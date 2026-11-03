@@ -463,9 +463,7 @@ describe('手挑組裝的邊界（#1300）', () => {
     // 前提：日誌上真的有一則只有空白的助手訊息、後面還有請求。
     expect(
       run.events.some(
-        (e) =>
-          e.type === 'assistant/message' &&
-          JSON.stringify(e.data.message).includes('" \\n"'),
+        (e) => e.type === 'assistant/message' && JSON.stringify(e.data.message).includes('" \\n"'),
       ),
     ).toBe(true);
     expect(run.mainBodies.length).toBeGreaterThan(1);
@@ -474,7 +472,7 @@ describe('手挑組裝的邊界（#1300）', () => {
     const last = run.events.filter((e) => e.type === 'model/start').at(-1)!;
     const replay = replayConversation(run.events.filter((e) => e.seq < last.seq));
     expect(replay.kind === 'replayed' ? replay.messages.length : -1).toBe(
-      run.mainBodies.at(-1)!.messages.length - 1,
+      run.mainBodies.at(-1)!.messages.length - 1, // 線上那份第一則是系統訊息，推導結果不含它
     );
   }, 60_000);
 });

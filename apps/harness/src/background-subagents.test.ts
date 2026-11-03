@@ -1786,7 +1786,7 @@ describe('結算通知（#840）', () => {
     await Promise.all([none.host.close(), blank.host.close()]);
   });
 
-  /** 只有空白的那則算最後的輸出（跟「哪則不送給模型」的判準不同）：換成 `isBlankContent` 的話，這裡會拿到更早那段。 */
+  /** 只有空白的那則算最後的輸出（跟「哪則不送給模型」的判準不同）：換成 `isEmptyAssistant` 的話，這裡會拿到更早那段。 */
   it('最後一則只有空白、更早有真文字：照樣是 It left no closing message.，不回頭拿更早那段', async () => {
     const { host, settlements } = setup((_text, _signal, log) => {
       reply(log, '我先查一下');

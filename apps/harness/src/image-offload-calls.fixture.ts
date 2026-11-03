@@ -1,7 +1,7 @@
 /**
  * 每次 root 模型呼叫的圖片省略狀態（[#2354](https://github.com/DemianLi/nexus-agent/issues/2354)），夾具產生器與 `session-format-fixtures.test.ts` 共用。
  *
- * `image/offload` 記在 `model/start` 之前（今天）或之後（舊寫入器，adapter 擋下、上層接住才記）。兩種位置下，那次呼叫**送出去的**
+ * `image/offload` 記在 `model/start` 之前（上層先量）或之後（adapter 擋下、上層接住才記：舊寫入器，以及今天上層量不到的情形）。兩種位置下，那次呼叫**送出去的**
  * 請求都已經套了決定；從日誌推那次呼叫的歷史時，推得到的只有 `model/start` 之前的。所以逐次各推兩份：
  *
  * - `derived`：那次 `model/start` 之前的前綴，套 `image/offload`（呼叫端從日誌推歷史的時機）；
@@ -22,7 +22,8 @@ export interface ImageOffloadCall {
 
 function offloadFlags(prefix: readonly SessionEvent[]): boolean[] {
   const replay = replayConversation(prefix, { applyImageOffloads: true });
-  if (replay.kind !== 'replayed') throw new Error(`推不回來：${replay.reason}@${String(replay.seq)}`);
+  if (replay.kind !== 'replayed')
+    throw new Error(`推不回來：${replay.reason}@${String(replay.seq)}`);
   return replay.messages.flatMap((message) =>
     HumanMessage.isInstance(message) && Array.isArray(message.content)
       ? (message.content as { type?: unknown; offloaded?: unknown }[])

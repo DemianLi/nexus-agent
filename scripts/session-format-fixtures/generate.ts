@@ -175,7 +175,7 @@ const TARGETS: readonly Target[] = [
     ownReplay: true,
     released: true,
   },
-  // `image/offload` 記在 `model/start` 之後的那一種（#2354 改到之前）：改之前的 develop，CLI 一輪碰不到圖片額度，由觸發補寫。
+  // `image/offload` 記在 `model/start` 之後的寫入器（`rev` 那一版，#2354）；CLI 一輪碰不到圖片額度，由觸發補寫。
   {
     name: 'v52-image-offload-after-start',
     rev: '7eb09103e1e094b51ff9b09e43b56da1b6d26036',

@@ -412,7 +412,11 @@ describe('沒配到結果的呼叫', () => {
     const log = new SessionLog('replay');
     log.append('turn/start', { kind: 'message', text: '查' });
     log.append('assistant/message', { message: reply('好') });
-    log.append('tool/result', { callId: 'ghost', isError: false, message: result('ghost', 'grep', '舊的') });
+    log.append('tool/result', {
+      callId: 'ghost',
+      isError: false,
+      message: result('ghost', 'grep', '舊的'),
+    });
     log.append('turn/end', {});
     chat(log, '再', '嗯');
     expect(shape(replayConversation(log.events))).toEqual([
@@ -986,7 +990,11 @@ describe('空的助手訊息', () => {
   });
 
   it('只有空白的也不進推導結果：空白字串、只有空白或空字串的文字區塊', () => {
-    for (const content of ['  \n', [{ type: 'text' as const, text: ' ' }], [{ type: 'text' as const, text: '' }]]) {
+    for (const content of [
+      '  \n',
+      [{ type: 'text' as const, text: ' ' }],
+      [{ type: 'text' as const, text: '' }],
+    ]) {
       const log = new SessionLog('replay');
       log.append('turn/start', { kind: 'message', text: '一' });
       log.append('assistant/message', { message: toLoggedMessage(new AIMessage({ content })) });

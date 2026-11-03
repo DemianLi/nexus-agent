@@ -417,9 +417,7 @@ describe('createImageOffloadRecoveryMiddleware（接住 adapter 的拋碼：下�
       }),
       5,
     );
-    await expect(
-      run.call([tool, human([ref('b')], 7), human([ref('c')], 9)]),
-    ).resolves.toBe('ok');
+    await expect(run.call([tool, human([ref('b')], 7), human([ref('c')], 9)])).resolves.toBe('ok');
     expect(run.log.events.map((event) => event.data)).toEqual([
       { targets: [{ seq: 7, imageIndexes: [0] }] },
     ]);

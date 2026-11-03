@@ -61,9 +61,9 @@
  * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
  * 那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
- * **配不到任何呼叫的結果（孤兒）照送**：推導只把日誌上有的推出來，不替它判對錯，配對錯由送出那一層擋。補結與孤兒的規則在推導端只有這一份：
+ * **配不到任何呼叫的結果（孤兒）照送**：推導只把日誌上有的推出來，不替它判對錯；今天送出前丟掉孤兒的是請求端的 `patchToolCallsMiddleware`。補結與孤兒的規則在推導端只有這一份：
  * 補的是 {@link ReplayFold.pendingMessages}（句子在 {@link closer}），孤兒在 `tool/result` 那一支。請求端的 `patchToolCallsMiddleware`
- * 是另一套（句子不同、孤兒丟掉），在推導成為唯一來源時一起拿掉。
+ * 是另一套（句子不同、孤兒丟掉）。TODO(#2355)：推導成為唯一來源時拿掉它，孤兒由哪一層擋要一起定。
  *
  * **續接時當掉那一輪的補結寫回日誌**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
 dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
@@ -126,7 +126,7 @@ export function isBlankContent(content: unknown): boolean {
 
 /**
  * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。內容空的判法是 {@link isBlankContent}，與送出時 `fetch` 層整則拿掉的是同一支
- * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它在 BaseMessage 這一層有一段不是文字。
+ * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它在 BaseMessage 這一層有一段不是文字；轉成 wire 時推理不進 `content`，`fetch` 層照樣整則拿掉。
  */
 export function isEmptyAssistant(message: BaseMessage): boolean {
   return (

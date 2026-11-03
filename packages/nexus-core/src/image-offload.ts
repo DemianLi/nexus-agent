@@ -24,7 +24,7 @@
  *   超額就挑最舊的幾張寫成 `image/offload`、標好再交下去，所以決定落在這次呼叫的 `model/start` 之前，adapter 量到的已經在額度內。
  * - **上層，adapter 拋了之後**：{@link createImageOffloadRecoveryMiddleware} 接住那個錯、挑最舊的 `offloadImages` 張寫成 `image/offload`、改好請求再送一次。
  *   它排在起訖紀錄器、用量記錄器與串流重打的**內側**（`fold.ts` 的槽位表），所以失敗的那一次嘗試在它們看來從沒發生：同一次 `model/start`／`model/end`、
- *   同一次用量、沒有 `llm/retry`；整次重打的預算（`retryPolicy`，#1427 之後 SDK 層不重打）也沒碰到。這一條的決定落在 `model/start` 之後，
+ *   同一次用量、沒有 `llm/retry`；整次重打的預算（`retryPolicy`；SDK 層不重打，#1427）也沒碰到。這一條的決定落在 `model/start` 之後，
  *   讀方兩種位置都認（`offloadedImagesOf` 不看位置）。
  * - **沒東西可省就往外拋**：挑不到（沒有來源記號的圖、已經全省略）時原錯誤原樣往外，走一般失敗路徑——同 dsh「沒有可省略的就委派下游」。
  *
@@ -141,7 +141,7 @@ export function offloadedImagesOf(events: readonly SessionEvent[]): Map<number, 
   return offloaded;
 }
 
-/** {@link offloadedImagesOf} 的一顆：是 `image/offload` 就把它的決定併進 `offloaded`，其餘事件不動。 */
+/** {@link offloadedImagesOf} 的一顆：是 `image/offload` 就把它的決定併進 `offloaded`，其餘事件略過。 */
 export function recordImageOffloadInto(
   offloaded: Map<number, Set<number>>,
   event: SessionEvent,
@@ -163,7 +163,7 @@ export function recordImageOffloadInto(
  * 這則訊息裡的圖能不能被省略：只有人話。選圖（{@link selectImagesToOffload}）與套用（{@link applyImageOffload}）都看這一支，
  * 選得到的一定標得上。工具結果今天不帶圖片區塊（MCP 的圖在 `nexus-plugin-mcp` 的 `project-content.ts` 就換成文字）。
  */
-export function imageOffloadable(message: BaseMessage): boolean {
+function imageOffloadable(message: BaseMessage): boolean {
   return HumanMessage.isInstance(message);
 }
 
@@ -308,11 +308,14 @@ export function assertImageBudget(messages: readonly BaseMessage[], budget: Imag
   if (need > 0) throw new ImageOffloadRequiredError(need);
 }
 
-/** adapter 上掛額度的那一格（{@link imageBudgetOf} 讀它）。 */
+/**
+ * adapter 上掛額度的那一格（getter），例如 `AttachmentChatOpenAI`、`ScriptedChatModel`；{@link imageBudgetOf} 讀它。
+ * 沒掛的 adapter，上層不先量，只能等 adapter 拋、由 recovery 接住，決定就落在 `model/start` 之後。
+ */
 export const IMAGE_BUDGET_PROPERTY = 'nexusImageBudget';
 
 /**
- * 這顆模型宣告的圖片額度：adapter 的 {@link IMAGE_BUDGET_PROPERTY}；沒有回 `undefined`。額度跟著 adapter 走，換模型就換一份。
+ * 這顆模型宣告的圖片額度：adapter 的 {@link IMAGE_BUDGET_PROPERTY}；沒有、或不是物件時回 `undefined`，不驗欄位。額度跟著 adapter 走，換模型就換一份。
  */
 export function imageBudgetOf(model: unknown): ImageBudget | undefined {
   if (typeof model !== 'object' || model === null) return undefined;
@@ -321,7 +324,7 @@ export function imageBudgetOf(model: unknown): ImageBudget | undefined {
 }
 
 /**
- * 在 `messages` 上再省略最舊的 `count` 張：挑圖、併進日誌上已有的決定、標在副本上。標上之後留著的圖沒有變少（挑不到、或挑到的標不上）回 `undefined`，
+ * 在 `messages` 上再省略最舊的 `count` 張：挑圖、併進日誌上已有的決定、標在副本上。標上之後留著的圖沒有變少（例如挑不到）就回 `undefined`，
  * 這時什麼都不該記：**記了卻標不上的決定是日誌裡永遠沒有效果的一筆**。
  */
 function decideOffload(

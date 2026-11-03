@@ -396,7 +396,7 @@ describe.each(names)('夾具 %s', (name) => {
       if (trigger.imageOffloadCalls !== undefined) {
         const calls = imageOffloadCalls(events);
         expect(calls).toEqual(trigger.imageOffloadCalls);
-        // 決定記在 `model/start` 之後的那次（#2354 定 (b)）：只有那一次推導與送出不同，下一次起每次都一樣。
+        // 決定記在 `model/start` 之後的那次（#2354；帶這一欄的觸發只產出這一種位置）：只有那一次推導與送出不同，下一次起每次都一樣。
         const starts = events.filter((event) => event.type === 'model/start');
         const offload = events.find((event) => event.type === 'image/offload')!;
         const late = starts.filter((start) => start.seq < offload.seq).length - 1;

@@ -18,11 +18,11 @@
  *
  * ## 圖片額度的檢查也在這裡（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）
  *
- * 照 dsh：**adapter 只量、不決定**。請求轉換之前先量 `imageBudget`，留著的圖超過這顆模型的額度時拋 `IMAGE_OFFLOAD_REQUIRED`（帶還要省略幾張），
+ * **adapter 只量、不決定**。請求轉換之前先量 `imageBudget`，留著的圖超過這顆模型的額度時拋 `IMAGE_OFFLOAD_REQUIRED`（帶還要省略幾張），
  * 這時**還沒讀附件位元組、沒有任何東西送出去**。接住、下決定、再送一次是上層的事（`@nexus/core` 的 `createImageOffloadRecoveryMiddleware`）。
  * 檢查放在投影前面：量的是參照上的 `bytes`，不必為了一個注定要被丟掉的請求讀檔。
  *
- * 額度也掛在 `IMAGE_BUDGET_PROPERTY` 上：上層（`createImageOffloadMiddleware`）在記 `model/start` 之前讀它先量、先下決定，這裡量到的多半已在額度內。
+ * 額度也掛在 `IMAGE_BUDGET_PROPERTY` 上：上層（`createImageOffloadMiddleware`）在記 `model/start` 之前讀它先量、先下決定；只有上層量不到的（adapter 沒掛額度、或上層挑不到可省略的）才會在這裡超額。
  *
  * @module
  */

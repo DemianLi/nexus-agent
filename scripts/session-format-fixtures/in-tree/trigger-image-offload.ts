@@ -1,5 +1,5 @@
 /**
- * 圖片額度省略記在舊位置的夾具觸發（[#2354](https://github.com/DemianLi/nexus-agent/issues/2354)）：用**那一版自己的**組裝跑一次超額。
+ * 圖片額度省略記在 `model/start` 之後的夾具觸發（[#2354](https://github.com/DemianLi/nexus-agent/issues/2354)）：用**那一版自己的**組裝跑一次超額。
  * 那一版的 `image/offload` 由 adapter 拋 `IMAGE_OFFLOAD_REQUIRED`、上層接住之後才記，落在那次呼叫的 `model/start` **之後**；
  * CLI 一輪碰不到圖片額度，所以由這支補寫。
  *
@@ -71,7 +71,8 @@ detach();
 await built.dispose();
 
 const offloads = events.filter((event) => event.type === 'image/offload');
-if (offloads.length !== 1) throw new Error(`該記一筆 image/offload，記了 ${String(offloads.length)} 筆。`);
+if (offloads.length !== 1)
+  throw new Error(`該記一筆 image/offload，記了 ${String(offloads.length)} 筆。`);
 if (model.rejectedImageRequests !== 1) {
   throw new Error(`那一版該由 adapter 擋一次，擋了 ${String(model.rejectedImageRequests)} 次。`);
 }

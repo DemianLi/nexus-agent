@@ -3,7 +3,7 @@
  *
  * 每次模型呼叫都從日誌推一次歷史時，整份重算（{@link replayConversation}）的成本跟日誌長度成正比。這裡把推過的留著：
  * 同一份日誌只往後長，新的事件接著餵進 {@link ReplayFold}，推出來的那一串只往後接。事件怎麼變成訊息只有 `ReplayFold` 一份；
- * 收尾那幾步（套摘要與切點、濾空的助手訊息、套剪法、縮短與圖片省略）借 `conversation-replay.ts` 與兩份紀錄模組的同一支函式逐段做。
+ * 收尾那幾步（套摘要與切點、濾空的助手訊息、套剪法、縮短與圖片省略）借 `conversation-replay.ts` 與三份紀錄模組的同一支函式逐段做。
  * 這裡管的是上一次推出來的哪些還能用。
  *
  * ## 什麼時候整份重建
@@ -125,7 +125,9 @@ export class ModelHistoryCache {
     const pruned = this.#prunes.size === 0 ? message : applyRecordedPrune(message, this.#prunes);
     const truncated =
       this.#truncations.size === 0 ? pruned : applyRecordedArgTruncation(pruned, this.#truncations);
-    return this.#offloads.size === 0 ? truncated : applyImageOffload([truncated], this.#offloads)[0]!;
+    return this.#offloads.size === 0
+      ? truncated
+      : applyImageOffload([truncated], this.#offloads)[0]!;
   }
 
   /** 把 `#stable` 接到 `ReplayFold.raw` 的尾巴；要重建就重建。切點還在那一批裡、建不起來時是 `undefined`。 */
