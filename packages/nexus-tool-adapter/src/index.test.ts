@@ -206,6 +206,38 @@ describe('rawParameters：JSON Schema 原樣上線、原樣驗', () => {
   });
 });
 
+describe('timeoutMs：轉成基座的呼叫預算', () => {
+  const stalling = (timeoutMs?: number): NexusTool => ({
+    ...tinyTool({ ok: true, content: '' }),
+    ...(timeoutMs !== undefined && { timeoutMs }),
+    execute: (_, exec) =>
+      new Promise((_resolve, reject) => {
+        exec.signal?.addEventListener('abort', () => {
+          reject(exec.signal?.reason as Error);
+        });
+      }),
+  });
+
+  it('宣告了就落在 defaultConfig.timeout，到期 exec.signal 舉起、拋 TimeoutError；送上線的不變', async () => {
+    const adapted = toLangChainTool(stalling(30));
+    expect(adapted.defaultConfig?.timeout).toBe(30);
+    await expect(adapted.invoke(call({ message: 'x' }))).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+    expect(JSON.stringify(convertToOpenAITool(adapted))).toBe(
+      JSON.stringify(convertToOpenAITool(toLangChainTool(stalling()))),
+    );
+  });
+
+  it('沒宣告就沒有 defaultConfig', () => {
+    expect(toLangChainTool(stalling()).defaultConfig).toBeUndefined();
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])('%s 不是正的有限數：轉換時就拋', (ms) => {
+    expect(() => toLangChainTool(stalling(ms))).toThrow(/timeoutMs/);
+  });
+});
+
 describe('artifact：跟著成功的結果落到 ToolMessage，不送模型', () => {
   it('帶了就落在 artifact，內容不變；沒帶就是 undefined', async () => {
     const withArtifact = (await toLangChainTool(

@@ -48,8 +48,8 @@ import { defineToken } from '@nexus/sdk';
  * 沒宣告的 `NexusTool` 呼叫它什麼都不做（`2.1.0` 也是這樣，那時還沒有地方宣告）。向後相容的新增：不呼叫 `concludeTurn()` 的消費者照常；
  * 要收輪的消費者宣告 `^2.2.0`（升級指南 `docs/upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md`）。
  *
- * `2.3.0`（#2353）：{@link NexusToolResult} 成功那一格多選填的 `artifact`，{@link NexusTool} 多選填的 {@link NexusTool.rawParameters}。
- * 向後相容的新增：不帶這兩格的消費者照常；要用的消費者宣告 `^2.3.0`。
+ * `2.3.0`（#2353）：{@link NexusToolResult} 成功那一格多選填的 `artifact`，{@link NexusTool} 多選填的 {@link NexusTool.rawParameters} 與 {@link NexusTool.timeoutMs}。
+ * 向後相容的新增：不帶這幾格的消費者照常；要用的消費者宣告 `^2.3.0`。
  */
 export const TOOLS_CONTRACT_VERSION = '2.3.0';
 
@@ -136,6 +136,11 @@ export interface NexusTool {
    * `properties` 時補一個空的。給 schema 不是自己寫的工具（MCP server 公告的那份）。省略是照上面那一小組關鍵字轉。
    */
   readonly rawParameters?: boolean;
+  /**
+   * 一次呼叫的預算（毫秒，契約 `2.3.0` 起），不送模型。到期時宿主舉起 `exec.signal`，逾時的措辭講出這個數字；本體要接住
+   * `exec.signal` 收手。省略是沒有期限。不是正的有限數，轉換時就拋。
+   */
+  readonly timeoutMs?: number;
   /**
    * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，收下的未宣告鍵已丟掉。預期中的失敗回 `ok: false`；
    * reject 不會轉成 `ok: false`，照 LangChain 工具拋錯的路往外走。

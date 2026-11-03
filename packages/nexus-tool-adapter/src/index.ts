@@ -9,6 +9,7 @@
  * - **驗證交給 zod**：`parameters` 轉成 zod 交給 LangChain 驗。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉，
  *   錯誤句是 zod 的逐項訊息。JSON Schema 直接交給 LangChain 的話，它改用另一套驗證，錯誤句只剩一行。
  * - **`rawParameters: true` 的工具例外**：JSON Schema 原樣交給 LangChain，由它那一套驗、錯誤句是那一行；不補 `additionalProperties`。
+ * - **`timeoutMs` 轉成 `defaultConfig.timeout`**：基座到期舉起 `signal`，圍堵的逾時措辭讀同一格。
  * - **`artifact` 跟著結果走**：一律用 `content_and_artifact`，沒帶的就是 `undefined`，那則 `ToolMessage` 跟只回內容時一樣。
  * - **身分是資料**：`ToolExec` 的 `threadId`、`agent` 從 LangGraph 的呼叫設定算一次，`forCall` 直接收它，結果與收呼叫設定時相同。
  *   `signal` 是這一輪的停止訊號（放在 `configurable`，見 `@nexus/core` 的 `turn-cancel.ts`）併上 LangGraph 自己的 `signal`。
@@ -113,6 +114,10 @@ function signalOf(config: ToolRunnableConfig | undefined): AbortSignal | undefin
 }
 
 function convert(tool: NexusTool): StructuredTool {
+  const { timeoutMs } = tool;
+  if (timeoutMs !== undefined && !(Number.isFinite(timeoutMs) && timeoutMs > 0)) {
+    throw new Error(`工具 ${tool.name} 的 timeoutMs 要是正的有限數：${String(timeoutMs)}`);
+  }
   const raw = tool.rawParameters === true ? rawSchemaOf(tool.parameters) : undefined;
   const schema = raw ?? zodOf(tool.parameters, tool.name);
   const converted = langChainTool(
@@ -149,6 +154,8 @@ function convert(tool: NexusTool): StructuredTool {
       description: tool.description,
       schema,
       responseFormat: 'content_and_artifact',
+      // 基座把 `defaultConfig.timeout` 變成併進 `signal` 的 `AbortSignal.timeout`；圍堵讀同一格講出預算（`@nexus/core` 的 `containment.ts`）。
+      ...(timeoutMs !== undefined && { defaultConfig: { timeout: timeoutMs } }),
       // 基座的 tools 路由只認靜態的 `returnDirect` 名單，標了 `concludeTurn()` 的結果才留住 `name` 而收這一輪（`@nexus/core` 的 `turn-conclusion.ts`）。
       ...(tool.concludesTurn === true && { returnDirect: true }),
     },
