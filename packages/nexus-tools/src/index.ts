@@ -36,8 +36,80 @@ import { defineToken } from '@nexus/sdk';
  *
  * `1.4.0`（#1607）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.concludeTurn}（宣告了 `returnDirect` 的工具在本體裡標「這一輪在這個結局收」）。
  * 同樣是向後相容的新增：`^1.0.0`～`^1.3.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.4.0`。
+ *
+ * `1.5.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料）。舊的 LangChain 工具照收，
+ * 所以仍是只增不減：`^1.0.0`～`^1.4.0` 的舊消費者照常；登記 `NexusTool` 的消費者宣告 `^1.5.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '1.4.0';
+export const TOOLS_CONTRACT_VERSION = '1.5.0';
+
+/** 無損 JSON 值。 */
+export type JsonValue =
+  null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+/** 一份 JSON Schema：純資料。根必須是 `type: 'object'`。 */
+export type JsonSchema = { readonly [key: string]: JsonValue };
+
+/** 工具結果的內容：一段文字，或內容區塊（形狀同落盤那一則訊息的 `content`）。 */
+export type ToolContent = string | readonly { readonly [key: string]: JsonValue }[];
+
+/** 錯誤碼。形狀對應 `@nexus/core` 的 `ToolErrorInfo`；這個套件不 import core，所以結構型別寫在這裡。 */
+export interface ToolErrorInfo {
+  readonly name: string;
+  readonly code: string;
+}
+
+/**
+ * 一次呼叫交給工具本體的東西（#2351）。身分是資料，不再從 LangGraph 的呼叫設定裡挖。
+ *
+ * 會話與 fs 的查找（`sessionLookup.forCall`、`fs.forCall`）直接收這一份。
+ */
+export interface ToolExec {
+  /** 模型給的 `tool_call.id`；取不到是 `''`。 */
+  readonly callId: string;
+  /** 這次呼叫在哪一條 thread 裡；認不出來（不在圖裡）是 `undefined`。 */
+  readonly threadId: string | undefined;
+  /** 誰在呼叫，形狀同 {@link ToolResultExecution.agent}；認不出來是 `undefined`。 */
+  readonly agent: ToolResultExecution['agent'];
+  /** 這一輪被中止時觸發。 */
+  readonly signal: AbortSignal | undefined;
+  /** 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}，只是不必再報自己的名字。 */
+  concludeTurn(): void;
+}
+
+/**
+ * 一次呼叫的結果（#2351）。錯誤是結果上的資料欄，不靠拋錯或別處的標記。
+ *
+ * 失敗那一格的 `content` 是模型看到的原因，**不要自己帶 `Error: `**：宿主照 `toolRefusal` 加前綴。
+ */
+export type NexusToolResult =
+  | { readonly ok: true; readonly content: ToolContent }
+  | { readonly ok: false; readonly content: string; readonly error?: ToolErrorInfo };
+
+/** 一個工具（#2351）。除了 `execute`，每一格都是可序列化的資料。 */
+export interface NexusTool {
+  readonly name: string;
+  readonly description: string;
+  /** 參數的 JSON Schema，就是送上線的那一份。用 zod 寫的插件經 `z.toJSONSchema()` 轉。 */
+  readonly parameters: JsonSchema;
+  /**
+   * 執行。`args` 已照 {@link parameters} 驗過。
+   *
+   * @param args - 模型給的參數。
+   * @param exec - 這次呼叫的身分與控制。
+   * @returns 這次呼叫的結果。
+   */
+  execute(args: { readonly [key: string]: JsonValue }, exec: ToolExec): Promise<NexusToolResult>;
+}
+
+/**
+ * 是不是 {@link NexusTool}：LangChain 的工具沒有 `parameters` 與 `execute`。
+ *
+ * @param tool - 登記進來的工具。
+ * @returns 是 `NexusTool` 就是 `true`。
+ */
+export function isNexusTool(tool: NexusTool | StructuredToolInterface): tool is NexusTool {
+  return 'parameters' in tool && typeof (tool as { execute?: unknown }).execute === 'function';
+}
 
 /**
  * 子代理叫到 `rootOnly` 工具時，那一份拒絕樁自己帶的句與碼（#1458 Q3 (a)）。形狀對應 `@nexus/core` 註冊點的
@@ -145,13 +217,13 @@ export interface ToolRegistry {
    *
    * 註冊就是 effect：註冊者那一列卸載時登記處自己撤掉，不靠呼叫者記得呼叫回傳的 disposer。
    *
-   * @param tool - 工具實例，名字取自它的 `name`；同名報錯。
+   * @param tool - 工具，名字取自它的 `name`；同名報錯。{@link NexusTool} 從契約 `1.5.0` 起收。
    * @param options - 選填，`rootOnly` 與 `outputSchema`（契約 `1.1.0` 起；`scope` 沒有消費者，不收）。
    * @returns 只撤銷這一次註冊的冪等 disposer。
    */
-  register(tool: StructuredToolInterface, options?: ToolRegisterOptions): () => void;
+  register(tool: NexusTool | StructuredToolInterface, options?: ToolRegisterOptions): () => void;
   /** 目前登記的全部工具，依註冊順序；回傳的是快照，之後的註冊不影響它。 */
-  list(): readonly StructuredToolInterface[];
+  list(): readonly (NexusTool | StructuredToolInterface)[];
   /**
    * 登記一位**核准閘門** listener（契約 `1.2.0` 起，#1466 Q1 (a)）：對一次工具呼叫回 `allow`／`deny`／`ask`。
    *

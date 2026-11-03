@@ -7,7 +7,7 @@ import { injectOf, need, service } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { toolsToken } from './index.js';
+import { isNexusTool, toolsToken } from './index.js';
 import { createToolsProvider } from './provider.js';
 
 const make = (name: string): StructuredToolInterface =>
@@ -84,6 +84,20 @@ const concludingConsumer = {
   },
 };
 
+/** 登記 `NexusTool` 的消費者（#2351）：要 `^1.5.0`。 */
+const nexusConsumer = {
+  name: 'tools-nexus-consumer',
+  inject: injectOf(need(toolsToken, '^1.5.0')),
+  apply(ctx: Context, config: { name: string }) {
+    service(ctx, toolsToken).register({
+      name: config.name,
+      description: '測試用',
+      parameters: { type: 'object', properties: {} },
+      execute: () => Promise.resolve({ ok: true, content: '' }),
+    });
+  },
+};
+
 /** 舊範圍的消費者：只登記一個工具，不呼叫 `gate`／`onResult`（驗收：`^1.0.0`～`^1.2.0` 在 1.3.0 的提供者上照常）。 */
 const oldRangeConsumer = (name: string, range: string) => ({
   name,
@@ -111,6 +125,7 @@ async function boot(options: Parameters<typeof createToolsProvider>[0] = {}) {
     gating: gatingConsumer,
     results: resultConsumer,
     concluding: concludingConsumer,
+    nexus: nexusConsumer,
     'old-100': oldRangeConsumer('old-100', '^1.0.0'),
     'old-110': oldRangeConsumer('old-110', '^1.1.0'),
     'old-120': oldRangeConsumer('old-120', '^1.2.0'),
@@ -247,7 +262,7 @@ describe('工具登記處的提供者', () => {
     expect(loader.resolve('con-b').fiber?.ctx.fiber.state).toBe(2);
   });
 
-  it('舊範圍：^1.0.0、^1.1.0、^1.2.0 的消費者在 1.4.0 的提供者上照常登記工具，而且沒有人因此多出閘門或觀察者', async () => {
+  it('舊範圍：^1.0.0、^1.1.0、^1.2.0 的消費者在 1.5.0 的提供者上照常登記工具，而且沒有人因此多出閘門或觀察者', async () => {
     const { provider, loader, create } = await boot();
     await create({ id: 'old-a', name: 'cordis:old-100' });
     await create({ id: 'old-b', name: 'cordis:old-110' });
@@ -263,6 +278,19 @@ describe('工具登記處的提供者', () => {
     ]);
     expect(provider.gates()).toEqual([]);
     expect(provider.resultListeners()).toEqual([]);
+  });
+
+  it('NexusTool（^1.5.0）與 LangChain 的工具登記在同一處，原物件原樣記下，同名照樣撞', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'row-n', name: 'cordis:nexus', config: { name: 'n1' } });
+    await create({ id: 'row-a', name: 'cordis:consumer', config: { names: ['a1'] } });
+    await create({ id: 'row-dup', name: 'cordis:consumer', config: { names: ['n1'] } });
+    await loader.await();
+    const [first, second] = provider.entries();
+    expect([first?.tool.name, first?.source, second?.tool.name]).toEqual(['n1', 'row-n', 'a1']);
+    expect(first !== undefined && isNexusTool(first.tool)).toBe(true);
+    expect(second !== undefined && isNexusTool(second.tool)).toBe(false);
+    expect(loader.resolve('row-dup').fiber?.ctx.fiber.state).toBe(3);
   });
 
   it('每次 createToolsProvider 的狀態是新的', () => {

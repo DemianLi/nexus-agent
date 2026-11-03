@@ -103,6 +103,27 @@ const CHECKPOINT_NS_SEPARATOR = '|';
  */
 export const BACKGROUND_SESSION_CONFIG_KEY = 'nexus_background_session';
 
+/**
+ * 宿主交給 `@nexus/tools` 的 `NexusTool` 的那一份 `ToolExec`（#2351）：身分已經是資料，不必再從 `configurable` 挖。
+ * 認法是形狀：有 `callId`、`threadId`、`agent` 三格，沒有 `configurable`。`agent` 形狀不對就當認不出來，不退回 root。
+ */
+function execIdentity(
+  config: unknown,
+): { readonly threadId: unknown; readonly agent: SessionAddress | undefined } | undefined {
+  if (typeof config !== 'object' || config === null || Object.hasOwn(config, 'configurable')) {
+    return undefined;
+  }
+  if (!['callId', 'threadId', 'agent'].every((key) => Object.hasOwn(config, key))) return undefined;
+  const { threadId, agent } = config as { threadId: unknown; agent: unknown };
+  if (typeof agent !== 'object' || agent === null) return { threadId, agent: undefined };
+  const { kind, runId } = agent as { kind?: unknown; runId?: unknown };
+  if (kind === 'root') return { threadId, agent: { kind: 'root' } };
+  if (kind === 'subagent' && typeof runId === 'string' && runId.length > 0) {
+    return { threadId, agent: { kind: 'subagent', runId } };
+  }
+  return { threadId, agent: undefined };
+}
+
 /** 從一份 `configurable` 裡把命名空間挖出來，形狀不對就當沒有。 */
 function checkpointNamespace(config: unknown): string | undefined {
   if (typeof config !== 'object' || config === null) return undefined;
@@ -152,13 +173,15 @@ export function isBackgroundCall(config: unknown): boolean {
 /**
  * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
  *
- * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西。工具那條路傳的是
+ * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西，或 `NexusTool` 收到的 `ToolExec`。工具那條路傳的是
  *   handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）——宣告不出第二個參數的
  *   工具永遠拿不到身分，那不是這裡的 bug，是那顆工具沒有要。middleware 那條路傳的是
  *   `{ configurable: request.runtime.configurable }`。
  * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡；背景身分鍵放壞了）。
  */
 export function toolCallSessionAddress(config: unknown): SessionAddress | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) return exec.agent;
   const background = backgroundSessionId(config);
   // 鍵在就以它為準，壞掉的鍵也是：退回 `checkpoint_ns` 會把壞掉的背景呼叫悄悄認成 root。
   if (background !== undefined) {
@@ -182,10 +205,16 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
  * - 同步子代理（`task`，在父圖裡跑）：**沿用父 thread 的 id**，子代理是誰靠 {@link toolCallSessionAddress} 的 `checkpoint_ns`；
  * - 背景子代理：它自己的日誌 id（`<root>/<runId>`），另帶 {@link BACKGROUND_SESSION_CONFIG_KEY}。
  *
- * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數，或 `{ configurable: request.runtime.configurable }`。
+ * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數、`ToolExec`，或 `{ configurable: request.runtime.configurable }`。
  * @returns 非空字串的 `thread_id`；沒有（不在圖裡、手搭的測試呼叫）是 `undefined`。
  */
 export function callThreadId(config: unknown): string | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) {
+    return typeof exec.threadId === 'string' && exec.threadId.length > 0
+      ? exec.threadId
+      : undefined;
+  }
   if (typeof config !== 'object' || config === null) return undefined;
   const configurable = (config as { configurable?: unknown }).configurable;
   if (typeof configurable !== 'object' || configurable === null) return undefined;

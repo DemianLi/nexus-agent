@@ -105,6 +105,7 @@ import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
+import { langChainToolOf } from './nexus-tool-adapter.js';
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 import { ThreadSessions } from './thread-sessions.js';
 
@@ -1052,7 +1053,9 @@ export class PluginTree {
       this.#selfDisabled.delete(id);
       return {
         kind: 'active',
-        tools: entries.filter((item) => item.source === id).map((item) => item.tool),
+        tools: entries
+          .filter((item) => item.source === id)
+          .map((item) => langChainToolOf(item.tool)),
         toolOptions: toolOptionsOf(entries.filter((item) => item.source === id)),
         gates: this.#provider
           .gates()
@@ -1120,7 +1123,7 @@ function toolOptionsOf(
 ): ReadonlyMap<StructuredToolInterface, ToolRegisterOptions> {
   const options = new Map<StructuredToolInterface, ToolRegisterOptions>();
   for (const entry of entries) {
-    if (entry.options !== undefined) options.set(entry.tool, entry.options);
+    if (entry.options !== undefined) options.set(langChainToolOf(entry.tool), entry.options);
   }
   return options;
 }
@@ -1283,7 +1286,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       }
       const owned = provider.entries().filter((entry) => entry.source === mount.id);
       return {
-        tools: owned.map((entry) => entry.tool),
+        tools: owned.map((entry) => langChainToolOf(entry.tool)),
         toolOptions: toolOptionsOf(owned),
         gates: provider
           .gates()

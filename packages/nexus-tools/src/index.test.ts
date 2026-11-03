@@ -7,7 +7,8 @@ import { checkConformance, defineManifest, injectOf, need, service } from '@nexu
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { TOOLS_CONTRACT_VERSION, toolsToken } from './index.js';
+import { isNexusTool, TOOLS_CONTRACT_VERSION, toolsToken } from './index.js';
+import type { NexusTool } from './index.js';
 import { createToolsProvider } from './provider.js';
 
 const echoTool = (name: string): StructuredToolInterface =>
@@ -40,12 +41,23 @@ const consumer = {
 };
 
 describe('@nexus/tools 的定義', () => {
+  it('isNexusTool 分得出 NexusTool 與 LangChain 的工具', () => {
+    const nexus: NexusTool = {
+      name: 'n',
+      description: 'd',
+      parameters: { type: 'object', properties: {} },
+      execute: () => Promise.resolve({ ok: true, content: '' }),
+    };
+    expect(isNexusTool(nexus)).toBe(true);
+    expect(isNexusTool(echoTool('lc'))).toBe(false);
+  });
+
   it('token 名是 tools，契約版本是 semver 常數', () => {
     expect(toolsToken).toEqual({ name: 'tools', version: TOOLS_CONTRACT_VERSION });
     expect(TOOLS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-    // 1.1.0（#1458）：`register` 多選填的第二個參數。1.2.0（#1466）：`ToolRegistry` 多選填方法 `gate`。1.3.0（#1469）：多選填方法 `onResult`。1.4.0（#1607）：多選填方法 `concludeTurn`。四次都是向後相容，
+    // 1.1.0（#1458）：`register` 多選填的第二個參數。1.2.0（#1466）：`ToolRegistry` 多選填方法 `gate`。1.3.0（#1469）：多選填方法 `onResult`。1.4.0（#1607）：多選填方法 `concludeTurn`。1.5.0（#2351）：`register` 也收 `NexusTool`。五次都是向後相容，
     // 所以主版號不動，`^1.0.0`、`^1.1.0` 的舊消費者照常（`provider.test.ts` 量）。
-    expect(TOOLS_CONTRACT_VERSION).toBe('1.4.0');
+    expect(TOOLS_CONTRACT_VERSION).toBe('1.5.0');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('1');
   });
 
