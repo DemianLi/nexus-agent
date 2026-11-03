@@ -244,7 +244,7 @@ export const PLAN_NO_REVIEWER_MESSAGE =
 
 /**
  * 組裝點沒提供答題管道（{@link CHANNEL_SERVICE} 讀不到）。**不當作有人在**：同 `@nexus/plugin-ask-user` 的 `NO_CHANNEL_MESSAGE`
- * （#1458 Q1 (c)），在問人之前拒絕。
+ * （#669），在問人之前拒絕。
  */
 export const PLAN_NO_CHANNEL_MESSAGE = `這次組裝沒有指定問答管道，${EXIT_PLAN_MODE_TOOL_NAME} 不知道該問誰，所以沒有送審。這不是有人拒絕了計劃——是沒有被問到。請使用者自己切換模式：/plan off。`;
 
@@ -518,7 +518,7 @@ export const EXIT_PLAN_MODE_CONCLUDES_TURN = true;
 
 /**
  * 送給模型之前，把 `exit_plan_mode` 那些被 core 拿掉 `name` 的結果（沒標記收尾的那些，見 {@link EXIT_PLAN_MODE_CONCLUDES_TURN}）補回 `name`，
- * **請求跟改動前逐位元組相同**（Chat Completions 的轉換器會把 `name` 送出去）。
+ * **送給模型的請求跟 core 沒拿掉 `name` 時逐位元組相同**（Chat Completions 的轉換器會把 `name` 送出去）。
  * 路由只看 state 裡的訊息，模型看的是這一份複本；沒有要補的就原物返回，不碰別的 middleware 看到的東西。
  */
 function withExitToolNames<T extends { messages?: readonly BaseMessage[] }>(request: T): T {
@@ -676,6 +676,7 @@ function createExitPlanModeTool(
  *   `AgentMiddleware` 自帶的 `tools`**。那條路繞過 `toolOrder`——`fold.ts` 的
  *   `orderTools` 只排 `registry.tools.effective()` 裡的東西，而工具呈現順序是我們
  *   自建的機制（dsh 那邊註冊順序造成過真實 CI flake），繞過它等於把那個保護放掉。
+ *   `exit_plan_mode` 是 `NexusTool`：組裝點的 `createRegistry` 要交 `adaptTool`，沒交就在載入當下拋。
  * - **`commands`**：`/plan` 走 `registry.commands.register()`。**命令不進模型**——它是
  *   人對工具說的話，結果直接印給打字的人看（`/plan <message>` 的那句話例外：它經 `steer` 成為命令落定後的一輪人話，命令本身仍然不進模型）。dsh 那邊這一格掛在
  *   `ctx.inject(['commands'], …)` 底下（「命令註冊表被組進來時才啟用」），我們的
@@ -716,7 +717,7 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
       attachedHere.add(session);
       sessionsHere.set(subject.log, session);
       return () => {
-        // 只是不留一格記憶體：收掉之後兩張表都找不到這份，命令與下一步都交不出它，行為上觀察不到。
+        // `pendingExits` 那一格只是不留記憶體：收掉之後兩張表都找不到這份，命令與下一步都交不出它。
         pendingExits.delete(session);
         sessionsHere.delete(subject.log);
         attachedHere.delete(session);
@@ -726,8 +727,8 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     // middleware 掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
     // - 認得出來、是這個 plugin 接著的 root 那份日誌 → 讀它的模式。
     // - 認得出來、是別的日誌（子代理）→ 不在計劃模式。照 dsh，子代理讀的是它自己的 session。
-    // - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 沿用改之前的答案：剛好接了一份就讀它，
-    //   否則退回初值。不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜
+    // - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 剛好接了一份就讀它，否則退回初值。
+    //   不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜
     //   消失，沒有東西會紅。接了不只一份時不猜：猜一份的話指引會照著別人的模式夾。
     const fallback = (): boolean => {
       const [only, ...rest] = attachedHere;

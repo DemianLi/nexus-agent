@@ -298,7 +298,7 @@ export interface ToolRegistry {
    */
   onResult?(listener: ToolResultListener): () => void;
   /**
-   * 標「這一輪在這個工具呼叫之後收」（契約 `1.4.0` 起，#1607）：宣告了 `returnDirect: true` 的工具，在**本體執行當中**、
+   * 標「這一輪在這個工具呼叫之後收」（契約 `1.4.0` 起，#1607）：宣告了 `returnDirect: true` 的工具（`NexusTool` 宣告的是 `concludesTurn: true`，轉接器轉成同一格），在**本體執行當中**、
    * 走到要收的那個結局時呼叫它。對應 dsh 的 `exec.concludeTurn()`（`packages/core/tools/src/index.ts:1862` 的 `concludingExecutions`，
    * 由 plan-mode 在 `ASK_CANCELLED` 呼叫，`plan-mode/src/index.ts:331-341`）。
    *
@@ -307,7 +307,7 @@ export interface ToolRegistry {
    *
    * 要收，同時要成立：
    * - 在該工具本體執行當中呼叫，且 `toolName` 是正在執行的那顆（別顆的名字、槽外呼叫都什麼都不做）；
-   * - 那個工具宣告了 `returnDirect: true`；
+   * - 那個工具宣告了 `returnDirect: true`（`NexusTool` 宣告的是 `concludesTurn: true`，轉接器轉成同一格）；
    * - 最終結果不是錯誤（錯誤不收，dsh 的 `ToolExecutionFailure` 寫的是 `concludesTurn?: never`）；
    * - 同一則 AI 訊息叫的工具只有這一個（**偏離**，下）。
    *

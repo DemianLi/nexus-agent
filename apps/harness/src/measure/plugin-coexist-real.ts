@@ -18,8 +18,9 @@
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { parse as parseYaml } from 'yaml';
 
 const HARNESS = join(import.meta.dirname, '../..');
@@ -114,8 +115,14 @@ export async function probeRealPlugin(
     let b;
     try {
       [a, b] = await Promise.all([
-        loadPlugins([host('thread-a'), entryOf(p1, 'thread-a')]),
-        loadPlugins([host('thread-b'), entryOf(p2, 'thread-b')]),
+        loadPlugins(
+          [host('thread-a'), entryOf(p1, 'thread-a')],
+          createRegistry({ adaptTool: toLangChainTool }),
+        ),
+        loadPlugins(
+          [host('thread-b'), entryOf(p2, 'thread-b')],
+          createRegistry({ adaptTool: toLangChainTool }),
+        ),
       ]);
     } catch (error) {
       return failed(`並行載入失敗：${error instanceof Error ? error.message : String(error)}`);

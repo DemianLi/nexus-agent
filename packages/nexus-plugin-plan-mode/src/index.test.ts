@@ -212,7 +212,7 @@ describe('exit_plan_mode 沒有生效時', () => {
     expect(sessions.root.events.filter((event) => event.type === 'plan/mode')).toEqual([]);
   });
 
-  /** 照 `approvalChannel` 契約與 ask-user（#1458 Q1 (c)）：組裝點沒提供答題管道，**不當作有人在**，問人之前就拒絕。 */
+  /** 照 `approvalChannel` 契約與 ask-user（#669）：組裝點沒提供答題管道，**不當作有人在**，問人之前就拒絕。 */
   it('組裝點沒提供答題管道：拒絕，不發中斷，模式不動', async () => {
     vi.mocked(interrupt).mockClear();
     const { registry } = await load([planPlugin({ startActive: true })]);
@@ -616,7 +616,7 @@ describe('/plan 附件', () => {
 
 /**
  * **沒有日誌的組裝寫不動模式，而它要說出來。** 命令在接線之前就註冊好了，所以這條路
- * 走得到——回「開了」而什麼都沒發生，比回一句錯更糟。
+ * 走得到——回「開了」而什麼都沒發生，比回一句錯更糟。接了不只一份時，命令改的是執行器交來的那一份（表以會話為鍵）。
  */
 describe('沒接、或接了不只一份', () => {
   it('沒接會話日誌：/plan 說得出原因', async () => {
@@ -669,7 +669,7 @@ describe('沒接、或接了不只一份', () => {
   });
 
   /**
-   * middleware 認不出呼叫者時的退路（K7 前留在這裡）：剛好接一份就讀它，接了兩份就退回初值，**不猜**——猜一份的話指引會照著別人的模式夾。
+   * middleware 認不出呼叫者時的退路（#2357 把 middleware 遷走之前都在）：剛好接一份就讀它，接了兩份就退回初值，**不猜**——猜一份的話指引會照著別人的模式夾。
    */
   it('認不出呼叫者：接一份讀它的模式，接兩份退回初值', async () => {
     const { registry } = await load([planPlugin()]);

@@ -227,7 +227,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `2.2.0`（#2353）起 `NexusTool` 多一格選填的 `concludesTurn`：宣告「這顆工具可能在本體裡呼叫 `exec.concludeTurn()` 收這一輪」，轉接器把它轉成
   LangChain 工具的 `returnDirect`。`concludeTurn()` 只對宣告了的工具有效，宣告了也只有呼叫了才收（升級指南
   [`nexus-tool-concludes-turn`](upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md)）。這一格是基座的產物：基座的 tools 路由只認靜態的
-  `returnDirect` 名單，dsh 的迴圈在整批工具跑完之後才判，不需要事先宣告；換掉基座（K6）之後拿掉。
+  `returnDirect` 名單，dsh 的迴圈在整批工具跑完之後才判，不需要事先宣告；換掉基座（#2356）之後拿掉。
   **相容層的 `registry.tools.register` 也收 `NexusTool`**（#2353）：註冊當下經組裝點交給 `createRegistry` 的 `adaptTool`（產品路徑上是轉接器的
   `toLangChainTool`）轉成 LangChain 工具，表裡放轉出來的那一顆；沒交 `adaptTool` 就在註冊當下拋。plan-mode 的 `exit_plan_mode`、sandbox-policy 的
   `request_sandbox_escalation` 走這條：插件留在相容層，工具本體是 `NexusTool`。

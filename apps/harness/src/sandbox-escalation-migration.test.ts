@@ -1,5 +1,5 @@
 /**
- * 產品組裝裡 `request_sandbox_escalation`（#2353 K3c PR 2）的工具定義、模型看到的工具結果、核准中斷的酬載、日誌上的
+ * 產品組裝裡 `request_sandbox_escalation`（#2353）的工具定義、模型看到的工具結果、核准中斷的酬載、日誌上的
  * `tool/result`、這一輪叫了模型幾次，與 `sandbox-escalation-migration.baseline.json` 逐字相同。
  *
  * 走的是 `createCliAgent` ＋ 出貨清單 ＋ `--workspace`／`--sandbox`，腳本是「寫入被擋 → 升級 → 重試寫入」；要問人的案例先停在中斷上、

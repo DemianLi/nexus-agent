@@ -1,5 +1,5 @@
 /**
- * 產品組裝裡 `exit_plan_mode`（#2353 K3c PR 2）的工具定義、模型看到的工具結果、提問中斷的酬載、日誌上的 `tool/result` 與
+ * 產品組裝裡 `exit_plan_mode`（#2353）的工具定義、模型看到的工具結果、提問中斷的酬載、日誌上的 `tool/result` 與
  * `plan/mode`、這一輪叫了模型幾次（收不收這一輪看這一格），與 `plan-mode-migration.baseline.json` 逐字相同。
  *
  * 走的是出貨清單（`plan-mode` 那一列開 `startActive`）＋腳本模型，要問人的案例先停在中斷上、再用 `Command({ resume })` 接回去。

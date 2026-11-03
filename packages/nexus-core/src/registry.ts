@@ -308,8 +308,8 @@ export interface NexusServices {
   /**
    * 這次組裝有沒有人可以回答。名字見 {@link ./approval.ts | CHANNEL_SERVICE}。
    *
-   * **沒人提供時消費者退到 `{ kind: 'human' }`**（軟相依）：那是給測試與「我知道我在幹嘛」的
-   * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
+   * **沒人提供時消費者當作沒有人可以回答**（軟相依，#669）：`ask_user_question`、`exit_plan_mode`、`request_sandbox_escalation`
+   * 在呼叫當下拒絕，MCP 不宣告 elicitation。產品路徑由組裝點明著算一次提供出來。
    */
   channel: ApprovalChannel;
   /**
@@ -1194,7 +1194,7 @@ function duplicateToolError(scope: ScopeKey | undefined) {
 
 /**
  * `tools.register()` 收到的東西換成表裡放的 LangChain 工具：`NexusTool` 經組裝點的轉接器轉，其餘原樣。
- * 認法同 `@nexus/tools` 的 `isNexusTool`（core 只拿它的型別，不在執行期載入那個套件）。
+ * 認法同 `@nexus/tools` 的 `isNexusTool`（core 只拿它的型別：執行期 import 會經 `defineToken` 把 `@nexus/sdk` 帶進 core）。
  */
 function asLangChainTool(
   tool: StructuredTool | NexusTool,
@@ -1244,7 +1244,7 @@ export interface CreateRegistryOptions {
   readonly validateSubagent?: (subagent: NexusSubAgent) => void;
   /**
    * 把 `tools.register()` 收到的 `NexusTool` 轉成 LangChain 的工具（#2353）。轉接器（`@nexus/tool-adapter`）相依 core，core 叫不到它，
-   * 所以由組裝點傳進來。**同一個 `NexusTool` 要轉出同一個實例**：撤銷註冊、`rootOnly` 與 `outputSchema` 都以實例為鍵。
+   * 所以由組裝點傳進來。表裡放的是這次轉出來的那一個，撤銷註冊、`rootOnly` 與 `outputSchema` 都以它為鍵。
    */
   readonly adaptTool?: (tool: NexusTool) => StructuredTool;
 }

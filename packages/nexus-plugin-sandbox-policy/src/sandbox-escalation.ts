@@ -19,9 +19,8 @@
  * 0. **問人在工具本體裡，fail-closed**（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。
  *    dsh 的 `resolvePolicy` 先驗欄位（`packages/fs/tool-fs/src/sandbox.ts:88`），再
  *    `await approveEscalation(...)`：不加寬就拋、沒有核准服務就拋、最後才問人（`escalation.ts:171-208`）。
- *    核准在工具自己的路徑上，所以 pre-execute 的 listener 怎麼排都跳不過它。以前這裡是另一個註冊點上
- *    一顆只認這個名字的核准閘門，排在它前面、回 `allow` 又不呼叫 `next()` 的閘門會把它
- *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `exec.interrupt()`，
+ *    核准在工具自己的路徑上，所以 pre-execute 的 listener 怎麼排都跳不過它；放在核准閘門上的話，
+ *    排在前面、回 `allow` 又不呼叫 `next()` 的閘門會把它短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `exec.interrupt()`，
  *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
  * 1. **升不升得到是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
  *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「升得到」在本體裡對這一刻的模式判（{@link canEscalate}）。
@@ -59,8 +58,8 @@
  * 技能來源不論模式、不認領 grant 都寫不進去（#1960，`apps/harness/src/shared-reserved-writes.ts`），核准了也不會成功，所以同樣判在加寬之前。
  * 判斷問 fence 本身（{@link EscalationTargets.reservedReason}），跟擋變更的是同一份規則。
  *
- * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，不像
- * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
+ * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，同
+ * `ask_user_question` 與 `exit_plan_mode`（#669）。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
  * 的 `ApprovalChannel` 那段記過）；dsh 的「沒有 agent 可以路由」也沒有——我們每一次工具呼叫都在某個 agent 裡。
  *
  * **子代理怎麼拒**：照 #324，子代理不問人升級（dsh 把核准政策 `'never'` 帶進子代理，那條在 `ask` 裡回 `rejected`）；
@@ -441,6 +440,8 @@ function createEscalationTool(
  * 照 dsh 把問人搬進本體之後拿掉了，留著的話同一次升級會問兩次。
  *
  * **問人沒有開關**：這顆工具存在的意義就是讓人看過。
+ *
+ * 升級工具是 `NexusTool`：組裝點的 `createRegistry` 要交 `adaptTool`，沒交就在註冊當下拋。
  *
  * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
