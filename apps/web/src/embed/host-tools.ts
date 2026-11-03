@@ -14,17 +14,8 @@ export const HOST_TOOL_EVENT = 'nexus-host-tool';
 /** 叫到的名字不在這個元件目前的宣告裡（例如重新整理後的頁面沒宣告它）時，元件自己交回的錯誤。 */
 export const HOST_TOOL_MISSING_ERROR = '這個頁面沒有這支工具';
 
-/** {@link HOST_TOOL_EVENT} 的 `detail`。`respond`、`fail` 只算第一次，之後的呼叫不送。 */
-export interface NexusHostToolDetail {
-  /** 宣告時的名字，不帶 `page__`。 */
-  readonly name: string;
-  /** 模型給的參數，server 已照宣告的 schema 驗過。 */
-  readonly args: Readonly<Record<string, unknown>>;
-  /** 執行成功，交回結果（JSON 值）。 */
-  respond(result: unknown): void;
-  /** 執行失敗，交回原因。 */
-  fail(error: string): void;
-}
+/** {@link HOST_TOOL_EVENT} 的 `detail`：給宿主頁的那份（`nexus-chat.d.ts`），這裡不另寫一份，形狀分歧時 typecheck 就不過。 */
+export type NexusHostToolDetail = globalThis.NexusHostToolDetail;
 
 /**
  * 宿主頁給的值 → 元件用的宣告。`null`、`undefined`、空陣列是清掉；不合 `hostToolsProblem` 的不收，規矩同 `context`：講一聲、原本的不動。
