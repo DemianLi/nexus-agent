@@ -40,6 +40,19 @@ import { REMOVE_ALL_MESSAGES } from '@langchain/langgraph';
 export const PATCH_TOOL_CALLS_MIDDLEWARE_NAME = 'patchToolCallsMiddleware';
 
 /**
+ * 補上去的那則 `ToolMessage` 的內容。
+ *
+ * @param name - 工具名。
+ * @param id - 呼叫 id。
+ * @returns 那一句。
+ */
+export function patchedToolCallText(name: string, id: string): string {
+  // 這句話的措辭**逐字**照基座：成因其實是「那一輪被中斷」，不一定是「有新訊息進來」，
+  // 但改字會讓 `thread-pump.ts` 與續行測試對不上它，改的話要連同它們一起想。
+  return `Tool call ${name} with id ${id} was cancelled - another message came in before it could be completed.`;
+}
+
+/**
  * 補懸空的呼叫並丟孤兒結果。
  *
  * @param messages - 一整串訊息。
@@ -86,9 +99,7 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
         needsPatch = true;
         patchedMessages.push(
           new ToolMessage({
-            // 這句話的措辭**逐字**照基座：成因其實是「那一輪被中斷」，不一定是「有新訊息進來」，
-            // 但改字會讓 `thread-pump.ts` 與續行測試對不上它，改的話要連同它們一起想。
-            content: `Tool call ${toolCall.name} with id ${toolCall.id} was cancelled - another message came in before it could be completed.`,
+            content: patchedToolCallText(toolCall.name, String(toolCall.id)),
             name: toolCall.name,
             tool_call_id: toolCall.id as string,
           }),

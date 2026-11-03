@@ -1817,7 +1817,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
 - **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
   照同一組 env 與 `--patch` 重讀一次清單，所以用 `plugin` 寫入口改了變更紀錄，之後開的對話看得到：哪幾列掛、組裝時讀的設定
-  （`agent-loop`、`recursion-limit`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
+  （`agent-loop`、`recursion-limit`、`history-source`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
   - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
@@ -2040,6 +2040,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `turn-timeout`              | `serve` 上一輪的時鐘上限，到點照停止鈕中止；**出廠 30 分鐘**，見〈執行上限〉                                                    | 有（一格）                       | 關得掉（關掉就是不限）   |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
+| `history-source`            | 模型歷史從哪裡來：`state`（出廠）照舊；`shadow` 照舊送 state，另拿從會話日誌推出來的歷史比一次，見下面那一段                        | 有（一格）                       | 關得掉（＝`state`）      |
 
 **從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
 它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
@@ -2066,6 +2067,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
+- **`history-source` 也在組裝期讀**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），同形；CLI 的 `--history-source <state|shadow>` 贏過這一列。
+  寫 `shadow` 時送給模型的內容不變，只在 root 每次呼叫模型之前，拿從會話日誌推出來的歷史跟這次的請求比一次：
+  `serve` 上差異寫到伺服器日誌的 `history-shadow` logger（debug 等級），CLI 上印成 `[歷史比對] <類別>：<細節>` 到 stderr；
+  兩邊都不寫進會話日誌。類別有 `match`、`image-offload-after-start`（相同，但圖片卸載落在這次呼叫開始之後）、`patch-closer`（只差補結的句子）、`other`。
+  關掉這一列跟寫 `state` 同一個結果，所以它不在下面「關不掉」的那幾列裡。
 
 **這十列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
 代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、

@@ -891,6 +891,16 @@
   config:
     maxParallelToolCalls: 10
 
+# 模型歷史從哪裡來（#2355）：`state` 把 LangGraph state 原樣送給模型，什麼都不掛；`shadow` 送的仍是 state，另在 root 緊貼請求快照外側
+# 拿從日誌推出來的歷史比一次。不是 `match` 的那幾次：serve 走伺服器日誌的 `history-shadow` logger（debug 等級，要看就把
+# `cordis.serve.yml` 裡 `logger-console` 的 `levels.history-shadow` 調成 `debug`），CLI 以 `[歷史比對]` 前綴印在標準錯誤；都不寫進會話日誌。
+# 值的家在 schema（`src/settings/history-source.ts`），這裡照抄同一個值讓人看得到。組裝期讀、新對話生效；CLI 的 `--history-source` 贏過這一列。
+# **這一列關得掉**：關掉落回 `state`，跟寫 `state` 同一個結果。
+- id: history-source
+  name: '#settings/history-source'
+  config:
+    source: state
+
 # ── 檔案政策（#669）──────────────────────────────────────────────────────────
 #
 # **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，

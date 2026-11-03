@@ -85,6 +85,17 @@ describe('parseCliArgs', () => {
       );
     }
   });
+
+  it('--history-source 只收 state 與 shadow，省略即不設（由組裝點照清單那一列）', () => {
+    expect(parseCliArgs(['--history-source', 'shadow']).historySource).toBe('shadow');
+    expect(parseCliArgs(['--history-source', 'state']).historySource).toBe('state');
+    expect(parseCliArgs([])).not.toHaveProperty('historySource');
+    for (const raw of ['log', 'Shadow', '']) {
+      expect(() => parseCliArgs([`--history-source=${raw}`])).toThrow(
+        /--history-source 只收 state、shadow[\s\S]*用法/,
+      );
+    }
+  });
 });
 
 /**
@@ -147,7 +158,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十二列 harness 設定 ＋ 八個配套入口', async () => {
+  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十三列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -286,6 +297,8 @@ describe('一次性模式', () => {
       // 續行排程器，起動期讀一次；續行沒開（CLI 預設）時它安靜地不起作用。關得掉，關掉就只剩目標自己的 `max_goal_rounds`。
       'goal-round-cap',
       'agent-loop',
+      // **`history-source` 講模型歷史從哪裡來**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：消費點在組裝期，出廠 `state` 什麼都不掛。
+      'history-source',
       // **`sandbox-policy` 進來的理由是它本來就在產品路徑上，只是藏在組裝點的條件裡**
       // （[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 3 步）：`--dump-config` 印不出來、patch 關不掉。
       // 不論有沒有 `--workspace` 都掛：有圍堵時註冊升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。

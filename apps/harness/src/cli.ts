@@ -25,7 +25,8 @@ import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
-import { approvalPolicyOnResume } from '@nexus/core';
+import { approvalPolicyOnResume, createHistoryShadowTally, HISTORY_SOURCES } from '@nexus/core';
+import type { HistorySource } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -143,6 +144,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
+  --history-source <state|shadow>
+                       模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 state）
+                       shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）
@@ -183,6 +187,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
+        'history-source': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
@@ -234,6 +239,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const goalDriver = values['goal-driver'] === true;
   const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
   const recursionLimit = parsePositiveInteger('--recursion-limit', values['recursion-limit']);
+  const historySource = parseHistorySource(values['history-source']);
 
   const dumpConfig = values['dump-config'] === true;
   if (dumpConfig) {
@@ -299,6 +305,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
+    ...(historySource !== undefined && { historySource }),
     dumpConfig,
     dumpConfigSchema,
     dumpDefaultConfig,
@@ -345,6 +352,24 @@ function parsePositiveInteger(flag: string, raw: string | undefined): number | u
   const value = Number(trimmed);
   if (trimmed === '' || !Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${flag} 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`);
+  }
+  return value;
+}
+
+/**
+ * `--history-source` 的值（#2355）。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @returns 那個值，或沒給時的 `undefined`。
+ * @throws 不是認得的值——訊息接上用法。
+ */
+function parseHistorySource(raw: string | undefined): HistorySource | undefined {
+  if (raw === undefined) return undefined;
+  const value = HISTORY_SOURCES.find((source) => source === raw.trim());
+  if (value === undefined) {
+    throw new Error(
+      `--history-source 只收 ${HISTORY_SOURCES.join('、')}（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`,
+    );
   }
   return value;
 }
@@ -1174,6 +1199,10 @@ async function runLaunched(
             // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
             // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
             ...(invariantTap !== undefined && { invariantTap }),
+            // 影子比對（#2355）不是 `match` 的那幾次印在標準錯誤，前綴的理由同上面 `[不變量]` 那行；沒開 `shadow` 時組裝點不叫它。
+            historyShadow: createHistoryShadowTally((outcome) =>
+              printer.error(`[歷史比對] ${outcome.kind}：${outcome.detail ?? ''}`),
+            ),
             // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
             // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
             // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。

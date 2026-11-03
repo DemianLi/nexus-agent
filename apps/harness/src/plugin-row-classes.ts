@@ -154,6 +154,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   // ── `#settings/*` 與模型提供者（分類文件 C 表）：組裝期讀的那幾列。
   ['agent-loop', next],
   ['recursion-limit', next],
+  ['history-source', next],
   ['tool-fs-search', next],
   ['tool-fs', next],
   [

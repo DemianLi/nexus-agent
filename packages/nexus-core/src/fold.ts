@@ -76,6 +76,8 @@ import { createEmptyResponseMiddleware } from './empty-response.js';
 import { createStreamRetryMiddleware } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
 import { createRequestSnapshotRecorder } from './request-snapshot.js';
+import { createHistoryShadowMiddleware } from './history-shadow.js';
+import type { HistoryShadowOptions } from './history-shadow.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import {
   createSessionCheckpointMiddleware,
@@ -480,6 +482,12 @@ export interface FoldOptions {
    * （{@link ./summarization.ts | effectiveTrigger}）。傳進來的是 `request.model`（換模型之後就是選中的那顆）。
    */
   modelLimits?: (model: unknown) => ModelContextLimits | undefined;
+
+  /**
+   * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）。省略或 `state`：不掛比對。
+   * `shadow`：送的仍是 state，另在 root 緊貼請求快照外側拿從日誌推出來的歷史比一次，結果交給 `sink`，不寫進會話日誌。見 {@link ./history-shadow.ts}。
+   */
+  history?: { readonly source: 'state' } | ({ readonly source: 'shadow' } & HistoryShadowOptions);
 }
 
 /**
@@ -873,6 +881,15 @@ export function foldRegistry(
         options.modelLimits === undefined
           ? undefined
           : createImageOffloadRecoveryMiddleware({ sessions: registry.sessions }),
+      ),
+    ),
+    // 影子比對（#2355）：只折進 root，排在請求快照外面，看到的是摘要、參數截斷、補懸空呼叫都套過之後的那一串。見 {@link ./history-shadow.ts}。
+    rootOnly(
+      'historyShadow',
+      same(
+        options.history?.source === 'shadow'
+          ? createHistoryShadowMiddleware({ ...options.history, sessions: registry.sessions })
+          : undefined,
       ),
     ),
     // 請求快照（#1020）緊貼最內層、在中止訊號外面：它也包 `request.model`，排在這裡外面每一顆看到的仍是原本的模型。

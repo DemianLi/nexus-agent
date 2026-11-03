@@ -46,6 +46,8 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { stringify } from 'yaml';
 import {
+  createHistoryShadowTally,
+  HISTORY_SHADOW_KINDS,
   ModelHistoryCache,
   SessionRegistry,
   isBlankContent,
@@ -53,7 +55,12 @@ import {
   toBaseMessage,
   toLoggedMessage,
 } from '@nexus/core';
-import type { DerivedConversation, PluginEntry, SessionEvent } from '@nexus/core';
+import type {
+  DerivedConversation,
+  HistoryShadowKind,
+  PluginEntry,
+  SessionEvent,
+} from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
@@ -538,12 +545,36 @@ export interface Run {
   readonly events: SessionEvent[];
   readonly bodies: Body[];
   readonly mainBodies: Body[];
+  /**
+   * 影子比對（#2355）的計數：夾具一律開 `shadow`。組裝點與 serve 兩條路徑有；CLI 數不到，只收得到不同的那幾行（{@link Run.shadowLines}）。
+   */
+  readonly shadow?: ShadowCounts;
+  /** CLI 印在標準錯誤的 `[歷史比對]` 那幾行。 */
+  readonly shadowLines?: readonly string[];
 }
 
-const finish = (events: SessionEvent[], bodies: Body[]): Run => ({
+/** 影子比對各類別的次數。 */
+export type ShadowCounts = Readonly<Record<HistoryShadowKind, number>>;
+
+/** 夾具疊在每一份 patch 上的那一列：開影子比對（#2355），比對結果不寫進會話日誌，所以不影響任何一份日誌的比對。 */
+export const HISTORY_SHADOW_PATCH_ROWS = '- id: history-source\n  config:\n    source: shadow\n';
+
+/** 幾份計數加起來（serve 每一段是一台、各一份）。 */
+export function addShadowCounts(counts: readonly ShadowCounts[]): ShadowCounts {
+  return Object.fromEntries(
+    HISTORY_SHADOW_KINDS.map((kind) => [kind, counts.reduce((sum, each) => sum + each[kind], 0)]),
+  ) as ShadowCounts;
+}
+
+const finish = (
+  events: SessionEvent[],
+  bodies: Body[],
+  shadow: Pick<Run, 'shadow' | 'shadowLines'> = {},
+): Run => ({
   events,
   bodies,
   mainBodies: bodies.filter(hasTools),
+  ...shadow,
 });
 
 /** 一份落了盤的會話：讀取接縫交出來的 id 與日誌路徑，加上逐行解開的事件。 */
@@ -602,7 +633,7 @@ export function liveModelPatch(
   };
   // `time-context` 關掉：兩次跑（不重啟與重啟）要逐位元組相同，而讀數帶牆鐘秒數（#1625，見 `withoutTimeContext`）。
   const off = options.timeContext === true ? '' : TIME_CONTEXT_OFF_PATCH_ROWS;
-  return `${stringify([row])}${off}${extra}\n`;
+  return `${stringify([row])}${off}${HISTORY_SHADOW_PATCH_ROWS}${extra}\n`;
 }
 
 /**
@@ -618,7 +649,10 @@ export async function runAssembly(
   const upstream = await fakeEndpoint(script, false);
   const root = await mkdtemp(join(tmpdir(), 'nexus-lh-'));
   await writeFile(join(root, 'AGENTS.md'), '使用者的代號是胡桃。');
+  const historyShadow = createHistoryShadowTally();
   const { agent, commands, attachSession, dispose } = await createNexusAgent({
+    historySource: 'shadow',
+    historyShadow,
     model: model(upstream.baseURL),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     systemPrompt: '你是測試助手。',
@@ -643,7 +677,7 @@ export async function runAssembly(
     await dispose();
     await upstream.close();
   }
-  return finish([...sessions.root.events], upstream.bodies);
+  return finish([...sessions.root.events], upstream.bodies, { shadow: historyShadow.counts() });
 }
 
 /** 出貨路徑之一：`runCli --live`（出貨清單、出貨設定、真的落盤），日誌從 root（`cli`）那一份讀回。 */
@@ -658,6 +692,7 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
   const input = new PassThrough();
   input.end(lines);
+  const shadowLines: string[] = [];
   try {
     await runCli({
       argv: ['--live', '--session-log', logs, '--workspace', workspace, '--patch', patch],
@@ -665,7 +700,12 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
       env: { [HARNESS_HOME_ENV]: home },
       input,
       output: new PassThrough(),
-      printer: { log: () => {}, error: () => {} },
+      printer: {
+        log: () => {},
+        error: (line: string) => {
+          if (line.startsWith('[歷史比對]')) shadowLines.push(line);
+        },
+      },
     });
   } finally {
     await upstream.close();
@@ -676,7 +716,7 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   if (root === undefined) {
     throw new Error(`root 日誌不在 ${logs} 底下：${sessions.map((s) => s.logPath).join(', ')}`);
   }
-  return finish(root.events, upstream.bodies);
+  return finish(root.events, upstream.bodies, { shadowLines });
 }
 
 /** 這一句人話之後，已經有一則收尾的 AI 訊息，而且對話回到 idle。 */
@@ -716,6 +756,7 @@ export async function runServePhases(
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
     mode: 0o600,
   });
+  const shadow: ShadowCounts[] = [];
   try {
     for (const [phaseIndex, texts] of phases.entries()) {
       if (phaseIndex > 0) patchOptions.beforePhase?.(phaseIndex);
@@ -753,6 +794,7 @@ export async function runServePhases(
         }
         await events.return?.(undefined);
       } finally {
+        if (running !== undefined) shadow.push(running.historyShadow.counts());
         await running?.close();
       }
     }
@@ -762,6 +804,7 @@ export async function runServePhases(
   return finish(
     await sessionEventsOf(join(logs, projectKey(process.cwd())), 'alpha'),
     upstream.bodies,
+    { shadow: addShadowCounts(shadow) },
   );
 }
 
@@ -794,6 +837,8 @@ export interface DriverRun {
   readonly logs: LogFile[];
   readonly bodies: Body[];
   readonly mainBodies: Body[];
+  /** 每一台 serve 的影子比對計數加起來，同 {@link Run.shadow}。只比 root 的呼叫。 */
+  readonly shadow: ShadowCounts;
 }
 
 /** root 的日誌：id 沒有 `/`。 */
@@ -848,6 +893,7 @@ export async function runServeDriver(
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
     mode: 0o600,
   });
+  const shadow: ShadowCounts[] = [];
   try {
     for (const driver of list) {
       let running: RunningServe | undefined;
@@ -879,6 +925,7 @@ export async function runServeDriver(
         await settle(600);
         await events.return?.(undefined);
       } finally {
+        if (running !== undefined) shadow.push(running.historyShadow.counts());
         await running?.close();
       }
     }
@@ -890,5 +937,6 @@ export async function runServeDriver(
     logs: await readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),
+    shadow: addShadowCounts(shadow),
   };
 }
