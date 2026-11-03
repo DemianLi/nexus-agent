@@ -2,10 +2,10 @@
  * 增量推導對整份重算逐位元組相同（[#2349](https://github.com/DemianLi/nexus-agent/issues/2349)）。
  *
  * 每一份日誌都**逐個前綴**比：同一個 {@link ModelHistoryCache} 依序吃 `events[0..k]`，每一步跟
- * `replayConversation(events[0..k])` 比。只比最後一份的話，中途推錯、後來剛好被重建蓋掉的快取也會綠。
+ * `deriveConversation(events[0..k])` 比。只比最後一份的話，中途推錯、後來剛好被重建蓋掉的快取也會綠。
  * 步距另跑兩種：每三顆推一次、只在每顆 `model/start` 之前推（呼叫端實際的時機）。一次吃進好幾顆事件才碰得到的錯，
  * 例如 `session/end-seed` 換掉的串跟後面新進的訊息落在同一次，逐顆推碰不到。
- * 比的是每則訊息 {@link toLoggedMessage} 之後的 JSON，也就是日誌記訊息的那個形狀（含 `additional_kwargs`）。
+ * 比的是每則訊息轉成 `BaseMessage`、再 {@link toLoggedMessage} 之後的 JSON，也就是日誌記訊息的那個形狀（含 `additional_kwargs`）。
  *
  * 前五節各對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
  * 出貨寫入器寫的夾具另在 `apps/harness` 的 `model-history-fixtures.test.ts` 比。
@@ -14,8 +14,9 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import { replayConversation } from './conversation-replay.js';
-import type { ConversationReplay } from './conversation-replay.js';
+import { deriveConversation } from './conversation-replay.js';
+import type { DerivedConversation } from './conversation-replay.js';
+import { toBaseMessage } from './langchain-message-adapter.js';
 import { toLoggedMessage } from './logged-message.js';
 import { MODEL_HISTORY_REBUILD_EVENTS, ModelHistoryCache } from './model-history.js';
 import type { ModelHistoryOptions } from './model-history.js';
@@ -24,9 +25,9 @@ import type { SessionEvent } from './session-log.js';
 
 const ORIGINAL = '字'.repeat(300);
 
-function serialized(replay: ConversationReplay): unknown {
+function serialized(replay: DerivedConversation): unknown {
   return replay.kind === 'replayed'
-    ? replay.messages.map((message) => JSON.stringify(toLoggedMessage(message)))
+    ? replay.messages.map((message) => JSON.stringify(toLoggedMessage(toBaseMessage(message))))
     : replay;
 }
 
@@ -50,7 +51,7 @@ function expectEveryPrefix(events: readonly SessionEvent[]): void {
       for (const k of cuts) {
         const prefix = events.slice(0, k);
         expect(serialized(cache.derive(prefix)), `${stride}，前 ${String(k)} 顆`).toEqual(
-          serialized(replayConversation(prefix, options)),
+          serialized(deriveConversation(prefix, options)),
         );
       }
     }
@@ -234,7 +235,7 @@ describe('image/offload：早就在串裡的人話要換', () => {
     const flagOf = (options: ModelHistoryOptions) => {
       const derived = new ModelHistoryCache(options).derive(log.events);
       if (derived.kind !== 'replayed') throw new Error(derived.reason);
-      const content = derived.messages[0]!.content as { type: string; offloaded?: boolean }[];
+      const content = derived.messages[0]!.data.content as { type: string; offloaded?: boolean }[];
       return content.find((block) => block.type === 'nexus-image')?.offloaded;
     };
     expect(flagOf(SENT)).toBe(true);
@@ -327,9 +328,9 @@ describe('快取的邊界', () => {
     chat(b, '別的', '別的回覆');
     const cache = new ModelHistoryCache();
     cache.derive(a.events);
-    expect(serialized(cache.derive(b.events))).toEqual(serialized(replayConversation(b.events)));
+    expect(serialized(cache.derive(b.events))).toEqual(serialized(deriveConversation(b.events)));
     expect(serialized(cache.derive(a.events.slice(0, 3)))).toEqual(
-      serialized(replayConversation(a.events.slice(0, 3))),
+      serialized(deriveConversation(a.events.slice(0, 3))),
     );
   });
 
@@ -342,7 +343,7 @@ describe('快取的邊界', () => {
     (first.messages as unknown[]).length = 0;
     chat(log, '二', '乙');
     expect(serialized(cache.derive(log.events))).toEqual(
-      serialized(replayConversation(log.events)),
+      serialized(deriveConversation(log.events)),
     );
   });
 

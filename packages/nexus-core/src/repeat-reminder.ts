@@ -72,7 +72,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
-import { isMachineMessage } from './message-source.js';
+import { isMachineMessage } from './langchain-message-adapter.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';

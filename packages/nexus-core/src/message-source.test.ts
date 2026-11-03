@@ -9,10 +9,12 @@ import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
 import { attachmentBlock } from './attachment-ref.js';
-import { replayConversation } from './conversation-replay.js';
 import {
   humanMessageForTurnStart,
   isMachineMessage,
+  replayConversation,
+} from './langchain-message-adapter.js';
+import {
   MESSAGE_SOURCE_KWARG,
   messageSourceOf,
   sourceKwargs,

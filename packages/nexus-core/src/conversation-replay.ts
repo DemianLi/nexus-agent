@@ -30,7 +30,7 @@
  *   兩種的切法相同：之後進來的訊息（包括那次呼叫的回覆）都接在切點之後。
  *
  * 第三件（80,000 字元以上的工具結果，模型看到的是基座換過的預覽）要知道組裝怎麼設，交給呼叫端，見
- * {@link ReplayOptions.toolResultAsSeen}。
+ * {@link DeriveOptions.toolResultAsSeen}。
  *
  * ## 空的助手訊息推導時丟掉，但切點的座標仍算它
  *
@@ -87,21 +87,20 @@ dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.t
  * #306 拍板 2：推不出完整的歷史，就不灌半截進去，模型從空的開始。見 {@link UnreplayableReason}。
  */
 
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
-import type { BaseMessage } from '@langchain/core/messages';
-
-import { fromLoggedMessage, readLoggedMessage } from './logged-message.js';
-import type { LoggedMessage } from './logged-message.js';
-import { applyImageOffload, offloadedImagesOf, stampImageOrigin } from './image-offload.js';
-import { humanMessageForTurnStart } from './message-source.js';
-import { isModelVisibleEvent, storedEventDepth } from './session-log.js';
-import type { SessionEvent } from './session-log.js';
-import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
 import {
-  applyRecordedArgTruncations,
-  recordedArgTruncationsOf,
-} from './tool-arg-truncation-log.js';
-import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
+  offloadedImagesOf,
+  offloadLoggedMessages,
+  stampLoggedImageOrigin,
+} from './image-offload-log.js';
+import { turnStartMessage } from './message-source.js';
+import { nexusContent, nexusToolCalls } from './nexus-message.js';
+import type { NexusMessage } from './nexus-message.js';
+import { isModelVisibleEvent, snapshotJsonValue, storedEventDepth } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
+import { errorResultFields, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-error-codes.js';
+import type { ToolErrorInfo } from './tool-error-codes.js';
+import { recordedArgTruncationsOf, truncateLoggedMessages } from './tool-arg-truncation-log.js';
+import { pruneLoggedMessages, recordedPrunesOf } from './tool-result-prune-log.js';
 
 /**
  * 助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。空白算空；有任何一段不是文字（推理、圖）就不算空。
@@ -126,13 +125,13 @@ export function isBlankContent(content: unknown): boolean {
 
 /**
  * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。內容空的判法是 {@link isBlankContent}，與送出時 `fetch` 層整則拿掉的是同一支
- * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它在 BaseMessage 這一層有一段不是文字；轉成 wire 時推理不進 `content`，`fetch` 層照樣整則拿掉。
+ * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它的內容（{@link nexusContent} 讀出的那一份）有一段不是文字；轉成 wire 時推理不進 `content`，`fetch` 層照樣整則拿掉。
  */
-export function isEmptyAssistant(message: BaseMessage): boolean {
+export function isEmptyAssistant(message: NexusMessage): boolean {
   return (
-    AIMessage.isInstance(message) &&
-    (message.tool_calls ?? []).length === 0 &&
-    isBlankContent(message.content)
+    message.type === 'ai' &&
+    nexusToolCalls(message).length === 0 &&
+    isBlankContent(nexusContent(message))
   );
 }
 
@@ -163,18 +162,22 @@ export type UnreplayableReason =
   'reply-missing' | 'result-missing' | 'summary-missing' | 'compaction-misaligned';
 
 /** 推的結果。`seq` 是第一顆推不下去的事件。 */
-export type ConversationReplay =
-  | { readonly kind: 'replayed'; readonly messages: readonly BaseMessage[] }
+export type DerivedConversation =
+  | { readonly kind: 'replayed'; readonly messages: readonly NexusMessage[] }
   | { readonly kind: 'unreplayable'; readonly reason: UnreplayableReason; readonly seq: number };
 
-export interface ReplayOptions {
+/**
+ * 推一份日誌的選項。全部省略時推出的是續接灌回 graph state 的那一份：原文、每則深拷。`apply*` 換成模型實際收到的那一份；
+ * {@link DeriveOptions.readOnly}／{@link DeriveOptions.shareStored} 改掉拷法。
+ */
+export interface DeriveOptions {
   /**
    * 一則工具結果在模型那一格長什麼樣。省略即日誌裡記的那則原樣。
    *
    * 日誌記的是工具的輸出，模型看到的可能是基座換過的預覽（`session-log.ts` 的 `tool/result`）。重算要知道
    * 門檻與暫存路徑，那是組裝點的設定，所以由呼叫端給。
    */
-  readonly toolResultAsSeen?: (message: ToolMessage) => BaseMessage;
+  readonly toolResultAsSeen?: (message: NexusMessage) => NexusMessage;
   /**
    * 把日誌上 `compaction/prune` 記過的剪法套上去（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)），推出來的就是
    * **模型實際收到的那一份**：被剪的工具結果是剪過的內容。省略即不套——續接灌回 graph state 的那一串要留原文（剪刀下一次請求會照日誌
@@ -208,15 +211,15 @@ export interface ReplayOptions {
    * 同 dsh 的 `foldSurface` 分 `current` 與 `shadowed`。拿到的是推出來的那一則本身（工具結果是換過預覽之後的），
    * 所以跟回傳的 `messages` 可以用物件身分對。
    */
-  readonly origin?: (message: BaseMessage, event: SessionEvent) => void;
+  readonly origin?: (message: NexusMessage, event: SessionEvent) => void;
   /**
-   * 只看推不推得回來（`kind`、`reason`），推出來的訊息讀完就丟：日誌記的每一則改用 {@link readLoggedMessage} 推，巢狀的值與日誌共用，不深拷。
+   * 只看推不推得回來（`kind`、`reason`），推出來的訊息讀完就丟：日誌記的每一則原樣交出日誌上那個物件，不深拷；含圖片區塊的那則換成淺拷、加上來源記號（巢狀的值仍與日誌共用）。
    * 給判斷是不是舊日誌的讀者（`apps/harness` 的 `isLegacyLog`）。回傳串或 {@link origin} 交出的訊息要留下來、交給 graph state 或模型的，不能開。
    */
   readonly readOnly?: boolean;
   /**
-   * 讀盤共用過的事件（{@link storedEventDepth} 有值，整張深凍過）改用 {@link readLoggedMessage} 推，巢狀的值與日誌共用、不深拷；
-   * 其餘的事件照舊拷。推出來的可以交給 graph state：下游就地改巢狀的值會當場拋，不會改到日誌。給續接灌回 graph state 的讀者
+   * 讀盤共用過的事件（{@link storedEventDepth} 有值，整張深凍過）原樣交出日誌上那個物件，不深拷（含圖片區塊的同 {@link DeriveOptions.readOnly}）；
+   * 其餘的事件深拷一份（`snapshotJsonValue`）。推出來的可以交給 graph state：下游就地改巢狀的值會當場拋，不會改到日誌。給續接灌回 graph state 的讀者
    * （`apps/harness` 的 `restoreConversation`）。
    */
   readonly shareStored?: boolean;
@@ -227,51 +230,72 @@ interface PendingBatch {
   /** 照回覆裡 `tool_calls` 的順序。 */
   readonly calls: readonly { readonly id: string; readonly name: string }[];
   /** callId → 那顆結果，加上跟著它注入的訊息。 */
-  readonly results: Map<string, BaseMessage[]>;
+  readonly results: Map<string, NexusMessage[]>;
   /** 記過 `tool/call` 的。補結果時據此挑 dsh 的哪一句。 */
   readonly started: Set<string>;
 }
 
 /** 一則回覆要了哪幾次呼叫，照順序。沒有 id 的配不到結果，不算。 */
-export function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
-  if (!AIMessage.isInstance(message)) return [];
-  return (message.tool_calls ?? []).flatMap((call) =>
+export function requestedCalls(message: NexusMessage): PendingBatch['calls'] {
+  return nexusToolCalls(message).flatMap((call) =>
     call.id === undefined ? [] : [{ id: call.id, name: call.name }],
   );
 }
 
 /**
- * 沒配到結果的那次，照 dsh `repair.ts` 補一則錯誤結果。**不帶 `Error: `**：那兩句是 dsh 的作者寫好的
- * 回饋，走第二條政策（`tool-events.ts` 的 `toolRefusal`）。
+ * 沒配到結果的那次補的一則錯誤結果（欄位由 {@link errorResultFields} 建）。**不帶 `Error: `**：那兩句是寫好的回饋，不是拒絕
+ * （前綴政策見 `tool-events.ts` 的 `toolRefusal`）。錯誤碼不在訊息上：寫日誌用 {@link closerError}，轉成 `ToolMessage` 時由
+ * {@link closerErrorOf} 認回，只認這個實例。
  */
 export function closer(
   call: { readonly id: string; readonly name: string },
   started: boolean,
-): ToolMessage {
-  return toolFeedback(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {
-    callId: call.id,
-    name: call.name,
-    error: started
-      ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
-      : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
-  });
+): NexusMessage {
+  const message: NexusMessage = {
+    type: 'tool',
+    data: {
+      ...errorResultFields(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {
+        callId: call.id,
+        name: call.name,
+      }),
+      additional_kwargs: {},
+      response_metadata: {},
+    } as NexusMessage['data'],
+  };
+  closerErrors.set(message, closerError(started));
+  return message;
+}
+
+/** {@link closer} 造的那幾則各自的錯誤資訊。碼不寫進訊息本身（理由見 `tool-events.ts` 檔頭〈碼怎麼從內層走到外層〉）；轉成 `ToolMessage` 時由轉接器（`toBaseMessage`）掛回去，拷過的那一則認不回。 */
+const closerErrors = new WeakMap<NexusMessage, ToolErrorInfo>();
+
+/** 這則是不是 {@link closer} 造的；是的話回它的錯誤資訊。 */
+export function closerErrorOf(message: NexusMessage): ToolErrorInfo | undefined {
+  return closerErrors.get(message);
+}
+
+/** {@link closer} 那一則對應的錯誤資訊，寫進 `tool/result` 的 `error`。 */
+export function closerError(started: boolean): ToolErrorInfo {
+  return started
+    ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
+    : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED };
 }
 
 /** 這個生命週期最後一次壓縮：摘要那一則與切點（原始訊息串的索引）。 */
 export interface ReplaySummary {
-  readonly message: BaseMessage;
+  readonly message: NexusMessage;
   readonly cutoff: number;
 }
 
 /**
- * 逐顆事件推歷史的狀態，可以接著餵：{@link replayConversation} 從頭餵一次，`model-history.ts` 的增量推導每次只餵新的事件。
+ * 逐顆事件推歷史的狀態，可以接著餵：{@link deriveConversation} 從頭餵一次，`model-history.ts` 的增量推導每次只餵新的事件。
  * 兩者共用這一份規則，所以同一串事件推出來的 {@link ReplayFold.raw}、{@link ReplayFold.summary}、{@link ReplayFold.pendingMessages} 一樣。
  *
  * 推到一處要取結果：先看 {@link ReplayFold.finalFailure}，沒有再拿 {@link ReplayFold.settled}。`options` 的 `applyPrunes`／`applyArgTruncations`
  * 這裡不套：剪法與縮短要整份事件才知道，記在後面的會回頭改前面的那幾則，由呼叫端在 `settled()` 之後套。
  */
 export class ReplayFold {
-  #raw: BaseMessage[] = [];
+  #raw: NexusMessage[] = [];
   #summary: ReplaySummary | undefined;
   #failure: { readonly reason: UnreplayableReason; readonly seq: number } | undefined;
   #batch: PendingBatch | undefined;
@@ -284,14 +308,14 @@ export class ReplayFold {
   #openCall: number | undefined;
   /** 整份日誌有沒有任何一則回覆。 */
   #replied = false;
-  readonly #options: ReplayOptions;
+  readonly #options: DeriveOptions;
 
-  constructor(options: ReplayOptions = {}) {
+  constructor(options: DeriveOptions = {}) {
     this.#options = options;
   }
 
   /** 這個生命週期的原始訊息串，與 graph state 的 `messages` 同一組座標。只會往後接，`session/end-seed` 時整串換掉。 */
-  get raw(): readonly BaseMessage[] {
+  get raw(): readonly NexusMessage[] {
     return this.#raw;
   }
 
@@ -306,7 +330,7 @@ export class ReplayFold {
   }
 
   /** 還在等結果的那一批照 `tool_calls` 的順序排好、缺的補上之後的樣子。不改狀態：之後到的結果還會換掉補上的那幾則。 */
-  pendingMessages(): BaseMessage[] {
+  pendingMessages(): NexusMessage[] {
     const batch = this.#batch;
     if (batch === undefined) return [];
     return batch.calls.flatMap(
@@ -329,7 +353,7 @@ export class ReplayFold {
   }
 
   /** 推到這裡為止的那一串，不改狀態：等於這時候收尾（補齊那一批、套摘要、濾掉空的助手訊息）。 */
-  settled(): BaseMessage[] {
+  settled(): NexusMessage[] {
     return settledMessages([...this.#raw, ...this.pendingMessages()], this.#summary);
   }
 
@@ -346,7 +370,7 @@ export class ReplayFold {
           this.#turn = { replied: false, interrupted: false };
           // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
           if (event.data.kind !== 'resume') {
-            this.#push(this.#from(humanMessageForTurnStart(event.data), event));
+            this.#push(this.#from(turnStartMessage(event.data), event));
           }
           break;
         }
@@ -476,38 +500,38 @@ export class ReplayFold {
   }
 
   /** 那一批照 `tool_calls` 的順序放進去，缺的補上，再接這一則。 */
-  #push(message: BaseMessage): void {
+  #push(message: NexusMessage): void {
     this.#raw.push(...this.pendingMessages(), message);
     this.#batch = undefined;
   }
 
-  #read(logged: LoggedMessage, event: SessionEvent): BaseMessage {
+  #read(logged: NexusMessage, event: SessionEvent): NexusMessage {
     return this.#options.readOnly === true ||
       (this.#options.shareStored === true && storedEventDepth(event) !== undefined)
-      ? readLoggedMessage(logged)
-      : fromLoggedMessage(logged);
+      ? logged
+      : (snapshotJsonValue(logged, '日誌訊息') as NexusMessage);
   }
 
-  #asSeen(message: BaseMessage): BaseMessage {
-    return this.#options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)
+  #asSeen(message: NexusMessage): NexusMessage {
+    return this.#options.toolResultAsSeen !== undefined && message.type === 'tool'
       ? this.#options.toolResultAsSeen(message)
       : message;
   }
 
-  /** 這一則出自這一顆，見 {@link ReplayOptions.origin}。 */
-  #from<M extends BaseMessage>(message: M, event: SessionEvent): M {
+  /** 這一則出自這一顆，見 {@link DeriveOptions.origin}。 */
+  #from(message: NexusMessage, event: SessionEvent): NexusMessage {
     // 含圖的訊息蓋上出自哪顆事件（#1270）：`image/offload` 的決定記的是「哪顆事件的第幾張圖」，續接後要靠它認回來。沒有圖的訊息不動。
-    stampImageOrigin(message, event.seq);
-    this.#options.origin?.(message, event);
-    return message;
+    const stamped = stampLoggedImageOrigin(message, event.seq);
+    this.#options.origin?.(stamped, event);
+    return stamped;
   }
 }
 
 /** 套摘要，再濾掉空的助手訊息：切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。增量推導（`model-history.ts`）逐段借用。 */
 export function settledMessages(
-  messages: readonly BaseMessage[],
+  messages: readonly NexusMessage[],
   summary: ReplaySummary | undefined,
-): BaseMessage[] {
+): NexusMessage[] {
   const cut =
     summary === undefined ? messages : [summary.message, ...messages.slice(summary.cutoff)];
   return cut.filter((message) => !isEmptyAssistant(message));
@@ -517,13 +541,13 @@ export function settledMessages(
  * 把一份 root 日誌推回模型的對話歷史。
  *
  * @param events - root 那一份日誌的全部事件，照 `seq` 排（續接時讀回來的那些）。
- * @param options - 見 {@link ReplayOptions}。
+ * @param options - 見 {@link DeriveOptions}。
  * @returns 要灌回 graph state 的那一串（壓縮過就是摘要加之後的），或推不出來的原因。
  */
-export function replayConversation(
+export function deriveConversation(
   events: readonly SessionEvent[],
-  options: ReplayOptions = {},
-): ConversationReplay {
+  options: DeriveOptions = {},
+): DerivedConversation {
   const fold = new ReplayFold(options);
   for (const event of events) {
     fold.feed(event);
@@ -531,15 +555,15 @@ export function replayConversation(
   }
   const failure = fold.finalFailure();
   if (failure !== undefined) return { kind: 'unreplayable', ...failure };
-  let messages: readonly BaseMessage[] = fold.settled();
+  let messages: readonly NexusMessage[] = fold.settled();
   if (options.applyPrunes === true) {
-    messages = applyRecordedPrunes(messages, recordedPrunesOf(events));
+    messages = pruneLoggedMessages(messages, recordedPrunesOf(events));
   }
   if (options.applyArgTruncations === true) {
-    messages = applyRecordedArgTruncations(messages, recordedArgTruncationsOf(events));
+    messages = truncateLoggedMessages(messages, recordedArgTruncationsOf(events));
   }
   if (options.applyImageOffloads === true) {
-    messages = applyImageOffload(messages, offloadedImagesOf(events));
+    messages = offloadLoggedMessages(messages, offloadedImagesOf(events));
   }
   return { kind: 'replayed', messages: [...messages] };
 }

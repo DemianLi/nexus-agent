@@ -35,7 +35,7 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
-import type { MessageContent } from '@langchain/core/messages';
+import type { MessageContent } from './nexus-message.js';
 import { brandNumber } from '@nexus/brand';
 import type { BrandedNumber } from '@nexus/brand';
 import type { AttachmentRef } from './attachment-ref.js';
@@ -54,7 +54,7 @@ import type { SessionHeaderBuildMetadata } from './session-store.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { SubagentDescriptorData } from './subagent-descriptor.js';
 import type { TodoItem } from './todo.js';
-import type { ToolErrorInfo } from './tool-events.js';
+import type { ToolErrorInfo } from './tool-error-codes.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**

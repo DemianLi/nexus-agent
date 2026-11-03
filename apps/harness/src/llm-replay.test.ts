@@ -118,7 +118,10 @@ async function loggedReplies(root: string, threadId: string): Promise<Record<str
     .filter((event) => event.type === 'assistant/message')
     .map(
       (event) =>
-        (event as SessionEvent<'assistant/message'>).data.message.data as Record<string, unknown>,
+        (event as SessionEvent<'assistant/message'>).data.message.data as unknown as Record<
+          string,
+          unknown
+        >,
     );
 }
 
