@@ -135,9 +135,9 @@ export function assertStoredHeaderFields(header: unknown): void {
  * 分叉前綴與 header 對不對得上，讀完已接受的前綴之後跑一次，回傳切點（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
  * 兩條：帶 `isSeeded` 的要有 inherited 標記；沒帶的不能有。切點不另外落盤，取最後一顆標記的 `seq`（core 的 `inheritedEventCount`），
- * 所以「切點超過事件數」「seeded 而切點不等於最後一顆標記」都寫不出來，只剩「seeded 卻沒有標記」：切點本來就是從標記推出來的。
+ * 所以切點必然落在標記上、不會超過事件數，header 與標記一致與否就是上面兩條。
  *
- * **放在尾端復原之後**（卡面做法 4 要先定）：只看已接受的事件，交出前綴之前跑（`jsonl-session-store.ts` 的 `validateStoredLog`）。
+ * **放在尾端復原之後**（#1579 做法第 4 步）：只看已接受的事件，交出前綴之前跑（`jsonl-session-store.ts` 的 `validateStoredLog`）。
  * 被丟掉的尾巴不在 `events` 裡，切點取自已接受的前綴，所以不會有「標記位置對不上繼承長度」的誤判；標記本身被當成壞尾巴丟掉時，
  * 這份 seeded 檔就拋損壞——繼承前綴的切點不能靠猜。
  *
@@ -187,9 +187,8 @@ export function assertStoredInheritance(
  *
  * `childId` 不是字串（或 `data` 不是物件）也拒。`SubagentCatalogData` 的其他格不在這裡驗，只驗這條規則要用到的 `childId`。
  *
- * 第 1 件**只掃切點之後（含）的**：繼承來的前綴
- * 是父會話的登記，分叉之後自己的區段可以再派一個同 id 的子代理，前綴裡那一筆不算重複（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)
- * 撤掉 #1549 的過渡）。第 2、3 件掃整份：前綴結尾是 inherited 的 `session/end-seed`，狀態在那裡照一般的 end-seed 重設或帶過去。
+ * 第 1 件**只掃切點之後（含）的**：繼承來的前綴是父會話的登記，分叉之後自己的區段可以再派一個同 id 的子代理，
+ * 前綴裡那一筆不算重複（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579) 撤掉 #1549 的過渡）。第 2、3 件掃整份：前綴結尾是 inherited 的 `session/end-seed`，狀態在那裡照一般的 end-seed 重設或帶過去。
  *
  * @param id - 這份會話的 id，放進錯誤裡。
  * @param events - 已接受的前綴，依 `seq` 排好。
@@ -278,7 +277,7 @@ function dataField(event: SessionEvent, key: string): unknown {
 }
 
 /**
- * 讀回來的每一筆跑 core 的單筆資料規則（`validateSessionEventData`），不過就包成損壞錯誤；續接與唯讀打開共用。
+ * 讀回來的每一筆跑 core 的單筆資料規則（`validateSessionEventData`），不過就包成損壞錯誤。跑在 `jsonl-session-store.ts` 的 `validateStoredLog` 裡，續接、唯讀打開、遷移都走。
  * 不認得的必需種類在解析本文時已經拒了（`SessionEventUnsupportedError`），這裡不重做。
  *
  * @param id - 這份會話的 id，放進錯誤裡。
