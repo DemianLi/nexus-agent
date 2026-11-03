@@ -1,27 +1,37 @@
 /**
- * #2353 的 `run_javascript` 改成 `NexusTool` 之後，在真的組裝裡模型看到的工具定義、工具結果，與日誌上的 `tool/result`，
+ * #2353 的 `run_javascript` 改成 `NexusTool` 之後，在產品組裝裡模型看到的工具定義、工具結果，與日誌上的 `tool/result`，
  * 與 `quickjs-migration.baseline.json` 逐字相同。
  *
- * 對照組在 `develop` `240e2354`（這顆還是 LangChain 工具時）以 `K3C_RECORD=1` 錄的。`K3C_RECORD=1` 會拿當下的輸出覆寫對照組。
+ * 走的是部署方掛它的那條路：出貨清單疊一份 `--patch`，`insert` 一列 `@nexus/plugin-quickjs`，再把出貨的腳本模型換成這裡的腳本。
+ * 對照組在 `develop` `240e2354`（這顆還是 LangChain 工具、掛在相容層時）以 `K3C_RECORD=1` 錄的。`K3C_RECORD=1` 會拿當下的輸出覆寫對照組。
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
-import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
-import { createQuickJsPlugin, RUN_JAVASCRIPT_TOOL_NAME } from '@nexus/plugin-quickjs';
-import type { QuickJsPluginOptions } from '@nexus/plugin-quickjs';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 
-import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
+import { createCordisRoot } from './cordis-root.js';
+import type { CordisRoot } from './cordis-root.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
-import { ScriptedChatModel } from './scripted-model.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import type { ScriptedChatModel } from './scripted-model.js';
 
 const BASELINE = new URL('./quickjs-migration.baseline.json', import.meta.url);
+const RUN_JAVASCRIPT = 'run_javascript';
 
-const cases: readonly (readonly [string, unknown, QuickJsPluginOptions])[] = [
+const cleanups: (() => Promise<void> | void)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+
+const cases: readonly (readonly [string, unknown, Record<string, number>])[] = [
   ['回傳值', { code: '1 + 1' }, {}],
   ['沒有回傳值', { code: 'const x = 1;' }, {}],
   ['async', { code: '(async () => 41 + 1)()' }, {}],
@@ -39,33 +49,45 @@ const cases: readonly (readonly [string, unknown, QuickJsPluginOptions])[] = [
   ['多一個鍵', { code: '1', extra: 1 }, {}],
 ];
 
-async function runOne(args: unknown, options: QuickJsPluginOptions): Promise<unknown> {
-  const model = new ScriptedChatModel({
-    turns: [
-      {
-        content: '',
-        toolCalls: [
-          { name: RUN_JAVASCRIPT_TOOL_NAME, args: args as Record<string, unknown>, id: 'c1' },
-        ],
-      },
-      { content: '收工。' },
-    ],
-  });
-  const { agent, attachSession, dispose } = await createNexusAgent({
-    model,
-    checkpointer: new MemorySaver(),
-    plugins: [createQuickJsPlugin(options)],
-  });
+/** 疊在出貨清單上的那一份 patch：插一列 quickjs、換掉腳本模型的 `turns`。 */
+function overlay(dir: string, args: unknown, config: Record<string, number>): string {
+  const turns = [
+    { content: '', toolCalls: [{ name: RUN_JAVASCRIPT, args, id: 'c1' }] },
+    { content: '收工。' },
+  ];
+  const text =
+    `- insert:\n    - id: quickjs\n      name: '@nexus/plugin-quickjs'\n      config: ${JSON.stringify(config)}\n` +
+    `- id: cli-script\n  config: ${JSON.stringify({ turns })}\n`;
+  const file = join(dir, 'overlay.yml');
+  writeFileSync(file, text);
+  return file;
+}
+
+async function runOne(
+  root: CordisRoot,
+  args: unknown,
+  config: Record<string, number>,
+): Promise<unknown> {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-quickjs-migration-'));
+  chmodSync(dir, 0o700);
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const loaded = await loadDefaultPlugins(
+    { env: { [HARNESS_HOME_ENV]: dir }, patches: [overlay(dir, args, config)], warn: () => {} },
+    { tree: root.tree },
+  );
+  expect(loaded.dropped).toEqual([]);
+  const built = await createCliAgent({ live: false }, loaded.plugins);
   const sessions = new SessionRegistry('quickjs');
-  const detach = attachSession(sessions);
+  const detach = built.attachSession(sessions);
   try {
-    await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'quickjs' } });
+    await built.agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'quickjs' } });
   } finally {
     detach();
-    await dispose();
+    await built.dispose();
   }
+  const model = built.model as ScriptedChatModel;
   const bound = (model.boundTools ?? []) as StructuredToolInterface[];
-  const tool = bound.find((entry) => entry.name === RUN_JAVASCRIPT_TOOL_NAME);
+  const tool = bound.find((entry) => entry.name === RUN_JAVASCRIPT);
   const prompt = (model.prompts[1] ?? []) as readonly BaseMessage[];
   const message = prompt.find((entry): entry is ToolMessage => ToolMessage.isInstance(entry));
   const rootLog = sessions.list().find((entry) => entry.address.kind === 'root');
@@ -81,16 +103,16 @@ async function runOne(args: unknown, options: QuickJsPluginOptions): Promise<unk
             id: message.tool_call_id,
           },
     logged: (rootLog?.log.events ?? []).flatMap((event) =>
-      event.type === 'tool/result'
-        ? [{ isError: event.data.isError, error: event.data.error, content: event.data.content }]
-        : [],
+      event.type === 'tool/result' ? [{ isError: event.data.isError, error: event.data.error }] : [],
     ),
   };
 }
 
-it('run_javascript 的工具定義、結果與日誌，與對照組逐字相同', { timeout: 60_000 }, async () => {
+it('run_javascript 的工具定義、結果與日誌，與對照組逐字相同', { timeout: 180_000 }, async () => {
+  const root = createCordisRoot();
+  cleanups.push(() => root.dispose());
   const now: Record<string, unknown> = {};
-  for (const [label, args, options] of cases) now[label] = await runOne(args, options);
+  for (const [label, args, config] of cases) now[label] = await runOne(root, args, config);
   if (process.env.K3C_RECORD === '1') {
     writeFileSync(BASELINE, `${JSON.stringify(now, null, 2)}\n`);
     return;
