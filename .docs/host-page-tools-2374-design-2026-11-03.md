@@ -7,7 +7,7 @@
 | 對象 | 版本 | 怎麼確認 |
 | --- | --- | --- |
 | nexus | `origin/develop` `713bfa35` | 2026-11-03 `git fetch` 後開的 worktree |
-| dsh | `ce7073d5` | `references/deepseek-harness` 的 `git rev-parse HEAD`。**遠端 `master` 已到 `8bd07339`**（`git ls-remote`），本機 clone 沒更新，這之間的改動沒讀 |
+| dsh | `master` `8bd07339` | PM worktree 裡那份 `references/deepseek-harness` 的 `git rev-parse HEAD`，對 `git ls-remote` 的 `master` 一致。初稿讀的是 `ce7073d5`；改讀這一版後，下面引用的檔逐一比過，行號照這一版改寫 |
 
 **依據**：地圖 #2365 第 7（情境是資料不是指令）、10（沒標唯讀就要核准）、14 點；#2367 的嵌入版設定檔（PR #2378）；#2336 的設計 [`agent-loop-off-langchain-design-2026-11-03.md`](agent-loop-off-langchain-design-2026-11-03.md)（D168 全照推薦）；D169「零 LangChain、零 Cordis、萬物皆可插件」。
 
@@ -27,15 +27,15 @@
 
 ## 一、dsh 怎麼做、為什麼
 
-**dsh 沒有「工具由客戶端宣告、客戶端執行」的機制。** 在 `packages/`、`docs/`、`apps/` 搜 `clientTool`、`client_tool`、`externalTool`、`external_tool`、`remoteTool`、`hostTool`、`host_tool`、`frontendTool`、`客户端执行`、`客户端提供`、`客户端工具`：命中的只有測試裡的變數名（`packages/experimental/tool-subagent-oar/tests/tool-subagent-oar.spec.ts:13`、`packages/extensions/cordis-host-runner/tests/sandbox-context.spec.ts:219`），以及「向客户端提供會話讀取」這類控制器說明，沒有一個是客戶端執行的工具。
+**dsh 沒有「工具由客戶端宣告、客戶端執行」的機制。** 在 `packages/`、`docs/`、`apps/` 搜 `clientTool`、`client_tool`、`externalTool`、`external_tool`、`remoteTool`、`hostTool`、`host_tool`、`frontendTool`、`客户端执行`、`客户端提供`、`客户端工具`：命中的只有測試裡的變數名（`packages/experimental/tool-subagent-oar/tests/tool-subagent-oar.spec.ts:13`、`packages/extensions/cordis-host-runner/tests/sandbox-context.spec.ts:219`）、帳號門控的一句說明（`packages/llm/llm-deepseek-account/README.zh.md:98`），以及「向客户端提供會話讀取」「MCP 伺服器管理器」這類說明（19 份），沒有一個是客戶端執行的工具。
 
 最接近的有三樣：
 
 1. **ACP 客戶端宣告 MCP 伺服器。** ACP 明文不支援客戶端的檔案系統操作與終端（`packages/acp/acp/README.zh.md:82`）；客戶端能帶進來的工具只有 `session/new` 時宣告的 MCP 伺服器，建立時掛上、之後不能換（`packages/acp/acp/src/session.ts:84`）。客戶端被當成受信的控制器（同一行 README）。
-2. **MCP 橋接的名字規則。** 命名空間 `mcp__<server>__<raw>`，namespace 用本地設定、不用遠端自報的名字（`packages/mcp/mcp-client/README.zh.md:107`）；名字上限 64、只准 `[A-Za-z0-9_-]`（`packages/mcp/mcp-client/src/tools.ts:48-87`）；清單裡重名整份作廢（`tools.ts:126`），跟既有工具撞名整代回滾（`tools.ts:148-160`）。**說明與 inputSchema 原樣放行，沒有長度上限**（`tools.ts:133-135`）。
+2. **MCP 橋接的名字規則。** 命名空間 `mcp__<server>__<raw>`，namespace 用本地設定、不用遠端自報的名字（`packages/mcp/mcp-client/README.zh.md:119`）；名字上限 64、只准 `[A-Za-z0-9_-]`（`packages/mcp/mcp-client/src/tools.ts:58-97`）；清單裡重名整份作廢（`tools.ts:140-144`），跟既有工具撞名整代回滾（`tools.ts:175-186`）。**說明與 inputSchema 原樣放行，沒有長度上限**（`tools.ts:147-149`）。
 3. **反問與核准的暫停。** 都是 waterfall 事件，gateway 轉給 owner 客戶端；待決的只在記憶體（`packages/api/gateway/src/index.ts:233`）。重連時新的 owner 串流補送全部待決（`index.ts:587-588`），斷線只撤那次投遞、請求照等（`index.ts:765-768`），停止送 cancel 幀（`index.ts:665-691`）。ask_user 預設沒有逾時；計時版預設 120 秒，逾時回 `pending`、這一輪不取消，遲到的回覆排成新的一輪（`packages/interaction/tool-ask-user/src/index.ts:24-25`、`packages/interaction/user-questions/src/index.ts:239-266,170-196`）。重啟後沒結果的工具呼叫補一顆 `TOOL_OUTCOME_UNKNOWN`，措辭叫模型不要盲目重試（`packages/core/session/src/repair.ts:18,31-35`）。
 
-結果與日誌：工具結果的長度由 spill-policy 管（出廠 `maxInlineTokens: 12500`，`packages/bundle/base/cordis.patch.yml:416`）；MCP 結果轉成文字前不標來源（`packages/mcp/mcp-client/src/tools.ts:261-263`），「不可信資料」的開頭聲明只有 web 工具有（`packages/web/tool-web/src/trust.ts:7`）。工具定義沒有唯讀旗標，走不走核准看 `tools/pre-execute` 回不回 `ask`（`packages/core/tools/src/contracts.ts:349-361`）。日誌只有 `tool/call`、`tool/result`，外部工具沒有專屬欄位；每次請求的 `request/header` 記下模型看到的整份工具 schema（`packages/core/session/src/types.ts:246-252`）。
+結果與日誌：工具結果的長度由 spill-policy 管（出廠 `maxInlineTokens: 12500`，`packages/bundle/base/cordis.patch.yml:425`）；MCP 結果轉成文字前不標來源（`packages/mcp/mcp-client/src/tools.ts:287-289`），「不可信資料」的開頭聲明只有 web 工具有（`packages/web/tool-web/src/trust.ts:7`）。工具定義沒有唯讀旗標，走不走核准看 `tools/pre-execute` 回不回 `ask`（`packages/core/tools/src/contracts.ts:349-361`）。日誌只有 `tool/call`、`tool/result`，外部工具沒有專屬欄位；每次請求的 `request/header` 記下模型看到的整份工具 schema（`packages/core/session/src/types.ts:246-252`）。
 
 **它解決的與代價**：dsh 的客戶端是 IDE、SDK、自己的 web，都是受信的一方，所以沒有「第三方頁面宣告工具」這種需求，也就不設說明與 schema 的上限。nexus 的宿主頁是另一個系統的程式碼，跑在使用者的瀏覽器裡，serve 驗不了它，所以這張多出 dsh 沒有的三件事：上限、來源標記、免核准的名單不由宿主頁自報。
 
