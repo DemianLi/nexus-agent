@@ -302,7 +302,7 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     expect((await view(page)).yaw).not.toBe(before.yaw);
     expect(await label('B-07 壓縮機').count()).toBe(1);
 
-    // 對話框裡打字（含 w、a、s、d）不會轉動或縮放模型；焦點在模型上時同一組鍵照常。
+    // 對話框裡打字（含 w、a、s、d）不會轉動或縮放模型；焦點在模型上時按 d 照常轉。
     const rotated = await view(page);
     const textbox = chat(page).getByRole('textbox', { name: '要說的話' });
     await textbox.click();
@@ -323,15 +323,17 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     await page.mouse.wheel(0, -400);
     expect((await view(page)).distance).toBeLessThan(zoomed.distance);
 
-    // 一輪還在串的時候照樣能轉模型、換選取；回覆照常串完，對話紀錄不受影響。
+    // 回覆還沒串完時照樣能轉模型、換選取（轉之前、轉之後都確認回覆還沒完整出現）；回覆照常串完。
     await chat(page).getByRole('button', { name: '送出', exact: true }).click();
     await expect.poll(() => transcript(page).getByText('wasd 這台現在怎樣').count()).toBe(1);
+    expect(await transcript(page).getByText(reply).count()).toBe(0);
     const streaming = await view(page);
     await page.mouse.move(box.x + 60, box.y + 60);
     await page.mouse.down();
     await page.mouse.move(box.x + 160, box.y + 90, { steps: 6 });
     await page.mouse.up();
     expect((await view(page)).yaw).not.toBe(streaming.yaw);
+    expect(await transcript(page).getByText(reply).count()).toBe(0);
     const a12 = await devicePoint(page, 'A-12');
     await page.mouse.click(a12.x, a12.y);
     await expect.poll(() => label('A-12 冷卻泵').count()).toBe(1);

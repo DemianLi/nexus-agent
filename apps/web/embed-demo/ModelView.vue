@@ -67,8 +67,8 @@ function onWheel(event: WheelEvent): void {
 }
 
 /**
- * 可視化系統常見的鍵盤操作：方向鍵或 A／D 轉、W／S 拉近拉遠。事件從 `<nexus-chat>` 的 shadow root 冒出來時 `target` 會換成元素本身，
- * 看不出是在打字，所以拿 `composedPath()[0]` 判斷（接入說明〈宿主頁的快捷鍵〉）。
+ * 焦點是不是在可輸入的元素上。`<nexus-chat>` 的 shadow root 冒出來的事件，`target` 會被換成元素本身，所以看
+ * `composedPath()[0]`（`docs/embed-chat.md`〈宿主頁的快捷鍵與指標操作〉）。
  */
 function typing(event: KeyboardEvent): boolean {
   const origin = event.composedPath()[0];

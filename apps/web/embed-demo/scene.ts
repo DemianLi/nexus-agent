@@ -3,10 +3,10 @@
  * 夠模擬可視化系統的互動（指標、滾輪、鍵盤都在宿主頁手上），不求畫得好看。
  */
 
+/** 一台設備。`x`、`z` 是地面上的位置，`height` 是高度，單位都是格。 */
 export interface Device {
   readonly id: string;
   readonly label: string;
-  /** 地面上的位置與高度，單位是格。 */
   readonly x: number;
   readonly z: number;
   readonly height: number;
@@ -34,10 +34,10 @@ interface Face {
 
 const PITCH_MIN = 0.15;
 const PITCH_MAX = 1.3;
-export const DISTANCE_MIN = 6;
-export const DISTANCE_MAX = 30;
+const DISTANCE_MIN = 6;
+const DISTANCE_MAX = 30;
 
-/** 立方體的 6 個面，各自的頂點索引與明暗。 */
+/** 立方體的面：頂點索引與明暗（1 是原色，越小疊上越深的暗色）。 */
 const FACES: readonly (readonly [readonly number[], number])[] = [
   [[4, 5, 6, 7], 1],
   [[0, 1, 5, 4], 0.75],
@@ -121,7 +121,9 @@ function inside(point: Point, polygon: readonly Point[]): boolean {
   return hit;
 }
 
-/** 點到的設備（最近的那一面），沒點到是 `null`。 */
+/**
+ * `faces` 要照 `layout()` 的遠到近順序（`draw()` 的回傳值就是）。回傳點到的設備，重疊時取最近的那一面；沒點到是 `null`。
+ */
 export function pick(faces: readonly Face[], point: Point): Device | null {
   for (let i = faces.length - 1; i >= 0; i--) {
     if (inside(point, faces[i]!.points)) return faces[i]!.device;
@@ -129,11 +131,12 @@ export function pick(faces: readonly Face[], point: Point): Device | null {
   return null;
 }
 
-/** 設備頂面中心在畫布上的位置（e2e 用來點它）。 */
+/** 設備頂面中心在畫布上的位置（給 `window.__model.point` 用）。 */
 export function topCenter(device: Device, view: View, width: number, height: number): Point {
   return project([device.x, device.height, device.z], view, width, height)[0];
 }
 
+/** 畫地面格線與所有設備，回傳 `layout()` 排好的面（遠到近），給 `pick()` 用。 */
 export function draw(
   context: CanvasRenderingContext2D,
   devices: readonly Device[],
