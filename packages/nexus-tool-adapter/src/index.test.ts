@@ -156,6 +156,82 @@ describe('驗證：寫了 additionalProperties: false 的拒，沒寫的收下�
   });
 });
 
+describe('rawParameters：JSON Schema 原樣上線、原樣驗', () => {
+  const booking = {
+    type: 'object',
+    $defs: { who: { type: 'object', properties: { email: { type: 'string', format: 'email' } } } },
+    properties: {
+      room: { anyOf: [{ type: 'string' }, { type: 'integer', minimum: 1 }] },
+      who: { $ref: '#/$defs/who' },
+    },
+    required: ['room'],
+  } as const;
+  const seen: unknown[] = [];
+  const raw = (parameters: NexusTool['parameters'], rawParameters = true): NexusTool => ({
+    ...tinyTool({ ok: true, content: 'ok' }, parameters),
+    rawParameters,
+    execute: (args) => {
+      seen.push(args);
+      return Promise.resolve({ ok: true, content: 'ok' });
+    },
+  });
+
+  it('送上線的就是 parameters，不補 additionalProperties；沒有 properties 的補空的', () => {
+    expect(convertToOpenAITool(toLangChainTool(raw(booking))).function.parameters).toEqual(booking);
+    expect(
+      convertToOpenAITool(toLangChainTool(raw({ type: 'object' }))).function.parameters,
+    ).toEqual({ type: 'object', properties: {} });
+  });
+
+  it('沒宣告的同一份 schema 走 zod 的轉換，碰到 $ref 就拋', () => {
+    expect(() => toLangChainTool(raw(booking, false))).toThrow();
+  });
+
+  it('合格的參數原樣交給本體，沒寫 additionalProperties 的多帶鍵也留著', async () => {
+    seen.length = 0;
+    await toLangChainTool(raw(booking)).invoke({ room: 3, who: { email: 'a@b.c' }, extra: 1 });
+    expect(seen).toEqual([{ room: 3, who: { email: 'a@b.c' }, extra: 1 }]);
+  });
+
+  it.each([
+    ['缺必填', { who: {} }],
+    ['anyOf 都不合', { room: 0 }],
+    ['$ref 指到的型別不合', { room: 'A', who: { email: 3 } }],
+  ])('不合格（%s）：拒，本體沒被叫到', async (_, args) => {
+    seen.length = 0;
+    await expect(toLangChainTool(raw(booking)).invoke(args)).rejects.toThrow(
+      /did not match expected schema/,
+    );
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('artifact：跟著成功的結果落到 ToolMessage，不送模型', () => {
+  it('帶了就落在 artifact，內容不變；沒帶就是 undefined', async () => {
+    const withArtifact = (await toLangChainTool(
+      tinyTool({ ok: true, content: '文字', artifact: [{ type: 'image' }] }),
+    ).invoke(call({ message: 'x' }))) as ToolMessage;
+    expect([withArtifact.content, withArtifact.artifact]).toEqual(['文字', [{ type: 'image' }]]);
+    const bare = (await toLangChainTool(tinyTool({ ok: true, content: '文字' })).invoke(
+      call({ message: 'x' }),
+    )) as ToolMessage;
+    expect(bare.artifact).toBeUndefined();
+  });
+
+  it('包成 Command 時那則 ToolMessage 也帶著', async () => {
+    const deferring: NexusTool = {
+      ...tinyTool({ ok: true, content: '' }),
+      execute: (_, exec) => {
+        exec.deferContext('補');
+        return Promise.resolve({ ok: true, content: '文字', artifact: [] });
+      },
+    };
+    const result = await toLangChainTool(deferring).invoke(call({ message: 'x' }));
+    const [message] = (result as { update: { messages: ToolMessage[] } }).update.messages;
+    expect(message?.artifact).toEqual([]);
+  });
+});
+
 describe('結果：錯誤是資料欄', () => {
   it('ok: false 轉成帶 Error: 前綴的錯誤結果，碼掛在訊息上，id 是這次呼叫的', async () => {
     const adapted = toLangChainTool(

@@ -8,6 +8,8 @@
  *   必須與補過 `false` 的 `parameters` 逐字相同，不同就在轉的當下拋錯。
  * - **驗證交給 zod**：`parameters` 轉成 zod 交給 LangChain 驗。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉，
  *   錯誤句是 zod 的逐項訊息。JSON Schema 直接交給 LangChain 的話，它改用另一套驗證，錯誤句只剩一行。
+ * - **`rawParameters: true` 的工具例外**：JSON Schema 原樣交給 LangChain，由它那一套驗、錯誤句是那一行；不補 `additionalProperties`。
+ * - **`artifact` 跟著結果走**：一律用 `content_and_artifact`，沒帶的就是 `undefined`，那則 `ToolMessage` 跟只回內容時一樣。
  * - **身分是資料**：`ToolExec` 的 `threadId`、`agent` 從 LangGraph 的呼叫設定算一次，`forCall` 直接收它，結果與收呼叫設定時相同。
  *   `signal` 是這一輪的停止訊號（放在 `configurable`，見 `@nexus/core` 的 `turn-cancel.ts`）併上 LangGraph 自己的 `signal`。
  * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 讀得到。
@@ -37,7 +39,7 @@ import {
 } from '@nexus/core';
 import { Command, interrupt } from '@langchain/langgraph';
 import { isNexusTool } from '@nexus/tools';
-import type { JsonValue, NexusTool, ToolExec } from '@nexus/tools';
+import type { JsonSchema, JsonValue, NexusTool, ToolExec } from '@nexus/tools';
 import { z } from 'zod';
 
 const adapted = new WeakMap<NexusTool, StructuredTool>();
@@ -111,7 +113,8 @@ function signalOf(config: ToolRunnableConfig | undefined): AbortSignal | undefin
 }
 
 function convert(tool: NexusTool): StructuredTool {
-  const schema = zodOf(tool.parameters, tool.name);
+  const raw = tool.rawParameters === true ? rawSchemaOf(tool.parameters) : undefined;
+  const schema = raw ?? zodOf(tool.parameters, tool.name);
   const converted = langChainTool(
     async (args: Record<string, JsonValue>, config?: ToolRunnableConfig) => {
       const deferred: HumanMessage[] = [];
@@ -124,33 +127,44 @@ function convert(tool: NexusTool): StructuredTool {
           throw new Error(`工具 ${tool.name} 要補訊息，但這次呼叫沒有 tool_call_id`);
         const message = new ToolMessage({
           content: result.content as ToolMessage['content'],
+          ...(result.artifact !== undefined && { artifact: result.artifact }),
           tool_call_id: exec.callId,
           name: tool.name,
         });
-        return new Command({ update: { messages: [message, ...deferred] } });
+        return [new Command({ update: { messages: [message, ...deferred] } }), undefined];
       }
-      if (result.ok) return result.content;
-      return toolRefusal(result.content, {
-        callId: exec.callId,
-        name: tool.name,
-        ...(result.error !== undefined && { error: result.error }),
-      });
+      if (result.ok) return [result.content, result.artifact];
+      // `content_and_artifact` 只收兩格；第一格是現成的訊息或 `Command` 時，LangChain 原樣交出去（`_formatToolOutput`）。
+      return [
+        toolRefusal(result.content, {
+          callId: exec.callId,
+          name: tool.name,
+          ...(result.error !== undefined && { error: result.error }),
+        }),
+        undefined,
+      ];
     },
     {
       name: tool.name,
       description: tool.description,
       schema,
+      responseFormat: 'content_and_artifact',
       // 基座的 tools 路由只認靜態的 `returnDirect` 名單，標了 `concludeTurn()` 的結果才留住 `name` 而收這一輪（`@nexus/core` 的 `turn-conclusion.ts`）。
       ...(tool.concludesTurn === true && { returnDirect: true }),
     },
   );
   const wire = JSON.stringify(toJsonSchema(converted.schema));
-  if (wire !== JSON.stringify(closed(tool.parameters))) {
+  if (wire !== JSON.stringify(raw ?? closed(tool.parameters))) {
     throw new Error(
       `工具 ${tool.name} 的 parameters 轉成 LangChain 工具之後，送上線的 schema 不同：${wire}`,
     );
   }
   return converted;
+}
+
+/** `rawParameters` 的工具送上線的形狀：原樣，根物件沒有 `properties` 時補一個空的（同 `@langchain/mcp-adapters` 轉 MCP 工具的做法）。 */
+function rawSchemaOf(parameters: JsonSchema): JsonSchema {
+  return parameters.properties === undefined ? { ...parameters, properties: {} } : parameters;
 }
 
 /** 送上線的形狀：每個帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`，LangChain 送 zod 工具時就是這樣補的。 */

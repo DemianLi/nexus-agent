@@ -47,8 +47,11 @@ import { defineToken } from '@nexus/sdk';
  * `2.2.0`（#2353）：{@link NexusTool} 多選填的 {@link NexusTool.concludesTurn}。`exec.concludeTurn()` 只對宣告了它的工具有效，
  * 沒宣告的 `NexusTool` 呼叫它什麼都不做（`2.1.0` 也是這樣，那時還沒有地方宣告）。向後相容的新增：不呼叫 `concludeTurn()` 的消費者照常；
  * 要收輪的消費者宣告 `^2.2.0`（升級指南 `docs/upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md`）。
+ *
+ * `2.3.0`（#2353）：{@link NexusToolResult} 成功那一格多選填的 `artifact`，{@link NexusTool} 多選填的 {@link NexusTool.rawParameters}。
+ * 向後相容的新增：不帶這兩格的消費者照常；要用的消費者宣告 `^2.3.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.2.0';
+export const TOOLS_CONTRACT_VERSION = '2.3.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -109,9 +112,12 @@ export interface ToolExec {
  * 一次呼叫的結果（#2351）。失敗是 `ok: false`，碼放在 `error`。
  *
  * 失敗那一格的 `content` 是模型看到的原因，**不要自己帶 `Error: `**：宿主照 `toolRefusal` 加前綴。
+ *
+ * 成功那一格的 `artifact`（契約 `2.3.0` 起）：跟著這則結果落盤、還原時讀回，**不送給模型**。省略就是沒有，跟帶 `[]` 不同：
+ * 帶了，落盤的那則訊息才有這一格。
  */
 export type NexusToolResult =
-  | { readonly ok: true; readonly content: ToolContent }
+  | { readonly ok: true; readonly content: ToolContent; readonly artifact?: JsonValue }
   | { readonly ok: false; readonly content: string; readonly error?: ToolErrorInfo };
 
 /** 一個工具（#2351）。除了 `execute`，每一格都是可序列化的資料。 */
@@ -122,8 +128,14 @@ export interface NexusTool {
    * 參數的 JSON Schema，input 模式：模型可以送的形狀。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉。
    * 用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉：`.strict()` 編成 `false`，一般的 `z.object` 不寫。
    * 送上線時，宿主在帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`，所以送上線的不是這一份原樣。
+   * 宿主只認一小組關鍵字，認不得的在轉換時就拋；別人寫的 schema（MCP server 公告的）用 {@link rawParameters}。
    */
   readonly parameters: JsonSchema;
+  /**
+   * {@link parameters} 原樣上線、照 JSON Schema 驗（契約 `2.3.0` 起）：不補 `additionalProperties`，任何關鍵字都收，根物件沒有
+   * `properties` 時補一個空的。給 schema 不是自己寫的工具（MCP server 公告的那份）。省略是照上面那一小組關鍵字轉。
+   */
+  readonly rawParameters?: boolean;
   /**
    * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，收下的未宣告鍵已丟掉。預期中的失敗回 `ok: false`；
    * reject 不會轉成 `ok: false`，照 LangChain 工具拋錯的路往外走。
