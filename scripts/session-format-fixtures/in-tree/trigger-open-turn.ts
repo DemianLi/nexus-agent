@@ -8,7 +8,7 @@
  *   又沒有新的一輪就停了——格式 33 以前續接只補 end-seed，開著的那一輪留在 end-seed 前面。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-open-turn.ts <run 目錄>
  */
 
 import { AIMessage } from '@langchain/core/messages';

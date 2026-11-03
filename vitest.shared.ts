@@ -30,9 +30,10 @@ export const pathsPlugin = (): ReturnType<typeof tsconfigPaths> =>
  * `2026-07-29-dsh-source-launch-tsx-esm.zh.md` 的機制），`TSX_TSCONFIG_PATH` 指到上面那份 tsconfig。
  * 子行程的**啟動指令**不動。`docs/testing.md:49` 管的是載入 Cordis 設定的子行程，不管 worker。
  *
- * **影響範圍比「只動 worker」寬一格**：這個函式在 vitest **主行程**設 `process.env.TSX_TSCONFIG_PATH`，所以測試裡開的每個
- * `node --import tsx` 子行程（例如 `entry-main.test.ts` 沒傳 `env`）都會繼承它，實際解析改走 runtime 那份 tsconfig，
- * 即使啟動指令沒改。這是退到的做法的一部分，不是副作用：子行程測試也因此能把 `@nexus/*` 解到 `src/`（乾淨樹上沒有 `lib/`）。
+ * **影響範圍比「只動 worker」寬一格**：這個函式在 vitest **主行程**設 `process.env.TSX_TSCONFIG_PATH`，所以測試裡開的
+ * `node --import tsx` 子行程，沒自己給 `env` 的（例如 `entry-main.test.ts`）會繼承它，實際解析改走 runtime 那份 tsconfig，
+ * 即使啟動指令沒改。自己給 `env`、又沒展開 `process.env` 的不會繼承，要明確帶上（例如 `conversation-process.test.ts`），否則 tsx 把 `@nexus/*`
+ * 解到 `lib/`，在乾淨的樹（CI）上找不到。這是退到的做法的一部分，不是副作用：子行程測試也因此能把 `@nexus/*` 解到 `src/`。
  * 要在子行程裡驗「沒有 tsx 蓋著」的情況，用 `scripts/smoke-built-bin.ts`（它清掉 `NODE_OPTIONS`、`NODE_PATH` 與這個變數）。
  *
  * 撤除條件：這批測試改走子行程或 `lib` 模式的那一天，就拿掉這個函式。
