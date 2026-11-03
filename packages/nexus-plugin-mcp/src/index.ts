@@ -243,8 +243,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
  *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
- * 收住的做法是自己 `catch`，不是把 adapter 換成 `onConnectionError: 'ignore'`：那一格只管連線，列不出工具照樣拋，
- * 蓋不到 dsh 的三種。
+ * 收住的做法是自己 `catch`：連線、列工具、註冊三步都在同一個 `try` 裡，蓋得到 dsh 的三種。
  *
  * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
  * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
@@ -609,7 +608,9 @@ function nexusToolOf(
 
 /** 一次呼叫的 reject 換成 `AbortError`（原錯放在 `cause`），讓圍堵照既有分類記成 `ABORTED`。 */
 function asAbort(error: unknown): Error {
-  const aborted = new Error(error instanceof Error ? error.message : String(error), { cause: error });
+  const aborted = new Error(error instanceof Error ? error.message : String(error), {
+    cause: error,
+  });
   aborted.name = 'AbortError';
   return aborted;
 }

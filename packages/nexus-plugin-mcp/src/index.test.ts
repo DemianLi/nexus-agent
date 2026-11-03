@@ -4,7 +4,7 @@
  * 分兩段：{@link publicToolName} 是純函式，用單測；其餘全部走一台**真的 stdio
  * 子行程**（[`fixture-server.ts`](./fixture-server.ts)）。判準照 dsh 的政策 4——
  * 「test denial through the executor」的同一條精神：要證明的是那條線真的通，而 mock
- * 掉 `MultiServerMCPClient` 之後連線、`tools/list`、`tools/call`、關機四件事一件都驗不到。
+ * 掉 SDK client 之後連線、`tools/list`、`tools/call`、關機四件事一件都驗不到。
  *
  * **不打網路、不需要任何 key**，所以進得了 CI（[#31](https://github.com/DemianLi/nexus-agent/issues/31)：
  * CI 不放模型 secret）。
@@ -13,7 +13,8 @@
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { EXTERNAL_MCP_CONTENT_NOTICE, installProxyFromEnvironment, loadPlugins } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE, installProxyFromEnvironment } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -225,7 +226,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // #1319：server 回 `resource_link`，模型看到的是 dsh 的 `Resource link: <name> (<uri>)`（adapter 2.0.0 的 metadata 帶
+  // #1319：server 回 `resource_link`，模型看到的是 dsh 的 `Resource link: <name> (<uri>)`（轉出來的 metadata 帶
   // name），結尾多一句引用提示；回文字的工具（上面的 `fetch_release_note`）不帶。
   it('回 resource_link 的工具：名稱加網址，結尾有引用提示；只回文字的沒有', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
@@ -295,8 +296,8 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // adapter 2.0.0 對 server 回的 `isError` 不拋，回 `status: 'error'` 的訊息、文字是原文（#1074）。圍堵只替**拋出來**的
-  // 工具失敗補 `Error: 工具 … 執行失敗：`，回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
+  // server 回 `isError` 時工具拋出 server 的原文（#1074）。圍堵只替**拋出來**的工具失敗補 `Error: 工具 … 執行失敗：`，
+  // 回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
   it('server 回 isError：兩種呼叫形狀都拋，帶原文', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
     try {
@@ -310,7 +311,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // #1768：`isError` 的錯誤文字不加前綴——它不是 server 的內容，是失敗的回報（adapter 在 `afterToolCall` 之前就換成錯誤訊息）。
+  // #1768：`isError` 的錯誤文字不加前綴——它不是 server 的內容，是失敗的回報（`tool-call.ts` 在標記之前就拋）。
   it('server 回 isError：錯誤文字不帶外部內容前綴', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
     try {
@@ -467,8 +468,8 @@ function childProcessCount(): number {
  * 卡上的驗收（#726）：stdio 子行程的環境**照 dsh 以清洗過的父環境為底**，設定裡的 `env` 疊在後面
  * （dsh `packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）。走真的子行程，問假 server 它看得到什麼。
  *
- * 這幾條同時是上游的絆索：底是 adapter（有 `env` 才傳、只補 `PATH`）與 SDK（`getDefaultEnvironment()` 只有六個
- * 名字）兩層合出來的，哪天它們改了合併方式，這裡會紅。
+ * 這幾條同時是上游的絆索：底是 `openClient` 傳的整份 env 與 SDK 的 stdio transport（`getDefaultEnvironment()` 只有六個
+ * 名字）兩層合出來的，哪天 SDK 改了合併方式，這裡會紅。
  */
 describe('子行程的環境（#726）', () => {
   const ASKED = ['KEEP_ME', 'HTTPS_PROXY', 'FAKE_API_TOKEN', 'NEXUS_X', 'GITHUB_TOKEN'];

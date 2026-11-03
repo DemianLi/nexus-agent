@@ -9,7 +9,11 @@
  * @module
  */
 
-import { Client, SSEClientTransport, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import {
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client';
 import type { Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { scrubbedParentEnv } from '@nexus/core';
@@ -159,7 +163,9 @@ async function listAllTools(client: Client, serverName: string): Promise<Tool[]>
 function rejectTaskRequired(rawName: string): ToolCall {
   return () =>
     Promise.reject(
-      new Error(`Tool "${rawName}" requires task-based execution, which this bridge does not support`),
+      new Error(
+        `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
+      ),
     );
 }
 
@@ -187,9 +193,12 @@ export async function openClient(
         track,
       );
     } catch (error) {
-      throw new Error(`Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`, {
-        cause: error,
-      });
+      throw new Error(
+        `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
+        {
+          cause: error,
+        },
+      );
     }
   }
   const url = connection.url;
@@ -258,9 +267,24 @@ async function connected(
   track: (client: Client) => void,
 ): Promise<Client> {
   const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode } });
+  // 工具在組裝時就定了，工具清單變了也不重列；處理器在連線之前掛上，握手時宣告的跟處理得了的才一致。
+  client.setNotificationHandler('notifications/tools/list_changed', () => {});
   track(client);
   try {
     await client.connect(transport);
+    // 新協議的 server 宣告了 `tools.listChanged` 就開一條常駐的 `subscriptions/listen`，同遷移前（`dist/connection.js` 的 `#connect`）：
+    // server 看到的連線形狀不變，收掉這一代時這條跟著收。
+    if (
+      client.getProtocolEra() === 'modern' &&
+      client.getServerCapabilities()?.tools?.listChanged === true
+    ) {
+      await client.listen({
+        toolsListChanged: true,
+        promptsListChanged: false,
+        resourcesListChanged: false,
+        resourceSubscriptions: [],
+      });
+    }
   } catch (error) {
     await Promise.allSettled([client.close(), transport.close()]);
     throw error;

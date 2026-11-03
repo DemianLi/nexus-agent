@@ -17,7 +17,11 @@
  * @module
  */
 
-import { CLIENT_CAPABILITIES_META_KEY, fromJsonSchema, isInputRequiredResult } from '@modelcontextprotocol/client';
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  fromJsonSchema,
+  isInputRequiredResult,
+} from '@modelcontextprotocol/client';
 import type { CallToolResult, Client, ContentBlock, Tool } from '@modelcontextprotocol/client';
 import { DefaultJsonSchemaValidator } from '@modelcontextprotocol/client/_shims';
 import type { JsonValue, NexusToolResult, ToolExec } from '@nexus/tools';
@@ -66,7 +70,8 @@ export function toolCallOf(
     ? { [CLIENT_CAPABILITIES_META_KEY]: { elicitation: { form: {}, url: {} } } }
     : undefined;
   const validateInput = lazyValidator(descriptor.inputSchema);
-  const validateOutput = inBand && outputSchema !== undefined ? lazyValidator(outputSchema) : undefined;
+  const validateOutput =
+    inBand && outputSchema !== undefined ? lazyValidator(outputSchema) : undefined;
   return async (args, exec) => {
     const { signal } = exec;
     const passthrough = new WeakSet<object>();
@@ -80,12 +85,15 @@ export function toolCallOf(
       }
       const request = { name: toolName, arguments: parsed.value as Record<string, unknown> };
       const round = (params: RoundParams): Promise<CallToolResult> =>
-        client.callTool({ ...params, _meta } as never, {
-          timeout: options.timeoutMs,
-          ...(signal !== undefined && { signal }),
-          toolDefinition: roundDefinition,
-          ...(inBand && { allowInputRequired: true }),
-        } as never) as Promise<CallToolResult>;
+        client.callTool(
+          { ...params, _meta } as never,
+          {
+            timeout: options.timeoutMs,
+            ...(signal !== undefined && { signal }),
+            toolDefinition: roundDefinition,
+            ...(inBand && { allowInputRequired: true }),
+          } as never,
+        ) as Promise<CallToolResult>;
       result = inBand
         ? await callWithElicitation(round, request, { serverName, toolName, exec, passthrough })
         : await round(request);
@@ -139,7 +147,9 @@ function lazyValidator(schema: unknown): Validate {
       value?: unknown;
       issues?: readonly Issue[];
     };
-    return checked.issues === undefined ? { value: checked.value } : { value, issues: checked.issues };
+    return checked.issues === undefined
+      ? { value: checked.value }
+      : { value, issues: checked.issues };
   };
 }
 
@@ -147,7 +157,12 @@ function lazyValidator(schema: unknown): Validate {
 function prettify(issues: readonly Issue[], root: string): string {
   return issues
     .map((issue) => {
-      const path = [root, ...(issue.path ?? []).map((segment) => String(typeof segment === 'object' ? segment.key : segment))];
+      const path = [
+        root,
+        ...(issue.path ?? []).map((segment) =>
+          String(typeof segment === 'object' ? segment.key : segment),
+        ),
+      ];
       return `✖ ${issue.message}\n  → at ${path.join('.')}`;
     })
     .join('\n');
@@ -184,7 +199,11 @@ async function callWithElicitation(
       context,
     );
     signal?.throwIfAborted();
-    result = await round({ ...params, inputResponses: responses, requestState: pending.requestState });
+    result = await round({
+      ...params,
+      inputResponses: responses,
+      requestState: pending.requestState,
+    });
   }
   return result;
 }
@@ -206,7 +225,8 @@ function answerableRequests(
       `MCP tool "${toolName}" on server "${serverName}" asked for input this client cannot answer: ${reason}`,
     );
   };
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return refuse('inputRequests is not an object');
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    return refuse('inputRequests is not an object');
   const entries = Object.entries(raw as Record<string, unknown>);
   if (entries.length === 0) return refuse('a state-only response carries no question to ask');
   const requests: { [key: string]: Question } = {};
@@ -220,7 +240,8 @@ function answerableRequests(
 
 function questionOf(request: unknown): Question | undefined {
   const { method, params } = (request ?? {}) as { method?: unknown; params?: unknown };
-  if (method !== 'elicitation/create' || typeof params !== 'object' || params === null) return undefined;
+  if (method !== 'elicitation/create' || typeof params !== 'object' || params === null)
+    return undefined;
   const { mode, message, url, requestedSchema } = params as Record<string, unknown>;
   if (typeof message !== 'string') return undefined;
   if (mode === 'url') return typeof url === 'string' ? { mode, message, url } : undefined;
@@ -238,7 +259,13 @@ function questionOf(request: unknown): Question | undefined {
  * 回答的是恢復圖的程式碼，不是填表的人。
  */
 async function answerFor(
-  question: { readonly type: 'mcp_elicitation'; readonly server: string; readonly tool: string; readonly arguments: JsonValue; readonly requests: { [key: string]: Question } },
+  question: {
+    readonly type: 'mcp_elicitation';
+    readonly server: string;
+    readonly tool: string;
+    readonly arguments: JsonValue;
+    readonly requests: { [key: string]: Question };
+  },
   { exec, passthrough, serverName, toolName }: ElicitationContext,
 ): Promise<Record<string, unknown>> {
   let resumed: unknown;
@@ -268,10 +295,12 @@ async function answerFor(
       return malformed(`"${key}" needs action accept, decline or cancel`);
     }
     if (request.mode === 'url') {
-      if (content !== undefined) malformed(`"${key}": URL elicitation answers cannot contain form content`);
+      if (content !== undefined)
+        malformed(`"${key}": URL elicitation answers cannot contain form content`);
     } else if (action === 'accept') {
       const checked = await lazyValidator(request.requestedSchema)(content ?? {});
-      if (checked.issues !== undefined) malformed(`"${key}": ${prettify(checked.issues, 'content')}`);
+      if (checked.issues !== undefined)
+        malformed(`"${key}": ${prettify(checked.issues, 'content')}`);
     }
     answers[key] = content === undefined ? { action } : { action, content };
   }
@@ -279,7 +308,12 @@ async function answerFor(
 }
 
 /** server 回 `isError` 時拋的那句：server 給的文字；一段文字都沒有就換一句固定的。 */
-function errorTextOf(result: CallToolResult, serverName: string, toolName: string, exec: ToolExec): string {
+function errorTextOf(
+  result: CallToolResult,
+  serverName: string,
+  toolName: string,
+  exec: ToolExec,
+): string {
   if (exec.callId === '') {
     const joined = (result.content as readonly Block[])
       .map((block) => (block.type === 'text' ? String(block.text) : ''))
@@ -289,7 +323,9 @@ function errorTextOf(result: CallToolResult, serverName: string, toolName: strin
   const [content] = convertCallToolResult(result, serverName, toolName);
   const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
   const texts = blocks
-    .map((block) => (block.type === 'text' && typeof block['text'] === 'string' ? block['text'] : ''))
+    .map((block) =>
+      block.type === 'text' && typeof block['text'] === 'string' ? block['text'] : '',
+    )
     .filter((text) => text !== '');
   if (texts.some((text) => text.trim() !== '')) return texts.join('\n');
   return 'The MCP tool returned an error without text content.';

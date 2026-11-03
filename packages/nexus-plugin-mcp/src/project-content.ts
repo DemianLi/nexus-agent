@@ -1,8 +1,8 @@
 /**
  * MCP 工具結果裡的非文字塊換成文字說明——[#642](https://github.com/DemianLi/nexus-agent/issues/642)。
  *
- * `@langchain/mcp-adapters` 把 MCP 的 `image` 轉成 `image` 塊（1.x 是 `image_url`，2.0.0 起帶 `data`／`mimeType`）、`audio` 轉成 `audio` 塊、
- * `resource_link` 轉成 `file` 塊（`dist/content.js` 的 `convertCallToolResult`），原樣放進 ToolMessage 的 content。模型那一側的工具訊息只收文字：NVIDIA 對
+ * `tool-call.ts` 的 `convertCallToolResult` 把 MCP 的 `image` 轉成 `image` 塊（帶 `data`／`mimeType`）、`audio` 轉成 `audio` 塊、
+ * `resource_link` 轉成 `file` 塊，原樣放進 ToolMessage 的 content。模型那一側的工具訊息只收文字：NVIDIA 對
  * `role: tool` 裡的 `image_url` 回 400（實測），而那則工具結果已經進了 state，同一條 thread 之後每一輪都 400。
  *
  * 照 dsh 的 `projectContent`（`packages/mcp/mcp-client/src/tools.ts:376-505`，`477b4f4`）：收不下的圖換成
@@ -10,15 +10,14 @@
  * resource link、不認得的類型也各換成一段文字。文字塊原樣保留，順序不變。
  *
  * **resource link 照 dsh 寫成 `Resource link: <name> (<uri>)`**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)）。
- * `@langchain/mcp-adapters` 2.0.0 轉成 `file` 塊時，`metadata` 帶著 `{uri, name, title?}`（`dist/content.js` 的
- * `resource_link` 分支），所以 #642 當時登記的「adapter 丟了 name」已經不成立，名稱補回來了。缺名稱或 URI 時的退路與
+ * 轉成 `file` 塊時，`metadata` 帶著 `{uri, name, title?}`，所以名稱與 URI 都在。缺名稱或 URI 時的退路與
  * dsh 同一句：`[resource link unavailable: the MCP block is missing its name or URI]`。
  *
  * **偏離**（dsh 表達得出來、我們這裡表達不出來的兩處；加上下面一條超出 dsh 的）：
  *
  * - **拿掉 `raw … data remains available to programmatic callers` 那一句**。dsh 把原始值留給程式呼叫端；我們
  *   留的話只能放進 ToolMessage 的 `artifact`，而它會跟著訊息進會話日誌（`toLoggedMessage` 帶 `artifact`）。
- *   **實測（#1320）修正了先前的說法**：圖片根本不在 adapter 的 `artifact` 裡（換成文字說明之後日誌只有幾百位元組），
+ *   **實測（#1320）修正了先前的說法**：圖片根本不在 `artifact` 裡（換成文字說明之後日誌只有幾百位元組），
  *   會整份進日誌的是**內嵌資源與 `structuredContent`**——3 MB 的資源就是 3 MB 的 `tool/result`。所以原始值今天仍然
  *   不留給程式呼叫端，那一句仍然不是真的；artifact 的上限處理見 `artifact-bound.ts`（{@link boundArtifacts}），實測表也在那裡。
  * - **不併相鄰的文字**：dsh 把連續的文字（連同音訊、resource link 的說明）用換行併成一塊，我們每塊換成各自一塊
@@ -42,7 +41,7 @@ export const CITE_RESOURCE_LINKS =
 /** 沒有附件儲存時，dsh 給收不下的圖的原因。 */
 export const NO_ATTACHMENT_STORE = 'no attachment store is mounted';
 
-/** content 裡的一塊。adapter 的型別是 LangChain 的內容塊聯集，這裡只讀得到的那幾個欄位。 */
+/** content 裡的一塊。型別是 LangChain 的內容塊聯集，這裡只讀得到的那幾個欄位。 */
 interface Block {
   readonly type?: unknown;
   readonly text?: unknown;
@@ -50,14 +49,14 @@ interface Block {
   readonly url?: unknown;
   readonly mime_type?: unknown;
   readonly mimeType?: unknown;
-  /** adapter 2.0.0 的 `resource_link` 帶 `{uri, name, title?}`；內嵌的二進位資源只帶 `{uri}`。 */
+  /** `resource_link` 帶 `{uri, name, title?}`；內嵌的二進位資源只帶 `{uri}`。 */
   readonly metadata?: unknown;
 }
 
 /**
  * 有非文字塊就回換過的 content，沒有就回 `undefined`（照原樣）。
  *
- * @param content - adapter 正規化過的 content：字串，或內容塊陣列。
+ * @param content - `convertCallToolResult` 轉出來的 content：字串，或內容塊陣列。
  * @returns 每一塊非文字都換成文字說明的新陣列，或 `undefined`。
  */
 export function projectNonText<T>(content: string | readonly T[]): T[] | undefined {
@@ -99,7 +98,7 @@ function describe(block: Block): string {
 }
 
 /**
- * 是不是 MCP 的 `resource_link` 轉出來的 `file` 塊。adapter 的 `resource_link` 分支一定帶 `url`，且 `metadata` 一定有 `name`
+ * 是不是 MCP 的 `resource_link` 轉出來的 `file` 塊。`convertCallToolResult` 的 `resource_link` 分支一定帶 `url`，且 `metadata` 一定有 `name`
  * 這個鍵（值可能是 `undefined`）；內嵌的二進位資源是 `data` 加 `metadata: {uri}`，沒有這兩樣。
  */
 function isResourceLink(block: Block): boolean {
@@ -124,7 +123,7 @@ function mediaType(block: Block): string {
   return typeof value === 'string' && value !== '' ? value : 'unknown media type';
 }
 
-/** `image_url` 的 MIME 在 data URL 裡（adapter 拼成 `data:<mime>;base64,…`）。 */
+/** `image_url` 的 MIME 在 data URL 裡（拼成 `data:<mime>;base64,…`）。 */
 function imageMediaType(block: Block): string {
   if (block.type !== 'image_url') return mediaType(block);
   const url =

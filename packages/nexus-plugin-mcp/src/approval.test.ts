@@ -7,7 +7,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadPlugins } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import type { PreToolDecision, PreToolListener } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 

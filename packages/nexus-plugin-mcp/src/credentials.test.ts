@@ -5,7 +5,8 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { configToJsonSchema, createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { configToJsonSchema, createHostServicesPlugin } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { poolKey } from './pool.js';

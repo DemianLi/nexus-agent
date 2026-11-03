@@ -1,16 +1,16 @@
 /**
  * 工具結果的 `artifact` 進會話日誌之前先設上限——[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)。
  *
- * ## 實測（2026-10-10，`@langchain/mcp-adapters` 2.0.0，舊協議與新協議兩台夾具結果相同）
+ * ## 實測（2026-10-10，舊協議與新協議兩台夾具結果相同）
  *
- * adapter 把 MCP 結果拆成給模型的 `content` 與不給模型的 `artifact`（`dist/content.js` 的 `convertCallToolResult`）。
+ * MCP 結果拆成給模型的 `content` 與不給模型的 `artifact`（`tool-call.ts` 的 `convertCallToolResult`）。
  * 量到的是：
  *
  * | 內容 | 進 `content` | 進 `artifact` | 會話日誌 `tool/result` |
  * | --- | --- | --- | --- |
  * | 內嵌二進位／文字資源，要求 3072 KB | 空（資源預設只放 artifact） | 整份原樣（`type: 'resource'`） | **3,146,139 位元組** |
  * | `structuredContent`，要求 1024 KB | 只有 server 附的文字摘要 | 整份原樣（`mcp_structured_content`） | **663,043 位元組** |
- * | 圖片，要求 3072 KB | 換成一句文字說明（#642） | 無（adapter 不把它放 artifact） | 411 位元組 |
+ * | 圖片，要求 3072 KB | 換成一句文字說明（#642） | 無（不放 artifact） | 411 位元組 |
  * | `resource_link`（兩條） | `Resource link: …` 文字 | 每條一份小的 `mcp_content` | 860 位元組 |
  *
  * 也就是 `project-content.ts` 先前的說法（「留 artifact，一張圖就是幾 MB，所以不留」）對圖片成立——圖片根本不在 artifact 裡——
@@ -31,10 +31,10 @@
  *
  * 規則只有一條：**單條序列化後超過 {@link ARTIFACT_ENTRY_MAX_BYTES} 位元組的 artifact，換成
  * `{ type: 'mcp_omitted', originalType, bytes, uri?, mimeType? }`**——留下原型別、原始大小與（有的話）URI 和 MIME，資料拿掉。
- * 占位的 `type` 不能沿用原型別：adapter 在 hook 回傳後會用 `toolArtifactSchema` 驗一次，`type: 'resource'` 必須是完整的
- * 內嵌資源（`resource.uri` 等），占位過不了（實測會拋 `Expected a valid MCP embedded resource`）；其他型別則任意。
+ * 占位的 `type` 不沿用原型別：`type: 'resource'` 說的是一份完整的內嵌資源（`resource.uri` 等），占位冒用它，讀日誌的一方
+ * 會照完整資源解讀；換成自己的型別才分得出這是占位。
  * 以大小而不是型別判斷，因為我們沒辦法預先列舉 server 會塞什麼（`_meta` 也是 server 自訂的）；未超過的原樣保留。
- * 不是 dsh 的做法（dsh 的 `tool/result` 本來就不帶原始值），是退到最接近的實作：adapter 的 `artifact` 欄位表達不出
+ * 不是 dsh 的做法（dsh 的 `tool/result` 本來就不帶原始值），是退到最接近的實作：ToolMessage 的 `artifact` 欄位表達不出
  * 「只放 meta」，所以在它進日誌前把大的那幾條換掉。
  *
  * @module
@@ -57,7 +57,7 @@ export interface OmittedArtifact {
 /**
  * 把超過上限的 artifact 換成占位。
  *
- * @param artifacts - adapter 回的 artifact 陣列。
+ * @param artifacts - `convertCallToolResult` 回的 artifact 陣列。
  * @returns 有任何一條被換掉就回新陣列，沒有就回 `undefined`（照原樣）。
  */
 export function boundArtifacts<T>(artifacts: readonly T[] | undefined): T[] | undefined {
@@ -94,11 +94,11 @@ function omitted(entry: unknown, bytes: number): OmittedArtifact {
 }
 
 /**
- * 從 artifact 條目找出 URI 與 MIME。adapter 2.0.0 會產出三種形狀：
+ * 從 artifact 條目找出 URI 與 MIME。`convertCallToolResult` 會產出三種形狀：
  * - `{ type: 'resource', resource: { uri, mimeType, … } }`（預設只放 artifact 的內嵌資源）；
  * - `{ type: 'mcp_content', data: { type: 'resource_link', uri, … } }`（`data` 是 MCP 原始區塊，連結的 URI 在頂層）；
  * - `{ type: 'mcp_content', data: { type: 'resource', resource: { uri, mimeType, … } } }`（內嵌資源被 `enhancedArtifacts` 再包一層，
- *   URI 在 `data.resource` 底下，`content.js` 的 `convertCallToolResult`）。
+ *   URI 在 `data.resource` 底下）。
  * 依序往下找第一個帶字串 `uri` 的物件。
  */
 function locate(record: Record<string, unknown>): { uri?: string; mimeType?: string } {
