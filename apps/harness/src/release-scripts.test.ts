@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -644,6 +645,43 @@ describe('相依圖', () => {
 
     rmSync(join(root, 'node_modules/b'), { recursive: true });
     expect(walkInstalledGraph(root).missing).toEqual(['root -> a -> b']);
+  });
+  it('NODE_PATH 上的套件不算進產物（#2366）', () => {
+    pkg('', {
+      name: 'root',
+      peerDependencies: { vue: '^3' },
+      peerDependenciesMeta: { vue: { optional: true } },
+    });
+    const outside = mkdtempSync(join(tmpdir(), 'release-node-path-'));
+    try {
+      mkdirSync(join(outside, 'vue'));
+      writeFileSync(
+        join(outside, 'vue', 'package.json'),
+        JSON.stringify({ name: 'vue', version: '3.5.44' }),
+      );
+      // `Module.globalPaths` 在行程起來時由 `NODE_PATH` 算好，所以另起一個帶著它的行程。
+      const sbom = pathToFileURL(join(ROOT, 'scripts/release/sbom.ts')).href;
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          '--input-type=module',
+          '-e',
+          `import { walkClosure } from ${JSON.stringify(sbom)};
+console.log(JSON.stringify(walkClosure(${JSON.stringify(root)}).map((entry) => entry.name)));`,
+        ],
+        {
+          cwd: ROOT,
+          env: { ...process.env, NODE_PATH: outside, NODE_OPTIONS: '' },
+          encoding: 'utf8',
+        },
+      );
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout)).toEqual(['root']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
