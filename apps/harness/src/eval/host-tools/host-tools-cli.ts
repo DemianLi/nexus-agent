@@ -74,6 +74,7 @@ function rootLifecycle(event: Event): unknown {
  * 折一輪到 root 收尾；途中每一顆新的宿主頁工具呼叫都記下、交回成功的結果。
  *
  * 停在宿主頁工具時 root 照樣發 `completed`，交回結果之後才再發 `running` 接著跑。所以交回之後、看到下一顆 `running` 之前的收尾不算。
+ * 依賴同一次停下的 `input.requested` 比 root 的 `completed` 先到（真 serve 上逐顆印出來是這個順序）。
  *
  * @returns 收尾時的狀態與宿主頁收到的呼叫。
  */

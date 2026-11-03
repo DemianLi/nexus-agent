@@ -10,7 +10,7 @@
  *
  * ## 金鑰
  *
- * serve 是子行程，`cwd` 是 `--serve-cwd`（金鑰在那一層的 `.env`，由 serve 自己讀）。這支行程的環境裡的 `*_API_KEY` 不傳給子行程，
+ * serve 是子行程，`cwd` 是 `--serve-cwd`（金鑰在那一層的 `.env`，由 serve 自己讀）。量測行程（呼叫 {@link startEmbedServe} 的那一支）環境裡的 `*_API_KEY` 不傳給子行程，
  * 也不讀、不印；serve 印出的網址帶登入用的 token，只在記憶體裡用，不寫進輸出。
  *
  * 離線驗量具：`--upstream` 指本機的假端點，`--fake-key` 給子行程一把假的 key（上游不是 127.0.0.1 就拒絕這個旗標）。
@@ -36,6 +36,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(HERE, '..', '..');
 const ROOT = join(HARNESS, '..', '..');
 
+/** 量測的命令列參數。`timeoutMs` 是每一題的期限。 */
 export interface EmbedEvalOptions {
   readonly upstream: string;
   readonly maxRequests: number;
@@ -46,6 +47,10 @@ export interface EmbedEvalOptions {
   readonly timeoutMs: number;
 }
 
+/**
+ * 解析量測的命令列參數。缺必填的旗標、值不是正整數，或 `--fake-key` 配上不是 127.0.0.1 的 `--upstream`，都拋；`--reps` 預設 1，
+ * `--timeout-ms` 預設 300000。
+ */
 export function parseEmbedEvalArgs(argv: readonly string[]): EmbedEvalOptions {
   const get = (flag: string): string | undefined => {
     const index = argv.indexOf(flag);
@@ -96,7 +101,8 @@ export interface EmbedServe {
 }
 
 /**
- * 起一個 `--live` 的 serve，home 與工作區都是新的暫存目錄。
+ * 起一個 `--live` 的 serve，home 與工作區都是 `/var/tmp` 底下新的暫存目錄，這裡不清。回傳的 `child` 由呼叫方收掉。
+ * serve 還沒印出網址就結束時 reject，錯誤訊息裡的 token 已遮掉。
  *
  * @param extraRows - 接在 patch 後面的列（YAML 文字，每列以換行結尾）。
  */
@@ -162,6 +168,7 @@ export async function startEmbedServe(
   };
 }
 
+/** `promise` 過了 `ms` 還沒結束就 reject。只是不再等，不會取消 `promise` 本身。 */
 export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
