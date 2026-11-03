@@ -1,0 +1,248 @@
+{
+  "回傳值": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "2",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "沒有回傳值": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "（沒有回傳值）",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "async": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "42",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "字串": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "嗨",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "物件": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "{\n  \"a\": [\n    1,\n    {\n      \"b\": 2\n    }\n  ],\n  \"c\": \"d\"\n}",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "拋例外": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (exception): TypeError: 壞了",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "reject": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (exception): RangeError: 拒絕了",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "逾時": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 200 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (timeout): 執行超過 200 毫秒的上限，已中斷。",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "不會完成的 promise": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (timeout): 回傳了一個永遠不會完成的 promise——VM 裡沒有計時器也沒有 IO，等到上限也不會有結果",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "不是無損 JSON": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (invalid-output): program completion must be lossless JSON",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "記憶體上限": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (exception): InternalError: out of memory",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "堆疊上限": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：code run failed (exception): InternalError: stack overflow",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "CodeRunFailedError",
+          "code": "CODE_RUN_FAILED"
+        }
+      }
+    ]
+  },
+  "參數型別不對": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at code",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "ToolArgsError",
+          "code": "INVALID_ARGS"
+        }
+      }
+    ]
+  },
+  "少參數": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "Error: 工具 run_javascript 執行失敗：Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at code",
+      "status": "error",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "ToolArgsError",
+          "code": "INVALID_ARGS"
+        }
+      }
+    ]
+  },
+  "多一個鍵": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"run_javascript\",\"description\":\"在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。執行超過 1000 毫秒會被中斷。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"要求值的 JavaScript。最後一個運算式的值就是回傳值。\"}},\"required\":[\"code\"],\"additionalProperties\":false}}}",
+    "seen": {
+      "content": "1",
+      "status": "success",
+      "name": "run_javascript",
+      "id": "c1"
+    },
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  }
+}
