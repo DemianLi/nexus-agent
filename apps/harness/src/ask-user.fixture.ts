@@ -20,7 +20,7 @@ import type { ApprovalChannel, NexusPlugin, PluginEntry } from '@nexus/core';
 import { ASK_USER_REGISTER_OPTIONS, createAskUserTool } from '@nexus/plugin-ask-user';
 import type { ToolExec } from '@nexus/tools';
 
-import { toLangChainTool } from './nexus-tool-adapter.js';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 /** ask-user 的 `NexusPlugin` 外殼：登記 `ask_user_question`。 */
 export const askUserPlugin: NexusPlugin = {

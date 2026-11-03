@@ -53,6 +53,9 @@ interface Violation {
 }
 
 const IMPORT_CORE_MESSAGE = pluginLintImportRestrictions.patterns[0]!.message;
+const IMPORT_TOOL_ADAPTER_MESSAGE = pluginLintImportRestrictions.patterns.find((pattern) =>
+  pattern.group.includes('@nexus/tool-adapter'),
+)?.message;
 
 function messageOfSyntax(id: string): string {
   const found = pluginLintSyntaxRestrictions.find((entry) => entry.id === id);
@@ -214,6 +217,17 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
       "import type { PluginRegistry } from '@nexus/core'; export type X = PluginRegistry;",
       "import { sessionAddressKey } from '@nexus/core/session-address'; export const x = sessionAddressKey;",
       "export { PluginRegistry } from '@nexus/core';",
+    ],
+  },
+  {
+    id: 'import-nexus-tool-adapter',
+    names: /@nexus\/tool-adapter/,
+    suggests: /NexusTool/,
+    expected: () =>
+      IMPORT_TOOL_ADAPTER_MESSAGE ?? '（lint.ts 沒有擋 @nexus/tool-adapter 的那一條）',
+    code: [
+      "import { toLangChainTool } from '@nexus/tool-adapter'; export const x = toLangChainTool;",
+      "export { langChainToolOf } from '@nexus/tool-adapter';",
     ],
   },
   {

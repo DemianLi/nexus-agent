@@ -1,9 +1,11 @@
 /**
- * `NexusTool`（`@nexus/tools` 契約 `2.0.0`，#2351）轉成 LangChain 的工具，讓還跑在 LangGraph 上的組裝照樣叫得到它。
- * 轉接器只住在宿主：插件只看見 `NexusTool`，不碰 LangChain。
+ * `NexusTool`（`@nexus/tools` 契約 `2.x`，#2351、#2352）轉成 LangChain 的工具，讓還跑在 LangGraph 上的組裝照樣叫得到它。
+ * 插件原始碼不 import 這個套件（SDK lint 擋），插件只看見 `NexusTool`、不碰 LangChain；插件的測試要拿真的 LangChain 工具時，
+ * 從 devDependencies 用它。
  *
- * - **送上線的 schema 是 `parameters` 補上 `additionalProperties: false`**：每個沒寫的物件都補，LangChain 送 zod 工具時就是這樣補的，
- *   所以位元組與遷移前相同。轉出來的工具經 LangChain 編回 JSON Schema 之後必須與它逐字相同，不同就在轉的當下拋錯。
+ * - **`parameters` 是 input 模式；送上線時，帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`**（record 不動）：
+ *   LangChain 送 zod 工具時就是這樣補的，所以兩種工具送出的位元組相同。轉出來的工具經 LangChain 編回 JSON Schema 之後，
+ *   必須與補過 `false` 的 `parameters` 逐字相同，不同就在轉的當下拋錯。
  * - **驗證交給 zod**：`parameters` 轉成 zod 交給 LangChain 驗。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉，
  *   錯誤句是 zod 的逐項訊息。JSON Schema 直接交給 LangChain 的話，它改用另一套驗證，錯誤句只剩一行。
  * - **身分是資料**：`ToolExec` 的 `threadId`、`agent` 從 LangGraph 的呼叫設定算一次，`forCall` 直接收它，結果與收呼叫設定時相同。
@@ -56,7 +58,8 @@ export function langChainToolOf(
  *
  * @param tool - 要轉的工具。
  * @returns 轉出來的工具。
- * @throws 轉出來的工具送上線的 schema 與 `parameters` 不同。
+ * @throws `parameters` 用了轉接器不認得的關鍵字或 type、enum 不是非空字串、record 的鍵不是字串、物件同時帶 `properties` 與
+ *   `additionalProperties` schema，或轉出來的工具送上線的 schema 與補過 `false` 的 `parameters` 不同。
  */
 export function toLangChainTool(tool: NexusTool): StructuredTool {
   let converted = adapted.get(tool);
@@ -94,7 +97,7 @@ export function toolExecOf(
         }),
       );
     },
-    // `interrupt` 用拋例外傳播，呼叫端不能包在 try/catch 裡（`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+    // `interrupt` 用拋例外傳播，呼叫端不能包在 try/catch 裡（`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
     interrupt: (payload: JsonValue) => Promise.resolve(interrupt(payload)),
   });
 }
@@ -114,8 +117,10 @@ function convert(tool: NexusTool): StructuredTool {
       const exec = toolExecOf(tool.name, config, deferred);
       const result = await tool.execute(args, exec);
       if (result.ok && deferred.length > 0) {
-        // 回 `Command` 時 LangChain 不替結果包 `ToolMessage`，要自己帶這次呼叫的 id。
-        if (exec.callId === '') throw new Error(`工具 ${tool.name} 要補訊息，但這次呼叫沒有 tool_call_id`);
+        // 回 `Command` 時 LangChain 不替結果包 `ToolMessage`（`@langchain/core@1.2.9` `dist/tools/index.js:335` 的 `isDirectToolOutput`），
+        // 要自己帶這次呼叫的 id。
+        if (exec.callId === '')
+          throw new Error(`工具 ${tool.name} 要補訊息，但這次呼叫沒有 tool_call_id`);
         const message = new ToolMessage({
           content: result.content as ToolMessage['content'],
           tool_call_id: exec.callId,
@@ -141,7 +146,7 @@ function convert(tool: NexusTool): StructuredTool {
   return converted;
 }
 
-/** 送上線的形狀：每個沒寫 `additionalProperties` 的物件補 `false`，LangChain 送 zod 工具時就是這樣補的。 */
+/** 送上線的形狀：每個帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`，LangChain 送 zod 工具時就是這樣補的。 */
 function closed(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(closed);
   if (typeof value !== 'object' || value === null) return value;
@@ -177,7 +182,8 @@ function zodOf(schema: JsonValue, toolName: string, required = true): z.ZodType 
   }
   const node = schema as { readonly [key: string]: JsonValue };
   for (const key of Object.keys(node)) {
-    if (!KNOWN_KEYS.has(key)) throw new Error(`工具 ${toolName} 的 parameters 用了轉接器不認得的 ${key}`);
+    if (!KNOWN_KEYS.has(key))
+      throw new Error(`工具 ${toolName} 的 parameters 用了轉接器不認得的 ${key}`);
   }
   let inner = bareZodOf(node, toolName);
   const description = typeof node.description === 'string' ? node.description : undefined;
@@ -232,5 +238,7 @@ function objectZodOf(node: { readonly [key: string]: JsonValue }, toolName: stri
   }
   if (extra === false) return z.strictObject(shape);
   if (extra === undefined) return z.object(shape);
-  throw new Error(`工具 ${toolName} 的 parameters 有一個物件同時帶 properties 與 additionalProperties`);
+  throw new Error(
+    `工具 ${toolName} 的 parameters 有一個物件同時帶 properties 與 additionalProperties`,
+  );
 }

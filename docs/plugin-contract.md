@@ -219,8 +219,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `{ ok: true, content }` 或 `{ ok: false, content, error? }`，`exec`（`ToolExec`）帶 `callId`、`threadId`、`agent`、`signal`、`concludeTurn()`，
   `2.1.0` 起再帶 `deferContext(text, marks?)`（成功的結果之後補一則插件來源的人話，照 dsh）與 `interrupt(payload)`（掛起等人回覆）。
   `sessionLookup.forCall`、`fs.forCall` 直接收 `ToolExec`。`parameters` 是模型可以送的形狀：寫了 `additionalProperties: false` 的物件多帶鍵就拒，
-  沒寫的收下丟掉；用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉。**宿主**把它轉成 LangChain 工具，送上線的 schema 是 `parameters`
-  在每個沒寫的物件補 `additionalProperties: false`，與遷移前的 zod 工具逐字相同；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
+  沒寫的收下丟掉；用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉。**`parameters` 是 input 模式；送上線時，沒寫 `additionalProperties` 的物件補 `false`**，
+  與遷移前的 zod 工具逐字相同。補的是**宿主**：轉接器在 `packages/nexus-tool-adapter`（`@nexus/tool-adapter`），把 `NexusTool` 轉成 LangChain 工具，
+  只有宿主 import 它，SDK 的 lint 擋插件原始碼 import；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
   樹上的消費者宣告 `^2.0.0`，goal（要 `deferContext`）與 ask-user（要 `interrupt`）宣告 `^2.1.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。
   一致性套件多一格 `schema-json`。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh

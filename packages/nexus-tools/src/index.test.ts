@@ -57,7 +57,8 @@ describe('@nexus/tools 的定義', () => {
     expect(TOOLS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     // 1.1.0（#1458）：`register` 多選填的第二個參數。1.2.0（#1466）：`ToolRegistry` 多選填方法 `gate`。1.3.0（#1469）：多選填方法 `onResult`。1.4.0（#1607）：多選填方法 `concludeTurn`。
     // 2.0.0（#2351）：`register` 也收 `NexusTool`，主版號跳 major，`^1.x` 的消費者停在 PENDING（`provider.test.ts` 量）。
-    expect(TOOLS_CONTRACT_VERSION).toBe('2.0.0');
+    // 2.1.0（#2352）：`ToolExec` 多 `deferContext` 與 `interrupt`。
+    expect(TOOLS_CONTRACT_VERSION).toBe('2.1.0');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('2');
   });
 

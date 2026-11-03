@@ -18,7 +18,7 @@ import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { createTodoTool, todoConfigSchema } from '@nexus/plugin-todo';
 import type { TodoConfig, TodoPluginOptions } from '@nexus/plugin-todo';
 
-import { toLangChainTool } from './nexus-tool-adapter.js';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 /** todo 的 `NexusPlugin` 外殼：登記 `todo_write`。 */
 export const todoPlugin: NexusPlugin<TodoConfig> = {

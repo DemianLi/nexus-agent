@@ -60,9 +60,9 @@
  * 「檔案沒建出來，而且線上什麼都沒說」。所以 `readRaw` 一定包在 try/catch 裡。
  * 絆索見 `apps/harness/src/submit-record-wire.test.ts` 最後那一段。
  *
- * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352，設計 Q11）
+ * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352；`.docs/agent-loop-off-langchain-design-2026-11-03.md` 的 Q11）
  *
- * backend 的 `write` 回 `filesUpdate`，意思是「我沒寫，要你把這份 state update 送出去才算數」。這個工具**不再送 state**，
+ * backend 的 `write` 回 `filesUpdate`，意思是「我沒寫，要你把這份 state update 送出去才算數」。這個工具**不送 state**，
  * 所以那一支一律拒絕，不說「已經寫進」。宿主交的 backend 都不走這一支：零參數的 `StateBackend` 在 `write` 裡自己送，
  * `FilesystemBackend` 直接落盤，兩者都不回 `filesUpdate`。
  *
@@ -212,7 +212,7 @@ export function createSubmitRecordTool(fsFor: (exec: ToolExec) => FsLookup): Nex
     parameters: z.toJSONSchema(submitSchema, { io: 'input' }) as JsonSchema,
     execute: async (raw, exec): Promise<NexusToolResult> => {
       const args = submitSchema.parse(raw);
-      // 前綴由宿主加（#318）：dsh 的寫入失敗是拋 `FsError`，由 `toolErrorResult` 渲染。
+      // 前綴由宿主加（#318）。
       const failed = (message: string): NexusToolResult => ({ ok: false, content: message });
 
       // **拿不到就拒絕，不退回預設**，見模組註解。

@@ -21,7 +21,7 @@ import { createGoalCore, goalConfigSchema, mountGoal } from '@nexus/plugin-goal'
 import type { GoalConfig, GoalCore, GoalSeams } from '@nexus/plugin-goal';
 import type { z } from 'zod';
 
-import { toLangChainTool } from './nexus-tool-adapter.js';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 /**
  * {@link createGoalPlugin} 收的東西：設定的輸入面，加上測試縫（時鐘、id 工廠）。
@@ -39,7 +39,8 @@ function applyWith(seams: GoalSeams, shared?: GoalCore): NexusPlugin<GoalConfig>
     registry.services.provide(GOALS_SERVICE, core);
     mountGoal(
       {
-        registerTool: (tool, options) => void registry.tools.register(toLangChainTool(tool), options),
+        registerTool: (tool, options) =>
+          void registry.tools.register(toLangChainTool(tool), options),
         registerCommand: (definition) => void registry.commands.register(definition),
         forCall: (exec) => registry.sessions.forCall(exec),
       },

@@ -25,7 +25,7 @@
  * `complete`／`blocked` 之後，那一輪還在圖的迴圈裡、手上還有全套工具，而它不知道自己
  * 剛剛把目標收掉了。#180 之前沒有自排輪次，這件事不存在。
  *
- * 載體是 `exec.deferContext()`（`@nexus/tools` 契約 `2.1.0`，照 dsh 的 `ToolRunContext.deferContext()`）：
+ * 載體是 `exec.deferContext()`（`@nexus/tools` 契約 `2.1.0`）：
  * 工具結果之後補一則 {@link ./wrapup.ts | 收尾指示}。只有「自主收尾成功」那一格補，
  * 其餘成功照舊回一句話，拒絕回一則錯誤訊息（見下面「拒絕」那一節）。
  *
@@ -136,13 +136,7 @@ import { z } from 'zod';
 import { goalId } from '@nexus/goal';
 import type { GoalRef, GoalView } from '@nexus/goal';
 import type { SessionAddress, SessionLog } from '@nexus/session';
-import type {
-  JsonSchema,
-  NexusTool,
-  NexusToolResult,
-  ToolErrorInfo,
-  ToolExec,
-} from '@nexus/tools';
+import type { JsonSchema, NexusTool, NexusToolResult, ToolErrorInfo, ToolExec } from '@nexus/tools';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
 import type { GoalToolAuthority } from './authority.js';
@@ -568,10 +562,9 @@ function authorityFor(
  *
  * ## 取不到 id 是壞掉，不是降級
  *
- * 補了指示，宿主要自己造那則工具結果，而且**要帶對 `tool_call_id`**——漏掉的話模型會看到一顆沒有結果的工具呼叫，
- * 有些 provider 直接拒。產品路徑上的 tool node 一律以 `ToolCall` 形式呼叫，所以取不到 id 代表這顆工具被以
- * 一個接不上的方式叫了。**安靜地退回回一句話**會讓模型在自主輪次收尾時默默收不到指示
- * ——那正是這條路存在的理由。所以拋，讓 `containment.ts` 分類。
+ * `exec.callId` 是 `''` 時補不了指示（見 `ToolExec.deferContext` 的契約）。產品路徑上每次呼叫都帶 id，
+ * 所以取不到 id 代表這顆工具被以一個接不上的方式叫了。**安靜地退回回一句話**會讓模型在自主輪次收尾時默默收不到指示
+ * ——那正是這條路存在的理由。所以在補之前就拋 {@link GOAL_TOOL_MISSING_CALL_ID_MESSAGE}，讓 `containment.ts` 分類。
  *
  * @param text - 這一次工具結果的原文（一行緊湊 JSON）。
  * @param objective - 被收掉那個目標的內容。
@@ -579,9 +572,14 @@ function authorityFor(
  * @param exec - 這一次呼叫的 `ToolExec`。
  * @returns 這次呼叫的結果。
  */
-function wrapup(text: string, objective: string, args: UpdateArgs, exec: ToolExec): NexusToolResult {
+function wrapup(
+  text: string,
+  objective: string,
+  args: UpdateArgs,
+  exec: ToolExec,
+): NexusToolResult {
   if (exec.callId === '') throw new Error(GOAL_TOOL_MISSING_CALL_ID_MESSAGE);
-  // 來源由宿主掛（`plugin` 是這顆工具），重複提醒據此知道它不是人插了話（#662）；`GOAL_WRAPUP_MARKER` 只剩收尾指示的身分。
+  // 來源由宿主掛（`plugin` 是這顆工具），重複提醒據此知道它不是人插了話（#662）；`GOAL_WRAPUP_MARKER` 只標出收尾指示，core 不讀它。
   exec.deferContext(
     args.action === 'complete'
       ? renderWrapupContext(objective)
@@ -617,10 +615,7 @@ const updateSchema = z.object({
   goal_id: z.string().describe('Exact id returned by get_goal.'),
   revision: z.number().describe('Exact positive revision returned by get_goal.'),
   action: z.enum(UPDATE_ACTIONS).describe('edit | pause | resume | complete | blocked'),
-  objective: z
-    .string()
-    .optional()
-    .describe('Replacement objective; valid only with action edit.'),
+  objective: z.string().optional().describe('Replacement objective; valid only with action edit.'),
   max_goal_rounds: z
     .number()
     .optional()
@@ -638,7 +633,9 @@ const updateSchema = z.object({
  * 造這三顆工具。
  *
  * @param wiring - 找日誌與找服務的兩條路，由組裝點的 `apply` 綁上去。
+ * @param policy - 工具的政策，見 {@link GoalToolPolicy}；省略照預設。
  * @returns 依 `get`／`create`／`update` 順序的三顆工具。
+ * @throws `TypeError`：`blockedAfterConsecutiveRounds` 不是正的安全整數（{@link resolveGoalToolPolicy}）。
  */
 export function createGoalTools(
   wiring: GoalToolWiring,

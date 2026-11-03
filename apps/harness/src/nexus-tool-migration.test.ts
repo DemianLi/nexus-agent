@@ -1,8 +1,9 @@
 /**
- * K3b（#2352）遷到 `NexusTool` 的六顆插件：送上線的工具定義、驗證與拒絕的結果，跟遷移前逐字相同。
+ * #2352 的六顆 `NexusTool` 插件經 `langChainToolOf` 轉出來之後，送上線的工具定義、驗證與拒絕的結果，
+ * 與 `nexus-tool-migration.baseline.json` 逐字相同。
  *
- * 對照組是 `nexus-tool-migration.baseline.json`，在 `develop` `76db1d8e`（遷移前）用這一份檔以 `K3B_RECORD=1` 錄的。
- * 每顆工具的查找都接成「沒接上」，所以合格的輸入走到的是本體裡第一條拒絕。
+ * 對照組在 `develop` `76db1d8e`（這幾顆還是 LangChain 工具時）以 `K3B_RECORD=1` 錄的，當時轉接器在 `./nexus-tool-adapter.js`。
+ * `K3B_RECORD=1` 會拿當下的輸出覆寫對照組。帶查找的工具都接成「沒接上」，所以合格的輸入走到的是本體裡第一條拒絕。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
@@ -18,7 +19,7 @@ import { isNexusTool } from '@nexus/tools';
 import type { NexusTool } from '@nexus/tools';
 import { expect, it } from 'vitest';
 
-import { langChainToolOf } from './nexus-tool-adapter.js';
+import { langChainToolOf } from '@nexus/tool-adapter';
 
 const BASELINE = new URL('./nexus-tool-migration.baseline.json', import.meta.url);
 const notAttached = () => ({ kind: 'not-attached' }) as never;
@@ -34,7 +35,9 @@ function tools(): StructuredToolInterface[] {
     createSubmitRecordTool(notAttached),
   ];
   return made.map((tool) =>
-    isNexusTool(tool as NexusTool) ? langChainToolOf(tool as NexusTool) : (tool as StructuredToolInterface),
+    isNexusTool(tool as NexusTool)
+      ? langChainToolOf(tool as NexusTool)
+      : (tool as StructuredToolInterface),
   );
 }
 
@@ -78,7 +81,12 @@ async function outcome(run: () => Promise<unknown>): Promise<unknown> {
     const result = await run();
     if (ToolMessage.isInstance(result) || AIMessage.isInstance(result)) {
       const message = result as ToolMessage;
-      return { content: message.content, status: message.status, id: message.tool_call_id, name: message.name };
+      return {
+        content: message.content,
+        status: message.status,
+        id: message.tool_call_id,
+        name: message.name,
+      };
     }
     return result;
   } catch (error) {
@@ -92,7 +100,12 @@ async function record(): Promise<Record<string, unknown>> {
     const key = out[tool.name] === undefined ? tool.name : `${tool.name}#2`;
     const results: unknown[] = [];
     for (const args of [...(inputs[tool.name] ?? []), ...common]) {
-      const call = { name: tool.name, args: args as Record<string, unknown>, id: 'c1', type: 'tool_call' as const };
+      const call = {
+        name: tool.name,
+        args: args as Record<string, unknown>,
+        id: 'c1',
+        type: 'tool_call' as const,
+      };
       results.push({
         args,
         toolCall: await outcome(() => tool.invoke(call)),
@@ -104,7 +117,7 @@ async function record(): Promise<Record<string, unknown>> {
   return out;
 }
 
-it('六顆插件的工具定義、驗證與拒絕，跟遷移前逐字相同', async () => {
+it('六顆插件的工具定義、驗證與拒絕，與對照組逐字相同', async () => {
   const now = await record();
   if (process.env.K3B_RECORD === '1') {
     writeFileSync(BASELINE, `${JSON.stringify(now, null, 2)}\n`);

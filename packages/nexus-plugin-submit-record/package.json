@@ -25,6 +25,7 @@
     "@nexus/core": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",

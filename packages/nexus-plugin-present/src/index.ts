@@ -98,8 +98,8 @@
  *
  * ## 這個檔不 import `@nexus/core`（#1469）
  *
- * 遷上樹之後套 SDK lint：會話日誌與位址的型別取自 `@nexus/session`、路徑換算取自 `@nexus/fs`，兩個都是 core 的單向轉出。
- * 呼叫的身分在 `execute` 的第二個參數 `ToolExec` 上（`@nexus/tools` 契約 `2.0.0`）。`deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`
+ * 這個檔套 SDK lint：會話日誌與位址的型別取自 `@nexus/session`、路徑換算取自 `@nexus/fs`，兩個都是 core 的單向轉出。
+ * 呼叫的身分在 `execute` 的第二個參數 `ToolExec` 上（`@nexus/tools` 契約 `2.0.0`）。`deliverables/presented` 的事件擴充放在 core 的 `session-log.ts`
  * （前例 `todo/write`），**偏離 dsh**：dsh 把型別和事件擴充都放在插件自己的 `src/types.ts`，我們的宿主（wire、web 的事件讀端、
  * `conversation-history`）要不經插件就讀到這份型別。`present-invariant` 那一列（`src/invariant.ts`）仍在相容層，eslint 只排除那一個檔（#1463 Q3 (a)）。
  *
@@ -300,23 +300,23 @@ export interface PresentDelivery {
 }
 
 const presentToolSchema = z.object({
-    files: z
-      .array(
-        z
-          .object({
-            path: z
-              .string()
-              .describe(
-                'Path of an existing regular file. Relative paths use the Session working directory.',
-              ),
-            description: z.string().optional().describe('Brief description for the user.'),
-          })
-          // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-          .strict(),
-      )
-      // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
-      .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
-  });
+  files: z
+    .array(
+      z
+        .object({
+          path: z
+            .string()
+            .describe(
+              'Path of an existing regular file. Relative paths use the Session working directory.',
+            ),
+          description: z.string().optional().describe('Brief description for the user.'),
+        })
+        // `.strict()`：落庫的要等於模型以為它寫的。
+        .strict(),
+    )
+    // 4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
+    .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
+});
 
 /**
  * 造 `present` 的工具與它的 `tools/result` 觀察者。**兩者共用同一張等結果的表**（閉包裡，每次呼叫一張，不在模組層級）。
@@ -346,7 +346,10 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
     parameters: z.toJSONSchema(presentToolSchema, { io: 'input' }) as JsonSchema,
     execute: async (args, exec): Promise<NexusToolResult> => {
       const { files: requested } = presentToolSchema.parse(args);
-      const refuse = (message: string, error?: { name: string; code: string }): NexusToolResult => ({
+      const refuse = (
+        message: string,
+        error?: { name: string; code: string },
+      ): NexusToolResult => ({
         ok: false,
         content: message,
         ...(error !== undefined && { error }),

@@ -187,6 +187,9 @@ importers:
       '@nexus/timeout':
         specifier: workspace:*
         version: link:../../packages/nexus-timeout
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../../packages/nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../../packages/nexus-tool-result
@@ -765,6 +768,9 @@ importers:
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -907,6 +913,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1110,6 +1119,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1258,6 +1270,9 @@ importers:
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1412,6 +1427,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1689,6 +1707,46 @@ importers:
 
   packages/nexus-timeout:
     devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  packages/nexus-tool-adapter:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/plugin-echo':
+        specifier: workspace:*
+        version: link:../nexus-plugin-echo
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

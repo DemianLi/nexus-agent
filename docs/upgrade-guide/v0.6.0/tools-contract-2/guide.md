@@ -31,3 +31,8 @@ LangChain。介面本身沒有拿掉任何東西，舊的 LangChain 工具照樣
    `jq '.rows[] | select(.id == "<列 id>") | .running' "$NEXUS_AGENT_HOME/plugin-snapshot.json"`，應是 `{"state":"mounted"}`，
    不是 `dropped`。
    最後開一條新對話，請模型列出能用的工具，它登記的工具名要在裡面。
+
+## 2.1.0
+
+`develop` 目前是 `2.1.0`（#2352）：`ToolExec` 多 `deferContext(text, marks?)` 與 `interrupt(payload)`。這是次版號的新增，
+宣告 `^2.0.0` 的外部插件照樣掛得上，不必再改。要用這兩個方法的插件宣告 `^2.1.0`，`inject` 與 `manifest.consumes` 兩邊一起改。

@@ -47,7 +47,7 @@
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src` 不 import `@nexus/core`
  * （套 #1420 的 lint 設定）。要的兩個服務都由宿主在樹上提供：
  *
- * - `tools`（`@nexus/tools`，契約 `^2.1.0`）：登記工具，**帶 `rootOnly` 與 `outputSchema` 兩個選項**（從 `1.1.0` 起；1.0.x 的提供者不認得選項，會把它們靜靜丟掉）。
+ * - `tools`（`@nexus/tools`，契約 `^2.1.0`）：登記工具，**帶 `rootOnly` 與 `outputSchema` 兩個選項**；工具本體用 `exec.interrupt()`（`2.1.0` 起）。
  * - `approvalChannel`（`@nexus/approval-channel`，契約 `^1.0.0`）：行程級的預設答題管道。**在 `apply` 當下抓進閉包**，
  *   呼叫當下才問它的 `current()`：列卸載之後經 `ctx` 取服務會拋（`cannot get required service … in inactive context`），
  *   抓住的那份則仍可呼叫，所以「這一列停用之後，開著的 thread 照樣問得到」。
@@ -166,7 +166,7 @@ export const DELEGATED_CALLER_ERROR: ToolErrorInfo = {
   code: 'DELEGATED_CALLER',
 };
 
-/** 子代理叫到這個工具時模型看到的那一句（前面由宿主加 `Error: `）。dsh 同一處那句的中文。 */
+/** 子代理叫到這個工具時模型看到的那一句（前面由宿主加 `Error: `）。 */
 export const DELEGATED_CALLER_MESSAGE =
   '呼叫的 agent 由另一個執行中的 agent 擁有，這時無法與人互動；' +
   '把沒解決的問題或待定的決定寫進子代理的最終結果。';
@@ -217,7 +217,7 @@ export function createAskUserTool(
       // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
       // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
       // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
-      // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由宿主加（#318）。
+      // 宿主把 `ok: false` 轉成 `toolRefusal`，與核准閘門的 `denial()` 同形，`Error: ` 前綴也由它加（#318）。
       const failed = (message: string, error?: ToolErrorInfo): NexusToolResult => ({
         ok: false,
         content: message,

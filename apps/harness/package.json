@@ -100,6 +100,7 @@
     "@nexus/skills": "workspace:*",
     "@nexus/system-prompt": "workspace:*",
     "@nexus/timeout": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@nexus/web": "workspace:*",
