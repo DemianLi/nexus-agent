@@ -41,7 +41,7 @@ afterEach(() => {
 function harness(open: (threadId: string) => Promise<void> = async () => undefined): Harness {
   const input = new PassThrough();
   const output = new PassThrough();
-  let pending = Buffer.alloc(0);
+  let pending: Buffer = Buffer.alloc(0);
   output.on('data', (chunk: Buffer) => {
     pending = Buffer.concat([pending, chunk]);
   });

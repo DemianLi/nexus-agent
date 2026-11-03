@@ -26,7 +26,9 @@ import type { ConversationCommand, ConversationReport } from './supervisor-proto
 
 /** 控制面要 handler 提供的那幾樣，見 `wire-handler.ts` 的同名成員。 */
 export interface ControlledHandler {
-  idleState(threadId: string): { readonly idle: boolean; readonly lastActiveAt: number } | undefined;
+  idleState(
+    threadId: string,
+  ): { readonly idle: boolean; readonly lastActiveAt: number } | undefined;
   open(threadId: string): Promise<void>;
   stopAdmission(): void;
 }
@@ -134,7 +136,8 @@ export class ConversationControl {
     const threadId = this.#bound;
     if (threadId === undefined || this.#opening) return undefined;
     const state = this.#options.handler.idleState(threadId);
-    const since = state === undefined ? this.#openFailedAt : state.idle ? state.lastActiveAt : undefined;
+    const since =
+      state === undefined ? this.#openFailedAt : state.idle ? state.lastActiveAt : undefined;
     if (since === undefined) return undefined;
     return this.#busySeenAt === undefined ? since : Math.max(since, this.#busySeenAt);
   }
@@ -164,9 +167,7 @@ export class ConversationControl {
   async #bind(threadId: string): Promise<void> {
     if (this.#bound !== undefined) {
       if (this.#bound !== threadId) {
-        this.#options.warn(
-          `[控制面] 已綁 thread "${this.#bound}"，不改綁 "${threadId}"`,
-        );
+        this.#options.warn(`[控制面] 已綁 thread "${this.#bound}"，不改綁 "${threadId}"`);
         return;
       }
       this.#send({ type: 'bound', threadId });

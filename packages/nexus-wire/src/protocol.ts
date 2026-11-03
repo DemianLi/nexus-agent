@@ -439,6 +439,12 @@ export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 export const THREAD_NOT_EMBEDDED = 'thread_not_embedded';
 
 /**
+ * 這個行程只放另一條 thread，或還沒綁上任何一條（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，每條對話一個行程）。
+ * 只有對話行程會回，回給前台；前台照 thread 轉送，回了就是轉錯行程。**不是暫時失敗，重試沒用。**
+ */
+export const THREAD_NOT_BOUND = 'thread_not_bound';
+
+/**
  * 這條 thread 的歷史（磁碟上的會話日誌）裡有一則巢狀太深，灌不回 serve 的狀態，這條 thread 建不起來
  * （[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）。多半是上限出現之前寫下的舊日誌。message 寫了是日誌第幾顆事件、
  * 幾層、上限多少。**不是暫時失敗，重試沒用**：同一份日誌每次都一樣深。任何會經 `threadFor` 續接舊 thread 的路都可能回。
@@ -501,6 +507,7 @@ export type WireErrorCode =
   | typeof SUBAGENT_CLOSED
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
+  | typeof THREAD_NOT_BOUND
   | typeof THREAD_NOT_EMBEDDED
   | typeof THREAD_HISTORY_TOO_DEEP
   | typeof THREAD_WRITER_HELD

@@ -21,8 +21,7 @@ afterEach(async () => {
 
 /** 把收到的 `Request` 原樣講回去：網址與 Host。 */
 const echo: WireHandler = {
-  handle: async (request) =>
-    Response.json({ url: request.url, host: request.headers.get('host') }),
+  handle: async (request) => Response.json({ url: request.url, host: request.headers.get('host') }),
   close: async () => undefined,
 };
 
