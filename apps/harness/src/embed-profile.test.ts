@@ -203,11 +203,19 @@ describe('嵌入版沒有 / 與 @（#2365 第 2 點）', () => {
   }, 30_000);
 
   it('白名單外的命令回 not_supported，列表與搜尋這類全域路由 404', async () => {
-    const { embed } = await start([hello]);
+    const { full, embed } = await start([hello, hello]);
+    await say(embed, 'e1');
     expect(await embed.modelCatalog('e1')).toMatchObject({
       kind: 'rejected',
       code: 'not_supported',
     });
+    // 改名在獨立頁面打得通，嵌入連線打不到：擋它的是命令白名單，不是這支命令自己做不到。
+    expect(await embed.threadRename('e1', '改名')).toMatchObject({
+      kind: 'rejected',
+      code: 'not_supported',
+    });
+    await say(full, 'f1');
+    expect(await full.threadRename('f1', '改名')).toMatchObject({ kind: 'ok' });
     await expect(embed.listThreads()).rejects.toThrow(/404/u);
   }, 30_000);
 });
@@ -262,10 +270,24 @@ describe('設定檔綁在 thread 上', () => {
     expect(await first.embed.threadHistory('f1')).toMatchObject({ kind: 'rejected' });
 
     const again = await start([hello], { logs: first.logs });
+    // 讀圖不經 `threadOrError`、也只讀載入著的 thread：沒載入的這條要靠冷讀 header 擋下，不然回的是「沒引用過這張圖」。
+    expect(await again.embed.readAttachment('f1', `sha256:${'0'.repeat(64)}`)).toMatchObject({
+      kind: 'rejected',
+      code: THREAD_NOT_EMBEDDED,
+    });
     expect(await again.embed.runStart('f1', '接手')).toMatchObject({
       error: THREAD_NOT_EMBEDDED,
     });
   }, 60_000);
+
+  it('讀圖：載入著的獨立頁面 thread 回 thread_not_embedded', async () => {
+    const { full, embed } = await start([hello]);
+    await say(full, 'f1');
+    expect(await embed.readAttachment('f1', `sha256:${'0'.repeat(64)}`)).toMatchObject({
+      kind: 'rejected',
+      code: THREAD_NOT_EMBEDDED,
+    });
+  }, 30_000);
 
   it('嵌入版開的 thread 重啟之後從獨立頁面打開，照樣不掛 task、沒有斜線命令', async () => {
     const first = await start([hello, hello]);
@@ -461,5 +483,12 @@ describe('畫面情境走排隊與插話兩條路', () => {
     // 插話進的是同一輪的第二次呼叫，不是另開一輪。
     expect(prompts.filter((_, index) => (bound[index]?.length ?? 0) > 0)).toHaveLength(2);
     expect(askedWith('順便看它', 'PUMP-09')).toBe(true);
+    const history = await embed.threadHistory('e1');
+    if (history.kind !== 'ok') throw new Error(`歷史沒拿到：${JSON.stringify(history)}`);
+    const cold = reduceAll(emptyConversation(), history.result.events);
+    expect(cold.entries.filter((entry) => entry.kind === 'human')).toEqual([
+      expect.objectContaining({ text: '先讀檔' }),
+      expect.objectContaining({ text: '順便看它' }),
+    ]);
   }, 30_000);
 });
