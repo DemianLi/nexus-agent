@@ -39,6 +39,11 @@ describe('judge', () => {
     expect(judge(q('a1'), said('', '你是指哪一台？'))).toBe('ok');
   });
 
+  it('編號裡的連字號是不換行連字號或全形的，照樣認得', () => {
+    expect(judge(q('a2'), said('「它」指的是目前選取的 AHU\u20113 空調箱。濾網堵塞時……'))).toBe('ok');
+    expect(judge(q('a2'), said('你選取的是 AHU－3。濾網堵塞時……'))).toBe('ok');
+  });
+
   it('跟畫面無關：提了選取的是 wrong', () => {
     expect(judge(q('u1'), said('一般建議提前三天。'))).toBe('ok');
     expect(judge(q('u1'), said('一般建議提前三天，跟 P-101 無關。'))).toBe('wrong');

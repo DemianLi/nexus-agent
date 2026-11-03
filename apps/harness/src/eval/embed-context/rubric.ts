@@ -21,11 +21,14 @@ export interface Observation {
   readonly askText: string;
 }
 
-/** 設備編號：大寫字母開頭、一個連字號、數字。 */
+/** 設備編號：一到三個大寫字母、一個連字號、一到三位數字。 */
 const DEVICE_ID = /\b[A-Z]{1,3}-\d{1,3}\b/gu;
 
+/** 模型會把編號裡的連字號寫成不換行連字號（U+2011）、破折號或全形的，比對前一律換回 `-`。 */
+const DASHES = /[\u2010-\u2015\u2212\uFE63\uFF0D]/gu;
+
 function idsIn(text: string): Set<string> {
-  return new Set(text.match(DEVICE_ID) ?? []);
+  return new Set(text.replace(DASHES, '-').match(DEVICE_ID) ?? []);
 }
 
 /** 第一句：到第一個句號、問號、驚嘆號或換行為止。 */
