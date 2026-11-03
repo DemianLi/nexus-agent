@@ -32,7 +32,7 @@ import {
   errorChain,
   TokenAnchorBook,
 } from '@nexus/core';
-import type { HistoryShadowTally } from '@nexus/core';
+import type { AgentLoopKind, HistoryShadowTally } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
 import { isThreadsPath, withoutEmbedPrefix } from './embed-profile.js';
 import type { ThreadProfile } from './embed-profile.js';
@@ -48,6 +48,7 @@ import type {
 import { AssemblyDropError } from './agent-factory.js';
 import {
   assertPersistenceFlags,
+  parseAgentLoop,
   parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
@@ -226,6 +227,8 @@ export interface ServeInvocation {
   readonly patches?: readonly string[];
   /** 見 `assembly-root.ts` 的 `CliInvocation.sessionLog`：換位置用，省略即 harness home 底下的 `sessions`。 */
   readonly sessionLog?: string;
+  /** 見 `assembly-root.ts` 的 `CliInvocation.agentLoop`。**兩個入口共用同一個旗標名、同一份驗證。** */
+  readonly agentLoop?: AgentLoopKind;
   /** 見 `assembly-root.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名；預設不同**：serve 開、CLI 關（#445）。 */
   readonly goalDriver: boolean;
   /** 見 `assembly-root.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
@@ -261,6 +264,8 @@ const USAGE = `用法：
   --session-log <dir>  把會話日誌改寫到這個目錄
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
+  --agent-loop <langgraph|native>
+                       驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
@@ -292,6 +297,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         workspace: { type: 'string' },
         sandbox: { type: 'string' },
         'session-log': { type: 'string' },
+        'agent-loop': { type: 'string' },
         port: { type: 'string' },
         compression: { type: 'string' },
         'compression-level': { type: 'string' },
@@ -324,6 +330,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   }
 
   const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
+  const agentLoop = parseAgentLoop(values['agent-loop'], USAGE);
 
   if (values['goal-driver'] === true && values['no-goal-driver'] === true) {
     throw new Error(
@@ -380,6 +387,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
+    ...(agentLoop !== undefined && { agentLoop }),
     // **serve 預設開，CLI 預設關**（#445）：要核准的工具在 serve 上是停下來等人，CLI 的
     // `HEADLESS_APPROVALS` 則確定性拒絕、續行只會一再撞同一個拒絕空轉。`--goal-driver` 留著
     // 當成「明講要開」，與 CLI 共用同一個旗標名；`--no-goal-driver` 關掉。
@@ -621,7 +629,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     // 行程級只留「有沒有圍堵」（#1774）：可寫根是逐條 thread 的，每條 thread 組裝時才依 thread 取。
     const contained = resolveWorkspaceRoot(invocation.workspace, cwd) !== undefined;
     root = createCordisRoot({
-      channel: entryApprovalChannel(undefined),
+      channel: entryApprovalChannel(undefined, invocation.agentLoop),
       ...(contained && { contained }),
     });
     serverLog = createServerLog(await root.tree.context(), log);

@@ -95,6 +95,7 @@ import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import {
   type CliInvocation,
+  parseAgentLoop,
   parseSandboxMode,
   resolveInvariantLogPath,
   resolveSessionLogDir,
@@ -148,6 +149,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 state）
                        shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
                        log：送日誌推出來的；推不出來這一輪就失敗
+  --agent-loop <langgraph|native>
+                       驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）
@@ -189,6 +192,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
         'history-source': { type: 'string' },
+        'agent-loop': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
@@ -241,6 +245,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
   const recursionLimit = parsePositiveInteger('--recursion-limit', values['recursion-limit']);
   const historySource = parseHistorySource(values['history-source']);
+  const agentLoop = parseAgentLoop(values['agent-loop'], USAGE);
 
   const dumpConfig = values['dump-config'] === true;
   if (dumpConfig) {
@@ -307,6 +312,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
     ...(historySource !== undefined && { historySource }),
+    ...(agentLoop !== undefined && { agentLoop }),
     dumpConfig,
     dumpConfigSchema,
     dumpDefaultConfig,
@@ -958,7 +964,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const contained =
     resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd()) !== undefined;
   const root = createCordisRoot({
-    channel: entryApprovalChannel(HEADLESS_APPROVALS),
+    channel: entryApprovalChannel(HEADLESS_APPROVALS, invocation.agentLoop),
     ...(contained && { contained }),
   });
   try {

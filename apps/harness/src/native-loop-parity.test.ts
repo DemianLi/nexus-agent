@@ -5,6 +5,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
+import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
@@ -50,6 +51,12 @@ interface RawEvent {
   readonly params: { readonly namespace: string[]; readonly node?: string; readonly data: unknown };
 }
 
+/** `tool-finished` 的 `output`：pump 的 `#toolData` 拿它判定，比 `status` 與 `content`。 */
+function toolOutputOf(output: unknown): string {
+  if (!ToolMessage.isInstance(output)) return `raw:${JSON.stringify(output)}`;
+  return JSON.stringify({ status: output.status, content: output.content });
+}
+
 /** pump 與 wire 會讀的欄位（`thread-pump.ts` 的 `trackRootReply`、`isRootTerminal`、`#translate`）。id 換成出現序。 */
 function projected(events: readonly RawEvent[]): string[] {
   const ids = new Map<string, string>();
@@ -67,7 +74,7 @@ function projected(events: readonly RawEvent[]): string[] {
     } else if (event.method === 'messages') {
       const delta = data['delta'] as Record<string, unknown> | undefined;
       out.push(
-        `messages ns${ns} ${String(data['event'])}` +
+        `messages ns${ns} node=${String(event.params.node)} ${String(data['event'])}` +
           (data['id'] === undefined ? '' : ` id=${idOf(data['id'])}`) +
           (data['role'] === undefined ? '' : ` role=${String(data['role'])}`) +
           (delta === undefined ? '' : ` ${String(delta['type'])}=${JSON.stringify(delta['text'] ?? delta['reasoning'] ?? '')}`),
@@ -77,7 +84,8 @@ function projected(events: readonly RawEvent[]): string[] {
         `tools ns${ns} ${String(data['event'])} call=${String(data['tool_call_id'])}` +
           (data['tool_name'] === undefined ? '' : ` name=${String(data['tool_name'])}`) +
           (data['input'] === undefined ? '' : ` input=${String(data['input'])}`) +
-          (data['message'] === undefined ? '' : ` message=${String(data['message'])}`),
+          (data['message'] === undefined ? '' : ` message=${String(data['message'])}`) +
+          (data['output'] === undefined ? '' : ` output=${toolOutputOf(data['output'])}`),
       );
     } else if (event.method === 'custom' && ns === 0) {
       out.push(`custom ns0 ${JSON.stringify(data)}`);
@@ -173,5 +181,56 @@ describe('native loop 對照 LangGraph', () => {
     expect(native.failure).toEqual(graph.failure);
     expect(native.events).toEqual(graph.events);
     expect(native.log).toEqual(graph.log);
+  });
+});
+
+/**
+ * native 下沒有存檔點（`fold.ts` 的 `foldApprovalChannel`），核准閘門是 `no-channel`：要核准的工具確定性地拒絕，**本體一次都不跑**，
+ * 也不發中斷。LangGraph 下同一份組裝停在核准中斷（`tool-events.test.ts` 的「被核准閘門中斷的呼叫」）。
+ */
+describe('native 下要核准的工具', () => {
+  it('本體呼叫 0 次，結果是拒絕，這一輪照常收完', async () => {
+    let calls = 0;
+    const dangerPlugin: PluginEntry = {
+      plugin: {
+        name: 'native-parity-danger',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              () => {
+                calls += 1;
+                return '危險的事做完了';
+              },
+              { name: 'danger', description: '要核准。', schema: z.object({}) },
+            ),
+          );
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+          );
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [{ content: '動手。', toolCalls: [{ name: 'danger', args: {} }] }, { content: '收工。' }],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [humanChannelPlugin(), dangerPlugin],
+      agentLoop: 'native',
+    });
+    try {
+      const result = await built.agent.invoke(toAgentInvocation('跑。'), {
+        configurable: { thread_id: 'native-danger' },
+      });
+      expect(calls).toBe(0);
+      expect((result as { __interrupt__?: unknown }).__interrupt__).toBeUndefined();
+      const reply = result.messages.find((message) => ToolMessage.isInstance(message));
+      expect(reply).toMatchObject({ name: 'danger', status: 'error' });
+      // 分得出「閘門算出 no-channel 而拒絕」與「閘門以為有人在、撞上 `interrupt()` 的 No checkpointer set」：兩者都是 0 次、error。
+      expect(String(reply?.content)).toContain('這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行');
+      expect(result.messages.at(-1)?.content).toBe('收工。');
+    } finally {
+      await built.dispose();
+    }
   });
 });
