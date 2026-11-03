@@ -231,6 +231,11 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   **相容層的 `registry.tools.register` 也收 `NexusTool`**（#2353）：註冊當下經組裝點交給 `createRegistry` 的 `adaptTool`（產品路徑上是轉接器的
   `toLangChainTool`）轉成 LangChain 工具，表裡放轉出來的那一顆；沒交 `adaptTool` 就在註冊當下拋。plan-mode 的 `exit_plan_mode`、sandbox-policy 的
   `request_sandbox_escalation` 走這條：插件留在相容層，工具本體是 `NexusTool`。
+  `2.3.0`（#2353）起再多三格選填的欄位（主要給 MCP 工具），不宣告的工具行為不變（升級指南 [`tools-contract-2-3`](upgrade-guide/v0.6.0/tools-contract-2-3/guide.md)）。
+  **`rawParameters: true`**：`parameters` 是外部給的 JSON Schema（`$ref`、`anyOf`、`format` 都可能有），原樣送上線、照 JSON Schema 驗，
+  不補 `additionalProperties`，根物件沒有 `properties` 時補一個空的，沒寫 `additionalProperties: false` 的多帶鍵原樣交給 `execute`；錯誤句是 LangChain 那一層的「Received tool input did not match expected schema」。
+  **`timeoutMs`**：一次呼叫的預算，照 dsh 的 `ToolDefinition.timeoutMs`；轉接器轉成 LangChain 的 `defaultConfig.timeout`，到期舉起 `exec.signal`，逾時句講出這個數字。
+  **成功結果的 `artifact`**：不送模型的附帶資料，落在那則 `ToolMessage` 的 `artifact`、跟著日誌落盤；省略與 `[]` 是兩種值。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，
