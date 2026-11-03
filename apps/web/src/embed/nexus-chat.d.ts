@@ -40,7 +40,8 @@ interface NexusChatElement extends HTMLElement {
   set context(value: NexusChatContext | string | null | undefined);
   /**
    * 宿主頁工具（#2374）：每一句送出時附上當下的這份，至多 8 支、整份序列化後至多 16 KiB。`null` 或空陣列清掉。超過上限或形狀不對的
-   * 不收、console 講一聲，原本的不動。模型叫到時元素發 `nexus-host-tool`；30 秒沒交回就當失敗。升級之前就設好的也收得到。
+   * 不收、console 講一聲，原本的不動。模型叫到時元素發 `nexus-host-tool`；沒在期限內交回就當失敗（預設 30 秒，營運者在 serve 的
+   * `host-tools` 設定 `timeoutMs`）。升級之前就設好的也收得到。
    */
   get hostTools(): readonly NexusHostTool[] | null;
   set hostTools(value: readonly NexusHostTool[] | null | undefined);
