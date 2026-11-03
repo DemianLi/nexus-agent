@@ -13,9 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import type { PluginRegistry } from '@nexus/core';
 import { createMcpPlugin, MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createMcpSandboxWrapper } from './mcp-sandbox.js';
@@ -176,25 +177,29 @@ describe.skipIf(BINARY === undefined).each(servers)(
         serveHome: serve,
         userHomes: ['/no-such-home'],
       }));
-      const loaded = await loadPlugins([
-        {
-          plugin: {
-            name: 'host',
-            apply: (host) => void host.services.provide(MCP_SANDBOX_SERVICE, wrap),
+      // MCP 的工具是 `NexusTool`，註冊表要帶轉接器才收得下（同組裝點）。
+      const loaded = await loadPlugins(
+        [
+          {
+            plugin: {
+              name: 'host',
+              apply: (host) => void host.services.provide(MCP_SANDBOX_SERVICE, wrap),
+            },
           },
-        },
-        createMcpPlugin({
-          serverName: 'srv',
-          connection: {
-            transport: 'stdio',
-            command,
-            args: [code],
-            env: { FROM_CONFIG: 'kept' },
-            ...(sandbox === undefined ? {} : { sandbox }),
-          },
-          approval: { default: 'allow' },
-        }),
-      ]);
+          createMcpPlugin({
+            serverName: 'srv',
+            connection: {
+              transport: 'stdio',
+              command,
+              args: [code],
+              env: { FROM_CONFIG: 'kept' },
+              ...(sandbox === undefined ? {} : { sandbox }),
+            },
+            approval: { default: 'allow' },
+          }),
+        ],
+        createRegistry({ adaptTool: toLangChainTool }),
+      );
       dispose = loaded.dispose;
       const { registry }: { registry: PluginRegistry } = loaded;
       return async (tool: string, value: string): Promise<string> => {
