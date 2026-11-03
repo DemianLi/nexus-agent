@@ -67,7 +67,8 @@ interface RawEvent {
 
 /** `tool-finished` 的 `output`：pump 的 `#toolData` 拿它判定，比 `status` 與 `content`。 */
 function toolOutputOf(output: unknown): string {
-  if (!ToolMessage.isInstance(output)) return `raw:${JSON.stringify(output).replace(UUID, '<uuid>')}`;
+  if (!ToolMessage.isInstance(output))
+    return `raw:${JSON.stringify(output).replace(UUID, '<uuid>')}`;
   return JSON.stringify({ status: output.status, content: output.content });
 }
 
@@ -91,7 +92,9 @@ function projected(events: readonly RawEvent[]): string[] {
         `messages ns${ns} node=${String(event.params.node)} ${String(data['event'])}` +
           (data['id'] === undefined ? '' : ` id=${idOf(data['id'])}`) +
           (data['role'] === undefined ? '' : ` role=${String(data['role'])}`) +
-          (delta === undefined ? '' : ` ${String(delta['type'])}=${JSON.stringify(delta['text'] ?? delta['reasoning'] ?? '')}`),
+          (delta === undefined
+            ? ''
+            : ` ${String(delta['type'])}=${JSON.stringify(delta['text'] ?? delta['reasoning'] ?? '')}`),
       );
     } else if (event.method === 'tools') {
       out.push(
@@ -109,7 +112,14 @@ function projected(events: readonly RawEvent[]): string[] {
 }
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-const CLOCK_KEYS = new Set(['time', 'timestamp', 'durationMs', 'elapsedMs', 'startedAt', 'endedAt']);
+const CLOCK_KEYS = new Set([
+  'time',
+  'timestamp',
+  'durationMs',
+  'elapsedMs',
+  'startedAt',
+  'endedAt',
+]);
 
 /** 日誌逐筆的型別與內容；時間換成記號、uuid 換成出現序。 */
 function logShape(events: readonly SessionEvent[]): string[] {
@@ -153,15 +163,34 @@ async function runOnce(loop: AgentLoopKind, turns: readonly ScriptedTurn[], prom
     });
     // LangGraph 那條的投影孤兒（工具拋錯時），pump 也這樣標掉。
     markProjectionsHandled(run as RunProjections);
-    const root0 = () => sessions.list().find((entry) => entry.address.kind === 'root')?.log.events ?? [];
+    const root0 = () =>
+      sessions.list().find((entry) => entry.address.kind === 'root')?.log.events ?? [];
     let failure: string | undefined;
     try {
       for await (const event of run as AsyncIterable<RawEvent>) raw.push(event);
     } catch (error) {
       failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     }
-    if (process.env['PARITY_DUMP']) (await import('node:fs')).appendFileSync(process.env['PARITY_DUMP'], [...raw.map((e) => [loop, e.method, JSON.stringify(e.params.namespace), e.params.node, JSON.stringify(e.params.data).slice(0, 300)].join(' ')), `${loop} FAILURE ${failure}`, ...logShape(root0()).map((l) => `${loop} LOG ${l.slice(0, 300)}`)].join('\n') + '\n');
-    const logs = sessions.list().map((entry) => [entry.address.kind, ...logShape(entry.log.events)]);
+    if (process.env['PARITY_DUMP'])
+      (await import('node:fs')).appendFileSync(
+        process.env['PARITY_DUMP'],
+        [
+          ...raw.map((e) =>
+            [
+              loop,
+              e.method,
+              JSON.stringify(e.params.namespace),
+              e.params.node,
+              JSON.stringify(e.params.data).slice(0, 300),
+            ].join(' '),
+          ),
+          `${loop} FAILURE ${failure}`,
+          ...logShape(root0()).map((l) => `${loop} LOG ${l.slice(0, 300)}`),
+        ].join('\n') + '\n',
+      );
+    const logs = sessions
+      .list()
+      .map((entry) => [entry.address.kind, ...logShape(entry.log.events)]);
     return { events: projected(raw), log: logs, failure };
   } finally {
     detach();
@@ -174,7 +203,10 @@ describe('native loop 對照 LangGraph', () => {
     ['只有文字', [{ content: '你好。' }]],
     [
       '一顆工具',
-      [{ content: '我來回聲。', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] }, { content: '好了。' }],
+      [
+        { content: '我來回聲。', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+        { content: '好了。' },
+      ],
     ],
     [
       '平行兩顆工具',
@@ -248,7 +280,10 @@ describe('native 下要核准的工具', () => {
     };
     const built = await createNexusAgent({
       model: new ScriptedChatModel({
-        turns: [{ content: '動手。', toolCalls: [{ name: 'danger', args: {} }] }, { content: '收工。' }],
+        turns: [
+          { content: '動手。', toolCalls: [{ name: 'danger', args: {} }] },
+          { content: '收工。' },
+        ],
       }),
       checkpointer: new MemorySaver(),
       plugins: [humanChannelPlugin(), dangerPlugin],
@@ -263,7 +298,9 @@ describe('native 下要核准的工具', () => {
       const reply = result.messages.find((message) => ToolMessage.isInstance(message));
       expect(reply).toMatchObject({ name: 'danger', status: 'error' });
       // 分得出「閘門算出 no-channel 而拒絕」與「閘門以為有人在、撞上 `interrupt()` 的 No checkpointer set」：兩者都是 0 次、error。
-      expect(String(reply?.content)).toContain('這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行');
+      expect(String(reply?.content)).toContain(
+        '這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行',
+      );
       expect(result.messages.at(-1)?.content).toBe('收工。');
     } finally {
       await built.dispose();

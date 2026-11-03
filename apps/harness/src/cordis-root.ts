@@ -198,7 +198,10 @@ export interface CordisRoot {
  * @param approvals - 這個入口給組裝的核准政策（`createCliAgent` 的 `session.approvals`）。
  * @param loop - 這個入口的 `--agent-loop`，省略即 `langgraph`。
  */
-export function entryApprovalChannel(approvals?: ApprovalPolicy, loop?: AgentLoopKind): ApprovalChannel {
+export function entryApprovalChannel(
+  approvals?: ApprovalPolicy,
+  loop?: AgentLoopKind,
+): ApprovalChannel {
   return deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
     hasCheckpointer: loop !== 'native',

@@ -11,8 +11,7 @@
 
 /** `agent/pre-step` 的決定。`next()` 回 `continue`。 */
 export type PreStepDecision =
-  | { readonly kind: 'continue' }
-  | { readonly kind: 'reject'; readonly reason: string };
+  { readonly kind: 'continue' } | { readonly kind: 'reject'; readonly reason: string };
 
 /** `agent/request-error` 的決定：`retry` 再打一次這一步的模型呼叫，`undefined` 讓這次失敗收掉這一輪。 */
 export type RequestErrorAction = { readonly kind: 'retry' } | undefined;

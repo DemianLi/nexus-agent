@@ -47,7 +47,9 @@ export class StateChannels {
   #collect(schema: unknown): void {
     if (schema === undefined || schema === null) return;
     if (StateSchema.isInstance(schema)) {
-      for (const [key, field] of Object.entries((schema as { fields: Record<string, unknown> }).fields)) {
+      for (const [key, field] of Object.entries(
+        (schema as { fields: Record<string, unknown> }).fields,
+      )) {
         if (ReducedValue.isInstance(field)) {
           const reduced = field as unknown as { reducer: Reducer; valueSchema: unknown };
           this.#reducers.set(key, reduced.reducer);

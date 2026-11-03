@@ -156,7 +156,11 @@ export class NativeAgent {
    * @param threads - thread 的 state；`withConfig` 出來的那一份共用同一張表。
    * @param defaults - `withConfig` 給的上限。
    */
-  constructor(params: NativeAgentParams, threads = new Map<string, LoopState>(), defaults: LoopDefaults = {}) {
+  constructor(
+    params: NativeAgentParams,
+    threads = new Map<string, LoopState>(),
+    defaults: LoopDefaults = {},
+  ) {
     this.#params = params;
     this.#threads = threads;
     this.#defaults = defaults;
@@ -169,7 +173,9 @@ export class NativeAgent {
       (m) => ((m as { tools?: readonly unknown[] }).tools ?? []) as readonly InvokableTool[],
     );
     this.#tools = [...(params.tools as readonly InvokableTool[]), ...middlewareTools];
-    this.#returnDirect = new Set(this.#tools.filter((t) => t.returnDirect === true).map((t) => t.name));
+    this.#returnDirect = new Set(
+      this.#tools.filter((t) => t.returnDirect === true).map((t) => t.name),
+    );
     this.#channels = new StateChannels(this.#middleware);
   }
 
@@ -200,7 +206,10 @@ export class NativeAgent {
    * @param config - 帶 `configurable.thread_id`。
    * @param values - 要寫的鍵。
    */
-  async updateState(config: RunnableConfig, values: Record<string, unknown>): Promise<RunnableConfig> {
+  async updateState(
+    config: RunnableConfig,
+    values: Record<string, unknown>,
+  ): Promise<RunnableConfig> {
     this.#channels.apply(this.#stateOf(threadIdOf(config)), values);
     return config;
   }
@@ -219,7 +228,10 @@ export class NativeAgent {
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
-  async stream(input: LoopInput, config: RunnableConfig = {}): Promise<AsyncIterable<[string, unknown]>> {
+  async stream(
+    input: LoopInput,
+    config: RunnableConfig = {},
+  ): Promise<AsyncIterable<[string, unknown]>> {
     const queue = new AsyncQueue<[string, unknown]>();
     void this.#run(input, config, {
       onUpdate: (node, update) => queue.push(['updates', { [node]: update }]),
@@ -276,7 +288,9 @@ export class NativeAgent {
 
   async #turn(input: LoopInput, config: RunnableConfig, observer: RunObserver): Promise<LoopState> {
     if (isCommand(input)) {
-      throw new Error('native agent loop 不支援 resume：中斷改成行程內 await 之前（K8 #2358）沒有可接回的中斷');
+      throw new Error(
+        'native agent loop 不支援 resume：中斷改成行程內 await 之前（K8 #2358）沒有可接回的中斷',
+      );
     }
     const threadId = threadIdOf(config);
     const state = this.#stateOf(threadId);
@@ -398,7 +412,11 @@ export class NativeAgent {
   ): Promise<AIMessage | undefined> {
     // 剛跑完要收這一輪的工具：同 `AgentNode` 的 returnDirect 檢查，不叫模型。
     const last = state.messages.at(-1);
-    if (ToolMessage.isInstance(last) && last.name !== undefined && this.#returnDirect.has(last.name)) {
+    if (
+      ToolMessage.isInstance(last) &&
+      last.name !== undefined &&
+      this.#returnDirect.has(last.name)
+    ) {
       return undefined;
     }
     const events = this.#params.events;
@@ -413,8 +431,7 @@ export class NativeAgent {
             tools: this.#tools,
             middleware: this.#middleware,
             ...(events !== undefined && {
-              around: (call) =>
-                events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
+              around: (call) => events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
             }),
           },
           task,
@@ -474,7 +491,9 @@ export class NativeAgent {
     if (messages.length > 0) this.#channels.apply(state, { messages });
     note('tools', { messages });
     const last = state.messages.at(-1);
-    return ToolMessage.isInstance(last) && last.name !== undefined && this.#returnDirect.has(last.name);
+    return (
+      ToolMessage.isInstance(last) && last.name !== undefined && this.#returnDirect.has(last.name)
+    );
   }
 
   #applyCommand(state: LoopState, command: Command): void {
@@ -484,7 +503,8 @@ export class NativeAgent {
     const update = command.update;
     if (update === undefined || update === null) return;
     if (Array.isArray(update)) {
-      for (const [key, value] of update as [string, unknown][]) this.#channels.apply(state, { [key]: value });
+      for (const [key, value] of update as [string, unknown][])
+        this.#channels.apply(state, { [key]: value });
       return;
     }
     this.#channels.apply(state, update as Record<string, unknown>);
@@ -566,4 +586,3 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 export function createNativeAgent(params: NativeAgentParams): NativeAgent {
   return new NativeAgent(params);
 }
-

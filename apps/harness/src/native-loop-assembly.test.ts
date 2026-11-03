@@ -19,9 +19,11 @@ import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
+import { parseCliArgs } from './cli.js';
 import { foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { startScriptedServe } from './scripted-serve.js';
+import { parseServeArgs } from './serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -53,6 +55,22 @@ async function finishedTurn(server: ScriptedServe, threadId: string): Promise<Co
   await events.return?.(undefined);
   return state;
 }
+
+describe('--agent-loop', () => {
+  it.each([
+    ['CLI', parseCliArgs],
+    ['serve', parseServeArgs],
+  ] as const)('%s：只收 langgraph、native，省略即不設', (_label, parse) => {
+    expect(parse(['--agent-loop', 'native']).agentLoop).toBe('native');
+    expect(parse(['--agent-loop', 'langgraph']).agentLoop).toBe('langgraph');
+    expect(parse([])).not.toHaveProperty('agentLoop');
+    for (const raw of ['Native', 'pregel', '']) {
+      expect(() => parse([`--agent-loop=${raw}`])).toThrow(
+        /--agent-loop 只收 langgraph、native[\s\S]*用法/,
+      );
+    }
+  });
+});
 
 describe('serve --agent-loop native', () => {
   it('ask_user_question 當下拒絕（no-channel），這一輪照常收完', async () => {

@@ -112,7 +112,10 @@ export class ProtocolEmitter {
    */
   custom(payload: unknown): void {
     const data =
-      typeof payload === 'object' && payload !== null && !Array.isArray(payload) && 'name' in payload
+      typeof payload === 'object' &&
+      payload !== null &&
+      !Array.isArray(payload) &&
+      'name' in payload
         ? payload
         : { payload };
     this.emit('custom', [], data);
@@ -159,7 +162,11 @@ function deltaFor(block: Block, index: number): unknown {
   if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
     return { event: 'content-block-delta', index, delta: { type: 'text-delta', text: block.text } };
   }
-  if (block.type === 'reasoning' && typeof block.reasoning === 'string' && block.reasoning.length > 0) {
+  if (
+    block.type === 'reasoning' &&
+    typeof block.reasoning === 'string' &&
+    block.reasoning.length > 0
+  ) {
     return {
       event: 'content-block-delta',
       index,
@@ -215,7 +222,8 @@ export class NativeStreamHandler extends BaseCallbackHandler {
     tags?: string[],
     metadata?: Record<string, unknown>,
   ): void {
-    if (tags?.includes('nostream') === true || tags?.includes('langsmith:nostream') === true) return;
+    if (tags?.includes('nostream') === true || tags?.includes('langsmith:nostream') === true)
+      return;
     const ns = metadata?.[NS_KEY];
     if (typeof ns !== 'string') return;
     const node = metadata?.[NODE_KEY];
@@ -338,7 +346,10 @@ export class NativeStreamHandler extends BaseCallbackHandler {
       event: 'tool-error',
       tool_call_id: String(run.toolCallId ?? ''),
       message:
-        typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
+        typeof error === 'object' &&
+        error !== null &&
+        'message' in error &&
+        typeof error.message === 'string'
           ? error.message
           : String(error ?? 'unknown error'),
     });

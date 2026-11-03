@@ -222,7 +222,11 @@ function canBindTools(model: unknown): model is BindsTools {
 }
 
 /** 同 langchain 的 `_simpleBindTools`：裸模型直接綁，`RunnableBinding` 綁裡面那顆再把外層的 config／kwargs 包回去。 */
-function bindTools(model: unknown, tools: readonly unknown[], options: Record<string, unknown>): unknown {
+function bindTools(
+  model: unknown,
+  tools: readonly unknown[],
+  options: Record<string, unknown>,
+): unknown {
   if (canBindTools(model)) return model.bindTools(tools, options);
   if (RunnableBinding.isRunnableBinding(model) && canBindTools(model.bound)) {
     const bound = model.bound.bindTools(tools, options);
@@ -426,8 +430,7 @@ export async function runTool(
   const registered = tools.find((tool) => tool.name === call.name);
   const base: ToolHandler = async (request) => {
     const tool = (request.tool ?? tools.find((t) => t.name === request.toolCall.name)) as
-      | InvokableTool
-      | undefined;
+      InvokableTool | undefined;
     if (tool === undefined) {
       return new ToolMessage({
         content: invalidToolError(
@@ -474,14 +477,17 @@ export async function runTool(
       const originalState = request.state;
       const downstream = new Set<unknown>();
       try {
-        const result = await m.wrapToolCall!({ ...request, state: originalState }, async (passed) => {
-          try {
-            return await inner({ ...passed, state: { ...originalState, ...passed.state } });
-          } catch (error) {
-            downstream.add(error);
-            throw error;
-          }
-        });
+        const result = await m.wrapToolCall!(
+          { ...request, state: originalState },
+          async (passed) => {
+            try {
+              return await inner({ ...passed, state: { ...originalState, ...passed.state } });
+            } catch (error) {
+              downstream.add(error);
+              throw error;
+            }
+          },
+        );
         if (!ToolMessage.isInstance(result) && !isCommand(result)) {
           throw new Error(
             `Invalid response from "wrapToolCall" in middleware "${m.name}": expected ToolMessage or Command, got ${typeof result}`,

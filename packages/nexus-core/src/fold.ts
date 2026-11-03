@@ -1214,7 +1214,9 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer:
-      options.checkpointer !== undefined && options.checkpointer !== false && options.loop !== 'native',
+      options.checkpointer !== undefined &&
+      options.checkpointer !== false &&
+      options.loop !== 'native',
   });
 }
 
