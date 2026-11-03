@@ -4,7 +4,7 @@
  * `/embed/threads/…` 的 `run.start` 帶得進來，CLI 一輪碰不到，所以由這支補寫。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那一版的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-embed-profile.ts <run 目錄>
  */
 
 import { attachSessionPersistence, pageContextBlock, SessionRegistry } from '@nexus/core';
@@ -22,7 +22,7 @@ const root = sessions.root;
 const first = { label: 'PUMP-07' };
 const queued = { label: 'PUMP-08' };
 const steer = { label: 'PUMP-09' };
-/** 模型那一次的回覆。 */
+/** 每一次模型呼叫都要有回覆：少了它，那一次推不回對話歷史（`reply-missing`）。 */
 const reply = (id: string, content: string) => ({
   message: {
     type: 'ai' as const,

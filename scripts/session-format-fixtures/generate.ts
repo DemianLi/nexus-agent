@@ -114,8 +114,7 @@ interface Target {
 }
 
 /**
- * 格式 53 的寫入器（#2367）。還沒出貨，釘在那張 PR 分支上的 commit：它只留在 PR 的 `refs/pull/N/head`，同 `v49` 釘在沒進 develop 的
- * commit。出貨前凍結時改釘 develop 上的，同 `v52`。
+ * 格式 53 的寫入器（#2367）。53 還沒出貨，釘的是不在 develop 上的分支 commit，同 `v49`；出貨前凍結時要改釘 develop 上的 commit，同 `v52`。
  */
 const V53_WRITER = '771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3';
 

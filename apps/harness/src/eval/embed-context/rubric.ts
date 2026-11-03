@@ -24,7 +24,10 @@ export interface Observation {
 /** 設備編號：一到三個大寫字母、一個連字號、一到三位數字。 */
 const DEVICE_ID = /\b[A-Z]{1,3}-\d{1,3}\b/gu;
 
-/** 模型會把編號裡的連字號寫成不換行連字號（U+2011）、破折號或全形的，比對前一律換回 `-`。 */
+/**
+ * 編號裡的連字號換成別的連字號或破折號（U+2010–U+2015）、負號（U+2212）、小型或全形連字號（U+FE63、U+FF0D）的，比對前一律換回 `-`。
+ * lightning 30B 實跑寫過 U+2011（#2367 試跑的 a2）。
+ */
 const DASHES = /[\u2010-\u2015\u2212\uFE63\uFF0D]/gu;
 
 function idsIn(text: string): Set<string> {
