@@ -14,8 +14,9 @@ description: 工具契約 `2.3.0` 加三格選填的欄位；要用 `rawParamete
 - **`NexusTool.timeoutMs`**：一次呼叫的預算（毫秒），不送模型。到期時宿主舉起 `exec.signal`，逾時句講出這個數字。不是正的有限數，轉換時就拋。
 - **成功結果的 `artifact`**：`{ ok: true, content, artifact }`。`artifact` 不送模型，落在那則工具結果上，跟著會話日誌落盤、還原時讀回。省略與 `[]` 是兩種值。
 
-**受影響的是：** 想用這三格的插件。現有的插件、出廠的插件不用改。`2.2.0` 的宿主不認得這三格，會靜靜忽略：
-不驗原樣 schema、不設期限、不落 `artifact`。
+**受影響的是：** 想用這三格的插件。現有的插件、出廠的插件不用改。`2.2.0` 的宿主不認得這三格：
+`rawParameters` 的 schema 用了宿主不認得的關鍵字時，轉換時就拋，沒用到的照舊轉（補 `additionalProperties: false`、多帶鍵丟掉）；
+`timeoutMs` 與 `artifact` 靜靜忽略，不設期限、不落 `artifact`。
 
 ## 遷移
 

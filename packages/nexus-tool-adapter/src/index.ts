@@ -139,7 +139,6 @@ function convert(tool: NexusTool): StructuredTool {
         return [new Command({ update: { messages: [message, ...deferred] } }), undefined];
       }
       if (result.ok) return [result.content, result.artifact];
-      // `content_and_artifact` 只收兩格；第一格是現成的訊息或 `Command` 時，LangChain 原樣交出去（`_formatToolOutput`）。
       return [
         toolRefusal(result.content, {
           callId: exec.callId,
@@ -153,6 +152,8 @@ function convert(tool: NexusTool): StructuredTool {
       name: tool.name,
       description: tool.description,
       schema,
+      // 每個 return 都是兩格：這個格式不是兩格就拋（`@langchain/core@1.2.9` `dist/tools/index.js:147`）；第一格是 `ToolMessage`
+      // 或 `Command` 時原樣交出去，第二格不看（`:335`）。
       responseFormat: 'content_and_artifact',
       // 基座把 `defaultConfig.timeout` 變成併進 `signal` 的 `AbortSignal.timeout`；圍堵讀同一格講出預算（`@nexus/core` 的 `containment.ts`）。
       ...(timeoutMs !== undefined && { defaultConfig: { timeout: timeoutMs } }),
@@ -169,7 +170,10 @@ function convert(tool: NexusTool): StructuredTool {
   return converted;
 }
 
-/** `rawParameters` 的工具送上線的形狀：原樣，根物件沒有 `properties` 時補一個空的（同 `@langchain/mcp-adapters` 轉 MCP 工具的做法）。 */
+/**
+ * `rawParameters` 的工具送上線的形狀：原樣，根物件沒有 `properties` 時補一個空的。MCP 插件今天經 `@langchain/mcp-adapters@2.0.0`
+ * （`dist/tools.js:206`）送的就是這個形狀，換成 `NexusTool` 之後送上線的位元組不變。
+ */
 function rawSchemaOf(parameters: JsonSchema): JsonSchema {
   return parameters.properties === undefined ? { ...parameters, properties: {} } : parameters;
 }

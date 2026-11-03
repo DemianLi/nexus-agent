@@ -49,7 +49,7 @@ import { defineToken } from '@nexus/sdk';
  * 要收輪的消費者宣告 `^2.2.0`（升級指南 `docs/upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md`）。
  *
  * `2.3.0`（#2353）：{@link NexusToolResult} 成功那一格多選填的 `artifact`，{@link NexusTool} 多選填的 {@link NexusTool.rawParameters} 與 {@link NexusTool.timeoutMs}。
- * 向後相容的新增：不帶這幾格的消費者照常；要用的消費者宣告 `^2.3.0`。
+ * 向後相容的新增：不帶這幾格的消費者照常；要用的消費者宣告 `^2.3.0`（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-3/guide.md`）。
  */
 export const TOOLS_CONTRACT_VERSION = '2.3.0';
 
@@ -114,7 +114,7 @@ export interface ToolExec {
  * 失敗那一格的 `content` 是模型看到的原因，**不要自己帶 `Error: `**：宿主照 `toolRefusal` 加前綴。
  *
  * 成功那一格的 `artifact`（契約 `2.3.0` 起）：跟著這則結果落盤、還原時讀回，**不送給模型**。省略就是沒有，跟帶 `[]` 不同：
- * 帶了，落盤的那則訊息才有這一格。
+ * 帶了，落盤的那則訊息才有這一格。⚠️ 不送模型不等於私密：它跟著 `tool/result` 原樣進本機日誌與遙測。
  */
 export type NexusToolResult =
   | { readonly ok: true; readonly content: ToolContent; readonly artifact?: JsonValue }
@@ -125,7 +125,7 @@ export interface NexusTool {
   readonly name: string;
   readonly description: string;
   /**
-   * 參數的 JSON Schema，input 模式：模型可以送的形狀。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉。
+   * 參數的 JSON Schema，input 模式：模型可以送的形狀。沒宣告 {@link rawParameters} 時，寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉。
    * 用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉：`.strict()` 編成 `false`，一般的 `z.object` 不寫。
    * 送上線時，宿主在帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`，所以送上線的不是這一份原樣。
    * 宿主只認一小組關鍵字，認不得的在轉換時就拋；別人寫的 schema（MCP server 公告的）用 {@link rawParameters}。
@@ -133,16 +133,18 @@ export interface NexusTool {
   readonly parameters: JsonSchema;
   /**
    * {@link parameters} 原樣上線、照 JSON Schema 驗（契約 `2.3.0` 起）：不補 `additionalProperties`，任何關鍵字都收，根物件沒有
-   * `properties` 時補一個空的。給 schema 不是自己寫的工具（MCP server 公告的那份）。省略是照上面那一小組關鍵字轉。
+   * `properties` 時補一個空的；沒寫 `additionalProperties: false` 的多帶鍵原樣交給 {@link execute}。給 schema 不是自己寫的工具（MCP server
+   * 公告的那份）。省略是照上面那一小組關鍵字轉。
    */
   readonly rawParameters?: boolean;
   /**
    * 一次呼叫的預算（毫秒，契約 `2.3.0` 起），不送模型。到期時宿主舉起 `exec.signal`，逾時的措辭講出這個數字；本體要接住
-   * `exec.signal` 收手。省略是沒有期限。不是正的有限數，轉換時就拋。
+   * `exec.signal` 收手：宿主不等本體，到期就以逾時結果收這次呼叫，沒接住的本體在背景跑完、結果丟掉、副作用照樣發生。
+   * 省略是沒有期限。不是正的有限數，轉換時就拋。
    */
   readonly timeoutMs?: number;
   /**
-   * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，收下的未宣告鍵已丟掉。預期中的失敗回 `ok: false`；
+   * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過；沒宣告 {@link rawParameters} 時，收下的未宣告鍵已丟掉，宣告了的原樣交進來。預期中的失敗回 `ok: false`；
    * reject 不會轉成 `ok: false`，照 LangChain 工具拋錯的路往外走。
    *
    * @param args - 模型給的參數。

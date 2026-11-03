@@ -183,8 +183,8 @@ describe('rawParameters：JSON Schema 原樣上線、原樣驗', () => {
     ).toEqual({ type: 'object', properties: {} });
   });
 
-  it('沒宣告的同一份 schema 走 zod 的轉換，碰到 $ref 就拋', () => {
-    expect(() => toLangChainTool(raw(booking, false))).toThrow();
+  it('沒宣告的同一份 schema 走 zod 的轉換，碰到認不得的關鍵字就拋', () => {
+    expect(() => toLangChainTool(raw(booking, false))).toThrow(/不認得的 \$defs/);
   });
 
   it('合格的參數原樣交給本體，沒寫 additionalProperties 的多帶鍵也留著', async () => {
