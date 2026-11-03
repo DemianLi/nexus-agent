@@ -61,17 +61,26 @@ export interface NewlyTruncatedCall {
  */
 export function recordedArgTruncationsOf(events: readonly SessionEvent[]): RecordedArgTruncations {
   const recorded = new Map<string, Map<string, RecordedArgTruncation>>();
-  for (const event of events) {
-    if (event.type !== 'compaction/truncate-args') continue;
-    for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
-      let args = recorded.get(call.callId);
-      if (args === undefined) recorded.set(call.callId, (args = new Map()));
-      for (const [key, truncation] of Object.entries(call.args)) {
-        args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
-      }
+  for (const event of events) recordArgTruncationsInto(recorded, event);
+  return recorded;
+}
+
+/**
+ * 把一顆事件記的縮短收進 `recorded`，規則同 {@link recordedArgTruncationsOf}（同一個參數後記的蓋前記的）。不是
+ * `compaction/truncate-args` 就不動。給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ */
+export function recordArgTruncationsInto(
+  recorded: Map<string, Map<string, RecordedArgTruncation>>,
+  event: SessionEvent,
+): void {
+  if (event.type !== 'compaction/truncate-args') return;
+  for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
+    let args = recorded.get(call.callId);
+    if (args === undefined) recorded.set(call.callId, (args = new Map()));
+    for (const [key, truncation] of Object.entries(call.args)) {
+      args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
     }
   }
-  return recorded;
 }
 
 /** 一則訊息的工具呼叫；不是助手訊息、或沒有工具呼叫就是 `undefined`。 */

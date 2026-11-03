@@ -3,9 +3,11 @@
  *
  * 每一份日誌都**逐個前綴**比：同一個 {@link ModelHistoryCache} 依序吃 `events[0..k]`，每一步跟
  * `replayConversation(events[0..k])` 比。只比最後一份的話，中途推錯、後來剛好被重建蓋掉的快取也會綠。
+ * 步距另跑兩種：每三顆推一次、只在每顆 `model/start` 之前推（呼叫端實際的時機）。一次吃進好幾顆事件才碰得到的錯，
+ * 例如 `session/end-seed` 換掉的串跟後面新進的訊息落在同一次，逐顆推碰不到。
  * 比的是每則訊息 {@link toLoggedMessage} 之後的 JSON，也就是日誌記訊息的那個形狀（含 `additional_kwargs`）。
  *
- * 下面每一節對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
+ * 前四節各對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
  * 出貨寫入器寫的夾具另在 `apps/harness` 的 `model-history-fixtures.test.ts` 比。
  */
 
@@ -30,15 +32,23 @@ function serialized(replay: ConversationReplay): unknown {
 
 const SENT: ModelHistoryOptions = { applyPrunes: true, applyArgTruncations: true };
 
-/** 逐個前綴比，兩組選項各一次。 */
+/** 逐個前綴、每三顆、每顆 `model/start` 之前各比一輪，兩組選項各一次。 */
 function expectEveryPrefix(events: readonly SessionEvent[]): void {
+  const every = events.map((_, k) => k + 1);
+  const strides = {
+    逐顆: [0, ...every],
+    每三顆: [0, ...every.filter((k) => k % 3 === 0), events.length],
+    'model/start 之前': events.flatMap((event, k) => (event.type === 'model/start' ? [k] : [])),
+  };
   for (const options of [{}, SENT]) {
-    const cache = new ModelHistoryCache(options);
-    for (let k = 0; k <= events.length; k++) {
-      const prefix = events.slice(0, k);
-      expect(serialized(cache.derive(prefix)), `前 ${String(k)} 顆`).toEqual(
-        serialized(replayConversation(prefix, options)),
-      );
+    for (const [stride, cuts] of Object.entries(strides)) {
+      const cache = new ModelHistoryCache(options);
+      for (const k of cuts) {
+        const prefix = events.slice(0, k);
+        expect(serialized(cache.derive(prefix)), `${stride}，前 ${String(k)} 顆`).toEqual(
+          serialized(replayConversation(prefix, options)),
+        );
+      }
     }
   }
 }

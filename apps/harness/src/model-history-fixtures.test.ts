@@ -1,6 +1,6 @@
 /**
  * 增量推導對出貨寫入器寫的夾具（[#2349](https://github.com/DemianLi/nexus-agent/issues/2349)）：拿 `fixtures/session-format/` 裡的每一份會話，
- * 逐個前綴比 {@link ModelHistoryCache} 與 `replayConversation`，三組選項各一次（不套、套剪法與縮短、共用讀盤的事件）。
+ * 逐個前綴、以及只在每顆 `model/start` 之前（呼叫端實際的時機），比 {@link ModelHistoryCache} 與 `replayConversation`，三組選項各一次（不套、換預覽並套剪法與縮短、共用讀盤的事件）。
  * 事件從 store 讀回，是凍過、共用的那一種，跟讀方實際拿到的一樣。手寫日誌的對照與每種重建事件的紅燈在 core 的 `model-history.test.ts`。
  */
 
@@ -62,13 +62,20 @@ describe.each(names)('夾具 %s', (name) => {
     const directory = join(scratch, name);
     await cp(join(FIXTURES, name), directory, { recursive: true });
     const events = await (await openJsonlSessionStore({ directory }).open(id, 'read')).read();
+    const strides = {
+      逐顆: events.map((_, k) => k).concat(events.length),
+      'model/start 之前': events.flatMap((event, k) => (event.type === 'model/start' ? [k] : [])),
+    };
     for (const [label, options] of OPTIONS) {
-      const cache = new ModelHistoryCache(options);
-      for (let k = 0; k <= events.length; k++) {
-        const prefix = events.slice(0, k);
-        expect(serialized(cache.derive(prefix)), `${label}，前 ${String(k)} 顆`).toEqual(
-          serialized(replayConversation(prefix, options)),
-        );
+      for (const [stride, cuts] of Object.entries(strides)) {
+        const cache = new ModelHistoryCache(options);
+        for (const k of cuts) {
+          const prefix = events.slice(0, k);
+          expect(
+            serialized(cache.derive(prefix)),
+            `${label}，${stride}，前 ${String(k)} 顆`,
+          ).toEqual(serialized(replayConversation(prefix, options)));
+        }
       }
     }
   });

@@ -350,7 +350,7 @@ export {
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from './conversation-replay.js';
 export type { ModelHistoryOptions } from './model-history.js';
-export { MODEL_HISTORY_REBUILD_EVENTS, ModelHistoryCache } from './model-history.js';
+export { ModelHistoryCache } from './model-history.js';
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {

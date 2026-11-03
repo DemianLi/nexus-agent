@@ -41,7 +41,7 @@
  * **但它在 graph state 裡有一格**，壓縮的 `messagesBefore` 與 `cutoffIndex` 是 state 的座標，所以丟掉要等切完：
  * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settledMessages} 把摘要與切點套完之後才濾掉。
  * 推出來的串因此比 state 少一則；灌回去之後 state 沒有它，**之後的切點以灌回去的那一串為座標**（下一節），所以
- * `session/end-seed` 的 settle 同樣濾掉。
+ * `session/end-seed` 換串時同樣經 {@link settledMessages} 濾掉。
  *
  * **舊日誌的一個縫**：這一版以前續接，灌回去的串帶著這則空訊息，那之後的壓縮記的座標比現在推出來的多一則——
  * 「空訊息在前、end-seed 在後、之後又壓縮」的舊檔會判成 `compaction-misaligned`（整串不灌，模型從空的開始），
@@ -236,30 +236,44 @@ export interface ReplaySummary {
 
 /**
  * 逐顆事件推歷史的狀態，可以接著餵：{@link replayConversation} 從頭餵一次，`model-history.ts` 的增量推導每次只餵新的事件。
- * 兩者共用這一份規則，所以同一串事件推出來的 {@link raw}、{@link summary}、{@link pendingMessages} 一樣。
+ * 兩者共用這一份規則，所以同一串事件推出來的 {@link ReplayFold.raw}、{@link ReplayFold.summary}、{@link ReplayFold.pendingMessages} 一樣。
  *
- * {@link feed} 遇到推不下去的事件就記在 {@link failure}，之後的事件都不看（同整份重算在那裡就回傳）。
+ * 推到一處要取結果：先看 {@link ReplayFold.finalFailure}，沒有再拿 {@link ReplayFold.settled}。`options` 的 `applyPrunes`／`applyArgTruncations`
+ * 這裡不套：剪法與縮短要整份事件才知道，記在後面的會回頭改前面的那幾則，由呼叫端在 `settled()` 之後套。
  */
 export class ReplayFold {
-  /** 這個生命週期的原始訊息串，與 graph state 的 `messages` 同一組座標。只會往後接，`session/end-seed` 時整串換掉。 */
-  raw: BaseMessage[] = [];
-  /** 這個生命週期最後一次壓縮。 */
-  summary: ReplaySummary | undefined;
-  /** 第一顆推不下去的事件；有值之後 {@link feed} 不再看事件。 */
-  failure: { readonly reason: UnreplayableReason; readonly seq: number } | undefined;
+  #raw: BaseMessage[] = [];
+  #summary: ReplaySummary | undefined;
+  #failure: { readonly reason: UnreplayableReason; readonly seq: number } | undefined;
   #batch: PendingBatch | undefined;
   /** 開著的那一輪有沒有回覆、有沒有停下來等人。 */
   #turn: { replied: boolean; interrupted: boolean } | undefined;
   #previous: SessionEvent | undefined;
-  /** 第一顆「模型跑過」的事件，與整份日誌有沒有任何一則回覆。見 {@link UnreplayableReason}。 */
+  /** 第一顆「模型跑過」的事件。見 {@link UnreplayableReason}。 */
   #modelRan: number | undefined;
   /** 開著、還沒配到 `model/end` 的那顆 `model/start`。行程死在呼叫中途時一直留到最後。 */
   #openCall: number | undefined;
+  /** 整份日誌有沒有任何一則回覆。 */
   #replied = false;
   readonly #options: ReplayOptions;
 
   constructor(options: ReplayOptions = {}) {
     this.#options = options;
+  }
+
+  /** 這個生命週期的原始訊息串，與 graph state 的 `messages` 同一組座標。只會往後接，`session/end-seed` 時整串換掉。 */
+  get raw(): readonly BaseMessage[] {
+    return this.#raw;
+  }
+
+  /** 這個生命週期最後一次壓縮。 */
+  get summary(): ReplaySummary | undefined {
+    return this.#summary;
+  }
+
+  /** 第一顆推不下去的事件；有值之後 {@link ReplayFold.feed} 不再看事件。 */
+  get failure(): { readonly reason: UnreplayableReason; readonly seq: number } | undefined {
+    return this.#failure;
   }
 
   /** 還在等結果的那一批照 `tool_calls` 的順序排好、缺的補上之後的樣子。不改狀態：之後到的結果還會換掉補上的那幾則。 */
@@ -271,11 +285,14 @@ export class ReplayFold {
     );
   }
 
-  /** 推到這裡為止、整份日誌層級的拒推原因（中途的 {@link failure} 之外的那一道）。不改狀態。 */
+  /**
+   * 推到這裡為止的拒推原因：中途的 {@link ReplayFold.failure}；沒有的話，看整份日誌層級那一道（模型跑過卻一則回覆都沒有，
+   * 見 {@link UnreplayableReason} 的 `reply-missing`）。不改狀態。
+   */
   finalFailure(): { readonly reason: UnreplayableReason; readonly seq: number } | undefined {
-    if (this.failure !== undefined) return this.failure;
+    if (this.#failure !== undefined) return this.#failure;
     // 停在半路的呼叫保守算跑過：續接時 `resumeClosingInterruptedTurn` 會先補一顆帶 `outcome` 的 `model/end`，
-    // 所以走續接進來的讀不到這一種；沒補過的舊檔照舊拒推。
+    // 所以走續接進來的讀不到這一種；沒補過的舊檔拒推。
     const modelRan = this.#modelRan ?? this.#openCall;
     return modelRan !== undefined && !this.#replied
       ? { reason: 'reply-missing', seq: modelRan }
@@ -284,14 +301,14 @@ export class ReplayFold {
 
   /** 推到這裡為止的那一串，不改狀態：等於這時候收尾（補齊那一批、套摘要、濾掉空的助手訊息）。 */
   settled(): BaseMessage[] {
-    return settledMessages([...this.raw, ...this.pendingMessages()], this.summary);
+    return settledMessages([...this.#raw, ...this.pendingMessages()], this.#summary);
   }
 
-  /** 餵一顆事件。 */
+  /** 餵一顆事件；推不下去就記進 {@link ReplayFold.failure}，有值之後不做事。 */
   feed(event: SessionEvent): void {
-    if (this.failure !== undefined) return;
+    if (this.#failure !== undefined) return;
     const fail = (reason: UnreplayableReason): void => {
-      this.failure = { reason, seq: event.seq };
+      this.#failure = { reason, seq: event.seq };
     };
     // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
     if (isModelVisibleEvent(event)) {
@@ -344,10 +361,13 @@ export class ReplayFold {
           if (logged === undefined) return fail('summary-missing');
           // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
           const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
-          if (this.raw.length + this.#pendingCount() !== expected || cutoffIndex > messagesBefore) {
+          if (
+            this.#raw.length + this.#pendingCount() !== expected ||
+            cutoffIndex > messagesBefore
+          ) {
             return fail('compaction-misaligned');
           }
-          this.summary = {
+          this.#summary = {
             message: this.#from(this.#read(logged, event), event),
             cutoff: cutoffIndex,
           };
@@ -403,8 +423,8 @@ export class ReplayFold {
         }
         case 'session/end-seed': {
           // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
-          this.raw = settledMessages(this.raw, this.summary);
-          this.summary = undefined;
+          this.#raw = settledMessages(this.#raw, this.#summary);
+          this.#summary = undefined;
           this.#turn = undefined;
           break;
         }
@@ -426,7 +446,7 @@ export class ReplayFold {
 
   /** 那一批照 `tool_calls` 的順序放進去，缺的補上，再接這一則。 */
   #push(message: BaseMessage): void {
-    this.raw.push(...this.pendingMessages(), message);
+    this.#raw.push(...this.pendingMessages(), message);
     this.#batch = undefined;
   }
 
@@ -452,8 +472,8 @@ export class ReplayFold {
   }
 }
 
-/** 套摘要，再濾掉空的助手訊息：切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。 */
-function settledMessages(
+/** 套摘要，再濾掉空的助手訊息：切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。增量推導（`model-history.ts`）逐段借用。 */
+export function settledMessages(
   messages: readonly BaseMessage[],
   summary: ReplaySummary | undefined,
 ): BaseMessage[] {

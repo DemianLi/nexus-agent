@@ -80,16 +80,19 @@ export type RecordedPrunes = ReadonlyMap<string, RecordedPrune>;
  */
 export function recordedPrunesOf(events: readonly SessionEvent[]): RecordedPrunes {
   const recorded = new Map<string, RecordedPrune>();
-  for (const event of events) {
-    if (event.type !== 'compaction/prune') continue;
-    for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
-      recorded.set(result.callId, {
-        originalChars: result.originalChars,
-        content: result.content,
-      });
-    }
-  }
+  for (const event of events) recordPruneInto(recorded, event);
   return recorded;
+}
+
+/**
+ * 把一顆事件記的剪法收進 `recorded`，規則同 {@link recordedPrunesOf}（後記的蓋前記的）。不是 `compaction/prune` 就不動。
+ * 給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ */
+export function recordPruneInto(recorded: Map<string, RecordedPrune>, event: SessionEvent): void {
+  if (event.type !== 'compaction/prune') return;
+  for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
+    recorded.set(result.callId, { originalChars: result.originalChars, content: result.content });
+  }
 }
 
 /**

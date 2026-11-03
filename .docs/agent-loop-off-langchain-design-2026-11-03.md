@@ -435,7 +435,7 @@ K0 ─┬─ K1 ── K5 ───────────┐
 - **範圍**：core 加 `deriveModelHistory(log)` 的增量快取（§3-2 (i)）。結果要與 `replayConversation` 逐位元組相同。
 - **驗收**：
   - 夾具 `log-derived-history` 全部場景、52 份凍結夾具與 v14 系列，增量與整份重算逐位元組相同；
-  - 突變：失效規則漏掉壓縮、省略、截斷任一種會紅；
+  - 突變：失效規則漏掉壓縮（`compaction/summary`）、剪（`compaction/prune`）、截斷（`compaction/truncate-args`）、`session/end-seed` 座標重設任一種會紅。今天的 `replayConversation` 不套用省略（`image/offload`，§四 W2），所以省略的失效規則與它的突變在 K4 跟套用一起做（PM 2026-11-03 定）；
   - 在 #2117 那份大日誌與 r7-driver 45 輪上量 (i)、(ii) 與今天的存檔點路徑，數字寫回 #1339，拿去回答 Q13。
 - **依賴**：K0。
 
@@ -478,7 +478,8 @@ K0 ─┬─ K1 ── K5 ───────────┐
 - **驗收**：
   - 每一項都有夾具場景；
   - 舊位置的 `image/offload` 從凍結夾具讀得過；
-  - 突變各自會紅。
+  - 突變各自會紅；
+  - K1 的增量推導遇到 `image/offload` 要失效：拿掉這條失效規則會紅（PM 2026-11-03 定）。
 - **依賴**：K1。
 
 ### K5 S2：影子比對，再切到「歷史從日誌推」（dev-h3）
