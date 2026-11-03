@@ -53,7 +53,8 @@
 import { AsyncResource } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
-import { HumanMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   ARCHIVE_GATE_CONFIG_KEY,
@@ -64,7 +65,6 @@ import {
   appendSubagentDescriptor,
   errorChain,
   fromLoggedMessage,
-  isEmptyAssistant,
   subagentLinks,
   thrownMessage,
   toLoggedMessage,
@@ -290,14 +290,26 @@ function sentJustBeforeFinishing(log: SessionLog, sentAt: number | undefined): b
  * 這一次結算的收尾訊息：從 `fromSeq` 起往回找，**最後一則不是空的助手回覆**的文字（trim 後；可以是空字串）。
  *
  * 照 dsh `assistant-output.ts:32-40`：沒有內容也沒有工具呼叫的回覆（撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那種，
- * `max-tokens.ts` 的 `dropToolCalls`）不取代更早的輸出；判準是 `@nexus/core` 的 `isEmptyAssistant`（`content.length === 0`
- * 加上沒有工具呼叫，照 dsh）。**不是「文字空就跳過」**：只有工具呼叫的那一則（沒撞上限）dsh 算非空、會被選中，到
+ * `max-tokens.ts` 的 `dropToolCalls`）不取代更早的輸出；判準是 {@link isClosingCandidate}。**不是「文字空就跳過」**：只有工具呼叫的那一則（沒撞上限）dsh 算非空、會被選中，到
  * `continuation-messages.ts:147-155` 才只留文字，沒有就寫 `It left no closing message.`——這裡一樣。
  *
  * 範圍是「上一次結算之後」（dsh `activation.ts:152` 的 `outputStart`）：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
  * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochs}），不是最近一顆。
  * 串流文字的退路（dsh `:55-59`）不做：子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）。
  */
+/**
+ * 這則助手訊息能不能當收尾訊息：有內容（`content` 長度不是 0）或有工具呼叫。只有空白的那則**算**，選中之後收尾文字 trim 成空字串。
+ *
+ * 跟 `@nexus/core` 的 `isEmptyAssistant` 判的是兩件事：那一支判「哪則不送給模型」，空白也算空；這一支判「哪則算最後的輸出」。
+ */
+function isClosingCandidate(message: BaseMessage): boolean {
+  return (
+    !AIMessage.isInstance(message) ||
+    (message.tool_calls ?? []).length > 0 ||
+    message.content.length > 0
+  );
+}
+
 function closingTextOf(log: SessionLog, fromSeq: number): string {
   const events = log.events;
   for (let at = events.length - 1; at >= 0; at -= 1) {
@@ -305,7 +317,7 @@ function closingTextOf(log: SessionLog, fromSeq: number): string {
     if (event.seq < fromSeq) return '';
     if (event.type !== 'assistant/message') continue;
     const message = fromLoggedMessage(event.data.message);
-    if (isEmptyAssistant(message)) continue;
+    if (!isClosingCandidate(message)) continue;
     return message.text.trim();
   }
   return '';

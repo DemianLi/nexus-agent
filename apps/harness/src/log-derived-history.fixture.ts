@@ -48,6 +48,7 @@ import { stringify } from 'yaml';
 import {
   ModelHistoryCache,
   SessionRegistry,
+  isBlankContent,
   replayConversation,
   toLoggedMessage,
 } from '@nexus/core';
@@ -379,16 +380,10 @@ export function assistantNameLeaks(messages: readonly WireMessage[]): number[] {
   );
 }
 
-const isEmptyContent = (content: unknown): boolean =>
-  content === null ||
-  content === undefined ||
-  content === '' ||
-  (Array.isArray(content) && content.length === 0);
-
-/** 沒有內容也沒有工具呼叫的助手訊息（空內容可能是 `null`、空字串或空陣列，視 adapter 而定）。 */
+/** 沒有內容也沒有工具呼叫的助手訊息，判法同推導端與 `fetch` 層（`@nexus/core` 的 `isBlankContent`）。 */
 const isEmptyAssistant = (message: WireMessage | undefined): boolean =>
   message?.role === 'assistant' &&
-  isEmptyContent(message.content) &&
+  isBlankContent(message.content) &&
   (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0);
 
 /** 兩段字串從第一個不同的字元前後各截一小段（工具結果動輒上萬字，從頭截看不到差在哪）。 */

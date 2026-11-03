@@ -985,6 +985,41 @@ describe('空的助手訊息', () => {
     }
   });
 
+  it('只有空白的也不進推導結果：空白字串、只有空白或空字串的文字區塊', () => {
+    for (const content of ['  \n', [{ type: 'text' as const, text: ' ' }], [{ type: 'text' as const, text: '' }]]) {
+      const log = new SessionLog('replay');
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('assistant/message', { message: toLoggedMessage(new AIMessage({ content })) });
+      log.append('turn/end', {});
+      chat(log, '二', 'B');
+
+      expect(shape(replayConversation(log.events)), JSON.stringify(content)).toEqual([
+        'human:一',
+        'human:二',
+        'ai:B',
+      ]);
+    }
+  });
+
+  it('只帶推理區塊的還在：它有一段不是文字', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: [{ type: 'reasoning', reasoning: '先想' }],
+          response_metadata: { output_version: 'v1' },
+        }),
+      ),
+    });
+    log.append('turn/end', {});
+    chat(log, '二', 'B');
+
+    const replay = replayConversation(log.events);
+    expect(shape(replay)).toHaveLength(4);
+    expect(shape(replay)[1]).toMatch(/^ai:/);
+  });
+
   it('對照：有內容的、只有工具呼叫（內容空）的都還在', () => {
     const log = new SessionLog('replay');
     log.append('turn/start', { kind: 'message', text: '一' });

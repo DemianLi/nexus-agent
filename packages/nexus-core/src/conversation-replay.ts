@@ -34,9 +34,8 @@
  *
  * ## 空的助手訊息推導時丟掉，但切點的座標仍算它
  *
- * 沒有內容也沒有工具呼叫的助手訊息（撞輸出上限那一步，`max-tokens.ts` 清掉它的呼叫之後什麼都不剩）不進推出來的串，
- * 照 dsh 的 `deriveEventMessage`（`packages/core/session/src/surface.ts:136-142`，`d7432673886`）：內容長度為 0 就回 `null`，
- * 理由是它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
+ * 沒有內容也沒有工具呼叫的助手訊息（{@link isEmptyAssistant}；撞輸出上限那一步，`max-tokens.ts` 清掉它的呼叫之後什麼都不剩）不進推出來的串：
+ * 它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
  *
  * **但它在 graph state 裡有一格**，壓縮的 `messagesBefore` 與 `cutoffIndex` 是 state 的座標，所以丟掉要等切完：
  * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settledMessages} 把摘要與切點套完之後才濾掉。
@@ -105,17 +104,35 @@ import {
 import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
 
 /**
- * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。
- *
- * 內容空＝字串長度 0 或區塊陣列長度 0（照 dsh `content.length === 0`）。**只帶推理區塊的不算空**——
- * 它在 BaseMessage 這一層有區塊；送出時 `fetch` 層會另外收掉（`live-model.ts` 的 `withEmptyAssistantContent`），
- * 那一條不在這張卡。
+ * 助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。空白算空；有任何一段不是文字（推理、圖）就不算空。
+ * 不是陣列（字串、`null`）一律不算。
+ */
+export function isBlankContentArray(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return !content.some((part: unknown) => {
+    if (typeof part !== 'object' || part === null) return true;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    if (type !== 'text') return true;
+    return typeof text === 'string' && text.trim().length > 0;
+  });
+}
+
+/** 助手訊息的 content 是不是一個字都沒有，**不分形狀**：`null`、缺席、空白字串、{@link isBlankContentArray}。 */
+export function isBlankContent(content: unknown): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content.trim() === '';
+  return isBlankContentArray(content);
+}
+
+/**
+ * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。內容空的判法是 {@link isBlankContent}，與送出時 `fetch` 層整則拿掉的是同一支
+ * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它在 BaseMessage 這一層有一段不是文字。
  */
 export function isEmptyAssistant(message: BaseMessage): boolean {
   return (
     AIMessage.isInstance(message) &&
     (message.tool_calls ?? []).length === 0 &&
-    message.content.length === 0
+    isBlankContent(message.content)
   );
 }
 
