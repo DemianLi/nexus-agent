@@ -2402,7 +2402,8 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#closing.abort();
-    for (const interruptId of [...this.#hostToolTimers.keys()]) this.#clearHostToolTimer(interruptId);
+    for (const interruptId of [...this.#hostToolTimers.keys()])
+      this.#clearHostToolTimer(interruptId);
     this.#hostToolsByItem.clear();
     this.#unobserveLogs();
     this.#projectionOut.dispose();

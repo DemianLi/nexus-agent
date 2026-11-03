@@ -74,9 +74,9 @@ describe('hostToolsProblem', () => {
         tool({ parameters: parametersOfBytes(HOST_TOOL_LIMITS.parametersBytes + 1) }),
       ]),
     ).toMatch(/parameters.*4096/u);
-    expect(
-      hostToolsProblem([tool({ parameters: { type: 'string' } as never })]),
-    ).toMatch(/type 為 object/u);
+    expect(hostToolsProblem([tool({ parameters: { type: 'string' } as never })])).toMatch(
+      /type 為 object/u,
+    );
   });
 
   it('整份 16384 位元組收、16385 拒', () => {

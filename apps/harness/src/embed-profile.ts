@@ -112,7 +112,9 @@ export function embedApprovalGate(
   return (exec, next) => {
     if (exec.name.startsWith(HOST_TOOL_PREFIX)) {
       const name = exec.name.slice(HOST_TOOL_PREFIX.length);
-      return hostToolExempt.has(name) ? next() : { kind: 'ask', reason: hostToolApprovalReason(name) };
+      return hostToolExempt.has(name)
+        ? next()
+        : { kind: 'ask', reason: hostToolApprovalReason(name) };
     }
     if (EMBED_READ_ONLY_TOOLS.has(exec.name)) return next();
     if (ASKS_THE_HUMAN_ITSELF.has(exec.name)) return next();

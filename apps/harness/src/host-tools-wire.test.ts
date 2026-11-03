@@ -283,7 +283,10 @@ describe('核准名單由 serve 設定（Q5）', () => {
     const sent = await embed.runStart('e1', '轉', {
       hostTools: [{ ...focus, readOnly: true } as unknown as HostToolDeclaration],
     });
-    expect(sent).toMatchObject({ error: 'invalid_argument', message: expect.stringContaining('readOnly') });
+    expect(sent).toMatchObject({
+      error: 'invalid_argument',
+      message: expect.stringContaining('readOnly'),
+    });
   }, 30_000);
 });
 
@@ -384,7 +387,9 @@ describe('哪裡收、收什麼', () => {
       }),
     ).not.toHaveProperty('error');
     await thread.until(settledAfter(2));
-    expect(lastToolText()).toMatch(/宿主頁回傳的結果超過上限：序列化後 4002 個字，最多 4000 個字$/u);
+    expect(lastToolText()).toMatch(
+      /宿主頁回傳的結果超過上限：序列化後 4002 個字，最多 4000 個字$/u,
+    );
     expect(lastToolText()).not.toContain('xxxx');
     await thread.close();
   }, 60_000);
