@@ -227,7 +227,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 | # | 項目 | 今天 | 處理 | 卡 |
 | --- | --- | --- | --- | --- |
 | W1 | 子代理撞到 `maxTurns` 時寫的上限訊息 | 未變：仍是 langchain `modelCallLimitMiddleware`（`fold.ts:755-764`），寫一則有內容的 AIMessage，日誌上沒有 | dsh 沒有輪數上限，nexus 留著（產品要）。改由 native loop 自己數，撞到時以 `turn/end{reason:'max-turns'}` 收，不合成助手訊息（Q5） | K9 |
-| W2 | `image/offload` 推導端不套用 | 未變：replay 只蓋來源 seq（`conversation-replay.ts:294`）；`applyImageOffload` 只處理 Human（`image-offload.ts:168`），`select` 不分種類 | 推導端照 dsh 當成訊息投影套用；選圖與套用的範圍要一致；決定寫在 `model/start` 之前 | K4 |
+| W2 | `image/offload` 推導端不套用 | 未變：replay 只蓋來源 seq（`conversation-replay.ts:471`）；`applyImageOffload` 只處理 Human（`image-offload.ts:168`），`select` 不分種類 | 推導端照 dsh 當成訊息投影套用；選圖與套用的範圍要一致；決定寫在 `model/start` 之前 | K4 |
 | W3 | 基座 Filesystem 把超過 200k 字元的人話搬走、80k 工具結果換預覽 | 未變 | 搬走：拿掉這條（native loop 不掛基座 Filesystem），長度改由入口拒收（Q8）。80k 預覽：搬進 nexus 自己的 spill（已有 `spill-policy.ts`），日誌記全文、推導用 `toolResultAsSeen` 重算；補一個逐字比對的夾具 | K7 |
 | W4 | `patchToolCalls` 跟 replay 是兩套規則 | 未變（已緩解）：句子不同（`patch-tool-calls.ts:91` 對 replay `:120-124`），孤兒結果 replay 照 push | L1 起推導端是唯一的一套；`patchToolCalls` 在 L1 拿掉，孤兒規則照 dsh `repair.ts` 定一種 | K4 |
 | W5 | `withEmptyAssistantContent` 與 `isEmptyAssistant` 是兩份函式 | 部分：夾具改用出貨的請求本文，函式仍是兩份 | 併成一份，推導與 HTTP 層共用 | K4 |
@@ -435,7 +435,7 @@ K0 ─┬─ K1 ── K5 ───────────┐
 - **範圍**：core 加 `deriveModelHistory(log)` 的增量快取（§3-2 (i)）。結果要與 `replayConversation` 逐位元組相同。
 - **驗收**：
   - 夾具 `log-derived-history` 全部場景、52 份凍結夾具與 v14 系列，增量與整份重算逐位元組相同；
-  - 突變：失效規則漏掉壓縮、省略、截斷任一種會紅；
+  - 突變：失效規則漏掉壓縮（`compaction/summary`）、剪（`compaction/prune`）、截斷（`compaction/truncate-args`）、`session/end-seed` 座標重設任一種會紅。今天的 `replayConversation` 不套用省略（`image/offload`，§四 W2），所以省略的失效規則與它的突變在 K4 跟套用一起做（PM 2026-11-03 定）；
   - 在 #2117 那份大日誌與 r7-driver 45 輪上量 (i)、(ii) 與今天的存檔點路徑，數字寫回 #1339，拿去回答 Q13。
 - **依賴**：K0。
 
@@ -478,7 +478,8 @@ K0 ─┬─ K1 ── K5 ───────────┐
 - **驗收**：
   - 每一項都有夾具場景；
   - 舊位置的 `image/offload` 從凍結夾具讀得過；
-  - 突變各自會紅。
+  - 突變各自會紅；
+  - K1 的增量推導遇到 `image/offload` 要失效：拿掉這條失效規則會紅（PM 2026-11-03 定）。
 - **依賴**：K1。
 
 ### K5 S2：影子比對，再切到「歷史從日誌推」（dev-h3）

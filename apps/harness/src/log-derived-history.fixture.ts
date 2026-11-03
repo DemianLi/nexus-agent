@@ -45,7 +45,12 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { stringify } from 'yaml';
-import { SessionRegistry, replayConversation } from '@nexus/core';
+import {
+  ModelHistoryCache,
+  SessionRegistry,
+  replayConversation,
+  toLoggedMessage,
+} from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event as WireEvent } from '@nexus/wire';
@@ -431,11 +436,21 @@ export function classify(
   return { kinds: [...kinds].sort(), ...(detail !== undefined && { detail }) };
 }
 
+/** 推的結果逐則序列化成日誌記訊息的形狀，比增量與整份重算用。 */
+function serializedReplay(replay: ReturnType<typeof replayConversation>): string {
+  return JSON.stringify(
+    replay.kind === 'replayed'
+      ? replay.messages.map((message) => toLoggedMessage(message))
+      : replay,
+  );
+}
+
 /**
  * 對每次主呼叫比一次。`events` 是整份日誌，`mainBodies` 是假端點收到的、帶工具的 body，照順序。
  *
  * 主呼叫的數量必須等於日誌裡 root 的 `model/start` 數——對不上就是量具壞了（少一邊的話逐個配對會默默漏比），
- * 當場拋。
+ * 當場拋。每次主呼叫同時拿增量推導（{@link ModelHistoryCache}，#2349）跟整份重算比，逐則序列化不同也當場拋：
+ * 這份夾具的每個場景因此也是增量推導的等價夾具。
  */
 export async function compareToLog(
   events: readonly SessionEvent[],
@@ -448,14 +463,16 @@ export async function compareToLog(
     );
   }
   const out: Verdict[] = [];
+  const options = { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true };
+  const history = new ModelHistoryCache(options);
   for (const [index, start] of starts.entries()) {
     const body = mainBodies[index]!;
     const prefix = events.filter((event) => event.seq < start.seq);
-    const replay = replayConversation(prefix, {
-      toolResultAsSeen,
-      applyPrunes: true,
-      applyArgTruncations: true,
-    });
+    const replay = replayConversation(prefix, options);
+    const incremental = history.derive(prefix);
+    if (serializedReplay(incremental) !== serializedReplay(replay)) {
+      throw new Error(`第 ${String(index)} 次主呼叫：增量推導與整份重算不同。`);
+    }
     if (replay.kind !== 'replayed') {
       out.push({
         call: index,

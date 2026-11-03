@@ -39,9 +39,9 @@
  * 理由是它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
  *
  * **但它在 graph state 裡有一格**，壓縮的 `messagesBefore` 與 `cutoffIndex` 是 state 的座標，所以丟掉要等切完：
- * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settle} 把摘要與切點套完之後才濾掉。
+ * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settledMessages} 把摘要與切點套完之後才濾掉。
  * 推出來的串因此比 state 少一則；灌回去之後 state 沒有它，**之後的切點以灌回去的那一串為座標**（下一節），所以
- * `session/end-seed` 的 settle 同樣濾掉。
+ * `session/end-seed` 換串時同樣經 {@link settledMessages} 濾掉。
  *
  * **舊日誌的一個縫**：這一版以前續接，灌回去的串帶著這則空訊息，那之後的壓縮記的座標比現在推出來的多一則——
  * 「空訊息在前、end-seed 在後、之後又壓縮」的舊檔會判成 `compaction-misaligned`（整串不灌，模型從空的開始），
@@ -228,6 +228,262 @@ export function closer(
   });
 }
 
+/** 這個生命週期最後一次壓縮：摘要那一則與切點（原始訊息串的索引）。 */
+export interface ReplaySummary {
+  readonly message: BaseMessage;
+  readonly cutoff: number;
+}
+
+/**
+ * 逐顆事件推歷史的狀態，可以接著餵：{@link replayConversation} 從頭餵一次，`model-history.ts` 的增量推導每次只餵新的事件。
+ * 兩者共用這一份規則，所以同一串事件推出來的 {@link ReplayFold.raw}、{@link ReplayFold.summary}、{@link ReplayFold.pendingMessages} 一樣。
+ *
+ * 推到一處要取結果：先看 {@link ReplayFold.finalFailure}，沒有再拿 {@link ReplayFold.settled}。`options` 的 `applyPrunes`／`applyArgTruncations`
+ * 這裡不套：剪法與縮短要整份事件才知道，記在後面的會回頭改前面的那幾則，由呼叫端在 `settled()` 之後套。
+ */
+export class ReplayFold {
+  #raw: BaseMessage[] = [];
+  #summary: ReplaySummary | undefined;
+  #failure: { readonly reason: UnreplayableReason; readonly seq: number } | undefined;
+  #batch: PendingBatch | undefined;
+  /** 開著的那一輪有沒有回覆、有沒有停下來等人。 */
+  #turn: { replied: boolean; interrupted: boolean } | undefined;
+  #previous: SessionEvent | undefined;
+  /** 第一顆「模型跑過」的事件。見 {@link UnreplayableReason}。 */
+  #modelRan: number | undefined;
+  /** 開著、還沒配到 `model/end` 的那顆 `model/start`。行程死在呼叫中途時一直留到最後。 */
+  #openCall: number | undefined;
+  /** 整份日誌有沒有任何一則回覆。 */
+  #replied = false;
+  readonly #options: ReplayOptions;
+
+  constructor(options: ReplayOptions = {}) {
+    this.#options = options;
+  }
+
+  /** 這個生命週期的原始訊息串，與 graph state 的 `messages` 同一組座標。只會往後接，`session/end-seed` 時整串換掉。 */
+  get raw(): readonly BaseMessage[] {
+    return this.#raw;
+  }
+
+  /** 這個生命週期最後一次壓縮。 */
+  get summary(): ReplaySummary | undefined {
+    return this.#summary;
+  }
+
+  /** 第一顆推不下去的事件；有值之後 {@link ReplayFold.feed} 不再看事件。 */
+  get failure(): { readonly reason: UnreplayableReason; readonly seq: number } | undefined {
+    return this.#failure;
+  }
+
+  /** 還在等結果的那一批照 `tool_calls` 的順序排好、缺的補上之後的樣子。不改狀態：之後到的結果還會換掉補上的那幾則。 */
+  pendingMessages(): BaseMessage[] {
+    const batch = this.#batch;
+    if (batch === undefined) return [];
+    return batch.calls.flatMap(
+      (call) => batch.results.get(call.id) ?? [closer(call, batch.started.has(call.id))],
+    );
+  }
+
+  /**
+   * 推到這裡為止的拒推原因：中途的 {@link ReplayFold.failure}；沒有的話，看整份日誌層級那一道（模型跑過卻一則回覆都沒有，
+   * 見 {@link UnreplayableReason} 的 `reply-missing`）。不改狀態。
+   */
+  finalFailure(): { readonly reason: UnreplayableReason; readonly seq: number } | undefined {
+    if (this.#failure !== undefined) return this.#failure;
+    // 停在半路的呼叫保守算跑過：續接時 `resumeClosingInterruptedTurn` 會先補一顆帶 `outcome` 的 `model/end`，
+    // 所以走續接進來的讀不到這一種；沒補過的舊檔拒推。
+    const modelRan = this.#modelRan ?? this.#openCall;
+    return modelRan !== undefined && !this.#replied
+      ? { reason: 'reply-missing', seq: modelRan }
+      : undefined;
+  }
+
+  /** 推到這裡為止的那一串，不改狀態：等於這時候收尾（補齊那一批、套摘要、濾掉空的助手訊息）。 */
+  settled(): BaseMessage[] {
+    return settledMessages([...this.#raw, ...this.pendingMessages()], this.#summary);
+  }
+
+  /** 餵一顆事件；推不下去就記進 {@link ReplayFold.failure}，有值之後不做事。 */
+  feed(event: SessionEvent): void {
+    if (this.#failure !== undefined) return;
+    const fail = (reason: UnreplayableReason): void => {
+      this.#failure = { reason, seq: event.seq };
+    };
+    // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
+    if (isModelVisibleEvent(event)) {
+      switch (event.type) {
+        case 'turn/start': {
+          this.#turn = { replied: false, interrupted: false };
+          // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
+          if (event.data.kind !== 'resume') {
+            this.#push(this.#from(humanMessageForTurnStart(event.data), event));
+          }
+          break;
+        }
+        case 'assistant/message': {
+          this.#replied = true;
+          if (this.#turn !== undefined) this.#turn.replied = true;
+          const message = this.#from(this.#read(event.data.message, event), event);
+          const calls = requestedCalls(message);
+          this.#push(message);
+          if (calls.length > 0) this.#batch = { calls, results: new Map(), started: new Set() };
+          break;
+        }
+        case 'tool/result': {
+          if (event.data.message === undefined) return fail('result-missing');
+          const message = this.#from(this.#asSeen(this.#read(event.data.message, event)), event);
+          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+            this.#batch.results.set(event.data.callId, [message]);
+          } else {
+            this.#push(message);
+          }
+          break;
+        }
+        case 'user/message': {
+          const message = this.#from(this.#read(event.data.message, event), event);
+          const { source } = event.data;
+          // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
+          // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
+          const previous = this.#previous;
+          const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
+          const call = this.#batch?.calls.find((candidate) => candidate.id === owner);
+          const results = call === undefined ? undefined : this.#batch?.results.get(call.id);
+          if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
+            results.push(message);
+          } else {
+            this.#push(message);
+          }
+          break;
+        }
+        case 'compaction/summary': {
+          const { summary: logged, cutoffIndex, messagesBefore } = event.data;
+          if (logged === undefined) {
+            return fail('summary-missing');
+          }
+          // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
+          const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
+          if (
+            this.#raw.length + this.#pendingCount() !== expected ||
+            cutoffIndex > messagesBefore
+          ) {
+            return fail('compaction-misaligned');
+          }
+          this.#summary = {
+            message: this.#from(this.#read(logged, event), event),
+            cutoff: cutoffIndex,
+          };
+          break;
+        }
+        default:
+          // 子聯集多一種而這裡沒有 case，這一行編不過。
+          event satisfies never;
+      }
+    } else {
+      switch (event.type) {
+        case 'model/start': {
+          this.#openCall = event.seq;
+          break;
+        }
+        case 'model/end': {
+          // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
+          if (this.#openCall !== undefined && event.data.outcome === undefined) {
+            this.#modelRan ??= this.#openCall;
+          }
+          this.#openCall = undefined;
+          break;
+        }
+        case 'tool/call': {
+          this.#modelRan ??= event.seq;
+          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+            this.#batch.started.add(event.data.callId);
+          }
+          break;
+        }
+        case 'interrupt/raised': {
+          if (this.#turn !== undefined) this.#turn.interrupted = true;
+          break;
+        }
+        case 'turn/end': {
+          // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
+          // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
+          const turn = this.#turn;
+          if (
+            turn !== undefined &&
+            event.data.reason === undefined &&
+            !turn.replied &&
+            !turn.interrupted
+          ) {
+            return fail('reply-missing');
+          }
+          this.#turn = undefined;
+          break;
+        }
+        case 'turn/failed': {
+          this.#turn = undefined;
+          break;
+        }
+        case 'session/end-seed': {
+          // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
+          this.#raw = settledMessages(this.#raw, this.#summary);
+          this.#summary = undefined;
+          this.#turn = undefined;
+          break;
+        }
+        default:
+          // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
+          // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
+          break;
+      }
+    }
+    this.#previous = event;
+  }
+
+  #pendingCount(): number {
+    return [...(this.#batch?.results.values() ?? [])].reduce(
+      (sum, messages) => sum + messages.length,
+      0,
+    );
+  }
+
+  /** 那一批照 `tool_calls` 的順序放進去，缺的補上，再接這一則。 */
+  #push(message: BaseMessage): void {
+    this.#raw.push(...this.pendingMessages(), message);
+    this.#batch = undefined;
+  }
+
+  #read(logged: LoggedMessage, event: SessionEvent): BaseMessage {
+    return this.#options.readOnly === true ||
+      (this.#options.shareStored === true && storedEventDepth(event) !== undefined)
+      ? readLoggedMessage(logged)
+      : fromLoggedMessage(logged);
+  }
+
+  #asSeen(message: BaseMessage): BaseMessage {
+    return this.#options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)
+      ? this.#options.toolResultAsSeen(message)
+      : message;
+  }
+
+  /** 這一則出自這一顆，見 {@link ReplayOptions.origin}。 */
+  #from<M extends BaseMessage>(message: M, event: SessionEvent): M {
+    // 含圖的訊息蓋上出自哪顆事件（#1270）：`image/offload` 的決定記的是「哪顆事件的第幾張圖」，續接後要靠它認回來。沒有圖的訊息不動。
+    stampImageOrigin(message, event.seq);
+    this.#options.origin?.(message, event);
+    return message;
+  }
+}
+
+/** 套摘要，再濾掉空的助手訊息：切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。增量推導（`model-history.ts`）逐段借用。 */
+export function settledMessages(
+  messages: readonly BaseMessage[],
+  summary: ReplaySummary | undefined,
+): BaseMessage[] {
+  const cut =
+    summary === undefined ? messages : [summary.message, ...messages.slice(summary.cutoff)];
+  return cut.filter((message) => !isEmptyAssistant(message));
+}
+
 /**
  * 把一份 root 日誌推回模型的對話歷史。
  *
@@ -239,192 +495,19 @@ export function replayConversation(
   events: readonly SessionEvent[],
   options: ReplayOptions = {},
 ): ConversationReplay {
-  /** 這個生命週期的原始訊息串，與 graph state 的 `messages` 同一組座標。 */
-  let raw: BaseMessage[] = [];
-  /** 這個生命週期最後一次壓縮。 */
-  let summary: { readonly message: BaseMessage; readonly cutoff: number } | undefined;
-  let batch: PendingBatch | undefined;
-  /** 開著的那一輪有沒有回覆、有沒有停下來等人。 */
-  let turn: { replied: boolean; interrupted: boolean } | undefined;
-  let previous: SessionEvent | undefined;
-  /** 第一顆「模型跑過」的事件，與整份日誌有沒有任何一則回覆。見 {@link UnreplayableReason}。 */
-  let modelRan: number | undefined;
-  /** 開著、還沒配到 `model/end` 的那顆 `model/start`。行程死在呼叫中途時一直留到最後。 */
-  let openCall: number | undefined;
-  let replied = false;
-
-  const pendingCount = (): number =>
-    [...(batch?.results.values() ?? [])].reduce((sum, messages) => sum + messages.length, 0);
-  /** 那一批照 `tool_calls` 的順序放進去，缺的補上。 */
-  const flush = (): void => {
-    if (batch === undefined) return;
-    for (const call of batch.calls) {
-      raw.push(...(batch.results.get(call.id) ?? [closer(call, batch.started.has(call.id))]));
-    }
-    batch = undefined;
-  };
-  const push = (message: BaseMessage): void => {
-    flush();
-    raw.push(message);
-  };
-  /**
-   * 這個生命週期到此為止：換成那時灌回去的那一串。
-   *
-   * @param keepBatch - end-seed 傳 `true`：還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
-   */
-  const settle = (keepBatch = false): void => {
-    if (!keepBatch) flush();
-    if (summary !== undefined) raw = [summary.message, ...raw.slice(summary.cutoff)];
-    summary = undefined;
-    // 切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。
-    raw = raw.filter((message) => !isEmptyAssistant(message));
-  };
-  const read = (logged: LoggedMessage, event: SessionEvent): BaseMessage =>
-    options.readOnly === true ||
-    (options.shareStored === true && storedEventDepth(event) !== undefined)
-      ? readLoggedMessage(logged)
-      : fromLoggedMessage(logged);
-  const asSeen = (message: BaseMessage): BaseMessage =>
-    options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)
-      ? options.toolResultAsSeen(message)
-      : message;
-  /** 這一則出自這一顆，見 {@link ReplayOptions.origin}。 */
-  const from = <M extends BaseMessage>(message: M, event: SessionEvent): M => {
-    // 含圖的訊息蓋上出自哪顆事件（#1270）：`image/offload` 的決定記的是「哪顆事件的第幾張圖」，續接後要靠它認回來。沒有圖的訊息不動。
-    stampImageOrigin(message, event.seq);
-    options.origin?.(message, event);
-    return message;
-  };
-
+  const fold = new ReplayFold(options);
   for (const event of events) {
-    // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
-    if (isModelVisibleEvent(event)) {
-      switch (event.type) {
-        case 'turn/start': {
-          turn = { replied: false, interrupted: false };
-          // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-          if (event.data.kind !== 'resume') push(from(humanMessageForTurnStart(event.data), event));
-          break;
-        }
-        case 'assistant/message': {
-          replied = true;
-          if (turn !== undefined) turn.replied = true;
-          const message = from(read(event.data.message, event), event);
-          const calls = requestedCalls(message);
-          push(message);
-          if (calls.length > 0) batch = { calls, results: new Map(), started: new Set() };
-          break;
-        }
-        case 'tool/result': {
-          if (event.data.message === undefined) {
-            return { kind: 'unreplayable', reason: 'result-missing', seq: event.seq };
-          }
-          const message = from(asSeen(read(event.data.message, event)), event);
-          if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            batch.results.set(event.data.callId, [message]);
-          } else {
-            push(message);
-          }
-          break;
-        }
-        case 'user/message': {
-          const message = from(read(event.data.message, event), event);
-          const { source } = event.data;
-          // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
-          // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
-          const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
-          const call = batch?.calls.find((candidate) => candidate.id === owner);
-          const results = call === undefined ? undefined : batch?.results.get(call.id);
-          if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
-            results.push(message);
-          } else {
-            push(message);
-          }
-          break;
-        }
-        case 'compaction/summary': {
-          const { summary: logged, cutoffIndex, messagesBefore } = event.data;
-          if (logged === undefined) {
-            return { kind: 'unreplayable', reason: 'summary-missing', seq: event.seq };
-          }
-          // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
-          const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
-          if (raw.length + pendingCount() !== expected || cutoffIndex > messagesBefore) {
-            return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
-          }
-          summary = { message: from(read(logged, event), event), cutoff: cutoffIndex };
-          break;
-        }
-        default:
-          // 子聯集多一種而這裡沒有 case，這一行編不過。
-          event satisfies never;
-      }
-    } else {
-      switch (event.type) {
-        case 'model/start': {
-          openCall = event.seq;
-          break;
-        }
-        case 'model/end': {
-          // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
-          if (openCall !== undefined && event.data.outcome === undefined) modelRan ??= openCall;
-          openCall = undefined;
-          break;
-        }
-        case 'tool/call': {
-          modelRan ??= event.seq;
-          if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            batch.started.add(event.data.callId);
-          }
-          break;
-        }
-        case 'interrupt/raised': {
-          if (turn !== undefined) turn.interrupted = true;
-          break;
-        }
-        case 'turn/end': {
-          // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
-          // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
-          if (
-            turn !== undefined &&
-            event.data.reason === undefined &&
-            !turn.replied &&
-            !turn.interrupted
-          ) {
-            return { kind: 'unreplayable', reason: 'reply-missing', seq: event.seq };
-          }
-          turn = undefined;
-          break;
-        }
-        case 'turn/failed': {
-          turn = undefined;
-          break;
-        }
-        case 'session/end-seed': {
-          settle(true);
-          turn = undefined;
-          break;
-        }
-        default:
-          // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
-          // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
-          break;
-      }
-    }
-    previous = event;
+    fold.feed(event);
+    if (fold.failure !== undefined) break;
   }
-  // 停在半路的呼叫保守算跑過：續接時 `resumeClosingInterruptedTurn` 會先補一顆帶 `outcome` 的 `model/end`，
-  // 所以走續接進來的讀不到這一種；沒補過的舊檔照舊拒推。
-  modelRan ??= openCall;
-  if (modelRan !== undefined && !replied) {
-    return { kind: 'unreplayable', reason: 'reply-missing', seq: modelRan };
-  }
-  settle();
+  const failure = fold.finalFailure();
+  if (failure !== undefined) return { kind: 'unreplayable', ...failure };
+  let messages: readonly BaseMessage[] = fold.settled();
   if (options.applyPrunes === true) {
-    raw = [...applyRecordedPrunes(raw, recordedPrunesOf(events))];
+    messages = applyRecordedPrunes(messages, recordedPrunesOf(events));
   }
   if (options.applyArgTruncations === true) {
-    raw = [...applyRecordedArgTruncations(raw, recordedArgTruncationsOf(events))];
+    messages = applyRecordedArgTruncations(messages, recordedArgTruncationsOf(events));
   }
-  return { kind: 'replayed', messages: raw };
+  return { kind: 'replayed', messages: [...messages] };
 }
