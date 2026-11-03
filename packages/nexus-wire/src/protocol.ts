@@ -34,6 +34,8 @@ import type {
 } from '@nexus/core/src/feedback.ts';
 import type { PageContextRef } from '@nexus/core/src/page-context.ts';
 
+import type { HostToolDeclaration } from './host-tools.js';
+
 import type {
   ATTACHMENT_NOT_FOUND,
   MODEL_DOES_NOT_SUPPORT_IMAGES,
@@ -157,6 +159,12 @@ export interface RunStartCommand {
      * `label` 是空字串、只有空白、超過 `@nexus/core` 的 `PAGE_CONTEXT_LABEL_MAX` 個字，或多了別的鍵，都回 `invalid_argument`，不截。交給模型時寫成「畫面上目前選取 …」，見 `page-context.ts`。
      */
     readonly context?: PageContext;
+    /**
+     * 嵌入的對話框替宿主頁宣告的工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，形狀與上限見 `host-tools.ts`）。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；不合 `hostToolsProblem` 回 `invalid_argument`，不截。
+     * 這一輪模型看到的就是這一份；插話（`mode: 'steer'`）帶的不換這一輪的工具。
+     */
+    readonly host_tools?: readonly HostToolDeclaration[];
     /**
      * 客戶端給這一次送出的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)），**選填**。
      * 照 dsh `session.prompt` 的 `requestId`（`packages/api/session-controller/src/types.ts:340`，`d7432673886`）：
@@ -712,6 +720,7 @@ export const RPC_PARAM_KEYS = {
     'attachments',
     'mention',
     'context',
+    'host_tools',
     'request_id',
     'client_time_zone',
   ],
