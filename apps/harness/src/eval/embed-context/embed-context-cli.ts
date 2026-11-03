@@ -18,6 +18,8 @@
  *
  * 離線驗量具：`--upstream` 指本機的假端點，`--fake-key` 給子行程一把假的 key（上游不是 127.0.0.1 就拒絕這個旗標）。
  *
+ * 輸出在 `--out` 底下：`runs.jsonl`（一題一次一行，見 {@link RunRecord}）、`summary.md`（{@link renderSummary}）、`requests.jsonl`（轉接器記下的每個請求）。
+ *
  * 離線重判：`--rejudge <runs.jsonl>` 拿今天的判準重判一份舊紀錄、列出判決變了的與有外露的題，不起 serve、不打端點（#2380）。
  *
  * **不進 CI。** 會花錢也會花時間。
@@ -368,9 +370,10 @@ async function main(): Promise<void> {
     `請求共 ${String(proxy.forwardedPosts())} 個（上限 ${String(options.maxRequests)}）。${stoppedBy(proxy) === undefined ? '' : `停下：${stoppedBy(proxy) ?? ''}`}`,
   ].join('\n');
   await writeFile(join(options.out, 'summary.md'), `${summary}\n`);
-  // 轉接器看到的每一個請求與狀態碼，依到達順序：被上限擋下的記 429、`blocked: true`（#2380）。
+  // session-file-exempt: 轉接器記下的每個請求（欄位見 `ProxiedRequest`），依記錄順序；核對請求數與哪一個不是 200 用，不是會話日誌（#2380）。
+  const requestsFile = join(options.out, 'requests.jsonl');
   await writeFile(
-    join(options.out, 'requests.jsonl'),
+    requestsFile,
     proxy
       .requests()
       .map((request) => `${JSON.stringify(request)}\n`)
