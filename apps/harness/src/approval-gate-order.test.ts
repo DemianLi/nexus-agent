@@ -66,8 +66,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
-import { formatOrigin, loadPlugins } from '@nexus/core';
+import { createRegistry, formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { createSubmitRecordPlugin } from './submit-record.fixture.js';
@@ -153,7 +154,10 @@ describe('預設組裝裡的核准 gate', () => {
    * 這個形狀早就存在。
    */
   it('出貨清單裡剛好一位：submit-record 的 `submit_record` 閘門', async () => {
-    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
+    const { registry, dispose } = await loadPlugins(
+      withSystemPromptVariables(shipped),
+      createRegistry({ adaptTool: toLangChainTool }),
+    );
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));
       expect(gates, NEW_GATE_GUIDANCE).toEqual(EXPECTED_APPROVAL_GATES);

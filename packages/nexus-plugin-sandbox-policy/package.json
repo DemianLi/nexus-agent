@@ -21,6 +21,9 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/sdk": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -28,9 +31,11 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.13",
     "@nexus/core": "workspace:*",
     "langchain": "^1.5.10",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/tools": "workspace:*"
   }
 }

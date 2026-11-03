@@ -29,9 +29,9 @@ import { join } from 'node:path';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { langChainToolOf } from '@nexus/tool-adapter';
+import { langChainToolOf, toLangChainTool } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
@@ -388,7 +388,10 @@ async function shippedTools(tempRoot: string): Promise<{
     }
   }
   // 歸屬另載一次：產品組裝不交出註冊表。載入同一份清單、同一組補的服務，`origin` 就是註冊那一列的 plugin。
-  const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
+  const { registry, dispose } = await loadPlugins(
+    withSystemPromptVariables(shipped),
+    createRegistry({ adaptTool: toLangChainTool }),
+  );
   try {
     const origins = new Map<string, string>();
     for (const name of registry.tools.effective().keys()) {
@@ -419,6 +422,7 @@ async function standaloneTools(
   const plugin = (mod as { default: PluginEntry['plugin'] }).default;
   const { registry, dispose } = await loadPlugins(
     withSystemPromptVariables([{ plugin, config } as PluginEntry]),
+    createRegistry({ adaptTool: toLangChainTool }),
   );
   try {
     return boundCatalogTools([...registry.tools.effective().values()].map((entry) => entry.value));
