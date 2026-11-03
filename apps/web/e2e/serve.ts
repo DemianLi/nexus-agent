@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
  *   測試設定（模組解析、工具子行程與檔案鎖的 mock）。
  * - **腳本走 `--patch`**：`insert` 一列 `#settings/scripted-model`，再把 `agent-default-model` 指過去，跟
  *   `apps/harness/src/scripted-serve.ts` 的 `scriptedPatchText` 同一個約定（照上一條不 import 它）。腳本欄位見
- *   `apps/harness/src/settings/scripted-model.ts` 檔頭。
+ *   `apps/harness/src/settings/scripted-model.ts` 檔頭。呼叫方可在前面多接幾列（`extraRows`）。
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
  */
@@ -48,8 +48,8 @@ export interface E2eServe {
   close(): Promise<void>;
 }
 
-function patchText(turns: readonly ScriptTurn[]): string {
-  return `- insert:
+function patchText(turns: readonly ScriptTurn[], extraRows: string): string {
+  return `${extraRows}- insert:
     - id: e2e-script
       name: '#settings/scripted-model'
       config: ${JSON.stringify({ turns })}
@@ -69,12 +69,16 @@ function exited(child: ChildProcess): Promise<void> {
  * 起一台 serve，模型是這份腳本。腳本每條 thread 從第一輪開始吃。
  *
  * @param turns - 腳本。
+ * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
  * @returns 登入網址與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  */
-export async function startE2eServe(turns: readonly ScriptTurn[]): Promise<E2eServe> {
+export async function startE2eServe(
+  turns: readonly ScriptTurn[],
+  extraRows = '',
+): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
   const patch = join(dir, 'script.patch.yml');
-  await writeFile(patch, patchText(turns), 'utf8');
+  await writeFile(patch, patchText(turns, extraRows), 'utf8');
   const home = join(dir, 'home');
   const child = spawn(TSX, ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', patch], {
     cwd: dir,

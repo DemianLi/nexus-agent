@@ -49,13 +49,15 @@ afterEach(async () => {
  * 起一台 serve，開登入網址換到 cookie，再開同源的 Vue 測試頁。
  *
  * @param beforeDemo - 登入之後、開測試頁之前在同一頁做的事（例如先在獨立頁面講一句）。
+ * @param extraRows - 交給 `startE2eServe` 的額外 patch 列。
  */
 async function openDemo(
   turns: readonly ScriptTurn[],
   viewport = { width: 1100, height: 760 },
   beforeDemo?: (page: Page) => Promise<void>,
+  extraRows?: string,
 ): Promise<Page> {
-  serve = await startE2eServe(turns);
+  serve = await startE2eServe(turns, extraRows);
   const page = await browser.newPage({ viewport });
   await page.goto(serve.url);
   await beforeDemo?.(page);
@@ -487,5 +489,144 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     await send(page, '換一條');
     // 腳本每條 thread 從第一輪開始吃：新的這一條拿到的也是第一輪那句。
     await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+  });
+});
+
+/** serve 的 `host-tools` 那一列（`apps/harness/cordis.serve.yml`）：免核准的名單與宿主頁幾毫秒沒回就當逾時。 */
+function hostToolsRow(config: { readonly exempt: readonly string[]; readonly timeoutMs?: number }) {
+  return `- id: host-tools\n  config: ${JSON.stringify({
+    approval: { exempt: config.exempt },
+    ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+  })}\n`;
+}
+
+/**
+ * 讓測試頁收不到 `nexus-host-tool`：在 window 的捕獲階段攔下來、留著 `detail`，模擬宿主頁沒掛監聽或一直不回。事件不 bubble，但捕獲階段照樣經過 window。
+ */
+async function silenceHost(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const held: unknown[] = [];
+    (window as unknown as { __held: unknown[] }).__held = held;
+    window.addEventListener(
+      'nexus-host-tool',
+      (event) => {
+        event.stopImmediatePropagation();
+        held.push((event as CustomEvent).detail);
+      },
+      { capture: true },
+    );
+  });
+}
+
+function heldCalls(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __held: unknown[] }).__held.length);
+}
+
+/** 設備在畫面上的水平位置離 3D 模型正中間多遠（像素）。 */
+async function offCenter(page: Page, id: string): Promise<number> {
+  const box = await page.locator('canvas.model').boundingBox();
+  if (box === null) throw new Error('找不到 3D 模型');
+  const point = await devicePoint(page, id);
+  return Math.abs(point.x - (box.x + box.width / 2));
+}
+
+describe('宿主頁工具（#2374）', () => {
+  test('模型轉到 B-07（免核准）、核准後高亮 C-03，結果交回，模型接著回', async () => {
+    const reply = '已經轉到 B-07，C-03 也標出來了。';
+    const page = await openDemo(
+      [
+        {
+          content: '先轉過去。',
+          toolCalls: [{ name: 'page__focus_device', args: { id: 'B-07' } }],
+        },
+        {
+          content: '再把 C-03 標出來。',
+          toolCalls: [{ name: 'page__highlight_device', args: { id: 'C-03' } }],
+        },
+        { content: reply },
+      ],
+      undefined,
+      undefined,
+      hostToolsRow({ exempt: ['focus_device'] }),
+    );
+    await settled(page);
+    expect(await offCenter(page, 'B-07')).toBeGreaterThan(20);
+    await send(page, '轉到 B-07，再把 C-03 標出來');
+    const approval = chat(page).getByRole('region', { name: '等待核准：page__highlight_device' });
+    const approve = approval.getByRole('button', { name: '全部核准' });
+    await expect.poll(() => approve.count(), { timeout: 30_000 }).toBe(1);
+    // 轉鏡頭在名單上，沒問就執行了：B-07 已經在正中間。
+    expect(await offCenter(page, 'B-07')).toBeLessThan(1);
+    expect(await chat(page).getByText('目前選取：C-03 感測器').count()).toBe(0);
+    await shot(page, 'host-tool-approval');
+    await approve.click();
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    await settled(page);
+    expect(
+      await page.getByRole('region', { name: '選取的設備' }).getByRole('heading').textContent(),
+    ).toBe('C-03 感測器');
+    expect(await chat(page).getByText('目前選取：C-03 感測器').count()).toBe(1);
+    expect(await transcript(page).getByText('頁面工具：focus_device').count()).toBeGreaterThan(0);
+    expect(await chat(page).getByRole('alert').count()).toBe(0);
+    await shot(page, 'host-tool-done');
+  });
+
+  test('宿主頁不回：逾時交回模型，這一輪接著跑，畫面不動', async () => {
+    const reply = '頁面沒有回應，畫面沒有轉過去。';
+    const page = await openDemo(
+      [
+        {
+          content: '先轉過去。',
+          toolCalls: [{ name: 'page__focus_device', args: { id: 'B-07' } }],
+        },
+        { content: reply },
+      ],
+      undefined,
+      undefined,
+      hostToolsRow({ exempt: ['focus_device'], timeoutMs: 2_000 }),
+    );
+    await settled(page);
+    await silenceHost(page);
+    const before = await view(page);
+    await send(page, '轉到 B-07');
+    await expect.poll(() => heldCalls(page), { timeout: 30_000 }).toBe(1);
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    await settled(page);
+    expect(await view(page)).toEqual(before);
+    await shot(page, 'host-tool-timeout');
+  });
+
+  test('按停止：等宿主頁的那一支收回，之後才交回的結果丟掉、模型不再接著回', async () => {
+    const reply = '這一句不該出現。';
+    const page = await openDemo(
+      [
+        {
+          content: '先轉過去。',
+          toolCalls: [{ name: 'page__focus_device', args: { id: 'B-07' } }],
+        },
+        { content: reply },
+      ],
+      undefined,
+      undefined,
+      hostToolsRow({ exempt: ['focus_device'] }),
+    );
+    await settled(page);
+    await silenceHost(page);
+    await send(page, '轉到 B-07');
+    await expect.poll(() => heldCalls(page), { timeout: 30_000 }).toBe(1);
+    const stop = chat(page).getByRole('button', { name: '停止' });
+    await expect.poll(() => stop.count(), { timeout: 30_000 }).toBe(1);
+    await stop.click();
+    await expect.poll(() => stop.count(), { timeout: 30_000 }).toBe(0);
+    // 停止之後才交回：server 回 no_such_interrupt，元件不寫狀態列，模型也不再被叫。
+    await page.evaluate(() =>
+      (window as unknown as { __held: { respond(result: unknown): void }[] }).__held[0]?.respond({
+        focused: 'B-07',
+      }),
+    );
+    await page.waitForTimeout(1_000);
+    expect(await transcript(page).getByText(reply).count()).toBe(0);
+    expect(await chat(page).getByRole('alert').count()).toBe(0);
+    await shot(page, 'host-tool-stopped');
   });
 });

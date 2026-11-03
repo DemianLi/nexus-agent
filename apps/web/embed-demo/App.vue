@@ -4,6 +4,15 @@ import { computed, ref } from 'vue';
 import ModelView from './ModelView.vue';
 import type { Device } from './scene';
 
+/** `<nexus-chat>` 交給宿主頁的那份 `detail`，形狀見 `src/embed/nexus-chat.d.ts`（測試頁不引用元件的型別）。 */
+interface HostToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly args: Readonly<Record<string, unknown>>;
+  respond(result: unknown): void;
+  fail(error: string): void;
+}
+
 const devices: readonly Device[] = [
   { id: 'A-12', label: 'A-12 冷卻泵', x: -2.5, z: 1, height: 1.6, color: '#38bdf8' },
   { id: 'B-07', label: 'B-07 壓縮機', x: 0.5, z: -1.5, height: 2.4, color: '#a78bfa' },
@@ -22,6 +31,50 @@ const context = computed(() => (selected.value === null ? null : { label: select
 
 function toggle(id: string | null): void {
   selectedId.value = selectedId.value === id ? null : id;
+}
+
+const model = ref<{ focus(id: string): boolean } | null>(null);
+const deviceArgument = {
+  type: 'object',
+  properties: {
+    id: {
+      type: 'string',
+      description: `設備編號：${devices.map((device) => device.id).join('、')}`,
+    },
+  },
+  required: ['id'],
+} as const;
+/** 宣告給模型的宿主頁工具（#2374）：轉到一台設備、選取一台設備。 */
+const hostTools = [
+  {
+    name: 'focus_device',
+    description: '把 3D 模型的視角轉到正對指定的設備。',
+    parameters: deviceArgument,
+  },
+  {
+    name: 'highlight_device',
+    description: '在 3D 模型上選取並高亮指定的設備，右側顯示它的數據。',
+    parameters: deviceArgument,
+  },
+];
+
+function onHostTool(event: Event): void {
+  const call = (event as CustomEvent<HostToolCall>).detail;
+  const id = call.args.id;
+  const device = devices.find((candidate) => candidate.id === id);
+  if (device === undefined) {
+    call.fail(`沒有設備 ${String(id)}`);
+    return;
+  }
+  if (call.name === 'focus_device') {
+    if (model.value?.focus(device.id) === true) call.respond({ focused: device.id });
+    else call.fail('3D 模型還沒準備好');
+  } else if (call.name === 'highlight_device') {
+    selectedId.value = device.id;
+    call.respond({ highlighted: device.id, ...metrics[device.id] });
+  } else {
+    call.fail(`這個頁面不認得 ${call.name}`);
+  }
 }
 </script>
 
@@ -55,7 +108,12 @@ function toggle(id: string | null): void {
         </button>
       </nav>
       <section class="stage" aria-label="3D 模型">
-        <ModelView :devices="devices" :selected="selectedId" @pick="selectedId = $event" />
+        <ModelView
+          ref="model"
+          :devices="devices"
+          :selected="selectedId"
+          @pick="selectedId = $event"
+        />
       </section>
       <aside class="panel side" aria-label="選取與對話">
         <section class="detail" aria-label="選取的設備">
@@ -70,7 +128,12 @@ function toggle(id: string | null): void {
           </dl>
         </section>
         <section class="chat" aria-label="對話框">
-          <nexus-chat :theme="theme" :context.prop="context" />
+          <nexus-chat
+            :theme="theme"
+            :context.prop="context"
+            :hostTools.prop="hostTools"
+            @nexus-host-tool="onHostTool"
+          />
         </section>
       </aside>
     </main>
