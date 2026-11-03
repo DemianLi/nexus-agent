@@ -122,7 +122,7 @@ describe('eventsForModelCall：這次呼叫要推的那一段', () => {
 
   it('model/start 之後的 image/offload 留著，其餘不留', () => {
     const log = secondCallOpen();
-    log.append('request/system', { modelCall: 6, system: '系統' });
+    log.append('request/system', { modelCall: 6, system: '系統', reason: 'change' });
     const offload = log.append('image/offload', { targets: [{ seq: 0, imageIndexes: [0] }] });
     const cut = eventsForModelCall(log.events);
     expect(cut.offloadAfterStart).toBe(true);
@@ -212,7 +212,7 @@ describe('compareHistoryWithLog：分類', () => {
       ),
     });
     log.append('model/end', {});
-    log.append('turn/end', { interrupted: true });
+    log.append('turn/end', { reason: { kind: 'interrupted' } });
     log.append('turn/start', { kind: 'message', text: '算了' });
     log.append('model/start', {});
     const { patchedMessages } = patchDanglingToolCalls([
@@ -290,7 +290,7 @@ describe('createHistoryShadowMiddleware', () => {
       forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
     });
     const request = { messages: stateOfSecondCall(), runtime: { configurable: {} } };
-    const handler = vi.fn(() => 'reply');
+    const handler = vi.fn((_request: unknown) => 'reply');
     expect(await hook(request, handler)).toBe('reply');
     expect(handler).toHaveBeenCalledWith(request);
     expect(handler.mock.calls[0]![0]).toBe(request);
@@ -305,7 +305,7 @@ describe('createHistoryShadowMiddleware', () => {
       },
     ]) {
       const { tally, hook } = hookOf({ forCall });
-      const handler = vi.fn(() => 'reply');
+      const handler = vi.fn((_request: unknown) => 'reply');
       expect(await hook({ messages: [] }, handler)).toBe('reply');
       expect(tally.counts().other).toBe(1);
     }
