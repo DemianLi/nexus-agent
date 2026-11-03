@@ -48,8 +48,8 @@ export interface E2eServe {
   close(): Promise<void>;
 }
 
-function patchText(turns: readonly ScriptTurn[]): string {
-  return `- insert:
+function patchText(turns: readonly ScriptTurn[], extraRows: string): string {
+  return `${extraRows}- insert:
     - id: e2e-script
       name: '#settings/scripted-model'
       config: ${JSON.stringify({ turns })}
@@ -69,12 +69,16 @@ function exited(child: ChildProcess): Promise<void> {
  * 起一台 serve，模型是這份腳本。腳本每條 thread 從第一輪開始吃。
  *
  * @param turns - 腳本。
+ * @param extraRows - 接在腳本前面的 patch 列（YAML，每列以 `- id:` 開頭、換行結尾），例如改 `host-tools` 那一列。
  * @returns 登入網址與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  */
-export async function startE2eServe(turns: readonly ScriptTurn[]): Promise<E2eServe> {
+export async function startE2eServe(
+  turns: readonly ScriptTurn[],
+  extraRows = '',
+): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
   const patch = join(dir, 'script.patch.yml');
-  await writeFile(patch, patchText(turns), 'utf8');
+  await writeFile(patch, patchText(turns, extraRows), 'utf8');
   const home = join(dir, 'home');
   const child = spawn(TSX, ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', patch], {
     cwd: dir,
