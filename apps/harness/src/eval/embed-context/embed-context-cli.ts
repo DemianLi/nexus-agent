@@ -368,6 +368,14 @@ async function main(): Promise<void> {
     `請求共 ${String(proxy.forwardedPosts())} 個（上限 ${String(options.maxRequests)}）。${stoppedBy(proxy) === undefined ? '' : `停下：${stoppedBy(proxy) ?? ''}`}`,
   ].join('\n');
   await writeFile(join(options.out, 'summary.md'), `${summary}\n`);
+  // 轉接器看到的每一個請求與狀態碼，依到達順序：被上限擋下的記 429、`blocked: true`（#2380）。
+  await writeFile(
+    join(options.out, 'requests.jsonl'),
+    proxy
+      .requests()
+      .map((request) => `${JSON.stringify(request)}\n`)
+      .join(''),
+  );
   console.log(`\n${summary}`);
 }
 
