@@ -24,7 +24,7 @@ const STANDALONE_ERROR =
   '改用 `pnpm dev`（vite build --watch，建成 apps/web/dist），另開 `pnpm --filter @nexus/harness run serve`，' +
   '開它印出的網址；改了網頁等重建完、手動重新整理。';
 
-function rejectStandaloneServe(): Plugin {
+export function rejectStandaloneServe(): Plugin {
   return {
     name: 'nexus-reject-standalone-web-serve',
     config(_config, env) {
