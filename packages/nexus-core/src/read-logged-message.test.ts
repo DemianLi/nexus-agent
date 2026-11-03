@@ -10,7 +10,7 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { replayConversation } from './conversation-replay.js';
+import { replayConversation } from './langchain-message-adapter.js';
 import { resumedLog } from './fixtures.js';
 import { fromLoggedMessage, readLoggedMessage, toLoggedMessage } from './logged-message.js';
 import type { LoggedMessage } from './logged-message.js';

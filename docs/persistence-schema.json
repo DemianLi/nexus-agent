@@ -7225,8 +7225,12 @@
     },
     {
       "digest": "17454f59df3c152370461e90e5bf45544acb079fda7c91126aef2a06fcb1ca69",
-      "names": [],
-      "sources": []
+      "names": [
+        "packages/nexus-core/src/nexus-message.ts#NexusMessageData"
+      ],
+      "sources": [
+        "packages/nexus-core/src/nexus-message.ts:39"
+      ]
     },
     {
       "digest": "186e6777d22be8abd885b4187590b5d76f93ce3eac4cf04705b02ac73914a4ce",
@@ -7459,10 +7463,10 @@
     {
       "digest": "39c7ec8c764ec1cd9a83693ffcaec8751a097fe784d704ccd366732bc47ba9b6",
       "names": [
-        "packages/nexus-core/src/tool-events.ts#ToolErrorInfo"
+        "packages/nexus-core/src/tool-error-codes.ts#ToolErrorInfo"
       ],
       "sources": [
-        "packages/nexus-core/src/tool-events.ts:61"
+        "packages/nexus-core/src/tool-error-codes.ts:33"
       ]
     },
     {
@@ -8076,8 +8080,12 @@
     },
     {
       "digest": "83556f91e1426d93a783c85d922021907a6000f83973ff4dbb88a736ba682a8d",
-      "names": [],
-      "sources": []
+      "names": [
+        "packages/nexus-core/src/nexus-message.ts#MessageContent"
+      ],
+      "sources": [
+        "packages/nexus-core/src/nexus-message.ts:29"
+      ]
     },
     {
       "digest": "835bc5eec7b4c22c2212dac42c884731ea203c6b0ee0e0feaf9accbdfe6fe84f",
@@ -8492,10 +8500,12 @@
     {
       "digest": "b3fd752b332241ac6e83f571cd6830445ccf7bcae4fc5009da9e2c615dbdb960",
       "names": [
-        "packages/nexus-core/src/logged-message.ts#LoggedMessage"
+        "packages/nexus-core/src/logged-message.ts#LoggedMessage",
+        "packages/nexus-core/src/nexus-message.ts#NexusMessage"
       ],
       "sources": [
-        "packages/nexus-core/src/logged-message.ts:73"
+        "packages/nexus-core/src/logged-message.ts:58",
+        "packages/nexus-core/src/nexus-message.ts:52"
       ]
     },
     {
@@ -8663,8 +8673,12 @@
     },
     {
       "digest": "c5559c663e38ecdb6d20175e3dad98233ce36c575bc1d94b0550d4f717fbc144",
-      "names": [],
-      "sources": []
+      "names": [
+        "packages/nexus-core/src/nexus-message.ts#ContentBlock"
+      ],
+      "sources": [
+        "packages/nexus-core/src/nexus-message.ts:22"
+      ]
     },
     {
       "digest": "c56e4ded5efa7631c1d03042e71a762bfafcaf84612e5700dfd1104defcd12bd",

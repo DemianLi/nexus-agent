@@ -22,6 +22,7 @@ import {
   fromLoggedMessage,
   SessionLog,
   SessionRegistry,
+  toBaseMessage,
   toLoggedMessage,
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
@@ -384,7 +385,7 @@ describe('過大的工具結果', () => {
     // 前提：日誌記的是全文，基座真的換了。
     expect(logged.text).toBe(body);
     expect(seen.text).not.toBe(body);
-    expect(toolResultAsSeen(logged).text).toBe(seen.text);
+    expect(toBaseMessage(toolResultAsSeen(toLoggedMessage(logged))).text).toBe(seen.text);
   });
 
   it('灌回去的就是重算過的那則', async () => {
@@ -420,17 +421,45 @@ describe('過大的工具結果', () => {
     const [, , result] = written[0]?.messages as BaseMessage[];
     expect(result?.text).not.toBe(body);
     expect(result?.text).toBe(
-      toolResultAsSeen(new ToolMessage({ content: body, tool_call_id: 'c1', name: 'big' })).text,
+      toBaseMessage(
+        toolResultAsSeen(
+          toLoggedMessage(new ToolMessage({ content: body, tool_call_id: 'c1', name: 'big' })),
+        ),
+      ).text,
     );
   });
 
+  it('換成預覽的那則，內容以外的欄位照留', () => {
+    const logged = toLoggedMessage(
+      new ToolMessage({
+        content: manyLines.join('\n'),
+        tool_call_id: 'c1',
+        name: 'big',
+        id: 'm1',
+        status: 'success',
+        artifact: { kept: true },
+      }),
+    );
+
+    const seen = toBaseMessage(toolResultAsSeen(logged)) as ToolMessage;
+
+    expect(seen.text).not.toBe(manyLines.join('\n'));
+    expect([seen.tool_call_id, seen.name, seen.id, seen.status, seen.artifact]).toEqual([
+      'c1',
+      'big',
+      'm1',
+      'success',
+      { kept: true },
+    ]);
+  });
+
   it('沒過門檻、或是基座不搬的那幾顆：原樣', () => {
-    const small = new ToolMessage({ content: '小', tool_call_id: 'c1', name: 'big' });
-    const excluded = new ToolMessage({
-      content: 'z'.repeat(90_000),
-      tool_call_id: 'c2',
-      name: 'grep',
-    });
+    const small = toLoggedMessage(
+      new ToolMessage({ content: '小', tool_call_id: 'c1', name: 'big' }),
+    );
+    const excluded = toLoggedMessage(
+      new ToolMessage({ content: 'z'.repeat(90_000), tool_call_id: 'c2', name: 'grep' }),
+    );
 
     expect(toolResultAsSeen(small)).toBe(small);
     expect(toolResultAsSeen(excluded)).toBe(excluded);

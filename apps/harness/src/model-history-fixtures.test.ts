@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ModelHistoryCache, replayConversation, toLoggedMessage } from '@nexus/core';
-import type { ModelHistoryOptions } from '@nexus/core';
+import { ModelHistoryCache, replayConversation, toBaseMessage, toLoggedMessage } from '@nexus/core';
+import type { DerivedConversation, ModelHistoryOptions } from '@nexus/core';
 
 import { toolResultAsSeen } from './conversation-restore.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
@@ -54,9 +54,11 @@ afterEach(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-function serialized(replay: ReturnType<typeof replayConversation>): unknown {
+function serialized(replay: ReturnType<typeof replayConversation> | DerivedConversation): unknown {
   return replay.kind === 'replayed'
-    ? replay.messages.map((message) => JSON.stringify(toLoggedMessage(message)))
+    ? replay.messages.map((message) =>
+        JSON.stringify(toLoggedMessage('data' in message ? toBaseMessage(message) : message)),
+      )
     : replay;
 }
 

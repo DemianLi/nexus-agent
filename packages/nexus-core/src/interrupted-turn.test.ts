@@ -6,17 +6,14 @@
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import {
-  replayConversation,
-  TOOL_NOT_STARTED_TEXT,
-  TOOL_OUTCOME_UNKNOWN_TEXT,
-} from './conversation-replay.js';
+import { TOOL_NOT_STARTED_TEXT, TOOL_OUTCOME_UNKNOWN_TEXT } from './conversation-replay.js';
 import {
   interruptedTurnClosers,
   readColdSession,
   resumeClosingInterruptedTurn,
 } from './interrupted-turn.js';
 import { createInvariantRunner } from './invariants.js';
+import { replayConversation } from './langchain-message-adapter.js';
 import type { InvariantError } from './invariants.js';
 import { sessionInvariant, CORE_INVARIANT_PACKAGE } from './invariant.js';
 import { toLoggedMessage } from './logged-message.js';

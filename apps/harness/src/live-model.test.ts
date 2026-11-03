@@ -1272,7 +1272,7 @@ describe('空的助手內容照 dsh 送（#592）', () => {
     ['不是文字的一段', [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }]],
   ])('沒有工具呼叫、內容是%s：整則不送的判法與從日誌推歷史時丟掉的是同一支', (_label, content) => {
     const dropped = normalizeEmptyAssistantContent([{ role: 'assistant', content }]).length === 0;
-    expect(dropped).toBe(isEmptyAssistant(new AIMessage({ content: content as string })));
+    expect(dropped).toBe(isEmptyAssistant({ type: 'ai', data: { content: content as string } }));
   });
 
   /**

@@ -341,18 +341,33 @@ export {
 } from './logged-message.js';
 
 export type {
-  ConversationReplay,
-  ReplayOptions,
+  DeriveOptions,
+  DerivedConversation,
   UnreplayableReason,
 } from './conversation-replay.js';
 export {
+  deriveConversation,
   isBlankContent,
   isBlankContentArray,
   isEmptyAssistant,
-  replayConversation,
   TOOL_NOT_STARTED_TEXT,
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from './conversation-replay.js';
+export type {
+  ContentBlock,
+  MessageContent,
+  NexusMessage,
+  NexusMessageData,
+  NexusToolCall,
+} from './nexus-message.js';
+export { nexusContent, nexusToolCalls } from './nexus-message.js';
+export type { ConversationReplay, ReplayOptions } from './langchain-message-adapter.js';
+export {
+  humanMessageForTurnStart,
+  isMachineMessage,
+  replayConversation,
+  toBaseMessage,
+} from './langchain-message-adapter.js';
 export type { ModelHistoryOptions } from './model-history.js';
 export { ModelHistoryCache } from './model-history.js';
 
@@ -673,12 +688,11 @@ export {
   mentionOfHintBlock,
 } from './subagent-mention.js';
 export {
-  humanMessageForTurnStart,
   userContent,
-  isMachineMessage,
   MESSAGE_SOURCE_KWARG,
   messageSourceOf,
   sourceKwargs,
+  turnStartMessage,
   turnStartSource,
 } from './message-source.js';
 export type {

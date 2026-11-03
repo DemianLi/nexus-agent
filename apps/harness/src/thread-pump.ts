@@ -102,6 +102,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  toBaseMessage,
   unansweredCallResults,
   stampImageOrigin,
   userContent,
@@ -2974,7 +2975,7 @@ export class ThreadPump {
       );
       const messages = results
         .filter(({ data }) => pending.has(data.callId))
-        .map(({ message }) => message);
+        .map(({ message }) => toBaseMessage(message));
       if (messages.length > 0) await this.#agent.updateState(config, { messages });
       return failure;
     } catch (recoveryError) {

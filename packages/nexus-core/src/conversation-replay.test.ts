@@ -10,12 +10,9 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import {
-  replayConversation,
-  TOOL_NOT_STARTED_TEXT,
-  TOOL_OUTCOME_UNKNOWN_TEXT,
-} from './conversation-replay.js';
-import type { ConversationReplay } from './conversation-replay.js';
+import { TOOL_NOT_STARTED_TEXT, TOOL_OUTCOME_UNKNOWN_TEXT } from './conversation-replay.js';
+import { replayConversation } from './langchain-message-adapter.js';
+import type { ConversationReplay } from './langchain-message-adapter.js';
 import type { GoalId } from './goal.js';
 import { toLoggedMessage } from './logged-message.js';
 import {
@@ -314,8 +311,13 @@ describe('一批工具結果', () => {
     log.append('turn/end', {});
 
     const replay = replayConversation(log.events, {
-      toolResultAsSeen: (message) =>
-        new ToolMessage({ content: `預覽：${message.text}`, tool_call_id: message.tool_call_id }),
+      toolResultAsSeen: (message) => ({
+        type: 'tool',
+        data: {
+          content: `預覽：${String(message.data.content)}`,
+          tool_call_id: message.data.tool_call_id,
+        },
+      }),
     });
     expect(shape(replay)).toEqual(['human:讀', 'ai:好', 'tool:c1:預覽：很長的輸出', 'ai:讀完了']);
   });

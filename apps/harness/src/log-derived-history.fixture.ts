@@ -50,9 +50,10 @@ import {
   SessionRegistry,
   isBlankContent,
   replayConversation,
+  toBaseMessage,
   toLoggedMessage,
 } from '@nexus/core';
-import type { PluginEntry, SessionEvent } from '@nexus/core';
+import type { DerivedConversation, PluginEntry, SessionEvent } from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
@@ -432,10 +433,14 @@ export function classify(
 }
 
 /** 推的結果逐則序列化成日誌記訊息的形狀，比增量與整份重算用。 */
-function serializedReplay(replay: ReturnType<typeof replayConversation>): string {
+function serializedReplay(
+  replay: ReturnType<typeof replayConversation> | DerivedConversation,
+): string {
   return JSON.stringify(
     replay.kind === 'replayed'
-      ? replay.messages.map((message) => toLoggedMessage(message))
+      ? replay.messages.map((message) =>
+          toLoggedMessage('data' in message ? toBaseMessage(message) : message),
+        )
       : replay,
   );
 }

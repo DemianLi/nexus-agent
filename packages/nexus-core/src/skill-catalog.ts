@@ -36,7 +36,7 @@ import type {
 } from 'deepagents';
 import { parse as parseYaml } from 'yaml';
 
-import { isMachineMessage } from './message-source.js';
+import { isMachineMessage } from './langchain-message-adapter.js';
 import { isReminder } from './repeat-reminder.js';
 import { isUnderAnyPrefix } from './sandbox.js';
 import { isSummarizationMessage } from './summarization.js';

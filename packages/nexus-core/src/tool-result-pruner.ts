@@ -108,12 +108,8 @@ import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
-import {
-  applyRecordedPrunes,
-  codePointLength,
-  isTextBlock,
-  measureToolResultContent,
-} from './tool-result-prune-log.js';
+import { applyRecordedPrunes } from './langchain-message-adapter.js';
+import { codePointLength, isTextBlock, measureToolResultContent } from './tool-result-prune-log.js';
 import type { ContentPart, RecordedPrunes } from './tool-result-prune-log.js';
 
 export { codePointLength, measureToolResultContent };
