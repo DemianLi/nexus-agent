@@ -423,6 +423,12 @@ export const THREAD_AT_CAPACITY = 'thread_at_capacity';
 export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 
 /**
+ * 嵌入的對話框（{@link EMBED_PATH_PREFIX}）碰到一條不是從嵌入版開的 thread（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。
+ * 嵌入版設定檔綁在 thread 上：從獨立頁面開的 thread 掛著完整的工具，嵌入連線不准接手它。**不是暫時失敗，重試沒用**：要開一條新對話。
+ */
+export const THREAD_NOT_EMBEDDED = 'thread_not_embedded';
+
+/**
  * 這條 thread 的歷史（磁碟上的會話日誌）裡有一則巢狀太深，灌不回 serve 的狀態，這條 thread 建不起來
  * （[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）。多半是上限出現之前寫下的舊日誌。message 寫了是日誌第幾顆事件、
  * 幾層、上限多少。**不是暫時失敗，重試沒用**：同一份日誌每次都一樣深。任何會經 `threadFor` 續接舊 thread 的路都可能回。
@@ -485,6 +491,7 @@ export type WireErrorCode =
   | typeof SUBAGENT_CLOSED
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
+  | typeof THREAD_NOT_EMBEDDED
   | typeof THREAD_HISTORY_TOO_DEEP
   | typeof THREAD_WRITER_HELD
   | typeof THREAD_ROOT_MISMATCH
@@ -900,6 +907,12 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
  * 標題是從第一句話來的。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
  */
 export const THREADS_PATH = '/threads';
+
+/**
+ * 嵌入的對話框（`<nexus-chat>`）走的路徑前綴（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：疊在 thread 那一族的路徑前面，
+ * 例如 `/embed/threads/:id/stream`、`/embed/threads/mux`。server 照它套嵌入版的設定檔；反向代理可以只轉這個前綴。
+ */
+export const EMBED_PATH_PREFIX = '/embed';
 
 /**
  * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`origin`（subagent 不列）、

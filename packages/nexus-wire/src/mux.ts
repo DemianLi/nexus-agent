@@ -11,7 +11,7 @@
  * @module
  */
 
-import { THREAD_FEED_PATH } from './protocol.js';
+import { EMBED_PATH_PREFIX, THREAD_FEED_PATH } from './protocol.js';
 
 /** 升級請求的路徑。 */
 export const WIRE_MUX_PATH = '/threads/mux';
@@ -40,11 +40,15 @@ export type MuxServerMessage =
   | { readonly t: 'end'; readonly id: string }
   | { readonly t: 'error'; readonly id: string; readonly message: string };
 
-/** 這條線只開下行的兩條路由，不是通用隧道：命令走 HTTP。 */
+/**
+ * 這條線只開下行的兩條路由，不是通用隧道：命令走 HTTP。嵌入版（{@link EMBED_PATH_PREFIX}）只有 thread 的下行，沒有全域那一條。
+ */
 export function isMuxRoute(method: string, path: string): boolean {
   if (method === 'GET') return path === THREAD_FEED_PATH;
-  return method === 'POST' && /^\/threads\/[^/?#]+\/stream$/u.test(path);
+  return method === 'POST' && THREAD_STREAM_ROUTE.test(path);
 }
+
+const THREAD_STREAM_ROUTE = new RegExp(`^(?:${EMBED_PATH_PREFIX})?/threads/[^/?#]+/stream$`, 'u');
 
 function parseObject(raw: string): Record<string, unknown> | undefined {
   try {

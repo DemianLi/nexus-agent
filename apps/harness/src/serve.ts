@@ -26,9 +26,9 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { dirname, join } from 'node:path';
-import { THREADS_PATH } from '@nexus/wire';
 import { approvalPolicyOnResume, errorChain, TokenAnchorBook } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
+import { isThreadsPath, withoutEmbedPrefix } from './embed-profile.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -456,7 +456,7 @@ function routeBySurface(
     handle: (request) => {
       const { pathname } = new URL(request.url);
       if (isOpsPath(pathname)) return ops.handle(request);
-      return pathname === THREADS_PATH || pathname.startsWith(`${THREADS_PATH}/`)
+      return isThreadsPath(pathname) || isThreadsPath(withoutEmbedPrefix(pathname) ?? '')
         ? wire.handle(request)
         : web(request);
     },

@@ -21,7 +21,7 @@
 import { STATUS_CODES } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { WIRE_MUX_PATH, isMuxRoute, parseMuxClientMessage } from '@nexus/wire';
+import { EMBED_PATH_PREFIX, WIRE_MUX_PATH, isMuxRoute, parseMuxClientMessage } from '@nexus/wire';
 import type { MuxClientMessage, MuxServerMessage } from '@nexus/wire';
 import type { RawData } from 'ws';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -123,6 +123,8 @@ class MuxConnection {
   constructor(
     readonly socket: WebSocket,
     upgrade: Headers,
+    /** 從嵌入版的升級路徑進來的：這條線上只開嵌入版的路由，免得繞過前綴拿到完整的設定檔。 */
+    private readonly embed: boolean,
     private readonly options: WireMuxOptions,
     private readonly onClosed: () => void,
   ) {
@@ -212,7 +214,8 @@ class MuxConnection {
       this.socket.close(PROTOCOL_ERROR_CLOSE, 'duplicate stream id');
       return;
     }
-    const refused = !isMuxRoute(method, path)
+    const refused =
+      !isMuxRoute(method, path) || (this.embed && !path.startsWith(`${EMBED_PATH_PREFIX}/`))
       ? ROUTE_NOT_ALLOWED
       : this.#streams.size >= (this.options.maxStreams ?? DEFAULT_MUX_MAX_STREAMS)
         ? 'too many streams'
@@ -357,7 +360,8 @@ export class WireMux {
       reject(rejection.status);
       return;
     }
-    if (path !== WIRE_MUX_PATH) {
+    const embed = path === `${EMBED_PATH_PREFIX}${WIRE_MUX_PATH}`;
+    if (path !== WIRE_MUX_PATH && !embed) {
       reject(404);
       return;
     }
@@ -367,7 +371,7 @@ export class WireMux {
     }
     this.#server.handleUpgrade(incoming, socket, head, (websocket) => {
       this.options.count(path, 101);
-      const connection: MuxConnection = new MuxConnection(websocket, headers, this.options, () => {
+      const connection: MuxConnection = new MuxConnection(websocket, headers, embed, this.options, () => {
         this.#connections.delete(connection);
       });
       this.#connections.add(connection);

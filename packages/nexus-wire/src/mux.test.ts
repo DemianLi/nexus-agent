@@ -13,6 +13,10 @@ describe('isMuxRoute', () => {
     ['POST', '/threads/t1/stream?x=1', false],
     ['POST', '/threads/a/b/stream', false],
     ['GET', '/threads', false],
+    ['POST', '/embed/threads/t1/stream', true],
+    ['GET', `/embed${THREAD_FEED_PATH}`, false],
+    ['POST', '/embed/threads/t1/commands/run.start', false],
+    ['POST', '/other/threads/t1/stream', false],
   ])('%s %s → %s', (method, path, allowed) => {
     expect(isMuxRoute(method, path)).toBe(allowed);
   });
