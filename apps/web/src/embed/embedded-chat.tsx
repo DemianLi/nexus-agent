@@ -11,6 +11,7 @@
  * @module
  */
 import type { ConversationEntry, WireClient } from '@nexus/wire';
+import { EMBED_PATH_PREFIX } from '@nexus/wire';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Composer } from '@/components/composer';
@@ -48,6 +49,14 @@ export const NEW_CONVERSATION_LABEL = '新對話';
 /** 情境標籤前面那幾個字。 */
 export const CONTEXT_LABEL_PREFIX = '目前選取：';
 
+/**
+ * 嵌入版打的 agent 位置：設定裡的來源加上 `/embed`（#2382）。thread 那一族的請求與 `/embed/threads/mux` 都從這裡長出來，server 照這個前綴套
+ * 嵌入版的設定檔（#2367）。差異檢視那兩條讀取不在嵌入版的路由上，打了是 404，畫成沒有內容。
+ */
+export function embedBaseUrl(): string {
+  return `${agentBaseUrl().replace(/\/+$/u, '')}${EMBED_PATH_PREFIX}`;
+}
+
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 function renderSubagentEntry(entry: ConversationEntry) {
@@ -57,7 +66,7 @@ function renderSubagentEntry(entry: ConversationEntry) {
 /**
  * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
  *
- * @param context - 宿主頁給的情境（#2365 第 7 點）：只畫成標籤，不送出（TODO(#2367)）。
+ * @param context - 宿主頁給的情境（#2365 第 7 點）：畫成標籤，每一句送出時附上當下的值（#2382）；沒有就不送。
  */
 export function EmbeddedChat({
   client,
@@ -94,11 +103,11 @@ function EmbeddedConversation({
 }) {
   const conversation = useConversation({ client, threadId });
   const changes = useMemo(
-    () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
+    () => createChangesStores({ threadId, baseUrl: embedBaseUrl() }),
     [threadId],
   );
   const deliverableDownload = useMemo(
-    () => createDeliverableDownloader({ threadId, baseUrl: agentBaseUrl() }),
+    () => createDeliverableDownloader({ threadId, baseUrl: embedBaseUrl() }),
     [threadId],
   );
   const imageSource = useMemo(
@@ -142,7 +151,7 @@ function EmbeddedConversation({
     setDraft('');
     setSendError(undefined);
     void conversation
-      .send(text, 'queue', undefined, undefined, requestId, 'sentence')
+      .send(text, 'queue', undefined, undefined, requestId, 'sentence', context)
       .then((rejected) => {
         if (rejected === undefined) return;
         pendingRequest.current = { id: requestId, sentence };

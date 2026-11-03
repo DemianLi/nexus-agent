@@ -1,7 +1,9 @@
 import type { WireClient } from '@nexus/wire';
+import { THREAD_NOT_EMBEDDED, WireRejectedError } from '@nexus/wire';
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { fakeClient } from '@/test/app-harness.fixture';
 
 import { EMBED_THREAD_KEY } from './embedded-chat';
@@ -14,11 +16,33 @@ import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-e
 
 const STYLES = { shadow: '.nexus-root{--shadow:1}', document: '@font-face{font-family:X}' };
 let clients: ReturnType<typeof fakeClient>[] = [];
+/** 設了就讓下一個元素的下行被拒。 */
+let failOpen: Error | undefined;
 
 function createClient(): WireClient {
   const fake = fakeClient([]);
   clients.push(fake);
-  return fake.client;
+  const refusal = failOpen;
+  if (refusal === undefined) return fake.client;
+  return {
+    ...fake.client,
+    openEvents: async (threadId) => {
+      fake.opened.push(threadId);
+      throw refusal;
+    },
+  };
+}
+
+async function say(element: NexusChatElement, text: string) {
+  const view = shadow(element);
+  const box = await view.findByRole('textbox', { name: '要說的話' });
+  await waitFor(() => expect(clients.at(-1)?.opened.length).toBeGreaterThan(0));
+  fireEvent.change(box, { target: { value: text } });
+  await waitFor(() =>
+    expect(view.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false),
+  );
+  fireEvent.click(view.getByRole('button', { name: '送出' }));
+  await waitFor(() => expect(clients.at(-1)?.sent).toEqual([text]));
 }
 
 function mount(): NexusChatElement {
@@ -36,6 +60,7 @@ function shadow(element: HTMLElement) {
 afterEach(() => {
   document.body.replaceChildren();
   clients = [];
+  failOpen = undefined;
 });
 
 describe('<nexus-chat>', () => {
@@ -97,6 +122,34 @@ describe('<nexus-chat>', () => {
     fireEvent.click(view.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(clients[0]?.sent).toEqual(['/deploy 今天']));
     expect(clients[0]?.slashed).toEqual([]);
+  });
+
+  test('送出時附上當下的情境（#2382）', async () => {
+    const element = mount();
+    element.context = { label: 'A-12 冷卻泵' };
+    await say(element, '它現在溫度多少？');
+    expect(clients[0]?.startOptions[0]?.context).toEqual({ label: 'A-12 冷卻泵' });
+  });
+
+  test('沒有情境就不附 context 這一格', async () => {
+    const element = mount();
+    await say(element, '今天有哪些告警？');
+    expect(clients[0]?.startOptions[0]).not.toHaveProperty('context');
+  });
+
+  test('獨立頁面開的 thread：講專用的那一句、不當一般錯誤，「新對話」按得動', async () => {
+    failOpen = new WireRejectedError(
+      THREAD_NOT_EMBEDDED,
+      'thread "t" 不是從嵌入的對話框開的，嵌入的對話框不能接手它；請開一條新對話',
+      '下行被拒',
+    );
+    const element = mount();
+    const view = shadow(element);
+    await waitFor(() =>
+      expect(view.getByRole('status').textContent).toBe(THREAD_NOT_EMBEDDED_TEXT),
+    );
+    expect(view.queryByText(/thread "t"/u)).toBeNull();
+    expect(view.getByRole('button', { name: '新對話' }).hasAttribute('disabled')).toBe(false);
   });
 
   test('新對話：講過話才按得動，換一條新的並記在嵌入版自己的鍵', async () => {

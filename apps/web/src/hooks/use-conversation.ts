@@ -12,6 +12,7 @@ import type {
   ConversationState,
   Event,
   GoalPauseResult,
+  PageContext,
   PromptAttachment,
   SubagentMention,
   SkillEntry,
@@ -74,6 +75,7 @@ import {
   threadLogTooLargeText,
 } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { threadNotEmbeddedText } from '@/lib/thread-not-embedded';
 import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
@@ -309,6 +311,8 @@ export interface Conversation {
    * `requestId` 是這一句的請求編號（#1335，`lib/request-id.ts`）：**每一次 `run.start` 都帶**，沒給就這一次現產一個。
    * 草稿沒送出去時呼叫端要留著它，原樣重送同一句時傳回來——第一次其實已經到了的話，伺服器認得、不再排。斜線命令不看它
    * （`slash.run` 沒有編號，見 `docs/operations.md`）。
+   *
+   * `context` 是嵌入的對話框附的畫面情境（#2382），放進 `run.start`；斜線命令不看它。只有嵌入版開的 thread 收。
    */
   send(
     text: string,
@@ -317,6 +321,7 @@ export interface Conversation {
     mention?: SubagentMention,
     requestId?: string,
     route?: 'command' | 'sentence',
+    context?: PageContext,
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -759,13 +764,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）、
+          // 嵌入的對話框碰到獨立頁面開的（#2382）。
           const permanent =
             error instanceof WireRejectedError
               ? (threadSubagentText(error.code) ??
                 threadHistoryTooDeepText(error.code) ??
                 threadLogTooLargeText(error.code) ??
-                threadRootMismatchText(error.code))
+                threadRootMismatchText(error.code) ??
+                threadNotEmbeddedText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
@@ -928,6 +935,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       mention?: SubagentMention,
       requestId?: string,
       route?: 'command' | 'sentence',
+      context?: PageContext,
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -971,6 +979,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(mention === undefined ? {} : { mention }),
+          ...(context === undefined ? {} : { context }),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -190,6 +190,8 @@ export function fakeClient(
   } = {},
 ) {
   const sent: string[] = [];
+  /** 每一次 `run.start` 的選項，跟 {@link sent} 一一對應。 */
+  const startOptions: (Parameters<WireClient['runStart']>[2] | undefined)[] = [];
   const responded: unknown[] = [];
   const slashed: string[] = [];
   const opened: string[] = [];
@@ -221,6 +223,7 @@ export function fakeClient(
       const seen = key === undefined ? undefined : requested.get(key);
       if (seen !== undefined) return { type: 'success', id: 1, result: { run_id: seen } };
       sent.push(text);
+      startOptions.push(options);
       const runId = downlink.accept(threadId, text);
       if (key !== undefined) requested.set(key, runId);
       return { type: 'success', id: 1, result: { run_id: runId } };
@@ -237,7 +240,7 @@ export function fakeClient(
     ...UNWIRED_QUEUE,
     ...UNWIRED_THREAD_LIST,
   };
-  return { client, sent, responded, slashed, opened, cancels, downlink };
+  return { client, sent, startOptions, responded, slashed, opened, cancels, downlink };
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */

@@ -18,5 +18,7 @@ describe('parseContext', () => {
     expect(parseContext(42)).toBe('invalid');
     expect(parseContext({ label: '' })).toBe('invalid');
     expect(parseContext({ name: 'A' })).toBe('invalid');
+    expect(parseContext('  ')).toBe('invalid');
+    expect(parseContext({ label: '\n\t' })).toBe('invalid');
   });
 });
