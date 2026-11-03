@@ -136,6 +136,7 @@ import type {
   ProjectionRegistrationPoint,
   FeedbackCategory,
   FeedbackService,
+  PageContextRef,
   SessionEvent,
   SessionLog,
   SessionRegistry,
@@ -148,6 +149,7 @@ import {
   FeedbackDurabilityUnavailableError,
   FeedbackLogCorruptionError,
   forkBoundaryOf,
+  PAGE_CONTEXT_LABEL_MAX,
   ProjectionDetailError,
   SessionAlreadyOwnedError,
   SessionLogTooLargeError,
@@ -1186,6 +1188,38 @@ function embedThreadCommand(
     return json(errorResponse(id, 'not_supported', '嵌入的對話框不能點名子代理'));
   }
   return undefined;
+}
+
+/**
+ * `run.start` 的 `context`（#2367）：省略＝沒有；只有嵌入版開的 thread 收，其餘回 `not_supported`。`label` 要是非空字串、
+ * 不超過 {@link PAGE_CONTEXT_LABEL_MAX} 個字，超過就整句拒，不截：截掉的名字可能剛好指到另一台設備。
+ */
+function pageContextOf(
+  id: number,
+  profile: ThreadProfile,
+  raw: unknown,
+): PageContextRef | undefined | Response {
+  if (raw === undefined) return undefined;
+  if (profile !== 'embed') {
+    return json(errorResponse(id, 'not_supported', '只有嵌入的對話框能附畫面情境'));
+  }
+  const label = (raw as { label?: unknown } | null)?.label;
+  const keys = raw !== null && typeof raw === 'object' ? Object.keys(raw) : [];
+  if (
+    typeof label !== 'string' ||
+    label.trim() === '' ||
+    [...label].length > PAGE_CONTEXT_LABEL_MAX ||
+    keys.length !== 1
+  ) {
+    return json(
+      errorResponse(
+        id,
+        'invalid_argument',
+        `run.start 的 context 要是 { label }，label 為非空字串、最多 ${PAGE_CONTEXT_LABEL_MAX} 個字`,
+      ),
+    );
+  }
+  return { label };
 }
 
 /**
@@ -2743,6 +2777,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           (params as { mention?: unknown }).mention,
         );
         if (mention instanceof Response) return mention;
+        // 畫面情境（#2367）：只有嵌入版開的 thread 收，同樣排在收下附件之前。
+        const context = pageContextOf(
+          command.id,
+          thread.profile,
+          (params as { context?: unknown }).context,
+        );
+        if (context instanceof Response) return context;
         const text = firstHumanText(params.input);
         if (text === undefined) {
           return json(
@@ -2785,6 +2826,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ...(mode === 'steer' ? { steer: true as const } : {}),
           ...(admitted.length > 0 && { attachments: admitted }),
           ...(mention !== undefined && { mention }),
+          ...(context !== undefined && { context }),
         });
         return json(successResponse(command.id, { run_id: runId }));
       } finally {

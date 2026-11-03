@@ -231,6 +231,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     ref: '#2132',
     readerBranch: 'apps/harness/src/jsonl-session-store.ts:1901',
   },
+  { from: 52, to: 53, kind: 'additive', ref: '#2367' },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */

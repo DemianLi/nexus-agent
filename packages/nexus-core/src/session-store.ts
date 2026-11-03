@@ -643,8 +643,23 @@ import type { SessionEvent } from './session-log.js';
  * **讀舊檔**：51 以前的舊兩檔與手寫的舊世代都直接讀。事件詞彙沒變，所以這條邊是加性的。
  * **回滾的後果**：被 52 碰過的 thread（新建，或續接過一次的舊 thread），v0.5.19 的 runtime 讀到墓碑，續接與列表都當成
  * 格式太新拒讀。
+ *
+ * ## 53：嵌入版設定檔記在 header，一句話可以附畫面情境
+ *
+ * [#2367](https://github.com/DemianLi/nexus-agent/issues/2367)（D177）：
+ * - header 多一格 `profile: 'embed'`：從嵌入的對話框（`/embed/threads/…`）開的 root 會話才寫，之後不管誰打開都照嵌入版組（不掛子代理、
+ *   沒有斜線命令、沒標唯讀的工具要核准）。子代理與獨立頁面開的不寫。見 {@link StoredSessionHeader}。
+ * - `inbox/spliced` 裡那一件（`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的 `context { label }`；輪中插話被領走時記的
+ *   `user/message` 的 `HumanMessage` 內容在文字之後多一個固定的文字區塊（見 `page-context.ts`）。
+ *
+ * **升版，不是可選的**：52 的 `parseHeader` 白名單會把帶 `profile` 的 header 拒成 `SessionCorruptionError`（同 51 那段），把好檔判成壞檔；
+ * 沒拒的話，52 的 runtime 會照獨立頁面組一條嵌入版的 thread，子代理與斜線命令都回來了，核准也放寬了。`context` 同 42 的 `mention`：
+ * 52 的 runtime 讀到會略過，排著的項目被折回來重跑時情境就悄悄不見了。要讓舊讀方在讀之前就停。
+ *
+ * **讀舊檔**：52 以前沒有這兩樣，等於獨立頁面開的、沒附情境。續接改寫 header 時只動 `version`，不補 `profile`。
+ * **回滾的後果**同 52：被 53 碰過的 thread，52 的 runtime 以格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 52;
+export const SESSION_LOG_FORMAT_VERSION = 53;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -32,6 +32,7 @@ import type {
   MessageFeedbackItem,
   MessageFeedbackRating,
 } from '@nexus/core/src/feedback.ts';
+import type { PageContextRef } from '@nexus/core/src/page-context.ts';
 
 import type {
   ATTACHMENT_NOT_FOUND,
@@ -125,6 +126,9 @@ export const RUN_START_MODES = ['queue', 'steer'] as const;
 
 export type RunStartMode = (typeof RUN_START_MODES)[number];
 
+/** `run.start` 的 `context`：**就是 `@nexus/core` 的 `PageContextRef`**，別名。 */
+export type PageContext = PageContextRef;
+
 /**
  * `run.start` 的封包。**`params` 比協定的 `RunStartParams` 多一格我們自己的 {@link RunStartMode}**：協定的 `Command`
  * 沒有送出模式那一格，而 dsh 的送出模式就掛在送出請求本身（`prompt` 的 `mode`）。另立一支命令的話，同一句話會有
@@ -147,6 +151,12 @@ export interface RunStartCommand {
      * 名字不在 `subagent.list` 上回 `invalid_argument`。
      */
     readonly mention?: SubagentMention;
+    /**
+     * 嵌入的對話框附在這句話上的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：宿主頁目前選取的東西。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；`label` 空字串或超過
+     * `@nexus/core` 的 `PAGE_CONTEXT_LABEL_MAX` 個字回 `invalid_argument`，不截。交給模型時寫成「畫面上目前選取 …」，見 `page-context.ts`。
+     */
+    readonly context?: PageContext;
     /**
      * 客戶端給這一次送出的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)），**選填**。
      * 照 dsh `session.prompt` 的 `requestId`（`packages/api/session-controller/src/types.ts:340`，`d7432673886`）：
@@ -694,6 +704,7 @@ export const RPC_PARAM_KEYS = {
     'mode',
     'attachments',
     'mention',
+    'context',
     'request_id',
     'client_time_zone',
   ],

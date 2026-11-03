@@ -681,6 +681,14 @@ export {
 } from './session-checkpoint-policy.js';
 export type { MessageSource } from './message-source.js';
 export type { SubagentMentionRef } from './subagent-mention.js';
+export type { PageContextRef } from './page-context.js';
+export {
+  isPageContextBlock,
+  PAGE_CONTEXT_LABEL_MAX,
+  pageContextBlock,
+  pageContextOfBlock,
+  pageContextText,
+} from './page-context.js';
 export {
   isMentionHintBlock,
   mentionHintBlock,

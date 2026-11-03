@@ -38,6 +38,7 @@ export type {
   SubagentInterruptCommand,
   SubagentSendCommand,
   RunStartCommand,
+  PageContext,
   RunStartMode,
   RunStartParams,
   SlashCommand,
