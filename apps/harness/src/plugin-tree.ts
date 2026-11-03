@@ -105,7 +105,7 @@ import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
-import { langChainToolOf } from './nexus-tool-adapter.js';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 import { ThreadSessions } from './thread-sessions.js';
 

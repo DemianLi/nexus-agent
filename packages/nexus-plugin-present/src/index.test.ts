@@ -33,7 +33,7 @@ import type { FsLookup } from '@nexus/fs';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkConformance } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
-import { isNexusTool } from '@nexus/tools';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { FilesystemBackend } from 'deepagents';
 
@@ -139,8 +139,8 @@ async function mount(
   });
   await root.loader.await();
   const entry = tools.entries().find((item) => item.tool.name === PRESENT_TOOL_NAME);
-  if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒註冊上');
-  return { tool: entry.tool, sessions, root, tools, backend };
+  if (entry === undefined) throw new Error('工具沒註冊上');
+  return { tool: langChainToolOf(entry.tool), sessions, root, tools, backend };
 }
 
 /** root 的一次呼叫。`toolCall.id` 就是 `callId`。 */

@@ -5,7 +5,7 @@
  * （[#30](https://github.com/DemianLi/nexus-agent/issues/30)）：這個套件只相依 `@nexus/sdk`（規範）、`@nexus/tools`
  * （服務定義）、`@nexus/cordis`（型別）與 `zod`，**沒有一行 import `@nexus/core`、`@nexus/harness` 或 LangChain**
  * ——外部插件只該看見 SDK 與服務定義（`.docs/decisions-2026-10-11.md` §3-4 第 17 條）。工具是 `NexusTool`（契約 `2.0.0`，#2351），參數用 zod 寫、
- * 交出去的是 `z.toJSONSchema()` 編出來的 JSON Schema。
+ * 交出去的是 `z.toJSONSchema()` 以 input 模式編出來的 JSON Schema。
  *
  * ## 形狀
  *
@@ -68,7 +68,7 @@ export function createEchoTool(prefix: string = DEFAULT_ECHO_PREFIX): NexusTool 
   return {
     name: ECHO_TOOL_NAME,
     description: '把收到的訊息原樣回聲，用來確認工具接線是通的。',
-    parameters: z.toJSONSchema(echoToolSchema) as JsonSchema,
+    parameters: z.toJSONSchema(echoToolSchema, { io: 'input' }) as JsonSchema,
     execute: async (args) => {
       const { message } = echoToolSchema.parse(args);
       return { ok: true, content: `${prefix}：${message}` };

@@ -18,6 +18,8 @@ const exec: ToolExec = {
   agent: undefined,
   signal: undefined,
   concludeTurn: () => {},
+  deferContext: () => {},
+  interrupt: () => Promise.resolve(undefined),
 };
 
 /**
@@ -42,13 +44,12 @@ describe('echo 工具', () => {
     expect(createEchoTool().name).toBe(ECHO_TOOL_NAME);
   });
 
-  it('參數 schema 是 JSON（送上線的那一份）', () => {
+  it('參數 schema 是 JSON（模型可以送的形狀：多帶的鍵收下丟掉，所以不寫 additionalProperties）', () => {
     expect(createEchoTool().parameters).toEqual({
       $schema: 'https://json-schema.org/draft/2020-12/schema',
       type: 'object',
       properties: { message: { type: 'string', description: '要回聲的訊息' } },
       required: ['message'],
-      additionalProperties: false,
     });
   });
 

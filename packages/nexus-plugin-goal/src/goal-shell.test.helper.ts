@@ -19,6 +19,7 @@
 import { GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { createGoalCore, goalConfigSchema, mountGoal } from './index.js';
 import type { GoalConfig, GoalCore, GoalSeams } from './index.js';
 import type { z } from 'zod';
@@ -34,12 +35,9 @@ function applyWith(seams: GoalSeams): NexusPlugin<GoalConfig>['apply'] {
     mountGoal(
       {
         registerTool: (tool, options) =>
-          void registry.tools.register(
-            tool as Parameters<typeof registry.tools.register>[0],
-            options,
-          ),
+          void registry.tools.register(toLangChainTool(tool), options),
         registerCommand: (definition) => void registry.commands.register(definition),
-        forCall: (callConfig) => registry.sessions.forCall(callConfig),
+        forCall: (exec) => registry.sessions.forCall(exec),
       },
       core,
       config,

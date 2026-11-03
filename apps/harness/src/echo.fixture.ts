@@ -23,7 +23,7 @@ import {
 } from '@nexus/plugin-echo';
 import type { EchoConfig, EchoPluginOptions } from '@nexus/plugin-echo';
 
-import { toLangChainTool } from './nexus-tool-adapter.js';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 export { DEFAULT_ECHO_PREFIX, ECHO_TOOL_NAME, echoConfigSchema };
 export type { EchoConfig, EchoPluginOptions };

@@ -40,8 +40,11 @@ import { defineToken } from '@nexus/sdk';
  * `2.0.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料）。
  * LangChain 的工具照收，介面本身只增不減，但主版號跳 major（#1827 D174）：宣告 `^1.x` 的消費者不滿足 `2.0.0`，停在 PENDING，要改宣告 `^2.0.0`
  * （升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2/guide.md`）。
+ *
+ * `2.1.0`（#2352）：{@link ToolExec} 多 {@link ToolExec.deferContext} 與 {@link ToolExec.interrupt}。向後相容的新增：`^2.0.0` 的消費者不呼叫它，照常；
+ * 要用的消費者宣告 `^2.1.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.0.0';
+export const TOOLS_CONTRACT_VERSION = '2.1.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -76,6 +79,23 @@ export interface ToolExec {
   readonly signal: AbortSignal | undefined;
   /** 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}；不帶參數，名字由宿主填這次呼叫的工具。 */
   concludeTurn(): void;
+  /**
+   * 這次呼叫成功的結果之後，補一則插件來源的人話給模型（契約 `2.1.0` 起）。
+   * 來源的 `plugin` 是這顆工具的名字；呼叫幾次補幾則，照呼叫順序。結果是 `ok: false` 時不補。
+   * 這次呼叫的 `callId` 是 `''`、又補了訊息、結果成功時，宿主拋錯：工具結果造不出來。
+   *
+   * @param text - 那則人話的內容。
+   * @param marks - 掛在那則訊息上的記號（`additional_kwargs`），測試據此認出它；省略是不掛。
+   */
+  deferContext(text: string, marks?: { readonly [key: string]: JsonValue }): void;
+  /**
+   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。**掛起靠拋例外傳播**：不要用 try/catch 攔下它丟出的例外，
+   * 真要 catch 就原樣重拋。**恢復時本體從頭重跑一次**，這次呼叫在掛起之前做的事要能重做而不出錯。
+   *
+   * @param payload - 給答題端的酬載。
+   * @returns 人回的值。
+   */
+  interrupt(payload: JsonValue): Promise<unknown>;
 }
 
 /**
@@ -91,10 +111,14 @@ export type NexusToolResult =
 export interface NexusTool {
   readonly name: string;
   readonly description: string;
-  /** 參數的 JSON Schema，就是送上線的那一份。用 zod 寫的插件經 `z.toJSONSchema()` 轉。 */
+  /**
+   * 參數的 JSON Schema，input 模式：模型可以送的形狀。寫了 `additionalProperties: false` 的物件多帶鍵就拒，沒寫的收下後丟掉。
+   * 用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉：`.strict()` 編成 `false`，一般的 `z.object` 不寫。
+   * 送上線時，宿主在帶 `properties`、沒寫 `additionalProperties` 的物件補 `false`，所以送上線的不是這一份原樣。
+   */
   readonly parameters: JsonSchema;
   /**
-   * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，未宣告的鍵已丟掉。預期中的失敗回 `ok: false`；
+   * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，收下的未宣告鍵已丟掉。預期中的失敗回 `ok: false`；
    * reject 不會轉成 `ok: false`，照 LangChain 工具拋錯的路往外走。
    *
    * @param args - 模型給的參數。
