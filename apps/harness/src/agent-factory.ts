@@ -104,6 +104,8 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { copyFileEntry } from './copy-file-tool.js';
+import { embedApprovalEntry } from './embed-profile.js';
+import type { ThreadProfile } from './embed-profile.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxModeSource } from './contained-backend.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
@@ -320,6 +322,11 @@ export interface CreateNexusAgentOptions {
    * 偏離登記與細節見 `background-delegation.ts`。
    */
   readonly backgroundSubagents?: BackgroundSubagentsOptions;
+  /**
+   * 照哪一份設定檔組（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），省略即 `full`。`embed`：不掛子代理（`task` 與
+   * {@link backgroundSubagents} 都不掛，給了後者就拋），工具照 `embedApprovalGate` 要核准，`subagentKinds` 缺席。
+   */
+  readonly profile?: ThreadProfile;
   /**
    * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
    * **省略＝關**。給了：`attachSession` 在 root 日誌還沒有 `subagent/model-selection-policy` 時把它寫進去（有了就不再寫，
@@ -764,6 +771,10 @@ function modelLabelOf(model: AgentModel): string {
 }
 
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
+  const embedded = options.profile === 'embed';
+  if (embedded && options.backgroundSubagents !== undefined) {
+    throw new Error('嵌入版設定檔不掛子代理：不能同時給 backgroundSubagents');
+  }
   if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
     throw new Error(
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
@@ -828,6 +839,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
     ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
     ...(delegation === undefined ? [] : [delegation.entry()]),
+    ...(embedded ? [embedApprovalEntry()] : []),
   ];
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
@@ -966,6 +978,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const agent = assembleAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
+      ...(embedded && { withoutSubagents: true }),
     }).withConfig({
       recursionLimit: recursionLimitFor(registry, options),
       // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
@@ -1287,10 +1300,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
        * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
        */
-      subagentKinds: (params.subagents ?? []).map(({ name, description }) => ({
-        name,
-        description,
-      })),
+      subagentKinds: embedded
+        ? undefined
+        : (params.subagents ?? []).map(({ name, description }) => ({
+            name,
+            description,
+          })),
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。

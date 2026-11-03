@@ -10,9 +10,10 @@
  * @module
  */
 
+import type { PluginEntry, PreToolListener } from '@nexus/core';
+import { mcpPlugin } from '@nexus/plugin-mcp';
 import { EMBED_PATH_PREFIX, THREADS_PATH } from '@nexus/wire';
 import type { RpcMethod } from '@nexus/wire';
-import type { PreToolListener } from '@nexus/core';
 
 /** 一條 thread 照哪一份設定檔組。`full` 是獨立頁面那一份。 */
 export type ThreadProfile = 'full' | 'embed';
@@ -102,5 +103,19 @@ export function embedApprovalGate(isMcpTool: (name: string) => boolean): PreTool
     if (ASKS_THE_HUMAN_ITSELF.has(exec.name)) return next();
     if (isMcpTool(exec.name)) return next();
     return { kind: 'ask', reason: embedApprovalReason(exec.name) };
+  };
+}
+
+/** 把 {@link embedApprovalGate} 登記進這次組裝的核准 waterfall。MCP 工具認的是註冊它的那一列（`mcp`），不認名字前綴。 */
+export function embedApprovalEntry(): PluginEntry {
+  return {
+    plugin: {
+      name: 'embed-approval',
+      apply: (registry) => {
+        registry.approvals.gate(
+          embedApprovalGate((name) => registry.tools.resolve(name)?.origin.name === mcpPlugin.name),
+        );
+      },
+    },
   };
 }

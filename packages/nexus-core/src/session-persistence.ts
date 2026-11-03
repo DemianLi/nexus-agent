@@ -322,6 +322,8 @@ export function attachSessionPersistence(
      * `meta`（`session-controller/src/commands.ts:281-283`，`687f282e`）。`resumedRoot` 那一份不新建 header，所以兩個一起給沒有意義。
      */
     readonly rootLineage?: { readonly parentSession: string; readonly isSeeded: true };
+    /** 照嵌入版設定檔開的 root（#2367）：**只進 root 的 header**，見 {@link StoredSessionHeader.profile}。 */
+    readonly rootProfile?: 'embed';
     /**
      * 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。
      *
@@ -390,6 +392,8 @@ export function attachSessionPersistence(
       }),
       ...(address.kind === 'root' &&
         options.rootModelEntryId !== undefined && { modelEntryId: options.rootModelEntryId }),
+      ...(address.kind === 'root' &&
+        options.rootProfile !== undefined && { profile: options.rootProfile }),
     };
     // 接回來的有兩種：root 由入口在建構時給（`resumedRoot`），子代理冷復活（#1271）由執行期開日誌時帶在 entry 上。
     const resumed =

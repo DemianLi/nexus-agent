@@ -766,6 +766,11 @@ export interface StoredSessionHeader {
    * 續接規則同 {@link build}。
    */
   readonly modelEntryId?: string;
+  /**
+   * 這條 thread 照哪一份設定檔組（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：**只寫 `'embed'`**，從嵌入的對話框開的 root 才有，
+   * 缺席就是完整的那一份。對到 dsh header 的 `agentPreset`（建立時定下、之後誰開都照它組）。續接、分叉照抄，不改。
+   */
+  readonly profile?: 'embed';
 }
 
 /**

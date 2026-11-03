@@ -77,6 +77,11 @@ import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 export interface AssembleAgentParams extends FoldedAgentParams {
   /** 系統提示詞。**原樣**送給模型，沒有基座 base prompt 墊在後面（基座預設本來就不注入）。 */
   systemPrompt?: string;
+  /**
+   * 不掛子代理中介層：模型看不到 `task`，也沒有它帶進系統提示的那一段（嵌入版設定檔，[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。
+   * 省略即照常掛。`subagents` 照收照驗，只是沒有人用它。
+   */
+  withoutSubagents?: boolean;
 }
 
 /**
@@ -249,7 +254,10 @@ export function assembleAgent(params: AssembleAgentParams) {
   for (const spec of params.subagents) assertSupportedSubagent(spec);
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
   // 不照搬基座那段補件（它會讓 profile 的 `generalPurposeSubagent` 設定有作用，我們不要）。
-  if (!params.subagents.some((spec) => spec.name === 'general-purpose')) {
+  if (
+    params.withoutSubagents !== true &&
+    !params.subagents.some((spec) => spec.name === 'general-purpose')
+  ) {
     throw new Error(
       'fold 的產物沒有 general-purpose 子代理：fold 一律自己補它，缺了表示 fold 壞了',
     );
@@ -285,13 +293,17 @@ export function assembleAgent(params: AssembleAgentParams) {
         fileTools: params.fileTools,
       }),
     ),
-    createSubAgentMiddleware({
-      defaultModel: model as never,
-      defaultTools: tools,
-      subagents: inlineSubagents,
-      generalPurposeAgent: false,
-      parentSystemPrompt: systemPrompt,
-    }),
+    ...(params.withoutSubagents === true
+      ? []
+      : [
+          createSubAgentMiddleware({
+            defaultModel: model as never,
+            defaultTools: tools,
+            subagents: inlineSubagents,
+            generalPurposeAgent: false,
+            parentSystemPrompt: systemPrompt,
+          }),
+        ]),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
   ] as unknown as AgentMiddleware[];
