@@ -20,6 +20,7 @@ import type { PendingInput } from '@nexus/wire';
 import { Chevron } from '@/components/chevron';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { activeElementOf } from '@/lib/active-element';
 import { pendingLabel } from '@/lib/pending-label';
 import { isPlanReview } from '@/lib/plan-review';
 
@@ -88,7 +89,7 @@ export function PendingSwap({
       mounted.current = true;
       return;
     }
-    const active = document.activeElement;
+    const active = activeElementOf(zone.current);
     const lost =
       active === null || active === document.body || (zone.current?.contains(active) ?? false);
     if (!lost) return;
