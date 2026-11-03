@@ -970,8 +970,17 @@ export { createSessionRelationshipChecker } from './session-relationships.js';
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
-export type { AssembleAgentParams } from './agent-assembly.js';
+export { createNativeAgent, NativeAgent } from './native-loop/agent.js';
+export type { NativeAgentParams, NativeStateSnapshot } from './native-loop/agent.js';
+export type {
+  AgentStepPayload,
+  PreStepDecision,
+  RequestErrorAction,
+} from './native-loop/events.js';
+export type { NativeProtocolEvent } from './native-loop/protocol.js';
+export type { AgentLoopKind, AssembleAgentParams } from './agent-assembly.js';
 export {
+  AGENT_LOOP_KINDS,
   assembleAgent,
   mergeMiddlewareStack,
   subagentDefaultMiddleware,

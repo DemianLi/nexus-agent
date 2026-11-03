@@ -62,6 +62,7 @@ import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
+import type { EventDispatcher } from './events.js';
 import type { FoldedAgentParams } from './fold.js';
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
@@ -70,6 +71,7 @@ import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
   SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
 } from './model-selection.js';
+import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
@@ -82,7 +84,20 @@ export interface AssembleAgentParams extends FoldedAgentParams {
    * 省略即照常掛。`subagents` 照收，每一項照 `assertSupportedSubagent` 驗，但不要求有 `general-purpose`；沒有人用它。
    */
   withoutSubagents?: boolean;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：`langgraph`（省略時）是 `createAgent` 編的圖，`native` 是
+   * `native-loop/agent.ts`，同一串 middleware 照 `createAgent` 的節點順序跑。
+   */
+  loop?: AgentLoopKind;
+  /** `native` 派發四個 agent 事件用；`langgraph` 不讀。 */
+  events?: EventDispatcher;
 }
+
+/** 誰跑 agent loop 的兩個值，`--agent-loop` 與設定列共用。 */
+export const AGENT_LOOP_KINDS = ['langgraph', 'native'] as const;
+
+/** 誰跑 agent loop。 */
+export type AgentLoopKind = (typeof AGENT_LOOP_KINDS)[number];
 
 /**
  * 排在**預設疊前面**的那幾顆的名字（#1369）：換模型（root 一顆、子代理跟隨一顆）與圖片省略。
@@ -313,12 +328,23 @@ export function assembleAgent(params: AssembleAgentParams) {
       : []),
   ] as unknown as AgentMiddleware[];
 
-  return createAgent({
+  const middleware = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
+  const agent = createAgent({
     model: model as never,
     ...(systemPrompt !== '' && { systemPrompt }),
     tools: tools as never,
-    middleware: mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail),
+    middleware,
     checkpointer,
     store,
   });
+  if (params.loop !== 'native') return agent;
+  // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（`NativeAgent` 的檔頭），
+  // K13 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
+  return createNativeAgent({
+    model,
+    systemPrompt,
+    tools: tools ?? [],
+    middleware,
+    ...(params.events !== undefined && { events: params.events }),
+  }) as unknown as typeof agent;
 }

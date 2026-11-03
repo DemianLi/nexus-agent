@@ -61,6 +61,7 @@ import {
   SESSION_TELEMETRY_SERVICE,
   SessionTelemetryCoordinator,
   type AgentCheckpointer,
+  type AgentLoopKind,
   type AgentModel,
   type AgentStore,
   type ToolFilter,
@@ -476,6 +477,12 @@ export interface CreateNexusAgentOptions {
    * `shadow` 時比對結果的去處。serve 一台一份、每條 thread 傳同一份；省略時這次組裝自己建一份不往外講的計數。
    */
   readonly historyShadow?: HistoryShadowSink;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
+   * `native` 下核准管道當成沒有存檔點（`no-channel`）：要核准的操作確定性回絕，ask_user、plan-mode 的切換與沙箱升級同樣不問人
+   * （K8 #2358 收）。背景子代理的圖不受影響，照舊是 LangGraph。
+   */
+  readonly agentLoop?: AgentLoopKind;
 }
 
 /**
@@ -997,6 +1004,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }),
       model: options.model,
       checkpointer: options.checkpointer,
+      ...(options.agentLoop !== undefined && { loop: options.agentLoop }),
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
@@ -1034,6 +1042,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
       ...(embedded && { withoutSubagents: true }),
+      ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
     }).withConfig({
       recursionLimit: recursionLimitFor(registry, options),
       // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
