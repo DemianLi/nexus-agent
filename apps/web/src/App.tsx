@@ -10,6 +10,7 @@ import { PermissionSeat } from '@/components/permission-seat';
 import { ConversationBody } from '@/components/conversation/conversation-body';
 import { ConversationFeedbackDialog } from '@/components/conversation/conversation-feedback-dialog';
 import { ConversationNotices } from '@/components/conversation/conversation-notices';
+import { inputPlaceholder } from '@/components/conversation/input-placeholder';
 import { renderPendingActions, renderPendingPanel } from '@/components/conversation/pending-panels';
 import { PendingSwap } from '@/components/pending-swap';
 import { ArchivedBanner } from '@/components/archived-banner';
@@ -54,7 +55,7 @@ import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { createSubagentUsageLoader } from '@/lib/subagent-usage';
 import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
-import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
+import { stoppedOnQuestion } from '@/lib/question-view';
 import {
   canRunSlash,
   canSendText,
@@ -75,7 +76,6 @@ import {
   canSteerQueue,
   steerAll,
   STEER_FAILED_TEXT,
-  STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
 import { pendingAsker } from '@/lib/approval-asker';
@@ -86,8 +86,7 @@ import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
-import { connectionStall, disconnectedPlaceholder } from '@/lib/connection-stall';
-import type { ConnectionStall } from '@/lib/connection-stall';
+import { connectionStall } from '@/lib/connection-stall';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { randomUuid } from '@/lib/uuid';
@@ -99,6 +98,7 @@ import { createAttachmentImageSource } from '@/lib/attachment-image';
 
 export { LEGACY_THREAD_NOTICE } from '@/components/conversation/conversation-notices';
 export { STOP_QUESTIONS_LABEL } from '@/components/conversation/pending-panels';
+export { inputPlaceholder } from '@/components/conversation/input-placeholder';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -148,33 +148,6 @@ const MODEL_SLASH: SlashDescriptor = {
   name: MODEL_COMMAND,
   description: '切換模型與推理強度（從下一步生效）。',
 };
-
-/**
- * 送出框裡那句灰字。
- *
- * **等人回答時它看不見**：核准與提問面板換掉輸入框（#408、#409，規格 §4.3），面板名稱與狀態列講現在該做什麼，所以這裡
- * 不再分「先回答上面那個核准請求」與「那組問題」——那幾格是 [#239](https://github.com/DemianLi/nexus-agent/issues/239)
- * 在卡片疊在輸入框上方時的補丁。
- *
- * **停在提問時按了停止**（❌，§4.3）：跟那張展開的提問工具卡講同一句，請人直接打字回覆（#376 第 9 條）。
- */
-export function inputPlaceholder({
-  connected,
-  stall,
-  stoppedOnQuestion,
-  steerQueue = false,
-}: {
-  readonly connected: boolean;
-  /** 沒連上、也不會自己接回的那兩種（{@link connectionStall}）；沒有就是在重接，講「連線中…」。 */
-  readonly stall?: ConnectionStall | undefined;
-  readonly stoppedOnQuestion: boolean;
-  /** 草稿空白、這一輪跑著、佇列裡有排著的：提示那個手勢（#710，dsh 的 `placeholder.steerQueue`）。 */
-  readonly steerQueue?: boolean;
-}): string {
-  if (!connected) return disconnectedPlaceholder(stall);
-  if (stoppedOnQuestion) return STOPPED_QUESTION_TEXT;
-  return steerQueue ? STEER_QUEUE_PLACEHOLDER : '說點什麼…';
-}
 
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
