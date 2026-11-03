@@ -153,8 +153,8 @@ export interface RunStartCommand {
     readonly mention?: SubagentMention;
     /**
      * 嵌入的對話框附在這句話上的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：宿主頁目前選取的東西。
-     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；`label` 空字串或超過
-     * `@nexus/core` 的 `PAGE_CONTEXT_LABEL_MAX` 個字回 `invalid_argument`，不截。交給模型時寫成「畫面上目前選取 …」，見 `page-context.ts`。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；`context` 只能有 `label` 一格，
+     * `label` 是空字串、只有空白、超過 `@nexus/core` 的 `PAGE_CONTEXT_LABEL_MAX` 個字，或多了別的鍵，都回 `invalid_argument`，不截。交給模型時寫成「畫面上目前選取 …」，見 `page-context.ts`。
      */
     readonly context?: PageContext;
     /**

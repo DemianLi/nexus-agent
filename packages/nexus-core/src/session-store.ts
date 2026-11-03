@@ -646,7 +646,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * ## 53：嵌入版設定檔記在 header，一句話可以附畫面情境
  *
- * [#2367](https://github.com/DemianLi/nexus-agent/issues/2367)（D177）：
+ * [#2367](https://github.com/DemianLi/nexus-agent/issues/2367)（#1827 D177）：
  * - header 多一格 `profile: 'embed'`：從嵌入的對話框（`/embed/threads/…`）開的 root 會話才寫，之後不管誰打開都照嵌入版組（不掛子代理、
  *   沒有斜線命令、沒標唯讀的工具要核准）。子代理與獨立頁面開的不寫。見 {@link StoredSessionHeader}。
  * - `inbox/spliced` 裡那一件（`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的 `context { label }`；輪中插話被領走時記的
@@ -783,7 +783,7 @@ export interface StoredSessionHeader {
   readonly modelEntryId?: string;
   /**
    * 這條 thread 照哪一份設定檔組（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：**只寫 `'embed'`**，從嵌入的對話框開的 root 才有，
-   * 缺席就是完整的那一份。對到 dsh header 的 `agentPreset`（建立時定下、之後誰開都照它組）。續接、分叉照抄，不改。
+   * 缺席就是完整的那一份。建立時定下，之後誰開都照它組；續接、分叉照抄，不改。
    */
   readonly profile?: 'embed';
 }

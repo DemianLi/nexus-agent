@@ -79,7 +79,7 @@ export interface AssembleAgentParams extends FoldedAgentParams {
   systemPrompt?: string;
   /**
    * 不掛子代理中介層：模型看不到 `task`，也沒有它帶進系統提示的那一段（嵌入版設定檔，[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。
-   * 省略即照常掛。`subagents` 照收照驗，只是沒有人用它。
+   * 省略即照常掛。`subagents` 照收，每一項照 `assertSupportedSubagent` 驗，但不要求有 `general-purpose`；沒有人用它。
    */
   withoutSubagents?: boolean;
 }

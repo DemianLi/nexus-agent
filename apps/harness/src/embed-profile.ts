@@ -90,8 +90,8 @@ export function embedApprovalReason(toolName: string): string {
 /**
  * 嵌入版的核准閘門：沒標唯讀的工具都要人核准（#2365 第 10 點）。**失敗的方向是多問**：唯讀是白名單，日後新增的工具預設被問。
  *
- * MCP 工具交給那一列自己的 `approval`（#1622，D171）：沒寫就整台都問，寫了 `default: allow` 或 `exempt` 就是那一列替自己的工具標了唯讀。
- * 這位不覆蓋它，所以也不放寬它。
+ * MCP 工具交給那一列自己的 `approval`（#1622；#1827 D171）：沒寫就整台都問，寫了 `default: allow` 或 `exempt` 就是那一列替自己的工具標了唯讀。
+ * 這道閘門不覆蓋它，所以也不放寬它。
  *
  * 只回 `ask` 或 `next()`，**絕不回 `allow`**：不呼叫 `next()` 的 `allow` 會把排在後面的閘門整條吃掉（`approval-gate-order.test.ts`）。
  *

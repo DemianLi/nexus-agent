@@ -435,6 +435,7 @@ export interface WireHandlerOptions {
    * 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。
    *
    * @param fork - 這條是剛分叉出來的子 thread（`thread.fork`，#1580）：不讀磁碟，從這一份 seed 組裝，其餘照續接那條路。
+   * @param profile - 這條 thread 要是新的，照它組；已經落盤的照 header，分叉的照來源，不看它。
    */
   createAgent(
     threadId: string,
@@ -444,8 +445,6 @@ export interface WireHandlerOptions {
   /**
    * 落盤的 thread 是照哪一份設定檔開的（#2367），只冷讀 header、不建 agent。磁碟上沒有它回 `undefined`。
    * 嵌入連線碰一條還沒載進記憶體的 thread 時先問這一支，不為一條會被拒的 thread 組 agent。**缺席就是沒有落盤**：只看記憶體裡的。
-   *
-   * @param profile - 傳給 {@link createAgent} 的第三個引數：這條 thread 要是新的，照它組；已經落盤的照 header，不看它。
    */
   storedProfile?(threadId: string): Promise<ThreadProfile | undefined>;
   /**
@@ -1165,11 +1164,7 @@ function notEmbedded(id: number | null, threadId: string): Response {
  *
  * @returns 要回的回應；`undefined` 是照常往下走。
  */
-function embedThreadCommand(
-  method: string,
-  id: number,
-  body: unknown,
-): Response | undefined {
+function embedThreadCommand(method: string, id: number, body: unknown): Response | undefined {
   if (method === 'slash.list') {
     const result: SlashListResult = { commands: [] };
     return json(successResponse(id, result));
@@ -1191,8 +1186,8 @@ function embedThreadCommand(
 }
 
 /**
- * `run.start` 的 `context`（#2367）：省略＝沒有；只有嵌入版開的 thread 收，其餘回 `not_supported`。`label` 要是非空字串、
- * 不超過 {@link PAGE_CONTEXT_LABEL_MAX} 個字，超過就整句拒，不截：截掉的名字可能剛好指到另一台設備。
+ * `run.start` 的 `context`（#2367）：省略＝沒有；只有嵌入版開的 thread 收，其餘回 `not_supported`。`label` 要是不全是空白的字串、
+ * 不超過 {@link PAGE_CONTEXT_LABEL_MAX} 個字，`context` 也只准有 `label` 一格；不合就整句拒，不截：截掉的名字可能剛好指到另一台設備。
  */
 function pageContextOf(
   id: number,

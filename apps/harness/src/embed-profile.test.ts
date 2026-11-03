@@ -3,7 +3,7 @@
  * `/embed/threads/…`，跟獨立頁面同一台 serve。
  *
  * 每一條拒絕各一條測試，拿掉就紅；設定檔綁在 thread 上那兩條（嵌入連線不准接手、從獨立頁打開仍照嵌入版組）也量重啟之後。
- * MCP 工具照那一列的 `approval`（D171）的那一條在最後，接 [`mcp-fixture-server.ts`](./mcp-fixture-server.ts)。
+ * MCP 工具照那一列的 `approval`（#1622；#1827 D171）的那一條在最後，接 [`mcp-fixture-server.ts`](./mcp-fixture-server.ts)。
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -309,7 +309,7 @@ describe('設定檔綁在 thread 上', () => {
   }, 60_000);
 });
 
-describe('MCP 工具照那一列的 approval（#1622，D171）', () => {
+describe('MCP 工具照那一列的 approval（#1622；#1827 D171）', () => {
   /** 一列 MCP：`exempt` 免問的是 `orders.search`，其餘照 `default: ask`。 */
   function mcpRow(callLog: string): string {
     return `- insert:
