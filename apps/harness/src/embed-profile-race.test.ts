@@ -1,6 +1,6 @@
 /**
  * 嵌入連線碰到不是嵌入版開的 thread（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）的兩道防線，各自量：
- * 進路由之前看設定檔（`embedRequestRefusal`），與建好之後再核一次（`threadOrError`）。
+ * 進路由之前看設定檔（`embedRequestRefusal`），與建好之後再核一次（`threadOrError`）。header 讀不了（#2385）也在第一道就拒。
  *
  * 走產品的線那幾條在 `embed-profile.test.ts`；第二道只在並行建同一個新 id 時才走得到，serve 排不出那個順序，所以這一檔用
  * 真的 wire handler、`storedProfile` 與 `createAgent` 換成可控的閘，同 `thread-capacity.test.ts`。
@@ -73,6 +73,17 @@ describe('嵌入連線碰非嵌入版的 thread（#2367）', () => {
     expect(await history(handler, 'f1', EMBED_PATH_PREFIX)).toMatchObject({
       type: 'error',
       error: THREAD_NOT_EMBEDDED,
+    });
+    expect(built).toEqual([]);
+  });
+
+  it('header 讀不了：進路由前就拒，回建不起來的碼，不為它建 agent（#2385）', async () => {
+    const { handler, built } = rig(async () => {
+      throw new Error('header 壞了');
+    });
+    expect(await history(handler, 'b1', EMBED_PATH_PREFIX)).toMatchObject({
+      type: 'error',
+      error: 'unknown_error',
     });
     expect(built).toEqual([]);
   });

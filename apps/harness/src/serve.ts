@@ -1162,7 +1162,7 @@ async function startServer(
 
   /**
    * 冷讀一條會話的 header（`open(id, 'read')`：不拿租約、不寫檔）；**只吞「找不到」**（回 `undefined`），其他讀不了的原樣拋，
-   * 不吞成別的意思。子代理會話閘（#1544）的兩個入口共用：`createAgent` 的第一道、`run.cancel` 的檢查。
+   * 不吞成別的意思。子代理會話閘（#1544）的兩個入口（`createAgent` 的第一道、`run.cancel` 的檢查）與嵌入連線的 `storedProfile`（#2367）共用。
    */
   const coldSessionHeader = async (threadId: string): Promise<StoredSessionHeader | undefined> => {
     if (sessionStore === undefined) return undefined;
@@ -1299,11 +1299,11 @@ async function startServer(
         return header !== undefined && isSubagentSessionHeader(header);
       },
     }),
-    // 嵌入連線碰到還沒載進記憶體的 thread 時問這一支（#2367）：只冷讀 header。讀不了的當成不是嵌入版的，拒的方向。
+    // 嵌入連線碰到還沒載進記憶體的 thread 時問這一支（#2367）：只冷讀 header。讀不了的照拋，handler 回跟獨立頁面一樣的碼（#2385）。
     storedProfile: async (threadId: string) => {
-      const header = await coldSessionHeader(threadId).catch(() => null);
+      const header = await coldSessionHeader(threadId).catch(noteRefusedLog(threadId));
       if (header === undefined) return undefined;
-      return header?.profile === 'embed' ? 'embed' : 'full';
+      return header.profile === 'embed' ? 'embed' : 'full';
     },
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string, fork?: ThreadForkSeed, requested?: ThreadProfile) => {
