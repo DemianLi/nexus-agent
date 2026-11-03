@@ -58,6 +58,7 @@ import {
 import type {
   DerivedConversation,
   HistoryShadowKind,
+  HistorySource,
   PluginEntry,
   SessionEvent,
 } from '@nexus/core';
@@ -546,7 +547,8 @@ export interface Run {
   readonly bodies: Body[];
   readonly mainBodies: Body[];
   /**
-   * 影子比對（#2355）的計數：夾具一律開 `shadow`。組裝點與 serve 兩條路徑有；CLI 數不到，只收得到不同的那幾行（{@link Run.shadowLines}）。
+   * 影子比對（#2355）的計數：這一次跑的是 `shadow` 時，組裝點與 serve 兩條路徑有；CLI 數不到，只收得到不同的那幾行（{@link Run.shadowLines}）。
+   * `state`、`log` 沒有比對，兩格都不給。
    */
   readonly shadow?: ShadowCounts;
   /** CLI 印在標準錯誤的 `[歷史比對]` 那幾行。 */
@@ -556,8 +558,19 @@ export interface Run {
 /** 影子比對各類別的次數。 */
 export type ShadowCounts = Readonly<Record<HistoryShadowKind, number>>;
 
-/** 夾具疊在每一份 patch 上的那一列：開影子比對（#2355），比對結果不寫進會話日誌，所以不影響任何一份日誌的比對。 */
-export const HISTORY_SHADOW_PATCH_ROWS = '- id: history-source\n  config:\n    source: shadow\n';
+/**
+ * 夾具跑哪一種歷史來源（#2355）：預設 `shadow`；環境變數 `NEXUS_LDH_HISTORY_SOURCE=log` 時改跑 `log`，同一套場景再跑一次
+ * （`log-derived-history.log.test.ts` 與 `log-derived-history.agents.log.test.ts` 兩份入口）。兩種都不寫進會話日誌，所以不影響任何一份日誌的比對。
+ */
+export const HISTORY_SOURCE_UNDER_TEST: 'shadow' | 'log' =
+  process.env['NEXUS_LDH_HISTORY_SOURCE'] === 'log' ? 'log' : 'shadow';
+
+/** 夾具疊在每一份 patch 上的那一列：{@link HISTORY_SOURCE_UNDER_TEST}。 */
+export const HISTORY_SOURCE_PATCH_ROWS = `- id: history-source\n  config:\n    source: ${HISTORY_SOURCE_UNDER_TEST}\n`;
+
+/** `log` 時沒有比對，計數不交出去。 */
+const shadowOnly = <T>(value: T): T | undefined =>
+  HISTORY_SOURCE_UNDER_TEST === 'shadow' ? value : undefined;
 
 /** 幾份計數加起來（serve 每一段是一台、各一份）。 */
 export function addShadowCounts(counts: readonly ShadowCounts[]): ShadowCounts {
@@ -569,13 +582,18 @@ export function addShadowCounts(counts: readonly ShadowCounts[]): ShadowCounts {
 const finish = (
   events: SessionEvent[],
   bodies: Body[],
-  shadow: Pick<Run, 'shadow' | 'shadowLines'> = {},
-): Run => ({
-  events,
-  bodies,
-  mainBodies: bodies.filter(hasTools),
-  ...shadow,
-});
+  shadow: { readonly shadow?: ShadowCounts; readonly shadowLines?: readonly string[] } = {},
+): Run => {
+  const counts = shadowOnly(shadow.shadow);
+  const lines = shadowOnly(shadow.shadowLines);
+  return {
+    events,
+    bodies,
+    mainBodies: bodies.filter(hasTools),
+    ...(counts !== undefined && { shadow: counts }),
+    ...(lines !== undefined && { shadowLines: lines }),
+  };
+};
 
 /** 一份落了盤的會話：讀取接縫交出來的 id 與日誌路徑，加上逐行解開的事件。 */
 interface SessionOnDisk {
@@ -633,25 +651,28 @@ export function liveModelPatch(
   };
   // `time-context` 關掉：兩次跑（不重啟與重啟）要逐位元組相同，而讀數帶牆鐘秒數（#1625，見 `withoutTimeContext`）。
   const off = options.timeContext === true ? '' : TIME_CONTEXT_OFF_PATCH_ROWS;
-  return `${stringify([row])}${off}${HISTORY_SHADOW_PATCH_ROWS}${extra}\n`;
+  return `${stringify([row])}${off}${HISTORY_SOURCE_PATCH_ROWS}${extra}\n`;
 }
 
 /**
  * 組裝點路徑：`createNexusAgent` + `runRepl`，非串流，日誌從記憶體裡的 `SessionRegistry` 取。
  * 呼叫端要自己用 `vi.stubEnv` 之類保證不碰真環境；這條路徑不讀金鑰。
+ *
+ * @param historySource - 省略就是 {@link HISTORY_SOURCE_UNDER_TEST}；給了就跑那一種（`state` 對 `log` 的位元組對照用）。
  */
 export async function runAssembly(
   lines: string,
   script: Script,
   plugins: readonly PluginEntry[],
   summarization?: CreateNexusAgentOptions['summarization'],
+  historySource: HistorySource = HISTORY_SOURCE_UNDER_TEST,
 ): Promise<Run> {
   const upstream = await fakeEndpoint(script, false);
   const root = await mkdtemp(join(tmpdir(), 'nexus-lh-'));
   await writeFile(join(root, 'AGENTS.md'), '使用者的代號是胡桃。');
   const historyShadow = createHistoryShadowTally();
   const { agent, commands, attachSession, dispose } = await createNexusAgent({
-    historySource: 'shadow',
+    historySource,
     historyShadow,
     model: model(upstream.baseURL),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
@@ -677,7 +698,11 @@ export async function runAssembly(
     await dispose();
     await upstream.close();
   }
-  return finish([...sessions.root.events], upstream.bodies, { shadow: historyShadow.counts() });
+  return finish(
+    [...sessions.root.events],
+    upstream.bodies,
+    historySource === 'shadow' ? { shadow: historyShadow.counts() } : {},
+  );
 }
 
 /** 出貨路徑之一：`runCli --live`（出貨清單、出貨設定、真的落盤），日誌從 root（`cli`）那一份讀回。 */
@@ -837,8 +862,8 @@ export interface DriverRun {
   readonly logs: LogFile[];
   readonly bodies: Body[];
   readonly mainBodies: Body[];
-  /** 每一台 serve 的影子比對計數加起來，同 {@link Run.shadow}。只比 root 的呼叫。 */
-  readonly shadow: ShadowCounts;
+  /** 每一台 serve 的影子比對計數加起來，同 {@link Run.shadow}。只比 root 的呼叫；`log` 時沒有。 */
+  readonly shadow?: ShadowCounts;
 }
 
 /** root 的日誌：id 沒有 `/`。 */
@@ -937,6 +962,6 @@ export async function runServeDriver(
     logs: await readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),
-    shadow: addShadowCounts(shadow),
+    ...(HISTORY_SOURCE_UNDER_TEST === 'shadow' && { shadow: addShadowCounts(shadow) }),
   };
 }

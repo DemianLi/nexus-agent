@@ -2040,7 +2040,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `turn-timeout`              | `serve` 上一輪的時鐘上限，到點照停止鈕中止；**出廠 30 分鐘**，見〈執行上限〉                                                    | 有（一格）                       | 關得掉（關掉就是不限）   |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
-| `history-source`            | 模型歷史從哪裡來：`state`（出廠）照舊；`shadow` 照舊送 state，另拿從會話日誌推出來的歷史比一次，見下面那一段                        | 有（一格）                       | 關得掉（＝`state`）      |
+| `history-source`            | 模型歷史從哪裡來：`state`（出廠）照舊；`shadow` 照舊送 state，另拿從會話日誌推出來的歷史比一次；`log` 改送從會話日誌推出來的，見下面那一段 | 有（一格）                       | 關得掉（＝`state`）      |
 
 **從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
 它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
@@ -2067,10 +2067,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
-- **`history-source` 也在組裝期讀**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），同形；CLI 的 `--history-source <state|shadow>` 贏過這一列。
+- **`history-source` 也在組裝期讀**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），同形；CLI 的 `--history-source <state|shadow|log>` 贏過這一列。
   寫 `shadow` 時送給模型的內容不變，只在 root 每次呼叫模型之前，拿從會話日誌推出來的歷史跟這次的請求比一次：
   `serve` 上差異寫到伺服器日誌的 `history-shadow` logger（debug 等級），CLI 上印成 `[歷史比對] <類別>：<細節>` 到 stderr；
   兩邊都不寫進會話日誌。類別有 `match`、`image-offload-after-start`（相同，但圖片卸載落在這次呼叫開始之後）、`patch-closer`（只差補結的句子）、`other`。
+  寫 `log` 時改送從會話日誌推出來的那一串：日誌上沒有的不會送出去；找不到日誌或推不出來時，那一輪以錯誤結束，不退回 state。
+  跟 `state` 唯一預期的差別是補結的句子：沒有回應的工具呼叫，模型看到的是會話日誌上的那一句，不是基座的 "was cancelled"。
   關掉這一列跟寫 `state` 同一個結果，所以它不在下面「關不掉」的那幾列裡。
 
 **這十列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）

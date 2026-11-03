@@ -251,7 +251,6 @@ describe('量具自檢：每一種寫法都抓得到，沒讀的不算', () => {
 const ALLOWED: Readonly<Record<string, number>> = {
   'apps/harness/src/pre-step-middleware.ts › createPreStepMiddleware 掛鉤的 state 參數': 1,
   'apps/harness/src/thread-pump.ts › ThreadPump getState()': 2,
-  'packages/nexus-core/src/invalid-tool-args.ts › rawArgumentsOf request.state': 1,
   'packages/nexus-core/src/patch-tool-calls.ts › createPatchToolCallsMiddleware 掛鉤的 state 參數': 1,
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,
   // 轉交基座的 skills 中介層；基座在這裡拿 state 讀的是 `skillsMetadata`，不讀訊息（設計 §四 W9）。
@@ -264,8 +263,8 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'packages/nexus-core/src/summarization.ts › withTokenBudget request.state': 1,
   'packages/nexus-core/src/summarization.ts › withTokenWarmup request.state': 1,
   'packages/nexus-core/src/summary-catch-up.ts › withSummaryCatchUp request.state': 2,
-  'packages/nexus-core/src/tool-barrier.ts › owningMessage request.state': 1,
-  'packages/nexus-core/src/turn-conclusion.ts › batchSizeOf request.state': 1,
+  // 屏障、`returnDirect` 的收尾、解不開參數的原字串三處共用；`history-source=log` 的 root 讀日誌，其餘讀這裡（#2355）。
+  'packages/nexus-core/src/tool-call-owner.ts › toolCallOwner request.state': 1,
 };
 
 const SOURCE_ROOTS = ['apps/harness/src', 'packages'] as const;

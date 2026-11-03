@@ -27,8 +27,8 @@
  *   `additional_kwargs.tool_calls` 與 content block，原字串以 callId 為鍵記在**同一則訊息**的
  *   `additional_kwargs`（{@link INVALID_ARGUMENTS_KEY}）上。從此 ToolNode 照常派發，下一輪回送的是
  *   `{}`，後面跟著那則 tool 訊息。
- * - **`wrapToolCall`** 從 `request.state.messages` 裡找到帶這個 callId 的那則 AI 訊息
- *   （{@link rawArgumentsOf}），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
+ * - **`wrapToolCall`** 找到帶這個 callId 的那則 AI 訊息
+ *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
  *   樁不碰工具本體，回 {@link INVALID_ARGUMENTS_REFUSAL}、碼 `INVALID_ARGS`。
  *
  * **`INVALID_ARGS` 從這裡起有兩個生產者**：這一顆（JSON 都不合格）與圍堵認出的 schema 不合
@@ -87,8 +87,8 @@
  * 模型節點不會因為 resume 重跑，所以改寫只發生一次；停在核准點再續接時，拒不拒要靠上次留下的記號。
  * 記號放在**那則 AI 訊息自己身上**，所以它活得跟那則訊息一樣久：進 checkpointer、進會話日誌
  * （`assistant/message`，`fromLoggedMessage` 推回來還在），不需要另一份以 callId 為鍵、只活在
- * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都從 `request.state.messages` 倒著找帶這個 callId
- * 的那則（{@link rawArgumentsOf}）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
+ * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都經 `toolCallOwner` 倒著找帶這個 callId
+ * 的那則（{@link rawArgumentsOf}；`log` 的 root 讀日誌的 `assistant/message`，其餘讀 `request.state.messages`）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
  * 新的呼叫在另一則訊息上，找到的就是另一個答案。
  *
  * 照 dsh 的方向（`tool-calls.ts:104-111`：解不開就把原字串留在呼叫資料本身，行程內沒有另存一份）。
@@ -122,6 +122,8 @@ import {
   UNKNOWN_TOOL,
 } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
+import type { SessionLookup } from './registry.js';
+import { toolCallOwner } from './tool-call-owner.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
 export const INVALID_TOOL_ARGS_MIDDLEWARE_NAME = 'nexusInvalidToolArgs';
@@ -173,31 +175,28 @@ function markUnknownTool<T>(result: T): T {
 export const INVALID_ARGUMENTS_KEY = 'nexusInvalidArguments';
 
 /**
- * 這一次呼叫的原字串：解不開的那顆有，其餘（含沒有 `state`、找不到那則訊息）是 `undefined`。
+ * 這一次呼叫的原字串：解不開的那顆有，其餘（含讀 state 時沒有 `state`、找不到那則訊息）是 `undefined`。
  *
  * **倒著找、認 callId**：ToolNode 執行時那則訊息就在尾巴附近，供應商重用 callId 時最近的那則才是
  * 這一次。記號查不到時是 `undefined`，**不是**「合法」的證明——呼叫端（`wrapToolCall`）照常放行。
  *
- * @param request - `wrapToolCall` 收到的請求，只讀 `toolCall.id` 與 `state.messages`。
+ * @param request - `wrapToolCall` 收到的請求，只讀 `toolCall.id`、`state.messages` 與 `runtime.configurable`。
+ * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌找那則訊息（{@link toolCallOwner}）。省略就只讀 state。
  * @returns 模型吐的原字串，或 `undefined`。
+ * @throws `history-source=log` 時找不到這次呼叫的日誌（見 {@link toolCallOwner}）；不退回 state。
  */
-export function rawArgumentsOf(request: {
-  readonly toolCall: { readonly id?: string };
-  readonly state?: unknown;
-}): string | undefined {
-  const callId = request.toolCall.id;
-  if (callId === undefined || callId === '') return undefined;
-  const messages = (request.state as { messages?: unknown } | undefined)?.messages;
-  if (!Array.isArray(messages)) return undefined;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message = messages[at] as Partial<AIMessage> | undefined;
-    if (!(message?.tool_calls ?? []).some((call) => call.id === callId)) continue;
-    const marks = message?.additional_kwargs?.[INVALID_ARGUMENTS_KEY] as
-      Record<string, unknown> | undefined;
-    const raw = marks?.[callId];
-    return typeof raw === 'string' ? raw : undefined;
-  }
-  return undefined;
+export function rawArgumentsOf(
+  request: {
+    readonly toolCall: { readonly id?: string };
+    readonly state?: unknown;
+    readonly runtime?: { readonly configurable?: unknown };
+  },
+  sessions?: { forCall(config: unknown): SessionLookup },
+): string | undefined {
+  const marks = toolCallOwner(request, sessions)?.additional_kwargs?.[INVALID_ARGUMENTS_KEY] as
+    Record<string, unknown> | undefined;
+  const raw = marks?.[request.toolCall.id ?? ''];
+  return typeof raw === 'string' ? raw : undefined;
 }
 
 /** 一顆解不開的呼叫。 */
@@ -296,9 +295,12 @@ function refusingStub(name: string): unknown {
 /**
  * 造這顆 middleware。
  *
+ * @param sessions - 那條 thread 的 `registry.sessions`，見 {@link rawArgumentsOf}。
  * @returns 要排在每一層內側（`nexusMaxTokens` 之外）的 middleware。
  */
-export function createInvalidToolArgsMiddleware(): AgentMiddleware {
+export function createInvalidToolArgsMiddleware(sessions?: {
+  forCall(config: unknown): SessionLookup;
+}): AgentMiddleware {
   return createMiddleware({
     name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
@@ -309,7 +311,7 @@ export function createInvalidToolArgsMiddleware(): AgentMiddleware {
       // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
       // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
       if (request.tool === undefined) return markUnknownTool(await handler(request));
-      const raw = rawArgumentsOf(request);
+      const raw = rawArgumentsOf(request, sessions);
       if (raw === undefined) return handler(request);
       // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
       // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`

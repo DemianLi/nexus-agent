@@ -1,5 +1,5 @@
 /**
- * 影子比對（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）的單元測試：投影、這次呼叫要推的那一段、分類、計數與 middleware。
+ * 影子比對與 `log`（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）的單元測試：投影、這次呼叫要推的那一段、分類、計數與兩顆 middleware。
  * 產品路徑上「沒有一次落在 other」的驗收在 `apps/harness` 的 `log-derived-history.test.ts` 與 `.agents.test.ts`；
  * 兩個分開數的類別在 `history-shadow-scenarios.test.ts`。
  */
@@ -11,6 +11,7 @@ import { TOOL_NOT_STARTED_TEXT } from './conversation-replay.js';
 import {
   compareHistoryWithLog,
   compareProjections,
+  createHistoryFromLogMiddleware,
   createHistoryShadowMiddleware,
   createHistoryShadowTally,
   eventsForModelCall,
@@ -333,5 +334,52 @@ describe('createHistoryShadowMiddleware', () => {
       () => undefined,
     );
     expect(tally.counts()).toMatchObject({ match: 2, other: 0 });
+  });
+});
+
+describe('createHistoryFromLogMiddleware', () => {
+  type Hook = (request: unknown, handler: (request: unknown) => unknown) => unknown;
+  const hookOf = (sessions: { forCall(): SessionLookup }) =>
+    (createHistoryFromLogMiddleware({ sessions }) as unknown as { wrapModelCall: Hook })
+      .wrapModelCall;
+
+  it('換掉 request.messages，其餘原樣：送出去的是日誌推出來的那一串', async () => {
+    const log = secondCallOpen();
+    const hook = hookOf({ forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) });
+    const request = {
+      messages: [new HumanMessage('state 裡的另一串')],
+      runtime: { configurable: {} },
+      model: 'm',
+    };
+    const handler = vi.fn((_request: unknown) => 'reply');
+    expect(await hook(request, handler)).toBe('reply');
+    const sent = handler.mock.calls[0]![0] as typeof request;
+    expect(sent.model).toBe('m');
+    expect(sent.runtime).toBe(request.runtime);
+    expect(sent.messages.map(wireProjection)).toEqual(stateOfSecondCall().map(wireProjection));
+  });
+
+  it('找不到日誌、推不出來：拋，不退回 state', async () => {
+    const handler = vi.fn((_request: unknown) => 'reply');
+    expect(() =>
+      hookOf({ forCall: () => ({ kind: 'unknown-caller' }) as SessionLookup })(
+        { messages: [new HumanMessage('甲')] },
+        handler,
+      ),
+    ).toThrow(/找不到這次模型呼叫的日誌（unknown-caller）/u);
+    const broken = new SessionLog('broken');
+    broken.append('turn/start', { kind: 'message', text: '甲' });
+    broken.append('model/start', {});
+    broken.append('model/end', {});
+    broken.append('turn/end', {});
+    broken.append('turn/start', { kind: 'message', text: '乙' });
+    broken.append('model/start', {});
+    expect(() =>
+      hookOf({ forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log: broken }) })(
+        { messages: [new HumanMessage('甲')] },
+        handler,
+      ),
+    ).toThrow(/模型歷史從日誌推不出來/u);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

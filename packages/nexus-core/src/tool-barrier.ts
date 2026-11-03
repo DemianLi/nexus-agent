@@ -42,6 +42,8 @@
 import { isGraphBubbleUp, GraphInterrupt } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { SessionLookup } from './registry.js';
+import { toolCallOwner } from './tool-call-owner.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 
 /** 工具 `metadata` 上宣告「同一步可以跟別顆重疊」的鍵。只有剛好是 `true` 才算（fail-closed，同 dsh）。 */
@@ -116,23 +118,15 @@ interface ToolBarrierRequest {
   readonly runtime?: { readonly configurable?: unknown };
 }
 
-/** 找出這顆呼叫屬於的那則 AI 訊息：倒著找帶這個呼叫 id 的。 */
+/** 找出這顆呼叫屬於的那則 AI 訊息（{@link toolCallOwner}）：那一步的鍵與每一顆的 id。 */
 function owningMessage(
   request: ToolBarrierRequest,
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
 ): { readonly key: string; readonly ids: string[] } | undefined {
-  const callId = request.toolCall.id;
-  if (callId === undefined || callId === '') return undefined;
-  const messages = (request.state as { messages?: unknown } | undefined)?.messages;
-  if (!Array.isArray(messages)) return undefined;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message = messages[at] as
-      { id?: string; tool_calls?: readonly { id?: string }[] } | undefined;
-    const calls = message?.tool_calls ?? [];
-    if (!calls.some((call) => call.id === callId)) continue;
-    const ids = calls.map((call) => call.id ?? '');
-    return { key: message?.id ?? ids.join('|'), ids };
-  }
-  return undefined;
+  const message = toolCallOwner(request, sessions);
+  if (message === undefined) return undefined;
+  const ids = message.tool_calls.map((call) => call.id ?? '');
+  return { key: message.id ?? ids.join('|'), ids };
 }
 
 /**
@@ -143,11 +137,13 @@ function owningMessage(
  *   （[#711](https://github.com/DemianLi/nexus-agent/issues/711) 收尾）：dsh 的 `maxParallelToolCalls: 1` 就是串行
  *   （`agent-loop/README.zh.md:48`），而 LangGraph 的 `maxConcurrency: 1` 會把第一顆之後的呼叫靜靜丟掉（見
  *   `settings/agent-loop.ts` 檔頭偏離 0），所以串行改由這道屏障承擔，`maxConcurrency` 另外墊在 2 以上。
+ * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌認這一步（{@link toolCallOwner}），找不到這次呼叫的日誌時 `wrapToolCall` 就拋。省略就只讀 state。
  * @returns 可以放進 middleware 陣列、排在圍堵外面的實例。
  */
 export function createToolBarrierMiddleware(
   safeNames: ReadonlySet<string> = DEFAULT_PARALLEL_SAFE_TOOLS,
   serial = false,
+  sessions?: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
   const steps = new Map<string, StepRecord>();
 
@@ -179,7 +175,7 @@ export function createToolBarrierMiddleware(
   return createMiddleware({
     name: TOOL_BARRIER_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
-      const owner = owningMessage(request as unknown as ToolBarrierRequest);
+      const owner = owningMessage(request as unknown as ToolBarrierRequest, sessions);
       // 一步只有一顆，或認不出屬於哪一步：沒有屏障可言，原樣放行。
       if (owner === undefined || owner.ids.length < 2) return handler(request);
       const at = owner.ids.indexOf(request.toolCall.id ?? '');

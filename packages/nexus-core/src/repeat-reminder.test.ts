@@ -1,6 +1,7 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
+import { markHistoryFromLog } from './history-shadow.js';
 import type { SessionLookup } from './registry.js';
 import {
   createRepeatReminder,
@@ -425,6 +426,23 @@ describe('記不進去：這一步失敗', () => {
     expect(update?.messages).toHaveLength(1);
     expect(log.events.map((event) => event.type)).toEqual(['user/message']);
   });
+
+  it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(
+    '查找是 %s：照送不記；history-source=log 時拋（#2355）',
+    (kind) => {
+      const sessions = { forCall: (): SessionLookup => ({ kind }) as SessionLookup };
+      const hook = (
+        createRepeatReminder(resolveRepeatReminderSettings(), sessions) as unknown as {
+          beforeModel: Hook;
+        }
+      ).beforeModel;
+      expect(hook({ messages: repeated() }, { configurable: {} })?.messages).toHaveLength(1);
+      markHistoryFromLog(sessions);
+      expect(() => hook({ messages: repeated() }, { configurable: {} })).toThrow(
+        `重複提醒找不到這次呼叫的日誌（${kind}）`,
+      );
+    },
+  );
 
   it('通知來源拋的錯不被吞：原樣往外拋', () => {
     const log = new SessionLog('n');

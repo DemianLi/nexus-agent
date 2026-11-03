@@ -464,7 +464,7 @@ export function createContainmentMiddleware(
       // 的東西：模型等的就是這一段。
       const startedAt = Date.now();
       // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
-      const raw = rawArgumentsOf(request);
+      const raw = rawArgumentsOf(request, sessions);
       // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
       const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
       const settle = recorded?.settle;
@@ -500,7 +500,7 @@ export function createContainmentMiddleware(
             [],
           );
           // 拋錯翻出來的訊息沒有「收這一輪」的標記（本體沒走到那一行）：`returnDirect` 工具的這一則照常回頭叫模型。
-          return settleTurnConclusion(request, message, false);
+          return settleTurnConclusion(request, message, false, sessions);
         }
         const { result, meta, concluded } = ran;
         // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
@@ -516,7 +516,7 @@ export function createContainmentMiddleware(
           meta,
         );
         // 日誌記的是上面那一則（帶 `name`）；交給基座的這一則，`returnDirect` 工具沒標記就拿掉 `name`（見 `turn-conclusion.ts`）。
-        return settleTurnConclusion(request, result, concluded);
+        return settleTurnConclusion(request, result, concluded, sessions);
       } finally {
         // 子代理出生在 `handler` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
         recorded?.release();

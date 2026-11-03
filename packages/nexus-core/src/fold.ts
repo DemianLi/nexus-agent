@@ -76,8 +76,12 @@ import { createEmptyResponseMiddleware } from './empty-response.js';
 import { createStreamRetryMiddleware } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
 import { createRequestSnapshotRecorder } from './request-snapshot.js';
-import { createHistoryShadowMiddleware } from './history-shadow.js';
-import type { HistoryShadowOptions } from './history-shadow.js';
+import {
+  createHistoryFromLogMiddleware,
+  createHistoryShadowMiddleware,
+  markHistoryFromLog,
+} from './history-shadow.js';
+import type { HistoryFromLogOptions, HistoryShadowOptions } from './history-shadow.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import {
   createSessionCheckpointMiddleware,
@@ -485,9 +489,14 @@ export interface FoldOptions {
 
   /**
    * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）。省略或 `state`：不掛比對。
-   * `shadow`：送的仍是 state，另在 root 緊貼請求快照外側拿從日誌推出來的歷史比一次，結果交給 `sink`，不寫進會話日誌。見 {@link ./history-shadow.ts}。
+   * `shadow`：送的仍是 state，另在 root 緊貼請求快照外側拿從日誌推出來的歷史比一次，結果交給 `sink`，不寫進會話日誌。
+   * `log`：在同一格拿從日誌推出來的歷史換掉 `request.messages`，找不到日誌、推不出來就拋；另把 `registry.sessions` 標成 `log`，
+   * root 的工具讀者與 pre-step 從日誌讀，記不進日誌時拋。見 {@link ./history-shadow.ts}。
    */
-  history?: { readonly source: 'state' } | ({ readonly source: 'shadow' } & HistoryShadowOptions);
+  history?:
+    | { readonly source: 'state' }
+    | ({ readonly source: 'shadow' } & HistoryShadowOptions)
+    | ({ readonly source: 'log' } & HistoryFromLogOptions);
 }
 
 /**
@@ -547,6 +556,8 @@ export function foldRegistry(
   options: FoldOptions = {},
 ): FoldedAgentParams {
   assertScopesHaveSubAgents(registry);
+  // 記進日誌的那幾顆在載入插件時就建好了；它們與工具讀者（`toolCallOwner`）都從這份 `sessions` 查是不是 `log`。見 {@link ./history-shadow.ts}。
+  if (options.history?.source === 'log') markHistoryFromLog(registry.sessions);
 
   const toolOrder = options.toolOrder;
   const globalTools = registry.tools.effective();
@@ -565,9 +576,9 @@ export function foldRegistry(
   }
 
   const permissions = foldPermissions(registry);
-  // 解不開的參數的原字串記在那則 AI 訊息上，三個讀者（圍堵、核准閘門、最內層那顆）各自從
-  // `request.state` 讀，沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
-  const invalidToolArgs = createInvalidToolArgsMiddleware();
+  // 解不開的參數的原字串記在那則 AI 訊息上，三個讀者（圍堵、核准閘門、最內層那顆）各自經
+  // `toolCallOwner` 找那則訊息（`log` 的 root 讀日誌，其餘讀 `request.state`），沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
+  const invalidToolArgs = createInvalidToolArgsMiddleware(registry.sessions);
   // **撞到輸出上限（#433）也是一份載體、一顆實例走遍 root 與每個子代理**：子代理的模型呼叫記、
   // 父圖的 `task` 取，得看到同一份。見 {@link ./max-tokens.ts}。
   const maxTokens = createMaxTokensMiddleware(createMaxTokensCarrier());
@@ -774,7 +785,7 @@ export function foldRegistry(
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
     // `tool/call`（resume 重跑會記第二顆）。**各建一份**：紀錄在閉包裡，root 與每個子代理各有各的步。見 {@link ./tool-barrier.ts}。
     perAgent('toolBarrier', () =>
-      createToolBarrierMiddleware(undefined, options.serialToolCalls === true),
+      createToolBarrierMiddleware(undefined, options.serialToolCalls === true, registry.sessions),
     ),
     // 圍堵在第 0 格：它要包住下面每一個，包含子代理 `spec.middleware` 自己帶的那些。
     shared('containment', containment),
@@ -883,12 +894,21 @@ export function foldRegistry(
           : createImageOffloadRecoveryMiddleware({ sessions: registry.sessions }),
       ),
     ),
-    // 影子比對（#2355）：只折進 root，排在請求快照外面，看到的是摘要、參數截斷、補懸空呼叫都套過之後的那一串。見 {@link ./history-shadow.ts}。
+    // 影子比對與歷史從日誌推（#2355）：只折進 root，排在請求快照外面，看到的是摘要、參數截斷、補懸空呼叫都套過之後的那一串。
+    // 兩格最多掛一顆。見 {@link ./history-shadow.ts}。
     rootOnly(
       'historyShadow',
       same(
         options.history?.source === 'shadow'
           ? createHistoryShadowMiddleware({ ...options.history, sessions: registry.sessions })
+          : undefined,
+      ),
+    ),
+    rootOnly(
+      'historyFromLog',
+      same(
+        options.history?.source === 'log'
+          ? createHistoryFromLogMiddleware({ ...options.history, sessions: registry.sessions })
           : undefined,
       ),
     ),
