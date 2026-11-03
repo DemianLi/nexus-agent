@@ -62,6 +62,7 @@ import {
   currentMessageFeedback,
   interruptedTurnClosers,
   isSubagentSessionHeader,
+  pageContextOfBlock,
   recordedApprovalPolicy,
   replayConversation,
 } from '../../packages/nexus-core/src/index.ts';
@@ -95,7 +96,8 @@ type Trigger =
   | 'two-file-layout'
   | 'client-time-zone'
   | 'image-offload'
-  | 'subagent-header';
+  | 'subagent-header'
+  | 'embed-profile';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -110,6 +112,11 @@ interface Target {
   /** 這一版有沒有出過貨。沒給就看 `rev`：tag 是出過貨的。 */
   readonly released?: boolean;
 }
+
+/**
+ * 格式 53 的寫入器（#2367）。53 還沒出貨，釘的是不在 develop 上的分支 commit，同 `v49`；出貨前凍結時要改釘 develop 上的 commit，同 `v52`。
+ */
+const V53_WRITER = '771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3';
 
 const TARGETS: readonly Target[] = [
   { name: 'v2', rev: 'v0.4.6', version: 2, ownReplay: false },
@@ -181,6 +188,15 @@ const TARGETS: readonly Target[] = [
     rev: '7eb09103e1e094b51ff9b09e43b56da1b6d26036',
     version: 52,
     triggers: ['image-offload'],
+    ownReplay: true,
+    released: false,
+  },
+  // CLI 一輪碰不到嵌入版：header 的 `profile`、`turn/start` 與佇列項的 `context` 由觸發補寫。
+  {
+    name: 'v53',
+    rev: V53_WRITER,
+    version: 53,
+    triggers: ['embed-profile'],
     ownReplay: true,
     released: false,
   },
@@ -322,6 +338,20 @@ function inTree(tree: string, scratch: string, script: string, args: readonly st
 }
 
 /** 今天的讀方的推法，`expected.json` 裡標 `today`。 */
+/** 今天推回的對話歷史裡，每一則人話附的畫面情境（`label`）；沒附的是 `null`。 */
+function humanPageContexts(events: readonly SessionEvent[]): (string | null)[] {
+  const replay = replayConversation(events);
+  if (replay.kind !== 'replayed') throw new Error(`推不回對話歷史：${replay.reason}`);
+  return replay.messages
+    .filter((message) => message.getType() === 'human')
+    .map((message) =>
+      Array.isArray(message.content)
+        ? (message.content.map(pageContextOfBlock).find((context) => context !== undefined)
+            ?.label ?? null)
+        : null,
+    );
+}
+
 function todayReplay(events: readonly SessionEvent[]): unknown {
   const replay = replayConversation(events);
   return replay.kind === 'replayed'
@@ -501,6 +531,16 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             session: 'image-offload',
             computedBy: 'today',
             imageOffloadCalls: imageOffloadCalls(readEvents(directory, 'image-offload')),
+          },
+        ];
+      case 'embed-profile':
+        return [
+          {
+            edge: 53,
+            session: 'embed-profile',
+            computedBy: 'today',
+            profile: readRawHeader<StoredSessionHeader>(directory, 'embed-profile').profile,
+            pageContexts: humanPageContexts(readEvents(directory, 'embed-profile')),
           },
         ];
       case 'subagent-header': {

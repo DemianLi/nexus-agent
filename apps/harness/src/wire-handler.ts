@@ -114,6 +114,7 @@ import {
   SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
+  THREAD_NOT_EMBEDDED,
   THREAD_IS_SUBAGENT,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
@@ -135,6 +136,7 @@ import type {
   ProjectionRegistrationPoint,
   FeedbackCategory,
   FeedbackService,
+  PageContextRef,
   SessionEvent,
   SessionLog,
   SessionRegistry,
@@ -147,6 +149,7 @@ import {
   FeedbackDurabilityUnavailableError,
   FeedbackLogCorruptionError,
   forkBoundaryOf,
+  PAGE_CONTEXT_LABEL_MAX,
   ProjectionDetailError,
   SessionAlreadyOwnedError,
   SessionLogTooLargeError,
@@ -203,6 +206,8 @@ import type { ThreadTitleLimits } from './session-title.js';
 import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
 import type { LiveThread, ThreadSearchErrorKind } from './thread-search.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
+import { EMBED_COMMAND_METHODS, EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './embed-profile.js';
+import type { ThreadProfile } from './embed-profile.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -280,6 +285,11 @@ export interface ThreadAgent {
    * **缺席就是這個組裝沒有清單**（手搭的組裝）：`subagent.list` 回 `not_supported`，`run.start` 帶 `mention` 也一樣。
    */
   readonly subagentKinds?: readonly SubagentKind[];
+  /**
+   * 這條 thread 照哪一份設定檔組的（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），選配，省略即 `full`。
+   * `embed` 的 thread 沒有斜線命令、不能點名子代理；嵌入連線只准碰 `embed` 的 thread。
+   */
+  readonly profile?: ThreadProfile;
   /**
    * 這條 thread 用 `/名字` 叫得出的技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929，`skill-catalog-wire.ts`），選配。
    * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve.ts`）一律交，沒掛 `skills` 那一列時
@@ -425,8 +435,18 @@ export interface WireHandlerOptions {
    * 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。
    *
    * @param fork - 這條是剛分叉出來的子 thread（`thread.fork`，#1580）：不讀磁碟，從這一份 seed 組裝，其餘照續接那條路。
+   * @param profile - 這條 thread 要是新的，照它組；已經落盤的照 header，分叉的照來源，不看它。
    */
-  createAgent(threadId: string, fork?: ThreadForkSeed): Promise<ThreadAgent>;
+  createAgent(
+    threadId: string,
+    fork?: ThreadForkSeed,
+    profile?: ThreadProfile,
+  ): Promise<ThreadAgent>;
+  /**
+   * 落盤的 thread 是照哪一份設定檔開的（#2367），只冷讀 header、不建 agent。磁碟上沒有它回 `undefined`。
+   * 嵌入連線碰一條還沒載進記憶體的 thread 時先問這一支，不為一條會被拒的 thread 組 agent。**缺席就是沒有落盤**：只看記憶體裡的。
+   */
+  storedProfile?(threadId: string): Promise<ThreadProfile | undefined>;
   /**
    * 冷讀一條落盤的 thread（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580) 的分叉來源；#1599 的搜尋也要用）：header 與整份事件，
    * 中斷的那一輪在記憶體裡補平（`readColdSession`）。**列表上看不到的回 `undefined`**（子代理的會話、別的 `cwd`，可見規則同列表），
@@ -1038,6 +1058,8 @@ interface ThreadState {
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
   readonly subagentKinds: readonly SubagentKind[] | undefined;
+  /** 見 {@link ThreadAgent.profile}。 */
+  readonly profile: ThreadProfile;
   /** 見 {@link ThreadAgent.skillCatalog}。 */
   readonly skillCatalog: SkillCatalog | undefined;
   readonly modelSelection: ThreadModelSelection | undefined;
@@ -1125,6 +1147,75 @@ function optional(value: unknown, check: (candidate: unknown) => boolean): boole
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string';
+
+/** 嵌入連線碰到不是嵌入版開的 thread（#2367）。 */
+function notEmbedded(id: number | null, threadId: string): Response {
+  return json(
+    errorResponse(
+      id,
+      THREAD_NOT_EMBEDDED,
+      `thread "${threadId}" 不是從嵌入的對話框開的，嵌入的對話框不能接手它；請開一條新對話`,
+    ),
+  );
+}
+
+/**
+ * 嵌入版的 thread（#2367，地圖 #2365 第 2 點）收到的命令：不管是哪一條連線送的，`/` 與 `@` 都沒有。
+ *
+ * @returns 要回的回應；`undefined` 是照常往下走。
+ */
+function embedThreadCommand(method: string, id: number, body: unknown): Response | undefined {
+  if (method === 'slash.list') {
+    const result: SlashListResult = { commands: [] };
+    return json(successResponse(id, result));
+  }
+  if (method === 'skill.list') {
+    const result: SkillListResult = { skills: [] };
+    return json(successResponse(id, result));
+  }
+  if (method === 'slash.run') {
+    return json(errorResponse(id, 'not_supported', '嵌入的對話框不支援斜線命令'));
+  }
+  if (
+    method === 'run.start' &&
+    (body as { params?: { mention?: unknown } }).params?.mention !== undefined
+  ) {
+    return json(errorResponse(id, 'not_supported', '嵌入的對話框不能點名子代理'));
+  }
+  return undefined;
+}
+
+/**
+ * `run.start` 的 `context`（#2367）：省略＝沒有；只有嵌入版開的 thread 收，其餘回 `not_supported`。`label` 要是不全是空白的字串、
+ * 不超過 {@link PAGE_CONTEXT_LABEL_MAX} 個字，`context` 也只准有 `label` 一格；不合就整句拒，不截：截掉的名字可能剛好指到另一台設備。
+ */
+function pageContextOf(
+  id: number,
+  profile: ThreadProfile,
+  raw: unknown,
+): PageContextRef | undefined | Response {
+  if (raw === undefined) return undefined;
+  if (profile !== 'embed') {
+    return json(errorResponse(id, 'not_supported', '只有嵌入的對話框能附畫面情境'));
+  }
+  const label = (raw as { label?: unknown } | null)?.label;
+  const keys = raw !== null && typeof raw === 'object' ? Object.keys(raw) : [];
+  if (
+    typeof label !== 'string' ||
+    label.trim() === '' ||
+    [...label].length > PAGE_CONTEXT_LABEL_MAX ||
+    keys.length !== 1
+  ) {
+    return json(
+      errorResponse(
+        id,
+        'invalid_argument',
+        `run.start 的 context 要是 { label }，label 為非空字串、最多 ${PAGE_CONTEXT_LABEL_MAX} 個字`,
+      ),
+    );
+  }
+  return { label };
+}
 
 /**
  * `run.start` 的 `mention`（#328 第 2 項）：省略＝沒點名；有值就要形狀合格、名字在這個組裝的子代理清單上。
@@ -1697,7 +1788,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * @param fork - 剛分叉出來的子 thread 的 seed（#1580）。id 是剛產生的，所以不會命中下面兩道；名額照算，**佔位在這個同步段**，
    *   查完名額到寫出任何東西之間不讓別人搶走（寫檔延到組裝之後第一次 flush）。
    */
-  function threadFor(threadId: string, fork?: ThreadForkSeed): Promise<ThreadState> {
+  function threadFor(
+    threadId: string,
+    fork?: ThreadForkSeed,
+    profile: ThreadProfile = 'full',
+  ): Promise<ThreadState> {
     const existing = threads.get(threadId);
     if (existing !== undefined) {
       return existing;
@@ -1708,7 +1803,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // 這時等的人在下面那道上限檢查拿到 `thread_at_capacity`，不保證等了就一定進得來。
     const retiring = closing.get(threadId);
     if (retiring !== undefined) {
-      return retiring.then(() => threadFor(threadId, fork));
+      return retiring.then(() => threadFor(threadId, fork, profile));
     }
     // **thread 數上限（#1476，保險絲第 2 級；偏離登記：產品需求超出 dsh，借 jobs-local 的准入形狀）。**
     // 順序是承重的：在 `threads.get` 沒命中之後（已在行程裡的不受影響，同一個新 id 的並行請求也在上面共用同一個 promise、
@@ -1727,7 +1822,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await (fork === undefined
-        ? options.createAgent(threadId)
+        ? profile === 'full'
+          ? options.createAgent(threadId)
+          : options.createAgent(threadId, undefined, profile)
         : options.createAgent(threadId, fork));
       // **從這裡到回傳之間拋錯，要把剛建好的 agent 收掉。** 下面說好「下一次請求該重試」，
       // 而續接的 thread 在 `createAgent` 裡就拿了寫租約——沒人收的話，重試撞上的是**自己
@@ -1943,6 +2040,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
           subagentKinds: threadAgent.subagentKinds,
+          profile: threadAgent.profile ?? 'full',
           skillCatalog: threadAgent.skillCatalog,
           modelSelection: threadAgent.modelSelection,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
@@ -2048,9 +2146,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     threadId: string,
     id: number | null,
     fork?: ThreadForkSeed,
+    profile: ThreadProfile = 'full',
   ): Promise<ThreadState | Response> {
     try {
-      return await threadFor(threadId, fork);
+      const thread = await threadFor(threadId, fork, profile);
+      // 建好之後再核一次：同一個新 id 被獨立頁面先建起來的話，嵌入連線拿到的是那一條（`threadFor` 共用同一個 promise）。
+      if (profile === 'embed' && thread.profile !== 'embed') return notEmbedded(id, threadId);
+      return thread;
     } catch (error: unknown) {
       // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
       if (error instanceof ThreadCapacityError) {
@@ -2360,6 +2462,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     threadId: string,
     body: unknown,
     signal: AbortSignal,
+    profile: ThreadProfile,
   ): Promise<Response> {
     const request = body as EventStreamRequest;
     if (typeof request !== 'object' || request === null) {
@@ -2379,7 +2482,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (channels === undefined) {
       return json(errorResponse(null, 'invalid_argument', 'channels 必須是非空的白名單子集'));
     }
-    const thread = await threadOrError(threadId, null);
+    const thread = await threadOrError(threadId, null, undefined, profile);
     if (thread instanceof Response) return thread;
     return openStream(thread.pump, threadId, channels, signal);
   }
@@ -2389,6 +2492,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     method: string,
     body: unknown,
     signal: AbortSignal,
+    profile: ThreadProfile,
   ): Promise<Response> {
     if (!isRpcMethod(method)) {
       return new Response('not found', { status: 404 });
@@ -2412,6 +2516,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // **精確鍵集**（#1572）：信封過了、進任何一支命令之前，`params` 多出協定沒定義的欄位就拒（拼錯的欄位名不再被靜靜忽略）。
     const rejected = paramsRejection(envelope.id, method, envelope);
     if (rejected !== undefined) return json(rejected);
+    if (profile === 'embed' && !EMBED_COMMAND_METHODS.has(method)) {
+      return json(errorResponse(envelope.id, 'not_supported', `嵌入的對話框不支援 ${method}`));
+    }
 
     if (isRunCancelMethod(method)) {
       // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行——照 dsh 的
@@ -2504,8 +2611,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 的 agent；為了封存一條還沒開起來的 thread 把它建起來（連 MCP 子行程）是反的。
       return handleThreadOrganization(threadId, method, envelope.id, body);
     }
-    const thread = await threadOrError(threadId, envelope.id);
+    const thread = await threadOrError(threadId, envelope.id, undefined, profile);
     if (thread instanceof Response) return thread;
+    if (thread.profile === 'embed') {
+      const refused = embedThreadCommand(method, envelope.id, body);
+      if (refused !== undefined) return refused;
+    }
     if (isSubagentListMethod(method)) {
       // 可點名的子代理清單（#328 第 2 項，契約在 `@nexus/wire` 的 `subagent-list.ts`）：經 `threadFor`——清單是這條 thread 的組裝的事實
       // （`task` 實際收的那份），web 打開一條 thread 才畫 `@` 選單。手搭的組裝沒有清單就回 `not_supported`，web 據這個碼把入口藏起來。
@@ -2661,6 +2772,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           (params as { mention?: unknown }).mention,
         );
         if (mention instanceof Response) return mention;
+        // 畫面情境（#2367）：只有嵌入版開的 thread 收，同樣排在收下附件之前。
+        const context = pageContextOf(
+          command.id,
+          thread.profile,
+          (params as { context?: unknown }).context,
+        );
+        if (context instanceof Response) return context;
         const text = firstHumanText(params.input);
         if (text === undefined) {
           return json(
@@ -2703,6 +2821,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ...(mode === 'steer' ? { steer: true as const } : {}),
           ...(admitted.length > 0 && { attachments: admitted }),
           ...(mention !== undefined && { mention }),
+          ...(context !== undefined && { context }),
         });
         return json(successResponse(command.id, { run_id: runId }));
       } finally {
@@ -3456,10 +3575,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 行程寫的、還沒落盤的那幾筆——讀檔的話那幾筆的 frame 可能早就送出去了，兩邊都沒有。順帶的：沒接
    * 落盤的組裝上，同一個行程裡切回去也有歷史。
    */
-  async function handleHistory(threadId: string, search: URLSearchParams): Promise<Response> {
+  async function handleHistory(
+    threadId: string,
+    search: URLSearchParams,
+    profile: ThreadProfile,
+  ): Promise<Response> {
     const query = historyQueryOf(search);
     if (query instanceof Response) return query;
-    const thread = await threadOrError(threadId, null);
+    const thread = await threadOrError(threadId, null, undefined, profile);
     if (thread instanceof Response) return thread;
     let result: ThreadHistoryResult;
     try {
@@ -3952,7 +4075,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   function holdThread(request: Request): (() => void) | undefined {
     let threadId: string | undefined;
     try {
-      threadId = parsePath(new URL(request.url).pathname)?.threadId;
+      const { pathname } = new URL(request.url);
+      threadId = parsePath(withoutEmbedPrefix(pathname) ?? pathname)?.threadId;
     } catch {
       // 壞的百分號編碼：之後會被當 404，沒有 thread 可握。
       return undefined;
@@ -3973,11 +4097,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /** 認證與信任檢查過之後的分派；`handle()` 在外面包一層請求計數。 */
-  async function dispatchRequest(request: Request): Promise<Response> {
-    const { pathname, searchParams } = new URL(request.url);
+  async function dispatchRequest(
+    request: Request,
+    pathname: string,
+    profile: ThreadProfile,
+  ): Promise<Response> {
+    const { searchParams } = new URL(request.url);
     const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
     const wrongMediaType = () =>
       new Response('content type must be application/json', { status: 415 });
+    if (profile === 'embed') {
+      const refused = await embedRequestRefusal(pathname);
+      if (refused !== undefined) return refused;
+    }
     if (pathname === THREADS_PATH) {
       if (request.method !== 'GET') return new Response('not found', { status: 404 });
       // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
@@ -4020,7 +4152,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (request.method !== 'GET') return new Response('not found', { status: 404 });
       // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
       if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-      return handleHistory(route.threadId, searchParams);
+      return handleHistory(route.threadId, searchParams, profile);
     }
     if (route?.kind === 'subagent-history') {
       if (request.method !== 'GET') return new Response('not found', { status: 404 });
@@ -4064,8 +4196,29 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return new Response('body is not JSON', { status: 400 });
     }
     return route.kind === 'stream'
-      ? handleStream(route.threadId, body, request.signal)
-      : handleCommand(route.threadId, route.method, body, request.signal);
+      ? handleStream(route.threadId, body, request.signal, profile)
+      : handleCommand(route.threadId, route.method, body, request.signal, profile);
+  }
+
+  /**
+   * 嵌入連線（#2367）在進任何路由之前：路由要在白名單上，碰的 thread 要是嵌入版開的。記憶體裡的看它的設定檔；不在記憶體裡的
+   * 冷讀 header（不建 agent），磁碟上也沒有就是新的、照嵌入版開。建好之後 `threadOrError` 再核一次（並行建同一個新 id）。
+   *
+   * @returns 要回的回應；`undefined` 是放行。
+   */
+  async function embedRequestRefusal(pathname: string): Promise<Response | undefined> {
+    const route = parsePath(pathname);
+    if (route === undefined || !EMBED_ROUTE_KINDS.has(route.kind)) {
+      return new Response('not found', { status: 404 });
+    }
+    const loaded = threads.get(route.threadId);
+    const profile =
+      loaded !== undefined
+        ? (await loaded.catch(() => undefined))?.profile
+        : await options.storedProfile?.(route.threadId);
+    return profile === undefined || profile === 'embed'
+      ? undefined
+      : notEmbedded(null, route.threadId);
   }
 
   function admit(headers: Headers): Response | undefined {
@@ -4091,8 +4244,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **請求計數在這裡、同步 +1**（#1484）：早於讀本文的 `await`、早於 `threadFor`，連 thread 還不在記憶體裡的請求也算。
       // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
       const held = holdThread(request);
+      const { pathname } = new URL(request.url);
+      const embedded = withoutEmbedPrefix(pathname);
       try {
-        return await dispatchRequest(request);
+        return await (embedded === undefined
+          ? dispatchRequest(request, pathname, 'full')
+          : dispatchRequest(request, embedded, 'embed'));
       } finally {
         held?.();
       }

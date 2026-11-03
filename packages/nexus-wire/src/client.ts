@@ -85,6 +85,7 @@ import type {
   SubagentInterruptCommand,
   SubagentSendCommand,
   RunStartCommand,
+  PageContext,
   RunStartMode,
   SkillEntry,
   SkillListCommand,
@@ -286,6 +287,8 @@ export interface WireClient {
       readonly attachments?: readonly PromptAttachment[];
       /** 這句話點名派哪一種子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328)，形狀見 `subagent-list.ts`）。 */
       readonly mention?: SubagentMention;
+      /** 嵌入的對話框附的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，見 `RunStartCommand` 的 `context`）。 */
+      readonly context?: PageContext;
       /**
        * 這一次送出的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)，見 `RunStartCommand` 的 `request_id`）。
        * **同一句話重送要沿用同一個編號**，伺服器才認得；回應裡的 `run_id` 重送時是原本那一件的。
@@ -1099,6 +1102,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
             : { attachments: options.attachments }),
           // 省略就不放這個 key：舊的 server 也收得下。
           ...(options?.mention === undefined ? {} : { mention: options.mention }),
+          ...(options?.context === undefined ? {} : { context: options.context }),
           // 省略就不放這個 key：舊的 server 也收得下（只是重送時分不出是同一句）。
           ...(options?.requestId === undefined ? {} : { request_id: options.requestId }),
           // 省略就不放這個 key：舊的 server 也收得下（只是模型被告知時區不明）。

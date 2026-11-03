@@ -26,9 +26,10 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { dirname, join } from 'node:path';
-import { THREADS_PATH } from '@nexus/wire';
 import { approvalPolicyOnResume, errorChain, TokenAnchorBook } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
+import { isThreadsPath, withoutEmbedPrefix } from './embed-profile.js';
+import type { ThreadProfile } from './embed-profile.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -456,7 +457,7 @@ function routeBySurface(
     handle: (request) => {
       const { pathname } = new URL(request.url);
       if (isOpsPath(pathname)) return ops.handle(request);
-      return pathname === THREADS_PATH || pathname.startsWith(`${THREADS_PATH}/`)
+      return isThreadsPath(pathname) || isThreadsPath(withoutEmbedPrefix(pathname) ?? '')
         ? wire.handle(request)
         : web(request);
     },
@@ -1283,8 +1284,14 @@ async function startServer(
         return header !== undefined && isSubagentSessionHeader(header);
       },
     }),
+    // 嵌入連線碰到還沒載進記憶體的 thread 時問這一支（#2367）：只冷讀 header。讀不了的當成不是嵌入版的，拒的方向。
+    storedProfile: async (threadId: string) => {
+      const header = await coldSessionHeader(threadId).catch(() => null);
+      if (header === undefined) return undefined;
+      return header?.profile === 'embed' ? 'embed' : 'full';
+    },
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
-    createAgent: async (threadId: string, fork?: ThreadForkSeed) => {
+    createAgent: async (threadId: string, fork?: ThreadForkSeed, requested?: ThreadProfile) => {
       // **子代理的會話不是 thread**（#1544；判準見 core 的 `isSubagentSessionHeader`，分叉不算，#1579）。
       // **必須在 `resumeThread` 之前、而且只冷讀 header**（`open(…, 'read')`，不拿租約、不寫檔）：續接會先拿寫租約、再把當掉那一輪的
       // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的
@@ -1326,6 +1333,14 @@ async function startServer(
               events: fork.seed,
             }
           : resumed;
+      // **設定檔綁在 thread 上**（#2367）：落盤過的照 header，分叉的照來源，只有新的才看這一次是誰開的。
+      const sourceHeader = fork !== undefined ? fork.sourceHeader : history?.header;
+      const profile: ThreadProfile =
+        sourceHeader !== undefined
+          ? sourceHeader.profile === 'embed'
+            ? 'embed'
+            : 'full'
+          : (requested ?? 'full');
       let handedOff = false;
       const release = async (): Promise<void> => {
         if (handedOff) return;
@@ -1423,13 +1438,15 @@ async function startServer(
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
             // 背景續行（#841）：只有 serve 有可以叫醒的一輪，見 `createCliAgent` 那一格。
-            ...(backgroundSubagents.backgroundMode === 'continuable' && {
-              backgroundSubagents: {
-                maxActive: backgroundSubagents.maxActiveSubagents,
-                // 重啟之前派出的背景子代理，收到話才接回來（#1271）；落盤關掉（#612）就沒有東西可接。
-                ...(sessionStore !== undefined && { cold: createColdChildStore(sessionStore) }),
-              },
-            }),
+            ...(profile === 'embed' && { profile }),
+            ...(profile === 'full' &&
+              backgroundSubagents.backgroundMode === 'continuable' && {
+                backgroundSubagents: {
+                  maxActive: backgroundSubagents.maxActiveSubagents,
+                  // 重啟之前派出的背景子代理，收到話才接回來（#1271）；落盤關掉（#612）就沒有東西可接。
+                  ...(sessionStore !== undefined && { cold: createColdChildStore(sessionStore) }),
+                },
+              }),
             liveModel,
             ...(requestGate !== undefined && { requestGate }),
             credentials,
@@ -1569,8 +1586,9 @@ async function startServer(
         ...(workspaceChanges !== undefined && { workspaceChanges }),
         // 權限組合的目錄（#437）：沒圍堵就缺席，`permission.catalog` 回 `not_supported`。
         ...(permissionPresets !== undefined && { permissionPresets }),
-        // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。
-        subagentKinds,
+        // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。嵌入版沒有，缺席。
+        ...(subagentKinds !== undefined && { subagentKinds }),
+        profile,
         // `/名字` 叫得出的技能（#1574 N0929）：來源、backend 與「有沒有磁碟根」都讀這條 thread 的 fs 把手（#1919），在 `skill.list` 打進來的當下。
         skillCatalog: createSkillCatalog({
           fs: () => tree.threadSessions.fsForThread(threadId),
@@ -1655,6 +1673,7 @@ async function startServer(
                   ...(fork !== undefined && {
                     rootLineage: { parentSession: fork.sourceHeader.id, isSeeded: true },
                   }),
+                  ...(profile === 'embed' && { rootProfile: profile }),
                   // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
                   // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
                   warn: (message) => {

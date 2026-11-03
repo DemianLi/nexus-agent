@@ -37,6 +37,7 @@ const ALLOWED_HEADER_KEYS: ReadonlySet<string> = new Set([
   'modelEntryId',
   'origin',
   'isSeeded',
+  'profile',
 ]);
 /** 有的話要是字串的那幾格。 */
 const OPTIONAL_STRING_KEYS = [
@@ -62,7 +63,7 @@ function isCount(value: unknown): value is number {
  *
  * **白名單讀盤也能用同一份**（#1549）：它是任何一版寫過的鍵的聯集。`StoredSessionHeader` 從第一版起只加不減，50 以前是
  * 10 個鍵（#1549 對 `session-store.ts` 的歷次 commit 逐版核過），51 加了 `origin`、`isSeeded`（#1579；升版的理由正是 50 的這份白名單
- * 會把它們判成壞檔）。之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下
+ * 會把它們判成壞檔），53 加了 `profile`（#2367，只准 `'embed'`）。之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下
  * （讀方開了 `acceptNewer` 讀比這一版新的，整支不跑，見 `parseHeader`）。
  *
  * `origin` 只准 `'subagent'`，同 dsh。`isSeeded` 只准 `true`：dsh 是必填的 boolean，我們只在 true 時寫（`StoredSessionHeader.isSeeded`），
@@ -98,6 +99,9 @@ export function assertStoredHeaderFields(header: unknown): void {
   }
   if (header['isSeeded'] !== undefined && header['isSeeded'] !== true) {
     throw new TypeError('session header 的 isSeeded 只能是 true');
+  }
+  if (header['profile'] !== undefined && header['profile'] !== 'embed') {
+    throw new TypeError('session header 的 profile 只能是 "embed"');
   }
   const { build } = header;
   if (build !== undefined) {
