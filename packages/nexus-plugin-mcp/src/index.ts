@@ -7,7 +7,7 @@
  * `mcp__github__*` 與 `mcp__linear__*` 兩個命名空間下井水不犯河水。兩次用同一個
  * `serverName`，會在 registry 那一層以「同層同名工具」撞掉——那正是撞名該發生的地方。
  *
- * 連線用 `@modelcontextprotocol/client` 的 SDK client（`connection.ts`），重連監督自己做（`supervisor.ts`），照 dsh。每顆工具是一個
+ * 連線用 `@modelcontextprotocol/client` 的 SDK client（`connection.ts`），重連監督自己做（`supervisor.ts`）。每顆工具是一個
  * `NexusTool`，`parameters` 是 server 給的 `inputSchema` 原樣（`rawParameters: true`），一次呼叫做什麼見 `tool-call.ts`。
  */
 
@@ -389,8 +389,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 
     registry.lifecycle.onDispose(async () => {
       unregisterSource?.();
-      // 取消待跑的重連、等進行中的那次收斂、收掉 client，整段一個期限（#1543）。收 client 在監督者的 `release` 裡，不在後面另外再收：
-      // 期限外面再等一次握手，會把期限白白疊上去。
+      // 取消待跑的重連、等進行中的那次收斂、收掉 client，整段一個期限（#1543）。收 client 在監督者的 `release` 裡，算在同一個期限內；
+      // 期限到了還在握手的嘗試，見 `supervisor.ts` 偏離 6。
       await supervisor.dispose();
     });
   },
@@ -637,7 +637,7 @@ function hideTools(
 
 /**
  * 一台 server 登記進 hub 的那一份。`acquire` 回目前這一代的 SDK client 與「這一代斷了」的通報；沒有（連不上、掉線等待重連、
- * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。逾時或被停止的請求要探活，同工具呼叫（{@link delegateTo}）。
+ * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。逾時或被停止的請求要探活，同工具呼叫（{@link nexusToolOf}）。
  */
 function resourceSource(
   serverName: string,

@@ -41,7 +41,7 @@ export const CITE_RESOURCE_LINKS =
 /** 沒有附件儲存時，dsh 給收不下的圖的原因。 */
 export const NO_ATTACHMENT_STORE = 'no attachment store is mounted';
 
-/** content 裡的一塊。型別是 LangChain 的內容塊聯集，這裡只讀得到的那幾個欄位。 */
+/** content 裡的一塊（`convertCallToolResult` 轉出來的內容塊），這裡只讀得到的那幾個欄位。 */
 interface Block {
   readonly type?: unknown;
   readonly text?: unknown;
@@ -49,7 +49,7 @@ interface Block {
   readonly url?: unknown;
   readonly mime_type?: unknown;
   readonly mimeType?: unknown;
-  /** `resource_link` 帶 `{uri, name, title?}`；內嵌的二進位資源只帶 `{uri}`。 */
+  /** `resource_link` 帶 `{uri, name, title?}`；只帶 `{uri}` 的內嵌二進位資源形狀是防禦（資源不進 content）。 */
   readonly metadata?: unknown;
 }
 
@@ -99,7 +99,7 @@ function describe(block: Block): string {
 
 /**
  * 是不是 MCP 的 `resource_link` 轉出來的 `file` 塊。`convertCallToolResult` 的 `resource_link` 分支一定帶 `url`，且 `metadata` 一定有 `name`
- * 這個鍵（值可能是 `undefined`）；內嵌的二進位資源是 `data` 加 `metadata: {uri}`，沒有這兩樣。
+ * 這個鍵（值可能是 `undefined`）；防禦用的內嵌二進位資源形狀是 `data` 加 `metadata: {uri}`，沒有這兩樣。
  */
 function isResourceLink(block: Block): boolean {
   return typeof block.url === 'string' || (isRecord(block.metadata) && 'name' in block.metadata);
@@ -123,7 +123,7 @@ function mediaType(block: Block): string {
   return typeof value === 'string' && value !== '' ? value : 'unknown media type';
 }
 
-/** `image_url` 的 MIME 在 data URL 裡（拼成 `data:<mime>;base64,…`）。 */
+/** 防禦：`image_url` 形狀（今天沒有生產者）的 MIME 在 data URL 裡（`data:<mime>;base64,…`）。 */
 function imageMediaType(block: Block): string {
   if (block.type !== 'image_url') return mediaType(block);
   const url =

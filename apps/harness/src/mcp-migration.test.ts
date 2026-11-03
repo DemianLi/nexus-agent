@@ -5,7 +5,8 @@
  * 走的是部署方掛它的那條路：出貨清單疊一份 `--patch`，`insert` 一列 `@nexus/plugin-mcp`、換掉 `cli-script` 的 `turns`。三台真的走
  * stdio 的 server：舊協定（`fixture-server.ts`）、新協定（`modern-stdio-server.ts`），與回原始 JSON Schema 的
  * `mcp-raw-schema.fixture-server.ts`。要問人的案例停在中斷上、照案例給的回答以 `Command({ resume })` 接回去，問幾次接幾次。
- * 對照組在 `develop` `b5855f0c`（MCP 工具還是 `@langchain/mcp-adapters` 轉出來的時候）以 `K3C_RECORD=1` 錄的。
+ * 對照組以 `develop` `b5855f0c`（MCP 工具還是 `@langchain/mcp-adapters` 轉出來的時候）`K3C_RECORD=1` 錄的為底，#2353 接受兩處差之後重錄：
+ * 成功的 `tool/result` 多 `metadata.versions`；`舊：逾時` 改記 `TOOL_TIMEOUT` 與預算句。
  * `K3C_RECORD=1` 會拿當下的輸出覆寫對照組。
  */
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -2,7 +2,7 @@
  * 一台 MCP server 的連線那一段：開一代 SDK client、一代連線的形狀、這一代每顆工具的呼叫。plugin 每次組裝自己連（CLI）
  * 與宿主的連線池（serve，[`pool.ts`](./pool.ts)）**共用這一份**，兩邊開連線的方式因此不會漂移。
  *
- * **一代一個 SDK client**：重連就是收掉上一代的 client、開一個新的（新子行程、新的 HTTP session）。開連線的做法照遷移前的
+ * **一代一個 SDK client**：重連就是收掉上一代的 client、開一個新的（新子行程、新的 HTTP session）。開連線的做法照
  * `@langchain/mcp-adapters@2.0.0`（`dist/connection.js`、`dist/client.js` 的 `_initializeStreamableHTTPConnection`）：版本協商 `auto`，
  * HTTP 先試 Streamable HTTP，回 404／405 再退回 SSE（先試原網址，再試把結尾的 `mcp` 換成 `sse`），SSE 走舊協議。
  *
@@ -35,7 +35,7 @@ const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
  * 一開 client 就建這一代、掛上 `onclose`，並把「真的關掉了」交給 `onAttached`：之後哪一步拋，呼叫端都等得到這次嘗試開的
  * 子行程關掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試沒有連上的 client，不會叫它。
  *
- * **`execution.taskSupport: 'required'` 的工具改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
+ * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
  */
 export async function connectGeneration(
@@ -136,7 +136,7 @@ export function attemptsOn(
   };
 }
 
-/** `tools/list` 分頁走完，沒有名字的略過。`cacheMode: 'refresh'` 同 dsh，不讀新協議 client 的列表快取。 */
+/** `tools/list` 分頁走完，沒有名字的略過。`cacheMode: 'refresh'`：不讀新協議 client 的列表快取。 */
 async function listAllTools(client: Client, serverName: string): Promise<Tool[]> {
   const tools: Tool[] = [];
   const seen = new Set<string>();
@@ -267,13 +267,12 @@ async function connected(
   track: (client: Client) => void,
 ): Promise<Client> {
   const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode } });
-  // 工具在組裝時就定了，工具清單變了也不重列；處理器在連線之前掛上，握手時宣告的跟處理得了的才一致。
-  client.setNotificationHandler('notifications/tools/list_changed', () => {});
   track(client);
   try {
     await client.connect(transport);
-    // 新協議的 server 宣告了 `tools.listChanged` 就開一條常駐的 `subscriptions/listen`，同遷移前（`dist/connection.js` 的 `#connect`）：
-    // server 看到的連線形狀不變，收掉這一代時這條跟著收。
+    // 新協議的 server 宣告了 `tools.listChanged` 就開一條常駐的 `subscriptions/listen`，照 `@langchain/mcp-adapters@2.0.0`
+    // （`dist/connection.js` 的 `#connect`），server 看到的連線形狀因此跟它一樣；收掉這一代時這條跟著收。工具在組裝時就定了，
+    // 收到的 `tools/list_changed` 不處理（沒掛處理器，SDK 直接丟掉）。
     if (
       client.getProtocolEra() === 'modern' &&
       client.getServerCapabilities()?.tools?.listChanged === true
@@ -356,7 +355,8 @@ export interface SdkClient {
   onclose?: () => void;
   close?(): Promise<void>;
   getInstructions(): string | undefined;
-  listTools(params?: { cursor: string }, options?: RequestOptions): Promise<ListToolsPage>;
+  /** 探活用：只要它回來，不讀內容。 */
+  listTools(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   readResource(params: { uri: string }, options?: RequestOptions): Promise<unknown>;
@@ -366,12 +366,6 @@ export interface RequestOptions {
   signal?: AbortSignal;
   timeout?: number;
   cacheMode?: 'refresh';
-}
-
-/** `tools/list` 的一頁，只列這個檔讀的欄位。 */
-export interface ListToolsPage {
-  readonly tools: readonly { name: string; execution?: { taskSupport?: string } }[];
-  readonly nextCursor?: string | undefined;
 }
 
 /**

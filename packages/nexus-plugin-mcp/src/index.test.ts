@@ -296,7 +296,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // server 回 `isError` 時工具拋出 server 的原文（#1074）。圍堵只替**拋出來**的工具失敗補 `Error: 工具 … 執行失敗：`，
+  // server 回 `isError` 時工具拋出 server 的原文（只給參數時帶 `MCP tool … returned an error:` 前綴，#1074）。圍堵只替**拋出來**的工具失敗補 `Error: 工具 … 執行失敗：`，
   // 回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
   it('server 回 isError：兩種呼叫形狀都拋，帶原文', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
@@ -327,7 +327,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // 釘住現況：2.0.0 不簡化 schema，供應商看到的就是 server 原樣公告的 `anyOf`／`$schema`。供應商若有一天不收，
+  // 釘住現況：工具宣告 `rawParameters`、不簡化 schema，供應商看到的就是 server 原樣公告的 `anyOf`／`$schema`。供應商若有一天不收，
   // 這一條會是第一個指到那裡的絆索（真供應商的實跑見 #1074 的 PR 內文）。
   it('可為 null 與聯集的參數：schema 原樣，呼叫也走得通', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);

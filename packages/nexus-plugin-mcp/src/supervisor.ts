@@ -29,8 +29,8 @@
  *    組的對話拿得到工具；之前組好的照偏離 2 補不了。CLI 沒有池，一次組裝就是整個行程，補不了工具也就不重試
  *    （`index.ts` 檔頭既有的偏離）。
  * 6. **關閉期限退到最接近的做法**（#1543，三格）：
- *    - **握手中斷不了**（理由 1）：dsh 先關「連線中的那一代」來打斷握手（`connection.ts:277`、`:388-407`）。這個檔案
- *      不認識 MCP，dispose 先等進行中的嘗試，收 client 的 {@link SupervisorHooks.release} 排在它之後，所以整段
+ *    - **期限內不打斷握手**：dsh 先關「連線中的那一代」來打斷握手（`connection.ts:277`、`:388-407`）；這裡 dispose
+ *      先等進行中的嘗試，才叫 {@link SupervisorHooks.release} 收 client，所以整段
  *      跟 {@link GENERATION_CLOSE_TIMEOUT_MS} 賽跑，到期就記 dsh 那一句、照常回來。被丟下的嘗試落定之後照樣收（連上了就關、
  *      失敗了 `connection.ts` 當場收掉 client 與 transport），所以那個子行程比 dispose 多活一段，最久到握手逾時（版本協商 `auto` 兩輪各 60 秒，60 秒時
  *      會換一個子行程）。行程先結束的話（寫入口 `plugin-cli.ts` 排空輸出就 exit）沒有人收，子行程只能靠 stdin 的 EOF

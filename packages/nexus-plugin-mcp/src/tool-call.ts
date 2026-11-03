@@ -1,17 +1,18 @@
 /**
  * 一顆 MCP 工具的一次 `tools/call`：參數驗證、server 執行到一半的反問（elicitation）、結果轉成 `NexusToolResult`。
- * 行為照 `@langchain/mcp-adapters@2.0.0`（`dist/tools.js` 的 `_callTool`、`dist/content.js`、`dist/elicitation.js`），
- * 那是遷移前的實作，送上線的請求、模型看到的句子與落盤的 `artifact` 因此不變（#2353）。
+ * 行為照 `@langchain/mcp-adapters@2.0.0`（`dist/tools.js` 的 `_callTool`、`dist/content.js`、`dist/elicitation.js`）抄；送上線的請求、
+ * 模型看到的句子與落盤的 `artifact` 由 `apps/harness/src/mcp-migration.test.ts` 對 `mcp-migration.baseline.json` 逐字釘住（#2353）。
  *
  * - **參數再照 server 的 JSON Schema 驗一次**，用 SDK 自己的驗證器：宿主那一層（轉接器的 `rawParameters`）驗的是 LangChain 那一套，
  *   兩套對 `format` 這類關鍵字看法不同。驗完的值才送上線。
- * - **server 回 `isError` 時拋**，訊息是 server 給的文字，照 dsh（`throw new Error(text)`）：走圍堵那條「拋錯 → `工具 … 執行失敗：`」的出口，
- *   失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用。
- * - **其他失敗包成 `Error calling tool <name>: <原錯>`**，按了停止的也是（呼叫端再換成 `AbortError`）。逾時由 LangChain 的 `tool()`
+ * - **server 回 `isError` 時拋**，訊息是 server 給的文字（沒有 tool_call_id、只給參數直接呼叫時帶 `MCP tool … returned an error:` 前綴）：
+ *   走圍堵那條「拋錯 → `工具 … 執行失敗：`」的出口，失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用。
+ * - **其他失敗包成 `Error calling tool <name>: <原錯>`**，按了停止的也是（`index.ts` 的 `nexusToolOf` 再換成 `AbortError`）；
+ *   這個檔自己的錯誤句與 `exec.interrupt` 的掛起例外不包。逾時由 LangChain 的 `tool()`
  *   搶先收掉，這裡拋什麼都沒有人看。
  * - **反問走 `exec.interrupt`**：掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的 server
  *   每問一輪就重做一次，所以副作用要冪等。
- * - **結果的 `artifact`**：內嵌資源、帶多餘欄位的內容塊、`structuredContent`、`_meta` 照原樣留在 `artifact`，跟著日誌落盤、不送模型。
+ * - **結果的 `artifact`**：內嵌資源、resource link、帶多餘欄位的內容塊、`structuredContent`、`_meta` 照原樣留在 `artifact`，跟著日誌落盤、不送模型。
  *   成功的結果一律帶 `artifact`（常是 `[]`）。
  *
  * @module
@@ -64,6 +65,8 @@ export function toolCallOf(
   const toolName = descriptor.name;
   const modern = client.getProtocolEra() === 'modern';
   const inBand = modern && options.elicitation;
+  // 要問人的呼叫，中間幾輪回的是 `input_required`、沒有 `structuredContent`；交給 SDK 驗的話第一輪就被 `outputSchema` 擋下，
+  // 所以送出去的定義拿掉 `outputSchema`，最後一輪才自己驗。
   const { outputSchema, ...withoutOutputSchema } = descriptor;
   const roundDefinition = inBand && outputSchema !== undefined ? withoutOutputSchema : descriptor;
   const _meta = inBand
@@ -307,7 +310,10 @@ async function answerFor(
   return answers;
 }
 
-/** server 回 `isError` 時拋的那句：server 給的文字；一段文字都沒有就換一句固定的。 */
+/**
+ * server 回 `isError` 時拋的那句。有 tool_call_id 時是 server 給的文字，一段文字都沒有就換一句固定的；沒有 tool_call_id
+ * （只給參數直接呼叫）時是 `MCP tool '<tool>' on server '<server>' returned an error: <文字>`。
+ */
 function errorTextOf(
   result: CallToolResult,
   serverName: string,

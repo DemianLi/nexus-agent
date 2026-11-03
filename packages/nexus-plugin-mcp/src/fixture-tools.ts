@@ -83,7 +83,7 @@ export function registerFixtureTools(server: McpServer): void {
     () => ({ content: [{ type: 'text', text: 'pong' }] }),
   );
 
-  // server 自己說「失敗了」（`isError`），不是協定層的錯。工具拿 server 的原文拋錯、沒有前綴（#1074）；
+  // server 自己說「失敗了」（`isError`），不是協定層的錯。工具拿 server 的原文拋錯（有 tool_call_id 時沒有前綴，#1074）；
   // 這一支讓外掛層的測試釘住「它會拋」。
   server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
     isError: true,

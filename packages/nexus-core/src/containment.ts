@@ -146,7 +146,7 @@ const TIMEOUT_ERROR_NAME = 'TimeoutError';
  * **用 `name` 不用訊息比對**：訊息是 Node 的，會隨版本改；`name` 是 DOM 規範定的。
  *
  * **而且 `name` 是唯一分得開這一輪被中止的東西。** 同一個 `catch` 也接得到這一輪被中止
- * 的那顆，`name` 為 `AbortError`（MCP 工具由 `asTurnAbort` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
+ * 的那顆，`name` 為 `AbortError`（MCP 工具由 `@nexus/plugin-mcp` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
  *
  * @param error - `catch` 到的東西。
  * @returns 是不是逾時。
