@@ -36,6 +36,7 @@ import type { BackgroundParentPort, ModelChoice } from './background-subagents.j
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
+import type { ThreadProfile } from './embed-profile.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -950,6 +951,8 @@ export async function createCliAgent(
      * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
      */
     readonly spillPolicy?: { readonly maxInlineTokens: number };
+    /** 照哪一份設定檔組（#2367），原樣交給 `createNexusAgent`。省略即 `full`。 */
+    readonly profile?: ThreadProfile;
     /**
      * 背景續行子代理的上限（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：**給了就是背景續行，省略就是一次性**。
      * 從 `background-subagents` 那一列解。**只有 serve 傳**：REPL 一行一輪、一次性模式答完就退出，背景子代理做完沒有
@@ -1023,8 +1026,11 @@ export async function createCliAgent(
    * （沒有圍堵）的組裝永遠不會觸發。回傳取消訂閱。
    */
   onDelegationNarrowed: (listener: (event: DelegationNarrowedEvent) => void) => () => void;
-  /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
-  subagentKinds: readonly { readonly name: string; readonly description: string }[];
+  /**
+   * 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。
+   * 嵌入版設定檔（#2367）不掛子代理，缺席。
+   */
+  subagentKinds: readonly { readonly name: string; readonly description: string }[] | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -1264,6 +1270,7 @@ export async function createCliAgent(
     ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
+    ...(invocation.profile !== undefined && { profile: invocation.profile }),
     // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；
     // 假模型沒有型號，用 {@link SCRIPTED_MODEL_NAME}。
     systemPromptVariables: {

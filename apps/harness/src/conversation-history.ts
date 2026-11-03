@@ -119,6 +119,7 @@ import {
   isLogicalTurnStart,
   isMaxTokensFinish,
   isMentionHintBlock,
+  isPageContextBlock,
   loggedContentBlocks,
   mentionOfHintBlock,
   loggedMessageId,
@@ -184,7 +185,7 @@ function mentionOf(message: LoggedMessage | undefined): ReturnType<typeof mentio
 
 /**
  * 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。
- * **點名的提示區塊不算**（#328 第 2 項）：那是給模型看的，不是使用者打的字，泡泡上不畫。
+ * **點名的提示區塊不算**（#328 第 2 項）：那是給模型看的，不是使用者打的字，泡泡上不畫。嵌入頁附的畫面情境（#2367）同理。
  */
 function textOf(message: LoggedMessage | undefined): string {
   if (!message) return '';
@@ -192,7 +193,10 @@ function textOf(message: LoggedMessage | undefined): string {
   return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
-      return typed?.type === 'text' && typeof typed.text === 'string' && !isMentionHintBlock(block)
+      return typed?.type === 'text' &&
+        typeof typed.text === 'string' &&
+        !isMentionHintBlock(block) &&
+        !isPageContextBlock(block)
         ? typed.text
         : '';
     })

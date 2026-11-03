@@ -180,9 +180,8 @@ describe('相容（驗收 6）', () => {
       { type: 'session/end-seed', seq: SessionSeq(resumed.events.length), time: 2, data: {} },
     ]);
     await resumed.stored.close();
-    expect(SESSION_LOG_FORMAT_VERSION).toBe(52);
     const { header, storedFormatVersion } = await sessionHeaderOf(directory, 'a');
-    expect(storedFormatVersion).toBe(52);
+    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(header).not.toHaveProperty('isSeeded');
     expect(header).not.toHaveProperty('origin');
   });

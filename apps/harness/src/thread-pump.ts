@@ -109,6 +109,7 @@ import {
   withModelCall,
   type ApprovalOutcome,
   type AttachmentRef,
+  type PageContextRef,
   type SubagentMentionRef,
   type InboxSplice,
   type InboxState,
@@ -348,6 +349,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
         ...(item.mention === undefined ? {} : { mention: item.mention }),
+        ...(item.context === undefined ? {} : { context: item.context }),
       };
     case 'subagent-settled':
       return {
@@ -450,6 +452,11 @@ export type PumpInput =
        * 進佇列、`turn/start`、插話的 `HumanMessage` 都帶著它，形狀見 `@nexus/core` 的 `subagent-mention.ts`。
        */
       readonly mention?: SubagentMentionRef;
+      /**
+       * 嵌入的對話框附的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）；呼叫端（`run.start`）已驗過這條 thread 是嵌入版、`label` 合格。
+       * 跟 `mention` 走同一條路，形狀見 `@nexus/core` 的 `page-context.ts`。
+       */
+      readonly context?: PageContextRef;
     }
   | {
       readonly kind: 'resume';
@@ -827,6 +834,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
           ? {}
           : { attachments: input.attachments }),
         ...(input.mention === undefined ? {} : { mention: input.mention }),
+        ...(input.context === undefined ? {} : { context: input.context }),
         // 兩格一起寫、一起缺（#1335）：沒有 `id` 的話（手搭的呼叫端）認出重送也回不了原本那一件，所以不寫半套。
         ...(input.requestId === undefined || input.id === undefined
           ? {}
@@ -1927,6 +1935,7 @@ export class ThreadPump {
           ? {}
           : { attachments: input.attachments }),
         ...(input.mention === undefined ? {} : { mention: input.mention }),
+        ...(input.context === undefined ? {} : { context: input.context }),
       };
       const steer = input.steer === true;
       const intoStep = steer && this.#acceptsSteer();
@@ -2820,7 +2829,12 @@ export class ThreadPump {
       if (job.text !== undefined) {
         // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
         const message = new HumanMessage({
-          content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
+          content: userContent(
+            job.text.text,
+            job.text.attachments,
+            job.text.mention,
+            job.text.context,
+          ) as never,
           id: job.text.id,
         });
         const logged = this.#sessions.root.append('user/message', {

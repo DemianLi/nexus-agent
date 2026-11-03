@@ -39,6 +39,7 @@ import type { MessageContent } from './nexus-message.js';
 import { brandNumber } from '@nexus/brand';
 import type { BrandedNumber } from '@nexus/brand';
 import type { AttachmentRef } from './attachment-ref.js';
+import type { PageContextRef } from './page-context.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
@@ -440,6 +441,13 @@ export interface SessionEventMap {
          * **格式 42 起才有**，而且不標 `ignorable`：一台 41 的 runtime 讀到會把它略過，排著的項目被折回來重跑時點名就悄悄不見了。
          */
         readonly mention?: SubagentMentionRef;
+        /**
+         * 嵌入的對話框附在這句話上的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，`run.start` 的 `context`）。沒有就整個不放這個 key。
+         * 送進模型的 `HumanMessage` 由它和 `text` 造（同 `mention`），形狀見 `page-context.ts`。
+         *
+         * **格式 53 起才有**，而且不標 `ignorable`：一台 52 的 runtime 讀到會把它略過，排著的項目被折回來重跑時情境就悄悄不見了。
+         */
+        readonly context?: PageContextRef;
         /**
          * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
          * 照 dsh 落在 `user/message` 的 `source.rpcId`（`packages/api/session-controller/src/commands.ts:331-335`，`d7432673886`）；

@@ -203,6 +203,7 @@ describe('header', () => {
     ['createdAt 是 -1', { createdAt: -1 }, 'createdAt'],
     ['cwd 是相對路徑', { cwd: 'relative/dir' }, 'cwd'],
     ['多一個沒人寫過的鍵 foo', { foo: 1 }, 'foo'],
+    ['profile 不是 embed（#2367 只寫 embed）', { profile: 'full' }, 'profile'],
   ])('D：%s，唯讀打開與續接都拒成 SessionCorruptionError', async (_name, header, cell) => {
     const directory = await written([usage], header);
     for (const error of await failures(directory)) {
