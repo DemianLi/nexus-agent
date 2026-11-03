@@ -17,11 +17,10 @@
  *   非文字塊先由 {@link projectNonText} 換成文字說明，再標記，所以說明文字（連結的名稱與 URI 都是 server 給的）一樣在前綴之後。
  * - **空結果不標——跟 dsh 不同**：dsh 的 web 工具不管本文空不空都先放前綴；這裡沒有本文就沒有東西要當資料看，一行孤零零的前綴
  *   只是雜訊，也會讓 #1562 要補的 `(no output)` 佔位字變成前綴加佔位字。空結果的處理交給 #1562（#1676 計畫第 2 點）。
- * - **`isError` 不標**：adapter 在 server 回 `isError` 時直接換成錯誤訊息，不經過 `afterToolCall`（`@langchain/mcp-adapters` 2.0.0
- *   `dist/tools.js` 的 `_callTool`），所以這裡根本看不到錯誤文字；另一條路徑是協定層的錯誤，一律拋出，沒有本文。
+ * - **`isError` 不標**：server 回 `isError` 時 `tool-call.ts` 直接拿錯誤文字拋，不經過標記，所以這裡根本看不到錯誤文字；另一條路徑是協定層的錯誤，一律拋出，沒有本文。
  * - **artifact 不動**：它不給模型看，原始結果照舊留在 artifact（上限處理見 `artifact-bound.ts`）。
  *
- * 換在工具本體裡（`connection.ts` 的 `afterToolCall`），所以進 state、會話日誌的 `tool/result`、還原與送給模型的都是標過的那一份（工具卡不畫這一行，#1930），
+ * 換在工具本體裡（`tool-call.ts`），所以進 state、會話日誌的 `tool/result`、還原與送給模型的都是標過的那一份（工具卡不畫這一行，#1930），
  * 跟 dsh「render 之後才記錄」同一個位置。
  *
  * @module
@@ -32,7 +31,7 @@ import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
 /**
  * 給有本文的結果加上前綴。
  *
- * @param content - adapter 正規化過的 content：字串，或全是文字塊的陣列（已過 `projectNonText`）。
+ * @param content - `convertCallToolResult` 轉出來的 content：字串，或全是文字塊的陣列（已過 `projectNonText`）。
  * @returns 標過的新值；空的（空字串、空陣列）原樣回傳同一個值。
  */
 export function markUntrusted<T>(content: string | readonly T[]): string | T[] {

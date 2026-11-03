@@ -1,9 +1,9 @@
 /**
- * 新協議（`2026-07-28`）的 server 與 HTTP 傳輸對 `@langchain/mcp-adapters` 2.0.0 的驗收
+ * 新協議（`2026-07-28`）的 server 與 HTTP 傳輸的驗收
  * （[#1095](https://github.com/DemianLi/nexus-agent/issues/1095)，補 [#1074](https://github.com/DemianLi/nexus-agent/issues/1074)
  * 那張 PR 自己標明沒測的兩格）。
  *
- * [`index.test.ts`](./index.test.ts) 的夾具是單包 SDK 1.x 的舊協議 stdio server；adapter 對每台 server 預設 `auto`
+ * [`index.test.ts`](./index.test.ts) 的夾具是單包 SDK 1.x 的舊協議 stdio server；client 對每台 server 預設 `auto`
  * 協商，新協議那一側整條路徑原本沒有任何測試走過。這裡補三台：新協議 stdio、新協議 HTTP、舊協議 HTTP，
  * 工具定義與舊 stdio 那台同名同行為，所以**同一組行為斷言**在每一台上各跑一遍。
  *
@@ -15,7 +15,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
-import { EXTERNAL_MCP_CONTENT_NOTICE, loadPlugins } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpPlugin } from './index.js';

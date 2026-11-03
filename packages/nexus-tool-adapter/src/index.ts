@@ -171,8 +171,8 @@ function convert(tool: NexusTool): StructuredTool {
 }
 
 /**
- * `rawParameters` 的工具送上線的形狀：原樣，根物件沒有 `properties` 時補一個空的。MCP 插件今天經 `@langchain/mcp-adapters@2.0.0`
- * （`dist/tools.js:206`）送的就是這個形狀，換成 `NexusTool` 之後送上線的位元組不變。
+ * `rawParameters` 的工具送上線的形狀：原樣，根物件沒有 `properties` 時補一個空的。MCP 插件的工具送的就是這個形狀
+ * （同 `@langchain/mcp-adapters@2.0.0` `dist/tools.js:206`，#2353 的對照組釘住）。
  */
 function rawSchemaOf(parameters: JsonSchema): JsonSchema {
   return parameters.properties === undefined ? { ...parameters, properties: {} } : parameters;

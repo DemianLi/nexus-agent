@@ -8,9 +8,10 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { MultiServerMCPClient } from '@langchain/mcp-adapters';
+import type { Client } from '@modelcontextprotocol/client';
 import type { PluginRegistry } from '@nexus/core';
-import { createHostServicesPlugin, loadPlugins, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
+import { createHostServicesPlugin, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectGeneration, generationOf, isRequestTimeout, probeLiveness } from './connection.js';
 import type { Generation, SdkClient } from './connection.js';
@@ -216,18 +217,22 @@ describe('卡死之後', () => {
   });
 
   it('只有 stdio 的一代帶探活窗口', async () => {
-    const client = {
-      getTools: () => Promise.resolve([]),
-      getClient: () => Promise.resolve(undefined),
-    } as unknown as MultiServerMCPClient;
+    const client = (): Promise<Client> =>
+      Promise.resolve({
+        getProtocolEra: () => 'modern',
+        getInstructions: () => undefined,
+        listTools: () => Promise.resolve({ tools: [] }),
+      } as unknown as Client);
     const base = { serverName: 'srv', livenessTimeoutMs: 7 };
     const stdio = await connectGeneration(
       client,
       mcpConfigSchema.parse({ ...base, connection: { transport: 'stdio', command: 'x' } }),
+      false,
     );
     const http = await connectGeneration(
       client,
       mcpConfigSchema.parse({ ...base, connection: { transport: 'http', url: 'http://x.test' } }),
+      false,
     );
     expect(stdio.livenessTimeoutMs).toBe(7);
     expect(http.livenessTimeoutMs).toBeUndefined();

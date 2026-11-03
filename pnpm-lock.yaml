@@ -946,9 +946,9 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/mcp-adapters':
-        specifier: ^2.0.0
-        version: 2.0.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))
+      '@modelcontextprotocol/client':
+        specifier: ^2.3.1
+        version: 2.3.1
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -968,6 +968,15 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.3.1
         version: 2.3.1
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -2622,13 +2631,6 @@ packages:
     peerDependencies:
       '@langchain/core': ^1.1.48
       zod: ^3.25.32 || ^4.2.0
-
-  '@langchain/mcp-adapters@2.0.0':
-    resolution: {integrity: sha512-0h5KzZVqSORz7JAQ0XlA8L+jvN+6mealM+60AdNs62i7vQBCkCTXG/PL7gLuiiPz72mIEzlAb662NL8serAQ+g==}
-    engines: {node: '>=20.10.0'}
-    peerDependencies:
-      '@langchain/core': ^1.2.6
-      '@langchain/langgraph': ^1.4.13
 
   '@langchain/openai@1.5.10':
     resolution: {integrity: sha512-4cxdgolkkXwnAiGEkNrue+ba7jUKjfBwleLCX5DrRVcRGrCc4w5EceblYZOIaHMY6+nhwMqIOtSzBWgcBCLfmw==}
@@ -6248,14 +6250,6 @@ snapshots:
     transitivePeerDependencies:
       - react
       - react-dom
-
-  '@langchain/mcp-adapters@2.0.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))':
-    dependencies:
-      '@langchain/core': 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph': 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      '@modelcontextprotocol/client': 2.3.1
-      '@modelcontextprotocol/core': 2.3.1
-      zod: 4.6.7
 
   '@langchain/openai@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(ws@8.21.3)':
     dependencies:

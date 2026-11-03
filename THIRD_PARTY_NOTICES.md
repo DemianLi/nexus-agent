@@ -46,9 +46,9 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`@langchain/langgraph`](https://github.com/langchain-ai/langgraphjs) | MIT |
 | [`@langchain/langgraph-checkpoint`](https://github.com/langchain-ai/langgraphjs) | MIT |
 | [`@langchain/langgraph-sdk`](https://github.com/langchain-ai/langgraphjs) | MIT |
-| [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchainjs) | MIT |
 | [`@langchain/openai`](https://github.com/langchain-ai/langchainjs) | MIT |
 | [`@langchain/protocol`](https://www.npmjs.com/package/@langchain/protocol) | MIT |
+| [`@modelcontextprotocol/client`](https://github.com/modelcontextprotocol/typescript-sdk) | Apache-2.0 |
 | [`@opentelemetry/api-logs`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
 | [`@opentelemetry/exporter-logs-otlp-http`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
 | [`@opentelemetry/otlp-exporter-base`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |

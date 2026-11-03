@@ -149,7 +149,7 @@ describe('MCP 的 artifact 到會話日誌與瀏覽器各多大（#1320）', () 
     expect(m.history).toBeLessThan(64 * 1024);
   }, 60_000);
 
-  it('圖片 3 MB：adapter 不把它放 artifact，日誌只有說明文字', async () => {
+  it('圖片 3 MB：不放 artifact，日誌只有說明文字', async () => {
     const m = await measure('big_image', 3072);
     expect(m.logResult).toBeLessThan(16 * 1024);
     expect(m.leaked).toBe(false);
@@ -158,7 +158,7 @@ describe('MCP 的 artifact 到會話日誌與瀏覽器各多大（#1320）', () 
 
 describe('走宿主的連線池（#1677 驗收 K）', () => {
   /**
-   * 池建 client 時沿用 plugin 自己連的那一份 adapter 選項（`connection.ts` 的 `clientOptions`），所以非文字塊換說明（#642）與
+   * 池與 plugin 自己連共用 `connection.ts` 的 `attemptsOn` 與 `tool-call.ts` 的 `toolCallOf`，所以非文字塊換說明（#642）與
    * artifact 上限（#1320）兩邊一樣：同一支工具走池與不走池，日誌裡的工具訊息逐位元組相同。
    */
   it.each([

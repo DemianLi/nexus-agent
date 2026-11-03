@@ -7,20 +7,12 @@
  * `mcp__github__*` 與 `mcp__linear__*` 兩個命名空間下井水不犯河水。兩次用同一個
  * `serverName`，會在 registry 那一層以「同層同名工具」撞掉——那正是撞名該發生的地方。
  *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 直接用 `@modelcontextprotocol/sdk`
- * 自己接連線、自己做重連監督。我們走 `@langchain/mcp-adapters`——它產出的是
- * `DynamicStructuredTool`，也就是 `registry.tools.register()` 本來就收的東西，而自己接
- * SDK 等於把 MCP 的 content block 翻成 LangChain 工具結果這一段重寫一次。三項因此
- * 跟著 adapter 而不是 dsh，逐條記在 [README](../README.md) 的明文限制裡。
- *
- * **這裡沒有內建 MCP 這回事。** 計劃第 0、2、4 節寫「deepagentsjs 已內建 MCP 工具接入」
- * 是錯的——`deepagents@1.13.1` 整包 grep `mcp` 零命中，MCP 在 LangChain JS 這一側是
- * `@langchain/mcp-adapters` 這個獨立套件。修訂隨本 PR 一併落地。
+ * 連線用 `@modelcontextprotocol/client` 的 SDK client（`connection.ts`），重連監督自己做（`supervisor.ts`）。每顆工具是一個
+ * `NexusTool`，`parameters` 是 server 給的 `inputSchema` 原樣（`rawParameters: true`），一次呼叫做什麼見 `tool-call.ts`。
  */
 
-import type { StructuredTool } from '@langchain/core/tools';
-import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { CHANNEL_SERVICE, turnCancelSignalOf } from '@nexus/core';
+import type { Tool } from '@modelcontextprotocol/client';
+import { CHANNEL_SERVICE } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
@@ -28,11 +20,12 @@ import type {
   PluginEntry,
   PluginRegistry,
 } from '@nexus/core';
+import type { NexusTool } from '@nexus/tools';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { attemptsOn, clientOptions, isRequestTimeout, probeLiveness } from './connection.js';
+import { attemptsOn, closeGeneration, isRequestTimeout, probeLiveness } from './connection.js';
 import {
   envValueSchema,
   headerValueSchema,
@@ -40,8 +33,8 @@ import {
   resolveCredentials,
 } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
-import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
-import { asTurnAbort, callSignalOf, ensureHub } from './hub.js';
+import type { Generation, RequestOptions, SdkClient } from './connection.js';
+import { ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -217,9 +210,8 @@ export const mcpConfigSchema = z.strictObject({
    * dsh 的 client 宣告的 capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb15009`），沒有這個功能。
    *
    * `true`（預設）**不等於一定開**：只有這次組裝有人可以回答（`channel.kind === 'human'`，同 `ask_user_question`）才開，其餘照舊關著，
-   * 那次呼叫落成普通的工具錯誤。**連線建起來時決定、不留到呼叫時**——新協定把這個 client 能力帶在每次呼叫的 `_meta` 裡，但值是
-   * adapter 在 `getTools` 建工具時就定死的（`@langchain/mcp-adapters` 2.0.0 `dist/tools.js` 的 `createToolInvocation`），呼叫時改不了。
-   * serve 的連線池因此把實際的旗標放進鍵（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），旗標不同的組裝不共用連線。
+   * 那次呼叫落成普通的工具錯誤。**連線建起來時決定、不留到呼叫時**——新協定把這個 client 能力帶在每次呼叫的 `_meta` 裡，值在
+   * 每一代連上、建這一代的工具呼叫時就定了（`tool-call.ts` 的 `toolCallOf`）。serve 的連線池因此把實際的旗標放進鍵（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），旗標不同的組裝不共用連線。
    * 寫 `false` 是明著關掉。
    */
   elicitation: z.boolean().default(true),
@@ -251,8 +243,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
  *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
- * 收住的做法是自己 `catch`，不是把 adapter 換成 `onConnectionError: 'ignore'`：那一格只管連線，列不出工具照樣拋，
- * 蓋不到 dsh 的三種。
+ * 收住的做法是自己 `catch`：連線、列工具、註冊三步都在同一個 `try` 裡，蓋得到 dsh 的三種。
  *
  * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
  * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
@@ -302,7 +293,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       await applyShared(registry, config, await pool.acquire(config, elicitation, credentials));
       return;
     }
-    const client = new MultiServerMCPClient(clientOptions(config, elicitation, credentials));
+    const attempts = attemptsOn(config, elicitation, credentials);
     const label = `mcp-client(${serverName})`;
     const registered: (() => void)[] = [];
     let supervisor: Supervisor<Generation> | undefined;
@@ -317,22 +308,15 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const error = report;
     try {
       // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
-      const attempts = attemptsOn(client, config);
       const first = await attempts.first();
       const names: string[] = [];
       // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
       const rawNameOf = new Map<string, string>();
-      for (const tool of first.listed.tools) {
-        const rawName = tool.name;
-        // **呼叫已在 `connectGeneration` 收進這一代，這裡才把註冊的物件換成委派**——否則第 0 代的呼叫會指到自己，無窮遞迴。
-        // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
-        // 就閉包住的 raw name（`convertMcpTools` 裡的 `toolName: tool.name`），不是這個欄位——所以改它不會讓
-        // 呼叫送到不存在的工具上。
-        tool.name = publicToolName(serverName, rawName);
-        delegateTo(tool, rawName, label, () => supervisor);
+      for (const descriptor of first.listed.tools) {
+        const tool = nexusToolOf(descriptor, config, label, () => supervisor);
         names.push(tool.name);
-        rawNameOf.set(tool.name, rawName);
-        registered.push(registry.tools.register(tool as StructuredTool));
+        rawNameOf.set(tool.name, descriptor.name);
+        registered.push(registry.tools.register(tool));
       }
       // 閘門跟工具一起進 `registered`：下面任何一步收住或拋，它跟工具一起撤掉，不留一位擋著不存在的工具的 listener。
       const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
@@ -344,7 +328,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
             `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
         );
       }
-      // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。指引上限已在 `connectGeneration` 查過：
+      // 指引與資源走同一條已經連上的 SDK client，不另開連線。指引上限已在 `connectGeneration` 查過：
       // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
       const { instructions } = first.listed;
       const policy: ReconnectPolicy = config.reconnect;
@@ -352,16 +336,15 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
         {
           label,
           policy,
-          // 重連 = 把整個 adapter client 收掉再重新列工具：同一個 `MultiServerMCPClient` 在 `close()` 之後再 `getTools()` 會開新連線、
-          // 新子行程、新的 SDK client（實測）。舊的工具物件永遠綁著死掉的 client，所以只取它們的呼叫，不取物件。
+          // 重連 = 收掉上一代的 SDK client、開一個新的再重新列工具：新子行程、新的 HTTP session。註冊的工具不綁哪一代，呼叫時才查目前這一代。
           // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
           // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
           connect: () => attempts.connect(),
           abandon: () => attempts.abandon(),
-          close: () => client.close(),
+          close: closeGeneration,
           closed: (generation) => generation.closed,
-          // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
-          release: () => client.close(),
+          // dispose 最後收掉最近開的 client：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
+          release: () => attempts.close(),
           watch(generation, onDown) {
             generation.onDown = onDown;
           },
@@ -399,15 +382,15 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
       // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
       await supervisor?.dispose();
-      await client.close().catch(() => {});
+      await attempts.close();
       unreachable(registry, config, error);
       return;
     }
 
     registry.lifecycle.onDispose(async () => {
       unregisterSource?.();
-      // 取消待跑的重連、等進行中的那次收斂、收掉 adapter client，整段一個期限（#1543）。不要在後面再 `await client.close()`：
-      // adapter 的 `close()` 也先等進行中的握手，會把期限白白疊上去。
+      // 取消待跑的重連、等進行中的那次收斂、收掉 client，整段一個期限（#1543）。收 client 在監督者的 `release` 裡，算在同一個期限內；
+      // 期限到了還在握手的嘗試，見 `supervisor.ts` 偏離 6。
       await supervisor.dispose();
     });
   },
@@ -497,14 +480,11 @@ async function applyShared(
     }
     const names: string[] = [];
     const rawNameOf = new Map<string, string>();
-    for (const listed of listing.tools) {
-      const rawName = listed.name;
-      // 池裡的物件每份組裝共用，不改；改名與委派都做在這份組裝自己的那一個上。
-      const tool = borrowed(listed);
-      tool.name = publicToolName(serverName, rawName);
-      delegateTo(tool, rawName, label, () => supervisor);
+    for (const descriptor of listing.tools) {
+      // 池裡共用的是工具描述；`NexusTool` 每份組裝建自己的，轉接器照物件身分快取轉出來的 LangChain 工具。
+      const tool = nexusToolOf(descriptor, config, label, () => supervisor);
       names.push(tool.name);
-      rawNameOf.set(tool.name, rawName);
+      rawNameOf.set(tool.name, descriptor.name);
       registered.push(registry.tools.register(tool));
     }
     // 閘門一份註冊表一顆，同自己連的那條（#1622）；共用的只有連線。
@@ -551,20 +531,6 @@ async function applyShared(
 }
 
 /**
- * 這份組裝自己的工具物件：原型照池裡那一個、自有欄位**淺拷貝**一份。之後只改這一份的 `name` 與 `func`，池裡的不動——直接改的話，
- * 第二份組裝會再包一層委派、名字也已經被第一份改過。
- *
- * **淺拷貝**：欄位裡的物件（`schema`、`metadata`、`tags`、`lc_kwargs`、`defaultConfig`）每份組裝與池裡那一個共用同一份。今天沒有
- * 人就地改它們（只換 `name` 與 `func` 這兩格本身）；要改的話先換成自己的一份，不要就地改。
- */
-function borrowed(tool: StructuredTool): StructuredTool {
-  return Object.assign(
-    Object.create(Object.getPrototypeOf(tool) as object) as StructuredTool,
-    tool,
-  );
-}
-
-/**
  * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
  *
  * @param options - 設定，形狀見 {@link mcpConfigSchema}。
@@ -588,60 +554,65 @@ export function isConnectionLost(error: unknown): boolean {
 }
 
 /**
- * 把已註冊的工具物件的 `func` 換成「委派給目前這一代同名工具」。註冊表裡的物件換不掉，而 adapter 重連之後它們仍綁著死掉的
- * client，所以呼叫要繞到目前這一代去。斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
+ * 一顆工具的 `NexusTool`：名字是 public name，`parameters` 是 server 給的 `inputSchema` 原樣，本體「委派給目前這一代同名工具」。
+ * 工具不綁哪一代：重連之後的呼叫走新的那一代；斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
  *
- * **這一輪的停止訊號在這裡併進交給 adapter 的 config**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)，見
- * {@link callSignalOf}）。adapter 的工具不拿 `config.signal` 跟本體競速，所以放在這一層不會丟下呼叫。按了停止之後，呼叫的 reject
- * 換成 `AbortError`（{@link asTurnAbort}），斷線判斷在換之前做。
+ * **按了停止之後，呼叫的 reject 換成 `AbortError`**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)），斷線判斷在換之前做。
+ * `exec.signal` 是這一輪的停止訊號併上 LangGraph 的；LangGraph 那一顆（含 `timeoutMs` 的逾時）舉起時，LangChain 的 `tool()` 已經先 reject
+ * 這次呼叫，這裡換不換都沒有人看。
  *
  * **逾時不算斷線**：工具永遠不回的 server 還活著，同一條連線上別的呼叫照常。呼叫被放棄之後才探活，沒回應才收掉重連（#2194）；
  * 收掉時進行中的呼叫回連線關閉、不重送，重連期間的呼叫當場回 `server is disconnected`。
  */
-function delegateTo(
-  tool: StructuredTool,
-  rawName: string,
+function nexusToolOf(
+  descriptor: Tool,
+  config: McpConfig,
   label: string,
   supervisorOf: () => Supervisor<Generation> | undefined,
-): void {
-  (tool as unknown as { func: ToolCall }).func = async (...args) => {
-    const supervisor = supervisorOf();
-    const generation = supervisor?.current();
-    if (supervisor === undefined || generation === undefined) {
-      throw new Error(
-        supervisor?.gaveUp === true
-          ? `${label}: server is disconnected and reconnection was given up — assemble the plugin again to reconnect`
-          : `${label}: server is disconnected`,
-      );
-    }
-    const call = generation.calls.get(rawName);
-    if (call === undefined) {
-      throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
-    }
-    try {
-      return await call(...withTurnSignal(args));
-    } catch (error) {
-      if (isConnectionLost(error)) supervisor.down(generation);
-      else if (isRequestTimeout(error)) {
-        probeLiveness(generation, () => {
-          supervisor.stalled(generation);
-        });
+): NexusTool {
+  const rawName = descriptor.name;
+  return {
+    name: publicToolName(config.serverName, rawName),
+    description: descriptor.description ?? '',
+    parameters: structuredClone(descriptor.inputSchema) as NexusTool['parameters'],
+    rawParameters: true,
+    timeoutMs: config.toolCallTimeoutMs,
+    async execute(args, exec) {
+      const supervisor = supervisorOf();
+      const generation = supervisor?.current();
+      if (supervisor === undefined || generation === undefined) {
+        throw new Error(
+          supervisor?.gaveUp === true
+            ? `${label}: server is disconnected and reconnection was given up — assemble the plugin again to reconnect`
+            : `${label}: server is disconnected`,
+        );
       }
-      throw asTurnAbort(error, args[2]);
-    }
+      const call = generation.calls.get(rawName);
+      if (call === undefined) {
+        throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
+      }
+      try {
+        return await call(args, exec);
+      } catch (error) {
+        if (isConnectionLost(error)) supervisor.down(generation);
+        else if (isRequestTimeout(error)) {
+          probeLiveness(generation, () => {
+            supervisor.stalled(generation);
+          });
+        }
+        throw exec.signal?.aborted === true ? asAbort(error) : error;
+      }
+    },
   };
 }
 
-/**
- * `func` 的參數（輸入、run manager、config）裡，把 config 的 `signal` 換成 {@link callSignalOf}（併上這一輪的停止訊號）。
- * 換一份新的 config，不改呼叫端那份。
- * @param args - 工具物件交給 `func` 的參數，原樣。
- * @returns 換過訊號的參數；這一輪沒有停止訊號時原樣回去。
- */
-function withTurnSignal(args: unknown[]): unknown[] {
-  const config = args[2] as object | undefined;
-  if (turnCancelSignalOf(config) === undefined) return args;
-  return [args[0], args[1], { ...config, signal: callSignalOf(config) }, ...args.slice(3)];
+/** 一次呼叫的 reject 換成 `AbortError`（原錯放在 `cause`），讓圍堵照既有分類記成 `ABORTED`。 */
+function asAbort(error: unknown): Error {
+  const aborted = new Error(error instanceof Error ? error.message : String(error), {
+    cause: error,
+  });
+  aborted.name = 'AbortError';
+  return aborted;
 }
 
 /** 放棄重連之後，把這一台的工具從每次模型請求的工具清單拿掉；沒放棄就原樣穿過。 */
@@ -666,7 +637,7 @@ function hideTools(
 
 /**
  * 一台 server 登記進 hub 的那一份。`acquire` 回目前這一代的 SDK client 與「這一代斷了」的通報；沒有（連不上、掉線等待重連、
- * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。逾時或被停止的請求要探活，同工具呼叫（{@link delegateTo}）。
+ * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。逾時或被停止的請求要探活，同工具呼叫（{@link nexusToolOf}）。
  */
 function resourceSource(
   serverName: string,

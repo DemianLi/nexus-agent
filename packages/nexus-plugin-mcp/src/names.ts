@@ -3,12 +3,10 @@
  *
  * 形狀照 dsh 的 `mcp-client`——「每個 MCP 工具有兩個名字：走 `tools/call` 上線的
  * raw name，與註冊給模型看的 public name」。這個前綴不是我們發明的，Claude Code 與
- * Codex 用的是同一個。`@langchain/mcp-adapters` 的 `MultiServerMCPClient` 預設
- * （`additionalToolNamePrefix: "mcp"` ＋ `prefixToolNameWithServerName: true`）拼出來
- * 正好就是它，所以常見情況下這裡什麼都不必改。
+ * Codex 用的是同一個。名字乾淨時就是
+ * 前綴加原名，原樣不動。
  *
- * 要補的是 adapter **沒有**做的那一半：正規化。它只是把字串接起來
- * （`dist/tools.js` 的 `toolNamePrefix`），而供應商的 function name 契約是 64 字元的
+ * 不乾淨的要正規化：供應商的 function name 契約是 64 字元的
  * `[A-Za-z0-9_-]`——一個名字太長或帶了句點的 MCP server 會讓整輪對話在供應商那端
  * 被退回，而且錯誤訊息不會指向這裡。
  */
