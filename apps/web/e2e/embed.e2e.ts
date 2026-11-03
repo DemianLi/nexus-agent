@@ -437,7 +437,7 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     expect(paths.some((path) => path.startsWith('/embed/threads/'))).toBe(true);
   });
 
-  test('空白畫面：元件不提拖檔，獨立頁面照舊提（#2384）', async () => {
+  test('空白畫面：元件不提拖檔，獨立頁面會提（#2384）', async () => {
     const page = await openDemo([{ content: '不會用到。' }], undefined, async (standalone) => {
       await expect.poll(() => standalone.getByText('在下面打字，或把檔案拖進來。').count()).toBe(1);
       await expect

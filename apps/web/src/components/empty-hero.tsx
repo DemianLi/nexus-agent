@@ -14,7 +14,7 @@ import {
  * 圖示是靜態的：會動的點在 nexus 表示這一輪正在跑，放在待命畫面上會說謊。
  * 原型那排建議按鈕沒搬：那是假資料，nexus 沒有可以建議的東西。
  *
- * @param fileDrop - 提不提「把檔案拖進來」。嵌入版沒有附件，不提（#2384）。
+ * @param fileDrop - 提不提「把檔案拖進來」，預設提。嵌入版沒有附件，傳 false（#2384）。
  */
 export function EmptyHero({ fileDrop = true }: { readonly fileDrop?: boolean }) {
   return (
