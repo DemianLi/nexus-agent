@@ -447,7 +447,10 @@ describe('收法（Q6）', () => {
     await embed.runStart('e1', '轉', { hostTools: [focus] });
     await thread.until(hostCalled);
     const [call] = thread.state.hostCalls;
+    const asked = Date.now();
     await thread.until(settledAfter(2));
+    // 照那一列的 300 ms，不是出廠的 30 秒。
+    expect(Date.now() - asked).toBeLessThan(10_000);
     expect(lastToolText()).toMatch(/嵌入的頁面沒有在期限內回應，這支工具沒有執行結果。$/u);
     expect(
       await embed.inputRespond('e1', {
