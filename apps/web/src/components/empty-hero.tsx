@@ -13,8 +13,10 @@ import {
  * 字級跟著 SG（#1688 G1）。`EmptyTitle` 是 `div`，所以補 `role="heading"`、`aria-level={2}`，報讀器照樣跳得到。
  * 圖示是靜態的：會動的點在 nexus 表示這一輪正在跑，放在待命畫面上會說謊。
  * 原型那排建議按鈕沒搬：那是假資料，nexus 沒有可以建議的東西。
+ *
+ * @param fileDrop - 提不提「把檔案拖進來」，預設提。嵌入版沒有附件，傳 false（#2384）。
  */
-export function EmptyHero() {
+export function EmptyHero({ fileDrop = true }: { readonly fileDrop?: boolean }) {
   return (
     <Empty>
       <EmptyHeader>
@@ -24,7 +26,9 @@ export function EmptyHero() {
         <EmptyTitle role="heading" aria-level={2}>
           今天要做什麼？
         </EmptyTitle>
-        <EmptyDescription>在下面打字，或把檔案拖進來。</EmptyDescription>
+        <EmptyDescription>
+          {fileDrop ? '在下面打字，或把檔案拖進來。' : '在下面打字。'}
+        </EmptyDescription>
       </EmptyHeader>
     </Empty>
   );

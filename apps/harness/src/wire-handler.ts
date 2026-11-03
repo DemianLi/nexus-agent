@@ -443,7 +443,7 @@ export interface WireHandlerOptions {
     profile?: ThreadProfile,
   ): Promise<ThreadAgent>;
   /**
-   * 落盤的 thread 是照哪一份設定檔開的（#2367），只冷讀 header、不建 agent。磁碟上沒有它回 `undefined`。
+   * 落盤的 thread 是照哪一份設定檔開的（#2367），只冷讀 header、不建 agent。磁碟上沒有它回 `undefined`；header 讀不了照拋（#2385）。
    * 嵌入連線碰一條還沒載進記憶體的 thread 時先問這一支，不為一條會被拒的 thread 組 agent。**缺席就是沒有落盤**：只看記憶體裡的。
    */
   storedProfile?(threadId: string): Promise<ThreadProfile | undefined>;
@@ -2154,58 +2154,68 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (profile === 'embed' && thread.profile !== 'embed') return notEmbedded(id, threadId);
       return thread;
     } catch (error: unknown) {
-      // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
-      if (error instanceof ThreadCapacityError) {
-        return json(errorResponse(id, THREAD_AT_CAPACITY, error.message));
-      }
-      // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
-      if (error instanceof SubagentSessionError) {
-        return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
-      }
-      // 別的寫入者握著這份會話（#2031）：不是壞了，對方放掉之後再送就不會再因此被拒。專用碼、不加「建不起來」的前綴。
-      if (error instanceof SessionAlreadyOwnedError) {
-        return json(
-          errorResponse(
-            id,
-            THREAD_WRITER_HELD,
-            `會話 "${error.id}" 正由另一個寫入者握著（多半是另一個行程還開著這條 thread），serve 沒有開它。` +
-              '等握著它的那個行程關掉這條 thread 或結束之後再試。',
-          ),
-        );
-      }
-      // 日誌超過額度不是壞了（#2203）：專用碼、不加「建不起來」的前綴，兩種的差別是等了有沒有用。
-      if (error instanceof SessionLogTooLargeError) {
-        return json(
-          errorResponse(
-            id,
-            error.reason === 'too-large' ? THREAD_LOG_TOO_LARGE : THREAD_LOG_BUSY,
-            error.message,
-          ),
-        );
-      }
-      // 可寫根接不上不是壞了（#2222）：專用碼，兩個根只進 serve 的日誌，不上線。
-      if (error instanceof ResumeWorkspaceConflictError) {
-        options.warn?.(`[thread] "${threadId}" ${error.message}`);
-        return json(
-          errorResponse(
-            id,
-            THREAD_ROOT_MISMATCH,
-            error.otherHome
-              ? `會話 "${error.sessionId}" 的檔案多半在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
-              : `會話 "${error.sessionId}" 跑在另一個 --workspace，這台 serve 沒有開它。要用原本的 --workspace 才打得開。`,
-          ),
-        );
-      }
-      const reason = error instanceof Error ? error.message : String(error);
-      // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。這條的原因上線：訊息帶「建不起來」與第幾顆事件、幾層。
-      if (hasCode(error, CHECKPOINT_DEPTH_EXCEEDED)) {
-        return json(errorResponse(id, THREAD_HISTORY_TOO_DEEP, `這條 thread 建不起來：${reason}`));
-      }
-      options.warn?.(`[thread] "${threadId}" 建不起來：${reason}`);
+      return threadFailure(threadId, id, error);
+    }
+  }
+
+  /**
+   * {@link threadOrError} 建不起來時回的錯。嵌入連線冷讀 header 讀不了時（`embedRequestRefusal`）也走這一支，碼跟獨立頁面打開同一條時一樣
+   * （[#2385](https://github.com/DemianLi/nexus-agent/issues/2385)）。碼的對應見 {@link threadOrError}。
+   *
+   * @param id - 回給哪一顆上行封包；下行那條、與嵌入連線的第一道（還沒解析 body）是 `null`。
+   */
+  function threadFailure(threadId: string, id: number | null, error: unknown): Response {
+    // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
+    if (error instanceof ThreadCapacityError) {
+      return json(errorResponse(id, THREAD_AT_CAPACITY, error.message));
+    }
+    // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
+    if (error instanceof SubagentSessionError) {
+      return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
+    }
+    // 別的寫入者握著這份會話（#2031）：不是壞了，對方放掉之後再送就不會再因此被拒。專用碼、不加「建不起來」的前綴。
+    if (error instanceof SessionAlreadyOwnedError) {
       return json(
-        errorResponse(id, 'unknown_error', '這條 thread 建不起來，原因記在 serve 的日誌。'),
+        errorResponse(
+          id,
+          THREAD_WRITER_HELD,
+          `會話 "${error.id}" 正由另一個寫入者握著（多半是另一個行程還開著這條 thread），serve 沒有開它。` +
+            '等握著它的那個行程關掉這條 thread 或結束之後再試。',
+        ),
       );
     }
+    // 日誌超過額度不是壞了（#2203）：專用碼、不加「建不起來」的前綴，兩種的差別是等了有沒有用。
+    if (error instanceof SessionLogTooLargeError) {
+      return json(
+        errorResponse(
+          id,
+          error.reason === 'too-large' ? THREAD_LOG_TOO_LARGE : THREAD_LOG_BUSY,
+          error.message,
+        ),
+      );
+    }
+    // 可寫根接不上不是壞了（#2222）：專用碼，兩個根只進 serve 的日誌，不上線。
+    if (error instanceof ResumeWorkspaceConflictError) {
+      options.warn?.(`[thread] "${threadId}" ${error.message}`);
+      return json(
+        errorResponse(
+          id,
+          THREAD_ROOT_MISMATCH,
+          error.otherHome
+            ? `會話 "${error.sessionId}" 的檔案多半在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
+            : `會話 "${error.sessionId}" 跑在另一個 --workspace，這台 serve 沒有開它。要用原本的 --workspace 才打得開。`,
+        ),
+      );
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。這條的原因上線：訊息帶「建不起來」與第幾顆事件、幾層。
+    if (hasCode(error, CHECKPOINT_DEPTH_EXCEEDED)) {
+      return json(errorResponse(id, THREAD_HISTORY_TOO_DEEP, `這條 thread 建不起來：${reason}`));
+    }
+    options.warn?.(`[thread] "${threadId}" 建不起來：${reason}`);
+    return json(
+      errorResponse(id, 'unknown_error', '這條 thread 建不起來，原因記在 serve 的日誌。'),
+    );
   }
 
   /**
@@ -4202,7 +4212,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
 
   /**
    * 嵌入連線（#2367）在進任何路由之前：路由要在白名單上，碰的 thread 要是嵌入版開的。記憶體裡的看它的設定檔；不在記憶體裡的
-   * 冷讀 header（不建 agent），磁碟上也沒有就是新的、照嵌入版開。建好之後 `threadOrError` 再核一次（並行建同一個新 id）。
+   * 冷讀 header（不建 agent），磁碟上也沒有就是新的、照嵌入版開；header 讀不了就拒，碼跟獨立頁面打開它時一樣（{@link threadFailure}，#2385）。
+   * 建好之後 `threadOrError` 再核一次（並行建同一個新 id）。
    *
    * @returns 要回的回應；`undefined` 是放行。
    */
@@ -4212,10 +4223,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return new Response('not found', { status: 404 });
     }
     const loaded = threads.get(route.threadId);
-    const profile =
-      loaded !== undefined
-        ? (await loaded.catch(() => undefined))?.profile
-        : await options.storedProfile?.(route.threadId);
+    let profile: ThreadProfile | undefined;
+    if (loaded !== undefined) {
+      profile = (await loaded.catch(() => undefined))?.profile;
+    } else {
+      try {
+        profile = await options.storedProfile?.(route.threadId);
+      } catch (error: unknown) {
+        return threadFailure(route.threadId, null, error);
+      }
+    }
     return profile === undefined || profile === 'embed'
       ? undefined
       : notEmbedded(null, route.threadId);

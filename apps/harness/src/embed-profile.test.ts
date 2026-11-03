@@ -6,13 +6,18 @@
  * MCP 工具照那一列的 `approval`（#1622；#1827 D171）的那一條在最後，接 [`mcp-fixture-server.ts`](./mcp-fixture-server.ts)。
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { BaseMessage } from '@langchain/core/messages';
-import { PAGE_CONTEXT_LABEL_MAX, pageContextText } from '@nexus/core';
+import {
+  generationLogFilename,
+  PAGE_CONTEXT_LABEL_MAX,
+  pageContextText,
+  SESSION_LOG_FORMAT_VERSION,
+} from '@nexus/core';
 import { publicToolName } from '@nexus/plugin-mcp';
 import type { ConversationState, Event, PageContext, WireClient } from '@nexus/wire';
 import {
@@ -32,6 +37,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
+import { rewriteSessionHeader, sessionOf } from './session-files.fixture.js';
 
 const SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
 const HARNESS = fileURLToPath(new URL('..', import.meta.url));
@@ -92,7 +98,11 @@ interface Clients {
 /** 起一台 serve（落盤開著，`--session-log`），交回獨立頁面與嵌入版兩個客戶端。同一個 `logs` 再起就是重啟。 */
 async function start(
   turns: readonly ScriptedTurn[],
-  options: { readonly logs?: string; readonly extraRows?: string } = {},
+  options: {
+    readonly logs?: string;
+    readonly extraRows?: string;
+    readonly log?: (line: string) => void;
+  } = {},
 ): Promise<
   Clients & {
     readonly logs: string;
@@ -105,6 +115,7 @@ async function start(
   served = await startScriptedServe(turns, {
     argv: ['--session-log', logs],
     ...(options.extraRows !== undefined && { extraRows: options.extraRows }),
+    ...(options.log !== undefined && { log: options.log }),
   });
   const cookie = await exchangeServeToken(served.running.authenticatedUrl);
   const fetch = fetchWithCookie(cookie);
@@ -284,6 +295,60 @@ describe('設定檔綁在 thread 上', () => {
     expect(await again.embed.runStart('f1', '接手')).toMatchObject({
       error: THREAD_NOT_EMBEDDED,
     });
+  }, 60_000);
+
+  /**
+   * header 讀不了（#2385）：嵌入連線拿到的碼跟獨立頁面打開同一條時一樣，不是 `thread_not_embedded`：那個碼斷定這條不是從嵌入的對話框開的，header 讀不了時不知道是不是。
+   * 嵌入連線先打：這時那條沒載入，走的是冷讀 header 那一道；獨立頁面那一次建不起來，不留在記憶體裡。
+   */
+  async function refusedAlike(damage: (logs: string) => Promise<void>): Promise<{
+    readonly embedded: object;
+    readonly standalone: object;
+    /** 嵌入連線那一次之後、獨立頁面那一次之前，serve 記下的日誌。 */
+    readonly embeddedLog: readonly string[];
+  }> {
+    const first = await start([hello]);
+    await say(first.full, 'f1');
+    // 先關：關的時候還會寫回日誌。
+    await served?.close();
+    served = undefined;
+    await damage(first.logs);
+    const lines: string[] = [];
+    const again = await start([hello], { logs: first.logs, log: (line) => lines.push(line) });
+    // 第一道還沒解析 body，回應不帶請求的 id（同 `thread_not_embedded`），只比碼與訊息。
+    const withoutId = ({ id: _id, ...rest }: object & { readonly id?: unknown }) => rest;
+    const embedded = withoutId(await again.embed.runStart('f1', '接手'));
+    const embeddedLog = [...lines];
+    const standalone = withoutId(await again.full.runStart('f1', '接手'));
+    return { embedded, standalone, embeddedLog };
+  }
+
+  it('header 壞了：嵌入連線回跟獨立頁面一樣的碼', async () => {
+    const { embedded, standalone } = await refusedAlike(async (logs) => {
+      await rewriteSessionHeader(logs, 'f1', () => '{壞的');
+    });
+    expect(standalone).toMatchObject({ error: 'unknown_error' });
+    expect(embedded).toEqual(standalone);
+  }, 60_000);
+
+  it('日誌比這一版新：嵌入連線回跟獨立頁面一樣的碼，serve 的日誌記下原始檔在哪', async () => {
+    let future = '';
+    const { embedded, standalone, embeddedLog } = await refusedAlike(async (logs) => {
+      // 會話目錄裡多一份比這一版新的世代（內容同這一版，只有 header 的版號往上一版）。
+      const { logPath } = await sessionOf(logs, 'f1');
+      const current = readFileSync(logPath, 'utf8');
+      const newline = current.indexOf('\n');
+      const stored = JSON.parse(current.slice(0, newline)) as Record<string, unknown>;
+      future = join(dirname(logPath), generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1));
+      writeFileSync(
+        future,
+        `${JSON.stringify({ ...stored, version: SESSION_LOG_FORMAT_VERSION + 1 })}${current.slice(newline)}`,
+      );
+    });
+    expect(standalone).toMatchObject({ error: 'unknown_error' });
+    expect(embedded).toEqual(standalone);
+    // 嵌入連線那一次就被擋在第一道、沒走到建 thread：路徑要由冷讀那一道記下，管理者才找得到原始檔（#1559 N0646）。
+    expect(embeddedLog.some((line) => line.includes(future) && line.includes('f1'))).toBe(true);
   }, 60_000);
 
   it('讀圖：載入著的獨立頁面 thread 回 thread_not_embedded', async () => {
