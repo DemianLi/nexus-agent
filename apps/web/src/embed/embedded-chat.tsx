@@ -3,7 +3,7 @@
  * 功能照地圖 #2365 第 12 點收窄：
  *
  * - 有：對話紀錄（工具呼叫列、思考摘要都在裡面）、狀態列、輸入框與停止、核准卡與反問面板、情境標籤、「新對話」、回覆底下的回饋鈕；
- * - 沒有：`/` 與 `@` 選單、模型與權限座、計劃模式、目標列、待辦、送出佇列、分叉、側欄與歷史清單、成本、附件上傳。
+ * - 沒有：`/` 與 `@` 選單、模型與權限座、計劃模式、目標列、待辦、送出佇列、分叉、側欄與歷史清單、成本、附件上傳、改動卡（差異檢視）。
  *
  * 輸入框送出的一律是一句話（`route: 'sentence'`）：開頭是 `/` 也不認成命令。一輪在跑時不收下一句，因為沒有畫送出佇列，排進去的
  * 那一句會看不見；要插話先按停止。
@@ -28,7 +28,6 @@ import { useConversation } from '@/hooks/use-conversation';
 import { agentBaseUrl } from '@/lib/agent';
 import { pendingAsker } from '@/lib/approval-asker';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
-import { createChangesStores } from '@/lib/changes-diff';
 import { connectionStall } from '@/lib/connection-stall';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { canSendText } from '@/lib/queue-view';
@@ -51,7 +50,7 @@ export const CONTEXT_LABEL_PREFIX = '目前選取：';
 
 /**
  * 嵌入版打的 agent 位置：設定裡的來源加上 `/embed`（#2382）。thread 那一族的請求與 `/embed/threads/mux` 都從這裡長出來，server 照這個前綴套
- * 嵌入版的設定檔（#2367）。差異檢視那兩條讀取不在嵌入版的路由上，打了是 404，畫成沒有內容。
+ * 嵌入版的設定檔（#2367）。
  */
 export function embedBaseUrl(): string {
   return `${agentBaseUrl().replace(/\/+$/u, '')}${EMBED_PATH_PREFIX}`;
@@ -102,10 +101,6 @@ function EmbeddedConversation({
   readonly onNewConversation: () => void;
 }) {
   const conversation = useConversation({ client, threadId });
-  const changes = useMemo(
-    () => createChangesStores({ threadId, baseUrl: embedBaseUrl() }),
-    [threadId],
-  );
   const deliverableDownload = useMemo(
     () => createDeliverableDownloader({ threadId, baseUrl: embedBaseUrl() }),
     [threadId],
@@ -187,8 +182,8 @@ function EmbeddedConversation({
         sessionLinks={sessionLinks}
         imageSource={imageSource}
         subagentControl={subagentControl}
-        changes={changes}
         deliverableDownload={deliverableDownload}
+        fileDrop={false}
       />
       <div className="mx-auto w-full max-w-2xl shrink-0 px-4 pt-2 pb-4">
         {context !== undefined && (
