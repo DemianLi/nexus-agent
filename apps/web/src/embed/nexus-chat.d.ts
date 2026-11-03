@@ -19,7 +19,9 @@ interface NexusHostTool {
 
 /** `nexus-host-tool` 事件的 `detail`：模型叫了哪一支、帶什麼參數，執行完呼叫 `respond` 或 `fail`，只算第一次。 */
 interface NexusHostToolDetail {
+  /** 宣告時的名字，不帶 `page__`。 */
   readonly name: string;
+  /** 模型給的參數，server 已照宣告的 `parameters` 驗過。 */
   readonly args: Readonly<Record<string, unknown>>;
   /** 成功，交回結果（JSON 值，序列化後至多 4,000 字）。 */
   respond(result: unknown): void;

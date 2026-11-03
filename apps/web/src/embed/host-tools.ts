@@ -14,7 +14,7 @@ export const HOST_TOOL_EVENT = 'nexus-host-tool';
 /** 叫到的名字不在這個元件目前的宣告裡（例如重新整理後的頁面沒宣告它）時，元件自己交回的錯誤。 */
 export const HOST_TOOL_MISSING_ERROR = '這個頁面沒有這支工具';
 
-/** {@link HOST_TOOL_EVENT} 的 `detail`：給宿主頁的那份（`nexus-chat.d.ts`），這裡不另寫一份，形狀分歧時 typecheck 就不過。 */
+/** {@link HOST_TOOL_EVENT} 的 `detail`，就是 `nexus-chat.d.ts` 給宿主頁的那份全域型別：元件交出去的物件照它檢查，對不上就編不過。 */
 export type NexusHostToolDetail = globalThis.NexusHostToolDetail;
 
 /**
