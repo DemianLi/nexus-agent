@@ -231,7 +231,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   **相容層的 `registry.tools.register` 也收 `NexusTool`**（#2353）：註冊當下經組裝點交給 `createRegistry` 的 `adaptTool`（產品路徑上是轉接器的
   `toLangChainTool`）轉成 LangChain 工具，表裡放轉出來的那一顆；沒交 `adaptTool` 就在註冊當下拋。plan-mode 的 `exit_plan_mode`、sandbox-policy 的
   `request_sandbox_escalation` 走這條：插件留在相容層，工具本體是 `NexusTool`。
-  `2.3.0`（#2353）起再多三格選填的欄位，給 MCP 工具用，不宣告的工具行為不變，所以不寫升級指南。
+  `2.3.0`（#2353）起再多三格選填的欄位，給 MCP 工具用，不宣告的工具行為不變（升級指南 [`tools-contract-2-3`](upgrade-guide/v0.6.0/tools-contract-2-3/guide.md)）。
   **`rawParameters: true`**：`parameters` 是外部給的 JSON Schema（`$ref`、`anyOf`、`format` 都可能有），原樣送上線、照 JSON Schema 驗，
   不補 `additionalProperties`，根物件沒有 `properties` 時補一個空的；錯誤句是 LangChain 那一層的「Received tool input did not match expected schema」。
   **`timeoutMs`**：一次呼叫的預算，照 dsh 的 `ToolDefinition.timeoutMs`；轉接器轉成 LangChain 的 `defaultConfig.timeout`，到期舉起 `exec.signal`，逾時句講出這個數字。
