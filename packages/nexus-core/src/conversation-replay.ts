@@ -358,7 +358,9 @@ export class ReplayFold {
         }
         case 'compaction/summary': {
           const { summary: logged, cutoffIndex, messagesBefore } = event.data;
-          if (logged === undefined) return fail('summary-missing');
+          if (logged === undefined) {
+            return fail('summary-missing');
+          }
           // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
           const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
           if (
