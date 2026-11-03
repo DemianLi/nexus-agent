@@ -34,7 +34,10 @@ const idsOf = (name: string): string[] =>
 
 const OPTIONS: readonly (readonly [string, ModelHistoryOptions])[] = [
   ['不套', {}],
-  ['送給模型的那一份', { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true }],
+  [
+    '送給模型的那一份',
+    { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true, applyImageOffloads: true },
+  ],
   ['共用讀盤的事件', { shareStored: true }],
 ];
 

@@ -1,0 +1,136 @@
+{
+  "writer": {
+    "rev": "7eb09103e1e094b51ff9b09e43b56da1b6d26036",
+    "commit": "7eb09103e1e094b51ff9b09e43b56da1b6d26036",
+    "formatVersion": 52,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "d871bc72f3457b08dc14206176a9f4114bbb7f70",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 52,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "7eb09103e1e094b51ff9b09e43b56da1b6d26036",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "image-offload": {
+      "headerVersion": 52,
+      "eventCount": 25,
+      "types": [
+        "inbox/spliced",
+        "turn/start",
+        "inbox/spliced",
+        "session/title",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "turn/end",
+        "inbox/spliced",
+        "turn/start",
+        "inbox/spliced",
+        "model/start",
+        "image/offload",
+        "assistant/message",
+        "model/end",
+        "turn/end",
+        "inbox/spliced",
+        "turn/start",
+        "inbox/spliced",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "7eb09103e1e094b51ff9b09e43b56da1b6d26036",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "human",
+          "ai",
+          "human",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 43,
+      "session": "image-offload",
+      "computedBy": "today",
+      "imageOffloadCalls": [
+        {
+          "derived": [
+            false
+          ],
+          "sent": [
+            false
+          ]
+        },
+        {
+          "derived": [
+            false,
+            false
+          ],
+          "sent": [
+            true,
+            false
+          ]
+        },
+        {
+          "derived": [
+            true,
+            false
+          ],
+          "sent": [
+            true,
+            false
+          ]
+        }
+      ]
+    }
+  ]
+}

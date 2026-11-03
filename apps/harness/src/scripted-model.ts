@@ -4,7 +4,7 @@ import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
-import { assertImageBudget } from '@nexus/core';
+import { assertImageBudget, IMAGE_BUDGET_PROPERTY } from '@nexus/core';
 import type { ImageBudget } from '@nexus/core';
 
 /**
@@ -142,6 +142,11 @@ export class ScriptedChatModel extends BaseChatModel {
     this.turns = turns;
     this.imageBudget = imageBudget;
     this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
+  }
+
+  /** 這顆模型的圖片額度，給上層先量（`@nexus/core` 的 `imageBudgetOf`），同真 adapter。 */
+  get [IMAGE_BUDGET_PROPERTY](): ImageBudget | undefined {
+    return this.imageBudget;
   }
 
   /** bindTools 收到什麼，spike 用它斷言基座真的把工具交給了模型。 */

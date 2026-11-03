@@ -741,7 +741,7 @@ export function foldRegistry(
     },
     // 圖片額度與 `image/offload`（#1270）緊貼換模型之後、摘要器外面：摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
     // 「摘要器外面」同上：由 `mergeMiddlewareStack` 搬到預設疊前面（#1369），不靠這張表。
-    // 這一顆只把日誌上**已經下的決定**標在請求上；新的決定由 adapter 量到超額、上層接住下（見下面 `imageOffloadRecovery`）。
+    // 這一顆先把日誌上已經下的決定標在請求上，再拿 adapter 掛的額度先量，超額就在 `model/start` 之前下新的決定；adapter 沒掛額度或這裡挑不到的，由 adapter 拋、下面 `imageOffloadRecovery` 接住。
     // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（沒有型錄，也就沒有誰宣告得了圖片額度）就整顆不掛，請求與以前逐位元組相同；沒有圖的請求原樣通過、不讀日誌。
     rootOnly(
       'imageOffload',

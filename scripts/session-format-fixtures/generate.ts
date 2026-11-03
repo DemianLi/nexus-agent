@@ -67,6 +67,7 @@ import {
 } from '../../packages/nexus-core/src/index.ts';
 import type { SessionEvent, StoredSessionHeader } from '../../packages/nexus-core/src/index.ts';
 import { historyFrames } from '../../apps/harness/src/conversation-history.ts';
+import { imageOffloadCalls } from '../../apps/harness/src/image-offload-calls.fixture.ts';
 import { assertSameWorkspaceRoot } from '../../apps/harness/src/resume-guards.ts';
 import { deriveBrowserTimeZoneContext } from '../../packages/nexus-plugin-time-context/src/index.ts';
 import { frozenFilesOf, readEvents, readRawHeader, sessionsIn } from './run-directory.ts';
@@ -93,6 +94,7 @@ type Trigger =
   | 'approval-policy-missing'
   | 'two-file-layout'
   | 'client-time-zone'
+  | 'image-offload'
   | 'subagent-header';
 
 interface Target {
@@ -172,6 +174,15 @@ const TARGETS: readonly Target[] = [
     triggers: ['client-time-zone'],
     ownReplay: true,
     released: true,
+  },
+  // `image/offload` 記在 `model/start` 之後的寫入器（`rev` 那一版，#2354）；CLI 一輪碰不到圖片額度，由觸發補寫。
+  {
+    name: 'v52-image-offload-after-start',
+    rev: '7eb09103e1e094b51ff9b09e43b56da1b6d26036',
+    version: 52,
+    triggers: ['image-offload'],
+    ownReplay: true,
+    released: false,
   },
 ];
 /** 混版的前半。 */
@@ -481,6 +492,15 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             browserTimeZone: deriveBrowserTimeZoneContext(
               readEvents(directory, 'client-time-zone'),
             ),
+          },
+        ];
+      case 'image-offload':
+        return [
+          {
+            edge: 43,
+            session: 'image-offload',
+            computedBy: 'today',
+            imageOffloadCalls: imageOffloadCalls(readEvents(directory, 'image-offload')),
           },
         ];
       case 'subagent-header': {

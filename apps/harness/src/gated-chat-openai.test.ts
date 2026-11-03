@@ -319,7 +319,14 @@ describe('帶附件投影的子類（AttachmentChatOpenAI）也受閘管，順�
     hooks: { project: () => void; guard?: () => void },
   ): AttachmentChatOpenAI {
     const { port } = server.address() as AddressInfo;
-    return new AttachmentChatOpenAI(
+    // 額度檢查的時機靠覆寫 `precheck` 探：探針先跑，再交回本尊的檢查。
+    class Probed extends AttachmentChatOpenAI {
+      protected override precheck(messages: readonly BaseMessage[]): void {
+        hooks.guard?.();
+        super.precheck(messages);
+      }
+    }
+    return new Probed(
       {
         model: 'fake',
         apiKey: 'sk-loopback',
@@ -330,11 +337,7 @@ describe('帶附件投影的子類（AttachmentChatOpenAI）也受閘管，順�
         hooks.project();
         return Promise.resolve(messages);
       },
-      hooks.guard === undefined
-        ? undefined
-        : () => {
-            hooks.guard!();
-          },
+      undefined,
       gate,
     );
   }
