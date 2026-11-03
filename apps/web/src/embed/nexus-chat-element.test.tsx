@@ -8,6 +8,8 @@ import { fakeClient } from '@/test/app-harness.fixture';
 import { Script } from '@/test/conversation-frames';
 
 import { EMBED_THREAD_KEY } from './embedded-chat';
+import { HOST_TOOL_EVENT, HOST_TOOL_MISSING_ERROR } from './host-tools';
+import type { NexusHostToolDetail } from './host-tools';
 import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-element';
 
 /**
@@ -220,5 +222,159 @@ describe('<nexus-chat>', () => {
       await Promise.resolve();
     });
     expect(app?.childElementCount).toBe(0);
+  });
+});
+
+describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
+  const FOCUS = {
+    name: 'focus_device',
+    description: '把鏡頭轉到指定的設備。',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  } as const;
+  const HIGHLIGHT = {
+    name: 'highlight_device',
+    description: '高亮指定的設備。',
+    parameters: { type: 'object', properties: { id: { type: 'string' } } },
+  } as const;
+
+  /** 掛一個宣告了 {@link FOCUS}、{@link HIGHLIGHT} 的元素，收它發的每一顆 `nexus-host-tool`。 */
+  function mountWithTools() {
+    const element = mount();
+    element.hostTools = [FOCUS, HIGHLIGHT];
+    const handed: NexusHostToolDetail[] = [];
+    element.addEventListener(HOST_TOOL_EVENT, (event) => {
+      handed.push((event as CustomEvent<NexusHostToolDetail>).detail);
+    });
+    return { element, handed };
+  }
+
+  test('送出時附上當下的宣告；沒宣告就不附 hostTools 這一格', async () => {
+    const element = mount();
+    await say(element, '第一句');
+    expect(clients[0]?.startOptions[0]).not.toHaveProperty('hostTools');
+    document.body.replaceChildren();
+    const { element: declared } = mountWithTools();
+    await say(declared, '把鏡頭轉到 P-101');
+    expect(clients[1]?.startOptions[0]?.hostTools).toEqual([FOCUS, HIGHLIGHT]);
+  });
+
+  test('超過上限或形狀不對的宣告不收：講一聲、原本的不動；null 清掉', () => {
+    const element = mount();
+    element.hostTools = [FOCUS];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const nine = Array.from({ length: 9 }, (_, i) => ({ ...FOCUS, name: `tool_${i}` }));
+    element.hostTools = nine;
+    element.hostTools = [{ ...FOCUS, name: 'Focus' }];
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(element.hostTools).toEqual([FOCUS]);
+    element.hostTools = null;
+    expect(element.hostTools).toBeNull();
+    warn.mockRestore();
+  });
+
+  test('模型叫了宣告過的一支：發事件帶 id、名字與參數，respond 交回結果、第二次不送', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
+    const { handed } = mountWithTools();
+    await waitFor(() => expect(handed).toHaveLength(1));
+    expect(handed[0]).toMatchObject({ id: 'h1', name: 'focus_device', args: { id: 'P-101' } });
+    await act(async () => {
+      handed[0]?.respond({ focused: 'P-101' });
+      handed[0]?.respond({ focused: 'again' });
+      handed[0]?.fail('too late');
+    });
+    expect(clients[0]?.responded).toEqual([
+      {
+        namespace: ['tools:a'],
+        interrupt_id: 'h1',
+        response: { ok: true, result: { focused: 'P-101' } },
+      },
+    ]);
+  });
+
+  test('fail 交回錯誤', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'highlight_device', { id: 'X-9' })];
+    const { handed } = mountWithTools();
+    await waitFor(() => expect(handed).toHaveLength(1));
+    await act(async () => handed[0]?.fail('找不到 X-9'));
+    expect(clients[0]?.responded).toEqual([
+      { namespace: ['tools:a'], interrupt_id: 'h1', response: { ok: false, error: '找不到 X-9' } },
+    ]);
+  });
+
+  test('結果不是 JSON 值：改成錯誤交回，不讓那顆中斷掛到逾時', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
+    const { handed } = mountWithTools();
+    await waitFor(() => expect(handed).toHaveLength(1));
+    await act(async () => handed[0]?.respond(undefined));
+    expect(clients[0]?.responded).toEqual([
+      {
+        namespace: ['tools:a'],
+        interrupt_id: 'h1',
+        response: { ok: false, error: '宿主頁的結果要是 JSON 值' },
+      },
+    ]);
+  });
+
+  test('名字不在目前的宣告裡：不發事件，當場交回「這個頁面沒有這支工具」', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'rotate_camera', {})];
+    const { handed } = mountWithTools();
+    await waitFor(() => expect(clients[0]?.responded).toHaveLength(1));
+    expect(clients[0]?.responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'h1',
+      response: { ok: false, error: HOST_TOOL_MISSING_ERROR },
+    });
+    expect(handed).toEqual([]);
+  });
+
+  test('同一顆中斷再出現（重連補送、再度中斷）不再轉交', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
+    const { handed } = mountWithTools();
+    await waitFor(() => expect(handed).toHaveLength(1));
+    const threadId = clients[0]?.opened[0] ?? '';
+    await act(async () => {
+      clients[0]?.downlink.push(threadId, [
+        script.running(),
+        script.hostTool('h1', 'focus_device', { id: 'P-101' }),
+        script.hostTool('h2', 'highlight_device', { id: 'P-102' }),
+      ]);
+    });
+    await waitFor(() => expect(handed).toHaveLength(2));
+    expect(handed.map((detail) => detail.name)).toEqual(['focus_device', 'highlight_device']);
+  });
+
+  test('重新整理（整個重掛）之後補送的待決照常轉交，id 跟上一次相同', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
+    const first = mountWithTools();
+    await waitFor(() => expect(first.handed).toHaveLength(1));
+    document.body.replaceChildren();
+    await act(async () => {});
+    const second = mountWithTools();
+    await waitFor(() => expect(second.handed).toHaveLength(1));
+    expect(second.handed[0]?.args).toEqual({ id: 'P-101' });
+    expect(second.handed[0]?.id).toBe(first.handed[0]?.id);
+    expect(second.handed[0]?.id).toBe('h1');
+  });
+
+  test('server 不收（例如停止之後才回）：不寫狀態列', async () => {
+    const script = new Script();
+    events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
+    const { element, handed } = mountWithTools();
+    await waitFor(() => expect(handed).toHaveLength(1));
+    const fake = clients[0];
+    if (fake === undefined) throw new Error('沒有 client');
+    fake.client.inputRespond = async (_threadId, params) => {
+      fake.responded.push(params);
+      return { type: 'error', id: 2, error: 'no_such_interrupt', message: '那顆中斷已經不在了' };
+    };
+    await act(async () => handed[0]?.respond({ focused: 'P-101' }));
+    expect(fake.responded).toHaveLength(1);
+    expect(shadow(element).queryByText(/那顆中斷已經不在了/u)).toBeNull();
   });
 });
