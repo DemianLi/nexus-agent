@@ -33,6 +33,7 @@ import {
   currentMessageFeedback,
   interruptedTurnClosers,
   isSubagentSessionHeader,
+  pageContextOfBlock,
   recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
@@ -101,6 +102,8 @@ interface Expected {
     readonly parentSession?: string;
     readonly originRecorded?: boolean;
     readonly subagent?: boolean;
+    readonly profile?: string;
+    readonly pageContexts?: readonly (string | null)[];
   }[];
 }
 
@@ -133,6 +136,20 @@ function replaySummary(events: readonly SessionEvent[]): Omit<Replay, 'computedB
   return replay.kind === 'replayed'
     ? { kind: 'replayed', roles: replay.messages.map((message) => message.getType()) }
     : { kind: 'unreplayable', reason: replay.reason };
+}
+
+/** 推回的對話歷史裡，每一則人話附的畫面情境（`label`）；沒附的是 `null`。 */
+function humanPageContexts(events: readonly SessionEvent[]): (string | null)[] {
+  const replay = replayConversation(events);
+  if (replay.kind !== 'replayed') throw new Error(`推不回對話歷史：${replay.reason}`);
+  return replay.messages
+    .filter((message) => message.getType() === 'human')
+    .map((message) =>
+      Array.isArray(message.content)
+        ? (message.content.map(pageContextOfBlock).find((context) => context !== undefined)
+            ?.label ?? null)
+        : null,
+    );
 }
 
 function closerSummary(events: readonly SessionEvent[]): unknown[] {
@@ -451,6 +468,10 @@ describe.each(names)('夾具 %s', (name) => {
         expect(opened.header.parentSession).toBe(trigger.parentSession);
         expect(opened.header.origin !== undefined).toBe(trigger.originRecorded);
         expect(isSubagentSessionHeader(opened.header)).toBe(trigger.subagent);
+      }
+      if (trigger.pageContexts !== undefined) {
+        expect(opened.header.profile).toBe(trigger.profile);
+        expect(humanPageContexts(events)).toEqual(trigger.pageContexts);
       }
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
