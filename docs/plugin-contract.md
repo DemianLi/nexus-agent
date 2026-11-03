@@ -224,6 +224,13 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   只有宿主 import 它，SDK 的 lint 擋插件原始碼 import；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
   樹上的消費者宣告 `^2.0.0`，goal（要 `deferContext`）與 ask-user（要 `interrupt`）宣告 `^2.1.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。
   一致性套件多一格 `schema-json`。
+  `2.2.0`（#2353）起 `NexusTool` 多一格選填的 `concludesTurn`：宣告「這顆工具可能在本體裡呼叫 `exec.concludeTurn()` 收這一輪」，轉接器把它轉成
+  LangChain 工具的 `returnDirect`。`concludeTurn()` 只對宣告了的工具有效，宣告了也只有呼叫了才收（升級指南
+  [`nexus-tool-concludes-turn`](upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md)）。這一格是基座的產物：基座的 tools 路由只認靜態的
+  `returnDirect` 名單，dsh 的迴圈在整批工具跑完之後才判，不需要事先宣告；換掉基座（K6）之後拿掉。
+  **相容層的 `registry.tools.register` 也收 `NexusTool`**（#2353）：註冊當下經組裝點交給 `createRegistry` 的 `adaptTool`（產品路徑上是轉接器的
+  `toLangChainTool`）轉成 LangChain 工具，表裡放轉出來的那一顆；沒交 `adaptTool` 就在註冊當下拋。plan-mode 的 `exit_plan_mode`、sandbox-policy 的
+  `request_sandbox_escalation` 走這條：插件留在相容層，工具本體是 `NexusTool`。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，

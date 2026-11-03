@@ -39,7 +39,7 @@ const ARGS = {
 };
 
 interface Case {
-  readonly args: unknown;
+  readonly args: Record<string, unknown>;
   readonly resume?: unknown;
   readonly mode?: SandboxMode;
   readonly headless?: boolean;

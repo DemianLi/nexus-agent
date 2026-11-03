@@ -304,6 +304,13 @@ describe('ToolExec：身分是資料，forCall 認得的與收呼叫設定時相
     ]);
     expect(vi.mocked(concludeTurn)).toHaveBeenCalledWith('probe');
   });
+
+  it('宣告了 concludesTurn 的才帶 returnDirect：基座的路由只認這個靜態名單', () => {
+    const plain = tinyTool({ ok: true, content: '' });
+    expect(toLangChainTool(plain).returnDirect).toBe(false);
+    expect(toLangChainTool({ ...plain, concludesTurn: false }).returnDirect).toBe(false);
+    expect(toLangChainTool({ ...plain, concludesTurn: true }).returnDirect).toBe(true);
+  });
 });
 
 describe('deferContext：結果之後補一則插件來源的人話', () => {

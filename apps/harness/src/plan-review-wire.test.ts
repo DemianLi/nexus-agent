@@ -37,6 +37,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { historyFrames, historyPage } from './conversation-history.js';
 import {
   emptyCommandPoint,
+  humanChannelPlugin,
   loopbackRequest,
   TEST_BROWSER_AUTH,
   testPlanModePlugin,
@@ -80,7 +81,8 @@ async function open(
   const built = await createNexusAgent({
     model,
     checkpointer: new PrunedMemorySaver(),
-    plugins: [testPlanModePlugin({ startActive: true })],
+    // 有人在答：組裝點沒提供答題管道時 `exit_plan_mode` 不發中斷（#2353），產品路徑由 `createCliAgent`／serve 自己算一份。
+    plugins: [humanChannelPlugin(), testPlanModePlugin({ startActive: true })],
     ...(options.stepInbox === true && { stepInbox: true }),
   });
   // 日誌接在 pump 自己那一份註冊表上，同 `ask-user-wire.test.ts`：另建一份的話計劃模式折的是別人。

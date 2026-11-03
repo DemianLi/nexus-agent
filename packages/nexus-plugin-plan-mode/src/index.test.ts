@@ -1,6 +1,7 @@
 import { ToolMessage } from '@langchain/core/messages';
 import {
   createHostServicesPlugin,
+  createRegistry,
   createSessionRunner,
   loadPlugins,
   SessionLog,
@@ -11,9 +12,11 @@ import type {
   AttachmentRef,
   CommandRegistrationPoint,
   CommandResult,
+  PluginEntry,
   PluginRegistry,
   SessionEvent,
 } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { interrupt } from '@langchain/langgraph';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -33,11 +36,11 @@ import {
   PLAN_HEADING_REQUIRED_MESSAGE,
   PLAN_LEFT_MESSAGE,
   PLAN_MODE_MIDDLEWARE_NAME,
+  PLAN_NO_CHANNEL_MESSAGE,
   PLAN_NO_REVIEWER_MESSAGE,
   PLAN_NOT_ATTACHED_MESSAGE,
   PLAN_NOT_ATTACHED_TOOL_MESSAGE,
   PLAN_OFF_ATTACHMENTS_MESSAGE,
-  planAmbiguousMessage,
   recordedPlanMode,
 } from './index.js';
 import type { PlanModePluginOptions } from './index.js';
@@ -47,6 +50,11 @@ import type { PlanModePluginOptions } from './index.js';
  * 這個套件的測試不依賴那一句，只要有一句可以認得。
  */
 const GUIDANCE = '你現在在計劃模式。先探索與設計，不要動手改東西。';
+
+/** 載入一份清單。`exit_plan_mode` 是 `NexusTool`，註冊時要組裝點交的轉接器（產品路徑上是 `apps/harness` 的 `agent-factory.ts`）。 */
+function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
+  return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
+}
 
 /** 補上指引的 `createPlanModePlugin`：這個檔的案例大多不關心指引寫什麼。 */
 function planPlugin(
@@ -111,7 +119,7 @@ async function assemble(
   options?: Partial<PlanModePluginOptions>,
   seed?: readonly SessionEvent[],
 ): Promise<{ registry: PluginRegistry; log: SessionLog }> {
-  const { registry } = await loadPlugins([planPlugin(options)]);
+  const { registry } = await load([planPlugin(options)]);
   const log = new SessionLog('plan', seed === undefined ? {} : { seed });
   attach(registry, log);
   return { registry, log };
@@ -145,7 +153,7 @@ describe('exit_plan_mode 沒有生效時', () => {
   };
 
   it('沒接日誌、在 subagent 裡：都是錯誤、不帶碼、文字是 `Error: ` 加原句', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
     const notAttached = await exit?.invoke(
       CALL as never,
@@ -173,7 +181,7 @@ describe('exit_plan_mode 沒有生效時', () => {
 
   /** 照 dsh 的先後：先看計劃是不是以 `#` 標題開頭，再看有沒有人可以回答。兩條都不寫日誌。 */
   it('計劃不是以 # 標題開頭、或沒有人可以回答：都在問人之前擋，模式不動', async () => {
-    const { registry } = await loadPlugins([
+    const { registry } = await load([
       createHostServicesPlugin({ channel: { kind: 'policy-never' } }),
       planPlugin({ startActive: true }),
     ]);
@@ -203,6 +211,29 @@ describe('exit_plan_mode 沒有生效時', () => {
     });
     expect(sessions.root.events.filter((event) => event.type === 'plan/mode')).toEqual([]);
   });
+
+  /** 照 `approvalChannel` 契約與 ask-user（#1458 Q1 (c)）：組裝點沒提供答題管道，**不當作有人在**，問人之前就拒絕。 */
+  it('組裝點沒提供答題管道：拒絕，不發中斷，模式不動', async () => {
+    vi.mocked(interrupt).mockClear();
+    const { registry } = await load([planPlugin({ startActive: true })]);
+    const sessions = new SessionRegistry('plan');
+    registry.sessions.bind(sessions);
+    attach(registry, sessions.root);
+    const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
+
+    const refused = await exit?.invoke(
+      CALL as never,
+      { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
+    );
+    expect(verdictOf(refused)).toEqual({
+      text: `Error: ${PLAN_NO_CHANNEL_MESSAGE}`,
+      status: 'error',
+      error: undefined,
+      id: 'call-1',
+    });
+    expect(vi.mocked(interrupt)).not.toHaveBeenCalled();
+    expect(modes(sessions.root)).toEqual([]);
+  });
 });
 
 /**
@@ -213,7 +244,7 @@ describe('exit_plan_mode 沒有生效時', () => {
  */
 describe('createPlanModePlugin', () => {
   it('四個註冊點都放了東西，核准閘門一位都沒有', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
 
     expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
@@ -233,7 +264,7 @@ describe('createPlanModePlugin', () => {
    * checkpointer 那一份與日誌那一份，而續接只帶得回其中一份。
    */
   it('middleware 沒有 stateSchema，也沒有邊界 hook', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
       string,
       unknown
@@ -246,7 +277,7 @@ describe('createPlanModePlugin', () => {
 
   /** 收得下自由訊息之後，提示字串跟 dsh 一樣（#776）。 */
   it('提示是 [off|message]，同 dsh', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
 
     expect(registry.commands.list()[0]?.input?.hint).toBe(PLAN_COMMAND_HINT);
     expect(PLAN_COMMAND_HINT).toBe('[off|message]');
@@ -257,14 +288,14 @@ describe('createPlanModePlugin', () => {
    * 前面的手段；那一層拿掉了（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)），模式外拒絕只在工具本體裡。
    */
   it('middleware 是 prepend 的', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
 
     expect(registry.middleware.list()[0]?.value.prepend).toBe(true);
   });
 
   /** 照 dsh：模式外拒絕只在工具本體裡。middleware 只剩模型呼叫那一件（含補回 `name`），事件匯流排上也沒有 plan-mode 的監聽者。 */
   it('middleware 沒有 wrapToolCall，也沒有掛任何事件監聽者', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
       string,
       unknown
@@ -311,7 +342,10 @@ describe('同意之後的待關', () => {
     vi.mocked(interrupt).mockReturnValue({
       answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
     });
-    const { registry } = await loadPlugins([planPlugin({ startActive: true })]);
+    const { registry } = await load([
+      createHostServicesPlugin({ channel: { kind: 'human' } }),
+      planPlugin({ startActive: true }),
+    ]);
     const sessions = new SessionRegistry('plan');
     registry.sessions.bind(sessions);
     attach(registry, sessions.root);
@@ -571,7 +605,7 @@ describe('/plan 附件', () => {
 
   it('沒接會話日誌：帶附件的 /plan 也不 steer', async () => {
     sent.length = 0;
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     expect(await runPlan(registry.commands, '', steer, [image])).toEqual({
       kind: 'error',
       text: PLAN_NOT_ATTACHED_MESSAGE,
@@ -586,7 +620,7 @@ describe('/plan 附件', () => {
  */
 describe('沒接、或接了不只一份', () => {
   it('沒接會話日誌：/plan 說得出原因', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
 
     expect(await runPlan(registry.commands, '')).toEqual({
       kind: 'error',
@@ -596,7 +630,7 @@ describe('沒接、或接了不只一份', () => {
 
   /** 沒接上的命令不能開輪：話留在原地，沒有東西被送出去。 */
   it('沒接會話日誌時，帶話的 /plan 不 steer', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     const steered: string[] = [];
 
     expect(await runPlan(registry.commands, '幫我', (text) => steered.push(text))).toEqual({
@@ -606,23 +640,64 @@ describe('沒接、或接了不只一份', () => {
     expect(steered).toEqual([]);
   });
 
-  it('接了兩份：挑不出來，兩份都不動', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+  /** 表以會話為鍵（#1486 Q1 (a)、Q2 (a)，同 goal）：命令改的是執行器交來的那一份，接了幾份都一樣。 */
+  it('接了兩份：各自改執行器交來的那一份，另一份不動', async () => {
+    const { registry } = await load([planPlugin()]);
     const first = new SessionLog('plan-a');
     const second = new SessionLog('plan-b');
     attach(registry, first);
     attach(registry, second);
+    const definition = registry.commands.find(PLAN_COMMAND_NAME);
 
-    expect(await runPlan(registry.commands, '')).toEqual({
-      kind: 'error',
-      text: planAmbiguousMessage(2),
+    const onSecond = await definition?.handler({
+      commandId: 'cmd-second',
+      rawInput: '',
+      attachments: [],
+      signal: new AbortController().signal,
+      sessionLog: second,
+      steer: () => undefined,
+    });
+    expect(onSecond).toEqual({ kind: 'success', text: PLAN_ENTERED_MESSAGE });
+    expect(modes(first)).toEqual([]);
+    expect(modes(second)).toEqual([true]);
+
+    expect(await runPlan(registry.commands, 'off')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_INACTIVE_MESSAGE,
     });
     expect(modes(first)).toEqual([]);
-    expect(modes(second)).toEqual([]);
+  });
+
+  /**
+   * middleware 認不出呼叫者時的退路（K7 前留在這裡）：剛好接一份就讀它，接了兩份就退回初值，**不猜**——猜一份的話指引會照著別人的模式夾。
+   */
+  it('認不出呼叫者：接一份讀它的模式，接兩份退回初值', async () => {
+    const { registry } = await load([planPlugin()]);
+    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as {
+      wrapModelCall: (
+        request: unknown,
+        handler: (request: { systemPrompt?: string }) => unknown,
+      ) => unknown;
+    };
+    const guided = (): boolean => {
+      let seen: string | undefined;
+      void middleware.wrapModelCall({}, (request) => {
+        seen = request.systemPrompt;
+        return undefined;
+      });
+      return seen === GUIDANCE;
+    };
+    const first = new SessionLog('plan-a');
+    attach(registry, first);
+    await runPlan(registry.commands, '');
+    expect(guided()).toBe(true);
+
+    attach(registry, new SessionLog('plan-b'));
+    expect(guided()).toBe(false);
   });
 
   it('收掉接線之後回到沒接的樣子', async () => {
-    const { registry } = await loadPlugins([planPlugin()]);
+    const { registry } = await load([planPlugin()]);
     const detach = attach(registry, new SessionLog('plan'));
     detach();
 
@@ -688,13 +763,13 @@ describe('recordedPlanMode', () => {
  *
  * 它們放在 `apply()` 裡而不是 `createPlanModePlugin()` 的閉包裡，因為 `load.ts` 一次組裝
  * 呼叫一次 `plugin.apply(tracked)`。放錯地方**不會拋任何東西**——兩次組裝共用一份，
- * 症狀是 `/plan` 回「接了兩份」，或一個 thread 的模式開到另一個 thread 上。所以要有人釘著。
+ * 症狀是一個 thread 的模式開到另一個 thread 上。所以要有人釘著。
  */
 describe('模式的作用範圍', () => {
   it('同一個 plugin 物件組兩次，兩邊的模式互不相干', async () => {
     const plugin = planPlugin();
-    const first = await loadPlugins([plugin]);
-    const second = await loadPlugins([plugin]);
+    const first = await load([plugin]);
+    const second = await load([plugin]);
     const firstLog = new SessionLog('plan-a');
     const secondLog = new SessionLog('plan-b');
     attach(first.registry, firstLog);
@@ -704,7 +779,7 @@ describe('模式的作用範圍', () => {
       kind: 'success',
       text: PLAN_ENTERED_MESSAGE,
     });
-    // 串台的話這裡會是 `planAmbiguousMessage(2)` 或 `PLAN_ALREADY_ACTIVE_MESSAGE`。
+    // 串台的話這裡會是 `PLAN_ALREADY_ACTIVE_MESSAGE`。
     expect(await runPlan(second.registry.commands, '')).toEqual({
       kind: 'success',
       text: PLAN_ENTERED_MESSAGE,
@@ -729,8 +804,8 @@ describe('設定（#453）', () => {
     ['只有空白', { guidance: '   \n\t ' }],
   ] as const)('指引%s：載入失敗，訊息帶 `<id> (<name>)` 與 guidance', async (_label, config) => {
     const bad = [{ plugin: planModePlugin, config }];
-    await expect(loadPlugins(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
-    await expect(loadPlugins(bad)).rejects.toThrow('guidance');
+    await expect(load(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
+    await expect(load(bad)).rejects.toThrow('guidance');
   });
 
   it('合法的覆寫會生效——夾進 prompt 的是部署給的那份原樣文本', async () => {
@@ -757,13 +832,13 @@ describe('設定（#453）', () => {
 
   it('型別錯就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
     const bad = [{ plugin: planModePlugin, config: { startActive: 'yes' } }];
-    await expect(loadPlugins(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
-    await expect(loadPlugins(bad)).rejects.toThrow('startActive');
+    await expect(load(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
+    await expect(load(bad)).rejects.toThrow('startActive');
   });
 
   it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
     await expect(
-      loadPlugins([{ plugin: planModePlugin, config: { guidence: '講清楚' } }]),
+      load([{ plugin: planModePlugin, config: { guidence: '講清楚' } }]),
     ).rejects.toThrow(/guidence/);
   });
 });

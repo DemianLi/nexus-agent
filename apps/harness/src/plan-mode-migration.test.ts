@@ -48,7 +48,7 @@ function denyExit(): PluginEntry {
 }
 
 interface Case {
-  readonly args: unknown;
+  readonly args: Record<string, unknown>;
   readonly reply?: QuestionReply;
   readonly startActive?: boolean;
   readonly headless?: boolean;
@@ -144,7 +144,7 @@ async function runOne(label: string, spec: Case): Promise<unknown> {
     state: messages
       .filter((message) => message.getType() === 'tool')
       .map((message) => ({ name: (message as { name?: string }).name ?? null })),
-    logged: events.flatMap((event) =>
+    logged: events.flatMap((event): unknown[] =>
       event.type === 'tool/result'
         ? [{ isError: event.data.isError, error: event.data.error }]
         : event.type === 'plan/mode'

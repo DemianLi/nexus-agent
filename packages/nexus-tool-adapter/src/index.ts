@@ -13,6 +13,7 @@
  * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 讀得到。
  *   `execute` reject 不接，照 LangChain 工具拋錯的路走。
  * - **`interrupt()` 是 LangGraph 的 `interrupt()`**：掛起靠拋例外，恢復時工具本體重跑。
+ * - **`concludesTurn: true` 轉成 `returnDirect: true`**：沒宣告的工具不帶它，`concludeTurn()` 標了也不收。
  * - **`deferContext()` 補的訊息**：成功的結果與補的訊息包成一顆 `Command`，那則工具結果的 `ToolMessage` 由這裡造。
  *
  * @module
@@ -135,7 +136,13 @@ function convert(tool: NexusTool): StructuredTool {
         ...(result.error !== undefined && { error: result.error }),
       });
     },
-    { name: tool.name, description: tool.description, schema },
+    {
+      name: tool.name,
+      description: tool.description,
+      schema,
+      // 基座的 tools 路由只認靜態的 `returnDirect` 名單，標了 `concludeTurn()` 的結果才留住 `name` 而收這一輪（`@nexus/core` 的 `turn-conclusion.ts`）。
+      ...(tool.concludesTurn === true && { returnDirect: true }),
+    },
   );
   const wire = JSON.stringify(toJsonSchema(converted.schema));
   if (wire !== JSON.stringify(closed(tool.parameters))) {

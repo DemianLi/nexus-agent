@@ -29,6 +29,7 @@
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
+import type { NexusTool } from '@nexus/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
@@ -121,11 +122,13 @@ interface Layer {
 export interface ToolRegistrationPoint {
   /**
    * 註冊一個工具。
-   * @param tool - 工具實例，名字取自它的 `name`。
+   * @param tool - 工具實例，名字取自它的 `name`。也收 `@nexus/tools` 的 `NexusTool`（#2353）：註冊的當下經組裝點交的
+   *   {@link CreateRegistryOptions.adaptTool} 轉成 LangChain 的工具，表裡放的是轉出來的那一個。
    * @param options - 註冊到哪一層。
    * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 收到 `NexusTool`、組裝點卻沒交 `adaptTool`。
    */
-  register(tool: StructuredTool, options?: RegisterOptions): () => void;
+  register(tool: StructuredTool | NexusTool, options?: RegisterOptions): () => void;
   /**
    * 從某一層看一個工具名解析到誰。就近原則：該層自己註冊的遮蔽掉全域的同名工具。
    * @param name - 工具名。
@@ -1189,6 +1192,26 @@ function duplicateToolError(scope: ScopeKey | undefined) {
   };
 }
 
+/**
+ * `tools.register()` 收到的東西換成表裡放的 LangChain 工具：`NexusTool` 經組裝點的轉接器轉，其餘原樣。
+ * 認法同 `@nexus/tools` 的 `isNexusTool`（core 只拿它的型別，不在執行期載入那個套件）。
+ */
+function asLangChainTool(
+  tool: StructuredTool | NexusTool,
+  origin: PluginOrigin,
+  adaptTool: ((tool: NexusTool) => StructuredTool) | undefined,
+): StructuredTool {
+  if (!('parameters' in tool) || typeof (tool as { execute?: unknown }).execute !== 'function') {
+    return tool as StructuredTool;
+  }
+  if (adaptTool === undefined) {
+    throw new Error(
+      `${formatOrigin(origin)} 註冊的 "${tool.name}" 是 NexusTool，但這次組裝沒有交轉接器（createRegistry 的 adaptTool），轉不成 LangChain 的工具。`,
+    );
+  }
+  return adaptTool(tool as NexusTool);
+}
+
 /** 把位置選項攤成兩個旗標。兩個都給是矛盾，當場拋——靜靜挑一個的話，另一個的意圖就消失了。 */
 function placementOf(
   options: MiddlewarePlacement | undefined,
@@ -1219,6 +1242,11 @@ export interface CreateRegistryOptions {
    * 在 `register()` 裡就拋，而不是等到委派才炸。registry 自己沒有型錄，所以由組裝點傳進來。拋出的錯誤照註冊點的規矩指名註冊者。
    */
   readonly validateSubagent?: (subagent: NexusSubAgent) => void;
+  /**
+   * 把 `tools.register()` 收到的 `NexusTool` 轉成 LangChain 的工具（#2353）。轉接器（`@nexus/tool-adapter`）相依 core，core 叫不到它，
+   * 所以由組裝點傳進來。**同一個 `NexusTool` 要轉出同一個實例**：撤銷註冊、`rootOnly` 與 `outputSchema` 都以實例為鍵。
+   */
+  readonly adaptTool?: (tool: NexusTool) => StructuredTool;
 }
 
 /**
@@ -1395,6 +1423,7 @@ function writePendingSpawnInput(log: SessionLog): void {
  * @returns 尚未進入任何 plugin 的 registry。
  */
 export function createRegistry(options: CreateRegistryOptions = {}): InternalPluginRegistry {
+  const { adaptTool } = options;
   const globalLayer: Layer = { tools: new NamedEntries(duplicateToolError(undefined)) };
   const scopedLayers = new Map<ScopeKey, Layer>();
   const subagents = new NamedEntries<NexusSubAgent>(
@@ -1507,8 +1536,9 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
   const outputSchemas = new Map<StructuredTool, ZodType>();
 
   const tools: ToolRegistrationPoint = {
-    register(tool, options) {
+    register(registered, options) {
       return effect('tools.register()', (origin) => {
+        const tool = asLangChainTool(registered, origin, adaptTool);
         const scope = options?.scope;
         // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
         const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';

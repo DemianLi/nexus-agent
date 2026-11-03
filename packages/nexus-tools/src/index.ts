@@ -43,8 +43,12 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.1.0`（#2352）：{@link ToolExec} 多 {@link ToolExec.deferContext} 與 {@link ToolExec.interrupt}。向後相容的新增：`^2.0.0` 的消費者不呼叫它，照常；
  * 要用的消費者宣告 `^2.1.0`。
+ *
+ * `2.2.0`（#2353）：{@link NexusTool} 多選填的 {@link NexusTool.concludesTurn}。`exec.concludeTurn()` 只對宣告了它的工具有效，
+ * 沒宣告的 `NexusTool` 呼叫它什麼都不做（`2.1.0` 也是這樣，那時還沒有地方宣告）。向後相容的新增：不呼叫 `concludeTurn()` 的消費者照常；
+ * 要收輪的消費者宣告 `^2.2.0`（升級指南 `docs/upgrade-guide/v0.6.0/nexus-tool-concludes-turn/guide.md`）。
  */
-export const TOOLS_CONTRACT_VERSION = '2.1.0';
+export const TOOLS_CONTRACT_VERSION = '2.2.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -77,7 +81,10 @@ export interface ToolExec {
   readonly agent: ToolResultExecution['agent'];
   /** 這一輪的停止訊號併上 LangGraph 自己的 `signal`，任一個舉起都算；兩個都沒有是 `undefined`。 */
   readonly signal: AbortSignal | undefined;
-  /** 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}；不帶參數，名字由宿主填這次呼叫的工具。 */
+  /**
+   * 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}；不帶參數，名字由宿主填這次呼叫的工具。
+   * 只對宣告了 {@link NexusTool.concludesTurn} 的工具有效。
+   */
   concludeTurn(): void;
   /**
    * 這次呼叫成功的結果之後，補一則插件來源的人話給模型（契約 `2.1.0` 起）。
@@ -126,6 +133,11 @@ export interface NexusTool {
    * @returns 這次呼叫的結果。
    */
   execute(args: { readonly [key: string]: JsonValue }, exec: ToolExec): Promise<NexusToolResult>;
+  /**
+   * 這顆工具可能在本體裡呼叫 `exec.concludeTurn()` 收這一輪（契約 `2.2.0` 起）。省略是不會：那時 `concludeTurn()` 什麼都不做。
+   * 宣告了也只有呼叫了才收，其餘結局照常回頭叫模型。
+   */
+  readonly concludesTurn?: boolean;
 }
 
 /**
