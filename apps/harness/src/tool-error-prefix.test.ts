@@ -58,17 +58,18 @@ function codeLinesMatching(pattern: RegExp): string[] {
 
 describe('Error: 前綴只有一個主人', () => {
   /**
-   * 手寫 `status: 'error'` 的只剩兩處：`toolRefusal`／`toolFeedback` 共用的那一個建構點，與
+   * 手寫 `status: 'error'` 的只剩兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
+   * 與推導端補的那兩句共用），與
    * `fs-tool-errors.ts` 包基座文字的那一則（文字不是我們寫的，可能是文字塊陣列）。
    *
    * 2026-09-14 在改之前的 develop（`473d12a`）上數到 10 處、10 個檔：圍堵、核准、先讀後改、輸出 schema、
    * fs-tool-errors、ask-user、submit_record、sandbox-escalation、pump 的 `#withdraw`，與 `tool-events.ts`
    * 自己。其中 8 處是 #318 補前綴的出口，全部改走 `toolRefusal`。
    */
-  it('手寫 error 狀態的只有 tool-events 與 fs-tool-errors', () => {
+  it('手寫 error 狀態的只有錯誤結果的建構點與 fs-tool-errors', () => {
     expect(codeLinesMatching(/status:\s*['"]error['"]/u)).toEqual([
       "packages/nexus-core/src/fs-tool-errors.ts: status: 'error',",
-      "packages/nexus-core/src/tool-events.ts: status: 'error',",
+      "packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
     ]);
   });
 
@@ -85,13 +86,16 @@ describe('Error: 前綴只有一個主人', () => {
   });
 
   /**
-   * 不帶前綴的那條路（`toolFeedback`，dsh 的第二條政策）只有一個呼叫者：推模型歷史時補的那兩句，
-   * 逐字抄 dsh `repair.ts`。**多一個呼叫者是一個決定，不是預設**——拒絕走它，前綴就悄悄不見了，
-   * 而上面兩條都數不到。另一行是它的定義。改之前這個函式不存在（0 處）。
+   * 不帶前綴的那條路（dsh 的第二條政策）只有一個生產者：推模型歷史時補的那兩句（`conversation-replay.ts` 的 `closer`），
+   * 逐字抄 dsh `repair.ts`，直接拿建構點的欄位；請求端的 `toolFeedback` 留給作者自己寫好的回饋，今天沒有呼叫者。
+   * **多一個呼叫者是一個決定，不是預設**——拒絕走這條，前綴就悄悄不見了，而上面兩條都數不到。
+   * 其餘幾行是定義與 `errorResult`（`toolRefusal`／`toolFeedback` 共用）那一處。
    */
   it('不帶前綴的那條路只有推模型歷史在走', () => {
-    expect(codeLinesMatching(/\btoolFeedback\(/u)).toEqual([
-      'packages/nexus-core/src/conversation-replay.ts: return toolFeedback(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
+    expect(codeLinesMatching(/\b(?:toolFeedback|errorResultFields)\(/u)).toEqual([
+      'packages/nexus-core/src/conversation-replay.ts: ...errorResultFields(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
+      'packages/nexus-core/src/tool-error-codes.ts: export function errorResultFields(',
+      'packages/nexus-core/src/tool-events.ts: const message = new ToolMessage(errorResultFields(content, options));',
       'packages/nexus-core/src/tool-events.ts: export function toolFeedback(content: string, options: ErrorResultOptions): ToolMessage {',
     ]);
   });

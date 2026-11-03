@@ -133,7 +133,7 @@ export type SearchErrorCode =
 const BASE_ERROR_WORD = 'Error';
 
 /**
- * 基座的文字原樣、只換成錯誤狀態的那一則。**全樹除了 `tool-events.ts` 之外唯一手寫 `status: 'error'`
+ * 基座的文字原樣、只換成錯誤狀態的那一則。**全樹除了 `tool-error-codes.ts`（錯誤結果的建構點）之外唯一手寫 `status: 'error'`
  * 的地方**（絆索見 `apps/harness/src/tool-error-prefix.test.ts`）：這裡的文字不是我們寫的，
  * 內容可能是文字塊陣列，`toolRefusal` 只收一句字串。
  */

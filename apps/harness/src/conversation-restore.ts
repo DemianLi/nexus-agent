@@ -31,9 +31,9 @@
  * 按會話分目錄（`tool-result-stash.ts`），不在 graph state 裡，所以這一條路灌回去的預覽指的路徑讀得到。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import {
+  nexusContent,
   parsesLoggedToolCalls,
   replayConversation,
   SESSION_EVENT_MAX_DEPTH,
@@ -42,6 +42,8 @@ import {
 import type {
   ConversationReplay,
   LoggedMessage,
+  MessageContent,
+  NexusMessage,
   SessionEvent,
   UnreplayableReason,
 } from '@nexus/core';
@@ -103,7 +105,7 @@ const TOO_LARGE_TOOL_MSG = context`
   {content_sample}
 `;
 
-function stringifyToolContent(content: ToolMessage['content']): string {
+function stringifyToolContent(content: MessageContent): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -169,10 +171,14 @@ function createContentPreview(contentStr: string, headLines = 5, tailLines = 5):
  *
  * 重播（{@link toolResultAsSeen}）與分叉讀繼承檔的路由（`fork-stash.ts`）共用這一份規則。
  *
- * @param message - 日誌裡記的那則（工具的輸出）。
+ * @param message - 日誌裡記的那則（工具的輸出）：`ToolMessage`，或 nexus 訊息讀出來的同名三格。
  * @returns 搬去的虛擬路徑（`/large_tool_results/<呼叫編號>.txt`）；不搬就是 undefined。
  */
-export function toolResultEvictionPath(message: ToolMessage): string | undefined {
+export function toolResultEvictionPath(message: {
+  readonly name?: string;
+  readonly content: MessageContent;
+  readonly tool_call_id: string;
+}): string | undefined {
   if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
     return undefined;
   }
@@ -183,26 +189,38 @@ export function toolResultEvictionPath(message: ToolMessage): string | undefined
 /**
  * 一則工具結果在模型那一格長什麼樣：照基座的規則，過大的換成預覽。
  *
+ * 換出來的那則帶齊 `ToolMessage` 建構子收的那幾格（轉的時候 `data` 原樣交給建構子），沒有 `additional_kwargs`／`response_metadata` 時補空物件，同建構子。
+ *
  * @param message - 日誌裡記的那則（工具的輸出）。
  * @returns 沒過門檻或基座不搬的原樣；過了的換成基座那則。
  */
-export function toolResultAsSeen(message: ToolMessage): ToolMessage {
-  const filePath = toolResultEvictionPath(message);
+export function toolResultAsSeen(message: NexusMessage): NexusMessage {
+  const data = message.data as NexusMessage['data'] & {
+    readonly artifact?: unknown;
+    readonly status?: unknown;
+    readonly metadata?: unknown;
+  };
+  const toolCallId = data.tool_call_id as string;
+  const content = nexusContent(message);
+  const filePath = toolResultEvictionPath({ name: data.name, content, tool_call_id: toolCallId });
   if (filePath === undefined) return message;
-  const text = stringifyToolContent(message.content);
-  return new ToolMessage({
-    content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', message.tool_call_id)
-      .replace('{file_path}', filePath)
-      .replace('{content_sample}', createContentPreview(text)),
-    tool_call_id: message.tool_call_id,
-    name: message.name,
-    id: message.id,
-    artifact: message.artifact,
-    status: message.status,
-    metadata: message.metadata,
-    additional_kwargs: message.additional_kwargs,
-    response_metadata: message.response_metadata,
-  });
+  const text = stringifyToolContent(content);
+  return {
+    type: 'tool',
+    data: {
+      content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', toolCallId)
+        .replace('{file_path}', filePath)
+        .replace('{content_sample}', createContentPreview(text)),
+      tool_call_id: toolCallId,
+      name: data.name,
+      id: data.id,
+      artifact: data.artifact,
+      status: data.status,
+      metadata: data.metadata,
+      additional_kwargs: data.additional_kwargs ?? {},
+      response_metadata: data.response_metadata ?? {},
+    } as NexusMessage['data'],
+  };
 }
 
 /* -------------------------------------------------------------------------- */

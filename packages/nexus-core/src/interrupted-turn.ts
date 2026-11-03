@@ -37,11 +37,8 @@
  * @module
  */
 
-import type { ToolMessage } from '@langchain/core/messages';
-
-import { readLoggedMessage, toLoggedMessage } from './logged-message.js';
-import { closer, requestedCalls } from './conversation-replay.js';
-import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
+import { closer, closerError, requestedCalls } from './conversation-replay.js';
+import type { NexusMessage } from './nexus-message.js';
 import { appendSharedEvents, SessionSeq } from './session-log.js';
 import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
@@ -106,7 +103,7 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
       }
       case 'assistant/message':
         if (open) {
-          for (const call of requestedCalls(readLoggedMessage(event.data.message))) {
+          for (const call of requestedCalls(event.data.message)) {
             unanswered.set(call.id, call.name);
           }
         }
@@ -130,10 +127,10 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
   return { open, unanswered, started, openModelStarts };
 }
 
-/** 一顆沒配到結果的呼叫補的錯誤結果：寫進日誌的 `data`，與寫進對話的那一則（同一個實例）。 */
+/** 一顆沒配到結果的呼叫補的錯誤結果：寫進日誌的 `data`（`data.message` 就是 `message`，同一個實例），與寫進對話的那一則。寫進對話時由呼叫端轉成 `BaseMessage`（`toBaseMessage`），錯誤碼靠這個實例認回。 */
 export interface UnansweredCallResult {
   readonly data: SessionEventMap['tool/result'];
-  readonly message: ToolMessage;
+  readonly message: NexusMessage;
 }
 
 /**
@@ -152,14 +149,7 @@ export function unansweredCallResults(events: readonly SessionEvent[]): Unanswer
     const message = closer({ id: callId, name }, wasStarted);
     return {
       message,
-      data: {
-        callId,
-        isError: true,
-        error: wasStarted
-          ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
-          : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
-        message: toLoggedMessage(message),
-      },
+      data: { callId, isError: true, error: closerError(wasStarted), message },
     };
   });
 }

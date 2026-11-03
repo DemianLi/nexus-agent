@@ -85,7 +85,7 @@ import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
-import { closer } from './conversation-replay.js';
+import { closer, closerError } from './conversation-replay.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
 import { spawnedSubagentRunId } from './session-address.js';
 import type { SessionLog } from './session-log.js';
@@ -96,7 +96,6 @@ import {
   readToolOutcome,
   readToolResultMessage,
   TOOL_ABORTED,
-  TOOL_OUTCOME_UNKNOWN,
   TOOL_TIMEOUT,
   toolRefusal,
 } from './tool-events.js';
@@ -315,8 +314,8 @@ function recordUnknownOutcome(
     log.append('tool/result', {
       callId,
       isError: true,
-      error: { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN },
-      message: toLoggedMessage(closer({ id: callId, name }, true)),
+      error: closerError(true),
+      message: closer({ id: callId, name }, true),
     });
   } catch (recoveryError) {
     throw new AggregateError(
@@ -346,7 +345,7 @@ function recordUnknownOutcome(
  * 日誌那一關拒收（#1526 的有損值、#1661 的深度上限）：
  *
  * - `tool/call` 寫不進去：原錯當場拋，工具本體不跑（dsh 的 `appendToolCall` 在 `prepare` 之前）。
- * - `tool/result` 寫不進去：先補一顆最小的錯誤結果（{@link TOOL_OUTCOME_UNKNOWN}，同 dsh `agent.ts:344-355` 用
+ * - `tool/result` 寫不進去：先補一顆最小的錯誤結果（`TOOL_OUTCOME_UNKNOWN`，碼由 {@link closerError} 給，同 dsh `agent.ts:344-355` 用
  *   `repair.ts` 補的那顆），再拋原錯，這一步失敗。補的那顆讓日誌上的呼叫有配對、畫面上的工具卡收成失敗
  *   （pump 從日誌的 `tool/result` 收卡）。補的也寫不進去就兩個錯一起拋（`AggregateError`，同 dsh `:353`）。
  *   跟著要注入的 `user/message` 不寫，同 dsh 拋在 `acceptContext`（`:157`）之前。

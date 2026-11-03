@@ -33,7 +33,7 @@
  * 1. **解譯不在 session surface 上，而在每次叫模型前讀日誌。** dsh 的 surface 把訊息節點與事件綁在一起，`image/offload` 直接改節點；我們的訊息住在
  *    LangGraph state 裡，沒有 surface 這一軸。所以訊息帶著「出自日誌哪一顆事件」的記號（`additional_kwargs`，{@link IMAGE_ORIGIN_KEY}），
  *    {@link createImageOffloadMiddleware} 照日誌上的決定把落在請求裡的圖標成已省略（{@link applyImageOffload}）。記號由 pump 在記 `turn/start`／`user/message`
- *    之後蓋上、由 `replayConversation` 在推回歷史時蓋上，日誌本身不存記號。
+ *    之後蓋上、由推導端（`conversation-replay.ts`，`stampLoggedImageOrigin`）在推回歷史時蓋上，日誌本身不存記號。
  * 2. **只處理有記號的圖。** 沒有記號的訊息（目前沒有生產者）算進額度、但選不到、也就不會被省略；省略之後額度仍超出時，adapter 再拋、上層挑不到，錯誤往外。
  * 3. **摘要請求不走這一支。** 摘要器的輸入是一段文字，圖在那一步已是文字佔位（`summarization.ts` 的 `withAttachmentText`），摘要請求不帶圖，所以 dsh 的
  *    `compaction/summary-error` 接這個碼的那一支在我們這裡沒有對應的失敗。
@@ -50,14 +50,25 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 
-import { isImageBlock } from './attachment-ref.js';
 import type { ImageBlock } from './attachment-ref.js';
 import type { AgentMiddleware } from './base-types.js';
+import {
+  imageOccurrencesIn,
+  imageOriginIn,
+  IMAGE_ORIGIN_KEY,
+  offloadedContent,
+  offloadedImagesOf,
+} from './image-offload-log.js';
+import type { ImageOccurrence, ImageOffloadTarget } from './image-offload-log.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionEvent } from './session-log.js';
 
-/** 訊息 `additional_kwargs` 上記「這則訊息出自日誌的哪一顆事件」的鍵。只蓋在含圖片區塊的訊息上。 */
-export const IMAGE_ORIGIN_KEY = 'nexus_event_seq';
+export {
+  IMAGE_ORIGIN_KEY,
+  offloadedImagesOf,
+  recordImageOffloadInto,
+} from './image-offload-log.js';
+export type { ImageOccurrence, ImageOffloadTarget } from './image-offload-log.js';
 
 /** 這顆middleware 的名字。排序斷言與錯誤訊息用得到。 */
 export const IMAGE_OFFLOAD_MIDDLEWARE_NAME = 'nexusImageOffload';
@@ -74,45 +85,19 @@ export interface ImageBudget {
   readonly maxBytes?: number;
 }
 
-/** 日誌上一格決定：這則訊息（出自哪顆事件）的哪幾張圖被省略。 */
-export interface ImageOffloadTarget {
-  readonly seq: number;
-  readonly imageIndexes: readonly number[];
-}
-
-/** 訊息內容裡由前往後的圖片區塊，連同它在這則訊息裡的位置（含已省略者）。 */
-export interface ImageOccurrence {
-  readonly imageIndex: number;
-  readonly block: ImageBlock;
-}
-
-function contentBlocks(message: BaseMessage): readonly unknown[] {
-  return Array.isArray(message.content) ? (message.content as readonly unknown[]) : [];
-}
-
 /** 一則訊息裡的圖片區塊，由前往後。位置從 0 數，算上已省略的。 */
 export function imageOccurrences(message: BaseMessage): ImageOccurrence[] {
-  const found: ImageOccurrence[] = [];
-  let imageIndex = 0;
-  for (const block of contentBlocks(message)) {
-    if (!isImageBlock(block)) continue;
-    found.push({ imageIndex, block });
-    imageIndex += 1;
-  }
-  return found;
+  return imageOccurrencesIn(message.content);
 }
 
 /** 這則訊息有沒有圖片區塊。 */
 export function hasImageBlock(message: BaseMessage): boolean {
-  return contentBlocks(message).some(isImageBlock);
+  return imageOccurrences(message).length > 0;
 }
 
 /** 這則訊息出自日誌的哪一顆事件；沒有記號回 `undefined`。 */
 export function imageOriginOf(message: BaseMessage): number | undefined {
-  const value = (message.additional_kwargs as Record<string, unknown> | undefined)?.[
-    IMAGE_ORIGIN_KEY
-  ];
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return imageOriginIn(message.additional_kwargs);
 }
 
 /**
@@ -129,34 +114,6 @@ export function stampImageOrigin<M extends BaseMessage>(message: M, seq: number)
 /** 位元組換成 base64 之後的長度。 */
 export function base64Length(bytes: number): number {
   return 4 * Math.ceil(bytes / 3);
-}
-
-/**
- * 日誌上所有的 `image/offload`，攤成「事件 `seq` → 被省略的圖片位置」。形狀不對的格略過（不拋：這份資料由我們自己寫、讀的時機是叫模型之前，
- * 拋出去等於整輪失敗；略過的後果只是那幾張圖又被送出，額度檢查會再省略一次）。
- */
-export function offloadedImagesOf(events: readonly SessionEvent[]): Map<number, Set<number>> {
-  const offloaded = new Map<number, Set<number>>();
-  for (const event of events) recordImageOffloadInto(offloaded, event);
-  return offloaded;
-}
-
-/** {@link offloadedImagesOf} 的一顆：是 `image/offload` 就把它的決定併進 `offloaded`，其餘事件略過。 */
-export function recordImageOffloadInto(
-  offloaded: Map<number, Set<number>>,
-  event: SessionEvent,
-): void {
-  if (event.type !== 'image/offload') return;
-  const targets: unknown = event.data?.targets;
-  if (!Array.isArray(targets)) return;
-  for (const target of targets as readonly Record<string, unknown>[]) {
-    const seq = target?.['seq'];
-    const indexes = target?.['imageIndexes'];
-    if (typeof seq !== 'number' || !Array.isArray(indexes)) continue;
-    const set = offloaded.get(seq) ?? new Set<number>();
-    for (const index of indexes) if (typeof index === 'number') set.add(index);
-    offloaded.set(seq, set);
-  }
 }
 
 /**
@@ -183,17 +140,8 @@ export function applyImageOffload(
     const origin = imageOriginOf(message);
     const indexes = origin === undefined ? undefined : offloaded.get(origin);
     if (indexes === undefined || !imageOffloadable(message)) continue;
-    let imageIndex = 0;
-    let touched = false;
-    const content = contentBlocks(message).map((block) => {
-      if (!isImageBlock(block)) return block;
-      const here = imageIndex;
-      imageIndex += 1;
-      if (!indexes.has(here) || block.offloaded === true) return block;
-      touched = true;
-      return { ...block, offloaded: true as const };
-    });
-    if (!touched) continue;
+    const content = offloadedContent(message.content, indexes);
+    if (content === undefined) continue;
     changed ??= [...messages];
     changed[position] = new HumanMessage({
       content: content as never,

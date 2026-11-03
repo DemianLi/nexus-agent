@@ -133,13 +133,14 @@ import {
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
   applyRecordedArgTruncations,
+  applyRecordedPrunes,
   newlyTruncatedArgs,
   restoreNewlyTruncatedArgs,
-  recordedArgTruncationsOf,
-} from './tool-arg-truncation-log.js';
+} from './langchain-message-adapter.js';
+import { recordedArgTruncationsOf } from './tool-arg-truncation-log.js';
 import { withSummaryCatchUp } from './summary-catch-up.js';
 import { createHistoryStaging } from './summary-history-staging.js';
-import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
+import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
