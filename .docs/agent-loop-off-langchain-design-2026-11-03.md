@@ -2,7 +2,9 @@
 
 卡 [#2336](https://github.com/DemianLi/nexus-agent/issues/2336)，地圖 [#1339](https://github.com/DemianLi/nexus-agent/issues/1339)（S2）與 [#1385](https://github.com/DemianLi/nexus-agent/issues/1385)（loop 第二段）。決策出處 D167：demian 2026-11-03 在 PM session 說「優先讓工程師處理等 agent loop 不再依賴 LangChain（Q29 那張），然後再告訴 dev-rs 第一條障礙消失了，對話那棵樹能不能換成 Rust 可以重新評估」。
 
-**這份只有設計與子卡草稿，沒有改任何產品程式碼。** 子卡要等 demian 看過才開到 GitHub。
+**這份只有設計與子卡草稿，沒有改任何產品程式碼。** §十 的 14 題 demian 2026-11-03 在 PM session 全部照推薦拍板（#1827 D168），子卡 K0–K13 由 PM 在這份合併後開。
+
+**最終目標**（D169，demian 同一則）：「最終目標依然是完全擺脫 langchain 和 cordis ，這樣才能真正的變成具有萬物皆可插件的架構設計搭配企業級智能體產品的應用模式」。**這一串只做 LangChain 那一半**；Cordis 怎麼拿掉不在這一串，這份不設計。
 
 基準：
 - nexus `origin/develop` `cc305eb6`；
@@ -30,11 +32,11 @@
 
    仍是 JS 函式的有六類：工具 `execute`、`gate`／`onResult`／`preStep` 的 listener、投影單元、命令 handler、`goals.onActivationChanged`、`sessionLookup.join`。
 
-   這跟 dsh 一樣：dsh 沒有「服務值必須可序列化」的整體約束（§八）。要再往下走成純資料＋RPC，是另一個題目（Q9）。
+   這跟 dsh 一樣：dsh 沒有「服務值必須可序列化」的整體約束（§八）。要再往下走成純資料＋RPC，D168 定為不在這一串（Q9）。
 5. **和 #1947 會撞的是 `thread-pump.ts`、`wire-handler.ts`、`assembly-root.ts`、`serve.ts`。** 建議的順序：
    - L0、L1 與 #1947 的 C0–C2b 並行；
-   - L2 起等 C1 合併後再動 pump；
-   - L3 拿掉存檔點，排在 C3 之後（§九、Q12）。
+   - L2 起等 C1（#2338）合併後再動 pump；
+   - L3 拿掉存檔點，排在 C3（#2341）之後（§九、Q12）。
 
 ## 一、dsh 怎麼做、為什麼
 
@@ -176,7 +178,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 | nexus 的需求 | 稽核要的「模型看到的都有記」在 L1 就成立，不必等 loop | 要等整個 loop 換完 | — |
 | 基座做不做得到 | L1 要一顆最外層 middleware 拿推出來的歷史換掉 `request.messages`。#1341 的 G2 量過這種取代：外層取代會讓模型看到日誌上沒有的東西，所以 L1 只換「歷史」、不取代回應，判準改成比對第二句請求的歷史（G2 的建議） | — | — |
 
-**推薦 (a)。**
+**選 (a)**（D168 Q1）。
 - (b) 省的只是一段並存期，丟掉的是「錯分得開」。
 - (c) 不符 D167。
 
@@ -195,7 +197,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 | 效能 | 一般一輪只付新事件的成本；壓縮那一輪付整份 | 每輪付整份，大日誌會退步（沒量） | 同今天 |
 | 維護 | 多一層失效規則 | 最少 | 兩份真相 |
 
-**推薦 (i)。** 數字由 K1 先量：
+**選 (i)**（D168 Q13 的前提）。數字由 K1 先量：
 - 在 #2117 那份大日誌與 r7-driver 的 45 輪上，量 (i) 與 (ii) 每輪的 CPU；
 - 量到的數字跟今天的存檔點路徑比。
 
@@ -237,7 +239,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 
 ## 五、會話日誌格式：要不要升、哪幾段是 one-way（第 3 點）
 
-**原則：整串只升一次版，放在 L2 的 K7。** L0、L1 都不改寫入方，讀方的改動要讓凍結的 52 份夾具照樣讀得過。我不升 `SESSION_LOG_FORMAT_VERSION`；要升的那張卡由 demian 拍板（Q4）。
+**原則：整串只升一次版，放在 L2 的 K7。** L0、L1 都不改寫入方，讀方的改動要讓凍結的 52 份夾具照樣讀得過。D168 Q4 定為整串只在 K7 升這一次。
 
 | # | 改動 | 段 | 升版？ | one-way？ | 凍結的 52 份夾具 | #1597 關係檢查器 | web 讀端 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -301,7 +303,7 @@ type NexusToolResult =
   | { readonly ok: false; readonly content: MessageContent; readonly error: ToolErrorInfo }
 ```
 
-| 決定 | 選項 | 推薦與理由 |
+| 決定 | 選項 | 選定與理由 |
 | --- | --- | --- |
 | 參數 schema | (a) 照 dsh 用 JSON Schema（純資料）；(b) 契約收 zod，邊界上轉 | **(a)**。插件可以繼續用 zod 寫，再用 zod 4 內建的 `z.toJSONSchema()` 轉，不必新下載（`zod@4.6.7` 已是直接相依）。MCP 的工具本來就是 JSON Schema。(b) 會讓服務值裡留著 zod 物件，§八 又多一項 |
 | 呼叫身分 | (a) `exec` 上的資料欄；(b) 照舊從呼叫設定裡挖 | **(a)**，照 dsh `ToolRunContext`。今天 `forCall(invocation)`（`@nexus/session`、`@nexus/fs`）收的 invocation 在 L2 改成 `ToolExec` |
@@ -360,11 +362,11 @@ type NexusToolResult =
 - 但服務值裡仍有六類 JS 函式，要跨 Rust 邊界就得處理：工具 `execute`、四種事件監聽者（pre-execute、result、pre-step、projection）、命令 handler、`join`／`onActivationChanged` 這類安裝者。
 - 另外還有幾種不可序列化的物件：`SessionLog`、`FsService`、`AbortSignal`、`GoalService`。
 
-這跟 dsh 一樣（§1-4，dsh 的 `ToolDefinition.execute` 與所有監聽者都是函式）。所以 §4-2 的 (ii)「服務值收斂成資料＋RPC」，**照 dsh 走到底也只走到一半**。要走完，得把監聽者改成按名字呼叫的 RPC，那是 Q9，不在這串的推薦範圍裡。
+這跟 dsh 一樣（§1-4，dsh 的 `ToolDefinition.execute` 與所有監聽者都是函式）。所以 §4-2 的 (ii)「服務值收斂成資料＋RPC」，**照 dsh 走到底也只走到一半**。要走完，得把監聽者改成按名字呼叫的 RPC，D168 Q9 定為不在這一串。
 
 ## 九、跟 #1947 的先後與撞檔（第 7 點）
 
-#1947 的子卡見 PR #2335 的設計 §九（`.docs/supervisor-1947-design-2026-11-03.md`，**PR 還開著**）。
+#1947 的設計見 `.docs/supervisor-1947-design-2026-11-03.md`（PR #2335，已合 `45fa00b1`）§九；子卡已開，C1 是 #2338、C3 是 #2341。
 
 | 檔 | 本串哪幾張碰 | #1947 哪幾張碰 | 誰的 |
 | --- | --- | --- | --- |
@@ -377,13 +379,15 @@ type NexusToolResult =
 
 **建議的順序（Q12）**：
 1. **K0–K5**（不動 loop、只少量動 pump）與 #1947 的 C0、C2a、C2b 並行。
-2. **K6 起**等 C1 合進 develop。C1 會重整入口與組裝，K6 在它上面接 native loop，比反過來衝突少。
-3. **K10**（拿掉存檔點、改 restore）排在 C3 之後。
+2. **K6 起**等 C1（#2338）合進 develop。C1 會重整入口與組裝，K6 在它上面接 native loop，比反過來衝突少。
+3. **K10**（拿掉存檔點、改 restore）排在 C3（#2341）之後。
 4. **K12**（native loop 改預設）排在 #1947 改預設之後，並且用 `per-thread` 形狀重量 D162。#1947 C7 量的是存檔點路徑，換 loop 之後基準就變了，兩個改預設的 PR 不能共用同一份量測。
 
-## 十、要 demian 拍的題（PM 寫進 #1827）
+## 十、已拍板（#1827 D168）
 
-| # | 題 | 推薦 | 理由 |
+demian 2026-11-03 在 PM session：14 題全部照推薦（Q5 選 (b)、Q7 選 (a)、Q9 不在這一串）。
+
+| # | 題 | 拍板 | 理由 |
 | --- | --- | --- | --- |
 | Q1 | 照 §三 分四段（L0 前置、L1 S2、L2 開關並存的 native loop、L3 拿掉），開關 `--agent-loop=langgraph\|native` 比照 `--process-model`？ | **是** | 每段都是 two-way，錯分得開（§3-1） |
 | Q2 | 落盤的訊息形狀（`LoggedMessage {type, data}`）不換成 dsh 的 `Message`，native loop 用 nexus 自己的型別讀寫同一個形狀？ | **是** | 換形狀要升版而且是 one-way，52 份凍結夾具全要重做；開關要兩個 loop 互相讀得懂才做得成（§五 F1） |
@@ -415,7 +419,7 @@ type NexusToolResult =
 K0 ─┬─ K1 ── K5 ───────────┐
     ├─ K2 ─┐               │
     ├─ K3a ┼─ K3b ── K3c ──┼─ K6 ── K7 ── K8 ── K9 ── K10 ── K11 ── K12 ── K13
-    └─ K4 ─┘               │   （K6 等 #1947 C1；K10 等 C3；K12 等 #1947 改預設）
+    └─ K4 ─┘               │   （K6 等 #2338；K10 等 #2341；K12 等 #1947 改預設）
 ```
 
 ### K0 讀取面護欄：讀 state 的地方只許白名單（dev-h3）
@@ -453,7 +457,7 @@ K0 ─┬─ K1 ── K5 ───────────┐
 
 ### K3b 樹上的六個插件遷到 2.0（dev-h3）
 
-- **範圍**：echo、todo、present、ask-user（`interrupt` 先留在轉接器裡）、goal（`deferContext`）、submit-record（`files` 等 Q11 拍板）。
+- **範圍**：echo、todo、present、ask-user（`interrupt` 先留在轉接器裡）、goal（`deferContext`）、submit-record（`files` 照 Q11 改寫到 fs 後端）。
 - **驗收**：
   - 每顆的工具描述位元組不變；
   - 原有測試全綠；
@@ -503,7 +507,7 @@ K0 ─┬─ K1 ── K5 ───────────┐
   - `native` 下 wire e2e、web e2e（#1602）與夾具全綠；
   - 同一份腳本兩個 loop 寫出的日誌逐事件對照，差異逐條登記；
   - `langgraph` 下一條測試都不動。
-- **依賴**：K2、K3a、K5；#1947 C1 已合。
+- **依賴**：K2、K3a、K5；#1947 C1（#2338）已合。
 
 ### K7 middleware 遷成事件與服務（dev-h3；跟 harness 宿主有關的幾顆和 dev-h2 協調）
 
@@ -545,7 +549,7 @@ K0 ─┬─ K1 ── K5 ───────────┐
 - **驗收**：
   - 重啟續聊、冷復活、閒置逐出後回來，三種情境 `native` 下全綠；
   - 記憶體量一次，跟今天比。
-- **依賴**：K9；#1947 C3 已合。
+- **依賴**：K9；#1947 C3（#2341）已合。
 
 ### K11 模型轉接器換成 `openai` SDK（dev-h3）
 
@@ -598,4 +602,3 @@ K0 ─┬─ K1 ── K5 ───────────┐
   - deepagents 內部用到的 LangGraph 功能；
   - web 的 `@nexus/wire` 折疊器讀不讀 `request/*` 與 `interrupt/raised`。
 - **§3-3 對應表**是大類，不是逐顆的結論，要在 K7 逐顆核。
-- **K6 依賴的 #1947 C1** 還沒開卡；PR #2335 的設計還開著。
