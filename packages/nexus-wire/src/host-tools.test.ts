@@ -1,5 +1,5 @@
 /**
- * 宿主頁工具的上限與形狀（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：每個上限各量剛好在上限的與多一個的，收法在 reducer。
+ * 宿主頁工具的上限與形狀（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：每個上限各量剛好在上限的與多一個的；reducer 怎麼收 `hostCalls` 也在這裡。
  * 接到 serve 的那一段在 `apps/harness/src/host-tools-wire.test.ts`。
  */
 

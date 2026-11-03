@@ -7,7 +7,7 @@
  *   工具（`request.tool`），名字不改，所以核准閘門、圍堵、`tool/call` 的日誌、參數照 schema 驗都照一般工具走。宣告裡沒有的名字照原樣交下去，
  *   落到基座的「沒有這顆工具」。
  * - **工具本體**：發一顆 `input.requested`（`kind: 'host_tool'`）停下這一輪，等宿主頁用 `input.respond` 交回結果。說明與結果都包上固定的字、
- *   標明是嵌入的頁面給的資料，內容寫成 JSON 字串、`<` 寫成 `<`，同 `@nexus/core` 的 `page-context.ts`。
+ *   標明是嵌入的頁面給的資料，內容寫成 JSON、`<` 寫成 `\u003c`，同 `@nexus/core` 的 `page-context.ts`；逾時只回固定的一句。
  *
  * @module
  */
@@ -146,7 +146,7 @@ function build(declaration: HostToolDeclaration): NexusTool {
       const problem = hostToolResponseProblem(answer);
       if (problem !== undefined) return { ok: false, content: problem };
       const response = answer as HostToolResponse;
-      // 超過上限照 D185 Q3：不截，這次呼叫算失敗，模型看得到原因。
+      // 超過上限照設計 Q3：不截，這次呼叫算失敗，模型看得到原因。
       const tooLarge = hostToolResultProblem(response);
       if (tooLarge !== undefined) return { ok: false, content: tooLarge };
       if (!response.ok) {

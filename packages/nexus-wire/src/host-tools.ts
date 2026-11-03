@@ -3,7 +3,7 @@
  * `<nexus-chat>` 的宿主頁在 `run.start` 宣告自己的工具，模型呼叫時 serve 停下這一輪、發一顆 `input.requested`（{@link HOST_TOOL_INTERRUPT_KIND}），
  * 宿主頁執行後用 `input.respond` 把 {@link HostToolResponse} 交回。
  *
- * 上限與形狀在這裡驗（{@link hostToolsProblem}、{@link hostToolResponseProblem}、{@link hostToolResultProblem}），serve 與元件共用同一份判準。
+ * 上限與形狀的判準在這裡（{@link hostToolsProblem}、{@link hostToolResponseProblem}、{@link hostToolResultProblem}），serve 用這一份驗。
  * 宣告超過上限整句拒收；結果超過上限交回模型當這次呼叫的錯誤。都不截。
  *
  * @module
@@ -54,7 +54,7 @@ export interface HostToolInterruptPayload {
   readonly args: Readonly<Record<string, unknown>>;
 }
 
-/** 宿主頁交回的結果：`input.respond` 的 `response`。其他形狀一律當失敗。 */
+/** 宿主頁交回的結果：`input.respond` 的 `response`。其他形狀 serve 回 `invalid_argument`，那顆中斷照樣掛著。 */
 export type HostToolResponse =
   { readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: string };
 

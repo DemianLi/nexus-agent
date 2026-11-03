@@ -627,7 +627,7 @@ export interface PendingQuestion extends PendingCommon {
 
 /**
  * 等宿主頁執行的一支宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）。**不是給人回答的卡**，所以不在 {@link ConversationState.pendings}：
- * 嵌入的元件據它發 DOM 事件給宿主頁，宿主頁的結果用 `input.respond` 交回（形狀見 `host-tools.ts` 的 `HostToolResponse`）。
+ * 給嵌入的元件轉交宿主頁執行，結果用 `input.respond` 交回（形狀見 `host-tools.ts` 的 `HostToolResponse`）。
  */
 export interface PendingHostCall extends PendingCommon {
   /** 宣告時的名字，不帶 `page__`。 */

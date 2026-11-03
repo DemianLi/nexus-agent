@@ -161,7 +161,7 @@ export interface RunStartCommand {
     readonly context?: PageContext;
     /**
      * 嵌入的對話框替宿主頁宣告的工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，形狀與上限見 `host-tools.ts`）。
-     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；不合 `hostToolsProblem` 回 `invalid_argument`，不截。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；不合 `hostToolsProblem`、或參數 schema 轉不成工具（轉接器不認的關鍵字），回 `invalid_argument`，不截。
      * 這一輪模型看到的就是這一份；插話（`mode: 'steer'`）帶的不換這一輪的工具。
      */
     readonly host_tools?: readonly HostToolDeclaration[];
