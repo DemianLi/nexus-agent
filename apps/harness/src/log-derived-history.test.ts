@@ -43,6 +43,7 @@ import {
   runAssembly,
   runServePhases,
   runShippedCli,
+  HISTORY_SOURCE_UNDER_TEST,
   systemText,
   TRUNCATE_MARKER,
 } from './log-derived-history.fixture.js';
@@ -281,6 +282,108 @@ describe('對照場景：預期逐位元組相同', () => {
     await expectDerivedHistory('SV5', run, [], 2);
   }, 90_000);
 });
+
+/**
+ * 判準出自 `.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` §三 G2：第一份之後的每一份主請求帶出去的助手歷史，每一則日誌上都有一則 `assistant/message` 對得上（文字與工具呼叫的 id）。
+ */
+function expectAssistantHistoryOnLog(run: Run): void {
+  const textOf = (content: unknown): string =>
+    typeof content === 'string' ? content : systemText(content);
+  const logged = run.events
+    .filter((event) => event.type === 'assistant/message')
+    .map((event) => {
+      const data = (event.data as unknown as { message: { data: Record<string, unknown> } }).message
+        .data;
+      const calls = (data['tool_calls'] as { id?: string }[] | undefined) ?? [];
+      return `${textOf(data['content'])}|${calls.map((call) => call.id).join(',')}`;
+    });
+  const later = run.mainBodies.slice(1);
+  expect(later.length).toBeGreaterThan(0);
+  for (const body of later) {
+    for (const message of body.messages.filter((m) => m.role === 'assistant')) {
+      const calls = (message['tool_calls'] as { id?: string }[] | undefined) ?? [];
+      const key = `${textOf(message.content ?? '')}|${calls.map((call) => call.id).join(',')}`;
+      expect(logged, `線上的助手訊息日誌上沒有：${key.slice(0, 200)}`).toContain(key);
+    }
+  }
+}
+
+/**
+ * `state` 對 `log` 的位元組對照（#2355）：同一個場景各跑一次，假端點收到的每一份請求本文逐位元組比。`log` 那份比的是線上對推導，
+ * 線上送的就是推導，那一組天生相同；這裡直接拿兩種來源送出去的比，投影漏掉了哪個會上線的欄位，這裡就會不同。只在 `log` 那份入口跑一次。
+ */
+describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
+  'state 對 log：送出去的請求逐位元組相同',
+  () => {
+    const scenarios: readonly [
+      string,
+      string,
+      Script,
+      Parameters<typeof runAssembly>[2],
+      Parameters<typeof runAssembly>[3],
+    ][] = [
+      [
+        'C1 一顆工具',
+        '叫工具\n再說\n/exit\n',
+        (i) => (i === 0 ? echoCall('call_a', '嗨') : {}),
+        [createEchoPlugin()],
+        undefined,
+      ],
+      [
+        'S6 壓縮摘要',
+        '一\n二\n三\n四\n五\n六\n七\n/exit\n',
+        (i, body) => {
+          if ((body.tools?.length ?? 0) === 0) return { content: '【摘要】之前聊了很多。' };
+          return i === 1 ? echoCall('call_mid', big('中', 20_000)) : {};
+        },
+        [createEchoPlugin()],
+        { trigger: [{ type: 'messages', value: 8 }], retainTokens: 12 },
+      ],
+      [
+        'S8 工具結果剪刀',
+        `大一點的結果${PAD}\n再說一輪${PAD}\n再一輪${PAD}\n/exit\n`,
+        (i, body) => {
+          if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
+          return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
+        },
+        [createEchoPlugin()],
+        { trigger: [{ type: 'tokens', value: 12_000 }], retainTokens: 12 },
+      ],
+      [
+        'S9 舊工具參數截斷',
+        '寫檔\n二\n三\n四\n/exit\n',
+        (i) => (i === 0 ? writeCall('call_w') : {}),
+        [],
+        {
+          trigger: [{ type: 'messages', value: 1000 }],
+          retainTokens: 12,
+          truncateArgs: {
+            trigger: { type: 'messages', value: 4 },
+            keep: { type: 'messages', value: 2 },
+            maxLength: 100,
+          },
+        },
+      ],
+    ];
+
+    it.each(scenarios)(
+      '%s',
+      async (_name, lines, script, plugins, summarization) => {
+        const state = await runAssembly(lines, script, plugins, summarization, 'state');
+        const log = await runAssembly(lines, script, plugins, summarization, 'log');
+        expect(log.mainBodies.length).toBeGreaterThanOrEqual(2);
+        // 摘要那則帶著會話歷史檔的路徑，每跑一次就是一個新會話、id 不同；其餘逐位元組比。
+        const bytes = (run: Run) =>
+          run.bodies.map((body) =>
+            JSON.stringify(body).replaceAll(/session_[0-9a-f]+\.md/gu, 'session_<id>.md'),
+          );
+        expect(bytes(log)).toEqual(bytes(state));
+        expectAssistantHistoryOnLog(log);
+      },
+      120_000,
+    );
+  },
+);
 
 describe('已知差異：每一類對應一張卡', () => {
   it('S6 壓縮摘要（#1301）', async () => {

@@ -32,9 +32,10 @@
  * @module
  */
 
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
-import type { BaseMessage } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
 
+import type { SessionLookup } from './registry.js';
+import { toolCallOwner } from './tool-call-owner.js';
 import { markToolError, toolErrorOf } from './tool-events.js';
 
 /** {@link settleTurnConclusion} 讀得到的那幾格；`wrapToolCall` 的請求都符合。 */
@@ -42,6 +43,7 @@ export interface TurnConclusionRequest {
   readonly tool?: unknown;
   readonly toolCall: { readonly id?: string };
   readonly state: unknown;
+  readonly runtime?: { readonly configurable?: unknown };
 }
 
 /** 這個請求的工具有沒有宣告 `returnDirect`。`tool` 取不到（動態加給模型的工具）就當沒有，結果原樣放行。 */
@@ -49,20 +51,12 @@ function declaresReturnDirect(request: TurnConclusionRequest): boolean {
   return (request.tool as { returnDirect?: unknown } | undefined)?.returnDirect === true;
 }
 
-/** 這次呼叫所屬的那則 AI 訊息一共叫了幾個工具；找不到那則訊息就當一個。 */
-function batchSizeOf(request: TurnConclusionRequest): number {
-  const messages = (request.state as { messages?: readonly BaseMessage[] } | undefined)?.messages;
-  if (messages === undefined) return 1;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message = messages[at]!;
-    if (
-      AIMessage.isInstance(message) &&
-      message.tool_calls?.some((call) => call.id === request.toolCall.id) === true
-    ) {
-      return message.tool_calls.length;
-    }
-  }
-  return 1;
+/** 這次呼叫所屬的那則 AI 訊息（{@link toolCallOwner}）一共叫了幾個工具；找不到那則訊息就當一個。 */
+function batchSizeOf(
+  request: TurnConclusionRequest,
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
+): number {
+  return toolCallOwner(request, sessions)?.tool_calls.length ?? 1;
 }
 
 /**
@@ -90,18 +84,21 @@ function withoutName(message: ToolMessage): ToolMessage {
  * @param request - 這次呼叫的 `wrapToolCall` 請求。
  * @param value - 圍堵要交出去的東西（成功的結果、內層回的錯誤訊息、圍堵自己接住拋錯翻出來的訊息）。
  * @param concluded - 工具本體有沒有呼叫 {@link concludeTurn}。標了但結果是 `status: 'error'`（內層換掉的）也不收。
+ * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌數這一批（{@link toolCallOwner}）。省略就只讀 state。
  * @returns 要收：原物（帶 `name`，路由走 exitNode）；不收：去掉 `name` 的同一則；不是 `returnDirect` 工具、
  *   不是 ToolMessage（`Command`）、本來就沒有 `name`：原物。
+ * @throws `history-source=log` 時找不到這次呼叫的日誌（只在要收這一輪、得數這一批時才查，見 {@link toolCallOwner}）。
  */
 export function settleTurnConclusion<T>(
   request: TurnConclusionRequest,
   value: T,
   concluded: boolean,
+  sessions?: { forCall(config: unknown): SessionLookup },
 ): T {
   if (!declaresReturnDirect(request)) return value;
   if (!ToolMessage.isInstance(value) || value.name === undefined) return value;
   // 標了、但內層把結果換成錯誤（輸出校驗、檔案圍欄、max-tokens 這類）：dsh 的 `ToolExecutionFailure` 寫的是 `concludesTurn?: never`，
   // 失敗不收；模型要有機會看到那則錯誤。
-  if (concluded && value.status !== 'error' && batchSizeOf(request) <= 1) return value;
+  if (concluded && value.status !== 'error' && batchSizeOf(request, sessions) <= 1) return value;
   return withoutName(value) as T;
 }

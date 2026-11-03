@@ -732,6 +732,7 @@ function historyFor(
     registry.services.get(HISTORY_SOURCE_SERVICE) ??
     DEFAULT_HISTORY_SOURCE;
   if (source === 'state') return { source };
+  if (source === 'log') return { source, toolResultAsSeen };
   return {
     source,
     sink: options.historyShadow ?? createHistoryShadowTally(),

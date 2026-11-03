@@ -101,12 +101,14 @@ async function expectAllSame(
   run: DriverRun,
   expected: Readonly<Record<string, number>>,
 ): Promise<void> {
-  // 影子比對（#2355）只掛在 root：root 的每一次主呼叫各比一次，沒有一次落在 `other`。
-  expect(run.shadow.other, `${name}：影子比對落在 other 的次數`).toBe(0);
-  expect(
-    Object.values(run.shadow).reduce((sum, n) => sum + n, 0),
-    `${name}：影子比對的次數（root 每一次主呼叫一次）`,
-  ).toBe(expected['ROOT']);
+  // 影子比對（#2355）只掛在 root：root 的每一次主呼叫各比一次，沒有一次落在 `other`。`log` 時沒有比對。
+  if (run.shadow !== undefined) {
+    expect(run.shadow.other, `${name}：影子比對落在 other 的次數`).toBe(0);
+    expect(
+      Object.values(run.shadow).reduce((sum, n) => sum + n, 0),
+      `${name}：影子比對的次數（root 每一次主呼叫一次）`,
+    ).toBe(expected['ROOT']);
+  }
   const owners = [rootLogOf(run), ...childLogsOf(run)].map(
     (log) => [logOwner(log, run), log] as const,
   );

@@ -1,11 +1,13 @@
 /**
- * 影子比對：每次模型呼叫，拿從日誌推出來的歷史跟這次真的要送的 `request.messages` 比（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）。
+ * 模型歷史從日誌推（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：每次模型呼叫，拿從日誌推出來的歷史跟這次真的要送的
+ * `request.messages` 比（`shadow`），或拿它換掉 `request.messages`（`log`）。
  *
- * 只比、不換：請求原樣交下去，結果交給 {@link HistoryShadowSink}，不寫進會話日誌。比對本身出錯也只記一筆，不往外拋。
+ * - `shadow` 只比、不換：請求原樣交下去，結果交給 {@link HistoryShadowSink}，不寫進會話日誌。比對本身出錯也只記一筆，不往外拋。
+ * - `log` 只換、不比：推不出來、找不到日誌就拋，這次呼叫失敗，不退回 state——日誌上沒有的就不送。
  *
  * ## 掛在哪一層
  *
- * root 那一串裡緊貼 `requestSnapshot` 外側。這裡看到的是摘要器、參數截斷、補懸空呼叫都套過之後的那一串，跟推導端「送出去的樣子」
+ * 兩顆都掛在 root 那一串裡緊貼 `requestSnapshot` 外側。這裡看到的是摘要器、參數截斷、補懸空呼叫都套過之後的那一串，跟推導端「送出去的樣子」
  * （三個 `apply*` 都開）同一個時間點；再外面的幾層還沒套，原理上比不齊。
  *
  * ## 比的是送上線的樣子
@@ -29,7 +31,8 @@ import {
 } from './conversation-replay.js';
 import { toBaseMessage } from './langchain-message-adapter.js';
 import { ModelHistoryCache } from './model-history.js';
-import type { DeriveOptions } from './conversation-replay.js';
+import type { ModelHistoryOptions } from './model-history.js';
+import type { DeriveOptions, DerivedConversation } from './conversation-replay.js';
 import type { NexusMessage } from './nexus-message.js';
 import { patchedToolCallText } from './patch-tool-calls.js';
 import type { SessionLookup } from './registry.js';
@@ -38,11 +41,20 @@ import type { SessionEvent, SessionLog } from './session-log.js';
 /** middleware 的名字。 */
 export const HISTORY_SHADOW_MIDDLEWARE_NAME = 'historyShadow';
 
-/** 模型歷史從哪裡來。`state`：歷史取自 LangGraph state；`shadow`：送的仍是 state，另外拿日誌推導比一次。 */
-export type HistorySource = 'state' | 'shadow';
+/** `log` 那一顆的名字。 */
+export const HISTORY_FROM_LOG_MIDDLEWARE_NAME = 'historyFromLog';
+
+/**
+ * 模型歷史從哪裡來。`state`：歷史取自 LangGraph state；`shadow`：送的仍是 state，另外拿日誌推導比一次；`log`：送日誌推出來的。
+ */
+export type HistorySource = 'state' | 'shadow' | 'log';
 
 /** 認得的值，設定與旗標驗值用。 */
-export const HISTORY_SOURCES = ['state', 'shadow'] as const satisfies readonly HistorySource[];
+export const HISTORY_SOURCES = [
+  'state',
+  'shadow',
+  'log',
+] as const satisfies readonly HistorySource[];
 
 /**
  * 一次比對的結果。
@@ -336,20 +348,7 @@ export interface HistoryShadowOptions {
 export function createHistoryShadowMiddleware(
   deps: HistoryShadowOptions & { readonly sessions: { forCall(config: unknown): SessionLookup } },
 ): AgentMiddleware {
-  const caches = new WeakMap<SessionLog, ModelHistoryCache>();
-  const cacheOf = (log: SessionLog): ModelHistoryCache => {
-    let cache = caches.get(log);
-    if (cache === undefined) {
-      cache = new ModelHistoryCache({
-        ...(deps.toolResultAsSeen !== undefined && { toolResultAsSeen: deps.toolResultAsSeen }),
-        applyPrunes: true,
-        applyArgTruncations: true,
-        applyImageOffloads: true,
-      });
-      caches.set(log, cache);
-    }
-    return cache;
-  };
+  const cacheOf = sentHistoryCaches(deps.toolResultAsSeen);
   return createMiddleware({
     name: HISTORY_SHADOW_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
@@ -373,4 +372,132 @@ export function createHistoryShadowMiddleware(
       return handler(request);
     },
   }) as unknown as AgentMiddleware;
+}
+
+/** 一份日誌一份增量推導，按日誌物件認。 */
+function historyCaches(options: ModelHistoryOptions): (log: SessionLog) => ModelHistoryCache {
+  const caches = new WeakMap<SessionLog, ModelHistoryCache>();
+  return (log) => {
+    let cache = caches.get(log);
+    if (cache === undefined) {
+      cache = new ModelHistoryCache(options);
+      caches.set(log, cache);
+    }
+    return cache;
+  };
+}
+
+/** 「送出去的樣子」（三個 `apply*` 都開）的 {@link historyCaches}。 */
+function sentHistoryCaches(
+  toolResultAsSeen: DeriveOptions['toolResultAsSeen'] | undefined,
+): (log: SessionLog) => ModelHistoryCache {
+  return historyCaches({
+    ...(toolResultAsSeen !== undefined && { toolResultAsSeen }),
+    applyPrunes: true,
+    applyArgTruncations: true,
+    applyImageOffloads: true,
+  });
+}
+
+/** 轉好的訊息按推出來的訊息物件快取：`ModelHistoryCache` 推出來的訊息跨呼叫沿用，同一個物件不重轉。 */
+const sentMessages = new WeakMap<NexusMessage, BaseMessage>();
+
+/**
+ * 這次模型呼叫要送的歷史，從日誌推。切法同 {@link compareHistoryWithLog}：`model/start` 之後的 `image/offload` 算進去，重送時不會再送一次圖。
+ *
+ * @param log - 這次呼叫的那一份日誌。
+ * @param cache - 這份日誌「送出去的樣子」的增量推導。
+ * @returns 要送的訊息：陣列每次是新的，訊息物件跨呼叫共用，呼叫端不能就地改。
+ * @throws 推不出來時。
+ */
+export function sentHistoryFromLog(log: SessionLog, cache: ModelHistoryCache): BaseMessage[] {
+  return messagesOf(cache.derive(eventsForModelCall(log.events).events));
+}
+
+function messagesOf(derived: DerivedConversation): BaseMessage[] {
+  if (derived.kind !== 'replayed') {
+    throw new Error(
+      `模型歷史從日誌推不出來（${derived.reason}@${String(derived.seq)}）：history-source=log 不退回 state`,
+    );
+  }
+  return derived.messages.map((message) => {
+    let sent = sentMessages.get(message);
+    if (sent === undefined) {
+      sent = toBaseMessage(message);
+      sentMessages.set(message, sent);
+    }
+    return sent;
+  });
+}
+
+/**
+ * 讀「模型看得到的那一串」的讀者（pre-step 的 listener）在 `log` 時用：摘要套上，剪法、參數截斷、圖片省略不套，跟 state 那邊的
+ * `effectiveMessages` 同一個視圖。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
+ *
+ * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}。
+ * @returns 從日誌推到目前為止的那一串；推不出來就拋。
+ */
+export function createVisibleHistoryReader(
+  toolResultAsSeen?: DeriveOptions['toolResultAsSeen'],
+): (log: SessionLog) => BaseMessage[] {
+  const cacheOf = historyCaches(toolResultAsSeen === undefined ? {} : { toolResultAsSeen });
+  return (log) => messagesOf(cacheOf(log).derive(eventsForModelCall(log.events).events));
+}
+
+/** `log` 那一顆要的東西。 */
+export interface HistoryFromLogOptions {
+  /** 見 {@link DeriveOptions.toolResultAsSeen}。 */
+  readonly toolResultAsSeen?: DeriveOptions['toolResultAsSeen'];
+}
+
+/**
+ * 建 `log` 那一顆：拿日誌推出來的歷史換掉 `request.messages`，其餘原樣交下去。摘要器、剪刀、參數截斷讀 state 決定要不要做，決定記進日誌；這裡只照日誌上記的套（摘要、剪法、截斷、圖片省略），不自己判斷。
+ *
+ * 找不到日誌、推不出來都拋，這次呼叫失敗。
+ *
+ * @param deps - 找日誌的通道與 {@link HistoryFromLogOptions}。
+ * @returns middleware。
+ */
+export function createHistoryFromLogMiddleware(
+  deps: HistoryFromLogOptions & { readonly sessions: { forCall(config: unknown): SessionLookup } },
+): AgentMiddleware {
+  const cacheOf = sentHistoryCaches(deps.toolResultAsSeen);
+  return createMiddleware({
+    name: HISTORY_FROM_LOG_MIDDLEWARE_NAME,
+    wrapModelCall: (request, handler) => {
+      const found = deps.sessions.forCall({
+        configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+      });
+      if (found.kind !== 'ok') {
+        throw new Error(
+          `找不到這次模型呼叫的日誌（${found.kind}）：history-source=log 不退回 state`,
+        );
+      }
+      return handler({ ...request, messages: sentHistoryFromLog(found.log, cacheOf(found.log)) });
+    },
+  }) as unknown as AgentMiddleware;
+}
+
+/** fold 在 `log` 時標起來的 `registry.sessions`，見 {@link markHistoryFromLog}。 */
+const fromLog = new WeakSet<object>();
+
+/**
+ * 標明這份 `registry.sessions` 那條 thread 的歷史從日誌推（`log`）。fold 在組裝開頭叫，標了不撤。用 {@link isHistoryFromLog} 查的有
+ * pre-step 宿主、重複提醒（兩顆在載入插件時就建好、拿的就是這個物件）與 `toolCallOwner`（屏障、`returnDirect` 收尾、原字串）。
+ *
+ * @param sessions - 那條 thread 的 `registry.sessions`。
+ */
+export function markHistoryFromLog(sessions: object): void {
+  fromLog.add(sessions);
+}
+
+/**
+ * 這份 `registry.sessions` 的歷史是不是從日誌推。是的話，找不到這次呼叫的日誌就得拋，不退回 state：要記進日誌的訊息
+ * 沒記進去，模型永遠看不到；讀歷史的讀者讀 state，看到的不是模型收到的那一串。
+ *
+ * @param sessions - 那條 thread 的 `registry.sessions`。
+ * @returns 有沒有被 {@link markHistoryFromLog} 標過。
+ */
+export function isHistoryFromLog(sessions: object): boolean {
+  return fromLog.has(sessions);
 }

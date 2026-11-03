@@ -177,15 +177,20 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 
 **監督行程不能併進 spawner**：spawner 啟動時裝一次 seccomp，之後 fork 的子行程都繼承，擋 `AF_INET`、`AF_INET6`、`AF_UNIX`（`native/sandbox-spawner/README.md` 第 5 行）。監督行程要是 spawner，它起的前台與對話行程都會繼承這份過濾器：前台綁不了 HTTP port，對話行程開不了 Unix socket，也連不到模型端點。兩支各自的執行檔，共用框格式的程式碼。
 
-### 5-2 訊息（草稿，位元格式在 C2 定）
+### 5-2 訊息
+
+位元格式在 `native/sandbox-spawner/src/supervisor_protocol.rs`（C2a，#2339），向量檔 `native/sandbox-spawner/supervisor-vectors.json`，TS 那一側是 `apps/harness/src/supervisor-protocol.ts`。
 
 | 方向 | 訊息 | 用途 |
 | --- | --- | --- |
-| 監督 → 對話 | `bind(threadId)` | 預熱池裡的行程綁定一條 thread |
-| 對話 → 監督 | `ready`、`bound`、`turn(begin\|end)`、`idle(since)`、`busy`、`heartbeat` | 生命週期；`idle` 用今天的 `isIdle` 判斷（`wire-handler.ts:1604-1621`） |
+| 監督 → 對話 | `bind(threadId)` | 綁定一條 thread：預熱池裡的行程，與一開始就為某條 thread 起的行程都走這一則 |
+| 對話 → 監督 | `ready`、`bound(threadId)`、`turn(begin\|end)`、`idle(idleMs)`、`busy`、`heartbeat` | 生命週期；`idle` 用今天的 `isIdle` 判斷，帶送出時已經閒置的毫秒數，不帶絕對時間（兩個行程的時鐘不同源） |
 | 監督 → 對話 | `drain`（準備收）、stdin EOF（收） | 逐出與停機 |
-| 前台 → 監督 | `ensure(threadId)`、`release(threadId)` | 要一條 thread 的對話行程、讀完歷史後可以先收 |
-| 監督 → 前台 | `up(threadId, socket)`、`down(threadId, cause)`、`capacity(…)`、`stats(…)` | 前台轉送與死因回報 |
+| 對話 → 監督 | `drained`、`busy` | `drain` 的回答：確認仍閒置、不再接新的請求才回 `drained`，否則回 `busy`（§7-2） |
+| 前台 → 監督 | `ensure(threadId, run\|read-only)`、`release(threadId)` | 要一條 thread 的對話行程（打開方式見 §7-3）、讀完歷史後可以先收 |
+| 監督 → 前台 | `up(threadId, socket)`、`down(threadId, cause)` | 前台轉送與死因回報（七類，§6-2） |
+| 監督 → 前台 | `capacity(threadId, current, limit)` | `ensure` 滿了、沒有可逐出的：前台回 `thread_at_capacity`（§7-1）；`current` 含預熱池與起動中的行程 |
+| 監督 → 前台 | `stats(live, warm, rssKib, deaths)` | 給 `/metrics`（§4-3、C6） |
 
 ## 六、失控保護與死因
 
@@ -212,7 +217,7 @@ dsh 只回 `{exitCode, signal}`，分類交給呼叫方。nexus 的呼叫方是�
 | `memory` | 監督行程因 RSS 超過上限殺的 |
 | `host-oom` | 不是監督行程殺的 SIGKILL，且 cgroup 的 `oom_kill` 計數增加 |
 | `stalled` | 監督行程因時鐘或心跳殺的 |
-| `crash` | 其他非零結束或訊號 |
+| `crash` | 其他非零結束或訊號，含沒起成 |
 | `evicted` | 閒置逐出（正常收尾） |
 | `shutdown` | 整台停機 |
 
@@ -241,7 +246,7 @@ dsh 只回 `{exitCode, signal}`，分類交給呼叫方。nexus 的呼叫方是�
 
 ### 7-2 閒置逐出（#1484）
 
-- 閒置的定義不變：今天的 `isIdle`（輪沒在跑、沒有掛著的中斷、沒有訂閱者、背景子代理靜止、目標沒在跑…），在對話行程裡判斷，變成閒置時回報 `idle(since)`。
+- 閒置的定義不變：今天的 `isIdle`（輪沒在跑、沒有掛著的中斷、沒有訂閱者、背景子代理靜止、目標沒在跑…），在對話行程裡判斷，變成閒置時回報 `idle(idleMs)`（§5-2）。
 - 監督行程照設定的閒置時間（出廠 2 小時，沿用）送 `drain`；對話行程確認仍閒置才收，避免「回報閒置」與「新請求進來」打架。
 - 逐出等於結束行程，記憶體整份還給系統。今天逐出 thread 後 heap 不一定還得回來（R6 量到 10 輪那一點 60 秒內不回收），這是形狀 B 多出來的好處。
 
@@ -250,7 +255,7 @@ dsh 只回 `{exitCode, signal}`，分類交給呼叫方。nexus 的呼叫方是�
 讀冷 thread 的歷史（側欄一路點舊對話）也會起對話行程（§三-3）。今天文件也寫了「讀歷史也佔名額」。為了不讓一個人點一排舊對話就把名額佔滿：
 
 - 這種行程標成「只讀開啟」，閒置時間用短的（出廠 5 分鐘，可設定），而且滿了的時候最先被逐出。
-- 在這個行程上一旦有 `run.start` 等會跑 agent 的指令，就轉成一般行程。
+- 在這個行程上一旦有 `run.start` 等會跑 agent 的指令，就轉成一般行程：監督行程收到它的 `turn(begin)` 就照一般行程算。
 
 ### 7-4 預熱池
 

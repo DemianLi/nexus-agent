@@ -13,6 +13,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
 import {
+  markHistoryFromLog,
   MESSAGE_SOURCE_KWARG,
   SESSION_EVENT_MAX_DEPTH,
   SessionLog,
@@ -365,6 +366,46 @@ describe('宿主建的 middleware', () => {
         const middleware = createPreStepMiddleware(NAME, injecting({ content: 'x' }), sessions);
         const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
         expect(result?.messages).toHaveLength(1);
+        expect(sessions.appended).toEqual([]);
+      },
+    );
+
+    it('history-source=log、root：listener 看到的是日誌推出來的那一串，不是 state（#2355）', async () => {
+      const log = new SessionLog('pre-step');
+      log.append('turn/start', { kind: 'message', text: '日誌上的那句' });
+      const sessions = {
+        forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
+      };
+      const seen: string[][] = [];
+      const listener: PreStepListener = (messages) => {
+        seen.push(messages.map((message) => message.text));
+        return undefined;
+      };
+      const state = { messages: [new HumanMessage('state 裡的另一句')] };
+      await hookOf(createPreStepMiddleware(NAME, listener, sessions))(state, { configurable: {} });
+      markHistoryFromLog(sessions);
+      await hookOf(createPreStepMiddleware(NAME, listener, sessions))(state, { configurable: {} });
+      expect(seen).toEqual([['state 裡的另一句'], ['日誌上的那句']]);
+    });
+
+    it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(
+      '查找是 %s、history-source=log：listener 還沒叫就拋，這一輪失敗（#2355）',
+      async (kind) => {
+        const sessions = fakeSessions({ kind });
+        markHistoryFromLog(sessions);
+        let called = false;
+        const middleware = createPreStepMiddleware(
+          NAME,
+          () => {
+            called = true;
+            return [{ content: 'x' }];
+          },
+          sessions,
+        );
+        await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
+          `pre-step listener 找不到這次呼叫的日誌（${kind}）`,
+        );
+        expect(called).toBe(false);
         expect(sessions.appended).toEqual([]);
       },
     );
