@@ -44,10 +44,14 @@ let served: ScriptedServe | undefined;
 let bound: string[][];
 /** 模型每一次被叫時拿到的訊息。 */
 let prompts: BaseMessage[][];
+/** 設了的話，下一次綁著工具的呼叫先等它（只等一次），開始等的時候叫 {@link atGate}。 */
+let gate: Promise<void> | undefined;
+let atGate: () => void = () => undefined;
 
 beforeEach(() => {
   bound = [];
   prompts = [];
+  gate = undefined;
   const stream = ScriptedChatModel.prototype._streamResponseChunks;
   vi.spyOn(ScriptedChatModel.prototype, '_streamResponseChunks').mockImplementation(function (
     this: ScriptedChatModel,
@@ -55,7 +59,15 @@ beforeEach(() => {
   ) {
     bound.push(this.boundTools.map((tool) => (tool as { name: string }).name));
     prompts.push(args[0]);
-    return stream.apply(this, args);
+    const inner = stream.apply(this, args);
+    const wait = this.boundTools.length > 0 ? gate : undefined;
+    if (wait === undefined) return inner;
+    gate = undefined;
+    return (async function* () {
+      atGate();
+      await wait;
+      yield* inner;
+    })();
   });
 });
 
@@ -81,7 +93,13 @@ interface Clients {
 async function start(
   turns: readonly ScriptedTurn[],
   options: { readonly logs?: string; readonly extraRows?: string } = {},
-): Promise<Clients & { readonly logs: string }> {
+): Promise<
+  Clients & {
+    readonly logs: string;
+    /** 帶著 cookie 直接打 serve，`path` 從根算起。 */
+    readonly raw: (path: string, init?: RequestInit) => Promise<Response>;
+  }
+> {
   await served?.close();
   const logs = options.logs ?? temp('nexus-embed-logs-');
   served = await startScriptedServe(turns, {
@@ -90,8 +108,10 @@ async function start(
   });
   const cookie = await exchangeServeToken(served.running.authenticatedUrl);
   const fetch = fetchWithCookie(cookie);
+  const origin = served.running.url;
   return {
     logs,
+    raw: (path, init) => fetch(`${origin}${path}`, init),
     full: createWireClient({ baseUrl: served.running.url, fetch }),
     embed: createWireClient({ baseUrl: `${served.running.url}${EMBED_PATH_PREFIX}`, fetch }),
   };
@@ -163,7 +183,23 @@ describe('嵌入版沒有 / 與 @（#2365 第 2 點）', () => {
     const sent = await embed.runStart('e1', '交給它', {
       mention: { kind: 'subagent', name: 'general-purpose' },
     });
-    expect(sent).toMatchObject({ error: 'not_supported' });
+    expect(sent).toMatchObject({ error: 'not_supported', message: expect.stringContaining('嵌入') });
+  }, 30_000);
+
+  it('嵌入版開的 thread 從獨立頁面打 slash.run 一樣回 not_supported（擋在 thread 上，不只擋在連線上）', async () => {
+    const { full, embed } = await start([hello]);
+    await say(embed, 'e1');
+    expect(await full.slashRun('e1', '/plan 寫一份計劃')).toMatchObject({
+      kind: 'rejected',
+      code: 'not_supported',
+    });
+  }, 30_000);
+
+  it('白名單外的 thread 路由 404：上傳不開', async () => {
+    const { raw, embed } = await start([hello]);
+    await say(embed, 'e1');
+    const upload = await raw(`${EMBED_PATH_PREFIX}/threads/e1/uploads`, { method: 'POST' });
+    expect(upload.status).toBe(404);
   }, 30_000);
 
   it('白名單外的命令回 not_supported，列表與搜尋這類全域路由 404', async () => {
@@ -364,5 +400,66 @@ describe('畫面情境（#2365 第 7、8 點）', () => {
     ]);
     expect(bound.at(-1)).not.toContain('task');
     expect(bound.at(-1)).not.toContain('subagent');
+  }, 30_000);
+});
+
+describe('畫面情境走排隊與插話兩條路', () => {
+  /** 擋住這一輪第一次模型呼叫：回傳「擋住了」與放行。 */
+  function hold(): { readonly reached: Promise<void>; readonly release: () => void } {
+    let release = (): void => undefined;
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      atGate = resolve;
+    });
+    return { reached, release };
+  }
+
+  const read: ScriptedTurn = {
+    content: '讀。',
+    toolCalls: [{ name: 'read_file', args: { file_path: '/a.md' } }],
+  };
+
+  /** 有某一次模型呼叫拿到的人話裡，同一則同時有 `text` 與 `label`。 */
+  const askedWith = (text: string, label: string): boolean =>
+    prompts.some((messages) =>
+      messages.some((message) => {
+        if (message.getType() !== 'human') return false;
+        const content = JSON.stringify(message.content);
+        return content.includes(text) && content.includes(label);
+      }),
+    );
+
+  it('排隊：前一輪跑著時送的那句，輪到它時帶著自己的情境', async () => {
+    const { embed } = await start([hello, hello]);
+    const events = await embed.openEvents('e1');
+    const held = hold();
+    expect(await embed.runStart('e1', '第一句')).not.toHaveProperty('error');
+    await held.reached;
+    expect(
+      await embed.runStart('e1', '它排第二', { context: { label: 'PUMP-08' } }),
+    ).not.toHaveProperty('error');
+    held.release();
+    await until(events, settledAfter(2));
+    await events.return(undefined);
+    expect(askedWith('它排第二', 'PUMP-08')).toBe(true);
+  }, 30_000);
+
+  it('插話：跑著的這一輪下一步收到的那句帶著情境', async () => {
+    const { embed } = await start([read, hello]);
+    const events = await embed.openEvents('e1');
+    const held = hold();
+    expect(await embed.runStart('e1', '先讀檔')).not.toHaveProperty('error');
+    await held.reached;
+    expect(
+      await embed.runStart('e1', '順便看它', { mode: 'steer', context: { label: 'PUMP-09' } }),
+    ).not.toHaveProperty('error');
+    held.release();
+    await until(events, settledAfter(1));
+    await events.return(undefined);
+    // 插話進的是同一輪的第二次呼叫，不是另開一輪。
+    expect(prompts.filter((_, index) => (bound[index]?.length ?? 0) > 0)).toHaveLength(2);
+    expect(askedWith('順便看它', 'PUMP-09')).toBe(true);
   }, 30_000);
 });
