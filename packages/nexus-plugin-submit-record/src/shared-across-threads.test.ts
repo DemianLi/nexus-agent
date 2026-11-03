@@ -16,6 +16,7 @@ import type { FsLookup, FsService } from '@nexus/fs';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
+import { isNexusTool } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { AnyBackendProtocol } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -93,7 +94,7 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
   const entry = tools
     .entries()
     .find((item) => item.tool.name === submitRecord.SUBMIT_RECORD_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒有註冊上去');
+  if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒有註冊上去');
   return { tool: entry.tool, files };
 }
 

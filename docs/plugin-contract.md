@@ -42,7 +42,7 @@ import { z } from 'zod';
 
 export const name = 'echo';
 export const Config = z.strictObject({ prefix: z.string().default('回聲') });
-export const inject = injectOf(need(toolsToken, '^1.0.0'));
+export const inject = injectOf(need(toolsToken, '^2.0.0'));
 export const manifest = defineManifest({ /* 見下表 */ });
 
 export function apply(ctx: Context, config: z.infer<typeof Config>) {
@@ -207,7 +207,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **同一張登記表、同一支挑法**：一次 `attachSession` 登記**一筆**，這一筆**同時帶這條 thread 的會話註冊表與 fs 把手**（`ThreadEntry = { sessions, fs }`）；會話查找與 fs 查找都套同一支
     `@nexus/core` 的 `pickBoundForCall`（`pickSessionForCall` 是它外面包一層「開日誌」），**挑法只有一份實作**，不另寫一份。所以兩個查找對「這次呼叫屬於哪一條 thread」永遠給同一個答案。
   - **登記與撤除**：同第七個（`attachSession` 的最後一步登記、撤除掛在它回傳的 detach、同 id 重組時後者取代前者且舊的遲到的 detach 只撤自己），不另開一條。
-  - **消費者**：submit-record 的 `inject` 是 `need(toolsToken, '^1.2.0')` 加 `need(fsToken, '^2.0.0')`，`apply` 當下兩個服務都抓進閉包；工具本體 `fs.forCall(invocation)`，**一律同一句話**回報三種失敗
+  - **消費者**：submit-record 的 `inject` 是 `need(toolsToken, '^2.0.0')` 加 `need(fsToken, '^2.0.0')`，`apply` 當下兩個服務都抓進閉包；工具本體 `fs.forCall(invocation)`，**一律同一句話**回報三種失敗
     （`not-attached`／`unknown-caller`／`ambiguous` 全是 `SUBMIT_RECORD_NO_BACKEND_MESSAGE`，#1466 Q3 逐字不變）。
   - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/submit-record-on-tree.test.ts` 的「三個入口各有一條」）：CLI（`boot('cli')` 的樹上內建列）、serve（`submit-record-wire.test.ts`，真的 `runServe`、真的核准卡、
     `--workspace` 磁碟上的檔案）、沒有樹的呼叫端（兩份無樹組裝互不相見）。多條 thread 同時活著時每一次呼叫靠 `thread_id` 認主人，另有 root、同步子代理、背景子代理、重組、組裝失敗、撤除六種形狀的紅燈（同檔「E」）。
@@ -215,6 +215,11 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     代價：`ambiguous` 的拒絕句（todo／goal 的「接了 N 份會話…」）在 N 為 1 時讀起來怪，今天不另開結果種類。
     **收尾順序是這條的另一半**（#1482，照 dsh 的 cancel → drain → flush → dispose）：`attachSession` 回傳的 detach 在有背景 host 時是非同步的，**先等背景 host 收完（中止進行中的輪、等它寫完 `turn/end` 與結算通知），才撤登記、解綁、停參與者**；serve 的 `release` 再接著收落盤與 agent。撤得太早，收尾中的工具會問不到自己的登記，落盤先退訂則讓被中止那一輪的事件到不了後端。
     **之後開「閒置 thread 回收」的卡（#1464 量到每條 thread 常駐約 2.1 MB、不回收）要先處理它**，兩個做法擇一：detach 等背景 host 收完再撤登記，或行程級查找一律核對 `thread_id`（改挑法要 demian 拍板）。
+- **工具接縫 2.0.0：`NexusTool`**（`@nexus/tools`，#2351）。`register` 也收 `NexusTool`：`parameters` 是 JSON Schema（純資料），`execute(args, exec)` 回
+  `{ ok: true, content }` 或 `{ ok: false, content, error? }`，`exec`（`ToolExec`）帶 `callId`、`threadId`、`agent`、`signal`、`concludeTurn()`。
+  `sessionLookup.forCall`、`fs.forCall` 直接收 `ToolExec`。**宿主**把它轉成 LangChain 工具（`apps/harness/src/nexus-tool-adapter.ts`），送上線的 schema
+  必須與 `parameters` 逐字相同，驗證語意同今天的 zod 工具；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
+  樹上的消費者都宣告 `^2.0.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。一致性套件多一格 `schema-json`。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，

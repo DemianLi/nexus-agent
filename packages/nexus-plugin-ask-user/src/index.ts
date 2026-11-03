@@ -47,8 +47,7 @@
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src` 不 import `@nexus/core`
  * （套 #1420 的 lint 設定）。要的兩個服務都由宿主在樹上提供：
  *
- * - `tools`（`@nexus/tools`，契約 `^1.1.0`）：登記工具，**帶 `rootOnly` 與 `outputSchema` 兩個選項**。範圍寫 `^1.1.0`
- *   而不是 `^1.0.0`：1.0.x 的提供者不認得選項，會把它們靜靜丟掉。
+ * - `tools`（`@nexus/tools`，契約 `^2.0.0`）：登記工具，**帶 `rootOnly` 與 `outputSchema` 兩個選項**（從 `1.1.0` 起；1.0.x 的提供者不認得選項，會把它們靜靜丟掉）。
  * - `approvalChannel`（`@nexus/approval-channel`，契約 `^1.0.0`）：行程級的預設答題管道。**在 `apply` 當下抓進閉包**，
  *   呼叫當下才問它的 `current()`：列卸載之後經 `ctx` 取服務會拋（`cannot get required service … in inactive context`），
  *   抓住的那份則仍可呼叫，所以「這一列停用之後，開著的 thread 照樣問得到」。
@@ -286,10 +285,10 @@ export const ASK_USER_REGISTER_OPTIONS: ToolRegisterOptions = {
 export const name = 'ask-user';
 
 /**
- * 要的服務：`tools`（`^1.1.0`，要帶選項）與 `approvalChannel`（`^1.0.0`）。範圍在這裡宣告，經
+ * 要的服務：`tools`（`^2.0.0`，要帶選項）與 `approvalChannel`（`^1.0.0`）。範圍在這裡宣告，經
  * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
-export const inject = injectOf(need(toolsToken, '^1.1.0'), need(approvalChannelToken, '^1.0.0'));
+export const inject = injectOf(need(toolsToken, '^2.0.0'), need(approvalChannelToken, '^1.0.0'));
 
 /**
  * 這個插件的設定：沒有。`strictObject` 不是隨手選的：manifest 的 `config` 必須是 `strictObject`，未知欄位讓載入失敗是
@@ -303,7 +302,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^1.1.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: approvalChannelToken.name, range: '^1.0.0' },
   ],
   config: Config,

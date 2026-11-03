@@ -267,7 +267,7 @@ import { z } from 'zod';
 const PREFIX = '回聲';
 const FROZEN = Object.freeze({ a: 1 });
 
-export const inject = injectOf(need(toolsToken, '^1.0.0'));
+export const inject = injectOf(need(toolsToken, '^2.0.0'));
 export const manifest = defineManifest({} as never);
 
 export function apply(ctx: Context): void {

@@ -105,6 +105,7 @@ import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
+import { langChainToolOf } from './nexus-tool-adapter.js';
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 import { ThreadSessions } from './thread-sessions.js';
 
@@ -1052,7 +1053,9 @@ export class PluginTree {
       this.#selfDisabled.delete(id);
       return {
         kind: 'active',
-        tools: entries.filter((item) => item.source === id).map((item) => item.tool),
+        tools: entries
+          .filter((item) => item.source === id)
+          .map((item) => langChainToolOf(item.tool)),
         toolOptions: toolOptionsOf(entries.filter((item) => item.source === id)),
         gates: this.#provider
           .gates()
@@ -1114,13 +1117,16 @@ export class PluginTree {
   }
 }
 
-/** 一組工具登記裡帶了選項的那些：工具實例 → 選項。沒帶選項的不進表（`Map` 只是索引，不是清單）。 */
+/**
+ * 一組工具登記裡帶了選項的那些：工具實例 → 選項。沒帶選項的不進表（`Map` 只是索引，不是清單）。
+ * 鍵是 {@link langChainToolOf} 轉出的實例；同一個 `NexusTool` 每次轉出同一個，所以和 `tools` 清單裡的物件對得上。
+ */
 function toolOptionsOf(
   entries: readonly ToolEntry[],
 ): ReadonlyMap<StructuredToolInterface, ToolRegisterOptions> {
   const options = new Map<StructuredToolInterface, ToolRegisterOptions>();
   for (const entry of entries) {
-    if (entry.options !== undefined) options.set(entry.tool, entry.options);
+    if (entry.options !== undefined) options.set(langChainToolOf(entry.tool), entry.options);
   }
   return options;
 }
@@ -1283,7 +1289,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       }
       const owned = provider.entries().filter((entry) => entry.source === mount.id);
       return {
-        tools: owned.map((entry) => entry.tool),
+        tools: owned.map((entry) => langChainToolOf(entry.tool)),
         toolOptions: toolOptionsOf(owned),
         gates: provider
           .gates()

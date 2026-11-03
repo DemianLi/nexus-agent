@@ -278,10 +278,10 @@ export const submitRecordGate: ToolGateListener = (exec, next) =>
 export const name = 'submit-record';
 
 /**
- * 要的服務：`tools`（**`^1.2.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，
+ * 要的服務：`tools`（**`^2.0.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，
  * 提供者的 `check` 讀得到；`tools` 提供者比 1.2.0 舊時，這一列在 `requires` 階段就掉，不會在「閘門沒掛」的狀態下起來。
  */
-export const inject = injectOf(need(toolsToken, '^1.2.0'), need(fsToken, '^2.0.0'));
+export const inject = injectOf(need(toolsToken, '^2.0.0'), need(fsToken, '^2.0.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：沒有資料設定。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = z.strictObject({});
@@ -292,7 +292,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^1.2.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: fsToken.name, range: '^2.0.0' },
   ],
   config: Config,
@@ -317,7 +317,7 @@ export function apply(ctx: Context): void {
   const tools = service(ctx, toolsToken);
   if (tools.gate === undefined) {
     throw new Error(
-      'submit-record: tools 服務沒有 gate()（要 @nexus/tools ^1.2.0），不讓沒有核准閘門的 submit_record 起來。',
+      'submit-record: tools 服務沒有 gate()（要 @nexus/tools ^2.0.0），不讓沒有核准閘門的 submit_record 起來。',
     );
   }
   tools.register(createSubmitRecordTool((invocation) => fs.forCall(invocation)));

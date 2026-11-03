@@ -7,7 +7,7 @@
  * 量的全部走真的 Loader 與 fiber（dsh 的三種測試寫法之一：經 Loader 開機的真組合測試，
  * `packages/AGENTS.md:7`），不手建 `ctx.plugin(...)`。
  *
- * ## 這一刀的四格
+ * ## 五格
  *
  * | check | 量什麼 |
  * | --- | --- |
@@ -15,6 +15,7 @@
  * | `export-form` | 不能有 default 匯出；`name`／`apply` 在場；Loader 的 `unwrapExports` 取回的就是這個命名空間；`Config` 就是 manifest 的 `config`；`inject` 與 `consumes` 一致 |
  * | `unload` | 掛上後有貢獻、**經 fiber 卸載**（移除那一列）後活資源回到掛載前；manifest 的 `provides` 宣告的服務掛上後在 root 上讀得到（歸屬與契約版本對），卸載後讀不到（#1456） |
  * | `missing` | 缺提供者時消費者停在 PENDING，等的服務名正好是 `consumes` 裡必要的那幾個 |
+ * | `schema-json` | 給了 {@link ConformanceTarget.tools} 才跑：掛上後插件登記的每個工具都有 `parameters`，而且是根為 `type: 'object'` 的無損 JSON（#2351） |
  *
  * 兩版並存與逾時留給版本路由那張卡。
  *
@@ -46,7 +47,7 @@ export const FIBER_STATE = {
 } as const;
 
 /** 一格的名字。 */
-export type ConformanceCheck = 'manifest' | 'export-form' | 'unload' | 'missing';
+export type ConformanceCheck = 'manifest' | 'export-form' | 'unload' | 'missing' | 'schema-json';
 
 /** 一格不合格。 */
 export interface ConformanceFailure {
@@ -76,6 +77,46 @@ export interface ConformanceTarget {
    * 掛上後要比掛上前多，卸載後要回到掛上前；**沒有變多就是量不到卸載，同樣判不合格**。
    */
   readonly residue: () => number;
+  /**
+   * 插件登記進工具登記處的工具（`@nexus/tools/provider` 的 `entries()` 取 `tool`）。掛上之後、卸載之前叫一次。
+   * 給了就跑 `schema-json` 那一格；登記 LangChain 工具的插件不給，那種工具沒有 `parameters`，這一格會紅。
+   */
+  readonly tools?: () => readonly unknown[];
+}
+
+/**
+ * 是不是無損 JSON：只由 null、字串、布林、有限且不是 `-0` 的數、不稀疏且沒有多餘鍵的陣列、原型是 `Object.prototype`
+ * 或 `null` 且沒有 Symbol 鍵的物件組成。
+ */
+function isLosslessJson(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0);
+  if (Array.isArray(value)) {
+    return Object.keys(value).length === value.length && value.every(isLosslessJson);
+  }
+  if (typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (proto !== Object.prototype && proto !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+  return Object.values(value).every(isLosslessJson);
+}
+
+/** 一個工具的 `parameters` 哪裡不合 `schema-json`；合格回 `undefined`。 */
+function schemaProblem(tool: unknown): string | undefined {
+  const name = (tool as { name?: unknown } | null)?.name;
+  const label = typeof name === 'string' ? name : '(沒有名字)';
+  const parameters = (tool as { parameters?: unknown } | null)?.parameters;
+  if (parameters === undefined) return `工具 ${label} 沒有 parameters（還不是 NexusTool）`;
+  if (!isLosslessJson(parameters)) return `工具 ${label} 的 parameters 不是無損 JSON`;
+  if (
+    typeof parameters !== 'object' ||
+    parameters === null ||
+    Array.isArray(parameters) ||
+    (parameters as { type?: unknown }).type !== 'object'
+  ) {
+    return `工具 ${label} 的 parameters 根不是 type: 'object'`;
+  }
+  return undefined;
 }
 
 interface Tree {
@@ -238,6 +279,12 @@ export async function checkConformance(target: ConformanceTarget): Promise<Confo
         }
       }
       const during = target.residue();
+      if (target.tools !== undefined) {
+        const tools = target.tools();
+        const problems = tools.map(schemaProblem).filter((p): p is string => p !== undefined);
+        if (tools.length === 0) problems.push('掛上後沒有登記任何工具，這一格量不到');
+        if (problems.length > 0) fail('schema-json', problems.join('；'));
+      }
       if (during <= before) {
         fail(
           'unload',

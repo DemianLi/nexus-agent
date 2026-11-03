@@ -20,6 +20,7 @@ import { ContractService } from '@nexus/sdk';
 
 import { toolsToken } from './index.js';
 import type {
+  NexusTool,
   ToolGateListener,
   ToolRegistry,
   ToolRegisterOptions,
@@ -28,7 +29,7 @@ import type {
 
 /** 一筆登記：工具、登記它的那一列（Cordis 的列 id；沒有列就是插件名），與登記時帶的選項（#1458）。 */
 export interface ToolEntry {
-  readonly tool: StructuredToolInterface;
+  readonly tool: NexusTool | StructuredToolInterface;
   readonly source: string;
   /** 登記時帶的選項；沒帶就是 `undefined`（不是空物件）。宿主折進每條 thread 的組裝時一起交出去。 */
   readonly options?: ToolRegisterOptions;
@@ -78,7 +79,7 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
       super(ctx, toolsToken);
     }
 
-    register(tool: StructuredToolInterface, options?: ToolRegisterOptions): () => void {
+    register(tool: NexusTool | StructuredToolInterface, options?: ToolRegisterOptions): () => void {
       // `this.ctx` 追蹤到呼叫者（消費者）：登記者那一列的 id 取自它。
       const caller = this.ctx.fiber;
       const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
@@ -98,7 +99,7 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
       }, 'tools.register()');
     }
 
-    list(): readonly StructuredToolInterface[] {
+    list(): readonly (NexusTool | StructuredToolInterface)[] {
       return items.map((item) => item.tool);
     }
 
