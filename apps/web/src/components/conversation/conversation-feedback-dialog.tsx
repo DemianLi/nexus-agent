@@ -1,3 +1,7 @@
+/**
+ * 回饋對話框的開關記帳，從 `App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版共用（#2366）。
+ */
+
 import { useRef } from 'react';
 
 import { FeedbackDialog } from '@/components/feedback-dialog';
@@ -9,9 +13,9 @@ export function ConversationFeedbackDialog({
 }: {
   readonly conversation: Conversation;
 }) {
-  // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
+  // 關掉之後留著最後那一份：退場動效那段時間裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
-  // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
+  // 數打開了幾次，給下面的 `key` 用。
   const dialogWasOpen = useRef(false);
   const dialogOpens = useRef(0);
   const dialogOpen = conversation.feedbackDialog !== undefined;

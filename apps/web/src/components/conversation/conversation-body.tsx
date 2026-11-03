@@ -1,3 +1,7 @@
+/**
+ * 對話區的中段（空白頁或對話紀錄），從 `App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版共用（#2366）。
+ */
+
 import { EmptyHero } from '@/components/empty-hero';
 import { AttachmentImageContext } from '@/components/sent-attachments';
 import { SessionReferenceContext } from '@/components/session-reference';

@@ -1,3 +1,8 @@
+/**
+ * 對話區最上面那一塊（狀態列與換線、舊格式、歷史拿不回來的那幾句），從 `App.tsx` 的會話畫面拆出來，獨立頁面與嵌入版
+ * 共用（#2366）。`LEGACY_THREAD_NOTICE` 由 `App.tsx` 再匯出，原本從那裡讀它的測試照舊。
+ */
+
 import { StatusLine } from '@/components/status-line';
 import type { Conversation } from '@/hooks/use-conversation';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -7,7 +12,7 @@ import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 
 /**
- * 舊格式的會話（格式 9 以前寫的，#306 拍板 2）：日誌不記模型的回覆，畫面重播得出來的只有人打的字與工具卡，模型也
+ * 舊格式的會話（格式 9 以前寫的，#306）：日誌不記模型的回覆，畫面重播得出來的只有人打的字與工具卡，模型也
  * 從空的開始——推不出完整的歷史就不灌半截。伺服器照整份日誌判一次（`ThreadHistoryResult.legacy`）。
  */
 export const LEGACY_THREAD_NOTICE =
