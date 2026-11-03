@@ -662,8 +662,7 @@ export interface ConversationState {
   readonly pendings: readonly PendingInput[];
   /**
    * 等宿主頁執行的宿主頁工具（#2374），發出的順序，同 id 覆寫。答掉（{@link settleHostCall}）、這一輪接著跑或被停止時收掉。
-   * 掛著它的時候 `status` 留在 `running`：這一輪在等宿主頁執行工具，不是在等人。root 照樣發的 `completed` 不把它翻成 `idle`、
-   * 也不把那顆工具列收成失敗。
+   * 收進來不改 `status`：這一輪在等宿主頁執行工具，不是在等人。它非空時 root 的 `completed` 不翻 `idle`、不把未結束的工具列收成失敗。
    */
   readonly hostCalls: readonly PendingHostCall[];
   /** 收過的最大 seq。線上是單調的（server 端跨 run 重編過號），拿它擋重複與亂序。 */
@@ -2439,7 +2438,7 @@ function reduceLifecycle(
   }
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
-    // 那一輪還沒關，卡還在等人。停在宿主頁工具的同理：那顆工具還在等宿主頁執行，不能被收成失敗。
+    // 那一輪還沒關，卡還在等人。停在宿主頁工具的同理：這一輪還沒關，不翻 idle，那顆工具列也不收成失敗。
     if (state.status === 'awaiting-input' || state.hostCalls.length > 0) return state;
     const settled = settleUnfinishedTools(state.entries, time);
     return {
