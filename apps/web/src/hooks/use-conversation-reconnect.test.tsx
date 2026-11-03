@@ -9,6 +9,7 @@ import {
   THREAD_LOG_TOO_LARGE,
   THREAD_ROOT_MISMATCH,
   THREAD_IS_SUBAGENT,
+  THREAD_NOT_EMBEDDED,
   THREAD_WRITER_HELD,
   WireProtocolError,
   WireRejectedError,
@@ -25,6 +26,7 @@ import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
+import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
@@ -308,6 +310,23 @@ function rejected(code: string, serverMessage: string) {
 }
 
 describe('useConversation 下行被拒：永久的不重試，暫時的照試（#1708）', () => {
+  it('嵌入的對話框碰到獨立頁面開的（#2382）：講那一句、不排重試', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(
+      rejected(
+        THREAD_NOT_EMBEDDED,
+        'thread "t/1" 不是從嵌入的對話框開的，嵌入的對話框不能接手它；請開一條新對話',
+      ),
+    );
+    const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_NOT_EMBEDDED_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
   it('子代理的會話：講那一句、不排重試；推過最長的退避、按「立刻重連」、網路回來都不再開', async () => {
     const { client, openEvents, setFailOpen } = scriptedClient();
     setFailOpen(

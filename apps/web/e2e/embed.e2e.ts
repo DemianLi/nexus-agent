@@ -1,6 +1,7 @@
 /**
  * 嵌入版 `<nexus-chat>` 的真瀏覽器 e2e（#2366）：Vue 測試頁（`embed-demo/`）放上元件，元件由 serve 供應（`dist/embed.js`），
  * 模型換成腳本（`serve.ts`）。一般回覆、核准、反問、新對話四個情境，外加情境標籤、樣式不外洩、焦點在 shadow root 裡，以及跟宿主頁的 3D 模型同時操作。
+ * 元件打 `/embed` 底下的路徑、送出時附上選取，獨立頁面開的對話在元件裡打不開（#2382）。
  *
  * 測試頁不進 `dist`：`beforeAll` 建到暫存目錄，`page.route` 從 serve 同一個來源供應（`/vue-demo/`），跟宿主頁經同源反向代理
  * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。設 `NEXUS_E2E_SHOTS=<目錄>` 時每個情境跑完存一張截圖。
@@ -44,14 +45,20 @@ afterEach(async () => {
   serve = undefined;
 });
 
-/** 起一台 serve，開登入網址換到 cookie，再開同源的 Vue 測試頁。 */
+/**
+ * 起一台 serve，開登入網址換到 cookie，再開同源的 Vue 測試頁。
+ *
+ * @param beforeDemo - 登入之後、開測試頁之前在同一頁做的事（例如先在獨立頁面講一句）。
+ */
 async function openDemo(
   turns: readonly ScriptTurn[],
   viewport = { width: 1100, height: 760 },
+  beforeDemo?: (page: Page) => Promise<void>,
 ): Promise<Page> {
   serve = await startE2eServe(turns);
   const page = await browser.newPage({ viewport });
   await page.goto(serve.url);
+  await beforeDemo?.(page);
   const origin = new URL(serve.url).origin;
   await page.route(`${origin}/vue-demo/**`, async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/vue-demo\/?/u, '');
@@ -350,5 +357,121 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
           .count(),
       )
       .toBe(0);
+  });
+
+  test('在模型上點選設備後發問：請求走 /embed、run.start 帶著選取；清掉選取之後送的不帶', async () => {
+    const page = await openDemo(
+      [
+        { content: 'B-07 壓縮機目前負載 91 %，屬於高負載。', tokenDelayMs: 20 },
+        { content: '目前沒有未處理的告警。', tokenDelayMs: 20 },
+      ],
+      { width: 1280, height: 800 },
+    );
+    const paths: string[] = [];
+    const starts: { readonly params: Record<string, unknown> }[] = [];
+    page.on('request', (request) => {
+      const { pathname } = new URL(request.url());
+      paths.push(pathname);
+      const body = request.postData();
+      if (request.method() === 'POST' && body !== null && body.includes('"run.start"')) {
+        starts.push(JSON.parse(body) as { params: Record<string, unknown> });
+      }
+    });
+    const sockets: string[] = [];
+    page.on('websocket', (socket) => sockets.push(new URL(socket.url()).pathname));
+    // 監聽掛上之前元件已經開過線：重新整理一次，從頭記。
+    await page.reload();
+    await expect.poll(() => sockets).toEqual(['/embed/threads/mux']);
+
+    const b07 = await devicePoint(page, 'B-07');
+    await page.mouse.click(b07.x, b07.y);
+    await expect.poll(() => chat(page).getByText('目前選取：B-07 壓縮機').count()).toBe(1);
+    await send(page, '它現在的負載多少？');
+    await expect
+      .poll(
+        () =>
+          transcript(page)
+            .getByText(/負載 91 %/u)
+            .count(),
+        { timeout: 30_000 },
+      )
+      .toBe(1);
+    await settled(page);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.params.context).toEqual({ label: 'B-07 壓縮機' });
+    // 畫面上的那一句只有使用者打的字，情境不混進對話紀錄。
+    expect(await transcript(page).getByText('它現在的負載多少？', { exact: true }).count()).toBe(1);
+    // 截圖時把抓到的請求本文疊在宿主頁左下角（只在這張截圖裡，不是測試頁的功能）。
+    await page.evaluate(
+      (body) => {
+        const pre = document.createElement('pre');
+        pre.textContent = `e2e 擷取的 run.start 請求：\n${body}`;
+        pre.style.cssText =
+          'position:fixed;left:12px;bottom:12px;max-width:560px;margin:0;padding:8px 10px;font:12px/1.4 monospace;white-space:pre-wrap;background:#0f172a;color:#e2e8f0;border-radius:6px;z-index:10';
+        document.body.append(pre);
+      },
+      JSON.stringify(starts[0]?.params, null, 1),
+    );
+    await shot(page, 'context-sent');
+    await page.evaluate(() => document.querySelector('body > pre')?.remove());
+
+    const box = (await page.getByRole('img', { name: /設備 3D 模型/u }).boundingBox())!;
+    await page.mouse.click(box.x + 12, box.y + 12);
+    await expect
+      .poll(() =>
+        chat(page)
+          .getByText(/^目前選取：/u)
+          .count(),
+      )
+      .toBe(0);
+    await send(page, '今天有哪些告警？');
+    await expect
+      .poll(() => transcript(page).getByText('目前沒有未處理的告警。').count(), {
+        timeout: 30_000,
+      })
+      .toBe(1);
+    expect(starts).toHaveLength(2);
+    expect(starts[1]?.params).not.toHaveProperty('context');
+    // thread 那一族全在 `/embed` 底下，沒有一條打到獨立頁面的 `/threads`。
+    expect(paths.filter((path) => path.startsWith('/threads'))).toEqual([]);
+    expect(paths.some((path) => path.startsWith('/embed/threads/'))).toBe(true);
+  });
+
+  test('獨立頁面開的對話：元件打開時講專用的那一句，按「新對話」就能接著用', async () => {
+    const reply = '這是獨立頁面的回覆。';
+    const page = await openDemo([{ content: reply }], undefined, async (standalone) => {
+      await standalone.getByRole('textbox', { name: '要說的話' }).fill('你好');
+      await standalone.getByRole('button', { name: '送出', exact: true }).click();
+      // 獨立頁面上這一句出現不只一處，只看有沒有出現。
+      await expect
+        .poll(() => standalone.getByText(reply).count(), { timeout: 30_000 })
+        .toBeGreaterThan(0);
+      // 讓元件記住的那一條換成獨立頁面這一條（同一個網域上兩邊的鍵被換過）。
+      await standalone.evaluate(() =>
+        localStorage.setItem(
+          'nexus.embed.threads.current',
+          localStorage.getItem('nexus.threads.current') ?? '',
+        ),
+      );
+    });
+    const status = chat(page).getByRole('status').first();
+    await expect
+      .poll(() => status.textContent(), { timeout: 30_000 })
+      .toMatch(/^這條對話是在完整的對話頁開的.*請按「新對話」開一條新的。$/u);
+    // 不畫成一般的錯誤：沒有 server 的原文，也沒有錯誤列（`alert`）。
+    expect(
+      await chat(page)
+        .getByText(/不是從嵌入的對話框開的/u)
+        .count(),
+    ).toBe(0);
+    expect(await chat(page).getByRole('alert').count()).toBe(0);
+    expect(await transcript(page).getByText(reply).count()).toBe(0);
+    await shot(page, 'thread-not-embedded');
+
+    await chat(page).getByRole('button', { name: '新對話' }).click();
+    await settled(page);
+    await send(page, '換一條');
+    // 腳本每條 thread 從第一輪開始吃：新的這一條拿到的也是第一輪那句。
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
   });
 });

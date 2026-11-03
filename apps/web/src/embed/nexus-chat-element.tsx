@@ -24,7 +24,7 @@ import { systemDarkQuery } from '@/lib/theme';
 import { SHADOW_CONTAINER_NAME, SHADOW_ROOT_CLASS } from '../../embed-shadow-css';
 import { parseContext } from './context';
 import type { NexusChatContext } from './context';
-import { EmbeddedChat } from './embedded-chat';
+import { EmbeddedChat, embedBaseUrl } from './embedded-chat';
 import { themeOverrides } from './theme-tokens';
 
 export const ELEMENT_NAME = 'nexus-chat';
@@ -43,7 +43,7 @@ export interface NexusChatStyles {
 
 export interface DefineOptions {
   readonly styles: NexusChatStyles;
-  /** 注入用；省略就是同源的 harness。每個元素一個。 */
+  /** 注入用；省略就是 `embedBaseUrl()`（agent 來源加 `/embed`）。每個元素一個。 */
   readonly createClient?: () => WireClient;
 }
 
@@ -57,7 +57,10 @@ function parseTheme(value: string | null): NexusChatTheme {
 }
 
 /** 註冊 `<nexus-chat>`；已經註冊過就什麼都不做（同一頁載入兩次 `embed.js`）。 */
-export function defineNexusChat({ styles, createClient = createAgentClient }: DefineOptions): void {
+export function defineNexusChat({
+  styles,
+  createClient = () => createAgentClient({ baseUrl: embedBaseUrl() }),
+}: DefineOptions): void {
   if (customElements.get(ELEMENT_NAME) !== undefined) return;
 
   // 型別對著給宿主頁的那份（`nexus-chat.d.ts`），實作跟公開的形狀對不上就編不過。
