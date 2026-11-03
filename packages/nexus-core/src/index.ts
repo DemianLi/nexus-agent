@@ -685,6 +685,7 @@ export type { PageContextRef } from './page-context.js';
 export {
   isPageContextBlock,
   PAGE_CONTEXT_LABEL_MAX,
+  PAGE_CONTEXT_WORDINGS,
   pageContextBlock,
   pageContextOfBlock,
   pageContextText,
