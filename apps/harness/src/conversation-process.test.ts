@@ -3,7 +3,7 @@
  * （`scripted-serve.ts` 那份 patch），控制面在 stdin／stdout，wire 經 Unix socket 打。情境同 `apps/web/e2e/conversation.e2e.ts`
  * （#1602）：一般回覆串完、核准中斷按核准後這一輪結束；另外量控制面的框、stdout 只有框、分叉回 `not_supported`、EOF 回 0。
  *
- * 跑的是原始碼（`node --import tsx`），同 `entry-main.test.ts`。子行程的環境只有 `PATH` 與暫存的 home，讀不到 `.env`。
+ * 跑的是原始碼（`node --import tsx`），同 `entry-main.test.ts`。子行程的環境只有 `PATH`、暫存的 home 與 {@link SOURCE_PATHS}，讀不到 `.env`。
  */
 
 import { spawn } from 'node:child_process';
@@ -34,6 +34,14 @@ const ENTRY = fileURLToPath(new URL('./conversation-process.ts', import.meta.url
 /** cwd 是暫存目錄，`--import tsx` 照 cwd 解析會找不到，給絕對位置。 */
 const TSX = import.meta.resolve('tsx');
 const THREAD = 'conversation-e2e';
+/**
+ * vitest 主行程設的 `TSX_TSCONFIG_PATH`（`vitest.shared.ts` 的 `sourceHook`）：子行程的 tsx 照它把 `@nexus/*` 解到 `src/`。
+ * 環境是自己給的，不帶的話會解到 `lib/`，乾淨的樹（CI）上沒有 `lib/`。
+ */
+const SOURCE_PATHS =
+  process.env.TSX_TSCONFIG_PATH === undefined
+    ? {}
+    : { TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH };
 
 /** 經 Unix socket 的 `fetch`：wire client 照常用，只是連線走 `socketPath`。 */
 function socketFetch(socketPath: string): typeof globalThis.fetch {
@@ -108,6 +116,7 @@ async function start(turns: readonly ScriptedTurn[]): Promise<Running> {
         PATH: process.env.PATH ?? '',
         HOME: home,
         NEXUS_AGENT_HOME: join(home, 'harness-home'),
+        ...SOURCE_PATHS,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     },
@@ -250,7 +259,7 @@ describe('對話行程經 Unix socket 跑一整段對話', () => {
       ['--import', TSX, ENTRY, '--socket', join(sockets, 'wire.sock')],
       {
         cwd: dir,
-        env: { PATH: process.env.PATH ?? '', HOME: dir },
+        env: { PATH: process.env.PATH ?? '', HOME: dir, ...SOURCE_PATHS },
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     );
