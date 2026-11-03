@@ -1,5 +1,5 @@
 /**
- * `@nexus/core` 的不變量配套入口：**會話日誌的 turn 配對**。
+ * `@nexus/core` 的不變量配套入口：**會話日誌的跨筆關係**。
  *
  * 檔名與子路徑（`@nexus/core/invariant`）照 dsh 的慣例——每個 package 的配套入口都是
  * `src/invariant.ts`，只掛在 `./invariant` 上，不從主入口再匯出。
@@ -10,209 +10,37 @@
  *
  * - dsh 檢的 turn/step 巢狀，{@link ./session-log.ts | SessionEventType} **沒有詞彙表達**
  *   ——沒有 `step/*` 事件，也沒有逐事件的 `{turn, step}`。一次模型呼叫的識別是 `modelCall`
- *   （[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，它的 `model/start` 的 `seq`），另有一道檢查（`startSeqs`）只檢它**指得到前面真的有的開頭**，
+ *   （[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，它的 `model/start` 的 `seq`），另有一道檢查（`session-relationships.ts` 的 `startSeqs`）只檢它**指得到前面真的有的開頭**，
  *   不檢「落在哪一輪」。`tool/call` ↔ `tool/result` 的 `callId` 配對從
  *   [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起有詞彙了，照 dsh 檢，但**只檢
  *   配對、不檢落在哪一步**（形狀的偏離見 `session-log.ts` 的那兩顆）。`model/start` ↔
  *   `model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）只檢結尾那一側，
- *   理由見下面那個計數。
+ *   理由見 `session-relationships.ts` 的 `openModelCalls`。
  * - `seq` 嚴格遞增、純 JSON、不可變、重入，**四樣全都已經被 `SessionLog` 自己擁有**
  *   （`#events.length`、`snapshotJsonValue`、`deepFreeze`、`#publishing`）。抄過來只是
  *   複製擁有者的邊界，dsh 明說配套入口只檢**擁有者自己不負責**的那部分。
  *
- * 剩下真的沒人管的跨筆關係就是 turn 配對，外加 `modelCall` 的指向，與核准稽核（`approval/asked`、`approval/decided`）落在開著的輪內
- * （見 `hasTurns`）。turn 配對對著兩個生產者實際發的序列驗過
- * （`apps/harness/src/thread-pump.ts` 的 `#runOnce`、`apps/harness/src/cli.ts` 的
- * `runTurn`）：兩條路都是 `turn/start` →（`interrupt/raised`）* → `turn/end` 或
- * `turn/failed`，而且 pump 的輪是排隊跑的，不會交錯。
- *
- * **刻意不檢「日誌結尾還有一輪開著」**：那跟「跑到一半」長得一模一樣，不是違規。
- *
- * **同一個理由往前推一步：它在 `session/end-seed` 那裡重設。** 一份帶 seed 開出來的日誌，
- * seed 結尾那一輪開著就是上一個行程跑到一半，**不是這個行程的違規**
- * （[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。所以這條檢查的範圍是
- * 「一個行程的生命週期之內」，不是整份檔案——不重設的話，resume 之後第一顆 `turn/start`
- * 必然報「上一輪還開著」，而那一輪這個行程根本沒碰過。
- *
- * **例外（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：end-seed 落下時輪還開著，輪與待結狀態帶過去，不清。** 理由與形狀見 `carried`。
- * 帶過去的那一輪只能被兩件事結束：補結（`tool/result`、`model/end`、`turn/end`），或下一顆 `turn/start`（新行程自己的一輪）。
- *
- * **送出佇列（`inbox/spliced`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）是例外，它不重設**：
- * 佇列本來就跨行程活著（重啟之後接回來、停住），所以一顆合規與否要對著從檔頭折起的清單判。檢的是 dsh 折疊那一側
- * 會拋的兩件：範圍超出、id 重複（`packages/core/agent-loop/src/inbox.ts` 的 `inboxProjectionDefinition`，`477b4f4`）。
+ * 剩下真的沒人管的跨筆關係（turn 配對、模型呼叫的起訖與 `modelCall` 的指向、工具呼叫與結果的配對、重試的連號與開跑、
+ * 核准稽核落在輪內、送出佇列）寫在 {@link ./session-relationships.ts | createSessionRelationshipChecker}，這個配套入口只把它接到
+ * 執行期的日誌上，違規交給 `fail`。harness 讀盤用的是同一支（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)），
+ * 這幾條兩邊判法相同；標題的來源只在讀盤那一側驗（`apps/harness/src/session-log-validation.ts`）。
  *
  * @module
  */
 
-import { EMPTY_INBOX, spliceInbox } from './inbox.js';
-import type { InboxState } from './inbox.js';
 import type { InvariantInstaller } from './invariants.js';
 import type { NexusPlugin, PluginEntry } from './plugin.js';
-import { TOOL_NOT_STARTED } from './tool-events.js';
+import { createSessionRelationshipChecker } from './session-relationships.js';
 
 /** 這個配套入口認領的 package 名。 */
 export const CORE_INVARIANT_PACKAGE = '@nexus/core';
 
-/**
- * turn 配對的三條關係。
- *
- * `turn/failed` 與 `turn/end` 都是收工，所以用同一格 `open` 記狀態就夠——
- * 兩者的差別是結果不是結構。
- */
+/** 會話日誌的跨筆關係，逐顆交給 {@link createSessionRelationshipChecker}。 */
 export const sessionInvariant: InvariantInstaller = (subject, fail) => {
-  // trace 放在 closure 裡：一份日誌一次安裝，不需要 dsh 那個
-  // `WeakMap<Session, SessionTrace>`（見 `invariants.ts` 裡標註的偏離）。
-  let open = false;
-  /**
-   * 開著的那一輪是**從上一個行程帶過來的**（`session/end-seed` 落下時輪還開著）。
-   *
-   * 新檔的補結在 end-seed 之前（[#721](https://github.com/DemianLi/nexus-agent/issues/721)），輪早已收；但**舊檔**
-   * 「開著的輪＋end-seed」的形狀照舊讀得到，續接它時補結接在 end-seed **後面**（dsh 的 `repair.ts` 掃描不在 end-seed 重設，所以
-   * 這個形狀本來就允許）。補結要對得上那一輪，所以輪、待結的呼叫、開著的模型呼叫都得跨過這顆 end-seed 留著；
-   * 旗標只管一件事——後面緊接著的 `turn/start` 是新行程自己的一輪，不是違規（舊檔的新一輪就是這樣接的）。
-   */
-  let carried = false;
-  /**
-   * 這份日誌出現過 `turn/start`（[#2026](https://github.com/DemianLi/nexus-agent/issues/2026)）。**跨 `session/end-seed` 不重設**：
-   * 續接時舊事件會重播，看得到上一個行程的輪。
-   *
-   * 核准稽核只在**有輪的日誌**上檢。前景子代理叫的工具走政策路徑時，稽核寫進子代理自己那份日誌（`forCall` 挑的是呼叫者的日誌），
-   * 而那份日誌從來沒有 `turn/*`，所以不判；前景子代理只在 parent 某顆工具執行期間跑，parent 那一輪一定開著。代價是一份全新的日誌在
-   * 第一顆 `turn/start` 之前寫的稽核抓不到。
-   */
-  let hasTurns = false;
-  /**
-   * 記過 `tool/call`、還沒配到結果的 `callId`。
-   *
-   * **同一個 `callId` 記兩次不是違規**：被中斷的呼叫 resume 後會再記一顆（見 `session-log.ts`
-   * 的 `tool/call`），集合吃得下重複。dsh 在 `step/end` 清空；我們沒有 `step/*` 事件，而一顆沒配到的
-   * 呼叫就是被中斷或跑到一半的那次，留著不會讓後面的檢查誤判，所以只在 end-seed 清。
-   */
-  const pendingCalls = new Set<string>();
-  /**
-   * 開著的模型呼叫有幾個（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）。
-   *
-   * **只檢一個方向**：`model/end` 前面沒有開著的 `model/start` 一定是寫錯了；反過來，
-   * `model/start` 沒配到結尾只有一種成因——行程在呼叫中途死了——一律報的話每個崩過的會話
-   * 都會紅。dsh 那側的配套入口也只檢得到「有沒有 `step/start`」。用計數不用布林，同一份日誌
-   * 裡哪天有了並行的模型呼叫也不會誤報。
-   */
-  let openModelCalls = 0;
-  /**
-   * 記過的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）：
-   * 事件上的 `modelCall` 是這個集合的成員才算指得到東西。**跨 `session/end-seed` 不清**——上一個行程的呼叫
-   * 仍可能被它之後補寫的事件指到（量測、被切斷的半段回覆都在呼叫結束之後才寫）。
-   */
-  const startSeqs = new Set<number>();
-  const checkModelCall = (type: string, seq: number, modelCall: number | undefined): void => {
-    if (modelCall === undefined) return;
-    if (!startSeqs.has(modelCall)) {
-      fail(`${type}（seq ${seq}）的 modelCall ${modelCall} 不是前面任何一顆 model/start 的 seq`);
-    }
-  };
-  /** 從檔頭折起的送出佇列。**跨 `session/end-seed` 不重設**，見檔頭。 */
-  let inbox: InboxState = EMPTY_INBOX;
-
+  // 一份日誌安裝一次，所以一份日誌一份檢查狀態。
+  const checker = createSessionRelationshipChecker();
   subject.observe((event) => {
-    switch (event.type) {
-      case 'inbox/spliced': {
-        try {
-          inbox = spliceInbox(inbox, event.data);
-        } catch (error: unknown) {
-          fail(
-            `inbox/spliced（seq ${event.seq}）不合規：${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        break;
-      }
-      case 'model/start': {
-        openModelCalls += 1;
-        startSeqs.add(event.seq);
-        break;
-      }
-      case 'model/usage':
-      case 'llm/retry':
-      case 'llm/retry-started':
-      case 'assistant/message':
-      case 'context/measure': {
-        checkModelCall(event.type, event.seq, event.data.modelCall);
-        break;
-      }
-      case 'model/end': {
-        checkModelCall(event.type, event.seq, event.data.modelCall);
-        if (openModelCalls === 0) {
-          fail(`model/end（seq ${event.seq}）前面沒有開著的 model/start`);
-        } else {
-          openModelCalls -= 1;
-        }
-        break;
-      }
-      case 'tool/call': {
-        pendingCalls.add(event.data.callId);
-        break;
-      }
-      case 'tool/result': {
-        // 「還沒開始」的合成結果沒有前面的 `tool/call`，明文放行，同 dsh（`packages/core/session/src/invariant.ts:142-145`）。
-        const synthetic = event.data.isError && event.data.error?.code === TOOL_NOT_STARTED;
-        if (!pendingCalls.delete(event.data.callId) && !synthetic) {
-          fail(
-            `tool/result（seq ${event.seq}）的 callId "${event.data.callId}" 前面沒有還沒配到的 tool/call`,
-          );
-        }
-        break;
-      }
-      case 'turn/start': {
-        if (open && !carried) fail(`turn/start（seq ${event.seq}）來的時候上一輪還開著`);
-        if (carried) {
-          // 上一個行程的那一輪帶來的待結狀態，不屬於這一輪。
-          carried = false;
-          pendingCalls.clear();
-          openModelCalls = 0;
-        }
-        open = true;
-        hasTurns = true;
-        break;
-      }
-      case 'turn/end':
-      case 'turn/failed': {
-        if (!open) fail(`${event.type}（seq ${event.seq}）關了一個沒有開著的輪`);
-        open = false;
-        carried = false;
-        break;
-      }
-      case 'session/end-seed': {
-        // seed 之前沒收的那一輪屬於上一個行程，見檔頭最後一段。
-        //
-        // **輪還開著就整份帶過去**（#721）：新檔的補結在 end-seed 之前、輪早已收；舊檔「開著的輪＋end-seed」續接時補結接在後面，
-        // 補結要配得到那一輪的待結呼叫與開著的模型呼叫，所以不清。下一顆 `turn/start` 來時由 `carried` 放行並清掉。
-        if (open) {
-          carried = true;
-          break;
-        }
-        // 輪已收：沒配到的呼叫同理，同一個行程裡被中斷的那次，resume 後 LangGraph 會重放那個沒跑完的 task、以同一個 callId 再記一顆
-        // （`apps/harness/src/tool-events.test.ts` 的中斷那一組量過）。**跨重啟沒有這條路**——續接重建的是日誌推出來的
-        // 對話，不是 checkpointer（`MemorySaver` 住在行程內，讀碼推得，沒另外實測）。
-        pendingCalls.clear();
-        // 上一個行程中途死掉的那次模型呼叫永遠等不到結尾。
-        openModelCalls = 0;
-        break;
-      }
-      case 'interrupt/raised': {
-        if (!open) fail(`interrupt/raised（seq ${event.seq}）落在任何開著的輪之外`);
-        break;
-      }
-      case 'approval/asked':
-      case 'approval/decided': {
-        // 人那條的 asked 與 decided 分在兩輪（提問那一輪、續接或收回那一輪的 `turn/start` 之後），各自都在輪內。
-        if (hasTurns && !open) fail(`${event.type}（seq ${event.seq}）落在任何開著的輪之外`);
-        break;
-      }
-      default:
-        // 後來加的事件種類歸它們自己的擁有者。這裡刻意不寫 exhaustive 的
-        // assertNever——不認得的事件不該讓這條檢查變成阻礙（協調器的 `severityOf`
-        // 同一條理由）。
-        break;
-    }
+    for (const violation of checker.accept(event)) fail(violation.message);
   });
 };
 

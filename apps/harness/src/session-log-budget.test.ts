@@ -207,7 +207,7 @@ describe('JSONL 存放處', () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  /** 一個目錄裡落一份 `alpha`（幾顆 `turn/start`），回目錄與日誌的位元組數。 */
+  /** 一個目錄裡落一份 `alpha`（幾顆 `model/usage`），回目錄與日誌的位元組數。 */
   async function seeded(): Promise<{ directory: string; bytes: number }> {
     const directory = await mkdtemp(join(tmpdir(), 'nexus-2115-'));
     roots.push(directory);
@@ -219,8 +219,7 @@ describe('JSONL 存放處', () => {
     await stored.append(
       Array.from(
         { length: 5 },
-        (_, seq) =>
-          ({ type: 'turn/start', seq, time: seq + 1, data: { kind: 'resume' } }) as SessionEvent,
+        (_, seq) => ({ type: 'model/usage', seq, time: seq + 1, data: {} }) as SessionEvent,
       ),
     );
     await stored.close();
@@ -296,7 +295,7 @@ describe('JSONL 存放處', () => {
 
   describe('開著的日誌長過額度（#2215）', () => {
     const more = (seq: number): SessionEvent =>
-      ({ type: 'turn/start', seq, time: seq + 1, data: { kind: 'resume' } }) as SessionEvent;
+      ({ type: 'model/usage', seq, time: seq + 1, data: {} }) as SessionEvent;
 
     /** 接回 `alpha`（5 顆事件），額度定在現在的大小加 `room`。 */
     async function reopened(room: number) {

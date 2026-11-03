@@ -235,10 +235,12 @@ describe('CLI 的 --resume', () => {
     await cli(['--session-log', logs], '/exit\n');
     const [entry] = await readdir(logs);
     const runDir = join(logs, entry!);
+    // `modelCall` 是那顆 `model/start` 的 `seq`：接在第一次執行寫下的事件後面。
+    const modelStartSeq = (await readLog(runDir)).length + 1;
     await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '第一句，沒得到回覆' } },
       { type: 'model/start', data: {} },
-      { type: 'model/end', data: { outcome, modelCall: 1 } },
+      { type: 'model/end', data: { outcome, modelCall: modelStartSeq } },
       reason === undefined
         ? { type: 'turn/failed', data: { message: '供應商掛了' } }
         : { type: 'turn/end', data: { reason } },

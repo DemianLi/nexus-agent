@@ -931,6 +931,13 @@ export type {
 export type { InvariantFailure } from './invariants.js';
 export { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';
 
+export type {
+  SessionRelationshipChecker,
+  SessionRelationshipRule,
+  SessionRelationshipViolation,
+} from './session-relationships.js';
+export { createSessionRelationshipChecker } from './session-relationships.js';
+
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
