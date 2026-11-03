@@ -178,10 +178,11 @@ describe('reducer 的 hostCalls', () => {
 
   it('停在宿主頁工具時 root 照樣發的 completed 不翻 idle、不把工具列收成失敗；交回後接著跑才收', () => {
     // 事件順序照真 serve 上逐顆印出來的：工具開跑 → 宿主頁工具的中斷 → tools 收尾 → root completed → 交回後 root running → 工具結束 → root completed。
-    const tool = (data: object): Event => ({
-      ...frame('tools', data),
-      params: { namespace: ['tools:a'], timestamp: 0, data },
-    }) as Event;
+    const tool = (data: object): Event =>
+      ({
+        ...frame('tools', data),
+        params: { namespace: ['tools:a'], timestamp: 0, data },
+      }) as Event;
     let state = reduceConversation(
       emptyConversation(),
       frame('lifecycle', { event: 'running', graph_name: 'root' }),
