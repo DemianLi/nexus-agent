@@ -8,8 +8,12 @@
  * - `unrelated`：提了選取的 → `wrong`；其餘 → `ok`。
  * - `unclear`：反問 → `ok`；沒反問而回答裡只挑了一群裡的某一台 → `wrong`；其餘 → `miss`。
  *
- * 「反問」是呼叫了 `ask_user_question`，或回答以問號收尾而且在問是哪一台（「哪一台」「哪個」「還是」「是指」）。
+ * 「反問」是呼叫了 `ask_user_question`，或回答裡有一句在問使用者是哪一台（{@link askedWhich}）。
+ *
+ * 判準之外另數兩種外露（{@link leaksOf}）：照抄情境區塊的原文、對使用者講出規則。使用者看得到，但不算拿錯對象。
  */
+
+import { PAGE_CONTEXT_WORDINGS } from '@nexus/core';
 
 import type { Question } from './fixture.js';
 
@@ -41,10 +45,53 @@ export function firstSentence(text: string): string {
   return end === -1 ? trimmed : trimmed.slice(0, end + 1);
 }
 
+/** 一句：到句號、問號、驚嘆號、冒號或換行為止（含那個標點）。 */
+function sentencesOf(text: string): string[] {
+  return text.match(/[^。！？!?：:\n]+[。！？!?：:\n]?/gu) ?? [];
+}
+
+/** 一句是在問使用者、或請使用者講清楚：問號或冒號收尾，或帶「請問」「請您」「請確認」這類。 */
+const ASKING = /[？?：:]\s*$|請(?:問|您|確認|明確|說明|指明|告訴)/u;
+
+/** 問的是哪一台：「哪一台」這類、「其他設備」「特定機台」、「還是」「或者」緊接著一個編號、「是指 … 嗎」。 */
+const WHICH =
+  /哪一?[台座部組]|(?:其他|特定)的?(?:機台|設備|機器)|(?:還是|或者|或是)\s*(?:\*\*)?\s*[A-Z]{1,3}-\d|是指.{0,24}[嗎吗]/u;
+
+/**
+ * 反問了是哪一台：呼叫了 `ask_user_question`，或回答裡有一句同時合乎 {@link ASKING} 與 {@link WHICH}。問句後面還接著別的話也算
+ * （#2380：只認問號收尾時，漏了 #2378 正式跑裡中段反問的那幾題）。「還是需要我查別的來源」這種不是在問是哪一台，不算。
+ */
 export function askedWhich(observation: Observation): boolean {
   if (observation.askText.trim() !== '') return true;
-  const answer = observation.answer.trim();
-  return /哪一?[台個座]|還是|是指/u.test(answer) && /[？?]\s*$/u.test(answer);
+  return sentencesOf(observation.answer.replace(DASHES, '-')).some(
+    (sentence) => ASKING.test(sentence.trim()) && WHICH.test(sentence),
+  );
+}
+
+/** 回答讓使用者看到的情境區塊內容：`verbatim` 照抄了區塊的原文，`rules` 對使用者講出了規則或系統提示。 */
+export type Leak = 'verbatim' | 'rules';
+
+/** 照抄的門檻：回答裡出現區塊固定字（任一份，見 `PAGE_CONTEXT_WORDINGS`）連續這麼多字就算。 */
+const VERBATIM_RUN = 12;
+
+const FIXED_PIECES = PAGE_CONTEXT_WORDINGS.flatMap(({ open, tail }) => [open, tail]).map((piece) =>
+  piece.replace(/<\/?system-reminder>/gu, ''),
+);
+
+/** 講出規則：「依（照）規則」「根據系統提示」「系統訊息」這類。「根據畫面情境，目前選取的是 X」照第 8 點是該寫的，不算。 */
+const CITES_RULES = /依照?規則|按照?規則|根據系統|系統(?:提示|訊息|指示)/u;
+
+export function leaksOf(answer: string): Leak[] {
+  const leaks: Leak[] = [];
+  const verbatim = FIXED_PIECES.some((piece) => {
+    for (let start = 0; start + VERBATIM_RUN <= piece.length; start += 1) {
+      if (answer.includes(piece.slice(start, start + VERBATIM_RUN))) return true;
+    }
+    return false;
+  });
+  if (verbatim) leaks.push('verbatim');
+  if (CITES_RULES.test(answer)) leaks.push('rules');
+  return leaks;
 }
 
 export function judge(question: Question, observation: Observation): Verdict {

@@ -18,6 +18,8 @@
  *
  * 離線驗量具：`--upstream` 指本機的假端點，`--fake-key` 給子行程一把假的 key（上游不是 127.0.0.1 就拒絕這個旗標）。
  *
+ * 離線重判：`--rejudge <runs.jsonl>` 拿今天的判準重判一份舊紀錄、列出判決變了的與有外露的題，不起 serve、不打端點（#2380）。
+ *
  * **不進 CI。** 會花錢也會花時間。
  */
 
@@ -38,8 +40,8 @@ import { startCountingProxy } from '../../smoke/counting-proxy.js';
 import type { CountingProxy } from '../../smoke/counting-proxy.js';
 import { CATEGORIES, QUESTIONS } from './fixture.js';
 import type { Category, Question } from './fixture.js';
-import { judge } from './rubric.js';
-import type { Verdict } from './rubric.js';
+import { judge, leaksOf } from './rubric.js';
+import type { Leak, Verdict } from './rubric.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(HERE, '..', '..', '..');
@@ -105,6 +107,8 @@ export interface RunRecord {
   readonly requests: number;
   readonly durationMs: number;
   readonly verdict?: Verdict;
+  /** 回答讓使用者看到的情境區塊內容（#2380）；舊的紀錄沒有這一格。 */
+  readonly leaks?: readonly Leak[];
   readonly error?: string;
 }
 
@@ -227,11 +231,11 @@ async function runOne(
   }
 }
 
-/** 每一類的 `wrong` 比例（主指標）與 `miss` 數。執行失敗的不進分母，另列。 */
+/** 每一類的 `wrong` 比例（主指標）、`miss` 數與兩種外露的次數。執行失敗的不進分母，另列。 */
 export function renderSummary(records: readonly RunRecord[]): string {
   const lines = [
-    '| 類 | 判了幾次 | 拿錯對象 | 沒照規則（miss） | 失敗 |',
-    '| --- | --- | --- | --- | --- |',
+    '| 類 | 判了幾次 | 拿錯對象 | 沒照規則（miss） | 照抄原文 | 講出規則 | 失敗 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
   ];
   const judged = records.filter((record) => record.error === undefined);
   for (const category of [...CATEGORIES, 'all'] as const) {
@@ -242,8 +246,9 @@ export function renderSummary(records: readonly RunRecord[]): string {
     ).length;
     const wrong = rows.filter((record) => record.verdict === 'wrong').length;
     const miss = rows.filter((record) => record.verdict === 'miss').length;
+    const leaked = (leak: Leak) => rows.filter((record) => record.leaks?.includes(leak)).length;
     lines.push(
-      `| ${category} | ${String(rows.length)} | ${formatProportion(wilson(wrong, rows.length))} | ${String(miss)} | ${String(failed)} |`,
+      `| ${category} | ${String(rows.length)} | ${formatProportion(wilson(wrong, rows.length))} | ${String(miss)} | ${String(leaked('verbatim'))} | ${String(leaked('rules'))} | ${String(failed)} |`,
     );
   }
   return lines.join('\n');
@@ -256,15 +261,52 @@ function stoppedBy(proxy: CountingProxy): string | undefined {
   return bad.blocked ? '到請求上限' : `上游回 ${String(bad.status)}`;
 }
 
+async function readRecords(path: string): Promise<RunRecord[]> {
+  return (await readFile(path, 'utf8'))
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as RunRecord);
+}
+
+/**
+ * 拿今天的判準重判一份 `runs.jsonl`（#2380）：不打端點。執行失敗的照舊不判。
+ *
+ * @returns 重判後的紀錄，與判決變了的那幾題（原判 → 新判）。
+ */
+function rejudge(records: readonly RunRecord[]): {
+  readonly records: RunRecord[];
+  readonly changed: string[];
+} {
+  const changed: string[] = [];
+  const rejudged = records.map((record) => {
+    if (record.error !== undefined) return record;
+    const question = QUESTIONS.find((candidate) => candidate.id === record.question);
+    if (question === undefined) throw new Error(`紀錄 ${record.id} 的題目 ${record.question} 不在題庫裡`);
+    const verdict = judge(question, record);
+    if (verdict !== record.verdict) {
+      changed.push(`${record.id}：${record.verdict ?? '（沒判）'} → ${verdict}`);
+    }
+    return { ...record, verdict, leaks: leaksOf(record.answer) };
+  });
+  return { records: rejudged, changed };
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes('--summarize')) {
-    const path = argv[argv.indexOf('--summarize') + 1] ?? '';
-    const records = (await readFile(path, 'utf8'))
-      .split('\n')
-      .filter((line) => line.trim() !== '')
-      .map((line) => JSON.parse(line) as RunRecord);
+    console.log(renderSummary(await readRecords(argv[argv.indexOf('--summarize') + 1] ?? '')));
+    return;
+  }
+  if (argv.includes('--rejudge')) {
+    const { records, changed } = rejudge(
+      await readRecords(argv[argv.indexOf('--rejudge') + 1] ?? ''),
+    );
     console.log(renderSummary(records));
+    console.log(`\n判決變了的 ${String(changed.length)} 題：`);
+    for (const line of changed) console.log(`- ${line}`);
+    const leaked = records.filter((record) => (record.leaks ?? []).length > 0);
+    console.log(`\n有外露的 ${String(leaked.length)} 題：`);
+    for (const record of leaked) console.log(`- ${record.id}：${(record.leaks ?? []).join('、')}`);
     return;
   }
   const options = parseArgs(argv);
@@ -288,7 +330,10 @@ async function main(): Promise<void> {
             ...observed,
             requests: proxy.forwardedPosts() - before,
             durationMs: Date.now() - started,
-            ...(observed.error === undefined && { verdict: judge(question, observed) }),
+            ...(observed.error === undefined && {
+              verdict: judge(question, observed),
+              leaks: leaksOf(observed.answer),
+            }),
           };
         } catch (error) {
           record = {

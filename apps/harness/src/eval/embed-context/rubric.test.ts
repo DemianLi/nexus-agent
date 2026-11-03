@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 
 import { QUESTIONS } from './fixture.js';
 import type { Question } from './fixture.js';
-import { askedWhich, firstSentence, judge } from './rubric.js';
+import { PAGE_CONTEXT_WORDINGS } from '@nexus/core';
+
+import { askedWhich, firstSentence, judge, leaksOf } from './rubric.js';
 
 const q = (id: string): Question => QUESTIONS.find((question) => question.id === id)!;
 const said = (answer: string, askText = '') => ({ answer, askText });
@@ -66,8 +68,40 @@ describe('工具', () => {
     expect(firstSentence('一\n二')).toBe('一\n');
   });
 
-  it('反問：問號收尾才算，陳述句裡提到「哪一台」不算', () => {
+  it('反問：陳述句裡提到「哪一台」不算；問是哪一台的那句就算', () => {
     expect(askedWhich(said('不知道是哪一台，所以先講通則。'))).toBe(false);
     expect(askedWhich(said('請問是哪一台？'))).toBe(true);
+  });
+
+  it('反問在中段、後面還接著別的話也算（#2380）', () => {
+    expect(askedWhich(said('請問您是想問 P-101 的軸承還是其他設備？一般兩年換一次。'))).toBe(true);
+    expect(askedWhich(said('請問是 CT-1 還是 CT\u20112？確認之後我再查。'))).toBe(true);
+    expect(askedWhich(said('您是指 P-101 冷卻水泵嗎？若是，軸承一般兩年換一次。'))).toBe(true);
+  });
+
+  it('冒號收尾的請求也算：請使用者講是哪一台（#2380）', () => {
+    expect(askedWhich(said('想確認一下，您問的是下列哪一台：\n- P-301\n- P-302'))).toBe(true);
+    expect(askedWhich(said('請問您是想詢問特定機台的保養時間？'))).toBe(true);
+  });
+
+  it('問的不是哪一台的不算：問資料在哪、問要不要查別的（#2380）', () => {
+    expect(askedWhich(said('P-101 一般兩年換一次。您是有手冊，還是想知道經驗原則？'))).toBe(false);
+    expect(askedWhich(said('保養記錄是存放在哪個系統裡？還是需要我查其他來源？'))).toBe(false);
+  });
+});
+
+describe('外露（#2380）', () => {
+  it('照抄區塊的原文：現在的字與以前的字都認得；只講選取的名字不算', () => {
+    for (const { tail } of PAGE_CONTEXT_WORDINGS) {
+      expect(leaksOf(`好的。${tail.slice(1, 30)}`)).toContain('verbatim');
+    }
+    expect(leaksOf('畫面上目前選取的是 P-101。')).toEqual([]);
+  });
+
+  it('講出規則：「依規則」「根據系統提示」算；「根據畫面情境，目前選取的是 X」不算', () => {
+    expect(leaksOf('這台指代不明，依規則我使用目前選取的。')).toEqual(['rules']);
+    expect(leaksOf('根據系統提示，畫面上目前選取的是 P-201。')).toEqual(['rules']);
+    expect(leaksOf('根據系統訊息，目前選取冷卻系統。')).toEqual(['rules']);
+    expect(leaksOf('根據畫面情境，目前選取的是 P-101。')).toEqual([]);
   });
 });
