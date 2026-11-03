@@ -229,10 +229,12 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
   });
 
   test('新對話開一條空的；重新整理接著那一條', async () => {
-    const page = await openDemo([{ content: '第一條的回覆。' }]);
+    const page = await openDemo([{ content: '收到，這是 serve 的腳本回覆。' }]);
     await send(page, '你好');
     await expect
-      .poll(() => transcript(page).getByText('第一條的回覆。').count(), { timeout: 30_000 })
+      .poll(() => transcript(page).getByText('收到，這是 serve 的腳本回覆。').count(), {
+        timeout: 30_000,
+      })
       .toBe(1);
     await settled(page);
     const keys = () =>
@@ -240,6 +242,7 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
         localStorage.getItem('nexus.embed.threads.current'),
         localStorage.getItem('nexus.threads.current'),
       ]);
+    await shot(page, 'new-conversation-before');
     const [embedBefore, standaloneBefore] = await keys();
     await chat(page).getByRole('button', { name: '新對話' }).click();
     await expect.poll(() => transcript(page).count()).toBe(0);
@@ -249,13 +252,16 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     expect(standaloneAfter).toBe(standaloneBefore);
     await send(page, '換一條');
     await expect
-      .poll(() => transcript(page).getByText('第一條的回覆。').count(), { timeout: 30_000 })
+      .poll(() => transcript(page).getByText('收到，這是 serve 的腳本回覆。').count(), {
+        timeout: 30_000,
+      })
       .toBe(1);
     await settled(page);
     await page.reload();
     await expect
       .poll(() => transcript(page).getByText('換一條').count(), { timeout: 30_000 })
       .toBe(1);
+    await expect.poll(() => transcript(page).getByText('你好').count()).toBe(0);
     await shot(page, 'new-conversation');
   });
 });
