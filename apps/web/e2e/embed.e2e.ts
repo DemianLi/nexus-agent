@@ -437,6 +437,20 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     expect(paths.some((path) => path.startsWith('/embed/threads/'))).toBe(true);
   });
 
+  test('空白畫面：元件不提拖檔，獨立頁面會提（#2384）', async () => {
+    const page = await openDemo([{ content: '不會用到。' }], undefined, async (standalone) => {
+      await expect.poll(() => standalone.getByText('在下面打字，或把檔案拖進來。').count()).toBe(1);
+      await expect
+        .poll(() => standalone.getByRole('status').first().textContent(), { timeout: 30_000 })
+        .toBe('就緒');
+      await shot(standalone, 'empty-standalone');
+    });
+    await expect.poll(() => chat(page).getByText('在下面打字。', { exact: true }).count()).toBe(1);
+    expect(await chat(page).getByText(/拖/u).count()).toBe(0);
+    await settled(page);
+    await shot(page, 'empty-embedded');
+  });
+
   test('獨立頁面開的對話：元件打開時講專用的那一句，按「新對話」就能接著用', async () => {
     const reply = '這是獨立頁面的回覆。';
     const page = await openDemo([{ content: reply }], undefined, async (standalone) => {
