@@ -463,7 +463,12 @@ export async function compareToLog(
     );
   }
   const out: Verdict[] = [];
-  const options = { toolResultAsSeen, applyPrunes: true, applyArgTruncations: true };
+  const options = {
+    toolResultAsSeen,
+    applyPrunes: true,
+    applyArgTruncations: true,
+    applyImageOffloads: true,
+  };
   const history = new ModelHistoryCache(options);
   for (const [index, start] of starts.entries()) {
     const body = mainBodies[index]!;
