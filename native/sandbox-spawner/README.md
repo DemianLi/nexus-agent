@@ -15,6 +15,8 @@
 
 協定（控制通道與 stdio 怎麼接）在 `src/protocol.rs` 與 `src/main.rs` 的檔頭。
 
+監督行程的控制面協定（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，#2339）也放在這個 crate：`src/supervisor_protocol.rs`，跟 spawner 共用框格式；向量檔是 `supervisor-vectors.json`，TS 那一側是 `apps/harness/src/supervisor-protocol.ts`。只有格式，spawner 的執行檔不用它。
+
 ## 建置與測試
 
 需要 Linux。Mac 上用容器跑，例如：

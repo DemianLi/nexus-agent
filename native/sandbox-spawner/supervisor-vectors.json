@@ -1,0 +1,203 @@
+{
+  "conversationCommands": [
+    {
+      "value": {
+        "type": "bind",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "620f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
+        "type": "bind",
+        "threadId": "é\n\t"
+      },
+      "hex": "6204000000c3a90a09"
+    },
+    {
+      "value": {
+        "type": "drain"
+      },
+      "hex": "64"
+    }
+  ],
+  "conversationReports": [
+    {
+      "value": {
+        "type": "ready"
+      },
+      "hex": "52"
+    },
+    {
+      "value": {
+        "type": "bound",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "420f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
+        "type": "turn",
+        "phase": "begin"
+      },
+      "hex": "5400"
+    },
+    {
+      "value": {
+        "type": "turn",
+        "phase": "end"
+      },
+      "hex": "5401"
+    },
+    {
+      "value": {
+        "type": "idle",
+        "idleMs": 0
+      },
+      "hex": "4900000000"
+    },
+    {
+      "value": {
+        "type": "idle",
+        "idleMs": 4294967295
+      },
+      "hex": "49ffffffff"
+    },
+    {
+      "value": {
+        "type": "busy"
+      },
+      "hex": "59"
+    },
+    {
+      "value": {
+        "type": "heartbeat"
+      },
+      "hex": "48"
+    },
+    {
+      "value": {
+        "type": "drained"
+      },
+      "hex": "44"
+    }
+  ],
+  "frontRequests": [
+    {
+      "value": {
+        "type": "ensure",
+        "threadId": "0c4f1c8e-thread",
+        "open": "run"
+      },
+      "hex": "450f00000030633466316338652d74687265616400"
+    },
+    {
+      "value": {
+        "type": "ensure",
+        "threadId": "",
+        "open": "read-only"
+      },
+      "hex": "450000000001"
+    },
+    {
+      "value": {
+        "type": "release",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "4c0f00000030633466316338652d746872656164"
+    }
+  ],
+  "frontEvents": [
+    {
+      "value": {
+        "type": "up",
+        "threadId": "0c4f1c8e-thread",
+        "socket": "/run/nexus/s-0700/thread a.sock"
+      },
+      "hex": "750f00000030633466316338652d7468726561641f0000002f72756e2f6e657875732f732d303730302f74687265616420612e736f636b"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "heap"
+      },
+      "hex": "780f00000030633466316338652d74687265616401"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "memory"
+      },
+      "hex": "780f00000030633466316338652d74687265616402"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "host-oom"
+      },
+      "hex": "780f00000030633466316338652d74687265616403"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "stalled"
+      },
+      "hex": "780f00000030633466316338652d74687265616404"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "crash"
+      },
+      "hex": "780f00000030633466316338652d74687265616405"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "evicted"
+      },
+      "hex": "780f00000030633466316338652d74687265616406"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "shutdown"
+      },
+      "hex": "780f00000030633466316338652d74687265616407"
+    },
+    {
+      "value": {
+        "type": "capacity",
+        "threadId": "0c4f1c8e-thread",
+        "current": 156,
+        "limit": 155
+      },
+      "hex": "630f00000030633466316338652d7468726561649c0000009b000000"
+    },
+    {
+      "value": {
+        "type": "stats",
+        "live": 3,
+        "warm": 1,
+        "rssKib": 4294967295,
+        "deaths": {
+          "heap": 1,
+          "memory": 2,
+          "host-oom": 3,
+          "stalled": 4,
+          "crash": 5,
+          "evicted": 6,
+          "shutdown": 7
+        }
+      },
+      "hex": "6d0300000001000000ffffffff01000000020000000300000004000000050000000600000007000000"
+    }
+  ]
+}
