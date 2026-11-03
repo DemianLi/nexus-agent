@@ -7,6 +7,7 @@ import {
   concludeTurn,
   toolCallSessionAddress,
   toolErrorOf,
+  TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import { createEchoTool } from '@nexus/plugin-echo';
 import type { NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
@@ -30,7 +31,7 @@ const legacyEcho = (prefix = '回聲') =>
 
 const call = (args: unknown, id = 'call-1') => ({
   name: 'echo',
-  args,
+  args: args as Record<string, unknown>,
   id,
   type: 'tool_call' as const,
 });
@@ -171,12 +172,38 @@ describe('ToolExec：身分是資料，forCall 認得的與收呼叫設定時相
     expect(toolCallSessionAddress(exec)).toEqual(toolCallSessionAddress(config));
   });
 
-  it('callId、signal 照呼叫設定；凍結', () => {
-    const signal = new AbortController().signal;
-    const exec = toolExecOf('echo', { toolCall: call({}, 'c-2'), signal } as never);
-    expect([exec.callId, exec.signal]).toEqual(['c-2', signal]);
+  it('callId 照呼叫設定；凍結', () => {
+    const exec = toolExecOf('echo', { toolCall: call({}, 'c-2') } as never);
+    expect(exec.callId).toBe('c-2');
     expect(toolExecOf('echo', undefined).callId).toBe('');
     expect(Object.isFrozen(exec)).toBe(true);
+  });
+
+  it('signal：這一輪的停止訊號（configurable 裡的）併上 LangGraph 的，任一個舉起都算', () => {
+    const own = new AbortController();
+    const turn = new AbortController();
+    const configOf = (withOwn: boolean, withTurn: boolean): never =>
+      ({
+        ...(withOwn && { signal: own.signal }),
+        configurable: {
+          thread_id: 't',
+          ...(withTurn && { [TURN_CANCEL_CONFIG_KEY]: turn.signal }),
+        },
+      }) as never;
+    expect(toolExecOf('echo', configOf(false, false)).signal).toBeUndefined();
+    expect(toolExecOf('echo', configOf(true, false)).signal).toBe(own.signal);
+    expect(toolExecOf('echo', configOf(false, true)).signal).toBe(turn.signal);
+    const both = toolExecOf('echo', configOf(true, true)).signal;
+    expect(both?.aborted).toBe(false);
+    turn.abort();
+    expect(both?.aborted).toBe(true);
+    const other = new AbortController();
+    const both2 = toolExecOf('echo', {
+      signal: other.signal,
+      configurable: { [TURN_CANCEL_CONFIG_KEY]: new AbortController().signal },
+    } as never).signal;
+    other.abort();
+    expect(both2?.aborted).toBe(true);
   });
 
   it('agent 形狀不對就認不出來，不退回 root', () => {

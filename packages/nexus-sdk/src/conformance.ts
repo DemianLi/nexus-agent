@@ -7,7 +7,7 @@
  * 量的全部走真的 Loader 與 fiber（dsh 的三種測試寫法之一：經 Loader 開機的真組合測試，
  * `packages/AGENTS.md:7`），不手建 `ctx.plugin(...)`。
  *
- * ## 這一刀的四格
+ * ## 五格
  *
  * | check | 量什麼 |
  * | --- | --- |
@@ -78,22 +78,26 @@ export interface ConformanceTarget {
    */
   readonly residue: () => number;
   /**
-   * 插件登記進工具登記處的工具（`@nexus/tools/provider` 的 `entries()` 取 `tool`）。給了就跑 `schema-json` 那一格；
-   * 還沒遷到 `NexusTool` 的插件不給。
+   * 插件登記進工具登記處的工具（`@nexus/tools/provider` 的 `entries()` 取 `tool`）。掛上之後、卸載之前叫一次。
+   * 給了就跑 `schema-json` 那一格；登記 LangChain 工具的插件不給，那種工具沒有 `parameters`，這一格會紅。
    */
   readonly tools?: () => readonly unknown[];
 }
 
-/** 是不是無損 JSON：`JSON.stringify` 再讀回來不會少東西、不會變樣。 */
+/**
+ * 是不是無損 JSON：只由 null、字串、布林、有限且不是 `-0` 的數、不稀疏且沒有多餘鍵的陣列、原型是 `Object.prototype`
+ * 或 `null` 且沒有 Symbol 鍵的物件組成。
+ */
 function isLosslessJson(value: unknown): boolean {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0);
   if (Array.isArray(value)) {
     return Object.keys(value).length === value.length && value.every(isLosslessJson);
   }
   if (typeof value !== 'object') return false;
   const proto = Object.getPrototypeOf(value) as unknown;
   if (proto !== Object.prototype && proto !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
   return Object.values(value).every(isLosslessJson);
 }
 

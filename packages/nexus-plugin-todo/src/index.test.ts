@@ -17,6 +17,7 @@ import Loader from '@nexus/cordis-plugin-loader';
 import { checkConformance } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
 import type { SessionLookup, TodoItem } from '@nexus/session';
+import { isNexusTool } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -70,7 +71,7 @@ async function mount(
   await create({ id: 'todo', name: 'cordis:todo', config: { allowParallelInProgress } });
   await root.loader.await();
   const entry = tools.entries().find((item) => item.tool.name === TODO_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒註冊上');
+  if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒註冊上');
   return { tool: entry.tool, root, tools };
 }
 

@@ -1117,7 +1117,10 @@ export class PluginTree {
   }
 }
 
-/** 一組工具登記裡帶了選項的那些：工具實例 → 選項。沒帶選項的不進表（`Map` 只是索引，不是清單）。 */
+/**
+ * 一組工具登記裡帶了選項的那些：工具實例 → 選項。沒帶選項的不進表（`Map` 只是索引，不是清單）。
+ * 鍵是 {@link langChainToolOf} 轉出的實例；同一個 `NexusTool` 每次轉出同一個，所以和 `tools` 清單裡的物件對得上。
+ */
 function toolOptionsOf(
   entries: readonly ToolEntry[],
 ): ReadonlyMap<StructuredToolInterface, ToolRegisterOptions> {

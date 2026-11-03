@@ -21,6 +21,7 @@ import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
+import { isNexusTool } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -59,7 +60,7 @@ async function mountWith(channel: ApprovalChannel | undefined): Promise<Mounted>
   const entry = tools
     .entries()
     .find((item) => item.tool.name === askUser.ASK_USER_QUESTION_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒有註冊上去');
+  if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒有註冊上去');
   return { tool: entry.tool };
 }
 

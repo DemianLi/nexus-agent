@@ -12,12 +12,6 @@ import type { ToolExec } from '@nexus/tools';
 import * as echo from './index.js';
 import { createEchoTool, DEFAULT_ECHO_PREFIX, ECHO_TOOL_NAME } from './index.js';
 
-/**
- * 這個套件的驗收分三塊：工具本身、一致性套件（G）、相依關係。
- *
- * 組裝點那一側（一份清單 fold 出的 agent 真的呼叫得到這個工具、設定一改下一條 thread 看到新值）在
- * `apps/harness` 的 `echo-on-tree.test.ts`；這裡不重跑。
- */
 const exec: ToolExec = {
   callId: 'c1',
   threadId: undefined,
@@ -26,6 +20,12 @@ const exec: ToolExec = {
   concludeTurn: () => {},
 };
 
+/**
+ * 這個套件的驗收分三塊：工具本身、一致性套件（G）、相依關係。
+ *
+ * 組裝點那一側（一份清單 fold 出的 agent 真的呼叫得到這個工具、設定一改下一條 thread 看到新值）在
+ * `apps/harness` 的 `echo-on-tree.test.ts`；這裡不重跑。
+ */
 describe('echo 工具', () => {
   it('回聲帶上前綴', async () => {
     await expect(createEchoTool('聽到了').execute({ message: '嗨' }, exec)).resolves.toEqual({
@@ -123,7 +123,7 @@ describe('相依關係（#30）', () => {
     });
     expect(all).not.toContain('@nexus/core');
     expect(all).not.toContain('@nexus/harness');
-    // dsh 的做法：宿主給的套件放 peerDependencies（同一份 `@nexus/sdk` 才有 ContractError 的 instanceof、同一份 Cordis
+    // 宿主給的套件放 peerDependencies（同一份 `@nexus/sdk` 才有 ContractError 的 instanceof、同一份 Cordis
     // 才有同一個 Context 類別），開發時由 devDependencies 補上 workspace 版本；自己才用的第三方留在 dependencies。
     expect(Object.keys(pkg.dependencies).sort()).toEqual(['zod']);
     const peers = ['@nexus/cordis', '@nexus/sdk', '@nexus/tools'];

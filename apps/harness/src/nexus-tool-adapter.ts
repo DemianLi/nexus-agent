@@ -4,10 +4,12 @@
  *
  * - **送上線的 schema 就是 `parameters`**：轉出來的工具經 LangChain 編回 JSON Schema 之後，必須與 `parameters` 逐字相同，
  *   不同就在轉的當下拋錯，不送出另一份位元組。
- * - **驗證語意同今天的 zod 工具**：`parameters` 轉回 zod 交給 LangChain 驗，未宣告的鍵照舊丟掉、錯誤句照舊是 zod 的那幾行。
+ * - **驗證交給 zod**：`parameters` 轉回 zod 交給 LangChain 驗，未宣告的鍵收下後丟掉，錯誤句是 zod 的逐項訊息。
  *   JSON Schema 直接交給 LangChain 的話，它改用另一套驗證，多帶鍵的呼叫整次拒收、錯誤句也只剩一行。
  * - **身分是資料**：`ToolExec` 的 `threadId`、`agent` 從 LangGraph 的呼叫設定算一次，`forCall` 直接收它，結果與收呼叫設定時相同。
- * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 照舊讀得到。
+ *   `signal` 是這一輪的停止訊號（放在 `configurable`，見 `@nexus/core` 的 `turn-cancel.ts`）併上 LangGraph 自己的 `signal`。
+ * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 讀得到。
+ *   `execute` reject 不接，照 LangChain 工具拋錯的路走。
  *
  * @module
  */
@@ -19,7 +21,13 @@ import type {
   ToolRunnableConfig,
 } from '@langchain/core/tools';
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
-import { callThreadId, concludeTurn, toolCallSessionAddress, toolRefusal } from '@nexus/core';
+import {
+  callThreadId,
+  concludeTurn,
+  toolCallSessionAddress,
+  toolRefusal,
+  turnCancelSignalOf,
+} from '@nexus/core';
 import { isNexusTool } from '@nexus/tools';
 import type { JsonSchema, JsonValue, NexusTool, ToolExec } from '@nexus/tools';
 import { z } from 'zod';
@@ -66,9 +74,16 @@ export function toolExecOf(name: string, config: ToolRunnableConfig | undefined)
     callId: config?.toolCall?.id ?? '',
     threadId: callThreadId(config),
     agent: toolCallSessionAddress(config),
-    signal: config?.signal,
+    signal: signalOf(config),
     concludeTurn: () => concludeTurn(name),
   });
+}
+
+function signalOf(config: ToolRunnableConfig | undefined): AbortSignal | undefined {
+  const own = config?.signal;
+  const turn = turnCancelSignalOf(config);
+  if (turn === undefined) return own;
+  return own === undefined ? turn : AbortSignal.any([own, turn]);
 }
 
 function convert(tool: NexusTool): StructuredTool {

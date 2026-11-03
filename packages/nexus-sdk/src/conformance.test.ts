@@ -67,6 +67,12 @@ describe('一致性套件（驗收 G）', () => {
       ],
       ['帶 NaN', { name: 'nan', parameters: { type: 'object', x: Number.NaN } }, '不是無損 JSON'],
       ['帶 Date', { name: 'd', parameters: { type: 'object', x: new Date(0) } }, '不是無損 JSON'],
+      ['帶 -0', { name: 'z', parameters: { type: 'object', x: -0 } }, '不是無損 JSON'],
+      [
+        '帶 Symbol 鍵',
+        { name: 'y', parameters: { type: 'object', [Symbol('k')]: 1 } },
+        '不是無損 JSON',
+      ],
       [
         '稀疏陣列',
         { name: 's', parameters: { type: 'object', x: new Array<number>(2) } },

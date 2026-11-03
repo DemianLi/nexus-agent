@@ -7,7 +7,7 @@
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本 | 只有 `@nexus/sdk`（與工具的型別） |
  * | 提供者 | 樹上一列，行程級的工具登記處（#1416 PR 2）：同一個套件的另一個入口 `@nexus/tools/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
- * | 消費者 | 想註冊工具的插件，今天只有 `echo` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
+ * | 消費者 | 想註冊工具的插件 | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * **不相依 `@nexus/core`**（第 17 條）：外部插件只該看見 SDK 與服務定義。工具的型別取自 `@langchain/core`，
  * 只用型別。
@@ -37,8 +37,8 @@ import { defineToken } from '@nexus/sdk';
  * `1.4.0`（#1607）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.concludeTurn}（宣告了 `returnDirect` 的工具在本體裡標「這一輪在這個結局收」）。
  * 同樣是向後相容的新增：`^1.0.0`～`^1.3.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.4.0`。
  *
- * `2.0.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料），這是工具契約脫離 LangChain 的那一版。
- * LangChain 的工具照收，介面本身只增不減，但主版號照設計跳 major：宣告 `^1.x` 的消費者不滿足 `2.0.0`，停在 PENDING，要改宣告 `^2.0.0`
+ * `2.0.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料）。
+ * LangChain 的工具照收，介面本身只增不減，但主版號跳 major（#1827 D174）：宣告 `^1.x` 的消費者不滿足 `2.0.0`，停在 PENDING，要改宣告 `^2.0.0`
  * （升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2/guide.md`）。
  */
 export const TOOLS_CONTRACT_VERSION = '2.0.0';
@@ -60,9 +60,10 @@ export interface ToolErrorInfo {
 }
 
 /**
- * 一次呼叫交給工具本體的東西（#2351）。身分是資料，不再從 LangGraph 的呼叫設定裡挖。
+ * 一次呼叫交給工具本體的東西（#2351）：身分是資料。
  *
- * 會話與 fs 的查找（`sessionLookup.forCall`、`fs.forCall`）直接收這一份。
+ * 會話與 fs 的查找（`sessionLookup.forCall`、`fs.forCall`）直接收這一份；`@nexus/core` 其他讀呼叫設定的輔助
+ * （`isBackgroundCall`、`turnCancelSignalOf`、`toolCallIdOf` 等）不認得它。
  */
 export interface ToolExec {
   /** 模型給的 `tool_call.id`；取不到是 `''`。 */
@@ -71,14 +72,14 @@ export interface ToolExec {
   readonly threadId: string | undefined;
   /** 誰在呼叫，形狀同 {@link ToolResultExecution.agent}；認不出來是 `undefined`。 */
   readonly agent: ToolResultExecution['agent'];
-  /** 這一輪被中止時觸發。 */
+  /** 這一輪的停止訊號併上 LangGraph 自己的 `signal`，任一個舉起都算；兩個都沒有是 `undefined`。 */
   readonly signal: AbortSignal | undefined;
-  /** 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}，只是不必再報自己的名字。 */
+  /** 標「這一輪在這次呼叫之後收」，規則同 {@link ToolRegistry.concludeTurn}；不帶參數，名字由宿主填這次呼叫的工具。 */
   concludeTurn(): void;
 }
 
 /**
- * 一次呼叫的結果（#2351）。錯誤是結果上的資料欄，不靠拋錯或別處的標記。
+ * 一次呼叫的結果（#2351）。失敗是 `ok: false`，碼放在 `error`。
  *
  * 失敗那一格的 `content` 是模型看到的原因，**不要自己帶 `Error: `**：宿主照 `toolRefusal` 加前綴。
  */
@@ -93,7 +94,8 @@ export interface NexusTool {
   /** 參數的 JSON Schema，就是送上線的那一份。用 zod 寫的插件經 `z.toJSONSchema()` 轉。 */
   readonly parameters: JsonSchema;
   /**
-   * 執行。`args` 已照 {@link parameters} 驗過。
+   * 執行。經宿主呼叫時，`args` 已照 {@link parameters} 驗過，未宣告的鍵已丟掉。預期中的失敗回 `ok: false`；
+   * reject 不會轉成 `ok: false`，照 LangChain 工具拋錯的路往外走。
    *
    * @param args - 模型給的參數。
    * @param exec - 這次呼叫的身分與控制。

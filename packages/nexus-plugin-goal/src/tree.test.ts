@@ -17,6 +17,7 @@ import type { GoalServices } from '@nexus/goal';
 import { checkConformance, checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import { isNexusTool } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -69,7 +70,8 @@ async function mountFor(threads: readonly string[], config: unknown = {}): Promi
     goals,
     tool: (name) => {
       const entry = tools.entries().find((item) => item.tool.name === name);
-      if (entry === undefined) throw new Error(`工具 ${name} 沒有註冊上去`);
+      if (entry === undefined || isNexusTool(entry.tool))
+        throw new Error(`工具 ${name} 沒有註冊上去`);
       return entry.tool;
     },
     command: (thread, input) => {

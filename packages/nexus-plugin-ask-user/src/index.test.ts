@@ -14,6 +14,7 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
 import { checkConformance } from '@nexus/sdk';
+import { isNexusTool } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -68,7 +69,7 @@ async function toolOf(
 ): Promise<StructuredToolInterface> {
   const { tools } = await mount({ kind: channelKind });
   const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒有註冊上去');
+  if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒有註冊上去');
   return entry.tool;
 }
 
@@ -190,7 +191,7 @@ describe('四條出口', () => {
     // 不掛 host-services 的組裝：以前這裡會退成 `{ kind: 'human' }`，工具停在一個沒人接的中斷上。
     const { tools } = await mount(undefined);
     const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
-    if (entry === undefined) throw new Error('工具沒有註冊上去');
+    if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒有註冊上去');
     expect(await errorTextOf(await entry.tool.invoke(ONE_QUESTION))).toBe(
       `Error: ${NO_CHANNEL_MESSAGE}`,
     );
@@ -244,7 +245,7 @@ describe('樹上這一列（#1458）', () => {
   it('列卸載之後，抓進閉包的答題管道仍可問：已登記的那一份工具照樣問得到（驗收 D 的單元面）', async () => {
     const { root, tools } = await mount({ kind: 'human' });
     const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
-    if (entry === undefined) throw new Error('工具沒有註冊上去');
+    if (entry === undefined || isNexusTool(entry.tool)) throw new Error('工具沒有註冊上去');
     // 把答題管道那一列拿掉：root 上的服務撤了，但工具在 `apply` 當下抓住的那一份還在。
     await root.loader.resolve('approval-channel').fiber?.ctx.fiber.dispose();
     expect(root.get('approvalChannel', false)).toBeUndefined();
