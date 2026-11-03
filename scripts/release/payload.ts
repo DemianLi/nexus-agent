@@ -27,8 +27,8 @@ import {
   realpathSync,
   rmSync,
 } from 'node:fs';
-import { Module, createRequire } from 'node:module';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
 import { spawnerProblems } from './spawner.js';
@@ -472,15 +472,16 @@ interface InstalledManifest {
 }
 
 /**
- * 沿 `from` 的祖先 `node_modules` 找一個套件的目錄。只看祖先：`resolve.paths` 還會接上 `Module.globalPaths`（`NODE_PATH` 與家目錄的
- * 全域路徑），而 pnpm 的 `tsx` 執行檔把 `NODE_PATH` 設成 repo 的 `node_modules/.pnpm/node_modules`，會從產物外面補到產物裡沒有的
- * 套件（#2366：harness 的選用 peer `vue` 被補成 apps/web 那一顆）。產物在主機上用純 `node` 跑，沒有這些路徑。
+ * 沿 `from` 的祖先 `node_modules` 找一個套件的目錄。只看祖先：`resolve.paths` 還會接上全域路徑（`NODE_PATH`、
+ * 家目錄與 Node 安裝前綴底下的），而 pnpm 的 `tsx` 執行檔會把 repo 的 `node_modules/.pnpm/node_modules` 加進
+ * `NODE_PATH`，於是從產物外面補到產物裡沒有的套件，例如 harness 的選用 peer `vue` 會解析到 apps/web 那一顆（#2366）。
+ * 產物在主機上用純 `node` 跑，不能靠建置機的這些路徑。
  */
 export function installedPackage(from: string, name: string): string | undefined {
   const resolver = createRequire(join(from, 'package.json'));
-  const global = new Set(Module.globalPaths);
   for (const directory of resolver.resolve.paths(name) ?? []) {
-    if (global.has(directory)) continue;
+    const parent = dirname(directory);
+    if (basename(directory) !== 'node_modules' || relative(parent, from).startsWith('..')) continue;
     const candidate = join(directory, name);
     if (existsSync(join(candidate, 'package.json'))) return candidate;
   }
