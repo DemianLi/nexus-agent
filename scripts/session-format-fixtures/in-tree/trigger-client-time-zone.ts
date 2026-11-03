@@ -4,7 +4,7 @@
  * 所以由這支補寫。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那一版的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-client-time-zone.ts <run 目錄>
  */
 
 import { SESSION_LOG_FORMAT_VERSION, SessionLog, SessionPersistenceCoordinator } from '@nexus/core';

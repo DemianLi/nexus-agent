@@ -19,6 +19,8 @@
  * @module
  */
 
+import { HOST_TOOL_PREFIX } from '@nexus/wire';
+
 import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
 
 /** 工具卡的呈現類別。 */
@@ -93,7 +95,17 @@ export function isKnownTool(name: string): boolean {
   return name in TOOL_VARIANTS || name in TOOL_TITLES;
 }
 
+/** 宿主頁工具（#2374）的標題前面那幾個字，後面接宣告時的名字。 */
+const HOST_TOOL_TITLE_PREFIX = '頁面工具：';
+
+/**
+ * 工具卡的標題。`page__` 開頭的是宿主頁工具，名字是宿主頁執行期宣告的、不進表，標題是 {@link HOST_TOOL_TITLE_PREFIX} 加上宣告時的名字；
+ * 其餘查 {@link TOOL_TITLES}，查不到就用類別的通用標題。
+ */
 export function toolTitle(name: string): string {
+  if (name.startsWith(HOST_TOOL_PREFIX)) {
+    return `${HOST_TOOL_TITLE_PREFIX}${name.slice(HOST_TOOL_PREFIX.length)}`;
+  }
   return TOOL_TITLES[name] ?? VARIANT_TITLE[classifyTool(name)];
 }
 

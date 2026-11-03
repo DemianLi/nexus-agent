@@ -5,14 +5,15 @@
  *   裡面是 `.nexus-app`（container query 的容器）與浮層的掛載點（`lib/portal-container.ts`）。掛載點不放在容器裡：
  *   `container-type` 會讓 `position: fixed` 的浮層以容器為準。
  * - **屬性**：`theme` 是 `light`／`dark`／`auto`（預設 `auto`，跟系統）；`context` 是情境標籤的字。`context` 也是 property，
- *   收字串或 `{ label }`（`context.ts`）。宿主頁在元素升級之前就設好的 property 也收得到。
+ *   收字串或 `{ label }`（`context.ts`）。`hostTools` 只是 property（#2374，`host-tools.ts`）：宿主頁宣告的工具，模型叫到時元素發
+ *   `nexus-host-tool` 事件。宿主頁在元素升級之前就設好的 property 也收得到。
  * - **不碰宿主頁**：亮暗掛在 `.nexus-root` 上，不改 `<html>`；記住上一條 thread 用自己的鍵（`embedded-chat.tsx`）。只有
  *   `@font-face` 與 `@property` 放進宿主頁的 `<head>`，shadow root 裡的這兩種規則 Chrome 不認（`embed-shadow-css.ts`）。
  * - 元素拿掉就卸掉 React（下行跟著關）；同一個 tick 裡搬到別處（先拿掉再放回去）不卸。
  *
  * @module
  */
-import type { WireClient } from '@nexus/wire';
+import type { HostToolDeclaration, WireClient } from '@nexus/wire';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
@@ -25,6 +26,8 @@ import { SHADOW_CONTAINER_NAME, SHADOW_ROOT_CLASS } from '../../embed-shadow-css
 import { parseContext } from './context';
 import type { NexusChatContext } from './context';
 import { EmbeddedChat, embedBaseUrl } from './embedded-chat';
+import { HOST_TOOL_EVENT, parseHostTools } from './host-tools';
+import type { NexusHostToolDetail } from './host-tools';
 import { themeOverrides } from './theme-tokens';
 
 export const ELEMENT_NAME = 'nexus-chat';
@@ -73,6 +76,7 @@ export function defineNexusChat({
     #react: Root | undefined;
     #client: WireClient | undefined;
     #context: NexusChatContext | undefined;
+    #hostTools: readonly HostToolDeclaration[] | undefined;
     #overrides: readonly string[] = [];
     #unwatchSystem: (() => void) | undefined;
 
@@ -105,12 +109,27 @@ export function defineNexusChat({
       this.#render();
     }
 
+    get hostTools(): readonly HostToolDeclaration[] | null {
+      return this.#hostTools ?? null;
+    }
+
+    set hostTools(value: unknown) {
+      const parsed = parseHostTools(value);
+      if (parsed !== undefined && 'problem' in parsed) {
+        console.warn(`<nexus-chat> 的 hostTools 不收：${parsed.problem}。這次的值：`, value);
+        return;
+      }
+      this.#hostTools = parsed;
+      this.#render();
+    }
+
     connectedCallback() {
       // 升級之前宿主頁直接設在實例上的 property 會蓋住 class 的 setter：拿下來重設一次。
-      if (Object.hasOwn(this, 'context')) {
-        const value: unknown = (this as { context?: unknown }).context;
-        delete (this as { context?: unknown }).context;
-        this.context = value;
+      for (const key of ['context', 'hostTools'] as const) {
+        if (!Object.hasOwn(this, key)) continue;
+        const value: unknown = (this as { [K in typeof key]?: unknown })[key];
+        delete (this as { [K in typeof key]?: unknown })[key];
+        this[key] = value as never;
       }
       if (document.getElementById(DOCUMENT_STYLE_ID) === null) {
         const style = document.createElement('style');
@@ -150,11 +169,20 @@ export function defineNexusChat({
       this.#react.render(
         <StrictMode>
           <PortalContainerContext.Provider value={this.#portal}>
-            <EmbeddedChat client={client} context={this.#context} />
+            <EmbeddedChat
+              client={client}
+              context={this.#context}
+              hostTools={this.#hostTools}
+              onHostCall={this.#handToHost}
+            />
           </PortalContainerContext.Provider>
         </StrictMode>,
       );
     }
+
+    readonly #handToHost = (detail: NexusHostToolDetail) => {
+      this.dispatchEvent(new CustomEvent(HOST_TOOL_EVENT, { detail }));
+    };
 
     #applyTheme() {
       const theme = parseTheme(this.getAttribute('theme'));

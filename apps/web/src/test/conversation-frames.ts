@@ -205,6 +205,15 @@ export class Script {
     );
   }
 
+  /** 等宿主頁執行的一支宿主頁工具（#2374）。 */
+  hostTool(interruptId: string, name: string, args: Record<string, unknown>): Event {
+    return this.frame(
+      'input.requested',
+      { interrupt_id: interruptId, payload: { kind: 'host_tool', name, args } },
+      ['tools:a'],
+    );
+  }
+
   /** `custom` frame（壓縮、交付、改動紀錄……）。 */
   custom(name: string, payload: unknown): Event {
     return this.frame('custom', { name, payload });

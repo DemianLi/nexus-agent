@@ -1,5 +1,5 @@
 /**
- * 會話日誌的形狀驗證，照 dsh `session-format-v3-to-v4/src/validation.ts`（`687f282e`）。
+ * 會話日誌的形狀驗證。
  *
  * 獨立成一個模組、不逐行插進讀檔的迴圈裡（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) 做法 1）：
  * 建立（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0622）與讀盤（#1549）共用同一支 header 驗證，
@@ -8,8 +8,7 @@
  * （`jsonl-session-store.ts` 的 `parseJsonlSessionBody`）共用；資料規則是 core 的 `validateSessionEventData`，寫入、seed、
  * 讀盤三處共用。
  *
- * header 驗證拋的是 `TypeError`，訊息說哪一格：建立那一側原樣交給呼叫方（同 dsh `materializeCreateHeader` 拋 `TypeError`），
- * 讀盤那一側由讀方換成 `SessionCorruptionError`。
+ * header 驗證拋的是 `TypeError`，訊息說哪一格：建立那一側原樣交給呼叫方，讀盤那一側由讀方換成 `SessionCorruptionError`。
  */
 
 import { isAbsolute } from 'node:path';
@@ -22,8 +21,7 @@ import {
 import type { SessionEvent } from '@nexus/core';
 
 /**
- * 這一版寫得出來的 header 鍵（`@nexus/core` 的 `StoredSessionHeader`），照 dsh 的精確鍵白名單
- * （`validation.ts:19-42` 的 `required` 與 `allowed`）。
+ * 這一版寫得出來的 header 鍵（`@nexus/core` 的 `StoredSessionHeader`）：必填的與允許的精確鍵白名單。
  */
 const REQUIRED_HEADER_KEYS = ['version', 'id', 'createdAt'] as const;
 const ALLOWED_HEADER_KEYS: ReadonlySet<string> = new Set([
@@ -51,24 +49,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 非負的安全整數，同 dsh 的 `sessionFormatCount`。 */
+/** 非負的安全整數。 */
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 /**
- * header 各格的形狀，照 dsh 的 `assertReleasedV4Header`（`validation.ts:19-42`）：缺必填的、多出這一版不寫的鍵、
- * 某一格型別不對，都拒。**版本是哪一版不在這裡判**：建立時要等於這一版（同 dsh 的 `encodeCurrentHeader`），讀盤時
- * 由版本邊目錄判，兩邊規則不同。讀盤那一側對到 dsh 讀 header 時的精確鍵與型別檢查（`session-format-v1-to-v2/src/codec.ts:40-75`）。
+ * header 各格的形狀：缺必填的、多出這一版不寫的鍵、某一格型別不對，都拒。**版本是哪一版不在這裡判**：建立時要等於這一版，
+ * 讀盤時由版本邊目錄判，兩邊規則不同。
  *
  * **白名單讀盤也能用同一份**（#1549）：它是任何一版寫過的鍵的聯集。`StoredSessionHeader` 從第一版起只加不減，50 以前是
  * 10 個鍵（#1549 對 `session-store.ts` 的歷次 commit 逐版核過），51 加了 `origin`、`isSeeded`（#1579；升版的理由正是 50 的這份白名單
  * 會把它們判成壞檔），53 加了 `profile`（#2367，只准 `'embed'`）。之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下
  * （讀方開了 `acceptNewer` 讀比這一版新的，整支不跑，見 `parseHeader`）。
  *
- * `origin` 只准 `'subagent'`，同 dsh。`isSeeded` 只准 `true`：dsh 是必填的 boolean，我們只在 true 時寫（`StoredSessionHeader.isSeeded`），
- * 落盤的 `false` 不是任何一版寫得出來的。nexus 的 header 沒有 dsh 的 `delegationDepth`、`agentPreset`（#1567 重核判不成立），
- * 多了 `workspaceRoot`、`build`、`plugins`、`configHash`、`modelEntryId`，各照 `StoredSessionHeader` 的宣告驗。
+ * `origin` 只准 `'subagent'`。`isSeeded` 只准 `true`：只在 true 時寫（`StoredSessionHeader.isSeeded`），落盤的 `false` 不是任何一版
+ * 寫得出來的。其餘各格照 `StoredSessionHeader` 的宣告驗。
  *
  * @param header - 還沒驗過的 header。
  * @throws `TypeError` 哪一格不對。
@@ -138,13 +134,12 @@ export function assertStoredHeaderFields(header: unknown): void {
 /**
  * 分叉前綴與 header 對不對得上，讀完已接受的前綴之後跑一次，回傳切點（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
- * 照 dsh 讀盤的兩條（`session-format-v3-to-v4/src/validation.ts:52-76`、`session-format-v1-to-v2/src/codec.ts:114-127`，`687f282e`）：
- * 帶 `isSeeded` 的要有 inherited 標記；沒帶的不能有。切點不另外落盤，取最後一顆標記的 `seq`（core 的 `inheritedEventCount`），
- * 所以 dsh 的「切點超過事件數」「seeded 而切點不等於最後一顆標記」在這裡收成同一條「seeded 卻沒有標記」：切點本來就是從標記推出來的。
+ * 兩條：帶 `isSeeded` 的要有 inherited 標記；沒帶的不能有。切點不另外落盤，取最後一顆標記的 `seq`（core 的 `inheritedEventCount`），
+ * 所以切點必然落在標記上、不會超過事件數，header 與標記一致與否就是上面兩條。
  *
- * **放在尾端復原之後**（卡面做法 4 要先定）：同 dsh，codec 只數已接受的事件（`codec.ts:104-117`），驗證在 `finish()` 跑。
+ * **放在尾端復原之後**（#1579 做法第 4 步）：只看已接受的事件，交出前綴之前跑（`jsonl-session-store.ts` 的 `validateStoredLog`）。
  * 被丟掉的尾巴不在 `events` 裡，切點取自已接受的前綴，所以不會有「標記位置對不上繼承長度」的誤判；標記本身被當成壞尾巴丟掉時，
- * 這份 seeded 檔就拋損壞，同 dsh（`codec.ts:121-123`）——繼承前綴的切點不能靠猜。
+ * 這份 seeded 檔就拋損壞——繼承前綴的切點不能靠猜。
  *
  * @param id - 這份會話的 id，放進錯誤裡。
  * @param header - 已過 {@link assertStoredHeaderFields} 的 header。
@@ -178,11 +173,9 @@ export function assertStoredInheritance(
 }
 
 /**
- * 讀回來的事件之間的關係，讀完已接受的前綴之後跑一次。照 dsh 的 `assertReleasedV4Relationships`
- * （`session-format-v3-to-v4/src/validation.ts:110-130`；呼叫點是讀檔器收尾的 `finish()`，`session-persistence-jsonl/src/format.ts:468`），
- * 三件：
+ * 讀回來的事件之間的關係，讀完已接受的前綴之後跑一次，三件：
  *
- * 1. 同一個子代理的 `subagent/catalog` 只能登記一次（#1549 N0603，dsh `:122-127`）。兩個寫入點都在派出的當下各寫一次、寫不進去
+ * 1. 同一個子代理的 `subagent/catalog` 只能登記一次（#1549 N0603）。兩個寫入點都在派出的當下各寫一次、寫不進去
  *    就不落盤，重複只可能是寫壞或拼接出錯；讀方（`subagentLinkOf`）只取第一筆，後一筆會被靜靜忽略。
  * 2. turn、工具、模型呼叫、重試、送出佇列的配對（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)）：逐顆餵 core 的
  *    `createSessionRelationshipChecker`，跟執行期的配套入口同一支，第一筆違規就拒開。規則與為舊形狀留的分支（end-seed 時輪還開著的
@@ -192,13 +185,10 @@ export function assertStoredInheritance(
  *
  * 第 1 件先掃完；第 2、3 件同一趟逐顆跑，哪一件先撞到就拒在那一行。
  *
- * `childId` 不是字串（或 `data` 不是物件）也拒，照 dsh 的 `catalogFact`（`session-format-v3-to-v4/src/facts.ts:72-84`）。
- * dsh 那一支還驗 `version`、`mode` 列舉、`label`、`childCreatedAt`，nexus 的 `SubagentCatalogData` 沒有那些格的對應，只驗
- * 這條規則要用到的 `childId`。
+ * `childId` 不是字串（或 `data` 不是物件）也拒。`SubagentCatalogData` 的其他格不在這裡驗，只驗這條規則要用到的 `childId`。
  *
- * 第 1 件**只掃切點之後（含）的**，同 dsh（`validation.ts:122`，整段 `catalogFact` 都在 `event.seq >= inheritedEventCount` 底下）：繼承來的前綴
- * 是父會話的登記，分叉之後自己的區段可以再派一個同 id 的子代理，前綴裡那一筆不算重複（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)
- * 撤掉 #1549 的過渡）。第 2、3 件掃整份：前綴結尾是 inherited 的 `session/end-seed`，狀態在那裡照一般的 end-seed 重設或帶過去。
+ * 第 1 件**只掃切點之後（含）的**：繼承來的前綴是父會話的登記，分叉之後自己的區段可以再派一個同 id 的子代理，
+ * 前綴裡那一筆不算重複（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579) 撤掉 #1549 的過渡）。第 2、3 件掃整份：前綴結尾是 inherited 的 `session/end-seed`，狀態在那裡照一般的 end-seed 重設或帶過去。
  *
  * @param id - 這份會話的 id，放進錯誤裡。
  * @param events - 已接受的前綴，依 `seq` 排好。
@@ -287,9 +277,7 @@ function dataField(event: SessionEvent, key: string): unknown {
 }
 
 /**
- * 讀回來的每一筆跑 core 的單筆資料規則（`validateSessionEventData`），照 dsh 後端讀盤的 `validateStoredEvents`
- * （`session-persistence/src/storage-contract.ts:69-104`，逐筆 `adoptSessionEvent` → `validateSessionEventData`，
- * 不過就包成損壞錯誤；呼叫點 `session-persistence-jsonl/src/index.ts:860`，續接與唯讀打開共用）。
+ * 讀回來的每一筆跑 core 的單筆資料規則（`validateSessionEventData`），不過就包成損壞錯誤。跑在 `jsonl-session-store.ts` 的 `validateStoredLog` 裡，續接、唯讀打開、遷移都走。
  * 不認得的必需種類在解析本文時已經拒了（`SessionEventUnsupportedError`），這裡不重做。
  *
  * @param id - 這份會話的 id，放進錯誤裡。

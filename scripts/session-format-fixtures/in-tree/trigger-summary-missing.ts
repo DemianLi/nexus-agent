@@ -6,7 +6,7 @@
  * `tool/result` 與 `turn/end` 之前：今天的推法逐顆判，排在前面的那一種先回，放後面就被別的理由蓋掉。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-summary-missing.ts <run 目錄>
  */
 
 import { SESSION_LOG_FORMAT_VERSION, SessionLog, SessionPersistenceCoordinator } from '@nexus/core';
