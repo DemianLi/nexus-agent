@@ -55,9 +55,9 @@ function renderSubagentEntry(entry: ConversationEntry) {
 }
 
 /**
- * 打開時接著上一條（第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
+ * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
  *
- * @param context - 宿主頁給的情境（第 7 點）：這張只畫成標籤，不送出（送出等 #2367 的 wire 欄位）。
+ * @param context - 宿主頁給的情境（#2365 第 7 點）：只畫成標籤，不送出（TODO(#2367)）。
  */
 export function EmbeddedChat({
   client,

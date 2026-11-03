@@ -27,7 +27,7 @@ function elementTypes(): Plugin {
 /**
  * 嵌入版 `<nexus-chat>`（#2366）的建置：一支 `dist/embed.js`，跟網頁同一個 `dist`，由 serve 一起供應。
  *
- * - **不用 library 模式**：library 模式把字型一律內嵌成 base64（Noto Sans TC 的切片加 KaTeX，整支會到 6 MB）。一般模式的字型照常
+ * - **不用 library 模式**：library 模式把字型一律內嵌成 base64（Noto Sans TC 的切片加 KaTeX）。一般模式的字型照常
  *   輸出到 `assets/`，內容雜湊跟網頁那一份相同，同一個檔。
  * - `base: './'`：產物裡的資源網址寫成 `new URL('assets/…', import.meta.url)`，從 `embed.js` 自己的位置算，不管宿主頁在哪個路徑。
  * - 不清空 `dist`：網頁那一份先建好，這裡只加 `embed.js`（`package.json` 的 `build` 照這個順序跑）。

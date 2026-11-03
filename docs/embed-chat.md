@@ -7,7 +7,9 @@
 serve 供應兩個檔，跟網頁同一個來源：
 
 - `/embed.js`：載入就註冊好 `<nexus-chat>`。
-- `/nexus-chat.d.ts`：元素的型別。
+- `/nexus-chat.d.ts`：元素的型別（以 `application/octet-stream` 回，下載下來放進專案用）。
+
+這兩個路徑是暫時的：最終會放在一個固定前綴底下（例如 `/nexus/embed.js`），前綴由 [#2369](https://github.com/DemianLi/nexus-agent/issues/2369) 決定，定案後這份說明跟著改。
 
 宿主頁要跟 serve 同源：在宿主頁的伺服器上設反向代理，把 serve 的路徑轉過去。登入沿用 serve 的登入網址換到的會話 cookie。
 
@@ -74,7 +76,7 @@ export default defineConfig({
 <nexus-chat :theme="theme" :context.prop="selected === null ? null : { label: selected }" />
 ```
 
-型別：把 serve 供應的 `nexus-chat.d.ts` 放進專案，加進 `tsconfig` 的 `include`。
+型別：把從 serve 下載的 `nexus-chat.d.ts` 放進專案，加進 `tsconfig` 的 `include`。
 
 ## 有什麼功能、沒有什麼功能
 

@@ -1,7 +1,7 @@
 /**
  * 自訂元素 `<nexus-chat>`（#2366，地圖 #2365 第 1、6、7、11 點）：宿主頁放一個元素就有一個對話框，不用 iframe。
  *
- * - **Shadow DOM（open）**：樣式與字型不外洩、宿主頁的樣式也進不來。shadow root 裡最外層是 `.nexus-root`（token、亮暗），
+ * - **Shadow DOM（open）**：樣式不外洩（`@font-face`、`@property` 例外，見下），宿主頁的樣式也進不來。shadow root 裡最外層是 `.nexus-root`（token、亮暗），
  *   裡面是 `.nexus-app`（container query 的容器）與浮層的掛載點（`lib/portal-container.ts`）。掛載點不放在容器裡：
  *   `container-type` 會讓 `position: fixed` 的浮層以容器為準。
  * - **屬性**：`theme` 是 `light`／`dark`／`auto`（預設 `auto`，跟系統）；`context` 是情境標籤的字。`context` 也是 property，

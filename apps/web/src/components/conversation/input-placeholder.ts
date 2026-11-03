@@ -1,6 +1,5 @@
 /**
- * 送出框的灰字，從 `App.tsx` 拆出來，獨立頁面與嵌入版共用（#2366）。`inputPlaceholder` 由 `App.tsx` 再匯出，原本從那裡讀它的
- * 測試照舊。
+ * 送出框的灰字，獨立頁面與嵌入版共用（#2366）。`App.tsx` 再匯出 `inputPlaceholder`，測試從那裡讀。
  */
 
 import type { ConnectionStall } from '@/lib/connection-stall';
