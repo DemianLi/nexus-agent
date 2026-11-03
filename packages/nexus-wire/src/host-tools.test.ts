@@ -176,6 +176,117 @@ describe('reducer 的 hostCalls', () => {
     expect(settleHostCall(state, 'other')).toBe(state);
   });
 
+  it('停在宿主頁工具時 root 照樣發的 completed 不翻 idle、不把工具列收成失敗；接著跑時收掉', () => {
+    // 工具開跑 → 宿主頁工具的中斷 → tools 收尾 → root completed → 交回後 root running → 工具結束 → root completed。
+    const inTools = (method: string, data: object): Event =>
+      ({
+        ...frame(method, data),
+        params: { namespace: ['tools:a'], timestamp: 0, data },
+      }) as Event;
+    const tool = (data: object): Event => inTools('tools', data);
+    let state = reduceConversation(
+      emptyConversation(),
+      frame('lifecycle', { event: 'running', graph_name: 'root' }),
+    );
+    state = reduceConversation(
+      state,
+      tool({
+        event: 'tool-started',
+        tool_call_id: 'call_1',
+        tool_name: 'page__focus_device',
+        input: '{"id":"P-1"}',
+      }),
+    );
+    state = reduceConversation(state, hostRequested('h-1'));
+    state = reduceConversation(
+      state,
+      inTools('lifecycle', { event: 'completed', graph_name: 'tools' }),
+    );
+    state = reduceConversation(
+      state,
+      frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+    );
+    expect(state.status).toBe('running');
+    expect(state.hostCalls).toHaveLength(1);
+    expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
+      status: 'running',
+    });
+    state = reduceConversation(state, frame('lifecycle', { event: 'running', graph_name: 'root' }));
+    expect(state.hostCalls).toEqual([]);
+    state = reduceConversation(
+      state,
+      tool({ event: 'tool-finished', tool_call_id: 'call_1', output: '好' }),
+    );
+    state = reduceConversation(
+      state,
+      frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+    );
+    expect(state.status).toBe('idle');
+    expect(state.entries.find((entry) => entry.kind === 'tool')).not.toMatchObject({
+      status: 'failed',
+    });
+  });
+
+  it('結果交回早於停下時的 completed：那顆 completed 也不翻 idle、不收工具列；接著跑之後的 completed 才翻 idle', () => {
+    const tool = (data: object): Event =>
+      ({
+        ...frame('tools', data),
+        params: { namespace: ['tools:a'], timestamp: 0, data },
+      }) as Event;
+    let state = reduceConversation(
+      emptyConversation(),
+      frame('lifecycle', { event: 'running', graph_name: 'root' }),
+    );
+    state = reduceConversation(
+      state,
+      tool({
+        event: 'tool-started',
+        tool_call_id: 'call_1',
+        tool_name: 'page__focus_device',
+        input: '{"id":"P-1"}',
+      }),
+    );
+    state = reduceConversation(state, hostRequested('h-1'));
+    state = settleHostCall(state, 'h-1');
+    expect(state.hostCalls).toEqual([]);
+    expect(state.hostResumePending).toBe(true);
+    state = reduceConversation(
+      state,
+      frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+    );
+    expect(state.status).toBe('running');
+    expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
+      status: 'running',
+    });
+    state = reduceConversation(state, frame('lifecycle', { event: 'running', graph_name: 'root' }));
+    expect(state.hostResumePending).toBeUndefined();
+    state = reduceConversation(
+      state,
+      frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+    );
+    expect(state.status).toBe('idle');
+  });
+
+  it('這一輪失敗時收掉掛著的宿主頁呼叫與等接著跑的標記', () => {
+    const waiting = reduceConversation(emptyConversation(), hostRequested('h-1'));
+    const failed = reduceConversation(
+      waiting,
+      frame('lifecycle', { event: 'failed', graph_name: 'root', error: '上游壞了' }),
+    );
+    expect(failed.status).toBe('failed');
+    expect(failed.hostCalls).toEqual([]);
+    const settled = settleHostCall(
+      reduceConversation(emptyConversation(), hostRequested('h-2')),
+      'h-2',
+    );
+    expect(
+      reduceConversation(
+        settled,
+        frame('lifecycle', { event: 'failed', graph_name: 'root', error: '上游壞了' }),
+      ).hostResumePending,
+    ).toBeUndefined();
+  });
+
   it('這一輪接著跑、被停止時收掉', () => {
     const waiting = reduceConversation(emptyConversation(), hostRequested('h-1'));
     const running = reduceConversation(
@@ -188,5 +299,10 @@ describe('reducer 的 hostCalls', () => {
       frame('lifecycle', { event: 'completed', graph_name: 'root', aborted: true }),
     );
     expect(stopped.hostCalls).toEqual([]);
+    const stoppedAfterReply = reduceConversation(
+      settleHostCall(waiting, 'h-1'),
+      frame('lifecycle', { event: 'completed', graph_name: 'root', aborted: true }),
+    );
+    expect(stoppedAfterReply.hostResumePending).toBeUndefined();
   });
 });
