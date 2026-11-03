@@ -24,9 +24,10 @@ import {
   HOST_TOOL_PREFIX,
   HOST_TOOL_TIMEOUT_ERROR,
   hostToolResponseProblem,
+  hostToolResultProblem,
   hostToolsProblem,
 } from '@nexus/wire';
-import type { HostToolDeclaration, HostToolInterruptPayload } from '@nexus/wire';
+import type { HostToolDeclaration, HostToolInterruptPayload, HostToolResponse } from '@nexus/wire';
 import { z } from 'zod';
 
 declare module '@nexus/core' {
@@ -144,7 +145,10 @@ function build(declaration: HostToolDeclaration): NexusTool {
       const answer: unknown = await exec.interrupt(payload as unknown as JsonValue);
       const problem = hostToolResponseProblem(answer);
       if (problem !== undefined) return { ok: false, content: problem };
-      const response = answer as { ok: boolean; result?: unknown; error?: string };
+      const response = answer as HostToolResponse;
+      // 超過上限照 D185 Q3：不截，這次呼叫算失敗，模型看得到原因。
+      const tooLarge = hostToolResultProblem(response);
+      if (tooLarge !== undefined) return { ok: false, content: tooLarge };
       if (!response.ok) {
         return {
           ok: false,

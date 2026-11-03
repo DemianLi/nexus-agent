@@ -6,7 +6,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { emptyConversation, reduceConversation, settleHostCall } from './conversation.js';
-import { HOST_TOOL_LIMITS, hostToolResponseProblem, hostToolsProblem } from './host-tools.js';
+import {
+  HOST_TOOL_LIMITS,
+  hostToolResponseProblem,
+  hostToolResultProblem,
+  hostToolsProblem,
+} from './host-tools.js';
 import type { HostToolDeclaration } from './host-tools.js';
 import type { Event } from './index.js';
 
@@ -107,17 +112,25 @@ describe('hostToolsProblem', () => {
   });
 });
 
-describe('hostToolResponseProblem', () => {
+describe('hostToolResultProblem', () => {
   it('結果序列化後 4000 個字收、4001 拒（字串的引號也算）', () => {
     const atLimit = 'x'.repeat(HOST_TOOL_LIMITS.resultChars - 2);
-    expect(hostToolResponseProblem({ ok: true, result: atLimit })).toBeUndefined();
-    expect(hostToolResponseProblem({ ok: true, result: `${atLimit}x` })).toMatch(/4000/u);
+    expect(hostToolResultProblem({ ok: true, result: atLimit })).toBeUndefined();
+    expect(hostToolResultProblem({ ok: true, result: `${atLimit}x` })).toMatch(/最多 4000/u);
   });
 
   it('錯誤字串同一個上限', () => {
     const atLimit = 'x'.repeat(HOST_TOOL_LIMITS.resultChars - 2);
-    expect(hostToolResponseProblem({ ok: false, error: atLimit })).toBeUndefined();
-    expect(hostToolResponseProblem({ ok: false, error: `${atLimit}x` })).toMatch(/4000/u);
+    expect(hostToolResultProblem({ ok: false, error: atLimit })).toBeUndefined();
+    expect(hostToolResultProblem({ ok: false, error: `${atLimit}x` })).toMatch(/錯誤超過上限/u);
+  });
+});
+
+describe('hostToolResponseProblem', () => {
+  it('形狀對的不看大小', () => {
+    const big = 'x'.repeat(HOST_TOOL_LIMITS.resultChars * 2);
+    expect(hostToolResponseProblem({ ok: true, result: big })).toBeUndefined();
+    expect(hostToolResponseProblem({ ok: false, error: big })).toBeUndefined();
   });
 
   it('其他形狀一律拒', () => {

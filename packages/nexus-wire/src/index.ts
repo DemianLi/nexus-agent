@@ -195,6 +195,7 @@ export {
   HOST_TOOL_PREFIX,
   HOST_TOOL_TIMEOUT_ERROR,
   hostToolResponseProblem,
+  hostToolResultProblem,
   hostToolsProblem,
 } from './host-tools.js';
 export type {

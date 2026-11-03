@@ -343,7 +343,7 @@ describe('哪裡收、收什麼', () => {
     await thread.close();
   }, 30_000);
 
-  it('宿主頁的回應不合格回 invalid_argument，那顆中斷照樣掛著，重送合格的就接著跑', async () => {
+  it('宿主頁的回應形狀不對回 invalid_argument，那顆中斷照樣掛著，重送對的就接著跑', async () => {
     const { embed } = await start([callFocus, done], {
       extraRows: hostToolsRow({ exempt: ['focus_device'] }),
     });
@@ -351,12 +351,11 @@ describe('哪裡收、收什麼', () => {
     await embed.runStart('e1', '轉', { hostTools: [focus] });
     await thread.until(hostCalled);
     const [call] = thread.state.hostCalls;
-    const tooLong = 'x'.repeat(HOST_TOOL_LIMITS.resultChars);
     expect(
       await embed.inputRespond('e1', {
         namespace: [],
         interrupt_id: call!.interruptId,
-        response: { ok: true, result: tooLong },
+        response: { ok: true },
       }),
     ).toMatchObject({ error: 'invalid_argument' });
     expect(
@@ -367,6 +366,26 @@ describe('哪裡收、收什麼', () => {
       }),
     ).not.toHaveProperty('error');
     await thread.until(settledAfter(2));
+    await thread.close();
+  }, 60_000);
+
+  it('結果超過上限不截：這次呼叫算失敗，原因交回模型，這一輪接著跑（Q3）', async () => {
+    const { embed } = await start([callFocus, done], {
+      extraRows: hostToolsRow({ exempt: ['focus_device'] }),
+    });
+    const thread = await watch(embed, 'e1');
+    await embed.runStart('e1', '轉', { hostTools: [focus] });
+    await thread.until(hostCalled);
+    expect(
+      await embed.inputRespond('e1', {
+        namespace: [],
+        interrupt_id: thread.state.hostCalls[0]!.interruptId,
+        response: { ok: true, result: 'x'.repeat(HOST_TOOL_LIMITS.resultChars) },
+      }),
+    ).not.toHaveProperty('error');
+    await thread.until(settledAfter(2));
+    expect(lastToolText()).toMatch(/宿主頁回傳的結果超過上限：序列化後 4002 個字，最多 4000 個字$/u);
+    expect(lastToolText()).not.toContain('xxxx');
     await thread.close();
   }, 60_000);
 

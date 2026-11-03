@@ -3,7 +3,8 @@
  * `<nexus-chat>` 的宿主頁在 `run.start` 宣告自己的工具，模型呼叫時 serve 停下這一輪、發一顆 `input.requested`（{@link HOST_TOOL_INTERRUPT_KIND}），
  * 宿主頁執行後用 `input.respond` 把 {@link HostToolResponse} 交回。
  *
- * 上限與形狀在這裡驗（{@link hostToolsProblem}、{@link hostToolResponseProblem}），serve 與元件共用同一份判準。超過就拒，不截。
+ * 上限與形狀在這裡驗（{@link hostToolsProblem}、{@link hostToolResponseProblem}、{@link hostToolResultProblem}），serve 與元件共用同一份判準。
+ * 宣告超過上限整句拒收；結果超過上限交回模型當這次呼叫的錯誤。都不截。
  *
  * @module
  */
@@ -120,26 +121,30 @@ export function hostToolsProblem(raw: unknown): string | undefined {
 }
 
 /**
- * 宿主頁交回的 `response` 合不合格。
+ * 宿主頁交回的 `response` 形狀對不對：`{ ok: true, result }`（`result` 是 JSON 值）或 `{ ok: false, error: string }`，多一格就不對。
+ * 不看大小，大小見 {@link hostToolResultProblem}。
  *
- * @returns 不合格的原因；合格回 `undefined`。
+ * @returns 不對的原因；對的回 `undefined`。
  */
 export function hostToolResponseProblem(raw: unknown): string | undefined {
-  if (!isPlainObject(raw)) return '宿主頁的回應要是 { ok, result } 或 { ok, error }';
+  const wrong = '宿主頁的回應要是 { ok: true, result } 或 { ok: false, error: string }';
+  if (!isPlainObject(raw)) return wrong;
   const keys = Object.keys(raw).sort().join(',');
   if (raw.ok === true && keys === 'ok,result') {
-    const serialized = JSON.stringify(raw.result);
-    if (serialized === undefined) return '宿主頁的結果要是 JSON 值';
-    if (chars(serialized) > HOST_TOOL_LIMITS.resultChars) {
-      return `宿主頁的結果超過上限：序列化後最多 ${HOST_TOOL_LIMITS.resultChars} 個字`;
-    }
-    return undefined;
+    return JSON.stringify(raw.result) === undefined ? '宿主頁的結果要是 JSON 值' : undefined;
   }
-  if (raw.ok === false && keys === 'error,ok' && typeof raw.error === 'string') {
-    if (chars(JSON.stringify(raw.error)) > HOST_TOOL_LIMITS.resultChars) {
-      return `宿主頁的錯誤超過上限：序列化後最多 ${HOST_TOOL_LIMITS.resultChars} 個字`;
-    }
-    return undefined;
-  }
-  return '宿主頁的回應要是 { ok: true, result } 或 { ok: false, error: string }';
+  if (raw.ok === false && keys === 'error,ok' && typeof raw.error === 'string') return undefined;
+  return wrong;
+}
+
+/**
+ * 形狀對的回應，結果（或錯誤字串）序列化後有沒有超過 {@link HOST_TOOL_LIMITS} 的 `resultChars`。
+ *
+ * @returns 超過時的原因；沒超過回 `undefined`。
+ */
+export function hostToolResultProblem(response: HostToolResponse): string | undefined {
+  const serialized = JSON.stringify(response.ok ? response.result : response.error) ?? '';
+  return chars(serialized) > HOST_TOOL_LIMITS.resultChars
+    ? `宿主頁回傳的${response.ok ? '結果' : '錯誤'}超過上限：序列化後 ${chars(serialized)} 個字，最多 ${HOST_TOOL_LIMITS.resultChars} 個字`
+    : undefined;
 }

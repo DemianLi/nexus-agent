@@ -2977,7 +2977,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     if (pending.hostTool === true) {
-      // 宿主頁工具（#2374）：形狀與上限不合就在這裡退回，那顆中斷照樣掛著，宿主頁可以再回一次。
+      // 宿主頁工具（#2374）：形狀不對就在這裡退回，那顆中斷照樣掛著，宿主頁可以再回一次。超過上限的照收，由工具交回模型（D185 Q3）。
       const problem = hostToolResponseProblem(params.response);
       if (problem !== undefined) {
         return json(errorResponse(command.id, 'invalid_argument', problem));
