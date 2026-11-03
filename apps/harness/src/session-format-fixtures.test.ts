@@ -28,6 +28,8 @@ import {
   SessionCorruptionError,
   SessionFormatUnsupportedError,
   createSessionFormatCatalog,
+  generationLogFilename,
+  parseGenerationLogFilename,
   currentMessageFeedback,
   interruptedTurnClosers,
   isSubagentSessionHeader,
@@ -195,10 +197,22 @@ describe('格式 52 的日誌沒有停止原因（#1847）', () => {
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
   const ids = Object.keys(expected.sessions).sort();
-  const twoFileIds = ids.filter((id) =>
-    existsSync(legacyTwoFilePathsIn(join(FIXTURES, name), id).log),
-  );
-  const generationIds = ids.filter((id) => !twoFileIds.includes(id));
+  /** 夾具裡這條會話最新的世代檔版號；只有舊兩檔是 `undefined`。 */
+  const generationOf = (id: string): number | undefined => {
+    const { sessionDirectory } = sessionPathsIn(join(FIXTURES, name), id);
+    const versions = existsSync(sessionDirectory)
+      ? readdirSync(sessionDirectory)
+          .map(parseGenerationLogFilename)
+          .filter((version) => version !== undefined)
+      : [];
+    return versions.length === 0 ? undefined : Math.max(...versions);
+  };
+  const twoFileIds = ids.filter((id) => generationOf(id) === undefined);
+  const generationIds = ids.filter((id) => generationOf(id) === SESSION_LOG_FORMAT_VERSION);
+  const olderGenerationIds = ids.filter((id) => {
+    const version = generationOf(id);
+    return version !== undefined && version < SESSION_LOG_FORMAT_VERSION;
+  });
 
   it('list 列得出每一條，沒有讀不懂的', async () => {
     const listing = await openJsonlSessionStore({ directory: await copied(name) }).list();
@@ -296,6 +310,54 @@ describe.each(names)('夾具 %s', (name) => {
       const newline = generation.indexOf(0x0a);
       const header = JSON.parse(generation.toString('utf8', 0, newline)) as Record<string, unknown>;
       expect(header).not.toHaveProperty('migratedFrom');
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
+        recovery: 'strict',
+      });
+      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+      expect(events).toHaveLength(resumed.events.length + 1);
+    },
+  );
+
+  it.each(olderGenerationIds)(
+    '續接 %s 之後再寫一筆、收掉：舊世代遷成這一版的世代檔，本文原樣開頭；舊世代、舊路徑一個位元組都沒動',
+    async (id) => {
+      const directory = await copied(name);
+      const { sessionDirectory } = sessionPathsIn(directory, id);
+      const older = join(sessionDirectory, generationLogFilename(generationOf(id)!));
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(older);
+      const legacyHeader = existsSync(legacy.header) ? await readFile(legacy.header) : undefined;
+      const legacyLog = existsSync(legacy.log) ? await readFile(legacy.log) : undefined;
+      const store = openJsonlSessionStore({ directory });
+      const resumed = await resumeClosingInterruptedTurn(store, id);
+      expect(resumed.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+      expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
+      const next: SessionEvent = {
+        type: 'turn/start',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { kind: 'message', text: '夾具續寫' },
+      };
+      await resumed.stored.append([next]);
+      await resumed.stored.close();
+
+      expect(await readFile(older)).toEqual(source);
+      if (legacyHeader !== undefined) expect(await readFile(legacy.header)).toEqual(legacyHeader);
+      if (legacyLog !== undefined) expect(await readFile(legacy.log)).toEqual(legacyLog);
+      const generation = await readFile(sessionPathsIn(directory, id).log);
+      const newline = generation.indexOf(0x0a);
+      const header = JSON.parse(generation.toString('utf8', 0, newline)) as Record<string, unknown>;
+      // 世代對世代不記遷移來源（只有從舊兩檔遷的才記），其餘各格照舊、只換版號。
+      const sourceNewline = source.indexOf(0x0a);
+      const { migratedFrom: _, ...sourceHeader } = JSON.parse(
+        source.toString('utf8', 0, sourceNewline),
+      ) as Record<string, unknown>;
+      expect(header).toEqual({ ...sourceHeader, version: SESSION_LOG_FORMAT_VERSION });
+      const body = source.subarray(sourceNewline + 1);
+      expect(generation.subarray(newline + 1, newline + 1 + body.byteLength).equals(body)).toBe(
+        true,
+      );
       const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
         version: SESSION_LOG_FORMAT_VERSION,
         recovery: 'strict',

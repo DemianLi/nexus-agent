@@ -186,7 +186,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1178',
+    readerBranch: 'apps/harness/src/conversation-history.ts:1182',
   },
   {
     from: 33,
@@ -222,7 +222,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:785',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:805',
   },
   {
     from: 51,
