@@ -407,6 +407,22 @@ describe('沒配到結果的呼叫', () => {
       'ai:在',
     ]);
   });
+
+  it('配不到任何呼叫的結果（孤兒）照送，不丟：配對錯由送出那一層擋', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: reply('好') });
+    log.append('tool/result', { callId: 'ghost', isError: false, message: result('ghost', 'grep', '舊的') });
+    log.append('turn/end', {});
+    chat(log, '再', '嗯');
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:查',
+      'ai:好',
+      'tool:ghost:舊的',
+      'human:再',
+      'ai:嗯',
+    ]);
+  });
 });
 
 /**
