@@ -41,7 +41,7 @@ import { defineToken } from '@nexus/sdk';
  * LangChain 的工具照收，介面本身只增不減，但主版號跳 major（#1827 D174）：宣告 `^1.x` 的消費者不滿足 `2.0.0`，停在 PENDING，要改宣告 `^2.0.0`
  * （升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2/guide.md`）。
  *
- * `2.1.0`（#2352）：{@link ToolExec} 多一個 {@link ToolExec.deferContext}。向後相容的新增：`^2.0.0` 的消費者不呼叫它，照常；
+ * `2.1.0`（#2352）：{@link ToolExec} 多 {@link ToolExec.deferContext} 與 {@link ToolExec.interrupt}。向後相容的新增：`^2.0.0` 的消費者不呼叫它，照常；
  * 要用的消費者宣告 `^2.1.0`。
  */
 export const TOOLS_CONTRACT_VERSION = '2.1.0';
@@ -87,6 +87,14 @@ export interface ToolExec {
    * @param marks - 掛在那則訊息上的記號（`additional_kwargs`），測試與重放據此認出它；省略是不掛。
    */
   deferContext(text: string, marks?: { readonly [key: string]: JsonValue }): void;
+  /**
+   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。宿主今天用 LangGraph 的 `interrupt()`：
+   * **恢復時本體從頭重跑一次**，這一次呼叫在掛起之前做的事要能重做而不出錯。
+   *
+   * @param payload - 給答題端的酬載。
+   * @returns 人回的值。
+   */
+  interrupt(payload: JsonValue): Promise<unknown>;
 }
 
 /**

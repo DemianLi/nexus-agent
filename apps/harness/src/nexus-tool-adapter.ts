@@ -10,6 +10,7 @@
  *   `signal` 是這一輪的停止訊號（放在 `configurable`，見 `@nexus/core` 的 `turn-cancel.ts`）併上 LangGraph 自己的 `signal`。
  * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 讀得到。
  *   `execute` reject 不接，照 LangChain 工具拋錯的路走。
+ * - **`interrupt()` 是 LangGraph 的 `interrupt()`**：掛起靠拋例外，恢復時工具本體重跑。
  * - **`deferContext()` 補的訊息**：成功的結果與補的訊息包成一顆 `Command`，那則工具結果的 `ToolMessage` 由這裡造。
  *
  * @module
@@ -31,9 +32,9 @@ import {
   toolRefusal,
   turnCancelSignalOf,
 } from '@nexus/core';
-import { Command } from '@langchain/langgraph';
+import { Command, interrupt } from '@langchain/langgraph';
 import { isNexusTool } from '@nexus/tools';
-import type { JsonSchema, JsonValue, NexusTool, ToolExec } from '@nexus/tools';
+import type { JsonValue, NexusTool, ToolExec } from '@nexus/tools';
 import { z } from 'zod';
 
 const adapted = new WeakMap<NexusTool, StructuredTool>();
@@ -93,6 +94,8 @@ export function toolExecOf(
         }),
       );
     },
+    // `interrupt` 用拋例外傳播，呼叫端不能包在 try/catch 裡（`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+    interrupt: (payload: JsonValue) => Promise.resolve(interrupt(payload)),
   });
 }
 

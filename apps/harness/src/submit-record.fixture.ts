@@ -17,6 +17,7 @@
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { createSubmitRecordTool, submitRecordGate } from '@nexus/plugin-submit-record';
 
+import { toLangChainTool } from './nexus-tool-adapter.js';
 import { registryFsLookup } from './registry-fs-lookup.js';
 
 /** submit-record 的 `NexusPlugin` 外殼：登記 `submit_record` 與只認它的核准閘門。 */
@@ -24,9 +25,7 @@ export const submitRecordPlugin: NexusPlugin = {
   name: 'submit-record',
   apply(registry) {
     registry.tools.register(
-      createSubmitRecordTool(registryFsLookup(registry)) as Parameters<
-        typeof registry.tools.register
-      >[0],
+      toLangChainTool(createSubmitRecordTool(registryFsLookup(registry))),
     );
     registry.approvals.gate(submitRecordGate);
   },

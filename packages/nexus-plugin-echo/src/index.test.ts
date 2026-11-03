@@ -18,6 +18,8 @@ const exec: ToolExec = {
   agent: undefined,
   signal: undefined,
   concludeTurn: () => {},
+  deferContext: () => {},
+  interrupt: () => Promise.resolve(undefined),
 };
 
 /**

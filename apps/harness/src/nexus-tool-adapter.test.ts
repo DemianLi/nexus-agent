@@ -1,9 +1,10 @@
-import { ToolMessage } from '@langchain/core/messages';
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
   callThreadId,
+  MESSAGE_SOURCE_KWARG,
   concludeTurn,
   toolCallSessionAddress,
   toolErrorOf,
@@ -11,6 +12,7 @@ import {
 } from '@nexus/core';
 import { createEchoTool } from '@nexus/plugin-echo';
 import type { NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
+import { isCommand } from '@langchain/langgraph';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -246,5 +248,60 @@ describe('ToolExec：身分是資料，forCall 認得的與收呼叫設定時相
       { kind: 'subagent', runId: 'tools:p' },
     ]);
     expect(vi.mocked(concludeTurn)).toHaveBeenCalledWith('probe');
+  });
+});
+
+describe('deferContext：結果之後補一則插件來源的人話', () => {
+  const deferring = (ok: boolean): NexusTool => ({
+    ...tinyTool({ ok: true, content: '' }),
+    name: 'defer',
+    execute: (_, exec) => {
+      exec.deferContext('收尾', { mark: { action: 'complete' } });
+      exec.deferContext('第二則');
+      return Promise.resolve(ok ? { ok: true, content: '{"x":1}' } : { ok: false, content: '不行' });
+    },
+  });
+
+  it('成功：包成 Command，工具結果不帶 status、帶這次的 id，記號在前、來源在後，照呼叫順序', async () => {
+    const result = await toLangChainTool(deferring(true)).invoke(call({ message: 'x' }, 'c-5'));
+    expect(isCommand(result)).toBe(true);
+    const messages = (result as { update: { messages: unknown[] } }).update.messages;
+    expect(messages).toHaveLength(3);
+    const [first, second, third] = messages as [ToolMessage, HumanMessage, HumanMessage];
+    expect(ToolMessage.isInstance(first)).toBe(true);
+    expect([first.content, first.tool_call_id, first.name, first.status]).toEqual([
+      '{"x":1}',
+      'c-5',
+      'defer',
+      undefined,
+    ]);
+    expect([second.content, Object.keys(second.additional_kwargs)]).toEqual([
+      '收尾',
+      ['mark', MESSAGE_SOURCE_KWARG],
+    ]);
+    expect(second.additional_kwargs[MESSAGE_SOURCE_KWARG]).toEqual({ kind: 'plugin', plugin: 'defer' });
+    expect(third.content).toBe('第二則');
+  });
+
+  it('失敗：不補，照一般拒絕', async () => {
+    const result = (await toLangChainTool(deferring(false)).invoke(call({ message: 'x' }))) as ToolMessage;
+    expect([ToolMessage.isInstance(result), result.status]).toEqual([true, 'error']);
+  });
+
+  it('沒有 tool_call_id 卻要補：拋，不靜靜退回一句話', async () => {
+    await expect(toLangChainTool(deferring(true)).invoke({ message: 'x' })).rejects.toThrow(
+      /沒有 tool_call_id/,
+    );
+  });
+});
+
+describe('interrupt：LangGraph 的 interrupt()', () => {
+  it('不在圖裡呼叫就照 LangGraph 拋，不吞掉', async () => {
+    const asking: NexusTool = {
+      ...tinyTool({ ok: true, content: '' }),
+      name: 'ask',
+      execute: async (_, exec) => ({ ok: true, content: String(await exec.interrupt({ q: 1 })) }),
+    };
+    await expect(toLangChainTool(asking).invoke(call({ message: 'x' }))).rejects.toThrow();
   });
 });

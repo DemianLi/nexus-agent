@@ -62,10 +62,6 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
-import type { StructuredToolInterface } from '@langchain/core/tools';
-import { interrupt } from '@langchain/langgraph';
 import {
   approvalChannelToken,
   CHANNEL_SERVICE,
@@ -79,10 +75,16 @@ import type {
 } from '@nexus/approval-channel';
 import type { Context } from '@nexus/cordis';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import { markToolError, toolCallIdOf, toolRefusal } from '@nexus/tool-result';
-import type { ToolErrorInfo } from '@nexus/tool-result';
 import { toolsToken } from '@nexus/tools';
-import type { ToolRegisterOptions } from '@nexus/tools';
+import type {
+  JsonSchema,
+  JsonValue,
+  NexusTool,
+  NexusToolResult,
+  ToolErrorInfo,
+  ToolExec,
+  ToolRegisterOptions,
+} from '@nexus/tools';
 import { z } from 'zod';
 
 /** 模型看到的工具名。與 dsh 同名。 */
@@ -164,7 +166,7 @@ export const DELEGATED_CALLER_ERROR: ToolErrorInfo = {
   code: 'DELEGATED_CALLER',
 };
 
-/** 子代理叫到這個工具時模型看到的那一句（前面由 `toolRefusal` 加 `Error: `）。dsh 同一處那句的中文。 */
+/** 子代理叫到這個工具時模型看到的那一句（前面由宿主加 `Error: `）。dsh 同一處那句的中文。 */
 export const DELEGATED_CALLER_MESSAGE =
   '呼叫的 agent 由另一個執行中的 agent 擁有，這時無法與人互動；' +
   '把沒解決的問題或待定的決定寫進子代理的最終結果。';
@@ -199,35 +201,37 @@ export function noAnswererMessage(channel: ApprovalChannel): string {
  * 而那個錯訊說不出原因。
  *
  * @param channelOf - 這次呼叫的答題者；`undefined` 是沒有人提供（回 {@link NO_CHANNEL_MESSAGE}，**不退成「有人在」**）。
- *   **在呼叫當下才呼叫它**，不在建工具的時候。參數是這次呼叫的 config（取得 thread 身分用；樹上的列不用它）。
+ *   **在呼叫當下才呼叫它**，不在建工具的時候。參數是這次呼叫的 `ToolExec`（取得 thread 身分用；樹上的列不用它）。
  * @returns 可以登記的工具。
  */
 export function createAskUserTool(
-  channelOf: (config: unknown) => ApprovalChannel | undefined,
-): StructuredToolInterface {
-  return tool(
-    async (args, config) => {
-      const { questions } = args as z.infer<typeof askSchema>;
-      // **回一則 `status: 'error'` 的 ToolMessage，不是 `throw`。** 兩者在模型那頭
+  channelOf: (exec: ToolExec) => ApprovalChannel | undefined,
+): NexusTool {
+  return {
+    name: ASK_USER_QUESTION_TOOL_NAME,
+    description: ASK_USER_QUESTION_DESCRIPTION,
+    parameters: z.toJSONSchema(askSchema, { io: 'input' }) as JsonSchema,
+    execute: async (args, exec): Promise<NexusToolResult> => {
+      const { questions } = askSchema.parse(args);
+      // **回 `ok: false`，不是 `throw`。** 兩者在模型那頭
       // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
       // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
       // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
-      // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
-      const failed = (message: string): ToolMessage =>
-        toolRefusal(message, {
-          callId: toolCallIdOf(config) ?? '',
-          name: ASK_USER_QUESTION_TOOL_NAME,
-        });
+      // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由宿主加（#318）。
+      const failed = (message: string, error?: ToolErrorInfo): NexusToolResult => ({
+        ok: false,
+        content: message,
+        ...(error !== undefined && { error }),
+      });
       // **沒人提供就是沒有答題者，不是「有人在」**（#669）：以前缺席時退成 `{ kind: 'human' }`，一份不掛 host-services 的
       // 組裝會拿到一顆以為有人在答的工具，問了就停在一個沒人接的中斷上。照 dsh：`tool-ask-user` 硬注入 `userQuestions`，
       // 沒有任何答題者接下請求時以 `NO_PROVIDER` 拋錯（`packages/interaction/user-questions/src/index.ts:132`）。
-      const channel = channelOf(config);
+      const channel = channelOf(exec);
       if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);
       if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
       if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
 
-      // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
-      // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+      // `exec.interrupt` 用拋例外傳播，**不能包在 try/catch 裡**；恢復時本體重跑，上面幾格只讀不寫。
       const payload: QuestionInterruptPayload = {
         kind: QUESTION_INTERRUPT_KIND,
         questions: questions.map((question) => ({
@@ -240,11 +244,10 @@ export function createAskUserTool(
           }),
         })),
       };
-      const answer = (await interrupt(payload)) as AskUserAnswer | undefined;
+      const answer = (await exec.interrupt(payload as unknown as JsonValue)) as
+        AskUserAnswer | undefined;
 
-      if (answer?.cancelled === true) {
-        return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
-      }
+      if (answer?.cancelled === true) return failed(CANCELLED_MESSAGE, CANCELLED_ERROR);
       const answers = answer?.answers;
       if (!Array.isArray(answers)) {
         return failed(
@@ -252,20 +255,18 @@ export function createAskUserTool(
             `這一格只收 { answers: [{ id, selected: string[], custom?: string }] }。`,
         );
       }
-      return JSON.stringify({
-        answers: answers.map((item) => ({
-          id: item.id,
-          selected: [...item.selected],
-          ...(item.custom !== undefined && { custom: item.custom }),
-        })),
-      });
+      return {
+        ok: true,
+        content: JSON.stringify({
+          answers: answers.map((item) => ({
+            id: item.id,
+            selected: [...item.selected],
+            ...(item.custom !== undefined && { custom: item.custom }),
+          })),
+        }),
+      };
     },
-    {
-      name: ASK_USER_QUESTION_TOOL_NAME,
-      description: ASK_USER_QUESTION_DESCRIPTION,
-      schema: askSchema,
-    },
-  );
+  };
 }
 
 /**
