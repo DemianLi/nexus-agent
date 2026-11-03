@@ -215,11 +215,15 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     代價：`ambiguous` 的拒絕句（todo／goal 的「接了 N 份會話…」）在 N 為 1 時讀起來怪，今天不另開結果種類。
     **收尾順序是這條的另一半**（#1482，照 dsh 的 cancel → drain → flush → dispose）：`attachSession` 回傳的 detach 在有背景 host 時是非同步的，**先等背景 host 收完（中止進行中的輪、等它寫完 `turn/end` 與結算通知），才撤登記、解綁、停參與者**；serve 的 `release` 再接著收落盤與 agent。撤得太早，收尾中的工具會問不到自己的登記，落盤先退訂則讓被中止那一輪的事件到不了後端。
     **之後開「閒置 thread 回收」的卡（#1464 量到每條 thread 常駐約 2.1 MB、不回收）要先處理它**，兩個做法擇一：detach 等背景 host 收完再撤登記，或行程級查找一律核對 `thread_id`（改挑法要 demian 拍板）。
-- **工具接縫 2.0.0：`NexusTool`**（`@nexus/tools`，#2351）。`register` 也收 `NexusTool`：`parameters` 是 JSON Schema（純資料），`execute(args, exec)` 回
-  `{ ok: true, content }` 或 `{ ok: false, content, error? }`，`exec`（`ToolExec`）帶 `callId`、`threadId`、`agent`、`signal`、`concludeTurn()`。
-  `sessionLookup.forCall`、`fs.forCall` 直接收 `ToolExec`。**宿主**把它轉成 LangChain 工具（`apps/harness/src/nexus-tool-adapter.ts`），送上線的 schema
-  必須與 `parameters` 逐字相同，驗證語意同今天的 zod 工具；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
-  樹上的消費者都宣告 `^2.0.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。一致性套件多一格 `schema-json`。
+- **工具接縫 2.x：`NexusTool`**（`@nexus/tools`，#2351、#2352）。`register` 也收 `NexusTool`：`parameters` 是 JSON Schema（純資料），`execute(args, exec)` 回
+  `{ ok: true, content }` 或 `{ ok: false, content, error? }`，`exec`（`ToolExec`）帶 `callId`、`threadId`、`agent`、`signal`、`concludeTurn()`，
+  `2.1.0` 起再帶 `deferContext(text, marks?)`（成功的結果之後補一則插件來源的人話，照 dsh）與 `interrupt(payload)`（掛起等人回覆）。
+  `sessionLookup.forCall`、`fs.forCall` 直接收 `ToolExec`。`parameters` 是模型可以送的形狀：寫了 `additionalProperties: false` 的物件多帶鍵就拒，
+  沒寫的收下丟掉；用 zod 寫的插件經 `z.toJSONSchema(schema, { io: 'input' })` 轉。**`parameters` 是 input 模式；送上線時，沒寫 `additionalProperties` 的物件補 `false`**，
+  與遷移前的 zod 工具逐字相同。補的是**宿主**：轉接器在 `packages/nexus-tool-adapter`（`@nexus/tool-adapter`），把 `NexusTool` 轉成 LangChain 工具，
+  只有宿主 import 它，SDK 的 lint 擋插件原始碼 import；插件不碰 LangChain。主版號跳 major，宣告 `^1.x` 的消費者停在 PENDING，
+  樹上的消費者宣告 `^2.0.0`，goal（要 `deferContext`）與 ask-user（要 `interrupt`）宣告 `^2.1.0`（升級指南 [`tools-contract-2`](upgrade-guide/v0.6.0/tools-contract-2/guide.md)）。
+  一致性套件多一格 `schema-json`。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，

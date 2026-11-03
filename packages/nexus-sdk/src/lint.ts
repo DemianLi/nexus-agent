@@ -191,6 +191,9 @@ export const pluginLintGlobalRestrictions = [
 const CORE_MESSAGE =
   '插件不准 import `@nexus/core`：外部插件只相依 `@nexus/sdk` 與服務定義套件（例如 `@nexus/tools`），不相依整個 core。型別與 token 從那邊取。';
 
+const TOOL_ADAPTER_MESSAGE =
+  '插件不准 import `@nexus/tool-adapter`：那是宿主把 `NexusTool` 轉成 LangChain 工具的轉接器，插件交出 `NexusTool` 就好，不碰 LangChain。測試檔可以用它呼叫工具。';
+
 /**
  * import 限制：ESLint `no-restricted-imports` 的選項。
  *
@@ -198,7 +201,10 @@ const CORE_MESSAGE =
  * `no-restricted-globals` 看不到，因為名字已經被本地宣告蓋過）。
  */
 export const pluginLintImportRestrictions = {
-  patterns: [{ group: ['@nexus/core', '@nexus/core/*'], message: CORE_MESSAGE }],
+  patterns: [
+    { group: ['@nexus/core', '@nexus/core/*'], message: CORE_MESSAGE },
+    { group: ['@nexus/tool-adapter', '@nexus/tool-adapter/*'], message: TOOL_ADAPTER_MESSAGE },
+  ],
   paths: [
     ...['node:timers', 'timers', 'node:timers/promises', 'timers/promises'].map((name) => ({
       name,

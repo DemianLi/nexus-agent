@@ -18,15 +18,17 @@ import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { createTodoTool, todoConfigSchema } from '@nexus/plugin-todo';
 import type { TodoConfig, TodoPluginOptions } from '@nexus/plugin-todo';
 
+import { toLangChainTool } from '@nexus/tool-adapter';
+
 /** todo 的 `NexusPlugin` 外殼：登記 `todo_write`。 */
 export const todoPlugin: NexusPlugin<TodoConfig> = {
   name: 'todo',
   Config: todoConfigSchema,
   apply(registry, config: TodoConfig) {
     registry.tools.register(
-      createTodoTool(config.allowParallelInProgress, (invocation) =>
-        registry.sessions.forCall(invocation),
-      ) as Parameters<typeof registry.tools.register>[0],
+      toLangChainTool(
+        createTodoTool(config.allowParallelInProgress, (exec) => registry.sessions.forCall(exec)),
+      ),
     );
   },
 };

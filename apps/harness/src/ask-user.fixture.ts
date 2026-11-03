@@ -18,17 +18,20 @@
 import { CHANNEL_FOR_THREAD_SERVICE, CHANNEL_SERVICE, callThreadId } from '@nexus/core';
 import type { ApprovalChannel, NexusPlugin, PluginEntry } from '@nexus/core';
 import { ASK_USER_REGISTER_OPTIONS, createAskUserTool } from '@nexus/plugin-ask-user';
+import type { ToolExec } from '@nexus/tools';
+
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 /** ask-user 的 `NexusPlugin` 外殼：登記 `ask_user_question`。 */
 export const askUserPlugin: NexusPlugin = {
   name: 'ask-user',
   apply(registry) {
     // **沒人提供就是沒有答題者，不是「有人在」**（#669）：缺席時回 `undefined`，工具在呼叫當下拒絕，載入照常。
-    const channelOf = (config: unknown): ApprovalChannel | undefined =>
-      registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config)) ??
+    const channelOf = (exec: ToolExec): ApprovalChannel | undefined =>
+      registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(exec)) ??
       registry.services.get(CHANNEL_SERVICE);
     registry.tools.register(
-      createAskUserTool(channelOf) as Parameters<typeof registry.tools.register>[0],
+      toLangChainTool(createAskUserTool(channelOf)),
       ASK_USER_REGISTER_OPTIONS as Parameters<typeof registry.tools.register>[1],
     );
   },

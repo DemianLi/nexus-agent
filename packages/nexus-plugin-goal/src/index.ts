@@ -91,6 +91,7 @@ import { ContractService, defineManifest, injectOf, need, service } from '@nexus
 import { sessionLookupToken } from '@nexus/session';
 import type { SessionLog } from '@nexus/session';
 import { toolsToken } from '@nexus/tools';
+import type { ToolExec } from '@nexus/tools';
 import { z } from 'zod';
 
 import {
@@ -287,11 +288,11 @@ export function createGoalCore(config: GoalConfig, seams: GoalSeams = {}): GoalC
 export const name = 'goal';
 
 /**
- * 要的服務：`tools`（`^2.0.0`，`rootOnly` 與 `outputSchema` 從 `1.1.0` 起）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
+ * 要的服務：`tools`（`^2.1.0`，要 `exec.deferContext()`）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
  * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^2.0.0'),
+  need(toolsToken, '^2.1.0'),
   need(commandsToken, '^1.1.0'),
   need(sessionLookupToken, '^1.0.0'),
 );
@@ -305,7 +306,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [{ token: goalsToken.name, version: goalsToken.version }],
   consumes: [
-    { token: toolsToken.name, range: '^2.0.0' },
+    { token: toolsToken.name, range: '^2.1.0' },
     { token: commandsToken.name, range: '^1.1.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
   ],
@@ -344,8 +345,8 @@ export interface GoalMountHost {
   ): void;
   /** 登記 `/goal`。 */
   registerCommand(definition: CommandDefinition): void;
-  /** 這次工具呼叫屬於哪一份日誌；呼叫當下才問，整份呼叫設定原樣傳。 */
-  forCall(config: unknown): GoalToolLookup;
+  /** 這次工具呼叫屬於哪一份日誌；呼叫當下才問，傳的是這次呼叫的 `ToolExec`。 */
+  forCall(exec: ToolExec): GoalToolLookup;
 }
 
 /**
@@ -361,7 +362,7 @@ export function mountGoal(host: GoalMountHost, core: GoalCore, config: GoalConfi
   // （`authority.ts` 的 `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代的，subagent 沒有人可以交代。
   for (const goalTool of createGoalTools(
     {
-      forCall: (callConfig) => host.forCall(callConfig),
+      forCall: (exec) => host.forCall(exec),
       serviceFor: (log) => core.serviceFor(log),
     },
     config,
@@ -402,7 +403,7 @@ export function createGoalApply(seams: GoalSeams = {}): (ctx: Context, config: G
       {
         registerTool: (goalTool, options) => void tools.register(goalTool, options),
         registerCommand: (definition) => void commands.register(definition),
-        forCall: (callConfig) => sessions.forCall(callConfig),
+        forCall: (exec) => sessions.forCall(exec),
       },
       core,
       config,
