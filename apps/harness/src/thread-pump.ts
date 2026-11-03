@@ -143,7 +143,7 @@ import {
   SessionReferenceError,
   SUBAGENT_STATUS,
 } from '@nexus/wire';
-import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
+import type { CustomFrameData, HostToolDeclaration, SubagentStatusPayload } from '@nexus/wire';
 
 import {
   BoundedQueue,
@@ -210,6 +210,7 @@ import {
   urlKeysOf,
 } from './mcp-elicitation.js';
 import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
+import type { HostToolsSlot } from './host-tools.js';
 import { renderGoalRoundPrompt } from '@nexus/goal';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-workspace-changes';
@@ -457,6 +458,11 @@ export type PumpInput =
        * 跟 `mention` 走同一條路，形狀見 `@nexus/core` 的 `page-context.ts`。
        */
       readonly context?: PageContextRef;
+      /**
+       * 嵌入的對話框替宿主頁宣告的工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）；呼叫端（`run.start`）已驗過。
+       * **不進佇列**（落盤的格式不動），記在 {@link ThreadPump.#hostToolsByItem}，這一句開跑時寫進 {@link HostToolsSlot}。
+       */
+      readonly hostTools?: readonly HostToolDeclaration[];
     }
   | {
       readonly kind: 'resume';
@@ -1422,6 +1428,10 @@ export class ThreadPump {
   readonly #spillStore: SpillStore | undefined;
   /** 引用別的會話的上限與預算（#1573 N0862），見建構參數 `referencePolicy`。 */
   readonly #referencePolicy: SessionReferencePolicy | undefined;
+  /** 宿主頁工具的插槽（#2374），見建構參數 `hostTools`。 */
+  readonly #hostTools: HostToolsSlot | undefined;
+  /** 排在佇列裡的句子各自帶的宿主頁工具宣告，鍵是佇列那一件的 id；開跑時取走。 */
+  readonly #hostToolsByItem = new Map<string, readonly HostToolDeclaration[]>();
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1492,6 +1502,8 @@ export class ThreadPump {
    * @param referencePolicy - 引用別的會話的上限與預算（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
    *   `session-reference` 那一列）：一則訊息最多幾條，與每條來源的位元組預算（跟著這條 thread 下一步會走的模型）。
    *   **省略即 3 條、每條 64 KiB**（`MAX_SESSION_REFERENCES`、`DEFAULT_MAX_REFERENCE_BYTES`），同今天。
+   * @param hostTools - 嵌入版的宿主頁工具插槽（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，`createNexusAgent` 回的那一格）：
+   *   每一句開跑時寫進那一句帶的宣告。**省略即不是嵌入版**，帶了宣告也不收。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1513,7 +1525,9 @@ export class ThreadPump {
     turnClock?: TurnClock,
     spillStore?: SpillStore,
     referencePolicy?: SessionReferencePolicy,
+    hostTools?: HostToolsSlot,
   ) {
+    this.#hostTools = hostTools;
     this.#turnClock = turnClock;
     this.#spillStore = spillStore;
     this.#referencePolicy = referencePolicy;
@@ -1953,6 +1967,10 @@ export class ThreadPump {
         return Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
       if (intoStep) return Promise.resolve();
+      // 插話被這一輪收下時不換工具集；退成排隊的照它自己的宣告開跑。
+      if (this.#hostTools !== undefined && input.hostTools !== undefined) {
+        this.#hostToolsByItem.set(id, input.hostTools);
+      }
       // **下一次送出喚醒停住的**（#637 的 Q2）：它們排在前面，照 FIFO 先跑。按了停止、那一輪還沒收尾就又送的話，
       // 那一句一樣是「下一次送出」，所以停住的請求也一起清掉。退成排隊的插話同樣是一次送出，同 dsh 中止之後的插話
       // 照樣叫醒迴圈（`agent.ts:157-158`）。
@@ -3011,6 +3029,25 @@ export class ThreadPump {
     return failure;
   }
 
+  /**
+   * 這一輪的宿主頁工具（#2374）：接著上一輪中斷的不換；一句話開跑換成它自己帶的宣告，沒帶就清空；其他輪（續行、背景結算）清空。
+   * 有宣告時記一顆可略過的 `host-tools/declared`。
+   */
+  #declareHostTools(input: PumpInput, claimed: QueuedInput | undefined): void {
+    const slot = this.#hostTools;
+    if (slot === undefined || input.kind === 'resume') return;
+    const declared = claimed === undefined ? undefined : this.#hostToolsByItem.get(claimed.id);
+    if (claimed !== undefined) this.#hostToolsByItem.delete(claimed.id);
+    slot.current = declared ?? [];
+    if (slot.current.length > 0) {
+      this.#sessions.root.append(
+        'host-tools/declared',
+        { tools: slot.current },
+        { ignorable: true },
+      );
+    }
+  }
+
   /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
   #reportTurnFailed(failed: SessionEvent<'turn/failed'>, runId?: string): void {
     const handler = this.#onTurnFailed;
@@ -3040,6 +3077,7 @@ export class ThreadPump {
       input = { ...input, text: referenced.text };
     }
     const turnStart = this.#sessions.root.append('turn/start', turnStartOf(input));
+    this.#declareHostTools(input, claimed);
     if (claimed !== undefined) this.#inboxIdBySeq.set(turnStart.seq, claimed.id);
     // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
     if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);

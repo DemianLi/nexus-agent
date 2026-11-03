@@ -196,6 +196,7 @@ import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
+import { hostToolsPlugin } from './settings/host-tools.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import type { GoalRoundCap } from './goal-driver.js';
@@ -909,6 +910,8 @@ async function startServer(
   const opsConfig = startupSetting(plugins, opsEndpointsPlugin);
   // 圖片轉碼的併發上限（#2033）：一個行程一份限流器，交給下面的附件儲存。出廠 2、關不掉（`settings/attachment-images.ts`）。
   const attachmentImages = startupSetting(plugins, attachmentImagesPlugin);
+  // 宿主頁工具的免核准名單（#2374）：只有嵌入版的 thread 用，關掉這一列是空名單、每支都問（`settings/host-tools.ts`）。
+  const hostToolsConfig = startupSetting(plugins, hostToolsPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -1508,7 +1511,10 @@ async function startServer(
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
             // 背景續行（#841）：只有 serve 有可以叫醒的一輪，見 `createCliAgent` 那一格。
-            ...(profile === 'embed' && { profile }),
+            ...(profile === 'embed' && {
+              profile,
+              hostTools: { exempt: hostToolsConfig.approval.exempt },
+            }),
             ...(profile === 'full' &&
               backgroundSubagents.backgroundMode === 'continuable' && {
                 backgroundSubagents: {
@@ -1638,12 +1644,15 @@ async function startServer(
         attachTitle,
         stepInbox,
         spillStore,
+        hostTools,
       } = built;
       return {
         agent: agent as unknown as PumpAgent,
         stepInbox,
         // 外溢存檔服務（#1553 N0948）：引用別的會話被截斷時全文存這裡。沒開會話日誌就沒有暫存，缺席。
         ...(spillStore !== undefined && { spillStore }),
+        // 宿主頁工具的插槽（#2374）：只有嵌入版有，pump 開一輪時寫進那一輪的宣告。
+        ...(hostTools !== undefined && { hostTools }),
         // **`createCliAgent` 一直都回著這個註冊點，這條路以前把它丟掉了。**
         // 撿起來就是 web 那端打得到 `/plan` 的全部
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在

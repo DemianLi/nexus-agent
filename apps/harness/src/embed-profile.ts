@@ -12,7 +12,7 @@
 
 import type { PluginEntry, PreToolListener } from '@nexus/core';
 import { mcpPlugin } from '@nexus/plugin-mcp';
-import { EMBED_PATH_PREFIX, THREADS_PATH } from '@nexus/wire';
+import { EMBED_PATH_PREFIX, HOST_TOOL_PREFIX, THREADS_PATH } from '@nexus/wire';
 import type { RpcMethod } from '@nexus/wire';
 
 /** 一條 thread 照哪一份設定檔組。`full` 是獨立頁面那一份。 */
@@ -87,18 +87,33 @@ export function embedApprovalReason(toolName: string): string {
   return `嵌入的對話框裡，工具 ${toolName} 沒標唯讀，要先讓人看過`;
 }
 
+/** 宿主頁工具（#2374）回 `ask` 時給人看的那一句。 */
+export function hostToolApprovalReason(name: string): string {
+  return `嵌入的頁面要執行 ${name}，這支不在 serve 設定的免核准名單上，要先讓人看過`;
+}
+
 /**
  * 嵌入版的核准閘門：沒標唯讀的工具都要人核准（#2365 第 10 點）。**失敗的方向是多問**：唯讀是白名單，日後新增的工具預設被問。
  *
  * MCP 工具交給那一列自己的 `approval`（#1622；#1827 D171）：沒寫就整台都問，寫了 `default: allow` 或 `exempt` 就是那一列替自己的工具標了唯讀。
  * 這道閘門不覆蓋它，所以也不放寬它。
  *
+ * 宿主頁工具（`page__<name>`，#2374）看 serve 設定的免核准名單（`host-tools` 那一列，營運者定），名單上的不問、其餘都問；宿主頁自己怎麼宣告都不算。
+ *
  * 只回 `ask` 或 `next()`，**絕不回 `allow`**：不呼叫 `next()` 的 `allow` 會把排在後面的閘門整條吃掉（`approval-gate-order.test.ts`）。
  *
  * @param isMcpTool - 這個工具名是不是 MCP 那一列註冊的。
+ * @param hostToolExempt - 宿主頁工具的免核准名單，宣告時的名字（不帶 `page__`）。
  */
-export function embedApprovalGate(isMcpTool: (name: string) => boolean): PreToolListener {
+export function embedApprovalGate(
+  isMcpTool: (name: string) => boolean,
+  hostToolExempt: ReadonlySet<string> = new Set(),
+): PreToolListener {
   return (exec, next) => {
+    if (exec.name.startsWith(HOST_TOOL_PREFIX)) {
+      const name = exec.name.slice(HOST_TOOL_PREFIX.length);
+      return hostToolExempt.has(name) ? next() : { kind: 'ask', reason: hostToolApprovalReason(name) };
+    }
     if (EMBED_READ_ONLY_TOOLS.has(exec.name)) return next();
     if (ASKS_THE_HUMAN_ITSELF.has(exec.name)) return next();
     if (isMcpTool(exec.name)) return next();
@@ -107,13 +122,16 @@ export function embedApprovalGate(isMcpTool: (name: string) => boolean): PreTool
 }
 
 /** 把 {@link embedApprovalGate} 登記進這次組裝的核准 waterfall。MCP 工具認的是註冊它的那一列（`mcp`），不認名字前綴。 */
-export function embedApprovalEntry(): PluginEntry {
+export function embedApprovalEntry(hostToolExempt?: ReadonlySet<string>): PluginEntry {
   return {
     plugin: {
       name: 'embed-approval',
       apply: (registry) => {
         registry.approvals.gate(
-          embedApprovalGate((name) => registry.tools.resolve(name)?.origin.name === mcpPlugin.name),
+          embedApprovalGate(
+            (name) => registry.tools.resolve(name)?.origin.name === mcpPlugin.name,
+            hostToolExempt,
+          ),
         );
       },
     },

@@ -109,6 +109,8 @@ import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { copyFileEntry } from './copy-file-tool.js';
 import { embedApprovalEntry } from './embed-profile.js';
+import { createHostToolsSlot, hostToolsEntry } from './host-tools.js';
+import type { HostToolsSlot } from './host-tools.js';
 import type { ThreadProfile } from './embed-profile.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxModeSource } from './contained-backend.js';
@@ -333,6 +335,11 @@ export interface CreateNexusAgentOptions {
    * {@link backgroundSubagents} 都不掛，給了後者就拋），工具照 `embedApprovalGate` 要核准，`subagentKinds` 缺席。
    */
   readonly profile?: ThreadProfile;
+  /**
+   * 嵌入版的宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：免核准名單與宿主頁幾毫秒沒回算逾時。只在 {@link profile} 是
+   * `embed` 時有作用，那時一律掛上 `host-tools.ts` 的 middleware、回傳的 `hostTools` 是這條 thread 的插槽；省略就是空名單、30 秒。
+   */
+  readonly hostTools?: { readonly exempt?: readonly string[]; readonly timeoutMs?: number };
   /**
    * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
    * **省略＝關**。給了：`attachSession` 在 root 日誌還沒有 `subagent/model-selection-policy` 時把它寫進去（有了就不再寫，
@@ -815,6 +822,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   if (embedded && options.backgroundSubagents !== undefined) {
     throw new Error('嵌入版設定檔不掛子代理：不能同時給 backgroundSubagents');
   }
+  const hostTools: HostToolsSlot | undefined = embedded
+    ? createHostToolsSlot(options.hostTools?.timeoutMs)
+    : undefined;
   if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
     throw new Error(
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
@@ -879,7 +889,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
     ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
     ...(delegation === undefined ? [] : [delegation.entry()]),
-    ...(embedded ? [embedApprovalEntry()] : []),
+    ...(hostTools === undefined
+      ? []
+      : [embedApprovalEntry(new Set(options.hostTools?.exempt)), hostToolsEntry(hostTools)]),
   ];
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
@@ -1341,6 +1353,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
        * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
        */
+      /**
+       * 這條 thread 的宿主頁工具插槽（#2374）：pump 開一輪時寫進這一輪的宣告。**只有嵌入版有**，其餘是 `undefined`。
+       */
+      hostTools,
       subagentKinds: embedded
         ? undefined
         : (params.subagents ?? []).map(({ name, description }) => ({
