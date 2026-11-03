@@ -35,7 +35,11 @@ function update(next: View): void {
   render();
 }
 
-/** 轉到正對著這台設備：它落在畫面水平的正中間、在離相機近的那一側（宿主頁工具 `focus_device`，#2374）。 */
+/**
+ * 轉到正對著這台設備：它落在畫面水平的正中間、在離相機近的那一側（宿主頁工具 `focus_device`，#2374）。
+ *
+ * @returns 找不到這個 id 就是 false，視角不動。
+ */
 function focus(id: string): boolean {
   const device = props.devices.find((candidate) => candidate.id === id);
   if (device === undefined) return false;

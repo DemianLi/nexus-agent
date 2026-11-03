@@ -66,8 +66,9 @@ function onHostTool(event: Event): void {
     call.fail(`沒有設備 ${String(id)}`);
     return;
   }
-  if (call.name === 'focus_device' && model.value?.focus(device.id) === true) {
-    call.respond({ focused: device.id });
+  if (call.name === 'focus_device') {
+    if (model.value?.focus(device.id) === true) call.respond({ focused: device.id });
+    else call.fail('3D 模型還沒準備好');
   } else if (call.name === 'highlight_device') {
     selectedId.value = device.id;
     call.respond({ highlighted: device.id, ...metrics[device.id] });
