@@ -38,6 +38,42 @@ serve 供應兩個檔，跟網頁同一個來源：
 
 只有空白的值不收（字串或 `label` 都算），跟其他不收的值一樣講一聲、標籤維持原樣。超過 200 字的整句送不出去，不會截斷，宿主頁要自己控制長度。
 
+## 宿主頁工具
+
+宿主頁可以宣告自己的工具給模型呼叫，例如把鏡頭轉到某台設備、把它高亮。用 `hostTools` property 設定（沒有對應的屬性）：
+
+```ts
+const chat = document.querySelector('nexus-chat');
+chat.hostTools = [
+  {
+    name: 'focus_device',
+    description: '把鏡頭轉到指定的設備。',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+];
+chat.addEventListener('nexus-host-tool', (event) => {
+  const { name, args, respond, fail } = event.detail;
+  if (name !== 'focus_device') return;
+  const found = scene.focus(args.id);
+  if (found) respond({ focused: args.id });
+  else fail(`找不到設備 ${args.id}`);
+});
+```
+
+- 每送出一句話，元件就把當下的宣告附在那句話上，跟情境一樣；那一輪模型看到的就是那一份，中途改的要到下一句才生效。
+- 模型叫了其中一支，元件在元素上發 `nexus-host-tool` 事件，`detail` 帶 `name`（宣告時的名字）與 `args`（已照 `parameters` 驗過）。執行完呼叫
+  `respond(結果)` 或 `fail(原因)`，只算第一次。結果要是 JSON 值；不是的話元件改成錯誤交回。
+- 30 秒內沒有交回就當失敗，模型會知道，這一輪接著跑。元件被拿掉時一樣由這個期限收。
+- 頁面重新整理後，還沒交回的那幾支會再發一次事件；新的頁面沒宣告那支工具的話，元件直接回「這個頁面沒有這支工具」，不發事件。重新整理前已經執行過的會再執行一次，
+  不能重做的動作不要列進免核准名單（見下）。
+- 使用者按停止之後才交回的結果會被丟掉。
+- 預設每次呼叫都會先出核准卡，使用者核准了才發事件。哪幾支不必問由 serve 的設定決定（`host-tools` 那一列的 `approval.exempt`，見
+  [`operations.md`](operations.md)），宿主頁自己標不算。
+
+上限：每次至多 8 支；名字合 `^[a-z][a-z0-9_]{0,31}$`、不重名；說明非空、至多 500 字；`parameters` 是 `type: 'object'` 的 JSON Schema，序列化後至多 4 KiB；
+整份序列化後至多 16 KiB；交回的結果序列化後至多 4,000 字。宣告超過上限或形狀不對，元件不收、在 console 講一聲，原本的那份不動；結果超過上限，模型拿到的是一則錯誤。
+都不截斷。設成 `null` 或空陣列就清掉。
+
 ## 可覆寫的外觀
 
 只開放四個，寫在元素上的 CSS 自訂屬性：
@@ -80,6 +116,12 @@ export default defineConfig({
 <nexus-chat :theme="theme" :context.prop="selected === null ? null : { label: selected }" />
 ```
 
+`hostTools` 一樣用 `.prop`，事件用 `@nexus-host-tool`：
+
+```vue
+<nexus-chat :hostTools.prop="tools" @nexus-host-tool="onHostTool" />
+```
+
 型別：把從 serve 下載的 `nexus-chat.d.ts` 放進專案，加進 `tsconfig` 的 `include`。
 
 ## 宿主頁的快捷鍵與指標操作
@@ -107,6 +149,7 @@ window.addEventListener('keydown', (event) => {
 - 輸入框與停止鈕；
 - 核准卡與反問面板；
 - 情境標籤；
+- 宿主頁工具；
 - 「新對話」鈕；
 - 回覆底下的回饋鈕。
 

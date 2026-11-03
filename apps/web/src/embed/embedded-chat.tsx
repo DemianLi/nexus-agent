@@ -2,7 +2,8 @@
  * 嵌入版的對話畫面（#2366）：`<nexus-chat>` 在 shadow root 裡畫的就是這個。跟獨立頁面共用 `components/conversation/` 那幾塊，
  * 功能照地圖 #2365 第 12 點收窄：
  *
- * - 有：對話紀錄（工具呼叫列、思考摘要都在裡面）、狀態列、輸入框與停止、核准卡與反問面板、情境標籤、「新對話」、回覆底下的回饋鈕；
+ * - 有：對話紀錄（工具呼叫列、思考摘要都在裡面）、狀態列、輸入框與停止、核准卡與反問面板、情境標籤、「新對話」、回覆底下的回饋鈕、
+ *   宿主頁工具（#2374，轉交見 {@link useHostCalls}）；
  * - 沒有：`/` 與 `@` 選單、模型與權限座、計劃模式、目標列、待辦、送出佇列、分叉、側欄與歷史清單、成本、附件上傳、改動卡（差異檢視）。
  *
  * 輸入框送出的一律是一句話（`route: 'sentence'`）：開頭是 `/` 也不認成命令。一輪在跑時不收下一句，因為沒有畫送出佇列，排進去的
@@ -10,7 +11,12 @@
  *
  * @module
  */
-import type { ConversationEntry, WireClient } from '@nexus/wire';
+import type {
+  ConversationEntry,
+  HostToolDeclaration,
+  HostToolResponse,
+  WireClient,
+} from '@nexus/wire';
 import { EMBED_PATH_PREFIX } from '@nexus/wire';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -25,6 +31,7 @@ import { useSubagentControl } from '@/components/tool/subagent-control';
 import { Entry as TranscriptEntry, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
+import type { Conversation } from '@/hooks/use-conversation';
 import { agentBaseUrl } from '@/lib/agent';
 import { pendingAsker } from '@/lib/approval-asker';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
@@ -39,6 +46,8 @@ import { pendingSteers } from '@/lib/steer-view';
 import { randomUuid } from '@/lib/uuid';
 
 import type { NexusChatContext } from './context';
+import { HOST_TOOL_MISSING_ERROR, hostToolSuccess } from './host-tools';
+import type { NexusHostToolDetail } from './host-tools';
 
 /** 嵌入版記住上一條 thread 的鍵，跟獨立頁面的 `nexus.threads.current` 分開：同一個網域上兩邊各接各的。 */
 export const EMBED_THREAD_KEY = 'nexus.embed.threads.current';
@@ -66,13 +75,19 @@ function renderSubagentEntry(entry: ConversationEntry) {
  * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
  *
  * @param context - 宿主頁給的情境（#2365 第 7 點）：畫成標籤，每一句送出時附上當下的值（#2382）；沒有就不送。
+ * @param hostTools - 宿主頁宣告的工具（#2374）：每一句送出時附上當下的值，同 `context`；沒有就不送。
+ * @param onHostCall - 模型叫了 `hostTools` 裡的一支時呼叫，交給宿主頁執行。
  */
 export function EmbeddedChat({
   client,
   context,
+  hostTools,
+  onHostCall,
 }: {
   readonly client: WireClient;
   readonly context: NexusChatContext | undefined;
+  readonly hostTools: readonly HostToolDeclaration[] | undefined;
+  readonly onHostCall: (detail: NexusHostToolDetail) => void;
 }) {
   const [threadId, setThreadId] = useState(() => recallThread(EMBED_THREAD_KEY).threadId);
   useEffect(() => {
@@ -84,23 +99,68 @@ export function EmbeddedChat({
       client={client}
       threadId={threadId}
       context={context}
+      hostTools={hostTools}
+      onHostCall={onHostCall}
       onNewConversation={() => setThreadId(randomUuid())}
     />
   );
+}
+
+/**
+ * 把 `hostCalls` 裡新來的那幾支轉交宿主頁，每顆中斷一次。同一顆因為重連補送或再度中斷又出現時不再轉交；重新整理（整個重掛）之後補送的
+ * 那幾支照常轉交，設計 Q6。名字不在**目前**的宣告裡的，不轉交、當場交回 {@link HOST_TOOL_MISSING_ERROR}。宿主頁一直不回的由 server 的逾時收。
+ */
+function useHostCalls(
+  conversation: Conversation,
+  hostTools: readonly HostToolDeclaration[] | undefined,
+  onHostCall: (detail: NexusHostToolDetail) => void,
+) {
+  const handed = useRef(new Set<string>());
+  const latest = useRef({ conversation, hostTools, onHostCall });
+  latest.current = { conversation, hostTools, onHostCall };
+  const calls = conversation.state.hostCalls;
+  useEffect(() => {
+    for (const call of calls) {
+      if (handed.current.has(call.interruptId)) continue;
+      handed.current.add(call.interruptId);
+      const { conversation: current, hostTools: declared, onHostCall: hand } = latest.current;
+      if (declared?.some((tool) => tool.name === call.name) !== true) {
+        void current.respondHostCall(call, { ok: false, error: HOST_TOOL_MISSING_ERROR });
+        continue;
+      }
+      let settled = false;
+      const settle = (response: HostToolResponse) => {
+        if (settled) return;
+        settled = true;
+        void latest.current.conversation.respondHostCall(call, response);
+      };
+      hand({
+        name: call.name,
+        args: call.args,
+        respond: (result) => settle(hostToolSuccess(result)),
+        fail: (error) => settle({ ok: false, error: String(error) }),
+      });
+    }
+  }, [calls]);
 }
 
 function EmbeddedConversation({
   client,
   threadId,
   context,
+  hostTools,
+  onHostCall,
   onNewConversation,
 }: {
   readonly client: WireClient;
   readonly threadId: string;
   readonly context: NexusChatContext | undefined;
+  readonly hostTools: readonly HostToolDeclaration[] | undefined;
+  readonly onHostCall: (detail: NexusHostToolDetail) => void;
   readonly onNewConversation: () => void;
 }) {
   const conversation = useConversation({ client, threadId });
+  useHostCalls(conversation, hostTools, onHostCall);
   const deliverableDownload = useMemo(
     () => createDeliverableDownloader({ threadId, baseUrl: embedBaseUrl() }),
     [threadId],
@@ -146,7 +206,7 @@ function EmbeddedConversation({
     setDraft('');
     setSendError(undefined);
     void conversation
-      .send(text, 'queue', undefined, undefined, requestId, 'sentence', context)
+      .send(text, 'queue', undefined, undefined, requestId, 'sentence', context, hostTools)
       .then((rejected) => {
         if (rejected === undefined) return;
         pendingRequest.current = { id: requestId, sentence };
