@@ -27,8 +27,12 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
 import { loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
+import { langChainToolOf } from '@nexus/tool-adapter';
+import { createToolsProvider } from '@nexus/tools/provider';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withSystemPromptVariables } from './fixtures.js';
@@ -397,7 +401,11 @@ async function shippedTools(tempRoot: string): Promise<{
   }
 }
 
-/** 不在出廠清單的選配 plugin，用清單上的設定單獨載入，回它註冊的工具。 */
+/**
+ * 不在出廠清單的選配 plugin，用清單上的設定單獨載入，回它註冊的工具。
+ *
+ * 樹上的函式插件掛在一棵只有工具登記處的樹上，工具經宿主的轉接器轉成模型拿到的那個形狀；`NexusPlugin` 走 `loadPlugins`。
+ */
 async function standaloneTools(
   packagesRoot: string,
   dir: string,
@@ -406,7 +414,9 @@ async function standaloneTools(
   const name = (
     JSON.parse(readFileSync(join(packagesRoot, dir, 'package.json'), 'utf8')) as { name: string }
   ).name;
-  const plugin = ((await import(name)) as { default: PluginEntry['plugin'] }).default;
+  const mod = (await import(name)) as Record<string, unknown>;
+  if (isFunctionPluginModule(mod)) return treeTools(mod, config);
+  const plugin = (mod as { default: PluginEntry['plugin'] }).default;
   const { registry, dispose } = await loadPlugins(
     withSystemPromptVariables([{ plugin, config } as PluginEntry]),
   );
@@ -414,6 +424,25 @@ async function standaloneTools(
     return boundCatalogTools([...registry.tools.effective().values()].map((entry) => entry.value));
   } finally {
     await dispose();
+  }
+}
+
+/** 函式插件掛上只有 `tools` 一列的樹，交回它登記的工具。 */
+async function treeTools(mod: object, config: unknown): Promise<Map<string, CatalogTool>> {
+  const provider = createToolsProvider();
+  const root = new Context();
+  try {
+    await root.plugin(Loader);
+    Object.assign(root.loader.builtins, { tools: provider.Provider, standalone: mod });
+    await root.loader.create({ id: 'tools', name: 'cordis:tools' } as never, null);
+    await root.loader.create(
+      { id: 'standalone', name: 'cordis:standalone', config } as never,
+      null,
+    );
+    await root.loader.await();
+    return boundCatalogTools(provider.entries().map((entry) => langChainToolOf(entry.tool)));
+  } finally {
+    await root.fiber.dispose();
   }
 }
 

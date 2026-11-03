@@ -13,46 +13,79 @@
  * 「隔離」這個詞就是假的。
  */
 
-import type { StructuredTool } from '@langchain/core/tools';
-import { loadPlugins } from '@nexus/core';
+import { readFileSync } from 'node:fs';
+
+import { checkConformance } from '@nexus/sdk';
+import { isNexusTool } from '@nexus/tools';
+import type { NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
+import { createToolsProvider } from '@nexus/tools/provider';
 import { describe, expect, it } from 'vitest';
+
+import * as quickjs from './index.js';
 import {
-  CodeRunFailedError,
-  createQuickJsPlugin,
+  CODE_RUN_FAILED,
+  createModuleHolder,
+  createRunJavascriptTool,
   DEFAULT_MAX_STACK_SIZE_BYTES,
   DEFAULT_MEMORY_LIMIT_BYTES,
   DEFAULT_TIMEOUT_MS,
   quickJsConfigSchema,
-  quickJsPlugin,
   RUN_JAVASCRIPT_TOOL_NAME,
 } from './index.js';
-import type { QuickJsPluginOptions } from './index.js';
+import type { CodeRunFailureKind, QuickJsPluginOptions } from './index.js';
 
-/** 掛一次 plugin，把註冊出來的那個工具拿出來，餵它一段程式。 */
+const exec: ToolExec = {
+  callId: 'c1',
+  threadId: undefined,
+  agent: undefined,
+  signal: undefined,
+  concludeTurn: () => {},
+  deferContext: () => {},
+  interrupt: () => Promise.resolve(undefined),
+};
+
+/** 程式失敗時結果文字的開頭（後面接 `code run failed (<kind>): …`）。 */
+const FAILURE_PREFIX = `工具 ${RUN_JAVASCRIPT_TOOL_NAME} 執行失敗：`;
+
+/** 照設定造一個工具，WASM 模組用自己的持有者。 */
+function toolOf(options: QuickJsPluginOptions): NexusTool {
+  return createRunJavascriptTool(quickJsConfigSchema.parse(options), createModuleHolder());
+}
+
+/** 造一個工具，餵它一段程式，回結果。 */
+async function execute(options: QuickJsPluginOptions, code: string): Promise<NexusToolResult> {
+  return toolOf(options).execute({ code }, exec);
+}
+
+/** 同 {@link execute}，但這段程式**該成功**：回結果文字。 */
 async function runTool(options: QuickJsPluginOptions, code: string): Promise<string> {
-  const { registry } = await loadPlugins([createQuickJsPlugin(options)]);
-  const entry = registry.tools.resolve(RUN_JAVASCRIPT_TOOL_NAME);
-  if (entry === undefined) throw new Error(`${RUN_JAVASCRIPT_TOOL_NAME} 沒有註冊上`);
-  return String(await (entry.value as StructuredTool).invoke({ code }));
+  const result = await execute(options, code);
+  if (!result.ok) throw new Error(`預期成功，卻回了：${result.content}`);
+  return String(result.content);
+}
+
+/** 一次程式失敗：種類與 `code run failed (<kind>): …` 那句。 */
+interface CodeRunFailure {
+  readonly kind: CodeRunFailureKind;
+  readonly message: string;
 }
 
 /**
- * 同 {@link runTool}，但這段程式**該失敗**：回傳工具拋出來的 {@link CodeRunFailedError}。
- * 沒拋、或拋的不是它，這裡就讓測試紅。
+ * 從 `ok: false` 的結果讀出失敗。碼不是 {@link CODE_RUN_FAILED}、文字不是程式失敗的那一句，這裡就讓測試紅。
  */
-async function runFailing(
-  options: QuickJsPluginOptions,
-  code: string,
-): Promise<CodeRunFailedError> {
-  const error: unknown = await runTool(options, code).then(
-    (value) => {
-      throw new Error(`預期失敗，卻回了：${value}`);
-    },
-    (thrown: unknown) => thrown,
-  );
-  if (!(error instanceof CodeRunFailedError)) throw error;
-  expect(error.code).toBe('CODE_RUN_FAILED');
-  return error;
+function failureOf(result: NexusToolResult): CodeRunFailure {
+  if (result.ok) throw new Error(`預期失敗，卻回了：${String(result.content)}`);
+  expect(result.error).toEqual({ name: 'CodeRunFailedError', code: CODE_RUN_FAILED });
+  expect(result.content.startsWith(FAILURE_PREFIX)).toBe(true);
+  const message = result.content.slice(FAILURE_PREFIX.length);
+  const kind = /^code run failed \((exception|timeout|invalid-output)\): /u.exec(message)?.[1];
+  if (kind === undefined) throw new Error(`不是程式失敗的那一句：${message}`);
+  return { kind: kind as CodeRunFailureKind, message };
+}
+
+/** 同 {@link execute}，但這段程式**該失敗**：回傳它的失敗。 */
+async function runFailing(options: QuickJsPluginOptions, code: string): Promise<CodeRunFailure> {
+  return failureOf(await execute(options, code));
 }
 
 describe('正常的路', () => {
@@ -66,9 +99,8 @@ describe('正常的路', () => {
     expect(await runTool({}, 'const x = 1;')).toBe('（沒有回傳值）');
   });
 
-  // #615：以前回一句 `錯誤：TypeError: 壞了` 的字串，工具算成功。翻面之後守的是「拋、而且
-  // 文字帶得出原因」——模型讀得到原因才能自己修，這一半沒有變。
-  it('VM 裡丟出來的錯誤：拋 CodeRunFailedError，原因原樣帶著，沒有 `錯誤：` 前綴', async () => {
+  // #615：守的是「算失敗、而且文字帶得出原因」——模型讀得到原因才能自己修。
+  it('VM 裡丟出來的錯誤：回 ok: false 帶 CODE_RUN_FAILED，原因原樣帶著，沒有 `錯誤：` 前綴', async () => {
     const error = await runFailing({}, 'throw new TypeError("壞了")');
     expect(error.kind).toBe('exception');
     expect(error.message).toBe('code run failed (exception): TypeError: 壞了');
@@ -155,7 +187,7 @@ describe('完成值必須是無損的 JSON', () => {
     ['class 實例', '(() => { class P { constructor() { this.x = 1; } } return new P(); })()'],
     ['包裝物件', 'new Number(1)'],
     ['藏在深處的 NaN', '({ a: [{ b: [{ c: 0 / 0 }] }] })'],
-  ])('%s：拋 invalid-output，不再默默變成 null 或 {}', async (_label, code) => {
+  ])('%s：回 invalid-output，不會默默變成 null 或 {}', async (_label, code) => {
     const error = await runFailing({}, code);
     expect(error.kind).toBe('invalid-output');
     expect(error.message).toBe(`code run failed (invalid-output): ${LOSSLESS}`);
@@ -245,7 +277,7 @@ describe('完成值必須是無損的 JSON', () => {
   });
 
   // 快照裡撞到記憶體上限算 invalid-output，所以記憶體上限給大、逾時給短：循環檢查壞了的話快照停不下來，跑成 timeout 而紅。
-  it('循環參照：拋 invalid-output', async () => {
+  it('循環參照：回 invalid-output', async () => {
     const error = await runFailing(
       { memoryLimitBytes: 256 * 1024 * 1024, timeoutMs: 200 },
       '(() => { const a = {}; a.self = a; return a; })()',
@@ -497,37 +529,86 @@ describe('資源邊界——只有設定的那麼強', () => {
   const HOST_OVERFLOW_STACK_BYTES = 2 * 1024 * 1024;
 
   it('host 的堆疊先用完：回 exception，下一次呼叫照常', async () => {
-    const { registry } = await loadPlugins([
-      createQuickJsPlugin({ maxStackSizeBytes: HOST_OVERFLOW_STACK_BYTES, timeoutMs: 10_000 }),
-    ]);
-    const tool = registry.tools.resolve(RUN_JAVASCRIPT_TOOL_NAME)!.value as StructuredTool;
+    const tool = toolOf({ maxStackSizeBytes: HOST_OVERFLOW_STACK_BYTES, timeoutMs: 10_000 });
 
     for (let round = 0; round < 3; round += 1) {
-      const error: unknown = await tool.invoke({ code: '(function f() { return f(); })()' }).then(
-        (value: unknown) => new Error(`預期失敗，卻回了：${String(value)}`),
-        (thrown: unknown) => thrown,
+      const error = failureOf(
+        await tool.execute({ code: '(function f() { return f(); })()' }, exec),
       );
-      expect(error).toBeInstanceOf(CodeRunFailedError);
-      expect((error as CodeRunFailedError).kind).toBe('exception');
-      expect((error as CodeRunFailedError).message).toContain('Maximum call stack size exceeded');
-      expect(String(await tool.invoke({ code: '1 + 1' }))).toBe('2');
+      expect(error.kind).toBe('exception');
+      expect(error.message).toContain('Maximum call stack size exceeded');
+      await expect(tool.execute({ code: '1 + 1' }, exec)).resolves.toEqual({
+        ok: true,
+        content: '2',
+      });
     }
   });
 });
 
-describe('plugin 的接線', () => {
-  // 這條釘住「不接 lifecycle」那個決定（見 index.ts）。接了一個什麼都不做的 disposer
-  // 會讓關機清單看起來比實際上熱鬧，而關機清單是診斷「誰沒收乾淨」時看的東西。
-  it('沒有登記關機清理——行程內的 VM 沒有活 handle 要收', async () => {
-    const { registry } = await loadPlugins([createQuickJsPlugin()]);
-
-    expect(registry.lifecycle.disposers()).toHaveLength(0);
-  });
-
+describe('插件的接線', () => {
   // 工具名不叫 `execute` 是刻意的（見 index.ts）。這條把那個決定釘住：改回 `execute`
   // 會撞上基座 sandbox backend 的同名工具。
   it('工具名不是 execute', () => {
     expect(RUN_JAVASCRIPT_TOOL_NAME).toBe('run_javascript');
+  });
+
+  it('參數 schema 是 JSON，描述帶設定的逾時', () => {
+    const tool = toolOf({ timeoutMs: 200 });
+    expect(tool.parameters).toEqual({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: '要求值的 JavaScript。最後一個運算式的值就是回傳值。',
+        },
+      },
+      required: ['code'],
+    });
+    expect(tool.description).toContain('執行超過 200 毫秒會被中斷。');
+  });
+
+  it('一致性套件全格通過：manifest、匯出形式、卸載後登記處回到掛載前、缺提供者停在 PENDING、schema 是 JSON', async () => {
+    let latest = createToolsProvider();
+    const failures = await checkConformance({
+      row: 'quickjs',
+      module: quickjs,
+      config: {},
+      providers: {
+        tools: () => {
+          latest = createToolsProvider();
+          return latest.Provider;
+        },
+      },
+      residue: () => latest.entries().length,
+      tools: () => latest.entries().map((entry) => entry.tool),
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it('掛上之後登記處裡是 run_javascript 這一個 NexusTool，設定的上限有用上', async () => {
+    let latest = createToolsProvider();
+    const failures = await checkConformance({
+      row: 'quickjs',
+      module: quickjs,
+      config: { timeoutMs: 150 },
+      providers: {
+        tools: () => {
+          latest = createToolsProvider();
+          return latest.Provider;
+        },
+      },
+      residue: () => latest.entries().length,
+      tools: () => {
+        const tools = latest.entries().map((entry) => entry.tool);
+        expect(tools.map((tool) => tool.name)).toEqual([RUN_JAVASCRIPT_TOOL_NAME]);
+        const [tool] = tools;
+        if (tool === undefined || !isNexusTool(tool)) throw new Error('登記的不是 NexusTool');
+        expect(tool.description).toContain('執行超過 150 毫秒會被中斷。');
+        return tools;
+      },
+    });
+    expect(failures).toEqual([]);
   });
 });
 
@@ -540,17 +621,40 @@ describe('設定（#453）', () => {
     });
   });
 
-  it('不是正整數就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
+  it('不是正整數就拒收，訊息帶欄位路徑', () => {
     for (const bad of [{ timeoutMs: 0 }, { memoryLimitBytes: -1 }, { maxStackSizeBytes: 1.5 }]) {
       const field = Object.keys(bad)[0]!;
-      await expect(loadPlugins([createQuickJsPlugin(bad)])).rejects.toThrow('quickjs#0 (quickjs)');
-      await expect(loadPlugins([createQuickJsPlugin(bad)])).rejects.toThrow(field);
+      expect(() => quickjs.Config.parse(bad)).toThrow(field);
     }
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
-    await expect(
-      loadPlugins([{ plugin: quickJsPlugin, config: { timeoutMS: 100 } }]),
-    ).rejects.toThrow(/timeoutMS/);
+  it('未知欄位拒收（登記的偏離：dsh 放行）', () => {
+    expect(() => quickjs.Config.parse({ timeoutMS: 100 })).toThrow(/timeoutMS/);
+  });
+});
+
+describe('相依關係（#30）', () => {
+  it('不相依 @nexus/core、@nexus/harness 與 LangChain；框架與規範套件走 peer', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      dependencies: Record<string, string>;
+      peerDependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    const all = Object.keys({
+      ...pkg.dependencies,
+      ...pkg.peerDependencies,
+      ...pkg.devDependencies,
+    });
+    for (const name of ['@nexus/core', '@nexus/harness', '@langchain/core']) {
+      expect(all).not.toContain(name);
+    }
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['quickjs-emscripten', 'zod']);
+    const peers = ['@nexus/cordis', '@nexus/sdk', '@nexus/tools'];
+    expect(Object.keys(pkg.peerDependencies).sort()).toEqual(peers);
+    for (const name of peers) expect(pkg.devDependencies[name]).toBe('workspace:*');
+  });
+
+  it('沒有 default 匯出（Loader 的 unwrapExports 有 default 就取 default）', () => {
+    expect('default' in quickjs).toBe(false);
   });
 });

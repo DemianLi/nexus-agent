@@ -243,8 +243,8 @@ export function resolveToolName(request: {
  *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
  *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼；
  * - 工具拋出 {@link HarnessError} → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`
- *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`），例如 `run_javascript` 的
- *   `CODE_RUN_FAILED`（#615）。
+ *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`）。`NexusTool` 回 `ok: false` 時，碼由轉接器掛在訊息上
+ *   （`@nexus/tool-adapter`），不經這裡。
  *
  * @param error - `catch` 到的東西。
  * @returns 它的碼，或 `undefined`。
