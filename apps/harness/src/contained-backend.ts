@@ -80,13 +80,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
+import { adaptBackendProtocol, applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
   EditResult,
@@ -131,7 +131,7 @@ import {
   withTargetLock,
 } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
-import { BINARY_SAMPLE_BYTES } from './binary-read.js';
+import { BINARY_SAMPLE_BYTES, NON_TEXT_EXTENSIONS } from './binary-read.js';
 import { canonicalize, isWithin } from './canonical-path.js';
 import { deleteDenial, permissionDenial } from './path-permissions.js';
 import type { PermissionOperation, PermissionRules } from './path-permissions.js';
@@ -558,6 +558,20 @@ interface ReadScope {
   readonly realTarget?: string;
 }
 
+/**
+ * 基座 `getMimeType` 對這個路徑給的值。`deepagents@1.13.1` 沒有匯出它；`adaptBackendProtocol` 的 `readRaw` 遇到缺 `mimeType` 的結果會用它補上，
+ * 這裡借那一條路。升版時對照：`contained-backend-fifo.test.ts` 的「一般檔的結果同基座」逐個副檔名比基座的 `readRaw`。
+ *
+ * @param filePath - 虛擬路徑（只看副檔名）。
+ */
+async function baseMimeType(filePath: string): Promise<string> {
+  const adapted = adaptBackendProtocol({
+    readRaw: async () => ({ content: '', created_at: '', modified_at: '' }),
+  } as never);
+  const { data } = await adapted.readRaw(filePath);
+  return (data as { mimeType: string }).mimeType;
+}
+
 /** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
 const READ_ABORTED = 'read aborted';
 
@@ -770,18 +784,47 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readScope}），
-   * 比過根的實際位置換回虛擬路徑交給基座，所以根內的連結讀到本尊，跟 {@link read} 一致（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
-   * 沒有實際位置（解析交給下游）或換不回來（`danger-full-access` 下落在根外）時，照原路徑交給基座。
+   * 比過根的實際位置換回虛擬路徑再讀，所以根內的連結讀到本尊，跟 {@link read} 一致（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 沒有實際位置（解析交給下游）或換不回來（`danger-full-access` 下落在根外）時，照原路徑讀。
+   *
+   * 結果與錯誤照基座（`FilesystemBackend.readRaw`）：路徑 `stat` 不是一般檔回 `File '…' not found`，`stat` 的錯原樣拋；
+   * 副檔名在 {@link NON_TEXT_EXTENSIONS} 的回位元組，其餘回 UTF-8 字串；`mimeType` 用基座的 `getMimeType`（經 {@link baseMimeType}）。
+   * 不同在開檔：`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，開好再用把手判一次一般檔，路徑判完之後被換成 FIFO 不會卡住
+   * （[#2322](https://github.com/DemianLi/nexus-agent/issues/2322)）。
    *
    * @param filePath - 虛擬路徑。
-   * @returns 基座的結果，或落在根外時的錯誤結果。
+   * @returns 原始內容，或錯誤結果。
    */
   override async readRaw(filePath: string): Promise<ReadRawResult> {
     const scope = await this.readScope(filePath, 'readRaw');
     if (scope.denial !== undefined) return denied({ error: scope.denial });
     const inside =
       scope.realTarget === undefined ? undefined : await this.virtualOf(scope.realTarget);
-    return super.readRaw(inside ?? filePath);
+    const path = inside ?? filePath;
+    const resolved = this.resolveVirtual(path);
+    if (!(await stat(resolved)).isFile()) return { error: `File '${path}' not found` };
+    await this.atomicInternals?.beforeReadOpen?.(resolved);
+    const handle = await open(
+      resolved,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) return { error: `File '${path}' not found` };
+      const content = NON_TEXT_EXTENSIONS.has(extname(path).toLocaleLowerCase())
+        ? new Uint8Array(await handle.readFile())
+        : await handle.readFile({ encoding: 'utf-8' });
+      return {
+        data: {
+          content,
+          mimeType: await baseMimeType(path),
+          created_at: info.ctime.toISOString(),
+          modified_at: info.mtime.toISOString(),
+        },
+      };
+    } finally {
+      await handle.close();
+    }
   }
 
   /**
@@ -809,8 +852,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readDenial}）。錯誤型別是四個碼的 union，
+   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readScope}）。錯誤型別是四個碼的 union，
    * 跟 {@link uploadFiles} 一樣，落在根外的回 `permission_denied`。
+   *
+   * 開 {@link readScope} 解出的實際位置（解不開、交給下游時退回字面路徑），`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判：
+   * 目錄回 `is_directory`，FIFO 這類不是一般檔的回 `file_not_found`，開檔不卡住（[#2322](https://github.com/DemianLi/nexus-agent/issues/2322)）。
+   * errno 照基座：`ENOENT` 回 `file_not_found`、`EACCES` 回 `permission_denied`、`EISDIR` 回 `is_directory`，其餘回 `invalid_path`。
    *
    * @param paths - 虛擬路徑。
    * @returns 逐檔對應的結果，順序與輸入相同。
@@ -818,14 +865,47 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   override async downloadFiles(paths: string[]): Promise<FileDownloadResponse[]> {
     const results: FileDownloadResponse[] = [];
     for (const filePath of paths) {
-      if ((await this.readDenial(filePath, 'downloadFiles')) === undefined) {
-        results.push(...(await super.downloadFiles([filePath])));
+      const scope = await this.readScope(filePath, 'downloadFiles');
+      if (scope.denial === undefined) {
+        results.push(await this.downloadOne(filePath, scope.realTarget));
       } else {
         noteSandboxDenial();
         results.push({ path: filePath, content: null, error: 'permission_denied' });
       }
     }
     return results;
+  }
+
+  /** {@link downloadFiles} 裡過了圍堵的一個檔。 */
+  private async downloadOne(
+    filePath: string,
+    realTarget: string | undefined,
+  ): Promise<FileDownloadResponse> {
+    const failed = (error: FileDownloadResponse['error']): FileDownloadResponse => ({
+      path: filePath,
+      content: null,
+      error,
+    });
+    try {
+      const handle = await open(
+        realTarget ?? this.resolveVirtual(filePath),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const info = await handle.stat();
+        if (info.isDirectory()) return failed('is_directory');
+        if (!info.isFile()) return failed('file_not_found');
+        return { path: filePath, content: await handle.readFile(), error: null };
+      } finally {
+        await handle.close();
+      }
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return failed('file_not_found');
+      if (code === 'EACCES') return failed('permission_denied');
+      if (code === 'EISDIR') return failed('is_directory');
+      return failed('invalid_path');
+    }
   }
 
   /**
