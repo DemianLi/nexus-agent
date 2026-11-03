@@ -3,7 +3,7 @@
  *
  * 每次模型呼叫都從日誌推一次歷史時，整份重算（{@link replayConversation}）的成本跟日誌長度成正比。這裡把推過的留著：
  * 同一份日誌只往後長，新的事件接著餵進 {@link ReplayFold}，推出來的那一串只往後接。事件怎麼變成訊息只有 `ReplayFold` 一份；
- * 收尾那幾步（套摘要與切點、濾空的助手訊息、套剪法與縮短）借 `conversation-replay.ts` 與兩份紀錄模組的同一支函式逐段做。
+ * 收尾那幾步（套摘要與切點、濾空的助手訊息、套剪法、縮短與圖片省略）借 `conversation-replay.ts` 與兩份紀錄模組的同一支函式逐段做。
  * 這裡管的是上一次推出來的哪些還能用。
  *
  * ## 什麼時候整份重建
@@ -14,6 +14,7 @@
  * - `compaction/summary`：換了摘要與切點，切點之前的都要拿掉。
  * - `compaction/prune`：記了新的剪法，對到的工具結果可能早就在串裡。
  * - `compaction/truncate-args`：記了新的參數縮短，對到的助手訊息可能早就在串裡。
+ * - `image/offload`：記了新的省略，對到的人話可能早就在串裡。
  * - `session/end-seed`：座標重設，`ReplayFold.raw` 整串換掉（套摘要、濾空的助手訊息）。
  *
  * 還在等結果的那一批（{@link ReplayFold.pendingMessages}）不進已推好的那一串：之後到的結果會換掉補上的那幾則，所以每次現算接在後面。
@@ -27,6 +28,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { ReplayFold, settledMessages } from './conversation-replay.js';
+import { applyImageOffload, recordImageOffloadInto } from './image-offload.js';
 import type { ConversationReplay, ReplayOptions } from './conversation-replay.js';
 import type { SessionEvent, SessionEventType } from './session-log.js';
 import { applyRecordedArgTruncation, recordArgTruncationsInto } from './tool-arg-truncation-log.js';
@@ -43,6 +45,7 @@ export const MODEL_HISTORY_REBUILD_EVENTS: ReadonlySet<SessionEventType> =
     'compaction/summary',
     'compaction/prune',
     'compaction/truncate-args',
+    'image/offload',
     'session/end-seed',
   ]);
 
@@ -60,6 +63,7 @@ export class ModelHistoryCache {
   #last: SessionEvent | undefined;
   readonly #prunes = new Map<string, RecordedPrune>();
   readonly #truncations = new Map<string, Map<string, RecordedArgTruncation>>();
+  readonly #offloads = new Map<number, Set<number>>();
   /** 推好、之後只會往後接的那一串；`undefined` 表示要整份重建。 */
   #stable: BaseMessage[] | undefined;
   /** `#stable` 用到 `ReplayFold.raw` 的第幾則為止。 */
@@ -88,6 +92,7 @@ export class ModelHistoryCache {
       if (this.#options.applyArgTruncations === true) {
         recordArgTruncationsInto(this.#truncations, event);
       }
+      if (this.#options.applyImageOffloads === true) recordImageOffloadInto(this.#offloads, event);
       if (MODEL_HISTORY_REBUILD_EVENTS.has(event.type)) this.#stable = undefined;
     }
     this.#fed = events.length;
@@ -110,16 +115,17 @@ export class ModelHistoryCache {
     this.#last = undefined;
     this.#prunes.clear();
     this.#truncations.clear();
+    this.#offloads.clear();
     this.#stable = undefined;
     this.#stableRaw = 0;
   }
 
-  /** 送出去的樣子：套剪法與縮短（兩者各管工具結果與助手訊息，互不相干）。 */
+  /** 送出去的樣子：套剪法、縮短與圖片省略（三者各管工具結果、助手訊息與人話，互不相干）。 */
   #asSent(message: BaseMessage): BaseMessage {
     const pruned = this.#prunes.size === 0 ? message : applyRecordedPrune(message, this.#prunes);
-    return this.#truncations.size === 0
-      ? pruned
-      : applyRecordedArgTruncation(pruned, this.#truncations);
+    const truncated =
+      this.#truncations.size === 0 ? pruned : applyRecordedArgTruncation(pruned, this.#truncations);
+    return this.#offloads.size === 0 ? truncated : applyImageOffload([truncated], this.#offloads)[0]!;
   }
 
   /** 把 `#stable` 接到 `ReplayFold.raw` 的尾巴；要重建就重建。切點還在那一批裡、建不起來時是 `undefined`。 */

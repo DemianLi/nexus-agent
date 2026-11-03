@@ -135,7 +135,7 @@ const offloadEvents = (events: readonly SessionEvent[]) =>
   events.filter((event): event is SessionEvent<'image/offload'> => event.type === 'image/offload');
 
 describe('超出圖片額度', () => {
-  it('第二張圖進來時記一筆 image/offload、最舊的那張在重送的請求裡變省略，之後每一步沿用、不再重記', async () => {
+  it('第二張圖進來時記一筆 image/offload（在那次 model/start 之前）、最舊的那張在送出的請求裡變省略，之後每一步沿用、不再重記', async () => {
     const run = await assemble([{ content: '一' }, { content: '二' }, { content: '三' }], 1);
 
     await run.pump.submit({ kind: 'message', text: '看這張', id: 'm1', attachments: [FIRST] });
@@ -156,11 +156,13 @@ describe('超出圖片額度', () => {
     const second = humans(run.model.prompts[1]!);
     expect(imageFlags(second[0])).toEqual([true]);
     expect(imageFlags(second[1])).toEqual([false]);
-    // 該叫的次數：第二輪被額度擋下一次（拋 `IMAGE_OFFLOAD_REQUIRED`），但那一次沒有送出任何東西——
-    // 不算一次模型呼叫（只有兩對 `model/start`／`model/end`、`model/end` 都沒帶 `outcome`）、不花重試額度（沒有 `llm/retry*`）。
+    // 決定在送出之前就下了（外層讀模型掛的額度先量）：adapter 一次都沒擋，決定落在第二次 `model/start` 之前，
+    // 從日誌推那次呼叫的歷史推得出它送出去的那一份。只有兩對 `model/start`／`model/end`、`model/end` 都沒帶 `outcome`，沒有 `llm/retry*`。
     expect(run.model.prompts).toHaveLength(2);
-    expect(run.model.rejectedImageRequests).toBe(1);
-    expect(events.filter((e) => e.type === 'model/start')).toHaveLength(2);
+    expect(run.model.rejectedImageRequests).toBe(0);
+    const starts = events.filter((e) => e.type === 'model/start');
+    expect(starts).toHaveLength(2);
+    expect(offloads[0]!.seq).toBeLessThan(starts[1]!.seq);
     expect(events.filter((e) => e.type === 'model/end').map((e) => e.data.outcome)).toEqual([
       undefined,
       undefined,

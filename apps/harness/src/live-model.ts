@@ -3,7 +3,6 @@ import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
 import {
-  assertImageBudget,
   beginAttemptReport,
   DEFAULT_STREAM_RETRYABLE_CODES,
   errorChain,
@@ -16,7 +15,7 @@ import {
   tagModelRoute,
   thrownMessage,
 } from '@nexus/core';
-import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
+import type { AttemptUsage, ImageBudget, LlmFailure, StreamFailure } from '@nexus/core';
 import { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE } from '@nexus/wire';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 import {
@@ -34,7 +33,6 @@ import { GuardedChatOpenAI } from './guarded-chat-openai.js';
 import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
 import type { RequestGate } from './request-gate.js';
-import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { resolveHarnessHome } from './harness-home.js';
@@ -1654,14 +1652,13 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
 export type LiveModelPurpose = 'session-title';
 
 /**
- * 這一列型錄條目的圖片額度檢查（#1270）：宣告了 `imageBudget` 且收圖才有；純文字模型的圖在投影裡就是文字佔位，不佔額度，不量。
- * 超額由 {@link assertImageBudget} 拋 `IMAGE_OFFLOAD_REQUIRED`，上層接住。額度跟著 adapter 走（照 dsh：額度住在 adapter 的部署設定），
- * 換模型就是換一顆 adapter、換一份額度。
+ * 這一列型錄條目要量的圖片額度（#1270）：宣告了 `imageBudget` 且收圖才有；純文字模型的圖在投影裡就是文字佔位，不佔額度，不量。
+ * 超額時上層先省略（`createImageOffloadMiddleware`），量不到的由 adapter 拋 `IMAGE_OFFLOAD_REQUIRED`、上層接住。額度跟著 adapter 走
+ * （照 dsh：額度住在 adapter 的部署設定），換模型就是換一顆 adapter、換一份額度。
  */
-export function imageBudgetGuard(entry: ModelEntry): RequestGuard | undefined {
+export function requestImageBudget(entry: ModelEntry): ImageBudget | undefined {
   const budget = entry.imageBudget;
-  if (budget === undefined || acceptsImages(entry) === 'rejects') return undefined;
-  return (messages) => assertImageBudget(messages, budget);
+  return budget === undefined || acceptsImages(entry) === 'rejects' ? undefined : budget;
 }
 
 /**
@@ -1796,7 +1793,7 @@ export function createLiveModel(
       ? new AttachmentChatOpenAI(
           fields,
           (messages) => projectAttachments(messages, attachments, acceptsImages(entry)),
-          imageBudgetGuard(entry),
+          requestImageBudget(entry),
           requestGate,
         )
       : requestGate !== undefined

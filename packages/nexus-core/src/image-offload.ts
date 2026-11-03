@@ -20,9 +20,12 @@
  *
  * - **adapter**：{@link assertImageBudget} 在請求轉換之前量留著的圖（`AttachmentChatOpenAI`、`ScriptedChatModel` 各自呼叫），超過就拋
  *   {@link ImageOffloadRequiredError}。額度來自型錄條目（`imageBudget`），跟著建出這顆 adapter 的那一列走——換模型就換了一顆 adapter、換了額度。
- * - **上層**：{@link createImageOffloadRecoveryMiddleware} 接住那個錯、挑最舊的 `offloadImages` 張寫成 `image/offload`、改好請求再送一次。
+ * - **上層，送出之前**：adapter 把額度掛在 {@link IMAGE_BUDGET_PROPERTY}，{@link createImageOffloadMiddleware} 在起訖紀錄器外側先量、
+ *   超額就挑最舊的幾張寫成 `image/offload`、標好再交下去，所以決定落在這次呼叫的 `model/start` 之前，adapter 量到的已經在額度內。
+ * - **上層，adapter 拋了之後**：{@link createImageOffloadRecoveryMiddleware} 接住那個錯、挑最舊的 `offloadImages` 張寫成 `image/offload`、改好請求再送一次。
  *   它排在起訖紀錄器、用量記錄器與串流重打的**內側**（`fold.ts` 的槽位表），所以失敗的那一次嘗試在它們看來從沒發生：同一次 `model/start`／`model/end`、
- *   同一次用量、沒有 `llm/retry`；整次重打的預算（`retryPolicy`，#1427 之後 SDK 層不重打）也沒碰到。
+ *   同一次用量、沒有 `llm/retry`；整次重打的預算（`retryPolicy`，#1427 之後 SDK 層不重打）也沒碰到。這一條的決定落在 `model/start` 之後，
+ *   讀方兩種位置都認（`offloadedImagesOf` 不看位置）。
  * - **沒東西可省就往外拋**：挑不到（沒有來源記號的圖、已經全省略）時原錯誤原樣往外，走一般失敗路徑——同 dsh「沒有可省略的就委派下游」。
  *
  * ## 登記的偏離
@@ -134,20 +137,34 @@ export function base64Length(bytes: number): number {
  */
 export function offloadedImagesOf(events: readonly SessionEvent[]): Map<number, Set<number>> {
   const offloaded = new Map<number, Set<number>>();
-  for (const event of events) {
-    if (event.type !== 'image/offload') continue;
-    const targets: unknown = event.data?.targets;
-    if (!Array.isArray(targets)) continue;
-    for (const target of targets as readonly Record<string, unknown>[]) {
-      const seq = target?.['seq'];
-      const indexes = target?.['imageIndexes'];
-      if (typeof seq !== 'number' || !Array.isArray(indexes)) continue;
-      const set = offloaded.get(seq) ?? new Set<number>();
-      for (const index of indexes) if (typeof index === 'number') set.add(index);
-      offloaded.set(seq, set);
-    }
-  }
+  for (const event of events) recordImageOffloadInto(offloaded, event);
   return offloaded;
+}
+
+/** {@link offloadedImagesOf} 的一顆：是 `image/offload` 就把它的決定併進 `offloaded`，其餘事件不動。 */
+export function recordImageOffloadInto(
+  offloaded: Map<number, Set<number>>,
+  event: SessionEvent,
+): void {
+  if (event.type !== 'image/offload') return;
+  const targets: unknown = event.data?.targets;
+  if (!Array.isArray(targets)) return;
+  for (const target of targets as readonly Record<string, unknown>[]) {
+    const seq = target?.['seq'];
+    const indexes = target?.['imageIndexes'];
+    if (typeof seq !== 'number' || !Array.isArray(indexes)) continue;
+    const set = offloaded.get(seq) ?? new Set<number>();
+    for (const index of indexes) if (typeof index === 'number') set.add(index);
+    offloaded.set(seq, set);
+  }
+}
+
+/**
+ * 這則訊息裡的圖能不能被省略：只有人話。選圖（{@link selectImagesToOffload}）與套用（{@link applyImageOffload}）都看這一支，
+ * 選得到的一定標得上。工具結果今天不帶圖片區塊（MCP 的圖在 `nexus-plugin-mcp` 的 `project-content.ts` 就換成文字）。
+ */
+export function imageOffloadable(message: BaseMessage): boolean {
+  return HumanMessage.isInstance(message);
 }
 
 /**
@@ -165,7 +182,7 @@ export function applyImageOffload(
   for (const [position, message] of messages.entries()) {
     const origin = imageOriginOf(message);
     const indexes = origin === undefined ? undefined : offloaded.get(origin);
-    if (indexes === undefined || !HumanMessage.isInstance(message)) continue;
+    if (indexes === undefined || !imageOffloadable(message)) continue;
     let imageIndex = 0;
     let touched = false;
     const content = contentBlocks(message).map((block) => {
@@ -224,7 +241,7 @@ export function requiredImageOffload(
 }
 
 /**
- * 從請求裡挑最舊的 `count` 張還留著的圖，寫成 `image/offload` 的 `targets`。**只挑有來源記號的訊息裡的**（沒有記號的定位不到、記不進日誌）。
+ * 從請求裡挑最舊的 `count` 張還留著的圖，寫成 `image/offload` 的 `targets`。**只挑有來源記號的人話裡的**（沒有記號的定位不到、記不進日誌；人話以外的見 {@link imageOffloadable}）。
  *
  * @returns 要記的 `targets`（照 `seq` 由小到大、位置嚴格遞增），與實際挑到幾張（可能少於 `count`）。
  */
@@ -236,6 +253,7 @@ export function selectImagesToOffload(
   let selected = 0;
   for (const message of messages) {
     if (selected >= count) break;
+    if (!imageOffloadable(message)) continue;
     const origin = imageOriginOf(message);
     for (const { imageIndex, block } of imageOccurrences(message)) {
       if (selected >= count) break;
@@ -290,6 +308,40 @@ export function assertImageBudget(messages: readonly BaseMessage[], budget: Imag
   if (need > 0) throw new ImageOffloadRequiredError(need);
 }
 
+/** adapter 上掛額度的那一格（{@link imageBudgetOf} 讀它）。 */
+export const IMAGE_BUDGET_PROPERTY = 'nexusImageBudget';
+
+/**
+ * 這顆模型宣告的圖片額度：adapter 的 {@link IMAGE_BUDGET_PROPERTY}；沒有回 `undefined`。額度跟著 adapter 走，換模型就換一份。
+ */
+export function imageBudgetOf(model: unknown): ImageBudget | undefined {
+  if (typeof model !== 'object' || model === null) return undefined;
+  const budget: unknown = (model as Record<string, unknown>)[IMAGE_BUDGET_PROPERTY];
+  return typeof budget === 'object' && budget !== null ? (budget as ImageBudget) : undefined;
+}
+
+/**
+ * 在 `messages` 上再省略最舊的 `count` 張：挑圖、併進日誌上已有的決定、標在副本上。標上之後留著的圖沒有變少（挑不到、或挑到的標不上）回 `undefined`，
+ * 這時什麼都不該記：**記了卻標不上的決定是日誌裡永遠沒有效果的一筆**。
+ */
+function decideOffload(
+  messages: readonly BaseMessage[],
+  events: readonly SessionEvent[],
+  count: number,
+): { readonly targets: ImageOffloadTarget[]; readonly next: readonly BaseMessage[] } | undefined {
+  const { targets, selected } = selectImagesToOffload(messages, count);
+  if (selected === 0) return undefined;
+  const decided = offloadedImagesOf(events);
+  for (const { seq, imageIndexes } of targets) {
+    const set = decided.get(seq) ?? new Set<number>();
+    for (const index of imageIndexes) set.add(index);
+    decided.set(seq, set);
+  }
+  const next = applyImageOffload(messages, decided);
+  if (retainedImages(next).length >= retainedImages(messages).length) return undefined;
+  return { targets, next };
+}
+
 /** 兩顆 middleware 要的東西。 */
 export interface ImageOffloadDeps {
   /** 註冊表的 `sessions` 通道：問「這次呼叫該讀、該寫哪一份日誌」。 */
@@ -303,10 +355,12 @@ function callConfigurable(request: unknown): { configurable?: unknown } {
 }
 
 /**
- * 每次叫模型之前：把日誌上已經省略的圖標在請求上，然後才把請求交下去。**沒有任何圖片區塊的請求原樣通過、不讀日誌。**
+ * 每次叫模型之前：把日誌上已經省略的圖標在請求上；這顆模型宣告了額度（{@link imageBudgetOf}）而還超出時，**在這裡下新的決定**：
+ * 挑最舊的幾張記一筆 `image/offload`、標上，然後才把請求交下去。**沒有任何圖片區塊的請求原樣通過、不讀日誌。**
  *
- * 位置：緊貼換模型之後、摘要器外面（`fold.ts` 的槽位表），所以摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
- * 只折進 root：圖由人送出、住在 root 的日誌上。**新的決定不在這裡下**，見 {@link createImageOffloadRecoveryMiddleware}。
+ * 位置：緊貼換模型之後、摘要器外面（`fold.ts` 的槽位表），所以摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求，
+ * 新的決定也落在這次呼叫的 `model/start` 之前：從日誌推這次呼叫的歷史，推得出它實際送出去的那一份。
+ * 只折進 root：圖由人送出、住在 root 的日誌上。挑不到可省略的就原樣交下去，adapter 照樣拋、{@link createImageOffloadRecoveryMiddleware} 接。
  */
 export function createImageOffloadMiddleware(deps: ImageOffloadDeps): AgentMiddleware {
   return createMiddleware({
@@ -317,7 +371,14 @@ export function createImageOffloadMiddleware(deps: ImageOffloadDeps): AgentMiddl
       const found = deps.sessions.forCall(callConfigurable(request));
       // 沒有日誌可讀（手搭的組裝沒接 session）就不標：決定記不下來，每一步都重算會讓同一張圖時有時無。
       if (found.kind !== 'ok') return handler(request);
-      const view = applyImageOffload(messages, offloadedImagesOf(found.log.events));
+      let view = applyImageOffload(messages, offloadedImagesOf(found.log.events));
+      const budget = imageBudgetOf(request.model);
+      const need = budget === undefined ? 0 : requiredImageOffload(view, budget);
+      const decided = need === 0 ? undefined : decideOffload(view, found.log.events, need);
+      if (decided !== undefined) {
+        found.log.append('image/offload', { targets: decided.targets });
+        view = decided.next;
+      }
       return handler(view === messages ? request : { ...request, messages: [...view] });
     },
   }) as unknown as AgentMiddleware;
@@ -329,6 +390,9 @@ export const IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME = 'nexusImageOffloadRecovery
 /**
  * dsh 的 `agent/request-error` 上 `compaction-image-offload` 的位置：接住 adapter 的 {@link ImageOffloadRequiredError}，挑最舊的
  * `offloadImages` 張寫一筆 `image/offload`，把這幾張標成已省略後**再送一次**。
+ *
+ * 宣告了額度的 adapter，決定已經由 {@link createImageOffloadMiddleware} 在送出前下好，這一顆接的是外層量不到的情形：adapter 沒有
+ * {@link IMAGE_BUDGET_PROPERTY}、或外層之後還有人往請求裡加了圖。這時決定落在這次呼叫的 `model/start` 之後。
  *
  * **排在起訖紀錄器、用量記錄器與串流重打的內側**：失敗的嘗試沒有送出任何東西，不該成為一次模型呼叫，也不該花重試額度（見檔頭）。
  * 一次最多迴圈到所有圖都省略為止——每圈至少多省一張，所以一定會停。挑不到（沒有來源記號的圖、已全省略）就把原錯誤往外拋。
@@ -347,20 +411,11 @@ export function createImageOffloadRecoveryMiddleware(deps: ImageOffloadDeps): Ag
           const found = deps.sessions.forCall(callConfigurable(current));
           if (found.kind !== 'ok') throw error;
           const messages = (current.messages ?? []) as readonly BaseMessage[];
-          const { targets, selected } = selectImagesToOffload(messages, required.offloadImages);
-          if (selected === 0) throw error;
-          // 先在副本上試：標得上才記。**記了卻標不上的決定是日誌裡永遠沒有效果的一筆**，而且再送一次只會原樣再拋。
-          const decided = offloadedImagesOf(found.log.events);
-          for (const { seq, imageIndexes } of targets) {
-            const set = decided.get(seq) ?? new Set<number>();
-            for (const index of imageIndexes) set.add(index);
-            decided.set(seq, set);
-          }
-          const next = applyImageOffload(messages, decided);
-          // 每圈都得真的少掉留著的圖，所以一定會停。
-          if (retainedImages(next).length >= retainedImages(messages).length) throw error;
-          found.log.append('image/offload', { targets });
-          current = { ...current, messages: [...next] };
+          // 每圈都得真的少掉留著的圖，所以一定會停；再送一次也只會原樣再拋的，不記。
+          const decided = decideOffload(messages, found.log.events, required.offloadImages);
+          if (decided === undefined) throw error;
+          found.log.append('image/offload', { targets: decided.targets });
+          current = { ...current, messages: [...decided.next] };
         }
       }
     },

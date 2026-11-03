@@ -89,7 +89,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage, readLoggedMessage } from './logged-message.js';
 import type { LoggedMessage } from './logged-message.js';
-import { stampImageOrigin } from './image-offload.js';
+import { applyImageOffload, offloadedImagesOf, stampImageOrigin } from './image-offload.js';
 import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent, storedEventDepth } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -170,6 +170,14 @@ export interface ReplayOptions {
    * 套用時 `origin` 交出的仍是套用**之前**那一則（物件身分對不上回傳串裡被換掉的那幾則）。
    */
   readonly applyArgTruncations?: boolean;
+  /**
+   * 把日誌上 `image/offload` 記過的省略套上去（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)），推出來的就是**模型實際收到的那一份**：
+   * 被省略的圖標成 `offloaded`。決定落在哪都認（`model/start` 之前或之後），只看它在不在 `events` 裡。理由與預設同 {@link applyPrunes}——
+   * 續接灌回 graph state 的那一串留原樣（請求端照日誌標上，見 `image-offload.ts` 的 `createImageOffloadMiddleware`）。
+   *
+   * 套用時 `origin` 交出的仍是套用**之前**那一則。
+   */
+  readonly applyImageOffloads?: boolean;
   /**
    * 每從一顆事件推出一則訊息就叫一次，交出那則訊息與那顆事件。補上的結果（{@link TOOL_OUTCOME_UNKNOWN_TEXT}
    * 那兩句）不是從事件推出來的，不叫。
@@ -508,6 +516,9 @@ export function replayConversation(
   }
   if (options.applyArgTruncations === true) {
     messages = applyRecordedArgTruncations(messages, recordedArgTruncationsOf(events));
+  }
+  if (options.applyImageOffloads === true) {
+    messages = applyImageOffload(messages, offloadedImagesOf(events));
   }
   return { kind: 'replayed', messages: [...messages] };
 }
