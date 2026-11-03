@@ -1,7 +1,7 @@
 /**
  * `read`、`edit`、`readRaw` 用路徑判完一般檔之後、開檔之前，路徑被換成 FIFO（[#2312](https://github.com/DemianLi/nexus-agent/issues/2312)、
  * [#2322](https://github.com/DemianLi/nexus-agent/issues/2322)）：開檔不卡住，用開好的把手判出不是一般檔，回跟路徑判斷同一句錯誤。
- * 換檔用 `beforeReadOpen` 接縫。`downloadFiles` 不先用路徑判，所以直接拿一個本來就是 FIFO 的檔來讀。卡住時這幾條會逾時。
+ * 換檔用 `beforeReadOpen` 接縫。`downloadFiles` 不先用路徑判一般檔，所以直接拿一個本來就是 FIFO 的檔來讀。卡住時這幾條會逾時。
  */
 
 import { execFileSync } from 'node:child_process';
