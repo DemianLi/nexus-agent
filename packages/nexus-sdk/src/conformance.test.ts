@@ -42,6 +42,54 @@ describe('一致性套件（驗收 G）', () => {
     expect(await checkConformance(target({ module: widgetConsumer() }))).toEqual([]);
   });
 
+  describe('schema-json（#2351）', () => {
+    const ok = {
+      name: 'ok',
+      parameters: { type: 'object', properties: { a: { type: 'string' } } },
+    };
+    const messagesOf = async (tools: readonly unknown[]) =>
+      (await checkConformance(target({ tools: () => tools })))
+        .filter((f) => f.check === 'schema-json')
+        .map((f) => f.message);
+
+    it('沒給 tools 就不跑；每個 parameters 都是根為 object 的無損 JSON 就過', async () => {
+      expect(await checksOf(target())).toEqual([]);
+      expect(await messagesOf([ok])).toEqual([]);
+    });
+
+    it.each([
+      ['沒有 parameters', { name: 'lc', schema: {} }, '沒有 parameters'],
+      ['帶函式', { name: 'f', parameters: { type: 'object', x: () => 1 } }, '不是無損 JSON'],
+      [
+        '帶 undefined',
+        { name: 'u', parameters: { type: 'object', x: undefined } },
+        '不是無損 JSON',
+      ],
+      ['帶 NaN', { name: 'nan', parameters: { type: 'object', x: Number.NaN } }, '不是無損 JSON'],
+      ['帶 Date', { name: 'd', parameters: { type: 'object', x: new Date(0) } }, '不是無損 JSON'],
+      ['帶 -0', { name: 'z', parameters: { type: 'object', x: -0 } }, '不是無損 JSON'],
+      [
+        '帶 Symbol 鍵',
+        { name: 'y', parameters: { type: 'object', [Symbol('k')]: 1 } },
+        '不是無損 JSON',
+      ],
+      [
+        '稀疏陣列',
+        { name: 's', parameters: { type: 'object', x: new Array<number>(2) } },
+        '不是無損 JSON',
+      ],
+      ['根不是 object', { name: 'r', parameters: { type: 'string' } }, "根不是 type: 'object'"],
+    ])('%s：紅，訊息指名工具', async (_, tool, expected) => {
+      const [message] = await messagesOf([ok, tool]);
+      expect(message).toContain(`工具 ${tool.name}`);
+      expect(message).toContain(expected);
+    });
+
+    it('一個工具都沒登記：紅（量不到）', async () => {
+      expect((await messagesOf([]))[0]).toContain('沒有登記任何工具');
+    });
+  });
+
   it('manifest 缺欄位：manifest 一格紅，訊息指名列與欄位', async () => {
     const { owner: _owner, ...rest } = widgetManifest();
     const failures = await checkConformance(

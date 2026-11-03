@@ -71,7 +71,7 @@
  *   root 那條的 `GOAL_TOOL_NO_SERVICE_MESSAGE`）拿掉了——lazy 之後服務一定建得出來，產品上一次組裝也只有一份 root。**工具層非 root 的那一句還在**
  *   （`GOAL_TOOL_NOT_ROOT_MESSAGE`，文字沿用原句）：直接帶子代理的 `checkpoint_ns` 呼叫真工具今天就走得到。
  *
- * 要的三個服務都由宿主在樹上提供：`tools`（`^1.1.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.1.0`）、
+ * 要的三個服務都由宿主在樹上提供：`tools`（`^2.0.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.1.0`）、
  * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/goal.fixture.ts` 給 harness 的測試，這個套件自己的測試用 `goal-shell.test.helper.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
  * 同一份 lazy 核心（{@link createGoalCore}），只有「這次呼叫的會話怎麼來」那一格不同。
  *
@@ -287,11 +287,11 @@ export function createGoalCore(config: GoalConfig, seams: GoalSeams = {}): GoalC
 export const name = 'goal';
 
 /**
- * 要的服務：`tools`（`^1.1.0`，`rootOnly` 與 `outputSchema` 從 `1.1.0` 起）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
+ * 要的服務：`tools`（`^2.0.0`，`rootOnly` 與 `outputSchema` 從 `1.1.0` 起）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
  * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^1.1.0'),
+  need(toolsToken, '^2.0.0'),
   need(commandsToken, '^1.1.0'),
   need(sessionLookupToken, '^1.0.0'),
 );
@@ -305,7 +305,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [{ token: goalsToken.name, version: goalsToken.version }],
   consumes: [
-    { token: toolsToken.name, range: '^1.1.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: commandsToken.name, range: '^1.1.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
   ],

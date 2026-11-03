@@ -307,13 +307,13 @@ describe('樹上這一列（#1466）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.2.0，要有 gate）與 fs（^2.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^2.0.0，要有 gate）與 fs（^2.0.0）；沒有 default 匯出', () => {
     expect(submitRecord.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.2.0' },
+      { token: 'tools', range: '^2.0.0' },
       { token: fsToken.name, range: '^2.0.0' },
     ]);
     expect(submitRecord.manifest.provides).toEqual([]);
-    expect(submitRecord.inject).toEqual({ tools: { range: '^1.2.0' }, fs: { range: '^2.0.0' } });
+    expect(submitRecord.inject).toEqual({ tools: { range: '^2.0.0' }, fs: { range: '^2.0.0' } });
     expect('default' in submitRecord).toBe(false);
   });
 
