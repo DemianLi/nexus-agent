@@ -144,6 +144,7 @@ import {
   SUBAGENT_STATUS,
 } from '@nexus/wire';
 import type { CustomFrameData, HostToolDeclaration, SubagentStatusPayload } from '@nexus/wire';
+import { HOST_TOOL_TIMEOUT_ERROR } from '@nexus/wire';
 
 import {
   BoundedQueue,
@@ -210,6 +211,7 @@ import {
   urlKeysOf,
 } from './mcp-elicitation.js';
 import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
+import { HOST_TOOL_TIMEOUT_REASON, isHostToolInterrupt } from './host-tools.js';
 import type { HostToolsSlot } from './host-tools.js';
 import { renderGoalRoundPrompt } from '@nexus/goal';
 import type {} from '@nexus/plugin-plan-mode';
@@ -482,7 +484,7 @@ export type PumpInput =
        * `url` 模式與子代理）：這一輪裡記一顆 `interrupt/system-answered`。人答的路不帶。
        */
       readonly systemAnswered?: {
-        readonly reason: SystemAnswerReason;
+        readonly reason: SystemAnswerReason | typeof HOST_TOOL_TIMEOUT_REASON;
         readonly keys: readonly string[];
       };
     }
@@ -575,6 +577,8 @@ export interface PendingInterrupt {
    * 廣播出去的是翻成問答卡的那一份，人的回覆要靠它翻回 adapter 要的 `{ responses }`（{@link answerElicitation}）。
    */
   readonly elicitation?: McpElicitation;
+  /** 這顆是宿主頁工具的（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：回應要合 `@nexus/wire` 的 `hostToolResponseProblem`。 */
+  readonly hostTool?: true;
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
@@ -1432,6 +1436,8 @@ export class ThreadPump {
   readonly #hostTools: HostToolsSlot | undefined;
   /** 排在佇列裡的句子各自帶的宿主頁工具宣告，鍵是佇列那一件的 id；開跑時取走。 */
   readonly #hostToolsByItem = new Map<string, readonly HostToolDeclaration[]>();
+  /** 等宿主頁回應的中斷 → 逾時的計時器（#2374）。第一次廣播時起算，答掉、收回、收線時清掉。 */
+  readonly #hostToolTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -2014,6 +2020,7 @@ export class ThreadPump {
       if (this.#pending.delete(input.interruptId)) {
         this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
       }
+      this.#clearHostToolTimer(input.interruptId);
     }
     return input.kind === 'resume'
       ? this.#schedule(() => this.#runOnce(input), true, { resumes: true })
@@ -2257,6 +2264,7 @@ export class ThreadPump {
       // 喚醒停住的那幾件（#637）。
       const withdrawn = [...this.#pending.keys()];
       this.#pending.clear();
+      for (const interruptId of withdrawn) this.#clearHostToolTimer(interruptId);
       for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
       this.#stopRequested = true;
       void this.#schedule(() => this.#withdraw(), true).catch(() => {
@@ -2394,6 +2402,8 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#closing.abort();
+    for (const interruptId of [...this.#hostToolTimers.keys()]) this.#clearHostToolTimer(interruptId);
+    this.#hostToolsByItem.clear();
     this.#unobserveLogs();
     this.#projectionOut.dispose();
     // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
@@ -2932,6 +2942,8 @@ export class ThreadPump {
       return 'steer-unavailable';
     }
     this.#spliceInbox({ target, start: index, removedCount: 1, inserted: [], outcome: 'canceled' });
+    // 不會照它自己開一輪了（刪掉、或轉成插話併進跑著的那一輪），它帶的宿主頁工具一起丟掉。
+    this.#hostToolsByItem.delete(itemId);
     if (action.kind === 'steer') {
       this.#spliceInbox({
         target: 'next-step',
@@ -3027,6 +3039,40 @@ export class ThreadPump {
       this.#warn?.(`[輪次] thread ${this.#threadId} ${failure.error.code}：${original}`);
     }
     return failure;
+  }
+
+  /**
+   * 宿主頁工具的中斷開始計時（#2374，設計 Q6）：到點還掛著就由系統代答 `{ ok: false, error: 'timeout' }`，這一輪接著跑，模型看到的是逾時。
+   * **只在第一次起算**：同一顆中斷再度出現（同 id 覆寫）不重算。走 {@link ThreadPump.submit}，排隊與日誌同人答的路，多記一顆
+   * `interrupt/system-answered`。
+   */
+  #armHostToolTimer(interruptId: string): void {
+    const slot = this.#hostTools;
+    if (slot === undefined || this.#hostToolTimers.has(interruptId)) return;
+    const timer = setTimeout(() => {
+      this.#hostToolTimers.delete(interruptId);
+      if (this.#closed || !this.#pending.has(interruptId)) return;
+      this.#warn?.(
+        `[宿主頁工具] thread ${this.#threadId}：中斷 ${interruptId} 等了 ${String(slot.timeoutMs)} ms 沒有回應，交回逾時`,
+      );
+      this.submit({
+        kind: 'resume',
+        interruptId,
+        response: { ok: false, error: HOST_TOOL_TIMEOUT_ERROR },
+        systemAnswered: { reason: HOST_TOOL_TIMEOUT_REASON, keys: [] },
+      }).catch(() => {
+        // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
+      });
+    }, slot.timeoutMs);
+    timer.unref?.();
+    this.#hostToolTimers.set(interruptId, timer);
+  }
+
+  #clearHostToolTimer(interruptId: string): void {
+    const timer = this.#hostToolTimers.get(interruptId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.#hostToolTimers.delete(interruptId);
   }
 
   /**
@@ -3636,12 +3682,15 @@ export class ThreadPump {
           },
         } as Event);
         // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
+        const hostTool = raw.params.namespace.length === 0 && isHostToolInterrupt(entry.value);
         this.#pending.set(entry.id, {
           interruptId: entry.id,
           actionCount: actionCountOf(entry.value),
           gatedTools: gatedToolsOf(entry.value, raw.params.namespace.length > 0),
           request,
+          ...(hostTool && { hostTool: true as const }),
         });
+        if (hostTool) this.#armHostToolTimer(entry.id);
         this.#tell({ type: 'input-requested', event: request });
         yield request;
       }

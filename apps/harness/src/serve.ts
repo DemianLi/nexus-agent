@@ -1513,7 +1513,10 @@ async function startServer(
             // 背景續行（#841）：只有 serve 有可以叫醒的一輪，見 `createCliAgent` 那一格。
             ...(profile === 'embed' && {
               profile,
-              hostTools: { exempt: hostToolsConfig.approval.exempt },
+              hostTools: {
+                exempt: hostToolsConfig.approval.exempt,
+                timeoutMs: hostToolsConfig.timeoutMs,
+              },
             }),
             ...(profile === 'full' &&
               backgroundSubagents.backgroundMode === 'continuable' && {

@@ -73,6 +73,7 @@ import type {
   PermissionCatalog,
 } from '@nexus/wire';
 import {
+  hostToolResponseProblem,
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
@@ -2974,6 +2975,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           `這顆中斷要 ${pending.actionCount} 筆決定，收到 ${Array.isArray(decisions) ? decisions.length : 0} 筆`,
         ),
       );
+    }
+    if (pending.hostTool === true) {
+      // 宿主頁工具（#2374）：形狀與上限不合就在這裡退回，那顆中斷照樣掛著，宿主頁可以再回一次。
+      const problem = hostToolResponseProblem(params.response);
+      if (problem !== undefined) {
+        return json(errorResponse(command.id, 'invalid_argument', problem));
+      }
     }
     if (pending.elicitation !== undefined) {
       // MCP 反問（#1098）：回覆要能翻成 adapter 的 `{ responses }`。翻不動就在這裡退回，**不是**讓 `start` 吞掉 pump 的拒絕——

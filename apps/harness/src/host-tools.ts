@@ -48,6 +48,9 @@ declare module '@nexus/core' {
 /** 宿主頁幾毫秒沒回就當失敗（設計 Q6）。 */
 export const HOST_TOOL_TIMEOUT_MS = 30_000;
 
+/** 逾時由系統代答時，`interrupt/system-answered` 的 `reason`。 */
+export const HOST_TOOL_TIMEOUT_REASON = 'host-tool-timeout';
+
 /**
  * 一條嵌入版 thread 的宿主頁工具：這一輪的宣告與逾時。組裝建一份，middleware 讀 {@link current}，pump 開一輪時寫它、照 {@link timeoutMs} 計時。
  */
