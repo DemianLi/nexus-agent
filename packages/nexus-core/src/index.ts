@@ -984,9 +984,15 @@ export {
 export {
   compareHistoryWithLog,
   compareProjections,
+  createHistoryFromLogMiddleware,
   createHistoryShadowMiddleware,
   createHistoryShadowTally,
+  createVisibleHistoryReader,
   eventsForModelCall,
+  HISTORY_FROM_LOG_MIDDLEWARE_NAME,
+  isHistoryFromLog,
+  markHistoryFromLog,
+  sentHistoryFromLog,
   HISTORY_SHADOW_KINDS,
   HISTORY_SHADOW_MIDDLEWARE_NAME,
   HISTORY_SOURCES,
@@ -994,6 +1000,7 @@ export {
   wireProjection,
 } from './history-shadow.js';
 export type {
+  HistoryFromLogOptions,
   HistoryShadowKind,
   HistoryShadowOptions,
   HistoryShadowOutcome,

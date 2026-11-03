@@ -436,7 +436,7 @@ export function createApprovalGateMiddleware(
 
       // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
       // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-      const raw = rawArgumentsOf(request);
+      const raw = rawArgumentsOf(request, sessions);
       const answer = (await interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [

@@ -1,6 +1,6 @@
 /**
- * 影子比對的兩個分開數的類別，各在一條會產生它的路徑上量（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）。
- * `log-derived-history` 的場景一個都打不到，所以在這裡另外造：
+ * 影子比對的兩個分開數的類別，各在一條會產生它的路徑上量（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）；同一條路徑再跑一次
+ * `history-source=log`，看送出去的是哪一份。`log-derived-history` 的場景一個都打不到，所以在這裡另外造：
  *
  * - `patch-closer`：一輪在工具開始前失敗，補結寫進了日誌、寫存檔點那一步失敗，下一輪由 `patchToolCallsMiddleware` 補。
  * - `image-offload-after-start`：adapter 沒掛 `IMAGE_BUDGET_PROPERTY`、送出才拋 `IMAGE_OFFLOAD_REQUIRED`，recovery 在 `model/start` 之後寫 offload；
@@ -20,13 +20,21 @@ import {
   compareHistoryWithLog,
   createHistoryShadowTally,
   IMAGE_BUDGET_PROPERTY,
+  isHistoryFromLog,
   ModelHistoryCache,
   SessionLog,
   TOOL_NOT_STARTED_TEXT,
   toBaseMessage,
   WIRE_EMPTY_TOOL_RESULT_TEXT,
+  wireProjection,
 } from '@nexus/core';
-import type { AttachmentRef, HistoryShadowOutcome, ImageBudget, PluginEntry } from '@nexus/core';
+import type {
+  AttachmentRef,
+  HistoryShadowOutcome,
+  HistorySource,
+  ImageBudget,
+  PluginEntry,
+} from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -50,6 +58,7 @@ async function assemble(
     readonly plugins?: readonly PluginEntry[];
     readonly recursionLimit?: number;
     readonly wrapAgent?: (agent: PumpAgent) => PumpAgent;
+    readonly source?: HistorySource;
   } = {},
 ) {
   const outcomes: HistoryShadowOutcome[] = [];
@@ -63,7 +72,7 @@ async function assemble(
     ...(options.recursionLimit !== undefined && { recursionLimit: options.recursionLimit }),
     // 有型錄才掛圖片那兩顆 middleware。
     modelLimits: () => ({ contextWindow: 32_768, maxOutputTokens: 4096 }),
-    historySource: 'shadow',
+    historySource: options.source ?? 'shadow',
     historyShadow: tally,
   });
   const agent = built.agent as unknown as PumpAgent;
@@ -137,6 +146,26 @@ describe('patch-closer', () => {
       prompt.filter((message) => message.getType() === 'tool').map((message) => message.text),
     ).not.toContain(TOOL_NOT_STARTED_TEXT);
   });
+
+  it('log：同一條路徑，送出去的補結是日誌上那句（#1827 D181）', async () => {
+    const model = new ScriptedChatModel({ turns: [TWO_CALLS, { content: '好。' }] });
+    const { pump, outcomes } = await assemble(model, {
+      plugins: [PINGS],
+      recursionLimit: FAILS_BEFORE_TOOLS,
+      wrapAgent: noUpdateState,
+      source: 'log',
+    });
+    await pump.submit({ kind: 'message', text: '跑' }).catch(() => undefined);
+    await pump.whenIdle();
+    await pump.submit({ kind: 'message', text: '再來' }).catch(() => undefined);
+    await pump.whenIdle();
+
+    expect(outcomes).toEqual([]);
+    const prompt = model.prompts.at(-1) ?? [];
+    expect(
+      prompt.filter((message) => message.getType() === 'tool').map((message) => message.text),
+    ).toEqual([TOOL_NOT_STARTED_TEXT, TOOL_NOT_STARTED_TEXT]);
+  });
 });
 
 describe('image-offload-after-start', () => {
@@ -187,6 +216,38 @@ describe('image-offload-after-start', () => {
     expect(tally.counts()).toMatchObject({ match: 2, 'image-offload-after-start': 1, other: 0 });
   });
 
+  it('log：重送那次推導帶上 model/start 之後的 offload，圖不會再送一次，送出去的跟 state 相同', async () => {
+    const run = async (source: HistorySource) => {
+      const model = new UndeclaredBudgetModel({
+        turns: [{ content: '一' }, { content: '二' }],
+        imageBudget: { maxImages: 1 },
+      });
+      const { pump } = await assemble(model, { source });
+      await pump.submit({
+        kind: 'message',
+        text: '看這張',
+        id: 'm1',
+        attachments: [imageRef('a', 'one.png')],
+      });
+      await pump.whenIdle();
+      await pump.submit({
+        kind: 'message',
+        text: '再看這張',
+        id: 'm2',
+        attachments: [imageRef('b', 'two.png')],
+      });
+      await pump.whenIdle();
+      return model;
+    };
+    const state = await run('state');
+    const log = await run('log');
+    expect(log.rejectedImageRequests).toBe(1);
+    expect(log.prompts).toHaveLength(2);
+    expect(log.prompts.map((prompt) => prompt.map(wireProjection))).toEqual(
+      state.prompts.map((prompt) => prompt.map(wireProjection)),
+    );
+  });
+
   it('凍結夾具 v52-image-offload-after-start：重送那一刻推出來的，跟下一輪推出來的同一段相同', async () => {
     const fixture = fileURLToPath(
       new URL('./fixtures/session-format/v52-image-offload-after-start/', import.meta.url),
@@ -223,6 +284,40 @@ describe('image-offload-after-start', () => {
     expect(compareHistoryWithLog(request, log, new ModelHistoryCache(options))).toEqual({
       kind: 'image-offload-after-start',
     });
+  });
+});
+
+describe('記進日誌的那幾顆查得到 log', () => {
+  /**
+   * pre-step 宿主與重複提醒在載入插件時就拿走 `registry.sessions`，fold 開頭才標。插件 `apply` 拿到的就是那一個物件：
+   * 標記要落在它身上，記不進去時才會拋（`pre-step-middleware.test.ts`、`repeat-reminder.test.ts` 量拋不拋）。
+   */
+  it.each([
+    ['log', true],
+    ['shadow', false],
+    ['state', false],
+  ] as const)('%s：插件拿到的 registry.sessions 標記是 %s', async (source, marked) => {
+    let seen: object | undefined;
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      checkpointer: new MemorySaver(),
+      summarization: false,
+      observationPolicy: false,
+      plugins: [
+        {
+          plugin: {
+            name: 'peek',
+            apply(registry) {
+              seen = registry.sessions;
+            },
+          },
+        },
+      ],
+      historySource: source,
+    });
+    cleanups.push(() => built.dispose());
+    expect(seen).toBeDefined();
+    expect(isHistoryFromLog(seen!)).toBe(marked);
   });
 });
 

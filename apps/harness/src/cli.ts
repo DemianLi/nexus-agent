@@ -144,9 +144,10 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
-  --history-source <state|shadow>
+  --history-source <state|shadow|log>
                        模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 state）
                        shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
+                       log：送日誌推出來的；推不出來這一輪就失敗
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）

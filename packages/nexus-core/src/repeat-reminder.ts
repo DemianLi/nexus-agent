@@ -71,6 +71,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
+import { isHistoryFromLog } from './history-shadow.js';
 import { toLoggedMessage } from './logged-message.js';
 import { isMachineMessage } from './langchain-message-adapter.js';
 import type { NexusPlugin } from './plugin.js';
@@ -458,7 +459,10 @@ export function createRepeatReminder(
   }) as unknown as AgentMiddleware;
 }
 
-/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份，都不記；寫不進去原錯往外拋（#1665）。 */
+/**
+ * 把提醒記成 `user/message`。沒接會話不記；認不出屬於哪一份，`log` 時拋（記不進去的提醒模型看不到，#2355），其餘不記、照送；
+ * 寫不進去原錯往外拋（#1665）。
+ */
 function recordReminders(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
   configurable: unknown,
@@ -466,7 +470,12 @@ function recordReminders(
 ): void {
   if (sessions === undefined) return;
   const found = sessions.forCall({ configurable });
-  if (found.kind !== 'ok') return;
+  if (found.kind !== 'ok') {
+    if (isHistoryFromLog(sessions)) {
+      throw new Error(`重複提醒找不到這次呼叫的日誌（${found.kind}）：history-source=log 不能照送`);
+    }
+    return;
+  }
   for (const message of messages) {
     // 寫不進去原錯往外拋，見上面。
     found.log.append('user/message', {

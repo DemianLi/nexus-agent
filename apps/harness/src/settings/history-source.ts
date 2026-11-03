@@ -7,6 +7,7 @@
  * - `state`（出廠）：把 LangGraph state 原樣送給模型，什麼都不掛。
  * - `shadow`：送的仍是 state，另在 root 緊貼請求快照外側拿從日誌推出來的歷史比一次；不是 `match` 的那幾次 serve 走伺服器日誌的
  *   `history-shadow` logger（debug 等級），CLI 印在標準錯誤；計數留在組裝點拿到的 tally。都不寫進會話日誌。
+ * - `log`：在同一格拿從日誌推出來的歷史換掉要送的那一串；找不到日誌、推不出來，這次呼叫就失敗，不退回 state。
  *
  * **關得掉**：關掉就是沒人講，組裝點落回 `state`，跟這一列寫 `state` 同一個結果。
  *

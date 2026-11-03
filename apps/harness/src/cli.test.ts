@@ -86,13 +86,14 @@ describe('parseCliArgs', () => {
     }
   });
 
-  it('--history-source 只收 state 與 shadow，省略即不設（由組裝點照清單那一列）', () => {
+  it('--history-source 只收 state、shadow、log，省略即不設（由組裝點照清單那一列）', () => {
     expect(parseCliArgs(['--history-source', 'shadow']).historySource).toBe('shadow');
     expect(parseCliArgs(['--history-source', 'state']).historySource).toBe('state');
+    expect(parseCliArgs(['--history-source', 'log']).historySource).toBe('log');
     expect(parseCliArgs([])).not.toHaveProperty('historySource');
-    for (const raw of ['log', 'Shadow', '']) {
+    for (const raw of ['Log', 'Shadow', '']) {
       expect(() => parseCliArgs([`--history-source=${raw}`])).toThrow(
-        /--history-source 只收 state、shadow[\s\S]*用法/,
+        /--history-source 只收 state、shadow、log[\s\S]*用法/,
       );
     }
   });
