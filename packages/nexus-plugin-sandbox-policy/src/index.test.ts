@@ -12,7 +12,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createHostServicesPlugin, loadPlugins, REFERENCE_RULE } from '@nexus/core';
+import { createHostServicesPlugin, createRegistry, loadPlugins, REFERENCE_RULE } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 
 import {
   CONTAINED_FILESYSTEM,
@@ -24,6 +26,11 @@ import {
 } from './index.js';
 import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
+
+/** 載入一份清單。升級工具是 `NexusTool`，註冊時要組裝點交的轉接器（產品路徑上是 `apps/harness` 的 `agent-factory.ts`）。 */
+function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
+  return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
+}
 
 describe('升級可達表（#1827 D23）', () => {
   // 第 2 條「不加寬的請求不問人」的另一面：升得到、會去問人的每一格，都嚴格更寬。
@@ -69,7 +76,7 @@ describe('唯讀共用參考區那一句（#1775）', () => {
 
   it('掛上之後 middleware 講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
     for (const withFence of [true, false]) {
-      const { registry } = await loadPlugins([
+      const { registry } = await load([
         createHostServicesPlugin({
           sharedWorkspace: '/shared',
           ...(withFence && {
@@ -150,17 +157,15 @@ describe('政策那句話本身', () => {
 describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
   it('有圍堵卻沒有 sandboxPolicy → 載入失敗，訊息指名服務與要它的 plugin', async () => {
     const withFence = createHostServicesPlugin({ fsContainment: CONTAINED_FILESYSTEM });
-    await expect(loadPlugins([withFence, createSandboxPolicyPlugin()])).rejects.toThrow(
+    await expect(load([withFence, createSandboxPolicyPlugin()])).rejects.toThrow(
       '卻沒有 sandboxPolicy 服務',
     );
-    await expect(loadPlugins([withFence, createSandboxPolicyPlugin()])).rejects.toThrow(
-      'sandbox-policy',
-    );
+    await expect(load([withFence, createSandboxPolicyPlugin()])).rejects.toThrow('sandbox-policy');
   });
 
   it('有圍堵、組裝點提供了就掛得上去，而且拿到的是同一顆控制器', async () => {
     const controller = new SandboxModeController('read-only');
-    const { registry } = await loadPlugins([
+    const { registry } = await load([
       createHostServicesPlugin({
         fsContainment: CONTAINED_FILESYSTEM,
         sandboxPolicy: { controller, rootDir: '/workspace' },
@@ -177,14 +182,14 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
   });
 
   it('沒有圍堵：載得起來、只貢獻那一句（一顆 middleware），不要控制器', async () => {
-    const { registry } = await loadPlugins([createSandboxPolicyPlugin()]);
+    const { registry } = await load([createSandboxPolicyPlugin()]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
     expect(registry.middleware.list().map((entry) => entry.value)).toHaveLength(1);
   });
 
   it('沒有圍堵時就算交了 sandboxPolicy 也不掛控制器那半（訊號是 fsContainment，不是控制器在不在）', async () => {
     const controller = new SandboxModeController('read-only');
-    const { registry } = await loadPlugins([
+    const { registry } = await load([
       createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: '/workspace' } }),
       createSandboxPolicyPlugin(),
     ]);

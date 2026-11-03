@@ -91,6 +91,7 @@ import {
   type ToolResultPruneConfig,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/system-prompt';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
@@ -886,6 +887,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     plugins,
     createRegistry({
       validateSubagent: options.validateSubagent ?? subagentDefinitionValidator(undefined),
+      adaptTool: toLangChainTool,
     }),
     optional === undefined
       ? {}

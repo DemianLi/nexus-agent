@@ -21,13 +21,14 @@
  * （`permission-presets` 同屬 C 類）接著釘。翻掉的那天看到這條紅，是遷移成功的訊號，不是壞了。
  */
 
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import * as systemPromptModule from '@nexus/plugin-system-prompt';
 import {
   CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import type { SystemPromptAssembly } from '@nexus/system-prompt';
@@ -67,21 +68,24 @@ async function systemPromptOf(wrap: Wrap): Promise<{ systemPrompt: unknown }> {
 
 /** 掛一份 sandbox-policy，控制器由宿主交進來——**一份掛載只能交一顆**，這正是共用時的處境。 */
 async function mountSandboxPolicy(mode: 'read-only' | 'workspace-write'): Promise<Wrap> {
-  const { registry } = await loadPlugins([
-    {
-      plugin: {
-        name: 'sandbox-host',
-        apply(host) {
-          host.services.provide('fsContainment', CONTAINED_FILESYSTEM);
-          host.services.provide('sandboxPolicy', {
-            controller: new SandboxModeController(mode),
-            rootDir: '/tmp/unused',
-          });
+  const { registry } = await loadPlugins(
+    [
+      {
+        plugin: {
+          name: 'sandbox-host',
+          apply(host) {
+            host.services.provide('fsContainment', CONTAINED_FILESYSTEM);
+            host.services.provide('sandboxPolicy', {
+              controller: new SandboxModeController(mode),
+              rootDir: '/tmp/unused',
+            });
+          },
         },
       },
-    },
-    createSandboxPolicyPlugin(),
-  ]);
+      createSandboxPolicyPlugin(),
+    ],
+    createRegistry({ adaptTool: toLangChainTool }),
+  );
   const entry = registry.middleware
     .list()
     .find((item) => (item.value.middleware as { name?: string }).name === 'nexusSandboxPolicy');

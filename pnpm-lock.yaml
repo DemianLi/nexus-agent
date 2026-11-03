@@ -574,6 +574,12 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1060,9 +1066,6 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -1076,6 +1079,18 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1180,9 +1195,6 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -1193,6 +1205,15 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
