@@ -113,7 +113,28 @@ async function expectDerivedHistory(
   expect(observedOf(verdicts), `${name}：已知差異清單與觀察不一致${explain(verdicts)}`).toEqual(
     known,
   );
+  expectShadowAgrees(name, run);
   return verdicts;
+}
+
+/**
+ * 影子比對（#2355）在產品路徑上：每一次主呼叫各比一次，沒有一次落在 `other`。補結的句子與 `model/start` 之後才省略的圖分開數，
+ * 不算差異。CLI 數不到次數，只看它印出來的那幾行裡沒有 `other`。
+ */
+function expectShadowAgrees(name: string, run: Run): void {
+  if (run.shadow !== undefined) {
+    expect(run.shadow.other, `${name}：影子比對落在 other 的次數`).toBe(0);
+    expect(
+      Object.values(run.shadow).reduce((sum, n) => sum + n, 0),
+      `${name}：影子比對的次數（每一次主呼叫一次）`,
+    ).toBe(run.mainBodies.length);
+  }
+  if (run.shadowLines !== undefined) {
+    expect(
+      run.shadowLines.filter((line) => line.startsWith('[歷史比對] other')),
+      `${name}：CLI 印出的影子比對差異`,
+    ).toEqual([]);
+  }
 }
 
 const big = (char: string, n: number) => char.repeat(n);

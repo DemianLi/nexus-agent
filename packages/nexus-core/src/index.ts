@@ -979,7 +979,28 @@ export {
   createPatchToolCallsMiddleware,
   PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
   patchDanglingToolCalls,
+  patchedToolCallText,
 } from './patch-tool-calls.js';
+export {
+  compareHistoryWithLog,
+  compareProjections,
+  createHistoryShadowMiddleware,
+  createHistoryShadowTally,
+  eventsForModelCall,
+  HISTORY_SHADOW_KINDS,
+  HISTORY_SHADOW_MIDDLEWARE_NAME,
+  HISTORY_SOURCES,
+  WIRE_EMPTY_TOOL_RESULT_TEXT,
+  wireProjection,
+} from './history-shadow.js';
+export type {
+  HistoryShadowKind,
+  HistoryShadowOptions,
+  HistoryShadowOutcome,
+  HistoryShadowSink,
+  HistoryShadowTally,
+  HistorySource,
+} from './history-shadow.js';
 export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {

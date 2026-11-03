@@ -23,6 +23,8 @@ import type {
   ProjectionRegistrationPoint,
   FeedbackService,
   InvariantError,
+  HistoryShadowSink,
+  HistorySource,
   InvariantTap,
   ModelRoute,
   PluginEntry,
@@ -229,6 +231,11 @@ export interface CliInvocation {
    * `--resume` 呼叫，靠的就是每次重給。
    */
   readonly recursionLimit?: number;
+  /**
+   * `--history-source`（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：模型歷史從哪裡來。在場時贏過 `#settings/history-source`
+   * 那一列，三態見 `agent-factory.ts` 的 `historyFor`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
+   */
+  readonly historySource?: HistorySource;
   /**
    * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
    *
@@ -808,6 +815,8 @@ export interface CreateCliAgentSession {
    * 省略就是不記，測試與 eval 不會寫到任何人的家目錄。
    */
   readonly invariantTap?: InvariantTap;
+  /** `shadow` 時比對結果的去處，原樣轉給 `createNexusAgent`。serve 一台一份；CLI 一次行程一份。 */
+  readonly historyShadow?: HistoryShadowSink;
   /**
    * 核准政策的 session 開關。[`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
    * CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
@@ -868,7 +877,7 @@ export interface CreateCliAgentSession {
 export async function createCliAgent(
   invocation: Pick<
     CliInvocation,
-    'live' | 'workspace' | 'sandbox' | 'approvalPolicy' | 'recursionLimit'
+    'live' | 'workspace' | 'sandbox' | 'approvalPolicy' | 'recursionLimit' | 'historySource'
   > & {
     /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
@@ -974,6 +983,7 @@ export async function createCliAgent(
   {
     onInvariantViolation,
     invariantTap,
+    historyShadow,
     approvals,
     rootSeed,
     tokenAnchorBook,
@@ -1269,6 +1279,8 @@ export async function createCliAgent(
     ...(backend !== undefined && { backend }),
     ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
+    ...(invocation.historySource !== undefined && { historySource: invocation.historySource }),
+    ...(historyShadow !== undefined && { historyShadow }),
     systemPrompt: SYSTEM_PROMPT,
     ...(invocation.profile !== undefined && { profile: invocation.profile }),
     // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；

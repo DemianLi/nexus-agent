@@ -43,6 +43,7 @@ import {
   assertInvariantSelection,
   createFsService,
   createHostServicesPlugin,
+  createHistoryShadowTally,
   createInvariantRunner,
   createSessionRunner,
   compileSubagentGraph,
@@ -66,6 +67,9 @@ import {
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
+  type FoldOptions,
+  type HistoryShadowSink,
+  type HistorySource,
   type InvariantTap,
   type DroppedEntry,
   type FileToolsOptions,
@@ -115,6 +119,8 @@ import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
+import { DEFAULT_HISTORY_SOURCE, HISTORY_SOURCE_SERVICE } from './settings/history-source.js';
+import { toolResultAsSeen } from './conversation-restore.js';
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   MAX_PARALLEL_TOOL_CALLS_SERVICE,
@@ -453,6 +459,15 @@ export interface CreateNexusAgentOptions {
    * tap 拋了一律吞掉。為第二刀的決策量測用，第二刀若選全部拿掉，這個選項跟著拿掉。
    */
   readonly invariantTap?: InvariantTap;
+  /**
+   * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），CLI 的 `--history-source`。由 {@link historyFor}
+   * 的三態決定：明著傳的 > `#settings/history-source` 那一列 > {@link DEFAULT_HISTORY_SOURCE}。
+   */
+  readonly historySource?: HistorySource;
+  /**
+   * `shadow` 時比對結果的去處。serve 一台一份、每條 thread 傳同一份；省略時這次組裝自己建一份不往外講的計數。
+   */
+  readonly historyShadow?: HistoryShadowSink;
 }
 
 /**
@@ -698,6 +713,30 @@ function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtoco
 function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOptions): number {
   if (options.recursionLimit !== undefined) return options.recursionLimit;
   return registry.services.get(RECURSION_LIMIT_SERVICE) ?? DEFAULT_RECURSION_LIMIT;
+}
+
+/**
+ * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：三態同 {@link recursionLimitFor}（明著傳的 > 那一列 > {@link DEFAULT_HISTORY_SOURCE}）。
+ * 這一列關得掉，但不需要第四態：關掉與沒有那一列都落回 `state`。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 交給 fold 的 `history`。
+ */
+function historyFor(
+  registry: PluginRegistry,
+  options: CreateNexusAgentOptions,
+): NonNullable<FoldOptions['history']> {
+  const source =
+    options.historySource ??
+    registry.services.get(HISTORY_SOURCE_SERVICE) ??
+    DEFAULT_HISTORY_SOURCE;
+  if (source === 'state') return { source };
+  return {
+    source,
+    sink: options.historyShadow ?? createHistoryShadowTally(),
+    toolResultAsSeen,
+  };
 }
 
 /**
@@ -960,6 +999,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
       ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
+      history: historyFor(registry, options),
     });
     // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
     // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。

@@ -26,7 +26,13 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { dirname, join } from 'node:path';
-import { approvalPolicyOnResume, errorChain, TokenAnchorBook } from '@nexus/core';
+import {
+  approvalPolicyOnResume,
+  createHistoryShadowTally,
+  errorChain,
+  TokenAnchorBook,
+} from '@nexus/core';
+import type { HistoryShadowTally } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
 import { isThreadsPath, withoutEmbedPrefix } from './embed-profile.js';
 import type { ThreadProfile } from './embed-profile.js';
@@ -429,6 +435,11 @@ export interface RunningServe {
    * 而且那一段時間 serve 還在收新回合，跟「不讓壞掉的 serve 存活」衝突。預設（省略）照舊等時間窗，SIGTERM／SIGINT 走這條。
    */
   close(options?: { readonly drain?: boolean }): Promise<void>;
+  /**
+   * 影子比對（#2355）的計數：一台 server 一份，每條 thread 的組裝傳同一份；`#settings/history-source` 是 `shadow` 的 thread 才會數。
+   * 不是 `match` 的那幾次另走伺服器日誌的 `history-shadow` logger（debug 等級）。
+   */
+  readonly historyShadow: HistoryShadowTally;
 }
 
 /**
@@ -894,6 +905,10 @@ async function startServer(
   );
   const invariantTap =
     invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
+  const historyShadowLogger = serverLogOut.logger('history-shadow');
+  const historyShadow = createHistoryShadowTally((outcome) => {
+    historyShadowLogger.debug(`${outcome.kind}：${outcome.detail ?? ''}`);
+  });
   // **組 agent 經 Cordis 樹上的相容層**（#1401）：根在試組之前才建，前面每一個錯誤的時刻與字都不變；每條 thread 用同一份服務。
   const assembly = await root.boot('serve', {
     plugins,
@@ -1480,6 +1495,7 @@ async function startServer(
                 invariantLogger.error(error.message);
               },
               ...(invariantTap !== undefined && { invariantTap }),
+              historyShadow,
             },
           },
         );
@@ -1864,6 +1880,7 @@ async function startServer(
   return {
     url: server.url,
     authenticatedUrl,
+    historyShadow,
     close: async (options) => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
