@@ -126,7 +126,8 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import type { ThreadForkSeed, WireHandler } from './wire-handler.js';
+import type { ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
+import type { ControlledHandler } from './conversation-control.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
@@ -421,7 +422,36 @@ export interface RunServeOptions {
    * 產品路徑不設，照 `thread-capacity` 的 `sessionLogBudgetMiB` 開一本（不寫就自動算）。serve 自己的存放處與引用候選逐格開的都記在這一本。
    */
   readonly sessionLogBudget?: SessionLogBudget;
+  /**
+   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（綁 port、帶登入）。
+   * 見 {@link ConversationProcessMode}。
+   */
+  readonly conversation?: ConversationProcessMode;
 }
+
+/**
+ * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§九 C1）：同一套組裝，
+ * 但一個行程只放一條 thread，前台經 Unix socket 轉送。跟 serve 不同的只有這幾處：
+ *
+ * - 不拿 home 鎖：同一個 home 底下有前台與許多對話行程。整台只做一次的事（清工具結果暫存、寫 `plugin-snapshot.json`）也不做，歸前台。
+ * - 聽 {@link socketPath}，不綁 port；只接 wire，沒有網頁、探針、指標，也不接 WebSocket 升級（前台把它轉成一般請求）。
+ * - 不起內容搜尋（跨 thread，歸前台）。不印登入網址。
+ * - handler 只認 {@link boundThread} 那一條、不自己逐出（什麼時候收由監督行程決定），一輪的邊緣交給 {@link onTurn}。
+ *
+ * 登入只在前台（設計 §4-2）：對話行程不建 `BrowserAuth`、不讀瀏覽器會話密鑰，驗證用 {@link auth}，信任來自 socket 所在目錄的權限。
+ */
+export interface ConversationProcessMode {
+  readonly socketPath: string;
+  /** socket 上的驗證：`peer-socket-auth.ts` 的 `openPeerSocketAuth` 驗過 {@link socketPath} 所在目錄之後交的那一支。 */
+  readonly auth: WireAuth;
+  readonly boundThread: () => string | undefined;
+  readonly onTurn: (threadId: string, phase: 'begin' | 'end') => void;
+}
+
+/** serve 聽哪裡：綁 port 的帶登入，聽 socket 的是對話行程。 */
+type ServeListening =
+  | { readonly kind: 'port'; readonly auth: BrowserAuth }
+  | { readonly kind: 'socket'; readonly mode: ConversationProcessMode };
 
 export interface RunningServe {
   readonly url: string;
@@ -440,6 +470,8 @@ export interface RunningServe {
    * 不是 `match` 的那幾次另走伺服器日誌的 `history-shadow` logger（debug 等級）。
    */
   readonly historyShadow: HistoryShadowTally;
+  /** 對話行程模式（{@link RunServeOptions.conversation}）才有：控制面要問的那支 handler。 */
+  readonly conversationHandler?: ControlledHandler;
 }
 
 /**
@@ -571,7 +603,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 讀 `.env`、裝代理、遷移變更紀錄、清暫存、寫快照、建密鑰、讀釘選檔，這些都碰 home。第二台在這裡就被拒，
   // 一個檔都沒寫。起不來的每一條路都放鎖，正常 `close()` 在最後一步放（下面）。
   // 平台拿不到 flock 時照常起來、講一聲（Q1 (a)，同會話寫租約）；`EACCES` 這類其餘的錯原樣往外拋。
-  const homeLock = await acquireHomeLock(resolveHarnessHome(env), options.homeLock);
+  // 對話行程不拿（#2338）：同一個 home 底下有前台與許多對話行程，整台只做一次的事歸前台。
+  const homeLock =
+    options.conversation === undefined
+      ? await acquireHomeLock(resolveHarnessHome(env), options.homeLock)
+      : { unavailable: '對話行程不拿 home 鎖' };
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`；它的 logger 是伺服器日誌的出口（#1534），所以**在第一行日誌之前**就要在：
   // 樹的 context 是第一次叫才建（`plugin-tree.ts` 的 `context()`），這裡先叫。exporter 要讀完清單才知道設定，
   // 晚掛上時先回放緩衝，所以排在它前面的幾行（home 鎖、代理、變更紀錄遷移）一樣印得出來；起不來的路徑掛出廠設定（`mountDefault`）。
@@ -588,7 +624,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       ...(contained && { contained }),
     });
     serverLog = createServerLog(await root.tree.context(), log);
-    if ('unavailable' in homeLock) {
+    if ('unavailable' in homeLock && options.conversation === undefined) {
       serverLog.serve.warn(
         `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve：${homeLock.unavailable}`,
       );
@@ -807,12 +843,14 @@ async function startServer(
   // 歸根所有，server 不等它就開始服務；卸載根（`close()` 與起不來的那幾條路）時等它收斂。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, env);
-  launchToolResultStashSweep(
-    await root.tree.context(),
-    stashRoot,
-    stashConfig.cleanupPeriodDays,
-    warn,
-  );
+  if (options.conversation === undefined) {
+    launchToolResultStashSweep(
+      await root.tree.context(),
+      stashRoot,
+      stashConfig.cleanupPeriodDays,
+      warn,
+    );
+  }
   // 外溢層的預算（#719）：server 的性質，解一次；省略就是不掛。
   const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   // 背景續行子代理（#841）：server 的性質，解一次；`one-shot` 就不傳，回到基座的 `task`。
@@ -994,7 +1032,7 @@ async function startServer(
     log,
     warn,
     publishSnapshot: async (snapshot) => {
-      await snapshotWriter.publish(snapshot);
+      if (options.conversation === undefined) await snapshotWriter.publish(snapshot);
     },
     ...(liveVersionKey !== undefined && {
       liveVersions: { sign: (signature: string) => hmacHashOf(signature, liveVersionKey) },
@@ -1002,7 +1040,9 @@ async function startServer(
   });
   // 啟動那一份先寫下去（檔在 server 起來之前就在），摘要留到下面啟動那幾行印完再記，不插在網址前面。
   const startupSnapshot = threadPluginList.snapshot();
-  const startupSnapshotWritten = await snapshotWriter.publish(startupSnapshot, { announce: false });
+  const startupSnapshotWritten =
+    options.conversation === undefined &&
+    (await snapshotWriter.publish(startupSnapshot, { announce: false }));
   // 啟動那幾行裡的「plugin：」不列掉了的列，兩次掉的都不列。
   const droppedEntries = new Set([
     ...loaded.dropped.flatMap((drop) => drop.entry ?? []),
@@ -1010,13 +1050,22 @@ async function startServer(
   ]);
   // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
   const telemetrySharing = trial.telemetrySharing;
-  const auth = new BrowserAuth(
-    await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
-    browserSession.maxAgeDays,
-  );
+  // 對話行程不建（#2338）：登入只在前台，它用入口驗過目錄的那一支；也就不讀瀏覽器會話密鑰。
+  const listening: ServeListening =
+    options.conversation === undefined
+      ? {
+          kind: 'port',
+          auth: new BrowserAuth(
+            await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
+            browserSession.maxAgeDays,
+          ),
+        }
+      : { kind: 'socket', mode: options.conversation };
+  const auth: WireAuth = listening.kind === 'port' ? listening.auth : listening.mode.auth;
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
-  const metricsToken = opsConfig.metrics.enabled
+  const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
+  const metricsToken = metricsEnabled
     ? await loadOrCreateMetricsToken(opsConfig.metrics.tokenFile ?? metricsTokenFile)
     : undefined;
   const webDist = options.webDist ?? resolveWebDist();
@@ -1126,15 +1175,16 @@ async function startServer(
         });
 
   // 一台 server 一份索引：對帳與查詢在它裡面排隊。沒接落盤時照樣建，搜尋回空（沒有東西可搜）。
-  const threadSearch = threadSearchMounted
-    ? new ThreadSearch({
-        cwd,
-        openAt: threadSearchConfig.openAt,
-        ...(sessionStore !== undefined && { store: sessionStore }),
-        // 活的 thread 讀記憶體（#1599）：表在下面建的 handler 手上，搜尋只經 handler 進來，叫到時它一定在了（同 `OpsMetrics` 那一支）。
-        liveThreads: () => handler.liveThreads(),
-      })
-    : undefined;
+  const threadSearch =
+    threadSearchMounted && options.conversation === undefined
+      ? new ThreadSearch({
+          cwd,
+          openAt: threadSearchConfig.openAt,
+          ...(sessionStore !== undefined && { store: sessionStore }),
+          // 活的 thread 讀記憶體（#1599）：表在下面建的 handler 手上，搜尋只經 handler 進來，叫到時它一定在了（同 `OpsMetrics` 那一支）。
+          liveThreads: () => handler.liveThreads(),
+        })
+      : undefined;
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
   await threadSearch?.open();
 
@@ -1205,7 +1255,7 @@ async function startServer(
     warn,
   });
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
-  const opsMetrics = opsConfig.metrics.enabled
+  const opsMetrics = metricsEnabled
     ? new OpsMetrics(() => ({
         threads: handler.threadCount() - handler.closingCount(),
         threadsClosing: handler.closingCount(),
@@ -1226,12 +1276,17 @@ async function startServer(
     maxThreads: threadCapacity.maxThreads,
     // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著、而且不是 0 才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；啟動時
     // 印一行講是哪一種（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
-    ...(idleEvictMs === undefined
+    ...(idleEvictMs === undefined || options.conversation !== undefined
       ? {}
       : {
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
+    // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
+    ...(options.conversation !== undefined && {
+      boundThread: options.conversation.boundThread,
+      onTurn: options.conversation.onTurn,
+    }),
     // 哪些事走它見 `WireHandlerOptions.warn`。
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
@@ -1725,13 +1780,17 @@ async function startServer(
   let server: WireServer;
   try {
     server = await startWireServer({
-      handler: routeBySurface(
-        handler,
-        createWebStaticHandler({ distRoot: webDist, auth }),
-        opsEndpoints,
-      ),
-      mux: handler,
-      port: invocation.port,
+      ...(listening.kind === 'port'
+        ? {
+            handler: routeBySurface(
+              handler,
+              createWebStaticHandler({ distRoot: webDist, auth: listening.auth }),
+              opsEndpoints,
+            ),
+            mux: handler,
+            port: invocation.port,
+          }
+        : { handler, socketPath: listening.mode.socketPath }),
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
       // 方法與 pathname 一起記（#1536）：管理者才對得回是哪一個請求；pathname 不含 query，權杖不進日誌。
@@ -1761,8 +1820,13 @@ async function startServer(
 
   // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
-  const authenticatedUrl = auth.authenticatedUrl(server.url);
-  log(`nexus-agent 在 ${authenticatedUrl}`);
+  const authenticatedUrl =
+    listening.kind === 'port' ? listening.auth.authenticatedUrl(server.url) : server.url;
+  log(
+    listening.kind === 'port'
+      ? `nexus-agent 在 ${authenticatedUrl}`
+      : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
+  );
   // 印的是這一次真的用的那一個（#545），不是預設值。
   log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
   log(
@@ -1881,6 +1945,7 @@ async function startServer(
     url: server.url,
     authenticatedUrl,
     historyShadow,
+    ...(options.conversation !== undefined && { conversationHandler: handler }),
     close: async (options) => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
@@ -1939,6 +2004,8 @@ export interface ServeProcessLifecycle {
   attach(running: RunningServe): void;
   /** 解除 fail-loud 的兩個 handler（訊號的不解除，行程結束前都在）。 */
   uninstall(): void;
+  /** 跟 `SIGTERM` 同一條收尾、回 0。對話行程的 stdin 讀到 EOF 走這裡（`conversation-process.ts`）。 */
+  stop(): void;
 }
 
 /**
@@ -2002,6 +2069,9 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       running = next;
     },
     uninstall,
+    stop() {
+      shutdown.interrupt(0);
+    },
   };
 }
 
