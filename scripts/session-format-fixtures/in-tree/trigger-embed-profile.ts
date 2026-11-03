@@ -22,6 +22,20 @@ const root = sessions.root;
 const first = { label: 'PUMP-07' };
 const queued = { label: 'PUMP-08' };
 const steer = { label: 'PUMP-09' };
+/** 模型那一次的回覆。 */
+const reply = (id: string, content: string) => ({
+  message: {
+    type: 'ai' as const,
+    data: {
+      content,
+      tool_calls: [],
+      invalid_tool_calls: [],
+      additional_kwargs: {},
+      response_metadata: {},
+      id,
+    },
+  },
+});
 
 root.append('turn/start', { kind: 'message', text: '它的溫度正常嗎', context: first });
 root.append('model/start', {});
@@ -37,6 +51,7 @@ root.append('inbox/spliced', {
   start: 0,
   inserted: [{ id: 'run-steer', text: '順便看它', source: { kind: 'user' }, context: steer }],
 });
+root.append('assistant/message', reply('fixture-reply-1', '我看一下 PUMP-07。'));
 root.append('model/end', {});
 root.append('inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] });
 root.append('user/message', {
@@ -52,12 +67,14 @@ root.append('user/message', {
   source: { kind: 'user' },
 });
 root.append('model/start', {});
+root.append('assistant/message', reply('fixture-reply-2', 'PUMP-09 也正常。'));
 root.append('model/end', {});
 root.append('turn/end', {});
 // 排著的那句輪到了。
 root.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
 root.append('turn/start', { kind: 'message', text: '它排第二', context: queued });
 root.append('model/start', {});
+root.append('assistant/message', reply('fixture-reply-3', 'PUMP-08 正常。'));
 root.append('model/end', {});
 root.append('turn/end', {});
 await persistence.dispose();
