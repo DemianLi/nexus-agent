@@ -7,7 +7,7 @@
  * 例如 `session/end-seed` 換掉的串跟後面新進的訊息落在同一次，逐顆推碰不到。
  * 比的是每則訊息 {@link toLoggedMessage} 之後的 JSON，也就是日誌記訊息的那個形狀（含 `additional_kwargs`）。
  *
- * 前四節各對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
+ * 前五節各對著 {@link MODEL_HISTORY_REBUILD_EVENTS} 的一種：那一種事件之後還有新的訊息進來，漏了重建就推錯。
  * 出貨寫入器寫的夾具另在 `apps/harness` 的 `model-history-fixtures.test.ts` 比。
  */
 
@@ -30,7 +30,11 @@ function serialized(replay: ConversationReplay): unknown {
     : replay;
 }
 
-const SENT: ModelHistoryOptions = { applyPrunes: true, applyArgTruncations: true };
+const SENT: ModelHistoryOptions = {
+  applyPrunes: true,
+  applyArgTruncations: true,
+  applyImageOffloads: true,
+};
 
 /** 逐個前綴、每三顆、每顆 `model/start` 之前各比一輪，兩組選項各一次。 */
 function expectEveryPrefix(events: readonly SessionEvent[]): void {
@@ -206,6 +210,38 @@ describe('compaction/truncate-args：早就在串裡的助手訊息要換', () =
   });
 });
 
+describe('image/offload：早就在串裡的人話要換', () => {
+  it('省略的是前一輪的圖，之後還有一輪', () => {
+    const image = {
+      type: 'image' as const,
+      attachmentId: `sha256:${'a'.repeat(64)}`,
+      mediaType: 'image/png' as const,
+      bytes: 300,
+      width: 4,
+      height: 3,
+    };
+    const log = new SessionLog('history');
+    const first = log.append('turn/start', { kind: 'message', text: '看', attachments: [image] });
+    log.append('model/start', {});
+    log.append('assistant/message', { message: reply('看到了') });
+    log.append('model/end', {});
+    log.append('turn/end', {});
+    chat(log, '再', '好的');
+    log.append('image/offload', { targets: [{ seq: first.seq, imageIndexes: [0] }] });
+    chat(log, '三', '嗯');
+    expectEveryPrefix(log.events);
+    // 套了才是送出去的那一份：第一輪那張圖標成已省略；不套就原樣。
+    const flagOf = (options: ModelHistoryOptions) => {
+      const derived = new ModelHistoryCache(options).derive(log.events);
+      if (derived.kind !== 'replayed') throw new Error(derived.reason);
+      const content = derived.messages[0]!.content as { type: string; offloaded?: boolean }[];
+      return content.find((block) => block.type === 'nexus-image')?.offloaded;
+    };
+    expect(flagOf(SENT)).toBe(true);
+    expect(flagOf({})).toBeUndefined();
+  });
+});
+
 describe('session/end-seed：座標重設、整串換掉', () => {
   it('空的助手訊息在 end-seed 濾掉，之後的新輪接在換過的串後面', () => {
     const log = new SessionLog('history');
@@ -310,11 +346,12 @@ describe('快取的邊界', () => {
     );
   });
 
-  it('重建事件恰好是這四種', () => {
+  it('重建事件恰好是這五種', () => {
     expect([...MODEL_HISTORY_REBUILD_EVENTS].sort()).toEqual([
       'compaction/prune',
       'compaction/summary',
       'compaction/truncate-args',
+      'image/offload',
       'session/end-seed',
     ]);
   });

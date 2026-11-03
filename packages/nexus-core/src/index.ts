@@ -283,12 +283,14 @@ export {
   createImageOffloadMiddleware,
   createImageOffloadRecoveryMiddleware,
   hasImageBlock,
+  IMAGE_BUDGET_PROPERTY,
   IMAGE_OFFLOAD_MIDDLEWARE_NAME,
   IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME,
   IMAGE_OFFLOAD_REQUIRED_CODE,
   ImageOffloadRequiredError,
   imageOffloadRequiredOf,
   IMAGE_ORIGIN_KEY,
+  imageBudgetOf,
   imageOccurrences,
   imageOriginOf,
   offloadedImagesOf,
@@ -344,6 +346,8 @@ export type {
   UnreplayableReason,
 } from './conversation-replay.js';
 export {
+  isBlankContent,
+  isBlankContentArray,
   isEmptyAssistant,
   replayConversation,
   TOOL_NOT_STARTED_TEXT,

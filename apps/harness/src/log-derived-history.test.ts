@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createEchoPlugin } from './echo.fixture.js';
+import { replayConversation } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 import {
@@ -450,6 +451,29 @@ describe('手挑組裝的邊界（#1300）', () => {
       expect(JSON.stringify(body.messages)).not.toContain('"role":"assistant","content":""');
       expect(assistantNameLeaks(body.messages)).toEqual([]);
     }
+  }, 60_000);
+
+  /**
+   * 只有空白的回覆：`fetch` 層整則不送，推導端用同一支判準（`@nexus/core` 的 `isBlankContent`）也丟。
+   * 比 wire 量不到推導端：推導結果轉 wire 也走同一層 `fetch`，空白那則在那裡被拿掉。所以另外比推出來的則數。
+   */
+  it('S13 只有空白的回覆：推導丟掉的與線上不送的是同一則，逐位元組相同', async () => {
+    const script: Script = (i) => (i === 0 ? { content: ' \n' } : { content: '好' });
+    const run = await runAssembly('一\n二\n/exit\n', script, []);
+    // 前提：日誌上真的有一則只有空白的助手訊息、後面還有請求。
+    expect(
+      run.events.some(
+        (e) => e.type === 'assistant/message' && JSON.stringify(e.data.message).includes('" \\n"'),
+      ),
+    ).toBe(true);
+    expect(run.mainBodies.length).toBeGreaterThan(1);
+    const verdicts = await compareToLog(run.events, run.mainBodies);
+    expect(observedOf(verdicts), explain(verdicts)).toEqual([]);
+    const last = run.events.filter((e) => e.type === 'model/start').at(-1)!;
+    const replay = replayConversation(run.events.filter((e) => e.seq < last.seq));
+    expect(replay.kind === 'replayed' ? replay.messages.length : -1).toBe(
+      run.mainBodies.at(-1)!.messages.length - 1, // 線上那份第一則是系統訊息，推導結果不含它
+    );
   }, 60_000);
 });
 

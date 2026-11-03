@@ -34,9 +34,8 @@
  *
  * ## 空的助手訊息推導時丟掉，但切點的座標仍算它
  *
- * 沒有內容也沒有工具呼叫的助手訊息（撞輸出上限那一步，`max-tokens.ts` 清掉它的呼叫之後什麼都不剩）不進推出來的串，
- * 照 dsh 的 `deriveEventMessage`（`packages/core/session/src/surface.ts:136-142`，`d7432673886`）：內容長度為 0 就回 `null`，
- * 理由是它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
+ * 沒有內容也沒有工具呼叫的助手訊息（{@link isEmptyAssistant}；撞輸出上限那一步，`max-tokens.ts` 清掉它的呼叫之後什麼都不剩）不進推出來的串：
+ * 它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
  *
  * **但它在 graph state 裡有一格**，壓縮的 `messagesBefore` 與 `cutoffIndex` 是 state 的座標，所以丟掉要等切完：
  * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settledMessages} 把摘要與切點套完之後才濾掉。
@@ -61,6 +60,10 @@
  * （`packages/core/session/src/repair.ts`，`c291e79`）補：記過 `tool/call` 的說結果不明、先確認外部狀態，
  * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
  * 那個位置也會有一則（基座補的），一則對一則照樣成立。
+ *
+ * **配不到任何呼叫的結果（孤兒）照送**：推導只把日誌上有的推出來，不替它判對錯；今天送出前丟掉孤兒的是請求端的 `patchToolCallsMiddleware`。補結與孤兒的規則在推導端只有這一份：
+ * 補的是 {@link ReplayFold.pendingMessages}（句子在 {@link closer}），孤兒在 `tool/result` 那一支。請求端的 `patchToolCallsMiddleware`
+ * 是另一套（句子不同、孤兒丟掉）。TODO(#2355)：推導成為唯一來源時拿掉它，孤兒由哪一層擋要一起定。
  *
  * **續接時當掉那一輪的補結寫回日誌**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
 dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
@@ -89,7 +92,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage, readLoggedMessage } from './logged-message.js';
 import type { LoggedMessage } from './logged-message.js';
-import { stampImageOrigin } from './image-offload.js';
+import { applyImageOffload, offloadedImagesOf, stampImageOrigin } from './image-offload.js';
 import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent, storedEventDepth } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -101,17 +104,35 @@ import {
 import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
 
 /**
- * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。
- *
- * 內容空＝字串長度 0 或區塊陣列長度 0（照 dsh `content.length === 0`）。**只帶推理區塊的不算空**——
- * 它在 BaseMessage 這一層有區塊；送出時 `fetch` 層會另外收掉（`live-model.ts` 的 `withEmptyAssistantContent`），
- * 那一條不在這張卡。
+ * 助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。空白算空；有任何一段不是文字（推理、圖）就不算空。
+ * 不是陣列（字串、`null`）一律不算。
+ */
+export function isBlankContentArray(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return !content.some((part: unknown) => {
+    if (typeof part !== 'object' || part === null) return true;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    if (type !== 'text') return true;
+    return typeof text === 'string' && text.trim().length > 0;
+  });
+}
+
+/** 助手訊息的 content 是不是一個字都沒有，**不分形狀**：`null`、缺席、空白字串、{@link isBlankContentArray}。 */
+export function isBlankContent(content: unknown): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content.trim() === '';
+  return isBlankContentArray(content);
+}
+
+/**
+ * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。內容空的判法是 {@link isBlankContent}，與送出時 `fetch` 層整則拿掉的是同一支
+ * （`live-model.ts` 的 `normalizeEmptyAssistantContent`）。**只帶推理區塊的不算空**：它在 BaseMessage 這一層有一段不是文字；轉成 wire 時推理不進 `content`，`fetch` 層照樣整則拿掉。
  */
 export function isEmptyAssistant(message: BaseMessage): boolean {
   return (
     AIMessage.isInstance(message) &&
     (message.tool_calls ?? []).length === 0 &&
-    message.content.length === 0
+    isBlankContent(message.content)
   );
 }
 
@@ -170,6 +191,14 @@ export interface ReplayOptions {
    * 套用時 `origin` 交出的仍是套用**之前**那一則（物件身分對不上回傳串裡被換掉的那幾則）。
    */
   readonly applyArgTruncations?: boolean;
+  /**
+   * 把日誌上 `image/offload` 記過的省略套上去（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)），推出來的就是**模型實際收到的那一份**：
+   * 被省略的圖標成 `offloaded`。決定落在哪都認（`model/start` 之前或之後），只看它在不在 `events` 裡。理由與預設同 {@link applyPrunes}——
+   * 續接灌回 graph state 的那一串留原樣（請求端照日誌標上，見 `image-offload.ts` 的 `createImageOffloadMiddleware`）。
+   *
+   * 套用時 `origin` 交出的仍是套用**之前**那一則。
+   */
+  readonly applyImageOffloads?: boolean;
   /**
    * 每從一顆事件推出一則訊息就叫一次，交出那則訊息與那顆事件。補上的結果（{@link TOOL_OUTCOME_UNKNOWN_TEXT}
    * 那兩句）不是從事件推出來的，不叫。
@@ -508,6 +537,9 @@ export function replayConversation(
   }
   if (options.applyArgTruncations === true) {
     messages = applyRecordedArgTruncations(messages, recordedArgTruncationsOf(events));
+  }
+  if (options.applyImageOffloads === true) {
+    messages = applyImageOffload(messages, offloadedImagesOf(events));
   }
   return { kind: 'replayed', messages: [...messages] };
 }
