@@ -88,6 +88,7 @@ type Trigger =
   | 'turn-feedback-tail'
   | 'summary-missing'
   | 'open-turn'
+  | 'carried-turn'
   | 'workspace-root'
   | 'approval-policy-missing'
   | 'two-file-layout'
@@ -136,6 +137,14 @@ const TARGETS: readonly Target[] = [
     rev: 'v0.5.19',
     version: 14,
     triggers: ['subagent-header'],
+    ownReplay: true,
+  },
+  // `v14` 已凍，「續接時輪還開著、end-seed 後面還有事件」另放一份：同一個 tag，28 以前出過貨的最後一版。
+  {
+    name: 'v14-carried-turn',
+    rev: 'v0.5.19',
+    version: 14,
+    triggers: ['carried-turn'],
     ownReplay: true,
   },
   // 今天的工作樹寫的是格式 52 的世代檔，所以 v49 釘在最後寫它的那個 commit（沒出過貨）。
@@ -422,6 +431,19 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             lifecyclesAfterResume: lifecycles([...events, ...closers]),
           };
         });
+      case 'carried-turn':
+        return ['crashed-in-model-resumed', 'crashed-in-tool-resumed', 'resumed-new-turn'].map(
+          (session) => {
+            const events = readEvents(directory, session);
+            const closers = interruptedTurnClosers(events);
+            return {
+              edge: 29,
+              session,
+              computedBy: 'today',
+              typesAfterResume: [...events, ...closers].map((event) => event.type),
+            };
+          },
+        );
       case 'workspace-root': {
         const header = readRawHeader<StoredSessionHeader>(directory, 'cli');
         let resumeWithWorkspace = 'allowed';
