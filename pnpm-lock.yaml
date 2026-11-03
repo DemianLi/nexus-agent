@@ -552,9 +552,6 @@ importers:
       '@nexus/timeout':
         specifier: workspace:*
         version: link:../nexus-timeout
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
       deepagents:
         specifier: ~1.13.1
         version: 1.13.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)))(@langchain/langgraph-sdk@1.12.1(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(langsmith@0.9.0(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))
@@ -577,6 +574,12 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1069,9 +1072,6 @@ importers:
       '@nexus/plugin-commands':
         specifier: workspace:*
         version: link:../nexus-plugin-commands
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
       langchain:
         specifier: ^1.5.10
         version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
@@ -1082,9 +1082,15 @@ importers:
       '@langchain/langgraph':
         specifier: ^1.4.13
         version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1192,9 +1198,6 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
-      '@nexus/tools':
-        specifier: workspace:*
-        version: link:../nexus-tools
       langchain:
         specifier: ^1.5.10
         version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
@@ -1202,9 +1205,15 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

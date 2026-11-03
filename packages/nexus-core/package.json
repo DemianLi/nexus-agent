@@ -29,6 +29,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/sdk": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "js-tiktoken": "^1.0.21",
@@ -41,7 +43,6 @@
     "@langchain/langgraph": "^1.4.13",
     "@nexus/brand": "workspace:*",
     "@nexus/timeout": "workspace:*",
-    "@nexus/tools": "workspace:*",
     "deepagents": "~1.13.1",
     "diff": "^9.0.0",
     "gpt-tokenizer": "^4.0.0",
@@ -49,5 +50,13 @@
     "undici": "^8.12.3",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/tools": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@nexus/tools": {
+      "optional": true
+    }
   }
 }
