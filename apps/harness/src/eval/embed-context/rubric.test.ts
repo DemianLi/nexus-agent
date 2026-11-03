@@ -40,7 +40,9 @@ describe('judge', () => {
   });
 
   it('編號裡的連字號是不換行連字號或全形的，照樣認得', () => {
-    expect(judge(q('a2'), said('「它」指的是目前選取的 AHU\u20113 空調箱。濾網堵塞時……'))).toBe('ok');
+    expect(judge(q('a2'), said('「它」指的是目前選取的 AHU\u20113 空調箱。濾網堵塞時……'))).toBe(
+      'ok',
+    );
     expect(judge(q('a2'), said('你選取的是 AHU－3。濾網堵塞時……'))).toBe('ok');
   });
 
