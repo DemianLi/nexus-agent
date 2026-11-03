@@ -25,6 +25,7 @@ import {
   SESSION_FORMAT_CATALOG,
   SESSION_FORMAT_EDGES,
   SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
   SessionFormatUnsupportedError,
   createSessionFormatCatalog,
   currentMessageFeedback,
@@ -84,6 +85,7 @@ interface Expected {
     readonly replay?: Omit<Replay, 'computedBy'>;
     readonly closers?: readonly unknown[];
     readonly lifecyclesAfterResume?: readonly unknown[];
+    readonly typesAfterResume?: readonly string[];
     readonly workspaceRootRecorded?: boolean;
     readonly resumeWithWorkspace?: string;
     readonly summaries?: readonly { readonly beforeCall: boolean }[];
@@ -354,6 +356,14 @@ describe.each(names)('夾具 %s', (name) => {
         await resumed.stored.close();
         expect(lifecycles(resumed.events)).toEqual(trigger.lifecyclesAfterResume);
       }
+      if (trigger.typesAfterResume !== undefined) {
+        // 今天的續接在舊寫入器留下的 end-seed 後面補結（輪已由新一輪收掉的不補），再唯讀打開一次：讀盤的關係驗證要讀得過（#1597）。
+        const store = openJsonlSessionStore({ directory: await copied(name, `${name}-reread`) });
+        const resumed = await resumeClosingInterruptedTurn(store, trigger.session);
+        await resumed.stored.close();
+        const reread = await (await store.open(trigger.session, 'read')).read();
+        expect(reread.map((event) => event.type)).toEqual(trigger.typesAfterResume);
+      }
       if (trigger.summaries !== undefined) {
         expect(
           events.flatMap((event) =>
@@ -382,6 +392,32 @@ describe.each(names)('夾具 %s', (name) => {
       }
     });
   }
+});
+
+describe('輪已收的 end-seed 之後，配舊呼叫的 tool/result 拒開（#1597）', () => {
+  // 停在核准點的那一輪收了、呼叫沒配到；跨重啟再也配不到（`session-relationships.ts` 的 end-seed）。這條只讓檢查更嚴，
+  // 拿掉它任何合法日誌都不會紅，所以用 v0.5.19 寫的前段接一顆不該有的結果守。
+  it('paused-resumed 接一顆 callId 對到 end-seed 前那顆呼叫的 tool/result：唯讀打開拒成 SessionCorruptionError', async () => {
+    const store = openJsonlSessionStore({ directory: await copied('v14-carried-turn') });
+    const resumed = await store.resume('paused-resumed');
+    await resumed.stored.append([
+      {
+        type: 'tool/result',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { callId: 'paused-resumed-call', isError: false },
+      },
+    ]);
+    await resumed.stored.close();
+
+    const opened = await store.open('paused-resumed', 'read');
+    const caught: unknown = await opened.read().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(SessionCorruptionError);
+    expect((caught as Error).message).toContain('tool-result-without-call');
+  });
 });
 
 describe('對不到回覆的舊評分（#1850）：評分清單不回，離線掃描照算', () => {
@@ -457,6 +493,7 @@ describe('規則（驗收 D）', () => {
       [9, 'if (logged === undefined) {'],
       [10, "if ('messageId' in stored) {"],
       [13, 'if (header.workspaceRoot === undefined) return;'],
+      [29, 'if (open) {'],
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
