@@ -3,7 +3,7 @@
  */
 
 import { statSync } from 'node:fs';
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,15 @@ describe('openPeerSocketAuth', () => {
     const file = join(directory, 'file');
     await writeFile(file, '');
     await expect(openPeerSocketAuth(join(file, 'wire.sock'))).rejects.toThrow();
+  });
+
+  it('指向 0700 目錄的符號連結：起不來', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'peer-socket-'));
+    const real = join(directory, 'real');
+    await mkdir(real, { mode: 0o700 });
+    const link = join(directory, 'link');
+    await symlink(real, link);
+    await expect(openPeerSocketAuth(join(link, 'wire.sock'))).rejects.toThrow(/符號連結也不算/u);
   });
 
   it.skipIf(foreignPrivate === undefined)('擁有者不是自己：起不來', async () => {

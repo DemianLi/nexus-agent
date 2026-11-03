@@ -1,3 +1,7 @@
+/**
+ * 聽 Unix socket（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：對話行程不綁 port，前台經 socket 連進來。
+ */
+
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -6,8 +10,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
-
-/** 聽 Unix socket（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：對話行程不綁 port，前台經 socket 連進來。 */
 
 let running: WireServer | undefined;
 let directory: string | undefined;

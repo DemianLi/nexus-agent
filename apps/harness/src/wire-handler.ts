@@ -631,7 +631,7 @@ export interface WireHandlerOptions {
   /**
    * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：這個行程只放哪一條 thread，`undefined` 是還沒綁。
    * **給了就只認這一條**：路徑帶別的 threadId 的請求在認證之後、碰任何東西之前就回 `thread_not_bound`；`threadFor` 也擋，所以分叉出來的子 thread
-   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（分叉由前台轉送，設計 §4-3）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是今天的 serve。
+   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（分叉要由前台轉送，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是不限 thread（一般 serve 的情形）。
    */
   readonly boundThread?: () => string | undefined;
   /**
@@ -3486,7 +3486,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤，同 dsh「leaves no stored residue」；寫不進去就收掉、不登記，回 `unknown_error`。
    */
   async function handleFork(sourceId: string, id: number, body: unknown): Promise<Response> {
-    // 對話行程（#2338）只放一條 thread：分叉出來的新 thread 要另起一個行程，由前台轉給來源的對話行程做（設計 §4-3，C3）。
+    // 對話行程（#2338）只放一條 thread，不在這裡分叉：分叉要由前台轉給來源的對話行程、新 thread 另起一個行程（設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。
     if (options.boundThread !== undefined) {
       return json(
         errorResponse(id, 'not_supported', '對話行程不在自己這裡分叉：新 thread 要另起一個行程'),

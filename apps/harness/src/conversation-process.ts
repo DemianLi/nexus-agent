@@ -1,5 +1,5 @@
 /**
- * 對話行程的入口（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §四、§五-2）：
+ * 對話行程的入口（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §四、§5-2）：
  * 監督行程每條 thread 起一個，`node conversation-process.js --socket <path> [serve 的旗標…]`。
  *
  * - wire 只聽 `--socket` 那個 Unix socket，驗證用 {@link openPeerSocketAuth}：socket 所在目錄要是自己的、權限 0700，否則起不來。
@@ -16,8 +16,9 @@ import { ConversationControl } from './conversation-control.js';
 import { openPeerSocketAuth } from './peer-socket-auth.js';
 import { installServeProcessLifecycle, runServe } from './serve.js';
 
-/** 控制面多久問一次閒不閒、一輪中多久送一次心跳。 */
+/** 控制面多久問一次閒不閒。 */
 const POLL_MS = 1_000;
+/** 一輪中多久送一次心跳。 */
 const HEARTBEAT_MS = 5_000;
 
 /** 拆出 `--socket <path>`，其餘原樣交給 serve。 */
@@ -46,15 +47,16 @@ async function main(): Promise<void> {
   try {
     const { socketPath, serveArgv } = parseConversationArgs(process.argv.slice(2));
     const auth = await openPeerSocketAuth(socketPath);
-    let control: ConversationControl | undefined;
+    // serve 起好之後才有 handler 可以交給控制面；在那之前來的請求看到的是還沒綁。
+    const bound: { control?: ConversationControl } = {};
     const running = await runServe({
       argv: serveArgv,
       log: (line) => console.error(line),
       conversation: {
         socketPath,
         auth,
-        boundThread: () => control?.boundThread,
-        onTurn: (threadId, phase) => control?.turn(threadId, phase),
+        boundThread: () => bound.control?.boundThread,
+        onTurn: (threadId, phase) => bound.control?.turn(threadId, phase),
       },
     });
     if (running?.conversationHandler === undefined) {
@@ -62,7 +64,7 @@ async function main(): Promise<void> {
       return;
     }
     lifecycle.attach(running);
-    control = new ConversationControl({
+    const control = new ConversationControl({
       input: process.stdin,
       output: frames,
       handler: running.conversationHandler,
@@ -72,6 +74,7 @@ async function main(): Promise<void> {
       onEnd: () => lifecycle.stop(),
       warn: (message) => console.error(message),
     });
+    bound.control = control;
     control.ready();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

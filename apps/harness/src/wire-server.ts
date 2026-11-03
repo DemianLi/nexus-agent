@@ -456,7 +456,7 @@ export function pathnameOf(target: string | undefined): string {
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
   const socketPath = options.socketPath;
-  /** 請求的 origin。要在 listen 之後才叫：port 是作業系統挑的。 */
+  /** 請求的 origin。綁 port 時要在 listen 之後才叫（port 是作業系統挑的）；聽 socket 固定 `http://localhost`。 */
   const originOf = (): string =>
     socketPath === undefined
       ? `http://${host}:${String((server.address() as AddressInfo).port)}`

@@ -1,5 +1,5 @@
 /**
- * 對話行程回報閒置（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 §七-2）：**真的 wire handler＋真的最小 agent**（`idle-eviction.fixture.ts`，
+ * 對話行程回報閒置（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §7-2）：**真的 wire handler＋真的最小 agent**（`idle-eviction.fixture.ts`，
  * 與 #1484 的逐出測試同一個測試台），接上真的控制面，監督行程那一側讀 stdout 的框。handler 不開逐出（對話行程不傳 `idleEvictMs`），
  * 什麼時候收由監督行程決定。
  *
@@ -375,26 +375,30 @@ describe('閒置條件：條件成立就不回報閒置（isIdle 逐條）', () 
   });
 });
 
-describe('全域下行（設計 §三-2）', () => {
+describe('全域下行（設計 §3-2）', () => {
   it('前台一直掛著 /threads/feed：照樣回報閒置、drain 回 drained', async () => {
-    const p = await conversation();
+    const p = await conversation({}, (r) => r.extras.set('t1', { script: PLAIN_SCRIPT }));
     const controller = new AbortController();
     const feed = await p.r.client.openThreadFeed(controller.signal);
+    let seen = 0;
     const reading = (async () => {
       try {
-        for await (const _ of feed) {
-          // 只是一直抽。
-        }
+        for await (const _ of feed) seen += 1;
       } catch {
         // 中止就是這樣結束的。
       }
     })();
     try {
       // 這條 thread 跑一輪，feed 上看得到它的狀態變化。
-      p.r.extras.set('t1', { script: PLAIN_SCRIPT });
+      const line = await openLine(p.r, 't1');
+      await p.r.client.runStart('t1', '一句');
+      await foldTurn(line.events);
+      await line.close();
+      await until(() => seen > 0);
+      p.reports();
       p.r.advance(T);
       p.control.checkIdle();
-      expect(p.idleReports()).toEqual([]);
+      expect(p.idleReports()).toEqual([{ type: 'idle', idleMs: T }]);
       await p.send({ type: 'drain' });
       expect(p.idleReports()).toEqual([{ type: 'drained' }]);
     } finally {

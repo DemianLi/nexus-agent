@@ -423,14 +423,14 @@ export interface RunServeOptions {
    */
   readonly sessionLogBudget?: SessionLogBudget;
   /**
-   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是今天的 serve。
+   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（綁 port、帶登入）。
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
 }
 
 /**
- * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §三-2、§九 C1）：同一套組裝，
+ * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§九 C1）：同一套組裝，
  * 但一個行程只放一條 thread，前台經 Unix socket 轉送。跟 serve 不同的只有這幾處：
  *
  * - 不拿 home 鎖：同一個 home 底下有前台與許多對話行程。整台只做一次的事（清工具結果暫存、寫 `plugin-snapshot.json`）也不做，歸前台。
@@ -438,7 +438,7 @@ export interface RunServeOptions {
  * - 不起內容搜尋（跨 thread，歸前台）。不印登入網址。
  * - handler 只認 {@link boundThread} 那一條、不自己逐出（什麼時候收由監督行程決定），一輪的邊緣交給 {@link onTurn}。
  *
- * 登入只在前台（設計 §四-2）：對話行程不建 `BrowserAuth`、不讀瀏覽器會話密鑰，驗證用 {@link auth}，信任來自 socket 所在目錄的權限。
+ * 登入只在前台（設計 §4-2）：對話行程不建 `BrowserAuth`、不讀瀏覽器會話密鑰，驗證用 {@link auth}，信任來自 socket 所在目錄的權限。
  */
 export interface ConversationProcessMode {
   readonly socketPath: string;

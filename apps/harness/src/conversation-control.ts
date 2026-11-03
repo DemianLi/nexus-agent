@@ -1,5 +1,5 @@
 /**
- * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §五-2、§七-2）：
+ * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §5-2、§7-2）：
  * 從 stdin 讀監督行程的命令，往 stdout 寫回報，框格式與編解碼在 `supervisor-protocol.ts`。**stdout 只寫框**，日誌一律走 stderr。
  *
  * - `bind(threadId)`：記下綁哪一條，叫 `open` 把它建起來，回 `bound`。建不起來也回 `bound`、記一行：之後經這條 thread 的請求會再建一次，
@@ -9,7 +9,7 @@
  *   （兩次輪詢之間有個短請求來去），就再送一次 `idle`，讓監督行程從新的時間點重新計時。不再閒置時送 `busy`。
  * - `drain`：當場再問一次。仍閒置就停收會開新一輪的命令、回 `drained`；否則回 `busy`。
  * - 一輪的開始與結束：送 `turn`，一輪中每 `heartbeatMs` 送一次 `heartbeat`。沒看到開始的結束不送（續接時補寫的收尾）。
- * - stdin 讀到 EOF 叫 `onEnd` 一次，由呼叫端走收尾。
+ * - stdin 讀到 EOF 或讀到解不開的框（當成 EOF）時叫 `onEnd` 一次，由呼叫端走收尾。
  *
  * @module
  */
