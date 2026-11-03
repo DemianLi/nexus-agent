@@ -15,7 +15,7 @@ export interface QuickJsModules {
    * 新模組建不起來時原樣 reject，下一次呼叫重建（見 {@link replace}）。
    */
   current(): Promise<QuickJSWASMModule>;
-  /** 建一個新模組、換掉目前的。建不起來就清掉，下一次要用時重建，一次失敗不會卡住整個行程。 */
+  /** 建一個新模組、換掉目前的。建不起來就清掉，下一次要用時重建，一次失敗不會卡住這份持有者。 */
   replace(): Promise<QuickJSWASMModule>;
 }
 

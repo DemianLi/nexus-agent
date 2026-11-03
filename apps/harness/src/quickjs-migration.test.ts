@@ -1,5 +1,5 @@
 /**
- * #2353 的 `run_javascript` 改成 `NexusTool` 之後，在產品組裝裡模型看到的工具定義、工具結果，與日誌上的 `tool/result`，
+ * 產品組裝裡 `run_javascript`（`NexusTool`，#2353）的工具定義、工具結果與日誌上的 `tool/result`，
  * 與 `quickjs-migration.baseline.json` 逐字相同。
  *
  * 走的是部署方掛它的那條路：出貨清單疊一份 `--patch`，`insert` 一列 `@nexus/plugin-quickjs`，再把出貨的腳本模型換成這裡的腳本。
@@ -76,7 +76,7 @@ async function runOne(
     { tree: root.tree },
   );
   expect(loaded.dropped).toEqual([]);
-  // 遷出之後那一列是樹上函式插件的橋接列；錄對照組時它還是相容層的 `NexusPlugin`，這一條在那時不成立。
+  // 錄對照組要在遷移前的樹上跑（見檔頭），那裡這一列不是橋接列，所以錄的時候不驗這一條。
   if (process.env.K3C_RECORD !== '1') {
     const row = loaded.plugins.find((entry) => entry.id === 'quickjs');
     expect(row !== undefined && isBridgeEntry(row)).toBe(true);
@@ -108,7 +108,9 @@ async function runOne(
             id: message.tool_call_id,
           },
     logged: (rootLog?.log.events ?? []).flatMap((event) =>
-      event.type === 'tool/result' ? [{ isError: event.data.isError, error: event.data.error }] : [],
+      event.type === 'tool/result'
+        ? [{ isError: event.data.isError, error: event.data.error }]
+        : [],
     ),
   };
 }

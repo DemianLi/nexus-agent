@@ -57,7 +57,7 @@ function toolOn(modules: QuickJsModules): NexusTool {
   );
 }
 
-/** 跑一段程式：成功回文字，失敗回 `Error: <內容>` 的被拒 promise，好讓下面照舊用 `resolves`／`rejects`。 */
+/** 跑一段程式：成功回文字，失敗回 `Error: <內容>` 的被拒 promise，讓下面用 `resolves`／`rejects` 斷言。 */
 async function run(tool: NexusTool, code: string): Promise<string> {
   const result: NexusToolResult = await tool.execute({ code }, exec);
   if (!result.ok) throw new Error(result.content);
@@ -68,13 +68,13 @@ beforeEach(() => {
   seen.used.length = 0;
 });
 
-/** 每條測試只看自己這段期間新建的。 */
+/** `seen.created` 跨測試累積：每條測試只看自己這段期間新建的。 */
 function createdSince(count: number): QuickJSWASMModule[] {
   return seen.created.slice(count);
 }
 
 describe('模組由那一列持有，那一列的工具共用', () => {
-  // 樹上那一列整個行程掛一次，`serve` 的每條 thread 用的都是那一列登記的工具；各自建模組的話，每條對話都多一個。
+  // 這一列掛著的期間，`serve` 的每條 thread 用的都是它登記的工具；各自建模組的話，每條對話都多一個。
   it('同一份持有者的兩個工具只建一個模組，兩邊用的是同一個', async () => {
     const before = seen.created.length;
     const modules = createModuleHolder();

@@ -404,7 +404,7 @@ async function shippedTools(tempRoot: string): Promise<{
 /**
  * 不在出廠清單的選配 plugin，用清單上的設定單獨載入，回它註冊的工具。
  *
- * 樹上的函式插件掛在一棵只有工具登記處的樹上，工具經宿主的轉接器轉成模型拿到的那個形狀；`NexusPlugin` 照舊走 `loadPlugins`。
+ * 樹上的函式插件掛在一棵只有工具登記處的樹上，工具經宿主的轉接器轉成模型拿到的那個形狀；`NexusPlugin` 走 `loadPlugins`。
  */
 async function standaloneTools(
   packagesRoot: string,

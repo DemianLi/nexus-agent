@@ -99,8 +99,7 @@ describe('正常的路', () => {
     expect(await runTool({}, 'const x = 1;')).toBe('（沒有回傳值）');
   });
 
-  // #615：以前回一句 `錯誤：TypeError: 壞了` 的字串，工具算成功。翻面之後守的是「算失敗、而且
-  // 文字帶得出原因」——模型讀得到原因才能自己修，這一半沒有變。
+  // #615：守的是「算失敗、而且文字帶得出原因」——模型讀得到原因才能自己修。
   it('VM 裡丟出來的錯誤：回 ok: false 帶 CODE_RUN_FAILED，原因原樣帶著，沒有 `錯誤：` 前綴', async () => {
     const error = await runFailing({}, 'throw new TypeError("壞了")');
     expect(error.kind).toBe('exception');
@@ -188,7 +187,7 @@ describe('完成值必須是無損的 JSON', () => {
     ['class 實例', '(() => { class P { constructor() { this.x = 1; } } return new P(); })()'],
     ['包裝物件', 'new Number(1)'],
     ['藏在深處的 NaN', '({ a: [{ b: [{ c: 0 / 0 }] }] })'],
-  ])('%s：拋 invalid-output，不再默默變成 null 或 {}', async (_label, code) => {
+  ])('%s：回 invalid-output，不會默默變成 null 或 {}', async (_label, code) => {
     const error = await runFailing({}, code);
     expect(error.kind).toBe('invalid-output');
     expect(error.message).toBe(`code run failed (invalid-output): ${LOSSLESS}`);
@@ -278,7 +277,7 @@ describe('完成值必須是無損的 JSON', () => {
   });
 
   // 快照裡撞到記憶體上限算 invalid-output，所以記憶體上限給大、逾時給短：循環檢查壞了的話快照停不下來，跑成 timeout 而紅。
-  it('循環參照：拋 invalid-output', async () => {
+  it('循環參照：回 invalid-output', async () => {
     const error = await runFailing(
       { memoryLimitBytes: 256 * 1024 * 1024, timeoutMs: 200 },
       '(() => { const a = {}; a.self = a; return a; })()',
@@ -559,7 +558,10 @@ describe('插件的接線', () => {
       $schema: 'https://json-schema.org/draft/2020-12/schema',
       type: 'object',
       properties: {
-        code: { type: 'string', description: '要求值的 JavaScript。最後一個運算式的值就是回傳值。' },
+        code: {
+          type: 'string',
+          description: '要求值的 JavaScript。最後一個運算式的值就是回傳值。',
+        },
       },
       required: ['code'],
     });

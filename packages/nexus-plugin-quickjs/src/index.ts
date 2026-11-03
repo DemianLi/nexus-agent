@@ -93,14 +93,12 @@ export type CodeRunFailureKind = 'exception' | 'timeout' | 'invalid-output';
 export const CODE_RUN_FAILED = 'CODE_RUN_FAILED';
 
 /**
- * `run_javascript` 的程式本身失敗時，求值那一層拋的東西，名字與訊息照 dsh 的 `CodeRunFailedError`
- * （`packages/core/tools/src/ptc.ts:165-180`，`477b4f4`）。工具本體接住它，回 `ok: false`（{@link failed}）：
+ * `run_javascript` 的程式本身失敗時，求值那一層拋的東西。工具本體接住它，回 `ok: false`（{@link failed}）：
  * 模型拿到 `status: 'error'` 的工具結果、文字帶得出失敗種類與原因，會話日誌的 `tool/result` 是 `isError: true`、
- * 碼是 {@link CODE_RUN_FAILED}，web 的工具卡因此是失敗狀態。以前回一句 `錯誤：…` 的字串，三處都記成成功
+ * 碼是 {@link CODE_RUN_FAILED}，web 的工具卡因此是失敗狀態。回字串的話，三處都會記成成功
  * （[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
  *
- * 訊息的形狀照 dsh 的 `code run failed (<kind>): <message>`（`ptc.ts:721`）。dsh 後面還接擷取到的
- * 輸出與沙箱資訊，這裡兩樣都沒有：VM 裡沒有 `console`，也沒有行程沙箱。
+ * 訊息的形狀是 `code run failed (<kind>): <message>`，不接擷取到的輸出與沙箱資訊：VM 裡沒有 `console`，也沒有行程沙箱。
  */
 export class CodeRunFailedError extends Error {
   /** 進會話日誌的碼。 */
@@ -199,8 +197,9 @@ export function createRunJavascriptTool(config: QuickJsConfig, modules: QuickJsM
 }
 
 /**
- * 程式本身失敗的結果。文字與工具拋錯時宿主的圍堵寫的那句相同（`工具 <名字> 執行失敗：<訊息>`，前面的 `Error: ` 由宿主加），
- * 所以模型看到的位元組與以前由圍堵接住拋錯時一樣。
+ * 程式本身失敗的結果。文字與 `@nexus/core` 的 `formatToolFailure` 逐字相同（`工具 <名字> 執行失敗：<訊息>`，前面的 `Error: `
+ * 由宿主加）：工具回 `ok: false` 與工具拋錯、由圍堵接住，模型看到的位元組一樣（`apps/harness` 的 `quickjs-migration.test.ts`
+ * 對著對照組逐字比）。插件不能 import core，所以這句只能照抄。
  */
 function failed(error: CodeRunFailedError): NexusToolResult {
   return {
@@ -219,6 +218,7 @@ export const inject = injectOf(need(toolsToken, '^2.0.0'));
 /** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
 export const Config = quickJsConfigSchema;
 
+/** 插件的宣告：只消費 `tools` `^2.0.0`，不提供服務；設定與 {@link Config} 是同一個物件。 */
 export const manifest = defineManifest({
   id: 'quickjs',
   version: '0.1.0',
@@ -237,7 +237,7 @@ export const manifest = defineManifest({
  * **async 的唯一理由是在載入期就把 WASM 模組拉起來**。載不起來就讓這一列掛不上，而不是等模型第一次呼叫工具時才在對話中間
  * 變成一句錯誤——共同軸線的 fail-closed 在這個插件上的樣子。
  *
- * **模組的持有者活在這一次掛載的閉包裡**：樹上這一列整個行程掛一次，所以每條 thread 用的是同一個模組；`serve` 每條 thread
+ * **模組的持有者活在這一次掛載的閉包裡**：這一列掛著的期間，每條 thread 用它登記的同一個工具、同一個模組；`serve` 每條 thread
  * 組一次 agent，各自建模組的話每條對話都多一個。runtime 與 context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時
  * 不收，整個模組換掉，見 {@link runInVm}），WASM 模組沒有要關的東西，卸載後由 GC 收，所以不登記收尾。
  *
@@ -402,7 +402,7 @@ function timedOut(run: Run): CodeRunFailedError {
  * 沒觸發過的一律是 `exception`，原樣轉述——`ReferenceError: require is not defined` 這種訊息本身就是模型需要的答案；
  * 程式自己丟一個 `InternalError: interrupted` 也只是一則訊息。
  *
- * **不帶 `錯誤：` 前綴**：圍堵會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
+ * **不帶 `錯誤：` 前綴**：{@link failed} 會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
  * 讀到的是兩層前綴。
  */
 function fail(detail: unknown, run: Run): never {
