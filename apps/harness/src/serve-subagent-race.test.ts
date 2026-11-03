@@ -98,7 +98,7 @@ describe('冷讀與續接之間檔案被換掉：第二次核對', () => {
     );
     await writeFile(
       join(directory, 'alpha%2fbg-0123456789ab.jsonl'),
-      `${JSON.stringify({ type: 'turn/end', seq: 0, time: 1, data: {} })}\n`,
+      `${JSON.stringify({ type: 'model/usage', seq: 0, time: 1, data: {} })}\n`,
     );
     serve = await startScriptedServe([{ content: '好' }], { argv: ['--session-log', root] });
     const client = await serveClient(serve.running);

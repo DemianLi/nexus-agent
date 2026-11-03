@@ -14,7 +14,11 @@
 
 import { isAbsolute } from 'node:path';
 
-import { SessionCorruptionError, validateSessionEventData } from '@nexus/core';
+import {
+  createSessionRelationshipChecker,
+  SessionCorruptionError,
+  validateSessionEventData,
+} from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 /**
@@ -171,24 +175,32 @@ export function assertStoredInheritance(
 
 /**
  * 讀回來的事件之間的關係，讀完已接受的前綴之後跑一次。照 dsh 的 `assertReleasedV4Relationships`
- * （`session-format-v3-to-v4/src/validation.ts:110-130`；呼叫點是讀檔器收尾的 `finish()`，`session-persistence-jsonl/src/format.ts:468`）。
+ * （`session-format-v3-to-v4/src/validation.ts:110-130`；呼叫點是讀檔器收尾的 `finish()`，`session-persistence-jsonl/src/format.ts:468`），
+ * 三件：
  *
- * **今天只有一條**（#1549 N0603）：同一個子代理的 `subagent/catalog` 只能登記一次（dsh `:122-127`）。兩個寫入點都在派出的
- * 當下各寫一次、寫不進去就不落盤，重複只可能是寫壞或拼接出錯；讀方（`subagentLinkOf`）只取第一筆，後一筆會被靜靜忽略。
- * turn、tool、模型呼叫、重試的配對由 [#1597](https://github.com/DemianLi/nexus-agent/issues/1597) 加進這一支。
+ * 1. 同一個子代理的 `subagent/catalog` 只能登記一次（#1549 N0603，dsh `:122-127`）。兩個寫入點都在派出的當下各寫一次、寫不進去
+ *    就不落盤，重複只可能是寫壞或拼接出錯；讀方（`subagentLinkOf`）只取第一筆，後一筆會被靜靜忽略。
+ * 2. turn、工具、模型呼叫、重試、送出佇列的配對（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)）：逐顆餵 core 的
+ *    `createSessionRelationshipChecker`，跟執行期的配套入口同一支，第一筆違規就拒開。規則與為舊形狀留的分支（end-seed 時輪還開著的
+ *    `carried`）寫在那一支裡。
+ * 3. 標題的來源（#1597）：見 {@link titleSourceProblem}。`session/title` 與 `session/title-llm-request` 是 harness 用 `declare module`
+ *    補進的詞彙（`session-title.ts`），core 那一支不解讀，由擁有者在這裡驗。
+ *
+ * 第 1 件先掃完；第 2、3 件同一趟逐顆跑，哪一件先撞到就拒在那一行。
  *
  * `childId` 不是字串（或 `data` 不是物件）也拒，照 dsh 的 `catalogFact`（`session-format-v3-to-v4/src/facts.ts:72-84`）。
  * dsh 那一支還驗 `version`、`mode` 列舉、`label`、`childCreatedAt`，nexus 的 `SubagentCatalogData` 沒有那些格的對應，只驗
  * 這條規則要用到的 `childId`。
  *
- * **只掃切點之後（含）的**，同 dsh（`validation.ts:122`，整段 `catalogFact` 都在 `event.seq >= inheritedEventCount` 底下）：繼承來的前綴
+ * 第 1 件**只掃切點之後（含）的**，同 dsh（`validation.ts:122`，整段 `catalogFact` 都在 `event.seq >= inheritedEventCount` 底下）：繼承來的前綴
  * 是父會話的登記，分叉之後自己的區段可以再派一個同 id 的子代理，前綴裡那一筆不算重複（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)
- * 撤掉 #1549 的過渡）。
+ * 撤掉 #1549 的過渡）。第 2、3 件掃整份：前綴結尾是 inherited 的 `session/end-seed`，狀態在那裡照一般的 end-seed 重設或帶過去。
  *
  * @param id - 這份會話的 id，放進錯誤裡。
  * @param events - 已接受的前綴，依 `seq` 排好。
  * @param cut - 切點，{@link assertStoredInheritance} 回的那個。
- * @throws {@link SessionCorruptionError} 同一個 `childId` 登記了兩次，或某一筆的 `childId` 不是字串，訊息帶第幾行。
+ * @throws {@link SessionCorruptionError} 同一個 `childId` 登記了兩次、某一筆的 `childId` 不是字串，或某一顆違反事件之間的關係，
+ *   訊息帶第幾行（與哪一條規則）。
  */
 export function assertStoredRelationships(
   id: string,
@@ -214,6 +226,60 @@ export function assertStoredRelationships(
     }
     children.add(childId);
   }
+  const checker = createSessionRelationshipChecker();
+  const humanMessages = new Set<number>();
+  for (const event of events) {
+    if (event.type === 'session/title' || event.type === 'session/title-llm-request') {
+      const problem = titleSourceProblem(event, humanMessages);
+      if (problem !== undefined) {
+        throw new SessionCorruptionError(id, `第 ${event.seq + 1} 行的 ${event.type} ${problem}`);
+      }
+    }
+    if (event.type === 'turn/start' && dataField(event, 'kind') === 'message') {
+      humanMessages.add(event.seq);
+    }
+    const [violation] = checker.accept(event);
+    if (violation !== undefined) {
+      throw new SessionCorruptionError(
+        id,
+        `第 ${violation.seq + 1} 行不合事件之間的關係（${violation.rule}）：${violation.message}`,
+      );
+    }
+  }
+}
+
+/**
+ * 標題的 `messageSeqs` 哪裡不對，沒問題回 `undefined`：`session/title` 的 `messageSeqs` 恰好在使用者改名時是空的；它與
+ * `session/title-llm-request` 的每一格都指到更早、不重複的一顆人話（`turn/start {kind:'message'}`，見 `session-title.ts` 的 `messageSeqs`），
+ * 模型標題的請求至少指一顆。
+ */
+function titleSourceProblem(
+  event: SessionEvent,
+  humanMessages: ReadonlySet<number>,
+): string | undefined {
+  const seqs = dataField(event, 'messageSeqs');
+  if (!Array.isArray(seqs)) return '的 messageSeqs 不是陣列';
+  if (event.type === 'session/title') {
+    const source = dataField(event, 'source');
+    const byUser = isRecord(source) && source['kind'] === 'user';
+    if ((seqs.length === 0) !== byUser) return '的 messageSeqs 要恰好在使用者改名時是空的';
+  } else if (seqs.length === 0) {
+    return '的 messageSeqs 是空的';
+  }
+  const seen = new Set<unknown>();
+  for (const value of seqs) {
+    if (seen.has(value) || typeof value !== 'number' || !humanMessages.has(value)) {
+      return `的 messageSeqs 有一格 ${String(value)} 不是更早、不重複的人話`;
+    }
+    seen.add(value);
+  }
+  return undefined;
+}
+
+/** `event.data[key]`；`data` 不是物件就是 `undefined`。 */
+function dataField(event: SessionEvent, key: string): unknown {
+  const data: unknown = event.data;
+  return isRecord(data) ? data[key] : undefined;
 }
 
 /**
