@@ -20,6 +20,8 @@ import type { DeliverableDownloader } from '@/lib/deliverable-download';
  *
  * @param hasSteers - 有排著的插話（#710）：就算這一輪是從還沒有任何一則的地方跑起來的，也有東西可畫。
  * @param fork - 分支鈕（#1581）。沒給就不畫。
+ * @param changes - 改動卡從哪裡讀（#443）。沒給就不畫改動卡。
+ * @param fileDrop - 空白頁提不提「把檔案拖進來」，見 {@link EmptyHero}。
  */
 export function ConversationBody({
   conversation,
@@ -31,6 +33,7 @@ export function ConversationBody({
   changes,
   deliverableDownload,
   fork,
+  fileDrop,
 }: {
   readonly conversation: Conversation;
   readonly isFresh: (id: string) => boolean;
@@ -38,14 +41,15 @@ export function ConversationBody({
   readonly sessionLinks: SessionReferenceLinks;
   readonly imageSource: AttachmentImageSource;
   readonly subagentControl: SubagentControl;
-  readonly changes: ChangesStores;
+  readonly changes?: ChangesStores;
   readonly deliverableDownload: DeliverableDownloader;
   readonly fork?: TranscriptFork;
+  readonly fileDrop?: boolean;
 }) {
   if (conversation.state.entries.length === 0 && !hasSteers) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
-        <EmptyHero />
+        <EmptyHero {...(fileDrop === undefined ? {} : { fileDrop })} />
       </div>
     );
   }
@@ -56,7 +60,7 @@ export function ConversationBody({
           <Transcript
             state={conversation.state}
             isFresh={isFresh}
-            changes={changes}
+            {...(changes === undefined ? {} : { changes })}
             deliverableDownload={deliverableDownload}
             {...(fork === undefined ? {} : { fork })}
             feedback={{

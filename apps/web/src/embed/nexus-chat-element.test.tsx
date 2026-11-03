@@ -1,10 +1,11 @@
-import type { WireClient } from '@nexus/wire';
-import { THREAD_NOT_EMBEDDED, WireRejectedError } from '@nexus/wire';
+import type { Event, WireClient } from '@nexus/wire';
+import { THREAD_NOT_EMBEDDED, WireRejectedError, WORKSPACE_CHANGES } from '@nexus/wire';
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { fakeClient } from '@/test/app-harness.fixture';
+import { Script } from '@/test/conversation-frames';
 
 import { EMBED_THREAD_KEY } from './embedded-chat';
 import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-element';
@@ -18,9 +19,11 @@ const STYLES = { shadow: '.nexus-root{--shadow:1}', document: '@font-face{font-f
 let clients: ReturnType<typeof fakeClient>[] = [];
 /** 設了就讓下一個元素的下行被拒。 */
 let failOpen: Error | undefined;
+/** 下一個元素的下行一打開就推的 frame。 */
+let events: Event[] = [];
 
 function createClient(): WireClient {
-  const fake = fakeClient([]);
+  const fake = fakeClient(events);
   clients.push(fake);
   const refusal = failOpen;
   if (refusal === undefined) return fake.client;
@@ -61,6 +64,8 @@ afterEach(() => {
   document.body.replaceChildren();
   clients = [];
   failOpen = undefined;
+  events = [];
+  vi.unstubAllGlobals();
 });
 
 describe('<nexus-chat>', () => {
@@ -150,6 +155,33 @@ describe('<nexus-chat>', () => {
     );
     expect(view.queryByText(/thread "t"/u)).toBeNull();
     expect(view.getByRole('button', { name: '新對話' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  test('空白畫面不提拖檔：嵌入版沒有附件（#2384）', async () => {
+    const view = shadow(mount());
+    await view.findByRole('heading', { level: 2, name: '今天要做什麼？' });
+    expect(view.getByText('在下面打字。')).toBeTruthy();
+    expect(view.queryByText(/拖/u)).toBeNull();
+  });
+
+  test('這一輪有改動也不畫改動卡、不讀改動摘要（#2384）', async () => {
+    const summary = { files: [{ path: 'a.md', display: 'a.md', added: 3, deleted: 1 }], total: 1, added: 3, deleted: 1 }; // prettier-ignore
+    const fetch = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify(summary)));
+    vi.stubGlobal('fetch', fetch);
+    const script = new Script();
+    events = [
+      script.running(),
+      ...script.human('inbox:r1', '改一下'),
+      script.custom(WORKSPACE_CHANGES, { seq: 42 }),
+      ...script.ai('a1', { text: '好了。' }),
+      script.completed(),
+    ];
+    const view = shadow(mount());
+    await view.findByText('好了。');
+    await act(async () => {});
+    expect(view.queryByRole('region', { name: /這一輪改動的檔案/u })).toBeNull();
+    const urls = fetch.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.includes('/changes'))).toEqual([]);
   });
 
   test('新對話：講過話才按得動，換一條新的並記在嵌入版自己的鍵', async () => {
