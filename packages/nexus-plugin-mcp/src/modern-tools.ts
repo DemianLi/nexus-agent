@@ -200,7 +200,7 @@ export function registerModernTools(server: McpServer): void {
     },
   );
 
-  // 連問兩輪：同一個 task 的第二次反問，adapter 會再掛一顆中斷（實測 id 與第一顆相同），pump 不能把它當成看過的。
+  // 連問兩輪：同一個 task 的第二次反問，`tool-call.ts` 會再掛一顆中斷（實測 id 與第一顆相同），pump 不能把它當成看過的。
   server.registerTool(
     'ask_twice',
     { description: '先後請使用者去開兩個網址才做事。', inputSchema: z.object({}) },

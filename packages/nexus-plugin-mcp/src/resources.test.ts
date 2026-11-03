@@ -10,12 +10,8 @@
 import { fileURLToPath } from 'node:url';
 import { SystemMessage } from '@langchain/core/messages';
 import type { PluginRegistry } from '@nexus/core';
-import {
-  EXTERNAL_MCP_CONTENT_NOTICE,
-  loadPlugins,
-  REFERENCE_RULE,
-  REFERENCE_WARNING,
-} from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, REFERENCE_WARNING } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
 import { RESOURCE_TOOL_NAMES } from './hub.js';
 import {

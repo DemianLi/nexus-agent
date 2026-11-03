@@ -42,7 +42,7 @@
  * 時間、分類、措辭。我們**只做後兩件**，理由是前一件基座已經做了——工具上的
  * `defaultConfig: { timeout }` 會被 `ensureConfig` 變成 `AbortSignal.timeout(ms)` 併進
  * `signal`（`@langchain/core@1.2.9` 的 `runnables/config.js:100-120`，實測），而我們樹上
- * 唯一有預算的 MCP 工具走的正是這條（`@langchain/mcp-adapters` 的 `tools.js` 的 `defaultConfig: { timeout }`）。
+ * 唯一有預算的 MCP 工具走的正是這條（`@nexus/tool-adapter` 把 `NexusTool.timeoutMs` 轉成 `defaultConfig: { timeout }`）。
  * 一個只剩措辭的 plugin 沒有東西可武裝，而且照 [#159](https://github.com/DemianLi/nexus-agent/issues/159)
  * 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉，紀律照抄**：分類
  * （它是超時，不是一般失敗）與射程（只作用在這次工具呼叫，不動整場 run）。
@@ -146,7 +146,7 @@ const TIMEOUT_ERROR_NAME = 'TimeoutError';
  * **用 `name` 不用訊息比對**：訊息是 Node 的，會隨版本改；`name` 是 DOM 規範定的。
  *
  * **而且 `name` 是唯一分得開這一輪被中止的東西。** 同一個 `catch` 也接得到這一輪被中止
- * 的那顆，`name` 為 `AbortError`（MCP 工具由 `asTurnAbort` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
+ * 的那顆，`name` 為 `AbortError`（MCP 工具由 `@nexus/plugin-mcp` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
  *
  * @param error - `catch` 到的東西。
  * @returns 是不是逾時。

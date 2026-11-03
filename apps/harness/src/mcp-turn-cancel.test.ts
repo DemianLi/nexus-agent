@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
-import { TOOL_ABORTED } from '@nexus/core';
+import { TOOL_ABORTED, TOOL_TIMEOUT } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -185,7 +185,7 @@ describe('MCP 呼叫跑到一半按停止', () => {
     }
   }, 60_000);
 
-  it('沒按停止、是 MCP 自己的逾時到點：不記成 ABORTED，這一輪照常往下走', async () => {
+  it('沒按停止、是 MCP 自己的逾時到點：記成 TOOL_TIMEOUT、講出預算，這一輪照常往下走', async () => {
     const run = await assemble(
       [
         { content: '查一下。', toolCalls: [{ name: SLOW_TOOL, args: { query: '庫存' } }] },
@@ -203,8 +203,8 @@ describe('MCP 呼叫跑到一半按停止', () => {
       const [verdict] = resultsOf(events);
       const [result] = events.filter((event) => event.type === 'tool/result');
       expect(verdict).toMatchObject({ isError: true });
-      expect(JSON.stringify(result?.data)).toContain('aborted due to timeout');
-      expect(verdict).not.toHaveProperty('error.code', TOOL_ABORTED);
+      expect(JSON.stringify(result?.data)).toContain('超過它宣告的 300ms 預算');
+      expect(verdict).toHaveProperty('error.code', TOOL_TIMEOUT);
     } finally {
       await run.close();
     }

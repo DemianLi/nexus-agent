@@ -27,8 +27,9 @@ import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Context } from '@nexus/cordis';
 import type { Loader } from '@nexus/cordis-plugin-loader';
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { STATE, boot, createEntry, fiberOf } from './tree.js';
 
 const REPO = join(import.meta.dirname, '../../../../..');
@@ -54,7 +55,11 @@ export function nexusVersion(label: string, plugin: NexusPlugin<unknown>) {
   return {
     name: `mcp-version`,
     async apply(ctx: Context, config: Record<string, unknown>) {
-      const loaded = await loadPlugins([{ plugin, id: label, config }]);
+      // MCP 的工具是 `NexusTool`，註冊表要帶轉接器才收得下（同組裝點）。
+      const loaded = await loadPlugins(
+        [{ plugin, id: label, config }],
+        createRegistry({ adaptTool: toLangChainTool }),
+      );
       // 收尾一開完資源就登記，排在 provide 前面：provide 撞名拋錯時（見 runWithoutIsolate），
       // 失敗的 fiber 照樣跑已登記的收尾；寫成 `return () => loaded.dispose()` 的話這時還沒登記，子行程就漏了。
       ctx.effect(() => () => loaded.dispose(), 'loadPlugins');

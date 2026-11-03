@@ -45,8 +45,8 @@ describe('artifact 進日誌前的上限（#1320）', () => {
     expect(JSON.stringify(placeholder)).not.toContain('AAAA');
   });
 
-  // adapter 2.0.0 `convertCallToolResult`：`enhancedArtifacts` 把內嵌資源原始區塊整個放進 `data`，所以 URI 在 `data.resource` 底下。
-  it('adapter 的 `mcp_content` 包著內嵌資源時，URI 與 MIME 從 data.resource 取', () => {
+  // 防禦：`mcp_content` 包著內嵌資源的形狀（`convertCallToolResult` 今天不產），URI 在 `data.resource` 底下。
+  it('`mcp_content` 包著內嵌資源時，URI 與 MIME 從 data.resource 取', () => {
     const entry = {
       type: 'mcp_content',
       data: {

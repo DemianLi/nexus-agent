@@ -3,7 +3,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadPlugins } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 

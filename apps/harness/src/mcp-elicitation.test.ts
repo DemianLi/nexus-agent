@@ -67,7 +67,7 @@ const payload = (requests: Record<string, unknown>) => ({
 });
 
 describe('翻譯：酬載 ⇄ 問答卡', () => {
-  it('認得 adapter 的形狀；缺欄位、模式不認得、空的 requests 都當作不是', () => {
+  it('認得 plugin 的形狀；缺欄位、模式不認得、空的 requests 都當作不是', () => {
     expect(parseMcpElicitation(payload({ profile: FORM }))).toBeDefined();
     expect(parseMcpElicitation(payload({}))).toBeUndefined();
     expect(parseMcpElicitation(payload({ a: { mode: 'weird', message: 'x' } }))).toBeUndefined();
@@ -127,7 +127,7 @@ describe('翻譯：酬載 ⇄ 問答卡', () => {
     expect(sparse.responses['profile']).toEqual({ action: 'accept', content: { name: 'x' } });
   });
 
-  it('不是數字的數字欄位原字串送過去，由 adapter 驗，不在這裡改寫', () => {
+  it('不是數字的數字欄位原字串送過去，由 plugin 驗，不在這裡改寫', () => {
     const elicitation = parseMcpElicitation(payload({ profile: FORM }))!;
     const result = answerElicitation(elicitation, {
       answers: [{ id: 'profile/age', selected: [], custom: 'abc' }],

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginRegistry } from '@nexus/core';
-import { loadPlugins } from '@nexus/core';
+import { loadPlugins } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
 import { createMcpPlugin } from './index.js';
 import type { McpPluginOptions } from './index.js';
@@ -313,7 +313,7 @@ describe('殺掉 stdio 子行程', () => {
 
 /**
  * **收尾有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：重連卡在一台不回 initialize 的 server 上時，
- * 關閉不被它拖住。改之前同樣的布置要等 SDK 的請求逾時（實測約 120 秒）：dispose 先等進行中的握手，adapter 的 `close()` 也先等它。
+ * 關閉不被它拖住。沒有期限的話，同樣的布置要等 SDK 的請求逾時（實測約 120 秒）：dispose 先等進行中的握手。
  */
 describe('握手卡住時關閉', () => {
   it('重連卡在握手：dispose 6 秒內回來，並記一句確認不到', async () => {
