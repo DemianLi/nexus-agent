@@ -126,7 +126,7 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import type { ThreadForkSeed, WireHandler } from './wire-handler.js';
+import type { ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
@@ -438,13 +438,20 @@ export interface RunServeOptions {
  * - 不起內容搜尋（跨 thread，歸前台）。不印登入網址。
  * - handler 只認 {@link boundThread} 那一條、不自己逐出（什麼時候收由監督行程決定），一輪的邊緣交給 {@link onTurn}。
  *
- * 驗證照用 `BrowserAuth`：密鑰是同一個 home 底下那一份，前台把瀏覽器的 cookie 原樣轉進來；cookie 綁 Host，所以前台轉送時要保留原本的 Host。
+ * 登入只在前台（設計 §四-2）：對話行程不建 `BrowserAuth`、不讀瀏覽器會話密鑰，驗證用 {@link auth}，信任來自 socket 所在目錄的權限。
  */
 export interface ConversationProcessMode {
   readonly socketPath: string;
+  /** socket 上的驗證：`peer-socket-auth.ts` 的 `openPeerSocketAuth` 驗過 {@link socketPath} 所在目錄之後交的那一支。 */
+  readonly auth: WireAuth;
   readonly boundThread: () => string | undefined;
   readonly onTurn: (threadId: string, phase: 'begin' | 'end') => void;
 }
+
+/** serve 聽哪裡：綁 port 的帶登入，聽 socket 的是對話行程。 */
+type ServeListening =
+  | { readonly kind: 'port'; readonly auth: BrowserAuth }
+  | { readonly kind: 'socket'; readonly mode: ConversationProcessMode };
 
 export interface RunningServe {
   readonly url: string;
@@ -1043,10 +1050,18 @@ async function startServer(
   ]);
   // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
   const telemetrySharing = trial.telemetrySharing;
-  const auth = new BrowserAuth(
-    await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
-    browserSession.maxAgeDays,
-  );
+  // 對話行程不建（#2338）：登入只在前台，它用入口驗過目錄的那一支；也就不讀瀏覽器會話密鑰。
+  const listening: ServeListening =
+    options.conversation === undefined
+      ? {
+          kind: 'port',
+          auth: new BrowserAuth(
+            await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
+            browserSession.maxAgeDays,
+          ),
+        }
+      : { kind: 'socket', mode: options.conversation };
+  const auth: WireAuth = listening.kind === 'port' ? listening.auth : listening.mode.auth;
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
@@ -1765,17 +1780,17 @@ async function startServer(
   let server: WireServer;
   try {
     server = await startWireServer({
-      ...(options.conversation === undefined
+      ...(listening.kind === 'port'
         ? {
             handler: routeBySurface(
               handler,
-              createWebStaticHandler({ distRoot: webDist, auth }),
+              createWebStaticHandler({ distRoot: webDist, auth: listening.auth }),
               opsEndpoints,
             ),
             mux: handler,
             port: invocation.port,
           }
-        : { handler, socketPath: options.conversation.socketPath }),
+        : { handler, socketPath: listening.mode.socketPath }),
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
       // 方法與 pathname 一起記（#1536）：管理者才對得回是哪一個請求；pathname 不含 query，權杖不進日誌。
@@ -1805,11 +1820,12 @@ async function startServer(
 
   // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
-  const authenticatedUrl = auth.authenticatedUrl(server.url);
+  const authenticatedUrl =
+    listening.kind === 'port' ? listening.auth.authenticatedUrl(server.url) : server.url;
   log(
-    options.conversation === undefined
+    listening.kind === 'port'
       ? `nexus-agent 在 ${authenticatedUrl}`
-      : `nexus-agent 對話行程在 ${options.conversation.socketPath}`,
+      : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
   );
   // 印的是這一次真的用的那一個（#545），不是預設值。
   log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
@@ -1988,6 +2004,8 @@ export interface ServeProcessLifecycle {
   attach(running: RunningServe): void;
   /** 解除 fail-loud 的兩個 handler（訊號的不解除，行程結束前都在）。 */
   uninstall(): void;
+  /** 跟 `SIGTERM` 同一條收尾、回 0。對話行程的 stdin 讀到 EOF 走這裡（`conversation-process.ts`）。 */
+  stop(): void;
 }
 
 /**
@@ -2051,6 +2069,9 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       running = next;
     },
     uninstall,
+    stop() {
+      shutdown.interrupt(0);
+    },
   };
 }
 
