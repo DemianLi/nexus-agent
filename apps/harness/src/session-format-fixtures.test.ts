@@ -357,7 +357,7 @@ describe.each(names)('夾具 %s', (name) => {
         expect(lifecycles(resumed.events)).toEqual(trigger.lifecyclesAfterResume);
       }
       if (trigger.typesAfterResume !== undefined) {
-        // 今天的續接把補結接在帶過來的 end-seed 後面，再唯讀打開一次：讀盤的關係驗證要讀得過（#1597）。
+        // 今天的續接在舊寫入器留下的 end-seed 後面補結（輪已由新一輪收掉的不補），再唯讀打開一次：讀盤的關係驗證要讀得過（#1597）。
         const store = openJsonlSessionStore({ directory: await copied(name, `${name}-reread`) });
         const resumed = await resumeClosingInterruptedTurn(store, trigger.session);
         await resumed.stored.close();

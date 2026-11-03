@@ -1,8 +1,9 @@
 /**
  * 格式 28 以前的夾具觸發（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)）：用**那一版自己的** `SessionLog`、
- * JSONL 後端與協調器，寫「續接時輪還開著」的會話。那時候續接只補一顆 `session/end-seed`，當掉的那一輪留著開，
- * end-seed **後面**的事件要靠今天的讀方把那一輪帶過去才讀得對。事件的順序照同一版 CLI 寫出來的那一輪
- * （`model/start`、`assistant/message`、`model/end`、`tool/call`），落盤後就收掉——行程死在那裡的樣子。
+ * JSONL 後端與協調器，寫被那一版續接過的會話。那時候續接只補一顆 `session/end-seed`，當掉的那一輪留著開，
+ * end-seed **後面**的事件要靠今天的讀方把那一輪帶過去，才過得了讀盤的關係驗證。模型與工具事件的相對順序照同一版 CLI
+ * 寫出來的那一輪（`model/start`、`assistant/message`、`model/end`、`tool/call`；CLI 在 `model/end` 後多記的
+ * `context/measure` 不寫），寫到下面各條的停點就落盤收掉。
  *
  * - `crashed-in-model-resumed`：死在模型呼叫中途（`model/start` 沒有結尾），被同一版續接過一次就停了。
  * - `crashed-in-tool-resumed`：死在工具跑到一半（`tool/call` 沒有結果），被同一版續接過一次就停了。
@@ -10,7 +11,7 @@
  * - `paused-resumed`：停在核准點（`tool/call` → `interrupt/raised` → `turn/end`，呼叫沒配到結果、輪已收），被同一版續接過一次。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-carried-turn.ts <run 目錄>
  */
 
 import { AIMessage } from '@langchain/core/messages';

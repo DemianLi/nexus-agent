@@ -139,7 +139,7 @@ const TARGETS: readonly Target[] = [
     triggers: ['subagent-header'],
     ownReplay: true,
   },
-  // `v14` 已凍，「續接時輪還開著、end-seed 後面還有事件」另放一份：同一個 tag，28 以前出過貨的最後一版。
+  // `v14` 已凍，被那一版續接過的會話另放一份（輪開著與已收的都有）：同一個 tag，28 以前出過貨的最後一版。
   {
     name: 'v14-carried-turn',
     rev: 'v0.5.19',
@@ -432,6 +432,7 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
           };
         });
       case 'carried-turn':
+        // paused-resumed 不登記：輪已收，走不到 29 的讀方分支（輪還開著的 end-seed）；它給 session-format-fixtures.test.ts 的反例用。
         return ['crashed-in-model-resumed', 'crashed-in-tool-resumed', 'resumed-new-turn'].map(
           (session) => {
             const events = readEvents(directory, session);
