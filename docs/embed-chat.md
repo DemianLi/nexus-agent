@@ -78,6 +78,23 @@ export default defineConfig({
 
 型別：把從 serve 下載的 `nexus-chat.d.ts` 放進專案，加進 `tsconfig` 的 `include`。
 
+## 宿主頁的快捷鍵與指標操作
+
+鍵盤事件會從元件的 Shadow DOM 冒到宿主頁，但 `event.target` 換成了 `<nexus-chat>` 元素本身，看不出使用者正在輸入框裡打字。宿主頁的全域快捷鍵（例如 3D 場景用 W／A／S／D 轉視角）要拿 `composedPath()[0]` 判斷，不然在對話框裡打字也會轉動場景：
+
+```ts
+window.addEventListener('keydown', (event) => {
+  const origin = event.composedPath()[0];
+  const typing =
+    origin instanceof HTMLElement &&
+    (origin.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(origin.tagName));
+  if (typing) return;
+  // 宿主頁自己的快捷鍵
+});
+```
+
+滾輪與拖曳的監聽掛在場景自己的元素上（例如 `<canvas>`），不要掛在 `window`：在對話框上捲動就不會縮放場景，一輪還在回覆時照樣能操作場景。
+
 ## 有什麼功能、沒有什麼功能
 
 有：

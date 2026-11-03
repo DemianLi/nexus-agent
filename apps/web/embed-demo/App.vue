@@ -1,10 +1,28 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-const devices = ['A-12 冷卻泵', 'B-07 壓縮機', 'C-03 感測器'];
-const selected = ref<string | null>(null);
+import ModelView from './ModelView.vue';
+import type { Device } from './scene';
+
+const devices: readonly Device[] = [
+  { id: 'A-12', label: 'A-12 冷卻泵', x: -2.5, z: 1, height: 1.6, color: '#38bdf8' },
+  { id: 'B-07', label: 'B-07 壓縮機', x: 0.5, z: -1.5, height: 2.4, color: '#a78bfa' },
+  { id: 'C-03', label: 'C-03 感測器', x: 2.8, z: 1.8, height: 0.9, color: '#34d399' },
+];
+const metrics: Readonly<Record<string, { temperature: string; load: string; state: string }>> = {
+  'A-12': { temperature: '41.2 °C', load: '68 %', state: '運轉中' },
+  'B-07': { temperature: '57.9 °C', load: '91 %', state: '高負載' },
+  'C-03': { temperature: '23.4 °C', load: '—', state: '正常' },
+};
+
+const selectedId = ref<string | null>(null);
 const theme = ref<'light' | 'dark' | 'auto'>('light');
-const context = computed(() => (selected.value === null ? null : { label: selected.value }));
+const selected = computed(() => devices.find((device) => device.id === selectedId.value) ?? null);
+const context = computed(() => (selected.value === null ? null : { label: selected.value.label }));
+
+function toggle(id: string | null): void {
+  selectedId.value = selectedId.value === id ? null : id;
+}
 </script>
 
 <template>
@@ -21,20 +39,40 @@ const context = computed(() => (selected.value === null ? null : { label: select
       </label>
     </header>
     <main class="body">
-      <nav class="devices" aria-label="設備清單">
+      <nav class="panel devices" aria-label="設備清單">
+        <h2>設備數據</h2>
         <button
           v-for="device in devices"
-          :key="device"
+          :key="device.id"
           type="button"
-          :aria-pressed="selected === device"
-          @click="selected = selected === device ? null : device"
+          :aria-pressed="selectedId === device.id"
+          @click="toggle(device.id)"
         >
-          {{ device }}
+          {{ device.label }}
+          <span class="metric"
+            >{{ metrics[device.id]!.temperature }}・{{ metrics[device.id]!.state }}</span
+          >
         </button>
       </nav>
-      <section class="chat" aria-label="對話框">
-        <nexus-chat :theme="theme" :context.prop="context" />
+      <section class="stage" aria-label="3D 模型">
+        <ModelView :devices="devices" :selected="selectedId" @pick="selectedId = $event" />
       </section>
+      <aside class="panel side" aria-label="選取與對話">
+        <section class="detail" aria-label="選取的設備">
+          <h2>{{ selected?.label ?? '尚未選取設備' }}</h2>
+          <dl v-if="selected !== null">
+            <dt>溫度</dt>
+            <dd>{{ metrics[selected.id]!.temperature }}</dd>
+            <dt>負載</dt>
+            <dd>{{ metrics[selected.id]!.load }}</dd>
+            <dt>狀態</dt>
+            <dd>{{ metrics[selected.id]!.state }}</dd>
+          </dl>
+        </section>
+        <section class="chat" aria-label="對話框">
+          <nexus-chat :theme="theme" :context.prop="context" />
+        </section>
+      </aside>
     </main>
   </div>
 </template>
@@ -62,6 +100,10 @@ p {
   margin: 0;
   color: #c2410c;
 }
+h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
 #app,
 .host {
   height: 100%;
@@ -86,18 +128,45 @@ p {
 .body {
   flex: 1;
   min-height: 0;
-  display: flex;
-  gap: 16px;
-  padding: 16px;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 360px;
+  gap: 12px;
+  padding: 12px;
 }
-.devices {
+.panel {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 160px;
+}
+.devices button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
 }
 .devices button[aria-pressed='true'] {
   outline: 3px solid #1e3a8a;
+}
+.metric {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.stage {
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+.detail dd {
+  margin: 0;
 }
 .chat {
   flex: 1;
@@ -105,13 +174,25 @@ p {
   min-height: 0;
   border: 1px dashed #78716c;
 }
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .body {
+    display: flex;
     flex-direction: column;
   }
   .devices {
     flex-direction: row;
-    width: auto;
+    flex-wrap: wrap;
+  }
+  .devices h2,
+  .metric,
+  .detail {
+    display: none;
+  }
+  .stage {
+    flex: 0 0 180px;
+  }
+  .side {
+    flex: 1;
   }
 }
 </style>

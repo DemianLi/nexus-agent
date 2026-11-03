@@ -1,6 +1,6 @@
 /**
  * 嵌入版 `<nexus-chat>` 的真瀏覽器 e2e（#2366）：Vue 測試頁（`embed-demo/`）放上元件，元件由 serve 供應（`dist/embed.js`），
- * 模型換成腳本（`serve.ts`）。一般回覆、核准、反問、新對話四個情境，外加情境標籤、樣式不外洩、焦點在 shadow root 裡。
+ * 模型換成腳本（`serve.ts`）。一般回覆、核准、反問、新對話四個情境，外加情境標籤、樣式不外洩、焦點在 shadow root 裡，以及跟宿主頁的 3D 模型同時操作。
  *
  * 測試頁不進 `dist`：`beforeAll` 建到暫存目錄，`page.route` 從 serve 同一個來源供應（`/vue-demo/`），跟宿主頁經同源反向代理
  * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。設 `NEXUS_E2E_SHOTS=<目錄>` 時每個情境跑完存一張截圖。
@@ -95,6 +95,16 @@ function focused(page: Page): Promise<string | null> {
       ? null
       : (active.getAttribute('data-slot') ?? active.tagName.toLowerCase());
   });
+}
+
+/** 測試頁的 3D 模型（`embed-demo/ModelView.vue`）目前的視角。 */
+function view(page: Page): Promise<{ yaw: number; pitch: number; distance: number }> {
+  return page.evaluate(() => window.__model!.view());
+}
+
+/** 設備在模型上的位置（頂面中心，視窗座標）。 */
+function devicePoint(page: Page, id: string): Promise<{ x: number; y: number }> {
+  return page.evaluate((device) => window.__model!.point(device), id);
 }
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -263,5 +273,80 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
       .toBe(1);
     await expect.poll(() => transcript(page).getByText('你好').count()).toBe(0);
     await shot(page, 'new-conversation');
+  });
+
+  test('跟 3D 模型互動：點選帶出情境、拖曳與滾輪各管各的、打字不觸發宿主頁的快捷鍵', async () => {
+    const reply = '收到，這是 serve 的腳本回覆。';
+    const page = await openDemo([{ content: reply, tokenDelayMs: 120 }], {
+      width: 1280,
+      height: 800,
+    });
+    const label = (text: string) => chat(page).getByText(`目前選取：${text}`);
+
+    // 在模型上點一台：宿主頁的選取、左邊清單、元件的情境標籤一起變。
+    const b07 = await devicePoint(page, 'B-07');
+    await page.mouse.click(b07.x, b07.y);
+    await expect.poll(() => label('B-07 壓縮機').count()).toBe(1);
+    expect(
+      await page.getByRole('button', { name: /B-07 壓縮機/u }).getAttribute('aria-pressed'),
+    ).toBe('true');
+
+    // 拖曳是轉視角，不是點選。
+    const before = await view(page);
+    const stage = page.getByRole('img', { name: /設備 3D 模型/u });
+    const box = (await stage.boundingBox())!;
+    await page.mouse.move(box.x + 40, box.y + box.height - 40);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 200, box.y + box.height - 60, { steps: 8 });
+    await page.mouse.up();
+    expect((await view(page)).yaw).not.toBe(before.yaw);
+    expect(await label('B-07 壓縮機').count()).toBe(1);
+
+    // 對話框裡打字（含 w、a、s、d）不會轉動或縮放模型；焦點在模型上時同一組鍵照常。
+    const rotated = await view(page);
+    const textbox = chat(page).getByRole('textbox', { name: '要說的話' });
+    await textbox.click();
+    await page.keyboard.type('wasd 這台現在怎樣');
+    expect(await textbox.inputValue()).toBe('wasd 這台現在怎樣');
+    expect(await view(page)).toEqual(rotated);
+    await stage.focus();
+    await page.keyboard.press('d');
+    expect((await view(page)).yaw).toBeGreaterThan(rotated.yaw);
+
+    // 滾輪：在對話框上不縮放模型，在模型上才縮放。
+    const zoomed = await view(page);
+    const panel = (await chat(page).boundingBox())!;
+    await page.mouse.move(panel.x + panel.width / 2, panel.y + panel.height / 3);
+    await page.mouse.wheel(0, 400);
+    expect((await view(page)).distance).toBe(zoomed.distance);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -400);
+    expect((await view(page)).distance).toBeLessThan(zoomed.distance);
+
+    // 一輪還在串的時候照樣能轉模型、換選取；回覆照常串完，對話紀錄不受影響。
+    await chat(page).getByRole('button', { name: '送出', exact: true }).click();
+    await expect.poll(() => transcript(page).getByText('wasd 這台現在怎樣').count()).toBe(1);
+    const streaming = await view(page);
+    await page.mouse.move(box.x + 60, box.y + 60);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 90, { steps: 6 });
+    await page.mouse.up();
+    expect((await view(page)).yaw).not.toBe(streaming.yaw);
+    const a12 = await devicePoint(page, 'A-12');
+    await page.mouse.click(a12.x, a12.y);
+    await expect.poll(() => label('A-12 冷卻泵').count()).toBe(1);
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    await settled(page);
+    await shot(page, 'model-interaction');
+
+    // 點模型上的空地清掉選取，情境標籤跟著拿掉。
+    await page.mouse.click(box.x + 12, box.y + 12);
+    await expect
+      .poll(() =>
+        chat(page)
+          .getByText(/^目前選取：/u)
+          .count(),
+      )
+      .toBe(0);
   });
 });
