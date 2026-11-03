@@ -418,11 +418,11 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
 export const name = 'present';
 
 /**
- * 要的服務：`tools`（`^1.3.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
+ * 要的服務：`tools`（`^2.0.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
  * `offWorkspacePrefixes()`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^1.3.0'),
+  need(toolsToken, '^2.0.0'),
   need(sessionLookupToken, '^1.0.0'),
   need(fsToken, '^2.0.0'),
 );
@@ -436,7 +436,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^1.3.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
     { token: fsToken.name, range: '^2.0.0' },
   ],

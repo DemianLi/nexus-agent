@@ -1,5 +1,5 @@
 /**
- * `NexusTool`（`@nexus/tools` 契約 `1.5.0`，#2351）轉成 LangChain 的工具，讓還跑在 LangGraph 上的組裝照樣叫得到它。
+ * `NexusTool`（`@nexus/tools` 契約 `2.0.0`，#2351）轉成 LangChain 的工具，讓還跑在 LangGraph 上的組裝照樣叫得到它。
  * 轉接器只住在宿主：插件只看見 `NexusTool`，不碰 LangChain。
  *
  * - **送上線的 schema 就是 `parameters`**：轉出來的工具經 LangChain 編回 JSON Schema 之後，必須與 `parameters` 逐字相同，

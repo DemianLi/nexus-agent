@@ -20,7 +20,7 @@ const make = (name: string): StructuredToolInterface =>
 /** 一顆註冊 `config.names` 裡每個工具的消費者，以命名空間物件的形式。 */
 const consumer = {
   name: 'tools-consumer',
-  inject: injectOf(need(toolsToken, '^1.0.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context, config: { names: string[] }) {
     for (const name of config.names) service(ctx, toolsToken).register(make(name));
   },
@@ -29,8 +29,7 @@ const consumer = {
 /** 帶選項登記的消費者（#1458）：`rootOnly` 兩種形狀與 `outputSchema` 都交給登記處。 */
 const optionedConsumer = {
   name: 'tools-optioned-consumer',
-  // 範圍仍是 `^1.0.0`：舊消費者不改範圍，提供者升到 1.1.0 之後照常（驗收 F）。
-  inject: injectOf(need(toolsToken, '^1.0.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context) {
     const tools = service(ctx, toolsToken);
     tools.register(make('plain'));
@@ -42,10 +41,10 @@ const optionedConsumer = {
   },
 };
 
-/** 登記核准閘門的消費者（#1466）：要 `^1.2.0`，名字是 `config.tool` 的呼叫回 `ask`，其餘 `next()`。 */
+/** 登記核准閘門的消費者（#1466）：名字是 `config.tool` 的呼叫回 `ask`，其餘 `next()`。 */
 const gatingConsumer = {
   name: 'tools-gating-consumer',
-  inject: injectOf(need(toolsToken, '^1.2.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context, config: { tool: string }) {
     const tools = service(ctx, toolsToken);
     if (tools.gate === undefined) throw new Error('提供者沒有 gate');
@@ -58,10 +57,10 @@ const gatingConsumer = {
 /** 觀察者看到的呼叫，依 `config.key` 分開記（Loader 會把列的 config 深複製，不能把陣列塞進 config 傳回來）。 */
 const seen = new Map<string, string[]>();
 
-/** 登記 `tools/result` 觀察者的消費者（#1469）：要 `^1.3.0`，把看到的呼叫記進 {@link seen}。 */
+/** 登記 `tools/result` 觀察者的消費者（#1469）：把看到的呼叫記進 {@link seen}。 */
 const resultConsumer = {
   name: 'tools-result-consumer',
-  inject: injectOf(need(toolsToken, '^1.3.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context, config: { key: string }) {
     const tools = service(ctx, toolsToken);
     if (tools.onResult === undefined) throw new Error('提供者沒有 onResult');
@@ -73,10 +72,10 @@ const resultConsumer = {
   },
 };
 
-/** 標「這一輪在這顆工具之後收」的消費者（#1607）：要 `^1.4.0`，叫 `concludeTurn(config.tool)`；方法是選填，沒有就擲。 */
+/** 標「這一輪在這顆工具之後收」的消費者（#1607）：叫 `concludeTurn(config.tool)`；方法是選填，沒有就擲。 */
 const concludingConsumer = {
   name: 'tools-concluding-consumer',
-  inject: injectOf(need(toolsToken, '^1.4.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context, config: { tool: string }) {
     const tools = service(ctx, toolsToken);
     if (tools.concludeTurn === undefined) throw new Error('提供者沒有 concludeTurn');
@@ -84,10 +83,10 @@ const concludingConsumer = {
   },
 };
 
-/** 登記 `NexusTool` 的消費者（#2351）：要 `^1.5.0`。 */
+/** 登記 `NexusTool` 的消費者（#2351）。 */
 const nexusConsumer = {
   name: 'tools-nexus-consumer',
-  inject: injectOf(need(toolsToken, '^1.5.0')),
+  inject: injectOf(need(toolsToken, '^2.0.0')),
   apply(ctx: Context, config: { name: string }) {
     service(ctx, toolsToken).register({
       name: config.name,
@@ -98,7 +97,7 @@ const nexusConsumer = {
   },
 };
 
-/** 舊範圍的消費者：只登記一個工具，不呼叫 `gate`／`onResult`（驗收：`^1.0.0`～`^1.2.0` 在 1.3.0 的提供者上照常）。 */
+/** 舊範圍的消費者：只登記一個工具。`^1.x` 不滿足 2.0.0 的提供者，應該停在 PENDING。 */
 const oldRangeConsumer = (name: string, range: string) => ({
   name,
   inject: injectOf(need(toolsToken, range)),
@@ -127,8 +126,8 @@ async function boot(options: Parameters<typeof createToolsProvider>[0] = {}) {
     concluding: concludingConsumer,
     nexus: nexusConsumer,
     'old-100': oldRangeConsumer('old-100', '^1.0.0'),
-    'old-110': oldRangeConsumer('old-110', '^1.1.0'),
-    'old-120': oldRangeConsumer('old-120', '^1.2.0'),
+    'old-140': oldRangeConsumer('old-140', '^1.4.0'),
+    'new-200': oldRangeConsumer('new-200', '^2.0.0'),
   });
   const create = (options: EntryOptions) =>
     context.loader.create(options as Omit<EntryOptions, 'id'>, null);
@@ -262,25 +261,21 @@ describe('工具登記處的提供者', () => {
     expect(loader.resolve('con-b').fiber?.ctx.fiber.state).toBe(2);
   });
 
-  it('舊範圍：^1.0.0、^1.1.0、^1.2.0 的消費者在 1.5.0 的提供者上照常登記工具，而且沒有人因此多出閘門或觀察者', async () => {
+  it('舊範圍：^1.0.0、^1.4.0 的消費者在 2.0.0 的提供者上停在 PENDING、什麼都沒登記；^2.0.0 照常', async () => {
     const { provider, loader, create } = await boot();
     await create({ id: 'old-a', name: 'cordis:old-100' });
-    await create({ id: 'old-b', name: 'cordis:old-110' });
-    await create({ id: 'old-c', name: 'cordis:old-120' });
+    await create({ id: 'old-b', name: 'cordis:old-140' });
+    await create({ id: 'new-a', name: 'cordis:new-200' });
     await loader.await();
-    expect(loader.resolve('old-a').fiber?.ctx.fiber.state).toBe(2);
-    expect(loader.resolve('old-b').fiber?.ctx.fiber.state).toBe(2);
-    expect(loader.resolve('old-c').fiber?.ctx.fiber.state).toBe(2);
+    expect(loader.resolve('old-a').fiber?.ctx.fiber.state).toBe(0);
+    expect(loader.resolve('old-b').fiber?.ctx.fiber.state).toBe(0);
+    expect(loader.resolve('new-a').fiber?.ctx.fiber.state).toBe(2);
     expect(provider.entries().map(({ tool: t, source }) => [t.name, source])).toEqual([
-      ['old-100_tool', 'old-a'],
-      ['old-110_tool', 'old-b'],
-      ['old-120_tool', 'old-c'],
+      ['new-200_tool', 'new-a'],
     ]);
-    expect(provider.gates()).toEqual([]);
-    expect(provider.resultListeners()).toEqual([]);
   });
 
-  it('NexusTool（^1.5.0）與 LangChain 的工具登記在同一處，原物件原樣記下，同名照樣撞', async () => {
+  it('NexusTool 與 LangChain 的工具登記在同一處，原物件原樣記下，同名照樣撞', async () => {
     const { provider, loader, create } = await boot();
     await create({ id: 'row-n', name: 'cordis:nexus', config: { name: 'n1' } });
     await create({ id: 'row-a', name: 'cordis:consumer', config: { names: ['a1'] } });

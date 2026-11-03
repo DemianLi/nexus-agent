@@ -40,18 +40,18 @@ afterEach(async () => {
 const LANGCHAIN_TOOLS = import.meta.resolve('@langchain/core/tools');
 
 /**
- * 一顆外部函式插件：只相依 `@nexus/tools`（`^1.4.0`），登記一個工具 `closer_tool`；
+ * 一顆外部函式插件：只相依 `@nexus/tools`（`^2.0.0`），登記一個工具 `closer_tool`；
  * `declared` 決定有沒有宣告 `returnDirect`，參數 `close` 決定本體呼不呼叫 `concludeTurn`。
  */
 function closerPlugin(declared: boolean): string {
   return `import { z } from 'zod';
 import { tool } from ${JSON.stringify(LANGCHAIN_TOOLS)};
 export const name = 'closer';
-export const inject = { tools: { range: '^1.4.0' } };
+export const inject = { tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({});
 export const manifest = {
   id: 'closer', version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^1.4.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx) {

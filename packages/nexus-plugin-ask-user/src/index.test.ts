@@ -228,14 +228,14 @@ describe('樹上這一列（#1458）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.1.0，要帶選項）與 approvalChannel（^1.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^2.0.0，要帶選項）與 approvalChannel（^1.0.0）；沒有 default 匯出', () => {
     expect(askUser.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.1.0' },
+      { token: 'tools', range: '^2.0.0' },
       { token: 'approvalChannel', range: '^1.0.0' },
     ]);
     expect(askUser.manifest.provides).toEqual([]);
     expect(askUser.inject).toEqual({
-      tools: { range: '^1.1.0' },
+      tools: { range: '^2.0.0' },
       approvalChannel: { range: '^1.0.0' },
     });
     expect('default' in askUser).toBe(false);

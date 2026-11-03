@@ -37,10 +37,11 @@ import { defineToken } from '@nexus/sdk';
  * `1.4.0`（#1607）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.concludeTurn}（宣告了 `returnDirect` 的工具在本體裡標「這一輪在這個結局收」）。
  * 同樣是向後相容的新增：`^1.0.0`～`^1.3.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.4.0`。
  *
- * `1.5.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料）。舊的 LangChain 工具照收，
- * 所以仍是只增不減：`^1.0.0`～`^1.4.0` 的舊消費者照常；登記 `NexusTool` 的消費者宣告 `^1.5.0`。
+ * `2.0.0`（#2351）：`register` 也收 {@link NexusTool}（參數是 JSON Schema、身分與錯誤碼是資料），這是工具契約脫離 LangChain 的那一版。
+ * LangChain 的工具照收，介面本身只增不減，但主版號照設計跳 major：宣告 `^1.x` 的消費者不滿足 `2.0.0`，停在 PENDING，要改宣告 `^2.0.0`
+ * （升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2/guide.md`）。
  */
-export const TOOLS_CONTRACT_VERSION = '1.5.0';
+export const TOOLS_CONTRACT_VERSION = '2.0.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -217,7 +218,7 @@ export interface ToolRegistry {
    *
    * 註冊就是 effect：註冊者那一列卸載時登記處自己撤掉，不靠呼叫者記得呼叫回傳的 disposer。
    *
-   * @param tool - 工具，名字取自它的 `name`；同名報錯。{@link NexusTool} 從契約 `1.5.0` 起收。
+   * @param tool - 工具，名字取自它的 `name`；同名報錯。{@link NexusTool} 從契約 `2.0.0` 起收。
    * @param options - 選填，`rootOnly` 與 `outputSchema`（契約 `1.1.0` 起；`scope` 沒有消費者，不收）。
    * @returns 只撤銷這一次註冊的冪等 disposer。
    */

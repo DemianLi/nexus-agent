@@ -239,11 +239,11 @@ describe('已知缺口：必掛的列自我停用不進 dropped，啟動稽核�
       module,
       `import { z } from 'zod';
 export const name = 'system-prompt';
-export const inject = { tools: { range: '^1.0.0' } };
+export const inject = { tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({});
 export const manifest = {
   id: 'system-prompt', version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx) { ctx.fiber.dispose(); }

@@ -643,15 +643,15 @@ describe('樹上這一列（#1469）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告三個必要依賴：tools（^1.3.0）、sessionLookup（^1.0.0）、fs（^2.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告三個必要依賴：tools（^2.0.0）、sessionLookup（^1.0.0）、fs（^2.0.0）；沒有 default 匯出', () => {
     expect(present.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.3.0' },
+      { token: 'tools', range: '^2.0.0' },
       { token: 'sessionLookup', range: '^1.0.0' },
       { token: 'fs', range: '^2.0.0' },
     ]);
     expect(present.manifest.provides).toEqual([]);
     expect(present.inject).toEqual({
-      tools: { range: '^1.3.0' },
+      tools: { range: '^2.0.0' },
       sessionLookup: { range: '^1.0.0' },
       fs: { range: '^2.0.0' },
     });

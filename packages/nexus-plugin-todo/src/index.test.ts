@@ -381,13 +381,13 @@ describe('樹上這一列（#1463）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.0.0）與 sessionLookup（^1.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^2.0.0）與 sessionLookup（^1.0.0）；沒有 default 匯出', () => {
     expect(todo.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.0.0' },
+      { token: 'tools', range: '^2.0.0' },
       { token: 'sessionLookup', range: '^1.0.0' },
     ]);
     expect(todo.manifest.provides).toEqual([]);
-    expect(todo.inject).toEqual({ tools: { range: '^1.0.0' }, sessionLookup: { range: '^1.0.0' } });
+    expect(todo.inject).toEqual({ tools: { range: '^2.0.0' }, sessionLookup: { range: '^1.0.0' } });
     expect('default' in todo).toBe(false);
   });
 

@@ -264,11 +264,11 @@ function contributor(options: Contribution): string {
   return `import { z } from ${JSON.stringify(ZOD_URL)};
 import { tool } from ${JSON.stringify(TOOLS_URL)};
 export const name = ${JSON.stringify(options.id)};
-export const inject = { projections: { range: '^1.0.0' }, tools: { range: '^1.0.0' } };
+export const inject = { projections: { range: '^1.0.0' }, tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({});
 export const manifest = {
   id: ${JSON.stringify(options.id)}, version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'projections', range: '^1.0.0' }, { token: 'tools', range: '^1.0.0' }],
+  provides: [], consumes: [{ token: 'projections', range: '^1.0.0' }, { token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx) {
