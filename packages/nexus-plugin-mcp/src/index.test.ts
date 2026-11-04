@@ -20,6 +20,7 @@ import { z } from 'zod';
 import {
   createMcpPlugin,
   DEFAULT_TOOL_CALL_TIMEOUT_MS,
+  hiddenAfterGiveUp,
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
@@ -583,5 +584,19 @@ describe('子行程的環境（#726）', () => {
       expect(seen['NODE_USE_ENV_PROXY']).toBeNull();
       expect(seen['HTTPS_PROXY']).toBe('socks5://proxy.internal:1080');
     });
+  });
+});
+
+describe('hiddenAfterGiveUp：放棄重連之後不放行這一台的工具', () => {
+  it('沒放棄全放行；放棄後只擋這一台的名字；每次現問 gaveUp', () => {
+    let gaveUp = false;
+    const admission = hiddenAfterGiveUp(['srv_a', 'srv_b'], () => gaveUp);
+    expect(['srv_a', 'other'].map((name) => admission.admits(name))).toEqual([true, true]);
+    gaveUp = true;
+    expect(['srv_a', 'srv_b', 'other'].map((name) => admission.admits(name))).toEqual([
+      false,
+      false,
+      true,
+    ]);
   });
 });

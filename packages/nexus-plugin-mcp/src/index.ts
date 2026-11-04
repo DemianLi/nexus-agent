@@ -12,13 +12,14 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/client';
-import { CHANNEL_SERVICE } from '@nexus/core';
+import { admittedTools, CHANNEL_SERVICE } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
   NexusPlugin,
   PluginEntry,
   PluginRegistry,
+  ToolAdmission,
 } from '@nexus/core';
 import type { NexusTool } from '@nexus/tools';
 import { createMiddleware } from 'langchain';
@@ -615,21 +616,33 @@ function asAbort(error: unknown): Error {
   return aborted;
 }
 
-/** 放棄重連之後，把這一台的工具從每次模型請求的工具清單拿掉；沒放棄就原樣穿過。 */
+/**
+ * 放棄重連之後，這一台的工具不放行；放棄與否每次問 `gaveUp`，不拍快照。
+ *
+ * 只管模型那一側的清單：被藏起來的工具若仍被叫到，照舊走到工具本體、回「已放棄重連」。
+ *
+ * @param names - 這一台註冊的工具名（public name）。
+ * @param gaveUp - 監督者是否已放棄重連。
+ * @returns 這一台的放行決定。
+ */
+export function hiddenAfterGiveUp(names: readonly string[], gaveUp: () => boolean): ToolAdmission {
+  const hidden = new Set(names);
+  return { admits: (name) => !(gaveUp() && hidden.has(name)) };
+}
+
+/** 套 {@link hiddenAfterGiveUp} 的那一格；沒放棄就原樣穿過同一個請求。 */
 function hideTools(
   serverName: string,
   names: readonly string[],
   gaveUp: () => boolean,
 ): AgentMiddleware {
-  const hidden = new Set(names);
+  const admission = hiddenAfterGiveUp(names, gaveUp);
   return createMiddleware({
     // 每一列一個名字：同名的兩顆 middleware 會在基座那邊撞名。
     name: `mcp-tools-guard:${serverName}`,
     wrapModelCall: (request, handler) => {
       if (!gaveUp()) return handler(request);
-      const tools = request.tools.filter(
-        (tool) => !hidden.has((tool as { name?: string }).name ?? ''),
-      );
+      const tools = admittedTools(request.tools, admission) as typeof request.tools;
       return handler({ ...request, tools });
     },
   }) as AgentMiddleware;

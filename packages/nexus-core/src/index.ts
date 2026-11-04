@@ -230,6 +230,8 @@ export type {
   ToolCallSubstitute,
 } from './tool-call-step.js';
 export { createToolCallStepMiddleware, wrapToolCallWith } from './tool-call-step.js';
+export type { ToolAdmission } from './tool-resolution.js';
+export { admittedTools } from './tool-resolution.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';
