@@ -115,20 +115,22 @@ function runBounded<T>(
       while (failure === undefined && next < jobs.length && running < limit) {
         const index = next++;
         running += 1;
-        jobs[index]!().then(
-          (value) => {
-            results[index] = value;
-          },
-          (reason: unknown) => {
-            if (failure !== undefined) return;
-            failure = { reason };
-            step.abort();
-          },
-        ).finally(() => {
-          running -= 1;
-          start();
-          settle();
-        });
+        jobs[index]!()
+          .then(
+            (value) => {
+              results[index] = value;
+            },
+            (reason: unknown) => {
+              if (failure !== undefined) return;
+              failure = { reason };
+              step.abort();
+            },
+          )
+          .finally(() => {
+            running -= 1;
+            start();
+            settle();
+          });
       }
     };
     start();
@@ -308,9 +310,7 @@ export class NativeAgent {
 
   async #turn(input: LoopInput, config: RunnableConfig, observer: RunObserver): Promise<LoopState> {
     if (isCommand(input)) {
-      throw new Error(
-        'native agent loop 不支援 resume：沒有可接回的中斷（#2358）',
-      );
+      throw new Error('native agent loop 不支援 resume：沒有可接回的中斷（#2358）');
     }
     // 沒給 thread 的一輪從空的 state 跑、跑完不留，同 LangGraph 沒有存檔點時。
     const threadId = optionalThreadIdOf(config);
@@ -333,7 +333,10 @@ export class NativeAgent {
       const config =
         signal === undefined
           ? base
-          : { ...base, signal: base.signal === undefined ? signal : AbortSignal.any([base.signal, signal]) };
+          : {
+              ...base,
+              signal: base.signal === undefined ? signal : AbortSignal.any([base.signal, signal]),
+            };
       return new NodeTask(config, ns, name, state, this.#channels, taskInput, () =>
         observer.emitter?.complete([ns]),
       );
