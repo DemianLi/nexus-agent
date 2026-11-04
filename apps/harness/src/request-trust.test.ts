@@ -2,7 +2,7 @@
  * 瀏覽器信任圍欄的判準（#387）。
  *
  * 線上四條路徑有沒有真的先過這道圍欄，在 `wire.test.ts`。
- * 指名的公開 authority（`trustedHosts`，#2369）與 Origin 依自己的 scheme 比對，在檔尾兩組。
+ * 檔尾三組（#2369）：指名的公開 authority（`trustedHosts`）、Origin 依自己的 scheme 比對、`assertTrustedAuthority`。
  */
 
 import { describe, expect, it } from 'vitest';

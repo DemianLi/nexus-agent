@@ -7,8 +7,7 @@
  * 也不是防護，rebinding 打的正是只綁 loopback 的服務。2026-09-18 實測過：真的 `serve` 收到
  * `Host: evil.example:18787` 照樣回 200（探針與結果在 #387 的 triage 留言）。
  *
- * **判準逐字照 dsh**：`packages/client/connection/src/api-request-trust.ts` 的
- * `isTrustedApiRequest` 與 `loopback-hostname.ts`（`ddefc45`）。三道，依序：
+ * 三道，依序：
  *
  * 1. **Host**：每個請求都判，沒有捷徑。純 HTTP 下瀏覽器的讀取不帶 Origin 也不帶
  *    Fetch-Metadata，跟 curl 分不開，而被 rebinding 的頁面讀得到那個回應；Host 是 rebinding
@@ -27,17 +26,9 @@
  *
  * ## 偏離（照 AGENTS.md 的偏離規則登記）
  *
- * - **沒有 TLS**（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547) 的 Q1 (a)）。dsh 的 web 可以選用 TLS
- *   （`--tls-cert`／`--tls-key` 成對才收，`packages/bundle/web-app/src/startup.ts:69-70`、`:105`）：憑證與私鑰在綁 port
- *   之前讀一次，讀不到、空檔、不成對都讓啟動失敗，不退回 HTTP（`packages/host/webserver/src/index.ts:257-268`、
- *   `:461-479`）；走 TLS 時 cookie 帶 `Secure`（`packages/client/connection/src/browser-auth.ts:131-140`，`687f282e`）。
- *   我們的 `serve` 只綁 loopback，走網路的那一段由前面的 SSH 隧道或反向代理負責加密（代理終止 TLS 見 `docs/operations.md`）。
- *   **重開條件**：`serve` 加上 `--host`——那天一起帶進來，連同 `wire-server.ts` 寫死的兩處 `http://`（給 handler 的 origin 與印出來的
- *   網址），以及 `browser-auth.ts` 檔頭「loopback 的 HTTP 所以刻意不設 `Secure`」那一句。
- * - **Origin 沒有落差。** 網頁一律由 serve 自己服務（`web-static.ts`，
- *   [#424](https://github.com/DemianLi/nexus-agent/issues/424)），開發時也一樣——Vite 不服務網頁、
- *   `pnpm dev` 只是 `vite build --watch`（[#426](https://github.com/DemianLi/nexus-agent/issues/426)）。
- *   所以跟 dsh 一樣，瀏覽器的 Origin 本來就等於 Host，這裡的判準一個字不動。
+ * - **沒有 TLS**（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547) 的 Q1 (a)）。`serve` 只走 HTTP、只綁 loopback；
+ *   加密由前面的 SSH 隧道或終止 TLS 的反向代理負責。`serve` 若加上 `--host`，要一起處理 `wire-server.ts` 寫死的兩處
+ *   `http://`（給 handler 的 origin 與印出來的網址），以及 `browser-auth.ts` 檔頭不設 `Secure` 的那一條。
  *
  * **圍欄不建立身分**：過了這一道還要過瀏覽器會話（`browser-auth.ts`，#424），防的是同機其他
  * 使用者或行程直接打 API，跟 rebinding 是不同的威脅。原本登記在這裡的「沒有瀏覽器會話認證」
@@ -72,8 +63,9 @@ function canonicalAuthority(entry: string, entryUrl: URL): string {
  * 驗一個 `--trusted-host` 條目：必須是正規寫法的裸 `host[:port]`，解析前後（大小寫除外）一字不差。
  *
  * 會被解析悄悄改寫的一律拒收，在啟動時就失敗，不留到請求一律 403 才發現：多了路徑或 `user@`（後者會放行裡面那個
- * hostname）、前後空白、空的或補零的 port（會把只認一個 port 放寬成任何 port）、非正規的位址寫法（`0x7f.0.0.1`、
- * 百分比編碼、沒加方括號的 IPv6；IDN 寫 punycode，線上傳的就是那個形式）。
+ * hostname）、前後空白、空的 port（會把只認一個 port 放寬成任何 port）、補零的 port、非正規的位址寫法（`0x7f.0.0.1`、
+ * 百分比編碼、沒加方括號的 IPv6；IDN 寫 punycode，線上傳的就是那個形式）。補零的 port 照數值比，不會放寬，
+ * 但讀回來跟寫的不一樣，一併拒收。
  *
  * @throws 條目不是正規寫法的裸 `host[:port]`。
  */

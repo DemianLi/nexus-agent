@@ -193,6 +193,8 @@ describe('serve 的瀏覽器會話', () => {
     expect(login.status).toBe(303);
     expect(login.headers['location']).toBe('./');
     const setCookie = String(login.headers['set-cookie']);
+    // 代理說前面是 https 也不加 `Secure`：只看 serve 自己的 listener。
+    expect(setCookie).not.toContain('Secure');
     const cookie = setCookie.split(';', 1)[0]!;
 
     const sameOrigin = { ...proxied, cookie, origin: 'https://app.example', ...JSON_HEADERS };
@@ -210,7 +212,7 @@ describe('serve 的瀏覽器會話', () => {
       });
       expect({ host, status: refused.status }).toEqual({ host, status: 403 });
     }
-    // 指名的 Host 配上別的 Origin。
+    // 指名只放行 Host，Origin 照樣要同源。
     expect(
       (await rawGet(server.url, THREADS_PATH, { ...sameOrigin, origin: 'https://evil.example' }))
         .status,

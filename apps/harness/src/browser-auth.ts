@@ -7,15 +7,15 @@
  * wire 的每一條路由都能以 serve 擁有者的身分操作 agent。部署主機是多人共用的（demian 2026-09-19），
  * 所以 #387 登記的重開條件已經觸發。
  *
- * **逐項照 dsh** `packages/client/connection/src/browser-auth.ts`（`ddefc45`），只把 node:http 的
- * req／res 換成 fetch 的 `Request`／`Response`：
+ * 判準：
  *
  * - **啟動 token**：每個行程一個，32 bytes 隨機值、base64url，不落盤。只有 `GET /?token=…` 而且
  *   query 裡剛好一個 token 才收；API 路徑與 `Authorization` 標頭都不收。
  * - **換到的 cookie**：值是 `v1.<body>.<HMAC-SHA256>`，body 是 `{ version, authority, issuedAt, expiresAt }`；
  *   名字是前綴加上 `sha256(authority)`——cookie 不分 port，所以同一台機器不同 port 上的 serve 各有
  *   各的名字、不會互相蓋掉；屬性 `Max-Age`、`Path=/`、`Expires`、`HttpOnly`、`SameSite=Strict`，
- *   loopback 的 HTTP 所以刻意不設 `Secure`，也不設 `Domain`（host-only）。
+ *   不設 `Domain`（host-only）。只有 serve 自己的 listener 走 TLS 才設 `Secure`：serve 只走 HTTP，所以不設；前面的代理
+ *   終止 TLS 時也一樣，`--public-url` 與轉送標頭都不算。
  * - **驗證**：authority 取 `Host` 正規化；只讀名字剛好相符的那一顆；簽章用 `timingSafeEqual` 比；
  *   authority 要相同；`issuedAt <= now < expiresAt`，而且期間不超過這一版的上限。
  * - **換完 303 到乾淨的 `./`**，帶 `cache-control: no-store` 與 `referrer-policy: no-referrer`；
