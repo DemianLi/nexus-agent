@@ -154,9 +154,17 @@ export class NodeTask {
 
   /** 節點結束：把經 `__pregel_send` 送出的寫入套進 state。 */
   flush(): void {
+    this.keepWrites();
+    this.onFlush?.();
+  }
+
+  /**
+   * 節點拋了：已經送出的寫入照樣套進 state，節點不算完成。同 LangGraph 把失敗 task 的寫入連同 `ERROR` 存成 pending writes，
+   * 下一輪與 `getState` 都看得到（例如摘要器先寫的歷史檔）。
+   */
+  keepWrites(): void {
     for (const [key, value] of this.writes) this.channels.apply(this.state, { [key]: value });
     this.writes.length = 0;
-    this.onFlush?.();
   }
 }
 

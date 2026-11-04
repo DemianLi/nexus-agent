@@ -48,6 +48,14 @@ const toolsPlugin: PluginEntry = {
           { name: 'boom', description: '會拋錯。', schema: z.object({}) },
         ),
       );
+      registry.tools.register(
+        tool(() => ['好了', pastLogDepthCap()] as [string, unknown], {
+          name: 'deep',
+          description: '結果記不進日誌。',
+          schema: z.object({}),
+          responseFormat: 'content_and_artifact',
+        }),
+      );
     },
   },
 };
@@ -218,6 +226,19 @@ describe('native loop 對照 LangGraph', () => {
       [{ content: '試試。', toolCalls: [{ name: 'nope', args: {} }] }, { content: '沒有。' }],
     ],
     ['模型出錯', [{ content: '', error: '供應商過載' }]],
+    // 這一步失敗：跑完的兄弟照寫進 state。前一顆失敗、兄弟晚進的那種不在這裡比，見下面「native 下同一步的兄弟」。
+    [
+      '兄弟跑完、後一顆失敗',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'echo', args: { text: '先' } },
+            { name: 'deep', args: {} },
+          ],
+        },
+      ],
+    ],
     [
       '前景委派',
       [
@@ -329,8 +350,11 @@ describe('native 下要核准的工具', () => {
 });
 
 /**
- * 同一步有一顆失敗了：兄弟拿到 abort、這一步拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。兄弟晚一步才進工具、拿到的已經是
- * 舉起來的 signal 時也一樣（LangChain 的 tool 只掛 `abort` 監聽，不先看一眼就會一直等）。
+ * 同一步有一顆失敗了：兄弟拿到 abort、這一步拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。
+ *
+ * 兄弟在失敗之後才進工具時（獨佔的兄弟排在失敗那顆後面）跟 LangGraph 不一樣：native 一失敗就 abort，兄弟不進工具；LangGraph
+ * 要等它的 runner 收到那顆失敗才 abort，這段空檔裡進工具的兄弟會跑完。已知差異，不在上面的等值對照裡。不先拋的話兄弟會永遠懸著：
+ * LangChain 的 `tool()` 拿到已經 abort 的 signal 不拒絕、也永不 resolve。
  */
 describe('native 下同一步的兄弟', () => {
   // 可重疊時兩顆同時進工具；獨佔時屏障讓 wait 等 breaks 收完才進，進去時 signal 已經舉起來了。

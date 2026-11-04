@@ -346,5 +346,6 @@ export function assembleAgent(params: AssembleAgentParams) {
     tools: tools ?? [],
     middleware,
     ...(params.events !== undefined && { events: params.events }),
+    ...(store !== undefined && { store }),
   }) as unknown as typeof agent;
 }

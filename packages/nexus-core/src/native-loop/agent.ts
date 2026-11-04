@@ -52,6 +52,8 @@ export interface NativeAgentParams {
   readonly middleware: readonly unknown[];
   /** 派發四個 agent 事件；不給就不派發（每一個都直通）。 */
   readonly events?: EventDispatcher;
+  /** 節點的 `config.store`，呼叫時給的優先，同 LangGraph。 */
+  readonly store?: unknown;
 }
 
 /** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意照舊。 */
@@ -96,36 +98,29 @@ function recursionError(limit: number): GraphRecursionError {
  * 依上限跑一批工作，**照索引起跑**：前面的先佔名額。屏障（`tool-barrier.ts`）等的是排在前面的呼叫，後面的先佔滿名額會互等。
  * 有一顆拋了就 abort `step`、排著的不再起跑，等跑著的收完再拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。
  */
-function runBounded<T>(
-  jobs: readonly (() => Promise<T>)[],
+function runBounded(
+  jobs: readonly (() => Promise<void>)[],
   limit: number,
   step: AbortController,
-): Promise<T[]> {
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const results = new Array<T>(jobs.length);
     let next = 0;
     let running = 0;
     let failure: { readonly reason: unknown } | undefined;
     const settle = (): void => {
       if (running > 0) return;
       if (failure !== undefined) reject(failure.reason);
-      else if (next >= jobs.length) resolve(results);
+      else if (next >= jobs.length) resolve();
     };
     const start = (): void => {
       while (failure === undefined && next < jobs.length && running < limit) {
-        const index = next++;
         running += 1;
-        jobs[index]!()
-          .then(
-            (value) => {
-              results[index] = value;
-            },
-            (reason: unknown) => {
-              if (failure !== undefined) return;
-              failure = { reason };
-              step.abort();
-            },
-          )
+        jobs[next++]!()
+          .catch((reason: unknown) => {
+            if (failure !== undefined) return;
+            failure = { reason };
+            step.abort();
+          })
           .finally(() => {
             running -= 1;
             start();
@@ -242,7 +237,7 @@ export class NativeAgent {
    * @param config - 帶 `configurable.thread_id`。
    */
   async invoke(input: LoopInput, config: RunnableConfig = {}): Promise<LoopState> {
-    return this.#run(input, config, {});
+    return outputOf(await this.#run(input, config, {}));
   }
 
   /**
@@ -259,7 +254,7 @@ export class NativeAgent {
       onUpdate: (node, update) => queue.push(['updates', { [node]: update }]),
     }).then(
       (state) => {
-        queue.push(['values', state]);
+        queue.push(['values', outputOf(state)]);
         queue.close();
       },
       (error: unknown) => queue.fail(error),
@@ -471,7 +466,6 @@ export class NativeAgent {
         note('model_request', update);
         return message;
       } catch (error) {
-        task.writes.length = 0;
         const action =
           events === undefined
             ? undefined
@@ -480,7 +474,11 @@ export class NativeAgent {
                 { ...payload, error },
                 async () => undefined,
               );
-        if (action?.kind === 'retry') continue;
+        if (action?.kind === 'retry') {
+          task.writes.length = 0;
+          continue;
+        }
+        task.keepWrites();
         throw error;
       }
     }
@@ -498,22 +496,39 @@ export class NativeAgent {
   ): Promise<boolean> {
     const step = new AbortController();
     const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }, step.signal));
-    // 有一顆拋了，整步不寫。
-    const settled = await runBounded(
-      calls.map((call, index) => () => runTool(call, this.#tools, this.middleware, tasks[index]!)),
-      Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
-      step,
-    );
+    const results = new Array<ToolMessage | Command | undefined>(calls.length);
     const messages: BaseMessage[] = [];
-    settled.forEach((value, index) => {
-      tasks[index]!.flush();
-      if (isCommand(value)) {
-        this.#applyCommand(state, value);
-      } else {
-        messages.push(value);
-      }
-    });
-    if (messages.length > 0) this.#channels.apply(state, { messages });
+    // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。
+    const commit = (): void => {
+      tasks.forEach((task, index) => {
+        const value = results[index];
+        if (value === undefined) {
+          task.keepWrites();
+          return;
+        }
+        task.flush();
+        if (isCommand(value)) {
+          this.#applyCommand(state, value);
+        } else {
+          messages.push(value);
+          this.#channels.apply(state, { messages: [value] });
+        }
+      });
+    };
+    try {
+      await runBounded(
+        calls.map((call, index) => async () => {
+          results[index] = await runTool(call, this.#tools, this.middleware, tasks[index]!);
+        }),
+        Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
+        step,
+      );
+    } catch (error) {
+      // 同 LangGraph 把這一步存成 pending writes：跑完的兄弟結果照寫，每一顆送出的寫入照套，失敗那顆不算完成。
+      commit();
+      throw error;
+    }
+    commit();
     note('tools', { messages });
     const last = state.messages.at(-1);
     return (
@@ -543,8 +558,10 @@ export class NativeAgent {
   ): RunnableConfig {
     const callbacks = Array.isArray(config.callbacks) ? [...config.callbacks] : [];
     if (emitter !== undefined) callbacks.push(new NativeStreamHandler(emitter));
+    const store = (config as { store?: unknown }).store ?? this.#params.store;
     return {
       ...config,
+      ...(store !== undefined && { store }),
       recursionLimit,
       ...(maxConcurrency !== undefined && { maxConcurrency }),
       callbacks,
@@ -552,6 +569,13 @@ export class NativeAgent {
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
     } as RunnableConfig;
   }
+}
+
+/** 回給呼叫端的 state：`_` 開頭的鍵是 middleware 私有的，不輸出（state 裡照留），同 langchain `createAgentState` 的 output 欄位。 */
+function outputOf(state: LoopState): LoopState {
+  return Object.fromEntries(
+    Object.entries(state).filter(([key]) => !key.startsWith('_')),
+  ) as LoopState;
 }
 
 function optionalThreadIdOf(config: RunnableConfig): string | undefined {
