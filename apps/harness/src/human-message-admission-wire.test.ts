@@ -2,12 +2,12 @@
  * 太大的人話在 wire 上的拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415) 第 6b 張）。量法對著基座比在
  * `@nexus/core` 的 `human-message-admission.test.ts`；這一檔問的是接線：
  *
- * 1. `native` 下 `run.start` 與 `queue.update` 的 `edit` 拒收，日誌一個字都不寫；剛好等於上限的照收。
+ * 1. `native` 下 `run.start` 與 `queue.update` 的 `edit` 拒收，日誌一個字都不寫；剛好等於上限的照收；點名的提示字算進去。
  * 2. `langgraph` 下照收，交給基座搬移。
  * 3. 產品路徑上的 serve 照 `--agent-loop` 決定：沒給就是 `langgraph`；native 套件把它當成 `native`（`native-loop.setup.ts`）。
  */
 
-import { HUMAN_MESSAGE_LIMIT_CHARS } from '@nexus/core';
+import { HUMAN_MESSAGE_LIMIT_CHARS, mentionHintText } from '@nexus/core';
 import type { AgentLoopKind, SessionEvent } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -75,6 +75,7 @@ describe('wire handler 照 agentLoop 拒收', () => {
       agentLoop,
       createAgent: async () => ({
         agent: heldAgent(hold),
+        subagentKinds: [{ name: 'reviewer', description: '審稿' }],
         commands: emptyCommandPoint(),
         dispose: async () => {},
         attachSessions: (sessions) => {
@@ -104,6 +105,21 @@ describe('wire handler 照 agentLoop 拒收', () => {
     expect(types()).toEqual([]);
     expect((await client.runStart(thread, AT_LIMIT)).type).toBe('success');
     await until(() => types().includes('turn/start'));
+  });
+
+  it('native：點名的提示字算進去，字本身沒過線、加上提示就過線的拒收', async () => {
+    const { client, types } = wire('native');
+    const thread = 'native-mention';
+    const mention = { kind: 'subagent', name: 'reviewer' } as const;
+    // 文字區塊與提示區塊以一個換行接起來，所以這句話剛好比上限多一個字。
+    const text = 'z'.repeat(HUMAN_MESSAGE_LIMIT_CHARS - mentionHintText(mention).length);
+    expect(await client.runStart(thread, text, { mention })).toMatchObject({
+      type: 'error',
+      error: 'invalid_argument',
+      message: 'message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字',
+    });
+    expect(types()).toEqual([]);
+    expect((await client.runStart(thread, text)).type).toBe('success');
   });
 
   it('native：queue.update 改成太大的回 invalid_argument，排著的那一件不動', async () => {
@@ -163,5 +179,19 @@ describe('產品路徑上的 serve', () => {
       await foldTurn(events);
     }
     await events.return?.(undefined);
+  });
+
+  it('明給 --agent-loop native：兩個套件都拒收', async () => {
+    running = (await runServe({
+      argv: ['--port', '0', '--agent-loop', 'native'],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    const client = await serveClient(running);
+    expect(await client.runStart('serve-native', TOO_LARGE)).toMatchObject({
+      type: 'error',
+      error: 'invalid_argument',
+      message: REJECTION,
+    });
   });
 });

@@ -6,7 +6,7 @@
  * - `createNexusAgent`：直接組 agent 的測試。
  * - `createCliAgent`：產品組裝根，它照 `invocation.agentLoop` 算答題管道再交給 `createNexusAgent`。
  * - `entryApprovalChannel`：入口給樹上那一列的預設答題管道。
- * - `createWireHandler`：serve 收人話時照 loop 決定太大的拒不拒收。
+ * - `parseAgentLoop`：serve 與 CLI 解出來的 `--agent-loop`，沒給就是 `native`。入口照它決定太大的人話拒不拒收（#2415）。
  *
  * 明著給了 loop 的照給的跑，所以 `native-loop-parity.test.ts` 的 LangGraph 那一半照樣是 LangGraph。
  */
@@ -30,6 +30,8 @@ vi.mock('./assembly-root.js', async (importActual) => {
       invocation: Parameters<typeof actual.createCliAgent>[0],
       ...rest: Parameters<typeof actual.createCliAgent> extends [unknown, ...infer R] ? R : never
     ) => actual.createCliAgent({ agentLoop: 'native', ...invocation }, ...rest),
+    parseAgentLoop: (...args: Parameters<typeof actual.parseAgentLoop>) =>
+      actual.parseAgentLoop(...args) ?? 'native',
   };
 });
 
@@ -39,14 +41,5 @@ vi.mock('./cordis-root.js', async (importActual) => {
     ...actual,
     entryApprovalChannel: (...args: Parameters<typeof actual.entryApprovalChannel>) =>
       actual.entryApprovalChannel(args[0], args[1] ?? 'native'),
-  };
-});
-
-vi.mock('./wire-handler.js', async (importActual) => {
-  const actual = await importActual<typeof import('./wire-handler.js')>();
-  return {
-    ...actual,
-    createWireHandler: (options: Parameters<typeof actual.createWireHandler>[0]) =>
-      actual.createWireHandler({ agentLoop: 'native', ...options }),
   };
 });
