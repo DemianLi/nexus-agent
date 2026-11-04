@@ -615,7 +615,7 @@ const commandPlugin: PluginEntry = {
   },
 };
 
-/** 三種 hook 各寫一點東西：`beforeModel` 插一則訊息（同重複提醒），`afterAgent` 寫 `marker`。 */
+/** 三種 hook：`beforeAgent` 不寫，`beforeModel` 插一則訊息（同重複提醒），`afterAgent` 寫 `marker`。 */
 const hookWritesPlugin: PluginEntry = {
   plugin: {
     name: 'native-parity-hook-writes',
@@ -1258,7 +1258,7 @@ describe('native 的多輪、updateState 與上限，對照 LangGraph', () => {
 
 /**
  * `agent/request-error`（只有 native 派）：監聽者每次都回 retry 時，這一輪的中止訊號照樣收得掉這一輪。不看的話，中止之後
- * 圍堵擋下的那次呼叫又進這個事件，又重試，永遠不停。
+ * `createTurnCancelGuard` 擋下的那次模型呼叫（`stopHere` 拋 `TurnCancelledError`）又進這個事件，又重試，永遠不停。
  */
 describe('native 的 agent/request-error', () => {
   it('監聽者一直回 retry：這一輪中止之後不再重試，拋出來', async () => {

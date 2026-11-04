@@ -24,7 +24,7 @@ jobs:
     with:
       full: true
 
-  # harness 全套改跑 native agent loop（#2356，#1827 D190）：登記過的已知差異照登記跑（`apps/harness/native-loop.runner.ts`），其餘要跟
+  # harness 全套在 native agent loop 下再跑一輪（#2356）：登記過的已知差異照登記跑（`apps/harness/native-loop.runner.ts`），其餘要跟
   # LangGraph 一樣綠。只在這裡跑，不進 gate；紅了跟完整一輪一樣處理。切兩片同 ci.yml 的 test-harness，不看耗時快取。
   native-loop:
     name: native agent loop (${{ matrix.shard }}/2)

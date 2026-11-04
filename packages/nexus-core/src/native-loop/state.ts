@@ -84,7 +84,7 @@ export class StateChannels {
   }
 
   /**
-   * 輪頭補預設值：只補缺的鍵（同 langchain 的 `#initializeMiddlewareStates`）。zod 的 `.default([])` 每次給同一個物件，
+   * 輪頭補預設值：只補缺的鍵（同 langchain 的 `#initializeMiddlewareStates`）。`getSchemaDefaultGetter` 每次回同一個物件，
    * 所以補的是複本；LangGraph 每一步從存檔點讀回各自的一份，thread 之間本來就不共用。
    * @param state - 要補的 state，原地改。
    */

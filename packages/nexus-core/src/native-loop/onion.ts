@@ -222,7 +222,7 @@ export type JumpTarget = 'model' | 'tools' | 'end' | undefined;
 /** 一顆 hook 跑完：寫入已套進 state，回跳轉目標與 CLI `stream()` 的那一筆 updates。 */
 export interface HookOutcome {
   readonly jump: JumpTarget;
-  /** 同 `nodes/middleware.js` 的回傳值：沒寫就是 `{}`，有寫是讀到的鍵加上寫的鍵，`jumpTo` 與沒值的格不算。 */
+  /** 同 `nodes/middleware.js` 的回傳值：hook 回 null／undefined 時是 `{}`；否則是讀到的鍵加上寫的鍵，`jumpTo` 與沒值的格不算。 */
   readonly update: Record<string, unknown>;
 }
 

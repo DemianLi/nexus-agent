@@ -258,7 +258,7 @@ export class NativeAgent {
 
   /**
    * 寫一份更新進 thread 的 state，套各鍵的合併規則（`state.ts`：`messages` 同 id 取代、`ReducedValue` 用它自己的 reducer、
-   * 其餘後寫的贏）。
+   * 其餘後寫的贏）。沒有 `stateSchema` 宣告的鍵與 `jumpTo` 丟掉（{@link StateChannels.apply}）。
    * @param config - 帶 `configurable.thread_id`。
    * @param values - 要寫的鍵。
    */
@@ -272,7 +272,7 @@ export class NativeAgent {
 
   /**
    * 跑一次，回最後的 state，不含 `_` 開頭的私有鍵（{@link outputOf}）。
-   * @param input - `{ messages }`。
+   * @param input - `{ messages }`，加上不以 `_` 開頭、`stateSchema` 宣告過的鍵（{@link StateChannels.inputOf}）；其餘的鍵丟掉。
    * @param config - 帶 `configurable.thread_id`。
    */
   async invoke(input: LoopInput, config: RunnableConfig = {}): Promise<LoopState> {
@@ -283,7 +283,7 @@ export class NativeAgent {
    * CLI 那條：每個節點寫完吐一次 updates（`{ 節點: 寫入 }`，同 LangGraph 的 `streamMode: 'updates'`；hook 節點見 `runHook`，工具每顆
    * 收完各吐一次、`Command` 吐它的 `update`）；結束時吐一次 values（不含 `_` 開頭的鍵），中間各步的 values 不吐。`streamMode`
    * 照 LangGraph：沒給是 `'updates'`（`StateGraph.compile` 的預設），給字串就只吐那一種的內容，給陣列吐 `[mode, 內容]`；`updates`、`values` 以外的拋錯。
-   * @param input - `{ messages }`。
+   * @param input - `{ messages }`，加上不以 `_` 開頭、`stateSchema` 宣告過的鍵（{@link StateChannels.inputOf}）；其餘的鍵丟掉。
    * @param config - 帶 `configurable.thread_id`。
    */
   async stream(
@@ -318,7 +318,7 @@ export class NativeAgent {
   /**
    * pump 那條：v3 事件，形狀同 LangGraph 的 `streamEvents({ version: 'v3' })`（`protocol.ts`）。迭代到底就是這次 run 結束；
    * 失敗時先吐 root `lifecycle failed` 再拋。
-   * @param input - `{ messages }`。
+   * @param input - `{ messages }`，加上不以 `_` 開頭、`stateSchema` 宣告過的鍵（{@link StateChannels.inputOf}）；其餘的鍵丟掉。
    * @param config - 帶 `configurable.thread_id` 與 pump 的三把鍵。
    */
   async streamEvents(
@@ -694,7 +694,9 @@ export class NativeAgent {
 }
 
 /**
- * 只給這一次 run 的選項，不往節點的 config 傳：同 LangGraph `Pregel._defaults` 與 `_streamIterator` 拿掉的那幾格。漏下去的話，
+ * 只給這一次 run 的選項，不往節點的 config 傳。LangGraph 的節點也拿不到：`ensureLangGraphConfig` 只留 `CONFIG_KEYS`（`subgraphs`、
+ * `encoding`、`debug`、`inputKeys` 不在其中），`_streamIterator` 拿掉 `runId`，`_defaults` 拿掉 `streamMode`、`outputKeys`、
+ * `interruptBefore`／`interruptAfter`。漏下去的話，
  * 工具裡再叫一張圖（`task` 叫子代理）會照呼叫端的 `streamMode: [...]` 回一串 chunk，而不是 state。
  */
 const RUN_OPTION_KEYS = [

@@ -178,7 +178,7 @@ interface RunOptions {
   readonly during?: (pump: ThreadPump) => Promise<void>;
   /** 這幾種事件寫進 root 日誌時拋這個錯（造日誌那一關拒收）。 */
   readonly reject?: { readonly types: readonly string[]; readonly error: Error };
-  /** pump 讀完第一則 `message-start` 之後停住，等這一輪的回覆記進日誌（圖跑完了）才往下讀。 */
+  /** pump 讀完第一則 `message-start` 之後停住，等 root 日誌出現 `assistant/message`（日誌由圖寫，不等 pump 讀）才往下讀。 */
   readonly holdAfterFirstStart?: boolean;
 }
 

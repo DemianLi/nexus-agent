@@ -3,8 +3,7 @@
  * 跑，這些條照登記的方式跑（`native-loop.runner.ts`）。每一條都歸到一種差異，每一種都寫出根因與收掉它的卡；不在這裡的，兩個
  * loop 要一樣。
  *
- * 中斷類那一格是這樣分出來的：`langgraph` 下跑全套，在 `GraphInterrupt` 的建構子上記下當下的測試（一次性的探針，不進版控），
- * native 下失敗、而且 `langgraph` 下真的發了中斷的才算。其餘按根因逐條讀過。
+ * 中斷類的判準：這一條在 `langgraph` 下真的發了 `GraphInterrupt`、在 native 下失敗。其餘各類按根因歸。
  *
  * @module
  */
@@ -22,8 +21,8 @@ export const KNOWN_DIFFERENCE_KINDS = {
   interrupt: {
     card: 2358,
     reason:
-      '這一條在 langgraph 下會發中斷（核准、問人、計畫、elicitation）再接回；native 不支援中斷與 resume（D189 (a)），' +
-      '要核准的工具確定性回絕。等得到中斷的那幾條在 native 下等到逾時，所以不跑（skip）。',
+      '這一條在 langgraph 下會發中斷（核准、問人、計畫、elicitation）再接回；native 不支援中斷與 resume，' +
+      '要核准的工具確定性回絕。等中斷的那幾條在 native 下等到逾時，所以不跑（skip）。',
   },
   approvalChannel: {
     card: 2358,
