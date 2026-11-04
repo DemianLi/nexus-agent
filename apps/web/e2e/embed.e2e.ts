@@ -630,3 +630,132 @@ describe('宿主頁工具（#2374）', () => {
     await shot(page, 'host-tool-stopped');
   });
 });
+
+/** 先講一句拿到回覆，再講一句停在核准點：核准卡比輸入框高，第一則回覆被往上推、捲出捲動區頂端（#2407）。 */
+const APPROVAL_AFTER_REPLY: readonly ScriptTurn[] = [
+  { content: '收到，這是 serve 經代理回的腳本回覆。' },
+  {
+    content: '我把這一筆寫進去。',
+    toolCalls: [
+      { name: 'submit_record', args: { file_path: '/visitors.csv', record: { 姓名: '阿明' } } },
+    ],
+  },
+  { content: '已經寫進 /visitors.csv。' },
+];
+
+/** 嵌入版或獨立頁面上的對話捲動區；嵌入版在 `nexus-chat` 的 shadow root 裡。 */
+type Surface = { readonly page: Page; readonly embedded: boolean };
+
+/** 捲動區的淡出：`mask-image` 的色標（頂層逗號切開），與頂端淡出那條捲動驅動動畫的進度（沒有這條是 `null`）。 */
+interface Fade {
+  readonly stops: readonly string[];
+  readonly topProgress: number | null;
+}
+
+/**
+ * 捲動區的捲動位置設成 `scrollTop`（`'straddle'`：讓第一則回覆的第一行跨在頂端的切邊上），等捲動驅動的動畫跟上，
+ * 回傳那時的淡出。
+ */
+function scrollAndReadFade(
+  { page, embedded }: Surface,
+  scrollTop: number | 'straddle',
+): Promise<Fade> {
+  return page.evaluate(
+    async ({ embedded, scrollTop }) => {
+      const root: ParentNode = embedded
+        ? document.querySelector('nexus-chat')!.shadowRoot!
+        : document;
+      const viewport = root.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]')!;
+      if (scrollTop === 'straddle') {
+        const reply = [...root.querySelectorAll('p')].find((element) =>
+          element.textContent?.startsWith('收到'),
+        )!;
+        const range = document.createRange();
+        range.selectNodeContents(reply);
+        const line = range.getClientRects()[0]!;
+        viewport.scrollTop -= viewport.getBoundingClientRect().top - line.top - line.height / 2;
+      } else {
+        viewport.scrollTop = scrollTop;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const mask = getComputedStyle(viewport).maskImage;
+      const body = mask.slice(mask.indexOf('(') + 1, mask.lastIndexOf(')'));
+      const stops: string[] = [];
+      let depth = 0;
+      let current = '';
+      for (const char of body) {
+        if (char === '(') depth++;
+        if (char === ')') depth--;
+        if (char === ',' && depth === 0) {
+          stops.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      stops.push(current.trim());
+      const reveal = viewport
+        .getAnimations()
+        .find(
+          (animation) =>
+            animation instanceof CSSAnimation && animation.animationName === 'scroll-fade-reveal-t',
+        );
+      const progress = reveal?.effect?.getComputedTiming().progress;
+      return { stops, topProgress: progress ?? null };
+    },
+    { embedded, scrollTop },
+  );
+}
+
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+
+/** 頂端有淡出：漸層從透明開始，而且頂端淡出的動畫已經往前走（捲在最上面時進度是 0，淡出寬 0）。 */
+function fadesAtTop({ stops, topProgress }: Fade): boolean {
+  return stops[0]?.startsWith(TRANSPARENT) === true && topProgress !== null && topProgress > 0;
+}
+
+async function stopAtApproval(surface: Surface): Promise<void> {
+  const scope = surface.embedded ? chat(surface.page) : surface.page;
+  const say = async (text: string) => {
+    await scope.getByRole('textbox', { name: '要說的話' }).fill(text);
+    await scope.getByRole('button', { name: '送出', exact: true }).click();
+  };
+  await say('你好');
+  // 送出前狀態列就是「就緒」：先等第一則回覆出現，不然第二句會按在這一輪剛長出來的「停止」上。
+  await expect
+    .poll(() => scope.getByRole('button', { name: '複製回覆' }).count(), { timeout: 30_000 })
+    .toBe(1);
+  await expect
+    .poll(() => scope.getByRole('status').first().textContent(), { timeout: 30_000 })
+    .toBe('就緒');
+  await say('幫我登記阿明');
+  await expect
+    .poll(() => scope.getByRole('button', { name: '全部核准' }).count(), { timeout: 30_000 })
+    .toBe(1);
+}
+
+describe('核准卡把對話往上推：捲動區頂端淡出（#2407）', () => {
+  test('嵌入版窄欄：捲到一行跨在頂端時那一行淡出，捲到最上面不淡出；底部淡出照舊', async () => {
+    const page = await openDemo(APPROVAL_AFTER_REPLY, { width: 1400, height: 724 });
+    const surface = { page, embedded: true };
+    await stopAtApproval(surface);
+    const straddled = await scrollAndReadFade(surface, 'straddle');
+    expect(fadesAtTop(straddled), JSON.stringify(straddled)).toBe(true);
+    expect(straddled.stops.at(-1)).toBe(`${TRANSPARENT} 100%`);
+    await shot(page, 'approval-top-fade-embedded');
+    const top = await scrollAndReadFade(surface, 0);
+    expect(fadesAtTop(top), JSON.stringify(top)).toBe(false);
+  });
+
+  test('獨立頁面：捲到一行跨在頂端時那一行淡出', async () => {
+    serve = await startE2eServe(APPROVAL_AFTER_REPLY);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 560 } });
+    await page.goto(serve.url);
+    const surface = { page, embedded: false };
+    await stopAtApproval(surface);
+    const straddled = await scrollAndReadFade(surface, 'straddle');
+    expect(fadesAtTop(straddled), JSON.stringify(straddled)).toBe(true);
+    await shot(page, 'approval-top-fade-standalone');
+    expect(fadesAtTop(await scrollAndReadFade(surface, 0))).toBe(false);
+  });
+});
