@@ -7,7 +7,7 @@
  *   （`subagent-tool-filter.ts` 拒絕；`@nexus/plugin-mcp` 放棄重連後只藏不拒）。
  * - {@link ToolOverride}：換掉某個工具在模型那一側的定義（參數說明、預設值），執行時找的仍是原本那個工具。
  *
- * `subagent-tool-filter.ts`、`read-continuation.ts`、`search-descriptions.ts`、`@nexus/plugin-mcp` 的 `mcp-tools-guard:<server>` 在自己的 `wrapModelCall`（放行另含 `wrapToolCall`）裡用這兩個
+ * `subagent-tool-filter.ts`、`read-continuation.ts`、`search-descriptions.ts`、`@nexus/plugin-mcp` 的 `mcp-tools-guard:<server>` 在自己的 `wrapModelCall`（`subagent-tool-filter.ts` 另在 `wrapToolCall` 拒絕）裡用這兩個
  * 函式套自己那一份決定；套的先後就是洋蔥的先後。
  *
  * @module
