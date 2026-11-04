@@ -241,6 +241,12 @@ export {
   toolResultEvictionWrap,
 } from './tool-result-eviction.js';
 export { filesystemModelCallWrap, filesystemToolAdmission } from './filesystem-tool-admission.js';
+export {
+  HUMAN_MESSAGE_LIMIT_CHARS,
+  HUMAN_MESSAGE_TOO_LARGE,
+  humanMessageRejection,
+  humanMessageText,
+} from './human-message-admission.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';

@@ -101,13 +101,13 @@ describe('分叉的子 thread 讀繼承來的外溢檔（驗收 7）', () => {
       join(stashRoot, stashSessionDirName(`${directory}\0${threadId}`));
     const replies: readonly ScriptedTurn[] = [{ content: '回一' }, { content: '回二' }];
 
-    // alpha 長到塞不進引用預算；beta 引用它，截掉的全文由真的引用流程存進 beta 的暫存目錄。
+    // alpha 長到塞不進引用預算，又在人話的上限之內（native 下過了就拒收，#2415）；beta 引用它，截掉的全文由真的引用流程存進 beta 的暫存目錄。
     const middle = 'MIDDLE-OF-THE-REFERENCED-SESSION'.padEnd(64, '-');
     const first = await start(replies, root);
     await say(
       await serveClient(first.running),
       'alpha',
-      `${'a'.repeat(64 * 5000)}${middle}${'b'.repeat(64 * 5000)}`,
+      `${'a'.repeat(64 * 1500)}${middle}${'b'.repeat(64 * 1500)}`,
     );
     await stop(first);
 

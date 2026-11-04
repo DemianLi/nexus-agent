@@ -133,6 +133,7 @@ import {
   unknownParamKeys,
 } from '@nexus/wire';
 import type {
+  AgentLoopKind,
   AttachmentRef,
   ColdStoredSession,
   CommandRegistrationPoint,
@@ -145,6 +146,7 @@ import type {
   SessionRegistry,
   SpillStore,
   StoredSessionHeader,
+  SubagentMentionRef,
 } from '@nexus/core';
 import {
   errorChain,
@@ -152,10 +154,12 @@ import {
   FeedbackDurabilityUnavailableError,
   FeedbackLogCorruptionError,
   forkBoundaryOf,
+  humanMessageRejection,
   PAGE_CONTEXT_LABEL_MAX,
   ProjectionDetailError,
   SessionAlreadyOwnedError,
   SessionLogTooLargeError,
+  userContent,
 } from '@nexus/core';
 import { childForkSeed } from './thread-fork.js';
 import type { GoalId } from '@nexus/goal';
@@ -619,6 +623,11 @@ export interface WireHandlerOptions {
    * **偏離登記：產品需求超出 dsh**——dsh 沒有 thread 數上限；借的是它背景工作准入的形狀，逐點見 `settings/thread-capacity.ts` 的檔頭。
    */
   readonly maxThreads?: number;
+  /**
+   * 這台 server 的 agent 由誰跑（`--agent-loop`），省略即 `langgraph`。`native` 時太大的人話在收下之前拒收（{@link sizeRejection}）；
+   * `langgraph` 照舊交給基座搬到 `/conversation_history/`。
+   */
+  readonly agentLoop?: AgentLoopKind;
   /**
    * 閒置多久（毫秒）之後把一條 thread 從行程裡撤掉（`thread-capacity` 那一列的 `idleEvictAfterMs`，
    * [#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，保險絲第 1 級）。**省略就不逐出**，行為與沒有這個選項時逐位元組相同。
@@ -2891,6 +2900,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         // `@` 的會話要能用才收（#713）：網址壞、引用自己、超過三條、這條 thread 不收引用，都在這裡回錯，那句話不進佇列。
         const referenceError = referenceRejection(pump, command.id, text);
         if (referenceError !== undefined) return json(referenceError);
+        // 太大的人話（#2415）：同樣排在收下附件之前。
+        const sizeError = sizeRejection(pump, command.id, text, { mention, context });
+        if (sizeError !== undefined) return json(sizeError);
         // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
         const mode = (params as { mode?: unknown }).mode;
         if (mode !== undefined && !(RUN_START_MODES as readonly unknown[]).includes(mode)) {
@@ -3166,6 +3178,32 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
+   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是送進模型的那一則——
+   * 引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來的內容。不收就是一則 `invalid_argument`。
+   * 引用要先經 {@link referenceRejection} 驗過。
+   */
+  function sizeRejection(
+    pump: ThreadPump,
+    id: number | null,
+    text: string,
+    extras: {
+      readonly attachments?: readonly AttachmentRef[];
+      readonly mention?: SubagentMentionRef | undefined;
+      readonly context?: PageContextRef | undefined;
+    },
+  ) {
+    if (options.agentLoop !== 'native') return undefined;
+    const content = userContent(
+      pump.referencedText(text).text,
+      extras.attachments,
+      extras.mention,
+      extras.context,
+    );
+    const rejection = humanMessageRejection(content as never);
+    return rejection === undefined ? undefined : errorResponse(id, 'invalid_argument', rejection);
+  }
+
+  /**
    * `subagent.send`／`subagent.interrupt`（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。語意與錯誤碼見
    * `SUBAGENT_SEND_METHOD`。**授權就是進得到這裡的會話認證**：host 只認得這條 thread 自己派出去的編號，所以「只能對直接
    * parent 派出去的子代理動手」是結構保證，這裡不另做一道。
@@ -3270,6 +3308,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       const referenceError = referenceRejection(pump, id, text);
       if (referenceError !== undefined) return json(referenceError);
+      // 改過的字配上那一件原本的附件、點名與情境量；找不到那一件就交給下面回 `not-found`。
+      const queued = [...pump.inbox, ...pump.nextStep].find((item) => item.id === params.item_id);
+      const sizeError = queued === undefined ? undefined : sizeRejection(pump, id, text, queued);
+      if (sizeError !== undefined) return json(sizeError);
       action = { kind: 'edit', text };
     } else {
       return json(

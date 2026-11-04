@@ -1339,6 +1339,7 @@ async function startServer(
     downlinkMaxBytes: downlink.maxQueuedBytes,
     ...(turnClock !== undefined && { turnClock }),
     maxThreads: threadCapacity.maxThreads,
+    ...(invocation.agentLoop !== undefined && { agentLoop: invocation.agentLoop }),
     // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著、而且不是 0 才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；啟動時
     // 印一行講是哪一種（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
     ...(idleEvictMs === undefined || options.conversation !== undefined
