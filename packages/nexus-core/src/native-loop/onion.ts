@@ -515,9 +515,9 @@ export async function runTool(
       });
     }
     // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著。兄弟失敗
-    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 不在這裡看，跟 `stepSignal` 合成
-    // `task.config.signal` 交給工具，同 LangGraph，中止由 {@link NodeTask.run} 收掉。
-    task.stepSignal?.throwIfAborted();
+    // 舉起來的這一格由 native 自己舉，所以先拋。呼叫端中止時 `stepSignal` 也會跟著舉（這顆被 {@link NodeTask.run} 拒絕，
+    // `runBounded` 當成失敗），那時不拋：同 LangGraph，本體照跑、懸著也沒人等，這個節點已經由 `NodeTask.run` 收掉。
+    if (task.callerSignal?.aborted !== true) task.stepSignal?.throwIfAborted();
     let output: unknown;
     try {
       output = await tool.invoke(

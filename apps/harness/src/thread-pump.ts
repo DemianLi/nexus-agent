@@ -108,6 +108,7 @@ import {
   userContent,
   withModelCall,
   type ApprovalOutcome,
+  type LoggedMessage,
   type AttachmentRef,
   type PageContextRef,
   type SubagentMentionRef,
@@ -1062,6 +1063,13 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
     default:
       return;
   }
+}
+
+/** 手上那則講到一半的回覆跟剛記進日誌的那則，兩邊都有 id 而且不同。 */
+function isOtherReply(reply: UnsettledReply | undefined, logged: LoggedMessage): boolean {
+  const live = (reply?.start as { id?: unknown } | undefined)?.id;
+  const written = (logged.data as { id?: unknown }).id;
+  return typeof live === 'string' && typeof written === 'string' && live !== written;
 }
 
 /** 一則已經上線、日誌還沒記的 root 回覆：開頭、到目前為止的推理與正文、收尾（有的話）。見 {@link CurrentRun.reply}。 */
@@ -3910,11 +3918,13 @@ export class ThreadPump {
     }
     // 一輪收尾（root 的 `turn/end`）：合併視窗裡待送的當場全送，下行看到的就是最終值（#1071）。
     if (event.type === 'turn/end' && entry.address.kind === 'root') this.#projectionOut.flush();
-    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
+    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。日誌由圖寫、片段由 pump 讀，兩邊不同步：讀得慢的時候，記下來的
+    // 可能已經是重打那一次，而 pump 手上還是失敗那一次（還沒讀到重打記號）。兩邊都有 id 又不同就不清，留給作廢記號收。
     if (
       event.type === 'assistant/message' &&
       entry.address.kind === 'root' &&
-      this.#current !== undefined
+      this.#current !== undefined &&
+      !isOtherReply(this.#current.reply, event.data.message)
     ) {
       this.#current.reply = undefined;
     }

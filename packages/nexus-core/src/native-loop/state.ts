@@ -106,13 +106,14 @@ export class StateChannels {
   }
 
   /**
-   * 把一份寫入套進 state，原地改。`undefined` 的格不寫（同 LangGraph：沒寫就是沒更新），`jumpTo` 不進 state。
+   * 把一份寫入套進 state，原地改。`undefined` 的格不寫（同 LangGraph：沒寫就是沒更新），`jumpTo` 與沒有 `stateSchema`
+   * 宣告的鍵不進 state（同 LangGraph：沒有那個 channel，寫了也丟掉）。
    * @param state - 目前的 state。
    * @param update - 一份寫入。
    */
   apply(state: LoopState, update: Readonly<Record<string, unknown>>): void {
     for (const [key, value] of Object.entries(update)) {
-      if (value === undefined || key === 'jumpTo') continue;
+      if (value === undefined || key === 'jumpTo' || !this.#keys.has(key)) continue;
       const reducer = this.#reducers.get(key);
       state[key] = reducer === undefined ? value : reducer(state[key], value);
     }

@@ -12,6 +12,7 @@ import {
   RemoveMessage,
   ToolMessage,
 } from '@langchain/core/messages';
+import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
@@ -472,7 +473,7 @@ async function invokeOnce(
   turns: readonly ScriptedTurn[],
   plugins: readonly PluginEntry[],
   signal?: AbortSignal,
-  input: Record<string, unknown> = toAgentInvocation('跑。'),
+  input: Readonly<Record<string, unknown>> = { ...toAgentInvocation('跑。') },
 ) {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
@@ -624,8 +625,29 @@ const hookWritesPlugin: PluginEntry = {
           name: 'nativeParityHookWrites',
           beforeAgent: () => undefined,
           beforeModel: () => ({ messages: [new HumanMessage('提醒')] }),
-          afterAgent: () => ({ marker: '收尾' }),
+          afterAgent: () => ({ marker: '收尾' }) as never,
         }),
+      );
+    },
+  },
+};
+
+/**
+ * 回它的 config 帶了哪幾格只給 run 的選項。漏下去的話，工具裡再叫一張圖（`task` 叫子代理）會照呼叫端的 `streamMode` 回一串
+ * chunk 而不是 state。
+ */
+const runOptionsPlugin: PluginEntry = {
+  plugin: {
+    name: 'native-parity-run-options',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input, config) =>
+            ['streamMode', 'runId', 'debug', 'outputKeys', 'subgraphs']
+              .filter((key) => (config as Record<string, unknown>)[key] !== undefined)
+              .join(',') || '沒有',
+          { name: 'runOptions', description: '回 config 裡的 run 選項。', schema: z.object({}) },
+        ),
       );
     },
   },
@@ -645,7 +667,7 @@ async function streamUpdates(
   });
   const detach = built.attachSession(new SessionRegistry(THREAD));
   try {
-    const updates: unknown[] = [];
+    const updates: [string, unknown][] = [];
     for await (const [mode, payload] of await built.agent.stream(toAgentInvocation('跑。'), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD },
@@ -694,6 +716,11 @@ describe('native 的 stream() 對照 LangGraph', () => {
       [commandPlugin],
     ],
     ['hook 寫了東西', [{ content: '好了。' }], [hookWritesPlugin]],
+    [
+      '工具讀得到的 config 不帶呼叫端的 streamMode',
+      [{ content: '', toolCalls: [{ name: 'runOptions', args: {} }] }, { content: '好了。' }],
+      [runOptionsPlugin],
+    ],
   ];
   it.each(scenarios)('%s：updates 逐筆相同', async (_label, turns, plugins) => {
     const graph = await streamUpdates('langgraph', turns, plugins);
@@ -705,10 +732,88 @@ describe('native 的 stream() 對照 LangGraph', () => {
 });
 
 /**
- * 一顆在 `where` 指的地方中止呼叫端 signal 的 middleware（加上一顆中止的工具與閘門）。`wrapModelCall` 先經 `__pregel_send` 寫
- * `marker`，比得出中止的模型節點送出的寫入有沒有套。
+ * 記下沒有 parent 的 run：tracer（LangSmith）要等 root run 收尾才送出整串，模型與工具的 run 要掛在它底下。
  */
-function abortAt(where: string, controller: AbortController): PluginEntry {
+class RootRunRecorder extends BaseCallbackHandler {
+  name = 'native-parity-root-runs';
+  readonly roots: unknown[] = [];
+  readonly #rootIds = new Set<string>();
+
+  override handleChainStart(
+    _chain: unknown,
+    _inputs: unknown,
+    runId: string,
+    parentRunId?: string,
+    _tags?: string[],
+    _metadata?: Record<string, unknown>,
+    _runType?: string,
+    runName?: string,
+  ): void {
+    if (parentRunId !== undefined) return;
+    this.#rootIds.add(runId);
+    this.roots.push(['chain', runName]);
+  }
+
+  override handleChainEnd(outputs: Record<string, unknown>, runId: string): void {
+    if (this.#rootIds.has(runId)) this.roots.push(['end', Object.keys(outputs).sort()]);
+  }
+
+  override handleChatModelStart(
+    _llm: unknown,
+    _messages: unknown,
+    _runId: string,
+    parentRunId?: string,
+  ): void {
+    if (parentRunId === undefined) this.roots.push(['model']);
+  }
+
+  override handleToolStart(
+    _tool: unknown,
+    _input: string,
+    _runId: string,
+    parentRunId?: string,
+  ): void {
+    if (parentRunId === undefined) this.roots.push(['tool']);
+  }
+}
+
+describe('native 的 callbacks 對照 LangGraph', () => {
+  it('一次 run 一顆 root chain run，模型與工具的 run 都掛在它底下', async () => {
+    const run = async (loop: AgentLoopKind) => {
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({
+          turns: [
+            { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+            { content: '好。' },
+          ],
+        }),
+        checkpointer: new MemorySaver(),
+        plugins: [toolsPlugin, markerPlugin()],
+        agentLoop: loop,
+      });
+      try {
+        const recorder = new RootRunRecorder();
+        await built.agent.invoke(toAgentInvocation('跑。'), {
+          configurable: { thread_id: THREAD },
+          callbacks: [recorder],
+        });
+        return recorder.roots;
+      } finally {
+        await built.dispose();
+      }
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph[0]).toEqual(['chain', 'LangGraph']);
+    expect(native).toEqual(graph);
+  });
+});
+
+/**
+ * 一顆在 `where` 指的地方中止呼叫端 signal 的 middleware（加上一顆中止的工具與閘門）。`wrapModelCall` 先經 `__pregel_send` 寫
+ * `marker`，比得出中止的模型節點送出的寫入有沒有套；工具本體跑一次往 `ran` 記一筆。
+ */
+function abortAt(where: string, controller: AbortController, ran: string[] = []): PluginEntry {
   const abort = (): void => controller.abort();
   return {
     plugin: {
@@ -717,6 +822,7 @@ function abortAt(where: string, controller: AbortController): PluginEntry {
         registry.tools.register(
           tool(
             () => {
+              ran.push('aborts');
               if (where === 'tool') abort();
               return '做完了';
             },
@@ -758,7 +864,7 @@ function abortAt(where: string, controller: AbortController): PluginEntry {
 
 /**
  * 呼叫端的 `config.signal` 中止：拋的錯（名字與訊息）與留在 state 裡的訊息，兩個 loop 一樣。LangGraph 的節點看到中止時拋
- * signal 的 reason（`AbortError`），那個節點的寫入不套。
+ * signal 的 reason（`AbortError`），那個節點的寫入不套；已經過了閘門的工具本體照跑（被放掉，沒人等它）。
  */
 describe('native 下呼叫端中止，對照 LangGraph', () => {
   const textOnly: ScriptedTurn[] = [{ content: '你好。' }];
@@ -780,16 +886,18 @@ describe('native 下呼叫端中止，對照 LangGraph', () => {
     const run = async (loop: AgentLoopKind) => {
       const controller = new AbortController();
       if (where === '呼叫前') controller.abort();
+      const ran: string[] = [];
       const result = await invokeOnce(
         loop,
         turns,
-        [markerPlugin(), abortAt(where, controller)],
+        [markerPlugin(), abortAt(where, controller, ran)],
         controller.signal,
       );
       return {
         failure: result.failure,
         messages: shapeOf(result.values['messages']),
         marker: result.values['marker'],
+        ran,
       };
     };
     const graph = await run('langgraph');
@@ -860,6 +968,54 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
     const native = await run('native');
     expect(graph.bags).toEqual([['推了'], ['推了']]);
     expect(native).toEqual(graph);
+  });
+
+  it('寫進沒有宣告的鍵：Command 與 hook 寫的都不進 state', async () => {
+    const undeclared: PluginEntry = {
+      plugin: {
+        name: 'native-parity-undeclared',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              (_input, config) =>
+                new Command({
+                  update: {
+                    undeclared: '命令寫的',
+                    messages: [
+                      new ToolMessage({
+                        content: '命令的結果',
+                        tool_call_id: (config as { toolCall?: { id?: string } }).toolCall?.id ?? '',
+                        name: 'undeclared',
+                      }),
+                    ],
+                  },
+                }),
+              { name: 'undeclared', description: '寫沒宣告的鍵。', schema: z.object({}) },
+            ),
+          );
+          registry.middleware.use(
+            createMiddleware({
+              name: 'nativeParityUndeclared',
+              afterAgent: () => ({ hookUndeclared: 'hook 寫的' }) as never,
+            }),
+          );
+        },
+      },
+    };
+    const turns: ScriptedTurn[] = [
+      { content: '', toolCalls: [{ name: 'undeclared', args: {} }] },
+      { content: '好。' },
+    ];
+    const pick = (values: Record<string, unknown>) => ({
+      undeclared: values['undeclared'],
+      hookUndeclared: values['hookUndeclared'],
+      messages: shapeOf(values['messages']),
+    });
+    const graph = await invokeOnce('langgraph', turns, [markerPlugin(), undeclared]);
+    const native = await invokeOnce('native', turns, [markerPlugin(), undeclared]);
+    expect(graph.failure).toBeUndefined();
+    expect(graph.values['messages']).toHaveLength(4);
+    expect(pick(native.values)).toEqual(pick(graph.values));
   });
 
   it('模型那一步失敗：wrapModelCall 已經送出的寫入照套進 state', async () => {

@@ -23,6 +23,9 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { CallbackManager } from '@langchain/core/callbacks/manager';
+import type { Callbacks } from '@langchain/core/callbacks/manager';
+import type { SerializedNotImplemented } from '@langchain/core/load/serializable';
 import type { BaseMessage } from '@langchain/core/messages';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
@@ -90,6 +93,14 @@ interface RunObserver {
   readonly emitter?: ProtocolEmitter;
   readonly onUpdate?: (node: string, update: Record<string, unknown>) => void;
 }
+
+/** root chain run 的名字與序列化，同沒取名的 `createAgent` 圖（`Pregel.getName()`）。 */
+const ROOT_RUN_NAME = 'LangGraph';
+const ROOT_SERIALIZED: SerializedNotImplemented = {
+  lc: 1,
+  type: 'not_implemented',
+  id: ['langgraph', 'CompiledStateGraph'],
+};
 
 /** 名字以 `extract-` 開頭的工具呼叫是結構化輸出，不進 tools（同 `ReactAgent.js`）。nexus 不用，照抄判準。 */
 function liveToolCalls(message: AIMessage): NonNullable<AIMessage['tool_calls']> {
@@ -319,20 +330,53 @@ export class NativeAgent {
     return state;
   }
 
+  /**
+   * 一次 run 包在一顆 root chain run 裡，節點拿它的 child callbacks，同 LangGraph `_streamIterator` 的 `handleChainStart`／
+   * `handleChainEnd`：tracer（LangSmith）靠 root run 收尾才送出整串。
+   */
   async #run(input: LoopInput, config: RunnableConfig, observer: RunObserver): Promise<LoopState> {
     const { emitter } = observer;
+    const manager = await CallbackManager.configure(
+      config.callbacks,
+      undefined,
+      config.tags,
+      undefined,
+      config.metadata,
+    );
+    const handler = emitter === undefined ? undefined : new NativeStreamHandler(emitter);
+    const root = await manager?.handleChainStart(
+      ROOT_SERIALIZED,
+      input as Record<string, unknown>,
+      config.runId,
+      undefined,
+      undefined,
+      undefined,
+      config.runName ?? ROOT_RUN_NAME,
+    );
+    const callbacks: Callbacks = root?.getChild() ?? [];
+    if (handler !== undefined) {
+      if (Array.isArray(callbacks)) callbacks.push(handler);
+      else callbacks.addHandler(handler, true);
+    }
     emitter?.lifecycle('running');
     try {
-      const state = await this.#turn(input, config, observer);
+      const state = await this.#turn(input, config, observer, callbacks);
       emitter?.lifecycle('completed');
+      await root?.handleChainEnd(outputOf(state));
       return state;
     } catch (error) {
       emitter?.lifecycle('failed', error instanceof Error ? error.message : String(error));
+      await root?.handleChainError(error);
       throw error;
     }
   }
 
-  async #turn(input: LoopInput, config: RunnableConfig, observer: RunObserver): Promise<LoopState> {
+  async #turn(
+    input: LoopInput,
+    config: RunnableConfig,
+    observer: RunObserver,
+    callbacks: Callbacks,
+  ): Promise<LoopState> {
     if (isCommand(input)) {
       throw new Error('native agent loop 不支援 resume：沒有可接回的中斷（#2358）');
     }
@@ -353,7 +397,7 @@ export class NativeAgent {
     const recursionLimit =
       config.recursionLimit ?? this.#defaults.recursionLimit ?? DEFAULT_RECURSION_LIMIT;
     const maxConcurrency = config.maxConcurrency ?? this.#defaults.maxConcurrency;
-    const base = this.#baseConfig(config, observer.emitter, recursionLimit, maxConcurrency);
+    const base = this.#baseConfig(config, callbacks, observer.emitter, recursionLimit, maxConcurrency);
     const budget = new StepBudget(recursionLimit);
     const events = this.#params.events;
     // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走
@@ -612,15 +656,14 @@ export class NativeAgent {
 
   #baseConfig(
     config: RunnableConfig,
+    callbacks: Callbacks,
     emitter: ProtocolEmitter | undefined,
     recursionLimit: number,
     maxConcurrency: number | undefined,
   ): RunnableConfig {
-    const callbacks = Array.isArray(config.callbacks) ? [...config.callbacks] : [];
-    if (emitter !== undefined) callbacks.push(new NativeStreamHandler(emitter));
     const store = (config as { store?: unknown }).store ?? this.#params.store;
     return {
-      ...config,
+      ...withoutRunOptions(config),
       ...(store !== undefined && { store }),
       recursionLimit,
       ...(maxConcurrency !== undefined && { maxConcurrency }),
@@ -629,6 +672,28 @@ export class NativeAgent {
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
     } as RunnableConfig;
   }
+}
+
+/**
+ * 只給這一次 run 的選項，不往節點的 config 傳：同 LangGraph `Pregel._defaults` 與 `_streamIterator` 拿掉的那幾格。漏下去的話，
+ * 工具裡再叫一張圖（`task` 叫子代理）會照呼叫端的 `streamMode: [...]` 回一串 chunk，而不是 state。
+ */
+const RUN_OPTION_KEYS = [
+  'runId',
+  'debug',
+  'streamMode',
+  'inputKeys',
+  'outputKeys',
+  'interruptBefore',
+  'interruptAfter',
+  'subgraphs',
+  'encoding',
+] as const;
+
+function withoutRunOptions(config: RunnableConfig): RunnableConfig {
+  const rest: Record<string, unknown> = { ...config };
+  for (const key of RUN_OPTION_KEYS) delete rest[key];
+  return rest as RunnableConfig;
 }
 
 /** 回給呼叫端的 state：`_` 開頭的鍵是 middleware 私有的，不輸出（state 裡照留），同 langchain `createAgentState` 的 output 欄位。 */
