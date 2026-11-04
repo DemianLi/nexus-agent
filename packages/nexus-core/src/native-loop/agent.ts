@@ -34,14 +34,15 @@ import { turnCancelSignalOf } from '../turn-cancel.js';
 import './events.js';
 import type { AgentStepPayload } from './events.js';
 import {
+  abortReason,
   callModel,
   hookTargets,
   NodeTask,
+  raceAbort,
   runHook,
   runTool,
   systemMessageOf,
   type InvokableTool,
-  type JumpTarget,
   type LoopMiddleware,
 } from './onion.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
@@ -82,7 +83,7 @@ const DEFAULT_RECURSION_LIMIT = 25;
 const UNBOUNDED = Number.POSITIVE_INFINITY;
 
 /** 一次 run 收到的輸入。 */
-type LoopInput = { readonly messages?: readonly BaseMessage[] } | Command;
+type LoopInput = { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
 
 /** 一次 run 的觀察者：v3 事件、CLI 的 updates。 */
 interface RunObserver {
@@ -230,13 +231,13 @@ export class NativeAgent {
   }
 
   /**
-   * 讀一條 thread 的 state。沒跑過的 thread 回空的 state。
+   * 讀一條 thread 的 state。沒跑過的 thread 的 `values` 是 `{}`（沒有 `messages`），同 LangGraph 沒有存檔點的 thread。
    * @param config - 帶 `configurable.thread_id`。
    */
   async getState(config: RunnableConfig): Promise<NativeStateSnapshot> {
     const state = this.#threads.get(threadIdOf(config));
     return {
-      values: state === undefined ? emptyState() : { ...state, messages: [...state.messages] },
+      values: state === undefined ? ({} as LoopState) : { ...state, messages: [...state.messages] },
       next: [],
       tasks: [],
       config,
@@ -267,8 +268,9 @@ export class NativeAgent {
   }
 
   /**
-   * CLI 那條：模型與工具節點寫完各吐一次 `['updates', { 節點: 寫入 }]`（hook 節點不吐），結束時吐一次 `['values', state]`
-   * （不含 `_` 開頭的鍵）；不讀 `streamMode`。
+   * CLI 那條：每個節點寫完吐一次 `['updates', { 節點: 寫入 }]`，同 LangGraph 的 `streamMode: 'updates'`（hook 節點見
+   * `runHook`，工具每顆收完各吐一次、`Command` 吐它的 `update`）；結束時吐一次 `['values', state]`（不含 `_` 開頭的鍵），
+   * 中間各步的 `values` 不吐。不讀 `streamMode`。
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
@@ -334,10 +336,15 @@ export class NativeAgent {
     if (isCommand(input)) {
       throw new Error('native agent loop 不支援 resume：沒有可接回的中斷（#2358）');
     }
+    // 呼叫前就已中止：輸入不寫、拋 signal 的 reason，同 LangGraph 拿到已中止的 signal 時。
+    if (config.signal?.aborted === true) throw abortReason(config.signal);
     // 沒給 thread 的一輪從空的 state 跑、跑完不留，同 LangGraph 沒有存檔點時。
     const threadId = optionalThreadIdOf(config);
     const state = threadId === undefined ? emptyState() : this.#stateOf(threadId);
-    this.#channels.apply(state, { messages: [...(input.messages ?? [])] });
+    this.#channels.apply(state, {
+      ...this.#channels.inputOf(input),
+      messages: [...(input.messages ?? [])],
+    });
     this.#channels.fillDefaults(state);
 
     const signal = turnCancelSignalOf(config) ?? new AbortController().signal;
@@ -370,6 +377,7 @@ export class NativeAgent {
         taskInput,
         () => observer.emitter?.complete([ns]),
         stepSignal,
+        base.signal,
       );
     };
     const note = (name: string, update: Record<string, unknown>): void =>
@@ -380,7 +388,9 @@ export class NativeAgent {
     for (const m of this.middleware) {
       if (m.beforeAgent === undefined) continue;
       budget.take();
-      const jump = await runHook(m, 'beforeAgent', node(`${m.name}.before_agent`), this.#channels);
+      const name = `${m.name}.before_agent`;
+      const { jump, update } = await runHook(m, 'beforeAgent', node(name), this.#channels);
+      note(name, update);
       if (jump === 'end') {
         exiting = true;
         break;
@@ -407,12 +417,9 @@ export class NativeAgent {
           for (const m of this.middleware) {
             if (m.beforeModel === undefined) continue;
             budget.take();
-            const jump: JumpTarget = await runHook(
-              m,
-              'beforeModel',
-              node(`${m.name}.before_model`),
-              this.#channels,
-            );
+            const name = `${m.name}.before_model`;
+            const { jump, update } = await runHook(m, 'beforeModel', node(name), this.#channels);
+            note(name, update);
             if (jump === 'end') {
               ended = true;
               break;
@@ -434,7 +441,7 @@ export class NativeAgent {
         if (!concluded) continue;
       }
 
-      const again = await this.#exit(node, budget);
+      const again = await this.#exit(node, budget, note);
       if (again) {
         skipBeforeModel = true;
         continue;
@@ -449,12 +456,18 @@ export class NativeAgent {
   /**
    * `afterAgent` 反序跑（最後一顆先），一顆跳 `end` 其餘不跑。回 `true` 表示有一顆跳回模型。
    */
-  async #exit(node: (name: string) => NodeTask, budget: StepBudget): Promise<boolean> {
+  async #exit(
+    node: (name: string) => NodeTask,
+    budget: StepBudget,
+    note: (name: string, update: Record<string, unknown>) => void,
+  ): Promise<boolean> {
     for (let i = this.middleware.length - 1; i >= 0; i--) {
       const m = this.middleware[i]!;
       if (m.afterAgent === undefined) continue;
       budget.take();
-      const jump = await runHook(m, 'afterAgent', node(`${m.name}.after_agent`), this.#channels);
+      const name = `${m.name}.after_agent`;
+      const { jump, update } = await runHook(m, 'afterAgent', node(name), this.#channels);
+      note(name, update);
       if (jump === 'model') return true;
       if (jump === 'end') return false;
     }
@@ -502,6 +515,8 @@ export class NativeAgent {
         note('model_request', update);
         return message;
       } catch (error) {
+        // 呼叫端中止：這個節點的寫入丟掉、不問要不要重試，同 LangGraph 中止的節點。
+        if (task.callerSignal?.aborted === true) throw error;
         const action =
           events === undefined
             ? undefined
@@ -510,7 +525,8 @@ export class NativeAgent {
                 { ...payload, error },
                 async () => undefined,
               );
-        if (action?.kind === 'retry') {
+        // 重試前看一次這一輪的中止訊號，監聽者一直回 retry 時停止照樣收得掉；重試的次數由監聽者自己限，不算步數。
+        if (action?.kind === 'retry' && !signal.aborted) {
           task.writes.length = 0;
           continue;
         }
@@ -534,7 +550,6 @@ export class NativeAgent {
     const step = new AbortController();
     const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }, step.signal));
     const results = new Array<ToolMessage | Command | undefined>(calls.length);
-    const messages: BaseMessage[] = [];
     // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。
     const commit = (keepUnfinishedWrites: boolean): void => {
       tasks.forEach((task, index) => {
@@ -547,7 +562,6 @@ export class NativeAgent {
         if (isCommand(value)) {
           this.#applyCommand(state, value);
         } else {
-          messages.push(value);
           this.#channels.apply(state, { messages: [value] });
         }
       });
@@ -556,13 +570,19 @@ export class NativeAgent {
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
-        results[index] = await runTool(call, this.#tools, this.middleware, tasks[index]!);
+        const result = await runTool(call, this.#tools, this.middleware, tasks[index]!);
+        results[index] = result;
+        note('tools', isCommand(result) ? commandUpdateOf(result) : { messages: [result] });
       }),
       Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
       step,
     );
     try {
-      await (caller === undefined ? batch : abortable(batch, caller));
+      if (caller === undefined) await batch;
+      else {
+        batch.catch(() => undefined);
+        await raceAbort(batch, caller);
+      }
     } catch (error) {
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
@@ -570,7 +590,6 @@ export class NativeAgent {
       throw error;
     }
     commit(true);
-    note('tools', { messages });
     const last = state.messages.at(-1);
     return (
       ToolMessage.isInstance(last) && last.name !== undefined && this.#returnDirect.has(last.name)
@@ -630,16 +649,12 @@ function threadIdOf(config: RunnableConfig): string {
   return threadId;
 }
 
-/** `promise` 與 `signal` 競速：先中止就拋 `Abort`（同 LangGraph），`promise` 之後的拒絕吞掉。 */
-function abortable(promise: Promise<void>, signal: AbortSignal): Promise<void> {
-  promise.catch(() => undefined);
-  return new Promise((resolve, reject) => {
-    const onAbort = (): void => reject(new Error('Abort'));
-    // 工具鏈可能同步跑到中止的那一處，掛監聽之前就已經舉起來了。
-    if (signal.aborted) onAbort();
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
-  });
+/** 一顆工具回的 `Command` 在 updates 裡的樣子：它的 `update`，tuple 陣列攤成物件。 */
+function commandUpdateOf(command: Command): Record<string, unknown> {
+  const update = command.update;
+  if (update === undefined || update === null) return {};
+  if (Array.isArray(update)) return Object.fromEntries(update as [string, unknown][]);
+  return update as Record<string, unknown>;
 }
 
 /** 一條推拉的佇列：生產者 push，消費者 for-await。 */

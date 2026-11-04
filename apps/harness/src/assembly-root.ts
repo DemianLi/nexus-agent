@@ -1141,9 +1141,10 @@ export async function createCliAgent(
           { followMainRoute: true, requestGate: invocation.requestGate },
         )
       : undefined;
-  // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
-  // （同一個 `deriveApprovalChannel`），`ask_user_question` 與 `exit_plan_mode`（#652）拿的是這一份
-  // ——分岔的樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
+  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊是同一個 `deriveApprovalChannel`，吃同三個輸入：
+  // `approvals.enabled`、有沒有 checkpointer、哪一種 loop。輸入對不上時分岔的樣子是「核准擋得下來、問答還掛在那裡」，
+  // 而那不會有任何測試紅。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
   // 呼叫的 checkpointer 與 `approvals`。

@@ -24,7 +24,7 @@ import type { Command } from '@langchain/langgraph';
 import { ToolInputParsingException } from '@langchain/core/tools';
 import { MiddlewareError, ToolInvocationError } from 'langchain';
 
-import type { LoopState, StateChannels } from './state.js';
+import { hookStateKeys, type LoopState, type StateChannels } from './state.js';
 
 /** 洋蔥裡用得到的 middleware 欄位；`createMiddleware` 的產物都符合。 */
 export interface LoopMiddleware {
@@ -98,6 +98,7 @@ export class NodeTask {
    * @param taskInput - `getCurrentTaskInput()` 讀到的值。
    * @param onFlush - 節點寫回之後（{@link NodeTask.flush}）。
    * @param stepSignal - 同一批工具共用、一顆拋了就舉起來的訊號；工具進 `invoke` 前看它。
+   * @param callerSignal - 呼叫端的 `config.signal`；{@link NodeTask.run} 照它中止這個節點。
    */
   constructor(
     base: RunnableConfig,
@@ -108,6 +109,7 @@ export class NodeTask {
     taskInput: unknown,
     private readonly onFlush?: () => void,
     readonly stepSignal?: AbortSignal,
+    readonly callerSignal?: AbortSignal,
   ) {
     this.config = {
       ...base,
@@ -134,12 +136,20 @@ export class NodeTask {
   }
 
   /**
-   * 在這個節點的 config 裡跑。
+   * 在這個節點的 config 裡跑，照呼叫端的 signal 中止，同 LangGraph 的一個節點（`PregelRunner` 起跑前那一檢，加上節點那串
+   * `RunnableSequence` 的 `raceWithSignal`）：起跑前已中止拋 `Abort`；跑著時中止拋 signal 的 reason（{@link abortReason}），
+   * 這個節點的寫入不套。不多包一層 `async`：兄弟失敗時 `stepSignal` 要趕在兄弟進工具之前舉起來（`runTool`）。
    * @param body - 要跑的東西。
    * @returns 它的結果。
    */
   run<T>(body: () => Promise<T>): Promise<T> {
-    return AsyncLocalStorageProviderSingleton.runWithConfig(this.config, body) as Promise<T>;
+    const signal = this.callerSignal;
+    if (signal?.aborted === true) return Promise.reject(new Error('Abort'));
+    const running = AsyncLocalStorageProviderSingleton.runWithConfig(
+      this.config,
+      body,
+    ) as Promise<T>;
+    return signal === undefined ? running : raceAbort(running, signal);
   }
 
   /** hook 與 wrap* 拿到的 runtime。 */
@@ -171,6 +181,32 @@ export class NodeTask {
   }
 }
 
+/** 中止時拋的錯：signal 的 reason，同 `@langchain/core` 的 `getAbortSignalError`。 */
+export function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  if (typeof reason === 'string') return new Error(reason);
+  return new Error('Aborted');
+}
+
+/** `promise` 與 `signal` 競速：先中止就拋 {@link abortReason}，`promise` 之後的拒絕吞掉，同 `@langchain/core` 的 `raceWithSignal`。 */
+export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  let listener: (() => void) | undefined;
+  return Promise.race([
+    promise.catch((error: unknown) => {
+      if (!signal.aborted) throw error;
+      return undefined as never;
+    }),
+    new Promise<never>((_resolve, reject) => {
+      listener = () => reject(abortReason(signal));
+      signal.addEventListener('abort', listener, { once: true });
+      if (signal.aborted) reject(abortReason(signal));
+    }),
+  ]).finally(() => {
+    if (listener !== undefined) signal.removeEventListener('abort', listener);
+  });
+}
+
 function hookFunction(hook: Hook): HookFunction {
   return typeof hook === 'function' ? hook : hook.hook;
 }
@@ -180,44 +216,67 @@ export function hookTargets(hook: Hook): readonly string[] {
   return typeof hook === 'function' ? [] : (hook.canJumpTo ?? []);
 }
 
-/** 一顆 hook 的結果：寫入已套進 state，只回跳轉目標。 */
+/** 一顆 hook 的跳轉目標。 */
 export type JumpTarget = 'model' | 'tools' | 'end' | undefined;
 
+/** 一顆 hook 跑完：寫入已套進 state，回跳轉目標與 CLI `stream()` 的那一筆 updates。 */
+export interface HookOutcome {
+  readonly jump: JumpTarget;
+  /** 同 `nodes/middleware.js` 的回傳值：沒寫就是 `{}`，有寫是讀到的鍵加上寫的鍵，`jumpTo` 與沒值的格不算。 */
+  readonly update: Record<string, unknown>;
+}
+
+/** 去掉 `jumpTo` 與值是 `undefined` 的格，同 LangGraph 的 updates 不吐沒寫的 channel。 */
+function writtenKeys(update: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(update).filter(([key, value]) => key !== 'jumpTo' && value !== undefined),
+  );
+}
+
 /**
- * 跑一顆 hook（`beforeAgent`、`beforeModel`、`afterAgent`）。照 `nodes/middleware.js`：回傳值是 null／undefined 就不套回傳值
- * （`__pregel_send` 的寫入照樣套）；跳轉目標要在 `canJumpTo` 裡。
+ * 跑一顆 hook（`beforeAgent`、`beforeModel`、`afterAgent`）。照 `nodes/middleware.js`：hook 讀到的 state 只有 `messages` 與
+ * 這一顆 `stateSchema` 的鍵（{@link hookStateKeys}）；回傳值是 null／undefined 就不套回傳值（`__pregel_send` 的寫入照樣套）；
+ * 跳轉目標要在 `canJumpTo` 裡。
  * @param middleware - 那一顆。
  * @param kind - 哪一種 hook。
  * @param task - 這個節點的環境。
  * @param channels - 合併規則。
- * @returns 跳轉目標。
+ * @returns 跳轉目標與 updates。
  */
 export async function runHook(
   middleware: LoopMiddleware,
   kind: 'beforeAgent' | 'beforeModel' | 'afterAgent',
   task: NodeTask,
   channels: StateChannels,
-): Promise<JumpTarget> {
+): Promise<HookOutcome> {
   const hook = middleware[kind];
-  if (hook === undefined) return undefined;
+  if (hook === undefined) return { jump: undefined, update: {} };
+  const view: LoopState = Object.fromEntries(
+    hookStateKeys(middleware.stateSchema).map((key) => [key, task.state[key]]),
+  ) as LoopState;
   const result = (await task.run(async () =>
-    hookFunction(hook)({ ...task.state }, task.runtime(Object.freeze({}))),
+    hookFunction(hook)({ ...view }, task.runtime(Object.freeze({}))),
   )) as Record<string, unknown> | undefined | null;
   task.flush();
-  if (result === undefined || result === null) return undefined;
+  if (result === undefined || result === null) return { jump: undefined, update: {} };
   const jumpTo = result['jumpTo'];
   if (typeof jumpTo === 'string' && !hookTargets(hook).includes(jumpTo)) {
     throw new Error(
       `Invalid jump target: ${jumpTo}, no ${kind}.canJumpTo defined in middleware ${middleware.name}.`,
     );
   }
-  if ('type' in result && result['type'] === 'terminate') {
-    if (result['error'] !== undefined) throw result['error'];
-    channels.apply(task.state, (result['result'] ?? {}) as Record<string, unknown>);
-  } else {
-    channels.apply(task.state, result);
-  }
-  return jumpTo as JumpTarget;
+  const written =
+    'type' in result && result['type'] === 'terminate'
+      ? terminated(result)
+      : (result as Record<string, unknown>);
+  channels.apply(task.state, written);
+  return { jump: jumpTo as JumpTarget, update: writtenKeys({ ...view, ...written }) };
+}
+
+/** `terminate` 動作：帶錯就拋，否則寫它的 `result`。 */
+function terminated(result: Record<string, unknown>): Record<string, unknown> {
+  if (result['error'] !== undefined) throw result['error'];
+  return (result['result'] ?? {}) as Record<string, unknown>;
 }
 
 /** 系統提示詞正規化成 `SystemMessage`，同 langchain 的 `normalizeSystemPrompt`。 */
@@ -456,8 +515,8 @@ export async function runTool(
       });
     }
     // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著。兄弟失敗
-    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 不在這裡先看，跟 `stepSignal`
-    // 合成 `task.config.signal` 交給工具，同 LangGraph；已中止時由 `#toolStep` 的競速收掉。
+    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 不在這裡看，跟 `stepSignal` 合成
+    // `task.config.signal` 交給工具，同 LangGraph，中止由 {@link NodeTask.run} 收掉。
     task.stepSignal?.throwIfAborted();
     let output: unknown;
     try {
