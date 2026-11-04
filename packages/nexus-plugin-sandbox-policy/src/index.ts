@@ -76,6 +76,7 @@
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import {
+  createToolCallStepMiddleware,
   REFERENCE_RULE,
   resolveToolName,
   SHARED_WORKSPACE_SERVICE,
@@ -84,7 +85,6 @@ import {
 import type { SandboxMode } from '@nexus/core';
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { MiddleSection } from '@nexus/core';
-import { createMiddleware } from 'langchain';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
 import type { SandboxModeController } from './sandbox-mode.js';
@@ -316,18 +316,19 @@ export const sandboxPolicyPlugin: NexusPlugin = {
       }),
     );
     registry.middleware.use(
-      createMiddleware({
-        name: SANDBOX_POLICY_MIDDLEWARE_NAME,
+      createToolCallStepMiddleware(
+        SANDBOX_POLICY_MIDDLEWARE_NAME,
         // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
         // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
         // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
         // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
         // 父代理那側的事。
-        wrapToolCall: (request, handler) =>
-          resolveToolName(request) === DELEGATION_TOOL_NAME
-            ? controller.delegate(() => handler(request))
-            : handler(request),
-      }),
+        (call, next) =>
+          resolveToolName({ tool: call.tool as { name?: unknown }, toolCall: call }) ===
+          DELEGATION_TOOL_NAME
+            ? controller.delegate(() => next())
+            : next(),
+      ),
     );
   },
 };

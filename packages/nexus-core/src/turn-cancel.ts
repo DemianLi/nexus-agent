@@ -79,6 +79,8 @@ import { bindModelConfig } from './model-binding.js';
 import { markModelCallFailure } from './model-call-failure.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
+import { wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallResult, ToolCallSite, ToolCallStep } from './tool-call-step.js';
 
 import { archiveGateOf, TurnBlockedError } from './archive-gate.js';
 import type { AgentMiddleware } from './base-types.js';
@@ -248,11 +250,11 @@ function signalOfRequest(request: unknown): AbortSignal | undefined {
 /**
  * 這次工具呼叫的中止訊號是不是已經舉起來了。
  *
- * @param request - `wrapToolCall` 拿到的 request。
+ * @param call - 這次工具呼叫。
  * @returns 已中止就是 `true`；這一輪沒有人放訊號也是 `false`。
  */
-export function toolCallAborted(request: unknown): boolean {
-  return signalOfRequest(request)?.aborted === true;
+export function toolCallAborted(call: Pick<ToolCallSite, 'configurable'>): boolean {
+  return turnCancelSignalOf({ configurable: call.configurable })?.aborted === true;
 }
 
 /**
@@ -289,18 +291,49 @@ export function isSyntheticStopReply(message: AIMessage): boolean {
  * 外層的 guard 用它；耐久檢查點排空之後再問一次中止時也用它
  * （{@link ./session-checkpoint-policy.ts}，照 dsh 的 `abortedBeforeDispatchResult`）。
  *
- * @param request - `wrapToolCall` 拿到的 request。
+ * @param call - 這次工具呼叫。
  * @returns 標成錯誤、帶 `AbortError` 碼的那則工具結果。
  */
-export function abortedBeforeDispatch(request: {
-  readonly toolCall: { readonly id?: string; readonly name: string };
-}): ToolMessage {
+export function abortedBeforeDispatch(call: Pick<ToolCallSite, 'callId' | 'name'>): ToolMessage {
   return toolRefusal(TOOL_ABORTED_BEFORE_DISPATCH_REASON, {
-    callId: request.toolCall.id ?? '',
-    name: request.toolCall.name,
+    callId: call.callId,
+    name: call.name,
     error: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH },
   });
 }
+
+/**
+ * 外層那顆的工具那一半：動手前已中止就不跑；跑完才中止的，成功的結果換成 `ABORTED`，工具自己回的錯照舊。
+ *
+ * 訊號每次從那一次呼叫的 `configurable` 現讀，所以一份走遍 root 與每個子代理。
+ */
+export const turnCancelToolStep: ToolCallStep = async (call, next) => {
+  const signal = turnCancelSignalOf({ configurable: call.configurable });
+  if (signal === undefined) return next();
+  const { callId, name } = call;
+  const aborted = (content: string, code: string) =>
+    toolRefusal(content, { callId, name, error: { name: 'AbortError', code } });
+  if (signal.aborted) return abortedBeforeDispatch(call);
+  let result: ToolCallResult;
+  try {
+    result = await next();
+  } catch (error) {
+    // 保險：子代理那一層照說不拋（見 `stopHere`），但被中止的原因若還是從工具裡冒出來，
+    // 那是一次被中止的呼叫，不是工具壞了（#265 的 Q10）。其餘照拋，讓圍堵照它的規則分類。
+    if (signal.aborted && isTurnCancelled(error)) {
+      return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
+    }
+    throw error;
+  }
+  if (!signal.aborted) return result;
+  // `Command` 留著它的狀態更新，只換屬於這次呼叫的那一則，見 `abortCommand`。
+  if (isCommand(result)) {
+    return abortCommand(result, callId, aborted(TOOL_ABORTED_REASON, TOOL_ABORTED));
+  }
+  // 只換成功的結果：工具自己回的錯照舊。
+  if (readToolOutcome(result, callId).isError) return result;
+  return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
+};
 
 /**
  * 外層那顆：擋工具與中止之後的模型呼叫。位置見檔頭「為什麼是兩顆」。
@@ -312,34 +345,7 @@ export function abortedBeforeDispatch(request: {
 export function createTurnCancelGuard(): AgentMiddleware {
   return createMiddleware({
     name: TURN_CANCEL_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const signal = signalOfRequest(request);
-      if (signal === undefined) return handler(request);
-      const callId = request.toolCall.id ?? '';
-      const name = request.toolCall.name;
-      const aborted = (content: string, code: string) =>
-        toolRefusal(content, { callId, name, error: { name: 'AbortError', code } });
-      if (signal.aborted) return abortedBeforeDispatch(request);
-      let result: Awaited<ReturnType<typeof handler>>;
-      try {
-        result = await handler(request);
-      } catch (error) {
-        // 保險：子代理那一層照說不拋（見 `stopHere`），但被中止的原因若還是從工具裡冒出來，
-        // 那是一次被中止的呼叫，不是工具壞了（#265 的 Q10）。其餘照拋，讓圍堵照它的規則分類。
-        if (signal.aborted && isTurnCancelled(error)) {
-          return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
-        }
-        throw error;
-      }
-      if (!signal.aborted) return result;
-      // `Command` 留著它的狀態更新，只換屬於這次呼叫的那一則，見 `abortCommand`。
-      if (isCommand(result)) {
-        return abortCommand(result, callId, aborted(TOOL_ABORTED_REASON, TOOL_ABORTED));
-      }
-      // 只換成功的結果：工具自己回的錯照舊。
-      if (readToolOutcome(result, callId).isError) return result;
-      return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
-    },
+    wrapToolCall: wrapToolCallWith(turnCancelToolStep),
     wrapModelCall: async (request, handler) => {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
       // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。

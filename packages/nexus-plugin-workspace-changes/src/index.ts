@@ -60,8 +60,14 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
-import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
+import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE, wrapToolCallWith } from '@nexus/core';
+import type {
+  NexusPlugin,
+  PluginEntry,
+  PluginRegistry,
+  SessionLog,
+  ToolCallStep,
+} from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
 import { copyMetaOf } from './capture.js';
@@ -394,20 +400,18 @@ function createWorkspaceChangesMiddleware(
     if (found.address.kind === 'root') return recorders.get(found.log);
     return scope === 'any' ? root() : undefined;
   };
+  const capture: ToolCallStep = async (call, next) => {
+    const recorder = recorderFor(call.configurable, 'any');
+    if (recorder !== undefined) {
+      recorder.capture(call.name, call.args as Parameters<TurnRecorder['capture']>[1]);
+      // 照 dsh：每一顆工具都等排著的工作，所以擷取不會被改檔搶先。
+      await recorder.settled();
+    }
+    return next();
+  };
   return createMiddleware({
     name: WORKSPACE_CHANGES_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const recorder = recorderFor(
-        (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-        'any',
-      );
-      if (recorder !== undefined) {
-        recorder.capture(request.toolCall.name, request.toolCall.args);
-        // 照 dsh：每一顆工具都等排著的工作，所以擷取不會被改檔搶先。
-        await recorder.settled();
-      }
-      return handler(request);
-    },
+    wrapToolCall: wrapToolCallWith(capture),
     afterAgent: async (_state, runtime) => {
       await recorderFor((runtime as { configurable?: unknown }).configurable, 'root')?.stopping();
       return undefined;
