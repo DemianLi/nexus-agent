@@ -12,7 +12,7 @@
  *                     沒有工具呼叫，或工具結果要收這一輪 → afterAgent[n..0] → agent/turn-stopping
  * ```
  *
- * `afterAgent` 回 `jumpTo: 'model'`（插話）就跳過 `agent/pre-step` 與 `beforeModel`、不加步數，直接再叫模型，同 LangGraph 的
+ * `afterAgent` 回 `jumpTo: 'model'`（插話）就跳過 `agent/pre-step` 與 `beforeModel`、`step` 不加（步數上限照扣一格），直接再叫模型，同 LangGraph 的
  * `Send(model_request)`。
  *
  * 不支援：中斷與 resume（沒有存檔點，核准管道在組裝點判成 `no-channel`，TODO(#2358)）、`afterModel`、`Command.goto`，以及
@@ -258,7 +258,7 @@ export class NativeAgent {
   }
 
   /**
-   * 跑一次，回最後的 state。
+   * 跑一次，回最後的 state，不含 `_` 開頭的私有鍵（{@link outputOf}）。
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
@@ -267,8 +267,8 @@ export class NativeAgent {
   }
 
   /**
-   * CLI 那條：模型與工具節點寫完各吐一次 `['updates', { 節點: 寫入 }]`（hook 節點不吐），結束時吐一次 `['values', state]`；
-   * 不讀 `streamMode`。
+   * CLI 那條：模型與工具節點寫完各吐一次 `['updates', { 節點: 寫入 }]`（hook 節點不吐），結束時吐一次 `['values', state]`
+   * （不含 `_` 開頭的鍵）；不讀 `streamMode`。
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
@@ -535,12 +535,12 @@ export class NativeAgent {
     const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }, step.signal));
     const results = new Array<ToolMessage | Command | undefined>(calls.length);
     const messages: BaseMessage[] = [];
-    // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。`unfinished` 是沒收完的那幾顆送出的寫入要不要套。
-    const commit = (unfinished: boolean): void => {
+    // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。
+    const commit = (keepUnfinishedWrites: boolean): void => {
       tasks.forEach((task, index) => {
         const value = results[index];
         if (value === undefined) {
-          if (unfinished) task.keepWrites();
+          if (keepUnfinishedWrites) task.keepWrites();
           return;
         }
         task.flush();
@@ -552,7 +552,7 @@ export class NativeAgent {
         }
       });
     };
-    // 呼叫端的 `config.signal` 中止時這一步當場拋，不等工具，只寫回收完的那幾顆，同 LangGraph `PregelRunner` 的 `abortPromise`。
+    // 呼叫端已中止就當場拋，不起跑，同 LangGraph `_executeTasksWithRetry` 起跑前那一檢。
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
@@ -564,7 +564,8 @@ export class NativeAgent {
     try {
       await (caller === undefined ? batch : abortable(batch, caller));
     } catch (error) {
-      // 一顆失敗：同 LangGraph 把這一步存成 pending writes，跑完的兄弟結果照寫，每一顆送出的寫入照套，失敗那顆不算完成。
+      // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
+      // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
       commit(!(caller?.aborted ?? false));
       throw error;
     }

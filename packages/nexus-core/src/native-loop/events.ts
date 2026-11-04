@@ -20,7 +20,7 @@ export type RequestErrorAction = { readonly kind: 'retry' } | undefined;
 export interface AgentStepPayload {
   /** 這條 thread；沒給 `configurable.thread_id` 的一輪是 `undefined`。 */
   readonly threadId: string | undefined;
-  /** 第幾次 `agent/pre-step`，從 1 起算；`afterAgent` 跳回模型那次沿用上一步，`beforeAgent` 跳 `end` 的一輪沒有 pre-step，是 0。 */
+  /** 第幾次 `agent/pre-step`，從 1 起算；`afterAgent` 跳回模型那次沿用上一步；還沒派過 pre-step 時（`beforeAgent` 跳 `end` 之後）是 0。 */
   readonly step: number;
   /** 這一輪的中止訊號。 */
   readonly signal: AbortSignal;

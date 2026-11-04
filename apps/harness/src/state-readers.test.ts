@@ -251,7 +251,7 @@ describe('量具自檢：每一種寫法都抓得到，沒讀的不算', () => {
 const ALLOWED: Readonly<Record<string, number>> = {
   'apps/harness/src/pre-step-middleware.ts › createPreStepMiddleware 掛鉤的 state 參數': 1,
   'apps/harness/src/thread-pump.ts › ThreadPump getState()': 2,
-  // native loop 的相容層照 `createAgent` 把 state 交給 `wrapToolCall` 的那一處，自己不讀；隨相容層拿掉（#2357）。
+  // native loop 的相容層照 `createAgent` 把 state 交給 `wrapToolCall` 的那一處，自己不讀。TODO(#2357)：隨相容層拿掉。
   'packages/nexus-core/src/native-loop/onion.ts › runTool request.state': 1,
   'packages/nexus-core/src/patch-tool-calls.ts › createPatchToolCallsMiddleware 掛鉤的 state 參數': 1,
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,

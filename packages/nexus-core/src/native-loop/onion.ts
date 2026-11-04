@@ -161,8 +161,9 @@ export class NodeTask {
   }
 
   /**
-   * 節點拋了：已經送出的寫入照樣套進 state，節點不算完成。同 LangGraph 把失敗 task 的寫入連同 `ERROR` 存成 pending writes，
-   * 下一輪與 `getState` 都看得到（例如摘要器先寫的歷史檔）。
+   * 把經 `__pregel_send` 送出的寫入套進 state 並清空，不叫 `onFlush`（節點不算完成）；`flush` 與失敗、沒收完的路徑共用。
+   * LangGraph 把失敗 task 的寫入連同 `ERROR` 存成 pending writes，`getState` 與之後的 `updateState` 會套上（例如摘要器先寫的
+   * 歷史檔）；native 當場套進 state。
    */
   keepWrites(): void {
     for (const [key, value] of this.writes) this.channels.apply(this.state, { [key]: value });
@@ -174,6 +175,7 @@ function hookFunction(hook: Hook): HookFunction {
   return typeof hook === 'function' ? hook : hook.hook;
 }
 
+/** 一顆 hook 宣告的 `canJumpTo`；函式形式的 hook 沒有宣告，回空陣列。 */
 export function hookTargets(hook: Hook): readonly string[] {
   return typeof hook === 'function' ? [] : (hook.canJumpTo ?? []);
 }
@@ -454,7 +456,8 @@ export async function runTool(
       });
     }
     // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著。兄弟失敗
-    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 照原樣交給工具，同 LangGraph。
+    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 不在這裡先看，跟 `stepSignal`
+    // 合成 `task.config.signal` 交給工具，同 LangGraph；已中止時由 `#toolStep` 的競速收掉。
     task.stepSignal?.throwIfAborted();
     let output: unknown;
     try {

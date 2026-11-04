@@ -226,7 +226,7 @@ describe('native loop 對照 LangGraph', () => {
       [{ content: '試試。', toolCalls: [{ name: 'nope', args: {} }] }, { content: '沒有。' }],
     ],
     ['模型出錯', [{ content: '', error: '供應商過載' }]],
-    // 這一步失敗：跑完的兄弟照寫進 state。前一顆失敗、兄弟晚進的那種不在這裡比，見下面「native 下同一步的兄弟」。
+    // 這一步失敗：跑完的兄弟、失敗那顆在事件與日誌上跟 LangGraph 一樣。前一顆失敗、兄弟晚進的那種不在這裡比，見下面「native 下同一步的兄弟」。
     [
       '兄弟跑完、後一顆失敗',
       [
