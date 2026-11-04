@@ -41,7 +41,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { FileReferenceCandidate } from '@nexus/wire';
 
 /** 一次查詢最多回幾筆。同 dsh 的 `DEFAULT_FILE_SEARCH_MAX_RESULTS`。 */
@@ -484,7 +484,7 @@ export const fileReferencePlugin: NexusPlugin = {
   apply(registry) {
     registry.prompt.section({
       name: FILE_REFERENCE_SECTION_NAME,
-      order: SECTION_ORDERS.PLUGIN_POLICY,
+      order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,
       separator: '\n',
       text: FILE_REFERENCE_PROMPT,
     });

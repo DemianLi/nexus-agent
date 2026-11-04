@@ -1,7 +1,8 @@
 /**
  * 系統提示詞的**中段**接在洋蔥的哪一格（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
  *
- * 中段是插件與組裝點交的文字（計劃模式指引、先讀後改、沙箱政策、核准政策句…），形狀見 `@nexus/system-prompt` 的 `PromptSection`。
+ * 中段是插件與組裝點交的文字（計劃模式指引、先讀後改、沙箱政策、核准政策句…）。頭尾兩段（身分句、前後綴）是 `@nexus/system-prompt`
+ * 的契約、由樹上的 `system-prompt` 那一列提供；中段的形狀與值在這裡，`@nexus/core` 的 runtime 不經那個契約套件（它掛著 `@nexus/sdk`）。
  * 這裡把「文字」與「接在哪一格」拆開：文字是段，接法是這裡的轉接，**一格一顆**，各在 `fold.ts` 槽位表裡固定的那一格。
  * 兩個 loop 跑的是同一顆。
  *
@@ -22,12 +23,109 @@
  */
 
 import { SystemMessage } from '@langchain/core/messages';
-import { renderMiddleSection, SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection, SectionAgent, SectionContext } from '@nexus/system-prompt';
 import { createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
 import { toolCallSessionAddress } from './session-address.js';
+
+/**
+ * 中段的排序值。照各段在洋蔥裡的先後：宿主依值把段交給它那一格接，值一換順序就跟著換，送出的位元組也跟著變
+ * （`apps/harness/src/middle-section-orders.test.ts` 釘住每一個值）。全部落在 `@nexus/system-prompt` 的前綴（0）與後綴（10200）之間。
+ */
+export const MIDDLE_SECTION_ORDERS = {
+  /** 計劃模式的指引。 */
+  PLAN_POLICY: 500,
+  /** 背景子代理「一起派、別乾等」那一句。 */
+  BACKGROUND_DELEGATION: 510,
+  /** 先讀後改的規則。 */
+  FS_OBSERVATION: 1000,
+  /** 子代理被委派的身分與權限範圍。只給子代理。 */
+  SUBAGENT_DELEGATION: 1100,
+  /** 插件的政策段：沙箱政策、MCP 伺服器、`@` 路徑。同值照登記的先後，也就是插件在出貨清單上的先後。 */
+  PLUGIN_POLICY: 2000,
+  /** 核准政策句。 */
+  APPROVAL_POLICY: 3000,
+} as const;
+
+/** 這一次模型呼叫是誰的：root，或某一次委派出去的子代理。 */
+export type SectionAgent =
+  | { readonly kind: 'root' }
+  | {
+      readonly kind: 'subagent';
+      /** 那一次委派的編號。 */
+      readonly id: string;
+    };
+
+/** 函式型的段收到的：這一次模型呼叫，在這一段被接上的那一格看到的。 */
+export interface SectionContext {
+  /** 呼叫者。認不出來（不在圖裡、身分壞掉）是 `undefined`。 */
+  readonly agent: SectionAgent | undefined;
+  /** 這一次呼叫的身分，原樣交給 `registry.sessions.forCall`；段不自己解析它。 */
+  readonly call: unknown;
+  /** 這一格看到的工具名，照請求裡的順序。外層的 middleware 換過、濾過的，這裡是換過之後的。 */
+  readonly tools: readonly string[];
+}
+
+/** 段的文字：原文，或每次模型呼叫現算的函式。函式回 `''` 就是這一次不接。 */
+export type SectionText = string | ((context: SectionContext) => string);
+
+/** 一個中段。 */
+export interface MiddleSection {
+  /** 段的名字，同一次組裝內不可重名。 */
+  readonly name: string;
+  /** 排序值，見 {@link MIDDLE_SECTION_ORDERS}。 */
+  readonly order: number;
+  /** 文字，照原文接，不代入變數。 */
+  readonly text: SectionText;
+  /** 接在前一塊後面時，自己這一塊開頭加的字（`'\n'`、`'\n\n'`、`''`）。省略即 `'\n\n'`。 */
+  readonly separator?: string;
+}
+
+/**
+ * 檢查一段的形狀：登記時就拋，不留到渲染才發現。`order` 接不接得上由登記的那一方再檢查。
+ *
+ * @param section - 要登記的段。
+ * @throws 不是物件、`name` 空、`order` 不是有限的數字、帶了 `complete`／`interpolate`、`text` 不是字串或函式、`separator` 不是字串。
+ */
+export function assertMiddleSection(section: unknown): asserts section is MiddleSection {
+  if (typeof section !== 'object' || section === null) {
+    throw new TypeError('prompt.section() 要收一個物件 { name, order, text }');
+  }
+  const { name, order, text, separator } = section as Record<string, unknown>;
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new TypeError('prompt.section() 的 name 要是非空字串');
+  }
+  if (typeof order !== 'number' || !Number.isFinite(order)) {
+    throw new TypeError(`prompt.section() "${name}" 的 order 要是有限的數字`);
+  }
+  for (const unsupported of ['complete', 'interpolate'] as const) {
+    if (unsupported in section) {
+      throw new TypeError(`prompt.section() "${name}" 帶了 ${unsupported}：不支援，不會靜靜丟掉`);
+    }
+  }
+  if (typeof text !== 'string' && typeof text !== 'function') {
+    throw new TypeError(`prompt.section() "${name}" 的 text 要是字串或函式`);
+  }
+  if (separator !== undefined && typeof separator !== 'string') {
+    throw new TypeError(`prompt.section() "${name}" 的 separator 要是字串`);
+  }
+}
+
+/**
+ * 中段這一次要接的那一塊：分隔字加上文字。函式這次回 `''` 的就不接。
+ *
+ * @param section - 一個中段。
+ * @param context - 這一次呼叫在那一格看到的。
+ * @returns 要接上的一塊；`undefined` 是這一次不接。
+ */
+export function renderMiddleSection(
+  section: MiddleSection,
+  context: SectionContext,
+): string | undefined {
+  const text = typeof section.text === 'function' ? section.text(context) : section.text;
+  if (text === '') return undefined;
+  return `${section.separator ?? '\n\n'}${text}`;
+}
 
 /** `plugins.prepended` 最後面那一格的名字。 */
 export const PREPENDED_SECTIONS_MIDDLEWARE_NAME = 'nexusPromptSections:prepended';
@@ -43,9 +141,9 @@ export const OBSERVATION_SECTION_MIDDLEWARE_NAME = 'nexusPromptSections:observat
  */
 export const SECTION_SLOT_ORDERS = {
   /** `plugins.prepended` 的最後面：計劃模式指引、平行句。 */
-  prepended: [SECTION_ORDERS.PLAN_POLICY, SECTION_ORDERS.BACKGROUND_DELEGATION],
+  prepended: [MIDDLE_SECTION_ORDERS.PLAN_POLICY, MIDDLE_SECTION_ORDERS.BACKGROUND_DELEGATION],
   /** `plugins.rest` 的最前面：沙箱政策、MCP、`@` 路徑。 */
-  plugins: [SECTION_ORDERS.PLUGIN_POLICY],
+  plugins: [MIDDLE_SECTION_ORDERS.PLUGIN_POLICY],
 } as const satisfies Record<string, readonly number[]>;
 
 /** 插件登記得了的值。 */
@@ -61,9 +159,9 @@ export const PLUGIN_SECTION_ORDERS: readonly number[] = [
  * @param orders - 這一格接的值。
  */
 export function sectionsIn(
-  sections: readonly PromptSection[],
+  sections: readonly MiddleSection[],
   orders: readonly number[],
-): PromptSection[] {
+): MiddleSection[] {
   return sections
     .map((section, index) => ({ section, index }))
     .filter(({ section }) => orders.includes(section.order))
@@ -114,7 +212,7 @@ export function sectionContextOf(request: SectionRequest): SectionContext {
  */
 export function applySections<Request extends SectionRequest>(
   request: Request,
-  sections: readonly PromptSection[],
+  sections: readonly MiddleSection[],
 ): Request {
   const context = sectionContextOf(request);
   let message = request.systemMessage;
@@ -136,7 +234,7 @@ export function applySections<Request extends SectionRequest>(
  */
 export function createSectionSlotMiddleware(
   name: string,
-  sections: readonly PromptSection[],
+  sections: readonly MiddleSection[],
 ): AgentMiddleware {
   return createMiddleware({
     name,

@@ -6,9 +6,6 @@ import {
   assertSectionRegistrable,
   composeSystemPromptParts,
   interpolateStrict,
-  isMiddleSection,
-  MIDDLE_SECTION_ORDERS,
-  renderMiddleSection,
   SECTION_ORDERS,
   SYSTEM_PROMPT_CONTRACT_VERSION,
   SYSTEM_PROMPT_MIDDLEWARE_NAME,
@@ -28,21 +25,12 @@ describe('@nexus/system-prompt 的定義', () => {
     expect(SYSTEM_PROMPT_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('SECTION_ORDERS：頭尾三格照 dsh，中段只放宿主接得上的', () => {
+  it('SECTION_ORDERS 數值照 dsh，只放用到的三格', () => {
     expect(SECTION_ORDERS).toEqual({
       HARNESS_IDENTITY: -1000,
       DEPLOYMENT_PERSONA_PREFIX: 0,
-      PLAN_POLICY: 500,
-      BACKGROUND_DELEGATION: 510,
-      FS_OBSERVATION: 1000,
-      SUBAGENT_DELEGATION: 1100,
-      PLUGIN_POLICY: 2000,
-      APPROVAL_POLICY: 3000,
       DEPLOYMENT_PERSONA_SUFFIX: 10200,
     });
-    expect([...MIDDLE_SECTION_ORDERS].sort((a, b) => a - b)).toEqual([
-      500, 510, 1000, 1100, 2000, 3000,
-    ]);
     expect(SYSTEM_PROMPT_MIDDLEWARE_NAME).toBe('nexusSystemPrompt');
   });
 });
@@ -160,37 +148,25 @@ describe('前後段的組法', () => {
   });
 });
 
-describe('登記時大聲拒絕不支援的', () => {
+describe('登記時大聲拒絕第一刀不支援的', () => {
   const ok = { name: 'x', order: SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX, text: '字' };
 
-  it('合法的：頭端、尾端與邊界值，以及中段接得上的每一個值', () => {
-    for (const order of [-1000, -1, 0, 10200, 99999, ...MIDDLE_SECTION_ORDERS]) {
+  it('合法的：頭端、尾端與邊界值', () => {
+    for (const order of [-1000, -1, 0, 10200, 99999]) {
       expect(() => assertSectionRegistrable({ ...ok, order })).not.toThrow();
     }
   });
 
-  it('order 落在前綴與後綴之間、但不是中段接得上的值（含邊界外一格）', () => {
-    for (const order of [1, 501, 2400, 10199]) {
+  it('order 落在前綴與後綴之間（含邊界外一格）', () => {
+    for (const order of [1, 500, 2400, 10199]) {
       expect(() => assertSectionRegistrable({ ...ok, order }), String(order)).toThrow(
-        /落在前綴.*之間.*不是中段接得上的值/u,
+        /落在前綴.*之間/u,
       );
     }
   });
 
-  it('函式型的 text 只收在中段', () => {
+  it('函式型的 text', () => {
     expect(() => assertSectionRegistrable({ ...ok, text: () => '字' })).toThrow(/text 是函式/u);
-    expect(() =>
-      assertSectionRegistrable({ ...ok, order: SECTION_ORDERS.PLAN_POLICY, text: () => '字' }),
-    ).not.toThrow();
-  });
-
-  it('separator 只收在中段，而且要是字串', () => {
-    expect(() => assertSectionRegistrable({ ...ok, separator: '\n' })).toThrow(/separator/u);
-    const middle = { ...ok, order: SECTION_ORDERS.PLAN_POLICY };
-    expect(() => assertSectionRegistrable({ ...middle, separator: '\n' })).not.toThrow();
-    expect(() => assertSectionRegistrable({ ...middle, separator: 1 })).toThrow(
-      /separator 要是字串/u,
-    );
   });
 
   it('dsh 的 complete、interpolate 欄位', () => {
@@ -201,40 +177,8 @@ describe('登記時大聲拒絕不支援的', () => {
   it('名字空、order 不是有限數字、text 不是字串', () => {
     expect(() => assertSectionRegistrable({ ...ok, name: ' ' })).toThrow(/name/u);
     expect(() => assertSectionRegistrable({ ...ok, order: Number.NaN })).toThrow(/order/u);
-    expect(() => assertSectionRegistrable({ ...ok, text: 3 })).toThrow(/text 要是字串或函式/u);
+    expect(() => assertSectionRegistrable({ ...ok, text: 3 })).toThrow(/text 要是字串/u);
     expect(() => assertSectionRegistrable(null)).toThrow(/物件/u);
-  });
-});
-
-describe('中段怎麼渲染', () => {
-  const context = { agent: undefined, call: {}, tools: ['write_file'] };
-
-  it('頭尾不渲染中段', () => {
-    const parts = composeSystemPromptParts(
-      {
-        sections: [
-          { name: 'head', order: SECTION_ORDERS.DEPLOYMENT_PERSONA_PREFIX, text: '頭' },
-          { name: 'mid', order: SECTION_ORDERS.PLAN_POLICY, text: '中' },
-          { name: 'tail', order: SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX, text: '尾' },
-        ],
-        variables: [],
-      },
-      {},
-    );
-    expect(JSON.stringify(parts)).not.toContain('中');
-  });
-
-  it('分隔字在前、預設兩個換行；函式每次現算，回空字串這一次不接', () => {
-    const base = { name: 'm', order: SECTION_ORDERS.PLAN_POLICY };
-    expect(isMiddleSection(base)).toBe(true);
-    expect(isMiddleSection({ order: SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX })).toBe(false);
-    expect(renderMiddleSection({ ...base, text: '字' }, context)).toBe('\n\n字');
-    expect(renderMiddleSection({ ...base, text: '字', separator: '\n' }, context)).toBe('\n字');
-    const seen = (tools: readonly string[]) => (tools.includes('write_file') ? '寫' : '');
-    expect(renderMiddleSection({ ...base, text: (c) => seen(c.tools) }, context)).toBe('\n\n寫');
-    expect(
-      renderMiddleSection({ ...base, text: (c) => seen(c.tools) }, { ...context, tools: [] }),
-    ).toBeUndefined();
   });
 });
 

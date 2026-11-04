@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import { createRegistry } from './registry.js';
 import {
   fakeBackend,
@@ -586,13 +586,17 @@ describe('其餘六個註冊點', () => {
 });
 
 describe('prompt 註冊點（#2414）', () => {
-  const section = { name: 'x:policy', order: SECTION_ORDERS.PLUGIN_POLICY, text: '字' };
+  const section = { name: 'x:policy', order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY, text: '字' };
 
   it('收插件接得上的兩格的值；撤銷就拿掉', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);
     const undo = registry.prompt.section(section);
-    registry.prompt.section({ ...section, name: 'x:plan', order: SECTION_ORDERS.PLAN_POLICY });
+    registry.prompt.section({
+      ...section,
+      name: 'x:plan',
+      order: MIDDLE_SECTION_ORDERS.PLAN_POLICY,
+    });
     leave();
     expect(registry.prompt.sections().map((each) => each.name)).toEqual(['x:policy', 'x:plan']);
     undo();
@@ -600,10 +604,10 @@ describe('prompt 註冊點（#2414）', () => {
   });
 
   it.each([
-    ['頭', SECTION_ORDERS.DEPLOYMENT_PERSONA_PREFIX],
-    ['組裝點自己的先讀後改', SECTION_ORDERS.FS_OBSERVATION],
-    ['組裝點自己的委派聲明', SECTION_ORDERS.SUBAGENT_DELEGATION],
-    ['組裝點自己的核准政策句', SECTION_ORDERS.APPROVAL_POLICY],
+    ['頭', 0],
+    ['組裝點自己的先讀後改', MIDDLE_SECTION_ORDERS.FS_OBSERVATION],
+    ['組裝點自己的委派聲明', MIDDLE_SECTION_ORDERS.SUBAGENT_DELEGATION],
+    ['組裝點自己的核准政策句', MIDDLE_SECTION_ORDERS.APPROVAL_POLICY],
   ])('%s那一格的值不收：沒有東西會渲染它，收了就是靜靜丟掉', (_label, order) => {
     const registry = createRegistry();
     const leave = registry.enter(first);

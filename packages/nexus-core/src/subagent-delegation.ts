@@ -27,13 +27,11 @@
  * @module
  */
 
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
-
 import type { ApprovalChannel } from './approval.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { AgentMiddleware } from './base-types.js';
-import { createSectionSlotMiddleware } from './prompt-sections.js';
+import { createSectionSlotMiddleware, MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const SUBAGENT_DELEGATION_MIDDLEWARE_NAME = 'nexusSubagentDelegation';
@@ -77,10 +75,10 @@ export function foregroundDelegationContext(
  *
  * @param context - 每次模型呼叫取一次那一句。
  */
-export function subagentDelegationSection(context: () => string): PromptSection {
+export function subagentDelegationSection(context: () => string): MiddleSection {
   return {
     name: 'nexus:subagent-delegation',
-    order: SECTION_ORDERS.SUBAGENT_DELEGATION,
+    order: MIDDLE_SECTION_ORDERS.SUBAGENT_DELEGATION,
     separator: '\n',
     text: () => context(),
   };

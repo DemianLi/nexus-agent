@@ -47,8 +47,8 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import { INVALID_ARGS, putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
 import type { PluginEntry, SessionLog, SessionRegistry, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
@@ -176,9 +176,9 @@ const PARALLEL_SENTENCE =
  * 那一句的段（#2414）：這一格看得到 `subagent` 才接。`subagent` 是上面那顆 middleware 換掉 `task` 換上的，fold 把段接在它內側，
  * 所以子代理（沒有 `task`）不接。
  */
-const PARALLEL_SECTION: PromptSection = {
+const PARALLEL_SECTION: MiddleSection = {
   name: 'background-delegation:parallel',
-  order: SECTION_ORDERS.BACKGROUND_DELEGATION,
+  order: MIDDLE_SECTION_ORDERS.BACKGROUND_DELEGATION,
   separator: '\n',
   text: (context) => (context.tools.includes(SUBAGENT_TOOL_NAME) ? PARALLEL_SENTENCE : ''),
 };

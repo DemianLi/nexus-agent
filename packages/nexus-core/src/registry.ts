@@ -29,8 +29,6 @@
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
-import { assertSectionRegistrable } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
 import type { NexusTool } from '@nexus/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
@@ -53,7 +51,8 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
 import { normalizeProjectionUnit } from './projections.js';
-import { PLUGIN_SECTION_ORDERS } from './prompt-sections.js';
+import { assertMiddleSection, PLUGIN_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 import type { ProjectionUnit } from './projections.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
@@ -648,14 +647,14 @@ export interface PromptSectionRegistrationPoint {
    * 登記一段。
    * @param section - 中段：`order` 是 `PLUGIN_SECTION_ORDERS` 之一。
    * @returns 只撤銷這一次登記的冪等 undo。
-   * @throws 形狀不合（見 `assertSectionRegistrable`）、`order` 不是插件接得上的值、或同名的段已經登記過。
+   * @throws 形狀不合（見 `assertMiddleSection`）、`order` 不是插件接得上的值、或同名的段已經登記過。
    */
-  section(section: PromptSection): () => void;
+  section(section: MiddleSection): () => void;
   /**
    * 目前登記的段。
    * @returns 依登記順序。
    */
-  sections(): PromptSection[];
+  sections(): MiddleSection[];
 }
 
 /** 一次關機清理。回 promise 就會被等到。 */
@@ -1486,7 +1485,7 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
   const denyRules = new AnonymousEntries<DenyRule>();
   const approvalListeners = new AnonymousEntries<PreToolListener>();
   const memorySources = new AnonymousEntries<string>();
-  const promptSections = new AnonymousEntries<PromptSection>();
+  const promptSections = new AnonymousEntries<MiddleSection>();
   const sessionInstallers = new AnonymousEntries<SessionInstaller>();
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
@@ -1762,7 +1761,7 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
   const promptPoint: PromptSectionRegistrationPoint = {
     section: (section) =>
       effect('prompt.section()', (origin) => {
-        assertSectionRegistrable(section);
+        assertMiddleSection(section);
         if (!PLUGIN_SECTION_ORDERS.includes(section.order)) {
           throw new RangeError(
             `${formatOrigin(origin)} 登記的段 "${section.name}" 的 order ${String(section.order)} 不是插件接得上的值` +

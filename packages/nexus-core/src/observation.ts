@@ -58,8 +58,6 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { posix } from 'node:path';
 
 import { ToolMessage } from '@langchain/core/messages';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { createMiddleware } from 'langchain';
@@ -67,6 +65,8 @@ import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
 import type { NexusPlugin } from './plugin.js';
 import { toolRefusal } from './tool-events.js';
+import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
@@ -117,9 +117,9 @@ export function observationGuidance(tools: ReadonlySet<string>): string {
  * 先讀後改那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：規則要在模型動手之前就講給它聽，理由與出處見檔頭。
  * 照這一格看到的工具名現算（{@link observationGuidance}），兩個工具都不在場時這一次不接。由 fold 在策略那一格的外側接上。
  */
-export const OBSERVATION_SECTION: PromptSection = {
+export const OBSERVATION_SECTION: MiddleSection = {
   name: 'nexus:fs-observation',
-  order: SECTION_ORDERS.FS_OBSERVATION,
+  order: MIDDLE_SECTION_ORDERS.FS_OBSERVATION,
   separator: '\n\n',
   text: (context) => observationGuidance(new Set(context.tools)),
 };

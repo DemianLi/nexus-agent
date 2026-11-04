@@ -56,8 +56,8 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, turnCancelSignalOf } from '@nexus/core';
 import type { PluginRegistry } from '@nexus/core';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection } from '@nexus/core';
 import { z } from 'zod';
 
 /** hub 在 `services` 上的名字。 */
@@ -299,10 +299,10 @@ export function ensureHub(registry: PluginRegistry): McpHub {
 }
 
 /** {@link hubPromptText} 那一段，每次模型呼叫現算；沒有東西可接就是 `''`，這一次不接。 */
-function promptSection(sources: ReadonlyMap<string, McpSource>): PromptSection {
+function promptSection(sources: ReadonlyMap<string, McpSource>): MiddleSection {
   return {
     name: MCP_PROMPT_SECTION_NAME,
-    order: SECTION_ORDERS.PLUGIN_POLICY,
+    order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,
     separator: '\n\n',
     text: () => hubPromptText(sources.values()),
   };

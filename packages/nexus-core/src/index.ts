@@ -581,13 +581,22 @@ export {
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
   subagentDelegationSection,
 } from './subagent-delegation.js';
+export type {
+  MiddleSection,
+  SectionAgent,
+  SectionContext,
+  SectionText,
+} from './prompt-sections.js';
 export {
   applySections,
+  assertMiddleSection,
   createSectionSlotMiddleware,
+  MIDDLE_SECTION_ORDERS,
   OBSERVATION_SECTION_MIDDLEWARE_NAME,
   PLUGIN_SECTION_ORDERS,
   PLUGIN_SECTIONS_MIDDLEWARE_NAME,
   PREPENDED_SECTIONS_MIDDLEWARE_NAME,
+  renderMiddleSection,
   sectionContextOf,
   SECTION_SLOT_ORDERS,
   sectionsIn,

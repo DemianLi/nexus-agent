@@ -11,13 +11,11 @@
  * @module
  */
 
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
-
 import type { AgentMiddleware } from './base-types.js';
 import type { ApprovalChannel } from './approval.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
-import { createSectionSlotMiddleware } from './prompt-sections.js';
+import { createSectionSlotMiddleware, MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 
 /** middleware 的名字。 */
 export const APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME = 'nexusApprovalPolicyPrompt';
@@ -57,10 +55,10 @@ export function approvalPolicySentence(
 export function approvalPolicySection(
   channel: ApprovalChannel,
   policy: () => ApprovalPolicyValue,
-): PromptSection {
+): MiddleSection {
   return {
     name: 'nexus:approval-policy',
-    order: SECTION_ORDERS.APPROVAL_POLICY,
+    order: MIDDLE_SECTION_ORDERS.APPROVAL_POLICY,
     separator: '\n',
     text: () => approvalPolicySentence(channel, policy()),
   };

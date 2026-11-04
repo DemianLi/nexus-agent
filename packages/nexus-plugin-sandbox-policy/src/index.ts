@@ -82,8 +82,8 @@ import {
   WORKSPACE_CAPABILITY,
 } from '@nexus/core';
 import type { SandboxMode } from '@nexus/core';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
@@ -245,10 +245,10 @@ declare module '@nexus/core' {
 function policySection(
   resolveMode: () => SandboxMode,
   options: { readonly contained: boolean; readonly sharedPrefix?: string },
-): PromptSection {
+): MiddleSection {
   return {
     name: SANDBOX_POLICY_SECTION_NAME,
-    order: SECTION_ORDERS.PLUGIN_POLICY,
+    order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,
     separator: '\n',
     text: () => sandboxPolicySentence(resolveMode(), options),
   };

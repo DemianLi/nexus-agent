@@ -184,8 +184,8 @@ import type {
   SessionSubject,
 } from '@nexus/core';
 import { CHANNEL_SERVICE, QUESTION_INTERRUPT_KIND } from '@nexus/core';
-import { SECTION_ORDERS } from '@nexus/system-prompt';
-import type { PromptSection } from '@nexus/system-prompt';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection } from '@nexus/core';
 import type { JsonValue, NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
@@ -471,10 +471,10 @@ function createPlanModeMiddleware(settle: (config: unknown) => void): AgentMiddl
  * @param guidance - 模式生效時夾的那一段。
  * @param active - 這一次呼叫的呼叫者在不在計劃模式裡；收的是 `registry.sessions.forCall` 要的那份身分。
  */
-function planPolicySection(guidance: string, active: (call: unknown) => boolean): PromptSection {
+function planPolicySection(guidance: string, active: (call: unknown) => boolean): MiddleSection {
   return {
     name: PLAN_POLICY_SECTION_NAME,
-    order: SECTION_ORDERS.PLAN_POLICY,
+    order: MIDDLE_SECTION_ORDERS.PLAN_POLICY,
     separator: '\n',
     text: (context) => (active(context.call) ? guidance : ''),
   };

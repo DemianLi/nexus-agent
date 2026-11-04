@@ -353,7 +353,7 @@ type NexusToolResult =
 | | `onActivationChanged(log, listener)` | F | **仍是 F** |
 | `messageFeedback` | `put`／`delete`／`list`／`record(log, req)` | 收 O | 同左 |
 | `permissionPresets` | `start`、`narrowDelegated` | D | D |
-| `systemPrompt` | `section`、`variable`、`assemble` | D（`section` 回 disposer，F） | 同左；中段的 `text` 可以是函式（K7a #2414），多一個 F。中段不經頭尾的渲染，交給 `registry.prompt`，由宿主接在洋蔥的原格 |
+| `systemPrompt` | `section`、`variable`、`assemble` | D（`section` 回 disposer，F） | 同左。中段（`text` 可以是函式，多一個 F）不在這個契約裡：形狀與值在 `@nexus/core` 的 `prompt-sections.ts`，插件經 `registry.prompt` 登記，由宿主接在洋蔥的原格（K7a #2414；core 的 runtime 不經掛著 `@nexus/sdk` 的契約套件） |
 | 宿主的 `assembly` | `create(invocation)` | 回整張 LangGraph 圖（L） | 回 native loop 的實例（O） |
 | 相容層 `PluginRegistry` | `tools`／`middleware`／`subagents`／`backend` | L、L/deepagents | L3 拆掉 |
 
