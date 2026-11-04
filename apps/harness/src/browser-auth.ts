@@ -18,8 +18,9 @@
  *   loopback 的 HTTP 所以刻意不設 `Secure`，也不設 `Domain`（host-only）。
  * - **驗證**：authority 取 `Host` 正規化；只讀名字剛好相符的那一顆；簽章用 `timingSafeEqual` 比；
  *   authority 要相同；`issuedAt <= now < expiresAt`，而且期間不超過這一版的上限。
- * - **換完 303 到乾淨的 `/`**，帶 `cache-control: no-store` 與 `referrer-policy: no-referrer`；
- *   舊的 token 配上有效的 cookie 也只轉回乾淨的 `/`；其他一律同一種最小的 401。
+ * - **換完 303 到乾淨的 `./`**，帶 `cache-control: no-store` 與 `referrer-policy: no-referrer`；
+ *   舊的 token 配上有效的 cookie 也只轉回乾淨的 `./`；其他一律同一種最小的 401。轉址寫相對的：放在反向代理的子路徑
+ *   底下（#2369）時 serve 看不到前綴，瀏覽器對著 `/nexus/?token=…` 解析才回得到 `/nexus/`。
  *
  * ## 偏離（照 AGENTS.md 的偏離規則登記）
  *
@@ -171,7 +172,7 @@ function decodeCookie(value: string, secret: Buffer): BrowserCookiePayload | und
 function redirectToCleanRoot(setCookie?: string): Response {
   const headers = new Headers({
     'cache-control': 'no-store',
-    location: '/',
+    location: './',
     'referrer-policy': 'no-referrer',
   });
   if (setCookie !== undefined) headers.set('set-cookie', setCookie);
@@ -209,14 +210,14 @@ export class BrowserAuth {
   }
 
   /**
-   * 在一般的根網址上帶這個行程的 token。
+   * 在瀏覽器要開的網址上帶這個行程的 token。
    *
-   * @param baseUrl - 瀏覽器要開的來源（不帶憑證）。
-   * @returns 路徑是 `/`、query 只有 token 的網址。**這個值是敏感輸出**：印一次，別處不重複。
+   * @param baseUrl - 瀏覽器要開的網址（不帶憑證）：直連時是 serve 的來源，放在反向代理後面時是 `--public-url`。
+   * @returns 保留 `baseUrl` 的路徑（補成 `/` 結尾）、query 只有 token 的網址。**這個值是敏感輸出**：印一次，別處不重複。
    */
   authenticatedUrl(baseUrl: string): string {
     const url = new URL(baseUrl);
-    url.pathname = '/';
+    if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
     url.search = '';
     url.hash = '';
     url.searchParams.set(TOKEN_QUERY, this.launchToken);

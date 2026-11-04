@@ -61,13 +61,31 @@ afterEach(() => {
 });
 
 describe('BrowserAuth', () => {
+  it('登入網址保留公開網址的路徑，換完轉到相對的 ./：掛在反向代理的子路徑底下也回得到同一層（#2369）', () => {
+    const auth = new BrowserAuth(SECRET);
+    const behindProxy = new URL(auth.authenticatedUrl('https://app.example/nexus/?x=1#y'));
+    expect(`${behindProxy.origin}${behindProxy.pathname}`).toBe('https://app.example/nexus/');
+    expect([...behindProxy.searchParams.keys()]).toEqual(['token']);
+    expect(behindProxy.searchParams.get('token')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(behindProxy.hash).toBe('');
+    expect(new URL(auth.authenticatedUrl('http://127.0.0.1:8787/nexus')).pathname).toBe('/nexus/');
+    expect(new URL(auth.authenticatedUrl(`http://${AUTHORITY}`)).pathname).toBe('/');
+
+    const login = exchange(auth);
+    // 代理剝掉前綴之後 serve 看到的是 `/?token=`；瀏覽器拿 `./` 對 `/nexus/?token=…` 解析，回到 `/nexus/`。
+    const location = login.response.headers.get('location') ?? '';
+    expect(new URL(location, 'https://app.example/nexus/?token=t').href).toBe(
+      'https://app.example/nexus/',
+    );
+  });
+
   it('一個行程一個 token，換到的是綁 authority、跨重啟有效的 cookie', () => {
     const first = new BrowserAuth(SECRET);
     const login = exchange(first);
 
     expect(login.response.status).toBe(303);
     expect(login.response.headers.get('cache-control')).toBe('no-store');
-    expect(login.response.headers.get('location')).toBe('/');
+    expect(login.response.headers.get('location')).toBe('./');
     expect(login.response.headers.get('referrer-policy')).toBe('no-referrer');
     const setCookie = login.response.headers.get('set-cookie') ?? '';
     expect(setCookie).toMatch(/^nexus-auth-[A-Za-z0-9_-]+=v1\./);
@@ -94,12 +112,12 @@ describe('BrowserAuth', () => {
     ).not.toBe(new URL(login.launchUrl).searchParams.get('token'));
     expect(restarted.isAuthenticated(headers(AUTHORITY, login.cookie))).toBe(true);
 
-    // 舊 token 配上有效 cookie：只轉回乾淨的 `/`，不再發 cookie。
+    // 舊 token 配上有效 cookie：只轉回乾淨的 `./`，不再發 cookie。
     const cleaned = restarted.authorizeIndex(
       request(login.launchUrl, AUTHORITY, { cookie: login.cookie }),
     );
     expect(cleaned?.status).toBe(303);
-    expect(cleaned?.headers.get('location')).toBe('/');
+    expect(cleaned?.headers.get('location')).toBe('./');
     expect(cleaned?.headers.get('cache-control')).toBe('no-store');
     expect(cleaned?.headers.get('referrer-policy')).toBe('no-referrer');
     expect(cleaned?.headers.get('set-cookie')).toBeNull();
@@ -202,15 +220,6 @@ describe('BrowserAuth', () => {
     // 未來才簽發。
     vi.setSystemTime(new Date('2026-09-18T00:00:00.000Z'));
     expect(auth.isAuthenticated(headers(AUTHORITY, cookie))).toBe(false);
-  });
-
-  it('帶 token 的網址只留根路徑與 token', () => {
-    const auth = new BrowserAuth(SECRET);
-    const url = new URL(auth.authenticatedUrl('http://127.0.0.1:8787/some/path?x=1#frag'));
-    expect(url.pathname).toBe('/');
-    expect(url.hash).toBe('');
-    expect([...url.searchParams.keys()]).toEqual(['token']);
-    expect(url.searchParams.get('token')).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   it('期限換算成毫秒超出安全整數就拒絕建立', () => {

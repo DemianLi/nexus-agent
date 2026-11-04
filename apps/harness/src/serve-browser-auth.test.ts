@@ -52,11 +52,16 @@ async function freePort(): Promise<number> {
 }
 
 async function start(
-  options: { readonly home?: string; readonly port?: number; readonly webDist?: string },
+  options: {
+    readonly home?: string;
+    readonly port?: number;
+    readonly webDist?: string;
+    readonly argv?: readonly string[];
+  },
   lines: string[] = [],
 ): Promise<RunningServe> {
   running = await runServe({
-    argv: ['--port', String(options.port ?? 0)],
+    argv: ['--port', String(options.port ?? 0), ...(options.argv ?? [])],
     log: bodyLog(lines),
     env: options.home === undefined ? {} : { [HARNESS_HOME_ENV]: options.home },
     ...(options.webDist === undefined ? {} : { webDist: options.webDist }),
@@ -69,7 +74,11 @@ function rawGet(
   url: string,
   path: string,
   headers: Record<string, string>,
-): Promise<{ readonly status: number; readonly body: string }> {
+): Promise<{
+  readonly status: number;
+  readonly body: string;
+  readonly headers: Record<string, string | string[] | undefined>;
+}> {
   const target = new URL(url);
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(
@@ -80,7 +89,9 @@ function rawGet(
         incoming.on('data', (chunk: string) => {
           body += chunk;
         });
-        incoming.on('end', () => resolve({ status: incoming.statusCode ?? 0, body }));
+        incoming.on('end', () =>
+          resolve({ status: incoming.statusCode ?? 0, body, headers: incoming.headers }),
+        );
       },
     );
     outgoing.on('error', reject);
@@ -93,7 +104,7 @@ async function exchange(
 ): Promise<{ readonly cookie: string; readonly setCookie: string }> {
   const response = await fetch(authenticatedUrl, { redirect: 'manual' });
   expect(response.status).toBe(303);
-  expect(response.headers.get('location')).toBe('/');
+  expect(response.headers.get('location')).toBe('./');
   const setCookie = response.headers.get('set-cookie') ?? '';
   return { cookie: setCookie.split(';', 1)[0]!, setCookie };
 }
@@ -160,6 +171,64 @@ describe('serve 的瀏覽器會話', () => {
     ).toBe(401);
   });
 
+  it('放在反向代理後面：指名的 Host 過得了圍欄、印的是公開網址；沒指名的照樣 403（#2369）', async () => {
+    const home = await tmp('nexus-serve-home-');
+    const lines: string[] = [];
+    const server = await start(
+      {
+        home,
+        webDist: await builtDist(),
+        argv: ['--trusted-host', 'app.example', '--public-url', 'https://app.example/nexus'],
+      },
+      lines,
+    );
+
+    const launch = new URL(server.authenticatedUrl);
+    expect(`${launch.origin}${launch.pathname}`).toBe('https://app.example/nexus/');
+    expect(lines[0]).toBe(`nexus-agent 在 ${server.authenticatedUrl}`);
+
+    // 代理剝掉 `/nexus` 之後轉給 serve，Host 原樣保留。
+    const proxied = { host: 'app.example', 'x-forwarded-proto': 'https' };
+    const login = await rawGet(server.url, `/${launch.search}`, proxied);
+    expect(login.status).toBe(303);
+    expect(login.headers['location']).toBe('./');
+    const setCookie = String(login.headers['set-cookie']);
+    const cookie = setCookie.split(';', 1)[0]!;
+
+    const sameOrigin = { ...proxied, cookie, origin: 'https://app.example', ...JSON_HEADERS };
+    expect((await rawGet(server.url, THREADS_PATH, sameOrigin)).status).toBe(200);
+    expect((await rawGet(server.url, '/', { ...proxied, cookie })).status).toBe(200);
+    expect((await rawGet(server.url, '/livez', proxied)).status).toBe(200);
+
+    // 沒指名的代理名字：同一顆 cookie 也進不來，圍欄先擋。
+    for (const host of ['other.example', 'app.example.evil', 'evil.example']) {
+      // Origin 跟著 Host 走，只剩 Host 這一道在判。
+      const refused = await rawGet(server.url, THREADS_PATH, {
+        ...sameOrigin,
+        host,
+        origin: `https://${host}`,
+      });
+      expect({ host, status: refused.status }).toEqual({ host, status: 403 });
+    }
+    // 指名的 Host 配上別的 Origin。
+    expect(
+      (await rawGet(server.url, THREADS_PATH, { ...sameOrigin, origin: 'https://evil.example' }))
+        .status,
+    ).toBe(403);
+  });
+
+  it('--trusted-host、--public-url 寫錯就起不來，不留到請求一律 403 才發現', async () => {
+    for (const argv of [
+      ['--trusted-host', 'app.example/nexus'],
+      ['--trusted-host', 'user@app.example'],
+      ['--public-url', 'app.example/nexus'],
+      ['--public-url', 'ftp://app.example/'],
+      ['--public-url', 'https://app.example/nexus?x=1'],
+    ]) {
+      await expect(start({ argv }), argv.join(' ')).rejects.toThrow(/--trusted-host|--public-url/);
+    }
+  });
+
   it('同一個 home、同一個 port 重啟：舊 cookie 照樣有效，token 換了一個', async () => {
     const home = await tmp('nexus-serve-home-');
     const port = await freePort();
@@ -179,7 +248,7 @@ describe('serve 的瀏覽器會話', () => {
     expect((await fetch(staleUrl, { redirect: 'manual' })).status).toBe(401);
     const cleaned = await fetch(staleUrl, { redirect: 'manual', headers: { cookie } });
     expect(cleaned.status).toBe(303);
-    expect(cleaned.headers.get('location')).toBe('/');
+    expect(cleaned.headers.get('location')).toBe('./');
     expect(cleaned.headers.get('set-cookie')).toBeNull();
   });
 
