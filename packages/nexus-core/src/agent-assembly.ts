@@ -339,7 +339,7 @@ export function assembleAgent(params: AssembleAgentParams) {
   });
   if (params.loop !== 'native') return agent;
   // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（`NativeAgent` 的檔頭），
-  // K13 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
+  // TODO(#2363) 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
   return createNativeAgent({
     model,
     systemPrompt,

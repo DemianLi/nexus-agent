@@ -1,8 +1,7 @@
 /**
- * native agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356) K6）：不經 LangGraph 的 Pregel，自己跑 turn／step，
- * 照 dsh `packages/core/agent-loop/src/agent.ts` 的骨架（`8bd07339`：`turn` 327-433、`step` 435-610）。
+ * native agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：不經 LangGraph 的 Pregel，自己跑 turn／step。
  *
- * K6 期間 middleware 洋蔥還在（#1827 D189 (a)）：每一步照 langchain `createAgent` 的節點順序跑它（`onion.ts`），日誌、圍堵、重試照舊由
+ * middleware 洋蔥還在（#1827 D189 (a)，[#2357](https://github.com/DemianLi/nexus-agent/issues/2357) 拆掉）：每一步照 langchain `createAgent` 的節點順序跑它（`onion.ts`），日誌、圍堵、重試照舊由
  * middleware 寫與做。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
  *
  * 一次 run 的順序（同 `ReactAgent.js` 的邊）：
@@ -15,7 +14,7 @@
  *
  * `afterAgent` 回 `jumpTo: 'model'`（插話）就跳過 `beforeModel` 直接再叫模型，同 LangGraph 的 `Send(model_request)`。
  *
- * 不支援（K8／K9 收）：中斷與 resume（沒有存檔點，核准管道在組裝點就判成 `no-channel`）、`afterModel`（樹上沒有）。
+ * 不支援（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)、[#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）：中斷與 resume（沒有存檔點，核准管道在組裝點就判成 `no-channel`）、`afterModel`（樹上沒有）。
  *
  * @module
  */
@@ -310,7 +309,7 @@ export class NativeAgent {
   async #turn(input: LoopInput, config: RunnableConfig, observer: RunObserver): Promise<LoopState> {
     if (isCommand(input)) {
       throw new Error(
-        'native agent loop 不支援 resume：中斷改成行程內 await 之前（K8 #2358）沒有可接回的中斷',
+        'native agent loop 不支援 resume：沒有可接回的中斷（#2358）',
       );
     }
     // 沒給 thread 的一輪從空的 state 跑、跑完不留，同 LangGraph 沒有存檔點時。
@@ -342,55 +341,64 @@ export class NativeAgent {
     const note = (name: string, update: Record<string, unknown>): void =>
       observer.onUpdate?.(name, update);
 
+    // `beforeAgent` 跳 `end`：同 LangGraph 落到 exitNode，`afterAgent` 照跑，也照樣能跳回模型。
+    let exiting = false;
     for (const m of this.middleware) {
       if (m.beforeAgent === undefined) continue;
       budget.take();
       const jump = await runHook(m, 'beforeAgent', node(`${m.name}.before_agent`), this.#channels);
-      if (jump === 'end') return this.#finish(state, threadId, signal, node, budget);
+      if (jump === 'end') {
+        exiting = true;
+        break;
+      }
     }
 
     let step = 0;
     let skipBeforeModel = false;
     for (;;) {
-      if (!skipBeforeModel) {
-        step += 1;
-        const payload: AgentStepPayload = { threadId, step, signal };
-        const decision =
-          events === undefined
-            ? { kind: 'continue' as const }
-            : await events.waterfall('agent/pre-step', payload, async () => ({
-                kind: 'continue' as const,
-              }));
-        if (decision.kind === 'reject') throw new TurnBlockedError();
-        let ended = false;
-        for (const m of this.middleware) {
-          if (m.beforeModel === undefined) continue;
-          budget.take();
-          const jump: JumpTarget = await runHook(
-            m,
-            'beforeModel',
-            node(`${m.name}.before_model`),
-            this.#channels,
-          );
-          if (jump === 'end') {
-            ended = true;
-            break;
+      if (exiting) {
+        exiting = false;
+      } else {
+        if (!skipBeforeModel) {
+          step += 1;
+          const payload: AgentStepPayload = { threadId, step, signal };
+          const decision =
+            events === undefined
+              ? { kind: 'continue' as const }
+              : await events.waterfall('agent/pre-step', payload, async () => ({
+                  kind: 'continue' as const,
+                }));
+          if (decision.kind === 'reject') throw new TurnBlockedError();
+          let ended = false;
+          for (const m of this.middleware) {
+            if (m.beforeModel === undefined) continue;
+            budget.take();
+            const jump: JumpTarget = await runHook(
+              m,
+              'beforeModel',
+              node(`${m.name}.before_model`),
+              this.#channels,
+            );
+            if (jump === 'end') {
+              ended = true;
+              break;
+            }
           }
+          // 從 `beforeModel` 跳 `end` 直接到 END，`afterAgent` 不跑（同 `ReactAgent.js` 的 beforeModel router）。
+          if (ended) return state;
         }
-        // 從 `beforeModel` 跳 `end` 直接到 END，`afterAgent` 不跑（同 `ReactAgent.js` 的 beforeModel router）。
-        if (ended) return state;
-      }
-      skipBeforeModel = false;
+        skipBeforeModel = false;
 
-      budget.take();
-      const ai = await this.#modelStep(state, threadId, step, signal, node, note);
-      const calls = ai === undefined ? [] : liveToolCalls(ai);
-      let concluded = calls.length === 0;
-      if (!concluded) {
         budget.take();
-        concluded = await this.#toolStep(calls, state, node, note);
+        const ai = await this.#modelStep(state, threadId, step, signal, node, note);
+        const calls = ai === undefined ? [] : liveToolCalls(ai);
+        let concluded = calls.length === 0;
+        if (!concluded) {
+          budget.take();
+          concluded = await this.#toolStep(calls, state, node, note);
+        }
+        if (!concluded) continue;
       }
-      if (!concluded) continue;
 
       const again = await this.#exit(node, budget);
       if (again) {
@@ -402,19 +410,6 @@ export class NativeAgent {
       }
       return state;
     }
-  }
-
-  /** `beforeAgent` 跳 `end`：同 LangGraph 落到 exitNode，`afterAgent` 照跑。 */
-  async #finish(
-    state: LoopState,
-    threadId: string | undefined,
-    signal: AbortSignal,
-    node: (name: string) => NodeTask,
-    budget: StepBudget,
-  ): Promise<LoopState> {
-    await this.#exit(node, budget);
-    await this.#params.events?.serial('agent/turn-stopping', { threadId, step: 0, signal });
-    return state;
   }
 
   /**

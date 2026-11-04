@@ -8,8 +8,10 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
+import { createMiddleware } from 'langchain';
 import {
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  SESSION_EVENT_MAX_DEPTH,
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
 } from '@nexus/core';
@@ -146,11 +148,16 @@ function withKnownDifferences(log: string[][]): string[][] {
   return log.map((lines) => lines.map((line) => line.replaceAll(from, to)));
 }
 
-async function runOnce(loop: AgentLoopKind, turns: readonly ScriptedTurn[], prompt: string) {
+async function runOnce(
+  loop: AgentLoopKind,
+  turns: readonly ScriptedTurn[],
+  prompt: string,
+  extra: readonly PluginEntry[] = [],
+) {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [humanChannelPlugin(), toolsPlugin, workerPlugin],
+    plugins: [humanChannelPlugin(), toolsPlugin, workerPlugin, ...extra],
     agentLoop: loop,
   });
   const sessions = new SessionRegistry(THREAD);
@@ -163,31 +170,12 @@ async function runOnce(loop: AgentLoopKind, turns: readonly ScriptedTurn[], prom
     });
     // LangGraph 那條的投影孤兒（工具拋錯時），pump 也這樣標掉。
     markProjectionsHandled(run as RunProjections);
-    const root0 = () =>
-      sessions.list().find((entry) => entry.address.kind === 'root')?.log.events ?? [];
     let failure: string | undefined;
     try {
       for await (const event of run as AsyncIterable<RawEvent>) raw.push(event);
     } catch (error) {
       failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     }
-    if (process.env['PARITY_DUMP'])
-      (await import('node:fs')).appendFileSync(
-        process.env['PARITY_DUMP'],
-        [
-          ...raw.map((e) =>
-            [
-              loop,
-              e.method,
-              JSON.stringify(e.params.namespace),
-              e.params.node,
-              JSON.stringify(e.params.data).slice(0, 300),
-            ].join(' '),
-          ),
-          `${loop} FAILURE ${failure}`,
-          ...logShape(root0()).map((l) => `${loop} LOG ${l.slice(0, 300)}`),
-        ].join('\n') + '\n',
-      );
     const logs = sessions
       .list()
       .map((entry) => [entry.address.kind, ...logShape(entry.log.events)]);
@@ -250,6 +238,38 @@ describe('native loop 對照 LangGraph', () => {
     expect(native.events).toEqual(graph.events);
     expect(withKnownDifferences(native.log)).toEqual(graph.log);
   });
+
+  it('beforeAgent 跳 end 之後，afterAgent 照樣能跳回模型', async () => {
+    // 每個 loop 一份，第一次收尾時跳回模型、第二次放行。
+    const jumps = (): PluginEntry => {
+      let exits = 0;
+      return {
+        plugin: {
+          name: 'native-parity-jumps',
+          apply(registry) {
+            registry.middleware.use(
+              createMiddleware({
+                name: 'nativeParityJumps',
+                beforeAgent: { canJumpTo: ['end'], hook: () => ({ jumpTo: 'end' as const }) },
+                afterAgent: {
+                  canJumpTo: ['model'],
+                  hook: () => (exits++ === 0 ? { jumpTo: 'model' as const } : undefined),
+                },
+              }),
+            );
+          },
+        },
+      };
+    };
+    const turns: ScriptedTurn[] = [{ content: '跳回來了。' }];
+    const graph = await runOnce('langgraph', turns, '開始。', [jumps()]);
+    const native = await runOnce('native', turns, '開始。', [jumps()]);
+    // 跳回模型的那一次真的叫了模型；native 照舊從 exitNode 收掉的話這裡就沒有。
+    expect(graph.events.filter((line) => line.endsWith('message-start id=run-0'))).toHaveLength(1);
+    expect(native.failure).toEqual(graph.failure);
+    expect(native.events).toEqual(graph.events);
+    expect(native.log).toEqual(graph.log);
+  });
 });
 
 /**
@@ -307,3 +327,82 @@ describe('native 下要核准的工具', () => {
     }
   });
 });
+
+/**
+ * 同一步有一顆失敗了：兄弟拿到 abort、這一步拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。兄弟晚一步才進工具、拿到的已經是
+ * 舉起來的 signal 時也一樣（LangChain 的 tool 只掛 `abort` 監聽，不先看一眼就會一直等）。
+ */
+describe('native 下同一步的兄弟', () => {
+  // 可重疊時兩顆同時進工具；獨佔時屏障讓 wait 等 breaks 收完才進，進去時 signal 已經舉起來了。
+  for (const [label, safe, order] of [
+    ['可重疊：兄弟跑著時被 abort', true, ['wait', 'breaks']],
+    ['獨佔：兄弟進工具時已經 abort', false, ['breaks', 'wait']],
+  ] as const) {
+    it(`${label}，這一輪拋第一個錯`, async () => {
+      let sawAbort = false;
+      const waitPlugin: PluginEntry = {
+        plugin: {
+          name: 'native-parity-wait',
+          apply(registry) {
+            registry.tools.register(
+              tool(
+                (_input, config) =>
+                  new Promise<string>((resolve) => {
+                    const signal = (config as { signal?: AbortSignal }).signal;
+                    signal?.addEventListener('abort', () => {
+                      sawAbort = true;
+                      resolve('不該用到');
+                    });
+                  }),
+                {
+                  name: 'wait',
+                  description: '等到被 abort。',
+                  schema: z.object({}),
+                  metadata: { concurrencySafe: safe },
+                },
+              ),
+            );
+            registry.tools.register(
+              tool(() => ['好了', pastLogDepthCap()] as [string, unknown], {
+                name: 'breaks',
+                description: '結果記不進日誌。',
+                schema: z.object({}),
+                responseFormat: 'content_and_artifact',
+                metadata: { concurrencySafe: safe },
+              }),
+            );
+          },
+        },
+      };
+      const turns: ScriptedTurn[] = [
+        { content: '', toolCalls: order.map((name) => ({ name, args: {} })) },
+        { content: '不該走到。' },
+      ];
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({ turns }),
+        checkpointer: new MemorySaver(),
+        plugins: [waitPlugin],
+        agentLoop: 'native',
+      });
+      const detach = built.attachSession(new SessionRegistry(THREAD));
+      try {
+        await expect(
+          built.agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: THREAD } }),
+        ).rejects.toThrow('超過上限');
+        if (safe) expect(sawAbort).toBe(true);
+      } finally {
+        detach();
+        await built.dispose();
+      }
+    });
+  }
+});
+
+/** 剛好超過日誌深度上限的值（同 `step-failure-closers.test.ts`）：結果記不進日誌，這一步失敗。 */
+function pastLogDepthCap(): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < SESSION_EVENT_MAX_DEPTH; level++) {
+    value = level % 2 ? { next: value } : [value];
+  }
+  return value;
+}

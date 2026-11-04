@@ -1,7 +1,7 @@
 /**
  * native loop 吐給 pump 的 v3 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：形狀同 `@langchain/langgraph`
- * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（root 的 `lifecycle`、`messages`、`custom`）。
- * K13 拿掉 LangChain 時跟著換成自己的線上協定。
+ * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（`lifecycle`、`messages`、`tools`、root 的 `custom`）。
+ * TODO(#2363)：拿掉 LangChain 時換成自己的線上協定。
  *
  * 模型的逐片事件由 `@langchain/core` 產：callback handler 宣告 `lc_prefer_chat_model_stream_events`，`BaseChatModel` 就算是 `invoke`
  * 也改走 `_streamChatModelEvents`，逐顆交給 `handleChatModelStreamEvent`，缺 id 時補成 `run-<runId>`。不會串流的模型（腳本模型）

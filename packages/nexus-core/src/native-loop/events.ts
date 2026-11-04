@@ -1,10 +1,9 @@
 /**
- * native loop 的四個 agent 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：名字與派發方式照 dsh 的
- * `agent/pre-step`、`agent/request-error`、`agent/turn-stopping`、`llm/stream`（`packages/extensions/tool-cordis/src/api-catalog.ts`
- * 的事件目錄，`8bd07339`）。生產者是 `agent.ts`，只在 `--agent-loop=native` 下派發；今天沒有監聽者，沒有監聽者時每一個都直通。
+ * native loop 的四個 agent 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：`agent/pre-step`、`agent/request-error`、
+ * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，只在 `--agent-loop=native` 下派發；今天沒有監聽者，沒有監聽者時每一個都直通。
  *
- * 載荷比 dsh 少：K6 期間訊息還住在 LangGraph 形狀的 state 裡、由 middleware 洋蔥改，所以 `agent/pre-step` 不帶 `messages`、
- * `llm/stream` 環繞的是一次 `invoke` 而不是串流。K7 #2357 把 middleware 搬成這些事件的監聽者時再補齊，契約可能跟著改。
+ * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 洋蔥改，所以 `agent/pre-step` 不帶 `messages`，`llm/stream` 環繞的是一次
+ * `invoke` 而不是串流。TODO(#2357)：middleware 搬成這些事件的監聽者時補齊載荷，契約可能跟著改。
  *
  * @module
  */
