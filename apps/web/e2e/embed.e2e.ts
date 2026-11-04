@@ -640,7 +640,6 @@ const APPROVAL_AFTER_REPLY: readonly ScriptTurn[] = [
       { name: 'submit_record', args: { file_path: '/visitors.csv', record: { 姓名: '阿明' } } },
     ],
   },
-  { content: '已經寫進 /visitors.csv。' },
 ];
 
 /** 嵌入版或獨立頁面上的對話捲動區；嵌入版在 `nexus-chat` 的 shadow root 裡。 */

@@ -132,7 +132,7 @@ describe('registry 檔的改動還在', () => {
     expect(overrides).toContain(
       '    animation: scroll-fade-reveal-t 1ms ease-in-out, scroll-fade-reveal-b 1ms ease-in-out;',
     );
-    // 第 43 條的退路排在後面，不支援時 `-t` 一起歸 0。
+    // 第 43 條的退路還在：不支援時 `-t`、`-b` 一起歸 0，雙向淡出也不遮字。
     expect(overrides.indexOf('scroll-fade-reveal-t 1ms')).toBeLessThan(
       overrides.indexOf(
         '@supports not (animation-timeline: scroll()) {\n  [data-slot="message-scroller-viewport"]',
