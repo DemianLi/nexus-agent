@@ -50,6 +50,8 @@ import {
   WORKSPACE_CAPABILITY,
   WORKSPACE_ROOT_SERVICE,
 } from './sandbox.js';
+import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
+import type { FilesystemToolDescriptions } from './fs-tool-descriptions.js';
 import type { FileToolsOptions } from './fs-tools-options.js';
 import { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
 import { createSearchDescriptionsMiddleware } from './search-descriptions.js';
@@ -546,9 +548,14 @@ export interface FoldedAgentParams {
   store?: AgentStore;
   /**
    * 檔案工具的組態（{@link FoldOptions.fileTools} 原樣帶出，`#1605`）。**省略 ＝ 全開**。`assembleAgent` 與兩條子代理路徑據此決定
-   * 基座檔案 middleware 的 `tools` 白名單與 `read_file` 描述裡的預設行數。
+   * 基座檔案 middleware 的 `tools` 白名單；`read_file` 描述裡的行數在 {@link FoldedAgentParams.fileToolDescriptions}。
    */
   fileTools?: FileToolsOptions;
+  /**
+   * 基座檔案工具換上的描述（`customToolDescriptions`）：`read_file` 在讀到哪掛上時、`grep`／`glob` 在搜尋說明掛上時換，
+   * 由決定掛不掛的這裡一起算（{@link filesystemToolDescriptions}）。root 與兩條子代理路徑共用。一顆都不換時省略。
+   */
+  fileToolDescriptions?: FilesystemToolDescriptions;
 }
 
 /**
@@ -984,6 +991,14 @@ export function foldRegistry(
   if (options.checkpointer !== undefined) params.checkpointer = options.checkpointer;
   if (options.store !== undefined) params.store = options.store;
   if (options.fileTools !== undefined) params.fileTools = options.fileTools;
+  const fileToolDescriptions = filesystemToolDescriptions(
+    {
+      readContinuation: readContinuation !== undefined,
+      searchDescriptions: searchDescriptions !== undefined,
+    },
+    options.fileTools,
+  );
+  if (fileToolDescriptions !== undefined) params.fileToolDescriptions = fileToolDescriptions;
 
   return params;
 }

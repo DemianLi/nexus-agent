@@ -3,7 +3,7 @@
  * 跑，這些條照登記的方式跑（`native-loop.runner.ts`）。每一條都歸到一種差異，每一種都寫出根因與收掉它的卡；不在這裡的，兩個
  * loop 要一樣。
  *
- * 中斷類的判準：這一條在 `langgraph` 下真的發了 `GraphInterrupt`、在 native 下失敗。其餘各類按根因歸。
+ * 中斷類的判準：這一條在 `langgraph` 下真的發了 `GraphInterrupt`、在 native 下失敗或工具事件序列不同。其餘各類按根因歸。
  *
  * @module
  */
@@ -22,19 +22,27 @@ export const KNOWN_DIFFERENCE_KINDS = {
     card: 2358,
     reason:
       '這一條在 langgraph 下會發中斷（核准、問人、計畫、elicitation）再接回；native 不支援中斷與 resume，' +
-      '要核准的工具確定性回絕。等中斷的那幾條在 native 下等到逾時，所以不跑（skip）。',
+      '要核准的工具確定性回絕。等中斷的那幾條在 native 下等到逾時，所以不跑（skip）；照跑會過的（passes）差在工具事件序列。',
   },
   approvalChannel: {
     card: 2358,
     reason:
       'native 沒有中斷，組裝根把核准管道算成 no-channel（`assembly-root.ts` 的 `hasCheckpointer`），這一條斷言的是有人在（human）' +
-      '時的結果：政策 never 的碼（native 先撞上 APPROVAL_NO_CHANNEL）、管道服務的值、前景子代理的委派聲明（跟著管道選句）。',
+      '時的結果：政策 never 的碼（native 先撞上 APPROVAL_NO_CHANNEL）、管道服務的值、前景子代理的委派聲明（跟著管道選句）。' +
+      '照跑會過的（passes）沒斷言到，差在送給模型的系統訊息裡那一句委派聲明。',
   },
   checkpoint: {
     card: 2360,
     reason:
       '這一條斷言 LangGraph 的存檔點：直接讀 `checkpointer.getTuple`、另一個 agent 實例經同一個 saver 接同一條 thread，' +
       '或存檔點寫入時的 seal 與層數守衛（#1658）。native 的 state 在實例的記憶體裡，不寫存檔點。',
+  },
+  crossAgentOrder: {
+    card: 2359,
+    reason:
+      '背景子代理的第一顆工具呼叫與 root 的下一顆工具呼叫，兩個 loop 的先後不同：讓出事件迴圈的時點不一樣。' +
+      '這一條斷言各自的結果，不斷言跨 agent 的先後。' +
+      '同一條也有前景子代理委派聲明的差異（approvalChannel 那一種），一條只登記一次，歸在這裡。',
   },
   langgraphInternals: {
     card: 2363,
@@ -49,8 +57,11 @@ export interface KnownDifference {
   readonly file: string;
   readonly test: string;
   readonly kind: KnownDifferenceKind;
-  /** `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）。 */
-  readonly run: 'fails' | 'skip';
+  /**
+   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，兩個 loop 的工具事件序列或送給模型的
+   * 系統訊息不同，斷言沒碰到。
+   */
+  readonly run: 'fails' | 'skip' | 'passes';
 }
 
 export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
@@ -59,6 +70,30 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: 'createNexusAgent > 宣告了要核准的工具、也給了 checkpointer 時中斷得起來',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/agent-instructions-on-tree.test.ts',
+    test: 'E：同一棵樹上多條 thread 同時活著，每一次注入靠 thread_id 認出主人 > 第二條 thread 活著時，同步子代理（general-purpose）那幾輪看到的是這條 thread 自己的 AGENTS.md，日誌記在子代理自己那份',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/agent-instructions-on-tree.test.ts',
+    test: 'E：同一棵樹上多條 thread 同時活著，每一次注入靠 thread_id 認出主人 > 第二條 thread 活著時，同步子代理（worker）那幾輪看到的是這條 thread 自己的 AGENTS.md，日誌記在子代理自己那份',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/agent-instructions.test.ts',
+    test: '子代理也各有一份 > 委派給 general-purpose：子代理那幾輪的 prompt 裡有基線，自己的日誌也記得到',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/agent-instructions.test.ts',
+    test: '子代理也各有一份 > 委派給 worker：子代理那幾輪的 prompt 裡有基線，自己的日誌也記得到',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/approval-audit-wire.test.ts',
@@ -247,6 +282,24 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/assembly-parity.test.ts',
+    test: '自有組裝點不套 harness profile > 基座對 Codex 會改組裝；自有組裝點對 Codex 與對一般模型組出同一個東西',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/assembly-parity.test.ts',
+    test: '自有組裝點對上 createDeepAgent > root 的系統提示就是組裝點給的那一句，沒有基座的 base prompt 墊在後面',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/attachment-route.test.ts',
+    test: '產品路徑：兩條 thread 共用一個儲存，前景子代理跟著 root 的日誌 > A 把檔案附在訊息上：A 的子代理讀得到；B 沒引用過，B 的子代理讀不到',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/attachment-slash-wire.test.ts',
     test: 'slash.run 帶附件 > handler 經 steer 傳帶型別以外鍵的參照（#2323）：日誌照記，送進圖的那則訊息只留型別裡的欄位',
     kind: 'checkpoint',
@@ -263,6 +316,48 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '背景路徑上的 #326：沙箱快照 > 子代理要核准的操作：前景改派問人，背景 start 回絕 > 前景改派：root 停在子代理冒出來的核准上，沒有自動拒絕',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: 'list_agents（#837） > 沒派過：回 (no subagents)；派了一個還在跑：running；跑完：inactive；一次性的不列',
+    kind: 'crossAgentOrder',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '並行派那一句只給 root（#2414） > 子代理的疊沒有 `subagent`，它的系統提示詞沒有那一句',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '前景（run_in_background: false）：改派給基座的 task > 子代理照今天的路徑跑完，結果回給模型，名字是 subagent',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '前景（run_in_background: false）：改派給基座的 task > 模型直接送藏起來的 task：照樣一次性跑完（等同前景）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '背景子代理往上傳訊（#849） > 前景一次性子代理叫它：被拒絕，出口沒收到；它的第一句也沒有回報指引',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '背景路徑上的 #326：沙箱快照 > 前景改派：子代理叫升級、真的加寬——被拒、root 沒有中斷、grant 沒發',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/background-wire.test.ts',
+    test: '前景：照今天的路徑歸屬 > subagent 前景派給 task，內部的卡歸給 worker；root 那顆是 subagent、不帶鑰匙',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/checkpoint-serde.test.ts',
@@ -293,6 +388,24 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '摘要事件的位置與內容（#1301） > 最後一筆記下的切點、檔案路徑、摘要，與基座寫進 graph state 的一致',
     kind: 'checkpoint',
     run: 'fails',
+  },
+  {
+    file: 'src/compaction-log.test.ts',
+    test: 'subagent 那側 > subagent 的壓縮記在 subagent 自己那份，不在 root 的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/compaction-wire.test.ts',
+    test: '壓縮過這件事在即時與重新整理之後都一樣 > 子代理自己的壓縮不進來',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/context-pressure.test.ts',
+    test: '即時與重新整理拿到同一份，只算 root > 串流的用量上線、子代理的不上線；最後一輪在第一次呼叫就失敗，歷史從切點之前補',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/conversation-history-route.test.ts',
@@ -355,6 +468,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/copy-file-product.test.ts',
+    test: 'copy_file：產品組裝 > 子代理的 copy_file：檔照樣複製，meta 只在子代理的日誌，root 那一份沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/delegated-subagent.test.ts',
     test: '委派聲明：子代理每次模型請求都有，root 的沒有 > fold 補的 general-purpose',
     kind: 'approvalChannel',
@@ -371,6 +490,36 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '產品裡掛 `ask` 的工具在前景子代理裡停下來等人 > submit_record',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/delegated-subagent.test.ts',
+    test: 'root 在計劃模式裡委派：子代理不在計劃模式 > fold 補的 general-purpose',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/delegated-subagent.test.ts',
+    test: 'root 在計劃模式裡委派：子代理不在計劃模式 > 子代理叫 exit_plan_mode 缺參數：子代理被叫了第二次',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/delegated-subagent.test.ts',
+    test: 'root 在計劃模式裡委派：子代理不在計劃模式 > 登記過的子代理',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/delegated-subagent.test.ts',
+    test: '子代理叫 `ask_user_question`：拒絕、帶 `DELEGATED_CALLER`、不停下來 > fold 補的 general-purpose',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/delegated-subagent.test.ts',
+    test: '子代理叫 `ask_user_question`：拒絕、帶 `DELEGATED_CALLER`、不停下來 > 登記過的子代理',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/embed-profile.test.ts',
@@ -419,6 +568,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '評一則回覆 > 停在核准點又續接：一輪只有一個收尾，放在續接後那則；停著時照樣評得到',
     kind: 'interrupt',
     run: 'skip',
+  },
+  {
+    file: 'src/feedback-wire.test.ts',
+    test: '查不到的目標 > 不存在的 id、人那一則、子代理的回覆、沒開過的 thread：target-not-found，日誌不動',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/goal-driver-pump.test.ts',
@@ -541,6 +696,18 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/idle-eviction.test.ts',
+    test: 'A：閒置條件成立滿 T 才逐出（#1484） > 按停止之後留在 next-step 的插話（沒有輪在跑、佇列空）：只有它擋逐出，不撤；沒有插話的對照照撤',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/idle-eviction.test.ts',
+    test: 'A：閒置條件成立滿 T 才逐出（#1484） > 送出佇列裡還有東西（停住的佇列也算）：不撤',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
     file: 'src/interrupt.test.ts',
     test: 'subagent 裡的閘門 > general-purpose：呼叫 gated 工具 → 中斷冒到 root，工具還沒跑；核准 → 工具真的跑、root 收尾',
     kind: 'interrupt',
@@ -637,6 +804,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/invalid-tool-args.test.ts',
+    test: '子代理那層 > 子代理吐壞參數：記在子代理那份、拿到 INVALID_ARGS，下一次請求回送 {}',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/legacy-thread-escalation.test.ts',
     test: '舊 thread 對守衛擋的目標升級：不掛核准卡（#2078） > 反例：根目錄別的檔、子目錄裡的指示檔名、名字像技能來源的目錄：照舊掛核准卡',
     kind: 'interrupt',
@@ -649,6 +822,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/log-content.test.ts',
+    test: 'subagent 的回覆 > 記在 subagent 那份，root 那份只有 root 的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/log-derived-history.agents.log.test.ts',
     test: '核准 > SR3 停在核准點時重啟 serve：核准不跨重啟，該呼叫成為「結果未知」，推導補出的與請求逐位元組相同',
     kind: 'interrupt',
@@ -661,6 +840,36 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/log-derived-history.agents.log.test.ts',
+    test: '核准 > SA1 核准後續說',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.log.test.ts',
+    test: '核准 > SA2 拒絕後續說（拒絕訊息是核准層固定的文字）',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.log.test.ts',
+    test: '核准 > SA3 同一批兩個要核准的工具，一准一拒',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.log.test.ts',
+    test: '核准 > SA4 批次裡有免核准的 ls 與要核准的 echo：免核准的在續接輪不重跑',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.log.test.ts',
+    test: '背景與前景子代理 > SS2 前景 task（one-shot 模式）：子代理當場做完回報，子日誌有自己的輸入（#1207）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/log-derived-history.agents.test.ts',
     test: '核准 > SR3 停在核准點時重啟 serve：核准不跨重啟，該呼叫成為「結果未知」，推導補出的與請求逐位元組相同',
     kind: 'interrupt',
@@ -671,6 +880,48 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '核准 > ST3 停在核准點時按停止，再說一句：日誌補一顆被取消的 tool/result',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/log-derived-history.agents.test.ts',
+    test: '核准 > SA1 核准後續說',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.test.ts',
+    test: '核准 > SA2 拒絕後續說（拒絕訊息是核准層固定的文字）',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.test.ts',
+    test: '核准 > SA3 同一批兩個要核准的工具，一准一拒',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.test.ts',
+    test: '核准 > SA4 批次裡有免核准的 ls 與要核准的 echo：免核准的在續接輪不重跑',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/log-derived-history.agents.test.ts',
+    test: '背景與前景子代理 > SS2 前景 task（one-shot 模式）：子代理當場做完回報，子日誌有自己的輸入（#1207）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/max-tokens.test.ts',
+    test: '子代理撞到上限 > 對照：子代理正常收，結果原樣',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/max-tokens.test.ts',
+    test: '子代理撞到上限 > 父代理拿到 dsh 那句錯誤加上寫出的那段；root 那一輪照常收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/mcp-approval-subagent.test.ts',
@@ -775,6 +1026,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/mcp-subagent.test.ts',
+    test: '子代理也拿得到 MCP 的資源工具與指引 > general-purpose 子代理：system 訊息接了指引，叫 list_mcp_resources 得到資源清單',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/measure/cordis-1386/compat.test.ts',
     test: '相容層讓出貨清單原樣跑（#1386 ②） > CLI 清單：請求、工具、middleware、命令逐位元組相同',
     kind: 'langgraphInternals',
@@ -785,6 +1042,24 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '相容層讓出貨清單原樣跑（#1386 ②） > serve 清單：請求、工具、middleware、命令逐位元組相同',
     kind: 'langgraphInternals',
     run: 'fails',
+  },
+  {
+    file: 'src/model-usage.test.ts',
+    test: 'subagent 的那幾輪 > 記在 subagent 那份，不在 root 的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/observation.test.ts',
+    test: '射程 > **subagent 自己讀過就改得動**（上一條的對照組）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/observation.test.ts',
+    test: '射程 > root 讀過的檔，subagent 還是不准改',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/pending-replay.test.ts',
@@ -851,6 +1126,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: 'exit_plan_mode 的定義、結果、中斷與日誌，與對照組逐字相同',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/plan-mode-wire.test.ts',
+    test: '只收 root 的 > root 日誌上的 plan/mode 送出去，子代理日誌上的不送',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/plan-mode.test.ts',
@@ -967,6 +1248,42 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'skip',
   },
   {
+    file: 'src/present-delivery-differential.test.ts',
+    test: 'present 交付寫入：日誌逐筆相同 > root 與子代理用同一個 callId：各寫進自己那份，不串',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/present-on-tree.test.ts',
+    test: 'E：同一棵樹上多條 thread 同時活著，各自交付、各自的日誌 > 第二條 thread 活著時，同步子代理（task）叫的 present 交付寫進子代理那一份，root 那一份沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/present-tool.test.ts',
+    test: 'present 在真的圖上 > 子代理交付：寫進子代理那一份，即時與重新整理都不送',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/projection-children.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：子代理的投影即時、歷史、重開之後一樣 > child 單元在 subagentProjections 長出子代理自己的值；root-only 的單元不收",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/projection-children.test.ts',
+    test: "'前景 task'：子代理的投影即時、歷史、重開之後一樣 > child 單元在 subagentProjections 長出子代理自己的值；root-only 的單元不收",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/projection-children.test.ts',
+    test: '沒有單元要折子代理 > 重開時不讀子日誌檔；歷史裡沒有 subagentProjections 的值',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/queued-input-interrupt.test.ts',
     test: 'wire：跑著時收下的一句，等 input.respond 那一輪收掉才跑 > 第二句的 turn/start 排在 resume 那一輪的 turn/end 之後',
     kind: 'interrupt',
@@ -1015,6 +1332,18 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/read-limits-openai.test.ts',
+    test: '模型真的收到的 read_file > CLI 那條（invoke，非串流）：root 與子代理的每一次請求都是 dsh 的說明',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/read-limits-openai.test.ts',
+    test: '模型真的收到的 read_file > serve 那條（ThreadPump，串流）：一樣',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/rejection-wire.test.ts',
     test: '核准的兩個方向在下行上長什麼樣 > **拒絕 → 一張失敗的卡、紅字是拒絕理由**，與「已拒絕」那一則並存；基座一顆 frame 都沒發',
     kind: 'interrupt',
@@ -1025,6 +1354,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '核准的兩個方向在下行上長什麼樣 > **核准 → 基座的 `tool-started` 與 `tool-finished` 都到**——上一條不是因為線收不到基座的 frame',
     kind: 'interrupt',
     run: 'skip',
+  },
+  {
+    file: 'src/root-only-tool.test.ts',
+    test: 'root-only 的工具 > subagent 叫同一個名字時，真的那一顆一次都沒被叫到',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/sandbox-escalation-migration.test.ts',
@@ -1135,6 +1470,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/serve-live-versions.test.ts',
+    test: '子代理只綁 root（#1442 驗收 F2） > 前景子代理（task，one-shot）：同樣只有 root',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/serve.test.ts',
     test: '核准那份清單 > docs/operations.md 寫的那道指令真的停得下來，也接得回去',
     kind: 'interrupt',
@@ -1153,6 +1494,24 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/session-stats.test.ts',
+    test: '一場跑過的會話 > subagent 的步在它自己那份',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/session-totals-wire.test.ts',
+    test: '會話累計在即時、重新整理、重開之後都一樣 > 只算 root；還沒叫模型不送；重開之後是 seed 加新的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/shared-read-mark-on-tree.test.ts',
+    test: '子代理 > 子代理讀 /shared/：同樣帶前綴',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/shared-workspace-grants.test.ts',
     test: '/shared 不接受 grant > 共用區 /shared/x.txt 同一串動作（升級填 訊息裡的 backend 內位址 /x.txt）：寫不進去，兩邊磁碟都沒有新檔',
     kind: 'interrupt',
@@ -1169,6 +1528,30 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '對唯讀共用區升級：不掛核准卡，直接說明不能升級（#1800） > 反例：前綴長得像但不在共用區底下（/sharedx.txt）、私有根的 /own.txt：照舊掛核准卡',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/skill-invocation-on-tree.test.ts',
+    test: '驗收 6（樹上）：task 子代理的描述裡寫 /release-notes 叫不出來 > general-purpose 子代理那幾輪沒有技能正文，子代理的日誌也沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/skills-shared-workspace.test.ts',
+    test: 'general-purpose 子代理 > 跟 root 讀同一份：清單有 /shared/skills/normal，私有根的 rogue 沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/skills.test.ts',
+    test: '只給人叫的技能不列給模型 > disable-model-invocation: true 的不在 root 與 general-purpose 子代理的 prompt 裡',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/skills.test.ts',
+    test: '沒有 skill 就一個字都不加 > general-purpose 子代理在沒有 skill 的工作區也不多一個字',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/slash-wire.test.ts',
@@ -1193,6 +1576,18 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '快照 harness > 同一份夾具重放兩次，正規化之後相等（含核准中斷）',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/snapshot/harness.test.ts',
+    test: '快照 harness > 腳本少一則：比對是紅的',
+    kind: 'interrupt',
+    run: 'passes',
+  },
+  {
+    file: 'src/snapshot/keyless.test.ts',
+    test: '重放不讀金鑰、不建真模型 > approval-resume',
+    kind: 'interrupt',
+    run: 'passes',
   },
   {
     file: 'src/snapshot/snapshot.test.ts',
@@ -1237,6 +1632,240 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 1 項：子代理在 task 以外用自己的 thread id 連跑兩輪 > 乙路：同一份規格自己編一張帶存檔點的圖，第二輪看得到第一輪',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 1 項：子代理在 task 以外用自己的 thread id 連跑兩輪 > 對照：不帶存檔點就沒有記憶——基座 `task` 那條路編出來的圖就是這樣',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 2 項（續）：全域 deny 規則與大結果外溢在背景圖上還在 > 全域 deny：規格帶著 permissions，背景圖照擋；對照組漏傳就寫得進去',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 2 項（續）：全域 deny 規則與大結果外溢在背景圖上還在 > 大結果外溢（#719 要驗的）：超過 80,000 字元的工具結果搬去暫存，下一輪 read_file 讀得回暗號',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 2 項：換了組裝路之後 fold 注進規格的東西還在不在 > 問答工具在背景圖上拿到拒絕樁',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 2 項：換了組裝路之後 fold 注進規格的東西還在不在 > 工具拋錯被圍堵、整輪不死；檔案工具照寫',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 2 項：換了組裝路之後 fold 注進規格的東西還在不在 > 自編的圖比規格多出基座那三顆預設：規格自己不帶檔案系統，圖上的模型卻拿得到檔案工具',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 叫醒那刻再 `controller.delegate` 一次也救不了：它拍的是叫醒那刻的 root，一樣放寬',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 每一輪用記下的那一格重新進 ALS（#827 的 `delegateAs`），兩個方向都守得住委派那一格',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 沒有任何包裝：root 之後放寬，委派在 read-only 的子代理被叫醒時反而寫得進去（越權）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 沒有任何包裝：被叫醒的那一輪讀 root 現在那一格，不是委派那一格（root 收緊，子代理跟著被擋）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 產品路徑：委派在 read-only、之後 root 切到 workspace-write，叫醒時從子代理日誌讀回，仍照 read-only',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 產品路徑：委派在 workspace-write、之後 root 切到 read-only，叫醒時從子代理日誌讀回，仍照 workspace-write',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 3 項：沙箱快照在背景路徑上 > 第一輪不 await、派出去之後 root 立刻切：ALS 快照撐得過分離的 promise，仍是委派那一格',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 4 項：背景那一輪走 v3 串流時的孤兒 rejection > 產品形狀：背景圖包一顆自己的 ThreadPump，工具本體拋錯不漏 rejection（背景 pump 也接上組裝）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 4 項：背景那一輪走 v3 串流時的孤兒 rejection > 產品形狀：背景圖包一顆自己的 ThreadPump，工具本體拋錯不漏 rejection（背景 pump 沒接上組裝）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 4 項：背景那一輪走 v3 串流時的孤兒 rejection > 產品形狀：背景圖包一顆自己的 ThreadPump，模型呼叫拋錯不漏 rejection（背景 pump 也接上組裝）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '第 4 項：背景那一輪走 v3 串流時的孤兒 rejection > 產品形狀：背景圖包一顆自己的 ThreadPump，模型呼叫拋錯不漏 rejection（背景 pump 沒接上組裝）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：root 按停止之後背景那一輪的下場',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：root 收掉之後背景才工具本體拋錯——行程不死',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：root 收掉之後背景才模型呼叫拋錯——行程不死',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：root 還在跑的時候背景工具本體拋錯——行程不死，root 那一輪照收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：root 還在跑的時候背景模型呼叫拋錯——行程不死，root 那一輪照收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > inherit：背景圖繼承 root 的中止訊號與命名空間；第二輪由另一個工具呼叫拉起，看不到第一輪',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop（對照組，沒放身分鍵）：迴圈在圖的環境之外取件，configurable 乾淨、第二輪看得到第一輪；但位址被認成 root',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop（帶身分鍵，#823）：位址是背景子代理，背景的工具結果進它自己的日誌，不併進 root',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：root 按停止之後背景那一輪的下場',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：root 收掉之後背景才工具本體拋錯——行程不死',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：root 收掉之後背景才模型呼叫拋錯——行程不死',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：root 還在跑的時候背景工具本體拋錯——行程不死，root 那一輪照收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：root 還在跑的時候背景模型呼叫拋錯——行程不死，root 那一輪照收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-background-probe.test.ts',
+    test: '背景那一輪由 root 的工具拉起（第 1、4、5 項的實況） > loop：自訂 checkpoint_ns 被最上層的圖無視，位址推不出來；自訂的 configurable 鍵倒是原樣送到工具',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: 'maxTurns 的計數不外漏到下一次委派 > 同一輪派兩次、再開一輪派第三次：每次都叫滿 2 次',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '前景子代理沿用會話此刻的選擇 > 前景子代理跑到一半使用者才換：下一次叫模型就換過去（逐次跟隨，不快照）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '前景子代理沿用會話此刻的選擇 > 會話換了模型之後派前景子代理：請求打到新模型（PM C 的驗收）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '前景子代理沿用會話此刻的選擇 > 沒選過：子代理打部署預設那顆，與今天相同',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '定義釘的 model 與 maxTurns > maxTurns：子代理叫到上限就收尾，第 n+1 次不會發出去；root 照常收尾',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '定義釘的 model 與 maxTurns > 釘了 model，會話又選了 A：還是釘的那顆',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-config.test.ts',
+    test: '定義釘的 model 與 maxTurns > 釘了 model：子代理用它，不管會話選了什麼；root 不受影響',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/subagent-delegation-claim.test.ts',
     test: '前景子代理的委派聲明跟閘門一致（#2056） > serve 路徑、政策 never：政策拒，聲明講自動拒絕',
     kind: 'approvalChannel',
@@ -1267,6 +1896,18 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/subagent-layer-delegation.test.ts',
+    test: "'前景子代理發前景呼叫' > 子代理那份記 UNKNOWN_TOOL，沒有孫代理，root 的目錄只有自己派的那一條；掃描只報那一次未知工具",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-layer-delegation.test.ts',
+    test: "'前景子代理發背景呼叫' > 子代理那份記 UNKNOWN_TOOL，沒有孫代理，root 的目錄只有自己派的那一條；掃描只報那一次未知工具",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/subagent-sandbox.test.ts',
     test: '子代理的沙箱模式 > root 手上一顆沒用掉的 grant：子代理同檔同操作認領不到，root 之後照樣認領得到',
     kind: 'interrupt',
@@ -1277,6 +1918,144 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '子代理的沙箱模式 > root 被擋 → 子代理被擋 → root 升級：grant 綁的是 root 那一次，root 的重試過得去',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 委派之後 root 收緊：子代理照委派那一格照樣寫得進去（照 dsh，root 之後的切換不屬於它）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 委派之後 root 放寬：子代理照委派那一格擋，root 自己的下一顆照新那一格放行',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 子代理叫升級、真的加寬：被拒、沒有中斷、grant 沒發，拒絕說的是沒有人被問到',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 子代理叫升級：「加寬」照委派那一格判，拿到的是不加寬的拒絕，不是 policy-never 那句',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 子代理每次請求都帶政策句，是委派那一格；root 之後切換不影響它',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 權限組合名：父代理全開，子代理日誌帶 danger-full-access；父代理 workspace-write，子代理沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-sandbox.test.ts',
+    test: '子代理的沙箱模式 > 沒給 `--workspace` 的組裝，子代理請求照樣帶那一句不宣稱圍堵的政策句（#669）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-consumers.test.ts',
+    test: 'goal 的參與者只掛在 root 上 > 委派過之後 `/goal` 照樣答得出來，不是「接了不只一份」',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-consumers.test.ts',
+    test: 'subagent 的日誌與三個消費者 > 三個都自動接上了——沒有人記得替第二份日誌重接',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-consumers.test.ts',
+    test: '輪的擁有者是進入點，不是工具 > 多出一份 subagent 日誌本身不會讓任何配套入口吭聲',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-consumers.test.ts',
+    test: '輪的擁有者是進入點，不是工具 > 工具往 subagent 的日誌寫 turn 事件，核心配套入口會報——而那是對的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：wire 的工具卡帶著子會話，重新整理與重開之後都還在 > 即時、歷史、只剩磁碟那一份的歷史，三處折出來的卡都指到同一份子會話",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：子日誌記不記得它收到的那一句話 > 前景：出生就記一顆來源 user 的 user/message，落在它的第一次叫模型與叫工具之前，照日誌推得出同一句",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：落盤的日誌兩個方向都接得回去 > 子 → 父：header 的 parentSession 打開父日誌，解出派它的那一顆呼叫與那一輪；父 → 子：callId 找得到那一份子日誌",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 task'：wire 的工具卡帶著子會話，重新整理與重開之後都還在 > 即時、歷史、只剩磁碟那一份的歷史，三處折出來的卡都指到同一份子會話",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 task'：子日誌記不記得它收到的那一句話 > 前景：出生就記一顆來源 user 的 user/message，落在它的第一次叫模型與叫工具之前，照日誌推得出同一句",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-session-link.test.ts',
+    test: "'前景 task'：落盤的日誌兩個方向都接得回去 > 子 → 父：header 的 parentSession 打開父日誌，解出派它的那一顆呼叫與那一輪；父 → 子：callId 找得到那一份子日誌",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-status-wire.test.ts',
+    test: '背景子代理現況 > 有背景派出的組裝、但沒有任何背景子代理（前景委派／重啟後）：接上就是一份空的，subagentStatus 是 {} 不是 null',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-tool-checkpoint.test.ts',
+    test: '子代理的工具動手之前，子代理那一份已經在後端 > 前景（task）：探針被叫的那一刻，子代理日誌上這次呼叫的 tool/call 已經寫到後端',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-tool-filter.test.ts',
+    test: '前景（task） > allow：基座工具只剩列到的，registry 工具也只剩列到的',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-tool-filter.test.ts',
+    test: '前景（task） > deny write_file：子代理的請求沒有它；手寫呼叫拿到錯誤結果、磁碟沒有檔；root 的請求照舊有它',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/subagent-tool-filter.test.ts',
+    test: '前景（task） > 對照組：沒設過濾，子代理看得到 write_file、也寫得出去',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/submit-record-mounts.test.ts',
@@ -1387,6 +2166,36 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'skip',
   },
   {
+    file: 'src/summarizer-model-swap-order.test.ts',
+    test: '摘要器看到的是這一步選中的模型（#1369） > 子代理（task 委派）：它的摘要器問 modelLimits 的也是選中那顆（跟隨的那顆搬到前面）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/summarizer-model-swap-order.test.ts',
+    test: '摘要器看到的是這一步選中的模型（#1369） > 子代理（task 委派）：生摘要也跟最近一次已送出的請求那顆，不是它這一步選中的（#1377）',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/summary-event-catch-up.test.ts',
+    test: '摘要之後請求失敗，下一輪從日誌上那筆接著 > 子代理：請求前不會被補上 root 日誌上的事件',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/summary-history-staging.test.ts',
+    test: '子代理的摘要器用自己那一份暫存 > 子代理生摘要失敗：沒有歷史檔回灌到 root 的 state',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/summary-prompt.test.ts',
+    test: '摘要提示詞在產品路徑上 > 子代理：自己的摘要器同樣吃到這份模板，要摘的是它自己那一串',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/thread-feed.test.ts',
     test: 'pump 對全域下行講的話 > 停在核准點算在跑：講在跑、兩題，不講閒著；答完兩題才講閒著',
     kind: 'interrupt',
@@ -1411,6 +2220,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'skip',
   },
   {
+    file: 'src/thread-id-reaches-handlers.test.ts',
+    test: 'thread_id 到得了工具 handler 與 middleware（#1418 Q3 的前提） > 同步子代理（task）：子代理的工具 handler 與 middleware 看到的 thread_id 就是 root 的，子代理身分靠 checkpoint_ns',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/time-context-on-tree.test.ts',
     test: '核准續接：續接不經過 beforeAgent，不補讀數；後面的一輪照常往上數（serve 真跑一輪核准） > 間隔 0 也一樣：核准續接是接著跑中斷的那張圖，不重進 beforeAgent，所以不補讀數；下一輪才是 turn 2, step 1',
     kind: 'interrupt',
@@ -1421,6 +2236,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '核准續接：續接不經過 beforeAgent，不補讀數；後面的一輪照常往上數（serve 真跑一輪核准） > 預設間隔：整輪只有一則讀數，續接後的那次請求帶的就是它',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/time-context-on-tree.test.ts',
+    test: 'G：子代理各有一則讀數，查找都找得到自己那份日誌 > 同步子代理：它那幾輪的 prompt 有一則讀數，日誌記在子代理自己那份；root 那份仍只有一則',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/todo-on-tree.test.ts',
@@ -1435,10 +2256,40 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/todo-on-tree.test.ts',
+    test: 'E：同一棵樹上多條 thread 同時活著，每一次呼叫靠 thread_id 認出主人 > 第二條 thread 活著時，同步子代理（task）的呼叫寫進這條 thread 自己的子代理日誌',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/todo-tool.test.ts',
+    test: 'todo_write 在真的圖上 > root 與 subagent 各自一份清單——照 dsh 的單一所有者規則',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/todo-tool.test.ts',
+    test: 'todo_write 在真的圖上 > subagent 那份沒有輪的日誌，十三個配套入口一句話都不說',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/todos-wire.test.ts',
     test: '待辦清單在即時與重新整理之後都一樣 > 寫兩次換兩次；批准之後不清；新的一輪清空；子代理的不進來',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/token-meter-wire.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：用量投影 > 子代理分列且連得回去；即時 = 歷史 = 重開之後；root 對得上既有的總帳",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/token-meter-wire.test.ts',
+    test: "'前景 task'：用量投影 > 子代理分列且連得回去；即時 = 歷史 = 重開之後；root 對得上既有的總帳",
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/tool-barrier.test.ts',
@@ -1459,6 +2310,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/tool-card-from-log.test.ts',
+    test: '產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡 > 子代理裡基座找不到的工具：卡掛在那個子代理底下',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/tool-events.test.ts',
     test: 'ask_user_question > 人放棄整組 → ASK_CANCELLED，碼走得過工具本體回的那則訊息',
     kind: 'interrupt',
@@ -1477,10 +2334,88 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/tool-events.test.ts',
+    test: 'subagent 裡的呼叫 > general-purpose 也有自己那份，記得到它裡面的呼叫',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-events.test.ts',
+    test: 'subagent 裡的呼叫 > 子代理叫不存在的工具：子代理那份記 UNKNOWN_TOOL',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-events.test.ts',
+    test: 'subagent 裡的呼叫 > 記在 subagent 那份，root 那份只有 task',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-fs.test.ts',
+    test: '子代理也拿同一份白名單 > `write: false`、`edit: false`：root 與子代理的每一次綁定都沒有 write_file／edit_file／delete，讀取面都在',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/tool-pipeline-product.test.ts',
     test: '拒絕在問人之前 > 對照：沒有人拒絕時，同一顆 `danger` 照舊停在核准卡（核准沒被動到）',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/tool-pipeline-product.test.ts',
+    test: '呼叫者身分與 tools/result > root 與子代理的呼叫各帶對 `exec.agent`；`tools/result` 看到每一顆',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-refusals.test.ts',
+    test: '拒絕在日誌上記成錯誤 > root-only 樁：subagent 那一份日誌上記成錯誤、不帶碼',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-session-log.test.ts',
+    test: '模型工具與會話日誌 > root 與 subagent 各寫各的一份——照 dsh 的單一所有者規則',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-session-log.test.ts',
+    test: '模型工具與會話日誌 > 同一個 subagent 併發兩次，兩次各自一份',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-status-wire.test.ts',
+    test: '產品路徑：handler 之後被改成錯誤的結果，web 畫成失敗 > 子代理裡被 fence 擋下的 `write_file` 也畫成失敗——子代理的日誌也在訂閱範圍裡',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-throw-orphan.test.ts',
+    test: '工具本體拋錯（#346） > fold 補的 general-purpose裡的工具拋錯：root 這一輪走完，沒有未處理的 rejection',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-throw-orphan.test.ts',
+    test: '工具本體拋錯（#346） > fold 補的 general-purpose那一輪的模型呼叫拋錯（#327 那次）：root 的 task 拿到錯誤、這一輪照跑完，沒有未處理的 rejection',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-throw-orphan.test.ts',
+    test: '工具本體拋錯（#346） > 登記過的子代理裡的工具拋錯：root 這一輪走完，沒有未處理的 rejection',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/tool-throw-orphan.test.ts',
+    test: '工具本體拋錯（#346） > 登記過的子代理那一輪的模型呼叫拋錯（#327 那次）：root 的 task 拿到錯誤、這一輪照跑完，沒有未處理的 rejection',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/tool-timeout.test.ts',
@@ -1495,10 +2430,58 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/trajectory-subagents-wire.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：軌跡投影 > 子代理有自己的軌跡與快照、連得回去；即時 = 歷史 = 重開之後",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/trajectory-subagents-wire.test.ts',
+    test: "'前景 task'：軌跡投影 > 子代理有自己的軌跡與快照、連得回去；即時 = 歷史 = 重開之後",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/trajectory-turn-wire.test.ts',
+    test: "'前景 subagent（run_in_background: false）'：按需拉軌跡 > 拉到的 = 推送的；重開之後一樣；失敗有碼有原因",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/trajectory-turn-wire.test.ts',
+    test: "'前景 task'：按需拉軌跡 > 拉到的 = 推送的；重開之後一樣；失敗有碼有原因",
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/turn-cancel.test.ts',
     test: '沒有一輪在跑 > 停在核准點按停止：收回——一輪 resume、那顆 before dispatch、aborted 收尾',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/turn-cancel.test.ts',
+    test: '有一輪在跑 > 委派中按停止：子代理也停，它的工具與 root 的 task 都是 ABORTED',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/turn-failure-code.test.ts',
+    test: '一輪失敗的錯誤碼 > 前景子代理串流中段的憑證失敗：同樣只有固定句',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/turn-failure-code.test.ts',
+    test: '一輪失敗的錯誤碼 > 前景子代理的其他失敗（真的 400）：文字照舊，憑證那條不寫',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/turn-failure-code.test.ts',
+    test: '一輪失敗的錯誤碼 > 前景子代理的真 401：下行、冷讀歷史、回給父模型的結果都是固定句，伺服器日誌含',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
   {
     file: 'src/turn-failure-record.test.ts',
@@ -1525,6 +2508,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/validation.test.ts',
+    test: '工具拋錯 > **錯發生在 subagent 裡也一樣**——第二個掛點',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
     file: 'src/waiting-cards.test.ts',
     test: '停下來等人的那一輪，即時與重播畫得一樣 > 前景子代理叫到要核准的工具：停下來，root 的 `task` 兩邊畫得一樣',
     kind: 'interrupt',
@@ -1547,5 +2536,17 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '條目時刻在真的線上（#1030） > 續接：同一顆呼叫的 `tool-started` 在兩條路上都到兩次，startedAt 取第一顆，等人回答的時間算在裡面',
     kind: 'interrupt',
     run: 'fails',
+  },
+  {
+    file: 'src/workspace-changes.test.ts',
+    test: '每一輪的改動紀錄在真的圖上 > 子代理用檔案工具改的檔算進 root 那一輪；事件只在 root',
+    kind: 'approvalChannel',
+    run: 'passes',
+  },
+  {
+    file: 'src/workspace-changes.test.ts',
+    test: '每一輪的改動紀錄在真的圖上 > 子代理的 copy_file（#2311）：root 那一輪的摘要裡目的地帶 copiedFrom，跟子代理日誌的 meta 一樣',
+    kind: 'approvalChannel',
+    run: 'passes',
   },
 ];

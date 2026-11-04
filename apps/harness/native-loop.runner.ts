@@ -3,6 +3,8 @@
  *
  * - `fails`：照跑，要失敗才算過（同 `it.fails`）。差異收掉、這一條轉綠時它會紅，提醒把登記拿掉。
  * - `skip`：不跑。只給會懸到逾時的那幾條：跑滿逾時只是燒時間，懸著的 promise 還可能漏到同檔的下一條。
+ * - `passes`：照跑、要過。差異在斷言之外（工具事件序列、送給模型的系統訊息），登記是讓它有根因與收掉它的卡。差異收掉時
+ *   這一條不會紅，登記要手動拿掉。
  *
  * 登記裡有一條對不到這個檔收集到的測試時整檔失敗：測試改名或刪掉之後，登記不能靜靜失效。
  */
@@ -48,7 +50,7 @@ export default class NativeLoopRunner extends TestRunner {
       for (const entry of entries) {
         const test = tests.get(entry.test)!;
         if (entry.run === 'skip') test.mode = 'skip';
-        else (test as { fails?: boolean }).fails = true;
+        else if (entry.run === 'fails') (test as { fails?: boolean }).fails = true;
       }
     }
   }

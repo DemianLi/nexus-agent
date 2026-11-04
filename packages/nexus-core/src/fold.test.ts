@@ -1435,6 +1435,29 @@ describe('搜尋工具的說明（workspaceSearch，#1605）', () => {
   });
 });
 
+describe('檔案工具的描述跟著讀到哪與搜尋說明掛不掛（#2415）', () => {
+  it('有 backend：read_file 換；再說搜尋走工作區 backend，grep、glob 也換', async () => {
+    const plain = await fold([], { defaultBackend: fakeBackend('default') });
+    expect(Object.keys(plain.fileToolDescriptions ?? {})).toEqual(['read_file']);
+
+    const search = await fold([], {
+      defaultBackend: fakeBackend('default'),
+      workspaceSearch: true,
+    });
+    expect(Object.keys(search.fileToolDescriptions ?? {}).sort()).toEqual([
+      'glob',
+      'grep',
+      'read_file',
+    ]);
+  });
+
+  it('沒有 backend：兩顆都不掛，描述也不換', async () => {
+    const params = await fold([], {});
+    expect(middlewareNames(params)).not.toContain(READ_CONTINUATION_MIDDLEWARE_NAME);
+    expect(params.fileToolDescriptions).toBeUndefined();
+  });
+});
+
 describe('摘要器打底', () => {
   it('排在閘門之後、其餘 registry middleware 之前', async () => {
     const params = await fold(

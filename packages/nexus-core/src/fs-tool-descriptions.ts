@@ -17,11 +17,12 @@
  * **`write_file`／`edit_file` 的描述不換。** 先讀後改的規則照 dsh 寫在系統提示詞的 section（`observation.ts` 的 {@link observationGuidance}），
  * 不是工具描述；dsh 的工具描述只有一句 UTF-8 文字檔的說明。
  *
- * ## 開不開，看 middleware 在不在
+ * ## 開不開，看讀到哪與搜尋說明掛不掛
  *
- * 描述講的是 middleware 的行為，middleware 沒掛，描述就是在說謊：`read_file` 的「預設 {@link READ_LIMIT} 行」只在
- * {@link READ_CONTINUATION_MIDDLEWARE_NAME} 在場時寫（預設的 `limit` 是它的 `wrapToolCall` 填的）。呼叫端傳這次組裝（或這個子代理）
- * 實際會掛的 middleware 清單進來，這裡看名字。行號那一句跟著同一個開關換：不開時整份描述維持基座原文，逐位元組相同。
+ * 描述講實際行為，行為不在就是在說謊：`read_file` 的「預設 {@link READ_LIMIT} 行」只在 `read-continuation.ts` 掛上時寫（預設的
+ * `limit` 是它的 `wrapToolCall` 填的）；`grep`、`glob` 講的是工作區 backend 的語意，跟 `search-descriptions.ts` 同一個條件
+ * （`FoldOptions.workspaceSearch`）一起換。fold 決定兩顆掛不掛，在同一處算好這份描述，放進 `FoldedAgentParams.fileToolDescriptions`
+ * 交給組裝。行號那一句跟著 `read_file` 的開關換：不開時 `read_file` 的描述維持基座原文，逐位元組相同。
  *
  * ## 從基座的原文改，不是整段重寫
  *
@@ -41,8 +42,13 @@
 import { createFilesystemMiddleware } from 'deepagents';
 
 import type { FileToolsOptions } from './fs-tools-options.js';
-import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
-import { READ_CONTINUATION_MIDDLEWARE_NAME, READ_LIMIT } from './read-continuation.js';
+import { READ_LIMIT } from './read-continuation.js';
+
+/** 讀到哪（`read-continuation.ts`）與搜尋說明（`search-descriptions.ts`）這次組裝掛了沒。 */
+export interface MountedDescriptionMiddleware {
+  readonly readContinuation: boolean;
+  readonly searchDescriptions: boolean;
+}
 
 /** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（用到 `read_file`、`grep` 與 `glob`）。 */
 export type FilesystemToolDescriptions = Readonly<
@@ -145,19 +151,17 @@ function grepRegexpDescription(): string {
 }
 
 /**
- * 這一組 middleware 掛上之後，基座檔案工具該用的描述。
+ * 讀到哪（`read-continuation.ts`）與搜尋說明（`search-descriptions.ts`）掛上之後，基座檔案工具該用的描述。
  *
- * @param middleware - 這次組裝（root）或這個子代理實際會掛的 middleware；只看名字。
+ * @param mounted - 這次組裝掛了哪幾顆。
  * @param options - `tool-fs` 設定（#1605）：`read_file` 描述裡的預設行數用 `readLimit`；缺席用 {@link READ_LIMIT}。
  * @returns 要交給 `createFilesystemMiddleware({ customToolDescriptions })` 的表；一顆都不用換時是 `undefined`（組成與基座逐位元組相同）。
  */
 export function filesystemToolDescriptions(
-  middleware: readonly { readonly name: string }[],
+  mounted: MountedDescriptionMiddleware,
   options?: Pick<FileToolsOptions, 'readLimit'>,
 ): FilesystemToolDescriptions | undefined {
-  const names = new Set(middleware.map((each) => each.name));
-  const readFile = names.has(READ_CONTINUATION_MIDDLEWARE_NAME);
-  const search = names.has(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+  const { readContinuation: readFile, searchDescriptions: search } = mounted;
   if (!readFile && !search) return undefined;
   return {
     ...(readFile && {
