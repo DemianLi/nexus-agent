@@ -58,29 +58,32 @@ function codeLinesMatching(pattern: RegExp): string[] {
 
 describe('Error: 前綴只有一個主人', () => {
   /**
-   * 手寫 `status: 'error'` 的只剩兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
-   * 與推導端補的那兩句共用），與
-   * `fs-tool-errors.ts` 包基座文字的那一則（文字不是我們寫的，可能是文字塊陣列）。
+   * 手寫 `status: 'error'` 的只剩三處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
+   * 與推導端補的那兩句共用），
+   * `fs-tool-errors.ts` 包基座文字的那一則（文字不是我們寫的，可能是文字塊陣列），與 native loop 相容層找不到工具時那一則：
+   * 逐字照 langchain `ToolNode` 的 `getInvalidToolError`，兩個 loop 才回同一句。TODO(#2357)：拿掉相容層時一起走。
    *
    * 2026-09-14 在改之前的 develop（`473d12a`）上數到 10 處、10 個檔：圍堵、核准、先讀後改、輸出 schema、
    * fs-tool-errors、ask-user、submit_record、sandbox-escalation、pump 的 `#withdraw`，與 `tool-events.ts`
    * 自己。其中 8 處是 #318 補前綴的出口，全部改走 `toolRefusal`。
    */
-  it('手寫 error 狀態的只有錯誤結果的建構點與 fs-tool-errors', () => {
+  it('手寫 error 狀態的只有錯誤結果的建構點、fs-tool-errors 與相容層照抄 langchain 的那一則', () => {
     expect(codeLinesMatching(/status:\s*['"]error['"]/u)).toEqual([
       "packages/nexus-core/src/fs-tool-errors.ts: status: 'error',",
+      "packages/nexus-core/src/native-loop/onion.ts: status: 'error',",
       "packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
     ]);
   });
 
   /**
-   * 自己拼 `'Error: '` 的只剩前綴的定義本身。**改之前是 5 處**：todo、goal 各一個前綴常數，中止的
-   * 兩句與壞參數那一句各自帶著——`toolRefusal` 加上前綴之後，它們留著就是 `Error: Error: `。
+   * 自己拼 `'Error: '` 的只剩前綴的定義本身，與 native loop 相容層照抄 langchain 的那一句（見上一條）。todo、goal 的前綴常數，中止的兩句與
+   * 壞參數那一句都不能自己帶前綴：`toolRefusal` 已經加了，再帶就是 `Error: Error: `。
    *
    * 期望值裡那一行是原始碼逐字，所以**前綴的值也被這條釘住**：改成別的字，這裡當場紅。
    */
-  it('字串裡寫 Error: 的只有前綴的定義', () => {
+  it('字串裡寫 Error: 的只有前綴的定義與相容層照抄 langchain 的那一句', () => {
     expect(codeLinesMatching(/['"`]Error: /u)).toEqual([
+      "packages/nexus-core/src/native-loop/onion.ts: return `Error: ${name} is not a valid tool, try one of [${available.join(', ')}].`;",
       "packages/nexus-core/src/tool-events.ts: export const TOOL_ERROR_PREFIX = 'Error: ';",
     ]);
   });

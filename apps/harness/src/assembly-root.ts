@@ -18,6 +18,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import type {
+  AgentLoopKind,
   ApprovalPolicy,
   CommandRegistrationPoint,
   ProjectionRegistrationPoint,
@@ -58,6 +59,7 @@ import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
 import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
 import {
+  AGENT_LOOP_KINDS,
   ApprovalPolicyController,
   type ApprovalPolicyValue,
   createHostServicesPlugin,
@@ -238,6 +240,11 @@ export interface CliInvocation {
    */
   readonly historySource?: HistorySource;
   /**
+   * `--agent-loop`（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：驅動 middleware 的是 LangGraph 的圖還是 `@nexus/core` 的 native loop。
+   * 省略即 `langgraph`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
+   */
+  readonly agentLoop?: AgentLoopKind;
+  /**
    * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
    *
    * **換掉整份清單這件事沒有旗標可以做**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -307,6 +314,25 @@ export function parseSandboxMode(
     );
   }
   return mode;
+}
+
+/**
+ * `--agent-loop` 的值（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。兩個入口共用，理由同 {@link parseSandboxMode}。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param usage - 接在錯誤訊息後面的用法那段話。
+ * @returns 那個值，或沒給時的 `undefined`（＝`langgraph`）。
+ * @throws 不是認得的值——訊息接上用法。
+ */
+export function parseAgentLoop(raw: string | undefined, usage: string): AgentLoopKind | undefined {
+  if (raw === undefined) return undefined;
+  const value = AGENT_LOOP_KINDS.find((kind) => kind === raw.trim());
+  if (value === undefined) {
+    throw new Error(
+      `--agent-loop 只收 ${AGENT_LOOP_KINDS.join('、')}（拿到 ${JSON.stringify(raw)}）。\n\n${usage}`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -878,7 +904,13 @@ export interface CreateCliAgentSession {
 export async function createCliAgent(
   invocation: Pick<
     CliInvocation,
-    'live' | 'workspace' | 'sandbox' | 'approvalPolicy' | 'recursionLimit' | 'historySource'
+    | 'live'
+    | 'workspace'
+    | 'sandbox'
+    | 'approvalPolicy'
+    | 'recursionLimit'
+    | 'historySource'
+    | 'agentLoop'
   > & {
     /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
@@ -1118,11 +1150,12 @@ export async function createCliAgent(
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
+  // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined,
+    hasCheckpointer: checkpointer !== undefined && invocation.agentLoop !== 'native',
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
@@ -1286,6 +1319,7 @@ export async function createCliAgent(
     ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     ...(invocation.historySource !== undefined && { historySource: invocation.historySource }),
+    ...(invocation.agentLoop !== undefined && { agentLoop: invocation.agentLoop }),
     ...(historyShadow !== undefined && { historyShadow }),
     systemPrompt: SYSTEM_PROMPT,
     ...(invocation.profile !== undefined && { profile: invocation.profile }),

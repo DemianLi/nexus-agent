@@ -20,6 +20,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import { modelCallLimitMiddleware } from 'langchain';
+import type { AgentLoopKind } from './agent-assembly.js';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { createApprovalGateMiddleware } from './approval.js';
@@ -290,6 +291,11 @@ export interface FoldOptions {
   model?: AgentModel;
   /** checkpointer。`false` 與缺席同義。 */
   checkpointer?: AgentCheckpointer;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 沒有中斷可接回（TODO(#2358)），
+   * 核准管道當成沒有存檔點：要核准的操作確定性回絕，不發 `interrupt()`。
+   */
+  loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */
   store?: AgentStore;
   /** 核准政策的 session 開關。 */
@@ -1207,7 +1213,10 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
-    hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
+    hasCheckpointer:
+      options.checkpointer !== undefined &&
+      options.checkpointer !== false &&
+      options.loop !== 'native',
   });
 }
 
