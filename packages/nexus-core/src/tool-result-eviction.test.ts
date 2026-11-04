@@ -24,7 +24,7 @@ interface Written {
   readonly sha256: string;
 }
 
-/** 記下每次 `write` 的 backend；`fail` 時回錯誤，`filesUpdate` 時照記憶體 backend 回更新。 */
+/** 記下每次 `write` 的 backend；`fail` 時回錯誤，`filesUpdate` 時像以 runtime 建的 `StateBackend` 那樣回 `filesUpdate`。 */
 function recordingBackend(mode: 'plain' | 'filesUpdate' | 'fail'): {
   readonly backend: object;
   readonly written: Written[];
@@ -124,7 +124,7 @@ const cases: Record<string, Case> = {
     result: () => tool('y'.repeat(TOOL_RESULT_EVICTION_THRESHOLD_CHARS)),
   },
   'execute 過門檻：搬走、換預覽': { toolName: 'execute', result: () => tool(big('line')) },
-  '記憶體 backend 回 filesUpdate：包成 Command': {
+  '回 filesUpdate 的 backend：包成 Command': {
     toolName: 'execute',
     mode: 'filesUpdate',
     result: () =>

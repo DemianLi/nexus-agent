@@ -16,7 +16,8 @@ import type { ToolAdmission } from './tool-resolution.js';
 /**
  * 這個 backend 下 `execute`、`delete` 放不放行；其餘名字一律放行。
  *
- * 基座比的是 `delete` 工具的物件身分，這裡比名字：別的來源的同名工具在 fold 就撞名，到不了這一格。
+ * 基座比的是 `delete` 工具的物件身分，這裡比名字。前提是同名的只有基座那一顆：harness 在進 fold 之前用
+ * `assertNoBaseToolNameCollision`（`apps/harness/src/agent-factory.ts`）擋下佔用基座工具名的註冊；不經 harness 直接組裝的呼叫端要自己守。
  *
  * @param resolved - `resolveBackend` 解析出來的 backend。
  * @returns 放行決定。

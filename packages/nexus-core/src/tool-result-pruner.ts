@@ -20,7 +20,8 @@
  *
  * ## 但基座還有**第二個**大結果處置，而那個是活的——它決定了這把剪刀的射程上界
  *
- * `createFilesystemMiddleware` 的 `wrapToolCall` 有自己的一條：`toolTokenLimitBeforeEvict`
+ * 基座 `createFilesystemMiddleware` 的 `wrapToolCall`（組裝點換成 core 逐字移植的 `toolResultEvictionWrap`，
+ * `tool-result-eviction.ts`）有自己的一條：`toolTokenLimitBeforeEvict`
  * 預設 `2e4`，工具結果的文字超過 `4 * 2e4 = 80,000` 字元就**寫進檔案系統**、換成一段頭尾
  * 預覽加一句「用 `read_file` 自己去讀」（`TOO_LARGE_TOOL_MSG`，`dist/langsmith-zm0ILQsV.js:1574`、
  * `:2426`、`:2507-2510`；`read_file`／`write_file`／`edit_file`／`glob`／`grep` 這幾個檔案

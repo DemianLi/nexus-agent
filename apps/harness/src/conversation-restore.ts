@@ -63,20 +63,20 @@ export interface RestorableAgent {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 過大的工具結果：模型看到的是基座換過的預覽                                   */
+/* 過大的工具結果：模型看到的是組裝點換過的預覽                               */
 /* -------------------------------------------------------------------------- */
 //
-// 日誌記的是工具的輸出（`session-log.ts` 的 `tool/result`），模型看到的是基座 `FilesystemMiddleware` 換過的
-// 那則：超過 80,000 字元的，換成一句「存在這個路徑、用 read_file 自己讀」加上頭尾預覽。推回去的要是模型看到的
-// 那則，所以照同一條規則重算。規則在 core 的 `tool-result-eviction.ts`，組裝點換上去的那一格也用它
-// （[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。`conversation-restore.test.ts` 拿真的基座換出來的那則
-// 逐字比對，升級基座時字變了就紅在那裡。
+// 日誌記的是工具的輸出（`session-log.ts` 的 `tool/result`），模型看到的是組裝點那一格（core 的 `toolResultEvictionWrap`）
+// 換過的那則：超過 80,000 字元的，換成一句「存在這個路徑、用 read_file 自己讀」加上頭尾預覽。推回去的要是模型看到的
+// 那則，所以照同一條規則重算；規則在 core 的 `tool-result-eviction.ts`（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。
+// `conversation-restore.test.ts` 比的是重算出來的與組裝點實際換上的那則；與基座逐字相同，由 core 的
+// `tool-result-eviction.test.ts` 對著真的基座比。
 //
 // 預覽裡指的路徑**續接之後讀得到**（#734）：暫存在主機的私有目錄、按會話分目錄
 // （`tool-result-stash.ts`），續接用同一個 run 目錄當鑰匙，找得到原來那個檔。重算的仍然是模型當時看到的字。
 
 /**
- * 基座會把這則工具結果搬到哪個檔：沒過門檻或基座不搬的回 undefined。
+ * 組裝點會把這則工具結果搬到哪個檔：沒過門檻或那顆工具不搬的回 undefined。
  *
  * 重播（{@link toolResultAsSeen}）與分叉讀繼承檔的路由（`fork-stash.ts`）共用這一份規則。
  *
@@ -92,12 +92,12 @@ export function toolResultEvictionPath(message: {
 }
 
 /**
- * 一則工具結果在模型那一格長什麼樣：照基座的規則，過大的換成預覽。
+ * 一則工具結果在模型那一格長什麼樣：照 core 的搬移規則，過大的換成預覽。
  *
  * 換出來的那則帶齊 `ToolMessage` 建構子收的那幾格（轉的時候 `data` 原樣交給建構子），沒有 `additional_kwargs`／`response_metadata` 時補空物件，同建構子。
  *
  * @param message - 日誌裡記的那則（工具的輸出）。
- * @returns 沒過門檻或基座不搬的原樣；過了的換成基座那則。
+ * @returns 沒過門檻或那顆工具不搬的原樣；過了的換成組裝點會換上的那則。
  */
 export function toolResultAsSeen(message: NexusMessage): NexusMessage {
   const data = message.data as NexusMessage['data'] & {

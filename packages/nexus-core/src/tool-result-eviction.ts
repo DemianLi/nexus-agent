@@ -1,10 +1,13 @@
 /**
  * 過大的工具結果搬到 `/large_tool_results/`、模型那一格換成頭尾預覽（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415) W3）。
  *
- * 規則逐字照基座 `FilesystemMiddleware` 的 `wrapToolCall`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `processToolMessage`、
+ * 規則與字串逐字照基座 `FilesystemMiddleware` 的 `wrapToolCall`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `processToolMessage`、
  * `createContentPreview`、`formatContentWithLineNumbers`、`TOO_LARGE_TOOL_MSG`、`TOOLS_EXCLUDED_FROM_EVICTION`），基座沒有匯出它們。
- * 組裝點建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionWrap}：名字、工具、`beforeAgent`、`wrapModelCall`
- * 仍是基座的，洋蔥裡的位置不變。`toolTokenLimitBeforeEvict` 不能拿來關掉基座那一份：`read_file` 本體的截斷也讀同一個選項。
+ * 逐字是因為已記下的日誌續接時要重算出模型當時看到的那則；`tool-result-eviction.test.ts` 對著真的基座比，基座升級改了字就紅在那裡。
+ *
+ * 組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionWrap}；
+ * 名字、工具、`beforeAgent` 仍是基座的，`wrapModelCall` 先經過 core 的 `filesystemModelCallWrap` 再交給基座那一支，洋蔥裡的位置不變。
+ * `toolTokenLimitBeforeEvict` 不能拿來關掉基座那一份：`read_file` 本體的截斷也讀同一個選項。
  *
  * 這一格在圍堵外層，所以日誌記的是換之前的全文；推模型歷史的一側照 {@link toolResultEvictionPath} 與
  * {@link evictedToolResultText} 重算模型看到的那則。
@@ -182,11 +185,12 @@ interface Processed {
  * 基座那一格的 `wrapToolCall`：結果過大就把全文寫進 backend、換成預覽。
  *
  * - 請求上的工具名在不搬名單裡：直接往內交，不看結果。
- * - 結果是 `ToolMessage`：照規則換；backend 回了 `filesUpdate` 就包成 `Command`（記憶體 backend 走這裡）。
- * - 結果是帶 `messages` 的 `Command`（`task`）：逐則換 `ToolMessage`，有一則搬了才換成新的 `Command`。
- * - 寫不進去：換成基座那句「存不進去」的話，不留全文。
+ * - 結果是 `ToolMessage`：照規則換；寫入回了 `filesUpdate`（以 runtime 建的 `StateBackend`）就包成 `Command`。
+ *   寫不進去時換成「存不進去」那句，不留全文。
+ * - 結果是帶 `messages` 的 `Command`（`task`）：逐則照規則處理，只有某一則的寫入回了 `filesUpdate` 才交回新的
+ *   `Command`；否則交回原來那個——backend 不回 `filesUpdate` 時檔照寫、寫不進去時不寫，兩種模型看到的都是全文。
  *
- * @param backend - 建基座那一顆時交的 backend（實例或工廠），每次呼叫照基座解析一次。
+ * @param backend - 建基座那一顆時交的 backend（實例或工廠）；某一則結果過了門檻才解析，每則解析一次。
  * @returns 換上去的 `wrapToolCall`。
  */
 export function toolResultEvictionWrap(

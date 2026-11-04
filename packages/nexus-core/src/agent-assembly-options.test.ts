@@ -88,7 +88,7 @@ describe('組裝點的 createFilesystemMiddleware 呼叫', () => {
       ...source.matchAll(/(?<![\w.]|function )filesystemMiddleware\(\s*(\S+)/gu),
     ].map((match) => match[1]);
 
-    // 基座那一顆的 `wrapToolCall`、`wrapModelCall` 要換成 core 的（#2415 W3），所以直接建的只有包裝裡那一處。
+    // 基座那一顆的 `wrapToolCall` 換成 core 的、`wrapModelCall` 由 core 包住（#2415 W3），所以直接建的只有包裝裡那一處。
     expect(direct).toEqual(['options);']);
     expect(wrapped).toHaveLength(2);
     for (const argument of wrapped) expect(argument).toMatch(/^filesystemMiddlewareOptions\(/u);
