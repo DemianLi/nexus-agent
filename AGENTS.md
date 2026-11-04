@@ -25,7 +25,7 @@ gate 擋下標題時改標題即可，不需要重開 PR。
 
 ## PR 內文
 
-**feature → develop**：照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。模板之外的規則：
+**feature → develop**：用 `mattpocock-skills:pr`，照 [`.github/pull_request_template.md`](.github/pull_request_template.md)；段落標題與欄位名用英文，內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。模板之外的規則：
 
 - 第一行寫 `Refs #N`，不寫 Closes；
 - Summary 的圖優先用文字樹或 diff 草圖：GitHub 上 Mermaid 只露出一小塊；
@@ -37,7 +37,7 @@ gate 擋下標題時改標題即可，不需要重開 PR。
 
 **開 PR 與每次推更新之前，對 diff 跑 [`comment-audit`](.agents/skills/comment-audit/SKILL.md)**（report 模式），照報告修完再推；判準見 [`docs/standards.md`](docs/standards.md)〈註解〉。
 
-**develop → main（發版）**：內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落，不用上面的模板。「驗證方式」同樣寫實際跑過的指令與結果，沒跑過就寫沒跑過。
+**develop → main（發版）**：內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落（`.github/scripts/check_pr.py`），不用上面的模板。「驗證方式」同樣寫實際跑過的指令與結果，沒跑過就寫沒跑過。
 
 ## 程式碼規範
 
@@ -74,12 +74,12 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 - **這一輪紅了，先只重跑失敗的 job 一次**（Actions 的 Re-run failed jobs）。轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發：
   開 backlog 卡（已有的就在卡上記一筆），不撤回。還是紅，就**撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，
   修好再重新開 PR。
-- **`main` 只接受來自 `develop` 的 PR**，緊急修補同樣先進 `develop`。
+- **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
 - **`develop` 要求分支與 base 同步（strict）**；`main` 刻意不開。
 - 合併方式：`feature → develop` 只能 squash；`develop → main` 只能 merge commit。
 
-`main` 不開 strict 的原因、規則的快照與匯出方式見 [`.github/rulesets/README.md`](.github/rulesets/README.md)。
+`main` 不開 strict、不開 linear history 的原因，規則的快照與匯出方式見 [`.github/rulesets/README.md`](.github/rulesets/README.md)。
 
 ## 檔案歸屬
 
