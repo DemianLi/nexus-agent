@@ -37,6 +37,19 @@ describe('wrapToolCallWith', () => {
     expect(seen?.signal).toBe(signal);
   });
 
+  it('請求帶著 owner 就照帶；沒有這個鍵，一步拿到的也沒有', async () => {
+    const owner = { id: 'm', tool_calls: [{ id: 'call_1' }] };
+    let seen: ToolCallSite | undefined;
+    const step = wrapToolCallWith((call, next) => {
+      seen = call;
+      return next();
+    });
+    await step({ ...request, owner }, () => 'done');
+    expect(seen?.owner).toBe(owner);
+    await step(request, () => 'done');
+    expect(seen !== undefined && 'owner' in seen).toBe(false);
+  });
+
   it('沒有 id 時 callId 是 undefined，不是空字串', async () => {
     let seen: ToolCallSite | undefined;
     await wrapToolCallWith((call, next) => {

@@ -602,7 +602,7 @@ export function foldRegistry(
 
   const permissions = foldPermissions(registry);
   // 解不開的參數的原字串記在那則 AI 訊息上，三個讀者（圍堵、核准閘門、最內層那顆）各自經
-  // `toolCallOwner` 找那則訊息（`log` 的 root 讀日誌，其餘讀 `request.state`），沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
+  // `toolCallOwner` 找那則訊息（怎麼找見 {@link ./tool-call-owner.ts}），沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
   const invalidToolArgs = createInvalidToolArgsMiddleware(registry.sessions);
   // **撞到輸出上限（#433）也是一份載體、一顆實例走遍 root 與每個子代理**：子代理的模型呼叫記、
   // 父圖的 `task` 取，得看到同一份。見 {@link ./max-tokens.ts}。

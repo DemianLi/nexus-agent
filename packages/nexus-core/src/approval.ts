@@ -29,6 +29,7 @@ import type { AgentMiddleware } from './base-types.js';
 import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
+import { ownerRequestOf } from './tool-call-owner.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
@@ -457,14 +458,7 @@ export function approvalGateToolStep(
 
     // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
     // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-    const raw = rawArgumentsOf(
-      {
-        toolCall: { id: call.callId },
-        state: call.state,
-        runtime: { configurable: call.configurable },
-      },
-      sessions,
-    );
+    const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
     const answer = (await interrupt({
       kind: APPROVAL_INTERRUPT_KIND,
       actionRequests: [
