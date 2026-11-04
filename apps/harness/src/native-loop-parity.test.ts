@@ -777,6 +777,42 @@ class RootRunRecorder extends BaseCallbackHandler {
   }
 }
 
+describe('native 的 stream() 的 streamMode，對照 LangGraph', () => {
+  const turns: ScriptedTurn[] = [
+    { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+    { content: '好。' },
+  ];
+  it.each([['updates'], [undefined]] as const)(
+    'streamMode 是 %s：吐的是內容本身，不是 [mode, 內容]',
+    async (streamMode) => {
+      const run = async (loop: AgentLoopKind) => {
+        const built = await createNexusAgent({
+          model: new ScriptedChatModel({ turns }),
+          checkpointer: new MemorySaver(),
+          plugins: [toolsPlugin, markerPlugin()],
+          agentLoop: loop,
+        });
+        try {
+          const chunks: unknown[] = [];
+          for await (const chunk of await built.agent.stream(toAgentInvocation('跑。'), {
+            configurable: { thread_id: THREAD },
+            ...(streamMode !== undefined && { streamMode }),
+          })) {
+            chunks.push(Object.keys(chunk as object));
+          }
+          return chunks;
+        } finally {
+          await built.dispose();
+        }
+      };
+      const graph = await run('langgraph');
+      const native = await run('native');
+      expect(graph).toContainEqual(['tools']);
+      expect(native).toEqual(graph);
+    },
+  );
+});
+
 describe('native 的 callbacks 對照 LangGraph', () => {
   it('一次 run 一顆 root chain run，模型與工具的 run 都掛在它底下', async () => {
     const run = async (loop: AgentLoopKind) => {

@@ -12,5 +12,7 @@ import base from './vitest.config.ts';
 export default mergeConfig(base, {
   test: {
     setupFiles: ['./src/native-loop.setup.ts'],
+    // 登記過的已知差異照登記的方式跑（`src/native-loop-known-differences.ts`）。
+    runner: './native-loop.runner.ts',
   },
 });

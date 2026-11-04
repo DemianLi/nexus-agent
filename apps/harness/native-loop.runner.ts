@@ -17,7 +17,11 @@ import { KNOWN_DIFFERENCES } from './src/native-loop-known-differences.ts';
 /** 從檔案以下的完整名字，`describe > … > it`，同 vitest 報告裡那一串。 */
 function fullName(task: RunnerTask): string {
   const names: string[] = [];
-  for (let at: RunnerTask | undefined = task; at !== undefined && !('filepath' in at); at = at.suite) {
+  for (
+    let at: RunnerTask | undefined = task;
+    at !== undefined && !('filepath' in at);
+    at = at.suite
+  ) {
     names.unshift(at.name);
   }
   return names.join(' > ');

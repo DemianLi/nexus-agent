@@ -279,22 +279,32 @@ export class NativeAgent {
   }
 
   /**
-   * CLI 那條：每個節點寫完吐一次 `['updates', { 節點: 寫入 }]`，同 LangGraph 的 `streamMode: 'updates'`（hook 節點見
-   * `runHook`，工具每顆收完各吐一次、`Command` 吐它的 `update`）；結束時吐一次 `['values', state]`（不含 `_` 開頭的鍵），
-   * 中間各步的 `values` 不吐。不讀 `streamMode`。
+   * CLI 那條：每個節點寫完吐一次 updates（`{ 節點: 寫入 }`，同 LangGraph 的 `streamMode: 'updates'`；hook 節點見 `runHook`，工具每顆
+   * 收完各吐一次、`Command` 吐它的 `update`）；結束時吐一次 values（不含 `_` 開頭的鍵），中間各步的 values 不吐。`streamMode`
+   * 照 LangGraph：沒給是 `'updates'`（`StateGraph.compile` 的預設），給字串就只吐那一種的內容，給陣列吐 `[mode, 內容]`；`updates`、`values` 以外的拋錯。
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
   async stream(
     input: LoopInput,
-    config: RunnableConfig = {},
-  ): Promise<AsyncIterable<[string, unknown]>> {
-    const queue = new AsyncQueue<[string, unknown]>();
+    config: RunnableConfig & { readonly streamMode?: string | readonly string[] } = {},
+  ): Promise<AsyncIterable<unknown>> {
+    const requested = config.streamMode ?? 'updates';
+    const modes = typeof requested === 'string' ? [requested] : requested;
+    const unsupported = modes.filter((mode) => mode !== 'updates' && mode !== 'values');
+    if (unsupported.length > 0) {
+      throw new Error(`native agent loop 的 stream() 不支援 streamMode：${unsupported.join(', ')}（#2356）`);
+    }
+    const queue = new AsyncQueue<unknown>();
+    const emit = (mode: string, payload: unknown): void => {
+      if (!modes.includes(mode)) return;
+      queue.push(typeof requested === 'string' ? payload : [mode, payload]);
+    };
     void this.#run(input, config, {
-      onUpdate: (node, update) => queue.push(['updates', { [node]: update }]),
+      onUpdate: (node, update) => emit('updates', { [node]: update }),
     }).then(
       (state) => {
-        queue.push(['values', outputOf(state)]);
+        emit('values', outputOf(state));
         queue.close();
       },
       (error: unknown) => queue.fail(error),
