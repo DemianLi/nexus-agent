@@ -13,8 +13,12 @@ export type LivezProbe = 'answered' | 'timed-out' | 'failed';
 /**
  * 打一次 `/livez`。回來就算 `answered`，不看狀態碼：連線排得上就夠了。永遠 resolve，不 reject。
  * @param signal - 收掉這次探測；收掉時回 `failed`。
+ * @param baseUrl - agent 的位置（`/livez` 在它底下）；省略是 {@link agentBaseUrl}，從頁面算。
  */
-export async function probeLivez(signal: AbortSignal): Promise<LivezProbe> {
+export async function probeLivez(
+  signal: AbortSignal,
+  baseUrl: string = agentBaseUrl(),
+): Promise<LivezProbe> {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -25,7 +29,7 @@ export async function probeLivez(signal: AbortSignal): Promise<LivezProbe> {
   signal.addEventListener('abort', cancel, { once: true });
   if (signal.aborted) cancel();
   try {
-    const response = await fetch(`${agentBaseUrl()}/livez`, {
+    const response = await fetch(`${baseUrl}/livez`, {
       cache: 'no-store',
       signal: controller.signal,
     });
