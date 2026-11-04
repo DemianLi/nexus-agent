@@ -62,10 +62,12 @@ const KEYFRAMES_ALLOWED = new Set([
   // 產出，原始碼裡出現那個字就會產出那個 utility，所以只列真的有元件用到的那幾個。
   // - `scroll-fade-reveal-b`：對話捲動區（vendor `message-scroller.tsx` 的 viewport）的 `scroll-fade-b`，底部淡出跟著捲動位置收放
   //   （scroll-driven，時長 1ms 只是佔位，不是時間動畫；#1638 PR B，Q8 照 SG）。
+  // - `scroll-fade-reveal-t`：同一個捲動區的頂端淡出（覆寫檔照 `scroll-fade-y` 寫的雙向那一份，README 本地修改第 83 條），跟著捲動位置收放（scroll-driven，同上；#2407）。
   // - `scroll-fade-reveal-s`／`scroll-fade-reveal-e`：一排附件（vendor `attachment.tsx` 的 `AttachmentGroup`）的 `scroll-fade-x`，
   //   左右淡出跟著橫向捲動位置收放（scroll-driven，同上；#1638 PR C）。
   // - `tw-shimmer`：附件上傳中、處理中的標題（vendor `attachment.tsx` 的 `AttachmentTitle`）的 `shimmer`，infinite；reduced-motion 的
   //   `animation: none` 寫在同一個 utility 裡（第 5 條認得到；#1638 PR C）。
+  'scroll-fade-reveal-t',
   'scroll-fade-reveal-b',
   'scroll-fade-reveal-s',
   'scroll-fade-reveal-e',

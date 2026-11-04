@@ -13,6 +13,8 @@ serve 供應兩個檔，跟網頁同一個來源：
 
 宿主頁要跟 serve 同源：在宿主頁的伺服器上設反向代理，把 serve 的路徑轉過去。登入沿用 serve 的登入網址換到的會話 cookie。
 
+開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉，有 [Vue CLI（webpack）](#vue-cliwebpack) 與 [Vite](#vite) 兩種寫法。
+
 元件的對話請求都打 `/embed/threads/…`，下行的 WebSocket 是 `/embed/threads/mux`。serve 看這個前綴決定這條對話能用什麼：沒有子代理、沒有斜線命令；內建工具沒標唯讀的都要使用者核准，MCP 工具照那一列設定的 `approval`。反向代理要多轉 `/embed/`，獨立頁面的 `/threads` 不用轉。
 
 ```html
@@ -167,3 +169,145 @@ window.addEventListener('keydown', (event) => {
 輸入框送出的一律當成一句話，`/` 開頭也不會當成命令。一輪還在跑時不收下一句，要先按停止。
 
 打開元件時會接上一次的對話（記在瀏覽器的 `nexus.embed.threads.current`，跟獨立頁面分開）；按「新對話」開一條新的。獨立頁面開的對話在元件裡打不開，元件會說明並請使用者按「新對話」。
+
+## 開發時接上另一台主機的 serve
+
+宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁的伺服器設反向代理。
+
+serve 只收 Host 是 loopback 的請求；Origin 有帶的話，要跟 Host 是同一個 authority，不然回 403。工程師開 `http://localhost:<port>`，開發伺服器的 proxy 設 `changeOrigin: false`，轉出去的 Host 仍是 `localhost:<port>`；Origin 也要原樣轉出去，兩條才都過。瀏覽器看來頁面、`embed.js` 與 API 同源，serve 不用開 CORS。
+
+### serve 那台主機
+
+serve 只綁容器裡的 `127.0.0.1`，區網連不進去。在 serve 容器的網路命名空間裡放一支轉送代理，原樣轉送所有路徑，包含 WebSocket 升級：
+
+```js
+// dev-proxy.mjs：把區網進來的請求轉給同一個網路命名空間裡的 serve，含 WebSocket 升級。
+// Host 與 Origin 要原樣轉送：serve 只收 loopback 的 Host，帶了 Origin 就要跟 Host 同一個 authority，改寫哪一個都會讓 API 與 WebSocket 回 403。
+import { createServer, request } from 'node:http';
+import { connect } from 'node:net';
+
+const SERVE_PORT = Number(process.env.SERVE_PORT ?? 8787);
+const PORT = Number(process.env.PORT ?? 8080);
+
+const server = createServer((req, res) => {
+  const upstream = request(
+    { host: '127.0.0.1', port: SERVE_PORT, method: req.method, path: req.url, headers: req.headers },
+    (up) => {
+      res.writeHead(up.statusCode ?? 502, up.headers);
+      up.pipe(res);
+    },
+  );
+  upstream.on('error', () => {
+    if (!res.headersSent) res.writeHead(502);
+    res.end();
+  });
+  req.pipe(upstream);
+});
+
+server.on('upgrade', (req, socket, head) => {
+  const upstream = connect(SERVE_PORT, '127.0.0.1', () => {
+    const lines = [`${req.method} ${req.url} HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+    upstream.write(head);
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('error', () => upstream.destroy());
+});
+
+server.listen(PORT, '0.0.0.0', () => console.log(`dev-proxy :${PORT} → 127.0.0.1:${SERVE_PORT}`));
+```
+
+代理跟 serve 共用網路命名空間，所以 port 要開在 **serve 容器**上：起 serve 的 `docker run` 加 `-p <主機的區網 IP>:18080:8080`。代理這樣起（serve 的 `--port` 不是預設的 8787 時，加 `-e SERVE_PORT=<port>`）：
+
+```bash
+docker run -d --name nexus-dev-proxy --network container:<serve 容器> \
+  -v <dev-proxy.mjs 所在目錄>:/proxy:ro node:22-bookworm-slim node /proxy/dev-proxy.mjs
+```
+
+### 開發伺服器的設定
+
+兩種開發伺服器的做法相同，只是寫法不同：
+
+- 元件從 `/nexus/embed.js` 載入。`/nexus/` 開頭的請求去掉前綴後轉給 serve：`embed.js`、型別 `nexus-chat.d.ts`，以及字型（`/nexus/assets/…`），都走這一條。
+- `/embed/` 開頭的請求原樣轉給 serve，包括 API 與下行的 WebSocket `/embed/threads/mux`。
+- 頁面裡這樣放：
+
+  ```html
+  <script type="module" src="/nexus/embed.js"></script>
+  ```
+
+- 型別從 `http://localhost:<port>/nexus/nexus-chat.d.ts` 下載。
+
+#### Vue CLI（webpack）
+
+`vue.config.js`：
+
+```js
+const { defineConfig } = require('@vue/cli-service');
+
+const nexus = { target: 'http://<serve 主機的區網 IP>:18080', changeOrigin: false };
+
+module.exports = defineConfig({
+  chainWebpack: (config) => {
+    config.module
+      .rule('vue')
+      .use('vue-loader')
+      .tap((options) => ({
+        ...options,
+        compilerOptions: { ...options?.compilerOptions, isCustomElement: (tag) => tag === 'nexus-chat' },
+      }));
+  },
+  devServer: {
+    proxy: {
+      '^/nexus/': { ...nexus, pathRewrite: { '^/nexus': '' } },
+      '^/embed/': { ...nexus, ws: true },
+    },
+  },
+});
+```
+
+- **`isCustomElement` 要設給 vue-loader。** `.vue` 檔在建置時就編譯好了，`app.config.compilerOptions` 只管執行期編譯的模板，對 `.vue` 檔沒有作用。
+- **登入不能靠比對 `/?token=`。** `@vue/cli-service` 把每一條的 key 拿去對 URL 的路徑部分做 `pathname.match(key)`，比不到 query；在那一條另外寫函式形式的 `context` 也一樣，`/?token=` 仍由開發伺服器回自己的首頁。登入改走 `/nexus/`（見下面〈登入〉）。
+- key 沒有寫 `^` 的話，路徑中間有出現也算比中。
+- 宿主自己 `public/assets/` 底下的檔照常由開發伺服器回；改了 `.vue` 檔照常熱更新。
+
+#### Vite
+
+`vite.config.ts`：
+
+```ts
+import vue from '@vitejs/plugin-vue';
+import { defineConfig } from 'vite';
+
+const nexus = { target: 'http://<serve 主機的區網 IP>:18080', changeOrigin: false };
+
+export default defineConfig({
+  plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === 'nexus-chat' } } })],
+  server: {
+    proxy: {
+      '^/nexus/': { ...nexus, rewrite: (path) => path.replace(/^\/nexus/, '') },
+      '^/embed/': { ...nexus, ws: true },
+    },
+  },
+});
+```
+
+Vite 不改 Origin。key 用 `^` 開頭的 RegExp：字串 key 比的是前綴，`/embedded.html` 這類自己的路徑也會被轉走。Vite 自己的路徑（`/@vite/client`、原始碼、HMR 的 WebSocket）不受影響，改了 Vue 檔照常熱更新。只驗過 `vite`，沒驗過 `vite preview`。
+
+### 登入
+
+架 serve 的人從容器日誌裡 serve 印出的網址取出 `token`，交給工程師。工程師開 `http://localhost:<port>/nexus/?token=<token>`：請求經 `/nexus/` 那一條轉給 serve，serve 設好 cookie 之後 303 回 `/`，也就是工程師自己的頁面。`token` 不必是第一個參數。
+
+### 注意事項
+
+- **一定要開 `localhost:<port>`。** 開發伺服器印的 Network 網址（`http://<IP>:<port>`）帶的 Host 不是 loopback，API 與 WebSocket 全部回 403。
+- **元件為什麼掛在 `/nexus/` 底下：** 為了不佔用宿主頁自己的 `/assets`。`embed.js` 照自己的網址找字型（`./assets/…`），從 `/embed.js` 載入的話，就要把 `/assets` 整條轉給 serve。宿主頁自己的 `assets/` 會跟它撞路徑：以 Vite 為例，proxy 排在 Vite 自己的檔案之前，專案 `public/assets/` 底下的檔會被轉給 serve、回 404。掛在 `/nexus/` 底下，字型跟著落在 `/nexus/assets/`。
+
+### 代價與限制
+
+- **只限開發。** 代理對區網開放之後，同網段任何人都能帶 `Host: localhost` 打進來，擋人的只剩 token；走 HTTP 時，token 與 cookie 在區網上是明文。
+- 多位工程師共用同一顆 token；一人一顆要等 [#2370](https://github.com/DemianLi/nexus-agent/issues/2370)。
+- 兩台機器之間的防火牆要放行代理的 port。
