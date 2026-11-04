@@ -350,11 +350,12 @@ class PostMerge(unittest.TestCase):
 
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
-        self.assertEqual(report['needs'], 'full')
+        self.assertEqual(report['needs'], ['full', 'native-loop'])
         self.assertEqual(report['if'], 'always()')
         step = report['steps'][0]
         self.assertEqual(step['env']['RESULT'], '${{ needs.full.result }}')
-        self.assertIn('if [ "$RESULT" != "success" ]', step['run'])
+        self.assertEqual(step['env']['NATIVE_RESULT'], '${{ needs.native-loop.result }}')
+        self.assertIn('if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]', step['run'])
 
 
     def test_native_loop_runs_the_native_config(self) -> None:
