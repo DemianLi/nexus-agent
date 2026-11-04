@@ -28,9 +28,9 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { estimateTextTokens } from './token-estimate.js';
 
 /** 外溢層 middleware 的名字。排序斷言與錯誤訊息用得到。 */
@@ -273,51 +273,58 @@ async function spill(
 }
 
 /**
+ * 外溢層的一步：往內交，結果超過預算就存檔、換成預覽。
+ *
+ * @param options - 預算與儲存。
+ * @returns 這一步。
+ */
+export function spillPolicyToolStep(options: SpillPolicyOptions): ToolCallStep {
+  return async (call, next) => {
+    const toolName = toolNameOfCall(call);
+    const result = await next();
+    if (EXEMPT_TOOLS.has(toolName)) return result;
+    if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+    const text = plainText(result.content);
+    if (text === undefined) return result;
+    try {
+      // 來源與建議檔名照 dsh `spill-policy/src/index.ts:103-106`。
+      const replaced = await spill(text, options, {
+        source: {
+          kind: 'tool',
+          toolName,
+          callId: call.callId ?? result.tool_call_id,
+          label: 'result',
+        },
+        suggestedName: `${toolName}.txt`,
+        content: text,
+      });
+      if (replaced === undefined) return result;
+      // 只換內容，其餘每一格原樣帶過去。
+      return new ToolMessage({
+        content: replaced,
+        tool_call_id: result.tool_call_id,
+        name: result.name ?? toolName,
+        id: result.id,
+        status: result.status,
+        artifact: result.artifact,
+        additional_kwargs: result.additional_kwargs,
+        response_metadata: result.response_metadata,
+      });
+    } catch (error: unknown) {
+      options.warn?.(
+        `spill-policy: ${toolName} 的結果存不下（${(error as Error).message}），保留原結果`,
+      );
+      return result;
+    }
+  };
+}
+
+/**
  * 外溢層。**每個 agent（root 與子代理）掛同一份實例**：沒有 closure 狀態，儲存本身按會話分。
  *
  * @param options - 預算與儲存。
  * @returns 一顆 `wrapToolCall` middleware。
  */
 export function createSpillPolicyMiddleware(options: SpillPolicyOptions): AgentMiddleware {
-  return createMiddleware({
-    name: SPILL_POLICY_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const toolName = resolveToolName(request);
-      const result = await handler(request);
-      if (EXEMPT_TOOLS.has(toolName)) return result;
-      if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-      const text = plainText(result.content);
-      if (text === undefined) return result;
-      try {
-        // 來源與建議檔名照 dsh `spill-policy/src/index.ts:103-106`。
-        const replaced = await spill(text, options, {
-          source: {
-            kind: 'tool',
-            toolName,
-            callId: request.toolCall.id ?? result.tool_call_id,
-            label: 'result',
-          },
-          suggestedName: `${toolName}.txt`,
-          content: text,
-        });
-        if (replaced === undefined) return result;
-        // 只換內容，其餘每一格原樣帶過去。
-        return new ToolMessage({
-          content: replaced,
-          tool_call_id: result.tool_call_id,
-          name: result.name ?? toolName,
-          id: result.id,
-          status: result.status,
-          artifact: result.artifact,
-          additional_kwargs: result.additional_kwargs,
-          response_metadata: result.response_metadata,
-        });
-      } catch (error: unknown) {
-        options.warn?.(
-          `spill-policy: ${toolName} 的結果存不下（${(error as Error).message}），保留原結果`,
-        );
-        return result;
-      }
-    },
-  }) as AgentMiddleware;
+  return createToolCallStepMiddleware(SPILL_POLICY_MIDDLEWARE_NAME, spillPolicyToolStep(options));
 }

@@ -189,3 +189,27 @@ describe('每行限長（grepMaxLineBytes）', () => {
     expect(saved[0]).not.toContain('一'.repeat(400));
   });
 });
+
+describe('沒有 tool_call.id 的呼叫', () => {
+  it('存檔的來源退到結果上的 tool_call_id', async () => {
+    const sources: unknown[] = [];
+    const middleware = createSearchOverflowMiddleware({
+      limits: { grepMaxMatches: 1, globMaxResults: 1 },
+      store: {
+        saveText: (input: { source: unknown }) => {
+          sources.push(input.source);
+          return Promise.resolve({ locator: '/saved', retrievalHint: 'read it' });
+        },
+      } as never,
+    });
+    const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
+    const backend = capSearchResults(fakeBackend([m('/a', 1), m('/a', 2)]));
+    await wrap({ toolCall: { name: 'grep', args: { pattern: 'x' } } } as never, async () => {
+      await backend.grep('x');
+      return new ToolMessage({ content: 'body', tool_call_id: 'from_result', name: 'grep' });
+    });
+    expect(sources).toEqual([
+      { kind: 'tool', toolName: 'grep', callId: 'from_result', label: 'result' },
+    ]);
+  });
+});

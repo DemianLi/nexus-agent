@@ -60,10 +60,10 @@ import { posix } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
 import type { NexusPlugin } from './plugin.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { toolRefusal } from './tool-events.js';
 import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import type { MiddleSection } from './prompt-sections.js';
@@ -375,6 +375,20 @@ export function observationKey(backend: AnyBackendProtocol, raw: string): string
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddleware {
+  return createToolCallStepMiddleware(
+    OBSERVATION_POLICY_MIDDLEWARE_NAME,
+    observationToolStep(backend),
+  );
+}
+
+/**
+ * 「先讀後改」的一步：讀完記下版本，改之前比對版本，不對就不往內交。觀測紀錄在這一步的 closure 裡，
+ * 一個 agent 一份，理由見 {@link createObservationPolicy}。
+ *
+ * @param backend - 這次組裝真正在用的那個 backend。
+ * @returns 這一步。
+ */
+export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
   // v1 / v2 兩種 backend 的 `readRaw` 回傳形狀不同；轉接一次之後統一是 `{ data } | { error }`。
   const fs = adaptBackendProtocol(backend);
   /** 鍵見 {@link observationKey}；問後端時一律用模型給的原路徑。 */
@@ -440,71 +454,68 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
     observed.set(keyOf(path), state);
   };
 
-  return createMiddleware({
-    name: OBSERVATION_POLICY_MIDDLEWARE_NAME,
+  const step: ToolCallStep = async (call, next) => {
+    const toolName = toolNameOfCall(call);
+    const path = filePathOf(call.args);
+    // 不是這三顆、或者參數根本不帶路徑（模型填壞了）→ 原樣放行，讓工具自己講。
+    if (path === undefined) return next();
+    const callId = call.callId ?? '';
 
-    wrapToolCall: async (request, handler) => {
-      const toolName = resolveToolName(request);
-      const path = filePathOf(request.toolCall.args);
-      // 不是這三顆、或者參數根本不帶路徑（模型填壞了）→ 原樣放行，讓工具自己講。
-      if (path === undefined) return handler(request);
-      const callId = request.toolCall.id ?? '';
+    if (toolName === OBSERVED_READ_TOOL) {
+      const slot: ReadVersionSlot = {};
+      const result = await currentReadVersion.run(slot, () => next());
+      // **讀完才記，而且版本記的是後端的真話不是工具的輸出**：讀一個不存在的檔會被
+      // 記成確認缺席，那正是之後受防護的新建所需要的授權。**但讀失敗時記不下「存在」**
+      // ——理由見 {@link observe}。
+      await observe(path, isErrorResult(result), slot.version);
+      return result;
+    }
 
-      if (toolName === OBSERVED_READ_TOOL) {
-        const slot: ReadVersionSlot = {};
-        const result = await currentReadVersion.run(slot, () => handler(request));
-        // **讀完才記，而且版本記的是後端的真話不是工具的輸出**：讀一個不存在的檔會被
-        // 記成確認缺席，那正是之後受防護的新建所需要的授權。**但讀失敗時記不下「存在」**
-        // ——理由見 {@link observe}。
-        await observe(path, isErrorResult(result), slot.version);
-        return result;
-      }
+    if (toolName === OBSERVED_EDIT_TOOL) {
+      const prior = observed.get(keyOf(path));
+      if (prior === undefined)
+        return refusal(
+          callId,
+          toolName,
+          NOT_OBSERVED,
+          `要編輯 "${path}" 得先讀過它——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`,
+        );
+      if (prior.kind === 'absent')
+        return refusal(callId, toolName, NOT_FOUND, `不能編輯 "${path}"：讀到的時候它不存在。`);
+      const stale = await staleness(path, prior);
+      if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
+      const result = await next();
+      await observe(path);
+      return result;
+    }
 
-      if (toolName === OBSERVED_EDIT_TOOL) {
-        const prior = observed.get(keyOf(path));
-        if (prior === undefined)
+    if (toolName === OBSERVED_WRITE_TOOL) {
+      const prior = observed.get(keyOf(path));
+      if (prior?.kind === 'present') {
+        const stale = await staleness(path, prior);
+        if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
+      } else {
+        // 未見或確認缺席 ＝ 只授權新建。現在檔在那裡，就是「覆蓋一個沒讀過的檔」——
+        // 沒讀過的那次是 NOT_OBSERVED，讀到缺席之後又冒出來的那次是有人搶先建了。
+        const now = await look(path);
+        if (now.kind === 'present')
           return refusal(
             callId,
             toolName,
-            NOT_OBSERVED,
-            `要編輯 "${path}" 得先讀過它——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`,
+            prior === undefined ? NOT_OBSERVED : STALE_VERSION,
+            prior === undefined
+              ? `"${path}" 已經存在，覆蓋它之前要先讀過——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`
+              : `"${path}" 在你讀到它不存在之後被建出來了——重新讀一次，再重試。`,
           );
-        if (prior.kind === 'absent')
-          return refusal(callId, toolName, NOT_FOUND, `不能編輯 "${path}"：讀到的時候它不存在。`);
-        const stale = await staleness(path, prior);
-        if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
-        const result = await handler(request);
-        await observe(path);
-        return result;
       }
+      const result = await next();
+      await observe(path);
+      return result;
+    }
 
-      if (toolName === OBSERVED_WRITE_TOOL) {
-        const prior = observed.get(keyOf(path));
-        if (prior?.kind === 'present') {
-          const stale = await staleness(path, prior);
-          if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
-        } else {
-          // 未見或確認缺席 ＝ 只授權新建。現在檔在那裡，就是「覆蓋一個沒讀過的檔」——
-          // 沒讀過的那次是 NOT_OBSERVED，讀到缺席之後又冒出來的那次是有人搶先建了。
-          const now = await look(path);
-          if (now.kind === 'present')
-            return refusal(
-              callId,
-              toolName,
-              prior === undefined ? NOT_OBSERVED : STALE_VERSION,
-              prior === undefined
-                ? `"${path}" 已經存在，覆蓋它之前要先讀過——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`
-                : `"${path}" 在你讀到它不存在之後被建出來了——重新讀一次，再重試。`,
-            );
-        }
-        const result = await handler(request);
-        await observe(path);
-        return result;
-      }
-
-      return handler(request);
-    },
-  }) as AgentMiddleware;
+    return next();
+  };
+  return step;
 
   /** 版本還是不是讀到的那個；是就回 `undefined`，不是就回那句要給模型看的話。 */
   async function staleness(path: string, prior: Observation): Promise<string | undefined> {

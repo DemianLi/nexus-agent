@@ -19,8 +19,8 @@ import type { AgentMiddleware } from './base-types.js';
 
 /** 一次工具呼叫：`wrapToolCall` 的請求上，一步用得到的那幾格。 */
 export interface ToolCallSite {
-  /** 模型給的 `tool_call.id`；取不到是 `''`。 */
-  readonly callId: string;
+  /** 模型給的 `tool_call.id`，原值；沒給是 `undefined`。 */
+  readonly callId: string | undefined;
   /** 模型叫的名字（`tool_call.name`）。 */
   readonly name: string;
   /** 解析後的參數：**就是對話狀態裡那一份**，不是複本，不要改。 */
@@ -31,13 +31,26 @@ export interface ToolCallSite {
   readonly state: unknown;
   /** 這次呼叫的 `configurable`：`registry.sessions.forCall({ configurable })` 與中止訊號都從這裡讀。 */
   readonly configurable: unknown;
+  /**
+   * 這次呼叫的中止訊號（`runtime.signal`），原樣讀穿，不合併、不替換。轉接層的過渡：K7c
+   * （[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）由 `@nexus/tools` 的訊號合約取代。
+   */
+  readonly signal: AbortSignal | undefined;
 }
 
 /** 一次工具呼叫落定成什麼：`ToolMessage` 或 `Command`。 */
 export type ToolCallResult = unknown;
 
-/** 往內交一層。`tool` 給了就換掉工具本體，內層看到的是換過的那一個。沒有防重入：呼叫兩次，內層就跑兩次。 */
-export type ToolCallNext = (substitute?: { readonly tool: unknown }) => Promise<ToolCallResult>;
+/** 往內交時換掉的格子。給了哪一格，內層看到的就是換過的那一格。 */
+export interface ToolCallSubstitute {
+  /** 換掉工具本體。 */
+  readonly tool?: unknown;
+  /** 換掉參數（`tool_call.args`）。 */
+  readonly args?: unknown;
+}
+
+/** 往內交一層。沒有防重入：呼叫兩次，內層就跑兩次。 */
+export type ToolCallNext = (substitute?: ToolCallSubstitute) => Promise<ToolCallResult>;
 
 /** 環繞一次工具呼叫的一步。 */
 export type ToolCallStep = (
@@ -50,26 +63,50 @@ interface WrappedRequest {
   readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
   readonly tool?: unknown;
   readonly state?: unknown;
-  readonly runtime?: { readonly configurable?: unknown };
+  readonly runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal };
 }
 
 /** 由 `wrapToolCall` 的請求造出 {@link ToolCallSite}。 */
 export function toolCallSiteOf(request: WrappedRequest): ToolCallSite {
   return {
-    callId: request.toolCall.id ?? '',
+    callId: request.toolCall.id,
     name: request.toolCall.name,
     args: request.toolCall.args,
     tool: request.tool,
     state: request.state,
     configurable: request.runtime?.configurable,
+    signal: request.runtime?.signal,
   };
+}
+
+/** 內層拿到的請求：沒有要換的就是原本那個物件。 */
+function substituted<Request extends WrappedRequest>(
+  request: Request,
+  substitute: ToolCallSubstitute | undefined,
+): Request {
+  if (substitute === undefined) return request;
+  const withTool = 'tool' in substitute ? { ...request, tool: substitute.tool } : request;
+  return 'args' in substitute
+    ? { ...withTool, toolCall: { ...request.toolCall, args: substitute.args } }
+    : withTool;
+}
+
+/**
+ * 工具名：工具本體的 `name`，取不到才用模型叫的名字（同 `containment.ts` 的 `resolveToolName`）。
+ *
+ * @param call - 這次工具呼叫。
+ * @returns 工具名。
+ */
+export function toolNameOfCall(call: Pick<ToolCallSite, 'tool' | 'name'>): string {
+  const fromTool: unknown = (call.tool as { readonly name?: unknown } | null | undefined)?.name;
+  return typeof fromTool === 'string' ? fromTool : call.name;
 }
 
 /**
  * 把一步轉成 `wrapToolCall`。
  *
  * @param step - 這一步。
- * @returns 交給 `createMiddleware({ wrapToolCall })` 的函式；沒有換工具時，內層拿到的是原本那個請求物件。
+ * @returns 交給 `createMiddleware({ wrapToolCall })` 的函式；沒有要換的時，內層拿到的是原本那個請求物件。
  */
 export function wrapToolCallWith(
   step: ToolCallStep,
@@ -83,9 +120,7 @@ export function wrapToolCallWith(
   ) =>
     Promise.resolve(
       step(toolCallSiteOf(request), (substitute) =>
-        Promise.resolve(
-          handler(substitute === undefined ? request : { ...request, tool: substitute.tool }),
-        ),
+        Promise.resolve(handler(substituted(request, substitute))),
       ),
     ) as Promise<Result>;
 }

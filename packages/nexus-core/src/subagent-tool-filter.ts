@@ -108,7 +108,7 @@ export function admissionToolStep(admission: ToolAdmission): ToolCallStep {
   return (call, next) =>
     admission.admits(call.name)
       ? next()
-      : toolRefusal(filteredToolRefusal(call.name), { callId: call.callId, name: call.name });
+      : toolRefusal(filteredToolRefusal(call.name), { callId: call.callId ?? '', name: call.name });
 }
 
 /**

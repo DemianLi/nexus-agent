@@ -62,9 +62,9 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { markToolError, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -349,46 +349,46 @@ function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): 
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createFsToolErrorsMiddleware(): AgentMiddleware {
-  return createMiddleware({
-    name: FS_TOOL_ERRORS_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
-      // （`submit_record`，#316），它的回報也要有地方落。
-      const record: CallRecord = {
-        failed: new Map(),
-        sandboxDenied: false,
-        signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
-        searchError: undefined,
-        fsError: undefined,
-        searchSkipped: 0,
-      };
-      const result = await currentCall.run(record, () => handler(request));
-      const toolName = resolveToolName(request);
-      const method = FS_TOOL_PRIMARY_METHOD[toolName];
-      if (method === undefined) return withSandboxCode(result, record);
-      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
-        return withSkippedNotice(result, toolName, record);
-      }
-      const error = record.sandboxDenied
-        ? { name: 'FsError', code: FS_SANDBOX_DENIED }
-        : record.searchError !== undefined
-          ? { name: 'SearchError', code: record.searchError }
-          : record.fsError === undefined
-            ? undefined
-            : { name: 'FsError', code: record.fsError };
-      // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
-      if (result.status === 'error' && error === undefined) return result;
-      const options = {
-        callId: result.tool_call_id,
-        name: result.name ?? resolveToolName(request),
-        ...(error === undefined ? {} : { error }),
-      };
-      // **前綴只補基座沒寫的**（#318）：`write_file`／`edit_file`／`grep` 回的是 backend 的裸錯誤，
-      // `read_file` 的 `Error: …` 與 `ls`／`glob` 的 `Error listing/finding files: …` 本來就讀得出是錯。
-      // 這是全樹唯一看文字決定前綴的地方：文字是基座寫的，我們不是它的主人。
-      return typeof result.content === 'string' && !result.content.startsWith(BASE_ERROR_WORD)
-        ? toolRefusal(result.content, options)
-        : markBaseFailure(result, options);
-    },
-  }) as AgentMiddleware;
+  return createToolCallStepMiddleware(FS_TOOL_ERRORS_MIDDLEWARE_NAME, fsToolErrorsToolStep);
 }
+
+/** 把檔案工具的失敗標成錯誤的一步：開一份記錄往內交，照記錄換結果的狀態與碼。 */
+export const fsToolErrorsToolStep: ToolCallStep = async (call, next) => {
+  // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
+  // （`submit_record`，#316），它的回報也要有地方落。
+  const record: CallRecord = {
+    failed: new Map(),
+    sandboxDenied: false,
+    signal: call.signal,
+    searchError: undefined,
+    fsError: undefined,
+    searchSkipped: 0,
+  };
+  const result = await currentCall.run(record, () => next());
+  const toolName = toolNameOfCall(call);
+  const method = FS_TOOL_PRIMARY_METHOD[toolName];
+  if (method === undefined) return withSandboxCode(result, record);
+  if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
+    return withSkippedNotice(result, toolName, record);
+  }
+  const error = record.sandboxDenied
+    ? { name: 'FsError', code: FS_SANDBOX_DENIED }
+    : record.searchError !== undefined
+      ? { name: 'SearchError', code: record.searchError }
+      : record.fsError === undefined
+        ? undefined
+        : { name: 'FsError', code: record.fsError };
+  // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
+  if (result.status === 'error' && error === undefined) return result;
+  const options = {
+    callId: result.tool_call_id,
+    name: result.name ?? toolNameOfCall(call),
+    ...(error === undefined ? {} : { error }),
+  };
+  // **前綴只補基座沒寫的**（#318）：`write_file`／`edit_file`／`grep` 回的是 backend 的裸錯誤，
+  // `read_file` 的 `Error: …` 與 `ls`／`glob` 的 `Error listing/finding files: …` 本來就讀得出是錯。
+  // 這是全樹唯一看文字決定前綴的地方：文字是基座寫的，我們不是它的主人。
+  return typeof result.content === 'string' && !result.content.startsWith(BASE_ERROR_WORD)
+    ? toolRefusal(result.content, options)
+    : markBaseFailure(result, options);
+};

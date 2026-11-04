@@ -36,9 +36,9 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { EMPTY_CONTENT_WARNING } from './read-continuation.js';
 import { SHARED_WORKSPACE_CONTENT_NOTICE } from './untrusted-content.js';
 
@@ -170,30 +170,44 @@ export function createSharedReadMarkMiddleware(
   prefix: string,
   skillSources: readonly string[] = [],
 ): AgentMiddleware {
-  return createMiddleware({
-    name: SHARED_READ_MARK_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const toolName = resolveToolName(request);
-      if (toolName !== 'read_file' && toolName !== 'grep') return handler(request);
-      const result = await handler(request);
-      if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-      const args: unknown = request.toolCall.args;
-      const mark =
-        toolName === 'read_file'
-          ? readIsMarked(args, result.content, prefix, skillSources)
-          : grepIsMarked(args, result.content, prefix, skillSources);
-      if (!mark || result.content.length === 0) return result;
-      // 只換內容；id、狀態、artifact 與兩份 kwargs 原樣帶過去，沒有名字時補上工具名。
-      return new ToolMessage({
-        content: marked(result.content),
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? toolName,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
-    },
-  }) as AgentMiddleware;
+  return createToolCallStepMiddleware(
+    SHARED_READ_MARK_MIDDLEWARE_NAME,
+    sharedReadMarkToolStep(prefix, skillSources),
+  );
+}
+
+/**
+ * 替共用區讀出來的內容加前綴的一步：`read_file`／`grep` 往內交，結果讀自共用區就標。
+ *
+ * @param prefix - 這條 thread 的共用區前綴。
+ * @param skillSources - 這條 thread 的技能來源，底下的不標。
+ * @returns 這一步。
+ */
+export function sharedReadMarkToolStep(
+  prefix: string,
+  skillSources: readonly string[] = [],
+): ToolCallStep {
+  return async (call, next) => {
+    const toolName = toolNameOfCall(call);
+    if (toolName !== 'read_file' && toolName !== 'grep') return next();
+    const result = await next();
+    if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+    const args: unknown = call.args;
+    const mark =
+      toolName === 'read_file'
+        ? readIsMarked(args, result.content, prefix, skillSources)
+        : grepIsMarked(args, result.content, prefix, skillSources);
+    if (!mark || result.content.length === 0) return result;
+    // 只換內容；id、狀態、artifact 與兩份 kwargs 原樣帶過去，沒有名字時補上工具名。
+    return new ToolMessage({
+      content: marked(result.content),
+      tool_call_id: result.tool_call_id,
+      name: result.name ?? toolName,
+      id: result.id,
+      status: result.status,
+      artifact: result.artifact,
+      additional_kwargs: result.additional_kwargs,
+      response_metadata: result.response_metadata,
+    });
+  };
 }

@@ -46,10 +46,10 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { INVALID_TOOL_OUTPUT, toolRefusal } from './tool-events.js';
 
 /** 校驗 middleware 的名字。 */
@@ -141,32 +141,42 @@ function rejectOutput(feedback: string, toolCallId: string, toolName: string): T
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): AgentMiddleware {
-  return createMiddleware({
-    name: OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const result = await handler(request);
-      const schema = schemaOf(request.tool);
-      if (schema === undefined) return result;
-      const toolName = resolveToolName(request);
-      const toolCallId = request.toolCall.id ?? '';
-      try {
-        if (ToolMessage.isInstance(result)) {
-          if (result.status === 'error') return result;
-          const verdict = verify(toolName, result.content, schema);
-          return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
-        }
-        if (isCommand(result)) {
-          // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
-          // 就是 `Command`，ToolMessage 埋在 `update.messages` 裡。基座自己的
-          // `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
-          return validateCommand(result, toolName, toolCallId, schema);
-        }
-        return result;
-      } catch (error) {
-        return reject(formatValidatorFailure(toolName, error), toolCallId, toolName);
+  return createToolCallStepMiddleware(
+    OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+    outputSchemaToolStep(schemaOf),
+  );
+}
+
+/**
+ * 驗工具輸出的一步：往內交，工具宣告了 schema 就驗結果，不通過換成錯誤結果。
+ *
+ * @param schemaOf - 工具實例 → 它宣告的 schema。
+ * @returns 這一步。
+ */
+export function outputSchemaToolStep(schemaOf: OutputSchemaLookup): ToolCallStep {
+  return async (call, next) => {
+    const result = await next();
+    const schema = schemaOf(call.tool);
+    if (schema === undefined) return result;
+    const toolName = toolNameOfCall(call);
+    const toolCallId = call.callId ?? '';
+    try {
+      if (ToolMessage.isInstance(result)) {
+        if (result.status === 'error') return result;
+        const verdict = verify(toolName, result.content, schema);
+        return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
       }
-    },
-  }) as AgentMiddleware;
+      if (isCommand(result)) {
+        // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
+        // 就是 `Command`，ToolMessage 埋在 `update.messages` 裡。基座自己的
+        // `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
+        return validateCommand(result, toolName, toolCallId, schema);
+      }
+      return result;
+    } catch (error) {
+      return reject(formatValidatorFailure(toolName, error), toolCallId, toolName);
+    }
+  };
 }
 
 /**

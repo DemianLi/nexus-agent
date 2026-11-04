@@ -52,11 +52,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
 import type { SharedGrepMark } from './shared-read-mark.js';
 import type { SpillRef, SpillStore } from './spill-policy.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 
 /** 這一層 middleware 的名字。 */
 export const SEARCH_OVERFLOW_MIDDLEWARE_NAME = 'nexusSearchOverflow';
@@ -392,73 +392,86 @@ function plainText(content: ToolMessage['content']): string | undefined {
  * @returns 一顆 `wrapToolCall` middleware。
  */
 export function createSearchOverflowMiddleware(options: SearchOverflowOptions): AgentMiddleware {
+  return createToolCallStepMiddleware(
+    SEARCH_OVERFLOW_MIDDLEWARE_NAME,
+    searchOverflowToolStep(options),
+  );
+}
+
+/**
+ * 搜尋結果筆數上限的一步：那三顆工具在槽裡往內交，超過上限就存完整清單、結尾講明。
+ *
+ * @param options - 上限與存檔服務。
+ * @returns 這一步。
+ */
+export function searchOverflowToolStep(options: SearchOverflowOptions): ToolCallStep {
   const limitOf = (tool: string): number | undefined =>
     tool === 'grep'
       ? options.limits.grepMaxMatches
       : tool === 'glob' || tool === 'ls'
         ? options.limits.globMaxResults
         : undefined;
-  return createMiddleware({
-    name: SEARCH_OVERFLOW_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const toolName = resolveToolName(request);
-      const limit = limitOf(toolName);
-      if (limit === undefined) return handler(request);
-      const args = request.toolCall.args;
-      const slot: SearchSlot = {
-        tool: toolName as SearchTool,
-        args: typeof args === 'object' && args !== null ? args : {},
-        limit,
-        maxLineBytes: toolName === 'grep' ? options.limits.grepMaxLineBytes : undefined,
-        taken: false,
-      };
-      const result = await currentSlot.run(slot, () => handler(request));
-      const overflow = slot.overflow;
-      if (overflow === undefined) return result;
-      if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-      const inline = plainText(result.content);
-      if (inline === undefined) return result;
-      const full = fullText(overflow);
-      // 前綴層只看得到行內那一份，完整清單在這裡判；判中了兩份都標，行內已經標過的不重複。
-      const shared =
-        toolName === 'grep' && options.sharedMark?.isMarked(slot.args, full) === true
-          ? options.sharedMark
-          : undefined;
-      const text = shared?.mark(inline) ?? inline;
-      let ref: SpillRef | undefined;
-      if (options.store === undefined) {
-        options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
-      } else {
-        try {
-          // 來源與建議檔名照 dsh `tool-fs-search/src/search-core.ts:399-404`、`grep.ts:354`、`glob.ts:361`。
-          ref = await options.store.saveText({
-            source: {
-              kind: 'tool',
-              toolName,
-              callId: request.toolCall.id ?? result.tool_call_id,
-              label: 'result',
-            },
-            suggestedName: `${toolName}-results.txt`,
-            content: shared?.mark(full) ?? full,
-          });
-        } catch (error: unknown) {
-          // 照 dsh：存不下不讓搜尋失敗，也不藏起行內那份，結尾講明沒存到。
-          options.warn?.(
-            `search-overflow: ${toolName} 的完整結果存不下（${(error as Error).message}），只留前段`,
-          );
-        }
+  return async (call, next) => {
+    const toolName = toolNameOfCall(call);
+    const limit = limitOf(toolName);
+    if (limit === undefined) return next();
+    const args = call.args;
+    const slot: SearchSlot = {
+      tool: toolName as SearchTool,
+      args:
+        typeof args === 'object' && args !== null
+          ? (args as Readonly<Record<string, unknown>>)
+          : {},
+      limit,
+      maxLineBytes: toolName === 'grep' ? options.limits.grepMaxLineBytes : undefined,
+      taken: false,
+    };
+    const result = await currentSlot.run(slot, () => next());
+    const overflow = slot.overflow;
+    if (overflow === undefined) return result;
+    if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+    const inline = plainText(result.content);
+    if (inline === undefined) return result;
+    const full = fullText(overflow);
+    // 前綴層只看得到行內那一份，完整清單在這裡判；判中了兩份都標，行內已經標過的不重複。
+    const shared =
+      toolName === 'grep' && options.sharedMark?.isMarked(slot.args, full) === true
+        ? options.sharedMark
+        : undefined;
+    const text = shared?.mark(inline) ?? inline;
+    let ref: SpillRef | undefined;
+    if (options.store === undefined) {
+      options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
+    } else {
+      try {
+        // 來源與建議檔名照 dsh `tool-fs-search/src/search-core.ts:399-404`、`grep.ts:354`、`glob.ts:361`。
+        ref = await options.store.saveText({
+          source: {
+            kind: 'tool',
+            toolName,
+            callId: call.callId ?? result.tool_call_id,
+            label: 'result',
+          },
+          suggestedName: `${toolName}-results.txt`,
+          content: shared?.mark(full) ?? full,
+        });
+      } catch (error: unknown) {
+        // 照 dsh：存不下不讓搜尋失敗，也不藏起行內那份，結尾講明沒存到。
+        options.warn?.(
+          `search-overflow: ${toolName} 的完整結果存不下（${(error as Error).message}），只留前段`,
+        );
       }
-      // 只換內容，其餘每一格原樣帶過去。
-      return new ToolMessage({
-        content: decorate(text, overflow, ref),
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? toolName,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
-    },
-  }) as AgentMiddleware;
+    }
+    // 只換內容，其餘每一格原樣帶過去。
+    return new ToolMessage({
+      content: decorate(text, overflow, ref),
+      tool_call_id: result.tool_call_id,
+      name: result.name ?? toolName,
+      id: result.id,
+      status: result.status,
+      artifact: result.artifact,
+      additional_kwargs: result.additional_kwargs,
+      response_metadata: result.response_metadata,
+    });
+  };
 }

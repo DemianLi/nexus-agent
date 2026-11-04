@@ -222,7 +222,13 @@ export {
   createToolPostExecuteMiddleware,
   createToolPreExecuteMiddleware,
 } from './tool-pipeline.js';
-export type { ToolCallNext, ToolCallResult, ToolCallSite, ToolCallStep } from './tool-call-step.js';
+export type {
+  ToolCallNext,
+  ToolCallResult,
+  ToolCallSite,
+  ToolCallStep,
+  ToolCallSubstitute,
+} from './tool-call-step.js';
 export { createToolCallStepMiddleware, wrapToolCallWith } from './tool-call-step.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
