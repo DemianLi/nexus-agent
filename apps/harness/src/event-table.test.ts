@@ -87,8 +87,13 @@ describe('真實的樹', () => {
     ).toEqual([]);
   });
 
-  it('S1a：事件表上正好是工具四事件（再多一個，要在這裡改名字並說它的生產者是誰）', () => {
+  // 再多一個，要在這裡改名字並說它的生產者是誰。agent 四事件的生產者是 `native-loop/agent.ts`（#2356）。
+  it('事件表上正好是 native loop 的 agent 四事件與工具四事件', () => {
     expect(scanEventTableTree(REPO_ROOT).map((event) => event.name)).toEqual([
+      'agent/pre-step',
+      'agent/request-error',
+      'agent/turn-stopping',
+      'llm/stream',
       'tools/pre-execute',
       'tools/execute',
       'tools/post-execute',
