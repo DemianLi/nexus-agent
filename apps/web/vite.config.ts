@@ -34,6 +34,8 @@ export function rejectStandaloneServe(): Plugin {
 }
 
 export default defineConfig({
+  // 資源網址寫成相對的（`./assets/…`），從 `index.html` 所在的目錄算：掛在反向代理的子路徑底下也抓得到（#2426）。
+  base: './',
   // `@nexus/*` 經根 `tsconfig.base.json` 的 paths 解析到 `src`，為什麼讀根 base 見 `vitest.config.ts` 同一行（#1633）。
   plugins: [
     rejectStandaloneServe(),

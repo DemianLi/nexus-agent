@@ -58,11 +58,13 @@ export const NEW_CONVERSATION_LABEL = '新對話';
 export const CONTEXT_LABEL_PREFIX = '目前選取：';
 
 /**
- * 嵌入版打的 agent 位置：設定裡的來源加上 `/embed`（#2382）。thread 那一族的請求與 `/embed/threads/mux` 都從這裡長出來，server 照這個前綴套
+ * 嵌入版打的 agent 位置：agent 的位置加上 `/embed`（#2382）。thread 那一族的請求與 `/embed/threads/mux` 都從這裡長出來，server 照這個前綴套
  * 嵌入版的設定檔（#2367）。
+ *
+ * @param scriptUrl - 從哪個網址算 agent 的位置。預設是這支模組自己的網址，建置後就是 `embed.js`：元件跑在宿主頁上，`document.baseURI` 是宿主頁的（#2426）。
  */
-export function embedBaseUrl(): string {
-  return `${agentBaseUrl().replace(/\/+$/u, '')}${EMBED_PATH_PREFIX}`;
+export function embedBaseUrl(scriptUrl: string = import.meta.url): string {
+  return `${agentBaseUrl(scriptUrl).replace(/\/+$/u, '')}${EMBED_PATH_PREFIX}`;
 }
 
 const NO_NAMES: ReadonlyMap<string, string> = new Map();

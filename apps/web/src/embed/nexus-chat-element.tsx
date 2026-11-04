@@ -14,18 +14,19 @@
  * @module
  */
 import type { HostToolDeclaration, WireClient } from '@nexus/wire';
+import { EMBED_PATH_PREFIX } from '@nexus/wire';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
 
-import { createAgentClient } from '@/lib/agent';
+import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { PortalContainerContext } from '@/lib/portal-container';
 import { systemDarkQuery } from '@/lib/theme';
 
 import { SHADOW_CONTAINER_NAME, SHADOW_ROOT_CLASS } from '../../embed-shadow-css';
 import { parseContext } from './context';
 import type { NexusChatContext } from './context';
-import { EmbeddedChat, embedBaseUrl } from './embedded-chat';
+import { EmbeddedChat } from './embedded-chat';
 import { HOST_TOOL_EVENT, parseHostTools } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { themeOverrides } from './theme-tokens';
@@ -46,8 +47,10 @@ export interface NexusChatStyles {
 
 export interface DefineOptions {
   readonly styles: NexusChatStyles;
-  /** 注入用；省略就是 `embedBaseUrl()`（agent 來源加 `/embed`）。每個元素一個。 */
+  /** 注入用；省略就是打 `scriptUrl` 所在目錄底下 `/embed` 的 client（#2382、#2426）。每個元素一個。 */
   readonly createClient?: () => WireClient;
+  /** 預設 client 從哪個網址算 agent 的位置；省略是這支模組自己的網址，建置後就是 `embed.js`。測試裡的模組網址是 `file:`，要另外給。 */
+  readonly scriptUrl?: string;
 }
 
 /** 元素自己的版面：填滿父容器，斷點跟著 `.nexus-app` 的寬度走。 */
@@ -62,7 +65,9 @@ function parseTheme(value: string | null): NexusChatTheme {
 /** 註冊 `<nexus-chat>`；已經註冊過就什麼都不做（同一頁載入兩次 `embed.js`）。 */
 export function defineNexusChat({
   styles,
-  createClient = () => createAgentClient({ baseUrl: embedBaseUrl() }),
+  scriptUrl = import.meta.url,
+  createClient = () =>
+    createAgentClient({ baseUrl: agentBaseUrl(scriptUrl), routePrefix: EMBED_PATH_PREFIX }),
 }: DefineOptions): void {
   if (customElements.get(ELEMENT_NAME) !== undefined) return;
 
