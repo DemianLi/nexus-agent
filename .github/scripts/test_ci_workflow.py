@@ -350,12 +350,22 @@ class PostMerge(unittest.TestCase):
 
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
-        self.assertEqual(report['needs'], 'full')
+        self.assertEqual(report['needs'], ['full', 'native-loop'])
         self.assertEqual(report['if'], 'always()')
         step = report['steps'][0]
         self.assertEqual(step['env']['RESULT'], '${{ needs.full.result }}')
-        self.assertIn('if [ "$RESULT" != "success" ]', step['run'])
+        self.assertEqual(step['env']['NATIVE_RESULT'], '${{ needs.native-loop.result }}')
+        self.assertIn('if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]', step['run'])
 
+
+    def test_native_loop_runs_the_native_config(self) -> None:
+        """native agent loop 的全套（#2356）只在這裡跑：兩片都跑 native 的設定，不靠完整一輪。"""
+        job = self.wf['jobs']['native-loop']
+        self.assertNotIn('needs', job)
+        self.assertEqual(job['strategy']['matrix']['shard'], [1, 2])
+        run = job['steps'][-1]['run']
+        self.assertIn('--config vitest.native.config.ts', run)
+        self.assertIn('--shard="${{ matrix.shard }}/2"', run)
 
 class LightMode(unittest.TestCase):
     """輕的模式（#2090）：擋合併所需的檢查都在 plan 裡跑，中間那一段 skipped。"""

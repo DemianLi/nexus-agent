@@ -5,15 +5,23 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
+import {
+  AIMessage,
+  BaseMessage,
+  HumanMessage,
+  RemoveMessage,
+  ToolMessage,
+} from '@langchain/core/messages';
+import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
+import { Command, MemorySaver } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import {
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SESSION_EVENT_MAX_DEPTH,
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
+  TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import type { AgentLoopKind, PluginEntry, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -459,54 +467,13 @@ describe('native 不支援的跳轉', () => {
   });
 });
 
-/**
- * 呼叫端的 `config.signal` 在工具鏈中途中止：這一步當場拋 `Abort`、不等工具（同 LangGraph `PregelRunner` 的 `abortPromise`）。
- * 工具拿到的是已中止的 signal，LangChain 的 `tool()` 這時永不 resolve，等它就是懸著。
- */
-describe('native 下呼叫端中止', () => {
-  it('閘門裡中止：這一輪拋 Abort，不懸著', async () => {
-    const controller = new AbortController();
-    const plugin: PluginEntry = {
-      plugin: {
-        name: 'native-parity-caller-abort',
-        apply(registry) {
-          registry.approvals.gate(async (exec, next) => {
-            if (exec.name === 'echo') controller.abort();
-            return next();
-          });
-        },
-      },
-    };
-    const built = await createNexusAgent({
-      model: new ScriptedChatModel({
-        turns: [
-          { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
-          { content: '不該走到。' },
-        ],
-      }),
-      checkpointer: new MemorySaver(),
-      plugins: [toolsPlugin, plugin],
-      agentLoop: 'native',
-    });
-    try {
-      await expect(
-        built.agent.invoke(toAgentInvocation('跑。'), {
-          configurable: { thread_id: 'native-caller-abort' },
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow('Abort');
-    } finally {
-      await built.dispose();
-    }
-  });
-});
-
-/** 組一個 agent、跑一輪，回 `invoke` 的結果（或拋的錯）與跑完之後的 `getState`。 */
+/** 組一個 agent、跑一輪，回 `invoke` 的結果（或拋的錯，`name: message`）與跑完之後的 `getState`。 */
 async function invokeOnce(
   loop: AgentLoopKind,
   turns: readonly ScriptedTurn[],
   plugins: readonly PluginEntry[],
   signal?: AbortSignal,
+  input: Readonly<Record<string, unknown>> = { ...toAgentInvocation('跑。') },
 ) {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
@@ -520,12 +487,12 @@ async function invokeOnce(
     let output: Record<string, unknown> | undefined;
     let failure: string | undefined;
     try {
-      output = (await built.agent.invoke(toAgentInvocation('跑。'), {
+      output = (await built.agent.invoke(input as never, {
         ...config,
         ...(signal !== undefined && { signal }),
       })) as Record<string, unknown>;
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     }
     const state = (await built.agent.getState(config)) as { values: Record<string, unknown> };
     return { output, failure, values: state.values };
@@ -603,50 +570,728 @@ describe('native 的 state 對照 LangGraph', () => {
     expect(graph.values['marker']).toBe('寫了');
     expect(native.values['marker']).toBe('寫了');
   });
+});
 
-  /**
-   * 已知差異（時序）：LangGraph 在模型節點收尾時就看到中止，拋 `This operation was aborted`，算在模型那一步；native 的模型那一步
-   * 不再看 signal，到工具那一步起跑前才拋 `Abort`（同 LangGraph `PregelRunner` 起跑前那一檢）。兩邊工具都不進閘門。
-   */
-  it('呼叫端在模型之後中止：這一輪拋，工具一次都不進閘門', async () => {
-    const run = async (loop: AgentLoopKind) => {
-      const controller = new AbortController();
-      let gated = 0;
-      const plugin: PluginEntry = {
-        plugin: {
-          name: 'native-parity-after-model-abort',
-          apply(registry) {
-            registry.middleware.use(
-              createMiddleware({
-                name: 'nativeParityAfterModelAbort',
-                wrapModelCall: async (request, handler) => {
-                  const response = await handler(request);
-                  controller.abort();
-                  return response;
-                },
-              }),
-            );
-            registry.approvals.gate(async (_exec, next) => {
-              gated++;
-              return next();
-            });
-          },
-        },
-      };
-      const result = await invokeOnce(
-        loop,
-        [
-          { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
-          { content: '不該走到。' },
-        ],
-        [toolsPlugin, plugin],
-        controller.signal,
+/** 訊息換成「型別:內容」，物件的鍵排序，比得出寫了什麼、不比物件身分。 */
+function shapeOf(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(shapeOf);
+  if (BaseMessage.isInstance(value)) {
+    return `${value.getType()}:${typeof value.content === 'string' ? value.content : JSON.stringify(value.content)}`;
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, shapeOf(entry)]),
+    );
+  }
+  return value;
+}
+
+/** 回 `Command` 的工具：寫 `marker` 與它自己的那則結果，同 task、todo、goal 那幾顆工具的回法。 */
+const commandPlugin: PluginEntry = {
+  plugin: {
+    name: 'native-parity-command',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input, config) =>
+            new Command({
+              update: {
+                marker: '命令寫的',
+                messages: [
+                  new ToolMessage({
+                    content: '命令的結果',
+                    tool_call_id: (config as { toolCall?: { id?: string } }).toolCall?.id ?? '',
+                    name: 'command',
+                  }),
+                ],
+              },
+            }),
+          { name: 'command', description: '回 Command。', schema: z.object({}) },
+        ),
       );
-      return { failure: result.failure, gated };
+    },
+  },
+};
+
+/** 三種 hook：`beforeAgent` 不寫，`beforeModel` 插一則訊息（同重複提醒），`afterAgent` 寫 `marker`。 */
+const hookWritesPlugin: PluginEntry = {
+  plugin: {
+    name: 'native-parity-hook-writes',
+    apply(registry) {
+      registry.middleware.use(
+        createMiddleware({
+          name: 'nativeParityHookWrites',
+          beforeAgent: () => undefined,
+          beforeModel: () => ({ messages: [new HumanMessage('提醒')] }),
+          afterAgent: () => ({ marker: '收尾' }) as never,
+        }),
+      );
+    },
+  },
+};
+
+/**
+ * 回它的 config 帶了哪幾格只給 run 的選項。漏下去的話，工具裡再叫一張圖（`task` 叫子代理）會照呼叫端的 `streamMode` 回一串
+ * chunk 而不是 state。
+ */
+const runOptionsPlugin: PluginEntry = {
+  plugin: {
+    name: 'native-parity-run-options',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input, config) =>
+            ['streamMode', 'runId', 'debug', 'outputKeys', 'subgraphs']
+              .filter((key) => (config as Record<string, unknown>)[key] !== undefined)
+              .join(',') || '沒有',
+          { name: 'runOptions', description: '回 config 裡的 run 選項。', schema: z.object({}) },
+        ),
+      );
+    },
+  },
+};
+
+/** CLI 的 `runTurn`（`cli.ts`）照 `stream()` 的 updates 印過程：每一筆 `[節點, 寫入]`。 */
+async function streamUpdates(
+  loop: AgentLoopKind,
+  turns: readonly ScriptedTurn[],
+  plugins: readonly PluginEntry[],
+) {
+  const built = await createNexusAgent({
+    model: new ScriptedChatModel({ turns }),
+    checkpointer: new MemorySaver(),
+    plugins: [toolsPlugin, markerPlugin(), ...plugins],
+    agentLoop: loop,
+  });
+  const detach = built.attachSession(new SessionRegistry(THREAD));
+  try {
+    const updates: [string, unknown][] = [];
+    for await (const [mode, payload] of await built.agent.stream(toAgentInvocation('跑。'), {
+      streamMode: ['updates', 'values'],
+      configurable: { thread_id: THREAD },
+    })) {
+      if (mode !== 'updates') continue;
+      for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
+        updates.push([node, shapeOf(update)]);
+      }
+    }
+    return updates;
+  } finally {
+    detach();
+    await built.dispose();
+  }
+}
+
+describe('native 的 stream() 對照 LangGraph', () => {
+  const scenarios: [string, ScriptedTurn[], PluginEntry[]][] = [
+    ['只有文字', [{ content: '你好。' }], []],
+    [
+      '平行兩顆工具',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'echo', args: { text: '一' } },
+            { name: 'echo', args: { text: '二' } },
+          ],
+        },
+        { content: '好了。' },
+      ],
+      [],
+    ],
+    [
+      '回 Command 的工具與一般工具同一步',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'command', args: {} },
+            { name: 'echo', args: { text: '二' } },
+          ],
+        },
+        { content: '好了。' },
+      ],
+      [commandPlugin],
+    ],
+    ['hook 寫了東西', [{ content: '好了。' }], [hookWritesPlugin]],
+    [
+      '工具讀得到的 config 不帶呼叫端的 streamMode',
+      [{ content: '', toolCalls: [{ name: 'runOptions', args: {} }] }, { content: '好了。' }],
+      [runOptionsPlugin],
+    ],
+  ];
+  it.each(scenarios)('%s：updates 逐筆相同', async (_label, turns, plugins) => {
+    const graph = await streamUpdates('langgraph', turns, plugins);
+    const native = await streamUpdates('native', turns, plugins);
+    // hook 節點在 LangGraph 下真的吐了 updates，下面的相等才分得出 native 有沒有吐。
+    expect(graph.some(([node]) => String(node).endsWith('.before_model'))).toBe(true);
+    expect(native).toEqual(graph);
+  });
+});
+
+/**
+ * 記下沒有 parent 的 run：tracer（LangSmith）要等 root run 收尾才送出整串，模型與工具的 run 要掛在它底下。
+ */
+class RootRunRecorder extends BaseCallbackHandler {
+  name = 'native-parity-root-runs';
+  readonly roots: unknown[] = [];
+  readonly #rootIds = new Set<string>();
+
+  override handleChainStart(
+    _chain: unknown,
+    _inputs: unknown,
+    runId: string,
+    parentRunId?: string,
+    _tags?: string[],
+    _metadata?: Record<string, unknown>,
+    _runType?: string,
+    runName?: string,
+  ): void {
+    if (parentRunId !== undefined) return;
+    this.#rootIds.add(runId);
+    this.roots.push(['chain', runName]);
+  }
+
+  override handleChainEnd(outputs: Record<string, unknown>, runId: string): void {
+    if (this.#rootIds.has(runId)) this.roots.push(['end', Object.keys(outputs).sort()]);
+  }
+
+  override handleChatModelStart(
+    _llm: unknown,
+    _messages: unknown,
+    _runId: string,
+    parentRunId?: string,
+  ): void {
+    if (parentRunId === undefined) this.roots.push(['model']);
+  }
+
+  override handleToolStart(
+    _tool: unknown,
+    _input: string,
+    _runId: string,
+    parentRunId?: string,
+  ): void {
+    if (parentRunId === undefined) this.roots.push(['tool']);
+  }
+}
+
+describe('native 的 stream() 的 streamMode，對照 LangGraph', () => {
+  const turns: ScriptedTurn[] = [
+    { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+    { content: '好。' },
+  ];
+  it.each([['updates'], [undefined]] as const)(
+    'streamMode 是 %s：吐的是內容本身，不是 [mode, 內容]',
+    async (streamMode) => {
+      const run = async (loop: AgentLoopKind) => {
+        const built = await createNexusAgent({
+          model: new ScriptedChatModel({ turns }),
+          checkpointer: new MemorySaver(),
+          plugins: [toolsPlugin, markerPlugin()],
+          agentLoop: loop,
+        });
+        try {
+          const chunks: unknown[] = [];
+          for await (const chunk of await built.agent.stream(toAgentInvocation('跑。'), {
+            configurable: { thread_id: THREAD },
+            ...(streamMode !== undefined && { streamMode }),
+          })) {
+            chunks.push(Object.keys(chunk as object));
+          }
+          return chunks;
+        } finally {
+          await built.dispose();
+        }
+      };
+      const graph = await run('langgraph');
+      const native = await run('native');
+      expect(graph).toContainEqual(['tools']);
+      expect(native).toEqual(graph);
+    },
+  );
+});
+
+describe('native 的 callbacks 對照 LangGraph', () => {
+  it('一次 run 一顆 root chain run，模型與工具的 run 都掛在它底下', async () => {
+    const run = async (loop: AgentLoopKind) => {
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({
+          turns: [
+            { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+            { content: '好。' },
+          ],
+        }),
+        checkpointer: new MemorySaver(),
+        plugins: [toolsPlugin, markerPlugin()],
+        agentLoop: loop,
+      });
+      try {
+        const recorder = new RootRunRecorder();
+        await built.agent.invoke(toAgentInvocation('跑。'), {
+          configurable: { thread_id: THREAD },
+          callbacks: [recorder],
+        });
+        return recorder.roots;
+      } finally {
+        await built.dispose();
+      }
     };
     const graph = await run('langgraph');
     const native = await run('native');
-    expect(graph.gated).toBe(0);
-    expect(native).toEqual({ failure: 'Abort', gated: 0 });
+    expect(graph[0]).toEqual(['chain', 'LangGraph']);
+    expect(native).toEqual(graph);
+  });
+});
+
+/**
+ * 一顆在 `where` 指的地方中止呼叫端 signal 的 middleware（加上一顆中止的工具與閘門）。`wrapModelCall` 先經 `__pregel_send` 寫
+ * `marker`，比得出中止的模型節點送出的寫入有沒有套；工具本體跑一次往 `ran` 記一筆。
+ */
+function abortAt(where: string, controller: AbortController, ran: string[] = []): PluginEntry {
+  const abort = (): void => controller.abort();
+  return {
+    plugin: {
+      name: 'native-parity-abort-at',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              ran.push('aborts');
+              if (where === 'tool') abort();
+              return '做完了';
+            },
+            { name: 'aborts', description: '本體裡中止。', schema: z.object({}) },
+          ),
+        );
+        registry.approvals.gate(async (_exec, next) => {
+          if (where === 'gate') abort();
+          return next();
+        });
+        registry.middleware.use(
+          createMiddleware({
+            name: 'nativeParityAbortAt',
+            beforeModel: () => {
+              if (where === 'beforeModel') abort();
+              return undefined;
+            },
+            wrapModelCall: async (request, handler) => {
+              (
+                request.runtime as {
+                  configurable?: { __pregel_send?: (w: [string, unknown][]) => void };
+                }
+              ).configurable?.__pregel_send?.([['marker', '模型節點寫的']]);
+              if (where === 'before handler') abort();
+              const response = await handler(request);
+              if (where === 'after handler') abort();
+              return response;
+            },
+            afterAgent: () => {
+              if (where === 'afterAgent') abort();
+              return undefined;
+            },
+          }),
+        );
+      },
+    },
+  };
+}
+
+/**
+ * 呼叫端的 `config.signal` 中止：拋的錯（名字與訊息）與留在 state 裡的訊息，兩個 loop 一樣。LangGraph 的節點看到中止時拋
+ * signal 的 reason（`AbortError`），那個節點的寫入不套；已經過了閘門的工具本體照跑（被放掉，沒人等它）。
+ */
+describe('native 下呼叫端中止，對照 LangGraph', () => {
+  const textOnly: ScriptedTurn[] = [{ content: '你好。' }];
+  const withTool: ScriptedTurn[] = [
+    { content: '', toolCalls: [{ name: 'aborts', args: {} }] },
+    { content: '不該走到。' },
+  ];
+  const cases: [string, ScriptedTurn[]][] = [
+    ['呼叫前', textOnly],
+    ['beforeModel', textOnly],
+    ['before handler', textOnly],
+    ['after handler', textOnly],
+    ['afterAgent', textOnly],
+    ['after handler', withTool],
+    ['gate', withTool],
+    ['tool', withTool],
+  ];
+  it.each(cases)('中止在 %s', async (where, turns) => {
+    const run = async (loop: AgentLoopKind) => {
+      const controller = new AbortController();
+      if (where === '呼叫前') controller.abort();
+      const ran: string[] = [];
+      const result = await invokeOnce(
+        loop,
+        turns,
+        [markerPlugin(), abortAt(where, controller, ran)],
+        controller.signal,
+      );
+      return {
+        failure: result.failure,
+        messages: shapeOf(result.values['messages']),
+        marker: result.values['marker'],
+        ran,
+      };
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.failure).toBe('AbortError: This operation was aborted');
+    expect(native).toEqual(graph);
+  });
+});
+
+describe('native 的輸入與預設值，對照 LangGraph', () => {
+  /** 宣告 `bag`（預設 `[]`）的 middleware，`beforeModel` 原地往裡推一格，順手記下 hook 讀得到的鍵。 */
+  const bagPlugin = (seen: string[][]): PluginEntry => ({
+    plugin: {
+      name: 'native-parity-bag',
+      apply(registry) {
+        registry.middleware.use(
+          createMiddleware({
+            name: 'nativeParityBag',
+            stateSchema: z.object({ bag: z.array(z.string()).default([]) }),
+            beforeModel: (state) => {
+              seen.push(Object.keys(state).sort());
+              state.bag.push('推了');
+              return undefined;
+            },
+          }),
+        );
+      },
+    },
+  });
+
+  it('輸入只套宣告過的公開鍵', async () => {
+    const input = { ...toAgentInvocation('跑。'), marker: '輸入帶的', _given: '私的', zzz: 1 };
+    const turns: ScriptedTurn[] = [{ content: '好。' }];
+    const pick = (values: Record<string, unknown>) => ({
+      marker: values['marker'],
+      zzz: values['zzz'],
+    });
+    // 私有鍵不出現在結果裡（`outputOf`），只能在第一顆 hook 裡看它有沒有進 state。
+    const run = async (loop: AgentLoopKind) => {
+      const seen: unknown[] = [];
+      const given: PluginEntry = {
+        plugin: {
+          name: 'native-parity-given',
+          apply(registry) {
+            registry.middleware.use(
+              createMiddleware({
+                name: 'nativeParityGiven',
+                stateSchema: z.object({ _given: z.string().optional() }),
+                beforeAgent: (state) => {
+                  seen.push(state._given);
+                  return undefined;
+                },
+              }),
+            );
+          },
+        },
+      };
+      const result = await invokeOnce(loop, turns, [markerPlugin(), given], undefined, input);
+      return { values: pick(result.values), seen };
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.values.marker).toBe('輸入帶的');
+    expect(graph.seen).toEqual([undefined]);
+    expect(native).toEqual(graph);
+  });
+
+  it('hook 只讀得到 messages 與自己宣告的鍵；預設值每條 thread 各一份', async () => {
+    const run = async (loop: AgentLoopKind) => {
+      const seen: string[][] = [];
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({ turns: [{ content: '一。' }, { content: '二。' }] }),
+        checkpointer: new MemorySaver(),
+        plugins: [markerPlugin(), bagPlugin(seen)],
+        agentLoop: loop,
+      });
+      try {
+        const bags: unknown[] = [];
+        for (const thread of ['甲', '乙']) {
+          const config = { configurable: { thread_id: thread } };
+          await built.agent.invoke(toAgentInvocation('跑。'), config);
+          bags.push(
+            ((await built.agent.getState(config)) as { values: { bag?: unknown } }).values.bag,
+          );
+        }
+        return { seen, bags };
+      } finally {
+        await built.dispose();
+      }
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.bags).toEqual([['推了'], ['推了']]);
+    expect(native).toEqual(graph);
+  });
+
+  it('寫進沒有宣告的鍵：Command 與 hook 寫的都不進 state', async () => {
+    const undeclared: PluginEntry = {
+      plugin: {
+        name: 'native-parity-undeclared',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              (_input, config) =>
+                new Command({
+                  update: {
+                    undeclared: '命令寫的',
+                    messages: [
+                      new ToolMessage({
+                        content: '命令的結果',
+                        tool_call_id: (config as { toolCall?: { id?: string } }).toolCall?.id ?? '',
+                        name: 'undeclared',
+                      }),
+                    ],
+                  },
+                }),
+              { name: 'undeclared', description: '寫沒宣告的鍵。', schema: z.object({}) },
+            ),
+          );
+          registry.middleware.use(
+            createMiddleware({
+              name: 'nativeParityUndeclared',
+              afterAgent: () => ({ hookUndeclared: 'hook 寫的' }) as never,
+            }),
+          );
+        },
+      },
+    };
+    const turns: ScriptedTurn[] = [
+      { content: '', toolCalls: [{ name: 'undeclared', args: {} }] },
+      { content: '好。' },
+    ];
+    const pick = (values: Record<string, unknown>) => ({
+      undeclared: values['undeclared'],
+      hookUndeclared: values['hookUndeclared'],
+      messages: shapeOf(values['messages']),
+    });
+    const graph = await invokeOnce('langgraph', turns, [markerPlugin(), undeclared]);
+    const native = await invokeOnce('native', turns, [markerPlugin(), undeclared]);
+    expect(graph.failure).toBeUndefined();
+    expect(graph.values['messages']).toHaveLength(4);
+    expect(pick(native.values)).toEqual(pick(graph.values));
+  });
+
+  it('模型那一步失敗：wrapModelCall 已經送出的寫入照套進 state', async () => {
+    const sendsBeforeModel: PluginEntry = {
+      plugin: {
+        name: 'native-parity-model-sends',
+        apply(registry) {
+          registry.middleware.use(
+            createMiddleware({
+              name: 'nativeParityModelSends',
+              wrapModelCall: async (request, handler) => {
+                const send = (
+                  request.runtime as {
+                    configurable?: { __pregel_send?: (w: [string, unknown][]) => void };
+                  }
+                ).configurable?.__pregel_send;
+                send?.([['marker', '模型前寫的']]);
+                return handler(request);
+              },
+            }),
+          );
+        },
+      },
+    };
+    const turns: ScriptedTurn[] = [{ content: '', error: '供應商過載' }];
+    const graph = await invokeOnce('langgraph', turns, [markerPlugin(), sendsBeforeModel]);
+    const native = await invokeOnce('native', turns, [markerPlugin(), sendsBeforeModel]);
+    expect(graph.failure).toBeDefined();
+    expect(native.failure).toEqual(graph.failure);
+    expect(graph.values['marker']).toBe('模型前寫的');
+    expect(native.values['marker']).toBe('模型前寫的');
+  });
+});
+
+describe('native 的多輪、updateState 與上限，對照 LangGraph', () => {
+  it('同一條 thread：第一輪之後 updateState 補一則、RemoveMessage 拿掉一則，第二輪接著跑', async () => {
+    const run = async (loop: AgentLoopKind) => {
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({
+          turns: [
+            { content: '', toolCalls: [{ name: 'echo', args: { text: '一' } }] },
+            { content: '第一輪收。' },
+            { content: '第二輪收。' },
+          ],
+        }),
+        checkpointer: new MemorySaver(),
+        plugins: [toolsPlugin],
+        agentLoop: loop,
+      });
+      const config = { configurable: { thread_id: THREAD } };
+      try {
+        await built.agent.invoke(toAgentInvocation('第一句。'), config);
+        await built.agent.updateState(config, {
+          messages: [new AIMessage({ content: '補的', id: 'patched' })],
+        });
+        await built.agent.updateState(config, {
+          messages: [new AIMessage({ content: '補的又改', id: 'patched' })],
+        });
+        await built.agent.updateState(config, {
+          messages: [new HumanMessage({ content: '要拿掉的', id: 'doomed' })],
+        });
+        await built.agent.updateState(config, { messages: [new RemoveMessage({ id: 'doomed' })] });
+        const output = await built.agent.invoke(toAgentInvocation('第二句。'), config);
+        const state = (await built.agent.getState(config)) as { values: Record<string, unknown> };
+        return { output: shapeOf(output.messages), state: shapeOf(state.values['messages']) };
+      } finally {
+        await built.dispose();
+      }
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.state).toContain('ai:補的又改');
+    expect(graph.state).not.toContain('human:要拿掉的');
+    expect(native).toEqual(graph);
+  });
+
+  it('stream() 最後那筆 values 與 invoke 的結果一致', async () => {
+    const turns: ScriptedTurn[] = [
+      { content: '', toolCalls: [{ name: 'echo', args: { text: '一' } }] },
+      { content: '好了。' },
+    ];
+    const run = async (loop: AgentLoopKind) => {
+      const make = () =>
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns }),
+          checkpointer: new MemorySaver(),
+          plugins: [toolsPlugin, markerPlugin()],
+          agentLoop: loop,
+        });
+      const viaStream = await make();
+      const viaInvoke = await make();
+      const config = { configurable: { thread_id: THREAD } };
+      try {
+        let last: Record<string, unknown> = {};
+        for await (const [mode, payload] of await viaStream.agent.stream(
+          toAgentInvocation('跑。'),
+          { ...config, streamMode: ['updates', 'values'] },
+        )) {
+          if (mode === 'values') last = payload as Record<string, unknown>;
+        }
+        const output = (await viaInvoke.agent.invoke(toAgentInvocation('跑。'), config)) as Record<
+          string,
+          unknown
+        >;
+        return {
+          stream: shapeOf({ messages: last['messages'], files: last['files'] }),
+          invoke: shapeOf({ messages: output['messages'], files: output['files'] }),
+        };
+      } finally {
+        await viaStream.dispose();
+        await viaInvoke.dispose();
+      }
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.stream).toEqual(graph.invoke);
+    expect(native).toEqual(graph);
+  });
+
+  it.each([3, 4, 5, 6])('recursionLimit %i：在同一步拋同一個錯，留下同樣的訊息', async (limit) => {
+    const turns: ScriptedTurn[] = Array.from({ length: 6 }, (_, i) => ({
+      content: '',
+      toolCalls: [{ name: 'echo', args: { text: String(i) } }],
+    }));
+    const run = async (loop: AgentLoopKind) => {
+      const built = await createNexusAgent({
+        model: new ScriptedChatModel({ turns }),
+        checkpointer: new MemorySaver(),
+        plugins: [toolsPlugin],
+        agentLoop: loop,
+      });
+      const config = { configurable: { thread_id: THREAD }, recursionLimit: limit };
+      try {
+        let failure: string | undefined;
+        try {
+          await built.agent.invoke(toAgentInvocation('跑。'), config);
+        } catch (error) {
+          failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        }
+        const state = (await built.agent.getState(config)) as { values: Record<string, unknown> };
+        return { failure, messages: shapeOf(state.values['messages']) };
+      } finally {
+        await built.dispose();
+      }
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.failure).toContain(`Recursion limit of ${limit} reached`);
+    expect(native).toEqual(graph);
+  });
+
+  it('returnDirect 的工具：結果就是這一輪的收尾，不再叫模型', async () => {
+    const direct: PluginEntry = {
+      plugin: {
+        name: 'native-parity-direct',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '直接交回', {
+              name: 'direct',
+              description: '結果直接交回。',
+              schema: z.object({}),
+              returnDirect: true,
+            }),
+          );
+        },
+      },
+    };
+    const turns: ScriptedTurn[] = [
+      { content: '', toolCalls: [{ name: 'direct', args: {} }] },
+      { content: '不該走到。' },
+    ];
+    const graph = await runOnce('langgraph', turns, '開始。', [direct]);
+    const native = await runOnce('native', turns, '開始。', [direct]);
+    expect(graph.events.some((line) => line.includes('name=direct'))).toBe(true);
+    expect(native.failure).toEqual(graph.failure);
+    expect(native.events).toEqual(graph.events);
+    expect(native.log).toEqual(graph.log);
+  });
+});
+
+/**
+ * `agent/request-error`（只有 native 派）：監聽者每次都回 retry 時，這一輪的中止訊號照樣收得掉這一輪。不看的話，中止之後
+ * `createTurnCancelGuard` 擋下的那次模型呼叫（`stopHere` 拋 `TurnCancelledError`）又進這個事件，又重試，永遠不停。
+ */
+describe('native 的 agent/request-error', () => {
+  it('監聽者一直回 retry：這一輪中止之後不再重試，拋出來', async () => {
+    const controller = new AbortController();
+    let asked = 0;
+    const retryForever: PluginEntry = {
+      plugin: {
+        name: 'native-parity-retry-forever',
+        apply(registry) {
+          registry.events.on('agent/request-error', async () => {
+            asked += 1;
+            controller.abort();
+            // 第三次就放手：不看中止的話這裡會一直轉，轉到放手為止，次數對不上。
+            return asked < 3 ? { kind: 'retry' as const } : undefined;
+          });
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '', error: '供應商過載' }] }),
+      checkpointer: new MemorySaver(),
+      plugins: [retryForever],
+      agentLoop: 'native',
+    });
+    try {
+      await expect(
+        built.agent.invoke(toAgentInvocation('跑。'), {
+          configurable: { thread_id: THREAD, [TURN_CANCEL_CONFIG_KEY]: controller.signal },
+        }),
+      ).rejects.toThrow();
+      expect(asked).toBe(1);
+    } finally {
+      await built.dispose();
+    }
   });
 });
