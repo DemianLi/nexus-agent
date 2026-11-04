@@ -29,6 +29,8 @@
  */
 
 import { createMiddleware } from 'langchain';
+import { wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 
 import type { AgentMiddleware } from './base-types.js';
 import { toolRefusal } from './tool-events.js';
@@ -97,6 +99,19 @@ export function filteredToolRefusal(name: string): string {
 }
 
 /**
+ * 工具那一半：不放行的名字回一則錯誤結果，工具本體與更內層都不跑。
+ *
+ * @param admission - 放不放行。
+ * @returns 環繞工具呼叫的一步。
+ */
+export function admissionToolStep(admission: ToolAdmission): ToolCallStep {
+  return (call, next) =>
+    admission.admits(call.name)
+      ? next()
+      : toolRefusal(filteredToolRefusal(call.name), { callId: call.callId, name: call.name });
+}
+
+/**
  * 建一顆把 `hidden` 裡的工具從請求拿掉、叫了也不執行的 middleware。
  *
  * 逐個子代理各建一份（`hidden` 不同的話）；本身無狀態。
@@ -112,10 +127,6 @@ export function createSubagentToolFilterMiddleware(hidden: ReadonlySet<string>):
         ...request,
         tools: admittedTools(request.tools, admission) as typeof request.tools,
       }),
-    wrapToolCall: (request, handler) => {
-      const name = request.toolCall.name;
-      if (admission.admits(name)) return handler(request);
-      return toolRefusal(filteredToolRefusal(name), { callId: request.toolCall.id ?? '', name });
-    },
+    wrapToolCall: wrapToolCallWith(admissionToolStep(admission)),
   });
 }

@@ -28,7 +28,7 @@
  *   `additional_kwargs`（{@link INVALID_ARGUMENTS_KEY}）上。從此 ToolNode 照常派發，下一輪回送的是
  *   `{}`，後面跟著那則 tool 訊息。
  * - **`wrapToolCall`** 找到帶這個 callId 的那則 AI 訊息
- *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
+ *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常往內交，但工具換成一顆同名的樁：
  *   樁不碰工具本體，回 {@link INVALID_ARGUMENTS_REFUSAL}、碼 `INVALID_ARGS`。
  *
  * **`INVALID_ARGS` 從這裡起有兩個生產者**：這一顆（JSON 都不合格）與圍堵認出的 schema 不合
@@ -111,6 +111,8 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
+import { wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
   INVALID_ARGS,
@@ -293,6 +295,35 @@ function refusingStub(name: string): unknown {
 }
 
 /**
+ * 工具那一半：沒有這顆工具的，結果標成 `UNKNOWN_TOOL`；參數解不開的，工具本體換成回 {@link INVALID_ARGUMENTS_REFUSAL} 的樁再往內交。
+ *
+ * @param sessions - 那條 thread 的 `registry.sessions`，見 {@link rawArgumentsOf}。
+ * @returns 環繞工具呼叫的一步。
+ */
+export function invalidToolArgsToolStep(sessions?: {
+  forCall(config: unknown): SessionLookup;
+}): ToolCallStep {
+  return async (call, next) => {
+    // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
+    // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
+    if (call.tool === undefined) return markUnknownTool(await next());
+    const raw = rawArgumentsOf(
+      {
+        toolCall: { id: call.callId },
+        state: call.state,
+        runtime: { configurable: call.configurable },
+      },
+      sessions,
+    );
+    if (raw === undefined) return next();
+    // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
+    // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
+    // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。
+    return next({ tool: refusingStub(call.name) });
+  };
+}
+
+/**
  * 造這顆 middleware。
  *
  * @param sessions - 那條 thread 的 `registry.sessions`，見 {@link rawArgumentsOf}。
@@ -307,19 +338,6 @@ export function createInvalidToolArgsMiddleware(sessions?: {
       const response = await handler(request);
       return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
     },
-    wrapToolCall: async (request, handler) => {
-      // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
-      // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
-      if (request.tool === undefined) return markUnknownTool(await handler(request));
-      const raw = rawArgumentsOf(request, sessions);
-      if (raw === undefined) return handler(request);
-      // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
-      // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
-      // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。
-      return handler({
-        ...request,
-        tool: refusingStub(request.toolCall.name) as typeof request.tool,
-      });
-    },
+    wrapToolCall: wrapToolCallWith(invalidToolArgsToolStep(sessions)),
   }) as AgentMiddleware;
 }

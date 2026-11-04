@@ -64,6 +64,8 @@ import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
+import { wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { abortedBeforeDispatch, toolCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。不撞基座任何一個。 */
@@ -91,6 +93,27 @@ function callConfigOf(request: unknown): { configurable: unknown } {
 }
 
 /**
+ * 工具那一半：動手之前排空這次呼叫所屬的那一份日誌，排空之後再問一次中止。找不到日誌就照常放行。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 環繞工具呼叫的一步。
+ */
+export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCallStep {
+  return async (call, next) => {
+    const found = sessions.forCall({ configurable: call.configurable });
+    // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
+    // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
+    // 日誌上卻沒有那次呼叫。
+    if (found.kind !== 'ok') return next();
+    await sessions.flush(found.log);
+    // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
+    // 外層的 guard 只在動手前與動手後問，擋不到這一段。
+    if (toolCallAborted(call)) return abortedBeforeDispatch(call);
+    return next();
+  };
+}
+
+/**
  * 建那顆 middleware。**無狀態，一份實例走遍 root 與每個子代理**：日誌每次從執行期的
  * `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
  *
@@ -108,18 +131,7 @@ export function createSessionCheckpointMiddleware(sessions: CheckpointSessions):
       if (found.kind === 'ok') await sessions.flush(found.log);
       return handler(request);
     },
-    wrapToolCall: async (request, handler) => {
-      const found = sessions.forCall(callConfigOf(request));
-      // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
-      // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
-      // 日誌上卻沒有那次呼叫。
-      if (found.kind !== 'ok') return handler(request);
-      await sessions.flush(found.log);
-      // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
-      // 外層的 guard 只在動手前與動手後問，擋不到這一段。
-      if (toolCallAborted(request)) return abortedBeforeDispatch(request);
-      return handler(request);
-    },
+    wrapToolCall: wrapToolCallWith(sessionCheckpointToolStep(sessions)),
   }) as unknown as AgentMiddleware;
 }
 
