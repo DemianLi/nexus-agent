@@ -90,6 +90,7 @@ import {
   type SummarizationSettings,
   type TokenAnchorBook,
   type ToolResultPruneConfig,
+  TOOL_RESULT_EVICTION_PREFIX,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/system-prompt';
 import { toLangChainTool } from '@nexus/tool-adapter';
@@ -547,18 +548,15 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
 /**
- * 基座把過大的工具結果搬去的那個路徑前綴。**抄自基座，不是我們選的。**
+ * 過大的工具結果搬去的那個路徑前綴，就是 core 的 `TOOL_RESULT_EVICTION_PREFIX`：組裝點那一格
+ * （`toolResultEvictionWrap`）在文字超過 80,000 字元時寫 `<前綴>/<sanitized tool_call_id>.txt`，
+ * 暫存的路由要接在同一個前綴底下。字串照基座寫死的那一個（`deepagents@1.13.1`），由 core 的
+ * `tool-result-eviction.test.ts` 對著真的基座比。
  *
- * `createFilesystemMiddleware` 的 `wrapToolCall` 在文字超過
- * `4 * toolTokenLimitBeforeEvict`（預設 `2e4` → 80,000 字元）時寫
- * `/large_tool_results/<sanitized tool_call_id>.txt`，然後把訊息換成頭尾預覽加一句
- * 「用 `read_file` 自己去讀」（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2416`
- * 的 `processToolMessage`）。那個路徑是**寫死在基座裡的**，這裡只是把同一個字串說出來。
- *
- * **匯出是刻意的**：`tool-result-stash.test.ts` 那條絆索拿它跟基座實際指路的路徑對，
- * 基座改了字串就當場紅。把它藏起來、測試裡再抄一次字面值，那條絆索就會兩邊一起錯。
+ * **匯出是刻意的**：`tool-result-stash.test.ts` 那條絆索拿它跟組裝好的 agent 實際指路的路徑對，
+ * 路由與搬移的前綴分家就當場紅。
  */
-export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
+export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
 
 /**
  * 把工具結果暫存那一格路由到獨立的去處，不讓它落在 agent 的工作區上。
