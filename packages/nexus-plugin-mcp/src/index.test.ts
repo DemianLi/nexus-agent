@@ -1,7 +1,7 @@
 /**
  * MCP plugin 的驗收。
  *
- * 分兩段：{@link publicToolName} 是純函式，用單測；其餘全部走一台**真的 stdio
+ * 分兩段：{@link publicToolName} 與 {@link hiddenAfterGiveUp} 是純函式，用單測；其餘走一台**真的 stdio
  * 子行程**（[`fixture-server.ts`](./fixture-server.ts)）。判準照 dsh 的政策 4——
  * 「test denial through the executor」的同一條精神：要證明的是那條線真的通，而 mock
  * 掉 SDK client 之後連線、`tools/list`、`tools/call`、關機四件事一件都驗不到。

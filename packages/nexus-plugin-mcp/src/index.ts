@@ -617,9 +617,7 @@ function asAbort(error: unknown): Error {
 }
 
 /**
- * 放棄重連之後，這一台的工具不放行；放棄與否每次問 `gaveUp`，不拍快照。
- *
- * 只管模型那一側的清單：被藏起來的工具若仍被叫到，照舊走到工具本體、回「已放棄重連」。
+ * 放棄重連之後不放行這一台的工具，別的名字一律放行；放棄與否每次問 `gaveUp`，不拍快照。
  *
  * @param names - 這一台註冊的工具名（public name）。
  * @param gaveUp - 監督者是否已放棄重連。
@@ -630,7 +628,12 @@ export function hiddenAfterGiveUp(names: readonly string[], gaveUp: () => boolea
   return { admits: (name) => !(gaveUp() && hidden.has(name)) };
 }
 
-/** 套 {@link hiddenAfterGiveUp} 的那一格；沒放棄就原樣穿過同一個請求。 */
+/**
+ * 每次模型呼叫前套 {@link hiddenAfterGiveUp}，只改模型那一側的清單；沒放棄就原樣穿過同一個請求。
+ *
+ * 呼叫那一側不擋：被藏的工具仍在註冊表上，叫到時由工具本體拋 `reconnection was given up` 的錯誤
+ * （{@link nexusToolOf}），讓呼叫得到要重新組裝的說明（`supervisor.ts` 檔頭偏離 4）。
+ */
 function hideTools(
   serverName: string,
   names: readonly string[],
