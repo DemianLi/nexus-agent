@@ -22,7 +22,7 @@
  * [#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
  *
  * **`read_file` 的描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：預設行數與行號格式經 `createFilesystemMiddleware` 的
- * `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有 read-continuation（`./fs-tool-descriptions.ts`）。這是跟
+ * `customToolDescriptions` 換掉，換成什麼由 fold 算好放在 {@link FoldedAgentParams.fileToolDescriptions}（`./fs-tool-descriptions.ts`）。這是跟
  * `createDeepAgent` 的**明文差異**，`assembly-parity.test.ts` 列出差在哪。「先讀後改」不在描述裡，照 dsh 在系統提示詞（`./observation.ts`）。
  *
  * ## 照抄基座的組裝順序，不是照猜
@@ -64,7 +64,6 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
 import type { FoldedAgentParams } from './fold.js';
-import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
@@ -174,16 +173,16 @@ export function mergeMiddlewareStack(
  * 傳了 `tools`（即使是全集）建出的工具跟不傳相同，`assembly-parity` 與模型看到的工具清單都看不出差別，但基座會改走白名單那條路，
  * 之後基座新增檔案工具，全開的部署要等我們更新名單才拿得到。
  *
- * @param input - 後端、權限，以及這一組實際會掛的 middleware（決定 `customToolDescriptions`）和 `tool-fs` 設定（決定 `tools` 白名單與描述裡的行數）。
+ * @param input - 後端、權限、fold 算好的檔案工具描述（`customToolDescriptions`），和 `tool-fs` 設定（決定 `tools` 白名單）。
  * @returns 選項；全開且沒有描述要換時只有 `backend`（與 `permissions`）。
  */
 export function filesystemMiddlewareOptions(input: {
   readonly backend: NonNullable<FoldedAgentParams['backend']>;
   readonly permissions?: FoldedAgentParams['permissions'];
-  readonly middleware: readonly { readonly name: string }[];
+  readonly descriptions?: FoldedAgentParams['fileToolDescriptions'];
   readonly fileTools?: FoldedAgentParams['fileTools'];
 }): NonNullable<Parameters<typeof createFilesystemMiddleware>[0]> {
-  const descriptions = filesystemToolDescriptions(input.middleware, input.fileTools);
+  const descriptions = input.descriptions;
   const whitelist = filesystemToolWhitelist(input.fileTools);
   return {
     backend: input.backend,
@@ -196,16 +195,19 @@ export function filesystemMiddlewareOptions(input: {
 /**
  * 一個宣告式子代理的預設疊：檔案工具、摘要、補懸空呼叫，規格帶 `skills` 時再加 skills。
  *
- * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**——兩條路
- * 以前各自維護一份，靠漂移絆索測試維持一致。
+ * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**；`subagent-graph.test.ts` 的漂移絆索
+ * 守兩條路模型看到的一樣。
  *
  * @param spec - 子代理規格。
- * @param context - 後端與全域權限。
+ * @param context - 後端、全域權限、`tool-fs` 設定（白名單），與 fold 算好的檔案工具描述。
  * @returns 預設疊；呼叫端再用 {@link mergeMiddlewareStack} 併上規格自己帶的。
  */
 export function subagentDefaultMiddleware(
-  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills' | 'middleware'>,
-  context: Pick<FoldedAgentParams, 'backend' | 'permissions' | 'fileTools'>,
+  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills'>,
+  context: Pick<
+    FoldedAgentParams,
+    'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
+  >,
 ): AgentMiddleware[] {
   const backend = context.backend;
   if (backend === undefined) throw new Error('子代理沒有 backend，檔案系統 middleware 建不起來');
@@ -218,7 +220,9 @@ export function subagentDefaultMiddleware(
       filesystemMiddlewareOptions({
         backend,
         permissions,
-        middleware: spec.middleware ?? [],
+        ...(context.fileToolDescriptions !== undefined && {
+          descriptions: context.fileToolDescriptions,
+        }),
         fileTools: context.fileTools,
       }),
     ),
@@ -290,6 +294,9 @@ export function assembleAgent(params: AssembleAgentParams) {
               backend,
               permissions,
               ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
+              ...(params.fileToolDescriptions !== undefined && {
+                fileToolDescriptions: params.fileToolDescriptions,
+              }),
             }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
@@ -305,7 +312,9 @@ export function assembleAgent(params: AssembleAgentParams) {
       filesystemMiddlewareOptions({
         backend,
         permissions,
-        middleware: params.middleware,
+        ...(params.fileToolDescriptions !== undefined && {
+          descriptions: params.fileToolDescriptions,
+        }),
         fileTools: params.fileTools,
       }),
     ),
