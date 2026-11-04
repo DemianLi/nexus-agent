@@ -332,6 +332,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/conversation-process.test.ts',
+    test: '對話行程經 Unix socket 跑一整段對話 > 核准中斷，按核准後這一輪結束',
+    kind: 'interrupt',
+    run: 'fails',
+  },
+  {
     file: 'src/conversation-restore-share.test.ts',
     test: '層數：讀盤記下的夠淺就不再量，其餘照舊量 > 舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq',
     kind: 'checkpoint',

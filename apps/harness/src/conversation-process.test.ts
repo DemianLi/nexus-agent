@@ -42,6 +42,11 @@ const SOURCE_PATHS =
   process.env.TSX_TSCONFIG_PATH === undefined
     ? {}
     : { TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH };
+/** `vitest.native.config.ts` 設的：子行程跑哪個 agent loop（#2356）。沒設就照出廠。 */
+const AGENT_LOOP =
+  process.env.NEXUS_TEST_AGENT_LOOP === undefined
+    ? []
+    : ['--agent-loop', process.env.NEXUS_TEST_AGENT_LOOP];
 
 /** 經 Unix socket 的 `fetch`：wire client 照常用，只是連線走 `socketPath`。 */
 function socketFetch(socketPath: string): typeof globalThis.fetch {
@@ -109,7 +114,7 @@ async function start(turns: readonly ScriptedTurn[]): Promise<Running> {
   const home = join(dir, 'home');
   const child = spawn(
     process.execPath,
-    ['--import', TSX, ENTRY, '--socket', socketPath, '--patch', patch],
+    ['--import', TSX, ENTRY, '--socket', socketPath, '--patch', patch, ...AGENT_LOOP],
     {
       cwd: dir,
       env: {
