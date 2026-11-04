@@ -500,3 +500,153 @@ describe('native 下呼叫端中止', () => {
     }
   });
 });
+
+/** 組一個 agent、跑一輪，回 `invoke` 的結果（或拋的錯）與跑完之後的 `getState`。 */
+async function invokeOnce(
+  loop: AgentLoopKind,
+  turns: readonly ScriptedTurn[],
+  plugins: readonly PluginEntry[],
+  signal?: AbortSignal,
+) {
+  const built = await createNexusAgent({
+    model: new ScriptedChatModel({ turns }),
+    checkpointer: new MemorySaver(),
+    plugins: [...plugins],
+    agentLoop: loop,
+  });
+  const detach = built.attachSession(new SessionRegistry(THREAD));
+  const config = { configurable: { thread_id: THREAD } };
+  try {
+    let output: Record<string, unknown> | undefined;
+    let failure: string | undefined;
+    try {
+      output = (await built.agent.invoke(toAgentInvocation('跑。'), {
+        ...config,
+        ...(signal !== undefined && { signal }),
+      })) as Record<string, unknown>;
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    const state = (await built.agent.getState(config)) as { values: Record<string, unknown> };
+    return { output, failure, values: state.values };
+  } finally {
+    detach();
+    await built.dispose();
+  }
+}
+
+/** 一顆帶私有鍵 `_secret` 與一般鍵 `marker` 的 middleware；`beforeModel` 寫私有鍵。 */
+function markerPlugin(): PluginEntry {
+  return {
+    plugin: {
+      name: 'native-parity-marker',
+      apply(registry) {
+        registry.middleware.use(
+          createMiddleware({
+            name: 'nativeParityMarker',
+            stateSchema: z.object({
+              _secret: z.string().optional(),
+              marker: z.string().optional(),
+            }),
+            beforeModel: () => ({ _secret: '不外漏' }),
+          }),
+        );
+      },
+    },
+  };
+}
+
+describe('native 的 state 對照 LangGraph', () => {
+  it('invoke 的結果不帶 `_` 開頭的私有鍵', async () => {
+    const turns: ScriptedTurn[] = [{ content: '好。' }];
+    const graph = await invokeOnce('langgraph', turns, [markerPlugin()]);
+    const native = await invokeOnce('native', turns, [markerPlugin()]);
+    // 私有鍵真的寫進了 state，下面的比較才分得出有沒有濾。
+    expect(native.values['_secret']).toBe('不外漏');
+    expect(Object.keys(graph.output ?? {})).not.toContain('_secret');
+    expect(Object.keys(native.output ?? {}).sort()).toEqual(Object.keys(graph.output ?? {}).sort());
+  });
+
+  it('工具這一步失敗：失敗那顆已經送出的寫入照套進 state', async () => {
+    const sends: PluginEntry = {
+      plugin: {
+        name: 'native-parity-sends',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              (_input, config) => {
+                const send = (
+                  config as { configurable?: { __pregel_send?: (w: [string, unknown][]) => void } }
+                ).configurable?.__pregel_send;
+                send?.([['marker', '寫了']]);
+                return ['好了', pastLogDepthCap()] as [string, unknown];
+              },
+              {
+                name: 'sends',
+                description: '先寫 state，結果記不進日誌。',
+                schema: z.object({}),
+                responseFormat: 'content_and_artifact',
+              },
+            ),
+          );
+        },
+      },
+    };
+    const turns: ScriptedTurn[] = [
+      { content: '', toolCalls: [{ name: 'sends', args: {} }] },
+      { content: '不該走到。' },
+    ];
+    const graph = await invokeOnce('langgraph', turns, [markerPlugin(), sends]);
+    const native = await invokeOnce('native', turns, [markerPlugin(), sends]);
+    expect(graph.failure).toContain('超過上限');
+    expect(native.failure).toEqual(graph.failure);
+    expect(graph.values['marker']).toBe('寫了');
+    expect(native.values['marker']).toBe('寫了');
+  });
+
+  /**
+   * 已知差異（時序）：LangGraph 在模型節點收尾時就看到中止，拋 `This operation was aborted`，算在模型那一步；native 的模型那一步
+   * 不再看 signal，到工具那一步起跑前才拋 `Abort`（同 LangGraph `PregelRunner` 起跑前那一檢）。兩邊工具都不進閘門。
+   */
+  it('呼叫端在模型之後中止：這一輪拋，工具一次都不進閘門', async () => {
+    const run = async (loop: AgentLoopKind) => {
+      const controller = new AbortController();
+      let gated = 0;
+      const plugin: PluginEntry = {
+        plugin: {
+          name: 'native-parity-after-model-abort',
+          apply(registry) {
+            registry.middleware.use(
+              createMiddleware({
+                name: 'nativeParityAfterModelAbort',
+                wrapModelCall: async (request, handler) => {
+                  const response = await handler(request);
+                  controller.abort();
+                  return response;
+                },
+              }),
+            );
+            registry.approvals.gate(async (_exec, next) => {
+              gated++;
+              return next();
+            });
+          },
+        },
+      };
+      const result = await invokeOnce(
+        loop,
+        [
+          { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+          { content: '不該走到。' },
+        ],
+        [toolsPlugin, plugin],
+        controller.signal,
+      );
+      return { failure: result.failure, gated };
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.gated).toBe(0);
+    expect(native).toEqual({ failure: 'Abort', gated: 0 });
+  });
+});
