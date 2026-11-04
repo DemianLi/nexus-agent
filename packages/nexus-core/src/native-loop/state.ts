@@ -95,14 +95,12 @@ export class StateChannels {
   }
 
   /**
-   * 一次 run 的輸入裡會寫進 state 的那幾格：`stateSchema` 收過的公開鍵（不以 `_` 開頭）。其餘的鍵丟掉，同 `createAgent` 的
-   * input schema。
+   * 一次 run 的輸入裡呼叫端寫得進的那幾格：不以 `_` 開頭的鍵，同 `createAgent` 的 input schema 不收私有鍵。沒有 `stateSchema`
+   * 宣告的鍵由 {@link StateChannels.apply} 丟掉。
    * @param input - 呼叫端給的輸入。
    */
   inputOf(input: Readonly<Record<string, unknown>>): Record<string, unknown> {
-    return Object.fromEntries(
-      Object.entries(input).filter(([key]) => this.#keys.has(key) && !key.startsWith('_')),
-    );
+    return Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith('_')));
   }
 
   /**

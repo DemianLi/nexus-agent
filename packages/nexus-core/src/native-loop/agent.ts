@@ -86,7 +86,8 @@ const DEFAULT_RECURSION_LIMIT = 25;
 const UNBOUNDED = Number.POSITIVE_INFINITY;
 
 /** 一次 run 收到的輸入。 */
-type LoopInput = { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
+type LoopInput =
+  { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
 
 /** 一次 run 的觀察者：v3 事件、CLI 的 updates。 */
 interface RunObserver {
@@ -293,7 +294,9 @@ export class NativeAgent {
     const modes = typeof requested === 'string' ? [requested] : requested;
     const unsupported = modes.filter((mode) => mode !== 'updates' && mode !== 'values');
     if (unsupported.length > 0) {
-      throw new Error(`native agent loop 的 stream() 不支援 streamMode：${unsupported.join(', ')}（#2356）`);
+      throw new Error(
+        `native agent loop 的 stream() 不支援 streamMode：${unsupported.join(', ')}（#2356）`,
+      );
     }
     const queue = new AsyncQueue<unknown>();
     const emit = (mode: string, payload: unknown): void => {
@@ -407,7 +410,13 @@ export class NativeAgent {
     const recursionLimit =
       config.recursionLimit ?? this.#defaults.recursionLimit ?? DEFAULT_RECURSION_LIMIT;
     const maxConcurrency = config.maxConcurrency ?? this.#defaults.maxConcurrency;
-    const base = this.#baseConfig(config, callbacks, observer.emitter, recursionLimit, maxConcurrency);
+    const base = this.#baseConfig(
+      config,
+      callbacks,
+      observer.emitter,
+      recursionLimit,
+      maxConcurrency,
+    );
     const budget = new StepBudget(recursionLimit);
     const events = this.#params.events;
     // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走

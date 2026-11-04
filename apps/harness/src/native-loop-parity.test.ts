@@ -965,18 +965,40 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
   });
 
   it('輸入只套宣告過的公開鍵', async () => {
-    const input = { ...toAgentInvocation('跑。'), marker: '輸入帶的', _secret: '私的', zzz: 1 };
+    const input = { ...toAgentInvocation('跑。'), marker: '輸入帶的', _given: '私的', zzz: 1 };
     const turns: ScriptedTurn[] = [{ content: '好。' }];
     const pick = (values: Record<string, unknown>) => ({
       marker: values['marker'],
       zzz: values['zzz'],
     });
-    const graph = await invokeOnce('langgraph', turns, [markerPlugin()], undefined, input);
-    const native = await invokeOnce('native', turns, [markerPlugin()], undefined, input);
-    expect(graph.values['marker']).toBe('輸入帶的');
-    expect(pick(native.values)).toEqual(pick(graph.values));
-    // `_secret` 由 markerPlugin 的 beforeModel 寫，輸入給的那份不算數。
-    expect(native.values['_secret']).toBe(graph.values['_secret']);
+    // 私有鍵不出現在結果裡（`outputOf`），只能在第一顆 hook 裡看它有沒有進 state。
+    const run = async (loop: AgentLoopKind) => {
+      const seen: unknown[] = [];
+      const given: PluginEntry = {
+        plugin: {
+          name: 'native-parity-given',
+          apply(registry) {
+            registry.middleware.use(
+              createMiddleware({
+                name: 'nativeParityGiven',
+                stateSchema: z.object({ _given: z.string().optional() }),
+                beforeAgent: (state) => {
+                  seen.push(state._given);
+                  return undefined;
+                },
+              }),
+            );
+          },
+        },
+      };
+      const result = await invokeOnce(loop, turns, [markerPlugin(), given], undefined, input);
+      return { values: pick(result.values), seen };
+    };
+    const graph = await run('langgraph');
+    const native = await run('native');
+    expect(graph.values.marker).toBe('輸入帶的');
+    expect(graph.seen).toEqual([undefined]);
+    expect(native).toEqual(graph);
   });
 
   it('hook 只讀得到 messages 與自己宣告的鍵；預設值每條 thread 各一份', async () => {
@@ -993,7 +1015,9 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
         for (const thread of ['甲', '乙']) {
           const config = { configurable: { thread_id: thread } };
           await built.agent.invoke(toAgentInvocation('跑。'), config);
-          bags.push(((await built.agent.getState(config)) as { values: { bag?: unknown } }).values.bag);
+          bags.push(
+            ((await built.agent.getState(config)) as { values: { bag?: unknown } }).values.bag,
+          );
         }
         return { seen, bags };
       } finally {
