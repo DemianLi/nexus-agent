@@ -393,6 +393,7 @@ export function createApprovalGateMiddleware(
 
 /**
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
+ * 要問人時經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。

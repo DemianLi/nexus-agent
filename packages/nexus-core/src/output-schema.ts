@@ -14,11 +14,11 @@
  *
  * **宣告跟著工具走**：`registry.tools.register(tool, { outputSchema })`，同 dsh「`output` 是
  * `defineTool` 的一個欄位」。fold 打底一份實例進 root 與每個 subagent，每次呼叫從
- * `request.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
+ * `call.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
  * 不以名字查**：同名的工具在不同層可以是不同的東西，fold 換上去的拒絕樁也是另一顆實例。
  *
  * **時刻：dsh 的 `createSuccessResult`，在 `tools/post-execute` 之前。** 載體是掛在
- * `tools/execute` 位置的一個 `wrapToolCall`，真正做事的是 `await handler()` **之後**那一段——
+ * `tools/execute` 位置的一個 `wrapToolCall`（{@link outputSchemaToolStep}），真正做事的是 `await next()` **之後**那一段——
  * 兩個時刻在我們這側共用一個載體，索引見 `apps/harness/src/interception-index.test.ts`。
  * 位置由 fold 決定——每一個
  * plugin middleware 的內側，所以看到的是工具原本的輸出，不是外層改過的版本。以前那個

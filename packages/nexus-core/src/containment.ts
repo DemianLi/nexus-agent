@@ -88,6 +88,7 @@ import { toLoggedMessage } from './logged-message.js';
 import { closer, closerError } from './conversation-replay.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
 import { spawnedSubagentRunId } from './session-address.js';
+import { toolNameOfCall } from './tool-call-step.js';
 import type { SessionLog } from './session-log.js';
 import {
   HarnessError,
@@ -212,11 +213,7 @@ export function formatToolTimeout(toolName: string, elapsedMs: number, budgetMs?
 }
 
 /**
- * 這次呼叫的工具名。
- *
- * 基座寫的是 `request.tool?.name ?? request.toolCall.name`，但那個 `tool` 是
- * `ClientTool | ServerTool` 的聯集，`name` 在型別上收斂成 `{}`——JS 那邊沒事，
- * TS 這邊接不住。所以先確定它真的是字串，不是的話退回 `toolCall.name`。
+ * 這次呼叫的工具名，判法見 {@link toolNameOfCall}。
  *
  * @param request - `wrapToolCall` 收到的請求。
  * @returns 工具名。
@@ -225,8 +222,7 @@ export function resolveToolName(request: {
   readonly tool?: { readonly name?: unknown };
   readonly toolCall: { readonly name: string };
 }): string {
-  const fromTool: unknown = request.tool?.name;
-  return typeof fromTool === 'string' ? fromTool : request.toolCall.name;
+  return toolNameOfCall({ tool: request.tool, name: request.toolCall.name });
 }
 
 /**

@@ -523,7 +523,8 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
 }
 
 /**
- * 這顆的工具那一半：`read_file` 補上行數上限往內交，讀到的範圍沒到檔尾就在結果後面接上續讀的提示。
+ * 這顆的工具那一半：`read_file` 沒給 `limit` 就補上行數上限再往內交（給的超過上限就拋錯、不往內交）；讀到文字就在結果最後
+ * 接上讀到哪一行，沒到檔尾的附續讀的 `offset`，並記下讀檔的 meta（`putToolResultMeta`）。
  *
  * @param readLimit - 一次最多讀幾行。
  * @returns 這一步。
