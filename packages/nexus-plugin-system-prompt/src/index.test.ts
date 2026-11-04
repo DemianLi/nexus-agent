@@ -200,11 +200,12 @@ describe('掛上之後', () => {
     }
   });
 
-  it('登記時大聲拒絕：中間的 order、函式型 text、complete／interpolate、重名', async () => {
+  it('登記時大聲拒絕：中段接不上的 order、頭尾的函式型 text、complete／interpolate、重名', async () => {
     const run = await boot({});
     try {
       const service = run.service!;
-      expect(() => service.section({ name: 'a', order: 500, text: 'x' })).toThrow(/之間/u);
+      expect(() => service.section({ name: 'a', order: 501, text: 'x' })).toThrow(/之間/u);
+      expect(() => service.section({ name: 'a', order: 500, text: 'x' })).toThrow(/還沒有宿主接/u);
       expect(() =>
         service.section({ name: 'b', order: 10200, text: (() => 'x') as never }),
       ).toThrow(/函式/u);

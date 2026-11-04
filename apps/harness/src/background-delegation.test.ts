@@ -324,6 +324,28 @@ describe('給了選項：模型面', () => {
   });
 });
 
+describe('並行派那一句只給 root（#2414）', () => {
+  it('子代理的疊沒有 `subagent`，它的系統提示詞沒有那一句', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [{ content: '子答' }],
+      background: {},
+    });
+    try {
+      await run.say();
+      const systemOf = (prompt: (typeof run.workerModel.prompts)[number]): string =>
+        prompt.find((message) => message.getType() === 'system')!.text;
+      expect(systemOf(run.rootModel.prompts[0]!)).toContain('同一則訊息裡一起呼叫 `subagent`');
+      expect(run.workerModel.prompts.length).toBeGreaterThan(0);
+      for (const prompt of run.workerModel.prompts) {
+        expect(systemOf(prompt)).not.toContain('同一則訊息裡一起呼叫 `subagent`');
+      }
+    } finally {
+      await run.close();
+    }
+  });
+});
+
 describe('前景（run_in_background: false）：改派給基座的 task', () => {
   it('子代理照今天的路徑跑完，結果回給模型，名字是 subagent', async () => {
     const run = await assemble({

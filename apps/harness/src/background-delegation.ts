@@ -47,6 +47,8 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import { INVALID_ARGS, putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
 import type { PluginEntry, SessionLog, SessionRegistry, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import { SECTION_ORDERS } from '@nexus/system-prompt';
+import type { PromptSection } from '@nexus/system-prompt';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
@@ -171,6 +173,17 @@ const PARALLEL_SENTENCE =
   '要派幾個互不相依的子代理時，在同一則訊息裡一起呼叫 `subagent`，派出去後繼續做有用的事，不要乾等。';
 
 /**
+ * 那一句的段（#2414）：這一格看得到 `subagent` 才接。`subagent` 是上面那顆 middleware 換掉 `task` 換上的，fold 把段接在它內側，
+ * 所以子代理（沒有 `task`）不接。
+ */
+const PARALLEL_SECTION: PromptSection = {
+  name: 'background-delegation:parallel',
+  order: SECTION_ORDERS.BACKGROUND_DELEGATION,
+  separator: '\n',
+  text: (context) => (context.tools.includes(SUBAGENT_TOOL_NAME) ? PARALLEL_SENTENCE : ''),
+};
+
+/**
  * 背景派出的接線點：一份組裝一個。`createNexusAgent` 建它，`attachSession` 時 {@link BackgroundDelegation.attach}
  * 建 host（**在任何圖的環境之外**，見 `background-subagents.ts` 檔頭）。
  */
@@ -228,13 +241,14 @@ export class BackgroundDelegation {
     return Object.assign(close, { control: host.control });
   }
 
-  /** 組裝用的條目：一顆最外層的 middleware。 */
+  /** 組裝用的條目：一顆最外層的 middleware，加上平行句那一段。 */
   entry(): PluginEntry {
     return {
       plugin: {
         name: 'background-delegation',
         apply: (registry) => {
           registry.middleware.use(this.#middleware(), { prepend: true });
+          registry.prompt.section(PARALLEL_SECTION);
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
@@ -428,14 +442,12 @@ export class BackgroundDelegation {
         if (base === undefined) return handler(request);
         this.#baseTask = base as unknown as StructuredToolInterface;
         const description = typeof base.description === 'string' ? base.description : '';
-        const { systemMessage } = request;
         return handler({
           ...request,
           tools: [
             ...request.tools.filter((each) => each.name !== BASE_DELEGATION_TOOL_NAME),
             this.#subagentTool(description),
           ],
-          systemMessage: systemMessage.concat(`\n${PARALLEL_SENTENCE}`),
         });
       },
       wrapToolCall: async (request, handler) => {

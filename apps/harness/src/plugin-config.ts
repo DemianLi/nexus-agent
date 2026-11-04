@@ -991,8 +991,8 @@ function registerFolded(
   for (const { name, listener } of contributions.preSteps) {
     registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
   }
-  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才是
-  // 最後一段（前綴是前置，位置不影響）。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
+  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才在
+  // 段的最後（前綴是前置，位置不影響）；記憶在基座最內層，接在後綴之後。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
   // 預設的 model／cwd 走宿主內部的路（`system-prompt-middleware.ts` 的 `WeakMap`），不是 `NexusServices`；組裝點沒交就是這一列起不來
   // （同今天的 `requires: ['systemPromptVariables']`：不退到猜的值）。代入之後頭尾都是空的就不掛——條件不是「有沒有服務」。
   if (contributions.systemPrompt !== undefined) {

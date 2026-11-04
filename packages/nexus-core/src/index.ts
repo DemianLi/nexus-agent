@@ -62,6 +62,7 @@ export {
   APPROVAL_POLICY_ASK_SENTENCE,
   APPROVAL_POLICY_NEVER_SENTENCE,
   APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
+  approvalPolicySection,
   approvalPolicySentence,
   createApprovalPolicyPromptMiddleware,
 } from './approval-policy-prompt.js';
@@ -161,6 +162,7 @@ export type {
   ApprovalRegistrationPoint,
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
+  PromptSectionRegistrationPoint,
   LifecycleRegistrationPoint,
   BoundPluginLogger,
   PluginLogger,
@@ -403,6 +405,7 @@ export {
   noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_PLUGIN_NAME,
+  OBSERVATION_SECTION,
   observationPolicyPlugin,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
@@ -576,7 +579,19 @@ export {
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
+  subagentDelegationSection,
 } from './subagent-delegation.js';
+export {
+  applySections,
+  createSectionSlotMiddleware,
+  OBSERVATION_SECTION_MIDDLEWARE_NAME,
+  PLUGIN_SECTION_ORDERS,
+  PLUGIN_SECTIONS_MIDDLEWARE_NAME,
+  PREPENDED_SECTIONS_MIDDLEWARE_NAME,
+  sectionContextOf,
+  SECTION_SLOT_ORDERS,
+  sectionsIn,
+} from './prompt-sections.js';
 export type { ToolFilter } from './subagent-tool-filter.js';
 export {
   assertToolFilter,

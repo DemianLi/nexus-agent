@@ -6,15 +6,14 @@
  * （`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`）由 `McpResourceRuntime` 在第一台 server
  * 登記時註冊，之後每台 server 只把自己的 provider 登記進去，工具以 `server` 參數選要問哪一台
  * （`packages/mcp/mcp-resources/src/index.ts`，`5badb150`）。我們沒有 cordis 的 context 樹，所以退到最接近的表達：
- * 第一個走到登記那一步的 `mcp` 列用 `services`（`mcp:hub`）建這個 hub 並註冊三支工具與一顆 middleware，後面的列
+ * 第一個走到登記那一步的 `mcp` 列用 `services`（`mcp:hub`）建這個 hub 並註冊三支工具與一段系統提示詞，後面的列
  * 只 {@link McpHub.add} 自己的 {@link McpSource}。
  *
  * ## 偏離登記
  *
  * 1. **載體**：dsh 的 server 指引與「可用的資源 server 有哪些」是 `systemPrompt.section(...)` 兩種段落
- *    （`mcp-client/src/server-context.ts`、`mcp-resources/src/index.ts`）。我們的提示詞是 middleware 一層層接出來的，
- *    沒有段落註冊點，所以退到 `wrapModelCall` 把文字接到 system message 後面（同 plan-mode、sandbox-policy，
- *    與 goal 登記過的同一條偏離）。**`concat` 不取代**，記憶與摘要器也在這份 system message 上加東西。
+ *    （`mcp-client/src/server-context.ts`、`mcp-resources/src/index.ts`）。我們的是**一段**（`registry.prompt.section`，#2414），
+ *    兩種文字併在 {@link hubPromptText} 裡；段接在 fold 的 `plugins.rest` 區頭那一格，不照 dsh 的 `order` 排。
  * 2. **提示詞只在載入期定下來**：dsh 的 `instructions()` 讀「最近一次成功連線」的快照，重連成功會換；我們重連
  *    之後不換（`supervisor.ts` 檔頭偏離 3），所以文字在登記那一刻就定了，每一輪逐位元組相同（不吃 KV cache）。disposal 才會移掉。
  * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `server is disconnected`；這裡一樣——名字照列、
@@ -56,12 +55,16 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, turnCancelSignalOf } from '@nexus/core';
-import type { AgentMiddleware, PluginRegistry } from '@nexus/core';
-import { createMiddleware } from 'langchain';
+import type { PluginRegistry } from '@nexus/core';
+import { SECTION_ORDERS } from '@nexus/system-prompt';
+import type { PromptSection } from '@nexus/system-prompt';
 import { z } from 'zod';
 
 /** hub 在 `services` 上的名字。 */
 export const MCP_HUB_SERVICE = 'mcp:hub';
+
+/** 伺服器清單與引用規則那一段的名字。 */
+export const MCP_PROMPT_SECTION_NAME = 'mcp:servers';
 
 /** 一個資源操作；cursor 與 uri 都是 server 自己的，原樣交過去。 */
 export type McpResourceRequest =
@@ -276,7 +279,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
           (args) => ({ method: 'resources/read', uri: args['uri'] ?? '' }),
         ),
       ),
-      registry.middleware.use(promptMiddleware(sources)),
+      registry.prompt.section(promptSection(sources)),
     );
 
     const hub: McpHub = {
@@ -295,20 +298,12 @@ export function ensureHub(registry: PluginRegistry): McpHub {
   }
 }
 
-/** 每次模型呼叫前把 {@link hubPromptText} 接到 system message 後面；沒有東西可接就原樣穿過。 */
-function promptMiddleware(sources: ReadonlyMap<string, McpSource>): AgentMiddleware {
-  return createMiddleware({
-    name: 'mcp-prompt',
-    wrapModelCall: (request, handler) => {
-      const text = hubPromptText(sources.values());
-      if (text === '') return handler(request);
-      // 兩個入口是同一件事：`systemMessage` 在就接在它後面，不在就由 `systemPrompt` 字串承接。
-      const { systemMessage } = request;
-      return handler(
-        systemMessage === undefined
-          ? { ...request, systemPrompt: text }
-          : { ...request, systemMessage: systemMessage.concat(`\n\n${text}`) },
-      );
-    },
-  }) as AgentMiddleware;
+/** {@link hubPromptText} 那一段，每次模型呼叫現算；沒有東西可接就是 `''`，這一次不接。 */
+function promptSection(sources: ReadonlyMap<string, McpSource>): PromptSection {
+  return {
+    name: MCP_PROMPT_SECTION_NAME,
+    order: SECTION_ORDERS.PLUGIN_POLICY,
+    separator: '\n\n',
+    text: () => hubPromptText(sources.values()),
+  };
 }

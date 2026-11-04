@@ -71,6 +71,7 @@ import { ContractService, defineManifest, injectOf } from '@nexus/sdk';
 import {
   assertSectionRegistrable,
   interpolateStrict,
+  isMiddleSection,
   SECTION_ORDERS,
   SYSTEM_PROMPT_MIDDLEWARE_NAME,
   SYSTEM_PROMPT_SECTION_NAMES,
@@ -226,6 +227,12 @@ export function createSystemPromptService(ctx: Context): SystemPromptServiceHand
 
     section(section: PromptSection): () => void {
       assertSectionRegistrable(section);
+      // 中段走 `registry.prompt`，由宿主接在洋蔥裡它那一格（#2414）；樹上的服務還沒有東西接中段（TODO(#2416)），收了就是靜靜丟掉。
+      if (isMiddleSection(section)) {
+        throw new RangeError(
+          `systemPrompt 的段 ${section.name} 是中段（order ${String(section.order)}）：樹上的 systemPrompt 只收頭尾，中段還沒有宿主接`,
+        );
+      }
       const entry: PromptSection = {
         name: section.name,
         order: section.order,

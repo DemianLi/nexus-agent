@@ -10,7 +10,12 @@
 import { fileURLToPath } from 'node:url';
 import { SystemMessage } from '@langchain/core/messages';
 import type { PluginRegistry } from '@nexus/core';
-import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, REFERENCE_WARNING } from '@nexus/core';
+import {
+  applySections,
+  EXTERNAL_MCP_CONTENT_NOTICE,
+  REFERENCE_RULE,
+  REFERENCE_WARNING,
+} from '@nexus/core';
 import { loadPlugins } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
 import { RESOURCE_TOOL_NAMES } from './hub.js';
@@ -82,24 +87,13 @@ function resourceTool(registry: PluginRegistry, name: (typeof RESOURCE_TOOL_NAME
   return found;
 }
 
-/** 模擬一次模型呼叫：回 middleware 交給下一層的 system 文字。 */
-async function systemTextOf(registry: PluginRegistry, base = '基底提示詞'): Promise<string> {
-  let text = base;
-  for (const entry of registry.middleware.list()) {
-    const registration = entry.value as { middleware?: { wrapModelCall?: unknown } };
-    const wrap = registration.middleware?.wrapModelCall as
-      | ((
-          request: { systemMessage?: SystemMessage },
-          handler: (request: { systemMessage?: SystemMessage; systemPrompt?: string }) => unknown,
-        ) => unknown)
-      | undefined;
-    if (wrap === undefined) continue;
-    await wrap({ systemMessage: new SystemMessage(text) }, (request) => {
-      text = request.systemMessage?.text ?? request.systemPrompt ?? text;
-      return undefined;
-    });
-  }
-  return text;
+/** 模擬一次模型呼叫：回插件登記的段接上之後的 system 文字。 */
+function systemTextOf(registry: PluginRegistry, base = '基底提示詞'): Promise<string> {
+  const request = applySections(
+    { systemMessage: new SystemMessage(base) },
+    registry.prompt.sections(),
+  );
+  return Promise.resolve(request.systemMessage.text);
 }
 
 const INSTRUCTIONS = '先讀 {model} 與 {cwd} 的說明。\n不要改檔。  \n';

@@ -42,9 +42,9 @@
  * 「Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.」、
  * 「Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.」
  * 工具描述本身只有一句「Create or fully replace a UTF-8 text file.」／「Edit an existing UTF-8 text file by replacing literal text.」。
- * 這裡一樣：{@link observationGuidance} 看這一輪送給模型的工具清單裡有沒有 `write_file`／`edit_file`，有才往 `systemMessage` 追加；
- * 句子用 dsh 原句，只把工具名換成我們的（`write`→`write_file`、`edit`→`edit_file`，機械對應，不算偏離）。
- * 模型看得到這句才不會每碰一個新檔都先撞一次牆。這一顆 middleware 沒掛（`observationPolicy: false`）就不會有這句。
+ * 這裡一樣是一段（{@link OBSERVATION_SECTION}）：{@link observationGuidance} 看這一輪送給模型的工具清單裡有沒有 `write_file`／`edit_file`，
+ * 有才接；句子用 dsh 原句，只把工具名換成我們的（`write`→`write_file`、`edit`→`edit_file`，機械對應，不算偏離）。
+ * 模型看得到這句才不會每碰一個新檔都先撞一次牆。策略沒掛（`observationPolicy: false`）就不會有這句。
  *
  * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
  *
@@ -58,6 +58,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { posix } from 'node:path';
 
 import { ToolMessage } from '@langchain/core/messages';
+import { SECTION_ORDERS } from '@nexus/system-prompt';
+import type { PromptSection } from '@nexus/system-prompt';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { createMiddleware } from 'langchain';
@@ -110,6 +112,17 @@ export function observationGuidance(tools: ReadonlySet<string>): string {
   }
   return sections.join('\n\n');
 }
+
+/**
+ * 先讀後改那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：規則要在模型動手之前就講給它聽，理由與出處見檔頭。
+ * 照這一格看到的工具名現算（{@link observationGuidance}），兩個工具都不在場時這一次不接。由 fold 在策略那一格的外側接上。
+ */
+export const OBSERVATION_SECTION: PromptSection = {
+  name: 'nexus:fs-observation',
+  order: SECTION_ORDERS.FS_OBSERVATION,
+  separator: '\n\n',
+  text: (context) => observationGuidance(new Set(context.tools)),
+};
 
 /**
  * 一次權威觀測。
@@ -429,22 +442,6 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
 
   return createMiddleware({
     name: OBSERVATION_POLICY_MIDDLEWARE_NAME,
-
-    // 規則要在模型動手之前就講給它聽，理由與出處見檔頭。
-    wrapModelCall: (request, handler) => {
-      const names = new Set(
-        request.tools.flatMap((tool) => {
-          const name = (tool as { readonly name?: unknown }).name;
-          return typeof name === 'string' ? [name] : [];
-        }),
-      );
-      const guidance = observationGuidance(names);
-      return handler(
-        guidance === ''
-          ? request
-          : { ...request, systemMessage: request.systemMessage.concat(`\n\n${guidance}`) },
-      );
-    },
 
     wrapToolCall: async (request, handler) => {
       const toolName = resolveToolName(request);

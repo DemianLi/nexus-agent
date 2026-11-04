@@ -55,9 +55,11 @@ describe('createApprovalPolicyPromptMiddleware', () => {
     expect(passed.systemMessage?.text).toBe(`身分句。\n${APPROVAL_POLICY_ASK_SENTENCE}`);
   });
 
-  it('沒有系統訊息時由 systemPrompt 承接', async () => {
+  // 兩個 loop 都先建好系統訊息，這條路走不到（`prompt-sections.ts` 的 `applySections`）；走到了也只當空的一則接，不另開 `systemPrompt`。
+  it('沒有系統訊息時當空的一則接', async () => {
     const passed = await seen(HUMAN, () => 'never', {});
-    expect(passed.systemPrompt).toBe(APPROVAL_POLICY_NEVER_SENTENCE);
+    expect(passed.systemMessage?.text).toBe(`\n${APPROVAL_POLICY_NEVER_SENTENCE}`);
+    expect(passed.systemPrompt).toBeUndefined();
   });
 
   it('每次呼叫現讀政策：切換之後下一次呼叫就是新的那一句', async () => {

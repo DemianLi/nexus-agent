@@ -215,7 +215,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 | `agent/request-error`（waterfall） | 同名。監聽者：重試（`retryModelCall` 拆成監聽者）、溢出時先摘要、搬圖 | streamRetry（`:818`）、imageOffloadRecovery（`:870`）、摘要器的溢出處理 |
 | `agent/turn-stopping`（serial） | 同名 | workspace-changes 的 `afterAgent`、stepInbox 的 `afterAgent` |
 | `tools/pre-execute`、`tools/execute`、`tools/post-execute`、`tools/result` | 同名，取代 `@nexus/tools` 今天的 `gate`／`onResult` 與 core 的 tool-pipeline | 二十來顆 `wrapToolCall`（containment、approvalGate、spill、searchOverflow、outputSchema、fsToolErrors、readContinuation…） |
-| `systemPrompt.assemble()` | 已有（#1477），補上 S1 那種函式型 `text` | 改 `systemMessage` 的十幾顆：observation、mcp-prompt、file-references、approvalPolicyPrompt、sandbox-policy、plan-mode… |
+| `systemPrompt.assemble()` | 已有（#1477），補上 S1 那種函式型 `text`。K7a（#2414）把每一顆的文字改成段，由留在原格的薄轉接渲染；在洋蔥外一次接完跟摘要器一起留到 K7c（#1827 D198） | 改 `systemMessage` 的十幾顆：observation、mcp-prompt、file-references、approvalPolicyPrompt、sandbox-policy、plan-mode… |
 | `tools.resolve()` | `@nexus/tools` 加 `resolve()` | 改工具清單的：subagent-tool-filter、mcp hideTools、background-delegation、read-continuation 改 schema、searchDescriptions |
 
 這張表是讀碼對應出來的。25 顆 `wrapModelCall` 與二十來顆 `wrapToolCall`，每一顆的歸宿都要在 K7 逐顆核；表上是大類，不是逐顆的結論。
@@ -244,7 +244,7 @@ grep -rlE "^(import|export|\}).* from '(@langchain/|langchain|deepagents)" <目�
 | # | 改動 | 段 | 升版？ | one-way？ | 凍結的 52 份夾具 | #1597 關係檢查器 | web 讀端 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | F1 | 落盤的訊息形狀（`LoggedMessage {type, data}`）**不變**，native loop 用 nexus 自己的型別讀寫同一個形狀（Q2） | L0 K2 | 否 | 否 | 讀方換了實作，要逐位元組讀得一樣 | 不動 | 不動 |
-| F2 | `request/system`、`request/header` 從可略過的事後快照，改成推導的輸入：寫在 `model/start` 之前、不可略過 | L2 K7 | **是** | **是**：新 runtime 寫的日誌，舊 runtime 讀到會拒開 | 舊格式的這兩顆照舊不讀（讀方要分支，登記 `readerBranch`） | 加一條：同一次模型呼叫內，這兩顆要落在 `model/start` 之前 | 不讀這兩顆（`@nexus/wire` 的折疊器沒有用到，未核），先知會 dev-ui |
+| F2 | `request/system`、`request/header` 從可略過的事後快照，改成推導的輸入：寫在 `model/start` 之前、不可略過 | L2 K7 | **是** | **是**：新 runtime 寫的日誌，舊 runtime 讀到會拒開 | 舊格式的這兩顆照舊不讀（讀方要分支，登記 `readerBranch`） | 加一條：同一次模型呼叫內，這兩顆要落在 `model/start` 之前 | **讀**：trace 視圖讀這兩顆（`apps/web/src/components/trace/call.tsx` 的 `SnapshotDetails`、`apps/web/src/lib/trace-view.ts` 的 `SnapshotReason`），改位置之前先知會 dev-ui（K7c 前） |
 | F3 | `assistant/attempt` 從可略過改成必寫（W7、dsh `agent.ts:544-547`） | L2 K7，與 F2 同一次升版 | 併入 F2 | 併入 F2 | 不影響（舊日誌照舊可略過） | 加：attempt 只能落在一對起訖裡 | 已經在畫（重試殘影），未核 |
 | F4 | `turn/end` 的 reason 多一個 `max-turns`（W1） | L2 K9，**提前併進 F2 那一次** | 併入 F2 | 併入 F2 | 不影響 | 不動 | 要能顯示，先知會 dev-ui |
 | F5 | `image/offload` 改寫在 `model/start` 之前，推導端套用（W2） | L0 K4 | 否：只動讀方與寫入時機，事件形狀不變 | 否 | 舊日誌的這顆落在 `model/start` 之後，讀方要兩種都認 | 不動 | 不動 |
@@ -353,7 +353,7 @@ type NexusToolResult =
 | | `onActivationChanged(log, listener)` | F | **仍是 F** |
 | `messageFeedback` | `put`／`delete`／`list`／`record(log, req)` | 收 O | 同左 |
 | `permissionPresets` | `start`、`narrowDelegated` | D | D |
-| `systemPrompt` | `section`、`variable`、`assemble` | D（`section` 回 disposer，F） | 同左；補函式型 `text` 會多一個 F（sandbox-policy S1） |
+| `systemPrompt` | `section`、`variable`、`assemble` | D（`section` 回 disposer，F） | 同左；中段的 `text` 可以是函式（K7a #2414），多一個 F。中段不經頭尾的渲染，交給 `registry.prompt`，由宿主接在洋蔥的原格 |
 | 宿主的 `assembly` | `create(invocation)` | 回整張 LangGraph 圖（L） | 回 native loop 的實例（O） |
 | 相容層 `PluginRegistry` | `tools`／`middleware`／`subagents`／`backend` | L、L/deepagents | L3 拆掉 |
 
@@ -601,5 +601,5 @@ K0 ─┬─ K1 ── K5 ───────────┐
   - `registry.services` 裡插件私有的字串鍵；
   - plugins.rest 在出貨清單裡的實際先後；
   - deepagents 內部用到的 LangGraph 功能；
-  - web 的 `@nexus/wire` 折疊器讀不讀 `request/*` 與 `interrupt/raised`。
+  - web 讀不讀 `interrupt/raised`。（`request/system`、`request/header` 已核：trace 視圖讀，見 §五 F2。）
 - **§3-3 對應表**是大類，不是逐顆的結論，要在 K7 逐顆核。
