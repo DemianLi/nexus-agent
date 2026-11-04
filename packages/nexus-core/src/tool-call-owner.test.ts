@@ -12,6 +12,7 @@ import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 import { ownerRequestOf, toolCallOwner } from './tool-call-owner.js';
+import type { ToolCallOwner } from './tool-call-owner.js';
 
 /** 日誌上那一則：兩顆呼叫，`b` 的參數解不開。 */
 function logWithTwoCalls(): SessionLog {
@@ -50,15 +51,11 @@ const decoyState = {
 const request = { toolCall: { id: 'b' }, state: decoyState, runtime: { configurable: {} } };
 
 /** loop 交下來的那一則：兩顆呼叫，`b` 帶記號。 */
-const handed = new AIMessage({
+const handed: ToolCallOwner = {
   id: 'from-loop',
-  content: '',
-  tool_calls: [
-    { id: 'a', name: 'grep', args: {}, type: 'tool_call' },
-    { id: 'b', name: 'grep', args: {}, type: 'tool_call' },
-  ],
+  tool_calls: [{ id: 'a' }, { id: 'b' }],
   additional_kwargs: { [INVALID_ARGUMENTS_KEY]: { b: '{交' } },
-});
+};
 
 const handedRequest = { ...request, owner: handed };
 

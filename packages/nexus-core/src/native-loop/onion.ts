@@ -69,7 +69,10 @@ type ModelHandler = (request: ModelRequest) => Promise<unknown>;
 export interface ToolRequest {
   readonly toolCall: ToolCall;
   readonly tool: unknown;
-  /** 這一批的助手訊息：`toolCallOwner` 讀這一格，不倒著找 `state`（設計 §四 W6）。 */
+  /**
+   * 這一批的助手訊息（`toolCall` 在它的 `tool_calls` 裡）。`toolCallOwner` 讀這一格，不倒著找 `state`；`history-source=log`
+   * 的 root 例外，讀日誌（#2355）。
+   */
   readonly owner: AIMessage;
   readonly state: LoopState;
   readonly runtime: Runtime;

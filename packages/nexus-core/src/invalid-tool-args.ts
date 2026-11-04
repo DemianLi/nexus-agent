@@ -88,7 +88,7 @@
  * 記號放在**那則 AI 訊息自己身上**，所以它活得跟那則訊息一樣久：進 checkpointer、進會話日誌
  * （`assistant/message`，`fromLoggedMessage` 推回來還在），不需要另一份以 callId 為鍵、只活在
  * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都經 `toolCallOwner` 找帶這個 callId
- * 的那則（{@link rawArgumentsOf}；`log` 的 root 讀日誌的 `assistant/message`，其餘讀 loop 交下來的那則，`langgraph` 讀 `request.state.messages`）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
+ * 的那則（{@link rawArgumentsOf}；怎麼找見 {@link toolCallOwner}）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
  * 新的呼叫在另一則訊息上，找到的就是另一個答案。
  *
  * 照 dsh 的方向（`tool-calls.ts:104-111`：解不開就把原字串留在呼叫資料本身，行程內沒有另存一份）。
@@ -178,7 +178,7 @@ function markUnknownTool<T>(result: T): T {
 export const INVALID_ARGUMENTS_KEY = 'nexusInvalidArguments';
 
 /**
- * 這一次呼叫的原字串：解不開的那顆有，其餘（含讀 state 時沒有 `state`、找不到那則訊息）是 `undefined`。
+ * 這一次呼叫的原字串：解不開的那顆有，其餘（含找不到那則訊息、交下來的那則不含這個 callId、讀 state 時沒有 `state`）是 `undefined`。
  *
  * 那則訊息怎麼找見 {@link toolCallOwner}。記號查不到時是 `undefined`，**不是**「合法」的證明——呼叫端（`wrapToolCall`）照常放行。
  *

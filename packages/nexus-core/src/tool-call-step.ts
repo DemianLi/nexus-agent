@@ -30,7 +30,7 @@ export interface ToolCallSite {
   readonly tool: unknown;
   /**
    * loop 交下來的、這一批的助手訊息（`toolCallOwner` 讀它，見 `tool-call-owner.ts`）。native loop 才有這個鍵，
-   * `langgraph` 沒有。
+   * `langgraph` 沒有。有沒有這個鍵決定 `toolCallOwner` 讀它還是讀 `state`，所以沒有就不帶這個鍵（不是 `owner: undefined`）。
    */
   readonly owner?: ToolCallOwner | undefined;
   /** 這次呼叫看到的 agent state（`messages` 在裡面）。 */
