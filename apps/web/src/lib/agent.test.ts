@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agentBaseUrl, agentMuxUrl, createAgentClient, mountedMuxFetch } from './agent.js';
 
 /**
- * 瀏覽器這一端只驗三件事：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
- * 編得過、載得進來），以及**預設同源**（沒設 `VITE_AGENT_BASE_URL` 時走相對路徑，
- * 不會硬編一個 localhost），以及**升級網址**（`ws`／`wss` 跟著 agent 的來源）。協定本身的行為在 `@nexus/wire` 自己的測試裡。
+ * 瀏覽器這一端驗的是：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
+ * 編得過、載得進來）、**預設同源**（沒設 `VITE_AGENT_BASE_URL` 時走相對路徑，
+ * 不會硬編一個 localhost）、**升級網址**（`ws`／`wss` 跟著 agent 的來源），以及**掛在子路徑底下**（`agentBaseUrl` 算前綴、
+ * `mountedMuxFetch` 剝接前綴，#2426）。協定本身的行為在 `@nexus/wire` 自己的測試裡。
  */
 describe('agent client', () => {
   it('預設走相對路徑，路徑就是協定規定的那條', async () => {

@@ -4,7 +4,8 @@ import { defineNexusChat, ELEMENT_NAME } from './nexus-chat-element';
 
 /**
  * `<nexus-chat>` 不注入 client 時打的路徑（#2382）：thread 那一族與 mux 都在 `/embed` 底下，server 照這個前綴套嵌入版的設定檔。
- * `embed.js` 掛在子路徑底下（#2426）：socket 帶著 `embed.js` 所在的目錄，socket 裡的 path 不帶，由代理剝掉前綴的 serve 收。
+ * `embed.js` 掛在子路徑底下（#2426）：WebSocket 網址帶著 `embed.js` 所在的目錄（代理只剝升級網址的前綴）；socket 訊息裡的 path 由
+ * client 先剝掉，所以不帶前綴。
  * 獨立一份檔：`customElements.define` 一份檔只能一次，`nexus-chat-element.test.tsx` 那份注入了假 client。
  */
 

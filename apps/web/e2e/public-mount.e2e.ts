@@ -1,6 +1,5 @@
 /**
- * 掛在反向代理的子路徑底下（#2426）：前面一台代理把 `/nexus/*` 剝掉前綴轉給 serve，serve 不認前綴，照 dsh
- * `docs/user/guide/public-deployments.zh.md`。獨立頁面開 `/nexus/`，嵌入版的 Vue 測試頁載 `/nexus/embed.js`，兩邊都講完一輪，
+ * 掛在反向代理的子路徑底下（#2426）：前面一台代理把 `/nexus/*` 剝掉前綴轉給 serve，serve 不認前綴。獨立頁面開 `/nexus/`，嵌入版的 Vue 測試頁載 `/nexus/embed.js`，兩邊都講完一輪，
  * 而且瀏覽器打出去的每個請求都帶著前綴：沒帶的代理不轉，記在 `stray` 裡。
  *
  * 代理是測試自己的 Node 伺服器，`Host` 原樣轉送（代理的 authority 是 loopback，serve 的圍欄放行）。登入網址 303 回 `/`

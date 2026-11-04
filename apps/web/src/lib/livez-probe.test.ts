@@ -32,6 +32,17 @@ describe('probeLivez（#2250）', () => {
     expect(doFetch).toHaveBeenCalledWith('/nexus/livez', expect.anything());
   });
 
+  it.each([
+    ['', '/livez'],
+    ['/nexus', '/nexus/livez'],
+  ])('指定 agent 位置 %j 時打 %s，不看頁面', async (baseUrl, expected) => {
+    vi.stubGlobal('document', { baseURI: 'http://localhost/viz/page/' });
+    const doFetch = vi.fn(async () => new Response('x'));
+    vi.stubGlobal('fetch', doFetch);
+    await expect(probeLivez(new AbortController().signal, baseUrl)).resolves.toBe('answered');
+    expect(doFetch).toHaveBeenCalledWith(expected, expect.anything());
+  });
+
   it.each([200, 503])('回來就算 answered，不看狀態碼（%i）', async (status) => {
     const doFetch = vi.fn(async () => new Response('x', { status }));
     vi.stubGlobal('fetch', doFetch);
