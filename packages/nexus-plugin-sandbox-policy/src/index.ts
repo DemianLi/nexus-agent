@@ -318,8 +318,8 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     registry.middleware.use(
       createToolCallStepMiddleware(
         SANDBOX_POLICY_MIDDLEWARE_NAME,
-        // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
-        // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
+        // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫往內交的那一層裡跑，所以包住
+        // `next()`，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
         // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
         // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
         // 父代理那側的事。

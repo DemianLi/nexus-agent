@@ -28,7 +28,7 @@
  *   `additional_kwargs`（{@link INVALID_ARGUMENTS_KEY}）上。從此 ToolNode 照常派發，下一輪回送的是
  *   `{}`，後面跟著那則 tool 訊息。
  * - **`wrapToolCall`** 找到帶這個 callId 的那則 AI 訊息
- *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
+ *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常往內交，但工具換成一顆同名的樁：
  *   樁不碰工具本體，回 {@link INVALID_ARGUMENTS_REFUSAL}、碼 `INVALID_ARGS`。
  *
  * **`INVALID_ARGS` 從這裡起有兩個生產者**：這一顆（JSON 都不合格）與圍堵認出的 schema 不合
@@ -308,7 +308,11 @@ export function invalidToolArgsToolStep(sessions?: {
     // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
     if (call.tool === undefined) return markUnknownTool(await next());
     const raw = rawArgumentsOf(
-      { toolCall: { id: call.callId }, state: call.state, runtime: { configurable: call.configurable } },
+      {
+        toolCall: { id: call.callId },
+        state: call.state,
+        runtime: { configurable: call.configurable },
+      },
       sessions,
     );
     if (raw === undefined) return next();

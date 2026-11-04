@@ -303,7 +303,9 @@ export function abortedBeforeDispatch(call: Pick<ToolCallSite, 'callId' | 'name'
 }
 
 /**
- * 外層那顆的工具那一半：動手前已中止就不跑；跑完才中止的，成功的結果換成 `ABORTED`，工具自己回的錯照舊。
+ * 外層那顆的工具那一半：這一輪沒有訊號就照常放行；動手前已中止就不跑，回 {@link abortedBeforeDispatch}；跑完才中止的，
+ * 成功的結果換成 `ABORTED`（`Command` 只換屬於這次呼叫的那一則），工具因中止而拋的也收成 `ABORTED`；工具自己回的錯與
+ * 其餘的拋錯照舊。
  *
  * 訊號每次從那一次呼叫的 `configurable` 現讀，所以一份走遍 root 與每個子代理。
  */

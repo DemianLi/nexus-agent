@@ -99,7 +99,7 @@ export function filteredToolRefusal(name: string): string {
 }
 
 /**
- * 呼叫那一半：不放行的名字回一則錯誤結果，工具本體與更內層都不跑。
+ * 工具那一半：不放行的名字回一則錯誤結果，工具本體與更內層都不跑。
  *
  * @param admission - 放不放行。
  * @returns 環繞工具呼叫的一步。

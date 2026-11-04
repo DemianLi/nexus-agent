@@ -1,6 +1,6 @@
 /**
  * `tool-call-step.ts` 的轉接：一步拿到的那次呼叫、往內交時內層拿到的請求、一步在同一個 tick 被呼叫。
- * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，見 `apps/harness` 的 native 套。
+ * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，native loop 那一套見 `apps/harness/vitest.native.config.ts`。
  */
 
 import { describe, expect, it } from 'vitest';

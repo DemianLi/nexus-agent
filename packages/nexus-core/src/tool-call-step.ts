@@ -1,11 +1,11 @@
 /**
- * 環繞一次工具呼叫的一步（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：不帶 LangChain 型別的形狀，由留在原格的那一顆
+ * 環繞一次工具呼叫的一步（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：不帶 LangChain 型別的形狀，由佔著 middleware 洋蔥那一格的
  * middleware 經 {@link wrapToolCallWith} 呼叫（agent loop 脫離 LangChain，[#2336](https://github.com/DemianLi/nexus-agent/issues/2336)）。
  *
  * 一步拿到這次呼叫（{@link ToolCallSite}）與往內一層（{@link ToolCallNext}）：可以先做事再往內交、不往內交而回自己的結果、
  * 換掉工具本體再往內交，或看往內交回來的結果再決定回什麼。
  *
- * **結果還是不透明的**（{@link ToolCallResult}）：今天往內交回來的是 `ToolMessage` 或 `Command`，一步要回自己的結果時也是造一則
+ * **結果是不透明的**（{@link ToolCallResult}）：往內交回來的是 `ToolMessage` 或 `Command`；一步要回自己的結果時，造一則
  * `ToolMessage`（`tool-events.ts` 的 `toolRefusal`）。
  *
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
@@ -17,7 +17,7 @@
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 
-/** 一次工具呼叫，原格那一層讀得到的。 */
+/** 一次工具呼叫：`wrapToolCall` 的請求上，一步用得到的那幾格。 */
 export interface ToolCallSite {
   /** 模型給的 `tool_call.id`；取不到是 `''`。 */
   readonly callId: string;
@@ -36,7 +36,7 @@ export interface ToolCallSite {
 /** 一次工具呼叫落定成什麼：`ToolMessage` 或 `Command`。 */
 export type ToolCallResult = unknown;
 
-/** 往內交一層。`tool` 給了就換掉工具本體，內層看到的是換過的那一個。只能呼叫一次。 */
+/** 往內交一層。`tool` 給了就換掉工具本體，內層看到的是換過的那一個。沒有防重入：呼叫兩次，內層就跑兩次。 */
 export type ToolCallNext = (substitute?: { readonly tool: unknown }) => Promise<ToolCallResult>;
 
 /** 環繞一次工具呼叫的一步。 */
@@ -98,5 +98,8 @@ export function wrapToolCallWith(
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createToolCallStepMiddleware(name: string, step: ToolCallStep): AgentMiddleware {
-  return createMiddleware({ name, wrapToolCall: wrapToolCallWith(step) }) as unknown as AgentMiddleware;
+  return createMiddleware({
+    name,
+    wrapToolCall: wrapToolCallWith(step),
+  }) as unknown as AgentMiddleware;
 }
