@@ -74,6 +74,8 @@ import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
+import { toolResultEvictionWrap } from './tool-result-eviction.js';
+import { filesystemModelCallWrap } from './filesystem-tool-admission.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
 export interface AssembleAgentParams extends FoldedAgentParams {
@@ -193,6 +195,27 @@ export function filesystemMiddlewareOptions(input: {
 }
 
 /**
+ * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionWrap}，`wrapModelCall` 先套 core 的
+ * {@link filesystemModelCallWrap} 再交給基座原本的那一支；名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。
+ *
+ * @param options - {@link filesystemMiddlewareOptions} 給的選項。
+ * @returns 掛進疊裡的那一顆。
+ */
+function filesystemMiddleware(
+  options: NonNullable<Parameters<typeof createFilesystemMiddleware>[0]>,
+): ReturnType<typeof createFilesystemMiddleware> {
+  const base = createFilesystemMiddleware(options);
+  const inner = base.wrapModelCall;
+  if (inner === undefined)
+    throw new Error('基座的 FilesystemMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
+  return {
+    ...base,
+    wrapModelCall: filesystemModelCallWrap(options.backend, inner) as unknown as typeof inner,
+    wrapToolCall: toolResultEvictionWrap(options.backend) as unknown as typeof base.wrapToolCall,
+  };
+}
+
+/**
  * 一個宣告式子代理的預設疊：檔案工具、摘要、補懸空呼叫，規格帶 `skills` 時再加 skills。
  *
  * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**；`subagent-graph.test.ts` 的漂移絆索
@@ -216,7 +239,7 @@ export function subagentDefaultMiddleware(
   const permissions = spec.permissions ?? context.permissions;
   const skills = spec.skills ?? [];
   return [
-    createFilesystemMiddleware(
+    filesystemMiddleware(
       filesystemMiddlewareOptions({
         backend,
         permissions,
@@ -308,7 +331,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     ...(skills.length > 0
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
-    createFilesystemMiddleware(
+    filesystemMiddleware(
       filesystemMiddlewareOptions({
         backend,
         permissions,

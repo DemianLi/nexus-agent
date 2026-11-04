@@ -232,6 +232,15 @@ export type {
 export { createToolCallStepMiddleware, wrapToolCallWith } from './tool-call-step.js';
 export type { ToolAdmission } from './tool-resolution.js';
 export { admittedTools } from './tool-resolution.js';
+export {
+  evictedToolResultText,
+  stringifyToolContent,
+  TOOL_RESULT_EVICTION_PREFIX,
+  TOOL_RESULT_EVICTION_THRESHOLD_CHARS,
+  toolResultEvictionPath,
+  toolResultEvictionWrap,
+} from './tool-result-eviction.js';
+export { filesystemModelCallWrap, filesystemToolAdmission } from './filesystem-tool-admission.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';

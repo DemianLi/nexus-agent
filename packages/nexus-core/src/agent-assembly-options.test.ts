@@ -79,13 +79,18 @@ describe('filesystemMiddlewareOptions', () => {
 });
 
 describe('組裝點的 createFilesystemMiddleware 呼叫', () => {
-  it('每一處都經過 filesystemMiddlewareOptions（root 一處、子代理預設疊一處）', () => {
+  it('只在 filesystemMiddleware 裡建；root 一處、子代理預設疊一處都經過 filesystemMiddlewareOptions', () => {
     const source = readFileSync(new URL('./agent-assembly.ts', import.meta.url), 'utf8');
-    const calls = [...source.matchAll(/(?<![\w.])createFilesystemMiddleware\(\s*(\S+)/gu)].map(
+    const direct = [...source.matchAll(/(?<![\w.])createFilesystemMiddleware\(\s*(\S+)/gu)].map(
       (match) => match[1],
     );
+    const wrapped = [
+      ...source.matchAll(/(?<![\w.]|function )filesystemMiddleware\(\s*(\S+)/gu),
+    ].map((match) => match[1]);
 
-    expect(calls).toHaveLength(2);
-    for (const argument of calls) expect(argument).toMatch(/^filesystemMiddlewareOptions\(/u);
+    // 基座那一顆的 `wrapToolCall` 換成 core 的、`wrapModelCall` 由 core 包住（#2415 W3），所以直接建的只有包裝裡那一處。
+    expect(direct).toEqual(['options);']);
+    expect(wrapped).toHaveLength(2);
+    for (const argument of wrapped) expect(argument).toMatch(/^filesystemMiddlewareOptions\(/u);
   });
 });
