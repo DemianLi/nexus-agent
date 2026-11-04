@@ -101,6 +101,7 @@ import type { LiveLaunch } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
+import { assertTrustedAuthority } from './request-trust.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
 import {
   createSessionHeaderMetadataResolver,
@@ -218,6 +219,16 @@ export const DEFAULT_PORT = 8787;
 export interface ServeInvocation {
   readonly live: boolean;
   readonly port: number;
+  /**
+   * 指名的非 loopback authority（`--trusted-host`，可給多次，#2369）：放在反向代理後面時，瀏覽器帶的 Host 是代理對外的名字，
+   * 沒指名的一律 403。每條在解析時過 `request-trust.ts` 的 `assertTrustedAuthority`。
+   */
+  readonly trustedHosts: readonly string[];
+  /**
+   * 瀏覽器實際開的網址（`--public-url`，#2369），補成 `/` 結尾：只決定啟動時印的登入網址，不放行任何 authority、不影響路由與 cookie。
+   * 省略就印 serve 自己的來源。
+   */
+  readonly publicUrl?: string;
   /** gzip 壓縮（#1570）：只在 `--compression gzip` 時有值；省略就是不壓，跟以前完全一樣。 */
   readonly compression?: WireCompression;
   readonly workspace?: string;
@@ -267,6 +278,11 @@ const USAGE = `用法：
   --agent-loop <langgraph|native>
                        驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
+  --trusted-host <host[:port]>
+                       放在反向代理後面時，瀏覽器看到的 authority（可以給多次）；沒指名的非 loopback Host 一律 403
+                       帶 port 的只認那個 port，不帶的認任何 port
+  --public-url <url>   瀏覽器實際開的網址（例如 https://app.example/nexus/），啟動時印的登入網址用它
+                       只是公告：放行要另外給 --trusted-host
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
   --compression-level <0-9>
@@ -286,6 +302,28 @@ const USAGE = `用法：
 啟動時印出的網址帶著這次行程的登入 token：只給自己用，別轉存到別人讀得到的檔。
 網頁要先 build（pnpm build）。按 Ctrl-C 結束——收線時會把每個 thread 的 agent 一起清掉。`;
 
+/**
+ * `--public-url` 的值：只收 http(s)、不帶帳密、query 與片段的絕對網址，路徑補成 `/` 結尾。
+ *
+ * @throws 不是這個形狀；訊息接著印用法。
+ */
+function parsePublicUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`--public-url 要給絕對網址，收到 "${raw}"。\n\n${USAGE}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`--public-url 只收 http 或 https，收到 "${raw}"。\n\n${USAGE}`);
+  }
+  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new Error(`--public-url 不能帶帳密、query 或片段，收到 "${raw}"。\n\n${USAGE}`);
+  }
+  if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
+  return url.href;
+}
+
 export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   let parsed;
   try {
@@ -299,6 +337,8 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'session-log': { type: 'string' },
         'agent-loop': { type: 'string' },
         port: { type: 'string' },
+        'trusted-host': { type: 'string', multiple: true },
+        'public-url': { type: 'string' },
         compression: { type: 'string' },
         'compression-level': { type: 'string' },
         'compression-threshold': { type: 'string' },
@@ -367,6 +407,17 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
   }
 
+  const trustedHosts = values['trusted-host'] ?? [];
+  for (const entry of trustedHosts) {
+    try {
+      assertTrustedAuthority(entry);
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
+    }
+  }
+  const publicUrl =
+    values['public-url'] === undefined ? undefined : parsePublicUrl(values['public-url']);
+
   // 壓縮旗標的驗證（照 dsh 的 schema）；不合法是 usage error，在任何檔案寫入之前失敗。
   let compression: WireCompression | undefined;
   try {
@@ -382,6 +433,8 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   return {
     live: values.live === true,
     port,
+    trustedHosts,
+    ...(publicUrl !== undefined && { publicUrl }),
     ...(compression !== undefined && { compression }),
     ...(patches !== undefined && { patches }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
@@ -1276,6 +1329,7 @@ async function startServer(
     : undefined;
   const handler = createWireHandler({
     auth,
+    trustedHosts: invocation.trustedHosts,
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
     attachments: attachmentStore,
     deliverableLimits,
@@ -1782,6 +1836,7 @@ async function startServer(
   });
 
   const opsEndpoints = createOpsEndpoints({
+    trustedHosts: invocation.trustedHosts,
     isClosing: () => closing || handler.isClosing(),
     probes: opsConfig.probes.enabled,
     storage: storageProbe,
@@ -1841,7 +1896,9 @@ async function startServer(
   // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
   const authenticatedUrl =
-    listening.kind === 'port' ? listening.auth.authenticatedUrl(server.url) : server.url;
+    listening.kind === 'port'
+      ? listening.auth.authenticatedUrl(invocation.publicUrl ?? server.url)
+      : server.url;
   log(
     listening.kind === 'port'
       ? `nexus-agent 在 ${authenticatedUrl}`
