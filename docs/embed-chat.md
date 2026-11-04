@@ -13,7 +13,7 @@ serve 供應兩個檔，跟網頁同一個來源：
 
 宿主頁要跟 serve 同源：在宿主頁的伺服器上設反向代理，把 serve 的路徑轉過去。登入沿用 serve 的登入網址換到的會話 cookie。
 
-開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉。
+開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉，有 [Vue CLI（webpack）](#vue-cliwebpack) 與 [Vite](#vite) 兩種寫法。
 
 元件的對話請求都打 `/embed/threads/…`，下行的 WebSocket 是 `/embed/threads/mux`。serve 看這個前綴決定這條對話能用什麼：沒有子代理、沒有斜線命令；內建工具沒標唯讀的都要使用者核准，MCP 工具照那一列設定的 `approval`。反向代理要多轉 `/embed/`，獨立頁面的 `/threads` 不用轉。
 
@@ -243,20 +243,12 @@ docker run -d --name nexus-dev-proxy --network container:<serve 容器> \
 
 #### Vue CLI（webpack）
 
-> **未實測。** 下面的寫法是讀 `@vue/cli-service` 5.0.8 的原始碼推出來的，還沒有在 webpack-dev-server 上跑過。
-
 `vue.config.js`：
 
 ```js
-const http = require('node:http');
 const { defineConfig } = require('@vue/cli-service');
 
-const nexus = {
-  target: 'http://<serve 主機的區網 IP>:18080',
-  changeOrigin: false,
-  // Vue CLI 會把轉出去的 Origin 改成 target，serve 就回 403；有 agent 時它不改。
-  agent: new http.Agent(),
-};
+const nexus = { target: 'http://<serve 主機的區網 IP>:18080', changeOrigin: false };
 
 module.exports = defineConfig({
   chainWebpack: (config) => {
@@ -278,9 +270,9 @@ module.exports = defineConfig({
 ```
 
 - **`isCustomElement` 要設給 vue-loader。** `.vue` 檔在建置時就編譯好了，`app.config.compilerOptions` 只管執行期編譯的模板，對 `.vue` 檔沒有作用。
-- **Origin 的改寫。** `@vue/cli-service` 會替 `devServer.proxy` 的每一條加上 `onProxyReq`。請求帶了 Origin、又沒有設 `agent` 時，它把 Origin 改成 `target`（`lib/util/prepareProxy.js`），serve 看到的 Origin 就跟 Host 對不上，回 403。WebSocket 升級不經過這一步。使用者自己寫的 `onProxyReq` 會先跑，所以改不回來；上面用 `agent` 讓這一步跳過。
-- **key 只比路徑。** 每一條的 key 會拿去對 URL 的路徑部分做 `pathname.match(key)`，比不到 query。自己寫的 `context` 也會被這層蓋掉，所以登入不能靠比對 `/?token=`，改走 `/nexus/`（見下面〈登入〉）。key 沒有寫 `^` 的話，路徑中間有出現也算比中。
-- `public/` 裡實際存在的檔不會被轉走，HMR 的 WebSocket 也不受這兩條 key 影響。
+- **登入不能靠比對 `/?token=`。** `@vue/cli-service` 把每一條的 key 拿去對 URL 的路徑部分做 `pathname.match(key)`，比不到 query；在那一條另外寫函式形式的 `context` 也一樣，`/?token=` 仍由開發伺服器回自己的首頁。登入改走 `/nexus/`（見下面〈登入〉）。
+- key 沒有寫 `^` 的話，路徑中間有出現也算比中。
+- 宿主自己 `public/assets/` 底下的檔照常由開發伺服器回；改了 `.vue` 檔照常熱更新。
 
 #### Vite
 
