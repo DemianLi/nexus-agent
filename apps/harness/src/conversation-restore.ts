@@ -33,11 +33,14 @@
 
 import type { BaseMessage } from '@langchain/core/messages';
 import {
+  evictedToolResultText,
   nexusContent,
   parsesLoggedToolCalls,
   replayConversation,
   SESSION_EVENT_MAX_DEPTH,
   storedEventDepth,
+  stringifyToolContent,
+  toolResultEvictionPath as coreToolResultEvictionPath,
 } from '@nexus/core';
 import type {
   ConversationReplay,
@@ -47,9 +50,7 @@ import type {
   SessionEvent,
   UnreplayableReason,
 } from '@nexus/core';
-import { context } from 'langchain';
 
-import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
 import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 import { vouchCheckpointDepth } from './pruned-memory-saver.js';
 
@@ -67,104 +68,12 @@ export interface RestorableAgent {
 //
 // 日誌記的是工具的輸出（`session-log.ts` 的 `tool/result`），模型看到的是基座 `FilesystemMiddleware` 換過的
 // 那則：超過 80,000 字元的，換成一句「存在這個路徑、用 read_file 自己讀」加上頭尾預覽。推回去的要是模型看到的
-// 那則，所以照同一條規則重算。**下面這幾樣逐字抄自基座**（`deepagents@1.13.1`，
-// `dist/langsmith-zm0ILQsV.js` 的 `processToolMessage`、`createContentPreview`、`formatContentWithLineNumbers`、
-// `TOO_LARGE_TOOL_MSG`），基座沒有匯出它們。`conversation-restore.test.ts` 拿真的基座換出來的那則逐字比對，
-// 升級基座時字變了就紅在那裡。
+// 那則，所以照同一條規則重算。規則在 core 的 `tool-result-eviction.ts`，組裝點換上去的那一格也用它
+// （[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。`conversation-restore.test.ts` 拿真的基座換出來的那則
+// 逐字比對，升級基座時字變了就紅在那裡。
 //
 // 預覽裡指的路徑**續接之後讀得到**（#734）：暫存在主機的私有目錄、按會話分目錄
 // （`tool-result-stash.ts`），續接用同一個 run 目錄當鑰匙，找得到原來那個檔。重算的仍然是模型當時看到的字。
-
-/** 基座的 `toolTokenLimitBeforeEvict` 預設 `2e4`，乘 4 是字元數。組裝點沒改它。 */
-const EVICTION_THRESHOLD_CHARS = 2e4 * 4;
-
-/** 基座不搬的那幾顆：`FILESYSTEM_TOOL_NAMES` 去掉 `execute`。 */
-const TOOLS_EXCLUDED_FROM_EVICTION: readonly string[] = [
-  'ls',
-  'read_file',
-  'write_file',
-  'edit_file',
-  'delete',
-  'glob',
-  'grep',
-];
-
-/** 基座的 `MAX_LINE_LENGTH`。 */
-const MAX_LINE_LENGTH = 5e3;
-
-const TOO_LARGE_TOOL_MSG = context`
-  Tool result too large, the result of this tool call {tool_call_id} was saved in the filesystem at this path: {file_path}
-  You can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.
-  You can do this by specifying an offset and limit in the read_file tool call.
-  For example, to read the first ${100} lines, you can use the read_file tool with offset=0 and limit=${100}.
-
-  Here is a preview showing the head and tail of the result (lines of the form
-  ... [N lines truncated] ...
-  indicate omitted lines in the middle of the content):
-
-  {content_sample}
-`;
-
-function stringifyToolContent(content: MessageContent): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block: unknown) =>
-        typeof block === 'object' &&
-        block !== null &&
-        'type' in block &&
-        block.type === 'text' &&
-        'text' in block &&
-        typeof block.text === 'string'
-          ? block.text
-          : JSON.stringify(block),
-      )
-      .join('\n');
-  }
-  return String(content);
-}
-
-function sanitizeToolCallId(toolCallId: string): string {
-  return toolCallId.replace(/\./g, '_').replace(/\//g, '_').replace(/\\/g, '_');
-}
-
-function formatContentWithLineNumbers(content: readonly string[], startLine: number): string {
-  const resultLines: string[] = [];
-  for (const [index, line] of content.entries()) {
-    const lineNum = index + startLine;
-    if (line.length <= MAX_LINE_LENGTH) {
-      resultLines.push(`${lineNum.toString().padStart(6)}\t${line}`);
-      continue;
-    }
-    const numChunks = Math.ceil(line.length / MAX_LINE_LENGTH);
-    for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx += 1) {
-      const start = chunkIdx * MAX_LINE_LENGTH;
-      const chunk = line.substring(start, Math.min(start + MAX_LINE_LENGTH, line.length));
-      const marker = chunkIdx === 0 ? lineNum.toString() : `${lineNum}.${chunkIdx}`;
-      resultLines.push(`${marker.padStart(6)}\t${chunk}`);
-    }
-  }
-  return resultLines.join('\n');
-}
-
-function createContentPreview(contentStr: string, headLines = 5, tailLines = 5): string {
-  const lines = contentStr.split('\n');
-  // 基座兩支都傳陣列進去，所以結尾的空行照留（它的字串版才會去掉）。
-  if (lines.length <= headLines + tailLines) {
-    return formatContentWithLineNumbers(
-      lines.map((line) => line.substring(0, 1e3)),
-      1,
-    );
-  }
-  const head = lines.slice(0, headLines).map((line) => line.substring(0, 1e3));
-  const tail = lines.slice(-tailLines).map((line) => line.substring(0, 1e3));
-  const truncationNotice = `\n... [${lines.length - headLines - tailLines} lines truncated] ...\n`;
-  return (
-    formatContentWithLineNumbers(head, 1) +
-    truncationNotice +
-    formatContentWithLineNumbers(tail, lines.length - tailLines + 1)
-  );
-}
 
 /**
  * 基座會把這則工具結果搬到哪個檔：沒過門檻或基座不搬的回 undefined。
@@ -179,11 +88,7 @@ export function toolResultEvictionPath(message: {
   readonly content: MessageContent;
   readonly tool_call_id: string;
 }): string | undefined {
-  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
-    return undefined;
-  }
-  if (stringifyToolContent(message.content).length <= EVICTION_THRESHOLD_CHARS) return undefined;
-  return `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
+  return coreToolResultEvictionPath(message);
 }
 
 /**
@@ -208,9 +113,7 @@ export function toolResultAsSeen(message: NexusMessage): NexusMessage {
   return {
     type: 'tool',
     data: {
-      content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', toolCallId)
-        .replace('{file_path}', filePath)
-        .replace('{content_sample}', createContentPreview(text)),
+      content: evictedToolResultText(text, toolCallId, filePath),
       tool_call_id: toolCallId,
       name: data.name,
       id: data.id,
