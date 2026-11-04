@@ -292,7 +292,7 @@ export interface FoldOptions {
   /** checkpointer。`false` 與缺席同義。 */
   checkpointer?: AgentCheckpointer;
   /**
-   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 沒有中斷可接回（K8 #2358 之前），
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 沒有中斷可接回（TODO(#2358)），
    * 核准管道當成沒有存檔點：要核准的操作確定性回絕，不發 `interrupt()`。
    */
   loop?: AgentLoopKind;

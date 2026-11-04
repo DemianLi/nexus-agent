@@ -1,7 +1,7 @@
 /**
- * `--agent-loop native` 在產品組裝上（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356) K6）：組裝根、pump、wire。
+ * `--agent-loop native` 在產品組裝上（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：組裝根、pump、wire。
  *
- * native loop 接不回中斷（K8 #2358 之前），所以兩處算答題管道時「有存檔點」是 `false`：要問人的工具當下拒絕，不發中斷。
+ * native loop 接不回中斷（TODO(#2358)），所以兩處算答題管道時「有存檔點」是 `false`：要問人的工具當下拒絕，不發中斷。
  * 入口那一份（`cordis-root.ts` 的 `entryApprovalChannel`）給樹上的 ask-user，組裝根那一份（`assembly-root.ts`）給沙箱升級，各一條。
  * 對照組是 `ask-user-assembly.test.ts` 的 serve 那條與 `legacy-thread-escalation.test.ts`（LangGraph 下停在中斷）。
  *

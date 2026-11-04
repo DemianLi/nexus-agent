@@ -1,7 +1,7 @@
 /**
  * native agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：不經 LangGraph 的 Pregel，自己跑 turn／step。
  *
- * middleware 洋蔥還在（#1827 D189 (a)，[#2357](https://github.com/DemianLi/nexus-agent/issues/2357) 拆掉）：每一步照 langchain `createAgent` 的節點順序跑它（`onion.ts`），日誌、圍堵、重試照舊由
+ * middleware 洋蔥還在：每一步照 langchain `createAgent` 的節點順序跑它（`onion.ts`，TODO(#2357)），日誌、圍堵、重試由
  * middleware 寫與做。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
  *
  * 一次 run 的順序（同 `ReactAgent.js` 的邊）：
@@ -12,9 +12,11 @@
  *                     沒有工具呼叫，或工具結果要收這一輪 → afterAgent[n..0] → agent/turn-stopping
  * ```
  *
- * `afterAgent` 回 `jumpTo: 'model'`（插話）就跳過 `beforeModel` 直接再叫模型，同 LangGraph 的 `Send(model_request)`。
+ * `afterAgent` 回 `jumpTo: 'model'`（插話）就跳過 `agent/pre-step` 與 `beforeModel`、不加步數，直接再叫模型，同 LangGraph 的
+ * `Send(model_request)`。
  *
- * 不支援（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)、[#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）：中斷與 resume（沒有存檔點，核准管道在組裝點就判成 `no-channel`）、`afterModel`（樹上沒有）。
+ * 不支援：中斷與 resume（沒有存檔點，核准管道在組裝點判成 `no-channel`，TODO(#2358)）、`afterModel`、`Command.goto`，以及
+ * {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）。子代理仍是 LangGraph 子圖，TODO(#2359)。
  *
  * @module
  */
@@ -33,6 +35,7 @@ import './events.js';
 import type { AgentStepPayload } from './events.js';
 import {
   callModel,
+  hookTargets,
   NodeTask,
   runHook,
   runTool,
@@ -56,11 +59,21 @@ export interface NativeAgentParams {
   readonly store?: unknown;
 }
 
-/** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意照舊。 */
+/** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
 interface LoopDefaults {
   readonly recursionLimit?: number;
   readonly maxConcurrency?: number;
 }
+
+/** 各掛鉤支援的跳轉目標；`canJumpTo` 宣告了別的就在建構時拋，不在跑到時靜靜忽略。 */
+const SUPPORTED_JUMPS: readonly (readonly [
+  'beforeAgent' | 'beforeModel' | 'afterAgent',
+  readonly string[],
+])[] = [
+  ['beforeAgent', ['end']],
+  ['beforeModel', ['end']],
+  ['afterAgent', ['model', 'end']],
+];
 
 /** LangGraph 的預設步數上限。 */
 const DEFAULT_RECURSION_LIMIT = 25;
@@ -82,7 +95,7 @@ function liveToolCalls(message: AIMessage): NonNullable<AIMessage['tool_calls']>
   return (message.tool_calls ?? []).filter((call) => !call.name.startsWith('extract-'));
 }
 
-/** 同 LangGraph 的 `GraphRecursionError` 訊息與錯誤碼，CLI 的退出碼與 eval 的分類照舊認得。 */
+/** 同 LangGraph 的 `GraphRecursionError` 訊息與錯誤碼，CLI 的退出碼與 eval 的分類認得它。 */
 function recursionError(limit: number): GraphRecursionError {
   return new GraphRecursionError(
     [
@@ -186,6 +199,18 @@ export class NativeAgent {
     if (unsupported !== undefined) {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
     }
+    for (const m of this.middleware) {
+      for (const [kind, allowed] of SUPPORTED_JUMPS) {
+        const hook = m[kind];
+        const extra =
+          hook === undefined ? [] : hookTargets(hook).filter((t) => !allowed.includes(t));
+        if (extra.length > 0) {
+          throw new Error(
+            `native agent loop 不支援 ${kind} 跳 ${extra.join('、')}（middleware "${m.name}"）`,
+          );
+        }
+      }
+    }
     const middlewareTools = this.middleware.flatMap(
       (m) => ((m as { tools?: readonly unknown[] }).tools ?? []) as readonly InvokableTool[],
     );
@@ -219,7 +244,8 @@ export class NativeAgent {
   }
 
   /**
-   * 寫一份更新進 thread 的 state，套各鍵的合併規則（`messages` 同 id 取代、其餘附加）。
+   * 寫一份更新進 thread 的 state，套各鍵的合併規則（`state.ts`：`messages` 同 id 取代、`ReducedValue` 用它自己的 reducer、
+   * 其餘後寫的贏）。
    * @param config - 帶 `configurable.thread_id`。
    * @param values - 要寫的鍵。
    */
@@ -241,7 +267,8 @@ export class NativeAgent {
   }
 
   /**
-   * CLI 那條：`streamMode: ['updates', 'values']`，每個節點寫完吐一次 `['updates', { 節點: 寫入 }]`，最後吐 `['values', state]`。
+   * CLI 那條：模型與工具節點寫完各吐一次 `['updates', { 節點: 寫入 }]`（hook 節點不吐），結束時吐一次 `['values', state]`；
+   * 不讀 `streamMode`。
    * @param input - `{ messages }`。
    * @param config - 帶 `configurable.thread_id`。
    */
@@ -322,15 +349,17 @@ export class NativeAgent {
     const base = this.#baseConfig(config, observer.emitter, recursionLimit, maxConcurrency);
     const budget = new StepBudget(recursionLimit);
     const events = this.#params.events;
-    // `signal` 是這一步自己的（一顆拋了 abort 兄弟），跟這次 run 的合起來。
-    const node = (name: string, taskInput: unknown = state, signal?: AbortSignal): NodeTask => {
+    // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走
+    // `configurable`，不在這裡。
+    const node = (name: string, taskInput: unknown = state, stepSignal?: AbortSignal): NodeTask => {
       const ns = `${name}:${randomUUID()}`;
       const config =
-        signal === undefined
+        stepSignal === undefined
           ? base
           : {
               ...base,
-              signal: base.signal === undefined ? signal : AbortSignal.any([base.signal, signal]),
+              signal:
+                base.signal === undefined ? stepSignal : AbortSignal.any([base.signal, stepSignal]),
             };
       return new NodeTask(config, ns, name, state, this.#channels, taskInput, () =>
         observer.emitter?.complete([ns]),
@@ -382,7 +411,7 @@ export class NativeAgent {
               break;
             }
           }
-          // 從 `beforeModel` 跳 `end` 直接到 END，`afterAgent` 不跑（同 `ReactAgent.js` 的 beforeModel router）。
+          // 從 `beforeModel` 跳 `end` 直接到 END：`afterAgent` 不跑、`agent/turn-stopping` 不派（同 `ReactAgent.js` 的 beforeModel router）。
           if (ended) return state;
         }
         skipBeforeModel = false;
@@ -411,7 +440,7 @@ export class NativeAgent {
   }
 
   /**
-   * `afterAgent` 反序跑（最後一顆先）。回 `true` 表示有一顆跳回模型。
+   * `afterAgent` 反序跑（最後一顆先），一顆跳 `end` 其餘不跑。回 `true` 表示有一顆跳回模型。
    */
   async #exit(node: (name: string) => NodeTask, budget: StepBudget): Promise<boolean> {
     for (let i = this.middleware.length - 1; i >= 0; i--) {
@@ -485,13 +514,13 @@ export class NativeAgent {
   }
 
   /**
-   * 一批工具：每顆一個節點、照上限起跑、結果照 `tool_calls` 的順序寫回。回 `true` 表示這一輪要收（最後一則結果是 returnDirect
+   * 一批工具：每顆一個節點、照上限起跑，結果（`ToolMessage` 或 `Command`）照 `tool_calls` 的順序寫回。回 `true` 表示這一輪要收（最後一則結果是 returnDirect
    * 工具帶著名字回來的，同 `ReactAgent.js` 的 tools router）。
    */
   async #toolStep(
     calls: NonNullable<AIMessage['tool_calls']>,
     state: LoopState,
-    node: (name: string, taskInput?: unknown, signal?: AbortSignal) => NodeTask,
+    node: (name: string, taskInput?: unknown, stepSignal?: AbortSignal) => NodeTask,
     note: (name: string, update: Record<string, unknown>) => void,
   ): Promise<boolean> {
     const step = new AbortController();

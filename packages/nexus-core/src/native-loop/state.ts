@@ -3,7 +3,7 @@
  *
  * 鍵與合併規則從 middleware 的 `stateSchema` 收：`messages` 走 LangGraph 的 `messagesStateReducer`（同 id 取代、`RemoveMessage`），
  * `StateSchema` 裡的 `ReducedValue`（`files`、`skillsMetadata`）用它自己的 reducer，其餘後寫的贏。預設值照 langchain
- * `#initializeMiddlewareStates`：輪頭補上缺的鍵，resume 不補。
+ * `#initializeMiddlewareStates`：輪頭補上缺的鍵。
  *
  * @module
  */
@@ -84,7 +84,7 @@ export class StateChannels {
   }
 
   /**
-   * 把一份寫入套進 state，原地改。`undefined` 的格不寫（同 LangGraph：沒寫就是沒更新）。
+   * 把一份寫入套進 state，原地改。`undefined` 的格不寫（同 LangGraph：沒寫就是沒更新），`jumpTo` 不進 state。
    * @param state - 目前的 state。
    * @param update - 一份寫入。
    */

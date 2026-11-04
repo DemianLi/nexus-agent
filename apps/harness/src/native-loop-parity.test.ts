@@ -1,5 +1,5 @@
 /**
- * native agent loop 對照 LangGraph（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356) K6 驗收第二條）：同一份腳本、同一串 plugin，
+ * native agent loop 對照 LangGraph（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：同一份腳本、同一串 plugin，
  * 兩個 loop 各跑一次，比 pump 會讀的 v3 欄位與會話日誌。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
@@ -147,7 +147,7 @@ function logShape(events: readonly SessionEvent[]): string[] {
 }
 
 /**
- * 登記過的差異（D189：中斷類，K8 #2358 收）：native 沒有存檔點，核准管道是 `no-channel`，前景子代理的委派聲明因此是「會自動被拒絕」
+ * 已知差異（中斷類，TODO(#2358)）：native 沒有存檔點，核准管道是 `no-channel`，前景子代理的委派聲明因此是「會自動被拒絕」
  * 那一句（`subagent-delegation.ts` 的 `foregroundDelegationContext`）。換回 LangGraph 那一句再比，其餘一個字都不放過。
  */
 function withKnownDifferences(log: string[][]): string[][] {
@@ -285,7 +285,7 @@ describe('native loop 對照 LangGraph', () => {
     const turns: ScriptedTurn[] = [{ content: '跳回來了。' }];
     const graph = await runOnce('langgraph', turns, '開始。', [jumps()]);
     const native = await runOnce('native', turns, '開始。', [jumps()]);
-    // 跳回模型的那一次真的叫了模型；native 照舊從 exitNode 收掉的話這裡就沒有。
+    // LangGraph 那條跳回模型時真的叫了模型；有這一條，下面的相等才分得出 native 有沒有跳回去。
     expect(graph.events.filter((line) => line.endsWith('message-start id=run-0'))).toHaveLength(1);
     expect(native.failure).toEqual(graph.failure);
     expect(native.events).toEqual(graph.events);
@@ -430,3 +430,31 @@ function pastLogDepthCap(): unknown {
   }
   return value;
 }
+
+describe('native 不支援的跳轉', () => {
+  it('beforeModel 宣告跳 tools：組裝時就拒絕，不在跑到時忽略', async () => {
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'native-parity-tools-jump',
+        apply(registry) {
+          registry.middleware.use(
+            createMiddleware({
+              name: 'nativeParityToolsJump',
+              beforeModel: { canJumpTo: ['tools'], hook: () => undefined },
+            }),
+          );
+        },
+      },
+    };
+    await expect(
+      createNexusAgent({
+        model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+        checkpointer: new MemorySaver(),
+        plugins: [plugin],
+        agentLoop: 'native',
+      }),
+    ).rejects.toThrow(
+      'native agent loop 不支援 beforeModel 跳 tools（middleware "nativeParityToolsJump"）',
+    );
+  });
+});

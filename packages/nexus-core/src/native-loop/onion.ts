@@ -1,12 +1,12 @@
 /**
- * native loop 的**暫時相容層**：照 langchain `createAgent` 的語意跑現有的 middleware 洋蔥（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)，
- * #1827 D189 (a)）。K7 #2357 把每一顆搬成事件與服務，搬完這個檔案整個拿掉。
+ * native loop 的相容層：照 langchain `createAgent` 的語意跑現有的 middleware 洋蔥（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。
+ * TODO(#2357)：middleware 搬成事件與服務後拿掉這個檔。
  *
  * 照的是 `langchain@1.5.10` 的這幾處：
  *
  * - hook 節點：`dist/agents/nodes/middleware.js`（state、runtime、`jumpTo` 檢查）；
  * - 模型洋蔥：`dist/agents/nodes/AgentNode.js` 的 `#invokeModel`（第一顆在最外層、系統訊息兩種改法互斥、回 `Command` 時用最內層記下的 AI 訊息補寫）；
- * - 工具洋蔥：`dist/agents/utils.js` 的 `wrapToolCall`／`chainToolCallHandlers` 與 `nodes/ToolNode.js` 的 `runTool`（工具錯一律重拋給圍堵，找不到工具回錯誤訊息）。
+ * - 工具洋蔥：`dist/agents/utils.js` 的 `wrapToolCall`／`chainToolCallHandlers` 與 `nodes/ToolNode.js` 的 `runTool`（工具錯重拋給圍堵；參數解析失敗、找不到工具回錯誤訊息）。
  *
  * 每一層都跑在 `AsyncLocalStorageProviderSingleton.runWithConfig` 裡，`getConfig()`、`getCurrentTaskInput()` 與 deepagents 的
  * 零參數 `StateBackend`（`__pregel_read`／`__pregel_send`）讀到的是 native loop 合成的 config。
@@ -172,7 +172,7 @@ function hookFunction(hook: Hook): HookFunction {
   return typeof hook === 'function' ? hook : hook.hook;
 }
 
-function hookTargets(hook: Hook): readonly string[] {
+export function hookTargets(hook: Hook): readonly string[] {
   return typeof hook === 'function' ? [] : (hook.canJumpTo ?? []);
 }
 
@@ -180,7 +180,8 @@ function hookTargets(hook: Hook): readonly string[] {
 export type JumpTarget = 'model' | 'tools' | 'end' | undefined;
 
 /**
- * 跑一顆 hook（`beforeAgent`、`beforeModel`、`afterAgent`）。照 `nodes/middleware.js`：沒回東西就沒寫入；跳轉目標要在 `canJumpTo` 裡。
+ * 跑一顆 hook（`beforeAgent`、`beforeModel`、`afterAgent`）。照 `nodes/middleware.js`：回傳值是 null／undefined 就不套回傳值
+ * （`__pregel_send` 的寫入照樣套）；跳轉目標要在 `canJumpTo` 裡。
  * @param middleware - 那一顆。
  * @param kind - 哪一種 hook。
  * @param task - 這個節點的環境。
@@ -406,7 +407,7 @@ export async function callModel(onion: ModelOnion, task: NodeTask): Promise<Mode
   return { message, commands };
 }
 
-/** 有 `name` 與 `invoke` 的物件（非 provider 內建工具），同 langchain 的 `isClientTool`。 */
+/** 有 `invoke` 的物件（非 provider 內建工具），同 langchain 的 `isClientTool`。 */
 function isClientTool(tool: unknown): boolean {
   return (
     typeof tool === 'object' &&
@@ -421,8 +422,8 @@ function invalidToolError(name: string, available: readonly string[]): string {
 }
 
 /**
- * 跑一顆工具呼叫，經過整串 `wrapToolCall`。照 `ToolNode.js` 的 `runTool`：有 `wrapToolCall` 時錯一律往外拋（圍堵在最外層接）；
- * 工具找不到回錯誤的 `ToolMessage`。
+ * 跑一顆工具呼叫，經過整串 `wrapToolCall`。照 `ToolNode.js` 的 `runTool`：工具與 middleware 的錯往外拋（圍堵在最外層接），
+ * 參數解析失敗翻成給模型的 `ToolMessage`；工具找不到回錯誤的 `ToolMessage`。
  * @param call - 這顆呼叫。
  * @param tools - 靜態註冊的工具。
  * @param middleware - 整串 middleware。
@@ -450,7 +451,7 @@ export async function runTool(
         status: 'error',
       });
     }
-    // LangChain 的 tool 只掛 `abort` 監聽，拿到已經 abort 的 signal 會一直等本體。
+    // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著，所以先拋。
     task.config.signal?.throwIfAborted();
     let output: unknown;
     try {

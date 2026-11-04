@@ -93,7 +93,7 @@ export interface AssembleAgentParams extends FoldedAgentParams {
   events?: EventDispatcher;
 }
 
-/** 誰跑 agent loop 的兩個值，`--agent-loop` 與設定列共用。 */
+/** 誰跑 agent loop 的兩個值；`--agent-loop` 的驗證與錯誤訊息照這份列。 */
 export const AGENT_LOOP_KINDS = ['langgraph', 'native'] as const;
 
 /** 誰跑 agent loop。 */
@@ -338,7 +338,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     store,
   });
   if (params.loop !== 'native') return agent;
-  // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（`NativeAgent` 的檔頭），
+  // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（見 `NativeAgent` 的類別說明），
   // TODO(#2363) 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
   return createNativeAgent({
     model,

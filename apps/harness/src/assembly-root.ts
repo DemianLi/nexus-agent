@@ -1150,7 +1150,7 @@ export async function createCliAgent(
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（K8 #2358 之前），
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
   // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
