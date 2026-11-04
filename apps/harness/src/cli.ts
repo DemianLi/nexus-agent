@@ -838,7 +838,7 @@ export async function runRepl(
         // 從來不會 abort 的。有那條路的時候換掉這一行就行，執行器那側已經接得住。
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
-          // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
+          // 語法不符或名字不認得——**照原樣當一輪人話跑**（native 下太大的照 {@link runTurn} 拒收）。
           await runTurn(agent, text, printer, sessionLog, titleLimits, loop);
         } else {
           if (execution.result.text !== undefined) {

@@ -1,9 +1,9 @@
 /**
- * 太大的人話在 wire 上的拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415) 第 6b 張）。量法對著基座比在
+ * 太大的人話在 wire 上的拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。量法對著基座比在
  * `@nexus/core` 的 `human-message-admission.test.ts`；這一檔問的是接線：
  *
  * 1. `native` 下 `run.start` 與 `queue.update` 的 `edit` 拒收，日誌一個字都不寫；剛好等於上限的照收；點名的提示字算進去。
- * 2. `langgraph` 下照收，交給基座搬移。
+ * 2. `langgraph` 下照收。
  * 3. 產品路徑上的 serve 照 `--agent-loop` 決定：沒給就是 `langgraph`；native 套件把它當成 `native`（`native-loop.setup.ts`）。
  */
 
@@ -129,6 +129,7 @@ describe('wire handler 照 agentLoop 拒收', () => {
     await until(() => types().includes('turn/start'));
     const queued = await client.runStart(thread, '第二句');
     const id = (queued as { result: { run_id: string } }).result.run_id;
+    // 改成功會落一顆 inbox/spliced：長度不變就是那一件沒被改。
     const before = types().length;
     expect(
       await client.queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: TOO_LARGE } }),

@@ -1,6 +1,6 @@
 /**
- * 人話拒收的量法對著真的基座比（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415) 第 6b 張）：同一則人話交給基座
- * `FilesystemMiddleware` 的 `beforeAgent`，基座搬了的，{@link humanMessageRejection} 一定拒收；基座寫進 backend 的那段字就是
+ * 人話拒收的量法對著真的基座比（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：同一則人話交給基座
+ * `FilesystemMiddleware` 的 `beforeAgent`，拒不拒收與基座搬不搬一致；基座寫進 backend 的那段字就是
  * {@link humanMessageText}。升級基座時門檻或量法變了就紅在這裡。
  */
 
@@ -46,11 +46,11 @@ const cases: Record<string, MessageContent> = {
     { type: 'text', text: 'b'.repeat(half) },
     { type: 'text', text: 'c'.repeat(half) },
   ],
-  '附件的參照區塊不算字': [
+  附件的參照區塊不算字: [
     { type: 'nexus-file', id: 'x'.repeat(limit), name: 'f.txt' } as never,
     { type: 'text', text: 'd'.repeat(limit) },
   ],
-  '點名與情境的文字區塊算字': [
+  點名與情境的文字區塊算字: [
     { type: 'text', text: 'e'.repeat(limit - 10) },
     { type: 'text', text: 'mention-hint' },
   ],

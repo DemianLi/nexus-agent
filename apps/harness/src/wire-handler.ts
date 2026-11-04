@@ -624,8 +624,8 @@ export interface WireHandlerOptions {
    */
   readonly maxThreads?: number;
   /**
-   * 這台 server 的 agent 由誰跑（`--agent-loop`），省略即 `langgraph`。`native` 時太大的人話在收下之前拒收（{@link sizeRejection}）；
-   * `langgraph` 照舊交給基座搬到 `/conversation_history/`。
+   * 這台 server 的 `--agent-loop`，省略即 `langgraph`；要跟 `createAgent` 組出來的 loop 一致。它只決定人話的准入：`native` 時
+   * 太大的人話在收下之前拒收（{@link sizeRejection}），`langgraph` 交給基座搬到 `/conversation_history/`。
    */
   readonly agentLoop?: AgentLoopKind;
   /**
@@ -3178,9 +3178,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是送進模型的那一則——
-   * 引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來的內容。不收就是一則 `invalid_argument`。
-   * 引用要先經 {@link referenceRejection} 驗過。
+   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是進圖的那一則——
+   * 引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來的內容。附件在那裡是參照區塊、不算字，所以
+   * `run.start` 在收下附件之前量也一樣。不收就是一則 `invalid_argument`。引用要先經 {@link referenceRejection} 驗過，否則拋
+   * `SessionReferenceError`。
    */
   function sizeRejection(
     pump: ThreadPump,

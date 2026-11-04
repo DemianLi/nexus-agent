@@ -1,10 +1,10 @@
 /**
- * 人話太大就在收下之前拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415) 第 6b 張）：native loop 的入口用它，
+ * 人話太大就在收下之前拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：native loop 的入口用它，
  * 那句話不進佇列、日誌一個字都不寫。
  *
  * 門檻與量法照基座 `FilesystemMiddleware` 的 `beforeAgent`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的
- * `extractTextFromMessage` 與 `4 * humanMessageTokenLimitBeforeEvict`）：拒收的那一刀與基座搬移的那一刀落在同一處，native 的
- * 人話因此到不了基座的搬移；已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
+ * `extractTextFromMessage` 與 `4 * humanMessageTokenLimitBeforeEvict`）：拒收的那一刀與基座搬移的那一刀落在同一處，經過入口的
+ * 人話因此到不了基座的搬移；命令接著送的話（`/plan <message>`）不經這裡，仍可能被基座搬移。已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
  *
  * @module
  */
@@ -43,7 +43,7 @@ export function humanMessageText(content: MessageContent): string {
 /**
  * 這則人話收不收。
  *
- * @param content - 組好的人話內容：`userContent` 拿換過 `@標題` 的字、附件、點名、畫面情境組出來的那一份。
+ * @param content - 送進圖的那則 `HumanMessage` 的內容（wire 那側是 `userContent` 組出來、引用已換成 `@標題` 的那一份）。
  * @returns 收就是 `undefined`；不收是 `<代碼>: <說法>`，帶實際字數與上限。
  */
 export function humanMessageRejection(content: MessageContent): string | undefined {

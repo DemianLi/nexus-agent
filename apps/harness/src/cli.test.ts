@@ -477,7 +477,7 @@ describe('runTurn 照 loop 拒收太大的人話（#2415）', () => {
     expect(sessionLog.events.map((event) => event.type)).toContain('turn/start');
   });
 
-  it('省略 loop（langgraph）：照跑，交給基座搬移', async () => {
+  it('省略 loop（langgraph）：不拒收，照跑', async () => {
     const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
     const { agent } = await createNexusAgent({ model, plugins: [] });
     const { printer, stdout } = recorder();

@@ -548,13 +548,11 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
 /**
- * 過大的工具結果搬去的那個路徑前綴，就是 core 的 `TOOL_RESULT_EVICTION_PREFIX`：組裝點那一格
- * （`toolResultEvictionWrap`）在文字超過 80,000 字元時寫 `<前綴>/<sanitized tool_call_id>.txt`，
- * 暫存的路由要接在同一個前綴底下。字串照基座寫死的那一個（`deepagents@1.13.1`），由 core 的
+ * 暫存路由接的那個前綴：組裝點那一格（core 的 `toolResultEvictionWrap`）在工具結果超過 80,000 字元時寫
+ * `<前綴>/<sanitized tool_call_id>.txt`，路由要蓋住同一個前綴。字串照基座寫死的那一個（`deepagents@1.13.1`），由 core 的
  * `tool-result-eviction.test.ts` 對著真的基座比。
  *
- * **匯出是刻意的**：`tool-result-stash.test.ts` 那條絆索拿它跟組裝好的 agent 實際指路的路徑對，
- * 路由與搬移的前綴分家就當場紅。
+ * **匯出是刻意的**：`tool-result-stash.test.ts` 的絆索斷言組裝好的 agent 指去的路徑落在這個前綴底下。
  */
 export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
 
