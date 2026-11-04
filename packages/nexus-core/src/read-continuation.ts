@@ -89,6 +89,8 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { readLangHintForPath } from './code-language.js';
 import { resolveToolName } from './containment.js';
+import { overriddenTools } from './tool-resolution.js';
+import type { ToolOverride } from './tool-resolution.js';
 import { putToolResultMeta } from './tool-result-meta.js';
 import type { ReadResultMeta } from './tool-result-meta.js';
 
@@ -474,15 +476,6 @@ function modelFacingReadTool(
   return definition;
 }
 
-/** 一個工具是不是基座的 `read_file`：工具實例或已經換過的那一份都叫這個名字。 */
-function isReadTool(tool: unknown): tool is object {
-  return (
-    typeof tool === 'object' &&
-    tool !== null &&
-    (tool as { readonly name?: unknown }).name === READ_TOOL
-  );
-}
-
 /**
  * 呼叫要交給工具的參數：`limit` 沒給就填 {@link READ_LIMIT}，超過就拋 dsh 的原句
  * （`packages/fs/tool-fs/src/read.ts:59`）。拋出去的由圍堵轉成工具錯誤。
@@ -511,17 +504,18 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
   const readLimit = limits?.readLimit ?? READ_LIMIT;
   // 每顆 middleware 各一份：描述裡有這顆的行數上限，不同上限的兩顆不能共用同一個快取。
   const modelFacing = new WeakMap<object, object>();
+  const readOverride: ToolOverride = {
+    override: (tool, name) =>
+      name === READ_TOOL ? modelFacingReadTool(tool, modelFacing, readLimit) : undefined,
+  };
   return createMiddleware({
     name: READ_CONTINUATION_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
       const tools = request.tools as readonly unknown[] | undefined;
-      if (!Array.isArray(tools) || !tools.some(isReadTool)) return handler(request);
-      return handler({
-        ...request,
-        tools: tools.map((tool) =>
-          isReadTool(tool) ? modelFacingReadTool(tool, modelFacing, readLimit) : tool,
-        ),
-      } as typeof request);
+      if (!Array.isArray(tools)) return handler(request);
+      const overridden = overriddenTools(tools, readOverride);
+      if (overridden === tools) return handler(request);
+      return handler({ ...request, tools: overridden } as typeof request);
     },
     wrapToolCall: async (request, handler) => {
       if (resolveToolName(request) !== READ_TOOL) return handler(request);

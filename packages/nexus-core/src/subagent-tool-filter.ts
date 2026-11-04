@@ -32,6 +32,8 @@ import { createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
 import { toolRefusal } from './tool-events.js';
+import { admittedTools } from './tool-resolution.js';
+import type { ToolAdmission } from './tool-resolution.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME = 'nexusSubagentToolFilter';
@@ -102,19 +104,17 @@ export function filteredToolRefusal(name: string): string {
  * @param hidden - 要遮的工具名（基座工具，registry 工具另走 `foldSubAgents`）。
  */
 export function createSubagentToolFilterMiddleware(hidden: ReadonlySet<string>): AgentMiddleware {
+  const admission: ToolAdmission = { admits: (name) => !hidden.has(name) };
   return createMiddleware({
     name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) =>
       handler({
         ...request,
-        tools: request.tools.filter((each) => {
-          const name = (each as { name?: unknown }).name;
-          return typeof name !== 'string' || !hidden.has(name);
-        }),
+        tools: admittedTools(request.tools, admission) as typeof request.tools,
       }),
     wrapToolCall: (request, handler) => {
       const name = request.toolCall.name;
-      if (!hidden.has(name)) return handler(request);
+      if (admission.admits(name)) return handler(request);
       return toolRefusal(filteredToolRefusal(name), { callId: request.toolCall.id ?? '', name });
     },
   });

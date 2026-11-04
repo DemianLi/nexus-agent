@@ -36,8 +36,10 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
+import { overriddenTools } from './tool-resolution.js';
+import type { ToolOverride } from './tool-resolution.js';
 
-/** 這個 middleware 的名字。`fs-tool-descriptions.ts` 看它在不在決定要不要換工具描述。 */
+/** 這個 middleware 的名字。排序斷言用得到。 */
 export const SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME = 'nexusSearchDescriptions';
 
 /** `grep` 的 `pattern` 參數的說法，照 dsh `grep.ts:289`。 */
@@ -100,11 +102,11 @@ function modelFacingSearchTool(tool: object, name: string): object {
   return definition;
 }
 
-function searchToolName(tool: unknown): string | undefined {
-  if (typeof tool !== 'object' || tool === null) return undefined;
-  const name = (tool as { readonly name?: unknown }).name;
-  return typeof name === 'string' && name in PARAMETER_DESCRIPTIONS ? name : undefined;
-}
+/** 模型那一側的 `grep`、`glob` 換成 {@link modelFacingSearchTool}，其餘不換。 */
+const searchOverride: ToolOverride = {
+  override: (tool, name) =>
+    name in PARAMETER_DESCRIPTIONS ? modelFacingSearchTool(tool, name) : undefined,
+};
 
 /**
  * 造一顆把 `grep`、`glob` 的參數說明換成 ripgrep 語意說法的 middleware。**無狀態**：root 與每個子代理共用同一顆。
@@ -116,16 +118,10 @@ export function createSearchDescriptionsMiddleware(): AgentMiddleware {
     name: SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
       const tools = request.tools as readonly unknown[] | undefined;
-      if (!Array.isArray(tools) || !tools.some((tool) => searchToolName(tool) !== undefined)) {
-        return handler(request);
-      }
-      return handler({
-        ...request,
-        tools: tools.map((tool) => {
-          const name = searchToolName(tool);
-          return name === undefined ? tool : modelFacingSearchTool(tool as object, name);
-        }),
-      } as typeof request);
+      if (!Array.isArray(tools)) return handler(request);
+      const overridden = overriddenTools(tools, searchOverride);
+      if (overridden === tools) return handler(request);
+      return handler({ ...request, tools: overridden } as typeof request);
     },
   }) as AgentMiddleware;
 }
