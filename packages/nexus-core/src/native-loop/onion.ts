@@ -69,6 +69,8 @@ type ModelHandler = (request: ModelRequest) => Promise<unknown>;
 export interface ToolRequest {
   readonly toolCall: ToolCall;
   readonly tool: unknown;
+  /** 這一批的助手訊息：`toolCallOwner` 讀這一格，不倒著找 `state`（設計 §四 W6）。 */
+  readonly owner: AIMessage;
   readonly state: LoopState;
   readonly runtime: Runtime;
 }
@@ -491,6 +493,7 @@ function invalidToolError(name: string, available: readonly string[]): string {
  * @param tools - 靜態註冊的工具。
  * @param middleware - 整串 middleware。
  * @param task - 這顆工具的環境（`tools:<id>`）。
+ * @param owner - 這一批的助手訊息（`call` 在它的 `tool_calls` 裡），放進請求的 `owner`。
  * @returns `ToolMessage` 或 `Command`。
  */
 export async function runTool(
@@ -498,6 +501,7 @@ export async function runTool(
   tools: readonly InvokableTool[],
   middleware: readonly LoopMiddleware[],
   task: NodeTask,
+  owner: AIMessage,
 ): Promise<ToolMessage | Command> {
   const registered = tools.find((tool) => tool.name === call.name);
   const base: ToolHandler = async (request) => {
@@ -582,6 +586,7 @@ export async function runTool(
       chained({
         toolCall: call,
         tool: registered,
+        owner,
         state: task.state,
         runtime: task.runtime(undefined),
       }),

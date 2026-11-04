@@ -16,6 +16,7 @@
 
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { ToolCallOwner } from './tool-call-owner.js';
 
 /** 一次工具呼叫：`wrapToolCall` 的請求上，一步用得到的那幾格。 */
 export interface ToolCallSite {
@@ -27,6 +28,11 @@ export interface ToolCallSite {
   readonly args: unknown;
   /** 要跑的工具本體；`undefined` 是這個名字沒有工具。 */
   readonly tool: unknown;
+  /**
+   * loop 交下來的、這一批的助手訊息（`toolCallOwner` 讀它，見 `tool-call-owner.ts`）。native loop 才有這個鍵，
+   * `langgraph` 沒有。
+   */
+  readonly owner?: ToolCallOwner | undefined;
   /** 這次呼叫看到的 agent state（`messages` 在裡面）。 */
   readonly state: unknown;
   /**
@@ -68,6 +74,7 @@ export type ToolCallStep = (
 interface WrappedRequest {
   readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
   readonly tool?: unknown;
+  readonly owner?: ToolCallOwner | undefined;
   readonly state?: unknown;
   readonly runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal };
 }
@@ -79,6 +86,7 @@ export function toolCallSiteOf(request: WrappedRequest): ToolCallSite {
     name: request.toolCall.name,
     args: request.toolCall.args,
     tool: request.tool,
+    ...('owner' in request && { owner: request.owner }),
     state: request.state,
     configurable: request.runtime?.configurable,
     signal: request.runtime?.signal,

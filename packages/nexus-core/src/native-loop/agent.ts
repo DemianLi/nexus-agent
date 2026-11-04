@@ -497,9 +497,9 @@ export class NativeAgent {
         const ai = await this.#modelStep(state, threadId, step, signal, node, note);
         const calls = ai === undefined ? [] : liveToolCalls(ai);
         let concluded = calls.length === 0;
-        if (!concluded) {
+        if (!concluded && ai !== undefined) {
           budget.take();
-          concluded = await this.#toolStep(calls, state, node, note, base.signal);
+          concluded = await this.#toolStep(ai, calls, state, node, note, base.signal);
         }
         if (!concluded) continue;
       }
@@ -604,6 +604,7 @@ export class NativeAgent {
    * 工具帶著名字回來的，同 `ReactAgent.js` 的 tools router）。
    */
   async #toolStep(
+    owner: AIMessage,
     calls: NonNullable<AIMessage['tool_calls']>,
     state: LoopState,
     node: (name: string, taskInput?: unknown, stepSignal?: AbortSignal) => NodeTask,
@@ -633,7 +634,7 @@ export class NativeAgent {
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
-        const result = await runTool(call, this.#tools, this.middleware, tasks[index]!);
+        const result = await runTool(call, this.#tools, this.middleware, tasks[index]!, owner);
         results[index] = result;
         note('tools', isCommand(result) ? commandUpdateOf(result) : { messages: [result] });
       }),
