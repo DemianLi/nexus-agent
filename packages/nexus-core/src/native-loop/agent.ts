@@ -361,8 +361,15 @@ export class NativeAgent {
               signal:
                 base.signal === undefined ? stepSignal : AbortSignal.any([base.signal, stepSignal]),
             };
-      return new NodeTask(config, ns, name, state, this.#channels, taskInput, () =>
-        observer.emitter?.complete([ns]),
+      return new NodeTask(
+        config,
+        ns,
+        name,
+        state,
+        this.#channels,
+        taskInput,
+        () => observer.emitter?.complete([ns]),
+        stepSignal,
       );
     };
     const note = (name: string, update: Record<string, unknown>): void =>
@@ -422,7 +429,7 @@ export class NativeAgent {
         let concluded = calls.length === 0;
         if (!concluded) {
           budget.take();
-          concluded = await this.#toolStep(calls, state, node, note);
+          concluded = await this.#toolStep(calls, state, node, note, base.signal);
         }
         if (!concluded) continue;
       }
@@ -522,17 +529,18 @@ export class NativeAgent {
     state: LoopState,
     node: (name: string, taskInput?: unknown, stepSignal?: AbortSignal) => NodeTask,
     note: (name: string, update: Record<string, unknown>) => void,
+    caller: AbortSignal | undefined,
   ): Promise<boolean> {
     const step = new AbortController();
     const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }, step.signal));
     const results = new Array<ToolMessage | Command | undefined>(calls.length);
     const messages: BaseMessage[] = [];
-    // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。
-    const commit = (): void => {
+    // 照 `tool_calls` 的順序寫回，同 LangGraph 照 task 的順序套寫入。`unfinished` 是沒收完的那幾顆送出的寫入要不要套。
+    const commit = (unfinished: boolean): void => {
       tasks.forEach((task, index) => {
         const value = results[index];
         if (value === undefined) {
-          task.keepWrites();
+          if (unfinished) task.keepWrites();
           return;
         }
         task.flush();
@@ -544,20 +552,23 @@ export class NativeAgent {
         }
       });
     };
+    // 呼叫端的 `config.signal` 中止時這一步當場拋，不等工具，只寫回收完的那幾顆，同 LangGraph `PregelRunner` 的 `abortPromise`。
+    if (caller?.aborted === true) throw new Error('Abort');
+    const batch = runBounded(
+      calls.map((call, index) => async () => {
+        results[index] = await runTool(call, this.#tools, this.middleware, tasks[index]!);
+      }),
+      Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
+      step,
+    );
     try {
-      await runBounded(
-        calls.map((call, index) => async () => {
-          results[index] = await runTool(call, this.#tools, this.middleware, tasks[index]!);
-        }),
-        Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
-        step,
-      );
+      await (caller === undefined ? batch : abortable(batch, caller));
     } catch (error) {
-      // 同 LangGraph 把這一步存成 pending writes：跑完的兄弟結果照寫，每一顆送出的寫入照套，失敗那顆不算完成。
-      commit();
+      // 一顆失敗：同 LangGraph 把這一步存成 pending writes，跑完的兄弟結果照寫，每一顆送出的寫入照套，失敗那顆不算完成。
+      commit(!(caller?.aborted ?? false));
       throw error;
     }
-    commit();
+    commit(true);
     note('tools', { messages });
     const last = state.messages.at(-1);
     return (
@@ -616,6 +627,18 @@ function threadIdOf(config: RunnableConfig): string {
   const threadId = optionalThreadIdOf(config);
   if (threadId === undefined) throw new Error('native agent loop 需要 configurable.thread_id');
   return threadId;
+}
+
+/** `promise` 與 `signal` 競速：先中止就拋 `Abort`（同 LangGraph），`promise` 之後的拒絕吞掉。 */
+function abortable(promise: Promise<void>, signal: AbortSignal): Promise<void> {
+  promise.catch(() => undefined);
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('Abort'));
+    // 工具鏈可能同步跑到中止的那一處，掛監聽之前就已經舉起來了。
+    if (signal.aborted) onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /** 一條推拉的佇列：生產者 push，消費者 for-await。 */

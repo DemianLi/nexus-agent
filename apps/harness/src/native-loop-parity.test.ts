@@ -458,3 +458,45 @@ describe('native 不支援的跳轉', () => {
     );
   });
 });
+
+/**
+ * 呼叫端的 `config.signal` 在工具鏈中途中止：這一步當場拋 `Abort`、不等工具（同 LangGraph `PregelRunner` 的 `abortPromise`）。
+ * 工具拿到的是已中止的 signal，LangChain 的 `tool()` 這時永不 resolve，等它就是懸著。
+ */
+describe('native 下呼叫端中止', () => {
+  it('閘門裡中止：這一輪拋 Abort，不懸著', async () => {
+    const controller = new AbortController();
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'native-parity-caller-abort',
+        apply(registry) {
+          registry.approvals.gate(async (exec, next) => {
+            if (exec.name === 'echo') controller.abort();
+            return next();
+          });
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          { content: '', toolCalls: [{ name: 'echo', args: { text: '嗨' } }] },
+          { content: '不該走到。' },
+        ],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [toolsPlugin, plugin],
+      agentLoop: 'native',
+    });
+    try {
+      await expect(
+        built.agent.invoke(toAgentInvocation('跑。'), {
+          configurable: { thread_id: 'native-caller-abort' },
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow('Abort');
+    } finally {
+      await built.dispose();
+    }
+  });
+});

@@ -97,6 +97,7 @@ export class NodeTask {
    * @param channels - 合併規則。
    * @param taskInput - `getCurrentTaskInput()` 讀到的值。
    * @param onFlush - 節點寫回之後（{@link NodeTask.flush}）。
+   * @param stepSignal - 同一批工具共用、一顆拋了就舉起來的訊號；工具進 `invoke` 前看它。
    */
   constructor(
     base: RunnableConfig,
@@ -106,6 +107,7 @@ export class NodeTask {
     private readonly channels: StateChannels,
     taskInput: unknown,
     private readonly onFlush?: () => void,
+    readonly stepSignal?: AbortSignal,
   ) {
     this.config = {
       ...base,
@@ -451,8 +453,9 @@ export async function runTool(
         status: 'error',
       });
     }
-    // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著，所以先拋。
-    task.config.signal?.throwIfAborted();
+    // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著。兄弟失敗
+    // 舉起來的這一格由 native 自己舉，所以先拋；呼叫端的 `config.signal` 照原樣交給工具，同 LangGraph。
+    task.stepSignal?.throwIfAborted();
     let output: unknown;
     try {
       output = await tool.invoke(
