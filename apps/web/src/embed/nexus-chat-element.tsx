@@ -14,18 +14,19 @@
  * @module
  */
 import type { HostToolDeclaration, WireClient } from '@nexus/wire';
+import { EMBED_PATH_PREFIX } from '@nexus/wire';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
 
-import { createAgentClient } from '@/lib/agent';
+import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { PortalContainerContext } from '@/lib/portal-container';
 import { systemDarkQuery } from '@/lib/theme';
 
 import { SHADOW_CONTAINER_NAME, SHADOW_ROOT_CLASS } from '../../embed-shadow-css';
 import { parseContext } from './context';
 import type { NexusChatContext } from './context';
-import { EmbeddedChat, embedBaseUrl } from './embedded-chat';
+import { EmbeddedChat } from './embedded-chat';
 import { HOST_TOOL_EVENT, parseHostTools } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { themeOverrides } from './theme-tokens';
@@ -46,8 +47,13 @@ export interface NexusChatStyles {
 
 export interface DefineOptions {
   readonly styles: NexusChatStyles;
-  /** 注入用；省略就是 `embedBaseUrl()`（agent 來源加 `/embed`）。每個元素一個。 */
+  /** 注入用；省略就是打 `scriptUrl` 所在目錄底下 `/embed` 的 client（#2382、#2426）。每個元素一個。 */
   readonly createClient?: () => WireClient;
+  /**
+   * 從哪個網址算 agent 的位置（client、`/livez` 探測、交付物下載都用它）；省略是這支模組自己的網址，建置後就是 `embed.js`。
+   * 元件跑在宿主頁上，`document.baseURI` 是宿主頁的，不能拿來用（#2426）。測試裡的模組網址是 `file:`，要另外給。
+   */
+  readonly scriptUrl?: string;
 }
 
 /** 元素自己的版面：填滿父容器，斷點跟著 `.nexus-app` 的寬度走。 */
@@ -62,9 +68,13 @@ function parseTheme(value: string | null): NexusChatTheme {
 /** 註冊 `<nexus-chat>`；已經註冊過就什麼都不做（同一頁載入兩次 `embed.js`）。 */
 export function defineNexusChat({
   styles,
-  createClient = () => createAgentClient({ baseUrl: embedBaseUrl() }),
+  scriptUrl = import.meta.url,
+  createClient,
 }: DefineOptions): void {
   if (customElements.get(ELEMENT_NAME) !== undefined) return;
+  const baseUrl = agentBaseUrl(scriptUrl);
+  const makeClient =
+    createClient ?? (() => createAgentClient({ baseUrl, routePrefix: EMBED_PATH_PREFIX }));
 
   // 型別對著給宿主頁的那份（`nexus-chat.d.ts`），實作跟公開的形狀對不上就編不過。
   class ChatElement extends HTMLElement implements NexusChatElement {
@@ -139,7 +149,7 @@ export function defineNexusChat({
       }
       this.#applyTheme();
       if (this.#react === undefined) {
-        this.#client ??= createClient();
+        this.#client ??= makeClient();
         this.#react = createRoot(this.#app);
       }
       this.#render();
@@ -170,6 +180,7 @@ export function defineNexusChat({
         <StrictMode>
           <PortalContainerContext.Provider value={this.#portal}>
             <EmbeddedChat
+              agentBaseUrl={baseUrl}
               client={client}
               context={this.#context}
               hostTools={this.#hostTools}

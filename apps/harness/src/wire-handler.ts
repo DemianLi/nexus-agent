@@ -558,6 +558,10 @@ export interface WireHandlerOptions {
    */
   readonly auth: WireAuth;
   /**
+   * 指名的非 loopback authority（`--trusted-host`，#2369），交給 `request-trust.ts` 的圍欄。省略就只認 loopback。
+   */
+  readonly trustedHosts?: readonly string[];
+  /**
    * 交付檔的三個上限，來自 plugin 清單上 `#settings/deliverable-files` 那一列
    * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    *
@@ -4360,7 +4364,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
 
   function admit(headers: Headers): Response | undefined {
     // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
-    if (!isTrustedWireRequest(headers)) {
+    if (!isTrustedWireRequest(headers, options.trustedHosts)) {
       return new Response('untrusted host or origin', { status: 403 });
     }
     // 同一個位置、排在圍欄之後：不存在的路徑一樣先要身分。見 `browser-auth.ts`。

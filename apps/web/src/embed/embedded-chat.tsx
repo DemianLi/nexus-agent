@@ -32,7 +32,6 @@ import { Entry as TranscriptEntry, useFreshItems } from '@/components/transcript
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
 import type { Conversation } from '@/hooks/use-conversation';
-import { agentBaseUrl } from '@/lib/agent';
 import { pendingAsker } from '@/lib/approval-asker';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
 import { connectionStall } from '@/lib/connection-stall';
@@ -57,14 +56,6 @@ export const NEW_CONVERSATION_LABEL = '新對話';
 /** 情境標籤前面那幾個字。 */
 export const CONTEXT_LABEL_PREFIX = '目前選取：';
 
-/**
- * 嵌入版打的 agent 位置：設定裡的來源加上 `/embed`（#2382）。thread 那一族的請求與 `/embed/threads/mux` 都從這裡長出來，server 照這個前綴套
- * 嵌入版的設定檔（#2367）。
- */
-export function embedBaseUrl(): string {
-  return `${agentBaseUrl().replace(/\/+$/u, '')}${EMBED_PATH_PREFIX}`;
-}
-
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 function renderSubagentEntry(entry: ConversationEntry) {
@@ -74,16 +65,19 @@ function renderSubagentEntry(entry: ConversationEntry) {
 /**
  * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
  *
+ * @param agentBaseUrl - agent 的位置，從 `embed.js` 算（#2426）。`/livez` 在它底下，thread 那一族在它加上 `/embed` 底下（#2382）。
  * @param context - 宿主頁給的情境（#2365 第 7 點）：畫成標籤，每一句送出時附上當下的值（#2382）；沒有就不送。
  * @param hostTools - 宿主頁宣告的工具（#2374）：每一句送出時附上當下的值，同 `context`；沒有就不送。
  * @param onHostCall - 模型叫了 `hostTools` 裡的一支時呼叫，交給宿主頁執行。
  */
 export function EmbeddedChat({
+  agentBaseUrl,
   client,
   context,
   hostTools,
   onHostCall,
 }: {
+  readonly agentBaseUrl: string;
   readonly client: WireClient;
   readonly context: NexusChatContext | undefined;
   readonly hostTools: readonly HostToolDeclaration[] | undefined;
@@ -96,6 +90,7 @@ export function EmbeddedChat({
   return (
     <EmbeddedConversation
       key={threadId}
+      agentBaseUrl={agentBaseUrl}
       client={client}
       threadId={threadId}
       context={context}
@@ -146,6 +141,7 @@ function useHostCalls(
 }
 
 function EmbeddedConversation({
+  agentBaseUrl,
   client,
   threadId,
   context,
@@ -153,6 +149,7 @@ function EmbeddedConversation({
   onHostCall,
   onNewConversation,
 }: {
+  readonly agentBaseUrl: string;
   readonly client: WireClient;
   readonly threadId: string;
   readonly context: NexusChatContext | undefined;
@@ -160,11 +157,11 @@ function EmbeddedConversation({
   readonly onHostCall: (detail: NexusHostToolDetail) => void;
   readonly onNewConversation: () => void;
 }) {
-  const conversation = useConversation({ client, threadId });
+  const conversation = useConversation({ client, threadId, agentBaseUrl });
   useHostCalls(conversation, hostTools, onHostCall);
   const deliverableDownload = useMemo(
-    () => createDeliverableDownloader({ threadId, baseUrl: embedBaseUrl() }),
-    [threadId],
+    () => createDeliverableDownloader({ threadId, baseUrl: `${agentBaseUrl}${EMBED_PATH_PREFIX}` }),
+    [threadId, agentBaseUrl],
   );
   const imageSource = useMemo(
     () => createAttachmentImageSource(client, threadId),

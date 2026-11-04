@@ -39,6 +39,8 @@ describe('serve 的旗標', () => {
     expect(parseServeArgs([])).toEqual({
       live: false,
       port: DEFAULT_PORT,
+      // 只認 loopback；放在反向代理後面才要指名（#2369）。
+      trustedHosts: [],
       // **續行 serve 預設開、CLI 預設關**（#445）：serve 要核准時停下來等人，不會空轉；
       // CLI 的 `HEADLESS_APPROVALS` 確定性拒絕，續行只會一再撞同一個拒絕。
       goalDriver: true,

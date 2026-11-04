@@ -15,6 +15,8 @@ function hanging() {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  // 探測打的位置從頁面算（`agentBaseUrl`）；這份跑在 node，給一個掛在根路徑的頁面。
+  vi.stubGlobal('document', { baseURI: 'http://localhost/' });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -22,6 +24,25 @@ afterEach(() => {
 });
 
 describe('probeLivez（#2250）', () => {
+  it('頁面掛在子路徑底下時打子路徑的 /livez（#2426）', async () => {
+    vi.stubGlobal('document', { baseURI: 'http://localhost/nexus/' });
+    const doFetch = vi.fn(async () => new Response('x'));
+    vi.stubGlobal('fetch', doFetch);
+    await expect(probeLivez(new AbortController().signal)).resolves.toBe('answered');
+    expect(doFetch).toHaveBeenCalledWith('/nexus/livez', expect.anything());
+  });
+
+  it.each([
+    ['', '/livez'],
+    ['/nexus', '/nexus/livez'],
+  ])('指定 agent 位置 %j 時打 %s，不看頁面', async (baseUrl, expected) => {
+    vi.stubGlobal('document', { baseURI: 'http://localhost/viz/page/' });
+    const doFetch = vi.fn(async () => new Response('x'));
+    vi.stubGlobal('fetch', doFetch);
+    await expect(probeLivez(new AbortController().signal, baseUrl)).resolves.toBe('answered');
+    expect(doFetch).toHaveBeenCalledWith(expected, expect.anything());
+  });
+
   it.each([200, 503])('回來就算 answered，不看狀態碼（%i）', async (status) => {
     const doFetch = vi.fn(async () => new Response('x', { status }));
     vi.stubGlobal('fetch', doFetch);

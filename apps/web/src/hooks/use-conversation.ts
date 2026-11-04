@@ -131,6 +131,8 @@ export interface UseConversationOptions {
   readonly client?: WireClient;
   /** 省略即這一次載入自己開一條新的。 */
   readonly threadId?: string;
+  /** `/livez` 探測打的 agent 位置；省略是 `agentBaseUrl()`，從頁面算。嵌入版跑在宿主頁上，要給從 `embed.js` 算的（#2426）。 */
+  readonly agentBaseUrl?: string;
 }
 
 /** 畫面上那段歷史的現況（#306）。 */
@@ -438,6 +440,7 @@ export interface Conversation {
 export function useConversation(options: UseConversationOptions = {}): Conversation {
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
   const threadId = useMemo(() => options.threadId ?? randomUuid(), [options.threadId]);
+  const livezBaseUrl = options.agentBaseUrl;
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
   // 右側欄的面板讀對話走這一條（#1033）：跟交給 React 的同一刻、同一份，所以放在發布回呼裡，不另外排。
@@ -619,7 +622,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     let cancelled = false;
     const probe = new AbortController();
     const slowTimer = setTimeout(() => {
-      void probeLivez(probe.signal).then((outcome) => {
+      void probeLivez(probe.signal, livezBaseUrl).then((outcome) => {
         // 逾時中止後請求可能晚一點才拒絕，連線在這段時間有了結果的話，這個 `timed-out` 不算數。
         if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
       });
@@ -820,7 +823,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       settled();
       setConnected(false);
     };
-  }, [client, threadId, advance, generation, scheduleRetry, ratingsController, commandDirectory]);
+  }, [
+    client,
+    threadId,
+    livezBaseUrl,
+    advance,
+    generation,
+    scheduleRetry,
+    ratingsController,
+    commandDirectory,
+  ]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
