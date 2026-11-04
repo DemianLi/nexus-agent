@@ -17,8 +17,9 @@
  *
  * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
  * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**。
- * 唯一的例外是 skills：基座那顆對空清單也會接一大段說明、又不快取空結果，包了一層
- * （`./skills-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
+ * skills 與 memory 各包了一層：掃描與讀檔仍是基座的 `beforeAgent`，接進系統訊息的文字由 nexus 渲染
+ * （`./skills-middleware.ts`、`./memory-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)、
+ * [#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
  *
  * **`read_file` 的描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：預設行數與行號格式經 `createFilesystemMiddleware` 的
  * `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有 read-continuation（`./fs-tool-descriptions.ts`）。這是跟
@@ -54,7 +55,6 @@
 
 import {
   createFilesystemMiddleware,
-  createMemoryMiddleware,
   createSubAgentMiddleware,
   createSummarizationMiddleware,
 } from 'deepagents';
@@ -73,6 +73,7 @@ import {
 } from './model-selection.js';
 import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
+import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
@@ -323,9 +324,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     createPatchToolCallsMiddleware(),
   ] as unknown as AgentMiddleware[];
   const tail = [
-    ...(memory.length > 0
-      ? [createMemoryMiddleware({ backend, sources: [...memory], addCacheControl: false })]
-      : []),
+    ...(memory.length > 0 ? [createMemoryMiddleware({ backend, sources: [...memory] })] : []),
   ] as unknown as AgentMiddleware[];
 
   const middleware = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
