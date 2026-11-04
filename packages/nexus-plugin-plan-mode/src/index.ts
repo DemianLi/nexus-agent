@@ -24,7 +24,7 @@
  * | 零件 | dsh | 這裡 |
  * | --- | --- | --- |
  * | 指引 | `plan:policy` 提示詞段落，順序 500，未激活不貢獻文本 | 同名的段（{@link PLAN_POLICY_SECTION_NAME}，`registry.prompt`），順序 500，未啟用時這一次不接；接在 `plugins.prepended` 的區尾，不是 dsh 的位置 |
- * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕（只在本體裡，同 dsh；沒有排在核准閘門之前的另一層，#1276） |
+ * | 退出工具 | `exit_plan_mode` 漸進揭露（對讀 `ce7073d5`）：從第一個啟用計劃模式的步驟起才進工具清單，之後整個會話都留著；模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，一律註冊、模式外拒絕（只在本體裡；沒有排在核准閘門之前的另一層，#1276） |
  * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊；送上線給畫面的那一份是 pump 另外合成的 `custom` 事件，只有 `active`，見 `@nexus/wire` 的 `plan-mode.ts`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)） |
  *
  * ## 交出計劃走提問通道——曾經走核准，已照 dsh 改回（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）
