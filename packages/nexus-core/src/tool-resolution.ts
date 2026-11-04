@@ -3,10 +3,11 @@
  *
  * 兩種決定，都不帶 LangChain 型別（agent loop 脫離 LangChain，[#2336](https://github.com/DemianLi/nexus-agent/issues/2336)）：
  *
- * - {@link ToolAdmission}：放不放行某個名字。模型那一側的清單拿掉不放行的；同一份決定也交給呼叫那一側，叫了不放行的就拒絕。
+ * - {@link ToolAdmission}：放不放行某個名字。模型那一側的清單拿掉不放行的；呼叫那一側要不要拒絕，由套用的那一格決定
+ *   （`subagent-tool-filter.ts` 拒絕；`@nexus/plugin-mcp` 放棄重連後只藏不拒）。
  * - {@link ToolOverride}：換掉某個工具在模型那一側的定義（參數說明、預設值），執行時找的仍是原本那個工具。
  *
- * `subagent-tool-filter.ts`、`read-continuation.ts`、`search-descriptions.ts` 在自己的 `wrapModelCall`（放行另含 `wrapToolCall`）裡用這兩個
+ * `subagent-tool-filter.ts`、`read-continuation.ts`、`search-descriptions.ts`、`@nexus/plugin-mcp` 的 `mcp-tools-guard:<server>` 在自己的 `wrapModelCall`（`subagent-tool-filter.ts` 另在 `wrapToolCall` 拒絕）裡用這兩個
  * 函式套自己那一份決定；套的先後就是洋蔥的先後。
  *
  * @module
