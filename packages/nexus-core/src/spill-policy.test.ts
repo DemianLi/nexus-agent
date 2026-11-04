@@ -201,3 +201,23 @@ describe('通知措辭', () => {
     );
   });
 });
+
+describe('沒有 tool_call.id 的呼叫', () => {
+  it('存檔的來源退到結果上的 tool_call_id', async () => {
+    const store = fakeStore();
+    const middleware = createSpillPolicyMiddleware({ maxInlineTokens: 100, store });
+    const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
+    const result = new ToolMessage({
+      content: 'x'.repeat(10_000),
+      tool_call_id: 'from_result',
+      name: 'bulk',
+    });
+    await wrap({ toolCall: { name: 'bulk', args: {} } } as never, () => Promise.resolve(result));
+    expect(store.requests[0]?.source).toEqual({
+      kind: 'tool',
+      toolName: 'bulk',
+      callId: 'from_result',
+      label: 'result',
+    });
+  });
+});

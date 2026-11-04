@@ -14,11 +14,11 @@
  *
  * **宣告跟著工具走**：`registry.tools.register(tool, { outputSchema })`，同 dsh「`output` 是
  * `defineTool` 的一個欄位」。fold 打底一份實例進 root 與每個 subagent，每次呼叫從
- * `request.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
+ * `call.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
  * 不以名字查**：同名的工具在不同層可以是不同的東西，fold 換上去的拒絕樁也是另一顆實例。
  *
  * **時刻：dsh 的 `createSuccessResult`，在 `tools/post-execute` 之前。** 載體是掛在
- * `tools/execute` 位置的一個 `wrapToolCall`，真正做事的是 `await handler()` **之後**那一段——
+ * `tools/execute` 位置的一個 `wrapToolCall`（{@link outputSchemaToolStep}），真正做事的是 `await next()` **之後**那一段——
  * 兩個時刻在我們這側共用一個載體，索引見 `apps/harness/src/interception-index.test.ts`。
  * 位置由 fold 決定——每一個
  * plugin middleware 的內側，所以看到的是工具原本的輸出，不是外層改過的版本。以前那個
@@ -46,10 +46,10 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { INVALID_TOOL_OUTPUT, toolRefusal } from './tool-events.js';
 
 /** 校驗 middleware 的名字。 */
@@ -141,32 +141,42 @@ function rejectOutput(feedback: string, toolCallId: string, toolName: string): T
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): AgentMiddleware {
-  return createMiddleware({
-    name: OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const result = await handler(request);
-      const schema = schemaOf(request.tool);
-      if (schema === undefined) return result;
-      const toolName = resolveToolName(request);
-      const toolCallId = request.toolCall.id ?? '';
-      try {
-        if (ToolMessage.isInstance(result)) {
-          if (result.status === 'error') return result;
-          const verdict = verify(toolName, result.content, schema);
-          return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
-        }
-        if (isCommand(result)) {
-          // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
-          // 就是 `Command`，ToolMessage 埋在 `update.messages` 裡。基座自己的
-          // `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
-          return validateCommand(result, toolName, toolCallId, schema);
-        }
-        return result;
-      } catch (error) {
-        return reject(formatValidatorFailure(toolName, error), toolCallId, toolName);
+  return createToolCallStepMiddleware(
+    OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+    outputSchemaToolStep(schemaOf),
+  );
+}
+
+/**
+ * 驗工具輸出的一步：往內交，工具宣告了 schema 就驗結果，不通過換成錯誤結果。
+ *
+ * @param schemaOf - 工具實例 → 它宣告的 schema。
+ * @returns 這一步。
+ */
+export function outputSchemaToolStep(schemaOf: OutputSchemaLookup): ToolCallStep {
+  return async (call, next) => {
+    const result = await next();
+    const schema = schemaOf(call.tool);
+    if (schema === undefined) return result;
+    const toolName = toolNameOfCall(call);
+    const toolCallId = call.callId ?? '';
+    try {
+      if (ToolMessage.isInstance(result)) {
+        if (result.status === 'error') return result;
+        const verdict = verify(toolName, result.content, schema);
+        return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
       }
-    },
-  }) as AgentMiddleware;
+      if (isCommand(result)) {
+        // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
+        // 就是 `Command`，ToolMessage 埋在 `update.messages` 裡。基座自己的
+        // `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
+        return validateCommand(result, toolName, toolCallId, schema);
+      }
+      return result;
+    } catch (error) {
+      return reject(formatValidatorFailure(toolName, error), toolCallId, toolName);
+    }
+  };
 }
 
 /**

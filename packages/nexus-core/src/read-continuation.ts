@@ -88,7 +88,8 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { readLangHintForPath } from './code-language.js';
-import { resolveToolName } from './containment.js';
+import { toolNameOfCall, wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { overriddenTools } from './tool-resolution.js';
 import type { ToolOverride } from './tool-resolution.js';
 import { putToolResultMeta } from './tool-result-meta.js';
@@ -517,43 +518,51 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
       if (overridden === tools) return handler(request);
       return handler({ ...request, tools: overridden } as typeof request);
     },
-    wrapToolCall: async (request, handler) => {
-      if (resolveToolName(request) !== READ_TOOL) return handler(request);
-      const args = withReadLimit(request.toolCall.args, readLimit);
-      const call =
-        args === request.toolCall.args
-          ? request
-          : { ...request, toolCall: { ...request.toolCall, args } };
-      const record: CallRecord = {};
-      const result = await currentRead.run(record, () => handler(call));
-      const extent = record.extent;
-      // 失敗的、沒讀到文字的（二進位、空檔）、包在 `Command` 裡的：原樣交出。
-      if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
-        return result;
-      }
-      let shownText: string | undefined;
-      const content = appendFooter(result.content, (text) => {
-        shownText = text;
-        return continuationFooter(extent, text);
-      });
-      if (content === undefined) return result;
-      const path = (request.toolCall.args as { readonly file_path?: unknown } | undefined)
-        ?.file_path;
-      if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
-        const meta = readResultMeta(path, extent, record.lines, shownText);
-        if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
-      }
-      // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
-      return new ToolMessage({
-        content,
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? READ_TOOL,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
-    },
+    wrapToolCall: wrapToolCallWith(readContinuationToolStep(readLimit)),
   }) as AgentMiddleware;
+}
+
+/**
+ * 這顆的工具那一半：`read_file` 沒給 `limit` 就補上行數上限再往內交（給的超過上限就拋錯、不往內交）；讀到文字就在結果最後
+ * 接上讀到哪一行，沒到檔尾的附續讀的 `offset`，並記下讀檔的 meta（`putToolResultMeta`）。
+ *
+ * @param readLimit - 一次最多讀幾行。
+ * @returns 這一步。
+ */
+export function readContinuationToolStep(readLimit: number): ToolCallStep {
+  return async (call, next) => {
+    if (toolNameOfCall(call) !== READ_TOOL) return next();
+    const args = withReadLimit(call.args, readLimit);
+    const record: CallRecord = {};
+    const result = await currentRead.run(record, () =>
+      next(args === call.args ? undefined : { args }),
+    );
+    const extent = record.extent;
+    // 失敗的、沒讀到文字的（二進位、空檔）、包在 `Command` 裡的：原樣交出。
+    if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
+      return result;
+    }
+    let shownText: string | undefined;
+    const content = appendFooter(result.content, (text) => {
+      shownText = text;
+      return continuationFooter(extent, text);
+    });
+    if (content === undefined) return result;
+    const path = (call.args as { readonly file_path?: unknown } | undefined)?.file_path;
+    if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
+      const meta = readResultMeta(path, extent, record.lines, shownText);
+      if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
+    }
+    // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
+    return new ToolMessage({
+      content,
+      tool_call_id: result.tool_call_id,
+      name: result.name ?? READ_TOOL,
+      id: result.id,
+      status: result.status,
+      artifact: result.artifact,
+      additional_kwargs: result.additional_kwargs,
+      response_metadata: result.response_metadata,
+    });
+  };
 }

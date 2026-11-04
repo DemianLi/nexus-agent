@@ -74,6 +74,8 @@ import {
 } from './session-address.js';
 import { currentTurnStart } from './session-log.js';
 import type { SessionEvent, TurnEndReason } from './session-log.js';
+import { wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import { toolRefusal } from './tool-events.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
@@ -250,7 +252,7 @@ export function turnReachedMaxTokens(events: readonly SessionEvent[]): boolean {
   return false;
 }
 
-/** `wrapModelCall`／`wrapToolCall` 的請求裡，這一顆讀得到的那一格。 */
+/** `wrapModelCall` 的請求裡，這一顆讀得到的那一格。 */
 interface RuntimeRequest {
   readonly runtime?: { readonly configurable?: unknown };
 }
@@ -278,23 +280,31 @@ export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddl
       }
       return dropToolCalls(response);
     },
-    wrapToolCall: async (request, handler) => {
-      if (request.toolCall.name !== TASK_TOOL) return handler(request);
-      const runId = spawnedSubagentRunId({
-        configurable: (request as RuntimeRequest).runtime?.configurable,
-      });
-      if (runId === undefined) return handler(request);
-      let result: unknown;
-      try {
-        result = await handler(request);
-      } catch (error: unknown) {
-        // 拋錯的那次也取走：同一個 runId 不會再來，留著只是漏。
-        carrier.take(runId);
-        throw error;
-      }
-      const partial = carrier.take(runId);
-      if (partial === undefined) return result as Awaited<ReturnType<typeof handler>>;
-      return subagentMaxTokensResult(result, request.toolCall.id ?? '', partial);
-    },
+    wrapToolCall: wrapToolCallWith(maxTokensToolStep(carrier)),
   }) as AgentMiddleware;
+}
+
+/**
+ * 這顆的工具那一半：`task` 往內交，載體裡有這次派出去的子代理撞限留下的部分回覆，就把結果換成撞限的錯誤。
+ *
+ * @param carrier - 這份組裝的載體。
+ * @returns 這一步。
+ */
+export function maxTokensToolStep(carrier: MaxTokensCarrier): ToolCallStep {
+  return async (call, next) => {
+    if (call.name !== TASK_TOOL) return next();
+    const runId = spawnedSubagentRunId({ configurable: call.configurable });
+    if (runId === undefined) return next();
+    let result: unknown;
+    try {
+      result = await next();
+    } catch (error: unknown) {
+      // 拋錯的那次也取走：同一個 runId 不會再來，留著只是漏。
+      carrier.take(runId);
+      throw error;
+    }
+    const partial = carrier.take(runId);
+    if (partial === undefined) return result;
+    return subagentMaxTokensResult(result, call.callId ?? '', partial);
+  };
 }

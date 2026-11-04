@@ -444,3 +444,29 @@ describe('核准政策 never（#437）：人在，但使用者選了不問', () 
     expect(appended[1]?.data).toMatchObject({ outcome: 'rejected' });
   });
 });
+
+describe('沒有 tool_call.id 的呼叫', () => {
+  it('listener 拿到的 callId 是 undefined，拒絕的結果 tool_call_id 是空字串', async () => {
+    const seen: ToolExecution[] = [];
+    const gate = wrapperOf(
+      [
+        entry((e) => {
+          seen.push(e);
+          return { kind: 'deny', reason: '不准' };
+        }),
+      ],
+      { kind: 'human' },
+    );
+    const ran = vi.fn(async () => ({ text: '跑過了', status: 'success' }));
+    const out = (await gate(
+      { toolCall: { name: exec.name, args: exec.args } },
+      ran,
+    )) as unknown as {
+      tool_call_id?: string;
+    };
+    expect(seen).toEqual([{ name: 'deploy_prod', args: { target: 'prod' }, callId: undefined }]);
+    expect(seen[0]).toHaveProperty('callId', undefined);
+    expect(out.tool_call_id).toBe('');
+    expect(ran).not.toHaveBeenCalled();
+  });
+});

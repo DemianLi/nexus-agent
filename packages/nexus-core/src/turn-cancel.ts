@@ -296,7 +296,7 @@ export function isSyntheticStopReply(message: AIMessage): boolean {
  */
 export function abortedBeforeDispatch(call: Pick<ToolCallSite, 'callId' | 'name'>): ToolMessage {
   return toolRefusal(TOOL_ABORTED_BEFORE_DISPATCH_REASON, {
-    callId: call.callId,
+    callId: call.callId ?? '',
     name: call.name,
     error: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH },
   });
@@ -312,7 +312,8 @@ export function abortedBeforeDispatch(call: Pick<ToolCallSite, 'callId' | 'name'
 export const turnCancelToolStep: ToolCallStep = async (call, next) => {
   const signal = turnCancelSignalOf({ configurable: call.configurable });
   if (signal === undefined) return next();
-  const { callId, name } = call;
+  const callId = call.callId ?? '';
+  const { name } = call;
   const aborted = (content: string, code: string) =>
     toolRefusal(content, { callId, name, error: { name: 'AbortError', code } });
   if (signal.aborted) return abortedBeforeDispatch(call);
