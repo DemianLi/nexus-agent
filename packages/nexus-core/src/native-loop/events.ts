@@ -18,8 +18,8 @@ export type RequestErrorAction = { readonly kind: 'retry' } | undefined;
 
 /** 每個 agent 事件都帶的那幾格。 */
 export interface AgentStepPayload {
-  /** 這條 thread。 */
-  readonly threadId: string;
+  /** 這條 thread；沒給 `configurable.thread_id` 的一輪是 `undefined`。 */
+  readonly threadId: string | undefined;
   /** 這次 run 裡的第幾步（模型呼叫），從 1 起算。 */
   readonly step: number;
   /** 這一輪的中止訊號。 */

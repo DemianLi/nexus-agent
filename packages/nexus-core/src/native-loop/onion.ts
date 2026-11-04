@@ -442,6 +442,8 @@ export async function runTool(
         status: 'error',
       });
     }
+    // LangChain 的 tool 只掛 `abort` 監聽，拿到已經 abort 的 signal 會一直等本體。
+    task.config.signal?.throwIfAborted();
     let output: unknown;
     try {
       output = await tool.invoke(

@@ -95,26 +95,46 @@ function recursionError(limit: number): GraphRecursionError {
 
 /**
  * 依上限跑一批工作，**照索引起跑**：前面的先佔名額。屏障（`tool-barrier.ts`）等的是排在前面的呼叫，後面的先佔滿名額會互等。
+ * 有一顆拋了就 abort `step`、排著的不再起跑，等跑著的收完再拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。
  */
-async function runBounded<T>(
+function runBounded<T>(
   jobs: readonly (() => Promise<T>)[],
   limit: number,
-): Promise<PromiseSettledResult<T>[]> {
-  const results = new Array<PromiseSettledResult<T>>(jobs.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < jobs.length) {
-      const index = next++;
-      try {
-        results[index] = { status: 'fulfilled', value: await jobs[index]!() };
-      } catch (reason) {
-        results[index] = { status: 'rejected', reason };
+  step: AbortController,
+): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const results = new Array<T>(jobs.length);
+    let next = 0;
+    let running = 0;
+    let failure: { readonly reason: unknown } | undefined;
+    const settle = (): void => {
+      if (running > 0) return;
+      if (failure !== undefined) reject(failure.reason);
+      else if (next >= jobs.length) resolve(results);
+    };
+    const start = (): void => {
+      while (failure === undefined && next < jobs.length && running < limit) {
+        const index = next++;
+        running += 1;
+        jobs[index]!().then(
+          (value) => {
+            results[index] = value;
+          },
+          (reason: unknown) => {
+            if (failure !== undefined) return;
+            failure = { reason };
+            step.abort();
+          },
+        ).finally(() => {
+          running -= 1;
+          start();
+          settle();
+        });
       }
-    }
-  };
-  const width = Math.max(1, Math.min(limit, jobs.length));
-  await Promise.all(Array.from({ length: width }, () => worker()));
-  return results;
+    };
+    start();
+    settle();
+  });
 }
 
 /** 用來計步：每一個「節點那一格」算一步，算法同 LangGraph 的 super-step（同一步的工具合起來算一格）。 */
@@ -146,7 +166,8 @@ export class NativeAgent {
   readonly #params: NativeAgentParams;
   readonly #threads: Map<string, LoopState>;
   readonly #defaults: LoopDefaults;
-  readonly #middleware: readonly LoopMiddleware[];
+  /** 這張圖的 middleware，照組裝順序。 */
+  readonly middleware: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
   readonly #returnDirect: ReadonlySet<string>;
   readonly #channels: StateChannels;
@@ -164,19 +185,19 @@ export class NativeAgent {
     this.#params = params;
     this.#threads = threads;
     this.#defaults = defaults;
-    this.#middleware = params.middleware as readonly LoopMiddleware[];
-    const unsupported = this.#middleware.find((m) => m.afterModel !== undefined);
+    this.middleware = params.middleware as readonly LoopMiddleware[];
+    const unsupported = this.middleware.find((m) => m.afterModel !== undefined);
     if (unsupported !== undefined) {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
     }
-    const middlewareTools = this.#middleware.flatMap(
+    const middlewareTools = this.middleware.flatMap(
       (m) => ((m as { tools?: readonly unknown[] }).tools ?? []) as readonly InvokableTool[],
     );
     this.#tools = [...(params.tools as readonly InvokableTool[]), ...middlewareTools];
     this.#returnDirect = new Set(
       this.#tools.filter((t) => t.returnDirect === true).map((t) => t.name),
     );
-    this.#channels = new StateChannels(this.#middleware);
+    this.#channels = new StateChannels(this.middleware);
   }
 
   /**
@@ -292,33 +313,40 @@ export class NativeAgent {
         'native agent loop 不支援 resume：中斷改成行程內 await 之前（K8 #2358）沒有可接回的中斷',
       );
     }
-    const threadId = threadIdOf(config);
-    const state = this.#stateOf(threadId);
+    // 沒給 thread 的一輪從空的 state 跑、跑完不留，同 LangGraph 沒有存檔點時。
+    const threadId = optionalThreadIdOf(config);
+    const state = threadId === undefined ? emptyState() : this.#stateOf(threadId);
     this.#channels.apply(state, { messages: [...(input.messages ?? [])] });
     this.#channels.fillDefaults(state);
 
     const signal = turnCancelSignalOf(config) ?? new AbortController().signal;
-    const base = this.#baseConfig(config, observer.emitter);
-    const budget = new StepBudget(
-      this.#defaults.recursionLimit ?? config.recursionLimit ?? DEFAULT_RECURSION_LIMIT,
-    );
+    // 呼叫時給的贏過 `withConfig` 的，同 LangGraph 的 `ensureLangGraphConfig(this.config, options)`。兩格都留在節點的 config 上：
+    // 工具裡跑的 LangGraph 子圖（前景子代理）從執行脈絡讀同一個上限。
+    const recursionLimit =
+      config.recursionLimit ?? this.#defaults.recursionLimit ?? DEFAULT_RECURSION_LIMIT;
+    const maxConcurrency = config.maxConcurrency ?? this.#defaults.maxConcurrency;
+    const base = this.#baseConfig(config, observer.emitter, recursionLimit, maxConcurrency);
+    const budget = new StepBudget(recursionLimit);
     const events = this.#params.events;
-    const node = (name: string, taskInput: unknown = state): NodeTask => {
+    // `signal` 是這一步自己的（一顆拋了 abort 兄弟），跟這次 run 的合起來。
+    const node = (name: string, taskInput: unknown = state, signal?: AbortSignal): NodeTask => {
       const ns = `${name}:${randomUUID()}`;
-      return new NodeTask(base, ns, name, state, this.#channels, taskInput, () =>
+      const config =
+        signal === undefined
+          ? base
+          : { ...base, signal: base.signal === undefined ? signal : AbortSignal.any([base.signal, signal]) };
+      return new NodeTask(config, ns, name, state, this.#channels, taskInput, () =>
         observer.emitter?.complete([ns]),
       );
     };
     const note = (name: string, update: Record<string, unknown>): void =>
       observer.onUpdate?.(name, update);
 
-    // 輸入那一格，同 LangGraph 的 `__start__`。
-    budget.take();
-    for (const m of this.#middleware) {
+    for (const m of this.middleware) {
       if (m.beforeAgent === undefined) continue;
       budget.take();
       const jump = await runHook(m, 'beforeAgent', node(`${m.name}.before_agent`), this.#channels);
-      if (jump === 'end') return this.#finish(state, threadId, signal, node);
+      if (jump === 'end') return this.#finish(state, threadId, signal, node, budget);
     }
 
     let step = 0;
@@ -335,7 +363,7 @@ export class NativeAgent {
               }));
         if (decision.kind === 'reject') throw new TurnBlockedError();
         let ended = false;
-        for (const m of this.#middleware) {
+        for (const m of this.middleware) {
           if (m.beforeModel === undefined) continue;
           budget.take();
           const jump: JumpTarget = await runHook(
@@ -364,7 +392,7 @@ export class NativeAgent {
       }
       if (!concluded) continue;
 
-      const again = await this.#exit(node);
+      const again = await this.#exit(node, budget);
       if (again) {
         skipBeforeModel = true;
         continue;
@@ -379,11 +407,12 @@ export class NativeAgent {
   /** `beforeAgent` 跳 `end`：同 LangGraph 落到 exitNode，`afterAgent` 照跑。 */
   async #finish(
     state: LoopState,
-    threadId: string,
+    threadId: string | undefined,
     signal: AbortSignal,
     node: (name: string) => NodeTask,
+    budget: StepBudget,
   ): Promise<LoopState> {
-    await this.#exit(node);
+    await this.#exit(node, budget);
     await this.#params.events?.serial('agent/turn-stopping', { threadId, step: 0, signal });
     return state;
   }
@@ -391,10 +420,11 @@ export class NativeAgent {
   /**
    * `afterAgent` 反序跑（最後一顆先）。回 `true` 表示有一顆跳回模型。
    */
-  async #exit(node: (name: string) => NodeTask): Promise<boolean> {
-    for (let i = this.#middleware.length - 1; i >= 0; i--) {
-      const m = this.#middleware[i]!;
+  async #exit(node: (name: string) => NodeTask, budget: StepBudget): Promise<boolean> {
+    for (let i = this.middleware.length - 1; i >= 0; i--) {
+      const m = this.middleware[i]!;
       if (m.afterAgent === undefined) continue;
+      budget.take();
       const jump = await runHook(m, 'afterAgent', node(`${m.name}.after_agent`), this.#channels);
       if (jump === 'model') return true;
       if (jump === 'end') return false;
@@ -404,7 +434,7 @@ export class NativeAgent {
 
   async #modelStep(
     state: LoopState,
-    threadId: string,
+    threadId: string | undefined,
     step: number,
     signal: AbortSignal,
     node: (name: string) => NodeTask,
@@ -429,7 +459,7 @@ export class NativeAgent {
             model: this.#params.model,
             systemMessage: systemMessageOf(this.#params.systemPrompt),
             tools: this.#tools,
-            middleware: this.#middleware,
+            middleware: this.middleware,
             ...(events !== undefined && {
               around: (call) => events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
             }),
@@ -465,23 +495,20 @@ export class NativeAgent {
   async #toolStep(
     calls: NonNullable<AIMessage['tool_calls']>,
     state: LoopState,
-    node: (name: string, taskInput?: unknown) => NodeTask,
+    node: (name: string, taskInput?: unknown, signal?: AbortSignal) => NodeTask,
     note: (name: string, update: Record<string, unknown>) => void,
   ): Promise<boolean> {
-    const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }));
+    const step = new AbortController();
+    const tasks = calls.map((call) => node('tools', { ...state, lg_tool_call: call }, step.signal));
+    // 有一顆拋了，整步不寫。
     const settled = await runBounded(
-      calls.map((call, index) => () => runTool(call, this.#tools, this.#middleware, tasks[index]!)),
-      this.#defaults.maxConcurrency ?? UNBOUNDED,
+      calls.map((call, index) => () => runTool(call, this.#tools, this.middleware, tasks[index]!)),
+      Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
+      step,
     );
-    const failure = settled.find((result) => result.status === 'rejected');
-    if (failure !== undefined) {
-      // 同 LangGraph：同一步有一顆拋了，整步不寫（已完成的兄弟留在 pending writes，不進 state）。
-      throw failure.reason;
-    }
     const messages: BaseMessage[] = [];
-    settled.forEach((result, index) => {
+    settled.forEach((value, index) => {
       tasks[index]!.flush();
-      const value = (result as PromiseFulfilledResult<ToolMessage | Command>).value;
       if (isCommand(value)) {
         this.#applyCommand(state, value);
       } else {
@@ -510,13 +537,18 @@ export class NativeAgent {
     this.#channels.apply(state, update as Record<string, unknown>);
   }
 
-  #baseConfig(config: RunnableConfig, emitter: ProtocolEmitter | undefined): RunnableConfig {
+  #baseConfig(
+    config: RunnableConfig,
+    emitter: ProtocolEmitter | undefined,
+    recursionLimit: number,
+    maxConcurrency: number | undefined,
+  ): RunnableConfig {
     const callbacks = Array.isArray(config.callbacks) ? [...config.callbacks] : [];
     if (emitter !== undefined) callbacks.push(new NativeStreamHandler(emitter));
-    const { recursionLimit: _limit, ...rest } = config as RunnableConfig & { version?: string };
-    void _limit;
     return {
-      ...rest,
+      ...config,
+      recursionLimit,
+      ...(maxConcurrency !== undefined && { maxConcurrency }),
       callbacks,
       configurable: { ...config.configurable },
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
@@ -524,11 +556,14 @@ export class NativeAgent {
   }
 }
 
-function threadIdOf(config: RunnableConfig): string {
+function optionalThreadIdOf(config: RunnableConfig): string | undefined {
   const threadId = config.configurable?.['thread_id'];
-  if (typeof threadId !== 'string' || threadId === '') {
-    throw new Error('native agent loop 需要 configurable.thread_id');
-  }
+  return typeof threadId === 'string' && threadId !== '' ? threadId : undefined;
+}
+
+function threadIdOf(config: RunnableConfig): string {
+  const threadId = optionalThreadIdOf(config);
+  if (threadId === undefined) throw new Error('native agent loop 需要 configurable.thread_id');
   return threadId;
 }
 
