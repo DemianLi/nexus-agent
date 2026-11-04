@@ -249,10 +249,10 @@ describe('GET /threads/:id/session-references', () => {
 
   it('被引用的會話塞不進預算：截掉的全文存進工具結果暫存，快照裡帶 saved 與位址（#1553，出貨組裝、真的落盤）', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-spill-'));
-    // 遠超過預算（今天 64 KiB）；中間的記號對齊 64 碼點分段，在逐字稿裡自成一行。
+    // 遠超過預算（今天 64 KiB），又在人話的上限之內（native 下過了就拒收，#2415）；中間的記號對齊 64 碼點分段，在逐字稿裡自成一行。
     const middle = 'MIDDLE-OF-THE-REFERENCED-SESSION'.padEnd(64, '-');
     const first = await start(root);
-    await driveTurn(first, 'alpha', `${'a'.repeat(64 * 5000)}${middle}${'b'.repeat(64 * 5000)}`);
+    await driveTurn(first, 'alpha', `${'a'.repeat(64 * 1500)}${middle}${'b'.repeat(64 * 1500)}`);
     await first.close();
     running = undefined;
 

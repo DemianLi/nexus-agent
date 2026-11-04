@@ -24,8 +24,18 @@ import { clearLine, cursorTo } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
-import { approvalPolicyOnResume, createHistoryShadowTally, HISTORY_SOURCES } from '@nexus/core';
+import type {
+  AgentLoopKind,
+  CommandDescriptor,
+  CommandRegistrationPoint,
+  SessionEventMap,
+} from '@nexus/core';
+import {
+  approvalPolicyOnResume,
+  createHistoryShadowTally,
+  HISTORY_SOURCES,
+  humanMessageRejection,
+} from '@nexus/core';
 import type { HistorySource } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
@@ -548,6 +558,8 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param sessionLog - 這條 REPL 的事件日誌。
  * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），由 `main`
  *   在起動期從清單解出來。**省略即 schema 的預設**，理由同 `ThreadPump` 的 `toolText`：測試呼叫點量的不是它。
+ * @param loop - 這個入口的 `--agent-loop`，省略即 `langgraph`。`native` 時人打的字太大就在寫 `turn/start` 之前拋錯
+ *   （[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)），日誌不動。
  */
 export async function runTurn(
   agent: NexusAgent,
@@ -555,8 +567,14 @@ export async function runTurn(
   printer: Printer,
   sessionLog: SessionLog,
   titleLimits: ThreadTitleLimits = threadTitleConfigSchema.parse({}),
+  loop?: AgentLoopKind,
 ): Promise<void> {
   let files: Record<string, unknown> = {};
+
+  if (typeof input === 'string' && loop === 'native') {
+    const rejection = humanMessageRejection(input);
+    if (rejection !== undefined) throw new Error(rejection);
+  }
 
   // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
   // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
@@ -763,6 +781,7 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
  * @param titleLimits - 見 {@link runTurn}。
  * @param line - 非同步輸出與輸入行的協調點，見 {@link ReplLine}；REPL 活著的期間它的 `redraw` 才有值。
+ * @param loop - 見 {@link runTurn}。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -774,6 +793,7 @@ export async function runRepl(
   roundCap?: GoalRoundCap,
   titleLimits?: ThreadTitleLimits,
   line?: ReplLine,
+  loop?: AgentLoopKind,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -818,8 +838,8 @@ export async function runRepl(
         // 從來不會 abort 的。有那條路的時候換掉這一行就行，執行器那側已經接得住。
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
-          // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
-          await runTurn(agent, text, printer, sessionLog, titleLimits);
+          // 語法不符或名字不認得——**照原樣當一輪人話跑**（native 下太大的照 {@link runTurn} 拒收）。
+          await runTurn(agent, text, printer, sessionLog, titleLimits, loop);
         } else {
           if (execution.result.text !== undefined) {
             const write = execution.result.kind === 'error' ? printer.error : printer.log;
@@ -1386,7 +1406,14 @@ async function runLaunched(
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
+      await runTurn(
+        agent,
+        invocation.prompt,
+        printer,
+        sessionLog,
+        threadTitle,
+        invocation.agentLoop,
+      );
       if (driver !== undefined)
         await driveGoalRounds(agent, printer, sessionLog, driver, goalRoundCap);
     } else {
@@ -1401,6 +1428,7 @@ async function runLaunched(
         goalRoundCap,
         threadTitle,
         replLine,
+        invocation.agentLoop,
       );
     }
   } catch (error) {

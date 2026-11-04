@@ -332,8 +332,9 @@ describe('serve 重開之後', () => {
 });
 
 /**
- * **過大的工具結果推回去的是模型當時看到的那則**：日誌記的是全文，基座在模型那一格換成預覽。重算的程式碼抄自
- * 基座（它沒匯出），所以拿真的基座換出來的那則逐字比對——升級基座時字變了，紅在這裡。
+ * **過大的工具結果推回去的是模型當時看到的那則**：日誌記的是全文，組裝點那一格（core 的 `toolResultEvictionWrap`）在模型
+ * 那一格換成預覽。這裡比的是重算出來的與組裝好的 agent 實際換上的那則；兩者與基座逐字相同，由 core 的
+ * `tool-result-eviction.test.ts` 對著真的基座比。
  */
 describe('過大的工具結果', () => {
   async function evicted(body: string): Promise<{ seen: ToolMessage; logged: ToolMessage }> {
@@ -379,10 +380,10 @@ describe('過大的工具結果', () => {
   it.each([
     ['很多行（頭尾預覽）', manyLines.join('\n')],
     ['一整行、結尾有換行（不滿十行那一支）', `${'y'.repeat(90_000)}\n`],
-  ])('%s：重算出來的與基座換上的逐字相同', async (_, body) => {
+  ])('%s：重算出來的與組裝點換上的逐字相同', async (_, body) => {
     const { seen, logged } = await evicted(body);
 
-    // 前提：日誌記的是全文，基座真的換了。
+    // 前提：日誌記的是全文，組裝點真的換了。
     expect(logged.text).toBe(body);
     expect(seen.text).not.toBe(body);
     expect(toBaseMessage(toolResultAsSeen(toLoggedMessage(logged))).text).toBe(seen.text);

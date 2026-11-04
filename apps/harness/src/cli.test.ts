@@ -9,7 +9,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
-import { SessionLog } from '@nexus/core';
+import { HUMAN_MESSAGE_LIMIT_CHARS, SessionLog } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
@@ -451,6 +451,40 @@ describe('停在核准點的那一輪', () => {
 
     expect(stdout()).toContain('沒事發生。');
     expect(stdout()).not.toContain('核准');
+  });
+});
+
+describe('runTurn 照 loop 拒收太大的人話（#2415）', () => {
+  const tooLarge = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
+
+  it('native：寫 turn/start 之前拋，日誌不動；剛好等於上限的照跑', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
+    const { agent } = await createNexusAgent({ model, plugins: [] });
+    const { printer } = recorder();
+    const sessionLog = new SessionLog('t');
+    await expect(
+      runTurn(agent, tooLarge, printer, sessionLog, undefined, 'native'),
+    ).rejects.toThrow('message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字');
+    expect(sessionLog.events).toEqual([]);
+    await runTurn(
+      agent,
+      'y'.repeat(HUMAN_MESSAGE_LIMIT_CHARS),
+      printer,
+      sessionLog,
+      undefined,
+      'native',
+    );
+    expect(sessionLog.events.map((event) => event.type)).toContain('turn/start');
+  });
+
+  it('省略 loop（langgraph）：不拒收，照跑', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
+    const { agent } = await createNexusAgent({ model, plugins: [] });
+    const { printer, stdout } = recorder();
+    const sessionLog = new SessionLog('t');
+    await runTurn(agent, tooLarge, printer, sessionLog);
+    expect(sessionLog.events[0]?.type).toBe('turn/start');
+    expect(stdout()).toContain('收到。');
   });
 });
 
