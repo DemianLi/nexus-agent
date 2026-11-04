@@ -26,6 +26,7 @@ import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
+import { OBSERVATION_SECTION_MIDDLEWARE_NAME } from './prompt-sections.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
@@ -509,6 +510,8 @@ describe('「先讀後改」策略打底', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      // 規則那兩句是段，接在它自己那一格、貼著策略本體的外側（#2414）。
+      OBSERVATION_SECTION_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
@@ -546,6 +549,8 @@ describe('「先讀後改」策略打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      // 規則那兩句是段，接在它自己那一格、貼著策略本體的外側（#2414）。
+      OBSERVATION_SECTION_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,

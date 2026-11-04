@@ -21,17 +21,17 @@
  * （[#327](https://github.com/DemianLi/nexus-agent/issues/327)），而這一句 root 不能有；fold 補的 general-purpose
  * 也要有。
  *
- * **接上，不是取代**：`systemMessage` 在就接在它後面；不在而 `systemPrompt` 有字就接在字後面；兩個都沒有
- * 才只給這一句。子代理有自己的提示詞（general-purpose 那份就是），照抄沙箱政策那段「不在就給
- * `systemPrompt`」的話，在第二種情況會把子代理的提示詞整段換掉。
+ * **接上，不是取代**：這一句是系統提示詞的一段（{@link subagentDelegationSection}），由這一格的轉接接在 `systemMessage` 後面
+ * （`prompt-sections.ts`，#2414）。
  *
  * @module
  */
 
-import { createMiddleware } from 'langchain';
 import type { ApprovalChannel } from './approval.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { AgentMiddleware } from './base-types.js';
+import { createSectionSlotMiddleware, MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const SUBAGENT_DELEGATION_MIDDLEWARE_NAME = 'nexusSubagentDelegation';
@@ -71,6 +71,20 @@ export function foregroundDelegationContext(
 }
 
 /**
+ * 委派聲明這一段。
+ *
+ * @param context - 每次模型呼叫取一次那一句。
+ */
+export function subagentDelegationSection(context: () => string): MiddleSection {
+  return {
+    name: 'nexus:subagent-delegation',
+    order: MIDDLE_SECTION_ORDERS.SUBAGENT_DELEGATION,
+    separator: '\n',
+    text: () => context(),
+  };
+}
+
+/**
  * 建一顆把委派聲明接進系統訊息的 middleware。
  *
  * 無狀態，一份實例走遍每個子代理。
@@ -82,24 +96,7 @@ export function foregroundDelegationContext(
 export function createSubagentDelegationMiddleware(
   context: () => string = () => SUBAGENT_DELEGATION_CONTEXT,
 ): AgentMiddleware {
-  return createMiddleware({
-    name: SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const { systemMessage, systemPrompt } = request;
-      const text = context();
-      if (systemMessage !== undefined) {
-        return handler({
-          ...request,
-          systemMessage: systemMessage.concat(`\n${text}`),
-        });
-      }
-      return handler({
-        ...request,
-        systemPrompt:
-          typeof systemPrompt === 'string' && systemPrompt !== ''
-            ? `${systemPrompt}\n${text}`
-            : text,
-      });
-    },
-  });
+  return createSectionSlotMiddleware(SUBAGENT_DELEGATION_MIDDLEWARE_NAME, [
+    subagentDelegationSection(context),
+  ]);
 }

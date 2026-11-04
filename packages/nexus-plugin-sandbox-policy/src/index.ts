@@ -15,7 +15,7 @@
  * ## 三件照抄的事
  *
  * 1. **逐次算，不是組裝期算一次。** `text` 在 dsh 那邊是個函式，每次組 prompt 都跑一次。
- *    我們用 `wrapModelCall`，每一次模型呼叫重算——執行期切換那一刀落地時這裡不必動。
+ *    我們的段也是函式型 `text`（`registry.prompt.section`），每一次模型呼叫重算，執行期切了模式，下一次呼叫就是新的那一句。
  * 2. **`read-only` 那一句明著叫模型「不要先拒絕」。** dsh 的原文是
  *    「Do not refuse a required modification from this policy alone: try an available tool
  *    normally and follow any denial and escalation guidance it returns.」少了這句，模型會
@@ -71,12 +71,6 @@
  * scope 的 profile 層。所以退到「不註冊」：淨效果與 dsh 出廠組合相同（沒有圍堵就沒有 `/permission`），但**這不是 dsh 的機制**。`/permission` 由 `@nexus/plugin-permission-presets`
  * （[#437](https://github.com/DemianLi/nexus-agent/issues/437)）註冊，它自己也在沒有圍堵時整顆不掛。
  *
- * ## 為什麼是 `wrapModelCall` 而不是 `beforeModel`
- *
- * 照 `@nexus/plugin-plan-mode` 的先例：`beforeModel` 是圖裡的一個節點，每輪多一格；
- * 而這裡要做的只是把一段話接到 system prompt 後面。**用 `concat` 不用取代**——記憶 plugin
- * 與基座的摘要器都在同一份 prompt 上加東西，取代會把它們吃掉。
- *
  * @module
  */
 
@@ -88,6 +82,8 @@ import {
   WORKSPACE_CAPABILITY,
 } from '@nexus/core';
 import type { SandboxMode } from '@nexus/core';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
@@ -95,6 +91,9 @@ import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
 export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
+
+/** 政策句那一段的名字。 */
+export const SANDBOX_POLICY_SECTION_NAME = 'sandbox:policy';
 
 /**
  * 基座的委派工具。**今天唯一的委派入口**：async 那組掛不上（見 `base-tools.ts`），`thread-pump.ts` 認的也是這個字。
@@ -236,34 +235,22 @@ declare module '@nexus/core' {
 }
 
 /**
- * 把一格模式講成一段話、接到 system prompt 後面的 middleware。
+ * 把一格模式講成一段話：系統提示詞的一段，fold 接在 `plugins.rest` 的區頭（#2414）。每次模型呼叫現算。
  *
- * **用 `concat` 不用取代**，兩條入口（`systemMessage` 在、不在）見 plan-mode 那段註解。
+ * 子代理也接這一段（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
+ * `controller.source` 先讀快照。
  *
  * @param resolveMode - 每次模型呼叫問一次。
  */
-function policyPromptMiddleware(
+function policySection(
   resolveMode: () => SandboxMode,
   options: { readonly contained: boolean; readonly sharedPrefix?: string },
-) {
+): MiddleSection {
   return {
-    name: SANDBOX_POLICY_MIDDLEWARE_NAME,
-    wrapModelCall: (
-      request: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[0],
-      handler: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[1],
-    ) => {
-      // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
-      // `controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆 `sandbox/mode { source: 'delegation' }`。
-      const sentence = sandboxPolicySentence(resolveMode(), options);
-      // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的時候接在它後面，不在的時候由
-      // `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
-      const { systemMessage } = request;
-      return handler(
-        systemMessage === undefined
-          ? { ...request, systemPrompt: sentence }
-          : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
-      );
-    },
+    name: SANDBOX_POLICY_SECTION_NAME,
+    order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,
+    separator: '\n',
+    text: () => sandboxPolicySentence(resolveMode(), options),
   };
 }
 
@@ -288,13 +275,11 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     const sharedPrefix = typeof sharedService === 'string' ? sharedService : undefined;
     if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
       // **沒有圍堵：只講那一句**（有共用區就再多一句）。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
-      registry.middleware.use(
-        createMiddleware(
-          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, {
-            contained: false,
-            ...(sharedPrefix !== undefined && { sharedPrefix }),
-          }),
-        ),
+      registry.prompt.section(
+        policySection(() => UNCONTAINED_POLICY_MODE, {
+          contained: false,
+          ...(sharedPrefix !== undefined && { sharedPrefix }),
+        }),
       );
       return;
     }
@@ -324,12 +309,15 @@ export const sandboxPolicyPlugin: NexusPlugin = {
       ...(sharedPrefix !== undefined && { sharedPrefix }),
       ...(reservedReason !== undefined && { reservedReason }),
     });
+    registry.prompt.section(
+      policySection(resolveMode, {
+        contained: true,
+        ...(sharedPrefix !== undefined && { sharedPrefix }),
+      }),
+    );
     registry.middleware.use(
       createMiddleware({
-        ...policyPromptMiddleware(resolveMode, {
-          contained: true,
-          ...(sharedPrefix !== undefined && { sharedPrefix }),
-        }),
+        name: SANDBOX_POLICY_MIDDLEWARE_NAME,
         // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
         // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
         // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），

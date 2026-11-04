@@ -1,12 +1,12 @@
 /**
  * `PluginRegistry`——plugin 的 `apply` 拿到的那個東西。
  *
- * 九個註冊點：`tools` / `subagents` / `capabilities` 是具名的，`backend` / `skills`
- * 也靠名字（`routePrefix` 與來源路徑）擋重複，其餘三個（`middleware` /
+ * 十個註冊點：`tools` / `subagents` / `capabilities` 是具名的，`backend` / `skills`
+ * 也靠名字（`routePrefix` 與來源路徑）擋重複，`prompt` 的段名不能重複，其餘三個（`middleware` /
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
- * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
+ * `createDeepAgent` 參數的部分在 {@link ./fold.ts}（`prompt` 的段折成 `middleware` 裡的轉接格，#2414）。
  *
- * 外加十條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加十條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那十個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
@@ -16,7 +16,7 @@
  * {@link EventRegistrationPoint} 回答「誰在匯流排的哪個事件上掛了監聽者」（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
  * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，與上面那十條正交。
+ * 十個註冊點回答的是「這個 agent 由什麼組成」，與上面那十條正交。
  *
  * **第十條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
@@ -51,6 +51,8 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
 import { normalizeProjectionUnit } from './projections.js';
+import { assertMiddleSection, PLUGIN_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 import type { ProjectionUnit } from './projections.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
@@ -633,13 +635,35 @@ export interface MemorySourceRegistrationPoint {
   sources(): string[];
 }
 
+/**
+ * `prompt` 註冊點：這條 thread 的系統提示詞**中段**（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
+ *
+ * 頭尾兩段（身分句、前後綴）由樹上的 `system-prompt` 那一列提供；先讀後改、委派聲明、核准政策句是組裝點自己的。這三種都不經這裡。
+ * 這裡只收插件的段（`PLUGIN_SECTION_ORDERS`），由 fold 在 `SECTION_SLOT_ORDERS` 對應的那一格接上（`prompt-sections.ts`），所以 `order`
+ * 決定的不只是先後，也是落在洋蔥的哪一格。
+ */
+export interface PromptSectionRegistrationPoint {
+  /**
+   * 登記一段。
+   * @param section - 中段：`order` 是 `PLUGIN_SECTION_ORDERS` 之一。
+   * @returns 只撤銷這一次登記的冪等 undo。
+   * @throws 形狀不合（見 `assertMiddleSection`）、`order` 不是插件接得上的值、或同名的段已經登記過。
+   */
+  section(section: MiddleSection): () => void;
+  /**
+   * 目前登記的段。
+   * @returns 依登記順序。
+   */
+  sections(): MiddleSection[];
+}
+
 /** 一次關機清理。回 promise 就會被等到。 */
 export type Disposer = () => void | Promise<void>;
 
 /**
  * `lifecycle` 通道：登記關機時要收掉的東西。
  *
- * **它與九個註冊點不同軸。** 九個註冊點的東西會折進 `createDeepAgent` 的參數，這條
+ * **它與十個註冊點不同軸。** 十個註冊點的東西會折進 `createDeepAgent` 的參數，這條
  * 不會——它的產物是 `loadPlugins()` 回傳的 `dispose()`，由組裝點在不用這個 agent 之後
  * 呼叫。第一個需要它的是 `@nexus/plugin-mcp`：MCP server 是外部程序，stdio 子行程的
  * pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出。
@@ -712,7 +736,7 @@ export interface BoundPluginLogger {
  * 一份共用的 registry，「是誰」只在 `apply` 的註冊視窗裡有（`current`），執行期無從得知，所以表達不出 `ctx.logger.warn()` 在執行期
  * 直接叫；退到最接近的 {@link PluginLogger.bind}：在 `apply` 裡把 origin 綁進一支 logger，之後拿它叫。
  *
- * **它與九個註冊點不同軸**，理由同 lifecycle：產物不進 `createDeepAgent` 的參數。也不跟著回滾：一列 `apply` 失敗
+ * **它與十個註冊點不同軸**，理由同 lifecycle：產物不進 `createDeepAgent` 的參數。也不跟著回滾：一列 `apply` 失敗
  * 撤掉的是它註冊的東西，它講過的話照樣交出去——那可能正是它為什麼失敗。
  */
 export interface PluginLogger {
@@ -752,7 +776,7 @@ export interface PluginLogger {
  * （`references/deepseek-harness/packages/session/session-telemetry/src/index.ts:19-40`，SHA `6b1808f`）。
  * 兩個不同的軸，收成一格反而是偏離。
  *
- * **它與九個註冊點不同軸**，理由跟 lifecycle 一樣：產物不進 `createDeepAgent` 的參數。
+ * **它與十個註冊點不同軸**，理由跟 lifecycle 一樣：產物不進 `createDeepAgent` 的參數。
  * 遙測是會話事件的第二個出口，走的不是 agent 那條線。
  *
  * **`WIRE_CHANNELS` 那份下行白名單擋不到這條路。** 那是 web 傳輸的邊界，遙測是另一個
@@ -843,7 +867,7 @@ export interface InvariantRegistrationPoint {
 /**
  * `commands` 通道：**人打的斜線命令**。
  *
- * **它與九個註冊點不同軸**，理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent`
+ * **它與十個註冊點不同軸**，理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent`
  * 的參數。命令由進入點發派，不經過模型——`@nexus/plugin-commands` 的執行器讀這裡。
  *
  * **形狀差異，不是偏離**（AGENTS.md 的偏離規則只蓋「基座表達不出來」，這兩條不是）：
@@ -1111,6 +1135,7 @@ export interface PluginRegistry {
   readonly approvals: ApprovalRegistrationPoint;
   readonly skills: SkillSourceRegistrationPoint;
   readonly memory: MemorySourceRegistrationPoint;
+  readonly prompt: PromptSectionRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
   readonly telemetry: TelemetryRegistrationPoint;
   readonly invariants: InvariantRegistrationPoint;
@@ -1460,6 +1485,7 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
   const denyRules = new AnonymousEntries<DenyRule>();
   const approvalListeners = new AnonymousEntries<PreToolListener>();
   const memorySources = new AnonymousEntries<string>();
+  const promptSections = new AnonymousEntries<MiddleSection>();
   const sessionInstallers = new AnonymousEntries<SessionInstaller>();
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
@@ -1732,6 +1758,26 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
+  const promptPoint: PromptSectionRegistrationPoint = {
+    section: (section) =>
+      effect('prompt.section()', (origin) => {
+        assertMiddleSection(section);
+        if (!PLUGIN_SECTION_ORDERS.includes(section.order)) {
+          throw new RangeError(
+            `${formatOrigin(origin)} 登記的段 "${section.name}" 的 order ${String(section.order)} 不是插件接得上的值` +
+              `（${PLUGIN_SECTION_ORDERS.join('、')}）：頭尾兩段由 system-prompt 那一列提供，其餘中段是組裝點自己的`,
+          );
+        }
+        for (const { value } of promptSections.entries()) {
+          if (value.name === section.name) {
+            throw new Error(`${formatOrigin(origin)} 登記的段 "${section.name}" 已經登記過了`);
+          }
+        }
+        return promptSections.append({ ...section }, origin);
+      }),
+    sections: () => [...promptSections.entries()].map((entry) => entry.value),
+  };
+
   const telemetryPoint: TelemetryRegistrationPoint = {
     redact: (rule) => effect('telemetry.redact()', (origin) => redactRules.append(rule, origin)),
     rules: () => [...redactRules.entries()],
@@ -1905,6 +1951,7 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
     approvals: approvalPoint,
     skills: skillPoint,
     memory: memoryPoint,
+    prompt: promptPoint,
     lifecycle: lifecyclePoint,
     telemetry: telemetryPoint,
     invariants: invariantPoint,

@@ -190,6 +190,7 @@ describe('同名取代是唯一的縫', () => {
         // `tools/pre-execute` 的生產者（#1248）：緊貼核准閘門外側，被拒的呼叫不會先跳核准卡。
         'nexusToolPreExecute',
         'nexusApprovalGate',
+        'nexusPromptSections:observation',
         'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
         // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——

@@ -20,6 +20,7 @@ import {
   CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   isUnderSharedPrefix,
+  SANDBOX_POLICY_SECTION_NAME,
   sandboxPolicySentence,
   sharedContentSentence,
   sharedReadOnlyRefusal,
@@ -74,7 +75,7 @@ describe('唯讀共用參考區那一句（#1775）', () => {
     },
   );
 
-  it('掛上之後 middleware 講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
+  it('掛上之後那一段講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
     for (const withFence of [true, false]) {
       const { registry } = await load([
         createHostServicesPlugin({
@@ -89,18 +90,11 @@ describe('唯讀共用參考區那一句（#1775）', () => {
         }),
         createSandboxPolicyPlugin(),
       ]);
-      const [entry] = registry.middleware.list();
-      let seen = '';
-      const middleware = (entry!.value as unknown as { middleware: unknown }).middleware as {
-        wrapModelCall: (
-          request: unknown,
-          handler: (request: { systemPrompt?: string }) => unknown,
-        ) => unknown;
-      };
-      await middleware.wrapModelCall({}, (request) => {
-        seen = request.systemPrompt ?? '';
-        return undefined;
-      });
+      const [section] = registry.prompt.sections();
+      expect(section?.name).toBe(SANDBOX_POLICY_SECTION_NAME);
+      const text = section!.text;
+      const seen =
+        typeof text === 'function' ? text({ agent: undefined, call: {}, tools: [] }) : text;
       expect(seen).toContain('共用參考區在 `/shared`，唯讀');
     }
   });
@@ -181,10 +175,13 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
     expect(registry.services.use('sandboxPolicy').controller.source()).toBe('danger-full-access');
   });
 
-  it('沒有圍堵：載得起來、只貢獻那一句（一顆 middleware），不要控制器', async () => {
+  it('沒有圍堵：載得起來、只貢獻那一句（一段，沒有 middleware），不要控制器', async () => {
     const { registry } = await load([createSandboxPolicyPlugin()]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
-    expect(registry.middleware.list().map((entry) => entry.value)).toHaveLength(1);
+    expect(registry.prompt.sections().map((section) => section.name)).toEqual([
+      SANDBOX_POLICY_SECTION_NAME,
+    ]);
+    expect(registry.middleware.list()).toHaveLength(0);
   });
 
   it('沒有圍堵時就算交了 sandboxPolicy 也不掛控制器那半（訊號是 fsContainment，不是控制器在不在）', async () => {

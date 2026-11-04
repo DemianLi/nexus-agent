@@ -8,7 +8,7 @@
 
 import { posix } from 'node:path';
 
-import { ToolMessage } from '@langchain/core/messages';
+import { SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
@@ -20,8 +20,10 @@ import {
   observationKey,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
+  OBSERVATION_SECTION,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
+import { applySections } from './prompt-sections.js';
 import { toolErrorOf } from './tool-events.js';
 
 /** `wrapToolCall` 拿出來直接呼叫用的形狀。 */
@@ -287,19 +289,10 @@ describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.sect
     expect(observationGuidance(new Set([OBSERVED_READ_TOOL, 'grep']))).toBe('');
   });
 
-  it('wrapModelCall：看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
-    const { backend } = fakeBackend(new Map());
-    const middleware = createObservationPolicy(backend) as unknown as {
-      wrapModelCall: (request: unknown, handler: (next: unknown) => unknown) => unknown;
-    };
-    const run = (tools: readonly { name: string }[]): string => {
-      let system = '';
-      middleware.wrapModelCall(
-        { tools, systemMessage: { concat: (text: string) => (system = `原本的${text}`) } },
-        (next) => next,
-      );
-      return system;
-    };
+  it('那一段看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
+    const run = (tools: readonly { name: string }[]): string =>
+      applySections({ tools, systemMessage: new SystemMessage('原本的') }, [OBSERVATION_SECTION])
+        .systemMessage.text;
     expect(
       run([
         { name: OBSERVED_READ_TOOL },
@@ -308,7 +301,14 @@ describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.sect
       ]),
     ).toBe(`原本的\n\n${WRITE_AND_EDIT}\n\n${EDIT}`);
     // 沒有 write_file／edit_file（例如唯讀模式把它們拿掉）→ 不追加，請求原樣交出去。
-    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('');
+    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('原本的');
+  });
+
+  it('策略本體不碰系統提示：文字只在段裡', () => {
+    const { backend } = fakeBackend(new Map());
+    expect(
+      (createObservationPolicy(backend) as unknown as { wrapModelCall?: unknown }).wrapModelCall,
+    ).toBeUndefined();
   });
 });
 

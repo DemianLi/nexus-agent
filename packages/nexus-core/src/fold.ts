@@ -62,7 +62,19 @@ import type { SpillPolicyOptions } from './spill-policy.js';
 import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
 import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
-import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
+import {
+  createObservationPolicy,
+  OBSERVATION_POLICY_PLUGIN_NAME,
+  OBSERVATION_SECTION,
+} from './observation.js';
+import {
+  createSectionSlotMiddleware,
+  OBSERVATION_SECTION_MIDDLEWARE_NAME,
+  PLUGIN_SECTIONS_MIDDLEWARE_NAME,
+  PREPENDED_SECTIONS_MIDDLEWARE_NAME,
+  SECTION_SLOT_ORDERS,
+  sectionsIn,
+} from './prompt-sections.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
@@ -825,6 +837,14 @@ export function foldRegistry(
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
     { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
+    // 先讀後改那一段（#2414）緊貼策略外側、在摘要器外層（摘要器估 token 時算得到它，見 `prompt-sections.ts` 檔頭）；無狀態，共用一份。
+    // 策略沒掛就沒有這一段。
+    shared(
+      'observationPrompt',
+      observationPolicy === undefined
+        ? undefined
+        : createSectionSlotMiddleware(OBSERVATION_SECTION_MIDDLEWARE_NAME, [OBSERVATION_SECTION]),
+    ),
     // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
     // 理由見 {@link foldObservationPolicy}。
     perAgent('observationPolicy', () => observationPolicy?.()),
@@ -851,7 +871,7 @@ export function foldRegistry(
     shared('sessionCheckpoint', sessionCheckpoint),
     // 其餘 plugin 的：排在子代理 `spec.middleware` 外層，plugin 打底、自帶的在內側，同 `tools` 那條「全域 → 自帶」的軸線。
     { name: 'plugins.rest', root: same(plugins.rest), subagent: same(subagentPlugins.rest) },
-    // 核准政策句排在其餘 plugin 內側：沙箱政策句由 `plugins.rest` 裡的那一顆附加，這一句附加在其餘 plugin 的文字之後。
+    // 核准政策句排在其餘 plugin 內側：插件的政策段由 `plugins.rest` 區頭那一格轉接附加，這一句附加在其餘 plugin 的文字之後。
     // 在子代理自帶的與 `last` 的外側，它們附加的文字在這一句之後。
     shared('approvalPolicyPrompt', approvalPolicyPrompt),
     // 子代理自己帶的 middleware：每個子代理不同，所以是「逐個取」而不是共用。
@@ -859,7 +879,7 @@ export function foldRegistry(
       'spec.middleware',
       make((spec) => spec.middleware ?? []),
     ),
-    // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的仍是最後一段。
+    // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的是段的最後；記憶在基座最內層，還接在它之後。
     { name: 'plugins.last', root: same(plugins.last), subagent: same(subagentPlugins.last) },
     // `tools/post-execute`（#1248）在輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、在每一個 plugin
     // middleware 內側：plugin 與圍堵看到的是替換過的那則。
@@ -1433,15 +1453,28 @@ function pluginMiddleware(
   const isMiddleware = (value: AgentMiddleware | undefined): value is AgentMiddleware =>
     value !== undefined;
   const entries = registry.middleware.list();
+  // 插件登記的系統提示詞中段（#2414）。`prepended` 接在區尾：計劃模式那一顆先交出排著的待關，指引才照交完的模式判。
+  // `rest` 接在區頭，區裡沒有別的會讀系統訊息。
+  const sections = registry.prompt.sections();
+  const slot = (name: string, orders: readonly number[]): AgentMiddleware[] => {
+    const here = sectionsIn(sections, orders);
+    return here.length === 0 ? [] : [createSectionSlotMiddleware(name, here)];
+  };
   return {
-    prepended: entries
-      .filter((entry) => entry.value.prepend)
-      .map(materialize)
-      .filter(isMiddleware),
-    rest: entries
-      .filter((entry) => !entry.value.prepend && !entry.value.last)
-      .map(materialize)
-      .filter(isMiddleware),
+    prepended: [
+      ...entries
+        .filter((entry) => entry.value.prepend)
+        .map(materialize)
+        .filter(isMiddleware),
+      ...slot(PREPENDED_SECTIONS_MIDDLEWARE_NAME, SECTION_SLOT_ORDERS.prepended),
+    ],
+    rest: [
+      ...slot(PLUGIN_SECTIONS_MIDDLEWARE_NAME, SECTION_SLOT_ORDERS.plugins),
+      ...entries
+        .filter((entry) => !entry.value.prepend && !entry.value.last)
+        .map(materialize)
+        .filter(isMiddleware),
+    ],
     last: entries
       .filter((entry) => entry.value.last)
       .map(materialize)

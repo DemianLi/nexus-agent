@@ -1,5 +1,6 @@
-import { ToolMessage } from '@langchain/core/messages';
+import { SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
+  applySections,
   createHostServicesPlugin,
   createRegistry,
   createSessionRunner,
@@ -36,6 +37,7 @@ import {
   PLAN_HEADING_REQUIRED_MESSAGE,
   PLAN_LEFT_MESSAGE,
   PLAN_MODE_MIDDLEWARE_NAME,
+  PLAN_POLICY_SECTION_NAME,
   PLAN_NO_CHANNEL_MESSAGE,
   PLAN_NO_REVIEWER_MESSAGE,
   PLAN_NOT_ATTACHED_MESSAGE,
@@ -112,6 +114,27 @@ function attach(registry: PluginRegistry, log: SessionLog): () => void {
       throw new Error(`不該有 warn：${message}`);
     },
   });
+}
+
+/**
+ * 一次模型呼叫：先過計劃模式的 middleware（交出待關），再在它內側接上插件登記的段，同 fold 的 `plugins.prepended`。
+ * 回這一步送給模型的系統文字。
+ */
+async function modelStepText(registry: PluginRegistry, configurable?: object): Promise<string> {
+  const middleware = registry.middleware
+    .list()
+    .find((one) => one.value.middleware?.name === PLAN_MODE_MIDDLEWARE_NAME)?.value
+    .middleware as unknown as {
+    wrapModelCall: (request: unknown, handler: (request: never) => unknown) => unknown;
+  };
+  const request = {
+    systemMessage: new SystemMessage(''),
+    ...(configurable !== undefined && { runtime: { configurable } }),
+  };
+  return (await middleware.wrapModelCall(
+    request,
+    (next: typeof request) => applySections(next, registry.prompt.sections()).systemMessage.text,
+  )) as string;
 }
 
 /** 建一個掛好、接上一份 root 日誌的計劃模式。`seed` 給了就是一份續接回來的日誌。 */
@@ -243,7 +266,7 @@ describe('exit_plan_mode 沒有生效時', () => {
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
  */
 describe('createPlanModePlugin', () => {
-  it('四個註冊點都放了東西，核准閘門一位都沒有', async () => {
+  it('五個註冊點都放了東西，核准閘門一位都沒有', async () => {
     const { registry } = await load([planPlugin()]);
 
     expect(registry.sessions.installers()).toHaveLength(1);
@@ -252,6 +275,10 @@ describe('createPlanModePlugin', () => {
     // **這裡不補 `?.`就好**：計劃模式走的是直接給實例那條，拿不到名字就是註冊方式變了。
     expect(registry.middleware.list().map((entry) => entry.value.middleware?.name)).toEqual([
       PLAN_MODE_MIDDLEWARE_NAME,
+    ]);
+    // 指引是一段（#2414），不在 middleware 裡。
+    expect(registry.prompt.sections().map((section) => section.name)).toEqual([
+      PLAN_POLICY_SECTION_NAME,
     ]);
     // **翻過來的絆索**（#652）：以前這裡是 1，`exit_plan_mode` 走核准。它改走提問通道之後，
     // 這個 plugin 不該再有任何一位閘門——有的話，計劃又會變成一張核准卡。
@@ -284,8 +311,8 @@ describe('createPlanModePlugin', () => {
   });
 
   /**
-   * **`prepend` 剩下的用處**：指引站在記憶 plugin 外面（`concat` 之後記憶才接上去）。以前它還是模式外拒絕擋在核准閘門
-   * 前面的手段；那一層拿掉了（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)），模式外拒絕只在工具本體裡。
+   * **`prepend` 的用處**：交出待關要在 fold 接指引那一格（`plugins.prepended` 的最後面）之前，這一步的指引才看得到剛交出的模式。模式外拒絕只在工具本體裡
+   * （[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)）。
    */
   it('middleware 是 prepend 的', async () => {
     const { registry } = await load([planPlugin()]);
@@ -355,17 +382,9 @@ describe('同意之後的待關', () => {
       { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
     );
     expect(verdictOf(result)).toMatchObject({ text: PLAN_APPROVED_MESSAGE, status: 'success' });
-    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as {
-      wrapModelCall: (request: unknown, handler: (request: unknown) => unknown) => unknown;
-    };
-    // 一次模型呼叫：回傳這一步的 system prompt（指引在不在）。
-    const modelStep = async (checkpointNs: string): Promise<string> => {
-      const seen = (await middleware.wrapModelCall(
-        { runtime: { configurable: { checkpoint_ns: checkpointNs } }, systemPrompt: '' },
-        (request) => request,
-      )) as { systemPrompt?: string };
-      return seen.systemPrompt ?? '';
-    };
+    // 一次模型呼叫：回傳這一步的系統文字（指引在不在）。
+    const modelStep = (checkpointNs: string): Promise<string> =>
+      modelStepText(registry, { checkpoint_ns: checkpointNs });
     return { registry, log: sessions.root, modelStep };
   }
 
@@ -669,31 +688,19 @@ describe('沒接、或接了不只一份', () => {
   });
 
   /**
-   * middleware 認不出呼叫者時的退路（#2357 把 middleware 遷走之前都在）：剛好接一份就讀它，接了兩份就退回初值，**不猜**——猜一份的話指引會照著別人的模式夾。
+   * 認不出呼叫者時的退路（段的 `text` 也走 `registry.sessions.forCall`）：剛好接一份就讀它，接了兩份就退回初值，**不猜**——猜一份的話指引會照著別人的模式夾。
    */
   it('認不出呼叫者：接一份讀它的模式，接兩份退回初值', async () => {
     const { registry } = await load([planPlugin()]);
-    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as {
-      wrapModelCall: (
-        request: unknown,
-        handler: (request: { systemPrompt?: string }) => unknown,
-      ) => unknown;
-    };
-    const guided = (): boolean => {
-      let seen: string | undefined;
-      void middleware.wrapModelCall({}, (request) => {
-        seen = request.systemPrompt;
-        return undefined;
-      });
-      return seen === GUIDANCE;
-    };
+    const guided = async (): Promise<boolean> =>
+      (await modelStepText(registry)) === `\n${GUIDANCE}`;
     const first = new SessionLog('plan-a');
     attach(registry, first);
     await runPlan(registry.commands, '');
-    expect(guided()).toBe(true);
+    expect(await guided()).toBe(true);
 
     attach(registry, new SessionLog('plan-b'));
-    expect(guided()).toBe(false);
+    expect(await guided()).toBe(false);
   });
 
   it('收掉接線之後回到沒接的樣子', async () => {
@@ -811,23 +818,10 @@ describe('設定（#453）', () => {
   it('合法的覆寫會生效——夾進 prompt 的是部署給的那份原樣文本', async () => {
     const guidance = '這一台只准先講清楚要做什麼。';
     const { registry } = await assemble({ guidance, startActive: true });
-    const entry = registry.middleware
-      .list()
-      .find((one) => one.value.middleware?.name === PLAN_MODE_MIDDLEWARE_NAME);
-    const middleware = entry!.value.middleware as unknown as {
-      wrapModelCall: (
-        request: unknown,
-        handler: (request: { systemPrompt?: string }) => unknown,
-      ) => unknown;
-    };
-    let seen: string | undefined;
-    middleware.wrapModelCall({}, (request) => {
-      seen = request.systemPrompt;
-      return undefined;
-    });
+    const seen = await modelStepText(registry);
 
-    expect(seen).toBe(guidance);
-    expect(seen).not.toBe(GUIDANCE);
+    expect(seen).toBe(`\n${guidance}`);
+    expect(seen).not.toContain(GUIDANCE);
   });
 
   it('型別錯就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
