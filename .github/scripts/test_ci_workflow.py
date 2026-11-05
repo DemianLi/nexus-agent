@@ -826,7 +826,18 @@ class NodeModulesCache(unittest.TestCase):
     def test_install_runs_on_both_paths(self) -> None:
         install = next(s for s in self.steps if s.get('name') == '安裝相依套件')
         self.assertNotIn('if', install)
-        self.assertEqual(install['run'], 'pnpm install --frozen-lockfile')
+        # 命中時只多帶 --ignore-scripts；沒命中時照常跑 vendor 的 prepare。
+        self.assertEqual(
+            install['run'],
+            "pnpm install --frozen-lockfile ${{ steps.modules.outputs.cache-hit == 'true' && '--ignore-scripts' || '' }}",
+        )
+
+    def test_vendor_declarations_follow_their_source(self) -> None:
+        # 命中時不跑 prepare，宣告檔只能從快取來；鍵沒含 vendor 原始碼，改了它仍會命中舊的宣告檔。
+        self.assertIn('vendor/*/lib/types', self.restore['with']['path'].split())
+        for part in ("'vendor/*/tsconfig.json'", "'vendor/*/src/**'"):
+            with self.subTest(part=part):
+                self.assertIn(part, self.restore['with']['key'])
 
     def test_only_full_typecheck_saves(self) -> None:
         self.assertEqual(self.save['if'], "inputs.save-cache == 'true' && steps.modules.outputs.cache-hit != 'true'")
