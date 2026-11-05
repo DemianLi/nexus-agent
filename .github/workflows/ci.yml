@@ -127,6 +127,7 @@ jobs:
       # CI 形狀測試等（#1546）。不用安裝相依，秒級。
       - name: CI 腳本的測試
         if: steps.plan.outputs.mode == 'light'
+        continue-on-error: true # 實驗用，不合併：plan_ci 的測試會因強制輕的模式而紅
         run: python3 -m unittest discover -s .github/scripts
 
       # lockfile 新帶進的版本要發布滿 `minimumReleaseAge`（#1545），規則見腳本檔頭。排在安裝之前；lockfile 沒變就不發請求。
@@ -143,6 +144,13 @@ jobs:
 
       - uses: ./.github/actions/setup
         if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.node == 'true'
+        with:
+          save-cache: 'true' # 實驗用，不合併：讓第二輪讀得到第一輪存的快取
+
+      - name: 實驗：vendor 的宣告檔（不合併）
+        if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.node == 'true'
+        run: |
+          for d in vendor/*/; do echo "結果｜$d｜$(find "$d/lib/types" -name '*.d.ts' 2>/dev/null | wc -l) 個 d.ts｜$(stat -c %y "$d/lib/types/index.d.ts" 2>/dev/null || echo 無)"; done
 
       # 合併後那一輪替每個 develop commit 存一份；先找分歧點那一份，沒有（那一輪還沒存好）就退回最近的一份。
       # 快取落後的部分 tsc 會比對 hash 重查，只影響快慢，不影響結果。
