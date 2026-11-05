@@ -3,18 +3,19 @@
  * [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 5 張）。**預設關**：
  * `createNexusAgent({ backgroundSubagents })` 不給就完全沒有這顆 middleware。
  *
- * ## 模型看到的是 `subagent`，執行的前景仍是基座的 `task`
+ * ## 為什麼是新工具，不是給 `task` 加欄位（偏離登記）
  *
- * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（core 的 `ToolAdmission` 與 `ToolAddition`），
- * `wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的 `ToolCallStep`。langchain 在 `wrapModelCall` 裡只拒絕一件事：
- * 已註冊的工具換成同名的另一個實例（`langchain@1.5.10` `dist/agents/nodes/AgentNode.js:241-257`）；拿掉、換成定義、
- * 有 `wrapToolCall` 時加上新的工具都放行（探針有斷言，見 #831）。基座 `task` 的 schema 固定，執行時 zod 會剝掉
- * 它不認得的欄位，所以背景與否、模型選擇這些參數由 `subagent` 這一顆收，不經 `task`。
+ * dsh 的委派工具自己帶 `run_in_background`（`packages/subagent/tool-subagent/src/index.ts:111/303`，`477b4f4`）。
+ * 基座的 `task` schema 固定，zod 會剝掉多的欄位；langchain 又禁止在 `wrapModelCall` 裡**修改**已註冊的工具
+ * （`You have modified a tool in "wrapModelCall" hook … This is not supported.`）。表達不出來，退到最接近的：
+ * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（兩件事 langchain 都允許，探針有斷言，見 #831；
+ * 拿掉與加上是 core 的 `ToolAdmission` 與 `ToolAddition`），`wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的
+ * `ToolCallStep`。
  *
  * - **`run_in_background: false`**：把呼叫改派給基座的 `task`（`toolCall.name` 換成 `task`、`request.tool` 換成
  *   `wrapModelCall` 順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
  *   回給模型的結果名字改回 `subagent`。
- * - **`true`（預設）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
+ * - **`true`（預設，同 dsh continuable）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
  *   當場回編號。
  * - **模型直接送 `task`**（藏起來的那顆）：**不攔**，基座照樣跑，等同 `run_in_background: false`。它沒被宣告過，
  *   只有壞掉的模型才會送；行為與前景一致，所以不值得為它多一條錯誤路徑（探針實測，#831）。
@@ -23,13 +24,13 @@
  * `nexusApprovalGate` ＞ … ＞ `nexusMaxTokens`；沙箱 plugin 的 `wrapToolCall` 也在這顆裡面。所以前景改派後，
  * 核准閘門、輸出上限、沙箱快照看到的是 `task`；**圍堵與外層的中止守衛在外面，看到的是 `subagent`**（圍堵的日誌事件名、
  * 中止後回的「還沒動手」結果都用 `subagent`）。wire 的子代理卡、`thread-pump.ts` 收回時選碼的 `DELEGATION_TOOL`
- * 比對的是 `task`，歸 #832；背景委派預設關，走不到。
+ * 也還在比對 `task`——這幾處歸 #832，預設關的今天不會被走到。
  *
  * `subagent` 的描述取自當次請求裡 `task` 的描述（core 的 `task-tool-definition.ts` 逐字造的那一份；改掉跟背景矛盾的兩句，見
  * {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
  * （plugin middleware 也射進去，#327）沒有 `task`，`wrapModelCall` 在那裡不加 `subagent`；`wrapToolCall` 按呼叫者身分只接手
  * root 的，子代理幻覺出來的 `subagent` 呼叫原樣交下去、落到 `UNKNOWN_TOOL`（[#1045](https://github.com/DemianLi/nexus-agent/issues/1045)：
- * 不按身分判的話，子代理那一層也會接手：前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
+ * 之前只比工具名，子代理那一層也接手，前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
  *
  * ## 沙箱快照
  *
