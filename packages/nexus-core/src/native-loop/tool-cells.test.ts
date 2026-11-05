@@ -15,6 +15,7 @@ import type { AgentMiddleware } from '../base-types.js';
 import { fakePlugin, fakeTool } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
+import { SHARED_WORKSPACE_SERVICE } from '../sandbox.js';
 import { toolCallStepOf, withToolCallStep } from '../tool-call-step.js';
 
 type Via = 'native' | 'wrapToolCall';
@@ -58,10 +59,11 @@ async function run() {
   const { registry } = await loadPlugins([
     fakePlugin('tools', (r) => {
       r.tools.register(fakeTool('alpha'));
+      r.services.provide(SHARED_WORKSPACE_SERVICE, '/shared/');
     }),
   ]);
   const backend = new StateBackend();
-  // 只在有設定時才掛的那幾格（外溢、搜尋上限、檔案工具兩顆、先讀後改、子代理工具過濾）全打開。名單涵蓋要共用區的 `nexusSharedReadMark` 以外每一顆登記過的。
+  // 只在有設定時才掛的那幾格（外溢、搜尋上限、檔案工具兩顆、先讀後改、共用區前綴、子代理工具過濾）全打開，名單涵蓋每一顆登記過的。
   const params = foldRegistry(registry, {
     summarization: false,
     repeatReminder: false,
@@ -161,6 +163,7 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
           "nexusFileObservationPolicy",
           "nexusSessionCheckpoint",
           "nexusToolPostExecute",
+          "nexusSharedReadMark",
           "nexusToolOutputSchema",
           "nexusFsToolErrors",
           "nexusReadContinuation",
@@ -180,6 +183,7 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
           "nexusFileObservationPolicy",
           "nexusSessionCheckpoint",
           "nexusToolPostExecute",
+          "nexusSharedReadMark",
           "nexusToolOutputSchema",
           "nexusFsToolErrors",
           "nexusReadContinuation",
