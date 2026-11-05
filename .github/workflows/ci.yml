@@ -39,7 +39,7 @@ permissions:
 #     跟 required 的 `gate` 不同名。這一輪的 typecheck 把 buildinfo 與宣告檔存成快取，給輕的模式讀。
 #
 # 全跑的結構：plan 算出模式與要不要掃，各項檢查平行跑，最後由 gate 收斂成單一 required check。
-# 輕的模式，中間那一段整排 skipped，gate 照 plan 輸出的模式接受它們 skipped。
+# 輕的模式，中間那一段整排 skipped；plan 成功、沒動到 spawner 時 gate 也不起 job，其餘情況 gate 照 plan 輸出的模式接受它們 skipped。
 #
 #   plan ─┬─ static ───────────┐   CI 腳本的測試、format、lint、web build、web 的瀏覽器護欄
 #         │                    │   （合併後完整一輪另跑真瀏覽器 e2e）
@@ -55,7 +55,7 @@ permissions:
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
 # ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
-# 輕的一輪是 plan 接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
+# 輕的一輪是 plan，失敗或動到 spawner 時才接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
 # 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
 #
@@ -211,6 +211,20 @@ jobs:
             [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
           done
           exit $rc
+
+      # 輕的模式全部過了時 gate 不起 job（見 gate 的 if），gate 摘要的這幾行改在這裡寫。
+      - name: 輕的模式的摘要
+        if: steps.plan.outputs.mode == 'light'
+        env:
+          CHANGED_COUNT: ${{ steps.checks.outputs.count }}
+          AFFECTED: ${{ steps.light.outputs.affected }}
+        run: |
+          {
+            echo "### 輕的模式"
+            echo ""
+            echo "- 異動檔案數：$CHANGED_COUNT"
+            echo "- 受影響套件數（含下游）：${AFFECTED:-0}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r；markdown 由 .prettierignore 排除。
   # lint 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
@@ -499,6 +513,10 @@ jobs:
   #   - plan 必須是 success（它掛了，其餘全 skip，不能因此綠燈；輕的模式的檢查也在它裡面）；
   #   - 該跑的 job 必須是 success，failure / cancelled 一律紅；
   #   - 只有 plan 明說「輕的模式」或「不用掃」時，其餘才允許是 skipped。
+  #
+  # 輕的模式下擋合併的檢查都在 plan 裡，plan 成功、沒動到 spawner、其餘全是 skipped 時，下面的判斷不會有別的結論，
+  # gate 就不起 job：skipped 的 `gate` 照樣算通過，省掉一個 job 的排隊與啟動。四個條件少一個就照跑、照判。
+  # if 列的 job 要跟 needs 一致，test_ci_workflow.py 會核。
   gate:
     name: gate
     needs:
@@ -514,7 +532,15 @@ jobs:
         sandbox-spawner,
         sandbox-spawner-arm64,
       ]
-    if: always()
+    if: >-
+      always() && !(
+        needs.plan.result == 'success' && needs.plan.outputs.mode == 'light' && needs.plan.outputs.rust == 'false'
+        && needs.static.result == 'skipped' && needs.typecheck.result == 'skipped'
+        && needs.test-packages.result == 'skipped' && needs.test-web.result == 'skipped'
+        && needs.test-harness.result == 'skipped' && needs.packed-install.result == 'skipped'
+        && needs.node-compat.result == 'skipped' && needs.sandbox-spawner.result == 'skipped'
+        && needs.sandbox-spawner-arm64.result == 'skipped'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
