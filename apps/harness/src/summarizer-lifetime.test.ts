@@ -1,13 +1,12 @@
 /**
- * 摘要器狀態的壽命（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416) K7c c-1）：切點與歷史檔的會話名
- * 跟著哪一段生命走。這幾條在換掉摘要器之前、之後都要綠。
+ * 摘要器狀態的壽命：切點與歷史檔的會話名跟著哪一段生命走。
  *
  * - 前景子代理：同型的子代理委派兩次，各是一段生命，身分（去尾的 `checkpoint_ns`，切點跟著它）不同；歷史檔的會話名跟著
  *   摘要器實例（每個子代理規格一份），同型兩次共用一份檔、跟 root 的不同。
  * - 續接：壓縮過、重啟、續接之後又壓縮，新的那次從灌回串的座標算起。
  * - 沒有 checkpointer：切點的壽命等於訊息 state 的壽命。langgraph 沒有 checkpointer 時 invoke 之間 state 不延續；native 的
  *   per-thread state 在實例裡，沒有 checkpointer 也延續。同一張表上留著舊切點、這一次交進來的串比切點短，也不套。
- * - 沒有日誌：摘要之後那次模型呼叫失敗，切點不遺失，下一輪接著它（以前要靠日誌補回 state，沒有日誌就從頭重摘）。
+ * - 沒有日誌：摘要之後那次模型呼叫失敗，切點不遺失，下一輪接著它。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';

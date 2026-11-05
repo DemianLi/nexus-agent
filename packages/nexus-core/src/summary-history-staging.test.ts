@@ -153,7 +153,7 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
     expect(seenDuring).toBe(0);
   });
 
-  /** S2：生摘要的呼叫失敗、基座吞掉照原請求送出——日誌沒有事件、也沒有切點。 */
+  /** S2：生摘要的呼叫失敗、`withTokenBudget` 吞掉照原請求送出——日誌沒有事件、也沒有切點。 */
   it('這一步沒生出摘要（日誌沒事件、也沒記切點）：丟棄', async () => {
     const memory = new MemoryBackend();
     const log = new SessionLog('staging');

@@ -750,7 +750,7 @@ describe('subagent 自帶的 middleware 到得了那個 subagent', () => {
  *
  * 切點（`cutoffIndex` / `summaryMessage` / `filePath`）記在組裝的切點表與日誌的 `compaction/summary`（#2416），
  * `filePath === null`（[#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open 的訊號）從日誌讀。
- * 以前基座把它寫進 graph state 的私有鍵；這一條釘住兩個輸出通道上都沒有摘要的私有欄位。
+ * 這一條釘住兩個輸出通道上都沒有摘要的私有欄位。
  */
 describe('摘要的私有欄位不上 graph', () => {
   it('invoke 的回傳值與 checkpointer 的快照裡都沒有', async () => {

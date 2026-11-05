@@ -513,7 +513,7 @@ describe('摘要之後下一句話把基線補回來', () => {
     // 圖上沒有摘要的私有欄位。
     expect(Object.keys(state).filter((key) => key.startsWith('_summarization'))).toEqual([]);
 
-    // 判準唯一的假陽性來源：摘要那一則被認成基線。基座真的建出來的那一則，一次都不能是。
+    // 判準唯一的假陽性來源：摘要那一則被認成基線。引擎真的建出來的那一則，一次都不能是。
     expect(found.prompts.flat().filter(isSummary).some(isAgentInstructionsMessage)).toBe(false);
   });
 

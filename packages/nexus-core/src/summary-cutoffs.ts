@@ -1,15 +1,13 @@
 /**
- * 摘要的切點表（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416) K7c c-1）：每次組裝一張，記「這條 thread 的這個 agent
- * 上一次摘要切在哪」，取代以前基座放在 graph state 的那顆摘要事件私有鍵。
+ * 摘要的切點表：每次組裝一張，記「這條 thread 的這個 agent 上一次摘要切在哪」。
  *
  * ## 寫：日誌寫進去了才寫
  *
- * 切點在基座把摘要過的請求交下去的那一刻算出來（`summarization.ts` 的 `withCompactionLog`）。有日誌時 `compaction/summary` 寫成功才算數，
+ * 切點在引擎把摘要過的請求交下去的那一刻算出來（`summarization.ts` 的 `withCompactionLog`）。有日誌時 `compaction/summary` 寫成功才算數，
  * 寫不進去這次摘要就不生效（#1702），表也不寫；沒有日誌（或這次呼叫不屬於任何一份）時，交下去就算數。表在這一步結束時落定，所以同一步
  * 裡溢出重摘的那一次讀的仍是這一步開始時的切點，最後落定的是最後一次。
  *
- * 跟日誌同一個時點，所以有日誌時表上的就是「這個生命週期日誌上最後一筆」；之後那次模型呼叫失敗也不會遺失（以前要靠下一步請求前從日誌補回
- * state，#1390）。
+ * 跟日誌同一個時點，所以有日誌時表上的就是「這個生命週期日誌上最後一筆」；之後那次模型呼叫失敗也不會遺失（#1390）。
  *
  * ## 讀：這一步開始時讀一次，用請求的訊息驗過
  *
@@ -21,7 +19,7 @@
  *
  * 條目記著切點前最後一則訊息（`messages[cutoffIndex - 1]`）的 id。讀的時候訊息串在同一格不是那一則，這個條目就不是這份
  * state 的：沒有 checkpointer 的 langgraph 組裝每次 invoke 從新的訊息串起跑，續接灌回的是「摘要＋之後」，都對不上，等於沒有切點。
- * **所以條目的壽命等於訊息 state 的壽命**，不另設數量上限。
+ * 所以**切點的效力**跟著訊息 state 走；條目本身留到組裝丟掉為止（見〈清理〉），每個前景委派的 runId 各佔一格，不另設數量上限。
  *
  * ## 鍵
  *
@@ -30,7 +28,7 @@
  *
  * ## 清理
  *
- * 表掛在組裝上（{@link summaryCutoffsOf}），組裝丟掉表就跟著丟。serve 一條 thread 一次組裝，閒置淘汰時整個組裝收掉。
+ * 表掛在組裝上（{@link summaryCutoffsOf}），組裝丟掉表就跟著丟。
  *
  * @module
  */
@@ -210,7 +208,7 @@ export function withSummaryCutoffs(
       const config = {
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       };
-      // 基座的切點是 `request.messages` 的座標（`getEffectiveMessages(request.messages, …)`）。
+      // 切點用 `request.messages` 的座標，見檔頭〈讀〉。
       const messages = request.messages ?? [];
       const cell: CutoffCell = { previous: table.lookup(config, messages), latest: undefined };
       try {

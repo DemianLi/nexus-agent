@@ -1,10 +1,10 @@
 /**
- * 摘要器的引擎：判斷要不要摘要、切在哪、寫歷史、生摘要、溢出時重摘（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)
- * K7c c-1）。演算法照 `deepagents@1.13.1` 的 `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2717-3242`）移過來，
- * 每一步的算法、門檻、字串都不改；`summarization.ts` 外面那幾層靠的就是它原本的行為。
+ * 摘要器的引擎：判斷要不要摘要、切在哪、寫歷史、生摘要、溢出時重摘。演算法與 `deepagents@1.13.1` 的
+ * `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2717-3242`）相同，算法、門檻、字串一致，
+ * `summarizer-engine.test.ts` 逐項對照；`summarization.ts` 外面那幾層靠的就是這些行為。
  *
- * 只移 nexus 用得到的那一半：組裝點一定給 `trigger`、`keep`、`truncateArgsSettings` 與 `summaryPrompt`，不給 `model`、
- * `trimTokensToSummarize`，所以基座「依模型 profile 補預設」與 `initChatModel` 那兩條不在這裡。
+ * 組裝點一定給 `trigger`、`keep`、`truncateArgsSettings` 與 `summaryPrompt`，不給 `model`、`trimTokensToSummarize`，
+ * 所以沒有「依模型 profile 補預設」與 `initChatModel` 那兩條。
  *
  * @module
  */
@@ -75,6 +75,10 @@ function isContextOverflow(error: unknown): boolean {
 
 /**
  * 建一顆摘要器引擎。回傳的 middleware 名字是 `SummarizationMiddleware`，只有 `wrapModelCall`。
+ *
+ * - 有效訊息串不空而 `request.model` 缺席就拋錯：摘要模型取自請求。
+ * - 歷史檔寫不進去只記一條 warn、照樣摘要，切點的 `filePath` 是 `null`（#66）。
+ * - 溢出重摘時放大的 token 估算倍率留在這顆實例裡，之後的請求沿用。
  *
  * @param options - 門檻、保留量、參數截斷、歷史檔前綴、backend、提示詞。
  * @returns 摘要器引擎。

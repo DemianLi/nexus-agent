@@ -1,8 +1,8 @@
 /**
- * 摘要器引擎對照基座（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：同一組請求同時餵 `deepagents@1.13.1` 的
+ * 摘要器引擎對照基座：同一組請求同時餵 `deepagents@1.13.1` 的
  * `createSummarizationMiddleware` 與 {@link createSummarizerEngine}，逐項比 handler 收到的訊息、摘要模型的輸入、歷史檔的寫入、
  * 回傳值、拋錯與切點。基座的上一次切點放在 state，引擎的放在切點表（{@link withSummaryCutoffs}）；基座的切點讀它回的 `Command`，
- * 引擎的照 `withCompactionLog` 的算法（{@link summaryCutoffIndex}）從交下去的那份算。基座拿掉時（c-2）這一支跟著刪。
+ * 引擎的照 `withCompactionLog` 的算法（{@link summaryCutoffIndex}）從交下去的那份算。基座的依賴拿掉時這一支跟著刪。
  */
 
 import { ContextOverflowError } from '@langchain/core/errors';
@@ -173,7 +173,7 @@ async function observe(
       out.push({
         handled,
         error,
-        // 基座摘要過回 `Command`，引擎回交下去那次的回覆；外層（`withSummaryCutoffs`）以前就是把前者換成後者。
+        // 基座摘要過回 `Command`，引擎回交下去那次的回覆，兩邊比的是交下去那次的回覆。
         result: isCommand(result) ? '好。' : (result as AIMessage | undefined)?.content,
         cutoff,
       });

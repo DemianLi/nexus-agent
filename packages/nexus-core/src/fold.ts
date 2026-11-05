@@ -1597,7 +1597,7 @@ function repeatReminderDisposition(
  *
  * **回工廠而不是一份實例，是量出來的。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`，而 `sessionId` 在
  * `summarization.ts` 的 `createSummarizer` 裡生一次、跟著那顆實例走（#2416）。一份實例同時掛在 root 與每個
- * subagent 上的話，**它們共用那個會話名**——實測到的下場（當年用基座摘要器時）是 root 與 subagent 的歷史
+ * subagent 上的話，**它們共用那個會話名**——實測到的下場是 root 與 subagent 的歷史
  * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話。
  *
  * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次

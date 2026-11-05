@@ -700,6 +700,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   `false` 就不剪新的（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：有 `sessions` 時仍包一層壓力永遠不到的剪刀，
  *   只把日誌上記過的剪法換上去（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)），沒有 `sessions` 就不包。
  * @param report - 摘要失敗時往哪裡講一條 warn（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）；省略即 `console.warn`。
+ * @param cutoffs - 這次組裝的切點表（`summary-cutoffs.ts`），`agent/pre-step` 問的也是這一張；省略就是這顆摘要器自己一張。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -1322,8 +1323,8 @@ const MAX_RETAIN_CHAINS = 32;
  *
  * ## 實例之間沒有狀態要同步
  *
- * 引擎實例的 closure 裡有兩樣：`tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
- * 見 {@link createSummarizer} 的絆索說明）、`cachedModel`（只在 `request.model` 缺席時用），都不會動。歷史檔的會話名
+ * 引擎實例的 closure 裡只有 `tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
+ * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名
  * 在 {@link createSummarizer} 生一次、交給每一顆實例，所以不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。
  * 這一份與基座原本的「一顆摘要器一個 closure」同一個範圍：摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理
  * 照舊不共用；同型的前景子代理共用同一份，所以同型子代理的歷史檔也是同一個。
@@ -1583,10 +1584,8 @@ function quietInvoke<T extends object>(
  *
  * ## 摘要記了，那次呼叫卻失敗
  *
- * 以前拋錯的那次連 `compaction/summary` 都不記；現在它在呼叫之前，呼叫失敗了事件也已經在日誌上。這是 dsh 的行為：
- * 壓縮在 `agent/pre-step`（組請求之前）落地，事件是耐久的，之後的請求失敗不會收回它
- * （`packages/compaction/compaction-basic/src/index.ts`，`d7432673886`）。切點表也一樣：這一步拋錯時照樣落定，下一次呼叫接著
- * 這個切點、不重摘，跟日誌上最後一筆一致。
+ * `compaction/summary` 在呼叫之前記，呼叫失敗了事件也已經在日誌上，之後的請求失敗不會收回它。切點表也一樣：這一步拋錯時照樣落定，
+ * 下一次呼叫接著這個切點、不重摘，跟日誌上最後一筆一致。
  *
  * ## 範圍怎麼表示：與 dsh 的偏離
  *
@@ -1610,9 +1609,8 @@ function quietInvoke<T extends object>(
  *
  * ## 記不進去，這次摘要不生效（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * dsh 的不變量是日誌與送給模型的內容一致：壓縮是一筆事件，寫不進去就等於這次壓縮沒發生；自動壓縮的失敗在 pressure 路徑記 warn、
- * 這一輪照原樣繼續（`packages/compaction/compaction-basic/src/index.ts:163-173`），在 overflow 路徑記 warn、保留原本的請求錯誤
- * （`:204-227`）。我們的摘要事件在引擎交下去的那一刻記，而摘要要生效還有三處：送出去的請求（`sent` 開頭那則摘要）、
+ * 不變量是日誌與送給模型的內容一致：壓縮是一筆事件，寫不進去就等於這次壓縮沒發生；門檻觸發的失敗記 warn、這一輪照原樣繼續，
+ * 端點超窗之後的失敗記 warn、保留原本的請求錯誤。摘要事件在引擎交下去的那一刻記，而摘要要生效還有三處：送出去的請求（`sent` 開頭那則摘要）、
  * 切點表（只在日誌寫進去之後 {@link noteSummaryCutoff}）、歷史檔（#1389 的暫存層依日誌與這一步記下的切點決定提交）。
  *
  * 所以 `append` 拋了就**不叫 `handler`**，改拋一顆登記成「生摘要失敗」的錯（{@link summaryLogFailure}）：
@@ -1622,9 +1620,8 @@ function quietInvoke<T extends object>(
  *   端點回超窗之後的恢復，記 warn、拋原本的超窗錯。照原請求送出的那一次若又碰到端點超窗、基座再摘要又記不進去，
  *   也是拋原本的超窗錯，不再重摘（重摘的次數由基座與 {@link withRetainedTail} 各自最多一次界住）。
  *
- * **偏離 dsh，理由 1（基座表達不出來）。** dsh 的壓縮是一筆交易，寫不進去就沒有提交；摘要器在 `wrapModelCall` 裡生摘要、
- * 交下去，日誌、切點表與送出的請求沒辦法合成一步，所以退到「交下去之前寫、寫不進去不交、錯走生摘要失敗那條路」。
- * **回頭點**：底座換成 Cordis、送給模型的內容改由日誌推出之後（#1385），壓縮改成一筆交易，拿掉 {@link summaryLogFailure} 這條繞路。
+ * 摘要器在 `wrapModelCall` 裡生摘要、交下去，日誌、切點表與送出的請求沒辦法合成一步，所以是「交下去之前寫、寫不進去不交、
+ * 錯走生摘要失敗那條路」。送給模型的內容改由日誌推出之後（#1385），壓縮改成一筆交易，拿掉 {@link summaryLogFailure} 這條繞路。
  *
  * `forCall` 的三種非 `ok` 不是寫入失敗（這次呼叫不屬於任何一份日誌），照舊不記、`handler` 照常被叫。
  *
@@ -1819,7 +1816,7 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
  * `handler` 包在 `try` 裡，接到 `ContextOverflowError` 就走緊急摘要：摘要、再叫一次 `handler`
  * （`:3219-3229`）。所以超過預算時這裡**拋一顆合成的 `ContextOverflowError`**，由基座自己摘要——保留、切點、
- * 寫歷史全是基座原本那套（引擎照抄）。摘要完再叫進來的那一次不拋溢出（已經拋過一次），由下一節的重量處理。
+ * 寫歷史全走引擎自己那套。摘要完再叫進來的那一次不拋溢出（已經拋過一次），由下一節的重量處理。
  *
  * ## 摘要完再量一次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）
  *
@@ -2087,6 +2084,7 @@ function withTokenBudget(
  * 與工具定義自己就占掉門檻八成以上——那時摘不到東西、剪刀照剪，而剪掉的確實是讓整份請求逼近窗口的那一截，所以不擋。
  *
  * @param request - 剪刀收到的那份請求。
+ * @param cutoff - 這一步的上一次切點，有效串由它算。
  * @param trigger - 我們配的那組門檻。
  * @param book - 錨定估算的帳。
  * @param retainedCount - 這一步摘要之後會留幾則，見 {@link retainedMessageCount}；收的是有效串。
