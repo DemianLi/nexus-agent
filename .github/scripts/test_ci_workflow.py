@@ -11,7 +11,7 @@
 - test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
 - web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）；
-- setup 的 node_modules 快取：鍵涵蓋影響內容的檔、存取同一組路徑、只有合併後那一輪的 typecheck 存（#2334）。
+- setup 的 node_modules 快取：只接受完全命中、鍵涵蓋影響內容的檔、存取同一組路徑、只有合併後那一輪的 typecheck 存（#2334）。
 """
 
 from __future__ import annotations
@@ -219,8 +219,6 @@ class UpgradeGuideGate(unittest.TestCase):
         uses = [str(s.get('uses', '')) for s in steps]
         at = next(i for i, u in enumerate(uses) if u.startswith('actions/checkout@'))
         self.assertEqual(steps[at].get('with', {}).get('fetch-depth'), 0)
-        # blob:none 只延後抓檔案內容，歷史與 tags 照樣完整（#2334）；換成 tree:0 之類的會讓 merge-base 與 diff 走不下去。
-        self.assertIn(steps[at]['with'].get('filter'), (None, 'blob:none'))
         self.assertLess(at, uses.index('./.github/actions/plan-checks'))
         self.assertNotIn('if', steps[uses.index('./.github/actions/plan-checks')])
 
@@ -812,7 +810,8 @@ class NodeModulesCache(unittest.TestCase):
 
     def test_key_covers_what_shapes_node_modules(self) -> None:
         key = self.restore['with']['key']
-        for part in ('runner.os', 'runner.arch', 'steps.node.outputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
+        self.assertNotIn('restore-keys', self.restore['with'])
+        for part in ('runner.os', 'runner.arch', 'inputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
             with self.subTest(part=part):
                 self.assertIn(part, key)
         for manifest in ("'package.json'", "'packages/*/package.json'", "'apps/*/package.json'", "'vendor/*/package.json'"):

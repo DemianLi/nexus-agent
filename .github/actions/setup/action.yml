@@ -15,24 +15,18 @@ inputs:
     required: false
     default: 'false'
 
-# 命中 node_modules 的快取時，跳過 pnpm/action-setup 的自我安裝與 pnpm store 的還原；沒命中時照舊。
+# node_modules 有兩條路。命中快取：直接用快取裡的 node_modules 與 pnpm。沒命中：pnpm/action-setup 裝 pnpm，
+# setup-node 還原 pnpm store，再從 store 裝。
 # 兩條路都照跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
-# 不一致就照 lockfile 重裝。快取壞了只會變慢，檢查不會跑在 lockfile 以外的相依上。
+# 不一致就照 lockfile 重裝。
 runs:
   using: composite
   steps:
-    # action 一律 pin 浮動 major tag，跟著修補版走；版本下限由 runtime 決定：node20 已棄用，
-    # runner 現在強制墊到 node24 並發警告，所以這幾顆都必須是 node24 的 major
-    # （checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5）。
-    # 先裝 Node、不帶 cache：快取鍵要用它解析出來的確切版本，而 `cache: pnpm` 要 pnpm 先裝好。
-    - uses: actions/setup-node@v7
-      id: node
-      with:
-        node-version: ${{ inputs.node-version }}
-
-    # 鍵含 OS、架構、Node 的確切版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、各套件的 package.json
-    # （bin 的連結、packageManager 指定的 pnpm 版本）。~/setup-pnpm 是 pnpm/action-setup 預設的安裝位置。
-    # 型別檢查的快取也在 node_modules 底下，由 ci.yml 另外存取，這裡排除。
+    # 鍵只帶 `key`、不帶 `restore-keys`：只接受完全命中，部分命中的 node_modules 會帶進別的相依。
+    # 鍵含 OS、架構、傳進來的 Node 版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、各套件的 package.json
+    # （bin 的連結、packageManager 指定的 pnpm 版本）。Node 用傳進來的版本而不是 runner 解析出的確切版本：
+    # runner 映像混著同一個主版本的不同修補版，確切版本會把同一份快取拆成好幾份；原生模組的 ABI 在主版本內不變。
+    # ~/setup-pnpm 是 pnpm/action-setup 預設的安裝位置。型別檢查的快取也在 node_modules 底下，由 ci.yml 另外存取，這裡排除。
     - uses: actions/cache/restore@v6
       id: modules
       with:
@@ -44,8 +38,9 @@ runs:
           !packages/*/node_modules/.cache
           !apps/*/node_modules/.cache
           ~/setup-pnpm
-        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'packages/*/package.json', 'apps/*/package.json', 'vendor/*/package.json') }}
+        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'packages/*/package.json', 'apps/*/package.json', 'vendor/*/package.json') }}
 
+    # 路徑要跟 pnpm/action-setup 沒命中時設的一致：pnpm 執行檔在 $PNPM_HOME 底下，store 也在那裡。
     - name: 接上快取裡的 pnpm
       if: steps.modules.outputs.cache-hit == 'true'
       shell: bash
@@ -53,16 +48,18 @@ runs:
         echo "PNPM_HOME=$HOME/setup-pnpm/node_modules/.bin" >> "$GITHUB_ENV"
         echo "$HOME/setup-pnpm/node_modules/.bin" >> "$GITHUB_PATH"
 
+    # action 一律 pin 浮動 major tag，跟著修補版走；版本下限由 runtime 決定：node20 已棄用，
+    # runner 現在強制墊到 node24 並發警告，所以這幾顆都必須是 node24 的 major
+    # （checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5、cache ≥ v5）。
     # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）。
     - uses: pnpm/action-setup@v6
       if: steps.modules.outputs.cache-hit != 'true'
 
-    # Node 已經裝好，這一步只為了還原 pnpm store（沒命中時在 post 存）。
+    # `cache: pnpm` 要 pnpm 已經裝好，只在沒命中時開：命中時不需要 store。
     - uses: actions/setup-node@v7
-      if: steps.modules.outputs.cache-hit != 'true'
       with:
         node-version: ${{ inputs.node-version }}
-        cache: pnpm
+        cache: ${{ steps.modules.outputs.cache-hit != 'true' && 'pnpm' || '' }}
 
     - name: 安裝相依套件
       shell: bash

@@ -78,12 +78,9 @@ jobs:
       durations_key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
       durations_key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
     steps:
-      # 完整歷史與 tags（比分歧點、升級指南的 tag），但 blob 用到才抓：只有 HEAD 的工作樹與 lockfile 年齡檢查讀 base 的
-      # `pnpm-lock.yaml` 會用到檔案內容，其餘的 git 操作只看 commit 與 tree（#2334）。
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          filter: blob:none
 
       - uses: ./.github/actions/plan-checks
         id: checks
@@ -184,8 +181,7 @@ jobs:
           typecheck() {
             [ -s "$L/typecheck.txt" ] || { echo "沒有受影響的套件"; return 0; }
             mapfile -t filters < "$L/typecheck.txt"
-            pnpm "${filters[@]}" --silent exec pwd | wc -l | tr -d ' ' > "$RUNNER_TEMP/affected.txt"
-            .github/scripts/typecheck.sh "${filters[@]}"
+            TYPECHECK_COUNT_FILE="$RUNNER_TEMP/affected.txt" .github/scripts/typecheck.sh "${filters[@]}"
           }
           format() {
             [ -s "$L/format.txt" ] || { echo "沒有要檢查的檔"; return 0; }
