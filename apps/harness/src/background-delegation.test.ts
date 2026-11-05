@@ -365,6 +365,33 @@ describe('前景（run_in_background: false）：改派給基座的 task', () =>
     }
   });
 
+  it('內層看到的是 task：名字改回 task、工具是基座那顆（不是模型看到的定義）', async () => {
+    const seen: { name: string; tool: unknown }[] = [];
+    const spy = createMiddleware({
+      name: 'zzToolCallSpy',
+      wrapToolCall: (request, handler) => {
+        seen.push({ name: request.toolCall.name, tool: request.tool });
+        return handler(request);
+      },
+    });
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [{ content: '子答' }],
+      background: {},
+      plugins: [
+        { plugin: { name: 'spy', apply: (registry) => void registry.middleware.use(spy) } },
+      ],
+    });
+    try {
+      await run.say();
+      const root = seen.find((each) => each.name === 'task' || each.name === 'subagent');
+      expect(root?.name).toBe('task');
+      expect(typeof (root?.tool as { invoke?: unknown } | undefined)?.invoke).toBe('function');
+    } finally {
+      await run.close();
+    }
+  });
+
   it('模型直接送藏起來的 task：照樣一次性跑完（等同前景）', async () => {
     const run = await assemble({
       rootTurns: [
