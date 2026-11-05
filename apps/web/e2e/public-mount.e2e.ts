@@ -174,6 +174,22 @@ describe('掛在 /nexus/ 底下', () => {
     expect(proxy.stray).toEqual([]);
   });
 
+  test('獨立頁面開關側欄，宿主頁的路徑看不到 nexus 寫的 cookie（#2438）', async () => {
+    const { page, proxy } = await mounted('不會送出。');
+    await page.goto(`${proxy.origin}${MOUNT}/`);
+    const toggle = page.getByRole('button', { name: '開關側欄' });
+    await toggle.click();
+    await expect
+      .poll(() => page.locator('[data-slot="sidebar"]').getAttribute('data-state'))
+      .toBe('collapsed');
+    await toggle.click();
+    await expect
+      .poll(() => page.locator('[data-slot="sidebar"]').getAttribute('data-state'))
+      .toBe('expanded');
+    await page.goto(`${proxy.origin}${DEMO}?embed=${encodeURIComponent(`${MOUNT}/embed.js`)}`);
+    expect(await page.evaluate(() => document.cookie)).toBe('');
+  });
+
   test('嵌入版：embed.js、/embed 的 API 與 mux 都帶前綴，一輪講完', async () => {
     const reply = '子路徑底下的嵌入版回覆。';
     const { page, proxy } = await mounted(reply);

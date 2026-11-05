@@ -25,8 +25,6 @@ import {
 } from "@/components/ui/tooltip"
 import { PanelLeftIcon } from "lucide-react"
 
-const SIDEBAR_COOKIE_NAME = "sidebar_state"
-const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 // The library default. AppShell sets --sidebar-width itself, so that is
 // where this app's width is decided.
 const SIDEBAR_WIDTH = "16rem"
@@ -82,14 +80,6 @@ function SidebarProvider({
         setOpenProp(openState)
       } else {
         _setOpen(openState)
-      }
-
-      // This sets the cookie to keep the sidebar state.
-      // 沙盒 iframe 裡寫 cookie 會拋 SecurityError；記不住開關不影響畫面。
-      try {
-        document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
-      } catch {
-        // 記不住側欄開關不影響畫面
       }
     },
     [setOpenProp, open]

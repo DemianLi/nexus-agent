@@ -181,11 +181,11 @@
     "components/ui/sidebar.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/sidebar.tsx",
-      "sha256": "231a812d637317874675f08d12b507fcf93659893b23066022fdc32079e61cbf",
+      "sha256": "5d229a36ba58d99f2074f395b350f6e59ec62f6f88fd93bf8123761dd16b3266",
       "patches": [
         "patches/0011-sidebar-chinese-strings.patch",
         "patches/0012-sidebar-lg-breakpoint.patch",
-        "patches/0013-sidebar-cookie-try-catch.patch",
+        "patches/0013-sidebar-no-cookie.patch",
         "patches/0014-sidebar-final-focus.patch",
         "patches/0015-sidebar-mobile-width.patch"
       ],
