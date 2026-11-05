@@ -1,7 +1,7 @@
 /**
  * `beforeAgent`、`beforeModel`、`afterAgent` 的一步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：不帶 LangChain 型別的形狀。
  * 一步照 LangChain hook 的位置收這一次的 state 與 runtime，回要寫回 state 的那幾格（可帶 `jumpTo`），或 `undefined` 不寫。
- * `apps/harness/src/state-readers.test.ts` 數讀 state 的地方，只數三種 hook 鍵下直接寫的函式，`{ step, canJumpTo }` 裡的 `step` 數不到。
+ * 第一個參數是 state：`apps/harness/src/state-readers.test.ts` 照它數讀 state 的地方，`{ step, canJumpTo }` 裡的 `step` 也數。
  *
  * **hook 由一步造出來**：{@link createHookStepMiddleware} 收的是一步，那顆 middleware 上的 hook 是 {@link hookWith} 從這一步造的，
  * 同時把這一步登記在那顆上。登記的一步跟 hook 跑的是同一份，分不開。
