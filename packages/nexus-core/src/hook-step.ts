@@ -1,7 +1,7 @@
 /**
  * `beforeAgent`、`beforeModel`、`afterAgent` 的一步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：不帶 LangChain 型別的形狀。
  * 一步照 LangChain hook 的位置收這一次的 state 與 runtime，回要寫回 state 的那幾格（可帶 `jumpTo`），或 `undefined` 不寫。
- * 第一個參數留著叫 `state`：`apps/harness/src/state-readers.test.ts` 照它數讀 state 的地方。
+ * `apps/harness/src/state-readers.test.ts` 數讀 state 的地方，只數三種 hook 鍵下直接寫的函式，`{ step, canJumpTo }` 裡的 `step` 數不到。
  *
  * **hook 由一步造出來**：{@link createHookStepMiddleware} 收的是一步，那顆 middleware 上的 hook 是 {@link hookWith} 從這一步造的，
  * 同時把這一步登記在那顆上。登記的一步跟 hook 跑的是同一份，分不開。
@@ -35,7 +35,7 @@ export type HookStep = (
 /** 登記的那一份：一步，與它能跳到哪裡。 */
 export interface HookStepCell {
   readonly step: HookStep;
-  /** 同 LangChain hook 的 `canJumpTo`；不給是不跳。 */
+  /** 同 LangChain hook 的 `canJumpTo`；不給就不能帶 `jumpTo`，帶了 native 當場拋。 */
   readonly canJumpTo?: readonly ('model' | 'tools' | 'end')[];
 }
 
@@ -65,15 +65,14 @@ function cellOf(spec: HookStepSpec): HookStepCell {
   return typeof spec === 'function' ? { step: spec } : spec;
 }
 
-/** 有一步的那三種 hook，依序。 */
+/** 有一步的那三種 hook。 */
 export const HOOK_KINDS: readonly HookKind[] = ['beforeAgent', 'beforeModel', 'afterAgent'];
 
 const registeredCells = new WeakMap<object, ReadonlyMap<HookKind, HookStepCell>>();
 
 /**
  * 造一顆 middleware：`beforeAgent`、`beforeModel`、`afterAgent` 給的是一步，hook 由 {@link hookWith} 從它造，並登記在這一顆上；
- * 其餘欄位（`name`、`stateSchema`、`wrapModelCall`、`wrapToolCall` 等）原樣交給 `createMiddleware`。要在 `createNativeAgent` 之前造：
- * native 在建構時讀登記。
+ * 其餘欄位（`name`、`stateSchema`、`wrapModelCall`、`wrapToolCall` 等）原樣交給 `createMiddleware`。
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param options - `createMiddleware` 的選項，三種 hook 換成一步。

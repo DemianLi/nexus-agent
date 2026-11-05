@@ -98,7 +98,7 @@ describe('hookWith', () => {
   });
 });
 
-describe('core 只在重複提醒關著時才掛的那一顆', () => {
+describe('core 在重複提醒關著、又有模型選擇時才掛的那一顆', () => {
   it('換模型通知那顆的 `beforeModel` 也登記了一步', () => {
     const middleware = createStepNoticeMiddleware(() => [], {
       forCall: () => ({}) as SessionLookup,

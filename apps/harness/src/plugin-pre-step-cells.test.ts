@@ -3,7 +3,7 @@
  * root 由 native 在原位直接呼叫那一步、不經那顆的 hook；前景子代理與背景子代理圖在 native 下仍是 LangGraph（TODO(#2359)），照舊經 hook。
  * `langgraph` 全部經 hook。
  *
- * 計數掛在登記上：從 `@nexus/core` 造的每一顆，登記的那一步包一個計數，那顆的 hook 再包一層 `AsyncLocalStorage`，經 hook 進來的叫用落在
+ * 計數掛在登記上：宿主經 `@nexus/core` 造的每一顆（core 自己造的不經這個 mock），登記的那一步包一個計數，那顆的 hook 再包一層 `AsyncLocalStorage`，經 hook 進來的叫用落在
  * 那一層裡面，native 直接呼叫登記的那一步則在外面。走 `createCliAgent` 的真組裝，跑一輪「root 前景委派 `worker` → 背景委派 `worker` →
  * 回答」，數每一位在 root、前景子代理、背景子代理各被叫了幾次。哪一邊照 state 的第一則訊息的第一段分：root 是「動手」，子代理是委派的描述。
  */
