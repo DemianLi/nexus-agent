@@ -14,12 +14,12 @@ import { describe, expect, it } from 'vitest';
 import {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
-  effectiveMessages,
   isUnderCompactionPressure,
-  readSummarizationEvent,
   retainedMessageCount,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
+import type { SummaryCutoff } from './summary-cutoffs.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEventMap } from './session-log.js';
 import {
@@ -59,35 +59,10 @@ function retainLast(messages: readonly BaseMessage[], count: number): number {
 }
 
 const SUMMARY = new AIMessage('這是摘要。');
-
-describe('摘要器眼中的訊息串', () => {
-  it('沒有摘要事件時就是原串', () => {
-    const messages = longHistory(10);
-    expect(effectiveMessages(messages, {})).toBe(messages);
-    expect(effectiveMessages(messages, undefined)).toBe(messages);
-    expect(effectiveMessages(messages, null)).toBe(messages);
-  });
-
-  it('有摘要事件時是「摘要 ＋ 切點之後」', () => {
-    const messages = longHistory(10);
-    const seen = effectiveMessages(messages, {
-      _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 8 },
-    });
-
-    expect(seen).toHaveLength(3);
-    expect(seen[0]).toBe(SUMMARY);
-    expect(seen[1]).toBe(messages[8]);
-  });
-
-  /** 形狀不對的事件不准把整串吃掉——寧可退回原串（多剪），不要當成空的（少量到）。 */
-  it('事件的形狀不對就退回原串', () => {
-    const messages = longHistory(10);
-    expect(effectiveMessages(messages, { _summarizationEvent: null })).toBe(messages);
-    expect(effectiveMessages(messages, { _summarizationEvent: { cutoffIndex: 8 } })).toBe(messages);
-    expect(effectiveMessages(messages, { _summarizationEvent: { summaryMessage: SUMMARY } })).toBe(
-      messages,
-    );
-  });
+const cutoffAt = (cutoffIndex: number): SummaryCutoff => ({
+  summaryMessage: SUMMARY,
+  cutoffIndex,
+  filePath: null,
 });
 
 describe('壓力閘門', () => {
@@ -98,11 +73,11 @@ describe('壓力閘門', () => {
   const pressure = (
     messages: readonly BaseMessage[],
     trigger: readonly SummarizationThreshold[],
-    state?: unknown,
+    cutoff?: SummaryCutoff,
     // 預設尾巴一則不留：這一組多數條目量的是門檻本身，不是「摘不摘得到東西」。
     retainedCount: (messages: readonly BaseMessage[]) => number = () => 0,
   ) =>
-    isUnderCompactionPressure({ messages, state }, trigger, new TokenAnchorBook(), retainedCount);
+    isUnderCompactionPressure({ messages }, cutoff, trigger, new TokenAnchorBook(), retainedCount);
 
   it('門檻陣列並聯，任何一道成立就算壓力到了', () => {
     expect(pressure(longHistory(6), BY_MESSAGES)).toBe(true);
@@ -123,9 +98,8 @@ describe('壓力閘門', () => {
 
   it('尾巴量的是有效串，不是原串', () => {
     const messages = longHistory(12);
-    const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 4 } };
     const seen: number[] = [];
-    pressure(messages, BY_MESSAGES, state, (view) => {
+    pressure(messages, BY_MESSAGES, cutoffAt(4), (view) => {
       seen.push(view.length);
       return 0;
     });
@@ -147,10 +121,9 @@ describe('壓力閘門', () => {
    */
   it('摘要之後：原串越得過門檻，有效串越不過——閘門要跟有效串走', () => {
     const messages = [...longHistory(9), new ToolMessage({ content: '收到', tool_call_id: 'c1' })];
-    const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 9 } };
 
     expect(pressure(messages, BY_MESSAGES)).toBe(true);
-    expect(pressure(messages, BY_MESSAGES, state)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES, cutoffAt(9))).toBe(false);
   });
 
   it('摘要之後但有效串真的很大時，壓力照樣算到', () => {
@@ -158,9 +131,8 @@ describe('壓力閘門', () => {
       ...longHistory(9),
       new ToolMessage({ content: BIG_TEXT, tool_call_id: 'c1' }),
     ];
-    const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 9 } };
 
-    expect(pressure(messages, BY_TOKENS, state)).toBe(true);
+    expect(pressure(messages, BY_TOKENS, cutoffAt(9))).toBe(true);
   });
 });
 
@@ -180,13 +152,16 @@ describe('壓力閘門接在有效串上（接線）', () => {
   async function messagesSeenByModel(
     trigger: readonly SummarizationThreshold[],
     messages: readonly BaseMessage[],
-    state: Record<string, unknown>,
+    cutoff: SummaryCutoff | undefined,
     options: {
       /** 給了就是「真的摘得到東西」的那種組裝：保留量照給、摘要模型會回話。 */
       retainTokens?: number;
       limits?: { contextWindow: number; maxOutputTokens: number };
     } = {},
   ): Promise<readonly BaseMessage[]> {
+    const runtime = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
+    const cutoffs = new SummaryCutoffTable();
+    if (cutoff !== undefined) cutoffs.record(runtime, messages, cutoff);
     // 沒給 `retainTokens` 也沒型錄時，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：串比它短就是尾巴蓋住全部，
     // `determineCutoffIndex` 算出 `<= 0`、基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**。
     const middleware = createSummarizer(
@@ -200,12 +175,17 @@ describe('壓力閘門接在有效串上（接線）', () => {
       undefined,
       undefined,
       options.limits === undefined ? undefined : () => options.limits,
+      undefined,
+      undefined,
+      undefined,
+      cutoffs,
     );
     let seen: readonly BaseMessage[] = [];
     await middleware.wrapModelCall?.(
       {
         messages,
-        state,
+        state: { messages },
+        runtime,
         model: options.retainTokens === undefined ? FAKE_MODEL : SUMMARY_MODEL,
         systemMessage: new SystemMessage('系統。'),
         tools: [],
@@ -232,9 +212,9 @@ describe('壓力閘門接在有效串上（接線）', () => {
    * 閘門改回量原串就會在這裡紅。
    */
   it('摘要之後有效串在門檻下 → 那坨大東西一個字都沒被動', async () => {
-    const seen = await messagesSeenByModel([{ type: 'messages', value: 6 }], withHugeTool(), {
-      _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 9 },
-    });
+    const seen = await messagesSeenByModel([{ type: 'messages', value: 6 }], withHugeTool(),
+      cutoffAt(9),
+    );
 
     expect(String(seen.at(-1)?.content)).toBe(HUGE);
   });
@@ -251,7 +231,7 @@ describe('壓力閘門接在有效串上（接線）', () => {
         ...fatHistory(8),
         new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'lookup', args: {} }] }),
       ]),
-      {},
+      undefined,
       { retainTokens: 1 },
     );
 
@@ -269,7 +249,7 @@ describe('壓力閘門接在有效串上（接線）', () => {
     const seen = await messagesSeenByModel(
       DEFAULT_SUMMARIZATION.trigger,
       messages,
-      {},
+      undefined,
       {
         limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
       },
@@ -661,66 +641,6 @@ describe('生摘要的那次呼叫不上線（接線）', () => {
     const handed = await modelHandedDown([{ type: 'messages', value: 1_000 }], model);
     expect(calls).toEqual([]);
     expect(handed).toBe(model);
-  });
-});
-
-/**
- * **從摘要器的回傳值認出「這一輪真的壓縮了」。**
- *
- * 這是 `compaction/summary`（[#143](https://github.com/DemianLi/nexus-agent/issues/143)）
- * 的判別式。它是鴨子型別而不是 `instanceof Command`，理由見 `summarization.ts`：pnpm 樹
- * 底下同一個套件可能有多份實例，跨實例的 `instanceof` 是 `false`，而那種錯不會拋，只會讓
- * 事件永遠記不到。
- *
- * 走 agent 迴圈驗得到「有記到」，但驗不到這些邊界——真的跑起來時 `filePath` 永遠是字串。
- */
-describe('認出壓縮發生過', () => {
-  it('帶 `_summarizationEvent` 的 Command 形狀就是壓縮了', () => {
-    expect(
-      readSummarizationEvent({
-        update: { _summarizationEvent: { cutoffIndex: 12, filePath: '/h/s.md' } },
-      }),
-    ).toEqual({ cutoffIndex: 12, filePath: '/h/s.md' });
-  });
-
-  /**
-   * **`filePath: null` 是有意義的那個值，不是「沒有」。**
-   *
-   * 它正是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open 的訊號
-   * ——歷史沒寫成功、原文就此消失，而基座對這件事只印一行 `console.warn`。把它當成缺值
-   * 而讓整筆事件消失的話，唯一一個耐久痕跡就沒了。
-   */
-  it('`filePath` 是 null 照樣記，那是 #66 的訊號', () => {
-    expect(
-      readSummarizationEvent({
-        update: { _summarizationEvent: { cutoffIndex: 3, filePath: null } },
-      }),
-    ).toEqual({ cutoffIndex: 3, filePath: null });
-  });
-
-  it('沒壓縮的那些輪回的是模型的回應，認不出東西來', () => {
-    expect(readSummarizationEvent(new AIMessage('好。'))).toBeUndefined();
-    expect(readSummarizationEvent(undefined)).toBeUndefined();
-    expect(readSummarizationEvent(null)).toBeUndefined();
-    expect(readSummarizationEvent({ update: null })).toBeUndefined();
-    expect(readSummarizationEvent({ update: {} })).toBeUndefined();
-  });
-
-  /** 形狀不對就整筆不要——`cutoffIndex` 不是數字的話，記下去也讀不出意義。 */
-  it('切點不是數字就整筆不記', () => {
-    expect(
-      readSummarizationEvent({ update: { _summarizationEvent: { filePath: '/h/s.md' } } }),
-    ).toBeUndefined();
-    expect(
-      readSummarizationEvent({ update: { _summarizationEvent: { cutoffIndex: '3' } } }),
-    ).toBeUndefined();
-  });
-
-  /** `filePath` 是別的型別時當成沒寫成功，不是讓整筆消失——同上一條的理由，方向相反。 */
-  it('`filePath` 型別不對就當成沒寫成功', () => {
-    expect(
-      readSummarizationEvent({ update: { _summarizationEvent: { cutoffIndex: 5, filePath: 7 } } }),
-    ).toEqual({ cutoffIndex: 5, filePath: null });
   });
 });
 

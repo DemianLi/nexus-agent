@@ -951,8 +951,8 @@ describe('正式路徑上的門檻是我們選的', () => {
  * 走的是同一套同名取代（`buildSubagentMiddleware` 呼叫的是**同一個** `mergeMiddlewareStack`）。
  *
  * 判準是 `historyPathPrefix`：基座那份寫死用 `/conversation_history`，我們配的用別的。
- * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——`EXCLUDED_STATE_KEYS` 雙向
- * 排除 `_summarizationSessionId`，所以 subagent 自己生一個新的 session id），而
+ * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——摘要器逐個 agent 各建一份，
+ * 會話名跟著實例走，所以 subagent 有自己的 session id），而
  * `/conversation_history` 底下一份都沒有。少了打底的話，subagent 那份會落在後者。
  */
 describe('我們配的那份打底到每個 subagent', () => {

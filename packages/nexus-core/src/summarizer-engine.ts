@@ -18,12 +18,12 @@ import {
   ToolMessage,
 } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { Command } from '@langchain/langgraph';
 import { resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { context, countTokensApproximately, createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
+import { applySummaryCutoff, previousSummaryCutoff } from './summary-cutoffs.js';
 
 /** 門檻或保留量，同基座的 `ContextSize`。 */
 export type EngineContextSize =
@@ -38,6 +38,8 @@ export interface SummarizerEngineOptions {
   readonly trigger: readonly EngineContextSize[];
   readonly keep: EngineContextSize;
   readonly historyPathPrefix?: string;
+  /** 歷史檔的會話名（`<historyPathPrefix>/<sessionId>.md`）。 */
+  readonly sessionId: string;
   readonly truncateArgsSettings: {
     readonly trigger?: EngineContextSize;
     readonly keep?: EngineContextSize;
@@ -46,21 +48,9 @@ export interface SummarizerEngineOptions {
   };
 }
 
-/** 上一次摘要的切點，同基座 state 上的 `_summarizationEvent`。 */
-interface PreviousEvent {
-  readonly cutoffIndex: number;
-  readonly summaryMessage: BaseMessage;
-  readonly filePath: string | null;
-}
-
-interface EngineState {
-  readonly _summarizationEvent?: PreviousEvent;
-  readonly _summarizationSessionId?: string;
-}
-
 interface EngineRequest {
   readonly messages?: BaseMessage[];
-  readonly state: EngineState;
+  readonly state: unknown;
   readonly model?: unknown;
   readonly systemMessage?: unknown;
   readonly tools?: unknown;
@@ -71,12 +61,6 @@ type Handler = (request: EngineRequest) => Promise<unknown>;
 function isSummaryMessage(message: BaseMessage): boolean {
   if (!HumanMessage.isInstance(message)) return false;
   return message.additional_kwargs?.lc_source === 'summarization';
-}
-
-function getEffectiveMessages(messages: BaseMessage[], state: EngineState): BaseMessage[] {
-  const event = state._summarizationEvent;
-  if (!event) return messages;
-  return [event.summaryMessage, ...messages.slice(event.cutoffIndex)];
 }
 
 function isContextOverflow(error: unknown): boolean {
@@ -96,7 +80,7 @@ function isContextOverflow(error: unknown): boolean {
  * @returns 摘要器引擎。
  */
 export function createSummarizerEngine(options: SummarizerEngineOptions): AgentMiddleware {
-  const { backend, summaryPrompt, historyPathPrefix = '/conversation_history' } = options;
+  const { backend, summaryPrompt, sessionId, historyPathPrefix = '/conversation_history' } = options;
   const trigger = options.trigger;
   const keep = options.keep;
   const truncateTrigger = options.truncateArgsSettings.trigger;
@@ -107,18 +91,8 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   const maxArgLength = options.truncateArgsSettings.maxLength ?? 2e3;
   const truncationText = options.truncateArgsSettings.truncationText ?? '...(argument truncated)';
 
-  let sessionId: string | null = null;
+  const historyPath = `${historyPathPrefix}/${sessionId}.md`;
   let tokenEstimationMultiplier = 1;
-
-  function getSessionId(state: EngineState): string {
-    if (state._summarizationSessionId) return state._summarizationSessionId;
-    if (!sessionId) sessionId = `session_${crypto.randomUUID().substring(0, 8)}`;
-    return sessionId;
-  }
-
-  function getHistoryPath(state: EngineState): string {
-    return `${historyPathPrefix}/${getSessionId(state)}.md`;
-  }
 
   function getMaxInputTokens(resolvedModel: unknown): number | undefined {
     const profile = (resolvedModel as { profile?: unknown }).profile;
@@ -345,10 +319,10 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
 
   async function offloadToBackend(
     messages: readonly BaseMessage[],
-    state: EngineState,
+    state: unknown,
   ): Promise<string | null> {
     const resolvedBackend = await resolveBackend(backend, { state } as never);
-    const filePath = getHistoryPath(state);
+    const filePath = historyPath;
     const filteredMessages = messages.filter((msg) => !isSummaryMessage(msg));
     const newSection = `## Summarized at ${new Date().toISOString()}\n\n${getBufferString(filteredMessages)}\n\n`;
     const sectionBytes = new TextEncoder().encode(newSection);
@@ -423,10 +397,8 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   async function summarizeMessages(
     messagesToSummarize: readonly BaseMessage[],
     resolvedModel: unknown,
-    state: EngineState,
-    previousCutoffIndex: number | undefined,
-    cutoffIndex: number,
-  ): Promise<{ summaryMessage: HumanMessage; filePath: string | null; stateCutoffIndex: number }> {
+    state: unknown,
+  ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
     const filePath = await offloadToBackend(messagesToSummarize, state);
     if (filePath === null)
       console.warn(
@@ -438,8 +410,6 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
         filePath,
       ),
       filePath,
-      stateCutoffIndex:
-        previousCutoffIndex != null ? previousCutoffIndex + cutoffIndex - 1 : cutoffIndex,
     };
   }
 
@@ -468,22 +438,15 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
           if (!isContextOverflow(err)) throw err;
         }
     }
-    const previousEvent = request.state._summarizationEvent;
-    const previousCutoffIndex = previousEvent != null ? previousEvent.cutoffIndex : undefined;
-    const { summaryMessage, filePath, stateCutoffIndex } = await summarizeMessages(
+    const { summaryMessage } = await summarizeMessages(
       messagesToSummarize,
       resolvedModel,
       request.state,
-      previousCutoffIndex,
-      cutoffIndex,
     );
-    let modifiedMessages: BaseMessage[] = [summaryMessage, ...preservedMessages];
+    const modifiedMessages: BaseMessage[] = [summaryMessage, ...preservedMessages];
     const modifiedTokens = countTotalTokens(modifiedMessages, request.systemMessage, request.tools);
-    let finalStateCutoffIndex = stateCutoffIndex;
-    let finalSummaryMessage = summaryMessage;
-    let finalFilePath = filePath;
     try {
-      await handler({ ...request, messages: modifiedMessages });
+      return await handler({ ...request, messages: modifiedMessages });
     } catch (err) {
       if (!isContextOverflow(err)) throw err;
       if (maxInputTokens && modifiedTokens > 0) {
@@ -495,25 +458,9 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
         [...messagesToSummarize, ...preservedMessages],
         resolvedModel,
         request.state,
-        previousCutoffIndex,
-        truncatedMessages.length,
       );
-      finalSummaryMessage = reSumResult.summaryMessage;
-      finalFilePath = reSumResult.filePath;
-      finalStateCutoffIndex = reSumResult.stateCutoffIndex;
-      modifiedMessages = [reSumResult.summaryMessage];
-      await handler({ ...request, messages: modifiedMessages });
+      return await handler({ ...request, messages: [reSumResult.summaryMessage] });
     }
-    return new Command({
-      update: {
-        _summarizationEvent: {
-          cutoffIndex: finalStateCutoffIndex,
-          summaryMessage: finalSummaryMessage,
-          filePath: finalFilePath,
-        },
-        _summarizationSessionId: getSessionId(request.state),
-      },
-    });
   }
 
   return createMiddleware({
@@ -521,7 +468,9 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     async wrapModelCall(request, handler) {
       const req = request as unknown as EngineRequest;
       const next = handler as unknown as Handler;
-      const effectiveMessages = getEffectiveMessages(req.messages ?? [], req.state);
+      const effectiveMessages = [
+        ...applySummaryCutoff(req.messages ?? [], previousSummaryCutoff()),
+      ];
       if (effectiveMessages.length === 0) return next(req) as never;
       if (req.model === undefined)
         throw new Error(

@@ -1,6 +1,6 @@
 /**
  * 摘要的切點表（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416) K7c c-1）：每次組裝一張，記「這條 thread 的這個 agent
- * 上一次摘要切在哪」，取代基座放在 graph state 的私有鍵 `_summarizationEvent`。
+ * 上一次摘要切在哪」，取代以前基座放在 graph state 的那顆摘要事件私有鍵。
  *
  * ## 寫：日誌寫進去了才寫
  *
@@ -11,11 +11,15 @@
  * 跟日誌同一個時點，所以有日誌時表上的就是「這個生命週期日誌上最後一筆」；之後那次模型呼叫失敗也不會遺失（以前要靠下一步請求前從日誌補回
  * state，#1390）。
  *
- * ## 讀：這一步開始時讀一次，用 state 的訊息驗過
+ * ## 讀：這一步開始時讀一次，用請求的訊息驗過
  *
- * 摘要器最外層在這一步開始時讀一次，交給內層各層當這一步的「上一次切點」；`agent/pre-step` 在一次 invoke 開始時讀，同一張表。
+ * 摘要器最外層在這一步開始時讀一次，交給內層各層當這一步的「上一次切點」；`agent/pre-step` 在一次 invoke 開始時（第一步之前）讀，
+ * 同一張表，讀到的跟摘要器在這次 invoke 第一步讀到的是同一個值。
  *
- * 條目記著切點前最後一則訊息（`messages[cutoffIndex - 1]`）的 id。讀的時候 state 的訊息串在同一格不是那一則，這個條目就不是這份
+ * 座標是摘要器收到的 `request.messages`（同基座 `getEffectiveMessages(request.messages, …)`）。排在摘要器外層的幾顆換訊息物件時保留
+ * id 與位置，所以它跟 state 的訊息串同一個座標；pre-step 拿 state 的來問，對到的是同一格。
+ *
+ * 條目記著切點前最後一則訊息（`messages[cutoffIndex - 1]`）的 id。讀的時候訊息串在同一格不是那一則，這個條目就不是這份
  * state 的：沒有 checkpointer 的 langgraph 組裝每次 invoke 從新的訊息串起跑，續接灌回的是「摘要＋之後」，都對不上，等於沒有切點。
  * **所以條目的壽命等於訊息 state 的壽命**，不另設數量上限。
  *
@@ -33,7 +37,6 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { BaseMessage } from '@langchain/core/messages';
-import { isCommand } from '@langchain/langgraph';
 import type { AgentMiddleware } from './base-types.js';
 import { callThreadId, sessionAddressKey, toolCallSessionAddress } from './session-address.js';
 
@@ -59,7 +62,7 @@ export class SummaryCutoffTable {
    * 這次呼叫的上一次切點。
    *
    * @param config - `{ configurable }`，同 `sessions.forCall`。
-   * @param messages - 這一步 state 的訊息串。
+   * @param messages - 這一步的訊息串（摘要器的 `request.messages`，或 pre-step 的 state；同一個座標）。
    * @returns 切點；沒有、或條目不是這份 state 的，回 `undefined`。
    */
   lookup(config: unknown, messages: readonly BaseMessage[]): SummaryCutoff | undefined {
@@ -82,7 +85,7 @@ export class SummaryCutoffTable {
    * 記下這次呼叫的切點，蓋掉舊的。
    *
    * @param config - `{ configurable }`。
-   * @param messages - 算出這個切點的那一步 state 的訊息串。
+   * @param messages - 算出這個切點的那一步，摘要器收到的 `request.messages`。
    * @param cutoff - 切點。
    */
   record(config: unknown, messages: readonly BaseMessage[], cutoff: SummaryCutoff): void {
@@ -134,11 +137,48 @@ export function applySummaryCutoff(
     : [cutoff.summaryMessage, ...messages.slice(cutoff.cutoffIndex)];
 }
 
-/** 這一步裡算出、日誌也寫進去了的最後一個切點；最外層在這一步結束時落表。 */
+/**
+ * 摘要過的請求交下去時，這次的切點（state 訊息串的座標）。同基座 `summarizeMessages` 的 `stateCutoffIndex`：
+ * 這次在有效串裡切在 `effectiveLength − (sentLength − 1)`，有上一次切點時再減去它換掉的那一格（`previous + local − 1`）。
+ *
+ * @param previous - 這一步開始時的上一次切點。
+ * @param effectiveLength - 這一步的有效串長度（{@link applySummaryCutoff}）。
+ * @param sentLength - 交下去的那份長度（摘要一則加上留下的尾巴）。
+ * @returns 切點。
+ */
+export function summaryCutoffIndex(
+  previous: number | undefined,
+  effectiveLength: number,
+  sentLength: number,
+): number {
+  const local = effectiveLength - (sentLength - 1);
+  return previous === undefined ? local : previous + local - 1;
+}
+
+/** 這一步的切點：開始時查到的上一次（整步不變），與這一步生效的最後一個（最外層在這一步結束時落表）。 */
 interface CutoffCell {
+  readonly previous: SummaryCutoff | undefined;
   latest: SummaryCutoff | undefined;
 }
 const cutoffCells = new AsyncLocalStorage<CutoffCell>();
+
+/**
+ * 這一步的上一次切點：最外層在這一步開始時查表定下，同一步裡溢出重摘、退到 retain 0、照原請求重走讀到的都是這一個。
+ *
+ * @returns 上一次切點；沒有、或不在摘要器的一步裡，回 `undefined`。
+ */
+export function previousSummaryCutoff(): SummaryCutoff | undefined {
+  return cutoffCells.getStore()?.previous;
+}
+
+/**
+ * 這一步到目前為止生效的最後一個切點（{@link noteSummaryCutoff} 寫的）。
+ *
+ * @returns 切點；這一步還沒有、或不在摘要器的一步裡，回 `undefined`。
+ */
+export function latestSummaryCutoff(): SummaryCutoff | undefined {
+  return cutoffCells.getStore()?.latest;
+}
 
 /**
  * 這一步算出一個生效的切點（`withCompactionLog` 在日誌寫進去之後、沒有日誌時在交下去時叫）。
@@ -151,14 +191,11 @@ export function noteSummaryCutoff(cutoff: SummaryCutoff): void {
 }
 
 /**
- * 摘要器的最外層：這一步開始時讀表，把上一次切點以基座認得的形狀交給內層；這一步結束時（成功或拋錯）把這一步生效的切點落表。
- * 內層（基座）摘要過會回一顆帶私有鍵的 `Command`，這裡換回那一步的模型回覆，私有鍵不進 graph state。
- *
- * 回傳的 middleware 沒有 `stateSchema`：圖上沒有摘要的私有欄位。
+ * 摘要器的最外層：這一步開始時讀表定下上一次切點（{@link previousSummaryCutoff}），這一步結束時（成功或拋錯）把這一步生效的切點落表。
  *
  * @param base - 其餘各層包好的摘要器。
  * @param table - 這次組裝的切點表。
- * @returns 同名、沒有 `stateSchema` 的 middleware。
+ * @returns 同名的 middleware。
  */
 export function withSummaryCutoffs(
   base: AgentMiddleware,
@@ -167,33 +204,17 @@ export function withSummaryCutoffs(
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 摘要器一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
   if (inner === undefined) return base;
-  const { stateSchema: _private, ...rest } = base as AgentMiddleware & { stateSchema?: unknown };
   return {
-    ...rest,
+    ...base,
     wrapModelCall: async (request, handler) => {
       const config = {
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       };
       // 基座的切點是 `request.messages` 的座標（`getEffectiveMessages(request.messages, …)`）。
       const messages = request.messages ?? [];
-      const previous = table.lookup(config, messages);
-      const seeded = {
-        ...request,
-        state: { ...(request.state as object), _summarizationEvent: previous },
-      } as unknown as typeof request;
-      const cell: CutoffCell = { latest: undefined };
-      let reply: unknown;
+      const cell: CutoffCell = { previous: table.lookup(config, messages), latest: undefined };
       try {
-        const result = await cutoffCells.run(cell, () =>
-          inner(seeded, async (sent) => {
-            reply = await handler(sent);
-            return reply as Awaited<ReturnType<typeof handler>>;
-          }),
-        );
-        if (!isCommand(result)) return result;
-        /* v8 ignore next 2 -- 基座一定先叫過 handler 才回 Command；沒叫過就不知道要回什麼。 */
-        if (reply === undefined) throw new Error('摘要器回了 Command，卻沒有交下去過任何請求。');
-        return reply as typeof result;
+        return await cutoffCells.run(cell, () => inner(request, handler));
       } finally {
         if (cell.latest !== undefined) table.record(config, messages, cell.latest);
       }

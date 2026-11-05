@@ -1,7 +1,8 @@
 /**
  * 摘要器引擎對照基座（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：同一組請求同時餵 `deepagents@1.13.1` 的
  * `createSummarizationMiddleware` 與 {@link createSummarizerEngine}，逐項比 handler 收到的訊息、摘要模型的輸入、歷史檔的寫入、
- * 回傳值與拋錯。基座拿掉時（c-2）這一支跟著刪。
+ * 回傳值、拋錯與切點。基座的上一次切點放在 state，引擎的放在切點表（{@link withSummaryCutoffs}）；基座的切點讀它回的 `Command`，
+ * 引擎的照 `withCompactionLog` 的算法（{@link summaryCutoffIndex}）從交下去的那份算。基座拿掉時（c-2）這一支跟著刪。
  */
 
 import { ContextOverflowError } from '@langchain/core/errors';
@@ -15,8 +16,17 @@ import { z } from 'zod';
 
 import { createSummarizerEngine } from './summarizer-engine.js';
 import type { SummarizerEngineOptions } from './summarizer-engine.js';
+import {
+  applySummaryCutoff,
+  summaryCutoffIndex,
+  SummaryCutoffTable,
+  withSummaryCutoffs,
+} from './summary-cutoffs.js';
+import type { SummaryCutoff } from './summary-cutoffs.js';
 
-type Options = Omit<SummarizerEngineOptions, 'backend'>;
+type Options = Omit<SummarizerEngineOptions, 'backend' | 'sessionId'>;
+
+const ROOT = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
 
 /** 記下每一次讀寫的記憶體 backend。`failWrite` 為真時 `write` 回錯。 */
 function memoryBackend(seed: Record<string, string> = {}, failWrite = false) {
@@ -70,7 +80,8 @@ const show = (messages: readonly BaseMessage[]) =>
 
 interface Step {
   readonly messages: BaseMessage[];
-  readonly state?: Record<string, unknown>;
+  /** 這一步開始時的上一次切點。 */
+  readonly previous?: SummaryCutoff;
   /** 第幾次 handler 呼叫（1 起算）拋什麼。 */
   readonly handlerThrows?: (call: number) => Error | undefined;
   readonly withTools?: boolean;
@@ -78,14 +89,14 @@ interface Step {
 
 /** 照順序跑幾步，回每一步的觀察；兩邊各一套，同一顆實例跑完全部步驟（看 closure 的壽命）。 */
 async function observe(
+  kind: 'base' | 'engine',
   make: (backend: never) => unknown,
   steps: readonly Step[],
   options: { profile?: object; seed?: Record<string, string>; failWrite?: boolean } = {},
 ) {
   const store = memoryBackend(options.seed, options.failWrite);
-  const middleware = make(store.backend as never) as {
-    wrapModelCall: (request: unknown, handler: unknown) => Promise<unknown>;
-  };
+  type Wrap = { wrapModelCall: (request: unknown, handler: unknown) => Promise<unknown> };
+  const made = make(store.backend as never);
   const prompts: string[] = [];
   const model = {
     profile: options.profile ?? {},
@@ -107,22 +118,33 @@ async function observe(
   try {
     for (const step of steps) {
       const handled: unknown[] = [];
+      let sent: BaseMessage[] = [];
       let result: unknown;
       let error: unknown;
+      // 引擎：每一步一張新表，只放這一步的上一次切點（同基座只看這一步交進來的 state）。
+      const table = new SummaryCutoffTable();
+      if (step.previous !== undefined) table.record(ROOT, step.messages, step.previous);
+      const middleware = (
+        kind === 'engine' ? withSummaryCutoffs(made as never, table) : made
+      ) as Wrap;
       try {
         result = await middleware.wrapModelCall(
           {
             messages: step.messages,
             state: {
               messages: step.messages,
-              _summarizationSessionId: 'session_fixed',
-              ...step.state,
+              ...(kind === 'base' && {
+                _summarizationSessionId: 'session_fixed',
+                _summarizationEvent: step.previous,
+              }),
             },
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: step.withTools === true ? [echo] : [],
+            runtime: ROOT,
           },
           async (request: { messages: BaseMessage[] }) => {
+            sent = request.messages;
             handled.push(show(request.messages));
             const thrown = step.handlerThrows?.(handled.length);
             if (thrown !== undefined) throw thrown;
@@ -132,18 +154,28 @@ async function observe(
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }
-      const update = isCommand(result) ? (result.update as Record<string, unknown>) : undefined;
-      const event = update?._summarizationEvent as
-        { cutoffIndex: number; filePath: string | null; summaryMessage: BaseMessage } | undefined;
+      let cutoff: number | undefined;
+      if (kind === 'base') {
+        const update = isCommand(result) ? (result.update as Record<string, unknown>) : undefined;
+        cutoff = (update?._summarizationEvent as { cutoffIndex: number } | undefined)?.cutoffIndex;
+      } else if (
+        error === undefined &&
+        sent[0] !== undefined &&
+        sent[0].additional_kwargs?.lc_source === 'summarization' &&
+        sent[0] !== step.previous?.summaryMessage
+      ) {
+        cutoff = summaryCutoffIndex(
+          step.previous?.cutoffIndex,
+          applySummaryCutoff(step.messages, step.previous).length,
+          sent.length,
+        );
+      }
       out.push({
         handled,
         error,
-        result: isCommand(result) ? 'command' : (result as AIMessage | undefined)?.content,
-        event:
-          event === undefined
-            ? undefined
-            : { ...event, summaryMessage: show([event.summaryMessage]) },
-        sessionId: update?._summarizationSessionId,
+        // 基座摘要過回 `Command`，引擎回交下去那次的回覆；外層（`withSummaryCutoffs`）以前就是把前者換成後者。
+        result: isCommand(result) ? '好。' : (result as AIMessage | undefined)?.content,
+        cutoff,
       });
     }
   } finally {
@@ -161,9 +193,10 @@ async function observe(
 async function same(
   settings: Options,
   steps: readonly Step[],
-  options?: Parameters<typeof observe>[2],
+  options?: Parameters<typeof observe>[3],
 ) {
   const base = await observe(
+    'base',
     (backend) =>
       createSummarizationMiddleware({
         backend,
@@ -179,7 +212,8 @@ async function same(
     options,
   );
   const ours = await observe(
-    (backend) => createSummarizerEngine({ ...settings, backend }),
+    'engine',
+    (backend) => createSummarizerEngine({ ...settings, sessionId: 'session_fixed', backend }),
     steps,
     options,
   );
@@ -232,8 +266,8 @@ describe('引擎與基座逐項相同', () => {
       settings(),
       [
         { messages: first },
-        { messages: turns(12), state: { _summarizationEvent: event(6) } },
-        { messages: turns(16), state: { _summarizationEvent: event(9) } },
+        { messages: turns(12), previous: event(6) },
+        { messages: turns(16), previous: event(9) },
       ],
       { seed: { '/conversation_history/session_fixed.md': '## Summarized at x\n\n舊的\n\n' } },
     );
@@ -345,37 +379,34 @@ describe('引擎與基座逐項相同', () => {
     expect(warns.length).toBeGreaterThan(0);
   });
 
-  it('state 沒有 session id：實例自己的 id 在同一顆實例上不變', async () => {
-    const steps: Step[] = [
-      { messages: turns(8), state: { _summarizationSessionId: undefined } },
-      { messages: turns(8), state: { _summarizationSessionId: undefined } },
-    ];
+  it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
     const store = memoryBackend();
-    const engine = createSummarizerEngine({ ...settings(), backend: store.backend as never });
-    const ids: unknown[] = [];
-    for (const step of steps) {
-      const result = await engine.wrapModelCall?.(
+    const engine = createSummarizerEngine({
+      ...settings(),
+      sessionId: 'session_abcd1234',
+      backend: store.backend as never,
+    });
+    for (let i = 0; i < 2; i += 1) {
+      const messages = turns(8);
+      await engine.wrapModelCall?.(
         {
-          messages: step.messages,
-          state: { messages: step.messages },
+          messages,
+          state: { messages },
           model: { profile: {}, invoke: async () => ({ text: '摘' }) },
           systemMessage: new SystemMessage('系統。'),
           tools: [],
         } as never,
         (async () => new AIMessage('好。')) as never,
       );
-      ids.push(
-        (result as { update: { _summarizationSessionId: unknown } }).update._summarizationSessionId,
-      );
     }
-    expect(ids[0]).toMatch(/^session_[0-9a-f]{8}$/);
-    expect(ids[1]).toBe(ids[0]);
+    expect([...store.files.keys()]).toEqual(['/conversation_history/session_abcd1234.md']);
   });
 
   it('沒有訊息：原樣交下去；沒有模型：同一句錯', async () => {
     await same(settings(), [{ messages: [] }]);
     const engine = createSummarizerEngine({
       ...settings(),
+      sessionId: 'session_fixed',
       backend: memoryBackend().backend as never,
     });
     const base = createSummarizationMiddleware({

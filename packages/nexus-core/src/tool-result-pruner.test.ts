@@ -125,8 +125,8 @@ describe('剪一整串訊息', () => {
   /**
    * **長度與順序不准變，這是一條性質不是一個偏好。**
    *
-   * 基座的 `getEffectiveMessages` 是 `[summary, ...messages.slice(cutoffIndex)]`，而那個
-   * `cutoffIndex` 是前幾輪算出來存在 state 裡的。少一則訊息，slice 就切在錯的地方，
+   * 摘要過的有效串是 `[summary, ...messages.slice(cutoffIndex)]`，而那個
+   * `cutoffIndex` 是前幾輪算出來記在切點表上的。少一則訊息，slice 就切在錯的地方，
    * AI／Tool 配對當場斷掉——**而且不會拋**。
    */
   it('訊息數與型別順序完全不變', () => {

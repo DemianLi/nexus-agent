@@ -17,7 +17,7 @@
  *
  * 白名單按「檔案 › 頂層宣告 寫法」數次數，不記行號：`getState()` 與 `request.state` 每一處各數一次，掛鉤每顆
  * 數一次；同一個頂層宣告裡多一處就紅，無關的改動讓行號漂了不紅。參數不叫 `request` 的請求整個看不到；
- * `request.state` 轉手給別的函式之後的讀（例如 `effectiveMessages(…, state)` 的內部）只數交出去的那一處。
+ * `request.state` 轉手給別的函式之後的讀（例如交給 `resolveBackend` 之後）只數交出去的那一處。
  *
  * 用 TypeScript 的語法樹掃，不用逐行正則：註解裡寫到 `state.messages` 的說明文字不算，解構與元素存取正則會漏。
  */
@@ -261,15 +261,8 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,
   // 轉交基座的 skills 中介層；基座在這裡拿 state 讀的是 `skillsMetadata`，不讀訊息（設計 §四 W9）。
   'packages/nexus-core/src/skills-middleware.ts › createSkillsMiddlewareQuietWhenEmpty 掛鉤的 state 參數': 1,
-  'packages/nexus-core/src/summarization.ts › assertSummaryShrinks request.state': 1,
-  'packages/nexus-core/src/summarization.ts › isUnderCompactionPressure request.state': 1,
-  'packages/nexus-core/src/summarization.ts › pruneLogOf request.state': 1,
-  'packages/nexus-core/src/summarization.ts › withCompactionLog request.state': 2,
-  'packages/nexus-core/src/summarization.ts › withRetainedTail request.state': 2,
-  'packages/nexus-core/src/summarization.ts › withTokenBudget request.state': 1,
-  'packages/nexus-core/src/summarization.ts › withTokenWarmup request.state': 1,
-  // 把這一步的切點以基座認得的形狀交給內層；B 段把基座的演算法移進 core 之後拿掉（#2416）。
-  'packages/nexus-core/src/summary-cutoffs.ts › withSummaryCutoffs request.state': 1,
+  // 同 `filesystemModelCallWrap`：照基座把 state 交給 `resolveBackend` 寫歷史檔（生摘要、溢出重摘各一處），給工廠 backend 用；自己不讀（#2416）。
+  'packages/nexus-core/src/summarizer-engine.ts › createSummarizerEngine request.state': 2,
   // 環繞工具呼叫的一步拿到的 `state`，自己不讀；只有解不開參數與核准閘門兩步轉給 `toolCallOwner`（#2355）。
   'packages/nexus-core/src/tool-call-step.ts › toolCallSiteOf request.state': 1,
   // 屏障、`returnDirect` 的收尾、解不開參數的原字串三處共用；`history-source=log` 的 root 讀日誌，native loop 讀它交下來的那則，

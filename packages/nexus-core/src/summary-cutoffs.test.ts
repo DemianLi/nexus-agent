@@ -5,13 +5,15 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { Command } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 
 import { BACKGROUND_SESSION_CONFIG_KEY } from './session-address.js';
 import {
   applySummaryCutoff,
+  latestSummaryCutoff,
   noteSummaryCutoff,
+  previousSummaryCutoff,
+  summaryCutoffIndex,
   SummaryCutoffTable,
   summaryCutoffsOf,
   withSummaryCutoffs,
@@ -153,55 +155,49 @@ describe('最外層：這一步開始時讀、結束時落表', () => {
   });
   const reply = new AIMessage('好。');
 
-  /** 內層：記下看到的上一次切點，照 `steps` 依序 note、叫 handler、回傳或拋錯。 */
-  function innerLayer(steps: {
-    note?: SummaryCutoff[];
-    returns?: 'command' | 'reply';
-    throws?: Error;
-  }) {
+  /** 內層：記下看到的上一次與最新切點，照 `steps` 依序 note、叫 handler、回傳或拋錯。 */
+  function innerLayer(steps: { note?: SummaryCutoff[]; throws?: Error }) {
     const seen: unknown[] = [];
+    const latest: unknown[] = [];
     const base = {
       name: 'Summarization',
-      stateSchema: { private: true },
       wrapModelCall: async (req: Request, handler: (r: Request) => Promise<unknown>) => {
-        seen.push(req.state._summarizationEvent);
+        seen.push(previousSummaryCutoff());
         for (const cutoff of steps.note ?? []) {
           noteSummaryCutoff(cutoff);
-          seen.push(req.state._summarizationEvent);
+          seen.push(previousSummaryCutoff());
+          latest.push(latestSummaryCutoff()?.cutoffIndex);
         }
         const answer = await handler(req);
         if (steps.throws !== undefined) throw steps.throws;
-        return steps.returns === 'command'
-          ? new Command({ update: { _summarizationEvent: {} } })
-          : answer;
+        return answer;
       },
     };
-    return { base, seen };
+    return { base, seen, latest };
   }
 
-  it('沒有 stateSchema；內層回 Command 時換回模型的回覆', async () => {
+  it('回內層的回傳值，落表', async () => {
     const table = new SummaryCutoffTable();
-    const { base } = innerLayer({ note: [cutoffAt(2)], returns: 'command' });
+    const { base } = innerLayer({ note: [cutoffAt(2)] });
     const outer = withSummaryCutoffs(base as never, table) as unknown as {
-      stateSchema?: unknown;
       wrapModelCall: (r: Request, h: () => Promise<unknown>) => Promise<unknown>;
     };
-    expect(outer.stateSchema).toBeUndefined();
     const messages = withIds(4);
     expect(await outer.wrapModelCall(request(messages), async () => reply)).toBe(reply);
     expect(table.lookup(ROOT, messages)?.cutoffIndex).toBe(2);
   });
 
-  it('同一步 note 兩次：落定的是最後一次，內層這一步讀到的一直是開始時的值', async () => {
+  it('同一步 note 兩次：落定的是最後一次，內層這一步讀到的上一次一直是開始時的值', async () => {
     const table = new SummaryCutoffTable();
     const messages = withIds(6);
     table.record(ROOT, messages, cutoffAt(1));
-    const { base, seen } = innerLayer({ note: [cutoffAt(3), cutoffAt(4)] });
+    const { base, seen, latest } = innerLayer({ note: [cutoffAt(3), cutoffAt(4)] });
     const outer = withSummaryCutoffs(base as never, table) as unknown as {
       wrapModelCall: (r: Request, h: () => Promise<unknown>) => Promise<unknown>;
     };
     await outer.wrapModelCall(request(messages), async () => reply);
     expect(seen.map((s) => (s as SummaryCutoff | undefined)?.cutoffIndex)).toEqual([1, 1, 1]);
+    expect(latest).toEqual([3, 4]);
     expect(table.lookup(ROOT, messages)?.cutoffIndex).toBe(4);
   });
 
@@ -228,7 +224,21 @@ describe('最外層：這一步開始時讀、結束時落表', () => {
     expect(table.lookup(ROOT, messages)).toBeUndefined();
   });
 
-  it('不在任何一步裡 note：什麼都不做', () => {
+  it('不在任何一步裡：note 什麼都不做，讀到的都是沒有', () => {
     expect(() => noteSummaryCutoff(cutoffAt(1))).not.toThrow();
+    expect(previousSummaryCutoff()).toBeUndefined();
+    expect(latestSummaryCutoff()).toBeUndefined();
+  });
+});
+
+describe('這次的切點換成整串的座標', () => {
+  it('沒有上一次：有效串長度 −（交下去的長度 − 1）', () => {
+    // 10 則、留 3 則：交下去 [摘要, 3 則]，切點 7。
+    expect(summaryCutoffIndex(undefined, 10, 4)).toBe(7);
+  });
+
+  it('有上一次：加上上一次切點、扣掉有效串開頭那則舊摘要', () => {
+    // 上一次切在 6，整串 12 則 → 有效串 [舊摘要, 6 則] 共 7；交下去 [新摘要, 2 則]，有效串裡切在 5，整串切在 6 + 5 − 1 = 10。
+    expect(summaryCutoffIndex(6, 7, 3)).toBe(10);
   });
 });

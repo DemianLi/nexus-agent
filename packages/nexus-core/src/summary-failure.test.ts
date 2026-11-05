@@ -19,7 +19,13 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/
 import type { BaseMessage } from '@langchain/core/messages';
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+
+// 歷史檔的會話名是摘要器建構時生的（`session_` 加 `randomUUID()` 的前 8 碼）；要固定它的那一條換掉前 8 碼，其餘照真的生。
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
 import { createSummarizer, DEFAULT_SUMMARIZATION } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { SummaryCutoffTable } from './summary-cutoffs.js';
@@ -60,8 +66,6 @@ async function run(options: {
   messages?: readonly BaseMessage[];
   /** 這一步開始時表上的上一次切點。 */
   previous?: SummaryCutoff;
-  /** state 上 `messages` 以外的欄位。 */
-  state?: Record<string, unknown>;
   settings?: Partial<SummarizationSettings>;
   /** 給了就是有型錄的模型：保留量走出廠的 `retainRatio`，不是測試預設的 1 token。 */
   limits?: { contextWindow: number; maxOutputTokens: number };
@@ -116,7 +120,7 @@ async function run(options: {
         result: await middleware.wrapModelCall?.(
           {
             messages,
-            state: { ...options.state, messages },
+            state: { messages },
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: [],
@@ -426,7 +430,7 @@ describe('摘要不比被取代的小', () => {
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]).toHaveLength(7);
     expect(String(out.handled[0]![0]!.content)).toBe('問');
-    // 沒有提交：回的是模型的回應，不是帶 `_summarizationEvent` 的 Command。
+    // 沒有提交：表上沒有新的切點。
     expect(out.committed).toBeUndefined();
     expect((out.result as AIMessage).content).toBe('好。');
     // 正好一條 warn，說的是這件事，走的是 #1383 那條「照原請求送出」。
@@ -512,8 +516,12 @@ describe('摘要不比被取代的小', () => {
    */
   it('一樣大：不提交；只大一個 token：提交', async () => {
     // 歷史檔路徑固定：框好的摘要裡帶著它，隨機的 session id 會讓估計值在兩次執行之間差幾個 token。
-    const state = { _summarizationSessionId: 'session_fixed01' };
-    const committed = await run({ state, settings: { trigger: [{ type: 'messages', value: 3 }] } });
+    const real = vi.mocked(randomUUID).getMockImplementation()!;
+    vi.mocked(randomUUID).mockImplementation(() => `fixed001-${real().slice(9)}` as never);
+    onTestFinished(() => {
+      vi.mocked(randomUUID).mockImplementation(real);
+    });
+    const committed = await run({ settings: { trigger: [{ type: 'messages', value: 3 }] } });
     const framed = estimateMessageTokens(committed.handled[0]![0]!);
 
     const textOf = (chars: number) => new HumanMessage('字'.repeat(chars));
@@ -531,7 +539,6 @@ describe('摘要不比被取代的小', () => {
     const attempt = (chars: number) =>
       run({
         messages: [textOf(chars), new HumanMessage('短問題')],
-        state,
         settings: { trigger: [{ type: 'messages', value: 2 }] },
       });
 

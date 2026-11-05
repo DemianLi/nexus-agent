@@ -262,8 +262,8 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   /**
    * **摘要本文進日誌**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）——這一條以前是
    * 反過來的絆索（「摘要本文不准進日誌」），理由是那時日誌不記訊息內容。推模型歷史的一側要拿它換掉
-   * 被壓掉的那一段，所以翻面：它要在，而且就是基座換上去的那一則（`lc_source: 'summarization'`
-   * 的 HumanMessage，`getEffectiveMessages` 放在最前面的那一則）。
+   * 被壓掉的那一段，所以翻面：它要在，而且就是摘要器換上去的那一則（`lc_source: 'summarization'`
+   * 的 HumanMessage，套用切點時放在最前面的那一則）。
    *
    * 釘的仍然是**欄位集合**：多一格、少一格都紅。
    */
@@ -293,10 +293,10 @@ describe('壓縮發生時，日誌裡留得下來', () => {
 /**
  * **射程：subagent 那側寫得進去——這是卡上決定 3 的反面。**
  *
- * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是 `EXCLUDED_STATE_KEYS` 把
- * `_summarizationEvent` 擋在傳進／傳出 subagent 兩個方向之外。**那條擋的是 root 的快照讀
+ * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是基座的 `EXCLUDED_STATE_KEYS` 把
+ * 摘要事件擋在傳進／傳出 subagent 兩個方向之外。**那條擋的是 root 的快照讀
  * 得到什麼**：`foldSummarizer` 逐個 agent 建一份摘要器，subagent 那份就在 subagent 自己的
- * 圖裡跑，回傳值當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
+ * 圖裡跑，摘要當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
  *
  * 兩半各有一條會紅的斷言，理由不同：漏了 `foldSubAgents` 那一注 → subagent 那份是空的；
  * 身分算錯 → subagent 的紀錄跑到 root 那份去。

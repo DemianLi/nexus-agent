@@ -16,7 +16,8 @@
  *
  * 1. 算出「模型看得到的那一串」。摘要器不改寫 `state.messages`，切點記在這次組裝的切點表（`@nexus/core` 的 `summary-cutoffs.ts`），
  *    模型呼叫時才組 `[summary, ...messages.slice(cutoffIndex)]`；listener 要看的是後者（#397）。切點由呼叫端交進來的查找函式問，
- *    跟摘要器問的是同一張表；這裡在一次 invoke 開始時問一次，跟摘要器在每一步開始時讀到的是同一個值。`history-source=log` 時 root
+ *    跟摘要器問的是同一張表；這裡在一次 invoke 開始時（第一步之前）問一次，讀到的跟摘要器在這次 invoke 第一步開始時讀到的是同一個值；同一次 invoke 後面幾步不再問，
+ *    時點同以前讀 state 私有鍵的時候。`history-source=log` 時 root
  *    從日誌推同一個視圖（`createVisibleHistoryReader`，#2355），不讀 state；子代理的歷史由 state 送，讀 state。
  * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。

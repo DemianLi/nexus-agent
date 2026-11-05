@@ -95,8 +95,8 @@ dsh 先 append 一顆 `compaction/prune` 影子價格事件，緊接著 append �
  *
  * ## 一條不准破的性質：長度與順序不變
  *
- * 基座的 `getEffectiveMessages` 是 `[summaryMessage, ...messages.slice(cutoffIndex)]`，
- * 而那個 `cutoffIndex` 是**前幾輪**算出來存在 state 裡的。少一則訊息，那個 slice 就切在
+ * 摘要過的有效串是 `[summaryMessage, ...messages.slice(cutoffIndex)]`（`summary-cutoffs.ts`），
+ * 而那個 `cutoffIndex` 是**前幾輪**算出來記在切點表上的。少一則訊息，那個 slice 就切在
  * 錯的地方，AI／Tool 配對當場斷掉——而且不會拋。所以 {@link pruneToolResults} **只換內容、
  * 永遠不刪訊息**；連內容剪成空字串的區塊都只在訊息**內部**丟掉（dsh 同款）。
  *

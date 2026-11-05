@@ -334,10 +334,9 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
   const unit = estimateMessageTokens(sized('human', '0'));
 
   /**
-   * 兩顆不同 N 的基座實例各有一份 closure 的 `sessionId`（state 上沒有 `_summarizationSessionId` 時用）。不處理的話，
-   * state 一旦掉了那個 key，第二次摘要就換了檔名。分派器補的是**這顆摘要器自己的**那一個。
+   * 分派器依 N 各建一顆引擎；歷史檔的會話名在分派器那一層生一次、交給每一顆，所以換了 N 仍是同一個檔。
    */
-  async function twoSummaries(options: { keepSessionId: boolean }) {
+  async function twoSummaries() {
     const backend = memoryBackend();
     const { model: modelA } = namedModel('small');
     const { model: modelB } = namedModel('mid');
@@ -354,11 +353,11 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
       undefined,
       cutoffs,
     );
-    const call = async (model: unknown, messages: readonly BaseMessage[], state: object) => {
+    const call = async (model: unknown, messages: readonly BaseMessage[]) => {
       await middleware.wrapModelCall?.(
         {
           messages,
-          state: { ...state, messages },
+          state: { messages },
           model,
           systemMessage: new SystemMessage('系統。'),
           tools: [],
@@ -370,32 +369,18 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
     };
 
     // 第一次：小窗口，N 小。
-    const first = await call(modelA, conversation(Math.ceil(26_214 / unit) + 8), {});
-    // 第二次：同一條 thread 接著長，換中窗口（N 不同）。state 只帶摘要事件，是否帶 session id 由案例決定。
-    const second = await call(
-      modelB,
-      conversation(Math.ceil(100_000 / unit) + 8),
-      options.keepSessionId
-        ? { _summarizationSessionId: pathToId(first.filePath) }
-        : {/* 掉了：state 上沒有 `_summarizationSessionId` */},
-    );
+    const first = await call(modelA, conversation(Math.ceil(26_214 / unit) + 8));
+    // 第二次：同一條 thread 接著長，換中窗口（N 不同）。
+    const second = await call(modelB, conversation(Math.ceil(100_000 / unit) + 8));
     return { backend, first, second };
   }
 
-  const pathToId = (path: string | null) => String(path).replace(/^.*\//, '').replace(/\.md$/, '');
-
-  it('state 上沒有 `_summarizationSessionId`（掉了）：兩次摘要仍寫進同一個檔，內容是兩段', async () => {
-    const { backend, first, second } = await twoSummaries({ keepSessionId: false });
+  it('換了 N：兩次摘要仍寫進同一個檔，內容是兩段', async () => {
+    const { backend, first, second } = await twoSummaries();
     expect(first.filePath).toBeTruthy();
     expect(second.filePath).toBe(first.filePath);
     expect([...backend.files.keys()]).toEqual([first.filePath]);
     const content = backend.files.get(first.filePath!)!;
     expect(content.match(/## Summarized at/g)).toHaveLength(2);
-  });
-
-  it('state 上有 `_summarizationSessionId`：同樣是同一個檔', async () => {
-    const { backend, first, second } = await twoSummaries({ keepSessionId: true });
-    expect(second.filePath).toBe(first.filePath);
-    expect([...backend.files.keys()]).toEqual([first.filePath]);
   });
 });

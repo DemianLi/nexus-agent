@@ -28,10 +28,9 @@
  * - **恢復會話之後鏈還在**。dsh 明列「仅驻留内存，从持久化恢复的会话以全新链开始」；
  *   我們的鏈長在訊息裡，checkpointer 存什麼就恢復什麼。這一格我們比較好。
  * - **摘要之後鏈也還在**，跟 dsh 的「压缩不会重置链」同一個結果，但成因不同而且是查過的：
- *   基座的摘要器**不改寫 `state.messages`**，它只記一顆 `_summarizationEvent`，每次模型
- *   呼叫時由 `getEffectiveMessages` 現組出 `[summary, ...messages.slice(cutoffIndex)]`
- *   （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2697`，原文註解就寫著
- *   “This avoids full state rewrites”）。我們讀的是完整的 `state.messages`，所以剪裁
+ *   摘要器**不改寫 `state.messages`**，切點記在組裝的切點表（`summary-cutoffs.ts`），每次模型
+ *   呼叫時現組出 `[summary, ...messages.slice(cutoffIndex)]`——照基座的做法（`deepagents@1.13.1`，
+ *   `dist/langsmith-zm0ILQsV.js:2697`，原文註解就寫著 “This avoids full state rewrites”）。我們讀的是完整的 `state.messages`，所以剪裁
  *   看不到。**代價在另一邊**：落在 cutoff 之前的提醒模型那一輪就看不到了，它跟其他被
  *   摘掉的訊息一起進了摘要。
  *

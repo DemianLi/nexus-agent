@@ -2,7 +2,7 @@
  * 薄測試：listener 讀得到什麼、什麼時候不加（backend 是替身，不經過 agent），加上樹上這一列（#1474）的接線與一致性。
  *
  * **基線真的有沒有進到模型、會不會重複**的驗收在組裝點（`apps/harness/src/agent-instructions.test.ts`），
- * 而且那裡用的是零設定的出貨清單（`apps/harness/cordis.yml`）。**摘要之後的判準**（宿主算 `effectiveMessages` 再交給 listener）
+ * 而且那裡用的是零設定的出貨清單（`apps/harness/cordis.yml`）。**摘要之後的判準**（宿主用 `applySummaryCutoff` 套上切點再交給 listener）
  * 在 `apps/harness/src/pre-step-middleware.test.ts`。兩件事。
  *
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core`；`src/index.ts` 不行。
