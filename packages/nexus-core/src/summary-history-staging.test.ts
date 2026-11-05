@@ -3,14 +3,14 @@
  * 「這一步有沒有生出摘要」提交。真摘要器配真 graph 的整合測試在 `apps/harness/src/summary-history-staging.test.ts`。
  */
 
-import { AIMessage } from '@langchain/core/messages';
-import { Command } from '@langchain/langgraph';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import type { AgentMiddleware } from './base-types.js';
 import { SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
 import { createHistoryStaging } from './summary-history-staging.js';
+import { noteSummaryCutoff, SummaryCutoffTable, withSummaryCutoffs } from './summary-cutoffs.js';
 
 const PREFIX = '/conversation_history';
 const FILE = `${PREFIX}/session_a.md`;
@@ -59,7 +59,7 @@ class MemoryBackend {
 
 const asBackend = (backend: MemoryBackend) => backend as unknown as AnyBackendProtocol;
 
-/** 摘要器替身：`body` 在範圍內跑，可對 staged backend 做事、對日誌記事件、回 Command 或拋。 */
+/** 摘要器替身：`body` 在範圍內跑，可對 staged backend 做事、對日誌記事件、記下切點或拋。 */
 function summarizer(
   body: (context: { backend: AnyBackendProtocol; log: SessionLog }) => Promise<unknown>,
   staged: { backend: AnyBackendProtocol },
@@ -75,8 +75,9 @@ const lookup = (log: SessionLog) => ({
   forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
 });
 
+/** 跟組裝一樣罩在切點那層裡跑：這一步記下的切點，暫存層在結束時讀得到。 */
 const run = (middleware: AgentMiddleware) =>
-  middleware.wrapModelCall!(
+  withSummaryCutoffs(middleware, new SummaryCutoffTable()).wrapModelCall!(
     { messages: [], runtime: { configurable: {} } } as never,
     (async () => new AIMessage('由 handler 回')) as never,
   );
@@ -84,8 +85,9 @@ const run = (middleware: AgentMiddleware) =>
 const record = (log: SessionLog, filePath: string | null) =>
   log.append('compaction/summary', { cutoffIndex: 1, messagesBefore: 3, filePath });
 
-const eventCommand = (filePath: string | null) =>
-  new Command({ update: { _summarizationEvent: { cutoffIndex: 1, filePath } } });
+/** 這一步生效的切點（`withCompactionLog` 在日誌寫進去、或沒有日誌時交下去那一刻記）。 */
+const note = (filePath: string | null) =>
+  noteSummaryCutoff({ cutoffIndex: 1, summaryMessage: new HumanMessage('摘要'), filePath });
 
 describe('暫存範圍之外：什麼都不攔', () => {
   it('不在範圍內的寫入直接進底下的 backend', async () => {
@@ -151,8 +153,8 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
     expect(seenDuring).toBe(0);
   });
 
-  /** S2：生摘要的呼叫失敗、基座吞掉照原請求送出——日誌沒有事件、也沒有 Command。 */
-  it('這一步沒生出摘要（日誌沒事件、也沒回 Command）：丟棄', async () => {
+  /** S2：生摘要的呼叫失敗、`withTokenBudget` 吞掉照原請求送出——日誌沒有事件、也沒有切點。 */
+  it('這一步沒生出摘要（日誌沒事件、也沒記切點）：丟棄', async () => {
     const memory = new MemoryBackend();
     const log = new SessionLog('staging');
     const staging = createHistoryStaging(asBackend(memory), PREFIX);
@@ -253,8 +255,8 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
     expect(memory.files.size).toBe(0);
   });
 
-  it('只回了 Command（查不到日誌）：事件的 filePath 相符就提交，不符就丟', async () => {
-    for (const [commandPath, expected] of [
+  it('只記了切點（查不到日誌）：切點的 filePath 相符就提交，不符就丟', async () => {
+    for (const [notedPath, expected] of [
       [FILE, '有事件'],
       [`${PREFIX}/other.md`, undefined],
       [null, undefined],
@@ -266,7 +268,8 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
         summarizer(
           async ({ backend }) => {
             await (backend as unknown as MemoryBackend).write(FILE, '有事件');
-            return eventCommand(commandPath);
+            note(notedPath);
+            return new AIMessage('好。');
           },
           staging,
           log,
@@ -399,7 +402,7 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
     }
   });
 
-  it('forCall 拋了：當查不到日誌，回 Command 的判準仍在', async () => {
+  it('forCall 拋了：當查不到日誌，切點的判準仍在', async () => {
     const memory = new MemoryBackend();
     const log = new SessionLog('staging');
     const staging = createHistoryStaging(asBackend(memory), PREFIX);
@@ -407,7 +410,8 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
       summarizer(
         async ({ backend }) => {
           await (backend as unknown as MemoryBackend).write(FILE, '有事件');
-          return eventCommand(FILE);
+          note(FILE);
+          return new AIMessage('好。');
         },
         staging,
         log,
@@ -420,6 +424,29 @@ describe('暫存範圍之內：這一步生出了摘要才提交', () => {
     );
 
     await run(wrapped);
+
+    expect(memory.files.get(FILE)).toBe('有事件');
+  });
+
+  it('查不到日誌、摘要之後那次模型呼叫失敗：切點記下了就提交，錯照樣拋', async () => {
+    const memory = new MemoryBackend();
+    const log = new SessionLog('staging');
+    const staging = createHistoryStaging(asBackend(memory), PREFIX);
+    const boom = new Error('503');
+    const wrapped = staging.wrap(
+      summarizer(
+        async ({ backend }) => {
+          await (backend as unknown as MemoryBackend).write(FILE, '有事件');
+          note(FILE);
+          throw boom;
+        },
+        staging,
+        log,
+      ),
+      { forCall: () => ({ kind: 'not-attached' }) },
+    );
+
+    await expect(run(wrapped)).rejects.toBe(boom);
 
     expect(memory.files.get(FILE)).toBe('有事件');
   });

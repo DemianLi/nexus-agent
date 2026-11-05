@@ -5,7 +5,7 @@
  * （`compaction-basic/src/index.ts:163-173`），在 overflow 路徑記 warn、保留原本的請求錯誤（`:204-227`）。
  * 我們的 `compaction/summary` 記不進去時改拋一顆「生摘要失敗」的錯，走 #1374 既有的兩條路（見 `summary-failure.test.ts`）。
  *
- * 每一格兩邊都斷言：**模型收到的是沒壓縮的請求**，而且**回傳沒有壓縮的痕跡**（沒有 `_summarizationEvent`、歷史檔沒寫、
+ * 每一格兩邊都斷言：**模型收到的是沒壓縮的請求**，而且**回傳沒有壓縮的痕跡**（切點表沒有新切點、歷史檔沒寫、
  * 日誌沒有 `compaction/summary`）。對照組是同一套組裝、日誌寫得進去。
  */
 
@@ -15,12 +15,9 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
-import {
-  createSummarizer,
-  DEFAULT_SUMMARIZATION,
-  readSummarizationEvent,
-} from './summarization.js';
+import { createSummarizer, DEFAULT_SUMMARIZATION } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
 import { TokenAnchorBook } from './token-estimate.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -71,6 +68,8 @@ function rig(
       return { text: '這是摘要。' };
     },
   };
+  const cutoffs = new SummaryCutoffTable();
+  const config = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
   const middleware = createSummarizer(
     {
       write: async (path: string) => {
@@ -85,21 +84,24 @@ function rig(
     undefined,
     undefined,
     (message) => reports.push(message),
+    undefined,
+    cutoffs,
   );
   const handled: BaseMessage[][] = [];
   const call = async (
     messages: readonly BaseMessage[],
     handlerThrows?: (call: number) => Error | undefined,
-  ): Promise<{ result?: unknown; error?: unknown }> => {
+  ): Promise<{ result?: unknown; error?: unknown; cutoff?: unknown }> => {
     try {
       return {
         result: await middleware.wrapModelCall?.(
           {
             messages,
-            state: {},
+            state: { messages },
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: [],
+            runtime: config,
           } as never,
           ((request: { messages: BaseMessage[] }) => {
             handled.push(request.messages);
@@ -108,9 +110,10 @@ function rig(
             return new AIMessage('好。');
           }) as never,
         ),
+        cutoff: cutoffs.lookup(config, messages),
       };
     } catch (error) {
-      return { error };
+      return { error, cutoff: cutoffs.lookup(config, messages) };
     }
   };
   return {
@@ -132,11 +135,11 @@ const summaries = (log: SessionLog) =>
   log.events.filter((event) => event.type === 'compaction/summary');
 
 describe('對照：寫得進去就照常摘要', () => {
-  it('門檻觸發：模型收到摘要過的請求、回傳帶 _summarizationEvent、日誌有一筆、歷史檔寫了', async () => {
+  it('門檻觸發：模型收到摘要過的請求、切點表記下切點、日誌有一筆、歷史檔寫了', async () => {
     const r = rig(TOKEN_TRIGGER, false);
     const out = await r.call(conversation());
     expect(out.error).toBeUndefined();
-    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.cutoff).toBeDefined();
     expect(r.handled).toHaveLength(1);
     expect(String(r.handled[0]![0]!.content)).not.toBe(BIG);
     expect(summaries(r.log)).toHaveLength(1);
@@ -146,13 +149,13 @@ describe('對照：寫得進去就照常摘要', () => {
 });
 
 describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () => {
-  it('warn 一條、照原請求送出：模型收到沒壓縮的、回傳沒有 _summarizationEvent、歷史檔丟掉', async () => {
+  it('warn 一條、照原請求送出：模型收到沒壓縮的、切點表沒有切點、歷史檔丟掉', async () => {
     const r = rig(TOKEN_TRIGGER, true);
     const out = await r.call(conversation());
     expect(out.error).toBeUndefined();
     // 回傳：基座的回覆原樣，不是帶事件的 Command。
     expect(out.result).toBeInstanceOf(AIMessage);
-    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    expect(out.cutoff).toBeUndefined();
     // 模型收到的：七則一則沒少，第一則是原文。
     expect(r.handled).toHaveLength(1);
     expect(r.handled[0]).toHaveLength(7);
@@ -175,7 +178,7 @@ describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () =>
     const out = await r.call(short);
     expect(out.error).toBeUndefined();
     expect(out.result).toBeInstanceOf(AIMessage);
-    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    expect(out.cutoff).toBeUndefined();
     expect(r.handled[1]).toEqual(short);
   });
 

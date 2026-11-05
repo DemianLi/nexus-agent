@@ -431,8 +431,8 @@ function messagesOf(derived: DerivedConversation): BaseMessage[] {
 }
 
 /**
- * 讀「模型看得到的那一串」的讀者（pre-step 的 listener）在 `log` 時用：摘要套上，剪法、參數截斷、圖片省略不套，跟 state 那邊的
- * `effectiveMessages` 同一個視圖。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
+ * 讀「模型看得到的那一串」的讀者（pre-step 的 listener）在 `log` 時用：摘要套上，剪法、參數截斷、圖片省略不套，跟 state 那邊
+ * （`applySummaryCutoff` 套切點表）同一個視圖。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
  *
  * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}。
  * @returns 從日誌推到目前為止的那一串；推不出來就拋。

@@ -2,11 +2,11 @@
  * 續接之後，摘要補追不撿上一個生命週期的切點（[#2434](https://github.com/DemianLi/nexus-agent/issues/2434)）。
  *
  * 續接灌回 graph state 的是「摘要＋切點之後」，新的座標從那一串算起（`conversation-restore.ts` 檔頭）；續接的日誌是
- * 「舊事件＋`session/end-seed`」。摘要補追（`@nexus/core` 的 `summary-catch-up.ts`）要是越過 end-seed 撿到舊的
- * `compaction/summary`，舊座標的切點就套進新座標，摘要之後緊接的那幾則從請求裡消失。
+ * 「舊事件＋`session/end-seed`」。舊座標的切點套進新座標的話，摘要之後緊接的那幾則會從請求裡消失。切點記在組裝的切點表
+ * （`@nexus/core` 的 `summary-cutoffs.ts`），這裡守的是：續接之後不套舊切點。
  *
  * 切點 1 時灌回串剛好不變、測不出誤切（`log-derived-history.test.ts` 的 SR2 是這個形狀）；灌回串短於切點時，
- * `summaryEventToCatchUp`「切點落在訊息串之外」那一條會先擋下。所以這裡在大結果前先說三句短的，把切點推到 2 以上，
+ * 切點表「切點超過訊息數」那一條會先擋下。所以這裡在大結果前先說三句短的，把切點推到 2 以上，
  * 之後再說 14 句，讓灌回串長過切點。
  * 走出貨的 `runServe --live`，兩段 serve 共用一個日誌目錄。
  */

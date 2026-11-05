@@ -778,12 +778,12 @@ export type {
   SummarizationSettings,
   SummarizationThreshold,
 } from './summarization.js';
+export { applySummaryCutoff, summaryCutoffsOf } from './summary-cutoffs.js';
+export type { SummaryCutoff, SummaryCutoffTable } from './summary-cutoffs.js';
 export {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
-  effectiveMessages,
   isUnderCompactionPressure,
-  readSummarizationEvent,
   resolveSummarizationSettings,
   RETAIN_FALLBACK_MESSAGES,
   RETAIN_RATIO,

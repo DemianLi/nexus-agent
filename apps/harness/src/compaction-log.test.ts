@@ -62,6 +62,8 @@ interface RunResult {
   /** 同一個 backend 與 checkpointer：歷史在 graph state 裡（#348），要讀回得接同一個 thread。 */
   readonly backend: ContainedFilesystemBackend;
   readonly saver: MemorySaver;
+  /** 最後一次 `invoke` 之後 root thread 的 `state.messages`（`getState`，兩個 loop 都有）。 */
+  readonly messages: readonly BaseMessage[];
 }
 
 /**
@@ -95,6 +97,7 @@ async function run(
   const sessions = new SessionRegistry(ROOT_ID);
   const detach = attachSession(sessions);
   const failures: string[] = [];
+  let messages: readonly BaseMessage[] = [];
   try {
     for (let index = 0; index < (options.invocations ?? 1); index += 1) {
       try {
@@ -106,6 +109,12 @@ async function run(
         failures.push(error instanceof Error ? error.message : String(error));
       }
     }
+    const snapshot = await (
+      agent as unknown as {
+        getState(config: unknown): Promise<{ values: { messages?: BaseMessage[] } }>;
+      }
+    ).getState({ configurable: { thread_id: ROOT_ID } });
+    messages = snapshot.values.messages ?? [];
   } finally {
     detach();
     await dispose();
@@ -119,6 +128,7 @@ async function run(
     prompts: model.prompts,
     backend,
     saver,
+    messages,
     root: compactionsOf(rootEvents),
     subagents: entries
       .filter((entry) => entry.address.kind === 'subagent')
@@ -252,8 +262,8 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   /**
    * **摘要本文進日誌**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）——這一條以前是
    * 反過來的絆索（「摘要本文不准進日誌」），理由是那時日誌不記訊息內容。推模型歷史的一側要拿它換掉
-   * 被壓掉的那一段，所以翻面：它要在，而且就是基座換上去的那一則（`lc_source: 'summarization'`
-   * 的 HumanMessage，`getEffectiveMessages` 放在最前面的那一則）。
+   * 被壓掉的那一段，所以翻面：它要在，而且就是摘要器換上去的那一則（`lc_source: 'summarization'`
+   * 的 HumanMessage，套用切點時放在最前面的那一則）。
    *
    * 釘的仍然是**欄位集合**：多一格、少一格都紅。
    */
@@ -281,12 +291,11 @@ describe('壓縮發生時，日誌裡留得下來', () => {
 });
 
 /**
- * **射程：subagent 那側寫得進去——這是卡上決定 3 的反面。**
+ * **射程：subagent 那側寫得進去。**
  *
- * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是 `EXCLUDED_STATE_KEYS` 把
- * `_summarizationEvent` 擋在傳進／傳出 subagent 兩個方向之外。**那條擋的是 root 的快照讀
- * 得到什麼**：`foldSummarizer` 逐個 agent 建一份摘要器，subagent 那份就在 subagent 自己的
- * 圖裡跑，回傳值當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
+ * `foldSummarizer`（`packages/nexus-core/src/fold.ts:1630`）逐個 agent 建一份摘要器，
+ * subagent 那份就在 subagent 自己的圖裡跑（`summarization.ts:1602` 的 `withCompactionLog`），摘要當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
+ * 不經過 root 的 state，所以不受基座 `task` 的 `EXCLUDED_STATE_KEYS` 擋（它擋的是 root 的快照讀得到什麼）。
  *
  * 兩半各有一條會紅的斷言，理由不同：漏了 `foldSubAgents` 那一注 → subagent 那份是空的；
  * 身分算錯 → subagent 的紀錄跑到 root 那份去。
@@ -422,12 +431,12 @@ describe('摘要事件的位置與內容（#1301）', () => {
   });
 
   /**
-   * **差分：記下的最後一筆 ＝ 基座事後寫進 graph state 的 `_summarizationEvent`。**
-   * 切點、檔案路徑、摘要文字三格逐一相等；`messagesBefore` 是我們自己的座標，不在基座事件裡，另由
-   * `conversation-replay` 的 `compaction-misaligned` 檢查。
+   * **差分：記下的最後一筆 ＝ 最後一次模型呼叫實際看到的。** 切點在組裝的切點表，不在 graph state（#2416），所以拿模型收到的
+   * prompt 對：摘要文字相同；摘要之後那幾則逐則比 id，就是 `state.messages` 從記下的切點起的那幾則。
+   * `messagesBefore` 是我們自己的座標，另由 `conversation-replay` 的 `compaction-misaligned` 檢查。
    */
-  it('最後一筆記下的切點、檔案路徑、摘要，與基座寫進 graph state 的一致', async () => {
-    const { root, saver } = await run(chatter(120), {
+  it('最後一筆記下的切點、摘要，與最後一次模型呼叫看到的一致', async () => {
+    const { root, messages, prompts } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
         retainTokens: 12,
@@ -436,32 +445,23 @@ describe('摘要事件的位置與內容（#1301）', () => {
     });
     expect(root.length).toBeGreaterThan(1);
 
-    const tuple = await saver.getTuple({ configurable: { thread_id: ROOT_ID } });
-    const event = (
-      tuple?.checkpoint.channel_values as
-        | {
-            _summarizationEvent?: {
-              cutoffIndex: number;
-              filePath: string | null;
-              summaryMessage: BaseMessage;
-            };
-          }
-        | undefined
-    )?._summarizationEvent;
-    expect(event).toBeDefined();
+    const agentCall = prompts.filter((prompt) => prompt[0]?.getType() === 'system').at(-1) ?? [];
 
     const last = root.at(-1)!;
-    expect(last.cutoffIndex).toBe(event!.cutoffIndex);
-    expect(last.filePath).toBe(event!.filePath);
-    expect(fromLoggedMessage(last.summary!).text).toBe(event!.summaryMessage.text);
+    expect(agentCall[1]?.text).toBe(fromLoggedMessage(last.summary!).text);
+    const seen = agentCall.slice(2).map((message) => message.id);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).toEqual(
+      messages.slice(last.cutoffIndex, last.cutoffIndex + seen.length).map((m) => m.id),
+    );
+    expect(typeof last.filePath).toBe('string');
   });
 
   /**
    * **摘要之後模型那一輪失敗：事件已經記下，下一次呼叫從那一筆接著，不從原始的串重摘**（[#1390](https://github.com/DemianLi/nexus-agent/issues/1390)）。
    *
-   * 失敗那輪 graph state 沒存到 `_summarizationEvent`（基座只在呼叫回來後才交出）。修之前下一次呼叫從沒摘要過的串再摘一次，
-   * 日誌因此緊接著第二筆、歷史檔疊一份重複的區段；現在摘要器外面那一層在下一步請求前把日誌上那筆補回 state，
-   * 下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
+   * 失敗那輪模型沒回來。切點若只在呼叫回來後才落，下一次呼叫會從沒摘要過的串再摘一次，日誌緊接著第二筆、歷史檔疊一份重複的區段；
+   * 切點在日誌寫進去的同一刻落在切點表，下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
    * 重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
    */
   it('摘要之後的模型呼叫失敗：事件仍在日誌裡，下一次呼叫接著它走，不重摘', async () => {

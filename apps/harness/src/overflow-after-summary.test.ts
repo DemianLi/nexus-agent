@@ -10,7 +10,7 @@
  * | 項目 | 量到的 |
  * | --- | --- |
  * | 日誌 | 兩筆 `compaction/summary` 都在（attempt 1 的先記在它那次 `model/start` 之前，那次超窗了）。**每一次主呼叫，從日誌推出的歷史都等於實際送出的**，包括升級之後那一次 |
- * | graph state | `_summarizationEvent` 是 attempt 2 的（切點 2），不是 attempt 1 的（切點 1）；訊息串沒有被動到 |
+ * | graph state | 訊息串沒有被動到（切點在組裝的切點表，同一步裡落定的是最後一次：單元見 `packages/nexus-core/src/summary-cutoffs.test.ts`「同一步 note 兩次」，整合見 `summary-shrink.test.ts`「不打摘要模型、不提交」那條） |
  * | 歷史檔 | **一個區段**：attempt 2 卸載的（含 attempt 1 那一則）。attempt 1 的寫入在同一步內被 attempt 2 取代，第 1 句只出現一次 |
  *
  * ## 歷史檔那一格的前後
@@ -100,7 +100,7 @@ async function converse(overflowOn: number) {
     built.stepInbox,
   );
   const detach = built.attachSession(pump.sessions);
-  type Snapshot = { cutoff: number | undefined; messages: number; history: string | undefined };
+  type Snapshot = { messages: number; history: string | undefined };
   const afterTurn: Snapshot[] = [];
   try {
     for (let turn = 1; turn <= 2; turn += 1) {
@@ -114,10 +114,8 @@ async function converse(overflowOn: number) {
       const values = state.values as {
         messages: BaseMessage[];
         files?: Record<string, { content?: string }>;
-        _summarizationEvent?: { cutoffIndex: number };
       };
       afterTurn.push({
-        cutoff: values._summarizationEvent?.cutoffIndex,
         messages: values.messages.length,
         history: Object.values(values.files ?? {})[0]?.content,
       });
@@ -133,7 +131,7 @@ async function converse(overflowOn: number) {
 describe('第一次已經摘要過、送出去端點還是回超窗', () => {
   // 第 1 輪：呼叫 1。第 2 輪：呼叫 2 是摘要、呼叫 3 是摘要之後的請求——在這裡超窗；
   // 升級之後呼叫 4 是 retain 0 的摘要、呼叫 5 是重送。
-  it('日誌兩筆都在、推導與實送逐呼叫相等；state 是第二次的切點；歷史檔一個區段', async () => {
+  it('日誌兩筆都在、推導與實送逐呼叫相等；state 的訊息串沒動；歷史檔一個區段', async () => {
     const { events, shared, afterTurn } = await converse(3);
 
     // 前提：真的走到了升級（第 4 次呼叫是摘要，第 5 次是重送）。
@@ -165,8 +163,8 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
       );
     }
 
-    // 2. graph state：第二輪結束時是 attempt 2 的切點，不是 attempt 1 的；訊息串長度就是兩輪四則。
-    expect(afterTurn[1]).toMatchObject({ cutoff: 2, messages: 4 });
+    // 2. graph state：訊息串長度就是兩輪四則。
+    expect(afterTurn[1]).toMatchObject({ messages: 4 });
 
     // 3. 歷史檔：一個區段（attempt 2 的），第 1 句只出現一次（見檔頭，#1389）。
     const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
@@ -182,7 +180,7 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
     expect(summaries.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex)).toEqual([
       1,
     ]);
-    expect(afterTurn[1]).toMatchObject({ cutoff: 1, messages: 4 });
+    expect(afterTurn[1]).toMatchObject({ messages: 4 });
     const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
     expect(sections.map((text) => text.trim())).toEqual([`Human: 第 1 句。${USER_PAD}`]);
   });

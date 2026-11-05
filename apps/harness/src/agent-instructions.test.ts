@@ -11,13 +11,16 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   AGENT_INSTRUCTIONS_INTRO,
   isAgentInstructionsMessage,
 } from '@nexus/plugin-agent-instructions';
-import { REPEAT_REMINDER_MARKER } from '@nexus/core';
+import { REPEAT_REMINDER_MARKER, subagentLinks } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { Event } from '@nexus/wire';
@@ -431,9 +434,8 @@ function isSummary(message: BaseMessage): boolean {
 }
 
 /**
- * **摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。** 基座的摘要器不改寫
- * `state.messages`，只記一顆 `_summarizationEvent`，每次模型呼叫現組 `[summary, ...messages.slice(cutoffIndex)]`
- * （`deepagents@1.13.1` 的 `getEffectiveMessages`）。所以舊基線還在 state 裡、模型卻看不到；v0.4.30 的去重看
+ * **摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。** 摘要器不改寫
+ * `state.messages`，只在組裝的切點表記一個切點（#2416），每次模型呼叫現組 `[summary, ...messages.slice(cutoffIndex)]`。所以舊基線還在 state 裡、模型卻看不到；v0.4.30 的去重看
  * `state.messages`，說「有」，於是整條 thread 再也補不回來（實測：第二句話 14 次呼叫全是 0 則）。
  *
  * 一場跑三句話，每一句都跑到迴圈上限，摘要每一句都發生好幾次。**要三句**：第二句補回來的那一則，第二句自己
@@ -490,37 +492,34 @@ describe('摘要之後下一句話把基線補回來', () => {
   });
 
   /**
-   * **上游絆索。** 判準讀的是基座的私有 state 鍵，升 `deepagents` 時這兩件事要紅在這裡，而不是讓
-   * 工作區指令又默默消失：
+   * **切點是 `state.messages` 的索引**：判準拿切點表上的切點去切 state 的訊息串，所以模型在摘要之後看到的，必須就是
+   * state 從日誌上記下的切點起的那一串。最後一次 agent 呼叫的 prompt 逐則比 id。
    *
-   * 1. 鍵名是 `_summarizationEvent`，帶 `cutoffIndex` 與 `summaryMessage`；
-   * 2. `cutoffIndex` 是 **`state.messages`** 的索引——模型在摘要之後看到的，就是 state 從那一格起的那一串。
-   *
-   * 量的是基座自己寫下的那一顆，不是我們塞的：最後一次 agent 呼叫的 prompt 逐則比 id。
+   * 宿主與摘要器拿同一張切點表（#2416）由上面那條負責：宿主要是拿到空的表，舊基線還在 state 裡，就不會補。
    */
-  it('上游絆索：切點記在 _summarizationEvent，而且是 state.messages 的索引', () => {
-    const event = state._summarizationEvent as
-      { cutoffIndex?: unknown; summaryMessage?: BaseMessage } | undefined;
-    expect(typeof event?.cutoffIndex).toBe('number');
-    const cutoff = event?.cutoffIndex as number;
-
+  it('切點是 state.messages 的索引：摘要之後看到的是 state 從記下的切點起的那一串', () => {
     const last = found.prompts.filter(isAgentCall).at(-1) ?? [];
     expect(last[1] !== undefined && isSummary(last[1])).toBe(true);
-    expect(last[1]?.text).toBe(event?.summaryMessage?.text);
     const seen = last.slice(2).map((message) => message.id);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((id) => typeof id === 'string')).toBe(true);
-    expect(seen).toEqual(
-      (state.messages as BaseMessage[]).slice(cutoff, cutoff + seen.length).map((m) => m.id),
-    );
+    // 切點取 root 日誌上最後一筆 `compaction/summary`：它跟切點表同一刻寫下。
+    const rootLog = found.sessions.find((session) => session.address.kind === 'root')?.log;
+    const logged = (rootLog?.events ?? []).filter((e) => e.type === 'compaction/summary').at(-1);
+    const cutoff = (logged?.data as { cutoffIndex?: number } | undefined)?.cutoffIndex;
+    expect(typeof cutoff).toBe('number');
+    const all = state.messages as BaseMessage[];
+    expect(seen).toEqual(all.slice(cutoff, cutoff! + seen.length).map((m) => m.id));
+    // 圖上沒有摘要的私有欄位。
+    expect(Object.keys(state).filter((key) => key.startsWith('_summarization'))).toEqual([]);
 
-    // 判準唯一的假陽性來源：摘要那一則被認成基線。基座真的建出來的那一則，一次都不能是。
+    // 判準唯一的假陽性來源：摘要那一則被認成基線。引擎真的建出來的那一則，一次都不能是。
     expect(found.prompts.flat().filter(isSummary).some(isAgentInstructionsMessage)).toBe(false);
   });
 
   /**
-   * **續接（`--resume`／serve 碰到舊 thread）不靠切點。** `conversation-restore.ts` 刻意只灌 `messages`、不帶
-   * `_summarizationEvent`，而灌回去的是「摘要＋之後的」——被切掉的基線本來就不在那一串裡，判準退回「有沒有」
+   * **續接（`--resume`／serve 碰到舊 thread）不靠切點。** `conversation-restore.ts` 只灌 `messages`，新組裝的切點表是空的，
+   * 而灌回去的是「摘要＋之後的」——被切掉的基線本來就不在那一串裡，判準退回「有沒有」
    * 也照樣補一則。2026-09-18 實測：推回 9 則、其中 0 則基線，續接後第一次呼叫看得到 1 則。
    */
   it('續接之後：灌回去的那一串沒有切點、也沒有舊基線，第一次呼叫照樣看得到一則', async () => {
@@ -557,13 +556,146 @@ describe('摘要之後下一句話把基線補回來', () => {
 });
 
 /**
- * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
- * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
- * channel 表上加東西。這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ * 背景子代理的模型：摘要器那次（prompt 沒有 system）回摘要；agent 自己的呼叫，第一輪先叫 `echo` 把訊息墊到摘要門檻之上再收工，
+ * 第二輪直接收工。輪次由測試換。
+ */
+class BackgroundWorkerModel extends BaseChatModel {
+  round: 1 | 2 = 1;
+  readonly agentCalls: { readonly round: 1 | 2; readonly prompt: BaseMessage[] }[] = [];
+  #echoes = 0;
+
+  _llmType(): string {
+    return 'background-worker';
+  }
+
+  override bindTools(): this {
+    return this;
+  }
+
+  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    const reply = (message: AIMessage): ChatResult => ({
+      generations: [{ text: message.text, message }],
+      llmOutput: {},
+    });
+    if (messages[0]?.getType() !== 'system') return reply(new AIMessage('背景的摘要。'));
+    this.agentCalls.push({ round: this.round, prompt: [...messages] });
+    if (this.round === 1 && this.#echoes < 6) {
+      this.#echoes += 1;
+      return reply(
+        new AIMessage({
+          content: '再來。',
+          tool_calls: [
+            {
+              id: `bg_echo_${String(this.#echoes)}`,
+              name: ECHO_TOOL_NAME,
+              args: { message: 'x' },
+              type: 'tool_call',
+            },
+          ],
+        }),
+      );
+    }
+    return reply(new AIMessage(this.round === 1 ? '第一輪收工。' : '第二輪收工。'));
+  }
+}
+
+/**
+ * **背景子代理的下一輪也補得回來**。背景子代理每一輪接在同一份 state 上（`thread_id` 是它自己的日誌、
+ * 身分是背景 id），`agent/pre-step` 與摘要器拿同一張切點表、同一把鍵。第一輪摘要把基線切掉，第二輪的第一次呼叫要看得到恰好一則，
+ * 排在摘要之後；pre-step 讀不到切點的話，舊基線還在 state 裡，就不會補。
+ *
+ * 前景子代理每次委派都是新的身分，第一步之前表上沒有它的切點，所以沒有對應的這一條。
+ */
+describe('背景子代理摘要之後，下一輪把基線補回來', () => {
+  it('第一輪摘要切掉基線；sendFromUser 開的第二輪，第一次呼叫看得到恰好一則，排在摘要之後', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-bg-'));
+    await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
+    const worker = new BackgroundWorkerModel({});
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          {
+            content: '委派。',
+            toolCalls: [
+              {
+                name: 'subagent',
+                id: 'root-bg',
+                args: { description: '幹活', subagent_type: 'worker', run_in_background: true },
+              },
+            ],
+          },
+          ...Array.from({ length: 6 }, () => ({ content: '根知道了。' })),
+        ],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [
+        ...shipped,
+        {
+          plugin: {
+            name: 'bg-worker-source',
+            apply(registry) {
+              registry.subagents.register({
+                name: 'worker',
+                description: '幹活的。',
+                systemPrompt: '你是 worker。',
+                model: worker as never,
+              });
+            },
+          },
+        },
+      ],
+      backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+      summarization: { trigger: [{ type: 'messages', value: 8 }], retainTokens: 24 },
+      backgroundSubagents: { maxActive: 4 },
+    });
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'instructions-bg');
+    const detach = built.attachSession(pump.sessions, {});
+    try {
+      await pump.submit({ kind: 'message', text: '開工' });
+      await pump.whenIdle();
+      const child = () => pump.sessions.list().find((entry) => entry.address.kind === 'subagent');
+      const turnEnds = () =>
+        (child()?.log.events ?? []).filter((event) => event.type === 'turn/end').length;
+      await until(() => turnEnds() >= 1, 15000);
+
+      const firstRound = worker.agentCalls.filter((call) => call.round === 1);
+      const lastOfFirst = firstRound.at(-1)?.prompt ?? [];
+      // 前提：第一輪真的摘要過，而且收尾那次已經看不到基線。沒有這兩條，下面那條在沒摘要過的子代理上也會通過。
+      expect(lastOfFirst.some(isSummary)).toBe(true);
+      expect(baselines(lastOfFirst)).toHaveLength(0);
+
+      worker.round = 2;
+      const links = subagentLinks(pump.sessions.root.events);
+      expect(links).toHaveLength(1);
+      const runId = links[0]!.childId.slice('instructions-bg/'.length);
+      await detach.background!.sendFromUser(runId, '再來一輪');
+      await until(() => turnEnds() >= 2, 15000);
+
+      const first = worker.agentCalls.find((call) => call.round === 2)?.prompt ?? [];
+      expect(first.some(isSummary)).toBe(true);
+      expect(baselines(first)).toHaveLength(1);
+      expect(first.indexOf(baselines(first)[0] as BaseMessage)).toBeGreaterThan(
+        first.findIndex(isSummary),
+      );
+      // 補的那一則記在背景子代理自己那份日誌：兩輪各一筆。
+      expect(injectedBaselines(child()?.log.events ?? [])).toHaveLength(2);
+    } finally {
+      detach();
+      await pump.whenIdle().catch(() => undefined);
+      await built.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
+/**
+ * **摘要沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與 `messages`」量的組裝沒有這顆
+ * plugin；這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。切點在組裝的切點表（#2416），
+ * graph state 上也不該有摘要的私有欄位。
  *
  * **`skillsMetadata` 是例外，而且只有它**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：出貨清單掛了
  * skills 之後，基座的 skills 狀態 channel 是公開的、帶預設值 `[]`，掛了就出現在回傳值裡（沒有 skill 時是空陣列，
- * 不影響 system prompt）。要量的是**私有鍵**（`_summarizationEvent` 之類）沒有外洩，所以其餘一律不准多。
+ * 不影響 system prompt）。要量的是**私有鍵**（`_summarization` 開頭的）沒有外洩，所以其餘一律不准多。
  */
 it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格沒有多的鍵', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
@@ -588,13 +720,16 @@ it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格�
         configurable: { thread_id: 'keys' },
       })) as object;
     }
-    // 前提：摘要真的發生過，那顆鍵在 graph state 裡有值。
+    // 前提：摘要真的發生過，最後一次 agent 呼叫看到的是摘要過的串。
+    expect(model.prompts.at(-1)?.some(isSummary)).toBe(true);
     const snapshot = await (
       built.agent as unknown as {
         getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
       }
     ).getState({ configurable: { thread_id: 'keys' } });
-    expect(snapshot.values._summarizationEvent).toBeDefined();
+    expect(Object.keys(snapshot.values).filter((key) => key.startsWith('_summarization'))).toEqual(
+      [],
+    );
 
     expect(Object.keys(returned).sort()).toEqual(['files', 'messages', 'skillsMetadata']);
   } finally {

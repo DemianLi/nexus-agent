@@ -385,12 +385,6 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
   },
   {
     file: 'src/compaction-log.test.ts',
-    test: '摘要事件的位置與內容（#1301） > 最後一筆記下的切點、檔案路徑、摘要，與基座寫進 graph state 的一致',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/compaction-log.test.ts',
     test: 'subagent 那側 > subagent 的壓縮記在 subagent 自己那份，不在 root 的',
     kind: 'approvalChannel',
     run: 'passes',

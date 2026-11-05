@@ -62,6 +62,7 @@ import {
   NEXUS_CORE_VERSION,
   resolveEntriesPerEntry,
   SESSION_PERSISTENCE_PLUGIN_NAME,
+  summaryCutoffsOf,
 } from '@nexus/core';
 import type {
   CommandDefinition,
@@ -988,8 +989,13 @@ function registerFolded(
   // 且**不帶 `prepend`／`last`**——它在鏈上的位置就是這一列在出貨清單上的位置，與遷移之前 `useWithBackend` 的落點相同；一份實例走遍
   // root 與每個子代理（`fold.ts` 的 `pluginMiddleware`）。日誌用**這條 thread 自己的** `registry.sessions`（不走行程級的
   // `session-lookup`：那條多 thread 時可能 `ambiguous`）。細節見 `pre-step-middleware.ts`。
+  const cutoffs = summaryCutoffsOf(registry);
   for (const { name, listener } of contributions.preSteps) {
-    registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
+    registry.middleware.use(
+      createPreStepMiddleware(name, listener, registry.sessions, (config, messages) =>
+        cutoffs.lookup(config, messages),
+      ),
+    );
   }
   // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才在
   // 段的最後（前綴是前置，位置不影響）；記憶在基座最內層，接在後綴之後。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。

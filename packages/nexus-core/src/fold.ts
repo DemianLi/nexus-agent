@@ -133,6 +133,7 @@ import {
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
+import { summaryCutoffsOf } from './summary-cutoffs.js';
 import type { SummarizationSettings } from './summarization.js';
 import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
@@ -844,7 +845,7 @@ export function foldRegistry(
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
     { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
-    // 先讀後改那一段（#2414）緊貼策略外側、在摘要器外層（摘要器估 token 時算得到它，見 `prompt-sections.ts` 檔頭）；無狀態，共用一份。
+    // 先讀後改那一段（#2414）緊貼策略外側；無狀態，共用一份。摘要器同名取代回預設疊第三格，這一段在它內層，見 `prompt-sections.ts` 檔頭。
     // 策略沒掛就沒有這一段。
     shared(
       'observationPrompt',
@@ -1594,24 +1595,21 @@ function repeatReminderDisposition(
 /**
  * 摘要器的**工廠**。明著關掉時工廠給的是同名空殼。
  *
- * **回工廠而不是一份實例，是量出來的。** `createSummarizationMiddleware` 把
- * `sessionId` 與 `tokenEstimationMultiplier` 放在 closure 裡（`let sessionId = null`），
- * 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`。一份實例同時掛在 root 與每個
- * subagent 上的話，**它們共用那個 closure**——實測到的下場是 root 與 subagent 的歷史
+ * **回工廠而不是一份實例，是量出來的。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`，而 `sessionId` 在
+ * `summarization.ts` 的 `createSummarizer` 裡生一次、跟著那顆實例走（#2416）。一份實例同時掛在 root 與每個
+ * subagent 上的話，**它們共用那個會話名**——實測到的下場是 root 與 subagent 的歷史
  * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話。
  *
  * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次
- * `createSummarizationMiddleware({ backend })`，不共用。基座另外還在 `task` 工具裡替
- * subagent 的 state 塞一個新的 `_summarizationSessionId`，但那條路徑在共用實例底下
- * 沒有把兩邊分開——所以答案是別共用，不是靠那個欄位。
+ * `createSummarizationMiddleware({ backend })`，不共用。基座的 `task` 工具另外還替 subagent 的 state
+ * 塞一個新的會話 id，我們的摘要器不讀它——會話名只看實例，所以答案是別共用。
  *
  * **關掉是給空殼，不是不給。** 不給的話基座會補回它自己那顆——一組沒有人在檢查的門檻，
  * 加上寫死的 `/conversation_history`，那正是
  * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態。同名取代是
  * 唯一能讓基座那顆消失的縫（見 {@link SUMMARIZATION_MIDDLEWARE_NAME}）；基座的
  * `excludedMiddleware` 掛在按模型名稱查的行程級 profile 上，做不成「這次組裝關掉」。
- * 空殼沒有 `stateSchema`，也沒有會變成圖節點的鉤子：基座的 `task` 照樣往子代理的 state 塞
- * `_summarizationSessionId`，實測委派不受影響（`summarization.test.ts`）。
+ * 空殼沒有 `stateSchema`，也沒有會變成圖節點的鉤子，實測委派不受影響（`summarization.test.ts`）。
  * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。有會話註冊表時它帶一個 `wrapModelCall`，把日誌上記過的剪法與
  * 參數截斷換上去（{@link createRecordedProjectionShell}，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）；沒有就只有名字。
  *
@@ -1651,6 +1649,8 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
     options.modelSelection === undefined
       ? undefined
       : summaryModelOf(options.modelSelection, registry.sessions);
+  // 切點表一次組裝一張，root 與子代理共用（條目按身分分開），`agent/pre-step` 也問同一張（summary-cutoffs.ts）。
+  const cutoffs = summaryCutoffsOf(registry);
   return () =>
     createSummarizer(
       backend,
@@ -1662,6 +1662,7 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
       summaryModel,
       undefined,
       options.streamRetry,
+      cutoffs,
     );
 }
 

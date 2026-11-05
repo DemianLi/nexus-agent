@@ -197,9 +197,9 @@ describe('提醒在正式路徑上進得了模型的 prompt', () => {
  * 這件事在那組裡一次都沒發生過——而 `repeat-reminder.ts` 的檔頭偏偏對它們的互動下了一個
  * 結論。**那個結論要有一條測試撐著，不然它只是一段推理。**
  *
- * 結論本身是查原始碼查出來的：基座的摘要器不改寫 `state.messages`，它只記一顆
- * `_summarizationEvent`，每次模型呼叫由 `getEffectiveMessages` 現組
- * `[summary, ...messages.slice(cutoffIndex)]`（`deepagents@1.13.1`，
+ * 結論本身是查原始碼查出來的：摘要器不改寫 `state.messages`，切點記在組裝的切點表
+ * （`@nexus/core` 的 `summary-cutoffs.ts`），每次模型呼叫現組
+ * `[summary, ...messages.slice(cutoffIndex)]`，同基座（`deepagents@1.13.1`，
  * `dist/langsmith-zm0ILQsV.js:2697`）。我們讀完整的 `state.messages`，所以剪裁看不到。
  *
  * 判準選「第 8 次那條詳細提醒出現過」而不是「有提醒」：鏈若在摘要那一輪被打斷，計數會

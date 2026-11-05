@@ -102,8 +102,8 @@ import type { ToolErrorInfo } from './tool-error-codes.js';
  *
  * `compaction/summary` 生產者同第四種，但**掛的位置不一樣**：它不是一顆新名字的
  * middleware，是{@link ./summarization.ts | 我們那個同名取代的摘要器}多包的一層。理由是
- * 基座**只在回傳值裡**交出摘要事件（`new Command({ update: { _summarizationEvent } })`），
- * 一顆排在它後面的新 middleware 看不到那個回傳值。「兩條路都產得出來嗎」跟 `model/usage`
+ * 摘要只在摘要器裡面看得到（生好、交下去的那一刻），一顆排在它後面的新 middleware 只看到摘要過的請求，
+ * 認不出這一步摘要過。「兩條路都產得出來嗎」跟 `model/usage`
  * 同一條理由：它就是那一份組裝本身。
  * 見 [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
  *
@@ -1072,8 +1072,8 @@ export interface SessionEventMap {
    * 整個操作的鎖**串起來：中途崩潰的形態是可偵測的遺留鎖（有 `start` 沒有配對的 `end`），
    * 而不是一個謊稱完成的 `end`。
    *
-   * **我們湊不出那把鎖，所以只留中間那顆。** 基座沒有把「開始壓縮」與「壓縮結束」暴露成
-   * 任何東西——它只在**成功走完**之後回一個帶 `_summarizationEvent` 的 `Command`。硬記
+   * **我們湊不出那把鎖，所以只留中間那顆。** 摘要器（流程照搬基座，`summarizer-engine.ts`）沒有「開始壓縮」與
+   * 「壓縮結束」這兩個時刻——它只在**成功走完**之後把摘要過的請求交下去。硬記
    * 一顆 `start` 只能記在「我們猜它要壓了」的時間點，而那個猜測正是 dsh 的鎖要消滅的
    * 那種東西。一顆誠實的事件勝過三顆撐不起語義的。**代價明寫**：壓縮失敗在日誌裡是
    * 沉默的，不是一顆帶 `error` 的 `end`。
@@ -1092,16 +1092,16 @@ export interface SessionEventMap {
    * `historyPathPrefix` 與一個隨機 session id，不含使用者輸入，但它仍然是路徑不是計數。
    *
    * **`cutoffIndex` 與 `messagesBefore` 是同一組座標**：原始訊息串（不是摘要器眼中的
-   * 有效串）的索引與長度。基座存進 state 的就是原始座標——`getEffectiveMessages` 拿它去
-   * `messages.slice(cutoffIndex)`。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
+   * 有效串）的索引與長度。切點表記的就是原始座標——套用時拿它去
+   * `messages.slice(cutoffIndex)`（`summary-cutoffs.ts` 的 `applySummaryCutoff`）。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
    * 多前面的多少」。
    *
    * **`summary` 是換上去的那則摘要訊息**（從格式 9 起，[#305](https://github.com/DemianLi/nexus-agent/issues/305)），
    * 照 dsh 的 `compaction/summary` 帶 `summary`（`packages/compaction/compaction/src/types.ts`）。1 到 8 刻意
    * 不記，理由是檔頭那條「不記訊息內容」；推模型歷史的一側要把被壓掉的那一段換成它，所以它要在日誌裡。
    * dsh 由緊接著的一顆 `user/message {surfaceOp: replace}` 真正取代那一段；我們沒有 surface 那一軸，
-   * 取代的規則是基座的 `getEffectiveMessages`——`[summaryMessage, ...messages.slice(cutoffIndex)]`，
-   * graph state 裡的 `messages` 本身不動（`deepagents@1.13.1` `dist/langsmith-zm0ILQsV.js:2697-2702`）。
+   * 取代的規則是 `[summaryMessage, ...messages.slice(cutoffIndex)]`（`summary-cutoffs.ts` 的 `applySummaryCutoff`，同基座的
+   * `getEffectiveMessages`，`deepagents@1.13.1` `dist/langsmith-zm0ILQsV.js:2697-2702`），graph state 裡的 `messages` 本身不動。
    * 8 以前的檔沒有這一格，所以型別上是選填。
    *
    * ⚠️ 摘要本文原樣進遙測，同 `assistant/message`。
