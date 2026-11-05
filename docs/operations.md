@@ -903,9 +903,9 @@ upstream nexus_agent {
     server unix:/run/nexus-agent/serve.sock;
 }
 
-# 宿主頁的伺服器。沒有嵌入元件、只開獨立頁面的話，拿掉這段與下面的 location /。
+# 宿主頁的伺服器，位址換成它實際的。沒有嵌入元件、只開獨立頁面的話，拿掉這段與下面的 location /。
 upstream host_app {
-    server 127.0.0.1:8080;
+    server 192.0.2.10:80;
 }
 
 map $http_upgrade $connection_upgrade {
@@ -946,7 +946,6 @@ server {
         client_max_body_size 300m;
     }
 
-    # 其餘路徑都是宿主頁的伺服器的。
     location / {
         proxy_pass http://host_app;
         proxy_http_version 1.1;
@@ -954,15 +953,14 @@ server {
         proxy_set_header Host $http_host;
         # 宿主頁的伺服器在代理後面看不到 https 與使用者的位址。
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
 
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
 
-        # 串流與上傳都邊收邊轉。
-        proxy_buffering off;
+        # 上傳的本文邊收邊轉。
         proxy_request_buffering off;
-        # 長連線閒置超過 nginx 預設的 60 秒不切斷。
+        # 長連線閒置到 1 小時才切斷（nginx 預設 60 秒）。
         proxy_read_timeout 1h;
 
         # 照宿主頁的伺服器自己的上限。
@@ -988,10 +986,14 @@ server {
 
 **轉給宿主頁的伺服器**（`location /`）。這一半是通用寫法，不知道對方系統用了什麼，所以每一件都明寫：
 
-- **Host 原樣轉、帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`**：TLS 在代理就結束了，對方看到的是 `http` 與代理的位址；靠這兩個標頭才知道使用者走的是 `https`、從哪裡來。
+- **Host 原樣轉、帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`**：TLS 在代理就結束了，對方看到的是 `http` 與代理的位址；靠這兩個標頭才知道使用者走的是 `https`、從哪裡來。這台代理在最外層，`X-Forwarded-For` 用 `$remote_addr` 覆寫，不接瀏覽器自己送來的值，對方記到的位址偽造不了。
 - **轉 WebSocket**：跟 `/nexus/` 共用同一個 `map`，沒有升級的請求 `Connection` 是空的。`proxy_http_version 1.1` 的理由同上。
 - **上傳不緩衝**：`proxy_request_buffering off` 讓上傳的本文邊收邊轉。不關的話，nginx 先收完整個本文才開始轉，對方在使用者送完之前收不到任何東西。
-- **下行不緩衝**：`proxy_buffering off` 讓 nginx 收到上游的一段就轉給瀏覽器，不先存進自己的緩衝區或暫存檔。serve 的 SSE 自帶 `X-Accel-Buffering: no`，宿主頁的伺服器不一定有，所以這一半明寫。在 1.30.6 上，替身每秒送一顆小事件，拿掉這行也是逐顆到，突變抓不到；留著是給替身沒涵蓋的上游與 nginx 版本。代價是慢的瀏覽器會佔住上游連線，直到它收完。
+- **下行的串流不用關緩衝**：在 nginx 1.30.6 上，上游每秒送一顆 SSE 事件、不帶 `X-Accel-Buffering`，經這個範本到瀏覽器的時間是 1、1002、2003、3004 ms，逐顆到；上游走 HTTP/1.0 也一樣。所以範本不放 `proxy_buffering off`：它管的是這一段的全部回應，大檔下載也在內，慢的瀏覽器會一直佔住宿主頁伺服器的上游連線。
+
+  串流真的被延遲時：
+  1. 首選：請宿主頁的伺服器在串流的回應上帶 `X-Accel-Buffering: no`。只對那幾條回應生效，serve 自己的 SSE 也是這樣做。
+  2. 對方改不了時：只替串流那條路徑另開一個 `location`，在裡面加 `proxy_buffering off`，其餘照 `location /` 抄一份。代價同上，只落在那條路徑。不要對整個 `location /` 關緩衝。
 - **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
 - **本文上限**：照對方系統自己的上限填。
 

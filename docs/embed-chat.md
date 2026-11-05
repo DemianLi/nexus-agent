@@ -174,7 +174,7 @@ window.addEventListener('keydown', (event) => {
 
 ## 開發時接上另一台主機的 serve
 
-宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁的伺服器設反向代理。
+宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁前面放反向代理。
 
 serve 沒給 `--trusted-host` 時只收 Host 是 loopback 的請求；Origin 有帶的話，要跟 Host 是同一個 authority，不然回 403。工程師開 `http://localhost:<port>`，開發伺服器的 proxy 設 `changeOrigin: false`，轉出去的 Host 仍是 `localhost:<port>`；Origin 也要原樣轉出去，兩條才都過。瀏覽器看來頁面、`embed.js` 與 API 同源，serve 不用開 CORS。
 
