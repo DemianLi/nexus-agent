@@ -13,7 +13,7 @@
  *   `request['state']` 與從 `request` 解構 `state` 都算。
  * - `beforeAgent`／`beforeModel`／`afterModel`／`afterAgent` 的第一個參數（state）有用到。物件寫法
  *   `{ hook }` 的 `hook` 與 `{ step }` 的 `step`（`@nexus/core` 的 `createHookStepMiddleware`）也算；沒有參數不算，參數名以 `_` 開頭的不看本體、一律不算。第一個參數是解構的、
- *   或掛鉤寫成別處的函式名（`beforeModel: fn`），這條看不到。
+ *   或掛鉤寫成別處的函式名（`beforeModel: fn`、`{ step: fn }`、簡寫 `{ step }`），這條看不到。
  *
  * 白名單按「檔案 › 頂層宣告 寫法」數次數，不記行號：`getState()` 與 `request.state` 每一處各數一次，掛鉤每顆
  * 數一次；同一個頂層宣告裡多一處就紅，無關的改動讓行號漂了不紅。參數不叫 `request` 的請求整個看不到；
