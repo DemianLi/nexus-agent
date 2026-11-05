@@ -18,7 +18,9 @@ const GID = process.getgid?.() ?? 0;
 const servers: Server[] = [];
 afterEach(async () => {
   await Promise.all(
-    servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    servers
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
   );
 });
 

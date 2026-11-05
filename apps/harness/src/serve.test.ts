@@ -81,9 +81,9 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--socket-group', '101', ...url])).toThrow(
       '--socket-group 要配 --unix-socket',
     );
-    expect(() => parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101'])).toThrow(
-      '--unix-socket 要配 --public-url',
-    );
+    expect(() =>
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101']),
+    ).toThrow('--unix-socket 要配 --public-url');
     // 明著給的 port 才算撞：預設的 port 不擋。
     expect(() =>
       parseServeArgs([
