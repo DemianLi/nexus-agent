@@ -15,7 +15,7 @@
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——這是一個長命的行程，漏了不會有任何錯誤訊息。**MCP 的連線不在這裡面**：
  * 整台 serve 一份連線池，一份設定一個 stdio 子行程，所有 thread 共用，關掉 server 時才收（#1677）。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
- * 在綁 port 之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
+ * 在開始聽之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
  * `ScriptedChatModel` 會當場失敗而不是靜默重播。**那個失敗會以
@@ -295,7 +295,7 @@ const USAGE = `用法：
   --public-url <url>   瀏覽器實際開的網址（例如 https://app.example/nexus/），啟動時印的登入網址用它
                        只是公告：放行要另外給 --trusted-host
   --unix-socket <path> 改聽這個 Unix socket、不綁 port，只讓同主機的反向代理連進來；不能配 --port，要配 --socket-group 與 --public-url
-                       socket 所在目錄要是 serve 的使用者自己的、群組是 --socket-group、權限恰好 750 或 710，否則起不來
+                       socket 所在目錄要是 serve 的使用者自己的、群組是 --socket-group、rwx 權限恰好 750 或 710，否則起不來
   --socket-group <gid> 代理所在群組的數字 gid（例如 getent group nginx 的第三欄）
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
@@ -341,7 +341,7 @@ function parsePublicUrl(raw: string): string {
 /**
  * `--unix-socket` 與 `--socket-group`：兩個一起給或都不給，不能配明著給的 `--port`，要配 `--public-url`。
  *
- * @throws 少了另一半、撞到 `--port`、沒有 `--public-url`，或 gid 不是數字；訊息接著印用法。
+ * @throws 少了另一半、`--unix-socket` 給了空字串、撞到明著給的 `--port`、沒有 `--public-url`，或 gid 不是非負整數；訊息接著印用法。
  */
 function parseUnixSocket(
   values: {
@@ -354,7 +354,10 @@ function parseUnixSocket(
   const path = values['unix-socket'];
   const group = values['socket-group'];
   if (path === undefined && group === undefined) return undefined;
-  if (path === undefined || path.trim() === '') {
+  if (path !== undefined && path.trim() === '') {
+    throw new Error(`--unix-socket 要給 socket 的路徑。\n\n${USAGE}`);
+  }
+  if (path === undefined) {
     throw new Error(`--socket-group 要配 --unix-socket <path>。\n\n${USAGE}`);
   }
   if (group === undefined) {
@@ -716,7 +719,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     return undefined;
   }
 
-  // socket 目錄的權限排在 home 鎖之前驗（#2369）：不合就起不來，一個檔都沒寫。對話行程的 socket 由監督行程給，兩個不能一起。
+  // socket 目錄的權限排在 home 鎖之前驗（#2369）：不合就起不來，一個檔都沒寫。
   if (invocation.unixSocket !== undefined) {
     if (options.conversation !== undefined) {
       throw new Error('對話行程不收 --unix-socket：它的 socket 由監督行程給（--socket）');
@@ -1058,7 +1061,7 @@ async function startServer(
   //
   // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
   // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
-  // 只印這一次，在綁 port 之前。
+  // 只印這一次，在開始聽之前。
   // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
   // 型錄上宣告逐位切詞的模型（#1102）按位數估，其餘照 o200k。
   const tokenAnchorBook = new TokenAnchorBook({
@@ -1194,7 +1197,7 @@ async function startServer(
         }
       : { kind: 'conversation', mode: options.conversation };
   const auth: WireAuth = listening.kind === 'front' ? listening.auth : listening.mode.auth;
-  // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
+  // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在開始聽之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
   const metricsToken = metricsEnabled
@@ -1239,7 +1242,7 @@ async function startServer(
   const sharedWorkspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
   const threadRootsBase = resolveThreadRootsBase(env);
   if (options.workspaceRootOf === undefined && sharedWorkspaceRoot !== undefined) {
-    // 基底不能跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄重疊（兩個方向）；排在綁 port 之前，起不來的訊息點名是哪一對。
+    // 基底不能跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄重疊（兩個方向）；排在開始聽之前，起不來的訊息點名是哪一對。
     await assertThreadRootsBaseSeparate({
       base: threadRootsBase,
       others: [

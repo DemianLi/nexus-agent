@@ -68,7 +68,7 @@ async function start(
   return running as RunningServe;
 }
 
-/** 經 socket 打一個請求，Host 照代理會帶的寫。 */
+/** 經 socket 打一個 GET；Host 等標頭由呼叫方給。 */
 function socketGet(
   socketPath: string,
   path: string,
@@ -141,7 +141,7 @@ describe.runIf(POSIX)('serve 聽 --unix-socket', () => {
     const page = await socketGet(socketPath, '/', { ...PROXIED, cookie });
     expect({ status: page.status, body: page.body }).toEqual({ status: 200, body: INDEX });
     expect((await socketGet(socketPath, '/livez', PROXIED)).status).toBe(200);
-    // 營運者在主機上直接打探針：curl --unix-socket 帶的 Host 是 localhost。
+    // 營運者在主機上直接打探針：`curl --unix-socket … http://localhost/livez` 的 Host 是 localhost。
     expect((await socketGet(socketPath, '/livez', { host: 'localhost' })).status).toBe(200);
     const sameOrigin = {
       ...PROXIED,

@@ -81,6 +81,9 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--socket-group', '101', ...url])).toThrow(
       '--socket-group 要配 --unix-socket',
     );
+    expect(() => parseServeArgs(['--unix-socket', '', ...url])).toThrow(
+      '--unix-socket 要給 socket 的路徑',
+    );
     expect(() =>
       parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101']),
     ).toThrow('--unix-socket 要配 --public-url');
