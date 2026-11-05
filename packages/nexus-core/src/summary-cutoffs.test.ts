@@ -213,6 +213,18 @@ describe('最外層：這一步開始時讀、結束時落表', () => {
     expect(table.lookup(ROOT, messages)?.cutoffIndex).toBe(2);
   });
 
+  it('只換 wrapModelCall：名字與其他鉤子原樣保留', () => {
+    const beforeAgent = async () => undefined;
+    const { base } = innerLayer({});
+    const outer = withSummaryCutoffs(
+      { ...base, beforeAgent } as never,
+      new SummaryCutoffTable(),
+    ) as unknown as Record<string, unknown>;
+    expect(outer.name).toBe('Summarization');
+    expect(outer.beforeAgent).toBe(beforeAgent);
+    expect(outer.wrapModelCall).not.toBe(base.wrapModelCall);
+  });
+
   it('沒有 note：表不動', async () => {
     const table = new SummaryCutoffTable();
     const messages = withIds(4);

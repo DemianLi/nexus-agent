@@ -10,7 +10,7 @@
  * | 項目 | 量到的 |
  * | --- | --- |
  * | 日誌 | 兩筆 `compaction/summary` 都在（attempt 1 的先記在它那次 `model/start` 之前，那次超窗了）。**每一次主呼叫，從日誌推出的歷史都等於實際送出的**，包括升級之後那一次 |
- * | graph state | 訊息串沒有被動到（切點在組裝的切點表，同一步裡落定的是最後一次，見 `packages/nexus-core/src/overflow-retain-zero.test.ts`） |
+ * | graph state | 訊息串沒有被動到（切點在組裝的切點表，同一步裡落定的是最後一次：單元見 `packages/nexus-core/src/summary-cutoffs.test.ts`「同一步 note 兩次」，整合見 `summary-shrink.test.ts`「不打摘要模型、不提交」那條） |
  * | 歷史檔 | **一個區段**：attempt 2 卸載的（含 attempt 1 那一則）。attempt 1 的寫入在同一步內被 attempt 2 取代，第 1 句只出現一次 |
  *
  * ## 歷史檔那一格的前後

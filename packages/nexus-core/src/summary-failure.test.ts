@@ -77,6 +77,8 @@ async function run(options: {
   signal?: AbortSignal;
   /** 給了就是子代理的模型呼叫。 */
   checkpointNs?: string;
+  /** 歷史檔寫不進去（backend 的 `write` 回 `error`）。 */
+  writeFails?: boolean;
 }) {
   const reports: string[] = [];
   const writes: string[] = [];
@@ -96,7 +98,7 @@ async function run(options: {
     {
       write: async (path: string) => {
         writes.push(path);
-        return { path };
+        return options.writeFails === true ? { error: 'permission denied' } : { path };
       },
     } as never,
     {
@@ -613,5 +615,21 @@ describe('摘要器進同步估算之前先預熱', () => {
     } finally {
       encode.mockRestore();
     }
+  });
+});
+
+describe('歷史檔寫不進去（#66）', () => {
+  it('照樣摘要、照樣落表，切點的 filePath 是 null', async () => {
+    const out = await run({ settings: TOKEN_TRIGGER, writeFails: true });
+    expect(out.error).toBeUndefined();
+    expect(out.writes.length).toBeGreaterThan(0);
+    expect(out.committed).toBeDefined();
+    expect(out.committed?.filePath).toBeNull();
+    expect(out.handled[0]![0]!.text).toContain('這是摘要。');
+  });
+
+  it('對照：寫得進去，filePath 是寫進去的那個路徑', async () => {
+    const out = await run({ settings: TOKEN_TRIGGER });
+    expect(out.committed?.filePath).toBe(out.writes.at(-1));
   });
 });

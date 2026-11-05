@@ -11,13 +11,16 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   AGENT_INSTRUCTIONS_INTRO,
   isAgentInstructionsMessage,
 } from '@nexus/plugin-agent-instructions';
-import { REPEAT_REMINDER_MARKER } from '@nexus/core';
+import { REPEAT_REMINDER_MARKER, subagentLinks } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { Event } from '@nexus/wire';
@@ -550,6 +553,139 @@ describe('摘要之後下一句話把基線補回來', () => {
       await rm(workspace, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+/**
+ * 背景子代理的模型：摘要器那次（prompt 沒有 system）回摘要；agent 自己的呼叫，第一輪先叫 `echo` 把訊息墊到摘要門檻之上再收工，
+ * 第二輪直接收工。輪次由測試換。
+ */
+class BackgroundWorkerModel extends BaseChatModel {
+  round: 1 | 2 = 1;
+  readonly agentCalls: { readonly round: 1 | 2; readonly prompt: BaseMessage[] }[] = [];
+  #echoes = 0;
+
+  _llmType(): string {
+    return 'background-worker';
+  }
+
+  override bindTools(): this {
+    return this;
+  }
+
+  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    const reply = (message: AIMessage): ChatResult => ({
+      generations: [{ text: message.text, message }],
+      llmOutput: {},
+    });
+    if (messages[0]?.getType() !== 'system') return reply(new AIMessage('背景的摘要。'));
+    this.agentCalls.push({ round: this.round, prompt: [...messages] });
+    if (this.round === 1 && this.#echoes < 6) {
+      this.#echoes += 1;
+      return reply(
+        new AIMessage({
+          content: '再來。',
+          tool_calls: [
+            {
+              id: `bg_echo_${String(this.#echoes)}`,
+              name: ECHO_TOOL_NAME,
+              args: { message: 'x' },
+              type: 'tool_call',
+            },
+          ],
+        }),
+      );
+    }
+    return reply(new AIMessage(this.round === 1 ? '第一輪收工。' : '第二輪收工。'));
+  }
+}
+
+/**
+ * **背景子代理的下一輪也補得回來**（#2416 條件 D 的子代理那條路）。背景子代理每一輪接在同一份 state 上（`thread_id` 是它自己的日誌、
+ * 身分是背景 id），`agent/pre-step` 與摘要器拿同一張切點表、同一把鍵。第一輪摘要把基線切掉，第二輪的第一次呼叫要看得到恰好一則，
+ * 排在摘要之後；pre-step 讀不到切點的話，舊基線還在 state 裡，就不會補。
+ *
+ * 前景子代理每次委派都是新的身分，第一步之前表上沒有它的切點，所以沒有對應的這一條。
+ */
+describe('背景子代理摘要之後，下一輪把基線補回來', () => {
+  it('第一輪摘要切掉基線；sendFromUser 開的第二輪，第一次呼叫看得到恰好一則，排在摘要之後', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-bg-'));
+    await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
+    const worker = new BackgroundWorkerModel({});
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          {
+            content: '委派。',
+            toolCalls: [
+              {
+                name: 'subagent',
+                id: 'root-bg',
+                args: { description: '幹活', subagent_type: 'worker', run_in_background: true },
+              },
+            ],
+          },
+          ...Array.from({ length: 6 }, () => ({ content: '根知道了。' })),
+        ],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [
+        ...shipped,
+        {
+          plugin: {
+            name: 'bg-worker-source',
+            apply(registry) {
+              registry.subagents.register({
+                name: 'worker',
+                description: '幹活的。',
+                systemPrompt: '你是 worker。',
+                model: worker as never,
+              });
+            },
+          },
+        },
+      ],
+      backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+      summarization: { trigger: [{ type: 'messages', value: 8 }], retainTokens: 24 },
+      backgroundSubagents: { maxActive: 4 },
+    });
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'instructions-bg');
+    const detach = built.attachSession(pump.sessions, {});
+    try {
+      await pump.submit({ kind: 'message', text: '開工' });
+      await pump.whenIdle();
+      const child = () => pump.sessions.list().find((entry) => entry.address.kind === 'subagent');
+      const turnEnds = () =>
+        (child()?.log.events ?? []).filter((event) => event.type === 'turn/end').length;
+      await until(() => turnEnds() >= 1, 15000);
+
+      const firstRound = worker.agentCalls.filter((call) => call.round === 1);
+      const lastOfFirst = firstRound.at(-1)?.prompt ?? [];
+      // 前提：第一輪真的摘要過，而且收尾那次已經看不到基線。沒有這兩條，下面那條在沒摘要過的子代理上也會通過。
+      expect(lastOfFirst.some(isSummary)).toBe(true);
+      expect(baselines(lastOfFirst)).toHaveLength(0);
+
+      worker.round = 2;
+      const links = subagentLinks(pump.sessions.root.events);
+      expect(links).toHaveLength(1);
+      const runId = links[0]!.childId.slice('instructions-bg/'.length);
+      await detach.background!.sendFromUser(runId, '再來一輪');
+      await until(() => turnEnds() >= 2, 15000);
+
+      const first = worker.agentCalls.find((call) => call.round === 2)?.prompt ?? [];
+      expect(first.some(isSummary)).toBe(true);
+      expect(baselines(first)).toHaveLength(1);
+      expect(first.indexOf(baselines(first)[0] as BaseMessage)).toBeGreaterThan(
+        first.findIndex(isSummary),
+      );
+      // 補的那一則記在背景子代理自己那份日誌：兩輪各一筆。
+      expect(injectedBaselines(child()?.log.events ?? [])).toHaveLength(2);
+    } finally {
+      detach();
+      await pump.whenIdle().catch(() => undefined);
+      await built.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
 });
 
 /**
