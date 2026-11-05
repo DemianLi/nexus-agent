@@ -10,6 +10,9 @@
  * 事件表上的每個名字，產品碼裡都要有一處 `emit`／`serial`／`waterfall`／`observe` 以字串字面量派發它。
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -129,5 +132,34 @@ describe('生產者掃描器本身（正向對照）', () => {
       other.send('a/five');
     `;
     expect(scanEventProducers(text)).toEqual(['a/one', 'a/two', 'a/three', 'a/four']);
+  });
+});
+
+describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件', () => {
+  // `scanEventTableTree` 只替寫得出 `Events` 的檔建 AST。識別字可以用 `\u` 跳脫來寫，這種檔原始碼裡沒有那幾個字，仍要掃到。
+  it('`Events` 用 `\\u` 跳脫寫的檔照樣掃得到', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nexus-event-scan-'));
+    try {
+      const src = join(root, 'packages', 'probe', 'src');
+      mkdirSync(src, { recursive: true });
+      mkdirSync(join(root, 'apps'));
+      const member = (name: string) =>
+        `  /**\n   * 探針事件。\n   * @mode emit\n   */\n  '${name}'(): void;\n`;
+      writeFileSync(
+        join(src, 'plain.ts'),
+        `export interface Events {\n${member('probe/plain')}}\n`,
+      );
+      writeFileSync(
+        join(src, 'escaped.ts'),
+        `export interface \\u0045vents {\n${member('probe/escaped')}}\n`,
+      );
+      expect(
+        scanEventTableTree(root)
+          .map((event) => event.name)
+          .sort(),
+      ).toEqual(['probe/escaped', 'probe/plain']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
