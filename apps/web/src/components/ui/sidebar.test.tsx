@@ -56,7 +56,7 @@ test('手機抽屜的說明是「對話列表與新對話。」', async () => {
 });
 
 /**
- * 第 53 條（`patches/0013-sidebar-no-cookie.patch`）：切換開關不寫 cookie。`path=/` 的 cookie 會跟著同源宿主頁的每個請求送出去
+ * `vendor/solid-glass/README.md`「本地修改」第 53 條（`patches/0013-sidebar-no-cookie.patch`）：切換開關不寫 cookie。`path=/` 的 cookie 會跟著同源宿主頁的每個請求送出去
  * （#2438）；沒有人讀它，不寫也不會少記任何東西。
  */
 test('切換開關不寫 cookie', () => {
