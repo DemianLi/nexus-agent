@@ -36,12 +36,12 @@ import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
 import './events.js';
 import type { AgentStepPayload } from './events.js';
+import { abortReason, raceAbort } from './abort.js';
+import { NodeTask } from './langgraph-compat.js';
 import {
-  abortReason,
   callModel,
+  drivenByOnion,
   hookTargets,
-  NodeTask,
-  raceAbort,
   runHook,
   runTool,
   systemMessageOf,
@@ -190,6 +190,10 @@ export class NativeAgent {
   readonly #defaults: LoopDefaults;
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
+  /** 洋蔥實際驅動的那一份（{@link drivenByOnion}），跟 {@link NativeAgent.middleware} 一一對應。 */
+  readonly #driven: readonly LoopMiddleware[];
+  /** 有沒有誰執行 `wrapModelCall` 新加的工具，照原物件算：標成由洋蔥外面做的 `wrapToolCall` 也算。 */
+  readonly #executesAddedTools: boolean;
   readonly #tools: readonly InvokableTool[];
   readonly #returnDirect: ReadonlySet<string>;
   readonly #channels: StateChannels;
@@ -208,11 +212,13 @@ export class NativeAgent {
     this.#threads = threads;
     this.#defaults = defaults;
     this.middleware = params.middleware as readonly LoopMiddleware[];
-    const unsupported = this.middleware.find((m) => m.afterModel !== undefined);
+    this.#driven = this.middleware.map(drivenByOnion);
+    this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
+    const unsupported = this.#driven.find((m) => m.afterModel !== undefined);
     if (unsupported !== undefined) {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
     }
-    for (const m of this.middleware) {
+    for (const m of this.#driven) {
       for (const [kind, allowed] of SUPPORTED_JUMPS) {
         const hook = m[kind];
         const extra =
@@ -224,7 +230,7 @@ export class NativeAgent {
         }
       }
     }
-    const middlewareTools = this.middleware.flatMap(
+    const middlewareTools = this.#driven.flatMap(
       (m) => ((m as { tools?: readonly unknown[] }).tools ?? []) as readonly InvokableTool[],
     );
     this.#tools = [...(params.tools as readonly InvokableTool[]), ...middlewareTools];
@@ -448,7 +454,7 @@ export class NativeAgent {
 
     // `beforeAgent` 跳 `end`：同 LangGraph 落到 exitNode，`afterAgent` 照跑，也照樣能跳回模型。
     let exiting = false;
-    for (const m of this.middleware) {
+    for (const m of this.#driven) {
       if (m.beforeAgent === undefined) continue;
       budget.take();
       const name = `${m.name}.before_agent`;
@@ -477,7 +483,7 @@ export class NativeAgent {
                 }));
           if (decision.kind === 'reject') throw new TurnBlockedError();
           let ended = false;
-          for (const m of this.middleware) {
+          for (const m of this.#driven) {
             if (m.beforeModel === undefined) continue;
             budget.take();
             const name = `${m.name}.before_model`;
@@ -524,8 +530,8 @@ export class NativeAgent {
     budget: StepBudget,
     note: (name: string, update: Record<string, unknown>) => void,
   ): Promise<boolean> {
-    for (let i = this.middleware.length - 1; i >= 0; i--) {
-      const m = this.middleware[i]!;
+    for (let i = this.#driven.length - 1; i >= 0; i--) {
+      const m = this.#driven[i]!;
       if (m.afterAgent === undefined) continue;
       budget.take();
       const name = `${m.name}.after_agent`;
@@ -564,7 +570,8 @@ export class NativeAgent {
             model: this.#params.model,
             systemMessage: systemMessageOf(this.#params.systemPrompt),
             tools: this.#tools,
-            middleware: this.middleware,
+            middleware: this.#driven,
+            executesAddedTools: this.#executesAddedTools,
             ...(events !== undefined && {
               around: (call) => events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
             }),
@@ -634,7 +641,7 @@ export class NativeAgent {
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
-        const result = await runTool(call, this.#tools, this.middleware, tasks[index]!, owner);
+        const result = await runTool(call, this.#tools, this.#driven, tasks[index]!, owner);
         results[index] = result;
         note('tools', isCommand(result) ? commandUpdateOf(result) : { messages: [result] });
       }),

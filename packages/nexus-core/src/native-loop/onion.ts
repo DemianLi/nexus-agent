@@ -8,8 +8,7 @@
  * - 模型洋蔥：`dist/agents/nodes/AgentNode.js` 的 `#invokeModel`（第一顆在最外層、系統訊息兩種改法互斥、回 `Command` 時用最內層記下的 AI 訊息補寫）；
  * - 工具洋蔥：`dist/agents/utils.js` 的 `wrapToolCall`／`chainToolCallHandlers` 與 `nodes/ToolNode.js` 的 `runTool`（工具錯重拋給圍堵；參數解析失敗、找不到工具回錯誤訊息）。
  *
- * 每一層都跑在 `AsyncLocalStorageProviderSingleton.runWithConfig` 裡，`getConfig()`、`getCurrentTaskInput()` 與 deepagents 的
- * 零參數 `StateBackend`（`__pregel_read`／`__pregel_send`）讀到的是 native loop 合成的 config。
+ * 每一層都經 `langgraph-compat.ts` 的 `NodeTask.run` 跑，`getConfig()` 等讀到的是那裡合成的 config。
  *
  * @module
  */
@@ -17,13 +16,13 @@
 import type { BaseMessage, ToolCall } from '@langchain/core/messages';
 import { AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
-import type { RunnableConfig } from '@langchain/core/runnables';
-import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { isCommand, isGraphInterrupt } from '@langchain/langgraph';
 import type { Command } from '@langchain/langgraph';
 import { ToolInputParsingException } from '@langchain/core/tools';
 import { MiddlewareError, ToolInvocationError } from 'langchain';
 
+import { invalidToolMessage } from './invalid-tool.js';
+import type { NodeTask } from './langgraph-compat.js';
 import { hookStateKeys, type LoopState, type StateChannels } from './state.js';
 
 /** 洋蔥裡用得到的 middleware 欄位；`createMiddleware` 的產物都符合。 */
@@ -86,129 +85,63 @@ export interface InvokableTool {
   invoke(input: unknown, config?: unknown): Promise<unknown>;
 }
 
+/** native 可以改由事件或服務做、不再經洋蔥驅動的那幾格。 */
+export type NativeHandledPart =
+  'beforeAgent' | 'beforeModel' | 'wrapModelCall' | 'wrapToolCall' | 'afterAgent' | 'tools';
+
+const nativeHandled = new WeakMap<object, ReadonlySet<NativeHandledPart>>();
+
 /**
- * 一個節點（一顆 hook、一次模型呼叫、一顆工具）的執行環境：合成的 config，加上這個節點經 `__pregel_send` 送出、
- * 還沒套進 state 的寫入（同 LangGraph：節點結束才套；`__pregel_read(…, true)` 看得到自己的）。
+ * 標明這顆 middleware 的某幾格在 native 下已經由事件或服務做，洋蔥不再驅動它們；`langgraph` 照舊跑整顆。一顆 middleware
+ * 分兩次搬時，搬出去的那一半在它自己的模組裡標，才不會跑兩次或一次都沒跑。要在 `createNativeAgent` 之前標：洋蔥驅動的那一份
+ * 在建構時就算好，之後標的不生效。TODO(#2416)：洋蔥拿掉時一起走。
+ * @param middleware - 那一顆；不複製，回同一個物件。
+ * @param parts - 改由別處做的格；這顆沒有的格當場拋，標錯不會靜靜沒作用。
+ * @returns `middleware` 本身。
  */
-export class NodeTask {
-  readonly writes: [string, unknown][] = [];
-  readonly config: RunnableConfig;
-
-  /**
-   * @param base - 這次 run 的 config（configurable、callbacks、signal、writer）。
-   * @param checkpointNs - 這個節點的命名空間（`model_request:<id>`、`tools:<id>`）。
-   * @param node - 節點名。
-   * @param state - 節點開始時的 state。
-   * @param channels - 合併規則。
-   * @param taskInput - `getCurrentTaskInput()` 讀到的值。
-   * @param onFlush - 節點寫回之後（{@link NodeTask.flush}）。
-   * @param stepSignal - 同一批工具共用、一顆拋了就舉起來的訊號；工具進 `invoke` 前看它。
-   * @param callerSignal - 呼叫端的 `config.signal`；{@link NodeTask.run} 照它中止這個節點。
-   */
-  constructor(
-    base: RunnableConfig,
-    checkpointNs: string,
-    node: string,
-    readonly state: LoopState,
-    private readonly channels: StateChannels,
-    taskInput: unknown,
-    private readonly onFlush?: () => void,
-    readonly stepSignal?: AbortSignal,
-    readonly callerSignal?: AbortSignal,
-  ) {
-    this.config = {
-      ...base,
-      metadata: { ...base.metadata, langgraph_node: node, langgraph_checkpoint_ns: checkpointNs },
-      configurable: {
-        ...base.configurable,
-        checkpoint_ns: checkpointNs,
-        __pregel_send: (writes: [string, unknown][]) => {
-          this.writes.push(...writes);
-        },
-        __pregel_read: (channel: string, fresh?: boolean) => this.#read(channel, fresh === true),
-        __pregel_scratchpad: { currentTaskInput: taskInput },
-      },
-    };
+export function handledOutsideOnion<M extends LoopMiddleware>(
+  middleware: M,
+  parts: readonly NativeHandledPart[],
+): M {
+  const missing = parts.filter((part) => middleware[part as keyof LoopMiddleware] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `middleware "${middleware.name}" 沒有 ${missing.join('、')}，不能標成由洋蔥外面做`,
+    );
   }
-
-  #read(channel: string, fresh: boolean): unknown {
-    if (!fresh) return this.state[channel];
-    const view: LoopState = { messages: this.state.messages, [channel]: this.state[channel] };
-    for (const [key, value] of this.writes) {
-      if (key === channel) this.channels.apply(view, { [key]: value });
-    }
-    return view[channel];
-  }
-
-  /**
-   * 在這個節點的 config 裡跑，照呼叫端的 signal 中止，同 LangGraph 的一個節點（`PregelRunner` 起跑前那一檢，加上節點那串
-   * `RunnableSequence` 的 `raceWithSignal`）：起跑前已中止拋 `Abort`；跑著時中止拋 signal 的 reason（{@link abortReason}），
-   * 這個節點的寫入不套。不多包一層 `async`：兄弟失敗時 `stepSignal` 要趕在兄弟進工具之前舉起來（`runTool`）。
-   * @param body - 要跑的東西。
-   * @returns 它的結果。
-   */
-  run<T>(body: () => Promise<T>): Promise<T> {
-    const signal = this.callerSignal;
-    if (signal?.aborted === true) return Promise.reject(new Error('Abort'));
-    const running = AsyncLocalStorageProviderSingleton.runWithConfig(
-      this.config,
-      body,
-    ) as Promise<T>;
-    return signal === undefined ? running : raceAbort(running, signal);
-  }
-
-  /** hook 與 wrap* 拿到的 runtime。 */
-  runtime(context: unknown): Runtime {
-    return Object.freeze({
-      context,
-      store: (this.config as { store?: unknown }).store,
-      configurable: this.config.configurable,
-      writer: (this.config as { writer?: unknown }).writer,
-      interrupt: undefined,
-      signal: this.config.signal,
-    });
-  }
-
-  /** 節點結束：把經 `__pregel_send` 送出的寫入套進 state。 */
-  flush(): void {
-    this.keepWrites();
-    this.onFlush?.();
-  }
-
-  /**
-   * 把經 `__pregel_send` 送出的寫入套進 state 並清空，不叫 `onFlush`（節點不算完成）；`flush` 與失敗、沒收完的路徑共用。
-   * LangGraph 把失敗 task 的寫入連同 `ERROR` 存成 pending writes，`getState` 與之後的 `updateState` 會套上（例如摘要器先寫的
-   * 歷史檔）；native 當場套進 state。
-   */
-  keepWrites(): void {
-    for (const [key, value] of this.writes) this.channels.apply(this.state, { [key]: value });
-    this.writes.length = 0;
-  }
+  nativeHandled.set(middleware, new Set([...(nativeHandled.get(middleware) ?? []), ...parts]));
+  return middleware;
 }
 
-/** 中止時拋的錯：signal 的 reason，同 `@langchain/core` 的 `getAbortSignalError`。 */
-export function abortReason(signal: AbortSignal): Error {
-  const reason: unknown = signal.reason;
-  if (reason instanceof Error) return reason;
-  if (typeof reason === 'string') return new Error(reason);
-  return new Error('Aborted');
+/**
+ * 洋蔥實際驅動的那一份：沒標的原樣回；標了的回一層視圖，標了的格讀到 `undefined`，其餘（名字、`stateSchema`）照讀原物件。
+ * @param middleware - 組裝好的那一顆。
+ * @returns 洋蔥要驅動的那一份。
+ */
+export function drivenByOnion(middleware: LoopMiddleware): LoopMiddleware {
+  const parts = nativeHandled.get(middleware);
+  if (parts === undefined) return middleware;
+  const view = Object.create(middleware) as Record<string, unknown>;
+  for (const part of parts) {
+    Object.defineProperty(view, part, { value: undefined, enumerable: true });
+  }
+  return view as unknown as LoopMiddleware;
 }
 
-/** `promise` 與 `signal` 競速：先中止就拋 {@link abortReason}，`promise` 之後的拒絕吞掉，同 `@langchain/core` 的 `raceWithSignal`。 */
-export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  let listener: (() => void) | undefined;
-  return Promise.race([
-    promise.catch((error: unknown) => {
-      if (!signal.aborted) throw error;
-      return undefined as never;
-    }),
-    new Promise<never>((_resolve, reject) => {
-      listener = () => reject(abortReason(signal));
-      signal.addEventListener('abort', listener, { once: true });
-      if (signal.aborted) reject(abortReason(signal));
-    }),
-  ]).finally(() => {
-    if (listener !== undefined) signal.removeEventListener('abort', listener);
+/**
+ * hook 與 wrap* 拿到的 runtime，取自這個節點的 config。
+ * @param task - 這個節點的環境。
+ * @param context - `runtime.context`：hook 是凍結的空物件，wrap* 是 `undefined`，同 langchain。
+ * @returns 凍結的 runtime。
+ */
+function runtimeOf(task: NodeTask, context: unknown): Runtime {
+  return Object.freeze({
+    context,
+    store: (task.config as { store?: unknown }).store,
+    configurable: task.config.configurable,
+    writer: (task.config as { writer?: unknown }).writer,
+    interrupt: undefined,
+    signal: task.config.signal,
   });
 }
 
@@ -260,7 +193,7 @@ export async function runHook(
     hookStateKeys(middleware.stateSchema).map((key) => [key, task.state[key]]),
   ) as LoopState;
   const result = (await task.run(async () =>
-    hookFunction(hook)({ ...view }, task.runtime(Object.freeze({}))),
+    hookFunction(hook)({ ...view }, runtimeOf(task, Object.freeze({}))),
   )) as Record<string, unknown> | undefined | null;
   task.flush();
   if (result === undefined || result === null) return { jump: undefined, update: {} };
@@ -337,6 +270,11 @@ export interface ModelOnion {
   readonly systemMessage: SystemMessage;
   readonly tools: readonly InvokableTool[];
   readonly middleware: readonly LoopMiddleware[];
+  /**
+   * 有沒有誰執行 `wrapModelCall` 新加的工具：任一顆 middleware 的 `wrapToolCall`，含標成由洋蔥外面做的那一格
+   * （{@link handledOutsideOnion}）。沒有就拒收新加的工具，同 langchain。
+   */
+  readonly executesAddedTools: boolean;
   /** 環繞最內層那次打模型（`llm/stream`）；不給就直接打。 */
   readonly around?: (call: () => Promise<AIMessage>) => Promise<AIMessage>;
 }
@@ -350,7 +288,6 @@ export interface ModelOnion {
 export async function callModel(onion: ModelOnion, task: NodeTask): Promise<ModelStepResult> {
   const state = task.state;
   const registered = new Map(onion.tools.map((tool) => [tool.name, tool]));
-  const hasWrapToolCall = onion.middleware.some((m) => m.wrapToolCall !== undefined);
   let currentSystemMessage = onion.systemMessage;
   let lastAiMessage: AIMessage | undefined;
   const collected: Command[] = [];
@@ -389,7 +326,7 @@ export async function callModel(onion: ModelOnion, task: NodeTask): Promise<Mode
           const original = registered.get((tool as InvokableTool).name);
           return original !== undefined && original !== tool;
         });
-        if (added.length > 0 && !hasWrapToolCall) {
+        if (added.length > 0 && !onion.executesAddedTools) {
           throw new Error(
             `You have added a new tool in "wrapModelCall" hook of middleware "${middleware.name}": ${added.map((tool) => (tool as InvokableTool).name).join(', ')}. This is not supported unless a middleware provides a "wrapToolCall" handler to execute it.`,
           );
@@ -435,7 +372,7 @@ export async function callModel(onion: ModelOnion, task: NodeTask): Promise<Mode
           {
             ...request,
             state: { ...state, messages: state.messages },
-            runtime: task.runtime(undefined),
+            runtime: runtimeOf(task, undefined),
           },
           withValidation,
         );
@@ -462,7 +399,7 @@ export async function callModel(onion: ModelOnion, task: NodeTask): Promise<Mode
       messages: state.messages,
       tools: onion.tools,
       state,
-      runtime: task.runtime(undefined),
+      runtime: runtimeOf(task, undefined),
     }),
   );
   const message = AIMessage.isInstance(response) ? response : lastAiMessage;
@@ -484,17 +421,12 @@ function isClientTool(tool: unknown): boolean {
   );
 }
 
-/** 找不到工具時的訊息，同 langchain 的 `getInvalidToolError`。 */
-function invalidToolError(name: string, available: readonly string[]): string {
-  return `Error: ${name} is not a valid tool, try one of [${available.join(', ')}].`;
-}
-
 /**
  * 跑一顆工具呼叫，經過整串 `wrapToolCall`。照 `ToolNode.js` 的 `runTool`：工具與 middleware 的錯往外拋（圍堵在最外層接），
  * 參數解析失敗翻成給模型的 `ToolMessage`；工具找不到回錯誤的 `ToolMessage`。
  * @param call - 這顆呼叫。
  * @param tools - 靜態註冊的工具。
- * @param middleware - 整串 middleware。
+ * @param middleware - 洋蔥驅動的那一份（{@link drivenByOnion}）。
  * @param task - 這顆工具的環境（`tools:<id>`）。
  * @param owner - 這一批的助手訊息（`call` 在它的 `tool_calls` 裡），放進請求的 `owner`。
  * @returns `ToolMessage` 或 `Command`。
@@ -511,15 +443,10 @@ export async function runTool(
     const tool = (request.tool ?? tools.find((t) => t.name === request.toolCall.name)) as
       InvokableTool | undefined;
     if (tool === undefined) {
-      return new ToolMessage({
-        content: invalidToolError(
-          request.toolCall.name,
-          tools.map((t) => t.name),
-        ),
-        tool_call_id: request.toolCall.id ?? '',
-        name: request.toolCall.name,
-        status: 'error',
-      });
+      return invalidToolMessage(
+        request.toolCall,
+        tools.map((t) => t.name),
+      );
     }
     // LangChain 的 `tool()` 只掛 `abort` 監聽：拿到已經 abort 的 signal 不會拒絕，本體跑完也不 resolve，永遠懸著。兄弟失敗
     // 舉起來的這一格由 native 自己舉，所以先拋。呼叫端中止時 `stepSignal` 也會跟著舉（這顆被 {@link NodeTask.run} 拒絕，
@@ -591,7 +518,7 @@ export async function runTool(
         tool: registered,
         owner,
         state: task.state,
-        runtime: task.runtime(undefined),
+        runtime: runtimeOf(task, undefined),
       }),
     )) as ToolMessage | Command;
   } catch (error) {
