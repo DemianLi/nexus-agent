@@ -199,8 +199,7 @@ jobs:
           typecheck() {
             [ -s "$L/typecheck.txt" ] || { echo "沒有受影響的套件"; return 0; }
             mapfile -t filters < "$L/typecheck.txt"
-            pnpm "${filters[@]}" --silent exec pwd | wc -l | tr -d ' ' > "$RUNNER_TEMP/affected.txt"
-            .github/scripts/typecheck.sh "${filters[@]}"
+            TYPECHECK_COUNT_FILE="$RUNNER_TEMP/affected.txt" .github/scripts/typecheck.sh "${filters[@]}"
           }
           format() {
             [ -s "$L/format.txt" ] || { echo "沒有要檢查的檔"; return 0; }
