@@ -1,6 +1,7 @@
 /**
  * 摘要器的引擎：判斷要不要摘要、切在哪、寫歷史、生摘要、溢出時重摘。演算法、門檻與字串取自 `deepagents@1.13.1` 的
- * `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2717-3242`）；`summarization.ts` 外面那幾層靠的就是這些行為，
+ * `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2716-3237`）。`summarization.ts` 外面那幾層靠這些行為：
+ * 摘要訊息的 `lc_source` 與兩種開頭（`summaryFilePathOf` 與摘要提示詞認的就是它們）、交下去的是「摘要＋留下的尾巴」；
  * 由 `summarizer-engine.test.ts` 釘住。
  *
  * 組裝點一定給 `trigger`、`keep`、`truncateArgsSettings` 與 `summaryPrompt`，不給 `model`、`trimTokensToSummarize`，
@@ -77,7 +78,7 @@ function isContextOverflow(error: unknown): boolean {
  * 建一顆摘要器引擎。回傳的 middleware 名字是 `SummarizationMiddleware`，只有 `wrapModelCall`。
  *
  * - 有效訊息串不空而 `request.model` 缺席就拋錯：摘要模型取自請求。
- * - 歷史檔寫不進去只記一條 warn、照樣摘要，切點的 `filePath` 是 `null`（#66）。
+ * - 歷史檔寫不進去只記一條 warn、照樣摘要，摘要文字不帶歷史檔那句，外層讀成 `null`（#66）。
  * - 溢出重摘時放大的 token 估算倍率留在這顆實例裡，之後的請求沿用。
  *
  * @param options - 門檻、保留量、參數截斷、歷史檔前綴、backend、提示詞。

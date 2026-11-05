@@ -10,6 +10,7 @@ import { tool } from 'langchain';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
+import { summaryFilePathOf } from './summarization.js';
 import { createSummarizerEngine } from './summarizer-engine.js';
 import type { SummarizerEngineOptions } from './summarizer-engine.js';
 import {
@@ -201,14 +202,14 @@ describe('摘要器引擎', () => {
     const step = await engineStep(engine, turns(8), { model });
     expect(step.cutoff).toBe(6);
     expect(step.contents.slice(1)).toEqual(['人 6', '答 7']);
-    expect(step.contents[0]).toContain(PATH);
+    expect(summaryFilePathOf(step.sent[0]!)).toBe(PATH);
     expect(prompts).toEqual([
       '摘要這段：\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n完。',
     ]);
     expect(sections(store.files.get(PATH))).toHaveLength(1);
   });
 
-  it('連三步帶著上一次的切點：prev + cutoff − 1，歷史檔接著寫', async () => {
+  it('連三步帶著上一次的切點：從上一則摘要接著摘，歷史檔接著寫', async () => {
     const { engine, store } = engineWith();
     const { model, prompts } = summaryModel();
     const cutoffs: (number | undefined)[] = [];
@@ -216,11 +217,12 @@ describe('摘要器引擎', () => {
     for (const count of [8, 12, 16]) {
       const step = await engineStep(engine, turns(count), { previous, model });
       cutoffs.push(step.cutoff);
-      // 交下去的是「新摘要＋留下的兩則」。
-      expect(step.contents.slice(1)).toEqual([
-        `人 ${String(count - 2)}`,
-        `答 ${String(count - 1)}`,
-      ]);
+      // 反推出的切點就是留下的尾巴在 state 裡的座標。
+      expect(step.contents.slice(1)).toEqual(
+        turns(count)
+          .slice(step.cutoff)
+          .map((m) => String(m.content)),
+      );
       previous = {
         cutoffIndex: step.cutoff!,
         summaryMessage: step.sent[0]!,
@@ -253,7 +255,7 @@ describe('摘要器引擎', () => {
     expect(sections(store.files.get(path))).toHaveLength(2);
   });
 
-  it('摘要之後端點回超窗：retain 0 重摘再送，只交一則摘要', async () => {
+  it('摘要之後端點回超窗：連留下的一起重摘，只交一則摘要', async () => {
     const { engine, store } = engineWith();
     const { model, prompts } = summaryModel();
     const step = await engineStep(engine, turns(8), {
@@ -304,7 +306,7 @@ describe('摘要器引擎', () => {
       new ToolMessage({ content: '結果', tool_call_id: 'c1' }),
       new AIMessage('收尾'),
     ];
-    // 留 2 則會落在工具結果上，往前退到發出呼叫的那則；留 3 則剛好在它上面。
+    // 留 2 則會落在工具結果上；往前退一則就是發出呼叫的那則（沒超過切點的一半），所以退到它。留 3 則切點本來就落在那則。
     for (const value of [2, 3]) {
       const { engine } = engineWith({ keep: { type: 'messages', value } });
       const step = await engineStep(engine, messages, { withTools: true });
@@ -319,13 +321,15 @@ describe('摘要器引擎', () => {
       keep: { type: 'tokens', value: 30 },
     });
     const messages = turns(10, '內容'.repeat(10));
+    // 門檻 60 只有連工具 schema 一起估才過（不帶工具估 59）。
     const step = await engineStep(engine, messages, { withTools: true });
     expect(step.cutoff).toBe(5);
     expect(step.sent.slice(1)).toEqual(messages.slice(5));
   });
 
-  it('參數截斷：保留區外 write_file 的長參數被截，別的工具不動', async () => {
+  it('參數截斷：保留區外 write_file／edit_file 的長字串參數截成前 20 字加標記，別的工具與保留區不動', async () => {
     const big = 'x'.repeat(50);
+    const cut = `${'x'.repeat(20)}...(argument truncated)`;
     const messages: BaseMessage[] = [
       new HumanMessage('寫'),
       new AIMessage({
@@ -335,10 +339,25 @@ describe('摘要器引擎', () => {
       new ToolMessage({ content: 'ok', tool_call_id: 'w1' }),
       new AIMessage({
         content: '',
+        tool_calls: [
+          {
+            id: 'd1',
+            name: 'edit_file',
+            args: { file_path: '/a', old_string: 'o', new_string: big },
+          },
+        ],
+      }),
+      new ToolMessage({ content: 'ok', tool_call_id: 'd1' }),
+      new AIMessage({
+        content: '',
         tool_calls: [{ id: 'e1', name: 'echo', args: { message: big } }],
       }),
       new ToolMessage({ content: 'ok', tool_call_id: 'e1' }),
-      new HumanMessage('再來'),
+      // 保留區（最後一則）：同樣的長參數不截。
+      new AIMessage({
+        content: '',
+        tool_calls: [{ id: 'w2', name: 'write_file', args: { file_path: '/b', content: big } }],
+      }),
     ];
     const { engine } = engineWith({
       trigger: [],
@@ -350,12 +369,11 @@ describe('摘要器引擎', () => {
     });
     const step = await engineStep(engine, messages);
     expect(step.cutoff).toBeUndefined();
-    const [write, echoed] = [step.sent[1] as AIMessage, step.sent[3] as AIMessage];
-    expect(write.tool_calls?.[0]?.args).toEqual({
-      file_path: '/a',
-      content: `${'x'.repeat(20)}...(argument truncated)`,
-    });
-    expect(echoed.tool_calls?.[0]?.args).toEqual({ message: big });
+    const argsAt = (i: number) => (step.sent[i] as AIMessage).tool_calls?.[0]?.args;
+    expect(argsAt(1)).toEqual({ file_path: '/a', content: cut });
+    expect(argsAt(3)).toEqual({ file_path: '/a', old_string: 'o', new_string: cut });
+    expect(argsAt(5)).toEqual({ message: big });
+    expect(argsAt(7)).toEqual({ file_path: '/b', content: big });
   });
 
   it('留下的是空的、有 profile：先壓工具結果再送', async () => {
@@ -371,15 +389,17 @@ describe('摘要器引擎', () => {
       trigger: [{ type: 'messages', value: 1 }],
       keep: { type: 'messages', value: 0 },
     });
-    const step = await engineStep(engine, messages, {
-      model: summaryModel({ maxInputTokens: 2_000 }).model,
-    });
+    const { model, prompts } = summaryModel({ maxInputTokens: 2_000 });
+    const step = await engineStep(engine, messages, { model });
+    // 壓過就裝得下：只交一次、不生摘要。
+    expect(step.handled).toHaveLength(1);
+    expect(prompts).toEqual([]);
     const result = String(step.sent[2]!.content);
     expect(result.endsWith('\n...(result truncated)')).toBe(true);
     expect(result.length).toBeLessThan(20_000);
   });
 
-  it('歷史檔寫不進去：filePath 是 null、warn、照樣摘要', async () => {
+  it('歷史檔寫不進去：warn、摘要不帶歷史檔那句、照樣摘要', async () => {
     const { engine } = engineWith({ failWrite: true });
     const warns: string[] = [];
     const spy = vi.spyOn(console, 'warn').mockImplementation((...args) => {
@@ -388,7 +408,7 @@ describe('摘要器引擎', () => {
     try {
       const step = await engineStep(engine, turns(8));
       expect(step.cutoff).toBe(6);
-      expect(step.contents[0]).not.toContain(PATH);
+      expect(step.contents[0]).toBe('Here is a summary of the conversation to date:\n\n摘要 1');
     } finally {
       spy.mockRestore();
     }
