@@ -12,7 +12,7 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/client';
-import { admittedTools, CHANNEL_SERVICE } from '@nexus/core';
+import { admittedTools, CHANNEL_SERVICE, createToolListStepMiddleware } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
@@ -22,7 +22,6 @@ import type {
   ToolAdmission,
 } from '@nexus/core';
 import type { NexusTool } from '@nexus/tools';
-import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
@@ -640,15 +639,10 @@ function hideTools(
   gaveUp: () => boolean,
 ): AgentMiddleware {
   const admission = hiddenAfterGiveUp(names, gaveUp);
-  return createMiddleware({
-    // 每一列一個名字：同名的兩顆 middleware 會在基座那邊撞名。
-    name: `mcp-tools-guard:${serverName}`,
-    wrapModelCall: (request, handler) => {
-      if (!gaveUp()) return handler(request);
-      const tools = admittedTools(request.tools, admission) as typeof request.tools;
-      return handler({ ...request, tools });
-    },
-  }) as AgentMiddleware;
+  // 每一列一個名字：同名的兩顆 middleware 會在基座那邊撞名。
+  return createToolListStepMiddleware(`mcp-tools-guard:${serverName}`, (request) =>
+    gaveUp() ? admittedTools(request.tools, admission) : undefined,
+  );
 }
 
 /**

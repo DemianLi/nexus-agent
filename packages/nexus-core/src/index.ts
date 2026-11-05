@@ -235,6 +235,18 @@ export {
   withToolCallStep,
   wrapToolCallWith,
 } from './tool-call-step.js';
+export type {
+  ToolListCell,
+  ToolListRequest,
+  ToolListResult,
+  ToolListStep,
+} from './tool-list-step.js';
+export {
+  createToolListStepMiddleware,
+  toolListCellOf,
+  withToolListStep,
+  wrapModelCallWith,
+} from './tool-list-step.js';
 export type { ToolAddition, ToolAdmission } from './tool-resolution.js';
 export { addedTools, originalToolOf, toolDescriptionOf, toolNameOf } from './tool-resolution.js';
 export { admittedTools } from './tool-resolution.js';

@@ -34,6 +34,8 @@ import type { ToolCallStep } from './tool-call-step.js';
 
 import type { AgentMiddleware } from './base-types.js';
 import { toolRefusal } from './tool-events.js';
+import { withToolListStep, wrapModelCallWith } from './tool-list-step.js';
+import type { ToolListStep } from './tool-list-step.js';
 import { admittedTools } from './tool-resolution.js';
 import type { ToolAdmission } from './tool-resolution.js';
 
@@ -121,16 +123,16 @@ export function admissionToolStep(admission: ToolAdmission): ToolCallStep {
 export function createSubagentToolFilterMiddleware(hidden: ReadonlySet<string>): AgentMiddleware {
   const admission: ToolAdmission = { admits: (name) => !hidden.has(name) };
   const toolStep = admissionToolStep(admission);
-  return withToolCallStep(
-    createMiddleware({
-      name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
-      wrapModelCall: (request, handler) =>
-        handler({
-          ...request,
-          tools: admittedTools(request.tools, admission) as typeof request.tools,
-        }),
-      wrapToolCall: wrapToolCallWith(toolStep),
-    }),
-    toolStep,
+  const listStep: ToolListStep = (request) => admittedTools(request.tools, admission);
+  return withToolListStep(
+    withToolCallStep(
+      createMiddleware({
+        name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCallWith(listStep) as never,
+        wrapToolCall: wrapToolCallWith(toolStep),
+      }),
+      toolStep,
+    ),
+    listStep,
   );
 }

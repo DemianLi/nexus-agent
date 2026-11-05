@@ -90,6 +90,8 @@ import type { AgentMiddleware } from './base-types.js';
 import { readLangHintForPath } from './code-language.js';
 import { toolNameOfCall, withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
+import { withToolListStep, wrapModelCallWith } from './tool-list-step.js';
+import type { ToolListStep } from './tool-list-step.js';
 import { overriddenTools } from './tool-resolution.js';
 import type { ToolOverride } from './tool-resolution.js';
 import { putToolResultMeta } from './tool-result-meta.js';
@@ -510,19 +512,22 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
       name === READ_TOOL ? modelFacingReadTool(tool, modelFacing, readLimit) : undefined,
   };
   const toolStep = readContinuationToolStep(readLimit);
-  return withToolCallStep(
-    createMiddleware({
-      name: READ_CONTINUATION_MIDDLEWARE_NAME,
-      wrapModelCall: (request, handler) => {
-        const tools = request.tools as readonly unknown[] | undefined;
-        if (!Array.isArray(tools)) return handler(request);
-        const overridden = overriddenTools(tools, readOverride);
-        if (overridden === tools) return handler(request);
-        return handler({ ...request, tools: overridden } as typeof request);
-      },
-      wrapToolCall: wrapToolCallWith(toolStep),
-    }) as AgentMiddleware,
-    toolStep,
+  const listStep: ToolListStep = (request) => {
+    const tools = request.tools as readonly unknown[] | undefined;
+    if (!Array.isArray(tools)) return undefined;
+    const overridden = overriddenTools(tools, readOverride);
+    return overridden === tools ? undefined : overridden;
+  };
+  return withToolListStep(
+    withToolCallStep(
+      createMiddleware({
+        name: READ_CONTINUATION_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCallWith(listStep) as never,
+        wrapToolCall: wrapToolCallWith(toolStep),
+      }) as AgentMiddleware,
+      toolStep,
+    ),
+    listStep,
   );
 }
 
