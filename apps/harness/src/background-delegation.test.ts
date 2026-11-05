@@ -270,8 +270,11 @@ describe('模型面的描述', () => {
 });
 
 /**
- * 上游絆索：我們偏離的理由是 langchain 禁止在 `wrapModelCall` 改已註冊的工具。哪天這一條放行了，這個測試會紅，
- * 那時可以直接給 `task` 加 `run_in_background`，`subagent` 這一整套偏離就能拆。
+ * 上游絆索：釘住 `background-delegation.ts` 檔頭引的 langchain 第一條規則——`wrapModelCall` 裡把已註冊的工具換成
+ * 同名的另一個實例一律拒絕（`dist/agents/nodes/AgentNode.js:246-257`）。這裡用 `tool()` 造的實例去換，正好落在檢查內。
+ * 預設的 langgraph loop 下轉紅，代表 langchain 改了這條規則，檔頭那段說明要照新版重讀；`vitest.native.config.ts`
+ * 下丟錯的是 `native-loop/onion.ts` 照同一套寫的那份檢查，轉紅是我們自己改了它。委派工具的命名與前景委派不因此改，
+ * 在 [#2363](https://github.com/DemianLi/nexus-agent/issues/2363#issuecomment-6653783737) 處理。
  */
 describe('上游絆索：wrapModelCall 不能改已註冊的工具', () => {
   it('換掉 task 會拋 “You have modified a tool”', async () => {
