@@ -66,7 +66,7 @@ def read_changed(path: str = 'changed.txt') -> list[str]:
 
 
 # 功能 PR 動到這些時全跑：改壞了 CI 自己，合併前只有全跑驗得出來（#2088 決議第 15 條）。
-FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
+FULL_RE = re.compile(r'(?!x)x')  # 實驗用，不合併（#2334 D）：讓這張 draft 走輕的模式
 
 
 # 沙箱 spawner 的 Rust（#1946）在這幾種情況編：動到它、TS 那一側的接縫與 client、CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
