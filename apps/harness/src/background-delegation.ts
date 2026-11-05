@@ -59,6 +59,8 @@ import {
   toolNameOf,
   toolRefusal,
   withToolCallStep,
+  withToolListStep,
+  wrapModelCallWith,
   wrapToolCallWith,
 } from '@nexus/core';
 import type {
@@ -71,7 +73,7 @@ import type {
 } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
-import type { MiddleSection } from '@nexus/core';
+import type { MiddleSection, ToolListStep } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
@@ -460,23 +462,26 @@ export class BackgroundDelegation {
 
   #middleware() {
     const step = this.#toolStep();
-    return withToolCallStep(
-      createMiddleware({
-        name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
-        wrapModelCall: (request, handler) => {
-          const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
-          // 子代理的疊沒有 `task`：什麼都不做。
-          if (base === undefined) return handler(request);
-          this.#baseTask = originalToolOf(base) as StructuredToolInterface;
-          const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
-          const tools = addedTools(admittedTools(request.tools, WITHOUT_TASK), {
-            additions: () => [subagent],
-          });
-          return handler({ ...request, tools: tools as typeof request.tools });
-        },
-        wrapToolCall: wrapToolCallWith(step),
-      }),
-      step,
+    const listStep: ToolListStep = (request) => {
+      const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
+      // 子代理的疊沒有 `task`：什麼都不做。
+      if (base === undefined) return undefined;
+      this.#baseTask = originalToolOf(base) as StructuredToolInterface;
+      const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
+      return addedTools(admittedTools(request.tools, WITHOUT_TASK), {
+        additions: () => [subagent],
+      });
+    };
+    return withToolListStep(
+      withToolCallStep(
+        createMiddleware({
+          name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCallWith(listStep) as never,
+          wrapToolCall: wrapToolCallWith(step),
+        }),
+        step,
+      ),
+      listStep,
     );
   }
 

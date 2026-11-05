@@ -33,9 +33,9 @@
  */
 
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
-import { createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
+import { createToolListStepMiddleware } from './tool-list-step.js';
 import { overriddenTools } from './tool-resolution.js';
 import type { ToolOverride } from './tool-resolution.js';
 
@@ -114,14 +114,10 @@ const searchOverride: ToolOverride = {
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createSearchDescriptionsMiddleware(): AgentMiddleware {
-  return createMiddleware({
-    name: SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const tools = request.tools as readonly unknown[] | undefined;
-      if (!Array.isArray(tools)) return handler(request);
-      const overridden = overriddenTools(tools, searchOverride);
-      if (overridden === tools) return handler(request);
-      return handler({ ...request, tools: overridden } as typeof request);
-    },
-  }) as AgentMiddleware;
+  return createToolListStepMiddleware(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME, (request) => {
+    const tools = request.tools as readonly unknown[] | undefined;
+    if (!Array.isArray(tools)) return undefined;
+    const overridden = overriddenTools(tools, searchOverride);
+    return overridden === tools ? undefined : overridden;
+  });
 }

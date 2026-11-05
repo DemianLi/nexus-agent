@@ -252,7 +252,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'apps/harness/src/pre-step-middleware.ts › createPreStepMiddleware 掛鉤的 state 參數': 1,
   'apps/harness/src/thread-pump.ts › ThreadPump getState()': 2,
   // 照基座把 state 交給 `resolveBackend`，給工廠 backend 用；自己不讀（#2415 W3）。兩個 loop 都經過這一格：TODO(#2416) native 隨相容層拿掉，TODO(#2363) langgraph 隨它拿掉。
-  'packages/nexus-core/src/filesystem-tool-admission.ts › filesystemModelCallWrap request.state': 1,
+  'packages/nexus-core/src/filesystem-tool-admission.ts › filesystemToolListStep request.state': 1,
   // native loop 的相容層照 `createAgent` 把 state 交給 `wrapToolCall` 的那一處，自己不讀。TODO(#2357)：隨相容層拿掉。
   // 轉交基座的記憶中介層；基座在這裡拿 state 讀的是 `memoryContents`，不讀訊息（設計 §四 W9）。渲染讀宿主的那一份，不讀 state。
   'packages/nexus-core/src/memory-middleware.ts › createMemoryMiddleware 掛鉤的 state 參數': 1,

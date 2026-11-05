@@ -75,8 +75,10 @@ import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 import { toolResultEvictionWrap } from './tool-result-eviction.js';
-import { filesystemModelCallWrap } from './filesystem-tool-admission.js';
+import { filesystemToolListStep } from './filesystem-tool-admission.js';
 import { taskToolOverride } from './task-tool-definition.js';
+import { wrapModelCallWith, withToolListStep } from './tool-list-step.js';
+import type { ToolListRequest, ToolListStep } from './tool-list-step.js';
 import { overriddenTools } from './tool-resolution.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
@@ -198,7 +200,7 @@ export function filesystemMiddlewareOptions(input: {
 
 /**
  * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionWrap}，`wrapModelCall` 先套 core 的
- * {@link filesystemModelCallWrap} 再交給基座原本的那一支；名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。
+ * {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。
  *
  * @param options - {@link filesystemMiddlewareOptions} 給的選項。
  * @returns 掛進疊裡的那一顆。
@@ -210,16 +212,21 @@ function filesystemMiddleware(
   const inner = base.wrapModelCall;
   if (inner === undefined)
     throw new Error('基座的 FilesystemMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
-  return {
-    ...base,
-    wrapModelCall: filesystemModelCallWrap(options.backend, inner) as unknown as typeof inner,
-    wrapToolCall: toolResultEvictionWrap(options.backend) as unknown as typeof base.wrapToolCall,
-  };
+  const step = filesystemToolListStep(options.backend);
+  return withToolListStep(
+    {
+      ...base,
+      wrapModelCall: wrapModelCallWith(step, inner) as unknown as typeof inner,
+      wrapToolCall: toolResultEvictionWrap(options.backend) as unknown as typeof base.wrapToolCall,
+    },
+    step,
+    inner,
+  );
 }
 
 /**
  * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
- * 基座原本的那一支；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
+ * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
  *
  * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
  *
@@ -237,16 +244,21 @@ function subAgentMiddleware(
   if (inner === undefined)
     throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
   const override = taskToolOverride(options.subagents ?? []);
-  return {
-    ...base,
-    wrapModelCall: ((request: { readonly tools: readonly unknown[] }, handler: unknown) => {
-      const tools = overriddenTools(request.tools, override);
-      return (inner as (r: unknown, h: unknown) => unknown)(
-        tools === request.tools ? request : { ...request, tools },
-        handler,
-      );
-    }) as unknown as typeof inner,
+  const step: ToolListStep = (request) => {
+    const tools = overriddenTools(request.tools, override);
+    return tools === request.tools ? undefined : tools;
   };
+  return withToolListStep(
+    {
+      ...base,
+      wrapModelCall: wrapModelCallWith(
+        step,
+        inner as (r: ToolListRequest, h: unknown) => unknown,
+      ) as unknown as typeof inner,
+    },
+    step,
+    inner,
+  );
 }
 
 /**

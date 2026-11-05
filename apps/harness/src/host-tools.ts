@@ -19,9 +19,11 @@ import {
   addedTools,
   toolCallSessionAddress,
   withToolCallStep,
+  withToolListStep,
+  wrapModelCallWith,
   wrapToolCallWith,
 } from '@nexus/core';
-import type { PluginEntry, ToolAddition, ToolCallStep } from '@nexus/core';
+import type { PluginEntry, ToolAddition, ToolCallStep, ToolListStep } from '@nexus/core';
 import { toLangChainTool } from '@nexus/tool-adapter';
 import type { JsonSchema, JsonValue, NexusTool, NexusToolResult } from '@nexus/tools';
 import {
@@ -237,18 +239,20 @@ export function hostToolsToolStep(
 function middleware(slot: HostToolsSlot): AgentMiddleware {
   const addition = hostToolsAddition(slot, toLangChainTool);
   const step = hostToolsToolStep(slot, toLangChainTool);
-  return withToolCallStep(
-    createMiddleware({
-      name: HOST_TOOLS_MIDDLEWARE_NAME,
-      wrapModelCall: (request, handler) => {
-        const tools = addedTools(request.tools, addition);
-        return handler(
-          tools === request.tools ? request : { ...request, tools: tools as typeof request.tools },
-        );
-      },
-      wrapToolCall: wrapToolCallWith(step),
-    }) as AgentMiddleware,
-    step,
+  const listStep: ToolListStep = (request) => {
+    const tools = addedTools(request.tools, addition);
+    return tools === request.tools ? undefined : tools;
+  };
+  return withToolListStep(
+    withToolCallStep(
+      createMiddleware({
+        name: HOST_TOOLS_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCallWith(listStep) as never,
+        wrapToolCall: wrapToolCallWith(step),
+      }) as AgentMiddleware,
+      step,
+    ),
+    listStep,
   );
 }
 

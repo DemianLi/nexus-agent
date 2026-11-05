@@ -35,6 +35,7 @@ import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
+import { toolListCellOf, wrapModelCallWith } from '../tool-list-step.js';
 import './events.js';
 import type { AgentStepPayload } from './events.js';
 import { abortReason, raceAbort } from './abort.js';
@@ -200,6 +201,11 @@ export class NativeAgent {
    * 標成由洋蔥外面做的 `wrapToolCall` 不在裡面。
    */
   readonly #toolCells: readonly LoopMiddleware[];
+  /**
+   * 一次模型呼叫由外到內經過的那幾格，照組裝順序：登記了工具清單那一步的（{@link toolListCellOf}）由 native 直接呼叫那一步，
+   * 其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
+   */
+  readonly #modelCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
   readonly #returnDirect: ReadonlySet<string>;
   readonly #channels: StateChannels;
@@ -233,6 +239,17 @@ export class NativeAgent {
               : (wrapToolCallWith(step) as NonNullable<LoopMiddleware['wrapToolCall']>),
         },
       ];
+    });
+    this.#modelCells = this.middleware.map((m, index) => {
+      const driven = this.#driven[index]!;
+      const cell = toolListCellOf(m);
+      if (driven.wrapModelCall === undefined || cell === undefined) return driven;
+      return {
+        name: m.name,
+        wrapModelCall: wrapModelCallWith(cell.step, cell.inner as never) as NonNullable<
+          LoopMiddleware['wrapModelCall']
+        >,
+      };
     });
     const unsupported = this.#driven.find((m) => m.afterModel !== undefined);
     if (unsupported !== undefined) {
@@ -590,7 +607,7 @@ export class NativeAgent {
             model: this.#params.model,
             systemMessage: systemMessageOf(this.#params.systemPrompt),
             tools: this.#tools,
-            middleware: this.#driven,
+            middleware: this.#modelCells,
             executesAddedTools: this.#executesAddedTools,
             ...(events !== undefined && {
               around: (call) => events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
