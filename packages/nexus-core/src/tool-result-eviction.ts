@@ -6,7 +6,7 @@
  * 逐字是因為已記下的日誌續接時要重算出模型當時看到的那則；`tool-result-eviction.test.ts` 對著真的基座比，基座升級改了字就紅在那裡。
  *
  * 組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionWrap}；
- * 名字、工具、`beforeAgent` 仍是基座的，`wrapModelCall` 先經過 core 的 `filesystemModelCallWrap` 再交給基座那一支，洋蔥裡的位置不變。
+ * 名字、工具、`beforeAgent` 仍是基座的，`wrapModelCall` 先經過 core 的 `filesystemToolListStep` 再交給基座那一支，洋蔥裡的位置不變。
  * `toolTokenLimitBeforeEvict` 不能拿來關掉基座那一份：`read_file` 本體的截斷也讀同一個選項。
  *
  * 這一格在圍堵外層，所以日誌記的是換之前的全文；推模型歷史的一側照 {@link toolResultEvictionPath} 與

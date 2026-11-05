@@ -75,7 +75,7 @@ async function run() {
     }),
   ]);
   const backend = new StateBackend();
-  // 只在有設定時才掛的那幾格（外溢、搜尋上限、檔案工具兩顆、先讀後改、共用區前綴、子代理工具過濾）全打開，名單涵蓋每一顆登記過的。
+  // 只在有設定時才掛的那幾格（backend 下的檔案工具與讀檔續讀、共用區搜尋描述、子代理工具過濾）全打開，名單涵蓋 core 每一顆登記了工具清單那一步的。
   const params = foldRegistry(registry, {
     summarization: false,
     repeatReminder: false,

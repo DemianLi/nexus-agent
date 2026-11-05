@@ -261,14 +261,14 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,
   // 轉交基座的 skills 中介層；基座在這裡拿 state 讀的是 `skillsMetadata`，不讀訊息（設計 §四 W9）。
   'packages/nexus-core/src/skills-middleware.ts › createSkillsMiddlewareQuietWhenEmpty 掛鉤的 state 參數': 1,
-  // 同 `filesystemModelCallWrap`：照基座把 state 交給 `resolveBackend` 寫歷史檔（生摘要、溢出重摘各一處），給工廠 backend 用；自己不讀（#2416）。
+  // 同 `filesystemToolListStep`：照基座把 state 交給 `resolveBackend` 寫歷史檔（生摘要、溢出重摘各一處），給工廠 backend 用；自己不讀（#2416）。
   'packages/nexus-core/src/summarizer-engine.ts › createSummarizerEngine request.state': 2,
   // 環繞工具呼叫的一步拿到的 `state`，自己不讀；只有解不開參數與核准閘門兩步轉給 `toolCallOwner`（#2355）。
   'packages/nexus-core/src/tool-call-step.ts › toolCallSiteOf request.state': 1,
   // 屏障、`returnDirect` 的收尾、解不開參數的原字串三處共用；`history-source=log` 的 root 讀日誌，native loop 讀它交下來的那則，
   // 只有 `langgraph`（含子代理子圖，#2359）讀這裡（#2355）。TODO(#2363)：隨 `langgraph` 拿掉。
   'packages/nexus-core/src/tool-call-owner.ts › toolCallOwner request.state': 1,
-  // 同 `filesystemModelCallWrap`：照基座交給 `resolveBackend`，結果是 `ToolMessage` 與 `Command` 的兩支各一處。
+  // 同 `filesystemToolListStep`：照基座交給 `resolveBackend`，結果是 `ToolMessage` 與 `Command` 的兩支各一處。
   'packages/nexus-core/src/tool-result-eviction.ts › toolResultEvictionWrap request.state': 2,
 };
 

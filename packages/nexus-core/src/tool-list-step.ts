@@ -4,8 +4,8 @@
  *
  * 一步拿到這次請求（{@link ToolListRequest}），回換過的工具清單；回 `undefined` 是不換，往內交原本那個請求物件。
  *
- * **不換就同步往內交**：一步同步回清單時，{@link wrapModelCallWith} 在同一個 tick 往內交，中間沒有 `await`；只有回 `Promise` 的一步
- * （例如要解析 backend 的檔案工具那一格）等它解開才往內交。
+ * **同步的一步就同步往內交**：一步同步回清單或 `undefined` 時，{@link wrapModelCallWith} 在同一個 tick 往內交，中間沒有 `await`；
+ * 回 `Promise` 的一步（例如要解析 backend 的檔案工具那一格）不論換不換，都等它解開才往內交。
  *
  * **登記了這一步的格**（{@link withToolListStep}；{@link createToolListStepMiddleware} 造的自動登記）由 native 的 root 的模型那一串
  * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；沒登記的格照洋蔥驅動 `wrapModelCall`。
@@ -20,7 +20,9 @@ import type { AgentMiddleware } from './base-types.js';
 export interface ToolListRequest {
   /** 外層交下來的工具清單。 */
   readonly tools: readonly unknown[];
+  /** 這次呼叫的 agent state，原樣讀穿；目前只有要解析 backend 的那一步交給 `resolveBackend`，自己不讀。 */
   readonly state?: unknown;
+  /** 這次呼叫的 runtime，原樣讀穿。 */
   readonly runtime?: object;
 }
 
@@ -88,7 +90,8 @@ const registeredCells = new WeakMap<object, ToolListCell>();
  * 登記這顆 middleware 的模型那一格就是 `step`（再經 `inner`）：native 的 root 在這一格直接呼叫它，不經這顆的 `wrapModelCall`
  * （{@link toolListCellOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapModelCall`。
  * 所以 `wrapModelCall` 必須就是 `wrapModelCallWith(step, inner)`，兩個 loop 才跑同一份實作。要在 `createNativeAgent` 之前登記：
- * 模型那一串在建構時就算好。`wrapModelCall` 標成由洋蔥外面做的格（`handledOutsideOnion`）不在那一串裡。
+ * 模型那一串在建構時就算好。`wrapModelCall` 標成由洋蔥外面做的格（`handledOutsideOnion`），在那一串裡讀到 `undefined`，native 的 root
+ * 不跑這一步。
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。

@@ -2,8 +2,8 @@
  * 檔案工具裡 `execute`、`delete` 放不放行，看這一次模型呼叫解析出來的 backend 有沒有那個能力（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。
  *
  * 判法照基座 `FilesystemMiddleware` 的 `wrapModelCall`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `isSandboxBackend`、
- * `supportsDelete`）。組裝點把基座那一顆的 `wrapModelCall` 換成 {@link filesystemModelCallWrap}：先套這份決定（{@link filesystemToolListStep}），再交給基座原本的
- * `wrapModelCall`，基座自己那份過濾因此什麼都不拿掉；系統提示與搬走人話的截斷照舊由基座做。
+ * `supportsDelete`）。組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）把這份決定做成工具清單那一步（{@link filesystemToolListStep}），
+ * 先套它再交給基座原本的 `wrapModelCall`，並登記這一步；基座自己那份過濾因此什麼都不拿掉；系統提示與搬走人話的截斷照舊由基座做。
  *
  * @module
  */
@@ -51,7 +51,7 @@ export function filesystemToolListStep(backend: unknown): ToolListStep {
 }
 
 /**
- * 基座那一格的 `wrapModelCall`：先套 {@link filesystemToolListStep}，再交給基座原本的那一支。一顆都沒拿掉時交下原本的請求物件。
+ * 先套 {@link filesystemToolListStep}，再交給 `inner`；一顆都沒拿掉時交下原本的請求物件。
  *
  * @param backend - 建基座那一顆時交的 backend（實例或工廠）。
  * @param inner - 基座原本的 `wrapModelCall`。

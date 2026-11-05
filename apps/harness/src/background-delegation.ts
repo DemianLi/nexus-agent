@@ -15,7 +15,7 @@
  * `run_in_background` 不會生效、照前景跑。背景與否、模型選擇只在 `subagent` 的 schema 上，前景改派只交那兩格。
  *
  * - **`run_in_background: false`**：把呼叫改派給基座的 `task`（`toolCall.name` 換成 `task`、`request.tool` 換成
- *   `wrapModelCall` 順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
+ *   工具清單那一步順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
  *   回給模型的結果名字改回 `subagent`。
  * - **`true`（預設）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
  *   當場回編號。
