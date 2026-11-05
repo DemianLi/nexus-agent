@@ -67,7 +67,7 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
+import { createHookStepMiddleware } from './hook-step.js';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { isHistoryFromLog } from './history-shadow.js';
@@ -429,14 +429,13 @@ export function createRepeatReminder(
 ): AgentMiddleware {
   const tracked = repeatReminderTracks(settings);
 
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: REPEAT_REMINDER_MIDDLEWARE_NAME,
-    beforeModel: (
-      state: { messages: readonly BaseMessage[] },
-      runtime?: { readonly configurable?: unknown },
-    ) => {
-      const hits = pendingReminders(state.messages ?? [], settings, tracked);
-      const extra = stepNoticesFor(notices, sessions, runtime?.configurable);
+    beforeModel: (state, runtime) => {
+      const { messages } = state as { messages?: readonly BaseMessage[] };
+      const { configurable } = (runtime ?? {}) as { readonly configurable?: unknown };
+      const hits = pendingReminders(messages ?? [], settings, tracked);
+      const extra = stepNoticesFor(notices, sessions, configurable);
       if (hits.length === 0 && extra.length === 0) return undefined;
       const reminders = hits.map(({ tool, count, canonical }) => {
         const text =
@@ -452,10 +451,10 @@ export function createRepeatReminder(
           additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
         });
       });
-      recordReminders(sessions, runtime?.configurable, reminders);
+      recordReminders(sessions, configurable, reminders);
       return { messages: [...extra, ...reminders] };
     },
-  }) as unknown as AgentMiddleware;
+  });
 }
 
 /**
@@ -595,11 +594,12 @@ export function createStepNoticeMiddleware(
   notices: StepNoticeSource,
   sessions: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: STEP_NOTICE_MIDDLEWARE_NAME,
-    beforeModel: (_state: unknown, runtime?: { readonly configurable?: unknown }) => {
-      const messages = stepNoticesFor(notices, sessions, runtime?.configurable);
+    beforeModel: (_state, runtime) => {
+      const { configurable } = (runtime ?? {}) as { readonly configurable?: unknown };
+      const messages = stepNoticesFor(notices, sessions, configurable);
       return messages.length === 0 ? undefined : { messages: [...messages] };
     },
-  }) as unknown as AgentMiddleware;
+  });
 }

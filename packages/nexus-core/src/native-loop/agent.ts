@@ -36,6 +36,7 @@ import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
 import { toolListCellOf, wrapModelCallWith } from '../tool-list-step.js';
+import { HOOK_KINDS, hookStepOf, hookWith } from '../hook-step.js';
 import './events.js';
 import type { AgentStepPayload } from './events.js';
 import { abortReason, raceAbort } from './abort.js';
@@ -206,6 +207,11 @@ export class NativeAgent {
    * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
    */
   readonly #modelCells: readonly LoopMiddleware[];
+  /**
+   * `beforeAgent`、`beforeModel`、`afterAgent` 實際跑的那一份，跟 {@link NativeAgent.middleware} 一一對應：登記了一步的 hook
+   * （{@link hookStepOf}）換成 native 從那一步造的，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 hook 讀到 `undefined`，照樣略過。
+   */
+  readonly #hookCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
   readonly #returnDirect: ReadonlySet<string>;
   readonly #channels: StateChannels;
@@ -250,6 +256,21 @@ export class NativeAgent {
           LoopMiddleware['wrapModelCall']
         >,
       };
+    });
+    this.#hookCells = this.middleware.map((m, index) => {
+      const driven = this.#driven[index]!;
+      const replaced = HOOK_KINDS.flatMap((kind) => {
+        const cell = hookStepOf(m, kind);
+        return driven[kind] === undefined || cell === undefined
+          ? []
+          : [[kind, hookWith(cell)] as const];
+      });
+      if (replaced.length === 0) return driven;
+      const view = Object.create(driven) as Record<string, unknown>;
+      for (const [kind, hook] of replaced) {
+        Object.defineProperty(view, kind, { value: hook, enumerable: true });
+      }
+      return view as unknown as LoopMiddleware;
     });
     const unsupported = this.#driven.find((m) => m.afterModel !== undefined);
     if (unsupported !== undefined) {
@@ -491,7 +512,7 @@ export class NativeAgent {
 
     // `beforeAgent` 跳 `end`：同 LangGraph 落到 exitNode，`afterAgent` 照跑，也照樣能跳回模型。
     let exiting = false;
-    for (const m of this.#driven) {
+    for (const m of this.#hookCells) {
       if (m.beforeAgent === undefined) continue;
       budget.take();
       const name = `${m.name}.before_agent`;
@@ -520,7 +541,7 @@ export class NativeAgent {
                 }));
           if (decision.kind === 'reject') throw new TurnBlockedError();
           let ended = false;
-          for (const m of this.#driven) {
+          for (const m of this.#hookCells) {
             if (m.beforeModel === undefined) continue;
             budget.take();
             const name = `${m.name}.before_model`;
@@ -567,8 +588,8 @@ export class NativeAgent {
     budget: StepBudget,
     note: (name: string, update: Record<string, unknown>) => void,
   ): Promise<boolean> {
-    for (let i = this.#driven.length - 1; i >= 0; i--) {
-      const m = this.#driven[i]!;
+    for (let i = this.#hookCells.length - 1; i >= 0; i--) {
+      const m = this.#hookCells[i]!;
       if (m.afterAgent === undefined) continue;
       budget.take();
       const name = `${m.name}.after_agent`;
