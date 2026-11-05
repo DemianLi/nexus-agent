@@ -124,6 +124,31 @@ describe('summaryEventToCatchUp：state 的事件落後日誌才補', () => {
     expect(restored?.summaryMessage.text).toBe('摘要二');
   });
 
+  it('續接（#2434）：摘要在上一個生命週期，end-seed 之後沒有新的摘要：不補', () => {
+    // 灌回去的是「摘要＋切點之後」，9 則 ≥ 舊切點 7：只靠「切點落在訊息串之外」那一條擋不住。
+    const log = new SessionLog('catch-up-resume', {
+      seed: [summaryEvent({ cutoffIndex: 7, messagesBefore: 9 })],
+    });
+    expect(log.events.at(-1)?.type).toBe('session/end-seed');
+    expect(summaryEventToCatchUp({ messages: messages(9) }, log.events)).toBeUndefined();
+  });
+
+  it('續接（#2434）：新的生命週期又摘要了：補新的那一筆，不是 end-seed 之前的', () => {
+    const log = new SessionLog('catch-up-resume-again', {
+      seed: [summaryEvent({ cutoffIndex: 7, summary: summaryOf('舊的') })],
+    });
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: '/conversation_history/t.md',
+      summary: summaryOf('新的'),
+      beforeCall: true,
+    });
+    const restored = summaryEventToCatchUp({ messages: messages(9) }, log.events);
+    expect(restored?.cutoffIndex).toBe(3);
+    expect(restored?.summaryMessage.text).toBe('新的');
+  });
+
   it('切點落在 state 訊息串之外（日誌與 state 不是同一份歷史）：不補', () => {
     expect(
       summaryEventToCatchUp({ messages: messages(3) }, [summaryEvent({ cutoffIndex: 4 })]),

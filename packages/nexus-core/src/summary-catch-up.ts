@@ -21,7 +21,7 @@
  *
  * ## 做法
  *
- * 進來的請求，state 的事件落後日誌上最後一筆 `compaction/summary` 時：
+ * 進來的請求，state 的事件落後日誌上最後一筆 `compaction/summary` 時（只算這個生命週期的，見下面「續接與分叉」）：
  *
  * 1. 用日誌事件還原一份 `_summarizationEvent`（切點、`filePath` 直接取日誌上那份，摘要訊息用 replay 同一個建構函式
  *    {@link fromLoggedMessage} 還原，不重算）；
@@ -31,6 +31,12 @@
  *
  * **比對只用兩個結構化欄位（切點與 `filePath`），不比摘要文字**：摘要文字是模型生的，沒有穩定的相等性；切點是 state
  * 座標，單調遞增。落後＝日誌切點大於 state 切點（或 state 沒有事件）。
+ *
+ * ## 續接與分叉
+ *
+ * 續接與分叉灌回 state 的都是「摘要＋切點之後」，座標從那一串重新算起；日誌上 `session/end-seed`（分叉的那顆帶
+ * `inherited`）之前的切點是舊座標，套進來會切掉灌回串的開頭（[#2434](https://github.com/DemianLi/nexus-agent/issues/2434)）。
+ * 所以找事件時遇到 `session/end-seed` 就停，同 `conversation-replay.ts` 在 end-seed 換串、清掉摘要。
  *
  * ## 子代理與換模型
  *
@@ -66,8 +72,8 @@ export interface RestoredSummaryEvent {
  * 這個 state 的摘要事件是不是落後日誌；落後就回該補的那一份。
  *
  * @param state - 這一步請求的 graph state（只讀 `messages` 長度與 `_summarizationEvent` 的 `cutoffIndex`、`filePath`）。
- * @param events - 這次呼叫所屬的那份日誌上的事件。
- * @returns 要補的事件；沒有落後（或日誌上沒有可用的摘要事件）回 `undefined`。
+ * @param events - 這次呼叫所屬的那份日誌上的事件；只看最後一顆 `session/end-seed` 之後的（#2434）。
+ * @returns 要補的事件；沒有落後（或這個生命週期還沒有可用的摘要事件）回 `undefined`。
  */
 export function summaryEventToCatchUp(
   state: unknown,
@@ -76,6 +82,8 @@ export function summaryEventToCatchUp(
   let latest: Extract<SessionEvent, { type: 'compaction/summary' }> | undefined;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
+    // end-seed 之前的切點是舊座標，見檔頭「續接與分叉」。
+    if (event.type === 'session/end-seed') break;
     if (event.type === 'compaction/summary') {
       latest = event;
       break;
