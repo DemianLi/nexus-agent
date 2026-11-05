@@ -6,12 +6,16 @@
  *   摘要器實例（每個子代理規格一份），同型兩次共用一份檔、跟 root 的不同。
  * - 續接：壓縮過、重啟、續接之後又壓縮，新的那次從灌回串的座標算起。
  * - 沒有 checkpointer：切點的壽命等於訊息 state 的壽命。langgraph 沒有 checkpointer 時 invoke 之間 state 不延續；native 的
- *   per-thread state 在實例裡，沒有 checkpointer 也延續。
+ *   per-thread state 在實例裡，沒有 checkpointer 也延續。同一張表上留著舊切點、這一次交進來的串比切點短，也不套。
+ * - 沒有日誌：摘要之後那次模型呼叫失敗，切點不遺失，下一輪接著它（以前要靠日誌補回 state，沒有日誌就從頭重摘）。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import type { SessionEvent } from '@nexus/core';
+import { SUMMARY_PROMPT } from '@nexus/core';
+import type { ModelContextLimits, SessionEvent } from '@nexus/core';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +25,8 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createEchoPlugin } from './echo.fixture.js';
 import { withShippedRequestBody } from './live-model.js';
+import { toAgentInvocation } from './messages.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import {
   childLogsOf,
   compareToLog,
@@ -225,6 +231,106 @@ describe('沒有 checkpointer 的組裝', () => {
     } finally {
       await dispose();
       await upstream.close();
+    }
+  }, 60_000);
+
+  it('同一張表留著舊切點、這一次交進來的串比切點短：不套舊切點', async () => {
+    const upstream = await fakeEndpoint(
+      (_index, body) => (hasTools(body) ? {} : { content: '【摘要】之前聊了很多。' }),
+      false,
+    );
+    const root = await mkdtemp(join(tmpdir(), 'nexus-lifetime-short-'));
+    const { agent, dispose } = await createNexusAgent({
+      model: new ChatOpenAI({
+        model: 'fake',
+        apiKey: 'sk-loopback',
+        maxRetries: 0,
+        configuration: { baseURL: upstream.baseURL, fetch: withShippedRequestBody() },
+      }),
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      systemPrompt: '你是測試助手。',
+      plugins: [createEchoPlugin()],
+      summarization: { trigger: [{ type: 'tokens', value: 6000 }], retainTokens: 12 },
+    });
+    const config = { configurable: { thread_id: 'short-after' } };
+    try {
+      const first = Array.from({ length: 9 }, (_, i) =>
+        i % 2 === 0
+          ? new HumanMessage(`一人${String(i)}${i === 2 ? '中'.repeat(30_000) : ''}`)
+          : new AIMessage(`一答${String(i)}`),
+      );
+      await agent.invoke({ messages: first }, config);
+      expect(upstream.bodies.filter((body) => !hasTools(body)).length, '第一次應該摘要過').toBe(1);
+
+      // 灌回的樣子：比第一次的切點短。
+      const second = [new HumanMessage('灌回的摘要'), new HumanMessage('灌回之後')];
+      const count = upstream.bodies.length;
+      await agent.invoke({ messages: second }, config);
+      const sent = upstream.bodies
+        .slice(count)[0]!
+        .messages.filter((m) => m.role !== 'system')
+        .map((m) => m.content);
+      if (process.env.NEXUS_TEST_AGENT_LOOP === 'native') {
+        // native 的 state 接在第一次後面，沒有「較短的串」：切點跟著延續的串，送的是摘要開頭、第二次交的收尾。
+        expect(String(sent[0])).toContain('【摘要】之前聊了很多。');
+        expect(sent.slice(-2)).toEqual(['灌回的摘要', '灌回之後']);
+      } else {
+        expect(sent).toEqual(['灌回的摘要', '灌回之後']);
+      }
+    } finally {
+      await dispose();
+      await upstream.close();
+    }
+  }, 60_000);
+});
+
+describe('沒有日誌的組裝', () => {
+  const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
+  const isSummaryCall = (prompt: readonly BaseMessage[]) =>
+    prompt.some((message) => message.text.includes(SUMMARY_MARK));
+  const SMALL: ModelContextLimits = { contextWindow: 4_200, maxOutputTokens: 200 };
+  const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const H1 = `第 1 句。${PAD}`;
+
+  it('摘要之後那次模型呼叫失敗：切點不遺失，下一輪接著它、不重摘', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: `好 1${PAD}` },
+        { content: '摘要一' },
+        { content: '', error: 'upstream 503' },
+        { content: '好 3' },
+      ],
+    });
+    const root = await mkdtemp(join(tmpdir(), 'nexus-lifetime-nolog-'));
+    let limits = SMALL;
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+      checkpointer: new MemorySaver(),
+      plugins: [],
+      summarization: { trigger: [{ type: 'tokens', value: 100_000 }], retainTokens: 12 },
+      modelLimits: () => limits,
+    });
+    const config = { configurable: { thread_id: 'no-log' } };
+    try {
+      await agent.invoke(toAgentInvocation(H1), config);
+      await expect(agent.invoke(toAgentInvocation('長'.repeat(2_400)), config)).rejects.toThrow();
+      limits = BIG;
+      await agent.invoke(toAgentInvocation('第 3 句。'), config);
+
+      // 前提：第 2 輪摘要過一次、那次請求失敗了。
+      expect(model.prompts.filter(isSummaryCall)).toHaveLength(1);
+      expect(model.prompts).toHaveLength(4);
+      // 第 3 輪的請求：摘要開頭，第 1 句不在裡面。
+      const last = model.prompts
+        .at(-1)!
+        .slice(1)
+        .map((m) => m.text);
+      expect(last[0]).toContain('摘要一');
+      expect(last.some((text) => text.includes(H1))).toBe(false);
+      expect(last.at(-1)).toBe('第 3 句。');
+    } finally {
+      await dispose();
     }
   }, 60_000);
 });

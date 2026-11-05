@@ -431,9 +431,8 @@ function isSummary(message: BaseMessage): boolean {
 }
 
 /**
- * **摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。** 基座的摘要器不改寫
- * `state.messages`，只記一顆 `_summarizationEvent`，每次模型呼叫現組 `[summary, ...messages.slice(cutoffIndex)]`
- * （`deepagents@1.13.1` 的 `getEffectiveMessages`）。所以舊基線還在 state 裡、模型卻看不到；v0.4.30 的去重看
+ * **摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。** 摘要器不改寫
+ * `state.messages`，只在組裝的切點表記一個切點（#2416），每次模型呼叫現組 `[summary, ...messages.slice(cutoffIndex)]`。所以舊基線還在 state 裡、模型卻看不到；v0.4.30 的去重看
  * `state.messages`，說「有」，於是整條 thread 再也補不回來（實測：第二句話 14 次呼叫全是 0 則）。
  *
  * 一場跑三句話，每一句都跑到迴圈上限，摘要每一句都發生好幾次。**要三句**：第二句補回來的那一則，第二句自己
@@ -490,37 +489,32 @@ describe('摘要之後下一句話把基線補回來', () => {
   });
 
   /**
-   * **上游絆索。** 判準讀的是基座的私有 state 鍵，升 `deepagents` 時這兩件事要紅在這裡，而不是讓
-   * 工作區指令又默默消失：
+   * **切點是 `state.messages` 的索引**：判準拿切點表上的切點去切 state 的訊息串，所以模型在摘要之後看到的，必須就是
+   * state 從某一格起連續的那一串。最後一次 agent 呼叫的 prompt 逐則比 id。
    *
-   * 1. 鍵名是 `_summarizationEvent`，帶 `cutoffIndex` 與 `summaryMessage`；
-   * 2. `cutoffIndex` 是 **`state.messages`** 的索引——模型在摘要之後看到的，就是 state 從那一格起的那一串。
-   *
-   * 量的是基座自己寫下的那一顆，不是我們塞的：最後一次 agent 呼叫的 prompt 逐則比 id。
+   * 宿主與摘要器拿同一張切點表（#2416）由上面那條負責：宿主要是拿到空的表，舊基線還在 state 裡，就不會補。
    */
-  it('上游絆索：切點記在 _summarizationEvent，而且是 state.messages 的索引', () => {
-    const event = state._summarizationEvent as
-      { cutoffIndex?: unknown; summaryMessage?: BaseMessage } | undefined;
-    expect(typeof event?.cutoffIndex).toBe('number');
-    const cutoff = event?.cutoffIndex as number;
-
+  it('切點是 state.messages 的索引：摘要之後看到的是 state 從某一格起連續的那一串', () => {
     const last = found.prompts.filter(isAgentCall).at(-1) ?? [];
     expect(last[1] !== undefined && isSummary(last[1])).toBe(true);
-    expect(last[1]?.text).toBe(event?.summaryMessage?.text);
     const seen = last.slice(2).map((message) => message.id);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((id) => typeof id === 'string')).toBe(true);
-    expect(seen).toEqual(
-      (state.messages as BaseMessage[]).slice(cutoff, cutoff + seen.length).map((m) => m.id),
-    );
+    // state 比那次 prompt 多了最後一句的回覆，所以從摘要之後第一則的位置比起。
+    const all = state.messages as BaseMessage[];
+    const cutoff = all.findIndex((message) => message.id === seen[0]);
+    expect(cutoff).toBeGreaterThan(0);
+    expect(seen).toEqual(all.slice(cutoff, cutoff + seen.length).map((m) => m.id));
+    // 圖上沒有摘要的私有欄位。
+    expect(Object.keys(state).filter((key) => key.startsWith('_summarization'))).toEqual([]);
 
     // 判準唯一的假陽性來源：摘要那一則被認成基線。基座真的建出來的那一則，一次都不能是。
     expect(found.prompts.flat().filter(isSummary).some(isAgentInstructionsMessage)).toBe(false);
   });
 
   /**
-   * **續接（`--resume`／serve 碰到舊 thread）不靠切點。** `conversation-restore.ts` 刻意只灌 `messages`、不帶
-   * `_summarizationEvent`，而灌回去的是「摘要＋之後的」——被切掉的基線本來就不在那一串裡，判準退回「有沒有」
+   * **續接（`--resume`／serve 碰到舊 thread）不靠切點。** `conversation-restore.ts` 只灌 `messages`，新組裝的切點表是空的，
+   * 而灌回去的是「摘要＋之後的」——被切掉的基線本來就不在那一串裡，判準退回「有沒有」
    * 也照樣補一則。2026-09-18 實測：推回 9 則、其中 0 則基線，續接後第一次呼叫看得到 1 則。
    */
   it('續接之後：灌回去的那一串沒有切點、也沒有舊基線，第一次呼叫照樣看得到一則', async () => {
@@ -557,13 +551,13 @@ describe('摘要之後下一句話把基線補回來', () => {
 });
 
 /**
- * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
- * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
- * channel 表上加東西。這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ * **摘要沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與 `messages`」量的組裝沒有這顆
+ * plugin；這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。切點在組裝的切點表（#2416），
+ * graph state 上也不該有摘要的私有欄位。
  *
  * **`skillsMetadata` 是例外，而且只有它**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：出貨清單掛了
  * skills 之後，基座的 skills 狀態 channel 是公開的、帶預設值 `[]`，掛了就出現在回傳值裡（沒有 skill 時是空陣列，
- * 不影響 system prompt）。要量的是**私有鍵**（`_summarizationEvent` 之類）沒有外洩，所以其餘一律不准多。
+ * 不影響 system prompt）。要量的是**私有鍵**（`_summarization` 開頭的）沒有外洩，所以其餘一律不准多。
  */
 it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格沒有多的鍵', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
@@ -588,13 +582,16 @@ it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格�
         configurable: { thread_id: 'keys' },
       })) as object;
     }
-    // 前提：摘要真的發生過，那顆鍵在 graph state 裡有值。
+    // 前提：摘要真的發生過，最後一次 agent 呼叫看到的是摘要過的串。
+    expect(model.prompts.at(-1)?.some(isSummary)).toBe(true);
     const snapshot = await (
       built.agent as unknown as {
         getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
       }
     ).getState({ configurable: { thread_id: 'keys' } });
-    expect(snapshot.values._summarizationEvent).toBeDefined();
+    expect(Object.keys(snapshot.values).filter((key) => key.startsWith('_summarization'))).toEqual(
+      [],
+    );
 
     expect(Object.keys(returned).sort()).toEqual(['files', 'messages', 'skillsMetadata']);
   } finally {

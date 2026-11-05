@@ -25,10 +25,10 @@ import {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
   isRealOverflow,
-  readSummarizationEvent,
   syntheticOverflow,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
 import { TokenAnchorBook } from './token-estimate.js';
 
 const BIG = '這是一段很長的內容。'.repeat(300);
@@ -71,6 +71,9 @@ async function run(options: {
   const reports: string[] = [];
   const model = summaryModel(options.summaryFails);
   const limits = options.limits ?? CATALOG;
+  const cutoffs = new SummaryCutoffTable();
+  const config = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
+  const messages = options.messages ?? conversation();
   const middleware = createSummarizer(
     { write: async (path: string) => ({ path }) } as never,
     { ...DEFAULT_SUMMARIZATION, ...options.settings },
@@ -80,6 +83,8 @@ async function run(options: {
     () => limits,
     undefined,
     (message) => reports.push(message),
+    undefined,
+    cutoffs,
   );
   const handled: BaseMessage[][] = [];
   const outcome = await (async () => {
@@ -87,11 +92,12 @@ async function run(options: {
       return {
         result: await middleware.wrapModelCall?.(
           {
-            messages: options.messages ?? conversation(),
-            state: {},
+            messages,
+            state: { messages },
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: [],
+            runtime: config,
           } as never,
           ((request: { messages: BaseMessage[] }) => {
             handled.push(request.messages);
@@ -105,7 +111,7 @@ async function run(options: {
       return { error };
     }
   })();
-  return { ...outcome, reports, handled, model };
+  return { ...outcome, reports, handled, model, cutoff: cutoffs.lookup(config, messages) };
 }
 
 /** 兩條觸發都不靠訊息數：端點超窗只會走「基座接住 handler 的超窗」那條。 */
@@ -134,7 +140,7 @@ describe('端點真的回超窗：retain 0', () => {
     expect(texts(out.handled[1]!)).toHaveLength(2);
     expect(texts(out.handled[1]!)[1]).toBe('短問題');
     expect(out.reports).toEqual([]);
-    expect(readSummarizationEvent(out.result)?.cutoffIndex).toBe(6);
+    expect(out.cutoff?.cutoffIndex).toBe(6);
   });
 
   /**

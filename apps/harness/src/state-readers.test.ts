@@ -268,7 +268,8 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'packages/nexus-core/src/summarization.ts › withRetainedTail request.state': 2,
   'packages/nexus-core/src/summarization.ts › withTokenBudget request.state': 1,
   'packages/nexus-core/src/summarization.ts › withTokenWarmup request.state': 1,
-  'packages/nexus-core/src/summary-catch-up.ts › withSummaryCatchUp request.state': 2,
+  // 把這一步的切點以基座認得的形狀交給內層；B 段把基座的演算法移進 core 之後拿掉（#2416）。
+  'packages/nexus-core/src/summary-cutoffs.ts › withSummaryCutoffs request.state': 1,
   // 環繞工具呼叫的一步拿到的 `state`，自己不讀；只有解不開參數與核准閘門兩步轉給 `toolCallOwner`（#2355）。
   'packages/nexus-core/src/tool-call-step.ts › toolCallSiteOf request.state': 1,
   // 屏障、`returnDirect` 的收尾、解不開參數的原字串三處共用；`history-source=log` 的 root 讀日誌，native loop 讀它交下來的那則，

@@ -138,7 +138,7 @@ import {
   restoreNewlyTruncatedArgs,
 } from './langchain-message-adapter.js';
 import { recordedArgTruncationsOf } from './tool-arg-truncation-log.js';
-import { withSummaryCatchUp } from './summary-catch-up.js';
+import { noteSummaryCutoff, SummaryCutoffTable, withSummaryCutoffs } from './summary-cutoffs.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
@@ -706,6 +706,7 @@ export function createSummarizer(
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
   report?: (message: string) => void,
   retry?: StreamRetryOptions,
+  cutoffs: SummaryCutoffTable = new SummaryCutoffTable(),
 ): AgentMiddleware {
   // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
   // 沒有會話註冊表就查不了日誌，維持直接寫。
@@ -748,7 +749,7 @@ export function createSummarizer(
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
-  const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
+  const logged = withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
   const truncationLogged =
     sessions === undefined ? logged : withArgTruncationLog(logged, sessions, warn);
@@ -764,11 +765,9 @@ export function createSummarizer(
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
-  // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串要是補過的。
+  // 最外層：這一步開始時讀切點表（summary-cutoffs.ts），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串都從這個切點算。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
-    sessions === undefined
-      ? withTokenWarmup(middleware)
-      : withSummaryCatchUp(withTokenWarmup(middleware), sessions);
+    withSummaryCutoffs(withTokenWarmup(middleware), cutoffs);
   // 剪刀關掉：不剪新的，但記過的照樣換上去（#1567 N0780）。續接灌回 state 的是原文，換上去的只有這一層。
   if (pruning === false) {
     return catchUp(
@@ -1634,7 +1633,7 @@ function quietInvoke<T extends object>(
  */
 function withCompactionLog(
   base: AgentMiddleware,
-  sessions: { forCall(config: unknown): SessionLookup },
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
@@ -1653,19 +1652,21 @@ function withCompactionLog(
             logged = cell.summaries;
             const summary = sent.messages?.[0];
             if (summary !== undefined && isSummarizationMessage(summary)) {
+              const local = effective.length - ((sent.messages ?? []).length - 1);
+              const cutoffIndex = previousCutoff === undefined ? local : previousCutoff + local - 1;
+              const filePath = summaryFilePathOf(summary);
               // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
               // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
-              const found = sessions.forCall({
+              const found = sessions?.forCall({
                 configurable: (request as { runtime?: { configurable?: unknown } }).runtime
                   ?.configurable,
               });
-              if (found.kind === 'ok') {
-                const local = effective.length - ((sent.messages ?? []).length - 1);
+              if (found?.kind === 'ok') {
                 try {
                   found.log.append('compaction/summary', {
-                    cutoffIndex: previousCutoff === undefined ? local : previousCutoff + local - 1,
+                    cutoffIndex,
                     messagesBefore: (request.messages ?? []).length,
-                    filePath: summaryFilePathOf(summary),
+                    filePath,
                     summary: toLoggedMessage(summary),
                     // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
                     ...(cell.usage === undefined ? {} : { usage: cell.usage }),
@@ -1676,6 +1677,7 @@ function withCompactionLog(
                   throw summaryLogFailure(error);
                 }
               }
+              noteSummaryCutoff({ cutoffIndex, summaryMessage: summary, filePath });
             }
           }
           return handler(sent);

@@ -133,6 +133,7 @@ import {
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
+import { summaryCutoffsOf } from './summary-cutoffs.js';
 import type { SummarizationSettings } from './summarization.js';
 import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
@@ -1651,6 +1652,8 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
     options.modelSelection === undefined
       ? undefined
       : summaryModelOf(options.modelSelection, registry.sessions);
+  // 切點表一次組裝一張，root 與子代理共用（條目按身分分開），`agent/pre-step` 也問同一張（summary-cutoffs.ts）。
+  const cutoffs = summaryCutoffsOf(registry);
   return () =>
     createSummarizer(
       backend,
@@ -1662,6 +1665,7 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
       summaryModel,
       undefined,
       options.streamRetry,
+      cutoffs,
     );
 }
 

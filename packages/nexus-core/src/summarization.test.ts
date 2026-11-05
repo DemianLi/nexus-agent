@@ -801,7 +801,9 @@ describe('tokens 門檻（接線）', () => {
     expect(sent).toHaveLength(1);
     expect(String(sent[0]!.messages[0]!.content)).toContain('這是摘要。');
     expect(sent[0]!.messages).toHaveLength(3);
-    expect(readSummarizationEvent(result)).toBeDefined();
+    // 切點落在組裝的切點表（#2416），回到圖上的是模型那一步的回覆，不是帶私有鍵的 Command。
+    expect(result).toBeInstanceOf(AIMessage);
+    expect((result as AIMessage).content).toBe('好。');
   });
 
   it('預算觸發的那次摘要照樣不上線，交下去的是本尊', async () => {

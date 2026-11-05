@@ -746,18 +746,14 @@ describe('subagent 自帶的 middleware 到得了那個 subagent', () => {
 });
 
 /**
- * **摘要發生過這件事讀得到，但不在 `invoke()` 的回傳值裡。**
+ * **摘要發生過這件事不在 `invoke()` 的回傳值裡，也不在 graph state 裡。**
  *
- * 基座把 `_summarizationEvent`（`cutoffIndex` / `summaryMessage` / `filePath`）寫進 graph
- * state，而 **`filePath === null` 正是 [#66](https://github.com/DemianLi/nexus-agent/issues/66)
- * 那個 fail-open 的訊號** —— 基座只印一行 `console.warn`，但同一件事在 state 裡有值。
- *
- * 這一條釘的是**取得它的路徑**，因為 [#143](https://github.com/DemianLi/nexus-agent/issues/143)
- * 的成本估算掛在上面：`invoke()` 拿不到，`getState()` 拿得到，所以要 checkpointer 而且是
- * 主動讀、不是推播。基座哪天把它放進回傳值，這條會紅——那時 #143 會變便宜。
+ * 切點（`cutoffIndex` / `summaryMessage` / `filePath`）記在組裝的切點表與日誌的 `compaction/summary`（#2416），
+ * `filePath === null`（[#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open 的訊號）從日誌讀。
+ * 以前基座把它寫進 graph state 的私有鍵；這一條釘住兩個輸出通道上都沒有摘要的私有欄位。
  */
-describe('_summarizationEvent 的取得路徑', () => {
-  it('invoke 的回傳值裡沒有，checkpointer 的快照裡有', async () => {
+describe('摘要的私有欄位不上 graph', () => {
+  it('invoke 的回傳值與 checkpointer 的快照裡都沒有', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-evt-'));
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     const model = new ScriptedChatModel({
@@ -768,13 +764,15 @@ describe('_summarizationEvent 的取得路徑', () => {
       model,
       backend,
       checkpointer: new MemorySaver(),
-      plugins: [tunedSummarization(backend)],
+      plugins: [],
+      summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: 1 },
     });
 
     let returned: Record<string, unknown> = {};
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）。
       for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-        returned = (await agent.invoke(toAgentInvocation(line), {
+        returned = (await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(100)}`), {
           configurable: { thread_id: 'event' },
         })) as unknown as Record<string, unknown>;
       }
@@ -783,9 +781,9 @@ describe('_summarizationEvent 的取得路徑', () => {
     }
 
     // 前提：這一輪真的觸發過。少了它，下面兩條斷言在一個沒摘要過的組裝上也會通過。
-    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+    expect(summarizedWithHistory(model)).toBe(true);
 
-    // 回傳值只有這兩格——摘要那組是 middleware 的私有 state，不在輸出通道上。
+    // 回傳值只有這兩格。
     expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
 
     const snapshot = await (
@@ -793,13 +791,9 @@ describe('_summarizationEvent 的取得路徑', () => {
         getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
       }
     ).getState({ configurable: { thread_id: 'event' } });
-    const event = snapshot.values._summarizationEvent as
-      { cutoffIndex: number; filePath: string | null } | undefined;
-
-    expect(event).toBeDefined();
-    expect(event?.cutoffIndex).toBeGreaterThan(0);
-    // 落點讀得到——`null` 的那一天就是 #66 那個 fail-open 真的發生的那一天。
-    expect(event?.filePath).toContain('/conversation_history/');
+    expect(Object.keys(snapshot.values).filter((key) => key.startsWith('_summarization'))).toEqual(
+      [],
+    );
   });
 });
 
@@ -1793,11 +1787,10 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   /**
    * **摘要已經發生過之後再剪，配對不能斷。**
    *
-   * 基座的 `getEffectiveMessages` 是 `[summary, ...messages.slice(cutoffIndex)]`，而那個
-   * `cutoffIndex` 是**前幾輪**存進 state 的。剪刀要是少回傳一則訊息，這個 slice 就切在錯
+   * 模型看到的是 `[summary, ...messages.slice(cutoffIndex)]`，而那個 `cutoffIndex` 是**前幾輪**記進切點表的。剪刀要是少回傳一則訊息，這個 slice 就切在錯
    * 的位置，AI／Tool 配對當場斷掉——**而且不會拋**，只會讓模型收到一段對不起來的歷史。
    */
-  it('state 裡已經有 _summarizationEvent 時，剪過的那輪照樣走得完', async () => {
+  it('已經有切點時，剪過的那輪照樣走得完', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-prune-'));
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     const model = new ScriptedChatModel({
