@@ -15,7 +15,12 @@
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-import { addedTools, toolCallSessionAddress, wrapToolCallWith } from '@nexus/core';
+import {
+  addedTools,
+  toolCallSessionAddress,
+  withToolCallStep,
+  wrapToolCallWith,
+} from '@nexus/core';
 import type { PluginEntry, ToolAddition, ToolCallStep } from '@nexus/core';
 import { toLangChainTool } from '@nexus/tool-adapter';
 import type { JsonSchema, JsonValue, NexusTool, NexusToolResult } from '@nexus/tools';
@@ -231,16 +236,20 @@ export function hostToolsToolStep(
 
 function middleware(slot: HostToolsSlot): AgentMiddleware {
   const addition = hostToolsAddition(slot, toLangChainTool);
-  return createMiddleware({
-    name: HOST_TOOLS_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const tools = addedTools(request.tools, addition);
-      return handler(
-        tools === request.tools ? request : { ...request, tools: tools as typeof request.tools },
-      );
-    },
-    wrapToolCall: wrapToolCallWith(hostToolsToolStep(slot, toLangChainTool)),
-  }) as AgentMiddleware;
+  const step = hostToolsToolStep(slot, toLangChainTool);
+  return withToolCallStep(
+    createMiddleware({
+      name: HOST_TOOLS_MIDDLEWARE_NAME,
+      wrapModelCall: (request, handler) => {
+        const tools = addedTools(request.tools, addition);
+        return handler(
+          tools === request.tools ? request : { ...request, tools: tools as typeof request.tools },
+        );
+      },
+      wrapToolCall: wrapToolCallWith(step),
+    }) as AgentMiddleware,
+    step,
+  );
 }
 
 /** 組裝用的條目：一顆最外層的 middleware。 */

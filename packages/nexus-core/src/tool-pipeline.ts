@@ -10,7 +10,7 @@
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
  * LangChain 的 `wrapToolCall` 是層層相包的，而 dsh 那四個時刻在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
- * 不由註冊順序決定）。native 的 root 在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createCoreToolCallStepMiddleware`），
+ * 不由註冊順序決定）。native 的 root 在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createToolCallStepMiddleware`），
  * 不經它們的 `wrapToolCall`；`langgraph` 與子代理仍經 `wrapToolCall`（TODO(#2359)）：
  *
  * | 事件 | 生產者 | 位置 |
@@ -64,7 +64,7 @@ import type { EventDispatcher, EventListenerInfo } from './events.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
-import { createCoreToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
+import { createToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
 import { markToolError, readToolOutcome, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -304,7 +304,7 @@ export const TOOL_POST_EXECUTE_MIDDLEWARE_NAME = 'nexusToolPostExecute';
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolPreExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+  return createToolCallStepMiddleware(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
     if (events.count('tools/pre-execute') === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
     const decision = await events.waterfall('tools/pre-execute', exec, () =>
@@ -327,7 +327,7 @@ export function createToolPreExecuteMiddleware(events: EventDispatcher): AgentMi
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(TOOL_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+  return createToolCallStepMiddleware(TOOL_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
     if (events.count('tools/execute') === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
     let raw: unknown;
@@ -352,7 +352,7 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolPostExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+  return createToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
     const result = await next();
     if (events.count('tools/post-execute') === 0) return result;
     if (!ToolMessage.isInstance(result)) return result;

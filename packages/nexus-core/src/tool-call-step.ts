@@ -11,8 +11,8 @@
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
  * 沙箱政策在委派的那一刻同步拍下快照（`@nexus/plugin-sandbox-policy`），靠的就是這一點。
  *
- * **core 自己的格另外登記這一步**（{@link withToolCallStep}／{@link createCoreToolCallStepMiddleware}）：native 的 root 由自己的工具鏈
- * 呼叫它（`native-loop/agent.ts` 的 `#toolCells`）。插件的格不登記，照舊經洋蔥。
+ * **每一格另外登記這一步**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）：native 的 root 由自己的
+ * 工具鏈呼叫它（`native-loop/agent.ts` 的 `#toolCells`）。
  *
  * @module
  */
@@ -58,6 +58,8 @@ export type ToolCallResult = unknown;
  * 內層拿到原本那個請求物件。
  */
 export interface ToolCallSubstitute {
+  /** 換掉模型叫的名字（`tool_call.name`）：內層照新名字認工具；回給模型的結果叫什麼名字，由換的那一步自己改回。 */
+  readonly name?: string;
   /** 換掉工具本體。 */
   readonly tool?: unknown;
   /** 換掉參數（`tool_call.args`）。 */
@@ -103,9 +105,15 @@ function substituted<Request extends WrappedRequest>(
 ): Request {
   if (substitute === undefined) return request;
   const withTool = 'tool' in substitute ? { ...request, tool: substitute.tool } : request;
-  return 'args' in substitute
-    ? { ...withTool, toolCall: { ...request.toolCall, args: substitute.args } }
-    : withTool;
+  if (!('name' in substitute) && !('args' in substitute)) return withTool;
+  return {
+    ...withTool,
+    toolCall: {
+      ...request.toolCall,
+      ...('name' in substitute && { name: substitute.name }),
+      ...('args' in substitute && { args: substitute.args }),
+    },
+  };
 }
 
 /**
@@ -146,17 +154,17 @@ export function wrapToolCallWith(
 }
 
 /**
- * 只環繞工具呼叫的一顆 middleware。
+ * 只環繞工具呼叫的一顆 middleware，並登記這一步（{@link withToolCallStep}）。
  *
  * @param name - middleware 的名字。
  * @param step - 這一步。
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createToolCallStepMiddleware(name: string, step: ToolCallStep): AgentMiddleware {
-  return createMiddleware({
-    name,
-    wrapToolCall: wrapToolCallWith(step),
-  }) as unknown as AgentMiddleware;
+  return withToolCallStep(
+    createMiddleware({ name, wrapToolCall: wrapToolCallWith(step) }) as unknown as AgentMiddleware,
+    step,
+  );
 }
 
 /**
@@ -193,6 +201,7 @@ const registeredSteps = new WeakMap<object, ToolCallStep>();
  * （{@link toolCallStepOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapToolCall`。
  * 所以 `wrapToolCall` 必須就是 `wrapToolCallWith(step)`，兩個 loop 才跑同一份實作。要在 `createNativeAgent` 之前登記：
  * 工具鏈在建構時就算好。`wrapToolCall` 標成由洋蔥外面做的格（`handledOutsideOnion`）不在工具鏈裡。
+ * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。
  * @param step - 它的工具那一步。
@@ -205,25 +214,11 @@ export function withToolCallStep<M extends object>(middleware: M, step: ToolCall
 
 /**
  * 這顆 middleware 登記的工具那一步（{@link withToolCallStep}）；沒登記是 `undefined`。
+ * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param middleware - 那一顆，照身分查：複製出來的物件查不到。
  * @returns 那一步。
  */
 export function toolCallStepOf(middleware: object): ToolCallStep | undefined {
   return registeredSteps.get(middleware);
-}
-
-/**
- * core 自己的、只環繞工具呼叫的一顆 middleware：同 {@link createToolCallStepMiddleware}，另外登記這一步
- * （{@link withToolCallStep}）。插件用的 {@link createToolCallStepMiddleware} 不登記，native 照舊經洋蔥驅動。
- *
- * @param name - middleware 的名字。
- * @param step - 這一步。
- * @returns 可以放進 middleware 陣列的實例。
- */
-export function createCoreToolCallStepMiddleware(
-  name: string,
-  step: ToolCallStep,
-): AgentMiddleware {
-  return withToolCallStep(createToolCallStepMiddleware(name, step), step);
 }

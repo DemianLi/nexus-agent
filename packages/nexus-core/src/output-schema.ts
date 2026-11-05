@@ -48,7 +48,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { INVALID_TOOL_OUTPUT, toolRefusal } from './tool-events.js';
 
@@ -141,7 +141,7 @@ function rejectOutput(feedback: string, toolCallId: string, toolName: string): T
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(
+  return createToolCallStepMiddleware(
     OUTPUT_SCHEMA_MIDDLEWARE_NAME,
     outputSchemaToolStep(schemaOf),
   );

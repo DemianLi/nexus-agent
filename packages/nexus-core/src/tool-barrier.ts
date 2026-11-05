@@ -40,7 +40,7 @@
  */
 
 import { isGraphBubbleUp, GraphInterrupt } from '@langchain/langgraph';
-import { createCoreToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
+import { createToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { SessionLookup } from './registry.js';
 import { toolCallOwner } from './tool-call-owner.js';
@@ -172,7 +172,7 @@ export function createToolBarrierMiddleware(
     });
   };
 
-  return createCoreToolCallStepMiddleware(TOOL_BARRIER_MIDDLEWARE_NAME, async (call, next) => {
+  return createToolCallStepMiddleware(TOOL_BARRIER_MIDDLEWARE_NAME, async (call, next) => {
     const request = wrappedRequestOf(call);
     const owner = owningMessage(request as unknown as ToolBarrierRequest, sessions);
     // 一步只有一顆，或認不出屬於哪一步：沒有屏障可言，原樣放行。

@@ -33,7 +33,7 @@ import { ownerRequestOf } from './tool-call-owner.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
-import { createCoreToolCallStepMiddleware } from './tool-call-step.js';
+import { createToolCallStepMiddleware } from './tool-call-step.js';
 import type { ToolCallSite, ToolCallStep } from './tool-call-step.js';
 import {
   APPROVAL_INVALID_REPLY,
@@ -386,7 +386,7 @@ export function createApprovalGateMiddleware(
   sessions?: ToolEventSessions,
   policy: ApprovalPolicySource = () => DEFAULT_APPROVAL_POLICY,
 ): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(
+  return createToolCallStepMiddleware(
     APPROVAL_GATE_MIDDLEWARE_NAME,
     approvalGateToolStep(listeners, channel, sessions, policy),
   );

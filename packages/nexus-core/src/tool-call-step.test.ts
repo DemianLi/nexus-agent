@@ -1,11 +1,16 @@
 /**
- * `tool-call-step.ts` 的轉接：一步拿到的那次呼叫、往內交時內層拿到的請求（換工具、換參數）、一步在同一個 tick 被呼叫。
+ * `tool-call-step.ts` 的轉接：一步拿到的那次呼叫、往內交時內層拿到的請求（換名字、換工具、換參數）、一步在同一個 tick 被呼叫，
+ * 以及 `createToolCallStepMiddleware` 造的那顆登記了這一步。
  * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，native loop 那一套見 `apps/harness/vitest.native.config.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { wrapToolCallWith } from './tool-call-step.js';
+import {
+  createToolCallStepMiddleware,
+  toolCallStepOf,
+  wrapToolCallWith,
+} from './tool-call-step.js';
 import type { ToolCallSite } from './tool-call-step.js';
 
 const tool = { name: 'echo' };
@@ -92,6 +97,35 @@ describe('wrapToolCallWith', () => {
     expect(request.toolCall.args).toEqual({ text: 'hi' });
   });
 
+  it('換名字：內層拿到換過 tool_call.name 的請求，id 與參數照舊', async () => {
+    let inner: typeof request | undefined;
+    await wrapToolCallWith((_call, next) => next({ name: 'task' }))(request, (passed) => {
+      inner = passed;
+      return 'done';
+    });
+    expect(inner).toEqual({ ...request, toolCall: { ...request.toolCall, name: 'task' } });
+    expect(Object.keys(inner?.toolCall ?? {})).toEqual(['id', 'name', 'args']);
+    expect(request.toolCall.name).toBe('echo');
+  });
+
+  it('名字、工具、參數一起換', async () => {
+    const stub = { name: 'stub' };
+    const args = { text: 'bye' };
+    let inner: typeof request | undefined;
+    await wrapToolCallWith((_call, next) => next({ name: 'task', tool: stub, args }))(
+      request,
+      (passed) => {
+        inner = passed;
+        return 'done';
+      },
+    );
+    expect(inner).toEqual({
+      ...request,
+      tool: stub,
+      toolCall: { ...request.toolCall, name: 'task', args },
+    });
+  });
+
   it('工具與參數一起換', async () => {
     const stub = { name: 'stub' };
     const args = { text: 'bye' };
@@ -129,5 +163,12 @@ describe('wrapToolCallWith', () => {
       return next();
     })(request, () => 'done');
     expect(entered).toBe(true);
+  });
+});
+
+describe('createToolCallStepMiddleware', () => {
+  it('造出來的那顆登記了這一步', () => {
+    const step = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
+    expect(toolCallStepOf(createToolCallStepMiddleware('m', step))).toBe(step);
   });
 });

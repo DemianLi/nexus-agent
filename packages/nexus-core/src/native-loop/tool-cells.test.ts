@@ -1,5 +1,5 @@
 /**
- * native 的工具鏈（#2416）：core 登記了工具步驟的那幾格（`tool-call-step.ts` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經
+ * native 的工具鏈（#2416）：登記了工具步驟的那幾格（`tool-call-step.ts` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經
  * 那顆的 `wrapToolCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapToolCall`。這裡在 fold 之後、組裝之前，
  * 把每顆登記過的 middleware 的那一步與 `wrapToolCall` 各包一個計數，跑一輪「root 叫工具 → 委派子代理、子代理叫工具」，
  * 數每一格對每一次呼叫各被叫了幾次。
