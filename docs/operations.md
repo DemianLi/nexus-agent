@@ -969,7 +969,7 @@ server {
 }
 ```
 
-範本在 nginx 1.30.6 上實測過。每一行對到一件代理非做不可的事：
+範本在 nginx 1.30.6 與 Debian 12 的 nginx 1.22.1 上實測過（後者見下面〈驗過什麼〉）。每一行對到一件代理非做不可的事：
 
 - **剝掉前綴**：serve 只認根路徑。`proxy_pass` 結尾的 `/` 把 `/nexus/threads` 變成 `/threads`。
 - **Host 原樣轉**：serve 拿它比 `--trusted-host`。要用 `$http_host`：`$host` 會丟掉 port，跟瀏覽器送的 `Origin` 對不上，每個 API 請求都會被 403。
@@ -1021,6 +1021,26 @@ journalctl -u nexus-agent -n 20                  # 找「nexus-agent 在 https:/
 ```
 
 登入 token 仍然是一個 serve 行程一顆、所有人共用，跟 SSH 轉 port 一樣；換成個人帳號登入是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+
+**驗過什麼**
+
+在 Linux arm64 容器（Debian bookworm、nginx 1.22.1、systemd-standalone-tmpfiles 252）裡，serve 用假模型，照這一節跑過一輪。serve 的帳號、代理的帳號（nginx 的 worker 以它跑）與一個不在代理群組的帳號，是同一個容器裡的三個帳號：
+
+- tmpfiles 那兩行原樣跑，建出 `drwxr-x--- nexus-agent nginx` 的目錄；serve 照上面的旗標起得來，socket 檔是 `0666`，`ss -ltnp` 看不到 serve。
+- 直接連 socket：serve 的帳號、代理的帳號與 root 都拿到 `livez` 的 `ok`；不在代理群組的帳號與 `nobody` 被 kernel 擋下（`EACCES`）。把目錄的群組換成別的，nginx 回 502，錯誤紀錄是 `connect() to unix:/run/nexus-agent/serve.sock failed (13: Permission denied)`；換回來就是 200。
+- nginx 範本只換宿主頁的上游位址與憑證（自簽），`server unix:` 原樣：
+  - `/nexus/livez` 與 `/nexus/readyz` 回 `ok`，`/nexus` 回 308；
+  - 沒指名的 `Host` 被 serve 擋下（403）；
+  - 登入回 303，cookie 改成 `Path=/nexus/` 並帶 `Secure`；
+  - 元件的 `/embed/threads/mux` 升級成功（101）；
+  - 轉給宿主頁伺服器的那一半，改成 HTTP 版跑：串流逐顆到、上傳邊收邊轉、5 MiB 本文、WebSocket、閒置 70 秒不被切斷等 13 項全過。
+- 宿主頁工具：用瀏覽器開宿主頁，假模型呼叫宿主頁宣告的工具。核准之後，宿主頁收到 `nexus-host-tool` 事件並交回結果，這一輪接著跑完。
+
+這次的環境限制：
+
+- 沒有 systemd，所以上面「`ExecStart` 換成四個旗標」的 systemd 單元沒有在這個環境跑過；serve 以 `sudo -u` 直接起。
+- 容器裡只裝了 `systemd-standalone-tmpfiles`，它不建 `/etc/tmpfiles.d`，所以先建好這個目錄才跑那兩行。裝了 systemd 的主機本來就有這個目錄。
+- 〈怎麼確認〉那幾行裡，`curl` 與 `journalctl` 沒有照原樣跑：連 socket 改用 `socat`，打代理改用 Node，登入網址直接從 serve 的輸出取。
 
 ## 金鑰放哪裡
 
