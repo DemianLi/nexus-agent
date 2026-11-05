@@ -997,7 +997,7 @@ server {
 - **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
 - **本文上限**：照對方系統自己的上限填。
 
-**部署前要跟對方核對的**：對方系統在代理後面產生的絕對網址與轉址。對方如果照自己看到的 `Host` 與協定組網址，會組出 `http://`；`Location` 是相對路徑或用 `X-Forwarded-Proto` 組的就沒事。對方的 cookie 若是 `Path=/`，也會送到 `/nexus/`，serve 不讀別人的 cookie，沒有影響。
+**部署前要跟對方核對的**：對方系統在代理後面產生的絕對網址與轉址。對方如果照自己看到的 `Host` 與協定組網址，會組出 `http://`；`Location` 是相對路徑或用 `X-Forwarded-Proto` 組的就沒事。對方的 cookie 若是 `Path=/`，也會送到 `/nexus/`；serve 不讀宿主頁的 cookie。反方向（serve 的頁面看得到宿主頁的哪些東西）見 [`embed-chat.md`](embed-chat.md) 的〈載入〉。
 
 **探針**：在主機上直接打 socket，`Host` 是 `localhost`，過得了信任圍欄。執行的帳號要連得進 socket：serve 的帳號、代理群組的成員或 root。
 

@@ -17,6 +17,12 @@ serve 在 `/nexus/` 底下供應兩個檔：
 
 同源的代價：宿主頁上執行的任何腳本，都能以使用者的身分打 `/nexus/` 底下的 API。cookie 是 `HttpOnly`，腳本讀不到它，但發得出帶著它的請求。宿主頁載入哪些腳本，跟元件一樣要信得過。
 
+同源是雙向的：serve 在 `/nexus/` 供應的頁面跟宿主頁共用沒標 `HttpOnly` 的 cookie、`localStorage` 與 `sessionStorage`。
+
+- serve 的頁面讀得到宿主頁沒標 `HttpOnly` 的 cookie 與 storage，所以宿主頁的會話 cookie 要標 `HttpOnly`。
+- nexus 寫進 `localStorage` 的鍵都以 `nexus.` 開頭。
+- 獨立頁面切換側欄時會寫一顆 `sidebar_state` cookie，`Path=/`，宿主頁的每個路徑都收得到；宿主頁如果也有同名的 cookie，兩邊會互相蓋掉。
+
 開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉，有 [Vue CLI（webpack）](#vue-cliwebpack) 與 [Vite](#vite) 兩種寫法。
 
 ```html
