@@ -952,7 +952,7 @@ server {
         proxy_http_version 1.1;
 
         proxy_set_header Host $http_host;
-        # 對方在代理後面看不到 https 與使用者的位址。
+        # 宿主頁的伺服器在代理後面看不到 https 與使用者的位址。
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
