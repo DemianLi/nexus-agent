@@ -118,7 +118,7 @@ interface StepOptions {
 
 /**
  * 經切點表跑一步：表上先記上一次切點。回 handler 每次收到的訊息、回傳值，與照 `withCompactionLog` 算出的切點
- * （最後一次交下去的開頭是這一步新的摘要才有）。
+ * （最後一次交下去的開頭是這一步新的摘要才有）。摘要過的步驟順便斷言留下的尾巴等於 state 從切點起的那段。
  */
 async function engineStep(
   engine: ReturnType<typeof createSummarizerEngine>,
@@ -153,19 +153,18 @@ async function engineStep(
   const summarized =
     sent[0]?.additional_kwargs?.lc_source === 'summarization' &&
     sent[0] !== previous?.summaryMessage;
-  return {
-    result,
-    handled,
-    sent,
-    contents: sent.map((m) => String(m.content)),
-    cutoff: summarized
-      ? summaryCutoffIndex(
-          previous?.cutoffIndex,
-          applySummaryCutoff(messages, previous).length,
-          sent.length,
-        )
-      : undefined,
-  };
+  const cutoff = summarized
+    ? summaryCutoffIndex(
+        previous?.cutoffIndex,
+        applySummaryCutoff(messages, previous).length,
+        sent.length,
+      )
+    : undefined;
+  const contents = sent.map((m) => String(m.content));
+  // 反推出的切點就是留下的尾巴在 state 裡的座標：每一條摘要過的情境都經過這裡。
+  if (cutoff !== undefined)
+    expect(contents.slice(1)).toEqual(messages.slice(cutoff).map((m) => String(m.content)));
+  return { result, handled, sent, contents, cutoff };
 }
 
 function engineWith(options: { failWrite?: boolean; sessionId?: string } & Partial<Options> = {}) {
@@ -178,6 +177,12 @@ function engineWith(options: { failWrite?: boolean; sessionId?: string } & Parti
   });
   return { store, engine };
 }
+
+/** 有歷史檔時交下去的那則摘要，全文。 */
+const summaryWithFile = (summary: string) =>
+  'You are in the middle of a conversation that has been summarized.\n\n' +
+  `The full conversation history has been saved to ${PATH} should you need to refer back to it for details.\n\n` +
+  `A condensed summary follows:\n\n<summary>\n${summary}\n</summary>`;
 
 const sections = (text: string | undefined) =>
   stamp(text ?? '')
@@ -201,12 +206,17 @@ describe('摘要器引擎', () => {
     const { model, prompts } = summaryModel();
     const step = await engineStep(engine, turns(8), { model });
     expect(step.cutoff).toBe(6);
-    expect(step.contents.slice(1)).toEqual(['人 6', '答 7']);
+    expect((step.result as AIMessage).content).toBe('好。');
+    expect(step.contents).toEqual([summaryWithFile('摘要 1'), '人 6', '答 7']);
     expect(summaryFilePathOf(step.sent[0]!)).toBe(PATH);
     expect(prompts).toEqual([
       '摘要這段：\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n完。',
     ]);
-    expect(sections(store.files.get(PATH))).toHaveLength(1);
+    // 沒有舊檔：先下載（不存在）再寫新檔。
+    expect(store.calls).toEqual([`download ${PATH}`, `write ${PATH}`]);
+    expect(stamp(store.files.get(PATH)!)).toBe(
+      '## Summarized at <t>\n\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n\n',
+    );
   });
 
   it('連三步帶著上一次的切點：從上一則摘要接著摘，歷史檔接著寫', async () => {
@@ -217,12 +227,6 @@ describe('摘要器引擎', () => {
     for (const count of [8, 12, 16]) {
       const step = await engineStep(engine, turns(count), { previous, model });
       cutoffs.push(step.cutoff);
-      // 反推出的切點就是留下的尾巴在 state 裡的座標。
-      expect(step.contents.slice(1)).toEqual(
-        turns(count)
-          .slice(step.cutoff)
-          .map((m) => String(m.content)),
-      );
       previous = {
         cutoffIndex: step.cutoff!,
         summaryMessage: step.sent[0]!,
@@ -245,6 +249,43 @@ describe('摘要器引擎', () => {
     expect(written[1]).toContain('人 6');
     expect(written[1]).not.toContain('人 4');
     expect(written[1]).not.toContain('摘要 1');
+  });
+
+  it('已有舊檔、上一次切點由外面給：照給的切點接著摘，歷史檔下載後整份上傳', async () => {
+    const { engine, store } = engineWith();
+    store.files.set(PATH, '## Summarized at x\n\n舊的\n\n');
+    const { model, prompts } = summaryModel();
+    const old = () =>
+      new HumanMessage({ content: '舊摘要', additional_kwargs: { lc_source: 'summarization' } });
+    const cutoffs: (number | undefined)[] = [];
+    // 第三步給的切點 9 不是第二步算出的 10：引擎照交進來的那一個切有效串。
+    for (const [count, given] of [
+      [8, undefined],
+      [12, 6],
+      [16, 9],
+    ] as const) {
+      const previous =
+        given === undefined
+          ? undefined
+          : { cutoffIndex: given, summaryMessage: old(), filePath: PATH };
+      cutoffs.push((await engineStep(engine, turns(count), { model, previous })).cutoff);
+    }
+    // 16 則、給 9：有效串 [舊摘要, 9..15] 共 8、留 2，本地切在 6，9 + 6 − 1 = 14。
+    expect(cutoffs).toEqual([6, 10, 14]);
+    expect(prompts).toEqual([
+      '摘要這段：\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n完。',
+      '摘要這段：\nHuman: 舊摘要\nHuman: 人 6\nAI: 答 7\nHuman: 人 8\nAI: 答 9\n完。',
+      '摘要這段：\nHuman: 舊摘要\nAI: 答 9\nHuman: 人 10\nAI: 答 11\nHuman: 人 12\nAI: 答 13\n完。',
+    ]);
+    expect(store.calls).toEqual(
+      Array.from({ length: 3 }, () => [`download ${PATH}`, `upload ${PATH}`]).flat(),
+    );
+    expect(stamp(store.files.get(PATH)!)).toBe(
+      '## Summarized at <t>\n\n舊的\n\n' +
+        '## Summarized at <t>\n\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n\n' +
+        '## Summarized at <t>\n\nHuman: 人 6\nAI: 答 7\nHuman: 人 8\nAI: 答 9\n\n' +
+        '## Summarized at <t>\n\nAI: 答 9\nHuman: 人 10\nAI: 答 11\nHuman: 人 12\nAI: 答 13\n\n',
+    );
   });
 
   it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
@@ -287,11 +328,24 @@ describe('摘要器引擎', () => {
     expect(fresh.handled[0]).toHaveLength(4);
   });
 
+  it('超窗後的倍率多抓一成：估算 × (窗 ÷ 估算) × 1.1 正好是窗的 1.1 倍', async () => {
+    const model = summaryModel({ maxInputTokens: 200 }).model;
+    const overflow = (call: number) => (call === 1 ? new ContextOverflowError('太長') : undefined);
+    /** 超窗一次之後，同一顆實例下一步的切點；沒摘要就是 `undefined`。 */
+    const nextCutoff = async (fraction: number) => {
+      const { engine } = engineWith({ trigger: [{ type: 'fraction', value: fraction }] });
+      await engineStep(engine, turns(4), { model, handlerThrows: overflow });
+      return (await engineStep(engine, turns(4), { model })).cutoff;
+    };
+    // 下一步估出來是窗的 1.1 倍：門檻 1.05 倍會摘要（沒有那一成就剛好等於窗），1.15 倍不會。
+    expect(await nextCutoff(1.05)).toBe(2);
+    expect(await nextCutoff(1.15)).toBeUndefined();
+  });
+
   it('其他錯：原樣拋', async () => {
     const { engine } = engineWith();
-    await expect(
-      engineStep(engine, turns(8), { handlerThrows: () => new Error('503') }),
-    ).rejects.toThrow('503');
+    const error = new Error('503');
+    await expect(engineStep(engine, turns(8), { handlerThrows: () => error })).rejects.toBe(error);
   });
 
   it('工具配對：切點不拆開 AI 與它的工具結果', async () => {
@@ -335,6 +389,7 @@ describe('摘要器引擎', () => {
       new AIMessage({
         content: '',
         tool_calls: [{ id: 'w1', name: 'write_file', args: { file_path: '/a', content: big } }],
+        additional_kwargs: { mark: 1 },
       }),
       new ToolMessage({ content: 'ok', tool_call_id: 'w1' }),
       new AIMessage({
@@ -371,6 +426,8 @@ describe('摘要器引擎', () => {
     expect(step.cutoff).toBeUndefined();
     const argsAt = (i: number) => (step.sent[i] as AIMessage).tool_calls?.[0]?.args;
     expect(argsAt(1)).toEqual({ file_path: '/a', content: cut });
+    // 截過參數的那則是重建的：只照搬 content 與 additional_kwargs。
+    expect(step.sent[1]!.additional_kwargs).toEqual({ mark: 1 });
     expect(argsAt(3)).toEqual({ file_path: '/a', old_string: 'o', new_string: cut });
     expect(argsAt(5)).toEqual({ message: big });
     expect(argsAt(7)).toEqual({ file_path: '/b', content: big });
@@ -394,9 +451,8 @@ describe('摘要器引擎', () => {
     // 壓過就裝得下：只交一次、不生摘要。
     expect(step.handled).toHaveLength(1);
     expect(prompts).toEqual([]);
-    const result = String(step.sent[2]!.content);
-    expect(result.endsWith('\n...(result truncated)')).toBe(true);
-    expect(result.length).toBeLessThan(20_000);
+    // 唯一一則工具結果的預算：max(2000 × 0.7 − 非工具訊息與系統段 14, 1000) 個 token × 4 字元 = 5544（倍率 1）。
+    expect(String(step.sent[2]!.content)).toBe(`${'大'.repeat(5_544)}\n...(result truncated)`);
   });
 
   it('歷史檔寫不進去：warn、摘要不帶歷史檔那句、照樣摘要', async () => {
@@ -412,7 +468,10 @@ describe('摘要器引擎', () => {
     } finally {
       spy.mockRestore();
     }
-    expect(warns[0]).toBe(`Failed to offload conversation history to ${PATH}: 寫不進去`);
+    expect(warns).toEqual([
+      `Failed to offload conversation history to ${PATH}: 寫不進去`,
+      '[SummarizationMiddleware] Backend offload failed during summarization. Proceeding with summary generation.',
+    ]);
   });
 
   it('沒有訊息：原樣交下去；沒有模型：拋錯', async () => {
@@ -429,6 +488,9 @@ describe('摘要器引擎', () => {
         } as never,
         (async () => new AIMessage('好。')) as never,
       ),
-    ).rejects.toThrow('Summarization middleware could not resolve a model.');
+    ).rejects.toMatchObject({
+      message:
+        'Summarization middleware could not resolve a model. Provide `options.model` or ensure `request.model` is present.',
+    });
   });
 });

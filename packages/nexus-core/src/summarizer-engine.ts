@@ -78,7 +78,7 @@ function isContextOverflow(error: unknown): boolean {
  * 建一顆摘要器引擎。回傳的 middleware 名字是 `SummarizationMiddleware`，只有 `wrapModelCall`。
  *
  * - 有效訊息串不空而 `request.model` 缺席就拋錯：摘要模型取自請求。
- * - 歷史檔寫不進去只記一條 warn、照樣摘要，摘要文字不帶歷史檔那句，外層讀成 `null`（#66）。
+ * - 歷史檔寫不進去記兩條 warn、照樣摘要，摘要文字不帶歷史檔那句，外層讀成 `null`（#66）。
  * - 溢出重摘時放大的 token 估算倍率留在這顆實例裡，之後的請求沿用。
  *
  * @param options - 門檻、保留量、參數截斷、歷史檔前綴、backend、提示詞。
