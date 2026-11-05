@@ -446,9 +446,9 @@ interface FunctionParameters {
  * **是 OpenAI 形狀的一份定義，不是工具**：`Runnable` 才算 client tool，langchain 對同名換了實例的
  * client tool 會拒絕，定義則直接交給 `bindTools`。執行時 ToolNode 找的仍是基座那個實例。
  *
- * **帶一格不可列舉的 `name`**：基座的 `_ToolExclusionMiddleware` 排在最內層，用 `tool.name` 認
- * 要拿掉的工具（`hasToolName`，`dist/langsmith-zm0ILQsV.js:5446-5462`）。沒有這一格的話，profile 拿掉
- * 的 `read_file` 會以這個形狀溜回去。不可列舉，所以序列化進請求本體時不會多一格。
+ * **帶一格不可列舉的 `name`**：疊裡靠 `toolNameOf` 認工具的那幾格（`ToolAdmission` 的放行，例如子代理的工具過濾）
+ * 才認得出它是 `read_file`；沒有這一格，被放行規則拿掉的 `read_file` 會以這個形狀溜回去。不可列舉，所以序列化進
+ * 請求本體時不會多一格。
  */
 function modelFacingReadTool(
   tool: object,

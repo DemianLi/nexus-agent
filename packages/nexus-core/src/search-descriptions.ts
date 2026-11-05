@@ -71,7 +71,7 @@ const modelFacing = new WeakMap<object, object>();
 /**
  * 模型看到的搜尋工具：要換的參數說明換掉，其餘（名字、描述、別的參數、必填）原樣。
  * **是 OpenAI 形狀的一份定義，不是工具**，也**帶一格不可列舉的 `name`**：理由同 `read-continuation.ts` 的 `modelFacingReadTool`
- * （基座的 `_ToolExclusionMiddleware` 用 `tool.name` 認要拿掉的工具）。
+ * （靠 `toolNameOf` 認工具的放行規則要認得出它）。
  */
 function modelFacingSearchTool(tool: object, name: string): object {
   const cached = modelFacing.get(tool);
