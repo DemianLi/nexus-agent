@@ -10,7 +10,8 @@
 - 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
 - test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
-- web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）。
+- web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）；
+- setup 的 node_modules 快取：鍵涵蓋影響內容的檔、存取同一組路徑、只有合併後那一輪的 typecheck 存（#2334）。
 """
 
 from __future__ import annotations
@@ -93,8 +94,9 @@ class NodeCompatShape(unittest.TestCase):
         self.assertEqual(len(setup), 1)
         self.assertEqual(setup[0].get('with', {}).get('node-version'), '${{ matrix.node }}')
         setup_node = [s for s in load(SETUP)['runs']['steps'] if str(s.get('uses', '')).startswith('actions/setup-node@')]
-        self.assertEqual(len(setup_node), 1)
-        self.assertEqual(setup_node[0]['with']['node-version'], '${{ inputs.node-version }}')
+        self.assertTrue(setup_node)
+        for step in setup_node:
+            self.assertEqual(step['with']['node-version'], '${{ inputs.node-version }}')
 
     def test_checks_version_before_smoke(self) -> None:
         names = [s.get('name') for s in self.job['steps']]
@@ -217,6 +219,8 @@ class UpgradeGuideGate(unittest.TestCase):
         uses = [str(s.get('uses', '')) for s in steps]
         at = next(i for i, u in enumerate(uses) if u.startswith('actions/checkout@'))
         self.assertEqual(steps[at].get('with', {}).get('fetch-depth'), 0)
+        # blob:none 只延後抓檔案內容，歷史與 tags 照樣完整（#2334）；換成 tree:0 之類的會讓 merge-base 與 diff 走不下去。
+        self.assertIn(steps[at]['with'].get('filter'), (None, 'blob:none'))
         self.assertLess(at, uses.index('./.github/actions/plan-checks'))
         self.assertNotIn('if', steps[uses.index('./.github/actions/plan-checks')])
 
@@ -796,3 +800,43 @@ class EditedPullRequest(unittest.TestCase):
         self.assertIn('gh api "$PR_URL"', step['run'])
         self.assertIn('[ "$live_base" != "$BASE" ]', step['run'])
         self.assertEqual(self.ci['permissions'].get('pull-requests'), 'read')
+
+
+class NodeModulesCache(unittest.TestCase):
+    """setup 的 node_modules 快取（#2334）。鍵漏了會影響內容的檔，命中的就是別的相依；存與取的路徑不一致，快取靜靜沒效。"""
+
+    def setUp(self) -> None:
+        self.steps = load(SETUP)['runs']['steps']
+        self.restore = next(s for s in self.steps if s.get('id') == 'modules')
+        self.save = next(s for s in self.steps if str(s.get('uses', '')).startswith('actions/cache/save@'))
+
+    def test_key_covers_what_shapes_node_modules(self) -> None:
+        key = self.restore['with']['key']
+        for part in ('runner.os', 'runner.arch', 'steps.node.outputs.node-version', "'pnpm-lock.yaml'", "'pnpm-workspace.yaml'"):
+            with self.subTest(part=part):
+                self.assertIn(part, key)
+        for manifest in ("'package.json'", "'packages/*/package.json'", "'apps/*/package.json'", "'vendor/*/package.json'"):
+            with self.subTest(manifest=manifest):
+                self.assertIn(manifest, key)
+
+    def test_save_matches_restore(self) -> None:
+        self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
+        self.assertEqual(self.save['with']['key'], '${{ steps.modules.outputs.cache-primary-key }}')
+        # 型別檢查的快取由 ci.yml 另外存取，混進來會讓它跟著 lockfile 的鍵走。
+        self.assertIn('!packages/*/node_modules/.cache', self.save['with']['path'].split())
+
+    def test_install_runs_on_both_paths(self) -> None:
+        install = next(s for s in self.steps if s.get('name') == '安裝相依套件')
+        self.assertNotIn('if', install)
+        self.assertEqual(install['run'], 'pnpm install --frozen-lockfile')
+
+    def test_only_full_typecheck_saves(self) -> None:
+        self.assertEqual(self.save['if'], "inputs.save-cache == 'true' && steps.modules.outputs.cache-hit != 'true'")
+        callers = {
+            name: next(s for s in job['steps'] if s.get('uses') == './.github/actions/setup')
+            for name, job in load(CI)['jobs'].items()
+            if any(s.get('uses') == './.github/actions/setup' for s in job.get('steps', []))
+        }
+        saving = {name for name, step in callers.items() if 'save-cache' in step.get('with', {})}
+        self.assertEqual(saving, {'typecheck'})
+        self.assertEqual(callers['typecheck']['with']['save-cache'], '${{ inputs.full }}')

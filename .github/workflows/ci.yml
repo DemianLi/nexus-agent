@@ -78,9 +78,12 @@ jobs:
       durations_key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
       durations_key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
     steps:
+      # 完整歷史與 tags（比分歧點、升級指南的 tag），但 blob 用到才抓：只有 HEAD 的工作樹與 lockfile 年齡檢查讀 base 的
+      # `pnpm-lock.yaml` 會用到檔案內容，其餘的 git 操作只看 commit 與 tree（#2334）。
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - uses: ./.github/actions/plan-checks
         id: checks
@@ -371,7 +374,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # 合併後那一輪由這個 job 替 develop 存 node_modules 的快取，給 PR 的 setup 讀（#2334）。
       - uses: ./.github/actions/setup
+        with:
+          save-cache: ${{ inputs.full }}
       - name: Typecheck
         run: .github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'
       - name: 存型別檢查快取

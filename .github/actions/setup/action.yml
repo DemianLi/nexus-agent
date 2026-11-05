@@ -1,5 +1,5 @@
 name: 準備 Node 與相依套件
-description: 每個要跑 TypeScript 檢查的 job 共用的前置：pnpm、Node、frozen lockfile 安裝。
+description: 每個要跑 TypeScript 檢查的 job 共用的前置：Node、pnpm、frozen lockfile 安裝。
 
 inputs:
   node-version:
@@ -8,17 +8,58 @@ inputs:
       相容矩陣與下限冒煙才傳別的版本。
     required: false
     default: '24'
+  save-cache:
+    description: >-
+      node_modules 沒有命中快取時，裝好之後存一份。只給合併後完整一輪的一個 job 開：同一把鍵只存得進一次，
+      PR 上存的別的 PR 讀不到，上傳又排在關鍵路徑上。
+    required: false
+    default: 'false'
 
+# 命中 node_modules 的快取時，跳過 pnpm/action-setup 的自我安裝與 pnpm store 的還原；沒命中時照舊。
+# 兩條路都照跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
+# 不一致就照 lockfile 重裝。快取壞了只會變慢，檢查不會跑在 lockfile 以外的相依上。
 runs:
   using: composite
   steps:
-    # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）。
     # action 一律 pin 浮動 major tag，跟著修補版走；版本下限由 runtime 決定：node20 已棄用，
     # runner 現在強制墊到 node24 並發警告，所以這幾顆都必須是 node24 的 major
     # （checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5）。
-    - uses: pnpm/action-setup@v6
-
+    # 先裝 Node、不帶 cache：快取鍵要用它解析出來的確切版本，而 `cache: pnpm` 要 pnpm 先裝好。
     - uses: actions/setup-node@v7
+      id: node
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # 鍵含 OS、架構、Node 的確切版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、各套件的 package.json
+    # （bin 的連結、packageManager 指定的 pnpm 版本）。~/setup-pnpm 是 pnpm/action-setup 預設的安裝位置。
+    # 型別檢查的快取也在 node_modules 底下，由 ci.yml 另外存取，這裡排除。
+    - uses: actions/cache/restore@v6
+      id: modules
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          apps/*/node_modules
+          vendor/*/node_modules
+          !packages/*/node_modules/.cache
+          !apps/*/node_modules/.cache
+          ~/setup-pnpm
+        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'packages/*/package.json', 'apps/*/package.json', 'vendor/*/package.json') }}
+
+    - name: 接上快取裡的 pnpm
+      if: steps.modules.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        echo "PNPM_HOME=$HOME/setup-pnpm/node_modules/.bin" >> "$GITHUB_ENV"
+        echo "$HOME/setup-pnpm/node_modules/.bin" >> "$GITHUB_PATH"
+
+    # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）。
+    - uses: pnpm/action-setup@v6
+      if: steps.modules.outputs.cache-hit != 'true'
+
+    # Node 已經裝好，這一步只為了還原 pnpm store（沒命中時在 post 存）。
+    - uses: actions/setup-node@v7
+      if: steps.modules.outputs.cache-hit != 'true'
       with:
         node-version: ${{ inputs.node-version }}
         cache: pnpm
@@ -26,3 +67,16 @@ runs:
     - name: 安裝相依套件
       shell: bash
       run: pnpm install --frozen-lockfile
+
+    - uses: actions/cache/save@v6
+      if: inputs.save-cache == 'true' && steps.modules.outputs.cache-hit != 'true'
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          apps/*/node_modules
+          vendor/*/node_modules
+          !packages/*/node_modules/.cache
+          !apps/*/node_modules/.cache
+          ~/setup-pnpm
+        key: ${{ steps.modules.outputs.cache-primary-key }}
