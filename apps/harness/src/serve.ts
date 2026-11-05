@@ -240,7 +240,7 @@ export interface ServeInvocation {
    * 省略就印 serve 自己的來源。
    */
   readonly publicUrl?: string;
-  /** gzip 壓縮（#1570）：只在 `--compression gzip` 時有值；省略就是不壓，跟以前完全一樣。 */
+  /** gzip 壓縮（#1570）：只在 `--compression gzip` 時有值；省略就是不壓。 */
   readonly compression?: WireCompression;
   readonly workspace?: string;
   /** 見 `assembly-root.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
@@ -297,7 +297,7 @@ const USAGE = `用法：
   --unix-socket <path> 改聽這個 Unix socket、不綁 port，只讓同主機的反向代理連進來；不能配 --port，要配 --socket-group 與 --public-url
                        socket 所在目錄要是 serve 的使用者自己的、群組是 --socket-group、rwx 權限恰好 750 或 710，否則起不來
   --socket-group <gid> 代理所在群組的數字 gid（例如 getent group nginx 的第三欄）
-  --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
+  --compression <mode> none｜gzip，預設 none（不壓）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
   --compression-level <0-9>
                        gzip 等級，預設 1
@@ -477,7 +477,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     values['public-url'] === undefined ? undefined : parsePublicUrl(values['public-url']);
   const unixSocket = parseUnixSocket(values, publicUrl);
 
-  // 壓縮旗標的驗證（照 dsh 的 schema）；不合法是 usage error，在任何檔案寫入之前失敗。
+  // 壓縮旗標的驗證：不合法是 usage error，在任何檔案寫入之前失敗。
   let compression: WireCompression | undefined;
   try {
     compression = parseCompressionFlags({
@@ -1978,7 +1978,7 @@ async function startServer(
     throw error;
   }
 
-  // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
+  // **這一行是敏感輸出**：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
   const authenticatedUrl =
     listening.kind === 'front'

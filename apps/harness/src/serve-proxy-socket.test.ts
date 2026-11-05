@@ -3,7 +3,6 @@
  * 目錄權限不合就起不來，而且一個檔都沒寫；上一次被砍掉留下的 socket 檔不擋重啟。
  */
 
-import { spawn } from 'node:child_process';
 import { access, chmod, chown, lstat, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -15,6 +14,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { bodyLog } from './fixtures.js';
+import { staleSocketAt } from './proxy-socket.fixture.js';
 
 const POSIX = process.platform !== 'win32';
 const GID = process.getgid?.() ?? 0;
@@ -213,19 +213,7 @@ describe.runIf(POSIX)('serve 聽 --unix-socket', () => {
 
   it('上一次被 SIGKILL 留下的 socket 檔不擋重啟；正常收尾會把檔清掉', async () => {
     const socketPath = await socketIn(0o750);
-    const child = spawn(
-      process.execPath,
-      [
-        '-e',
-        'require("node:net").createServer().listen(process.argv[1], () => process.stdout.write("ready"))',
-        socketPath,
-      ],
-      { stdio: ['ignore', 'pipe', 'inherit'] },
-    );
-    await new Promise<void>((resolve) => child.stdout.once('data', () => resolve()));
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-    child.kill('SIGKILL');
-    await exited;
+    await staleSocketAt(socketPath);
     expect((await lstat(socketPath)).isSocket()).toBe(true);
 
     await start(socketPath, await mkdtemp(join(tmpdir(), 'nexus-serve-home-')));
