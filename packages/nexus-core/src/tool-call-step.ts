@@ -3,7 +3,7 @@
  * middleware 經 {@link wrapToolCallWith} 呼叫（agent loop 脫離 LangChain，[#2336](https://github.com/DemianLi/nexus-agent/issues/2336)）。
  *
  * 一步拿到這次呼叫（{@link ToolCallSite}）與往內一層（{@link ToolCallNext}）：可以先做事再往內交、不往內交而回自己的結果、
- * 換掉工具本體或參數（{@link ToolCallSubstitute}）再往內交，或看往內交回來的結果再決定回什麼。
+ * 換掉名字、工具本體或參數（{@link ToolCallSubstitute}）再往內交，或看往內交回來的結果再決定回什麼。
  *
  * **結果是不透明的**（{@link ToolCallResult}）：往內交回來的是 `ToolMessage` 或 `Command`；一步要回自己的結果時，造一則
  * `ToolMessage`（`tool-events.ts` 的 `toolRefusal`）。
@@ -11,8 +11,8 @@
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
  * 沙箱政策在委派的那一刻同步拍下快照（`@nexus/plugin-sandbox-policy`），靠的就是這一點。
  *
- * **每一格另外登記這一步**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）：native 的 root 由自己的
- * 工具鏈呼叫它（`native-loop/agent.ts` 的 `#toolCells`）。
+ * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 的工具鏈
+ * 直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格照洋蔥驅動 `wrapToolCall`。
  *
  * @module
  */
@@ -58,7 +58,11 @@ export type ToolCallResult = unknown;
  * 內層拿到原本那個請求物件。
  */
 export interface ToolCallSubstitute {
-  /** 換掉模型叫的名字（`tool_call.name`）：內層照新名字認工具；回給模型的結果叫什麼名字，由換的那一步自己改回。 */
+  /**
+   * 換掉模型叫的名字（`tool_call.name`）：內層拿到的 `tool_call.name`／{@link ToolCallSite.name} 是新名字。工具本體不跟著換
+   * （{@link toolNameOfCall} 與最內層的執行都先認 `tool`），要內層照新名字認工具就連 `tool` 一起換。回給模型的結果叫什麼名字，
+   * 由換的那一步自己改回。
+   */
   readonly name?: string;
   /** 換掉工具本體。 */
   readonly tool?: unknown;

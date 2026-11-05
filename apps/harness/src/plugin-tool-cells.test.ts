@@ -123,7 +123,7 @@ const worker: PluginEntry = {
 
 /**
  * 委派那一次呼叫：同步往內交，**回來的下一行**就把 root 切成 `read-only`。沙箱那一格在往內交的同一個 tick 拍快照的話，
- * 子代理拿到的是切之前那一格；那一步晚一個 `await` 才跑，拍到的就是切之後的。
+ * 子代理拿到的是切之前的模式；那一步晚一個 `await` 才跑，拍到的就是切之後的。
  */
 function flipAfterDelegating(flipped: string[]): PluginEntry {
   return {
@@ -242,7 +242,7 @@ describe.each(['native', 'langgraph'] as const)(
 
     it('前景委派：內層看到 task，模型拿回的結果叫 subagent，日誌記的是 subagent', async () => {
       const { seen, messages, toolEvents } = await run(loop);
-      // 改名的那一格在最外層：它自己看到 `subagent`，往內每一格看到 `task`。
+      // 改名的那一格在沙箱與 workspace-changes 外面：它自己看到 `subagent`，這兩格看到 `task`。
       expect(seen.names.get(BACKGROUND_DELEGATION_MIDDLEWARE_NAME)?.get('root-sub')).toEqual([
         'subagent',
       ]);
@@ -294,7 +294,7 @@ describe.each(['native', 'langgraph'] as const)(
       const flipped: string[] = [];
       const { childModes, messages } = await run(loop, [flipAfterDelegating(flipped)]);
       expect(messages.at(-1)?.text).toBe('好了');
-      // 切了，root 那一格真的變了：子代理沒跟著變，不是因為根本沒切。
+      // 切了，root 的模式真的變了：子代理沒跟著變，不是因為根本沒切。
       expect(flipped).toEqual(['read-only']);
       expect(childModes).toEqual([{ mode: 'workspace-write', source: 'delegation' }]);
     });
