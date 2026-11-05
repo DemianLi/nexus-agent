@@ -25,6 +25,7 @@ import {
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
   TOOL_ERROR_PREFIX,
+  toolDescriptionOf,
 } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
@@ -220,15 +221,13 @@ describe('不給選項：完全不變', () => {
   });
 });
 
-/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求。 */
+/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求（`task` 在那裡是 core 逐字造的定義）。 */
 async function describedTool(background: boolean, name: 'task' | 'subagent'): Promise<string> {
   let seen = '';
   const spy = createMiddleware({
     name: 'zzDescriptionSpy',
     wrapModelCall: (request, handler) => {
-      seen =
-        (request.tools.find((each) => each.name === name) as { description?: string })
-          ?.description ?? '';
+      seen = toolDescriptionOf(request.tools.find((each) => each.name === name)) ?? '';
       return handler(request);
     },
   });
