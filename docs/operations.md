@@ -1026,15 +1026,21 @@ journalctl -u nexus-agent -n 20                  # 找「nexus-agent 在 https:/
 
 在 Linux arm64 容器（Debian bookworm、nginx 1.22.1、systemd-standalone-tmpfiles 252）裡，serve 用假模型，照這一節跑過一輪。serve 的帳號、代理的帳號（nginx 的 worker 以它跑）與一個不在代理群組的帳號，是同一個容器裡的三個帳號：
 
-- tmpfiles 那兩行原樣跑，建出 `drwxr-x--- nexus-agent nginx` 的目錄；serve 照上面的旗標起得來，socket 檔是 `0666`，`ss -ltnp` 看不到 serve。
+- tmpfiles 那兩行原樣跑，建出 `drwxr-x--- nexus-agent nginx` 的目錄；serve 帶 `--unix-socket`、`--socket-group`、`--trusted-host`、`--public-url` 起得來（`--public-url` 是瀏覽器開的 HTTP 網址，`--trusted-host` 多給一個它的 authority；沒帶 `--live` 與 `--workspace`，模型用假的），socket 檔是 `0666`，`ss -ltnp` 看不到 serve。
 - 直接連 socket：serve 的帳號、代理的帳號與 root 都拿到 `livez` 的 `ok`；不在代理群組的帳號與 `nobody` 被 kernel 擋下（`EACCES`）。把目錄的群組換成別的，nginx 回 502，錯誤紀錄是 `connect() to unix:/run/nexus-agent/serve.sock failed (13: Permission denied)`；換回來就是 200。
 - nginx 範本只換宿主頁的上游位址與憑證（自簽），`server unix:` 原樣：
   - `/nexus/livez` 與 `/nexus/readyz` 回 `ok`，`/nexus` 回 308；
   - 沒指名的 `Host` 被 serve 擋下（403）；
   - 登入回 303，cookie 改成 `Path=/nexus/` 並帶 `Secure`；
   - 元件的 `/embed/threads/mux` 升級成功（101）；
-  - 轉給宿主頁伺服器的那一半，改成 HTTP 版跑：串流逐顆到、上傳邊收邊轉、5 MiB 本文、WebSocket、閒置 70 秒不被切斷等 13 項全過。
-- 宿主頁工具：用瀏覽器開宿主頁，假模型呼叫宿主頁宣告的工具。核准之後，宿主頁收到 `nexus-host-tool` 事件並交回結果，這一輪接著跑完。
+  - 轉給宿主頁伺服器的那一半，`listen 443 ssl` 換成 `listen 80`、拿掉憑證那兩行之後跑：
+    - `Host` 原樣轉，帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`，瀏覽器自己送的 `X-Forwarded-For` 被覆寫；
+    - 不帶 `X-Accel-Buffering` 的串流逐顆到；
+    - 上傳的本文邊收邊轉，5 MiB 的本文轉得過去；
+    - WebSocket 升級並來回；
+    - 對方的相對轉址原樣回到瀏覽器；
+    - 閒置 70 秒的串流沒有被切斷。
+- 宿主頁工具：經上面 `listen 80` 那份設定，用瀏覽器開宿主頁，假模型呼叫宿主頁宣告的工具。核准之後，宿主頁收到 `nexus-host-tool` 事件並交回結果，這一輪接著跑完。
 
 這次的環境限制：
 
