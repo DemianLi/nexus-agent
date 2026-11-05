@@ -11,6 +11,7 @@
 - test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
 - web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）；
+- 輕的模式 plan 成功、rust 為 false、其餘全是 skipped 時 gate 不起 job，條件涵蓋 gate 的每一個 needs；plan 也寫輕的模式的摘要（#2334）；
 - setup 的 node_modules 快取：只接受完全命中、鍵涵蓋影響內容的檔、存取同一組路徑、只有合併後那一輪的 typecheck 存（#2334）。
 """
 
@@ -144,6 +145,28 @@ class Gate(unittest.TestCase):
                 self.assertIn(job, skipped)
                 self.assertIn(job, required)
 
+    def test_skips_only_when_plan_already_decided(self) -> None:
+        """plan 成功、輕的模式、rust 為 false、其餘全是 skipped 才不起 job，少一個就照跑。"""
+        cond = ' '.join(self.gate['if'].split())
+        self.assertTrue(cond.startswith('always() && !('), cond)
+        for part in (
+            "needs.plan.result == 'success'",
+            "needs.plan.outputs.mode == 'light'",
+            "needs.plan.outputs.rust == 'false'",
+        ):
+            with self.subTest(part=part):
+                self.assertIn(part, cond)
+        # 新增 job 沒列進來，它跑起來 gate 照樣會跳過，它的結果就沒人判。
+        for job in set(self.gate['needs']) - {'plan'}:
+            with self.subTest(job=job):
+                self.assertIn(f"needs.{job}.result == 'skipped'", cond)
+        self.assertNotIn('||', cond)
+
+    def test_plan_writes_the_light_summary(self) -> None:
+        step = next(s for s in self.ci['jobs']['plan']['steps'] if s.get('name') == '輕的模式的摘要')
+        self.assertEqual(step['if'], "steps.plan.outputs.mode == 'light'")
+        self.assertIn('GITHUB_STEP_SUMMARY', step['run'])
+
     def test_reads_the_mode_from_plan(self) -> None:
         """全部 skipped 只在 plan 說是輕的模式時才放行；模式判錯成輕的，靠 Mode 那組測試擋。"""
         self.assertEqual(self.step['env']['MODE'], '${{ needs.plan.outputs.mode }}')
@@ -185,7 +208,7 @@ class Budget(unittest.TestCase):
     def test_post_merge_and_two_light_gates_fit(self) -> None:
         """ci.yml 檔頭的算式：合併後一輪的峰值，加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
         jobs = load(CI)['jobs']
-        # 輕的一輪是 plan 接 gate：中間那一段都只在全跑時跑，gate 等 plan 跑完才開始，同時只有 1 個。
+        # 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate：中間那一段都只在全跑時跑，gate 等 plan 跑完才開始，同時只有 1 個。
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
