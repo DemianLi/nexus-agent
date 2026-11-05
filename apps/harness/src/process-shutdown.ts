@@ -11,6 +11,10 @@
  *   `dispose` 不能讓 Ctrl-C 失效。
  * - 收尾本身失敗也強制結束，用同一個碼。
  *
+ * 到了上限，強制結束之前先叫 `onTimeout(code)`（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。
+ * `forceExit` 拿到的碼分不出逾時、收尾失敗與第二次訊號，要讓人看出這次是逾時結束、沒排空，只能靠它；
+ * 印不印、印到哪由呼叫端決定。
+ *
  * 舊的做法是 `process.once('SIGINT', stop)`：第一次之後 listener 就沒了，第二次訊號落回
  * 預設動作（tsx 底下是它的 preflight 代為 `exit(130)`），而且收尾沒有上限。行為上「第二次
  * 就結束」跟這裡一樣，差在那是意外不是政策——沒有上限、沒有測試、退出碼也不對。
@@ -36,6 +40,8 @@ export interface ProcessShutdown {
  * @param forceExit - 當場結束行程。測試換掉它。
  * @param complete - 記下自然結束的退出碼。測試換掉它。
  * @param timeoutMs - 強制結束前的寬限。測試換掉它。
+ * @param onTimeout - 到了上限、強制結束之前叫一次，拿到的是要結束的碼。收完、收尾失敗、第二次訊號都不叫。
+ *   它拋錯也照樣強制結束。
  * @returns 正常呼叫會合併、重複的訊號會升級的控制器。
  */
 export function createProcessShutdown(
@@ -47,6 +53,7 @@ export function createProcessShutdown(
     process.exitCode = code;
   },
   timeoutMs = PROCESS_SHUTDOWN_TIMEOUT_MS,
+  onTimeout: (code: number) => void = () => undefined,
 ): ProcessShutdown {
   let pending: Promise<void> | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -74,7 +81,11 @@ export function createProcessShutdown(
   const start = (code: number, forceAfterDispose: boolean): Promise<void> => {
     if (pending !== undefined) return pending;
     timeout = setTimeout(() => {
-      forceExitOnce(code);
+      try {
+        onTimeout(code);
+      } finally {
+        forceExitOnce(code);
+      }
     }, timeoutMs);
     pending = Promise.resolve()
       .then(dispose)

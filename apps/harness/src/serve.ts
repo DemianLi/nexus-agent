@@ -117,7 +117,7 @@ import {
 import { installFailLoud } from './fail-loud.js';
 import type { FailLoudProcess } from './fail-loud.js';
 import { forkAncestors, inheritedStashNames } from './fork-stash.js';
-import { createProcessShutdown } from './process-shutdown.js';
+import { createProcessShutdown, PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import {
   assertThreadRootsBaseSeparate,
@@ -590,6 +590,8 @@ export interface RunningServe {
    * 而且那一段時間 serve 還在收新回合，跟「不讓壞掉的 serve 存活」衝突。預設（省略）照舊等時間窗，SIGTERM／SIGINT 走這條。
    */
   close(options?: { readonly drain?: boolean }): Promise<void>;
+  /** 伺服器日誌 `serve` logger 的 `warn`。行程層的收尾逾時那一行從這裡寫（{@link installServeProcessLifecycle}）。 */
+  readonly warn: (line: string) => void;
   /**
    * 影子比對（#2355）的計數：一台 server 一份，每條 thread 的組裝傳同一份；`#settings/history-source` 是 `shadow` 的 thread 才會數。
    * 不是 `match` 的那幾次另走伺服器日誌的 `history-shadow` logger（debug 等級）。
@@ -2106,6 +2108,7 @@ async function startServer(
   return {
     url: server.url,
     authenticatedUrl,
+    warn,
     historyShadow,
     ...(options.conversation !== undefined && { conversationHandler: handler }),
     close: async (options) => {
@@ -2154,6 +2157,11 @@ async function startServer(
   };
 }
 
+/** 收尾逾時、強制結束之前印的那一行（#2231）。 */
+function shutdownTimeoutNotice(code: number): string {
+  return `serve 收尾逾時（${String(PROCESS_SHUTDOWN_TIMEOUT_MS)} 毫秒）：還有沒排空的，可能有沒寫進會話日誌的（重啟後不在）；以退出碼 ${String(code)} 強制結束`;
+}
+
 /** {@link installServeProcessLifecycle} 需要的那一片 `process`：fail-loud 那幾個事件，加上兩個訊號與退出碼。 */
 export type ServeProcess = FailLoudProcess & {
   on(event: 'SIGTERM' | 'SIGINT', handler: () => void): unknown;
@@ -2177,6 +2185,8 @@ export interface ServeProcessLifecycle {
  * - 訊號（`SIGTERM` 回 0、`SIGINT` 回 130）走 {@link createProcessShutdown}：5 秒上限、收尾中再來一次就當場結束（#599）。
  *   **`close()` 拒絕時兩者都回 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：有東西沒收好（會話日誌沒落盤這類），監管程式要從退出碼看得出來。
  *   逾時與第二次訊號回訊號的碼：那兩條沒有等到 `close()` 的結果。
+ *   **逾時多印一行「還有沒排空的」**到標準錯誤與伺服器日誌（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）：碼跟正常停止一樣，
+ *   監控要靠這一行分出逾時結束。沒有這一行只代表沒有逾時：第二次訊號同樣沒排空，也不印，那是操作的人自己說不等了。
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
@@ -2216,6 +2226,12 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
     },
     (code) => {
       proc.exitCode = code;
+    },
+    PROCESS_SHUTDOWN_TIMEOUT_MS,
+    (code) => {
+      const line = shutdownTimeoutNotice(code);
+      console.error(line);
+      running?.warn(line);
     },
   );
   // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。

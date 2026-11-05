@@ -52,6 +52,7 @@ function fakeRunning(options: { fail?: Error } = {}) {
     release = resolve;
   });
   const state = { closes: 0 };
+  const warned: string[] = [];
   const running = {
     url: 'http://127.0.0.1:0',
     authenticatedUrl: 'http://127.0.0.1:0/?token=x',
@@ -60,8 +61,11 @@ function fakeRunning(options: { fail?: Error } = {}) {
       await gate;
       if (options.fail !== undefined) throw options.fail;
     },
+    warn: (line: string) => {
+      warned.push(line);
+    },
   } as RunningServe;
-  return { running, state, release };
+  return { running, state, release, warned };
 }
 
 describe('serve 行程層收尾共用一份 dispose', () => {
@@ -165,38 +169,46 @@ describe('serve 行程層收尾共用一份 dispose', () => {
       ['SIGINT', 130],
     ] as const) {
       const { proc, exits, fire } = fakeProc();
-      const { running, release } = fakeRunning();
+      const { running, release, warned } = fakeRunning();
       installServeProcessLifecycle(proc).attach(running);
       fire(signal);
       release();
       await vi.waitFor(() => {
         expect(exits).toEqual([code]);
       });
+      expect(warned).toEqual([]);
     }
   });
 
   it('5 秒逾時：以訊號的碼結束，之後 close() 才拒絕也不改碼', async () => {
     vi.useFakeTimers();
     const { proc, exits, fire } = fakeProc();
-    const { running, release } = fakeRunning({ fail: new Error('逾時之後才失敗') });
+    const { running, release, warned } = fakeRunning({ fail: new Error('逾時之後才失敗') });
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       installServeProcessLifecycle(proc).attach(running);
       fire('SIGTERM');
       await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
       expect(exits).toEqual([0]);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('收尾逾時');
+      expect(warned[0]).toContain('沒排空');
+      expect(warned[0]).toContain('退出碼 0');
+      expect(error.mock.calls).toEqual([[warned[0]]]);
       release();
       await vi.advanceTimersByTimeAsync(0);
       expect(exits).toEqual([0]);
+      expect(warned).toHaveLength(1);
     } finally {
       error.mockRestore();
       vi.useRealTimers();
     }
   });
 
-  it('收尾中第二次訊號：當場以訊號的碼結束，不等 close() 的結果', async () => {
+  it('收尾中第二次訊號：當場以訊號的碼結束，不等 close() 的結果，也不印逾時那一行', async () => {
+    vi.useFakeTimers();
     const { proc, exits, fire } = fakeProc();
-    const { running, release } = fakeRunning({ fail: new Error('之後才失敗') });
+    const { running, release, warned } = fakeRunning({ fail: new Error('之後才失敗') });
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       installServeProcessLifecycle(proc).attach(running);
@@ -204,11 +216,15 @@ describe('serve 行程層收尾共用一份 dispose', () => {
       await Promise.resolve();
       fire('SIGTERM');
       expect(exits).toEqual([0]);
+      // 推過整個上限：第二次訊號沒有清掉計時器的話，逾時那一行會在這裡出現。
+      await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
       release();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.advanceTimersByTimeAsync(0);
       expect(exits).toEqual([0]);
+      expect(warned).toEqual([]);
     } finally {
       error.mockRestore();
+      vi.useRealTimers();
     }
   });
 

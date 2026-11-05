@@ -613,7 +613,7 @@ header（世代檔的第一行；舊兩檔是 `.header.json`）自格式 30 起�
 **停 `serve` 按一次 Ctrl-C 就好**（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。第一次
 訊號會把每一條 thread 的日誌排空、關檔之後才結束（退出碼 130；`SIGTERM` 是 0）；**收尾失敗**（磁碟滿寫不完這類，
 原因印在標準錯誤）**退出碼是 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)），沒寫進去的那幾筆重啟後不在。收尾最多等 5 秒，
-到了就強制結束，退出碼是訊號的碼，不代表都收好了，這條路也不印訊息（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
+到了就強制結束，退出碼仍是訊號的碼，不代表都收好了：這時標準錯誤印一行 `serve 收尾逾時（5000 毫秒）：還有沒排空的…`，伺服器日誌也記同一行（`warn`，logger 名 `serve`；門檻調到 `error` 就只剩標準錯誤那一行）。沒有第二次訊號時，要分出這次有沒有收完就看這一行（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
 檢查點把使用者那句話與之前每一步先寫下去（`session-checkpoint-policy`，見下面 core 那幾顆），所以
 最多丟最後一步的尾巴。用腳本或監管程式停它時，送一次訊號、等它自己結束，不要連送。
 
@@ -1257,7 +1257,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | 等級 | 放什麼 |
 | --- | --- |
 | `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
-| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]`、`serve 收尾逾時`（收尾到了 5 秒上限，見〈會話日誌〉停 `serve` 那一段） |
 | `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
 
 **命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
@@ -1522,7 +1522,7 @@ WantedBy=multi-user.target
 
 - **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
-  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**，這條路今天也不印訊息，看不出日誌有沒有排空（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
+  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**：退出碼分不出來，要看 journald 裡有沒有 `serve 收尾逾時` 那一行（標準錯誤一行；伺服器日誌的門檻沒調到 `error` 時再一行；[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
   這兩個數字改其中一個，另一個要跟著改。
 - **收尾失敗之後**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：serve 以 1 結束，原因印在標準錯誤。照 systemd 的語意（**沒有實跑過**），上面這份 `Restart=on-failure` 的單元：`systemctl stop` 不重啟，單元進 `failed`，
   排除原因後 `systemctl reset-failed nexus-agent` 再啟動；不是 `systemctl stop` 送的 `SIGTERM` 會重啟，連續失敗滿 `StartLimitBurst` 後單元進 `failed`。
