@@ -221,6 +221,7 @@ export class NativeAgent {
    * @param params - 模型、提示詞、工具、middleware。
    * @param threads - thread 的 state；`withConfig` 出來的那一份共用同一張表。
    * @param defaults - `withConfig` 給的上限。
+   * @throws {Error} 有一顆 middleware 同時登記了工具清單那一步與系統提示那一步。
    */
   constructor(
     params: NativeAgentParams,

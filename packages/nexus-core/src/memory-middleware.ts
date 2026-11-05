@@ -85,7 +85,7 @@ export function createMemoryMiddleware(
     sources: [...options.sources],
     addCacheControl: false,
   }) as unknown as BaseHooks;
-  // 不是 `concat`：另建一則內容是區塊陣列的系統訊息，記憶自己一塊（字串內容也先包成一塊），同基座。
+  // 用 `block` 不用 `append`：記憶自己一塊，位元組同基座。
   const cell: SystemPromptCell = {
     step: (request) => [
       {

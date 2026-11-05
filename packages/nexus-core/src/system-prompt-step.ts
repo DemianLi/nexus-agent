@@ -1,10 +1,10 @@
 /**
  * 往系統提示加字的一步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：一步拿到這次模型請求，回要接上的那幾塊
- * （{@link SystemPromptPiece}），由 {@link applySystemPromptPieces} 照順序套到系統訊息上。一步本身不帶 LangChain 型別。
+ * （{@link SystemPromptPiece}），由 {@link applySystemPromptPieces} 照順序套到系統訊息上。一步回的那幾塊是純字串，不帶 LangChain 型別。
  *
  * **wrapModelCall 由登記的那一份造出來**（{@link withSystemPromptStep}）：同一份 cell 既造那顆的 `wrapModelCall`，也登記給 native，
  * 所以兩者分不開。native 的 root 在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link systemPromptWrapWith} 造的
- * 那一支，不經那顆的 `wrapModelCall`；`langgraph` 與子代理照舊經 `wrapModelCall`。同步的一步同步往內交，中間沒有 `await`。
+ * 那一支，不經那顆的 `wrapModelCall`；`langgraph` 與子代理照舊經 `wrapModelCall`。一步是同步的，套完就在同一個 tick 往內交，中間沒有 `await`。
  *
  * @module
  */
@@ -15,7 +15,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 
 /**
- * 接上的一塊。三種接法的位元組各不相同，照各格原本的寫法：
+ * 接上的一塊。三種接法送出的位元組各不相同：`append` 給中段段格、Skills 與尾段，`prepend` 給 `nexusSystemPrompt` 的頭段，`block` 給記憶（同基座）。
  *
  * - `append`：`SystemMessage.concat(text)`（內容是區塊陣列時另開一塊，見 `@langchain/core` 的 `mergeContent`）。
  * - `prepend`：接在最前面，後面空一行；字串內容接成 `${text}\n\n${content}`，區塊陣列就在最前面加一塊 `${text}\n\n`。
@@ -41,8 +41,9 @@ export type SystemPromptStep = (
 export interface SystemPromptCell {
   readonly step: SystemPromptStep;
   /**
-   * 請求上沒有 `systemMessage` 時怎麼辦。`'empty'` 是當成 `new SystemMessage('')` 再接；函式是整個交給它、不叫 `step`；不給就照樣讀
-   * `systemMessage`（會拋）。兩個 loop 都一定設 `systemMessage`，這一條只有直接叫 `wrapModelCall` 的測試走得到。
+   * 請求上沒有 `systemMessage` 時怎麼辦。`'empty'` 是當成 `new SystemMessage('')` 再接；函式是整個交給它、不叫 `step`；不給就把
+   * `undefined` 當系統訊息接，`step` 回了要接的就拋 `TypeError`。兩個 loop 都一定設 `systemMessage`，走得到這一條的只有直接叫
+   * `wrapModelCall` 或 `applySections` 的測試。
    */
   readonly withoutSystemMessage?: 'empty' | (<R extends SystemPromptRequest>(request: R) => R);
 }

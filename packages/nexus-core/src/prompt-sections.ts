@@ -222,7 +222,7 @@ function sectionPieces(
   });
 }
 
-/** 一格的系統提示那一步：沒有 `systemMessage` 時當它是空的一則接。 */
+/** 一格的系統提示那一步。 */
 function sectionCell(sections: readonly MiddleSection[]): SystemPromptCell {
   return {
     step: (request) => sectionPieces(request as SectionRequest, sections),
