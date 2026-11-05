@@ -68,7 +68,7 @@ describe('createSearchDescriptionsMiddleware', () => {
     expect(swapped?.function.parameters.required).toEqual(original.function.parameters.required);
     expect(swapped?.function.description).toBe(original.function.description);
     expect(swapped?.function.name).toBe('grep');
-    // 不可列舉的 name：基座的工具排除 middleware 用它認工具（跟 read_file 的換法同一個理由）。
+    // 不可列舉的 name：`toolNameOf` 用它認工具（跟 read_file 的換法同一個理由）。
     expect((swapped as unknown as { name: string }).name).toBe('grep');
     expect(Object.keys(swapped as object)).not.toContain('name');
   });
