@@ -1,7 +1,7 @@
 /**
- * 摘要器的引擎：判斷要不要摘要、切在哪、寫歷史、生摘要、溢出時重摘。演算法與 `deepagents@1.13.1` 的
- * `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2717-3242`）相同，算法、門檻、字串一致，
- * `summarizer-engine.test.ts` 逐項對照；`summarization.ts` 外面那幾層靠的就是這些行為。
+ * 摘要器的引擎：判斷要不要摘要、切在哪、寫歷史、生摘要、溢出時重摘。演算法、門檻與字串取自 `deepagents@1.13.1` 的
+ * `createSummarizationMiddleware`（`dist/langsmith-zm0ILQsV.js:2717-3242`）；`summarization.ts` 外面那幾層靠的就是這些行為，
+ * 由 `summarizer-engine.test.ts` 釘住。
  *
  * 組裝點一定給 `trigger`、`keep`、`truncateArgsSettings` 與 `summaryPrompt`，不給 `model`、`trimTokensToSummarize`，
  * 所以沒有「依模型 profile 補預設」與 `initChatModel` 那兩條。

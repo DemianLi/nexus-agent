@@ -1,15 +1,11 @@
 /**
- * 摘要器引擎對照基座：同一組請求同時餵 `deepagents@1.13.1` 的
- * `createSummarizationMiddleware` 與 {@link createSummarizerEngine}，逐項比 handler 收到的訊息、摘要模型的輸入、歷史檔的寫入、
- * 回傳值、拋錯與切點。基座的上一次切點放在 state，引擎的放在切點表（{@link withSummaryCutoffs}）；基座的切點讀它回的 `Command`，
- * 引擎的照 `withCompactionLog` 的算法（{@link summaryCutoffIndex}）從交下去的那份算。基座的依賴拿掉時這一支跟著刪。
+ * 摘要器引擎：判斷、切點、歷史檔、溢出重摘、估算倍率、參數截斷與工具結果壓縮。上一次切點經切點表（{@link withSummaryCutoffs}）
+ * 交進來；這一步的切點照 `withCompactionLog` 的算法（{@link summaryCutoffIndex}）從交下去的那份算。
  */
 
 import { ContextOverflowError } from '@langchain/core/errors';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { isCommand } from '@langchain/langgraph';
-import { createSummarizationMiddleware } from 'deepagents';
 import { tool } from 'langchain';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -69,159 +65,9 @@ function memoryBackend(seed: Record<string, string> = {}, failWrite = false) {
 }
 
 const stamp = (text: string) => text.replace(/## Summarized at \S+/g, '## Summarized at <t>');
-const show = (messages: readonly BaseMessage[]) =>
-  messages.map((m) => ({
-    type: m.getType(),
-    content: m.content,
-    kwargs: m.additional_kwargs,
-    tools: (m as AIMessage).tool_calls,
-    id: (m as ToolMessage).tool_call_id,
-  }));
-
-interface Step {
-  readonly messages: BaseMessage[];
-  /** 這一步開始時的上一次切點。 */
-  readonly previous?: SummaryCutoff;
-  /** 第幾次 handler 呼叫（1 起算）拋什麼。 */
-  readonly handlerThrows?: (call: number) => Error | undefined;
-  readonly withTools?: boolean;
-}
-
-/** 照順序跑幾步，回每一步的觀察；兩邊各一套，同一顆實例跑完全部步驟（看 closure 的壽命）。 */
-async function observe(
-  kind: 'base' | 'engine',
-  make: (backend: never) => unknown,
-  steps: readonly Step[],
-  options: { profile?: object; seed?: Record<string, string>; failWrite?: boolean } = {},
-) {
-  const store = memoryBackend(options.seed, options.failWrite);
-  type Wrap = { wrapModelCall: (request: unknown, handler: unknown) => Promise<unknown> };
-  const made = make(store.backend as never);
-  const prompts: string[] = [];
-  const model = {
-    profile: options.profile ?? {},
-    invoke: async (input: BaseMessage[]) => {
-      prompts.push(String(input[0]!.content));
-      return { text: `摘要 ${String(prompts.length)}` };
-    },
-  };
-  const echo = tool(async () => 'ok', {
-    name: 'echo',
-    description: '回聲',
-    schema: z.object({ message: z.string() }),
-  });
-  const warns: string[] = [];
-  const spy = vi.spyOn(console, 'warn').mockImplementation((...args) => {
-    warns.push(String(args[0]));
-  });
-  const out: unknown[] = [];
-  try {
-    for (const step of steps) {
-      const handled: unknown[] = [];
-      let sent: BaseMessage[] = [];
-      let result: unknown;
-      let error: unknown;
-      // 引擎：每一步一張新表，只放這一步的上一次切點（同基座只看這一步交進來的 state）。
-      const table = new SummaryCutoffTable();
-      if (step.previous !== undefined) table.record(ROOT, step.messages, step.previous);
-      const middleware = (
-        kind === 'engine' ? withSummaryCutoffs(made as never, table) : made
-      ) as Wrap;
-      try {
-        result = await middleware.wrapModelCall(
-          {
-            messages: step.messages,
-            state: {
-              messages: step.messages,
-              ...(kind === 'base' && {
-                _summarizationSessionId: 'session_fixed',
-                _summarizationEvent: step.previous,
-              }),
-            },
-            model,
-            systemMessage: new SystemMessage('系統。'),
-            tools: step.withTools === true ? [echo] : [],
-            runtime: ROOT,
-          },
-          async (request: { messages: BaseMessage[] }) => {
-            sent = request.messages;
-            handled.push(show(request.messages));
-            const thrown = step.handlerThrows?.(handled.length);
-            if (thrown !== undefined) throw thrown;
-            return new AIMessage('好。');
-          },
-        );
-      } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
-      }
-      let cutoff: number | undefined;
-      if (kind === 'base') {
-        const update = isCommand(result) ? (result.update as Record<string, unknown>) : undefined;
-        cutoff = (update?._summarizationEvent as { cutoffIndex: number } | undefined)?.cutoffIndex;
-      } else if (
-        error === undefined &&
-        sent[0] !== undefined &&
-        sent[0].additional_kwargs?.lc_source === 'summarization' &&
-        sent[0] !== step.previous?.summaryMessage
-      ) {
-        cutoff = summaryCutoffIndex(
-          step.previous?.cutoffIndex,
-          applySummaryCutoff(step.messages, step.previous).length,
-          sent.length,
-        );
-      }
-      out.push({
-        handled,
-        error,
-        // 基座摘要過回 `Command`，引擎回交下去那次的回覆，兩邊比的是交下去那次的回覆。
-        result: isCommand(result) ? '好。' : (result as AIMessage | undefined)?.content,
-        cutoff,
-      });
-    }
-  } finally {
-    spy.mockRestore();
-  }
-  return {
-    out,
-    prompts,
-    warns,
-    calls: store.calls,
-    files: Object.fromEntries([...store.files].map(([path, text]) => [path, stamp(text)])),
-  };
-}
-
-async function same(
-  settings: Options,
-  steps: readonly Step[],
-  options?: Parameters<typeof observe>[3],
-) {
-  const base = await observe(
-    'base',
-    (backend) =>
-      createSummarizationMiddleware({
-        backend,
-        summaryPrompt: settings.summaryPrompt,
-        trigger: settings.trigger.map((t) => ({ ...t })) as never,
-        keep: { ...settings.keep } as never,
-        ...(settings.historyPathPrefix !== undefined && {
-          historyPathPrefix: settings.historyPathPrefix,
-        }),
-        truncateArgsSettings: settings.truncateArgsSettings as never,
-      }),
-    steps,
-    options,
-  );
-  const ours = await observe(
-    'engine',
-    (backend) => createSummarizerEngine({ ...settings, sessionId: 'session_fixed', backend }),
-    steps,
-    options,
-  );
-  expect(ours).toEqual(base);
-  return ours;
-}
 
 const PROMPT = '摘要這段：\n{conversation}\n完。';
+const PATH = '/conversation_history/session_fixed.md';
 const turns = (count: number, pad = '') =>
   Array.from({ length: count }, (_, i) =>
     i % 2 === 0
@@ -240,17 +86,49 @@ const settings = (over: Partial<Options> = {}): Options => ({
   ...over,
 });
 
-/** 經切點表跑一步：表上先記上一次切點，回 handler 收到的、摘要模型收到的，與照 `withCompactionLog` 算出的切點。 */
+const echo = tool(async () => 'ok', {
+  name: 'echo',
+  description: '回聲',
+  schema: z.object({ message: z.string() }),
+});
+
+/** 摘要模型：記下每次收到的提示，回「摘要 N」。 */
+function summaryModel(profile: object = {}) {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    model: {
+      profile,
+      invoke: async (input: BaseMessage[]) => {
+        prompts.push(String(input[0]!.content));
+        return { text: `摘要 ${String(prompts.length)}` };
+      },
+    },
+  };
+}
+
+interface StepOptions {
+  readonly previous?: SummaryCutoff;
+  /** 第幾次 handler 呼叫（1 起算）拋什麼。 */
+  readonly handlerThrows?: (call: number) => Error | undefined;
+  readonly withTools?: boolean;
+  readonly model?: unknown;
+}
+
+/**
+ * 經切點表跑一步：表上先記上一次切點。回 handler 每次收到的訊息、回傳值，與照 `withCompactionLog` 算出的切點
+ * （最後一次交下去的開頭是這一步新的摘要才有）。
+ */
 async function engineStep(
   engine: ReturnType<typeof createSummarizerEngine>,
   messages: BaseMessage[],
-  previous: SummaryCutoff | undefined,
+  options: StepOptions = {},
 ) {
+  const { previous } = options;
   const table = new SummaryCutoffTable();
   if (previous !== undefined) table.record(ROOT, messages, previous);
-  const prompts: string[] = [];
-  let sent: BaseMessage[] = [];
-  await (
+  const handled: BaseMessage[][] = [];
+  const result = await (
     withSummaryCutoffs(engine, table) as unknown as {
       wrapModelCall: (request: unknown, handler: unknown) => Promise<unknown>;
     }
@@ -258,58 +136,95 @@ async function engineStep(
     {
       messages,
       state: { messages },
-      model: {
-        profile: {},
-        invoke: async (input: BaseMessage[]) => {
-          prompts.push(String(input[0]!.content));
-          return { text: `摘要 ${String(prompts.length)}` };
-        },
-      },
+      model: options.model ?? summaryModel().model,
       systemMessage: new SystemMessage('系統。'),
-      tools: [],
+      tools: options.withTools === true ? [echo] : [],
       runtime: ROOT,
     },
     async (request: { messages: BaseMessage[] }) => {
-      sent = request.messages;
+      handled.push(request.messages);
+      const thrown = options.handlerThrows?.(handled.length);
+      if (thrown !== undefined) throw thrown;
       return new AIMessage('好。');
     },
   );
+  const sent = handled.at(-1) ?? [];
+  const summarized =
+    sent[0]?.additional_kwargs?.lc_source === 'summarization' &&
+    sent[0] !== previous?.summaryMessage;
   return {
-    prompts,
-    sent: sent.map((m) => String(m.content)),
-    cutoff: summaryCutoffIndex(
-      previous?.cutoffIndex,
-      applySummaryCutoff(messages, previous).length,
-      sent.length,
-    ),
+    result,
+    handled,
+    sent,
+    contents: sent.map((m) => String(m.content)),
+    cutoff: summarized
+      ? summaryCutoffIndex(
+          previous?.cutoffIndex,
+          applySummaryCutoff(messages, previous).length,
+          sent.length,
+        )
+      : undefined,
   };
 }
 
-describe('引擎自己的行為', () => {
+function engineWith(options: { failWrite?: boolean; sessionId?: string } & Partial<Options> = {}) {
+  const { failWrite, sessionId, ...over } = options;
+  const store = memoryBackend({}, failWrite);
+  const engine = createSummarizerEngine({
+    ...settings(over),
+    sessionId: sessionId ?? 'session_fixed',
+    backend: store.backend as never,
+  });
+  return { store, engine };
+}
+
+const sections = (text: string | undefined) =>
+  stamp(text ?? '')
+    .split('## Summarized at <t>')
+    .slice(1);
+
+describe('摘要器引擎', () => {
+  it('沒到門檻：原樣交下去，不叫摘要模型', async () => {
+    const { engine, store } = engineWith();
+    const { model, prompts } = summaryModel();
+    const messages = turns(3);
+    const step = await engineStep(engine, messages, { model });
+    expect(step.handled).toEqual([messages]);
+    expect((step.result as AIMessage).content).toBe('好。');
+    expect(prompts).toEqual([]);
+    expect(store.calls).toEqual([]);
+  });
+
+  it('訊息數門檻：摘要前段、寫歷史檔，交下去的是摘要＋留下的', async () => {
+    const { engine, store } = engineWith();
+    const { model, prompts } = summaryModel();
+    const step = await engineStep(engine, turns(8), { model });
+    expect(step.cutoff).toBe(6);
+    expect(step.contents.slice(1)).toEqual(['人 6', '答 7']);
+    expect(step.contents[0]).toContain(PATH);
+    expect(prompts).toEqual([
+      '摘要這段：\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n完。',
+    ]);
+    expect(sections(store.files.get(PATH))).toHaveLength(1);
+  });
+
   it('連三步帶著上一次的切點：prev + cutoff − 1，歷史檔接著寫', async () => {
-    const store = memoryBackend();
-    const engine = createSummarizerEngine({
-      ...settings(),
-      sessionId: 'session_fixed',
-      backend: store.backend as never,
-    });
-    const path = '/conversation_history/session_fixed.md';
-    const cutoffs: number[] = [];
+    const { engine, store } = engineWith();
+    const { model, prompts } = summaryModel();
+    const cutoffs: (number | undefined)[] = [];
     let previous: SummaryCutoff | undefined;
-    const prompts: string[] = [];
     for (const count of [8, 12, 16]) {
-      const step = await engineStep(engine, turns(count), previous);
+      const step = await engineStep(engine, turns(count), { previous, model });
       cutoffs.push(step.cutoff);
-      prompts.push(...step.prompts);
       // 交下去的是「新摘要＋留下的兩則」。
-      expect(step.sent.slice(1)).toEqual([`人 ${String(count - 2)}`, `答 ${String(count - 1)}`]);
+      expect(step.contents.slice(1)).toEqual([
+        `人 ${String(count - 2)}`,
+        `答 ${String(count - 1)}`,
+      ]);
       previous = {
-        cutoffIndex: step.cutoff,
-        summaryMessage: new HumanMessage({
-          content: `摘要 ${String(cutoffs.length)}`,
-          additional_kwargs: { lc_source: 'summarization' },
-        }),
-        filePath: path,
+        cutoffIndex: step.cutoff!,
+        summaryMessage: step.sent[0]!,
+        filePath: PATH,
       };
     }
     // 8 則：有效串 8、留 2，切在 6；12 則：有效串 [摘要, 6..11] 共 7、留 2，本地切在 5，6 + 5 − 1 = 10；
@@ -322,93 +237,59 @@ describe('引擎自己的行為', () => {
     expect(prompts[2]).toContain('摘要 2');
     expect(prompts[2]).not.toContain('人 8');
     // 歷史檔接著寫同一個檔，一步一段，摘要訊息本身不寫進去。
-    expect([...store.files.keys()]).toEqual([path]);
-    const sections = stamp(store.files.get(path)!).split('## Summarized at <t>').slice(1);
-    expect(sections).toHaveLength(3);
-    expect(sections[1]).toContain('人 6');
-    expect(sections[1]).not.toContain('人 4');
-    expect(sections[1]).not.toContain('摘要 1');
+    expect([...store.files.keys()]).toEqual([PATH]);
+    const written = sections(store.files.get(PATH));
+    expect(written).toHaveLength(3);
+    expect(written[1]).toContain('人 6');
+    expect(written[1]).not.toContain('人 4');
+    expect(written[1]).not.toContain('摘要 1');
   });
 
   it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
-    const store = memoryBackend();
-    const engine = createSummarizerEngine({
-      ...settings(),
-      sessionId: 'session_abcd1234',
-      backend: store.backend as never,
+    const { engine, store } = engineWith({ sessionId: 'session_abcd1234' });
+    for (let i = 0; i < 2; i += 1) await engineStep(engine, turns(8));
+    const path = '/conversation_history/session_abcd1234.md';
+    expect([...store.files.keys()]).toEqual([path]);
+    expect(sections(store.files.get(path))).toHaveLength(2);
+  });
+
+  it('摘要之後端點回超窗：retain 0 重摘再送，只交一則摘要', async () => {
+    const { engine, store } = engineWith();
+    const { model, prompts } = summaryModel();
+    const step = await engineStep(engine, turns(8), {
+      model,
+      handlerThrows: (call) => (call === 1 ? new ContextOverflowError('太長') : undefined),
     });
-    for (let i = 0; i < 2; i += 1) await engineStep(engine, turns(8), undefined);
-    expect([...store.files.keys()]).toEqual(['/conversation_history/session_abcd1234.md']);
-    expect(
-      stamp(store.files.get('/conversation_history/session_abcd1234.md')!).split(
-        '## Summarized at <t>',
-      ),
-    ).toHaveLength(3);
-  });
-});
-
-describe('引擎與基座逐項相同', () => {
-  it('沒到門檻：原樣交下去', async () => {
-    const { out } = await same(settings(), [{ messages: turns(3) }]);
-    expect((out[0] as { result: unknown }).result).toBe('好。');
-  });
-
-  it('訊息數門檻：摘要、寫檔、回 Command', async () => {
-    const { prompts, files } = await same(settings(), [{ messages: turns(8) }]);
-    expect(prompts).toHaveLength(1);
-    expect(Object.keys(files)).toEqual(['/conversation_history/session_fixed.md']);
-  });
-
-  it('連三步帶著上一次的切點：prev + cutoff − 1，歷史檔接著寫', async () => {
-    const first = turns(8);
-    const event = (cutoffIndex: number) => ({
-      cutoffIndex,
-      summaryMessage: new HumanMessage({
-        content: '舊摘要',
-        additional_kwargs: { lc_source: 'summarization' },
-      }),
-      filePath: '/conversation_history/session_fixed.md',
-    });
-    await same(
-      settings(),
-      [
-        { messages: first },
-        { messages: turns(12), previous: event(6) },
-        { messages: turns(16), previous: event(9) },
-      ],
-      { seed: { '/conversation_history/session_fixed.md': '## Summarized at x\n\n舊的\n\n' } },
-    );
-  });
-
-  it('摘要之後端點回超窗：retain 0 重摘再送', async () => {
-    const { out } = await same(settings(), [
-      {
-        messages: turns(8),
-        handlerThrows: (call) => (call === 1 ? new ContextOverflowError('太長') : undefined),
-      },
-    ]);
-    expect((out[0] as { handled: unknown[] }).handled).toHaveLength(2);
+    expect(step.handled.map((sent) => sent.length)).toEqual([3, 1]);
+    expect(step.cutoff).toBe(8);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('人 6');
+    expect(sections(store.files.get(PATH))).toHaveLength(2);
   });
 
   it('沒到門檻卻超窗：估算倍率記在實例上，下一步照倍率判', async () => {
-    await same(
-      settings({ trigger: [{ type: 'tokens', value: 50 }] }),
-      [
-        {
-          messages: turns(4),
-          handlerThrows: (call) => (call === 1 ? new ContextOverflowError('太長') : undefined),
-        },
-        { messages: turns(4) },
-      ],
-      { profile: { maxInputTokens: 200 } },
-    );
+    const over = { trigger: [{ type: 'tokens', value: 50 }] } as const;
+    const { engine } = engineWith(over);
+    const model = summaryModel({ maxInputTokens: 200 }).model;
+    const overflow = (call: number) => (call === 1 ? new ContextOverflowError('太長') : undefined);
+    const first = await engineStep(engine, turns(4), { model, handlerThrows: overflow });
+    // 照原樣送一次超窗，摘要後再送。
+    expect(first.handled.map((sent) => sent.length)).toEqual([4, 3]);
+    // 同一顆實例：同樣的四則這次直接摘要。
+    const second = await engineStep(engine, turns(4), { model });
+    expect(second.handled).toHaveLength(1);
+    expect(second.cutoff).toBe(2);
+    // 新的實例沒有倍率：照原樣交下去。
+    const fresh = await engineStep(engineWith(over).engine, turns(4), { model });
+    expect(fresh.cutoff).toBeUndefined();
+    expect(fresh.handled[0]).toHaveLength(4);
   });
 
   it('其他錯：原樣拋', async () => {
-    const { out } = await same(settings(), [
-      { messages: turns(8), handlerThrows: () => new Error('503') },
-    ]);
-    expect((out[0] as { error: unknown }).error).toBe('503');
+    const { engine } = engineWith();
+    await expect(
+      engineStep(engine, turns(8), { handlerThrows: () => new Error('503') }),
+    ).rejects.toThrow('503');
   });
 
   it('工具配對：切點不拆開 AI 與它的工具結果', async () => {
@@ -423,18 +304,27 @@ describe('引擎與基座逐項相同', () => {
       new ToolMessage({ content: '結果', tool_call_id: 'c1' }),
       new AIMessage('收尾'),
     ];
-    await same(settings({ keep: { type: 'messages', value: 2 } }), [{ messages, withTools: true }]);
-    await same(settings({ keep: { type: 'messages', value: 3 } }), [{ messages, withTools: true }]);
+    // 留 2 則會落在工具結果上，往前退到發出呼叫的那則；留 3 則剛好在它上面。
+    for (const value of [2, 3]) {
+      const { engine } = engineWith({ keep: { type: 'messages', value } });
+      const step = await engineStep(engine, messages, { withTools: true });
+      expect(step.cutoff).toBe(3);
+      expect(step.sent.slice(1)).toEqual(messages.slice(3));
+    }
   });
 
   it('token 保留量與門檻，帶工具一起估', async () => {
-    await same(
-      settings({ trigger: [{ type: 'tokens', value: 60 }], keep: { type: 'tokens', value: 30 } }),
-      [{ messages: turns(10, '內容'.repeat(10)), withTools: true }],
-    );
+    const { engine } = engineWith({
+      trigger: [{ type: 'tokens', value: 60 }],
+      keep: { type: 'tokens', value: 30 },
+    });
+    const messages = turns(10, '內容'.repeat(10));
+    const step = await engineStep(engine, messages, { withTools: true });
+    expect(step.cutoff).toBe(5);
+    expect(step.sent.slice(1)).toEqual(messages.slice(5));
   });
 
-  it('參數截斷：舊的 write_file 長參數被截，之後的工具呼叫重建', async () => {
+  it('參數截斷：保留區外 write_file 的長參數被截，別的工具不動', async () => {
     const big = 'x'.repeat(50);
     const messages: BaseMessage[] = [
       new HumanMessage('寫'),
@@ -450,17 +340,22 @@ describe('引擎與基座逐項相同', () => {
       new ToolMessage({ content: 'ok', tool_call_id: 'e1' }),
       new HumanMessage('再來'),
     ];
-    await same(
-      settings({
-        trigger: [],
-        truncateArgsSettings: {
-          trigger: { type: 'messages', value: 2 },
-          keep: { type: 'messages', value: 1 },
-          maxLength: 10,
-        },
-      }),
-      [{ messages }],
-    );
+    const { engine } = engineWith({
+      trigger: [],
+      truncateArgsSettings: {
+        trigger: { type: 'messages', value: 2 },
+        keep: { type: 'messages', value: 1 },
+        maxLength: 10,
+      },
+    });
+    const step = await engineStep(engine, messages);
+    expect(step.cutoff).toBeUndefined();
+    const [write, echoed] = [step.sent[1] as AIMessage, step.sent[3] as AIMessage];
+    expect(write.tool_calls?.[0]?.args).toEqual({
+      file_path: '/a',
+      content: `${'x'.repeat(20)}...(argument truncated)`,
+    });
+    expect(echoed.tool_calls?.[0]?.args).toEqual({ message: big });
   });
 
   it('留下的是空的、有 profile：先壓工具結果再送', async () => {
@@ -472,70 +367,48 @@ describe('引擎與基座逐項相同', () => {
       }),
       new ToolMessage({ content: '大'.repeat(20_000), tool_call_id: 'r1' }),
     ];
-    await same(
-      settings({ trigger: [{ type: 'messages', value: 1 }], keep: { type: 'messages', value: 0 } }),
-      [{ messages }],
-      {
-        profile: { maxInputTokens: 2_000 },
-      },
-    );
+    const { engine } = engineWith({
+      trigger: [{ type: 'messages', value: 1 }],
+      keep: { type: 'messages', value: 0 },
+    });
+    const step = await engineStep(engine, messages, {
+      model: summaryModel({ maxInputTokens: 2_000 }).model,
+    });
+    const result = String(step.sent[2]!.content);
+    expect(result.endsWith('\n...(result truncated)')).toBe(true);
+    expect(result.length).toBeLessThan(20_000);
   });
 
   it('歷史檔寫不進去：filePath 是 null、warn、照樣摘要', async () => {
-    const { warns } = await same(settings(), [{ messages: turns(8) }], { failWrite: true });
-    expect(warns.length).toBeGreaterThan(0);
+    const { engine } = engineWith({ failWrite: true });
+    const warns: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warns.push(String(args[0]));
+    });
+    try {
+      const step = await engineStep(engine, turns(8));
+      expect(step.cutoff).toBe(6);
+      expect(step.contents[0]).not.toContain(PATH);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warns[0]).toBe(`Failed to offload conversation history to ${PATH}: 寫不進去`);
   });
 
-  it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
-    const store = memoryBackend();
-    const engine = createSummarizerEngine({
-      ...settings(),
-      sessionId: 'session_abcd1234',
-      backend: store.backend as never,
-    });
-    for (let i = 0; i < 2; i += 1) {
-      const messages = turns(8);
-      await engine.wrapModelCall?.(
+  it('沒有訊息：原樣交下去；沒有模型：拋錯', async () => {
+    const empty = await engineStep(engineWith().engine, []);
+    expect(empty.handled).toEqual([[]]);
+    const { engine } = engineWith({ trigger: [{ type: 'messages', value: 1 }] });
+    await expect(
+      engine.wrapModelCall?.(
         {
-          messages,
-          state: { messages },
-          model: { profile: {}, invoke: async () => ({ text: '摘' }) },
-          systemMessage: new SystemMessage('系統。'),
+          messages: turns(2),
+          state: {},
+          systemMessage: new SystemMessage('s'),
           tools: [],
         } as never,
         (async () => new AIMessage('好。')) as never,
-      );
-    }
-    expect([...store.files.keys()]).toEqual(['/conversation_history/session_abcd1234.md']);
-  });
-
-  it('沒有訊息：原樣交下去；沒有模型：同一句錯', async () => {
-    await same(settings(), [{ messages: [] }]);
-    const engine = createSummarizerEngine({
-      ...settings(),
-      sessionId: 'session_fixed',
-      backend: memoryBackend().backend as never,
-    });
-    const base = createSummarizationMiddleware({
-      backend: memoryBackend().backend as never,
-      trigger: [{ type: 'messages', value: 1 }],
-    });
-    const request = {
-      messages: turns(2),
-      state: {},
-      systemMessage: new SystemMessage('s'),
-      tools: [],
-    };
-    const handler = async () => new AIMessage('好。');
-    const [a, b] = await Promise.allSettled([
-      engine.wrapModelCall?.(request as never, handler as never),
-      (
-        base as unknown as { wrapModelCall: (r: unknown, h: unknown) => Promise<unknown> }
-      ).wrapModelCall(request, handler),
-    ]);
-    expect(a.status).toBe('rejected');
-    expect((a as PromiseRejectedResult).reason.message).toBe(
-      (b as PromiseRejectedResult).reason.message,
-    );
+      ),
+    ).rejects.toThrow('Summarization middleware could not resolve a model.');
   });
 });
