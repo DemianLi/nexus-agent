@@ -69,6 +69,38 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--no-goal-driver');
   });
 
+  it('--unix-socket（#2369）：要配 --socket-group 與 --public-url，不能配 --port', () => {
+    const url = ['--public-url', 'https://app.example/nexus'];
+    expect(
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101', ...url]).unixSocket,
+    ).toEqual({ path: '/run/nexus/s', group: 101 });
+    expect('unixSocket' in parseServeArgs([])).toBe(false);
+    expect(() => parseServeArgs(['--unix-socket', '/run/nexus/s', ...url])).toThrow(
+      '--unix-socket 要配 --socket-group',
+    );
+    expect(() => parseServeArgs(['--socket-group', '101', ...url])).toThrow(
+      '--socket-group 要配 --unix-socket',
+    );
+    expect(() => parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101'])).toThrow(
+      '--unix-socket 要配 --public-url',
+    );
+    // 明著給的 port 才算撞：預設的 port 不擋。
+    expect(() =>
+      parseServeArgs([
+        '--unix-socket',
+        '/run/nexus/s',
+        '--socket-group',
+        '101',
+        '--port',
+        String(DEFAULT_PORT),
+        ...url,
+      ]),
+    ).toThrow('--unix-socket 不能配 --port');
+    expect(() =>
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', 'nginx', ...url]),
+    ).toThrow('--socket-group 要給代理所在群組的數字 gid');
+  });
+
   it('port 不是合法整數就當場說清楚', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--port 要給 0 到 65535');
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');

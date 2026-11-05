@@ -102,6 +102,12 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { assertTrustedAuthority } from './request-trust.js';
+import {
+  assertProxySocketDirectory,
+  clearStaleSocket,
+  openSocketToProxy,
+  parseSocketGroup,
+} from './proxy-socket.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
 import {
   createSessionHeaderMetadataResolver,
@@ -225,6 +231,11 @@ export interface ServeInvocation {
    */
   readonly trustedHosts: readonly string[];
   /**
+   * 改聽這個 Unix socket、不綁 port（`--unix-socket` 配 `--socket-group`，#2369）：只讓反向代理連進來，見 `proxy-socket.ts`。
+   * 有它就一定有 {@link publicUrl}：socket 沒有瀏覽器開得到的來源，登入網址只能印公告的那一個。
+   */
+  readonly unixSocket?: { readonly path: string; readonly group: number };
+  /**
    * 瀏覽器實際開的網址（`--public-url`，#2369），補成 `/` 結尾：只決定啟動時印的登入網址，不放行任何 authority、不影響路由與 cookie。
    * 省略就印 serve 自己的來源。
    */
@@ -283,6 +294,9 @@ const USAGE = `用法：
                        帶 port 的只認那個 port，不帶的認任何 port
   --public-url <url>   瀏覽器實際開的網址（例如 https://app.example/nexus/），啟動時印的登入網址用它
                        只是公告：放行要另外給 --trusted-host
+  --unix-socket <path> 改聽這個 Unix socket、不綁 port，只讓同主機的反向代理連進來；不能配 --port，要配 --socket-group 與 --public-url
+                       socket 所在目錄要是 serve 的使用者自己的、群組是 --socket-group、權限恰好 750 或 710，否則起不來
+  --socket-group <gid> 代理所在群組的數字 gid（例如 getent group nginx 的第三欄）
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
   --compression-level <0-9>
@@ -324,6 +338,45 @@ function parsePublicUrl(raw: string): string {
   return url.href;
 }
 
+/**
+ * `--unix-socket` 與 `--socket-group`：兩個一起給或都不給，不能配明著給的 `--port`，要配 `--public-url`。
+ *
+ * @throws 少了另一半、撞到 `--port`、沒有 `--public-url`，或 gid 不是數字；訊息接著印用法。
+ */
+function parseUnixSocket(
+  values: {
+    readonly 'unix-socket'?: string | undefined;
+    readonly 'socket-group'?: string | undefined;
+    readonly port?: string | undefined;
+  },
+  publicUrl: string | undefined,
+): ServeInvocation['unixSocket'] {
+  const path = values['unix-socket'];
+  const group = values['socket-group'];
+  if (path === undefined && group === undefined) return undefined;
+  if (path === undefined || path.trim() === '') {
+    throw new Error(`--socket-group 要配 --unix-socket <path>。\n\n${USAGE}`);
+  }
+  if (group === undefined) {
+    throw new Error(
+      `--unix-socket 要配 --socket-group <gid>：socket 目錄的群組要是代理的那一個。\n\n${USAGE}`,
+    );
+  }
+  if (values.port !== undefined) {
+    throw new Error(`--unix-socket 不能配 --port：一次只聽一個地方。\n\n${USAGE}`);
+  }
+  if (publicUrl === undefined) {
+    throw new Error(
+      `--unix-socket 要配 --public-url：socket 沒有瀏覽器開得到的網址，登入網址要印代理對外的那一個。\n\n${USAGE}`,
+    );
+  }
+  try {
+    return { path, group: parseSocketGroup(group) };
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
+  }
+}
+
 export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   let parsed;
   try {
@@ -339,6 +392,8 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         port: { type: 'string' },
         'trusted-host': { type: 'string', multiple: true },
         'public-url': { type: 'string' },
+        'unix-socket': { type: 'string' },
+        'socket-group': { type: 'string' },
         compression: { type: 'string' },
         'compression-level': { type: 'string' },
         'compression-threshold': { type: 'string' },
@@ -417,6 +472,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   }
   const publicUrl =
     values['public-url'] === undefined ? undefined : parsePublicUrl(values['public-url']);
+  const unixSocket = parseUnixSocket(values, publicUrl);
 
   // 壓縮旗標的驗證（照 dsh 的 schema）；不合法是 usage error，在任何檔案寫入之前失敗。
   let compression: WireCompression | undefined;
@@ -434,6 +490,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     live: values.live === true,
     port,
     trustedHosts,
+    ...(unixSocket !== undefined && { unixSocket }),
     ...(publicUrl !== undefined && { publicUrl }),
     ...(compression !== undefined && { compression }),
     ...(patches !== undefined && { patches }),
@@ -510,10 +567,13 @@ export interface ConversationProcessMode {
   readonly onTurn: (threadId: string, phase: 'begin' | 'end') => void;
 }
 
-/** serve 聽哪裡：綁 port 的帶登入，聽 socket 的是對話行程。 */
+/**
+ * serve 是哪一種：前台帶登入、網頁與營運端點，聽 port 或 `--unix-socket`（`ServeInvocation.unixSocket`）；
+ * 對話行程只有 wire，聽監督行程給的 socket。
+ */
 type ServeListening =
-  | { readonly kind: 'port'; readonly auth: BrowserAuth }
-  | { readonly kind: 'socket'; readonly mode: ConversationProcessMode };
+  | { readonly kind: 'front'; readonly auth: BrowserAuth }
+  | { readonly kind: 'conversation'; readonly mode: ConversationProcessMode };
 
 export interface RunningServe {
   readonly url: string;
@@ -654,6 +714,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       }).trimEnd(),
     );
     return undefined;
+  }
+
+  // socket 目錄的權限排在 home 鎖之前驗（#2369）：不合就起不來，一個檔都沒寫。對話行程的 socket 由監督行程給，兩個不能一起。
+  if (invocation.unixSocket !== undefined) {
+    if (options.conversation !== undefined) {
+      throw new Error('對話行程不收 --unix-socket：它的 socket 由監督行程給（--socket）');
+    }
+    await assertProxySocketDirectory(invocation.unixSocket.path, invocation.unixSocket.group);
   }
 
   const env = options.env ?? process.env;
@@ -1118,14 +1186,14 @@ async function startServer(
   const listening: ServeListening =
     options.conversation === undefined
       ? {
-          kind: 'port',
+          kind: 'front',
           auth: new BrowserAuth(
             await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
             browserSession.maxAgeDays,
           ),
         }
-      : { kind: 'socket', mode: options.conversation };
-  const auth: WireAuth = listening.kind === 'port' ? listening.auth : listening.mode.auth;
+      : { kind: 'conversation', mode: options.conversation };
+  const auth: WireAuth = listening.kind === 'front' ? listening.auth : listening.mode.auth;
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
@@ -1853,10 +1921,12 @@ async function startServer(
       }),
   });
 
+  const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
   try {
-    server = await startWireServer({
-      ...(listening.kind === 'port'
+    if (proxySocket !== undefined) await clearStaleSocket(proxySocket);
+    const started = await startWireServer({
+      ...(listening.kind === 'front'
         ? {
             handler: routeBySurface(
               handler,
@@ -1864,7 +1934,9 @@ async function startServer(
               opsEndpoints,
             ),
             mux: handler,
-            port: invocation.port,
+            ...(proxySocket === undefined
+              ? { port: invocation.port }
+              : { socketPath: proxySocket }),
           }
         : { handler, socketPath: listening.mode.socketPath }),
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
@@ -1882,6 +1954,15 @@ async function startServer(
           opsMetrics.recordRequest(surfaceOf(path), status),
       }),
     });
+    if (proxySocket !== undefined) {
+      try {
+        await openSocketToProxy(proxySocket);
+      } catch (error) {
+        await started.close();
+        throw error;
+      }
+    }
+    server = started;
   } catch (error) {
     // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。
     try {
@@ -1897,11 +1978,11 @@ async function startServer(
   // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
   const authenticatedUrl =
-    listening.kind === 'port'
+    listening.kind === 'front'
       ? listening.auth.authenticatedUrl(invocation.publicUrl ?? server.url)
       : server.url;
   log(
-    listening.kind === 'port'
+    listening.kind === 'front'
       ? `nexus-agent 在 ${authenticatedUrl}`
       : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
   );
