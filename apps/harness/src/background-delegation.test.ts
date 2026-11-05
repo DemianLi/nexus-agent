@@ -25,6 +25,7 @@ import {
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
   TOOL_ERROR_PREFIX,
+  toolDescriptionOf,
 } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
@@ -220,15 +221,13 @@ describe('不給選項：完全不變', () => {
   });
 });
 
-/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求。 */
+/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求（`task` 在那裡是 core 逐字造的定義）。 */
 async function describedTool(background: boolean, name: 'task' | 'subagent'): Promise<string> {
   let seen = '';
   const spy = createMiddleware({
     name: 'zzDescriptionSpy',
     wrapModelCall: (request, handler) => {
-      seen =
-        (request.tools.find((each) => each.name === name) as { description?: string })
-          ?.description ?? '';
+      seen = toolDescriptionOf(request.tools.find((each) => each.name === name)) ?? '';
       return handler(request);
     },
   });
@@ -361,6 +360,34 @@ describe('前景（run_in_background: false）：改派給基座的 task', () =>
       // 走的是基座的 task：子代理的日誌是 `checkpoint_ns` 那一條，不是背景編號。
       expect(run.backgroundLogs().some((log) => /\/bg-/.test(log.sessionId))).toBe(false);
       expect(run.backgroundLogs()).toHaveLength(1);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('內層看到的是 task：名字改回 task、工具是基座那顆（不是模型看到的定義）', async () => {
+    const seen: { name: string; tool: unknown }[] = [];
+    // spy 用預設的 `use`，排在 prepend 的背景委派裡面，看到的是改派之後交給內層的那一份。
+    const spy = createMiddleware({
+      name: 'zzToolCallSpy',
+      wrapToolCall: (request, handler) => {
+        seen.push({ name: request.toolCall.name, tool: request.tool });
+        return handler(request);
+      },
+    });
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [{ content: '子答' }],
+      background: {},
+      plugins: [
+        { plugin: { name: 'spy', apply: (registry) => void registry.middleware.use(spy) } },
+      ],
+    });
+    try {
+      await run.say();
+      const root = seen.find((each) => each.name === 'task' || each.name === 'subagent');
+      expect(root?.name).toBe('task');
+      expect(typeof (root?.tool as { invoke?: unknown } | undefined)?.invoke).toBe('function');
     } finally {
       await run.close();
     }

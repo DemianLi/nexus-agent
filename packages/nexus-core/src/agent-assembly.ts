@@ -76,6 +76,8 @@ import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 import { toolResultEvictionWrap } from './tool-result-eviction.js';
 import { filesystemModelCallWrap } from './filesystem-tool-admission.js';
+import { taskToolOverride } from './task-tool-definition.js';
+import { overriddenTools } from './tool-resolution.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
 export interface AssembleAgentParams extends FoldedAgentParams {
@@ -216,6 +218,38 @@ function filesystemMiddleware(
 }
 
 /**
+ * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
+ * 基座原本的那一支；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
+ *
+ * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
+ *
+ * @param options - 交給基座的其餘選項。
+ * @returns 掛進疊裡的那一顆。
+ */
+function subAgentMiddleware(
+  options: Omit<
+    Parameters<typeof createSubAgentMiddleware>[0],
+    'taskDescription' | 'generalPurposeAgent'
+  >,
+): ReturnType<typeof createSubAgentMiddleware> {
+  const base = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const inner = base.wrapModelCall;
+  if (inner === undefined)
+    throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
+  const override = taskToolOverride(options.subagents ?? []);
+  return {
+    ...base,
+    wrapModelCall: ((request: { readonly tools: readonly unknown[] }, handler: unknown) => {
+      const tools = overriddenTools(request.tools, override);
+      return (inner as (r: unknown, h: unknown) => unknown)(
+        tools === request.tools ? request : { ...request, tools },
+        handler,
+      );
+    }) as unknown as typeof inner,
+  };
+}
+
+/**
  * 一個宣告式子代理的預設疊：檔案工具、摘要、補懸空呼叫，規格帶 `skills` 時再加 skills。
  *
  * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**；`subagent-graph.test.ts` 的漂移絆索
@@ -344,11 +378,10 @@ export function assembleAgent(params: AssembleAgentParams) {
     ...(params.withoutSubagents === true
       ? []
       : [
-          createSubAgentMiddleware({
+          subAgentMiddleware({
             defaultModel: model as never,
             defaultTools: tools,
             subagents: inlineSubagents,
-            generalPurposeAgent: false,
             parentSystemPrompt: systemPrompt,
           }),
         ]),

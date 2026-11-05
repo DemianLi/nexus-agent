@@ -3,8 +3,8 @@
  * `run.start` 替宿主頁宣告的工具，這一輪模型看到的是 `page__<name>`。只掛在嵌入版的組裝。
  *
  * - **每輪一份**：宣告放在 {@link HostToolsSlot}，pump 開一輪時寫進去（插話不換），這裡每次模型呼叫時讀。
- * - **模型看到的工具**：`wrapModelCall` 把這一輪的宣告加進工具清單；`wrapToolCall` 在最外層把 `page__<name>` 的呼叫接到當場轉出來的
- *   工具（`request.tool`），名字不改，所以核准閘門、圍堵、`tool/call` 的日誌、參數照 schema 驗都照一般工具走。宣告裡沒有的名字照原樣交下去，
+ * - **模型看到的工具**：模型那一側照 {@link hostToolsAddition} 把這一輪的宣告接在工具清單尾端；工具那一側照 {@link hostToolsToolStep}
+ *   在最外層把 `page__<name>` 的呼叫接到當場轉出來的工具（`request.tool`），名字不改，所以核准閘門、圍堵、`tool/call` 的日誌、參數照 schema 驗都照一般工具走。宣告裡沒有的名字照原樣交下去，
  *   落到基座的「沒有這顆工具」。
  * - **工具本體**：發一顆 `input.requested`（`kind: 'host_tool'`）停下這一輪，等宿主頁用 `input.respond` 交回結果。說明與結果都包上固定的字、
  *   標明是嵌入的頁面給的資料，內容寫成 JSON、`<` 寫成 `\u003c`，同 `@nexus/core` 的 `page-context.ts`；逾時只回固定的一句。
@@ -15,8 +15,8 @@
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-import { toolCallSessionAddress } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
+import { addedTools, toolCallSessionAddress, wrapToolCallWith } from '@nexus/core';
+import type { PluginEntry, ToolAddition, ToolCallStep } from '@nexus/core';
 import { toLangChainTool } from '@nexus/tool-adapter';
 import type { JsonSchema, JsonValue, NexusTool, NexusToolResult } from '@nexus/tools';
 import {
@@ -193,27 +193,53 @@ export function hostToolsDeclarationProblem(raw: unknown): string | undefined {
 /** middleware 的名字。 */
 export const HOST_TOOLS_MIDDLEWARE_NAME = 'host-tools';
 
+/**
+ * 模型那一側：這一輪的宣告，每次模型呼叫時讀 {@link HostToolsSlot}。
+ *
+ * @param slot - 這份組裝的槽。
+ * @param toTool - 把 {@link hostTool} 轉成交給模型的那一種。
+ * @returns 接在清單尾端的那幾顆。
+ */
+export function hostToolsAddition(
+  slot: HostToolsSlot,
+  toTool: (tool: NexusTool) => unknown,
+): ToolAddition {
+  return { additions: () => slot.current.map((each) => toTool(hostTool(each))) };
+}
+
+/**
+ * 工具那一側：root 叫的 `page__<name>` 在宣告裡，就換上當場轉出來的工具再往內交；其餘原樣往內交。
+ *
+ * @param slot - 這份組裝的槽。
+ * @param toTool - 把 {@link hostTool} 轉成內層跑得動的那一種。
+ * @returns 這一步。
+ */
+export function hostToolsToolStep(
+  slot: HostToolsSlot,
+  toTool: (tool: NexusTool) => unknown,
+): ToolCallStep {
+  return (call, next) => {
+    if (!call.name.startsWith(HOST_TOOL_PREFIX)) return next();
+    // 只有 root 看得到這些工具（嵌入版也不掛子代理）。
+    const caller = toolCallSessionAddress({ configurable: call.configurable } as never);
+    if (caller?.kind !== 'root') return next();
+    const declaration = slot.current.find((each) => hostToolModelName(each.name) === call.name);
+    if (declaration === undefined) return next();
+    return next({ tool: toTool(hostTool(declaration)) });
+  };
+}
+
 function middleware(slot: HostToolsSlot): AgentMiddleware {
+  const addition = hostToolsAddition(slot, toLangChainTool);
   return createMiddleware({
     name: HOST_TOOLS_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
-      const declared = slot.current;
-      if (declared.length === 0) return handler(request);
-      return handler({
-        ...request,
-        tools: [...request.tools, ...declared.map((each) => toLangChainTool(hostTool(each)))],
-      });
+      const tools = addedTools(request.tools, addition);
+      return handler(
+        tools === request.tools ? request : { ...request, tools: tools as typeof request.tools },
+      );
     },
-    wrapToolCall: async (request, handler) => {
-      const { name } = request.toolCall;
-      if (!name.startsWith(HOST_TOOL_PREFIX)) return handler(request);
-      // 只有 root 看得到這些工具（嵌入版也不掛子代理）。
-      const caller = toolCallSessionAddress({ configurable: request.runtime?.configurable });
-      if (caller?.kind !== 'root') return handler(request);
-      const declaration = slot.current.find((each) => hostToolModelName(each.name) === name);
-      if (declaration === undefined) return handler(request);
-      return handler({ ...request, tool: toLangChainTool(hostTool(declaration)) } as never);
-    },
+    wrapToolCall: wrapToolCallWith(hostToolsToolStep(slot, toLangChainTool)),
   }) as AgentMiddleware;
 }
 

@@ -1,11 +1,18 @@
 /**
- * `tool-resolution.ts` 的兩種決定：放行拿掉不放行的名字，覆寫換上定義；認不出名字的那一筆都原樣留著。
+ * `tool-resolution.ts` 的三種決定：放行拿掉不放行的名字，覆寫換上定義，加的接在尾端；認不出名字的那一筆都原樣留著。
  * 掛進 middleware 之後模型實際收到什麼，在各顆自己的測試與 `apps/harness/src/tool-catalog.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { admittedTools, overriddenTools, toolNameOf } from './tool-resolution.js';
+import {
+  addedTools,
+  admittedTools,
+  originalToolOf,
+  overriddenTools,
+  toolDescriptionOf,
+  toolNameOf,
+} from './tool-resolution.js';
 
 const read = { name: 'read_file' };
 const grep = { name: 'grep' };
@@ -41,5 +48,39 @@ describe('toolNameOf', () => {
     expect(toolNameOf(read)).toBe('read_file');
     expect(toolNameOf({ name: 3 })).toBeUndefined();
     expect(toolNameOf(null)).toBeUndefined();
+  });
+});
+
+describe('addedTools', () => {
+  it('接在尾端；一筆都不加時回原本那份清單', () => {
+    const tools = [read, grep];
+    expect(addedTools(tools, { additions: () => [nameless] })).toEqual([read, grep, nameless]);
+    expect(addedTools(tools, { additions: () => [] })).toBe(tools);
+  });
+});
+
+describe('originalToolOf', () => {
+  it('換上的定義回最初那顆，換過兩層也一樣；沒換過的原樣', () => {
+    const first = overriddenTools([read], { override: () => ({ layer: 1 }) });
+    const second = overriddenTools(first, { override: () => ({ layer: 2 }) });
+    expect(originalToolOf(first[0])).toBe(read);
+    expect(originalToolOf(second[0])).toBe(read);
+    expect(originalToolOf(grep)).toBe(grep);
+    expect(originalToolOf(undefined)).toBeUndefined();
+  });
+
+  it('覆寫回同一個物件：不記成它自己頂替自己', () => {
+    const definition = { name: 'read_file' };
+    overriddenTools([definition], { override: (tool) => tool });
+    expect(originalToolOf(definition)).toBe(definition);
+  });
+});
+
+describe('toolDescriptionOf', () => {
+  it('工具的 description，或 OpenAI 形狀的 function.description', () => {
+    expect(toolDescriptionOf({ description: '讀檔' })).toBe('讀檔');
+    expect(toolDescriptionOf({ type: 'function', function: { description: '派工' } })).toBe('派工');
+    expect(toolDescriptionOf({ name: 'x' })).toBeUndefined();
+    expect(toolDescriptionOf(null)).toBeUndefined();
   });
 });

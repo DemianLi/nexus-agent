@@ -230,7 +230,8 @@ export type {
   ToolCallSubstitute,
 } from './tool-call-step.js';
 export { createToolCallStepMiddleware, wrapToolCallWith } from './tool-call-step.js';
-export type { ToolAdmission } from './tool-resolution.js';
+export type { ToolAddition, ToolAdmission } from './tool-resolution.js';
+export { addedTools, originalToolOf, toolDescriptionOf, toolNameOf } from './tool-resolution.js';
 export { admittedTools } from './tool-resolution.js';
 export {
   evictedToolResultText,
