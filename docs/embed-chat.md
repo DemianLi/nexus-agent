@@ -21,7 +21,7 @@ serve 在 `/nexus/` 底下供應兩個檔：
 
 - serve 的頁面讀得到宿主頁沒標 `HttpOnly` 的 cookie 與 storage，所以宿主頁的會話 cookie 要標 `HttpOnly`。
 - nexus 寫進 `localStorage` 的鍵都以 `nexus.` 開頭。
-- 獨立頁面切換側欄時會寫一顆 `sidebar_state` cookie，`Path=/`，宿主頁的每個路徑都收得到；宿主頁如果也有同名的 cookie，兩邊會互相蓋掉。
+- nexus 的頁面不寫 cookie，唯一的 cookie 是 serve 設的會話 cookie，只送給 `/nexus/`。
 
 開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉，有 [Vue CLI（webpack）](#vue-cliwebpack) 與 [Vite](#vite) 兩種寫法。
 
