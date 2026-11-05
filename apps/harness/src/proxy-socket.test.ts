@@ -84,6 +84,11 @@ describe.runIf(POSIX)('assertProxySocketDirectory', () => {
     },
   );
 
+  it.runIf(process.getuid?.() !== 0)('擁有者不是 serve 的帳號不過', async () => {
+    // `/` 是 root 的；serve 不以 root 跑時，這就是「別人的目錄」。
+    await expect(assertProxySocketDirectory('/s', GID)).rejects.toThrow(/的擁有者是 uid 0/);
+  });
+
   it('群組跟 --socket-group 不一樣不過', async () => {
     await expect(assertProxySocketDirectory(await socketIn(0o750), GID + 1)).rejects.toThrow(
       /跟 --socket-group/,
@@ -131,6 +136,15 @@ describe.runIf(POSIX)('clearStaleSocket', () => {
     const path = await socketIn(0o750);
     await listenOn(path);
     await expect(clearStaleSocket(path)).rejects.toThrow(/已經有行程在聽/);
+    expect((await lstat(path)).isSocket()).toBe(true);
+  });
+
+  it('connect 出的錯不是「被拒」：分不出有沒有人在聽，拒絕，檔留著', async () => {
+    const path = await socketIn(0o750);
+    await listenOn(path);
+    // 權限 000 的 socket：一般帳號 connect 得到 EACCES；root 不受權限擋，connect 得上，同樣拒絕。
+    await chmod(path, 0o000);
+    await expect(clearStaleSocket(path)).rejects.toThrow(/serve 不刪它|已經有行程在聽/);
     expect((await lstat(path)).isSocket()).toBe(true);
   });
 
