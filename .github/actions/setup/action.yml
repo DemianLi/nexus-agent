@@ -17,13 +17,13 @@ inputs:
 
 # node_modules 有兩條路。命中快取：直接用快取裡的 node_modules 與 pnpm。沒命中：pnpm/action-setup 裝 pnpm，
 # setup-node 還原 pnpm store，再從 store 裝。
-# 兩條路都照跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
+# 兩條路都跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
 # 不一致就照 lockfile 重裝。
 runs:
   using: composite
   steps:
     # 鍵只帶 `key`、不帶 `restore-keys`：只接受完全命中，部分命中的 node_modules 會帶進別的相依。
-    # 鍵含 OS、架構、傳進來的 Node 版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、各套件的 package.json
+    # 鍵含 OS、架構、傳進來的 Node 版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、.npmrc、各套件的 package.json
     # （bin 的連結、packageManager 指定的 pnpm 版本）。Node 用傳進來的版本而不是 runner 解析出的確切版本：
     # runner 映像混著同一個主版本的不同修補版，確切版本會把同一份快取拆成好幾份；原生模組的 ABI 在主版本內不變。
     # ~/setup-pnpm 是 pnpm/action-setup 預設的安裝位置。型別檢查的快取也在 node_modules 底下，由 ci.yml 另外存取，這裡排除。
@@ -55,7 +55,7 @@ runs:
     - uses: pnpm/action-setup@v6
       if: steps.modules.outputs.cache-hit != 'true'
 
-    # `cache: pnpm` 要 pnpm 已經裝好，只在沒命中時開：命中時不需要 store。
+    # `cache: pnpm` 會呼叫 pnpm，所以排在 pnpm/action-setup 之後；只在沒命中時開：命中時 node_modules 已齊，用不到 setup-node 還原的 store。
     - uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}

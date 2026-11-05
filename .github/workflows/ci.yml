@@ -370,7 +370,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      # 合併後那一輪由這個 job 替 develop 存 node_modules 的快取，給 PR 的 setup 讀（#2334）。
+      # 完整一輪（`inputs.full`）由這個 job 存 node_modules 的快取；develop 上存的給 PR 的 setup 讀（#2334）。
       - uses: ./.github/actions/setup
         with:
           save-cache: ${{ inputs.full }}

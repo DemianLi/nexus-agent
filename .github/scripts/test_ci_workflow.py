@@ -94,9 +94,8 @@ class NodeCompatShape(unittest.TestCase):
         self.assertEqual(len(setup), 1)
         self.assertEqual(setup[0].get('with', {}).get('node-version'), '${{ matrix.node }}')
         setup_node = [s for s in load(SETUP)['runs']['steps'] if str(s.get('uses', '')).startswith('actions/setup-node@')]
-        self.assertTrue(setup_node)
-        for step in setup_node:
-            self.assertEqual(step['with']['node-version'], '${{ inputs.node-version }}')
+        self.assertEqual(len(setup_node), 1)
+        self.assertEqual(setup_node[0]['with']['node-version'], '${{ inputs.node-version }}')
 
     def test_checks_version_before_smoke(self) -> None:
         names = [s.get('name') for s in self.job['steps']]
