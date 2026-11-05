@@ -833,7 +833,7 @@ class NodeModulesCache(unittest.TestCase):
         )
 
     def test_vendor_declarations_follow_their_source(self) -> None:
-        # 命中時不跑 prepare，宣告檔只能從快取來；鍵沒含 vendor 原始碼，改了它仍會命中舊的宣告檔。
+        # 命中時不跑 prepare，宣告檔只能從快取來；鍵若不含 vendor 的 src 與 tsconfig，改了它們仍會命中舊的宣告檔。
         self.assertIn('vendor/*/lib/types', self.restore['with']['path'].split())
         for part in ("'vendor/*/tsconfig.json'", "'vendor/*/src/**'"):
             with self.subTest(part=part):

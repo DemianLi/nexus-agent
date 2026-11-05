@@ -19,7 +19,7 @@ inputs:
 # setup-node 還原 pnpm store，再從 store 裝。
 # 兩條路都跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
 # 不一致就照 lockfile 重裝。
-# 命中時另帶 `--ignore-scripts`，不跑 vendor 的 `prepare`：它產生的宣告檔（vendor/*/lib/types）跟著快取還原。
+# 命中時另帶 `--ignore-scripts`，不跑 vendor 的 `prepare`（重裝那一支也不跑）：它產生的宣告檔（vendor/*/lib/types）跟著快取還原。
 # 相依的建置腳本（allowBuilds 放行的 esbuild postinstall）在 node_modules 已齊時本來就不重跑，產物也在快取裡。
 runs:
   using: composite
