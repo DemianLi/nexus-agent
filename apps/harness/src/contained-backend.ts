@@ -1998,3 +1998,4 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 }
 
 // #2334 B、C 量測用的異動，不合併。
+export const exp2334FormatBreak   =  1 ;
