@@ -207,13 +207,18 @@ export function scanEventProducers(text: string): string[] {
 /**
  * 整棵樹產品碼裡每個事件名有哪些檔案派發它（排除測試）。
  *
+ * 寫不出 {@link DISPATCH_METHODS} 任何一個方法名的檔不建 AST：{@link scanEventProducers} 只認方法名在那份清單上的屬性存取呼叫，
+ * 這種檔不可能有這種呼叫，篩掉不會少掉任何生產者（[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)）。
+ *
  * @param root - repo 根。
  * @returns 事件名 → 派發它的檔案（repo 相對路徑）。
  */
 export function scanEventProducersTree(root: string): Map<string, string[]> {
   const producers = new Map<string, string[]>();
   for (const path of productFiles(root)) {
-    for (const name of new Set(scanEventProducers(readFileSync(path, 'utf8')))) {
+    const text = readFileSync(path, 'utf8');
+    if (!mayContainIdentifier(text, DISPATCH_METHODS)) continue;
+    for (const name of new Set(scanEventProducers(text))) {
       producers.set(name, [...(producers.get(name) ?? []), relative(root, path)]);
     }
   }

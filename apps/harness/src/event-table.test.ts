@@ -135,9 +135,9 @@ describe('生產者掃描器本身（正向對照）', () => {
   });
 });
 
-describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件', () => {
-  // `scanEventTableTree` 只替寫得出 `Events` 的檔建 AST。識別字可以用 `\u` 跳脫來寫，這種檔原始碼裡沒有那幾個字，仍要掃到。
-  it('`Events` 用 `\\u` 跳脫寫的檔照樣掃得到', () => {
+describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件或生產者', () => {
+  // 兩個 `*Tree` 只替寫得出目標識別字的檔建 AST。識別字可以用 `\u` 跳脫來寫，這種檔原始碼裡沒有那幾個字，仍要掃到。
+  it('`Events` 與派發方法名用 `\\u` 跳脫寫的檔照樣掃得到', () => {
     const root = mkdtempSync(join(tmpdir(), 'nexus-event-scan-'));
     try {
       const src = join(root, 'packages', 'probe', 'src');
@@ -153,11 +153,18 @@ describe('整棵樹的掃描：沒建 AST 的檔不會少掉事件', () => {
         join(src, 'escaped.ts'),
         `export interface \\u0045vents {\n${member('probe/escaped')}}\n`,
       );
+      writeFileSync(
+        join(src, 'producer.ts'),
+        `declare const bus: { \\u0065mit(name: string): void };\nbus.\\u0065mit('probe/escaped');\n`,
+      );
       expect(
         scanEventTableTree(root)
           .map((event) => event.name)
           .sort(),
       ).toEqual(['probe/escaped', 'probe/plain']);
+      expect(Object.fromEntries(scanEventProducersTree(root))).toEqual({
+        'probe/escaped': ['packages/probe/src/producer.ts'],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
