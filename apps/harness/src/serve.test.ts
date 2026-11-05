@@ -110,7 +110,6 @@ describe('serve 的旗標', () => {
   });
 
   it('壓縮旗標（#1570）：預設不壓；gzip 帶預設等級與門檻；不合法當場說清楚', () => {
-    // 預設：沒有 compression 這一格（跟以前的 ServeInvocation 一樣）。
     expect('compression' in parseServeArgs([])).toBe(false);
     expect(parseServeArgs(['--compression', 'none']).compression).toBeUndefined();
     expect(parseServeArgs(['--compression', 'gzip']).compression).toEqual({
@@ -138,7 +137,7 @@ describe('serve 的旗標', () => {
       /非負整數/u,
     );
     expect(() => parseServeArgs(['--compression', 'brotli'])).toThrow(/none 或 gzip/u);
-    // 逐欄獨立驗（dsh webserver/src/index.ts:295-296）：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
+    // 逐欄獨立驗：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
     expect(parseServeArgs(['--compression-level', '3']).compression).toBeUndefined();
     expect(
       parseServeArgs(['--compression', 'none', '--compression-threshold', '10']).compression,
@@ -235,7 +234,7 @@ describe('gzip 壓縮接上了 serve（#1570）', () => {
     );
   });
 
-  it('不給旗標：跟以前一樣，不壓', async () => {
+  it('不給旗標：不壓', async () => {
     expect(await listEncoding([])).toBeNull();
   });
 });

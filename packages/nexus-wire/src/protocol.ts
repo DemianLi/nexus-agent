@@ -937,7 +937,9 @@ export const THREADS_PATH = '/threads';
 
 /**
  * 嵌入的對話框（`<nexus-chat>`）走的路徑前綴（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：疊在 thread 那一族的路徑前面，
- * 例如 `/embed/threads/:id/stream`、`/embed/threads/mux`。server 照它套嵌入版的設定檔；反向代理可以只轉這個前綴。
+ * 例如 `/embed/threads/:id/stream`、`/embed/threads/mux`；只認 `/embed/` 開頭，`/embed.js` 不算。server 照它認出連線來自嵌入元件，
+ * 套嵌入版的設定檔。它不是轉發的範圍：元件的 `embed.js`、字型（`assets/…`）與登入（`/?token=`）在 serve 的其他路徑，
+ * 反向代理要把整個掛載路徑轉給 serve（見 `docs/operations.md`〈放在反向代理後面〉）。
  */
 export const EMBED_PATH_PREFIX = '/embed';
 

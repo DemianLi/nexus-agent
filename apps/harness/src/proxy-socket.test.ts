@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { chmod, chown, lstat, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import type { Server } from 'node:net';
@@ -11,6 +10,7 @@ import {
   openSocketToProxy,
   parseSocketGroup,
 } from './proxy-socket.js';
+import { staleSocketAt } from './proxy-socket.fixture.js';
 
 const POSIX = process.platform !== 'win32';
 const GID = process.getgid?.() ?? 0;
@@ -37,23 +37,6 @@ async function listenOn(path: string): Promise<Server> {
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(path, resolve));
   return server;
-}
-
-/** 起一個子行程聽 `path`，再 `SIGKILL` 它：留下一個沒有人在聽的 socket 檔。 */
-async function staleSocketAt(path: string): Promise<void> {
-  const child = spawn(
-    process.execPath,
-    [
-      '-e',
-      'require("node:net").createServer().listen(process.argv[1], () => process.stdout.write("ready"))',
-      path,
-    ],
-    { stdio: ['ignore', 'pipe', 'inherit'] },
-  );
-  await new Promise<void>((resolve) => child.stdout.once('data', () => resolve()));
-  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-  child.kill('SIGKILL');
-  await exited;
 }
 
 describe('parseSocketGroup', () => {
