@@ -8,8 +8,16 @@ cd "$(dirname "$0")/../.."
 tsc="$PWD/node_modules/.bin/tsc"
 cache=node_modules/.cache/nexus-typecheck
 
+# 每一段的牆鐘印成一行「計時：<段> <秒>」，CI 的 log 據此拆 typecheck 花在哪（#2334）。macOS 內建的 bash 3.2 沒有 EPOCHREALTIME，退回整秒。
+now() { if [ -n "${EPOCHREALTIME:-}" ]; then echo "${EPOCHREALTIME/[.,]/}"; else echo $(($(date +%s) * 1000000)); fi; }
+lap() { local us=$(($(now) - $2)); printf '計時：%s %d.%02d\n' "$1" $((us / 1000000)) $((us % 1000000 / 10000)); }
+
+t=$(now)
 pnpm exec tsx scripts/gen-typecheck-projects.ts
+lap gen-typecheck-projects "$t"
+t=$(now)
 dirs=$(pnpm "$@" --silent exec pwd)
+lap 'pnpm exec pwd' "$t"
 
 projects=()
 web=false
@@ -27,14 +35,16 @@ done <<< "$dirs"
 
 rc=0
 build=
+t=$(now)
 if [ ${#projects[@]} -gt 0 ]; then
-  "$tsc" -b "${projects[@]}" &
+  { brc=0; "$tsc" -b "${projects[@]}" || brc=$?; lap "tsc -b（${#projects[@]} 個套件）" "$t"; exit $brc; } &
   build=$!
 fi
 if $web; then
   # 跟 tsc -b 同時跑，輸出先收起來，免得兩邊的錯誤訊息交錯。
   log=$(mktemp)
   (cd apps/web && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
+  lap 'tsc web' "$t" >> "$log"
 fi
 if [ -n "$build" ]; then
   wait "$build" || rc=1
