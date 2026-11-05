@@ -62,7 +62,7 @@ import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
-import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { toolRefusal } from './tool-events.js';
 import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
@@ -375,7 +375,7 @@ export function observationKey(backend: AnyBackendProtocol, raw: string): string
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(
+  return createToolCallStepMiddleware(
     OBSERVATION_POLICY_MIDDLEWARE_NAME,
     observationToolStep(backend),
   );

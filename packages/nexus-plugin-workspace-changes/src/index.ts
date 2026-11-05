@@ -60,7 +60,12 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
-import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE, wrapToolCallWith } from '@nexus/core';
+import {
+  isLogicalTurnStart,
+  WORKSPACE_ROOT_SERVICE,
+  withToolCallStep,
+  wrapToolCallWith,
+} from '@nexus/core';
 import type {
   NexusPlugin,
   PluginEntry,
@@ -409,14 +414,17 @@ function createWorkspaceChangesMiddleware(
     }
     return next();
   };
-  return createMiddleware({
-    name: WORKSPACE_CHANGES_MIDDLEWARE_NAME,
-    wrapToolCall: wrapToolCallWith(capture),
-    afterAgent: async (_state, runtime) => {
-      await recorderFor((runtime as { configurable?: unknown }).configurable, 'root')?.stopping();
-      return undefined;
-    },
-  }) as unknown as AgentMiddleware;
+  return withToolCallStep(
+    createMiddleware({
+      name: WORKSPACE_CHANGES_MIDDLEWARE_NAME,
+      wrapToolCall: wrapToolCallWith(capture),
+      afterAgent: async (_state, runtime) => {
+        await recorderFor((runtime as { configurable?: unknown }).configurable, 'root')?.stopping();
+        return undefined;
+      },
+    }) as unknown as AgentMiddleware,
+    capture,
+  );
 }
 
 declare module '@nexus/core' {

@@ -8569,7 +8569,7 @@
       "digest": "a3d61aaeeeed6d5a9fb14a74a91fadfd01327b0dac9b8fbac3d80b0baab0c5fe",
       "names": [],
       "sources": [
-        "apps/harness/src/host-tools.ts:39"
+        "apps/harness/src/host-tools.ts:44"
       ]
     },
     {
@@ -8815,7 +8815,7 @@
       "digest": "bfb5779d39f7a2bc1bd335801241df7b0476c35b6ce11d7985f4e9f76a7f0907",
       "names": [],
       "sources": [
-        "apps/harness/src/host-tools.ts:40"
+        "apps/harness/src/host-tools.ts:45"
       ]
     },
     {

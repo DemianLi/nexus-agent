@@ -58,6 +58,7 @@ import {
   toolDescriptionOf,
   toolNameOf,
   toolRefusal,
+  withToolCallStep,
   wrapToolCallWith,
 } from '@nexus/core';
 import type {
@@ -458,46 +459,34 @@ export class BackgroundDelegation {
   }
 
   #middleware() {
-    return createMiddleware({
-      name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
-      wrapModelCall: (request, handler) => {
-        const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
-        // 子代理的疊沒有 `task`：什麼都不做。
-        if (base === undefined) return handler(request);
-        this.#baseTask = originalToolOf(base) as StructuredToolInterface;
-        const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
-        const tools = addedTools(admittedTools(request.tools, WITHOUT_TASK), {
-          additions: () => [subagent],
-        });
-        return handler({ ...request, tools: tools as typeof request.tools });
-      },
-      // `toolCall.name` 換成 `task`、結果改回 `subagent` 是相容層的事：基座內層認 `task`，`ToolCallSubstitute` 又換不了名字。
-      wrapToolCall: (request, handler) =>
-        wrapToolCallWith(
-          this.#toolStep(async (args) =>
-            renameResult(
-              await handler({
-                ...request,
-                toolCall: { ...request.toolCall, name: BASE_DELEGATION_TOOL_NAME, args },
-                tool: this.#baseTask,
-              } as never),
-              request.toolCall.id ?? '',
-            ),
-          ),
-        )(request, handler),
-    });
+    const step = this.#toolStep();
+    return withToolCallStep(
+      createMiddleware({
+        name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
+        wrapModelCall: (request, handler) => {
+          const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
+          // 子代理的疊沒有 `task`：什麼都不做。
+          if (base === undefined) return handler(request);
+          this.#baseTask = originalToolOf(base) as StructuredToolInterface;
+          const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
+          const tools = addedTools(admittedTools(request.tools, WITHOUT_TASK), {
+            additions: () => [subagent],
+          });
+          return handler({ ...request, tools: tools as typeof request.tools });
+        },
+        wrapToolCall: wrapToolCallWith(step),
+      }),
+      step,
+    );
   }
 
   /**
-   * 這顆的工具那一半：只接 root 叫的 `subagent`。前景交給 `toTask`（改派給基座的 `task`，回來的結果名字改回 `subagent`），
+   * 這顆的工具那一半：只接 root 叫的 `subagent`。前景改派給基座的 `task`（內層認 `task`），回來的結果名字改回 `subagent`；
    * 背景在這裡交給 host、當場回編號；其餘原樣往內交。
    *
-   * @param toTask - 前景改派：收 `task` 的參數，回落定的結果。
    * @returns 這一步。
    */
-  #toolStep(
-    toTask: (args: { description: string; subagent_type: string }) => Promise<unknown>,
-  ): ToolCallStep {
+  #toolStep(): ToolCallStep {
     return async (call, next) => {
       if (call.name !== SUBAGENT_TOOL_NAME) return next();
       // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
@@ -569,7 +558,14 @@ export class BackgroundDelegation {
             name: SUBAGENT_TOOL_NAME,
           });
         }
-        return toTask({ description, subagent_type: subagentType });
+        return renameResult(
+          await next({
+            name: BASE_DELEGATION_TOOL_NAME,
+            tool: this.#baseTask,
+            args: { description, subagent_type: subagentType },
+          }),
+          callId,
+        );
       }
 
       const host = this.#host;

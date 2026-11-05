@@ -89,7 +89,7 @@ import { closer, closerError } from './conversation-replay.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
 import { spawnedSubagentRunId } from './session-address.js';
 import {
-  createCoreToolCallStepMiddleware,
+  createToolCallStepMiddleware,
   toolNameOfCall,
   wrappedRequestOf,
 } from './tool-call-step.js';
@@ -456,7 +456,7 @@ export function createContainmentMiddleware(
   events?: EventDispatcher,
   reportObserverFailure?: (message: string) => void,
 ): AgentMiddleware {
-  return createCoreToolCallStepMiddleware(CONTAINMENT_MIDDLEWARE_NAME, async (call, next) => {
+  return createToolCallStepMiddleware(CONTAINMENT_MIDDLEWARE_NAME, async (call, next) => {
     const request = wrappedRequestOf(call);
     // **計時從這一層開始，不是從工具本體開始**——工具本體我們碰不到。所以這個數字是
     // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
