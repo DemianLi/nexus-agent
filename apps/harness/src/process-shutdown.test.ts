@@ -138,6 +138,26 @@ describe('收尾控制器', () => {
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
+  it('onTimeout 拋錯也照樣強制結束', async () => {
+    vi.useFakeTimers();
+    const exit = vi.fn();
+    const shutdown = createProcessShutdown(
+      () => deferred().promise,
+      exit,
+      vi.fn(),
+      PROCESS_SHUTDOWN_TIMEOUT_MS,
+      () => {
+        throw new Error('notice failed');
+      },
+    );
+    shutdown.interrupt(130);
+    await expect(vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS)).rejects.toThrow(
+      'notice failed',
+    );
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
   it('正常收尾卡住時，Ctrl-C 強制結束', async () => {
     const disposal = deferred();
     const exit = vi.fn();

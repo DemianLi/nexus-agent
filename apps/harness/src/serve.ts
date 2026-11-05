@@ -2186,7 +2186,7 @@ export interface ServeProcessLifecycle {
  *   **`close()` 拒絕時兩者都回 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：有東西沒收好（會話日誌沒落盤這類），監管程式要從退出碼看得出來。
  *   逾時與第二次訊號回訊號的碼：那兩條沒有等到 `close()` 的結果。
  *   **逾時多印一行「還有沒排空的」**到標準錯誤與伺服器日誌（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）：碼跟正常停止一樣，
- *   監控只能從這一行分出這次有沒有收完。第二次訊號不印：那是操作的人自己說不等了。
+ *   監控要靠這一行分出逾時結束。沒有這一行只代表沒有逾時：第二次訊號同樣沒排空，也不印，那是操作的人自己說不等了。
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
