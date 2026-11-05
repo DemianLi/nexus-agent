@@ -64,7 +64,7 @@ import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
-import { wrapToolCallWith } from './tool-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { abortedBeforeDispatch, toolCallAborted } from './turn-cancel.js';
 
@@ -124,15 +124,19 @@ export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCal
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createSessionCheckpointMiddleware(sessions: CheckpointSessions): AgentMiddleware {
-  return createMiddleware({
-    name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
-      const found = sessions.forCall(callConfigOf(request));
-      if (found.kind === 'ok') await sessions.flush(found.log);
-      return handler(request);
-    },
-    wrapToolCall: wrapToolCallWith(sessionCheckpointToolStep(sessions)),
-  }) as unknown as AgentMiddleware;
+  const toolStep = sessionCheckpointToolStep(sessions);
+  return withToolCallStep(
+    createMiddleware({
+      name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      wrapModelCall: async (request, handler) => {
+        const found = sessions.forCall(callConfigOf(request));
+        if (found.kind === 'ok') await sessions.flush(found.log);
+        return handler(request);
+      },
+      wrapToolCall: wrapToolCallWith(toolStep),
+    }) as unknown as AgentMiddleware,
+    toolStep,
+  );
 }
 
 /**

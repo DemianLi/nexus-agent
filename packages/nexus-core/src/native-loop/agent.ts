@@ -34,6 +34,7 @@ import { Command, GraphRecursionError, isCommand } from '@langchain/langgraph';
 import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
+import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
 import './events.js';
 import type { AgentStepPayload } from './events.js';
 import { abortReason, raceAbort } from './abort.js';
@@ -194,6 +195,11 @@ export class NativeAgent {
   readonly #driven: readonly LoopMiddleware[];
   /** 有沒有誰執行 `wrapModelCall` 新加的工具，照原物件算：標成由洋蔥外面做的 `wrapToolCall` 也算。 */
   readonly #executesAddedTools: boolean;
+  /**
+   * 一次工具呼叫由外到內經過的那幾格，照組裝順序：登記了工具步驟的（{@link toolCallStepOf}）由 native 直接呼叫那一步，其餘照洋蔥驅動的那一份。
+   * 標成由洋蔥外面做的 `wrapToolCall` 不在裡面。
+   */
+  readonly #toolCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
   readonly #returnDirect: ReadonlySet<string>;
   readonly #channels: StateChannels;
@@ -214,6 +220,20 @@ export class NativeAgent {
     this.middleware = params.middleware as readonly LoopMiddleware[];
     this.#driven = this.middleware.map(drivenByOnion);
     this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
+    this.#toolCells = this.middleware.flatMap((m, index) => {
+      const wrapToolCall = this.#driven[index]!.wrapToolCall;
+      if (wrapToolCall === undefined) return [];
+      const step = toolCallStepOf(m);
+      return [
+        {
+          name: m.name,
+          wrapToolCall:
+            step === undefined
+              ? wrapToolCall
+              : (wrapToolCallWith(step) as NonNullable<LoopMiddleware['wrapToolCall']>),
+        },
+      ];
+    });
     const unsupported = this.#driven.find((m) => m.afterModel !== undefined);
     if (unsupported !== undefined) {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
@@ -641,7 +661,7 @@ export class NativeAgent {
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
-        const result = await runTool(call, this.#tools, this.#driven, tasks[index]!, owner);
+        const result = await runTool(call, this.#tools, this.#toolCells, tasks[index]!, owner);
         results[index] = result;
         note('tools', isCommand(result) ? commandUpdateOf(result) : { messages: [result] });
       }),

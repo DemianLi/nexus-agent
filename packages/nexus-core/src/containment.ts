@@ -64,7 +64,7 @@
  *
  * `tool/call` 在進任何一層之前記，`tool/result` 在落定之後記。**只有這一層兩樣都看得到**：
  * 內層拋出來的原始錯誤（超時、取消、參數不合）只在這裡的 `catch` 裡還是錯誤，出了這一層
- * 就變成訊息；內層自己回的錯誤訊息（核准被拒、schema 違規、未知工具）則原樣從 `handler()`
+ * 就變成訊息；內層自己回的錯誤訊息（核准被拒、schema 違規、未知工具）則原樣從 `next()`
  * 回來，碼由產生它的那一層標好（未知工具由最內層標，見 `invalid-tool-args.ts`），這裡只讀不猜。
  * 另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
  * ——那正是這一層要擋的東西。
@@ -80,7 +80,7 @@
 
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
-import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
+import { MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
@@ -88,7 +88,11 @@ import { toLoggedMessage } from './logged-message.js';
 import { closer, closerError } from './conversation-replay.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
 import { spawnedSubagentRunId } from './session-address.js';
-import { toolNameOfCall } from './tool-call-step.js';
+import {
+  createCoreToolCallStepMiddleware,
+  toolNameOfCall,
+  wrappedRequestOf,
+} from './tool-call-step.js';
 import type { SessionLog } from './session-log.js';
 import {
   HarnessError,
@@ -164,13 +168,13 @@ export function isToolTimeout(error: unknown): boolean {
  * 宣告，`timeoutMs === undefined` 就不武裝任何截止時間。所以一顆沒宣告的工具跑多久都
  * 不會被打斷，這裡也就讀不到數字。
  *
- * @param request - `wrapToolCall` 收到的請求。
+ * @param request - 這次呼叫的請求形狀（`wrappedRequestOf`），或 `wrapToolCall` 收到的請求。
  * @returns 宣告的毫秒數，或沒宣告／不是正數時的 `undefined`。
  */
 export function declaredToolTimeoutMs(request: { readonly tool?: unknown }): number | undefined {
   // **參數型別收到 `unknown` 為止**，同 {@link resolveToolName} 的處境但更極端：
   // `defaultConfig` 根本不在 `ClientTool | ServerTool` 這個聯集上，所以連
-  // `{ defaultConfig?: unknown }` 都接不住基座傳進來的 `request`。
+  // `{ defaultConfig?: unknown }` 都接不住呼叫端傳進來的 `request`。
   const tool: unknown = request.tool;
   if (typeof tool !== 'object' || tool === null) return undefined;
   const config: unknown = (tool as { defaultConfig?: unknown }).defaultConfig;
@@ -215,7 +219,7 @@ export function formatToolTimeout(toolName: string, elapsedMs: number, budgetMs?
 /**
  * 這次呼叫的工具名，判法見 {@link toolNameOfCall}。
  *
- * @param request - `wrapToolCall` 收到的請求。
+ * @param request - 這次呼叫的請求形狀（`wrappedRequestOf`），或 `wrapToolCall` 收到的請求。
  * @returns 工具名。
  */
 export function resolveToolName(request: {
@@ -267,7 +271,7 @@ export interface ToolEventSessions {
   expectSpawn?(runId: string, link: SpawnLink): () => void;
 }
 
-/** `wrapToolCall` 收到的請求裡，記工具事件讀得到的那幾格。 */
+/** 這次呼叫的請求形狀（`wrappedRequestOf`）裡，記工具事件讀得到的那幾格。 */
 interface RecordableRequest {
   readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
   readonly runtime?: { readonly configurable?: unknown };
@@ -347,7 +351,7 @@ function recordUnknownOutcome(
  *   跟著要注入的 `user/message` 不寫，同 dsh 拋在 `acceptContext`（`:157`）之前。
  * - 注入的 `user/message` 寫不進去：原錯當場拋。
  *
- * 拋出去的錯走出 `wrapToolCall`，不會被這一層翻成錯誤訊息（見 `createContainmentMiddleware` 的結構）。
+ * 拋出去的錯走出這一步，不會被這一層翻成錯誤訊息（見 `createContainmentMiddleware` 的結構）。
  */
 function recordToolCall(
   sessions: ToolEventSessions | undefined,
@@ -452,71 +456,67 @@ export function createContainmentMiddleware(
   events?: EventDispatcher,
   reportObserverFailure?: (message: string) => void,
 ): AgentMiddleware {
-  return createMiddleware({
-    name: CONTAINMENT_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      // **計時從這一層開始，不是從工具本體開始**——工具本體我們碰不到。所以這個數字是
-      // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
-      // 的東西：模型等的就是這一段。
-      const startedAt = Date.now();
-      // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
-      const raw = rawArgumentsOf(request, sessions);
-      // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
-      const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
-      const settle = recorded?.settle;
+  return createCoreToolCallStepMiddleware(CONTAINMENT_MIDDLEWARE_NAME, async (call, next) => {
+    const request = wrappedRequestOf(call);
+    // **計時從這一層開始，不是從工具本體開始**——工具本體我們碰不到。所以這個數字是
+    // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
+    // 的東西：模型等的就是這一段。
+    const startedAt = Date.now();
+    // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
+    const raw = rawArgumentsOf(request, sessions);
+    // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
+    const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
+    const settle = recorded?.settle;
+    try {
+      // **只有本體那一段在接錯的 try 裡**：`settle` 寫日誌拋的錯（#1665）要走出這一層，不能被翻成錯誤訊息。
+      let ran;
       try {
-        // **只有本體那一段在接錯的 try 裡**：`settle` 寫日誌拋的錯（#1665）要走出這一層，不能被翻成錯誤訊息。
-        let ran;
-        try {
-          // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
-          // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
-          ran = await runInToolMetaSlot(request.toolCall.name, request.toolCall.args, () =>
-            handler(request),
-          );
-        } catch (error) {
-          // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
-          if (isGraphBubbleUp(error)) throw error;
-          const toolName = resolveToolName(request);
-          // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
-          // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
-          // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
-          const message = toolRefusal(
-            isToolTimeout(error)
-              ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
-              : formatToolFailure(toolName, error),
-            { callId: request.toolCall.id ?? '', name: toolName },
-          );
-          const kind = classifyThrownToolError(error);
-          if (events !== undefined) {
-            notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
-          }
-          settle?.(
-            kind === undefined ? { isError: true } : { isError: true, error: kind },
-            message,
-            [],
-          );
-          // 拋錯翻出來的訊息沒有「收這一輪」的標記（本體沒走到那一行）：`returnDirect` 工具的這一則照常回頭叫模型。
-          return settleTurnConclusion(request, message, false, sessions);
-        }
-        const { result, meta, concluded } = ran;
-        // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
-        // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
-        // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
+        // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
+        // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
+        ran = await runInToolMetaSlot(request.toolCall.name, request.toolCall.args, () => next());
+      } catch (error) {
+        // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
+        if (isGraphBubbleUp(error)) throw error;
+        const toolName = toolNameOfCall(call);
+        // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
+        // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
+        // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
+        const message = toolRefusal(
+          isToolTimeout(error)
+            ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
+            : formatToolFailure(toolName, error),
+          { callId: request.toolCall.id ?? '', name: toolName },
+        );
+        const kind = classifyThrownToolError(error);
         if (events !== undefined) {
-          notifyToolResult(events, request as RecordableRequest, result, reportObserverFailure);
+          notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
         }
         settle?.(
-          readToolOutcome(result, request.toolCall.id ?? ''),
-          readToolResultMessage(result, request.toolCall.id ?? ''),
-          readInjectedMessages(result),
-          meta,
+          kind === undefined ? { isError: true } : { isError: true, error: kind },
+          message,
+          [],
         );
-        // 日誌記的是上面那一則（帶 `name`）；交給基座的這一則，`returnDirect` 工具沒標記就拿掉 `name`（見 `turn-conclusion.ts`）。
-        return settleTurnConclusion(request, result, concluded, sessions);
-      } finally {
-        // 子代理出生在 `handler` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
-        recorded?.release();
+        // 拋錯翻出來的訊息沒有「收這一輪」的標記（本體沒走到那一行）：`returnDirect` 工具的這一則照常回頭叫模型。
+        return settleTurnConclusion(request, message, false, sessions);
       }
-    },
-  }) as AgentMiddleware;
+      const { result, meta, concluded } = ran;
+      // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
+      // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
+      // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
+      if (events !== undefined) {
+        notifyToolResult(events, request as RecordableRequest, result, reportObserverFailure);
+      }
+      settle?.(
+        readToolOutcome(result, request.toolCall.id ?? ''),
+        readToolResultMessage(result, request.toolCall.id ?? ''),
+        readInjectedMessages(result),
+        meta,
+      );
+      // 日誌記的是上面那一則（帶 `name`）；交給基座的這一則，`returnDirect` 工具沒標記就拿掉 `name`（見 `turn-conclusion.ts`）。
+      return settleTurnConclusion(request, result, concluded, sessions);
+    } finally {
+      // 子代理出生在 `next()` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
+      recorded?.release();
+    }
+  });
 }

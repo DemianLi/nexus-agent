@@ -79,7 +79,7 @@ import { bindModelConfig } from './model-binding.js';
 import { markModelCallFailure } from './model-call-failure.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
-import { wrapToolCallWith } from './tool-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallResult, ToolCallSite, ToolCallStep } from './tool-call-step.js';
 
 import { archiveGateOf, TurnBlockedError } from './archive-gate.js';
@@ -346,20 +346,24 @@ export const turnCancelToolStep: ToolCallStep = async (call, next) => {
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createTurnCancelGuard(): AgentMiddleware {
-  return createMiddleware({
-    name: TURN_CANCEL_MIDDLEWARE_NAME,
-    wrapToolCall: wrapToolCallWith(turnCancelToolStep),
-    wrapModelCall: async (request, handler) => {
-      // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
-      // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
-      if (signalOfRequest(request)?.aborted) return stopHere(request);
-      // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——那一輪是被中止，不是被擋下。
-      if (archiveGateOf({ configurable: requestConfigurable(request) })?.() === true) {
-        return blockHere(request);
-      }
-      return handler(request);
-    },
-  }) as unknown as AgentMiddleware;
+  const toolStep = turnCancelToolStep;
+  return withToolCallStep(
+    createMiddleware({
+      name: TURN_CANCEL_MIDDLEWARE_NAME,
+      wrapToolCall: wrapToolCallWith(toolStep),
+      wrapModelCall: async (request, handler) => {
+        // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
+        // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
+        if (signalOfRequest(request)?.aborted) return stopHere(request);
+        // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——那一輪是被中止，不是被擋下。
+        if (archiveGateOf({ configurable: requestConfigurable(request) })?.() === true) {
+          return blockHere(request);
+        }
+        return handler(request);
+      },
+    }) as unknown as AgentMiddleware,
+    toolStep,
+  );
 }
 
 /**

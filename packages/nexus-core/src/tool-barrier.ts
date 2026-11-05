@@ -19,7 +19,7 @@
  *
  * - **宣告的載體是工具的 `metadata.concurrencySafe === true`**（{@link CONCURRENCY_SAFE_METADATA_KEY}），plugin 自己的工具在
  *   註冊時帶；基座的工具（`read_file`、`task`）我們改不到 metadata，退到一張名字表（{@link DEFAULT_PARALLEL_SAFE_TOOLS}）。
- * - **屏障用 `wrapToolCall` 表達，排在圍堵外面一格**——這是本檔最重要的位置約束：等待的呼叫在通過屏障之前**什麼都不做**，
+ * - **屏障是排在圍堵外面一格的工具步驟（`ToolCallStep`）**——這是本檔最重要的位置約束：等待的呼叫在通過屏障之前**什麼都不做**，
  *   不能先被圍堵記一顆 `tool/call`（resume 重跑會記第二顆）。它自己只會拋一種東西——不帶酬載的 `GraphInterrupt`，是控制流，
  *   不需要圍堵接。圍堵「必須是第 0 格」那條約束管的是工具失敗不能殺掉整場 run，屏障沒有失敗路徑。
  * - **核准中斷是偏離 dsh 的新設計**（PM 2026-10-08 在 #711 拍板的第 3 條）：dsh 的核准在 `prepare` 裡、照模型順序逐顆 await；我們的核准是
@@ -40,7 +40,7 @@
  */
 
 import { isGraphBubbleUp, GraphInterrupt } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
+import { createCoreToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { SessionLookup } from './registry.js';
 import { toolCallOwner } from './tool-call-owner.js';
@@ -137,7 +137,7 @@ function owningMessage(
  *   （[#711](https://github.com/DemianLi/nexus-agent/issues/711) 收尾）：dsh 的 `maxParallelToolCalls: 1` 就是串行
  *   （`agent-loop/README.zh.md:48`），而 LangGraph 的 `maxConcurrency: 1` 會把第一顆之後的呼叫靜靜丟掉（見
  *   `settings/agent-loop.ts` 檔頭偏離 0），所以串行改由這道屏障承擔，`maxConcurrency` 另外墊在 2 以上。
- * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌認這一步（{@link toolCallOwner}），找不到這次呼叫的日誌時 `wrapToolCall` 就拋。省略就只讀 state。
+ * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌認這一步（{@link toolCallOwner}），找不到這次呼叫的日誌時這一步就拋。省略就只讀 state。
  * @returns 可以放進 middleware 陣列、排在圍堵外面的實例。
  */
 export function createToolBarrierMiddleware(
@@ -172,69 +172,67 @@ export function createToolBarrierMiddleware(
     });
   };
 
-  return createMiddleware({
-    name: TOOL_BARRIER_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const owner = owningMessage(request as unknown as ToolBarrierRequest, sessions);
-      // 一步只有一顆，或認不出屬於哪一步：沒有屏障可言，原樣放行。
-      if (owner === undefined || owner.ids.length < 2) return handler(request);
-      const at = owner.ids.indexOf(request.toolCall.id ?? '');
-      if (at < 0) return handler(request);
+  return createCoreToolCallStepMiddleware(TOOL_BARRIER_MIDDLEWARE_NAME, async (call, next) => {
+    const request = wrappedRequestOf(call);
+    const owner = owningMessage(request as unknown as ToolBarrierRequest, sessions);
+    // 一步只有一顆，或認不出屬於哪一步：沒有屏障可言，原樣放行。
+    if (owner === undefined || owner.ids.length < 2) return next();
+    const at = owner.ids.indexOf(request.toolCall.id ?? '');
+    if (at < 0) return next();
 
-      const record = recordOf(owner.key, owner.ids);
-      const slot = record.slots[at] as Slot;
-      // 這個位置在之前的 attempt 已經跑完（resume 不會重跑它，來到這裡只可能是同一個 id 的再次呼叫）：不設屏障。
-      if (slot.status === 'complete') return handler(request);
+    const record = recordOf(owner.key, owner.ids);
+    const slot = record.slots[at] as Slot;
+    // 這個位置在之前的 attempt 已經跑完（resume 不會重跑它，來到這裡只可能是同一個 id 的再次呼叫）：不設屏障。
+    if (slot.status === 'complete') return next();
 
-      const safe =
-        !serial &&
-        isConcurrencySafe(
-          (request as unknown as ToolBarrierRequest).tool,
-          request.toolCall.name,
-          safeNames,
-        );
-      slot.status = 'running';
-      slot.safe = safe;
-      slot.entered.resolve();
+    const safe =
+      !serial &&
+      isConcurrencySafe(
+        (request as unknown as ToolBarrierRequest).tool,
+        request.toolCall.name,
+        safeNames,
+      );
+    slot.status = 'running';
+    slot.safe = safe;
+    slot.entered.resolve();
 
-      const signal = turnCancelSignalOf({
-        configurable: (request as unknown as ToolBarrierRequest).runtime?.configurable,
-      });
-      const settle = (outcome: Outcome): void => {
-        slot.status = outcome;
-        slot.settled.resolve(outcome);
-        afterExit(owner.key, record);
-      };
+    const signal = turnCancelSignalOf({
+      configurable: (request as unknown as ToolBarrierRequest).runtime?.configurable,
+    });
+    const settle = (outcome: Outcome): void => {
+      slot.status = outcome;
+      slot.settled.resolve(outcome);
+      afterExit(owner.key, record);
+    };
 
-      try {
-        for (let before = 0; before < at; before += 1) {
-          const earlier = record.slots[before] as Slot;
-          if (earlier.status === 'complete') continue;
-          await raceAbort(earlier.entered.promise, signal);
-          // 兩顆都是 parallel：不用等。
-          if (safe && earlier.safe === true) continue;
-          const outcome = await raceAbort(earlier.settled.promise, signal);
-          if (outcome === 'interrupted') {
-            // 前面那顆中斷了：一起退出，不留任何寫入，resume 時重跑（見檔頭）。
-            settle('interrupted');
-            throw new GraphInterrupt([]);
-          }
+    try {
+      for (let before = 0; before < at; before += 1) {
+        const earlier = record.slots[before] as Slot;
+        if (earlier.status === 'complete') continue;
+        await raceAbort(earlier.entered.promise, signal);
+        // 兩顆都是 parallel：不用等。
+        if (safe && earlier.safe === true) continue;
+        const outcome = await raceAbort(earlier.settled.promise, signal);
+        if (outcome === 'interrupted') {
+          // 前面那顆中斷了：一起退出，不留任何寫入，resume 時重跑（見檔頭）。
+          settle('interrupted');
+          throw new GraphInterrupt([]);
         }
-      } catch (error) {
-        if (isGraphBubbleUp(error)) throw error;
-        // 其他例外（只有中止會走到）：放行，讓內層照它自己的規則處理中止。
       }
+    } catch (error) {
+      if (isGraphBubbleUp(error)) throw error;
+      // 其他例外（只有中止會走到）：放行，讓內層照它自己的規則處理中止。
+    }
 
-      try {
-        const result = await handler(request);
-        settle('complete');
-        return result;
-      } catch (error) {
-        settle(isGraphBubbleUp(error) ? 'interrupted' : 'complete');
-        throw error;
-      }
-    },
-  }) as unknown as AgentMiddleware;
+    try {
+      const result = await next();
+      settle('complete');
+      return result;
+    } catch (error) {
+      settle(isGraphBubbleUp(error) ? 'interrupted' : 'complete');
+      throw error;
+    }
+  });
 }
 
 /** 等一個 promise，但中止訊號舉起來就放棄等（拋出去，由呼叫端放行）。 */
