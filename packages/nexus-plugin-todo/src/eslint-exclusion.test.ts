@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { pluginLintConfig } from '@nexus/sdk/lint';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 
@@ -26,6 +26,20 @@ const eslint = new ESLint({
   cwd: PACKAGE,
   overrideConfigFile: `${PACKAGE}eslint.config.js`,
 });
+
+/**
+ * **暖身：ESLint 第一次載入設定的一次性成本不能算在第一條測試頭上**（[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)）。
+ *
+ * 設定檔在第一次 `lintText`／`calculateConfigForFile` 才載入：根目錄那份 import `typescript-eslint`，連帶載入 `typescript`
+ * 本體，本機約 400ms；載過之後每次 `lintText` 只要個位數到幾十 ms。CI 上好幾個套件的測試同時跑時，這段放大到 2–5 秒（量測見
+ * #2412），全落在檔裡的第一條，貼著它預設的 5 秒逾時。所以在這裡先付掉，每條測試的逾時只蓋熱路徑。hook 的逾時明講成遠高於實測的
+ * 60 秒：預設的 10 秒不到 #2412 在 CI 上量到最慢那次（5.4 秒）的兩倍。
+ *
+ * 暖身只 lint 一段空字串、不做斷言：規則落在哪、排除蓋到哪，仍由下面每一條自己量。
+ */
+beforeAll(async () => {
+  await eslint.lintText('', { filePath: `${PACKAGE}src/index.ts` });
+}, 60_000);
 
 /** 這一份違規碼同時踩到「不准碰 `ctx.root`」與「模組層的可變狀態」。 */
 const VIOLATING = [
