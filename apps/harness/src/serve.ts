@@ -15,7 +15,7 @@
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——這是一個長命的行程，漏了不會有任何錯誤訊息。**MCP 的連線不在這裡面**：
  * 整台 serve 一份連線池，一份設定一個 stdio 子行程，所有 thread 共用，關掉 server 時才收（#1677）。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
- * 在綁 port 之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
+ * 在開始聽之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
  * `ScriptedChatModel` 會當場失敗而不是靜默重播。**那個失敗會以
@@ -102,6 +102,12 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { assertTrustedAuthority } from './request-trust.js';
+import {
+  assertProxySocketDirectory,
+  clearStaleSocket,
+  openSocketToProxy,
+  parseSocketGroup,
+} from './proxy-socket.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
 import {
   createSessionHeaderMetadataResolver,
@@ -225,6 +231,11 @@ export interface ServeInvocation {
    */
   readonly trustedHosts: readonly string[];
   /**
+   * 改聽這個 Unix socket、不綁 port（`--unix-socket` 配 `--socket-group`，#2369）：只讓反向代理連進來，見 `proxy-socket.ts`。
+   * 有它就一定有 {@link publicUrl}：socket 沒有瀏覽器開得到的來源，登入網址只能印公告的那一個。
+   */
+  readonly unixSocket?: { readonly path: string; readonly group: number };
+  /**
    * 瀏覽器實際開的網址（`--public-url`，#2369），補成 `/` 結尾：只決定啟動時印的登入網址，不放行任何 authority、不影響路由與 cookie。
    * 省略就印 serve 自己的來源。
    */
@@ -283,6 +294,9 @@ const USAGE = `用法：
                        帶 port 的只認那個 port，不帶的認任何 port
   --public-url <url>   瀏覽器實際開的網址（例如 https://app.example/nexus/），啟動時印的登入網址用它
                        只是公告：放行要另外給 --trusted-host
+  --unix-socket <path> 改聽這個 Unix socket、不綁 port，只讓同主機的反向代理連進來；不能配 --port，要配 --socket-group 與 --public-url
+                       socket 所在目錄要是 serve 的使用者自己的、群組是 --socket-group、rwx 權限恰好 750 或 710，否則起不來
+  --socket-group <gid> 代理所在群組的數字 gid（例如 getent group nginx 的第三欄）
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
   --compression-level <0-9>
@@ -324,6 +338,48 @@ function parsePublicUrl(raw: string): string {
   return url.href;
 }
 
+/**
+ * `--unix-socket` 與 `--socket-group`：兩個一起給或都不給，不能配明著給的 `--port`，要配 `--public-url`。
+ *
+ * @throws 少了另一半、`--unix-socket` 給了空字串、撞到明著給的 `--port`、沒有 `--public-url`，或 gid 不是非負整數；訊息接著印用法。
+ */
+function parseUnixSocket(
+  values: {
+    readonly 'unix-socket'?: string | undefined;
+    readonly 'socket-group'?: string | undefined;
+    readonly port?: string | undefined;
+  },
+  publicUrl: string | undefined,
+): ServeInvocation['unixSocket'] {
+  const path = values['unix-socket'];
+  const group = values['socket-group'];
+  if (path === undefined && group === undefined) return undefined;
+  if (path !== undefined && path.trim() === '') {
+    throw new Error(`--unix-socket 要給 socket 的路徑。\n\n${USAGE}`);
+  }
+  if (path === undefined) {
+    throw new Error(`--socket-group 要配 --unix-socket <path>。\n\n${USAGE}`);
+  }
+  if (group === undefined) {
+    throw new Error(
+      `--unix-socket 要配 --socket-group <gid>：socket 目錄的群組要是代理的那一個。\n\n${USAGE}`,
+    );
+  }
+  if (values.port !== undefined) {
+    throw new Error(`--unix-socket 不能配 --port：一次只聽一個地方。\n\n${USAGE}`);
+  }
+  if (publicUrl === undefined) {
+    throw new Error(
+      `--unix-socket 要配 --public-url：socket 沒有瀏覽器開得到的網址，登入網址要印代理對外的那一個。\n\n${USAGE}`,
+    );
+  }
+  try {
+    return { path, group: parseSocketGroup(group) };
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
+  }
+}
+
 export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   let parsed;
   try {
@@ -339,6 +395,8 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         port: { type: 'string' },
         'trusted-host': { type: 'string', multiple: true },
         'public-url': { type: 'string' },
+        'unix-socket': { type: 'string' },
+        'socket-group': { type: 'string' },
         compression: { type: 'string' },
         'compression-level': { type: 'string' },
         'compression-threshold': { type: 'string' },
@@ -417,6 +475,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   }
   const publicUrl =
     values['public-url'] === undefined ? undefined : parsePublicUrl(values['public-url']);
+  const unixSocket = parseUnixSocket(values, publicUrl);
 
   // 壓縮旗標的驗證（照 dsh 的 schema）；不合法是 usage error，在任何檔案寫入之前失敗。
   let compression: WireCompression | undefined;
@@ -434,6 +493,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     live: values.live === true,
     port,
     trustedHosts,
+    ...(unixSocket !== undefined && { unixSocket }),
     ...(publicUrl !== undefined && { publicUrl }),
     ...(compression !== undefined && { compression }),
     ...(patches !== undefined && { patches }),
@@ -485,7 +545,7 @@ export interface RunServeOptions {
    */
   readonly sessionLogBudget?: SessionLogBudget;
   /**
-   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（綁 port、帶登入）。
+   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（聽 port 或 `--unix-socket`、帶登入）。
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
@@ -510,10 +570,13 @@ export interface ConversationProcessMode {
   readonly onTurn: (threadId: string, phase: 'begin' | 'end') => void;
 }
 
-/** serve 聽哪裡：綁 port 的帶登入，聽 socket 的是對話行程。 */
+/**
+ * serve 是哪一種：前台帶登入、網頁與營運端點，聽 port 或 `--unix-socket`（`ServeInvocation.unixSocket`）；
+ * 對話行程只有 wire，聽監督行程給的 socket。
+ */
 type ServeListening =
-  | { readonly kind: 'port'; readonly auth: BrowserAuth }
-  | { readonly kind: 'socket'; readonly mode: ConversationProcessMode };
+  | { readonly kind: 'front'; readonly auth: BrowserAuth }
+  | { readonly kind: 'conversation'; readonly mode: ConversationProcessMode };
 
 export interface RunningServe {
   readonly url: string;
@@ -618,7 +681,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     patches: invocation.patches,
   });
 
-  // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
+  // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要開始聽，也不該因為 port 或 socket 被佔住
   // 就看不到設定。
   if (invocation.dumpConfigSchema) {
     // 同 `cli.ts`：標準輸出只放那份 JSON，診斷走標準錯誤；不完整時文件印完之後拋 `ConfigSchemaIncompleteError`。
@@ -654,6 +717,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       }).trimEnd(),
     );
     return undefined;
+  }
+
+  // socket 目錄的權限排在 home 鎖之前驗（#2369）：不合就起不來，一個檔都沒寫。
+  if (invocation.unixSocket !== undefined) {
+    if (options.conversation !== undefined) {
+      throw new Error('對話行程不收 --unix-socket：它的 socket 由監督行程給（--socket）');
+    }
+    await assertProxySocketDirectory(invocation.unixSocket.path, invocation.unixSocket.group);
   }
 
   const env = options.env ?? process.env;
@@ -720,7 +791,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   };
 }
 
-/** {@link runServe} 在 home 鎖就位之後的其餘部分：啟動環境、代理、載清單、組裝、綁 port。 */
+/** {@link runServe} 在 home 鎖就位之後的其餘部分：啟動環境、代理、載清單、組裝、開始聽。 */
 async function startUnderHomeLock(
   options: RunServeOptions,
   invocation: ServeInvocation,
@@ -782,7 +853,7 @@ async function startUnderHomeLock(
   };
 }
 
-/** {@link runServe} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、綁 port。 */
+/** {@link runServe} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、開始聽。 */
 async function startServer(
   options: RunServeOptions,
   invocation: ServeInvocation,
@@ -985,12 +1056,12 @@ async function startServer(
   // 啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
   // 一樣在啟動時，代價是每一列的 `apply` 多跑一遍。
   //
-  // **位置是承重的**：在讀或建瀏覽器會話密鑰與綁 port 之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
+  // **位置是承重的**：在讀或建瀏覽器會話密鑰與開始聽之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
   // 那條：組得起來卻收不乾淨，可能有子行程還活著（`cli-dispose-failure.fixture.ts`）。
   //
   // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
   // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
-  // 只印這一次，在綁 port 之前。
+  // 只印這一次，在開始聽之前。
   // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
   // 型錄上宣告逐位切詞的模型（#1102）按位數估，其餘照 o200k。
   const tokenAnchorBook = new TokenAnchorBook({
@@ -1118,15 +1189,15 @@ async function startServer(
   const listening: ServeListening =
     options.conversation === undefined
       ? {
-          kind: 'port',
+          kind: 'front',
           auth: new BrowserAuth(
             await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
             browserSession.maxAgeDays,
           ),
         }
-      : { kind: 'socket', mode: options.conversation };
-  const auth: WireAuth = listening.kind === 'port' ? listening.auth : listening.mode.auth;
-  // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
+      : { kind: 'conversation', mode: options.conversation };
+  const auth: WireAuth = listening.kind === 'front' ? listening.auth : listening.mode.auth;
+  // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在開始聽之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
   const metricsToken = metricsEnabled
@@ -1171,7 +1242,7 @@ async function startServer(
   const sharedWorkspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
   const threadRootsBase = resolveThreadRootsBase(env);
   if (options.workspaceRootOf === undefined && sharedWorkspaceRoot !== undefined) {
-    // 基底不能跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄重疊（兩個方向）；排在綁 port 之前，起不來的訊息點名是哪一對。
+    // 基底不能跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄重疊（兩個方向）；排在開始聽之前，起不來的訊息點名是哪一對。
     await assertThreadRootsBaseSeparate({
       base: threadRootsBase,
       others: [
@@ -1853,10 +1924,12 @@ async function startServer(
       }),
   });
 
+  const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
   try {
-    server = await startWireServer({
-      ...(listening.kind === 'port'
+    if (proxySocket !== undefined) await clearStaleSocket(proxySocket);
+    const started = await startWireServer({
+      ...(listening.kind === 'front'
         ? {
             handler: routeBySurface(
               handler,
@@ -1864,7 +1937,9 @@ async function startServer(
               opsEndpoints,
             ),
             mux: handler,
-            port: invocation.port,
+            ...(proxySocket === undefined
+              ? { port: invocation.port }
+              : { socketPath: proxySocket }),
           }
         : { handler, socketPath: listening.mode.socketPath }),
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
@@ -1882,6 +1957,15 @@ async function startServer(
           opsMetrics.recordRequest(surfaceOf(path), status),
       }),
     });
+    if (proxySocket !== undefined) {
+      try {
+        await openSocketToProxy(proxySocket);
+      } catch (error) {
+        await started.close();
+        throw error;
+      }
+    }
+    server = started;
   } catch (error) {
     // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。
     try {
@@ -1897,11 +1981,11 @@ async function startServer(
   // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
   // 只印這一次，別處不重複。
   const authenticatedUrl =
-    listening.kind === 'port'
+    listening.kind === 'front'
       ? listening.auth.authenticatedUrl(invocation.publicUrl ?? server.url)
       : server.url;
   log(
-    listening.kind === 'port'
+    listening.kind === 'front'
       ? `nexus-agent 在 ${authenticatedUrl}`
       : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
   );

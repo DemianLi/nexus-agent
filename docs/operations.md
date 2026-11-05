@@ -478,14 +478,14 @@ connection:
 
 **今天的形狀**
 
-- serve 只綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
-- 唯一支援的連法是 SSH 轉 port（同一節）。信任圍欄只認 loopback 的 `Host`（[#387](https://github.com/DemianLi/nexus-agent/issues/387)），所以經反向代理連進來今天沒有支援，等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（`--host` 與 TLS）。
+- serve 預設綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
+- 連法有兩種：SSH 轉 port（下面這幾條），或 serve 改聽 Unix socket、經同一台主機上的反向代理連進來（〈[放在反向代理後面](#放在反向代理後面)〉）。後者不開 port，同主機的其他帳號連不進 serve。
 
 - 網頁的兩條下行共用一條 WebSocket（`/threads/mux`，[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)），解掉 HTTP/1.1 每個來源 6 條連線的上限，分頁開多也不會卡住。升級請求一定要帶同源的 `Origin` 與有效 cookie。一台 serve 最多 1024 條 socket，握手失敗或超過上限時，那一頁改走 SSE，30 秒後再試；走 SSE 時第三分頁起會排隊。
 
 **做什麼**
 
-- 不改綁位址、不架反向代理。
+- 下面這幾條是 SSH 轉 port 的部署：不改綁位址。經反向代理的部署照〈[放在反向代理後面](#放在反向代理後面)〉。
 - 只為了連 serve 而開的主機帳號，在 `sshd_config` 裡用 `Match User <帳號>` 收窄成「只能把本機 port 轉到 serve 那一個 port、不能執行指令」：
   - `AllowTcpForwarding local`、`PermitOpen 127.0.0.1:8787`：只准本機轉發、只准轉到 serve。`PermitOpen` 逐字比對主機字串，寫成 `localhost:8787` 的轉發會被拒；
   - `AllowStreamLocalForwarding no`：Unix socket 轉發由它管，預設是開的。不要靠 `PermitOpen` 順便擋：OpenSSH 9.2 實測 `PermitOpen` 會一起擋，其他版本沒有量；
@@ -822,7 +822,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - **serve 沒在跑的時候別開那個網址。** cookie 是持有即用的憑證：別人趁 serve 沒跑先佔住同一個 port，
   你的瀏覽器（經 SSH 轉 port 也一樣）就會把 cookie 送給他，等你在同一個 port 重開 serve，那顆 cookie
   仍然有效。懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
-- **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
+- **在多人共用的主機上**，從自己的電腦用 SSH 轉 port 連進去，或經反向代理（〈[放在反向代理後面](#放在反向代理後面)〉）。SSH 轉 port 是這樣：
 
   ```bash
   ssh -L 8787:127.0.0.1:8787 <主機>
@@ -854,6 +854,130 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 來源（同一個主機加 port，經 SSH 轉 port 也一樣）最多同時開 6 條連線，所以開到第 3 個分頁就用滿了。用滿之後，
 任何一個分頁再送出的請求（送訊息、列清單）都要排隊等一條連線空出來，看起來就是按了沒反應；再開一個分頁的話，
 連載入網頁本身都要排隊，會卡在載入畫面。關掉多的分頁就好。
+
+## 放在反向代理後面
+
+[#2369](https://github.com/DemianLi/nexus-agent/issues/2369)。多人共用的主機上，serve 綁的 port 誰都連得到（〈多人共用主機的部署清單〉第 6 條）。要讓瀏覽器經反向代理連進來，serve 改聽 Unix socket，只讓代理連得進去；對外的名字、TLS 與子路徑都歸代理。代理要跟 serve 在同一台主機上。
+
+**serve 這一端**
+
+```bash
+serve --unix-socket /run/nexus-agent/serve.sock --socket-group <代理群組的 gid> \
+      --trusted-host app.example --public-url https://app.example/nexus/ \
+      --live --workspace /srv/nexus-agent/workspace
+```
+
+- `--unix-socket`：改聽這個 socket，不綁任何 port。不能配 `--port`。
+- `--socket-group`：代理所在群組的**數字 gid**（`getent group nginx` 的第三欄）。不收群組名：Node 查不到 LDAP、SSSD 這類目錄服務的群組。
+- `--trusted-host`：瀏覽器網址列上的 authority，可以給多次。帶 port 的只認那個 port，不帶的認任何 port。沒指名的 `Host` 一律 403。
+- `--public-url`：瀏覽器開的網址，啟動時印的登入網址用它。聽 socket 時一定要給：serve 自己沒有瀏覽器開得到的網址。它只是公告，放行要靠 `--trusted-host`。
+
+**socket 目錄決定誰連得進來。** serve 起動時驗這個目錄，任何一條不合就起不來，home 底下一個檔都不寫：
+
+- 是真的目錄，符號連結不算；
+- 擁有者是 serve 的帳號；
+- 群組是 `--socket-group`；
+- 權限恰好 `0750` 或 `0710`，other 一律沒有。
+
+這個群組只放代理的帳號：群組裡的每一個帳號都連得進 serve。socket 檔本身由 serve 在 listen 之後設成 `0666`，閘門是目錄，不是這個檔。
+`/run` 每次開機都會清空，所以用 systemd-tmpfiles 建這個目錄：
+
+```bash
+echo 'd /run/nexus-agent 0750 nexus-agent nginx -' | sudo tee /etc/tmpfiles.d/nexus-agent.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/nexus-agent.conf
+```
+
+上一次 serve 被 `kill -9` 或當機留下的 socket 檔，下一次起動時會清掉。路徑上是別種檔，或還有行程在聽（例如另一個 serve），serve 就起不來，也不碰那個檔。正常停 serve 時 socket 檔會一起刪掉。
+
+用〈[用 systemd 常駐](#用-systemd-常駐)〉的單元時，`ExecStart` 的 `--port 8787` 換成上面那四個旗標。
+
+**代理這一端（nginx）**
+
+```nginx
+# serve 這樣起：
+#   serve --unix-socket /run/nexus-agent/serve.sock --socket-group <nginx 群組的 gid> \
+#         --trusted-host app.example --public-url https://app.example/nexus/
+upstream nexus_agent {
+    server unix:/run/nexus-agent/serve.sock;
+}
+
+map $http_upgrade $nexus_connection {
+    default upgrade;
+    ''      '';
+}
+
+server {
+    listen 443 ssl;
+    server_name app.example;
+    ssl_certificate     /etc/nginx/tls/app.example.crt;
+    ssl_certificate_key /etc/nginx/tls/app.example.key;
+
+    # 裸的掛載路徑轉成帶 / 的：serve 看不到 /nexus，補不回來。
+    location = /nexus {
+        absolute_redirect off;
+        return 308 /nexus/$is_args$args;
+    }
+
+    location /nexus/ {
+        # 結尾的 / 剝掉 /nexus 前綴：serve 只認根路徑。
+        proxy_pass http://nexus_agent/;
+        # WebSocket 要 HTTP/1.1；舊版 nginx 預設 1.0。
+        proxy_http_version 1.1;
+
+        # Host 原樣轉：serve 拿它比 --trusted-host。$host 會丟掉 port，用 $http_host。
+        proxy_set_header Host $http_host;
+
+        # WebSocket（/threads/mux）。
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $nexus_connection;
+
+        # 會話 cookie 改成只送給掛載路徑，並只走 HTTPS。
+        proxy_cookie_path / /nexus/;
+        proxy_cookie_flags ~ secure;
+
+        # 附件上傳：nginx 預設只收 1m，serve 收到 300m。
+        client_max_body_size 300m;
+    }
+}
+```
+
+範本在 nginx 1.30.6 上實測過。每一行對到一件代理非做不可的事：
+
+- **剝掉前綴**：serve 只認根路徑。`proxy_pass` 結尾的 `/` 把 `/nexus/threads` 變成 `/threads`。
+- **Host 原樣轉**：serve 拿它比 `--trusted-host`。要用 `$http_host`：`$host` 會丟掉 port，跟瀏覽器送的 `Origin` 對不上，每個 API 請求都會被 403。
+- **轉 WebSocket**：網頁的下行走 `/threads/mux`。nginx 1.30.6 的 `proxy_http_version` 預設已經是 1.1，舊版是 1.0，所以範本明寫。
+- **改 cookie**：serve 發的會話 cookie 是 `Path=/`、沒有 `Secure`，因為 serve 自己沒有 TLS。代理把 `Path` 改成掛載路徑，再加上 `Secure`。
+- **裸的掛載路徑轉成帶 `/`**：serve 看不到 `/nexus` 這段，補不回來。
+- **本文上限**：nginx 預設只收 1m，serve 收到 300m。不調的話，附件上傳會先被 nginx 回 413。
+
+代理不用管的：
+
+- **SSE 的緩衝**：serve 的 SSE 下行自帶 `X-Accel-Buffering: no`。WebSocket 與 SSE 每 2 秒有心跳，`proxy_read_timeout` 用預設就好。
+- **`X-Forwarded-*`**：serve 不讀。cookie 加不加 `Secure` 只看 serve 自己的 listener。
+- **WebSocket 裡的路徑**：mux 每條串流的路徑寫在 socket 訊息裡，代理剝不到。網頁送進 socket 之前會自己剝掉前綴，serve 收到的路徑照舊從根算。
+
+**探針**：在主機上直接打 socket，`Host` 是 `localhost`，過得了信任圍欄。執行的帳號要連得進 socket：serve 的帳號、代理群組的成員或 root。
+
+```bash
+curl --unix-socket /run/nexus-agent/serve.sock http://localhost/livez    # ok
+curl --unix-socket /run/nexus-agent/serve.sock http://localhost/readyz   # ok、closing 或 storage-full
+```
+
+經代理的 `https://app.example/nexus/livez` 也回得到。不想讓外面看到，就在代理把 `/nexus/livez`、`/nexus/readyz` 擋掉。
+
+**SSH 轉 port 這條路沒有了。** 聽 socket 時 serve 不綁 port，`ssh -L 8787:127.0.0.1:8787` 轉不到東西，使用者一律經代理連進來。
+
+**怎麼確認**
+
+```bash
+sudo ss -ltnp | grep node                       # 沒有 serve：它不聽任何 port
+ls -ld /run/nexus-agent                          # drwxr-x--- nexus-agent nginx
+sudo -u nobody curl --unix-socket /run/nexus-agent/serve.sock http://localhost/livez   # 連不進去：nobody 不在代理群組
+curl -sI https://app.example/nexus               # 308，Location: /nexus/
+journalctl -u nexus-agent -n 20                  # 找「nexus-agent 在 https://app.example/nexus/?token=…」，在瀏覽器開它
+```
+
+登入 token 仍然是一個 serve 行程一顆、所有人共用，跟 SSH 轉 port 一樣；換成個人帳號登入是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
 
 ## 金鑰放哪裡
 
@@ -1163,7 +1287,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
   - **配額滿（`EDQUOT`）看不到**：`statfs` 不知道配額，這時 `/readyz` 回 200，工具與輪次仍會回報空間用完。
   - 使用者看到的字不講是哪一區（多人共用主機不帶路徑）。管理者看 `nexus_storage_full{area="home|thread-roots"}` 與日誌的 `[儲存]`、`[輪次]` 行。指標不受 `probes.enabled` 影響。
 - **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
-- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。經反向代理連進來今天不支援，要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉）。
+- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。serve 聽 Unix socket 時探針怎麼打，見〈[放在反向代理後面](#放在反向代理後面)〉。
 
 ### 打開指標
 
@@ -1258,7 +1382,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則：因為門檻不生效，抓取端帶 `Accept-Encoding: gzip` 時連只有 `ok` 兩個字的探針本文也會被壓（實測壓成 22 位元組），抓取端不需要這個的話不要帶。
 - **三個旗標逐欄獨立驗**（同 dsh）：等級超出 0 到 9、門檻不是非負整數、`--compression` 不是 `none`／`gzip` 都是 usage error，在任何檔案寫入之前失敗；沒打開 gzip 時給等級或門檻照收但不生效。
 - **設定走旗標，不走 `cordis.yml` 的列**：listener 的設定（`--port`）本來就是旗標，將來的 `--host` 與 TLS（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）也一樣。起動時決定，改了要重啟。
-- **今天只支援 SSH 轉 port**：經反向代理連進來要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉），所以 gzip 只有 `serve` 這一層會壓。
+- **放在反向代理後面時**（〈[放在反向代理後面](#放在反向代理後面)〉），代理也可以自己壓（nginx 的 `gzip`），跟 `serve` 這一層擇一開就好。
 - **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。
 
 ## 用 systemd 常駐
@@ -1370,8 +1494,8 @@ WantedBy=multi-user.target
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
   照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
   裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
-- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。今天唯一支援的連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉），經反向代理連進來要等
-  [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條。
+- **預設只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條），
+  或改聽 Unix socket、經反向代理連進來（〈[放在反向代理後面](#放在反向代理後面)〉）。
 - **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
   `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
 - **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
