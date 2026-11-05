@@ -221,13 +221,18 @@ function filesystemMiddleware(
  * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
  * 基座原本的那一支；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
  *
- * @param options - 交給基座的選項；`taskDescription` 不給、`generalPurposeAgent` 是 `false`，覆寫的定義照這個前提造。
+ * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
+ *
+ * @param options - 交給基座的其餘選項。
  * @returns 掛進疊裡的那一顆。
  */
 function subAgentMiddleware(
-  options: Parameters<typeof createSubAgentMiddleware>[0],
+  options: Omit<
+    Parameters<typeof createSubAgentMiddleware>[0],
+    'taskDescription' | 'generalPurposeAgent'
+  >,
 ): ReturnType<typeof createSubAgentMiddleware> {
-  const base = createSubAgentMiddleware(options);
+  const base = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
   const inner = base.wrapModelCall;
   if (inner === undefined)
     throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
@@ -377,7 +382,6 @@ export function assembleAgent(params: AssembleAgentParams) {
             defaultModel: model as never,
             defaultTools: tools,
             subagents: inlineSubagents,
-            generalPurposeAgent: false,
             parentSystemPrompt: systemPrompt,
           }),
         ]),
