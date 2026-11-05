@@ -1580,7 +1580,8 @@ function quietInvoke<T extends object>(
  * 算出的切點同時交給切點表（{@link noteSummaryCutoff}）：有日誌時在 `append` 成功之後，沒有日誌時在交下去的那一刻；表在這一步
  * 結束時落定（{@link withSummaryCutoffs}），下一步的「上一次切點」就是它。
  *
- * **切點是反推的**：`summarizer-engine.test.ts` 的差分測試拿真的基座，逐條路徑比基座回的切點與這裡的算法。
+ * **切點是反推的**：引擎不回報切點，這裡從交下去的那份反推（{@link summaryCutoffIndex}）；公式由 `summary-cutoffs.test.ts` 釘住，
+ * 反推值對得上引擎實際留下的尾巴由 `summarizer-engine.test.ts` 釘住。
  *
  * ## 摘要記了，那次呼叫卻失敗
  *
