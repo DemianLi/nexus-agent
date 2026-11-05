@@ -39,7 +39,7 @@ permissions:
 #     跟 required 的 `gate` 不同名。這一輪的 typecheck 把 buildinfo 與宣告檔存成快取，給輕的模式讀。
 #
 # 全跑的結構：plan 算出模式與要不要掃，各項檢查平行跑，最後由 gate 收斂成單一 required check。
-# 輕的模式，中間那一段整排 skipped；plan 成功、沒動到 spawner 時 gate 也不起 job，其餘情況 gate 照 plan 輸出的模式接受它們 skipped。
+# 輕的模式，中間那一段整排 skipped；plan 成功、rust 為 false、其餘全是 skipped 時 gate 不起 job（skipped 的 gate 算通過），其餘情況 gate 照跑、照判。
 #
 #   plan ─┬─ static ───────────┐   CI 腳本的測試、format、lint、web build、web 的瀏覽器護欄
 #         │                    │   （合併後完整一輪另跑真瀏覽器 e2e）
@@ -55,7 +55,7 @@ permissions:
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
 # ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
-# 輕的一輪是 plan，失敗或動到 spawner 時才接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
+# 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate（rust 為 true 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
 # 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
 #
@@ -212,7 +212,7 @@ jobs:
           done
           exit $rc
 
-      # 輕的模式全部過了時 gate 不起 job（見 gate 的 if），gate 摘要的這幾行改在這裡寫。
+      # gate 不起 job 時沒有 gate 的摘要（條件見 gate 的 if），異動檔案數與受影響套件數也寫在這裡。
       - name: 輕的模式的摘要
         if: steps.plan.outputs.mode == 'light'
         env:
@@ -509,12 +509,12 @@ jobs:
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
-  # 所以這裡 `if: always()` 並逐個檢查結果：
+  # 所以這裡的 if 以 `always()` 起頭，並逐個檢查結果：
   #   - plan 必須是 success（它掛了，其餘全 skip，不能因此綠燈；輕的模式的檢查也在它裡面）；
   #   - 該跑的 job 必須是 success，failure / cancelled 一律紅；
   #   - 只有 plan 明說「輕的模式」或「不用掃」時，其餘才允許是 skipped。
   #
-  # 輕的模式下擋合併的檢查都在 plan 裡，plan 成功、沒動到 spawner、其餘全是 skipped 時，下面的判斷不會有別的結論，
+  # 輕的模式下擋合併的檢查都在 plan 裡，plan 成功、rust 為 false（沒動到 spawner 與它的接縫）、其餘全是 skipped 時，下面的判斷不會有別的結論，
   # gate 就不起 job：skipped 的 `gate` 照樣算通過，省掉一個 job 的排隊與啟動。四個條件少一個就照跑、照判。
   # if 列的 job 要跟 needs 一致，test_ci_workflow.py 會核。
   gate:
