@@ -92,7 +92,13 @@ describe('前景子代理：每次委派各一段生命', () => {
     const run = await runServeDriver(
       async (ctx) => {
         await ctx.client.runStart('alpha', '派兩次前景');
-        await ctx.fold(idleWithContent, 60_000);
+        // 等 root 的收尾那句：只看 idle，負載下會在委派跑完之前就收工。
+        await ctx.fold(
+          (state) =>
+            idleWithContent(state) &&
+            state.entries.some((e) => e.kind === 'ai' && !e.streaming && e.text === '好。'),
+          60_000,
+        );
       },
       script,
       [
