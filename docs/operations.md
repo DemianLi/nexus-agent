@@ -959,8 +959,7 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
 
-        # 串流與上傳都邊收邊轉。
-        proxy_buffering off;
+        # 上傳的本文邊收邊轉。
         proxy_request_buffering off;
         # 長連線閒置超過 nginx 預設的 60 秒不切斷。
         proxy_read_timeout 1h;
@@ -989,8 +988,9 @@ server {
 **轉給宿主頁的伺服器**（`location /`）。這一半是通用寫法，不知道對方系統用了什麼，所以每一件都明寫：
 
 - **Host 原樣轉、帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`**：TLS 在代理就結束了，對方看到的是 `http` 與代理的位址；靠這兩個標頭才知道使用者走的是 `https`、從哪裡來。
-- **轉 WebSocket**：跟 `/nexus/` 共用同一個 `map`，沒有升級的請求 `Connection` 是空的。
-- **不緩衝**：`proxy_buffering off` 讓 SSE 之類的串流逐顆送出，不等 nginx 的緩衝區滿；serve 自帶 `X-Accel-Buffering: no`，對方不一定有。`proxy_request_buffering off` 讓上傳的本文邊收邊轉，不先落在代理的磁碟上。
+- **轉 WebSocket**：跟 `/nexus/` 共用同一個 `map`，沒有升級的請求 `Connection` 是空的。`proxy_http_version 1.1` 的理由同上。
+- **上傳不緩衝**：`proxy_request_buffering off` 讓上傳的本文邊收邊轉。不關的話，nginx 先收完整個本文才開始轉，對方在使用者送完之前收不到任何東西。
+- **下行的串流不用關緩衝**：nginx 1.30.6 預設的回應緩衝不會壓住串流，上游送一顆就轉一顆。實測對方的 SSE 不帶 `X-Accel-Buffering`、上游走 HTTP/1.0 也一樣，所以範本不放 `proxy_buffering off`。
 - **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
 - **本文上限**：照對方系統自己的上限填。
 
