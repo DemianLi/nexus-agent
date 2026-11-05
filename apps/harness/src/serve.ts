@@ -545,7 +545,7 @@ export interface RunServeOptions {
    */
   readonly sessionLogBudget?: SessionLogBudget;
   /**
-   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（綁 port、帶登入）。
+   * 起成對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，`conversation-process.ts` 用）；省略就是一般的 serve（聽 port 或 `--unix-socket`、帶登入）。
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
@@ -681,7 +681,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     patches: invocation.patches,
   });
 
-  // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
+  // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要開始聽，也不該因為 port 或 socket 被佔住
   // 就看不到設定。
   if (invocation.dumpConfigSchema) {
     // 同 `cli.ts`：標準輸出只放那份 JSON，診斷走標準錯誤；不完整時文件印完之後拋 `ConfigSchemaIncompleteError`。
@@ -791,7 +791,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   };
 }
 
-/** {@link runServe} 在 home 鎖就位之後的其餘部分：啟動環境、代理、載清單、組裝、綁 port。 */
+/** {@link runServe} 在 home 鎖就位之後的其餘部分：啟動環境、代理、載清單、組裝、開始聽。 */
 async function startUnderHomeLock(
   options: RunServeOptions,
   invocation: ServeInvocation,
@@ -853,7 +853,7 @@ async function startUnderHomeLock(
   };
 }
 
-/** {@link runServe} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、綁 port。 */
+/** {@link runServe} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、開始聽。 */
 async function startServer(
   options: RunServeOptions,
   invocation: ServeInvocation,
@@ -1056,7 +1056,7 @@ async function startServer(
   // 啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
   // 一樣在啟動時，代價是每一列的 `apply` 多跑一遍。
   //
-  // **位置是承重的**：在讀或建瀏覽器會話密鑰與綁 port 之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
+  // **位置是承重的**：在讀或建瀏覽器會話密鑰與開始聽之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
   // 那條：組得起來卻收不乾淨，可能有子行程還活著（`cli-dispose-failure.fixture.ts`）。
   //
   // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
