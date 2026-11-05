@@ -2,7 +2,7 @@
  * 嵌入版設定檔（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，地圖 #2365 第 2、3、10 點）：從 `<nexus-chat>` 來的連線
  * 只能做普通對話。
  *
- * - **怎麼認**：路徑前綴 `EMBED_PATH_PREFIX`（`/embed/threads/…`、`/embed/threads/mux`）。反向代理可以只轉這個前綴。
+ * - **怎麼認**：路徑以 {@link EMBED_PATH_PREFIX} 加 `/` 開頭（`/embed/threads/…`、`/embed/threads/mux`）。它只用來認出連線來自嵌入元件，不是反向代理轉發的範圍。
  * - **綁在 thread 上**：從嵌入版開的 thread 不管之後誰開都照嵌入版組；嵌入連線碰到不是嵌入版開的 thread 一律拒（`thread_not_embedded`）。
  * - **能打的路由與命令是白名單**（{@link EMBED_ROUTE_KINDS}、{@link EMBED_COMMAND_METHODS}）：協定日後多一支命令，嵌入版預設打不到。
  * - **組裝**：不掛子代理（前景的 `task` 與背景的那幾支都不掛），沒有斜線命令，工具照 {@link embedApprovalGate} 要核准。

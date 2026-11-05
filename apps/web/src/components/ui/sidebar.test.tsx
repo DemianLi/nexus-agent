@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, onTestFinished, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import {
   Sidebar,
@@ -56,29 +56,21 @@ test('手機抽屜的說明是「對話列表與新對話。」', async () => {
 });
 
 /**
- * 第 53 條（`patches/0013-sidebar-cookie-try-catch.patch`）：沙盒 iframe 裡寫 cookie 會拋 SecurityError，開關照樣能切（§9）。
- * state 在寫 cookie 之前就切了，事件處理器裡拋的錯由 React 交給 `reportError`（window 的 `error` 事件），不從 `fireEvent` 拋出來：
- * 所以除了看 state，還要數 window 收到幾個錯。
+ * `vendor/solid-glass/README.md`「本地修改」第 53 條（`patches/0013-sidebar-no-cookie.patch`）：切換開關不寫 cookie。`path=/` 的 cookie 會跟著同源宿主頁的每個請求送出去
+ * （#2438）；沒有人讀它，不寫也不會少記任何東西。
  */
-test('寫 cookie 拋錯時，開關照樣切得動、沒有錯誤冒出來', () => {
-  vi.spyOn(document, 'cookie', 'set').mockImplementation(() => {
-    throw new DOMException('blocked', 'SecurityError');
-  });
-  const errors: unknown[] = [];
-  const onError = (event: ErrorEvent) => {
-    errors.push(event.error);
-    event.preventDefault();
-  };
-  window.addEventListener('error', onError);
-  onTestFinished(() => window.removeEventListener('error', onError));
+test('切換開關不寫 cookie', () => {
+  const set = vi.spyOn(document, 'cookie', 'set');
   render(
     <SidebarProvider>
       <SidebarTrigger />
       <State />
     </SidebarProvider>,
   );
-  expect(screen.getByTestId('state').textContent).toBe('expanded');
-  fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
+  const trigger = screen.getByRole('button', { name: '開關側欄' });
+  fireEvent.click(trigger);
   expect(screen.getByTestId('state').textContent).toBe('collapsed');
-  expect(errors).toEqual([]);
+  fireEvent.click(trigger);
+  expect(screen.getByTestId('state').textContent).toBe('expanded');
+  expect(set).not.toHaveBeenCalled();
 });

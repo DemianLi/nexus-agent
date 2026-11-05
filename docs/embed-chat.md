@@ -4,21 +4,29 @@
 
 ## 載入
 
-serve 供應兩個檔，跟網頁同一個來源：
+宿主頁要跟 serve 同源：在宿主頁前面放一台反向代理，把 `/nexus/` 底下的請求去掉前綴後轉給 serve，其餘路徑轉給宿主頁自己的伺服器。設定與 nginx 範本見 [`operations.md`](operations.md) 的〈放在反向代理後面〉。
 
-- `/embed.js`：載入就註冊好 `<nexus-chat>`。
-- `/nexus-chat.d.ts`：元素的型別（以 `application/octet-stream` 回，下載下來放進專案用）。
+serve 在 `/nexus/` 底下供應兩個檔：
 
-這兩個路徑是暫時的：最終會放在一個固定前綴底下（例如 `/nexus/embed.js`），前綴由 [#2369](https://github.com/DemianLi/nexus-agent/issues/2369) 決定，定案後這份說明跟著改。
+- `/nexus/embed.js`：載入就註冊好 `<nexus-chat>`。
+- `/nexus/nexus-chat.d.ts`：元素的型別（以 `application/octet-stream` 回，下載下來放進專案用）。
 
-宿主頁要跟 serve 同源：在宿主頁的伺服器上設反向代理，把 serve 的路徑轉過去。登入沿用 serve 的登入網址換到的會話 cookie。
+元件照 `embed.js` 自己的網址找 serve：從 `/nexus/embed.js` 載入，對話請求就打 `/nexus/embed/threads/…`，下行的 WebSocket 是 `/nexus/embed/threads/mux`，字型在 `/nexus/assets/…`，全都落在 `/nexus/` 這一條裡，代理不用另外轉別的路徑。serve 看 `/embed` 這段決定這條對話能用什麼：沒有子代理、沒有斜線命令；內建工具沒標唯讀的都要使用者核准，MCP 工具照那一列設定的 `approval`。
+
+登入：使用者先開 serve 啟動時印的登入網址（`https://<宿主頁的網域>/nexus/?token=…`），serve 設好會話 cookie 後轉到 `/nexus/`，也就是獨立頁面；之後開宿主頁，元件就帶著這個 cookie。cookie 只送給 `/nexus/`，宿主頁自己的路徑收不到。
+
+同源的代價：宿主頁上執行的任何腳本，都能以使用者的身分打 `/nexus/` 底下的 API。cookie 是 `HttpOnly`，腳本讀不到它，但發得出帶著它的請求。宿主頁載入哪些腳本，跟元件一樣要信得過。
+
+同源是雙向的：serve 在 `/nexus/` 供應的頁面跟宿主頁共用沒標 `HttpOnly` 的 cookie、`localStorage` 與 `sessionStorage`。
+
+- serve 的頁面讀得到宿主頁沒標 `HttpOnly` 的 cookie 與 storage，所以宿主頁的會話 cookie 要標 `HttpOnly`。
+- nexus 寫進 `localStorage` 的鍵都以 `nexus.` 開頭。
+- nexus 的頁面不寫 cookie，唯一的 cookie 是 serve 設的會話 cookie。serve 發的是 `Path=/`，照 [`operations.md`](operations.md) 的〈放在反向代理後面〉nginx 範本架代理時，`proxy_cookie_path` 把它改成 `/nexus/`，宿主頁自己的路徑收不到。〈[開發伺服器的設定](#開發伺服器的設定)〉的 Vue CLI 與 Vite 寫法不改 `Path`，開發時這顆 cookie 會送到開發伺服器的每個路徑；cookie 不分 port，同一台電腦上 `localhost` 其他 port 的伺服器也收得到。
 
 開發時在自己的電腦接上另一台主機上的 serve，見〈[開發時接上另一台主機的 serve](#開發時接上另一台主機的-serve)〉，有 [Vue CLI（webpack）](#vue-cliwebpack) 與 [Vite](#vite) 兩種寫法。
 
-元件的對話請求都打 `/embed/threads/…`，下行的 WebSocket 是 `/embed/threads/mux`。serve 看這個前綴決定這條對話能用什麼：沒有子代理、沒有斜線命令；內建工具沒標唯讀的都要使用者核准，MCP 工具照那一列設定的 `approval`。反向代理要多轉 `/embed/`，獨立頁面的 `/threads` 不用轉。
-
 ```html
-<script type="module" src="/embed.js"></script>
+<script type="module" src="/nexus/embed.js"></script>
 
 <div style="height: 600px">
   <nexus-chat theme="auto"></nexus-chat>
@@ -172,9 +180,9 @@ window.addEventListener('keydown', (event) => {
 
 ## 開發時接上另一台主機的 serve
 
-宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁的伺服器設反向代理。
+宿主頁的工程師在自己的電腦開前端的開發伺服器（Vue CLI 或 Vite），把 `<nexus-chat>` 接到同一個區網裡另一台主機上的 serve（跑在 docker）。這只用在開發與聯調；正式部署照〈載入〉在宿主頁前面放反向代理。
 
-serve 只收 Host 是 loopback 的請求；Origin 有帶的話，要跟 Host 是同一個 authority，不然回 403。工程師開 `http://localhost:<port>`，開發伺服器的 proxy 設 `changeOrigin: false`，轉出去的 Host 仍是 `localhost:<port>`；Origin 也要原樣轉出去，兩條才都過。瀏覽器看來頁面、`embed.js` 與 API 同源，serve 不用開 CORS。
+serve 沒給 `--trusted-host` 時只收 Host 是 loopback 的請求；Origin 有帶的話，要跟 Host 是同一個 authority，不然回 403。工程師開 `http://localhost:<port>`，開發伺服器的 proxy 設 `changeOrigin: false`，轉出去的 Host 仍是 `localhost:<port>`；Origin 也要原樣轉出去，兩條才都過。瀏覽器看來頁面、`embed.js` 與 API 同源，serve 不用開 CORS。
 
 ### serve 那台主機
 
@@ -182,7 +190,7 @@ serve 只綁容器裡的 `127.0.0.1`，區網連不進去。在 serve 容器的�
 
 ```js
 // dev-proxy.mjs：把區網進來的請求轉給同一個網路命名空間裡的 serve，含 WebSocket 升級。
-// Host 與 Origin 要原樣轉送：serve 只收 loopback 的 Host，帶了 Origin 就要跟 Host 同一個 authority，改寫哪一個都會讓 API 與 WebSocket 回 403。
+// Host 與 Origin 要原樣轉送：serve 沒給 --trusted-host 時只收 loopback 的 Host，帶了 Origin 就要跟 Host 同一個 authority，改寫哪一個都會讓 API 與 WebSocket 回 403。
 import { createServer, request } from 'node:http';
 import { connect } from 'node:net';
 
@@ -231,8 +239,7 @@ docker run -d --name nexus-dev-proxy --network container:<serve 容器> \
 
 兩種開發伺服器的做法相同，只是寫法不同：
 
-- 元件從 `/nexus/embed.js` 載入。`/nexus/` 開頭的請求去掉前綴後轉給 serve：`embed.js`、型別 `nexus-chat.d.ts`，以及字型（`/nexus/assets/…`），都走這一條。
-- `/embed/` 開頭的請求原樣轉給 serve，包括 API 與下行的 WebSocket `/embed/threads/mux`。
+- 元件從 `/nexus/embed.js` 載入。`/nexus/` 開頭的請求去掉前綴後轉給 serve，只有這一條：`embed.js`、型別 `nexus-chat.d.ts`、字型（`/nexus/assets/…`）、API（`/nexus/embed/threads/…`）與下行的 WebSocket（`/nexus/embed/threads/mux`）都走它，所以這一條要轉 WebSocket（`ws: true`）。
 - 頁面裡這樣放：
 
   ```html
@@ -262,8 +269,7 @@ module.exports = defineConfig({
   },
   devServer: {
     proxy: {
-      '^/nexus/': { ...nexus, pathRewrite: { '^/nexus': '' } },
-      '^/embed/': { ...nexus, ws: true },
+      '^/nexus/': { ...nexus, ws: true, pathRewrite: { '^/nexus': '' } },
     },
   },
 });
@@ -288,8 +294,7 @@ export default defineConfig({
   plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === 'nexus-chat' } } })],
   server: {
     proxy: {
-      '^/nexus/': { ...nexus, rewrite: (path) => path.replace(/^\/nexus/, '') },
-      '^/embed/': { ...nexus, ws: true },
+      '^/nexus/': { ...nexus, ws: true, rewrite: (path) => path.replace(/^\/nexus/, '') },
     },
   },
 });
@@ -299,12 +304,12 @@ Vite 不改 Origin。key 用 `^` 開頭的 RegExp：字串 key 比的是前綴�
 
 ### 登入
 
-架 serve 的人從容器日誌裡 serve 印出的網址取出 `token`，交給工程師。工程師開 `http://localhost:<port>/nexus/?token=<token>`：請求經 `/nexus/` 那一條轉給 serve，serve 設好 cookie 之後 303 回 `/`，也就是工程師自己的頁面。`token` 不必是第一個參數。
+架 serve 的人從容器日誌裡 serve 印出的網址取出 `token`，交給工程師。工程師開 `http://localhost:<port>/nexus/?token=<token>`：請求經 `/nexus/` 那一條轉給 serve，serve 設好 cookie 之後 303 到 `./`，落在 `/nexus/`，也就是 serve 的獨立頁面；再開工程師自己的頁面，元件就帶著這個 cookie。`token` 不必是第一個參數。
 
 ### 注意事項
 
 - **一定要開 `localhost:<port>`。** 開發伺服器印的 Network 網址（`http://<IP>:<port>`）帶的 Host 不是 loopback，API 與 WebSocket 全部回 403。
-- **元件為什麼掛在 `/nexus/` 底下：** 為了不佔用宿主頁自己的 `/assets`。`embed.js` 照自己的網址找字型（`./assets/…`），從 `/embed.js` 載入的話，就要把 `/assets` 整條轉給 serve。宿主頁自己的 `assets/` 會跟它撞路徑：以 Vite 為例，proxy 排在 Vite 自己的檔案之前，專案 `public/assets/` 底下的檔會被轉給 serve、回 404。掛在 `/nexus/` 底下，字型跟著落在 `/nexus/assets/`。
+- **元件為什麼掛在 `/nexus/` 底下：** 為了不佔用宿主頁自己的 `/assets`。`embed.js` 照自己的網址找字型（`./assets/…`），從 `/embed.js` 載入的話，就要把 `/assets` 整條轉給 serve。宿主頁自己的 `assets/` 會跟它撞路徑：以 Vite 為例，proxy 排在 Vite 自己的檔案之前，專案 `public/assets/` 底下的檔會被轉給 serve、回 404。掛在 `/nexus/` 底下，字型跟著落在 `/nexus/assets/`，API 與 WebSocket 也跟著落在 `/nexus/embed/…`。
 
 ### 代價與限制
 
