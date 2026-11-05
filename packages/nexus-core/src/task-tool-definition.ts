@@ -2,8 +2,8 @@
  * 基座 `task` 在模型那一側的定義，由 core 逐字造出來（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。
  *
  * 字串與 schema 照基座 `createTaskTool`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `getTaskToolDescription` 與
- * `createTaskTool` 的 `schema`）：描述照清單先後列出 `- <名字>: <描述>`，`subagent_type` 的說明列出名字。組裝點不給
- * `taskDescription`、`generalPurposeAgent` 是 `false`，所以清單就是 fold 給的那幾個子代理。
+ * `createTaskTool` 的 `schema`）。組裝點（`subAgentMiddleware`）不收 `taskDescription`、自己設 `generalPurposeAgent: false`，
+ * 所以清單就是 fold 給的那幾個子代理。
  * `task-tool-definition.test.ts` 對著真的基座逐字比，基座升級改了字就紅在那裡。
  *
  * 換掉的只有模型看到的那一份；執行找的仍是基座那顆（LangGraph 子圖）。組裝點（`agent-assembly.ts` 的 `subAgentMiddleware`）
@@ -43,8 +43,8 @@ function taskDescription(subagentDescriptions: readonly string[]): string {
 }
 
 /**
- * 模型看到的 `task`：OpenAI 形狀的一份定義，不是工具。帶一格不可列舉的 `name`，理由同 `search-descriptions.ts`
- * （基座的 `_ToolExclusionMiddleware` 用 `tool.name` 認要拿掉的工具）。
+ * 模型看到的 `task`：OpenAI 形狀的一份定義，不是工具。帶一格不可列舉的 `name`：疊裡靠 `toolNameOf` 認工具的那幾格
+ * （`ToolAdmission` 的放行、harness 背景委派找 `task`）才認得出它是 `task`；不可列舉，序列化進請求本體時不多一格。
  *
  * @param subagents - 交給基座的子代理清單，照先後。
  * @returns 那一份定義。

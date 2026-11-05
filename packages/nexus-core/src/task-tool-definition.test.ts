@@ -1,7 +1,7 @@
 /**
  * 模型看到的 `task` 對著真的基座逐字比（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：同一份子代理清單，各交給基座
  * `createSubAgentMiddleware` 與 {@link taskToolDefinition}，比轉成 OpenAI 形狀之後的整份定義。升級基座時字變了就紅在這裡。
- * 組好的 agent 送給模型的是 core 這一份、執行找的仍是基座那顆，也在這裡量。
+ * 組好的 agent 送給模型的是 core 這一份、它頂替的（`originalToolOf`）是基座那顆，也在這裡量。
  */
 
 import { FakeListChatModel } from '@langchain/core/utils/testing';

@@ -9,11 +9,11 @@
  * 基座的 `task` schema 固定，zod 會剝掉多的欄位；langchain 又禁止在 `wrapModelCall` 裡**修改**已註冊的工具
  * （`You have modified a tool in "wrapModelCall" hook … This is not supported.`）。表達不出來，退到最接近的：
  * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（兩件事 langchain 都允許，探針有斷言，見 #831；
- * 拿掉與加上是 core 的 `ToolAdmission` 與 `ToolAddition`，先後照這個順序），`wrapToolCall`（最外層）承接它：判斷與背景派出是
- * core 型別的 `ToolCallStep`，改名回 `task` 留在轉接那一層。
+ * 拿掉與加上是 core 的 `ToolAdmission` 與 `ToolAddition`），`wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的
+ * `ToolCallStep`。
  *
  * - **`run_in_background: false`**：把呼叫改派給基座的 `task`（`toolCall.name` 換成 `task`、`request.tool` 換成
- *   `wrapModelCall` 順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`，行為同今天。
+ *   `wrapModelCall` 順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
  *   回給模型的結果名字改回 `subagent`。
  * - **`true`（預設，同 dsh continuable）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
  *   當場回編號。
@@ -469,7 +469,7 @@ export class BackgroundDelegation {
         });
         return handler({ ...request, tools: tools as typeof request.tools });
       },
-      // 改名回 `task` 是相容層的事（基座內層認 `task`），所以留在這裡，不進那一步。
+      // `toolCall.name` 換成 `task`、結果改回 `subagent` 是相容層的事：基座內層認 `task`，`ToolCallSubstitute` 又換不了名字。
       wrapToolCall: (request, handler) =>
         wrapToolCallWith(
           this.#toolStep(async (args) =>

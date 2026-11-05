@@ -367,6 +367,7 @@ describe('前景（run_in_background: false）：改派給基座的 task', () =>
 
   it('內層看到的是 task：名字改回 task、工具是基座那顆（不是模型看到的定義）', async () => {
     const seen: { name: string; tool: unknown }[] = [];
+    // spy 用預設的 `use`，排在 prepend 的背景委派裡面，看到的是改派之後交給內層的那一份。
     const spy = createMiddleware({
       name: 'zzToolCallSpy',
       wrapToolCall: (request, handler) => {

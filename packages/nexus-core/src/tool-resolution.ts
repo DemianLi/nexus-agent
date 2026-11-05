@@ -5,11 +5,11 @@
  *
  * - {@link ToolAdmission}：放不放行某個名字。模型那一側的清單拿掉不放行的；呼叫那一側要不要拒絕，由套用的那一格決定
  *   （`subagent-tool-filter.ts` 拒絕；`@nexus/plugin-mcp` 放棄重連後只藏不拒）。
- * - {@link ToolOverride}：換掉某個工具在模型那一側的定義（參數說明、預設值），執行時找的仍是原本那個工具（{@link originalToolOf}）。
+ * - {@link ToolOverride}：換掉某個工具在模型那一側的定義（參數說明、預設值），執行時找的仍是原本那個工具；要拿到那顆實例用 {@link originalToolOf}。
  * - {@link ToolAddition}：在清單尾端接上這一步才有的工具（harness 的 `host-tools.ts`、`background-delegation.ts`）。
  *
- * `subagent-tool-filter.ts`、`read-continuation.ts`、`search-descriptions.ts`、`@nexus/plugin-mcp` 的 `mcp-tools-guard:<server>` 在自己的 `wrapModelCall`（`subagent-tool-filter.ts` 另在 `wrapToolCall` 拒絕）裡用這兩個
- * 函式套自己那一份決定；套的先後就是洋蔥的先後。
+ * 各顆在自己的 `wrapModelCall` 裡用 {@link admittedTools}、{@link overriddenTools}、{@link addedTools} 套自己那一份決定
+ * （`subagent-tool-filter.ts` 另在 `wrapToolCall` 拒絕）；套的先後就是洋蔥的先後。
  *
  * @module
  */
@@ -39,7 +39,7 @@ export interface ToolAddition {
   additions(): readonly unknown[];
 }
 
-/** 經 {@link overriddenTools} 換上的定義 → 它頂替的那顆工具。 */
+/** 經 {@link overriddenTools} 換上的定義 → 最初那顆工具（換過幾層都指到最初那顆）。 */
 const origins = new WeakMap<object, object>();
 
 /** 清單上一筆的名字；不是物件或沒有字串名字是 `undefined`。 */
