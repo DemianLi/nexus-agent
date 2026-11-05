@@ -859,6 +859,8 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 
 [#2369](https://github.com/DemianLi/nexus-agent/issues/2369)。多人共用的主機上，serve 綁的 port 誰都連得到（〈多人共用主機的部署清單〉第 6 條）。要讓瀏覽器經反向代理連進來，serve 改聽 Unix socket，只讓代理連得進去；對外的名字、TLS 與子路徑都歸代理。代理要跟 serve 在同一台主機上。
 
+嵌入版 `<nexus-chat>` 放在宿主頁上時，代理放在宿主頁的伺服器前面：`/nexus/` 轉給 serve，其餘路徑轉給宿主頁的伺服器，瀏覽器看來兩邊同源。元件那一端怎麼放見 [`embed-chat.md`](embed-chat.md)。
+
 **serve 這一端**
 
 ```bash
@@ -901,7 +903,12 @@ upstream nexus_agent {
     server unix:/run/nexus-agent/serve.sock;
 }
 
-map $http_upgrade $nexus_connection {
+# 宿主頁的伺服器。沒有嵌入元件、只開獨立頁面的話，拿掉這段與下面的 location /。
+upstream host_app {
+    server 127.0.0.1:8080;
+}
+
+map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      '';
 }
@@ -927,9 +934,9 @@ server {
         # Host 原樣轉：serve 拿它比 --trusted-host。$host 會丟掉 port，用 $http_host。
         proxy_set_header Host $http_host;
 
-        # WebSocket（/threads/mux）。
+        # WebSocket（獨立頁面的 /threads/mux、元件的 /embed/threads/mux）。
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $nexus_connection;
+        proxy_set_header Connection $connection_upgrade;
 
         # 會話 cookie 改成只送給掛載路徑，並只走 HTTPS。
         proxy_cookie_path / /nexus/;
@@ -938,6 +945,29 @@ server {
         # 附件上傳：nginx 預設只收 1m，serve 收到 300m。
         client_max_body_size 300m;
     }
+
+    # 其餘路徑都是宿主頁的伺服器的。
+    location / {
+        proxy_pass http://host_app;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        # 對方在代理後面看不到 https 與使用者的位址。
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # 串流與上傳都邊收邊轉。
+        proxy_buffering off;
+        proxy_request_buffering off;
+        # 長連線閒置超過 nginx 預設的 60 秒不切斷。
+        proxy_read_timeout 1h;
+
+        # 照宿主頁的伺服器自己的上限。
+        client_max_body_size 100m;
+    }
 }
 ```
 
@@ -945,7 +975,7 @@ server {
 
 - **剝掉前綴**：serve 只認根路徑。`proxy_pass` 結尾的 `/` 把 `/nexus/threads` 變成 `/threads`。
 - **Host 原樣轉**：serve 拿它比 `--trusted-host`。要用 `$http_host`：`$host` 會丟掉 port，跟瀏覽器送的 `Origin` 對不上，每個 API 請求都會被 403。
-- **轉 WebSocket**：網頁的下行走 `/threads/mux`。nginx 1.30.6 的 `proxy_http_version` 預設已經是 1.1，舊版是 1.0，所以範本明寫。
+- **轉 WebSocket**：獨立頁面的下行走 `/threads/mux`，元件的走 `/embed/threads/mux`。nginx 1.30.6 的 `proxy_http_version` 預設已經是 1.1，舊版是 1.0，所以範本明寫。
 - **改 cookie**：serve 發的會話 cookie 是 `Path=/`、沒有 `Secure`，因為 serve 自己沒有 TLS。代理把 `Path` 改成掛載路徑，再加上 `Secure`。
 - **裸的掛載路徑轉成帶 `/`**：serve 看不到 `/nexus` 這段，補不回來。
 - **本文上限**：nginx 預設只收 1m，serve 收到 300m。不調的話，附件上傳會先被 nginx 回 413。
@@ -954,7 +984,17 @@ server {
 
 - **SSE 的緩衝**：serve 的 SSE 下行自帶 `X-Accel-Buffering: no`。WebSocket 與 SSE 每 2 秒有心跳，`proxy_read_timeout` 用預設就好。
 - **`X-Forwarded-*`**：serve 不讀。cookie 加不加 `Secure` 只看 serve 自己的 listener。
-- **WebSocket 裡的路徑**：mux 每條串流的路徑寫在 socket 訊息裡，代理剝不到。網頁送進 socket 之前會自己剝掉前綴，serve 收到的路徑照舊從根算。
+- **WebSocket 裡的路徑**：mux 每條串流的路徑寫在 socket 訊息裡，代理剝不到。網頁與元件送進 socket 之前會自己剝掉前綴，serve 收到的路徑照舊從根算。
+
+**轉給宿主頁的伺服器**（`location /`）。這一半是通用寫法，不知道對方系統用了什麼，所以每一件都明寫：
+
+- **Host 原樣轉、帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`**：TLS 在代理就結束了，對方看到的是 `http` 與代理的位址；靠這兩個標頭才知道使用者走的是 `https`、從哪裡來。
+- **轉 WebSocket**：跟 `/nexus/` 共用同一個 `map`，沒有升級的請求 `Connection` 是空的。
+- **不緩衝**：`proxy_buffering off` 讓 SSE 之類的串流逐顆送出，不等 nginx 的緩衝區滿；serve 自帶 `X-Accel-Buffering: no`，對方不一定有。`proxy_request_buffering off` 讓上傳的本文邊收邊轉，不先落在代理的磁碟上。
+- **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
+- **本文上限**：照對方系統自己的上限填。
+
+**部署前要跟對方核對的**：對方系統在代理後面產生的絕對網址與轉址。對方如果照自己看到的 `Host` 與協定組網址，會組出 `http://`；`Location` 是相對路徑或用 `X-Forwarded-Proto` 組的就沒事。對方的 cookie 若是 `Path=/`，也會送到 `/nexus/`，serve 不讀別人的 cookie，沒有影響。
 
 **探針**：在主機上直接打 socket，`Host` 是 `localhost`，過得了信任圍欄。執行的帳號要連得進 socket：serve 的帳號、代理群組的成員或 root。
 
