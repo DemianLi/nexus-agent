@@ -1326,8 +1326,8 @@ const MAX_RETAIN_CHAINS = 32;
  * 引擎實例的 closure 裡只有 `tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
  * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名
  * 在 {@link createSummarizer} 生一次、交給每一顆實例，所以不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。
- * 這一份與基座原本的「一顆摘要器一個 closure」同一個範圍：摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理
- * 照舊不共用；同型的前景子代理共用同一份，所以同型子代理的歷史檔也是同一個。
+ * 範圍是每個 agent 各一份：摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理不共用；同型的前景子代理
+ * 共用同一份，所以同型子代理的歷史檔也是同一個。
  *
  * @param makeChain - 建「`keep` 是 N 則」的那一顆（含它外面貼著的兩層）。
  * @param settings - 補滿的設定。
@@ -1599,13 +1599,12 @@ function quietInvoke<T extends object>(
  * 看不到基座交下去之前的那一刻。（例外是換模型、子代理跟隨與圖片省略：`mergeMiddlewareStack` 在合併時把它們搬到預設疊
  * 前面，所以它們在摘要器**外面**——#1369。）
  *
- * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
+ * ## subagent 那側**寫得進去**
  *
- * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是基座 `task` 的 `EXCLUDED_STATE_KEYS`（`:3263`）
- * 把摘要的私有鍵擋在「傳進／傳出 subagent」兩個方向之外。**那條擋的是 root 的
- * 快照讀得到什麼，不是這裡。** 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建
- * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫
- * 屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ * 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建一份摘要器，subagent 那份的 `wrapModelCall` 就在
+ * subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ * 基座 `task` 的 `EXCLUDED_STATE_KEYS`（`:3263`）把摘要的私有鍵擋在「傳進／傳出 subagent」兩個方向之外，
+ * 擋的是 root 的快照讀得到什麼，不是這裡。
  *
  * ## 記不進去，這次摘要不生效（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
@@ -1616,12 +1615,12 @@ function quietInvoke<T extends object>(
  * 所以 `append` 拋了就**不叫 `handler`**，改拋一顆登記成「生摘要失敗」的錯（{@link summaryLogFailure}）：
  *
  * - 引擎不認它是超窗，原樣往外拋——切點表沒有這次的切點；暫存層看不到事件也看不到切點，歷史檔丟掉。
- * - {@link withTokenBudget} 把它當成生摘要失敗走 dsh 的兩條路：我們自己的門檻觸發的，記 warn、照原請求（不摘要）送出；
+ * - {@link withTokenBudget} 把它當成生摘要失敗，分兩條路：我們自己的門檻觸發的，記 warn、照原請求（不摘要）送出；
  *   端點回超窗之後的恢復，記 warn、拋原本的超窗錯。照原請求送出的那一次若又碰到端點超窗、基座再摘要又記不進去，
  *   也是拋原本的超窗錯，不再重摘（重摘的次數由基座與 {@link withRetainedTail} 各自最多一次界住）。
  *
  * 摘要器在 `wrapModelCall` 裡生摘要、交下去，日誌、切點表與送出的請求沒辦法合成一步，所以是「交下去之前寫、寫不進去不交、
- * 錯走生摘要失敗那條路」。送給模型的內容改由日誌推出之後（#1385），壓縮改成一筆交易，拿掉 {@link summaryLogFailure} 這條繞路。
+ * 錯走生摘要失敗那條路」。TODO(#1385)：送給模型的內容由日誌推出之後，壓縮就是一筆交易，{@link summaryLogFailure} 這條繞路可以拿掉。
  *
  * `forCall` 的三種非 `ok` 不是寫入失敗（這次呼叫不屬於任何一份日誌），照舊不記、`handler` 照常被叫。
  *

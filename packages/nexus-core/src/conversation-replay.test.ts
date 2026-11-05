@@ -646,7 +646,8 @@ describe('壓縮（摘要事件在呼叫之前）', () => {
       summary: summaryMessage('摘要甲'),
       beforeCall: true,
     });
-    // 模型呼叫失敗，切點沒落定（#2416 以前的版本），下一次呼叫從原始的五則再摘要：座標仍是原始串的。舊日誌有這個形狀。
+    // 模型呼叫失敗，切點沒落定，下一次呼叫從原始的五則再摘要：座標仍是原始串的。v0.6.0（會話日誌格式版本 52）寫的日誌有這個形狀；
+    // 格式版本 53 在 #2416 合併之前寫的也是。
     log.append('compaction/summary', {
       cutoffIndex: 3,
       messagesBefore: 5,

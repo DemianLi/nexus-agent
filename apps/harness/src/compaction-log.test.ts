@@ -291,12 +291,11 @@ describe('壓縮發生時，日誌裡留得下來', () => {
 });
 
 /**
- * **射程：subagent 那側寫得進去——這是卡上決定 3 的反面。**
+ * **射程：subagent 那側寫得進去。**
  *
- * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是基座的 `EXCLUDED_STATE_KEYS` 把
- * 摘要事件擋在傳進／傳出 subagent 兩個方向之外。**那條擋的是 root 的快照讀
- * 得到什麼**：`foldSummarizer` 逐個 agent 建一份摘要器，subagent 那份就在 subagent 自己的
- * 圖裡跑，摘要當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
+ * `foldSummarizer`（`packages/nexus-core/src/fold.ts:1630`）逐個 agent 建一份摘要器，
+ * subagent 那份就在 subagent 自己的圖裡跑（`summarization.ts:1602` 的 `withCompactionLog`），摘要當場拿到，再用 `checkpoint_ns` 問這次屬於哪一份日誌。
+ * 不經過 root 的 state，所以不受基座 `task` 的 `EXCLUDED_STATE_KEYS` 擋（它擋的是 root 的快照讀得到什麼）。
  *
  * 兩半各有一條會紅的斷言，理由不同：漏了 `foldSubAgents` 那一注 → subagent 那份是空的；
  * 身分算錯 → subagent 的紀錄跑到 root 那份去。

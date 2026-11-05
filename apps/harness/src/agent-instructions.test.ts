@@ -600,7 +600,7 @@ class BackgroundWorkerModel extends BaseChatModel {
 }
 
 /**
- * **背景子代理的下一輪也補得回來**（#2416 條件 D 的子代理那條路）。背景子代理每一輪接在同一份 state 上（`thread_id` 是它自己的日誌、
+ * **背景子代理的下一輪也補得回來**。背景子代理每一輪接在同一份 state 上（`thread_id` 是它自己的日誌、
  * 身分是背景 id），`agent/pre-step` 與摘要器拿同一張切點表、同一把鍵。第一輪摘要把基線切掉，第二輪的第一次呼叫要看得到恰好一則，
  * 排在摘要之後；pre-step 讀不到切點的話，舊基線還在 state 裡，就不會補。
  *
