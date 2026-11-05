@@ -19,6 +19,8 @@ inputs:
 # setup-node 還原 pnpm store，再從 store 裝。
 # 兩條路都跑 `pnpm install --frozen-lockfile`：命中時它比對 lockfile 與 node_modules 裡記下的狀態，一致就直接結束，
 # 不一致就照 lockfile 重裝。
+# 命中時另帶 `--ignore-scripts`，不跑 vendor 的 `prepare`（重裝那一支也不跑）：它產生的宣告檔（vendor/*/lib/types）跟著快取還原。
+# 相依的建置腳本（allowBuilds 放行的 esbuild postinstall）在 node_modules 已齊時本來就不重跑，產物也在快取裡。
 runs:
   using: composite
   steps:
@@ -26,6 +28,8 @@ runs:
     # 鍵含 OS、架構、傳進來的 Node 版本，以及決定 node_modules 內容的檔：lockfile、workspace 設定、.npmrc、各套件的 package.json
     # （bin 的連結、packageManager 指定的 pnpm 版本）。Node 用傳進來的版本而不是 runner 解析出的確切版本：
     # runner 映像混著同一個主版本的不同修補版，確切版本會把同一份快取拆成好幾份；原生模組的 ABI 在主版本內不變。
+    # vendor 的宣告檔由 `prepare`（`tsc -p tsconfig.json`）從 vendor/*/src 產生，所以鍵另含 vendor 的 src 與 tsconfig：
+    # 改了 vendor 原始碼就不命中，照跑 `prepare`，它同時是 vendor 原始碼的型別檢查（vendor/README.md）。
     # ~/setup-pnpm 是 pnpm/action-setup 預設的安裝位置。型別檢查的快取也在 node_modules 底下，由 ci.yml 另外存取，這裡排除。
     - uses: actions/cache/restore@v6
       id: modules
@@ -35,10 +39,11 @@ runs:
           packages/*/node_modules
           apps/*/node_modules
           vendor/*/node_modules
+          vendor/*/lib/types
           !packages/*/node_modules/.cache
           !apps/*/node_modules/.cache
           ~/setup-pnpm
-        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'packages/*/package.json', 'apps/*/package.json', 'vendor/*/package.json') }}
+        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'package.json', 'packages/*/package.json', 'apps/*/package.json', 'vendor/*/package.json', 'vendor/*/tsconfig.json', 'vendor/*/src/**') }}
 
     # 路徑要跟 pnpm/action-setup 沒命中時設的一致：pnpm 執行檔在 $PNPM_HOME 底下，store 也在那裡。
     - name: 接上快取裡的 pnpm
@@ -63,7 +68,7 @@ runs:
 
     - name: 安裝相依套件
       shell: bash
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile ${{ steps.modules.outputs.cache-hit == 'true' && '--ignore-scripts' || '' }}
 
     - uses: actions/cache/save@v6
       if: inputs.save-cache == 'true' && steps.modules.outputs.cache-hit != 'true'
@@ -73,6 +78,7 @@ runs:
           packages/*/node_modules
           apps/*/node_modules
           vendor/*/node_modules
+          vendor/*/lib/types
           !packages/*/node_modules/.cache
           !apps/*/node_modules/.cache
           ~/setup-pnpm
