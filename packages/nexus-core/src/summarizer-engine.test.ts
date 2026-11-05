@@ -240,6 +240,113 @@ const settings = (over: Partial<Options> = {}): Options => ({
   ...over,
 });
 
+/** 經切點表跑一步：表上先記上一次切點，回 handler 收到的、摘要模型收到的，與照 `withCompactionLog` 算出的切點。 */
+async function engineStep(
+  engine: ReturnType<typeof createSummarizerEngine>,
+  messages: BaseMessage[],
+  previous: SummaryCutoff | undefined,
+) {
+  const table = new SummaryCutoffTable();
+  if (previous !== undefined) table.record(ROOT, messages, previous);
+  const prompts: string[] = [];
+  let sent: BaseMessage[] = [];
+  await (
+    withSummaryCutoffs(engine, table) as unknown as {
+      wrapModelCall: (request: unknown, handler: unknown) => Promise<unknown>;
+    }
+  ).wrapModelCall(
+    {
+      messages,
+      state: { messages },
+      model: {
+        profile: {},
+        invoke: async (input: BaseMessage[]) => {
+          prompts.push(String(input[0]!.content));
+          return { text: `摘要 ${String(prompts.length)}` };
+        },
+      },
+      systemMessage: new SystemMessage('系統。'),
+      tools: [],
+      runtime: ROOT,
+    },
+    async (request: { messages: BaseMessage[] }) => {
+      sent = request.messages;
+      return new AIMessage('好。');
+    },
+  );
+  return {
+    prompts,
+    sent: sent.map((m) => String(m.content)),
+    cutoff: summaryCutoffIndex(
+      previous?.cutoffIndex,
+      applySummaryCutoff(messages, previous).length,
+      sent.length,
+    ),
+  };
+}
+
+describe('引擎自己的行為', () => {
+  it('連三步帶著上一次的切點：prev + cutoff − 1，歷史檔接著寫', async () => {
+    const store = memoryBackend();
+    const engine = createSummarizerEngine({
+      ...settings(),
+      sessionId: 'session_fixed',
+      backend: store.backend as never,
+    });
+    const path = '/conversation_history/session_fixed.md';
+    const cutoffs: number[] = [];
+    let previous: SummaryCutoff | undefined;
+    const prompts: string[] = [];
+    for (const count of [8, 12, 16]) {
+      const step = await engineStep(engine, turns(count), previous);
+      cutoffs.push(step.cutoff);
+      prompts.push(...step.prompts);
+      // 交下去的是「新摘要＋留下的兩則」。
+      expect(step.sent.slice(1)).toEqual([`人 ${String(count - 2)}`, `答 ${String(count - 1)}`]);
+      previous = {
+        cutoffIndex: step.cutoff,
+        summaryMessage: new HumanMessage({
+          content: `摘要 ${String(cutoffs.length)}`,
+          additional_kwargs: { lc_source: 'summarization' },
+        }),
+        filePath: path,
+      };
+    }
+    // 8 則：有效串 8、留 2，切在 6；12 則：有效串 [摘要, 6..11] 共 7、留 2，本地切在 5，6 + 5 − 1 = 10；
+    // 16 則：有效串 [摘要, 10..15] 共 7，10 + 5 − 1 = 14。
+    expect(cutoffs).toEqual([6, 10, 14]);
+    // 第二、三步摘要的是「上一則摘要＋切點之後」，不是從頭。
+    expect(prompts[1]).toContain('摘要 1');
+    expect(prompts[1]).toContain('人 6');
+    expect(prompts[1]).not.toContain('人 4');
+    expect(prompts[2]).toContain('摘要 2');
+    expect(prompts[2]).not.toContain('人 8');
+    // 歷史檔接著寫同一個檔，一步一段，摘要訊息本身不寫進去。
+    expect([...store.files.keys()]).toEqual([path]);
+    const sections = stamp(store.files.get(path)!).split('## Summarized at <t>').slice(1);
+    expect(sections).toHaveLength(3);
+    expect(sections[1]).toContain('人 6');
+    expect(sections[1]).not.toContain('人 4');
+    expect(sections[1]).not.toContain('摘要 1');
+  });
+
+  it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
+    const store = memoryBackend();
+    const engine = createSummarizerEngine({
+      ...settings(),
+      sessionId: 'session_abcd1234',
+      backend: store.backend as never,
+    });
+    for (let i = 0; i < 2; i += 1) await engineStep(engine, turns(8), undefined);
+    expect([...store.files.keys()]).toEqual(['/conversation_history/session_abcd1234.md']);
+    expect(
+      stamp(store.files.get('/conversation_history/session_abcd1234.md')!).split(
+        '## Summarized at <t>',
+      ),
+    ).toHaveLength(3);
+  });
+});
+
 describe('引擎與基座逐項相同', () => {
   it('沒到門檻：原樣交下去', async () => {
     const { out } = await same(settings(), [{ messages: turns(3) }]);
