@@ -106,7 +106,6 @@ import { randomUUID } from 'node:crypto';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage, MessageContent } from '@langchain/core/messages';
-import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
@@ -139,6 +138,7 @@ import {
 } from './langchain-message-adapter.js';
 import { recordedArgTruncationsOf } from './tool-arg-truncation-log.js';
 import { noteSummaryCutoff, SummaryCutoffTable, withSummaryCutoffs } from './summary-cutoffs.js';
+import { createSummarizerEngine } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
@@ -719,7 +719,7 @@ export function createSummarizer(
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
-    const base = createSummarizationMiddleware({
+    const base = createSummarizerEngine({
       backend: staging?.backend ?? backend,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
@@ -741,7 +741,7 @@ export function createSummarizer(
           maxLength: settings.truncateArgs.maxLength,
         }),
       },
-    }) as unknown as AgentMiddleware;
+    });
     // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
     return withQuietSummaryCall(withAttachmentText(base), summaryModelOf, retry);
   };

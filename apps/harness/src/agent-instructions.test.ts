@@ -490,21 +490,23 @@ describe('摘要之後下一句話把基線補回來', () => {
 
   /**
    * **切點是 `state.messages` 的索引**：判準拿切點表上的切點去切 state 的訊息串，所以模型在摘要之後看到的，必須就是
-   * state 從某一格起連續的那一串。最後一次 agent 呼叫的 prompt 逐則比 id。
+   * state 從日誌上記下的切點起的那一串。最後一次 agent 呼叫的 prompt 逐則比 id。
    *
    * 宿主與摘要器拿同一張切點表（#2416）由上面那條負責：宿主要是拿到空的表，舊基線還在 state 裡，就不會補。
    */
-  it('切點是 state.messages 的索引：摘要之後看到的是 state 從某一格起連續的那一串', () => {
+  it('切點是 state.messages 的索引：摘要之後看到的是 state 從記下的切點起的那一串', () => {
     const last = found.prompts.filter(isAgentCall).at(-1) ?? [];
     expect(last[1] !== undefined && isSummary(last[1])).toBe(true);
     const seen = last.slice(2).map((message) => message.id);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((id) => typeof id === 'string')).toBe(true);
-    // state 比那次 prompt 多了最後一句的回覆，所以從摘要之後第一則的位置比起。
+    // 切點取 root 日誌上最後一筆 `compaction/summary`：它跟切點表同一刻寫下。
+    const rootLog = found.sessions.find((session) => session.address.kind === 'root')?.log;
+    const logged = (rootLog?.events ?? []).filter((e) => e.type === 'compaction/summary').at(-1);
+    const cutoff = (logged?.data as { cutoffIndex?: number } | undefined)?.cutoffIndex;
+    expect(typeof cutoff).toBe('number');
     const all = state.messages as BaseMessage[];
-    const cutoff = all.findIndex((message) => message.id === seen[0]);
-    expect(cutoff).toBeGreaterThan(0);
-    expect(seen).toEqual(all.slice(cutoff, cutoff + seen.length).map((m) => m.id));
+    expect(seen).toEqual(all.slice(cutoff, cutoff! + seen.length).map((m) => m.id));
     // 圖上沒有摘要的私有欄位。
     expect(Object.keys(state).filter((key) => key.startsWith('_summarization'))).toEqual([]);
 
