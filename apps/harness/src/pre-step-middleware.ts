@@ -2,7 +2,7 @@
  * `agent/pre-step` 接縫的**宿主端**（[#1474](https://github.com/DemianLi/nexus-agent/issues/1474) Q1 (a)、Q2 (a)）：把樹上插件登記的
  * listener（`@nexus/agent-loop` 的 `preStep`）建成 middleware。
  *
- * 建 middleware 要 core 的 `applySummaryCutoff`／`sourceKwargs`／`toLoggedMessage` 與 langchain 的 `createMiddleware`，定義套件
+ * 建 middleware 要 core 的 `applySummaryCutoff`／`sourceKwargs`／`toLoggedMessage`／`createHookStepMiddleware`，定義套件
  * 不 import core，所以這段程式放在宿主，跟 `plugin-config.ts` 的 `registerFolded` 一起用（橋接列把每位 listener 折進**這條 thread
  * 自己的** `registry.middleware`）。接縫的契約、偏離登記與 dsh 的對照寫在 `@nexus/agent-loop` 的檔頭。
  *
@@ -39,6 +39,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepListener } from '@nexus/agent-loop';
 import {
   applySummaryCutoff,
+  createHookStepMiddleware,
   createVisibleHistoryReader,
   isHistoryFromLog,
   sourceKwargs,
@@ -46,7 +47,6 @@ import {
   turnCancelSignalOf,
 } from '@nexus/core';
 import type { SessionLog, SessionLookup, SummaryCutoff, UserMessageSource } from '@nexus/core';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
@@ -95,13 +95,12 @@ export function createPreStepMiddleware(
   cutoffOf: SummaryCutoffOf,
 ): AgentMiddleware {
   const fromLog = createVisibleHistoryReader(toolResultAsSeen);
-  return createMiddleware({
+  return createHookStepMiddleware({
     name,
-    beforeAgent: async (
-      state: { messages?: readonly BaseMessage[] },
-      runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal },
-    ) => {
-      const current = state.messages ?? [];
+    beforeAgent: async (state, hookRuntime) => {
+      const runtime = hookRuntime as
+        { readonly configurable?: unknown; readonly signal?: AbortSignal } | undefined;
+      const current = (state as { messages?: readonly BaseMessage[] }).messages ?? [];
       const visible =
         visibleFromLog(sessions, runtime?.configurable, fromLog) ??
         applySummaryCutoff(current, cutoffOf({ configurable: runtime?.configurable }, current));

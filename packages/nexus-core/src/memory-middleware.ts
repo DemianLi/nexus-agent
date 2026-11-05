@@ -12,7 +12,7 @@
 import { SystemMessage } from '@langchain/core/messages';
 import type { AnyBackendProtocol } from 'deepagents';
 import { createMemoryMiddleware as createBaseMemoryMiddleware } from 'deepagents';
-import { createMiddleware } from 'langchain';
+import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
 import { renderMemorySection } from './base-prompt-text.js';
@@ -90,7 +90,7 @@ export function createMemoryMiddleware(
     sources: [...options.sources],
     addCacheControl: false,
   }) as unknown as BaseHooks;
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: base.name,
     ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
     async beforeAgent(state: unknown, runtime: unknown) {

@@ -32,9 +32,11 @@
  * @module
  */
 
-import { AIMessage, createMiddleware, ToolMessage } from 'langchain';
+import { AIMessage, ToolMessage } from 'langchain';
 import { RemoveMessage, type BaseMessage } from '@langchain/core/messages';
 import { REMOVE_ALL_MESSAGES } from '@langchain/langgraph';
+import type { AgentMiddleware } from './base-types.js';
+import { createHookStepMiddleware } from './hook-step.js';
 
 /** middleware 的名字。**不要改**：合併疊按名字去重，測試按名字斷言。 */
 export const PATCH_TOOL_CALLS_MIDDLEWARE_NAME = 'patchToolCallsMiddleware';
@@ -116,18 +118,21 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
  *
  * @returns 名字是 {@link PATCH_TOOL_CALLS_MIDDLEWARE_NAME} 的 middleware。
  */
-export function createPatchToolCallsMiddleware() {
-  return createMiddleware({
+export function createPatchToolCallsMiddleware(): AgentMiddleware {
+  return createHookStepMiddleware({
     name: PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
     beforeAgent: async (state) => {
-      const messages = state.messages;
+      const { messages } = state as { readonly messages?: BaseMessage[] };
       if (!messages || messages.length === 0) return;
       const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
       if (!needsPatch) return;
       // 先清空再放回處理過的整串：`add_messages` reducer 只認這個寫法。
       return { messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...patchedMessages] };
     },
-    wrapModelCall: async (request, handler) => {
+    wrapModelCall: async (
+      request: { readonly messages?: BaseMessage[] },
+      handler: (request: unknown) => unknown,
+    ) => {
       const messages = request.messages;
       if (!messages || messages.length === 0) return handler(request);
       const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);

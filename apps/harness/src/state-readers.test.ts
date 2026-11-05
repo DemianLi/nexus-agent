@@ -12,8 +12,8 @@
  * - 讀 `request.state`：`wrapModelCall`／`wrapToolCall` 收到的請求帶著 state。屬性存取（含 `(request as X).state`）、
  *   `request['state']` 與從 `request` 解構 `state` 都算。
  * - `beforeAgent`／`beforeModel`／`afterModel`／`afterAgent` 的第一個參數（state）有用到。物件寫法
- *   `{ hook }` 的 `hook` 也算；沒有參數不算，參數名以 `_` 開頭的不看本體、一律不算。第一個參數是解構的、
- *   或掛鉤寫成別處的函式名（`beforeModel: fn`），這條看不到。
+ *   `{ hook }` 的 `hook` 與 `{ step }` 的 `step`（`@nexus/core` 的 `createHookStepMiddleware`）也算；沒有參數不算，參數名以 `_` 開頭的不看本體、一律不算。第一個參數是解構的、
+ *   或掛鉤寫成別處的函式名（`beforeModel: fn`、`{ step: fn }`、簡寫 `{ step }`），這條看不到。
  *
  * 白名單按「檔案 › 頂層宣告 寫法」數次數，不記行號：`getState()` 與 `request.state` 每一處各數一次，掛鉤每顆
  * 數一次；同一個頂層宣告裡多一處就紅，無關的改動讓行號漂了不紅。參數不叫 `request` 的請求整個看不到；
@@ -62,7 +62,7 @@ function nameText(name: ts.PropertyName): string | undefined {
 }
 
 /**
- * `node` 是 state 掛鉤時回傳掛鉤的函式：方法本身、屬性值的箭頭／function，或 `{ hook }` 物件裡的 `hook`；
+ * `node` 是 state 掛鉤時回傳掛鉤的函式：方法本身、屬性值的箭頭／function，或物件裡的 `hook`、`step`；
  * 屬性值是識別字或計算屬性名時不認。
  */
 function hookFunction(node: ts.Node): ts.SignatureDeclaration | undefined {
@@ -78,10 +78,10 @@ function hookFunction(node: ts.Node): ts.SignatureDeclaration | undefined {
   if (direct !== undefined) return direct;
   if (!ts.isObjectLiteralExpression(node.initializer)) return undefined;
   for (const property of node.initializer.properties) {
-    if (ts.isPropertyAssignment(property) && nameText(property.name) === 'hook') {
-      return fn(property.initializer);
-    }
-    if (ts.isMethodDeclaration(property) && nameText(property.name) === 'hook') return property;
+    if (!ts.isPropertyAssignment(property) && !ts.isMethodDeclaration(property)) continue;
+    const key = nameText(property.name);
+    if (key !== 'hook' && key !== 'step') continue;
+    return ts.isPropertyAssignment(property) ? fn(property.initializer) : property;
   }
   return undefined;
 }
@@ -218,6 +218,7 @@ describe('量具自檢：每一種寫法都抓得到，沒讀的不算', () => {
     ['const m = { beforeModel(state) { return f(state); } };', 'm 掛鉤的 state 參數'],
     ['const m = { afterModel: function (s) { return s; } };', 'm 掛鉤的 state 參數'],
     ['const m = { afterAgent: { hook: async (state) => state.x } };', 'm 掛鉤的 state 參數'],
+    ['const m = { afterAgent: { step: async (state) => state.x } };', 'm 掛鉤的 state 參數'],
     [
       'createMiddleware({ beforeAgent: (state) => state.messages });',
       '(模組頂層) 掛鉤的 state 參數',
@@ -229,6 +230,7 @@ describe('量具自檢：每一種寫法都抓得到，沒讀的不算', () => {
   it('沒讀 state 的不算', () => {
     expect(at('const m = { beforeModel: async (_state, runtime) => runtime };')).toEqual([]);
     expect(at('const m = { afterAgent: { hook: async (_state) => 1 } };')).toEqual([]);
+    expect(at('const m = { afterAgent: { step: async (_state) => 1 } };')).toEqual([]);
     expect(at('const m = { beforeAgent: async () => 1 };')).toEqual([]);
     expect(at('const m = { beforeAgent: async (state, runtime) => runtime.state };')).toEqual([]);
     expect(at('const f = (request) => request.messages;')).toEqual([]);

@@ -52,7 +52,7 @@
  */
 
 import { createSkillsMiddleware } from 'deepagents';
-import { createMiddleware } from 'langchain';
+import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
 import { renderSkillsSection } from './base-prompt-text.js';
@@ -104,7 +104,7 @@ export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): Agen
   let empty = false;
   /** 這個組裝看到的技能清單：基座掃到的，或沿用 state 裡已經有的。段的文字由它算，不讀模型請求上的 state。 */
   let listed: readonly SkillListing[] | undefined;
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: base.name,
     ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
     async beforeAgent(state: unknown, runtime: unknown) {

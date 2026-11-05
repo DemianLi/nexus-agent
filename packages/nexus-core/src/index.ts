@@ -223,6 +223,14 @@ export {
   createToolPreExecuteMiddleware,
 } from './tool-pipeline.js';
 export type {
+  HookKind,
+  HookStep,
+  HookStepCell,
+  HookStepResult,
+  HookStepSpec,
+} from './hook-step.js';
+export { createHookStepMiddleware, HOOK_KINDS, hookStepOf, hookWith } from './hook-step.js';
+export type {
   ToolCallNext,
   ToolCallResult,
   ToolCallSite,
