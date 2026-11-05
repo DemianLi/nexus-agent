@@ -1,0 +1,22 @@
+===================================================================
+--- a/components/ui/sidebar.tsx
++++ b/components/ui/sidebar.tsx
+@@ -25,8 +25,6 @@
+ } from "@/components/ui/tooltip"
+ import { PanelLeftIcon } from "lucide-react"
+ 
+-const SIDEBAR_COOKIE_NAME = "sidebar_state"
+-const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
+ // The library default. AppShell sets --sidebar-width itself, so that is
+ // where this app's width is decided.
+ const SIDEBAR_WIDTH = "16rem"
+@@ -83,9 +81,6 @@
+       } else {
+         _setOpen(openState)
+       }
+-
+-      // This sets the cookie to keep the sidebar state.
+-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+     },
+     [setOpenProp, open]
+   )
