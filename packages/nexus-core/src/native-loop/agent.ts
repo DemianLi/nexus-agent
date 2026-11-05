@@ -35,6 +35,7 @@ import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
+import { systemPromptCellOf, systemPromptWrapWith } from '../system-prompt-step.js';
 import { toolListCellOf, wrapModelCallWith } from '../tool-list-step.js';
 import { HOOK_KINDS, hookStepOf, hookWith } from '../hook-step.js';
 import './events.js';
@@ -204,7 +205,7 @@ export class NativeAgent {
   readonly #toolCells: readonly LoopMiddleware[];
   /**
    * 一次模型呼叫由外到內經過的那幾格，跟 {@link NativeAgent.middleware} 一一對應：登記了工具清單那一步的（{@link toolListCellOf}）
-   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
+   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
    */
   readonly #modelCells: readonly LoopMiddleware[];
   /**
@@ -249,13 +250,30 @@ export class NativeAgent {
     this.#modelCells = this.middleware.map((m, index) => {
       const driven = this.#driven[index]!;
       const cell = toolListCellOf(m);
-      if (driven.wrapModelCall === undefined || cell === undefined) return driven;
-      return {
-        name: m.name,
-        wrapModelCall: wrapModelCallWith(cell.step, cell.inner as never) as NonNullable<
-          LoopMiddleware['wrapModelCall']
-        >,
-      };
+      const prompt = systemPromptCellOf(m);
+      if (cell !== undefined && prompt !== undefined) {
+        throw new Error(
+          `middleware "${m.name}" 同時登記了工具清單與系統提示那一步，native 只能直接呼叫其中一個`,
+        );
+      }
+      if (driven.wrapModelCall === undefined) return driven;
+      if (cell !== undefined) {
+        return {
+          name: m.name,
+          wrapModelCall: wrapModelCallWith(cell.step, cell.inner as never) as NonNullable<
+            LoopMiddleware['wrapModelCall']
+          >,
+        };
+      }
+      if (prompt !== undefined) {
+        return {
+          name: m.name,
+          wrapModelCall: systemPromptWrapWith(prompt) as NonNullable<
+            LoopMiddleware['wrapModelCall']
+          >,
+        };
+      }
+      return driven;
     });
     this.#hookCells = this.middleware.map((m, index) => {
       const driven = this.#driven[index]!;

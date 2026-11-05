@@ -9,12 +9,14 @@
  * ## 為什麼不在洋蔥外一次接完
  *
  * 摘要器估 token 時算的是當下的 `request.systemMessage`（`token-estimate.ts`）。它同名取代回預設疊第三格（`fold.ts` 換模型那一格的說明），
- * 這裡的每一段——計劃指引、平行句、先讀後改、插件政策段（沙箱、MCP、`@` 路徑）、委派聲明、核准政策句——都在它內層，它看不到；
- * 槽位表上的順序是輸出清單的順序，不是包裹層次。那個估算決定什麼時候摘要，也落盤成 `context/measure.approxTokens`。一次接完會改這兩件事，
- * 所以估算只算外層段。
+ * 這裡的每一段——計劃指引、平行句、先讀後改、插件政策段（沙箱、MCP、`@` 路徑）、委派聲明、核准政策句——都在它內層，它看不到；頭尾兩段
+ * （`nexusSystemPrompt`）與記憶也在它內層，同樣看不到。它看得到的只有基底那句與 Skills（子代理的 Skills 在它內層，子代理的估算只看得到
+ * `spec.systemPrompt`）。槽位表上的順序是輸出清單的順序，不是包裹層次。那個估算決定什麼時候摘要，也落盤成 `context/measure.approxTokens`。
+ * 一次接完會改這兩件事，所以估算只算外層段。
  *
  * ## 接法
  *
+ * - 每一格登記成系統提示那一步（`system-prompt-step.ts`）：native 的 root 原位直接呼叫，`langgraph` 與子代理經 `wrapModelCall`。
  * - 每一段各成請求裡的一塊：`SystemMessage.concat(字串)` 在內容是區塊陣列時另開一塊（`@langchain/core` `messages/base.js` 的 `mergeContent`），
  *   開頭是段自己的 `separator`。
  * - 函式型的段每次模型呼叫現算，回 `''` 就這一次不接（先讀後改在沒有寫檔工具時、平行句在這一格看不到 `subagent` 時）。
@@ -23,11 +25,12 @@
  * @module
  */
 
-import { SystemMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
+import type { SystemMessage } from '@langchain/core/messages';
 
 import type { AgentMiddleware } from './base-types.js';
 import { toolCallSessionAddress } from './session-address.js';
+import { createSystemPromptStepMiddleware, systemPromptWrapWith } from './system-prompt-step.js';
+import type { SystemPromptCell, SystemPromptPiece } from './system-prompt-step.js';
 
 /**
  * 中段的排序值。照各段在洋蔥裡的先後：宿主依值把段交給它那一格接，值一換順序就跟著換，送出的位元組也跟著變
@@ -203,6 +206,31 @@ export function sectionContextOf(request: SectionRequest): SectionContext {
 }
 
 /**
+ * 這幾段在這一次模型呼叫要接上的那幾塊，每段一塊、照順序；回 `''` 的段不接。
+ *
+ * @param request - 模型請求。
+ * @param sections - 這一格的段，已照順序。
+ */
+function sectionPieces(
+  request: SectionRequest,
+  sections: readonly MiddleSection[],
+): SystemPromptPiece[] {
+  const context = sectionContextOf(request);
+  return sections.flatMap((section) => {
+    const block = renderMiddleSection(section, context);
+    return block === undefined ? [] : [{ append: block }];
+  });
+}
+
+/** 一格的系統提示那一步：沒有 `systemMessage` 時當它是空的一則接。 */
+function sectionCell(sections: readonly MiddleSection[]): SystemPromptCell {
+  return {
+    step: (request) => sectionPieces(request as SectionRequest, sections),
+    withoutSystemMessage: 'empty',
+  };
+}
+
+/**
  * 把這幾段接上一次模型請求。
  *
  * 沒有 `systemMessage` 的請求在兩個 loop 上都不會出現（`langchain` 的 `AgentNode` 與 native 的洋蔥起點都先建好一則），這裡當它是空的
@@ -215,18 +243,11 @@ export function applySections<Request extends SectionRequest>(
   request: Request,
   sections: readonly MiddleSection[],
 ): Request {
-  const context = sectionContextOf(request);
-  let message = request.systemMessage;
-  for (const section of sections) {
-    const block = renderMiddleSection(section, context);
-    if (block === undefined) continue;
-    message = (message ?? new SystemMessage('')).concat(block);
-  }
-  return message === request.systemMessage ? request : { ...request, systemMessage: message };
+  return systemPromptWrapWith<Request, Request>(sectionCell(sections))(request, (next) => next);
 }
 
 /**
- * 一格的轉接：每次模型呼叫把這幾段接上去。
+ * 一格的轉接：每次模型呼叫把這幾段接上去，並登記這一步（`system-prompt-step.ts`）。
  *
  * @param name - middleware 的名字。背景子代理的圖照名字換掉核准政策句與委派聲明那兩格（`subagent-graph.ts`），所以那兩格的名字是
  *   `APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME`、`SUBAGENT_DELEGATION_MIDDLEWARE_NAME`。
@@ -237,8 +258,5 @@ export function createSectionSlotMiddleware(
   name: string,
   sections: readonly MiddleSection[],
 ): AgentMiddleware {
-  return createMiddleware({
-    name,
-    wrapModelCall: (request, handler) => handler(applySections(request, sections)),
-  }) as unknown as AgentMiddleware;
+  return createSystemPromptStepMiddleware(name, sectionCell(sections));
 }

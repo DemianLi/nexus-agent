@@ -9,13 +9,14 @@
  * @module
  */
 
-import { SystemMessage } from '@langchain/core/messages';
 import type { AnyBackendProtocol } from 'deepagents';
 import { createMemoryMiddleware as createBaseMemoryMiddleware } from 'deepagents';
 import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
 import { renderMemorySection } from './base-prompt-text.js';
+import { withSystemPromptStep } from './system-prompt-step.js';
+import type { SystemPromptCell } from './system-prompt-step.js';
 
 /** 一條 thread 讀到的記憶：來源路徑 → 內容。 */
 type Contents = Readonly<Record<string, string>>;
@@ -66,12 +67,6 @@ interface BaseHooks {
   ) => Promise<{ memoryContents?: Contents } | undefined>;
 }
 
-/** 這一格用得到的模型請求欄位。 */
-interface MemoryRequest {
-  readonly systemMessage: SystemMessage;
-  readonly runtime?: unknown;
-}
-
 /**
  * 建記憶 middleware。名字與 state 形狀同基座那顆（`MemoryMiddleware`、`memoryContents`）。
  *
@@ -90,37 +85,28 @@ export function createMemoryMiddleware(
     sources: [...options.sources],
     addCacheControl: false,
   }) as unknown as BaseHooks;
-  return createHookStepMiddleware({
-    name: base.name,
-    ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
-    async beforeAgent(state: unknown, runtime: unknown) {
-      const result = await base.beforeAgent(state, runtime);
-      const loaded =
-        result?.memoryContents ??
-        (state as { readonly memoryContents?: Contents } | null)?.memoryContents ??
-        {};
-      contents.record(threadOf(runtime), loaded);
-      return result as never;
-    },
-    wrapModelCall(request: MemoryRequest, handler: (request: unknown) => unknown) {
-      const section = renderMemorySection(
-        contents.of(threadOf(request.runtime)) ?? {},
-        options.sources,
-      );
-      // 不是 `concat`：另建一則內容是區塊陣列的系統訊息，記憶自己一塊（字串內容也先包成一塊），同基座。
-      const existing = request.systemMessage.content;
-      const blocks =
-        typeof existing === 'string'
-          ? [{ type: 'text', text: existing }]
-          : Array.isArray(existing)
-            ? existing
-            : [];
-      return handler({
-        ...request,
-        systemMessage: new SystemMessage({
-          content: [...blocks, { type: 'text', text: section }] as never,
-        }),
-      });
-    },
-  } as never) as unknown as AgentMiddleware;
+  // 不是 `concat`：另建一則內容是區塊陣列的系統訊息，記憶自己一塊（字串內容也先包成一塊），同基座。
+  const cell: SystemPromptCell = {
+    step: (request) => [
+      {
+        block: renderMemorySection(contents.of(threadOf(request.runtime)) ?? {}, options.sources),
+      },
+    ],
+  };
+  return withSystemPromptStep(cell, (wrapModelCall) =>
+    createHookStepMiddleware({
+      name: base.name,
+      ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
+      async beforeAgent(state: unknown, runtime: unknown) {
+        const result = await base.beforeAgent(state, runtime);
+        const loaded =
+          result?.memoryContents ??
+          (state as { readonly memoryContents?: Contents } | null)?.memoryContents ??
+          {};
+        contents.record(threadOf(runtime), loaded);
+        return result as never;
+      },
+      wrapModelCall,
+    } as never),
+  ) as unknown as AgentMiddleware;
 }
