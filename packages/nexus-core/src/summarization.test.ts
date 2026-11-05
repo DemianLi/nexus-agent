@@ -212,7 +212,9 @@ describe('壓力閘門接在有效串上（接線）', () => {
    * 閘門改回量原串就會在這裡紅。
    */
   it('摘要之後有效串在門檻下 → 那坨大東西一個字都沒被動', async () => {
-    const seen = await messagesSeenByModel([{ type: 'messages', value: 6 }], withHugeTool(),
+    const seen = await messagesSeenByModel(
+      [{ type: 'messages', value: 6 }],
+      withHugeTool(),
       cutoffAt(9),
     );
 
@@ -246,14 +248,9 @@ describe('壓力閘門接在有效串上（接線）', () => {
    */
   it('出廠門檻下則數過了 60、尾巴卻蓋住全部：不摘要，那坨大東西也一個字都不動', async () => {
     const messages = withHugeTool(longHistory(61));
-    const seen = await messagesSeenByModel(
-      DEFAULT_SUMMARIZATION.trigger,
-      messages,
-      undefined,
-      {
-        limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
-      },
-    );
+    const seen = await messagesSeenByModel(DEFAULT_SUMMARIZATION.trigger, messages, undefined, {
+      limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
+    });
 
     expect(seen).toHaveLength(messages.length);
     expect(String(seen.at(-1)?.content)).toBe(HUGE);

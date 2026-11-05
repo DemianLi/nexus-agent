@@ -80,7 +80,12 @@ function isContextOverflow(error: unknown): boolean {
  * @returns 摘要器引擎。
  */
 export function createSummarizerEngine(options: SummarizerEngineOptions): AgentMiddleware {
-  const { backend, summaryPrompt, sessionId, historyPathPrefix = '/conversation_history' } = options;
+  const {
+    backend,
+    summaryPrompt,
+    sessionId,
+    historyPathPrefix = '/conversation_history',
+  } = options;
   const trigger = options.trigger;
   const keep = options.keep;
   const truncateTrigger = options.truncateArgsSettings.trigger;
