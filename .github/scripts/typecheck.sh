@@ -8,8 +8,21 @@ cd "$(dirname "$0")/../.."
 tsc="$PWD/node_modules/.bin/tsc"
 cache=node_modules/.cache/nexus-typecheck
 
-pnpm exec tsx scripts/gen-typecheck-projects.ts
+# 每一段的牆鐘印成一行「計時：<段> <秒>」，CI 的 log 據此拆 typecheck 花在哪（#2334）。macOS 內建的 bash 3.2 沒有 EPOCHREALTIME，退回整秒。
+now() { if [ -n "${EPOCHREALTIME:-}" ]; then echo "${EPOCHREALTIME/[.,]/}"; else echo $(($(date +%s) * 1000000)); fi; }
+lap() { local us=$(($(now) - $2)); printf '計時：%s %d.%02d\n' "$1" $((us / 1000000)) $((us % 1000000 / 10000)); }
+
+# 直接跑 node_modules/.bin 底下的 tsx，不經 pnpm exec：少一次 pnpm 的啟動。
+t=$(now)
+node_modules/.bin/tsx scripts/gen-typecheck-projects.ts
+lap gen-typecheck-projects "$t"
+t=$(now)
 dirs=$(pnpm "$@" --silent exec pwd)
+lap 'pnpm exec pwd' "$t"
+# 設了 TYPECHECK_COUNT_FILE 就把套件數寫進去，給 CI 的摘要用，省得呼叫端為了數套件再起一次 pnpm。
+if [ -n "${TYPECHECK_COUNT_FILE:-}" ]; then
+  grep -c . <<< "$dirs" > "$TYPECHECK_COUNT_FILE" || true
+fi
 
 projects=()
 web=false
@@ -27,14 +40,16 @@ done <<< "$dirs"
 
 rc=0
 build=
+t=$(now)
 if [ ${#projects[@]} -gt 0 ]; then
-  "$tsc" -b "${projects[@]}" &
+  { brc=0; "$tsc" -b "${projects[@]}" || brc=$?; lap "tsc -b（${#projects[@]} 個套件）" "$t"; exit $brc; } &
   build=$!
 fi
 if $web; then
   # 跟 tsc -b 同時跑，輸出先收起來，免得兩邊的錯誤訊息交錯。
   log=$(mktemp)
   (cd apps/web && "$tsc" --noEmit --incremental --tsBuildInfoFile "$cache/tsconfig.tsbuildinfo") > "$log" 2>&1 || rc=1
+  lap 'tsc web' "$t" >> "$log"
 fi
 if [ -n "$build" ]; then
   wait "$build" || rc=1
