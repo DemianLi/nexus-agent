@@ -88,6 +88,18 @@ jobs:
       - uses: ./.github/actions/plan-checks
         id: checks
 
+      - name: 實驗：按需抓 blob 的耗時（不合併）
+        run: |
+          now() { echo "${EPOCHREALTIME/[.,]/}"; }
+          for before in 2026-10-25 2026-10-15 2026-10-01; do
+            c=$(git rev-list -n1 --before="$before" origin/develop)
+            t=$(now); n=$(git cat-file -p "$c:pnpm-lock.yaml" | wc -c); us=$(($(now) - t))
+            echo "結果｜lazy-blob｜$before｜${c:0:8}｜$n bytes｜$((us / 1000)) ms"
+            t=$(now); git cat-file -p "$c:pnpm-lock.yaml" > /dev/null; us=$(($(now) - t))
+            echo "結果｜lazy-blob 第二次｜$before｜$((us / 1000)) ms"
+          done
+          git count-objects -vH
+
       - name: 決定模式與範圍
         id: plan
         env:
@@ -130,6 +142,7 @@ jobs:
       # CI 形狀測試等（#1546）。不用安裝相依，秒級。
       - name: CI 腳本的測試
         if: steps.plan.outputs.mode == 'light'
+        continue-on-error: true # 實驗用，不合併：plan_ci 的測試會因強制輕的模式而紅
         run: python3 -m unittest discover -s .github/scripts
 
       # lockfile 新帶進的版本要發布滿 `minimumReleaseAge`（#1545），規則見腳本檔頭。排在安裝之前；lockfile 沒變就不發請求。
@@ -146,6 +159,8 @@ jobs:
 
       - uses: ./.github/actions/setup
         if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.node == 'true'
+        with:
+          save-cache: 'true' # 實驗用，不合併：讓第二輪讀得到第一輪存的快取
 
       # 合併後那一輪替每個 develop commit 存一份；先找分歧點那一份，沒有（那一輪還沒存好）就退回最近的一份。
       # 快取落後的部分 tsc 會比對 hash 重查，只影響快慢，不影響結果。

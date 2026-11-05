@@ -1996,3 +1996,5 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     return `[containment] 拒絕 ${operation} "${filePath}"：${reason}（mode: ${mode}）`;
   }
 }
+
+// #2334 B、C 量測用的異動，不合併。
