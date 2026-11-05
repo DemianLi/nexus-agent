@@ -426,7 +426,7 @@ function isClientTool(tool: unknown): boolean {
  * 參數解析失敗翻成給模型的 `ToolMessage`；工具找不到回錯誤的 `ToolMessage`。
  * @param call - 這顆呼叫。
  * @param tools - 靜態註冊的工具。
- * @param middleware - 洋蔥驅動的那一份（{@link drivenByOnion}）。
+ * @param middleware - 由外到內的那幾格：登記了工具步驟的那幾格，換成直接呼叫那一步的那一份；其餘是洋蔥驅動的那一份（{@link drivenByOnion}）。見 `agent.ts` 的 `#toolCells`。
  * @param task - 這顆工具的環境（`tools:<id>`）。
  * @param owner - 這一批的助手訊息（`call` 在它的 `tool_calls` 裡），放進請求的 `owner`。
  * @returns `ToolMessage` 或 `Command`。

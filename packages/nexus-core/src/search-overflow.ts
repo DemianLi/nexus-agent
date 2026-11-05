@@ -55,7 +55,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { AgentMiddleware } from './base-types.js';
 import type { SharedGrepMark } from './shared-read-mark.js';
 import type { SpillRef, SpillStore } from './spill-policy.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 
 /** 這一層 middleware 的名字。 */
@@ -392,7 +392,7 @@ function plainText(content: ToolMessage['content']): string | undefined {
  * @returns 一顆 `wrapToolCall` middleware。
  */
 export function createSearchOverflowMiddleware(options: SearchOverflowOptions): AgentMiddleware {
-  return createToolCallStepMiddleware(
+  return createCoreToolCallStepMiddleware(
     SEARCH_OVERFLOW_MIDDLEWARE_NAME,
     searchOverflowToolStep(options),
   );

@@ -29,7 +29,7 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { estimateTextTokens } from './token-estimate.js';
 
@@ -326,5 +326,8 @@ export function spillPolicyToolStep(options: SpillPolicyOptions): ToolCallStep {
  * @returns 一顆 `wrapToolCall` middleware。
  */
 export function createSpillPolicyMiddleware(options: SpillPolicyOptions): AgentMiddleware {
-  return createToolCallStepMiddleware(SPILL_POLICY_MIDDLEWARE_NAME, spillPolicyToolStep(options));
+  return createCoreToolCallStepMiddleware(
+    SPILL_POLICY_MIDDLEWARE_NAME,
+    spillPolicyToolStep(options),
+  );
 }

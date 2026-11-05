@@ -111,7 +111,7 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
-import { wrapToolCallWith } from './tool-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
@@ -321,12 +321,16 @@ export function invalidToolArgsToolStep(sessions?: {
 export function createInvalidToolArgsMiddleware(sessions?: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
-      const response = await handler(request);
-      return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
-    },
-    wrapToolCall: wrapToolCallWith(invalidToolArgsToolStep(sessions)),
-  }) as AgentMiddleware;
+  const toolStep = invalidToolArgsToolStep(sessions);
+  return withToolCallStep(
+    createMiddleware({
+      name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      wrapModelCall: async (request, handler) => {
+        const response = await handler(request);
+        return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
+      },
+      wrapToolCall: wrapToolCallWith(toolStep),
+    }) as AgentMiddleware,
+    toolStep,
+  );
 }

@@ -29,7 +29,7 @@
  */
 
 import { createMiddleware } from 'langchain';
-import { wrapToolCallWith } from './tool-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 
 import type { AgentMiddleware } from './base-types.js';
@@ -120,13 +120,17 @@ export function admissionToolStep(admission: ToolAdmission): ToolCallStep {
  */
 export function createSubagentToolFilterMiddleware(hidden: ReadonlySet<string>): AgentMiddleware {
   const admission: ToolAdmission = { admits: (name) => !hidden.has(name) };
-  return createMiddleware({
-    name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) =>
-      handler({
-        ...request,
-        tools: admittedTools(request.tools, admission) as typeof request.tools,
-      }),
-    wrapToolCall: wrapToolCallWith(admissionToolStep(admission)),
-  });
+  const toolStep = admissionToolStep(admission);
+  return withToolCallStep(
+    createMiddleware({
+      name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+      wrapModelCall: (request, handler) =>
+        handler({
+          ...request,
+          tools: admittedTools(request.tools, admission) as typeof request.tools,
+        }),
+      wrapToolCall: wrapToolCallWith(toolStep),
+    }),
+    toolStep,
+  );
 }

@@ -88,7 +88,7 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { readLangHintForPath } from './code-language.js';
-import { toolNameOfCall, wrapToolCallWith } from './tool-call-step.js';
+import { toolNameOfCall, withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { overriddenTools } from './tool-resolution.js';
 import type { ToolOverride } from './tool-resolution.js';
@@ -509,17 +509,21 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
     override: (tool, name) =>
       name === READ_TOOL ? modelFacingReadTool(tool, modelFacing, readLimit) : undefined,
   };
-  return createMiddleware({
-    name: READ_CONTINUATION_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const tools = request.tools as readonly unknown[] | undefined;
-      if (!Array.isArray(tools)) return handler(request);
-      const overridden = overriddenTools(tools, readOverride);
-      if (overridden === tools) return handler(request);
-      return handler({ ...request, tools: overridden } as typeof request);
-    },
-    wrapToolCall: wrapToolCallWith(readContinuationToolStep(readLimit)),
-  }) as AgentMiddleware;
+  const toolStep = readContinuationToolStep(readLimit);
+  return withToolCallStep(
+    createMiddleware({
+      name: READ_CONTINUATION_MIDDLEWARE_NAME,
+      wrapModelCall: (request, handler) => {
+        const tools = request.tools as readonly unknown[] | undefined;
+        if (!Array.isArray(tools)) return handler(request);
+        const overridden = overriddenTools(tools, readOverride);
+        if (overridden === tools) return handler(request);
+        return handler({ ...request, tools: overridden } as typeof request);
+      },
+      wrapToolCall: wrapToolCallWith(toolStep),
+    }) as AgentMiddleware,
+    toolStep,
+  );
 }
 
 /**

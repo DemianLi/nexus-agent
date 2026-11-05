@@ -74,7 +74,7 @@ import {
 } from './session-address.js';
 import { currentTurnStart } from './session-log.js';
 import type { SessionEvent, TurnEndReason } from './session-log.js';
-import { wrapToolCallWith } from './tool-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { toolRefusal } from './tool-events.js';
 
@@ -264,24 +264,28 @@ interface RuntimeRequest {
  * @returns 要排在 `invalidToolArgs` 內側的 middleware。
  */
 export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddleware {
-  return createMiddleware({
-    name: MAX_TOKENS_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
-      const response = await handler(request);
-      if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
-        return response;
-      }
-      const where = { configurable: (request as RuntimeRequest).runtime?.configurable };
-      const address = toolCallSessionAddress(where);
-      // 背景子代理不記：載體是父圖的 `task` 取走的，背景位址沒有人取（#858）。它的撞限由日誌上回覆的
-      // `finish_reason` 讀（結算摘要的 `max-tokens`）。
-      if (address?.kind === 'subagent' && !isBackgroundCall(where)) {
-        carrier.record(address.runId, response.text);
-      }
-      return dropToolCalls(response);
-    },
-    wrapToolCall: wrapToolCallWith(maxTokensToolStep(carrier)),
-  }) as AgentMiddleware;
+  const toolStep = maxTokensToolStep(carrier);
+  return withToolCallStep(
+    createMiddleware({
+      name: MAX_TOKENS_MIDDLEWARE_NAME,
+      wrapModelCall: async (request, handler) => {
+        const response = await handler(request);
+        if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
+          return response;
+        }
+        const where = { configurable: (request as RuntimeRequest).runtime?.configurable };
+        const address = toolCallSessionAddress(where);
+        // 背景子代理不記：載體是父圖的 `task` 取走的，背景位址沒有人取（#858）。它的撞限由日誌上回覆的
+        // `finish_reason` 讀（結算摘要的 `max-tokens`）。
+        if (address?.kind === 'subagent' && !isBackgroundCall(where)) {
+          carrier.record(address.runId, response.text);
+        }
+        return dropToolCalls(response);
+      },
+      wrapToolCall: wrapToolCallWith(toolStep),
+    }) as AgentMiddleware,
+    toolStep,
+  );
 }
 
 /**

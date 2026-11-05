@@ -63,7 +63,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ToolMessage } from '@langchain/core/messages';
 import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { markToolError, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
@@ -349,7 +349,7 @@ function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): 
  * @returns 交給 fold 排位置的 middleware。
  */
 export function createFsToolErrorsMiddleware(): AgentMiddleware {
-  return createToolCallStepMiddleware(FS_TOOL_ERRORS_MIDDLEWARE_NAME, fsToolErrorsToolStep);
+  return createCoreToolCallStepMiddleware(FS_TOOL_ERRORS_MIDDLEWARE_NAME, fsToolErrorsToolStep);
 }
 
 /** 把檔案工具的失敗標成錯誤的一步：開一份記錄往內交，照記錄換結果的狀態與碼。 */

@@ -10,7 +10,8 @@
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
  * LangChain 的 `wrapToolCall` 是層層相包的，而 dsh 那四個時刻在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
- * 不由註冊順序決定）：
+ * 不由註冊順序決定）。native 的 root 在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createCoreToolCallStepMiddleware`），
+ * 不經它們的 `wrapToolCall`；`langgraph` 與子代理仍經 `wrapToolCall`（TODO(#2359)）：
  *
  * | 事件 | 生產者 | 位置 |
  * | --- | --- | --- |
@@ -25,7 +26,7 @@
  * ## 契約不帶 LangChain 型別
  *
  * 簽名只用這個檔案自己的形狀（{@link PipelineExecution}、{@link PipelineResult}），LangChain 的 `ToolMessage`／`Command`
- * 與 `wrapToolCall` 的 `request` 只出現在生產者裡。**沒有人替換時，生產者把原物件原樣交回**：`tool-events.ts` 的錯誤碼掛在
+ * 與請求形狀（`wrappedRequestOf`）只出現在生產者裡。**沒有人替換時，生產者把原物件原樣交回**：`tool-events.ts` 的錯誤碼掛在
  * 以訊息物件為鍵的 `WeakMap` 上，中途複製訊息碼就斷。
  *
  * ## agent 身分（草稿 D4）
@@ -57,13 +58,13 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
 import type { PreToolDecision } from './approval.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher, EventListenerInfo } from './events.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
+import { createCoreToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
 import { markToolError, readToolOutcome, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -175,7 +176,7 @@ declare module './events.js' {
   }
 }
 
-/** 三顆生產者與圍堵讀得到的 `wrapToolCall` 請求格子。 */
+/** 三顆生產者與圍堵讀得到的請求格子（`wrappedRequestOf`）。 */
 export interface PipelineRequest {
   readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
   readonly runtime?: { readonly configurable?: unknown };
@@ -212,7 +213,7 @@ function frozenArgsCopy(args: unknown): unknown {
   }
 }
 
-/** 由 `wrapToolCall` 的請求造出監聽者看的 {@link PipelineExecution}（凍結，參數是深凍結的複本）。 */
+/** 由這次呼叫的請求形狀造出監聽者看的 {@link PipelineExecution}（凍結，參數是深凍結的複本）。 */
 export function toolExecutionOf(request: PipelineRequest): PipelineExecution {
   return Object.freeze({
     callId: request.toolCall.id ?? '',
@@ -224,9 +225,9 @@ export function toolExecutionOf(request: PipelineRequest): PipelineExecution {
 }
 
 /**
- * 由 handler 回來的值造出監聽者看的 {@link PipelineResult}（凍結）。
+ * 由內層（`next()`）回來的值造出監聽者看的 {@link PipelineResult}（凍結）。
  *
- * @param result - `handler(request)` 回來的值（或圍堵翻出來的訊息）。
+ * @param result - 內層（`next()`）回來的值（或圍堵翻出來的訊息）。
  * @param callId - 這次呼叫的 id，用來在 `Command` 裡認出屬於它的那則。
  * @returns 凍結的視圖。
  */
@@ -303,79 +304,69 @@ export const TOOL_POST_EXECUTE_MIDDLEWARE_NAME = 'nexusToolPostExecute';
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolPreExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createMiddleware({
-    name: TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      if (events.count('tools/pre-execute') === 0) return handler(request);
-      const exec = toolExecutionOf(request as PipelineRequest);
-      const decision = await events.waterfall('tools/pre-execute', exec, () =>
-        Promise.resolve(ALLOW),
-      );
-      if (decision.kind === 'allow') return handler(request);
-      if (decision.kind === 'deny' && typeof decision.reason === 'string') {
-        return toolRefusal(decision.reason, { callId: exec.callId, name: exec.name });
-      }
-      throw badDecision('tools/pre-execute', decision);
-    },
-  }) as AgentMiddleware;
+  return createCoreToolCallStepMiddleware(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+    if (events.count('tools/pre-execute') === 0) return next();
+    const exec = toolExecutionOf(wrappedRequestOf(call));
+    const decision = await events.waterfall('tools/pre-execute', exec, () =>
+      Promise.resolve(ALLOW),
+    );
+    if (decision.kind === 'allow') return next();
+    if (decision.kind === 'deny' && typeof decision.reason === 'string') {
+      return toolRefusal(decision.reason, { callId: exec.callId, name: exec.name });
+    }
+    throw badDecision('tools/pre-execute', decision);
+  });
 }
 
 /**
  * `tools/execute` 的生產者，環繞工具本體。沒有監聽者時直接交給下一層。
  *
- * **沒有人短路時，回的是 handler 原本回的那個物件**（同一個 `ToolMessage` 或 `Command`），不是重建的。
+ * **沒有人短路時，回的是內層原本回的那個物件**（同一個 `ToolMessage` 或 `Command`），不是重建的。
  *
  * @param events - 宿主持有的派發面。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createMiddleware({
-    name: TOOL_EXECUTE_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      if (events.count('tools/execute') === 0) return handler(request);
-      const exec = toolExecutionOf(request as PipelineRequest);
-      let raw: unknown;
-      let viewOfRaw: PipelineResult | undefined;
-      const view = await events.waterfall('tools/execute', exec, async () => {
-        raw = await handler(request);
-        viewOfRaw = toolResultView(raw, exec.callId);
-        return viewOfRaw;
-      });
-      // 沒人短路（或原樣回了 `next()` 的結果）：把 handler 原本的物件交回去，錯誤碼掛在它身上。
-      if (viewOfRaw !== undefined && view === viewOfRaw)
-        return raw as Awaited<ReturnType<typeof handler>>;
-      return materialize(view, exec);
-    },
-  }) as AgentMiddleware;
+  return createCoreToolCallStepMiddleware(TOOL_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+    if (events.count('tools/execute') === 0) return next();
+    const exec = toolExecutionOf(wrappedRequestOf(call));
+    let raw: unknown;
+    let viewOfRaw: PipelineResult | undefined;
+    const view = await events.waterfall('tools/execute', exec, async () => {
+      raw = await next();
+      viewOfRaw = toolResultView(raw, exec.callId);
+      return viewOfRaw;
+    });
+    // 沒人短路（或原樣回了 `next()` 的結果）：把內層原本的物件交回去，錯誤碼掛在它身上。
+    if (viewOfRaw !== undefined && view === viewOfRaw) return raw;
+    return materialize(view, exec);
+  });
 }
 
 /**
- * `tools/post-execute` 的生產者。沒有監聽者、結果是 `Command`、或決定是 `accept`，都回 handler 原本的那個物件。
+ * `tools/post-execute` 的生產者。沒有監聽者、結果是 `Command`、或決定是 `accept`，都回內層原本的那個物件。
  *
- * **工具拋的錯不經過這裡**（偏離 3）：它們從 `handler` 往外拋，由外面的圍堵翻成訊息。
+ * **工具拋的錯不經過這裡**（偏離 3）：它們從 `next()` 往外拋，由外面的圍堵翻成訊息。
  *
  * @param events - 宿主持有的派發面。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolPostExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
-  return createMiddleware({
-    name: TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const result = await handler(request);
-      if (events.count('tools/post-execute') === 0) return result;
-      if (!ToolMessage.isInstance(result)) return result;
-      const exec = toolExecutionOf(request as PipelineRequest);
-      const view = toolResultView(result, exec.callId);
-      const decision = await events.waterfall('tools/post-execute', exec, view, () =>
-        Promise.resolve(ACCEPT),
-      );
-      if (decision.kind === 'accept') return result;
-      if (decision.kind === 'replace' && typeof decision.content === 'string') {
-        return replaceContent(result, decision.content);
-      }
-      throw badDecision('tools/post-execute', decision);
-    },
-  }) as AgentMiddleware;
+  return createCoreToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
+    const result = await next();
+    if (events.count('tools/post-execute') === 0) return result;
+    if (!ToolMessage.isInstance(result)) return result;
+    const exec = toolExecutionOf(wrappedRequestOf(call));
+    const view = toolResultView(result, exec.callId);
+    const decision = await events.waterfall('tools/post-execute', exec, view, () =>
+      Promise.resolve(ACCEPT),
+    );
+    if (decision.kind === 'accept') return result;
+    if (decision.kind === 'replace' && typeof decision.content === 'string') {
+      return replaceContent(result, decision.content);
+    }
+    throw badDecision('tools/post-execute', decision);
+  });
 }
 
 /**
@@ -383,7 +374,7 @@ export function createToolPostExecuteMiddleware(events: EventDispatcher): AgentM
  * 因為這一步發生在一次已經有結果的呼叫上，任何失敗都不能把它翻成別的。
  *
  * @param events - 宿主持有的派發面。
- * @param request - `wrapToolCall` 收到的請求。
+ * @param request - 圍堵造的請求形狀（`wrappedRequestOf`）。
  * @param result - 最終回給模型的值（成功的、或圍堵翻出來的錯誤訊息）。
  * @param report - 某位監聽者壞了往哪裡講；省略即 `console.warn`。
  */

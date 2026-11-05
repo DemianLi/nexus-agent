@@ -37,7 +37,7 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
+import { createCoreToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
 import type { ToolCallStep } from './tool-call-step.js';
 import { EMPTY_CONTENT_WARNING } from './read-continuation.js';
 import { SHARED_WORKSPACE_CONTENT_NOTICE } from './untrusted-content.js';
@@ -170,7 +170,7 @@ export function createSharedReadMarkMiddleware(
   prefix: string,
   skillSources: readonly string[] = [],
 ): AgentMiddleware {
-  return createToolCallStepMiddleware(
+  return createCoreToolCallStepMiddleware(
     SHARED_READ_MARK_MIDDLEWARE_NAME,
     sharedReadMarkToolStep(prefix, skillSources),
   );
