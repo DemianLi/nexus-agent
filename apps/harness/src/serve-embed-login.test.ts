@@ -378,7 +378,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     return { socket, received };
   }
 
-  it('接線（#2489）：多工連線上被切，對方收到這一條的 error，日誌記什麼', async () => {
+  it('接線（#2489）：多工連線上被切，對方收到這一條的 error，日誌記被切的原因、不記處理失敗', async () => {
     const where = layout(CRM_ROW);
     const lines: string[] = [];
     const server = await start(where, lines);
@@ -401,7 +401,12 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     expect(received.at(-1)).toEqual({ t: 'error', id: '1', message: 'stream failed' });
     expect(socket.readyState).toBe(WebSocket.OPEN);
     socket.close();
-    expect(lines.filter((line) => line.includes('重驗沒過'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('重驗沒過'))).toEqual([
+      expect.stringContaining(
+        '[下行] /embed/threads/e-mux/stream：嵌入版下行重驗沒過，已切掉（not_mapped）',
+      ),
+    ]);
+    expect(lines.filter((line) => line.includes('處理失敗'))).toEqual([]);
 
     const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
     expect(streams).toEqual([

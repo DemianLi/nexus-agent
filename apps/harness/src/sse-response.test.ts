@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sseResponse } from './sse-response.js';
+import { StreamCutError, sseResponse } from './sse-response.js';
 
 /**
  * `pull` 裡 `encode` 拋錯（[#1560](https://github.com/DemianLi/nexus-agent/issues/1560) N1384）：以前 `pull` reject、串流進入 errored，
@@ -119,7 +119,13 @@ describe('sseResponse', () => {
     }
     expect(state.pulled).toBe(1);
     cut.abort(new Error('切掉了'));
-    await expect(reader.read()).rejects.toThrow('切掉了');
+    // reason 不是 StreamCutError 也包成它，訊息照留：多工連線靠型別認出被切。
+    const failure = await reader.read().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(StreamCutError);
+    expect((failure as Error).message).toBe('切掉了');
     for (let attempt = 0; attempt < 50 && !state.finished; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
@@ -128,12 +134,13 @@ describe('sseResponse', () => {
 
   it('開線前 cut 就已中止：連開線那一行都不送，產生器收掉（從沒被拉過，所以沒進 try）', async () => {
     const { generator, state } = source(['a']);
+    const reason = new StreamCutError('早就切了');
     const response = sseResponse(generator, (value) => `data: ${value}\n\n`, {
       where: 'thread t1',
       describe: () => 'x',
-      cut: AbortSignal.abort(new Error('早就切了')),
+      cut: AbortSignal.abort(reason),
     });
-    await expect(response.body!.getReader().read()).rejects.toThrow('早就切了');
+    await expect(response.body!.getReader().read()).rejects.toBe(reason);
     expect(await generator.next()).toEqual({ done: true, value: undefined });
     expect(state.pulled).toBe(0);
   });

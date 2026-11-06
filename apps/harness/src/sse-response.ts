@@ -16,8 +16,21 @@ export interface SseResponseOptions<T> {
   /**
    * 中止時當場結束這條線（#2489 撤權切流）：`controller.error()` 丟掉已經拉進佇列、還沒送出的那幾顆，本體以錯誤結束；
    * `events.return()` 讓已經開始跑的產生器跑 `finally`。出口怎麼轉給對方：HTTP（`wire-server.ts`）照正常結束收掉回應，多工連線送 `error`。
+   * 本體一律以 {@link StreamCutError} 結束（reason 不是的就包一層）：多工連線靠它分辨「伺服器切掉」與真的失敗。
    */
   readonly cut?: AbortSignal;
+}
+
+/** 伺服器刻意切掉一條下行時，`cut` 中止用的 reason。 */
+export class StreamCutError extends Error {
+  override readonly name = 'StreamCutError';
+}
+
+function asCutError(reason: unknown): StreamCutError {
+  if (reason instanceof StreamCutError) return reason;
+  return new StreamCutError(reason instanceof Error ? reason.message : String(reason), {
+    cause: reason,
+  });
 }
 
 /**
@@ -43,7 +56,7 @@ export function sseResponse<T>(
       if (cut !== undefined) {
         onCut = () => {
           void events.return(undefined);
-          controller.error(cut.reason);
+          controller.error(asCutError(cut.reason));
         };
         if (cut.aborted) {
           onCut();

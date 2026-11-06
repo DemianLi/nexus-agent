@@ -239,7 +239,7 @@ import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
-import { sseResponse } from './sse-response.js';
+import { StreamCutError, sseResponse } from './sse-response.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import type { TurnClock } from './turn-clock.js';
@@ -2761,7 +2761,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       if (verdict.ok) continue;
       entry.end({ cut: verdict.reason });
-      entry.cut.abort(new Error(`嵌入版下行重驗沒過，已切掉（${verdict.reason}）`));
+      entry.cut.abort(new StreamCutError(`嵌入版下行重驗沒過，已切掉（${verdict.reason}）`));
     }
   }
 
