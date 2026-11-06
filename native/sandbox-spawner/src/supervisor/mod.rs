@@ -281,8 +281,8 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         stats_at,
         deaths: [0; DEATH_CAUSES],
     };
-    supervisor.start_front();
     supervisor.fill_warm();
+    supervisor.start_front();
     Ok(supervisor)
 }
 
