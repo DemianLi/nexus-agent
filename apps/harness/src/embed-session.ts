@@ -8,7 +8,8 @@
  * - **cookie 的內容**：`{ version, authority, issuedAt, expiresAt, embedder, subject, userId, sessionIdSha256 }`，
  *   不帶票、不帶服務憑證。屬性同獨立頁面那顆：`Path=/`、`HttpOnly`、`SameSite=Strict`、不設 `Domain`。
  * - **兌換**：票只能兌換一次（`EmbedTicketStore.redeem`）。兌換時再問一次身分對應，對應被撤掉的票換不到 cookie。
- *   續期就是嵌入方再換一張票、元件再兌換一次：同一個 authority 的嵌入 cookie 同名，新的蓋掉舊的。
+ *   續期就是嵌入方再換一張票、元件再兌換一次：同一個 authority 的嵌入 cookie 同名，新的蓋掉舊的。舊的那顆不失效，到它自己的到期時間為止；
+ *   兌換成功時在記憶體記下這條登入最晚的到期時間，已開的下行手上的舊 cookie 過期時據此判斷續上了沒（`recheckOpenStream`，#2489）。
  * - **稽核**：票查得到的每一次都記（`embed-audit.ts`），記好才回應；寫不進去就 500、不設 cookie。票不存在、用過、
  *   本文不對的只計數合併。
  *
@@ -56,6 +57,16 @@ interface EmbedCookiePayload {
   readonly sessionIdSha256: string;
 }
 
+function principalOf(payload: EmbedCookiePayload): EmbedPrincipal {
+  return {
+    kind: 'embed',
+    embedder: payload.embedder,
+    subject: payload.subject,
+    userId: payload.userId,
+    sessionIdSha256: payload.sessionIdSha256,
+  };
+}
+
 function cookieName(authority: string): string {
   return COOKIE_PREFIX + encodeBase64Url(createHash('sha256').update(authority).digest());
 }
@@ -64,13 +75,40 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-/** 驗 cookie 時問的那一支：這組對應現在還在不在表上（`embed-identities.ts` 的 `EmbedIdentityTable.has`）。 */
-export interface EmbedIdentityCheck {
-  has(identity: {
-    readonly embedder: string;
-    readonly subject: string;
-    readonly userId: string;
-  }): boolean;
+/**
+ * 驗 cookie 時問的那一支：這個對方帳號現在對到誰（`embed-identities.ts` 的 `EmbedIdentityTable.resolve`）。對到的不是 cookie 上那個使用者代號就是沒對上；
+ * 拒絕的原因是 `identity_table_invalid` 時記成表不合規，其餘記成不在表上。
+ */
+export type EmbedIdentityCheck = EmbedIdentityResolver;
+
+/** {@link EmbedSessionCookies.check} 驗不過的原因。 */
+export type EmbedCookieRefusal =
+  /** 沒帶這個 authority 的嵌入 cookie，或請求沒有 Host。 */
+  | 'no_cookie'
+  /** 簽章不對、內容認不得、authority 不符、簽發時間在未來或有效期比設定長。 */
+  | 'bad_cookie'
+  /** 簽它的嵌入方已經不在設定裡。 */
+  | 'embedder_removed'
+  /** 對應表不合規（`identity_table_invalid`）：表修好之前一律驗不過。 */
+  | 'table_invalid'
+  /** 這組對應已經不在表上，或對到別的使用者代號。 */
+  | 'not_mapped'
+  /** 到期了。 */
+  | 'expired';
+
+/** {@link EmbedSessionCookies.check} 的結果。 */
+export type EmbedCookieVerdict =
+  | { readonly ok: true; readonly principal: EmbedPrincipal }
+  | { readonly ok: false; readonly reason: EmbedCookieRefusal };
+
+/** 同一條登入：嵌入方、對方帳號、使用者代號、對方登入 session id 的 sha256。 */
+function loginKey(identity: Omit<EmbedPrincipal, 'kind'>): string {
+  return JSON.stringify([
+    identity.embedder,
+    identity.subject,
+    identity.userId,
+    identity.sessionIdSha256,
+  ]);
 }
 
 /**
@@ -85,12 +123,14 @@ export class EmbedSessionCookies {
   readonly #embedders: ReadonlySet<string>;
   readonly #identities: EmbedIdentityCheck;
   readonly #now: () => number;
+  /** 每條登入目前發出去、最晚到期的那顆 cookie 的到期時間（只在記憶體，serve 重開就是空的）。 */
+  readonly #renewedUntil = new Map<string, number>();
 
   /**
    * @param secret - 瀏覽器會話密鑰（32 bytes）。
    * @param maxAgeSeconds - cookie 的絕對有效期（秒）。
    * @param embedders - 設定裡現在有的嵌入方 id：拿掉一個嵌入方重啟之後，它簽出去還沒到期的 cookie 也驗不過。
-   * @param identities - 每次驗都問一次這組對應還在不在表上（多快看到表的變動見 `EmbedIdentityTable.has`）。
+   * @param identities - 每次驗都問一次這個對方帳號現在對到誰（多快看到表的變動見 `EmbedIdentityTable` 的 `IDENTITY_TABLE_STAT_INTERVAL_MS`）。
    * @param now - 現在幾點；測試換掉。
    */
   constructor(
@@ -157,40 +197,89 @@ export class EmbedSessionCookies {
   }
 
   /**
-   * 驗一個請求帶的嵌入 cookie。
-   *
-   * @returns 子鑰簽的、authority 相符、還在有效期內、嵌入方還在設定裡、對應還在表上的 cookie 代表的身分；其他回 `undefined`。
+   * 記下這條登入又換到一顆 cookie（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239 Q5 (c)）：兌換的稽核寫好、回應確定設 cookie 之後才記。
+   * {@link recheckOpenStream} 據此判斷已開的下行手上那顆過期的 cookie 是不是已經續上了。
    */
-  authenticate(headers: Headers): EmbedPrincipal | undefined {
+  recordRenewal(identity: Omit<EmbedPrincipal, 'kind'>, expiresAt: number): void {
+    const now = this.#now();
+    for (const [key, until] of this.#renewedUntil) {
+      if (until <= now) this.#renewedUntil.delete(key);
+    }
+    const key = loginKey(identity);
+    this.#renewedUntil.set(key, Math.max(expiresAt, this.#renewedUntil.get(key) ?? 0));
+  }
+
+  /**
+   * 驗一個請求帶的嵌入 cookie，驗不過時帶原因。
+   *
+   * 過期的 cookie 也照樣查嵌入方與對應表：分得出只是過期，還是也被撤了（撤權的不看續期，見 {@link recheckOpenStream}）。
+   */
+  check(headers: Headers): EmbedCookieVerdict {
+    const { refusal, payload } = this.#evaluate(headers);
+    return refusal === undefined
+      ? { ok: true, principal: principalOf(payload) }
+      : { ok: false, reason: refusal };
+  }
+
+  /** {@link check} 的本體：驗不過時，簽章與內容驗得過的那幾種也交回 cookie 的內容。 */
+  #evaluate(
+    headers: Headers,
+  ):
+    | { readonly refusal: undefined; readonly payload: EmbedCookiePayload }
+    | { readonly refusal: EmbedCookieRefusal; readonly payload?: EmbedCookiePayload } {
     const authority = requestAuthority(headers);
     const rawCookie = headers.get('cookie') ?? undefined;
-    if (authority === undefined || rawCookie === undefined) return undefined;
+    if (authority === undefined || rawCookie === undefined) return { refusal: 'no_cookie' };
     const value = cookieValue(rawCookie, cookieName(authority));
-    if (value === undefined) return undefined;
+    if (value === undefined) return { refusal: 'no_cookie' };
     const payload = this.#decode(value);
+    const now = this.#now();
     if (
       payload === undefined ||
       payload.authority !== authority ||
-      !this.#embedders.has(payload.embedder)
-    ) {
-      return undefined;
-    }
-    const now = this.#now();
-    if (
       payload.issuedAt > now ||
-      payload.expiresAt <= now ||
       payload.expiresAt - payload.issuedAt > this.#maxAgeMs
     ) {
-      return undefined;
+      return { refusal: 'bad_cookie' };
     }
-    if (!this.#identities.has(payload)) return undefined;
-    return {
-      kind: 'embed',
-      embedder: payload.embedder,
-      subject: payload.subject,
-      userId: payload.userId,
-      sessionIdSha256: payload.sessionIdSha256,
-    };
+    if (!this.#embedders.has(payload.embedder)) return { refusal: 'embedder_removed', payload };
+    const identity = this.#identities.resolve(payload.embedder, payload.subject);
+    if (identity.kind === 'rejected') {
+      return {
+        refusal: identity.reason === 'identity_table_invalid' ? 'table_invalid' : 'not_mapped',
+        payload,
+      };
+    }
+    if (identity.userId !== payload.userId) return { refusal: 'not_mapped', payload };
+    if (payload.expiresAt <= now) return { refusal: 'expired', payload };
+    return { refusal: undefined, payload };
+  }
+
+  /**
+   * 驗一個請求帶的嵌入 cookie。
+   *
+   * @returns 子鑰簽的、authority 相符、還在有效期內、嵌入方還在設定裡、對應還在表上的 cookie 代表的身分；其他回 `undefined`。
+   *   過期就是 `undefined`，不看這條登入續期了沒：舊連線上新開的串流照舊 401。
+   */
+  authenticate(headers: Headers): EmbedPrincipal | undefined {
+    const verdict = this.check(headers);
+    return verdict.ok ? verdict.principal : undefined;
+  }
+
+  /**
+   * 重驗一條已經開著的嵌入版下行開線時帶的標頭（#2489）：同 {@link check}，只差在**唯一沒過的是到期**、而這條登入已經換到一顆
+   * 還沒到期的 cookie 時算過（D239 Q5 (c)：續上的不切）。撤權、嵌入方被拿掉、表不合規都不看續期。
+   */
+  recheckOpenStream(headers: Headers): EmbedCookieVerdict {
+    const { refusal, payload } = this.#evaluate(headers);
+    if (refusal === undefined) return { ok: true, principal: principalOf(payload) };
+    if (refusal === 'expired' && payload !== undefined) {
+      const until = this.#renewedUntil.get(loginKey(payload));
+      if (until !== undefined && until > this.#now()) {
+        return { ok: true, principal: principalOf(payload) };
+      }
+    }
+    return { ok: false, reason: refusal };
   }
 
   #decode(value: string): EmbedCookiePayload | undefined {
@@ -340,7 +429,7 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
         loginSessionSha256: sessionIdSha256,
       });
       const cookie = options.cookies.issue(authority, base);
-      return audited(
+      const response = await audited(
         {
           outcome: 'redeemed',
           ...base,
@@ -356,6 +445,8 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
           { 'set-cookie': cookie.setCookie },
         ),
       );
+      if (response.status === 200) options.cookies.recordRenewal(base, cookie.expiresAt);
+      return response;
     },
   };
 }

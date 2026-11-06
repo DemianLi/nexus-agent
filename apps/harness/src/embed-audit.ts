@@ -1,5 +1,7 @@
 /**
  * 嵌入換票的稽核紀錄（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：`<home>/embed-audit.jsonl`，一行一筆，只增不改。
+ * 除了換票與兌換，也記嵌入版下行的開、關、切（`event: 'stream'`）與嵌入身分碰到不是自己的 thread 被拒（`event: 'access'`），
+ * 見 [#2489](https://github.com/DemianLi/nexus-agent/issues/2489)、`wire-handler.ts`。
  *
  * - **寫法**：整行 append、`datasync` 之後才算寫好；一次只寫一行（排隊）。只有前台行程寫，同一個 home 只有一台 serve（home 鎖；拿不到 flock 的平台例外，
  *   見 `home-lock.ts`），所以不另拿跨行程鎖。檔 `0600`；已存在的檔權限過寬就拒絕啟動。
@@ -19,6 +21,7 @@ import { createHash } from 'node:crypto';
 import { open, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
+import type { EmbedCookieRefusal } from './embed-session.js';
 import { assertOwnerOnlyMode, PRIVATE_FILE_MODE } from './owner-only.js';
 
 /** 檔名，放在 harness home 底下。 */
@@ -69,6 +72,42 @@ export interface RedeemRecord {
   readonly cookieExpiresAt?: string;
 }
 
+/** 稽核紀錄上的嵌入身分：cookie 上的那一組。 */
+export interface EmbedAuditIdentity {
+  readonly embedder: string;
+  readonly subject: string;
+  readonly userId: string;
+  readonly sessionIdSha256: string;
+}
+
+/** 一條嵌入版 thread 下行的開、關、切（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239 Q2）。 */
+export type StreamRecord = EmbedAuditIdentity & { readonly threadId: string } & (
+    | { readonly outcome: 'opened' }
+    | {
+        readonly outcome: 'closed';
+        /** 開線的時間（ISO）。 */
+        readonly openedAt: string;
+        /** `client`：請求被中止（對方取消、斷線，或 serve 先關掉連線）；`server`：下行從 serve 這一側收掉（thread 收掉、積壓逐出、serve 收尾）。 */
+        readonly by: 'client' | 'server';
+      }
+    | {
+        readonly outcome: 'cut';
+        readonly openedAt: string;
+        /** 掃描重驗開線時那顆 cookie 驗不過的原因。 */
+        readonly reason: EmbedCookieRefusal;
+      }
+  );
+
+/** 嵌入身分碰到不是自己的 thread 被拒（#2489，#1827 D239 Q3）。 */
+export interface AccessRecord extends EmbedAuditIdentity {
+  readonly outcome: 'refused';
+  readonly threadId: string;
+  /** 路由的種類：`stream`、`history`、`attachment`、`command`。 */
+  readonly route: string;
+  /** `thread_not_owned`：別人開的嵌入版 thread；`not_embedded`：不是嵌入版開的。 */
+  readonly reason: 'thread_not_owned' | 'not_embedded';
+}
+
 /** 合併記的那一類屬於哪一步：換票時沒過服務憑證，或兌換時票不存在、用過、本文不對。 */
 export type UnattributedEvent = 'exchange' | 'redeem';
 
@@ -78,12 +117,16 @@ export interface EmbedAudit {
   recordExchange(record: ExchangeRecord): Promise<void>;
   /** 記一筆兌換。寫好（`datasync` 完）才 resolve；寫不進去就 reject。 */
   recordRedeem(record: RedeemRecord): Promise<void>;
+  /** 記一筆下行的開、關、切。寫好（`datasync` 完）才 resolve；寫不進去就 reject。 */
+  recordStream(record: StreamRecord): Promise<void>;
+  /** 記一筆嵌入身分碰到不是自己的 thread 被拒。寫好（`datasync` 完）才 resolve；寫不進去就 reject。 */
+  recordAccess(record: AccessRecord): Promise<void>;
   /**
    * 記一次認不出是誰的請求（合併，見檔頭）：`exchange` 是沒過服務憑證，`redeem` 是拿不存在或用過的票、或本文不對來兌換。
    * 兩類各自一個時間窗；`event` 不帶是 `exchange`。不 reject：寫失敗交給 `onError`。
    */
   recordUnauthenticated(event?: UnattributedEvent): void;
-  /** 把還沒寫的合併計數寫掉、關檔。關了之後 `recordExchange`、`recordRedeem` 一律 reject，`recordUnauthenticated` 不動作。 */
+  /** 把還沒寫的合併計數寫掉、關檔。關了之後 `recordExchange`、`recordRedeem`、`recordStream`、`recordAccess` 一律 reject，`recordUnauthenticated` 不動作。 */
   close(): Promise<void>;
 }
 
@@ -159,6 +202,14 @@ export async function openEmbedAudit(
     recordRedeem(record) {
       if (closed) return Promise.reject(new Error(`${LABEL}已關閉`));
       return append({ event: 'redeem', ...record });
+    },
+    recordStream(record) {
+      if (closed) return Promise.reject(new Error(`${LABEL}已關閉`));
+      return append({ event: 'stream', ...record });
+    },
+    recordAccess(record) {
+      if (closed) return Promise.reject(new Error(`${LABEL}已關閉`));
+      return append({ event: 'access', ...record });
     },
     recordUnauthenticated(event = 'exchange') {
       if (closed) return;
