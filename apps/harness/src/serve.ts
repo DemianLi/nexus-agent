@@ -191,6 +191,16 @@ import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
 import { memorySourceWarnings } from './memory-source-check.js';
 import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
+import { assertDistinctSecretFiles, loadOrCreateBearerTokenFile } from './bearer-token-file.js';
+import { EMBED_AUDIT_FILE, openEmbedAudit } from './embed-audit.js';
+import type { EmbedAudit } from './embed-audit.js';
+import {
+  createEmbedLogin,
+  EMBED_EXCHANGE_PATH,
+  EmbedTicketStore,
+  rejectAllIdentities,
+} from './embed-login.js';
+import type { EmbedderCredential, EmbedIdentityResolver, EmbedLogin } from './embed-login.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
 import { StorageProbe } from './storage-probe.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
@@ -202,6 +212,7 @@ import {
 } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
+import { embedLoginPlugin } from './settings/embed-login.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
 import { hostToolsPlugin } from './settings/host-tools.js';
@@ -549,6 +560,11 @@ export interface RunServeOptions {
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
+  /**
+   * 嵌入換票的「對方帳號 → nexus 身分」（#2370），只給測試用。產品路徑不設，用 `rejectAllIdentities`：對應方式待 #1827 D231 拍板，
+   * 在那之前換票一律拒。
+   */
+  readonly embedIdentity?: EmbedIdentityResolver;
 }
 
 /**
@@ -622,11 +638,15 @@ function routeBySurface(
   wire: WireHandler,
   web: (request: Request) => Promise<Response>,
   ops: OpsEndpoints,
+  embedLogin?: EmbedLogin,
 ): WireHandler {
   return {
     handle: (request) => {
       const { pathname } = new URL(request.url);
       if (isOpsPath(pathname)) return ops.handle(request);
+      if (embedLogin !== undefined && pathname === EMBED_EXCHANGE_PATH) {
+        return embedLogin.handle(request);
+      }
       return isThreadsPath(pathname) || isThreadsPath(withoutEmbedPrefix(pathname) ?? '')
         ? wire.handle(request)
         : web(request);
@@ -1042,6 +1062,8 @@ async function startServer(
   const downlink = startupSetting(plugins, downlinkPlugin);
   // 探針與指標（#1535）：探針預設開，指標預設關。路由與披露在下面，token 檔在瀏覽器密鑰之後讀。
   const opsConfig = startupSetting(plugins, opsEndpointsPlugin);
+  // 嵌入換票（#2370）：沒有嵌入方就沒有這條路由。憑證檔與稽核紀錄在瀏覽器密鑰之後讀。
+  const embedLoginConfig = startupSetting(plugins, embedLoginPlugin);
   // 圖片轉碼的併發上限（#2033）：一個行程一份限流器，交給下面的附件儲存。出廠 2、關不掉（`settings/attachment-images.ts`）。
   const attachmentImages = startupSetting(plugins, attachmentImagesPlugin);
   // 宿主頁工具的免核准名單（#2374）：只有嵌入版的 thread 用，關掉這一列是空名單、每支都問（`settings/host-tools.ts`）。
@@ -1205,6 +1227,34 @@ async function startServer(
   const metricsToken = metricsEnabled
     ? await loadOrCreateMetricsToken(opsConfig.metrics.tokenFile ?? metricsTokenFile)
     : undefined;
+  // 嵌入方的服務憑證與換票稽核（#2370）：只在前台、而且有嵌入方才讀，**在開始聽之前**——權限過寬、內容認不得就起不來，同指標的 token。
+  const embedCredentialFiles =
+    options.conversation === undefined
+      ? embedLoginConfig.embedders.map((embedder) => ({
+          id: embedder.id,
+          file:
+            embedder.credentialFile ??
+            join(resolveHarnessHome(env), `embed-credential-${embedder.id}`),
+        }))
+      : [];
+  assertDistinctSecretFiles([
+    ...embedCredentialFiles.map(({ id, file }) => ({ label: `嵌入方 ${id} 的服務憑證檔`, file })),
+    ...(metricsEnabled
+      ? [{ label: '指標 token 檔', file: opsConfig.metrics.tokenFile ?? metricsTokenFile }]
+      : []),
+  ]);
+  const embedders: EmbedderCredential[] = [];
+  for (const { id, file } of embedCredentialFiles) {
+    embedders.push({
+      id,
+      credential: await loadOrCreateBearerTokenFile(file, {
+        label: `嵌入方 ${id} 的服務憑證檔`,
+        resetHint: '嵌入方的後端要換新的憑證',
+      }),
+    });
+  }
+  let embedAudit: EmbedAudit | undefined;
+  let embedLogin: EmbedLogin | undefined;
   const webDist = options.webDist ?? resolveWebDist();
   // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
   // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
@@ -1929,6 +1979,20 @@ async function startServer(
   const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
   try {
+    // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
+    if (embedders.length > 0) {
+      embedAudit = await openEmbedAudit(join(resolveHarnessHome(env), EMBED_AUDIT_FILE), {
+        onError: (error) => warn(`[嵌入換票] 稽核紀錄寫不進去：${String(error)}`),
+      });
+      embedLogin = createEmbedLogin({
+        embedders,
+        identity: options.embedIdentity ?? rejectAllIdentities,
+        tickets: new EmbedTicketStore(embedLoginConfig.ticketTtlSeconds * 1000),
+        audit: embedAudit,
+        trustedHosts: invocation.trustedHosts,
+        warn,
+      });
+    }
     if (proxySocket !== undefined) await clearStaleSocket(proxySocket);
     const started = await startWireServer({
       ...(listening.kind === 'front'
@@ -1937,6 +2001,7 @@ async function startServer(
               handler,
               createWebStaticHandler({ distRoot: webDist, auth: listening.auth }),
               opsEndpoints,
+              embedLogin,
             ),
             mux: handler,
             ...(proxySocket === undefined
@@ -1977,6 +2042,11 @@ async function startServer(
     }
     // 等已接受的搜尋靜止才關（#1552 N0836）；它不 reject，蓋不掉原本的錯。
     await threadSearch?.close();
+    try {
+      await embedAudit?.close();
+    } catch (closeError: unknown) {
+      fail(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
+    }
     throw error;
   }
 
@@ -2042,6 +2112,18 @@ async function startServer(
         : `開 /metrics（要 Authorization: Bearer，token 在 ${opsConfig.metrics.tokenFile ?? metricsTokenFile}）`
     }`,
   );
+  // 嵌入換票講出來（#2370）：不印憑證本身，只印在哪個檔。
+  if (options.conversation === undefined) {
+    log(
+      embedCredentialFiles.length === 0
+        ? '嵌入換票：關（embed-login 沒有嵌入方）'
+        : `嵌入換票：開 POST ${EMBED_EXCHANGE_PATH}（嵌入方 ${embedCredentialFiles
+            .map(({ id, file }) => `${id}，憑證在 ${file}`)
+            .join('；')}；稽核記在 ${join(resolveHarnessHome(env), EMBED_AUDIT_FILE)}）；身分對應${
+            options.embedIdentity === undefined ? '尚未接上，一律拒絕' : '由呼叫端提供'
+          }`,
+    );
+  }
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
   log(
     requestGate === undefined
@@ -2146,6 +2228,8 @@ async function startServer(
       await attempt(() => threadSearch?.close());
       // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
       await attempt(() => failureRecorder.flush());
+      // 換票的稽核最後關：server 關掉之後不會再有換票，合併中的計數這時才寫得完整。
+      await attempt(() => embedAudit?.close());
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) {
         throw new AggregateError(

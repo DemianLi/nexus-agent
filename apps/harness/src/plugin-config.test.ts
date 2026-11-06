@@ -80,6 +80,7 @@ import { downlinkConfigSchema } from './settings/downlink.js';
 import { projectionFlushConfigSchema } from './settings/projection-flush.js';
 import { memoryGaugeConfigSchema } from './settings/memory-gauge.js';
 import { opsEndpointsConfigSchema } from './settings/ops-endpoints.js';
+import { embedLoginConfigSchema } from './settings/embed-login.js';
 import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS } from './settings/tool-result-stash.js';
@@ -123,17 +124,15 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 59 = 17 個功能（#1574 加了 `skill-invocation`，#1625 加了 `time-context`，#440 加了 `skills`，#669 加了 `ask-user`、`submit-record` 與 `sandbox-policy`，#1027 加了 `trajectory`，#1028 加了 `token-meter`，#437 加了 `permission-presets`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
-    // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
-    // `session-checkpoint-policy`）
-    // ＋ **25 個 harness 自己的設定條目**（#1573 加了 `session-reference`；#1605 加了 `tool-fs`；#1624 加了 `turn-timeout`；#1623 加了 `goal-round-cap`；#1535 加了 `ops-endpoints`；#1490 加了 `memory-gauge`；#1504 加了 `downlink`；#1476 加了 `thread-capacity`；#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735、#1071；#670 之後 `agent-default-model` 旁多一列出貨的腳本提供者 `cli-script`，所以是 19 個）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
+    // 60 = 17 個功能 ＋ 8 個 core 的條目（5 顆 middleware 設定、關不掉的核准閘門、`session-persistence`、`session-checkpoint-policy`）
+    // ＋ 27 個 harness 自己的設定條目（`#settings/…`，含 `agent-default-model` 旁那列出貨的腳本提供者 `cli-script`）＋ 8 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個配套入口
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 59。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(59);
+    // 解析、import、而且長得像一顆 plugin，才數得到 60。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(60);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -257,6 +256,9 @@ describe('出貨的 cordis.yml', () => {
       probes: { enabled: true, drainMs: 500 },
       metrics: { enabled: false },
     });
+    // **嵌入換票**（#2370，出廠沒有嵌入方）：出貨那一行與 schema 預設相等。
+    expect(byId.get('embed-login')).toEqual(embedLoginConfigSchema.parse({}));
+    expect(embedLoginConfigSchema.parse({})).toEqual({ embedders: [], ticketTtlSeconds: 60 });
     expect(
       opsEndpointsConfigSchema.safeParse({ metrics: { enabled: true, port: 1 } }).success,
     ).toBe(false);
@@ -391,6 +393,7 @@ describe('出貨的 cordis.yml', () => {
       'thread-capacity',
       'memory-gauge',
       'ops-endpoints',
+      'embed-login',
       'browser-session',
       'deliverable-files',
       'tool-text',
