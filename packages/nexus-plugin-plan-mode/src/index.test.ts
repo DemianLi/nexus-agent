@@ -5,9 +5,11 @@ import {
   createRegistry,
   createSessionRunner,
   loadPlugins,
+  modelCallStepOf,
   SessionLog,
   SessionRegistry,
   toolErrorOf,
+  wrapModelCallFromStep,
 } from '@nexus/core';
 import type {
   AttachmentRef,
@@ -266,6 +268,27 @@ describe('exit_plan_mode 沒有生效時', () => {
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
  */
 describe('createPlanModePlugin', () => {
+  it('那顆 middleware 登記了環繞步：native 直接呼叫那一步，跟經 wrapModelCall 交出同一份請求', async () => {
+    const { registry } = await load([planPlugin()]);
+    const middleware = registry.middleware
+      .list()
+      .find((one) => one.value.middleware?.name === PLAN_MODE_MIDDLEWARE_NAME)?.value.middleware;
+    const step = middleware === undefined ? undefined : modelCallStepOf(middleware);
+    expect(step).toBeDefined();
+    const request = {
+      messages: [new ToolMessage({ content: '同意', tool_call_id: 'c1' })],
+    };
+    const seen: unknown[] = [];
+    await wrapModelCallFromStep(step!)(request, (next) => seen.push(next));
+    await (
+      middleware as unknown as {
+        wrapModelCall: (request: unknown, handler: (request: unknown) => unknown) => unknown;
+      }
+    ).wrapModelCall(request, (next) => seen.push(next));
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual(seen[1]);
+  });
+
   it('五個註冊點都放了東西，核准閘門一位都沒有', async () => {
     const { registry } = await load([planPlugin()]);
 

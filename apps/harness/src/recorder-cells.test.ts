@@ -3,7 +3,8 @@
  * 這七顆都由 core 造，各登記了一步（`@nexus/core` 的 `withModelCallStep`），native 的 root 在原位直接呼叫；次數與路徑由 core 的
  * `native-loop/recorder-cells.test.ts` 數。這裡守宿主那一側：
  *
- * - 宿主組出來的 native agent 上，七顆都還帶著登記（沒被宿主換成沒登記的同名顆）；
+ * - 宿主組出來的 native agent 上，七顆都還帶著登記（沒被宿主換成沒登記的同名顆）；會改請求或回覆的格（修工具參數、輸出上限、
+ *   補懸空呼叫、計劃模式）也一樣；
  * - 同一輪「root 前景委派 `worker` → 回答」，兩個 loop 的 root 日誌裡，每一筆帶 `modelCall` 的事件指到的 `model/start` 相同
  *   （起訖紀錄器用 `AsyncLocalStorage` 把識別往內帶，native 直接呼叫時不能斷）。
  */
@@ -31,6 +32,17 @@ const CELLS = [
   'nexusSessionCheckpoint',
   'nexusRequestSnapshot',
   'nexusTurnCancelModelSignal',
+];
+
+/**
+ * 會改請求或回覆、這裡的組裝（`live: false`）上 root 會掛的格。換模型與圖片省略要有型錄才掛，影子比對與從日誌推要給
+ * `--history-source`，這幾格的次數與路徑由 core 的 `native-loop/mutator-cells.test.ts` 數。
+ */
+const MUTATOR_CELLS = [
+  'nexusInvalidToolArgs',
+  'nexusMaxTokens',
+  'patchToolCallsMiddleware',
+  'nexusPlanMode',
 ];
 
 const worker: PluginEntry = {
@@ -114,6 +126,25 @@ describe('出貨組裝上只記錄的七格', () => {
       }),
     );
     expect(registered).toEqual(Object.fromEntries(CELLS.map((name) => [name, '登記'])));
+  });
+
+  it('native agent 上改請求或回覆的格也都帶著登記的一步', async () => {
+    const { middleware } = await run('native');
+    const names = middleware?.map((m) => m.name) ?? [];
+    const registered = Object.fromEntries(
+      MUTATOR_CELLS.map((name) => {
+        const found = middleware?.filter((m) => m.name === name) ?? [];
+        return [
+          name,
+          found.length === 1 && core.modelCallStepOf(found[0]!) !== undefined
+            ? '登記'
+            : `${found.length} 顆，${found.length === 1 ? '沒登記' : '數目不對'}`,
+        ];
+      }),
+    );
+    expect(registered, names.join(', ')).toEqual(
+      Object.fromEntries(MUTATOR_CELLS.map((name) => [name, '登記'])),
+    );
   });
 
   it('兩個 loop 的 root 日誌，每一筆帶 modelCall 的事件指到同一次 model/start', async () => {
