@@ -27,7 +27,8 @@
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。
 //!
-//! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。
+//! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
+//! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，所有對話行程走拆除梯度；全部收完之後前台也走一次；前台收完就回 0。
@@ -405,7 +406,8 @@ impl Supervisor {
             .min()
     }
 
-    /// 綁上之後 `stall` 沒聽到回報的，照拆除梯度收，死因 `stalled`。監督行程自己停住過（fd 2 阻塞、被 SIGSTOP）時，
+    /// 綁上之後 `stall` 沒聽到回報的，當場殺掉整個群組，死因 `stalled`。不走拆除梯度：事件迴圈卡住的行程讀不到 EOF，
+    /// 也跑不了自己的 SIGTERM handler，梯度的兩段寬限只會讓它多佔那麼久的 CPU。監督行程自己停住過（fd 2 阻塞、被 SIGSTOP）時，
     /// 回報可能還在管線裡沒讀，所以判之前先讀一次它的控制通道。
     fn check_stalls(&mut self, now: Instant, stall: Duration) {
         for index in 0..self.conversations.len() {
@@ -415,28 +417,32 @@ impl Supervisor {
             self.on_conversation_readable(index);
             let conversation = &mut self.conversations[index];
             if conversation.stalled(now, stall) {
-                say!("對話行程 {} 已經 {} ms 沒有回報，收掉", conversation.proc.pid, stall.as_millis());
+                say!("對話行程 {} 已經 {} ms 沒有回報，殺掉", conversation.proc.pid, stall.as_millis());
                 conversation.cause.get_or_insert(DeathCause::Stalled);
-                conversation.proc.begin_stop(now, self.args.eof_grace);
+                conversation.proc.kill_now();
             }
         }
     }
 
     /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
-    /// 已經在收的（例如停機）照原本的理由。同一次也取樣 CPU：連續吃滿一顆超過 `--cpu-busy-ms` 的，把群組 renice 到 19，只做一次。
+    /// 已經在收的（例如停機）照原本的理由。同一次也取樣 CPU：最近 `--cpu-busy-ms` 一直想要一整顆的（判法見 [`cpu`]），把群組 renice 到 19，只做一次。
     ///
     /// 只量 leader：只讀它自己的 `VmRSS` 與 CPU，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 與 renice 也打不到
     /// （TODO(#2494)）。
     fn poll_resources(&mut self, now: Instant) {
         for conversation in &mut self.conversations {
             let pid = conversation.proc.pid;
-            let busy = cpu::cpu_ticks(pid).and_then(|ticks| conversation.busy.sample(ticks, now, self.ticks_per_second));
-            let too_busy = self.args.cpu_busy.is_some_and(|limit| busy.is_some_and(|busy| busy >= limit));
-            if too_busy && conversation.reniced.is_none() && conversation.proc.stop.is_none() {
+            let too_busy = conversation.reniced.is_none()
+                && conversation.proc.stop.is_none()
+                && self.args.cpu_busy.is_some_and(|window| {
+                    let cpu = cpu::cpu_time(pid, self.ticks_per_second);
+                    conversation.busy.sample(now, cpu, cpu::runnable_time(pid), window)
+                });
+            if too_busy {
                 let result = cpu::renice_group(pid);
                 match &result {
-                    Ok(()) => say!("對話行程 {pid} 連續吃滿 CPU {} ms，renice 到 19", busy.unwrap_or_default().as_millis()),
-                    Err(err) => say!("對話行程 {pid} 連續吃滿 CPU，renice 失敗：{err}"),
+                    Ok(()) => say!("對話行程 {pid} 一直想要一整顆 CPU，renice 到 19"),
+                    Err(err) => say!("對話行程 {pid} 一直想要一整顆 CPU，renice 失敗：{err}"),
                 }
                 conversation.reniced = Some(result.is_ok());
             }

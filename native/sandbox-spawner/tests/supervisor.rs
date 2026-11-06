@@ -640,10 +640,16 @@ fn audit_number(line: &str, key: &str) -> u64 {
 
 #[test]
 fn reports_stopping_after_bind_is_stalled() {
-    // RSS 輪詢放到一分鐘：只有 stall 的期限會叫醒 poll。
-    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "300", "--rss-poll-ms", "60000"], ..Options::default() });
-    assert_eq!(h.down("x,hang"), DeathCause::Stalled);
-    let line = h.audit_line("\"thread\":\"x,hang\"");
+    // RSS 輪詢放到一分鐘：只有 stall 的期限會叫醒 poll。兩段寬限各 5 s：走拆除梯度的話 down 要 10 s 後才到。
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "300", "--rss-poll-ms", "60000", "--eof-grace-ms", "5000", "--term-grace-ms", "5000"],
+        ..Options::default()
+    });
+    h.up("x,ignore-term,hang");
+    let silent_since = Instant::now();
+    assert_eq!(h.down_of("x,ignore-term,hang"), DeathCause::Stalled);
+    assert!(silent_since.elapsed() < Duration::from_millis(2_000), "{:?}", silent_since.elapsed());
+    let line = h.audit_line("\"thread\":\"x,ignore-term,hang\"");
     assert!(line.contains("\"cause\":\"stalled\""), "{line}");
     assert!(audit_number(&line, "max_silence_ms") < 300, "{line}");
 }

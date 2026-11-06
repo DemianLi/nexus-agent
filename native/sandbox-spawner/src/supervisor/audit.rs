@@ -41,7 +41,7 @@ pub enum Record<'a> {
         rss_kb: u64,
         /// 送出 `bind` 之後，兩則回報之間最長隔了多久；沒送過 `bind` 是 0。
         max_silence_ms: u64,
-        /// 因為連續吃滿 CPU 被 renice 到 19 過。
+        /// 因為一直想要一整顆 CPU 被 renice 到 19 過。
         reniced: bool,
         error: Option<&'a str>,
     },

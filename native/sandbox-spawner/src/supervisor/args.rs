@@ -18,7 +18,7 @@ pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
 /// 綁上之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
 pub const DEFAULT_STALL: Duration = Duration::from_millis(15_000);
-/// 對話行程連續吃滿一顆 CPU 多久，就把它的群組 renice 到 19。
+/// 對話行程一直想要一整顆 CPU 多久，就把它的群組 renice 到 19。
 pub const DEFAULT_CPU_BUSY: Duration = Duration::from_millis(10_000);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub struct Args {
     pub rss_poll: Duration,
     /// 綁上之後多久沒聽到對話行程任何一則回報，就照拆除梯度收它，死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
-    /// 對話行程（leader）連續吃滿一顆 CPU 多久，就把它的群組 renice 到 19。`None`（`--cpu-busy-ms 0`）是不調。
+    /// 對話行程一直想要一整顆 CPU 多久（判法見 `cpu` 模組），就把它的群組 renice 到 19。`None`（`--cpu-busy-ms 0`）是不調。
     pub cpu_busy: Option<Duration>,
 }
 
