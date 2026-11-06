@@ -36,9 +36,13 @@
  * @module
  */
 
-import { SystemMessage } from '@langchain/core/messages';
-import { taggedRouteOf } from '@nexus/core';
-import type { PluginEntry, PluginRegistry } from '@nexus/core';
+import type { SystemMessage } from '@langchain/core/messages';
+import {
+  applySystemPromptPieces,
+  createSystemPromptStepMiddleware,
+  taggedRouteOf,
+} from '@nexus/core';
+import type { PluginEntry, PluginRegistry, SystemPromptPiece } from '@nexus/core';
 import {
   composeSystemPromptParts,
   SYSTEM_PROMPT_MIDDLEWARE_NAME,
@@ -49,7 +53,6 @@ import type {
   SystemPromptParts,
   SystemPromptVariables,
 } from '@nexus/system-prompt';
-import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 /**
@@ -94,17 +97,12 @@ export function systemPromptDefaultsOf(
   return DEFAULTS.get(registry.middleware);
 }
 
-/**
- * 把一段文字接在系統訊息的最前面。內容可能是字串，也可能是內容區塊的陣列（提示詞快取那類會把它拆成區塊）。
- */
-function prependText(message: SystemMessage, text: string): SystemMessage {
-  const { content } = message;
-  return new SystemMessage({
-    content:
-      typeof content === 'string'
-        ? `${text}\n\n${content}`
-        : [{ type: 'text', text: `${text}\n\n` }, ...content],
-  });
+/** 前後段要接上的那幾塊：頭段接在最前面，尾段空一行接在最後。 */
+function piecesOf({ head, tail }: SystemPromptParts): SystemPromptPiece[] {
+  return [
+    ...(head.length > 0 ? [{ prepend: head }] : []),
+    ...(tail.length > 0 ? [{ append: `\n\n${tail}` }] : []),
+  ];
 }
 
 /**
@@ -123,10 +121,10 @@ export function applySystemPromptParts<
     const text = [head, body, tail].filter((part) => part.length > 0).join('\n\n');
     return { ...request, systemPrompt: text };
   }
-  let next = systemMessage;
-  if (head.length > 0) next = prependText(next, head);
-  if (tail.length > 0) next = next.concat(`\n\n${tail}`);
-  return { ...request, systemMessage: next };
+  return {
+    ...request,
+    systemMessage: applySystemPromptPieces(systemMessage, piecesOf({ head, tail })),
+  };
 }
 
 /**
@@ -161,9 +159,8 @@ export function createSystemPromptMiddleware(
     }
     return cached;
   };
-  return createMiddleware({
-    name: SYSTEM_PROMPT_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) =>
-      handler(applySystemPromptParts(request, partsFor((request as { model?: unknown }).model))),
-  });
+  return createSystemPromptStepMiddleware(SYSTEM_PROMPT_MIDDLEWARE_NAME, {
+    step: (request) => piecesOf(partsFor(request.model)),
+    withoutSystemMessage: (request) => applySystemPromptParts(request, partsFor(request.model)),
+  }) as unknown as AgentMiddleware;
 }
