@@ -103,7 +103,7 @@ describe('sseResponse', () => {
     }
     expect(state.finished).toBe(true);
   });
-  it('cut 中止：已經拉進佇列、還沒送出的那一顆不送，讀者拿到錯誤（連線中斷），產生器的 finally 跑了', async () => {
+  it('cut 中止：已經拉進佇列、還沒送出的那一顆不送，讀者拿到錯誤，產生器的 finally 跑了', async () => {
     const { generator, state } = source(['a', 'b', 'c']);
     const cut = new AbortController();
     const response = sseResponse(generator, (value) => `data: ${value}\n\n`, {

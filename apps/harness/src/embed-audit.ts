@@ -87,7 +87,10 @@ export type StreamRecord = EmbedAuditIdentity & { readonly threadId: string } & 
         readonly outcome: 'closed';
         /** 開線的時間（ISO）。 */
         readonly openedAt: string;
-        /** `client`：請求被中止（對方取消、斷線，或 serve 先關掉連線）；`server`：下行從 serve 這一側收掉（thread 收掉、積壓逐出、serve 收尾）。 */
+        /**
+         * `client`：請求的 signal 先中止（對方取消或斷線、多工連線上收掉這一條，或 serve 收尾先關掉連線：多工連線上的都是這一種）；
+         * `server`：產生器從 serve 這一側結束（thread 收掉、積壓逐出），或 handler 收尾時還登記著。
+         */
         readonly by: 'client' | 'server';
       }
     | {
@@ -98,12 +101,14 @@ export type StreamRecord = EmbedAuditIdentity & { readonly threadId: string } & 
       }
   );
 
+/** 稽核裡記的路由種類：嵌入版打得到的那幾種（`embed-profile.ts` 的 `EMBED_ROUTE_KINDS`）。 */
+export type EmbedAccessRoute = 'stream' | 'history' | 'attachment' | 'command';
+
 /** 嵌入身分碰到不是自己的 thread 被拒（#2489，#1827 D239 Q3）。 */
 export interface AccessRecord extends EmbedAuditIdentity {
   readonly outcome: 'refused';
   readonly threadId: string;
-  /** 路由的種類：`stream`、`history`、`attachment`、`command`。 */
-  readonly route: string;
+  readonly route: EmbedAccessRoute;
   /** `thread_not_owned`：別人開的嵌入版 thread；`not_embedded`：不是嵌入版開的。 */
   readonly reason: 'thread_not_owned' | 'not_embedded';
 }

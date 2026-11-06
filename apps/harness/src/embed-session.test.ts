@@ -230,7 +230,7 @@ describe('EmbedSessionCookies', () => {
       ok: true,
       principal: { kind: 'embed', ...IDENTITY },
     });
-    // 嚴格的那一支不變：舊 cookie 開不了新的。
+    // authenticate 不看續期：舊 cookie 開不了新的。
     expect(cookies.authenticate(old)).toBeUndefined();
 
     mapped = false;

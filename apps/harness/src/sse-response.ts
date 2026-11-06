@@ -1,6 +1,6 @@
 /**
- * 下行的 SSE `Response`：把一條事件產生器接成 `text/event-stream`。從 [`wire-handler.ts`](./wire-handler.ts) 原樣搬出來（`pull` 以外的
- * 部分一字未改），為了能直接用一個會拋的 `encode` 測 `pull` 這一層（#1560 N1384）。
+ * 下行的 SSE `Response`：把一條事件產生器接成 `text/event-stream`。獨立成模組，是為了能直接用一個會拋的 `encode` 測 `pull`
+ * 這一層（#1560 N1384）。
  *
  * @module
  */
@@ -14,8 +14,8 @@ export interface SseResponseOptions<T> {
   /** 伺服器日誌（warn 級）。 */
   readonly warn?: (message: string) => void;
   /**
-   * 中止時當場結束這條線（#2489 撤權切流）：`controller.error()` 丟掉已經拉進佇列、還沒送出的那幾顆，`events.return()` 讓產生器的
-   * `finally` 跑。對方看到的是連線中斷，不是正常結束。
+   * 中止時當場結束這條線（#2489 撤權切流）：`controller.error()` 丟掉已經拉進佇列、還沒送出的那幾顆，本體以錯誤結束；
+   * `events.return()` 讓已經開始跑的產生器跑 `finally`。出口怎麼轉給對方：HTTP（`wire-server.ts`）照正常結束收掉回應，多工連線送 `error`。
    */
   readonly cut?: AbortSignal;
 }
@@ -23,8 +23,8 @@ export interface SseResponseOptions<T> {
 /**
  * 開一條 SSE 回應。
  *
- * **`pull` 裡 `encode` 拋錯**（#1560 N1384）：以前 `pull` reject，ReadableStream 進入 errored，而 `cancel()` 不會被叫（它只在讀者主動取消時跑），
- * 產生器停在 `yield`、`finally` 永遠不跑——那是 `#subscribers.delete` 唯一的地方。現在接住：記一行 warn（路徑、標籤，不寫內容）、
+ * **`pull` 裡 `encode` 拋錯**（#1560 N1384）：`pull` reject 的話 ReadableStream 進入 errored，而 `cancel()` 不會被叫（它只在讀者主動取消時跑），
+ * 產生器停在 `yield`、`finally` 永遠不跑——那是 `#subscribers.delete` 唯一的地方。所以接住：記一行 warn（路徑、標籤，不寫內容）、
  * `events.return()` 讓產生器的 `finally` 跑、`controller.error(error)` 結束這條線（沒有終止 frame，偏離 C 見 `bounded-event-queue.ts`）。
  *
  * 實務上 `ThreadPump`／`ThreadFeed` 廣播與補送時已經 `JSON.stringify` 過同一顆（`boundFrame`），所以這一層是防禦：`encode` 會拋、

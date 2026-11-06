@@ -2,8 +2,8 @@
  * 撤權後切掉已開的嵌入版下行（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239）：wire handler 的登記、掃描、
  * 切掉之後已經排著的事件不送，與 `stream`／`access` 兩種稽核紀錄。
  *
- * 多數用替身的身分驗證與重驗（請求帶 `x-who` 指名身分、`cookie` 只用來分開掃描的快取鍵），掃描間隔縮到 20 ms；
- * 「2 秒內」與「續上的不切」用真的 `EmbedSessionCookies`（後者再加真的對應表檔）。
+ * 多數用替身的身分驗證與重驗（請求帶 `x-who` 指名身分，`cookie` 是替身重驗查判決的鍵、也是掃描的快取鍵），
+ * 掃描間隔縮到 20 ms；「2 秒內」與「續上的不切」用真的 `EmbedSessionCookies`，前者再加真的對應表檔。
  */
 
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -76,7 +76,8 @@ async function realAgent(
 
 /**
  * @param options.auth - 省略就照 `x-who` 認。
- * @param options.guard - 省略 `recheck` 就照 {@link verdicts} 判（`cookie` 標頭當鍵，沒列的算過）。
+ * @param options.recheck - 省略就照回傳的 `verdicts` 判（`cookie` 標頭當鍵，沒列的算過）。
+ * @param options.intervalMs - 省略是 20 ms；給 0 是不帶這個欄位，用出廠的間隔。
  */
 function rig(
   options: {
@@ -152,7 +153,7 @@ async function startRun(
   expect(((await response.json()) as { type: string }).type).toBe('success');
 }
 
-/** 一條 SSE 下行的讀者：`next` 讀一段文字，讀完回 `undefined`；被切掉的線讀到的是錯誤（連線中斷）。 */
+/** 一條 SSE 下行的讀者：`next` 讀一段文字，讀完回 `undefined`；被切掉的線讀到錯誤（handler 層；經 HTTP 是正常結束，見 `serve-embed-login.test.ts`）。 */
 function sse(response: Response) {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -238,7 +239,7 @@ describe('掃描切掉驗不過的下行', () => {
   }, 10_000);
 });
 
-describe('過期：續上的不切，沒續上的切（D239 Q5 (c)）', () => {
+describe('過期：續上的不切，沒續上的切（#1827 D239 Q5 (c)）', () => {
   it('同一條登入兌換過一顆還沒到期的就不切；沒兌換過的在到期後切；舊 cookie 照樣開不了新的下行', async () => {
     let clock = 1_000_000;
     const now = () => clock;
@@ -342,7 +343,7 @@ describe('稽核紀錄', () => {
       }),
     );
     expect(((await bobReads.json()) as { error: string }).error).toBe('thread_not_owned');
-    // 主機擁有者在獨立頁面開的 thread，嵌入身分打不開；擁有者自己從嵌入路由打別人的，不記。
+    // 主機擁有者在獨立頁面開的 thread，嵌入身分打不開；擁有者自己從嵌入路由打不是嵌入版開的，被拒也不記。
     expect((await openStream(handler, 'owner', 'h1', { prefix: '' })).status).toBe(200);
     expect((await openStream(handler, 'alice', 'h1')).status).toBe(200);
     await openStream(handler, 'owner', 'h1');

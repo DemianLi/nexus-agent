@@ -220,7 +220,13 @@ import { EMBED_COMMAND_METHODS, EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './
 import type { ThreadProfile } from './embed-profile.js';
 import { mayOpenEmbedThread, ownerToRecord } from './embed-thread-owner.js';
 import type { EmbedThreadOwner } from './embed-thread-owner.js';
-import type { AccessRecord, EmbedAudit, EmbedAuditIdentity } from './embed-audit.js';
+import type {
+  AccessRecord,
+  EmbedAccessRoute,
+  EmbedAudit,
+  EmbedAuditIdentity,
+} from './embed-audit.js';
+import { IDENTITY_TABLE_STAT_INTERVAL_MS } from './embed-identities.js';
 import type { EmbedCookieRefusal, EmbedCookieVerdict } from './embed-session.js';
 import { hostToolsDeclarationProblem } from './host-tools.js';
 import type { HostToolsSlot } from './host-tools.js';
@@ -737,7 +743,7 @@ export interface EmbedStreamGuard {
    * `access` 只講進 {@link WireHandlerOptions.warn}。
    */
   audit(): Pick<EmbedAudit, 'recordStream' | 'recordAccess'> | undefined;
-  /** 掃描間隔（毫秒）。省略即 1000，同對應表的 stat 間隔（`embed-identities.ts` 的 `IDENTITY_TABLE_STAT_INTERVAL_MS`）。 */
+  /** 掃描間隔（毫秒）。省略同對應表的 stat 間隔。 */
   readonly intervalMs?: number;
 }
 
@@ -1258,7 +1264,11 @@ async function* untilCut<T>(
   }
 }
 
-/** 稽核紀錄上的嵌入身分（#2489）。 */
+/** 嵌入版打得到的路由種類（`embed-profile.ts` 的 `EMBED_ROUTE_KINDS`）。 */
+function isEmbedAccessRoute(kind: string): kind is EmbedAccessRoute {
+  return EMBED_ROUTE_KINDS.has(kind);
+}
+
 function auditIdentity(principal: EmbedPrincipal): EmbedAuditIdentity {
   return {
     embedder: principal.embedder,
@@ -2330,7 +2340,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     fork?: ThreadForkSeed,
     profile: ThreadProfile = 'full',
     principal?: WirePrincipal,
-    route = 'command',
+    route: EmbedAccessRoute = 'command',
   ): Promise<ThreadState | Response> {
     try {
       const owner =
@@ -2713,7 +2723,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (embedScan === undefined && !closed) {
       embedScan = setInterval(() => {
         scanEmbedStreams(guard);
-      }, guard.intervalMs ?? 1000);
+      }, guard.intervalMs ?? IDENTITY_TABLE_STAT_INTERVAL_MS);
       embedScan.unref();
     }
     const events = pump.subscribe(channels, AbortSignal.any([signal, cut.signal]));
@@ -4591,7 +4601,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     principal: WirePrincipal,
   ): Promise<Response | undefined> {
     const route = parsePath(pathname);
-    if (route === undefined || !EMBED_ROUTE_KINDS.has(route.kind)) {
+    if (route === undefined || !isEmbedAccessRoute(route.kind)) {
       return new Response('not found', { status: 404 });
     }
     const loaded = threads.get(route.threadId);
@@ -4623,7 +4633,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     id: number | null,
     threadId: string,
     principal: WirePrincipal | undefined,
-    route: string,
+    route: EmbedAccessRoute,
   ): Promise<Response> {
     if (principal?.kind === 'embed' && options.embedStreams !== undefined) {
       try {

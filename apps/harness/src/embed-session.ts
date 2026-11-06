@@ -76,14 +76,14 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 /**
- * 驗 cookie 時問的那一支：這個對方帳號現在對到誰（`embed-identities.ts` 的 `EmbedIdentityTable.resolve`）。對到的不是 cookie 上那個使用者代號就是沒對上；
- * 拒絕的原因是 `identity_table_invalid` 時記成表不合規，其餘記成不在表上。
+ * 驗 cookie 時問的那一支：這個對方帳號現在對到誰（`embed-identities.ts` 的 `EmbedIdentityTable.resolve`）。對到的不是 cookie 上那個使用者代號，
+ * 算沒對上（見 {@link EmbedCookieRefusal}）。
  */
 export type EmbedIdentityCheck = EmbedIdentityResolver;
 
 /** {@link EmbedSessionCookies.check} 驗不過的原因。 */
 export type EmbedCookieRefusal =
-  /** 沒帶這個 authority 的嵌入 cookie，或請求沒有 Host。 */
+  /** 沒帶這個 authority 的嵌入 cookie，或請求沒有 Host、Host 解析不了。 */
   | 'no_cookie'
   /** 簽章不對、內容認不得、authority 不符、簽發時間在未來或有效期比設定長。 */
   | 'bad_cookie'
@@ -93,7 +93,7 @@ export type EmbedCookieRefusal =
   | 'table_invalid'
   /** 這組對應已經不在表上，或對到別的使用者代號。 */
   | 'not_mapped'
-  /** 到期了。 */
+  /** 只有到期沒過：嵌入方與對應都還驗得過。也被撤了的報撤權那一種。 */
   | 'expired';
 
 /** {@link EmbedSessionCookies.check} 的結果。 */
@@ -198,7 +198,7 @@ export class EmbedSessionCookies {
 
   /**
    * 記下這條登入又換到一顆 cookie（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239 Q5 (c)）：兌換的稽核寫好、回應確定設 cookie 之後才記。
-   * {@link recheckOpenStream} 據此判斷已開的下行手上那顆過期的 cookie 是不是已經續上了。
+   * {@link recheckOpenStream} 據此判斷已開的下行手上那顆過期的 cookie 是不是已經續上了。順手清掉已過期的登入：表裡只有還沒到期的。
    */
   recordRenewal(identity: Omit<EmbedPrincipal, 'kind'>, expiresAt: number): void {
     const now = this.#now();
@@ -259,7 +259,7 @@ export class EmbedSessionCookies {
    * 驗一個請求帶的嵌入 cookie。
    *
    * @returns 子鑰簽的、authority 相符、還在有效期內、嵌入方還在設定裡、對應還在表上的 cookie 代表的身分；其他回 `undefined`。
-   *   過期就是 `undefined`，不看這條登入續期了沒：舊連線上新開的串流照舊 401。
+   *   過期就是 `undefined`，不看這條登入續期了沒：舊連線上新開的串流因此是 401。
    */
   authenticate(headers: Headers): EmbedPrincipal | undefined {
     const verdict = this.check(headers);
@@ -268,7 +268,7 @@ export class EmbedSessionCookies {
 
   /**
    * 重驗一條已經開著的嵌入版下行開線時帶的標頭（#2489）：同 {@link check}，只差在**唯一沒過的是到期**、而這條登入已經換到一顆
-   * 還沒到期的 cookie 時算過（D239 Q5 (c)：續上的不切）。撤權、嵌入方被拿掉、表不合規都不看續期。
+   * 還沒到期的 cookie 時算過（續上的不切，#1827 D239）。撤權、嵌入方被拿掉、表不合規都不看續期。
    */
   recheckOpenStream(headers: Headers): EmbedCookieVerdict {
     const { refusal, payload } = this.#evaluate(headers);

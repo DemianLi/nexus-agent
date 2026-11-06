@@ -977,7 +977,7 @@ Content-Type: application/json
 - **已經開著的下行每秒重驗一次**（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239）：拿開線時那顆 cookie（多工連線上是連線建立時那顆）照上面的規則再驗一次，SSE 與多工連線上的都算。
   - 從表上拿掉、對到別的使用者、表改壞了：切掉，還沒送出的事件不送，稽核記一筆 `cut`（〈稽核紀錄〉）。
   - 只是過期：同一條登入（同一個嵌入方、對方帳號、使用者代號、`sessionId`）已經兌換到一顆還沒到期的 cookie，就不切；沒有就切。
-  - 「續上了沒」只記在 serve 的記憶體裡，兌換的稽核寫好之後才記；serve 重開就清空，重開之前的續期不算。所以 **serve 重開之後、這條登入還沒再兌換過時**，開線那顆 cookie 一到期，下行就被切一次。
+  - 「續上了沒」只記在 serve 的記憶體裡，兌換的稽核寫好之後才記；serve 重開就清空：**只認重開之後的兌換**，重開之後還沒再兌換過的登入，開線那顆 cookie 一到期，下行就被切。
   - 切掉之後元件照下行結束處理：重開下行時 cookie 已經失效就是 `401`，元件發 `nexus-ticket-needed`（[`embed-chat.md`](embed-chat.md)〈續期〉）。
   - 獨立頁面那顆 cookie（主機擁有者）開的下行不重驗。
 - **回到上一條**：這一次登入（同一個人、同一個嵌入方、同一個 `sessionId`）開過、已經落盤的對話，`threadId` 是最新開的那一條，元件接著開它；沒開過、還沒落盤、會話不落盤、或查不到（伺服器日誌記一行）就不帶。換人登入、或同一個人換了 `sessionId`，都不帶。
@@ -1006,9 +1006,9 @@ Content-Type: application/json
 - 兌換（`event: "redeem"`）的 `outcome`：`redeemed`（帶 `userId` 與 `cookieExpiresAt`）、`ticket_expired`、`identity_rejected`（帶 `reason`，對應被撤或對到別人是 `user_changed`），都帶票上的嵌入方、對方帳號與 session id 的 sha256；票不存在、用過、本文不對的兌換認不出是誰，記成 `unauthenticated`。
 - 嵌入版下行（`event: "stream"`，#2489）：都帶嵌入方、對方帳號、使用者代號、session id 的 sha256 與 `threadId`。
   - `opened`：**寫好才開線**；寫不進去回 `500`、不開線，伺服器日誌記一行。主機擁有者開的下行不記。
-  - `closed`（帶 `openedAt`、`by`）：`client` 是請求被中止（瀏覽器關掉、斷線、多工連線上收掉這一條）；`server` 是 serve 這一側收掉（對話收掉、積壓太多被斷開、serve 收尾時還開著的）。
-  - `cut`（帶 `openedAt`、`reason`）：重驗沒過被切掉。`reason` 是 `not_mapped`（從表上拿掉或對到別人）、`table_invalid`、`expired`（過期而且沒續上）、`embedder_removed`。
-  - 每一筆 `opened` 恰好配一筆 `closed` 或 `cut`；serve 被強制結束時缺最後那一筆。`closed`、`cut` 寫不進去只記伺服器日誌，不影響下行。
+  - `closed`（帶 `openedAt`、`by`）：`client` 是請求被中止（瀏覽器關掉、斷線、多工連線上收掉這一條）；`server` 是 serve 這一側收掉（對話收掉、積壓太多被斷開）。serve 收尾時還開著的：多工連線上的先被關掉連線，記 `client`；SSE 上的實測記 `server`（看時序，不保證）。
+  - `cut`（帶 `openedAt`、`reason`）：重驗沒過被切掉。`reason` 是 `not_mapped`（從表上拿掉或對到別人）、`table_invalid`、`expired`（過期而且沒續上）。系統時鐘往回撥到簽發時間之前時是 `bad_cookie`。
+  - 每一筆 `opened` 最多配一筆 `closed` 或 `cut`；serve 被強制結束、或那一筆寫不進去時就缺。`closed`、`cut` 寫不進去只記伺服器日誌，不影響下行。
 - 嵌入身分碰到不是自己的對話（`event: "access"`，`outcome: "refused"`）：帶身分、`threadId`、`route`（`stream`、`history`、`attachment`、`command`）與 `reason`（`thread_not_owned`：別人開的；`not_embedded`：不是嵌入版開的，見〈對話歸誰〉）。寫不進去照樣回拒絕，只記伺服器日誌。主機擁有者從嵌入路由被拒的不記。
 - **不記秘密**：服務憑證與票都不記，對方的 session id 只記 sha256。
 - **認不出是誰的請求會合併**（換票時憑證錯、兌換時票不存在或用過或本文不對，兩種 `event` 各自一個時間窗）：它們不知道是誰打的，也最容易被大量打。每 60 秒的時間窗裡，第一次照記一行（`count: 1`），之後只計數；時間窗過了之後**再有**一次同一類的請求、或 serve 收尾時，把計到的寫成一行（`count` 是第一行之後的次數，`from` 是這個時間窗第一次的時間，`to` 是最後一次）。serve 被強制結束時這段計數遺失。所以每一類每個時間窗最多兩行，檔案不會因為有人一直打錯憑證或亂丟票而無上限地長。
