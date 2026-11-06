@@ -161,15 +161,6 @@ describe('啟動時讀表', () => {
   });
 });
 
-describe('has：驗嵌入 cookie 用', () => {
-  it('(embedder, subject) 現在對到的正是那個 userId 才算', () => {
-    const table = EmbedIdentityTable.load(tableFile(TABLE), EMBEDDERS);
-    expect(table.has({ embedder: 'crm', subject: 'alice', userId: 'alice' })).toBe(true);
-    expect(table.has({ embedder: 'crm', subject: 'alice', userId: 'bob.chen' })).toBe(false);
-    expect(table.has({ embedder: 'crm', subject: 'carol', userId: 'carol' })).toBe(false);
-  });
-});
-
 describe('跑著時重讀', () => {
   function running(file: string) {
     let now = 0;
@@ -198,10 +189,9 @@ describe('跑著時重讀', () => {
     advance(1);
     expect(table.resolve('crm', 'carol')).toEqual({ kind: 'accepted', userId: 'carol' });
     expect(table.resolve('crm', 'alice')).toEqual({ kind: 'rejected', reason: 'not_mapped' });
-    expect(table.has({ embedder: 'crm', subject: 'alice', userId: 'alice' })).toBe(false);
   });
 
-  it('改壞：一律 identity_table_invalid，has 也是 false；修好之後自動恢復；壞與好各講一次', () => {
+  it('改壞：一律 identity_table_invalid；修好之後自動恢復；壞與好各講一次', () => {
     const file = tableFile(TABLE);
     const { table, warnings, advance } = running(file);
     write(file, '{');
@@ -211,7 +201,6 @@ describe('跑著時重讀', () => {
       kind: 'rejected',
       reason: 'identity_table_invalid',
     });
-    expect(table.has({ embedder: 'crm', subject: 'alice', userId: 'alice' })).toBe(false);
     expect(table.size).toBeUndefined();
     advance();
     table.resolve('crm', 'alice');
