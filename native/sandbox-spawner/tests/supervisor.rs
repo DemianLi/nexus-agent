@@ -968,3 +968,19 @@ fn pending_threads_are_answered_with_shutdown() {
         ]
     );
 }
+
+#[test]
+fn ensure_while_waiting_for_the_drain_answer_is_answered_when_it_drains() {
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "1"], ..Options::default() });
+    let a = h.up("a,idle:1000,slow-drain:300");
+    h.ensure("b");
+    assert!(saw_drain(&a), "{:?} {}", log(&a), supervisor_stderr(&h));
+    h.ensure("a,idle:1000,slow-drain:300");
+    let mut events: Vec<String> = (0..3).map(|_| format!("{:?}", h.event())).collect();
+    events.sort();
+    let a_bytes = format!("{:?}", b"a,idle:1000,slow-drain:300".to_vec());
+    // 名額給先排的 b；a 收掉之後要的新行程沒有名額，回 `capacity`，不會一直懸著。
+    assert!(events[0].starts_with("Capacity") && events[0].contains(&a_bytes), "{events:?}");
+    assert!(events[1].starts_with("Down") && events[1].contains(&a_bytes) && events[1].contains("Evicted"), "{events:?}");
+    assert!(events[2].starts_with("Up") && events[2].contains(&format!("{:?}", b"b".to_vec())), "{events:?}");
+}

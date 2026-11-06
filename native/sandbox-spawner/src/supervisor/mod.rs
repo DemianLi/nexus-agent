@@ -912,6 +912,8 @@ impl Supervisor {
                     conversation.drain = None;
                     conversation.cause.get_or_insert(DeathCause::Evicted);
                     conversation.proc.begin_stop(Instant::now(), self.args.eof_grace);
+                    // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
+                    self.make_room();
                 }
                 _ => {}
             }
