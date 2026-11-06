@@ -33,6 +33,20 @@ interface NexusHostToolDetail {
   fail(error: string): void;
 }
 
+/** `signIn` 失敗時 reject 的錯誤。`code` 之外的格子給人看，不要拿來判斷。 */
+interface NexusSignInError extends Error {
+  readonly name: 'NexusSignInError';
+  /**
+   * - `ticket_invalid`：票不存在或已經用過（一張票只能兌換一次）；
+   * - `ticket_expired`：票過期了；
+   * - `identity_rejected`：這位使用者不在 serve 的身分對應表上，或對應被撤掉了；
+   * - `sign_in_failed`：其他失敗，例如網路斷了、serve 沒開換票、回應看不懂。
+   */
+  readonly code: 'ticket_invalid' | 'ticket_expired' | 'identity_rejected' | 'sign_in_failed';
+  /** HTTP 狀態碼；請求沒有送到就沒有。 */
+  readonly status?: number;
+}
+
 interface NexusChatElementEventMap extends HTMLElementEventMap {
   'nexus-host-tool': CustomEvent<NexusHostToolDetail>;
 }
@@ -51,6 +65,12 @@ interface NexusChatElement extends HTMLElement {
    */
   get hostTools(): readonly NexusHostTool[] | null;
   set hostTools(value: readonly NexusHostTool[] | null | undefined);
+  /**
+   * 換票登入（#2370）：拿宿主系統後端換來的一次性登入票兌換嵌入 cookie。成功時回 cookie 的到期時間（系統時間的毫秒時間戳），
+   * 對話改接這位使用者這一次登入最新開的那一條，沒有就開新的；失敗時 reject {@link NexusSignInError}，畫面不動。
+   * 元素放進頁面之前或之後呼叫都可以；要走換票就在放進頁面之前呼叫，否則放進去的那一刻會先照主機擁有者的方式接上一條。
+   */
+  signIn(ticket: string): Promise<{ readonly expiresAt: number }>;
   addEventListener<K extends keyof NexusChatElementEventMap>(
     type: K,
     listener: (this: NexusChatElement, event: NexusChatElementEventMap[K]) => unknown,

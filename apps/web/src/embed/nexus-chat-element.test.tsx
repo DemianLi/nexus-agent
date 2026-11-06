@@ -1,9 +1,15 @@
 import type { Event, WireClient } from '@nexus/wire';
-import { THREAD_NOT_EMBEDDED, WireRejectedError, WORKSPACE_CHANGES } from '@nexus/wire';
+import {
+  THREAD_NOT_EMBEDDED,
+  THREAD_NOT_OWNED,
+  WireRejectedError,
+  WORKSPACE_CHANGES,
+} from '@nexus/wire';
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
+import { THREAD_NOT_OWNED_TEXT } from '@/lib/thread-not-owned';
 import { fakeClient } from '@/test/app-harness.fixture';
 import { Script } from '@/test/conversation-frames';
 
@@ -11,6 +17,7 @@ import { EMBED_THREAD_KEY } from './embedded-chat';
 import { HOST_TOOL_EVENT, HOST_TOOL_MISSING_ERROR } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-element';
+import { NexusSignInError } from './sign-in';
 
 /**
  * `<nexus-chat>`（#2366）：元素的生命週期與屬性。整份檔共用一次 `customElements.define`（jsdom 的登記表是全域的），
@@ -50,6 +57,11 @@ async function say(element: NexusChatElement, text: string) {
   await waitFor(() => expect(clients.at(-1)?.sent).toEqual([text]));
 }
 
+/** 第一個元素開過下行的那幾條 thread，照第一次開的順序、不重複（StrictMode 會把同一條開兩次）。 */
+function threads(): string[] {
+  return [...new Set(clients[0]?.opened)];
+}
+
 function mount(): NexusChatElement {
   const element = document.createElement(ELEMENT_NAME);
   document.body.append(element);
@@ -68,6 +80,8 @@ afterEach(() => {
   failOpen = undefined;
   events = [];
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe('<nexus-chat>', () => {
@@ -157,6 +171,31 @@ describe('<nexus-chat>', () => {
     );
     expect(view.queryByText(/thread "t"/u)).toBeNull();
     expect(view.getByRole('button', { name: '新對話' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  test('別人的對話（#2370）：講專用的那一句、不重試，「新對話」按得動也接得上新的一條', async () => {
+    failOpen = new WireRejectedError(THREAD_NOT_OWNED, 'thread "t" 不是這位使用者開的', '下行被拒');
+    const element = mount();
+    const view = shadow(element);
+    await waitFor(() => expect(view.getByRole('status').textContent).toBe(THREAD_NOT_OWNED_TEXT));
+    expect(view.queryByText(/thread "t"/u)).toBeNull();
+    const first = clients[0]?.opened[0];
+    const before = clients[0]?.opened.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    });
+    expect(clients[0]?.opened).toHaveLength(before ?? 0);
+    const fresh = view.getByRole('button', { name: '新對話' });
+    expect(fresh.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(fresh);
+    await waitFor(() => expect(threads()).toHaveLength(2));
+    expect(clients[0]?.opened.at(-1)).not.toBe(first);
+  });
+
+  test('沒換票：接著 localStorage 記的上一條', async () => {
+    localStorage.setItem(EMBED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    mount();
+    await waitFor(() => expect(threads()).toEqual(['上一條']));
   });
 
   test('空白畫面不提拖檔：嵌入版沒有附件（#2384）', async () => {
@@ -376,5 +415,107 @@ describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
     await act(async () => handed[0]?.respond({ focused: 'P-101' }));
     expect(fake.responded).toHaveLength(1);
     expect(shadow(element).queryByText(/那顆中斷已經不在了/u)).toBeNull();
+  });
+});
+
+describe('<nexus-chat> 的換票登入（#2370）', () => {
+  /** 讓 `POST /embed/session` 回這個；收到的每一個請求記在回傳的陣列裡。 */
+  function serveSession(status: number, body: unknown) {
+    const seen: { url: string; init: RequestInit | undefined }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(url), init });
+        return Response.json(body, { status });
+      }),
+    );
+    return seen;
+  }
+
+  /** 記下讀寫嵌入版那個鍵的每一下。 */
+  function watchStorage() {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem');
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    return {
+      reads: () => getItem.mock.calls.filter(([key]) => key === EMBED_THREAD_KEY),
+      writes: () => setItem.mock.calls.filter(([key]) => key === EMBED_THREAD_KEY),
+    };
+  }
+
+  test('放進頁面之前換票：接 serve 回的那一條，記著的鍵不讀不寫、被清掉', async () => {
+    localStorage.setItem(EMBED_THREAD_KEY, JSON.stringify({ threadId: '上一個人的' }));
+    const seen = serveSession(200, { expiresAt: 1_800_000_000_000, threadId: '我的' });
+    const storage = watchStorage();
+    const element = document.createElement(ELEMENT_NAME);
+    await expect(element.signIn('票')).resolves.toEqual({ expiresAt: 1_800_000_000_000 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toMatch(/\/embed\/session$/u);
+    expect(seen[0]?.init?.method).toBe('POST');
+    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ ticket: '票' });
+    expect(localStorage.getItem(EMBED_THREAD_KEY)).toBeNull();
+    storage.reads().length = 0;
+
+    document.body.append(element);
+    await waitFor(() => expect(threads()).toEqual(['我的']));
+    await say(element, '你好');
+    fireEvent.click(shadow(element).getByRole('button', { name: '新對話' }));
+    await waitFor(() => expect(threads()).toHaveLength(2));
+    expect(storage.reads()).toEqual([]);
+    expect(storage.writes()).toEqual([]);
+    expect(localStorage.getItem(EMBED_THREAD_KEY)).toBeNull();
+  });
+
+  test('回應沒有 threadId：開新的一條，不接記著的那一條', async () => {
+    localStorage.setItem(EMBED_THREAD_KEY, JSON.stringify({ threadId: '上一個人的' }));
+    serveSession(200, { expiresAt: 1_800_000_000_000 });
+    const element = document.createElement(ELEMENT_NAME);
+    await element.signIn('票');
+    document.body.append(element);
+    await waitFor(() => expect(threads()).toHaveLength(1));
+    expect(threads()).not.toContain('上一個人的');
+    expect(localStorage.getItem(EMBED_THREAD_KEY)).toBeNull();
+  });
+
+  test('放進頁面之後才換票：改接 serve 回的那一條，之後不再寫記著的鍵', async () => {
+    const element = mount();
+    await waitFor(() => expect(threads()).toHaveLength(1));
+    serveSession(200, { expiresAt: 1_800_000_000_000, threadId: '我的' });
+    const storage = watchStorage();
+    await act(async () => {
+      await element.signIn('票');
+    });
+    await waitFor(() => expect(clients[0]?.opened.at(-1)).toBe('我的'));
+    expect(localStorage.getItem(EMBED_THREAD_KEY)).toBeNull();
+    expect(storage.writes()).toEqual([]);
+  });
+
+  test.each([
+    [401, 'ticket_invalid'],
+    [401, 'ticket_expired'],
+    [403, 'identity_rejected'],
+  ] as const)('兌換被拒 %i %s：reject 帶這個碼，畫面接的那一條不動', async (status, code) => {
+    localStorage.setItem(EMBED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const element = mount();
+    await waitFor(() => expect(threads()).toEqual(['上一條']));
+    serveSession(status, { error: code });
+    const failure = await element.signIn('票').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(NexusSignInError);
+    expect(failure).toMatchObject({ name: 'NexusSignInError', code, status });
+    await act(async () => {});
+    expect(threads()).toEqual(['上一條']);
+    expect(JSON.parse(localStorage.getItem(EMBED_THREAD_KEY) ?? '{}')).toEqual({
+      threadId: '上一條',
+    });
+  });
+
+  test('其他失敗是 sign_in_failed；票不是字串不發請求', async () => {
+    const seen = serveSession(404, 'not found');
+    const element = document.createElement(ELEMENT_NAME);
+    await expect(element.signIn('票')).rejects.toMatchObject({
+      code: 'sign_in_failed',
+      status: 404,
+    });
+    await expect(element.signIn('' as string)).rejects.toBeInstanceOf(TypeError);
+    expect(seen).toHaveLength(1);
   });
 });
