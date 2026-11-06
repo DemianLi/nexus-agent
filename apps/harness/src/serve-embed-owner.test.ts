@@ -3,6 +3,7 @@
  * 嵌入身分走真的換票、兌換、嵌入 cookie。兩道檢查的拆開量測在 `embed-thread-owner.test.ts`。
  */
 
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -221,6 +222,40 @@ describe('嵌入版 thread 誰開就歸誰（#2370）', () => {
     );
     expect((await embedLogin(server, where, 'crm', 'bob', 's-a')).redeemed).not.toHaveProperty(
       'threadId',
+    );
+  }, 60_000);
+
+  it('身分指紋：同一個人換一次登入、重啟之後都一樣；換人、同使用者代號換嵌入方都不一樣；不露出代號', async () => {
+    const where = place();
+    const first = await start(where);
+    const fingerprint = async (
+      server: ScriptedServe,
+      embedder: string,
+      subject: string,
+      sessionId: string,
+      at: Place = where,
+    ): Promise<unknown> =>
+      (await embedLogin(server, at, embedder, subject, sessionId)).redeemed.identityFingerprint;
+
+    const alice = await fingerprint(first, 'crm', 'alice', 's-a');
+    expect(alice).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(await fingerprint(first, 'crm', 'alice', 's-b')).toBe(alice);
+    expect(await fingerprint(first, 'crm', 'bob', 's-a')).not.toBe(alice);
+    expect(await fingerprint(first, 'erp', 'alice-erp', 's-a')).not.toBe(alice);
+    for (const exposed of [
+      'alice',
+      'u-alice',
+      createHash('sha256').update('u-alice').digest('base64url'),
+    ]) {
+      expect(alice).not.toContain(exposed);
+    }
+
+    const again = await start(where);
+    expect(await fingerprint(again, 'crm', 'alice', 's-c')).toBe(alice);
+    // 另一台 serve（另一個 home、另一把密鑰）算出來不一樣。
+    const elsewhere = place();
+    expect(await fingerprint(await start(elsewhere), 'crm', 'alice', 's-a', elsewhere)).not.toBe(
+      alice,
     );
   }, 60_000);
 });

@@ -3,6 +3,8 @@
  * 接線（路由、`admit` 的放行範圍）在 `serve-embed-login.test.ts`。
  */
 
+import { createHmac } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { BrowserAuth } from './browser-auth.js';
@@ -111,6 +113,31 @@ describe('EmbedSessionCookies', () => {
     ]);
   });
 
+  it('身分指紋只看嵌入方與使用者代號，換密鑰就不一樣，不是 cookie 子鑰算的', () => {
+    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED);
+    const alice = cookies.identityFingerprint(IDENTITY);
+    expect(alice).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(cookies.identityFingerprint({ embedder: 'crm', userId: 'u-alice' })).toBe(alice);
+    expect(cookies.identityFingerprint({ embedder: 'crm', userId: 'u-bob' })).not.toBe(alice);
+    expect(cookies.identityFingerprint({ embedder: 'erp', userId: 'u-alice' })).not.toBe(alice);
+    // 欄位接起來不能撞：("a:b", "c") 跟 ("a", "b:c") 是兩個人。
+    expect(cookies.identityFingerprint({ embedder: 'a:b', userId: 'c' })).not.toBe(
+      cookies.identityFingerprint({ embedder: 'a', userId: 'b:c' }),
+    );
+    expect(
+      new EmbedSessionCookies(Buffer.alloc(32, 8), 900, ['crm'], ALL_MAPPED).identityFingerprint(
+        IDENTITY,
+      ),
+    ).not.toBe(alice);
+    // 不是 cookie 子鑰算的：那樣回給瀏覽器的值就是一個有效簽章。
+    const cookieKey = createHmac('sha256', SECRET).update('nexus-embed-session-v1').digest();
+    expect(alice).not.toBe(
+      createHmac('sha256', cookieKey)
+        .update(JSON.stringify([IDENTITY.embedder, IDENTITY.userId]))
+        .digest('base64url'),
+    );
+  });
+
   it('同一把密鑰：嵌入 cookie 的值放到獨立頁面的名字底下不是擁有者，反過來也不是嵌入身分', () => {
     const browser = new BrowserAuth(SECRET);
     const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED);
@@ -194,7 +221,10 @@ describe('POST /embed/session', () => {
     const response = await session.handle(redeem({ body: { ticket } }));
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toEqual({ expiresAt: 5_000 + 900_000 });
+    expect(await response.json()).toEqual({
+      expiresAt: 5_000 + 900_000,
+      identityFingerprint: cookies.identityFingerprint({ embedder: 'crm', userId: 'u-alice' }),
+    });
     const setCookie = response.headers.get('set-cookie')!;
     expect(cookies.authenticate(headersWith(cookiePair(setCookie)))).toMatchObject({
       kind: 'embed',
@@ -216,7 +246,7 @@ describe('POST /embed/session', () => {
 
   it('這一次登入開過對話：200 多帶最新那條的 threadId；問的是票上的身分與登入', async () => {
     const asked: unknown[] = [];
-    const { session, issue } = setup({
+    const { session, cookies, issue } = setup({
       now: () => 5_000,
       latestThread: async (owner) => {
         asked.push(owner);
@@ -225,7 +255,11 @@ describe('POST /embed/session', () => {
     });
     const response = await session.handle(redeem({ body: { ticket: issue() } }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ expiresAt: 5_000 + 900_000, threadId: 't-latest' });
+    expect(await response.json()).toEqual({
+      expiresAt: 5_000 + 900_000,
+      identityFingerprint: cookies.identityFingerprint({ embedder: 'crm', userId: 'u-alice' }),
+      threadId: 't-latest',
+    });
     expect(asked).toEqual([{ userId: 'u-alice', embedder: 'crm', loginSessionSha256: 'h' }]);
   });
 
