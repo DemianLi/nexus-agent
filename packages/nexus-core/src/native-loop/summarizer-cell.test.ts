@@ -5,7 +5,7 @@
  *
  * 計數掛在登記上：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層 `AsyncLocalStorage`，
  * 沒有那一層就是經 `wrapModelCall`。不換 `build` 收到的那支：`withModelCallStep` 會檢查兩者是同一支。
- * 除了那一步被叫幾次，也數它往內交（`next`）幾次：端點真的回超窗時，force 鏈換保留 0 重走，`next` 多一次。
+ * 只數摘要器那一顆（模型那一串其餘登記了環繞步的格不算）。除了那一步被叫幾次，也數它往內交（`next`）幾次：端點真的回超窗時，force 鏈換保留 0 重走，`next` 多一次。
  * 哪一邊照 state 的第一則訊息分。
  */
 
@@ -23,6 +23,7 @@ import { fakePlugin, fakeTool } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
 import type * as ModelCallStepModule from '../model-call-step.js';
+import { SUMMARIZATION_MIDDLEWARE_NAME } from '../summarization.js';
 
 type Via = 'native' | 'hook';
 interface Count {
@@ -45,8 +46,10 @@ vi.mock('../model-call-step.js', async (importOriginal) => {
     counts.set(side, entry);
     return entry;
   };
-  const withModelCallStep: typeof actual.withModelCallStep = (step, build) =>
-    actual.withModelCallStep((request, next) => {
+  const withModelCallStep: typeof actual.withModelCallStep = (step, build) => {
+    let summarizer = false;
+    const middleware = actual.withModelCallStep((request, next) => {
+      if (!summarizer) return step(request, (inner) => viaNative.exit(() => next(inner)));
       const entry = entryOf(request);
       entry[(viaNative.getStore() === true ? 'native' : 'hook') satisfies Via] += 1;
       return step(request, (inner) => {
@@ -54,6 +57,9 @@ vi.mock('../model-call-step.js', async (importOriginal) => {
         return viaNative.exit(() => next(inner));
       });
     }, build);
+    summarizer = (middleware as { name?: unknown }).name === SUMMARIZATION_MIDDLEWARE_NAME;
+    return middleware;
+  };
   const wrapModelCallFromStep = ((step: ModelCallStepModule.ModelCallStep) => {
     const wrap = actual.wrapModelCallFromStep(step);
     return (request: object, handler: (request: object) => unknown) =>
