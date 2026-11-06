@@ -2,7 +2,7 @@
 //!
 //! 前台與對話行程是 `examples/` 的兩支假程式：`fake_front` 把監督行程的前台通道轉到這裡聽著的 Unix socket，測試就站在前台的位置；
 //! `fake_conversation` 照協定回 `ready`／`bound`，之後照 thread id 做事、把收到的 EOF 與 SIGTERM 記進 `<socket>.log`。
-//! 等待一律寫成「最多等多久、條件成立就過」，不拿牆鐘時間當斷言。
+//! 等待一律寫成「最多等多久、條件成立就過」，不拿牆鐘時間當斷言。空轉測試例外：固定量兩秒的 CPU tick。
 
 #![cfg(target_os = "linux")]
 
@@ -43,7 +43,7 @@ fn wait_until(mut done: impl FnMut() -> bool) -> bool {
     done()
 }
 
-/// 行程不在了，或只剩 zombie（父行程已經不是監督行程，收不收屍不歸它管）。
+/// 行程不在了，或已經死了、只剩還沒被收的 zombie。
 fn gone(pid: i32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Err(_) => true,
@@ -246,6 +246,8 @@ fn ensure_binds_and_reports_the_socket_in_a_private_run_dir() {
     assert_eq!(h.up("a"), socket);
     assert_eq!(log(&socket).iter().filter(|l| l.starts_with("pid ")).count(), 1);
     assert!(h.audit().is_empty());
+    // 監督行程只有一條執行緒：PDEATHSIG 跟著起子行程的那條執行緒走。
+    assert_eq!(std::fs::read_dir(format!("/proc/{}/task", h.pid())).unwrap().count(), 1);
 }
 
 #[test]
@@ -346,7 +348,7 @@ fn shutdown_walks_the_teardown_ladder() {
     assert_eq!(log(&plain)[2..], ["eof"]);
     assert_eq!(log(&eof)[2..], ["eof", "sigterm"]);
     assert_eq!(log(&term)[2..], ["grandchild ".to_string() + &grandchild.to_string(), "eof".to_string()]);
-    assert!(gone(grandchild));
+    assert!(wait_until(|| gone(grandchild)));
     assert!(h.audit_line("\"thread\":\"plain\"").contains("\"cause\":\"shutdown\""));
     assert!(h.audit_line("e,ignore-eof").contains("\"exit_code\":0"));
     assert!(h.audit_line("t,ignore-term").contains("\"signal\":9"));

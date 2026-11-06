@@ -1,18 +1,18 @@
-//! 監督行程（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947) 的形狀 B，[#2340](https://github.com/DemianLi/nexus-agent/issues/2340)，
+//! 監督行程（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，[#2340](https://github.com/DemianLi/nexus-agent/issues/2340)，
 //! 設計 `.docs/supervisor-1947-design-2026-11-03.md` §三-2、§五、§六）：起一個前台、按前台的要求每條 thread 起一個對話行程，
 //! 管它們的生死，寫稽核紀錄。資料不經這裡：前台直接連對話行程的 socket。訊息格式在 [`crate::supervisor_protocol`]。
 //!
 //! **嚴格單執行緒**：子行程的 `PR_SET_PDEATHSIG` 看的是起它的那條執行緒，那條執行緒結束子行程就會被殺。不要在這裡起 thread。
 //!
 //! 啟動：擋下 SIGINT／SIGTERM／SIGHUP／SIGCHLD 改由 signalfd 收；設 `PR_SET_CHILD_SUBREAPER`（子行程的後代成了孤兒也掛回這裡收）；
-//! 準備 `--run-dir`（0700）；開稽核紀錄；起前台。任何一步失敗就結束、回 1，不起前台以外的東西。
+//! 準備 `--run-dir`（0700）；開稽核紀錄。前四步任一失敗就結束、回 1。最後起前台；前台起不來就寫稽核，隔 `--front-restart-ms` 再起。
 //!
 //! 前台的控制通道是它的 stdin／stdout：
 //!
-//! - `ensure(thread)`：這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；正在收就不理（收完會回 `down`，前台要再要一次）；
+//! - `ensure(thread)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；正在收就不理（收完會回 `down`，前台要再要一次）；
 //!   都沒有就起一個。
-//!   對話行程送 `ready` 之後送它 `bind(thread)`，回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。開啟方式目前不影響行為。
-//! - `release(thread)`：目前不收行程。
+//!   對話行程送 `ready` 之後送它 `bind(thread)`，回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。`open` 不影響行為（唯讀開啟的逐出優先序，TODO(#2340)）。
+//! - `release(thread)`：不理，不收行程（TODO(#2340)）。
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
@@ -23,7 +23,7 @@
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，所有對話行程走拆除梯度；全部收完之後前台也走一次；前台收完就回 0。
-//! 停機中再收到一次這些訊號，所有對話行程的群組當場 SIGKILL；前台照樣先收到它們的 `down`，再走拆除梯度。
+//! 停機中再收到一次這些訊號，所有對話行程的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
 
 mod args;
 mod audit;
@@ -69,7 +69,7 @@ struct Proc {
 impl Proc {
     fn begin_stop(&mut self, now: Instant, eof_grace: Duration) {
         if self.stop.is_none() {
-            self.chan.close_write();
+            self.chan.finish();
             self.stop = Some((Step::Eof, Some(now + eof_grace)));
         }
     }
@@ -102,7 +102,7 @@ enum Phase {
     Starting,
     /// 送了 `bind`，還沒回 `bound`。
     Binding,
-    /// 已回前台 `up`。
+    /// 收到同一個 thread 的 `bound`；沒在收的才會給前台 `up`。
     Up,
 }
 
@@ -128,7 +128,8 @@ struct Supervisor {
     shutting_down: bool,
 }
 
-/// 執行檔的入口；回結束碼。
+/// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
+/// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯。
 pub fn run(argv: Vec<OsString>) -> i32 {
     let args = match args::parse(&argv) {
         Ok(args) => args,
@@ -219,7 +220,7 @@ fn prepare_run_dir(dir: &Path) -> Result<(), String> {
 enum Slot {
     Signal,
     Front { write: bool },
-    Conversation { index: usize, write: bool },
+    Conversation { pid: libc::pid_t, write: bool },
 }
 
 impl Supervisor {
@@ -250,18 +251,19 @@ impl Supervisor {
             if let Some(front) = &self.front {
                 watch(&front.chan, Slot::Front { write: false }, Slot::Front { write: true });
             }
-            for (index, conversation) in self.conversations.iter().enumerate() {
+            for conversation in &self.conversations {
                 watch(
                     &conversation.proc.chan,
-                    Slot::Conversation { index, write: false },
-                    Slot::Conversation { index, write: true },
+                    Slot::Conversation { pid: conversation.proc.pid, write: false },
+                    Slot::Conversation { pid: conversation.proc.pid, write: true },
                 );
             }
 
             let timeout = self.next_deadline().map_or(-1, |at| {
                 let left = at.saturating_duration_since(Instant::now());
                 // 進位到毫秒，免得差不到 1 ms 時 poll 立刻回來、空轉到期限。
-                left.as_millis().min(i32::MAX as u128) as i32 + i32::from(left.subsec_nanos() % 1_000_000 != 0)
+                let millis = left.as_millis() + u128::from(left.subsec_nanos() % 1_000_000 != 0);
+                millis.min(i32::MAX as u128) as i32
             });
             // SAFETY：fds 在這次呼叫期間有效。
             let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
@@ -274,7 +276,6 @@ impl Supervisor {
                 return 1;
             }
 
-            // 先處理通道，最後才收屍：收屍會從 `conversations` 移除，前面記下的 index 就對不上了。
             let mut signals = false;
             for (pollfd, slot) in fds.iter().zip(slots) {
                 if pollfd.revents == 0 {
@@ -288,8 +289,14 @@ impl Supervisor {
                         }
                     }
                     Slot::Front { write: false } => self.on_front_readable(),
-                    Slot::Conversation { index, write: true } => self.conversations[index].proc.chan.flush(),
-                    Slot::Conversation { index, write: false } => self.on_conversation_readable(index),
+                    Slot::Conversation { pid, write } => {
+                        let Some(index) = self.conversations.iter().position(|c| c.proc.pid == pid) else { continue };
+                        if write {
+                            self.conversations[index].proc.chan.flush();
+                        } else {
+                            self.on_conversation_readable(index);
+                        }
+                    }
                 }
             }
             if signals {

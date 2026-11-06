@@ -16,7 +16,7 @@ pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
-    /// 對話行程的 socket 放這裡；監督行程建它（0700），已存在就要是自己的、0700。
+    /// 對話行程的 socket 放這裡；監督行程建它（0700），已存在就要是自己的、0700；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。
     pub run_dir: PathBuf,
     /// 稽核紀錄（JSONL，只追加）。
     pub audit: PathBuf,
