@@ -13,6 +13,7 @@ import { lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { WireAuth } from './wire-handler.js';
+import { OWNER_PRINCIPAL } from './wire-principal.js';
 
 /** 對話行程 socket 上的 {@link WireAuth}。用 {@link openPeerSocketAuth} 建。 */
 export interface PeerSocketAuth extends WireAuth {
@@ -21,7 +22,7 @@ export interface PeerSocketAuth extends WireAuth {
 }
 
 /**
- * 驗 `socketPath` 所在的目錄，過了才回一支放行所有請求的 {@link PeerSocketAuth}。
+ * 驗 `socketPath` 所在的目錄，過了才回一支把所有請求都當成擁有者的 {@link PeerSocketAuth}。
  *
  * @throws 目錄不存在、不是目錄（含符號連結）、權限不是 0700，或擁有者不是這個行程的使用者。
  */
@@ -43,5 +44,5 @@ export async function openPeerSocketAuth(socketPath: string): Promise<PeerSocket
       `對話行程的 socket 目錄 ${directory} 的擁有者是 uid ${String(info.uid)}，不是這個行程的 ${String(uid)}`,
     );
   }
-  return { directory, isAuthenticated: () => true };
+  return { directory, authenticate: () => OWNER_PRINCIPAL };
 }

@@ -540,6 +540,22 @@
     metrics:
       enabled: false
 
+# 嵌入方換票登入（#2370，地圖 #2365 第 4 點）。對方的後端用服務憑證打 `POST /embed/exchange`（代理後面是 `/nexus/embed/exchange`），
+# 替一位使用者換一張只能用一次的短效登入票；元件拿票打 `POST /embed/session` 換嵌入專用的 cookie。**出廠沒有嵌入方，就沒有這兩條路由。**
+# - `embedders`：每個嵌入方一個 `id`（小寫英數與 -）與一把服務憑證；憑證在 `credentialFile`（絕對路徑，缺席是 `<home>/embed-credential-<id>`，
+#   `0600`，沒有就建；權限過寬或內容認不得就拒絕啟動）。把這個檔的內容交給嵌入方的後端。
+# - `ticketTtlSeconds`：票多久沒兌換就作廢（10 到 300，預設 60）。
+# - `cookieMaxAgeSeconds`：拿票換到的嵌入 cookie 多久到期（60 到 86400，預設 900）；它只打得到 `/embed/` 底下的路徑。
+# - 對方帳號對應到 nexus 身分的對應表還沒接上（#1827 D231）：**在那之前換票一律被拒**；過了服務憑證的換票與票查得到的兌換，每一次都記進
+#   `<home>/embed-audit.jsonl`（認不出是誰的按時間窗合併）。
+# 起動期讀一次、改了要重啟。patch 是整份替換 `config`，沒寫的格回到預設值。
+- id: embed-login
+  name: '#settings/embed-login'
+  config:
+    embedders: []
+    ticketTtlSeconds: 60
+    cookieMaxAgeSeconds: 900
+
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
 #

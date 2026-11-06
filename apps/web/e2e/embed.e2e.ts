@@ -490,6 +490,25 @@ describe('Vue 頁面裡的 <nexus-chat>', () => {
     // 腳本每條 thread 從第一輪開始吃：新的這一條拿到的也是第一輪那句。
     await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
   });
+
+  test('元件開的對話：獨立頁面的歷史清單裡看得到，點開看得到那一輪（#2365 第 6 點）', async () => {
+    const question = '嵌入版開的這一條';
+    const reply = '這是元件裡的回覆。';
+    const page = await openDemo([{ content: reply }], { width: 1280, height: 800 });
+    await send(page, question);
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    await settled(page);
+
+    await page.goto(`${new URL(serve!.url).origin}/`);
+    const row = page.getByTestId('thread-title-text').getByText(question, { exact: true });
+    await expect.poll(() => row.count(), { timeout: 30_000 }).toBe(1);
+    await row.click();
+    // 獨立頁面上這一句出現不只一處，只看有沒有出現。
+    await expect
+      .poll(() => page.getByRole('log').getByText(reply).count(), { timeout: 30_000 })
+      .toBeGreaterThan(0);
+    await shot(page, 'embed-thread-in-standalone-history');
+  });
 });
 
 /** serve 的 `host-tools` 那一列（`apps/harness/cordis.serve.yml`）：免核准的名單與宿主頁幾毫秒沒回就當逾時。 */
