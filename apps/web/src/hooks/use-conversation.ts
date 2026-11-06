@@ -52,6 +52,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
+import { EMBED_UNAUTHORIZED_TEXT, StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { sendRejectionText } from '@/lib/attachment-send';
 import { resolvedClientTimeZone } from '@/lib/client-time-zone';
 import { createConversationStore } from '@/lib/conversation-store';
@@ -134,6 +135,11 @@ export interface UseConversationOptions {
   readonly threadId?: string;
   /** `/livez` 探測打的 agent 位置；省略是 `agentBaseUrl()`，從頁面算。嵌入版跑在宿主頁上，要給從 `embed.js` 算的（#2426）。 */
   readonly agentBaseUrl?: string;
+  /**
+   * 嵌入版的 `signIn` 成功過幾次（#2490）。下行被 401 擋下之後不排重試，等這個數變了才重開；開線之後、401 回來之前就變了的，
+   * 401 回來時當場重開。獨立頁面不給。
+   */
+  readonly signIns?: number;
 }
 
 /** 畫面上那段歷史的現況（#306）。 */
@@ -442,6 +448,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
   const threadId = useMemo(() => options.threadId ?? randomUuid(), [options.threadId]);
   const livezBaseUrl = options.agentBaseUrl;
+  const signIns = options.signIns;
+  const signInsRef = useRef(signIns);
+  signInsRef.current = signIns;
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
   // 右側欄的面板讀對話走這一條（#1033）：跟交給 React 的同一刻、同一份，所以放在發布回呼裡，不另外排。
@@ -493,15 +502,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
    * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
    * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」；
    * `halted` 是最後一次失敗是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`）：「立刻重連」、接上、一般的斷線都清掉它。
+   * `unauthorized` 是最後一次失敗是嵌入版的 401（#2490），等 `signIns` 變了才重開；每次開線都清掉。
    */
   const retry = useRef<{
     attempt: number;
     lost: boolean;
     everConnected: boolean;
     halted: boolean;
+    unauthorized: boolean;
     timer?: ReturnType<typeof setTimeout>;
     recoveredTimer?: ReturnType<typeof setTimeout>;
-  }>({ attempt: 0, lost: false, everConnected: false, halted: false });
+  }>({ attempt: 0, lost: false, everConnected: false, halted: false, unauthorized: false });
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
   const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
@@ -609,6 +620,14 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
   }, [scheduleRetry]);
 
+  useEffect(() => {
+    const book = retry.current;
+    if (!book.unauthorized) return;
+    book.unauthorized = false;
+    book.attempt = 0;
+    setGeneration((current) => current + 1);
+  }, [signIns]);
+
   // 卸載（換 thread 時整個 view 重掛）就把兩個計時器收掉：不能對已經離開的 thread 重接。
   useEffect(() => {
     const book = retry.current;
@@ -651,7 +670,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
     /**
      * 伺服器說這條**永遠**開不了（子代理的會話，#1708）：講原因、不排重試。`lost` 留在 false，所以「立刻重連」與
-     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。
+     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。嵌入版的 401（#2490）也走這裡，等 `signIns` 變了才重開。
      */
     const refuse = (refused: string) => {
       const book = retry.current;
@@ -684,6 +703,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setRefusal(THREAD_PROTOCOL_ERROR_TEXT);
       setReconnecting({ wasConnected: book.everConnected, offline: false });
     };
+
+    retry.current.unauthorized = false;
+    const signInsAtOpen = signInsRef.current;
 
     void (async () => {
       try {
@@ -781,6 +803,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           settled();
           if (error instanceof WireProtocolError) {
             halt(error);
+            return;
+          }
+          if (error instanceof StreamUnauthorizedError) {
+            if (signInsRef.current !== signInsAtOpen) {
+              setGeneration((current) => current + 1);
+              return;
+            }
+            refuse(EMBED_UNAUTHORIZED_TEXT);
+            retry.current.unauthorized = true;
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
