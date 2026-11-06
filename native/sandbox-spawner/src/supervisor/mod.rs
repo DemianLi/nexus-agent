@@ -517,7 +517,7 @@ impl Supervisor {
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.cpu.stall_at(c.heard_at?, stall))
             }))
-            .chain(self.conversations.iter().filter_map(|c| c.cpu.deadline()))
+            .chain(self.conversations.iter().filter(|c| c.throttleable()).filter_map(|c| c.cpu.deadline()))
             .chain(self.args.stall.filter(|_| self.conversations.iter().any(|c| c.heard_at.is_some())).map(|stall| Instant::now() + stall / 4))
             .chain(self.conversations.iter().filter_map(|c| c.drain.map(|at| at + self.args.drain_timeout)))
             .chain(self.conversations.iter().filter_map(|c| self.idle_deadline(c)))
@@ -565,11 +565,10 @@ impl Supervisor {
         }
     }
 
-    /// 壓住吃滿 CPU 的對話行程（[`cpu`]）：可以壓的照 [`cpu::Guard::tick`] 開始或切換；不能壓了（開始收、送了 `drain`）的放開。
+    /// 壓住吃滿 CPU 的對話行程（[`cpu`]）：可以壓的照 [`cpu::Guard::tick`] 開始或切換。開始收、送 `drain` 的當場就放開了，見 [`Conversation::release`]。
     fn throttle(&mut self, now: Instant, config: cpu::Config) {
         for conversation in &mut self.conversations {
             let Some(heard_at) = conversation.heard_at.filter(|_| conversation.throttleable()) else {
-                conversation.release(now);
                 continue;
             };
             let holding = conversation.cpu.holding();

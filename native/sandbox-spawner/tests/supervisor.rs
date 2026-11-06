@@ -678,6 +678,95 @@ fn a_silence_shorter_than_the_limit_is_not_stalled() {
     assert!((600..1500).contains(&silence), "{silence}");
 }
 
+/// 行程狀態那一欄（`R`、`S`、`T`、`Z`…）；行程不在了回 `None`。
+fn state(pid: i32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(") ")?.1.chars().next()
+}
+
+/// 壓制的參數：沉默 300 ms 起判，每 25 ms／`stop_ms` 放一段；schedstat 每 50 ms 取樣。
+fn throttle(stop_ms: &'static str) -> Vec<&'static str> {
+    vec!["--throttle-ms", "300", "--throttle-run-ms", "25", "--throttle-stop-ms", stop_ms, "--rss-poll-ms", "50"]
+}
+
+#[test]
+fn a_silent_spinning_leader_is_held_until_it_speaks_again() {
+    let mut h = Harness::start(Options { extra: throttle("75"), ..Options::default() });
+    let socket = h.up("s,spin:2000");
+    let pid = logged_pid(&socket, "pid");
+    assert!(wait_until(|| state(pid) == Some('T')), "空轉的 {pid} 一直沒被停住");
+    // 轉完、心跳回來就放開：之後不再停住，也還是同一個行程。
+    assert!(wait_until(|| supervisor_stderr(&h).contains("不再壓它")), "{}", supervisor_stderr(&h));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_ne!(state(pid), Some('T'));
+    assert_eq!(h.up("s,spin:2000"), socket);
+}
+
+#[test]
+fn a_silent_sleeping_leader_is_not_held() {
+    // execSync 那類：事件迴圈睡著等，不吃 CPU。
+    let mut h = Harness::start(Options { extra: throttle("75"), ..Options::default() });
+    let socket = h.up("q,silent:1500");
+    let pid = logged_pid(&socket, "pid");
+    let until = Instant::now() + Duration::from_millis(1_500);
+    while Instant::now() < until {
+        assert_ne!(state(pid), Some('T'));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!supervisor_stderr(&h).contains("開始壓住"), "{}", supervisor_stderr(&h));
+}
+
+#[test]
+fn while_held_stalled_only_counts_the_time_it_was_let_run() {
+    // 沉默 300 ms 起壓、只放四分之一：要放它跑滿 1 s 才判 stalled，牆鐘約 300 + 700 × 4 ≈ 3.1 s。不壓的話 1 s 就殺。
+    let mut extra = throttle("75");
+    extra.extend(["--stall-ms", "1000"]);
+    let mut h = Harness::start(Options { extra, ..Options::default() });
+    h.up("x,spin:0");
+    let silent_since = Instant::now();
+    assert_eq!(h.down_of("x,spin:0"), DeathCause::Stalled);
+    assert!(silent_since.elapsed() >= Duration::from_millis(2_000), "{:?}", silent_since.elapsed());
+}
+
+#[test]
+fn sigkilled_supervisor_while_holding_leaves_nothing_stopped() {
+    // 停的那段拉到一分鐘：送 SIGKILL 時 leader 一定是停住的。
+    let mut h = Harness::start(Options { extra: throttle("60000"), ..Options::default() });
+    let socket = h.up("o,grandchild,spin:0");
+    let (pid, grandchild) = (logged_pid(&socket, "pid"), logged_pid(&socket, "grandchild"));
+    assert!(wait_until(|| state(pid) == Some('T')));
+    kill(h.pid(), libc::SIGKILL);
+    h.wait_exit();
+    assert!(wait_until(|| gone(pid)), "leader {pid} 還在");
+    // 同群組的子行程不歸壓制管：沒被停住，留下來也是醒著的。
+    let left = state(grandchild);
+    kill(grandchild as u32, libc::SIGKILL);
+    assert_ne!(left, Some('T'), "子行程 {grandchild} 停在 T");
+}
+
+#[test]
+fn teardown_lets_a_held_leader_run_first() {
+    // 停的那段拉到一分鐘、SIGTERM 之後的寬限也是：沒先 SIGCONT 的話，它收不到 SIGTERM，要等很久才被 SIGKILL。
+    let mut h = Harness::start(Options { term_grace_ms: 600_000, extra: throttle("60000"), ..Options::default() });
+    let socket = h.up("t,spin:0");
+    let pid = logged_pid(&socket, "pid");
+    assert!(wait_until(|| state(pid) == Some('T')));
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("t,spin:0"), DeathCause::Shutdown);
+    assert!(log(&socket).contains(&"sigterm".to_string()), "{:?}", log(&socket));
+}
+
+#[test]
+fn drain_lets_a_held_leader_run_first() {
+    // 開頭的 `idle:0` 讓 release 當場送 `drain`；空轉的它不會回答，但不能停在那裡。
+    let mut h = Harness::start(Options { extra: throttle("60000"), ..Options::default() });
+    let socket = h.up("d,idle:0,spin:0");
+    let pid = logged_pid(&socket, "pid");
+    assert!(wait_until(|| state(pid) == Some('T')));
+    h.release("d,idle:0,spin:0");
+    assert!(wait_until(|| state(pid) != Some('T')), "送了 drain，{pid} 還停著");
+}
+
 #[test]
 fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
     let mut h = Harness::start(Options { extra: vec!["--stall-ms", "300"], piped_stderr: true, ..Options::default() });
