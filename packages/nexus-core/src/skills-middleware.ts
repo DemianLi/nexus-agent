@@ -58,6 +58,8 @@ import type { AgentMiddleware } from 'langchain';
 import { renderSkillsSection } from './base-prompt-text.js';
 import type { SkillListing } from './base-prompt-text.js';
 import { modelVisibleSkillsBackend } from './skill-catalog.js';
+import { withSystemPromptStep } from './system-prompt-step.js';
+import type { SystemPromptCell } from './system-prompt-step.js';
 
 /** {@link createSkillsMiddleware} 收的東西，原樣轉給基座。 */
 type BaseOptions = Parameters<typeof createSkillsMiddleware>[0];
@@ -72,11 +74,6 @@ interface BaseHooks {
     | Promise<{ skillsMetadata?: unknown[] } | undefined>
     | { skillsMetadata?: unknown[] }
     | undefined;
-}
-
-/** 這一格用得到的模型請求欄位。 */
-interface SkillsRequest {
-  readonly systemMessage: { concat(text: string): unknown };
 }
 
 /** state 裡已經有的技能（同一條 thread 之前的組裝寫的，或子代理併回來的）。 */
@@ -104,39 +101,40 @@ export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): Agen
   let empty = false;
   /** 這個組裝看到的技能清單：基座掃到的，或沿用 state 裡已經有的。段的文字由它算，不讀模型請求上的 state。 */
   let listed: readonly SkillListing[] | undefined;
-  return createHookStepMiddleware({
-    name: base.name,
-    ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
-    async beforeAgent(state: unknown, runtime: unknown) {
-      if (empty) return undefined;
-      incomplete = false;
-      const result = await base.beforeAgent(state, runtime);
-      if (incomplete) return undefined;
-      if (
-        result !== undefined &&
-        Array.isArray(result.skillsMetadata) &&
-        result.skillsMetadata.length === 0
-      ) {
-        // 空的連 state 都不寫（基座會寫一格空的 `skillsMetadata`）：`invoke` 的回傳多一個鍵也算「有東西」。
-        empty = true;
-        return undefined;
-      }
-      if (result !== undefined && Array.isArray(result.skillsMetadata)) {
-        listed = result.skillsMetadata as SkillListing[];
-      } else {
-        // 基座沒寫 state 有兩種：它已經有清單（`listed` 早就記下了），或 state 裡已經有、它直接沿用。
-        listed ??= skillsInState(state);
-      }
-      return result as never;
-    },
-    wrapModelCall(request: SkillsRequest, handler: (request: unknown) => unknown) {
-      if (empty || incomplete) return handler(request);
+  const cell: SystemPromptCell = {
+    step: () => {
+      if (empty || incomplete) return undefined;
       // 走得到這裡就有清單：完整掃描不是空的（空的在上面放行），或沿用了 state 裡已有的。
-      const skills = listed ?? [];
-      return handler({
-        ...request,
-        systemMessage: request.systemMessage.concat(renderSkillsSection(skills, options.sources)),
-      });
+      return [{ append: renderSkillsSection(listed ?? [], options.sources) }];
     },
-  } as never) as unknown as AgentMiddleware;
+  };
+  return withSystemPromptStep(cell, (wrapModelCall) =>
+    createHookStepMiddleware({
+      name: base.name,
+      ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
+      async beforeAgent(state: unknown, runtime: unknown) {
+        if (empty) return undefined;
+        incomplete = false;
+        const result = await base.beforeAgent(state, runtime);
+        if (incomplete) return undefined;
+        if (
+          result !== undefined &&
+          Array.isArray(result.skillsMetadata) &&
+          result.skillsMetadata.length === 0
+        ) {
+          // 空的連 state 都不寫（基座會寫一格空的 `skillsMetadata`）：`invoke` 的回傳多一個鍵也算「有東西」。
+          empty = true;
+          return undefined;
+        }
+        if (result !== undefined && Array.isArray(result.skillsMetadata)) {
+          listed = result.skillsMetadata as SkillListing[];
+        } else {
+          // 基座沒寫 state 有兩種：它已經有清單（`listed` 早就記下了），或 state 裡已經有、它直接沿用。
+          listed ??= skillsInState(state);
+        }
+        return result as never;
+      },
+      wrapModelCall,
+    } as never),
+  ) as unknown as AgentMiddleware;
 }
