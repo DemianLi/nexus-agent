@@ -25,7 +25,7 @@
 nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]...
                  --conversation <程式> [--conversation-arg <參數>]...
                  [--eof-grace-ms 6000] [--term-grace-ms 3000] [--front-restart-ms 1000]
-                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250]
+                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000] [--cpu-busy-ms 10000]
 ```
 
 - 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr，同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。**監督行程的 stderr 一定要有人讀**：它是阻塞的而沒人讀時，整個監督行程（計時器、RSS 上限、拆除梯度）都停住；寫不出去（非阻塞而滿了、或壞了）的丟掉、記數，監督行程自己的訊息與轉出的對話行程 stderr 都一樣，下次寫得出去時先講一句丟了多少。
@@ -33,18 +33,23 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
-- 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。
-- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、RSS 超過上限、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
+- 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
+- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。`ready` 之前不判。對話行程從收到 `bind` 起每 5 s 送一次 `heartbeat`，一直送到收掉；`turn` 不參與判斷。`--stall-ms 0` 是不判。
+- renice：輪詢 RSS 時一併取樣 CPU。最近 `--cpu-busy-ms` 這段平均每秒有 0.9 秒以上想跑的，把群組 renice 到 19，只做一次、不調回。「想跑」取兩者較高的：整個執行緒群組用掉的 CPU（`/proc/<pid>/stat` 的 utime＋stime），與 leader 在 CPU 上加排隊等 CPU 的時間（`/proc/<pid>/schedstat`）；後者讓搶 CPU 時拿不到一整顆的空轉也算得到。`--cpu-busy-ms 0` 是不調。
+- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、RSS 超過上限、心跳斷了太久、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
   - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。只量 leader（見已知限制）。
   - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
   - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器、hybrid 主機的 v2 掛在別處）就一律算 `crash`。監督行程自己送 SIGKILL 的（RSS 超過上限、停機的最後一步）也會先算一次：核心搶先 OOM kill 了它時，那一次在這裡消掉，死因仍照監督行程的理由。
+  - `stalled`：心跳斷了超過 `--stall-ms`。
   - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。
 - 已知限制：
   - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程；spawner 與工具又各自 `setsid`，`memory` 的群組 SIGKILL 也打不到它們（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。
   - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
   - 同一批收屍的幾條都被 SIGKILL 時，一次 OOM 歸給誰看收屍的順序，不一定是真正被 OOM 殺的那條。
+  - renice 也只管 leader 的群組（同 #2494），調低了就不調回；在 CFS 配額（`--cpus`）底下它擋不住配額被吃光後整個 cgroup 被 throttle，S4 實測其他對話的 p95 在被殺之前的 N 秒內仍上升 15–90%。
+  - `ready` 之前（載插件、建根）不判 stalled，這一段卡死的對話行程會一直留著。
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
-- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）只有 `conversation` 有；沒起成的多一個 `error`。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（綁上之後兩次聽到之間最長的間隔）、`reniced`（renice 過）只有 `conversation` 有；沒起成的多一個 `error`。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2。
 
 整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`examples/fake_conversation.rs` 兩支假程式站在前台與對話行程的位置。

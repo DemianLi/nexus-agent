@@ -17,7 +17,7 @@
 //!   前台不在的期間要給它的訊息丟掉。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，RSS 超過 `--rss-limit-mb` 是
-//! `memory`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! `memory`，心跳斷了超過 `--stall-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
 //! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
 //! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`。
 //!
@@ -25,7 +25,8 @@
 //! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。fd 2 阻塞而沒人讀時，整個迴圈停在寫那一步；寫不出去的（轉出的與
 //! 監督行程自己的訊息）丟掉、記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
-//! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。
+//! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`；同一次取樣 CPU，一直想要一整顆的 renice
+//! 到 19（[`cpu`]）。送出 `bind` 起收到的每個框都算聽到，兩次之間最長的間隔寫進稽核的 `max_silence_ms`。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
 //! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
