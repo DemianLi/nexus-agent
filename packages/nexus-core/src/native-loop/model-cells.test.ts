@@ -45,18 +45,18 @@ vi.mock('../tool-list-step.js', async (importOriginal) => {
       wrapModelCall: (request: unknown, handler: unknown) => unknown;
     };
     const wrap = target.wrapModelCall;
+    const counted: ToolListStepModule.ToolListStep = (request) => {
+      bump(target.name, request, 'native');
+      return step(request);
+    };
+    // 登記時核對 `wrapModelCall` 就是用登記的那一步造的：先換成計數那一步造的那支去登記，登記完再換成經 `wrapModelCall` 也計數的那一支。
+    target.wrapModelCall = actual.wrapModelCallWith(counted, inner as never) as never;
+    const registered = actual.withToolListStep(middleware, counted, inner);
     target.wrapModelCall = (request, handler) => {
       bump(target.name, request, 'wrapModelCall');
       return wrap(request, handler);
     };
-    return actual.withToolListStep(
-      middleware,
-      (request) => {
-        bump(target.name, request, 'native');
-        return step(request);
-      },
-      inner,
-    );
+    return registered;
   };
   return {
     ...actual,

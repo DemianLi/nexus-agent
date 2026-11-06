@@ -16,7 +16,8 @@ import { fakePlugin, fakeTool } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
 import { SHARED_WORKSPACE_SERVICE } from '../sandbox.js';
-import { toolCallStepOf, withToolCallStep } from '../tool-call-step.js';
+import { toolCallStepOf, withToolCallStep, wrapToolCallWith } from '../tool-call-step.js';
+import type { ToolCallStep } from '../tool-call-step.js';
 
 type Via = 'native' | 'wrapToolCall';
 
@@ -39,14 +40,17 @@ function instrument(middleware: Iterable<AgentMiddleware>, counts: Counts): Set<
     const step = toolCallStepOf(m);
     if (step === undefined || instrumented.has(m)) continue;
     instrumented.add(m);
-    withToolCallStep(m, (call, next) => {
+    const counted: ToolCallStep = (call, next) => {
       bump(counts, m, call.callId, 'native');
       return step(call, next);
-    });
+    };
     const target = m as unknown as {
       wrapToolCall: (request: { toolCall: { id?: string } }, handler: unknown) => unknown;
     };
     const wrap = target.wrapToolCall;
+    // 登記時核對 `wrapToolCall` 就是用登記的那一步造的：先換成計數那一步造的那支去登記，登記完再換成經 `wrapToolCall` 也計數的那一支。
+    target.wrapToolCall = wrapToolCallWith(counted) as never;
+    withToolCallStep(m, counted);
     target.wrapToolCall = (request, handler) => {
       bump(counts, m, request.toolCall.id, 'wrapToolCall');
       return wrap(request, handler);

@@ -47,6 +47,8 @@ type ModelCallWrap = (request: never, handler: never) => unknown;
  * 把一步轉成 `wrapModelCall`：一步回清單就換掉請求上的 `tools` 再往內交，回 `undefined` 就交原本那個請求；有 `inner` 時交給它，
  * 由它再交給 `handler`。
  *
+ * 同一步配同一支 `inner` 每次拿到的是同一支函式，{@link withToolListStep} 靠這一點核對登記的就是這顆在跑的那一支。
+ *
  * @param step - 這一步。
  * @param inner - 往內交之前還要經過的那一支；不給就直接交給 `handler`。
  * @returns 可以放進 `createMiddleware({ wrapModelCall })` 的函式。
@@ -55,7 +57,12 @@ export function wrapModelCallWith<Request extends ToolListRequest, Handler, Resu
   step: ToolListStep,
   inner?: (request: Request, handler: Handler) => Result,
 ): (request: Request, handler: Handler) => Result | Promise<Awaited<Result>> {
-  return (request, handler) => {
+  type Wrap = (request: Request, handler: Handler) => Result | Promise<Awaited<Result>>;
+  const byInner = wrapsOf.get(step) ?? new Map<unknown, unknown>();
+  wrapsOf.set(step, byInner);
+  const known = byInner.get(inner);
+  if (known !== undefined) return known as Wrap;
+  const wrap: Wrap = (request, handler) => {
     const pass = (tools: ToolListResult): Result => {
       const next = tools === undefined ? request : { ...request, tools };
       return inner === undefined
@@ -65,7 +72,12 @@ export function wrapModelCallWith<Request extends ToolListRequest, Handler, Resu
     const tools = step(request);
     return tools instanceof Promise ? (tools.then(pass) as Promise<Awaited<Result>>) : pass(tools);
   };
+  byInner.set(inner, wrap);
+  return wrap;
 }
+
+/** {@link wrapModelCallWith} 造過的：一步 → `inner`（沒給是 `undefined`）→ 那一支。 */
+const wrapsOf = new WeakMap<ToolListStep, Map<unknown, unknown>>();
 
 /**
  * 只決定工具清單的一顆 middleware，並登記這一步（{@link withToolListStep}）。
@@ -89,7 +101,7 @@ const registeredCells = new WeakMap<object, ToolListCell>();
 /**
  * 登記這顆 middleware 的模型那一格就是 `step`（再經 `inner`）：native 的 root 在這一格直接呼叫它，不經這顆的 `wrapModelCall`
  * （{@link toolListCellOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapModelCall`。
- * 所以 `wrapModelCall` 必須就是 `wrapModelCallWith(step, inner)`，兩個 loop 才跑同一份實作。要在 `createNativeAgent` 之前登記：
+ * 所以 `wrapModelCall` 必須就是 `wrapModelCallWith(step, inner)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
  * 模型那一串在建構時就算好。`wrapModelCall` 標成由洋蔥外面做的格（`handledOutsideOnion`），在那一串裡讀到 `undefined`，native 的 root
  * 不跑這一步。
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
@@ -98,12 +110,21 @@ const registeredCells = new WeakMap<object, ToolListCell>();
  * @param step - 它的工具清單那一步。
  * @param inner - 往內交之前還要經過的那一支，同 {@link wrapModelCallWith}。
  * @returns `middleware` 本身。
+ * @throws {Error} `middleware.wrapModelCall` 不是 `wrapModelCallWith(step, inner)`。
  */
 export function withToolListStep<M extends object>(
   middleware: M,
   step: ToolListStep,
   inner?: ModelCallWrap,
 ): M {
+  if (
+    (middleware as { wrapModelCall?: unknown }).wrapModelCall !== wrapModelCallWith(step, inner)
+  ) {
+    const name = (middleware as { name?: unknown }).name;
+    throw new Error(
+      `middleware "${String(name)}" 的 wrapModelCall 不是 wrapModelCallWith(step, inner)：native 直接呼叫的那一步會跟它不一樣`,
+    );
+  }
   registeredCells.set(middleware, inner === undefined ? { step } : { step, inner });
   return middleware;
 }
