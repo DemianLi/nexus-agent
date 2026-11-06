@@ -8,7 +8,9 @@
  *   兩者較晚的那個算（後者同 `sweepIdle` 的「不閒的重新計時」：有些條件放掉時不推最後活動時間）。閒著的期間最後活動時間又往前推了
  *   （兩次輪詢之間有個短請求來去），就再送一次 `idle`，讓監督行程從新的時間點重新計時。不再閒置時送 `busy`。
  * - `drain`：當場再問一次。仍閒置就停收會開新一輪的命令、回 `drained`；否則回 `busy`。
- * - 一輪的開始與結束：送 `turn`，一輪中每 `heartbeatMs` 送一次 `heartbeat`。沒看到開始的結束不送（續接時補寫的收尾）。
+ * - 心跳：收到 `bind` 起每 `heartbeatMs` 送一次 `heartbeat`，在 `open` 之前就開始，一直送到 `close`，不分在不在一輪裡。
+ *   監督行程只看心跳斷了多久，事件迴圈卡住時計時器不觸發，心跳就斷了。
+ * - 一輪的開始與結束：送 `turn`。沒看到開始的結束不送（續接時補寫的收尾）。
  * - stdin 讀到 EOF 或讀到解不開的框（當成 EOF）時叫 `onEnd` 一次，由呼叫端走收尾。
  *
  * @module
@@ -41,7 +43,7 @@ export interface ConversationControlOptions {
   readonly now: () => number;
   /** 多久問一次閒不閒。 */
   readonly pollMs: number;
-  /** 一輪中多久送一次心跳。 */
+  /** 綁定之後多久送一次心跳。 */
   readonly heartbeatMs: number;
   /** stdin 讀到 EOF，或讀到解不開的框（框格式錯了，之後的位元組都對不上）。只叫一次。 */
   readonly onEnd: () => void;
@@ -92,17 +94,10 @@ export class ConversationControl {
       if (this.#inTurn) return;
       this.#inTurn = true;
       this.#send({ type: 'turn', phase });
-      this.#heartbeat = setInterval(
-        () => this.#send({ type: 'heartbeat' }),
-        this.#options.heartbeatMs,
-      );
-      this.#heartbeat.unref();
       return;
     }
     if (!this.#inTurn) return;
     this.#inTurn = false;
-    clearInterval(this.#heartbeat);
-    this.#heartbeat = undefined;
     this.#send({ type: 'turn', phase });
   }
 
@@ -174,6 +169,11 @@ export class ConversationControl {
       return;
     }
     this.#bound = threadId;
+    this.#heartbeat = setInterval(
+      () => this.#send({ type: 'heartbeat' }),
+      this.#options.heartbeatMs,
+    );
+    this.#heartbeat.unref();
     this.#opening = true;
     try {
       await this.#options.handler.open(threadId);

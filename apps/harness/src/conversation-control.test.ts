@@ -223,23 +223,41 @@ describe('drain', () => {
 });
 
 describe('一輪', () => {
-  it('開始送 turn(begin)，一輪中每 heartbeatMs 一次心跳，結束送 turn(end) 後心跳停', async () => {
+  it('收到 bind 起每 heartbeatMs 一次心跳，open 還沒完成也送，跨過一輪照送，close 才停', async () => {
+    vi.useFakeTimers();
+    let finishOpen = (): void => undefined;
+    const h = harness(() => new Promise<void>((resolve) => (finishOpen = resolve)));
+    h.control.ready();
+    h.reports();
+    h.send({ type: 'bind', threadId: 't1' });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.reports()).toEqual([{ type: 'heartbeat' }]);
+    finishOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.reports()).toEqual([{ type: 'bound', threadId: 't1' }]);
+    h.control.turn('t1', 'begin');
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.control.turn('t1', 'end');
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.control.close();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(
+      h.reports().filter((report) => report.type !== 'idle' && report.type !== 'busy'),
+    ).toEqual([
+      { type: 'turn', phase: 'begin' },
+      { type: 'heartbeat' },
+      { type: 'turn', phase: 'end' },
+      { type: 'heartbeat' },
+    ]);
+  });
+
+  it('綁定之前不送心跳', async () => {
     vi.useFakeTimers();
     const h = harness();
     h.control.ready();
-    h.send({ type: 'bind', threadId: 't1' });
-    await vi.advanceTimersByTimeAsync(0);
     h.reports();
-    h.control.turn('t1', 'begin');
-    await vi.advanceTimersByTimeAsync(2_500);
-    h.control.turn('t1', 'end');
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(h.reports()).toEqual([
-      { type: 'turn', phase: 'begin' },
-      { type: 'heartbeat' },
-      { type: 'heartbeat' },
-      { type: 'turn', phase: 'end' },
-    ]);
+    expect(h.reports().filter((report) => report.type === 'heartbeat')).toEqual([]);
   });
 
   it('沒看到開始的結束、別條 thread 的邊緣：不送', async () => {
