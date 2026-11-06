@@ -152,7 +152,7 @@ function readTable(
 }
 
 /**
- * 管理者寫的身分對應表。實作 {@link EmbedIdentityResolver}（換票與兌換）與 `embed-session.ts` 的 `EmbedIdentityCheck`（驗嵌入 cookie）。
+ * 管理者寫的身分對應表。實作 {@link EmbedIdentityResolver}：換票、兌換與驗嵌入 cookie（`embed-session.ts`）都問它。
  *
  * 查表是同步的：表檔小，stat 之間有間隔，檔沒變就不讀。
  */
@@ -209,23 +209,6 @@ export class EmbedIdentityTable implements EmbedIdentityResolver {
     return userId === undefined
       ? { kind: 'rejected', reason: 'not_mapped' }
       : { kind: 'accepted', userId };
-  }
-
-  /**
-   * 這組對應現在還在不在表上。驗嵌入 cookie 時問它（`embed-session.ts`）：從表上拿掉的人，手上沒到期的 cookie 最多晚 {@link IDENTITY_TABLE_STAT_INTERVAL_MS} 就驗不過。
-   *
-   * @returns 表合規、而且 (embedder, subject) 現在對到的正是 `userId`。
-   */
-  has(identity: {
-    readonly embedder: string;
-    readonly subject: string;
-    readonly userId: string;
-  }): boolean {
-    const state = this.#current();
-    return (
-      state.kind === 'ready' &&
-      state.lookup.get(identity.embedder)?.get(identity.subject) === identity.userId
-    );
   }
 
   #current(): TableState {

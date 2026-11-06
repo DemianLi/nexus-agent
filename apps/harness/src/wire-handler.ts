@@ -164,7 +164,7 @@ import {
 } from '@nexus/core';
 import { childForkSeed } from './thread-fork.js';
 import { principalMayReach } from './wire-principal.js';
-import type { WirePrincipal } from './wire-principal.js';
+import type { EmbedPrincipal, WirePrincipal } from './wire-principal.js';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -220,6 +220,14 @@ import { EMBED_COMMAND_METHODS, EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './
 import type { ThreadProfile } from './embed-profile.js';
 import { mayOpenEmbedThread, ownerToRecord } from './embed-thread-owner.js';
 import type { EmbedThreadOwner } from './embed-thread-owner.js';
+import type {
+  AccessRecord,
+  EmbedAccessRoute,
+  EmbedAudit,
+  EmbedAuditIdentity,
+} from './embed-audit.js';
+import { IDENTITY_TABLE_STAT_INTERVAL_MS } from './embed-identities.js';
+import type { EmbedCookieRefusal, EmbedCookieVerdict } from './embed-session.js';
 import { hostToolsDeclarationProblem } from './host-tools.js';
 import type { HostToolsSlot } from './host-tools.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
@@ -231,7 +239,7 @@ import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
-import { sseResponse } from './sse-response.js';
+import { StreamCutError, sseResponse } from './sse-response.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import type { TurnClock } from './turn-clock.js';
@@ -714,6 +722,29 @@ export interface WireHandlerOptions {
    * （`http-route.ts` 串流收、沒有上限）：位元組串流進暫存檔、不聚合，吃的是磁碟不是記憶體。
    */
   readonly maxUploadBytes?: number;
+  /**
+   * 嵌入版下行的撤權與稽核（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239），選配。
+   *
+   * 嵌入身分（`principal.kind === 'embed'`）開的 thread 下行登記起來：一支共用的計時器每 {@link EmbedStreamGuard.intervalMs} 拿每條開線時的標頭
+   * 重驗一次，驗不過就切掉那一條，已經排著還沒送出的事件也不送。開線先在稽核記 `opened`、寫好才開；收掉記 `closed`、切掉記 `cut`。
+   * 嵌入身分碰到不是自己的 thread 被拒也記一筆 `access`。主機擁有者從嵌入路由開的不登記、不記。
+   *
+   * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve.ts` 有嵌入方時一定給。
+   */
+  readonly embedStreams?: EmbedStreamGuard;
+}
+
+/** {@link WireHandlerOptions.embedStreams}。 */
+export interface EmbedStreamGuard {
+  /** 重驗一條已開下行開線時帶的標頭：`embed-session.ts` 的 `EmbedSessionCookies.recheckOpenStream`。 */
+  recheck(headers: Headers): EmbedCookieVerdict;
+  /**
+   * 稽核的寫入端。serve 在組好 handler 之後才打開稽核檔，所以每次用時才問；回 `undefined`（還沒打開）時嵌入身分開不了下行（500），
+   * `access` 只講進 {@link WireHandlerOptions.warn}。
+   */
+  audit(): Pick<EmbedAudit, 'recordStream' | 'recordAccess'> | undefined;
+  /** 掃描間隔（毫秒）。省略同對應表的 stat 間隔。 */
+  readonly intervalMs?: number;
 }
 
 /** wire 只需要知道「這個請求是誰發的」。`BrowserAuth` 滿足它。 */
@@ -1213,6 +1244,39 @@ function optional(value: unknown, check: (candidate: unknown) => boolean): boole
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string';
+
+/**
+ * 嵌入版下行的外層（#2489）：每交出一顆之前先看 `cut`，切了就結束，連已經從 pump 拿到、還沒交出去的那一顆也不交。
+ * 結束（交完、切掉、被放掉）時叫一次 `onEnd`；產生器從沒被拉過就被放掉時不會叫，呼叫端另外接請求的中止。
+ */
+async function* untilCut<T>(
+  events: AsyncGenerator<T, void, undefined>,
+  cut: AbortSignal,
+  onEnd: () => void,
+): AsyncGenerator<T, void, undefined> {
+  try {
+    for await (const event of events) {
+      if (cut.aborted) return;
+      yield event;
+    }
+  } finally {
+    onEnd();
+  }
+}
+
+/** 嵌入版打得到的路由種類（`embed-profile.ts` 的 `EMBED_ROUTE_KINDS`）。 */
+function isEmbedAccessRoute(kind: string): kind is EmbedAccessRoute {
+  return EMBED_ROUTE_KINDS.has(kind);
+}
+
+function auditIdentity(principal: EmbedPrincipal): EmbedAuditIdentity {
+  return {
+    embedder: principal.embedder,
+    subject: principal.subject,
+    userId: principal.userId,
+    sessionIdSha256: principal.sessionIdSha256,
+  };
+}
 
 /** 嵌入身分碰到不是自己的嵌入版 thread（#2370）：訊息不講擁有者是誰。 */
 function notOwned(id: number | null, threadId: string): Response {
@@ -2267,6 +2331,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
    * @param principal - 嵌入連線（`profile` 是 `embed`）的身分：新的 thread 記它當擁有者（主機擁有者不記），建好之後再核它打不打得開。嵌入連線沒給就拒。
+   * @param route - 嵌入連線被拒時記進稽核的路由種類（{@link refuseEmbed}）。
    * @returns 這條 thread，或一個已經包好的錯誤回應。
    */
   async function threadOrError(
@@ -2275,6 +2340,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     fork?: ThreadForkSeed,
     profile: ThreadProfile = 'full',
     principal?: WirePrincipal,
+    route: EmbedAccessRoute = 'command',
   ): Promise<ThreadState | Response> {
     try {
       const owner =
@@ -2282,9 +2348,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       const thread = await threadFor(threadId, fork, profile, owner);
       // 建好之後再核一次：同一個新 id 被獨立頁面或別的嵌入身分先建起來的話，這條連線拿到的是那一條（`threadFor` 共用同一個 promise）。
       if (profile === 'embed') {
-        if (thread.profile !== 'embed') return notEmbedded(id, threadId);
+        if (thread.profile !== 'embed') {
+          return refuseEmbed('not_embedded', id, threadId, principal, route);
+        }
         if (principal === undefined || !mayOpenEmbedThread(principal, thread.owner)) {
-          return notOwned(id, threadId);
+          return refuseEmbed('thread_not_owned', id, threadId, principal, route);
         }
       }
       return thread;
@@ -2582,6 +2650,127 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     });
   }
 
+  /** 一條登記中的嵌入版下行（#2489）。 */
+  interface OpenEmbedStream {
+    /** 開線那個請求的標頭：mux 上是升級當下的那一份（`wire-mux.ts` 的 `logicalHeaders`）。 */
+    readonly headers: Headers;
+    /** 收尾：記 `closed` 或 `cut`、拿出登記。冪等，先到的算。 */
+    readonly end: (
+      how: { readonly by: 'client' | 'server' } | { readonly cut: EmbedCookieRefusal },
+    ) => void;
+    /** 切掉：之後產生器不再交出任何一顆，pump 那一側的訂閱跟著中止。 */
+    readonly cut: AbortController;
+  }
+
+  const embedStreams = new Set<OpenEmbedStream>();
+  let embedScan: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * 開一條嵌入身分的 thread 下行（#2489）：先記 `opened`、寫好才開（寫不進去回 500、不訂閱，#1827 D239 Q4），再登記給掃描。寫好時請求已中止或 handler 已收掉：記 `closed`、回 503，不開線。
+   * 切掉時 `untilCut` 每交出一顆之前先看切了沒：pump 只認 `signal`，中止之後還是會把佇列裡排著的吐完（`thread-pump.ts` 的 `#drain`）。
+   */
+  async function openEmbedStream(
+    guard: EmbedStreamGuard,
+    pump: ThreadPump,
+    threadId: string,
+    channels: readonly WireChannel[],
+    signal: AbortSignal,
+    headers: Headers,
+    principal: EmbedPrincipal,
+  ): Promise<Response> {
+    const audit = guard.audit();
+    const base = { ...auditIdentity(principal), threadId, streamId: randomUUID() };
+    try {
+      if (audit === undefined) throw new Error('稽核紀錄還沒打開');
+      await audit.recordStream({ outcome: 'opened', ...base });
+    } catch (error: unknown) {
+      options.warn?.(
+        `[嵌入下行] thread ${threadId} 的稽核紀錄寫不進去，這條下行不開：${String(error)}`,
+      );
+      return new Response('audit unavailable', {
+        status: 500,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    const cut = new AbortController();
+    let ended = false;
+    const onAbort = () => entry.end({ by: 'client' });
+    const entry: OpenEmbedStream = {
+      headers,
+      cut,
+      end: (how) => {
+        if (ended) return;
+        ended = true;
+        signal.removeEventListener('abort', onAbort);
+        embedStreams.delete(entry);
+        if (embedStreams.size === 0 && embedScan !== undefined) {
+          clearInterval(embedScan);
+          embedScan = undefined;
+        }
+        audit
+          .recordStream(
+            'cut' in how
+              ? { outcome: 'cut', ...base, reason: how.cut }
+              : { outcome: 'closed', ...base, by: how.by },
+          )
+          .catch((error: unknown) => {
+            options.warn?.(
+              `[嵌入下行] thread ${threadId} 收線的稽核紀錄寫不進去：${String(error)}`,
+            );
+          });
+      },
+    };
+    // 請求已中止：本體沒人讀，產生器不會開始、`#drain` 的 `finally` 不跑，訂閱了就留在 pump 上擋住閒置逐出。
+    // handler 已收掉：`close()` 逐條收尾那一輪已經跑過，之後登記的收不到，掃描計時器也不該再起。
+    if (signal.aborted || closed) {
+      entry.end({ by: signal.aborted ? 'client' : 'server' });
+      return new Response('stream not opened', {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    embedStreams.add(entry);
+    // 產生器從沒被拉過就被放掉時 `finally` 不跑（`sse-response.ts` 的 `cancel`）：請求一中止就收尾，不等它。
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (embedScan === undefined) {
+      embedScan = setInterval(() => {
+        scanEmbedStreams(guard);
+      }, guard.intervalMs ?? IDENTITY_TABLE_STAT_INTERVAL_MS);
+      embedScan.unref();
+    }
+    const events = pump.subscribe(channels, AbortSignal.any([signal, cut.signal]));
+    return sseResponse(
+      untilCut(touchOnEnd(events, threadId), cut.signal, () => {
+        entry.end({ by: signal.aborted ? 'client' : 'server' });
+      }),
+      encodeSseFrame,
+      {
+        where: `thread ${threadId}`,
+        describe: (event) => event.method,
+        ...(options.warn !== undefined && { warn: options.warn }),
+        cut: cut.signal,
+      },
+    );
+  }
+
+  /**
+   * 拿每條登記中的嵌入版下行開線時的標頭重驗一次（#2489）。同一輪裡同一個 Host 加同一串 cookie 只驗一次：mux 上同一條連線的每條串流是同一份標頭。
+   */
+  function scanEmbedStreams(guard: EmbedStreamGuard): void {
+    const verdicts = new Map<string, EmbedCookieVerdict>();
+    for (const entry of [...embedStreams]) {
+      const key = `${entry.headers.get('host') ?? ''}\n${entry.headers.get('cookie') ?? ''}`;
+      let verdict = verdicts.get(key);
+      if (verdict === undefined) {
+        verdict = guard.recheck(entry.headers);
+        verdicts.set(key, verdict);
+      }
+      if (verdict.ok) continue;
+      entry.end({ cut: verdict.reason });
+      entry.cut.abort(new StreamCutError(`嵌入版下行重驗沒過，已切掉（${verdict.reason}）`));
+    }
+  }
+
   /**
    * 下行放掉（頁籤關了、中止、串流結束）的那一刻把這條 thread 的最後活動時間推到現在（#1484）：閒置計時從放掉那一刻起算，
    * 不是從上一次掃描看到它還掛著的時候。`pump.subscribe` 在呼叫時就同步註冊了訂閱者，這裡只管放掉。
@@ -2612,6 +2801,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     signal: AbortSignal,
     profile: ThreadProfile,
     principal: WirePrincipal,
+    headers: Headers,
   ): Promise<Response> {
     const request = body as EventStreamRequest;
     if (typeof request !== 'object' || request === null) {
@@ -2631,8 +2821,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (channels === undefined) {
       return json(errorResponse(null, 'invalid_argument', 'channels 必須是非空的白名單子集'));
     }
-    const thread = await threadOrError(threadId, null, undefined, profile, principal);
+    const thread = await threadOrError(threadId, null, undefined, profile, principal, 'stream');
     if (thread instanceof Response) return thread;
+    if (profile === 'embed' && principal.kind === 'embed' && options.embedStreams !== undefined) {
+      return openEmbedStream(
+        options.embedStreams,
+        thread.pump,
+        threadId,
+        channels,
+        signal,
+        headers,
+        principal,
+      );
+    }
     return openStream(thread.pump, threadId, channels, signal);
   }
 
@@ -3788,7 +3989,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   ): Promise<Response> {
     const query = historyQueryOf(search);
     if (query instanceof Response) return query;
-    const thread = await threadOrError(threadId, null, undefined, profile, principal);
+    const thread = await threadOrError(threadId, null, undefined, profile, principal, 'history');
     if (thread instanceof Response) return thread;
     let result: ThreadHistoryResult;
     try {
@@ -4396,7 +4597,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       return new Response('body is not JSON', { status: 400 });
     }
     return route.kind === 'stream'
-      ? handleStream(route.threadId, body, request.signal, profile, principal)
+      ? handleStream(route.threadId, body, request.signal, profile, principal, request.headers)
       : handleCommand(route.threadId, route.method, body, request.signal, profile, principal);
   }
 
@@ -4412,7 +4613,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     principal: WirePrincipal,
   ): Promise<Response | undefined> {
     const route = parsePath(pathname);
-    if (route === undefined || !EMBED_ROUTE_KINDS.has(route.kind)) {
+    if (route === undefined || !isEmbedAccessRoute(route.kind)) {
       return new Response('not found', { status: 404 });
     }
     const loaded = threads.get(route.threadId);
@@ -4427,8 +4628,43 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
     }
     if (access === undefined) return undefined;
-    if (access.profile !== 'embed') return notEmbedded(null, route.threadId);
-    return mayOpenEmbedThread(principal, access.owner) ? undefined : notOwned(null, route.threadId);
+    if (access.profile !== 'embed') {
+      return refuseEmbed('not_embedded', null, route.threadId, principal, route.kind);
+    }
+    return mayOpenEmbedThread(principal, access.owner)
+      ? undefined
+      : refuseEmbed('thread_not_owned', null, route.threadId, principal, route.kind);
+  }
+
+  /**
+   * 嵌入連線碰到不是自己的、或不是嵌入版開的 thread（#2370、#2367）：回拒絕，嵌入身分的再記一筆 `access`（#2489，#1827 D239 Q3）。
+   * 主機擁有者從嵌入路由打的不記。稽核寫不進去不擋這個拒絕，講進 {@link WireHandlerOptions.warn}。
+   */
+  async function refuseEmbed(
+    reason: AccessRecord['reason'],
+    id: number | null,
+    threadId: string,
+    principal: WirePrincipal | undefined,
+    route: EmbedAccessRoute,
+  ): Promise<Response> {
+    if (principal?.kind === 'embed' && options.embedStreams !== undefined) {
+      try {
+        const audit = options.embedStreams.audit();
+        if (audit === undefined) throw new Error('稽核紀錄還沒打開');
+        await audit.recordAccess({
+          outcome: 'refused',
+          ...auditIdentity(principal),
+          threadId,
+          route,
+          reason,
+        });
+      } catch (error: unknown) {
+        options.warn?.(
+          `[嵌入下行] thread ${threadId} 拒絕 ${route} 的稽核紀錄寫不進去：${String(error)}`,
+        );
+      }
+    }
+    return reason === 'not_embedded' ? notEmbedded(id, threadId) : notOwned(id, threadId);
   }
 
   /** 這個請求的路徑指名哪一條 thread；不指名或解不開回 `undefined`。 */
@@ -4529,6 +4765,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 計時器先停、之後的掃描一律不動作；已經在撤的等它撤完——撤到一半就收線的話，那條的寫租約與子行程沒人收（#1484）。
       closed = true;
       if (sweeper !== undefined) clearInterval(sweeper);
+      if (embedScan !== undefined) clearInterval(embedScan);
+      embedScan = undefined;
+      for (const entry of [...embedStreams]) entry.end({ by: 'server' });
       await Promise.all([...closing.values()]);
       // 全域下行先收：它不屬於任何一條 thread，下面那幾條 pump 收掉也不會讓它結束。
       feed.close();

@@ -1,6 +1,6 @@
 /**
- * 下行的 SSE `Response`：把一條事件產生器接成 `text/event-stream`。從 [`wire-handler.ts`](./wire-handler.ts) 原樣搬出來（`pull` 以外的
- * 部分一字未改），為了能直接用一個會拋的 `encode` 測 `pull` 這一層（#1560 N1384）。
+ * 下行的 SSE `Response`：把一條事件產生器接成 `text/event-stream`。獨立成模組，是為了能直接用一個會拋的 `encode` 測 `pull`
+ * 這一層（#1560 N1384）。
  *
  * @module
  */
@@ -13,13 +13,31 @@ export interface SseResponseOptions<T> {
   readonly describe: (value: T) => string;
   /** 伺服器日誌（warn 級）。 */
   readonly warn?: (message: string) => void;
+  /**
+   * 中止時當場結束這條線（#2489 撤權切流）：`controller.error()` 丟掉已經拉進佇列、還沒送出的那幾顆，本體以錯誤結束；
+   * `events.return()` 讓已經開始跑的產生器跑 `finally`。出口怎麼轉給對方：HTTP（`wire-server.ts`）照正常結束收掉回應，多工連線送 `error`。
+   * 本體一律以 {@link StreamCutError} 結束（reason 不是的就包一層）：多工連線靠它分辨「伺服器切掉」與真的失敗。
+   */
+  readonly cut?: AbortSignal;
+}
+
+/** 伺服器刻意切掉一條下行時，`cut` 中止用的 reason。 */
+export class StreamCutError extends Error {
+  override readonly name = 'StreamCutError';
+}
+
+function asCutError(reason: unknown): StreamCutError {
+  if (reason instanceof StreamCutError) return reason;
+  return new StreamCutError(reason instanceof Error ? reason.message : String(reason), {
+    cause: reason,
+  });
 }
 
 /**
  * 開一條 SSE 回應。
  *
- * **`pull` 裡 `encode` 拋錯**（#1560 N1384）：以前 `pull` reject，ReadableStream 進入 errored，而 `cancel()` 不會被叫（它只在讀者主動取消時跑），
- * 產生器停在 `yield`、`finally` 永遠不跑——那是 `#subscribers.delete` 唯一的地方。現在接住：記一行 warn（路徑、標籤，不寫內容）、
+ * **`pull` 裡 `encode` 拋錯**（#1560 N1384）：`pull` reject 的話 ReadableStream 進入 errored，而 `cancel()` 不會被叫（它只在讀者主動取消時跑），
+ * 產生器停在 `yield`、`finally` 永遠不跑——那是 `#subscribers.delete` 唯一的地方。所以接住：記一行 warn（路徑、標籤，不寫內容）、
  * `events.return()` 讓產生器的 `finally` 跑、`controller.error(error)` 結束這條線（沒有終止 frame，偏離 C 見 `bounded-event-queue.ts`）。
  *
  * 實務上 `ThreadPump`／`ThreadFeed` 廣播與補送時已經 `JSON.stringify` 過同一顆（`boundFrame`），所以這一層是防禦：`encode` 會拋、
@@ -31,8 +49,21 @@ export function sseResponse<T>(
   options: SseResponseOptions<T>,
 ): Response {
   const encoder = new TextEncoder();
+  const cut = options.cut;
+  let onCut: (() => void) | undefined;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
+      if (cut !== undefined) {
+        onCut = () => {
+          void events.return(undefined);
+          controller.error(asCutError(cut.reason));
+        };
+        if (cut.aborted) {
+          onCut();
+          return;
+        }
+        cut.addEventListener('abort', onCut, { once: true });
+      }
       // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
       // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
       // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
@@ -44,7 +75,9 @@ export function sseResponse<T>(
     },
     async pull(controller) {
       const next = await events.next();
+      if (cut?.aborted === true) return;
       if (next.done === true) {
+        if (onCut !== undefined) cut?.removeEventListener('abort', onCut);
         controller.close();
         return;
       }
@@ -63,6 +96,7 @@ export function sseResponse<T>(
       controller.enqueue(encoder.encode(text));
     },
     cancel() {
+      if (onCut !== undefined) cut?.removeEventListener('abort', onCut);
       void events.return(undefined);
     },
   });
