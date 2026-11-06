@@ -1,6 +1,6 @@
 /**
- * 出貨組裝上模型那一串只記錄的七格（#2416）：中止閘門與檢查點的模型那一半、起訖、空回覆、用量、請求快照、綁中止訊號。
- * 這七顆都由 core 造，各登記了一步（`@nexus/core` 的 `withModelCallStep`），native 的 root 在原位直接呼叫；次數與路徑由 core 的
+ * 出貨組裝上模型那一串登記成環繞步的格（#2416）：只記錄的七格（中止閘門與檢查點的模型那一半、起訖、空回覆、用量、請求快照、
+ * 綁中止訊號），與會改請求或回覆、這裡會掛的四格（{@link MUTATOR_CELLS}）。只記錄的七顆都由 core 造，各登記了一步（`@nexus/core` 的 `withModelCallStep`），native 的 root 在原位直接呼叫；次數與路徑由 core 的
  * `native-loop/recorder-cells.test.ts` 數。這裡守宿主那一側：
  *
  * - 宿主組出來的 native agent 上，七顆都還帶著登記（沒被宿主換成沒登記的同名顆）；會改請求或回覆的格（修工具參數、輸出上限、
@@ -35,8 +35,10 @@ const CELLS = [
 ];
 
 /**
- * 會改請求或回覆、這裡的組裝（`live: false`）上 root 會掛的格。換模型與圖片省略要有型錄才掛，影子比對與從日誌推要給
- * `--history-source`，這幾格的次數與路徑由 core 的 `native-loop/mutator-cells.test.ts` 數。
+ * 會改請求或回覆、這裡的組裝（`live: false`）上 root 會掛的格。換模型與圖片省略只在 `live` 時掛，影子比對與從日誌推要歷史來源是
+ * `shadow` 或 `log`（`--history-source` 或 `#settings/history-source` 那一列，出廠是 `state`）；這四格與這裡前三格的次數與路徑由
+ * core 的 `native-loop/mutator-cells.test.ts` 數。計劃模式在 plugin 套件，core 數不到，只有 `nexus-plugin-plan-mode` 的
+ * `index.test.ts` 比對兩支交出的請求。
  */
 const MUTATOR_CELLS = [
   'nexusInvalidToolArgs',
@@ -111,7 +113,7 @@ async function run(loop: 'native' | 'langgraph') {
   }
 }
 
-describe('出貨組裝上只記錄的七格', () => {
+describe('出貨組裝上登記成環繞步的格', () => {
   it('native agent 上七顆都帶著登記的一步', async () => {
     const { middleware } = await run('native');
     const registered = Object.fromEntries(
