@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sessionIdDigest } from './embed-audit.js';
-import type { EmbedAudit, ExchangeRecord } from './embed-audit.js';
+import { memoryAudit } from './embed-audit.fixture.js';
 import {
   createEmbedLogin,
   EMBED_EXCHANGE_PATH,
@@ -18,35 +18,6 @@ import type { EmbedIdentityResolver } from './embed-login.js';
 
 const CRM = 'c'.repeat(43);
 const ERP = 'e'.repeat(43);
-
-/** 記在記憶體的稽核；`failNext` 讓下一筆寫失敗。 */
-function memoryAudit() {
-  const records: ExchangeRecord[] = [];
-  let unauthenticated = 0;
-  let failNext = false;
-  const audit: EmbedAudit = {
-    recordExchange(record) {
-      if (failNext) {
-        failNext = false;
-        return Promise.reject(new Error('disk full'));
-      }
-      records.push(record);
-      return Promise.resolve();
-    },
-    recordUnauthenticated() {
-      unauthenticated += 1;
-    },
-    close: () => Promise.resolve(),
-  };
-  return {
-    audit,
-    records,
-    unauthenticatedCount: () => unauthenticated,
-    failNextWrite: () => {
-      failNext = true;
-    },
-  };
-}
 
 /** 對應表：`alice` 對到 `u-alice`，其他拒。 */
 const aliceOnly: EmbedIdentityResolver = {
@@ -194,7 +165,10 @@ describe('換票', () => {
     ]);
     expect(JSON.stringify(records)).not.toContain('s-1"');
     expect(JSON.stringify(records)).not.toContain(body.ticket);
-    expect(tickets.redeem(body.ticket)).toMatchObject({ userId: 'u-alice', embedder: 'crm' });
+    expect(tickets.redeem(body.ticket)).toMatchObject({
+      kind: 'redeemed',
+      grant: { userId: 'u-alice', embedder: 'crm' },
+    });
   });
 
   it('續期：同一個 session id 再換一次，拿到另一張票，兩張都記', async () => {
@@ -253,9 +227,9 @@ describe('EmbedTicketStore', () => {
   it('只能兌換一次', () => {
     const store = new EmbedTicketStore(60_000);
     const issued = store.issue(grant)!;
-    expect(store.redeem(issued.ticket)).toMatchObject(grant);
-    expect(store.redeem(issued.ticket)).toBeUndefined();
-    expect(store.redeem('not-a-ticket')).toBeUndefined();
+    expect(store.redeem(issued.ticket)).toMatchObject({ kind: 'redeemed', grant });
+    expect(store.redeem(issued.ticket)).toEqual({ kind: 'unknown' });
+    expect(store.redeem('not-a-ticket')).toEqual({ kind: 'unknown' });
   });
 
   it('兩個請求同時兌換同一張票，只有一個拿到', async () => {
@@ -264,17 +238,37 @@ describe('EmbedTicketStore', () => {
     const results = await Promise.all(
       Array.from({ length: 8 }, () => Promise.resolve().then(() => store.redeem(issued.ticket))),
     );
-    expect(results.filter((result) => result !== undefined)).toHaveLength(1);
+    expect(results.filter((result) => result.kind === 'redeemed')).toHaveLength(1);
   });
 
-  it('過期的票兌換不到，而且會從記憶體清掉', () => {
+  it('過期的票兌換不到、分得出是過期，而且會從記憶體清掉', () => {
     let now = 1_000;
     const store = new EmbedTicketStore(60_000, 1024, () => now);
     const stale = store.issue(grant)!;
     store.issue(grant);
     now += 60_000;
-    expect(store.redeem(stale.ticket)).toBeUndefined();
+    expect(store.redeem(stale.ticket)).toMatchObject({ kind: 'expired', grant });
     expect(store.size).toBe(0);
+  });
+
+  it('系統時間往回調：到期照單調時鐘判，過期的票照樣清掉', () => {
+    let monotonic = 0;
+    let wall = Date.UTC(2026, 10, 6);
+    const store = new EmbedTicketStore(
+      1_000,
+      1024,
+      () => monotonic,
+      () => wall,
+    );
+    const first = store.issue(grant)!;
+    expect(first.expiresAt).toBe(wall + 1_000);
+    monotonic += 500;
+    wall -= 3_600_000;
+    store.issue(grant);
+    monotonic += 2_000;
+    store.issue(grant);
+    expect(store.size).toBe(1);
+    expect(store.redeem(first.ticket)).toEqual({ kind: 'unknown' });
   });
 
   it('發新票時先清過期的：不兌換的票不會無限累積', () => {

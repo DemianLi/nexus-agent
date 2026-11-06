@@ -201,6 +201,8 @@ import {
   rejectAllIdentities,
 } from './embed-login.js';
 import type { EmbedderCredential, EmbedIdentityResolver, EmbedLogin } from './embed-login.js';
+import { createEmbedSession, EMBED_SESSION_PATH, EmbedSessionCookies } from './embed-session.js';
+import type { EmbedSession } from './embed-session.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
 import { StorageProbe } from './storage-probe.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
@@ -627,6 +629,16 @@ function resolveWebDist(): string {
 }
 
 /**
+ * 前台的 {@link WireAuth}（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：獨立頁面的會話 cookie 是擁有者，先驗；
+ * 沒有才驗嵌入 cookie。兩顆都帶時以擁有者為準。
+ */
+function frontAuth(browser: BrowserAuth, embed: EmbedSessionCookies | undefined): WireAuth {
+  return {
+    authenticate: (headers) => browser.authenticate(headers) ?? embed?.authenticate(headers),
+  };
+}
+
+/**
  * 按路徑把請求分給三個面（[#424](https://github.com/DemianLi/nexus-agent/issues/424)、[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)）。
  *
  * `/livez`、`/readyz`、`/metrics` 給探針與指標（先過信任圍欄，見 `ops-endpoints.ts`）——**排在 `/threads` 的判斷之前**；
@@ -638,15 +650,16 @@ function routeBySurface(
   wire: WireHandler,
   web: (request: Request) => Promise<Response>,
   ops: OpsEndpoints,
-  embedLogin?: EmbedLogin,
+  embed?: { readonly login: EmbedLogin; readonly session: EmbedSession },
 ): WireHandler {
   return {
     handle: (request) => {
       const { pathname } = new URL(request.url);
       if (isOpsPath(pathname)) return ops.handle(request);
-      if (embedLogin !== undefined && pathname === EMBED_EXCHANGE_PATH) {
-        return embedLogin.handle(request);
-      }
+      if (embed !== undefined && pathname === EMBED_EXCHANGE_PATH)
+        return embed.login.handle(request);
+      if (embed !== undefined && pathname === EMBED_SESSION_PATH)
+        return embed.session.handle(request);
       return isThreadsPath(pathname) || isThreadsPath(withoutEmbedPrefix(pathname) ?? '')
         ? wire.handle(request)
         : web(request);
@@ -1210,17 +1223,27 @@ async function startServer(
   // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
   const telemetrySharing = trial.telemetrySharing;
   // 對話行程不建（#2338）：登入只在前台，它用入口驗過目錄的那一支；也就不讀瀏覽器會話密鑰。
+  // 嵌入 cookie（#2370）只在有嵌入方時驗，只認設定裡還在的嵌入方：拿掉嵌入方重啟之後，它還沒到期的嵌入 cookie 也一起失效。
+  let embedCookies: EmbedSessionCookies | undefined;
   const listening: ServeListening =
     options.conversation === undefined
-      ? {
-          kind: 'front',
-          auth: new BrowserAuth(
-            await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
-            browserSession.maxAgeDays,
-          ),
-        }
+      ? await (async () => {
+          const secret = await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env));
+          if (embedLoginConfig.embedders.length > 0) {
+            embedCookies = new EmbedSessionCookies(
+              secret,
+              embedLoginConfig.cookieMaxAgeSeconds,
+              embedLoginConfig.embedders.map((embedder) => embedder.id),
+            );
+          }
+          return {
+            kind: 'front' as const,
+            auth: new BrowserAuth(secret, browserSession.maxAgeDays),
+          };
+        })()
       : { kind: 'conversation', mode: options.conversation };
-  const auth: WireAuth = listening.kind === 'front' ? listening.auth : listening.mode.auth;
+  const auth: WireAuth =
+    listening.kind === 'front' ? frontAuth(listening.auth, embedCookies) : listening.mode.auth;
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在開始聽之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
@@ -1254,7 +1277,7 @@ async function startServer(
     });
   }
   let embedAudit: EmbedAudit | undefined;
-  let embedLogin: EmbedLogin | undefined;
+  let embedRoutes: { readonly login: EmbedLogin; readonly session: EmbedSession } | undefined;
   const webDist = options.webDist ?? resolveWebDist();
   // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
   // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
@@ -1980,18 +2003,30 @@ async function startServer(
   let server: WireServer;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
-    if (embedders.length > 0) {
+    if (embedders.length > 0 && embedCookies !== undefined) {
       embedAudit = await openEmbedAudit(join(resolveHarnessHome(env), EMBED_AUDIT_FILE), {
         onError: (error) => warn(`[嵌入換票] 稽核紀錄寫不進去：${String(error)}`),
       });
-      embedLogin = createEmbedLogin({
-        embedders,
-        identity: options.embedIdentity ?? rejectAllIdentities,
-        tickets: new EmbedTicketStore(embedLoginConfig.ticketTtlSeconds * 1000),
-        audit: embedAudit,
-        trustedHosts: invocation.trustedHosts,
-        warn,
-      });
+      const identity = options.embedIdentity ?? rejectAllIdentities;
+      const tickets = new EmbedTicketStore(embedLoginConfig.ticketTtlSeconds * 1000);
+      embedRoutes = {
+        login: createEmbedLogin({
+          embedders,
+          identity,
+          tickets,
+          audit: embedAudit,
+          trustedHosts: invocation.trustedHosts,
+          warn,
+        }),
+        session: createEmbedSession({
+          tickets,
+          cookies: embedCookies,
+          identity,
+          audit: embedAudit,
+          trustedHosts: invocation.trustedHosts,
+          warn,
+        }),
+      };
     }
     if (proxySocket !== undefined) await clearStaleSocket(proxySocket);
     const started = await startWireServer({
@@ -2001,7 +2036,7 @@ async function startServer(
               handler,
               createWebStaticHandler({ distRoot: webDist, auth: listening.auth }),
               opsEndpoints,
-              embedLogin,
+              embedRoutes,
             ),
             mux: handler,
             ...(proxySocket === undefined
@@ -2119,7 +2154,11 @@ async function startServer(
         ? '嵌入換票：關（embed-login 沒有嵌入方）'
         : `嵌入換票：開 POST ${EMBED_EXCHANGE_PATH}（嵌入方 ${embedCredentialFiles
             .map(({ id, file }) => `${id}，憑證在 ${file}`)
-            .join('；')}；稽核記在 ${join(resolveHarnessHome(env), EMBED_AUDIT_FILE)}）；身分對應${
+            .join(
+              '；',
+            )}；稽核記在 ${join(resolveHarnessHome(env), EMBED_AUDIT_FILE)}）；兌換 POST ${EMBED_SESSION_PATH}，嵌入 cookie ${String(
+            embedLoginConfig.cookieMaxAgeSeconds,
+          )} 秒；身分對應${
             options.embedIdentity === undefined ? '尚未接上，一律拒絕' : '由呼叫端提供'
           }`,
     );

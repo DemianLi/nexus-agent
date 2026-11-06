@@ -7,6 +7,7 @@
  * - **`embedders`**：能換票的嵌入方。一個嵌入方一把服務憑證，放在 `credentialFile`（預設 `<home>/embed-credential-<id>`，`0600`，沒有就建）。
  *   出廠是空的：沒有嵌入方就沒有換票的路由。
  * - **`ticketTtlSeconds`**：換到的登入票多久沒兌換就作廢。票只能用一次。
+ * - **`cookieMaxAgeSeconds`**：拿票換到的嵌入 cookie 的絕對有效期（`../embed-session.ts`）。到期之前要再換一張票、再兌換一次。
  *
  * @module
  */
@@ -53,6 +54,8 @@ export const embedLoginConfigSchema = z.strictObject({
     ),
   /** 登入票的有效期（秒）。 */
   ticketTtlSeconds: z.number().int().min(10).max(300).default(60),
+  /** 嵌入 cookie 的絕對有效期（秒）。 */
+  cookieMaxAgeSeconds: z.number().int().min(60).max(86_400).default(900),
 });
 
 /** 驗過的設定。 */

@@ -49,8 +49,8 @@ const ROUTE_NOT_ALLOWED = 'route not allowed';
 
 /** 上層要給的 handler：`wire-handler.ts` 的實作。 */
 export type WireMuxHandler = Pick<WireHandler, 'handle'> & {
-  /** 升級前的圍欄與身分：過了回 `undefined`，沒過回要回的 `Response`。 */
-  admit(headers: Headers): Response | undefined;
+  /** 升級前的圍欄與身分（`pathname` 是升級請求的路徑）：過了回 `undefined`，沒過回要回的 `Response`。 */
+  admit(headers: Headers, pathname: string): Response | undefined;
 };
 
 export interface WireMuxOptions {
@@ -355,7 +355,7 @@ export class WireMux {
       reject(403);
       return;
     }
-    const rejection = this.options.handler.admit(headers);
+    const rejection = this.options.handler.admit(headers, path);
     if (rejection !== undefined) {
       reject(rejection.status);
       return;

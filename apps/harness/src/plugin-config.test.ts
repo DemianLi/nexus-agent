@@ -258,7 +258,11 @@ describe('出貨的 cordis.yml', () => {
     });
     // **嵌入換票**（#2370，出廠沒有嵌入方）：出貨那一行與 schema 預設相等。
     expect(byId.get('embed-login')).toEqual(embedLoginConfigSchema.parse({}));
-    expect(embedLoginConfigSchema.parse({})).toEqual({ embedders: [], ticketTtlSeconds: 60 });
+    expect(embedLoginConfigSchema.parse({})).toEqual({
+      embedders: [],
+      ticketTtlSeconds: 60,
+      cookieMaxAgeSeconds: 900,
+    });
     expect(
       opsEndpointsConfigSchema.safeParse({ metrics: { enabled: true, port: 1 } }).success,
     ).toBe(false);
