@@ -298,10 +298,10 @@ static DROPPED: AtomicU64 = AtomicU64::new(0);
 
 /// 寫到監督行程自己的 fd 2。fd 2 是阻塞的而讀者不讀時，整個監督行程停在這裡。寫不出去（fd 2 非阻塞而滿了、或壞了）就丟掉剩下的、
 /// 記下丟了多少，等下一次寫得出去時先講一句。
-fn write_stderr(bytes: &[u8]) {
+pub(super) fn write_stderr(bytes: &[u8]) {
     let dropped = DROPPED.load(Ordering::Relaxed);
     if dropped > 0 {
-        let note = format!("[nexus-supervisor] 對話行程的 stderr 寫不出去，丟掉了 {dropped} 位元組\n");
+        let note = format!("[nexus-supervisor] stderr 寫不出去，丟掉了 {dropped} 位元組\n");
         if write_all(2, note.as_bytes()).is_ok() {
             DROPPED.fetch_sub(dropped, Ordering::Relaxed);
         }

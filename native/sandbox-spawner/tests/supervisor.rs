@@ -73,11 +73,15 @@ struct Options {
     extra: Vec<&'static str>,
     /// 監督行程的 stderr 丟掉，不寫進 `supervisor.err`。
     discard_stderr: bool,
+    /// 監督行程的 stderr 接一條讀端已經關掉的管線：每次寫都是 EPIPE。
+    broken_stderr: bool,
+    /// 監督行程的 stderr 接一條管線，讀端留在 `Harness::stderr`，測試不讀它就會滿。
+    piped_stderr: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false }
     }
 }
 
@@ -87,6 +91,7 @@ struct Harness {
     front: Option<UnixStream>,
     inbox: Vec<u8>,
     dir: PathBuf,
+    stderr: Option<std::fs::File>,
 }
 
 impl Harness {
@@ -105,13 +110,29 @@ impl Harness {
         cmd.args(["--eof-grace-ms", &options.eof_grace_ms.to_string()]);
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
         cmd.args(&options.extra);
-        let stderr = if options.discard_stderr {
+        let mut stderr_read = None;
+        let stderr = if options.piped_stderr {
+            let mut fds = [0; 2];
+            // SAFETY：拿一對新的 pipe。
+            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+            // SAFETY：兩端都是剛拿到的，各交給一個擁有者。
+            stderr_read = Some(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) });
+            Stdio::from(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) })
+        } else if options.broken_stderr {
+            let mut fds = [0; 2];
+            // SAFETY：拿一對新的 pipe，讀端當場關掉。
+            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+            // SAFETY：fds 是剛拿到的。
+            unsafe { libc::close(fds[0]) };
+            // SAFETY：寫端交給 Stdio 擁有。
+            Stdio::from(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) })
+        } else if options.discard_stderr {
             Stdio::null()
         } else {
             Stdio::from(std::fs::File::create(dir.join("supervisor.err")).unwrap())
         };
         let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn().unwrap();
-        let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir };
+        let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir, stderr: stderr_read };
         harness.accept_front();
         harness
     }
@@ -590,4 +611,113 @@ fn flooding_stderr_does_not_starve_the_others() {
         ]
     );
     assert!(h.wait_exit().success());
+}
+
+#[test]
+fn stderr_that_cannot_be_written_does_not_take_the_supervisor_down() {
+    let mut h = Harness::start(Options { broken_stderr: true, ..Options::default() });
+    // 綁錯 thread：監督行程自己印一行再殺掉它，那一行寫到 EPIPE。
+    assert_eq!(h.down("a,wrong-bound"), DeathCause::Crash);
+    h.up("b");
+    assert!(h.child.try_wait().unwrap().is_none(), "監督行程不該結束");
+}
+
+fn audit_number(line: &str, key: &str) -> u64 {
+    line.split(&format!("\"{key}\":")).nth(1).unwrap().split([',', '}']).next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn reports_stopping_after_bind_is_stalled() {
+    // RSS 輪詢放到一分鐘：只有 stall 的期限會叫醒 poll。兩段寬限各 5 s：走拆除梯度的話 down 要 10 s 後才到。
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "300", "--rss-poll-ms", "60000", "--eof-grace-ms", "5000", "--term-grace-ms", "5000"],
+        ..Options::default()
+    });
+    h.up("x,ignore-term,hang");
+    let silent_since = Instant::now();
+    assert_eq!(h.down_of("x,ignore-term,hang"), DeathCause::Stalled);
+    assert!(silent_since.elapsed() < Duration::from_millis(2_000), "{:?}", silent_since.elapsed());
+    let line = h.audit_line("\"thread\":\"x,ignore-term,hang\"");
+    assert!(line.contains("\"cause\":\"stalled\""), "{line}");
+    assert!(audit_number(&line, "max_silence_ms") < 300, "{line}");
+}
+
+#[test]
+fn a_silence_shorter_than_the_limit_is_not_stalled() {
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "1500"], ..Options::default() });
+    let socket = h.up("q,silent:600");
+    // 沉默過去之後還是同一個行程。
+    assert!(wait_until(|| log(&socket).len() >= 2));
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert_eq!(h.up("q,silent:600"), socket);
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("q,silent:600"), DeathCause::Shutdown);
+    let silence = audit_number(&h.audit_line("\"thread\":\"q,silent:600\""), "max_silence_ms");
+    assert!((600..1500).contains(&silence), "{silence}");
+}
+
+#[test]
+fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "300"], piped_stderr: true, ..Options::default() });
+    let socket = h.up("a");
+    // j 往 stderr 倒 1000 KiB，監督行程轉送時把測試沒在讀的那條管線寫滿，卡在寫上遠超過 300 ms。
+    h.ensure("j,stderr-junk:1000");
+    std::thread::sleep(Duration::from_millis(1_500));
+    let mut stderr = h.stderr.take().unwrap();
+    std::thread::spawn(move || std::io::copy(&mut stderr, &mut std::io::sink()));
+    // a 的回報這段時間都在管線裡：醒來之後不能被判 stalled。
+    h.ensure("a");
+    loop {
+        match h.event() {
+            FrontEvent::Up { thread_id, socket: up } if thread_id == b"a" => {
+                assert_eq!(PathBuf::from(String::from_utf8(up).unwrap()), socket);
+                break;
+            }
+            FrontEvent::Up { .. } => {}
+            other => panic!("要 a 的 up，拿到 {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
+    // RSS 輪詢放到一分鐘：計時器只剩 stall 的期限與它的四分之一。
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "1000", "--rss-poll-ms", "60000"], ..Options::default() });
+    let socket = h.up("a");
+    let a = logged_pid(&socket, "pid");
+    kill(h.pid(), libc::SIGSTOP);
+    // SAFETY：只送訊號，對 a 的群組。
+    unsafe { libc::kill(-a, libc::SIGSTOP) };
+    // 只比 N 多一點：監督行程不是最晚 N 的四分之一就醒一次的話，醒來時比預定晚不到 N 的一半，認不出自己被停住過。
+    std::thread::sleep(Duration::from_millis(1_300));
+    // 監督行程先醒，a 晚 200 ms：監督行程醒來那一刻還沒有 a 的心跳。
+    kill(h.pid(), libc::SIGCONT);
+    std::thread::sleep(Duration::from_millis(200));
+    // SAFETY：同上。
+    unsafe { libc::kill(-a, libc::SIGCONT) };
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(h.up("a"), socket);
+    assert!(supervisor_stderr(&h).contains("判定自己被停住過"), "{}", supervisor_stderr(&h));
+}
+
+#[test]
+fn stalled_counts_from_ready_not_from_spawn() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "800".into()],
+        extra: vec!["--stall-ms", "300"],
+        ..Options::default()
+    });
+    let socket = h.up("r");
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(h.up("r"), socket);
+}
+
+#[test]
+fn silence_during_the_teardown_ladder_is_not_cut_short_as_stalled() {
+    let mut h = Harness::start(Options { eof_grace_ms: 1_000, term_grace_ms: 1_000, extra: vec!["--stall-ms", "300"], ..Options::default() });
+    // 收到 EOF 之後心跳就停，要等到 SIGTERM 那一步才結束。
+    let socket = h.up("e,ignore-eof");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("e,ignore-eof"), DeathCause::Shutdown);
+    assert!(log(&socket).iter().any(|line| line == "sigterm"), "{:?}", log(&socket));
 }
