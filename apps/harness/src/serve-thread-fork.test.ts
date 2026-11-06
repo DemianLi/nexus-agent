@@ -9,7 +9,8 @@
  * - **3 各走各的**、**5 重啟**：分叉一回傳檔就在（不等關機排空）；重啟之後兩條都列得出來、子 thread 帶 `parentThreadId`、各說一句互不影響。
  * - **4 讀活的**：落盤窗口拉長，來源的尾巴還在記憶體時照樣分得出去。
  * - **6 錯誤**：沒開落盤 `not_supported`；名額滿 `thread_at_capacity`，磁碟上沒有多出檔。
- * - **8 不會自己跑**：前綴裡有執行中的 goal、切點上還排著一句，分叉之後兩秒內子 thread 沒有新的 `turn/start`，佇列是空的。
+ * - **8 不會自己跑**：前綴裡有執行中的 goal、切點上還排著一句。分叉之後子 thread 的續行授權是 `disarmed`、佇列是空的，
+ *   再一次往返之後收掉 serve，子 thread 落盤的日誌跟分叉回傳時一樣，沒有多出任何一顆事件。
  *
  * **零憑證、零外部連線**：模型是腳本，工作區與日誌根是暫存目錄。
  */
@@ -20,7 +21,7 @@ import { join } from 'node:path';
 
 import { EMPTY_INBOX, foldInbox, inheritedEventCount, loggedMessageId } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { emptyConversation, reduceAll, THREAD_AT_CAPACITY } from '@nexus/wire';
+import { emptyConversation, reduceAll, reduceConversation, THREAD_AT_CAPACITY } from '@nexus/wire';
 import type { ConversationEntry, WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -107,21 +108,51 @@ async function eventsOnDisk(root: string, threadId: string): Promise<SessionEven
   return (await sessionEvents(await sessionOf(root, threadId))).events;
 }
 
-/** 輪詢落盤的那一份，直到 `pick` 挑得到東西（逾時就拋，講等的是什麼）。 */
+/**
+ * {@link until} 等多久就放棄：比 vitest 預設的 5 秒短，在測試開頭起跑的等待卡住時報得出等的是哪一步；起跑得晚就可能先撞上
+ * vitest 的逾時，那時看 {@link stepTimer} 印的各步耗時。
+ */
+const UNTIL_DEADLINE_MS = 4_000;
+
+/** 輪詢落盤的那一份，直到 `pick` 挑得到東西；逾時就拋，講等的是什麼、等了多久。 */
 async function until<T>(
   root: string,
   threadId: string,
+  what: string,
   pick: (events: readonly SessionEvent[]) => T | undefined | Promise<T | undefined>,
 ): Promise<T> {
-  const deadline = Date.now() + 10_000;
+  const started = Date.now();
   for (;;) {
     const session = await findSession(root, threadId);
     const found =
       session === undefined ? undefined : await pick((await sessionEvents(session)).events);
     if (found !== undefined) return found;
-    if (Date.now() > deadline) throw new Error(`等不到 ${threadId} 的日誌出現要的事件`);
+    if (Date.now() - started > UNTIL_DEADLINE_MS) {
+      throw new Error(
+        `等不到 ${threadId} 的日誌出現「${what}」（等了 ${String(Date.now() - started)} ms）`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/**
+ * 記這一支走到哪一步，失敗（含逾時）時把每一步的耗時印到 stderr（#2458）：逾時的錯誤只說超過幾毫秒，看不出停在哪一步。
+ *
+ * @returns 進入下一步時呼叫，帶這一步的名字。
+ */
+function stepTimer(onTestFailed: (handler: () => void) => void): (step: string) => void {
+  const started = performance.now();
+  const steps: { readonly step: string; readonly at: number }[] = [];
+  onTestFailed(() => {
+    const now = performance.now();
+    const lines = steps.map(({ step, at }, index) => {
+      const end = steps[index + 1]?.at ?? now;
+      return `  ${step}：${String(Math.round(at - started))} ms 開始，花了 ${String(Math.round(end - at))} ms`;
+    });
+    console.error(`各步耗時（最後一步就是停住的地方）：\n${lines.join('\n')}`);
+  });
+  return (step) => steps.push({ step, at: performance.now() });
 }
 
 function seqOfTurnEnd(events: readonly SessionEvent[], nth: number): number {
@@ -307,7 +338,7 @@ describe('serve 上的 thread.fork', () => {
     const serve = await start(turns, { argv: ['--session-log', root] });
     const client = await serveClient(serve.running);
     await say(client, 'src', '請派一個子代理');
-    const subagent = await until(root, 'src', async () => {
+    const subagent = await until(root, 'src', '背景子代理跑完第一輪', async () => {
       const found = (await sessionsUnder(root)).find((session) => session.id.startsWith('src/bg-'));
       if (found === undefined) return undefined;
       const { events } = await sessionEvents(found);
@@ -335,7 +366,11 @@ describe('serve 上的 thread.fork', () => {
     });
   });
 
-  it('不會自己跑：前綴有執行中的 goal、切點上還排著一句，分叉之後子 thread 不開新的一輪、佇列是空的（驗收 8）', async () => {
+  it('不會自己跑：前綴有執行中的 goal、切點上還排著一句，分叉之後子 thread 不開新的一輪、佇列是空的（驗收 8）', async ({
+    onTestFailed,
+  }) => {
+    const step = stepTimer(onTestFailed);
+    step('起 serve');
     const root = await tempDir('nexus-fork-idle-');
     // 來源：建目標，續行排程器開的第一輪慢慢吐字；那一輪跑著的時候送一句，排進佇列。之後佇列那句與續行的輪次各吃一份腳本，給足。
     const turns: ScriptedTurn[] = [
@@ -344,32 +379,41 @@ describe('serve 上的 thread.fork', () => {
     ];
     const serve = await start(turns, { argv: ['--session-log', root] });
     const client = await serveClient(serve.running);
+    step('開來源的下行');
     const events = await client.openEvents('src');
+    step('建目標');
     expect(await client.slashRun('src', '/goal 把藍鯨計畫做完')).toMatchObject({
       kind: 'success',
     });
-    const goalTurn = await until(root, 'src', (list) =>
+    step('等目標那一輪開始落盤');
+    const goalTurn = await until(root, 'src', '目標那一輪的 turn/start', (list) =>
       list.find(
         (event) =>
           event.type === 'turn/start' && (event.data as { kind?: unknown }).kind === 'goal',
       ),
     );
+    step('送排著的一句');
     expect((await client.runStart('src', '排著的一句')).type).toBe('success');
-    await until(root, 'src', (list) =>
+    step('等目標那一輪結束落盤');
+    await until(root, 'src', '目標那一輪的 turn/end', (list) =>
       list.find((event) => event.type === 'turn/end' && event.seq > goalTurn.seq),
     );
+    step('關來源的下行、暫停目標');
     await events.return?.(undefined);
     // 收掉來源的目標，免得它在背景一直跑。
     expect(await client.slashRun('src', '/goal pause')).toMatchObject({ kind: 'success' });
 
+    step('讀來源的歷史');
     const goalTail = (await entries(client, 'src')).find(
       (entry) => entry.kind === 'ai' && entry.text === '慢慢說的一輪',
     );
     if (goalTail?.kind !== 'ai' || goalTail.messageId === undefined) {
       throw new Error('找不到慢的那一輪的回覆');
     }
+    step('分叉');
     const childId = await forkOk(client, 'src', goalTail.messageId);
 
+    step('讀子 thread 的 seed');
     const seeded = await eventsOnDisk(root, childId);
     const inherited = seeded.slice(0, inheritedEventCount(seeded));
     // 前提：切點上真的有排著的一句，前綴裡真的有執行中的目標（不是兩個「本來就沒有」相等）。
@@ -377,9 +421,27 @@ describe('serve 上的 thread.fork', () => {
     const goals = inherited.filter((event) => event.type === 'goal/change');
     expect((goals.at(-1)?.data as { operation?: unknown } | undefined)?.operation).toBe('create');
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const after = await eventsOnDisk(root, childId);
-    expect(after.slice(inherited.length).some((event) => event.type === 'turn/start')).toBe(false);
-    expect(foldInbox(after)).toEqual(EMPTY_INBOX);
+    expect(foldInbox(seeded)).toEqual(EMPTY_INBOX);
+
+    // 能讓子 thread 跑出不是人送的那一輪的有兩條：續行（排程器只在授權是 armed 時排）與繼承來的佇列（折回來會停住，
+    // 但下一次送出時會先跑它；上面已驗是空的）。開子 thread 的下行，拿補送的授權。
+    step('開子 thread 的下行、等續行授權');
+    const childEvents = await client.openEvents(childId);
+    let child = emptyConversation();
+    while (child.goalActivation === null) {
+      const next = await childEvents.next();
+      if (next.done === true) throw new Error('子 thread 的下行斷了，還沒收到續行授權');
+      child = reduceConversation(child, next.value);
+    }
+    expect(child.goalActivation).toBe('disarmed');
+    await childEvents.return(undefined);
+
+    // 多一次往返，讓延後一個 tick 的排程（例如續行的 setImmediate）有機會先跑；收掉 serve 會把日誌全部落盤，之後再比。
+    step('往返、收掉 serve');
+    expect(await client.threadHistory(childId)).toMatchObject({ kind: 'ok' });
+    await stop(serve);
+    step('比對落盤');
+    // 沒有新的一輪、沒有新的模型呼叫：子 thread 的日誌跟分叉回傳時一樣，一顆都沒多。
+    expect(await eventsOnDisk(root, childId)).toEqual(seeded);
   });
 });
