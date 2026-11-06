@@ -152,7 +152,7 @@ async function startRun(
   expect(((await response.json()) as { type: string }).type).toBe('success');
 }
 
-/** 一條 SSE 下行的讀者：`next` 讀一段文字，讀完回 `undefined`。 */
+/** 一條 SSE 下行的讀者：`next` 讀一段文字，讀完回 `undefined`；被切掉的線讀到的是錯誤（連線中斷）。 */
 function sse(response: Response) {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -190,7 +190,7 @@ describe('掃描切掉驗不過的下行', () => {
     await vi.waitFor(() => {
       expect(streams.some((record) => record.outcome === 'cut')).toBe(true);
     });
-    expect(await cutting.next()).toBeUndefined();
+    await expect(cutting.next()).rejects.toThrow('重驗沒過');
 
     expect(streams.filter((record) => record.outcome === 'cut')).toEqual([
       expect.objectContaining({ threadId: 'e1', userId: 'alice', reason: 'not_mapped' }),
@@ -232,7 +232,7 @@ describe('掃描切掉驗不過的下行', () => {
     const later = new Date(Date.now() + 5_000);
     utimesSync(file, later, later);
     const revokedAt = performance.now();
-    expect(await downlink.next()).toBeUndefined();
+    await expect(downlink.next()).rejects.toThrow('重驗沒過');
     expect(performance.now() - revokedAt).toBeLessThan(2_000);
     expect(streams.at(-1)).toMatchObject({ outcome: 'cut', reason: 'not_mapped' });
   }, 10_000);
@@ -270,7 +270,7 @@ describe('過期：續上的不切，沒續上的切（D239 Q5 (c)）', () => {
     cookies.recordRenewal(renewing, cookies.issue('localhost', renewing).expiresAt);
     clock += 60_001;
 
-    expect(await dropped.next()).toBeUndefined();
+    await expect(dropped.next()).rejects.toThrow('重驗沒過');
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(streams.filter((record) => record.outcome === 'cut')).toEqual([
       expect.objectContaining({ threadId: 'e2', reason: 'expired' }),

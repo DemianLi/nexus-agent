@@ -7,12 +7,15 @@ import { sseResponse } from './sse-response.js';
  * `cancel()` 不會被叫，產生器停在 `yield`、`finally` 不跑。用一個會拋的假 `encode` 直接測這一層。
  */
 
-/** 產生器：吐 `items`，`finally` 記下有沒有跑。 */
+/** 產生器：吐 `items`，記下被拉了幾顆、`finally` 有沒有跑。 */
 function source(items: readonly string[]) {
-  const state = { finished: false };
+  const state = { finished: false, pulled: 0 };
   const generator = (async function* () {
     try {
-      for (const item of items) yield item;
+      for (const item of items) {
+        state.pulled += 1;
+        yield item;
+      }
       // 吐完不結束：停在這裡等，像一條長期的下行。
       await new Promise<void>(() => {});
     } finally {
@@ -99,5 +102,39 @@ describe('sseResponse', () => {
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
     expect(state.finished).toBe(true);
+  });
+  it('cut 中止：已經拉進佇列、還沒送出的那一顆不送，讀者拿到錯誤（連線中斷），產生器的 finally 跑了', async () => {
+    const { generator, state } = source(['a', 'b', 'c']);
+    const cut = new AbortController();
+    const response = sseResponse(generator, (value) => `data: ${value}\n\n`, {
+      where: 'thread t1',
+      describe: () => 'x',
+      cut: cut.signal,
+    });
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(': connected\n\n');
+    // 讀完開線那一行，`pull` 已經把 `a` 拉進佇列（水位 1）。
+    for (let attempt = 0; attempt < 50 && state.pulled < 1; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(state.pulled).toBe(1);
+    cut.abort(new Error('切掉了'));
+    await expect(reader.read()).rejects.toThrow('切掉了');
+    for (let attempt = 0; attempt < 50 && !state.finished; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(state.finished).toBe(true);
+  });
+
+  it('開線前 cut 就已中止：連開線那一行都不送，產生器收掉（從沒被拉過，所以沒進 try）', async () => {
+    const { generator, state } = source(['a']);
+    const response = sseResponse(generator, (value) => `data: ${value}\n\n`, {
+      where: 'thread t1',
+      describe: () => 'x',
+      cut: AbortSignal.abort(new Error('早就切了')),
+    });
+    await expect(response.body!.getReader().read()).rejects.toThrow('早就切了');
+    expect(await generator.next()).toEqual({ done: true, value: undefined });
+    expect(state.pulled).toBe(0);
   });
 });

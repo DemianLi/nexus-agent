@@ -2726,6 +2726,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         where: `thread ${threadId}`,
         describe: (event) => event.method,
         ...(options.warn !== undefined && { warn: options.warn }),
+        cut: cut.signal,
       },
     );
   }
@@ -2744,7 +2745,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       if (verdict.ok) continue;
       entry.end({ cut: verdict.reason });
-      entry.cut.abort();
+      entry.cut.abort(new Error(`嵌入版下行重驗沒過，已切掉（${verdict.reason}）`));
     }
   }
 

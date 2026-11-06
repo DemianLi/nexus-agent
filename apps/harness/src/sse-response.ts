@@ -13,6 +13,11 @@ export interface SseResponseOptions<T> {
   readonly describe: (value: T) => string;
   /** 伺服器日誌（warn 級）。 */
   readonly warn?: (message: string) => void;
+  /**
+   * 中止時當場結束這條線（#2489 撤權切流）：`controller.error()` 丟掉已經拉進佇列、還沒送出的那幾顆，`events.return()` 讓產生器的
+   * `finally` 跑。對方看到的是連線中斷，不是正常結束。
+   */
+  readonly cut?: AbortSignal;
 }
 
 /**
@@ -31,8 +36,21 @@ export function sseResponse<T>(
   options: SseResponseOptions<T>,
 ): Response {
   const encoder = new TextEncoder();
+  const cut = options.cut;
+  let onCut: (() => void) | undefined;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
+      if (cut !== undefined) {
+        onCut = () => {
+          void events.return(undefined);
+          controller.error(cut.reason);
+        };
+        if (cut.aborted) {
+          onCut();
+          return;
+        }
+        cut.addEventListener('abort', onCut, { once: true });
+      }
       // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
       // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
       // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
@@ -44,7 +62,9 @@ export function sseResponse<T>(
     },
     async pull(controller) {
       const next = await events.next();
+      if (cut?.aborted === true) return;
       if (next.done === true) {
+        if (onCut !== undefined) cut?.removeEventListener('abort', onCut);
         controller.close();
         return;
       }
@@ -63,6 +83,7 @@ export function sseResponse<T>(
       controller.enqueue(encoder.encode(text));
     },
     cancel() {
+      if (onCut !== undefined) cut?.removeEventListener('abort', onCut);
       void events.return(undefined);
     },
   });

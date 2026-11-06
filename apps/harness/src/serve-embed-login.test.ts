@@ -5,7 +5,7 @@
  * **零憑證、零外部連線**：模型是腳本。
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -289,6 +289,57 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     expect((await get(server, '/', cookie)).status).toBe(401);
     expect((await get(server, '/index.html', cookie)).status).toBe(401);
     expect(await upgrade(server, '/threads/mux', cookie)).toBe(401);
+  });
+
+  /** 開一條嵌入版 SSE 下行，讀掉開線那一行。 */
+  async function openDownlink(server: RunningServe, cookie: string, thread: string) {
+    const response = await fetch(`${server.url}/embed/threads/${thread}/stream`, {
+      method: 'POST',
+      headers: { origin: server.url, cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ channels: ['messages', 'lifecycle'] }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(': connected\n\n');
+    return reader;
+  }
+
+  it('接線（#2489）：從表上拿掉之後，已開的下行 2 秒內被切掉，稽核記 opened 與 cut', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const cookie = await embedCookie(server, where.home);
+    const reader = await openDownlink(server, cookie, 'e-revoke');
+
+    const table = join(where.home, EMBED_IDENTITIES_FILE);
+    writeFileSync(table, JSON.stringify({ version: 1, mappings: [] }), { mode: 0o600 });
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(table, later, later);
+    const revokedAt = performance.now();
+    // 實測：經 HTTP 時對方讀到的是本體結束，不是錯誤（handler 那一層的串流是 errored）。
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
+    expect(performance.now() - revokedAt).toBeLessThan(2_000);
+
+    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-revoke', userId: 'alice' }),
+      expect.objectContaining({ outcome: 'cut', threadId: 'e-revoke', reason: 'not_mapped' }),
+    ]);
+  }, 15_000);
+
+  it('接線（#2489）：serve 收尾時還開著的下行記一筆 closed by server', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const cookie = await embedCookie(server, where.home);
+    const reader = await openDownlink(server, cookie, 'e-shutdown');
+    await server.close();
+    running = undefined;
+    await reader.read().catch(() => undefined);
+
+    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-shutdown' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e-shutdown', by: 'server' }),
+    ]);
   });
 
   it('獨立頁面的 cookie 照舊：獨立頁面與嵌入路由都打得到', async () => {
