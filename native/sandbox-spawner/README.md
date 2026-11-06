@@ -26,6 +26,8 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
                  --conversation <程式> [--conversation-arg <參數>]...
                  [--eof-grace-ms 6000] [--term-grace-ms 3000] [--front-restart-ms 1000]
                  [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000]
+                 [--capacity <條>] [--warm 1] [--idle-ms 7200000] [--read-only-idle-ms 300000]
+                 [--drain-timeout-ms 5000] [--stats-ms 10000]
 ```
 
 - 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr，同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。**監督行程的 stderr 一定要有人讀**：它是阻塞的而沒人讀時，整個監督行程（計時器、RSS 上限、拆除梯度）都停住；寫不出去（非阻塞而滿了、或壞了）的丟掉、記數，監督行程自己的訊息與轉出的對話行程 stderr 都一樣，下次寫得出去時先講一句丟了多少。
@@ -35,12 +37,18 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
 - 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
 - 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
-- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、RSS 超過上限、心跳斷了太久、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
+- 容量（設計 §七）：同時活著的對話行程最多 `--capacity` 個，含預熱池、起動中與正在收的。沒給就算：⌊（記憶體上限 − 一半 − 19 − 150）÷ 209⌋（MiB），最少 1；記憶體上限取 `/proc/self/cgroup` 指到的 cgroup v2 目錄與它每一層上層的 `memory.max`，以及 `/proc/meminfo` 的 `MemTotal`，裡面最小的。起來時記一行算出的容量。19 MiB（監督行程）與 209 MiB（每條對話峰值）是研究量的，150 MiB（前台）是估的。
+- 逐出：名額滿時，排著的每一條都要有一個正在收的行程讓出名額，不夠就挑閒置的送 `drain`：只讀開啟的先，同類裡閒置最久的先；閒置從對話行程回報 `idle` 的時間點（收到的時間減 `idleMs`）與最後一次被 `ensure` 要到的時間兩者較晚的算。挑不到的從最晚排進來的起回 `capacity(thread, current, limit)`。回 `drained` 就走拆除梯度收掉（死因 `evicted`），收完起排著的；回 `busy` 或 `--drain-timeout-ms` 內沒回答都不收。閒置超過 `--idle-ms`（只讀開啟的 `--read-only-idle-ms`）也送 `drain`；給 0 是不照時間逐出。`release(thread)` 是已經閒置就送 `drain`，還沒閒置就等它回報閒置再送。
+- 只讀開啟：`ensure(thread, read-only)` 起的標成只讀；同一條 thread 收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
+- 預熱池：補到 `--warm` 個已經 `ready`、還沒綁 thread 的對話行程（0 是不預熱）；`ensure` 先從池裡拿，拿了再補。有排著的、名額滿、停機中都不補；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。池裡的沒送 `bind`，不判 stalled。
+- `stats(live, warm, rssKib, deaths)`：每 `--stats-ms` 送一次，前台（重）起時也送；`--stats-ms 0` 是不送。`live` 含預熱池，`rssKib` 是各 leader 最近一次輪詢到的 `VmRSS` 加總，`deaths` 是起來以來各類死因的累計（含預熱池裡的與沒起成的）。
+- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、逐出、RSS 超過上限、心跳斷了太久、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
   - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。只量 leader（見已知限制）。
   - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
   - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器、hybrid 主機的 v2 掛在別處）就一律算 `crash`。監督行程自己送 SIGKILL 的（RSS 超過上限、停機的最後一步）也會先算一次：核心搶先 OOM kill 了它時，那一次在這裡消掉，死因仍照監督行程的理由。
   - `stalled`：心跳斷了超過 `--stall-ms`。
-  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。
+  - `evicted`：回了 `drained`、被收掉的（見逐出）。
+  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的，含停機時還排著的 thread。
 - 已知限制：
   - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程；spawner 與工具又各自 `setsid`，`memory` 的群組 SIGKILL 也打不到它們（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。
   - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
@@ -50,8 +58,11 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - `ready` 之前（載插件、建根）不判 stalled，這一段卡死的對話行程會一直留著。
   - 監督行程卡在寫自己的 fd 2 超過 `--stall-ms` 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住，醒來後被判成 `stalled`。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
   - V8 heap 快用完時，GC 可能連續空轉超過 `--stall-ms`，結果先被判成 `stalled` 而不是 `heap`。沒量過。
+  - 容量算的是行程數，不看實際用掉的記憶體：每條對話實際用得比 209 MiB 多（例如掛了 MCP）時，名額還沒滿記憶體就先滿了。
+  - 正在收的行程照樣佔名額：排著的 thread 要等 `drained` 之後的拆除梯度走完（最長 `--eof-grace-ms` 加 `--term-grace-ms`）才起。
+  - 回 `busy` 或沒回答 `drain` 的，要等它下次回報 `idle` 才會再被挑；對話行程只在變成閒置的那一刻回報一次，所以一直閒著卻沒回答 `drain` 的，之後都不會再被逐出。讀程式推論，沒量過。
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
-- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 有；沒起成的多一個 `error`。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 有；沒起成的多一個 `error`。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2。
 
 整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`examples/fake_conversation.rs` 兩支假程式站在前台與對話行程的位置。

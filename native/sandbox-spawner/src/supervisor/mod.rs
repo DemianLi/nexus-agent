@@ -9,17 +9,27 @@
 //!
 //! 前台的控制通道是它的 stdin／stdout：
 //!
-//! - `ensure(thread)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；正在收就不理（收完會回 `down`，前台要再要一次）；
-//!   都沒有就起一個。
-//!   對話行程送 `ready` 之後送它 `bind(thread)`，回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。`open` 不影響行為（唯讀開啟的逐出優先序，TODO(#2340)）。
-//! - `release(thread)`：不理，不收行程（TODO(#2340)）。
+//! - `ensure(thread, open)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；
+//!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`，回 `drained` 就收掉、收完起一個新的。
+//!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。
+//!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
+//!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
+//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置就記著，一回報閒置就送。
+//!
+//! 容量（設計 §七）：同時活著的對話行程（含預熱池、起動中與正在收的）最多 `--capacity` 個，沒給就照記憶體上限算
+//! （[`memory::auto_capacity`]）。名額滿時，排著的每一條都要有一個正在收的行程讓出名額：不夠就挑一個閒置的送 `drain`，只讀的先，
+//! 同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
+//! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度）；回 `busy` 或
+//! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
+//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。停機時排著的都回 `down(shutdown)`。
+//! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
-//! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，RSS 超過 `--rss-limit-mb` 是
+//! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
 //! `memory`，心跳斷了超過 `--stall-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
 //! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
-//! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`。
+//! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`；預熱池裡還沒指派的只寫稽核（`thread` 是空字串）。
 //!
 //! 對話行程的 stderr 接到監督行程（[`process::StderrTap`]）：每次可讀時最多讀 `READ_BUDGET`，原樣寫到自己的 fd 2，順便找 heap
 //! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。fd 2 阻塞而沒人讀時，整個迴圈停在寫那一步；寫不出去的（轉出的與
