@@ -49,4 +49,13 @@ describe('withModelCallStep', () => {
       ),
     ).toBe('inner');
   });
+
+  it('build 回的那顆不用收到的那支當 wrapModelCall 就拋，不登記', () => {
+    const step: ModelCallStep = (request, next) => next(request);
+    const other = (request: never, handler: (request: never) => unknown) => handler(request);
+    expect(() => withModelCallStep(step, () => ({ name: 'm', wrapModelCall: other }))).toThrow(
+      /middleware "m" 的 wrapModelCall 不是 withModelCallStep 交給 build 的那支/,
+    );
+    expect(() => withModelCallStep(step, () => ({ name: 'n' }))).toThrow(/middleware "n"/);
+  });
 });

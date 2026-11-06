@@ -61,6 +61,7 @@
 
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { withModelCallStep } from './model-call-step.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
@@ -126,15 +127,19 @@ export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCal
 export function createSessionCheckpointMiddleware(sessions: CheckpointSessions): AgentMiddleware {
   const toolStep = sessionCheckpointToolStep(sessions);
   return withToolCallStep(
-    createMiddleware({
-      name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
-      wrapModelCall: async (request, handler) => {
+    withModelCallStep(
+      async (request, handler) => {
         const found = sessions.forCall(callConfigOf(request));
         if (found.kind === 'ok') await sessions.flush(found.log);
         return handler(request);
       },
-      wrapToolCall: wrapToolCallWith(toolStep),
-    }) as unknown as AgentMiddleware,
+      (wrapModelCall) =>
+        createMiddleware({
+          name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCall as never,
+          wrapToolCall: wrapToolCallWith(toolStep),
+        }) as unknown as AgentMiddleware,
+    ),
     toolStep,
   );
 }
