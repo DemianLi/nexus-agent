@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
-/// 心跳先停：`hang`、`silent`、`close-stdout`、`ignore-eof` 收到 EOF 時設它。
+/// 心跳先停：`hang`、`silent`、`close-stdout` 設它；`ignore-eof` 在收到 EOF 時設它。
 static QUIET: AtomicBool = AtomicBool::new(false);
 const HEARTBEAT: Duration = Duration::from_millis(50);
 

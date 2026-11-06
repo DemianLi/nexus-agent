@@ -681,7 +681,7 @@ fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
 
 #[test]
 fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
-    // RSS 輪詢放到一分鐘：叫醒 poll 的只有 stall 的期限與它四分之一的那一次。
+    // RSS 輪詢放到一分鐘：計時器只剩 stall 的期限與它的四分之一。
     let mut h = Harness::start(Options { extra: vec!["--stall-ms", "1000", "--rss-poll-ms", "60000"], ..Options::default() });
     let socket = h.up("a");
     let a = logged_pid(&socket, "pid");

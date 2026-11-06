@@ -34,7 +34,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
 - 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
-- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定整棵樹一起被凍住過（docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有對話行程時最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
+- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
 - 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、RSS 超過上限、心跳斷了太久、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
   - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。只量 leader（見已知限制）。
   - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
@@ -45,12 +45,13 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程；spawner 與工具又各自 `setsid`，`memory` 的群組 SIGKILL 也打不到它們（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。
   - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
   - 同一批收屍的幾條都被 SIGKILL 時，一次 OOM 歸給誰看收屍的順序，不一定是真正被 OOM 殺的那條。
-  - 沒有單條對話的 CPU 上限：事件迴圈空轉的對話行程要到 N 才被 `stalled` 殺掉，這段期間其他對話會變慢（S4 實測 p95 上升 7–91%）。壓住鄰居另做（[#2496](https://github.com/DemianLi/nexus-agent/issues/2496)）。
+  - 沒有單條對話的 CPU 上限：事件迴圈空轉的對話行程要到 `--stall-ms` 才被 `stalled` 殺掉，這段期間其他對話會變慢（S4 實測 p95 上升 7–91%）。壓住鄰居另做（[#2496](https://github.com/DemianLi/nexus-agent/issues/2496)）。CPU 吃在主執行緒以外（worker、工具子行程）時心跳照送，不會被殺，也沒有別的限制（讀程式推論，沒量過）。
+  - 只有監督行程被停住超過 `--stall-ms` 的一半時（例如它自己被 SIGSTOP），也會把所有沉默重算，真的卡死的對話行程要多等最多 `--stall-ms` 才被殺。合法的同步阻塞做到一半時整棵樹被凍住，沉默加上凍住的時間超過 `--stall-ms` 仍會被殺。兩者都是讀程式推論，沒量過。
   - `ready` 之前（載插件、建根）不判 stalled，這一段卡死的對話行程會一直留著。
-  - 監督行程卡在寫自己的 fd 2 超過 N 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住，醒來後被判成 `stalled`。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
-  - V8 heap 快用完時，GC 可能連續空轉超過 N，結果先被判成 `stalled` 而不是 `heap`。沒量過。
+  - 監督行程卡在寫自己的 fd 2 超過 `--stall-ms` 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住，醒來後被判成 `stalled`。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
+  - V8 heap 快用完時，GC 可能連續空轉超過 `--stall-ms`，結果先被判成 `stalled` 而不是 `heap`。沒量過。
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
-- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段與監督行程被停住的那段）只有 `conversation` 有；沒起成的多一個 `error`。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 有；沒起成的多一個 `error`。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2。
 
 整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`examples/fake_conversation.rs` 兩支假程式站在前台與對話行程的位置。

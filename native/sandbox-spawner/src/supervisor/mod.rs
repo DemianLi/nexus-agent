@@ -26,7 +26,7 @@
 //! 監督行程自己的訊息）丟掉、記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
-//! `max_silence_ms`，死前最後一段不算。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定整棵樹被凍住過，所有沉默從醒來起重新起算
+//! `max_silence_ms`，死前最後一段不算。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過，所有沉默從醒來起重新起算
 //! （[`Supervisor::check_resumed`]）。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
@@ -408,10 +408,10 @@ impl Supervisor {
             .min()
     }
 
-    /// 監督行程比預定的時間晚了超過 `--stall-ms` 的一半才醒，判定自己被停住過（整棵樹一起被凍住：docker pause、cgroup freezer、
-    /// VM 暫停或快照）。這時對話行程也一起停了，遲到的心跳還沒送出來，照樣判就會把每一條都殺掉；所以所有的沉默從現在重新起算。
+    /// 監督行程比預定的時間晚了超過 `--stall-ms` 的一半才醒，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、
+    /// cgroup freezer、VM 暫停或快照）。這時對話行程也一起停了，遲到的心跳還沒送出來，照樣判就會把每一條都殺掉；所以所有的沉默從現在重新起算。
     ///
-    /// 門檻取一半：正常的排程延遲是毫秒級，遠低於它；而會造成誤判的停住，醒來時一定晚了至少 `stall` 的四分之三減一個心跳間隔
+    /// 門檻取一半：正常的排程延遲是毫秒級，遠低於它；而凍住前對話行程照常送心跳時，會造成誤判的停住醒來時一定晚了至少 `stall` 的四分之三減一個心跳間隔
     /// （[`Self::next_deadline`] 保證最晚 `stall` 的四分之一就醒一次），所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
     fn check_resumed(&mut self, planned: Instant) {
         let Some(stall) = self.args.stall else { return };
