@@ -68,6 +68,54 @@ fn read_oom_kill(path: &Path) -> Option<u64> {
     parse_oom_kill(&std::fs::read_to_string(path).ok()?)
 }
 
+/// 容量公式（設計 §7-1）的常數，單位 MiB：每條對話行程的峰值（R6）、監督行程（p2t 量到的）、前台（估的，C0 量）。
+const PER_CONVERSATION_MIB: u64 = 209;
+const SUPERVISOR_MIB: u64 = 19;
+const FRONT_MIB: u64 = 150;
+
+/// 記憶體上限是 `limit_bytes` 時，同時能活幾個對話行程：⌊（上限 − 一半保留 − 監督行程 − 前台）÷ 每條⌋，最少 1。
+pub fn capacity_for(limit_bytes: u64) -> u32 {
+    let mib = limit_bytes >> 20;
+    let usable = (mib - mib / 2).saturating_sub(SUPERVISOR_MIB + FRONT_MIB);
+    u32::try_from(usable / PER_CONVERSATION_MIB).unwrap_or(u32::MAX).max(1)
+}
+
+/// cgroup v2 的 `memory.max`（bytes）；`max` 是沒有上限。
+pub fn parse_memory_max(text: &str) -> Option<u64> {
+    text.trim().parse().ok()
+}
+
+/// `/proc/meminfo` 的 `MemTotal`，換成 bytes。
+pub fn parse_mem_total_bytes(meminfo: &str) -> Option<u64> {
+    let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
+    let kib: u64 = line["MemTotal:".len()..].trim().strip_suffix("kB")?.trim().parse().ok()?;
+    kib.checked_mul(1024)
+}
+
+/// 記憶體上限（bytes）：`/proc/self/cgroup` 指到的 cgroup v2 目錄與它每一層上層的 `memory.max`，加上 `MemTotal`，取最小的。
+/// 限制常設在上層（例如 systemd 的 slice），自己這層是 `max`。都讀不到回 `None`。
+pub fn memory_limit_bytes(proc_self_cgroup: &str, cgroup_root: &Path, meminfo: &str) -> Option<u64> {
+    let mut limits = vec![parse_mem_total_bytes(meminfo)];
+    if let Some(relative) = proc_self_cgroup.lines().find_map(|line| line.strip_prefix("0::")) {
+        let mut dir = cgroup_root.join(relative.trim().trim_start_matches('/'));
+        loop {
+            limits.push(std::fs::read_to_string(dir.join("memory.max")).ok().as_deref().and_then(parse_memory_max));
+            if dir == cgroup_root || !dir.pop() || !dir.starts_with(cgroup_root) {
+                break;
+            }
+        }
+    }
+    limits.into_iter().flatten().min()
+}
+
+/// 照這台機器（或容器）的記憶體上限算出的容量，與用來算的上限（bytes）。上限讀不到時回 1 條、上限 `None`。
+pub fn auto_capacity() -> (u32, Option<u64>) {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let limit = memory_limit_bytes(&cgroup, Path::new("/sys/fs/cgroup"), &meminfo);
+    (limit.map_or(1, capacity_for), limit)
+}
+
 /// 行程結束了，分成哪一類。
 ///
 /// - 以 SIGKILL 結束的，一律先算一次 `oom_kill`（`oom`）：監督行程送了 SIGKILL、核心又搶先 OOM kill 它時，那一次也要在這裡消掉，
@@ -91,6 +139,31 @@ pub fn classify(decided: Option<DeathCause>, signal: Option<i32>, heap_message: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capacity_matches_the_design_table() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(capacity_for(64 * GIB), 155);
+        assert_eq!(capacity_for(32 * GIB), 77);
+        assert_eq!(capacity_for(8 * GIB), 18);
+        assert_eq!(capacity_for(256 << 20), 1);
+        assert_eq!(capacity_for(0), 1);
+    }
+
+    #[test]
+    fn memory_limit_is_the_smallest_of_each_cgroup_level_and_mem_total() {
+        let root = std::env::temp_dir().join(format!("nsup-memmax-{}", std::process::id()));
+        let leaf = root.join("slice/app");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::write(leaf.join("memory.max"), "max\n").unwrap();
+        std::fs::write(root.join("slice/memory.max"), "4294967296\n").unwrap();
+        let meminfo = "MemTotal:       16384000 kB\nMemFree: 1 kB\n";
+        assert_eq!(memory_limit_bytes("0::/slice/app\n", &root, meminfo), Some(4 << 30));
+        assert_eq!(memory_limit_bytes("0::/slice/app\n", &root, "MemTotal: 1024 kB\n"), Some(1 << 20));
+        assert_eq!(memory_limit_bytes("1:memory:/x\n", &root, meminfo), Some(16_384_000 * 1024));
+        assert_eq!(memory_limit_bytes("", &root, ""), None);
+        assert_eq!(parse_memory_max("max\n"), None);
+    }
 
     #[test]
     fn vm_rss_is_read_in_kb() {

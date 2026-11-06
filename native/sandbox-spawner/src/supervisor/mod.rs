@@ -50,7 +50,7 @@ mod process;
 
 use crate::supervisor_protocol::{
     decode_conversation_report, decode_front_request, encode_conversation_command, encode_front_event, ConversationCommand,
-    ConversationReport, DeathCause, FrontEvent, FrontRequest, TurnPhase,
+    ConversationReport, DeathCause, FrontEvent, FrontRequest, OpenMode, TurnPhase, DEATH_CAUSES,
 };
 use audit::{Audit, Exit, Record};
 use memory::OomCounter;
@@ -123,6 +123,8 @@ impl Proc {
 enum Phase {
     /// 起了，還沒送 `ready`。
     Starting,
+    /// 預熱池裡的：送了 `ready`，還沒指派 thread。
+    Warm,
     /// 送了 `bind`，還沒回 `bound`。
     Binding,
     /// 收到同一個 thread 的 `bound`；沒在收的才會給前台 `up`。
@@ -131,7 +133,20 @@ enum Phase {
 
 struct Conversation {
     proc: Proc,
-    thread: Vec<u8>,
+    /// 預熱池裡還沒指派的是 `None`。
+    thread: Option<Vec<u8>>,
+    /// 只讀開啟（設計 §7-3）：閒置時間用 `--read-only-idle-ms`，名額滿時先逐出。收到 `turn(begin)` 或 `ensure(run)` 就轉成一般的。
+    read_only: bool,
+    /// 它回報閒置起算的時間點；不閒置（還沒回報過、回了 `busy`）是 `None`。
+    idle_since: Option<Instant>,
+    /// 最後一次被 `ensure` 要到的時間；逐出的先後與閒置時限都從它與 `idle_since` 較晚的那個算。
+    used_at: Instant,
+    /// 送出 `drain`、還沒收到回答的時間點。
+    drain: Option<Instant>,
+    /// 前台 `release` 過、還沒閒置：一回報閒置就送 `drain`。
+    released: bool,
+    /// 最近一次輪詢到的 RSS（kB），給 `stats` 加總。
+    rss_now_kb: u64,
     socket: PathBuf,
     phase: Phase,
     /// 收到幾次 `turn(begin)`，寫進稽核。
@@ -156,6 +171,21 @@ impl Conversation {
         }
     }
 
+    /// 閒置、已經 `up`、沒在收也沒在等 `drain` 的回答：可以送 `drain`。
+    fn evictable(&self) -> bool {
+        self.idle_since.is_some() && self.phase == Phase::Up && self.proc.stop.is_none() && self.drain.is_none()
+    }
+
+    /// 閒置從什麼時候算：回報閒置的時間點與最後一次被要到的時間點較晚的那個。
+    fn idle_from(&self) -> Option<Instant> {
+        self.idle_since.map(|at| at.max(self.used_at))
+    }
+
+    /// 預熱池裡的（還沒指派 thread、沒在收）。
+    fn warm(&self) -> bool {
+        self.thread.is_none() && self.proc.stop.is_none()
+    }
+
     /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它。
     fn stalled(&self, now: Instant, stall: Duration) -> bool {
         self.proc.stop.is_none() && self.heard_at.is_some_and(|at| now.saturating_duration_since(at) >= stall)
@@ -173,6 +203,16 @@ struct Supervisor {
     shutting_down: bool,
     oom: OomCounter,
     rss_poll_at: Instant,
+    /// 同時活著的對話行程最多幾個（含預熱池、起動中與正在收的）。
+    capacity: u32,
+    /// 名額滿、等某個行程收完才起的 thread，照到的先後。
+    pending: Vec<(Vec<u8>, OpenMode)>,
+    /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。
+    warm_retry_at: Option<Instant>,
+    /// 下次送 `stats` 的時間。
+    stats_at: Option<Instant>,
+    /// 各類死因的累計，依死因碼的順序。
+    deaths: [u32; DEATH_CAUSES],
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
@@ -202,6 +242,18 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
     }
     prepare_run_dir(&args.run_dir)?;
     let audit = Audit::open(&args.audit).map_err(|err| format!("稽核紀錄 {}：{err}", args.audit.display()))?;
+    let capacity = match args.capacity {
+        Some(capacity) => capacity,
+        None => {
+            let (capacity, limit) = memory::auto_capacity();
+            match limit {
+                Some(bytes) => say!("容量 {capacity} 個對話行程（記憶體上限 {} MiB）", bytes >> 20),
+                None => say!("讀不到記憶體上限，容量用 {capacity}"),
+            }
+            capacity
+        }
+    };
+    let stats_at = args.stats.map(|every| Instant::now() + every);
     let mut supervisor = Supervisor {
         args,
         audit,
@@ -213,8 +265,14 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         shutting_down: false,
         oom: OomCounter::open(),
         rss_poll_at: Instant::now(),
+        capacity,
+        pending: Vec::new(),
+        warm_retry_at: None,
+        stats_at,
+        deaths: [0; DEATH_CAUSES],
     };
     supervisor.start_front();
+    supervisor.fill_warm();
     Ok(supervisor)
 }
 
@@ -390,6 +448,18 @@ impl Supervisor {
             self.front_restart_at = None;
             self.start_front();
         }
+        self.check_drains(now);
+        self.check_idle(now);
+        if self.warm_retry_at.is_some_and(|at| at <= now) {
+            self.warm_retry_at = None;
+            self.fill_warm();
+        }
+        if let (Some(at), Some(every)) = (self.stats_at, self.args.stats) {
+            if at <= now {
+                self.stats_at = Some(now + every);
+                self.send_stats();
+            }
+        }
     }
 
     /// 有對話行程在判 `stalled` 時，最晚 `--stall-ms` 的四分之一醒一次，[`Self::check_resumed`] 才量得出自己停住過。
@@ -405,6 +475,10 @@ impl Supervisor {
                 self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.heard_at.map(|at| at + stall))
             }))
             .chain(self.args.stall.filter(|_| self.conversations.iter().any(|c| c.heard_at.is_some())).map(|stall| Instant::now() + stall / 4))
+            .chain(self.conversations.iter().filter_map(|c| c.drain.map(|at| at + self.args.drain_timeout)))
+            .chain(self.conversations.iter().filter_map(|c| self.idle_deadline(c)))
+            .chain(self.warm_retry_at.filter(|_| !self.shutting_down))
+            .chain(self.stats_at)
             .min()
     }
 
@@ -453,6 +527,7 @@ impl Supervisor {
     fn poll_rss(&mut self) {
         for conversation in &mut self.conversations {
             let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
+            conversation.rss_now_kb = kb;
             conversation.rss_kb = conversation.rss_kb.max(kb);
             let over = self.args.rss_limit_kb.is_some_and(|limit| kb > limit);
             if over && !matches!(conversation.proc.stop, Some((Step::Kill, _))) {
@@ -468,12 +543,16 @@ impl Supervisor {
             Ok((pid, chan, _)) => {
                 let mut front = Proc { pid, chan, stop: None };
                 for conversation in self.conversations.iter().filter(|c| c.phase == Phase::Up && c.proc.stop.is_none()) {
+                    let Some(thread) = &conversation.thread else { continue };
                     front.chan.send(&encode_front_event(&FrontEvent::Up {
-                        thread_id: conversation.thread.clone(),
+                        thread_id: thread.clone(),
                         socket: conversation.socket.as_os_str().as_bytes().to_vec(),
                     }));
                 }
                 self.front = Some(front);
+                if self.args.stats.is_some() {
+                    self.send_stats();
+                }
             }
             Err(err) => {
                 say!("前台起不來：{err}");
@@ -503,8 +582,8 @@ impl Supervisor {
         };
         for payload in frames {
             match decode_front_request(&payload) {
-                Ok(FrontRequest::Ensure { thread_id, .. }) => self.ensure(thread_id),
-                Ok(FrontRequest::Release { .. }) => {}
+                Ok(FrontRequest::Ensure { thread_id, open }) => self.ensure(thread_id, open),
+                Ok(FrontRequest::Release { thread_id }) => self.release(&thread_id),
                 Err(err) => {
                     say!("前台送來解不開的訊息（{}），殺掉前台", err.0);
                     if let Some(front) = self.front.as_mut() {
@@ -516,22 +595,197 @@ impl Supervisor {
         }
     }
 
-    fn ensure(&mut self, thread: Vec<u8>) {
+    fn ensure(&mut self, thread: Vec<u8>, open: OpenMode) {
         if self.shutting_down {
             self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Shutdown });
             return;
         }
-        if let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread == thread) {
-            if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
+        let now = Instant::now();
+        if let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread.as_ref() == Some(&thread)) {
+            conversation.used_at = now;
+            conversation.released = false;
+            if open == OpenMode::Run {
+                conversation.read_only = false;
+            }
+            if conversation.drain.is_some() {
+                // 等它回答：回 `busy` 就回 `up`，回 `drained` 就收掉、收完再起一個新的。
+                self.queue(thread, open);
+            } else if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
                 let socket = conversation.socket.as_os_str().as_bytes().to_vec();
                 self.tell_front(&FrontEvent::Up { thread_id: thread, socket });
             }
             return;
         }
-        self.start_conversation(thread);
+        if let Some(waiting) = self.pending.iter_mut().find(|(t, _)| *t == thread) {
+            if open == OpenMode::Run {
+                waiting.1 = OpenMode::Run;
+            }
+            return;
+        }
+        if self.take_warm(&thread, open) {
+            self.fill_warm();
+            return;
+        }
+        if self.conversations.len() < self.capacity as usize {
+            self.start_conversation(Some(thread), open);
+            return;
+        }
+        self.queue(thread, open);
+        self.make_room();
     }
 
-    fn start_conversation(&mut self, thread: Vec<u8>) {
+    fn queue(&mut self, thread: Vec<u8>, open: OpenMode) {
+        if !self.pending.iter().any(|(t, _)| *t == thread) {
+            self.pending.push((thread, open));
+        }
+    }
+
+    /// 把預熱池裡的一個指派給 `thread`，先挑已經 `ready` 的。還沒 `ready` 的等它 `ready` 再送 `bind`。
+    fn take_warm(&mut self, thread: &[u8], open: OpenMode) -> bool {
+        let Some(index) = self
+            .conversations
+            .iter()
+            .position(|c| c.warm() && c.phase == Phase::Warm)
+            .or_else(|| self.conversations.iter().position(Conversation::warm))
+        else {
+            return false;
+        };
+        let conversation = &mut self.conversations[index];
+        conversation.thread = Some(thread.to_vec());
+        conversation.read_only = open == OpenMode::ReadOnly;
+        conversation.used_at = Instant::now();
+        if conversation.phase == Phase::Warm {
+            Self::bind(conversation);
+        }
+        true
+    }
+
+    fn bind(conversation: &mut Conversation) {
+        let Some(thread) = &conversation.thread else { return };
+        conversation.phase = Phase::Binding;
+        conversation.heard_at = Some(Instant::now());
+        let bind = ConversationCommand::Bind { thread_id: thread.clone() };
+        conversation.proc.chan.send(&encode_conversation_command(&bind));
+    }
+
+    /// 排著的每一條都要有一個正在收的行程讓出名額：不夠就挑閒置最久的送 `drain`（只讀的先），挑不到的從最晚排進來的起回 `capacity`。
+    fn make_room(&mut self) {
+        let mut freeing = self.conversations.iter().filter(|c| c.proc.stop.is_some() || c.drain.is_some()).count();
+        while freeing < self.pending.len() {
+            let victim = self
+                .conversations
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.evictable())
+                .min_by_key(|(_, c)| (!c.read_only, c.idle_from()))
+                .map(|(index, _)| index);
+            let Some(index) = victim else { break };
+            Self::drain(&mut self.conversations[index]);
+            freeing += 1;
+        }
+        while freeing < self.pending.len() {
+            let Some((thread, _)) = self.pending.pop() else { break };
+            let (current, limit) = (self.conversations.len() as u32, self.capacity);
+            say!("名額滿（{current}／{limit}），沒有可逐出的對話行程");
+            self.tell_front(&FrontEvent::Capacity { thread_id: thread, current, limit });
+        }
+    }
+
+    fn drain(conversation: &mut Conversation) {
+        conversation.drain = Some(Instant::now());
+        conversation.proc.chan.send(&encode_conversation_command(&ConversationCommand::Drain));
+    }
+
+    /// 有名額就起排著的；排的都起完了再補預熱池。
+    fn serve_pending(&mut self) {
+        while !self.pending.is_empty() && self.conversations.len() < self.capacity as usize && !self.shutting_down {
+            let (thread, open) = self.pending.remove(0);
+            if !self.take_warm(&thread, open) {
+                self.start_conversation(Some(thread), open);
+            }
+        }
+        self.fill_warm();
+    }
+
+    /// 預熱池補到 `--warm` 個：有排著的、名額滿、停機中、上一個預熱的剛失敗，都不補。
+    fn fill_warm(&mut self) {
+        while !self.shutting_down
+            && self.warm_retry_at.is_none()
+            && self.pending.is_empty()
+            && self.conversations.iter().filter(|c| c.warm()).count() < self.args.warm as usize
+            && self.conversations.len() < self.capacity as usize
+        {
+            self.start_conversation(None, OpenMode::Run);
+        }
+    }
+
+    fn release(&mut self, thread: &[u8]) {
+        let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread.as_deref() == Some(thread)) else { return };
+        if conversation.evictable() {
+            Self::drain(conversation);
+        } else if conversation.proc.stop.is_none() && conversation.drain.is_none() {
+            conversation.released = true;
+        }
+    }
+
+    /// 這條的閒置時限到期的時間點；不在閒置、在收、在等 `drain` 的回答、或這種開啟方式不照時間逐出的，沒有。
+    fn idle_deadline(&self, conversation: &Conversation) -> Option<Instant> {
+        if !conversation.evictable() {
+            return None;
+        }
+        let limit = if conversation.read_only { self.args.read_only_idle } else { self.args.idle };
+        Some(conversation.idle_from()? + limit?)
+    }
+
+    fn check_idle(&mut self, now: Instant) {
+        for index in 0..self.conversations.len() {
+            if self.idle_deadline(&self.conversations[index]).is_some_and(|at| at <= now) {
+                Self::drain(&mut self.conversations[index]);
+            }
+        }
+    }
+
+    /// `drain` 送出 `--drain-timeout-ms` 還沒回答，當它不閒置：不收，等它下次回報閒置。
+    fn check_drains(&mut self, now: Instant) {
+        for index in 0..self.conversations.len() {
+            let conversation = &mut self.conversations[index];
+            if conversation.drain.is_some_and(|at| at + self.args.drain_timeout <= now) {
+                say!("對話行程 {} 沒回答 drain，不收", conversation.proc.pid);
+                self.not_drained(index);
+            }
+        }
+    }
+
+    /// `drain` 的回答是不收（`busy` 或逾時）：排著等它的那條 thread 回 `up`，其餘排著的另找名額。
+    fn not_drained(&mut self, index: usize) {
+        let conversation = &mut self.conversations[index];
+        conversation.drain = None;
+        conversation.idle_since = None;
+        if let Some(thread) = conversation.thread.clone() {
+            if let Some(at) = self.pending.iter().position(|(t, _)| *t == thread) {
+                self.pending.remove(at);
+                if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
+                    let socket = conversation.socket.as_os_str().as_bytes().to_vec();
+                    self.tell_front(&FrontEvent::Up { thread_id: thread, socket });
+                }
+            }
+        }
+        self.make_room();
+    }
+
+    fn send_stats(&mut self) {
+        let live = self.conversations.len() as u32;
+        let warm = self.conversations.iter().filter(|c| c.warm()).count() as u32;
+        let rss_kib = self.conversations.iter().map(|c| c.rss_now_kb).sum::<u64>().min(u64::from(u32::MAX)) as u32;
+        self.tell_front(&FrontEvent::Stats { live, warm, rss_kib, deaths: self.deaths });
+    }
+
+    fn count_death(&mut self, cause: DeathCause) {
+        let slot = &mut self.deaths[cause as usize - 1];
+        *slot = slot.saturating_add(1);
+    }
+
+    fn start_conversation(&mut self, thread: Option<Vec<u8>>, open: OpenMode) {
         self.next_socket += 1;
         let socket = self.args.run_dir.join(format!("c{}.sock", self.next_socket));
         let _ = std::fs::remove_file(&socket);
@@ -542,6 +796,12 @@ impl Supervisor {
             Ok((pid, chan, stderr)) => self.conversations.push(Conversation {
                 proc: Proc { pid, chan, stop: None },
                 thread,
+                read_only: open == OpenMode::ReadOnly,
+                idle_since: None,
+                used_at: Instant::now(),
+                drain: None,
+                released: false,
+                rss_now_kb: 0,
                 socket,
                 phase: Phase::Starting,
                 turns: 0,
@@ -555,7 +815,7 @@ impl Supervisor {
                 say!("對話行程起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Conversation {
-                    thread: &thread,
+                    thread: thread.as_deref().unwrap_or_default(),
                     pid: 0,
                     cause: DeathCause::Crash,
                     exit: Exit::NOT_STARTED,
@@ -564,7 +824,11 @@ impl Supervisor {
                     max_silence_ms: 0,
                     error: Some(&error),
                 });
-                self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Crash });
+                self.count_death(DeathCause::Crash);
+                match thread {
+                    Some(thread) => self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Crash }),
+                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                }
             }
         }
     }
@@ -596,13 +860,14 @@ impl Supervisor {
             };
             match report {
                 ConversationReport::Ready if conversation.phase == Phase::Starting => {
-                    conversation.phase = Phase::Binding;
-                    conversation.heard_at = Some(Instant::now());
-                    let bind = ConversationCommand::Bind { thread_id: conversation.thread.clone() };
-                    conversation.proc.chan.send(&encode_conversation_command(&bind));
+                    if conversation.thread.is_some() {
+                        Self::bind(conversation);
+                    } else {
+                        conversation.phase = Phase::Warm;
+                    }
                 }
                 ConversationReport::Bound { thread_id } if conversation.phase == Phase::Binding => {
-                    if thread_id != conversation.thread {
+                    if Some(&thread_id) != conversation.thread.as_ref() {
                         say!("對話行程 {} 綁錯 thread，殺掉", conversation.proc.pid);
                         conversation.cause.get_or_insert(DeathCause::Crash);
                         conversation.proc.kill_now();
@@ -616,6 +881,27 @@ impl Supervisor {
                 }
                 ConversationReport::Turn { phase: TurnPhase::Begin } => {
                     conversation.turns = conversation.turns.saturating_add(1);
+                    conversation.read_only = false;
+                }
+                ConversationReport::Idle { idle_ms } => {
+                    let now = Instant::now();
+                    conversation.idle_since = Some(now.checked_sub(Duration::from_millis(idle_ms.into())).unwrap_or(now));
+                    if conversation.released && conversation.evictable() {
+                        conversation.released = false;
+                        Self::drain(conversation);
+                    }
+                }
+                ConversationReport::Busy => {
+                    if conversation.drain.is_some() {
+                        self.not_drained(index);
+                    } else {
+                        conversation.idle_since = None;
+                    }
+                }
+                ConversationReport::Drained if conversation.proc.stop.is_none() => {
+                    conversation.drain = None;
+                    conversation.cause.get_or_insert(DeathCause::Evicted);
+                    conversation.proc.begin_stop(Instant::now(), self.args.eof_grace);
                 }
                 _ => {}
             }
@@ -650,6 +936,9 @@ impl Supervisor {
                 }
             } else {
                 self.shutting_down = true;
+                for (thread, _) in std::mem::take(&mut self.pending) {
+                    self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Shutdown });
+                }
                 let now = Instant::now();
                 for conversation in &mut self.conversations {
                     conversation.cause.get_or_insert(DeathCause::Shutdown);
@@ -711,7 +1000,7 @@ impl Supervisor {
         let oom = &mut self.oom;
         let cause = memory::classify(conversation.cause, exit.signal, heap_message, || oom.claim());
         self.audit.record(&Record::Conversation {
-            thread: &conversation.thread,
+            thread: conversation.thread.as_deref().unwrap_or_default(),
             pid,
             cause,
             exit,
@@ -721,7 +1010,13 @@ impl Supervisor {
             error: None,
         });
         let _ = std::fs::remove_file(&conversation.socket);
-        self.tell_front(&FrontEvent::Down { thread_id: conversation.thread, cause });
+        self.count_death(cause);
+        match conversation.thread {
+            Some(thread) => self.tell_front(&FrontEvent::Down { thread_id: thread, cause }),
+            None if cause != DeathCause::Shutdown => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+            None => {}
+        }
+        self.serve_pending();
     }
 }
 
