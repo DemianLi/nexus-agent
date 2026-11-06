@@ -59,8 +59,8 @@ async function conversation(handle: (request: IncomingMessage, response: ServerR
   return { socket, seen, closed };
 }
 
-/** 監督行程那一端：每個 `ensure` 都回同一個 socket 的 `up`。 */
-function supervisorAnswering(socket: string): SupervisorClient {
+/** 監督行程那一端：每個 `ensure` 都回同一個 socket 的 `up`，收到的 thread id 記在 `ensured`。 */
+function supervisorAnswering(socket: string, ensured: string[] = []): SupervisorClient {
   const input = new PassThrough();
   const output = new PassThrough();
   let pending = Buffer.alloc(0);
@@ -70,6 +70,7 @@ function supervisorAnswering(socket: string): SupervisorClient {
     for (const payload of taken.frames) {
       const request = decodeFrontRequest(payload);
       if (request.type === 'ensure') {
+        ensured.push(request.threadId);
         input.write(frame(encodeFrontEvent({ type: 'up', threadId: request.threadId, socket })));
       }
     }
@@ -81,7 +82,7 @@ function supervisorAnswering(socket: string): SupervisorClient {
   return client;
 }
 
-function front(socket: string, verdict: () => EmbedCookieVerdict) {
+function front(socket: string, verdict: () => EmbedCookieVerdict, ensured: string[] = []) {
   const streams: StreamRecord[] = [];
   const access: AccessRecord[] = [];
   const forwarder = new FrontForwarder();
@@ -94,7 +95,7 @@ function front(socket: string, verdict: () => EmbedCookieVerdict) {
   } as unknown as IdleSweepingWireHandler;
   const handler = createFrontWireHandler({
     local,
-    supervisor: supervisorAnswering(socket),
+    supervisor: supervisorAnswering(socket, ensured),
     forwarder,
     auth: { authenticate: () => ALICE },
     embedStreams: {
@@ -169,5 +170,46 @@ describe('createFrontWireHandler 的嵌入版', () => {
     expect(streams.map(({ outcome }) => outcome)).toEqual(['opened', 'cut']);
     expect(streams[1]).toMatchObject({ reason: 'not_mapped', threadId: 't1' });
     await expect.poll(() => upstream.closed).toEqual(['/embed/threads/t1/stream']);
+  });
+});
+
+describe('createFrontWireHandler 的 run.cancel 與評分', () => {
+  function command(path: string, method: string, params: unknown): Request {
+    return new Request(`http://nexus.test${path}/commands/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 1, method, params }),
+    });
+  }
+
+  it.each([
+    ['一般路由', '/threads/t1'],
+    ['嵌入路由', '/embed/threads/t1'],
+  ])('%s：沒有行程時 run.cancel 由前台本地答，不起行程', async (_name, path) => {
+    const upstream = await conversation((_request, response) => response.end('{}'));
+    const ensured: string[] = [];
+    const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }), ensured);
+    const response = await handler.handle(command(path, 'run.cancel', {}));
+    expect(response.status).toBe(418);
+    expect(ensured).toEqual([]);
+    expect(upstream.seen).toEqual([]);
+  });
+
+  it.each([
+    ['一般路由', '/threads/t1'],
+    ['嵌入路由', '/embed/threads/t1'],
+  ])('%s：沒有行程時評分照樣轉給對話行程（要寫那條的日誌）', async (_name, path) => {
+    const upstream = await conversation((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"id":1}');
+    });
+    const ensured: string[] = [];
+    const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }), ensured);
+    const response = await handler.handle(
+      command(path, 'feedback.record', { targetId: 'm1', rating: 'up' }),
+    );
+    expect(response.status).toBe(200);
+    expect(ensured).toEqual(['t1']);
+    expect(upstream.seen.map(({ url }) => url)).toEqual([`${path}/commands/feedback.record`]);
   });
 });

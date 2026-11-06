@@ -248,6 +248,24 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     );
   }, 180_000);
 
+  it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {
+    const running = await start([{ content: '回覆。' }]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    const idle = await settled(supervisor, 'conversation-process', WARM);
+    expect(idle).toHaveLength(WARM);
+
+    expect(await client.runCancel('thread-cold')).toMatchObject({
+      type: 'success',
+      result: { accepted: true },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(childrenRunning(supervisor, 'conversation-process')).toEqual(idle);
+
+    expect(await client.feedbackList('thread-cold')).toMatchObject({ kind: 'ok' });
+    expect(await settled(supervisor, 'conversation-process', 1 + WARM)).toHaveLength(1 + WARM);
+  }, 180_000);
+
   describe('嵌入版（身分由前台往下傳）', () => {
     const EMBED_ROWS =
       '- id: embed-login\n  config:\n    embedders:\n      - id: crm\n    ticketTtlSeconds: 60\n';

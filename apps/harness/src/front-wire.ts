@@ -8,8 +8,9 @@
  *   對話行程收到之後照樣再核一次；那一道拒絕時帶回原因，`access` 稽核由前台記（對話行程沒有稽核檔）。
  * - **嵌入版的 thread 下行由前台登記**（#2489）：開線先記 `opened`，每 {@link EmbedStreamGuard.intervalMs} 拿開線時的標頭重驗一次，
  *   驗不過就切掉往對話行程的那條、記 `cut`；收掉記 `closed`。對話行程收不到 cookie，重驗只能在這裡做。
- * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 與評分在
- *   那條 thread 沒有行程、而且不是從嵌入路由來時（本地答「沒在跑」）；嵌入路由的照樣轉送，沒有行程就起一個。
+ * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
+ *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
+ *   前台不載 thread，本地答只會是「還沒開過」。
  * - **打開方式**：讀歷史、附件、引用、變更的是 `read-only`，其餘（開下行、送指令、上傳）是 `run`。
  *
  * @module
@@ -17,7 +18,7 @@
 
 import {
   errorResponse,
-  isFeedbackMethod,
+  isRunCancelMethod,
   isThreadManagementMethod,
   THREAD_AT_CAPACITY,
 } from '@nexus/wire';
@@ -55,10 +56,6 @@ const READ_ONLY_KINDS: ReadonlySet<Route['kind']> = new Set([
   'changes-diff',
 ]);
 
-/** 沒有行程時前台自己答的指令：它們不建 agent，只看記憶體裡那條 thread。 */
-function answeredWhenAbsent(method: string): boolean {
-  return method === 'run.cancel' || isFeedbackMethod(method);
-}
 
 export interface FrontWireOptions {
   /** 前台自己那一支：閘門、列表、搜尋、全域下行、整理檔都在它身上。 */
@@ -330,15 +327,16 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         if (refusal !== undefined) return refusal;
         if (!EMBED_ROUTE_KINDS.has(route.kind)) return new Response('not found', { status: 404 });
       }
-      if (route.kind === 'command' && embedded === undefined) {
+      if (route.kind === 'command') {
         if (
+          embedded === undefined &&
           isThreadManagementMethod(route.method) &&
           route.method !== 'thread.rename' &&
           route.method !== 'thread.fork'
         ) {
           return local.handle(request);
         }
-        if (answeredWhenAbsent(route.method) && supervisor.socketOf(route.threadId) === undefined) {
+        if (isRunCancelMethod(route.method) && supervisor.socketOf(route.threadId) === undefined) {
           return local.handle(request);
         }
       }
