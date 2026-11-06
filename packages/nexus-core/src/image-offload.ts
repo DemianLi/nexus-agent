@@ -358,19 +358,18 @@ export const IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME = 'nexusImageOffloadRecovery
  * 一次最多迴圈到所有圖都省略為止——每圈至少多省一張，所以一定會停。挑不到（沒有來源記號的圖、已全省略）就把原錯誤往外拋。
  */
 export function createImageOffloadRecoveryMiddleware(deps: ImageOffloadDeps): AgentMiddleware {
-  return createMiddleware({
-    name: IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
-      let current = request;
+  return withModelCallStep(
+    async (request, next) => {
+      let current = request as { readonly messages?: readonly BaseMessage[] };
       for (;;) {
         try {
-          return await handler(current);
+          return await next(current);
         } catch (error) {
           const required = imageOffloadRequiredOf(error);
           if (required === undefined) throw error;
           const found = deps.sessions.forCall(callConfigurable(current));
           if (found.kind !== 'ok') throw error;
-          const messages = (current.messages ?? []) as readonly BaseMessage[];
+          const messages = current.messages ?? [];
           // 每圈都得真的少掉留著的圖，所以一定會停；再送一次也只會原樣再拋的，不記。
           const decided = decideOffload(messages, found.log.events, required.offloadImages);
           if (decided === undefined) throw error;
@@ -379,5 +378,10 @@ export function createImageOffloadRecoveryMiddleware(deps: ImageOffloadDeps): Ag
         }
       }
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }

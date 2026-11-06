@@ -71,10 +71,11 @@
  * - **`retry-after`**（照 dsh 的 `recover`）：供應商給的延遲不超過 `maxDelayMs` 就照它等（不加抖動）；超過就放棄、原錯誤往外拋。
  * - **退避聽中止訊號**：等待中按停止就立刻收，不再打一次。
  *
- * ## 偏離：重試掛在 `wrapModelCall`，不是 `agent/request-error`
+ * ## 位置
  *
- * dsh 的重試聽 `agent/request-error`（步級掛點）。LangChain 沒有這個掛點（S2 地圖 #1339 才會補三事件），所以退到 #1341 指出的
- * 同一個位置：模型呼叫的 `wrapModelCall`。S2 落地之後撤除。重試計數只活在一次模型呼叫裡，不像 dsh 從事件折出、跨重啟接著數。
+ * 重打登記成模型那一串的一步（`model-call-step.ts` 的 `withModelCallStep`），排在起訖與用量外面、摘要器裡面（`fold.ts` 的槽位表）：
+ * 每次嘗試在這一步裡往內再交一次，內層各格（起訖、用量、圖片省略的接住端）跟著重跑。native 的 root 在原位直接呼叫這一步，
+ * `langgraph` 與子代理經 `wrapModelCall`。重試計數只活在一次模型呼叫裡，不從日誌折出、不跨重啟接著數。
  *
  * @module
  */
@@ -88,6 +89,7 @@ import { llmFailure, thrownMessage } from './llm-failure.js';
 import { captureModelCallSettled, withModelCall } from './model-call-scope.js';
 import type { CapturedModelCall } from './model-call-scope.js';
 import type { SessionLookup } from './registry.js';
+import { withModelCallStep } from './model-call-step.js';
 import type { LlmFailure, SessionLog } from './session-log.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 
@@ -444,9 +446,8 @@ export function createStreamRetryMiddleware(
   options: StreamRetryOptions,
   sessions: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
-  return createMiddleware({
-    name: STREAM_RETRY_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (request, next) => {
       const configurable = (request as { runtime?: { configurable?: unknown } }).runtime
         ?.configurable;
       const signalAbort = turnCancelSignalOf({ configurable });
@@ -459,8 +460,13 @@ export function createStreamRetryMiddleware(
           ...(log !== undefined && { log }),
           notify: signal,
         },
-        () => Promise.resolve(handler(request)),
+        () => Promise.resolve(next(request)),
       );
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: STREAM_RETRY_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
