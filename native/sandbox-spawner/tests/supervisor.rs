@@ -684,7 +684,7 @@ fn state(pid: i32) -> Option<char> {
     stat.rsplit_once(") ")?.1.chars().next()
 }
 
-/// 壓制的參數：沉默 300 ms 起判，每 25 ms／`stop_ms` 放一段；schedstat 每 50 ms 取樣。
+/// 壓制的參數：沉默 300 ms 起判，每一輪跑 25 ms、停 `stop_ms`；schedstat 每 50 ms 取樣。
 fn throttle(stop_ms: &'static str) -> Vec<&'static str> {
     vec!["--throttle-ms", "300", "--throttle-run-ms", "25", "--throttle-stop-ms", stop_ms, "--rss-poll-ms", "50"]
 }
@@ -746,7 +746,7 @@ fn sigkilled_supervisor_while_holding_leaves_nothing_stopped() {
 
 #[test]
 fn teardown_lets_a_held_leader_run_first() {
-    // 停的那段拉到一分鐘、SIGTERM 之後的寬限也是：沒先 SIGCONT 的話，它收不到 SIGTERM，要等很久才被 SIGKILL。
+    // 停的那段一分鐘、SIGTERM 之後的寬限十分鐘：沒先 SIGCONT 的話，它收不到 SIGTERM，要等很久才被 SIGKILL。
     let mut h = Harness::start(Options { term_grace_ms: 600_000, extra: throttle("60000"), ..Options::default() });
     let socket = h.up("t,spin:0");
     let pid = logged_pid(&socket, "pid");

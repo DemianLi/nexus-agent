@@ -1,4 +1,4 @@
-//! 壓住失控吃 CPU 的對話行程：已經 `up`、沉默超過 `--throttle-ms`，而且 leader 這段時間一直要 CPU 的，交替送 SIGSTOP／SIGCONT，
+//! 壓住失控吃 CPU 的對話行程：已經 `up`、沒在收、沒在等 `drain` 回答、沉默滿 `--throttle-ms`，而且 leader 這段時間一直要 CPU 的，交替送 SIGSTOP／SIGCONT，
 //! 每 `--throttle-run-ms`＋`--throttle-stop-ms` 只放它跑前一段。聽到它的任何一框就當場 SIGCONT、解除。
 //!
 //! 「一直要 CPU」看 leader 的 `/proc/<pid>/schedstat`：在 CPU 上的時間加上在可執行佇列上等的時間，平均每秒至少 [`BUSY`] 秒。只看 utime 的話，
@@ -33,7 +33,7 @@ pub enum Signal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hold {
-    /// 停住了：從 `since` 起，到 `until` 放。
+    /// 停住了，到 `until` 放；`since` 是這一段停住時間的起算點（[`Guard::restart`] 會改）。
     Stopped { since: Instant, until: Instant },
     /// 放它跑，到 `until` 再停。
     Running { until: Instant },
@@ -153,14 +153,14 @@ impl Guard {
     }
 }
 
-/// 讀 leader 的 `/proc/<pid>/schedstat`：在 CPU 上的時間加上在可執行佇列上等的時間（奈秒）。讀不到（行程沒了、核心沒開 schedstat）回 `None`。
+/// 讀 leader 的 `/proc/<pid>/schedstat`：在 CPU 上的時間加上在可執行佇列上等的時間（奈秒）。只算 leader 的主執行緒（事件迴圈），不含它的其他執行緒，所以每秒最多長 1 秒。讀不到（行程沒了、核心沒開 schedstat）回 `None`。
 pub fn demand_ns(pid: libc::pid_t) -> Option<u64> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/schedstat")).ok()?;
     let mut fields = text.split_whitespace().map(|field| field.parse::<u64>().ok());
     Some(fields.next()??.saturating_add(fields.next()??))
 }
 
-/// 只送給 leader，不送整個群組：監督行程在壓住期間死掉時，leader 靠 PDEATHSIG 被殺掉，群組裡被停住的子行程卻不會被叫醒。錯一律不理（例如 leader 已經結束的 ESRCH）。
+/// 只送給 leader，理由見模組說明。錯一律不理。
 pub fn signal(pid: libc::pid_t, signal: Signal) {
     let signo = match signal {
         Signal::Stop => libc::SIGSTOP,

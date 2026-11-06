@@ -202,8 +202,8 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 | 一次大配置（S3b） | 監督行程 | 輪詢 `/proc/<pid>/status` 的 RSS，超過上限就 SIGKILL | c0p 839 ms、p2 1,434 ms |
 | heap 外（S3c） | 監督行程 | 同上；被 cgroup OOM killer 殺的，從結束訊號與 `memory.events` 分辨 | c0p 103 ms、p2 129 ms |
 | 一輪跑太久 | 對話行程自己 | 今天的一輪時鐘（30 分鐘，`settings/turn-timeout.ts:49`），照停止鍵的路中止 | — |
-| 事件迴圈卡死（S4） | 監督行程 | 對話行程收到 `bind` 起就定時送 `heartbeat`，一直送到收掉，不分在不在一輪裡（D238）。監督行程只看心跳斷了多久：超過 `--stall-ms`（N）就當場對群組送 SIGKILL，死因 `stalled`；不走拆除梯度，因為事件迴圈卡住的行程讀不到 EOF、也跑不了自己的 SIGTERM handler，兩段寬限只會讓它多佔那麼久的 CPU（S4 試跑實測：走梯度時 down 在觸發後 24.2 s，等於 N 加兩段寬限）。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以這道一定在外面。`turn(begin\|end)` 不參與 stalled 判斷；監督行程用 `turn(begin)` 數稽核的 `turns`，§7-3 的只讀轉一般也會靠它；一輪跑太久交給上一列的一輪時鐘。`ready` 之前不判。整棵樹一起被凍住（docker pause、cgroup freezer、VM 暫停）時，解凍後監督行程比對話行程先醒，照樣判會把每一條都殺掉；所以監督行程比預定晚了超過 N/2 才醒，就判定自己被停住過，所有沉默從醒來起重算。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級；出廠值與量到的最大沉默寫在 C2b 的 PR | 失控的都在 N 內被殺，其他對話零錯誤 |
-| 吃滿 CPU | 監督行程 | 已經 `up`、沒在收的對話行程沉默滿 `--throttle-ms`（2 s），而且 leader 的 `/proc/<pid>/schedstat`（在 CPU 上加上在佇列上等）至少是牆鐘的 0.9 倍，就對 leader 交替送 SIGSTOP 75 ms／SIGCONT 25 ms；聽到任何一框、開始收、送 `drain` 之前都先 SIGCONT。壓住期間上一列的 `stalled` 只算放它跑的時間，卡死的那條約 2＋13×4＝54 s 被殺。只看 utime 會把搶不到 CPU 的空轉看成不忙；同步等待（`execSync`）的事件迴圈睡著，不會被壓。`bind` 到 `bound` 之間（冷開）不壓。訊號只送 leader：監督行程在壓住時死掉，leader 靠 PDEATHSIG 被殺，同群組被停住的子行程卻沒人叫醒；代價是同群組吃 CPU 的子行程壓不到（觸發本來也只看 leader）。renice 依 [D241](https://github.com/DemianLi/nexus-agent/issues/1827#issuecomment-6684872514) 不做；SCHED_IDLE 沒採用（[#2496](https://github.com/DemianLi/nexus-agent/issues/2496) 的比較）。CPU 吃在主執行緒以外（worker、工具子行程）時心跳照送，不壓也不殺 | S4（[D244](https://github.com/DemianLi/nexus-agent/issues/1827#issuecomment-6691625115)：對同一時窗、沒有失控的對照組，各 10 輪）：沒配額時壓制開每輪 1.01（最差 1.02），壓制關 1.13（最差 1.26）；有配額（`--cpus 2`）時壓制開 1.13（最差 1.22），壓制關 1.10（最差 1.36），對照組自己最差也到 1.30。冷開 #2117 大日誌不觸發。監督行程壓住期間多花約 0.1% 一顆 CPU |
+| 事件迴圈卡死（S4） | 監督行程 | 對話行程收到 `bind` 起就定時送 `heartbeat`，一直送到收掉，不分在不在一輪裡（D238）。監督行程只看心跳斷了多久：超過 `--stall-ms`（N）就當場對群組送 SIGKILL（被下一列壓住時只算放它跑的時間），死因 `stalled`；不走拆除梯度，因為事件迴圈卡住的行程讀不到 EOF、也跑不了自己的 SIGTERM handler，兩段寬限只會讓它多佔那麼久的 CPU（S4 試跑實測：走梯度時 down 在觸發後 24.2 s，等於 N 加兩段寬限）。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以這道一定在外面。`turn(begin\|end)` 不參與 stalled 判斷；監督行程用 `turn(begin)` 數稽核的 `turns`，§7-3 的只讀轉一般也會靠它；一輪跑太久交給上一列的一輪時鐘。`ready` 之前不判。整棵樹一起被凍住（docker pause、cgroup freezer、VM 暫停）時，解凍後監督行程比對話行程先醒，照樣判會把每一條都殺掉；所以監督行程比預定晚了超過 N/2 才醒，就判定自己被停住過，所有沉默從醒來起重算。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級；出廠值與量到的最大沉默寫在 C2b 的 PR | 沒被壓的失控都在 N 內被殺，其他對話零錯誤 |
+| 吃滿 CPU | 監督行程 | 已經 `up`、沒在收、沒在等 `drain` 回答的對話行程沉默滿 `--throttle-ms`（2 s），而且 leader 的 `/proc/<pid>/schedstat`（在 CPU 上加上在佇列上等）至少是牆鐘的 0.9 倍，就對 leader 交替送 SIGSTOP 75 ms／SIGCONT 25 ms；聽到任何一框就 SIGCONT；開始收、送 `drain` 之前也先 SIGCONT。壓住期間上一列的 `stalled` 只算放它跑的時間，`--stall-ms` 15 s 時卡死的那條約 2＋13×4＝54 s 被殺。只看 utime 會把搶不到 CPU 的空轉看成不忙；同步等待（`execSync`）的事件迴圈睡著，不會被壓。`bind` 到 `bound` 之間（冷開）不壓。訊號只送 leader：監督行程在壓住時死掉，leader 靠 PDEATHSIG 被殺，同群組被停住的子行程卻沒人叫醒；代價是同群組吃 CPU 的子行程壓不到（觸發本來也只看 leader）。renice 依 [D241](https://github.com/DemianLi/nexus-agent/issues/1827#issuecomment-6684872514) 不做；SCHED_IDLE 沒採用（[#2496](https://github.com/DemianLi/nexus-agent/issues/2496) 的比較）。CPU 吃在主執行緒以外（worker、工具子行程）時心跳照送，不壓也不殺 | S4（[D244](https://github.com/DemianLi/nexus-agent/issues/1827#issuecomment-6691625115)：對同一時窗、沒有失控的對照組，各 10 輪；以中位數判，最差那一輪不比對照組自己最差的差，[判法](https://github.com/DemianLi/nexus-agent/issues/1827#issuecomment-6692101921)；原始數字在 [#2496](https://github.com/DemianLi/nexus-agent/issues/2496) 的 PR 內文）：沒配額時壓制開每輪 1.01（最差 1.02），壓制關 1.13（最差 1.26）；有配額（`--cpus 2`）時壓制開 1.13（最差 1.22），壓制關 1.10（最差 1.36），對照組自己最差也到 1.30，兩組都及格；有配額時放它跑的那 1/4 顆仍吃配額，壓制幫不上忙。冷開 #2117 大日誌三輪都不觸發。監督行程壓住期間多花約 0.1% 一顆 CPU |
 
 **拆除梯度照 dsh**（`packages/subagent/subagent-acp/src/run.ts:183-212`）：`drain` → stdin EOF → 寬限 → SIGTERM → 寬限 → SIGKILL → 確認行程群組已空。被殺的對話行程留下的「輪還開著」的日誌，下次開時走今天的續接收尾（`resumeClosingInterruptedTurn`，`serve.ts:479`），不另寫一套。
 
@@ -279,6 +279,7 @@ Q32：沒宣告的退步擋合併。前面各節散見的，收在這裡；C7 �
 | 9 | 搜尋、`@` 引用候選看不到還沒落盤的事件 | §四-3 | C3 量落後時間 |
 | 10 | 容量滿時，從「直接拒收」改成「先逐出閒置的、再拒收」 | §七-1 | 行為改變，寫進升級指南 |
 | 11 | thread 上限的語意與出廠值（500 → 自動算，64 GiB 約 155 條） | §七-1、D166 Q6a、Q6b | C4，寫進升級指南 |
+| 12 | 事件迴圈空轉的對話行程被殺得比較晚：被壓住時 `stalled` 只算放它跑的時間，`--stall-ms` 15 s 從 15 s 變成約 54 s，這段期間它只拿到約 1/4 顆 CPU | §6-1、[#2496](https://github.com/DemianLi/nexus-agent/issues/2496) | #2496 的 PR 量到 52.4–53.4 s |
 
 ## 八、落地與回退
 
@@ -383,7 +384,7 @@ C2a ┼─> C1 ─┐
 ## 十一、範圍外與已知限制
 
 - **#1948 的事不在這裡**：MCP 連線池、全機並行上限搬進監督行程；主機級的樹。
-- **單條對話的 CPU 上限**：沒有硬上限。沉默又吃滿 CPU 的 leader 被壓到約四分之一（§6-1），沒沉默的（心跳照送）不管。
+- **單條對話的 CPU 上限**：沒有硬上限。沉默又吃滿 CPU 的 leader 在預設值下被壓到約四分之一（§6-1），沒沉默的（心跳照送）不管。
 - **平台**：只在 aarch64 的 Docker Desktop VM 量過（第 1 步、R6、R7 都是），x86_64 與正式主機沒量；C7 要在部署形狀的機器上至少跑一次。
 - **macOS**：只有 `single`。
 - **容量公式裡的 209 MB** 是 20 輪內量到的峰值；更長的對話沒量（R6「沒跑的」）。
