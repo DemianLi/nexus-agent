@@ -60,6 +60,7 @@ import {
   offloadedImagesOf,
 } from './image-offload-log.js';
 import type { ImageOccurrence, ImageOffloadTarget } from './image-offload-log.js';
+import { withModelCallStep } from './model-call-step.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionEvent } from './session-log.js';
 
@@ -314,10 +315,13 @@ function callConfigurable(request: unknown): { configurable?: unknown } {
  * 只折進 root：圖由人送出、住在 root 的日誌上。挑不到可省略的就原樣交下去，adapter 照樣拋、{@link createImageOffloadRecoveryMiddleware} 接。
  */
 export function createImageOffloadMiddleware(deps: ImageOffloadDeps): AgentMiddleware {
-  return createMiddleware({
-    name: IMAGE_OFFLOAD_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const messages = (request.messages ?? []) as readonly BaseMessage[];
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as {
+        readonly messages?: readonly BaseMessage[];
+        readonly model?: unknown;
+      };
+      const messages = request.messages ?? [];
       if (!messages.some(hasImageBlock)) return handler(request);
       const found = deps.sessions.forCall(callConfigurable(request));
       // 沒有日誌可讀（手搭的組裝沒接 session）就不標：決定記不下來，每一步都重算會讓同一張圖時有時無。
@@ -332,7 +336,12 @@ export function createImageOffloadMiddleware(deps: ImageOffloadDeps): AgentMiddl
       }
       return handler(view === messages ? request : { ...request, messages: [...view] });
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /** 接住 adapter 的 {@link ImageOffloadRequiredError} 的那顆 middleware 的名字。 */

@@ -67,6 +67,7 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { withModelCallStep } from './model-call-step.js';
 import {
   isBackgroundCall,
   spawnedSubagentRunId,
@@ -266,9 +267,8 @@ interface RuntimeRequest {
 export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddleware {
   const toolStep = maxTokensToolStep(carrier);
   return withToolCallStep(
-    createMiddleware({
-      name: MAX_TOKENS_MIDDLEWARE_NAME,
-      wrapModelCall: async (request, handler) => {
+    withModelCallStep(
+      async (request, handler) => {
         const response = await handler(request);
         if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
           return response;
@@ -282,8 +282,13 @@ export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddl
         }
         return dropToolCalls(response);
       },
-      wrapToolCall: wrapToolCallWith(toolStep),
-    }) as AgentMiddleware,
+      (wrapModelCall) =>
+        createMiddleware({
+          name: MAX_TOKENS_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCall as never,
+          wrapToolCall: wrapToolCallWith(toolStep),
+        }) as unknown as AgentMiddleware,
+    ),
     toolStep,
   );
 }
