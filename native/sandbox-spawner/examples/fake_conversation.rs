@@ -13,7 +13,7 @@
 //!   `heap`（往 stderr 寫 V8 heap 用完的訊息再 SIGABRT）、`alloc:<MiB>`（配置並碰過這麼多記憶體，留著不放）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）、
 //!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）、
 //!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
-//!   之後恢復）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）、`slow-drain:<毫秒>`（收到 `drain` 等這麼久才回）、
+//!   之後恢復）、`spin:<毫秒>`（心跳停這麼久、主執行緒空轉這麼久，之後恢復；0 是一直轉）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）、`slow-drain:<毫秒>`（收到 `drain` 等這麼久才回）、
 //!   `busy-then-idle`（第一次收到 `drain` 回 `busy`，接著送 `idle(0)`、記一行 `idle`；之後的照預設回 `drained`）。
 //! - 緊接在名字後面的 `idle:<毫秒>` 例外，在 `bound` 之前送：監督行程照順序讀同一條管線，前台收到 `up` 時它已經讀到這幾個 `idle`。
 //! - 收到 `drain` 預設回 `drained`，記一行 `drain`。
@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
-/// 心跳先停：`hang`、`silent`、`close-stdout` 設它；`ignore-eof` 在收到 EOF 時設它。
+/// 心跳先停：`hang`、`silent`、`spin`、`close-stdout` 設它；`ignore-eof` 在收到 EOF 時設它。
 static QUIET: AtomicBool = AtomicBool::new(false);
 const HEARTBEAT: Duration = Duration::from_millis(50);
 
@@ -182,6 +182,15 @@ fn main() {
                     ("silent", ms) => {
                         QUIET.store(true, Ordering::SeqCst);
                         std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
+                        QUIET.store(false, Ordering::SeqCst);
+                    }
+                    ("spin", ms) => {
+                        QUIET.store(true, Ordering::SeqCst);
+                        let ms: u64 = ms.parse().unwrap();
+                        let start = std::time::Instant::now();
+                        while ms == 0 || start.elapsed() < Duration::from_millis(ms) {
+                            std::hint::spin_loop();
+                        }
                         QUIET.store(false, Ordering::SeqCst);
                     }
                     ("ignore-eof", _) => ignore_eof = true,

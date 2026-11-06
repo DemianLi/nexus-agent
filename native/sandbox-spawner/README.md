@@ -28,6 +28,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
                  [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000]
                  [--capacity <條>] [--warm 1] [--idle-ms 7200000] [--read-only-idle-ms 300000]
                  [--drain-timeout-ms 5000] [--stats-ms 10000]
+                 [--throttle-ms 2000] [--throttle-run-ms 25] [--throttle-stop-ms 75]
 ```
 
 - 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr，同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。**監督行程的 stderr 一定要有人讀**：它是阻塞的而沒人讀時，整個監督行程（計時器、RSS 上限、拆除梯度）都停住；寫不出去（非阻塞而滿了、或壞了）的丟掉、記數，監督行程自己的訊息與轉出的對話行程 stderr 都一樣，下次寫得出去時先講一句丟了多少。
@@ -36,7 +37,8 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
 - 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
-- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
+- 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`；壓住期間只算放它跑的時間，見下一條）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
+- 壓住吃滿 CPU 的對話行程（#2496）：已經 `up`、沒在收、沒在等 `drain` 回答的對話行程，沉默滿 `--throttle-ms`，而且這段期間 leader 一直要 CPU（`/proc/<pid>/schedstat` 的在 CPU 上加上在可執行佇列上等的時間，至少是牆鐘的 0.9 倍），就對 leader 交替送 SIGSTOP（`--throttle-stop-ms`）與 SIGCONT（`--throttle-run-ms`），預設值下它只拿到約 run／(run＋stop)＝四分之一的 CPU。取樣跟著 `--rss-poll-ms`，取樣的跨度不到 `--throttle-ms` 的一半不判。聽到它任何一個框就 SIGCONT、不再壓；開始收（`drain`、拆除梯度）之前也先 SIGCONT。壓住期間 `stalled` 只算放它跑的時間：停住的時間不算沉默，真的卡死的要多等，預設值下約 2＋13×4＝54 s 才被殺。`bind` 到 `bound` 之間（冷開）不壓；沉默但不吃 CPU 的同步等待（`execSync`）不壓。訊號只送 leader，不送群組：監督行程在壓住期間死掉時，leader 靠 `PR_SET_PDEATHSIG` 被殺，群組裡被停住的子行程卻沒人叫醒。`--throttle-ms 0` 是不壓。
 - 容量（設計 `.docs/supervisor-1947-design-2026-11-03.md` §七）：同時活著的對話行程最多 `--capacity` 個，含預熱池、起動中與正在收的。沒給就算：⌊（記憶體上限 − 一半 − 19 − 150）÷ 209⌋（MiB），最少 1；記憶體上限取 `/proc/self/cgroup` 指到的 cgroup v2 目錄與它每一層上層的 `memory.max`，以及 `/proc/meminfo` 的 `MemTotal`，裡面最小的；都讀不到就用 1。起來時記一行算出的容量（或讀不到上限）。19 MiB（監督行程）與 209 MiB（每條對話峰值）是研究量的，150 MiB（前台）是估的。
 - 逐出：名額滿時，排著的每一條都要有一個正在收、或在等 `drain` 回答的行程讓出名額，不夠就挑閒置的送 `drain`：只讀開啟的先，同類裡閒置最久的先；閒置從對話行程回報 `idle` 的時間點（收到的時間減 `idleMs`）與最後一次被 `ensure` 要到的時間兩者較晚的算。挑不到的從最晚排進來的起回 `capacity(thread, current, limit)`。回 `drained` 就走拆除梯度收掉（死因 `evicted`；逾時之後才到的也照收），收完照排隊順序起排著的；回 `busy` 或 `--drain-timeout-ms` 內沒回答都不收。在等 `drain` 回答時又被 `ensure` 的 thread：回 `busy` 或逾時就回 `up`；回 `drained` 就先收到 `down(evicted)`，再跟其他排著的一起重算名額，沒名額回 `capacity`。等回答的這段期間，它跟自己的行程互抵，不算排著的、也不算讓出名額，不會被回 `capacity`；別的行程結束讓出的名額也不會拿去替它起第二個行程，要等它自己的行程回答（或收完）。已經在排的再被 `ensure`，只把開啟方式升成 `run`。閒置超過 `--idle-ms`（只讀開啟的 `--read-only-idle-ms`）也送 `drain`；給 0 是不照時間逐出。`release(thread)` 是已經閒置就送 `drain`，還沒閒置（含正在等 `drain` 回答、後來回了 `busy` 或逾時的）就等它回報閒置再送，之間再被 `ensure` 就作廢。
 - 只讀開啟：`ensure(thread, read-only)` 起的標成只讀；同一條 thread 收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
@@ -53,7 +55,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程；spawner 與工具又各自 `setsid`，`memory` 的群組 SIGKILL 也打不到它們（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。
   - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
   - 同一批收屍的幾條都被 SIGKILL 時，一次 OOM 歸給誰看收屍的順序，不一定是真正被 OOM 殺的那條。
-  - 沒有單條對話的 CPU 上限：事件迴圈空轉的對話行程要到 `--stall-ms` 才被 `stalled` 殺掉，這段期間其他對話會變慢（S4 實測 p95 上升 7–91%）。壓住鄰居另做（[#2496](https://github.com/DemianLi/nexus-agent/issues/2496)）。CPU 吃在主執行緒以外（worker、工具子行程）時心跳照送，不會被殺，也沒有別的限制（讀程式推論，沒量過）。
+  - 壓制只管沉默的 leader：CPU 吃在主執行緒以外（worker）時心跳照送，不壓也不殺（讀程式推論，沒量過）。SIGSTOP 只送 leader，同群組裡吃 CPU 的子行程壓不到；觸發也只看 leader 的 schedstat，本來就不看它們。spawner 與工具各自 `setsid`，更打不到（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494) 同一件事）。沉默 `--throttle-ms` 之前的那一段照樣吃滿 CPU。有 CPU 配額（cgroup `cpu.max`）時，放它跑的那四分之一仍吃同一份配額，鄰居照樣變慢（S4 量的見設計 §6-1）。冷開失敗之後由後來的請求重建 thread 時已經 `up`，那段同步工作沉默滿 `--throttle-ms` 也會被壓，牆鐘約拉長成 4 倍；沉默只算放它跑的時間，所以不會因此被判 `stalled`（讀程式推論，沒量過）。
   - 只有監督行程被停住超過 `--stall-ms` 的一半時（例如它自己被 SIGSTOP），也會把所有沉默重算，真的卡死的對話行程要多等最多 `--stall-ms` 才被殺。合法的同步阻塞做到一半時整棵樹被凍住，沉默加上凍住的時間超過 `--stall-ms` 仍會被殺。兩者都是讀程式推論，沒量過。
   - `ready` 之前（載插件、建根）不判 stalled，這一段卡死的對話行程會一直留著。
   - 監督行程卡在寫自己的 fd 2 超過 `--stall-ms` 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住，醒來後被判成 `stalled`。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
