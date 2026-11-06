@@ -675,6 +675,52 @@ describe('<nexus-chat> 的續期與 nexus-ticket-needed（#2370）', () => {
     expect(new Set(clients[0]?.opened)).toEqual(new Set(['我的']));
   });
 
+  test('按過「新對話」之後被 401 擋下：同一個人續期接回畫面上那一條，不改接 serve 回的（#2490）', async () => {
+    serveSessions(
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+    );
+    const element = document.createElement(ELEMENT_NAME);
+    await element.signIn('第一張');
+    document.body.append(element);
+    await waitFor(() => expect(threads()).toEqual(['我的']));
+    await say(element, '你好');
+    failOpen = new StreamUnauthorizedError();
+    fireEvent.click(shadow(element).getByRole('button', { name: '新對話' }));
+    await waitFor(() => expect(threads()).toHaveLength(2));
+    const fresh = clients[0]?.opened.at(-1);
+    if (fresh === undefined || fresh === '我的') throw new Error('沒開到新的一條');
+    const view = shadow(element);
+    await view.findByText(EMBED_UNAUTHORIZED_TEXT);
+    const opened = clients[0]?.opened.length ?? 0;
+
+    failOpen = undefined;
+    await act(async () => {
+      await element.signIn('續期');
+    });
+    await waitFor(() => expect(clients[0]?.opened.length).toBeGreaterThan(opened));
+    await waitFor(() => expect(view.queryByText(EMBED_UNAUTHORIZED_TEXT)).toBeNull());
+    expect(new Set(clients[0]?.opened.slice(opened))).toEqual(new Set([fresh]));
+  });
+
+  test('換票被拒 identity_rejected、cookie 還有效：對話照常，不說沒有權限、不重開下行（#2490）', async () => {
+    const answers = [
+      Response.json({ expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' }),
+      Response.json({ error: 'identity_rejected' }, { status: 403 }),
+    ];
+    vi.stubGlobal('fetch', async () => answers.shift() ?? Response.json({}, { status: 500 }));
+    const element = document.createElement(ELEMENT_NAME);
+    await element.signIn('第一張');
+    document.body.append(element);
+    await waitFor(() => expect(threads()).toEqual(['我的']));
+    const opened = clients[0]?.opened.length ?? 0;
+    const failure = await element.signIn('被拒').catch((error: unknown) => error);
+    expect(failure).toMatchObject({ name: 'NexusSignInError', code: 'identity_rejected' });
+    await say(element, '還在嗎');
+    expect(clients[0]?.opened).toHaveLength(opened);
+    expect(shadow(element).queryByText(EMBED_UNAUTHORIZED_TEXT)).toBeNull();
+  });
+
   test('拿掉之後到點不發', async () => {
     // 有效期很短：剩一半的時候就發（50 毫秒後）。
     const expiresAt = Date.now() + 100;

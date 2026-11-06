@@ -308,7 +308,7 @@ describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
     expect(fromInjected).not.toBeInstanceOf(StreamUnauthorizedError);
   });
 
-  it('下行回 401 以外的狀態：不叫，也不是 StreamUnauthorizedError（#2490）', async () => {
+  it('下行回 403（來源不受信任）：不叫，也不是 StreamUnauthorizedError，呼叫端照舊重試（#2490）', async () => {
     const onUnauthorized = vi.fn();
     const { client } = createAgentConnection({
       fetch: async () => new Response('', { status: 403 }),
