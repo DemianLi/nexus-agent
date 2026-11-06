@@ -1,7 +1,8 @@
 /**
  * native 模型那一串會改請求或回覆的格（#2416）：換模型、子代理跟隨、圖片省略、修工具參數、輸出上限、影子比對、歷史從日誌推、
- * 補懸空呼叫。每一格登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 由 native 在模型那一串原位直接呼叫，
- * 子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），經 `wrapModelCall`。
+ * 補懸空呼叫（摘要器也會改請求、也登記了一步，次數另由 `summarizer-cell.test.ts` 數）。每一格登記成一步（`model-call-step.ts`
+ * 的 `withModelCallStep`），root 由 native 在模型那一串原位直接呼叫，子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），
+ * 經 `wrapModelCall`。
  *
  * 計數做法同 `recorder-cells.test.ts`：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層
  * `AsyncLocalStorage`，沒有那一層就是經 `wrapModelCall`。哪一邊照 state 的第一則訊息分。

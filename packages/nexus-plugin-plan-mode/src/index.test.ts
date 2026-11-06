@@ -262,10 +262,11 @@ describe('exit_plan_mode 沒有生效時', () => {
 });
 
 /**
- * 薄測試，只斷言「`apply` 真的往那幾個註冊點放了東西」與那顆 middleware 登記了環繞步，加上兩條**順序**的斷言。
+ * 薄測試：斷言 `apply` 往那幾個註冊點放了東西；那顆 middleware 登記的環繞步與 `wrapModelCall` 交出同一份補過名字的請求；
+ * middleware 的形狀（`prepend`、沒有 `stateSchema`、邊界 hook 與 `wrapToolCall`）。
  *
  * 計劃模式**真的有沒有作用**的驗收在組裝點（`apps/harness` 的 `plan-mode.test.ts`）
- * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
+ * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容、`/plan` 的提示與交出的請求。
  */
 describe('createPlanModePlugin', () => {
   it('那顆 middleware 登記了環繞步：native 直接呼叫那一步，跟經 wrapModelCall 一樣補上退出工具的名字', async () => {
