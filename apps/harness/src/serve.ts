@@ -192,6 +192,7 @@ import { startMemoryGauge } from './memory-gauge.js';
 import { memorySourceWarnings } from './memory-source-check.js';
 import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
 import { assertDistinctSecretFiles, loadOrCreateBearerTokenFile } from './bearer-token-file.js';
+import { EMBED_IDENTITIES_FILE, EmbedIdentityTable } from './embed-identities.js';
 import { EMBED_AUDIT_FILE, openEmbedAudit } from './embed-audit.js';
 import type { EmbedAudit } from './embed-audit.js';
 import {
@@ -563,8 +564,8 @@ export interface RunServeOptions {
    */
   readonly conversation?: ConversationProcessMode;
   /**
-   * 嵌入換票的「對方帳號 → nexus 身分」（#2370），只給測試用。產品路徑不設，用 `rejectAllIdentities`：對應方式待 #1827 D231 拍板，
-   * 在那之前換票一律拒。
+   * 嵌入換票的「對方帳號 → nexus 身分」（#2370），只給測試用。產品路徑不設，用 `rejectAllIdentities`：對應表（`embed-identities.ts`）
+   * 照樣在啟動時讀、驗，但不拿來放行：對話還沒按擁有者隔離。TODO(#2370)：隔離做好之後改交對應表。
    */
   readonly embedIdentity?: EmbedIdentityResolver;
 }
@@ -1276,6 +1277,16 @@ async function startServer(
       }),
     });
   }
+  // 身分對應表（#1827 D231）：有嵌入方就要有，檔不在、權限過寬、不合規都起不來。
+  const embedIdentitiesFile = join(resolveHarnessHome(env), EMBED_IDENTITIES_FILE);
+  const embedIdentityTable =
+    embedders.length === 0
+      ? undefined
+      : EmbedIdentityTable.load(
+          embedIdentitiesFile,
+          embedders.map(({ id }) => id),
+          { warn },
+        );
   let embedAudit: EmbedAudit | undefined;
   let embedRoutes: { readonly login: EmbedLogin; readonly session: EmbedSession } | undefined;
   const webDist = options.webDist ?? resolveWebDist();
@@ -2158,8 +2169,10 @@ async function startServer(
               '；',
             )}；稽核記在 ${join(resolveHarnessHome(env), EMBED_AUDIT_FILE)}）；兌換 POST ${EMBED_SESSION_PATH}，嵌入 cookie ${String(
             embedLoginConfig.cookieMaxAgeSeconds,
-          )} 秒；身分對應${
-            options.embedIdentity === undefined ? '尚未接上，一律拒絕' : '由呼叫端提供'
+          )} 秒；身分對應表 ${embedIdentitiesFile}（${String(embedIdentityTable?.size ?? 0)} 筆）；${
+            options.embedIdentity === undefined
+              ? '對話的擁有者隔離還沒上，換票一律拒絕'
+              : '身分對應由呼叫端提供'
           }`,
     );
   }
