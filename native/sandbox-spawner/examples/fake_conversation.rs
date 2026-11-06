@@ -10,7 +10,10 @@
 //!   同一個群組）、`close-stdout`、`ignore-eof`（stdin EOF 之後不結束）、`ignore-term`（再加上不理 SIGTERM）、
 //!   `wrong-bound`（回別的 thread id，取代正常的 `bound`）、`flood`（之後不停往 stdout 寫 `heartbeat`，不再讀 stdin）、`stderr-flood`（之後不停往 stderr 寫填充，不再讀 stdin）、
 //!   `heap`（往 stderr 寫 V8 heap 用完的訊息再 SIGABRT）、`alloc:<MiB>`（配置並碰過這麼多記憶體，留著不放）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）、
-//!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）。
+//!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）、
+//!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`spin`（主執行緒空轉吃滿 CPU，心跳照送）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
+//!   之後恢復）。
+//! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`eof`、`sigterm`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -18,9 +21,13 @@ use nexus_sandbox_spawner::supervisor_protocol::{
     decode_conversation_command, encode_conversation_report, ConversationCommand, ConversationReport, TurnPhase,
 };
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
+/// 心跳先停：`hang`、`silent`、`close-stdout` 設它。
+static QUIET: AtomicBool = AtomicBool::new(false);
+const HEARTBEAT: Duration = Duration::from_millis(50);
 
 fn log(line: &str) {
     let text = format!("{line}\n");
@@ -41,6 +48,19 @@ fn report(report: &ConversationReport) {
     let mut out = std::io::stdout().lock();
     out.write_all(&frame(&encode_conversation_report(report))).unwrap();
     out.flush().unwrap();
+}
+
+fn start_heartbeat() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(HEARTBEAT);
+        if QUIET.load(Ordering::SeqCst) {
+            continue;
+        }
+        // 一則框在同一把 stdout 鎖裡寫完，不會跟主執行緒的框交錯；寫不出去（stdout 關了）就不寫。
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(&frame(&encode_conversation_report(&ConversationReport::Heartbeat)));
+        let _ = out.flush();
+    });
 }
 
 fn main() {
@@ -79,6 +99,7 @@ fn main() {
             let ConversationCommand::Bind { thread_id } = decode_conversation_command(&payload).unwrap() else { continue };
             let thread = String::from_utf8(thread_id.clone()).unwrap();
             log(&format!("bind {thread}"));
+            start_heartbeat();
             let actions: Vec<&str> = thread.split(',').skip(1).collect();
             if actions.contains(&"garbage") {
                 let mut out = std::io::stdout().lock();
@@ -112,8 +133,28 @@ fn main() {
                     },
                     // SAFETY：關掉 stdout，之後不再寫它。
                     ("close-stdout", _) => unsafe {
+                        QUIET.store(true, Ordering::SeqCst);
+                        let _lock = std::io::stdout().lock();
                         libc::close(1);
                     },
+                    ("hang", _) => {
+                        QUIET.store(true, Ordering::SeqCst);
+                        loop {
+                            // SAFETY：等訊號。
+                            unsafe { libc::pause() };
+                        }
+                    }
+                    ("spin", _) => {
+                        let mut n = 0u64;
+                        loop {
+                            n = std::hint::black_box(n.wrapping_add(1));
+                        }
+                    }
+                    ("silent", ms) => {
+                        QUIET.store(true, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
+                        QUIET.store(false, Ordering::SeqCst);
+                    }
                     ("ignore-eof", _) => ignore_eof = true,
                     ("ignore-term", _) => {
                         ignore_eof = true;

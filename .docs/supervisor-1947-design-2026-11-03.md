@@ -25,7 +25,7 @@ demian 2026-11-03 在 PM session（#1827 D164）：「1947 直接讓他寫設計
 | 行程怎麼分 | 三種行程：**Rust 監督行程**（控制面：生死、資源、容量、稽核）、**一個 Node 前台行程**（HTTP、登入、靜態檔、跨 thread 的功能）、**每條對話一個 Node 對話行程**（今天的 harness，只管一條 thread）。資料不經監督行程（§三） |
 | 前台怎麼跟對話行程講話 | **沿用今天的 wire 協定**：對話行程在自己的私有 Unix socket 上跑今天的 `createWireHandler`（只放一條 thread），前台照路徑轉送。不另訂新 RPC（§四） |
 | 監督行程怎麼跟兩種 Node 行程講話 | 照 `native/sandbox-spawner` 的格式：stdin／stdout 一筆一框（`u32 LE 長度`＋內容），Rust 與 TS 共用一份協定向量。**不加新 crate**（§五） |
-| 失控保護 | heap 上限旗標、監督行程輪詢 RSS、一輪時限的後盾、renice；死因分七類，經前台送到 web，寫進監督行程的稽核紀錄（§六） |
+| 失控保護 | heap 上限旗標、監督行程輪詢 RSS、心跳、renice；死因分七類，經前台送到 web，寫進監督行程的稽核紀錄（§六） |
 | 容量 | thread 上限改數「同時活著的對話行程」，出廠值照容器記憶體自動算；滿了先逐出最久沒用的閒置行程，沒有可逐出的才回 `thread_at_capacity`（§七） |
 | D151 | 開大 thread 只卡住它自己的對話行程，別條不受影響；前台不解析任何會話日誌（§三-3） |
 | 怎麼落地 | 加 `--process-model`：Linux 預設仍是 `single`（今天的 serve），驗收全過才改預設；單行程模式至少保留一個版本，當回退與 macOS 開發用（§八） |
@@ -202,8 +202,8 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 | 一次大配置（S3b） | 監督行程 | 輪詢 `/proc/<pid>/status` 的 RSS，超過上限就 SIGKILL | c0p 839 ms、p2 1,434 ms |
 | heap 外（S3c） | 監督行程 | 同上；被 cgroup OOM killer 殺的，從結束訊號與 `memory.events` 分辨 | c0p 103 ms、p2 129 ms |
 | 一輪跑太久 | 對話行程自己 | 今天的一輪時鐘（30 分鐘，`settings/turn-timeout.ts:49`），照停止鍵的路中止 | — |
-| 事件迴圈卡死（S4） | 監督行程 | 對話行程在一輪中每秒送 `heartbeat`；一輪中超過時鐘＋寬限、或心跳斷了超過 N 秒，就照拆除梯度殺。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以後盾一定在外面。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級，C2b 定值並驗 | 失控的都在時限被殺，其他對話零錯誤 |
-| 吃滿 CPU | 監督行程 | 連續吃滿超過 N 秒就 renice 到 19（R3：先不上 cgroup） | 其他對話 p95 +11–20% |
+| 事件迴圈卡死（S4） | 監督行程 | 對話行程收到 `bind` 起就定時送 `heartbeat`，一直送到收掉，不分在不在一輪裡（D238）。監督行程只看心跳斷了多久：超過 `--stall-ms`（N）就照拆除梯度殺，死因 `stalled`。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以這道一定在外面。`turn(begin\|end)` 不參與判斷，只給 §7-3 用；一輪跑太久交給上一列的一輪時鐘。`ready` 之前不判。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級；出廠值與量到的最大沉默寫在 C2b 的 PR | 失控的都在 N 內被殺，其他對話零錯誤 |
+| 吃滿 CPU | 監督行程 | 輪詢 RSS 時一併取樣 `/proc/<pid>/stat` 的 utime＋stime，連續吃滿一顆超過 `--cpu-busy-ms` 就把整個行程群組 renice 到 19，只做一次、不調回（R3：先不上 cgroup） | 其他對話 p95 +11–20% |
 
 **拆除梯度照 dsh**（`packages/subagent/subagent-acp/src/run.ts:183-212`）：`drain` → stdin EOF → 寬限 → SIGTERM → 寬限 → SIGKILL → 確認行程群組已空。被殺的對話行程留下的「輪還開著」的日誌，下次開時走今天的續接收尾（`resumeClosingInterruptedTurn`，`serve.ts:479`），不另寫一套。
 
@@ -216,7 +216,7 @@ dsh 只回 `{exitCode, signal}`，分類交給呼叫方。nexus 的呼叫方是�
 | `heap` | V8 的 heap 上限：SIGABRT，stderr 有 `Reached heap limit` |
 | `memory` | 監督行程因 RSS 超過上限殺的 |
 | `host-oom` | 不是監督行程殺的 SIGKILL，且 cgroup 的 `oom_kill` 計數增加 |
-| `stalled` | 監督行程因時鐘或心跳殺的 |
+| `stalled` | 監督行程因心跳斷了超過 N 殺的 |
 | `crash` | 其他非零結束或訊號，含沒起成 |
 | `evicted` | 閒置逐出（正常收尾） |
 | `shutdown` | 整台停機 |
@@ -321,7 +321,7 @@ C2a ┼─> C1 ─┐
 
 ### C2b Rust 監督行程 v1（dev-h3）
 
-- **做什麼**：`native/` 下新的執行檔。起與收對話行程（拆除梯度照 dsh）、預熱池、RSS 輪詢、心跳與時鐘後盾、renice、死因七類、稽核 JSONL、容量計算與 LRU 逐出（§七）。不加 crate（§五-1）；建置、musl、授權清單照 spawner。
+- **做什麼**：`native/` 下新的執行檔。起與收對話行程（拆除梯度照 dsh）、預熱池、RSS 輪詢、心跳、renice、死因七類、稽核 JSONL、容量計算與 LRU 逐出（§七）。不加 crate（§五-1）；建置、musl、授權清單照 spawner。
 - **驗收**：
   - 研究的 S3、S3b、S3c、S4 在**真的對話行程**（C1）上及格：失控那條被殺、其他對話零中斷、宿主存活、其他對話 p95 上升 ≤ 20%。
   - 每一類死因都有一條會紅的測試（造出那種死法、斷言分類）。

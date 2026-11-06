@@ -42,6 +42,7 @@ macro_rules! say {
 
 mod args;
 mod audit;
+mod cpu;
 mod memory;
 mod process;
 
@@ -138,6 +139,28 @@ struct Conversation {
     stderr: Option<StderrTap>,
     /// 輪詢看到的最高 RSS（kB），寫進稽核。
     rss_kb: u64,
+    /// 送出 `bind` 之後最後一次聽到它的時間；還沒送 `bind` 是 `None`，不判 `stalled`。
+    heard_at: Option<Instant>,
+    /// 送出 `bind` 之後，兩則回報之間最長隔了多久，寫進稽核。
+    max_silence: Duration,
+    busy: cpu::Busy,
+    /// renice 過了沒：`None` 沒試過，`Some(false)` 試了沒成功（不再試）。
+    reniced: Option<bool>,
+}
+
+impl Conversation {
+    /// 聽到它的一則回報。
+    fn hear(&mut self, now: Instant) {
+        if let Some(at) = self.heard_at {
+            self.max_silence = self.max_silence.max(now.saturating_duration_since(at));
+            self.heard_at = Some(now);
+        }
+    }
+
+    /// 綁上之後、還沒在收，而且已經 `stall` 沒聽到它。
+    fn stalled(&self, now: Instant, stall: Duration) -> bool {
+        self.proc.stop.is_none() && self.heard_at.is_some_and(|at| now.saturating_duration_since(at) >= stall)
+    }
 }
 
 struct Supervisor {
@@ -151,6 +174,7 @@ struct Supervisor {
     shutting_down: bool,
     oom: OomCounter,
     rss_poll_at: Instant,
+    ticks_per_second: u64,
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
@@ -191,6 +215,7 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         shutting_down: false,
         oom: OomCounter::open(),
         rss_poll_at: Instant::now(),
+        ticks_per_second: cpu::ticks_per_second(),
     };
     supervisor.start_front();
     Ok(supervisor)
@@ -355,7 +380,10 @@ impl Supervisor {
         }
         if self.rss_poll_at <= now {
             self.rss_poll_at = now + self.args.rss_poll;
-            self.poll_rss();
+            self.poll_resources(now);
+        }
+        if let Some(stall) = self.args.stall {
+            self.check_stalls(now, stall);
         }
         if self.front_restart_at.is_some_and(|at| at <= now) && !self.shutting_down {
             self.front_restart_at = None;
@@ -371,15 +399,47 @@ impl Supervisor {
             .chain(self.front.as_ref().and_then(Proc::deadline))
             .chain(restart)
             .chain(Some(self.rss_poll_at).filter(|_| !self.conversations.is_empty()))
+            .chain(self.args.stall.into_iter().flat_map(|stall| {
+                self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.heard_at.map(|at| at + stall))
+            }))
             .min()
     }
 
+    /// 綁上之後 `stall` 沒聽到回報的，照拆除梯度收，死因 `stalled`。監督行程自己停住過（fd 2 阻塞、被 SIGSTOP）時，
+    /// 回報可能還在管線裡沒讀，所以判之前先讀一次它的控制通道。
+    fn check_stalls(&mut self, now: Instant, stall: Duration) {
+        for index in 0..self.conversations.len() {
+            if !self.conversations[index].stalled(now, stall) {
+                continue;
+            }
+            self.on_conversation_readable(index);
+            let conversation = &mut self.conversations[index];
+            if conversation.stalled(now, stall) {
+                say!("對話行程 {} 已經 {} ms 沒有回報，收掉", conversation.proc.pid, stall.as_millis());
+                conversation.cause.get_or_insert(DeathCause::Stalled);
+                conversation.proc.begin_stop(now, self.args.eof_grace);
+            }
+        }
+    }
+
     /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
-    /// 已經在收的（例如停機）照原本的理由。
+    /// 已經在收的（例如停機）照原本的理由。同一次也取樣 CPU：連續吃滿一顆超過 `--cpu-busy-ms` 的，把群組 renice 到 19，只做一次。
     ///
-    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
-    fn poll_rss(&mut self) {
+    /// 只量 leader：只讀它自己的 `VmRSS` 與 CPU，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 與 renice 也打不到
+    /// （TODO(#2494)）。
+    fn poll_resources(&mut self, now: Instant) {
         for conversation in &mut self.conversations {
+            let pid = conversation.proc.pid;
+            let busy = cpu::cpu_ticks(pid).and_then(|ticks| conversation.busy.sample(ticks, now, self.ticks_per_second));
+            let too_busy = self.args.cpu_busy.is_some_and(|limit| busy.is_some_and(|busy| busy >= limit));
+            if too_busy && conversation.reniced.is_none() && conversation.proc.stop.is_none() {
+                let result = cpu::renice_group(pid);
+                match &result {
+                    Ok(()) => say!("對話行程 {pid} 連續吃滿 CPU {} ms，renice 到 19", busy.unwrap_or_default().as_millis()),
+                    Err(err) => say!("對話行程 {pid} 連續吃滿 CPU，renice 失敗：{err}"),
+                }
+                conversation.reniced = Some(result.is_ok());
+            }
             let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
             conversation.rss_kb = conversation.rss_kb.max(kb);
             let over = self.args.rss_limit_kb.is_some_and(|limit| kb > limit);
@@ -476,6 +536,10 @@ impl Supervisor {
                 cause: None,
                 stderr,
                 rss_kb: 0,
+                heard_at: None,
+                max_silence: Duration::ZERO,
+                busy: cpu::Busy::default(),
+                reniced: None,
             }),
             Err(err) => {
                 say!("對話行程起不來：{err}");
@@ -487,6 +551,8 @@ impl Supervisor {
                     exit: Exit::NOT_STARTED,
                     turns: 0,
                     rss_kb: 0,
+                    max_silence_ms: 0,
+                    reniced: false,
                     error: Some(&error),
                 });
                 self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Crash });
@@ -505,6 +571,9 @@ impl Supervisor {
                 return;
             }
         };
+        if !frames.is_empty() {
+            self.conversations[index].hear(Instant::now());
+        }
         for payload in frames {
             let conversation = &mut self.conversations[index];
             let report = match decode_conversation_report(&payload) {
@@ -519,6 +588,7 @@ impl Supervisor {
             match report {
                 ConversationReport::Ready if conversation.phase == Phase::Starting => {
                     conversation.phase = Phase::Binding;
+                    conversation.heard_at = Some(Instant::now());
                     let bind = ConversationCommand::Bind { thread_id: conversation.thread.clone() };
                     conversation.proc.chan.send(&encode_conversation_command(&bind));
                 }
@@ -638,6 +708,8 @@ impl Supervisor {
             exit,
             turns: conversation.turns,
             rss_kb: conversation.rss_kb,
+            max_silence_ms: conversation.max_silence.as_millis().min(u128::from(u64::MAX)) as u64,
+            reniced: conversation.reniced == Some(true),
             error: None,
         });
         let _ = std::fs::remove_file(&conversation.socket);

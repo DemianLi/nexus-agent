@@ -39,6 +39,10 @@ pub enum Record<'a> {
         turns: u32,
         /// 輪詢看到的最高 RSS（kB）；沒量到是 0。
         rss_kb: u64,
+        /// 送出 `bind` 之後，兩則回報之間最長隔了多久；沒送過 `bind` 是 0。
+        max_silence_ms: u64,
+        /// 因為連續吃滿 CPU 被 renice 到 19 過。
+        reniced: bool,
         error: Option<&'a str>,
     },
     Front { pid: i32, exit: Exit, error: Option<&'a str> },
@@ -101,10 +105,13 @@ impl Audit {
 fn line(ts_ms: u128, record: &Record<'_>) -> String {
     let mut out = format!("{{\"ts_ms\":{ts_ms}");
     let (exit, error) = match record {
-        Record::Conversation { thread, pid, cause, exit, turns, rss_kb, error } => {
+        Record::Conversation { thread, pid, cause, exit, turns, rss_kb, max_silence_ms, reniced, error } => {
             out.push_str(",\"role\":\"conversation\",\"thread\":");
             json_string(&mut out, &String::from_utf8_lossy(thread));
-            out.push_str(&format!(",\"pid\":{pid},\"cause\":\"{}\",\"turns\":{turns},\"rss_kb\":{rss_kb}", cause_name(*cause)));
+            out.push_str(&format!(
+                ",\"pid\":{pid},\"cause\":\"{}\",\"turns\":{turns},\"rss_kb\":{rss_kb},\"max_silence_ms\":{max_silence_ms},\"reniced\":{reniced}",
+                cause_name(*cause)
+            ));
             (exit, error)
         }
         Record::Front { pid, exit, error } => {
@@ -171,12 +178,14 @@ mod tests {
             exit: Exit { code: Some(3), signal: None },
             turns: 2,
             rss_kb: 81920,
+            max_silence_ms: 5012,
+            reniced: true,
             error: None,
         };
         assert_eq!(
             line(7, &record),
             "{\"ts_ms\":7,\"role\":\"conversation\",\"thread\":\"t\\\"1\\\\\\u000a\\u0001\u{fffd}\",\"pid\":42,\
-\"cause\":\"crash\",\"turns\":2,\"rss_kb\":81920,\"exit_code\":3,\"signal\":null}\n"
+\"cause\":\"crash\",\"turns\":2,\"rss_kb\":81920,\"max_silence_ms\":5012,\"reniced\":true,\"exit_code\":3,\"signal\":null}\n"
         );
     }
 

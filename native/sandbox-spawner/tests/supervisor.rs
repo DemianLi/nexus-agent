@@ -75,11 +75,13 @@ struct Options {
     discard_stderr: bool,
     /// 監督行程的 stderr 接一條讀端已經關掉的管線：每次寫都是 EPIPE。
     broken_stderr: bool,
+    /// 監督行程的 stderr 接一條管線，讀端留在 `Harness::stderr`，測試不讀它就會滿。
+    piped_stderr: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false }
     }
 }
 
@@ -89,6 +91,7 @@ struct Harness {
     front: Option<UnixStream>,
     inbox: Vec<u8>,
     dir: PathBuf,
+    stderr: Option<std::fs::File>,
 }
 
 impl Harness {
@@ -107,7 +110,15 @@ impl Harness {
         cmd.args(["--eof-grace-ms", &options.eof_grace_ms.to_string()]);
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
         cmd.args(&options.extra);
-        let stderr = if options.broken_stderr {
+        let mut stderr_read = None;
+        let stderr = if options.piped_stderr {
+            let mut fds = [0; 2];
+            // SAFETY：拿一對新的 pipe。
+            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+            // SAFETY：兩端都是剛拿到的，各交給一個擁有者。
+            stderr_read = Some(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) });
+            Stdio::from(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) })
+        } else if options.broken_stderr {
             let mut fds = [0; 2];
             // SAFETY：拿一對新的 pipe，讀端當場關掉。
             assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
@@ -121,7 +132,7 @@ impl Harness {
             Stdio::from(std::fs::File::create(dir.join("supervisor.err")).unwrap())
         };
         let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn().unwrap();
-        let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir };
+        let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir, stderr: stderr_read };
         harness.accept_front();
         harness
     }
@@ -609,4 +620,87 @@ fn stderr_that_cannot_be_written_does_not_take_the_supervisor_down() {
     assert_eq!(h.down("a,wrong-bound"), DeathCause::Crash);
     h.up("b");
     assert!(h.child.try_wait().unwrap().is_none(), "監督行程不該結束");
+}
+
+/// 一個行程每條執行緒的 nice 值。
+fn thread_nices(pid: i32) -> Vec<i64> {
+    std::fs::read_dir(format!("/proc/{pid}/task"))
+        .map(|tasks| {
+            tasks
+                .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("stat")).ok())
+                .map(|stat| stat.rsplit_once(") ").unwrap().1.split(' ').nth(16).unwrap().parse().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn audit_number(line: &str, key: &str) -> u64 {
+    line.split(&format!("\"{key}\":")).nth(1).unwrap().split([',', '}']).next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn reports_stopping_after_bind_is_stalled() {
+    // RSS 輪詢放到一分鐘：只有 stall 的期限會叫醒 poll。
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "300", "--rss-poll-ms", "60000"], ..Options::default() });
+    assert_eq!(h.down("x,hang"), DeathCause::Stalled);
+    let line = h.audit_line("\"thread\":\"x,hang\"");
+    assert!(line.contains("\"cause\":\"stalled\""), "{line}");
+    assert!(audit_number(&line, "max_silence_ms") < 300, "{line}");
+}
+
+#[test]
+fn a_silence_shorter_than_the_limit_is_not_stalled() {
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "1500"], ..Options::default() });
+    let socket = h.up("q,silent:600");
+    // 沉默過去之後還是同一個行程。
+    assert!(wait_until(|| log(&socket).len() >= 2));
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert_eq!(h.up("q,silent:600"), socket);
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("q,silent:600"), DeathCause::Shutdown);
+    let silence = audit_number(&h.audit_line("\"thread\":\"q,silent:600\""), "max_silence_ms");
+    assert!((600..1500).contains(&silence), "{silence}");
+}
+
+#[test]
+fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "300"], piped_stderr: true, ..Options::default() });
+    let socket = h.up("a");
+    // j 往 stderr 倒 1000 KiB，監督行程轉送時把測試沒在讀的那條管線寫滿，卡在寫上遠超過 300 ms。
+    h.ensure("j,stderr-junk:1000");
+    std::thread::sleep(Duration::from_millis(1_500));
+    let mut stderr = h.stderr.take().unwrap();
+    std::thread::spawn(move || std::io::copy(&mut stderr, &mut std::io::sink()));
+    // a 的回報這段時間都在管線裡：醒來之後不能被判 stalled。
+    h.ensure("a");
+    loop {
+        match h.event() {
+            FrontEvent::Up { thread_id, socket: up } if thread_id == b"a" => {
+                assert_eq!(PathBuf::from(String::from_utf8(up).unwrap()), socket);
+                break;
+            }
+            FrontEvent::Up { .. } => {}
+            other => panic!("要 a 的 up，拿到 {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_conversation_spinning_the_cpu_is_reniced_with_all_its_threads() {
+    let mut h = Harness::start(Options { extra: vec!["--cpu-busy-ms", "300", "--rss-poll-ms", "50"], ..Options::default() });
+    let idle = logged_pid(&h.up("q"), "pid");
+    let spin = logged_pid(&h.up("s,spin"), "pid");
+    assert!(wait_until(|| {
+        let nices = thread_nices(spin);
+        nices.len() >= 2 && nices.iter().all(|&n| n == 19)
+    }), "{:?}", thread_nices(spin));
+    let base = thread_nices(h.pid() as i32)[0];
+    assert_ne!(base, 19);
+    assert!(thread_nices(idle).iter().all(|&n| n == base), "{:?}", thread_nices(idle));
+    kill(h.pid(), libc::SIGTERM);
+    for _ in 0..2 {
+        assert!(matches!(h.event(), FrontEvent::Down { cause: DeathCause::Shutdown, .. }));
+    }
+    assert!(h.audit_line("\"thread\":\"s,spin\"").contains("\"reniced\":true"));
+    assert!(h.audit_line("\"thread\":\"q\"").contains("\"reniced\":false"));
 }
