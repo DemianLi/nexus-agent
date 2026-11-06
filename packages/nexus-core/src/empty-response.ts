@@ -43,6 +43,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { noteStreamFailure } from './stream-retry.js';
 import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
@@ -118,9 +119,9 @@ export function isEmptyStopReply(message: AIMessage): boolean {
  * @returns 要排在起訖紀錄器內側、用量記錄器外側的 middleware。
  */
 export function createEmptyResponseMiddleware(): AgentMiddleware {
-  return createMiddleware({
-    name: EMPTY_RESPONSE_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       // **這裡不標「模型呼叫的失敗」**（#1778）：這一層在 plugin 的 `wrapModelCall` 外面，`catch` 收到的包含插件自己拋的錯。
       // 記號由最內層那一顆打，見 {@link ./model-call-failure.ts}。
       const response = await handler(request);
@@ -138,5 +139,10 @@ export function createEmptyResponseMiddleware(): AgentMiddleware {
       noteStreamFailure({ code: EMPTY_RESPONSE_CODE });
       throw new EmptyResponseError();
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: EMPTY_RESPONSE_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }

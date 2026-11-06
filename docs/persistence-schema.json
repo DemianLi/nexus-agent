@@ -7444,7 +7444,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestConfig"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:149"
+        "packages/nexus-core/src/request-snapshot.ts:150"
       ]
     },
     {
@@ -8691,7 +8691,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestSnapshotReason"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:138"
+        "packages/nexus-core/src/request-snapshot.ts:139"
       ]
     },
     {
@@ -8714,7 +8714,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestToolSchema"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:141"
+        "packages/nexus-core/src/request-snapshot.ts:142"
       ]
     },
     {
@@ -9128,7 +9128,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestHeader"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:161"
+        "packages/nexus-core/src/request-snapshot.ts:162"
       ]
     },
     {

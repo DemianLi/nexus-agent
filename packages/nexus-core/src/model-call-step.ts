@@ -42,12 +42,20 @@ const registeredSteps = new WeakMap<object, ModelCallStep>();
  * @param build - 拿 `wrapModelCall` 造那顆 middleware；回的那顆要用收到的這支當 `wrapModelCall`，native 直接呼叫的那一步才跟經
  *   `wrapModelCall` 的是同一份。
  * @returns `build` 造的那顆。
+ * @throws {Error} `build` 回的那顆的 `wrapModelCall` 不是收到的那支。
  */
 export function withModelCallStep<M extends object>(
   step: ModelCallStep,
   build: (wrapModelCall: (request: never, handler: never) => unknown) => M,
 ): M {
-  const middleware = build(wrapModelCallFromStep(step) as never);
+  const wrapModelCall = wrapModelCallFromStep(step);
+  const middleware = build(wrapModelCall as never);
+  if ((middleware as { wrapModelCall?: unknown }).wrapModelCall !== wrapModelCall) {
+    const name = (middleware as { name?: unknown }).name;
+    throw new Error(
+      `middleware "${String(name)}" 的 wrapModelCall 不是 withModelCallStep 交給 build 的那支：native 直接呼叫的那一步會跟它不一樣`,
+    );
+  }
   registeredSteps.set(middleware, step);
   return middleware;
 }
