@@ -39,7 +39,9 @@ import type {
   SessionHeaderBuildMetadata,
   SessionStore,
   StoredSession,
+  StoredSessionEmbedOrigin,
   StoredSessionHeader,
+  StoredSessionOwner,
 } from './session-store.js';
 import type { SessionRegistry } from './session-registry.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
@@ -325,6 +327,13 @@ export function attachSessionPersistence(
     /** 照嵌入版設定檔開的 root（#2367）：**只進 root 的 header**，見 {@link StoredSessionHeader.profile}。 */
     readonly rootProfile?: 'embed';
     /**
+     * 嵌入身分開的 root（#2370）：**只進 root 的 header**，見 {@link StoredSessionHeader.owner}。只能跟 `rootProfile` 一起給。
+     */
+    readonly rootOwner?: {
+      readonly owner: StoredSessionOwner;
+      readonly embedOrigin: StoredSessionEmbedOrigin;
+    };
+    /**
      * 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。
      *
      * **一路轉發給每一份協調器**——這個行程裡的每一條會話（root 與 subagent）共用同一個
@@ -394,6 +403,11 @@ export function attachSessionPersistence(
         options.rootModelEntryId !== undefined && { modelEntryId: options.rootModelEntryId }),
       ...(address.kind === 'root' &&
         options.rootProfile !== undefined && { profile: options.rootProfile }),
+      ...(address.kind === 'root' &&
+        options.rootOwner !== undefined && {
+          owner: options.rootOwner.owner,
+          embedOrigin: options.rootOwner.embedOrigin,
+        }),
     };
     // 接回來的有兩種：root 由入口在建構時給（`resumedRoot`），子代理冷復活（#1271）由執行期開日誌時帶在 entry 上。
     const resumed =

@@ -152,7 +152,7 @@ function readTable(
 }
 
 /**
- * 管理者寫的身分對應表。實作 {@link EmbedIdentityResolver}，另外有 {@link has}。
+ * 管理者寫的身分對應表。實作 {@link EmbedIdentityResolver}（換票與兌換）與 `embed-session.ts` 的 `EmbedIdentityCheck`（驗嵌入 cookie）。
  *
  * 查表是同步的：表檔小，stat 之間有間隔，檔沒變就不讀。
  */
@@ -212,7 +212,7 @@ export class EmbedIdentityTable implements EmbedIdentityResolver {
   }
 
   /**
-   * 這組對應現在還在不在表上。TODO(#2370)：驗嵌入 cookie 時接上，讓從表上拿掉的人手上的 cookie 失效。
+   * 這組對應現在還在不在表上。驗嵌入 cookie 時問它（`embed-session.ts`）：從表上拿掉的人，手上沒到期的 cookie 最多晚 {@link IDENTITY_TABLE_STAT_INTERVAL_MS} 就驗不過。
    *
    * @returns 表合規、而且 (embedder, subject) 現在對到的正是 `userId`。
    */

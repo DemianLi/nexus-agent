@@ -198,12 +198,34 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
   });
 });
 
+/** 嵌入身分開的 thread 的 header 兩格（#2370）。 */
+const ORIGIN = { embedder: 'crm', loginSessionSha256: 'a'.repeat(64) };
+const OWNED = { profile: 'embed', owner: { userId: 'u' }, embedOrigin: ORIGIN };
+
 describe('header', () => {
+  it('嵌入身分開的：owner、embedOrigin、profile 三格一起，讀得出', async () => {
+    const directory = await written([usage], OWNED);
+    expect(await lengths(directory)).toEqual([1, 1]);
+  });
+
   it.each([
     ['createdAt 是 -1', { createdAt: -1 }, 'createdAt'],
     ['cwd 是相對路徑', { cwd: 'relative/dir' }, 'cwd'],
     ['多一個沒人寫過的鍵 foo', { foo: 1 }, 'foo'],
     ['profile 不是 embed（#2367 只寫 embed）', { profile: 'full' }, 'profile'],
+    [
+      'owner 沒有 embedOrigin（#2370）',
+      { profile: 'embed', owner: { userId: 'u' } },
+      'embedOrigin',
+    ],
+    ['owner 沒有 profile: embed', { owner: { userId: 'u' }, embedOrigin: ORIGIN }, 'profile'],
+    ['owner 的 userId 是空字串', { ...OWNED, owner: { userId: '' } }, 'owner'],
+    ['owner 多一個鍵', { ...OWNED, owner: { userId: 'u', name: 'x' } }, 'owner'],
+    [
+      'embedOrigin 的 loginSessionSha256 不是 64 個小寫十六進位',
+      { ...OWNED, embedOrigin: { ...ORIGIN, loginSessionSha256: 'A'.repeat(64) } },
+      'embedOrigin',
+    ],
   ])('D：%s，唯讀打開與續接都拒成 SessionCorruptionError', async (_name, header, cell) => {
     const directory = await written([usage], header);
     for (const error of await failures(directory)) {

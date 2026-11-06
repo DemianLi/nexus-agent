@@ -15,7 +15,7 @@ serve 在 `/nexus/` 底下供應兩個檔：
 
 登入：使用者先開 serve 啟動時印的登入網址（`https://<宿主頁的網域>/nexus/?token=…`），serve 設好會話 cookie 後轉到 `/nexus/`，也就是獨立頁面；之後開宿主頁，元件就帶著這個 cookie。cookie 只送給 `/nexus/`，宿主頁自己的路徑收不到。
 
-換票登入（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：宿主系統的後端用服務憑證打 `POST /nexus/embed/exchange`，替使用者換一張一次性的登入票；元件拿票打 `POST /nexus/embed/session`，兌換一顆只打得到嵌入路由的 cookie，見 [`operations.md`](operations.md) 的〈嵌入方換票登入〉。**現在還用不了**：身分對應表（管理者寫的 `<home>/embed-identities.json`）serve 會讀，但對話按人隔離之前換票一律被拒；元件也還沒有收票的入口。在那之前照上一段的方式登入。
+換票登入（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：宿主系統的後端用服務憑證打 `POST /nexus/embed/exchange`，替使用者換一張一次性的登入票；元件拿票打 `POST /nexus/embed/session`，兌換一顆只打得到嵌入路由的 cookie，見 [`operations.md`](operations.md) 的〈嵌入方換票登入〉。serve 這一側已經接上：表上（管理者寫的 `<home>/embed-identities.json`）有的人換得到票，只打得開自己開的對話；兌換的回應帶 `threadId` 時是這一次登入最新開的那一條。**元件還沒有收票的入口**，在那之前照上一段的方式登入。
 
 同源的代價：宿主頁上執行的任何腳本，都能以使用者的身分打 `/nexus/` 底下的 API。cookie 是 `HttpOnly`，腳本讀不到它，但發得出帶著它的請求。宿主頁載入哪些腳本，跟元件一樣要信得過。
 

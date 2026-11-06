@@ -3,7 +3,7 @@
  * 進路由之前看設定檔（`embedRequestRefusal`），與建好之後再核一次（`threadOrError`）。header 讀不了（#2385）也在第一道就拒。
  *
  * 走產品的線那幾條在 `embed-profile.test.ts`；第二道只在並行建同一個新 id 時才走得到，serve 排不出那個順序，所以這一檔用
- * 真的 wire handler、`storedProfile` 與 `createAgent` 換成可控的閘，同 `thread-capacity.test.ts`。
+ * 真的 wire handler、`storedAccess` 與 `createAgent` 換成可控的閘，同 `thread-capacity.test.ts`。
  */
 
 import { EMBED_PATH_PREFIX, historyPath, THREAD_NOT_EMBEDDED } from '@nexus/wire';
@@ -17,7 +17,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import type { ThreadAgent, WireHandlerOptions } from './wire-handler.js';
+import type { ThreadAgent } from './wire-handler.js';
 
 const BASE = 'http://embed-race.test';
 
@@ -36,7 +36,7 @@ async function realAgent(profile: ThreadProfile | undefined): Promise<ThreadAgen
   };
 }
 
-function rig(storedProfile: WireHandlerOptions['storedProfile']): {
+function rig(storedProfile: (threadId: string) => Promise<ThreadProfile | undefined>): {
   readonly handler: ReturnType<typeof createWireHandler>;
   readonly built: string[];
 } {
@@ -47,7 +47,10 @@ function rig(storedProfile: WireHandlerOptions['storedProfile']): {
       built.push(threadId);
       return realAgent(profile);
     },
-    storedProfile,
+    storedAccess: async (threadId) => {
+      const profile = await storedProfile(threadId);
+      return profile === undefined ? undefined : { profile };
+    },
   });
   return { handler, built };
 }

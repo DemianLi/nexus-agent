@@ -12,7 +12,6 @@ import {
   EMBED_EXCHANGE_PATH,
   EmbedTicketStore,
   MAX_EXCHANGE_BODY_BYTES,
-  rejectAllIdentities,
 } from './embed-login.js';
 import type { EmbedIdentityResolver } from './embed-login.js';
 
@@ -114,23 +113,6 @@ describe('服務憑證', () => {
 });
 
 describe('身分', () => {
-  it('出廠的 rejectAllIdentities：憑證對也換不到票，回 403 並記一筆', async () => {
-    const { login, records, tickets } = setup(rejectAllIdentities);
-    const response = await login.handle(exchange({ credential: CRM }));
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: 'identity_rejected' });
-    expect(tickets.size).toBe(0);
-    expect(records).toEqual([
-      {
-        outcome: 'identity_rejected',
-        embedder: 'crm',
-        subject: 'alice',
-        sessionIdSha256: sessionIdDigest('s-1'),
-        reason: 'identity_mapping_unavailable',
-      },
-    ]);
-  });
-
   it('對不上帳號：403，記下對方帳號與原因', async () => {
     const { login, records } = setup();
     const response = await login.handle(
