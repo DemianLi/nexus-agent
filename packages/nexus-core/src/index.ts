@@ -255,6 +255,19 @@ export {
   withToolListStep,
   wrapModelCallWith,
 } from './tool-list-step.js';
+export type {
+  SystemPromptCell,
+  SystemPromptPiece,
+  SystemPromptRequest,
+  SystemPromptStep,
+} from './system-prompt-step.js';
+export {
+  applySystemPromptPieces,
+  createSystemPromptStepMiddleware,
+  systemPromptCellOf,
+  systemPromptWrapWith,
+  withSystemPromptStep,
+} from './system-prompt-step.js';
 export type { ToolAddition, ToolAdmission } from './tool-resolution.js';
 export { addedTools, originalToolOf, toolDescriptionOf, toolNameOf } from './tool-resolution.js';
 export { admittedTools } from './tool-resolution.js';
