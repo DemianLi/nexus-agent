@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
---conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>]";
+--conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
+[--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>]";
 
 /// stdin EOF 之後等多久才送 SIGTERM。
 pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
@@ -13,6 +14,8 @@ pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
 pub const DEFAULT_TERM_GRACE: Duration = Duration::from_millis(3_000);
 /// 前台結束後隔多久重起。
 pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
+/// 多久讀一次對話行程的 RSS。
+pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -28,6 +31,9 @@ pub struct Args {
     pub eof_grace: Duration,
     pub term_grace: Duration,
     pub front_restart: Duration,
+    /// 對話行程（leader）的 RSS 超過這個值（kB）就 SIGKILL 它的群組，死因 `memory`（已經在收的照原本的理由）。沒給就不殺，只把最高值記進稽核。
+    pub rss_limit_kb: Option<u64>,
+    pub rss_poll: Duration,
 }
 
 pub fn parse(args: &[OsString]) -> Result<Args, String> {
@@ -40,6 +46,8 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut eof_grace = DEFAULT_EOF_GRACE;
     let mut term_grace = DEFAULT_TERM_GRACE;
     let mut front_restart = DEFAULT_FRONT_RESTART;
+    let mut rss_limit_kb = None;
+    let mut rss_poll = DEFAULT_RSS_POLL;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_str().ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
@@ -54,6 +62,8 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--eof-grace-ms" => eof_grace = millis(flag, value()?)?,
             "--term-grace-ms" => term_grace = millis(flag, value()?)?,
             "--front-restart-ms" => front_restart = millis(flag, value()?)?,
+            "--rss-limit-mb" => rss_limit_kb = Some(positive(flag, value()?)?.saturating_mul(1024)),
+            "--rss-poll-ms" => rss_poll = Duration::from_millis(positive(flag, value()?)?),
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
@@ -67,7 +77,17 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         eof_grace,
         term_grace,
         front_restart,
+        rss_limit_kb,
+        rss_poll,
     })
+}
+
+fn positive(flag: &str, value: OsString) -> Result<u64, String> {
+    value
+        .to_str()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .ok_or_else(|| format!("{flag} 要正整數，拿到 {value:?}"))
 }
 
 fn millis(flag: &str, value: OsString) -> Result<Duration, String> {
@@ -99,6 +119,23 @@ mod tests {
         assert_eq!(args.eof_grace, DEFAULT_EOF_GRACE);
         assert_eq!(args.term_grace, Duration::from_millis(50));
         assert_eq!(args.front_restart, DEFAULT_FRONT_RESTART);
+        assert_eq!(args.rss_limit_kb, None);
+        assert_eq!(args.rss_poll, DEFAULT_RSS_POLL);
+    }
+
+    #[test]
+    fn rss_limit_is_mib_and_must_be_positive() {
+        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let mut items = base.to_vec();
+        items.extend(["--rss-limit-mb", "512", "--rss-poll-ms", "100"]);
+        let args = parse(&os(&items)).unwrap();
+        assert_eq!(args.rss_limit_kb, Some(512 * 1024));
+        assert_eq!(args.rss_poll, Duration::from_millis(100));
+        for bad in [["--rss-limit-mb", "0"], ["--rss-poll-ms", "0"], ["--rss-limit-mb", "big"]] {
+            let mut items = base.to_vec();
+            items.extend(bad);
+            assert!(parse(&os(&items)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

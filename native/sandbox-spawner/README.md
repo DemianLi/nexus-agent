@@ -25,14 +25,20 @@
 nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]...
                  --conversation <程式> [--conversation-arg <參數>]...
                  [--eof-grace-ms 6000] [--term-grace-ms 3000] [--front-restart-ms 1000]
+                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250]
 ```
 
-- 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框；stderr 照監督行程的。
+- 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr（阻塞寫：監督行程的 stderr 沒人讀時整個監督行程會停住），同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。
 - 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
 - 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。
-- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns` 只有 `conversation` 有；沒起成的多一個 `error`。
+- 死因（`down` 與稽核的 `cause`）：監督行程自己決定收的（停機、RSS 超過上限、送了解不開的框或綁錯 thread）照那個理由，不再往下判；其餘的依下列：
+  - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。
+  - `heap`：以 SIGABRT 結束，而且 stderr 出現過 `JavaScript heap out of memory`（V8 heap 用完時印的）。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
+  - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器）就一律算 `crash`。已知限制：這個 cgroup（含子 cgroup）裡對話行程 leader 以外的行程被 OOM 殺掉，例如前台、對話行程底下的工具行程，也會讓計數加一；之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
+  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）只有 `conversation` 有；沒起成的多一個 `error`。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2。
 
 整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`examples/fake_conversation.rs` 兩支假程式站在前台與對話行程的位置。

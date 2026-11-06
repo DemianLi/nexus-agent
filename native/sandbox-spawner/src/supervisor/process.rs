@@ -1,13 +1,14 @@
-//! 子行程：怎麼起、控制通道怎麼讀寫、怎麼收。
+//! 子行程：怎麼起、控制通道怎麼讀寫、stderr 怎麼轉送、怎麼收。
 
+use super::memory::HEAP_MARKER;
 use crate::protocol::{frame, take_frame, DecodeError};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
-/// `receive` 一次最多讀這麼多：對方一直寫也會交回迴圈，計時器、訊號與別的通道照樣輪得到。
-const READ_BUDGET: usize = 64 * 1024;
+/// `receive` 與 stderr 轉送一次最多讀這麼多：對方一直寫也會交回迴圈，計時器、訊號與別的通道照樣輪得到。
+pub const READ_BUDGET: usize = 64 * 1024;
 
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -21,14 +22,20 @@ fn set_nonblocking(fd: &OwnedFd) {
     }
 }
 
-/// 起一個子行程：stdin、stdout 是給監督行程的 pipe（這一側非阻塞），stderr 照監督行程的。
+/// 起一個子行程：stdin、stdout 是給監督行程的 pipe（這一側非阻塞）。`tap_stderr` 時 stderr 也接到監督行程（[`StderrTap`]），
+/// 否則照監督行程的。
 ///
 /// 子行程在 exec 之前：清空訊號遮罩（監督行程擋著的訊號改由 signalfd 收，不能傳下去）、自成一個行程群組（之後殺整個群組）、
 /// 設 `PR_SET_PDEATHSIG` 為 SIGKILL（監督行程死了它跟著死），設好之後再核一次父行程還是監督行程（fork 之後、prctl 之前監督行程若已經死了，PDEATHSIG 不會再觸發）。
-pub fn spawn(program: &OsString, args: &[OsString]) -> std::io::Result<(libc::pid_t, Chan)> {
+pub fn spawn(
+    program: &OsString,
+    args: &[OsString],
+    tap_stderr: bool,
+) -> std::io::Result<(libc::pid_t, Chan, Option<StderrTap>)> {
     let parent = std::process::id() as libc::pid_t;
     let mut cmd = Command::new(program);
-    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped());
+    cmd.stderr(if tap_stderr { Stdio::piped() } else { Stdio::inherit() });
     // SAFETY：pre_exec 在 fork 之後的子行程裡跑，這裡只做系統呼叫，不配置記憶體。
     unsafe {
         cmd.pre_exec(move || {
@@ -50,10 +57,12 @@ pub fn spawn(program: &OsString, args: &[OsString]) -> std::io::Result<(libc::pi
     let pid = child.id() as libc::pid_t;
     let stdin = child.stdin.take().map(OwnedFd::from);
     let stdout = child.stdout.take().map(OwnedFd::from);
-    for fd in [&stdin, &stdout].into_iter().flatten() {
+    let stderr = child.stderr.take().map(OwnedFd::from);
+    for fd in [&stdin, &stdout, &stderr].into_iter().flatten() {
         set_nonblocking(fd);
     }
-    Ok((pid, Chan { write: stdin, read: stdout, inbox: Vec::new(), outbox: Vec::new(), finishing: false }))
+    let chan = Chan { write: stdin, read: stdout, inbox: Vec::new(), outbox: Vec::new(), finishing: false };
+    Ok((pid, chan, stderr.map(StderrTap::new)))
 }
 
 /// 送訊號給整個行程群組（群組號就是 leader 的 pid）。錯一律不理（例如群組已空的 ESRCH）。
@@ -196,6 +205,81 @@ impl Chan {
     }
 }
 
+/// 子行程的 stderr：讀到的原樣寫到監督行程自己的 stderr，順便找 [`HEAP_MARKER`]（跨兩次讀也找得到）。
+pub struct StderrTap {
+    read: Option<OwnedFd>,
+    /// 上一次讀到的最後幾個位元組，接在這一次前面找標記。
+    tail: Vec<u8>,
+    marker_seen: bool,
+}
+
+impl StderrTap {
+    pub fn new(read: OwnedFd) -> StderrTap {
+        StderrTap { read: Some(read), tail: Vec::new(), marker_seen: false }
+    }
+
+    pub fn poll_fd(&self) -> Option<libc::c_int> {
+        self.read.as_ref().map(AsRawFd::as_raw_fd)
+    }
+
+    pub fn marker_seen(&self) -> bool {
+        self.marker_seen
+    }
+
+    /// 讀到 EAGAIN 或讀滿 `budget` 為止，轉出去；讀到 EOF 或讀錯就關掉。
+    pub fn pump(&mut self, budget: usize) {
+        let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return };
+        let mut buf = [0u8; 4096];
+        let mut left = budget;
+        while left > 0 {
+            // SAFETY：讀進 buf。
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n > 0 {
+                let chunk = &buf[..n as usize];
+                write_stderr(chunk);
+                self.scan(chunk);
+                left = left.saturating_sub(chunk.len());
+                continue;
+            }
+            if n < 0 && errno() == libc::EINTR {
+                continue;
+            }
+            if n < 0 && errno() == libc::EAGAIN {
+                return;
+            }
+            self.read = None;
+            return;
+        }
+    }
+
+    fn scan(&mut self, chunk: &[u8]) {
+        if self.marker_seen {
+            return;
+        }
+        self.tail.extend_from_slice(chunk);
+        if self.tail.windows(HEAP_MARKER.len()).any(|window| window == HEAP_MARKER) {
+            self.marker_seen = true;
+        }
+        let keep = HEAP_MARKER.len() - 1;
+        if self.tail.len() > keep {
+            self.tail.drain(..self.tail.len() - keep);
+        }
+    }
+}
+
+/// 寫到監督行程自己的 fd 2。fd 2 是阻塞的而讀者不讀時，整個監督行程停在這裡；EINTR 以外的錯就丟掉剩下的。
+fn write_stderr(mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        // SAFETY：寫 fd 2。
+        let n = unsafe { libc::write(2, bytes.as_ptr().cast(), bytes.len()) };
+        if n > 0 {
+            bytes = &bytes[n as usize..];
+        } else if !(n < 0 && errno() == libc::EINTR) {
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +313,31 @@ mod tests {
         }
         assert_eq!(got, frame(&big));
         assert!(chan.write.is_none());
+    }
+
+    #[test]
+    fn stderr_tap_finds_the_marker_split_across_reads() {
+        let (_r, w) = pipe();
+        let mut tap = StderrTap::new(w);
+        tap.scan(b"FATAL ERROR: Reached heap limit Allocation failed - JavaScript he");
+        assert!(!tap.marker_seen());
+        tap.scan(b"ap out of memory\n");
+        assert!(tap.marker_seen());
+        assert!(tap.tail.len() < HEAP_MARKER.len());
+
+        let (_r, w) = pipe();
+        let mut tap = StderrTap::new(w);
+        for byte in b"xx JavaScript heap out of memory" {
+            tap.scan(&[*byte]);
+        }
+        assert!(tap.marker_seen());
+    }
+
+    fn pipe() -> (OwnedFd, OwnedFd) {
+        let mut fds = [0; 2];
+        // SAFETY：拿一對新的 pipe。
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // SAFETY：兩個 fd 都是剛開的，各交給一個擁有者。
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
     }
 }
