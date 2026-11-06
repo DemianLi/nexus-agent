@@ -16,8 +16,16 @@
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
-//! 對話行程的死因：監督行程為停機收掉的是 `shutdown`；其他的結束（非零、被訊號殺、沒人叫它停卻自己結束、沒起成、控制通道上送了
-//! 解不開的框或綁錯 thread 而被殺）都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`。
+//! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，RSS 超過 `--rss-limit-mb` 是
+//! `memory`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
+//! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`。
+//!
+//! 對話行程的 stderr 接到監督行程（[`process::StderrTap`]）：每次可讀時最多讀 `READ_BUDGET`，原樣寫到自己的 fd 2，順便找 heap
+//! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。fd 2 阻塞而沒人讀時，整個迴圈停在寫那一步；轉出時寫不出去的丟掉、
+//! 記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
+//!
+//! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
@@ -27,6 +35,7 @@
 
 mod args;
 mod audit;
+mod memory;
 mod process;
 
 use crate::supervisor_protocol::{
@@ -34,7 +43,8 @@ use crate::supervisor_protocol::{
     ConversationReport, DeathCause, FrontEvent, FrontRequest, TurnPhase,
 };
 use audit::{Audit, Exit, Record};
-use process::Chan;
+use memory::OomCounter;
+use process::{Chan, StderrTap};
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -47,6 +57,9 @@ const LOG: &str = "[nexus-supervisor]";
 const LONGEST_SOCKET_NAME: &str = "/c18446744073709551615.sock";
 /// `sockaddr_un.sun_path` 的長度，含結尾的 NUL。
 const SUN_PATH: usize = 108;
+/// 收屍時 stderr 最多再讀多少：還握著寫端的後代一直寫，也不會卡住收屍。1 MiB 是 Linux `pipe-max-size` 的預設值，
+/// 管線沒被調得比它大時，leader 死前留在管線裡的一定讀得完。
+const STDERR_DRAIN: usize = 1 << 20;
 
 /// 拆除梯度走到哪一步。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +128,9 @@ struct Conversation {
     turns: u32,
     /// 監督行程決定收它的理由；沒有就是它自己結束的。
     cause: Option<DeathCause>,
+    stderr: Option<StderrTap>,
+    /// 輪詢看到的最高 RSS（kB），寫進稽核。
+    rss_kb: u64,
 }
 
 struct Supervisor {
@@ -126,6 +142,8 @@ struct Supervisor {
     conversations: Vec<Conversation>,
     next_socket: u64,
     shutting_down: bool,
+    oom: OomCounter,
+    rss_poll_at: Instant,
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
@@ -164,6 +182,8 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         conversations: Vec::new(),
         next_socket: 0,
         shutting_down: false,
+        oom: OomCounter::open(),
+        rss_poll_at: Instant::now(),
     };
     supervisor.start_front();
     Ok(supervisor)
@@ -221,6 +241,7 @@ enum Slot {
     Signal,
     Front { write: bool },
     Conversation { pid: libc::pid_t, write: bool },
+    ConversationStderr { pid: libc::pid_t },
 }
 
 impl Supervisor {
@@ -258,6 +279,12 @@ impl Supervisor {
                     Slot::Conversation { pid: conversation.proc.pid, write: true },
                 );
             }
+            for conversation in &self.conversations {
+                if let Some(fd) = conversation.stderr.as_ref().and_then(StderrTap::poll_fd) {
+                    fds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+                    slots.push(Slot::ConversationStderr { pid: conversation.proc.pid });
+                }
+            }
 
             let timeout = self.next_deadline().map_or(-1, |at| {
                 let left = at.saturating_duration_since(Instant::now());
@@ -289,6 +316,12 @@ impl Supervisor {
                         }
                     }
                     Slot::Front { write: false } => self.on_front_readable(),
+                    Slot::ConversationStderr { pid } => {
+                        let conversation = self.conversations.iter_mut().find(|c| c.proc.pid == pid);
+                        if let Some(tap) = conversation.and_then(|c| c.stderr.as_mut()) {
+                            tap.pump(process::READ_BUDGET);
+                        }
+                    }
                     Slot::Conversation { pid, write } => {
                         let Some(index) = self.conversations.iter().position(|c| c.proc.pid == pid) else { continue };
                         if write {
@@ -313,6 +346,10 @@ impl Supervisor {
         if let Some(front) = self.front.as_mut() {
             front.advance_stop(now, term_grace);
         }
+        if self.rss_poll_at <= now {
+            self.rss_poll_at = now + self.args.rss_poll;
+            self.poll_rss();
+        }
         if self.front_restart_at.is_some_and(|at| at <= now) && !self.shutting_down {
             self.front_restart_at = None;
             self.start_front();
@@ -326,12 +363,30 @@ impl Supervisor {
             .filter_map(|c| c.proc.deadline())
             .chain(self.front.as_ref().and_then(Proc::deadline))
             .chain(restart)
+            .chain(Some(self.rss_poll_at).filter(|_| !self.conversations.is_empty()))
             .min()
     }
 
+    /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
+    /// 已經在收的（例如停機）照原本的理由。
+    ///
+    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
+    fn poll_rss(&mut self) {
+        for conversation in &mut self.conversations {
+            let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
+            conversation.rss_kb = conversation.rss_kb.max(kb);
+            let over = self.args.rss_limit_kb.is_some_and(|limit| kb > limit);
+            if over && !matches!(conversation.proc.stop, Some((Step::Kill, _))) {
+                eprintln!("{LOG} 對話行程 {} 的 RSS {kb} kB 超過上限，殺掉", conversation.proc.pid);
+                conversation.cause.get_or_insert(DeathCause::Memory);
+                conversation.proc.kill_now();
+            }
+        }
+    }
+
     fn start_front(&mut self) {
-        match process::spawn(&self.args.front, &self.args.front_args) {
-            Ok((pid, chan)) => {
+        match process::spawn(&self.args.front, &self.args.front_args, false) {
+            Ok((pid, chan, _)) => {
                 let mut front = Proc { pid, chan, stop: None };
                 for conversation in self.conversations.iter().filter(|c| c.phase == Phase::Up && c.proc.stop.is_none()) {
                     front.chan.send(&encode_front_event(&FrontEvent::Up {
@@ -404,14 +459,16 @@ impl Supervisor {
         let mut args = self.args.conversation_args.clone();
         args.push("--socket".into());
         args.push(socket.clone().into_os_string());
-        match process::spawn(&self.args.conversation, &args) {
-            Ok((pid, chan)) => self.conversations.push(Conversation {
+        match process::spawn(&self.args.conversation, &args, true) {
+            Ok((pid, chan, stderr)) => self.conversations.push(Conversation {
                 proc: Proc { pid, chan, stop: None },
                 thread,
                 socket,
                 phase: Phase::Starting,
                 turns: 0,
                 cause: None,
+                stderr,
+                rss_kb: 0,
             }),
             Err(err) => {
                 eprintln!("{LOG} 對話行程起不來：{err}");
@@ -422,6 +479,7 @@ impl Supervisor {
                     cause: DeathCause::Crash,
                     exit: Exit::NOT_STARTED,
                     turns: 0,
+                    rss_kb: 0,
                     error: Some(&error),
                 });
                 self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Crash });
@@ -560,13 +618,19 @@ impl Supervisor {
                 conversation.turns = conversation.turns.saturating_add(1);
             }
         }
-        let cause = conversation.cause.unwrap_or(DeathCause::Crash);
+        let heap_message = conversation.stderr.as_mut().is_some_and(|tap| {
+            tap.pump(STDERR_DRAIN);
+            tap.heap_message_near_end()
+        });
+        let oom = &mut self.oom;
+        let cause = memory::classify(conversation.cause, exit.signal, heap_message, || oom.claim());
         self.audit.record(&Record::Conversation {
             thread: &conversation.thread,
             pid,
             cause,
             exit,
             turns: conversation.turns,
+            rss_kb: conversation.rss_kb,
             error: None,
         });
         let _ = std::fs::remove_file(&conversation.socket);

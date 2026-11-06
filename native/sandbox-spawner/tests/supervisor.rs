@@ -69,11 +69,15 @@ struct Options {
     conversation_args: Vec<String>,
     eof_grace_ms: u64,
     term_grace_ms: u64,
+    /// 多給監督行程的參數。
+    extra: Vec<&'static str>,
+    /// 監督行程的 stderr 丟掉，不寫進 `supervisor.err`。
+    discard_stderr: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300 }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false }
     }
 }
 
@@ -100,7 +104,13 @@ impl Harness {
         }
         cmd.args(["--eof-grace-ms", &options.eof_grace_ms.to_string()]);
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
-        let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).spawn().unwrap();
+        cmd.args(&options.extra);
+        let stderr = if options.discard_stderr {
+            Stdio::null()
+        } else {
+            Stdio::from(std::fs::File::create(dir.join("supervisor.err")).unwrap())
+        };
+        let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn().unwrap();
         let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir };
         harness.accept_front();
         harness
@@ -510,4 +520,74 @@ fn audit_file_must_be_own_private_regular_file() {
     assert!(wait_until(|| std::fs::read_to_string(&target).unwrap().contains("\"role\":\"front\"")));
     kill(child.id(), libc::SIGKILL);
     child.wait().unwrap();
+}
+
+fn supervisor_stderr(h: &Harness) -> String {
+    String::from_utf8_lossy(&std::fs::read(h.dir.join("supervisor.err")).unwrap()).into_owned()
+}
+
+#[test]
+fn abort_with_the_v8_heap_message_is_heap() {
+    let mut h = Harness::start(Options::default());
+    assert_eq!(h.down("h,heap"), DeathCause::Heap);
+    let line = h.audit_line("\"thread\":\"h,heap\"");
+    assert!(line.contains("\"cause\":\"heap\"") && line.contains("\"signal\":6"), "{line}");
+    // stderr 原樣轉到監督行程的 stderr。
+    assert!(wait_until(|| supervisor_stderr(&h).contains("Reached heap limit")));
+    // 沒有那段訊息的 SIGABRT 是 crash。
+    assert_eq!(h.down("a,signal:6"), DeathCause::Crash);
+}
+
+#[test]
+fn heap_message_still_in_the_pipe_at_exit_is_read() {
+    let mut h = Harness::start(Options { discard_stderr: true, ..Options::default() });
+    // 監督行程停著的時候，對話行程把超過一次讀取上限的填充與 heap 訊息寫進管線、死掉；收屍時要把管線讀完才分類。
+    let thread = "late,wait-go,stderr-junk:512,heap";
+    let socket = h.up(thread);
+    let pid = logged_pid(&socket, "pid");
+    kill(h.pid(), libc::SIGSTOP);
+    std::fs::write(format!("{}.go", socket.display()), "").unwrap();
+    let died = wait_until(|| gone(pid));
+    kill(h.pid(), libc::SIGCONT);
+    assert!(died);
+    assert_eq!(h.down_of(thread), DeathCause::Heap);
+}
+
+#[test]
+fn rss_over_the_limit_is_memory_and_spares_the_others() {
+    let mut h = Harness::start(Options { extra: vec!["--rss-limit-mb", "64", "--rss-poll-ms", "50"], ..Options::default() });
+    let small = h.up("small");
+    assert_eq!(h.down("big,alloc:200"), DeathCause::Memory);
+    let line = h.audit_line("\"thread\":\"big,alloc:200\"");
+    assert!(line.contains("\"cause\":\"memory\"") && line.contains("\"signal\":9"), "{line}");
+    let rss: u64 = line.split("\"rss_kb\":").nth(1).unwrap().split(',').next().unwrap().parse().unwrap();
+    assert!(rss > 64 * 1024, "{line}");
+    // 沒超過的那條還是同一個行程。
+    assert_eq!(h.up("small"), small);
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.down_of("small"), DeathCause::Shutdown);
+    assert!(!h.audit_line("\"thread\":\"small\"").contains("\"rss_kb\":0,"));
+}
+
+#[test]
+fn flooding_stderr_does_not_starve_the_others() {
+    let mut h = Harness::start(Options { discard_stderr: true, ..Options::default() });
+    h.up("s,stderr-flood");
+    h.up("b");
+    h.ensure("x,exit:3");
+    assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
+    kill(h.pid(), libc::SIGTERM);
+    let mut downs = vec![h.event(), h.event()];
+    downs.sort_by_key(|event| match event {
+        FrontEvent::Down { thread_id, .. } => thread_id.clone(),
+        other => panic!("要 down，拿到 {other:?}"),
+    });
+    assert_eq!(
+        downs,
+        [
+            FrontEvent::Down { thread_id: b"b".to_vec(), cause: DeathCause::Shutdown },
+            FrontEvent::Down { thread_id: b"s,stderr-flood".to_vec(), cause: DeathCause::Shutdown },
+        ]
+    );
+    assert!(h.wait_exit().success());
 }
