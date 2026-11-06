@@ -3,8 +3,9 @@
  * 原位直接呼叫那一步、不經那顆的 `wrapModelCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
  * 摘要關掉時同一格是空殼（`createRecordedProjectionShell`），有 `sessions` 時一樣登記。
  *
- * 計數掛在登記上，做法同 `system-prompt-cells.test.ts`：登記的那一步包一個計數，交給那顆的 `wrapModelCall` 再包一層
- * `AsyncLocalStorage`。除了那一步被叫幾次，也數它往內交（`next`）幾次：端點真的回超窗時，force 鏈換保留 0 重走，`next` 多一次。
+ * 計數掛在登記上：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層 `AsyncLocalStorage`，
+ * 沒有那一層就是經 `wrapModelCall`。不換 `build` 收到的那支：`withModelCallStep` 會檢查兩者是同一支。
+ * 除了那一步被叫幾次，也數它往內交（`next`）幾次：端點真的回超窗時，force 鏈換保留 0 重走，`next` 多一次。
  * 哪一邊照 state 的第一則訊息分。
  */
 
@@ -35,7 +36,7 @@ const counts = vi.hoisted(() => new Map<string, Count>());
 
 vi.mock('../model-call-step.js', async (importOriginal) => {
   const actual = await importOriginal<typeof ModelCallStepModule>();
-  const viaHook = new AsyncLocalStorage<true>();
+  const viaNative = new AsyncLocalStorage<true>();
   const sideOf = (request: unknown): string =>
     (request as { state?: { messages?: readonly BaseMessage[] } }).state?.messages?.[0]?.text ?? '';
   const entryOf = (request: unknown): Count => {
@@ -45,20 +46,20 @@ vi.mock('../model-call-step.js', async (importOriginal) => {
     return entry;
   };
   const withModelCallStep: typeof actual.withModelCallStep = (step, build) =>
-    actual.withModelCallStep(
-      (request, next) => {
-        const entry = entryOf(request);
-        entry[(viaHook.getStore() === true ? 'hook' : 'native') satisfies Via] += 1;
-        return step(request, (inner) => {
-          entry.next += 1;
-          return next(inner);
-        });
-      },
-      (wrapModelCall) =>
-        build(((request: never, handler: never) =>
-          viaHook.run(true, () => wrapModelCall(request, handler))) as typeof wrapModelCall),
-    );
-  return { ...actual, withModelCallStep };
+    actual.withModelCallStep((request, next) => {
+      const entry = entryOf(request);
+      entry[(viaNative.getStore() === true ? 'native' : 'hook') satisfies Via] += 1;
+      return step(request, (inner) => {
+        entry.next += 1;
+        return viaNative.exit(() => next(inner));
+      });
+    }, build);
+  const wrapModelCallFromStep = ((step: ModelCallStepModule.ModelCallStep) => {
+    const wrap = actual.wrapModelCallFromStep(step);
+    return (request: object, handler: (request: object) => unknown) =>
+      viaNative.run(true, () => wrap(request, handler));
+  }) as typeof actual.wrapModelCallFromStep;
+  return { ...actual, withModelCallStep, wrapModelCallFromStep };
 });
 
 const SUMMARY_TEXT = '這是摘要。';

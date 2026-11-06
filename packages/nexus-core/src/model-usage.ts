@@ -78,6 +78,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
   currentModelCall,
@@ -296,9 +297,9 @@ function recordUnfinished(
 export function createModelUsageRecorder(sessions: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: MODEL_USAGE_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       let response: Awaited<ReturnType<typeof handler>>;
       try {
         response = await handler(request);
@@ -327,7 +328,12 @@ export function createModelUsageRecorder(sessions: {
       found.log.append('model/usage', withModelCall(usage, currentModelCall(found.log)));
       return response;
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MODEL_USAGE_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /**
