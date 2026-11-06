@@ -22,8 +22,9 @@ export interface AgentClientOptions {
   readonly fetch?: typeof globalThis.fetch;
   /**
    * client 的請求（上行與兩條下行）回 401 時呼叫，回應照樣交給呼叫端。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
-   * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡；回來時已經 {@link AgentConnection.renewStreams}
-   * 過的下行，401 也不叫（#2484）。嵌入版用它通知宿主頁換票（#2370）。
+   * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡；開線之後、回應回來之前呼叫過
+   * {@link AgentConnection.renewStreams} 的下行，401 也不叫：呼叫端照斷線重開，重開走新的 socket，那裡再 401 才叫（#2484）。
+   * 嵌入版用它通知宿主頁換票（#2370）。
    */
   readonly onUnauthorized?: () => void;
 }
@@ -92,8 +93,8 @@ export interface AgentConnection {
    * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後新開的下行走一條新的 socket。
    *
    * - `closeOpen: true`（換了人）：舊 socket 當場關掉，上面的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。
-   * - `closeOpen: false`（同一個人續期，#2484）：舊 socket 上已開的下行照常收，等它自己結束（斷線、serve 收線、呼叫端收掉）才關這條 socket；
-   *   serve 只在開串流時驗 cookie，舊的過期了也不切已開的串流。
+   * - `closeOpen: false`（同一個人續期，#2484）：舊 socket 上已開的下行照常收，等它們自己結束（斷線、serve 收線、呼叫端收掉）才關舊的 socket；
+   *   serve 在升級與每開一條串流時驗 cookie（用升級當下那顆），不因 cookie 過期切掉已開的串流。
    *
    * 已經退回 SSE 的下行不經 socket，兩種都不動它（SSE 每個請求帶當下的 cookie，下次重開就是新的）。注入了 `fetch` 時沒有 socket，什麼都不做。
    */
@@ -133,7 +134,7 @@ function tracked(
   );
 }
 
-/** 同一顆 cookie 開的那幾條 socket，與經它們開著、還沒收掉的下行數。 */
+/** 兩次 `renewStreams` 之間經同一支 mux 開的 socket（mux 自己 401 重開的也算這一代），與經這一代開著、還沒收掉的下行數（退回 SSE 的也算）。 */
 class SocketGeneration {
   readonly #sockets = new Set<MuxSocket>();
   readonly #fetch: typeof globalThis.fetch;
@@ -144,7 +145,10 @@ class SocketGeneration {
     this.#fetch = open(this.#sockets);
   }
 
-  /** 經這一代開一條下行。本體讀完、出錯、被取消，或呼叫端中止 `signal`，都算這條收掉了（只算一次）。 */
+  /**
+   * 經這一代開一條下行。開不成、本體讀完、出錯、被取消，或呼叫端中止 `signal`，都算這條收掉了（只算一次）。
+   * 拿到回應的人要讀完或 cancel 本體，否則這一代的 socket 關不掉。
+   */
   async stream(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     this.#open += 1;
     let counted = true;
@@ -153,8 +157,6 @@ class SocketGeneration {
       counted = false;
       this.#closed();
     };
-    // 中止時 mux 已經送了 cancel；沒有人在讀的本體不會再被 pull，不能只靠本體那一頭。
-    init?.signal?.addEventListener('abort', closed, { once: true });
     let response: Response;
     try {
       response = await this.#fetch(input, init);
@@ -162,6 +164,11 @@ class SocketGeneration {
       closed();
       throw error;
     }
+    // 中止時 mux 只把本體 error 掉（`MuxStream.abort`），沒人在讀的本體不會再被 pull，`tracked` 看不到，所以另外聽 `signal`。
+    // 掛在 mux 的之後：mux 先送 cancel，這裡才可能關 socket。
+    const signal = init?.signal;
+    if (signal?.aborted === true) closed();
+    else signal?.addEventListener('abort', closed, { once: true });
     if (response.body === null) {
       closed();
       return response;
@@ -173,7 +180,7 @@ class SocketGeneration {
     });
   }
 
-  /** 之後不再經這一代開新的下行。 */
+  /** 呼叫端先換上新的一代再呼叫（`stream` 不擋退役的這一代）。`closeOpen` 或沒有開著的下行就當場關 socket，否則等最後一條收掉才關。 */
   retire(closeOpen: boolean): void {
     this.#retired = true;
     if (closeOpen || this.#open === 0) this.#closeSockets();
@@ -216,7 +223,7 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
     client: createWireClient({
       baseUrl,
       fetch: watched(fetch, onUnauthorized),
-      // 回來時已經換過一代的 401 不算：那是舊 cookie 的事，新的那顆已經在瀏覽器上了。
+      // 回來時已經換過一代的 401 不叫：呼叫端照斷線重開，重開走新的一代，那裡還是 401 才叫。
       streamFetch: async (input, init) => {
         const opened = current;
         const response = await opened.stream(input, init);

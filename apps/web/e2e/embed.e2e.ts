@@ -924,7 +924,7 @@ describe('換票登入（#2370）', () => {
     await settled(page);
     await chat(page).getByRole('button', { name: '新對話' }).click();
     await expect.poll(() => transcript(page).count()).toBe(0);
-    // 換票之前那一下 401 與第一次換票都會換 socket，這裡只看續期前還開著的那幾條。
+    // 換票之前升級被 401 拒掉的那條、第一次換票之前的那一代都已經關了：這裡只看續期前還開著的那幾條。
     const before = sockets.length;
     const live = sockets.filter((ws) => !ws.isClosed());
     expect(live.length).toBeGreaterThan(0);
@@ -963,7 +963,7 @@ describe('換票登入（#2370）', () => {
       await settled(page);
     };
     await talk('第一條');
-    // 換票之前那一下 401 與第一次換票都會換 socket：從這裡才開始算。
+    // 換票之前升級被 401 拒掉的那條、第一次換票之前的那一代都已經關了：從這裡才開始算。
     await expect.poll(() => open).toBe(1);
     most = open;
 
@@ -1016,7 +1016,7 @@ describe('換票登入（#2370）', () => {
       .poll(() => transcript(page).getByText('第一句的回覆。').count(), { timeout: 30_000 })
       .toBe(1);
     await settled(page);
-    // 換票之前那一下 401 與第一次換票都會換 socket：續期前還開著的只剩一條。
+    // 換票之前升級被 401 拒掉的那條、第一次換票之前的那一代都已經關了：續期前還開著的只剩一條。
     const live = sockets.filter(({ ws }) => !ws.isClosed());
     expect(live).toHaveLength(1);
     const socketsBefore = sockets.length;
