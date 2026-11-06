@@ -959,7 +959,7 @@ Content-Type: application/json
 
 | 回應 | 什麼時候 |
 | --- | --- |
-| `200 { "expiresAt", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`threadId` 見下面「回到上一條」 |
+| `200 { "expiresAt", "identityFingerprint", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`identityFingerprint` 見下面「身分指紋」；`threadId` 見下面「回到上一條」 |
 | `401 { "error": "ticket_invalid" }` | 沒有這張票、用過了、serve 重啟過：**一律同一個回應** |
 | `401 { "error": "ticket_expired" }` | 票過了 `ticketTtlSeconds` 才來兌換 |
 | `403 { "error": "identity_rejected" }` | 換票之後對應被撤掉、或對到了別的使用者：兌換時會再對一次 |
@@ -971,6 +971,7 @@ Content-Type: application/json
 - **只打得到 `/embed/…`**：帶嵌入 cookie 打獨立頁面（`/`、`/index.html`）、`/threads`、`/threads/mux` 都是 `401`，跟沒帶 cookie 一樣。獨立頁面那顆 cookie 照舊打得到嵌入路由。
 - cookie 裡帶著身分（嵌入方、對方帳號、nexus 使用者、session id 的 sha256），伺服器不留狀態：到期前、對應還在表上就一直有效，重啟 serve 也不會作廢。把某個嵌入方從設定拿掉再重啟，它簽出去的嵌入 cookie 就驗不過；要讓所有 cookie（含獨立頁面那顆）一起失效，換掉 home 裡的瀏覽器會話密鑰。
 - **續期**：快到期時嵌入方的後端用同一個 `sessionId` 再換一張票，元件再兌換一次；新的 cookie 同名，蓋掉舊的。
+- **身分指紋**（`identityFingerprint`）：讓元件分得出續期的是同一個人還是換了人。同一個嵌入方＋使用者代號就相同，跟「對話歸誰」的範圍一樣（換 `sessionId`、表上另一個對方帳號對到同一個使用者代號，都算同一個人）。它是用瀏覽器會話密鑰導出的另一把子鑰算的 HMAC：反查不回使用者代號，不同的 serve 算出來不同，換掉密鑰之後全部改變（那時所有 cookie 也一起失效）。
 - 多工連線（`/embed/threads/mux`）建立時看 cookie；連線上每開一條串流，都用那顆 cookie 再查一次對應表與對話歸誰。兌換或續期之後要重開這條連線，新的 cookie 才帶得上。
 - **回到上一條**：這一次登入（同一個人、同一個嵌入方、同一個 `sessionId`）開過、已經落盤的對話，`threadId` 是最新開的那一條，給元件接著開（元件那側還沒做）；沒開過、還沒落盤、會話不落盤、或查不到（伺服器日誌記一行）就不帶。換人登入、或同一個人換了 `sessionId`，都不帶。
 - **`sessionId` 要是猜不到的隨機值**：它記進稽核檔與對話（只記 sha256，不加鹽，兩邊同一個值），「回到上一條」也照它找。用使用者帳號、遞增的號碼這類猜得到的值，讀得到這兩份檔的人就反查得回來。

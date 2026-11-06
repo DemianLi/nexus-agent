@@ -12,7 +12,8 @@
  * - **稽核**：票查得到的每一次都記（`embed-audit.ts`），記好才回應；寫不進去就 500、不設 cookie。票不存在、用過、
  *   本文不對的只計數合併。
  *
- * 回應：`200 { expiresAt, threadId? }` 加 `Set-Cookie`；`threadId` 是這一次登入最新開的那條嵌入對話，沒開過、還沒落盤、沒開會話日誌、或查不到就沒有；票不存在或用過 `401 { error: 'ticket_invalid' }`；票過期
+ * 回應：`200 { expiresAt, identityFingerprint, threadId? }` 加 `Set-Cookie`；`identityFingerprint` 見
+ * {@link EmbedSessionCookies.identityFingerprint}；`threadId` 是這一次登入最新開的那條嵌入對話，沒開過、還沒落盤、沒開會話日誌、或查不到就沒有；票不存在或用過 `401 { error: 'ticket_invalid' }`；票過期
  * `401 { error: 'ticket_expired' }`；對應被撤 `403 { error: 'identity_rejected' }`；本文不對 `400`；方法不對 `405`；
  * 圍欄沒過 `403`（純文字）。`expiresAt` 是 cookie 的到期時間，系統時間的毫秒時間戳。都帶 `cache-control: no-store`。
  *
@@ -41,6 +42,7 @@ const COOKIE_PREFIX = 'nexus-embed-';
 const COOKIE_VERSION_TAG = 'e1';
 const COOKIE_PAYLOAD_VERSION = 1;
 const KEY_LABEL = 'nexus-embed-session-v1';
+const FINGERPRINT_KEY_LABEL = 'nexus-embed-identity-fingerprint-v1';
 const MAX_TICKET_LENGTH = 256;
 
 interface EmbedCookiePayload {
@@ -78,6 +80,7 @@ export interface EmbedIdentityCheck {
  */
 export class EmbedSessionCookies {
   readonly #key: Buffer;
+  readonly #fingerprintKey: Buffer;
   readonly #maxAgeMs: number;
   readonly #embedders: ReadonlySet<string>;
   readonly #identities: EmbedIdentityCheck;
@@ -98,6 +101,7 @@ export class EmbedSessionCookies {
     now: () => number = Date.now,
   ) {
     this.#key = createHmac('sha256', secret).update(KEY_LABEL).digest();
+    this.#fingerprintKey = createHmac('sha256', secret).update(FINGERPRINT_KEY_LABEL).digest();
     this.#maxAgeMs = maxAgeSeconds * 1000;
     this.#embedders = new Set(embedders);
     this.#identities = identities;
@@ -136,6 +140,20 @@ export class EmbedSessionCookies {
       setCookie: `${cookieName(authority)}=${value}; Max-Age=${String(maxAge)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Strict`,
       expiresAt,
     };
+  }
+
+  /**
+   * 身分指紋（#2370）：讓元件分得出續期的是同一個人還是換了人。
+   *
+   * 範圍跟「對話歸誰」一樣（`embed-thread-owner.ts` 的 `mayOpenEmbedThread`）：同一個嵌入方＋使用者代號就相同，
+   * 不看對方帳號與 `sessionId`。用自己的子鑰算 HMAC：換成 cookie 那一把，回給瀏覽器的值就是一個有效簽章。
+   */
+  identityFingerprint(identity: { readonly embedder: string; readonly userId: string }): string {
+    return encodeBase64Url(
+      createHmac('sha256', this.#fingerprintKey)
+        .update(JSON.stringify([identity.embedder, identity.userId]))
+        .digest(),
+    );
   }
 
   /**
@@ -330,7 +348,11 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
         },
         json(
           200,
-          { expiresAt: cookie.expiresAt, ...(threadId !== undefined && { threadId }) },
+          {
+            expiresAt: cookie.expiresAt,
+            identityFingerprint: options.cookies.identityFingerprint(base),
+            ...(threadId !== undefined && { threadId }),
+          },
           { 'set-cookie': cookie.setCookie },
         ),
       );
