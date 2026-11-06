@@ -59,7 +59,6 @@ const READ_ONLY_KINDS: ReadonlySet<Route['kind']> = new Set([
   'changes-diff',
 ]);
 
-
 export interface FrontWireOptions {
   /** 前台自己那一支：閘門、列表、搜尋、全域下行、整理檔都在它身上。 */
   readonly local: IdleSweepingWireHandler;
@@ -362,7 +361,10 @@ export function threadActivityOverSocket(
   supervisor: SupervisorClient,
   forwarder: FrontForwarder,
 ): NonNullable<WireHandlerOptions['threadActivityElsewhere']> {
-  async function call(threadId: string, action: 'activity' | 'stop'): Promise<Response | undefined> {
+  async function call(
+    threadId: string,
+    action: 'activity' | 'stop',
+  ): Promise<Response | undefined> {
     const socket = supervisor.socketOf(threadId);
     if (socket === undefined) return undefined;
     const request = new Request(`http://localhost${internalThreadPath(threadId, action)}`, {
