@@ -80,6 +80,7 @@ import {
 } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { threadNotEmbeddedText } from '@/lib/thread-not-embedded';
+import { threadNotOwnedText } from '@/lib/thread-not-owned';
 import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
@@ -784,14 +785,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
           // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）、
-          // 嵌入的對話框碰到獨立頁面開的（#2382）。
+          // 嵌入的對話框碰到獨立頁面開的（#2382）、別人開的（#2370）。
           const permanent =
             error instanceof WireRejectedError
               ? (threadSubagentText(error.code) ??
                 threadHistoryTooDeepText(error.code) ??
                 threadLogTooLargeText(error.code) ??
                 threadRootMismatchText(error.code) ??
-                threadNotEmbeddedText(error.code))
+                threadNotEmbeddedText(error.code) ??
+                threadNotOwnedText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);

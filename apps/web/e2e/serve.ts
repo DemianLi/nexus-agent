@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,8 @@ export interface ScriptTurn {
 export interface E2eServe {
   /** 帶登入 token 的網址，瀏覽器開它換到會話 cookie。 */
   readonly url: string;
+  /** serve 的 home（`NEXUS_AGENT_HOME`），例如嵌入方的服務憑證檔建在這裡。 */
+  readonly home: string;
   /** 收掉子行程與暫存目錄。 */
   close(): Promise<void>;
 }
@@ -70,19 +72,26 @@ function exited(child: ChildProcess): Promise<void> {
  *
  * @param turns - 腳本。
  * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
- * @returns 登入網址與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
+ * @param prepareHome - serve 起動之前在它的 home 裡放檔，例如嵌入身分對應表。目錄已經建好。
+ * @returns 登入網址、serve 的 home 與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  */
 export async function startE2eServe(
   turns: readonly ScriptTurn[],
   extraRows = '',
+  prepareHome?: (home: string) => Promise<void>,
 ): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
   const patch = join(dir, 'script.patch.yml');
   await writeFile(patch, patchText(turns, extraRows), 'utf8');
   const home = join(dir, 'home');
+  const harnessHome = join(home, 'harness-home');
+  if (prepareHome !== undefined) {
+    await mkdir(harnessHome, { recursive: true, mode: 0o700 });
+    await prepareHome(harnessHome);
+  }
   const child = spawn(TSX, ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', patch], {
     cwd: dir,
-    env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: join(home, 'harness-home') },
+    env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: harnessHome },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const close = async (): Promise<void> => {
@@ -113,7 +122,7 @@ export async function startE2eServe(
         reject(new Error(`serve 起動中結束（exit ${String(code)}）：\n${log}`));
       });
     });
-    return { url, close };
+    return { url, home: harnessHome, close };
   } catch (error) {
     await close();
     throw error;

@@ -8,7 +8,7 @@
  * 而我們的 `ContainedFilesystemBackend` 繼承的正是其中的 `FilesystemBackend`。
  */
 
-import type { WireClient } from '@nexus/wire';
+import type { MuxSocket, WireClient } from '@nexus/wire';
 import { WIRE_MUX_PATH, createMuxFetch, createWireClient } from '@nexus/wire';
 
 import { clockedFetch } from '@/lib/server-clock';
@@ -50,6 +50,7 @@ export function mountedMuxFetch(
   baseUrl: string,
   pageUrl: string,
   fetch: typeof globalThis.fetch,
+  createSocket: (url: string) => MuxSocket = (url) => new WebSocket(url),
 ): typeof globalThis.fetch {
   const prefix = new URL(`${mount}/`, pageUrl).pathname.replace(/\/$/u, '');
   const moved = (input: RequestInfo | URL, from: string, to: string): string => {
@@ -60,22 +61,57 @@ export function mountedMuxFetch(
   };
   const mux = createMuxFetch({
     url: agentMuxUrl(baseUrl, pageUrl),
-    createSocket: (url) => new WebSocket(url),
+    createSocket,
     fallback: prefix === '' ? fetch : (input, init) => fetch(moved(input, '', prefix), init),
   });
   return prefix === '' ? mux : (input, init) => mux(moved(input, prefix, ''), init);
 }
 
+/** 一個 client，加上換掉它下行那條 socket 的開關。 */
+export interface AgentConnection {
+  readonly client: WireClient;
+  /**
+   * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後的下行改開一條新的，舊的那幾條當場關掉。
+   * 關掉的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。已經退回 SSE 的下行不經 socket，這裡關不到，要呼叫端自己收
+   * （嵌入元件換票時整個重掛，就收掉了）。注入了 `fetch` 時沒有 socket，什麼都不做。
+   */
+  renewStreams(): void;
+}
+
 /** 沒注入 `fetch` 時兩條下行走 WebSocket，要有 `window`（升級網址從頁面算）；socket 到第一條下行才開。 */
-export function createAgentClient(options: AgentClientOptions = {}): WireClient {
+export function createAgentConnection(options: AgentClientOptions = {}): AgentConnection {
   const mount = (options.baseUrl ?? agentBaseUrl()).replace(/\/+$/u, '');
   const baseUrl = `${mount}${options.routePrefix ?? ''}`;
   const fetch = options.fetch ?? clockedFetch();
-  return createWireClient({
-    baseUrl,
-    fetch,
-    ...(options.fetch === undefined && {
-      streamFetch: mountedMuxFetch(mount, baseUrl, window.location.href, fetch),
+  if (options.fetch !== undefined) {
+    return { client: createWireClient({ baseUrl, fetch }), renewStreams: () => {} };
+  }
+  let sockets = new Set<MuxSocket>();
+  const open = (into: Set<MuxSocket>) =>
+    mountedMuxFetch(mount, baseUrl, window.location.href, fetch, (url) => {
+      const socket = new WebSocket(url);
+      into.add(socket);
+      // 用 addEventListener：`onclose` 是 mux 自己的（`mux.ts` 的 `MuxCarrier`），指派會蓋掉它的收尾。
+      socket.addEventListener('close', () => into.delete(socket));
+      return socket;
+    });
+  let streams = open(sockets);
+  return {
+    client: createWireClient({
+      baseUrl,
+      fetch,
+      streamFetch: (input, init) => streams(input, init),
     }),
-  });
+    renewStreams() {
+      const old = sockets;
+      sockets = new Set();
+      streams = open(sockets);
+      for (const socket of old) socket.close();
+    },
+  };
+}
+
+/** {@link createAgentConnection} 的 client，不換 socket 的地方用。 */
+export function createAgentClient(options: AgentClientOptions = {}): WireClient {
+  return createAgentConnection(options).client;
 }

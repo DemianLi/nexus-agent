@@ -85,3 +85,12 @@ export function rememberThread(threadId: string, key: string = REMEMBERED_THREAD
     console.error(`寫不進 ${key}，這一條 thread 下次載入接不回來：`, error);
   }
 }
+
+/** 把記著的那一條清掉。清不掉就算了（見模組說明）。 */
+export function forgetThread(key: string = REMEMBERED_THREAD_KEY): void {
+  try {
+    storage()?.removeItem(key);
+  } catch (error) {
+    console.error(`清不掉 ${key}：`, error);
+  }
+}
