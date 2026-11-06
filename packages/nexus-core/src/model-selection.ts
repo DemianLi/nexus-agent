@@ -34,6 +34,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage, fromLoggedMessage } from './logged-message.js';
 import { messageSourceOf, sourceKwargs } from './message-source.js';
+import { withModelCallStep } from './model-call-step.js';
 import { normalizeRoute, routeOfModel, sameModel, sameRoute } from './model-route.js';
 import type { ModelRoute } from './model-route.js';
 import type { SessionLookup } from './registry.js';
@@ -258,16 +259,21 @@ export function routedFromOf(request: { model?: unknown }): unknown {
  * @param controller - 這條會話的控制器。
  */
 export function createModelSwapMiddleware(controller: ModelSelectionController): AgentMiddleware {
-  return createMiddleware({
-    name: MODEL_SELECTION_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       const route = controller.takeStepRoute();
       const instance = controller.instanceFor(route);
       // 預設那顆（`instanceFor` 回 `undefined`）不換：沒選過的會話送出去的請求與沒有這顆 middleware 時逐欄一樣。
       if (instance === undefined || instance === request.model) return handler(request);
       return handler(routed(request, instance));
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MODEL_SELECTION_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /** 子代理跟隨會話選擇的 middleware 名字；背景圖有自己指定的模型時要把它濾掉（`compileSubagentGraph`）。 */
@@ -300,9 +306,9 @@ export function createSubagentModelFollowMiddleware(
   controller: ModelSelectionController,
   pin: SubagentModelPin = {},
 ): AgentMiddleware {
-  return createMiddleware({
-    name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       const parent = controller.next();
       const route: ModelRoute =
         pin.model !== undefined
@@ -317,7 +323,12 @@ export function createSubagentModelFollowMiddleware(
       if (instance === undefined || instance === request.model) return handler(request);
       return handler(routed(request, instance));
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /** 摘要器問「這一次生摘要用哪一顆」時交的請求（只用到這幾格）。 */

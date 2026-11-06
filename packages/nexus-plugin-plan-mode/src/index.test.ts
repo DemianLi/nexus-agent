@@ -1,13 +1,15 @@
-import { SystemMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
   applySections,
   createHostServicesPlugin,
   createRegistry,
   createSessionRunner,
   loadPlugins,
+  modelCallStepOf,
   SessionLog,
   SessionRegistry,
   toolErrorOf,
+  wrapModelCallFromStep,
 } from '@nexus/core';
 import type {
   AttachmentRef,
@@ -260,12 +262,44 @@ describe('exit_plan_mode 沒有生效時', () => {
 });
 
 /**
- * 薄測試，只斷言「`apply` 真的往那幾個註冊點放了東西」，加上兩條**順序**的斷言。
+ * 薄測試：斷言 `apply` 往那幾個註冊點放了東西；那顆 middleware 登記的環繞步與 `wrapModelCall` 交出同一份補過名字的請求；
+ * middleware 的形狀（`prepend`、沒有 `stateSchema`、邊界 hook 與 `wrapToolCall`）。
  *
  * 計劃模式**真的有沒有作用**的驗收在組裝點（`apps/harness` 的 `plan-mode.test.ts`）
- * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
+ * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容、`/plan` 的提示與交出的請求。
  */
 describe('createPlanModePlugin', () => {
+  it('那顆 middleware 登記了環繞步：native 直接呼叫那一步，跟經 wrapModelCall 一樣補上退出工具的名字', async () => {
+    const { registry } = await load([planPlugin()]);
+    const middleware = registry.middleware
+      .list()
+      .find((one) => one.value.middleware?.name === PLAN_MODE_MIDDLEWARE_NAME)?.value.middleware;
+    const step = middleware === undefined ? undefined : modelCallStepOf(middleware);
+    expect(step).toBeDefined();
+    const request = {
+      messages: [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: {}, id: 'c1' }],
+        }),
+        new ToolMessage({ content: '同意', tool_call_id: 'c1' }),
+      ],
+    };
+    const seen: unknown[] = [];
+    await wrapModelCallFromStep(step!)(request, (next) => seen.push(next));
+    await (
+      middleware as unknown as {
+        wrapModelCall: (request: unknown, handler: (request: unknown) => unknown) => unknown;
+      }
+    ).wrapModelCall(request, (next) => seen.push(next));
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual(seen[1]);
+    const names = (seen as { messages: unknown[] }[]).map((one) =>
+      one.messages.flatMap((message) => (ToolMessage.isInstance(message) ? [message.name] : [])),
+    );
+    expect(names).toEqual([[EXIT_PLAN_MODE_TOOL_NAME], [EXIT_PLAN_MODE_TOOL_NAME]]);
+  });
+
   it('五個註冊點都放了東西，核准閘門一位都沒有', async () => {
     const { registry } = await load([planPlugin()]);
 

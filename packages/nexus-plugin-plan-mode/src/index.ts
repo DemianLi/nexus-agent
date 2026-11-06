@@ -185,6 +185,7 @@ import type {
 } from '@nexus/core';
 import { CHANNEL_SERVICE, QUESTION_INTERRUPT_KIND } from '@nexus/core';
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import { withModelCallStep } from '@nexus/core';
 import type { MiddleSection } from '@nexus/core';
 import type { JsonValue, NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
 import { createMiddleware } from 'langchain';
@@ -449,14 +450,19 @@ function planCommandResult(
  * @returns 可以交給 `registry.middleware.use()` 的 middleware。
  */
 function createPlanModeMiddleware(settle: (config: unknown) => void): AgentMiddleware {
-  return createMiddleware({
-    name: PLAN_MODE_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as { readonly messages?: readonly BaseMessage[] };
       settle(callConfigOf(request));
       // 不論模式開不開：同意、繼續規劃那幾則結果在歷史裡是不帶 `name` 的（{@link EXIT_PLAN_MODE_CONCLUDES_TURN}），送給模型之前補回去。
       return handler(withExitToolNames(request));
     },
-  }) as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: PLAN_MODE_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /**
