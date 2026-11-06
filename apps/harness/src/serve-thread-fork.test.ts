@@ -108,7 +108,10 @@ async function eventsOnDisk(root: string, threadId: string): Promise<SessionEven
   return (await sessionEvents(await sessionOf(root, threadId))).events;
 }
 
-/** {@link until} 等多久就放棄：短於 vitest 預設的 5 秒，卡住時報的是等哪一步，而不是只有「Test timed out」。 */
+/**
+ * {@link until} 等多久就放棄：比 vitest 預設的 5 秒短，在測試開頭起跑的等待卡住時報得出等的是哪一步；起跑得晚就可能先撞上
+ * vitest 的逾時，那時看 {@link stepTimer} 印的各步耗時。
+ */
 const UNTIL_DEADLINE_MS = 4_000;
 
 /** 輪詢落盤的那一份，直到 `pick` 挑得到東西；逾時就拋，講等的是什麼、等了多久。 */
@@ -420,7 +423,8 @@ describe('serve 上的 thread.fork', () => {
 
     expect(foldInbox(seeded)).toEqual(EMPTY_INBOX);
 
-    // 會讓它自己跑的只有兩條：續行（授權要是 armed）與佇列（上面已是空的）。開子 thread 的下行，拿補送的授權。
+    // 能讓子 thread 跑出不是人送的那一輪的有兩條：續行（排程器只在授權是 armed 時排）與繼承來的佇列（折回來會停住，
+    // 但下一次送出時會先跑它；上面已驗是空的）。開子 thread 的下行，拿補送的授權。
     step('開子 thread 的下行、等續行授權');
     const childEvents = await client.openEvents(childId);
     let child = emptyConversation();
@@ -432,7 +436,7 @@ describe('serve 上的 thread.fork', () => {
     expect(child.goalActivation).toBe('disarmed');
     await childEvents.return(undefined);
 
-    // 再一次往返，讓建子 thread 與開下行時排上的事有機會跑；收掉 serve 讓日誌全部落盤再比。
+    // 多一次往返，讓延後一個 tick 的排程（例如續行的 setImmediate）有機會先跑；收掉 serve 會把日誌全部落盤，之後再比。
     step('往返、收掉 serve');
     expect(await client.threadHistory(childId)).toMatchObject({ kind: 'ok' });
     await stop(serve);
