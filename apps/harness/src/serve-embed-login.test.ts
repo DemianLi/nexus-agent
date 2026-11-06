@@ -5,12 +5,20 @@
  * **零憑證、零外部連線**：模型是腳本。
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { EMBED_AUDIT_FILE } from './embed-audit.js';
@@ -94,6 +102,18 @@ async function auditLines(home: string): Promise<Record<string, unknown>[]> {
     .split('\n')
     .filter((line) => line !== '')
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** 等到稽核檔裡有 `count` 筆 `stream`：`cut` 那一筆不等寫好就切線，讀到線結束時它可能還沒落盤。 */
+async function streamLines(home: string, count: number): Promise<Record<string, unknown>[]> {
+  return vi.waitFor(
+    async () => {
+      const streams = (await auditLines(home)).filter((line) => line.event === 'stream');
+      expect(streams).toHaveLength(count);
+      return streams;
+    },
+    { timeout: 2_000 },
+  );
 }
 
 describe('出廠（沒有嵌入方）', () => {
@@ -289,6 +309,137 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     expect((await get(server, '/', cookie)).status).toBe(401);
     expect((await get(server, '/index.html', cookie)).status).toBe(401);
     expect(await upgrade(server, '/threads/mux', cookie)).toBe(401);
+  });
+
+  /** 開一條嵌入版 SSE 下行，讀掉開線那一行。 */
+  async function openDownlink(server: RunningServe, cookie: string, thread: string) {
+    const response = await fetch(`${server.url}/embed/threads/${thread}/stream`, {
+      method: 'POST',
+      headers: { origin: server.url, cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ channels: ['messages', 'lifecycle'] }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(': connected\n\n');
+    return reader;
+  }
+
+  it('接線（#2489）：從表上拿掉之後，已開的下行 2 秒內被切掉，稽核記 opened 與 cut', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const cookie = await embedCookie(server, where.home);
+    const reader = await openDownlink(server, cookie, 'e-revoke');
+
+    const table = join(where.home, EMBED_IDENTITIES_FILE);
+    writeFileSync(table, JSON.stringify({ version: 1, mappings: [] }), { mode: 0o600 });
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(table, later, later);
+    const revokedAt = performance.now();
+    // 實測：經 HTTP 時對方讀到的是本體結束，不是錯誤（handler 那一層的串流是 errored）。
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
+    expect(performance.now() - revokedAt).toBeLessThan(2_000);
+
+    const streams = await streamLines(where.home, 2);
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-revoke', userId: 'alice' }),
+      expect.objectContaining({ outcome: 'cut', threadId: 'e-revoke', reason: 'not_mapped' }),
+    ]);
+  }, 15_000);
+
+  it('接線（#2489）：serve 收尾時還開著的下行記一筆 closed by server', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const cookie = await embedCookie(server, where.home);
+    const reader = await openDownlink(server, cookie, 'e-shutdown');
+    await server.close();
+    running = undefined;
+    await reader.read().catch(() => undefined);
+
+    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-shutdown' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e-shutdown', by: 'server' }),
+    ]);
+  });
+
+  /** 在 `/embed/threads/mux` 上開一條下行；回收到的每則訊息（已解析）與 socket。 */
+  async function openMuxDownlink(server: RunningServe, cookie: string, thread: string) {
+    const socket = new WebSocket(`${server.url.replace(/^http/u, 'ws')}/embed/threads/mux`, {
+      headers: { origin: server.url, cookie },
+    });
+    const received: Record<string, unknown>[] = [];
+    socket.on('message', (raw) => {
+      received.push(JSON.parse(String(raw)) as Record<string, unknown>);
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    socket.send(
+      JSON.stringify({
+        t: 'open',
+        id: '1',
+        method: 'POST',
+        path: `/embed/threads/${thread}/stream`,
+        body: JSON.stringify({ channels: ['messages', 'lifecycle'] }),
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(received).toContainEqual(expect.objectContaining({ t: 'data', id: '1' }));
+    });
+    return { socket, received };
+  }
+
+  it('接線（#2489）：多工連線上被切，對方收到這一條的 error，日誌記被切的原因、不記處理失敗', async () => {
+    const where = layout(CRM_ROW);
+    const lines: string[] = [];
+    const server = await start(where, lines);
+    const cookie = await embedCookie(server, where.home);
+    const { socket, received } = await openMuxDownlink(server, cookie, 'e-mux');
+    expect(received[0]).toMatchObject({ t: 'head', id: '1', status: 200 });
+
+    const table = join(where.home, EMBED_IDENTITIES_FILE);
+    writeFileSync(table, JSON.stringify({ version: 1, mappings: [] }), { mode: 0o600 });
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(table, later, later);
+    const revokedAt = performance.now();
+    await vi.waitFor(
+      () => {
+        expect(received.some((message) => message.t === 'error' || message.t === 'end')).toBe(true);
+      },
+      { timeout: 3_000 },
+    );
+    expect(performance.now() - revokedAt).toBeLessThan(2_000);
+    expect(received.at(-1)).toEqual({ t: 'error', id: '1', message: 'stream failed' });
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    socket.close();
+    expect(lines.filter((line) => line.includes('重驗沒過'))).toEqual([
+      expect.stringContaining(
+        '[下行] /embed/threads/e-mux/stream：嵌入版下行重驗沒過，已切掉（not_mapped）',
+      ),
+    ]);
+    expect(lines.filter((line) => line.includes('處理失敗'))).toEqual([]);
+
+    const streams = await streamLines(where.home, 2);
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-mux' }),
+      expect.objectContaining({ outcome: 'cut', threadId: 'e-mux', reason: 'not_mapped' }),
+    ]);
+  }, 15_000);
+
+  it('接線（#2489）：serve 收尾時多工連線上還開著的下行記一筆 closed', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const cookie = await embedCookie(server, where.home);
+    await openMuxDownlink(server, cookie, 'e-mux-shutdown');
+    await server.close();
+    running = undefined;
+
+    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e-mux-shutdown' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e-mux-shutdown', by: 'client' }),
+    ]);
   });
 
   it('獨立頁面的 cookie 照舊：獨立頁面與嵌入路由都打得到', async () => {

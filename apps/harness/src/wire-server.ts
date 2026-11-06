@@ -193,7 +193,7 @@ export interface StartWireServerOptions {
    */
   readonly heartbeatIntervalMs?: number;
   /**
-   * 一條下行因為卡住被斷開時往哪裡講（一行訊息，不含 thread 內容）。預設 `console.warn`。
+   * 一條下行被斷開時往哪裡講（一行訊息，不含 thread 內容）：卡住被斷開，以及多工連線上被伺服器切掉的（`StreamCutError`，嵌入版撤權）。預設 `console.warn`。
    * **和 {@link StartWireServerOptions.warn} 分開**：那一個的呼叫端會把每則訊息包成「處理失敗，回 400」。
    */
   readonly warnDisconnect?: (message: string) => void;

@@ -13,9 +13,12 @@
 //!   `heap`（往 stderr 寫 V8 heap 用完的訊息再 SIGABRT）、`alloc:<MiB>`（配置並碰過這麼多記憶體，留著不放）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）、
 //!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）、
 //!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
-//!   之後恢復）。
+//!   之後恢復）、`spin:<毫秒>`（心跳停這麼久、主執行緒空轉這麼久，之後恢復；0 是一直轉）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）、`slow-drain:<毫秒>`（收到 `drain` 等這麼久才回）、
+//!   `busy-then-idle`（第一次收到 `drain` 回 `busy`，接著送 `idle(0)`、記一行 `idle`；之後的照預設回 `drained`）。
+//! - 緊接在名字後面的 `idle:<毫秒>` 例外，在 `bound` 之前送：監督行程照順序讀同一條管線，前台收到 `up` 時它已經讀到這幾個 `idle`。
+//! - 收到 `drain` 預設回 `drained`，記一行 `drain`。
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
-//! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`eof`、`sigterm`。
+//! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`idle`（送出之後）、`drain`、`eof`、`sigterm`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -26,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
-/// 心跳先停：`hang`、`silent`、`close-stdout` 設它；`ignore-eof` 在收到 EOF 時設它。
+/// 心跳先停：`hang`、`silent`、`spin`、`close-stdout` 設它；`ignore-eof` 在收到 EOF 時設它。
 static QUIET: AtomicBool = AtomicBool::new(false);
 const HEARTBEAT: Duration = Duration::from_millis(50);
 
@@ -49,6 +52,11 @@ fn report(report: &ConversationReport) {
     let mut out = std::io::stdout().lock();
     out.write_all(&frame(&encode_conversation_report(report))).unwrap();
     out.flush().unwrap();
+}
+
+fn idle(ms: &str) {
+    report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() });
+    log("idle");
 }
 
 fn start_heartbeat() {
@@ -83,6 +91,9 @@ fn main() {
     report(&ConversationReport::Ready);
 
     let mut ignore_eof = false;
+    let mut on_drain = Some(ConversationReport::Drained);
+    let mut drain_delay = Duration::ZERO;
+    let mut busy_then_idle = false;
     let mut input = Vec::new();
     let mut buf = [0u8; 4096];
     let mut stdin = std::io::stdin().lock();
@@ -101,11 +112,25 @@ fn main() {
         }
         input.extend_from_slice(&buf[..n]);
         while let Some(payload) = take_frame(&mut input).unwrap() {
-            let ConversationCommand::Bind { thread_id } = decode_conversation_command(&payload).unwrap() else { continue };
+            let thread_id = match decode_conversation_command(&payload).unwrap() {
+                ConversationCommand::Bind { thread_id } => thread_id,
+                ConversationCommand::Drain => {
+                    log("drain");
+                    std::thread::sleep(drain_delay);
+                    if std::mem::take(&mut busy_then_idle) {
+                        report(&ConversationReport::Busy);
+                        report(&ConversationReport::Idle { idle_ms: 0 });
+                        log("idle");
+                    } else if let Some(answer) = &on_drain {
+                        report(answer);
+                    }
+                    continue;
+                }
+            };
             let thread = String::from_utf8(thread_id.clone()).unwrap();
             log(&format!("bind {thread}"));
             start_heartbeat();
-            let actions: Vec<&str> = thread.split(',').skip(1).collect();
+            let mut actions: Vec<&str> = thread.split(',').skip(1).collect();
             if actions.contains(&"garbage") {
                 let mut out = std::io::stdout().lock();
                 out.write_all(&u32::MAX.to_le_bytes()).unwrap();
@@ -113,6 +138,10 @@ fn main() {
                 continue;
             }
             let bound = if actions.contains(&"wrong-bound") { b"someone-else".to_vec() } else { thread_id };
+            let leading_idle = actions.iter().take_while(|action| action.starts_with("idle:")).count();
+            for action in actions.drain(..leading_idle) {
+                idle(&action["idle:".len()..]);
+            }
             report(&ConversationReport::Bound { thread_id: bound });
             for action in actions {
                 match action.split_once(':').unwrap_or((action, "")) {
@@ -155,7 +184,21 @@ fn main() {
                         std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
                         QUIET.store(false, Ordering::SeqCst);
                     }
+                    ("spin", ms) => {
+                        QUIET.store(true, Ordering::SeqCst);
+                        let ms: u64 = ms.parse().unwrap();
+                        let start = std::time::Instant::now();
+                        while ms == 0 || start.elapsed() < Duration::from_millis(ms) {
+                            std::hint::spin_loop();
+                        }
+                        QUIET.store(false, Ordering::SeqCst);
+                    }
                     ("ignore-eof", _) => ignore_eof = true,
+                    ("idle", ms) => idle(ms),
+                    ("busy-on-drain", _) => on_drain = Some(ConversationReport::Busy),
+                    ("ignore-drain", _) => on_drain = None,
+                    ("busy-then-idle", _) => busy_then_idle = true,
+                    ("slow-drain", ms) => drain_delay = Duration::from_millis(ms.parse().unwrap()),
                     ("ignore-term", _) => {
                         ignore_eof = true;
                         // SAFETY：改訊號處置。

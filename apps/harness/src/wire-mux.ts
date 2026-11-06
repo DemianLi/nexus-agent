@@ -26,6 +26,7 @@ import type { MuxClientMessage, MuxServerMessage } from '@nexus/wire';
 import type { RawData } from 'ws';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { StreamCutError } from './sse-response.js';
 import type { WireHandler } from './wire-handler.js';
 
 /** 連續漏幾拍算死，SSE 與 WebSocket 共用。協定常數，不開成設定。 */
@@ -237,10 +238,14 @@ class MuxConnection {
     stream.done = this.#serve(id, stream, message)
       .catch((error: unknown) => {
         if (stream.abort.signal.aborted) return;
-        this.options.warn(error instanceof Error ? error : new Error(String(error)), {
-          method,
-          path,
-        });
+        if (error instanceof StreamCutError) {
+          this.options.warnDisconnect(`[下行] ${pathOf(path)}：${error.message}`);
+        } else {
+          this.options.warn(error instanceof Error ? error : new Error(String(error)), {
+            method,
+            path,
+          });
+        }
         // socket 已關：'close' 會收掉每一條。
         void this.#send({ t: 'error', id, message: 'stream failed' }).catch(() => undefined);
       })
