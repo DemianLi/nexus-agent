@@ -196,20 +196,41 @@ describe('掃描切掉驗不過的下行', () => {
     expect(streams.filter((record) => record.outcome === 'cut')).toEqual([
       expect.objectContaining({ threadId: 'e1', userId: 'alice', reason: 'not_mapped' }),
     ]);
+    // 同一人、同一條 thread 開了兩條：`cut` 靠 `streamId` 配回先開的那一條。
+    const [first, second] = streams.filter((record) => record.outcome === 'opened');
+    expect(streams.find((record) => record.outcome === 'cut')?.streamId).toBe(first?.streamId);
+    expect(second?.streamId).not.toBe(first?.streamId);
     await startRun(handler, 'alice-2', 'e1');
     expect(await staying.until(ROOT_COMPLETED)).toContain(ROOT_COMPLETED);
   });
 
   it('同一輪裡同一顆 cookie 只重驗一次', async () => {
-    const { handler, rechecks } = rig({ intervalMs: 50 });
+    // 一輪是同步跑完的一個迴圈：同一個同步段落裡的重驗算同一輪。
+    const rounds: string[][] = [];
+    let current: string[] | undefined;
+    const { handler } = rig({
+      intervalMs: 50,
+      recheck: (headers) => {
+        if (current === undefined) {
+          current = [];
+          rounds.push(current);
+          queueMicrotask(() => {
+            current = undefined;
+          });
+        }
+        current.push(headers.get('cookie') ?? '');
+        return { ok: true, principal: ALICE };
+      },
+    });
     await openStream(handler, 'alice', 'e1');
     await openStream(handler, 'alice', 'e2');
     await openStream(handler, 'alice-2', 'e3');
+    // 三條都登記好之後才數：在那之前跑的輪只看得到一部分。
+    const registered = rounds.length;
     await vi.waitFor(() => {
-      expect(rechecks()).toBeGreaterThanOrEqual(2);
+      expect(rounds.length).toBeGreaterThan(registered);
     });
-    // 三條、兩顆不同的 cookie：每一輪兩次。
-    expect(rechecks() % 2).toBe(0);
+    expect([...rounds[registered]!].sort()).toEqual(['who=alice', 'who=alice-2']);
   });
 
   it('從對應表拿掉之後 2 秒內切掉（真的 cookie、真的表檔，掃描間隔用出廠的 1 秒）', async () => {
@@ -294,6 +315,10 @@ describe('稽核紀錄', () => {
       expect(streams.filter((record) => record.outcome === 'closed')).toHaveLength(2);
     });
     await new Promise((resolve) => setTimeout(resolve, 60));
+    const e1 = streams[0]?.streamId;
+    const e2 = streams[2]?.streamId;
+    expect(e1).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(e2).not.toBe(e1);
     expect(streams).toEqual([
       {
         outcome: 'opened',
@@ -302,15 +327,11 @@ describe('稽核紀錄', () => {
         userId: 'alice',
         sessionIdSha256: ALICE.sessionIdSha256,
         threadId: 'e1',
+        streamId: e1,
       },
-      expect.objectContaining({
-        outcome: 'closed',
-        threadId: 'e1',
-        by: 'client',
-        openedAt: expect.any(String),
-      }),
-      expect.objectContaining({ outcome: 'opened', threadId: 'e2' }),
-      expect.objectContaining({ outcome: 'closed', threadId: 'e2', by: 'client' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e1', streamId: e1, by: 'client' }),
+      expect.objectContaining({ outcome: 'opened', threadId: 'e2', streamId: e2 }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e2', streamId: e2, by: 'client' }),
     ]);
   });
 
@@ -319,6 +340,45 @@ describe('稽核紀錄', () => {
     await openStream(handler, 'alice', 'e1');
     await handler.close();
     expect(streams.at(-1)).toMatchObject({ outcome: 'closed', threadId: 'e1', by: 'server' });
+  });
+
+  it('opened 落盤期間請求被中止：記 closed by client，不訂閱、不登記、不起掃描', async () => {
+    const { handler, streams, holdNextWrite, rechecks } = rig();
+    const write = holdNextWrite();
+    const request = new AbortController();
+    const opening = openStream(handler, 'alice', 'e1', { signal: request.signal });
+    await vi.waitFor(() => {
+      expect(write.held()).toBe(true);
+    });
+    request.abort();
+    write.release();
+    await opening;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(handler.idleState('e1')?.idle).toBe(true);
+    expect(rechecks()).toBe(0);
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e1' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e1', by: 'client' }),
+    ]);
+  });
+
+  it('opened 落盤期間 handler 收掉：記 closed by server、不登記', async () => {
+    const { handler, streams, holdNextWrite, rechecks } = rig();
+    const write = holdNextWrite();
+    const opening = openStream(handler, 'alice', 'e1');
+    await vi.waitFor(() => {
+      expect(write.held()).toBe(true);
+    });
+    const closing = handler.close();
+    write.release();
+    await opening;
+    await closing;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(rechecks()).toBe(0);
+    expect(streams).toEqual([
+      expect.objectContaining({ outcome: 'opened', threadId: 'e1' }),
+      expect.objectContaining({ outcome: 'closed', threadId: 'e1', by: 'server' }),
+    ]);
   });
 
   it('opened 寫不進去：回 500、不開線、不登記給掃描', async () => {

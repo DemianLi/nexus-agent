@@ -2666,7 +2666,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   let embedScan: ReturnType<typeof setInterval> | undefined;
 
   /**
-   * 開一條嵌入身分的 thread 下行（#2489）：先記 `opened`、寫好才開（寫不進去回 500、不訂閱，#1827 D239 Q4），再登記給掃描。
+   * 開一條嵌入身分的 thread 下行（#2489）：先記 `opened`、寫好才開（寫不進去回 500、不訂閱，#1827 D239 Q4），再登記給掃描。寫好時請求已中止或 handler 已收掉：記 `closed`、回 503，不開線。
    * 切掉時 `untilCut` 每交出一顆之前先看切了沒：pump 只認 `signal`，中止之後還是會把佇列裡排著的吐完（`thread-pump.ts` 的 `#drain`）。
    */
   async function openEmbedStream(
@@ -2679,10 +2679,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     principal: EmbedPrincipal,
   ): Promise<Response> {
     const audit = guard.audit();
-    const identity = auditIdentity(principal);
+    const base = { ...auditIdentity(principal), threadId, streamId: randomUUID() };
     try {
       if (audit === undefined) throw new Error('稽核紀錄還沒打開');
-      await audit.recordStream({ outcome: 'opened', ...identity, threadId });
+      await audit.recordStream({ outcome: 'opened', ...base });
     } catch (error: unknown) {
       options.warn?.(
         `[嵌入下行] thread ${threadId} 的稽核紀錄寫不進去，這條下行不開：${String(error)}`,
@@ -2692,7 +2692,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         headers: { 'cache-control': 'no-store' },
       });
     }
-    const openedAt = new Date(now()).toISOString();
     const cut = new AbortController();
     let ended = false;
     const onAbort = () => entry.end({ by: 'client' });
@@ -2708,7 +2707,6 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           clearInterval(embedScan);
           embedScan = undefined;
         }
-        const base = { ...identity, threadId, openedAt };
         audit
           .recordStream(
             'cut' in how
@@ -2722,11 +2720,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           });
       },
     };
+    // 請求已中止：本體沒人讀，產生器不會開始、`#drain` 的 `finally` 不跑，訂閱了就留在 pump 上擋住閒置逐出。
+    // handler 已收掉：`close()` 逐條收尾那一輪已經跑過，之後登記的收不到，掃描計時器也不該再起。
+    if (signal.aborted || closed) {
+      entry.end({ by: signal.aborted ? 'client' : 'server' });
+      return new Response('stream not opened', {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
     embedStreams.add(entry);
     // 產生器從沒被拉過就被放掉時 `finally` 不跑（`sse-response.ts` 的 `cancel`）：請求一中止就收尾，不等它。
-    if (signal.aborted) entry.end({ by: 'client' });
-    else signal.addEventListener('abort', onAbort, { once: true });
-    if (embedScan === undefined && !closed) {
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (embedScan === undefined) {
       embedScan = setInterval(() => {
         scanEmbedStreams(guard);
       }, guard.intervalMs ?? IDENTITY_TABLE_STAT_INTERVAL_MS);

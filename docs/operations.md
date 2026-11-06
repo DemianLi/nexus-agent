@@ -1004,11 +1004,11 @@ Content-Type: application/json
 
 - 換票（`event: "exchange"`）的 `outcome`：`issued` 與 `capacity`（帶 `userId`）、`identity_rejected`、`bad_request`（帶 `reason`）、`capacity`、`unauthenticated`。
 - 兌換（`event: "redeem"`）的 `outcome`：`redeemed`（帶 `userId` 與 `cookieExpiresAt`）、`ticket_expired`、`identity_rejected`（帶 `reason`，對應被撤或對到別人是 `user_changed`），都帶票上的嵌入方、對方帳號與 session id 的 sha256；票不存在、用過、本文不對的兌換認不出是誰，記成 `unauthenticated`。
-- 嵌入版下行（`event: "stream"`，#2489）：都帶嵌入方、對方帳號、使用者代號、session id 的 sha256 與 `threadId`。
+- 嵌入版下行（`event: "stream"`，#2489）：都帶嵌入方、對方帳號、使用者代號、session id 的 sha256、`threadId` 與 `streamId`（每條下行一個隨機值）。
   - `opened`：**寫好才開線**；寫不進去回 `500`、不開線，伺服器日誌記一行。主機擁有者開的下行不記。
-  - `closed`（帶 `openedAt`、`by`）：`client` 是請求被中止（瀏覽器關掉、斷線、多工連線上收掉這一條）；`server` 是 serve 這一側收掉（對話收掉、積壓太多被斷開）。serve 收尾時還開著的：多工連線上的先被關掉連線，記 `client`；SSE 上的實測記 `server`（看時序，不保證）。
-  - `cut`（帶 `openedAt`、`reason`）：重驗沒過被切掉。`reason` 是 `not_mapped`（從表上拿掉或對到別人）、`table_invalid`、`expired`（過期而且沒續上）。系統時鐘往回撥到簽發時間之前時是 `bad_cookie`。
-  - 每一筆 `opened` 最多配一筆 `closed` 或 `cut`；serve 被強制結束、或那一筆寫不進去時就缺。`closed`、`cut` 寫不進去只記伺服器日誌，不影響下行。
+  - `closed`（帶 `by`）：`client` 是請求被中止（瀏覽器關掉、斷線、多工連線上收掉這一條）；`server` 是 serve 這一側收掉（對話收掉、積壓太多被斷開）。serve 收尾時還開著的：多工連線上的先被關掉連線，記 `client`；SSE 上的實測記 `server`（看時序，不保證）。
+  - `cut`（帶 `reason`）：重驗沒過被切掉。`reason` 是 `not_mapped`（從表上拿掉或對到別人）、`table_invalid`、`expired`（過期而且沒續上）。系統時鐘往回撥到簽發時間之前時是 `bad_cookie`。
+  - 每一筆 `opened` 最多配一筆同 `streamId` 的 `closed` 或 `cut`（同一人可以對同一條對話開好幾條，要靠 `streamId` 配）；serve 被強制結束、或那一筆寫不進去時就缺。`opened` 寫好時請求已經中止、或 serve 正在收尾的，不開線、回 `503`，緊接著記同 `streamId` 的 `closed`（`client`／`server`）。`closed`、`cut` 寫不進去只記伺服器日誌，不影響下行。`opened` 的 `at` 是開始寫那一筆的時間，線在它寫好之後才開。
 - 嵌入身分碰到不是自己的對話（`event: "access"`，`outcome: "refused"`）：帶身分、`threadId`、`route`（`stream`、`history`、`attachment`、`command`）與 `reason`（`thread_not_owned`：別人開的；`not_embedded`：不是嵌入版開的，見〈對話歸誰〉）。寫不進去照樣回拒絕，只記伺服器日誌。主機擁有者從嵌入路由被拒的不記。
 - **不記秘密**：服務憑證與票都不記，對方的 session id 只記 sha256。
 - **認不出是誰的請求會合併**（換票時憑證錯、兌換時票不存在或用過或本文不對，兩種 `event` 各自一個時間窗）：它們不知道是誰打的，也最容易被大量打。每 60 秒的時間窗裡，第一次照記一行（`count: 1`），之後只計數；時間窗過了之後**再有**一次同一類的請求、或 serve 收尾時，把計到的寫成一行（`count` 是第一行之後的次數，`from` 是這個時間窗第一次的時間，`to` 是最後一次）。serve 被強制結束時這段計數遺失。所以每一類每個時間窗最多兩行，檔案不會因為有人一直打錯憑證或亂丟票而無上限地長。

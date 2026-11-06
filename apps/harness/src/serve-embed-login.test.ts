@@ -104,6 +104,18 @@ async function auditLines(home: string): Promise<Record<string, unknown>[]> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+/** 等到稽核檔裡有 `count` 筆 `stream`：`cut` 那一筆不等寫好就切線，讀到線結束時它可能還沒落盤。 */
+async function streamLines(home: string, count: number): Promise<Record<string, unknown>[]> {
+  return vi.waitFor(
+    async () => {
+      const streams = (await auditLines(home)).filter((line) => line.event === 'stream');
+      expect(streams).toHaveLength(count);
+      return streams;
+    },
+    { timeout: 2_000 },
+  );
+}
+
 describe('出廠（沒有嵌入方）', () => {
   it('沒有換票的路由、不建憑證檔與稽核檔；啟動披露講關', async () => {
     const where = layout();
@@ -327,7 +339,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     expect(await reader.read()).toEqual({ done: true, value: undefined });
     expect(performance.now() - revokedAt).toBeLessThan(2_000);
 
-    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    const streams = await streamLines(where.home, 2);
     expect(streams).toEqual([
       expect.objectContaining({ outcome: 'opened', threadId: 'e-revoke', userId: 'alice' }),
       expect.objectContaining({ outcome: 'cut', threadId: 'e-revoke', reason: 'not_mapped' }),
@@ -408,7 +420,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     ]);
     expect(lines.filter((line) => line.includes('處理失敗'))).toEqual([]);
 
-    const streams = (await auditLines(where.home)).filter((line) => line.event === 'stream');
+    const streams = await streamLines(where.home, 2);
     expect(streams).toEqual([
       expect.objectContaining({ outcome: 'opened', threadId: 'e-mux' }),
       expect.objectContaining({ outcome: 'cut', threadId: 'e-mux', reason: 'not_mapped' }),

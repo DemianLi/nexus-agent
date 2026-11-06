@@ -81,21 +81,22 @@ export interface EmbedAuditIdentity {
 }
 
 /** 一條嵌入版 thread 下行的開、關、切（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239 Q2）。 */
-export type StreamRecord = EmbedAuditIdentity & { readonly threadId: string } & (
+export type StreamRecord = EmbedAuditIdentity & {
+  readonly threadId: string;
+  /** 每條下行一個隨機值：`closed`、`cut` 靠它配回同一條的 `opened`（同一人可以對同一條 thread 開好幾條）。 */
+  readonly streamId: string;
+} & (
     | { readonly outcome: 'opened' }
     | {
         readonly outcome: 'closed';
-        /** 開線的時間（ISO）。 */
-        readonly openedAt: string;
         /**
          * `client`：請求的 signal 先中止（對方取消或斷線、多工連線上收掉這一條，或 serve 收尾先關掉連線：多工連線上的都是這一種）；
-         * `server`：產生器從 serve 這一側結束（thread 收掉、積壓逐出），或 handler 收尾時還登記著。
+         * `server`：產生器從 serve 這一側結束（thread 收掉、積壓逐出），或 handler 收尾時還登記著、或 `opened` 還在落盤。
          */
         readonly by: 'client' | 'server';
       }
     | {
         readonly outcome: 'cut';
-        readonly openedAt: string;
         /** 掃描重驗開線時那顆 cookie 驗不過的原因。 */
         readonly reason: EmbedCookieRefusal;
       }
