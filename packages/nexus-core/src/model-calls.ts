@@ -91,6 +91,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
@@ -141,9 +142,9 @@ function recordReply(log: SessionLog, response: unknown, modelCall: number): voi
 export function createModelCallRecorder(sessions: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
@@ -176,5 +177,10 @@ export function createModelCallRecorder(sessions: {
       log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
       return response;
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }

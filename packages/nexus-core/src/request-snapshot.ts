@@ -119,6 +119,7 @@ import type { Serialized } from '@langchain/core/load/serializable';
 import type { BaseMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { currentModelCall, withModelCall } from './model-call-scope.js';
 import { bindModelConfig } from './model-binding.js';
@@ -482,9 +483,9 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
 export function createRequestSnapshotRecorder(sessions: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
@@ -501,5 +502,10 @@ export function createRequestSnapshotRecorder(sessions: {
         })),
       });
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
