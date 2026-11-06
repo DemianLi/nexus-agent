@@ -6,7 +6,8 @@
  * - 宿主組出來的 native agent 上，七顆都還帶著登記（沒被宿主換成沒登記的同名顆）；會改請求或回覆的格（修工具參數、輸出上限、
  *   補懸空呼叫、計劃模式）也一樣；
  * - 同一輪「root 前景委派 `worker` → 回答」，兩個 loop 的 root 日誌裡，每一筆帶 `modelCall` 的事件指到的 `model/start` 相同
- *   （起訖紀錄器用 `AsyncLocalStorage` 把識別往內帶，native 直接呼叫時不能斷）。
+ *   （起訖紀錄器用 `AsyncLocalStorage` 把識別往內帶，native 直接呼叫時不能斷）；
+ * - native 進各格的先後照 middleware 的排序：core 的計數測試掛不到計劃模式，中止閘門與計劃模式這兩格的先後只有出貨組裝看得到。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -147,6 +148,43 @@ describe('出貨組裝上登記成環繞步的格', () => {
     expect(registered, names.join(', ')).toEqual(
       Object.fromEntries(MUTATOR_CELLS.map((name) => [name, '登記'])),
     );
+  });
+
+  it('native 進各格的先後照 middleware 的排序，也就是 langgraph 經 wrapModelCall 由外往內的先後', async () => {
+    const built = await createCliAgent(
+      { live: false, workspace, sandbox: 'workspace-write', agentLoop: 'native' },
+      withScriptedModel(shipped, [{ content: '好了' }]),
+      workspace,
+    );
+    const sessions = new core.SessionRegistry('root-1');
+    const detach = built.attachSession(sessions);
+    try {
+      const agent = built.agent as unknown as {
+        middleware: readonly { name: string }[];
+        withConfig(config: object): typeof built.agent;
+      };
+      const registered = agent.middleware.filter((m) => core.modelCallStepOf(m) !== undefined);
+      const entered: string[] = [];
+      // 每顆登記的那一步換成先記一筆再照原樣做的一步；`withConfig` 造的新 agent 重讀登記，native 直接呼叫的就是換過的。
+      for (const m of registered) {
+        const step = core.modelCallStepOf(m)!;
+        core.withModelCallStep(
+          (request, next) => {
+            entered.push(m.name);
+            return step(request, next);
+          },
+          (wrapModelCall) => Object.assign(m, { wrapModelCall }),
+        );
+      }
+      await agent
+        .withConfig({})
+        .invoke({ messages: [new HumanMessage('動手')] }, { configurable: { thread_id: 'order' } });
+      expect(entered).toEqual(registered.map((m) => m.name));
+      expect(entered).toEqual(expect.arrayContaining(['nexusTurnCancel', 'nexusPlanMode']));
+    } finally {
+      detach();
+      await built.dispose();
+    }
   });
 
   it('兩個 loop 的 root 日誌，每一筆帶 modelCall 的事件指到同一次 model/start', async () => {
