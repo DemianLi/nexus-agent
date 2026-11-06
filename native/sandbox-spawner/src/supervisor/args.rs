@@ -16,7 +16,7 @@ pub const DEFAULT_TERM_GRACE: Duration = Duration::from_millis(3_000);
 pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
 /// 多久讀一次對話行程的 RSS 與 CPU。
 pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
-/// 綁上之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
+/// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
 pub const DEFAULT_STALL: Duration = Duration::from_millis(15_000);
 /// 對話行程一直想要一整顆 CPU 多久，就把它的群組 renice 到 19。
 pub const DEFAULT_CPU_BUSY: Duration = Duration::from_millis(10_000);
@@ -38,7 +38,7 @@ pub struct Args {
     /// 對話行程（leader）的 RSS 超過這個值（kB）就 SIGKILL 它的群組，死因 `memory`（已經在收的照原本的理由）。沒給就不殺，只把最高值記進稽核。
     pub rss_limit_kb: Option<u64>,
     pub rss_poll: Duration,
-    /// 綁上之後多久沒聽到對話行程任何一則回報，就照拆除梯度收它，死因 `stalled`。`None`（`--stall-ms 0`）是不判。
+    /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就當場對它的群組送 SIGKILL（不走拆除梯度），死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
     /// 對話行程一直想要一整顆 CPU 多久（判法見 `cpu` 模組），就把它的群組 renice 到 19。`None`（`--cpu-busy-ms 0`）是不調。
     pub cpu_busy: Option<Duration>,

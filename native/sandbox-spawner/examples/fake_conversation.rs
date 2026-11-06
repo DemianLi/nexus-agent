@@ -131,7 +131,8 @@ fn main() {
                         }
                         log(&format!("grandchild {pid}"));
                     },
-                    // SAFETY：關掉 stdout，之後不再寫它。
+                    // SAFETY：關掉 stdout。先設 `QUIET`、拿著 stdout 的鎖再關：心跳寫到一半的那一框先寫完；已經過了 `QUIET` 檢查的那一次
+                    // 會寫到關掉的 fd，寫不出去就丟掉。
                     ("close-stdout", _) => unsafe {
                         QUIET.store(true, Ordering::SeqCst);
                         let _lock = std::io::stdout().lock();

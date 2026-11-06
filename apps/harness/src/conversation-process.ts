@@ -19,7 +19,7 @@ import { installServeProcessLifecycle, runServe } from './serve.js';
 /** 控制面多久問一次閒不閒。 */
 const POLL_MS = 1_000;
 /** 一輪中多久送一次心跳。 */
-const HEARTBEAT_MS = 5_000;
+const HEARTBEAT_MS = 1_000;
 
 /** 拆出 `--socket <path>`，其餘原樣交給 serve。 */
 export function parseConversationArgs(argv: readonly string[]): {

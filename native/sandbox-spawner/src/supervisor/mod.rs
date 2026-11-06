@@ -26,7 +26,8 @@
 //! 監督行程自己的訊息）丟掉、記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`；同一次取樣 CPU，一直想要一整顆的 renice
-//! 到 19（[`cpu`]）。送出 `bind` 起收到的每個框都算聽到，兩次之間最長的間隔寫進稽核的 `max_silence_ms`。
+//! 到 19（[`cpu`]）。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
+//! `max_silence_ms`，死前最後一段不算。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
 //! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
@@ -159,7 +160,7 @@ impl Conversation {
         }
     }
 
-    /// 綁上之後、還沒在收，而且已經 `stall` 沒聽到它。
+    /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它。
     fn stalled(&self, now: Instant, stall: Duration) -> bool {
         self.proc.stop.is_none() && self.heard_at.is_some_and(|at| now.saturating_duration_since(at) >= stall)
     }
@@ -407,7 +408,7 @@ impl Supervisor {
             .min()
     }
 
-    /// 綁上之後 `stall` 沒聽到回報的，當場殺掉整個群組，死因 `stalled`。不走拆除梯度：事件迴圈卡住的行程讀不到 EOF，
+    /// 送出 `bind` 之後 `stall` 沒聽到回報的，當場殺掉整個群組，死因 `stalled`。不走拆除梯度：事件迴圈卡住的行程讀不到 EOF，
     /// 也跑不了自己的 SIGTERM handler，梯度的兩段寬限只會讓它多佔那麼久的 CPU。監督行程自己停住過（fd 2 阻塞、被 SIGSTOP）時，
     /// 回報可能還在管線裡沒讀，所以判之前先讀一次它的控制通道。
     fn check_stalls(&mut self, now: Instant, stall: Duration) {

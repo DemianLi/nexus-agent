@@ -202,8 +202,8 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 | 一次大配置（S3b） | 監督行程 | 輪詢 `/proc/<pid>/status` 的 RSS，超過上限就 SIGKILL | c0p 839 ms、p2 1,434 ms |
 | heap 外（S3c） | 監督行程 | 同上；被 cgroup OOM killer 殺的，從結束訊號與 `memory.events` 分辨 | c0p 103 ms、p2 129 ms |
 | 一輪跑太久 | 對話行程自己 | 今天的一輪時鐘（30 分鐘，`settings/turn-timeout.ts:49`），照停止鍵的路中止 | — |
-| 事件迴圈卡死（S4） | 監督行程 | 對話行程收到 `bind` 起就定時送 `heartbeat`，一直送到收掉，不分在不在一輪裡（D238）。監督行程只看心跳斷了多久：超過 `--stall-ms`（N）就當場對群組送 SIGKILL，死因 `stalled`；不走拆除梯度，因為事件迴圈卡住的行程讀不到 EOF、也跑不了自己的 SIGTERM handler，兩段寬限只會讓它多佔那麼久的 CPU（S4 試跑實測：走梯度時 down 在觸發後 24.2 s，等於 N 加兩段寬限）。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以這道一定在外面。`turn(begin\|end)` 不參與判斷，只給 §7-3 用；一輪跑太久交給上一列的一輪時鐘。`ready` 之前不判。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級；出廠值與量到的最大沉默寫在 C2b 的 PR | 失控的都在 N 內被殺，其他對話零錯誤 |
-| 吃滿 CPU | 監督行程 | 輪詢 RSS 時一併取樣 `/proc/<pid>/stat` 的 utime＋stime，連續吃滿一顆超過 `--cpu-busy-ms` 就把整個行程群組 renice 到 19，只做一次、不調回（R3：先不上 cgroup） | 其他對話 p95 +11–20% |
+| 事件迴圈卡死（S4） | 監督行程 | 對話行程收到 `bind` 起就定時送 `heartbeat`，一直送到收掉，不分在不在一輪裡（D238）。監督行程只看心跳斷了多久：超過 `--stall-ms`（N）就當場對群組送 SIGKILL，死因 `stalled`；不走拆除梯度，因為事件迴圈卡住的行程讀不到 EOF、也跑不了自己的 SIGTERM handler，兩段寬限只會讓它多佔那麼久的 CPU（S4 試跑實測：走梯度時 down 在觸發後 24.2 s，等於 N 加兩段寬限）。卡死時對話行程自己的計時器不會觸發（研究 §三-4 c0s「時限計時器也不觸發」），所以這道一定在外面。`turn(begin\|end)` 不參與 stalled 判斷；監督行程用 `turn(begin)` 數稽核的 `turns`，§7-3 的只讀轉一般也會靠它；一輪跑太久交給上一列的一輪時鐘。`ready` 之前不判。**N 要高於已知的合法同步阻塞**：冷開大 thread 時解析、還原、投影折疊三段同步連著跑，#2117 量到 4.8–5.6 s（D151 不切片），所以 N 出廠不能低於這個量級；出廠值與量到的最大沉默寫在 C2b 的 PR | 失控的都在 N 內被殺，其他對話零錯誤 |
+| 吃滿 CPU | 監督行程 | 輪詢 RSS 時一併取樣兩個累計量：整個執行緒群組的 utime＋stime（`/proc/<pid>/stat`），與 leader 在 CPU 上加排隊等 CPU 的時間（`/proc/<pid>/schedstat`）。最近 `--cpu-busy-ms` 窗口內兩者較高的平均 ≥ 0.9 顆，就把整個行程群組 renice 到 19，只做一次、不調回（R3：先不上 cgroup） | 其他對話 p95 +11–20% |
 
 **拆除梯度照 dsh**（`packages/subagent/subagent-acp/src/run.ts:183-212`）：`drain` → stdin EOF → 寬限 → SIGTERM → 寬限 → SIGKILL → 確認行程群組已空。被殺的對話行程留下的「輪還開著」的日誌，下次開時走今天的續接收尾（`resumeClosingInterruptedTurn`，`serve.ts:479`），不另寫一套。
 

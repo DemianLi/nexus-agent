@@ -39,7 +39,8 @@ pub enum Record<'a> {
         turns: u32,
         /// 輪詢看到的最高 RSS（kB）；沒量到是 0。
         rss_kb: u64,
-        /// 送出 `bind` 之後，兩則回報之間最長隔了多久；沒送過 `bind` 是 0。
+        /// 送出 `bind` 起，每次聽到它與上一次（第一次是與送出 `bind`）之間最長隔了多久；最後一次聽到之後到結束的那段不算，
+        /// 所以死因 `stalled` 的紀錄這個值也小於 `--stall-ms`。沒送過 `bind` 是 0。
         max_silence_ms: u64,
         /// 因為一直想要一整顆 CPU 被 renice 到 19 過。
         reniced: bool,
