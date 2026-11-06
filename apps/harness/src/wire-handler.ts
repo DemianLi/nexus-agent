@@ -2655,7 +2655,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     /** 開線那個請求的標頭：mux 上是升級當下的那一份（`wire-mux.ts` 的 `logicalHeaders`）。 */
     readonly headers: Headers;
     /** 收尾：記 `closed` 或 `cut`、拿出登記。冪等，先到的算。 */
-    readonly end: (how: { readonly by: 'client' | 'server' } | { readonly cut: EmbedCookieRefusal }) => void;
+    readonly end: (
+      how: { readonly by: 'client' | 'server' } | { readonly cut: EmbedCookieRefusal },
+    ) => void;
     /** 切掉：之後產生器不再交出任何一顆，pump 那一側的訂閱跟著中止。 */
     readonly cut: AbortController;
   }
@@ -2682,7 +2684,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (audit === undefined) throw new Error('稽核紀錄還沒打開');
       await audit.recordStream({ outcome: 'opened', ...identity, threadId });
     } catch (error: unknown) {
-      options.warn?.(`[嵌入下行] thread ${threadId} 的稽核紀錄寫不進去，這條下行不開：${String(error)}`);
+      options.warn?.(
+        `[嵌入下行] thread ${threadId} 的稽核紀錄寫不進去，這條下行不開：${String(error)}`,
+      );
       return new Response('audit unavailable', {
         status: 500,
         headers: { 'cache-control': 'no-store' },
@@ -2712,7 +2716,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
               : { outcome: 'closed', ...base, by: how.by },
           )
           .catch((error: unknown) => {
-            options.warn?.(`[嵌入下行] thread ${threadId} 收線的稽核紀錄寫不進去：${String(error)}`);
+            options.warn?.(
+              `[嵌入下行] thread ${threadId} 收線的稽核紀錄寫不進去：${String(error)}`,
+            );
           });
       },
     };
