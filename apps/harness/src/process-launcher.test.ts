@@ -237,6 +237,16 @@ describe('resolveProcessModel', () => {
     });
   });
 
+  it('process-model 那一列寫壞了：旗標明講 single 照樣是 single，per-thread 在啟動器就拋，沒給旗標交給 runServe 報', async () => {
+    const broken = await patchFile('- id: process-model\n  config:\n    mode: forked\n');
+    const argv = ['--patch', broken];
+    expect(resolveProcessModel({ ...base, argv, flag: 'single' })).toEqual({ mode: 'single' });
+    expect(resolveProcessModel({ ...base, argv, flag: undefined })).toEqual({ mode: 'single' });
+    expect(() => resolveProcessModel({ ...base, argv, flag: 'per-thread' })).toThrow(
+      PROCESS_MODEL_ENTRY_NAME,
+    );
+  });
+
   it('per-thread 不在 Linux 就拋', () => {
     expect(() =>
       resolveProcessModel({ ...base, platform: 'darwin', argv: [], flag: 'per-thread' }),

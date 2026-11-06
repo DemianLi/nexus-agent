@@ -8,7 +8,7 @@
  * - 逐跳標頭（`connection` 那一串）兩個方向都拿掉，照 RFC 9110 §7.6.1。回應的 `set-cookie` 也拿掉：登入只在前台。
  * - **兩個方向都是串流**：上傳不在前台聚合，SSE 的下行一框一框過；客戶端斷線（`request.signal`）就斷掉往下的那條連線，
  *   對話行程那邊看到的跟客戶端直接斷線一樣。
- * - 每個 socket 一個 keep-alive 的 agent，行程走了（`forget`）就收掉。
+ * - 每個 socket 一個 keep-alive 的 agent，行程走了（`forget`）就收掉；一條連線出錯只丟閒置的（`dropIdle`），用中的不動。
  *
  * @module
  */
@@ -105,7 +105,8 @@ export class FrontForwarder {
    * 把 `request` 轉給在 `socketPath` 上聽的對話行程，回它的回應。
    *
    * @param extraHeaders - 前台加給對話行程的標頭。
-   * @throws 連不上（行程剛走、socket 不在）：呼叫端把它當成這條 thread 的行程不在。
+   * @throws 轉送失敗時 reject 底層的錯：`code` 是 `ECONNREFUSED`／`ENOENT` 表示 socket 那頭沒有行程；其他（重用到對方剛關的
+   *   閒置連線、上傳本文出錯、`request.signal` 中止）只是這一條連線的事。
    */
   forward(
     request: Request,
@@ -156,7 +157,18 @@ export class FrontForwarder {
     });
   }
 
-  /** 這個 socket 的行程走了：收掉它的連線。 */
+  /**
+   * 一條連線出錯而行程還在（重用到對方剛關的閒置連線、上傳本文出錯）：只丟閒置的，同一個 socket 上轉送中的下行不動。
+   */
+  dropIdle(socketPath: string): void {
+    const agent = this.#agents.get(socketPath);
+    if (agent === undefined) return;
+    for (const sockets of Object.values(agent.freeSockets)) {
+      for (const socket of sockets ?? []) socket.destroy();
+    }
+  }
+
+  /** 這個 socket 的行程走了：收掉它的連線，連轉送中的一起。 */
   forget(socketPath: string): void {
     this.#agents.get(socketPath)?.destroy();
     this.#agents.delete(socketPath);
