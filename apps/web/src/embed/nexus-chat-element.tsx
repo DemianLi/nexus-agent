@@ -61,7 +61,7 @@ export interface DefineOptions {
   readonly styles: NexusChatStyles;
   /**
    * 注入用；省略就是打 `scriptUrl` 所在目錄底下 `/embed` 的 client（#2382、#2426）。每個元素一個。注入的 client 換票之後不換 socket，
-   * 請求被 401 擋下時要自己呼叫 `onUnauthorized`。
+   * 請求被 401 擋下時要自己呼叫 `onUnauthorized`；下行的 401 還要拋 `StreamUnauthorizedError`，否則照一般斷線重試（#2490）。
    */
   readonly createClient?: (hooks: { readonly onUnauthorized: () => void }) => WireClient;
   /** 注入用：`signIn` 兌換登入票打的 `fetch`。省略是全域的（包一層記下 serve 的時鐘）。 */

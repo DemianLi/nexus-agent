@@ -1,8 +1,8 @@
 /**
  * 嵌入的對話框，下行被 serve 以 401 擋下（[#2490](https://github.com/DemianLi/nexus-agent/issues/2490)）時用的錯誤型別與文案。
  *
- * 401 只在嵌入版的連線上變成 {@link StreamUnauthorizedError}（`lib/agent.ts`），獨立頁面照舊是一般的 `Error`、照舊重試。
- * 下行不排重試，等宿主頁下一次 `signIn` 成功再開（`hooks/use-conversation.ts`）。
+ * 401 只在給了 `onUnauthorized` 的連線（嵌入版）上變成 {@link StreamUnauthorizedError}（`lib/agent.ts`）；獨立頁面是一般的 `Error`，
+ * 照一般斷線退避重試。什麼時候重開見 `hooks/use-conversation.ts` 的 `signIns`。
  *
  * @module
  */

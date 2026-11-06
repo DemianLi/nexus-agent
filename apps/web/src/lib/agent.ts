@@ -22,10 +22,11 @@ export interface AgentClientOptions {
   /** 注入用；給了就兩條下行也走它，不開 socket。預設是全域的 `fetch` 包一層、順手記下回應的 `Date` 標頭（{@link clockedFetch}，換算時鐘差用），下行走 WebSocket。 */
   readonly fetch?: typeof globalThis.fetch;
   /**
-   * client 的請求（上行與兩條下行）回 401 時呼叫，回應照樣交給呼叫端。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
+   * client 的請求（上行與兩條下行）回 401 時呼叫。上行的回應照樣交給呼叫端，下行的見最後一句。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
    * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡；開線之後、回應回來之前呼叫過
    * {@link AgentConnection.renewStreams} 的下行，401 也不叫：呼叫端照斷線重開，重開走新的 socket，那裡再 401 才叫（#2484）。
-   * 嵌入版用它通知宿主頁換票（#2370）。給了它，下行的 401 在叫過它之後拋 {@link StreamUnauthorizedError}，不交回應（#2490）。
+   * 嵌入版用它通知宿主頁換票（#2370）。給了它，下行的 401 在叫過它之後拋 {@link StreamUnauthorizedError}，不交回應；
+   * 換過一代的不叫也不拋，照樣交回回應（#2490）。
    */
   readonly onUnauthorized?: () => void;
 }
@@ -215,13 +216,12 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
   const fetch = options.fetch ?? clockedFetch();
   const onUnauthorized = options.onUnauthorized;
   if (options.fetch !== undefined) {
-    const injected = options.fetch;
     return {
       client: createWireClient({
         baseUrl,
         fetch: watched(fetch, onUnauthorized),
         streamFetch: async (input, init) =>
-          unauthorizedStream(await injected(input, init), onUnauthorized),
+          unauthorizedStream(await fetch(input, init), onUnauthorized),
       }),
       renewStreams: () => {},
     };

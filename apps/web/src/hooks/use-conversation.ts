@@ -670,7 +670,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
     /**
      * 伺服器說這條**永遠**開不了（子代理的會話，#1708）：講原因、不排重試。`lost` 留在 false，所以「立刻重連」與
-     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。
+     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。嵌入版的 401（#2490）也走這裡，等 `signIns` 變了才重開。
      */
     const refuse = (refused: string) => {
       const book = retry.current;
