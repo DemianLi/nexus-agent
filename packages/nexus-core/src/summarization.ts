@@ -890,7 +890,8 @@ export function createRecordedProjectionShell(sessions?: {
 
 /**
  * 摘要器那一格整串登記成一個環繞步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：那一步就是包好的整串
- * `wrapModelCall`，force 鏈（{@link withRetainedTail}）也在裡面；回的那顆用它造 `wrapModelCall`，其餘欄位照舊。
+ * `wrapModelCall`，{@link createSummarizer} 那串的 force 鏈（{@link withRetainedTail}）也在裡面；回的那顆用它造 `wrapModelCall`，
+ * 其餘欄位照舊。
  *
  * @param chain - 包好的整串，一定有 `wrapModelCall`。
  * @returns 同名、同狀態、登記了那一步的 middleware。

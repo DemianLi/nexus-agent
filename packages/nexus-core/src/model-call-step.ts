@@ -2,7 +2,7 @@
  * 環繞一次模型呼叫的一步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：一步拿到這次模型請求與往內一層，
  * 可以改了請求再往內交、往內交好幾次（摘要器超窗時換保留量重走），或看往內交回來的結果再決定回什麼。
  *
- * 請求與結果都是不透明的，一步的簽名不帶 LangChain 型別；摘要器那一步內部仍用 `BaseMessage` 與 `model.invoke`，留到 K13 再拆。
+ * 請求與結果都是不透明的，一步的簽名不帶 LangChain 型別；摘要器那一步內部仍用 `BaseMessage` 與 `model.invoke`，TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))。
  *
  * **wrapModelCall 由登記的那一份造出來**（{@link withModelCallStep}）：同一步既造那顆的 `wrapModelCall`，也登記給 native，所以兩者
  * 分不開。native 的 root 在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link wrapModelCallFromStep} 造的那一支，
@@ -39,7 +39,8 @@ const registeredSteps = new WeakMap<object, ModelCallStep>();
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param step - 這一步。
- * @param build - 拿 `wrapModelCall` 造那顆 middleware。
+ * @param build - 拿 `wrapModelCall` 造那顆 middleware；回的那顆要用收到的這支當 `wrapModelCall`，native 直接呼叫的那一步才跟經
+ *   `wrapModelCall` 的是同一份。
  * @returns `build` 造的那顆。
  */
 export function withModelCallStep<M extends object>(
