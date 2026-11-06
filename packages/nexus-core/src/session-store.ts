@@ -658,8 +658,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：52 以前沒有這兩樣，等於獨立頁面開的、沒附情境。續接改寫 header 時只動 `version`，不補 `profile`。
  * **回滾的後果**同 52：被 53 碰過的 thread，52 的 runtime 以格式太新拒讀。
+ *
+ * ## 54：嵌入版的 thread 記下擁有者與哪一次登入
+ *
+ * [#2370](https://github.com/DemianLi/nexus-agent/issues/2370)（#1827 D231 Q3）：header 多兩格，嵌入身分（換票登入的人）開的 root 才寫，
+ * 見 {@link StoredSessionHeader.owner} 與 {@link StoredSessionHeader.embedOrigin}。嵌入身分只打得開自己的 thread。
+ *
+ * **升版，不是可選的**：53 的 `parseHeader` 白名單會把帶這兩格的 header 拒成 `SessionCorruptionError`（同 51 那段），把好檔判成壞檔；
+ * 要讓舊讀方在讀之前就停。
+ *
+ * **讀舊檔**：53 以前沒有這兩格，等於沒有擁有者：嵌入身分打不開，主機擁有者照開。續接改寫 header 時只動 `version`，不補。
+ * **回滾的後果**同 52：被 54 碰過的 thread，53 的 runtime 以格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 53;
+export const SESSION_LOG_FORMAT_VERSION = 54;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
@@ -686,6 +697,24 @@ export interface StoredSessionPluginRow {
   readonly id?: string;
   /** 那一列寫了 `disabled: true`。 */
   readonly disabled: boolean;
+}
+
+/**
+ * 一條 thread 屬於哪位 nexus 使用者（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）。
+ *
+ * 帳號系統（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428)）上線之前，`userId` 是管理者在嵌入身分對應表寫的使用者代號；
+ * TODO(#1428)：上線時遷成帳號 id。
+ */
+export interface StoredSessionOwner {
+  readonly userId: string;
+}
+
+/** 嵌入身分開的 thread 從哪個嵌入方、哪一次登入開的（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）。 */
+export interface StoredSessionEmbedOrigin {
+  /** embed-login 設定裡的嵌入方 id。 */
+  readonly embedder: string;
+  /** 嵌入方換票時送的登入 session id 的 sha256 hex，跟嵌入稽核紀錄的 `sessionIdSha256` 同一個值。 */
+  readonly loginSessionSha256: string;
 }
 
 /**
@@ -786,6 +815,13 @@ export interface StoredSessionHeader {
    * 缺席就是完整的那一份。建立時定下，之後誰開都照它組；續接、分叉照抄，不改。
    */
   readonly profile?: 'embed';
+  /**
+   * 這條 thread 屬於誰（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：只有嵌入身分開的 root 寫，跟 {@link embedOrigin} 一起，
+   * 而且一定帶 `profile: 'embed'`。缺席就是沒有擁有者：嵌入身分打不開，主機擁有者照開。建立時定下，續接不改不補，分叉不抄。
+   */
+  readonly owner?: StoredSessionOwner;
+  /** 見 {@link StoredSessionEmbedOrigin}；寫不寫同 {@link owner}。 */
+  readonly embedOrigin?: StoredSessionEmbedOrigin;
 }
 
 /**

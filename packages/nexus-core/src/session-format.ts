@@ -222,7 +222,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:805',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:841',
   },
   {
     from: 51,
@@ -232,6 +232,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     readerBranch: 'apps/harness/src/jsonl-session-store.ts:1901',
   },
   { from: 52, to: 53, kind: 'additive', ref: '#2367' },
+  { from: 53, to: 54, kind: 'additive', ref: '#2370' },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */

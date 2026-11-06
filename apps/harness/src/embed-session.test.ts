@@ -15,6 +15,7 @@ import {
   EmbedSessionCookies,
   MAX_SESSION_BODY_BYTES,
 } from './embed-session.js';
+import type { EmbedIdentityCheck, EmbedSessionOptions } from './embed-session.js';
 
 const SECRET = Buffer.alloc(32, 7);
 const AUTHORITY = '127.0.0.1:8787';
@@ -24,6 +25,9 @@ const IDENTITY = {
   userId: 'u-alice',
   sessionIdSha256: 'h'.repeat(64),
 };
+
+/** 表上什麼都有：只量 cookie 本身的那幾條。 */
+const ALL_MAPPED: EmbedIdentityCheck = { has: () => true };
 
 /** 從 `Set-Cookie` 取出 `name=value`。 */
 function cookiePair(setCookie: string): string {
@@ -36,7 +40,7 @@ function headersWith(cookie: string, host = AUTHORITY): Headers {
 
 describe('EmbedSessionCookies', () => {
   it('簽出來的 cookie 驗得回同一個身分；屬性同獨立頁面那顆', () => {
-    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], () => 1_000_000);
+    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED, () => 1_000_000);
     const { setCookie, expiresAt } = cookies.issue(AUTHORITY, IDENTITY);
     expect(expiresAt).toBe(1_000_000 + 900_000);
     expect(setCookie).toMatch(/^nexus-embed-[A-Za-z0-9_-]+=e1\./u);
@@ -51,7 +55,7 @@ describe('EmbedSessionCookies', () => {
 
   it('到期、換了 authority、被改過、別的密鑰簽的：都驗不過', () => {
     let now = 1_000_000;
-    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], () => now);
+    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED, () => now);
     const pair = cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie);
     expect(cookies.authenticate(headersWith(pair, '127.0.0.1:9999'))).toBeUndefined();
     const [name, value] = pair.split('=') as [string, string];
@@ -66,9 +70,13 @@ describe('EmbedSessionCookies', () => {
       cookies.authenticate(headersWith(`${name}=${tag}.${forged}.${signature}`)),
     ).toBeUndefined();
     expect(
-      new EmbedSessionCookies(Buffer.alloc(32, 8), 900, ['crm'], () => now).authenticate(
-        headersWith(pair),
-      ),
+      new EmbedSessionCookies(
+        Buffer.alloc(32, 8),
+        900,
+        ['crm'],
+        ALL_MAPPED,
+        () => now,
+      ).authenticate(headersWith(pair)),
     ).toBeUndefined();
     now += 900_000;
     expect(cookies.authenticate(headersWith(pair))).toBeUndefined();
@@ -76,16 +84,36 @@ describe('EmbedSessionCookies', () => {
 
   it('嵌入方從設定拿掉之後，它簽出去還沒到期的 cookie 驗不過', () => {
     const pair = cookiePair(
-      new EmbedSessionCookies(SECRET, 900, ['crm', 'erp']).issue(AUTHORITY, IDENTITY).setCookie,
+      new EmbedSessionCookies(SECRET, 900, ['crm', 'erp'], ALL_MAPPED).issue(AUTHORITY, IDENTITY)
+        .setCookie,
     );
     expect(
-      new EmbedSessionCookies(SECRET, 900, ['erp']).authenticate(headersWith(pair)),
+      new EmbedSessionCookies(SECRET, 900, ['erp'], ALL_MAPPED).authenticate(headersWith(pair)),
     ).toBeUndefined();
+  });
+
+  it('從表上拿掉之後，手上沒到期的 cookie 下一次就驗不過；問表時帶的是 cookie 上的那組對應', () => {
+    const asked: unknown[] = [];
+    let mapped = true;
+    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], {
+      has: (identity) => {
+        asked.push({ ...identity });
+        return mapped;
+      },
+    });
+    const pair = cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie);
+    expect(cookies.authenticate(headersWith(pair))).toMatchObject({ userId: 'u-alice' });
+    mapped = false;
+    expect(cookies.authenticate(headersWith(pair))).toBeUndefined();
+    expect(asked).toEqual([
+      expect.objectContaining({ embedder: 'crm', subject: 'alice', userId: 'u-alice' }),
+      expect.objectContaining({ embedder: 'crm', subject: 'alice', userId: 'u-alice' }),
+    ]);
   });
 
   it('同一把密鑰：嵌入 cookie 的值放到獨立頁面的名字底下不是擁有者，反過來也不是嵌入身分', () => {
     const browser = new BrowserAuth(SECRET);
-    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm']);
+    const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED);
     const embedPair = cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie);
     const minted = browser.authorizeIndex(
       new Request(browser.authenticatedUrl(`http://${AUTHORITY}/`), {
@@ -118,16 +146,20 @@ function setup(
     identity?: EmbedIdentityResolver;
     tickets?: EmbedTicketStore;
     now?: () => number;
+    latestThread?: EmbedSessionOptions['latestThread'];
+    warn?: (line: string) => void;
   } = {},
 ) {
   const recorded = memoryAudit();
   const tickets = options.tickets ?? new EmbedTicketStore(60_000);
-  const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], options.now);
+  const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], ALL_MAPPED, options.now);
   const session = createEmbedSession({
     tickets,
     cookies,
     identity: options.identity ?? aliceOnly,
     audit: recorded.audit,
+    ...(options.latestThread !== undefined && { latestThread: options.latestThread }),
+    ...(options.warn !== undefined && { warn: options.warn }),
   });
   const issue = (subject = 'alice') =>
     tickets.issue({ embedder: 'crm', subject, userId: 'u-alice', sessionIdSha256: 'h' })!.ticket;
@@ -180,6 +212,36 @@ describe('POST /embed/session', () => {
       },
     ]);
     expect(JSON.stringify(redeems)).not.toContain(ticket);
+  });
+
+  it('這一次登入開過對話：200 多帶最新那條的 threadId；問的是票上的身分與登入', async () => {
+    const asked: unknown[] = [];
+    const { session, issue } = setup({
+      now: () => 5_000,
+      latestThread: async (owner) => {
+        asked.push(owner);
+        return 't-latest';
+      },
+    });
+    const response = await session.handle(redeem({ body: { ticket: issue() } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ expiresAt: 5_000 + 900_000, threadId: 't-latest' });
+    expect(asked).toEqual([{ userId: 'u-alice', embedder: 'crm', loginSessionSha256: 'h' }]);
+  });
+
+  it('查最新那條失敗：兌換照常，不帶 threadId，講進伺服器日誌', async () => {
+    const lines: string[] = [];
+    const { session, issue } = setup({
+      latestThread: async () => {
+        throw new Error('磁碟讀不動');
+      },
+      warn: (line) => lines.push(line),
+    });
+    const response = await session.handle(redeem({ body: { ticket: issue() } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).not.toHaveProperty('threadId');
+    expect(response.headers.get('set-cookie')).not.toBeNull();
+    expect(lines.join('\n')).toContain('磁碟讀不動');
   });
 
   it('同一張票兌換第二次：401 ticket_invalid，不設 cookie，合併計數', async () => {

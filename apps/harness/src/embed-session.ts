@@ -12,7 +12,7 @@
  * - **稽核**：票查得到的每一次都記（`embed-audit.ts`），記好才回應；寫不進去就 500、不設 cookie。票不存在、用過、
  *   本文不對的只計數合併。
  *
- * 回應：`200 { expiresAt }` 加 `Set-Cookie`；票不存在或用過 `401 { error: 'ticket_invalid' }`；票過期
+ * 回應：`200 { expiresAt, threadId? }` 加 `Set-Cookie`；`threadId` 是這一次登入最新開的那條嵌入對話，沒開過、還沒落盤、沒開會話日誌、或查不到就沒有；票不存在或用過 `401 { error: 'ticket_invalid' }`；票過期
  * `401 { error: 'ticket_expired' }`；對應被撤 `403 { error: 'identity_rejected' }`；本文不對 `400`；方法不對 `405`；
  * 圍欄沒過 `403`（純文字）。`expiresAt` 是 cookie 的到期時間，系統時間的毫秒時間戳。都帶 `cache-control: no-store`。
  *
@@ -27,6 +27,7 @@ import { cookieValue, decodeBase64Url, encodeBase64Url, requestAuthority } from 
 import type { EmbedAudit } from './embed-audit.js';
 import { json, plain, readJsonObject } from './embed-http.js';
 import type { EmbedIdentityResolver, EmbedTicketStore } from './embed-login.js';
+import type { EmbedThreadOwner } from './embed-thread-owner.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { EmbedPrincipal } from './wire-principal.js';
 
@@ -61,6 +62,15 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
+/** 驗 cookie 時問的那一支：這組對應現在還在不在表上（`embed-identities.ts` 的 `EmbedIdentityTable.has`）。 */
+export interface EmbedIdentityCheck {
+  has(identity: {
+    readonly embedder: string;
+    readonly subject: string;
+    readonly userId: string;
+  }): boolean;
+}
+
 /**
  * 嵌入 cookie 的簽發與驗證。
  *
@@ -70,23 +80,27 @@ export class EmbedSessionCookies {
   readonly #key: Buffer;
   readonly #maxAgeMs: number;
   readonly #embedders: ReadonlySet<string>;
+  readonly #identities: EmbedIdentityCheck;
   readonly #now: () => number;
 
   /**
    * @param secret - 瀏覽器會話密鑰（32 bytes）。
    * @param maxAgeSeconds - cookie 的絕對有效期（秒）。
    * @param embedders - 設定裡現在有的嵌入方 id：拿掉一個嵌入方重啟之後，它簽出去還沒到期的 cookie 也驗不過。
+   * @param identities - 每次驗都問一次這組對應還在不在表上（多快看到表的變動見 `EmbedIdentityTable.has`）。
    * @param now - 現在幾點；測試換掉。
    */
   constructor(
     secret: Buffer,
     maxAgeSeconds: number,
     embedders: Iterable<string>,
+    identities: EmbedIdentityCheck,
     now: () => number = Date.now,
   ) {
     this.#key = createHmac('sha256', secret).update(KEY_LABEL).digest();
     this.#maxAgeMs = maxAgeSeconds * 1000;
     this.#embedders = new Set(embedders);
+    this.#identities = identities;
     this.#now = now;
   }
 
@@ -127,7 +141,7 @@ export class EmbedSessionCookies {
   /**
    * 驗一個請求帶的嵌入 cookie。
    *
-   * @returns 子鑰簽的、authority 相符、還在有效期內、嵌入方還在設定裡的 cookie 代表的身分；其他回 `undefined`。
+   * @returns 子鑰簽的、authority 相符、還在有效期內、嵌入方還在設定裡、對應還在表上的 cookie 代表的身分；其他回 `undefined`。
    */
   authenticate(headers: Headers): EmbedPrincipal | undefined {
     const authority = requestAuthority(headers);
@@ -151,6 +165,7 @@ export class EmbedSessionCookies {
     ) {
       return undefined;
     }
+    if (!this.#identities.has(payload)) return undefined;
     return {
       kind: 'embed',
       embedder: payload.embedder,
@@ -216,6 +231,11 @@ export interface EmbedSessionOptions {
   readonly trustedHosts?: readonly string[];
   /** 稽核寫不進去時的去處（伺服器日誌）。 */
   readonly warn?: (line: string) => void;
+  /**
+   * 這一次登入最新開的那條 thread（#2370，`embed-thread-owner.ts` 的 `latestThreadOfLogin`）：兌換成功時回給元件，讓它接著那一條。
+   * 缺席（沒有落盤）就不給。查不到不擋兌換：講進伺服器日誌，回應裡沒有 `threadId`。
+   */
+  readonly latestThread?: (owner: EmbedThreadOwner) => Promise<string | undefined>;
 }
 
 /** 兌換的處理器。 */
@@ -239,6 +259,17 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
       return plain(500, 'audit unavailable');
     }
     return response;
+  }
+
+  async function latestThreadOf(owner: EmbedThreadOwner): Promise<string | undefined> {
+    try {
+      return await options.latestThread?.(owner);
+    } catch (error) {
+      options.warn?.(
+        `[嵌入換票] 找不到這一次登入開過的對話，兌換照常、不回 threadId：${String(error)}`,
+      );
+      return undefined;
+    }
   }
 
   return {
@@ -285,6 +316,11 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
           json(403, { error: 'identity_rejected' }),
         );
       }
+      const threadId = await latestThreadOf({
+        userId,
+        embedder,
+        loginSessionSha256: sessionIdSha256,
+      });
       const cookie = options.cookies.issue(authority, base);
       return audited(
         {
@@ -292,7 +328,11 @@ export function createEmbedSession(options: EmbedSessionOptions): EmbedSession {
           ...base,
           cookieExpiresAt: new Date(cookie.expiresAt).toISOString(),
         },
-        json(200, { expiresAt: cookie.expiresAt }, { 'set-cookie': cookie.setCookie }),
+        json(
+          200,
+          { expiresAt: cookie.expiresAt, ...(threadId !== undefined && { threadId }) },
+          { 'set-cookie': cookie.setCookie },
+        ),
       );
     },
   };

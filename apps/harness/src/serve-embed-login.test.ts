@@ -16,7 +16,6 @@ import WebSocket from 'ws';
 import { EMBED_AUDIT_FILE } from './embed-audit.js';
 import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
-import type { EmbedIdentityResolver } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { bodyLog, exchangeServeToken } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -68,23 +67,25 @@ function layout(rows: string[] = [], identities: unknown = ALICE_TABLE) {
 async function start(
   where: ReturnType<typeof layout>,
   lines: string[] = [],
-  embedIdentity?: EmbedIdentityResolver,
 ): Promise<RunningServe> {
   running = (await runServe({
     argv: ['--port', '0', '--patch', where.patch],
     log: bodyLog(lines),
     env: { [HARNESS_HOME_ENV]: where.home },
     cwd: where.cwd,
-    ...(embedIdentity !== undefined && { embedIdentity }),
   })) as RunningServe;
   return running;
 }
 
-function post(server: RunningServe, headers: Record<string, string>): Promise<Response> {
+function post(
+  server: RunningServe,
+  headers: Record<string, string>,
+  subject = 'alice',
+): Promise<Response> {
   return fetch(`${server.url}${EMBED_EXCHANGE_PATH}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify({ subject: 'alice', sessionId: 's-1' }),
+    body: JSON.stringify({ subject, sessionId: 's-1' }),
   });
 }
 
@@ -110,7 +111,7 @@ describe('出廠（沒有嵌入方）', () => {
 });
 
 describe('有嵌入方', () => {
-  it('憑證檔沒有就建 0600；擁有者隔離上線之前，表上有的人憑證對也一律 403，記進稽核', async () => {
+  it('憑證檔沒有就建 0600；憑證對、表上有的人發票，表上沒有的 403，都記進稽核', async () => {
     const where = layout(CRM_ROW);
     const lines: string[] = [];
     const server = await start(where, lines);
@@ -122,26 +123,28 @@ describe('有嵌入方', () => {
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.endsWith(
-          `身分對應表 ${join(where.home, EMBED_IDENTITIES_FILE)}（1 筆）；對話的擁有者隔離還沒上，換票一律拒絕`,
-        ),
+        line.endsWith(`身分對應表 ${join(where.home, EMBED_IDENTITIES_FILE)}（1 筆）`),
       ),
     ).toBe(true);
     expect(lines.join('\n')).not.toContain(credential);
 
     expect((await post(server, { authorization: `Bearer ${'x'.repeat(43)}` })).status).toBe(401);
-    const rejected = await post(server, { authorization: `Bearer ${credential}` });
+    const issued = await post(server, { authorization: `Bearer ${credential}` });
+    expect(issued.status).toBe(200);
+    expect(await issued.json()).toMatchObject({ ticket: expect.any(String) });
+    const rejected = await post(server, { authorization: `Bearer ${credential}` }, 'mallory');
     expect(rejected.status).toBe(403);
 
     await running!.close();
     running = undefined;
     const written = await auditLines(where.home);
-    expect(written.map((line) => line.outcome)).toEqual(['unauthenticated', 'identity_rejected']);
-    expect(written[1]).toMatchObject({
-      embedder: 'crm',
-      subject: 'alice',
-      reason: 'identity_mapping_unavailable',
-    });
+    expect(written.map((line) => line.outcome)).toEqual([
+      'unauthenticated',
+      'issued',
+      'identity_rejected',
+    ]);
+    expect(written[1]).toMatchObject({ embedder: 'crm', subject: 'alice', userId: 'alice' });
+    expect(written[2]).toMatchObject({ embedder: 'crm', subject: 'mallory' });
     expect(JSON.stringify(written)).not.toContain(credential);
   });
 
@@ -169,28 +172,15 @@ describe('有嵌入方', () => {
     await expect(start(where)).rejects.toThrow(file);
   });
 
-  it('身分對應接上之後發票', async () => {
-    const where = layout(CRM_ROW);
-    const server = await start(where, [], {
-      resolve: () => ({ kind: 'accepted', userId: 'u-alice' }),
-    });
-    const credential = (await readFile(join(where.home, 'embed-credential-crm'), 'utf8')).trim();
-    const response = await post(server, { authorization: `Bearer ${credential}` });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ticket: expect.any(String) });
-  });
-
   it('獨立頁面的會話 cookie 換不到票', async () => {
     const where = layout(CRM_ROW);
-    const server = await start(where, [], {
-      resolve: () => ({ kind: 'accepted', userId: 'u-alice' }),
-    });
+    const server = await start(where);
     const cookie = await exchangeServeToken(server.authenticatedUrl);
     expect((await post(server, { cookie })).status).toBe(401);
   });
 
   it('明寫的憑證檔撞到別的嵌入方的預設檔：起不來，不建任何憑證檔', async () => {
-    const where = layout();
+    const where = layout(CRM_ROW);
     const shared = join(where.home, 'embed-credential-crm');
     writeFileSync(
       where.patch,
@@ -211,7 +201,7 @@ describe('有嵌入方', () => {
   });
 
   it('憑證檔撞到指標的 token 檔：起不來', async () => {
-    const where = layout();
+    const where = layout(CRM_ROW);
     const shared = join(where.home, 'shared-token');
     writeFileSync(
       where.patch,
@@ -242,8 +232,6 @@ describe('有嵌入方', () => {
 });
 
 describe('兌換成嵌入 cookie（POST /embed/session）', () => {
-  const alice: EmbedIdentityResolver = { resolve: () => ({ kind: 'accepted', userId: 'u-alice' }) };
-
   async function embedCookie(server: RunningServe, home: string): Promise<string> {
     const credential = (await readFile(join(home, 'embed-credential-crm'), 'utf8')).trim();
     const exchanged = await post(server, { authorization: `Bearer ${credential}` });
@@ -287,7 +275,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
   it('嵌入 cookie 只打得到 /embed/…：獨立頁面、列表、非嵌入的 mux 都是 401', async () => {
     const where = layout(CRM_ROW);
     const lines: string[] = [];
-    const server = await start(where, lines, alice);
+    const server = await start(where, lines);
     expect(
       lines.some((line) => line.includes(`兌換 POST ${EMBED_SESSION_PATH}，嵌入 cookie 900 秒`)),
     ).toBe(true);
@@ -305,7 +293,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
 
   it('獨立頁面的 cookie 照舊：獨立頁面與嵌入路由都打得到', async () => {
     const where = layout(CRM_ROW);
-    const server = await start(where, [], alice);
+    const server = await start(where);
     const cookie = await exchangeServeToken(server.authenticatedUrl);
     expect((await get(server, '/threads', cookie)).status).not.toBe(401);
     expect((await get(server, EMBED_HISTORY, cookie)).status).not.toBe(401);
@@ -313,7 +301,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
 
   it('續期：再換一張票兌換，同名 cookie 換新值，新的那顆打得到', async () => {
     const where = layout(CRM_ROW);
-    const server = await start(where, [], alice);
+    const server = await start(where);
     const first = await embedCookie(server, where.home);
     const second = await embedCookie(server, where.home);
     expect(second.split('=', 1)[0]).toBe(first.split('=', 1)[0]);
