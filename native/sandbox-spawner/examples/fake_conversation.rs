@@ -8,7 +8,7 @@
 //! - thread id 以逗號分段，第一段是名字，之後每段是一個動作，回 `bound` 之後依序做：
 //!   `exit:<碼>`、`signal:<號>`（對自己送）、`turn`（送一次 `turn(begin)` 與 `turn(end)`）、`grandchild`（fork 一個睡著的子行程，
 //!   同一個群組）、`close-stdout`、`ignore-eof`（stdin EOF 之後不結束）、`ignore-term`（再加上不理 SIGTERM）、
-//!   `wrong-bound`（回別的 thread id，取代正常的 `bound`）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）。
+//!   `wrong-bound`（回別的 thread id，取代正常的 `bound`）、`flood`（之後不停往 stdout 寫 `heartbeat`，不再讀 stdin）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`eof`、`sigterm`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -117,6 +117,15 @@ fn main() {
                         unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
                     }
                     ("wrong-bound", _) => {}
+                    ("flood", _) => {
+                        let batch: Vec<u8> = (0..65536).flat_map(|_| frame(&encode_conversation_report(&ConversationReport::Heartbeat))).collect();
+                        let mut out = std::io::stdout().lock();
+                        while out.write_all(&batch).is_ok() {}
+                        loop {
+                            // SAFETY：等訊號。
+                            unsafe { libc::pause() };
+                        }
+                    }
                     (other, _) => panic!("不認得的動作 {other}"),
                 }
             }

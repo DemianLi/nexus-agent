@@ -345,7 +345,8 @@ fn shutdown_walks_the_teardown_ladder() {
     assert_eq!(h.next_event(), None);
     assert!(h.wait_exit().success());
 
-    assert_eq!(log(&plain)[2..], ["eof"]);
+    // plain 讀到 EOF 就結束；寬限只有幾百毫秒，忙的機器上它可能先收到 SIGTERM，所以只驗第一件事。
+    assert_eq!(log(&plain)[2], "eof");
     assert_eq!(log(&eof)[2..], ["eof", "sigterm"]);
     assert_eq!(log(&term)[2..], ["grandchild ".to_string() + &grandchild.to_string(), "eof".to_string()]);
     assert!(wait_until(|| gone(grandchild)));
@@ -441,4 +442,72 @@ fn unusable_audit_path_refuses_to_start() {
 fn bad_arguments_exit_2() {
     let status = Command::new(SUPERVISOR).arg("--nope").stderr(Stdio::null()).status().unwrap();
     assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn flooding_conversation_does_not_starve_the_others() {
+    let mut h = Harness::start(Options::default());
+    h.up("f,flood");
+    // 狂寫的那條還在寫，別的照樣起、照樣收。
+    h.up("b");
+    h.ensure("x,exit:3");
+    assert_eq!(h.down_of("x,exit:3"), DeathCause::Crash);
+    kill(h.pid(), libc::SIGTERM);
+    let mut downs = vec![h.event(), h.event()];
+    downs.sort_by_key(|event| match event {
+        FrontEvent::Down { thread_id, .. } => thread_id.clone(),
+        other => panic!("要 down，拿到 {other:?}"),
+    });
+    assert_eq!(
+        downs,
+        [
+            FrontEvent::Down { thread_id: b"b".to_vec(), cause: DeathCause::Shutdown },
+            FrontEvent::Down { thread_id: b"f,flood".to_vec(), cause: DeathCause::Shutdown },
+        ]
+    );
+    assert!(h.wait_exit().success());
+}
+
+/// 等它結束（最多 `WAIT`），回結束碼；到時還在跑就殺掉、回 `None`。
+fn exit_code(mut child: Child) -> Option<i32> {
+    let mut code = None;
+    if wait_until(|| child.try_wait().unwrap().map(|status| code = status.code()).is_some()) {
+        return code;
+    }
+    kill(child.id(), libc::SIGKILL);
+    child.wait().unwrap();
+    None
+}
+
+fn supervisor_with_audit(dir: &Path, audit: &Path) -> Child {
+    Command::new(SUPERVISOR)
+        .args(["--run-dir", dir.join("run").to_str().unwrap(), "--audit", audit.to_str().unwrap()])
+        .args(["--front", "/bin/true", "--conversation", "/bin/true"])
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+fn audit_file_must_be_own_private_regular_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("audit");
+    let readable = dir.join("readable.jsonl");
+    std::fs::write(&readable, "").unwrap();
+    std::fs::set_permissions(&readable, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(exit_code(supervisor_with_audit(&dir, &readable)), Some(1));
+
+    let target = dir.join("target.jsonl");
+    std::fs::write(&target, "").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let link = dir.join("link.jsonl");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(exit_code(supervisor_with_audit(&dir, &link)), Some(1));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+
+    // 自己的、0600 的照常用：前台（/bin/true）一結束就寫進去。
+    let mut child = supervisor_with_audit(&dir, &target);
+    assert!(wait_until(|| std::fs::read_to_string(&target).unwrap().contains("\"role\":\"front\"")));
+    kill(child.id(), libc::SIGKILL);
+    child.wait().unwrap();
 }

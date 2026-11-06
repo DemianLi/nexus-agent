@@ -1,9 +1,10 @@
-//! 稽核紀錄：每個行程結束寫一行 JSON，只追加。檔案以 `O_APPEND` 開，一行一次 `write`。
+//! 稽核紀錄：每個行程結束寫一行 JSON，只追加。檔案以 `O_APPEND` 開，一行一次 `write`；
+//! 短寫（磁碟滿、被訊號打斷）會留下沒有換行的殘行，下一筆先補一個換行，不黏上去。
 
 use crate::supervisor_protocol::DeathCause;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,21 +49,42 @@ pub fn cause_name(cause: DeathCause) -> &'static str {
 
 pub struct Audit {
     file: File,
+    /// 上一筆可能只寫了一半（沒有換行），下一筆先補一個換行，不黏在殘行後面。
+    torn: bool,
 }
 
 impl Audit {
-    /// 開不了就回錯：沒有稽核紀錄就不起。
+    /// 開不了就回錯：沒有稽核紀錄就不起。主機多人共用：路徑不能是連結；已存在的要是自己擁有、0600 的一般檔，
+    /// 別人不能先建好檔來讀，也不能用連結把紀錄導走。
     pub fn open(path: &Path) -> std::io::Result<Audit> {
-        let file = OpenOptions::new().append(true).create(true).mode(0o600).open(path)?;
-        Ok(Audit { file })
+        let file = OpenOptions::new().append(true).create(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
+        let meta = file.metadata()?;
+        // SAFETY：geteuid 不會失敗。
+        let me = unsafe { libc::geteuid() };
+        if !meta.file_type().is_file() || meta.uid() != me || meta.mode() & 0o777 != 0o600 {
+            return Err(std::io::Error::other(format!(
+                "{} 要是自己擁有、權限 0600 的一般檔（現在是 uid {}、{:o}）",
+                path.display(),
+                meta.uid(),
+                meta.mode() & 0o7777
+            )));
+        }
+        Ok(Audit { file, torn: false })
     }
 
     /// 寫不進去只往 stderr 講，不停下監督行程。
     pub fn record(&mut self, record: &Record<'_>) {
         let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        let line = line(ms, record);
-        if let Err(err) = self.file.write_all(line.as_bytes()) {
-            eprintln!("[nexus-supervisor] 稽核紀錄寫不進去：{err}；那一行是 {}", line.trim_end());
+        let mut line = line(ms, record);
+        if self.torn {
+            line.insert(0, '\n');
+        }
+        match self.file.write_all(line.as_bytes()) {
+            Ok(()) => self.torn = false,
+            Err(err) => {
+                self.torn = true;
+                eprintln!("[nexus-supervisor] 稽核紀錄寫不進去：{err}；那一行是 {}", line.trim());
+            }
         }
     }
 }
@@ -110,6 +132,26 @@ fn json_string(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_after_a_failed_write_starts_on_its_own_line() {
+        let record = Record::Front { pid: 1, exit: Exit::NOT_STARTED, error: None };
+        let mut audit = Audit { file: OpenOptions::new().append(true).open("/dev/full").unwrap(), torn: false };
+        audit.record(&record);
+        assert!(audit.torn);
+        let path = std::env::temp_dir().join(format!("nsup-unit-torn-{}", std::process::id()));
+        std::fs::write(&path, "{\"ts_ms\":1,\"ro").unwrap();
+        audit.file = OpenOptions::new().append(true).open(&path).unwrap();
+        audit.record(&record);
+        audit.record(&record);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "{\"ts_ms\":1,\"ro");
+        assert!(lines[1].starts_with("{\"ts_ms\":") && lines[2].starts_with("{\"ts_ms\":"), "{text}");
+        assert!(!audit.torn);
+    }
 
     #[test]
     fn conversation_line() {

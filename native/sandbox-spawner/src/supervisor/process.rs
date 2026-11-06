@@ -6,6 +6,9 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
+/// `receive` 一次最多讀這麼多：對方一直寫也會交回迴圈，計時器、訊號與別的通道照樣輪得到。
+const READ_BUDGET: usize = 64 * 1024;
+
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
@@ -148,16 +151,19 @@ impl Chan {
         self.outbox.clear();
     }
 
-    /// 讀到 EAGAIN 為止，切出完整的框。讀到 EOF 或讀錯就關讀端，已經讀到的照樣切。框太大回錯（之後的位元組都對不上了），讀端也關掉。
+    /// 讀到 EAGAIN 或讀滿 `READ_BUDGET` 為止，切出完整的框；沒讀完的留給下一次 poll。讀到 EOF 或讀錯就關讀端，已經讀到的照樣切。
+    /// 框太大回錯（之後的位元組都對不上了），讀端也關掉。
     pub fn receive(&mut self) -> Result<Vec<Vec<u8>>, DecodeError> {
         if let Some(fd) = &self.read {
             let fd = fd.as_raw_fd();
             let mut buf = [0u8; 4096];
-            loop {
+            let mut budget = READ_BUDGET;
+            while budget > 0 {
                 // SAFETY：讀進 buf。
                 let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
                 if n > 0 {
                     self.inbox.extend_from_slice(&buf[..n as usize]);
+                    budget = budget.saturating_sub(n as usize);
                     continue;
                 }
                 if n < 0 && errno() == libc::EINTR {
