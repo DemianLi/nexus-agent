@@ -170,13 +170,21 @@ describe('createAgentConnection 換 socket（#2370）', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renewStreams 關掉舊的 socket，下一條下行開新的一條', async () => {
+  /** 假 serve 從這條 socket 送一則下行訊息。 */
+  function serverSays(socket: FakeSocket | undefined, message: Record<string, unknown>) {
+    socket?.onmessage?.({ data: JSON.stringify(message) });
+  }
+
+  const sse = (seq: number) =>
+    `data: ${JSON.stringify({ type: 'event', seq, event_id: `t1:${String(seq)}`, method: 'custom', params: { namespace: [], timestamp: 0, data: {} } })}\n\n`;
+
+  it('換了人（closeOpen: true）：舊的 socket 當場關掉，下一條下行開新的一條', async () => {
     vi.stubGlobal('WebSocket', FakeSocket);
     const { client, renewStreams } = createAgentConnection({ baseUrl: '', routePrefix: '/embed' });
     const first = client.openEvents('t1');
     first.catch(() => undefined);
     await vi.waitFor(() => expect(FakeSocket.made[0]?.sent.length).toBe(1));
-    renewStreams();
+    renewStreams({ closeOpen: true });
     expect(FakeSocket.made[0]?.closed).toBe(true);
     await expect(first).rejects.toThrow();
     void client.openEvents('t1').catch(() => undefined);
@@ -185,9 +193,50 @@ describe('createAgentConnection 換 socket（#2370）', () => {
     expect(FakeSocket.made[1]?.closed).toBe(false);
   });
 
+  it('同一個人續期（closeOpen: false）：已開的下行照常收，新的開在新 socket；舊的收掉之後才關舊 socket（#2484）', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const { client, renewStreams } = createAgentConnection({ baseUrl: '', routePrefix: '/embed' });
+    const controller = new AbortController();
+    const opening = client.openEvents('t1', { signal: controller.signal });
+    await vi.waitFor(() => expect(FakeSocket.made[0]?.sent.length).toBe(1));
+    serverSays(FakeSocket.made[0], {
+      t: 'head',
+      id: '1',
+      status: 200,
+      contentType: 'text/event-stream',
+    });
+    const events = await opening;
+
+    renewStreams({ closeOpen: false });
+    expect(FakeSocket.made[0]?.closed).toBe(false);
+    const next = events.next();
+    serverSays(FakeSocket.made[0], { t: 'data', id: '1', text: sse(7) });
+    expect((await next).value).toMatchObject({ seq: 7 });
+
+    void client.openEvents('t2').catch(() => undefined);
+    await vi.waitFor(() => expect(FakeSocket.made[1]?.sent.length).toBe(1));
+    expect(FakeSocket.made[0]?.sent.filter(({ t }) => t === 'open')).toHaveLength(1);
+    expect(FakeSocket.made[0]?.closed).toBe(false);
+
+    controller.abort();
+    await vi.waitFor(() => expect(FakeSocket.made[0]?.closed).toBe(true));
+    expect(FakeSocket.made[1]?.closed).toBe(false);
+  });
+
+  it('續期時舊 socket 上沒有開著的下行：當場關掉', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const { client, renewStreams } = createAgentConnection({ baseUrl: '', routePrefix: '/embed' });
+    const opening = client.openEvents('t1');
+    await vi.waitFor(() => expect(FakeSocket.made[0]?.sent.length).toBe(1));
+    serverSays(FakeSocket.made[0], { t: 'end', id: '1' });
+    await expect(opening).rejects.toThrow();
+    renewStreams({ closeOpen: false });
+    expect(FakeSocket.made[0]?.closed).toBe(true);
+  });
+
   it('注入 fetch 時沒有 socket，renewStreams 什麼都不做', () => {
     const { renewStreams } = createAgentConnection({ fetch: async () => new Response('') });
-    expect(() => renewStreams()).not.toThrow();
+    expect(() => renewStreams({ closeOpen: true })).not.toThrow();
   });
 });
 
@@ -223,6 +272,43 @@ describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
       onUnauthorized,
     });
     await expect(client.openEvents('t1')).rejects.toThrow();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('續期之前開的下行，回來時才是 401：不叫；續期之後開的 401 照叫（#2484）', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const onUnauthorized = vi.fn();
+    const { client, renewStreams } = createAgentConnection({
+      baseUrl: '',
+      routePrefix: '/embed',
+      onUnauthorized,
+    });
+    const unauthorized = (socket: FakeSocket | undefined) => {
+      for (const message of [
+        { t: 'head', id: '1', status: 401, contentType: 'application/json' },
+        { t: 'end', id: '1' },
+      ]) {
+        socket?.onmessage?.({ data: JSON.stringify(message) });
+      }
+    };
+    const old = client.openEvents('t1');
+    old.catch(() => undefined);
+    await vi.waitFor(() => expect(FakeSocket.made[0]?.sent.length).toBe(1));
+    renewStreams({ closeOpen: false });
+    // mux 收到 401 會換一條 socket 再開一次，兩次都 401 才交回來。
+    unauthorized(FakeSocket.made[0]);
+    await vi.waitFor(() => expect(FakeSocket.made[1]?.sent.length).toBe(1));
+    unauthorized(FakeSocket.made[1]);
+    await expect(old).rejects.toThrow();
+    expect(onUnauthorized).not.toHaveBeenCalled();
+
+    const fresh = client.openEvents('t1');
+    fresh.catch(() => undefined);
+    await vi.waitFor(() => expect(FakeSocket.made[2]?.sent.length).toBe(1));
+    unauthorized(FakeSocket.made[2]);
+    await vi.waitFor(() => expect(FakeSocket.made[3]?.sent.length).toBe(1));
+    unauthorized(FakeSocket.made[3]);
+    await expect(fresh).rejects.toThrow();
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
