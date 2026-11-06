@@ -622,18 +622,6 @@ fn stderr_that_cannot_be_written_does_not_take_the_supervisor_down() {
     assert!(h.child.try_wait().unwrap().is_none(), "監督行程不該結束");
 }
 
-/// 一個行程每條執行緒的 nice 值。
-fn thread_nices(pid: i32) -> Vec<i64> {
-    std::fs::read_dir(format!("/proc/{pid}/task"))
-        .map(|tasks| {
-            tasks
-                .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("stat")).ok())
-                .map(|stat| stat.rsplit_once(") ").unwrap().1.split(' ').nth(16).unwrap().parse().unwrap())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn audit_number(line: &str, key: &str) -> u64 {
     line.split(&format!("\"{key}\":")).nth(1).unwrap().split([',', '}']).next().unwrap().parse().unwrap()
 }
@@ -692,21 +680,44 @@ fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
 }
 
 #[test]
-fn a_conversation_spinning_the_cpu_is_reniced_with_all_its_threads() {
-    let mut h = Harness::start(Options { extra: vec!["--cpu-busy-ms", "300", "--rss-poll-ms", "50"], ..Options::default() });
-    let idle = logged_pid(&h.up("q"), "pid");
-    let spin = logged_pid(&h.up("s,spin"), "pid");
-    assert!(wait_until(|| {
-        let nices = thread_nices(spin);
-        nices.len() >= 2 && nices.iter().all(|&n| n == 19)
-    }), "{:?}", thread_nices(spin));
-    let base = thread_nices(h.pid() as i32)[0];
-    assert_ne!(base, 19);
-    assert!(thread_nices(idle).iter().all(|&n| n == base), "{:?}", thread_nices(idle));
+fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
+    // RSS 輪詢放到一分鐘：叫醒 poll 的只有 stall 的期限與它四分之一的那一次。
+    let mut h = Harness::start(Options { extra: vec!["--stall-ms", "1000", "--rss-poll-ms", "60000"], ..Options::default() });
+    let socket = h.up("a");
+    let a = logged_pid(&socket, "pid");
+    kill(h.pid(), libc::SIGSTOP);
+    // SAFETY：只送訊號，對 a 的群組。
+    unsafe { libc::kill(-a, libc::SIGSTOP) };
+    // 只比 N 多一點：監督行程不是最晚 N 的四分之一就醒一次的話，醒來時比預定晚不到 N 的一半，認不出自己被停住過。
+    std::thread::sleep(Duration::from_millis(1_300));
+    // 監督行程先醒，a 晚 200 ms：監督行程醒來那一刻還沒有 a 的心跳。
+    kill(h.pid(), libc::SIGCONT);
+    std::thread::sleep(Duration::from_millis(200));
+    // SAFETY：同上。
+    unsafe { libc::kill(-a, libc::SIGCONT) };
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(h.up("a"), socket);
+    assert!(supervisor_stderr(&h).contains("判定自己被停住過"), "{}", supervisor_stderr(&h));
+}
+
+#[test]
+fn stalled_counts_from_ready_not_from_spawn() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "800".into()],
+        extra: vec!["--stall-ms", "300"],
+        ..Options::default()
+    });
+    let socket = h.up("r");
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(h.up("r"), socket);
+}
+
+#[test]
+fn silence_during_the_teardown_ladder_is_not_cut_short_as_stalled() {
+    let mut h = Harness::start(Options { eof_grace_ms: 1_000, term_grace_ms: 1_000, extra: vec!["--stall-ms", "300"], ..Options::default() });
+    // 收到 EOF 之後心跳就停，要等到 SIGTERM 那一步才結束。
+    let socket = h.up("e,ignore-eof");
     kill(h.pid(), libc::SIGTERM);
-    for _ in 0..2 {
-        assert!(matches!(h.event(), FrontEvent::Down { cause: DeathCause::Shutdown, .. }));
-    }
-    assert!(h.audit_line("\"thread\":\"s,spin\"").contains("\"reniced\":true"));
-    assert!(h.audit_line("\"thread\":\"q\"").contains("\"reniced\":false"));
+    assert_eq!(h.down_of("e,ignore-eof"), DeathCause::Shutdown);
+    assert!(log(&socket).iter().any(|line| line == "sigterm"), "{:?}", log(&socket));
 }

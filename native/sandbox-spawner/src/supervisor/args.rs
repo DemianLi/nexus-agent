@@ -6,7 +6,7 @@ use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
 --conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
-[--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--cpu-busy-ms <毫秒>]";
+[--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>]";
 
 /// stdin EOF 之後等多久才送 SIGTERM。
 pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
@@ -14,12 +14,10 @@ pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
 pub const DEFAULT_TERM_GRACE: Duration = Duration::from_millis(3_000);
 /// 前台結束後隔多久重起。
 pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
-/// 多久讀一次對話行程的 RSS 與 CPU。
+/// 多久讀一次對話行程的 RSS。
 pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
 /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
 pub const DEFAULT_STALL: Duration = Duration::from_millis(15_000);
-/// 對話行程一直想要一整顆 CPU 多久，就把它的群組 renice 到 19。
-pub const DEFAULT_CPU_BUSY: Duration = Duration::from_millis(10_000);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -40,8 +38,6 @@ pub struct Args {
     pub rss_poll: Duration,
     /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就當場對它的群組送 SIGKILL（不走拆除梯度），死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
-    /// 對話行程一直想要一整顆 CPU 多久（判法見 `cpu` 模組），就把它的群組 renice 到 19。`None`（`--cpu-busy-ms 0`）是不調。
-    pub cpu_busy: Option<Duration>,
 }
 
 pub fn parse(args: &[OsString]) -> Result<Args, String> {
@@ -57,7 +53,6 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut rss_limit_kb = None;
     let mut rss_poll = DEFAULT_RSS_POLL;
     let mut stall = Some(DEFAULT_STALL);
-    let mut cpu_busy = Some(DEFAULT_CPU_BUSY);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_str().ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
@@ -75,7 +70,6 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--rss-limit-mb" => rss_limit_kb = Some(positive(flag, value()?)?.saturating_mul(1024)),
             "--rss-poll-ms" => rss_poll = Duration::from_millis(positive(flag, value()?)?),
             "--stall-ms" => stall = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
-            "--cpu-busy-ms" => cpu_busy = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
@@ -92,7 +86,6 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         rss_limit_kb,
         rss_poll,
         stall,
-        cpu_busy,
     })
 }
 
@@ -136,21 +129,17 @@ mod tests {
         assert_eq!(args.rss_limit_kb, None);
         assert_eq!(args.rss_poll, DEFAULT_RSS_POLL);
         assert_eq!(args.stall, Some(DEFAULT_STALL));
-        assert_eq!(args.cpu_busy, Some(DEFAULT_CPU_BUSY));
     }
 
     #[test]
-    fn zero_turns_stall_and_renice_off() {
+    fn zero_turns_stall_off() {
         let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
         let mut items = base.to_vec();
-        items.extend(["--stall-ms", "0", "--cpu-busy-ms", "0"]);
-        let args = parse(&os(&items)).unwrap();
-        assert_eq!((args.stall, args.cpu_busy), (None, None));
+        items.extend(["--stall-ms", "0"]);
+        assert_eq!(parse(&os(&items)).unwrap().stall, None);
         let mut items = base.to_vec();
-        items.extend(["--stall-ms", "300", "--cpu-busy-ms", "500"]);
-        let args = parse(&os(&items)).unwrap();
-        assert_eq!(args.stall, Some(Duration::from_millis(300)));
-        assert_eq!(args.cpu_busy, Some(Duration::from_millis(500)));
+        items.extend(["--stall-ms", "300"]);
+        assert_eq!(parse(&os(&items)).unwrap().stall, Some(Duration::from_millis(300)));
     }
 
     #[test]

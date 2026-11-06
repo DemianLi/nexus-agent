@@ -25,9 +25,9 @@
 //! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。fd 2 阻塞而沒人讀時，整個迴圈停在寫那一步；寫不出去的（轉出的與
 //! 監督行程自己的訊息）丟掉、記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
-//! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`；同一次取樣 CPU，一直想要一整顆的 renice
-//! 到 19（[`cpu`]）。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
-//! `max_silence_ms`，死前最後一段不算。
+//! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
+//! `max_silence_ms`，死前最後一段不算。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定整棵樹被凍住過，所有沉默從醒來起重新起算
+//! （[`Supervisor::check_resumed`]）。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
 //! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
@@ -45,7 +45,6 @@ macro_rules! say {
 
 mod args;
 mod audit;
-mod cpu;
 mod memory;
 mod process;
 
@@ -146,9 +145,6 @@ struct Conversation {
     heard_at: Option<Instant>,
     /// 送出 `bind` 之後，兩則回報之間最長隔了多久，寫進稽核。
     max_silence: Duration,
-    busy: cpu::Busy,
-    /// renice 過了沒：`None` 沒試過，`Some(false)` 試了沒成功（不再試）。
-    reniced: Option<bool>,
 }
 
 impl Conversation {
@@ -177,7 +173,6 @@ struct Supervisor {
     shutting_down: bool,
     oom: OomCounter,
     rss_poll_at: Instant,
-    ticks_per_second: u64,
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
@@ -218,7 +213,6 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         shutting_down: false,
         oom: OomCounter::open(),
         rss_poll_at: Instant::now(),
-        ticks_per_second: cpu::ticks_per_second(),
     };
     supervisor.start_front();
     Ok(supervisor)
@@ -327,6 +321,7 @@ impl Supervisor {
                 let millis = left.as_millis() + u128::from(left.subsec_nanos() % 1_000_000 != 0);
                 millis.min(i32::MAX as u128) as i32
             });
+            let planned = u64::try_from(timeout).ok().map(|millis| Instant::now() + Duration::from_millis(millis));
             // SAFETY：fds 在這次呼叫期間有效。
             let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
             if n < 0 {
@@ -336,6 +331,9 @@ impl Supervisor {
                 say!("poll 失敗：{}；殺掉所有群組後結束", std::io::Error::last_os_error());
                 self.kill_everything();
                 return 1;
+            }
+            if let Some(planned) = planned {
+                self.check_resumed(planned);
             }
 
             let mut signals = false;
@@ -383,7 +381,7 @@ impl Supervisor {
         }
         if self.rss_poll_at <= now {
             self.rss_poll_at = now + self.args.rss_poll;
-            self.poll_resources(now);
+            self.poll_rss();
         }
         if let Some(stall) = self.args.stall {
             self.check_stalls(now, stall);
@@ -394,6 +392,7 @@ impl Supervisor {
         }
     }
 
+    /// 有對話行程在判 `stalled` 時，最晚 `--stall-ms` 的四分之一醒一次，[`Self::check_resumed`] 才量得出自己停住過。
     fn next_deadline(&self) -> Option<Instant> {
         let restart = self.front_restart_at.filter(|_| !self.shutting_down);
         self.conversations
@@ -405,7 +404,28 @@ impl Supervisor {
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.heard_at.map(|at| at + stall))
             }))
+            .chain(self.args.stall.filter(|_| self.conversations.iter().any(|c| c.heard_at.is_some())).map(|stall| Instant::now() + stall / 4))
             .min()
+    }
+
+    /// 監督行程比預定的時間晚了超過 `--stall-ms` 的一半才醒，判定自己被停住過（整棵樹一起被凍住：docker pause、cgroup freezer、
+    /// VM 暫停或快照）。這時對話行程也一起停了，遲到的心跳還沒送出來，照樣判就會把每一條都殺掉；所以所有的沉默從現在重新起算。
+    ///
+    /// 門檻取一半：正常的排程延遲是毫秒級，遠低於它；而會造成誤判的停住，醒來時一定晚了至少 `stall` 的四分之三減一個心跳間隔
+    /// （[`Self::next_deadline`] 保證最晚 `stall` 的四分之一就醒一次），所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
+    fn check_resumed(&mut self, planned: Instant) {
+        let Some(stall) = self.args.stall else { return };
+        let now = Instant::now();
+        let late = now.saturating_duration_since(planned);
+        if late < stall / 2 {
+            return;
+        }
+        say!("監督行程比預定晚了 {} ms 才醒，判定自己被停住過；所有對話行程的沉默從現在重新起算", late.as_millis());
+        for conversation in &mut self.conversations {
+            if conversation.heard_at.is_some() {
+                conversation.heard_at = Some(now);
+            }
+        }
     }
 
     /// 送出 `bind` 之後 `stall` 沒聽到回報的，當場殺掉整個群組，死因 `stalled`。不走拆除梯度：事件迴圈卡住的行程讀不到 EOF，
@@ -427,27 +447,11 @@ impl Supervisor {
     }
 
     /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
-    /// 已經在收的（例如停機）照原本的理由。同一次也取樣 CPU：最近 `--cpu-busy-ms` 一直想要一整顆的（判法見 [`cpu`]），把群組 renice 到 19，只做一次。
+    /// 已經在收的（例如停機）照原本的理由。
     ///
-    /// 只量 leader：只讀它自己的 `VmRSS` 與 CPU，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 與 renice 也打不到
-    /// （TODO(#2494)）。
-    fn poll_resources(&mut self, now: Instant) {
+    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
+    fn poll_rss(&mut self) {
         for conversation in &mut self.conversations {
-            let pid = conversation.proc.pid;
-            let too_busy = conversation.reniced.is_none()
-                && conversation.proc.stop.is_none()
-                && self.args.cpu_busy.is_some_and(|window| {
-                    let cpu = cpu::cpu_time(pid, self.ticks_per_second);
-                    conversation.busy.sample(now, cpu, cpu::runnable_time(pid), window)
-                });
-            if too_busy {
-                let result = cpu::renice_group(pid);
-                match &result {
-                    Ok(()) => say!("對話行程 {pid} 一直想要一整顆 CPU，renice 到 19"),
-                    Err(err) => say!("對話行程 {pid} 一直想要一整顆 CPU，renice 失敗：{err}"),
-                }
-                conversation.reniced = Some(result.is_ok());
-            }
             let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
             conversation.rss_kb = conversation.rss_kb.max(kb);
             let over = self.args.rss_limit_kb.is_some_and(|limit| kb > limit);
@@ -546,8 +550,6 @@ impl Supervisor {
                 rss_kb: 0,
                 heard_at: None,
                 max_silence: Duration::ZERO,
-                busy: cpu::Busy::default(),
-                reniced: None,
             }),
             Err(err) => {
                 say!("對話行程起不來：{err}");
@@ -560,7 +562,6 @@ impl Supervisor {
                     turns: 0,
                     rss_kb: 0,
                     max_silence_ms: 0,
-                    reniced: false,
                     error: Some(&error),
                 });
                 self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Crash });
@@ -717,7 +718,6 @@ impl Supervisor {
             turns: conversation.turns,
             rss_kb: conversation.rss_kb,
             max_silence_ms: conversation.max_silence.as_millis().min(u128::from(u64::MAX)) as u64,
-            reniced: conversation.reniced == Some(true),
             error: None,
         });
         let _ = std::fs::remove_file(&conversation.socket);

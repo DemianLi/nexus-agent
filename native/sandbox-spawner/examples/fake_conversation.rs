@@ -1,17 +1,18 @@
 //! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`，收到 `bind` 回 `bound`，之後照 thread id 做事。
 //!
 //! ```text
-//! fake_conversation [--die-before-ready] --socket <路徑>
+//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] --socket <路徑>
 //! ```
 //!
 //! - `--die-before-ready`：一起來就以 7 結束。
+//! - `--ready-after-ms`：等這麼久才送 `ready`。
 //! - thread id 以逗號分段，第一段是名字，之後每段是一個動作，回 `bound` 之後依序做：
 //!   `exit:<碼>`、`signal:<號>`（對自己送）、`turn`（送一次 `turn(begin)` 與 `turn(end)`）、`grandchild`（fork 一個睡著的子行程，
-//!   同一個群組）、`close-stdout`、`ignore-eof`（stdin EOF 之後不結束）、`ignore-term`（再加上不理 SIGTERM）、
+//!   同一個群組）、`close-stdout`、`ignore-eof`（stdin EOF 之後不結束，心跳也停）、`ignore-term`（再加上不理 SIGTERM）、
 //!   `wrong-bound`（回別的 thread id，取代正常的 `bound`）、`flood`（之後不停往 stdout 寫 `heartbeat`，不再讀 stdin）、`stderr-flood`（之後不停往 stderr 寫填充，不再讀 stdin）、
 //!   `heap`（往 stderr 寫 V8 heap 用完的訊息再 SIGABRT）、`alloc:<MiB>`（配置並碰過這麼多記憶體，留著不放）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）、
 //!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）、
-//!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`spin`（主執行緒空轉吃滿 CPU，心跳照送）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
+//!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
 //!   之後恢復）。
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`eof`、`sigterm`。
@@ -25,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
-/// 心跳先停：`hang`、`silent`、`close-stdout` 設它。
+/// 心跳先停：`hang`、`silent`、`close-stdout`、`ignore-eof` 收到 EOF 時設它。
 static QUIET: AtomicBool = AtomicBool::new(false);
 const HEARTBEAT: Duration = Duration::from_millis(50);
 
@@ -76,6 +77,9 @@ fn main() {
     // SAFETY：裝 handler。
     unsafe { libc::signal(libc::SIGTERM, on_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t) };
     log(&format!("pid {}", std::process::id()));
+    if let Some(ms) = args.iter().position(|a| a == "--ready-after-ms").and_then(|i| args.get(i + 1)) {
+        std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
+    }
     report(&ConversationReport::Ready);
 
     let mut ignore_eof = false;
@@ -89,6 +93,7 @@ fn main() {
             if !ignore_eof {
                 std::process::exit(0);
             }
+            QUIET.store(true, Ordering::SeqCst);
             loop {
                 // SAFETY：等訊號。
                 unsafe { libc::pause() };
@@ -143,12 +148,6 @@ fn main() {
                         loop {
                             // SAFETY：等訊號。
                             unsafe { libc::pause() };
-                        }
-                    }
-                    ("spin", _) => {
-                        let mut n = 0u64;
-                        loop {
-                            n = std::hint::black_box(n.wrapping_add(1));
                         }
                     }
                     ("silent", ms) => {

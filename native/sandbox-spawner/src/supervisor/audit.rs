@@ -39,11 +39,10 @@ pub enum Record<'a> {
         turns: u32,
         /// 輪詢看到的最高 RSS（kB）；沒量到是 0。
         rss_kb: u64,
-        /// 送出 `bind` 起，每次聽到它與上一次（第一次是與送出 `bind`）之間最長隔了多久；最後一次聽到之後到結束的那段不算，
-        /// 所以死因 `stalled` 的紀錄這個值也小於 `--stall-ms`。沒送過 `bind` 是 0。
+        /// 送出 `bind` 起，每次聽到它與上一次（第一次是與送出 `bind`）之間最長隔了多久；最後一次聽到之後到結束的那段不算。
+        /// 監督行程判定自己被停住過時從醒來起重新算，停住的那段不算。判 `stalled` 之前先讀一次通道而救回來的那一段會算進來，
+        /// 所以可能大於等於 `--stall-ms`。沒送過 `bind` 是 0。
         max_silence_ms: u64,
-        /// 因為一直想要一整顆 CPU 被 renice 到 19 過。
-        reniced: bool,
         error: Option<&'a str>,
     },
     Front { pid: i32, exit: Exit, error: Option<&'a str> },
@@ -106,11 +105,11 @@ impl Audit {
 fn line(ts_ms: u128, record: &Record<'_>) -> String {
     let mut out = format!("{{\"ts_ms\":{ts_ms}");
     let (exit, error) = match record {
-        Record::Conversation { thread, pid, cause, exit, turns, rss_kb, max_silence_ms, reniced, error } => {
+        Record::Conversation { thread, pid, cause, exit, turns, rss_kb, max_silence_ms, error } => {
             out.push_str(",\"role\":\"conversation\",\"thread\":");
             json_string(&mut out, &String::from_utf8_lossy(thread));
             out.push_str(&format!(
-                ",\"pid\":{pid},\"cause\":\"{}\",\"turns\":{turns},\"rss_kb\":{rss_kb},\"max_silence_ms\":{max_silence_ms},\"reniced\":{reniced}",
+                ",\"pid\":{pid},\"cause\":\"{}\",\"turns\":{turns},\"rss_kb\":{rss_kb},\"max_silence_ms\":{max_silence_ms}",
                 cause_name(*cause)
             ));
             (exit, error)
@@ -180,13 +179,12 @@ mod tests {
             turns: 2,
             rss_kb: 81920,
             max_silence_ms: 5012,
-            reniced: true,
             error: None,
         };
         assert_eq!(
             line(7, &record),
             "{\"ts_ms\":7,\"role\":\"conversation\",\"thread\":\"t\\\"1\\\\\\u000a\\u0001\u{fffd}\",\"pid\":42,\
-\"cause\":\"crash\",\"turns\":2,\"rss_kb\":81920,\"max_silence_ms\":5012,\"reniced\":true,\"exit_code\":3,\"signal\":null}\n"
+\"cause\":\"crash\",\"turns\":2,\"rss_kb\":81920,\"max_silence_ms\":5012,\"exit_code\":3,\"signal\":null}\n"
         );
     }
 
