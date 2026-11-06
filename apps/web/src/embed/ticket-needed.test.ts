@@ -69,6 +69,16 @@ describe('TicketWatch（#2370）', () => {
     expect(seen).toEqual([]);
   });
 
+  test('換票當下剩不到兩分鐘：剩一半的時候發，不會一換完票就又要票', () => {
+    watch.resume();
+    const expiresAt = Date.now() + 60_000;
+    watch.signedIn(expiresAt);
+    vi.advanceTimersByTime(29_999);
+    expect(seen).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(seen).toEqual([{ reason: 'expiring', expiresAt }]);
+  });
+
   test('到期時間超過 setTimeout 收得下的上限：不會馬上發', () => {
     watch.resume();
     const expiresAt = Date.now() + 40 * 24 * 3_600_000;

@@ -52,8 +52,8 @@ interface NexusSignInError extends Error {
  */
 interface NexusTicketNeededDetail {
   /**
-   * - `expiring`：到期前 60 秒（照 serve 的時鐘）；
-   * - `unauthorized`：請求被 401 擋下，例如 cookie 已經過期、被撤掉，或還沒換過票。
+   * - `expiring`：到期前 60 秒（照 serve 的時鐘）；換票當下剩不到兩分鐘時，在剩一半的時候；
+   * - `unauthorized`：請求被 401 擋下：瀏覽器上沒有有效的會話 cookie，例如嵌入 cookie 已經過期、被撤掉，或還沒換過票、也沒有主機擁有者登入的那顆。
    */
   readonly reason: 'expiring' | 'unauthorized';
   /** `expiring` 才有：目前這顆 cookie 的到期時間，同 `signIn` resolve 的那個。 */

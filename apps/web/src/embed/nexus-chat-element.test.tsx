@@ -18,7 +18,7 @@ import { HOST_TOOL_EVENT, HOST_TOOL_MISSING_ERROR } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-element';
 import { NexusSignInError } from './sign-in';
-import { TICKET_NEEDED_EVENT, TICKET_RENEW_LEAD_MS } from './ticket-needed';
+import { TICKET_NEEDED_EVENT } from './ticket-needed';
 import type { NexusTicketNeededDetail } from './ticket-needed';
 
 /**
@@ -624,7 +624,8 @@ describe('<nexus-chat> 的續期與 nexus-ticket-needed（#2370）', () => {
   }
 
   test('快到期：發 expiring 帶到期時間，不 bubble、只發一次', async () => {
-    const expiresAt = Date.now() + TICKET_RENEW_LEAD_MS + 50;
+    // 有效期很短：剩一半的時候就發（50 毫秒後）。
+    const expiresAt = Date.now() + 100;
     serveSessions({ expiresAt, identityFingerprint: 'alice', threadId: '我的' });
     const element = mount();
     const { seen, bubbled } = listen(element);
@@ -648,7 +649,8 @@ describe('<nexus-chat> 的續期與 nexus-ticket-needed（#2370）', () => {
   });
 
   test('拿掉之後到點不發', async () => {
-    const expiresAt = Date.now() + TICKET_RENEW_LEAD_MS + 50;
+    // 有效期很短：剩一半的時候就發（50 毫秒後）。
+    const expiresAt = Date.now() + 100;
     serveSessions({ expiresAt, identityFingerprint: 'alice' });
     const element = mount();
     const { seen } = listen(element);

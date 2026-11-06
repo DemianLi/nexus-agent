@@ -62,7 +62,7 @@ function renderSubagentEntry(entry: ConversationEntry) {
   return <TranscriptEntry entry={entry} subagentNames={NO_NAMES} />;
 }
 
-/** 換過登入票（`el.signIn()`，#2370）之後接哪一條：`seq` 每兌換一次就換一個，換了就整個重來。 */
+/** 換過登入票（`el.signIn()`，#2370）之後接哪一條：`seq` 換了人才換，換了就整個重來；同一個人續期不換。 */
 export interface EmbedSignIn {
   readonly seq: number;
   /** serve 說的「這一次登入最新開的那一條」，沒有就是這一端新生的。 */

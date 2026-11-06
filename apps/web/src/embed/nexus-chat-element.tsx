@@ -10,7 +10,7 @@
  * - **不碰宿主頁**：亮暗掛在 `.nexus-root` 上，不改 `<html>`；記住上一條 thread 用自己的鍵（`embedded-chat.tsx`）。只有
  *   `@font-face` 與 `@property` 放進宿主頁的 `<head>`，shadow root 裡的這兩種規則 Chrome 不認（`embed-shadow-css.ts`）。
  * - **換票登入**：`signIn(ticket)` 兌換宿主系統後端換來的登入票（#2370，`sign-in.ts`）。成功之後清掉記著的上一條、下行改開新的 socket
- *   （cookie 定在升級當下）。換了人（指紋不同，或第一次換票）就改接 serve 回的那一條，沒有就開新的；同一個人續期就留在畫面上這一條。
+ *   （cookie 定在升級當下）。換了人（指紋不同、回應沒有指紋，或第一次換票）就改接 serve 回的那一條，沒有就開新的；同一個人續期就留在畫面上這一條。
  *   之後只認換票帶來的，不再讀寫記著的那一條（`embedded-chat.tsx`）。快到期或被 401 擋下時發 `nexus-ticket-needed`（`ticket-needed.ts`）。
  * - 元素拿掉就卸掉 React（下行跟著關）；同一個 tick 裡搬到別處（先拿掉再放回去）不卸。
  *

@@ -39,14 +39,13 @@ export interface RedeemedTicket {
   readonly expiresAt: number;
   /**
    * 這是誰的不可逆指紋（serve 的 `EmbedSessionCookies.identityFingerprint`）：同一個嵌入方＋使用者代號就相同，換了人就不同。
-   * 回應裡沒有（舊版的 serve）就沒有這一格，當成分不出是不是同一個人。
+   * 回應裡沒有（或不是非空字串）就沒有這一格，當成分不出是不是同一個人。
    */
   readonly identityFingerprint?: string;
   /** 這一次登入最新開的那條嵌入對話；沒有就沒有這一格。 */
   readonly threadId?: string;
 }
 
-/** 回應裡的字串欄位；不是非空字串就當沒有。 */
 function text(body: unknown, key: string): string | undefined {
   const value = (body as Record<string, unknown> | null | undefined)?.[key];
   return typeof value === 'string' && value !== '' ? value : undefined;
