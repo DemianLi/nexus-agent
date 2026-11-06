@@ -787,17 +787,17 @@ describe('核准卡把對話往上推：捲動區頂端淡出（#2407）', () =>
 });
 
 describe('換票登入（#2370）', () => {
-  const EMBED_LOGIN = `- id: embed-login
+  const embedLogin = (cookieMaxAgeSeconds: number) => `- id: embed-login
   config:
     embedders:
       - id: crm
     ticketTtlSeconds: 60
-    cookieMaxAgeSeconds: 900
+    cookieMaxAgeSeconds: ${String(cookieMaxAgeSeconds)}
 `;
 
   /** 起一台開了換票的 serve，對應表上有 crm 的 alice 與 bob；回傳替其中一位換一張票的函式。 */
-  async function startWithEmbedLogin(turns: readonly ScriptTurn[]) {
-    serve = await startE2eServe(turns, EMBED_LOGIN, async (home) => {
+  async function startWithEmbedLogin(turns: readonly ScriptTurn[], cookieMaxAgeSeconds = 900) {
+    serve = await startE2eServe(turns, embedLogin(cookieMaxAgeSeconds), async (home) => {
       const mappings = [
         { embedder: 'crm', subject: 'alice', userId: 'alice' },
         { embedder: 'crm', subject: 'bob', userId: 'bob' },
@@ -908,7 +908,7 @@ describe('換票登入（#2370）', () => {
     expect(await transcript(page).getByText('我是 bob').count()).toBe(0);
   });
 
-  test('同一個人續期：留在剛開、還沒講話的那一條，下行改走新開的 socket', async () => {
+  test('同一個人續期：留在剛開、還沒講話的那一條，下行留在原本那條 socket', async () => {
     const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     const sockets: import('playwright-core').WebSocket[] = [];
@@ -924,18 +924,86 @@ describe('換票登入（#2370）', () => {
     await settled(page);
     await chat(page).getByRole('button', { name: '新對話' }).click();
     await expect.poll(() => transcript(page).count()).toBe(0);
+    // 換票之前那一下 401 與第一次換票都會換 socket，這裡只看續期前還開著的那幾條。
     const before = sockets.length;
+    const live = sockets.filter((ws) => !ws.isClosed());
+    expect(live.length).toBeGreaterThan(0);
 
     await signIn(page, await ticket());
-    await expect.poll(() => sockets.length).toBeGreaterThan(before);
-    await expect.poll(() => sockets.slice(0, before).every((ws) => ws.isClosed())).toBe(true);
     expect(await transcript(page).count()).toBe(0);
     await send(page, '第二條');
     await expect
       .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
       .toBe(1);
     expect(await transcript(page).getByText('第一條').count()).toBe(0);
+    expect(sockets).toHaveLength(before);
+    expect(live.every((ws) => !ws.isClosed())).toBe(true);
   });
+
+  test('同一個人續期、舊 cookie 過期之後：下行沒斷，狀態列沒說重新連線，歷史沒重讀，回覆從原本那條 socket 進來（#2484）', async () => {
+    const { origin, ticket } = await startWithEmbedLogin(
+      [{ content: '第一句的回覆。' }, { content: '舊的過期之後的回覆。' }],
+      60,
+    );
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // 「正在重新連線」與「已重新連線」都只在狀態列待一下：在頁面裡每 50 毫秒看一次，出現過就記住。
+    await page.addInitScript(() => {
+      const flags = window as unknown as { reconnectSeen: boolean };
+      flags.reconnectSeen = false;
+      setInterval(() => {
+        const text = document.querySelector('nexus-chat')?.shadowRoot?.textContent ?? '';
+        if (text.includes('重新連線')) flags.reconnectSeen = true;
+      }, 50);
+    });
+    const sockets: { ws: import('playwright-core').WebSocket; frames: string[] }[] = [];
+    page.on('websocket', (ws) => {
+      if (!ws.url().endsWith('/embed/threads/mux')) return;
+      const entry = { ws, frames: [] as string[] };
+      sockets.push(entry);
+      ws.on('framereceived', ({ payload }) => entry.frames.push(String(payload)));
+    });
+    const histories: string[] = [];
+    page.on('request', (request) => {
+      if (/\/threads\/[^/]+\/history(?:\?|$)/u.test(new URL(request.url()).pathname)) {
+        histories.push(request.url());
+      }
+    });
+    await gotoBare(page, origin);
+    const firstExpiresAt = Number(await signIn(page, await ticket()));
+    await send(page, '你好');
+    await expect
+      .poll(() => transcript(page).getByText('第一句的回覆。').count(), { timeout: 30_000 })
+      .toBe(1);
+    await settled(page);
+    // 換票之前那一下 401 與第一次換票都會換 socket：續期前還開著的只剩一條。
+    const live = sockets.filter(({ ws }) => !ws.isClosed());
+    expect(live).toHaveLength(1);
+    const socketsBefore = sockets.length;
+    const historiesBefore = histories.length;
+
+    // 拖到舊 cookie 還剩 30 秒才續期：新的那顆比舊的晚 30 秒過期，舊的過期之後還有時間講一句。
+    await page.waitForTimeout(Math.max(0, firstExpiresAt - 30_000 - Date.now()));
+    await signIn(page, await ticket());
+    await page.waitForTimeout(Math.max(0, firstExpiresAt + 2_000 - Date.now()));
+
+    const framesAtExpiry = live[0]!.frames.length;
+    await send(page, '舊的過期了嗎');
+    await expect
+      .poll(() => transcript(page).getByText('舊的過期之後的回覆。').count(), { timeout: 30_000 })
+      .toBe(1);
+    await settled(page);
+    expect(sockets).toHaveLength(socketsBefore);
+    expect(live[0]!.ws.isClosed()).toBe(false);
+    // 回覆的字可能分好幾段送，看「過期之後這條 socket 收到過資料」就好。
+    expect(
+      live[0]!.frames.slice(framesAtExpiry).some((frame) => frame.includes('"t":"data"')),
+    ).toBe(true);
+    expect(histories).toHaveLength(historiesBefore);
+    expect(
+      await page.evaluate(() => (window as unknown as { reconnectSeen: boolean }).reconnectSeen),
+    ).toBe(false);
+    expect(await transcript(page).getByText('第一句的回覆。').count()).toBe(1);
+  }, 150_000);
 
   test('沒換票被 401 擋下：發 unauthorized（不 bubble）；交回 signIn 之後講得了話', async () => {
     const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);

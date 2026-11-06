@@ -22,7 +22,8 @@ export interface AgentClientOptions {
   readonly fetch?: typeof globalThis.fetch;
   /**
    * client 的請求（上行與兩條下行）回 401 時呼叫，回應照樣交給呼叫端。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
-   * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡。嵌入版用它通知宿主頁換票（#2370）。
+   * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡；回來時已經 {@link AgentConnection.renewStreams}
+   * 過的下行，401 也不叫（#2484）。嵌入版用它通知宿主頁換票（#2370）。
    */
   readonly onUnauthorized?: () => void;
 }
@@ -88,12 +89,104 @@ export function mountedMuxFetch(
 export interface AgentConnection {
   readonly client: WireClient;
   /**
-   * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後的下行改開一條新的，舊的那幾條當場關掉。
-   * 關掉的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。已經退回 SSE 的下行不經 socket，這裡關不到，要呼叫端自己收
-   * （嵌入元件換了人時整個重掛，就收掉了；同一個人續期時留著，SSE 每個請求帶當下的 cookie，下次重開就是新的）。注入了 `fetch` 時沒有 socket，
-   * 什麼都不做。
+   * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後新開的下行走一條新的 socket。
+   *
+   * - `closeOpen: true`（換了人）：舊 socket 當場關掉，上面的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。
+   * - `closeOpen: false`（同一個人續期，#2484）：舊 socket 上已開的下行照常收，等它自己結束（斷線、serve 收線、呼叫端收掉）才關這條 socket；
+   *   serve 只在開串流時驗 cookie，舊的過期了也不切已開的串流。
+   *
+   * 已經退回 SSE 的下行不經 socket，兩種都不動它（SSE 每個請求帶當下的 cookie，下次重開就是新的）。注入了 `fetch` 時沒有 socket，什麼都不做。
    */
-  renewStreams(): void;
+  renewStreams(options: { readonly closeOpen: boolean }): void;
+}
+
+/**
+ * 回應本體照讀者的速度一段一段轉出去，讀完、出錯或被取消時叫 `finished`（可能不只一次，呼叫端自己擋）。`highWaterMark: 0` 不預讀：mux 讀者讀走才還額度。
+ */
+function tracked(
+  body: ReadableStream<Uint8Array>,
+  finished: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            finished();
+            controller.close();
+          } else {
+            controller.enqueue(chunk.value);
+          }
+        } catch (error) {
+          finished();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        finished();
+        await reader.cancel(reason);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/** 同一顆 cookie 開的那幾條 socket，與經它們開著、還沒收掉的下行數。 */
+class SocketGeneration {
+  readonly #sockets = new Set<MuxSocket>();
+  readonly #fetch: typeof globalThis.fetch;
+  #open = 0;
+  #retired = false;
+
+  constructor(open: (into: Set<MuxSocket>) => typeof globalThis.fetch) {
+    this.#fetch = open(this.#sockets);
+  }
+
+  /** 經這一代開一條下行。本體讀完、出錯、被取消，或呼叫端中止 `signal`，都算這條收掉了（只算一次）。 */
+  async stream(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    this.#open += 1;
+    let counted = true;
+    const closed = () => {
+      if (!counted) return;
+      counted = false;
+      this.#closed();
+    };
+    // 中止時 mux 已經送了 cancel；沒有人在讀的本體不會再被 pull，不能只靠本體那一頭。
+    init?.signal?.addEventListener('abort', closed, { once: true });
+    let response: Response;
+    try {
+      response = await this.#fetch(input, init);
+    } catch (error) {
+      closed();
+      throw error;
+    }
+    if (response.body === null) {
+      closed();
+      return response;
+    }
+    return new Response(tracked(response.body, closed), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  /** 之後不再經這一代開新的下行。 */
+  retire(closeOpen: boolean): void {
+    this.#retired = true;
+    if (closeOpen || this.#open === 0) this.#closeSockets();
+  }
+
+  #closed(): void {
+    this.#open -= 1;
+    if (this.#retired && this.#open === 0) this.#closeSockets();
+  }
+
+  #closeSockets(): void {
+    for (const socket of this.#sockets) socket.close();
+  }
 }
 
 /** 沒注入 `fetch` 時兩條下行走 WebSocket，要有 `window`（升級網址從頁面算）；socket 到第一條下行才開。 */
@@ -107,27 +200,34 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
       renewStreams: () => {},
     };
   }
-  let sockets = new Set<MuxSocket>();
-  const open = (into: Set<MuxSocket>) =>
-    mountedMuxFetch(mount, baseUrl, window.location.href, fetch, (url) => {
-      const socket = new WebSocket(url);
-      into.add(socket);
-      // 用 addEventListener：`onclose` 是 mux 自己的（`mux.ts` 的 `MuxCarrier`），指派會蓋掉它的收尾。
-      socket.addEventListener('close', () => into.delete(socket));
-      return socket;
-    });
-  let streams = open(sockets);
+  const generation = () =>
+    new SocketGeneration((into) =>
+      mountedMuxFetch(mount, baseUrl, window.location.href, fetch, (url) => {
+        const socket = new WebSocket(url);
+        into.add(socket);
+        // 用 addEventListener：`onclose` 是 mux 自己的（`mux.ts` 的 `MuxCarrier`），指派會蓋掉它的收尾。
+        socket.addEventListener('close', () => into.delete(socket));
+        return socket;
+      }),
+    );
+  let current = generation();
+  const onUnauthorized = options.onUnauthorized;
   return {
     client: createWireClient({
       baseUrl,
-      fetch: watched(fetch, options.onUnauthorized),
-      streamFetch: watched((input, init) => streams(input, init), options.onUnauthorized),
+      fetch: watched(fetch, onUnauthorized),
+      // 回來時已經換過一代的 401 不算：那是舊 cookie 的事，新的那顆已經在瀏覽器上了。
+      streamFetch: async (input, init) => {
+        const opened = current;
+        const response = await opened.stream(input, init);
+        if (response.status === 401 && opened === current) onUnauthorized?.();
+        return response;
+      },
     }),
-    renewStreams() {
-      const old = sockets;
-      sockets = new Set();
-      streams = open(sockets);
-      for (const socket of old) socket.close();
+    renewStreams({ closeOpen }) {
+      const old = current;
+      current = generation();
+      old.retire(closeOpen);
     },
   };
 }
