@@ -4,11 +4,12 @@
  * 原位直接呼叫，子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），經 `wrapModelCall`。摘要器裝不下時換保留量重走也在它那一步
  * 裡面，次數由 `summarizer-cell.test.ts` 數。
  *
- * 這兩格在登記的那一步裡叫 `next` 不只一次，所以這裡多看兩件事：每叫一次 `next`，內層各格都重跑一次（起訖紀錄器每次嘗試各記
- * 一對 `model/start`／`model/end`）；串流重打經 `getConfig().writer` 送給 pump 的通知，native 原位呼叫時照樣送得到。
+ * 這兩格在登記的那一步裡叫 `next` 不只一次，所以這裡多看兩件事：每叫一次 `next`，這一格內層的各格都重跑一次（串流重打每次重交，
+ * 起訖紀錄器各多記一對 `model/start`／`model/end`；接住端重交時起訖在它外面，不多記）；串流重打經 `getConfig().writer` 送給 pump
+ * 的通知，native 原位呼叫時照樣送得到。
  *
- * 計數做法同 `mutator-cells.test.ts`。root 第一次叫模型：第一次嘗試回報可重試的 500 失敗，串流重打再交一次；第二次嘗試 adapter
- * 量到圖超額拋碼，接住端省略最舊的一張再交一次；第三次才回。
+ * 計數做法同 `mutator-cells.test.ts`。root 第一次叫模型，模型被打三次：第一次回報可重試的 500 失敗，串流重打再交一次；第二次拋圖超額
+ * （`ImageOffloadRequiredError`，模擬 adapter 量到超額），接住端省略最舊的一張，在同一次嘗試裡再交一次；第三次才回。
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -116,7 +117,7 @@ async function run(loop: AgentLoopKind) {
     modelLimits: () => undefined,
     streamRetry: { maxRetries: 2, initialDelayMs: 1, jitterRatio: 0 },
   });
-  /** root 第一次叫模型時，第三次嘗試看到的圖：哪幾張已省略。 */
+  /** root 第一次叫模型時，模型第三次被打（接住端重交之後）看到的圖：哪幾張已省略。 */
   const seen: boolean[][] = [];
   const model = fakeModel()
     .respond(() => {
@@ -178,7 +179,7 @@ const cellCounts = () =>
 /**
  * 這一輪預期的計數，`root` 那一邊由 `rootVia` 叫。root 叫了兩次模型（委派、收尾）：串流重打兩次各進一次；第一次在裡面重交一次，
  * 接住端與起訖紀錄器那一次各進兩次（第二次嘗試被拋碼、接住端在起訖裡面重交，不算一次新的呼叫），所以起訖 3 次、接住端 3 次。
- * 子代理：串流重打進一次、重交一次，起訖 2 次；接住端只折進 root。
+ * 子代理：串流重打與起訖各進一次（一次就回，不重交）；接住端只折進 root。
  */
 function expected(rootVia: Via) {
   const of = (n: number) => ({
@@ -236,7 +237,7 @@ describe('native 模型那一串重交的兩格：root 由 native 原位呼叫�
       CALLS,
       RECOVERY,
     ]);
-    // 兩格與只記錄的格排在一起，交換任兩格才看得出來。
+    // 先後比對也要涵蓋只記錄的格，任兩格交換位置上面的 `toEqual` 才會紅；這裡確認它們真的在清單裡。
     for (const cell of ['nexusModelUsage', 'nexusSessionCheckpoint', 'nexusRequestSnapshot']) {
       expect(langgraph).toContain(cell);
     }
