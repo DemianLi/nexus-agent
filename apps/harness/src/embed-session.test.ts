@@ -28,8 +28,10 @@ const IDENTITY = {
   sessionIdSha256: 'h'.repeat(64),
 };
 
-/** 表上什麼都有：只量 cookie 本身的那幾條。 */
-const ALL_MAPPED: EmbedIdentityCheck = { has: () => true };
+/** 表上什麼都有（對方帳號 `x` 對到 `u-x`）：只量 cookie 本身的那幾條。 */
+const ALL_MAPPED: EmbedIdentityCheck = {
+  resolve: (_embedder, subject) => ({ kind: 'accepted', userId: `u-${subject}` }),
+};
 
 /** 從 `Set-Cookie` 取出 `name=value`。 */
 function cookiePair(setCookie: string): string {
@@ -98,9 +100,11 @@ describe('EmbedSessionCookies', () => {
     const asked: unknown[] = [];
     let mapped = true;
     const cookies = new EmbedSessionCookies(SECRET, 900, ['crm'], {
-      has: (identity) => {
-        asked.push({ ...identity });
-        return mapped;
+      resolve: (embedder, subject) => {
+        asked.push({ embedder, subject });
+        return mapped
+          ? { kind: 'accepted', userId: 'u-alice' }
+          : { kind: 'rejected', reason: 'not_mapped' };
       },
     });
     const pair = cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie);
@@ -108,8 +112,8 @@ describe('EmbedSessionCookies', () => {
     mapped = false;
     expect(cookies.authenticate(headersWith(pair))).toBeUndefined();
     expect(asked).toEqual([
-      expect.objectContaining({ embedder: 'crm', subject: 'alice', userId: 'u-alice' }),
-      expect.objectContaining({ embedder: 'crm', subject: 'alice', userId: 'u-alice' }),
+      { embedder: 'crm', subject: 'alice' },
+      { embedder: 'crm', subject: 'alice' },
     ]);
   });
 
@@ -158,6 +162,82 @@ describe('EmbedSessionCookies', () => {
     expect(browser.authenticate(headersWith(`${ownerName}=${embedValue}`))).toBeUndefined();
     expect(cookies.authenticate(headersWith(ownerPair))).toBeUndefined();
     expect(cookies.authenticate(headersWith(`${embedName}=${ownerValue}`))).toBeUndefined();
+  });
+
+  it('check 帶回驗不過的原因；撤權與嵌入方被拿掉時，過期的 cookie 照樣報撤權那一種', () => {
+    let now = 1_000_000;
+    let answer: ReturnType<EmbedIdentityResolver['resolve']> = {
+      kind: 'accepted',
+      userId: 'u-alice',
+    };
+    const cookies = new EmbedSessionCookies(
+      SECRET,
+      900,
+      ['crm'],
+      { resolve: () => answer },
+      () => now,
+    );
+    const pair = cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie);
+    const reason = (headers: Headers) => {
+      const verdict = cookies.check(headers);
+      return verdict.ok ? 'ok' : verdict.reason;
+    };
+    expect(reason(headersWith(pair))).toBe('ok');
+    expect(reason(new Headers({ host: AUTHORITY }))).toBe('no_cookie');
+    expect(reason(headersWith('other=1'))).toBe('no_cookie');
+    expect(reason(headersWith(pair, '127.0.0.1:9999'))).toBe('no_cookie');
+    expect(reason(headersWith(`${pair.split('=', 1)[0]!}=e1.x.y`))).toBe('bad_cookie');
+    expect(
+      new EmbedSessionCookies(SECRET, 900, ['erp'], ALL_MAPPED, () => now).check(headersWith(pair)),
+    ).toEqual({ ok: false, reason: 'embedder_removed' });
+    answer = { kind: 'rejected', reason: 'identity_table_invalid' };
+    expect(reason(headersWith(pair))).toBe('table_invalid');
+    answer = { kind: 'accepted', userId: 'u-bob' };
+    expect(reason(headersWith(pair))).toBe('not_mapped');
+    now += 900_000;
+    expect(reason(headersWith(pair))).toBe('not_mapped');
+    answer = { kind: 'rejected', reason: 'not_mapped' };
+    expect(reason(headersWith(pair))).toBe('not_mapped');
+    answer = { kind: 'accepted', userId: 'u-alice' };
+    expect(reason(headersWith(pair))).toBe('expired');
+  });
+
+  it('recheckOpenStream：只有過期、而且同一條登入已換到還沒到期的才算過；撤權不看續期', () => {
+    let now = 1_000_000;
+    let mapped = true;
+    const cookies = new EmbedSessionCookies(
+      SECRET,
+      900,
+      ['crm'],
+      {
+        resolve: () =>
+          mapped
+            ? { kind: 'accepted', userId: 'u-alice' }
+            : { kind: 'rejected', reason: 'not_mapped' },
+      },
+      () => now,
+    );
+    const old = headersWith(cookiePair(cookies.issue(AUTHORITY, IDENTITY).setCookie));
+    now += 900_000;
+    expect(cookies.recheckOpenStream(old)).toEqual({ ok: false, reason: 'expired' });
+
+    // 別條登入（對方的 session id 不同）續期，不算這一條續上。
+    cookies.recordRenewal({ ...IDENTITY, sessionIdSha256: 'k'.repeat(64) }, now + 900_000);
+    expect(cookies.recheckOpenStream(old)).toEqual({ ok: false, reason: 'expired' });
+
+    cookies.recordRenewal(IDENTITY, now + 900_000);
+    expect(cookies.recheckOpenStream(old)).toEqual({
+      ok: true,
+      principal: { kind: 'embed', ...IDENTITY },
+    });
+    // authenticate 不看續期：舊 cookie 開不了新的。
+    expect(cookies.authenticate(old)).toBeUndefined();
+
+    mapped = false;
+    expect(cookies.recheckOpenStream(old)).toEqual({ ok: false, reason: 'not_mapped' });
+    mapped = true;
+    now += 900_000;
+    expect(cookies.recheckOpenStream(old)).toEqual({ ok: false, reason: 'expired' });
   });
 });
 
@@ -379,6 +459,23 @@ describe('POST /embed/session', () => {
     const response = await session.handle(redeem({ body: { ticket } }));
     expect(response.status).toBe(500);
     expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('兌換成功才記續期：稽核寫不進去的那一次，已開的下行手上那顆過期了照樣不算續上', async () => {
+    let now = 0;
+    const { session, cookies, issue, failNextWrite } = setup({ now: () => now });
+    const login = { embedder: 'crm', subject: 'alice', userId: 'u-alice', sessionIdSha256: 'h' };
+    const old = headersWith(cookiePair(cookies.issue(AUTHORITY, login).setCookie));
+    now += 840_000;
+    failNextWrite();
+    expect((await session.handle(redeem({ body: { ticket: issue() } }))).status).toBe(500);
+    now += 60_000;
+    expect(cookies.recheckOpenStream(old)).toEqual({ ok: false, reason: 'expired' });
+
+    now -= 60_000;
+    expect((await session.handle(redeem({ body: { ticket: issue() } }))).status).toBe(200);
+    now += 60_000;
+    expect(cookies.recheckOpenStream(old)).toMatchObject({ ok: true });
   });
 
   it('續期：同一個人再兌換一張新票，拿到一顆新的 cookie', async () => {
