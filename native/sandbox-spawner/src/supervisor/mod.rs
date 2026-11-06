@@ -17,12 +17,13 @@
 //!   前台不在的期間要給它的訊息丟掉。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，RSS 超過 `--rss-limit-mb` 是
-//! `memory`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 又出現過 V8 heap 用完的
-//! 訊息是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
+//! `memory`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
 //! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`。
 //!
-//! 對話行程的 stderr 接到監督行程（[`process::StderrTap`]）：每次可讀時最多讀 `READ_BUDGET`，原樣阻塞寫到自己的 fd 2，順便找 heap
-//! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。監督行程的 fd 2 沒人讀時，整個迴圈停在寫那一步。前台的 stderr 照監督行程的。
+//! 對話行程的 stderr 接到監督行程（[`process::StderrTap`]）：每次可讀時最多讀 `READ_BUDGET`，原樣寫到自己的 fd 2，順便找 heap
+//! 訊息；收屍時再讀最多 `STDERR_DRAIN` 才判死因，之後就關掉。fd 2 阻塞而沒人讀時，整個迴圈停在寫那一步；轉出時寫不出去的丟掉、
+//! 記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。
 //!
@@ -56,7 +57,8 @@ const LOG: &str = "[nexus-supervisor]";
 const LONGEST_SOCKET_NAME: &str = "/c18446744073709551615.sock";
 /// `sockaddr_un.sun_path` 的長度，含結尾的 NUL。
 const SUN_PATH: usize = 108;
-/// 收屍時 stderr 最多再讀多少：還握著寫端的後代一直寫，也不會卡住收屍。
+/// 收屍時 stderr 最多再讀多少：還握著寫端的後代一直寫，也不會卡住收屍。1 MiB 是 Linux `pipe-max-size` 的預設值，
+/// 管線沒被調得比它大時，leader 死前留在管線裡的一定讀得完。
 const STDERR_DRAIN: usize = 1 << 20;
 
 /// 拆除梯度走到哪一步。
@@ -367,6 +369,8 @@ impl Supervisor {
 
     /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
     /// 已經在收的（例如停機）照原本的理由。
+    ///
+    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
     fn poll_rss(&mut self) {
         for conversation in &mut self.conversations {
             let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
@@ -614,12 +618,12 @@ impl Supervisor {
                 conversation.turns = conversation.turns.saturating_add(1);
             }
         }
-        let marker = conversation.stderr.as_mut().is_some_and(|tap| {
+        let heap_message = conversation.stderr.as_mut().is_some_and(|tap| {
             tap.pump(STDERR_DRAIN);
-            tap.marker_seen()
+            tap.heap_message_near_end()
         });
         let oom = &mut self.oom;
-        let cause = memory::classify(conversation.cause, exit.signal, marker, || oom.claim());
+        let cause = memory::classify(conversation.cause, exit.signal, heap_message, || oom.claim());
         self.audit.record(&Record::Conversation {
             thread: &conversation.thread,
             pid,

@@ -10,7 +10,7 @@
 //!   同一個群組）、`close-stdout`、`ignore-eof`（stdin EOF 之後不結束）、`ignore-term`（再加上不理 SIGTERM）、
 //!   `wrong-bound`（回別的 thread id，取代正常的 `bound`）、`flood`（之後不停往 stdout 寫 `heartbeat`，不再讀 stdin）、`stderr-flood`（之後不停往 stderr 寫填充，不再讀 stdin）、
 //!   `heap`（往 stderr 寫 V8 heap 用完的訊息再 SIGABRT）、`alloc:<MiB>`（配置並碰過這麼多記憶體，留著不放）、`garbage`（送一個超過上限的框長，取代正常的 `bound`）、
-//!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充，不等人讀）。
+//!   `wait-go`（等 `<socket 路徑>.go` 出現）、`stderr-junk:<KiB>`（stderr 的管線放大到 1 MiB，寫這麼多填充、以換行結尾；KiB ≤ 1024 時不等人讀）。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`eof`、`sigterm`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -51,6 +51,8 @@ fn main() {
     let socket = args.iter().position(|a| a == "--socket").and_then(|i| args.get(i + 1)).expect("--socket").clone();
     let file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
     LOG_FD.store(std::os::fd::IntoRawFd::into_raw_fd(file), Ordering::SeqCst);
+    // SAFETY：不留 core 檔（`signal:6`、`heap` 會 abort）。
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &libc::rlimit { rlim_cur: 0, rlim_max: 0 }) };
     // SAFETY：裝 handler。
     unsafe { libc::signal(libc::SIGTERM, on_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t) };
     log(&format!("pid {}", std::process::id()));
@@ -142,9 +144,12 @@ fn main() {
                     ("stderr-junk", kib) => {
                         // SAFETY：改 fd 2 那條管線的容量。
                         assert!(unsafe { libc::fcntl(2, libc::F_SETPIPE_SZ, 1 << 20) } >= 1 << 20);
-                        std::io::stderr().lock().write_all(&vec![b'j'; kib.parse::<usize>().unwrap() << 10]).unwrap();
+                        let mut junk = vec![b'j'; (kib.parse::<usize>().unwrap() << 10) - 1];
+                        junk.push(b'\n');
+                        std::io::stderr().lock().write_all(&junk).unwrap();
                     }
-                    ("alloc", mib) => std::mem::forget(vec![1u8; mib.parse::<usize>().unwrap() << 20]),
+                    // black_box：免得最佳化把沒人讀的配置整個省掉。
+                    ("alloc", mib) => std::mem::forget(std::hint::black_box(vec![1u8; mib.parse::<usize>().unwrap() << 20])),
                     ("flood", _) => {
                         let batch: Vec<u8> = (0..65536).flat_map(|_| frame(&encode_conversation_report(&ConversationReport::Heartbeat))).collect();
                         let mut out = std::io::stdout().lock();

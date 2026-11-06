@@ -1,9 +1,10 @@
 //! 子行程：怎麼起、控制通道怎麼讀寫、stderr 怎麼轉送、怎麼收。
 
-use super::memory::HEAP_MARKER;
+use super::memory::{HEAP_LINE_PREFIX, HEAP_MARKER, HEAP_TAIL};
 use crate::protocol::{frame, take_frame, DecodeError};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -205,25 +206,35 @@ impl Chan {
     }
 }
 
-/// 子行程的 stderr：讀到的原樣寫到監督行程自己的 stderr，順便找 [`HEAP_MARKER`]（跨兩次讀也找得到）。
+/// 子行程的 stderr：讀到的原樣寫到監督行程自己的 stderr，順便逐行找 V8 的 heap 訊息（一行跨兩次讀也找得到）。
 pub struct StderrTap {
     read: Option<OwnedFd>,
-    /// 上一次讀到的最後幾個位元組，接在這一次前面找標記。
-    tail: Vec<u8>,
-    marker_seen: bool,
+    /// 還沒讀到換行的這一行，最多留 [`LINE_CAP`] 個位元組；超過的那一行不可能是 heap 訊息。
+    line: Vec<u8>,
+    line_overflow: bool,
+    /// 到目前為止讀到的位元組數。
+    total: u64,
+    /// 最後一則 heap 訊息那一行結尾時的 `total`。
+    heap_line_end: Option<u64>,
 }
+
+/// heap 訊息一行最長約 104 位元組（`Ineffective mark-compacts …` 那種）；512 留了餘量。
+const LINE_CAP: usize = 512;
 
 impl StderrTap {
     pub fn new(read: OwnedFd) -> StderrTap {
-        StderrTap { read: Some(read), tail: Vec::new(), marker_seen: false }
+        StderrTap { read: Some(read), line: Vec::new(), line_overflow: false, total: 0, heap_line_end: None }
     }
 
     pub fn poll_fd(&self) -> Option<libc::c_int> {
         self.read.as_ref().map(AsRawFd::as_raw_fd)
     }
 
-    pub fn marker_seen(&self) -> bool {
-        self.marker_seen
+    /// 最後一則以 [`HEAP_LINE_PREFIX`] 開頭、含 [`HEAP_MARKER`]、不超過 [`LINE_CAP`] 的行，結尾是否落在 stderr 最後 [`HEAP_TAIL`]
+    /// 位元組內。還沒換行的那一行會被當成結束：只在讀完之後（收屍時）呼叫。
+    pub fn heap_message_near_end(&mut self) -> bool {
+        self.end_line();
+        self.heap_line_end.is_some_and(|end| self.total - end <= HEAP_TAIL)
     }
 
     /// 讀到 EAGAIN 或讀滿 `budget` 為止，轉出去；讀到 EOF 或讀錯就關掉。
@@ -252,32 +263,66 @@ impl StderrTap {
         }
     }
 
-    fn scan(&mut self, chunk: &[u8]) {
-        if self.marker_seen {
-            return;
+    fn scan(&mut self, mut chunk: &[u8]) {
+        while !chunk.is_empty() {
+            let (part, newline) = match chunk.iter().position(|&b| b == b'\n') {
+                Some(i) => (&chunk[..i], true),
+                None => (chunk, false),
+            };
+            let room = LINE_CAP - self.line.len();
+            self.line.extend_from_slice(&part[..part.len().min(room)]);
+            self.line_overflow |= part.len() > room;
+            self.total += part.len() as u64;
+            chunk = &chunk[part.len()..];
+            if newline {
+                self.end_line();
+                self.total += 1;
+                chunk = &chunk[1..];
+            }
         }
-        self.tail.extend_from_slice(chunk);
-        if self.tail.windows(HEAP_MARKER.len()).any(|window| window == HEAP_MARKER) {
-            self.marker_seen = true;
-        }
-        let keep = HEAP_MARKER.len() - 1;
-        if self.tail.len() > keep {
-            self.tail.drain(..self.tail.len() - keep);
+    }
+
+    fn end_line(&mut self) {
+        let line = std::mem::take(&mut self.line);
+        if !std::mem::take(&mut self.line_overflow)
+            && line.starts_with(HEAP_LINE_PREFIX)
+            && line.windows(HEAP_MARKER.len()).any(|window| window == HEAP_MARKER)
+        {
+            self.heap_line_end = Some(self.total);
         }
     }
 }
 
-/// 寫到監督行程自己的 fd 2。fd 2 是阻塞的而讀者不讀時，整個監督行程停在這裡；EINTR 以外的錯就丟掉剩下的。
-fn write_stderr(mut bytes: &[u8]) {
+/// 寫不出去而丟掉的位元組，還沒報過的。
+static DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// 寫到監督行程自己的 fd 2。fd 2 是阻塞的而讀者不讀時，整個監督行程停在這裡。寫不出去（fd 2 非阻塞而滿了、或壞了）就丟掉剩下的、
+/// 記下丟了多少，等下一次寫得出去時先講一句。
+fn write_stderr(bytes: &[u8]) {
+    let dropped = DROPPED.load(Ordering::Relaxed);
+    if dropped > 0 {
+        let note = format!("[nexus-supervisor] 對話行程的 stderr 寫不出去，丟掉了 {dropped} 位元組\n");
+        if write_all(2, note.as_bytes()).is_ok() {
+            DROPPED.fetch_sub(dropped, Ordering::Relaxed);
+        }
+    }
+    if let Err(left) = write_all(2, bytes) {
+        DROPPED.fetch_add(left as u64, Ordering::Relaxed);
+    }
+}
+
+/// 寫完回 `Ok`；EINTR 以外的錯（含 EAGAIN）停下，回還沒寫出去的位元組數。
+fn write_all(fd: libc::c_int, mut bytes: &[u8]) -> Result<(), usize> {
     while !bytes.is_empty() {
-        // SAFETY：寫 fd 2。
-        let n = unsafe { libc::write(2, bytes.as_ptr().cast(), bytes.len()) };
+        // SAFETY：寫一個開著的 fd。
+        let n = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
         if n > 0 {
             bytes = &bytes[n as usize..];
         } else if !(n < 0 && errno() == libc::EINTR) {
-            return;
+            return Err(bytes.len());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,21 +361,57 @@ mod tests {
     }
 
     #[test]
-    fn stderr_tap_finds_the_marker_split_across_reads() {
-        let (_r, w) = pipe();
-        let mut tap = StderrTap::new(w);
-        tap.scan(b"FATAL ERROR: Reached heap limit Allocation failed - JavaScript he");
-        assert!(!tap.marker_seen());
-        tap.scan(b"ap out of memory\n");
-        assert!(tap.marker_seen());
-        assert!(tap.tail.len() < HEAP_MARKER.len());
+    fn stderr_tap_finds_the_heap_line_split_across_reads() {
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        tap.scan(b"<--- Last few GCs --->\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript he");
+        tap.scan(b"ap out of memory\n----- Native stack trace -----\n");
+        assert!(tap.heap_message_near_end());
 
-        let (_r, w) = pipe();
-        let mut tap = StderrTap::new(w);
-        for byte in b"xx JavaScript heap out of memory" {
+        // 一個位元組一個位元組來，最後一行沒換行也算。
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        for byte in b"FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory" {
             tap.scan(&[*byte]);
         }
-        assert!(tap.marker_seen());
+        assert!(tap.heap_message_near_end());
+    }
+
+    #[test]
+    fn heap_words_in_the_middle_of_a_line_or_long_ago_do_not_count() {
+        // 工具輸出被轉印出來，那句話夾在行中間。
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        tap.scan(b"tool said: FATAL ERROR: x - JavaScript heap out of memory\n");
+        assert!(!tap.heap_message_near_end());
+
+        // 真的印過，但之後又寫了超過 HEAP_TAIL 才死。
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        tap.scan(b"FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n");
+        // 那一行的換行加上之後的填充，剛好 HEAP_TAIL 還算。
+        tap.scan(&vec![b'x'; HEAP_TAIL as usize - 1]);
+        assert!(tap.heap_message_near_end());
+        tap.scan(b"y");
+        assert!(!tap.heap_message_near_end());
+
+        // 超長的一行就算開頭對也不算。
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        let mut long = b"FATAL ERROR: ".to_vec();
+        long.extend(vec![b'z'; LINE_CAP]);
+        long.extend_from_slice(b" JavaScript heap out of memory\n");
+        tap.scan(&long);
+        assert!(!tap.heap_message_near_end());
+
+        // 標記落在前 LINE_CAP 之內，但整行超長，也不算。
+        let (r, _w) = pipe();
+        let mut tap = StderrTap::new(r);
+        let mut long = b"FATAL ERROR: x - JavaScript heap out of memory ".to_vec();
+        long.extend(vec![b'z'; LINE_CAP]);
+        long.push(b'\n');
+        tap.scan(&long);
+        assert!(!tap.heap_message_near_end());
     }
 
     fn pipe() -> (OwnedFd, OwnedFd) {
