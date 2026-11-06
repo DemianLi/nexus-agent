@@ -558,7 +558,7 @@ impl Supervisor {
             self.on_conversation_readable(index);
             let conversation = &mut self.conversations[index];
             if conversation.stalled(now, stall) {
-                say!("對話行程 {} 已經 {} ms 沒有回報，殺掉", conversation.proc.pid, stall.as_millis());
+                say!("對話行程 {} 已經 {} ms 沒有回報（壓住時停住的時間不算），殺掉", conversation.proc.pid, stall.as_millis());
                 conversation.cause.get_or_insert(DeathCause::Stalled);
                 conversation.proc.kill_now();
             }

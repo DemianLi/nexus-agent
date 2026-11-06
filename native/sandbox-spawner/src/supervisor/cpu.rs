@@ -56,8 +56,7 @@ impl Guard {
         self.hold.is_some()
     }
 
-    /// 現在是停住的。
-    pub fn stopped(&self) -> bool {
+    fn stopped(&self) -> bool {
         matches!(self.hold, Some(Hold::Stopped { .. }))
     }
 
@@ -78,8 +77,11 @@ impl Guard {
         }
     }
 
-    /// 要收它了（拆除梯度、送 `drain`）：解除壓制，停住的時間照樣不算沉默。回 `true` 時它正停著，要送 SIGCONT。
+    /// 要收它了（拆除梯度、送 `drain`）：解除壓制，停住的時間照樣不算沉默；取樣重來，`drain` 沒收成時不拿壓制前的取樣算。
+    /// 回 `true` 時它正停著，要送 SIGCONT。
     pub fn release(&mut self, now: Instant) -> bool {
+        self.first = None;
+        self.last = None;
         match self.hold.take() {
             Some(Hold::Stopped { since, .. }) => {
                 self.paused += now.saturating_duration_since(since);
@@ -310,6 +312,8 @@ mod tests {
         // 放開之前停住的那 50 ms 照樣不算沉默。
         assert_eq!(guard.silence(s + 50 * MS, t), 2_000 * MS);
         assert!(!guard.release(s + 60 * MS));
+        // 放開之後取樣重來：不拿壓制前的取樣再判一次。
+        assert_eq!(guard.tick(s + 60 * MS, t, CONFIG), None);
     }
 
     #[test]
@@ -380,8 +384,7 @@ mod tests {
     #[test]
     fn schedstat_sums_run_and_wait() {
         assert_eq!(demand_ns(i32::MAX), None);
-        // SAFETY：只讀自己的 pid。
-        let me = unsafe { libc::getpid() };
+        let me = std::process::id() as libc::pid_t;
         if std::path::Path::new(&format!("/proc/{me}/schedstat")).exists() {
             assert!(demand_ns(me).is_some());
         }
