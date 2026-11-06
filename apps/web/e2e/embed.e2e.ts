@@ -7,7 +7,7 @@
  * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。經 `gotoDemo` 開的頁面，收尾時核對下行走了 mux、沒有退回 SSE。
  * 設 `NEXUS_E2E_SHOTS=<目錄>` 時，呼叫 `shot` 的情境存截圖。
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { build } from 'vite';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
+
+import { EMBED_UNAUTHORIZED_TEXT } from '../src/lib/embed-unauthorized';
 
 import { startE2eServe, type E2eServe, type ScriptTurn } from './serve';
 
@@ -1140,6 +1142,81 @@ describe('換票登入（#2370）', () => {
       .toBe(1);
     expect(await needed()).toHaveLength(1);
   });
+
+  test('被撤權：講沒有權限、不再重開下行；對應加回來、再換一次票就接回這一條（#2490）', async () => {
+    const { origin, ticket } = await startWithEmbedLogin([
+      { content: '撤權之前的回覆。' },
+      { content: '接回來之後的回覆。' },
+    ]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    /** 元件每一次想開下行：mux 升級、socket 上的 `open`、退回 SSE 的請求。 */
+    let attempts = 0;
+    /** 下行收到的 401：mux 上那條串流的 `head`，或 SSE 的回應。 */
+    let unauthorized = 0;
+    const isStream = (url: string) =>
+      /^\/embed\/threads\/[^/]+\/stream$/u.test(new URL(url).pathname);
+    page.on('websocket', (ws) => {
+      if (!ws.url().endsWith('/embed/threads/mux')) return;
+      attempts += 1;
+      ws.on('framesent', ({ payload }) => {
+        const frame = JSON.parse(String(payload)) as { t?: string; path?: string };
+        if (frame.t === 'open' && frame.path?.endsWith('/stream') === true) attempts += 1;
+      });
+      ws.on('framereceived', ({ payload }) => {
+        const frame = JSON.parse(String(payload)) as { t?: string; status?: number };
+        if (frame.t === 'head' && frame.status === 401) unauthorized += 1;
+      });
+    });
+    page.on('request', (request) => {
+      if (isStream(request.url())) attempts += 1;
+    });
+    page.on('response', (response) => {
+      if (isStream(response.url()) && response.status() === 401) unauthorized += 1;
+    });
+    await gotoBare(page, origin);
+    await signIn(page, await ticket());
+    await send(page, '你好');
+    await expect
+      .poll(() => transcript(page).getByText('撤權之前的回覆。').count(), { timeout: 30_000 })
+      .toBe(1);
+    await settled(page);
+
+    // 換票之前那次開線本來就是 401：只看撤權之後多出來的。
+    const unauthorizedBeforeRevoke = unauthorized;
+    const table = join(serve!.home, 'embed-identities.json');
+    const rewrite = async (mappings: unknown[], at: Date) => {
+      await writeFile(table, JSON.stringify({ version: 1, mappings }), { mode: 0o600 });
+      await utimes(table, at, at);
+    };
+    await rewrite(
+      [{ embedder: 'crm', subject: 'bob', userId: 'bob' }],
+      new Date(Date.now() + 60_000),
+    );
+    await expect
+      .poll(() => unauthorized, { timeout: 30_000 })
+      .toBeGreaterThan(unauthorizedBeforeRevoke);
+    const refusal = () => chat(page).getByText(EMBED_UNAUTHORIZED_TEXT).count();
+    await expect.poll(refusal, { timeout: 30_000 }).toBe(1);
+    const refusedAt = attempts;
+    await page.waitForTimeout(5_000);
+    expect(attempts).toBe(refusedAt);
+    expect(await refusal()).toBe(1);
+
+    await rewrite(
+      [
+        { embedder: 'crm', subject: 'alice', userId: 'alice' },
+        { embedder: 'crm', subject: 'bob', userId: 'bob' },
+      ],
+      new Date(Date.now() + 120_000),
+    );
+    await signIn(page, await ticket());
+    await expect.poll(refusal, { timeout: 30_000 }).toBe(0);
+    expect(await transcript(page).getByText('撤權之前的回覆。').count()).toBe(1);
+    await send(page, '回來了嗎');
+    await expect
+      .poll(() => transcript(page).getByText('接回來之後的回覆。').count(), { timeout: 30_000 })
+      .toBe(1);
+  }, 120_000);
 
   test('用過的票：signIn reject ticket_invalid', async () => {
     const { origin, ticket } = await startWithEmbedLogin([{ content: '用不到' }]);
