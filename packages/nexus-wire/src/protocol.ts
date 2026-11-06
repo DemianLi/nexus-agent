@@ -447,6 +447,12 @@ export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 export const THREAD_NOT_EMBEDDED = 'thread_not_embedded';
 
 /**
+ * 嵌入的對話框碰到一條不是這位使用者開的嵌入版 thread（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：別人的，或沒有擁有者的。
+ * **不是暫時失敗，重試沒用**：要開一條新對話。訊息不帶擁有者是誰。
+ */
+export const THREAD_NOT_OWNED = 'thread_not_owned';
+
+/**
  * 這個行程只放另一條 thread，或還沒綁上任何一條（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，每條對話一個行程）。
  * 只有對話行程會回，回給前台；前台照 thread 轉送，回了就是轉錯行程。**不是暫時失敗，重試沒用。**
  */
@@ -517,6 +523,7 @@ export type WireErrorCode =
   | typeof THREAD_IS_SUBAGENT
   | typeof THREAD_NOT_BOUND
   | typeof THREAD_NOT_EMBEDDED
+  | typeof THREAD_NOT_OWNED
   | typeof THREAD_HISTORY_TOO_DEEP
   | typeof THREAD_WRITER_HELD
   | typeof THREAD_ROOT_MISMATCH

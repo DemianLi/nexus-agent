@@ -861,9 +861,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 嵌入 `<nexus-chat>` 的系統（嵌入方）用自己後端手上的服務憑證，替一位已經登入它的使用者，向 serve 換一張只能用一次的短效登入票；
 瀏覽器裡的元件再拿這張票兌換一顆**只能打嵌入路由**的 cookie。
 
-**現況：寫了對應表也還換不到票。** 對應表（下面〈身分對應表〉）serve 啟動時就讀、就驗，但對話還沒有按人隔離：同一個嵌入方底下的人，
-知道 thread id 就打得開別人的嵌入對話。所以隔離上線之前，憑證對、表上有的人也回 `403 identity_rejected`（稽核的 `reason` 是 `identity_mapping_unavailable`）。
-兌換那一步做好了，但拿不到票。元件那一側（`el.signIn(ticket)`）還沒做。
+**現況**：表上有的人換得到票、兌換得到嵌入 cookie，只打得開自己開的對話（下面〈對話歸誰〉）。元件用 `el.signIn(ticket)` 兌換，見 [`embed-chat.md`](embed-chat.md) 的〈換票登入〉。快到期時元件通知宿主頁換新票（`nexus-ticket-needed`）還沒做。
 
 ### 設定
 
@@ -893,12 +891,12 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - **服務憑證檔**：serve 啟動時讀，沒有就建（目錄 `0700`、檔 `0600`，內容是 43 字元的 base64url 加換行）；權限過寬或內容認不得就**起不來**。把檔的內容交給嵌入方的後端，只放在後端，不能進瀏覽器。要換憑證就刪掉檔再重啟。
 - `id` 不能重複；每個嵌入方的憑證檔（含預設路徑）各自一個，也不能跟指標的 token 檔同一個：撞到就**起不來**，訊息指名兩邊。比的是絕對路徑，經 symlink 換了名字的同一個檔看不出來。
 - **有嵌入方就要有身分對應表**（下一節），沒有就**起不來**。
-- 啟動日誌印一行 `嵌入換票：開 POST /embed/exchange（嵌入方 crm，憑證在 …；稽核記在 …）；兌換 POST /embed/session，嵌入 cookie 900 秒；身分對應表 <路徑>（N 筆）；對話的擁有者隔離還沒上，換票一律拒絕`，**不印憑證本身**。沒有嵌入方時印 `嵌入換票：關（embed-login 沒有嵌入方）`。
+- 啟動日誌印一行 `嵌入換票：開 POST /embed/exchange（嵌入方 crm，憑證在 …；稽核記在 …）；兌換 POST /embed/session，嵌入 cookie 900 秒；身分對應表 <路徑>（N 筆）`，**不印憑證本身**。沒有嵌入方時印 `嵌入換票：關（embed-login 沒有嵌入方）`。
 
 ### 身分對應表
 
 #1827 D231：嵌入方說「這是我的使用者 alice」，要照管理者寫的表對到 nexus 的使用者代號，不在表上就拒；服務憑證外洩時，只能冒充表上的人。
-**現在 serve 只在啟動時讀、驗這張表，換票不查它**（見上面〈現況〉）。
+換票、兌換、每一個帶嵌入 cookie 的請求都查這張表。
 
 `<home>/embed-identities.json`，權限 `0600`，**由管理者寫**，serve 不會替你建。位置固定，不能在設定裡改：表是憑證層級的東西，不跟插件設定放在一起。
 
@@ -916,8 +914,12 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - `subject`：嵌入方換票時送的對方帳號，1 到 256 字，**照原樣比**（大小寫不同就是不同的人）。
 - `userId`：nexus 這邊的使用者代號，小寫英數開頭、只含小寫英數與 `. _ -`，最長 64 字。帳號系統（#1428）上線時，這一欄要遷成帳號 id。
 - 同一組 (`embedder`, `subject`) 只能出現一次；不同系統的帳號可以對到同一個 `userId`（同一個人從兩個系統進來）。
+  **從兩個系統進來看到的對話是分開的**：對話歸「使用者代號＋嵌入方」，同一個人從另一個系統進來看不到這邊的對話，見〈對話歸誰〉。
 - 不認得的欄位、多的欄位都算不合規，不默默忽略。檔不能超過 1 MiB。
 - **啟動時**：檔不在、權限過寬、不合規就**起不來**。訊息指名檔與第幾筆，**不印 `subject`、`userId` 的值**。
+- **跑著時改表不用重啟**：查表前先看檔的修改時間、大小、inode 與權限（最多每秒一次），變了才重讀。
+  - 從表上拿掉一個人：之後他換不到票，手上還沒到期的嵌入 cookie 最多晚一秒，下一個請求就是 `401`，已經開著的多工連線下一條串流也是。
+  - 改壞了（不合規、權限變寬、被刪）：**一律拒**，換票與兌換回 `403 identity_rejected`（稽核的 `reason` 是 `identity_table_invalid`），嵌入 cookie 一律 `401`；伺服器日誌記一行（原因變了再記），不印 `subject`、`userId` 的值。修好之後下一次查表自動恢復，日誌記一行恢復。
 
 ### 換票
 
@@ -933,7 +935,7 @@ Content-Type: application/json
 | --- | --- |
 | `200 { "ticket", "expiresAt" }` | 發票。`expiresAt` 是毫秒時間戳 |
 | `401 unauthorized` | 缺憑證、憑證錯、不是 `Bearer <值>` 的形狀：**一律同一個回應**，看不出是哪一種、也看不出有哪些嵌入方 |
-| `403 { "error": "identity_rejected" }` | 現在一律如此（稽核的 `reason` 是 `identity_mapping_unavailable`），見〈現況〉 |
+| `403 { "error": "identity_rejected" }` | 這個嵌入方的這個對方帳號不在對應表上（稽核的 `reason` 是 `not_mapped`），或對應表跑著時壞了（`identity_table_invalid`） |
 | `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好這兩個欄位、欄位空或超過 256 字、本文超過 4096 位元組 |
 | `503 { "error": "capacity" }` | 還沒兌換、還沒過期的票已有 1024 張 |
 | `500` | 稽核紀錄寫不進去：不發票 |
@@ -957,7 +959,7 @@ Content-Type: application/json
 
 | 回應 | 什麼時候 |
 | --- | --- |
-| `200 { "expiresAt" }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳 |
+| `200 { "expiresAt", "identityFingerprint", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`identityFingerprint` 見下面「身分指紋」；`threadId` 見下面「回到上一條」 |
 | `401 { "error": "ticket_invalid" }` | 沒有這張票、用過了、serve 重啟過：**一律同一個回應** |
 | `401 { "error": "ticket_expired" }` | 票過了 `ticketTtlSeconds` 才來兌換 |
 | `403 { "error": "identity_rejected" }` | 換票之後對應被撤掉、或對到了別的使用者：兌換時會再對一次 |
@@ -967,16 +969,30 @@ Content-Type: application/json
 
 - **嵌入 cookie 跟獨立頁面那顆是兩顆**：名字是 `nexus-embed-…`（獨立頁面是 `nexus-auth-…`），簽章用從同一把密鑰導出的另一把，值搬到對方的名字底下也驗不過。屬性同獨立頁面那顆（`HttpOnly`、`SameSite=Strict`、`Path=/`、不設 `Domain`），經代理照樣由 `proxy_cookie_path` 改成 `/nexus/`。
 - **只打得到 `/embed/…`**：帶嵌入 cookie 打獨立頁面（`/`、`/index.html`）、`/threads`、`/threads/mux` 都是 `401`，跟沒帶 cookie 一樣。獨立頁面那顆 cookie 照舊打得到嵌入路由。
-- cookie 裡帶著身分（嵌入方、對方帳號、nexus 使用者、session id 的 sha256），伺服器不留狀態：到期前一直有效，重啟 serve 也不會作廢。把某個嵌入方從設定拿掉再重啟，它簽出去的嵌入 cookie 就驗不過；要讓所有 cookie（含獨立頁面那顆）一起失效，換掉 home 裡的瀏覽器會話密鑰。
-- **續期**：快到期時嵌入方的後端用同一個 `sessionId` 再換一張票，元件再兌換一次；新的 cookie 同名，蓋掉舊的。
-- 多工連線（`/embed/threads/mux`）只在建立時看 cookie：兌換或續期之後要重開這條連線，新的 cookie 才帶得上。
+- cookie 裡帶著身分（嵌入方、對方帳號、nexus 使用者、session id 的 sha256），伺服器不留狀態：到期前、對應還在表上就一直有效，重啟 serve 也不會作廢。把某個嵌入方從設定拿掉再重啟，它簽出去的嵌入 cookie 就驗不過；要讓所有 cookie（含獨立頁面那顆）一起失效，換掉 home 裡的瀏覽器會話密鑰。
+- **續期**：快到期時嵌入方的後端用同一個 `sessionId` 再換一張票，元件再兌換一次；新的 cookie 同名，蓋掉舊的。元件每次兌換都重接一次，改接 serve 回的那一條，所以還沒落盤的那一條（剛按「新對話」、還沒講話）續期之後接不回來。
+- **身分指紋**（`identityFingerprint`）：讓元件分得出續期的是同一個人還是換了人。同一個嵌入方＋使用者代號就相同，跟「對話歸誰」的範圍一樣（換 `sessionId`、表上另一個對方帳號對到同一個使用者代號，都算同一個人）。它是用瀏覽器會話密鑰導出的另一把子鑰算的 HMAC：反查不回使用者代號，不同的 serve 算出來不同，換掉密鑰之後全部改變（那時所有 cookie 也一起失效）。元件還沒用它。
+- 多工連線（`/embed/threads/mux`）建立時看 cookie；連線上每開一條串流，都用那顆 cookie 再查一次對應表與對話歸誰。兌換或續期之後要重開這條連線，新的 cookie 才帶得上。
+- **回到上一條**：這一次登入（同一個人、同一個嵌入方、同一個 `sessionId`）開過、已經落盤的對話，`threadId` 是最新開的那一條，元件接著開它；沒開過、還沒落盤、會話不落盤、或查不到（伺服器日誌記一行）就不帶。換人登入、或同一個人換了 `sessionId`，都不帶。
+- **`sessionId` 要是猜不到的隨機值**：它記進稽核檔與對話（只記 sha256，不加鹽，兩邊同一個值），「回到上一條」也照它找。用使用者帳號、遞增的號碼這類猜得到的值，讀得到這兩份檔的人就反查得回來。
+
+### 對話歸誰
+
+#1827 D231 Q3。嵌入 cookie 開的新對話，記下開它的人（使用者代號、嵌入方、哪一次登入），寫在會話日誌的 header（格式 54），之後不改。
+
+- **嵌入 cookie 只打得開自己開的對話**：使用者代號與嵌入方都要對上；同一個人另一次登入（`sessionId` 不同）也打得開。不是自己的回 `thread_not_owned`，訊息不說是誰的。
+- **獨立頁面的 cookie（主機擁有者）打得開任何一條**；嵌入路由照舊只打得開嵌入版開的。主機擁有者從嵌入路由開的對話不記開它的人。
+- **沒記開它的人的嵌入版對話，嵌入 cookie 一律打不開**：主機擁有者從嵌入路由開的，和格式 54 以前開的都是。
+- 續接不補開它的人；分叉出來的不抄（只有主機擁有者分叉得了）。
+- 同一個新 id 兩個人同時開：先建起來的那位擁有它，晚到的回 `thread_not_owned`。
+- 元件收到 `thread_not_owned` 不重試，跟使用者說這不是他的對話、請按「新對話」。換過票的元件只接 `threadId`，不接瀏覽器上記著的那一條，所以換人登入不會碰到上一位的對話。
 
 ### 稽核紀錄
 
 `<home>/embed-audit.jsonl`，一行一筆、只追加、`0600`。過了服務憑證的每筆寫好（`datasync`）才回應；憑證錯的不等落盤。
 
 ```json
-{"v":1,"at":"2026-11-06T08:00:00.000Z","event":"exchange","outcome":"identity_rejected","embedder":"crm","subject":"alice","sessionIdSha256":"…","reason":"identity_mapping_unavailable"}
+{"v":1,"at":"2026-11-06T08:00:00.000Z","event":"exchange","outcome":"issued","embedder":"crm","subject":"alice","sessionIdSha256":"…","userId":"alice"}
 ```
 
 - 換票（`event: "exchange"`）的 `outcome`：`issued` 與 `capacity`（帶 `userId`）、`identity_rejected`、`bad_request`（帶 `reason`）、`capacity`、`unauthenticated`。

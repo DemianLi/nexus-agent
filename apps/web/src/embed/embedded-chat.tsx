@@ -62,27 +62,42 @@ function renderSubagentEntry(entry: ConversationEntry) {
   return <TranscriptEntry entry={entry} subagentNames={NO_NAMES} />;
 }
 
-/**
- * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
- *
- * @param agentBaseUrl - agent 的位置，從 `embed.js` 算（#2426）。`/livez` 在它底下，thread 那一族在它加上 `/embed` 底下（#2382）。
- * @param context - 宿主頁給的情境（#2365 第 7 點）：畫成標籤，每一句送出時附上當下的值（#2382）；沒有就不送。
- * @param hostTools - 宿主頁宣告的工具（#2374）：每一句送出時附上當下的值，同 `context`；沒有就不送。
- * @param onHostCall - 模型叫了 `hostTools` 裡的一支時呼叫，交給宿主頁執行。
- */
-export function EmbeddedChat({
-  agentBaseUrl,
-  client,
-  context,
-  hostTools,
-  onHostCall,
-}: {
+/** 換過登入票（`el.signIn()`，#2370）之後接哪一條：`seq` 每兌換一次就換一個，換了就整個重來。 */
+export interface EmbedSignIn {
+  readonly seq: number;
+  /** serve 說的「這一次登入最新開的那一條」，沒有就是這一端新生的。 */
+  readonly threadId: string;
+}
+
+interface ChatProps {
   readonly agentBaseUrl: string;
   readonly client: WireClient;
   readonly context: NexusChatContext | undefined;
   readonly hostTools: readonly HostToolDeclaration[] | undefined;
   readonly onHostCall: (detail: NexusHostToolDetail) => void;
-}) {
+}
+
+/**
+ * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
+ *
+ * 上一條從哪裡來看有沒有換過登入票：沒換過（這個元素還沒呼叫 `signIn`）讀寫 {@link EMBED_THREAD_KEY}；換過就只認 `signIn` 帶來的那一條，
+ * 這個鍵不讀也不寫。換票的是不同的人，記在瀏覽器上的那一條可能是上一個人的。
+ *
+ * @param agentBaseUrl - agent 的位置，從 `embed.js` 算（#2426）。`/livez` 在它底下，thread 那一族在它加上 `/embed` 底下（#2382）。
+ * @param context - 宿主頁給的情境（#2365 第 7 點）：畫成標籤，每一句送出時附上當下的值（#2382）；沒有就不送。
+ * @param hostTools - 宿主頁宣告的工具（#2374）：每一句送出時附上當下的值，同 `context`；沒有就不送。
+ * @param onHostCall - 模型叫了 `hostTools` 裡的一支時呼叫，交給宿主頁執行。
+ * @param signIn - 最近一次換票的結果；沒換過是 `undefined`。
+ */
+export function EmbeddedChat({ signIn, ...props }: ChatProps & { readonly signIn?: EmbedSignIn }) {
+  return signIn === undefined ? (
+    <RememberedChat {...props} />
+  ) : (
+    <SignedInChat key={signIn.seq} threadId={signIn.threadId} {...props} />
+  );
+}
+
+function RememberedChat(props: ChatProps) {
   const [threadId, setThreadId] = useState(() => recallThread(EMBED_THREAD_KEY).threadId);
   useEffect(() => {
     rememberThread(threadId, EMBED_THREAD_KEY);
@@ -90,12 +105,20 @@ export function EmbeddedChat({
   return (
     <EmbeddedConversation
       key={threadId}
-      agentBaseUrl={agentBaseUrl}
-      client={client}
+      {...props}
       threadId={threadId}
-      context={context}
-      hostTools={hostTools}
-      onHostCall={onHostCall}
+      onNewConversation={() => setThreadId(randomUuid())}
+    />
+  );
+}
+
+function SignedInChat({ threadId: first, ...props }: ChatProps & { readonly threadId: string }) {
+  const [threadId, setThreadId] = useState(first);
+  return (
+    <EmbeddedConversation
+      key={threadId}
+      {...props}
+      threadId={threadId}
       onNewConversation={() => setThreadId(randomUuid())}
     />
   );

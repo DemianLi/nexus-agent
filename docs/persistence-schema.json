@@ -4,7 +4,7 @@
     {
       "key": "SessionHeader",
       "kind": "header",
-      "digest": "e04afc7da27409dcc075e96043db4468039464876ceb84247e6fc959584f0a80",
+      "digest": "96bd0f041fb2f4aec011aa1efde651187eff546fc48286ad538a4db0aa561daa",
       "schema": {
         "root": 0,
         "nodes": [
@@ -32,171 +32,8 @@
                 "optional": true
               },
               {
-                "name": "id",
-                "type": 4,
-                "optional": false
-              },
-              {
-                "name": "isSeeded",
+                "name": "embedOrigin",
                 "type": 8,
-                "optional": true
-              },
-              {
-                "name": "modelEntryId",
-                "type": 4,
-                "optional": true
-              },
-              {
-                "name": "origin",
-                "type": 9,
-                "optional": true
-              },
-              {
-                "name": "parentSession",
-                "type": 4,
-                "optional": true
-              },
-              {
-                "name": "plugins",
-                "type": 10,
-                "optional": true
-              },
-              {
-                "name": "profile",
-                "type": 12,
-                "optional": true
-              },
-              {
-                "name": "version",
-                "type": 13,
-                "optional": false
-              },
-              {
-                "name": "workspaceRoot",
-                "type": 4,
-                "optional": true
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "commit",
-                "type": 2,
-                "optional": false
-              },
-              {
-                "name": "dirty",
-                "type": 5,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "union",
-            "types": [
-              3,
-              4
-            ]
-          },
-          {
-            "kind": "primitive",
-            "type": "null"
-          },
-          {
-            "kind": "primitive",
-            "type": "string"
-          },
-          {
-            "kind": "union",
-            "types": [
-              3,
-              6
-            ]
-          },
-          {
-            "kind": "primitive",
-            "type": "boolean"
-          },
-          {
-            "kind": "primitive",
-            "type": "number"
-          },
-          {
-            "kind": "literal",
-            "value": true
-          },
-          {
-            "kind": "literal",
-            "value": "subagent"
-          },
-          {
-            "kind": "array",
-            "element": 11
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "disabled",
-                "type": 6,
-                "optional": false
-              },
-              {
-                "name": "id",
-                "type": 4,
-                "optional": true
-              },
-              {
-                "name": "name",
-                "type": 4,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "embed"
-          },
-          {
-            "kind": "literal",
-            "value": 53
-          }
-        ]
-      }
-    },
-    {
-      "key": "JsonlHeaderLine",
-      "kind": "header",
-      "digest": "91c6a89347f6e605919ab901f31c8554dcb5bc9420805530e2ae2fde59dbee2f",
-      "schema": {
-        "root": 0,
-        "nodes": [
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "build",
-                "type": 1,
-                "optional": true
-              },
-              {
-                "name": "configHash",
-                "type": 4,
-                "optional": true
-              },
-              {
-                "name": "createdAt",
-                "type": 7,
-                "optional": false
-              },
-              {
-                "name": "cwd",
-                "type": 4,
                 "optional": true
               },
               {
@@ -206,11 +43,6 @@
               },
               {
                 "name": "isSeeded",
-                "type": 8,
-                "optional": true
-              },
-              {
-                "name": "migratedFrom",
                 "type": 9,
                 "optional": true
               },
@@ -225,24 +57,24 @@
                 "optional": true
               },
               {
-                "name": "parentSession",
-                "type": 4,
-                "optional": true
-              },
-              {
-                "name": "plugins",
+                "name": "owner",
                 "type": 11,
                 "optional": true
               },
               {
-                "name": "profile",
-                "type": 13,
+                "name": "parentSession",
+                "type": 4,
                 "optional": true
               },
               {
-                "name": "type",
+                "name": "plugins",
+                "type": 12,
+                "optional": true
+              },
+              {
+                "name": "profile",
                 "type": 14,
-                "optional": false
+                "optional": true
               },
               {
                 "name": "version",
@@ -304,6 +136,237 @@
             "type": "number"
           },
           {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "embedder",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "loginSessionSha256",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "subagent"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "userId",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 13
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "disabled",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "name",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "embed"
+          },
+          {
+            "kind": "literal",
+            "value": 54
+          }
+        ]
+      }
+    },
+    {
+      "key": "JsonlHeaderLine",
+      "kind": "header",
+      "digest": "9b58747b97c44275d593e33f8c76451e79da95c93458ccb258df9ea0d2989d67",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "build",
+                "type": 1,
+                "optional": true
+              },
+              {
+                "name": "configHash",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "createdAt",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "cwd",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "embedOrigin",
+                "type": 8,
+                "optional": true
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "isSeeded",
+                "type": 9,
+                "optional": true
+              },
+              {
+                "name": "migratedFrom",
+                "type": 10,
+                "optional": true
+              },
+              {
+                "name": "modelEntryId",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "origin",
+                "type": 11,
+                "optional": true
+              },
+              {
+                "name": "owner",
+                "type": 12,
+                "optional": true
+              },
+              {
+                "name": "parentSession",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "plugins",
+                "type": 13,
+                "optional": true
+              },
+              {
+                "name": "profile",
+                "type": 15,
+                "optional": true
+              },
+              {
+                "name": "type",
+                "type": 16,
+                "optional": false
+              },
+              {
+                "name": "version",
+                "type": 17,
+                "optional": false
+              },
+              {
+                "name": "workspaceRoot",
+                "type": 4,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "commit",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "dirty",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              4
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "null"
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              6
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "embedder",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "loginSessionSha256",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
             "kind": "literal",
             "value": true
           },
@@ -333,8 +396,19 @@
             "value": "subagent"
           },
           {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "userId",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
             "kind": "array",
-            "element": 12
+            "element": 14
           },
           {
             "kind": "object",
@@ -367,7 +441,7 @@
           },
           {
             "kind": "literal",
-            "value": 53
+            "value": 54
           }
         ]
       }
@@ -7823,7 +7897,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionBuild"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:670"
+        "packages/nexus-core/src/session-store.ts:681"
       ]
     },
     {
@@ -8360,7 +8434,7 @@
         "packages/nexus-core/src/session-store.ts#SessionHeaderBuildMetadata"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:695"
+        "packages/nexus-core/src/session-store.ts:724"
       ]
     },
     {
@@ -8431,15 +8505,6 @@
       "sources": []
     },
     {
-      "digest": "91c6a89347f6e605919ab901f31c8554dcb5bc9420805530e2ae2fde59dbee2f",
-      "names": [
-        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
-      ],
-      "sources": [
-        "apps/harness/src/jsonl-session-store.ts:573"
-      ]
-    },
-    {
       "digest": "9208c016a6f294e1b938cdda50232c7a72c220f668aa23ba0c8743e69159f279",
       "names": [],
       "sources": [
@@ -8479,10 +8544,28 @@
       "sources": []
     },
     {
+      "digest": "96bd0f041fb2f4aec011aa1efde651187eff546fc48286ad538a4db0aa561daa",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:737"
+      ]
+    },
+    {
       "digest": "970ba1b320ec4813b31c64f20b9922c955526173248aedde372d6d6779a1e329",
       "names": [],
       "sources": [
         "packages/nexus-core/src/inbox.ts:72"
+      ]
+    },
+    {
+      "digest": "988b31de49ef38c128fa771e5708936d542ff2fdbe61061d90defabe82e6f612",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionOwner"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:708"
       ]
     },
     {
@@ -8514,6 +8597,15 @@
       "digest": "99744a282618c62b47d51a8ea24adbacae77500e5bbf3e8ee9a8e10980d92c48",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "9b58747b97c44275d593e33f8c76451e79da95c93458ccb258df9ea0d2989d67",
+      "names": [
+        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
+      ],
+      "sources": [
+        "apps/harness/src/jsonl-session-store.ts:573"
+      ]
     },
     {
       "digest": "9b595015033039754b43ef831a701d4cdcc0cf548c41dd26f9cc4425bc08fa43",
@@ -8947,11 +9039,6 @@
       "sources": []
     },
     {
-      "digest": "cce2bd0d23982c06ebed916a142e8601a3a90c1e7ff69883305f35ef15074edb",
-      "names": [],
-      "sources": []
-    },
-    {
       "digest": "cd756735b6b5ea947876953d5ad12811835066bb0058ddc2f19882e545c00966",
       "names": [],
       "sources": []
@@ -9093,6 +9180,15 @@
       "sources": []
     },
     {
+      "digest": "dc7d206b96edf2a7776aca81f8d60ef8a053646807330991b9264cae4d1af8ec",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionEmbedOrigin"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:713"
+      ]
+    },
+    {
       "digest": "dcd249366e892c36b59d7fd447cd0155cb62e2b50a31fb00df4e4ee727cb2633",
       "names": [],
       "sources": []
@@ -9159,15 +9255,6 @@
       "digest": "dfca5f65f3fe59c703db26f2a08988cb9a11ac420772ebff9ff47ae34a2f9f86",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "e04afc7da27409dcc075e96043db4468039464876ceb84247e6fc959584f0a80",
-      "names": [
-        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
-      ],
-      "sources": [
-        "packages/nexus-core/src/session-store.ts:708"
-      ]
     },
     {
       "digest": "e067ef685615bd0f091983d0acb1a57036a05fbdd8eabad445f4b88b17c9effc",
@@ -9288,7 +9375,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionPluginRow"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:682"
+        "packages/nexus-core/src/session-store.ts:693"
       ]
     },
     {
@@ -9323,6 +9410,11 @@
       "sources": [
         "packages/nexus-core/src/session-log.ts:530"
       ]
+    },
+    {
+      "digest": "f68795351edd5cac2838ef517568746baf56f9cbba9d124e80d2a56cdc93c1ff",
+      "names": [],
+      "sources": []
     },
     {
       "digest": "f6a8e5377dc38c49507efa4861a896c272280b265b36f060ebdf1fc4008a1a49",

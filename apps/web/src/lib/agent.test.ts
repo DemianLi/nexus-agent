@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agentBaseUrl, agentMuxUrl, createAgentClient, mountedMuxFetch } from './agent.js';
+import {
+  agentBaseUrl,
+  agentMuxUrl,
+  createAgentClient,
+  createAgentConnection,
+  mountedMuxFetch,
+} from './agent.js';
 
 /**
  * 瀏覽器這一端驗的是：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
@@ -102,7 +108,19 @@ class FakeSocket {
     this.sent.push(JSON.parse(text) as { t: string; path?: string });
   }
 
-  close() {}
+  closed = false;
+  readonly #closeListeners: (() => void)[] = [];
+
+  addEventListener(type: string, listener: () => void) {
+    if (type === 'close') this.#closeListeners.push(listener);
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.onclose?.({});
+    for (const listener of this.#closeListeners) listener();
+  }
 }
 
 describe('mountedMuxFetch', () => {
@@ -143,5 +161,32 @@ describe('mountedMuxFetch', () => {
     });
     await fetch('/nexus/threads/t1/stream?x=1', { method: 'POST', body: '{}' });
     expect(seen).toEqual(['http://h/nexus/threads/t1/stream?x=1']);
+  });
+});
+
+describe('createAgentConnection 換 socket（#2370）', () => {
+  afterEach(() => {
+    FakeSocket.made = [];
+    vi.unstubAllGlobals();
+  });
+
+  it('renewStreams 關掉舊的 socket，下一條下行開新的一條', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const { client, renewStreams } = createAgentConnection({ baseUrl: '', routePrefix: '/embed' });
+    const first = client.openEvents('t1');
+    first.catch(() => undefined);
+    await vi.waitFor(() => expect(FakeSocket.made[0]?.sent.length).toBe(1));
+    renewStreams();
+    expect(FakeSocket.made[0]?.closed).toBe(true);
+    await expect(first).rejects.toThrow();
+    void client.openEvents('t1').catch(() => undefined);
+    await vi.waitFor(() => expect(FakeSocket.made[1]?.sent.length).toBe(1));
+    expect(FakeSocket.made).toHaveLength(2);
+    expect(FakeSocket.made[1]?.closed).toBe(false);
+  });
+
+  it('注入 fetch 時沒有 socket，renewStreams 什麼都不做', () => {
+    const { renewStreams } = createAgentConnection({ fetch: async () => new Response('') });
+    expect(() => renewStreams()).not.toThrow();
   });
 });

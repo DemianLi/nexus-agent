@@ -15,7 +15,7 @@ serve 在 `/nexus/` 底下供應兩個檔：
 
 登入：使用者先開 serve 啟動時印的登入網址（`https://<宿主頁的網域>/nexus/?token=…`），serve 設好會話 cookie 後轉到 `/nexus/`，也就是獨立頁面；之後開宿主頁，元件就帶著這個 cookie。cookie 只送給 `/nexus/`，宿主頁自己的路徑收不到。
 
-換票登入（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：宿主系統的後端用服務憑證打 `POST /nexus/embed/exchange`，替使用者換一張一次性的登入票；元件拿票打 `POST /nexus/embed/session`，兌換一顆只打得到嵌入路由的 cookie，見 [`operations.md`](operations.md) 的〈嵌入方換票登入〉。**現在還用不了**：身分對應表（管理者寫的 `<home>/embed-identities.json`）serve 會讀，但對話按人隔離之前換票一律被拒；元件也還沒有收票的入口。在那之前照上一段的方式登入。
+換票登入（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：宿主系統的後端用服務憑證打 `POST /nexus/embed/exchange`，替使用者換一張一次性的登入票；元件拿票打 `POST /nexus/embed/session`，兌換一顆只打得到嵌入路由的 cookie，見 [`operations.md`](operations.md) 的〈嵌入方換票登入〉。元件收票的入口是 `signIn`，見〈[換票登入](#換票登入)〉。
 
 同源的代價：宿主頁上執行的任何腳本，都能以使用者的身分打 `/nexus/` 底下的 API。cookie 是 `HttpOnly`，腳本讀不到它，但發得出帶著它的請求。宿主頁載入哪些腳本，跟元件一樣要信得過。
 
@@ -87,6 +87,33 @@ chat.addEventListener('nexus-host-tool', (event) => {
 上限：每次至多 8 支；名字合 `^[a-z][a-z0-9_]{0,31}$`、不重名；說明非空、至多 500 字；`parameters` 是 `type: 'object'` 的 JSON Schema，序列化後至多 4 KiB；
 整份序列化後至多 16 KiB；交回的結果序列化後至多 4,000 字。宣告超過上限或形狀不對，元件不收、在 console 講一聲，原本的那份不動；結果超過上限，模型拿到的是一則錯誤。
 都不截斷。設成 `null` 或空陣列就清掉。
+
+## 換票登入
+
+宿主系統已經有自己的登入時，不用讓使用者再開一次登入網址：宿主系統的後端替這位使用者換一張一次性的登入票（[`operations.md`](operations.md) 的〈嵌入方換票登入〉），交給頁面，頁面呼叫 `signIn`：
+
+```ts
+const chat = document.createElement('nexus-chat');
+const { expiresAt } = await chat.signIn(ticket); // 毫秒時間戳：嵌入 cookie 什麼時候失效
+container.append(chat);
+```
+
+- **只有方法，沒有屬性**：票不寫進 DOM，元件也不把它存在任何地方。服務憑證只放在宿主系統的後端，不能進瀏覽器。
+- **成功之後**：元件改接這位使用者這一次登入最新開的那一條對話（serve 在兌換的回應裡給），沒有就開一條新的。下行的連線改開新的一條，舊的關掉：連線建立時才看 cookie。
+- **換過票就不用瀏覽器記的上一條**：沒換過票時，元件把上一條記在 `localStorage` 的 `nexus.embed.threads.current`，下次打開接著它；換過票就不讀也不寫這個鍵，每次換票成功都把它清掉。同一台電腦換人登入，不會接到上一個人的對話。
+- **先換票再放進頁面**：放進頁面的那一刻還沒換過票，元件就照沒換過票的方式先接上一條，換票之後才改過來。
+- **失敗時** reject 一個 `NexusSignInError`，畫面不動。看 `code` 決定下一步：
+
+| `code` | 什麼時候 | 宿主頁怎麼辦 |
+| --- | --- | --- |
+| `ticket_invalid` | 票不存在、用過了（一張票只能兌換一次），或 serve 重啟過 | 再換一張票 |
+| `ticket_expired` | 票換來之後太久才兌換（預設 60 秒） | 再換一張票 |
+| `identity_rejected` | 這位使用者不在 serve 的身分對應表上，或對應被撤了 | 請管理者查對應表；再換票也一樣 |
+| `sign_in_failed` | 其他：票不是非空字串（不發請求）、網路斷了、serve 沒開換票、回應看不懂 | 看 `status` 與 `message` |
+
+續期就是再換一張票、再呼叫一次 `signIn`。每一次 `signIn` 都重接一次：下行重開，改接 serve 回的那一條（沒有就開新的），所以畫面上這一條還沒落盤（例如剛按「新對話」、還沒講話）時，續期之後接不回它；一輪正在跑時續期，下行會重開、重讀歷史。快到期時元件發事件通知宿主頁換票，還沒做（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）。
+
+換過票的元件只打得開這位使用者自己開的對話。碰到別人的，元件說「這不是你的對話」，請使用者按「新對話」，不會一直重試。
 
 ## 可覆寫的外觀
 
@@ -316,5 +343,5 @@ Vite 不改 Origin。key 用 `^` 開頭的 RegExp：字串 key 比的是前綴�
 ### 代價與限制
 
 - **只限開發。** 代理對區網開放之後，同網段任何人都能帶 `Host: localhost` 打進來，擋人的只剩 token；走 HTTP 時，token 與 cookie 在區網上是明文。
-- 多位工程師共用同一顆 token；一人一顆要等 [#2370](https://github.com/DemianLi/nexus-agent/issues/2370)。
+- 多位工程師共用同一顆 token。要分人，就要設好嵌入方與身分對應表，由後端替每個人換票，見〈[換票登入](#換票登入)〉。
 - 兩台機器之間的防火牆要放行代理的 port。

@@ -36,6 +36,8 @@ const ALLOWED_HEADER_KEYS: ReadonlySet<string> = new Set([
   'origin',
   'isSeeded',
   'profile',
+  'owner',
+  'embedOrigin',
 ]);
 /** 有的話要是字串的那幾格。 */
 const OPTIONAL_STRING_KEYS = [
@@ -60,7 +62,7 @@ function isCount(value: unknown): value is number {
  *
  * **白名單讀盤也能用同一份**（#1549）：它是任何一版寫過的鍵的聯集。`StoredSessionHeader` 從第一版起只加不減，50 以前是
  * 10 個鍵（#1549 對 `session-store.ts` 的歷次 commit 逐版核過），51 加了 `origin`、`isSeeded`（#1579；升版的理由正是 50 的這份白名單
- * 會把它們判成壞檔），53 加了 `profile`（#2367，只准 `'embed'`）。之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下
+ * 會把它們判成壞檔），53 加了 `profile`（#2367，只准 `'embed'`），54 加了 `owner`、`embedOrigin`（#2370，兩格同進同出、只跟 `profile: 'embed'` 一起）。之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下
  * （讀方開了 `acceptNewer` 讀比這一版新的，整支不跑，見 `parseHeader`）。
  *
  * `origin` 只准 `'subagent'`。`isSeeded` 只准 `true`：只在 true 時寫（`StoredSessionHeader.isSeeded`），落盤的 `false` 不是任何一版
@@ -99,6 +101,7 @@ export function assertStoredHeaderFields(header: unknown): void {
   if (header['profile'] !== undefined && header['profile'] !== 'embed') {
     throw new TypeError('session header 的 profile 只能是 "embed"');
   }
+  assertOwnerFields(header);
   const { build } = header;
   if (build !== undefined) {
     if (
@@ -128,6 +131,40 @@ export function assertStoredHeaderFields(header: unknown): void {
         );
       }
     });
+  }
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/u;
+
+/** `owner` 與 `embedOrigin`（#2370）：兩格同進同出，只跟 `profile: 'embed'` 一起；形狀照 `StoredSessionOwner`、`StoredSessionEmbedOrigin`。 */
+function assertOwnerFields(header: Record<string, unknown>): void {
+  const { owner, embedOrigin } = header;
+  if (owner === undefined && embedOrigin === undefined) return;
+  if (owner === undefined || embedOrigin === undefined) {
+    throw new TypeError('session header 的 owner 與 embedOrigin 要一起出現');
+  }
+  if (header['profile'] !== 'embed') {
+    throw new TypeError('session header 帶 owner 就要帶 profile: "embed"');
+  }
+  if (
+    !isRecord(owner) ||
+    Object.keys(owner).length !== 1 ||
+    typeof owner['userId'] !== 'string' ||
+    owner['userId'] === ''
+  ) {
+    throw new TypeError('session header 的 owner 要是 {userId: 非空字串}');
+  }
+  if (
+    !isRecord(embedOrigin) ||
+    Object.keys(embedOrigin).length !== 2 ||
+    typeof embedOrigin['embedder'] !== 'string' ||
+    embedOrigin['embedder'] === '' ||
+    typeof embedOrigin['loginSessionSha256'] !== 'string' ||
+    !SHA256_HEX.test(embedOrigin['loginSessionSha256'])
+  ) {
+    throw new TypeError(
+      'session header 的 embedOrigin 要是 {embedder: 非空字串, loginSessionSha256: 64 個小寫十六進位字元}',
+    );
   }
 }
 

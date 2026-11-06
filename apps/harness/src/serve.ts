@@ -36,6 +36,8 @@ import type { AgentLoopKind, HistoryShadowTally } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
 import { isThreadsPath, withoutEmbedPrefix } from './embed-profile.js';
 import type { ThreadProfile } from './embed-profile.js';
+import { headerFieldsOf, latestThreadOfLogin, ownerOfHeader } from './embed-thread-owner.js';
+import type { EmbedThreadOwner } from './embed-thread-owner.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -195,13 +197,8 @@ import { assertDistinctSecretFiles, loadOrCreateBearerTokenFile } from './bearer
 import { EMBED_IDENTITIES_FILE, EmbedIdentityTable } from './embed-identities.js';
 import { EMBED_AUDIT_FILE, openEmbedAudit } from './embed-audit.js';
 import type { EmbedAudit } from './embed-audit.js';
-import {
-  createEmbedLogin,
-  EMBED_EXCHANGE_PATH,
-  EmbedTicketStore,
-  rejectAllIdentities,
-} from './embed-login.js';
-import type { EmbedderCredential, EmbedIdentityResolver, EmbedLogin } from './embed-login.js';
+import { createEmbedLogin, EMBED_EXCHANGE_PATH, EmbedTicketStore } from './embed-login.js';
+import type { EmbedderCredential, EmbedLogin } from './embed-login.js';
 import { createEmbedSession, EMBED_SESSION_PATH, EmbedSessionCookies } from './embed-session.js';
 import type { EmbedSession } from './embed-session.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
@@ -563,11 +560,6 @@ export interface RunServeOptions {
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
-  /**
-   * 嵌入換票的「對方帳號 → nexus 身分」（#2370），只給測試用。產品路徑不設，用 `rejectAllIdentities`：對應表（`embed-identities.ts`）
-   * 照樣在啟動時讀、驗，但不拿來放行：對話還沒按擁有者隔離。TODO(#2370)：隔離做好之後改交對應表。
-   */
-  readonly embedIdentity?: EmbedIdentityResolver;
 }
 
 /**
@@ -1224,17 +1216,30 @@ async function startServer(
   // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
   const telemetrySharing = trial.telemetrySharing;
   // 對話行程不建（#2338）：登入只在前台，它用入口驗過目錄的那一支；也就不讀瀏覽器會話密鑰。
-  // 嵌入 cookie（#2370）只在有嵌入方時驗，只認設定裡還在的嵌入方：拿掉嵌入方重啟之後，它還沒到期的嵌入 cookie 也一起失效。
+  // 身分對應表（#1827 D231）：有嵌入方就要有，檔不在、權限過寬、不合規都起不來。只在前台讀：換票與嵌入 cookie 都只在前台。
+  // 換票、兌換、驗嵌入 cookie 都查它。
+  const embedIdentitiesFile = join(resolveHarnessHome(env), EMBED_IDENTITIES_FILE);
+  const embedIdentityTable =
+    options.conversation !== undefined || embedLoginConfig.embedders.length === 0
+      ? undefined
+      : EmbedIdentityTable.load(
+          embedIdentitiesFile,
+          embedLoginConfig.embedders.map(({ id }) => id),
+          { warn },
+        );
+  // 嵌入 cookie（#2370）只在有嵌入方時驗，只認設定裡還在的嵌入方、表上還在的對應：拿掉嵌入方重啟之後，或從表上拿掉一個人之後，
+  // 還沒到期的嵌入 cookie 也一起失效。
   let embedCookies: EmbedSessionCookies | undefined;
   const listening: ServeListening =
     options.conversation === undefined
       ? await (async () => {
           const secret = await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env));
-          if (embedLoginConfig.embedders.length > 0) {
+          if (embedIdentityTable !== undefined) {
             embedCookies = new EmbedSessionCookies(
               secret,
               embedLoginConfig.cookieMaxAgeSeconds,
               embedLoginConfig.embedders.map((embedder) => embedder.id),
+              embedIdentityTable,
             );
           }
           return {
@@ -1277,16 +1282,6 @@ async function startServer(
       }),
     });
   }
-  // 身分對應表（#1827 D231）：有嵌入方就要有，檔不在、權限過寬、不合規都起不來。
-  const embedIdentitiesFile = join(resolveHarnessHome(env), EMBED_IDENTITIES_FILE);
-  const embedIdentityTable =
-    embedders.length === 0
-      ? undefined
-      : EmbedIdentityTable.load(
-          embedIdentitiesFile,
-          embedders.map(({ id }) => id),
-          { warn },
-        );
   let embedAudit: EmbedAudit | undefined;
   let embedRoutes: { readonly login: EmbedLogin; readonly session: EmbedSession } | undefined;
   const webDist = options.webDist ?? resolveWebDist();
@@ -1433,7 +1428,7 @@ async function startServer(
 
   /**
    * 冷讀一條會話的 header（`open(id, 'read')`：不拿租約、不寫檔）；**只吞「找不到」**（回 `undefined`），其他讀不了的原樣拋，
-   * 不吞成別的意思。子代理會話閘（#1544）的兩個入口（`createAgent` 的第一道、`run.cancel` 的檢查）與嵌入連線的 `storedProfile`（#2367）共用。
+   * 不吞成別的意思。子代理會話閘（#1544）的兩個入口（`createAgent` 的第一道、`run.cancel` 的檢查）與嵌入連線的 `storedAccess`（#2367、#2370）共用。
    */
   const coldSessionHeader = async (threadId: string): Promise<StoredSessionHeader | undefined> => {
     if (sessionStore === undefined) return undefined;
@@ -1577,14 +1572,23 @@ async function startServer(
         return header !== undefined && isSubagentSessionHeader(header);
       },
     }),
-    // 嵌入連線碰到還沒載進記憶體的 thread 時問這一支（#2367）：只冷讀 header。讀不了的照拋，handler 回跟獨立頁面一樣的碼（#2385）。
-    storedProfile: async (threadId: string) => {
+    // 嵌入連線碰到還沒載進記憶體的 thread 時問這一支（#2367、#2370）：只冷讀 header。讀不了的照拋，handler 回跟獨立頁面一樣的碼（#2385）。
+    storedAccess: async (threadId: string) => {
       const header = await coldSessionHeader(threadId).catch(noteRefusedLog(threadId));
       if (header === undefined) return undefined;
-      return header.profile === 'embed' ? 'embed' : 'full';
+      const owner = ownerOfHeader(header);
+      return {
+        profile: header.profile === 'embed' ? ('embed' as const) : ('full' as const),
+        ...(owner !== undefined && { owner }),
+      };
     },
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
-    createAgent: async (threadId: string, fork?: ThreadForkSeed, requested?: ThreadProfile) => {
+    createAgent: async (
+      threadId: string,
+      fork?: ThreadForkSeed,
+      requested?: ThreadProfile,
+      requestedOwner?: EmbedThreadOwner,
+    ) => {
       // **子代理的會話不是 thread**（#1544；判準見 core 的 `isSubagentSessionHeader`，分叉不算，#1579）。
       // **必須在 `resumeThread` 之前、而且只冷讀 header**（`open(…, 'read')`，不拿租約、不寫檔）：續接會先拿寫租約、再把當掉那一輪的
       // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的
@@ -1634,6 +1638,15 @@ async function startServer(
             ? 'embed'
             : 'full'
           : (requested ?? 'full');
+      // **擁有者也綁在 thread 上**（#2370）：落盤過的照 header；分叉的不抄（只有主機擁有者分叉得了），新的記開它的嵌入身分。
+      const createdOwner =
+        sourceHeader === undefined && profile === 'embed' ? requestedOwner : undefined;
+      const owner =
+        fork !== undefined
+          ? undefined
+          : history !== undefined
+            ? ownerOfHeader(history.header)
+            : createdOwner;
       let handedOff = false;
       const release = async (): Promise<void> => {
         if (handedOff) return;
@@ -1892,6 +1905,7 @@ async function startServer(
         // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。嵌入版沒有，缺席。
         ...(subagentKinds !== undefined && { subagentKinds }),
         profile,
+        ...(owner !== undefined && { owner }),
         // `/名字` 叫得出的技能（#1574 N0929）：來源、backend 與「有沒有磁碟根」都讀這條 thread 的 fs 把手（#1919），在 `skill.list` 打進來的當下。
         skillCatalog: createSkillCatalog({
           fs: () => tree.threadSessions.fsForThread(threadId),
@@ -1977,6 +1991,7 @@ async function startServer(
                     rootLineage: { parentSession: fork.sourceHeader.id, isSeeded: true },
                   }),
                   ...(profile === 'embed' && { rootProfile: profile }),
+                  ...(createdOwner !== undefined && { rootOwner: headerFieldsOf(createdOwner) }),
                   // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
                   // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
                   warn: (message) => {
@@ -2014,11 +2029,11 @@ async function startServer(
   let server: WireServer;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
-    if (embedders.length > 0 && embedCookies !== undefined) {
+    if (embedIdentityTable !== undefined && embedCookies !== undefined) {
       embedAudit = await openEmbedAudit(join(resolveHarnessHome(env), EMBED_AUDIT_FILE), {
         onError: (error) => warn(`[嵌入換票] 稽核紀錄寫不進去：${String(error)}`),
       });
-      const identity = options.embedIdentity ?? rejectAllIdentities;
+      const identity = embedIdentityTable;
       const tickets = new EmbedTicketStore(embedLoginConfig.ticketTtlSeconds * 1000);
       embedRoutes = {
         login: createEmbedLogin({
@@ -2036,6 +2051,10 @@ async function startServer(
           audit: embedAudit,
           trustedHosts: invocation.trustedHosts,
           warn,
+          ...(sessionStore !== undefined && {
+            latestThread: (owner: EmbedThreadOwner) =>
+              latestThreadOfLogin(sessionStore, cwd, owner),
+          }),
         }),
       };
     }
@@ -2169,11 +2188,7 @@ async function startServer(
               '；',
             )}；稽核記在 ${join(resolveHarnessHome(env), EMBED_AUDIT_FILE)}）；兌換 POST ${EMBED_SESSION_PATH}，嵌入 cookie ${String(
             embedLoginConfig.cookieMaxAgeSeconds,
-          )} 秒；身分對應表 ${embedIdentitiesFile}（${String(embedIdentityTable?.size ?? 0)} 筆）；${
-            options.embedIdentity === undefined
-              ? '對話的擁有者隔離還沒上，換票一律拒絕'
-              : '身分對應由呼叫端提供'
-          }`,
+          )} 秒；身分對應表 ${embedIdentitiesFile}（${String(embedIdentityTable?.size ?? 0)} 筆）`,
     );
   }
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
