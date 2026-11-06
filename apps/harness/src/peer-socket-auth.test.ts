@@ -37,7 +37,7 @@ const foreignPrivate = ['/private/var/audit', '/root'].find((path) => {
 describe('openPeerSocketAuth', () => {
   it('目錄是自己的、權限 0700：放行', async () => {
     const auth = await openPeerSocketAuth(await socketIn(0o700));
-    expect(auth.isAuthenticated(new Headers())).toBe(true);
+    expect(auth.authenticate(new Headers())).toEqual({ kind: 'owner' });
     expect(auth.directory).toBe(directory);
   });
 

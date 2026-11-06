@@ -39,6 +39,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
+import { OWNER_PRINCIPAL } from './wire-principal.js';
+import type { OwnerPrincipal } from './wire-principal.js';
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
@@ -56,12 +58,13 @@ interface BrowserCookiePayload {
   readonly expiresAt: number;
 }
 
-function encodeBase64Url(value: Uint8Array): string {
+/** base64url 編碼（`embed-session.ts` 的嵌入 cookie 共用）。 */
+export function encodeBase64Url(value: Uint8Array): string {
   return Buffer.from(value).toString('base64url');
 }
 
 /** 只收 canonical 的 base64url，同 dsh 的 `decodeBase64Url`。 */
-function decodeBase64Url(value: string): Buffer | undefined {
+export function decodeBase64Url(value: string): Buffer | undefined {
   if (!BASE64URL_PATTERN.test(value)) return undefined;
   const decoded = Buffer.from(value, 'base64url');
   return encodeBase64Url(decoded) === value ? decoded : undefined;
@@ -71,8 +74,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 正規化過的請求 authority：cookie 名字與簽章裡的 audience 都用它。 */
-function requestAuthority(headers: Headers): string | undefined {
+/** 正規化過的請求 authority：cookie 名字與簽章裡的 audience 都用它。Host 缺或解析不了回 `undefined`。 */
+export function requestAuthority(headers: Headers): string | undefined {
   const host = headers.get('host') ?? undefined;
   if (host === undefined) return undefined;
   try {
@@ -101,7 +104,7 @@ function cookieName(authority: string): string {
 }
 
 /** 只找自己產生的那一顆，不實作一般的 Cookie 解碼。 */
-function cookieValue(headerValue: string, name: string): string | undefined {
+export function cookieValue(headerValue: string, name: string): string | undefined {
   for (const segment of headerValue.split(';')) {
     const at = segment.indexOf('=');
     if (at === -1 || segment.slice(0, at).trim() !== name) continue;
@@ -292,6 +295,15 @@ export class BrowserAuth {
       payload.expiresAt > payload.issuedAt &&
       payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
     );
+  }
+
+  /**
+   * {@link isAuthenticated} 過了就是 serve 的擁有者（`wire-handler.ts` 的 `WireAuth`）。
+   *
+   * @returns 有效的會話 cookie 回擁有者；沒有回 `undefined`。
+   */
+  authenticate(headers: Headers): OwnerPrincipal | undefined {
+    return this.isAuthenticated(headers) ? OWNER_PRINCIPAL : undefined;
   }
 
   private unauthorized(request: Request): Response {

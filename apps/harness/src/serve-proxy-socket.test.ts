@@ -15,6 +15,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { bodyLog } from './fixtures.js';
 import { staleSocketAt } from './proxy-socket.fixture.js';
+import { OWNER_PRINCIPAL } from './wire-principal.js';
 
 const POSIX = process.platform !== 'win32';
 const GID = process.getgid?.() ?? 0;
@@ -203,7 +204,7 @@ describe.runIf(POSIX)('serve 聽 --unix-socket', () => {
         env: { [HARNESS_HOME_ENV]: await mkdtemp(join(tmpdir(), 'nexus-serve-home-')) },
         conversation: {
           socketPath: `${socketPath}-peer`,
-          auth: { isAuthenticated: () => true },
+          auth: { authenticate: () => OWNER_PRINCIPAL },
           boundThread: () => undefined,
           onTurn: () => undefined,
         },

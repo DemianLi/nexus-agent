@@ -162,6 +162,8 @@ import {
   userContent,
 } from '@nexus/core';
 import { childForkSeed } from './thread-fork.js';
+import { principalMayReach } from './wire-principal.js';
+import type { WirePrincipal } from './wire-principal.js';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -701,9 +703,10 @@ export interface WireHandlerOptions {
   readonly maxUploadBytes?: number;
 }
 
-/** wire 只需要知道「這個請求帶的會話有沒有效」。`BrowserAuth` 滿足它。 */
+/** wire 只需要知道「這個請求是誰發的」。`BrowserAuth` 滿足它。 */
 export interface WireAuth {
-  isAuthenticated(headers: Headers): boolean;
+  /** @returns 請求帶的會話代表的身分；沒有有效的會話回 `undefined`。 */
+  authenticate(headers: Headers): WirePrincipal | undefined;
 }
 
 export interface WireHandler {
@@ -714,8 +717,11 @@ export interface WireHandler {
 
 /** {@link createWireHandler} 回的實作：多 `admit` 與掃描，其他實作 {@link WireHandler} 的替身（測試、量測）不需要有。 */
 export interface IdleSweepingWireHandler extends WireHandler {
-  /** `handle` 與 WebSocket 升級（`wire-mux.ts`）共用的圍欄與身分：過了回 `undefined`，沒過回要回的 `Response`。 */
-  admit(headers: Headers): Response | undefined;
+  /**
+   * `handle` 與 WebSocket 升級（`wire-mux.ts`）共用的圍欄與身分：過了回 `undefined`，沒過回要回的 `Response`。
+   * 嵌入的身分打 `/embed/` 以外的路徑，回的跟沒有會話是同一個 401。
+   */
+  admit(headers: Headers, pathname: string): Response | undefined;
   /**
    * 掃一遍閒置的 thread 並撤掉（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：不閒的重新計時，閒夠久的撤，
    * 撤完才兌現。內部計時器每隔一段時間呼叫同一支；公開是為了測試用假時鐘決定性地驅動它。沒設 `idleEvictMs` 時什麼也不做。
@@ -4405,13 +4411,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
   }
 
-  function admit(headers: Headers): Response | undefined {
+  function admit(headers: Headers, pathname: string): Response | undefined {
     // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
     if (!isTrustedWireRequest(headers, options.trustedHosts)) {
       return new Response('untrusted host or origin', { status: 403 });
     }
     // 同一個位置、排在圍欄之後：不存在的路徑一樣先要身分。見 `browser-auth.ts`。
-    if (!options.auth.isAuthenticated(headers)) {
+    const principal = options.auth.authenticate(headers);
+    if (principal === undefined || !principalMayReach(principal, pathname)) {
       return new Response('unauthorized', {
         status: 401,
         headers: { 'cache-control': 'no-store' },
@@ -4423,14 +4430,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   return {
     admit,
     async handle(request) {
-      const rejection = admit(request.headers);
+      const { pathname } = new URL(request.url);
+      const rejection = admit(request.headers, pathname);
       if (rejection !== undefined) return rejection;
       const unbound = notBound(request);
       if (unbound !== undefined) return unbound;
       // **請求計數在這裡、同步 +1**（#1484）：早於讀本文的 `await`、早於 `threadFor`，連 thread 還不在記憶體裡的請求也算。
       // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
       const held = holdThread(request);
-      const { pathname } = new URL(request.url);
       const embedded = withoutEmbedPrefix(pathname);
       try {
         return await (embedded === undefined

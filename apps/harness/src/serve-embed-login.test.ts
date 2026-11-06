@@ -11,10 +11,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
 
 import { EMBED_AUDIT_FILE } from './embed-audit.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import type { EmbedIdentityResolver } from './embed-login.js';
+import { EMBED_SESSION_PATH } from './embed-session.js';
 import { bodyLog, exchangeServeToken } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
@@ -189,5 +191,103 @@ describe('有嵌入方', () => {
     writeFileSync(credentialFile, `${'a'.repeat(43)}\n`);
     chmodSync(credentialFile, 0o644);
     await expect(start(where)).rejects.toThrow(credentialFile);
+  });
+});
+
+describe('兌換成嵌入 cookie（POST /embed/session）', () => {
+  const alice: EmbedIdentityResolver = { resolve: () => ({ kind: 'accepted', userId: 'u-alice' }) };
+
+  async function embedCookie(server: RunningServe, home: string): Promise<string> {
+    const credential = (await readFile(join(home, 'embed-credential-crm'), 'utf8')).trim();
+    const exchanged = await post(server, { authorization: `Bearer ${credential}` });
+    const { ticket } = (await exchanged.json()) as { ticket: string };
+    const redeemed = await fetch(`${server.url}${EMBED_SESSION_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ticket }),
+    });
+    expect(redeemed.status).toBe(200);
+    return redeemed.headers.get('set-cookie')!.split(';', 1)[0]!;
+  }
+
+  function get(server: RunningServe, path: string, cookie?: string): Promise<Response> {
+    return fetch(`${server.url}${path}`, {
+      redirect: 'manual',
+      headers: { origin: server.url, ...(cookie !== undefined && { cookie }) },
+    });
+  }
+
+  function upgrade(server: RunningServe, path: string, cookie: string): Promise<number> {
+    const socket = new WebSocket(`${server.url.replace(/^http/u, 'ws')}${path}`, {
+      headers: { origin: server.url, cookie },
+    });
+    return new Promise((resolve) => {
+      socket.once('open', () => {
+        socket.close();
+        resolve(101);
+      });
+      socket.once('unexpected-response', (_request, response) => {
+        resolve(response.statusCode ?? 0);
+      });
+      socket.once('error', () => {
+        resolve(0);
+      });
+    });
+  }
+
+  const EMBED_HISTORY = '/embed/threads/t-none/history';
+
+  it('嵌入 cookie 只打得到 /embed/…：獨立頁面、列表、非嵌入的 mux 都是 401', async () => {
+    const where = layout(CRM_ROW);
+    const lines: string[] = [];
+    const server = await start(where, lines, alice);
+    expect(
+      lines.some((line) => line.includes(`兌換 POST ${EMBED_SESSION_PATH}，嵌入 cookie 900 秒`)),
+    ).toBe(true);
+    const cookie = await embedCookie(server, where.home);
+
+    expect((await get(server, EMBED_HISTORY)).status).toBe(401);
+    expect((await get(server, EMBED_HISTORY, cookie)).status).not.toBe(401);
+    expect(await upgrade(server, '/embed/threads/mux', cookie)).toBe(101);
+
+    expect((await get(server, '/threads', cookie)).status).toBe(401);
+    expect((await get(server, '/', cookie)).status).toBe(401);
+    expect((await get(server, '/index.html', cookie)).status).toBe(401);
+    expect(await upgrade(server, '/threads/mux', cookie)).toBe(401);
+  });
+
+  it('獨立頁面的 cookie 照舊：獨立頁面與嵌入路由都打得到', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where, [], alice);
+    const cookie = await exchangeServeToken(server.authenticatedUrl);
+    expect((await get(server, '/threads', cookie)).status).not.toBe(401);
+    expect((await get(server, EMBED_HISTORY, cookie)).status).not.toBe(401);
+  });
+
+  it('續期：再換一張票兌換，同名 cookie 換新值，新的那顆打得到', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where, [], alice);
+    const first = await embedCookie(server, where.home);
+    const second = await embedCookie(server, where.home);
+    expect(second.split('=', 1)[0]).toBe(first.split('=', 1)[0]);
+    expect((await get(server, EMBED_HISTORY, second)).status).not.toBe(401);
+
+    await running!.close();
+    running = undefined;
+    expect((await auditLines(where.home)).filter((line) => line.event === 'redeem')).toHaveLength(
+      2,
+    );
+  });
+
+  it('沒有嵌入方：沒有兌換的路由', async () => {
+    const where = layout();
+    const server = await start(where);
+    const response = await fetch(`${server.url}${EMBED_SESSION_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ticket: 'x' }),
+    });
+    expect(response.headers.get('content-type') ?? '').not.toContain('application/json');
+    expect(response.headers.get('set-cookie')).toBeNull();
   });
 });

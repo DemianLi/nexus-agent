@@ -1,13 +1,13 @@
 /**
  * 嵌入方換票（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)，地圖 #2365 第 4 點）：對方的後端用服務憑證打
- * `POST /embed/exchange`，替一位使用者換一張短效、只能用一次的登入票；元件拿票去換嵌入專用的會話（TODO(#2370)：兌換的入口還沒接；票由 {@link EmbedTicketStore.redeem} 兌換）。
+ * `POST /embed/exchange`，替一位使用者換一張短效、只能用一次的登入票；元件拿票打 `POST /embed/session` 換嵌入專用的會話（`embed-session.ts`）。
  *
  * - **只在前台行程**：登入只在前台（`serve.ts` 的 `ServeListening`），對話行程不掛這條路由。
  * - **圍欄**：先過 `isTrustedWireRequest`（Host 不是 loopback 也不是 `--trusted-host` 指名的、`Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源，一律 403），同 wire 與指標。
  * - **服務憑證**：`Authorization: Bearer <憑證>`。拿請求帶的值與**每一個**嵌入方的憑證各比一次，比的是兩邊的 sha256（定長），
  *   不提早結束。缺標頭時拿一個空字串照樣比完。所以 401 的本文與耗時看不出缺憑證、憑證錯，或是哪一個嵌入方；請求本文裡也沒有嵌入方 id。
- * - **身分**：`{ subject }` 交給 {@link EmbedIdentityResolver}。nexus 的帳號系統（#1428）還沒有，對應方式待決（#1827 D231），
- *   出廠的 {@link rejectAllIdentities} 一律拒，所以這條路由在接上之前換不到票（fail closed）。
+ * - **身分**：`{ subject }` 交給 {@link EmbedIdentityResolver}。對應方式是管理者寫的對應表（#1827 D231），
+ *   還沒接上；出廠的 {@link rejectAllIdentities} 一律拒，所以這條路由在接上之前換不到票（fail closed）。
  * - **票**：32 位元組亂數，只放在記憶體（{@link EmbedTicketStore}）；重啟就作廢。過期的與用過的都刪掉，同時在手的票有上限。
  * - **稽核**：過了服務憑證的每一次都記（`embed-audit.ts`），記好才回應，寫不進去就 500、不發票。憑證錯的只計數合併、不等落盤；
  *   圍欄的 403 與 405 不記。
@@ -24,6 +24,8 @@ import { EMBED_PATH_PREFIX } from '@nexus/wire';
 
 import { sessionIdDigest } from './embed-audit.js';
 import type { EmbedAudit } from './embed-audit.js';
+import { json, plain, readJsonObject } from './embed-http.js';
+import type { BodyRejection } from './embed-http.js';
 import { isTrustedWireRequest } from './request-trust.js';
 
 /** 換票的路徑（反向代理後面是 `/nexus/embed/exchange`）。 */
@@ -77,31 +79,54 @@ export interface EmbedGrant {
   readonly userId: string;
   /** 對方登入 session id 的 sha256 hex（`sessionIdDigest`）。 */
   readonly sessionIdSha256: string;
-  /** 毫秒時間戳；過了就兌換不到。 */
+  /** 到期時間，系統時間的毫秒時間戳；回給對方看的，兌換時判到期用的是單調時鐘。 */
   readonly expiresAt: number;
+}
+
+/** {@link EmbedTicketStore.redeem} 的結果。 */
+export type TicketRedemption =
+  | { readonly kind: 'redeemed'; readonly grant: EmbedGrant }
+  /** 查到了但已過期；這張票也一併刪掉。 */
+  | { readonly kind: 'expired'; readonly grant: EmbedGrant }
+  /** 沒有這張、用過了，或過期之後已經被清掉。 */
+  | { readonly kind: 'unknown' };
+
+interface StoredTicket {
+  readonly grant: EmbedGrant;
+  /** 單調時鐘上的到期點。 */
+  readonly deadline: number;
 }
 
 /**
  * 登入票：只在記憶體，只能兌換一次。
  *
- * 票的有效期是固定的，所以 `Map` 的插入順序就是到期順序：清過期的只要從頭清到第一張還沒過期的。
+ * 到期用單調時鐘判，系統時間被往回或往前調都不影響；回給對方的 `expiresAt` 才用系統時間。票的有效期固定、單調時鐘不倒退，
+ * 所以 `Map` 的插入順序就是到期順序：清過期的只要從頭清到第一張還沒過期的。
  * 兌換是同步的「查到就刪」，兩個請求同時兌換同一張票時只有先執行到的那一個拿到。
  */
 export class EmbedTicketStore {
-  readonly #tickets = new Map<string, EmbedGrant>();
+  readonly #tickets = new Map<string, StoredTicket>();
   readonly #ttlMs: number;
   readonly #max: number;
-  readonly #now: () => number;
+  readonly #monotonicNow: () => number;
+  readonly #wallNow: () => number;
 
   /**
    * @param ttlMs - 票的有效期（毫秒）。
    * @param max - 同時在手的上限。
-   * @param now - 現在幾點；測試換掉。
+   * @param monotonicNow - 單調時鐘（毫秒）；測試換掉。
+   * @param wallNow - 系統時間，只用來算回給對方的 `expiresAt`；測試換掉。
    */
-  constructor(ttlMs: number, max: number = MAX_OUTSTANDING_TICKETS, now: () => number = Date.now) {
+  constructor(
+    ttlMs: number,
+    max: number = MAX_OUTSTANDING_TICKETS,
+    monotonicNow: () => number = () => performance.now(),
+    wallNow: () => number = Date.now,
+  ) {
     this.#ttlMs = ttlMs;
     this.#max = max;
-    this.#now = now;
+    this.#monotonicNow = monotonicNow;
+    this.#wallNow = wallNow;
   }
 
   /** 在手的票數（含已過期還沒清的）。 */
@@ -110,8 +135,8 @@ export class EmbedTicketStore {
   }
 
   #prune(at: number): void {
-    for (const [ticket, grant] of this.#tickets) {
-      if (grant.expiresAt > at) return;
+    for (const [ticket, stored] of this.#tickets) {
+      if (stored.deadline > at) return;
       this.#tickets.delete(ticket);
     }
   }
@@ -119,31 +144,30 @@ export class EmbedTicketStore {
   /**
    * 發一張票。
    *
-   * @returns 票與到期時間；在手的票滿了回 `undefined`。
+   * @returns 票與到期時間（系統時間的毫秒時間戳）；在手的票滿了回 `undefined`。
    */
   issue(
     grant: Omit<EmbedGrant, 'expiresAt'>,
   ): { readonly ticket: string; readonly expiresAt: number } | undefined {
-    const at = this.#now();
+    const at = this.#monotonicNow();
     this.#prune(at);
     if (this.#tickets.size >= this.#max) return undefined;
     const ticket = randomBytes(TICKET_BYTES).toString('base64url');
-    const expiresAt = at + this.#ttlMs;
-    this.#tickets.set(ticket, { ...grant, expiresAt });
+    const expiresAt = this.#wallNow() + this.#ttlMs;
+    this.#tickets.set(ticket, { grant: { ...grant, expiresAt }, deadline: at + this.#ttlMs });
     return { ticket, expiresAt };
   }
 
-  /**
-   * 兌換一張票。查到就刪，不論有沒有過期。
-   *
-   * @returns 還在有效期內的那一筆；沒有、用過或過期回 `undefined`。
-   */
-  redeem(ticket: string): EmbedGrant | undefined {
-    const at = this.#now();
-    const grant = this.#tickets.get(ticket);
-    if (grant !== undefined) this.#tickets.delete(ticket);
+  /** 兌換一張票。查到就刪，不論有沒有過期；先查再清，過期的才分得出來。 */
+  redeem(ticket: string): TicketRedemption {
+    const at = this.#monotonicNow();
+    const stored = this.#tickets.get(ticket);
+    if (stored !== undefined) this.#tickets.delete(ticket);
     this.#prune(at);
-    return grant !== undefined && grant.expiresAt > at ? grant : undefined;
+    if (stored === undefined) return { kind: 'unknown' };
+    return stored.deadline > at
+      ? { kind: 'redeemed', grant: stored.grant }
+      : { kind: 'expired', grant: stored.grant };
   }
 }
 
@@ -175,29 +199,6 @@ function bearerOf(headers: Headers): string {
   return match?.[1] ?? '';
 }
 
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8' },
-  });
-}
-
-function plain(status: number, text: string, extra: Record<string, string> = {}): Response {
-  return new Response(text, {
-    status,
-    headers: { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8', ...extra },
-  });
-}
-
-/** 讀本文，超過上限回 `undefined`。 */
-async function readLimitedBody(request: Request): Promise<string | undefined> {
-  const declared = Number(request.headers.get('content-length') ?? '0');
-  if (declared > MAX_EXCHANGE_BODY_BYTES) return undefined;
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > MAX_EXCHANGE_BODY_BYTES) return undefined;
-  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-}
-
 function isField(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_FIELD_LENGTH;
 }
@@ -207,33 +208,13 @@ async function parseExchangeBody(
   request: Request,
 ): Promise<
   | { readonly ok: true; readonly subject: string; readonly sessionId: string }
-  | { readonly ok: false; readonly reason: string; readonly subject?: string }
+  | { readonly ok: false; readonly reason: BodyRejection; readonly subject?: string }
 > {
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!/^application\/json(\s*;|$)/iu.test(contentType)) {
-    return { ok: false, reason: 'content_type' };
-  }
-  let text: string | undefined;
-  try {
-    text = await readLimitedBody(request);
-  } catch {
-    // 不是 UTF-8，或本文讀到一半失敗（對方斷線）。
-    return { ok: false, reason: 'body_encoding' };
-  }
-  if (text === undefined) return { ok: false, reason: 'body_too_large' };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { ok: false, reason: 'body_json' };
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { ok: false, reason: 'body_shape' };
-  }
-  const record = parsed as Record<string, unknown>;
-  const keys = Object.keys(record);
+  const body = await readJsonObject(request, MAX_EXCHANGE_BODY_BYTES);
+  if (!body.ok) return body;
+  const { record } = body;
   const subject = isField(record.subject) ? record.subject : undefined;
-  if (subject === undefined || !isField(record.sessionId) || keys.length !== 2) {
+  if (subject === undefined || !isField(record.sessionId) || Object.keys(record).length !== 2) {
     return { ok: false, reason: 'body_shape', ...(subject !== undefined && { subject }) };
   }
   return { ok: true, subject, sessionId: record.sessionId };
