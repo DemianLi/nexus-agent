@@ -109,7 +109,7 @@ impl Harness {
         }
         cmd.args(["--eof-grace-ms", &options.eof_grace_ms.to_string()]);
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
-        // 預熱池、自動算的容量、定時的 `stats` 預設關掉，免得每條測試多一個行程、多出沒預期的訊息；要測它們的測試從 `extra` 蓋過去。
+        // 預熱池與定時的 `stats` 預設關掉，免得每條測試多一個行程、多出沒預期的訊息；容量固定，不跟著跑測試那台的記憶體變。要測它們的測試從 `extra` 蓋過去。
         cmd.args(["--warm", "0", "--capacity", "64", "--stats-ms", "0"]);
         cmd.args(&options.extra);
         let mut stderr_read = None;

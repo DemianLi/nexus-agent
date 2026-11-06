@@ -5,26 +5,28 @@
 //! **嚴格單執行緒**：子行程的 `PR_SET_PDEATHSIG` 看的是起它的那條執行緒，那條執行緒結束子行程就會被殺。不要在這裡起 thread。
 //!
 //! 啟動：擋下 SIGINT／SIGTERM／SIGHUP／SIGCHLD 改由 signalfd 收；設 `PR_SET_CHILD_SUBREAPER`（子行程的後代成了孤兒也掛回這裡收）；
-//! 準備 `--run-dir`（0700）；開稽核紀錄。前四步任一失敗就結束、回 1。接著補預熱池，最後起前台；前台起不來就寫稽核，隔 `--front-restart-ms` 再起。
+//! 準備 `--run-dir`（0700）；開稽核紀錄。前四步任一失敗就結束、回 1。接著先補預熱池再起前台，前台送出的第一則 `stats` 才數得到池裡的；
+//! 前台起不來就寫稽核，隔 `--front-restart-ms` 再起。
 //!
 //! 前台的控制通道是它的 stdin／stdout：
 //!
 //! - `ensure(thread, open)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；
-//!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`，回 `drained` 就收掉、收完起一個新的。
-//!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。
+//!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
+//!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。
+//!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
 //!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
 //!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
-//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置就記著，一回報閒置就送。
+//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置就記著，一回報閒置就送，之間再被 `ensure` 就作廢。
+//! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
+//!   前台不在的期間要給它的訊息丟掉。
 //!
 //! 容量（設計 §七）：同時活著的對話行程（含預熱池、起動中與正在收的）最多 `--capacity` 個，沒給就照記憶體上限算
-//! （[`memory::auto_capacity`]）。名額滿時，排著的每一條都要有一個正在收的行程讓出名額：不夠就挑一個閒置的送 `drain`，只讀的先，
-//! 同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
-//! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度）；回 `busy` 或
+//! （[`memory::auto_capacity`]）。名額滿時，排著的每一條都要有一個正在收、或在等 `drain` 回答的行程讓出名額：不夠就挑一個閒置的送 `drain`，
+//! 只讀的先，同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
+//! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度；逾時之後才到的也照收）；回 `busy` 或
 //! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
 //! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。停機時排著的都回 `down(shutdown)`。
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
-//! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
-//!   前台不在的期間要給它的訊息丟掉。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
 //! `memory`，心跳斷了超過 `--stall-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
@@ -147,13 +149,13 @@ struct Conversation {
     thread: Option<Vec<u8>>,
     /// 只讀開啟（設計 §7-3）：閒置時間用 `--read-only-idle-ms`，名額滿時先逐出。收到 `turn(begin)` 或 `ensure(run)` 就轉成一般的。
     read_only: bool,
-    /// 它回報閒置起算的時間點；不閒置（還沒回報過、回了 `busy`）是 `None`。
+    /// 它回報閒置起算的時間點；不閒置（還沒回報過、回了 `busy`、`drain` 逾時）是 `None`。
     idle_since: Option<Instant>,
-    /// 最後一次被 `ensure` 要到的時間；逐出的先後與閒置時限都從它與 `idle_since` 較晚的那個算。
+    /// 最後一次被 `ensure` 要到、被起、或從預熱池指派的時間；逐出的先後與閒置時限都從它與 `idle_since` 較晚的那個算。
     used_at: Instant,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
-    /// 前台 `release` 過、還沒閒置：一回報閒置就送 `drain`。
+    /// 前台 `release` 過、還沒閒置：一回報閒置就送 `drain`；再被 `ensure` 就清掉。
     released: bool,
     /// 最近一次輪詢到的 RSS（kB），給 `stats` 加總。
     rss_now_kb: u64,
@@ -215,7 +217,7 @@ struct Supervisor {
     rss_poll_at: Instant,
     /// 同時活著的對話行程最多幾個（含預熱池、起動中與正在收的）。
     capacity: u32,
-    /// 名額滿、等某個行程收完才起的 thread，照到的先後。
+    /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
     pending: Vec<(Vec<u8>, OpenMode)>,
     /// 預熱池的行程沒綁就死了（或起不來）：這時間之前不補。
     warm_retry_at: Option<Instant>,
@@ -618,7 +620,7 @@ impl Supervisor {
                 conversation.read_only = false;
             }
             if conversation.drain.is_some() {
-                // 等它回答：回 `busy` 就回 `up`，回 `drained` 就收掉、收完再起一個新的。
+                // 等它回答：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
                 self.queue(thread, open);
             } else if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
                 let socket = conversation.socket.as_os_str().as_bytes().to_vec();
@@ -678,7 +680,7 @@ impl Supervisor {
         conversation.proc.chan.send(&encode_conversation_command(&bind));
     }
 
-    /// 排著的每一條都要有一個正在收的行程讓出名額：不夠就挑閒置最久的送 `drain`（只讀的先），挑不到的從最晚排進來的起回 `capacity`。
+    /// 排著的每一條都要有一個正在收、或在等 `drain` 回答的行程讓出名額：不夠就挑閒置最久的送 `drain`（只讀的先），挑不到的從最晚排進來的起回 `capacity`。
     fn make_room(&mut self) {
         let mut freeing = self.conversations.iter().filter(|c| c.proc.stop.is_some() || c.drain.is_some()).count();
         while freeing < self.pending.len() {
@@ -738,7 +740,7 @@ impl Supervisor {
         }
     }
 
-    /// 這條的閒置時限到期的時間點；不在閒置、在收、在等 `drain` 的回答、或這種開啟方式不照時間逐出的，沒有。
+    /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、或這種開啟方式不照時間逐出的，沒有。
     fn idle_deadline(&self, conversation: &Conversation) -> Option<Instant> {
         if !conversation.evictable() {
             return None;

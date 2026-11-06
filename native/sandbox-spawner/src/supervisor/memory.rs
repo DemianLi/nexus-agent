@@ -68,7 +68,8 @@ fn read_oom_kill(path: &Path) -> Option<u64> {
     parse_oom_kill(&std::fs::read_to_string(path).ok()?)
 }
 
-/// 容量公式（設計 §7-1）的常數，單位 MiB：每條對話行程的峰值（R6）、監督行程（p2t 量到的）、前台（估的，C0 量）。
+/// 容量公式（設計 §7-1）的常數，單位 MiB：每條對話行程的峰值（R6，#1947 issuecomment-6373481570）、
+/// 監督行程（p2t，#1947 issuecomment-6370306989）、前台（估的；#2337 量到最小的轉送前台 68–69 MB）。
 const PER_CONVERSATION_MIB: u64 = 209;
 const SUPERVISOR_MIB: u64 = 19;
 const FRONT_MIB: u64 = 150;
@@ -80,7 +81,7 @@ pub fn capacity_for(limit_bytes: u64) -> u32 {
     u32::try_from(usable / PER_CONVERSATION_MIB).unwrap_or(u32::MAX).max(1)
 }
 
-/// cgroup v2 的 `memory.max`（bytes）；`max` 是沒有上限。
+/// cgroup v2 的 `memory.max`（bytes）；`max`（沒有上限）與解不開的都回 `None`。
 pub fn parse_memory_max(text: &str) -> Option<u64> {
     text.trim().parse().ok()
 }
@@ -120,7 +121,7 @@ pub fn auto_capacity() -> (u32, Option<u64>) {
 ///
 /// - 以 SIGKILL 結束的，一律先算一次 `oom_kill`（`oom`）：監督行程送了 SIGKILL、核心又搶先 OOM kill 它時，那一次也要在這裡消掉，
 ///   不能留給之後一條無關的行程領走。只有 SIGKILL 才去算，免得別的死法吃掉計數；
-/// - 監督行程自己決定收它的（停機、RSS 超過上限、送了解不開的框或綁錯 thread）照那個理由；
+/// - 監督行程自己決定收它的（停機、回了 `drained`、RSS 超過上限、心跳斷了、送了解不開的框或綁錯 thread）照那個理由；
 /// - SIGABRT 而且 stderr 結尾附近有 V8 的 heap 訊息（`heap_message`）：`heap`；
 /// - SIGKILL 而且算到了 `oom_kill`：`host-oom`；
 /// - 其他都是 `crash`。
