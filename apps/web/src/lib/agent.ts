@@ -11,6 +11,7 @@
 import type { MuxSocket, WireClient } from '@nexus/wire';
 import { WIRE_MUX_PATH, createMuxFetch, createWireClient } from '@nexus/wire';
 
+import { StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { clockedFetch } from '@/lib/server-clock';
 
 export interface AgentClientOptions {
@@ -24,7 +25,7 @@ export interface AgentClientOptions {
    * client 的請求（上行與兩條下行）回 401 時呼叫，回應照樣交給呼叫端。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
    * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡；開線之後、回應回來之前呼叫過
    * {@link AgentConnection.renewStreams} 的下行，401 也不叫：呼叫端照斷線重開，重開走新的 socket，那裡再 401 才叫（#2484）。
-   * 嵌入版用它通知宿主頁換票（#2370）。
+   * 嵌入版用它通知宿主頁換票（#2370）。給了它，下行的 401 在叫過它之後拋 {@link StreamUnauthorizedError}，不交回應（#2490）。
    */
   readonly onUnauthorized?: () => void;
 }
@@ -39,6 +40,17 @@ function watched(
     if (response.status === 401) onUnauthorized();
     return response;
   };
+}
+
+/** 下行的 401：有 `onUnauthorized` 就叫它、收掉本體、拋 {@link StreamUnauthorizedError}；其他回應原樣交回。 */
+async function unauthorizedStream(
+  response: Response,
+  onUnauthorized: (() => void) | undefined,
+): Promise<Response> {
+  if (response.status !== 401 || onUnauthorized === undefined) return response;
+  onUnauthorized();
+  await response.body?.cancel();
+  throw new StreamUnauthorizedError();
 }
 
 /**
@@ -201,9 +213,16 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
   const mount = (options.baseUrl ?? agentBaseUrl()).replace(/\/+$/u, '');
   const baseUrl = `${mount}${options.routePrefix ?? ''}`;
   const fetch = options.fetch ?? clockedFetch();
+  const onUnauthorized = options.onUnauthorized;
   if (options.fetch !== undefined) {
+    const injected = options.fetch;
     return {
-      client: createWireClient({ baseUrl, fetch: watched(fetch, options.onUnauthorized) }),
+      client: createWireClient({
+        baseUrl,
+        fetch: watched(fetch, onUnauthorized),
+        streamFetch: async (input, init) =>
+          unauthorizedStream(await injected(input, init), onUnauthorized),
+      }),
       renewStreams: () => {},
     };
   }
@@ -218,7 +237,6 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
       }),
     );
   let current = generation();
-  const onUnauthorized = options.onUnauthorized;
   return {
     client: createWireClient({
       baseUrl,
@@ -227,8 +245,7 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
       streamFetch: async (input, init) => {
         const opened = current;
         const response = await opened.stream(input, init);
-        if (response.status === 401 && opened === current) onUnauthorized?.();
-        return response;
+        return opened === current ? unauthorizedStream(response, onUnauthorized) : response;
       },
     }),
     renewStreams({ closeOpen }) {

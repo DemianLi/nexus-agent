@@ -8,6 +8,7 @@ import {
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 
+import { EMBED_UNAUTHORIZED_TEXT, StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { THREAD_NOT_OWNED_TEXT } from '@/lib/thread-not-owned';
 import { fakeClient } from '@/test/app-harness.fixture';
@@ -28,7 +29,7 @@ import type { NexusTicketNeededDetail } from './ticket-needed';
 
 const STYLES = { shadow: '.nexus-root{--shadow:1}', document: '@font-face{font-family:X}' };
 let clients: ReturnType<typeof fakeClient>[] = [];
-/** 設了就讓下一個元素的下行被拒。 */
+/** 設著的期間，元素的下行一開就被拒（開線那一刻才讀）。 */
 let failOpen: Error | undefined;
 /** 下一個元素的下行一打開就推的 frame。 */
 let events: Event[] = [];
@@ -40,11 +41,11 @@ function createClient(given: { readonly onUnauthorized: () => void }): WireClien
   hooks = given;
   const fake = fakeClient(events);
   clients.push(fake);
-  const refusal = failOpen;
-  if (refusal === undefined) return fake.client;
   return {
     ...fake.client,
-    openEvents: async (threadId) => {
+    openEvents: async (threadId, options) => {
+      const refusal = failOpen;
+      if (refusal === undefined) return fake.client.openEvents(threadId, options);
       fake.opened.push(threadId);
       throw refusal;
     },
@@ -646,6 +647,32 @@ describe('<nexus-chat> 的續期與 nexus-ticket-needed（#2370）', () => {
     await element.signIn('票');
     hooks?.onUnauthorized();
     expect(seen).toEqual([{ reason: 'unauthorized' }, { reason: 'unauthorized' }]);
+  });
+
+  test('下行被 401 擋下：講沒有權限、不重試；同一個人續期成功就接回來（#2490）', async () => {
+    serveSessions(
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+    );
+    const element = document.createElement(ELEMENT_NAME);
+    await element.signIn('第一張');
+    failOpen = new StreamUnauthorizedError();
+    document.body.append(element);
+    const view = shadow(element);
+    await view.findByText(EMBED_UNAUTHORIZED_TEXT);
+    const opened = clients[0]?.opened.length ?? 0;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(clients[0]?.opened).toHaveLength(opened);
+
+    failOpen = undefined;
+    await act(async () => {
+      await element.signIn('續期');
+    });
+    await waitFor(() => expect(clients[0]?.opened.length).toBeGreaterThan(opened));
+    await waitFor(() => expect(view.queryByText(EMBED_UNAUTHORIZED_TEXT)).toBeNull());
+    expect(new Set(clients[0]?.opened)).toEqual(new Set(['我的']));
   });
 
   test('拿掉之後到點不發', async () => {

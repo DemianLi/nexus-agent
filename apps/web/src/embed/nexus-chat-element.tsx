@@ -108,6 +108,7 @@ export function defineNexusChat({
     #connection: AgentConnection | undefined;
     #signIn: EmbedSignIn | undefined;
     #fingerprint: string | undefined;
+    #signIns = 0;
     readonly #ticketWatch = new TicketWatch(
       (detail) => this.#ticketNeeded(detail),
       () => serverClock.now() ?? Date.now(),
@@ -211,13 +212,14 @@ export function defineNexusChat({
       this.#fingerprint = redeemed.identityFingerprint;
       forgetThread(EMBED_THREAD_KEY);
       this.#connection?.renewStreams({ closeOpen: !renewal });
+      this.#signIns += 1;
       if (!renewal) {
         this.#signIn = {
           seq: (this.#signIn?.seq ?? 0) + 1,
           threadId: redeemed.threadId ?? randomUuid(),
         };
-        this.#render();
       }
+      this.#render();
       this.#ticketWatch.signedIn(redeemed.expiresAt);
       return { expiresAt: redeemed.expiresAt };
     }
@@ -235,6 +237,7 @@ export function defineNexusChat({
               hostTools={this.#hostTools}
               onHostCall={this.#handToHost}
               signIn={this.#signIn}
+              signIns={this.#signIns}
             />
           </PortalContainerContext.Provider>
         </StrictMode>,

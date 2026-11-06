@@ -6,6 +6,7 @@ import {
   createAgentConnection,
   mountedMuxFetch,
 } from './agent.js';
+import { StreamUnauthorizedError } from './embed-unauthorized.js';
 
 /**
  * 瀏覽器這一端驗的是：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
@@ -271,8 +272,55 @@ describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
       routePrefix: '/embed',
       onUnauthorized,
     });
-    await expect(client.openEvents('t1')).rejects.toThrow();
+    await expect(client.openEvents('t1')).rejects.toThrow(StreamUnauthorizedError);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('注入 fetch 的下行回 401：叫一次，拋 StreamUnauthorizedError（#2490）', async () => {
+    const onUnauthorized = vi.fn();
+    const { client } = createAgentConnection({
+      fetch: async () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+      onUnauthorized,
+    });
+    await expect(client.openEvents('t1')).rejects.toThrow(StreamUnauthorizedError);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('沒給 onUnauthorized（獨立頁面）：下行的 401 照舊是一般的錯誤，不是 StreamUnauthorizedError（#2490）', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    FakeSocket.refuse = true;
+    vi.stubGlobal('fetch', async () => new Response('', { status: 401 }));
+    const { client } = createAgentConnection({ baseUrl: '', routePrefix: '/embed' });
+    const error: unknown = await client.openEvents('t1').then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(StreamUnauthorizedError);
+    const injected = createAgentClient({
+      fetch: async () => new Response('', { status: 401 }),
+    });
+    const fromInjected: unknown = await injected.openEvents('t1').then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(fromInjected).toBeInstanceOf(Error);
+    expect(fromInjected).not.toBeInstanceOf(StreamUnauthorizedError);
+  });
+
+  it('下行回 401 以外的狀態：不叫，也不是 StreamUnauthorizedError（#2490）', async () => {
+    const onUnauthorized = vi.fn();
+    const { client } = createAgentConnection({
+      fetch: async () => new Response('', { status: 403 }),
+      onUnauthorized,
+    });
+    const error: unknown = await client.openEvents('t1').then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(StreamUnauthorizedError);
+    expect(onUnauthorized).not.toHaveBeenCalled();
   });
 
   it('續期之前開的下行，回來時才是 401：不叫；續期之後開的 401 照叫（#2484）', async () => {
@@ -299,7 +347,12 @@ describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
     unauthorized(FakeSocket.made[0]);
     await vi.waitFor(() => expect(FakeSocket.made[1]?.sent.length).toBe(1));
     unauthorized(FakeSocket.made[1]);
-    await expect(old).rejects.toThrow();
+    const oldError: unknown = await old.then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(oldError).toBeInstanceOf(Error);
+    expect(oldError).not.toBeInstanceOf(StreamUnauthorizedError);
     expect(onUnauthorized).not.toHaveBeenCalled();
 
     const fresh = client.openEvents('t1');
@@ -308,7 +361,7 @@ describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
     unauthorized(FakeSocket.made[2]);
     await vi.waitFor(() => expect(FakeSocket.made[3]?.sent.length).toBe(1));
     unauthorized(FakeSocket.made[3]);
-    await expect(fresh).rejects.toThrow();
+    await expect(fresh).rejects.toThrow(StreamUnauthorizedError);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
