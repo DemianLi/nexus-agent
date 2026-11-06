@@ -108,15 +108,24 @@ async function gotoDemo(page: Page, origin: string): Promise<void> {
     (html) => {
       if (location.pathname !== '/livez') return;
       document.addEventListener('DOMContentLoaded', () => {
+        // `document.write` 寫進去的 module script 不保證會跑；留著它、close 之後再換一支新建的，負載高時遇過 Vue 找不到 `#app`。
+        // 所以寫入前先拿掉，等文件解析完再用新建的元素加回 head（新建的 module script 一載完就跑，不等解析）。
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        const scripts = [...parsed.querySelectorAll('script')];
+        for (const script of scripts) script.remove();
         document.open();
-        document.write(html);
+        document.write(`<!doctype html>${parsed.documentElement.outerHTML}`);
         document.close();
-        // `document.write` 寫進去的 module script 不保證會跑，所以換成新建的元素。同一個網址的 module 只跑一次，兩邊都跑也一樣。
-        for (const written of document.querySelectorAll('script')) {
-          const script = document.createElement('script');
-          for (const { name, value } of written.attributes) script.setAttribute(name, value);
-          written.replaceWith(script);
-        }
+        const run = () => {
+          for (const written of scripts) {
+            const script = document.createElement('script');
+            for (const { name, value } of written.attributes) script.setAttribute(name, value);
+            document.head.append(script);
+          }
+        };
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', run, { once: true });
+        } else run();
       });
     },
     await readFile(join(demo, 'index.html'), 'utf8'),
