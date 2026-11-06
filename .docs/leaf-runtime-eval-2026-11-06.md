@@ -9,10 +9,10 @@
 
 讀的版本：
 - nexus：`origin/develop` `06db7738`。
-- rutis：`3f87e6b1`，用 `gh api` 讀文件，沒有 clone，沒有編譯或執行。
+- rutis：`3f87e6b1`。用 `gh api` 從上游讀了 repo 的描述與檔案清單，以及 `docs/` 下 6 份文件：`decision-multilang-2026-10-03.md`、`design-dual-core-2026-08-20.md`、`design-cordis-runtime-plugin-2026-10-03.md`、`design-function-refs-2026-11-03.md`、`design-dsh-bridge-2026-08-21.md`、`cordis-spec-parity-2026-08-18.md`。最後一份讀下來了，但沒有讀內容。沒有 clone，沒有編譯或執行。
 - dsh：本機 clone `05b1cae8`。遠端 HEAD 是 `fcc0ad46`，本篇沒有對新版重核。
 
-本篇只做讀碼與讀文件，沒有量測，也沒有下載任何東西。
+除了上面用 `gh api` 讀的 rutis 文件，本篇只讀本機的碼與文件，沒有量測。
 
 ## 結論
 
