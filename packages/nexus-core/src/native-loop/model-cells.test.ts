@@ -49,7 +49,7 @@ vi.mock('../tool-list-step.js', async (importOriginal) => {
       bump(target.name, request, 'native');
       return step(request);
     };
-    // 登記時核對 `wrapModelCall` 就是用登記的那一步造的：先換成計數那一步造的那支去登記，登記完再換成經 `wrapModelCall` 也計數的那一支。
+    // `withToolListStep` 只在登記那一刻核對 `wrapModelCall` 是 `wrapModelCallWith(counted, inner)`；登記後換上的這支經原本的 `wrap` 跑、不經 `counted`，native 與 `wrapModelCall` 兩條路徑才各記各的。
     target.wrapModelCall = actual.wrapModelCallWith(counted, inner as never) as never;
     const registered = actual.withToolListStep(middleware, counted, inner);
     target.wrapModelCall = (request, handler) => {

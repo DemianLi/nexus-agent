@@ -48,7 +48,7 @@ function instrument(middleware: Iterable<AgentMiddleware>, counts: Counts): Set<
       wrapToolCall: (request: { toolCall: { id?: string } }, handler: unknown) => unknown;
     };
     const wrap = target.wrapToolCall;
-    // 登記時核對 `wrapToolCall` 就是用登記的那一步造的：先換成計數那一步造的那支去登記，登記完再換成經 `wrapToolCall` 也計數的那一支。
+    // `withToolCallStep` 只在登記那一刻核對 `wrapToolCall` 是 `wrapToolCallWith(counted)`；登記後換上的這支經原本的 `wrap` 跑、不經 `counted`，native 與 `wrapToolCall` 兩條路徑才各記各的。
     target.wrapToolCall = wrapToolCallWith(counted) as never;
     withToolCallStep(m, counted);
     target.wrapToolCall = (request, handler) => {

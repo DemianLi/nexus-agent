@@ -63,7 +63,14 @@ export const DEFAULT_PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
 /** {@link createToolBarrierMiddleware} 的名字，診斷與索引用。 */
 export const TOOL_BARRIER_MIDDLEWARE_NAME = 'nexusToolBarrier';
 
-/** 工具能不能跟別顆重疊。 */
+/**
+ * 工具能不能跟別顆重疊。
+ *
+ * @param tool - 工具本體，任何值都收；不是物件、或 `metadata` 上的 {@link CONCURRENCY_SAFE_METADATA_KEY} 不剛好是 `true`，都當沒宣告。
+ * @param name - 模型叫的名字，拿去對 `safeNames`。
+ * @param safeNames - 用名字宣告可以重疊的工具；省略即 {@link DEFAULT_PARALLEL_SAFE_TOOLS}。
+ * @returns 宣告了 `true`，或名字在 `safeNames` 裡。
+ */
 export function isConcurrencySafe(
   tool: unknown,
   name: string,

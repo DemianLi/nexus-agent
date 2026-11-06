@@ -181,7 +181,7 @@ export function createToolCallStepMiddleware(name: string, step: ToolCallStep): 
 }
 
 /**
- * {@link wrappedRequestOf} 造的請求形狀：只有這幾格。吃它的函式照這個型別讀，讀別的鍵編不過；native 下請求上真的只有這幾格。
+ * {@link wrappedRequestOf} 造的請求形狀，兩個 loop 都只有這幾格：外層請求上的其他鍵不帶過來，吃它的函式照這個型別讀。
  */
 export interface WrappedToolRequest {
   readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
