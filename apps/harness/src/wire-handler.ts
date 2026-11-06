@@ -681,6 +681,14 @@ export interface WireHandlerOptions {
    */
   readonly boundThread?: () => string | undefined;
   /**
+   * 這台 handler 手上沒有 thread、工作在別的行程裡跑（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台）：
+   * 封存問「還有什麼在跑」、帶 `stopActivity` 時請它停，都問這一組，不看本地的記憶體。對話行程那一側答的是 {@link internalThreadPath}。
+   */
+  readonly threadActivityElsewhere?: {
+    activity(threadId: string): Promise<readonly ThreadActivityKind[]>;
+    stop(threadId: string): Promise<void>;
+  };
+  /**
    * 主對話一輪開始與結束時叫（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：`begin` 是 root 日誌寫下 `turn/start`，`end` 是 `turn/end` 或
    * `turn/failed`。背景子代理的輪寫在它自己的日誌，不算。thread 建好之後才開始聽，續接時補寫的收尾可能只看到 `end`。
    */
@@ -943,6 +951,11 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
     (query as Record<string, number>)[key] = value;
   }
   return query;
+}
+
+/** 對話行程給前台的內部路由（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`activity` 用 GET 問還有什麼在跑，`stop` 用 POST 請它停。 */
+export function internalThreadPath(threadId: string, action: 'activity' | 'stop'): string {
+  return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
 
 /**
@@ -3701,8 +3714,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           await organization.archive(threadId, {
             ...(stopActivity === true && { stopActivity: true }),
             known: () => threadKnown(threadId),
-            activity: () => activityOf(threadId),
-            stop: () => stopActivityOf(threadId),
+            activity: () =>
+              options.threadActivityElsewhere?.activity(threadId) ?? activityOf(threadId),
+            stop: () => options.threadActivityElsewhere?.stop(threadId) ?? stopActivityOf(threadId),
             warn: (message) => options.warn?.(message),
           });
           return json(
@@ -4714,6 +4728,30 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
   }
 
+  /**
+   * 對話行程的內部路由（{@link internalThreadPath}）：只在綁了 thread 的行程上、只給主機擁有者（前台不帶身分標頭），
+   * 其餘回 `undefined` 照一般路由走。
+   */
+  function internalRoute(
+    request: Request,
+    pathname: string,
+    principal: WirePrincipal,
+  ): Response | undefined {
+    if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
+    const match = /^\/internal\/threads\/([^/]+)\/(activity|stop)$/u.exec(pathname);
+    if (match === null) return undefined;
+    const threadId = decodeURIComponent(match[1]!);
+    if (threadId !== options.boundThread()) return new Response('not bound', { status: 404 });
+    if (match[2] === 'activity' && request.method === 'GET') {
+      return json({ activity: activityOf(threadId) });
+    }
+    if (match[2] === 'stop' && request.method === 'POST') {
+      stopActivityOf(threadId);
+      return new Response(null, { status: 204 });
+    }
+    return new Response('method not allowed', { status: 405 });
+  }
+
   /** 圍欄與身分：過了回這個請求的身分，沒過回要回的回應。 */
   function admitted(headers: Headers, pathname: string): WirePrincipal | Response {
     // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
@@ -4743,6 +4781,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (principal instanceof Response) return principal;
       const unbound = notBound(request);
       if (unbound !== undefined) return unbound;
+      const internal = internalRoute(request, pathname, principal);
+      if (internal !== undefined) return internal;
       // **請求計數在這裡、同步 +1**（#1484）：早於讀本文的 `await`、早於 `threadFor`，連 thread 還不在記憶體裡的請求也算。
       // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
       const held = holdThread(request);

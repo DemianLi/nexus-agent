@@ -45,6 +45,7 @@
  * @module
  */
 
+import { readFileSync, statSync } from 'node:fs';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ThreadActivityKind } from '@nexus/wire';
@@ -99,7 +100,7 @@ export interface ArchiveDeps {
   /** 會話存不存在（活著的，或落盤的）。**儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。 */
   readonly known: () => Promise<boolean>;
   /** 這條會話還有什麼在跑；空陣列＝閒著。沒帶 `stopActivity` 才問。 */
-  readonly activity: () => readonly ThreadActivityKind[];
+  readonly activity: () => readonly ThreadActivityKind[] | Promise<readonly ThreadActivityKind[]>;
   /** 帶 `stopActivity` 時，封存寫下去**之後**請它去停。發出去就算，不等停穩；拋了由 {@link ArchiveDeps.warn} 講一聲。 */
   readonly stop: () => Promise<void> | void;
   /** 停失敗時講一聲（不撤銷封存）。 */
@@ -155,6 +156,8 @@ export class ThreadOrganization {
   readonly #file: string;
   readonly #home: string;
   #state: OrganizationState;
+  /** 跟隨模式（{@link ThreadOrganization.follow}）上次讀到的檔案身分；`undefined` 是一般模式。 */
+  #followed: { key: string; warn: (message: string) => void } | undefined;
   /** 序列佇列的尾巴：每一個變更排在前一個之後，前一個失敗不拖累後面的。 */
   #tail: Promise<unknown> = Promise.resolve();
 
@@ -191,19 +194,60 @@ export class ThreadOrganization {
     return new ThreadOrganization(home, state);
   }
 
+  /**
+   * 只讀、跟著檔案走的一份（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的對話行程用）：寫的是前台，
+   * 這裡每次讀集合都先 `stat` 一次，檔變了才重讀，所以封存閘門在前台寫完之後的下一次問就生效，預熱池裡早就起好的行程也一樣。
+   * 變更一律拋。檔案後來壞了（格式、權限）留著上一份、講一聲，不讓閘門跟著失效。
+   *
+   * @throws 開的當下就讀不動或認不得，同 {@link ThreadOrganization.open}。
+   */
+  static async follow(home: string, warn: (message: string) => void): Promise<ThreadOrganization> {
+    // 先取身分再讀：兩步之間被換掉的話，下一次問會看到身分變了、重讀，不會漏掉那一次。
+    const key = fileKey(join(home, THREAD_ORGANIZATION_FILE));
+    const opened = await ThreadOrganization.open(home);
+    opened.#followed = { key, warn };
+    return opened;
+  }
+
   /** 釘選的會話，**最近釘的在前**。 */
   get pinnedThreadIds(): readonly string[] {
-    return this.#state.pinnedThreadIds;
+    return this.#current().pinnedThreadIds;
   }
 
   /** 封存的會話，依封存順序。 */
   get archivedThreadIds(): readonly string[] {
-    return this.#state.archivedThreadIds;
+    return this.#current().archivedThreadIds;
   }
 
-  /** 這條會話封存了沒有。同步讀記憶體，給閘門每一輪問。 */
+  /** 這條會話封存了沒有。同步讀記憶體（跟隨模式先 `stat`），給閘門每一輪問。 */
   isArchived(threadId: string): boolean {
-    return this.#state.archivedThreadIds.includes(threadId);
+    return this.#current().archivedThreadIds.includes(threadId);
+  }
+
+  #current(): OrganizationState {
+    const followed = this.#followed;
+    if (followed === undefined) return this.#state;
+    const key = fileKey(this.#file);
+    if (key === followed.key) return this.#state;
+    try {
+      if (key === MISSING) {
+        this.#state = emptyState();
+      } else if (key.startsWith('error:')) {
+        throw new Error(`stat 失敗（${key.slice('error:'.length)}）`);
+      } else {
+        assertOwnerOnlyMode('會話整理檔（釘選與封存）', this.#file, statSync(this.#file).mode);
+        const state = parseRecord(readFileSync(this.#file, 'utf8'));
+        if (state === undefined) throw new Error('格式認不得');
+        this.#state = state;
+      }
+      followed.key = key;
+    } catch (error) {
+      followed.key = key;
+      followed.warn(
+        `[封存] 會話整理檔 ${this.#file} 讀不動，沿用上一份：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.#state;
   }
 
   /**
@@ -247,7 +291,7 @@ export class ThreadOrganization {
       if (this.#state.archivedThreadIds.includes(threadId)) return;
       if (!(await deps.known())) throw new ThreadUnknownError(threadId, 'archive');
       if (deps.stopActivity !== true) {
-        const activity = deps.activity();
+        const activity = await deps.activity();
         if (activity.length > 0) throw new ThreadActiveError(threadId, activity);
       }
       await this.#commit({
@@ -279,6 +323,9 @@ export class ThreadOrganization {
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.#followed !== undefined) {
+      return Promise.reject(new Error('這一份只讀（對話行程跟著前台寫的檔），釘選與封存由前台寫'));
+    }
     const result = this.#tail.then(operation);
     this.#tail = result.then(
       () => undefined,
@@ -296,6 +343,19 @@ export class ThreadOrganization {
     await mkdir(this.#home, { recursive: true, mode: PRIVATE_DIR_MODE });
     await writeAtomic(this.#file, `${JSON.stringify({ version: RECORD_VERSION, ...next })}\n`);
     this.#state = next;
+  }
+}
+
+const MISSING = 'missing';
+
+/** 檔案的身分：換檔（`rename`）換 inode，原地改了換 mtime 或大小。 */
+function fileKey(file: string): string {
+  try {
+    const { ino, mtimeMs, size } = statSync(file);
+    return `${String(ino)}:${String(mtimeMs)}:${String(size)}`;
+  } catch (error) {
+    if (isMissing(error)) return MISSING;
+    return `error:${String((error as NodeJS.ErrnoException | null)?.code ?? error)}`;
   }
 }
 

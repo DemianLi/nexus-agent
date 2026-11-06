@@ -384,3 +384,41 @@ describe('ThreadOrganization.open：認不得的檔明確失敗，而且一個�
     await expect(ThreadOrganization.open(home)).resolves.toBeInstanceOf(ThreadOrganization);
   });
 });
+
+describe('ThreadOrganization.follow：per-thread 的對話行程跟著前台寫的檔（#2341）', () => {
+  it('前台封存與取消封存，跟隨的那一份下一次問就看到；開的時候檔還不在也一樣', async () => {
+    const home = await freshHome();
+    const follower = await ThreadOrganization.follow(home, () => undefined);
+    const writer = await ThreadOrganization.open(home);
+    expect(follower.isArchived('t1')).toBe(false);
+    await writer.archive('t1', deps());
+    expect(follower.isArchived('t1')).toBe(true);
+    await writer.unarchive('t1');
+    expect(follower.isArchived('t1')).toBe(false);
+  });
+
+  it('跟隨的那一份不寫：釘選、封存都拋，檔案不動', async () => {
+    const home = await freshHome();
+    const follower = await ThreadOrganization.follow(home, () => undefined);
+    await expect(follower.archive('t1', deps())).rejects.toThrow('由前台寫');
+    await expect(follower.pin('t1', exists)).rejects.toThrow('由前台寫');
+    await expect(readdir(home)).rejects.toThrow();
+  });
+
+  it('檔後來壞了：沿用上一份、只講一次，修好了再跟上', async () => {
+    const home = await freshHome();
+    const writer = await ThreadOrganization.open(home);
+    await writer.archive('t1', deps());
+    const warnings: string[] = [];
+    const follower = await ThreadOrganization.follow(home, (message) => warnings.push(message));
+    const file = join(home, THREAD_ORGANIZATION_FILE);
+    const good = await readFile(file, 'utf8');
+    await writeFile(file, '{"version":1,', { mode: 0o600 });
+    expect(follower.isArchived('t1')).toBe(true);
+    expect(follower.isArchived('t1')).toBe(true);
+    expect(warnings).toHaveLength(1);
+    await writeFile(file, good.replace('"t1"', '"t2"'), { mode: 0o600 });
+    expect(follower.isArchived('t1')).toBe(false);
+    expect(follower.isArchived('t2')).toBe(true);
+  });
+});

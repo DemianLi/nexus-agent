@@ -266,6 +266,40 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(await settled(supervisor, 'conversation-process', 1 + WARM)).toHaveLength(1 + WARM);
   }, 180_000);
 
+  it('封存由前台寫：問對話行程在跑什麼、請它停，之後那個行程的閘門就擋', async () => {
+    const slow = '慢慢串的一段很長的回覆，'.repeat(20);
+    const running = await start([
+      { content: slow, tokenDelayMs: 100 },
+      { content: '封存之後不該跑出來的回覆。' },
+    ]);
+    const url = await running.loginUrl(1);
+    const client = await clientOf(url);
+    const events = await client.openEvents('thread-archive');
+    await client.runStart('thread-archive', '你好');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(await client.threadArchive('thread-archive')).toMatchObject({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'thread_active', activity: ['turn'] } },
+    });
+    expect(await client.threadArchive('thread-archive', { stopActivity: true })).toMatchObject({
+      kind: 'ok',
+      result: { ok: true, value: { archivedThreadIds: ['thread-archive'] } },
+    });
+    // 對話行程的內部路由只在 0700 的 socket 上：從前台的入口打，主機擁有者也打不到。
+    const internal = await fetchWithCookie(await exchangeServeToken(url))(
+      `${new URL(url).origin}/internal/threads/thread-archive/activity`,
+    );
+    expect(internal.status).toBe(404);
+    // 停是真的停了：這一輪照腳本要串 24 秒，沒停的話這裡會拿到整段。
+    expect(replies(await foldTurn(events))).not.toContain(slow);
+    await events.return?.(undefined);
+
+    expect(replies(await turn(client, 'thread-archive', '再一輪'))).not.toContain(
+      '封存之後不該跑出來的回覆。',
+    );
+  }, 180_000);
+
   describe('嵌入版（身分由前台往下傳）', () => {
     const EMBED_ROWS =
       '- id: embed-login\n  config:\n    embedders:\n      - id: crm\n    ticketTtlSeconds: 60\n';

@@ -21,6 +21,7 @@ import {
   isRunCancelMethod,
   isThreadManagementMethod,
   THREAD_AT_CAPACITY,
+  type ThreadActivityKind,
 } from '@nexus/wire';
 
 import { randomUUID } from 'node:crypto';
@@ -35,10 +36,12 @@ import { StreamCutError } from './sse-response.js';
 import type { EnsureOutcome, SupervisorClient } from './supervisor-client.js';
 import type { OpenMode } from './supervisor-protocol.js';
 import {
+  internalThreadPath,
   parsePath,
   type EmbedStreamGuard,
   type IdleSweepingWireHandler,
   type WireAuth,
+  type WireHandlerOptions,
 } from './wire-handler.js';
 import type { EmbedPrincipal, WirePrincipal } from './wire-principal.js';
 
@@ -347,6 +350,50 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         principal,
         embedded !== undefined,
       );
+    },
+  };
+}
+
+/**
+ * 前台封存時問對話行程的那一組（{@link WireHandlerOptions.threadActivityElsewhere}）：沒有行程就是閒著、停無可停；
+ * 連不上而行程剛好走了也一樣，其餘的錯照拋（封存不寫）。
+ */
+export function threadActivityOverSocket(
+  supervisor: SupervisorClient,
+  forwarder: FrontForwarder,
+): NonNullable<WireHandlerOptions['threadActivityElsewhere']> {
+  async function call(threadId: string, action: 'activity' | 'stop'): Promise<Response | undefined> {
+    const socket = supervisor.socketOf(threadId);
+    if (socket === undefined) return undefined;
+    const request = new Request(`http://localhost${internalThreadPath(threadId, action)}`, {
+      method: action === 'activity' ? 'GET' : 'POST',
+    });
+    let response: Response;
+    try {
+      response = await forwarder.forward(request, socket);
+    } catch (error) {
+      if (supervisor.socketOf(threadId) === undefined) return undefined;
+      throw error;
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`thread "${threadId}" 的對話行程回 ${String(response.status)}（${action}）`);
+    }
+    return response;
+  }
+  return {
+    activity: async (threadId) => {
+      const response = await call(threadId, 'activity');
+      if (response === undefined) return [];
+      const body = (await response.json()) as { activity?: unknown };
+      if (!Array.isArray(body.activity)) {
+        throw new Error(`thread "${threadId}" 的對話行程回的 activity 認不得`);
+      }
+      return body.activity as ThreadActivityKind[];
+    },
+    stop: async (threadId) => {
+      const response = await call(threadId, 'stop');
+      await response?.body?.cancel();
     },
   };
 }

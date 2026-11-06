@@ -136,7 +136,7 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import { createFrontWireHandler } from './front-wire.js';
+import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
 import type { SupervisorClient } from './supervisor-client.js';
 import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
@@ -1321,10 +1321,13 @@ async function startServer(
   const webDist = options.webDist ?? resolveWebDist();
   // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
   // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
+  // 對話行程（per-thread）只讀、跟著前台寫的檔走：寫的只有前台一個，封存閘門要在前台寫完的下一次問就生效。
   const threadOrganization =
     sessionLogDir === undefined
       ? undefined
-      : await ThreadOrganization.open(resolveHarnessHome(env));
+      : options.conversation === undefined
+        ? await ThreadOrganization.open(resolveHarnessHome(env))
+        : await ThreadOrganization.follow(resolveHarnessHome(env), warn);
   // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
   // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
@@ -1544,6 +1547,13 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
+    // 前台（#2341）：手上沒有 thread，封存問的「還有什麼在跑」與停，問那條的對話行程。
+    ...(options.front !== undefined && {
+      threadActivityElsewhere: threadActivityOverSocket(
+        options.front.supervisor,
+        options.front.forwarder,
+      ),
+    }),
     // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
     ...(options.conversation !== undefined && {
       reportEmbedRefusals: true,
