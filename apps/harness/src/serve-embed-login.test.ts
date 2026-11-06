@@ -25,6 +25,7 @@ import { EMBED_AUDIT_FILE } from './embed-audit.js';
 import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
+import { principalHeaders } from './forwarded-principal.js';
 import { bodyLog, exchangeServeToken } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
@@ -309,6 +310,22 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     expect((await get(server, '/', cookie)).status).toBe(401);
     expect((await get(server, '/index.html', cookie)).status).toBe(401);
     expect(await upgrade(server, '/threads/mux', cookie)).toBe(401);
+  });
+
+  it('single 的 TCP 入口不信 per-thread 的內部身分標頭（#2341）：沒有 cookie 只帶標頭是 401', async () => {
+    const where = layout(CRM_ROW);
+    const server = await start(where);
+    const forged = principalHeaders({
+      kind: 'embed',
+      embedder: 'crm',
+      subject: 'alice',
+      userId: 'alice',
+      sessionIdSha256: 'a'.repeat(64),
+    });
+    const response = await fetch(`${server.url}${EMBED_HISTORY}`, {
+      headers: { origin: server.url, 'content-type': 'application/json', ...forged },
+    });
+    expect(response.status).toBe(401);
   });
 
   /** 開一條嵌入版 SSE 下行，讀掉開線那一行。 */

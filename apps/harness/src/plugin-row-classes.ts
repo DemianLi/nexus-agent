@@ -55,6 +55,7 @@ import { hostToolsPlugin } from './settings/host-tools.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
+import { processModelPlugin } from './settings/process-model.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { sessionReferencePlugin } from './settings/session-reference.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
@@ -101,6 +102,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   hostToolsPlugin,
   goalRoundCapPlugin,
   turnTimeoutPlugin,
+  processModelPlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */

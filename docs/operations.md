@@ -1613,6 +1613,37 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **放在反向代理後面時**（〈[放在反向代理後面](#放在反向代理後面)〉），代理也可以自己壓（nginx 的 `gzip`），跟 `serve` 這一層擇一開就好。
 - **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。
 
+## 行程模型：`single` 與 `per-thread`
+
+serve 預設是 `single`：一個行程放所有 thread。`per-thread`（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md`）
+改由監督行程 `nexus-supervisor` 起一個前台、每條 thread 一個對話行程：一條 thread 的 heap 用完或卡死（心跳斷 15 秒），只死那一條。RSS 上限預設不設。
+
+```bash
+nexus-agent serve --process-model per-thread
+```
+
+或寫在自己的 `~/.nexus-agent/cordis.patch.yml`：
+
+```yaml
+- id: process-model
+  config:
+    mode: per-thread
+    # supervisorBinary: /opt/nexus/native/nexus-supervisor
+```
+
+- 旗標蓋過設定列；起動期讀一次，改了要重啟。關掉這一列就是 `single`。
+- **只在 Linux 起得來**，其他平台起動就停下來講原因。
+- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去。
+- **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
+- 前台與對話行程之間走 home 底下 `run/` 的 Unix socket，目錄權限 0700；監督行程的稽核紀錄寫在 home 的 `supervisor-audit.jsonl`。
+- `thread-capacity` 的 `idleEvictAfterMs` 交給監督行程：對話行程閒置這麼久就收掉（`0` 不收）。
+  只讀打開（看歷史、附件）的行程閒置 5 分鐘就收，不吃這一格；落盤那一列關掉時一律不照時間收（收掉的行程不留日誌）。`maxThreads` 在 `per-thread` 下不管用：
+  同時活著的對話行程數由監督行程照記憶體上限算（含一個預熱的空行程）。
+- 前台掛了監督行程會重起它，對話行程不斷；網頁重連即可。
+- **嵌入對話框（`<nexus-chat>`）照常可用**。登入、嵌入 cookie 與身分對應表只在前台；前台驗過人之後把身分放進內部標頭轉給對話行程，
+  轉送前一律刪掉客戶端帶來的同名標頭。對話行程只在 `run/` 的 socket 上讀這個標頭，TCP 入口從不讀它。擁有者檢查前台先擋一次、對話行程再核一次；
+  轉送中的嵌入版下行由前台每秒對一次身分對應表，從表上拿掉的人 2 秒內斷線，稽核同 `single`。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），

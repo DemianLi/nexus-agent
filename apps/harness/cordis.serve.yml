@@ -53,3 +53,12 @@
     approval:
       exempt: []
     timeoutMs: 30000
+
+# serve 的行程模型（#2341，設計 `.docs/supervisor-1947-design-2026-11-03.md` §八）。`single` 是一個行程放所有 thread；
+# `per-thread` 是監督行程起一個前台、每條 thread 一個對話行程，只在 Linux 起得來。`--process-model` 旗標蓋過 `mode`。
+# `supervisorBinary` 是監督行程執行檔的絕對路徑，省略就從 harness 往上找 `native/nexus-supervisor`。
+# 起動期讀一次、改了要重啟。關掉這一列就是 `single`。
+- id: process-model
+  name: '#settings/process-model'
+  config:
+    mode: single
