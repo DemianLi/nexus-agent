@@ -12,11 +12,12 @@
 //!
 //! - `ensure(thread, open)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；
 //!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
-//!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。
+//!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。等回答期間它跟自己的行程互抵，
+//!   不回 `capacity`，別的行程讓出的名額也不拿去替它起第二個。
 //!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
 //!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
 //!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
-//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置就記著，一回報閒置就送，之間再被 `ensure` 就作廢。
+//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置（含正在等 `drain` 回答的）就記著，一回報閒置就送，之間再被 `ensure` 就作廢。
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
@@ -25,7 +26,7 @@
 //! 只讀的先，同類裡閒置最久的先（閒置從回報閒置與最後一次被 `ensure` 要到兩者較晚的算）。挑不到的，從最晚排進來的起回 `capacity`。
 //! 有行程收完就起排著的，排的都起完才補預熱池。`drain` 回 `drained` 才收（死因 `evicted`，走拆除梯度；逾時之後才到的也照收）；回 `busy` 或
 //! `--drain-timeout-ms` 內沒回答都不收，當它不閒置，等它下次回報閒置。閒置超過 `--idle-ms`（只讀的 `--read-only-idle-ms`）也送 `drain`。
-//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。停機時排著的都回 `down(shutdown)`。
+//! 預熱池補到 `--warm` 個；池裡的沒綁就死了（或起不來），隔 `--front-restart-ms` 才再補。停機時排著的都回 `down(shutdown)`，那條 thread 還有行程的等它結束時回一次。
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
