@@ -4,8 +4,8 @@
  * 元件打 `/embed` 底下的路徑、送出時附上選取，獨立頁面開的對話在元件裡打不開（#2382）。
  *
  * 測試頁不進 `dist`：`beforeAll` 建到暫存目錄，開在 serve 同一個來源上（`gotoDemo`），跟宿主頁經同源反向代理
- * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。元件的下行走 mux 的 WebSocket，每個情境收尾時核對沒有退回 SSE。
- * 設 `NEXUS_E2E_SHOTS=<目錄>` 時每個情境跑完存一張截圖。
+ * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。經 `gotoDemo` 開的頁面，收尾時核對下行走了 mux、沒有退回 SSE。
+ * 設 `NEXUS_E2E_SHOTS=<目錄>` 時，呼叫 `shot` 的情境存截圖。
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -81,7 +81,7 @@ async function openDemo(
 interface Downstream {
   /** 元件的 mux socket 收到的訊框數。 */
   frames: number;
-  /** 元件的 mux socket 連不上的錯誤。 */
+  /** 元件的 mux socket 上 Playwright 回報的 `socketerror`。 */
   readonly socketErrors: string[];
   /** 退回 SSE 的下行請求（`POST /embed/threads/<id>/stream`）。 */
   readonly sse: string[];
@@ -91,10 +91,10 @@ const downstreams = new Map<Page, Downstream>();
 
 /**
  * 開 Vue 測試頁，等到元件註冊好。文件是 serve 供應的 `/livez`，載入之後整份寫成測試頁的 HTML（帶 doctype，標準模式），
- * 只有測試頁的資源經 `page.route` 供應。init script 每次載入都寫，重新整理之後照樣是測試頁。
+ * 只有測試頁的資源經 `page.route` 供應。init script 每次載入 `/livez` 都寫，重新整理之後照樣是測試頁。
  *
- * 文件不能用 `page.route` 交：Chrome 把那份文件當成公開網路上的來源，它連 loopback 的 WebSocket 會被
- * Local Network Access 檢查擋下（`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`），下行全退回 SSE（#2481）。
+ * 文件不能用 `page.route` 交：那份文件連 loopback 的 WebSocket 會被 Chrome 的 Local Network Access 檢查擋下
+ * （`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`），下行全退回 SSE（#2481）。
  */
 async function gotoDemo(page: Page, origin: string): Promise<void> {
   await page.route(`${origin}/vue-demo/assets/**`, async (route) => {
@@ -111,7 +111,7 @@ async function gotoDemo(page: Page, origin: string): Promise<void> {
         document.open();
         document.write(html);
         document.close();
-        // 寫進去的 module script 不一定會跑，換成新建的元素才會。同一個網址的 module 只跑一次，兩邊都跑也一樣。
+        // `document.write` 寫進去的 module script 不保證會跑，所以換成新建的元素。同一個網址的 module 只跑一次，兩邊都跑也一樣。
         for (const written of document.querySelectorAll('script')) {
           const script = document.createElement('script');
           for (const { name, value } of written.attributes) script.setAttribute(name, value);
