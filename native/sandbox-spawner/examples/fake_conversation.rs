@@ -15,6 +15,7 @@
 //!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
 //!   之後恢復）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）、`slow-drain:<毫秒>`（收到 `drain` 等這麼久才回）、
 //!   `busy-then-idle`（第一次收到 `drain` 回 `busy`，接著送 `idle(0)`、記一行 `idle`；之後的照預設回 `drained`）。
+//! - 緊接在名字後面的 `idle:<毫秒>` 例外，在 `bound` 之前送：監督行程照順序讀同一條管線，前台收到 `up` 時它已經讀到這幾個 `idle`。
 //! - 收到 `drain` 預設回 `drained`，記一行 `drain`。
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`idle`（送出之後）、`drain`、`eof`、`sigterm`。
@@ -51,6 +52,11 @@ fn report(report: &ConversationReport) {
     let mut out = std::io::stdout().lock();
     out.write_all(&frame(&encode_conversation_report(report))).unwrap();
     out.flush().unwrap();
+}
+
+fn idle(ms: &str) {
+    report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() });
+    log("idle");
 }
 
 fn start_heartbeat() {
@@ -124,7 +130,7 @@ fn main() {
             let thread = String::from_utf8(thread_id.clone()).unwrap();
             log(&format!("bind {thread}"));
             start_heartbeat();
-            let actions: Vec<&str> = thread.split(',').skip(1).collect();
+            let mut actions: Vec<&str> = thread.split(',').skip(1).collect();
             if actions.contains(&"garbage") {
                 let mut out = std::io::stdout().lock();
                 out.write_all(&u32::MAX.to_le_bytes()).unwrap();
@@ -132,6 +138,10 @@ fn main() {
                 continue;
             }
             let bound = if actions.contains(&"wrong-bound") { b"someone-else".to_vec() } else { thread_id };
+            let leading_idle = actions.iter().take_while(|action| action.starts_with("idle:")).count();
+            for action in actions.drain(..leading_idle) {
+                idle(&action["idle:".len()..]);
+            }
             report(&ConversationReport::Bound { thread_id: bound });
             for action in actions {
                 match action.split_once(':').unwrap_or((action, "")) {
@@ -175,10 +185,7 @@ fn main() {
                         QUIET.store(false, Ordering::SeqCst);
                     }
                     ("ignore-eof", _) => ignore_eof = true,
-                    ("idle", ms) => {
-                        report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() });
-                        log("idle");
-                    }
+                    ("idle", ms) => idle(ms),
                     ("busy-on-drain", _) => on_drain = Some(ConversationReport::Busy),
                     ("ignore-drain", _) => on_drain = None,
                     ("busy-then-idle", _) => busy_then_idle = true,

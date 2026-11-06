@@ -992,7 +992,6 @@ fn ensure_while_waiting_for_the_drain_answer_and_another_ends(answer: &str) -> (
     let mut h = Harness::start(Options { extra: vec!["--capacity", "2"], ..Options::default() });
     let a = h.up(&thread);
     let b = h.up("b,wait-go,exit:3");
-    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
     h.release(&thread);
     assert!(saw_drain(&a));
     h.ensure(&thread);
@@ -1027,7 +1026,6 @@ fn release_while_waiting_for_the_drain_answer_is_kept_after_busy() {
     let mut h = Harness::start(Options { extra: vec!["--capacity", "1"], ..Options::default() });
     let thread = "a,idle:1000,slow-drain:500,busy-then-idle";
     let a = h.up(thread);
-    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
     h.ensure("b");
     assert!(saw_drain(&a));
     h.release(thread);
@@ -1042,7 +1040,6 @@ fn a_thread_waiting_for_its_drain_answer_is_not_answered_capacity() {
     let thread = "a,idle:1000,slow-drain:800,busy-on-drain";
     let a = h.up(thread);
     h.up("x");
-    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
     h.ensure("u");
     assert!(saw_drain(&a));
     h.ensure(thread);
