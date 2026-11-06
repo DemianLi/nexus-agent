@@ -92,7 +92,7 @@ impl Audit {
             Ok(()) => self.torn = false,
             Err(err) => {
                 self.torn = true;
-                eprintln!("[nexus-supervisor] 稽核紀錄寫不進去：{err}；那一行是 {}", line.trim());
+                say!("稽核紀錄寫不進去：{err}；那一行是 {}", line.trim());
             }
         }
     }

@@ -73,11 +73,13 @@ struct Options {
     extra: Vec<&'static str>,
     /// 監督行程的 stderr 丟掉，不寫進 `supervisor.err`。
     discard_stderr: bool,
+    /// 監督行程的 stderr 接一條讀端已經關掉的管線：每次寫都是 EPIPE。
+    broken_stderr: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false }
     }
 }
 
@@ -105,7 +107,15 @@ impl Harness {
         cmd.args(["--eof-grace-ms", &options.eof_grace_ms.to_string()]);
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
         cmd.args(&options.extra);
-        let stderr = if options.discard_stderr {
+        let stderr = if options.broken_stderr {
+            let mut fds = [0; 2];
+            // SAFETY：拿一對新的 pipe，讀端當場關掉。
+            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+            // SAFETY：fds 是剛拿到的。
+            unsafe { libc::close(fds[0]) };
+            // SAFETY：寫端交給 Stdio 擁有。
+            Stdio::from(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) })
+        } else if options.discard_stderr {
             Stdio::null()
         } else {
             Stdio::from(std::fs::File::create(dir.join("supervisor.err")).unwrap())
@@ -590,4 +600,13 @@ fn flooding_stderr_does_not_starve_the_others() {
         ]
     );
     assert!(h.wait_exit().success());
+}
+
+#[test]
+fn stderr_that_cannot_be_written_does_not_take_the_supervisor_down() {
+    let mut h = Harness::start(Options { broken_stderr: true, ..Options::default() });
+    // 綁錯 thread：監督行程自己印一行再殺掉它，那一行寫到 EPIPE。
+    assert_eq!(h.down("a,wrong-bound"), DeathCause::Crash);
+    h.up("b");
+    assert!(h.child.try_wait().unwrap().is_none(), "監督行程不該結束");
 }

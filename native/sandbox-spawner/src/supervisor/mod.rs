@@ -33,6 +33,13 @@
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，所有對話行程走拆除梯度；全部收完之後前台也走一次；前台收完就回 0。
 //! 停機中再收到一次這些訊號，所有對話行程的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
 
+/// 監督行程自己的一行訊息，走跟轉送對話行程 stderr 同一條路（[`process::write_stderr`]）：寫不出去就丟掉、記數，不 panic。
+macro_rules! say {
+    ($($arg:tt)*) => {
+        $crate::supervisor::process::write_stderr(format!("{} {}\n", $crate::supervisor::LOG, format_args!($($arg)*)).as_bytes())
+    };
+}
+
 mod args;
 mod audit;
 mod memory;
@@ -152,14 +159,14 @@ pub fn run(argv: Vec<OsString>) -> i32 {
     let args = match args::parse(&argv) {
         Ok(args) => args,
         Err(err) => {
-            eprintln!("{LOG} {err}\n用法：{}", args::USAGE);
+            say!("{err}\n用法：{}", args::USAGE);
             return 2;
         }
     };
     match start(args) {
         Ok(mut supervisor) => supervisor.run(),
         Err(err) => {
-            eprintln!("{LOG} 起不來：{err}");
+            say!("起不來：{err}");
             1
         }
     }
@@ -298,7 +305,7 @@ impl Supervisor {
                 if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                     continue;
                 }
-                eprintln!("{LOG} poll 失敗：{}；殺掉所有群組後結束", std::io::Error::last_os_error());
+                say!("poll 失敗：{}；殺掉所有群組後結束", std::io::Error::last_os_error());
                 self.kill_everything();
                 return 1;
             }
@@ -377,7 +384,7 @@ impl Supervisor {
             conversation.rss_kb = conversation.rss_kb.max(kb);
             let over = self.args.rss_limit_kb.is_some_and(|limit| kb > limit);
             if over && !matches!(conversation.proc.stop, Some((Step::Kill, _))) {
-                eprintln!("{LOG} 對話行程 {} 的 RSS {kb} kB 超過上限，殺掉", conversation.proc.pid);
+                say!("對話行程 {} 的 RSS {kb} kB 超過上限，殺掉", conversation.proc.pid);
                 conversation.cause.get_or_insert(DeathCause::Memory);
                 conversation.proc.kill_now();
             }
@@ -397,7 +404,7 @@ impl Supervisor {
                 self.front = Some(front);
             }
             Err(err) => {
-                eprintln!("{LOG} 前台起不來：{err}");
+                say!("前台起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Front { pid: 0, exit: Exit::NOT_STARTED, error: Some(&error) });
                 self.front_restart_at = Some(Instant::now() + self.args.front_restart);
@@ -417,7 +424,7 @@ impl Supervisor {
         let frames = match frames {
             Ok(frames) => frames,
             Err(err) => {
-                eprintln!("{LOG} 前台送來解不開的框（{}），殺掉前台", err.0);
+                say!("前台送來解不開的框（{}），殺掉前台", err.0);
                 front.kill_now();
                 return;
             }
@@ -427,7 +434,7 @@ impl Supervisor {
                 Ok(FrontRequest::Ensure { thread_id, .. }) => self.ensure(thread_id),
                 Ok(FrontRequest::Release { .. }) => {}
                 Err(err) => {
-                    eprintln!("{LOG} 前台送來解不開的訊息（{}），殺掉前台", err.0);
+                    say!("前台送來解不開的訊息（{}），殺掉前台", err.0);
                     if let Some(front) = self.front.as_mut() {
                         front.kill_now();
                     }
@@ -471,7 +478,7 @@ impl Supervisor {
                 rss_kb: 0,
             }),
             Err(err) => {
-                eprintln!("{LOG} 對話行程起不來：{err}");
+                say!("對話行程起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Conversation {
                     thread: &thread,
@@ -492,7 +499,7 @@ impl Supervisor {
         let frames = match conversation.proc.chan.receive() {
             Ok(frames) => frames,
             Err(err) => {
-                eprintln!("{LOG} 對話行程 {} 送來解不開的框（{}），殺掉", conversation.proc.pid, err.0);
+                say!("對話行程 {} 送來解不開的框（{}），殺掉", conversation.proc.pid, err.0);
                 conversation.cause.get_or_insert(DeathCause::Crash);
                 conversation.proc.kill_now();
                 return;
@@ -503,7 +510,7 @@ impl Supervisor {
             let report = match decode_conversation_report(&payload) {
                 Ok(report) => report,
                 Err(err) => {
-                    eprintln!("{LOG} 對話行程 {} 送來解不開的訊息（{}），殺掉", conversation.proc.pid, err.0);
+                    say!("對話行程 {} 送來解不開的訊息（{}），殺掉", conversation.proc.pid, err.0);
                     conversation.cause.get_or_insert(DeathCause::Crash);
                     conversation.proc.kill_now();
                     return;
@@ -517,7 +524,7 @@ impl Supervisor {
                 }
                 ConversationReport::Bound { thread_id } if conversation.phase == Phase::Binding => {
                     if thread_id != conversation.thread {
-                        eprintln!("{LOG} 對話行程 {} 綁錯 thread，殺掉", conversation.proc.pid);
+                        say!("對話行程 {} 綁錯 thread，殺掉", conversation.proc.pid);
                         conversation.cause.get_or_insert(DeathCause::Crash);
                         conversation.proc.kill_now();
                         return;
@@ -558,7 +565,7 @@ impl Supervisor {
         }
         if stop {
             if self.shutting_down {
-                eprintln!("{LOG} 停機中又收到停止訊號，所有對話行程當場 SIGKILL");
+                say!("停機中又收到停止訊號，所有對話行程當場 SIGKILL");
                 for conversation in &mut self.conversations {
                     conversation.proc.kill_now();
                 }
@@ -605,7 +612,7 @@ impl Supervisor {
             self.front = None;
             self.audit.record(&Record::Front { pid, exit, error: None });
             if !self.shutting_down {
-                eprintln!("{LOG} 前台結束了（{exit:?}），{} ms 後重起", self.args.front_restart.as_millis());
+                say!("前台結束了（{exit:?}），{} ms 後重起", self.args.front_restart.as_millis());
                 self.front_restart_at = Some(Instant::now() + self.args.front_restart);
             }
             return;
