@@ -268,6 +268,8 @@ export {
   systemPromptWrapWith,
   withSystemPromptStep,
 } from './system-prompt-step.js';
+export type { ModelCallNext, ModelCallRequest, ModelCallStep } from './model-call-step.js';
+export { modelCallStepOf, withModelCallStep, wrapModelCallFromStep } from './model-call-step.js';
 export type { ToolAddition, ToolAdmission } from './tool-resolution.js';
 export { addedTools, originalToolOf, toolDescriptionOf, toolNameOf } from './tool-resolution.js';
 export { admittedTools } from './tool-resolution.js';

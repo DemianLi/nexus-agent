@@ -35,6 +35,7 @@ import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
 import { turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
+import { modelCallStepOf, wrapModelCallFromStep } from '../model-call-step.js';
 import { systemPromptCellOf, systemPromptWrapWith } from '../system-prompt-step.js';
 import { toolListCellOf, wrapModelCallWith } from '../tool-list-step.js';
 import { HOOK_KINDS, hookStepOf, hookWith } from '../hook-step.js';
@@ -205,7 +206,7 @@ export class NativeAgent {
   readonly #toolCells: readonly LoopMiddleware[];
   /**
    * 一次模型呼叫由外到內經過的那幾格，跟 {@link NativeAgent.middleware} 一一對應：登記了工具清單那一步的（{@link toolListCellOf}）
-   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
+   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）與環繞步的（{@link modelCallStepOf}，摘要器那一格）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
    */
   readonly #modelCells: readonly LoopMiddleware[];
   /**
@@ -221,7 +222,7 @@ export class NativeAgent {
    * @param params - 模型、提示詞、工具、middleware。
    * @param threads - thread 的 state；`withConfig` 出來的那一份共用同一張表。
    * @param defaults - `withConfig` 給的上限。
-   * @throws {Error} 有一顆 middleware 同時登記了工具清單那一步與系統提示那一步。
+   * @throws {Error} 有一顆 middleware 在模型那一格登記了不只一步（工具清單、系統提示、環繞步）。
    */
   constructor(
     params: NativeAgentParams,
@@ -252,12 +253,21 @@ export class NativeAgent {
       const driven = this.#driven[index]!;
       const cell = toolListCellOf(m);
       const prompt = systemPromptCellOf(m);
-      if (cell !== undefined && prompt !== undefined) {
+      const around = modelCallStepOf(m);
+      if ([cell, prompt, around].filter((registered) => registered !== undefined).length > 1) {
         throw new Error(
-          `middleware "${m.name}" 同時登記了工具清單與系統提示那一步，native 只能直接呼叫其中一個`,
+          `middleware "${m.name}" 在模型那一格登記了不只一步（工具清單、系統提示、環繞步），native 只能直接呼叫其中一個`,
         );
       }
       if (driven.wrapModelCall === undefined) return driven;
+      if (around !== undefined) {
+        return {
+          name: m.name,
+          wrapModelCall: wrapModelCallFromStep(around) as NonNullable<
+            LoopMiddleware['wrapModelCall']
+          >,
+        };
+      }
       if (cell !== undefined) {
         return {
           name: m.name,
