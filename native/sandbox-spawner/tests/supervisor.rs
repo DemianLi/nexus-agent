@@ -984,3 +984,105 @@ fn ensure_while_waiting_for_the_drain_answer_is_answered_when_it_drains() {
     assert!(events[1].starts_with("Down") && events[1].contains(&a_bytes) && events[1].contains("Evicted"), "{events:?}");
     assert!(events[2].starts_with("Up") && events[2].contains(&format!("{:?}", b"b".to_vec())), "{events:?}");
 }
+
+/// 名額 2：a 閒置、`release` 之後慢慢回答 `drain`；這段期間又要 a，然後另一條 b 結束了。
+/// b 讓出的名額不能拿去給 a 起第二個行程：a 回答之前，a 要的仍是它自己那個。
+fn ensure_while_waiting_for_the_drain_answer_and_another_ends(answer: &str) -> (Harness, PathBuf, String) {
+    let thread = format!("a,idle:1000,slow-drain:800{answer}");
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "2"], ..Options::default() });
+    let a = h.up(&thread);
+    let b = h.up("b,wait-go,exit:3");
+    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
+    h.release(&thread);
+    assert!(saw_drain(&a));
+    h.ensure(&thread);
+    std::fs::write(format!("{}.go", b.display()), b"").unwrap();
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: b"b,wait-go,exit:3".to_vec(), cause: DeathCause::Crash });
+    (h, a, thread)
+}
+
+#[test]
+fn a_thread_waiting_for_its_drain_answer_is_not_started_twice_when_it_stays() {
+    let (mut h, a, thread) = ensure_while_waiting_for_the_drain_answer_and_another_ends(",busy-on-drain");
+    assert_eq!(h.event(), FrontEvent::Up { thread_id: thread.as_bytes().to_vec(), socket: a.to_str().unwrap().as_bytes().to_vec() });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!h.dir.join("run/c3.sock.log").exists(), "a 起了第二個行程");
+}
+
+#[test]
+fn a_thread_waiting_for_its_drain_answer_gets_a_new_one_only_after_it_is_down() {
+    let (mut h, a, thread) = ensure_while_waiting_for_the_drain_answer_and_another_ends("");
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    match h.event() {
+        FrontEvent::Up { thread_id, socket } => {
+            assert_eq!(thread_id, thread.as_bytes());
+            assert_ne!(socket, a.to_str().unwrap().as_bytes());
+        }
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    }
+}
+
+#[test]
+fn release_while_waiting_for_the_drain_answer_is_kept_after_busy() {
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "1"], ..Options::default() });
+    let thread = "a,idle:1000,slow-drain:500,busy-then-idle";
+    let a = h.up(thread);
+    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
+    h.ensure("b");
+    assert!(saw_drain(&a));
+    h.release(thread);
+    // 回 `busy`：b 沒有名額；接著回報閒置，記著的 `release` 這時送 `drain`，回 `drained` 收掉。
+    assert_eq!(h.event(), capacity("b", 1, 1));
+    assert_eq!(h.down_of(thread), DeathCause::Evicted);
+}
+
+#[test]
+fn a_thread_waiting_for_its_drain_answer_is_not_answered_capacity() {
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "2"], ..Options::default() });
+    let thread = "a,idle:1000,slow-drain:800,busy-on-drain";
+    let a = h.up(thread);
+    h.up("x");
+    assert!(wait_until(|| log(&a).iter().any(|line| line == "idle")));
+    h.ensure("u");
+    assert!(saw_drain(&a));
+    h.ensure(thread);
+    h.ensure("w");
+    let mut events: Vec<FrontEvent> = (0..3).map(|_| h.event()).collect();
+    events.sort_by_key(|e| format!("{e:?}"));
+    // a 在等自己的回答，跟自己的行程互抵；名額只能讓排著的 u、w 回 `capacity`，回 `busy` 之後 a 回 `up`。
+    assert_eq!(
+        events,
+        vec![
+            capacity("u", 2, 2),
+            capacity("w", 2, 2),
+            FrontEvent::Up { thread_id: thread.as_bytes().to_vec(), socket: a.to_str().unwrap().as_bytes().to_vec() },
+        ]
+    );
+}
+
+#[test]
+fn shutdown_answers_a_thread_waiting_for_its_drain_answer_once() {
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "2", "--drain-timeout-ms", "60000"], ..Options::default() });
+    let thread = "a,idle:1000,ignore-drain";
+    let a = h.up(thread);
+    let x = h.up("x");
+    h.ensure("b");
+    assert!(saw_drain(&a));
+    h.ensure(thread);
+    // 前台的要求照順序處理：x 回了 `up`，前一個 `ensure` 就已經排進去了。
+    assert_eq!(h.up("x"), x);
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    events.sort_by_key(|e| format!("{e:?}"));
+    assert_eq!(
+        events,
+        [
+            FrontEvent::Down { thread_id: b"x".to_vec(), cause: DeathCause::Shutdown },
+            FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Shutdown },
+            FrontEvent::Down { thread_id: b"b".to_vec(), cause: DeathCause::Shutdown },
+        ]
+    );
+}

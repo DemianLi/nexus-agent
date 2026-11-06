@@ -155,7 +155,7 @@ struct Conversation {
     used_at: Instant,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
-    /// 前台 `release` 過、還沒閒置：一回報閒置就送 `drain`；再被 `ensure` 就清掉。
+    /// 前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 就清掉。
     released: bool,
     /// 最近一次輪詢到的 RSS（kB），給 `stats` 加總。
     rss_now_kb: u64,
@@ -680,10 +680,24 @@ impl Supervisor {
         conversation.proc.chan.send(&encode_conversation_command(&bind));
     }
 
+    /// 這條 thread 排著，是在等它自己那個行程回答 `drain`：回 `busy` 就用原來的，回 `drained` 就用它讓出的名額，兩者互抵。
+    fn waiting_own_drain(&self, thread: &[u8]) -> bool {
+        self.conversations.iter().any(|c| c.thread.as_deref() == Some(thread) && c.drain.is_some() && c.proc.stop.is_none())
+    }
+
     /// 排著的每一條都要有一個正在收、或在等 `drain` 回答的行程讓出名額：不夠就挑閒置最久的送 `drain`（只讀的先），挑不到的從最晚排進來的起回 `capacity`。
+    /// 在等自己 `drain` 回答的那條與它自己的行程互抵，兩邊都不算，也不回 `capacity`。
     fn make_room(&mut self) {
-        let mut freeing = self.conversations.iter().filter(|c| c.proc.stop.is_some() || c.drain.is_some()).count();
-        while freeing < self.pending.len() {
+        let needed = self.pending.iter().filter(|(t, _)| !self.waiting_own_drain(t)).count();
+        let mut freeing = self
+            .conversations
+            .iter()
+            .filter(|c| {
+                c.proc.stop.is_some()
+                    || (c.drain.is_some() && !c.thread.as_ref().is_some_and(|t| self.pending.iter().any(|(p, _)| p == t)))
+            })
+            .count();
+        while freeing < needed {
             let victim = self
                 .conversations
                 .iter()
@@ -695,8 +709,10 @@ impl Supervisor {
             Self::drain(&mut self.conversations[index]);
             freeing += 1;
         }
-        while freeing < self.pending.len() {
-            let Some((thread, _)) = self.pending.pop() else { break };
+        while freeing < needed {
+            let Some(at) = self.pending.iter().rposition(|(t, _)| !self.waiting_own_drain(t)) else { break };
+            let (thread, _) = self.pending.remove(at);
+            freeing += 1;
             let (current, limit) = (self.conversations.len() as u32, self.capacity);
             say!("名額滿（{current}／{limit}），沒有可逐出的對話行程");
             self.tell_front(&FrontEvent::Capacity { thread_id: thread, current, limit });
@@ -708,10 +724,15 @@ impl Supervisor {
         conversation.proc.chan.send(&encode_conversation_command(&ConversationCommand::Drain));
     }
 
-    /// 有名額就起排著的；排的都起完了再補預熱池。
+    /// 有名額就照排隊順序起排著的；這條 thread 還有行程（在等它回答 `drain`、或正在收）的留著，等那個行程的結果。排的都起完了再補預熱池。
     fn serve_pending(&mut self) {
-        while !self.pending.is_empty() && self.conversations.len() < self.capacity as usize && !self.shutting_down {
-            let (thread, open) = self.pending.remove(0);
+        while self.conversations.len() < self.capacity as usize && !self.shutting_down {
+            let Some(at) =
+                self.pending.iter().position(|(t, _)| !self.conversations.iter().any(|c| c.thread.as_ref() == Some(t)))
+            else {
+                break;
+            };
+            let (thread, open) = self.pending.remove(at);
             if !self.take_warm(&thread, open) {
                 self.start_conversation(Some(thread), open);
             }
@@ -735,7 +756,7 @@ impl Supervisor {
         let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread.as_deref() == Some(thread)) else { return };
         if conversation.evictable() {
             Self::drain(conversation);
-        } else if conversation.proc.stop.is_none() && conversation.drain.is_none() {
+        } else if conversation.proc.stop.is_none() {
             conversation.released = true;
         }
     }
@@ -950,7 +971,11 @@ impl Supervisor {
                 }
             } else {
                 self.shutting_down = true;
+                // 還有行程的那幾條，等那個行程結束時回 `down`。
                 for (thread, _) in std::mem::take(&mut self.pending) {
+                    if self.conversations.iter().any(|c| c.thread.as_ref() == Some(&thread)) {
+                        continue;
+                    }
                     self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Shutdown });
                 }
                 let now = Instant::now();
