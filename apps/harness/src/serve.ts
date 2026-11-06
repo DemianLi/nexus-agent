@@ -1479,9 +1479,17 @@ async function startServer(
         storageFull: storageProbe.full,
       }))
     : undefined;
+  const streamCookies = embedCookies;
   const handler = createWireHandler({
     auth,
     trustedHosts: invocation.trustedHosts,
+    // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。
+    ...(streamCookies !== undefined && {
+      embedStreams: {
+        recheck: (headers: Headers) => streamCookies.recheckOpenStream(headers),
+        audit: () => embedAudit,
+      },
+    }),
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
     attachments: attachmentStore,
     deliverableLimits,

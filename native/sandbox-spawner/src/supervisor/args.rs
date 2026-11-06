@@ -2,12 +2,14 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use super::cpu::Config;
 use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
 --conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
 [--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--capacity <條>] [--warm <個>] [--idle-ms <毫秒>] \
-[--read-only-idle-ms <毫秒>] [--drain-timeout-ms <毫秒>] [--stats-ms <毫秒>]";
+[--read-only-idle-ms <毫秒>] [--drain-timeout-ms <毫秒>] [--stats-ms <毫秒>] [--throttle-ms <毫秒>] [--throttle-run-ms <毫秒>] \
+[--throttle-stop-ms <毫秒>]";
 
 /// stdin EOF 之後等多久才送 SIGTERM。
 pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
@@ -19,6 +21,12 @@ pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
 /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
 pub const DEFAULT_STALL: Duration = Duration::from_millis(15_000);
+/// 沉默多久才看要不要壓住吃滿 CPU 的對話行程（[`super::cpu`]）。
+pub const DEFAULT_THROTTLE: Duration = Duration::from_millis(2_000);
+/// 壓住時每一輪放它跑多久。
+pub const DEFAULT_THROTTLE_RUN: Duration = Duration::from_millis(25);
+/// 壓住時每一輪停它多久。
+pub const DEFAULT_THROTTLE_STOP: Duration = Duration::from_millis(75);
 /// 預熱池的大小（設計 §7-4）。
 pub const DEFAULT_WARM: u32 = 1;
 /// 一般對話行程閒置多久就逐出（設計 §7-2）。
@@ -61,6 +69,8 @@ pub struct Args {
     pub drain_timeout: Duration,
     /// 每隔這麼久給前台一次 `stats`。`None` 是不送。
     pub stats: Option<Duration>,
+    /// 壓住吃滿 CPU 的對話行程（[`super::cpu`]）。`None`（`--throttle-ms 0`）是不壓。
+    pub throttle: Option<Config>,
 }
 
 pub fn parse(args: &[OsString]) -> Result<Args, String> {
@@ -82,6 +92,9 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut read_only_idle = Some(DEFAULT_READ_ONLY_IDLE);
     let mut drain_timeout = DEFAULT_DRAIN_TIMEOUT;
     let mut stats = Some(DEFAULT_STATS);
+    let mut throttle = Some(DEFAULT_THROTTLE);
+    let mut throttle_run = DEFAULT_THROTTLE_RUN;
+    let mut throttle_stop = DEFAULT_THROTTLE_STOP;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_str().ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
@@ -105,6 +118,9 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--read-only-idle-ms" => read_only_idle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
             "--drain-timeout-ms" => drain_timeout = Duration::from_millis(positive(flag, value()?)?),
             "--stats-ms" => stats = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
+            "--throttle-ms" => throttle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
+            "--throttle-run-ms" => throttle_run = Duration::from_millis(positive(flag, value()?)?),
+            "--throttle-stop-ms" => throttle_stop = Duration::from_millis(positive(flag, value()?)?),
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
@@ -127,6 +143,7 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         read_only_idle,
         drain_timeout,
         stats,
+        throttle: throttle.map(|after| Config { after, run: throttle_run, stop: throttle_stop }),
     })
 }
 
@@ -180,6 +197,30 @@ mod tests {
         assert_eq!(args.read_only_idle, Some(DEFAULT_READ_ONLY_IDLE));
         assert_eq!(args.drain_timeout, DEFAULT_DRAIN_TIMEOUT);
         assert_eq!(args.stats, Some(DEFAULT_STATS));
+        assert_eq!(
+            args.throttle,
+            Some(Config { after: DEFAULT_THROTTLE, run: DEFAULT_THROTTLE_RUN, stop: DEFAULT_THROTTLE_STOP })
+        );
+    }
+
+    #[test]
+    fn throttle_flags() {
+        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let mut items = base.to_vec();
+        items.extend(["--throttle-ms", "300", "--throttle-run-ms", "10", "--throttle-stop-ms", "40"]);
+        let args = parse(&os(&items)).unwrap();
+        assert_eq!(
+            args.throttle,
+            Some(Config { after: Duration::from_millis(300), run: Duration::from_millis(10), stop: Duration::from_millis(40) })
+        );
+        let mut items = base.to_vec();
+        items.extend(["--throttle-ms", "0"]);
+        assert_eq!(parse(&os(&items)).unwrap().throttle, None);
+        for bad in [["--throttle-run-ms", "0"], ["--throttle-stop-ms", "0"], ["--throttle-ms", "x"]] {
+            let mut items = base.to_vec();
+            items.extend(bad);
+            assert!(parse(&os(&items)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

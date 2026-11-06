@@ -30,7 +30,7 @@
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
-//! `memory`，心跳斷了超過 `--stall-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! `memory`，心跳斷了超過 `--stall-ms`（壓住時只算放它跑的時間）是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
 //! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
 //! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`；預熱池裡還沒指派的只寫稽核（`thread` 是空字串）。
 //!
@@ -44,6 +44,8 @@
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
 //! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
+//!
+//! 沉默又一直要 CPU 的 leader 交替送 SIGSTOP／SIGCONT（[`cpu`]）；走拆除梯度或送 `drain` 之前先 SIGCONT。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，所有對話行程走拆除梯度；全部收完之後前台也走一次；前台收完就回 0。
@@ -58,6 +60,7 @@ macro_rules! say {
 
 mod args;
 mod audit;
+mod cpu;
 mod memory;
 mod process;
 
@@ -173,6 +176,8 @@ struct Conversation {
     heard_at: Option<Instant>,
     /// 送出 `bind` 之後，兩則回報之間最長隔了多久，寫進稽核。
     max_silence: Duration,
+    /// 吃滿 CPU 時的壓制（[`cpu`]）。
+    cpu: cpu::Guard,
 }
 
 impl Conversation {
@@ -182,6 +187,29 @@ impl Conversation {
             self.max_silence = self.max_silence.max(now.saturating_duration_since(at));
             self.heard_at = Some(now);
         }
+        if self.cpu.holding() {
+            say!("對話行程 {} 出聲了，不再壓它", self.proc.pid);
+        }
+        if self.cpu.heard() {
+            cpu::signal(self.proc.pid, cpu::Signal::Cont);
+        }
+    }
+
+    /// 走拆除梯度。壓制中的先放開：停住的行程讀不到 EOF，SIGTERM 也要等 SIGCONT 才送得到。
+    fn begin_stop(&mut self, now: Instant, eof_grace: Duration) {
+        self.release(now);
+        self.proc.begin_stop(now, eof_grace);
+    }
+
+    fn release(&mut self, now: Instant) {
+        if self.cpu.release(now) {
+            cpu::signal(self.proc.pid, cpu::Signal::Cont);
+        }
+    }
+
+    /// 可以判要不要壓：已經 `up`、沒在收、沒在等 `drain` 的回答。`bind` 到 `bound` 之間是冷開，不壓。
+    fn throttleable(&self) -> bool {
+        self.phase == Phase::Up && self.proc.stop.is_none() && self.drain.is_none() && self.heard_at.is_some()
     }
 
     /// 閒置、已經 `up`、沒在收也沒在等 `drain` 的回答：可以送 `drain`。
@@ -199,9 +227,9 @@ impl Conversation {
         self.thread.is_none() && self.proc.stop.is_none()
     }
 
-    /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它。
+    /// 送出 `bind` 之後、還沒在收，而且已經 `stall` 沒聽到它（壓住時停住的時間不算，見 [`cpu::Guard::silence`]）。
     fn stalled(&self, now: Instant, stall: Duration) -> bool {
-        self.proc.stop.is_none() && self.heard_at.is_some_and(|at| now.saturating_duration_since(at) >= stall)
+        self.proc.stop.is_none() && self.heard_at.is_some_and(|at| self.cpu.silence(now, at) >= stall)
     }
 }
 
@@ -457,6 +485,9 @@ impl Supervisor {
         if let Some(stall) = self.args.stall {
             self.check_stalls(now, stall);
         }
+        if let Some(config) = self.args.throttle {
+            self.throttle(now, config);
+        }
         if self.front_restart_at.is_some_and(|at| at <= now) && !self.shutting_down {
             self.front_restart_at = None;
             self.start_front();
@@ -485,8 +516,9 @@ impl Supervisor {
             .chain(restart)
             .chain(Some(self.rss_poll_at).filter(|_| !self.conversations.is_empty()))
             .chain(self.args.stall.into_iter().flat_map(|stall| {
-                self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.heard_at.map(|at| at + stall))
+                self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.cpu.stall_at(c.heard_at?, stall))
             }))
+            .chain(self.conversations.iter().filter(|c| c.throttleable()).filter_map(|c| c.cpu.deadline()))
             .chain(self.args.stall.filter(|_| self.conversations.iter().any(|c| c.heard_at.is_some())).map(|stall| Instant::now() + stall / 4))
             .chain(self.conversations.iter().filter_map(|c| c.drain.map(|at| at + self.args.drain_timeout)))
             .chain(self.conversations.iter().filter_map(|c| self.idle_deadline(c)))
@@ -511,6 +543,7 @@ impl Supervisor {
         for conversation in &mut self.conversations {
             if conversation.heard_at.is_some() {
                 conversation.heard_at = Some(now);
+                conversation.cpu.restart(now);
             }
         }
     }
@@ -526,9 +559,25 @@ impl Supervisor {
             self.on_conversation_readable(index);
             let conversation = &mut self.conversations[index];
             if conversation.stalled(now, stall) {
-                say!("對話行程 {} 已經 {} ms 沒有回報，殺掉", conversation.proc.pid, stall.as_millis());
+                say!("對話行程 {} 已經 {} ms 沒有回報（壓住時停住的時間不算），殺掉", conversation.proc.pid, stall.as_millis());
                 conversation.cause.get_or_insert(DeathCause::Stalled);
                 conversation.proc.kill_now();
+            }
+        }
+    }
+
+    /// 壓住吃滿 CPU 的對話行程（[`cpu`]）：可以壓的照 [`cpu::Guard::tick`] 開始或切換。開始收、送 `drain` 的當場就放開了，見 [`Conversation::release`]。
+    fn throttle(&mut self, now: Instant, config: cpu::Config) {
+        for conversation in &mut self.conversations {
+            let Some(heard_at) = conversation.heard_at.filter(|_| conversation.throttleable()) else {
+                continue;
+            };
+            let holding = conversation.cpu.holding();
+            if let Some(signal) = conversation.cpu.tick(now, heard_at, config) {
+                if !holding {
+                    say!("對話行程 {} 沉默 {} ms 而且一直要 CPU，開始壓住它", conversation.proc.pid, config.after.as_millis());
+                }
+                cpu::signal(conversation.proc.pid, signal);
             }
         }
     }
@@ -538,7 +587,13 @@ impl Supervisor {
     ///
     /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
     fn poll_rss(&mut self) {
+        let now = Instant::now();
         for conversation in &mut self.conversations {
+            if self.args.throttle.is_some() && conversation.throttleable() {
+                if let Some(ns) = cpu::demand_ns(conversation.proc.pid) {
+                    conversation.cpu.sample(now, ns);
+                }
+            }
             let Some(kb) = memory::vm_rss_kb(conversation.proc.pid) else { continue };
             conversation.rss_now_kb = kb;
             conversation.rss_kb = conversation.rss_kb.max(kb);
@@ -721,7 +776,9 @@ impl Supervisor {
     }
 
     fn drain(conversation: &mut Conversation) {
-        conversation.drain = Some(Instant::now());
+        let now = Instant::now();
+        conversation.release(now);
+        conversation.drain = Some(now);
         conversation.proc.chan.send(&encode_conversation_command(&ConversationCommand::Drain));
     }
 
@@ -844,6 +901,7 @@ impl Supervisor {
                 rss_kb: 0,
                 heard_at: None,
                 max_silence: Duration::ZERO,
+                cpu: cpu::Guard::default(),
             }),
             Err(err) => {
                 say!("對話行程起不來：{err}");
@@ -935,7 +993,7 @@ impl Supervisor {
                 ConversationReport::Drained if conversation.proc.stop.is_none() => {
                     conversation.drain = None;
                     conversation.cause.get_or_insert(DeathCause::Evicted);
-                    conversation.proc.begin_stop(Instant::now(), self.args.eof_grace);
+                    conversation.begin_stop(Instant::now(), self.args.eof_grace);
                     // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
                     self.make_room();
                 }
@@ -982,7 +1040,7 @@ impl Supervisor {
                 let now = Instant::now();
                 for conversation in &mut self.conversations {
                     conversation.cause.get_or_insert(DeathCause::Shutdown);
-                    conversation.proc.begin_stop(now, self.args.eof_grace);
+                    conversation.begin_stop(now, self.args.eof_grace);
                 }
             }
         }
