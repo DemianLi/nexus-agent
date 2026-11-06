@@ -119,6 +119,8 @@ import { isFileBlock } from './attachment-ref.js';
 import { toLoggedMessage } from './logged-message.js';
 import { isMaxTokensFinish } from './max-tokens.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
+import { withModelCallStep } from './model-call-step.js';
+import type { ModelCallStep } from './model-call-step.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
@@ -777,7 +779,7 @@ export function createSummarizer(
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
   // 最外層：這一步開始時讀切點表（summary-cutoffs.ts），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串都從這個切點算。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
-    withSummaryCutoffs(withTokenWarmup(middleware), cutoffs);
+    asModelCallStep(withSummaryCutoffs(withTokenWarmup(middleware), cutoffs));
   // 剪刀關掉：不剪新的，但記過的照樣換上去（#1567 N0780）。續接灌回 state 的是原文，換上去的只有這一層。
   if (pruning === false) {
     return catchUp(
@@ -864,7 +866,7 @@ export function createRecordedProjectionShell(sessions?: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
   if (sessions === undefined) return { name: SUMMARIZATION_MIDDLEWARE_NAME } as AgentMiddleware;
-  return {
+  return asModelCallStep({
     name: SUMMARIZATION_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
       const original: readonly BaseMessage[] = request.messages ?? [];
@@ -883,7 +885,22 @@ export function createRecordedProjectionShell(sessions?: {
           : { ...request, messages: [...messages] }) as typeof request,
       );
     },
-  } as AgentMiddleware;
+  } as AgentMiddleware);
+}
+
+/**
+ * 摘要器那一格整串登記成一個環繞步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：那一步就是包好的整串
+ * `wrapModelCall`，force 鏈（{@link withRetainedTail}）也在裡面；回的那顆用它造 `wrapModelCall`，其餘欄位照舊。
+ *
+ * @param chain - 包好的整串，一定有 `wrapModelCall`。
+ * @returns 同名、同狀態、登記了那一步的 middleware。
+ */
+function asModelCallStep(chain: AgentMiddleware): AgentMiddleware {
+  const wrap = chain.wrapModelCall!.bind(chain) as unknown as ModelCallStep;
+  return withModelCallStep(
+    (request, next) => wrap(request, next),
+    (wrapModelCall) => ({ ...chain, wrapModelCall }) as unknown as AgentMiddleware,
+  );
 }
 
 /**
