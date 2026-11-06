@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import { EMBED_AUDIT_FILE } from './embed-audit.js';
+import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import type { EmbedIdentityResolver } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
@@ -39,7 +40,16 @@ const CRM_ROW = [
   '    ticketTtlSeconds: 60',
 ];
 
-function layout(rows: string[] = []) {
+const ALICE_TABLE = {
+  version: 1,
+  mappings: [{ embedder: 'crm', subject: 'alice', userId: 'alice' }],
+};
+
+/**
+ * @param rows - patch 的內容。
+ * @param identities - 有列時寫進 home 的對應表（0600）；`null` 不寫。
+ */
+function layout(rows: string[] = [], identities: unknown = ALICE_TABLE) {
   const base = mkdtempSync(join(tmpdir(), 'nexus-embed-login-'));
   chmodSync(base, 0o700);
   temporary.push(base);
@@ -49,6 +59,9 @@ function layout(rows: string[] = []) {
   mkdirSync(cwd);
   const patch = join(base, 'patch.yml');
   writeFileSync(patch, rows.length === 0 ? '[]\n' : `${rows.join('\n')}\n`);
+  if (rows.length > 0 && identities !== null) {
+    writeFileSync(join(home, EMBED_IDENTITIES_FILE), JSON.stringify(identities), { mode: 0o600 });
+  }
   return { home, cwd, patch };
 }
 
@@ -97,7 +110,7 @@ describe('出廠（沒有嵌入方）', () => {
 });
 
 describe('有嵌入方', () => {
-  it('憑證檔沒有就建 0600；身分對應沒接上時，憑證對也一律 403，記進稽核', async () => {
+  it('憑證檔沒有就建 0600；擁有者隔離上線之前，表上有的人憑證對也一律 403，記進稽核', async () => {
     const where = layout(CRM_ROW);
     const lines: string[] = [];
     const server = await start(where, lines);
@@ -107,7 +120,13 @@ describe('有嵌入方', () => {
     expect(
       lines.some((line) => line.startsWith('嵌入換票：開 POST /embed/exchange（嵌入方 crm')),
     ).toBe(true);
-    expect(lines.some((line) => line.endsWith('身分對應尚未接上，一律拒絕'))).toBe(true);
+    expect(
+      lines.some((line) =>
+        line.endsWith(
+          `身分對應表 ${join(where.home, EMBED_IDENTITIES_FILE)}（1 筆）；對話的擁有者隔離還沒上，換票一律拒絕`,
+        ),
+      ),
+    ).toBe(true);
     expect(lines.join('\n')).not.toContain(credential);
 
     expect((await post(server, { authorization: `Bearer ${'x'.repeat(43)}` })).status).toBe(401);
@@ -118,8 +137,36 @@ describe('有嵌入方', () => {
     running = undefined;
     const written = await auditLines(where.home);
     expect(written.map((line) => line.outcome)).toEqual(['unauthenticated', 'identity_rejected']);
-    expect(written[1]).toMatchObject({ embedder: 'crm', subject: 'alice' });
+    expect(written[1]).toMatchObject({
+      embedder: 'crm',
+      subject: 'alice',
+      reason: 'identity_mapping_unavailable',
+    });
     expect(JSON.stringify(written)).not.toContain(credential);
+  });
+
+  it('有嵌入方、沒有對應表：起不來，訊息指名表檔，不替管理者建', async () => {
+    const where = layout(CRM_ROW, null);
+    const file = join(where.home, EMBED_IDENTITIES_FILE);
+    await expect(start(where)).rejects.toThrow(`${file} 不存在`);
+    expect(() => statSync(file)).toThrow();
+  });
+
+  it('對應表不合規：起不來，訊息指名第幾筆、不帶 subject', async () => {
+    const where = layout(CRM_ROW, {
+      version: 1,
+      mappings: [{ embedder: 'hr', subject: 'secret-subject', userId: 'alice' }],
+    });
+    const failure = start(where);
+    await expect(failure).rejects.toThrow(/第 1 筆的 embedder/u);
+    await expect(failure).rejects.not.toThrow(/secret-subject/u);
+  });
+
+  it.skipIf(process.platform === 'win32')('對應表權限過寬：起不來', async () => {
+    const where = layout(CRM_ROW);
+    const file = join(where.home, EMBED_IDENTITIES_FILE);
+    chmodSync(file, 0o644);
+    await expect(start(where)).rejects.toThrow(file);
   });
 
   it('身分對應接上之後發票', async () => {

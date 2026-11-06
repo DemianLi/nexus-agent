@@ -6,8 +6,9 @@
  * - **圍欄**：先過 `isTrustedWireRequest`（Host 不是 loopback 也不是 `--trusted-host` 指名的、`Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源，一律 403），同 wire 與指標。
  * - **服務憑證**：`Authorization: Bearer <憑證>`。拿請求帶的值與**每一個**嵌入方的憑證各比一次，比的是兩邊的 sha256（定長），
  *   不提早結束。缺標頭時拿一個空字串照樣比完。所以 401 的本文與耗時看不出缺憑證、憑證錯，或是哪一個嵌入方；請求本文裡也沒有嵌入方 id。
- * - **身分**：`{ subject }` 交給 {@link EmbedIdentityResolver}。對應方式是管理者寫的對應表（#1827 D231），
- *   還沒接上；出廠的 {@link rejectAllIdentities} 一律拒，所以這條路由在接上之前換不到票（fail closed）。
+ * - **身分**：`{ subject }` 交給 {@link EmbedIdentityResolver}。對應方式是管理者寫的對應表（`embed-identities.ts`，#1827 D231），
+ *   serve 啟動時讀、驗。產品路徑交 {@link rejectAllIdentities}，換不到票（fail closed）：對話還沒按擁有者隔離，
+ *   放行就讓同一個嵌入方底下的人互看對話。TODO(#2370)：隔離做好之後改交對應表。
  * - **票**：32 位元組亂數，只放在記憶體（{@link EmbedTicketStore}）；重啟就作廢。過期的與用過的都刪掉，同時在手的票有上限。
  * - **稽核**：過了服務憑證的每一次都記（`embed-audit.ts`），記好才回應，寫不進去就 500、不發票。憑證錯的只計數合併、不等落盤；
  *   圍欄的 403 與 405 不記。
@@ -52,7 +53,7 @@ export type EmbedIdentity =
   | { readonly kind: 'accepted'; readonly userId: string }
   | { readonly kind: 'rejected'; readonly reason: string };
 
-/** 對方帳號 → nexus 身分。對應方式待 #1827 D231 Q1 拍板。 */
+/** 對方帳號 → nexus 身分。實作：管理者的對應表（`embed-identities.ts`）與一律拒的 {@link rejectAllIdentities}；serve 的產品路徑目前用後者。 */
 export interface EmbedIdentityResolver {
   /**
    * 對一位對方帳號作出決定。同步、不得拋錯。
@@ -64,7 +65,7 @@ export interface EmbedIdentityResolver {
   resolve(embedder: string, subject: string): EmbedIdentity;
 }
 
-/** 出廠的實作：帳號系統與對應方式都還沒有，一律拒。 */
+/** 一律拒。serve 的產品路徑目前用它（見檔頭〈身分〉）。 */
 export const rejectAllIdentities: EmbedIdentityResolver = {
   resolve: () => ({ kind: 'rejected', reason: 'identity_mapping_unavailable' }),
 };
