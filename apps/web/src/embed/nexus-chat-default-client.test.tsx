@@ -26,6 +26,8 @@ class FakeSocket {
     this.sent.push(JSON.parse(text) as { t: string; path?: string });
   }
 
+  addEventListener() {}
+
   close() {}
 }
 

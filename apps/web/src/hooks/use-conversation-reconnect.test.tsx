@@ -10,6 +10,7 @@ import {
   THREAD_ROOT_MISMATCH,
   THREAD_IS_SUBAGENT,
   THREAD_NOT_EMBEDDED,
+  THREAD_NOT_OWNED,
   THREAD_WRITER_HELD,
   WireProtocolError,
   WireRejectedError,
@@ -27,6 +28,7 @@ import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-lo
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
+import { THREAD_NOT_OWNED_TEXT } from '@/lib/thread-not-owned';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
@@ -321,6 +323,18 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
     await tick();
     expect(result.current.refusal).toBe(THREAD_NOT_EMBEDDED_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('嵌入的對話框碰到別人的（#2370）：講那一句、不排重試', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_NOT_OWNED, 'thread "t/1" 不是這位使用者開的；請開一條新對話'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_NOT_OWNED_TEXT);
     expect(result.current.connectionError).toBeUndefined();
     expect(result.current.reconnecting).toBeUndefined();
     await tick(60_000);

@@ -6,7 +6,7 @@
  * 測試頁不進 `dist`：`beforeAll` 建到暫存目錄，`page.route` 從 serve 同一個來源供應（`/vue-demo/`），跟宿主頁經同源反向代理
  * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。設 `NEXUS_E2E_SHOTS=<目錄>` 時每個情境跑完存一張截圖。
  */
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,7 +61,12 @@ async function openDemo(
   const page = await browser.newPage({ viewport });
   await page.goto(serve.url);
   await beforeDemo?.(page);
-  const origin = new URL(serve.url).origin;
+  await gotoDemo(page, new URL(serve.url).origin);
+  return page;
+}
+
+/** 從 serve 同一個來源供應 Vue 測試頁並開它，等到元件註冊好。 */
+async function gotoDemo(page: Page, origin: string): Promise<void> {
   await page.route(`${origin}/vue-demo/**`, async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/vue-demo\/?/u, '');
     const file = join(demo, path === '' ? 'index.html' : path);
@@ -71,10 +76,13 @@ async function openDemo(
     });
   });
   await page.goto(`${origin}/vue-demo/`);
+  await defined(page);
+}
+
+async function defined(page: Page): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => customElements.get('nexus-chat') !== undefined))
     .toBe(true);
-  return page;
 }
 
 function chat(page: Page) {
@@ -775,5 +783,146 @@ describe('核准卡把對話往上推：捲動區頂端淡出（#2407）', () =>
     expect(fadesAtTop(straddled), JSON.stringify(straddled)).toBe(true);
     await shot(page, 'approval-top-fade-standalone');
     expect(fadesAtTop(await scrollAndReadFade(surface, 0))).toBe(false);
+  });
+});
+
+describe('換票登入（#2370）', () => {
+  const EMBED_LOGIN = `- id: embed-login
+  config:
+    embedders:
+      - id: crm
+    ticketTtlSeconds: 60
+    cookieMaxAgeSeconds: 900
+`;
+
+  /** 起一台開了換票的 serve，對應表上有 crm 的 alice 與 bob；回傳替其中一位換一張票的函式。 */
+  async function startWithEmbedLogin(turns: readonly ScriptTurn[]) {
+    serve = await startE2eServe(turns, EMBED_LOGIN, async (home) => {
+      const mappings = [
+        { embedder: 'crm', subject: 'alice', userId: 'alice' },
+        { embedder: 'crm', subject: 'bob', userId: 'bob' },
+      ];
+      await writeFile(
+        join(home, 'embed-identities.json'),
+        JSON.stringify({ version: 1, mappings }),
+        { mode: 0o600 },
+      );
+    });
+    const origin = new URL(serve.url).origin;
+    const credential = (await readFile(join(serve.home, 'embed-credential-crm'), 'utf8')).trim();
+    const ticket = async (subject = 'alice'): Promise<string> => {
+      const response = await fetch(`${origin}/embed/exchange`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ subject, sessionId: `crm-session-${subject}` }),
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { ticket: string }).ticket;
+    };
+    return { origin, ticket };
+  }
+
+  /**
+   * 不經 `page.route` 的宿主頁：先開 serve 一個不用登入的路徑，在同一個來源上用 DOM 放進元件（`page.setContent` 放的元素不會升級）。
+   * `gotoDemo` 那一頁是 `page.route` 供應的，那一頁上 WebSocket 升級失敗（帶主機擁有者的 cookie 也是 1006，serve 自己的頁面上同一個網址開得起來），
+   * 下行全退回 SSE，看不到換票之後換 socket 這一步。
+   */
+  async function gotoBare(page: Page, origin: string): Promise<void> {
+    await page.goto(`${origin}/livez`);
+    await page.evaluate(() => {
+      document.body.replaceChildren();
+      const box = document.createElement('div');
+      box.style.height = '600px';
+      box.append(document.createElement('nexus-chat'));
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = '/embed.js';
+      document.body.append(box, script);
+    });
+    await defined(page);
+  }
+
+  function signIn(page: Page, ticket: string): Promise<unknown> {
+    return page.evaluate(async (value) => {
+      const element = document.querySelector('nexus-chat') as unknown as {
+        signIn(ticket: string): Promise<{ expiresAt: number }>;
+      };
+      return (await element.signIn(value)).expiresAt;
+    }, ticket);
+  }
+
+  test('沒開登入網址、只拿票：講得了話，重新整理再換一張票接回這次登入開的那一條', async () => {
+    const reply = '換票之後的回覆。';
+    const { origin, ticket } = await startWithEmbedLogin([{ content: reply }]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await gotoBare(page, origin);
+    expect(typeof (await signIn(page, await ticket()))).toBe('number');
+    await send(page, '你好');
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    await settled(page);
+
+    await gotoBare(page, origin);
+    await signIn(page, await ticket());
+    await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
+    expect(
+      await page.evaluate(() => localStorage.getItem('nexus.embed.threads.current')),
+    ).toBeNull();
+    await shot(page, 'embed-ticket-sign-in');
+  });
+
+  test('換人登入：下行改走新開的 socket，舊的關掉；換上來的人講得了話', async () => {
+    // 腳本每條 thread 從第一輪開始吃：兩個人各一條，拿到的都是這一句。
+    const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    /** 每一條 mux socket，與它送出的 `open`（下行）各打開了哪些路徑。 */
+    const sockets: { ws: import('playwright-core').WebSocket; opened: string[] }[] = [];
+    page.on('websocket', (ws) => {
+      if (!ws.url().endsWith('/embed/threads/mux')) return;
+      const entry = { ws, opened: [] as string[] };
+      sockets.push(entry);
+      ws.on('framesent', ({ payload }) => {
+        const frame = JSON.parse(String(payload)) as { t?: string; path?: string };
+        if (frame.t === 'open' && frame.path !== undefined) entry.opened.push(frame.path);
+      });
+    });
+    await gotoBare(page, origin);
+    const talk = async (text: string) => {
+      await send(page, text);
+      await expect
+        .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
+        .toBe(1);
+      await settled(page);
+    };
+
+    await signIn(page, await ticket('bob'));
+    await expect.poll(() => sockets.some(({ opened }) => opened.length > 0)).toBe(true);
+    await talk('我是 bob');
+    const bobs = sockets.length;
+    await signIn(page, await ticket('alice'));
+    await expect.poll(() => transcript(page).count()).toBe(0);
+    await expect.poll(() => sockets.length).toBeGreaterThan(bobs);
+    const alices = sockets.at(-1)!;
+    await expect.poll(() => alices.opened.some((path) => path.endsWith('/stream'))).toBe(true);
+    await expect.poll(() => sockets.slice(0, bobs).every(({ ws }) => ws.isClosed())).toBe(true);
+    await talk('我是 alice');
+    expect(await transcript(page).getByText('我是 bob').count()).toBe(0);
+  });
+
+  test('用過的票：signIn reject ticket_invalid', async () => {
+    const { origin, ticket } = await startWithEmbedLogin([{ content: '用不到' }]);
+    const page = await browser.newPage();
+    await gotoBare(page, origin);
+    const used = await ticket();
+    await signIn(page, used);
+    const failure = await page.evaluate(async (value) => {
+      const element = document.querySelector('nexus-chat') as unknown as {
+        signIn(ticket: string): Promise<unknown>;
+      };
+      return element.signIn(value).then(
+        () => undefined,
+        (error: { name: string; code: string }) => ({ name: error.name, code: error.code }),
+      );
+    }, used);
+    expect(failure).toEqual({ name: 'NexusSignInError', code: 'ticket_invalid' });
   });
 });
