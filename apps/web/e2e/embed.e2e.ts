@@ -940,6 +940,47 @@ describe('換票登入（#2370）', () => {
     expect(live.every((ws) => !ws.isClosed())).toBe(true);
   });
 
+  test('續期兩次、每次之後換一條對話：舊的 socket 等上面的下行收掉才關，同時開著的不超過兩條（#2484）', async () => {
+    const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const sockets: import('playwright-core').WebSocket[] = [];
+    let open = 0;
+    let most = 0;
+    page.on('websocket', (ws) => {
+      if (!ws.url().endsWith('/embed/threads/mux')) return;
+      sockets.push(ws);
+      open += 1;
+      most = Math.max(most, open);
+      ws.on('close', () => (open -= 1));
+    });
+    await gotoBare(page, origin);
+    await signIn(page, await ticket());
+    const talk = async (text: string) => {
+      await send(page, text);
+      await expect
+        .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
+        .toBe(1);
+      await settled(page);
+    };
+    await talk('第一條');
+    // 換票之前那一下 401 與第一次換票都會換 socket：從這裡才開始算。
+    await expect.poll(() => open).toBe(1);
+    most = open;
+
+    for (const round of [1, 2]) {
+      const holding = sockets.filter((ws) => !ws.isClosed());
+      await signIn(page, await ticket());
+      expect(holding.every((ws) => !ws.isClosed())).toBe(true);
+      await chat(page).getByRole('button', { name: '新對話' }).click();
+      await expect.poll(() => transcript(page).count()).toBe(0);
+      // 新對話的下行開在新的 socket 上，舊對話的那條收掉，舊的 socket 跟著關。
+      await expect.poll(() => holding.every((ws) => ws.isClosed())).toBe(true);
+      await expect.poll(() => open).toBe(1);
+      await talk(`續期第 ${String(round)} 次之後`);
+    }
+    expect(most).toBeLessThanOrEqual(2);
+  });
+
   test('同一個人續期、舊 cookie 過期之後：下行沒斷，狀態列沒說重新連線，歷史沒重讀，回覆從原本那條 socket 進來（#2484）', async () => {
     const { origin, ticket } = await startWithEmbedLogin(
       [{ content: '第一句的回覆。' }, { content: '舊的過期之後的回覆。' }],
