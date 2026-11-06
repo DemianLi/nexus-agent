@@ -18,6 +18,8 @@ import { HOST_TOOL_EVENT, HOST_TOOL_MISSING_ERROR } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { defineNexusChat, DOCUMENT_STYLE_ID, ELEMENT_NAME } from './nexus-chat-element';
 import { NexusSignInError } from './sign-in';
+import { TICKET_NEEDED_EVENT } from './ticket-needed';
+import type { NexusTicketNeededDetail } from './ticket-needed';
 
 /**
  * `<nexus-chat>`（#2366）：元素的生命週期與屬性。整份檔共用一次 `customElements.define`（jsdom 的登記表是全域的），
@@ -31,7 +33,11 @@ let failOpen: Error | undefined;
 /** 下一個元素的下行一打開就推的 frame。 */
 let events: Event[] = [];
 
-function createClient(): WireClient {
+/** 最近一個元素交給注入的 client 的回呼：呼叫 `onUnauthorized` 就是假裝它的請求被 401 擋下。 */
+let hooks: { readonly onUnauthorized: () => void } | undefined;
+
+function createClient(given: { readonly onUnauthorized: () => void }): WireClient {
+  hooks = given;
   const fake = fakeClient(events);
   clients.push(fake);
   const refusal = failOpen;
@@ -79,6 +85,7 @@ afterEach(() => {
   clients = [];
   failOpen = undefined;
   events = [];
+  hooks = undefined;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -539,5 +546,119 @@ describe('<nexus-chat> 的換票登入（#2370）', () => {
       code: 'sign_in_failed',
     });
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('<nexus-chat> 的續期與 nexus-ticket-needed（#2370）', () => {
+  beforeAll(() => {
+    defineNexusChat({ styles: STYLES, createClient });
+  });
+
+  /** `POST /embed/session` 依序回這幾份 200；用完了回 401 `ticket_invalid`。 */
+  function serveSessions(...bodies: unknown[]) {
+    const queue = [...bodies];
+    vi.stubGlobal('fetch', async () => {
+      const body = queue.shift();
+      return body === undefined
+        ? Response.json({ error: 'ticket_invalid' }, { status: 401 })
+        : Response.json(body);
+    });
+  }
+
+  const LATER = 1_800_000_000_000;
+
+  /** 換票、放進頁面、在 serve 回的那一條講一句，再按「新對話」：回傳那條還沒講話的新對話。 */
+  async function signedInWithFreshConversation(element: NexusChatElement): Promise<string> {
+    await element.signIn('第一張');
+    document.body.append(element);
+    await waitFor(() => expect(threads()).toEqual(['我的']));
+    await say(element, '你好');
+    fireEvent.click(shadow(element).getByRole('button', { name: '新對話' }));
+    await waitFor(() => expect(threads()).toHaveLength(2));
+    const fresh = clients[0]?.opened.at(-1);
+    if (fresh === undefined || fresh === '我的') throw new Error('沒開到新的一條');
+    return fresh;
+  }
+
+  test('同一個人續期：留在剛開、還沒講話的那一條，不重掛', async () => {
+    serveSessions(
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+      { expiresAt: LATER + 1, identityFingerprint: 'alice', threadId: '我的' },
+    );
+    const element = document.createElement(ELEMENT_NAME);
+    const fresh = await signedInWithFreshConversation(element);
+    const opened = clients[0]?.opened.length;
+    await act(async () => {
+      await expect(element.signIn('續期')).resolves.toEqual({ expiresAt: LATER + 1 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(clients[0]?.opened).toHaveLength(opened ?? 0);
+    expect(clients[0]?.opened.at(-1)).toBe(fresh);
+  });
+
+  test.each([
+    ['換了人', { identityFingerprint: 'bob' }],
+    ['分不出是不是同一個人（回應沒有指紋）', {}],
+  ])('%s：照第一次換票重掛，接上 serve 回的那一條', async (_name, who) => {
+    serveSessions(
+      { expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' },
+      { expiresAt: LATER, ...who, threadId: '對方的' },
+    );
+    const element = document.createElement(ELEMENT_NAME);
+    await signedInWithFreshConversation(element);
+    await act(async () => {
+      await element.signIn('換人');
+    });
+    await waitFor(() => expect(clients[0]?.opened.at(-1)).toBe('對方的'));
+  });
+
+  /** 記下元素發的 `nexus-ticket-needed`，並確認它不往上冒。 */
+  function listen(element: NexusChatElement) {
+    const seen: NexusTicketNeededDetail[] = [];
+    const bubbled = vi.fn();
+    document.body.addEventListener(TICKET_NEEDED_EVENT, bubbled);
+    element.addEventListener('nexus-ticket-needed', (event) => seen.push(event.detail));
+    return { seen, bubbled };
+  }
+
+  test('快到期：發 expiring 帶到期時間，不 bubble、只發一次', async () => {
+    // 有效期很短：剩一半的時候就發（50 毫秒後）。
+    const expiresAt = Date.now() + 100;
+    serveSessions({ expiresAt, identityFingerprint: 'alice', threadId: '我的' });
+    const element = mount();
+    const { seen, bubbled } = listen(element);
+    await element.signIn('票');
+    await waitFor(() => expect(seen).toEqual([{ reason: 'expiring', expiresAt }]));
+    hooks?.onUnauthorized();
+    expect(seen).toHaveLength(1);
+    expect(bubbled).not.toHaveBeenCalled();
+  });
+
+  test('被 401 擋下：發 unauthorized；同一輪只發一次，下一次換票成功才再發', async () => {
+    serveSessions({ expiresAt: LATER, identityFingerprint: 'alice', threadId: '我的' });
+    const element = mount();
+    const { seen } = listen(element);
+    hooks?.onUnauthorized();
+    hooks?.onUnauthorized();
+    expect(seen).toEqual([{ reason: 'unauthorized' }]);
+    await element.signIn('票');
+    hooks?.onUnauthorized();
+    expect(seen).toEqual([{ reason: 'unauthorized' }, { reason: 'unauthorized' }]);
+  });
+
+  test('拿掉之後到點不發', async () => {
+    // 有效期很短：剩一半的時候就發（50 毫秒後）。
+    const expiresAt = Date.now() + 100;
+    serveSessions({ expiresAt, identityFingerprint: 'alice' });
+    const element = mount();
+    const { seen } = listen(element);
+    await element.signIn('票');
+    element.remove();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    expect(seen).toEqual([]);
   });
 });
