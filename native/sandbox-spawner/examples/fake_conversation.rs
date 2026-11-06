@@ -16,7 +16,7 @@
 //!   之後恢復）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）。
 //! - 收到 `drain` 預設回 `drained`，記一行 `drain`。
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
-//! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`drain`、`eof`、`sigterm`。
+//! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`idle`（送出之後）、`drain`、`eof`、`sigterm`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -167,7 +167,10 @@ fn main() {
                         QUIET.store(false, Ordering::SeqCst);
                     }
                     ("ignore-eof", _) => ignore_eof = true,
-                    ("idle", ms) => report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() }),
+                    ("idle", ms) => {
+                        report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() });
+                        log("idle");
+                    }
                     ("busy-on-drain", _) => on_drain = Some(ConversationReport::Busy),
                     ("ignore-drain", _) => on_drain = None,
                     ("ignore-term", _) => {

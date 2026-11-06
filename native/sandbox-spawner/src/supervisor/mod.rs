@@ -5,7 +5,7 @@
 //! **嚴格單執行緒**：子行程的 `PR_SET_PDEATHSIG` 看的是起它的那條執行緒，那條執行緒結束子行程就會被殺。不要在這裡起 thread。
 //!
 //! 啟動：擋下 SIGINT／SIGTERM／SIGHUP／SIGCHLD 改由 signalfd 收；設 `PR_SET_CHILD_SUBREAPER`（子行程的後代成了孤兒也掛回這裡收）；
-//! 準備 `--run-dir`（0700）；開稽核紀錄。前四步任一失敗就結束、回 1。最後起前台；前台起不來就寫稽核，隔 `--front-restart-ms` 再起。
+//! 準備 `--run-dir`（0700）；開稽核紀錄。前四步任一失敗就結束、回 1。接著補預熱池，最後起前台；前台起不來就寫稽核，隔 `--front-restart-ms` 再起。
 //!
 //! 前台的控制通道是它的 stdin／stdout：
 //!

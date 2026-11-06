@@ -60,7 +60,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - V8 heap 快用完時，GC 可能連續空轉超過 `--stall-ms`，結果先被判成 `stalled` 而不是 `heap`。沒量過。
   - 容量算的是行程數，不看實際用掉的記憶體：每條對話實際用得比 209 MiB 多（例如掛了 MCP）時，名額還沒滿記憶體就先滿了。
   - 正在收的行程照樣佔名額：排著的 thread 要等 `drained` 之後的拆除梯度走完（最長 `--eof-grace-ms` 加 `--term-grace-ms`）才起。
-  - 回 `busy` 或沒回答 `drain` 的，要等它下次回報 `idle` 才會再被挑；對話行程只在變成閒置的那一刻回報一次，所以一直閒著卻沒回答 `drain` 的，之後都不會再被逐出。讀程式推論，沒量過。
+  - 回 `busy` 或沒回答 `drain` 的，要等它下次回報 `idle` 才會再被挑。C1 的對話行程在變成閒置時送 `idle`，閒置期間最後活動時間往前推了才再送；所以一直閒著、沒有新活動又沒回答 `drain` 的，之後不會再被逐出。讀程式推論，沒量過。
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
 - 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`）、`pid`、`exit_code`、`signal`；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 有；沒起成的多一個 `error`。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2。

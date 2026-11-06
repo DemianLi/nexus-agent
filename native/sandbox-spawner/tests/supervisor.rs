@@ -748,6 +748,13 @@ fn capacity(thread: &str, current: u32, limit: u32) -> FrontEvent {
     FrontEvent::Capacity { thread_id: thread.as_bytes().to_vec(), current, limit }
 }
 
+/// `drain` 記在 `eof` 之前。只驗順序：寬限只有幾百毫秒，忙的機器上 `eof` 之後還可能多一行 `sigterm`。
+fn drain_then_eof(socket: &Path) -> bool {
+    let lines = log(socket);
+    let at = |name: &str| lines.iter().position(|line| line == name);
+    matches!((at("drain"), at("eof")), (Some(drain), Some(eof)) if drain < eof)
+}
+
 /// 等到 `socket` 的假對話行程記下 `drain`。
 fn saw_drain(socket: &Path) -> bool {
     wait_until(|| log(socket).iter().any(|line| line == "drain"))
@@ -774,9 +781,24 @@ fn full_evicts_the_longest_idle_and_then_starts_the_waiting_thread() {
         FrontEvent::Up { thread_id, .. } => assert_eq!(thread_id, b"c"),
         other => panic!("要 c 的 up，拿到 {other:?}"),
     }
-    assert_eq!(log(&old)[2..], ["drain", "eof"]);
+    assert!(drain_then_eof(&old), "{:?}", log(&old));
     assert_eq!(h.up("new,idle:1000"), new);
     assert!(h.audit_line("old,idle:5000").contains("\"cause\":\"evicted\""));
+}
+
+#[test]
+fn the_one_idle_longest_goes_first_not_the_one_started_first() {
+    let mut h = Harness::start(Options { extra: vec!["--capacity", "2"], ..Options::default() });
+    let early = h.up("early,wait-go,idle:0");
+    let late = h.up("late,idle:0");
+    assert!(wait_until(|| log(&late).contains(&"idle".to_string())));
+    // 先起的那條比較晚才變閒置。
+    std::thread::sleep(Duration::from_millis(200));
+    std::fs::write(format!("{}.go", early.display()), b"").unwrap();
+    assert!(wait_until(|| log(&early).contains(&"idle".to_string())));
+    h.ensure("c");
+    assert_eq!(h.down_of("late,idle:0"), DeathCause::Evicted);
+    assert_eq!(h.up("early,wait-go,idle:0"), early);
 }
 
 #[test]
@@ -839,7 +861,7 @@ fn idle_past_the_limit_is_evicted() {
     let mut h = Harness::start(Options { extra: vec!["--idle-ms", "300"], ..Options::default() });
     let socket = h.up("a,idle:0");
     assert_eq!(h.down_of("a,idle:0"), DeathCause::Evicted);
-    assert_eq!(log(&socket)[2..], ["drain", "eof"]);
+    assert!(drain_then_eof(&socket), "{:?}", log(&socket));
 }
 
 #[test]
