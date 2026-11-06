@@ -40,7 +40,7 @@ interface NexusSignInError extends Error {
    * - `ticket_invalid`：票不存在或已經用過（一張票只能兌換一次）；
    * - `ticket_expired`：票過期了；
    * - `identity_rejected`：這位使用者不在 serve 的身分對應表上，或對應被撤掉了；
-   * - `sign_in_failed`：其他失敗，例如網路斷了、serve 沒開換票、回應看不懂。
+   * - `sign_in_failed`：其他失敗，例如票不是非空字串（不發請求）、網路斷了、serve 沒開換票、回應看不懂。
    */
   readonly code: 'ticket_invalid' | 'ticket_expired' | 'identity_rejected' | 'sign_in_failed';
   /** HTTP 狀態碼；請求沒有送到就沒有。 */

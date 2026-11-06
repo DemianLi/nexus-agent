@@ -72,7 +72,8 @@ export interface AgentConnection {
   readonly client: WireClient;
   /**
    * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後的下行改開一條新的，舊的那幾條當場關掉。
-   * 關掉的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。注入了 `fetch` 時沒有 socket，什麼都不做。
+   * 關掉的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。已經退回 SSE 的下行不經 socket，這裡關不到，要呼叫端自己收
+   * （嵌入元件換票時整個重掛，就收掉了）。注入了 `fetch` 時沒有 socket，什麼都不做。
    */
   renewStreams(): void;
 }
@@ -90,6 +91,7 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
     mountedMuxFetch(mount, baseUrl, window.location.href, fetch, (url) => {
       const socket = new WebSocket(url);
       into.add(socket);
+      // 用 addEventListener：`onclose` 是 mux 自己的（`mux.ts` 的 `MuxCarrier`），指派會蓋掉它的收尾。
       socket.addEventListener('close', () => into.delete(socket));
       return socket;
     });

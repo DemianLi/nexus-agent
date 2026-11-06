@@ -6,7 +6,7 @@ import {
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { THREAD_NOT_OWNED_TEXT } from '@/lib/thread-not-owned';
@@ -419,6 +419,11 @@ describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
 });
 
 describe('<nexus-chat> 的換票登入（#2370）', () => {
+  // 單獨跑這一組（`-t`）時前面的 define 沒跑過；已經 define 過就什麼都不做。
+  beforeAll(() => {
+    defineNexusChat({ styles: STYLES, createClient });
+  });
+
   /** 讓 `POST /embed/session` 回這個；收到的每一個請求記在回傳的陣列裡。 */
   function serveSession(status: number, body: unknown) {
     const seen: { url: string; init: RequestInit | undefined }[] = [];
@@ -432,13 +437,27 @@ describe('<nexus-chat> 的換票登入（#2370）', () => {
     return seen;
   }
 
-  /** 記下讀寫嵌入版那個鍵的每一下。 */
+  /**
+   * 記下讀寫嵌入版那個鍵的每一下。spy 掛在 `localStorage` 這個實例上：掛在 `Storage.prototype` 的，這份環境裡錄不到。
+   * 先自己讀寫一次確認錄得到，再清掉，免得斷言「沒讀沒寫」其實什麼都沒在看。
+   */
   function watchStorage() {
-    const getItem = vi.spyOn(Storage.prototype, 'getItem');
-    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const getItem = vi.spyOn(localStorage, 'getItem');
+    const setItem = vi.spyOn(localStorage, 'setItem');
+    const saved = localStorage.getItem(EMBED_THREAD_KEY);
+    localStorage.setItem(EMBED_THREAD_KEY, saved ?? '{}');
+    if (saved === null) localStorage.removeItem(EMBED_THREAD_KEY);
+    expect(getItem).toHaveBeenCalledWith(EMBED_THREAD_KEY);
+    expect(setItem).toHaveBeenCalledWith(EMBED_THREAD_KEY, saved ?? '{}');
+    const reset = () => {
+      getItem.mockClear();
+      setItem.mockClear();
+    };
+    reset();
     return {
       reads: () => getItem.mock.calls.filter(([key]) => key === EMBED_THREAD_KEY),
       writes: () => setItem.mock.calls.filter(([key]) => key === EMBED_THREAD_KEY),
+      reset,
     };
   }
 
@@ -453,7 +472,7 @@ describe('<nexus-chat> 的換票登入（#2370）', () => {
     expect(seen[0]?.init?.method).toBe('POST');
     expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ ticket: '票' });
     expect(localStorage.getItem(EMBED_THREAD_KEY)).toBeNull();
-    storage.reads().length = 0;
+    storage.reset();
 
     document.body.append(element);
     await waitFor(() => expect(threads()).toEqual(['我的']));
@@ -508,14 +527,17 @@ describe('<nexus-chat> 的換票登入（#2370）', () => {
     });
   });
 
-  test('其他失敗是 sign_in_failed；票不是字串不發請求', async () => {
+  test('其他失敗是 sign_in_failed；空的票也是，不發請求', async () => {
     const seen = serveSession(404, 'not found');
     const element = document.createElement(ELEMENT_NAME);
     await expect(element.signIn('票')).rejects.toMatchObject({
       code: 'sign_in_failed',
       status: 404,
     });
-    await expect(element.signIn('' as string)).rejects.toBeInstanceOf(TypeError);
+    await expect(element.signIn('')).rejects.toMatchObject({
+      name: 'NexusSignInError',
+      code: 'sign_in_failed',
+    });
     expect(seen).toHaveLength(1);
   });
 });

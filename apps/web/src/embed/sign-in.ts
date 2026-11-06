@@ -9,7 +9,7 @@
 
 import { EMBED_PATH_PREFIX } from '@nexus/wire';
 
-/** serve 回的失敗碼，宿主頁照它決定下一步；其餘的失敗（網路斷了、serve 沒開換票、回應看不懂）一律是 `sign_in_failed`。 */
+/** serve 回的失敗碼，宿主頁照它決定下一步；其餘的失敗（票不是非空字串、網路斷了、serve 沒開換票、回應看不懂）一律是 `sign_in_failed`。 */
 export type NexusSignInErrorCode =
   'ticket_invalid' | 'ticket_expired' | 'identity_rejected' | 'sign_in_failed';
 
@@ -54,8 +54,8 @@ async function errorCode(response: Response): Promise<string | undefined> {
 /**
  * 兌換一張登入票。
  *
- * @param agentBaseUrl - agent 的位置，同 `createAgentClient`（`/nexus` 或空字串）。
- * @throws {@link NexusSignInError} 兌換不成；`ticket` 不是非空字串時是 `TypeError`，不發請求。
+ * @param agentBaseUrl - agent 的位置，`agentBaseUrl()` 算出來的那個（例如 `/nexus`，掛在根路徑是空字串）。
+ * @throws {@link NexusSignInError} 兌換不成。`ticket` 不是非空字串時是 `sign_in_failed`，不發請求。
  */
 export async function redeemTicket(
   agentBaseUrl: string,
@@ -63,7 +63,7 @@ export async function redeemTicket(
   fetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<RedeemedTicket> {
   if (typeof ticket !== 'string' || ticket === '') {
-    throw new TypeError('<nexus-chat> 的 signIn(ticket) 要給非空字串');
+    throw new NexusSignInError('sign_in_failed', '<nexus-chat> 的 signIn(ticket) 要給非空字串');
   }
   let response: Response;
   try {

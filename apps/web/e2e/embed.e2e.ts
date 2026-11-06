@@ -823,8 +823,9 @@ describe('換票登入（#2370）', () => {
   }
 
   /**
-   * 不經 `page.route` 的宿主頁：先開 serve 一個不用登入的路徑，在同一個來源上寫進元件。`gotoDemo` 那一頁是 `page.route` 供應的，
-   * 那一頁上 WebSocket 升級一律失敗、下行全退回 SSE，看不到換票之後換 socket 這一步。
+   * 不經 `page.route` 的宿主頁：先開 serve 一個不用登入的路徑，在同一個來源上用 DOM 放進元件（`page.setContent` 放的元素不會升級）。
+   * `gotoDemo` 那一頁是 `page.route` 供應的，那一頁上 WebSocket 升級失敗（帶主機擁有者的 cookie 也是 1006，serve 自己的頁面上同一個網址開得起來），
+   * 下行全退回 SSE，看不到換票之後換 socket 這一步。
    */
   async function gotoBare(page: Page, origin: string): Promise<void> {
     await page.goto(`${origin}/livez`);

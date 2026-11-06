@@ -73,7 +73,7 @@ function exited(child: ChildProcess): Promise<void> {
  * @param turns - 腳本。
  * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
  * @param prepareHome - serve 起動之前在它的 home 裡放檔，例如嵌入身分對應表。目錄已經建好。
- * @returns 登入網址與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
+ * @returns 登入網址、serve 的 home 與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  */
 export async function startE2eServe(
   turns: readonly ScriptTurn[],

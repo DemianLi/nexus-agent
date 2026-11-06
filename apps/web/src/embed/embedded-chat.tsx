@@ -80,7 +80,7 @@ interface ChatProps {
 /**
  * 打開時接著上一條（#2365 第 6 點）；「新對話」開一條新的。換 thread 整個重掛，理由同獨立頁面（`App.tsx`）。
  *
- * 上一條從哪裡來看有沒有換過登入票：沒換過（主機擁有者的 cookie）讀寫 {@link EMBED_THREAD_KEY}；換過就只認 `signIn` 帶來的那一條，
+ * 上一條從哪裡來看有沒有換過登入票：沒換過（這個元素還沒呼叫 `signIn`）讀寫 {@link EMBED_THREAD_KEY}；換過就只認 `signIn` 帶來的那一條，
  * 這個鍵不讀也不寫。換票的是不同的人，記在瀏覽器上的那一條可能是上一個人的。
  *
  * @param agentBaseUrl - agent 的位置，從 `embed.js` 算（#2426）。`/livez` 在它底下，thread 那一族在它加上 `/embed` 底下（#2382）。
