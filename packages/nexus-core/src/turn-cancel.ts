@@ -341,11 +341,12 @@ export const turnCancelToolStep: ToolCallStep = async (call, next) => {
 };
 
 /**
- * 外層那顆的模型那一半：中止或封存之後不往內交，回一則合成的回覆。
+ * 外層那顆的模型那一半：已中止或會話已封存就不往內交，中止先判。root 拋 {@link TurnCancelledError}／{@link TurnBlockedError}，
+ * 子代理回一則空的 AI 訊息（見 {@link stopHere}、`blockHere`）。
  *
  * @param request - 這次模型請求。
  * @param next - 往內一層。
- * @returns 內層的結果，或那則合成的回覆。
+ * @returns 內層的結果，或子代理那則空訊息。
  */
 const turnCancelModelStep: ModelCallStep = async (request, next) => {
   // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
@@ -362,7 +363,6 @@ const turnCancelModelStep: ModelCallStep = async (request, next) => {
  * 外層那顆：擋工具與中止之後的模型呼叫。位置見檔頭「為什麼是兩顆」。
  *
  * **無狀態，一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的 `configurable` 現讀。
- * 模型那一半登記成一步（{@link withModelCallStep}），工具那一半登記工具步驟（{@link withToolCallStep}）。
  *
  * @returns 可以放進 middleware 陣列的實例。
  */
@@ -403,12 +403,12 @@ export function createTurnCancelModelSignal(): AgentMiddleware {
 }
 
 /**
- * 內層那顆的那一步：綁中止訊號、記模型呼叫的失敗、被切斷就換成停止的回覆。
- * 一步內仍包 LangChain 的 `RunnableBinding`，TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))。
+ * 內層那顆的那一步：綁中止訊號，往內拋的錯一律先記成模型呼叫的失敗再拋。被切斷時 root 拋 {@link TurnCancelledError}
+ * （cause 是原錯），子代理回一則空的 AI 訊息。一步內仍包 LangChain 的 `RunnableBinding`，TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))。
  *
  * @param request - 這次模型請求。
  * @param nextHandler - 往內一層。
- * @returns 內層的結果，或停止的回覆。
+ * @returns 內層的結果，或子代理那則空訊息。
  */
 const turnCancelModelSignalStep: ModelCallStep = async (rawRequest, nextHandler) => {
   const request = rawRequest as { readonly model?: unknown };

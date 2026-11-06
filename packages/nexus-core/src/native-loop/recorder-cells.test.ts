@@ -1,5 +1,5 @@
 /**
- * native 模型那一串只記錄、不改請求的七格（#2416 b4b-1）：中止閘門與檢查點的模型那一半、起訖、空回覆、用量、請求快照、綁中止訊號。
+ * native 模型那一串只記錄、不改請求的七格（#2416）：中止閘門與檢查點的模型那一半、起訖、空回覆、用量、請求快照、綁中止訊號。
  * 每一格登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 由 native 在模型那一串原位直接呼叫，子代理在 native 下
  * 仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
  *
@@ -162,7 +162,7 @@ describe('native 模型那一串只記錄的七格：root 由 native 原位呼�
     const native = attribution((await run('native')).root);
     const langgraph = attribution((await run('langgraph')).root);
     expect(native).toEqual(langgraph);
-    // 三次 root 模型呼叫各有用量與回覆，指到的都是自己那一次。
+    // 三次 root 模型呼叫各有 `model/usage` 與 `model/end`，指到的都是自己那一次。
     for (const index of [0, 1, 2]) {
       expect(native).toContain(`model/usage → ${index}`);
       expect(native).toContain(`model/end → ${index}`);

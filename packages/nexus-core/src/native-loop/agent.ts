@@ -206,7 +206,7 @@ export class NativeAgent {
   readonly #toolCells: readonly LoopMiddleware[];
   /**
    * 一次模型呼叫由外到內經過的那幾格，跟 {@link NativeAgent.middleware} 一一對應：登記了工具清單那一步的（{@link toolListCellOf}）
-   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）與環繞步的（{@link modelCallStepOf}，摘要器那一格）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
+   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）與環繞步的（{@link modelCallStepOf}）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
    */
   readonly #modelCells: readonly LoopMiddleware[];
   /**
