@@ -195,13 +195,13 @@ impl Conversation {
 
     /// 走拆除梯度。壓制中的先放開：停住的行程讀不到 EOF，SIGTERM 也要等 SIGCONT 才送得到。
     fn begin_stop(&mut self, now: Instant, eof_grace: Duration) {
-        self.release();
+        self.release(now);
         self.proc.begin_stop(now, eof_grace);
     }
 
     /// 解除壓制；停住的送 SIGCONT。
-    fn release(&mut self) {
-        if self.cpu.release() {
+    fn release(&mut self, now: Instant) {
+        if self.cpu.release(now) {
             cpu::signal(self.proc.pid, cpu::Signal::Cont);
         }
     }
@@ -569,7 +569,7 @@ impl Supervisor {
     fn throttle(&mut self, now: Instant, config: cpu::Config) {
         for conversation in &mut self.conversations {
             let Some(heard_at) = conversation.heard_at.filter(|_| conversation.throttleable()) else {
-                conversation.release();
+                conversation.release(now);
                 continue;
             };
             let holding = conversation.cpu.holding();
@@ -776,8 +776,9 @@ impl Supervisor {
     }
 
     fn drain(conversation: &mut Conversation) {
-        conversation.release();
-        conversation.drain = Some(Instant::now());
+        let now = Instant::now();
+        conversation.release(now);
+        conversation.drain = Some(now);
         conversation.proc.chan.send(&encode_conversation_command(&ConversationCommand::Drain));
     }
 

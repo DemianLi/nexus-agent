@@ -78,11 +78,15 @@ impl Guard {
         }
     }
 
-    /// 要收它了（拆除梯度、送 `drain`）：解除壓制。回 `true` 時它正停著，要送 SIGCONT。
-    pub fn release(&mut self) -> bool {
-        let stopped = self.stopped();
-        self.hold = None;
-        stopped
+    /// 要收它了（拆除梯度、送 `drain`）：解除壓制，停住的時間照樣不算沉默。回 `true` 時它正停著，要送 SIGCONT。
+    pub fn release(&mut self, now: Instant) -> bool {
+        match self.hold.take() {
+            Some(Hold::Stopped { since, .. }) => {
+                self.paused += now.saturating_duration_since(since);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// 記一筆 leader 的 schedstat（run＋wait，奈秒）。壓制中不記：停住的行程不在佇列上，量到的不是它想要多少。
@@ -297,11 +301,15 @@ mod tests {
     fn release_conts_only_when_stopped() {
         let t = Instant::now();
         let mut guard = Guard::default();
-        assert!(!guard.release());
+        assert!(!guard.release(t));
         feed(&mut guard, t, 1.0, 2_000 * MS);
-        guard.tick(t + 2_000 * MS, t, CONFIG);
-        assert!(guard.release());
+        let s = t + 2_000 * MS;
+        guard.tick(s, t, CONFIG);
+        assert!(guard.release(s + 50 * MS));
         assert!(!guard.holding());
+        // 放開之前停住的那 50 ms 照樣不算沉默。
+        assert_eq!(guard.silence(s + 50 * MS, t), 2_000 * MS);
+        assert!(!guard.release(s + 60 * MS));
     }
 
     #[test]
