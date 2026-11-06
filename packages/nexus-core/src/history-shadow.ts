@@ -31,6 +31,7 @@ import {
 } from './conversation-replay.js';
 import { toBaseMessage } from './langchain-message-adapter.js';
 import { ModelHistoryCache } from './model-history.js';
+import { withModelCallStep } from './model-call-step.js';
 import type { ModelHistoryOptions } from './model-history.js';
 import type { DeriveOptions, DerivedConversation } from './conversation-replay.js';
 import type { NexusMessage } from './nexus-message.js';
@@ -349,9 +350,9 @@ export function createHistoryShadowMiddleware(
   deps: HistoryShadowOptions & { readonly sessions: { forCall(config: unknown): SessionLookup } },
 ): AgentMiddleware {
   const cacheOf = sentHistoryCaches(deps.toolResultAsSeen);
-  return createMiddleware({
-    name: HISTORY_SHADOW_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (rawRequest, handler) => {
+      const request = rawRequest as { readonly messages: BaseMessage[] };
       let outcome: HistoryShadowOutcome;
       try {
         const found = deps.sessions.forCall({
@@ -371,7 +372,12 @@ export function createHistoryShadowMiddleware(
       }
       return handler(request);
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: HISTORY_SHADOW_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /** 一份日誌一份增量推導，按日誌物件認。 */
@@ -462,9 +468,8 @@ export function createHistoryFromLogMiddleware(
   deps: HistoryFromLogOptions & { readonly sessions: { forCall(config: unknown): SessionLookup } },
 ): AgentMiddleware {
   const cacheOf = sentHistoryCaches(deps.toolResultAsSeen);
-  return createMiddleware({
-    name: HISTORY_FROM_LOG_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
+  return withModelCallStep(
+    (request, handler) => {
       const found = deps.sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
@@ -475,7 +480,12 @@ export function createHistoryFromLogMiddleware(
       }
       return handler({ ...request, messages: sentHistoryFromLog(found.log, cacheOf(found.log)) });
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: HISTORY_FROM_LOG_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /** fold 在 `log` 時標起來的 `registry.sessions`，見 {@link markHistoryFromLog}。 */
