@@ -855,6 +855,79 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 任何一個分頁再送出的請求（送訊息、列清單）都要排隊等一條連線空出來，看起來就是按了沒反應；再開一個分頁的話，
 連載入網頁本身都要排隊，會卡在載入畫面。關掉多的分頁就好。
 
+## 嵌入方換票登入
+
+[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)，地圖 [#2365](https://github.com/DemianLi/nexus-agent/issues/2365) 第 4 點。
+嵌入 `<nexus-chat>` 的系統（嵌入方）用自己後端手上的服務憑證，替一位已經登入它的使用者，向 serve 換一張只能用一次的短效登入票。
+
+**現況：身分對應還沒接上，換票一律被拒。** 對方帳號怎麼對應到 nexus 身分待決（#1827 D231）。在那之前，憑證對的請求也回 `403 identity_rejected`，並記進稽核。
+拿票換嵌入專用會話的那一步（元件那一側）還沒做。
+
+### 設定
+
+`embed-login` 那一列，起動期讀一次，改了要重啟。出廠值：
+
+```yaml
+- id: embed-login
+  name: '#settings/embed-login'
+  config:
+    embedders: []          # 出廠沒有嵌入方：沒有換票的路由
+    ticketTtlSeconds: 60   # 票多久沒兌換就作廢，10 到 300
+```
+
+加一個嵌入方，在自己的 `cordis.patch.yml` 整份寫出 `config`（patch 是整份替換）：
+
+```yaml
+- id: embed-login
+  config:
+    embedders:
+      - id: crm                                   # 小寫英數與 -，最長 32 字；寫進稽核與預設的憑證檔名
+        # credentialFile: /var/lib/nexus-agent/embed-credential-crm   # 絕對路徑；不寫就是 <home>/embed-credential-<id>
+    ticketTtlSeconds: 60
+```
+
+- **服務憑證檔**：serve 啟動時讀，沒有就建（目錄 `0700`、檔 `0600`，內容是 43 字元的 base64url 加換行）；權限過寬或內容認不得就**起不來**。把檔的內容交給嵌入方的後端，只放在後端，不能進瀏覽器。要換憑證就刪掉檔再重啟。
+- `id` 不能重複；每個嵌入方的憑證檔（含預設路徑）各自一個，也不能跟指標的 token 檔同一個：撞到就**起不來**，訊息指名兩邊。比的是絕對路徑，經 symlink 換了名字的同一個檔看不出來。
+- 啟動日誌印一行 `嵌入換票：開 POST /embed/exchange（嵌入方 crm，憑證在 …；稽核記在 …）；身分對應尚未接上，一律拒絕`，**不印憑證本身**。沒有嵌入方時印 `嵌入換票：關（embed-login 沒有嵌入方）`。
+
+### 換票
+
+```
+POST /embed/exchange                 # 代理後面是 /nexus/embed/exchange
+Authorization: Bearer <服務憑證>
+Content-Type: application/json
+
+{ "subject": "<對方帳號>", "sessionId": "<對方的登入 session id>" }
+```
+
+| 回應 | 什麼時候 |
+| --- | --- |
+| `200 { "ticket", "expiresAt" }` | 發票。`expiresAt` 是毫秒時間戳 |
+| `401 unauthorized` | 缺憑證、憑證錯、不是 `Bearer <值>` 的形狀：**一律同一個回應**，看不出是哪一種、也看不出有哪些嵌入方 |
+| `403 { "error": "identity_rejected" }` | 對方帳號對不上 nexus 身分（現在一律如此） |
+| `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好這兩個欄位、欄位空或超過 256 字、本文超過 4096 位元組 |
+| `503 { "error": "capacity" }` | 還沒兌換、還沒過期的票已有 1024 張 |
+| `500` | 稽核紀錄寫不進去：不發票 |
+| `403`（純文字） | Host 不是 loopback 也不是 `--trusted-host` 指名的，或 `Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源；同 wire |
+| `405` | 不是 `POST` |
+
+- 憑證決定是哪一個嵌入方，本文裡沒有嵌入方 id。serve 拿請求帶的值跟每一個嵌入方的憑證各比一次（比雜湊，長度固定、不提早結束）。
+- **票只放在記憶體**：只能兌換一次，到期或用過就刪，serve 重啟就全部作廢。續期就是用同一個 `sessionId` 再換一張。
+- 瀏覽器的會話 cookie 換不到票；服務憑證也打不了 wire 與指標。
+
+### 稽核紀錄
+
+`<home>/embed-audit.jsonl`，一行一筆、只追加、`0600`。過了服務憑證的每筆寫好（`datasync`）才回應；憑證錯的不等落盤。
+
+```json
+{"v":1,"at":"2026-11-06T08:00:00.000Z","event":"exchange","outcome":"identity_rejected","embedder":"crm","subject":"alice","sessionIdSha256":"…","reason":"identity_mapping_unavailable"}
+```
+
+- `outcome`：`issued` 與 `capacity`（帶 `userId`）、`identity_rejected`、`bad_request`（帶 `reason`）、`capacity`、`unauthenticated`。
+- **不記秘密**：服務憑證與票都不記，對方的 session id 只記 sha256。
+- **憑證錯的請求會合併**：它們不知道是誰打的，也最容易被大量打。每 60 秒的時間窗裡，第一次照記一行（`count: 1`），之後只計數；時間窗過了之後**再有**一次憑證錯的請求、或 serve 收尾時，把計到的寫成一行（`count` 是第一行之後的次數，`from` 是這個時間窗第一次的時間，`to` 是最後一次）。serve 被強制結束時這段計數遺失。所以這一類每個時間窗最多兩行，檔案不會因為有人一直打錯憑證而無上限地長。
+- 過了服務憑證的請求一筆一行：打的人是設定裡指名的嵌入方。
+
 ## 放在反向代理後面
 
 [#2369](https://github.com/DemianLi/nexus-agent/issues/2369)。多人共用的主機上，serve 綁的 port 誰都連得到（〈多人共用主機的部署清單〉第 6 條）。要讓瀏覽器經反向代理連進來，serve 改聽 Unix socket，只讓代理連得進去；對外的名字、TLS 與子路徑都歸代理。代理要跟 serve 在同一台主機上。
@@ -1605,6 +1678,8 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 | `browser-session.json` | 瀏覽器登入的簽章密鑰 | **秘密** |
 | `config-hash-key.json` | 會話日誌 header 設定雜湊的鍵 | **秘密** |
 | `metrics-token` | 指標的 bearer token | **秘密**；打開指標才有，`tokenFile` 有設就在那個位置、不在 home |
+| `embed-credential-<id>` | 嵌入方 `<id>` 換票用的服務憑證 | **秘密**；`embed-login` 列了嵌入方才有，`credentialFile` 有設就在那個位置、不在 home |
+| `embed-audit.jsonl` | 嵌入換票的稽核紀錄 | `embed-login` 列了嵌入方才有；只追加 |
 | `invariant-log.jsonl` | 不變量量測記錄 | |
 | `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
 | `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
@@ -1628,6 +1703,8 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 | `browser-session.json`（秘密） | 啟動 | **起不來**：版本不對、JSON 壞、密鑰不是 32 bytes 的 base64url、權限過寬 | 要重設：刪掉它再重啟，**所有瀏覽器會話一起失效** |
 | `thread-organization.json` | 會話落盤開著才開它（沒落盤就不開）；開的時候沒有這個檔，就是兩個空集合 | **起不來**：版本不對、JSON 壞、欄位型別不對、集合裡有重複、釘選與封存重疊、權限過寬 | 要重設：刪掉它再重啟，**釘選與封存全部清空** |
 | `metrics-token`（秘密） | 打開指標時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`tokenFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url | 要重設：刪掉它再重啟，**監控那一側要換新的 token**（見〈探針與指標〉） |
+| `embed-credential-<id>`（秘密） | `embed-login` 列了嵌入方時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`credentialFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url；訊息指名檔案 | 要重設：刪掉它再重啟，**嵌入方的後端要換新的憑證**（見〈嵌入方換票登入〉） |
+| `embed-audit.jsonl` | `embed-login` 列了嵌入方時，在綁 port 之前打開（只追加，不讀內容）；沒有就建（`0600`） | **起不來**：權限讓別人讀得到；訊息指名檔案。跑著的時候寫不進去：那一次換票回 500、不發票（憑證錯的那一類只記伺服器日誌，照回 401） | 權限過寬跑 `chmod 600`；內容不讀，壞行不影響啟動 |
 | `config-hash-key.json`（秘密） | 會話落盤開著才讀（落盤關掉就不取）；啟動時讀兩處：會話日誌 header 的設定雜湊、對照快照的活著版本 | **警告，少一格**：兩處各講一次，新寫的會話日誌 header 不記設定雜湊、對照快照不列活著的設定版本；檔不動，之後每次啟動都一樣，直到它修好 | 要重設：刪掉它，之後寫的設定雜湊換一套，**跟之前的比不起來** |
 
 表裡「起不來」的，serve 不碰檔：不會備份、不會用空內容重建、不會跳過壞的部分。`plugin-snapshot.json` 每次啟動重寫、`invariant-log.jsonl` 只追加，serve 啟動時都不讀它們，壞了不影響啟動；`serve.lock` 是空的鎖檔，不用管。
@@ -2013,7 +2090,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`history-source`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`embed-login`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -2227,6 +2304,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `attachment-images`         | 圖片轉碼（落盤前規範化）同時最多幾張；**只有 `serve` 載**；**出廠 2**（1 到 8），見〈送出時帶附件〉                                | 有（一格）                       | **關不掉**               |
 | `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 `.docs/host-page-tools-2374-design-2026-11-03.md` | 有（兩格）                       | 關得掉（＝空名單、30 秒） |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
+| `embed-login`               | 嵌入方用服務憑證換一次性登入票：有哪些嵌入方、憑證檔在哪、票多久作廢；**只有 `serve` 用**（CLI 也載這一列，不讀）；**出廠沒有嵌入方（沒有這條路由）、票 60 秒**，見〈嵌入方換票登入〉 | 有（兩格）                       | 關得掉（＝沒有嵌入方）   |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
 | `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理），以及全機的模型請求並行上限（選配，出廠不限） | 有                       | **關不掉**               |

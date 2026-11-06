@@ -276,6 +276,7 @@ describe('一次性模式', () => {
       'thread-capacity',
       'memory-gauge',
       'ops-endpoints',
+      'embed-login',
       'browser-session',
       'deliverable-files',
       'tool-text',
