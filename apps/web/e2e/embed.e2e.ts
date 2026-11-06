@@ -908,6 +908,63 @@ describe('換票登入（#2370）', () => {
     expect(await transcript(page).getByText('我是 bob').count()).toBe(0);
   });
 
+  test('同一個人續期：留在剛開、還沒講話的那一條，下行改走新開的 socket', async () => {
+    const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const sockets: import('playwright-core').WebSocket[] = [];
+    page.on('websocket', (ws) => {
+      if (ws.url().endsWith('/embed/threads/mux')) sockets.push(ws);
+    });
+    await gotoBare(page, origin);
+    await signIn(page, await ticket());
+    await send(page, '第一條');
+    await expect
+      .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
+      .toBe(1);
+    await settled(page);
+    await chat(page).getByRole('button', { name: '新對話' }).click();
+    await expect.poll(() => transcript(page).count()).toBe(0);
+    const before = sockets.length;
+
+    await signIn(page, await ticket());
+    await expect.poll(() => sockets.length).toBeGreaterThan(before);
+    await expect.poll(() => sockets.slice(0, before).every((ws) => ws.isClosed())).toBe(true);
+    expect(await transcript(page).count()).toBe(0);
+    await send(page, '第二條');
+    await expect
+      .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
+      .toBe(1);
+    expect(await transcript(page).getByText('第一條').count()).toBe(0);
+  });
+
+  test('沒換票被 401 擋下：發 unauthorized（不 bubble）；交回 signIn 之後講得了話', async () => {
+    const { origin, ticket } = await startWithEmbedLogin([{ content: '收到。' }]);
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // 不 bubble 的事件 capture 階段照樣經過 window：元件升級之前就聽著，第一下也錄得到。
+    await page.addInitScript(() => {
+      const seen: unknown[] = [];
+      (window as unknown as { ticketNeeded: unknown[] }).ticketNeeded = seen;
+      window.addEventListener(
+        'nexus-ticket-needed',
+        (event) => seen.push({ detail: (event as CustomEvent).detail, bubbles: event.bubbles }),
+        true,
+      );
+    });
+    const needed = () =>
+      page.evaluate(() => (window as unknown as { ticketNeeded: unknown[] }).ticketNeeded);
+    await gotoBare(page, origin);
+    await expect
+      .poll(needed, { timeout: 30_000 })
+      .toEqual([{ detail: { reason: 'unauthorized' }, bubbles: false }]);
+
+    await signIn(page, await ticket());
+    await send(page, '你好');
+    await expect
+      .poll(() => transcript(page).getByText('收到。').count(), { timeout: 30_000 })
+      .toBe(1);
+    expect(await needed()).toHaveLength(1);
+  });
+
   test('用過的票：signIn reject ticket_invalid', async () => {
     const { origin, ticket } = await startWithEmbedLogin([{ content: '用不到' }]);
     const page = await browser.newPage();

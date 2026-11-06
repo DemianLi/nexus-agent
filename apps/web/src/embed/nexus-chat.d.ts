@@ -47,8 +47,22 @@ interface NexusSignInError extends Error {
   readonly status?: number;
 }
 
+/**
+ * `nexus-ticket-needed` 事件的 `detail`（#2370）：該換一張新票，交回 `signIn`。事件發在元素上、不 bubble；兩次 `signIn` 成功之間只發一次。
+ */
+interface NexusTicketNeededDetail {
+  /**
+   * - `expiring`：到期前 60 秒（照 serve 的時鐘）；
+   * - `unauthorized`：請求被 401 擋下，例如 cookie 已經過期、被撤掉，或還沒換過票。
+   */
+  readonly reason: 'expiring' | 'unauthorized';
+  /** `expiring` 才有：目前這顆 cookie 的到期時間，同 `signIn` resolve 的那個。 */
+  readonly expiresAt?: number;
+}
+
 interface NexusChatElementEventMap extends HTMLElementEventMap {
   'nexus-host-tool': CustomEvent<NexusHostToolDetail>;
+  'nexus-ticket-needed': CustomEvent<NexusTicketNeededDetail>;
 }
 
 interface NexusChatElement extends HTMLElement {
@@ -67,7 +81,8 @@ interface NexusChatElement extends HTMLElement {
   set hostTools(value: readonly NexusHostTool[] | null | undefined);
   /**
    * 換票登入（#2370）：拿宿主系統後端換來的一次性登入票兌換嵌入 cookie。成功時回 cookie 的到期時間（系統時間的毫秒時間戳），
-   * 對話改接這位使用者這一次登入最新開的那一條，沒有就開新的；失敗時 reject {@link NexusSignInError}，畫面不動。
+   * 對話改接這位使用者這一次登入最新開的那一條，沒有就開新的；同一個人續期（serve 認得是同一個嵌入方＋使用者代號）就留在畫面上這一條。
+   * 失敗時 reject {@link NexusSignInError}，畫面不動。
    * 元素放進頁面之前或之後呼叫都可以；要走換票就在放進頁面之前呼叫，否則放進去的那一刻會先照主機擁有者的方式接上一條。
    */
   signIn(ticket: string): Promise<{ readonly expiresAt: number }>;

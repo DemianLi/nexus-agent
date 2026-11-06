@@ -10,7 +10,8 @@
  * - **不碰宿主頁**：亮暗掛在 `.nexus-root` 上，不改 `<html>`；記住上一條 thread 用自己的鍵（`embedded-chat.tsx`）。只有
  *   `@font-face` 與 `@property` 放進宿主頁的 `<head>`，shadow root 裡的這兩種規則 Chrome 不認（`embed-shadow-css.ts`）。
  * - **換票登入**：`signIn(ticket)` 兌換宿主系統後端換來的登入票（#2370，`sign-in.ts`）。成功之後清掉記著的上一條、下行改開新的 socket
- *   （cookie 定在升級當下），改接 serve 回的那一條，沒有就開新的；之後只認換票帶來的，不再讀寫記著的那一條（`embedded-chat.tsx`）。
+ *   （cookie 定在升級當下）。換了人（指紋不同，或第一次換票）就改接 serve 回的那一條，沒有就開新的；同一個人續期就留在畫面上這一條。
+ *   之後只認換票帶來的，不再讀寫記著的那一條（`embedded-chat.tsx`）。快到期或被 401 擋下時發 `nexus-ticket-needed`（`ticket-needed.ts`）。
  * - 元素拿掉就卸掉 React（下行跟著關）；同一個 tick 裡搬到別處（先拿掉再放回去）不卸。
  *
  * @module
@@ -25,6 +26,7 @@ import { agentBaseUrl, createAgentConnection } from '@/lib/agent';
 import type { AgentConnection } from '@/lib/agent';
 import { PortalContainerContext } from '@/lib/portal-container';
 import { forgetThread } from '@/lib/remembered-thread';
+import { clockedFetch, serverClock } from '@/lib/server-clock';
 import { systemDarkQuery } from '@/lib/theme';
 import { randomUuid } from '@/lib/uuid';
 
@@ -37,6 +39,8 @@ import { HOST_TOOL_EVENT, parseHostTools } from './host-tools';
 import type { NexusHostToolDetail } from './host-tools';
 import { redeemTicket } from './sign-in';
 import { themeOverrides } from './theme-tokens';
+import { TICKET_NEEDED_EVENT, TicketWatch } from './ticket-needed';
+import type { NexusTicketNeededDetail } from './ticket-needed';
 
 export const ELEMENT_NAME = 'nexus-chat';
 
@@ -54,9 +58,12 @@ export interface NexusChatStyles {
 
 export interface DefineOptions {
   readonly styles: NexusChatStyles;
-  /** 注入用；省略就是打 `scriptUrl` 所在目錄底下 `/embed` 的 client（#2382、#2426）。每個元素一個。注入的 client 換票之後不換 socket。 */
-  readonly createClient?: () => WireClient;
-  /** 注入用：`signIn` 兌換登入票打的 `fetch`。省略是全域的。 */
+  /**
+   * 注入用；省略就是打 `scriptUrl` 所在目錄底下 `/embed` 的 client（#2382、#2426）。每個元素一個。注入的 client 換票之後不換 socket，
+   * 請求被 401 擋下時要自己呼叫 `onUnauthorized`。
+   */
+  readonly createClient?: (hooks: { readonly onUnauthorized: () => void }) => WireClient;
+  /** 注入用：`signIn` 兌換登入票打的 `fetch`。省略是全域的（包一層記下 serve 的時鐘）。 */
   readonly fetch?: typeof globalThis.fetch;
   /**
    * 從哪個網址算 agent 的位置（client、`/livez` 探測、交付物下載都用它）；省略是這支模組自己的網址，建置後就是 `embed.js`。
@@ -83,10 +90,11 @@ export function defineNexusChat({
 }: DefineOptions): void {
   if (customElements.get(ELEMENT_NAME) !== undefined) return;
   const baseUrl = agentBaseUrl(scriptUrl);
-  const makeConnection = (): AgentConnection =>
+  const redeemFetch = fetch ?? clockedFetch();
+  const makeConnection = (onUnauthorized: () => void): AgentConnection =>
     createClient === undefined
-      ? createAgentConnection({ baseUrl, routePrefix: EMBED_PATH_PREFIX })
-      : { client: createClient(), renewStreams: () => {} };
+      ? createAgentConnection({ baseUrl, routePrefix: EMBED_PATH_PREFIX, onUnauthorized })
+      : { client: createClient({ onUnauthorized }), renewStreams: () => {} };
 
   // 型別對著給宿主頁的那份（`nexus-chat.d.ts`），實作跟公開的形狀對不上就編不過。
   class ChatElement extends HTMLElement implements NexusChatElement {
@@ -98,6 +106,11 @@ export function defineNexusChat({
     #react: Root | undefined;
     #connection: AgentConnection | undefined;
     #signIn: EmbedSignIn | undefined;
+    #fingerprint: string | undefined;
+    readonly #ticketWatch = new TicketWatch(
+      (detail) => this.#ticketNeeded(detail),
+      () => serverClock.now() ?? Date.now(),
+    );
     #context: NexusChatContext | undefined;
     #hostTools: readonly HostToolDeclaration[] | undefined;
     #overrides: readonly string[] = [];
@@ -161,8 +174,9 @@ export function defineNexusChat({
         document.head.append(style);
       }
       this.#applyTheme();
+      this.#ticketWatch.resume();
       if (this.#react === undefined) {
-        this.#connection ??= makeConnection();
+        this.#connection ??= makeConnection(() => this.#ticketWatch.unauthorized());
         this.#react = createRoot(this.#app);
       }
       this.#render();
@@ -171,6 +185,7 @@ export function defineNexusChat({
     disconnectedCallback() {
       queueMicrotask(() => {
         if (this.isConnected) return;
+        this.#ticketWatch.pause();
         this.#unwatchSystem?.();
         this.#unwatchSystem = undefined;
         this.#react?.unmount();
@@ -187,14 +202,22 @@ export function defineNexusChat({
     }
 
     async signIn(ticket: string): Promise<{ readonly expiresAt: number }> {
-      const redeemed = await redeemTicket(baseUrl, ticket, fetch);
+      const redeemed = await redeemTicket(baseUrl, ticket, redeemFetch);
+      const renewal =
+        this.#signIn !== undefined &&
+        redeemed.identityFingerprint !== undefined &&
+        redeemed.identityFingerprint === this.#fingerprint;
+      this.#fingerprint = redeemed.identityFingerprint;
       forgetThread(EMBED_THREAD_KEY);
       this.#connection?.renewStreams();
-      this.#signIn = {
-        seq: (this.#signIn?.seq ?? 0) + 1,
-        threadId: redeemed.threadId ?? randomUuid(),
-      };
-      this.#render();
+      if (!renewal) {
+        this.#signIn = {
+          seq: (this.#signIn?.seq ?? 0) + 1,
+          threadId: redeemed.threadId ?? randomUuid(),
+        };
+        this.#render();
+      }
+      this.#ticketWatch.signedIn(redeemed.expiresAt);
       return { expiresAt: redeemed.expiresAt };
     }
 
@@ -220,6 +243,12 @@ export function defineNexusChat({
     readonly #handToHost = (detail: NexusHostToolDetail) => {
       this.dispatchEvent(new CustomEvent(HOST_TOOL_EVENT, { detail }));
     };
+
+    #ticketNeeded(detail: NexusTicketNeededDetail) {
+      this.dispatchEvent(
+        new CustomEvent(TICKET_NEEDED_EVENT, { detail: Object.freeze({ ...detail }) }),
+      );
+    }
 
     #applyTheme() {
       const theme = parseTheme(this.getAttribute('theme'));
