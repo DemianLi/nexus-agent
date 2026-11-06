@@ -37,8 +37,18 @@ export class NexusSignInError extends Error {
 export interface RedeemedTicket {
   /** cookie 的到期時間，系統時間的毫秒時間戳。 */
   readonly expiresAt: number;
+  /**
+   * 這是誰的不可逆指紋（serve 的 `EmbedSessionCookies.identityFingerprint`）：同一個嵌入方＋使用者代號就相同，換了人就不同。
+   * 回應裡沒有（或不是非空字串）就沒有這一格，當成分不出是不是同一個人。
+   */
+  readonly identityFingerprint?: string;
   /** 這一次登入最新開的那條嵌入對話；沒有就沒有這一格。 */
   readonly threadId?: string;
+}
+
+function text(body: unknown, key: string): string | undefined {
+  const value = (body as Record<string, unknown> | null | undefined)?.[key];
+  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 async function errorCode(response: Response): Promise<string | undefined> {
@@ -93,7 +103,6 @@ export async function redeemTicket(
     body = undefined;
   }
   const expiresAt = (body as { expiresAt?: unknown } | null | undefined)?.expiresAt;
-  const threadId = (body as { threadId?: unknown } | null | undefined)?.threadId;
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
     throw new NexusSignInError(
       'sign_in_failed',
@@ -101,5 +110,11 @@ export async function redeemTicket(
       response.status,
     );
   }
-  return typeof threadId === 'string' && threadId !== '' ? { expiresAt, threadId } : { expiresAt };
+  const identityFingerprint = text(body, 'identityFingerprint');
+  const threadId = text(body, 'threadId');
+  return {
+    expiresAt,
+    ...(identityFingerprint === undefined ? {} : { identityFingerprint }),
+    ...(threadId === undefined ? {} : { threadId }),
+  };
 }

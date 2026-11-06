@@ -20,6 +20,23 @@ export interface AgentClientOptions {
   readonly routePrefix?: string;
   /** 注入用；給了就兩條下行也走它，不開 socket。預設是全域的 `fetch` 包一層、順手記下回應的 `Date` 標頭（{@link clockedFetch}，換算時鐘差用），下行走 WebSocket。 */
   readonly fetch?: typeof globalThis.fetch;
+  /**
+   * client 的請求（上行與兩條下行）回 401 時呼叫，回應照樣交給呼叫端。WebSocket 下行只交出 mux 換過一條 socket、或改走 SSE 之後的結果
+   * （`mux.ts` 的 `createMuxFetch`），舊 socket 帶著換票前 cookie 的那個 401 不會叫到這裡。嵌入版用它通知宿主頁換票（#2370）。
+   */
+  readonly onUnauthorized?: () => void;
+}
+
+function watched(
+  fetch: typeof globalThis.fetch,
+  onUnauthorized: (() => void) | undefined,
+): typeof globalThis.fetch {
+  if (onUnauthorized === undefined) return fetch;
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    if (response.status === 401) onUnauthorized();
+    return response;
+  };
 }
 
 /**
@@ -73,7 +90,8 @@ export interface AgentConnection {
   /**
    * 換一顆 cookie 之後呼叫（嵌入版兌換登入票，#2370）：socket 的 cookie 定在升級當下，所以之後的下行改開一條新的，舊的那幾條當場關掉。
    * 關掉的下行跟斷線一樣由呼叫端重開，重開時就走新的那條。已經退回 SSE 的下行不經 socket，這裡關不到，要呼叫端自己收
-   * （嵌入元件換票時整個重掛，就收掉了）。注入了 `fetch` 時沒有 socket，什麼都不做。
+   * （嵌入元件換了人時整個重掛，就收掉了；同一個人續期時留著，SSE 每個請求帶當下的 cookie，下次重開就是新的）。注入了 `fetch` 時沒有 socket，
+   * 什麼都不做。
    */
   renewStreams(): void;
 }
@@ -84,7 +102,10 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
   const baseUrl = `${mount}${options.routePrefix ?? ''}`;
   const fetch = options.fetch ?? clockedFetch();
   if (options.fetch !== undefined) {
-    return { client: createWireClient({ baseUrl, fetch }), renewStreams: () => {} };
+    return {
+      client: createWireClient({ baseUrl, fetch: watched(fetch, options.onUnauthorized) }),
+      renewStreams: () => {},
+    };
   }
   let sockets = new Set<MuxSocket>();
   const open = (into: Set<MuxSocket>) =>
@@ -99,8 +120,8 @@ export function createAgentConnection(options: AgentClientOptions = {}): AgentCo
   return {
     client: createWireClient({
       baseUrl,
-      fetch,
-      streamFetch: (input, init) => streams(input, init),
+      fetch: watched(fetch, options.onUnauthorized),
+      streamFetch: watched((input, init) => streams(input, init), options.onUnauthorized),
     }),
     renewStreams() {
       const old = sockets;

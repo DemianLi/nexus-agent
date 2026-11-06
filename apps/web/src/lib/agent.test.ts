@@ -190,3 +190,39 @@ describe('createAgentConnection 換 socket（#2370）', () => {
     expect(() => renewStreams()).not.toThrow();
   });
 });
+
+describe('createAgentConnection 的 onUnauthorized（#2370）', () => {
+  afterEach(() => {
+    FakeSocket.made = [];
+    FakeSocket.refuse = false;
+    vi.unstubAllGlobals();
+  });
+
+  it('上行回 401 叫一次，其他狀態不叫', async () => {
+    const onUnauthorized = vi.fn();
+    let status = 401;
+    const { client } = createAgentConnection({
+      fetch: async () => Response.json({ error: 'unauthorized' }, { status }),
+      onUnauthorized,
+    });
+    await expect(client.runStart('t1', '哈囉')).rejects.toThrow();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    status = 500;
+    await expect(client.runStart('t1', '哈囉')).rejects.toThrow();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('WebSocket 下行退回 SSE 被 401 擋下：叫一次', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    FakeSocket.refuse = true;
+    vi.stubGlobal('fetch', async () => new Response('', { status: 401 }));
+    const onUnauthorized = vi.fn();
+    const { client } = createAgentConnection({
+      baseUrl: '',
+      routePrefix: '/embed',
+      onUnauthorized,
+    });
+    await expect(client.openEvents('t1')).rejects.toThrow();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+});
