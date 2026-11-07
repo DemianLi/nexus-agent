@@ -422,6 +422,29 @@ describe('tools/execute 的生產者', () => {
     const wrap = wrapperOf(createToolExecuteMiddleware(bus));
     const handler = vi.fn(async () => new ToolMessage({ content: '真的', tool_call_id: 'call-1' }));
     const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('本體拋錯、監聽者接住再回 `command` 結果 → 本體跑過了，訊息說不是 next() 回的那一個', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      try {
+        await next();
+      } catch {
+        // 接住本體的錯，改交回 `command` 結果。
+      }
+      return { kind: 'command', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => {
+      throw new Error('壞了');
+    });
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
     await expect(failure).rejects.toThrow(
       'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
     );

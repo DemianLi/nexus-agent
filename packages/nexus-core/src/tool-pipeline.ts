@@ -419,7 +419,8 @@ function rebuildMessage(
 }
 
 /**
- * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時，或叫了 `next()` 而本體回的不是 `ToolMessage` 時。
+ * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時、本體拋錯而監聽者接住時，或叫了 `next()` 而本體回的不是
+ * `ToolMessage` 時。
  * 交回的是 `command` 結果就拋 `TypeError`，訊息照 `bodyRan`（工具本體跑了沒）分兩句：模型看得到這段文字，要講出實際的情形。
  * 判準是本體跑了沒，不是交回的那位叫了 `next()` 沒：有多位監聽者時，叫了 `next()` 也可能被內層短路。
  */
@@ -500,7 +501,9 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
     const exec = toolExecutionOf(wrappedRequestOf(call));
     let raw: unknown;
     let viewOfRaw: PipelineResult | undefined;
+    let bodyRan = false;
     const view = await events.waterfall('tools/execute', exec, async () => {
+      bodyRan = true;
       raw = await next();
       viewOfRaw = toolResultView(raw, exec.callId);
       return viewOfRaw;
@@ -512,7 +515,7 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
       if (body === undefined) throw badDecision('tools/execute', view);
       return rebuildMessage(raw, body, view);
     }
-    return materialize(view, exec, viewOfRaw !== undefined);
+    return materialize(view, exec, bodyRan);
   });
 }
 
