@@ -217,12 +217,12 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   只有 render 文字與 meta；`artifact` 照 `convertCallToolResult` 原樣組、日誌跟著它的形狀，所以在進日誌前把大的換掉，改成只放 meta 是日誌格式的變更。
 - **resource link 寫成 `Resource link: <name> (<uri>)`，並要求模型標出處**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)，
   **超出 dsh**）。名稱與 URI 照 dsh 拼，轉出來的 metadata 帶著 `name`，所以不只剩網址。dsh 只對 `web_search`／`web_fetch`
-  要求引用（`search.ts:92` 的結果結尾、`:315-323` 的系統提示詞），MCP 沒有；我們的 web 搜尋判過不做，內部資料全走 MCP，所以把同一套
+  要求引用（`search.ts:105` 的結果結尾、`search.ts:358-359` 與 `fetch.ts:455` 的系統提示詞，`05b1cae8`），MCP 沒有；我們的 web 搜尋判過不做，內部資料全走 MCP，所以把同一套
   移過來：系統提示詞多一段「說出是哪個 server、結果裡的連結用 markdown 連結標出來」（有任何 MCP 列登記就有，不看 resources 能力），
   工具結果**只在**含 resource link 時結尾多一句 `Cite the relevant resource links above as markdown links in your answer.`
   （措辭用 resource links 而不是 URLs，因為 MCP 的 URI 不一定是 http）。模型有沒有照做不保證，實機結果記在 PR。
 - **同一段提示詞多兩條規則：只講結果裡有的事實、查無要先明說**（[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)，
-  **超出 dsh**，登記在 `hub.ts` 檔頭偏離 5）。dsh 沒有對應的段落。起因是 [#1329](https://github.com/DemianLi/nexus-agent/issues/1329)
+  **超出 dsh**）。dsh 沒有對應的段落。起因是 [#1329](https://github.com/DemianLi/nexus-agent/issues/1329)
   真模型量測：結果只有連結時 10/24 編出流程，查無資料時 20/24 先反問、明說查無 5/24。放 MCP 段而不放 persona
   （persona 是 dsh web-app profile 的出貨值）。同樣是請求不是保證。
 - **server 回 `isError` 時，plugin 拿 server 的原文拋錯**（`src/tool-call.ts`；只給參數直接呼叫時帶 `MCP tool … returned an error:` 前綴），錯誤才走圍堵（`containment.ts`）那條出口，模型看到 `Error: 工具 … 執行失敗：<原文>`
