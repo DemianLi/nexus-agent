@@ -120,6 +120,9 @@ export const hasTools = (body: Body): boolean => (body.tools?.length ?? 0) > 0;
 
 /**
  * 只對「主呼叫」（帶工具的）編號的腳本；標題、摘要這類不帶工具的呼叫一律回固定字串，不佔號。
+ *
+ * 腳本有狀態：主呼叫編號存在回傳的腳本裡、跨請求累計，一份只給一次 {@link runServeDriver}（或其他收 {@link Script} 的跑法）用。
+ * 同一次呼叫裡的重啟照樣接著數；對照組與重啟組是兩次呼叫，各要一份，共用時後一組的 `k` 不從 0 起算。
  */
 export const mainOnly = (script: (k: number) => Reply): Script => {
   let k = 0;
