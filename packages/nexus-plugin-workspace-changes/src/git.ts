@@ -1,36 +1,33 @@
 /**
- * git 工作樹快照、樹與樹的比較、忽略判斷。照 dsh `workspace-changes/src/git.ts`（`ddefc45`）逐條移植。
+ * git 工作樹快照、樹與樹的比較、忽略判斷。
  *
- * ## 與 dsh 的偏離：git 怎麼起由組裝點決定
+ * ## git 怎麼起由組裝點決定
  *
- * 起行程的介面（{@link GitStarter}）定在這個套件，產品由 harness 經 {@link GIT_STARTER_SERVICE} 注入，走沙箱 spawner（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）；
- * {@link directGitStarter} 直接 spawn，只給測試。**退掉的是載體，隨載體來的規則明著抄過來**：
+ * 起行程的介面（{@link GitStarter}）定在這個套件，產品由 harness 經 {@link GIT_STARTER_SERVICE} 注入：Linux 上走沙箱 spawner
+ * （[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），其他平台沒有沙箱後端，會話是 `danger-full-access` 時才拍得了快照，由 harness 直接 spawn。
+ * {@link directGitStarter} 直接 spawn，只給測試。前三條不論經哪個 starter 都在這個檔裡做，第四條看 starter：
  *
- * - **環境**：dsh 的 `scrubbedParentEnv()`（`packages/subprocess/subprocess/src/index.ts:47-80`）拿掉名字像
- *   憑證的變數（`/KEY|PASSWORD|SECRET|TOKEN/i`）與自己的 `DSH_*`；我們拿掉同一批與自己的 `NEXUS_*`，定義跟 MCP
- *   的 stdio server 共用一份，在 `@nexus/core` 的 `child-env.ts`（#726）。dsh 另外把 proxy 變數還原成使用者設的
- *   樣子、補上子行程裡的 Node 要的旗標；那一層已疊進共用的那一份（#746），git 快照的環境自然帶著。git 自己不看
- *   那個旗標、只讀代理變數，快照又不碰網路，所以這一層對今天的 git 呼叫沒有可觀察的效果——跟著共用函式走，
- *   是為了將來哪個 git 底下的 Node 工具（hook、credential helper）連外時跟父行程走同一條路。
- * - **逾時、輸出上限與管線排空**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
- *   {@link GitRunner.run} 裡自己做。**管線排空**也在這裡：dsh 的 `bindManagedProcess`
- *   （`packages/subprocess/subprocess-local/src/spawn.ts:409-415`）在直接子行程 `exit` 之後給 `graceMs` 讓管線排空，
- *   到時間就強制結算並銷毀收集用的管線，不等後代把 pipe 關掉。`run` 以 {@link GitProcess.exited} 為界、到 {@link TERMINATE_GRACE_MS}
- *   銷毀 stdout／stderr、用它的結束碼結算（#1560 N1110）；只等 `done` 的話，後代（會自己 fork 背景行程的
- *   clean filter、fsmonitor）握著管線時 `run` 永遠不回來，recorder 的 dispose 與 thread 的閒置逐出都會等它。
- * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
+ * - **環境**：`scrubbedParentEnv()`，定義在 core 的 `child-env.ts`（#726）、經 `@nexus/subprocess` 轉出，跟 MCP 的 stdio server
+ *   共用一份：拿掉名字像憑證的與 `NEXUS_*` 變數，行程裝了代理時疊上代理那一層（#746），git 快照的環境自然帶著。git 自己不看
+ *   那層裡的 `NODE_USE_ENV_PROXY`、只讀代理變數，快照又不碰網路，所以這一層對今天的 git 呼叫沒有可觀察的效果——跟著共用函式走，
+ *   是為了將來哪個 git 底下的 Node 工具（hook、credential helper）連外時跟父行程走同一條路；這只在直接 spawn 的路徑上有意義，
+ *   經 spawner 的子行程連不了網路（seccomp 擋 `AF_INET`）。
+ * - **逾時、輸出上限與管線排空**：{@link GitRunner.run} 自己做逾時、stdout 位元組上限（保留尾端）與管線排空。`run` 以
+ *   {@link GitProcess.exited} 為界、到 {@link TERMINATE_GRACE_MS} 銷毀 stdout／stderr、用它的結束碼結算（#1560 N1110），不等後代
+ *   把 pipe 關掉；只等 `done` 的話，後代（會自己 fork 背景行程的 clean filter、fsmonitor）握著管線時 `run` 永遠不回來，recorder
+ *   的 dispose 與 thread 的閒置逐出都會等它。
+ * - **找執行檔**：{@link resolveGitExecutable} 在淨化過的 `PATH` 裡找。
  * - **行程結束時同步強殺**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）：serve 被強制結束時 git 的逾時沒人數，
- *   還在跑的 git 會留成孤兒。經 spawner 時由 spawner 收掉整個行程群組；{@link directGitStarter} 登記進 `@nexus/core` 的
- *   `trackHostExitChild`，只殺直接子行程。
+ *   還在跑的 git 會留成孤兒。經 spawner 時由 spawner 收掉整個行程群組；直接 spawn 的（harness 的 `directToolLauncher` 與
+ *   {@link directGitStarter}）登記進 `trackHostExitChild`，只殺直接子行程。
  *
- * ## 與 dsh 的偏離：私有 index 保留原本的時間戳
+ * ## 私有 index 保留原本的時間戳
  *
- * dsh 的 `snapshotTree` 把 repo 的 index `copyFile` 一份當種子，副本的 mtime 是「現在」。**git 判斷一個 index
- * 項目要不要重讀內容，看的是 index 檔自己的 mtime**（racy git：項目的 mtime 不早於 index 的，就不信 stat）。
- * 副本一旦比原本的新，一個跟上次寫 index 同一秒改、大小沒變的檔，stat 看起來跟快取一樣，`git add` 就不讀它，
- * 那次改動從快照裡消失。實測 git 2.50.1：commit 後立刻改同大小的檔、隔一秒再拍，新時間戳的副本三次都漏、
- * 保留時間戳的三次都看得到（Node 的 `copyFile` 在 macOS 與 Linux 上都不保留 mtime）。所以副本照原本的
- * 時間戳，讓 git 在副本上做的判斷跟在真的 index 上一樣。
+ * `snapshotTree` 把 repo 的 index 複製一份當種子，並把副本的時間戳設回原本的。**git 判斷一個 index 項目要不要重讀內容，看的是
+ * index 檔自己的 mtime**（racy git：項目的 mtime 不早於 index 的，就不信 stat）。副本一旦比原本的新，一個跟上次寫 index 同一秒改、
+ * 大小沒變的檔，stat 看起來跟快取一樣，`git add` 就不讀它，那次改動從快照裡消失。實測 git 2.50.1：commit 後立刻改同大小的檔、
+ * 隔一秒再拍，新時間戳的副本三次都漏、保留時間戳的三次都看得到（Node 的 `copyFile` 在 macOS 與 Linux 上都不保留 mtime）。保留時間戳，
+ * git 在副本上做的判斷才跟在真的 index 上一樣。
  *
  * @module
  */
@@ -41,7 +38,7 @@ import { access, copyFile, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/prom
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { scrubbedParentEnv, trackHostExitChild } from '@nexus/core';
+import { scrubbedParentEnv, trackHostExitChild } from '@nexus/subprocess';
 import { deadline, timeoutOf } from '@nexus/timeout';
 import type { Readable } from 'node:stream';
 
@@ -52,7 +49,7 @@ import { canonicalPath, isInside, toPosix } from './paths.js';
 /** 逾時的 `TimeoutReason.code`；`timeoutOf` 靠它分辨「自己這顆逾時」與上游的中止。 */
 const GIT_TIMEOUT_CODE = 'GIT_TIMEOUT';
 
-/** 開始收掉之後，git 子行程還有幾毫秒可以自己結束；固定的生命週期常數，同 dsh。 */
+/** 開始收掉之後，git 子行程還有幾毫秒可以自己結束；固定的生命週期常數，不進 {@link GitLimits}。 */
 const TERMINATE_GRACE_MS = 2_000;
 /** 留下來診斷用的 stderr 尾端。 */
 const STDERR_TAIL_BYTES = 16 * 1024;
@@ -86,7 +83,7 @@ export interface GitLimits {
   readonly outputMaxBytes: number;
 }
 
-/** 只留最後 `max` 個位元組的收集器，同 dsh 能力層的「超過上限就丟開頭」。 */
+/** 只留最後 `max` 個位元組的收集器：超過上限就丟開頭。 */
 class TailBuffer {
   #chunks: Buffer[] = [];
   #bytes = 0;
@@ -246,9 +243,8 @@ export class GitRunner {
   async run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
     // 取消與逾時融合成一顆 signal，**先到的那個決定原因**（`AbortSignal.any` 採用先中止的來源的 reason）：先被中止、
     // 逾時的計時器之後才到期（git 收到 SIGTERM 之後還有 2 秒的 SIGKILL 寬限），`timeoutOf` 讀到的仍是中止，不會誤報逾時。
-    // 舊寫法另外留著逾時那顆 signal、事後看 `timeout.aborted`，上面這個時序會報成「逾時」。
-    // `deadline` 把 `<= 0` 當成「不起計時器」（dsh 的內部暗號）；這裡的設定是 `z.number()`，0 或負數是設錯了，
-    // 舊寫法（`AbortSignal.timeout(0)`）會立刻逾時，不能因為換了實作就變成「永不逾時」。
+    // 不能另外留著逾時那顆 signal、事後看 `timeout.aborted`：上面這個時序會報成「逾時」。
+    // `deadline` 把 `<= 0` 當成「不起計時器」；這裡的設定是 `z.number()`，0 或負數是設錯了，要拋，不能靜靜變成「永不逾時」。
     if (!(this.limits.timeoutMs > 0)) {
       throw new Error(`git timeoutMs 必須大於 0，收到 ${String(this.limits.timeoutMs)}`);
     }
@@ -345,9 +341,9 @@ export class GitRunner {
 }
 
 /**
- * 找 git 執行檔，一個 plugin 實例找一次。在淨化過的 `PATH` 裡找，同 dsh 能力層的 `resolveExecutable`。
+ * 找 git 執行檔，一個 plugin 實例找一次。在淨化過的 `PATH` 裡找。
  * **macOS 上的 `/usr/bin/git` 是開發者工具的樁程序**，沒裝工具時會跳安裝視窗而不是跑，所以 `xcode-select -p`
- * 不成功就當成沒有 git，同 dsh 的 `resolveGit`。
+ * 不成功就當成沒有 git。
  * @param options - 測試用：`PATH`、平台、樁程序的探測。
  * @returns 執行檔路徑；沒有 git 時是 `null`。
  */

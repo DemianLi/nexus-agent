@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/timeout": "workspace:*",
     "diff": "^9.0.0",
     "langchain": "^1.5.10",
