@@ -11,7 +11,8 @@
  * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
  *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
  *   前台不載 thread，本地答只會是「還沒開過」。
- * - **打開方式**：讀歷史、附件、引用、變更的是 `read-only`，其餘（開下行、送指令、上傳）是 `run`。
+ * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開了下行不講話就走的
+ *   thread 照只讀的閒置時間收；開著的下行讓對話行程不回報閒置，所以只讀的閒置時間只從下行關掉之後算。
  *
  * @module
  */
@@ -49,6 +50,7 @@ type Route = NonNullable<ReturnType<typeof parsePath>>;
 
 /** 用 `read-only` 打開的路由：監督行程給它較短的閒置時間（`--read-only-idle-ms`），名額滿時先逐出（設計 §7-3）。 */
 const READ_ONLY_KINDS: ReadonlySet<Route['kind']> = new Set([
+  'stream',
   'history',
   'subagent-history',
   'trajectory-turn',

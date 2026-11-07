@@ -60,7 +60,11 @@ async function conversation(handle: (request: IncomingMessage, response: ServerR
 }
 
 /** 監督行程那一端：每個 `ensure` 都回同一個 socket 的 `up`，收到的 thread id 記在 `ensured`。 */
-function supervisorAnswering(socket: string, ensured: string[] = []): SupervisorClient {
+function supervisorAnswering(
+  socket: string,
+  ensured: string[] = [],
+  modes: string[] = [],
+): SupervisorClient {
   const input = new PassThrough();
   const output = new PassThrough();
   let pending = Buffer.alloc(0);
@@ -71,6 +75,7 @@ function supervisorAnswering(socket: string, ensured: string[] = []): Supervisor
       const request = decodeFrontRequest(payload);
       if (request.type === 'ensure') {
         ensured.push(request.threadId);
+        modes.push(request.open);
         input.write(frame(encodeFrontEvent({ type: 'up', threadId: request.threadId, socket })));
       }
     }
@@ -90,6 +95,7 @@ function front(
 ) {
   const streams: StreamRecord[] = [];
   const access: AccessRecord[] = [];
+  const modes: string[] = [];
   const forwarder = new FrontForwarder();
   cleanups.push(() => forwarder.close());
   const local = {
@@ -100,7 +106,7 @@ function front(
   } as unknown as IdleSweepingWireHandler;
   const handler = createFrontWireHandler({
     local,
-    supervisor: supervisorAnswering(socket, ensured),
+    supervisor: supervisorAnswering(socket, ensured, modes),
     forwarder,
     auth: { authenticate: () => ALICE },
     embedStreams: {
@@ -117,7 +123,7 @@ function front(
       }),
     },
   });
-  return { handler, streams, access };
+  return { handler, streams, access, modes };
 }
 
 describe('createFrontWireHandler 的嵌入版', () => {
@@ -176,6 +182,38 @@ describe('createFrontWireHandler 的嵌入版', () => {
     expect(streams.map(({ outcome }) => outcome)).toEqual(['opened', 'cut']);
     expect(streams[1]).toMatchObject({ reason: 'not_mapped', threadId: 't1' });
     await expect.poll(() => upstream.closed).toEqual(['/embed/threads/t1/stream']);
+  });
+});
+
+describe('createFrontWireHandler 的打開方式', () => {
+  it.each([
+    ['一般路由', '/threads/t1', {}],
+    ['嵌入路由', '/embed/threads/t1', { cookie: 'nexus_embed=x' }],
+  ])('%s：開下行與讀歷史用 read-only，送指令用 run', async (_name, path, headers) => {
+    const upstream = await conversation((request, response) => {
+      if (request.url?.endsWith('/stream') === true) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write(': connected\n\n');
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id: 1, result: {} }));
+    });
+    const { handler, modes } = front(upstream.socket, () => ({ ok: true, principal: ALICE }));
+    const stream = await handler.handle(
+      new Request(`http://nexus.test${path}/stream`, { method: 'POST', headers, body: '{}' }),
+    );
+    expect(stream.status).toBe(200);
+    await stream.body?.cancel();
+    await handler.handle(new Request(`http://nexus.test${path}/history`, { headers }));
+    await handler.handle(
+      new Request(`http://nexus.test${path}/commands/run.start`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 1, method: 'run.start', params: { text: 'hi' } }),
+      }),
+    );
+    expect(modes).toEqual(['read-only', 'read-only', 'run']);
   });
 });
 

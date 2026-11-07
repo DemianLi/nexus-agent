@@ -76,15 +76,23 @@ async function start(
   turns: readonly ScriptedTurn[],
   extraRows = '',
   prepareHome?: (home: string) => Promise<void>,
+  supervisorArgs: readonly string[] = [],
 ): Promise<Running> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-per-thread-'));
   roots.push(dir);
   const patch = join(dir, 'script.patch.yml');
+  // 監督行程的旗標由啟動器組，測試要加的經一支 `exec` 包裝：pid 不變，`childrenRunning` 照樣找得到子行程。
+  let supervisorBinary = SUPERVISOR!;
+  if (supervisorArgs.length > 0) {
+    supervisorBinary = join(dir, 'supervisor-wrapper.sh');
+    const quoted = [SUPERVISOR!, ...supervisorArgs].map((arg) => `'${arg}'`).join(' ');
+    await writeFile(supervisorBinary, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+  }
   await writeFile(
     patch,
     scriptedPatchText(
       turns,
-      `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${SUPERVISOR!}\n${extraRows}`,
+      `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisorBinary}\n${extraRows}`,
     ),
     'utf8',
   );
@@ -246,6 +254,28 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(await settled(running.child.pid!, 'conversation-process', 2 + WARM)).toHaveLength(
       2 + WARM,
     );
+  }, 180_000);
+
+  it('只讀開的下行：開著就不照只讀的閒置時間收，關掉之後才收', async () => {
+    const running = await start([{ content: '回覆。' }], '', undefined, [
+      '--read-only-idle-ms',
+      '1500',
+    ]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    const downlink = new AbortController();
+    await client.openEvents('thread-ro', { signal: downlink.signal });
+    const opened = await settled(supervisor, 'conversation-process', 1 + WARM);
+    expect(opened).toHaveLength(1 + WARM);
+
+    // 只讀閒置 1.5 秒＋對話行程每秒回報一次：4 秒內沒收，就是開著的下行讓它不回報閒置。
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect(childrenRunning(supervisor, 'conversation-process')).toEqual(opened);
+
+    // 對照：下行一關，同一個行程照只讀的閒置時間收掉。
+    downlink.abort();
+    const after = await settled(supervisor, 'conversation-process', WARM);
+    expect(after).toHaveLength(WARM);
   }, 180_000);
 
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {
