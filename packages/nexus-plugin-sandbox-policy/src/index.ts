@@ -75,22 +75,13 @@
  */
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import {
-  createToolCallStepMiddleware,
-  REFERENCE_RULE,
-  resolveToolName,
-  SHARED_WORKSPACE_SERVICE,
-  WORKSPACE_CAPABILITY,
-} from '@nexus/core';
+import { REFERENCE_RULE, SHARED_WORKSPACE_SERVICE, WORKSPACE_CAPABILITY } from '@nexus/core';
 import type { SandboxMode } from '@nexus/core';
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { MiddleSection } from '@nexus/core';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
 import type { SandboxModeController } from './sandbox-mode.js';
-
-/** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
-export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
 
 /** 政策句那一段的名字。 */
 export const SANDBOX_POLICY_SECTION_NAME = 'sandbox:policy';
@@ -237,7 +228,7 @@ declare module '@nexus/core' {
 /**
  * 把一格模式講成一段話：系統提示詞的一段，fold 接在 `plugins.rest` 的區頭（#2414）。每次模型呼叫現算。
  *
- * 子代理也接這一段（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
+ * 子代理也接這一段（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `tools/execute` 監聽者包的 ALS 之內，
  * `controller.source` 先讀快照。
  *
  * @param resolveMode - 每次模型呼叫問一次。
@@ -315,20 +306,14 @@ export const sandboxPolicyPlugin: NexusPlugin = {
         ...(sharedPrefix !== undefined && { sharedPrefix }),
       }),
     );
-    registry.middleware.use(
-      createToolCallStepMiddleware(
-        SANDBOX_POLICY_MIDDLEWARE_NAME,
-        // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫往內交的那一層裡跑，所以包住
-        // `next()`，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
-        // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
-        // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
-        // 父代理那側的事。
-        (call, next) =>
-          resolveToolName({ tool: call.tool as { name?: unknown }, toolCall: call }) ===
-          DELEGATION_TOOL_NAME
-            ? controller.delegate(() => next())
-            : next(),
-      ),
+    // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫往內交的那一層裡跑，所以包住
+    // `next()`，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**：派發到這位監聽者的那一刻就拍（外層 core 的
+    // 耐久檢查點先排空才往內交到這裡），拍完同步往內交，不先 await；內側再等多久，子代理讀到的都是這一格。
+    // 子代理的工具呼叫也派發 `tools/execute`、經過這裡（#327），
+    // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
+    // 父代理那側的事。
+    registry.events.on('tools/execute', (exec, next) =>
+      exec.name === DELEGATION_TOOL_NAME ? controller.delegate(() => next()) : next(),
     );
   },
 };

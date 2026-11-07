@@ -3,8 +3,9 @@
  * （[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)，事件契約草稿的 S1a）。
  *
  * 事件名與時刻照 dsh 的 `packages/core/tools/src/index.ts`（`5badb15009a`，`docs/tool-execution-pipeline.zh.md`）：
- * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**。出廠的插件監聽者只有
- * `@nexus/plugin-present` 的交付寫入，掛在 `tools/result`（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）；core 自己的監聽者
+ * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**。出廠的插件監聽者有
+ * `@nexus/plugin-present` 的交付寫入，掛在 `tools/result`（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)），與
+ * `@nexus/plugin-sandbox-policy` 的委派快照，掛在 `tools/execute`（有圍堵時才掛）；core 自己的監聽者
  * 由 `fold.ts` 依 agent 組好交給生產者（{@link CoreToolListeners}），分外層（在插件監聽者外側）與內層（在插件監聽者內側）。
  * 沒有任何監聽者時，生產者直接交給下一層，行為與位元組都跟這個檔案不存在時一樣。
  *
@@ -523,7 +524,9 @@ function listenerCount<K extends LayeredToolEvent>(
 
 /**
  * 外層 core → 匯流排上的插件監聽者 → 內層 core → `innermost`，語意同 `EventDispatcher.waterfall`：每位拿自己的一支 `next`，
- * 只能叫一次，不叫就是否決。
+ * 只能叫一次，不叫就是否決。**`next` 同步呼叫下一位**，中間不 `await`（匯流排那一段交給 `events.waterfall`，它的 `next` 同樣同步）；
+ * 某位自己 `await` 之後才叫 `next` 的，內側就晚到那之後（外層的耐久檢查點先排空才往內交）。沙箱政策的 `tools/execute` 監聽者
+ * 拍委派快照靠這一點：外側的監聽者叫 `next()`、回來之前快照已經拍好（`@nexus/plugin-sandbox-policy`）。
  *
  * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
  */

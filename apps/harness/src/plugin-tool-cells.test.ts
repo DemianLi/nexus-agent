@@ -1,5 +1,5 @@
 /**
- * 插件與 harness 的四格在 native 的工具鏈上（#2416）：sandbox-policy、workspace-changes、host-tools、background-delegation
+ * 插件與 harness 的三格在 native 的工具鏈上（#2416）：workspace-changes、host-tools、background-delegation
  * 都登記了工具步驟（`@nexus/core` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經那顆的 `wrapToolCall`；
  * 子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapToolCall`。`langgraph` 兩邊都經 `wrapToolCall`。
  *
@@ -15,13 +15,9 @@ import { join } from 'node:path';
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { SessionRegistry, toolCallStepOf, withToolCallStep, wrapToolCallWith } from '@nexus/core';
-import type { AgentMiddleware, PluginEntry, ToolCallStep } from '@nexus/core';
-import {
-  SANDBOX_POLICY_MIDDLEWARE_NAME,
-  SANDBOX_POLICY_SERVICE,
-} from '@nexus/plugin-sandbox-policy';
+import type { PluginEntry, ToolCallStep } from '@nexus/core';
+import { SANDBOX_POLICY_SERVICE } from '@nexus/plugin-sandbox-policy';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { createMiddleware } from 'langchain';
 import {
   WORKSPACE_CHANGES_MIDDLEWARE_NAME,
   workspaceChangesPlugin,
@@ -39,7 +35,6 @@ const shipped = await shippedPlugins();
 const CELLS = [
   BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
   HOST_TOOLS_MIDDLEWARE_NAME,
-  SANDBOX_POLICY_MIDDLEWARE_NAME,
   WORKSPACE_CHANGES_MIDDLEWARE_NAME,
 ] as const;
 
@@ -125,10 +120,11 @@ const worker: PluginEntry = {
 };
 
 /**
- * 委派那一次呼叫：同步往內交，**回來的下一行**就把 root 切成 `read-only`。沙箱那一格在往內交的同一個 tick 拍快照的話，
- * 子代理拿到的是切之前的模式；那一步晚一個 `await` 才跑，拍到的就是切之後的。
+ * 一位 `tools/execute` 監聽者，登記在沙箱政策之前（匯流排上排在它外側）：委派那一次呼叫同步往內交，**回來的下一行**就把
+ * root 切成 `read-only`。沙箱的監聽者在被派發的同一個 tick 拍快照的話，子代理拿到的是切之前的模式；它晚一個 `await` 才拍，
+ * 拍到的就是切之後的。順便記下匯流排上看到的工具名。
  */
-function flipAfterDelegating(flipped: string[]): PluginEntry {
+function flipAfterDelegating(flipped: string[], names: Map<string, string>): PluginEntry {
   return {
     plugin: {
       name: 'zz-flip-after-delegating',
@@ -136,19 +132,15 @@ function flipAfterDelegating(flipped: string[]): PluginEntry {
         const { controller } = registry.services.get(SANDBOX_POLICY_SERVICE) as {
           readonly controller: SandboxModeController;
         };
-        registry.middleware.use(
-          createMiddleware({
-            name: 'zzFlipAfterDelegating',
-            wrapToolCall: (request, handler) => {
-              const result = handler(request);
-              if (request.toolCall.id === 'root-sub') {
-                controller.switchTo('read-only');
-                flipped.push(controller.current);
-              }
-              return result;
-            },
-          }) as unknown as AgentMiddleware,
-        );
+        registry.events.on('tools/execute', (exec, next) => {
+          names.set(exec.callId, exec.name);
+          const result = next();
+          if (exec.callId === 'root-sub') {
+            controller.switchTo('read-only');
+            flipped.push(controller.current);
+          }
+          return result;
+        });
       },
     },
   };
@@ -163,7 +155,7 @@ afterEach(async () => {
 });
 
 /**
- * @param beforeSandbox - 插在出貨清單 `sandbox-policy` 那一列之前的條目：它們掛的 middleware 緊貼在沙箱那一格外面。
+ * @param beforeSandbox - 插在出貨清單 `sandbox-policy` 那一列之前的條目：它們掛的 `tools/execute` 監聽者在匯流排上緊貼沙箱外側。
  */
 async function run(loop: 'native' | 'langgraph', beforeSandbox: readonly PluginEntry[] = []) {
   const seen: Seen = { counts: new Map(), names: new Map() };
@@ -228,7 +220,7 @@ const count = (seen: Seen, cell: string, callId: string) =>
   seen.counts.get(cell)?.get(callId) ?? { native: 0, wrapToolCall: 0 };
 
 describe.each(['native', 'langgraph'] as const)(
-  '%s：插件與 harness 的四格每次呼叫只跑一次',
+  '%s：插件與 harness 的三格每次呼叫只跑一次',
   (loop) => {
     const root =
       loop === 'native' ? { native: 1, wrapToolCall: 0 } : { native: 0, wrapToolCall: 1 };
@@ -245,13 +237,11 @@ describe.each(['native', 'langgraph'] as const)(
 
     it('前景委派：內層看到 task，模型拿回的結果叫 subagent，日誌記的是 subagent', async () => {
       const { seen, messages, toolEvents } = await run(loop);
-      // 改名的那一格在沙箱與 workspace-changes 外面：它自己看到 `subagent`，這兩格看到 `task`。
+      // 改名的那一格在 workspace-changes 外面：它自己看到 `subagent`，workspace-changes 看到 `task`。
       expect(seen.names.get(BACKGROUND_DELEGATION_MIDDLEWARE_NAME)?.get('root-sub')).toEqual([
         'subagent',
       ]);
-      for (const cell of [SANDBOX_POLICY_MIDDLEWARE_NAME, WORKSPACE_CHANGES_MIDDLEWARE_NAME]) {
-        expect([cell, seen.names.get(cell)?.get('root-sub')]).toEqual([cell, ['task']]);
-      }
+      expect(seen.names.get(WORKSPACE_CHANGES_MIDDLEWARE_NAME)?.get('root-sub')).toEqual(['task']);
       const result = messages.find(
         (message): message is ToolMessage =>
           ToolMessage.isInstance(message) && message.tool_call_id === 'root-sub',
@@ -293,10 +283,13 @@ describe.each(['native', 'langgraph'] as const)(
     `);
     });
 
-    it('委派那一刻同步拍沙箱快照：往內交之後才切的那一格，子代理看不到', async () => {
+    it('委派那一刻同步拍沙箱快照：模型叫的是 subagent、改名成 task 的那一次，往內交之後才切的那一格，子代理看不到', async () => {
       const flipped: string[] = [];
-      const { childModes, messages } = await run(loop, [flipAfterDelegating(flipped)]);
+      const names = new Map<string, string>();
+      const { childModes, messages } = await run(loop, [flipAfterDelegating(flipped, names)]);
       expect(messages.at(-1)?.text).toBe('好了');
+      // 沙箱的監聽者認的是 `exec.name`：改名那一格在 `tools/execute` 外面，匯流排上看到的已經是 `task`。
+      expect(names.get('root-sub')).toBe('task');
       // 切了，root 的模式真的變了：子代理沒跟著變，不是因為根本沒切。
       expect(flipped).toEqual(['read-only']);
       expect(childModes).toEqual([{ mode: 'workspace-write', source: 'delegation' }]);

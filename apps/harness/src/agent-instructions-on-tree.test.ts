@@ -601,7 +601,7 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
  *
  * 期望值**寫死**，是 `b0a74042`（#1475 之前、agent-instructions 還是舊外殼 `useWithBackend` 的最後一個 develop）上實際錄到的名單，
  * 不是拿當前分支自己比自己：遷到樹上、改由橋接列 `registry.middleware.use` 折進之後，`AgentInstructionsMiddleware` 必須還在
- * 同一格（`nexusSessionCheckpoint` 之後、`nexusSandboxPolicy` 之前），其餘一個都不能多、不能少、不能換位。
+ * 名單上的同一格（`nexusSessionCheckpoint` 之後、`nexusSandboxPolicy` 之前），其餘一個都不能多、不能少、不能換位。
  *
  * 錄法（PR 內文也寫了）：`git worktree add --detach <dir> b0a74042`、`pnpm install --frozen-lockfile`，在 `apps/harness/src/` 放一個
  * 臨時測試，三種組裝各建一次（出貨清單＝`createNexusAgent({ plugins: await shippedPlugins(), summarization: false, backend })`；
@@ -760,7 +760,7 @@ const withApprovalPolicyPrompt = (chain: readonly string[]): string[] =>
 
 /**
  * `permission-presets` 掛了一位 `agent/pre-step` listener（切換核准政策的通知，#2057）：CLI 與 serve 的樹才有這個插件，鏈上在
- * `nexusSandboxPolicy` 之後多**恰好一格**。同上，只在這裡插這一格。
+ * 名單上 `nexusSandboxPolicy` 那一列之後多**恰好一格**（那一列本身由 {@link withToolListeners} 拿掉）。同上，只在這裡插這一格。
  */
 const withApprovalPolicyNotice = (chain: readonly string[]): string[] =>
   chain.flatMap((name) =>
@@ -769,13 +769,11 @@ const withApprovalPolicyNotice = (chain: readonly string[]): string[] =>
 
 /**
  * 中段是段（#2414），`b0a74042` 錄的名單沒有轉接格：fold 在 `plugins.prepended` 最後、名單上先讀後改策略那一格的正外側、`plugins.rest` 最前面各放一格轉接，
- * `nexusFileReference` 只剩段、整顆拿掉。`nexusSandboxPolicy` 有圍堵時還要包 `task`，留著；出貨清單不經樹、沒有 `fsContainment`，
- * 只剩段，也拿掉（`contained`）。同上，只在這裡插這三格、拿這一兩格。
+ * `nexusFileReference` 只剩段、整顆拿掉。同上，只在這裡插這三格、拿這一格。
  */
-const withPromptSections = (chain: readonly string[], contained: boolean): string[] =>
+const withPromptSections = (chain: readonly string[]): string[] =>
   chain.flatMap((name) => {
     if (name === 'nexusFileReference') return [];
-    if (name === 'nexusSandboxPolicy' && !contained) return [];
     if (name === 'nexusPlanMode') return [name, 'nexusPromptSections:prepended'];
     if (name === 'nexusFileObservationPolicy') return ['nexusPromptSections:observation', name];
     if (name === 'AgentInstructionsMiddleware') return ['nexusPromptSections:plugins', name];
@@ -784,14 +782,17 @@ const withPromptSections = (chain: readonly string[], contained: boolean): strin
 
 /**
  * 先讀後改、檔案工具的失敗標成錯誤與搜尋上限的開槽是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的（#2416），
- * 都不佔 stack 的格子：鏈上**恰好少這三格**，行為由 `nexusToolExecute` 與 `nexusToolPostExecute` 帶。同上，只在這裡拿這三格。
+ * 沙箱政策委派時拍快照是插件掛在匯流排上的 `tools/execute` 監聽者（#2416；出貨清單沒有 `fsContainment`，連它都不掛）：
+ * 都不佔 stack 的格子，鏈上**恰好少這四格**，
+ * 行為由 `nexusToolExecute` 與 `nexusToolPostExecute` 帶。同上，只在這裡拿這四格。
  */
 const withToolListeners = (chain: readonly string[]): string[] =>
   chain.filter(
     (name) =>
       name !== 'nexusSearchOverflow' &&
       name !== 'nexusFileObservationPolicy' &&
-      name !== 'nexusFsToolErrors',
+      name !== 'nexusFsToolErrors' &&
+      name !== 'nexusSandboxPolicy',
   );
 
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
@@ -809,7 +810,7 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
     try {
       expect(middlewareNames(agent)).toEqual(
         withToolListeners(
-          withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED)), false),
+          withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
         ),
       );
     } finally {
@@ -832,7 +833,6 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
           withToolListeners(
             withPromptSections(
               withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
-              true,
             ),
           ),
         );

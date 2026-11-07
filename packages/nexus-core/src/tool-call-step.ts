@@ -9,7 +9,6 @@
  * `ToolMessage`（`tool-events.ts` 的 `toolRefusal`）。
  *
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
- * 沙箱政策在委派的那一刻同步拍下快照（`@nexus/plugin-sandbox-policy`），靠的就是這一點。
  *
  * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 的工具鏈
  * 直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格照洋蔥驅動 `wrapToolCall`。
