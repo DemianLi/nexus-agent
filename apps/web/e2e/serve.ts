@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
  *   `apps/harness/src/settings/scripted-model.ts` 檔頭。呼叫方可在前面多接幾列（`extraRows`）。
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
+ * - **行程模型**：呼叫端設了 `NEXUS_E2E_PROCESS_MODEL=per-thread` 就用 per-thread 起（#2341），監督行程的路徑由
+ *   `NEXUS_SUPERVISOR_BIN` 給。兩個都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
  */
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -50,8 +52,8 @@ export interface E2eServe {
   close(): Promise<void>;
 }
 
-function patchText(turns: readonly ScriptTurn[], extraRows: string): string {
-  return `${extraRows}- insert:
+function scriptRows(turns: readonly ScriptTurn[]): string {
+  return `- insert:
     - id: e2e-script
       name: '#settings/scripted-model'
       config: ${JSON.stringify({ turns })}
@@ -59,6 +61,54 @@ function patchText(turns: readonly ScriptTurn[], extraRows: string): string {
   config:
     provider: e2e-script
 `;
+}
+
+/** 起 serve 的命令列參數（`tsx` 之後的部分）、patch 檔的內容，與起動之前要不要先建 home。 */
+export interface E2eServeInvocation {
+  readonly args: readonly string[];
+  readonly patch: string;
+  readonly createHome: boolean;
+}
+
+/**
+ * 組出 {@link startE2eServe} 起 serve 用的東西，環境由呼叫端傳進來。
+ *
+ * - `NEXUS_E2E_PROCESS_MODEL` 沒設或是空字串：照單一行程起。
+ * - `per-thread`：加 `--process-model per-thread`，patch 最前面改 `process-model` 那一列，`supervisorBinary` 是 `NEXUS_SUPERVISOR_BIN`
+ *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 自己往上找的那一個。home 一律先建（`0700`）。
+ * - 其他值拋錯。
+ */
+export function e2eServeInvocation(options: {
+  readonly turns: readonly ScriptTurn[];
+  readonly extraRows: string;
+  readonly prepareHome: boolean;
+  readonly patchPath: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+}): E2eServeInvocation {
+  const base = ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', options.patchPath];
+  const rows = `${options.extraRows}${scriptRows(options.turns)}`;
+  const model = options.env.NEXUS_E2E_PROCESS_MODEL ?? '';
+  if (model === '') return { args: base, patch: rows, createHome: options.prepareHome };
+  if (model !== 'per-thread') {
+    throw new Error(
+      `NEXUS_E2E_PROCESS_MODEL 只認 per-thread（或不設），收到 ${JSON.stringify(model)}`,
+    );
+  }
+  const supervisor = options.env.NEXUS_SUPERVISOR_BIN ?? '';
+  if (supervisor === '') {
+    throw new Error(
+      'NEXUS_E2E_PROCESS_MODEL=per-thread 要同時設 NEXUS_SUPERVISOR_BIN（監督行程執行檔的絕對路徑）',
+    );
+  }
+  return {
+    args: [...base, '--process-model', 'per-thread'],
+    patch: `- id: process-model
+  config:
+    mode: per-thread
+    supervisorBinary: ${JSON.stringify(supervisor)}
+${rows}`,
+    createHome: true,
+  };
 }
 
 function exited(child: ChildProcess): Promise<void> {
@@ -82,14 +132,25 @@ export async function startE2eServe(
 ): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
   const patch = join(dir, 'script.patch.yml');
-  await writeFile(patch, patchText(turns, extraRows), 'utf8');
+  let invocation: E2eServeInvocation;
+  try {
+    invocation = e2eServeInvocation({
+      turns,
+      extraRows,
+      prepareHome: prepareHome !== undefined,
+      patchPath: patch,
+      env: process.env,
+    });
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  await writeFile(patch, invocation.patch, 'utf8');
   const home = join(dir, 'home');
   const harnessHome = join(home, 'harness-home');
-  if (prepareHome !== undefined) {
-    await mkdir(harnessHome, { recursive: true, mode: 0o700 });
-    await prepareHome(harnessHome);
-  }
-  const child = spawn(TSX, ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', patch], {
+  if (invocation.createHome) await mkdir(harnessHome, { recursive: true, mode: 0o700 });
+  await prepareHome?.(harnessHome);
+  const child = spawn(TSX, invocation.args, {
     cwd: dir,
     env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: harnessHome },
     stdio: ['ignore', 'pipe', 'pipe'],
