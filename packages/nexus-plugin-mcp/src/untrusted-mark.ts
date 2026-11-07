@@ -3,7 +3,7 @@
  * [#1676](https://github.com/DemianLi/nexus-agent/issues/1676)）。本產品最主要的外部內容來源是 MCP（內部資料全走 MCP，
  * [#949](https://github.com/DemianLi/nexus-agent/issues/949)）。
  *
- * 順序是**出處行 → 前綴 → 本文**，只標記、不過濾。字句住在 `@nexus/core` 的 {@link EXTERNAL_MCP_CONTENT_NOTICE}，跟
+ * 順序是**出處行 → 前綴 → 本文**，只標記、不過濾。字句 {@link EXTERNAL_MCP_CONTENT_NOTICE} 住在 `@nexus/core` 的 `untrusted-content.ts`（經 `@nexus/tool-result` 轉出），跟
  * `REFERENCE_WARNING` 同一個出處。資源結果的那一半在 `hub.ts` 的 {@link renderResourceResult}（出處行 `MCP server: <name>` 在前，
  * 前綴接在後面）；工具結果這一半沒有出處行，前綴就是第一行。
  *

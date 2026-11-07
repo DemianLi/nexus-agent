@@ -2,7 +2,7 @@
 
 這份記 `packages/nexus-plugin-mcp` 兩支模組跟 dsh 的對照與取捨：`src/approval.ts`（MCP 那一列的 `approval` 宣告，[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）與 `src/untrusted-mark.ts`（工具結果前面的外部內容前綴，[#1768](https://github.com/DemianLi/nexus-agent/issues/1768)）。程式碼註解只寫 nexus 自己的契約，對照紀錄放在這裡（見 [`docs/standards.md`](../docs/standards.md)〈註解〉）。
 
-- **路徑**：一律相對 `references/deepseek-harness/`。
+- **路徑**：dsh 的路徑一律相對 `references/deepseek-harness/`。
 - **SHA**：標了行號的出處都在 `05b1cae8` 上核對過。
 
 ## 核准宣告（`approval.ts`）
@@ -15,9 +15,9 @@
 
 **理由類別**：產品需求超出 dsh 的射程。
 
-- **dsh 怎麼做**：mcp-client 沒有核准宣告（`packages/mcp/` 底下沒有任何 `tools/pre-execute` 的 listener），出廠沒有任何 listener 替 MCP 工具回 `ask`。會回 `ask` 的有兩個實驗性套件：
-  - `packages/experimental/auto-review`：Auto preset 下由 LLM 逐次審查每一支呼叫（`src/index.ts:741`），否決時轉問人（`:712-718`）。那是審查，不是部署方寫的宣告。
-  - `packages/experimental/hooks-claude-code`：每次呼叫照 matcher 起一支外部指令，matcher 比對的是工具名 `exec.name`（`src/index.ts:241-245`）；設定是行程級的一份（`src/index.ts:52-54`），格式是 matcher group（`src/config.ts:21-22`）。
+- **dsh 怎麼做**：mcp-client 沒有核准宣告（`packages/mcp/` 底下沒有任何 `tools/pre-execute` 的 listener），預設啟用的 profile（`packages/util/official-bundles/src/bundles.ts:10-26`）裡沒有任何 listener 替 MCP 工具回 `ask`。會回 `ask` 的只有兩個實驗性套件：
+  - `packages/experimental/auto-review`：隨安裝出貨、預設關著的選用 bundle（`bundles.ts:65`）。Auto preset 下由 LLM 審查每一支呼叫（沒有 agent 的呼叫與頂層 `run_code` 除外，`src/index.ts:741-748`）。審查否決時，session 的核准政策是 `never` 就直接拒絕（`:770-771`）；否則下游放行時轉問人（`:773-776`，`askUser` 在 `:712-718`）。那是審查，不是部署方寫的宣告。
+  - `packages/experimental/hooks-claude-code`：每次呼叫照 matcher 起一支外部指令，matcher 比對的是工具名 `exec.name`（`src/index.ts:242-245`，回 `ask` 在 `:247`）；設定是行程級的一份（`src/index.ts:52-54`），格式是 matcher group（`src/config.ts:21-22`）。
 - **為什麼不照搬 hooks**：nexus 是企業內部的業務輔助機器人，內部系統的寫入全走 MCP。「哪台、哪幾支要人看過」是部署方的業務判斷，要能寫在設定裡；不照搬的完整理由見 #1622。
 - **nexus 補了什麼**：宣告寫在 MCP 那一列，用 server 自己公告的 raw name 比對。閘門只回 `ask` 或 `next()`，其餘全走現成的 waterfall 與 core 的 `nexusApprovalGate` 中介層。
 - **之後**：要支援用樣式比對工具名時，語意照抄 dsh 的 matcher（#1622 Q4）。
@@ -36,13 +36,13 @@
 
 - **一行固定字句、只標記不過濾**：dsh 的 `EXTERNAL_WEB_CONTENT_NOTICE`（`packages/web/tool-web/src/trust.ts:7`）。nexus 的字句只把 `web` 換成 `MCP`。
 - **出處行 → 前綴 → 本文、中間空一行**：dsh 的 `packages/web/tool-web/src/fetch.ts:329`（`Fetched … (HTTP …)\n\n${NOTICE}\n\n<本文>`），多段用 `parts.join('\n\n')` 接（`packages/web/tool-web/src/search.ts:106`）。
-- **標在工具本體裡**：跟 dsh「render 之後才記錄」同一個位置，所以進 state、日誌與送給模型的都是標過的那一份。
+- **標記的效果照 dsh，位置不同**：dsh 在 tool-web 的 `output.render` 裡加前綴（`packages/web/tool-web/src/fetch.ts:495` → `:329`），pipeline 在產生成功結果時呼叫 render（`packages/core/tools/src/pipeline.ts:544`）得出模型面的 content。nexus 的工具沒有 render 這一步，所以標在工具本體裡（`packages/nexus-plugin-mcp/src/tool-call.ts`）；進 state、日誌與送給模型的同樣都是標過的那一份。
 
 ### 偏離 1：對 MCP 加這一行
 
 **理由類別**：產品需求超出 dsh 的射程。
 
-dsh 只對 web 工具加這一行：`EXTERNAL_WEB_CONTENT_NOTICE` 只出現在 `packages/web/tool-web/src/` 的 `fetch.ts`、`search.ts`、`trust.ts`。本產品最主要的外部內容來源是 MCP（內部資料全走 MCP，[#949](https://github.com/DemianLi/nexus-agent/issues/949)），所以把同一個做法搬到 MCP。先例是 `project-content.ts` 的檔頭。
+dsh 只對 web 工具加這一行：`EXTERNAL_WEB_CONTENT_NOTICE` 只出現在 `packages/web/tool-web/src/` 的 `fetch.ts`、`search.ts`、`trust.ts`。本產品最主要的外部內容來源是 MCP（內部資料全走 MCP，[#949](https://github.com/DemianLi/nexus-agent/issues/949)），所以把同一個做法搬到 MCP。先例是 `packages/nexus-plugin-mcp/src/project-content.ts` 的檔頭。
 
 ### 偏離 2：空結果不標
 

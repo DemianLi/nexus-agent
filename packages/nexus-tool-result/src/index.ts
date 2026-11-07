@@ -18,10 +18,10 @@
  * `markToolError` 與 `toolErrorOf` 共用 core 模組層的同一張 `WeakMap`（日誌讀的就是它），實作搬出來會出現兩張表、
  * 兩份「工具錯誤」的判準（#1458 Q4 (b) 不選的理由）。所以（抽出實作是橫跨核心的一刀，表達不出來，退到最接近的實作，同 `@nexus/session`、`@nexus/projections`）：
  *
- * - 三個值**留在 `@nexus/core`，由這個套件單向轉出**。相依是單向的：這個套件相依 `@nexus/core`，core 不 import 它。
+ * - 轉出的值**留在 `@nexus/core`，由這個套件單向轉出**。相依是單向的：這個套件相依 `@nexus/core`，core 不 import 它。
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）：不能讓安裝結果出現第二份
  *   core——兩份 core 就是兩張 `WeakMap`，標上去的碼日誌讀不到。
- * - **撤除條件**：SDK 與定義套件要發布到私有 registry 之前，把這三個值的實作連同 `toolErrorOf` 一起搬進這個套件
+ * - **撤除條件**：SDK 與定義套件要發布到私有 registry 之前，把轉出的值的實作連同 `toolErrorOf` 一起搬進這個套件
  *   （屆時 core 改從這裡 import）。
  *
  * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`toolRefusal`、`toolCallIdOf`、`markToolError`
