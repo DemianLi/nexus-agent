@@ -2,66 +2,37 @@
  * 各台 MCP server 共用的那一份：資源工具與 server 指引的提示詞（[#430](https://github.com/DemianLi/nexus-agent/issues/430)、
  * [#431](https://github.com/DemianLi/nexus-agent/issues/431)）。
  *
- * **一個 plugin 實例對一台 server，但資源工具只有一組。** dsh 的 `mcp-resources` 是獨立套件：三支工具
- * （`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`）由 `McpResourceRuntime` 在第一台 server
- * 登記時註冊，之後每台 server 只把自己的 provider 登記進去，工具以 `server` 參數選要問哪一台
- * （`packages/mcp/mcp-resources/src/index.ts`，`5badb150`）。我們沒有 cordis 的 context 樹，所以退到最接近的表達：
- * 第一個走到登記那一步的 `mcp` 列用 `services`（`mcp:hub`）建這個 hub 並註冊三支工具與一段系統提示詞，後面的列
- * 只 {@link McpHub.add} 自己的 {@link McpSource}。
+ * **一列對一台 server，但一條 thread 上資源工具只有一組。** 三支工具（`list_mcp_resources`、`list_mcp_resource_templates`、
+ * `read_mcp_resource`）以 `server` 參數選要問哪一台。這條 thread 上第一個走到登記那一步的 `mcp` 列建 hub，放在
+ * `thread.shared`（同一條 thread、同一顆插件的各列共用），登記三支工具與一段系統提示詞；後面的列只 {@link McpHub.add}
+ * 自己的 {@link McpSource}。
  *
- * ## 偏離登記
+ * **提示詞那一段每次渲染時現算**（{@link hubPromptText} 讀 hub 目前的 sources）：段由第一列登記，後面的列在同一次組裝裡才加進來，
+ * 所以文字要到渲染時才定。每台 server 的指引在它 `add` 那一刻定下，重連之後不換（`supervisor.ts` 檔頭）；sources 只在組裝期間增加、
+ * thread 收掉時移除，所以一條組好的 thread 每一輪逐位元組相同。
  *
- * 1. **載體**：dsh 的 server 指引與「可用的資源 server 有哪些」是 `systemPrompt.section(...)` 兩種段落
- *    （`mcp-client/src/server-context.ts`、`mcp-resources/src/index.ts`）。我們的是**一段**（`registry.prompt.section`，#2414），
- *    兩種文字併在 {@link hubPromptText} 裡；段接在 fold 的 `plugins.rest` 區頭那一格，不照 dsh 的 `order` 排。
- * 2. **提示詞只在載入期定下來**：dsh 的 `instructions()` 讀「最近一次成功連線」的快照，重連成功會換；我們重連
- *    之後不換（`supervisor.ts` 檔頭偏離 3），所以文字在登記那一刻就定了，每一輪逐位元組相同（不吃 KV cache）。disposal 才會移掉。
- * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `server is disconnected`；這裡一樣——名字照列、
- *    工具照在，叫它得到同一句（`mcp-client(<name>): server is disconnected`，dsh `connection.ts:128,361`）。
+ * **起不來的那一列也登記**（沒寫 `failOnStartupError: true` 的）：名字照列、工具照在，呼叫時才得到 `mcp-client(<name>): server is disconnected`。
  *
- * 4. **超出 dsh：提示詞多一段引用要求**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)）。dsh 只對
- *    `web_search`／`web_fetch` 要求引用，系統提示詞段落在 `packages/web/tool-web/src/search.ts:315-323`
- *    （`… and cite the relevant URLs as markdown links.`），MCP 沒有。我們的 web 搜尋判過不做（T-10），內部資料全走 MCP，
- *    產品定位（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）需要讓使用者知道答案出自哪個系統，所以把同一套提示
- *    移到 MCP：措辭與語氣比照 `search.ts`（英文、一句），多一個「說出是哪個 server」，因為對內部系統來說出處首先是系統名。
- *    **只要有任何一台 MCP 登記進來就有這一段**，不看它宣告不宣告 `resources` 能力——hub 的登記不分（只掛 tools 的
- *    server 也登記），所以 {@link CITATION_PROMPT} 跟 {@link hubPromptText} 的其他文字一起出現或一起不出現。工具結果那一半
- *    （結果含 resource link 才在結尾加一句）在 `project-content.ts`。
+ * **只要有任何一台 MCP 登記進來，提示詞就有引用要求與外部內容兩段**（{@link CITATION_PROMPT}、{@link UNTRUSTED_CONTENT_PROMPT}，
+ * [#1319](https://github.com/DemianLi/nexus-agent/issues/1319)、[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)、
+ * [#1768](https://github.com/DemianLi/nexus-agent/issues/1768)），不看它宣告不宣告 `resources` 能力：本產品的內部資料全走 MCP
+ * （[#949](https://github.com/DemianLi/nexus-agent/issues/949)），使用者要知道答案出自哪個系統，MCP 的結果也是外部內容。這是對模型的
+ * 請求，不是保證，效果見 #1345 的盲標比較。工具結果那一半在 `project-content.ts` 與 `untrusted-mark.ts`。
  *
- * 5. **超出 dsh：同一段多兩條規則**（[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)）。dsh 沒有任何一段要求「只講結果
- *    裡有的事實」或「查無要先明說」，`search.ts:315-323` 只管引用。[#1329](https://github.com/DemianLi/nexus-agent/issues/1329)
- *    用真模型每組 24 次量出：結果只有連結時模型有 10/24 編出流程、查無資料時有 20/24 先反問而不是說查無（明說查無 5/24）。
- *    產品是查資料的聊天機器人（[#949](https://github.com/DemianLi/nexus-agent/issues/949)），這兩種最傷信任，所以補在
- *    {@link CITATION_PROMPT}：只講結果裡有的、讀不到內容就明說並附連結、查無先明說再問。放在 MCP 段而不放 persona
- *    （`cordis.yml` 的 `personaPrefix`／`personaSuffix` 是 dsh web-app profile 的出貨值，這兩條只跟 MCP 結果有關，沒掛 MCP 就不出現）。
- *    **這是對模型的請求，不是保證**，效果見 #1345 的盲標比較。
- *
- * 6. **超出 dsh：MCP 的外部內容也標**（[#1768](https://github.com/DemianLi/nexus-agent/issues/1768)、[#1676](https://github.com/DemianLi/nexus-agent/issues/1676)，
- *    理由 2：產品需求超出 dsh 的射程）。dsh 只對 web 工具標「外部內容，當資料不當指令」（`packages/web/tool-web/src/trust.ts:7`、
- *    `fetch.ts:329`、`:448-454`），MCP 沒有；本產品最主要的外部內容來源是 MCP（內部資料全走 MCP，[#949](https://github.com/DemianLi/nexus-agent/issues/949)），
- *    所以把同一套搬過來：資源結果在出處行之後加一行 {@link EXTERNAL_MCP_CONTENT_NOTICE}（{@link renderResourceResult}），提示詞多
- *    {@link UNTRUSTED_CONTENT_PROMPT}（條件同 {@link CITATION_PROMPT}：任何一台 MCP 登記進來就有），工具結果那一半在 `untrusted-mark.ts`。
- *    只標記、不過濾；server 的指引（`### MCP server:` 那段）不動。提示詞那一句的規則子句取自 `REFERENCE_WARNING` 的後半
- *    （{@link REFERENCE_RULE}，#1676 Q4 (a)），主詞涵蓋結果、資源與錯誤文字（Q5 (a)）。
- *
- * 其餘照 dsh：三支工具的名字、描述、參數、找不到 server 的錯誤訊息一字不差；`list` 沒帶 `cursor` 時由 SDK 的
- * `Client.listResources()` 自己走完所有頁並合併（`@modelcontextprotocol/client` 2.x，dsh README 同寫「Without a cursor,
- * the MCP SDK collects the server's pages」，`mcp-resources/README.md:36`），帶了 `cursor` 就只要那一頁並原樣回
- * `nextCursor`；`read` 的二進位 `blob` 在給模型的文字裡換成一句描述。
+ * `list` 沒帶 `cursor` 時由 SDK 的 `Client.listResources()` 自己走完所有頁並合併（`@modelcontextprotocol/client` 2.x），帶了 `cursor`
+ * 就只要那一頁並原樣回 `nextCursor`；`read` 的二進位 `blob` 在給模型的文字裡換成一句描述。
  *
  * @module
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
+// eslint-disable-next-line no-restricted-imports -- 外部內容前綴、引用規則與停止訊號今天只在 core 匯出，還沒有定義套件可取；#2537 拿掉
 import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, turnCancelSignalOf } from '@nexus/core';
-import type { PluginRegistry } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 系統提示詞的段序今天只在 core 匯出，#2537 拿掉
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
-import type { MiddleSection } from '@nexus/core';
+import type { ToolThread, ToolThreadSection } from '@nexus/tools';
 import { z } from 'zod';
-
-/** hub 在 `services` 上的名字。 */
-export const MCP_HUB_SERVICE = 'mcp:hub';
 
 /** 伺服器清單與引用規則那一段的名字。 */
 export const MCP_PROMPT_SECTION_NAME = 'mcp:servers';
@@ -90,7 +61,7 @@ export interface McpSource {
 
 /** 共用的那一份。 */
 export interface McpHub {
-  /** 登記一台 server；回的函式撤銷這一次登記（冪等）。同名重複登記由呼叫端用 `mcp:server:<name>` 先擋掉。 */
+  /** 登記一台 server；回的函式撤銷這一次登記（冪等）。同名重複登記由呼叫端先擋掉。 */
   add(source: McpSource): () => void;
 }
 
@@ -136,6 +107,7 @@ export const RESOURCE_TOOL_NAMES = [
  * 協議在結果上加的、對模型沒有用處的欄位（新協議的 `_meta`、快取提示 `ttlMs`／`cacheScope`）。只在**頂層**拿掉，
  * 完整的結果仍在工具的 artifact 裡。
  */
+// eslint-disable-next-line no-restricted-syntax -- 唯讀的欄位名常數，掛載之間不變
 const ENVELOPE_KEYS: ReadonlySet<string> = new Set(['_meta', 'ttlMs', 'cacheScope']);
 
 /**
@@ -207,13 +179,18 @@ const listParameters = z.object({
   cursor: z.string().optional().describe('Continuation cursor returned by this server.'),
 });
 
+/** `thread.shared` 上放 hub 的那一格。 */
+const HUB = Symbol('mcp:hub');
+
 /**
- * 取這次組裝的 hub；第一次叫就建（註冊三支工具與 middleware，並提供 `mcp:hub`）。
+ * 取這條 thread 的 hub；第一次叫就建（登記三支工具與一段系統提示詞）。建的那一列收掉時，hub 跟著從 `thread.shared` 拿掉，
+ * 那一列在組裝裡失敗時也一樣：它登記的工具與段已經撤了，後面的列不能再拿到這一個。
  *
- * 建到一半拋錯的話，已經註冊的撤掉再拋，不留下半套。
+ * 建到一半拋錯的話，已經登記的撤掉再拋，不留下半套。
  */
-export function ensureHub(registry: PluginRegistry): McpHub {
-  const existing = registry.services.get<McpHub>(MCP_HUB_SERVICE);
+export function ensureHub(thread: ToolThread): McpHub {
+  const shared = thread.shared as { [HUB]?: McpHub };
+  const existing = shared[HUB];
   if (existing !== undefined) return existing;
 
   const sources = new Map<string, McpSource>();
@@ -246,7 +223,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
       ) as unknown as StructuredTool;
 
     undos.push(
-      registry.tools.register(
+      thread.register(
         resourceTool(
           'list_mcp_resources',
           'List resources available from an MCP server.',
@@ -257,7 +234,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
           }),
         ),
       ),
-      registry.tools.register(
+      thread.register(
         resourceTool(
           'list_mcp_resource_templates',
           'List parameterized resource URI templates from an MCP server.',
@@ -268,7 +245,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
           }),
         ),
       ),
-      registry.tools.register(
+      thread.register(
         resourceTool(
           'read_mcp_resource',
           'Read an MCP resource by URI from the named server. Use a listed URI or an expanded resource template.',
@@ -279,7 +256,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
           (args) => ({ method: 'resources/read', uri: args['uri'] ?? '' }),
         ),
       ),
-      registry.prompt.section(promptSection(sources)),
+      thread.section(promptSection(sources)),
     );
 
     const hub: McpHub = {
@@ -290,7 +267,10 @@ export function ensureHub(registry: PluginRegistry): McpHub {
         };
       },
     };
-    undos.push(registry.services.provide(MCP_HUB_SERVICE, hub));
+    shared[HUB] = hub;
+    thread.onDispose(() => {
+      if (shared[HUB] === hub) delete shared[HUB];
+    });
     return hub;
   } catch (error) {
     for (const undo of undos.reverse()) undo();
@@ -299,7 +279,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
 }
 
 /** {@link hubPromptText} 那一段，每次模型呼叫現算；沒有東西可接就是 `''`，這一次不接。 */
-function promptSection(sources: ReadonlyMap<string, McpSource>): MiddleSection {
+function promptSection(sources: ReadonlyMap<string, McpSource>): ToolThreadSection {
   return {
     name: MCP_PROMPT_SECTION_NAME,
     order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,

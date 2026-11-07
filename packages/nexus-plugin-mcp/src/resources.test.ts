@@ -28,6 +28,7 @@ import {
 } from './hub.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
 import { createMcpPlugin } from './index.js';
+import { registryThread } from './registry-thread.js';
 import {
   LOGO_BASE64,
   LOGO_URI,
@@ -366,7 +367,7 @@ describe('hub：翻頁與中止訊號原樣交給 server', () => {
         plugin: {
           name: 'stub-host',
           apply(registry: PluginRegistry) {
-            ensureHub(registry).add(source);
+            ensureHub(registryThread(registry)).add(source);
           },
         },
         config: {},
