@@ -34,6 +34,7 @@ import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
 import { elapsedText, runningTurnStart } from '@/lib/running-turn';
 import { serverClock } from '@/lib/server-clock';
+import { RECONNECT_ACTION_LABEL } from '@/lib/stream-halted';
 import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT, stoppedByTurnClock } from '@/lib/stop-cause';
 import { turnActivity } from '@/lib/turn-activity';
 
@@ -113,8 +114,15 @@ export function StatusLine({
    * 不重試（子代理的會話，[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）就單獨一行，沒有「立刻重連」。
    */
   refusal?: string;
-  /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
-  reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /**
+   * 下行斷了、等著重接：多半是自動重接，停止自動重連時只等人按（見 `useConversation` 的 `reconnecting`）。
+   * `actionLabel` 是按鈕上的字，不在就是 {@link RECONNECT_ACTION_LABEL}。
+   */
+  reconnecting?: {
+    readonly wasConnected: boolean;
+    readonly offline: boolean;
+    readonly actionLabel?: string;
+  };
   /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
   slowConnect?: boolean;
   /**
@@ -124,7 +132,7 @@ export function StatusLine({
   opening?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;
-  /** 「立刻重連」。 */
+  /** 斷線那一行旁邊的按鈕。 */
   onReconnect?: () => void;
   commandError?: string;
   slashError?: string;
@@ -144,7 +152,7 @@ export function StatusLine({
             className="h-11 shrink-0 lg:h-8"
             onClick={onReconnect}
           >
-            立刻重連
+            {reconnecting.actionLabel ?? RECONNECT_ACTION_LABEL}
           </Button>
         )}
       </div>

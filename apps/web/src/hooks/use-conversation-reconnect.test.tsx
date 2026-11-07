@@ -32,6 +32,7 @@ import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { StreamHaltedError } from '@/lib/stream-halted';
 import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_NOT_EMBEDDED_TEXT } from '@/lib/thread-not-embedded';
 import { THREAD_NOT_OWNED_TEXT } from '@/lib/thread-not-owned';
@@ -62,7 +63,7 @@ function frame(seq: number, runId: string): Event {
 interface Line {
   push(...events: Event[]): void;
   end(): void;
-  fail(message: string): void;
+  fail(failure: string | Error): void;
 }
 
 /**
@@ -86,8 +87,8 @@ function scriptedClient(extra: Record<string, unknown> = {}) {
         ended = true;
         wake?.();
       },
-      fail: (message) => {
-        error = new Error(message);
+      fail: (failure) => {
+        error = typeof failure === 'string' ? new Error(failure) : failure;
         wake?.();
       },
     });
@@ -551,6 +552,106 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
 
     await tick(250);
     expect(openEvents).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useConversation 下行拋 StreamHaltedError：停止自動重連，按鈕換字（#2343）', () => {
+  const HALTED_TEXT = '這條對話停了';
+  const HALTED_ACTION = '重新開啟';
+
+  it('開線時拋：講它給的那一句、按鈕是它給的字；推過退避、網路斷了又回來都不重開，按了才開', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(new StreamHaltedError(HALTED_TEXT, HALTED_ACTION));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(false);
+    expect(result.current.refusal).toBe(HALTED_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toStrictEqual({
+      wasConnected: false,
+      offline: false,
+      actionLabel: HALTED_ACTION,
+    });
+    expect(warn.mock.calls.some(([error]) => error instanceof StreamHaltedError)).toBe(true);
+
+    await tick(RECONNECT_MAX_MS * 4);
+    online = false;
+    act(() => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    online = true;
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(RECONNECT_MAX_MS * 4);
+    expect(openEvents).toHaveBeenCalledOnce();
+    expect(result.current.reconnecting?.actionLabel).toBe(HALTED_ACTION);
+
+    setFailOpen(undefined);
+    act(() => result.current.reconnectNow());
+    await tick();
+    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.refusal).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+  });
+
+  it('接上之後下行中途拋：wasConnected 為真，同樣不重開', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { client, openEvents, latest } = scriptedClient();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(true);
+
+    latest().fail(new StreamHaltedError(HALTED_TEXT, HALTED_ACTION));
+    await tick(RECONNECT_MAX_MS * 4);
+    expect(openEvents).toHaveBeenCalledOnce();
+    expect(result.current.connected).toBe(false);
+    expect(result.current.refusal).toBe(HALTED_TEXT);
+    expect(result.current.reconnecting).toStrictEqual({
+      wasConnected: true,
+      offline: false,
+      actionLabel: HALTED_ACTION,
+    });
+  });
+
+  it('按了但這次是網路層失敗：當一般的斷線，按鈕字回到預設，照退避自動重試', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(new StreamHaltedError(HALTED_TEXT, HALTED_ACTION));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+
+    setFailOpen('網路斷了');
+    act(() => result.current.reconnectNow());
+    await tick();
+    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.refusal).toBeUndefined();
+    expect(result.current.reconnecting).toStrictEqual({ wasConnected: false, offline: false });
+    setFailOpen(undefined);
+    await tick(RECONNECT_MAX_MS);
+    expect(openEvents).toHaveBeenCalledTimes(3);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('按了接回之後，下一次一般的斷線照退避自動重試，按鈕字回到預設', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { client, openEvents, latest } = scriptedClient();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    latest().fail(new StreamHaltedError(HALTED_TEXT, HALTED_ACTION));
+    await tick();
+    act(() => result.current.reconnectNow());
+    await tick();
+    expect(openEvents).toHaveBeenCalledTimes(2);
+
+    latest().fail('網路斷了');
+    await tick();
+    expect(result.current.refusal).toBeUndefined();
+    expect(result.current.reconnecting).toStrictEqual({ wasConnected: true, offline: false });
+    await tick(RECONNECT_MAX_MS);
+    expect(openEvents).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -1081,7 +1182,7 @@ describe.each([false, true])(
       expect(result.current.connected).toBe(false);
       expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
       expect(result.current.connectionError).toBeUndefined();
-      expect(result.current.reconnecting).toEqual({ wasConnected: true, offline: false });
+      expect(result.current.reconnecting).toStrictEqual({ wasConnected: true, offline: false });
       expect(warn.mock.calls.some(([error]) => error instanceof WireProtocolError)).toBe(true);
 
       await tick(RECONNECT_MAX_MS * 4);
@@ -1103,7 +1204,7 @@ describe.each([false, true])(
       await tick();
       expect(result.current.connected).toBe(false);
       expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
-      expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+      expect(result.current.reconnecting).toStrictEqual({ wasConnected: false, offline: false });
       const opened = wire.opened.mock.calls.length;
 
       await tick(RECONNECT_MAX_MS * 4);
@@ -1136,7 +1237,7 @@ describe.each([false, true])(
       await tick(RECONNECT_MAX_MS * 4);
       expect(wire.opened).toHaveBeenCalledTimes(opened);
       expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
-      expect(result.current.reconnecting).toEqual({ wasConnected: true, offline: false });
+      expect(result.current.reconnecting).toStrictEqual({ wasConnected: true, offline: false });
     });
 
     it('按「立刻重連」接回之後，下一次一般的斷線照舊：網路回來就自動重連', async () => {

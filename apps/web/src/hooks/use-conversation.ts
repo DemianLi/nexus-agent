@@ -75,6 +75,7 @@ import {
   reconnectDelay,
   SLOW_CONNECT_MS,
 } from '@/lib/reconnect';
+import { StreamHaltedError } from '@/lib/stream-halted';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -254,11 +255,16 @@ export interface Conversation {
   readonly connections: number;
   /**
    * 下行斷了（或第一次就沒開成），等著重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：多半是照退避自動重接；
-   * 伺服器送來看不懂的資料時（#1601 `N0758`）停止自動重連，只等人按 {@link reconnectNow}，這時 {@link refusal} 有那一句。
+   * 伺服器送來看不懂的資料時（#1601 `N0758`）、或下行拋 `StreamHaltedError`（#2343）時停止自動重連，只等人按 {@link reconnectNow}，
+   * 這時 {@link refusal} 有那一句。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
-   * 回到線上才從頭算。
+   * 回到線上才從頭算。`actionLabel` 是按鈕上的字，只有 `StreamHaltedError` 給；不在就是「立刻重連」。
    */
-  readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  readonly reconnecting?: {
+    readonly wasConnected: boolean;
+    readonly offline: boolean;
+    readonly actionLabel?: string;
+  };
   /**
    * 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗，而且 `/livez` 探測也逾時
    * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
@@ -699,8 +705,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
      * 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。**不排重試**：
      * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`packages/api/session-controller/README.md:54`）協定錯誤終止串流。
      * `lost` 照設，「立刻重連」按得到；`halted` 擋掉 `online`／`offline` 的自動重排。原文只進 `console.warn`，不進畫面。
+     * `StreamHaltedError`（#2343）也走這裡，`text` 與按鈕字由它給。
      */
-    const halt = (error: WireProtocolError) => {
+    const halt = (
+      error: WireProtocolError | StreamHaltedError,
+      text: string,
+      actionLabel?: string,
+    ) => {
       console.warn(error);
       const book = retry.current;
       book.lost = true;
@@ -711,8 +722,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setRecovered(false);
       setConnected(false);
       setConnectionError(undefined);
-      setRefusal(THREAD_PROTOCOL_ERROR_TEXT);
-      setReconnecting({ wasConnected: book.everConnected, offline: false });
+      setRefusal(text);
+      setReconnecting({
+        wasConnected: book.everConnected,
+        offline: false,
+        ...(actionLabel === undefined ? {} : { actionLabel }),
+      });
     };
 
     retry.current.unauthorized = false;
@@ -813,7 +828,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) {
           settled();
           if (error instanceof WireProtocolError) {
-            halt(error);
+            halt(error, THREAD_PROTOCOL_ERROR_TEXT);
+            return;
+          }
+          if (error instanceof StreamHaltedError) {
+            halt(error, error.text, error.actionLabel);
             return;
           }
           if (error instanceof StreamUnauthorizedError) {
