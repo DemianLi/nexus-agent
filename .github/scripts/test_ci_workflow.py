@@ -8,7 +8,7 @@
 - 兩處釘在下限的 Node（packed-install、node-compat 的 22.19）對得上 `engines`；
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
 - 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
-- test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
+- test-harness 與 native agent loop 各自的四片讀同一份耗時（兩者分開存）、合併後那一輪各片存回自己那一份（#2093、#2498）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
 - web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）；
 - 輕的模式 plan 成功、rust 為 false、其餘全是 skipped 時 gate 不起 job，條件涵蓋 gate 的每一個 needs；plan 也寫輕的模式的摘要（#2334）；
@@ -203,10 +203,10 @@ def full_peak(jobs: dict) -> int:
 
 class Budget(unittest.TestCase):
     def test_peak_matches_header(self) -> None:
-        self.assertEqual(full_peak(load(CI)['jobs']), 9)
+        self.assertEqual(full_peak(load(CI)['jobs']), 11)
 
     def test_post_merge_and_two_light_gates_fit(self) -> None:
-        """ci.yml 檔頭的算式：合併後一輪的峰值，加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
+        """ci.yml 檔頭的算式：合併後一輪的峰值（ci.yml 中間那一段加上 post-merge.yml 的 native agent loop），加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
         jobs = load(CI)['jobs']
         # 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate：中間那一段都只在全跑時跑，gate 等 plan 跑完才開始，同時只有 1 個。
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
@@ -218,7 +218,9 @@ class Budget(unittest.TestCase):
             if name not in ('plan', 'gate', 'sandbox-spawner', 'sandbox-spawner-arm64'):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
-        self.assertLessEqual(full_peak(jobs) + 2 * light_peak, JOB_LIMIT)
+        native = load(CI.with_name('post-merge.yml'))['jobs']['native-loop']['strategy']['matrix']['shard']
+        self.assertEqual(full_peak(jobs) + len(native) + 2 * light_peak, 17)
+        self.assertLessEqual(full_peak(jobs) + len(native) + 2 * light_peak, JOB_LIMIT)
 
 
 class UpgradeGuideGate(unittest.TestCase):
@@ -383,13 +385,13 @@ class PostMerge(unittest.TestCase):
 
 
     def test_native_loop_runs_the_native_config(self) -> None:
-        """native agent loop 的全套（#2356）只在這裡跑：兩片都跑 native 的設定，不靠完整一輪。"""
+        """native agent loop 的全套（#2356）只在這裡跑：四片都跑 native 的設定，不靠完整一輪；只等查耗時的那個 job（#2498）。"""
         job = self.wf['jobs']['native-loop']
-        self.assertNotIn('needs', job)
-        self.assertEqual(job['strategy']['matrix']['shard'], [1, 2])
-        run = job['steps'][-1]['run']
+        self.assertEqual(job['needs'], 'native-durations')
+        self.assertEqual(job['strategy']['matrix']['shard'], [1, 2, 3, 4])
+        run = next(s for s in job['steps'] if s.get('name') == 'Test')['run']
         self.assertIn('--config vitest.native.config.ts', run)
-        self.assertIn('--shard="${{ matrix.shard }}/2"', run)
+        self.assertIn('--shard="${{ matrix.shard }}/4"', run)
 
 class LightMode(unittest.TestCase):
     """輕的模式（#2090）：擋合併所需的檢查都在 plan 裡跑，中間那一段 skipped。"""
@@ -442,6 +444,13 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
+        for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
+                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'peer-socket-auth',
+                     'forwarded-principal', 'per-thread.integration.test'):
+            self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
+        # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
+        self.assertEqual(self.rust(['apps/harness/src/serve.ts']), 'false')
+        self.assertEqual(self.rust(['apps/harness/src/wire-handler.ts']), 'false')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
 
@@ -508,6 +517,16 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(download['with']['name'], 'sandbox-spawner-linux-x64')
         names = [s.get('name') for s in steps]
         self.assertIn('--spawner "$RUNNER_TEMP/spawner"', steps[names.index('打包')]['run'])
+
+    def test_integration_runs_against_the_built_binaries(self) -> None:
+        """兩種架構都拿編好的 spawner 與監督行程跑整合測試；env 沒設時測試整支跳過，CI 照樣綠，所以 env 與清單都要釘（#2341）。"""
+        release = '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/'
+        for job in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            step = next(s for s in self.ci['jobs'][job]['steps'] if s.get('name') == '真的 spawner 跑整合測試')
+            for suite in ('sandbox-spawner', 'git-sandbox', 'mcp-sandbox', 'kernel-file-lock', 'per-thread'):
+                self.assertIn(f' src/{suite}.integration', step['run'], (job, suite))
+            self.assertEqual(step['env']['NEXUS_SPAWNER_BIN'], release + 'nexus-sandbox-spawner', job)
+            self.assertEqual(step['env']['NEXUS_SUPERVISOR_BIN'], release + 'nexus-supervisor', job)
 
     def test_light_mode_still_builds(self) -> None:
         result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
@@ -632,10 +651,10 @@ class TypecheckCache(unittest.TestCase):
 
 
 class HarnessDurations(unittest.TestCase):
-    """test-harness 分片看的耗時（#2093）。路徑或鍵對不上時快取靜靜沒效、退回雜湊切法，gate 照樣綠，只是兩片又不均；
-    兩片取到的不是同一份時切法不一致，會有檔兩片都沒跑。"""
+    """test-harness 分片看的耗時（#2093、#2498）。路徑或鍵對不上時快取靜靜沒效、退回雜湊切法，gate 照樣綠，只是各片又不均；
+    各片取到的不是同一份時切法不一致，會有檔哪一片都沒跑。"""
 
-    SHARDS = (1, 2)
+    SHARDS = (1, 2, 3, 4)
 
     def setUp(self) -> None:
         jobs = load(CI)['jobs']
@@ -666,8 +685,8 @@ class HarnessDurations(unittest.TestCase):
                     f'${{{{ steps.durations-{n}.outputs.cache-matched-key }}}}',
                 )
 
-    def test_both_shards_restore_exactly_what_plan_found(self) -> None:
-        # 兩片都取兩份；鍵是 plan 查到的那一個、取不到就紅，所以兩片看到的資料相同。
+    def test_every_shard_restores_exactly_what_plan_found(self) -> None:
+        # 每一片都取 plan 查到的每一份；鍵是 plan 查到的那一組、取不到就紅，所以各片看到的資料相同。
         self.assertEqual(len(self.restores), len(self.SHARDS))
         for n, step in zip(self.SHARDS, self.restores):
             with self.subTest(shard=n):
@@ -694,6 +713,66 @@ class HarnessDurations(unittest.TestCase):
         self.assertEqual(self.save['with']['key'], 'harness-durations-${{ matrix.shard }}-${{ github.sha }}')
         self.assertIn(f'"{self.path("${{ matrix.shard }}")}"', self.collect['run'])
         self.assertEqual(self.harness['strategy']['matrix']['shard'], list(self.SHARDS))
+        self.assertIn(f'--shard="${{{{ matrix.shard }}}}/{len(self.SHARDS)}"', self.test['run'])
+
+
+class NativeDurations(unittest.TestCase):
+    """native agent loop 分片看的耗時（#2498），作法同 `HarnessDurations`：post-merge.yml 沒有 plan，另起一個只查鍵的 job；
+    四片取同一組鍵、取不到就紅；跟 test-harness 分開存。"""
+
+    SHARDS = (1, 2, 3, 4)
+
+    def setUp(self) -> None:
+        jobs = load(CI.with_name('post-merge.yml'))['jobs']
+        self.lookup = jobs['native-durations']
+        self.native = jobs['native-loop']
+        steps = self.native['steps']
+        self.restores = [s for s in steps if str(s.get('uses', '')).startswith('actions/cache/restore@')]
+        self.save = next(s for s in steps if str(s.get('uses', '')).startswith('actions/cache/save@'))
+        self.collect = next(s for s in steps if s.get('name') == '收這一片的耗時')
+        self.test = next(s for s in steps if s.get('name') == 'Test')
+
+    def path(self, shard: int | str) -> str:
+        return f'.native-durations/results-{shard}.json'
+
+    def test_lookup_only_finds_keys(self) -> None:
+        steps = self.lookup['steps']
+        self.assertEqual([s['id'] for s in steps], [f'durations-{n}' for n in self.SHARDS])
+        for n, step in zip(self.SHARDS, steps):
+            with self.subTest(shard=n):
+                self.assertNotIn('if', step)
+                self.assertIs(step['with']['lookup-only'], True)
+                self.assertEqual(step['with']['path'], self.path(n))
+                self.assertEqual(step['with']['key'], f'native-durations-{n}-${{{{ github.sha }}}}')
+                self.assertEqual(step['with']['restore-keys'], f'native-durations-{n}-')
+                self.assertEqual(
+                    self.lookup['outputs'][f'key_{n}'], f'${{{{ steps.durations-{n}.outputs.cache-matched-key }}}}'
+                )
+
+    def test_every_shard_restores_exactly_what_was_found(self) -> None:
+        self.assertEqual(len(self.restores), len(self.SHARDS))
+        for n, step in zip(self.SHARDS, self.restores):
+            with self.subTest(shard=n):
+                self.assertEqual(step['if'], f"needs.native-durations.outputs.key_{n} != ''")
+                self.assertEqual(step['with']['key'], f'${{{{ needs.native-durations.outputs.key_{n} }}}}')
+                self.assertEqual(step['with']['path'], self.path(n))
+                self.assertIs(step['with']['fail-on-cache-miss'], True)
+                self.assertNotIn('restore-keys', step['with'])
+        steps = self.native['steps']
+        self.assertLess(steps.index(self.restores[-1]), steps.index(self.test))
+
+    def test_sequencer_reads_the_restored_dir(self) -> None:
+        self.assertEqual(self.test['env'], {'NEXUS_TEST_DURATIONS_DIR': '${{ github.workspace }}/.native-durations'})
+        config = (ROOT / 'apps' / 'harness' / 'vitest.native.config.ts').read_text(encoding='utf-8')
+        self.assertIn("mergeConfig(base", config)
+
+    def test_saves_its_own_shard(self) -> None:
+        for step in (self.collect, self.save):
+            self.assertEqual(step['if'], '${{ !cancelled() }}')
+        self.assertEqual(self.save['with']['path'], self.path('${{ matrix.shard }}'))
+        self.assertEqual(self.save['with']['key'], 'native-durations-${{ matrix.shard }}-${{ github.sha }}')
+        self.assertIn(f'"{self.path("${{ matrix.shard }}")}"', self.collect['run'])
+        self.assertEqual(self.native['strategy']['matrix']['shard'], list(self.SHARDS))
 
 
 class LightScope(unittest.TestCase):

@@ -75,6 +75,8 @@ interface ChatProps {
   readonly context: NexusChatContext | undefined;
   readonly hostTools: readonly HostToolDeclaration[] | undefined;
   readonly onHostCall: (detail: NexusHostToolDetail) => void;
+  /** `signIn` 成功過幾次，續期也算：下行被 401 擋下之後，這個數變了才重開（#2490）。 */
+  readonly signIns: number;
 }
 
 /**
@@ -171,6 +173,7 @@ function EmbeddedConversation({
   hostTools,
   onHostCall,
   onNewConversation,
+  signIns,
 }: {
   readonly agentBaseUrl: string;
   readonly client: WireClient;
@@ -179,8 +182,9 @@ function EmbeddedConversation({
   readonly hostTools: readonly HostToolDeclaration[] | undefined;
   readonly onHostCall: (detail: NexusHostToolDetail) => void;
   readonly onNewConversation: () => void;
+  readonly signIns: number;
 }) {
-  const conversation = useConversation({ client, threadId, agentBaseUrl });
+  const conversation = useConversation({ client, threadId, agentBaseUrl, signIns });
   useHostCalls(conversation, hostTools, onHostCall);
   const deliverableDownload = useMemo(
     () => createDeliverableDownloader({ threadId, baseUrl: `${agentBaseUrl}${EMBED_PATH_PREFIX}` }),

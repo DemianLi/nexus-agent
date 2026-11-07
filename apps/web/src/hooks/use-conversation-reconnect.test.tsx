@@ -19,6 +19,7 @@ import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
+import { EMBED_UNAUTHORIZED_TEXT, StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { LIVEZ_PROBE_TIMEOUT_MS } from '@/lib/livez-probe';
 import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
@@ -477,6 +478,108 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     expect(result.current.refusal).toBe(THREAD_AT_CAPACITY_TEXT);
     expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
 
+    await tick(250);
+    expect(openEvents).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useConversation 嵌入版的下行被 401 擋下（#2490）', () => {
+  it('講沒有權限那一句、不排重試；推過最長的退避、按「立刻重連」、網路回來都不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(new StreamUnauthorizedError());
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(false);
+    expect(result.current.refusal).toBe(EMBED_UNAUTHORIZED_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+    expect(result.current.refusal).toBe(EMBED_UNAUTHORIZED_TEXT);
+  });
+
+  it('接上之後才被 401 擋下：同樣不排重試', async () => {
+    const { client, openEvents, setFailOpen, latest } = scriptedClient();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(true);
+    setFailOpen(new StreamUnauthorizedError());
+    latest().end();
+    await tick(250);
+    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.refusal).toBe(EMBED_UNAUTHORIZED_TEXT);
+    expect(result.current.reconnecting).toBeUndefined();
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledTimes(2);
+  });
+
+  it('下一次 signIn 成功（signIns 變了）：當場重開，接上之後沒有權限那一句收掉', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(new StreamUnauthorizedError());
+    const { result, rerender } = renderHook(
+      ({ signIns }) => useConversation({ client, threadId: 't', signIns }),
+      { initialProps: { signIns: 1 } },
+    );
+    await tick();
+    expect(result.current.refusal).toBe(EMBED_UNAUTHORIZED_TEXT);
+
+    setFailOpen(undefined);
+    rerender({ signIns: 2 });
+    await tick();
+    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.refusal).toBeUndefined();
+  });
+
+  it('signIn 在 401 回來之前就成功了：當場重開，不停在沒有權限', async () => {
+    const { client, openEvents } = scriptedClient();
+    let reject: ((error: Error) => void) | undefined;
+    openEvents.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const { result, rerender } = renderHook(
+      ({ signIns }) => useConversation({ client, threadId: 't', signIns }),
+      { initialProps: { signIns: 1 } },
+    );
+    await tick();
+    rerender({ signIns: 2 });
+    await tick();
+    reject?.(new StreamUnauthorizedError());
+    await tick();
+    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.refusal).toBeUndefined();
+  });
+
+  it('沒被 401 擋下時 signIns 變了：不重開', async () => {
+    const { client, openEvents } = scriptedClient();
+    const { result, rerender } = renderHook(
+      ({ signIns }) => useConversation({ client, threadId: 't', signIns }),
+      { initialProps: { signIns: 1 } },
+    );
+    await tick();
+    expect(result.current.connected).toBe(true);
+    rerender({ signIns: 2 });
+    await tick();
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('對照組：獨立頁面的 401 是一般的錯誤，照退避重試', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen('下行開不起來：401 {"error":"unauthorized"}');
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBeUndefined();
+    expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
     await tick(250);
     expect(openEvents).toHaveBeenCalledTimes(2);
   });

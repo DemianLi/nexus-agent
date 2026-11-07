@@ -64,7 +64,7 @@ describe('列的分類表', () => {
   it('起動期讀的每一顆都對得上出貨的一列，名字不重複', async () => {
     const rows = await shippedRows();
     const names = STARTUP_READ_PLUGINS.map((plugin) => plugin.name);
-    expect(names).toHaveLength(24);
+    expect(names).toHaveLength(25);
     expect(new Set(names).size).toBe(names.length);
     const shipped = new Set(rows.map((row) => row.pluginName));
     expect(names.filter((name) => !shipped.has(name))).toEqual([]);
@@ -76,8 +76,11 @@ describe('列的分類表', () => {
     for (const match of source.matchAll(/startup(?:Setting|EntryMounted)\(plugins, (\w+)\)/gu)) {
       if (match[1] !== undefined) read.add(match[1]);
     }
+    // `process-model` 在任何組裝之前由啟動器讀（`process-launcher.ts` 的 `processModelSetting`），不經 serve.ts。
+    const launcher = readFileSync(join(import.meta.dirname, 'process-launcher.ts'), 'utf8');
+    expect(launcher).toMatch(/processModelSetting\(entries\)/u);
     // 只比數量：識別字與插件名不是同一個字串。一顆不多一顆不少。
-    expect(read.size).toBe(STARTUP_READ_PLUGINS.length);
+    expect(read.size + 1).toBe(STARTUP_READ_PLUGINS.length);
   });
 
   it('mount-restart 的列一律寫了理由；目前這一類是空的', () => {

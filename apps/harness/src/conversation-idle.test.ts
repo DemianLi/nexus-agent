@@ -462,3 +462,25 @@ describe('一輪的邊緣', () => {
     ]);
   });
 });
+
+describe('綁一條磁碟上還沒有的 thread（#2341）', () => {
+  it('不先建、從綁定起算閒著；第一個請求才照它的路由建', async () => {
+    const r = rig({ idleEvictMs: undefined, storedAccess: async () => undefined });
+    running.push({ r, control: { close: () => undefined } } as unknown as Process);
+    const boundAt = r.clock;
+    await r.handler.open('t1');
+    expect(r.created).toEqual([]);
+    r.advance(T);
+    expect(r.handler.idleState('t1')).toEqual({ idle: true, lastActiveAt: boundAt });
+    await touch(r, 't1');
+    expect(r.created).toHaveLength(1);
+    expect(r.handler.idleState('t1')?.lastActiveAt).not.toBe(boundAt);
+  });
+
+  it('磁碟上有的照樣先建', async () => {
+    const r = rig({ idleEvictMs: undefined, storedAccess: async () => ({ profile: 'full' }) });
+    running.push({ r, control: { close: () => undefined } } as unknown as Process);
+    await r.handler.open('t1');
+    expect(r.created).toHaveLength(1);
+  });
+});
