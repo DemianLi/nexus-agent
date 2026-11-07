@@ -19,7 +19,7 @@
  * 檔案系統工具不在 registry 裡，是子代理 middleware stack 裡 `createFilesystemMiddleware` 帶的
  * （`apps/harness/src/base-tools.ts`）。要「從請求消失、叫了也不執行」，只能在它的外側攔：
  * `wrapModelCall` 把名字從 `request.tools` 拿掉；手寫的呼叫由 `tools/pre-execute` 的 core 監聽者拒絕，工具本體不跑。
- * 形狀同 deepagents 內部（沒有公開匯出）的 `createToolExclusionMiddleware`。
+ * 請求那一半的形狀同 deepagents 內部（沒有公開匯出）的 `createToolExclusionMiddleware`。
  *
  * **偏離（登記）：基座檔案工具的系統提示段落仍會描述被遮掉的工具。** dsh 的提示是從可見工具現算的，所以濾掉的
  * 工具從提示消失；基座那段檔案系統說明是固定文字，我們攔不到它的內文（不替換基座的 `createFilesystemMiddleware`，
@@ -100,7 +100,7 @@ export function filteredToolRefusal(name: string): string {
 }
 
 /**
- * 工具那一半：`tools/pre-execute` 的 core 監聽者，排在插件監聽者外側。被遮的名字直接拒絕，插件監聽者、核准閘門與工具本體都不跑。
+ * 工具那一半：`tools/pre-execute` 的 core 監聽者，排在插件監聽者外側。被遮的名字直接拒絕，插件的 `tools/pre-execute` 監聽者、核准閘門與工具本體都不跑。
  *
  * 只交給子代理那一份生產者（`fold.ts`），所以不看 `exec.agent`。
  *

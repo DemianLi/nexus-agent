@@ -11,8 +11,8 @@
  * ## core 監聽者排在固定的兩段
  *
  * 外層 core → 匯流排上的插件監聽者 → 內層 core（{@link CoreToolListeners}）。core 的監聽者不掛在匯流排上：同一個事件裡，有的要在插件外側
- * （工具過濾：被遮的呼叫連最外側的插件監聽者也看不到），只靠註冊順序的話，插件的 `prepend` 或晚掛的監聽者就會排到它外面。內層段給要排在
- * 每位插件監聽者之後的 core 監聽者。
+ * （工具過濾：被遮的呼叫連最外側的插件監聽者也看不到），有的要在內側。只靠註冊順序的話，以 `prepend` 掛的（或比它早掛的）插件監聽者
+ * 會排到外層那位的外面，晚掛的會排到內層那位的裡面。
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
@@ -495,7 +495,7 @@ function listenerCount<K extends LayeredToolEvent>(
  * 外層 core → 匯流排上的插件監聽者 → 內層 core → `innermost`，語意同 `EventDispatcher.waterfall`：每位拿自己的一支 `next`，
  * 只能叫一次，不叫就是否決。
  *
- * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：事件表的生產者檢查只認字面量；沒有插件監聽者時傳 `undefined`。
+ * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
  */
 function dispatchLayered<K extends LayeredToolEvent>(
   name: K,

@@ -174,7 +174,7 @@ describe('fold：基座工具', () => {
     );
   });
 
-  it('遮罩 middleware 排在核准閘門外側（被遮的呼叫碰不到閘門）', async () => {
+  it('遮罩 middleware（清單那一半）排在核准閘門外側', async () => {
     const params = await fold(team(), {
       subagentToolFilter: { deny: ['write_file'] },
       checkpointer: true,

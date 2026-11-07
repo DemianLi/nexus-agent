@@ -851,7 +851,8 @@ export function foldRegistry(
     ),
     // `tools/pre-execute`（#1248）緊貼閘門外側：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成
     // 「先跳核准卡、再被拒」。拒絕在問人之前，同 dsh（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
-    // 有基座工具被遮時，子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件監聽者、閘門與工具本體。
+    // 有基座工具被遮時，子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件的 `tools/pre-execute` 監聽者、閘門與工具本體；
+    // `tools/result` 仍收到那則拒絕。
     { name: 'toolPreExecute', root: same(toolPreExecute), subagent: same(subagentToolPreExecute) },
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
