@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url';
  *   `apps/harness/src/settings/scripted-model.ts` 檔頭。呼叫方可在前面多接幾列（`extraRows`）。
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
- * - **行程模型**：呼叫端設了 `NEXUS_E2E_PROCESS_MODEL=per-thread` 就用 per-thread 起（#2341），監督行程的路徑由
- *   `NEXUS_SUPERVISOR_BIN` 給。兩個都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
+ * - **行程模型**：跑 e2e 的環境設了 `NEXUS_E2E_PROCESS_MODEL=per-thread` 就用 per-thread 起（#2341，只在 Linux
+ *   起得來），監督行程的路徑由 `NEXUS_SUPERVISOR_BIN` 給。兩個都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
  */
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -73,9 +73,9 @@ export interface E2eServeInvocation {
 /**
  * 組出 {@link startE2eServe} 起 serve 用的東西，環境由呼叫端傳進來。
  *
- * - `NEXUS_E2E_PROCESS_MODEL` 沒設或是空字串：照單一行程起。
+ * - `NEXUS_E2E_PROCESS_MODEL` 沒設或是空字串：不加旗標、不動 `process-model` 那一列（出廠 `single`）；有 `prepareHome` 才先建 home。
  * - `per-thread`：加 `--process-model per-thread`，patch 最前面改 `process-model` 那一列，`supervisorBinary` 是 `NEXUS_SUPERVISOR_BIN`
- *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 自己往上找的那一個。home 一律先建（`0700`）。
+ *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 的 `findSupervisorBinary`（`apps/harness/src/process-launcher.ts`）。home 一律先建（`0700`）。
  * - 其他值拋錯。
  */
 export function e2eServeInvocation(options: {
@@ -124,6 +124,7 @@ function exited(child: ChildProcess): Promise<void> {
  * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
  * @param prepareHome - serve 起動之前在它的 home 裡放檔，例如嵌入身分對應表。目錄已經建好。
  * @returns 登入網址、serve 的 home 與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
+ *   `NEXUS_E2E_PROCESS_MODEL` 不是 `per-thread`／空，或 per-thread 卻沒給 `NEXUS_SUPERVISOR_BIN`，也拋（見 {@link e2eServeInvocation}）。
  */
 export async function startE2eServe(
   turns: readonly ScriptTurn[],

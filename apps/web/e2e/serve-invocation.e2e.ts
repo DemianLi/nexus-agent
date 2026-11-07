@@ -4,7 +4,7 @@ import { e2eServeInvocation } from './serve';
 
 /**
  * e2e 的 serve 怎麼起（#2341）：不起 serve、不開瀏覽器，只看組出來的參數、patch 與要不要先建 home。
- * 環境明確傳進去，不讀 `process.env`，CI 上設了 `NEXUS_E2E_PROCESS_MODEL` 也不影響這裡。
+ * 環境明確傳進去，不讀 `process.env`，跑測試的環境設了 `NEXUS_E2E_PROCESS_MODEL` 也不影響這裡。
  */
 
 const TURNS = [{ content: '你好。' }];
@@ -28,7 +28,7 @@ describe('e2eServeInvocation：沒設 NEXUS_E2E_PROCESS_MODEL', () => {
     ['沒設', {}],
     ['空字串', { NEXUS_E2E_PROCESS_MODEL: '' }],
     ['只給了監督行程', { NEXUS_SUPERVISOR_BIN: SUPERVISOR }],
-  ])('%s：參數、patch 跟原本一樣，沒有 prepareHome 就不先建 home', (_name, env) => {
+  ])('%s：不加 --process-model、patch 只有腳本列，沒有 prepareHome 就不先建 home', (_name, env) => {
     const invocation = invoke(env);
     expect(invocation.args.slice(3)).toEqual(['--port', '0', '--patch', PATCH_PATH]);
     expect(invocation.args).not.toContain('--process-model');
