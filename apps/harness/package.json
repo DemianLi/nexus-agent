@@ -100,6 +100,7 @@
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",
     "@nexus/skills": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/system-prompt": "workspace:*",
     "@nexus/timeout": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",

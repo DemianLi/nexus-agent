@@ -88,6 +88,7 @@
       "@nexus/session/provider": ["../../packages/nexus-session/src/provider.ts"],
       "@nexus/skills": ["../../packages/nexus-skills/src/index.ts"],
       "@nexus/skills/provider": ["../../packages/nexus-skills/src/provider.ts"],
+      "@nexus/subprocess": ["../../packages/nexus-subprocess/src/index.ts"],
       "@nexus/system-prompt": ["../../packages/nexus-system-prompt/src/index.ts"],
       "@nexus/timeout": ["../../packages/nexus-timeout/src/index.ts"],
       "@nexus/tool-adapter": ["../../packages/nexus-tool-adapter/src/index.ts"],

@@ -26,6 +26,7 @@
     "@modelcontextprotocol/server": "^2.3.1",
     "@nexus/approval-channel": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",
     "@nexus/tool-result": "workspace:*",
@@ -47,6 +48,7 @@
     "@nexus/approval-channel": "workspace:*",
     "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*"
