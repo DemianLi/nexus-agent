@@ -73,6 +73,23 @@ describe('StatusLine 的連線那幾句（#593）', () => {
     expect(screen.getByRole('button', { name: '立刻重連' })).toBeTruthy();
   });
 
+  it('停止自動重連時給了按鈕字（#2343）：按鈕換成那個字，按下去照樣叫 onReconnect', () => {
+    const onReconnect = vi.fn();
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        refusal="這條對話停了"
+        reconnecting={{ wasConnected: true, offline: false, actionLabel: '重新開啟' }}
+        onReconnect={onReconnect}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('這條對話停了');
+    expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '重新開啟' }));
+    expect(onReconnect).toHaveBeenCalledOnce();
+  });
+
   it('離線與伺服器明說的話優先，不講分頁太多（#2250）', () => {
     const { unmount } = render(
       <StatusLine
