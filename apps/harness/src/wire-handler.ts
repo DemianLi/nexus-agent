@@ -695,6 +695,11 @@ export interface WireHandlerOptions {
    */
   readonly liveBindings?: (threadId: string) => readonly LiveRowBinding[] | undefined;
   /**
+   * 對話行程答前台的 `turn-failures`（{@link internalThreadPath}，#2341）：一條 SSE，這個行程的回合失敗推給前台計數（`front-turn-failures.ts`）。
+   * 缺席答 404（指標關著）。
+   */
+  readonly turnFailures?: () => Response;
+  /**
    * 這台 handler 手上沒有 thread、工作在別的行程裡跑（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台）：
    * 封存問「還有什麼在跑」、帶 `stopActivity` 時請它停，都問這一組，不看本地的記憶體。對話行程那一側答的是 {@link internalThreadPath}。
    */
@@ -978,11 +983,12 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
 
 /**
  * 對話行程給前台的內部路由（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`activity` 用 GET 問還有什麼在跑，`stop` 用 POST 請它停，
- * `plugins` 用 GET 問這條 thread 綁著哪幾列（{@link WireHandlerOptions.liveBindings}）。
+ * `plugins` 用 GET 問這條 thread 綁著哪幾列（{@link WireHandlerOptions.liveBindings}），
+ * `turn-failures` 用 GET 接這個行程的回合失敗（{@link WireHandlerOptions.turnFailures}）。
  */
 export function internalThreadPath(
   threadId: string,
-  action: 'activity' | 'stop' | 'plugins',
+  action: 'activity' | 'stop' | 'plugins' | 'turn-failures',
 ): string {
   return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
@@ -4778,7 +4784,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     principal: WirePrincipal,
   ): Response | undefined {
     if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
-    const match = /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins)$/u.exec(pathname);
+    const match = /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures)$/u.exec(
+      pathname,
+    );
     if (match === null) return undefined;
     const threadId = decodeURIComponent(match[1]!);
     if (threadId !== options.boundThread()) return new Response('not bound', { status: 404 });
@@ -4787,6 +4795,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     if (match[2] === 'plugins' && request.method === 'GET') {
       return json({ bindings: options.liveBindings?.(threadId) ?? [] });
+    }
+    if (match[2] === 'turn-failures' && request.method === 'GET') {
+      return options.turnFailures?.() ?? new Response('not found', { status: 404 });
     }
     if (match[2] === 'stop' && request.method === 'POST') {
       stopActivityOf(threadId);

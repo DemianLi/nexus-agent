@@ -141,6 +141,7 @@ import { forwardedFromClosingFront } from './forwarded-principal.js';
 import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
 import type { FrontFeed } from './front-feed.js';
+import { TurnFailureOutbox, type FrontTurnFailures } from './front-turn-failures.js';
 import type { FrontPluginBindings } from './front-plugins.js';
 import type { SupervisorClient } from './supervisor-client.js';
 import type {
@@ -603,6 +604,8 @@ export interface FrontProcessMode {
   readonly forwarder: FrontForwarder;
   readonly feed: FrontFeed;
   readonly plugins: FrontPluginBindings;
+  /** 對話行程推來的回合失敗（`/metrics` 的 `nexus_turn_failures_total`）；指標關著就不接。 */
+  readonly turnFailures: FrontTurnFailures;
 }
 
 /**
@@ -1303,6 +1306,11 @@ async function startServer(
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在開始聽之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
+  // 對話行程不出指標，回合失敗推給前台計數（`front-turn-failures.ts`）；前台的指標關著就不留。
+  const turnFailureOutbox =
+    opsConfig.metrics.enabled && options.conversation !== undefined
+      ? new TurnFailureOutbox()
+      : undefined;
   const metricsToken = metricsEnabled
     ? await loadOrCreateMetricsToken(opsConfig.metrics.tokenFile ?? metricsTokenFile)
     : undefined;
@@ -1524,14 +1532,23 @@ async function startServer(
     warn,
   });
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
+  // per-thread 的前台手上沒有 thread：thread 數是監督行程講過還活著的對話行程（重起的前台由監督行程重送 `up` 補齊），
+  // 撤到一半的前台看不到，記 0。回合失敗由對話行程推過來（`front-turn-failures.ts`）。
+  const front = options.front;
   const opsMetrics = metricsEnabled
     ? new OpsMetrics(() => ({
-        threads: handler.threadCount() - handler.closingCount(),
-        threadsClosing: handler.closingCount(),
+        threads:
+          front === undefined
+            ? handler.threadCount() - handler.closingCount()
+            : front.supervisor.liveThreads().length,
+        threadsClosing: front === undefined ? handler.closingCount() : 0,
         maxThreads: threadCapacity.maxThreads,
         storageFull: storageProbe.full,
       }))
     : undefined;
+  if (opsMetrics !== undefined) {
+    front?.turnFailures.countWith((code, count) => opsMetrics.recordTurnFailure(code, count));
+  }
   const streamCookies = embedCookies;
   const embedStreamGuard: EmbedStreamGuard | undefined =
     streamCookies === undefined
@@ -1584,6 +1601,7 @@ async function startServer(
       frontClosing: forwardedFromClosingFront,
       boundThread: options.conversation.boundThread,
       liveBindings: (threadId: string) => threadPluginList.liveBindings(threadId),
+      ...(turnFailureOutbox !== undefined && { turnFailures: () => turnFailureOutbox.stream() }),
       onTurn: options.conversation.onTurn,
     }),
     // 哪些事走它見 `WireHandlerOptions.warn`。
@@ -1595,6 +1613,7 @@ async function startServer(
     onTurnFailed: (report) => {
       // 指標的回合失敗計數（#1535）：跟下面那一行日誌共用同一個回呼，不各插一行。指標關著（`opsMetrics` 缺席）就什麼都不做。
       opsMetrics?.recordTurnFailure(report.code);
+      turnFailureOutbox?.record(report.code);
       serverLogOut.serveWith(turnFailedFields(report)).warn(turnFailedMessage(report));
     },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
