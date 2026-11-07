@@ -21,6 +21,8 @@ import {
   errorResponse,
   isRunCancelMethod,
   isThreadManagementMethod,
+  SERVER_CLOSING,
+  SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
   type ThreadActivityKind,
 } from '@nexus/wire';
@@ -101,6 +103,17 @@ async function envelopeId(request: Request, route: Route): Promise<number | null
   }
 }
 
+/** 收尾中不收的那句；文案同本地那支（客戶端認碼，不認文案）。 */
+function serverClosing(id: number | null): Response {
+  return json(
+    errorResponse(
+      id,
+      SERVER_CLOSING,
+      'serve 正在收尾，這個請求沒有處理；等它重新起來再送一次（run.start 帶同一個 request_id）。',
+    ),
+  );
+}
+
 /** 轉送的錯是不是「socket 那頭沒有行程」：沒人在聽，或 socket 檔已經不在。 */
 function processGone(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -121,6 +134,7 @@ function outcomeFailure(
       ),
     );
   }
+  if (outcome.cause === 'shutdown') return serverClosing(id);
   return json(
     errorResponse(
       id,
@@ -140,6 +154,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   const streams = new Set<ForwardedEmbedStream>();
   let scan: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let admissionStopped = false;
   /** 每條 thread 轉送中的下行有幾條；降到 0 就 `release`。 */
   const downlinks = new Map<string, number>();
 
@@ -403,6 +418,10 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
 
   return {
     ...local,
+    stopAdmission: () => {
+      admissionStopped = true;
+      local.stopAdmission();
+    },
     close: async () => {
       closed = true;
       for (const entry of [...streams]) entry.close();
@@ -436,6 +455,16 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         }
         if (isRunCancelMethod(route.method) && supervisor.socketOf(route.threadId) === undefined) {
           return local.handle(request);
+        }
+        // 收尾中不開新一輪（#1787），同本地那支：`subagent.send` 一律擋；`run.start` 只擋沒有行程的（有行程的轉過去，
+        // 窗前收過的重送由對話行程照 request_id 去重、拿回原本的 run_id）。不為一句不會收的話起一個對話行程。
+        if (admissionStopped) {
+          if (route.method === SUBAGENT_SEND_METHOD) {
+            return serverClosing(await envelopeId(request, route));
+          }
+          if (route.method === 'run.start' && supervisor.socketOf(route.threadId) === undefined) {
+            return serverClosing(await envelopeId(request, route));
+          }
         }
       }
       return forwardTo(

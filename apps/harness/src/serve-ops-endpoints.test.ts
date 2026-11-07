@@ -360,6 +360,13 @@ describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 5
     await foldTurn(events);
 
     const closing = server.close();
+    // 立了旗才算進了窗：per-thread 下 `close()` 是送訊號給子行程，前台收到之前送的話是窗前的一句。
+    await expect
+      .poll(
+        async () =>
+          (await fetch(`${server.url}/readyz`, { headers: { connection: 'close' } })).status,
+      )
+      .toBe(503);
     const refused = await client.runStart('closing-window', '窗內');
     expect(refused).toMatchObject({ type: 'error', error: 'server_closing' });
     await closing;

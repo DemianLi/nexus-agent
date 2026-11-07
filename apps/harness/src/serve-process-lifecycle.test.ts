@@ -228,6 +228,36 @@ describe('serve 行程層收尾共用一份 dispose', () => {
     }
   });
 
+  it('收尾中再叫 stop()（per-thread 收尾時讀到監督行程的 EOF）：不升級，等 close() 收完才結束', async () => {
+    const { proc, exits, fire } = fakeProc();
+    const { running, release, state } = fakeRunning();
+    const lifecycle = installServeProcessLifecycle(proc);
+    lifecycle.attach(running);
+    fire('SIGTERM');
+    await Promise.resolve();
+    lifecycle.stop();
+    lifecycle.stop();
+    await Promise.resolve();
+    expect(exits).toEqual([]);
+    release();
+    await vi.waitFor(() => {
+      expect(exits).toEqual([0]);
+    });
+    expect(state.closes).toBe(1);
+  });
+
+  it('stop() 開始的收尾，之後來的訊號照樣是第二次：當場結束', async () => {
+    const { proc, exits, fire } = fakeProc();
+    const { running } = fakeRunning();
+    const lifecycle = installServeProcessLifecycle(proc);
+    lifecycle.attach(running);
+    lifecycle.stop();
+    await Promise.resolve();
+    expect(exits).toEqual([]);
+    fire('SIGINT');
+    expect(exits).toEqual([130]);
+  });
+
   it('runServe 還沒回來（沒有 attach）就致命：沒有東西可收，直接以 1 結束', async () => {
     const { proc, written, exits, fire } = fakeProc();
     installServeProcessLifecycle(proc);

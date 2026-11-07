@@ -106,6 +106,7 @@ function front(
     embedRefusal: async () => undefined,
     handle: async () => new Response('local', { status: 418 }),
     close: async () => {},
+    stopAdmission: () => {},
   } as unknown as IdleSweepingWireHandler;
   const handler = createFrontWireHandler({
     local,
@@ -336,6 +337,74 @@ describe('createFrontWireHandler 的 run.cancel 與評分', () => {
     expect(response.status).toBe(200);
     expect(ensured).toEqual(['t1']);
     expect(upstream.seen.map(({ url }) => url)).toEqual([`${path}/commands/feedback.record`]);
+  });
+});
+
+describe('createFrontWireHandler 的收尾（#1787）', () => {
+  function command(path: string, method: string, params: unknown): Request {
+    return new Request(`http://nexus.test${path}/commands/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 7, method, params }),
+    });
+  }
+
+  it.each([
+    ['一般路由', '/threads/t1'],
+    ['嵌入路由', '/embed/threads/t1'],
+  ])(
+    '%s：stopAdmission 之後，沒有行程的 run.start 與 subagent.send 回 server_closing，不起行程',
+    async (_name, path) => {
+      const upstream = await conversation((_request, response) => response.end('{}'));
+      const ensured: string[] = [];
+      const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }), ensured);
+      handler.stopAdmission();
+      for (const [method, params] of [
+        ['run.start', { text: 'hi' }],
+        ['subagent.send', { runId: 'r1', text: 'hi' }],
+      ] as const) {
+        const response = await handler.handle(command(path, method, params));
+        expect(await response.json()).toMatchObject({ id: 7, error: 'server_closing' });
+      }
+      expect(ensured).toEqual([]);
+      expect(upstream.seen).toEqual([]);
+    },
+  );
+
+  it('監督行程答 shutdown：回 server_closing，不是 unknown_error', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let pending = Buffer.alloc(0);
+    output.on('data', (chunk: Buffer) => {
+      const taken = takeFrames(Buffer.concat([pending, chunk]));
+      pending = Buffer.from(taken.rest);
+      for (const payload of taken.frames) {
+        const request = decodeFrontRequest(payload);
+        if (request.type === 'ensure') {
+          input.write(
+            frame(
+              encodeFrontEvent({ type: 'down', threadId: request.threadId, cause: 'shutdown' }),
+            ),
+          );
+        }
+      }
+    });
+    cleanups.push(() => {
+      input.end();
+    });
+    const forwarder = new FrontForwarder();
+    cleanups.push(() => forwarder.close());
+    const handler = createFrontWireHandler({
+      local: {
+        admit: () => undefined,
+        stopAdmission: () => {},
+      } as unknown as IdleSweepingWireHandler,
+      supervisor: new SupervisorClient({ input, output }),
+      forwarder,
+      auth: { authenticate: () => ALICE },
+    });
+    const response = await handler.handle(command('/threads/t1', 'run.start', { text: 'hi' }));
+    expect(await response.json()).toMatchObject({ id: 7, error: 'server_closing' });
   });
 });
 

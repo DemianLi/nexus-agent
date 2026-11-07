@@ -142,7 +142,13 @@ import type { FrontForwarder } from './front-forward.js';
 import type { FrontFeed } from './front-feed.js';
 import type { FrontPluginBindings } from './front-plugins.js';
 import type { SupervisorClient } from './supervisor-client.js';
-import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
+import type {
+  EmbedStreamGuard,
+  IdleSweepingWireHandler,
+  ThreadForkSeed,
+  WireAuth,
+  WireHandler,
+} from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
@@ -2100,8 +2106,8 @@ async function startServer(
 
   const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
-  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`。
-  let servedHandler: Pick<WireHandler, 'close'> = handler;
+  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`，包過的 `stopAdmission` 才擋得到轉送。
+  let servedHandler: Pick<IdleSweepingWireHandler, 'close' | 'stopAdmission'> = handler;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
     if (embedIdentityTable !== undefined && embedCookies !== undefined) {
@@ -2351,8 +2357,8 @@ async function startServer(
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
       // 會開新一輪的命令從這一刻起回 `server_closing`（#1787）：立旗與時間窗之間不留縫，窗裡才不會再收新的一輪、在窗末被切斷。
-      // 致命例外的收尾（`drain: false`）一樣先停准入。
-      handler.stopAdmission();
+      // 致命例外的收尾（`drain: false`）一樣先停准入。per-thread 的前台停的是包起來的那一支：轉送之前就擋。
+      servedHandler.stopAdmission();
       // **時間窗**（#1777）：立旗之後 listener 要再照常在聽一小段，探針才抓得到 503。`server.close()` 一開頭就 `closeAllConnections()`
       // （`wire-server.ts`），不留這一段，旗標只在同一個 macrotask 裡亮過，沒有任何請求看得到。**只有 `/readyz` 被抓過才等**：
       // 沒有監控在看，等了也沒人聽（測試與一次性使用不付這個代價）。時間窗屬於整體 5 秒收尾上限（#599），所以設定上限 2000。
@@ -2412,7 +2418,11 @@ export interface ServeProcessLifecycle {
   attach(running: RunningServe): void;
   /** 解除 fail-loud 的兩個 handler（訊號的不解除，行程結束前都在）。 */
   uninstall(): void;
-  /** 跟 `SIGTERM` 同一條收尾、回 0。對話行程的 stdin 讀到 EOF 走這裡（`conversation-process.ts`）。 */
+  /**
+   * 跟 `SIGTERM` 同一條收尾、回 0。對話行程與前台的 stdin 讀到 EOF 走這裡（`conversation-process.ts`、`front-process.ts`）。
+   * 收尾已經在跑就不做事：不算第二次訊號，否則先收到 SIGTERM（systemd 對整個控制群組送）、再讀到監督行程的 EOF 時，
+   * `/readyz` 的時間窗會被砍掉。
+   */
   stop(): void;
 }
 
@@ -2472,11 +2482,14 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       running?.warn(line);
     },
   );
+  let stopping = false;
   // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
   proc.on('SIGTERM', () => {
+    stopping = true;
     shutdown.interrupt(0);
   });
   proc.on('SIGINT', () => {
+    stopping = true;
     shutdown.interrupt(130);
   });
   const uninstall = installFailLoud('nexus-agent serve', proc, () => disposeWith(false));
@@ -2486,6 +2499,8 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
     },
     uninstall,
     stop() {
+      if (stopping) return;
+      stopping = true;
       shutdown.interrupt(0);
     },
   };
