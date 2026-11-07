@@ -268,6 +268,20 @@ describe('createFrontWireHandler 的 release', () => {
   });
 });
 
+describe('createFrontWireHandler 的 @ 會話候選', () => {
+  it('前台冷讀磁碟答，不為一份清單起對話行程', async () => {
+    const upstream = await conversation((_request, response) => response.end('{}'));
+    const ensured: string[] = [];
+    const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }), ensured);
+    const response = await handler.handle(
+      new Request('http://nexus.test/threads/t1/session-references?query=a'),
+    );
+    expect(response.status).toBe(418);
+    expect(ensured).toEqual([]);
+    expect(upstream.seen).toEqual([]);
+  });
+});
+
 describe('createFrontWireHandler 的 run.cancel 與評分', () => {
   function command(path: string, method: string, params: unknown): Request {
     return new Request(`http://nexus.test${path}/commands/${method}`, {

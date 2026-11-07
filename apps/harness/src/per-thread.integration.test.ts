@@ -330,6 +330,67 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     feedLine.abort();
   }, 180_000);
 
+  it('搜尋與 @ 會話候選只讀磁碟：照樣找得到剛講完的，落後多久印出來', async () => {
+    const ROUNDS = 5;
+    // 每條 thread 一個新的對話行程，腳本各自從第一輪吃起：回覆都一樣，命中照 threadId 分。回覆一字 20 毫秒慢慢串，
+    // 才看得出串到一半的那一則搜不搜得到。
+    const reply = `回覆 replymarker ${'後面還在串'.repeat(10)}`;
+    const running = await start(
+      [{ content: reply, tokenDelayMs: 20 }],
+      `- id: thread-search\n  config:\n    openAt: startup\n`,
+    );
+    const client = await clientOf(await running.loginUrl(1));
+    const until = async <T>(probe: () => Promise<T | undefined>): Promise<number> => {
+      const began = performance.now();
+      for (;;) {
+        if ((await probe()) !== undefined) return performance.now() - began;
+        if (performance.now() - began > 15_000) throw new Error('15 秒內沒看到');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    const hit = (query: string, threadId: string) => async () => {
+      const outcome = await client.searchThreads(query);
+      if (outcome.kind !== 'ok') throw new Error(outcome.message);
+      return outcome.result.items.find((item) => item.threadId === threadId);
+    };
+    const candidate = (from: string, threadId: string) => async () => {
+      const outcome = await client.sessionReferences(from, '');
+      if (outcome.kind !== 'ok') throw new Error(outcome.message);
+      if (!outcome.result.available) throw new Error('候選沒開');
+      return outcome.result.candidates.find(({ sessionId }) => sessionId === threadId);
+    };
+
+    const lags = { userMessage: [] as number[], reply: [] as number[], reference: [] as number[] };
+    for (let i = 0; i < ROUNDS; i += 1) {
+      const threadId = `thread-lag-${String(i)}`;
+      const downlink = new AbortController();
+      const events = await client.openEvents(threadId, { signal: downlink.signal });
+      await client.runStart(threadId, `問題 asked${String(i)}marker`);
+      const [userMessage, reference] = await Promise.all([
+        until(hit(`asked${String(i)}marker`, threadId)),
+        until(candidate('thread-lag-observer', threadId)),
+      ]);
+      const began = performance.now();
+      const [replyHit, endedAt] = await Promise.all([
+        until(hit('replymarker', threadId)),
+        foldTurn(events).then((state) => {
+          expect(replies(state)).toEqual([reply]);
+          return performance.now() - began;
+        }),
+      ]);
+      lags.userMessage.push(userMessage);
+      lags.reference.push(reference);
+      lags.reply.push(replyHit - endedAt);
+      downlink.abort();
+    }
+    const round = (values: number[]) => values.map((value) => Math.round(value));
+    console.log(
+      `[C3 落後量測] 送出後搜得到使用者那句 ${JSON.stringify(round(lags.userMessage))} ms；` +
+        `回覆在一輪結束之後幾毫秒搜得到（負的是還在串就搜得到）${JSON.stringify(round(lags.reply))} ms；` +
+        `送出後別條 thread 的 @ 候選看得到 ${JSON.stringify(round(lags.reference))} ms`,
+    );
+  }, 180_000);
+
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {
     const running = await start([{ content: '回覆。' }]);
     const supervisor = running.child.pid!;

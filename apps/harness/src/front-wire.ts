@@ -8,7 +8,7 @@
  *   對話行程收到之後照樣再核一次；那一道拒絕時帶回原因，`access` 稽核由前台記（對話行程沒有稽核檔）。
  * - **嵌入版的 thread 下行由前台登記**（#2489）：開線先記 `opened`，每 {@link EmbedStreamGuard.intervalMs} 拿開線時的標頭重驗一次，
  *   驗不過就切掉往對話行程的那條、記 `cut`；收掉記 `closed`。對話行程收不到 cookie，重驗只能在這裡做。
- * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
+ * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）、`@` 的會話候選（冷讀磁碟，看不到還沒落盤的事件）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
  *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
  *   前台不載 thread，本地答只會是「還沒開過」。
  * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開了下行不講話就走的
@@ -55,7 +55,6 @@ const READ_ONLY_KINDS: ReadonlySet<Route['kind']> = new Set([
   'subagent-history',
   'trajectory-turn',
   'file-references',
-  'session-references',
   'attachment',
   'changes-summary',
   'changes-diff',
@@ -420,6 +419,8 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         if (refusal !== undefined) return refusal;
         if (!EMBED_ROUTE_KINDS.has(route.kind)) return new Response('not found', { status: 404 });
       }
+      // `@` 的會話候選是冷讀整個會話根，為一份清單起一個行程是反的；嵌入路由打不到它（`EMBED_ROUTE_KINDS`）。
+      if (route.kind === 'session-references') return local.handle(request);
       if (route.kind === 'command') {
         if (
           embedded === undefined &&
