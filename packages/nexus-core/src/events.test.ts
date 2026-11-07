@@ -221,6 +221,46 @@ describe('waterfall：最後一個參數是最內層 next，由外而內，不�
     expect([bRan, innerRan]).toEqual([false, false]);
   });
 
+  it('同一位監聽者呼叫第二次 next 就拋，下一位只被叫一次', () => {
+    const bus = new EventBus();
+    let bCalls = 0;
+    let innerCalls = 0;
+    bus.on('test/waterfall', (_label, next) => {
+      next();
+      return next();
+    });
+    bus.on('test/waterfall', (_label, next) => {
+      bCalls += 1;
+      return next();
+    });
+    expect(() =>
+      bus.waterfall('test/waterfall', 'x', () => {
+        innerCalls += 1;
+        return 'I';
+      }),
+    ).toThrow('test/waterfall 的監聽者呼叫了第二次 next()');
+    expect([bCalls, innerCalls]).toEqual([1, 1]);
+  });
+
+  it('每位各有自己的 next：內層那位的第一次呼叫不受外層已呼叫影響', () => {
+    const bus = new EventBus();
+    bus.on('test/waterfall', (_label, next) => `a(${next()})`);
+    bus.on('test/waterfall', (_label, next) => `b(${next()})`);
+    bus.on('test/waterfall', (_label, next) => `c(${next()})`);
+    expect(bus.waterfall('test/waterfall', 'x', () => 'I')).toBe('a(b(c(I)))');
+  });
+
+  it('非同步監聽者呼叫第二次 next：回 rejected promise', async () => {
+    const bus = new EventBus();
+    bus.on('test/waterfall-async', async (_label, next) => {
+      await next();
+      return next();
+    });
+    await expect(
+      bus.waterfall('test/waterfall-async', 'x', () => Promise.resolve('內')),
+    ).rejects.toThrow('test/waterfall-async 的監聽者呼叫了第二次 next()');
+  });
+
   it('可以是非同步：外層 await next() 後再改結果', async () => {
     const bus = new EventBus();
     bus.on('test/waterfall-async', async (_label, next) => `外(${await next()})`);

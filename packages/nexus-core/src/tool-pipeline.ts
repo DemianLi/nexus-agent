@@ -45,8 +45,8 @@
  *    事，翻之前的錯到不了內側的 post-execute。退到：拋錯只走 `tools/result`。要補（例如失敗時補上下文）得先把翻譯搬進來，等到有消費者再說。
  * 4. **resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次。** 核准的 `interrupt()` 穿過之後，同一個呼叫以同一個 `callId`
  *    重進（見 `containment.ts`）。dsh 沒有這回事。**`tools/pre-execute` 的監聽者必須冪等。**
- * 5. **`tools/execute` 的 `next()` 只能呼叫一次**（匯流排的 `next` 是共用的一支，見 `events.ts`），所以 dsh 那種「重試包住 next」
- *    表達不出來。短路（不呼叫 `next()`、回自己的結果）可以。
+ * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`）。要重試得在 `next()` 外面自己重造呼叫，不能重叫
+ *    `next()`。短路（不呼叫 `next()`、回自己的結果）可以。
  * 6. **`tools/pre-execute` 沒有 `ask`／`cancel`**：範圍，不是表達不出來。
  * 7. **結果內容是文字視圖，不是 `ContentBlock[]`**（範圍，不是表達不出來）：`PipelineResult.content` 是 `ToolMessage` 的文字，
  *    非文字區塊（圖片之類）看不到；`replace` 換掉的是整則訊息的內容，會把區塊壓成純文字。S1a 沒有消費者，先給最小的視圖；
