@@ -78,6 +78,8 @@ export interface FrontWireOptions {
   /** 轉送給一條 thread 的請求拿到了對話行程的回應（不論狀態碼；那條 thread 不一定已組裝，看路由）。前台拿它去問 plugin 綁定（`front-plugins.ts`）。 */
   readonly onForwarded?: (threadId: string) => void;
   readonly warn?: (message: string) => void;
+  /** 分叉出來的子 thread 的 id；省略用 `randomUUID`（測試給固定的）。 */
+  readonly newThreadId?: () => string;
 }
 
 /** 前台登記中的一條嵌入版下行。 */
@@ -360,6 +362,94 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
     return new Response(body, { status: response.status, headers: response.headers });
   }
 
+  /** 監督行程替這條 thread 開好行程，回它的 socket；開不了回要回給客戶端的那一份。 */
+  async function socketFor(
+    threadId: string,
+    open: OpenMode,
+    id: number | null,
+    signal: AbortSignal,
+  ): Promise<string | Response> {
+    let outcome: EnsureOutcome;
+    try {
+      outcome = await supervisor.ensure(threadId, open, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return json(
+        errorResponse(id, 'unknown_error', `監督行程不在，thread "${threadId}" 開不了。`),
+      );
+    }
+    return outcome.type === 'up' ? outcome.socket : outcomeFailure(outcome, id, threadId);
+  }
+
+  /** 打一支對話行程的內部路由（不帶身分標頭，同 `turn-failures`）；連不上回 `undefined`。 */
+  async function internalPost(
+    threadId: string,
+    socket: string,
+    action: 'fork-seed' | 'fork-adopt',
+    body: string,
+    signal: AbortSignal,
+  ): Promise<Response | undefined> {
+    try {
+      return await forwarder.forward(
+        new Request(`http://localhost${internalThreadPath(threadId, action)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal,
+        }),
+        socket,
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (processGone(error)) forwarder.forget(socket);
+      else forwarder.dropIdle(socket);
+      return undefined;
+    }
+  }
+
+  /**
+   * 分叉（設計 §4-3）：來源的對話行程算出子 thread 的 seed（`fork-seed`；冷的來源用 `read-only` 開，不佔一格），
+   * 分得出去才替子 thread 開一個行程、交給它照 single 的第 5、6 步建（`fork-adopt`）。分不出去的、子 thread 建不起來的，原樣回對話行程的那一份。
+   */
+  async function forkAcross(request: Request, route: Route, id: number): Promise<Response> {
+    const body = await request.text();
+    const unreachable = (threadId: string): Response =>
+      json(errorResponse(id, 'unknown_error', `thread "${threadId}" 的對話行程連不上，請重試。`));
+    const source = await socketFor(route.threadId, 'read-only', id, request.signal);
+    if (source instanceof Response) return source;
+    const seeded = await internalPost(route.threadId, source, 'fork-seed', body, request.signal);
+    if (seeded === undefined) return unreachable(route.threadId);
+    if (!seeded.ok) {
+      await seeded.body?.cancel();
+      return unreachable(route.threadId);
+    }
+    const result = (await seeded.json()) as { fork?: unknown; answer?: unknown };
+    if (result.fork === undefined) return json(result.answer);
+    const childId = options.newThreadId?.() ?? randomUUID();
+    const child = await socketFor(childId, 'run', id, request.signal);
+    if (child instanceof Response) return child;
+    const adopted = await internalPost(
+      childId,
+      child,
+      'fork-adopt',
+      JSON.stringify({ id, fork: result.fork }),
+      request.signal,
+    );
+    if (adopted === undefined) return unreachable(childId);
+    if (!adopted.ok) {
+      await adopted.body?.cancel();
+      return json(
+        errorResponse(
+          id,
+          'unknown_error',
+          `分叉出來的 thread 沒有建起來（對話行程回 ${String(adopted.status)}）。`,
+        ),
+      );
+    }
+    options.onForwarded?.(childId);
+    return adopted;
+  }
+
   async function forwardTo(
     request: Request,
     route: Route,
@@ -467,6 +557,15 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         }
         // 收尾中不開新一輪（#1787），同本地那支：`subagent.send` 一律擋；`run.start` 只擋沒有行程的（有行程的轉過去，
         // 窗前收過的重送由對話行程照 request_id 去重、拿回原本的 run_id）。不為一句不會收的話起一個對話行程。
+        // 讀不出 id 的封包照一般轉送，封包的錯由對話行程照 single 回。
+        const forkId =
+          route.method === 'thread.fork' && embedded === undefined
+            ? await envelopeId(request, route)
+            : null;
+        if (forkId !== null) {
+          if (admissionStopped) return serverClosing(forkId);
+          return forkAcross(request, route, forkId);
+        }
         if (admissionStopped) {
           if (route.method === SUBAGENT_SEND_METHOD) {
             return serverClosing(await envelopeId(request, route));

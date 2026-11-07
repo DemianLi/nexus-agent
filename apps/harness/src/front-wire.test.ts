@@ -24,6 +24,7 @@ import { createFrontWireHandler } from './front-wire.js';
 import { SupervisorClient } from './supervisor-client.js';
 import { decodeFrontRequest, encodeFrontEvent, frame, takeFrames } from './supervisor-protocol.js';
 import type { IdleSweepingWireHandler } from './wire-handler.js';
+import { OWNER_PRINCIPAL } from './wire-principal.js';
 import type { EmbedPrincipal } from './wire-principal.js';
 
 const ALICE: EmbedPrincipal = {
@@ -275,14 +276,146 @@ describe('createFrontWireHandler 的內部路由', () => {
     const upstream = await conversation((_request, response) => response.end('{}'));
     const ensured: string[] = [];
     const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }), ensured);
-    for (const action of ['plugins', 'activity']) {
+    for (const [action, method] of [
+      ['plugins', 'GET'],
+      ['activity', 'GET'],
+      ['turn-failures', 'GET'],
+      ['fork-seed', 'POST'],
+      ['fork-adopt', 'POST'],
+    ] as const) {
       const response = await handler.handle(
-        new Request(`http://nexus.test/internal/threads/t1/${action}`),
+        new Request(`http://nexus.test/internal/threads/t1/${action}`, {
+          method,
+          ...(method === 'POST' && { body: '{"id":1,"fork":{"sourceHeader":{},"seed":[]}}' }),
+        }),
       );
       expect(response.status).toBe(418);
     }
     expect(ensured).toEqual([]);
     expect(upstream.seen).toEqual([]);
+  });
+});
+
+describe('createFrontWireHandler 的分叉（設計 §4-3）', () => {
+  const FORK = { sourceHeader: { id: 'src' }, seed: [{ type: 'turn/end', seq: 0 }] };
+
+  /** 假的對話行程：`fork-seed` 回 `seed`，`fork-adopt` 回成功；收到的路徑、本文、身分標頭照順序記下來。 */
+  async function forkingConversation(seed: unknown) {
+    const calls: { url: string; body: string; principal: string | undefined }[] = [];
+    const upstream = await conversation((request, response) => {
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => (body += chunk));
+      request.on('end', () => {
+        const principal = request.headers[PRINCIPAL_HEADER];
+        calls.push({
+          url: request.url ?? '',
+          body,
+          principal: typeof principal === 'string' ? principal : undefined,
+        });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url?.endsWith('/fork-seed') === true) response.end(JSON.stringify(seed));
+        else {
+          const { id } = JSON.parse(body) as { id: number };
+          response.end(
+            JSON.stringify({
+              id,
+              type: 'success',
+              result: { ok: true, value: { threadId: 'child-1' } },
+            }),
+          );
+        }
+      });
+    });
+    return { upstream, calls };
+  }
+
+  function forkRequest(path = '/threads/src'): Request {
+    return new Request(`http://nexus.test${path}/commands/thread.fork`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 9, method: 'thread.fork', params: { messageId: 'm1' } }),
+    });
+  }
+
+  function forkFront(socket: string, ensured: string[]) {
+    const forwarder = new FrontForwarder();
+    cleanups.push(() => forwarder.close());
+    const modes: string[] = [];
+    const local = {
+      admit: () => undefined,
+      embedRefusal: async () => undefined,
+      handle: async () => new Response('local', { status: 418 }),
+      close: async () => {},
+      stopAdmission: () => {},
+    } as unknown as IdleSweepingWireHandler;
+    const onForwarded: string[] = [];
+    const handler = createFrontWireHandler({
+      local,
+      supervisor: supervisorAnswering(socket, ensured, modes),
+      forwarder,
+      auth: { authenticate: () => OWNER_PRINCIPAL },
+      newThreadId: () => 'child-1',
+      onForwarded: (threadId) => onForwarded.push(threadId),
+    });
+    return { handler, modes, onForwarded };
+  }
+
+  it('來源用 read-only 開、向它要 seed；分得出去才替子 thread 用 run 開、交給它建；內部路由不帶身分標頭', async () => {
+    const { upstream, calls } = await forkingConversation({ fork: FORK });
+    const ensured: string[] = [];
+    const { handler, modes, onForwarded } = forkFront(upstream.socket, ensured);
+    const response = await handler.handle(forkRequest());
+    expect(await response.json()).toEqual({
+      id: 9,
+      type: 'success',
+      result: { ok: true, value: { threadId: 'child-1' } },
+    });
+    expect(ensured).toEqual(['src', 'child-1']);
+    expect(modes).toEqual(['read-only', 'run']);
+    expect(calls.map(({ url }) => url)).toEqual([
+      '/internal/threads/src/fork-seed',
+      '/internal/threads/child-1/fork-adopt',
+    ]);
+    expect(JSON.parse(calls[0]!.body)).toMatchObject({ id: 9, params: { messageId: 'm1' } });
+    expect(JSON.parse(calls[1]!.body)).toEqual({ id: 9, fork: FORK });
+    expect(calls.map(({ principal }) => principal)).toEqual([undefined, undefined]);
+    expect(onForwarded).toEqual(['child-1']);
+  });
+
+  it('分不出去：原樣回來源行程的那一份，不替子 thread 開行程', async () => {
+    const answer = {
+      id: 9,
+      type: 'success',
+      result: { ok: false, error: { code: 'fork_unavailable' } },
+    };
+    const { upstream, calls } = await forkingConversation({ answer });
+    const ensured: string[] = [];
+    const { handler } = forkFront(upstream.socket, ensured);
+    expect(await (await handler.handle(forkRequest())).json()).toEqual(answer);
+    expect(ensured).toEqual(['src']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('停准入之後回 server_closing，不開任何行程', async () => {
+    const { upstream, calls } = await forkingConversation({ fork: FORK });
+    const ensured: string[] = [];
+    const { handler } = forkFront(upstream.socket, ensured);
+    handler.stopAdmission();
+    expect(await (await handler.handle(forkRequest())).json()).toMatchObject({
+      id: 9,
+      error: 'server_closing',
+    });
+    expect(ensured).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('嵌入路由的分叉照一般轉送，不走內部路由', async () => {
+    const { upstream, calls } = await forkingConversation({ fork: FORK });
+    const ensured: string[] = [];
+    const { handler } = forkFront(upstream.socket, ensured);
+    await (await handler.handle(forkRequest('/embed/threads/src'))).text();
+    expect(calls.map(({ url }) => url)).toEqual(['/embed/threads/src/commands/thread.fork']);
   });
 });
 

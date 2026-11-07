@@ -686,7 +686,7 @@ export interface WireHandlerOptions {
   /**
    * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：這個行程只放哪一條 thread，`undefined` 是還沒綁。
    * **給了就只認這一條**：路徑帶別的 threadId 的請求在認證之後、碰任何東西之前就回 `thread_not_bound`；`threadFor` 也擋，所以分叉出來的子 thread
-   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（分叉要由前台轉送，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是不限 thread（一般 serve 的情形）。
+   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（前台經內部路由 `fork-seed`／`fork-adopt` 做，見 `front-wire.ts`）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是不限 thread（一般 serve 的情形）。
    */
   readonly boundThread?: () => string | undefined;
   /**
@@ -988,7 +988,7 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
  */
 export function internalThreadPath(
   threadId: string,
-  action: 'activity' | 'stop' | 'plugins' | 'turn-failures',
+  action: 'activity' | 'stop' | 'plugins' | 'turn-failures' | 'fork-seed' | 'fork-adopt',
 ): string {
   return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
@@ -3901,21 +3901,35 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤，同 dsh「leaves no stored residue」；寫不進去就收掉、不登記，回 `unknown_error`。
    */
   async function handleFork(sourceId: string, id: number, body: unknown): Promise<Response> {
-    // 對話行程（#2338）只放一條 thread，不在這裡分叉：分叉要由前台轉給來源的對話行程、新 thread 另起一個行程（設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。
+    // 對話行程（#2338）只放一條 thread，不在這裡建子 thread：前台經內部路由向來源要 seed（`fork-seed`），另起一個行程交給它建（`fork-adopt`）。
     if (options.boundThread !== undefined) {
       return json(
         errorResponse(id, 'not_supported', '對話行程不在自己這裡分叉：新 thread 要另起一個行程'),
       );
     }
+    const source = await forkSourceOf(sourceId, id, body);
+    if ('answer' in source) return json(source.answer);
+    const childId = options.newThreadId?.() ?? randomUUID();
+    const child = await threadOrError(childId, id, source.fork);
+    if (child instanceof Response) return child;
+    return json(successResponse(id, { ok: true, value: { threadId: childId } }));
+  }
+
+  /** 分叉的第 1 到 4 步：分得出去回子 thread 的 seed，分不出去回要回給客戶端的那一份。 */
+  async function forkSourceOf(
+    sourceId: string,
+    id: number,
+    body: unknown,
+  ): Promise<{ readonly fork: ThreadForkSeed } | { readonly answer: unknown }> {
     const readStored = options.readStoredThread;
     if (readStored === undefined) {
-      return json(
-        errorResponse(
+      return {
+        answer: errorResponse(
           id,
           'not_supported',
           '這台 server 的會話日誌只在記憶體裡（沒接落盤），沒有可以分叉的東西',
         ),
-      );
+      };
     }
     const params = (body as { params?: unknown }).params;
     const messageId =
@@ -3923,14 +3937,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ? (params as { messageId?: unknown }).messageId
         : undefined;
     if (typeof messageId !== 'string' || messageId === '') {
-      return json(errorResponse(id, 'invalid_argument', 'thread.fork 的 messageId 要是非空字串'));
+      return {
+        answer: errorResponse(id, 'invalid_argument', 'thread.fork 的 messageId 要是非空字串'),
+      };
     }
     let source: Awaited<ReturnType<typeof observeThread>>;
     try {
       source = await observeThread(sourceId, readStored);
     } catch (error: unknown) {
-      return json(
-        errorResponse(
+      return {
+        answer: errorResponse(
           id,
           'unknown_error',
           withheldReason(
@@ -3940,20 +3956,58 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             error,
           ),
         ),
-      );
+      };
     }
     if (source === undefined) {
-      return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
+      return { answer: successResponse(id, { ok: false, error: { code: 'thread_not_found' } }) };
     }
     const boundary = forkBoundaryOf(source.events, messageId);
     if (boundary === undefined) {
-      return json(successResponse(id, { ok: false, error: { code: 'fork_unavailable' } }));
+      return { answer: successResponse(id, { ok: false, error: { code: 'fork_unavailable' } }) };
     }
-    const childId = options.newThreadId?.() ?? randomUUID();
-    const child = await threadOrError(childId, id, {
-      sourceHeader: source.header,
-      seed: childForkSeed(source.events, boundary),
-    });
+    return {
+      fork: { sourceHeader: source.header, seed: childForkSeed(source.events, boundary) },
+    };
+  }
+
+  /**
+   * 對話行程答前台的 `fork-seed`：本文是客戶端那一顆 `thread.fork` 封包。分得出去回 `{ fork }`（子 thread 的 seed），
+   * 分不出去回 `{ answer }`（前台原樣回給客戶端）。
+   */
+  async function forkSeedRoute(sourceId: string, request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    const id = (body as { id?: unknown } | null)?.id;
+    if (typeof id !== 'number') return new Response('bad request', { status: 400 });
+    return json(await forkSourceOf(sourceId, id, body));
+  }
+
+  /**
+   * 對話行程答前台的 `fork-adopt`：本文是 `{ id, fork }`，`fork` 是來源行程 `fork-seed` 回的那一份。照 single 分叉的第 5、6 步建這一條，
+   * 回給客戶端的那一份（成功帶子 thread 的 id）。
+   */
+  async function forkAdoptRoute(childId: string, request: Request): Promise<Response> {
+    let body: { id?: unknown; fork?: { sourceHeader?: unknown; seed?: unknown } } | null;
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    const id = body?.id;
+    const fork = body?.fork;
+    if (
+      typeof id !== 'number' ||
+      typeof fork?.sourceHeader !== 'object' ||
+      fork.sourceHeader === null ||
+      !Array.isArray(fork.seed)
+    ) {
+      return new Response('bad request', { status: 400 });
+    }
+    const child = await threadOrError(childId, id, fork as ThreadForkSeed);
     if (child instanceof Response) return child;
     return json(successResponse(id, { ok: true, value: { threadId: childId } }));
   }
@@ -4782,11 +4836,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     request: Request,
     pathname: string,
     principal: WirePrincipal,
-  ): Response | undefined {
+  ): Response | Promise<Response> | undefined {
     if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
-    const match = /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures)$/u.exec(
-      pathname,
-    );
+    const match =
+      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt)$/u.exec(
+        pathname,
+      );
     if (match === null) return undefined;
     const threadId = decodeURIComponent(match[1]!);
     if (threadId !== options.boundThread()) return new Response('not bound', { status: 404 });
@@ -4802,6 +4857,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (match[2] === 'stop' && request.method === 'POST') {
       stopActivityOf(threadId);
       return new Response(null, { status: 204 });
+    }
+    if (match[2] === 'fork-seed' && request.method === 'POST')
+      return forkSeedRoute(threadId, request);
+    if (match[2] === 'fork-adopt' && request.method === 'POST') {
+      return forkAdoptRoute(threadId, request);
     }
     return new Response('method not allowed', { status: 405 });
   }

@@ -475,6 +475,9 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
       ['activity', 'GET'],
       ['plugins', 'GET'],
       ['stop', 'POST'],
+      ['turn-failures', 'GET'],
+      ['fork-seed', 'POST'],
+      ['fork-adopt', 'POST'],
     ] as const) {
       const response = await fetchAsOwner(`${origin}/internal/threads/thread-i/${action}`, {
         method,
