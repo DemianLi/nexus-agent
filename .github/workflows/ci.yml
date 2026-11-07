@@ -50,14 +50,15 @@ permissions:
 #         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
 #         ├─ sandbox-spawner ──┤   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
 #         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
-#         └─ sandbox-spawner-arm64 ┘ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
+#         ├─ sandbox-spawner-arm64 ┤ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
+#         └─ e2e (per-thread) ─┘   只在合併後完整一輪：真瀏覽器 e2e 換成 per-thread 行程模型再跑一輪（#2341）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 4 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
-# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 11。plan 在它之前、gate 在它之後，不同時。
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e (per-thread) 1 ＝ 12。plan 在它之前、gate 在它之後，不同時。
 # 合併後那一輪的 post-merge.yml 另有 native agent loop 4 片，跟這一段同時跑。
 # 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate（rust 為 true 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
-# 所以合併後的一輪加上兩張功能 PR 同時跑是 11 ＋ 4 ＋ 1 ＋ 1 ＝ 17，在 20 之內。
+# 所以合併後的一輪加上兩張功能 PR 同時跑是 12 ＋ 4 ＋ 1 ＋ 1 ＝ 18，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住：ci.yml 加 job、加矩陣格或 native agent loop 加片時它會紅；post-merge.yml
 # 另加平行的 job 時要自己改算式。
 #
@@ -542,6 +543,31 @@ jobs:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
+  # 真瀏覽器 e2e 換成 per-thread 行程模型（#2341）：serve 由監督行程起前台與每條 thread 的對話行程，瀏覽器從前台的 port 打。
+  # 跟 static 那一步的 e2e 同一套測試、同樣只在合併後完整一輪跑；另開 job 是為了跟 static 平行，不拉長最長的那一段。
+  # 監督行程在這台機器上用 spawner 那個 action 編（同一個 crate）。建置的順序照 static：先 lib，再 web 的 dist。
+  e2e-per-thread:
+    name: e2e (per-thread)
+    needs: plan
+    if: inputs.full
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/sandbox-spawner
+        with:
+          cache: 'false'
+      - uses: ./.github/actions/setup
+      - name: 建置 lib 與 web
+        run: |
+          pnpm run build:lib
+          pnpm --filter @nexus/web run build
+      - name: 真瀏覽器 e2e（per-thread）
+        run: pnpm --filter @nexus/web run test:e2e
+        env:
+          NEXUS_E2E_PROCESS_MODEL: per-thread
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
@@ -567,6 +593,7 @@ jobs:
         node-compat,
         sandbox-spawner,
         sandbox-spawner-arm64,
+        e2e-per-thread,
       ]
     if: >-
       always() && !(
@@ -575,7 +602,7 @@ jobs:
         && needs.test-packages.result == 'skipped' && needs.test-web.result == 'skipped'
         && needs.test-harness.result == 'skipped' && needs.packed-install.result == 'skipped'
         && needs.node-compat.result == 'skipped' && needs.sandbox-spawner.result == 'skipped'
-        && needs.sandbox-spawner-arm64.result == 'skipped'
+        && needs.sandbox-spawner-arm64.result == 'skipped' && needs.e2e-per-thread.result == 'skipped'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -597,6 +624,7 @@ jobs:
           SANDBOX_SPAWNER: ${{ needs.sandbox-spawner.result }}
           FULL: ${{ inputs.full }}
           SANDBOX_SPAWNER_ARM64: ${{ needs.sandbox-spawner-arm64.result }}
+          E2E_PER_THREAD: ${{ needs.e2e-per-thread.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
           {
@@ -619,6 +647,7 @@ jobs:
             echo "| node-compat | $NODE_COMPAT |"
             echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
             echo "| sandbox-spawner-arm64 | $SANDBOX_SPAWNER_ARM64 |"
+            echo "| e2e (per-thread) | $E2E_PER_THREAD |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -649,6 +678,8 @@ jobs:
 
           if [ "$FULL" = "true" ]; then
             [ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail "sandbox-spawner-arm64 的結果是 '$SANDBOX_SPAWNER_ARM64'，需要 success。"
+            [ "$E2E_PER_THREAD" = "success" ] || fail "e2e (per-thread) 的結果是 '$E2E_PER_THREAD'，需要 success。"
           else
             [ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail "不是合併後完整一輪，sandbox-spawner-arm64 卻是 '$SANDBOX_SPAWNER_ARM64'。"
+            [ "$E2E_PER_THREAD" = "skipped" ] || fail "不是合併後完整一輪，e2e (per-thread) 卻是 '$E2E_PER_THREAD'。"
           fi

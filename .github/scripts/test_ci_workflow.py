@@ -137,8 +137,9 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        # sandbox-spawner 看 plan 的 rust、sandbox-spawner-arm64 看是不是合併後完整一輪，都不看模式，另有 SandboxSpawner 那組。
-        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64'}:
+        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64 與 e2e-per-thread 看是不是合併後完整一輪，都不看模式；
+        # 另有 SandboxSpawner、E2ePerThread 兩組。
+        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-per-thread'}:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -203,7 +204,7 @@ def full_peak(jobs: dict) -> int:
 
 class Budget(unittest.TestCase):
     def test_peak_matches_header(self) -> None:
-        self.assertEqual(full_peak(load(CI)['jobs']), 11)
+        self.assertEqual(full_peak(load(CI)['jobs']), 12)
 
     def test_post_merge_and_two_light_gates_fit(self) -> None:
         """ci.yml 檔頭的算式：合併後一輪的峰值（ci.yml 中間那一段加上 post-merge.yml 的 native agent loop），加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
@@ -212,15 +213,51 @@ class Budget(unittest.TestCase):
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
-        # sandbox-spawner-arm64 只在合併後完整一輪跑，功能 PR 上不跑。
+        # sandbox-spawner-arm64 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
         self.assertEqual(jobs['sandbox-spawner-arm64']['if'], 'inputs.full')
+        self.assertEqual(jobs['e2e-per-thread']['if'], 'inputs.full')
         for name, job in jobs.items():
-            if name not in ('plan', 'gate', 'sandbox-spawner', 'sandbox-spawner-arm64'):
+            if name not in ('plan', 'gate', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-per-thread'):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         native = load(CI.with_name('post-merge.yml'))['jobs']['native-loop']['strategy']['matrix']['shard']
-        self.assertEqual(full_peak(jobs) + len(native) + 2 * light_peak, 17)
+        self.assertEqual(full_peak(jobs) + len(native) + 2 * light_peak, 18)
         self.assertLessEqual(full_peak(jobs) + len(native) + 2 * light_peak, JOB_LIMIT)
+
+
+class E2ePerThread(unittest.TestCase):
+    """真瀏覽器 e2e 用 per-thread 再跑一輪（#2341）：`NEXUS_E2E_PROCESS_MODEL` 沒設時 e2e 照 single 跑、照樣綠，所以 env 要釘。"""
+
+    def setUp(self) -> None:
+        self.ci = load(CI)
+        self.job = self.ci['jobs']['e2e-per-thread']
+        self.steps = {s.get('name'): s for s in self.job['steps']}
+
+    def test_runs_e2e_against_the_built_supervisor(self) -> None:
+        step = self.steps['真瀏覽器 e2e（per-thread）']
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
+        self.assertEqual(
+            step['env']['NEXUS_SUPERVISOR_BIN'],
+            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+        )
+        uses = [s.get('uses') for s in self.job['steps']]
+        self.assertLess(uses.index('./.github/actions/sandbox-spawner'), list(self.steps).index('真瀏覽器 e2e（per-thread）'))
+
+    def test_builds_like_static(self) -> None:
+        """e2e 供應的是 web 的 dist；順序照 static：先 lib、再 web。"""
+        build = self.steps['建置 lib 與 web']['run'].split('\n')
+        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
+        static = self.ci['jobs']['static']['steps']
+        self.assertIn('pnpm run build:lib', next(s for s in static if s.get('name') == '建置 lib 並驗 manifest')['run'])
+
+    def test_only_in_the_post_merge_run_and_judged_by_gate(self) -> None:
+        self.assertEqual(self.job['if'], 'inputs.full')
+        self.assertEqual(self.job['needs'], 'plan')
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['E2E_PER_THREAD'], '${{ needs.e2e-per-thread.result }}')
+        self.assertIn('[ "$E2E_PER_THREAD" = "success" ] || fail', step['run'])
+        self.assertIn('[ "$E2E_PER_THREAD" = "skipped" ] || fail', step['run'])
 
 
 class UpgradeGuideGate(unittest.TestCase):
