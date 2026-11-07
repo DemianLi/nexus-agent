@@ -986,7 +986,7 @@ fn release_drains_now_if_idle_or_once_it_becomes_idle() {
 fn release_leaves_one_turned_into_a_run_to_the_idle_limit() {
     let mut h = Harness::start(Options { extra: vec!["--idle-ms", "1500"], ..Options::default() });
     let turned = h.up_read_only("turned,turn,idle:0");
-    // `turn(begin)` 跟 `up` 走不同的 fd：等它送完後面的 `idle`，再留一點時間讓監督行程讀到。沒讀到就送 release，走的是記著再作廢那條，
+    // release 走前台的 fd、`turn(begin)` 走對話行程的管線，兩邊沒有先後保證：等它送完後面的 `idle`，再留一點時間讓監督行程讀到。沒讀到就送 release，走的是記著再作廢那條，
     // 這支就不再釘住「轉成一般的不理」。
     assert!(wait_until(|| log(&turned).contains(&"idle".to_string())));
     std::thread::sleep(Duration::from_millis(200));
@@ -1135,6 +1135,78 @@ fn a_thread_waiting_for_its_drain_answer_gets_a_new_one_only_after_it_is_down() 
         }
         other => panic!("要 a 的新 up，拿到 {other:?}"),
     }
+}
+
+#[test]
+fn ensure_run_while_waiting_for_the_drain_answer_opens_the_new_one_as_a_run() {
+    // 只讀的照時限送 `drain`，一般的不照時間送：新行程有沒有被送 `drain`，就看出它是哪種開啟。
+    let mut h = Harness::start(Options { extra: vec!["--idle-ms", "0", "--read-only-idle-ms", "300"], ..Options::default() });
+    let thread = "a,idle:0,slow-drain:800";
+    let old = h.up_read_only(thread);
+    assert!(saw_drain(&old));
+    h.ensure_open(thread, OpenMode::ReadOnly);
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    let new = match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => PathBuf::from(String::from_utf8(socket).unwrap()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    };
+    assert_ne!(new, old);
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(!log(&new).contains(&"drain".to_string()), "排著時要過 run，新行程照只讀收了");
+}
+
+#[test]
+fn ensure_run_while_the_drained_one_is_stopping_opens_the_new_one_as_a_run() {
+    // `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段，`ensure(run)` 落在這段裡。
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 1_500,
+        extra: vec!["--idle-ms", "0", "--read-only-idle-ms", "300"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,slow-drain:300,ignore-eof";
+    let old = h.up_read_only(thread);
+    assert!(saw_drain(&old));
+    h.ensure_open(thread, OpenMode::ReadOnly);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    let new = match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => PathBuf::from(String::from_utf8(socket).unwrap()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    };
+    assert_ne!(new, old);
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(!log(&new).contains(&"drain".to_string()), "收的期間要過 run，新行程照只讀收了");
+}
+
+#[test]
+fn ensure_while_it_is_stopping_is_answered_by_a_single_new_one() {
+    // `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段。這條沒在排，`ensure` 落在這段裡也要等到 `up`。
+    let mut h = Harness::start(Options { eof_grace_ms: 1_500, extra: vec!["--idle-ms", "300"], ..Options::default() });
+    let thread = "a,idle:0,ignore-eof";
+    let old = h.up(thread);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => assert_ne!(socket, old.to_str().unwrap().as_bytes()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!h.dir.join("run/c3.sock.log").exists(), "起了不只一個新行程");
+}
+
+#[test]
+fn ensure_while_it_is_stopping_is_answered_capacity_when_the_slot_went_to_another() {
+    // 名額 2：a 一直不閒置；c 排著，x 被逐出讓名額給它。x 還在收時又要 x，讓出的名額只有一個，x 要回 `capacity`，不能一直懸著。
+    let mut h = Harness::start(Options { eof_grace_ms: 1_500, extra: vec!["--capacity", "2"], ..Options::default() });
+    h.up("a,wait-go");
+    let x = h.up_read_only("x,idle:0,ignore-eof");
+    h.ensure("c");
+    assert!(wait_until(|| log(&x).contains(&"eof".to_string())));
+    h.ensure("x,idle:0,ignore-eof");
+    assert_eq!(h.event(), capacity("x,idle:0,ignore-eof", 2, 2));
 }
 
 #[test]

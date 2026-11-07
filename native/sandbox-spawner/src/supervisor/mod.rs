@@ -11,7 +11,8 @@
 //! 前台的控制通道是它的 stdin／stdout：
 //!
 //! - `ensure(thread, open)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；
-//!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
+//!   逐出、正在收的就排隊（已經在排的只升 `open`），跟其他排著的一起重算名額：有名額就等它收完，先回 `down(evicted)` 再照排隊順序起；
+//!   沒名額當場回 `capacity`，收完照樣送 `down(evicted)`。死因不是 `evicted`、正在收、又沒在等 `drain` 回答的不理，收完回的 `down` 就是回答；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
 //!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。等回答期間它跟自己的行程互抵，
 //!   不回 `capacity`，別的行程讓出的名額也不拿去替它起第二個。
 //!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
@@ -681,13 +682,15 @@ impl Supervisor {
             } else if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
                 let socket = conversation.socket.as_os_str().as_bytes().to_vec();
                 self.tell_front(&FrontEvent::Up { thread_id: thread, socket });
+            } else if conversation.proc.stop.is_some() && conversation.cause == Some(DeathCause::Evicted) {
+                // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
+                // 別的死因不理：收完回的 `down` 就是回答。
+                self.queue(thread, open);
+                self.make_room();
             }
             return;
         }
-        if let Some(waiting) = self.pending.iter_mut().find(|(t, _)| *t == thread) {
-            if open == OpenMode::Run {
-                waiting.1 = OpenMode::Run;
-            }
+        if self.upgrade_pending(&thread, open) {
             return;
         }
         if self.take_warm(&thread, open) {
@@ -702,10 +705,20 @@ impl Supervisor {
         self.make_room();
     }
 
+    /// 排進等名額的隊伍；已經在排的不重排，見 [`Self::upgrade_pending`]。
     fn queue(&mut self, thread: Vec<u8>, open: OpenMode) {
-        if !self.pending.iter().any(|(t, _)| *t == thread) {
+        if !self.upgrade_pending(&thread, open) {
             self.pending.push((thread, open));
         }
+    }
+
+    /// 這條 thread 在排的話，要的是 `run` 就把排著的升成 `run`；回它在不在排。
+    fn upgrade_pending(&mut self, thread: &[u8], open: OpenMode) -> bool {
+        let Some(waiting) = self.pending.iter_mut().find(|(t, _)| t == thread) else { return false };
+        if open == OpenMode::Run {
+            waiting.1 = OpenMode::Run;
+        }
+        true
     }
 
     /// 把預熱池裡的一個指派給 `thread`，先挑已經 `ready` 的。還沒 `ready` 的等它 `ready` 再送 `bind`。
