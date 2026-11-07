@@ -31,6 +31,7 @@ import { processLaunchEnv } from './launch-env.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { signalPid } from './test-pids.fixture.js';
 
 const BASELINE = new URL('./mcp-on-tree.baseline.json', import.meta.url);
 const SERVER = 'srv';
@@ -426,13 +427,14 @@ async function runOne(
       await invokeUntilDone(toAgentInvocation('跑。'));
       if (spec.giveUp === true) {
         writeFileSync(join(dir, 'down'), '');
-        for (const pid of pidsWith(marker)) process.kill(pid, 'SIGKILL');
+        for (const pid of pidsWith(marker)) signalPid(pid, 'SIGKILL');
         // 放棄之前每次重連嘗試都會起一個馬上退出的子行程，兩次之間只隔幾十毫秒的退避；連續 3 秒都沒有子行程才算用完。
+        // 每個子行程都要先把 tsx 載起來才退出，機器忙的時候一個要一秒多，整串在本機量過 22 秒，所以等到 60 秒。
         let quietSince = Date.now();
         await waitFor(() => {
           if (pidsWith(marker).length > 0) quietSince = Date.now();
           return Date.now() - quietSince >= 3_000;
-        }, 20_000);
+        }, 60_000);
         await invokeUntilDone(toAgentInvocation('再跑。'));
       }
     } catch (error) {
@@ -492,6 +494,14 @@ it(
   'MCP 那一列兩個 loop 的請求、工具清單、中斷、警告與落盤位元組，與對照組逐字相同',
   { timeout: 1_800_000 },
   async () => {
+    // time context 那則訊息帶行程時區的名字；文字在 normalized() 換成 <now>，但 context/measure 的 token 數在那之前就從原文算好了。
+    // 對照組是在 Asia/Taipei 錄的，在 UTC 主機上 messageTokens 會少 3。
+    const tz = process.env.TZ;
+    process.env.TZ = 'Asia/Taipei';
+    cleanups.push(() => {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    });
     const root = createCordisRoot();
     cleanups.push(() => root.dispose());
     const only = process.env.MCP_ON_TREE_ONLY;
