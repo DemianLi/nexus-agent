@@ -629,7 +629,7 @@ class Mode(unittest.TestCase):
 
 class WebE2e(unittest.TestCase):
     """真瀏覽器 e2e（#1602）只在合併後完整一輪跑：沒有 `if` 就進了 PR 的全跑，排到 build 前面就開不到 dist。
-    它是跟 static 平行的獨立 job（#2517）：放回 static 就又串在護欄後面，成了整輪最長的那一段。"""
+    它是跟 static 平行的獨立 job（#2517）：放進 static 就跟護欄依序跑，static 成了整輪最長的那一段。"""
 
     def setUp(self) -> None:
         self.ci = load(CI)
@@ -641,6 +641,7 @@ class WebE2e(unittest.TestCase):
         self.assertEqual(self.job['needs'], 'plan')
         e2e = self.job['steps'][self.names.index('真瀏覽器 e2e')]
         self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
+        # 這裡帶了 NEXUS_E2E_PROCESS_MODEL，兩個 job 都跑 per-thread，single 沒人測也照樣綠。
         self.assertNotIn('env', e2e)
         build = self.job['steps'][self.names.index('建置 lib 與 web')]['run'].split('\n')
         self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))

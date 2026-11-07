@@ -539,7 +539,7 @@ jobs:
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # 真瀏覽器的對話 e2e（#1602）：子行程起真的 serve（模型是腳本，不帶 key、不打模型端點），供應這裡 build 出來的 dist，Chrome 開它。
-  # 只在合併後完整一輪跑（#1602 的定案，依據 #2088 決議第 5 條把瀏覽器檢查搬出 gate）。
+  # 只在合併後完整一輪跑（#1602；#2088 決議第 5 條：瀏覽器檢查不擋功能 PR 的 gate）：PR 與 main 的 push 上 skipped，gate 照 inputs.full 判。
   # 自己 build、不從 static 拿產物：needs 是 job 層級，等 static 就不平行了（#2517）。前置條件是 build:lib 與 web build：
   # 只有這個組合驗證過；e2e 用不用得到 lib 沒查。
   e2e-single:
@@ -559,7 +559,7 @@ jobs:
         run: pnpm --filter @nexus/web run test:e2e
 
   # 真瀏覽器 e2e 換成 per-thread 行程模型（#2341）：serve 由監督行程起前台與每條 thread 的對話行程，瀏覽器從前台的 port 打。
-  # 跟 e2e-single 同一套測試、同樣的前置建置、同樣只在合併後完整一輪跑。
+  # 跟 e2e-single 同一套測試、同樣的前置建置、同樣只在合併後完整一輪跑；另開 job、不接在 e2e-single 後面，兩輪才同時跑。
   # 監督行程在這台機器上用 spawner 那個 action 編（同一個 crate）。
   e2e-per-thread:
     name: e2e (per-thread)
