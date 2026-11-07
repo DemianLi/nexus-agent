@@ -12,7 +12,7 @@
 | vendor | 4 | `vendor/README.md`，維護者取上游 npm 最新版 |
 | crate | 11 | `Cargo.lock`，備註欄分「連進執行檔」與「只在建置時」；SBOM 只列前者 |
 | 工具鏈 | 3 | `scripts/release/spawner.ts`、`rust-toolchain.toml` |
-| 第一方 | 43 顆 | 本 repo，repo 與維護者都是 DemianLi/nexus-agent，不另列（清單見下） |
+| 第一方 | 44 顆 | 本 repo，repo 與維護者都是 DemianLi/nexus-agent，不另列（清單見下） |
 
 SBOM 的 `nexus-sandbox-spawner` 執行檔也是第一方。
 
@@ -59,7 +59,7 @@ pnpm exec tsx .docs/sbom-provenance/collect.ts --platform darwin-arm64 --check-s
 
 ## 第一方
 
-@nexus/agent-loop、@nexus/approval-channel、@nexus/brand、@nexus/commands、@nexus/core、@nexus/deque、@nexus/feedback、@nexus/fs、@nexus/goal、@nexus/harness、@nexus/permission-presets、@nexus/plugin-agent-instructions、@nexus/plugin-ask-user、@nexus/plugin-commands、@nexus/plugin-echo、@nexus/plugin-feedback、@nexus/plugin-goal、@nexus/plugin-mcp、@nexus/plugin-memory、@nexus/plugin-permission-presets、@nexus/plugin-plan-mode、@nexus/plugin-present、@nexus/plugin-quickjs、@nexus/plugin-sandbox-policy、@nexus/plugin-skills、@nexus/plugin-submit-record、@nexus/plugin-system-prompt、@nexus/plugin-telemetry-otel、@nexus/plugin-time-context、@nexus/plugin-todo、@nexus/plugin-token-meter、@nexus/plugin-trajectory、@nexus/plugin-workspace-changes、@nexus/projections、@nexus/sdk、@nexus/session、@nexus/skills、@nexus/system-prompt、@nexus/timeout、@nexus/tool-result、@nexus/tools、@nexus/web、@nexus/wire
+@nexus/agent-loop、@nexus/approval-channel、@nexus/brand、@nexus/commands、@nexus/core、@nexus/deque、@nexus/feedback、@nexus/fs、@nexus/goal、@nexus/harness、@nexus/permission-presets、@nexus/plugin-agent-instructions、@nexus/plugin-ask-user、@nexus/plugin-commands、@nexus/plugin-echo、@nexus/plugin-feedback、@nexus/plugin-goal、@nexus/plugin-mcp、@nexus/plugin-memory、@nexus/plugin-permission-presets、@nexus/plugin-plan-mode、@nexus/plugin-present、@nexus/plugin-quickjs、@nexus/plugin-sandbox-policy、@nexus/plugin-skills、@nexus/plugin-submit-record、@nexus/plugin-system-prompt、@nexus/plugin-telemetry-otel、@nexus/plugin-time-context、@nexus/plugin-todo、@nexus/plugin-token-meter、@nexus/plugin-trajectory、@nexus/plugin-workspace-changes、@nexus/projections、@nexus/sdk、@nexus/session、@nexus/skills、@nexus/subprocess、@nexus/system-prompt、@nexus/timeout、@nexus/tool-result、@nexus/tools、@nexus/web、@nexus/wire
 
 ## 表
 
