@@ -97,6 +97,20 @@ const nexusConsumer = {
   },
 };
 
+/** 登記逐條 thread 的工具來源的消費者（#2533）：`config.services` 給了就宣告要讀它們。 */
+const threadSourceConsumer = {
+  name: 'tools-thread-source-consumer',
+  inject: injectOf(need(toolsToken, '^2.5.0')),
+  apply(ctx: Context, config: { services?: string[] }) {
+    const tools = service(ctx, toolsToken);
+    if (tools.threadSource === undefined) throw new Error('提供者沒有 threadSource');
+    tools.threadSource(
+      () => undefined,
+      config.services === undefined ? undefined : { services: config.services },
+    );
+  },
+};
+
 /** 舊範圍的消費者：只登記一個工具。`^1.x` 不滿足 2.0.0 的提供者，應該停在 PENDING。 */
 const oldRangeConsumer = (name: string, range: string) => ({
   name,
@@ -125,6 +139,7 @@ async function boot(options: Parameters<typeof createToolsProvider>[0] = {}) {
     results: resultConsumer,
     concluding: concludingConsumer,
     nexus: nexusConsumer,
+    'thread-source': threadSourceConsumer,
     'old-100': oldRangeConsumer('old-100', '^1.0.0'),
     'old-140': oldRangeConsumer('old-140', '^1.4.0'),
     'new-200': oldRangeConsumer('new-200', '^2.0.0'),
@@ -288,10 +303,59 @@ describe('工具登記處的提供者', () => {
     expect(loader.resolve('row-dup').fiber?.ctx.fiber.state).toBe(3);
   });
 
+  it('threadSource（#2533）：登記記下登記者那一列的 id 與宣告的服務（去重），依登記順序；列卸載就撤掉', async () => {
+    const asked: [string, readonly string[]][] = [];
+    const { provider, loader, create } = await boot({
+      authorizeThreadServices: (source, services) => {
+        asked.push([source, services]);
+        return [];
+      },
+    });
+    await create({ id: 'src-a', name: 'cordis:thread-source', config: {} });
+    await create({
+      id: 'src-b',
+      name: 'cordis:thread-source',
+      config: { services: ['pool', 'pool', 'credentials'] },
+    });
+    await loader.await();
+    expect(provider.threadSources().map(({ source, services }) => ({ source, services }))).toEqual([
+      { source: 'src-a', services: [] },
+      { source: 'src-b', services: ['pool', 'credentials'] },
+    ]);
+    // 沒宣告服務的不問授權。
+    expect(asked).toEqual([['src-b', ['pool', 'credentials']]]);
+    await loader.resolve('src-a').fiber?.ctx.fiber.dispose();
+    expect(provider.threadSources().map((entry) => entry.source)).toEqual(['src-b']);
+  });
+
+  it('threadSource（#2533）：宣告了沒授權的服務，登記當下就拋，那一列 FAILED、什麼都沒登記', async () => {
+    const { provider, loader, create } = await boot({
+      authorizeThreadServices: (_source, services) => services.filter((name) => name !== 'pool'),
+    });
+    await create({
+      id: 'src-denied',
+      name: 'cordis:thread-source',
+      config: { services: ['pool', 'credentials'] },
+    });
+    await loader.await();
+    expect(loader.resolve('src-denied').fiber?.ctx.fiber.state).toBe(3);
+    expect(provider.threadSources()).toEqual([]);
+  });
+
+  it('threadSource（#2533）：宿主沒給授權函式 → 宣告了任何服務都拋；沒宣告的照常登記', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'src-none', name: 'cordis:thread-source', config: {} });
+    await create({ id: 'src-some', name: 'cordis:thread-source', config: { services: ['pool'] } });
+    await loader.await();
+    expect(loader.resolve('src-some').fiber?.ctx.fiber.state).toBe(3);
+    expect(provider.threadSources().map((entry) => entry.source)).toEqual(['src-none']);
+  });
+
   it('每次 createToolsProvider 的狀態是新的', () => {
     expect(createToolsProvider().entries()).toEqual([]);
     expect(createToolsProvider().gates()).toEqual([]);
     expect(createToolsProvider().resultListeners()).toEqual([]);
+    expect(createToolsProvider().threadSources()).toEqual([]);
     const one = createToolsProvider();
     const two = createToolsProvider();
     expect(one.Provider).not.toBe(two.Provider);

@@ -53,8 +53,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.4.0`（#2416）：`onResult` 的 listener 看到的 {@link ToolResultExecution} 多 `signal`，{@link ToolResultOutcome} 多 `content` 與 `blocks`。
  * 向後相容的新增：不讀這幾格的消費者照常；要讀的消費者宣告 `^2.4.0`（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-4/guide.md`）。
+ *
+ * `2.5.0`（#2533）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.threadSource}（每次組 thread 時叫一次的工具來源，
+ * 拿到 {@link ToolThread}，含 {@link ToolThread.admit}）。向後相容的新增：不呼叫它的消費者照常；要用的消費者宣告 `^2.5.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.4.0';
+export const TOOLS_CONTRACT_VERSION = '2.5.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -279,6 +282,80 @@ export type ToolResultListener = (
   result: ToolResultOutcome,
 ) => void | Promise<void>;
 
+/** 放不放行某個工具名（`2.5.0` 起）。形狀對應 `@nexus/core` 的 `ToolAdmission`。 */
+export interface ToolAdmission {
+  /**
+   * @param name - 工具名。
+   * @returns 放行是 `true`。
+   */
+  admits(name: string): boolean;
+}
+
+/** {@link ToolThread.admit} 的選項。 */
+export interface ToolAdmitOptions {
+  /** 這一格在這條 thread 的工具鏈上的名字，同一條 thread 上不能重複；省略時宿主以列 id 與序號命名。 */
+  readonly name?: string;
+}
+
+/** {@link ToolRegistry.threadSource} 的選項。 */
+export interface ToolThreadSourceOptions {
+  /**
+   * 這個來源要讀的宿主服務名。{@link ToolThread.services} 只給這裡宣告過、而且宿主授權給這顆插件的；宣告了宿主不授權的，
+   * 登記當下就拋。省略是一個都不讀。
+   */
+  readonly services?: readonly string[];
+}
+
+/**
+ * 一條 thread 的組裝，{@link ToolThreadSource} 看到的樣子（`2.5.0` 起）。來源結束（resolve 或 reject）之後再呼叫
+ * `register`、`gate`、`admit`、`onDispose` 會拋；`services.get`、`shared`、`logger.warn` 不受限。
+ */
+export interface ToolThread {
+  /** 這條 thread 的宿主服務。 */
+  readonly services: {
+    /**
+     * @param name - 服務名。
+     * @returns 那個服務；宿主這條 thread 沒有提供它是 `undefined`。
+     * @throws {Error} 沒在 {@link ToolThreadSourceOptions.services} 宣告。
+     */
+    get(name: string): unknown;
+  };
+  /**
+   * 在這條 thread 上登記一個工具，選項同 {@link ToolRegistry.register}。
+   *
+   * @returns 只撤這一次登記的 disposer。
+   */
+  register(tool: NexusTool | StructuredToolInterface, options?: ToolRegisterOptions): () => void;
+  /**
+   * 在這條 thread 上登記一位核准閘門 listener，語意同 {@link ToolRegistry.gate}。
+   *
+   * @returns 只撤這一次登記的 disposer。
+   */
+  gate(listener: ToolGateListener): () => void;
+  /**
+   * 決定這條 thread 每一次模型呼叫看得到哪些工具：不放行的從模型那一側的清單拿掉，呼叫那一側照常。每次模型呼叫都問一次，
+   * 所以 `admits` 可以隨時間改答案。一個名字都沒拿掉時，請求原樣往內交。
+   *
+   * @returns 只撤這一格的 disposer。
+   */
+  admit(admission: ToolAdmission, options?: ToolAdmitOptions): () => void;
+  /** 這條 thread 收掉時要做的事，照登記的反序跑。這一列有任何來源失敗時，它所有來源已登記的會當場跑。 */
+  onDispose(dispose: () => void | Promise<void>): void;
+  /** 這條 thread 的警告，記在這一列名下；thread 收掉之前任何時候都能叫。 */
+  readonly logger: { warn(message: string): void };
+  /**
+   * 這條 thread 上，**同一顆插件**的每一列拿到同一個物件；別的插件、別的 thread 拿到的是別的。給同一顆插件跨列的協調用
+   * （例如同名的偵測），不要放跨 thread 的東西。
+   */
+  readonly shared: object;
+}
+
+/**
+ * 每次組 thread 時叫一次的工具來源（`2.5.0` 起）。reject 等於這一列在那次組裝裡失敗：已登記的撤掉、這一列所有來源已登記的
+ * `onDispose` 照跑，結果跟那一列掛在相容層、`apply` 拋錯時相同。
+ */
+export type ToolThreadSource = (thread: ToolThread) => void | Promise<void>;
+
 /** 工具登記處。 */
 export interface ToolRegistry {
   /**
@@ -352,6 +429,21 @@ export interface ToolRegistry {
    * @param toolName - 正在執行的這顆工具的名字。
    */
   concludeTurn?(toolName: string): void;
+  /**
+   * 登記一個**每次組 thread 時叫一次**的工具來源（契約 `2.5.0` 起，#2533）。給工具清單要在組裝當下才知道、或要讀這條 thread 的宿主
+   * 服務才組得出來的插件（預定的消費者是 `@nexus/plugin-mcp`，#2533：每次組裝連線，憑證與連線池是這條 thread 的服務）。
+   *
+   * 宿主在這一列折進那條 thread 的位置 await 它，所以它登記的東西排在清單上這一列的位置。登記之前已經組好的 thread 不受影響；
+   * 登記者那一列卸載時登記處自己撤掉，已經折進某條 thread 的那一份留到那條 thread 收掉。
+   *
+   * **選填**：`2.0.0`～`2.4.0` 的提供者沒有它。消費者宣告 `^2.5.0` 就保證有。
+   *
+   * @param source - 這個來源。
+   * @param options - 要讀的宿主服務。
+   * @returns 只撤銷這一次登記的冪等 disposer。
+   * @throws {Error} 宣告了宿主不授權給這顆插件的服務。
+   */
+  threadSource?(source: ToolThreadSource, options?: ToolThreadSourceOptions): () => void;
 }
 
 /** `tools` 服務的 token。 */
