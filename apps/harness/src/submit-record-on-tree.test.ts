@@ -275,7 +275,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
     });
   }, 60000);
 
-  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.2.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）；tools 服務 2.3.0（#1469 加 onResult、#2351 加 NexusTool 後跳 major、#2352 加 deferContext 與 interrupt、#2353 加 concludesTurn（2.2.0）與 rawParameters、timeoutMs、artifact（2.3.0））', async () => {
+  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.2.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）；tools 服務 2.4.0（#1469 加 onResult、#2351 加 NexusTool 後跳 major、#2352 加 deferContext 與 interrupt、#2353 加 concludesTurn（2.2.0）與 rawParameters、timeoutMs、artifact（2.3.0）、#2416 加 onResult 看得到的 signal、blocks、content（2.4.0））', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });

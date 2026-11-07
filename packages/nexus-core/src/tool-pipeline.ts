@@ -47,8 +47,8 @@
  *    中斷與這一輪被中止的錯不派發。
  * 4. **resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次。** 核准的 `interrupt()` 穿過之後，同一個呼叫以同一個 `callId`
  *    重進（見 `containment.ts`）。dsh 沒有這回事。**`tools/pre-execute` 的監聽者必須冪等。**
- * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`）。要重試得在 `next()` 外面自己重造呼叫，不能重叫
- *    `next()`。短路（不呼叫 `next()`、回自己的結果）可以。
+ * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`），所以「重試包住 `next()`」表達不出來：
+ *    `tools/execute` 的監聽者重跑不了工具本體。短路（不呼叫 `next()`、回自己的結果）可以。
  * 6. **`tools/pre-execute` 沒有 `ask`／`cancel`**：範圍，不是表達不出來。
  * 7. **結果多一份文字視圖**：`PipelineResult.blocks` 是內容區塊，`content` 是由它導出的文字（{@link pipelineTextOf}）。
  *    `tools/execute` 交回的結果兩者都在時以 `blocks` 為準；`replace` 只能給其中一個，兩個都給或都不給拋 `TypeError`。`content` 留著是給只讀文字的監聽者，不必自己串區塊。
@@ -195,8 +195,8 @@ declare module './events.js' {
     ): Promise<PipelinePreDecision>;
     /**
      * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
-     * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑；回 `command` 結果而沒呼叫
-     * `next()` 會拋。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
+     * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑；交回的 `command` 結果
+     * 不是 `next()` 回的那一個（沒呼叫 `next()`，或自己另造了一個）就拋 `TypeError`。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
      * @mode waterfall
@@ -208,7 +208,7 @@ declare module './events.js' {
     /**
      * 接受或替換一則工具結果。`next()` 即接受；回 `{ kind: 'replace', content }` 或 `{ kind: 'replace', blocks }` 換掉模型收到的內容
      * （`status`、`artifact`、`additional_kwargs`、錯誤碼沿用原本的）。**只對 `ToolMessage` 結果派發**：`Command` 不經過這裡（偏離 2）。
-     * 工具拋的錯也到這裡，`result` 是圍堵會翻出來的那則錯誤訊息；`next()`（接受）就原樣再拋那個錯（偏離 3）。中斷、`Command` 這類控制流與這一輪被中止的錯不派發，原樣往外拋。
+     * 工具拋的錯也到這裡，`result` 是圍堵會翻出來的那則錯誤訊息（逾時那句的毫秒數由這一層量，可能比模型收到的少）；`next()`（接受）就原樣再拋那個錯（偏離 3）。中斷、`Command` 這類控制流與這一輪被中止的錯不派發，原樣往外拋。
      * @param exec - 剛跑完的這次呼叫。
      * @param result - 工具落定的結果，唯讀。
      * @param next - 往內一位；最內層回 `accept`。
@@ -508,7 +508,7 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
 /**
  * `tools/post-execute` 的生產者。沒有監聽者、結果是 `Command`、或決定是 `accept`，都回內層原本的那個物件。
  *
- * **工具拋的錯也派發**：監聽者看到的是圍堵會翻出來的那則錯誤訊息（文字與碼同 `containment.ts`）。`accept` 時把**同一個錯物件**
+ * **工具拋的錯也派發**：監聽者看到的是圍堵會翻出來的那則錯誤訊息（文字與碼同 `containment.ts`，只有逾時那句的毫秒數由這一層量）。`accept` 時把**同一個錯物件**
  * 原樣再拋，交給外面的圍堵照舊翻；`replace` 時回替換過的那則（`status: 'error'`，碼沿用）。中斷與 `Command` 這類控制流
  * （`isGraphBubbleUp`）和這一輪被中止的錯（`isTurnCancelled`，交給外面的 `turn-cancel` 換成 `ABORTED`）不派發，原樣往外拋。
  *

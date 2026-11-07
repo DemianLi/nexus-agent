@@ -981,7 +981,7 @@ function registerFolded(
   for (const listener of contributions.gates) registry.approvals.gate(listener);
   // `tools/result` 觀察者（#1469）：走 `registry.events.on`，**和工具一起折進同一條 thread**——工具與觀察者共用同一個閉包（present 的
   // 交付表），兩者必須在同一條 thread 上成對存在，之後列被卸載也不拆開。事件的簽名由核心的事件表定（`Readonly<PipelineExecution>`、
-  // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（只讀 `isError`），結構上相容。
+  // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（`isError`、`blocks`、`content` 與 `signal`），結構上相容。
   for (const listener of contributions.resultListeners) {
     registry.events.on('tools/result', listener as (...args: never[]) => void);
   }
