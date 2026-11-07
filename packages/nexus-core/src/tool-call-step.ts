@@ -134,19 +134,26 @@ export function toolNameOfCall(call: Pick<ToolCallSite, 'tool' | 'name'>): strin
   return typeof fromTool === 'string' ? fromTool : call.name;
 }
 
+/** {@link wrapToolCallWith} 造的那一支。 */
+export type ToolCallWrap = <Request extends WrappedRequest, Result>(
+  request: Request,
+  handler: (request: Request) => Result | Promise<Result>,
+) => Promise<Result>;
+
+const wrapsOf = new WeakMap<ToolCallStep, ToolCallWrap>();
+
 /**
  * 把一步轉成 `wrapToolCall`。
+ *
+ * 同一步每次拿到的是同一支函式，{@link withToolCallStep} 靠這一點核對登記的就是這顆在跑的那一支。
  *
  * @param step - 這一步。
  * @returns 交給 `createMiddleware({ wrapToolCall })` 的函式；沒有要換的時，內層拿到的是原本那個請求物件。
  */
-export function wrapToolCallWith(
-  step: ToolCallStep,
-): <Request extends WrappedRequest, Result>(
-  request: Request,
-  handler: (request: Request) => Result | Promise<Result>,
-) => Promise<Result> {
-  return <Request extends WrappedRequest, Result>(
+export function wrapToolCallWith(step: ToolCallStep): ToolCallWrap {
+  const known = wrapsOf.get(step);
+  if (known !== undefined) return known;
+  const wrap: ToolCallWrap = <Request extends WrappedRequest, Result>(
     request: Request,
     handler: (request: Request) => Result | Promise<Result>,
   ) =>
@@ -155,6 +162,8 @@ export function wrapToolCallWith(
         Promise.resolve(handler(substituted(request, substitute))),
       ),
     ) as Promise<Result>;
+  wrapsOf.set(step, wrap);
+  return wrap;
 }
 
 /**
@@ -172,19 +181,24 @@ export function createToolCallStepMiddleware(name: string, step: ToolCallStep): 
 }
 
 /**
+ * {@link wrappedRequestOf} 造的請求形狀，兩個 loop 都只有這幾格：外層請求上的其他鍵不帶過來，吃它的函式照這個型別讀。
+ */
+export interface WrappedToolRequest {
+  readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
+  readonly tool: unknown;
+  readonly owner?: ToolCallOwner | undefined;
+  readonly state: unknown;
+  readonly runtime: { readonly configurable: unknown; readonly signal: AbortSignal | undefined };
+}
+
+/**
  * 由一步拿到的呼叫造回 `wrapToolCall` 請求的形狀，給吃請求形狀的 core 函式用（圍堵、屏障、工具事件的生產者）。
  * `toolCall` 只帶 id、名字與參數；`owner` 這個鍵有才帶（同 {@link toolCallSiteOf}）。
  *
  * @param call - 這次工具呼叫。
  * @returns 請求的形狀；每次造新的，不是外層那個物件。
  */
-export function wrappedRequestOf(call: ToolCallSite): {
-  readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
-  readonly tool: unknown;
-  readonly owner?: ToolCallOwner | undefined;
-  readonly state: unknown;
-  readonly runtime: { readonly configurable: unknown; readonly signal: AbortSignal | undefined };
-} {
+export function wrappedRequestOf(call: ToolCallSite): WrappedToolRequest {
   return {
     toolCall: {
       ...(call.callId !== undefined && { id: call.callId }),
@@ -203,15 +217,22 @@ const registeredSteps = new WeakMap<object, ToolCallStep>();
 /**
  * 登記這顆 middleware 的工具那一格就是 `step`：native 的 root 在這一格直接呼叫它，不經這顆的 `wrapToolCall`
  * （{@link toolCallStepOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapToolCall`。
- * 所以 `wrapToolCall` 必須就是 `wrapToolCallWith(step)`，兩個 loop 才跑同一份實作。要在 `createNativeAgent` 之前登記：
+ * 所以 `wrapToolCall` 必須就是 `wrapToolCallWith(step)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
  * 工具鏈在建構時就算好。`wrapToolCall` 標成由洋蔥外面做的格（`handledOutsideOnion`）不在工具鏈裡。
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。
  * @param step - 它的工具那一步。
  * @returns `middleware` 本身。
+ * @throws {Error} `middleware.wrapToolCall` 不是 `wrapToolCallWith(step)`。
  */
 export function withToolCallStep<M extends object>(middleware: M, step: ToolCallStep): M {
+  if ((middleware as { wrapToolCall?: unknown }).wrapToolCall !== wrapToolCallWith(step)) {
+    const name = (middleware as { name?: unknown }).name;
+    throw new Error(
+      `middleware "${String(name)}" 的 wrapToolCall 不是 wrapToolCallWith(step)：native 直接呼叫的那一步會跟它不一樣`,
+    );
+  }
   registeredSteps.set(middleware, step);
   return middleware;
 }

@@ -1,6 +1,7 @@
 /**
  * `tool-list-step.ts` 的轉接：一步回 `undefined` 時往內交原本那個請求、回清單時只換 `tools`、同步的一步在同一個 tick 往內交、
- * 回 `Promise` 的等它解開，有 `inner` 時交給它，以及 `createToolListStepMiddleware` 造的那顆登記了這一步。
+ * 回 `Promise` 的等它解開，有 `inner` 時交給它，以及 `createToolListStepMiddleware` 造的那顆登記了這一步、`withToolListStep` 登記時核對
+ * `wrapModelCall` 就是用那一步與 `inner` 造的。
  * 掛進各顆 middleware 之後的行為在各顆自己的測試；native 的 root 直接呼叫這一步見 `native-loop/model-cells.test.ts`。
  */
 
@@ -104,9 +105,37 @@ describe('登記', () => {
   it('withToolListStep 連 inner 一起登記；沒登記的查不到，複製出來的也查不到', () => {
     const step = () => undefined;
     const inner = () => 'inner';
-    const middleware = withToolListStep({ name: 'm' }, step, inner);
+    const middleware = withToolListStep(
+      { name: 'm', wrapModelCall: wrapModelCallWith(step, inner) },
+      step,
+      inner,
+    );
     expect(toolListCellOf(middleware)).toEqual({ step, inner });
     expect(toolListCellOf({ ...middleware })).toBeUndefined();
     expect(toolListCellOf({ name: 'other' })).toBeUndefined();
+  });
+
+  it('同一步配同一支 inner，wrapModelCallWith 每次給同一支；換 inner 就不是', () => {
+    const step = () => undefined;
+    const inner = () => 'inner';
+    expect(wrapModelCallWith(step)).toBe(wrapModelCallWith(step));
+    expect(wrapModelCallWith(step, inner)).toBe(wrapModelCallWith(step, inner));
+    expect(wrapModelCallWith(step, inner)).not.toBe(wrapModelCallWith(step));
+  });
+
+  it('wrapModelCall 不是用登記的那一步造的：登記時就拋，不登記', () => {
+    const running = () => [alpha];
+    const registered = () => undefined;
+    const middleware = { name: 'm', wrapModelCall: wrapModelCallWith(running) };
+    expect(() => withToolListStep(middleware, registered)).toThrow(/"m" 的 wrapModelCall/);
+    expect(toolListCellOf(middleware)).toBeUndefined();
+  });
+
+  it('wrapModelCall 是同一步、但 inner 不同：登記時就拋', () => {
+    const step = () => undefined;
+    const inner = () => 'inner';
+    const middleware = { name: 'm', wrapModelCall: wrapModelCallWith(step, inner) };
+    expect(() => withToolListStep(middleware, step)).toThrow(/"m" 的 wrapModelCall/);
+    expect(() => withToolListStep(middleware, step, () => 'other')).toThrow(/"m" 的 wrapModelCall/);
   });
 });
