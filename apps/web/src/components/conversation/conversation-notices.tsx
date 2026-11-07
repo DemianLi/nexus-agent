@@ -36,6 +36,7 @@ export function ConversationNotices({
         state={conversation.state}
         connected={conversation.connected}
         slowConnect={conversation.slowConnect}
+        opening={conversation.opening}
         {...(conversation.connectionError === undefined
           ? {}
           : { connectionError: conversation.connectionError })}

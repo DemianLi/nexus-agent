@@ -27,6 +27,13 @@ export const RECOVERED_NOTICE_MS = 2_000;
 export const SLOW_CONNECT_MS = 6_000;
 
 /**
+ * 一次連線（開下行到歷史回來）等了多久還沒成功或失敗，狀態列才把「連線中…」換成「正在開啟這條對話…」（#2343）。
+ * 每條對話一個行程時，前台在對話行程起好之前不回應下行；新對話與逐出後回來的第一輪宣告多等 ≤400 ms（#1947 R7），
+ * 取兩倍，一般的冷啟動不會閃一下字。等退避的時間不算。
+ */
+export const OPENING_NOTICE_MS = 800;
+
+/**
  * 第 `attempt` 次重試（從 1 起算）要等多久。
  *
  * @param attempt - 這是連續第幾次重試。
