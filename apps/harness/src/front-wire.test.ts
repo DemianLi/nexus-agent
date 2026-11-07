@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccessRecord, StreamRecord } from './embed-audit.js';
 import type { EmbedCookieVerdict } from './embed-session.js';
@@ -82,7 +82,12 @@ function supervisorAnswering(socket: string, ensured: string[] = []): Supervisor
   return client;
 }
 
-function front(socket: string, verdict: () => EmbedCookieVerdict, ensured: string[] = []) {
+function front(
+  socket: string,
+  verdict: () => EmbedCookieVerdict,
+  ensured: string[] = [],
+  holdOpened: Promise<void> = Promise.resolve(),
+) {
   const streams: StreamRecord[] = [];
   const access: AccessRecord[] = [];
   const forwarder = new FrontForwarder();
@@ -104,6 +109,7 @@ function front(socket: string, verdict: () => EmbedCookieVerdict, ensured: strin
       audit: () => ({
         recordStream: async (record) => {
           streams.push(record);
+          if (record.outcome === 'opened') await holdOpened;
         },
         recordAccess: async (record) => {
           access.push(record);
@@ -211,5 +217,106 @@ describe('createFrontWireHandler 的 run.cancel 與評分', () => {
     expect(response.status).toBe(200);
     expect(ensured).toEqual(['t1']);
     expect(upstream.seen.map(({ url }) => url)).toEqual([`${path}/commands/feedback.record`]);
+  });
+});
+
+describe('createFrontWireHandler 的轉送失敗', () => {
+  it('一條轉送 ECONNRESET（行程還在）：同一條 thread 開著的下行不受影響', async () => {
+    let streamResponse: ServerResponse | undefined;
+    const upstream = await conversation((request, response) => {
+      if (request.url?.endsWith('/history') === true) {
+        request.socket.destroy();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('data: 1\n\n');
+      streamResponse = response;
+    });
+    const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }));
+    const stream = await handler.handle(
+      new Request('http://nexus.test/threads/t1/stream', { method: 'POST', body: '{}' }),
+    );
+    const reader = stream.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 1\n\n');
+
+    const failed = await handler.handle(new Request('http://nexus.test/threads/t1/history'));
+    expect(await failed.text()).toContain('連不上');
+
+    streamResponse!.write('data: 2\n\n');
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 2\n\n');
+  });
+
+  it('socket 那頭沒有行程（ENOENT）：收掉整個 socket 的連線', async () => {
+    const forget = vi.spyOn(FrontForwarder.prototype, 'forget');
+    const dropIdle = vi.spyOn(FrontForwarder.prototype, 'dropIdle');
+    cleanups.push(() => {
+      forget.mockRestore();
+      dropIdle.mockRestore();
+    });
+    const gone = join(tmpdir(), `front-wire-gone-${String(process.pid)}.sock`);
+    const { handler } = front(gone, () => ({ ok: true, principal: ALICE }));
+    const failed = await handler.handle(new Request('http://nexus.test/threads/t1/history'));
+    expect(await failed.text()).toContain('連不上');
+    expect(forget).toHaveBeenCalledWith(gone);
+    expect(dropIdle).not.toHaveBeenCalled();
+  });
+});
+
+describe('createFrontWireHandler 的嵌入下行收尾', () => {
+  function embedStream(signal?: AbortSignal): Request {
+    return new Request('http://nexus.test/embed/threads/t1/stream', {
+      method: 'POST',
+      headers: { cookie: 'nexus_embed=x', 'content-type': 'application/json' },
+      body: '{}',
+      ...(signal !== undefined && { signal }),
+    });
+  }
+
+  it('寫 opened 的時候客戶端斷了：回 503、記 closed，不登記給重驗', async () => {
+    const upstream = await conversation((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(': connected\n\n');
+    });
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let rechecks = 0;
+    const { handler, streams } = front(
+      upstream.socket,
+      () => {
+        rechecks += 1;
+        return { ok: true, principal: ALICE };
+      },
+      [],
+      hold,
+    );
+    const controller = new AbortController();
+    const pending = handler.handle(embedStream(controller.signal));
+    await expect.poll(() => streams.map(({ outcome }) => outcome)).toEqual(['opened']);
+    controller.abort();
+    release();
+    expect((await pending).status).toBe(503);
+    expect(streams.map(({ outcome }) => outcome)).toEqual(['opened', 'closed']);
+    expect(streams[1]).toMatchObject({ by: 'client' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(rechecks).toBe(0);
+    await expect.poll(() => upstream.closed).toEqual(['/embed/threads/t1/stream']);
+  });
+
+  it('前台關機：還開著的嵌入下行記 closed（server），往對話行程的連線一起斷', async () => {
+    const upstream = await conversation((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(': connected\n\n');
+    });
+    const { handler, streams } = front(upstream.socket, () => ({ ok: true, principal: ALICE }));
+    const response = await handler.handle(embedStream());
+    const reader = response.body!.getReader();
+    await reader.read();
+    await handler.close();
+    await expect(reader.read()).rejects.toThrow('前台關機');
+    expect(streams.map(({ outcome }) => outcome)).toEqual(['opened', 'closed']);
+    expect(streams[1]).toMatchObject({ by: 'server' });
+    await expect.poll(() => upstream.closed).toEqual(['/embed/threads/t1/stream']);
   });
 });

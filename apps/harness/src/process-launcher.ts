@@ -4,8 +4,8 @@
  * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve.ts` 照單行程起 server。
  *
  * - **模式**：`--process-model` 旗標優先，再來是 `#settings/process-model` 那一列，都沒有就是 `single`。那一列只疊層、不載模組
- *   （`composeDefaultEntries`）：旗標沒給而疊層失敗時當成 `single`，讓 `runServe` 報同一個錯。印用法、版本、設定的那幾個旗標
- *   一律走 `single`。
+ *   （`composeDefaultEntries`）：疊層失敗或那一列寫壞了，旗標沒給或明講 `single` 都當成 `single`，交給 `runServe` 報；旗標明講
+ *   `per-thread` 就在這裡拋。印用法、版本、設定的那幾個旗標一律走 `single`。
  * - **只在 Linux**：監督行程靠 signalfd、`/proc` 與 `PR_SET_PDEATHSIG`。其他平台要 `per-thread` 就拋。
  * - **兩邊的 leader 都是 node**：`process.execPath` 加上 `process.execArgv` 再接入口檔，所以開發時（tsx 的 loader 在 execArgv 裡）
  *   與裝好的 `lib/*.js` 走同一條路。入口檔的副檔名跟這個模組一樣。
@@ -298,7 +298,8 @@ export interface LaunchContext {
 /**
  * 這次要用哪個模型。
  *
- * @throws `per-thread` 但不是 Linux；設定列寫壞了（只在旗標沒給時讀）。
+ * @throws 模式是 `per-thread`（旗標或設定列）但不是 Linux；旗標明講 `per-thread` 而疊層或 `process-model` 那一列寫壞了；
+ *   模式是 `per-thread` 而 `thread-capacity` 那一列寫壞了（{@link idleEvictAfterMs}）。
  */
 export function resolveProcessModel(context: LaunchContext): {
   readonly mode: ProcessModel;
@@ -315,7 +316,7 @@ export function resolveProcessModel(context: LaunchContext): {
   const patches = Array.isArray(patch)
     ? patch.filter((value): value is string => typeof value === 'string')
     : undefined;
-  let entries: readonly ConfigEntry[] | undefined;
+  let entries: readonly ConfigEntry[];
   try {
     // 警告不在這裡印：`runServe` 疊同一份清單時會印一次，這裡再印就是兩次。
     entries = composeDefaultEntries({
@@ -330,18 +331,25 @@ export function resolveProcessModel(context: LaunchContext): {
     if (context.flag !== 'per-thread') return { mode: 'single' };
     throw error;
   }
-  const setting = entries === undefined ? undefined : processModelSetting(entries);
-  const mode = context.flag ?? setting?.mode ?? 'single';
+  let setting: ProcessModelConfig;
+  try {
+    setting = processModelSetting(entries);
+  } catch (error) {
+    // 這一列寫壞了：旗標沒給或明講 `single` 就當 `single`。`runServe` 會把這一列當設定不合停用、列進啟動警告（不在必掛名單），
+    // 而 `single` 是 per-thread 起不來時退回的路，不能被這一列擋住。旗標明講 `per-thread` 就在這裡拋，不換成監督行程。
+    if (context.flag !== 'per-thread') return { mode: 'single' };
+    throw error;
+  }
+  const mode = context.flag ?? setting.mode;
   if (mode === 'per-thread' && context.platform !== 'linux') {
     throw new Error(
       `--process-model per-thread 只在 Linux 起得來（監督行程要 signalfd、/proc 與 PR_SET_PDEATHSIG），這台是 ${context.platform}；改用 single`,
     );
   }
-  const idleMs =
-    entries === undefined || mode !== 'per-thread' ? undefined : idleEvictAfterMs(entries);
+  const idleMs = mode !== 'per-thread' ? undefined : idleEvictAfterMs(entries);
   return {
     mode,
-    ...(setting?.supervisorBinary !== undefined && { supervisorBinary: setting.supervisorBinary }),
+    ...(setting.supervisorBinary !== undefined && { supervisorBinary: setting.supervisorBinary }),
     ...(mode === 'per-thread' && idleMs !== undefined && { idleMs }),
   };
 }

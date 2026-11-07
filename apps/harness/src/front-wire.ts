@@ -75,6 +75,8 @@ export interface FrontWireOptions {
 interface ForwardedEmbedStream {
   readonly headers: Headers;
   cut(reason: EmbedCookieRefusal): void;
+  /** 前台關機：記 `closed`（`server`），客戶端那頭以錯誤結束，斷掉往對話行程的那條。 */
+  close(): void;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -94,6 +96,12 @@ async function envelopeId(request: Request, route: Route): Promise<number | null
   } catch {
     return null;
   }
+}
+
+/** 轉送的錯是不是「socket 那頭沒有行程」：沒人在聽，或 socket 檔已經不在。 */
+function processGone(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'ECONNREFUSED' || code === 'ENOENT';
 }
 
 function outcomeFailure(
@@ -120,13 +128,15 @@ function outcomeFailure(
 }
 
 /**
- * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，只換 `handle`；收尾由 serve 收本地那一支，轉送器由入口收。
+ * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，換掉 `handle` 與 `close`（先收轉送中的嵌入下行、補記 `closed`，再收本地那一支）；
+ * 轉送器由入口收。
  */
 export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingWireHandler {
   const { local, supervisor, forwarder, auth, embedStreams: guard } = options;
   const warn = options.warn ?? (() => {});
   const streams = new Set<ForwardedEmbedStream>();
   let scan: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
 
   function scanStreams(active: EmbedStreamGuard): void {
     const verdicts = new Map<string, ReturnType<EmbedStreamGuard['recheck']>>();
@@ -206,6 +216,24 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         headers: { 'cache-control': 'no-store' },
       });
     }
+    // 寫 `opened` 期間客戶端斷了（之後掛的 abort 監聽不會觸發），或前台已經在收（`close` 掃過 `streams` 了，之後登記的沒人收）：
+    // 在這裡就收尾。
+    if (request.signal.aborted || closed) {
+      upstream.abort();
+      audit
+        .recordStream({
+          outcome: 'closed',
+          ...base,
+          by: request.signal.aborted ? 'client' : 'server',
+        })
+        .catch((error: unknown) => {
+          warn(`[嵌入下行] thread ${threadId} 收線的稽核紀錄寫不進去：${String(error)}`);
+        });
+      return new Response('stream not opened', {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
     const reader = response.body!.getReader();
     let ended = false;
     let fail: ((error: Error) => void) | undefined;
@@ -223,6 +251,11 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
       cut: (reason) => {
         end({ outcome: 'cut', ...base, reason });
         fail?.(new StreamCutError(`嵌入版下行重驗沒過，已切掉（${reason}）`));
+        upstream.abort();
+      },
+      close: () => {
+        end({ outcome: 'closed', ...base, by: 'server' });
+        fail?.(new Error('前台關機，下行收掉'));
         upstream.abort();
       },
     };
@@ -291,8 +324,10 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
       response = await forwarder.forward(outgoing, outcome.socket, principalHeaders(principal));
     } catch (error) {
       if (request.signal.aborted) throw error;
-      // 連不上：行程剛走、`down` 還沒到。換掉這個 socket 的連線，回暫時性的錯，客戶端重試會再 `ensure` 一次。
-      forwarder.forget(outcome.socket);
+      // 連不上（行程剛走、`down` 還沒到）才收掉整個 socket 的連線；其餘的錯只丟閒置的，同一條 thread 開著的下行不跟著斷。
+      // 都回暫時性的錯，客戶端重試會再 `ensure` 一次。
+      if (processGone(error)) forwarder.forget(outcome.socket);
+      else forwarder.dropIdle(outcome.socket);
       return json(
         errorResponse(id, 'unknown_error', `thread "${route.threadId}" 的對話行程連不上，請重試。`),
       );
@@ -314,6 +349,11 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
 
   return {
     ...local,
+    close: async () => {
+      closed = true;
+      for (const entry of [...streams]) entry.close();
+      await local.close();
+    },
     handle: async (request) => {
       const { pathname } = new URL(request.url);
       const embedded = withoutEmbedPrefix(pathname);

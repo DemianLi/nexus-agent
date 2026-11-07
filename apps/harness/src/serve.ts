@@ -2082,6 +2082,8 @@ async function startServer(
 
   const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
+  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`。
+  let servedHandler: Pick<WireHandler, 'close'> = handler;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
     if (embedIdentityTable !== undefined && embedCookies !== undefined) {
@@ -2124,6 +2126,7 @@ async function startServer(
             ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
             warn,
           });
+    servedHandler = served;
     const started = await startWireServer({
       ...(listening.kind === 'front'
         ? {
@@ -2343,7 +2346,7 @@ async function startServer(
       ) {
         await new Promise<void>((resolve) => setTimeout(resolve, opsConfig.probes.drainMs));
       }
-      // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
+      // **每一步各自接住，全部跑完才拋**（#1511）：`servedHandler.close()` 會拒絕（thread 收尾失敗），
       // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
       const failures: unknown[] = [];
       const attempt = async (run: () => void | Promise<void>): Promise<void> => {
@@ -2356,7 +2359,7 @@ async function startServer(
       await attempt(() => memoryGauge?.stop());
       await attempt(() => opsMetrics?.stop());
       await attempt(() => server.close());
-      await attempt(() => handler.close());
+      await attempt(() => servedHandler.close());
       await attempt(() => threadSearch?.close());
       // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
       await attempt(() => failureRecorder.flush());
