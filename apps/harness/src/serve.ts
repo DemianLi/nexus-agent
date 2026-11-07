@@ -997,6 +997,8 @@ async function startServer(
       serve: true,
       env,
       ...(invocation.patches !== undefined && { patches: invocation.patches }),
+      // 讀清單的警告前台起動時講過，之後由前台綁上時講（`thread-plugin-list.ts` 的 `bindElsewhere`）：對話行程不講。
+      ...(options.conversation !== undefined && { warn: () => {} }),
     },
     { tree: root.tree },
   );
@@ -1243,8 +1245,9 @@ async function startServer(
     audit,
     // 起動期讀的那幾列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
-    log,
-    warn,
+    // 讀清單的日誌歸前台講（`bindElsewhere`）：對話行程各講一次就是同一句 N 次。
+    log: options.conversation === undefined ? log : () => {},
+    warn: options.conversation === undefined ? warn : () => {},
     publishSnapshot: async (snapshot) => {
       if (options.conversation === undefined) await snapshotWriter.publish(snapshot);
     },
@@ -2240,9 +2243,12 @@ async function startServer(
       ? `nexus-agent 在 ${authenticatedUrl}`
       : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
   );
+  // **起動披露只由前台印**（#2341）：對話行程是同一台主機、同一份設定起的，每個行程各印一份只是把同樣的話重複 N 次。
+  // 對話行程只講它在哪個 socket（上面那一行）。
+  const disclose = options.conversation === undefined ? log : (_line: string): void => {};
   // 印的是這一次真的用的那一個（#545），不是預設值。
-  log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
-  log(
+  disclose(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
+  disclose(
     `plugin：${
       plugins
         .filter((entry) => !droppedEntries.has(entry))
@@ -2250,41 +2256,41 @@ async function startServer(
         .join('、') || '（空）'
     }`,
   );
-  log(
+  disclose(
     existsSync(join(webDist, 'index.html'))
       ? `網頁：${webDist}`
       : `網頁：${webDist}（還沒 build——先跑 pnpm build，不然開網址只會看到 404）`,
   );
   // grep 用的是產物內附的 ripgrep（#1502 刀 4）：講出是哪一支。缺了壞了不讓啟動失敗（照 dsh，rg 路徑是延遲解析的），
   // 但每一次 grep 都會以 SEARCH_FAILED 失敗、沒有退路——管理者要在啟動這一行就看得到，不必等模型第一次搜尋。
-  log(formatRipgrepDisclosure(await ripgrepStatus()));
-  reportSandboxTo(log);
+  disclose(formatRipgrepDisclosure(await ripgrepStatus()));
+  reportSandboxTo(disclose);
   // 同上：沒有沙箱時 grep、glob 與改動卡的 git 跑不了，別等到模型第一次用它們才知道。
-  log(await productSandboxStatus());
+  disclose(await productSandboxStatus());
   // **披露，不是設定。** 每一條 thread 的對話都會寫上磁碟（#444 起預設就寫），寫去哪裡
   // 不該要讀文件才知道；清單把落盤關掉（#612）時，講的是「只在記憶體裡」與是哪一列關的。
-  log(
+  disclose(
     sessionStore === undefined ? SESSION_LOG_OFF_DISCLOSURE : `會話日誌：${sessionStore.directory}`,
   );
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
-  log(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap, 'serve'));
+  disclose(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap, 'serve'));
   // 上限講出來（#1476）：一律印數字（#1619 起出廠就有值），管理者從這一行分得出出廠值和自己改過的值。
-  log(
+  disclose(
     `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
   );
   // 轉碼併發講出來（#2033）：讀的是附件儲存手上那一份限流器，不是設定值。
-  log(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
+  disclose(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
   // 一輪的時鐘講出來（#1624）：出廠就有值，關掉那一列是管理者明著拿掉的，兩種都印。
-  log(
+  disclose(
     turnClock === undefined
       ? '一輪的時鐘：不限（turn-timeout 那一列關掉了）'
       : `一輪的時鐘：${String(turnClock.timeoutMs)} 毫秒（主對話與背景子代理的每一輪各自起算，到點照停止鍵的路中止）`,
   );
   // 探針與指標講出來（#1535）：不印 token 本身，只印在哪個檔。
-  log(
+  disclose(
     `探針：${opsConfig.probes.enabled ? '/livez、/readyz（免登入、只回狀態字）' : '關'}；指標：${
       metricsToken === undefined
         ? '關'
@@ -2293,7 +2299,7 @@ async function startServer(
   );
   // 嵌入換票講出來（#2370）：不印憑證本身，只印在哪個檔。
   if (options.conversation === undefined) {
-    log(
+    disclose(
       embedCredentialFiles.length === 0
         ? '嵌入換票：關（embed-login 沒有嵌入方）'
         : `嵌入換票：開 POST ${EMBED_EXCHANGE_PATH}（嵌入方 ${embedCredentialFiles
@@ -2306,14 +2312,14 @@ async function startServer(
     );
   }
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
-  log(
+  disclose(
     requestGate === undefined
       ? '模型請求並行上限：不限'
       : `模型請求並行上限：${String(requestGate.maxConcurrent)}（整台 serve 共用；名額滿了排隊，等超過 ${String(liveModel.maxWaitMs)} 毫秒以 LOCAL_CAPACITY 失敗、不重試）`,
   );
   // 閒置逐出講出來（#1484）：一律印一行，三種之一（#1619）。設成 0 先講——那是管理者明著關的，有沒有落盤都一樣不逐出。
   // 沒落盤那一句是中性的：出廠就有 T，沒落盤的部署每次啟動都會印它，不是管理者設錯了什麼。
-  log(
+  disclose(
     threadCapacity.idleEvictAfterMs === 0
       ? 'thread 閒置逐出：idleEvictAfterMs 是 0，不逐出'
       : idleEvictMs === undefined
@@ -2321,21 +2327,21 @@ async function startServer(
         : `thread 閒置逐出：閒置 ${String(idleEvictMs)} 毫秒後撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
   );
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
-    log(line);
+    disclose(line);
   }
   // **遙測披露印在啟動時**（#749），同 CLI 緊接在追蹤那一行後面、分兩行講（理由見 `telemetry-disclosure.ts`）。
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
-  for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+  for (const line of formatTelemetryDisclosure(telemetrySharing)) disclose(line);
   // 主機沒有 spawner（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
   const guardNotice = mcpGuardNotice();
-  if (guardNotice !== undefined) warn(guardNotice);
+  if (guardNotice !== undefined && options.conversation === undefined) warn(guardNotice);
   // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是
   // serve 起動完的底。
   // 沒落盤就沒有日誌要讀，不印。
   if (sessionStore !== undefined) {
     const { limitBytes } = sessionLogBudget;
-    log(
+    disclose(
       limitBytes === Number.POSITIVE_INFINITY
         ? '會話日誌額度：不限（thread-capacity 的 sessionLogBudgetMiB 是 0；大日誌可能把整個行程撐死）'
         : `會話日誌額度：${(limitBytes / 1024 / 1024).toFixed(1)} MiB（同時開著與正在讀的會話日誌合計，超過的在讀之前拒收；${

@@ -374,12 +374,24 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   // 最近一次 `read()` 回的那一份：綁定之後重寫快照時當「已儲存」（見 {@link ThreadPluginReader.bindThread}）。
   let latestRead: ThreadPluginList | undefined;
   /**
-   * per-thread 的前台不組 thread、從不 `read()`：「已儲存」照這一刻磁碟上的那一份另讀。讀的警告對話行程組裝時已經講過，這裡不再講；
+   * per-thread 的前台不組 thread、從不 `read()`：「已儲存」照這一刻磁碟上的那一份另讀。**讀清單的日誌由這裡講**（#2341）：
+   * 對話行程不講（serve 給它的 `log`／`warn` 是空的，每個行程各講一次就是同一句 N 次），前台每次綁上、放掉時讀一次，
+   * 用的是同一套去重（讀的警告、未稽核的覆蓋層、掛不上的列、待重啟），同 `single` 每建一條 thread 讀一次。
    * 讀不起來就退回最近一次讀到的（前台是啟動那一份）。
    */
   async function savedOnDisk(): Promise<ThreadPluginList | undefined> {
     try {
-      const loaded = await options.load(() => {});
+      const loaded = await options.load(warn);
+      for (const drop of loaded.dropped) {
+        const key = rowKey(loaded, drop.id);
+        if (known.has(key)) continue;
+        known.add(key);
+        logWarn(
+          `[清單] 這一列沒掛上，之後的 thread 也不掛，直到它的設定改了：${describeDrop(drop)}`,
+        );
+      }
+      reportStartupDrift(loaded.plugins);
+      reportLayers(loaded.layers);
       return { loaded, plugins: loaded.plugins, optionalEntries: optionalEntriesOf(loaded, audit) };
     } catch {
       return latestRead;

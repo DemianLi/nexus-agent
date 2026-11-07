@@ -194,15 +194,26 @@ describe('--patch 是不經過紀錄的路（驗收 E）', () => {
     const server = await start(env, lines, ['--patch', overlay]);
     expect(await say(server, 'a')).toBeUndefined();
 
-    const notice = lines.filter((line) => line.includes('有未稽核的覆蓋層在作用'));
+    // per-thread 下 fixture 自己那一層（切 process-model）也是覆蓋層，不算。
+    const notices = (): string[] =>
+      lines.filter(
+        (line) =>
+          line.includes('有未稽核的覆蓋層在作用') && !line.includes(FIXTURE_PATCH_DIR_PREFIX),
+      );
+    const notice = notices();
     expect(notice).toHaveLength(1);
     expect(notice[0]).toContain(overlay);
     expect(notice[0]).toContain('todo');
     expect(notice[0]).toContain('goal');
 
     const snap = snapshot(dir);
-    expect(snap.layers?.overlays).toEqual([{ file: overlay, rows: ['todo', 'goal'] }]);
-    const marked = snap.rows.filter((row) => row.unaudited === true).map((row) => row.id);
+    const overlays = snap.layers?.overlays.filter(
+      ({ file }) => !file.includes(FIXTURE_PATCH_DIR_PREFIX),
+    );
+    expect(overlays).toEqual([{ file: overlay, rows: ['todo', 'goal'] }]);
+    const marked = snap.rows
+      .filter((row) => row.unaudited === true && row.id !== 'process-model')
+      .map((row) => row.id);
     expect([...marked].sort()).toEqual(['goal', 'todo']);
 
     // 寫入口帶同一組 --patch：啟用 todo 被 overlay 蓋回停用 → overridden（照寫）。
@@ -210,7 +221,7 @@ describe('--patch 是不經過紀錄的路（驗收 E）', () => {
     expect(enable).toMatchObject({ outcome: 'recorded', effect: 'overridden' });
     // 同一個寫入再問一次，日誌那句不重複。
     expect(await say(server, 'b')).toBeUndefined();
-    expect(lines.filter((line) => line.includes('有未稽核的覆蓋層在作用'))).toHaveLength(1);
+    expect(notices()).toHaveLength(1);
   }, 60000);
 });
 
@@ -229,7 +240,8 @@ describe('舊檔又出現（加 3）', () => {
     const server = await start(env, second);
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();
-    const seen = second.filter((line) => line.includes('沒讀'));
+    // 伺服器日誌那一行（per-thread 下 fixture 也收得到 serve 起動讀清單時直接寫 stderr 的那一句，single 的 `log` 收不到，不算）。
+    const seen = second.filter((line) => line.includes('[清單]') && line.includes('沒讀'));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain(planted);
     expect(snapshot(dir).layers?.journal?.ignoredLegacyPatch).toBe(planted);

@@ -310,7 +310,7 @@ describe('current：下一條新 thread 會拿到的就是這一版（#1442 PM �
 });
 
 describe('ThreadPluginReader.bindThread', () => {
-  function reader(env: NodeJS.ProcessEnv, published: PluginSnapshot[]) {
+  function reader(env: NodeJS.ProcessEnv, published: PluginSnapshot[], logged: string[] = []) {
     return loadDefaultPlugins({ serve: true, env, warn: () => {} }).then((startup) =>
       createThreadPluginList({
         load: (warn) => loadDefaultPlugins({ serve: true, env, warn }),
@@ -318,7 +318,7 @@ describe('ThreadPluginReader.bindThread', () => {
         trialDropped: [],
         audit: { live: false },
         startupRead: [],
-        log: () => {},
+        log: (line) => logged.push(line),
         now: () => AT,
         publishSnapshot: (snapshot) => {
           published.push(snapshot);
@@ -395,5 +395,21 @@ describe('ThreadPluginReader.bindThread', () => {
       saved: { state: 'mounted' },
       sync: 'same',
     });
+  });
+
+  it('bindElsewhere：讀清單的警告由前台講，綁上、放掉幾次都只講一次（對話行程不講）', async () => {
+    const h = home();
+    const logged: string[] = [];
+    const list = await reader(h.env, [], logged);
+    const startup = await loadDefaultPlugins({ serve: true, env: h.env, warn: () => {} });
+    const bindings = liveBindingsOf({ loaded: startup, plugins: startup.plugins }, []);
+    h.patch('- id: no-such-row\n  disabled: true\n');
+    const first = await list.bindElsewhere('t1', bindings);
+    const second = await list.bindElsewhere('t2', bindings);
+    await first();
+    await second();
+    expect(logged.filter((line) => line.includes('no-such-row'))).toEqual([
+      '[清單] patch：找不到 id 為 "no-such-row" 的條目，這一條跳過。',
+    ]);
   });
 });

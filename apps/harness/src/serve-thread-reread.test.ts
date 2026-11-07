@@ -28,7 +28,7 @@ import {
   writeJournalText,
 } from './plugin-journal.fixture.js';
 import { sessionHeaderOf } from './session-files.fixture.js';
-import { startServeUnderTest } from './serve-under-test.fixture.js';
+import { FIXTURE_PATCH_DIR_PREFIX, startServeUnderTest } from './serve-under-test.fixture.js';
 import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const temporary: string[] = [];
@@ -135,6 +135,13 @@ async function header(dir: string, thread: string): Promise<{ configHash?: strin
   return (await sessionHeaderOf(join(dir, 'sessions', projectKey(process.cwd())), thread)).header;
 }
 
+/** 伺服器日誌裡讀清單的那幾行；per-thread 下 fixture 自己那一層覆蓋層（切 process-model）的那一行不算。 */
+function listLines(lines: readonly string[]): string[] {
+  return lines.filter(
+    (line) => line.startsWith('[清單]') && !line.includes(FIXTURE_PATCH_DIR_PREFIX),
+  );
+}
+
 describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('兩條對話之間改了一列的設定：第二條拿到新值，開著的第一條不變；模組只求值一次', async () => {
     const h = home();
@@ -224,7 +231,7 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     const lines: string[] = [];
     const server = await start(h.env, lines);
     expect(await say(server, 'a')).toBeUndefined();
-    expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([]);
+    expect(listLines(lines)).toEqual([]);
     const written = await h.change({
       op: 'config-set',
       id: 'thread-title',
@@ -233,7 +240,7 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(written).toMatchObject({ outcome: 'recorded', effect: 'restart' });
     expect(await say(server, 'b')).toBeUndefined();
     expect(await say(server, 'c')).toBeUndefined();
-    expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([
+    expect(listLines(lines)).toEqual([
       '[清單] 「thread-title」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值',
     ]);
   }, 60000);
