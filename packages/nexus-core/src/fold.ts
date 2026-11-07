@@ -868,7 +868,7 @@ export function foldRegistry(
     // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
     // 理由見 {@link foldObservationPolicy}。
     perAgent('observationPolicy', () => observationPolicy?.()),
-    // **摘要器也各建一份，不共用**：`sessionId` 在 closure 裡，共用會讓 root 與這個 subagent 的歷史 append 進同一個檔。
+    // **摘要器也各建一份，不共用**：認不出身分的呼叫用實例自己的會話名，共用會讓 root 與這個 subagent 的那種呼叫 append 進同一個檔。
     // 理由見 {@link foldSummarizer}。排在子代理自帶的 middleware 之前 ＝ 自帶的同名版本贏得過我們這份（打底不是強制）。
     perAgent('summarizer', () => summarizer()),
     // 提醒器與用量記錄器同樣打底、共用一份：它們無狀態，不注的話子代理那幾輪完全沒有——沒有人會紅
@@ -1522,8 +1522,8 @@ interface PluginMiddleware {
  * 攤進子代理的那一份：{@link pluginMiddleware} 去掉名字撞上摘要器的那一顆。
  *
  * **偏離（登記，#327 動工時 demian 拍板）**：plugin 用同名換掉摘要器（`apps/harness/src/contained-backend.ts`
- * 教的那條路）的那一顆是**一份實例**，而摘要器的 `sessionId` 在閉包裡。攤過去的話它會蓋掉 {@link foldSubAgents}
- * 替每個子代理各建的那份，root 與子代理的歷史混進同一個檔——{@link foldSummarizer} 做成工廠要防的正是這件事。
+ * 教的那條路）的那一顆是**一份實例**，而摘要器認不出身分的呼叫用實例自己的會話名。攤過去的話它會蓋掉 {@link foldSubAgents}
+ * 替每個子代理各建的那份，root 與子代理的那種呼叫混進同一個檔——{@link foldSummarizer} 做成工廠要防的正是這件事。
  * dsh 那側子代理拿到同一套壓縮設定、狀態逐 session 分開；我們沒有「逐個建」的註冊介面，所以退一步：**那一顆只到
  * root**，子代理照舊用 fold 逐個建的那份（明著關掉摘要時是基座自己的）。真的要子代理也吃那份設定時，開卡加工廠。
  *
@@ -1539,7 +1539,7 @@ function subagentPluginMiddleware({ prepended, rest, last }: PluginMiddleware): 
  * 提醒器，或在明著關掉時回 `undefined`。
  *
  * **回一份實例而不是工廠，跟 {@link foldSummarizer} 相反，而且是量過的差別**：摘要器的
- * `sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史混進同一個檔；提醒器的 closure 裡
+ * closure 裡有認不出身分時用的會話名，共用會讓兩個 agent 的那種呼叫寫進同一個檔；提醒器的 closure 裡
  * 只有設定，鏈每次從 `state.messages` 現算，而 `state` 本來就逐 thread、逐 agent 各一份。
  *
  * @param options - 組裝點自有的那些。
@@ -1607,14 +1607,14 @@ function repeatReminderDisposition(
 /**
  * 摘要器的**工廠**。明著關掉時工廠給的是同名空殼。
  *
- * **回工廠而不是一份實例，是量出來的。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`，而 `sessionId` 在
- * `summarization.ts` 的 `createSummarizer` 裡生一次、跟著那顆實例走（#2416）。一份實例同時掛在 root 與每個
- * subagent 上的話，**它們共用那個會話名**——實測到的下場是 root 與 subagent 的歷史
- * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話。
+ * **回工廠而不是一份實例。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`。`summarization.ts` 的 `createSummarizer`
+ * 照切點表的鍵（thread 加呼叫身分）每次委派各生一個 `sessionId`，認不出身分的呼叫退回那顆實例自己的一個（#2451）。
+ * 一份實例同時掛在 root 與每個 subagent 上的話，那種呼叫**共用實例那個會話名**，root 與 subagent 的歷史
+ * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話（#2416）。
  *
  * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次
  * `createSummarizationMiddleware({ backend })`，不共用。基座的 `task` 工具另外還替 subagent 的 state
- * 塞一個新的會話 id，我們的摘要器不讀它——會話名只看實例，所以答案是別共用。
+ * 塞一個新的會話 id，我們的摘要器不讀它——會話名看呼叫身分，認不出時看實例，所以答案是別共用。
  *
  * **關掉是給空殼，不是不給。** 不給的話基座會補回它自己那顆——一組沒有人在檢查的門檻，
  * 加上寫死的 `/conversation_history`，那正是

@@ -24,7 +24,7 @@
  * ## 鍵
  *
  * `thread_id` 加上這次呼叫的身分（`session-address.ts` 的 {@link toolCallSessionAddress}：root、前景子代理的 runId、背景子代理的
- * 背景 id），同 `sessions.forCall` 認日誌用的那一把。歷史檔的會話名不在這裡，跟著摘要器實例走。
+ * 背景 id），同 `sessions.forCall` 認日誌用的那一把。摘要器的歷史檔會話名也用這一把（{@link summaryCallKey}），每把鍵一個。
  *
  * ## 清理
  *
@@ -64,7 +64,7 @@ export class SummaryCutoffTable {
    * @returns 切點；沒有、或條目不是這份 state 的，回 `undefined`。
    */
   lookup(config: unknown, messages: readonly BaseMessage[]): SummaryCutoff | undefined {
-    const key = keyOf(config);
+    const key = summaryCallKey(config);
     if (key === undefined) return undefined;
     const entry = this.#entries.get(key);
     if (entry === undefined) return undefined;
@@ -87,7 +87,7 @@ export class SummaryCutoffTable {
    * @param cutoff - 切點。
    */
   record(config: unknown, messages: readonly BaseMessage[], cutoff: SummaryCutoff): void {
-    const key = keyOf(config);
+    const key = summaryCallKey(config);
     if (key === undefined) return;
     const anchor = cutoff.cutoffIndex >= 1 ? messages[cutoff.cutoffIndex - 1] : undefined;
     this.#entries.set(key, {
@@ -98,8 +98,13 @@ export class SummaryCutoffTable {
   }
 }
 
-/** 認不出身分（不在圖裡）就沒有鍵：那次呼叫不讀也不寫。沒有 `thread_id` 的呼叫共用空字串那一格，靠訊息驗證分開。 */
-function keyOf(config: unknown): string | undefined {
+/**
+ * 這次呼叫在切點表上的鍵：`thread_id` 加上呼叫身分，見檔頭〈鍵〉。
+ *
+ * @param config - `{ configurable }`，同 `sessions.forCall`。
+ * @returns 鍵；認不出身分（不在圖裡）回 `undefined`。沒有 `thread_id` 的呼叫共用空字串那一格。
+ */
+export function summaryCallKey(config: unknown): string | undefined {
   const address = toolCallSessionAddress(config);
   if (address === undefined) return undefined;
   return `${callThreadId(config) ?? ''}\u0000${sessionAddressKey(address)}`;

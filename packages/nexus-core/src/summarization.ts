@@ -143,6 +143,7 @@ import {
   applySummaryCutoff,
   noteSummaryCutoff,
   previousSummaryCutoff,
+  summaryCallKey,
   summaryCutoffIndex,
   SummaryCutoffTable,
   withSummaryCutoffs,
@@ -727,12 +728,24 @@ export function createSummarizer(
   const warn = report ?? ((message: string) => console.warn(message));
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
-  // 歷史檔的會話名：這顆摘要器一個，各保留則數的實例共用（{@link withRetainedTail}）。
-  const sessionId = `session_${randomUUID().substring(0, 8)}`;
+  // 歷史檔的會話名：每把切點表的鍵（thread 加呼叫身分，所以每次委派各一把）第一次寫時生一個，各保留則數的實例共用這張表
+  // （{@link withRetainedTail}）。認不出身分的呼叫用這顆摘要器自己那一個。
+  const newSessionId = () => `session_${randomUUID().substring(0, 8)}`;
+  const ownSessionId = newSessionId();
+  const sessionIds = new Map<string, string>();
+  const sessionIdOf = (request: unknown): string => {
+    const key = summaryCallKey({
+      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+    });
+    if (key === undefined) return ownSessionId;
+    let sessionId = sessionIds.get(key);
+    if (sessionId === undefined) sessionIds.set(key, (sessionId = newSessionId()));
+    return sessionId;
+  };
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
     const base = createSummarizerEngine({
       backend: staging?.backend ?? backend,
-      sessionId,
+      sessionIdOf,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
       // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
@@ -2217,7 +2230,7 @@ export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
  *
  * 它只做一件事：把驗過的設定提供成 {@link SUMMARIZATION_SERVICE} 服務。
  * **摘要器不在這裡建**——它由 {@link ./fold.ts | foldRegistry} 逐個 agent 各建一份
- * （`sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史寫進同一個檔）。
+ * （認不出身分的呼叫用實例自己的會話名，共用會讓兩個 agent 的那種呼叫寫進同一個檔）。
  *
  * **關掉它跟前兩顆不同形。** `disabled: true` 之後 fold 發出去的不是「沒有」，是一顆
  * **同名空殼**——基座無條件建的那顆摘要器靠同名取代才消得掉，真的不掛的話它會補回來。
