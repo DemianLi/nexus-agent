@@ -35,7 +35,7 @@
  * @module
  */
 
-// eslint-disable-next-line no-restricted-imports -- 審批閘門的 listener 型別今天只在 core 匯出
+// eslint-disable-next-line no-restricted-imports -- 審批閘門的 listener 型別今天只在 core 匯出，#2537 拿掉
 import type { PreToolListener } from '@nexus/core';
 import { z } from 'zod';
 

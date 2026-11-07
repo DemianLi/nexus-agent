@@ -26,7 +26,7 @@
  * @module
  */
 
-// eslint-disable-next-line no-restricted-imports -- 外部內容前綴今天只在 core 匯出
+// eslint-disable-next-line no-restricted-imports -- 外部內容前綴今天只在 core 匯出，#2537 拿掉
 import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
 
 /**

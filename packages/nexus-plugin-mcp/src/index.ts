@@ -11,9 +11,9 @@
 
 import type { Tool } from '@modelcontextprotocol/client';
 import type { Context } from '@nexus/cordis';
-// eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出
+// eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出，#2537 拿掉
 import { CHANNEL_SERVICE } from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core；其餘是相容層暫時路徑用的，#2535 拿掉
+// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core 匯出，#2537 拿掉；其餘是相容層暫時路徑用的，#2535 拿掉
 import type {
   ApprovalChannel,
   NexusPlugin,

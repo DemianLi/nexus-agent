@@ -27,9 +27,9 @@
 
 import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-// eslint-disable-next-line no-restricted-imports -- 外部內容前綴、引用規則與停止訊號今天只在 core 匯出，還沒有定義套件可取
+// eslint-disable-next-line no-restricted-imports -- 外部內容前綴、引用規則與停止訊號今天只在 core 匯出，還沒有定義套件可取；#2537 拿掉
 import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, turnCancelSignalOf } from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- 系統提示詞的段序今天只在 core 匯出
+// eslint-disable-next-line no-restricted-imports -- 系統提示詞的段序今天只在 core 匯出，#2537 拿掉
 import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { ToolThread, ToolThreadSection } from '@nexus/tools';
 import { z } from 'zod';
