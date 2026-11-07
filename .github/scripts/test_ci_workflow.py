@@ -444,6 +444,13 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
+        for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
+                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'peer-socket-auth',
+                     'forwarded-principal', 'per-thread.integration.test'):
+            self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
+        # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
+        self.assertEqual(self.rust(['apps/harness/src/serve.ts']), 'false')
+        self.assertEqual(self.rust(['apps/harness/src/wire-handler.ts']), 'false')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
 
@@ -510,6 +517,16 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(download['with']['name'], 'sandbox-spawner-linux-x64')
         names = [s.get('name') for s in steps]
         self.assertIn('--spawner "$RUNNER_TEMP/spawner"', steps[names.index('打包')]['run'])
+
+    def test_integration_runs_against_the_built_binaries(self) -> None:
+        """兩種架構都拿編好的 spawner 與監督行程跑整合測試；env 沒設時測試整支跳過，CI 照樣綠，所以 env 與清單都要釘（#2341）。"""
+        release = '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/'
+        for job in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            step = next(s for s in self.ci['jobs'][job]['steps'] if s.get('name') == '真的 spawner 跑整合測試')
+            for suite in ('sandbox-spawner', 'git-sandbox', 'mcp-sandbox', 'kernel-file-lock', 'per-thread'):
+                self.assertIn(f' src/{suite}.integration', step['run'], (job, suite))
+            self.assertEqual(step['env']['NEXUS_SPAWNER_BIN'], release + 'nexus-sandbox-spawner', job)
+            self.assertEqual(step['env']['NEXUS_SUPERVISOR_BIN'], release + 'nexus-supervisor', job)
 
     def test_light_mode_still_builds(self) -> None:
         result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
