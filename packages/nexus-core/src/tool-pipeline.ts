@@ -43,15 +43,15 @@
  *    只對 `ToolMessage` 結果派發；`Command` 只走 `tools/result`（`kind: 'command'`，不能改）。
  * 3. **拋出來的錯到 `tools/post-execute` 時是圍堵會翻的那則訊息，接受就原樣再拋。** 「拋錯翻成訊息」仍是圍堵（最外層）的事；
  *    post 先用同一組翻譯（`containment.ts` 的 `formatToolFailure`／`formatToolTimeout`／`classifyThrownToolError`）造一則給監聽者看，
- *    接受就把同一個錯物件往外拋、由圍堵照舊翻與記，替換就回替換過的那則。逾時那句的毫秒數各自量，接受之後模型收到的可能差幾毫秒。
+ *    接受就把同一個錯物件往外拋、由圍堵照舊翻與記，替換就回替換過的那則。
  *    中斷與這一輪被中止的錯不派發。
  * 4. **resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次。** 核准的 `interrupt()` 穿過之後，同一個呼叫以同一個 `callId`
  *    重進（見 `containment.ts`）。dsh 沒有這回事。**`tools/pre-execute` 的監聽者必須冪等。**
  * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`）。要重試得在 `next()` 外面自己重造呼叫，不能重叫
  *    `next()`。短路（不呼叫 `next()`、回自己的結果）可以。
  * 6. **`tools/pre-execute` 沒有 `ask`／`cancel`**：範圍，不是表達不出來。
- * 7. **結果多一份文字視圖**：`PipelineResult.blocks` 是內容區塊，`content` 是由它導出的文字（{@link pipelineTextOf}），兩者都在時以
- *    `blocks` 為準。交回的結果與 `replace` 給其中一個。`content` 留著是給只讀文字的監聽者，不必自己串區塊。
+ * 7. **結果多一份文字視圖**：`PipelineResult.blocks` 是內容區塊，`content` 是由它導出的文字（{@link pipelineTextOf}）。
+ *    `tools/execute` 交回的結果兩者都在時以 `blocks` 為準；`replace` 只能給其中一個，兩個都給或都不給拋 `TypeError`。`content` 留著是給只讀文字的監聽者，不必自己串區塊。
  * 8. **`tools/post-execute` 只有 `accept`／`replace`**（範圍，不是表達不出來）：沒有 dsh 的 `block` 與 `additionalContexts`，
  *    等到有消費者要用再加。
  *
@@ -119,7 +119,7 @@ export type PipelineContentBlock = Readonly<{ type: string } & Record<string, un
  * 一次呼叫落定成什麼，監聽者看到的樣子。唯讀。
  *
  * - `message`：工具回了一則 `ToolMessage`。**`blocks` 是它的內容，`content` 由 `blocks` 導出**（{@link pipelineTextOf}：只串
- *   `text` 區塊，同 `ToolMessage.text`）。兩者都在時以 `blocks` 為準。
+ *   `text` 區塊，同 `ToolMessage.text`）。
  * - `command`：工具回了 `Command`（帶狀態更新）或別的非訊息值；**沒有可看的 `content`**，也不能被 `tools/post-execute` 替換
  *   （偏離 2）。`isError` 讀的是 `Command` 裡屬於這次呼叫的那則訊息。
  */
@@ -196,7 +196,7 @@ declare module './events.js' {
     /**
      * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
      * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑；回 `command` 結果而沒呼叫
-     * `next()` 會拋。呼叫了 `next()` 又交回別的 `message` 結果，換掉的是內容與狀態，`tool_call_id`、`artifact`、`id` 等沿用本體那則。
+     * `next()` 會拋。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
      * @mode waterfall
@@ -208,7 +208,7 @@ declare module './events.js' {
     /**
      * 接受或替換一則工具結果。`next()` 即接受；回 `{ kind: 'replace', content }` 或 `{ kind: 'replace', blocks }` 換掉模型收到的內容
      * （`status`、`artifact`、`additional_kwargs`、錯誤碼沿用原本的）。**只對 `ToolMessage` 結果派發**：`Command` 不經過這裡（偏離 2）。
-     * 工具拋的錯也到這裡，`result` 是圍堵會翻出來的那則錯誤訊息；`next()`（接受）就原樣再拋那個錯（偏離 3）。
+     * 工具拋的錯也到這裡，`result` 是圍堵會翻出來的那則錯誤訊息；`next()`（接受）就原樣再拋那個錯（偏離 3）。中斷、`Command` 這類控制流與這一輪被中止的錯不派發，原樣往外拋。
      * @param exec - 剛跑完的這次呼叫。
      * @param result - 工具落定的結果，唯讀。
      * @param next - 往內一位；最內層回 `accept`。
@@ -317,7 +317,7 @@ function frozenBlock(block: unknown): PipelineContentBlock {
 }
 
 /**
- * 一則 `ToolMessage` 的內容造成凍結的區塊。陣列內容不能原地凍：別處還會改它（圖片省略在區塊上標 `offloaded`），所以複製。
+ * 一則 `ToolMessage` 的內容造成凍結的區塊。陣列內容不原地凍：那是對話狀態裡那則訊息自己的陣列，凍了會改到模型收到、存檔點存的那一份，所以複製。
  */
 function frozenBlocksOf(content: unknown): readonly PipelineContentBlock[] {
   if (typeof content === 'string') return Object.freeze([frozenBlock(content)]);
@@ -328,7 +328,7 @@ function frozenBlocksOf(content: unknown): readonly PipelineContentBlock[] {
 /**
  * 由內層（`next()`）回來的值造出監聽者看的 {@link PipelineResult}（凍結）。
  *
- * `blocks` 第一次讀才複製（getter）：圍堵每次呼叫都造視圖給 `tools/result`，出廠的觀察者只讀 `isError`，帶大圖的結果不必每次都複製。
+ * `blocks` 第一次讀才複製（getter）：有 `tools/result` 監聽者時，圍堵每次呼叫都造視圖給它；出廠的那一位（present）只讀 `isError`，帶大圖的結果不必每次都複製。
  *
  * @param result - 內層（`next()`）回來的值（或圍堵翻出來的訊息）。
  * @param callId - 這次呼叫的 id，用來在 `Command` 裡認出屬於它的那則。
@@ -358,7 +358,6 @@ export function toolResultView(result: unknown, callId: string): PipelineResult 
   return Object.freeze({ kind: 'command', isError: outcome.isError, ...error });
 }
 
-/** `{ name, code }` 兩格都是字串。 */
 function isErrorInfo(value: unknown): value is ToolErrorInfo {
   const { name, code } = (value ?? {}) as { name?: unknown; code?: unknown };
   return typeof value === 'object' && typeof name === 'string' && typeof code === 'string';
@@ -419,7 +418,7 @@ function rebuildMessage(
   return code === undefined ? replaced : markToolError(replaced, code);
 }
 
-/** 把監聽者在 `tools/execute` 短路時回的 `message` 結果造成一則 `ToolMessage`。 */
+/** 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時，或叫了 `next()` 而本體回的不是 `ToolMessage` 時。 */
 function materialize(view: PipelineExecuteResult, exec: PipelineExecution): ToolMessage {
   const body = view.kind === 'message' ? bodyOf(view) : undefined;
   if (body === undefined) {
@@ -497,7 +496,6 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
     });
     // 沒人短路（或原樣回了 `next()` 的結果）：把內層原本的物件交回去，錯誤碼掛在它身上。
     if (viewOfRaw !== undefined && view === viewOfRaw) return raw;
-    // 叫了 `next()` 又交回別的訊息結果：從本體那則造，只換內容與狀態。
     if (viewOfRaw !== undefined && ToolMessage.isInstance(raw) && view.kind === 'message') {
       const body = bodyOf(view);
       if (body === undefined) throw badDecision('tools/execute', view);

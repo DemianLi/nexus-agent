@@ -266,7 +266,7 @@ export interface ToolResultOutcome {
    * 最終那則訊息的內容區塊，凍結；字串內容視為一格 `text`。結果是 `Command` 時沒有。`2.4.0` 起才有。
    */
   readonly blocks?: readonly Readonly<{ type: string } & Record<string, unknown>>[];
-  /** `blocks` 的文字（只串 `text` 區塊）。結果是 `Command` 時沒有。 */
+  /** `blocks` 的文字（只串 `text` 區塊）。結果是 `Command` 時沒有。`2.4.0` 起才有。 */
   readonly content?: string;
 }
 
