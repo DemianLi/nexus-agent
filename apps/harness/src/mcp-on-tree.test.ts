@@ -75,6 +75,8 @@ interface Case {
   readonly pool?: boolean;
   /** 再插一列 `srv2`（新協定、有資源）：同一條 thread 上兩台 server 共用一個 hub。 */
   readonly second?: boolean;
+  /** 第二列改用這個 `serverName`（撞名那一格用）。 */
+  readonly secondName?: string;
   /** 換掉腳本模型的 `turns`；給了就不看 `tool`。 */
   readonly turns?: readonly unknown[];
 }
@@ -310,7 +312,7 @@ function overlay(dir: string, spec: Case, marker: string): string {
     ...spec.config,
   };
   const second = {
-    serverName: 'srv2',
+    serverName: spec.secondName ?? 'srv2',
     approval: { default: 'allow' },
     connection: {
       transport: 'stdio',
@@ -508,5 +510,40 @@ it(
     const baseline = JSON.parse(readFileSync(BASELINE, 'utf8')) as Record<string, unknown>;
     if (only === undefined) expect(Object.keys(now)).toEqual(Object.keys(baseline));
     for (const key of Object.keys(now)) expect(now[key], key).toEqual(baseline[key]);
+  },
+);
+
+it(
+  '同一條 thread 上兩列同一個 serverName：組裝失敗，訊息帶後掛那一列，先掛那一列的子行程收掉',
+  { timeout: 120_000 },
+  async () => {
+    const root = createCordisRoot();
+    cleanups.push(() => root.dispose());
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-on-tree-'));
+    chmodSync(dir, 0o700);
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const marker = `--nexus-mcp-on-tree=${dir}`;
+    const loaded = await loadDefaultPlugins(
+      {
+        env: { [HARNESS_HOME_ENV]: dir },
+        patches: [overlay(dir, { server: 'legacy', second: true, secondName: SERVER }, marker)],
+        warn: () => {},
+      },
+      { tree: root.tree },
+    );
+    const failure = await createCliAgent(
+      { live: false, agentLoop: 'langgraph' },
+      loaded.plugins,
+      dir,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(
+      /mcp-srv2[\s\S]*MCP 伺服器 "srv" 在這條 thread 上已經有一列掛了，同一個 serverName 不能掛兩次/u,
+    );
+    expect((failure as Error).message).not.toContain('mcp-srv (');
+    await waitFor(() => pidsWith(marker).length === 0, 10_000);
   },
 );

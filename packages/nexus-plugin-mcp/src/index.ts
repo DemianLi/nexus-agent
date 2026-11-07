@@ -236,25 +236,22 @@ const SERVERS = Symbol('mcp:servers');
 /**
  * 在一條 thread 上掛一台 server。
  *
- * async 的，裡面做五件事：預留這台伺服器的名字、包裝 command（宣告了 `sandbox` 包進沙箱，其餘 stdio 交給 guard）、連上 server、`tools/list` 拿工具、逐個註冊。五件事
- * **都在載入期**——agent 跑起來的時候工具集合已經定了。
+ * async 的，裡面做五件事：預留這台伺服器的名字、包裝 command（宣告了 `sandbox` 包進沙箱，其餘 stdio 交給 guard）、連上 server、
+ * `tools/list` 拿工具、逐個註冊。五件事**都在組這條 thread 時**——agent 跑起來的時候工具集合已經定了。
  *
- * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
+ * **失敗分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
  *
  * - **同一條 thread 上同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，後來那一列在連線之前就拋。
  *   名字預留在 `thread.shared`，那一列收掉（或在組裝裡失敗）時釋放。
- * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
- *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
+ * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、經 `thread.logger`
+ *   交出一則警告，那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。連線、列工具、註冊三步在同一個 `try` 裡。
  *
- * 收住的做法是自己 `catch`：連線、列工具、註冊三步都在同一個 `try` 裡，蓋得到 dsh 的三種。
+ * **掛上那一刻就連不上的列，這一條 thread 補不了工具**：一條 thread 組好之後工具就定了（`packages/nexus-core/src/load.ts` 檔頭）。
+ * serve 有連線池（[`pool.ts`](./pool.ts)，[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）在背景重試，連上之後組的 thread 有工具，
+ * 之前組好的沒有；CLI 一次組裝就是整個行程，不重連。
  *
- * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
- * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
- * [#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），照 dsh 在背景重試，連上之後組的對話有工具，之前組好的沒有；CLI 一次組裝
- * 就是整個行程，不重連。
- *
- * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），政策照 dsh，實作與偏離見
- * [`supervisor.ts`](./supervisor.ts) 檔頭：已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
+ * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），見 [`supervisor.ts`](./supervisor.ts) 檔頭：
+ * 已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
  *
  * **每條 thread 才有的狀態一律活在這裡**：行程級的 {@link apply} 只登記來源，連線、工具與 hub 都是每條 thread 各一份。
  *
