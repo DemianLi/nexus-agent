@@ -247,6 +247,23 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `RowVerdict.active.resultListeners` → `FoldedContributions.resultListeners` → `registerFolded` 逐位進這條 thread 的 `registry.events.on('tools/result', l)`——**派發的時機與次序仍是核心圍堵的**
   （`tool/call` → 觀察者 → `tool/result`，觀察者的失敗被隔離），這一層只決定「誰聽」。工具與觀察者是**同一次折疊進同一條 thread**，所以之後列被卸載也不拆開。
   次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
+- **工具接縫 2.5.0：逐條 thread 的工具來源**（`@nexus/tools`，#2533）。`ToolRegistry` 多一個**選配**方法 `threadSource(source, { services? })`：登記一個來源，宿主每組一條 thread 就在那一列
+  折進 thread 的位置 await 它一次，交給它這條 thread 的 `ToolThread`：`register`、`gate`、`admit`、`section`（2.6.0 起）、`onDispose`、`logger`、`services.get` 與 `shared`。**消費者**宣告 `^2.5.0`（用 `section` 的宣告 `^2.6.0`），並在 `apply` 裡檢查
+  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`apps/harness/src/thread-source.ts`）；
+  沒有樹的呼叫端走 `mountDetached` 取同一格，授權一律查出廠的表。樹上沒有來源的列，`apply` 只做 `registerFolded`、同步回傳。
+  - **給誰用**：工具、閘門與隱藏規則要**每條 thread 各一份**、而且要在組 thread 當下讀宿主服務才定得出來的插件。消費者是 mcp（#2533 把它搬上樹），目前只有它用：憑證逐 thread 輪替（池鍵帶憑證指紋，#1989）、serve 用連線池而 CLI 每列自己連、
+    放棄重連之後工具藏起來但呼叫得到說明（#2430），這些都要在那一條 thread 的組裝裡讀 `channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`。只需要行程級工具的插件照舊用 `register`。
+  - **最小權限**：插件在 `threadSource` 宣告要讀哪幾個服務；宿主據授權表（`apps/harness/src/thread-service-grants.ts`，鍵是模組 specifier）判斷，宣告了沒授權的，**登記當下就拋**、那一列起不來；
+    `thread.services.get` 對沒宣告的也拋。出廠的授權表只有 `@nexus/plugin-mcp` 那五格。樹上的插件不一定是我們寫的，而這些服務裡有憑證、連線池與答題管道，所以不給「任何插件讀任何服務」。
+  - **`shared`**：同一條 thread 上、**同一顆插件**（同一個模組命名空間）的各列共用一份物件，給同一顆插件的多列互相協調（例如 server 名撞名、共用一顆資源工具的 hub）；不同插件拿到不同份，下一條 thread 是新的一份。
+  - **`admit`**：在這條 thread 的工具清單那一步（`createToolListStepMiddleware`）拿掉不放行的工具；一個名字都沒拿掉時請求原樣往內交。名字省略時是 `<列 id>:admit:<序號>`。
+  - **`section`**（2.6.0）：在這條 thread 的系統提示詞中段登記一段，轉給這條 thread 的 `registry.prompt.section`，名字、`order`、`separator` 與重名、`order` 的檢查都跟相容層那一格相同。
+    `text` 給函式就是每次模型呼叫現算：段的內容要等這條 thread 上所有列都掛完才定得下來的（mcp 的 server 指引與可用的資源 server，後掛的列也要算進去）用它。
+  - **失敗**：來源 reject 等於那一列的 `apply` 拋錯，走相容層同一條路——預設模式整次組裝失敗，`perEntry` 模式那一列掉（在可少掛清單上的成了警告），訊息帶那一列的 origin。宿主多做一件事：
+    **先照反序跑完這一列每個來源已登記的 `onDispose`**（含先前已 resolve 的），再原樣拋出原本的錯誤（收資源失敗不蓋掉它）；全部 resolve 之後才交給這條 thread 的收尾。
+    來源結束（resolve 或 reject）之後再呼叫 `register`、`gate`、`admit`、`section`、`onDispose` 會拋，`services.get`、`shared`、`logger.warn` 不受限。
+  - **為什麼不做行程級的 `admit`**：要藏的工具是那一條 thread 自己連出去的那一份（放棄重連是逐條 thread、逐份連線的事），行程級的規則看不到是哪一條 thread 的哪一份連線，只能藏所有 thread 的同名工具。
+  - **撤除條件**：憑證與連線池改成行程級服務、mcp 能在 `apply` 裡連一次線的那一天，這一格連同 `thread-source.ts` 與授權表一起拿掉，mcp 改用 `register` 與 `gate`。
 - **fs 接縫 1.1.0：工作區事實跟著把手走**（`@nexus/fs`，#1469 Q2 (a)）。`FsService` 多 `hasWorkspace(): boolean`；`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的路由前綴也併進來（組裝點明著交的在前、plugin 掛的在後，重複 fold 不累加）。
   兩樣都在 **fold 填 backend 的同一處**算（`settleFsService(service, backend, facts)` 是唯一的算法，`fold.ts` 把 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 與 `registry.backend.mounts()` 當 `facts` 交進去），不在別處再算一次。
   **`backend.mount()` 的前綴限制（#1775）**：外掛掛的路由前綴不得與組裝點自己的路由重疊——`/shared`、`/attachments`、`/conversation_history`、`/large_tool_results`——相同、更深、更上層（含根 `/`）一律被拒：`fold` 的 `reservedBackendPrefixes` 當場拋，訊息點名外掛與重疊的前綴。外掛的路由包在組裝點預設路由的外面，不擋的話外掛可以遮住唯讀共用區。CLI 與 serve 都生效；沒有啟用的路由（沒有附件、沒有工具結果暫存、沒有共用區）不在保留清單裡，該前綴照常可掛——沒有暫存時組裝點那一格只是記憶體墊底，被遮住沒有安全後果。
@@ -584,7 +601,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照），`goal` 是第十二顆（#1486，第三個插件提供、宿主消費的服務：`goals` 查找表，服務查找時才建），`time-context` 是第十三顆（#1625，`agent/pre-step` 的第二位消費者，沒有新接縫：同一個 `agentLoop` 登記 listener、同一個 `sessionLookup` 讀這條 thread 的日誌；排在 `agent-instructions` 正下方，同一次 invoke 裡讀數在 AGENTS.md 基線之後），`permission-presets` 是第十四顆（#1491，第四個插件提供、宿主消費的服務：`permissionPresets`，加上會話參與者接縫 `sessionLookup.join` 與 `@nexus/fs` 的 `hasContainment()`（行程級；可寫根 `FsService.workspaceRoot()` 是 2.0.0 起逐條 thread 的，#1774）；兩顆旋鈕改成以日誌為準），`quickjs` 是第十五顆（#2353，沒有新接縫：只用 `tools`；不在出廠清單上，部署方用 patch `insert` 一列才掛，掛上就經 Include 上樹）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照），`goal` 是第十二顆（#1486，第三個插件提供、宿主消費的服務：`goals` 查找表，服務查找時才建），`time-context` 是第十三顆（#1625，`agent/pre-step` 的第二位消費者，沒有新接縫：同一個 `agentLoop` 登記 listener、同一個 `sessionLookup` 讀這條 thread 的日誌；排在 `agent-instructions` 正下方，同一次 invoke 裡讀數在 AGENTS.md 基線之後），`permission-presets` 是第十四顆（#1491，第四個插件提供、宿主消費的服務：`permissionPresets`，加上會話參與者接縫 `sessionLookup.join` 與 `@nexus/fs` 的 `hasContainment()`（行程級；可寫根 `FsService.workspaceRoot()` 是 2.0.0 起逐條 thread 的，#1774）；兩顆旋鈕改成以日誌為準），`quickjs` 是第十五顆（#2353，沒有新接縫：只用 `tools`；不在出廠清單上，部署方用 patch `insert` 一列才掛，掛上就經 Include 上樹），`mcp` 是第十六顆（#2533，`tools.threadSource` 的第一位消費者：工具、閘門、隱藏規則與提示詞段都逐條 thread 登記，連線沒有池時逐條 thread 開、有池時向池取用；同樣不在出廠清單上，用 patch `insert` 才掛）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |

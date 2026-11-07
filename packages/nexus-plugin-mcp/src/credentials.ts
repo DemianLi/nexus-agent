@@ -48,6 +48,7 @@ export const headerValueSchema = z.union([
 /** 這一列引用到的憑證：名字 → 值。 */
 export type ResolvedCredentials = ReadonlyMap<string, string>;
 
+// eslint-disable-next-line no-restricted-syntax -- 唯讀的空表，沒有人寫進去
 const NONE: ResolvedCredentials = new Map();
 
 /** 這一列每一處引用：欄位路徑與憑證名。 */

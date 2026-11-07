@@ -1,27 +1,29 @@
 /**
  * `@nexus/plugin-mcp`——把一台外部 MCP server 的工具接進 agent。
  *
- * **一個 plugin 實例對一台 server**，照 dsh 的 `mcp-client`。同一個工廠掛載多次是合法的
- * （`NexusPlugin.name` 不唯一）：`createMcpPlugin({ serverName: 'github', ... })` 與
- * `createMcpPlugin({ serverName: 'linear', ... })` 兩個都叫 `mcp`，各自的工具在
- * `mcp__github__*` 與 `mcp__linear__*` 兩個命名空間下井水不犯河水。兩次用同一個
- * `serverName`，會在 registry 那一層以「同層同名工具」撞掉——那正是撞名該發生的地方。
+ * **樹上的函式插件**（#2533），具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。**一列對一台 server**：
+ * 同一顆插件掛多列是合法的，`serverName: 'github'` 與 `serverName: 'linear'` 兩列的工具各在 `mcp__github__*` 與 `mcp__linear__*`
+ * 底下。同一條 thread 上兩列用同一個 `serverName`，後來那一列在連線之前就拋（{@link mountServer}）。
  *
  * 連線用 `@modelcontextprotocol/client` 的 SDK client（`connection.ts`），重連監督自己做（`supervisor.ts`）。每顆工具是一個
  * `NexusTool`，`parameters` 是 server 給的 `inputSchema` 原樣（`rawParameters: true`），一次呼叫做什麼見 `tool-call.ts`。
  */
 
 import type { Tool } from '@modelcontextprotocol/client';
-import { admittedTools, CHANNEL_SERVICE, createToolListStepMiddleware } from '@nexus/core';
+import type { Context } from '@nexus/cordis';
+// eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出，#2537 拿掉
+import { CHANNEL_SERVICE } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core 匯出，#2537 拿掉；其餘是相容層暫時路徑用的，#2535 拿掉
 import type {
-  AgentMiddleware,
   ApprovalChannel,
   NexusPlugin,
   PluginEntry,
   PluginRegistry,
   ToolAdmission,
 } from '@nexus/core';
-import type { NexusTool } from '@nexus/tools';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { toolsToken } from '@nexus/tools';
+import type { NexusTool, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
@@ -32,9 +34,10 @@ import {
   MCP_CREDENTIALS_SERVICE,
   resolveCredentials,
 } from './credentials.js';
-import type { ResolvedCredentials } from './credentials.js';
+import type { McpCredentials, ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient } from './connection.js';
 import { ensureHub } from './hub.js';
+import { registryThread } from './registry-thread.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -42,7 +45,7 @@ import type { ReconnectPolicy } from './supervisor.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
-export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES, UNTRUSTED_CONTENT_PROMPT } from './hub.js';
+export { RESOURCE_TOOL_NAMES, UNTRUSTED_CONTENT_PROMPT } from './hub.js';
 export { reconnectSchema } from './supervisor.js';
 export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
@@ -229,174 +232,189 @@ export type McpConfig = z.infer<typeof mcpConfigSchema>;
 /** 工廠收的東西：schema 的輸入面。 */
 export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 
+/** `thread.shared` 上放已預留的 `serverName` 的那一格。 */
+const SERVERS = Symbol('mcp:servers');
+
 /**
- * MCP plugin。
+ * 在一條 thread 上掛一台 server。
  *
- * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、包裝 command（宣告了 `sandbox` 包進沙箱，其餘 stdio 交給 guard）、連上 server、`tools/list` 拿工具、逐個註冊。五件事
- * **都在載入期**——agent 跑起來的時候工具集合已經定了。
+ * async 的，裡面做五件事：預留這台伺服器的名字、包裝 command（宣告了 `sandbox` 包進沙箱，其餘 stdio 交給 guard）、連上 server、
+ * `tools/list` 拿工具、逐個註冊。五件事**都在組這條 thread 時**——agent 跑起來的時候工具集合已經定了。
  *
- * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
+ * **失敗分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
  *
- * - **同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，這一列 `apply` 拋錯。dsh 在連線之前
- *   先預留名字、重複就讓那一個實例失敗（`packages/mcp/mcp-client/src/index.ts:160-176`）。預留用一個服務名
- *   （`mcp:server:<serverName>`）：服務是單一佔位、重名就拋，而且訊息指名兩個 plugin。
- * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
- *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
+ * - **同一條 thread 上同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，後來那一列在連線之前就拋。
+ *   名字預留在 `thread.shared`，那一列收掉（或在組裝裡失敗）時釋放。
+ * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、經 `thread.logger`
+ *   交出一則警告，那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
- * 收住的做法是自己 `catch`：連線、列工具、註冊三步都在同一個 `try` 裡，蓋得到 dsh 的三種。
+ * **掛上那一刻就連不上的列，這一條 thread 補不了工具**：一條 thread 組好之後工具就定了（`packages/nexus-core/src/load.ts` 檔頭）。
+ * serve 有連線池（[`pool.ts`](./pool.ts)，[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）在背景重試，連上之後組的 thread 有工具，
+ * 之前組好的沒有；CLI 不在背景重試首連。
  *
- * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
- * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
- * [#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），照 dsh 在背景重試，連上之後組的對話有工具，之前組好的沒有；CLI 一次組裝
- * 就是整個行程，不重連。
+ * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），見 [`supervisor.ts`](./supervisor.ts) 檔頭：
+ * 已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
  *
- * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），政策照 dsh，實作與偏離見
- * [`supervisor.ts`](./supervisor.ts) 檔頭：已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
+ * **每條 thread 才有的狀態一律活在這裡**：行程級的 {@link apply} 只登記來源；工具、閘門、隱藏規則與 hub 每條
+ * thread 各一份。連線在沒有池時（CLI）每條 thread 一份，有池時（serve）向池取用、同一份設定整個行程共用（`pool.ts` 檔頭）。
  *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
- * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ * @param thread - 這條 thread。
+ * @param declared - 驗過的設定。
+ * @throws 同一條 thread 上已有一列掛了同一個 `serverName`；寫了 `failOnStartupError: true` 而這一列起不來。
  */
-export const mcpPlugin: NexusPlugin<McpConfig> = {
-  name: 'mcp',
-  Config: mcpConfigSchema,
-  async apply(registry: PluginRegistry, declared: McpConfig): Promise<void> {
-    const { serverName } = declared;
-    // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，照 dsh 讓這一列失敗、不收成警告。
-    registry.services.provide(`mcp:server:${serverName}`, { serverName });
-    // 包裝在連線、池之前：之後就是一條 command 換過的 stdio 設定，後面的路徑不必知道沙箱。
-    let config: McpConfig;
-    try {
-      config = await wrapStdio(
-        declared,
-        registry.services.get(MCP_SANDBOX_SERVICE),
-        registry.services.get(MCP_GUARD_SERVICE),
+export async function mountServer(thread: ToolThread, declared: McpConfig): Promise<void> {
+  const { serverName } = declared;
+  // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，這一列失敗、不收成警告。
+  const slots = thread.shared as { [SERVERS]?: Set<string> };
+  const reserved = (slots[SERVERS] ??= new Set());
+  if (reserved.has(serverName)) {
+    throw new Error(
+      `MCP 伺服器 "${serverName}" 在這條 thread 上已經有一列掛了，同一個 serverName 不能掛兩次`,
+    );
+  }
+  reserved.add(serverName);
+  thread.onDispose(() => {
+    reserved.delete(serverName);
+  });
+  // 包裝在連線、池之前：之後就是一條 command 換過的 stdio 設定，後面的路徑不必知道沙箱。
+  let config: McpConfig;
+  try {
+    config = await wrapStdio(
+      declared,
+      thread.services.get(MCP_SANDBOX_SERVICE) as McpSandboxWrapper | undefined,
+      thread.services.get(MCP_GUARD_SERVICE) as McpGuardWrapper | undefined,
+    );
+  } catch (error) {
+    unreachable(thread, declared, error);
+    return;
+  }
+  // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
+  const channel = thread.services.get(CHANNEL_SERVICE) as ApprovalChannel | undefined;
+  const elicitation = config.elicitation && channel?.kind === 'human';
+  // 憑證引用在連線之前解析（#1989）：解析不了就是這一列連不上，池裡不留東西。
+  let credentials: ResolvedCredentials;
+  try {
+    credentials = resolveCredentials(
+      config,
+      thread.services.get(MCP_CREDENTIALS_SERVICE) as McpCredentials | undefined,
+    );
+  } catch (error) {
+    unreachable(thread, config, error);
+    return;
+  }
+  // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
+  const pool = thread.services.get(MCP_POOL_SERVICE) as McpConnectionPool | undefined;
+  if (pool !== undefined) {
+    await applyShared(thread, config, await pool.acquire(config, elicitation, credentials));
+    return;
+  }
+  const attempts = attemptsOn(config, elicitation, credentials);
+  const label = `mcp-client(${serverName})`;
+  const registered: (() => void)[] = [];
+  let supervisor: Supervisor<Generation> | undefined;
+  let unregisterSource: (() => void) | undefined;
+  // 進度（掉線、第 n 次重連、放棄、連回來）交給 `thread.logger`：它記在這一列名下，重連發生在組裝之後也叫得動。外掛不自己寫
+  // 標準錯誤，印在哪由 CLI 與 serve 決定。
+  const logger = thread.logger;
+  const report = (message: string): void => {
+    logger.warn(message);
+  };
+  // dsh 這幾句是 error 級；插件 logger 只有 warn，所以退成 warn（`supervisor.ts` 檔頭偏離 6）。
+  const error = report;
+  try {
+    // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
+    const first = await attempts.first();
+    const names: string[] = [];
+    // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
+    const rawNameOf = new Map<string, string>();
+    for (const descriptor of first.listed.tools) {
+      const tool = nexusToolOf(descriptor, config, label, () => supervisor);
+      names.push(tool.name);
+      rawNameOf.set(tool.name, descriptor.name);
+      registered.push(thread.register(tool));
+    }
+    // 閘門跟工具一起進 `registered`：下面任何一步收住或拋，它跟工具一起撤掉，不留一位擋著不存在的工具的 listener。
+    const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
+    if (gate !== undefined) registered.push(thread.gate(gate));
+    const unknown = unknownExempt(config.approval, rawNameOf.values());
+    if (unknown.length > 0) {
+      thread.logger.warn(
+        `MCP 伺服器 "${serverName}" 的 approval.exempt 有 tools/list 沒列出的名字：${unknown.join('、')}` +
+          `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
       );
-    } catch (error) {
-      unreachable(registry, declared, error);
-      return;
     }
-    // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
-    const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
-    const elicitation = config.elicitation && channel?.kind === 'human';
-    // 憑證引用在連線之前解析（#1989）：解析不了就是這一列連不上，池裡不留東西。
-    let credentials: ResolvedCredentials;
-    try {
-      credentials = resolveCredentials(config, registry.services.get(MCP_CREDENTIALS_SERVICE));
-    } catch (error) {
-      unreachable(registry, config, error);
-      return;
-    }
-    // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
-    const pool: McpConnectionPool | undefined = registry.services.get(MCP_POOL_SERVICE);
-    if (pool !== undefined) {
-      await applyShared(registry, config, await pool.acquire(config, elicitation, credentials));
-      return;
-    }
-    const attempts = attemptsOn(config, elicitation, credentials);
-    const label = `mcp-client(${serverName})`;
-    const registered: (() => void)[] = [];
-    let supervisor: Supervisor<Generation> | undefined;
-    let unregisterSource: (() => void) | undefined;
-    // 進度（掉線、第 n 次重連、放棄、連回來）交給 `registry.logger`：`bind()` 在 `apply` 裡把「是誰」綁進去，重連發生在組裝之後
-    // 也叫得動。外掛不自己寫標準錯誤，印在哪由 CLI 與 serve 決定。
-    const logger = registry.logger.bind();
-    const report = (message: string): void => {
-      logger.warn(message);
-    };
-    // dsh 這幾句是 error 級；插件 logger 只有 warn，所以退成 warn（`supervisor.ts` 檔頭偏離 6）。
-    const error = report;
-    try {
-      // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
-      const first = await attempts.first();
-      const names: string[] = [];
-      // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
-      const rawNameOf = new Map<string, string>();
-      for (const descriptor of first.listed.tools) {
-        const tool = nexusToolOf(descriptor, config, label, () => supervisor);
-        names.push(tool.name);
-        rawNameOf.set(tool.name, descriptor.name);
-        registered.push(registry.tools.register(tool));
-      }
-      // 閘門跟工具一起進 `registered`：下面任何一步收住或拋，它跟工具一起撤掉，不留一位擋著不存在的工具的 listener。
-      const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
-      if (gate !== undefined) registered.push(registry.approvals.gate(gate));
-      const unknown = unknownExempt(config.approval, rawNameOf.values());
-      if (unknown.length > 0) {
-        registry.logger.warn(
-          `MCP 伺服器 "${serverName}" 的 approval.exempt 有 tools/list 沒列出的名字：${unknown.join('、')}` +
-            `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
-        );
-      }
-      // 指引與資源走同一條已經連上的 SDK client，不另開連線。指引上限已在 `connectGeneration` 查過：
-      // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
-      const { instructions } = first.listed;
-      const policy: ReconnectPolicy = config.reconnect;
-      const current = (supervisor = new Supervisor<Generation>(
-        {
-          label,
-          policy,
-          // 重連 = 收掉上一代的 SDK client、開一個新的再重新列工具：新子行程、新的 HTTP session。註冊的工具不綁哪一代，呼叫時才查目前這一代。
-          // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
-          // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
-          connect: () => attempts.connect(),
-          abandon: () => attempts.abandon(),
-          close: closeGeneration,
-          closed: (generation) => generation.closed,
-          // dispose 最後收掉最近開的 client：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
-          release: () => attempts.close(),
-          watch(generation, onDown) {
-            generation.onDown = onDown;
-          },
-          report,
-          error,
+    // 指引與資源走同一條已經連上的 SDK client，不另開連線。指引上限已在 `connectGeneration` 查過：
+    // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
+    const { instructions } = first.listed;
+    const policy: ReconnectPolicy = config.reconnect;
+    const current = (supervisor = new Supervisor<Generation>(
+      {
+        label,
+        policy,
+        // 重連 = 收掉上一代的 SDK client、開一個新的再重新列工具：新子行程、新的 HTTP session。註冊的工具不綁哪一代，呼叫時才查目前這一代。
+        // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
+        // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
+        connect: () => attempts.connect(),
+        abandon: () => attempts.abandon(),
+        close: closeGeneration,
+        closed: (generation) => generation.closed,
+        // dispose 最後收掉最近開的 client：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
+        release: () => attempts.close(),
+        watch(generation, onDown) {
+          generation.onDown = onDown;
         },
-        first,
-      ));
-      // 放棄重連之後，這一台的工具對模型隱藏（dsh 此時把工具從註冊表撤掉；我們的註冊表在組裝之後撤了沒有效果，
-      // 所以改在每次模型呼叫前把它們從請求的工具清單拿掉，見 `supervisor.ts` 檔頭偏離 4）。
-      registered.push(registry.middleware.use(hideTools(serverName, names, () => current.gaveUp)));
-      unregisterSource = ensureHub(registry).add(
-        resourceSource(serverName, instructions, config.toolCallTimeoutMs, () => {
-          const generation = current.current();
-          return generation?.sdk === undefined
-            ? undefined
-            : {
-                sdk: generation.sdk,
-                lost: () => {
-                  current.down(generation);
-                },
-                suspect: () => {
-                  probeLiveness(generation, () => {
-                    current.stalled(generation);
-                  });
-                },
-              };
-        }),
-      );
-    } catch (error) {
-      // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
-      // 之後載入器因為別的理由再撤一次也沒事）。
-      for (const undo of registered.reverse()) undo();
-      // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
-      // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
-      // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
-      await supervisor?.dispose();
-      await attempts.close();
-      unreachable(registry, config, error);
-      return;
-    }
+        report,
+        error,
+      },
+      first,
+    ));
+    // 放棄重連之後，這一台的工具對模型隱藏（dsh 此時把工具從註冊表撤掉；我們的註冊表在組裝之後撤了沒有效果，
+    // 所以改在每次模型呼叫前把它們從請求的工具清單拿掉，見 `supervisor.ts` 檔頭偏離 4）。
+    registered.push(
+      thread.admit(
+        hiddenAfterGiveUp(names, () => current.gaveUp),
+        {
+          name: `mcp-tools-guard:${serverName}`,
+        },
+      ),
+    );
+    unregisterSource = ensureHub(thread).add(
+      resourceSource(serverName, instructions, config.toolCallTimeoutMs, () => {
+        const generation = current.current();
+        return generation?.sdk === undefined
+          ? undefined
+          : {
+              sdk: generation.sdk,
+              lost: () => {
+                current.down(generation);
+              },
+              suspect: () => {
+                probeLiveness(generation, () => {
+                  current.stalled(generation);
+                });
+              },
+            };
+      }),
+    );
+  } catch (error) {
+    // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
+    // 之後載入器因為別的理由再撤一次也沒事）。
+    for (const undo of registered.reverse()) undo();
+    // 這裡的資源要自己收：`thread.onDispose` 在 try 之後才登記，還沒有人接得到它。連線已經開了就得收掉，否則這個
+    // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
+    await supervisor?.dispose();
+    await attempts.close();
+    unreachable(thread, config, error);
+    return;
+  }
 
-    registry.lifecycle.onDispose(async () => {
-      unregisterSource?.();
-      // 取消待跑的重連、等進行中的那次收斂、收掉 client，整段一個期限（#1543）。收 client 在監督者的 `release` 裡，算在同一個期限內；
-      // 期限到了還在握手的嘗試，見 `supervisor.ts` 偏離 6。
-      await supervisor.dispose();
-    });
-  },
-};
-
-export default mcpPlugin;
+  thread.onDispose(async () => {
+    unregisterSource?.();
+    // 取消待跑的重連、等進行中的那次收斂、收掉 client，整段一個期限（#1543）。收 client 在監督者的 `release` 裡，算在同一個期限內；
+    // 期限到了還在握手的嘗試，見 `supervisor.ts` 偏離 6。
+    await supervisor.dispose();
+  });
+}
 
 /** 宣告了 `sandbox` 的 stdio 換成包過的，宿主沒給包裝就拋，不退回直接起。沒宣告的 stdio 交給 guard，包不了原樣回；非 stdio 原樣回。 */
 async function wrapStdio(
@@ -437,18 +455,18 @@ async function wrapStdio(
  * 資源 provider 的登記不看連線成敗：名字照列，呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列才登記**——寫了 `true`
  * 的那一列拋出去，不在 hub 留任何東西。
  */
-function unreachable(registry: PluginRegistry, config: McpConfig, error: unknown): void {
+function unreachable(thread: ToolThread, config: McpConfig, error: unknown): void {
   const { serverName } = config;
   if (config.failOnStartupError) throw error;
   const reason = error instanceof Error ? error.message : String(error);
-  registry.logger.warn(
+  thread.logger.warn(
     `MCP 伺服器 "${serverName}" 套不上沙箱、連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
       `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
   );
-  const hubUndo = ensureHub(registry).add(
+  const hubUndo = ensureHub(thread).add(
     resourceSource(serverName, '', config.toolCallTimeoutMs, () => undefined),
   );
-  registry.lifecycle.onDispose(hubUndo);
+  thread.onDispose(hubUndo);
 }
 
 /**
@@ -465,7 +483,7 @@ function unreachable(registry: PluginRegistry, config: McpConfig, error: unknown
  * 交出警告，寫了 `failOnStartupError: true` 就拋。
  */
 async function applyShared(
-  registry: PluginRegistry,
+  thread: ToolThread,
   config: McpConfig,
   { shared, error: connectError }: Acquired,
 ): Promise<void> {
@@ -485,31 +503,38 @@ async function applyShared(
       const tool = nexusToolOf(descriptor, config, label, () => supervisor);
       names.push(tool.name);
       rawNameOf.set(tool.name, descriptor.name);
-      registered.push(registry.tools.register(tool));
+      registered.push(thread.register(tool));
     }
     // 閘門一份註冊表一顆，同自己連的那條（#1622）；共用的只有連線。
     const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
-    if (gate !== undefined) registered.push(registry.approvals.gate(gate));
+    if (gate !== undefined) registered.push(thread.gate(gate));
     const unknown = unknownExempt(config.approval, rawNameOf.values());
     if (unknown.length > 0) {
-      registry.logger.warn(
+      thread.logger.warn(
         `MCP 伺服器 "${serverName}" 的 approval.exempt 有 tools/list 沒列出的名字：${unknown.join('、')}` +
           `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
       );
     }
-    registered.push(registry.middleware.use(hideTools(serverName, names, () => supervisor.gaveUp)));
+    registered.push(
+      thread.admit(
+        hiddenAfterGiveUp(names, () => supervisor.gaveUp),
+        {
+          name: `mcp-tools-guard:${serverName}`,
+        },
+      ),
+    );
     instructions = listing.instructions;
   } catch (error) {
     for (const undo of registered.reverse()) undo();
     if (config.failOnStartupError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    registry.logger.warn(
+    thread.logger.warn(
       `MCP 伺服器 "${serverName}" 套不上沙箱、連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
         `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
     );
   }
   // 資源的登記不看連線成敗（照 dsh，同自己連的那條）；讀的是同一個監督者目前這一代，背景連上之後這次組裝的資源也叫得動。
-  const unregisterSource = ensureHub(registry).add(
+  const unregisterSource = ensureHub(thread).add(
     resourceSource(serverName, instructions, config.toolCallTimeoutMs, () => {
       const generation = supervisor.current();
       return generation?.sdk === undefined
@@ -527,11 +552,72 @@ async function applyShared(
           };
     }),
   );
-  registry.lifecycle.onDispose(unregisterSource);
+  thread.onDispose(unregisterSource);
+}
+
+/** 樹上那一列的插件名：橋接列的 `origin.name` 取它，embed 的審批靠它認出 mcp 的工具。 */
+export const name = 'mcp';
+
+/** 要宿主的工具接縫 `^2.6.0`：`threadSource` 從 2.5.0 起、`ToolThread.section` 從 2.6.0 起。 */
+export const inject = injectOf(need(toolsToken, '^2.6.0'));
+
+/** 這一列的設定。 */
+export const Config = mcpConfigSchema;
+
+/** 樹上的宣告：不提供服務，只用工具接縫；每條 thread 組的時候才掛 server，改設定從下一條 thread 起生效。 */
+export const manifest = defineManifest({
+  id: 'mcp',
+  version: '0.6.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [{ token: toolsToken.name, range: '^2.6.0' }],
+  config: mcpConfigSchema,
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/** {@link mountServer} 讀的宿主服務：`threadSource` 要先宣告，`thread.services.get` 才給。 */
+const HOST_SERVICES = [
+  CHANNEL_SERVICE,
+  MCP_POOL_SERVICE,
+  MCP_CREDENTIALS_SERVICE,
+  MCP_SANDBOX_SERVICE,
+  MCP_GUARD_SERVICE,
+] as const;
+
+/**
+ * 行程級的那一次：只登記一個逐條 thread 的來源，每條 thread 組的時候才 {@link mountServer}。
+ *
+ * @param ctx - 這一列的 context。
+ * @param config - 驗過的設定。
+ * @throws 宿主的工具接縫沒有 `threadSource`。
+ */
+export function apply(ctx: Context, config: McpConfig): void {
+  const tools = service(ctx, toolsToken);
+  if (tools.threadSource === undefined) {
+    throw new Error('mcp 要宿主的 tools.threadSource()，這個宿主沒有提供');
+  }
+  tools.threadSource((thread) => mountServer(thread, config), { services: HOST_SERVICES });
 }
 
 /**
- * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * 相容層的 mcp 插件。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉**；產品路徑走樹上的 {@link apply}。
+ *
+ * 名字先佔進 `mcp:server:<serverName>` 這個服務：撞名時 `services.provide` 的重名錯誤指名兩列。
+ */
+export const mcpPlugin: NexusPlugin<McpConfig> = {
+  name,
+  Config: mcpConfigSchema,
+  async apply(registry: PluginRegistry, declared: McpConfig): Promise<void> {
+    registry.services.provide(`mcp:server:${declared.serverName}`, {
+      serverName: declared.serverName,
+    });
+    await mountServer(registryThread(registry), declared);
+  },
+};
+
+/**
+ * 建一個相容層條目。**只給還沒搬的測試用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
  *
  * @param options - 設定，形狀見 {@link mcpConfigSchema}。
  * @returns 可以放進組裝點清單的條目。
@@ -625,24 +711,6 @@ function asAbort(error: unknown): Error {
 export function hiddenAfterGiveUp(names: readonly string[], gaveUp: () => boolean): ToolAdmission {
   const hidden = new Set(names);
   return { admits: (name) => !(gaveUp() && hidden.has(name)) };
-}
-
-/**
- * 每次模型呼叫前套 {@link hiddenAfterGiveUp}，只改模型那一側的清單；沒放棄就原樣穿過同一個請求。
- *
- * 呼叫那一側不擋：被藏的工具仍在註冊表上，叫到時由工具本體拋 `reconnection was given up` 的錯誤
- * （{@link nexusToolOf}），讓呼叫得到要重新組裝的說明（`supervisor.ts` 檔頭偏離 4）。
- */
-function hideTools(
-  serverName: string,
-  names: readonly string[],
-  gaveUp: () => boolean,
-): AgentMiddleware {
-  const admission = hiddenAfterGiveUp(names, gaveUp);
-  // 每一列一個名字：同名的兩顆 middleware 會在基座那邊撞名。
-  return createToolListStepMiddleware(`mcp-tools-guard:${serverName}`, (request) =>
-    gaveUp() ? admittedTools(request.tools, admission) : undefined,
-  );
 }
 
 /**

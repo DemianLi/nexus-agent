@@ -231,10 +231,11 @@ async function copies(): Promise<{
       filter: (source) => !/\.test\.ts$/u.test(source),
     });
     await pinWorkspaceImports(join(root, version));
+    // 量的是相容層那一顆（`mcpPlugin`）；它在 #2535 拿掉時，這裡要改成樹上的 `apply` 搭兩版。
     const module = (await import(pathToFileURL(join(root, version, 'index.ts')).href)) as {
-      default: NexusPlugin<unknown>;
+      mcpPlugin: NexusPlugin<unknown>;
     };
-    return module.default;
+    return module.mcpPlugin;
   };
   const [v1, v2] = [await load('v1'), await load('v2')];
   return { v1, v2, cleanup: () => rm(root, { recursive: true, force: true }) };

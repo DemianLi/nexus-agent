@@ -83,6 +83,8 @@ import {
   systemPromptDefaultsOf,
 } from './system-prompt-middleware.js';
 import { registryFsForThread, registryFsLookup } from './registry-fs-lookup.js';
+import { runThreadSources } from './thread-source.js';
+import type { FoldedThreadSource } from './thread-source.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
   createJournalFile,
@@ -867,6 +869,8 @@ interface BridgeMeta {
   readonly module: FunctionPluginModule;
   /** manifest 宣告提供的服務名（`provides[].token`）：宿主據此知道哪一列應該提供 `systemPrompt`（#1477）。 */
   readonly provides: readonly string[];
+  /** 模組 specifier（`cordis.yml` 的 `name`）：單獨掛上時據它查 `tools.threadSource` 的授權表（#2533）。 */
+  readonly specifier: string;
 }
 
 type BridgePlugin = NexusPlugin<unknown> & { readonly [BRIDGE]: BridgeMeta };
@@ -909,7 +913,11 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
         `橋接列 ${row} 還沒綁定到樹：只有 loadPluginConfig 交出來的清單上的條目能組裝`,
       );
     },
-    [BRIDGE]: { module, provides: manifest.provides.map((provide) => provide.token) },
+    [BRIDGE]: {
+      module,
+      provides: manifest.provides.map((provide) => provide.token),
+      specifier: entry.name,
+    },
   };
   return {
     plugin,
@@ -921,7 +929,7 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
 
 /**
  * 一列在樹上登記的東西，**每一種接縫一格**（#1421）。加一個新接縫要在這裡多一格，然後在 {@link registerFolded} 折進
- * 這條 thread 的 registry；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
+ * 這條 thread 的 registry（要 await 的 `threadSources` 在 `registerFolded` 之後由 {@link runThreadSources} 跑）；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
  */
 interface FoldedContributions {
   readonly tools: readonly StructuredToolInterface[];
@@ -951,6 +959,8 @@ interface FoldedContributions {
    * `nexusSystemPrompt` middleware（`{ last: true }`），用快照渲染。`undefined` 代表這一列不是 `systemPrompt` 的提供者。
    */
   readonly systemPrompt: SystemPromptAssembly | undefined;
+  /** 逐條 thread 的工具來源（#2533），照那一列登記的順序；折完其餘各格之後，由 {@link runThreadSources} 依序 await。 */
+  readonly threadSources: readonly FoldedThreadSource[];
 }
 
 /**
@@ -1027,11 +1037,21 @@ function registerFolded(
 }
 
 /** 樹上這一列起來了：折進它登記的工具與投影單元。 */
-function bindToTree(entry: PluginEntry, contributions: FoldedContributions): PluginEntry {
+function bindToTree(
+  entry: PluginEntry,
+  id: string,
+  contributions: FoldedContributions,
+): PluginEntry {
+  const bridge = entry.plugin as BridgePlugin;
   const plugin: BridgePlugin = {
-    ...(entry.plugin as BridgePlugin),
+    ...bridge,
     apply(registry) {
       registerFolded(registry, contributions);
+      if (contributions.threadSources.length === 0) return;
+      return runThreadSources(registry, contributions.threadSources, {
+        id,
+        module: bridge[BRIDGE].module,
+      });
     },
   };
   return { ...entry, plugin };
@@ -1050,24 +1070,26 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
       // 有沒有圍堵（#1491 Q4 (a)、#1774）：同樣從這一次組裝的 host 服務 `workspaceRoot` 有沒有值推（組裝點只在有 `--workspace` 時提供）。
       // 根本身是逐條 thread 的，不在這裡取：函式插件在呼叫當下經 `fs` 把手讀 `workspaceRoot()`。
       const contained = registry.services.get('workspaceRoot') !== undefined;
-      registerFolded(
-        registry,
-        await mountDetached({
-          id,
-          module: meta.module,
-          provides: meta.provides,
-          config: entry.config,
-          ...(channel === undefined ? {} : { channel }),
-          ...(contained && { contained }),
-          // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
-          // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
-          sessionLookup: (config) => registry.sessions.forCall(config),
-          // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
-          // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
-          fsLookup: registryFsLookup(registry),
-          fsForThread: registryFsForThread(registry),
-        }),
-      );
+      const contributions = await mountDetached({
+        id,
+        module: meta.module,
+        provides: meta.provides,
+        config: entry.config,
+        ...(channel === undefined ? {} : { channel }),
+        ...(contained && { contained }),
+        // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
+        // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
+        sessionLookup: (config) => registry.sessions.forCall(config),
+        // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
+        // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
+        fsLookup: registryFsLookup(registry),
+        fsForThread: registryFsForThread(registry),
+        specifier: meta.specifier,
+      });
+      registerFolded(registry, contributions);
+      if (contributions.threadSources.length > 0) {
+        await runThreadSources(registry, contributions.threadSources, { id, module: meta.module });
+      }
     },
   };
   return { ...entry, plugin };
@@ -1773,7 +1795,7 @@ async function loadPluginConfigOnce(
       rows.set(off, { id: origin.id, module: row.name });
       return off;
     }
-    const bound = bindToTree(entry, {
+    const bound = bindToTree(entry, origin.id, {
       tools: verdict.tools,
       toolOptions: verdict.toolOptions,
       gates: verdict.gates,
@@ -1785,6 +1807,7 @@ async function loadPluginConfigOnce(
       commands: verdict.commands,
       services: verdict.services,
       systemPrompt: verdict.systemPrompt,
+      threadSources: verdict.threadSources,
     });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;
