@@ -334,7 +334,7 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
   const unit = estimateMessageTokens(sized('human', '0'));
 
   /**
-   * 分派器依 N 各建一顆引擎；歷史檔的會話名在分派器那一層生一次、交給每一顆，所以換了 N 仍是同一個檔。
+   * 分派器依 N 各建一顆引擎；歷史檔的會話名由同一個 `sessionIdOf` 交給每一顆、照呼叫身分取，所以同一個呼叫身分換了 N 仍是同一個檔。
    */
   async function twoSummaries() {
     const backend = memoryBackend();

@@ -19,8 +19,8 @@
  * dsh 把每個 agent 的鏈存在 `WeakMap<Agent, Chain>`（`src/index.ts:173`），以活著的
  * `Agent` 物件為鍵。我們這側**沒有那個鍵**：`wrapToolCall` 與 `beforeModel` 拿到的是
  * `state` 與 `runtime`，沒有任何 agent 身分。而共用一份 middleware 實例是會出事的
- * ——同一份 subagent 定義被並行呼叫兩次時共用同一個 closure（同型的實測見
- * {@link https://github.com/DemianLi/nexus-agent/pull/156} 裡摘要器的 `sessionId`）。
+ * ——同一份 subagent 定義被並行呼叫兩次時共用同一個 closure（同類的實測見
+ * {@link https://github.com/DemianLi/nexus-agent/pull/156}，量的是摘要器共用實例時的歷史檔）。
  *
  * 所以退到「每次都從 `state.messages` 現算」。`state` 本來就是逐 thread、逐 agent 各
  * 一份，隔離是結構上的而不是靠紀律。順帶兩個行為差，方向相反、兩個都講明白：
@@ -389,7 +389,7 @@ function pendingReminders(
  * ## 它是無狀態的，所以可以共用同一份實例
  *
  * closure 裡只有設定與編好的樣式，鏈每次從 `state.messages` 現算。這跟摘要器**相反**
- * ——那個把 `sessionId` 放在 closure 裡，所以 fold 必須逐個 agent 各建一份
+ * ——那個的 closure 裡有認不出身分的呼叫用的會話名，所以 fold 逐個 agent 各建一份
  * （[#156](https://github.com/DemianLi/nexus-agent/pull/156)）。這裡不必，而且不是
  * 「反正共用也還好」：`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
  *
