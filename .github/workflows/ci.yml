@@ -505,7 +505,7 @@ jobs:
 
   # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試，再用編好的執行檔跑 TS 那一側。plan 的 `rust` 決定跑不跑，跟模式無關：
   # 動到它、TS 那一側的接縫與 client 或 CI 自己的功能 PR（輕的模式也跑，#1827 D55：接受超過 60 秒）、packed-install 要跑的一輪（並打 bundle 給它）與合併後完整一輪。
-  # 核心沒有 Landlock 時測試紅，不准自我跳過。
+  # 核心沒有 Landlock 時測試紅，不准自我跳過。同一個 crate 也編出監督行程（`src/bin/nexus-supervisor.rs`），per-thread 的整合測試（#2341）在這裡跑。
   sandbox-spawner:
     name: sandbox-spawner
     needs: plan
@@ -519,9 +519,10 @@ jobs:
           bundle: ${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
@@ -536,9 +537,10 @@ jobs:
       - uses: ./.github/actions/sandbox-spawner
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
