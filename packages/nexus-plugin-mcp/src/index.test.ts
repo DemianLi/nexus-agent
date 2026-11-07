@@ -90,10 +90,9 @@ describe('publicToolName', () => {
   });
 });
 
-describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', () => {
+describe('設定的檢查（#453：驗在載入的時候）', () => {
   it('serverName 不合法時載入就失敗，不必等到連線', async () => {
-    // **翻面過的絆索**：原本是 `mcpEntry()` 當場拋。工廠現在只是薄薄一層，檢查搬到
-    // schema，所以訊息帶得出是清單裡哪一個條目——那正是從 YAML 載入時唯一指得到的東西。
+    // 設定在載入時由 schema 驗，訊息才帶得出是清單裡哪一列——那正是從 YAML 載入時唯一指得到的東西。
     for (const serverName of ['has space', '', 'x'.repeat(33)]) {
       const bad = [mcpEntry({ serverName, connection: emptyStdio() })];
       await expect(loadPlugins(bad)).rejects.toThrow('mcp#0 (mcp)');
@@ -327,7 +326,7 @@ describe('接上一台真的 MCP server', () => {
   });
 
   /**
-   * 同一個 `serverName` 掛兩次：照 dsh 在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
+   * 同一個 `serverName` 掛兩次：在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
    * 不是伺服器不在，不收成警告（#751）。
    */
   it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名後來那一列與 serverName', async () => {

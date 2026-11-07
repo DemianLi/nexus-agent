@@ -19,6 +19,9 @@
  * - **`concludesTurn: true` 轉成 `returnDirect: true`**：沒宣告的工具不帶它，`concludeTurn()` 標了也不收。
  * - **`deferContext()` 補的訊息**：成功的結果與補的訊息包成一顆 `Command`，那則工具結果的 `ToolMessage` 由這裡造。
  *
+ * 入口另外轉出 `runThreadSources`（`thread-source.ts`）：把樹上插件登記的逐條 thread 工具來源接到相容層 registry 的橋。宿主（harness 的
+ * `plugin-config.ts`）與插件自己的測試用同一份；哪些宿主服務授權給哪顆插件不在這裡，由呼叫端決定。
+ *
  * @module
  */
 

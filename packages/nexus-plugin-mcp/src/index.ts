@@ -13,7 +13,7 @@ import type { Tool } from '@modelcontextprotocol/client';
 import type { Context } from '@nexus/cordis';
 // eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出，#2537 拿掉
 import { CHANNEL_SERVICE } from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core 匯出，#2537 拿掉
+// eslint-disable-next-line no-restricted-imports -- ApprovalChannel 只在 core 定義（mcp 不相依轉出它的 @nexus/approval-channel）；ToolAdmission 改取 @nexus/tools 歸 #2537
 import type { ApprovalChannel, ToolAdmission } from '@nexus/core';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { toolsToken } from '@nexus/tools';
@@ -222,7 +222,7 @@ export const mcpConfigSchema = z.strictObject({
 /** 驗過的設定。 */
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 
-/** 工廠收的東西：schema 的輸入面。 */
+/** 一列 mcp 的 config 輸入面（`Config` 解析之前）：清單與測試照這個形狀寫。 */
 export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 
 /** `thread.shared` 上放已預留的 `serverName` 的那一格。 */

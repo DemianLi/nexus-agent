@@ -56,7 +56,7 @@ async function until(predicate: () => boolean, ms = 20_000): Promise<void> {
   }
 }
 
-/** 一列沒寫 `approval` 的 MCP（Q2 (a)：整台都問），server 收到的呼叫記進回傳的檔。 */
+/** 一列沒寫 `approval` 的 MCP（#1622 Q2 (a)：整台都問），server 收到的呼叫記進回傳的檔。 */
 async function crmRow(): Promise<{ readonly row: PluginEntry; calls(): string[] }> {
   const callLog = join(temp('nexus-mcp-calls-'), 'calls.log');
   return {

@@ -2,10 +2,10 @@
  * 宿主這一側的 `tools.threadSource`（#2533）：組一條 thread 時，照樹上那一列登記的順序叫它的每個來源，交給它這條 thread 的
  * {@link ToolThread}。宿主（harness 的 `plugin-config.ts`）與插件自己的測試用的是這同一份。
  *
- * 這裡只有橋接本身。哪些宿主服務授權給哪顆插件是宿主的政策，留在宿主（harness 的 `thread-service-grants.ts`），
+ * 這裡只有橋接本身。哪些宿主服務授權給哪顆插件是宿主的政策，在宿主（harness 的 `thread-service-grants.ts`），
  * 傳進來的 `services` 是宿主已經授權過的。
  *
- * 在橋接列的 `apply` 裡被 await，所以來源 reject 走的是相容層那一列 `apply` 拋錯的同一條路：預設模式整次組裝失敗、`perEntry`
+ * 在呼叫端那一列（`NexusPlugin`）的 `apply` 裡被 await，所以來源 reject 走的是那一列 `apply` 拋錯的同一條路：預設模式整次組裝失敗、`perEntry`
  * 模式那一列掉了，訊息帶的是那一列的 origin。差別只有一處：這一列每個來源已登記的 `onDispose`（含先前已 resolve 的）會先照反序跑完，
  * 再原樣拋出原本的錯誤。
  *
@@ -28,7 +28,7 @@ export interface FoldedThreadSource {
 
 /** 叫來源的那一列。 */
 export interface ThreadSourceOwner {
-  /** 相容層解析後的列 id：訊息與 `admit` 的預設名字用它。 */
+  /** 呼叫端給的列名：錯誤訊息與 `admit` 的預設名字用它；宿主給的是解析後的 origin id。 */
   readonly id: string;
   /** 那一列的模組命名空間：`shared` 以它為鍵，同一顆插件的各列拿到同一份。 */
   readonly module: object;

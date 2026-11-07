@@ -34,6 +34,7 @@ export function loadPlugins(
  *
  * @param config - 那一列的 `config`，照宿主清單的寫法（交給 `Config` 解析之前）。
  * @param id - 列 id；省略就由 `loadPlugins` 補號。
+ * @returns 放得進 `loadPlugins` 清單的條目。
  */
 export function mcpEntry(config: unknown, id?: string): PluginEntry {
   return { plugin: mcpRow(id ?? mcp.name), config, ...(id === undefined ? {} : { id }) };

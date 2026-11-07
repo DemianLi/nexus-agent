@@ -4,10 +4,10 @@
 # pnpm --filter @nexus/harness run cli --patch src/cli-mcp.patch.yml "回聲一下"
 # ```
 #
-# 自動測試證明不了的是這一件事：MCP server 是 stdio 子行程，它的 pipe 是活的 handle，收線那條路
-# 斷了的話，CLI 印完答案會停在那裡不動，而那個症狀在 vitest 裡看不到（worker 自己會被收掉）。
+# 自動測試證明不了的是這一件事：MCP server 是 stdio 子行程，它的 pipe 是活的 handle，沒人把
+# MCP client 收掉的話，CLI 印完答案會停在那裡不動，而那個症狀在 vitest 裡看不到（worker 自己會被收掉）。
 #
-# 路徑是相對的：`pnpm --filter` 在 `apps/harness` 底下跑，子行程繼承這個工作目錄（#455 不寫絕對路徑的理由）。
+# 路徑是相對的：`pnpm --filter` 在 `apps/harness` 底下跑，子行程繼承這個工作目錄；絕對路徑跟機器綁，寫進版控換一台就壞。
 - insert:
     - id: mcp-fixture
       name: '@nexus/plugin-mcp'

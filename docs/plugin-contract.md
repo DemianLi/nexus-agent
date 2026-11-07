@@ -249,7 +249,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
 - **工具接縫 2.5.0：逐條 thread 的工具來源**（`@nexus/tools`，#2533）。`ToolRegistry` 多一個**選配**方法 `threadSource(source, { services? })`：登記一個來源，宿主每組一條 thread 就在那一列
   折進 thread 的位置 await 它一次，交給它這條 thread 的 `ToolThread`：`register`、`gate`、`admit`、`section`（2.6.0 起）、`onDispose`、`logger`、`services.get` 與 `shared`。**消費者**宣告 `^2.5.0`（用 `section` 的宣告 `^2.6.0`），並在 `apply` 裡檢查
-  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`packages/nexus-tool-adapter/src/thread-source.ts`；授權表留在宿主的 `apps/harness/src/thread-service-grants.ts`）；
+  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`packages/nexus-tool-adapter/src/thread-source.ts`；授權表在宿主的 `apps/harness/src/thread-service-grants.ts`）；
   沒有樹的呼叫端走 `mountDetached` 取同一格，授權一律查出廠的表。樹上沒有來源的列，`apply` 只做 `registerFolded`、同步回傳。
   - **給誰用**：工具、閘門與隱藏規則要**每條 thread 各一份**、而且要在組 thread 當下讀宿主服務才定得出來的插件。消費者是 mcp（#2533 把它搬上樹），目前只有它用：憑證逐 thread 輪替（池鍵帶憑證指紋，#1989）、serve 用連線池而 CLI 每列自己連、
     放棄重連之後工具藏起來但呼叫得到說明（#2430），這些都要在那一條 thread 的組裝裡讀 `channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`。只需要行程級工具的插件照舊用 `register`。

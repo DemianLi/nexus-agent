@@ -2,7 +2,7 @@
  * [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 驗收 ③：同一顆插件的兩個版本各在一個 isolate realm、各被不同 thread 使用；
  * 舊版的最後一個 thread 結束後由引用計數撤掉，活資源回到載入前。
  *
- * 選 `nexus-plugin-mcp`，因為它是出貨插件裡少數掛上時會開**真的**行程級資源的：一台 stdio 的 MCP server 子行程
+ * 選 `nexus-plugin-mcp`，因為它是出貨插件裡少數掛上時會開**真的** OS 資源的：一台 stdio 的 MCP server 子行程
  * （它自己的 `fixture-server.ts`）加三條管線，在它的逐條 thread 來源跑的那一刻開。用不開資源的插件量「回到載入前」是空的通過。
  *
  * 各層是什麼：
@@ -253,7 +253,7 @@ function treeVersion(module: McpModule): NexusPlugin<McpConfig> {
   };
 }
 
-/** 把 mcp 的 src 複製成 v1、v2，各自 import。回傳兩份模組、各自包好的插件與收拾函式。 */
+/** 把 mcp 的 src 複製成 v1、v2，各自 import。回傳各自包好的兩顆插件、兩份模組是不是不同的實例，與收拾函式。 */
 async function copies(): Promise<{
   v1: NexusPlugin<McpConfig>;
   v2: NexusPlugin<McpConfig>;
