@@ -1,5 +1,5 @@
 /**
- * 檔案工具失敗標成錯誤的那一層自己的邏輯——直接餵 middleware 一個假 `handler`，`handler` 照基座
+ * 檔案工具失敗標成錯誤的那一層自己的邏輯——把監聽者掛進 `tools/execute`，直接餵一個假 `handler`，`handler` 照基座
  * 檔案工具的樣子叫包過的 backend、把結果包成狀態成功的 ToolMessage。「fold 有沒有把它打底進去、
  * 排在哪」在 `fold.test.ts`；「掛進真的 agent、真的 fence 之後」在 `apps/harness/src/fs-tool-errors.test.ts`。
  */
@@ -7,8 +7,8 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import {
-  createFsToolErrorsMiddleware,
   currentToolCallSignal,
+  fsToolErrorsListener,
   FS_SANDBOX_DENIED,
   noteSandboxDenial,
   noteSearchError,
@@ -17,6 +17,12 @@ import {
   SEARCH_INVALID_PATTERN,
 } from './fs-tool-errors.js';
 import { markToolError, toolErrorOf } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
+
+/** 正式組裝裡它住的位置：`tools/execute` 的內層。 */
+function createFsToolErrorsMiddleware(): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [fsToolErrorsListener] });
+}
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -115,6 +121,21 @@ describe('檔案工具的失敗標成錯誤', () => {
     })) as ToolMessage;
     expect(result.status).toBe('error');
     expect(result.content).toEqual(blocks);
+  });
+
+  it('同名工具回文字塊陣列、開頭不是 `Error`：補上前綴，併成一個文字塊（非文字塊不留）', async () => {
+    // 基座的 `read_file` 失敗都以 `Error: ` 開頭，碰不到這一格；換掉同名工具、回陣列的才會。
+    const backend = recordBackendOutcomes(new FakeBackend());
+    const blocks = [
+      { type: 'text' as const, text: "File '/nope' not found" },
+      { type: 'image', mimeType: 'image/png', data: 'AA==' },
+    ];
+    const result = (await wrap(requestFor('read_file'), async () => {
+      await backend.read('/nope');
+      return asToolMessage(blocks, 'read_file');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(result.content).toEqual([{ type: 'text', text: "Error: File '/nope' not found" }]);
   });
 
   it('基座自己寫成錯誤的字不補前綴：`ls` 的 `Error listing files: …` 不會變成 `Error: Error …`', async () => {
@@ -243,15 +264,32 @@ describe('fence 擋下非檔案工具：只補碼', () => {
     });
   }
 
-  it('工具回了錯誤、fence 喊過拒絕：同一則補上 `FS_SANDBOX_DENIED`，字不動', async () => {
+  it('工具回了錯誤、fence 喊過拒絕：補上 `FS_SANDBOX_DENIED`，字與狀態不動', async () => {
     const message = refusal('Error: 寫不進 "/deny/x"：[containment] 拒絕 write "/deny/x"');
-    const result = await wrap(requestFor('submit_record'), async () => {
+    const result = (await wrap(requestFor('submit_record'), async () => {
       await plain.write('/deny/x', 'x');
       return message;
+    })) as ToolMessage;
+    expect(result.content).toBe('Error: 寫不進 "/deny/x"：[containment] 拒絕 write "/deny/x"');
+    expect(result.status).toBe('error');
+    expect(result.tool_call_id).toBe(message.tool_call_id);
+    expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: FS_SANDBOX_DENIED });
+  });
+
+  it('內容是文字塊陣列：補碼之後仍是同樣的陣列', async () => {
+    const blocks = [{ type: 'text', text: 'Error: 寫不進 "/deny/y"' }];
+    const message = new ToolMessage({
+      content: blocks,
+      tool_call_id: 'call-1',
+      name: 'submit_record',
+      status: 'error',
     });
-    expect(result).toBe(message);
-    expect(message.content).toBe('Error: 寫不進 "/deny/x"：[containment] 拒絕 write "/deny/x"');
-    expect(toolErrorOf(message)).toEqual({ name: 'FsError', code: FS_SANDBOX_DENIED });
+    const result = (await wrap(requestFor('submit_record'), async () => {
+      await plain.write('/deny/y', 'x');
+      return message;
+    })) as ToolMessage;
+    expect(result.content).toEqual(blocks);
+    expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: FS_SANDBOX_DENIED });
   });
 
   it('對照：同一顆工具的一般失敗（fence 沒喊）不帶碼', async () => {
@@ -398,12 +436,9 @@ describe('搜尋成功但有路徑讀不到：把「略過幾條」接在結果�
     expect((await call('grep', 'x', [2, 1, 3])).content).toBe(`x\n\n(${sentence(6)})`);
   });
 
-  it('文字塊陣列：多接一個文字塊，原本的塊原樣保留', async () => {
+  it('文字塊陣列：仍是陣列，那句併進同一個文字塊', async () => {
     const result = await call('grep', [{ type: 'text', text: 'Found 1 match' }]);
-    expect(result.content).toEqual([
-      { type: 'text', text: 'Found 1 match' },
-      { type: 'text', text: `\n\n(${sentence(2)})` },
-    ]);
+    expect(result.content).toEqual([{ type: 'text', text: `Found 1 match\n\n(${sentence(2)})` }]);
   });
 
   it('反例：沒有記過就什麼都不接', async () => {

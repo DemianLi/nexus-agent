@@ -468,7 +468,7 @@ export {
 } from './tool-events.js';
 
 export {
-  createObservationPolicy,
+  createObservationListener,
   FILE_VERSION,
   noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
@@ -481,7 +481,7 @@ export {
 } from './observation.js';
 export type { FileVersionLookup, FileVersionSource } from './observation.js';
 
-// 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
+// 檔案錯誤與讀到哪各是一對：監聽者或 middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
   currentToolCallSignal,
@@ -516,13 +516,12 @@ export {
 
 export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
 export {
-  createSpillPolicyMiddleware,
   formatSpillNotice,
   SPILL_POLICY_MIDDLEWARE_NAME,
   SPILL_RETRIEVAL_HINT,
 } from './spill-policy.js';
 
-// 搜尋結果的筆數上限（#735）也是一對（middleware 開槽、backend 包裝截前段），只由 `foldRegistry` 組起來，主入口只公開
+// 搜尋結果的筆數上限（#735）也是一對（監聽者開槽、backend 包裝截前段），只由 `foldRegistry` 組起來，主入口只公開
 // 設定與名字。
 export type { SearchOverflowOptions, SearchResultLimits } from './search-overflow.js';
 export {

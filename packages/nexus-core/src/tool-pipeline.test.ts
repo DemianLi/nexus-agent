@@ -464,6 +464,86 @@ describe('tools/execute 的生產者', () => {
   });
 });
 
+describe('tools/execute 交回改過的結果：內容的形狀', () => {
+  const IMAGE = { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } };
+  const STRING_RAW = () =>
+    new ToolMessage({ content: '原文', tool_call_id: 'call-1', name: 'probe' });
+  const ARRAY_RAW = () =>
+    new ToolMessage({
+      content: [{ type: 'text', text: '原文' }, IMAGE],
+      tool_call_id: 'call-1',
+      name: 'probe',
+    });
+
+  type Rewrite = (view: PipelineResult & { kind: 'message' }) => unknown;
+  /** 兩種寫法：展開視圖，與明寫 `blocks: view.blocks`。兩者的 `blocks` 都是收到的那一份。 */
+  const STYLES: [string, (patch: { content?: string; isError?: boolean }) => Rewrite][] = [
+    ['{ ...view, … }', (patch) => (view) => ({ ...view, ...patch })],
+    [
+      'blocks: view.blocks',
+      (patch) => (view) => ({
+        kind: 'message',
+        isError: patch.isError ?? view.isError,
+        content: patch.content ?? view.content,
+        blocks: view.blocks,
+      }),
+    ],
+  ];
+
+  async function run(raw: ToolMessage, rewrite: Rewrite): Promise<ToolMessage> {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      const view = await next();
+      if (view.kind !== 'message') throw new Error('應該是訊息');
+      return rewrite(view) as never;
+    });
+    const out = await wrapperOf(createToolExecuteMiddleware(bus))(requestFor(), async () => raw);
+    if (!ToolMessage.isInstance(out)) throw new Error('應該是 ToolMessage');
+    return out;
+  }
+
+  describe.each(STYLES)('%s', (_name, patched) => {
+    it('字串、content 沒換：沿用原本的字串', async () => {
+      const out = await run(STRING_RAW(), patched({ isError: true }));
+      expect(out.content).toBe('原文');
+      expect(out.status).toBe('error');
+    });
+
+    it('字串、content 換了：新的字串', async () => {
+      expect((await run(STRING_RAW(), patched({ content: '新的' }))).content).toBe('新的');
+    });
+
+    it('陣列、content 沒換：沿用原本的陣列，圖片塊也在', async () => {
+      const out = await run(ARRAY_RAW(), patched({ isError: true }));
+      expect(out.content).toEqual([{ type: 'text', text: '原文' }, IMAGE]);
+      expect(out.status).toBe('error');
+    });
+
+    it('陣列、content 換了：只剩一個文字塊，圖片塊不留', async () => {
+      expect((await run(ARRAY_RAW(), patched({ content: '新的' }))).content).toEqual([
+        { type: 'text', text: '新的' },
+      ]);
+    });
+  });
+
+  it('給了新的 blocks（不同參照）：照 blocks，字串的原文也變成陣列', async () => {
+    const out = await run(STRING_RAW(), (view) => ({
+      ...view,
+      blocks: [{ type: 'text', text: '甲' }, IMAGE],
+    }));
+    expect(out.content).toEqual([{ type: 'text', text: '甲' }, IMAGE]);
+  });
+
+  it('只給 content、不給 blocks：新的字串，陣列的原文也一樣', async () => {
+    const out = await run(ARRAY_RAW(), (view) => ({
+      kind: 'message',
+      isError: view.isError,
+      content: '新的',
+    }));
+    expect(out.content).toBe('新的');
+  });
+});
+
 describe('tools/post-execute 的生產者', () => {
   it('沒有監聽者 → 直通，原物件、碼還在', async () => {
     const wrap = wrapperOf(createToolPostExecuteMiddleware(new EventBus()));

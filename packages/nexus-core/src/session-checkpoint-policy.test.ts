@@ -10,13 +10,21 @@ import { ToolMessage } from '@langchain/core/messages';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { describe, expect, it } from 'vitest';
 import { loadPlugins } from './load.js';
-import { createSessionCheckpointMiddleware } from './session-checkpoint-policy.js';
+import {
+  createSessionCheckpointListener,
+  createSessionCheckpointMiddleware,
+} from './session-checkpoint-policy.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
 import type { SessionEvent } from './session-log.js';
 import { attachSessionPersistence, MAX_PERSISTENCE_WINDOW_MS } from './session-persistence.js';
 import { SessionRegistry } from './session-registry.js';
 import type { SessionStore, StoredSession } from './session-store.js';
 import { TOOL_ABORTED_BEFORE_DISPATCH, toolErrorOf } from './tool-events.js';
-import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
+import {
+  abortedBeforeDispatch,
+  TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+  TURN_CANCEL_CONFIG_KEY,
+} from './turn-cancel.js';
 
 type Hook = (request: never, handler: (request: never) => Promise<unknown>) => Promise<unknown>;
 
@@ -72,10 +80,14 @@ async function assemble(persist = true) {
   if (persist) attachSessionPersistence(sessions, store, { windowMs: MAX_PERSISTENCE_WINDOW_MS });
   const { registry } = await loadPlugins([]);
   registry.sessions.bind(sessions);
-  const hooks = createSessionCheckpointMiddleware(registry.sessions) as unknown as {
+  // 模型那一半是 middleware；工具那一半在正式組裝裡是 `tools/execute` 的外層監聽者。
+  const model = createSessionCheckpointMiddleware(registry.sessions) as unknown as {
     wrapModelCall: Hook;
-    wrapToolCall: Hook;
   };
+  const tool = createToolExecuteMiddleware(undefined, {
+    outer: [createSessionCheckpointListener(registry.sessions)],
+  }) as unknown as { wrapToolCall: Hook };
+  const hooks = { wrapModelCall: model.wrapModelCall, wrapToolCall: tool.wrapToolCall };
   return { sessions, handles, hooks };
 }
 
@@ -235,6 +247,10 @@ describe('工具動手之前', () => {
     expect(called).toBe(false);
     expect((result as ToolMessage).content).toBe(TOOL_ABORTED_BEFORE_DISPATCH_TEXT);
     expect(toolErrorOf(result as ToolMessage)?.code).toBe(TOOL_ABORTED_BEFORE_DISPATCH);
+    // 經 `tools/execute` 造出來的那則，跟外層 guard 用的那則逐位元組相同。
+    const expected = abortedBeforeDispatch({ callId: 'c1', name: 'write_file' });
+    expect(Object.keys(result as ToolMessage)).toEqual(Object.keys(expected));
+    expect(JSON.stringify(result)).toBe(JSON.stringify(expected));
   });
 
   it('排空被拒：工具本體不跑，錯誤往外走（fail-closed）', async () => {

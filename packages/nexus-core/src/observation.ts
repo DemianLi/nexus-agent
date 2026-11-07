@@ -2,7 +2,7 @@
  * 先讀後改：沒讀過的檔不准改。
  *
  * 模型可以對一個**沒讀過**的檔直接 `edit_file`——盲改。失敗一次是一輪往返（工具錯誤 →
- * 模型重讀 → 再改），成功了則可能改壞它沒看到的地方。這個 middleware 記下每個 agent
+ * 模型重讀 → 再改），成功了則可能改壞它沒看到的地方。這位監聽者記下每個 agent
  * 這一場觀察過哪些檔，並用那份紀錄擋下每一次寫入與編輯。
  *
  * ## 照抄 dsh 的哪些、退了哪一條
@@ -26,7 +26,7 @@
  * expected version 下去，後端自己做 compare-and-swap。`deepagents@1.13.1` 的
  * `BackendProtocol` 表達不出來：`write(filePath, content)` 與
  * `edit(filePath, old, new, replaceAll)` 收不到任何 expected-version 參數。退到最接近的
- * 實作——在 `wrapToolCall` 裡先 `readRaw()` 比對版本再放行。**殘留 TOCTOU**：比對與寫入
+ * 實作——在 `tools/execute` 的監聽者裡、寫入之前比對版本再放行（先問 {@link FILE_VERSION}，沒有才 `readRaw`）。**殘留 TOCTOU**：比對與寫入
  * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
  * 不是 kernel boundary）。
  *
@@ -48,8 +48,8 @@
  *
  * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
  *
- * **鍵的範圍（N0333）：延後，不是偏離。** {@link observationKey} 只看得到兩層路由，見該函式的說明。要全看見只需要 `fold.ts` 把
- * `offWorkspacePrefixes()` 交給 {@link createObservationPolicy}；PM 裁決這張卡不動 `fold.ts`，驗收時另開 backlog 卡。
+ * **鍵的範圍：** {@link observationKey} 只看得到兩層路由，見該函式的說明。TODO(#1910)：{@link createObservationListener}
+ * 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
  *
  * @module
  */
@@ -57,18 +57,16 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { posix } from 'node:path';
 
-import { ToolMessage } from '@langchain/core/messages';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
-import { toolRefusal } from './tool-events.js';
+import { toolNameOfCall } from './tool-call-step.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
 import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import type { MiddleSection } from './prompt-sections.js';
 
-/** 這個 middleware 的名字。排序斷言用得到。 */
+/** 先讀後改的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
 
 /**
@@ -115,7 +113,7 @@ export function observationGuidance(tools: ReadonlySet<string>): string {
 
 /**
  * 先讀後改那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：規則要在模型動手之前就講給它聽，理由與出處見檔頭。
- * 照這一格看到的工具名現算（{@link observationGuidance}），兩個工具都不在場時這一次不接。由 fold 在策略那一格的外側接上。
+ * 照這一格看到的工具名現算（{@link observationGuidance}），兩個工具都不在場時這一次不接。由 fold 掛在核准閘門內側的 `observationPrompt` 那一格。
  */
 export const OBSERVATION_SECTION: MiddleSection = {
   name: 'nexus:fs-observation',
@@ -214,7 +212,7 @@ interface ReadVersionSlot {
 }
 
 /**
- * 正在跑的 `read_file` 的版本槽。**observation 自己開一顆**，不借 `read-continuation` 的：兩個 middleware 的排位由 fold 決定，
+ * 正在跑的 `read_file` 的版本槽。**observation 自己開一顆**，不借 `read-continuation` 的：兩者的先後由 fold 決定，
  * 自己開槽的話不論誰包誰，backend 在深處 `getStore()` 拿到的都是這一顆。
  */
 const currentReadVersion = new AsyncLocalStorage<ReadVersionSlot>();
@@ -273,22 +271,15 @@ export async function fileVersionOf(backend: unknown, path: string): Promise<Fil
  * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。照 dsh：`FsError` 拋出來由
  * `toolErrorResult` 渲染，碼只在 `error.info`（`packages/core/tools/src/index.ts:635-641`）。
  */
-function refusal(callId: string, toolName: string, code: string, reason: string): ToolMessage {
+function refusal(code: string, reason: string): PipelineExecuteResult {
   // 碼標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
   // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
-  return toolRefusal(reason, { callId, name: toolName, error: { name: 'FsError', code } });
-}
-
-/**
- * 這次工具呼叫是不是失敗了。
- *
- * 判準是 `status === 'error'`——`ToolMessage` 上分辨成功與失敗的結構欄位（模型看不到它，靠的是
- * 文字的 `Error: `；這裡是程式在讀），跟圍堵與核准
- * 閘門用的是同一格。認不得的形狀（例如 `Command`）一律當成功：這裡多算一次成功只會讓
- * 策略**多記一筆觀測**，而那條路上已經有版本新鮮度在守；多算一次失敗才會讓它漏記缺席。
- */
-function isErrorResult(result: unknown): boolean {
-  return (result as { readonly status?: unknown } | undefined)?.status === 'error';
+  return {
+    kind: 'message',
+    content: `${TOOL_ERROR_PREFIX}${reason}`,
+    isError: true,
+    error: { name: 'FsError', code },
+  };
 }
 
 /** 這次呼叫的 `file_path`，不是字串就回 `undefined`（表示這一格不歸我們管）。 */
@@ -326,13 +317,12 @@ const MAX_ROUTE_DEPTH = 8;
  *   `routePrefixes`、不留 `getBackendAndKey` 與 `default`，所以沒辦法用基座自己的 `getBackendAndKey` 一路走到底，也看不到第三層以後的前綴。
  *   看不到的那幾層裡，不同路由的同名檔會被當成同一個檔：結果只會是**錯誤碼不準**（`FS_STALE_VERSION` 而不是 `FS_NOT_OBSERVED`），不會放行——
  *   `staleness` 拿這次呼叫的原路徑問後端，版本對不上就拒絕。
- *   **這一條是延後，不是偏離**：`fold.ts` 把 `offWorkspacePrefixes()` 交給 {@link createObservationPolicy} 就看得到全部前綴（PM 裁決這張卡不動 `fold.ts`，
- *   驗收時另開 backlog 卡）。dsh 對應的是 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`）。
+ *   TODO(#1910)：{@link createObservationListener} 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
  *   另一個殘留：看不到的那幾層裡鍵相同的兩個不同檔，若版本 token 也撞號（同一毫秒 mtime、同長度、同 djb2），讀其中一個會讓另一個被放行；實務上可以忽略。
  * - 含 `..` 段的路徑不收（鍵是原字串）：後端會拒絕它，`normalize` 卻會把它折成別的檔的名字，讓一次失敗的讀誤記到那個檔身上。
  *
  * **與 dsh 的偏離（理由 1，基座表達不出來）：不取 realpath，用字面正規化。** dsh 的 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`，
- * `687f282e`）檔案存在時用 realpath 當 `targetKey`，不存在時取最近一個存在的祖先的 realpath 接上缺的幾段。這裡 middleware 拿到的是 `BackendProtocol`，
+ * `687f282e`）檔案存在時用 realpath 當 `targetKey`，不存在時取最近一個存在的祖先的 realpath 接上缺的幾段。這裡監聽者拿到的是 `BackendProtocol`，
  * 上面沒有 `resolve`／`realpath`，主機路徑只存在於 `ContainedFilesystemBackend` 內部。經過符號連結的別名（目錄或檔案連結）因此仍是兩個檔，
  * 但結果只會是誤擋（`FS_NOT_OBSERVED`），不會放行：別名各是一把鍵，沒讀過的那個寫法被擋；同一個寫法，`read_file` 回報的版本與
  * `staleness`／`look` 拿**原路徑**問到的版本取自同一個位置，經另一個別名改過就對不上。`ContainedFilesystemBackend` 的 `read` 與
@@ -363,32 +353,20 @@ export function observationKey(backend: AnyBackendProtocol, raw: string): string
 }
 
 /**
- * 造一份「先讀後改」的策略 middleware。
+ * 造一位「先讀後改」的監聽者：`tools/execute` 的 core 內層，讀完記下版本；改之前看紀錄，沒讀過、讀到的是不存在、或版本對不上就短路成拒絕，不往內交。
  *
- * **一個 agent 一份，不共用。** 觀測紀錄在 closure 裡，共用會讓 root 讀過的檔變成
+ * **一個 agent 一位，不共用。** 觀測紀錄在 closure 裡，共用會讓 root 讀過的檔變成
  * subagent 也可以直接改——那正好把這件事要擋的東西放掉。這是與 {@link createSummarizer}
  * 同型的理由，跟圍堵與提醒器（無狀態、共用一份）相反。
  *
  * @param backend - 這次組裝真正在用的那個 backend（`foldBackend` 的產物，可能是
  *   `CompositeBackend`）。版本 token 從它身上取——**必須是工具實際讀寫的那一個**，
  *   拿兜底那個會讓掛了路由的路徑量到別人的版本。
- * @returns 可以放進 `middleware` 陣列的 middleware。
+ * @returns 掛在 `tools/execute` 內層的監聽者。
  */
-export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddleware {
-  return createToolCallStepMiddleware(
-    OBSERVATION_POLICY_MIDDLEWARE_NAME,
-    observationToolStep(backend),
-  );
-}
-
-/**
- * 「先讀後改」的一步：讀完記下版本，改之前比對版本，不對就不往內交。觀測紀錄在這一步的 closure 裡，
- * 一個 agent 一份，理由見 {@link createObservationPolicy}。
- *
- * @param backend - 這次組裝真正在用的那個 backend。
- * @returns 這一步。
- */
-export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
+export function createObservationListener(
+  backend: AnyBackendProtocol,
+): CoreToolListener<'tools/execute'> {
   // v1 / v2 兩種 backend 的 `readRaw` 回傳形狀不同；轉接一次之後統一是 `{ data } | { error }`。
   const fs = adaptBackendProtocol(backend);
   /** 鍵見 {@link observationKey}；問後端時一律用模型給的原路徑。 */
@@ -454,12 +432,11 @@ export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
     observed.set(keyOf(path), state);
   };
 
-  const step: ToolCallStep = async (call, next) => {
-    const toolName = toolNameOfCall(call);
-    const path = filePathOf(call.args);
+  const listener: CoreToolListener<'tools/execute'> = async (_exec, next, site) => {
+    const toolName = toolNameOfCall(site);
+    const path = filePathOf(site.args);
     // 不是這三顆、或者參數根本不帶路徑（模型填壞了）→ 原樣放行，讓工具自己講。
     if (path === undefined) return next();
-    const callId = call.callId ?? '';
 
     if (toolName === OBSERVED_READ_TOOL) {
       const slot: ReadVersionSlot = {};
@@ -467,7 +444,7 @@ export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
       // **讀完才記，而且版本記的是後端的真話不是工具的輸出**：讀一個不存在的檔會被
       // 記成確認缺席，那正是之後受防護的新建所需要的授權。**但讀失敗時記不下「存在」**
       // ——理由見 {@link observe}。
-      await observe(path, isErrorResult(result), slot.version);
+      await observe(path, result.isError, slot.version);
       return result;
     }
 
@@ -475,15 +452,13 @@ export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
       const prior = observed.get(keyOf(path));
       if (prior === undefined)
         return refusal(
-          callId,
-          toolName,
           NOT_OBSERVED,
           `要編輯 "${path}" 得先讀過它——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`,
         );
       if (prior.kind === 'absent')
-        return refusal(callId, toolName, NOT_FOUND, `不能編輯 "${path}"：讀到的時候它不存在。`);
+        return refusal(NOT_FOUND, `不能編輯 "${path}"：讀到的時候它不存在。`);
       const stale = await staleness(path, prior);
-      if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
+      if (stale !== undefined) return refusal(STALE_VERSION, stale);
       const result = await next();
       await observe(path);
       return result;
@@ -493,15 +468,13 @@ export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
       const prior = observed.get(keyOf(path));
       if (prior?.kind === 'present') {
         const stale = await staleness(path, prior);
-        if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);
+        if (stale !== undefined) return refusal(STALE_VERSION, stale);
       } else {
         // 未見或確認缺席 ＝ 只授權新建。現在檔在那裡，就是「覆蓋一個沒讀過的檔」——
         // 沒讀過的那次是 NOT_OBSERVED，讀到缺席之後又冒出來的那次是有人搶先建了。
         const now = await look(path);
         if (now.kind === 'present')
           return refusal(
-            callId,
-            toolName,
             prior === undefined ? NOT_OBSERVED : STALE_VERSION,
             prior === undefined
               ? `"${path}" 已經存在，覆蓋它之前要先讀過——先用 \`${OBSERVED_READ_TOOL}\` 讀一次，再重試。`
@@ -515,7 +488,7 @@ export function observationToolStep(backend: AnyBackendProtocol): ToolCallStep {
 
     return next();
   };
-  return step;
+  return listener;
 
   /** 版本還是不是讀到的那個；是就回 `undefined`，不是就回那句要給模型看的話。 */
   async function staleness(path: string, prior: Observation): Promise<string | undefined> {

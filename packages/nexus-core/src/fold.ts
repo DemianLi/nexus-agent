@@ -43,7 +43,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createToolBarrierMiddleware } from './tool-barrier.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
-import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { fsToolErrorsListener, recordBackendOutcomes } from './fs-tool-errors.js';
 import { limitGlobPatterns } from './glob-pattern-limit.js';
 import { FS_SERVICE, settleFsService } from './fs-service.js';
 import {
@@ -60,13 +60,13 @@ import { createReadContinuationMiddleware, recordReadExtent } from './read-conti
 import { recordToolResultMeta } from './tool-result-meta.js';
 import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
-import { createSpillPolicyMiddleware } from './spill-policy.js';
+import { createSpillPolicyListener } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
-import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
+import { capSearchResults, createSearchOverflowListeners } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
 import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
 import {
-  createObservationPolicy,
+  createObservationListener,
   OBSERVATION_POLICY_PLUGIN_NAME,
   OBSERVATION_SECTION,
 } from './observation.js';
@@ -100,6 +100,7 @@ import {
 import type { HistoryFromLogOptions, HistoryShadowOptions } from './history-shadow.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import {
+  createSessionCheckpointListener,
   createSessionCheckpointMiddleware,
   SESSION_CHECKPOINT_PLUGIN_NAME,
 } from './session-checkpoint-policy.js';
@@ -143,6 +144,7 @@ import {
   createToolPostExecuteMiddleware,
   createToolPreExecuteMiddleware,
 } from './tool-pipeline.js';
+import type { CoreToolListener } from './tool-pipeline.js';
 import {
   resolveToolResultPruneConfig,
   TOOL_RESULT_PRUNE_SERVICE,
@@ -401,8 +403,8 @@ export interface FoldOptions {
    * 沒有任何 backend（組裝點沒給、也沒人掛路由）又沒關掉時，fold 當場拋——同
    * {@link foldSummarizer} 那條軸線：靜默跳過會長得跟「一切正常」一模一樣。
    *
-   * 它建的 middleware **有狀態**（觀測紀錄在 closure 裡），所以 root 與每個 subagent
-   * **各建一份**，不共用。見 {@link createObservationPolicy}。
+   * 它建的監聽者**有狀態**（觀測紀錄在 closure 裡），所以 root 與每個 subagent
+   * **各建一份**，不共用。見 {@link createObservationListener}。
    */
   observationPolicy?: boolean;
 
@@ -410,7 +412,7 @@ export interface FoldOptions {
    * 工具結果的外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
    * 全文存進 `store`，模型只收到預覽加定位。**省略就不掛**——那時超過 80,000 字元的結果仍由基座換成預覽。
    *
-   * 沒有 closure 狀態，root 與每個子代理共用同一份實例（儲存本身按會話分）。見 {@link ./spill-policy.ts}。
+   * 沒有 closure 狀態，root 與每個子代理共用同一位監聽者（儲存本身按會話分）。見 {@link ./spill-policy.ts}。
    */
   spillPolicy?: SpillPolicyOptions;
 
@@ -473,13 +475,13 @@ export interface FoldOptions {
   serialToolCalls?: boolean;
 
   /**
-   * 宿主持有的事件派發面（`registry.dispatch`，[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）。省略即不掛
-   * 工具事件的生產者，工具呼叫的行為與沒有這一格時一樣。
+   * 宿主持有的事件派發面（`registry.dispatch`，[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）。
    *
-   * 給了會多四件事：`tools/pre-execute`（核准閘門外側）、`tools/post-execute`、`tools/execute` 三顆 middleware 進槽位表，
-   * 圍堵多派發 `tools/result`。**沒有任何監聽者時全部是直通**，連請求物件都不造。位置與理由見 {@link ./tool-pipeline.ts}。
+   * 給了，插件掛在 `tools/pre-execute`（核准閘門外側）、`tools/post-execute`、`tools/execute` 與 `tools/result`（圍堵派發）上的監聽者
+   * 才會被問到；三顆生產者 middleware 進槽位表。**沒有任何監聽者時全部是直通**，連請求物件都不造。位置與理由見 {@link ./tool-pipeline.ts}。
    *
-   * 省略時掛在這四個事件上的監聽者沒有生產者，不會被問到。產品路徑只有 `apps/harness/src/agent-factory.ts`
+   * 省略時插件的監聽者不會被問到；core 自己的監聽者照常掛：有 core 監聽者的那幾顆生產者（`tools/execute`、`tools/post-execute`，
+   * 有基座工具被遮時子代理的 `tools/pre-execute`）不給派發面也建。產品路徑只有 `apps/harness/src/agent-factory.ts`
    * 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試或量測要載入有監聽者的 plugin 時也得傳。
    * 沒傳而載了 `@nexus/plugin-present` 的組裝，`present` 會叫得動卻靜靜不交付（它的交付寫入掛在 `tools/result` 上，#1286）。
    */
@@ -615,14 +617,10 @@ export function foldRegistry(
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions, options.events);
-  // 工具事件的三顆生產者（#1248）：無狀態，呼叫者身分從每次請求現算。post 與 execute 一份實例走遍 root 與每個子代理；
-  // pre 在有基座工具被遮時，子代理另一份，帶工具過濾那一位 core 監聽者（見下面的 `subagentToolPreExecute`）。
+  // 工具事件的三顆生產者（#1248）：呼叫者身分從每次請求現算。pre 在有基座工具被遮時，子代理另一份，帶工具過濾那一位
+  // core 監聽者（見下面的 `subagentToolPreExecute`）；execute 與 post 帶 core 自己的監聽者，在下面組。
   const toolPreExecute =
     options.events === undefined ? undefined : createToolPreExecuteMiddleware(options.events);
-  const toolPostExecute =
-    options.events === undefined ? undefined : createToolPostExecuteMiddleware(options.events);
-  const toolExecute =
-    options.events === undefined ? undefined : createToolExecuteMiddleware(options.events);
   // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
   // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
   const turnCancel = createTurnCancelGuard();
@@ -664,6 +662,10 @@ export function foldRegistry(
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
   // 理由見 {@link foldMiddleware}。
   const sessionCheckpoint = foldSessionCheckpoint(registry);
+  const sessionCheckpointListener =
+    sessionCheckpoint === undefined
+      ? undefined
+      : createSessionCheckpointListener(registry.sessions);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend, options.reservedBackendPrefixes);
@@ -688,8 +690,9 @@ export function foldRegistry(
   });
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
-  // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
-  const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
+  // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一位走遍 root 與每個 subagent；子代理的檔案工具由基座用
+  // root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
+  const fsToolErrors = backend === undefined ? undefined : fsToolErrorsListener;
   // 讀檔結果最後補上讀到哪（#594）：同上，只在有 backend 時掛、包的是交給基座的那一份，無狀態、
   // 一份走遍 root 與每個 subagent。見 {@link ./read-continuation.ts}。
   const readContinuation =
@@ -700,12 +703,9 @@ export function foldRegistry(
     backend === undefined || options.workspaceSearch !== true
       ? undefined
       : createSearchDescriptionsMiddleware();
-  // 外溢層（#719）：無狀態、一份走遍 root 與每個 subagent，位置緊貼中止（在 plugin 與核准閘門外側），
-  // 圍堵記進日誌的就是它換過的那一則。見 {@link ./spill-policy.ts}。
+  // 外溢層（#719）：無狀態、一位走遍 root 與每個 subagent，在每一個 plugin middleware 內側：plugin 換過的內容它量不到；圍堵記進日誌的是它換過的那一則，外側的 plugin 再換過的除外。見 {@link ./spill-policy.ts}。
   const spill =
-    options.spillPolicy === undefined
-      ? undefined
-      : createSpillPolicyMiddleware(options.spillPolicy);
+    options.spillPolicy === undefined ? undefined : createSpillPolicyListener(options.spillPolicy);
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
@@ -723,7 +723,7 @@ export function foldRegistry(
     backend === undefined || sharedWorkspacePrefix === undefined
       ? undefined
       : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
-  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
+  // 搜尋結果的筆數上限（#735）：監聽者（execute／post 兩半）與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
   // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
   const searchOverflow =
     options.searchOverflow !== undefined &&
@@ -732,10 +732,10 @@ export function foldRegistry(
       ? options.searchOverflow
       : undefined;
   // 有共用區時，超過上限的 `grep` 由上限層用前綴層同一份判準判完整清單（#2065）。
-  const searchOverflowMiddleware =
+  const searchOverflowListeners =
     searchOverflow === undefined
       ? undefined
-      : createSearchOverflowMiddleware(
+      : createSearchOverflowListeners(
           sharedWorkspacePrefix === undefined
             ? searchOverflow
             : {
@@ -743,6 +743,29 @@ export function foldRegistry(
                 sharedMark: createSharedGrepMark(sharedWorkspacePrefix, skills),
               },
         );
+  // `tools/post-execute`：外層第一位是外溢，第二位是搜尋上限的後半，所以外溢量的是排好版、接上定位的那一則。
+  // 一份走遍 root 與每個子代理；沒有派發面也照樣有，core 監聽者不能跟著消失。搜尋上限的 `scope` 交給這一顆，
+  // 包住它的整步（execute 那一半在它的內層跑），native 的 root 直接呼叫那一步時也一樣。
+  const postOuter = [spill, searchOverflowListeners?.post].filter(isPresent);
+  const toolPostExecute =
+    options.events === undefined && postOuter.length === 0
+      ? undefined
+      : createToolPostExecuteMiddleware(
+          options.events,
+          { outer: postOuter },
+          searchOverflowListeners?.scope,
+        );
+  // `tools/execute`：外層是耐久檢查點（動手前排空），內層由外而內是先讀後改、搜尋上限的開槽、檔案工具的失敗。
+  // 先讀後改在檔案工具的失敗外側，讀失敗時它看到的已經是錯誤。**逐個 agent 各建一份**：先讀後改的觀測紀錄在 closure 裡。
+  const toolExecute = (): AgentMiddleware | undefined => {
+    const outer = [sessionCheckpointListener].filter(isPresent);
+    const inner = [observationPolicy?.(), searchOverflowListeners?.execute, fsToolErrors].filter(
+      isPresent,
+    );
+    return options.events === undefined && outer.length === 0 && inner.length === 0
+      ? undefined
+      : createToolExecuteMiddleware(options.events, { outer, inner });
+  };
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
@@ -827,12 +850,6 @@ export function foldRegistry(
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。
     // root 按了停止，訊號經 `configurable` 傳到子代理（#265 的 Q10）。見 {@link ./turn-cancel.ts}。
     shared('turnCancel', turnCancel),
-    // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
-    // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
-    shared('spill', spill),
-    // 搜尋結果的筆數上限（#735）緊貼外溢層內側：外溢層看到的是它換過的那則（行內前段加定位），同 dsh `tools/post-execute`
-    // 先於外溢；在 plugin 與核准閘門外側。無狀態、一份走遍 root 與每個子代理（槽逐次呼叫開）。見 {@link ./search-overflow.ts}。
-    shared('searchOverflow', searchOverflowMiddleware),
     // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
     {
       name: 'plugins.prepended',
@@ -857,7 +874,7 @@ export function foldRegistry(
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
     { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
-    // 先讀後改那一段（#2414）緊貼策略外側；無狀態，共用一份。摘要器同名取代回預設疊第三格，這一段在它內層，見 `prompt-sections.ts` 檔頭。
+    // 先讀後改那一段（#2414）；無狀態，共用一份。摘要器同名取代回預設疊第三格，這一段在它內層，見 `prompt-sections.ts` 檔頭。
     // 策略沒掛就沒有這一段。
     shared(
       'observationPrompt',
@@ -865,9 +882,6 @@ export function foldRegistry(
         ? undefined
         : createSectionSlotMiddleware(OBSERVATION_SECTION_MIDDLEWARE_NAME, [OBSERVATION_SECTION]),
     ),
-    // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
-    // 理由見 {@link foldObservationPolicy}。
-    perAgent('observationPolicy', () => observationPolicy?.()),
     // **摘要器也各建一份，不共用**：認不出身分的呼叫用實例自己的會話名，共用會讓 root 與這個 subagent 的那種呼叫 append 進同一個檔。
     // 理由見 {@link foldSummarizer}。排在子代理自帶的 middleware 之前 ＝ 自帶的同名版本贏得過我們這份（打底不是強制）。
     perAgent('summarizer', () => summarizer()),
@@ -887,7 +901,8 @@ export function foldRegistry(
     shared('modelUsage', modelUsage),
     // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；在其餘 plugin
     // middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次。子代理的模型呼叫排空的是子代理那一份日誌。
-    // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
+    // 工具那一側是 `tools/execute` 外層的那一位（下面 `toolExecute` 那一格）；圍堵在它外側先記 `tool/call`（有 `callId`、找得到日誌時）。
+    // 見 {@link ./session-checkpoint-policy.ts}。
     shared('sessionCheckpoint', sessionCheckpoint),
     // 其餘 plugin 的：排在子代理 `spec.middleware` 外層，plugin 打底、自帶的在內側，同 `tools` 那條「全域 → 自帶」的軸線。
     { name: 'plugins.rest', root: same(plugins.rest), subagent: same(subagentPlugins.rest) },
@@ -911,21 +926,17 @@ export function foldRegistry(
     // `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
     // 見 {@link ./output-schema.ts}。
     shared('outputSchema', outputSchema),
-    // 檔案工具的失敗標成錯誤：貼著工具本體（dsh 在工具裡拋），在輸出校驗、先讀後改與圍堵的內側，它們讀到的都是
-    // 改過的狀態。子代理的檔案工具由基座用 root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
-    // 解不開參數的樁不叫 backend，排在它裡面沒有東西可記。見 {@link ./fs-tool-errors.ts}。
-    shared('fsToolErrors', fsToolErrors),
-    // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，兩者不相干；
+    // 讀檔結果最後補上讀到哪：在 `tools/execute` 外側，看到的是失敗已經標成錯誤的結果，只補成功的；
     // 外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     shared('readContinuation', readContinuation),
-    // `grep` 參數說明的換法：同一個時刻、同一個理由，只動模型那一側的工具定義，與上面互不相干。見 {@link ./search-descriptions.ts}。
+    // `grep` 參數說明的換法：只動模型那一側的工具定義，跟工具呼叫那一側的鄰居互不相干。見 {@link ./search-descriptions.ts}。
     shared('searchDescriptions', searchDescriptions),
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘 `wrapModelCall`
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
     // `tools/execute`（#1248）環繞工具本體，排在解不開參數那顆的內側（樁回的錯誤它看得到）、撞到輸出上限那顆的外側：後者的
     // `wrapToolCall` 只對 `task` 把結果換成 dsh 那句錯誤，dsh 是在前景 `task` 本體裡拋，所以那個替換在 execute 的內側才對得上。
-    shared('toolExecute', toolExecute),
+    perAgent('toolExecute', toolExecute),
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
     shared('maxTokens', maxTokens),
@@ -1398,6 +1409,11 @@ interface MiddlewareSlot {
   readonly subagent: SlotTake<[spec: NexusSubAgent]>;
 }
 
+/** 濾掉 `undefined` 的型別守衛。 */
+function isPresent<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
 /** 一列在一個 agent 身上產出的東西：一顆、一批，或什麼都沒有。 */
 type SlotContribution = AgentMiddleware | readonly AgentMiddleware[] | undefined;
 
@@ -1727,13 +1743,13 @@ function summarizationDisposition(
  *   {@link ./registry.ts | DisabledEntryView}。
  * @param options - 組裝點自有的那些。
  * @param backend - {@link foldBackend} 折出來的那個。
- * @returns 每呼叫一次就給一份新的策略 middleware，或 `undefined`。
+ * @returns 每呼叫一次就給一位新的策略監聽者，或 `undefined`。
  */
 function foldObservationPolicy(
   registry: PluginRegistry,
   options: FoldOptions,
   backend: AnyBackendProtocol | undefined,
-): (() => AgentMiddleware) | undefined {
+): (() => CoreToolListener<'tools/execute'>) | undefined {
   if (options.observationPolicy === false) return undefined;
   // **這一格要問在拋之前。** `disabled: true` 是第二條正當的「不要」，而不要的組裝不必
   // 有 backend——問在拋之後的話，一個正確關掉了它、又沒有 backend 的組裝會當場炸。
@@ -1749,7 +1765,7 @@ function foldObservationPolicy(
         '`observationPolicy: false`，或在部署設定裡把 `@nexus/core/observation-policy` ' +
         '那一列標成 `disabled: true`（三者都等於接受盲改）。',
     );
-  return () => createObservationPolicy(backend);
+  return () => createObservationListener(backend);
 }
 
 /**

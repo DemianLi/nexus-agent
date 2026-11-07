@@ -59,8 +59,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.6.0`（#2533）：{@link ToolThread} 多 {@link ToolThread.section}，在這條 thread 的系統提示詞登記一段。向後相容的新增：
  * 不呼叫它的來源照常；要用的消費者宣告 `^2.6.0`。
+ *
+ * `2.6.1`（#2416）：`tools/execute` 的監聽者交回改過的結果、`blocks` 仍是工具本體那則造出的那一份時，內容的形狀照本體回的那則：`content` 沒換就沿用原本的內容，
+ * 換了就照原本是字串或陣列給新的文字（陣列裡的非文字塊不留）。修補號：介面不變，只改這種交回怎麼造回訊息。
  */
-export const TOOLS_CONTRACT_VERSION = '2.6.0';
+export const TOOLS_CONTRACT_VERSION = '2.6.1';
 
 /** 無損 JSON 值。 */
 export type JsonValue =

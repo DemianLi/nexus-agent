@@ -27,13 +27,11 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
+import { toolNameOfCall } from './tool-call-step.js';
+import type { CoreToolListener } from './tool-pipeline.js';
 import { estimateTextTokens } from './token-estimate.js';
 
-/** 外溢層 middleware 的名字。排序斷言與錯誤訊息用得到。 */
+/** 外溢的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const SPILL_POLICY_MIDDLEWARE_NAME = 'nexusSpillPolicy';
 
 /** 不外溢的工具：讀出來的東西再外溢，模型永遠讀不完。dsh 只放過 `read`。 */
@@ -225,7 +223,7 @@ function measure(text: string): { readonly tokens: number; readonly density: num
 }
 
 /** 結果訊息的文字：字串，或全是文字區塊的陣列。有別的區塊（圖片等）就是 `undefined`。 */
-function plainText(content: ToolMessage['content']): string | undefined {
+function plainText(content: string | readonly unknown[]): string | undefined {
   if (typeof content === 'string') return content;
   const parts: string[] = [];
   for (const block of content) {
@@ -273,58 +271,47 @@ async function spill(
 }
 
 /**
- * 外溢層的一步：往內交，結果超過預算就存檔、換成預覽。
+ * 外溢層：`tools/post-execute` 的 core 外層第一位。結果超過預算就存檔、換成預覽；只換內容，`status`、碼與其餘欄位由派發點沿用。
+ * **沒有 closure 狀態，root 與每個子代理共用同一位**，儲存本身按會話分。
  *
  * @param options - 預算與儲存。
- * @returns 這一步。
+ * @returns 掛在 `tools/post-execute` 外層的監聽者。
  */
-export function spillPolicyToolStep(options: SpillPolicyOptions): ToolCallStep {
-  return async (call, next) => {
+export function createSpillPolicyListener(
+  options: SpillPolicyOptions,
+): CoreToolListener<'tools/post-execute'> {
+  return async (exec, result, next, call) => {
+    // 先往內交：內層（搜尋上限的後半、插件的 `tools/post-execute` 監聽者）換過的內容才是要量的那一則。
+    const decision = await next();
     const toolName = toolNameOfCall(call);
-    const result = await next();
-    if (EXEMPT_TOOLS.has(toolName)) return result;
-    if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-    const text = plainText(result.content);
-    if (text === undefined) return result;
+    if (EXEMPT_TOOLS.has(toolName)) return decision;
+    if (result.kind !== 'message' || result.isError) return decision;
+    const text =
+      decision.kind !== 'replace'
+        ? plainText(result.blocks)
+        : decision.blocks === undefined
+          ? decision.content
+          : plainText(decision.blocks);
+    if (text === undefined) return decision;
     try {
       // 來源與建議檔名照 dsh `spill-policy/src/index.ts:103-106`。
       const replaced = await spill(text, options, {
         source: {
           kind: 'tool',
           toolName,
-          callId: call.callId ?? result.tool_call_id,
+          callId: call.callId ?? exec.callId,
           label: 'result',
         },
         suggestedName: `${toolName}.txt`,
         content: text,
       });
-      if (replaced === undefined) return result;
-      // 只換內容，其餘每一格原樣帶過去。
-      return new ToolMessage({
-        content: replaced,
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? toolName,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
+      if (replaced === undefined) return decision;
+      return { kind: 'replace', content: replaced };
     } catch (error: unknown) {
       options.warn?.(
         `spill-policy: ${toolName} 的結果存不下（${(error as Error).message}），保留原結果`,
       );
-      return result;
+      return decision;
     }
   };
-}
-
-/**
- * 外溢層。**每個 agent（root 與子代理）掛同一份實例**：沒有 closure 狀態，儲存本身按會話分。
- *
- * @param options - 預算與儲存。
- * @returns 一顆 `wrapToolCall` middleware。
- */
-export function createSpillPolicyMiddleware(options: SpillPolicyOptions): AgentMiddleware {
-  return createToolCallStepMiddleware(SPILL_POLICY_MIDDLEWARE_NAME, spillPolicyToolStep(options));
 }

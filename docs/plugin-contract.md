@@ -236,6 +236,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   不補 `additionalProperties`，根物件沒有 `properties` 時補一個空的，沒寫 `additionalProperties: false` 的多帶鍵原樣交給 `execute`；錯誤句是 LangChain 那一層的「Received tool input did not match expected schema」。
   **`timeoutMs`**：一次呼叫的預算，照 dsh 的 `ToolDefinition.timeoutMs`；轉接器轉成 LangChain 的 `defaultConfig.timeout`，到期舉起 `exec.signal`，逾時句講出這個數字。
   **成功結果的 `artifact`**：不送模型的附帶資料，落在那則 `ToolMessage` 的 `artifact`、跟著日誌落盤；省略與 `[]` 是兩種值。
+- **工具接縫 2.6.1：`tools/execute` 交回結果的內容形狀**（`@nexus/tools`，#2416）。監聽者交回改過的 `message` 結果時：給了新的 `blocks`（跟工具本體那則造出的視圖不是同一個參照）就照 `blocks`；
+  `blocks` 還是那一份（`{ ...view, … }` 一路展開帶過去的也算）時，形狀照本體回的那則——`content` 沒換就沿用原本的內容，換了就照原本是字串或陣列給新的文字，
+  陣列裡的圖之類的非文字塊這時不留，要留就自己給新的 `blocks`。修補號：介面不變，消費者的範圍不用改。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，

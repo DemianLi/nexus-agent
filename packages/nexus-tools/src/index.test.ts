@@ -59,7 +59,8 @@ describe('@nexus/tools 的定義', () => {
     // 2.0.0（#2351）：`register` 也收 `NexusTool`，主版號跳 major，`^1.x` 的消費者停在 PENDING（`provider.test.ts` 量）。
     // 2.1.0（#2352）：`ToolExec` 多 `deferContext` 與 `interrupt`。2.2.0（#2353）：`NexusTool` 多選填的 `concludesTurn`。
     // 2.3.0（#2353）：`rawParameters`、`timeoutMs`、成功結果的 `artifact`。2.4.0（#2416）：`onResult` 看得到 `signal`、`blocks`、`content`。2.5.0（#2533）：多選填方法 `threadSource`。2.6.0（#2533）：`ToolThread` 多 `section`。
-    expect(TOOLS_CONTRACT_VERSION).toBe('2.6.0');
+    // 2.6.1（#2416）：`tools/execute` 交回沿用原 `blocks` 的結果時，內容形狀照本體那則。
+    expect(TOOLS_CONTRACT_VERSION).toBe('2.6.1');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('2');
   });
 
