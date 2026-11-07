@@ -136,7 +136,10 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import type { ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
+import { createFrontWireHandler } from './front-wire.js';
+import type { FrontForwarder } from './front-forward.js';
+import type { SupervisorClient } from './supervisor-client.js';
+import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
@@ -215,6 +218,9 @@ import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { embedLoginPlugin } from './settings/embed-login.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
+import { PROCESS_MODELS } from './settings/process-model.js';
+import { launchProcessModel } from './process-launcher.js';
+import type { ProcessModel } from './settings/process-model.js';
 import { hostToolsPlugin } from './settings/host-tools.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
@@ -273,6 +279,8 @@ export interface ServeInvocation {
   readonly help: boolean;
   /** 只印版本就退出（#1502）。 */
   readonly version: boolean;
+  /** `--process-model`（#2341）：省略就照 `#settings/process-model` 那一列，那一列也沒有就是 `single`。見 `process-launcher.ts`。 */
+  readonly processModel?: ProcessModel;
 }
 
 const USAGE = `用法：
@@ -318,6 +326,9 @@ const USAGE = `用法：
   --no-goal-driver     關掉自動續行：一個 active 的目標沒達成時，預設會自己再開一輪
                        （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
   --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）
+  --process-model <single|per-thread>
+                       single（預設）：一個行程放所有 thread；per-thread：監督行程起一個前台、每條 thread 一個行程，只在 Linux
+                       省略就照設定列 #settings/process-model
   --help               印這段話
   --version            印這個 harness 的版本就退出
 
@@ -418,6 +429,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
         version: { type: 'boolean', default: false },
+        'process-model': { type: 'string' },
       },
     });
   } catch (error) {
@@ -471,6 +483,13 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     }
   }
 
+  const processModel = values['process-model'];
+  if (processModel !== undefined && !(PROCESS_MODELS as readonly string[]).includes(processModel)) {
+    throw new Error(
+      `--process-model 只收 ${PROCESS_MODELS.join('、')}，收到 "${processModel}"。\n\n${USAGE}`,
+    );
+  }
+
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
@@ -521,6 +540,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     dumpDefaultConfig,
     help: values.help === true,
     version: values.version === true,
+    ...(processModel !== undefined && { processModel: processModel as ProcessModel }),
   };
 }
 
@@ -560,6 +580,17 @@ export interface RunServeOptions {
    * 見 {@link ConversationProcessMode}。
    */
   readonly conversation?: ConversationProcessMode;
+  /**
+   * 起成 per-thread 的前台（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，`front-process.ts` 用）：登入、網頁、營運端點跟 single 一樣，
+   * 指名一條 thread 的 wire 請求轉給那條的對話行程（`front-wire.ts`）。跟 {@link conversation} 只能給一個，兩個都給就拋。
+   */
+  readonly front?: FrontProcessMode;
+}
+
+/** per-thread 前台要的兩樣：監督行程的控制面、往對話行程的轉送器。 */
+export interface FrontProcessMode {
+  readonly supervisor: SupervisorClient;
+  readonly forwarder: FrontForwarder;
 }
 
 /**
@@ -692,6 +723,9 @@ async function resumeThread(
  * @returns 它的位址與收掉它的方法；`--help` 時回 undefined（只印用法）。
  */
 export async function runServe(options: RunServeOptions): Promise<RunningServe | undefined> {
+  if (options.front !== undefined && options.conversation !== undefined) {
+    throw new Error('runServe：front 與 conversation 只能給一個');
+  }
   const log = options.log ?? ((line: string) => console.log(line));
   const invocation = parseServeArgs(options.argv);
   if (invocation.help) {
@@ -1480,16 +1514,18 @@ async function startServer(
       }))
     : undefined;
   const streamCookies = embedCookies;
+  const embedStreamGuard: EmbedStreamGuard | undefined =
+    streamCookies === undefined
+      ? undefined
+      : {
+          recheck: (headers: Headers) => streamCookies.recheckOpenStream(headers),
+          audit: () => embedAudit,
+        };
   const handler = createWireHandler({
     auth,
     trustedHosts: invocation.trustedHosts,
     // 已開的嵌入版下行每秒重驗、記 stream／access（#2489）。稽核檔在下面的 try 裡才打開，所以用時才取。
-    ...(streamCookies !== undefined && {
-      embedStreams: {
-        recheck: (headers: Headers) => streamCookies.recheckOpenStream(headers),
-        audit: () => embedAudit,
-      },
-    }),
+    ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
     attachments: attachmentStore,
     deliverableLimits,
@@ -1510,6 +1546,7 @@ async function startServer(
         }),
     // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
     ...(options.conversation !== undefined && {
+      reportEmbedRefusals: true,
       boundThread: options.conversation.boundThread,
       onTurn: options.conversation.onTurn,
     }),
@@ -2035,6 +2072,8 @@ async function startServer(
 
   const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
+  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`。
+  let servedHandler: Pick<WireHandler, 'close'> = handler;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
     if (embedIdentityTable !== undefined && embedCookies !== undefined) {
@@ -2067,16 +2106,27 @@ async function startServer(
       };
     }
     if (proxySocket !== undefined) await clearStaleSocket(proxySocket);
+    const served =
+      options.front === undefined
+        ? handler
+        : createFrontWireHandler({
+            local: handler,
+            ...options.front,
+            auth,
+            ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
+            warn,
+          });
+    servedHandler = served;
     const started = await startWireServer({
       ...(listening.kind === 'front'
         ? {
             handler: routeBySurface(
-              handler,
+              served,
               createWebStaticHandler({ distRoot: webDist, auth: listening.auth }),
               opsEndpoints,
               embedRoutes,
             ),
-            mux: handler,
+            mux: served,
             ...(proxySocket === undefined
               ? { port: invocation.port }
               : { socketPath: proxySocket }),
@@ -2286,7 +2336,7 @@ async function startServer(
       ) {
         await new Promise<void>((resolve) => setTimeout(resolve, opsConfig.probes.drainMs));
       }
-      // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
+      // **每一步各自接住，全部跑完才拋**（#1511）：`servedHandler.close()` 會拒絕（thread 收尾失敗），
       // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
       const failures: unknown[] = [];
       const attempt = async (run: () => void | Promise<void>): Promise<void> => {
@@ -2299,7 +2349,7 @@ async function startServer(
       await attempt(() => memoryGauge?.stop());
       await attempt(() => opsMetrics?.stop());
       await attempt(() => server.close());
-      await attempt(() => handler.close());
+      await attempt(() => servedHandler.close());
       await attempt(() => threadSearch?.close());
       // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
       await attempt(() => failureRecorder.flush());
@@ -2413,9 +2463,32 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
 }
 
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  // `per-thread` 在這裡換成監督行程（#2341），不會回來；排在裝收尾之前，換掉之前這個行程什麼都還沒起。
+  // 旗標壞了不換：交給 `runServe` 報，訊息與退出碼跟 single 一樣。
+  let parsed: ServeInvocation | undefined;
+  try {
+    parsed = parseServeArgs(argv);
+  } catch {
+    parsed = undefined;
+  }
+  try {
+    if (parsed !== undefined) {
+      launchProcessModel({
+        argv,
+        flag: parsed.processModel,
+        env: process.env,
+        platform: process.platform,
+      });
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
   const lifecycle = installServeProcessLifecycle();
   try {
-    const running = await runServe({ argv: process.argv.slice(2) });
+    const running = await runServe({ argv });
     if (running === undefined) {
       lifecycle.uninstall();
       return;

@@ -217,6 +217,7 @@ import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.j
 import type { LiveThread, ThreadSearchErrorKind } from './thread-search.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
 import { EMBED_COMMAND_METHODS, EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './embed-profile.js';
+import { EMBED_REFUSED_HEADER } from './forwarded-principal.js';
 import type { ThreadProfile } from './embed-profile.js';
 import { mayOpenEmbedThread, ownerToRecord } from './embed-thread-owner.js';
 import type { EmbedThreadOwner } from './embed-thread-owner.js';
@@ -732,6 +733,11 @@ export interface WireHandlerOptions {
    * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve.ts` 有嵌入方時一定給。
    */
   readonly embedStreams?: EmbedStreamGuard;
+  /**
+   * 對話行程（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：拒絕嵌入身分時在回應帶 `x-nexus-embed-refused: <原因>`，
+   * 由前台記 `access` 稽核、轉給客戶端前刪掉（`forwarded-principal.ts`）。對話行程沒有稽核檔，{@link embedStreams} 缺席。
+   */
+  readonly reportEmbedRefusals?: boolean;
 }
 
 /** {@link WireHandlerOptions.embedStreams}。 */
@@ -767,6 +773,14 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   admit(headers: Headers, pathname: string): Response | undefined;
   /**
+   * 嵌入路由進任何路由之前的那道檢查（同 `handle` 裡的那一道）：路由在白名單上、thread 是嵌入版開的、這個身分打得開。
+   * per-thread 的前台（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）轉送前先過這一道；對話行程收到之後照樣再核一次。
+   *
+   * @param pathname - 去掉 `/embed` 前綴之後的路徑。
+   * @returns 要回的拒絕；`undefined` 是放行。
+   */
+  embedRefusal(pathname: string, principal: WirePrincipal): Promise<Response | undefined>;
+  /**
    * 掃一遍閒置的 thread 並撤掉（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：不閒的重新計時，閒夠久的撤，
    * 撤完才兌現。內部計時器每隔一段時間呼叫同一支；公開是為了測試用假時鐘決定性地驅動它。沒設 `idleEvictMs` 時什麼也不做。
    */
@@ -780,12 +794,15 @@ export interface IdleSweepingWireHandler extends WireHandler {
   closingCount(): number;
   /**
    * 一條已經建好的 thread 此刻閒不閒（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：`idle` 照 {@link WireHandlerOptions.idleEvictMs} 列的每一條，
-   * `lastActiveAt` 是最後活動時間（{@link WireHandlerOptions.now} 的時鐘）。還沒建好或正在撤回 `undefined`。只讀，不重新計時。
+   * `lastActiveAt` 是最後活動時間（{@link WireHandlerOptions.now} 的時鐘）。還沒建好或正在撤回 `undefined`；{@link open} 沒先建的那條從 `open` 起算閒著。只讀，不重新計時。
    */
   idleState(
     threadId: string,
   ): { readonly idle: boolean; readonly lastActiveAt: number } | undefined;
-  /** 把一條 thread 建起來（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，對話行程收到 `bind` 時叫），建不起來就拋。 */
+  /**
+   * 把一條落盤的 thread 建起來（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，對話行程收到 `bind` 時叫），建不起來就拋。
+   * 有 {@link WireHandlerOptions.storedAccess} 而磁碟上還沒有的，什麼都不做，留給第一個請求照它的路由建（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）。
+   */
   open(threadId: string): Promise<void>;
   /**
    * 已經建好、活著的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)，內容搜尋讀它們記憶體裡的日誌）。**同步、只讀 `ready`**：
@@ -933,7 +950,7 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
  * `/threads/:id/changes/{summary,diff}` 或
  * `/threads/:id/commands/:method`，都不是就 undefined。
  */
-function parsePath(
+export function parsePath(
   pathname: string,
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
@@ -1817,6 +1834,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `close()` 一起收，那裡整張清掉。再有新的逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
+  /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著，直到第一個請求把它建起來。 */
+  const unbuiltSince = new Map<string, number>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
   const feed = new ThreadFeed({
     ...(options.downlinkMaxBytes === undefined ? {} : { maxQueuedBytes: options.downlinkMaxBytes }),
@@ -4664,7 +4683,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
     }
-    return reason === 'not_embedded' ? notEmbedded(id, threadId) : notOwned(id, threadId);
+    const refused = reason === 'not_embedded' ? notEmbedded(id, threadId) : notOwned(id, threadId);
+    if (options.reportEmbedRefusals === true && principal?.kind === 'embed') {
+      refused.headers.set(EMBED_REFUSED_HEADER, reason);
+    }
+    return refused;
   }
 
   /** 這個請求的路徑指名哪一條 thread；不指名或解不開回 `undefined`。 */
@@ -4713,6 +4736,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       const result = admitted(headers, pathname);
       return result instanceof Response ? result : undefined;
     },
+    embedRefusal: embedRequestRefusal,
     async handle(request) {
       const { pathname } = new URL(request.url);
       const principal = admitted(request.headers, pathname);
@@ -4734,11 +4758,21 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     sweepIdle,
     idleState: (threadId) => {
       const state = ready.get(threadId);
-      return state === undefined
-        ? undefined
-        : { idle: isIdle(threadId, state), lastActiveAt: state.lastActiveAt };
+      if (state !== undefined)
+        return { idle: isIdle(threadId, state), lastActiveAt: state.lastActiveAt };
+      const since = threads.has(threadId) ? undefined : unbuiltSince.get(threadId);
+      return since === undefined ? undefined : { idle: true, lastActiveAt: since };
     },
     open: async (threadId) => {
+      // 磁碟上還沒有的不先建：設定檔與擁有者要照第一個請求的路由與身分記（`threadOrError`），先用 `full` 建起來，嵌入版就再也開不了它。
+      if (
+        !threads.has(threadId) &&
+        options.storedAccess !== undefined &&
+        (await options.storedAccess(threadId)) === undefined
+      ) {
+        unbuiltSince.set(threadId, now());
+        return;
+      }
       await threadFor(threadId);
     },
     threadCount: () => threads.size + closing.size,
