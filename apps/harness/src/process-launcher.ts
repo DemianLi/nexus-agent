@@ -7,8 +7,9 @@
  *   （`composeDefaultEntries`）：疊層失敗或那一列寫壞了，旗標沒給或明講 `single` 都當成 `single`，交給 `runServe` 報；旗標明講
  *   `per-thread` 就在這裡拋。印用法、版本、設定的那幾個旗標一律走 `single`。
  * - **只在 Linux**：監督行程靠 signalfd、`/proc` 與 `PR_SET_PDEATHSIG`。其他平台要 `per-thread` 就拋。
- * - **兩邊的 leader 都是 node**：`process.execPath` 加上 `process.execArgv` 再接入口檔，所以開發時（tsx 的 loader 在 execArgv 裡）
- *   與裝好的 `lib/*.js` 走同一條路。入口檔的副檔名跟這個模組一樣。
+ * - **兩邊的 leader 都是 node**：`process.execPath` 加上 `process.execArgv`（對話行程的拿掉 inspector 旗標，
+ *   {@link childExecArgv}）再接入口檔，所以開發時（tsx 的 loader 在 execArgv 裡）與裝好的 `lib/*.js` 走同一條路。
+ *   入口檔的副檔名跟這個模組一樣。
  * - **旗標分兩份**：前台拿除了 `--process-model` 以外的全部；對話行程只拿 {@link CONVERSATION_FLAGS} 那幾個，它不聽 port、不印登入網址。
  * - **PDEATHSIG 不能在 exec 時被清掉**：監督行程替前台與對話行程設了 `PR_SET_PDEATHSIG`，exec 帶 setuid、setgid 或
  *   file capabilities 的執行檔時核心會清掉它（prctl(2)），監督行程被 SIGKILL 時就會留下孤兒。所以 node 與監督行程本身都不能帶
@@ -258,6 +259,32 @@ export interface SupervisorLaunchInput {
   readonly idleMs?: number;
 }
 
+/** 值可以分開寫成下一個參數的 inspector 旗標。 */
+const INSPECTOR_FLAGS_WITH_VALUE = new Set([
+  '--inspect-port',
+  '--debug-port',
+  '--inspect-publish-uid',
+]);
+
+/**
+ * 交給對話行程的 `execArgv`：拿掉 inspector 的旗標（`--inspect*`、`--debug-port`），其餘照原樣。前台照原樣拿：啟動器
+ * `execve` 成監督行程之後，帶 `--inspect` 起 serve 時能接上的只剩前台。對話行程也帶上的話，第二個起來的就印「address already in use」、
+ * 沒有 inspector 照跑。純函式。
+ */
+export function childExecArgv(execArgv: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const arg = execArgv[index]!;
+    if (INSPECTOR_FLAGS_WITH_VALUE.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--inspect') || arg.startsWith('--debug-port')) continue;
+    kept.push(arg);
+  }
+  return kept;
+}
+
 /** 監督行程的命令列（見 `native/sandbox-spawner/README.md`〈監督行程〉）。純函式。 */
 export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch {
   const { front, conversation } = splitServeArgv(input.serveArgv);
@@ -276,7 +303,11 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       ...each('--front-arg', [...input.execArgv, input.frontEntry, ...front]),
       '--conversation',
       input.execPath,
-      ...each('--conversation-arg', [...input.execArgv, input.conversationEntry, ...conversation]),
+      ...each('--conversation-arg', [
+        ...childExecArgv(input.execArgv),
+        input.conversationEntry,
+        ...conversation,
+      ]),
     ],
   };
 }

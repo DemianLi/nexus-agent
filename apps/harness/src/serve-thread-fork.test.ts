@@ -29,6 +29,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
+import { PROCESS_MODEL_UNDER_TEST } from './serve-under-test.fixture.js';
 import { findSession, sessionEvents, sessionsUnder, sessionOf } from './session-files.fixture.js';
 
 const opened: ScriptedServe[] = [];
@@ -161,6 +162,8 @@ function seqOfTurnEnd(events: readonly SessionEvent[], nth: number): number {
   if (end === undefined) throw new Error(`沒有第 ${String(nth + 1)} 顆 turn/end`);
   return end.seq;
 }
+
+const PER_THREAD = PROCESS_MODEL_UNDER_TEST === 'per-thread';
 
 describe('serve 上的 thread.fork', () => {
   it('分出來的長相、各走各的、回傳之後馬上重啟（驗收 2、3、5）', async () => {
@@ -296,7 +299,8 @@ describe('serve 上的 thread.fork', () => {
     });
   });
 
-  it('名額滿：thread_at_capacity，磁碟上沒有多出檔（驗收 6）', async () => {
+  // per-thread 的名額由監督行程照記憶體算，`maxThreads` 不管用；名額滿時分叉回什麼碼在 #2342 定。
+  it.skipIf(PER_THREAD)('名額滿：thread_at_capacity，磁碟上沒有多出檔（驗收 6）', async () => {
     const root = await tempDir('nexus-fork-cap-');
     const serve = await start(TURNS, {
       argv: ['--session-log', root],

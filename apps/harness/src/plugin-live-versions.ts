@@ -113,6 +113,8 @@ export interface LiveVersionTable {
   bind(threadId: string, bindings: readonly LiveRowBinding[]): () => void;
   /** 目前的對照：列 id → 簽章 → thread id。**唯讀的一份，之後的綁定與放掉不影響已經拿到的。** */
   rows(): LiveVersionRows;
+  /** 這條 thread 現在綁著的那幾列；沒綁是 `undefined`。 */
+  bindingsOf(threadId: string): readonly LiveRowBinding[] | undefined;
 }
 
 /**
@@ -153,6 +155,9 @@ export function createLiveVersionTable(): LiveVersionTable {
         held.delete(threadId);
         release(threadId, bindings);
       };
+    },
+    bindingsOf(threadId) {
+      return held.get(threadId);
     },
     rows() {
       return new Map(

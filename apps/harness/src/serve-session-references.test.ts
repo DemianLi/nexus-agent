@@ -28,12 +28,12 @@ import {
   projectKey,
   sessionPathsIn,
 } from './jsonl-session-store.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import { TOOL_RESULT_STASH_DIR_NAME } from './settings/tool-result-stash.js';
+import { PROCESS_MODEL_UNDER_TEST, startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -48,17 +48,17 @@ const PERSISTENCE_OFF_PATCH = fileURLToPath(
   new URL('./settings/persistence-off.patch.yml', import.meta.url),
 );
 
-async function start(root: string, extra: readonly string[] = []): Promise<RunningServe> {
+async function start(root: string, extra: readonly string[] = []): Promise<ServeUnderTest> {
   resetAssemblyWitness();
-  running = (await runServe({
+  running = (await startServeUnderTest({
     argv: ['--port', '0', '--patch', WITNESS, '--session-log', root, ...extra],
     log: () => undefined,
     env: {},
-  })) as RunningServe;
+  })) as ServeUnderTest;
   return running;
 }
 
-async function driveTurn(server: RunningServe, threadId: string, prompt: string): Promise<void> {
+async function driveTurn(server: ServeUnderTest, threadId: string, prompt: string): Promise<void> {
   const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, prompt);
@@ -66,7 +66,7 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
   await events.return?.(undefined);
 }
 
-async function references(server: RunningServe, threadId: string, query: string) {
+async function references(server: ServeUnderTest, threadId: string, query: string) {
   const outcome = await (await serveClient(server)).sessionReferences(threadId, query);
   if (outcome.kind !== 'ok') throw new Error(`列會話被拒：${outcome.message}`);
   return outcome.result;
@@ -200,7 +200,10 @@ describe('GET /threads/:id/session-references', () => {
     const snapshot = beta.find(
       (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
     ) as SessionEvent<'user/message'>;
-    expect(JSON.stringify(snapshot.data.message)).toContain('記憶體裡的蘋果派');
+    // per-thread：取快照的是 beta 的對話行程，讀不到 alpha 那個行程的記憶體，只讀得到盤上那份（#2341）。
+    expect(JSON.stringify(snapshot.data.message)).toContain(
+      PROCESS_MODEL_UNDER_TEST === 'per-thread' ? '盤上被改過的話' : '記憶體裡的蘋果派',
+    );
   });
 
   it('被引用的是舊版寫的：落盤的快照記原版號，不是轉譯後的這一版（#1856，出貨組裝、真的落盤）', async () => {
@@ -286,11 +289,11 @@ describe('GET /threads/:id/session-references', () => {
 
   it('清單把落盤關掉：不提供，不是空清單', async () => {
     resetAssemblyWitness();
-    running = (await runServe({
+    running = (await startServeUnderTest({
       argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
       log: () => undefined,
       env: {},
-    })) as RunningServe;
+    })) as ServeUnderTest;
     expect(await references(running, 'any', '')).toEqual({ available: false });
   });
 });

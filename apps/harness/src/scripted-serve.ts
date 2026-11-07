@@ -19,8 +19,8 @@ import { join } from 'node:path';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { SessionLogBudget } from './session-log-budget.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 /** 腳本提供者那一列的 id。 */
 export const SCRIPTED_PROVIDER_ID = 'test-script';
@@ -46,7 +46,7 @@ ${extraRows}`;
 
 /** 一台換了腳本模型的 serve，和用完要收的東西。 */
 export interface ScriptedServe {
-  readonly running: RunningServe;
+  readonly running: ServeUnderTest;
   /** 收掉 server 與 patch 檔所在的暫存目錄。 */
   close(): Promise<void>;
 }
@@ -80,7 +80,7 @@ export async function startScriptedServe(
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
   const patch = join(dir, 'scripted.patch.yml');
   await writeFile(patch, scriptedPatchText(turns, options.extraRows), 'utf8');
-  const running = (await runServe({
+  const running = (await startServeUnderTest({
     argv: [
       '--port',
       '0',
@@ -96,7 +96,7 @@ export async function startScriptedServe(
     ...(options.sessionLogBudget === undefined
       ? {}
       : { sessionLogBudget: options.sessionLogBudget }),
-  })) as RunningServe;
+  })) as ServeUnderTest;
   return {
     running,
     close: async () => {

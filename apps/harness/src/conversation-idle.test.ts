@@ -477,6 +477,38 @@ describe('綁一條磁碟上還沒有的 thread（#2341）', () => {
     expect(r.handler.idleState('t1')?.lastActiveAt).not.toBe(boundAt);
   });
 
+  it('還沒建的時候有請求握著（httpInFlight）：不算閒著', async () => {
+    const r = rig({ idleEvictMs: undefined, storedAccess: async () => undefined });
+    running.push({ r, control: { close: () => undefined } } as unknown as Process);
+    await r.handler.open('t1');
+    r.advance(T);
+    let finish: () => void = () => undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        finish = () => {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify({ id: 1, method: 'subagent.list' })),
+          );
+          controller.close();
+        };
+      },
+    });
+    const pending = r.handler.handle(
+      loopbackRequest(`${BASE}/threads/t1/commands/subagent.list`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body,
+        duplex: 'half',
+      }),
+    );
+    await settle(10);
+    expect(r.created).toEqual([]);
+    expect(r.handler.idleState('t1')).toMatchObject({ idle: false });
+    finish();
+    await pending;
+    expect(r.handler.idleState('t1')).toMatchObject({ idle: true });
+  });
+
   it('磁碟上有的照樣先建', async () => {
     const r = rig({ idleEvictMs: undefined, storedAccess: async () => ({ profile: 'full' }) });
     running.push({ r, control: { close: () => undefined } } as unknown as Process);

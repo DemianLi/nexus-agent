@@ -80,6 +80,7 @@ import {
   listStoredThreads,
   readStoredSubagentSession,
 } from './session-list.js';
+import { ThreadFeed } from './thread-feed.js';
 import { ThreadOrganization } from './thread-organization.js';
 import {
   attachSessionPersistence,
@@ -136,10 +137,20 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import { createFrontWireHandler } from './front-wire.js';
+import { forwardedFromClosingFront } from './forwarded-principal.js';
+import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
+import type { FrontFeed } from './front-feed.js';
+import { TurnFailureOutbox, type FrontTurnFailures } from './front-turn-failures.js';
+import type { FrontPluginBindings } from './front-plugins.js';
 import type { SupervisorClient } from './supervisor-client.js';
-import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
+import type {
+  EmbedStreamGuard,
+  IdleSweepingWireHandler,
+  ThreadForkSeed,
+  WireAuth,
+  WireHandler,
+} from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
@@ -587,10 +598,14 @@ export interface RunServeOptions {
   readonly front?: FrontProcessMode;
 }
 
-/** per-thread 前台要的兩樣：監督行程的控制面、往對話行程的轉送器。 */
+/** per-thread 前台要的：監督行程的控制面、往對話行程的轉送器、從對話行程接進來的全域下行、對話行程回報的 plugin 綁定。 */
 export interface FrontProcessMode {
   readonly supervisor: SupervisorClient;
   readonly forwarder: FrontForwarder;
+  readonly feed: FrontFeed;
+  readonly plugins: FrontPluginBindings;
+  /** 對話行程推來的回合失敗（`/metrics` 的 `nexus_turn_failures_total`）；指標關著就不接。 */
+  readonly turnFailures: FrontTurnFailures;
 }
 
 /**
@@ -982,6 +997,8 @@ async function startServer(
       serve: true,
       env,
       ...(invocation.patches !== undefined && { patches: invocation.patches }),
+      // 讀清單的警告前台起動時講過，之後落盤開著時由前台綁上時講（`thread-plugin-list.ts` 的 `bindElsewhere`）：對話行程不講。
+      ...(options.conversation !== undefined && { warn: () => {} }),
     },
     { tree: root.tree },
   );
@@ -1228,8 +1245,13 @@ async function startServer(
     audit,
     // 起動期讀的那幾列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
-    log,
-    warn,
+    ...(options.front !== undefined && {
+      startupReadEffect:
+        '這一列在每個對話行程起動時讀一次：之後起來的對話行程用新值，已經起著的（含預熱池）照舊，要全部生效就重啟 serve',
+    }),
+    // 讀清單的日誌歸前台講（`bindElsewhere`，落盤開著時）：對話行程各講一次就是同一句 N 次。
+    log: options.conversation === undefined ? log : () => {},
+    warn: options.conversation === undefined ? warn : () => {},
     publishSnapshot: async (snapshot) => {
       if (options.conversation === undefined) await snapshotWriter.publish(snapshot);
     },
@@ -1237,6 +1259,10 @@ async function startServer(
       liveVersions: { sign: (signature: string) => hmacHashOf(signature, liveVersionKey) },
     }),
   });
+  // per-thread 的前台（#2341）：thread 組在對話行程裡，綁著哪幾列由 `front-plugins.ts` 問來、綁進這張表，快照照樣列。
+  options.front?.plugins.bindWith((threadId, bindings) =>
+    threadPluginList.bindElsewhere(threadId, bindings),
+  );
   // 啟動那一份先寫下去（檔在 server 起來之前就在），摘要留到下面啟動那幾行印完再記，不插在網址前面。
   const startupSnapshot = threadPluginList.snapshot();
   const startupSnapshotWritten =
@@ -1287,6 +1313,11 @@ async function startServer(
   // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在開始聽之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
   const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
   const metricsEnabled = opsConfig.metrics.enabled && options.conversation === undefined;
+  // 對話行程不出指標，回合失敗推給前台計數（`front-turn-failures.ts`）；前台的指標關著就不留。
+  const turnFailureOutbox =
+    opsConfig.metrics.enabled && options.conversation !== undefined
+      ? new TurnFailureOutbox()
+      : undefined;
   const metricsToken = metricsEnabled
     ? await loadOrCreateMetricsToken(opsConfig.metrics.tokenFile ?? metricsTokenFile)
     : undefined;
@@ -1321,10 +1352,13 @@ async function startServer(
   const webDist = options.webDist ?? resolveWebDist();
   // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
   // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
+  // 對話行程（per-thread）只讀、跟著前台寫的檔走：寫的只有前台一個，封存閘門要在前台寫完的下一次問就生效。
   const threadOrganization =
     sessionLogDir === undefined
       ? undefined
-      : await ThreadOrganization.open(resolveHarnessHome(env));
+      : options.conversation === undefined
+        ? await ThreadOrganization.open(resolveHarnessHome(env))
+        : await ThreadOrganization.follow(resolveHarnessHome(env), warn);
   // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
   // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
@@ -1505,14 +1539,23 @@ async function startServer(
     warn,
   });
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
+  // per-thread 的前台手上沒有 thread：thread 數是監督行程講過還活著的對話行程（重起的前台由監督行程重送 `up` 補齊），
+  // 撤到一半的前台看不到，記 0。回合失敗由對話行程推過來（`front-turn-failures.ts`）。
+  const front = options.front;
   const opsMetrics = metricsEnabled
     ? new OpsMetrics(() => ({
-        threads: handler.threadCount() - handler.closingCount(),
-        threadsClosing: handler.closingCount(),
+        threads:
+          front === undefined
+            ? handler.threadCount() - handler.closingCount()
+            : front.supervisor.liveThreads().length,
+        threadsClosing: front === undefined ? handler.closingCount() : 0,
         maxThreads: threadCapacity.maxThreads,
         storageFull: storageProbe.full,
       }))
     : undefined;
+  if (opsMetrics !== undefined) {
+    front?.turnFailures.countWith((code, count) => opsMetrics.recordTurnFailure(code, count));
+  }
   const streamCookies = embedCookies;
   const embedStreamGuard: EmbedStreamGuard | undefined =
     streamCookies === undefined
@@ -1521,6 +1564,12 @@ async function startServer(
           recheck: (headers: Headers) => streamCookies.recheckOpenStream(headers),
           audit: () => embedAudit,
         };
+  // per-thread 的前台（#2341）：全域下行照下行那一列的上限建，由 `FrontFeed` 把每個對話行程的線接進來。
+  const frontThreadFeed =
+    options.front === undefined
+      ? undefined
+      : new ThreadFeed({ maxQueuedBytes: downlink.maxQueuedBytes, warn });
+  if (frontThreadFeed !== undefined) options.front?.feed.connect(frontThreadFeed);
   const handler = createWireHandler({
     auth,
     trustedHosts: invocation.trustedHosts,
@@ -1544,10 +1593,22 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
-    // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
+    // 前台（#2341）：手上沒有 thread。封存問的「還有什麼在跑」與停、全域下行、列表的在跑，都從那條的對話行程來（`front-wire.ts`、`front-feed.ts`）。
+    ...(options.front !== undefined && {
+      threadActivityElsewhere: threadActivityOverSocket(
+        options.front.supervisor,
+        options.front.forwarder,
+      ),
+      ...(frontThreadFeed !== undefined && { threadFeed: frontThreadFeed }),
+      runningElsewhere: (threadId: string) => options.front?.feed.running(threadId),
+    }),
+    // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。快照歸前台寫，綁著哪幾列由前台來問（#2341）。
     ...(options.conversation !== undefined && {
       reportEmbedRefusals: true,
+      frontClosing: forwardedFromClosingFront,
       boundThread: options.conversation.boundThread,
+      liveBindings: (threadId: string) => threadPluginList.liveBindings(threadId),
+      ...(turnFailureOutbox !== undefined && { turnFailures: () => turnFailureOutbox.stream() }),
       onTurn: options.conversation.onTurn,
     }),
     // 哪些事走它見 `WireHandlerOptions.warn`。
@@ -1559,6 +1620,7 @@ async function startServer(
     onTurnFailed: (report) => {
       // 指標的回合失敗計數（#1535）：跟下面那一行日誌共用同一個回呼，不各插一行。指標關著（`opsMetrics` 缺席）就什麼都不做。
       opsMetrics?.recordTurnFailure(report.code);
+      turnFailureOutbox?.record(report.code);
       serverLogOut.serveWith(turnFailedFields(report)).warn(turnFailedMessage(report));
     },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
@@ -2072,8 +2134,8 @@ async function startServer(
 
   const proxySocket = listening.kind === 'front' ? invocation.unixSocket?.path : undefined;
   let server: WireServer;
-  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`。
-  let servedHandler: Pick<WireHandler, 'close'> = handler;
+  // 收這一支、不是 `handler`：前台包過的 `close` 才會收它登記的嵌入下行並記 `closed`，包過的 `stopAdmission` 才擋得到轉送。
+  let servedHandler: Pick<IdleSweepingWireHandler, 'close' | 'stopAdmission'> = handler;
   try {
     // 稽核檔在 try 裡打開：後面任何一步失敗，下面的收尾都關得到它。
     if (embedIdentityTable !== undefined && embedCookies !== undefined) {
@@ -2112,6 +2174,7 @@ async function startServer(
         : createFrontWireHandler({
             local: handler,
             ...options.front,
+            onForwarded: (threadId) => options.front?.plugins.touched(threadId),
             auth,
             ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
             warn,
@@ -2184,9 +2247,12 @@ async function startServer(
       ? `nexus-agent 在 ${authenticatedUrl}`
       : `nexus-agent 對話行程在 ${listening.mode.socketPath}`,
   );
+  // **起動披露只由前台印**（#2341）：對話行程是同一台主機、同一份設定起的，每個行程各印一份只是把同樣的話重複 N 次。
+  // 對話行程只講它在哪個 socket（上面那一行）。
+  const disclose = options.conversation === undefined ? log : (_line: string): void => {};
   // 印的是這一次真的用的那一個（#545），不是預設值。
-  log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
-  log(
+  disclose(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
+  disclose(
     `plugin：${
       plugins
         .filter((entry) => !droppedEntries.has(entry))
@@ -2194,41 +2260,41 @@ async function startServer(
         .join('、') || '（空）'
     }`,
   );
-  log(
+  disclose(
     existsSync(join(webDist, 'index.html'))
       ? `網頁：${webDist}`
       : `網頁：${webDist}（還沒 build——先跑 pnpm build，不然開網址只會看到 404）`,
   );
   // grep 用的是產物內附的 ripgrep（#1502 刀 4）：講出是哪一支。缺了壞了不讓啟動失敗（照 dsh，rg 路徑是延遲解析的），
   // 但每一次 grep 都會以 SEARCH_FAILED 失敗、沒有退路——管理者要在啟動這一行就看得到，不必等模型第一次搜尋。
-  log(formatRipgrepDisclosure(await ripgrepStatus()));
-  reportSandboxTo(log);
+  disclose(formatRipgrepDisclosure(await ripgrepStatus()));
+  reportSandboxTo(disclose);
   // 同上：沒有沙箱時 grep、glob 與改動卡的 git 跑不了，別等到模型第一次用它們才知道。
-  log(await productSandboxStatus());
+  disclose(await productSandboxStatus());
   // **披露，不是設定。** 每一條 thread 的對話都會寫上磁碟（#444 起預設就寫），寫去哪裡
   // 不該要讀文件才知道；清單把落盤關掉（#612）時，講的是「只在記憶體裡」與是哪一列關的。
-  log(
+  disclose(
     sessionStore === undefined ? SESSION_LOG_OFF_DISCLOSURE : `會話日誌：${sessionStore.directory}`,
   );
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
-  log(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap, 'serve'));
+  disclose(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap, 'serve'));
   // 上限講出來（#1476）：一律印數字（#1619 起出廠就有值），管理者從這一行分得出出廠值和自己改過的值。
-  log(
+  disclose(
     `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
   );
   // 轉碼併發講出來（#2033）：讀的是附件儲存手上那一份限流器，不是設定值。
-  log(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
+  disclose(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
   // 一輪的時鐘講出來（#1624）：出廠就有值，關掉那一列是管理者明著拿掉的，兩種都印。
-  log(
+  disclose(
     turnClock === undefined
       ? '一輪的時鐘：不限（turn-timeout 那一列關掉了）'
       : `一輪的時鐘：${String(turnClock.timeoutMs)} 毫秒（主對話與背景子代理的每一輪各自起算，到點照停止鍵的路中止）`,
   );
   // 探針與指標講出來（#1535）：不印 token 本身，只印在哪個檔。
-  log(
+  disclose(
     `探針：${opsConfig.probes.enabled ? '/livez、/readyz（免登入、只回狀態字）' : '關'}；指標：${
       metricsToken === undefined
         ? '關'
@@ -2237,7 +2303,7 @@ async function startServer(
   );
   // 嵌入換票講出來（#2370）：不印憑證本身，只印在哪個檔。
   if (options.conversation === undefined) {
-    log(
+    disclose(
       embedCredentialFiles.length === 0
         ? '嵌入換票：關（embed-login 沒有嵌入方）'
         : `嵌入換票：開 POST ${EMBED_EXCHANGE_PATH}（嵌入方 ${embedCredentialFiles
@@ -2250,14 +2316,14 @@ async function startServer(
     );
   }
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
-  log(
+  disclose(
     requestGate === undefined
       ? '模型請求並行上限：不限'
       : `模型請求並行上限：${String(requestGate.maxConcurrent)}（整台 serve 共用；名額滿了排隊，等超過 ${String(liveModel.maxWaitMs)} 毫秒以 LOCAL_CAPACITY 失敗、不重試）`,
   );
   // 閒置逐出講出來（#1484）：一律印一行，三種之一（#1619）。設成 0 先講——那是管理者明著關的，有沒有落盤都一樣不逐出。
   // 沒落盤那一句是中性的：出廠就有 T，沒落盤的部署每次啟動都會印它，不是管理者設錯了什麼。
-  log(
+  disclose(
     threadCapacity.idleEvictAfterMs === 0
       ? 'thread 閒置逐出：idleEvictAfterMs 是 0，不逐出'
       : idleEvictMs === undefined
@@ -2265,21 +2331,21 @@ async function startServer(
         : `thread 閒置逐出：閒置 ${String(idleEvictMs)} 毫秒後撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
   );
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
-    log(line);
+    disclose(line);
   }
   // **遙測披露印在啟動時**（#749），同 CLI 緊接在追蹤那一行後面、分兩行講（理由見 `telemetry-disclosure.ts`）。
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
-  for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+  for (const line of formatTelemetryDisclosure(telemetrySharing)) disclose(line);
   // 主機沒有 spawner（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
   const guardNotice = mcpGuardNotice();
-  if (guardNotice !== undefined) warn(guardNotice);
+  if (guardNotice !== undefined && options.conversation === undefined) warn(guardNotice);
   // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是
   // serve 起動完的底。
   // 沒落盤就沒有日誌要讀，不印。
   if (sessionStore !== undefined) {
     const { limitBytes } = sessionLogBudget;
-    log(
+    disclose(
       limitBytes === Number.POSITIVE_INFINITY
         ? '會話日誌額度：不限（thread-capacity 的 sessionLogBudgetMiB 是 0；大日誌可能把整個行程撐死）'
         : `會話日誌額度：${(limitBytes / 1024 / 1024).toFixed(1)} MiB（同時開著與正在讀的會話日誌合計，超過的在讀之前拒收；${
@@ -2322,8 +2388,8 @@ async function startServer(
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
       // 會開新一輪的命令從這一刻起回 `server_closing`（#1787）：立旗與時間窗之間不留縫，窗裡才不會再收新的一輪、在窗末被切斷。
-      // 致命例外的收尾（`drain: false`）一樣先停准入。
-      handler.stopAdmission();
+      // 致命例外的收尾（`drain: false`）一樣先停准入。per-thread 的前台停的是包起來的那一支：轉送之前就擋。
+      servedHandler.stopAdmission();
       // **時間窗**（#1777）：立旗之後 listener 要再照常在聽一小段，探針才抓得到 503。`server.close()` 一開頭就 `closeAllConnections()`
       // （`wire-server.ts`），不留這一段，旗標只在同一個 macrotask 裡亮過，沒有任何請求看得到。**只有 `/readyz` 被抓過才等**：
       // 沒有監控在看，等了也沒人聽（測試與一次性使用不付這個代價）。時間窗屬於整體 5 秒收尾上限（#599），所以設定上限 2000。
@@ -2383,7 +2449,11 @@ export interface ServeProcessLifecycle {
   attach(running: RunningServe): void;
   /** 解除 fail-loud 的兩個 handler（訊號的不解除，行程結束前都在）。 */
   uninstall(): void;
-  /** 跟 `SIGTERM` 同一條收尾、回 0。對話行程的 stdin 讀到 EOF 走這裡（`conversation-process.ts`）。 */
+  /**
+   * 跟 `SIGTERM` 同一條收尾、回 0。對話行程與前台的 stdin 讀到 EOF 走這裡（`conversation-process.ts`、`front-process.ts`）。
+   * 收尾已經在跑就不做事：不算第二次訊號，否則先收到 SIGTERM（systemd 對整個控制群組送）、再讀到監督行程的 EOF 時，
+   * `/readyz` 的時間窗會被砍掉。
+   */
   stop(): void;
 }
 
@@ -2443,11 +2513,14 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       running?.warn(line);
     },
   );
+  let stopping = false;
   // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
   proc.on('SIGTERM', () => {
+    stopping = true;
     shutdown.interrupt(0);
   });
   proc.on('SIGINT', () => {
+    stopping = true;
     shutdown.interrupt(130);
   });
   const uninstall = installFailLoud('nexus-agent serve', proc, () => disposeWith(false));
@@ -2457,6 +2530,8 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
     },
     uninstall,
     stop() {
+      if (stopping) return;
+      stopping = true;
       shutdown.interrupt(0);
     },
   };

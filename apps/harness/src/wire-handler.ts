@@ -29,6 +29,7 @@
  * 見 [`browser-auth.ts`](./browser-auth.ts)（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import type {
@@ -241,6 +242,7 @@ import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
 import { StreamCutError, sseResponse } from './sse-response.js';
+import type { LiveRowBinding } from './plugin-live-versions.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import type { TurnClock } from './turn-clock.js';
@@ -586,6 +588,13 @@ export interface WireHandlerOptions {
    */
   readonly auth: WireAuth;
   /**
+   * per-thread 的對話行程：這個請求是前台停准入（{@link IdleSweepingWireHandler.stopAdmission}）之後轉來的
+   * （[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)、[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）。
+   * 是的話**只這一個請求**照停准入處理：前台收尾不等於這個行程要收（前台換一個之後照常收），所以不叫 `stopAdmission`。
+   * 只有對話行程的 socket 接這一項；前台與 single 不接，客戶端帶同名標頭也沒用（前台轉送前刪掉）。
+   */
+  readonly frontClosing?: (headers: Headers) => boolean;
+  /**
    * 指名的非 loopback authority（`--trusted-host`，#2369），交給 `request-trust.ts` 的圍欄。省略就只認 loopback。
    */
   readonly trustedHosts?: readonly string[];
@@ -677,9 +686,36 @@ export interface WireHandlerOptions {
   /**
    * 對話行程（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：這個行程只放哪一條 thread，`undefined` 是還沒綁。
    * **給了就只認這一條**：路徑帶別的 threadId 的請求在認證之後、碰任何東西之前就回 `thread_not_bound`；`threadFor` 也擋，所以分叉出來的子 thread
-   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（分叉要由前台轉送，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是不限 thread（一般 serve 的情形）。
+   * 在這裡建不起來；`thread.fork` 直接回 `not_supported`（前台經內部路由 `fork-seed`／`fork-adopt` 做，見 `front-wire.ts`）。不帶 threadId 的路（列表、搜尋、全域下行）不受影響。省略就是不限 thread（一般 serve 的情形）。
    */
   readonly boundThread?: () => string | undefined;
+  /**
+   * 對話行程答前台的 `plugins`（{@link internalThreadPath}，#2341）：綁著的那條 thread 在這個行程裡綁著的列，前台拿去寫 plugin 對照快照。
+   * 沒綁或沒維護是 `undefined`（答空的）。
+   */
+  readonly liveBindings?: (threadId: string) => readonly LiveRowBinding[] | undefined;
+  /**
+   * 對話行程答前台的 `turn-failures`（{@link internalThreadPath}，#2341）：一條 SSE，這個行程的回合失敗推給前台計數（`front-turn-failures.ts`）。
+   * 缺席答 404（指標關著）。
+   */
+  readonly turnFailures?: () => Response;
+  /**
+   * 這台 handler 手上沒有 thread、工作在別的行程裡跑（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台）：
+   * 封存問「還有什麼在跑」、帶 `stopActivity` 時請它停，都問這一組，不看本地的記憶體。對話行程那一側答的是 {@link internalThreadPath}。
+   */
+  readonly threadActivityElsewhere?: {
+    activity(threadId: string): Promise<readonly ThreadActivityKind[]>;
+    stop(threadId: string): Promise<void>;
+  };
+  /**
+   * 全域下行用這一條，不自己建（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台：每件都由 `front-feed.ts`
+   * 從對話行程接進來）。帶了它，{@link downlinkMaxBytes} 就不管全域下行，上限照這一條建時給的。handler 收尾時照樣關它。
+   */
+  readonly threadFeed?: ThreadFeed;
+  /**
+   * 本地沒建的 thread 在不在跑（列表的 `running`），per-thread 的前台問 `front-feed.ts`。回 `undefined` 當閒著。
+   */
+  readonly runningElsewhere?: (threadId: string) => boolean | undefined;
   /**
    * 主對話一輪開始與結束時叫（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：`begin` 是 root 日誌寫下 `turn/start`，`end` 是 `turn/end` 或
    * `turn/failed`。背景子代理的輪寫在它自己的日誌，不算。thread 建好之後才開始聽，續接時補寫的收尾可能只看到 `end`。
@@ -943,6 +979,19 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
     (query as Record<string, number>)[key] = value;
   }
   return query;
+}
+
+/**
+ * 對話行程給前台的內部路由（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`activity` 用 GET 問還有什麼在跑，`stop` 用 POST 請它停，
+ * `plugins` 用 GET 問這條 thread 綁著哪幾列（{@link WireHandlerOptions.liveBindings}），
+ * `turn-failures` 用 GET 接這個行程的回合失敗（{@link WireHandlerOptions.turnFailures}），
+ * `fork-seed` 用 POST 交出分叉子 thread 的 seed，`fork-adopt` 用 POST 照 seed 建子 thread（`forkSeedRoute`／`forkAdoptRoute`）。
+ */
+export function internalThreadPath(
+  threadId: string,
+  action: 'activity' | 'stop' | 'plugins' | 'turn-failures' | 'fork-seed' | 'fork-adopt',
+): string {
+  return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
 
 /**
@@ -1834,13 +1883,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `close()` 一起收，那裡整張清掉。再有新的逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
-  /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著，直到第一個請求把它建起來。 */
+  /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著（有請求在途時不算），直到第一個請求把它建起來。 */
   const unbuiltSince = new Map<string, number>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
-  const feed = new ThreadFeed({
-    ...(options.downlinkMaxBytes === undefined ? {} : { maxQueuedBytes: options.downlinkMaxBytes }),
-    warn: (message) => options.warn?.(message),
-  });
+  const feed =
+    options.threadFeed ??
+    new ThreadFeed({
+      ...(options.downlinkMaxBytes === undefined
+        ? {}
+        : { maxQueuedBytes: options.downlinkMaxBytes }),
+      warn: (message) => options.warn?.(message),
+    });
   /**
    * 上傳收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：thread → 收據 id → 存好的檔案參照。
    * **收據只在收下它的那條 thread 有效**（查表以 thread 為鍵，拿別條 thread 的收據查不到），行程重開就失效——沒送出去的上傳不續命。
@@ -1869,6 +1922,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 所以「檢查過、旗標才立」只會發生在 `admitAttachmentsCore` 那種 `await` 的前後——那一處在 `await` 回來之後重查。
    */
   let admissionStopped = false;
+  /** 正在處理的這個請求是不是前台停准入之後轉來的（{@link WireHandlerOptions.frontClosing}）；跟著請求的 async 鏈走。 */
+  const frontClosingScope = new AsyncLocalStorage<true>();
+  /** 這一刻還收不收會開新一輪的命令：整台停了，或這個請求是收尾中的前台轉來的。 */
+  const admissionClosed = (): boolean => admissionStopped || frontClosingScope.getStore() === true;
 
   /** 收尾中拒收這一句：附件收據由呼叫端放回去，這裡只負責回應。 */
   function serverClosing(id: number | null): Response {
@@ -2235,12 +2292,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用就讓命令在動任何東西之前失敗。
             acceptSteer: (text) => {
               // 收尾中不替命令開新一輪（#1787）：在命令動任何域之前就拒收，命令落定成 `error`、什麼都沒改。`handleSlash` 認這個例外回 `server_closing`。
-              if (admissionStopped) throw new ServerClosingError();
+              if (admissionClosed()) throw new ServerClosingError();
               void pump.referencedText(text);
             },
             // 同一道閘，給「不 steer、但改了域之後排程器自己開一輪」的命令（`/goal <目標>`、`/goal resume`，#1787）：在寫日誌之前拒。
             acceptOpenTurn: () => {
-              if (admissionStopped) throw new ServerClosingError();
+              if (admissionClosed()) throw new ServerClosingError();
             },
           }),
           feedback: threadAgent.feedback,
@@ -2919,7 +2976,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // **收尾中不開新一輪**（#1787）。冷 thread 擋在 `threadFor` 之前：不為一句不會收的話組 agent、起 MCP 子行程再拆掉。熱的 thread 的
     // `run.start` 在下面、request_id 去重**之後**才擋（窗前收過的重送要拿回原本的 `run_id`）。`slash.run` 看不出一行會不會 steer，
     // 交給 `acceptSteer`（命令真的呼叫 `steer` 時才拒）與 `acceptOpenTurn`（命令要改的域狀態會讓排程器自己開一輪時才拒，`/goal` 的建立／續上／改進行中的目標）。
-    if (admissionStopped) {
+    if (admissionClosed()) {
       if (method === SUBAGENT_SEND_METHOD) return serverClosing(envelope.id);
       if (method === 'run.start' && !threads.has(threadId)) return serverClosing(envelope.id);
     }
@@ -3109,7 +3166,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       // 收尾中拒收（#1787）：**排在去重之後**——窗前收過的那一筆重送已經在上面拿回原本的 `run_id`；排在 `promptRequestsInFlight.set` 之前，
       // 拒收不留任何痕跡。不合法的輸入在上面先擋，不論收不收尾都是同一個回應。
-      if (admissionStopped) return serverClosing(command.id);
+      if (admissionClosed()) return serverClosing(command.id);
       let settleRequest: ((runId: string | undefined) => void) | undefined;
       if (requestId !== undefined) {
         const inFlight = new Promise<string | undefined>((resolve) => (settleRequest = resolve));
@@ -3186,7 +3243,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           }
           // **准入的 `await` 回來之後再查一次**（#1787，同 dsh `commands.ts:342-347`：await 之後重查 agent 還在不在）：等附件的那段時間
           // 收尾可能開始了。收據已經用掉，放回去，使用者稍後重送不必重傳。
-          if (admissionStopped) {
+          if (admissionClosed()) {
             outcome.restore();
             return serverClosing(command.id);
           }
@@ -3519,7 +3576,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     // 上面那道閘在 `threadFor` 之前，而冷的 thread 在這條路上要先建 agent（`await`）：窗可能在建的期間才開。投遞之前再查一次，
     // 同 `run.start` 在准入 `await` 之後的第二次檢查（#1787）。
-    if (admissionStopped) return serverClosing(id);
+    if (admissionClosed()) return serverClosing(id);
     try {
       // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
       await background.sendFromUser(params.run_id, params.text, clientTimeZone);
@@ -3701,8 +3758,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           await organization.archive(threadId, {
             ...(stopActivity === true && { stopActivity: true }),
             known: () => threadKnown(threadId),
-            activity: () => activityOf(threadId),
-            stop: () => stopActivityOf(threadId),
+            activity: () =>
+              options.threadActivityElsewhere?.activity(threadId) ?? activityOf(threadId),
+            stop: () => options.threadActivityElsewhere?.stop(threadId) ?? stopActivityOf(threadId),
             warn: (message) => options.warn?.(message),
           });
           return json(
@@ -3844,21 +3902,35 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤，同 dsh「leaves no stored residue」；寫不進去就收掉、不登記，回 `unknown_error`。
    */
   async function handleFork(sourceId: string, id: number, body: unknown): Promise<Response> {
-    // 對話行程（#2338）只放一條 thread，不在這裡分叉：分叉要由前台轉給來源的對話行程、新 thread 另起一個行程（設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3，落地在 §九 C3）。
+    // 對話行程（#2338）只放一條 thread，不在這裡建子 thread：前台經內部路由向來源要 seed（`fork-seed`），另起一個行程交給它建（`fork-adopt`）。
     if (options.boundThread !== undefined) {
       return json(
         errorResponse(id, 'not_supported', '對話行程不在自己這裡分叉：新 thread 要另起一個行程'),
       );
     }
+    const source = await forkSourceOf(sourceId, id, body);
+    if ('answer' in source) return json(source.answer);
+    const childId = options.newThreadId?.() ?? randomUUID();
+    const child = await threadOrError(childId, id, source.fork);
+    if (child instanceof Response) return child;
+    return json(successResponse(id, { ok: true, value: { threadId: childId } }));
+  }
+
+  /** 分叉的第 1 到 4 步：分得出去回子 thread 的 seed，分不出去回要回給客戶端的那一份。 */
+  async function forkSourceOf(
+    sourceId: string,
+    id: number,
+    body: unknown,
+  ): Promise<{ readonly fork: ThreadForkSeed } | { readonly answer: unknown }> {
     const readStored = options.readStoredThread;
     if (readStored === undefined) {
-      return json(
-        errorResponse(
+      return {
+        answer: errorResponse(
           id,
           'not_supported',
           '這台 server 的會話日誌只在記憶體裡（沒接落盤），沒有可以分叉的東西',
         ),
-      );
+      };
     }
     const params = (body as { params?: unknown }).params;
     const messageId =
@@ -3866,14 +3938,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ? (params as { messageId?: unknown }).messageId
         : undefined;
     if (typeof messageId !== 'string' || messageId === '') {
-      return json(errorResponse(id, 'invalid_argument', 'thread.fork 的 messageId 要是非空字串'));
+      return {
+        answer: errorResponse(id, 'invalid_argument', 'thread.fork 的 messageId 要是非空字串'),
+      };
     }
     let source: Awaited<ReturnType<typeof observeThread>>;
     try {
       source = await observeThread(sourceId, readStored);
     } catch (error: unknown) {
-      return json(
-        errorResponse(
+      return {
+        answer: errorResponse(
           id,
           'unknown_error',
           withheldReason(
@@ -3883,20 +3957,58 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             error,
           ),
         ),
-      );
+      };
     }
     if (source === undefined) {
-      return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
+      return { answer: successResponse(id, { ok: false, error: { code: 'thread_not_found' } }) };
     }
     const boundary = forkBoundaryOf(source.events, messageId);
     if (boundary === undefined) {
-      return json(successResponse(id, { ok: false, error: { code: 'fork_unavailable' } }));
+      return { answer: successResponse(id, { ok: false, error: { code: 'fork_unavailable' } }) };
     }
-    const childId = options.newThreadId?.() ?? randomUUID();
-    const child = await threadOrError(childId, id, {
-      sourceHeader: source.header,
-      seed: childForkSeed(source.events, boundary),
-    });
+    return {
+      fork: { sourceHeader: source.header, seed: childForkSeed(source.events, boundary) },
+    };
+  }
+
+  /**
+   * 對話行程答前台的 `fork-seed`：本文是客戶端那一顆 `thread.fork` 封包。分得出去回 `{ fork }`（子 thread 的 seed），
+   * 分不出去回 `{ answer }`（前台原樣回給客戶端）。
+   */
+  async function forkSeedRoute(sourceId: string, request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    const id = (body as { id?: unknown } | null)?.id;
+    if (typeof id !== 'number') return new Response('bad request', { status: 400 });
+    return json(await forkSourceOf(sourceId, id, body));
+  }
+
+  /**
+   * 對話行程答前台的 `fork-adopt`：本文是 `{ id, fork }`，`fork` 是來源行程 `fork-seed` 回的那一份。照 single 分叉的第 5、6 步建這一條，
+   * 回給客戶端的那一份（成功帶子 thread 的 id）。
+   */
+  async function forkAdoptRoute(childId: string, request: Request): Promise<Response> {
+    let body: { id?: unknown; fork?: { sourceHeader?: unknown; seed?: unknown } } | null;
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    const id = body?.id;
+    const fork = body?.fork;
+    if (
+      typeof id !== 'number' ||
+      typeof fork?.sourceHeader !== 'object' ||
+      fork.sourceHeader === null ||
+      !Array.isArray(fork.seed)
+    ) {
+      return new Response('bad request', { status: 400 });
+    }
+    const child = await threadOrError(childId, id, fork as ThreadForkSeed);
     if (child instanceof Response) return child;
     return json(successResponse(id, { ok: true, value: { threadId: childId } }));
   }
@@ -3945,7 +4057,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         items: stored.items.map((item) => ({
           ...item,
           // 同全域下行的狀態（#632）：停在等人回答也算在跑，兩邊是同一個判準。
-          running: ready.get(item.threadId)?.pump.agentRunning ?? false,
+          running:
+            ready.get(item.threadId)?.pump.agentRunning ??
+            options.runningElsewhere?.(item.threadId) ??
+            false,
         })),
       },
     };
@@ -4714,6 +4829,44 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
   }
 
+  /**
+   * 對話行程的內部路由（{@link internalThreadPath}）：只在綁了 thread 的行程上、只給主機擁有者（前台不帶身分標頭），
+   * 其餘回 `undefined` 照一般路由走。
+   */
+  function internalRoute(
+    request: Request,
+    pathname: string,
+    principal: WirePrincipal,
+  ): Response | Promise<Response> | undefined {
+    if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
+    const match =
+      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt)$/u.exec(
+        pathname,
+      );
+    if (match === null) return undefined;
+    const threadId = decodeURIComponent(match[1]!);
+    if (threadId !== options.boundThread()) return new Response('not bound', { status: 404 });
+    if (match[2] === 'activity' && request.method === 'GET') {
+      return json({ activity: activityOf(threadId) });
+    }
+    if (match[2] === 'plugins' && request.method === 'GET') {
+      return json({ bindings: options.liveBindings?.(threadId) ?? [] });
+    }
+    if (match[2] === 'turn-failures' && request.method === 'GET') {
+      return options.turnFailures?.() ?? new Response('not found', { status: 404 });
+    }
+    if (match[2] === 'stop' && request.method === 'POST') {
+      stopActivityOf(threadId);
+      return new Response(null, { status: 204 });
+    }
+    if (match[2] === 'fork-seed' && request.method === 'POST')
+      return forkSeedRoute(threadId, request);
+    if (match[2] === 'fork-adopt' && request.method === 'POST') {
+      return forkAdoptRoute(threadId, request);
+    }
+    return new Response('method not allowed', { status: 405 });
+  }
+
   /** 圍欄與身分：過了回這個請求的身分，沒過回要回的回應。 */
   function admitted(headers: Headers, pathname: string): WirePrincipal | Response {
     // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
@@ -4743,14 +4896,20 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (principal instanceof Response) return principal;
       const unbound = notBound(request);
       if (unbound !== undefined) return unbound;
+      const internal = internalRoute(request, pathname, principal);
+      if (internal !== undefined) return internal;
       // **請求計數在這裡、同步 +1**（#1484）：早於讀本文的 `await`、早於 `threadFor`，連 thread 還不在記憶體裡的請求也算。
       // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
       const held = holdThread(request);
       const embedded = withoutEmbedPrefix(pathname);
-      try {
-        return await (embedded === undefined
+      const dispatch = (): Promise<Response> =>
+        embedded === undefined
           ? dispatchRequest(request, pathname, 'full', principal)
-          : dispatchRequest(request, embedded, 'embed', principal));
+          : dispatchRequest(request, embedded, 'embed', principal);
+      try {
+        return await (options.frontClosing?.(request.headers) === true
+          ? frontClosingScope.run(true, dispatch)
+          : dispatch());
       } finally {
         held?.();
       }
@@ -4761,7 +4920,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (state !== undefined)
         return { idle: isIdle(threadId, state), lastActiveAt: state.lastActiveAt };
       const since = threads.has(threadId) ? undefined : unbuiltSince.get(threadId);
-      return since === undefined ? undefined : { idle: true, lastActiveAt: since };
+      return since === undefined
+        ? undefined
+        : { idle: (httpInFlight.get(threadId) ?? 0) === 0, lastActiveAt: since };
     },
     open: async (threadId) => {
       // 磁碟上還沒有的不先建：設定檔與擁有者要照第一個請求的路由與身分記（`threadOrError`），先用 `full` 建起來，嵌入版就再也開不了它。

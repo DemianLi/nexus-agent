@@ -21,6 +21,17 @@ export const PRINCIPAL_HEADER = 'x-nexus-principal';
 /** 對話行程在拒絕嵌入身分時帶的內部回應標頭，值是拒絕的原因；前台據此記 `access` 稽核、轉給客戶端前刪掉。 */
 export const EMBED_REFUSED_HEADER = 'x-nexus-embed-refused';
 
+/**
+ * 前台停准入之後轉送的請求帶這個標頭（值 `1`），對話行程照它把**這一個請求**當成停准入（`WireHandlerOptions.frontClosing`，#1787）。
+ * 信任邊界同 {@link PRINCIPAL_HEADER}：客戶端帶來的由前台刪掉，只有對話行程的 socket 讀。
+ */
+export const FRONT_CLOSING_HEADER = 'x-nexus-front-closing';
+
+/** 對話行程這一側：這個請求是不是收尾中的前台轉來的。 */
+export function forwardedFromClosingFront(headers: Headers): boolean {
+  return headers.get(FRONT_CLOSING_HEADER) === '1';
+}
+
 const EMBED_FIELDS = ['embedder', 'subject', 'userId', 'sessionIdSha256'] as const;
 
 /** 前台要加的標頭：嵌入身分帶一份，主機擁有者不帶。 */
