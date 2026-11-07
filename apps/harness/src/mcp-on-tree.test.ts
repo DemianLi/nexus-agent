@@ -16,7 +16,7 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { Command } from '@langchain/langgraph';
 import { convertMessagesToCompletionsMessageParams } from '@langchain/openai';
-import { SessionRegistry } from '@nexus/core';
+import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { AgentLoopKind } from '@nexus/core';
 import { McpConnectionPool, publicToolName } from '@nexus/plugin-mcp';
 import { afterEach, expect, it } from 'vitest';
@@ -544,6 +544,44 @@ it(
       /mcp-srv2[\s\S]*MCP 伺服器 "srv" 在這條 thread 上已經有一列掛了，同一個 serverName 不能掛兩次/u,
     );
     expect((failure as Error).message).not.toContain('mcp-srv (');
+    await waitFor(() => pidsWith(marker).length === 0, 10_000);
+  },
+);
+
+it(
+  '同一條 thread 上兩列同一個 serverName，逐列掉模式：只掉後掛那一列，先掛那一列的工具照樣在',
+  { timeout: 120_000 },
+  async () => {
+    const root = createCordisRoot();
+    cleanups.push(() => root.dispose());
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-on-tree-'));
+    chmodSync(dir, 0o700);
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const marker = `--nexus-mcp-on-tree=${dir}`;
+    const loaded = await loadDefaultPlugins(
+      {
+        env: { [HARNESS_HOME_ENV]: dir },
+        patches: [overlay(dir, { server: 'legacy', second: true, secondName: SERVER }, marker)],
+        warn: () => {},
+      },
+      { tree: root.tree },
+    );
+    const result = await loadPlugins(loaded.plugins, undefined, { perEntry: true });
+    try {
+      // 只看 mcp 的兩列：不經 `createCliAgent` 時別的出貨列拿不到宿主服務，也會掉。
+      const dropped = result.dropped.filter(({ origin }) => origin.id.startsWith('mcp-'));
+      expect(dropped.map(({ origin, stage }) => ({ id: origin.id, stage }))).toEqual([
+        { id: 'mcp-srv2', stage: 'apply' },
+      ]);
+      expect(dropped[0]?.message).toContain(
+        `MCP 伺服器 "${SERVER}" 在這條 thread 上已經有一列掛了`,
+      );
+      expect(result.registry.tools.resolve(publicToolName(SERVER, 'embed_blob'))?.origin.id).toBe(
+        'mcp-srv',
+      );
+    } finally {
+      await result.dispose();
+    }
     await waitFor(() => pidsWith(marker).length === 0, 10_000);
   },
 );
