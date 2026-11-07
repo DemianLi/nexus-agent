@@ -11,13 +11,11 @@
 
 import type { Tool } from '@modelcontextprotocol/client';
 import type { Context } from '@nexus/cordis';
-// eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出，#2537 拿掉
-import { CHANNEL_SERVICE } from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- ApprovalChannel 只在 core 定義（mcp 不相依轉出它的 @nexus/approval-channel）；ToolAdmission 改取 @nexus/tools 歸 #2537
-import type { ApprovalChannel, ToolAdmission } from '@nexus/core';
+import { CHANNEL_SERVICE } from '@nexus/approval-channel';
+import type { ApprovalChannel } from '@nexus/approval-channel';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { toolsToken } from '@nexus/tools';
-import type { NexusTool, ToolThread } from '@nexus/tools';
+import type { NexusTool, ToolAdmission, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
@@ -212,7 +210,7 @@ export const mcpConfigSchema = z.strictObject({
    */
   elicitation: z.boolean().default(true),
   /**
-   * 哪些工具要先讓人核准（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)），形狀與偏離見 [`approval.ts`](./approval.ts)。
+   * 哪些工具要先讓人核准（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)），形狀見 [`approval.ts`](./approval.ts)。
    * **省略即 `{ default: ask }`：整台都問**。唯讀的 server 寫 `{ default: allow }`；`default: ask` 時用 `exempt` 列免問的工具
    * （server 自己公告的名字）。
    */
