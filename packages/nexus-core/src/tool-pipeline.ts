@@ -196,7 +196,7 @@ declare module './events.js' {
     /**
      * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
      * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑；交回的 `command` 結果
-     * 不是 `next()` 回的那一個（沒呼叫 `next()`，或自己另造了一個）就拋 `TypeError`。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
+     * 不是工具本體回的那一個（本體沒跑，或自己另造了一個）就拋 `TypeError`。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
      * @mode waterfall
@@ -420,18 +420,19 @@ function rebuildMessage(
 
 /**
  * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時，或叫了 `next()` 而本體回的不是 `ToolMessage` 時。
- * 交回的是 `command` 結果就拋 `TypeError`，訊息照 `calledNext` 分兩句：模型看得到這段文字，要講出實際的情形。
+ * 交回的是 `command` 結果就拋 `TypeError`，訊息照 `bodyRan`（工具本體跑了沒）分兩句：模型看得到這段文字，要講出實際的情形。
+ * 判準是本體跑了沒，不是交回的那位叫了 `next()` 沒：有多位監聽者時，叫了 `next()` 也可能被內層短路。
  */
 function materialize(
   view: PipelineExecuteResult,
   exec: PipelineExecution,
-  calledNext: boolean,
+  bodyRan: boolean,
 ): ToolMessage {
   const body = view.kind === 'message' ? bodyOf(view) : undefined;
   if (body === undefined) {
     throw view.kind === 'message'
       ? badDecision('tools/execute', view)
-      : new TypeError(calledNext ? COMMAND_NOT_FROM_NEXT : COMMAND_WITHOUT_NEXT);
+      : new TypeError(bodyRan ? COMMAND_NOT_FROM_BODY : COMMAND_WITHOUT_BODY);
   }
   const message = new ToolMessage({
     content: body as ToolMessage['content'],
@@ -442,9 +443,9 @@ function materialize(
   return view.error === undefined ? message : markToolError(message, view.error);
 }
 
-const COMMAND_WITHOUT_NEXT =
-  'tools/execute 的監聽者回了 command 結果，但沒有呼叫 next()：Command 造不出來（偏離 2）';
-const COMMAND_NOT_FROM_NEXT =
+const COMMAND_WITHOUT_BODY =
+  'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）';
+const COMMAND_NOT_FROM_BODY =
   'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）';
 
 const ALLOW: PipelinePreDecision = Object.freeze({ kind: 'allow' });

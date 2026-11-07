@@ -361,7 +361,7 @@ describe('tools/execute 的生產者', () => {
     expect(result.text).toBe('區塊');
   });
 
-  it('短路回 `command` 結果 → 拋 TypeError，訊息說沒有呼叫 next()', async () => {
+  it('短路回 `command` 結果 → 拋 TypeError，訊息說工具本體沒有跑', async () => {
     const bus = new EventBus();
     bus.on('tools/execute', () => Promise.resolve({ kind: 'command', isError: false }));
     const wrap = wrapperOf(createToolExecuteMiddleware(bus));
@@ -369,8 +369,30 @@ describe('tools/execute 的生產者', () => {
     const failure = wrap(requestFor(), handler);
     await expect(failure).rejects.toBeInstanceOf(TypeError);
     await expect(failure).rejects.toThrow(
-      'tools/execute 的監聽者回了 command 結果，但沒有呼叫 next()：Command 造不出來（偏離 2）',
+      'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）',
     );
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('兩位監聽者：外層叫了 `next()`、內層短路，外層交回 `command` 結果 → 訊息說工具本體沒有跑', async () => {
+    const bus = new EventBus();
+    const order: string[] = [];
+    bus.on('tools/execute', async (_exec, next) => {
+      order.push('外層');
+      await next();
+      return { kind: 'command', isError: false };
+    });
+    bus.on('tools/execute', () => {
+      order.push('內層');
+      return Promise.resolve({ kind: 'message', content: '快取的', isError: false });
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => 'x');
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）',
+    );
+    expect(order).toEqual(['外層', '內層']);
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -389,6 +411,21 @@ describe('tools/execute 的生產者', () => {
     await expect(failure).rejects.toThrow(
       'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
     );
+  });
+
+  it('叫了 `next()`、本體回 `ToolMessage`，卻交回 `command` 結果 → 拋 TypeError，訊息說不是 next() 回的那一個', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => new ToolMessage({ content: '真的', tool_call_id: 'call-1' }));
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('本體拋錯 → 原樣往外拋（翻成訊息是圍堵的事）', async () => {
