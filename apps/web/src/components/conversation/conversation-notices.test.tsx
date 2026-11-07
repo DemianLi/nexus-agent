@@ -28,4 +28,17 @@ describe('ConversationNotices 把連線狀態交給狀態列', () => {
     );
     expect(screen.getByRole('status').textContent).toBe(OPENING_TEXT);
   });
+
+  it('停止自動重連給的按鈕字（#2343）交到狀態列的按鈕上', () => {
+    render(
+      <ConversationNotices
+        conversation={conversation({
+          refusal: '這條對話停了',
+          reconnecting: { wasConnected: true, offline: false, actionLabel: '重新開啟' },
+        })}
+        notice={undefined}
+      />,
+    );
+    expect(screen.getByRole('button', { name: '重新開啟' })).toBeTruthy();
+  });
 });

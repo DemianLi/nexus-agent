@@ -8,18 +8,23 @@
  *   對話行程收到之後照樣再核一次；那一道拒絕時帶回原因，`access` 稽核由前台記（對話行程沒有稽核檔）。
  * - **嵌入版的 thread 下行由前台登記**（#2489）：開線先記 `opened`，每 {@link EmbedStreamGuard.intervalMs} 拿開線時的標頭重驗一次，
  *   驗不過就切掉往對話行程的那條、記 `cut`；收掉記 `closed`。對話行程收不到 cookie，重驗只能在這裡做。
- * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 與評分在
- *   那條 thread 沒有行程、而且不是從嵌入路由來時（本地答「沒在跑」）；嵌入路由的照樣轉送，沒有行程就起一個。
- * - **打開方式**：讀歷史、附件、引用、變更的是 `read-only`，其餘（開下行、送指令、上傳）是 `run`。
+ * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）、`@` 的會話候選（冷讀磁碟，看不到還沒落盤的事件）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
+ *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
+ *   前台不載 thread，本地答只會是「還沒開過」。
+ * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開著的下行讓對話行程不回報閒置；
+ *   這條 thread 經前台的最後一條下行收掉時送 `release`（見 `countDownlink`）。只讀過歷史、沒開下行的照只讀的閒置時間收。
  *
  * @module
  */
 
 import {
   errorResponse,
-  isFeedbackMethod,
+  isRunCancelMethod,
   isThreadManagementMethod,
+  SERVER_CLOSING,
+  SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
+  type ThreadActivityKind,
 } from '@nexus/wire';
 
 import { randomUUID } from 'node:crypto';
@@ -28,16 +33,22 @@ import type { EmbedAccessRoute, StreamRecord } from './embed-audit.js';
 import { IDENTITY_TABLE_STAT_INTERVAL_MS } from './embed-identities.js';
 import { EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './embed-profile.js';
 import type { EmbedCookieRefusal } from './embed-session.js';
-import { EMBED_REFUSED_HEADER, principalHeaders } from './forwarded-principal.js';
+import {
+  EMBED_REFUSED_HEADER,
+  FRONT_CLOSING_HEADER,
+  principalHeaders,
+} from './forwarded-principal.js';
 import type { FrontForwarder } from './front-forward.js';
 import { StreamCutError } from './sse-response.js';
 import type { EnsureOutcome, SupervisorClient } from './supervisor-client.js';
 import type { OpenMode } from './supervisor-protocol.js';
 import {
+  internalThreadPath,
   parsePath,
   type EmbedStreamGuard,
   type IdleSweepingWireHandler,
   type WireAuth,
+  type WireHandlerOptions,
 } from './wire-handler.js';
 import type { EmbedPrincipal, WirePrincipal } from './wire-principal.js';
 
@@ -45,20 +56,15 @@ type Route = NonNullable<ReturnType<typeof parsePath>>;
 
 /** 用 `read-only` 打開的路由：監督行程給它較短的閒置時間（`--read-only-idle-ms`），名額滿時先逐出（設計 §7-3）。 */
 const READ_ONLY_KINDS: ReadonlySet<Route['kind']> = new Set([
+  'stream',
   'history',
   'subagent-history',
   'trajectory-turn',
   'file-references',
-  'session-references',
   'attachment',
   'changes-summary',
   'changes-diff',
 ]);
-
-/** 沒有行程時前台自己答的指令：它們不建 agent，只看記憶體裡那條 thread。 */
-function answeredWhenAbsent(method: string): boolean {
-  return method === 'run.cancel' || isFeedbackMethod(method);
-}
 
 export interface FrontWireOptions {
   /** 前台自己那一支：閘門、列表、搜尋、全域下行、整理檔都在它身上。 */
@@ -69,7 +75,11 @@ export interface FrontWireOptions {
   readonly auth: WireAuth;
   /** 同本地那支的 `embedStreams`；缺席就是沒有嵌入方，嵌入身分不會出現。 */
   readonly embedStreams?: EmbedStreamGuard;
+  /** 轉送給一條 thread 的請求拿到了對話行程的回應（不論狀態碼；那條 thread 不一定已組裝，看路由）。前台拿它去問 plugin 綁定（`front-plugins.ts`）。 */
+  readonly onForwarded?: (threadId: string) => void;
   readonly warn?: (message: string) => void;
+  /** 分叉出來的子 thread 的 id；省略用 `randomUUID`（測試給固定的）。 */
+  readonly newThreadId?: () => string;
 }
 
 /** 前台登記中的一條嵌入版下行。 */
@@ -99,6 +109,17 @@ async function envelopeId(request: Request, route: Route): Promise<number | null
   }
 }
 
+/** 收尾中不收的那句；文案同本地那支（客戶端認碼，不認文案）。 */
+function serverClosing(id: number | null): Response {
+  return json(
+    errorResponse(
+      id,
+      SERVER_CLOSING,
+      'serve 正在收尾，這個請求沒有處理；等它重新起來再送一次（run.start 帶同一個 request_id）。',
+    ),
+  );
+}
+
 /** 轉送的錯是不是「socket 那頭沒有行程」：沒人在聽，或 socket 檔已經不在。 */
 function processGone(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -119,6 +140,7 @@ function outcomeFailure(
       ),
     );
   }
+  if (outcome.cause === 'shutdown') return serverClosing(id);
   return json(
     errorResponse(
       id,
@@ -129,7 +151,7 @@ function outcomeFailure(
 }
 
 /**
- * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，換掉 `handle` 與 `close`（先收轉送中的嵌入下行、補記 `closed`，再收本地那一支）；
+ * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，換掉 `handle`、`close`（先收轉送中的嵌入下行、補記 `closed`，再收本地那一支）與 `stopAdmission`（停准入之後轉送的請求帶 `FRONT_CLOSING_HEADER`）；
  * 轉送器由入口收。
  */
 export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingWireHandler {
@@ -138,6 +160,54 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   const streams = new Set<ForwardedEmbedStream>();
   let scan: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let admissionStopped = false;
+  /** 每條 thread 轉送中的下行有幾條；降到 0 就 `release`。 */
+  const downlinks = new Map<string, number>();
+
+  /**
+   * 數這條下行：本文讀完、被取消或出錯時減一，這條 thread 一條都不剩就告訴監督行程可以先收。監督行程只收只讀開的，
+   * 已經轉成一般的（收到過 `ensure(run)` 或 `turn(begin)`）照一般的閒置時間收。讀歷史不 `release`：監督行程會把它記到行程閒置為止，
+   * 送了的話，只讀過歷史的那條一閒置就收，不留只讀的閒置時間。
+   */
+  function countDownlink(threadId: string, response: Response): Response {
+    const source = response.body;
+    if (source === null || response.status !== 200) return response;
+    downlinks.set(threadId, (downlinks.get(threadId) ?? 0) + 1);
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      const left = (downlinks.get(threadId) ?? 1) - 1;
+      if (left > 0) {
+        downlinks.set(threadId, left);
+        return;
+      }
+      downlinks.delete(threadId);
+      supervisor.release(threadId);
+    };
+    const reader = source.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            finish();
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk.value);
+        } catch (error) {
+          finish();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        finish();
+        await reader.cancel(reason);
+      },
+    });
+    return new Response(body, { status: response.status, headers: response.headers });
+  }
 
   function scanStreams(active: EmbedStreamGuard): void {
     const verdicts = new Map<string, ReturnType<EmbedStreamGuard['recheck']>>();
@@ -292,6 +362,96 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
     return new Response(body, { status: response.status, headers: response.headers });
   }
 
+  /** 監督行程替這條 thread 開好行程，回它的 socket；開不了回要回給客戶端的那一份。 */
+  async function socketFor(
+    threadId: string,
+    open: OpenMode,
+    id: number | null,
+    signal: AbortSignal,
+  ): Promise<string | Response> {
+    let outcome: EnsureOutcome;
+    try {
+      outcome = await supervisor.ensure(threadId, open, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return json(
+        errorResponse(id, 'unknown_error', `監督行程不在，thread "${threadId}" 開不了。`),
+      );
+    }
+    return outcome.type === 'up' ? outcome.socket : outcomeFailure(outcome, id, threadId);
+  }
+
+  /** 打一支對話行程的內部路由（不帶身分標頭，同 `turn-failures`）；連不上回 `undefined`。 */
+  async function internalPost(
+    threadId: string,
+    socket: string,
+    action: 'fork-seed' | 'fork-adopt',
+    body: string,
+    signal: AbortSignal,
+  ): Promise<Response | undefined> {
+    try {
+      return await forwarder.forward(
+        new Request(`http://localhost${internalThreadPath(threadId, action)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal,
+        }),
+        socket,
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (processGone(error)) forwarder.forget(socket);
+      else forwarder.dropIdle(socket);
+      return undefined;
+    }
+  }
+
+  /**
+   * 分叉（`.docs/supervisor-1947-design-2026-11-03.md` §4-3）：來源的對話行程照 `handleFork`（`wire-handler.ts`）的第 1 到 4 步算出子 thread 的 seed
+   * （`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），分得出去才替子 thread 開一個行程、交給它照第 5、6 步建（`fork-adopt`）。
+   * 來源開不起來（名額滿）時回那一份，排在參數與切點的檢查之前；分不出去的、子 thread 建不起來的，原樣回對話行程的那一份；`fork-adopt` 回的不是 2xx（例如本文超過上限的 413）時回 `unknown_error`，
+   * 已經開好的子行程照閒置時間收。
+   */
+  async function forkAcross(request: Request, route: Route, id: number): Promise<Response> {
+    const body = await request.text();
+    const unreachable = (threadId: string): Response =>
+      json(errorResponse(id, 'unknown_error', `thread "${threadId}" 的對話行程連不上，請重試。`));
+    const source = await socketFor(route.threadId, 'read-only', id, request.signal);
+    if (source instanceof Response) return source;
+    const seeded = await internalPost(route.threadId, source, 'fork-seed', body, request.signal);
+    if (seeded === undefined) return unreachable(route.threadId);
+    if (!seeded.ok) {
+      await seeded.body?.cancel();
+      return unreachable(route.threadId);
+    }
+    const result = (await seeded.json()) as { fork?: unknown; answer?: unknown };
+    if (result.fork === undefined) return json(result.answer);
+    const childId = options.newThreadId?.() ?? randomUUID();
+    const child = await socketFor(childId, 'run', id, request.signal);
+    if (child instanceof Response) return child;
+    const adopted = await internalPost(
+      childId,
+      child,
+      'fork-adopt',
+      JSON.stringify({ id, fork: result.fork }),
+      request.signal,
+    );
+    if (adopted === undefined) return unreachable(childId);
+    if (!adopted.ok) {
+      await adopted.body?.cancel();
+      return json(
+        errorResponse(
+          id,
+          'unknown_error',
+          `分叉出來的 thread 沒有建起來（對話行程回 ${String(adopted.status)}）。`,
+        ),
+      );
+    }
+    options.onForwarded?.(childId);
+    return adopted;
+  }
+
   async function forwardTo(
     request: Request,
     route: Route,
@@ -322,7 +482,12 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
       : request;
     let response: Response;
     try {
-      response = await forwarder.forward(outgoing, outcome.socket, principalHeaders(principal));
+      // 停准入之後轉的每一個都帶標頭，對話行程照它擋這一個請求（有行程的 `run.start`、會 steer 的 `slash.run`）：
+      // 停准入只在前台，對話行程的那一支沒被叫過。
+      response = await forwarder.forward(outgoing, outcome.socket, {
+        ...principalHeaders(principal),
+        ...(admissionStopped && { [FRONT_CLOSING_HEADER]: '1' }),
+      });
     } catch (error) {
       if (request.signal.aborted) throw error;
       // 連不上（行程剛走、`down` 還沒到）才收掉整個 socket 的連線；其餘的錯只丟閒置的，同一條 thread 開著的下行不跟著斷。
@@ -333,23 +498,31 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         errorResponse(id, 'unknown_error', `thread "${route.threadId}" 的對話行程連不上，請重試。`),
       );
     }
+    options.onForwarded?.(route.threadId);
     const refused = response.headers.get(EMBED_REFUSED_HEADER);
     if (refused !== null) {
       response.headers.delete(EMBED_REFUSED_HEADER);
       if (principal.kind === 'embed') await recordAccess(principal, route.threadId, route, refused);
     }
-    if (
-      guarded &&
+    const eventStream =
+      route.kind === 'stream' &&
       response.body !== null &&
-      (response.headers.get('content-type') ?? '').startsWith('text/event-stream')
-    ) {
-      return guardStream(guard, response, upstream, request, route.threadId, principal);
-    }
-    return response;
+      (response.headers.get('content-type') ?? '').startsWith('text/event-stream');
+    if (!eventStream) return response;
+    return countDownlink(
+      route.threadId,
+      guarded
+        ? await guardStream(guard, response, upstream, request, route.threadId, principal)
+        : response,
+    );
   }
 
   return {
     ...local,
+    stopAdmission: () => {
+      admissionStopped = true;
+      local.stopAdmission();
+    },
     close: async () => {
       closed = true;
       for (const entry of [...streams]) entry.close();
@@ -370,16 +543,38 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         if (refusal !== undefined) return refusal;
         if (!EMBED_ROUTE_KINDS.has(route.kind)) return new Response('not found', { status: 404 });
       }
-      if (route.kind === 'command' && embedded === undefined) {
+      // `@` 的會話候選是冷讀整個會話根，為一份清單起一個行程是反的；嵌入路由打不到它（`EMBED_ROUTE_KINDS`）。
+      if (route.kind === 'session-references') return local.handle(request);
+      if (route.kind === 'command') {
         if (
+          embedded === undefined &&
           isThreadManagementMethod(route.method) &&
           route.method !== 'thread.rename' &&
           route.method !== 'thread.fork'
         ) {
           return local.handle(request);
         }
-        if (answeredWhenAbsent(route.method) && supervisor.socketOf(route.threadId) === undefined) {
+        if (isRunCancelMethod(route.method) && supervisor.socketOf(route.threadId) === undefined) {
           return local.handle(request);
+        }
+        // 收尾中不開新一輪（#1787），同本地那支：`subagent.send` 一律擋；`run.start` 只擋沒有行程的（有行程的轉過去，
+        // 窗前收過的重送由對話行程照 request_id 去重、拿回原本的 run_id）。不為一句不會收的話起一個對話行程。
+        // 嵌入路由的 `thread.fork` 與讀不出 id 的照一般轉送；後者封包的錯由對話行程照 single 回。
+        const forkId =
+          route.method === 'thread.fork' && embedded === undefined
+            ? await envelopeId(request, route)
+            : null;
+        if (forkId !== null) {
+          if (admissionStopped) return serverClosing(forkId);
+          return forkAcross(request, route, forkId);
+        }
+        if (admissionStopped) {
+          if (route.method === SUBAGENT_SEND_METHOD) {
+            return serverClosing(await envelopeId(request, route));
+          }
+          if (route.method === 'run.start' && supervisor.socketOf(route.threadId) === undefined) {
+            return serverClosing(await envelopeId(request, route));
+          }
         }
       }
       return forwardTo(
@@ -389,6 +584,53 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         principal,
         embedded !== undefined,
       );
+    },
+  };
+}
+
+/**
+ * 前台封存時問對話行程的那一組（{@link WireHandlerOptions.threadActivityElsewhere}）：沒有行程就是閒著、停無可停；
+ * 連不上而行程剛好走了也一樣。其餘的錯照拋：`activity` 拋了封存不寫，`stop` 拋了封存照舊、由封存那一側講一聲（`ArchiveDeps.stop`）。
+ */
+export function threadActivityOverSocket(
+  supervisor: SupervisorClient,
+  forwarder: FrontForwarder,
+): NonNullable<WireHandlerOptions['threadActivityElsewhere']> {
+  async function call(
+    threadId: string,
+    action: 'activity' | 'stop',
+  ): Promise<Response | undefined> {
+    const socket = supervisor.socketOf(threadId);
+    if (socket === undefined) return undefined;
+    const request = new Request(`http://localhost${internalThreadPath(threadId, action)}`, {
+      method: action === 'activity' ? 'GET' : 'POST',
+    });
+    let response: Response;
+    try {
+      response = await forwarder.forward(request, socket);
+    } catch (error) {
+      if (supervisor.socketOf(threadId) === undefined) return undefined;
+      throw error;
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`thread "${threadId}" 的對話行程回 ${String(response.status)}（${action}）`);
+    }
+    return response;
+  }
+  return {
+    activity: async (threadId) => {
+      const response = await call(threadId, 'activity');
+      if (response === undefined) return [];
+      const body = (await response.json()) as { activity?: unknown };
+      if (!Array.isArray(body.activity)) {
+        throw new Error(`thread "${threadId}" 的對話行程回的 activity 認不得`);
+      }
+      return body.activity as ThreadActivityKind[];
+    },
+    stop: async (threadId) => {
+      const response = await call(threadId, 'stop');
+      await response?.body?.cancel();
     },
   };
 }

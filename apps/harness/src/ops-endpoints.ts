@@ -111,13 +111,13 @@ export class OpsMetrics {
     this.#requests.set(key, (this.#requests.get(key) ?? 0) + 1);
   }
 
-  /** 一輪失敗了（`onTurnFailed`，含背景子代理）。 */
-  recordTurnFailure(code: string): void {
+  /** 一輪失敗了（`onTurnFailed`，含背景子代理）；per-thread 的前台一次收到幾筆（`front-turn-failures.ts`）。 */
+  recordTurnFailure(code: string, count = 1): void {
     const key =
       this.#turnFailures.has(code) || this.#turnFailures.size < MAX_TURN_FAILURE_CODES
         ? code
         : 'OTHER';
-    this.#turnFailures.set(key, (this.#turnFailures.get(key) ?? 0) + 1);
+    this.#turnFailures.set(key, (this.#turnFailures.get(key) ?? 0) + count);
   }
 
   /** 停掉事件圈取樣。可重複呼叫。 */

@@ -15,12 +15,12 @@ import { emptyConversation, PERMISSIONS_PROJECTION_KEY, PROJECTION, reduceAll } 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { FULL_ACCESS_PATCH, serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 afterEach(async () => {
   await running?.close();
   running = undefined;
@@ -31,12 +31,12 @@ async function start(
   workspace: string,
   extra: readonly string[] = [],
   log: (line: string) => void = () => {},
-): Promise<RunningServe> {
-  const server = (await runServe({
+): Promise<ServeUnderTest> {
+  const server = (await startServeUnderTest({
     argv: ['--port', '0', '--session-log', root, '--workspace', workspace, ...extra],
     log,
     env: {},
-  })) as RunningServe;
+  })) as ServeUnderTest;
   running = server;
   return server;
 }

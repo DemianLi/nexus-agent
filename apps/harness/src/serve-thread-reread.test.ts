@@ -27,12 +27,16 @@ import {
   seedHomePatch,
   writeJournalText,
 } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import { sessionHeaderOf } from './session-files.fixture.js';
+import {
+  FIXTURE_PATCH_DIR_PREFIX,
+  PROCESS_MODEL_UNDER_TEST,
+  startServeUnderTest,
+} from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const temporary: string[] = [];
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -47,6 +51,8 @@ interface Home {
   applied(): string[];
   /** 模組被求值了幾次。 */
   evaluations(): number;
+  /** 照行程分：每個 pid 的 `apply` 拿到的設定，與那個行程把模組求值了幾次。 */
+  byPid(): Map<string, { applied: string[]; evaluations: number }>;
   /** 起始的設定：寫成紀錄檔（等同第一次啟動時遷移的結果），要在 `runServe` 之前呼叫。 */
   seed(body: string): void;
   /** 走真的寫入口改一列（驗證、鎖、fsync 都在）。 */
@@ -71,11 +77,11 @@ function home(failUnlessOk = false): Home {
     module,
     [
       "import { appendFileSync } from 'node:fs';",
-      `appendFileSync(${JSON.stringify(evaluatedPath)}, 'x');`,
+      `appendFileSync(${JSON.stringify(evaluatedPath)}, process.pid + '\\n');`,
       'export default {',
       "  name: 'probe',",
       '  apply(_registry, config) {',
-      `    appendFileSync(${JSON.stringify(appliedPath)}, JSON.stringify(config ?? null) + '\\n');`,
+      `    appendFileSync(${JSON.stringify(appliedPath)}, process.pid + '\\t' + JSON.stringify(config ?? null) + '\\n');`,
       `    if (${String(failUnlessOk)} && config?.ok !== true) throw new Error('故意在 apply 裡壞掉');`,
       '  },',
       '};',
@@ -83,13 +89,28 @@ function home(failUnlessOk = false): Home {
     ].join('\n'),
   );
   chmodSync(module, 0o600);
-  const read = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : '');
+  const read = (path: string) =>
+    (existsSync(path) ? readFileSync(path, 'utf8') : '').split('\n').filter(Boolean);
   const env = { [HARNESS_HOME_ENV]: dir };
   return {
     env,
     dir,
-    applied: () => read(appliedPath).split('\n').filter(Boolean),
+    applied: () => read(appliedPath).map((line) => line.slice(line.indexOf('\t') + 1)),
     evaluations: () => read(evaluatedPath).length,
+    byPid() {
+      const out = new Map<string, { applied: string[]; evaluations: number }>();
+      const of = (pid: string) => {
+        const entry = out.get(pid) ?? { applied: [], evaluations: 0 };
+        out.set(pid, entry);
+        return entry;
+      };
+      for (const pid of read(evaluatedPath)) of(pid).evaluations += 1;
+      for (const line of read(appliedPath)) {
+        const tab = line.indexOf('\t');
+        of(line.slice(0, tab)).applied.push(line.slice(tab + 1));
+      }
+      return out;
+    },
     seed: (body) => seedHomePatch(dir, body),
     change: (change) => changePlugin(change, { env, trial: async () => [] }),
     raw: (body) => appendRaw(dir, body),
@@ -105,18 +126,18 @@ function probeRow(config: string, extra = ''): string {
   return `- insert:\n    - id: probe\n      name: './probe.ts'\n${config}${extra}`;
 }
 
-async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<RunningServe> {
-  const server = (await runServe({
+async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<ServeUnderTest> {
+  const server = (await startServeUnderTest({
     argv: ['--port', '0'],
     log: bodyLog(lines),
     env,
-  })) as RunningServe;
+  })) as ServeUnderTest;
   running = server;
   return server;
 }
 
 /** 在這條 thread 上說一句，跑完一輪；建不起來就回錯誤訊息。 */
-async function say(server: RunningServe, thread: string): Promise<string | undefined> {
+async function say(server: ServeUnderTest, thread: string): Promise<string | undefined> {
   const client = await serveClient(server);
   // 建不起來的 thread，開下行那一步就被拒，原因在 serve 的日誌。
   const events = await client.openEvents(thread).catch((error: unknown) => error as Error);
@@ -135,6 +156,37 @@ async function header(dir: string, thread: string): Promise<{ configHash?: strin
   return (await sessionHeaderOf(join(dir, 'sessions', projectKey(process.cwd())), thread)).header;
 }
 
+/** 伺服器日誌裡讀清單的那幾行；per-thread 下 fixture 自己那一層覆蓋層（切 process-model）的那一行不算。 */
+function listLines(lines: readonly string[]): string[] {
+  return lines.filter(
+    (line) => line.startsWith('[清單]') && !line.includes(FIXTURE_PATCH_DIR_PREFIX),
+  );
+}
+
+const PER_THREAD = PROCESS_MODEL_UNDER_TEST === 'per-thread';
+
+/**
+ * per-thread 下照行程分的 `apply`（docs/operations.md〈行程模型：`single` 與 `per-thread`〉：每個行程各自求值、各自試組、各自記得試組掉了的列）。
+ * 暖池的行程什麼時候起不一定，只斷言跟它無關的：每個行程模組求值一次；`apply` 最多兩次（起動試組、綁到的那一條組裝）；
+ * `bad` 裡的壞值同一個行程不試第二次。
+ */
+function perProcess(h: Home, bad: readonly string[] = []): string[][] {
+  const groups = [...h.byPid().values()];
+  for (const group of groups) {
+    expect(group.evaluations).toBe(1);
+    expect(group.applied.length).toBeLessThanOrEqual(2);
+    for (const value of bad) {
+      expect(group.applied.filter((applied) => applied === value).length).toBeLessThanOrEqual(1);
+    }
+  }
+  return groups.map((group) => group.applied);
+}
+
+/** 綁了 thread、組裝過的那幾個行程（起動試組一次、組裝一次）。 */
+function assembled(groups: readonly string[][]): string[][] {
+  return groups.filter((applied) => applied.length === 2);
+}
+
 describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('兩條對話之間改了一列的設定：第二條拿到新值，開著的第一條不變；模組只求值一次', async () => {
     const h = home();
@@ -146,6 +198,14 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(await say(server, 'b')).toBeUndefined();
     // 第一條還開著，再說一句不重組。
     expect(await say(server, 'a')).toBeUndefined();
+    if (PER_THREAD) {
+      // a 的行程在改之前起：試組、組裝都是舊值；b 的行程組裝拿到新值；a 再說一句，沒有行程多組一次。
+      const bound = assembled(perProcess(h));
+      expect(bound).toHaveLength(2);
+      expect(bound).toContainEqual(['{"tag":"one"}', '{"tag":"one"}']);
+      expect(bound.map((applied) => applied[1])).toContain('{"tag":"two"}');
+      return;
+    }
     // 試組、a、b。
     expect(h.applied()).toEqual(['{"tag":"one"}', '{"tag":"one"}', '{"tag":"two"}']);
     // 不換程式碼版本：同一個 specifier 第二次拿到的是同一個模組。
@@ -159,6 +219,10 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(await say(server, 'a')).toBeUndefined();
     expect(await h.change({ op: 'disable', id: 'probe' })).toMatchObject({ outcome: 'recorded' });
     expect(await say(server, 'b')).toBeUndefined();
+    if (PER_THREAD) {
+      expect(assembled(perProcess(h))).toEqual([['{"tag":"one"}', '{"tag":"one"}']]);
+      return;
+    }
     expect(h.applied()).toHaveLength(2);
   }, 60000);
 
@@ -193,6 +257,12 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     h.text(good);
     await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
     expect(await say(server, 'b')).toBeUndefined();
+    if (PER_THREAD) {
+      // 只有 b 組裝過；a 那一條建不起來。
+      const bound = assembled(perProcess(h));
+      expect(bound.map((applied) => applied[1])).toEqual(['{"tag":"two"}']);
+      return;
+    }
     expect(h.applied()).toEqual(['{"tag":"one"}', '{"tag":"two"}']);
   }, 60000);
 
@@ -224,7 +294,7 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     const lines: string[] = [];
     const server = await start(h.env, lines);
     expect(await say(server, 'a')).toBeUndefined();
-    expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([]);
+    expect(listLines(lines)).toEqual([]);
     const written = await h.change({
       op: 'config-set',
       id: 'thread-title',
@@ -233,8 +303,10 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(written).toMatchObject({ outcome: 'recorded', effect: 'restart' });
     expect(await say(server, 'b')).toBeUndefined();
     expect(await say(server, 'c')).toBeUndefined();
-    expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([
-      '[清單] 「thread-title」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值',
+    expect(listLines(lines)).toEqual([
+      PER_THREAD
+        ? '[清單] 「thread-title」改了，已儲存，待重啟：這一列在每個對話行程起動時讀一次：之後起來的對話行程用新值，已經起著的（含預熱池）照舊，要全部生效就重啟 serve'
+        : '[清單] 「thread-title」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值',
     ]);
   }, 60000);
 
@@ -261,10 +333,21 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     h.seed(probeRow('      config:\n        ok: false\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
-    // 只有試組那一次。
-    expect(h.applied()).toEqual(['{"ok":false}']);
+    if (PER_THREAD) {
+      // 每個行程起動時各試一次；a 組裝時不再試。
+      expect(assembled(perProcess(h, ['{"ok":false}']))).toEqual([]);
+    } else {
+      // 只有試組那一次。
+      expect(h.applied()).toEqual(['{"ok":false}']);
+    }
     await h.change({ op: 'config-set', id: 'probe', config: { ok: true } });
     expect(await say(server, 'b')).toBeUndefined();
+    if (PER_THREAD) {
+      // b 的行程不管起動試組拿到哪一個值，組裝時用的是新值。
+      const bound = assembled(perProcess(h, ['{"ok":false}']));
+      expect(bound.map((applied) => applied[1])).toEqual(['{"ok":true}']);
+      return;
+    }
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
 
@@ -274,10 +357,16 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     h.seed(anonymous('      config:\n        ok: false\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
-    expect(h.applied()).toEqual(['{"ok":false}']);
+    if (PER_THREAD) expect(assembled(perProcess(h, ['{"ok":false}']))).toEqual([]);
+    else expect(h.applied()).toEqual(['{"ok":false}']);
     // 沒有 id 的列寫入口指不到：這一條只換整份起始設定（測試用），量的是重試的鍵。
     seedHomePatch(h.dir, anonymous('      config:\n        ok: true\n'));
     expect(await say(server, 'b')).toBeUndefined();
+    if (PER_THREAD) {
+      const bound = assembled(perProcess(h, ['{"ok":false}']));
+      expect(bound.map((applied) => applied[1])).toEqual(['{"ok":true}']);
+      return;
+    }
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
 
@@ -288,6 +377,11 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     await h.change({ op: 'config-set', id: 'probe', config: { note: 2 } });
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();
+    if (PER_THREAD) {
+      // 每個行程各試一次：起動試組讀到哪個值就試哪個，組裝時只在鍵變了才再試。
+      perProcess(h, ['{"note":1}', '{"note":2}']);
+      return;
+    }
     expect(h.applied()).toEqual(['{"note":1}', '{"note":2}']);
   }, 60000);
 

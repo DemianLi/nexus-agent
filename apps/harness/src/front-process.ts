@@ -11,7 +11,10 @@
 
 import { Writable } from 'node:stream';
 
+import { FrontFeed } from './front-feed.js';
+import { FrontPluginBindings } from './front-plugins.js';
 import { FrontForwarder } from './front-forward.js';
+import { FrontTurnFailures } from './front-turn-failures.js';
 import { installServeProcessLifecycle, runServe } from './serve.js';
 import { SupervisorClient } from './supervisor-client.js';
 
@@ -26,19 +29,31 @@ async function main(): Promise<void> {
 
   const lifecycle = installServeProcessLifecycle();
   const forwarder = new FrontForwarder();
+  const warn = (message: string): void => console.error(message);
+  const feed = new FrontFeed({ forwarder, warn });
+  const plugins = new FrontPluginBindings({ forwarder, warn });
+  const turnFailures = new FrontTurnFailures({ forwarder, warn });
   const supervisor = new SupervisorClient({
     input: process.stdin,
     output: frames,
-    onDown: (_threadId, _cause, socket) => {
+    onUp: (threadId, socket) => {
+      feed.up(threadId, socket);
+      plugins.up(threadId, socket);
+      turnFailures.up(threadId, socket);
+    },
+    onDown: (threadId, _cause, socket) => {
+      feed.down(threadId);
+      plugins.down(threadId);
+      turnFailures.down(threadId);
       if (socket !== undefined) forwarder.forget(socket);
     },
-    warn: (message) => console.error(message),
+    warn,
   });
   process.stdin.once('end', () => lifecycle.stop());
   try {
     const running = await runServe({
       argv: process.argv.slice(2),
-      front: { supervisor, forwarder },
+      front: { supervisor, forwarder, feed, plugins, turnFailures },
     });
     if (running === undefined) {
       lifecycle.uninstall();
@@ -50,6 +65,9 @@ async function main(): Promise<void> {
         try {
           await running.close(options);
         } finally {
+          feed.close();
+          plugins.close();
+          turnFailures.close();
           forwarder.close();
         }
       },

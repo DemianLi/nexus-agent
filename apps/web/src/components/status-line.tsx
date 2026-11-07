@@ -15,8 +15,8 @@
  * 只換這一支：其他支的字級跟它不一樣（14px 對 12.5px），記在 #1688；高度由外層的 `min-h-lh` 對齊。
  *
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
- * 「立刻重連」；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，
- * 所以放進既有的狀態列（UI 形狀，不是執行語意）。按鈕放在 live region 外面，免得每次重唸都唸到它。
+ * 「立刻重連」（停止自動重連時字由觸發點給，#2343）；接回來短暫寫「已重新連線」。
+ * 按鈕放在 live region 外面，免得每次重唸都唸到它。
  *
  * **執行中帶經過時間**（[#1308](https://github.com/DemianLi/nexus-agent/issues/1308)）：從 server 記下的這一輪開始時刻起算
  * （`lib/running-turn.ts`），用回應的 `Date` 標頭換算兩邊的時鐘差（`lib/server-clock.ts`），所以重新整理不歸零。每秒跳，
@@ -34,6 +34,7 @@ import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
 import { elapsedText, runningTurnStart } from '@/lib/running-turn';
 import { serverClock } from '@/lib/server-clock';
+import { RECONNECT_ACTION_LABEL } from '@/lib/stream-halted';
 import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT, stoppedByTurnClock } from '@/lib/stop-cause';
 import { turnActivity } from '@/lib/turn-activity';
 
@@ -75,8 +76,8 @@ export const OPENING_TEXT = '正在開啟這條對話…';
 
 /**
  * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
- * 或伺服器送來看不懂的資料（[#1601](https://github.com/DemianLi/nexus-agent/issues/1601)）：不管之前連上過沒有都換成它，**不接 server 的原文**。
- * 前者背景的重試照舊；後者停了自動重連。兩種「立刻重連」都還在。
+ * 或停止自動重連時的那一句（看不懂的資料 [#1601](https://github.com/DemianLi/nexus-agent/issues/1601)、`StreamHaltedError` #2343）：
+ * 不管之前連上過沒有都換成它，**不接 server 的原文**。前者背景的重試照舊；後者停了自動重連。兩種都留著按鈕。
  */
 function lostText(
   reconnecting: { readonly wasConnected: boolean; readonly offline: boolean },
@@ -109,12 +110,19 @@ export function StatusLine({
   connected: boolean;
   connectionError?: string;
   /**
-   * 下行被伺服器明說不收、或送來看不懂的資料時給人看的話。斷著（thread 數滿了、看不懂的資料）就取代斷線那一行（見 `lostText`）；
+   * 下行被伺服器明說不收、或停止自動重連時給人看的話。斷著（thread 數滿了、看不懂的資料、`StreamHaltedError`）就取代斷線那一行（見 `lostText`）；
    * 不重試（子代理的會話，[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）就單獨一行，沒有「立刻重連」。
    */
   refusal?: string;
-  /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
-  reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /**
+   * 下行斷了、等著重接：多半是自動重接，停止自動重連時只等人按（見 `useConversation` 的 `reconnecting`）。
+   * `actionLabel` 是按鈕上的字，不在就是 {@link RECONNECT_ACTION_LABEL}。
+   */
+  reconnecting?: {
+    readonly wasConnected: boolean;
+    readonly offline: boolean;
+    readonly actionLabel?: string;
+  };
   /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
   slowConnect?: boolean;
   /**
@@ -124,7 +132,7 @@ export function StatusLine({
   opening?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;
-  /** 「立刻重連」。 */
+  /** 按下斷線那一行旁邊的按鈕時叫（字見 `reconnecting.actionLabel`）。 */
   onReconnect?: () => void;
   commandError?: string;
   slashError?: string;
@@ -144,7 +152,7 @@ export function StatusLine({
             className="h-11 shrink-0 lg:h-8"
             onClick={onReconnect}
           >
-            立刻重連
+            {reconnecting.actionLabel ?? RECONNECT_ACTION_LABEL}
           </Button>
         )}
       </div>
