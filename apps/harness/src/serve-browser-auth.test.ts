@@ -153,7 +153,7 @@ describe('serve 的瀏覽器會話', () => {
       const index = await fetch(`${server.url}/`);
       expect(index.status).toBe(401);
       expect(await index.text()).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
-      // 資產公開，照 dsh。
+      // 資產公開。
       expect((await fetch(`${server.url}/assets/app.js`)).status).toBe(200);
 
       const { cookie, setCookie } = await exchange(server.authenticatedUrl);

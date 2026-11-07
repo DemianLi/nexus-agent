@@ -200,7 +200,7 @@ describe('GET /threads/:id/session-references', () => {
     const snapshot = beta.find(
       (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
     ) as SessionEvent<'user/message'>;
-    // per-thread：取快照的是 beta 的對話行程，讀不到 alpha 那個行程的記憶體，只讀得到盤上那份（#2341 的已知缺口）。
+    // per-thread：取快照的是 beta 的對話行程，讀不到 alpha 那個行程的記憶體，只讀得到盤上那份（#2341）。
     expect(JSON.stringify(snapshot.data.message)).toContain(
       PROCESS_MODEL_UNDER_TEST === 'per-thread' ? '盤上被改過的話' : '記憶體裡的蘋果派',
     );

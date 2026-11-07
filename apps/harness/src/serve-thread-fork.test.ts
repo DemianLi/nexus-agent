@@ -299,7 +299,7 @@ describe('serve 上的 thread.fork', () => {
     });
   });
 
-  // per-thread 的名額由監督行程照記憶體算，`maxThreads` 不管用；名額滿時分叉回什麼碼在 C4（#2342）定。
+  // per-thread 的名額由監督行程照記憶體算，`maxThreads` 不管用；名額滿時分叉回什麼碼在 #2342 定。
   it.skipIf(PER_THREAD)('名額滿：thread_at_capacity，磁碟上沒有多出檔（驗收 6）', async () => {
     const root = await tempDir('nexus-fork-cap-');
     const serve = await start(TURNS, {

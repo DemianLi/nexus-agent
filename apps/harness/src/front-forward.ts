@@ -35,7 +35,7 @@ const DROPPED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
   'referer',
   // 身分只由前台放（`forwarded-principal.ts`）：客戶端帶來的一律刪，不然誰都能冒充別人。
   PRINCIPAL_HEADER,
-  // 同上：客戶端帶來的不能讓對話行程拒收別人的話。
+  // 同上：只有前台能說它在收尾，客戶端帶來的一律刪。
   FRONT_CLOSING_HEADER,
 ]);
 

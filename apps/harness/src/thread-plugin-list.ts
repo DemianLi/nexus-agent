@@ -107,6 +107,11 @@ export interface ThreadPluginListOptions {
   readonly audit: StartupAuditOptions;
   /** 起動期讀一次的設定列：值以啟動那一份為準，重讀時不同就記「已儲存，待重啟」。 */
   readonly startupRead: readonly NexusPlugin<unknown>[];
+  /**
+   * 「已儲存，待重啟」那句冒號後面講的生效時機。省略是 `single` 的：新對話照舊用啟動時的值。
+   * per-thread 的前台另給：值在每個對話行程起動時讀，之後起來的就用新值。
+   */
+  readonly startupReadEffect?: string;
   /** 伺服器日誌（info）。 */
   readonly log: (line: string) => void;
   /** 要人處理的那幾句（讀清單的警告、未稽核的覆蓋層、掛不上的列）的出口（warn，#1534）；省略就走 `log`。 */
@@ -231,6 +236,9 @@ export interface ThreadPluginReader {
  * @param options - 啟動那一份、試組掉了的列、起動期讀的列、伺服器日誌。
  * @returns 讀取器。
  */
+
+/** `single` 下「已儲存，待重啟」講的生效時機。 */
+const SINGLE_STARTUP_READ_EFFECT = '這一列在啟動時讀一次，新對話照舊用啟動時的值';
 export function createThreadPluginList(options: ThreadPluginListOptions): ThreadPluginReader {
   const { startup, audit, log } = options;
   const logWarn = options.warn ?? log;
@@ -544,7 +552,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       if (reported.has(plugin.name) && !snapshotsDiffer(reported.get(plugin.name), next)) continue;
       reported.set(plugin.name, next);
       log(
-        `[清單] 「${plugin.name}」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值`,
+        `[清單] 「${plugin.name}」改了，已儲存，待重啟：${options.startupReadEffect ?? SINGLE_STARTUP_READ_EFFECT}`,
       );
     }
   }

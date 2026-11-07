@@ -1245,6 +1245,10 @@ async function startServer(
     audit,
     // 起動期讀的那幾列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
+    ...(options.front !== undefined && {
+      startupReadEffect:
+        '這一列在每個對話行程起動時讀一次：之後起來的對話行程用新值，已經起著的（含預熱池）照舊，要全部生效就重啟 serve',
+    }),
     // 讀清單的日誌歸前台講（`bindElsewhere`）：對話行程各講一次就是同一句 N 次。
     log: options.conversation === undefined ? log : () => {},
     warn: options.conversation === undefined ? warn : () => {},

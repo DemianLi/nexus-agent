@@ -329,7 +329,7 @@ async function hits(client: WireClient, query: string): Promise<string[]> {
 }
 
 describe('活的 thread 讀記憶體（#1599）', () => {
-  // 要分叉出子 thread：per-thread 的對話行程不在自己這裡分叉（#2341 的已知缺口，`serve-thread-fork.test.ts` 釘住它現在的行為）。
+  // per-thread 下搜尋由前台冷讀磁碟，看不到批次窗口裡還沒落盤的那一句（docs/operations.md〈行程模型〉）。
   it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread')(
     '新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判',
     async () => {

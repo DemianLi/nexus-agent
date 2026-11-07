@@ -304,7 +304,9 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(await say(server, 'b')).toBeUndefined();
     expect(await say(server, 'c')).toBeUndefined();
     expect(listLines(lines)).toEqual([
-      '[清單] 「thread-title」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值',
+      PER_THREAD
+        ? '[清單] 「thread-title」改了，已儲存，待重啟：這一列在每個對話行程起動時讀一次：之後起來的對話行程用新值，已經起著的（含預熱池）照舊，要全部生效就重啟 serve'
+        : '[清單] 「thread-title」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值',
     ]);
   }, 60000);
 

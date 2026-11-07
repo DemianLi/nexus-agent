@@ -408,8 +408,10 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   }
 
   /**
-   * 分叉（設計 §4-3）：來源的對話行程算出子 thread 的 seed（`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），
-   * 分得出去才替子 thread 開一個行程、交給它照 single 的第 5、6 步建（`fork-adopt`）。分不出去的、子 thread 建不起來的，原樣回對話行程的那一份。
+   * 分叉（`.docs/supervisor-1947-design-2026-11-03.md` §4-3）：來源的對話行程照 `handleFork`（`wire-handler.ts`）的第 1 到 4 步算出子 thread 的 seed
+   * （`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），分得出去才替子 thread 開一個行程、交給它照第 5、6 步建（`fork-adopt`）。
+   * 分不出去的、子 thread 建不起來的，原樣回對話行程的那一份；`fork-adopt` 回的不是 2xx（例如本文超過上限的 413）時回 `unknown_error`，
+   * 已經開好的子行程照閒置時間收。
    */
   async function forkAcross(request: Request, route: Route, id: number): Promise<Response> {
     const body = await request.text();
@@ -557,7 +559,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         }
         // 收尾中不開新一輪（#1787），同本地那支：`subagent.send` 一律擋；`run.start` 只擋沒有行程的（有行程的轉過去，
         // 窗前收過的重送由對話行程照 request_id 去重、拿回原本的 run_id）。不為一句不會收的話起一個對話行程。
-        // 讀不出 id 的封包照一般轉送，封包的錯由對話行程照 single 回。
+        // 讀不出 id 的 `thread.fork` 照一般轉送，封包的錯由對話行程照 single 回。
         const forkId =
           route.method === 'thread.fork' && embedded === undefined
             ? await envelopeId(request, route)

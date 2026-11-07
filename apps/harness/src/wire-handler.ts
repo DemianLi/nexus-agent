@@ -984,7 +984,8 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
 /**
  * 對話行程給前台的內部路由（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`activity` 用 GET 問還有什麼在跑，`stop` 用 POST 請它停，
  * `plugins` 用 GET 問這條 thread 綁著哪幾列（{@link WireHandlerOptions.liveBindings}），
- * `turn-failures` 用 GET 接這個行程的回合失敗（{@link WireHandlerOptions.turnFailures}）。
+ * `turn-failures` 用 GET 接這個行程的回合失敗（{@link WireHandlerOptions.turnFailures}），
+ * `fork-seed` 用 POST 交出分叉子 thread 的 seed，`fork-adopt` 用 POST 照 seed 建子 thread（`forkSeedRoute`／`forkAdoptRoute`）。
  */
 export function internalThreadPath(
   threadId: string,
