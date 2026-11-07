@@ -491,25 +491,20 @@ function listenerCount<K extends LayeredToolEvent>(
 /**
  * 外層 core → 匯流排上的插件監聽者 → 內層 core → `innermost`，語意同 `EventDispatcher.waterfall`：每位拿自己的一支 `next`，
  * 只能叫一次，不叫就是否決。
+ *
+ * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：事件表的生產者檢查只認字面量；沒有插件監聽者時傳 `undefined`。
  */
 function dispatchLayered<K extends LayeredToolEvent>(
-  events: EventDispatcher | undefined,
   name: K,
   core: CoreToolListeners<K>,
+  bus: Events[K] | undefined,
   args: readonly unknown[],
   innermost: () => unknown,
 ): ReturnType<Events[K]> {
   type Stage = (...stageArgs: unknown[]) => unknown;
-  const bus: Stage[] =
-    events === undefined || events.count(name) === 0
-      ? []
-      : [
-          (...stageArgs) =>
-            (events.waterfall as (...all: unknown[]) => unknown)(name, ...stageArgs),
-        ];
   const stages: Stage[] = [
     ...((core.outer ?? []) as unknown as Stage[]),
-    ...bus,
+    ...(bus === undefined ? [] : [bus as unknown as Stage]),
     ...((core.inner ?? []) as unknown as Stage[]),
   ];
   const dispatch = (at: number): unknown => {
@@ -542,7 +537,11 @@ export function createToolPreExecuteMiddleware(
   return createToolCallStepMiddleware(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
     if (listenerCount(events, 'tools/pre-execute', core) === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
-    const decision = await dispatchLayered(events, 'tools/pre-execute', core, [exec], () =>
+    const bus: Events['tools/pre-execute'] | undefined =
+      events === undefined || events.count('tools/pre-execute') === 0
+        ? undefined
+        : (e, n) => events.waterfall('tools/pre-execute', e, n);
+    const decision = await dispatchLayered('tools/pre-execute', core, bus, [exec], () =>
       Promise.resolve(ALLOW),
     );
     if (decision.kind === 'allow') return next();
@@ -577,7 +576,11 @@ export function createToolExecuteMiddleware(
     let raw: unknown;
     let viewOfRaw: PipelineResult | undefined;
     let bodyRan = false;
-    const view = await dispatchLayered(events, 'tools/execute', core, [exec], async () => {
+    const bus: Events['tools/execute'] | undefined =
+      events === undefined || events.count('tools/execute') === 0
+        ? undefined
+        : (e, n) => events.waterfall('tools/execute', e, n);
+    const view = await dispatchLayered('tools/execute', core, bus, [exec], async () => {
       bodyRan = true;
       raw = await next();
       viewOfRaw = toolResultView(raw, exec.callId);
@@ -609,10 +612,15 @@ export function createToolPostExecuteMiddleware(
   events: EventDispatcher | undefined,
   core: CoreToolListeners<'tools/post-execute'> = {},
 ): AgentMiddleware {
-  const post: PostDispatch = (exec, view) =>
-    dispatchLayered(events, 'tools/post-execute', core, [exec, view], () =>
+  const post: PostDispatch = (exec, view) => {
+    const bus: Events['tools/post-execute'] | undefined =
+      events === undefined || events.count('tools/post-execute') === 0
+        ? undefined
+        : (e, v, n) => events.waterfall('tools/post-execute', e, v, n);
+    return dispatchLayered('tools/post-execute', core, bus, [exec, view], () =>
       Promise.resolve(ACCEPT),
     );
+  };
   return createToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
     if (listenerCount(events, 'tools/post-execute', core) === 0) return next();
     const startedAt = Date.now();
