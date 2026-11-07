@@ -68,6 +68,12 @@ export const SLOW_CONNECT_TEXT =
   '連線比平常久。可能是這個瀏覽器開了太多 nexus-agent 分頁，關掉其他分頁試試。';
 
 /**
+ * 開線等了一下還沒好、又不在重接中時的狀態字（#2343）。per-thread 行程模型下多半是伺服器在起這條對話的行程；
+ * 字面不講行程，講使用者看得到的事。
+ */
+export const OPENING_TEXT = '正在開啟這條對話…';
+
+/**
  * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
  * 或伺服器送來看不懂的資料（[#1601](https://github.com/DemianLi/nexus-agent/issues/1601)）：不管之前連上過沒有都換成它，**不接 server 的原文**。
  * 前者背景的重試照舊；後者停了自動重連。兩種「立刻重連」都還在。
@@ -95,6 +101,7 @@ export function StatusLine({
   slashNotice,
   reconnecting,
   slowConnect = false,
+  opening = false,
   recovered = false,
   onReconnect,
 }: {
@@ -110,6 +117,11 @@ export function StatusLine({
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
   slowConnect?: boolean;
+  /**
+   * 這次開線等了一下還沒好（見 `useConversation` 的 `opening`）。重接中不講，那時講的是斷線那一行；
+   * 等太久（`slowConnect`）時講的是那一句。
+   */
+  opening?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;
   /** 「立刻重連」。 */
@@ -160,7 +172,7 @@ export function StatusLine({
         }
         role="status"
       >
-        {slowConnect ? SLOW_CONNECT_TEXT : '連線中…'}
+        {slowConnect ? SLOW_CONNECT_TEXT : opening ? OPENING_TEXT : '連線中…'}
       </p>
     );
   }
