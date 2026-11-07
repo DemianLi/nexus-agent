@@ -6,33 +6,31 @@
 
 ## 用法
 
-**一個條目對一台 server。** `NexusPlugin.name` 不唯一，所以同一個工廠掛幾次都行
-（工廠回的是條目，[#453](https://github.com/DemianLi/nexus-agent/issues/453)；設定不在
-工廠裡驗，驗在載入的時候，訊息因此帶得出 `<id> (<name>)`）：
+**樹上的函式插件**（[#2533](https://github.com/DemianLi/nexus-agent/issues/2533)）：具名匯出 `name`、`inject`、`Config`、`manifest`、`apply`，
+沒有 default。**一列對一台 server**，同一顆插件掛幾列都行。不在出廠清單上，部署方用 patch `insert` 一列才掛：
 
-```ts
-import { createMcpPlugin } from '@nexus/plugin-mcp';
-
-export default [
-  createMcpPlugin({
-    serverName: 'github',
-    connection: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-github'],
-      env: { GITHUB_TOKEN: process.env.GITHUB_TOKEN ?? '' },
-    },
-  }),
-  createMcpPlugin({
-    serverName: 'web',
-    connection: {
-      transport: 'http',
-      url: 'http://localhost:3000/mcp',
-      headers: { Authorization: `Bearer ${process.env.MCP_TOKEN ?? ''}` },
-    },
-  }),
-];
+```yaml
+- insert:
+    - id: mcp-github
+      name: '@nexus/plugin-mcp'
+      config:
+        serverName: github
+        connection:
+          transport: stdio
+          command: npx
+          args: ['-y', '@modelcontextprotocol/server-github']
 ```
+
+完整的 patch 寫法見 [`docs/operations.md`](../../docs/operations.md)。
+
+`apply` 只登記一個逐條 thread 的工具來源（`tools.threadSource`，要 `@nexus/tools` `^2.6.0`）；連線、工具、閘門與 hub 都在組每一條 thread
+時由 `mountServer` 建，每條 thread 各一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
+在宿主的授權表上（`apps/harness/src/thread-service-grants.ts`）。
+
+**相容層的 `mcpPlugin` 與 `createMcpPlugin` 只給還沒搬的測試用，[#2535](https://github.com/DemianLi/nexus-agent/issues/2535) 拿掉。**
+它們把 registry 包成一條 thread 交給同一個 `mountServer`，跟宿主的 `threadSource` 不同的地方：`services.get` 不檢查宣告；`shared` 以
+那一次組裝為範圍、不分插件；`onDispose` 直接交給 `registry.lifecycle`（那一列 `apply` 失敗時被 rollback 撤掉、不跑）；`apply` 結束之後
+再叫各方法不拋；撞名另外經 `mcp:server:<serverName>` 服務先佔一次，訊息指名兩列。
 
 模型看到的是 `mcp__github__create_issue`、`mcp__web__search`——與 Claude Code、Codex 同一種
 server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化過的那些不會，見明文限制。）
@@ -83,8 +81,8 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 一個——併掉的下場是模型呼叫到另一個工具，而且沒有任何錯誤。
 
 - 兩台 server 公告同一個 raw name（例如 `search`）在各自的命名空間下共存。
-- 兩個 plugin 實例用同一個 `serverName`：後掛的那一個在連線之前就失敗，訊息指名是清單裡
-  哪兩個。照 dsh 先佔名字再連線，所以這一條不受 `failOnStartupError` 管。
+- 同一條 thread 上兩列用同一個 `serverName`：後掛的那一列在連線之前就失敗（`MCP 伺服器 "<name>" 在這條 thread 上已經有一列掛了`，
+  外層帶後掛那一列的 origin）。照 dsh 先佔名字再連線，所以這一條不受 `failOnStartupError` 管。
 - 一台 server 公告兩個同名工具，同樣撞在那一層。
 
 ## 行為
@@ -103,7 +101,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   把 `livenessTimeoutMs` 調到比最長的呼叫還久。只有 stdio 探活：HTTP 沒有子行程可收。
 - **連不上照樣掛上，照 dsh**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
   連不上、列不出、註冊撞名，任何一件發生時：已經註冊的工具撤掉、連線收掉、這一列照樣掛上但
-  **這台 server 一個工具都沒有**，並經 `registry.logger` 交出一則警告。出貨的啟動程式把它印在
+  **這台 server 一個工具都沒有**，並經 `thread.logger` 交出一則警告。出貨的啟動程式把它印在
   啟動時那段警告裡（「警告：N 則外掛掛上時交出的話」）。`serve` 的連線池照 dsh 在背景照 `reconnect` 退避重試，
   還沒連上的期間組的對話沒有工具、在伺服器日誌記一行 `[組裝] thread "…" 警告：…`，連上之後組的對話就有；CLI 不重試。
   第一次連線由第一條取用的對話起頭、等它落定；同一份設定的其餘對話**最多等 5 秒**（`FIRST_CONNECT_WAIT_MS`），握手卡住時到期就照
@@ -115,17 +113,16 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   不變，提示詞前綴不會因重連失效。**放棄之後**那台的工具從每次模型請求的工具清單拿掉（註冊表上仍在，呼叫得到「已放棄重連」），
   要等重新組裝（`serve` 的下一條對話、或重啟）才恢復：`serve` 下一條對話取用時，池替那一份重開一個監督者、重新起算預算，開著的
   對話照舊隱藏。`reconnect.enabled: false` 關掉自動重連（工具照列、呼叫失敗，直到重新組裝）。重連的進度——掉線、第 n 次嘗試、
-  放棄、連回來——CLI 交給 `registry.logger`（在 `apply` 裡 `bind()` 綁好是誰，印到標準錯誤、帶 `[外掛]` 前綴）；`serve` 的連線
+  放棄、連回來——CLI 交給 `thread.logger`（記在這一列名下，印到標準錯誤、帶 `[外掛]` 前綴）；`serve` 的連線
   不屬於哪一條對話，記進伺服器日誌的 `mcp` logger，本文是 `mcp-client(<名字>): …`。偵測有兩個來源：SDK client 的 `onclose`（子行程被殺立刻觸發），與工具／資源呼叫
   失敗且錯誤是 `Not connected`／`Connection closed`（沒掛 `onclose` 的傳輸也能觸發）。
 - **`failOnStartupError: true` 讓這一列失敗。** 同樣三件事改成在 `apply` 裡拋：清單上的這一列
   掉了（啟動時的警告指名它），手搭清單則整個載入失敗。`serve` 啟動時就掉了的列之後每條對話都
   算沒掛、不再重連，要到重啟。
-- **關機收線。** plugin 經 `registry.lifecycle.onDispose()` 登記關閉連線，由組裝點的
-  `dispose()` 觸發。stdio 子行程的 pipe 是活的 handle，沒收掉的話行程不會退出。`serve` 的連線屬於池，對話撤掉只撤登記，
+- **關機收線。** plugin 經 `thread.onDispose()` 登記關閉連線，這條 thread 收掉時觸發。stdio 子行程的 pipe 是活的 handle，沒收掉的話行程不會退出。`serve` 的連線屬於池，對話撤掉只撤登記，
   `serve` 收掉（或起不來）時才整池關。
-- **`apply` 中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 先關掉 client 再收成警告或
-  拋出——那時登記還沒發生，`lifecycle` 通道接不到它。
+- **組裝中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 先關掉 client 再收成警告或
+  拋出——那時 `onDispose` 還沒登記，接不到它。
 
 ## 核准（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）
 
@@ -165,7 +162,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   閘門，`approval` 管不到讀資源（見下一節）。
 - **不讀 MCP 的 tool annotations**（`readOnlyHint`、`destructiveHint`）：SDK 說明寫明那些只是 hint，client 不該依不受信任的 server
   給的 annotations 做決定。
-- 閘門經 `registry.approvals.gate()` 登記，只回 `ask` 或委派給下一位、**從不回 `allow`**（回 `allow` 會把排在後面的閘門整條吃掉）。
+- 閘門經 `thread.gate()` 登記，只回 `ask` 或委派給下一位、**從不回 `allow`**（回 `allow` 會把排在後面的閘門整條吃掉）。
   連不上、列不出工具的那一列不登記閘門；`tools/list` 一支都沒列出的、`default: allow` 的也不登記。
 
 ## 指引與資源（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、[#430](https://github.com/DemianLi/nexus-agent/issues/430)）
@@ -185,8 +182,8 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **提示詞另有一段 `## MCP resource servers`**，列出所有已登記的 server 名字，讓模型知道 `server` 參數能填什麼。
 - **連不上的那一列也登記**（照 dsh）：名字照列，叫它得到 dsh 那句 `mcp-client(<name>): server is disconnected`；問不存在的名字得到 `MCP resource server "<name>" is unavailable in this agent's scope`。寫了
   `failOnStartupError: true` 而掉了的列不留任何東西。
-- **偏離**：dsh 的兩種提示詞是 `systemPrompt.section(...)`；我們沒有段落註冊點，提示詞是 middleware 一層層接的，
-  所以用 `wrapModelCall` 把文字**接**（不是取代）到 system message 後面，與 goal、plan-mode 同一條已登記的偏離。
+- **提示詞的段**：各台的指引與資源 server 清單是同一段，經 `thread.section` 登記在這條 thread 的系統提示詞中段，同 dsh 的
+  `systemPrompt.section(...)`。段的文字每次模型呼叫現算，但讀的東西只在組這條 thread 時增加、收尾時移除，所以組好的 thread 每一輪逐位元組相同。
   dsh 的 `instructions()` 讀最近一次成功連線的快照、重連成功會換；我們重連之後不換（工具集合與提示詞都在組裝時定下，`supervisor.ts` 檔頭偏離 3）。
   Prompts（`prompts/*`）dsh 也不支援（「MCP prompt templates are unsupported」），這裡同樣不做。
 
