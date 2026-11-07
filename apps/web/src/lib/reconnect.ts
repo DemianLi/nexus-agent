@@ -27,6 +27,13 @@ export const RECOVERED_NOTICE_MS = 2_000;
 export const SLOW_CONNECT_MS = 6_000;
 
 /**
+ * 一次連線（開下行到歷史回來）等了多久還沒有結果，狀態列才把「連線中…」換成「正在開啟這條對話…」（#2343）。等退避的時間不算。
+ * per-thread 行程模型下，前台要等這條對話的行程起好才轉送下行：預熱池命中時多等 ≤400 ms（#1947 R7），取兩倍不會閃字；
+ * 沒命中時要多等一次 ready（R6 的 0.65–1.7 s），就會換成這句。數字見 `.docs/supervisor-1947-design-2026-11-03.md` §七之二 第 4、5 列。
+ */
+export const OPENING_NOTICE_MS = 800;
+
+/**
  * 第 `attempt` 次重試（從 1 起算）要等多久。
  *
  * @param attempt - 這是連續第幾次重試。

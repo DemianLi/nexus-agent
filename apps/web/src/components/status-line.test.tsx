@@ -3,7 +3,12 @@ import type { AiEntry, ConversationEntry, ConversationState, ToolEntry } from '@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ELAPSED_TICK_MS, SLOW_CONNECT_TEXT, StatusLine } from '@/components/status-line';
+import {
+  ELAPSED_TICK_MS,
+  OPENING_TEXT,
+  SLOW_CONNECT_TEXT,
+  StatusLine,
+} from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
 import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT } from '@/lib/stop-cause';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
@@ -29,6 +34,29 @@ describe('StatusLine 的連線那幾句（#593）', () => {
     expect(text).toBe(SLOW_CONNECT_TEXT);
     expect(text).toContain('可能');
     expect(text).toContain('關掉其他分頁');
+  });
+
+  it('開線等了一下（#2343）：「連線中…」換成正在開啟這條對話', () => {
+    const { unmount } = render(<StatusLine state={idle} connected={false} />);
+    expect(screen.getByRole('status').textContent).toBe('連線中…');
+    unmount();
+    render(<StatusLine state={idle} connected={false} opening />);
+    expect(screen.getByRole('status').textContent).toBe(OPENING_TEXT);
+  });
+
+  it('等太久（#2250）蓋過正在開啟；重接中講的是斷線那一行（#2343）', () => {
+    const { unmount } = render(<StatusLine state={idle} connected={false} opening slowConnect />);
+    expect(screen.getByRole('status').textContent).toBe(SLOW_CONNECT_TEXT);
+    unmount();
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        opening
+        reconnecting={{ wasConnected: true, offline: false }}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('連線中斷，正在重新連線…');
   });
 
   it('重接中等太久（#2250）也講，「立刻重連」還在', () => {

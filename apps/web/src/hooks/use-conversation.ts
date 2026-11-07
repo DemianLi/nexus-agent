@@ -69,7 +69,12 @@ import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { probeLivez } from '@/lib/livez-probe';
-import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
+import {
+  OPENING_NOTICE_MS,
+  RECOVERED_NOTICE_MS,
+  reconnectDelay,
+  SLOW_CONNECT_MS,
+} from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -259,6 +264,8 @@ export interface Conversation {
    * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
    */
   readonly slowConnect: boolean;
+  /** 這次連線等了 {@link OPENING_NOTICE_MS} 還沒成功或失敗（#2343）；等退避的時間不算。 */
+  readonly opening: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
@@ -495,6 +502,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [slowConnect, setSlowConnect] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
   const [generation, setGeneration] = useState(0);
@@ -647,10 +655,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
       });
     }, SLOW_CONNECT_MS);
+    const openingTimer = setTimeout(() => setOpening(true), OPENING_NOTICE_MS);
     const settled = () => {
       clearTimeout(slowTimer);
+      clearTimeout(openingTimer);
       probe.abort();
       setSlowConnect(false);
+      setOpening(false);
     };
     /**
      * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
@@ -1460,6 +1471,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     connected,
     attempted,
     slowConnect,
+    opening,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),

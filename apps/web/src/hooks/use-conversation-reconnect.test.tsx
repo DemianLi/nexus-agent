@@ -21,7 +21,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConversation } from '@/hooks/use-conversation';
 import { EMBED_UNAUTHORIZED_TEXT, StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { LIVEZ_PROBE_TIMEOUT_MS } from '@/lib/livez-probe';
-import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS, SLOW_CONNECT_MS } from '@/lib/reconnect';
+import {
+  OPENING_NOTICE_MS,
+  RECONNECT_MAX_MS,
+  RECOVERED_NOTICE_MS,
+  SLOW_CONNECT_MS,
+} from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
@@ -302,6 +307,72 @@ describe('useConversation 連線一直等不到結果（#2250）', () => {
       expect(result.current.slowConnect).toBe(false);
     }
     expect(doFetch).not.toHaveBeenCalled();
+    expect(result.current.reconnecting).toBeDefined();
+  });
+});
+
+describe('useConversation 開線等了一下還沒好（#2343）', () => {
+  const opened = {
+    kind: 'ok',
+    result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+  };
+
+  it('開下行一直不回來：到點才翻，回來就收', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { client: base } = scriptedClient();
+    const client = {
+      ...base,
+      openEvents: async (...args: Parameters<WireClient['openEvents']>) => {
+        await gate;
+        return base.openEvents(...args);
+      },
+    } as WireClient;
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(OPENING_NOTICE_MS - 1);
+    expect(result.current.opening).toBe(false);
+    await tick(1);
+    expect(result.current.opening).toBe(true);
+    release();
+    await tick();
+    expect(result.current.connected).toBe(true);
+    expect(result.current.opening).toBe(false);
+  });
+
+  it('歷史慢也算在這次連線裡', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { client } = scriptedClient({
+      threadHistory: async () => {
+        await gate;
+        return opened;
+      },
+    });
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(OPENING_NOTICE_MS);
+    expect(result.current.opening).toBe(true);
+    release();
+    await tick();
+    expect(result.current.opening).toBe(false);
+  });
+
+  it('很快就接上：不翻', async () => {
+    const { client } = scriptedClient();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(true);
+    await tick(OPENING_NOTICE_MS * 3);
+    expect(result.current.opening).toBe(false);
+  });
+
+  it('開線一直失敗：等退避的時間不算，不翻', async () => {
+    const { client, setFailOpen } = scriptedClient();
+    setFailOpen('Failed to fetch');
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    for (let elapsed = 0; elapsed < RECONNECT_MAX_MS * 3; elapsed += 100) {
+      await tick(100);
+      expect(result.current.opening).toBe(false);
+    }
     expect(result.current.reconnecting).toBeDefined();
   });
 });
