@@ -64,7 +64,7 @@ pub enum OpenMode {
 pub enum FrontRequest {
     /// 要這條 thread 的對話行程；監督行程回 [`FrontEvent::Up`]、[`FrontEvent::Down`] 或 [`FrontEvent::Capacity`]。
     Ensure { thread_id: Vec<u8>, open: OpenMode },
-    /// 前台用完了（例如讀完歷史），這條 thread 的行程可以先收。
+    /// 前台用完了（例如讀完歷史），這條 thread 的行程可以先收。只收只讀開啟的；已經轉成一般的（收到過 `ensure(run)` 或 `turn(begin)`）不理，照閒置時限收。
     Release { thread_id: Vec<u8> },
 }
 

@@ -760,7 +760,7 @@ fn teardown_lets_a_held_leader_run_first() {
 fn drain_lets_a_held_leader_run_first() {
     // 開頭的 `idle:0` 讓 release 當場送 `drain`；空轉的它不會回答，但不能停在那裡。
     let mut h = Harness::start(Options { extra: throttle("60000"), ..Options::default() });
-    let socket = h.up("d,idle:0,spin:0");
+    let socket = h.up_read_only("d,idle:0,spin:0");
     let pid = logged_pid(&socket, "pid");
     assert!(wait_until(|| state(pid) == Some('T')));
     h.release("d,idle:0,spin:0");
@@ -971,15 +971,42 @@ fn read_only_uses_the_short_idle_limit_until_it_runs_a_turn() {
 #[test]
 fn release_drains_now_if_idle_or_once_it_becomes_idle() {
     let mut h = Harness::start(Options::default());
-    h.up("a,idle:0");
+    h.up_read_only("a,idle:0");
     h.release("a,idle:0");
     assert_eq!(h.down_of("a,idle:0"), DeathCause::Evicted);
-    let b = h.up("b,wait-go,idle:0");
+    let b = h.up_read_only("b,wait-go,idle:0");
     h.release("b,wait-go,idle:0");
     std::thread::sleep(Duration::from_millis(200));
     assert!(!log(&b).contains(&"drain".to_string()), "還沒閒置不送 drain");
     std::fs::write(format!("{}.go", b.display()), b"").unwrap();
     assert_eq!(h.down_of("b,wait-go,idle:0"), DeathCause::Evicted);
+}
+
+#[test]
+fn release_leaves_one_turned_into_a_run_to_the_idle_limit() {
+    let mut h = Harness::start(Options { extra: vec!["--idle-ms", "1500"], ..Options::default() });
+    let turned = h.up_read_only("turned,turn,idle:0");
+    // release 走前台的 fd、`turn(begin)` 走對話行程的管線，兩邊沒有先後保證：等它送完後面的 `idle`，再留一點時間讓監督行程讀到。沒讀到就送 release，走的是記著再作廢那條，
+    // 這支就不再釘住「轉成一般的不理」。
+    assert!(wait_until(|| log(&turned).contains(&"idle".to_string())));
+    std::thread::sleep(Duration::from_millis(200));
+    h.release("turned,turn,idle:0");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!log(&turned).contains(&"drain".to_string()), "轉成一般的，release 不收");
+    assert_eq!(h.down_of("turned,turn,idle:0"), DeathCause::Evicted);
+}
+
+#[test]
+fn release_before_a_turn_is_dropped_once_it_turns_into_a_run() {
+    let mut h = Harness::start(Options::default());
+    let socket = h.up_read_only("late,wait-go,turn,idle:0");
+    h.release("late,wait-go,turn,idle:0");
+    // 等監督行程讀到 release 才放它跑：release 要早於 `turn(begin)`，否則走的是不理那條，這支就不再釘住 `turn(begin)` 清掉記著的 release。
+    std::thread::sleep(Duration::from_millis(200));
+    std::fs::write(format!("{}.go", socket.display()), b"").unwrap();
+    assert!(wait_until(|| log(&socket).contains(&"idle".to_string())));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!log(&socket).contains(&"drain".to_string()), "只讀時記著的 release，轉成一般之後作廢");
 }
 
 #[test]
@@ -1079,7 +1106,7 @@ fn ensure_while_waiting_for_the_drain_answer_is_answered_when_it_drains() {
 fn ensure_while_waiting_for_the_drain_answer_and_another_ends(answer: &str) -> (Harness, PathBuf, String) {
     let thread = format!("a,idle:1000,slow-drain:800{answer}");
     let mut h = Harness::start(Options { extra: vec!["--capacity", "2"], ..Options::default() });
-    let a = h.up(&thread);
+    let a = h.up_read_only(&thread);
     let b = h.up("b,wait-go,exit:3");
     h.release(&thread);
     assert!(saw_drain(&a));
@@ -1111,10 +1138,82 @@ fn a_thread_waiting_for_its_drain_answer_gets_a_new_one_only_after_it_is_down() 
 }
 
 #[test]
+fn ensure_run_while_waiting_for_the_drain_answer_opens_the_new_one_as_a_run() {
+    // 只讀的照時限送 `drain`，一般的不照時間送：新行程有沒有被送 `drain`，就看出它是哪種開啟。
+    let mut h = Harness::start(Options { extra: vec!["--idle-ms", "0", "--read-only-idle-ms", "300"], ..Options::default() });
+    let thread = "a,idle:0,slow-drain:800";
+    let old = h.up_read_only(thread);
+    assert!(saw_drain(&old));
+    h.ensure_open(thread, OpenMode::ReadOnly);
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    let new = match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => PathBuf::from(String::from_utf8(socket).unwrap()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    };
+    assert_ne!(new, old);
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(!log(&new).contains(&"drain".to_string()), "排著時要過 run，新行程照只讀收了");
+}
+
+#[test]
+fn ensure_run_while_the_drained_one_is_stopping_opens_the_new_one_as_a_run() {
+    // `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段，`ensure(run)` 落在這段裡。
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 1_500,
+        extra: vec!["--idle-ms", "0", "--read-only-idle-ms", "300"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,slow-drain:300,ignore-eof";
+    let old = h.up_read_only(thread);
+    assert!(saw_drain(&old));
+    h.ensure_open(thread, OpenMode::ReadOnly);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    let new = match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => PathBuf::from(String::from_utf8(socket).unwrap()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    };
+    assert_ne!(new, old);
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(!log(&new).contains(&"drain".to_string()), "收的期間要過 run，新行程照只讀收了");
+}
+
+#[test]
+fn ensure_while_it_is_stopping_is_answered_by_a_single_new_one() {
+    // `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段。這條沒在排，`ensure` 落在這段裡也要等到 `up`。
+    let mut h = Harness::start(Options { eof_grace_ms: 1_500, extra: vec!["--idle-ms", "300"], ..Options::default() });
+    let thread = "a,idle:0,ignore-eof";
+    let old = h.up(thread);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    assert_eq!(h.event(), FrontEvent::Down { thread_id: thread.as_bytes().to_vec(), cause: DeathCause::Evicted });
+    match h.event() {
+        FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => assert_ne!(socket, old.to_str().unwrap().as_bytes()),
+        other => panic!("要 a 的新 up，拿到 {other:?}"),
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!h.dir.join("run/c3.sock.log").exists(), "起了不只一個新行程");
+}
+
+#[test]
+fn ensure_while_it_is_stopping_is_answered_capacity_when_the_slot_went_to_another() {
+    // 名額 2：a 一直不閒置；c 排著，x 被逐出讓名額給它。x 還在收時又要 x，讓出的名額只有一個，x 要回 `capacity`，不能一直懸著。
+    let mut h = Harness::start(Options { eof_grace_ms: 1_500, extra: vec!["--capacity", "2"], ..Options::default() });
+    h.up("a,wait-go");
+    let x = h.up_read_only("x,idle:0,ignore-eof");
+    h.ensure("c");
+    assert!(wait_until(|| log(&x).contains(&"eof".to_string())));
+    h.ensure("x,idle:0,ignore-eof");
+    assert_eq!(h.event(), capacity("x,idle:0,ignore-eof", 2, 2));
+}
+
+#[test]
 fn release_while_waiting_for_the_drain_answer_is_kept_after_busy() {
     let mut h = Harness::start(Options { extra: vec!["--capacity", "1"], ..Options::default() });
     let thread = "a,idle:1000,slow-drain:500,busy-then-idle";
-    let a = h.up(thread);
+    let a = h.up_read_only(thread);
     h.ensure("b");
     assert!(saw_drain(&a));
     h.release(thread);
