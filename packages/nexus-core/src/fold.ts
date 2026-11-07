@@ -34,6 +34,7 @@ import {
 import {
   assertToolFilter,
   createSubagentToolFilterMiddleware,
+  subagentToolFilterListener,
   toolKept,
 } from './subagent-tool-filter.js';
 import type { ToolFilter } from './subagent-tool-filter.js';
@@ -614,7 +615,8 @@ export function foldRegistry(
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions, options.events);
-  // 工具事件的三顆生產者（#1248）：一份實例走遍 root 與每個子代理，無狀態；呼叫者身分從每次請求現算。
+  // 工具事件的三顆生產者（#1248）：無狀態，呼叫者身分從每次請求現算。post 與 execute 一份實例走遍 root 與每個子代理；
+  // pre 在有基座工具被遮時，子代理另一份，帶工具過濾那一位 core 監聽者（見下面的 `subagentToolPreExecute`）。
   const toolPreExecute =
     options.events === undefined ? undefined : createToolPreExecuteMiddleware(options.events);
   const toolPostExecute =
@@ -751,6 +753,13 @@ export function foldRegistry(
           (each) => !toolKept(options.subagentToolFilter!, each),
         ),
   );
+  // 子代理那一份 pre：遮罩在插件監聽者外側。沒有基座工具被遮就跟 root 同一份；宿主沒給派發面也照樣有這一份，遮罩不能跟著消失。
+  const subagentToolPreExecute =
+    hiddenBaseTools.size === 0
+      ? toolPreExecute
+      : createToolPreExecuteMiddleware(options.events, {
+          outer: [subagentToolFilterListener(hiddenBaseTools)],
+        });
 
   // **槽位表：root 與每個子代理的 middleware 疊都從這一張導出**（#664），順序就是兩邊的包裹順序。
   // 新增一顆 core middleware = 上面建一個實例、這裡加一列。子代理那一欄要寫「不給」得明著寫，漏接在這裡寫不出來。
@@ -830,7 +839,8 @@ export function foldRegistry(
       root: same(plugins.prepended),
       subagent: same(subagentPlugins.prepended),
     },
-    // 工具過濾（#707）遮基座工具，排在閘門外側：被遮的呼叫碰不到閘門與工具本體。沒設或沒有基座工具被遮就不放。
+    // 工具過濾（#707）的模型那一半：被遮的基座工具從請求拿掉。叫了也不執行的那一半在下一格 pre 的外層 core 段。
+    // 沒設或沒有基座工具被遮就不放。
     subagentOnly(
       'toolFilter',
       make(() =>
@@ -841,7 +851,9 @@ export function foldRegistry(
     ),
     // `tools/pre-execute`（#1248）緊貼閘門外側：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成
     // 「先跳核准卡、再被拒」。拒絕在問人之前，同 dsh（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
-    shared('toolPreExecute', toolPreExecute),
+    // 有基座工具被遮時，子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件的 `tools/pre-execute` 監聽者、閘門與工具本體；
+    // `tools/result` 仍收到那則拒絕。
+    { name: 'toolPreExecute', root: same(toolPreExecute), subagent: same(subagentToolPreExecute) },
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
     { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },

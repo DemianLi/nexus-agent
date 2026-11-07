@@ -56,6 +56,8 @@ async function assemble(options: {
   workerTurns: ScriptedTurn[];
   filter: ToolFilter | undefined;
   background: boolean;
+  /** 插件掛在 `tools/pre-execute` 的監聽者看到的每次呼叫，記成 `<root|subagent|none>:<工具名>`（認不出身分時是 `none`）。 */
+  preSeen?: string[];
 }) {
   const rootModel = new ScriptedChatModel({ turns: options.rootTurns });
   const workerModel = new ScriptedChatModel({ turns: options.workerTurns });
@@ -63,6 +65,13 @@ async function assemble(options: {
     plugin: {
       name: 'worker-host',
       apply(registry) {
+        const seen = options.preSeen;
+        if (seen !== undefined) {
+          registry.events.on('tools/pre-execute', (exec, next) => {
+            seen.push(`${exec.agent?.kind ?? 'none'}:${exec.name}`);
+            return next();
+          });
+        }
         registry.subagents.register({
           name: 'worker',
           description: '幹活的。',
@@ -164,6 +173,42 @@ describe('前景（task）', () => {
       await run.say();
       expect(run.workerModel.boundToolNames).toContain('write_file');
       expect(await exists(join(dir, 'leak.txt'))).toBe(true);
+    } finally {
+      await run.close();
+    }
+  });
+});
+
+describe('root 不受遮罩、插件的 pre 監聽者兩邊都派發到', () => {
+  it('root 手寫叫被遮的 write_file：照樣寫出去', async () => {
+    const run = await assemble({
+      rootTurns: [WRITE, { content: '根收尾' }],
+      workerTurns: [],
+      filter: { deny: ['write_file'] },
+      background: false,
+    });
+    try {
+      const result = await run.say();
+      expect(toolTexts(result.messages).join()).not.toContain('被設定遮掉了');
+      expect(await exists(join(dir, 'leak.txt'))).toBe(true);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('同一顆插件監聽者：root 與子代理的呼叫各收到一次；被遮的呼叫在它外側就擋下，它收不到', async () => {
+    const preSeen: string[] = [];
+    const run = await assemble({
+      rootTurns: [call('look', {}), delegateForeground, { content: '根收尾' }],
+      workerTurns: [call('look', {}), WRITE, { content: '子代理收尾' }],
+      filter: { deny: ['write_file'] },
+      background: false,
+      preSeen,
+    });
+    try {
+      await run.say();
+      expect(preSeen).toEqual(['root:look', 'root:task', 'subagent:look']);
+      expect(await exists(join(dir, 'leak.txt'))).toBe(false);
     } finally {
       await run.close();
     }
