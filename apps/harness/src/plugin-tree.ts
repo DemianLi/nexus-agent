@@ -108,6 +108,9 @@ import semver from 'semver';
 import { langChainToolOf } from '@nexus/tool-adapter';
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 import { ThreadSessions } from './thread-sessions.js';
+import { DEFAULT_THREAD_SERVICE_GRANTS, deniedThreadServices } from './thread-service-grants.js';
+import type { ThreadServiceGrants } from './thread-service-grants.js';
+import type { FoldedThreadSource } from './thread-source.js';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';
@@ -335,6 +338,8 @@ export type RowVerdict =
        * 活的服務不外漏：折進 thread 的只有這份資料。
        */
       readonly systemPrompt: SystemPromptAssembly | undefined;
+      /** 這一列登記的逐條 thread 的工具來源（#2533），照登記順序；組 thread 時由宿主依序 await。 */
+      readonly threadSources: readonly FoldedThreadSource[];
     }
   | { readonly kind: 'off' }
   | {
@@ -428,13 +433,22 @@ export interface PluginTreeOptions {
    * 不給就是沒有圍堵。**不帶根**：可寫根是逐條 thread 的（#1774），由組裝點依「thread → 根」取得，經 `FsService.workspaceRoot()` 讀。
    */
   readonly contained?: boolean;
+  /** `tools.threadSource` 的授權表（#2533）。不給就是出廠那一份（{@link DEFAULT_THREAD_SERVICE_GRANTS}）。 */
+  readonly threadServiceGrants?: ThreadServiceGrants;
 }
 
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
 export class PluginTree {
   readonly #channel: ApprovalChannel | undefined;
   #context?: Promise<Context>;
-  #provider = createToolsProvider({ concludeTurn });
+  #threadServiceGrants: ThreadServiceGrants = DEFAULT_THREAD_SERVICE_GRANTS;
+  /** 樹上的列 id → 模組 specifier，每次 {@link sync} 依清單換一份：`tools.threadSource` 據它查授權表。 */
+  #modules = new Map<string, string>();
+  #provider = createToolsProvider({
+    concludeTurn,
+    authorizeThreadServices: (source, services) =>
+      deniedThreadServices(this.#threadServiceGrants, this.#modules.get(source), services),
+  });
   #projections = createProjectionsProvider();
   #skillSources = createSkillSourcesProvider();
   #preSteps = createAgentLoopProvider();
@@ -476,6 +490,9 @@ export class PluginTree {
     this.#channel = options.channel;
     this.#approvalChannel = createApprovalChannelProvider(options.channel);
     this.#contained = options.contained === true;
+    if (options.threadServiceGrants !== undefined) {
+      this.#threadServiceGrants = options.threadServiceGrants;
+    }
     this.#fsLookup = createFsLookupProvider(
       (config) => this.#threadSessions.fsForCall(config),
       (threadId) => this.#threadSessions.fsForThread(threadId),
@@ -648,6 +665,7 @@ export class PluginTree {
     const root = await this.context();
     assertNoJsExpr(input.patches, 'patch');
     const only = [...new Set(input.rows.map((row) => row.module))];
+    this.#modules = new Map(input.rows.map((row) => [treeId(row.id), row.module]));
     this.#forgetSettled(input);
     const forced = this.#needsRetry(root, input);
     if (forced) this.#epoch += 1;
@@ -1082,6 +1100,10 @@ export class PluginTree {
         services: [],
         // 系統提示詞的快照由 `#assignSystemPrompt` 取（要 await 服務的 `assemble()`，且要在所有列的結果都有了之後）。
         systemPrompt: undefined,
+        threadSources: this.#provider
+          .threadSources()
+          .filter((item) => item.source === id)
+          .map(({ threadSource, services }) => ({ threadSource, services })),
       };
     }
     if (fiber.state === FIBER_STATE.FAILED) {
@@ -1168,6 +1190,8 @@ export interface DetachedMount {
    * 有沒有值推出來（組裝點只在有 `--workspace` 時提供它）；不給等於沒有圍堵。
    */
   readonly contained?: boolean;
+  /** 那一列的模組 specifier：`tools.threadSource` 據它查出廠的授權表（#2533）。省略就是認不出來，一個服務都不授權。 */
+  readonly specifier?: string;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
@@ -1189,6 +1213,8 @@ export interface DetachedContributions {
   readonly services: readonly HostService[];
   /** 這一列提供的 `systemPrompt` 服務的快照（#1477），**在卸載之前取**；同 {@link RowVerdict} 的 `systemPrompt`。 */
   readonly systemPrompt: SystemPromptAssembly | undefined;
+  /** 這一列登記的逐條 thread 的工具來源（#2533），同 {@link RowVerdict} 的 `threadSources`。 */
+  readonly threadSources: readonly FoldedThreadSource[];
 }
 
 /**
@@ -1203,7 +1229,11 @@ export interface DetachedContributions {
  * @throws {Error} 那一列沒有起來，訊息同樹上的判定。
  */
 export async function mountDetached(mount: DetachedMount): Promise<DetachedContributions> {
-  const provider = createToolsProvider({ concludeTurn });
+  const provider = createToolsProvider({
+    concludeTurn,
+    authorizeThreadServices: (_source, services) =>
+      deniedThreadServices(DEFAULT_THREAD_SERVICE_GRANTS, mount.specifier, services),
+  });
   const projections = createProjectionsProvider();
   const skillSources = createSkillSourcesProvider();
   const commands = createCommandsProvider();
@@ -1321,6 +1351,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .map((entry) => entry.definition),
         services,
         systemPrompt,
+        threadSources: provider
+          .threadSources()
+          .filter((entry) => entry.source === mount.id)
+          .map(({ threadSource, services: declared }) => ({ threadSource, services: declared })),
       };
     }
     if (fiber?.state === FIBER_STATE.FAILED) {
