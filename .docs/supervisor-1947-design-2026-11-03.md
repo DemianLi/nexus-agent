@@ -63,7 +63,7 @@ demian 2026-11-03 在 PM session（#1827 D164）：「1947 直接讓他寫設計
 | 分叉 | `thread.fork` 讀來源 thread 的記憶體（`wire-handler.ts:3308`） | 轉給來源的對話行程做，新 thread 再起新行程（§四-3） |
 | 全域下行 | `GET /threads/feed`，`ThreadFeed`（`thread-feed.ts:42`） | 前台訂閱每個活著的對話行程的 feed、合併（§三-2） |
 | 整個行程的單例 | MCP 連線池（`serve.ts:635`）、模型並行閘（`serve.ts:820`）、token 錨點、圖片轉碼限流器（`attachment-store.ts:267`）、會話日誌額度（`serve.ts:842`）、spawner（`tool-launcher.ts:56-61`）、home 鎖（`serve.ts:562`） | 見 §三-4 |
-| plugin 對照快照、掉列紀錄器、不變量記錄檔、探針與指標、memory-gauge | `plugin-snapshot.ts:404`、`plugin-failure-recorder.ts:138`、`invariant-log.ts:61`、`ops-endpoints.ts:260`、`memory-gauge.ts:400` | 前台持有檔案與端點，對話行程把紀錄送給前台寫（§四-3） |
+| plugin 對照快照、掉列紀錄器、不變量記錄檔、探針與指標、memory-gauge | `plugin-snapshot.ts:404`、`plugin-failure-recorder.ts:138`、`invariant-log.ts:61`、`ops-endpoints.ts:260`、`memory-gauge.ts:400` | plugin 對照快照由前台寫；掉列紀錄器與不變量記錄檔由每個行程直接寫同一個檔；探針與指標、memory-gauge 見 §四-3 |
 | 子代理 | 同行程、同事件迴圈（背景子代理 `background-subagents.ts:550`，對 `child_process\|worker_threads` 零命中） | 照 Q22 留在父對話的行程裡，不動 |
 
 ## 三、行程怎麼分
@@ -156,8 +156,8 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 | 釘選與封存 | 前台持有檔案；封存時呼叫該條對話行程的內部指令把閘門關上，對話行程不在就只寫檔（下次開時讀檔） | 無 |
 | 分叉 | `thread.fork` 轉給來源 thread 的對話行程，它寫好新 thread 的檔；前台再為新 thread 起行程 | 無 |
 | 子代理會話的歷史、`isSubagentSession` | 前台冷讀 header（今天就是冷讀） | 無 |
-| plugin 對照快照 | 前台啟動時寫；每個對話行程綁定時把 live-versions 回報前台，前台更新 | 寫檔的行程換了，格式不變 |
-| 掉列紀錄器、不變量記錄檔 | 對話行程把紀錄送給前台，由前台寫同一個檔 | 路徑與格式不變；前台不在時暫存，C3 定上限 |
+| plugin 對照快照 | 前台啟動時寫；監督行程送 `up` 時與之後每次轉送拿到回應時，前台向那條的對話行程問它綁著哪幾列（內部路由 `plugins`，只在對話行程的 socket 上答），問到就綁進前台的表、重寫快照；`down` 放掉再重寫。只看過歷史的 thread 也列得出來 | 寫檔的行程換了，格式不變 |
+| 掉列紀錄器、不變量記錄檔 | 每個行程直接寫同一個檔，不經前台。掉列紀錄器本來就為兩台 serve 設計：去重在檔案鎖裡、寫之前對紀錄再查一次，同一列在幾個對話行程掉了都只記一筆。不變量記錄檔一行一次 `appendFileSync`（`O_APPEND`），訊息截在 500 個字元，最長一行約 3 KB；兩個行程各寫 2000 行最長的，一行不缺、每行都完整（Linux 與 macOS 實測）。兩個檔都不輪替；變更紀錄只在持鎖時截掉上一次當掉留下的半行（`plugin-journal.ts` 的 `appendJournalRecord`），別的行程那時寫不進來，不變量記錄檔從不截 | 路徑與格式不變；前台不在時照樣記，沒有暫存與上限 |
 | 探針與指標 | 前台提供 `/livez`、`/readyz`、`/metrics`；thread 數、各行程 RSS 由監督行程提供 | `/metrics` 多幾個指標，不少 |
 | memory-gauge | 每個行程各自量自己；監督行程另外看全部的 RSS 合計 | 行為變成每個行程各一份 |
 
