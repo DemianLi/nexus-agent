@@ -4,7 +4,7 @@
  *
  * 走部署方掛它的那條路（出貨清單疊一份 `--patch`，`insert` 一列 `@nexus/plugin-mcp`），`langgraph` 與 `native` 各跑一次。場景是
  * `mcp-migration.test.ts` 的全部，再加首連失敗、放棄重連、憑證引用、連線池、預設要問人五種組裝路徑。
- * 對照組在 `develop` `46419a14`（這一列還掛在相容層時）以 `K7C_RECORD=1` 錄的；`K7C_RECORD=1` 會拿當下的輸出覆寫對照組。
+ * 對照組在 `develop` `36624090`（這一列還掛在相容層時）以 `K7C_RECORD=1` 錄的；`K7C_RECORD=1` 會拿當下的輸出覆寫對照組。
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -324,9 +324,7 @@ function overlay(dir: string, spec: Case, marker: string): string {
     (spec.second === true
       ? `    - id: mcp-srv2\n      name: '@nexus/plugin-mcp'\n      config: ${JSON.stringify(second)}\n`
       : '');
-  const text =
-    `- insert:\n${rows}` +
-    `- id: cli-script\n  config: ${JSON.stringify({ turns })}\n`;
+  const text = `- insert:\n${rows}` + `- id: cli-script\n  config: ${JSON.stringify({ turns })}\n`;
   const file = join(dir, 'overlay.yml');
   writeFileSync(file, text);
   return file;

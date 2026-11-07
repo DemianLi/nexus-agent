@@ -11,7 +11,7 @@
  */
 
 import type { PluginEntry, PreToolListener } from '@nexus/core';
-import { mcpPlugin } from '@nexus/plugin-mcp';
+import { name as mcpPluginName } from '@nexus/plugin-mcp';
 import { EMBED_PATH_PREFIX, HOST_TOOL_PREFIX, THREADS_PATH } from '@nexus/wire';
 import type { RpcMethod } from '@nexus/wire';
 
@@ -131,7 +131,7 @@ export function embedApprovalEntry(hostToolExempt?: ReadonlySet<string>): Plugin
       apply: (registry) => {
         registry.approvals.gate(
           embedApprovalGate(
-            (name) => registry.tools.resolve(name)?.origin.name === mcpPlugin.name,
+            (name) => registry.tools.resolve(name)?.origin.name === mcpPluginName,
             hostToolExempt,
           ),
         );
