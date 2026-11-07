@@ -15,8 +15,8 @@
  * 只換這一支：其他支的字級跟它不一樣（14px 對 12.5px），記在 #1688；高度由外層的 `min-h-lh` 對齊。
  *
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
- * 「立刻重連」（停止自動重連時字由觸發點給，#2343）；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，
- * 所以放進既有的狀態列（UI 形狀，不是執行語意）。按鈕放在 live region 外面，免得每次重唸都唸到它。
+ * 「立刻重連」（停止自動重連時字由觸發點給，#2343）；接回來短暫寫「已重新連線」。
+ * 按鈕放在 live region 外面，免得每次重唸都唸到它。
  *
  * **執行中帶經過時間**（[#1308](https://github.com/DemianLi/nexus-agent/issues/1308)）：從 server 記下的這一輪開始時刻起算
  * （`lib/running-turn.ts`），用回應的 `Date` 標頭換算兩邊的時鐘差（`lib/server-clock.ts`），所以重新整理不歸零。每秒跳，
