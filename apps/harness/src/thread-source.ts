@@ -104,6 +104,10 @@ export async function runThreadSources(
           }),
         );
       },
+      section(section) {
+        live('section');
+        return registry.prompt.section(section);
+      },
       onDispose(dispose) {
         live('onDispose');
         disposers.push(dispose);

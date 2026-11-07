@@ -56,8 +56,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.5.0`（#2533）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.threadSource}（每次組 thread 時叫一次的工具來源，
  * 拿到 {@link ToolThread}，含 {@link ToolThread.admit}）。向後相容的新增：不呼叫它的消費者照常；要用的消費者宣告 `^2.5.0`。
+ *
+ * `2.6.0`（#2533）：{@link ToolThread} 多 {@link ToolThread.section}，在這條 thread 的系統提示詞登記一段。向後相容的新增：
+ * 不呼叫它的來源照常；要用的消費者宣告 `^2.6.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.5.0';
+export const TOOLS_CONTRACT_VERSION = '2.6.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -306,9 +309,21 @@ export interface ToolThreadSourceOptions {
   readonly services?: readonly string[];
 }
 
+/** {@link ToolThread.section} 登記的一段系統提示詞（`2.6.0` 起）。 */
+export interface ToolThreadSection {
+  /** 段的名字，同一條 thread 上不能重複。 */
+  readonly name: string;
+  /** 排序值，只收宿主開放給插件的那幾個（`@nexus/core` 的 `PLUGIN_SECTION_ORDERS`）。 */
+  readonly order: number;
+  /** 文字，照原文接。給函式就是每次模型呼叫現算，回 `''` 那一次不接。 */
+  readonly text: string | (() => string);
+  /** 這一段開頭加的字（這一次不接時也不加）；省略即 `'\n\n'`。 */
+  readonly separator?: string;
+}
+
 /**
  * 一條 thread 的組裝，{@link ToolThreadSource} 看到的樣子（`2.5.0` 起）。來源結束（resolve 或 reject）之後再呼叫
- * `register`、`gate`、`admit`、`onDispose` 會拋；`services.get`、`shared`、`logger.warn` 不受限。
+ * `register`、`gate`、`admit`、`section`、`onDispose` 會拋；`services.get`、`shared`、`logger.warn` 不受限。
  */
 export interface ToolThread {
   /** 這條 thread 的宿主服務。 */
@@ -339,6 +354,13 @@ export interface ToolThread {
    * @returns 只撤這一格的 disposer。
    */
   admit(admission: ToolAdmission, options?: ToolAdmitOptions): () => void;
+  /**
+   * 在這條 thread 的系統提示詞中段登記一段（`2.6.0` 起）。
+   *
+   * @returns 只撤這一段的 disposer；這條 thread 組好之後才撤，已經組進去的那一段照接。
+   * @throws 段的形狀不對（`TypeError`）、`order` 不是開放給插件的值（`RangeError`），或同一條 thread 上已有同名的段。
+   */
+  section(section: ToolThreadSection): () => void;
   /** 這條 thread 收掉時要做的事，照登記的反序跑。這一列有任何來源失敗時，它所有來源已登記的會當場跑。 */
   onDispose(dispose: () => void | Promise<void>): void;
   /** 這條 thread 的警告，記在這一列名下；thread 收掉之前任何時候都能叫。 */
