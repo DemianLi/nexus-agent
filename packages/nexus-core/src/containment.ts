@@ -465,7 +465,7 @@ export function createContainmentMiddleware(
     // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
     const raw = rawArgumentsOf(request, sessions);
     // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
-    const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
+    const recorded = recordToolCall(sessions, request, raw);
     const settle = recorded?.settle;
     try {
       // **只有本體那一段在接錯的 try 裡**：`settle` 寫日誌拋的錯（#1665）要走出這一層，不能被翻成錯誤訊息。
@@ -489,7 +489,7 @@ export function createContainmentMiddleware(
         );
         const kind = classifyThrownToolError(error);
         if (events !== undefined) {
-          notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
+          notifyToolResult(events, request, message, reportObserverFailure);
         }
         settle?.(
           kind === undefined ? { isError: true } : { isError: true, error: kind },
@@ -504,7 +504,7 @@ export function createContainmentMiddleware(
       // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
       // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
       if (events !== undefined) {
-        notifyToolResult(events, request as RecordableRequest, result, reportObserverFailure);
+        notifyToolResult(events, request, result, reportObserverFailure);
       }
       settle?.(
         readToolOutcome(result, request.toolCall.id ?? ''),
