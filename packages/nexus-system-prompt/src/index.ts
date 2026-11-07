@@ -49,17 +49,25 @@ import { defineToken } from '@nexus/sdk';
 /**
  * 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍與宿主取服務時的範圍檢查擋下不相容的提供者。
  */
-export const SYSTEM_PROMPT_CONTRACT_VERSION = '1.0.0';
+export const SYSTEM_PROMPT_CONTRACT_VERSION = '1.1.0';
 
 /**
- * 段的排序值，照 dsh `SECTION_ORDERS`（`packages/core/system-prompt/src/index.ts:131-165`）。**只放這張用到的三格**：
- * 其餘的數值（`PLAN_POLICY: 500`、`TOOL_GOAL: 2400`…）等第一個登記它們的遷移卡再加。
+ * 段的排序值。只放有消費者從這裡取的格，其餘的值等第一個從這裡取它的遷移卡再加。
+ *
+ * 頭尾三格由 `system-prompt` 那一列登記。`PLUGIN_POLICY` 是遷出的插件經 `thread.section()` 交的中段（契約 `1.1.0` 起）：宿主只收
+ * `@nexus/core` 開放給插件的中段值，所以它必須等於 core 的 `MIDDLE_SECTION_ORDERS.PLUGIN_POLICY`，兩邊相等由
+ * `apps/harness/src/middle-section-orders.test.ts` 釘住。
  */
 export const SECTION_ORDERS = {
   /** 最前面一句身分句。 */
   HARNESS_IDENTITY: -1000,
   /** 部署方的前綴：身分句之後、其餘一切之前。 */
   DEPLOYMENT_PERSONA_PREFIX: 0,
+  /**
+   * 插件的政策段：沙箱政策、MCP 伺服器、`@` 路徑。同值照登記的先後。只給 `thread.section()`：它落在前後綴之間，交給
+   * {@link SystemPrompt.section} 會拋。
+   */
+  PLUGIN_POLICY: 2000,
   /** 部署方的後綴：整份提示詞的最後一段。 */
   DEPLOYMENT_PERSONA_SUFFIX: 10200,
 } as const;

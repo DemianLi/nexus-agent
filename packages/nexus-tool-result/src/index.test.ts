@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import * as toolResult from './index.js';
 
 describe('@nexus/tool-result 是 @nexus/core 的單向轉出', () => {
-  it('五個值與 core 是同一個參照（轉出，不是複製）', () => {
+  it('七個值與 core 是同一個參照（轉出，不是複製）', () => {
+    expect(toolResult.EXTERNAL_MCP_CONTENT_NOTICE).toBe(core.EXTERNAL_MCP_CONTENT_NOTICE);
+    expect(toolResult.REFERENCE_RULE).toBe(core.REFERENCE_RULE);
     expect(toolResult.toolRefusal).toBe(core.toolRefusal);
     expect(toolResult.toolCallIdOf).toBe(core.toolCallIdOf);
     expect(toolResult.markToolError).toBe(core.markToolError);
@@ -14,8 +16,10 @@ describe('@nexus/tool-result 是 @nexus/core 的單向轉出', () => {
     expect(toolResult.toolCallSessionAddress).toBe(core.toolCallSessionAddress);
   });
 
-  it('只轉出這五個值', () => {
+  it('只轉出這七個值', () => {
     expect(Object.keys(toolResult).sort()).toEqual([
+      'EXTERNAL_MCP_CONTENT_NOTICE',
+      'REFERENCE_RULE',
       'callThreadId',
       'markToolError',
       'toolCallIdOf',

@@ -1,42 +1,32 @@
 /**
  * MCP 那一列的核准宣告（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）：哪些工具要先讓人看過。
  *
- * 宣告寫在那一列的 `approval`，由一位 pre-execute listener 讀，經 `registry.approvals.gate()` 登記進核准 waterfall。
+ * 宣告寫在那一列的 `approval`，由一位核准閘門 listener 讀。閘門經逐條 thread 的 `thread.gate()` 登記（`index.ts` 的 `mountServer`
+ * 與 `applyShared`），宿主轉給這條 thread 的 `registry.approvals.gate()`，跟其他核准閘門同一條 waterfall。
  * 閘門**只回 `ask` 或 `next()`**；回 `ask` 之後的事（政策 never、沒有管道、背景子代理、人按不允許）全在 core 的
  * `nexusApprovalGate` 中介層，碼也沿用那裡的 `APPROVAL_*`。**絕不回 `allow`**：不呼叫 `next()` 的 `allow` 會把排在後面的
  * 閘門整條吃掉（`apps/harness/src/approval-gate-order.test.ts` 釘著）。
+ *
+ * 宣告寫在 MCP 那一列：內部系統的寫入全走 MCP，「哪台、哪幾支要人看過」是部署方的業務判斷，要能寫在設定裡。
  *
  * ## 形狀
  *
  * - `default`：`ask`（預設）這台的工具都要人核准；`allow` 都不問。
  * - `exempt`：`default: ask` 時免問的工具，寫 **server 自己公告的名字（raw name）**，只收精確名字。
  *
+ * **沒寫 `approval` 等同 `default: ask`，整台都問**（#1622 Q2 (a)）：部署方忘了寫宣告時，結果應該是多問一次，不是寫入沒經過人。
+ * 唯讀的 server 明寫 `approval: { default: allow }`。
+ *
  * **失敗的方向都是多問**：`exempt` 打錯字，那一支照樣被問；server 下一次組裝多出新工具，新工具照 `default` 被問。反過來的形狀
  * （列「要問」的工具）在這兩種情況都會靜靜放行寫入，所以不採用（#1622 Q1 (a)）。比對用 raw name：模型看到的 public name 可能被
  * 換字、補指紋（`names.ts`），寫設定的人對不上。
- *
- * ## 偏離 dsh
- *
- * **偏離 2（理由 2，產品需求超出 dsh 的射程）**：dsh 的 mcp-client 沒有核准宣告，MCP 工具沒有人回 `ask`。我們的產品是企業內部的
- * 業務輔助機器人，內部系統的寫入全走 MCP，「哪台、哪幾支要人看過」是部署方的業務判斷，要能寫在設定裡。最接近的 dsh 做法是
- * `hooks-claude-code`（每次呼叫起一支外部指令、比對模型面的工具名、行程級一份設定），不照搬，理由見 #1622。**補了什麼**：宣告寫在
- * MCP 那一列、用 raw name 比對；閘門只回 `ask` 或 `next()`，其餘全走現成的 waterfall 與中介層。日後要比對樣式，語意照抄 dsh 的
- * matcher（Q4）。
- *
- * **偏離 3（理由 2，#1622 Q2 (a)）**：沒寫 `approval` 等同 `default: ask`，整台都問。dsh 的 MCP 工具預設一律放行（鏈底 `allow`）。
- * 寫入全走 MCP，部署方忘了寫宣告時，結果應該是多問一次，不是寫入沒經過人。唯讀的 server 明寫 `approval: { default: allow }`，
- * 就回到 dsh 的行為。
- *
- * **機制本身不算偏離**：閘門經逐條 thread 的 `thread.gate()` 登記（`index.ts` 的 `mountServer` 與 `applyShared`），宿主轉給這條
- * thread 的 `registry.approvals.gate()`，跟其他核准閘門同一條 waterfall；形狀照 dsh 的 `tools/pre-execute`（core `approval.ts` 檔頭）。
  *
  * **不讀 MCP 的 tool annotations**（Q3 (a)）：SDK 說明寫明那些只是 hint，client 不該依不受信任的 server 給的 annotations 做決定。
  *
  * @module
  */
 
-// eslint-disable-next-line no-restricted-imports -- 審批閘門的 listener 型別今天只在 core 匯出，#2537 拿掉
-import type { PreToolListener } from '@nexus/core';
+import type { ToolGateListener } from '@nexus/tools';
 import { z } from 'zod';
 
 /** 這一列的核准宣告。 */
@@ -74,7 +64,7 @@ export function mcpApprovalGate(
   serverName: string,
   approval: McpApproval,
   rawNameOf: ReadonlyMap<string, string>,
-): PreToolListener | undefined {
+): ToolGateListener | undefined {
   if (approval.default === 'allow' || rawNameOf.size === 0) return undefined;
   const exempt = new Set(approval.exempt ?? []);
   return (exec, next) => {

@@ -968,15 +968,24 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.3.1
         version: 2.3.1
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
       '@nexus/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
       '@nexus/tools':
         specifier: workspace:*
         version: link:../nexus-tools

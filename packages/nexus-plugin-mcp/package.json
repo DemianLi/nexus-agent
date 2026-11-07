@@ -24,8 +24,11 @@
     "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@modelcontextprotocol/server": "^2.3.1",
+    "@nexus/approval-channel": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
@@ -41,8 +44,11 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@nexus/approval-channel": "workspace:*",
     "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*"
   }
 }
