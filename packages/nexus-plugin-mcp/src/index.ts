@@ -11,7 +11,9 @@
 
 import type { Tool } from '@modelcontextprotocol/client';
 import type { Context } from '@nexus/cordis';
+// eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出
 import { CHANNEL_SERVICE } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core；其餘是相容層暫時路徑用的，#2535 拿掉
 import type {
   ApprovalChannel,
   NexusPlugin,
@@ -599,7 +601,7 @@ export function apply(ctx: Context, config: McpConfig): void {
 }
 
 /**
- * 相容層的 mcp 插件。**只給還沒搬的測試用，#2535 拿掉**；產品路徑走樹上的 {@link apply}。
+ * 相容層的 mcp 插件。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉**；產品路徑走樹上的 {@link apply}。
  *
  * 名字先佔進 `mcp:server:<serverName>` 這個服務：撞名時訊息指名兩列，跟搬之前一樣。
  */
@@ -615,7 +617,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 };
 
 /**
- * 建一個相容層條目。**只給還沒搬的測試用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * 建一個相容層條目。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
  *
  * @param options - 設定，形狀見 {@link mcpConfigSchema}。
  * @returns 可以放進組裝點清單的條目。

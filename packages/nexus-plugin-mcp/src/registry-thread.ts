@@ -1,18 +1,21 @@
 /**
- * 把相容層的 registry 包成一條 `ToolThread`。**只給還沒搬的測試用，#2535 拿掉**；不從套件入口匯出。
+ * 把相容層的 registry 包成一條 `ToolThread`。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉**；不從套件入口匯出。
  *
  * @module
  */
 
+// eslint-disable-next-line no-restricted-imports -- 相容層暫時路徑，#2535 拿掉
 import { admittedTools, createToolListStepMiddleware } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 相容層暫時路徑，#2535 拿掉
 import type { PluginRegistry } from '@nexus/core';
 import type { ToolThread } from '@nexus/tools';
 
 /** 暫時路徑的 `shared`：一次組裝一份 registry，以它為鍵。 */
+// eslint-disable-next-line no-restricted-syntax -- 相容層暫時路徑，以 registry 為鍵、registry 收掉就回收；#2535 拿掉
 const sharedByRegistry = new WeakMap<PluginRegistry, object>();
 
 /**
- * 把相容層的 registry 包成一條 {@link ToolThread}。**只給還沒搬的測試用，#2535 拿掉。**
+ * 把相容層的 registry 包成一條 {@link ToolThread}。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉。**
  *
  * 跟宿主的 `threadSource` 不同的地方：`services.get` 不檢查宣告、什麼都給；`shared` 以 registry 為範圍，不分插件；`onDispose`
  * 直接交給 `registry.lifecycle`，這一列 `apply` 失敗時被 rollback 撤掉、不跑；`apply` 結束之後再叫各方法不拋。

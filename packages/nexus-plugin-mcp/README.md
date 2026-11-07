@@ -27,7 +27,7 @@
 時由 `mountServer` 建，每條 thread 各一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
 在宿主的授權表上（`apps/harness/src/thread-service-grants.ts`）。
 
-**相容層的 `mcpPlugin` 與 `createMcpPlugin` 只給還沒搬的測試用，[#2535](https://github.com/DemianLi/nexus-agent/issues/2535) 拿掉。**
+**相容層的 `mcpPlugin` 與 `createMcpPlugin` 只給還沒搬的測試和 cli-mcp 手動夾具用，[#2535](https://github.com/DemianLi/nexus-agent/issues/2535) 拿掉。**
 它們把 registry 包成一條 thread 交給同一個 `mountServer`，跟宿主的 `threadSource` 不同的地方：`services.get` 不檢查宣告；`shared` 以
 那一次組裝為範圍、不分插件；`onDispose` 直接交給 `registry.lifecycle`（那一列 `apply` 失敗時被 rollback 撤掉、不跑）；`apply` 結束之後
 再叫各方法不拋；撞名另外經 `mcp:server:<serverName>` 服務先佔一次，訊息指名兩列。

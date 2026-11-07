@@ -5,6 +5,7 @@
  * 要先把它們扣掉才數得對。不進 `index.ts` 的匯出。
  */
 
+// eslint-disable-next-line no-restricted-imports -- 測試輔助檔，只給測試用
 import type { PluginRegistry } from '@nexus/core';
 import { RESOURCE_TOOL_NAMES } from './hub.js';
 

@@ -3,11 +3,14 @@
  * 用一條假的 {@link ToolThread}，不經宿主；宿主那一側的語意在 `apps/harness/src/thread-source.test.ts`。
  */
 import { Context } from '@nexus/cordis';
+import { checkConformance } from '@nexus/sdk';
 import { toolsToken } from '@nexus/tools';
+import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolThread } from '@nexus/tools';
 import { describe, expect, it } from 'vitest';
 
 import { RESOURCE_TOOL_NAMES } from './hub.js';
+import * as mcp from './index.js';
 import { apply, mcpConfigSchema, mountServer } from './index.js';
 
 interface FakeThread {
@@ -110,5 +113,29 @@ describe('apply（行程級）', () => {
     expect(() => {
       apply(ctx, unreachableConfig('srv'));
     }).toThrow('mcp 要宿主的 tools.threadSource()');
+  });
+});
+
+describe('一致性', () => {
+  it('一致性套件全格通過：manifest、匯出形式、卸載後登記處回到掛載前、缺提供者停在 PENDING、schema 是 JSON', async () => {
+    // 宿主的授權表給 mcp 那五格；這裡全授權，量的是插件本身。
+    const provider = () => createToolsProvider({ authorizeThreadServices: () => [] });
+    let latest = provider();
+    const failures = await checkConformance({
+      row: 'mcp',
+      module: mcp,
+      config: {
+        serverName: 'srv',
+        connection: { transport: 'stdio', command: '/nonexistent/nexus-mcp-on-tree' },
+      },
+      providers: {
+        tools: () => {
+          latest = provider();
+          return latest.Provider;
+        },
+      },
+      residue: () => latest.entries().length + latest.threadSources().length,
+    });
+    expect(failures).toEqual([]);
   });
 });
