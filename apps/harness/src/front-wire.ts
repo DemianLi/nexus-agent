@@ -408,7 +408,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   }
 
   /**
-   * 分叉（設計 §4-3）：來源的對話行程算出子 thread 的 seed（`fork-seed`；冷的來源用 `read-only` 開，不佔一格），
+   * 分叉（設計 §4-3）：來源的對話行程算出子 thread 的 seed（`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），
    * 分得出去才替子 thread 開一個行程、交給它照 single 的第 5、6 步建（`fork-adopt`）。分不出去的、子 thread 建不起來的，原樣回對話行程的那一份。
    */
   async function forkAcross(request: Request, route: Route, id: number): Promise<Response> {
