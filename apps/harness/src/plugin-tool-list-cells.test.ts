@@ -49,18 +49,18 @@ vi.mock('@nexus/core', async (importOriginal) => {
       wrapModelCall: (request: unknown, handler: unknown) => unknown;
     };
     const wrap = target.wrapModelCall;
+    const counted: ToolListStep = (request) => {
+      bump(target.name, request, 'native');
+      return step(request);
+    };
+    // `withToolListStep` 只在登記那一刻核對 `wrapModelCall` 是 `wrapModelCallWith(counted, inner)`；登記後換上的這支經原本的 `wrap` 跑、不經 `counted`，native 與 `wrapModelCall` 兩條路徑才各記各的。
+    target.wrapModelCall = actual.wrapModelCallWith(counted, inner as never) as never;
+    const registered = actual.withToolListStep(middleware, counted, inner);
     target.wrapModelCall = (request, handler) => {
       bump(target.name, request, 'wrapModelCall');
       return wrap(request, handler);
     };
-    return actual.withToolListStep(
-      middleware,
-      (request) => {
-        bump(target.name, request, 'native');
-        return step(request);
-      },
-      inner,
-    );
+    return registered;
   };
   return {
     ...actual,

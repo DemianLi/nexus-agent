@@ -236,6 +236,7 @@ export type {
   ToolCallSite,
   ToolCallStep,
   ToolCallSubstitute,
+  ToolCallWrap,
 } from './tool-call-step.js';
 export {
   createToolCallStepMiddleware,

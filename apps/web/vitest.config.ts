@@ -17,7 +17,7 @@ export default defineConfig({
   resolve: { alias: RESOLVE_ALIAS },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'e2e/**/*.test.ts'],
     execArgv: vitestExecArgv,
   },
 });

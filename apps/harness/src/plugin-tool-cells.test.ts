@@ -14,8 +14,8 @@ import { join } from 'node:path';
 
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { SessionRegistry, toolCallStepOf, withToolCallStep } from '@nexus/core';
-import type { AgentMiddleware, PluginEntry } from '@nexus/core';
+import { SessionRegistry, toolCallStepOf, withToolCallStep, wrapToolCallWith } from '@nexus/core';
+import type { AgentMiddleware, PluginEntry, ToolCallStep } from '@nexus/core';
 import {
   SANDBOX_POLICY_MIDDLEWARE_NAME,
   SANDBOX_POLICY_SERVICE,
@@ -79,10 +79,10 @@ function instrumentEntry(seen: Seen): PluginEntry {
           const step = toolCallStepOf(middleware);
           if (step !== undefined) {
             const name = (middleware as { name: string }).name;
-            withToolCallStep(middleware, (call, next) => {
+            const counted: ToolCallStep = (call, next) => {
               bump(seen, name, { id: call.callId, name: call.name }, 'native');
               return step(call, next);
-            });
+            };
             const target = middleware as unknown as {
               wrapToolCall: (
                 request: { toolCall: { id?: string; name: string } },
@@ -90,6 +90,9 @@ function instrumentEntry(seen: Seen): PluginEntry {
               ) => unknown;
             };
             const wrap = target.wrapToolCall;
+            // `withToolCallStep` 只在登記那一刻核對 `wrapToolCall` 是 `wrapToolCallWith(counted)`；登記後換上的這支經原本的 `wrap` 跑、不經 `counted`，native 與 `wrapToolCall` 兩條路徑才各記各的。
+            target.wrapToolCall = wrapToolCallWith(counted) as never;
+            withToolCallStep(middleware, counted);
             target.wrapToolCall = (request, handler) => {
               bump(seen, name, request.toolCall, 'wrapToolCall');
               return wrap(request, handler);

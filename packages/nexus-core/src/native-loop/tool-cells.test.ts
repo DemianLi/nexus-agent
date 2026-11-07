@@ -16,7 +16,8 @@ import { fakePlugin, fakeTool } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
 import { SHARED_WORKSPACE_SERVICE } from '../sandbox.js';
-import { toolCallStepOf, withToolCallStep } from '../tool-call-step.js';
+import { toolCallStepOf, withToolCallStep, wrapToolCallWith } from '../tool-call-step.js';
+import type { ToolCallStep } from '../tool-call-step.js';
 
 type Via = 'native' | 'wrapToolCall';
 
@@ -39,14 +40,17 @@ function instrument(middleware: Iterable<AgentMiddleware>, counts: Counts): Set<
     const step = toolCallStepOf(m);
     if (step === undefined || instrumented.has(m)) continue;
     instrumented.add(m);
-    withToolCallStep(m, (call, next) => {
+    const counted: ToolCallStep = (call, next) => {
       bump(counts, m, call.callId, 'native');
       return step(call, next);
-    });
+    };
     const target = m as unknown as {
       wrapToolCall: (request: { toolCall: { id?: string } }, handler: unknown) => unknown;
     };
     const wrap = target.wrapToolCall;
+    // `withToolCallStep` 只在登記那一刻核對 `wrapToolCall` 是 `wrapToolCallWith(counted)`；登記後換上的這支經原本的 `wrap` 跑、不經 `counted`，native 與 `wrapToolCall` 兩條路徑才各記各的。
+    target.wrapToolCall = wrapToolCallWith(counted) as never;
+    withToolCallStep(m, counted);
     target.wrapToolCall = (request, handler) => {
       bump(counts, m, request.toolCall.id, 'wrapToolCall');
       return wrap(request, handler);
