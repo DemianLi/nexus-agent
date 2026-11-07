@@ -16,13 +16,17 @@ import { createContainmentMiddleware } from './containment.js';
 import { EventBus } from './events.js';
 import { SessionLog } from './session-log.js';
 import { FS_SANDBOX_DENIED } from './fs-tool-errors.js';
+import { TOOL_ABORTED, TOOL_TIMEOUT } from './tool-error-codes.js';
 import { markToolError, toolErrorOf, UNKNOWN_TOOL } from './tool-events.js';
 import {
   createToolExecuteMiddleware,
   createToolPostExecuteMiddleware,
   createToolPreExecuteMiddleware,
+  pipelineTextOf,
+  toolResultView,
 } from './tool-pipeline.js';
 import type { PipelineExecution, PipelineResult } from './tool-pipeline.js';
+import { TurnCancelledError } from './turn-cancel.js';
 
 type Handler = (request: unknown) => Promise<unknown>;
 type Wrapper = (request: unknown, handler: Handler) => Promise<unknown>;
@@ -34,8 +38,11 @@ function wrapperOf(middleware: unknown): Wrapper {
 }
 
 /** 一次工具呼叫的假請求；`namespace` 決定呼叫者身分（`checkpoint_ns`）。 */
-function requestFor(options: { namespace?: string | null; id?: string | null } = {}): unknown {
+function requestFor(
+  options: { namespace?: string | null; id?: string | null; signal?: AbortSignal } = {},
+): unknown {
   const namespace = options.namespace === undefined ? 'tools:x' : options.namespace;
+  const configurable = namespace === null ? {} : { configurable: { checkpoint_ns: namespace } };
   return {
     toolCall: {
       name: 'probe',
@@ -44,7 +51,7 @@ function requestFor(options: { namespace?: string | null; id?: string | null } =
     },
     tool: { name: 'probe' },
     state: {},
-    runtime: namespace === null ? {} : { configurable: { checkpoint_ns: namespace } },
+    runtime: { ...configurable, ...(options.signal !== undefined && { signal: options.signal }) },
   };
 }
 
@@ -153,6 +160,38 @@ describe('tools/pre-execute 的生產者', () => {
     expect(Object.isFrozen(execs[0])).toBe(true);
   });
 
+  it('`exec.signal` 是這次呼叫的那一支，唯讀；沒有就是 undefined', async () => {
+    const bus = new EventBus();
+    const execs: PipelineExecution[] = [];
+    bus.on('tools/pre-execute', (exec, next) => {
+      execs.push(exec);
+      return next();
+    });
+    const wrap = wrapperOf(createToolPreExecuteMiddleware(bus));
+    const controller = new AbortController();
+    await wrap(requestFor({ signal: controller.signal }), async () => 'x');
+    await wrap(requestFor(), async () => 'x');
+    expect(execs[0]?.signal).toBe(controller.signal);
+    expect(execs[1]?.signal).toBeUndefined();
+    expect(() => {
+      (execs[0] as { signal: unknown }).signal = undefined;
+    }).toThrow(TypeError);
+  });
+
+  it('拒絕帶 `error` → 那則訊息掛它的碼；`error` 形狀不對 → 拋 TypeError', async () => {
+    const bus = new EventBus();
+    let error: unknown = { name: 'PolicyDenied', code: FS_SANDBOX_DENIED };
+    bus.on('tools/pre-execute', () =>
+      Promise.resolve({ kind: 'deny', reason: '不准', error } as never),
+    );
+    const wrap = wrapperOf(createToolPreExecuteMiddleware(bus));
+    const refused = (await wrap(requestFor(), async () => 'x')) as ToolMessage;
+    expect(refused.content).toBe('Error: 不准');
+    expect(toolErrorOf(refused)).toEqual({ name: 'PolicyDenied', code: FS_SANDBOX_DENIED });
+    error = { name: 'PolicyDenied' };
+    await expect(wrap(requestFor(), async () => 'x')).rejects.toBeInstanceOf(TypeError);
+  });
+
   it('`exec.args` 是深凍結的複本：監聽者改不動，handler 收到的參數不變', async () => {
     const bus = new EventBus();
     let attempted: unknown;
@@ -236,6 +275,7 @@ describe('tools/execute 的生產者', () => {
     expect(views).toEqual([
       {
         kind: 'message',
+        blocks: [{ type: 'text', text: '沒這顆' }],
         content: '沒這顆',
         isError: true,
         error: { name: 'ToolNotFoundError', code: UNKNOWN_TOOL },
@@ -275,11 +315,140 @@ describe('tools/execute 的生產者', () => {
     expect(result.status).toBe('success');
   });
 
-  it('短路回 `command` 結果 → 拋 TypeError（Command 造不出來）', async () => {
+  it('叫了 `next()` 又交回別的訊息結果 → 從本體那則造：只換內容與狀態，其餘沿用', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'message', content: '換過的', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const original = markToolError(
+      new ToolMessage({
+        content: '原本的',
+        tool_call_id: 'call-1',
+        name: 'probe',
+        status: 'error',
+        artifact: { n: 1 },
+        id: 'msg-1',
+        additional_kwargs: { mark: true },
+      }),
+      { name: 'FsSandboxDenied', code: FS_SANDBOX_DENIED },
+    );
+    const result = (await wrap(requestFor(), async () => original)) as ToolMessage;
+    expect(result).not.toBe(original);
+    expect(result.content).toBe('換過的');
+    expect(result.status).toBe('success');
+    expect(toolErrorOf(result)).toBeUndefined();
+    expect([result.tool_call_id, result.name, result.id]).toEqual(['call-1', 'probe', 'msg-1']);
+    expect(result.artifact).toEqual({ n: 1 });
+    expect(result.additional_kwargs).toEqual({ mark: true });
+  });
+
+  it('短路交回 `blocks` → 訊息內容是那串區塊；`content` 與 `blocks` 都在時以 `blocks` 為準', async () => {
+    const bus = new EventBus();
+    const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } };
+    bus.on('tools/execute', () =>
+      Promise.resolve({
+        kind: 'message',
+        blocks: [{ type: 'text', text: '區塊' }, image],
+        content: '字串',
+        isError: false,
+      } as never),
+    );
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const result = (await wrap(requestFor(), async () => 'x')) as ToolMessage;
+    expect(result.content).toEqual([{ type: 'text', text: '區塊' }, image]);
+    expect(result.text).toBe('區塊');
+  });
+
+  it('短路回 `command` 結果 → 拋 TypeError，訊息說工具本體沒有跑', async () => {
     const bus = new EventBus();
     bus.on('tools/execute', () => Promise.resolve({ kind: 'command', isError: false }));
     const wrap = wrapperOf(createToolExecuteMiddleware(bus));
-    await expect(wrap(requestFor(), async () => 'x')).rejects.toBeInstanceOf(TypeError);
+    const handler = vi.fn(async () => 'x');
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）',
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('兩位監聽者：外層叫了 `next()`、內層短路，外層交回 `command` 結果 → 訊息說工具本體沒有跑', async () => {
+    const bus = new EventBus();
+    const order: string[] = [];
+    bus.on('tools/execute', async (_exec, next) => {
+      order.push('外層');
+      await next();
+      return { kind: 'command', isError: false };
+    });
+    bus.on('tools/execute', () => {
+      order.push('內層');
+      return Promise.resolve({ kind: 'message', content: '快取的', isError: false });
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => 'x');
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）',
+    );
+    expect(order).toEqual(['外層', '內層']);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('叫了 `next()`、本體回 `Command`，卻交回另造的 `command` 結果 → 拋 TypeError，訊息說不是 next() 回的那一個', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      const view = await next();
+      return { ...view };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const command = new Command({
+      update: { messages: [new ToolMessage({ content: '好', tool_call_id: 'call-1' })] },
+    });
+    const failure = wrap(requestFor(), async () => command);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
+    );
+  });
+
+  it('叫了 `next()`、本體回 `ToolMessage`，卻交回 `command` 結果 → 拋 TypeError，訊息說不是 next() 回的那一個', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => new ToolMessage({ content: '真的', tool_call_id: 'call-1' }));
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('本體拋錯、監聽者接住再回 `command` 結果 → 本體跑過了，訊息說不是 next() 回的那一個', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      try {
+        await next();
+      } catch {
+        // 接住本體的錯，改交回 `command` 結果。
+      }
+      return { kind: 'command', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const handler = vi.fn(async () => {
+      throw new Error('壞了');
+    });
+    const failure = wrap(requestFor(), handler);
+    await expect(failure).rejects.toBeInstanceOf(TypeError);
+    await expect(failure).rejects.toThrow(
+      'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）',
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('本體拋錯 → 原樣往外拋（翻成訊息是圍堵的事）', async () => {
@@ -345,6 +514,38 @@ describe('tools/post-execute 的生產者', () => {
     expect(original.content).toBe('原本的');
   });
 
+  it('替換也沿用 `additional_kwargs`', async () => {
+    const bus = new EventBus();
+    bus.on('tools/post-execute', () => Promise.resolve({ kind: 'replace', content: '改過的' }));
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const original = new ToolMessage({
+      content: '原本的',
+      tool_call_id: 'call-1',
+      additional_kwargs: { mark: true },
+    });
+    const result = (await wrap(requestFor(), async () => original)) as ToolMessage;
+    expect(result.additional_kwargs).toEqual({ mark: true });
+  });
+
+  it('以 `blocks` 替換 → 訊息內容是那串區塊（可改的複本）；`content` 與 `blocks` 都給或都不給 → 拋 TypeError', async () => {
+    const bus = new EventBus();
+    let decision: unknown = {
+      kind: 'replace',
+      blocks: Object.freeze([Object.freeze({ type: 'text', text: '新' })]),
+    };
+    bus.on('tools/post-execute', () => Promise.resolve(decision as never));
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const call = () =>
+      wrap(requestFor(), async () => new ToolMessage({ content: '舊', tool_call_id: 'call-1' }));
+    const result = (await call()) as ToolMessage;
+    expect(result.content).toEqual([{ type: 'text', text: '新' }]);
+    expect(Object.isFrozen((result.content as unknown[])[0])).toBe(false);
+    decision = { kind: 'replace', blocks: [{ type: 'text', text: '新' }], content: '新' };
+    await expect(call()).rejects.toBeInstanceOf(TypeError);
+    decision = { kind: 'replace' };
+    await expect(call()).rejects.toBeInstanceOf(TypeError);
+  });
+
   it('`Command` 結果不派發（偏離 2）→ 原物件，監聽者沒被叫', async () => {
     const bus = new EventBus();
     const listener = vi.fn((_exec: unknown, _result: unknown, next: () => Promise<unknown>) =>
@@ -359,10 +560,23 @@ describe('tools/post-execute 的生產者', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it('本體拋錯 → 原樣往外拋，監聽者沒被叫（偏離 3）', async () => {
+  it('本體拋錯、沒有監聽者 → 同一個錯原樣往外拋', async () => {
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(new EventBus()));
+    const boom = new Error('壞了');
+    await expect(
+      wrap(requestFor(), async () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+  });
+
+  it('本體拋錯、監聽者接受 → 看到圍堵會翻的那則錯誤訊息；再拋的是同一個錯物件（偏離 3）', async () => {
     const bus = new EventBus();
-    const listener = vi.fn();
-    bus.on('tools/post-execute', listener as never);
+    const views: PipelineResult[] = [];
+    bus.on('tools/post-execute', (_exec, result, next) => {
+      views.push(result);
+      return next();
+    });
     const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
     const boom = new Error('壞了');
     await expect(
@@ -370,7 +584,90 @@ describe('tools/post-execute 的生產者', () => {
         throw boom;
       }),
     ).rejects.toBe(boom);
+    expect(views).toEqual([
+      {
+        kind: 'message',
+        blocks: [{ type: 'text', text: 'Error: 工具 probe 執行失敗：壞了' }],
+        content: 'Error: 工具 probe 執行失敗：壞了',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('本體拋錯、監聽者替換 → 回替換過的那則：status 是 error，碼照拋的錯分類', async () => {
+    const bus = new EventBus();
+    bus.on('tools/post-execute', () => Promise.resolve({ kind: 'replace', content: '補了上下文' }));
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const aborted = Object.assign(new Error('停了'), { name: 'AbortError' });
+    const result = (await wrap(requestFor(), async () => {
+      throw aborted;
+    })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.content).toBe('補了上下文');
+    expect([result.tool_call_id, result.name, result.status]).toEqual(['call-1', 'probe', 'error']);
+    expect(toolErrorOf(result)).toEqual({ name: 'AbortError', code: TOOL_ABORTED });
+  });
+
+  it('逾時 → 監聽者看到逾時那句與 TOOL_TIMEOUT 的碼', async () => {
+    const bus = new EventBus();
+    const views: PipelineResult[] = [];
+    bus.on('tools/post-execute', (_exec, result, next) => {
+      views.push(result);
+      return next();
+    });
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    await expect(
+      wrap(requestFor(), async () => {
+        throw timeout;
+      }),
+    ).rejects.toBe(timeout);
+    expect(views[0]).toMatchObject({ isError: true, error: { code: TOOL_TIMEOUT } });
+    expect((views[0] as { content: string }).content).toMatch(
+      /^Error: 工具 probe 超時：等了 \d+ms。$/,
+    );
+  });
+
+  it.each([
+    ['核准的中斷（GraphInterrupt）', () => new GraphInterrupt()],
+    ['這一輪被中止（TurnCancelledError）', () => new TurnCancelledError()],
+  ])('本體拋 %s → 同一個錯原樣往外拋，監聽者沒被叫', async (_label, make) => {
+    const bus = new EventBus();
+    const listener = vi.fn();
+    bus.on('tools/post-execute', listener as never);
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const thrown = make();
+    await expect(
+      wrap(requestFor(), async () => {
+        throw thrown;
+      }),
+    ).rejects.toBe(thrown);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('經圍堵：接受 → 模型收到圍堵翻的那則；替換 → 收到替換過的那則，`tool/result` 記它的碼', async () => {
+    const bus = new EventBus();
+    let replace = false;
+    bus.on('tools/post-execute', (_exec, _result, next) =>
+      replace ? Promise.resolve({ kind: 'replace', content: '換掉了' }) : next(),
+    );
+    const post = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const contain = wrapperOf(createContainmentMiddleware());
+    const aborted = Object.assign(new Error('停了'), { name: 'AbortError' });
+    const run = () =>
+      contain(requestFor(), (request) =>
+        post(request, async () => {
+          throw aborted;
+        }),
+      ) as Promise<ToolMessage>;
+    const accepted = await run();
+    expect(accepted.content).toBe('Error: 工具 probe 執行失敗：停了');
+    replace = true;
+    const replaced = await run();
+    expect(replaced.content).toBe('換掉了');
+    expect(toolErrorOf(replaced)).toEqual({ name: 'AbortError', code: TOOL_ABORTED });
   });
 
   it('回了不認得的決定 → 拋 TypeError', async () => {
@@ -517,5 +814,47 @@ describe('tools/result（圍堵派發）', () => {
       }),
     ).rejects.toBe(interrupt);
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe('結果視圖：`content` 由 `blocks` 導出', () => {
+  const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } };
+  const cases: [string, ToolMessage['content']][] = [
+    ['字串內容', '一段字'],
+    [
+      '純文字陣列',
+      [
+        { type: 'text', text: '前' },
+        { type: 'text', text: '後' },
+      ],
+    ],
+    ['含圖片的陣列', [{ type: 'text', text: '看圖：' }, image, { type: 'text', text: '完' }]],
+  ];
+  it.each(cases)(
+    '%s：`content` 等於那則訊息的 `text`，也等於 `pipelineTextOf(blocks)`',
+    (_label, content) => {
+      const message = new ToolMessage({ content, tool_call_id: 'call-1' });
+      const view = toolResultView(message, 'call-1');
+      if (view.kind !== 'message') throw new Error('應該是 message');
+      expect(view.content).toBe(message.text);
+      expect(pipelineTextOf(view.blocks)).toBe(view.content);
+      expect(view.blocks).toEqual(
+        typeof content === 'string' ? [{ type: 'text', text: content }] : content,
+      );
+    },
+  );
+
+  it('`blocks` 是凍結的複本：讀兩次是同一份，原訊息的陣列沒被凍', () => {
+    const content = [{ type: 'text', text: '前' }, image];
+    const message = new ToolMessage({ content, tool_call_id: 'call-1' });
+    const view = toolResultView(message, 'call-1');
+    if (view.kind !== 'message') throw new Error('應該是 message');
+    const blocks = view.blocks;
+    expect(view.blocks).toBe(blocks);
+    expect(blocks).not.toBe(message.content);
+    expect(Object.isFrozen(blocks)).toBe(true);
+    expect(Object.isFrozen(blocks[1])).toBe(true);
+    expect(Object.isFrozen(message.content)).toBe(false);
+    expect(Object.isFrozen((message.content as unknown[])[1])).toBe(false);
   });
 });
