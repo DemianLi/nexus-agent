@@ -380,7 +380,7 @@ describe('先讀後改的開關從條目來', () => {
 });
 
 describe('讀失敗不算讀過', () => {
-  // 檔案在、讀卻失敗：基座回的是錯誤，策略看到的必須是那個錯誤，不能記成讀過、讓接著的覆蓋放行。
+  // 檔案在、讀卻失敗：基座回錯誤文字、fs-tool-errors 標成錯誤，策略看到的必須是那個錯誤，不能記成讀過、讓接著的覆蓋放行。
   const cases: [string, (root: string) => Promise<void>, Record<string, unknown>][] = [
     ['offset 超過檔尾', () => Promise.resolve(), { offset: 999 }],
     [

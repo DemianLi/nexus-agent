@@ -703,7 +703,7 @@ export function foldRegistry(
     backend === undefined || options.workspaceSearch !== true
       ? undefined
       : createSearchDescriptionsMiddleware();
-  // 外溢層（#719）：無狀態、一位走遍 root 與每個 subagent，圍堵記進日誌的就是它換過的那一則。見 {@link ./spill-policy.ts}。
+  // 外溢層（#719）：無狀態、一位走遍 root 與每個 subagent，在每一個 plugin middleware 內側：plugin 換過的內容它量不到；圍堵記進日誌的是它換過的那一則，外側的 plugin 再換過的除外。見 {@link ./spill-policy.ts}。
   const spill =
     options.spillPolicy === undefined ? undefined : createSpillPolicyListener(options.spillPolicy);
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
@@ -723,7 +723,7 @@ export function foldRegistry(
     backend === undefined || sharedWorkspacePrefix === undefined
       ? undefined
       : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
-  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
+  // 搜尋結果的筆數上限（#735）：監聽者（execute／post 兩半）與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
   // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
   const searchOverflow =
     options.searchOverflow !== undefined &&

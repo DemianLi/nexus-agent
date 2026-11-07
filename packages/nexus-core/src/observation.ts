@@ -26,7 +26,7 @@
  * expected version 下去，後端自己做 compare-and-swap。`deepagents@1.13.1` 的
  * `BackendProtocol` 表達不出來：`write(filePath, content)` 與
  * `edit(filePath, old, new, replaceAll)` 收不到任何 expected-version 參數。退到最接近的
- * 實作——在 `tools/execute` 的監聽者裡先 `readRaw()` 比對版本再放行。**殘留 TOCTOU**：比對與寫入
+ * 實作——在 `tools/execute` 的監聽者裡、寫入之前比對版本再放行（先問 {@link FILE_VERSION}，沒有才 `readRaw`）。**殘留 TOCTOU**：比對與寫入
  * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
  * 不是 kernel boundary）。
  *
@@ -48,8 +48,8 @@
  *
  * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
  *
- * **鍵的範圍（N0333）：延後，不是偏離。** {@link observationKey} 只看得到兩層路由，見該函式的說明。要全看見，{@link createObservationListener}
- * 得多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來。
+ * **鍵的範圍：** {@link observationKey} 只看得到兩層路由，見該函式的說明。TODO(#1910)：{@link createObservationListener}
+ * 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
  *
  * @module
  */
@@ -66,7 +66,7 @@ import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js
 import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import type { MiddleSection } from './prompt-sections.js';
 
-/** `tools/execute` 的 core 監聽者沿用的名字；stack 裡沒有叫這個名字的一格，`@nexus/core` 主入口仍轉出。 */
+/** 先讀後改的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
 
 /**
@@ -317,8 +317,7 @@ const MAX_ROUTE_DEPTH = 8;
  *   `routePrefixes`、不留 `getBackendAndKey` 與 `default`，所以沒辦法用基座自己的 `getBackendAndKey` 一路走到底，也看不到第三層以後的前綴。
  *   看不到的那幾層裡，不同路由的同名檔會被當成同一個檔：結果只會是**錯誤碼不準**（`FS_STALE_VERSION` 而不是 `FS_NOT_OBSERVED`），不會放行——
  *   `staleness` 拿這次呼叫的原路徑問後端，版本對不上就拒絕。
- *   **這一條是延後，不是偏離**：{@link createObservationListener} 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
- *   dsh 對應的是 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`）。
+ *   TODO(#1910)：{@link createObservationListener} 多收 `offWorkspacePrefixes()`、由 `fold.ts` 交進來就看得到全部前綴。
  *   另一個殘留：看不到的那幾層裡鍵相同的兩個不同檔，若版本 token 也撞號（同一毫秒 mtime、同長度、同 djb2），讀其中一個會讓另一個被放行；實務上可以忽略。
  * - 含 `..` 段的路徑不收（鍵是原字串）：後端會拒絕它，`normalize` 卻會把它折成別的檔的名字，讓一次失敗的讀誤記到那個檔身上。
  *
@@ -354,7 +353,7 @@ export function observationKey(backend: AnyBackendProtocol, raw: string): string
 }
 
 /**
- * 造一位「先讀後改」的監聽者：`tools/execute` 的 core 內層，讀完記下版本，改之前比對版本，不對就短路、不往內交。
+ * 造一位「先讀後改」的監聽者：`tools/execute` 的 core 內層，讀完記下版本；改之前看紀錄，沒讀過、讀到的是不存在、或版本對不上就短路成拒絕，不往內交。
  *
  * **一個 agent 一位，不共用。** 觀測紀錄在 closure 裡，共用會讓 root 讀過的檔變成
  * subagent 也可以直接改——那正好把這件事要擋的東西放掉。這是與 {@link createSummarizer}

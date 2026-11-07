@@ -31,8 +31,7 @@
  * 也該帶。記錄每一顆工具呼叫都開；換狀態、補前綴仍只對基座那七個，其餘只補碼（`withSandboxCode`）。
  *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
- * `tools/execute` 最內層的一位監聽者，結果離開之前換狀態。時刻是 dsh 的 `tools/execute`：拋在工具
- * 本體裡、註冊表接住的那一刻（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * `tools/execute` 最內層的一位監聽者，結果離開之前換狀態（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
  * 判準是結構訊號而不是字面：
  *
  * - {@link recordBackendOutcomes} 包住交給基座的 backend，記下**這一次呼叫**裡每個方法最後一次
@@ -65,7 +64,7 @@ import { toolNameOfCall } from './tool-call-step.js';
 import { TOOL_ERROR_PREFIX } from './tool-events.js';
 import type { CoreToolListener, PipelineExecuteResult, PipelineResult } from './tool-pipeline.js';
 
-/** `tools/execute` 的 core 監聽者沿用的名字；stack 裡沒有叫這個名字的一格，`@nexus/core` 主入口仍轉出。 */
+/** 檔案工具失敗標成錯誤的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 
 /** fence 擋下一次變更的碼。dsh `FsErrorCode` 的同名成員。 */

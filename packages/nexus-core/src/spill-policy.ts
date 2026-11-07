@@ -31,7 +31,7 @@ import { toolNameOfCall } from './tool-call-step.js';
 import type { CoreToolListener } from './tool-pipeline.js';
 import { estimateTextTokens } from './token-estimate.js';
 
-/** `tools/post-execute` 的 core 監聽者沿用的名字；stack 裡沒有叫這個名字的一格，`@nexus/core` 主入口仍轉出。 */
+/** 外溢的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const SPILL_POLICY_MIDDLEWARE_NAME = 'nexusSpillPolicy';
 
 /** 不外溢的工具：讀出來的東西再外溢，模型永遠讀不完。dsh 只放過 `read`。 */

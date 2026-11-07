@@ -58,7 +58,7 @@ function codeLinesMatching(pattern: RegExp): string[] {
 
 describe('Error: 前綴只有一個主人', () => {
   /**
-   * 手寫 `status: 'error'` 的只剩兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
+   * 手寫 `status: 'error'` 的只有兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
    * 與推導端補的那兩句共用），與 native loop 找不到工具時那一則
    * （`native-loop/invalid-tool.ts`）：逐字照 langchain `ToolNode` 的 `getInvalidToolError`，兩個 loop 才回同一句。
    * `tools/execute` 的 core 監聽者（fs-tool-errors、先讀後改、耐久檢查點）交回的是 `isError`，狀態由 `tool-pipeline.ts` 從那一格推，

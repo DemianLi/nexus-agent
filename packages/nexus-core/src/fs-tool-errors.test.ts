@@ -123,6 +123,21 @@ describe('檔案工具的失敗標成錯誤', () => {
     expect(result.content).toEqual(blocks);
   });
 
+  it('同名工具回文字塊陣列、開頭不是 `Error`：補上前綴，併成一個文字塊（非文字塊不留）', async () => {
+    // 基座的 `read_file` 失敗都以 `Error: ` 開頭，碰不到這一格；換掉同名工具、回陣列的才會。
+    const backend = recordBackendOutcomes(new FakeBackend());
+    const blocks = [
+      { type: 'text' as const, text: "File '/nope' not found" },
+      { type: 'image', mimeType: 'image/png', data: 'AA==' },
+    ];
+    const result = (await wrap(requestFor('read_file'), async () => {
+      await backend.read('/nope');
+      return asToolMessage(blocks, 'read_file');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(result.content).toEqual([{ type: 'text', text: "Error: File '/nope' not found" }]);
+  });
+
   it('基座自己寫成錯誤的字不補前綴：`ls` 的 `Error listing files: …` 不會變成 `Error: Error …`', async () => {
     const backend = recordBackendOutcomes(new FakeBackend());
     const result = (await wrap(requestFor('ls'), async () => {

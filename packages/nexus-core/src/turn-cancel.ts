@@ -288,7 +288,7 @@ export function isSyntheticStopReply(message: AIMessage): boolean {
 }
 
 /**
- * 還沒動手就被中止的那次工具呼叫的結果（dsh 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
+ * 還沒動手就被中止的那次工具呼叫的結果。
  *
  * 外層的 guard 用它。耐久檢查點排空之後再問一次中止時回的那則經 `tools/execute` 造出來，跟它逐位元組相同
  * （{@link ./session-checkpoint-policy.ts}）。

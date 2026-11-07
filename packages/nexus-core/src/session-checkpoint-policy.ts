@@ -111,13 +111,14 @@ export function createSessionCheckpointListener(
     // 日誌上卻沒有那次呼叫。
     if (found.kind !== 'ok') return next();
     await sessions.flush(found.log);
-    // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
+    // 排空要時間，那段時間裡使用者可能按了停止：排空之後再問一次，中止了就不叫工具本體。
     // 外層的 guard 只在動手前與動手後問，擋不到這一段。
     if (toolCallAborted(call)) return ABORTED_BEFORE_DISPATCH;
     return next();
   };
 }
 
+/** 經 `tools/execute` 造出來之後跟 `turn-cancel.ts` 的 `abortedBeforeDispatch` 逐位元組相同，`session-checkpoint-policy.test.ts` 釘著。 */
 const ABORTED_BEFORE_DISPATCH: PipelineExecuteResult = Object.freeze({
   kind: 'message',
   content: `${TOOL_ERROR_PREFIX}${TOOL_ABORTED_BEFORE_DISPATCH_REASON}`,

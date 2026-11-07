@@ -406,6 +406,7 @@ function bodyOf(value: {
  * - 給了新的 `blocks`（跟原視圖不是同一個參照），或沒給 `blocks`：同 {@link bodyOf}。
  * - `blocks` 跟原視圖是同一個參照（例如 `{ ...view, isError: true }`），形狀照本體那則：`content` 沒換就沿用原本的內容；
  *   換了，原本是字串就給新字串，原本是陣列就給只有一個文字塊的陣列——原本陣列裡的非文字塊不留。
+ *   換成不是字串的值時回 `undefined`，呼叫端當成認不得的決定拋 `TypeError`。
  */
 function executeBody(
   raw: ToolMessage,

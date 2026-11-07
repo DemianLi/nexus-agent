@@ -783,8 +783,8 @@ const withPromptSections = (chain: readonly string[], contained: boolean): strin
   });
 
 /**
- * 搜尋上限、先讀後改、檔案工具的失敗標成錯誤是 `tools/execute` 的 core 監聽者（#2416），不佔 stack 的格子：鏈上**恰好少這三格**，
- * 它們的行為由那一格 `nexusToolExecute` 帶。同上，只在這裡拿這三格。
+ * 先讀後改、檔案工具的失敗標成錯誤與搜尋上限的開槽是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的（#2416），
+ * 都不佔 stack 的格子：鏈上**恰好少這三格**，行為由 `nexusToolExecute` 與 `nexusToolPostExecute` 帶。同上，只在這裡拿這三格。
  */
 const withToolListeners = (chain: readonly string[]): string[] =>
   chain.filter(

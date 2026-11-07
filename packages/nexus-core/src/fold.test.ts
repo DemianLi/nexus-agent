@@ -536,7 +536,7 @@ describe('「先讀後改」策略打底', () => {
       on,
     );
     // 策略是 `tools/execute` 內層的監聽者，在閘門與每一個 plugin middleware 的內側：核准卡先出，
-    // plugin middleware 要跑工具也得經過 `tools/execute`，繞不過它。
+    // plugin middleware 叫 handler 往內交時一定經過 `tools/execute`。
     expect(middlewareNames(params)).toEqual([
       TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,

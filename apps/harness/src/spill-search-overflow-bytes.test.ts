@@ -3,7 +3,7 @@
  * （[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
  *
  * 兩份存檔釘 sha256：期望值是 `1a30daf1` 上用同一支測試錄到的（那裡搜尋上限與外溢還是 stack 上的 middleware，這支釘兩種組裝的位元組相同），兩個 loop 相同，存檔名裡的
- * 隨機段換成 `<id>` 再算。要重錄，在那個 commit 上跑這支、照失敗訊息裡的 received 抄回來。
+ * 隨機段換成 `<id>` 再算。要重錄，把這支複製到那個 commit 上跑、照失敗訊息裡的 received 抄回來。
  *
  * 模型看到的那則不釘雜湊：預覽切在哪取決於通知裡存檔名的 o200k 估算，存檔名有隨機段，同一份程式碼每跑一次切點都會動，所以逐位元組
  * 拼回來——頭是外溢存檔的開頭、尾是它的結尾、中間是 `[...]`、最後是省略位元組數算得對的那句通知。
@@ -142,7 +142,7 @@ const EXPECTED: Record<'plain' | 'shared', { spill: string; results: string }> =
   },
 };
 
-describe('外溢加搜尋上限的 grep：三份位元組跟搬之前相同', () => {
+describe('外溢加搜尋上限的 grep：三份位元組跟 `1a30daf1` 錄到的相同', () => {
   it.each([
     ['沒有共用區', 'plain', false],
     ['有共用區', 'shared', true],

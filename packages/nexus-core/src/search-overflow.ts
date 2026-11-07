@@ -60,7 +60,7 @@ import type { SpillRef, SpillStore } from './spill-policy.js';
 import { toolNameOfCall } from './tool-call-step.js';
 import type { CoreToolListener } from './tool-pipeline.js';
 
-/** 兩位 core 監聽者沿用的名字；stack 裡沒有叫這個名字的一格，`@nexus/core` 主入口仍轉出。 */
+/** 搜尋上限的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const SEARCH_OVERFLOW_MIDDLEWARE_NAME = 'nexusSearchOverflow';
 
 /** `grep` 行內最多留幾筆命中，同 dsh 的 `GREP_MAX_MATCHES`。 */
@@ -386,7 +386,7 @@ function plainText(content: string | readonly unknown[]): string | undefined {
   return parts.join('\n');
 }
 
-/** 一次呼叫的交接格：execute 那一半進來時先清空，超過上限、本體回了非錯誤的訊息時寫進去；post 那一半讀出來並清空。 */
+/** 一次呼叫的交接格：那三顆工具進 execute 那一半時先清空，超過上限、內層交回非錯誤的訊息時寫進去；post 那一半讀出來並清空。 */
 interface HandoffCell {
   entry: { readonly slot: SearchSlot; readonly overflow: Overflow } | undefined;
 }
@@ -399,7 +399,7 @@ export const SEARCH_OVERFLOW_SCOPE_MISSING =
  * 搜尋上限的兩半：`tools/execute` 內層開槽，`tools/post-execute` 外層第二位存檔、排版，加上包住兩者的範圍。
  */
 export interface SearchOverflowListeners {
-  /** 那三顆工具在槽裡往內交；超過上限、本體回了非錯誤的訊息時寫進這次呼叫的交接格。找不到交接格就拋 {@link SEARCH_OVERFLOW_SCOPE_MISSING}，不往內交、本體不跑。 */
+  /** 那三顆工具在槽裡往內交；超過上限、內層交回非錯誤的訊息時寫進這次呼叫的交接格。找不到交接格就拋 {@link SEARCH_OVERFLOW_SCOPE_MISSING}，不往內交、本體不跑。 */
   readonly execute: CoreToolListener<'tools/execute'>;
   /**
    * 先取出並清空這次呼叫的交接格，再往內交；取出的有東西、結果是非錯誤的訊息、行內是純文字時，存完整清單並在行內前段的結尾講明；其餘交回內層的決定。
