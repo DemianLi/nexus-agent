@@ -50,8 +50,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.3.0`（#2353）：{@link NexusToolResult} 成功那一格多選填的 `artifact`，{@link NexusTool} 多選填的 {@link NexusTool.rawParameters} 與 {@link NexusTool.timeoutMs}。
  * 向後相容的新增：不帶這幾格的消費者照常；要用的消費者宣告 `^2.3.0`（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-3/guide.md`）。
+ *
+ * `2.4.0`（#2416）：`onResult` 的 listener 看到的 {@link ToolResultExecution} 多 `signal`，{@link ToolResultOutcome} 多 `content` 與 `blocks`。
+ * 向後相容的新增：不讀這幾格的消費者照常；要讀的消費者宣告 `^2.4.0`（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-4/guide.md`）。
  */
-export const TOOLS_CONTRACT_VERSION = '2.3.0';
+export const TOOLS_CONTRACT_VERSION = '2.4.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -251,12 +254,20 @@ export interface ToolResultExecution {
    * 為鍵的一部分**：兩條 thread 可能撞上同一個 `callId`（#1418）。
    */
   readonly thread: string | undefined;
+  /** 這次呼叫的中止訊號；沒有是 `undefined`。唯讀，`2.4.0` 起才有。 */
+  readonly signal?: AbortSignal | undefined;
 }
 
-/** 一次呼叫落定成什麼，`onResult` 的 listener 看到的樣子（#1469）。對應 `@nexus/core` 的 `PipelineResult`；listener 只需要 `isError`。 */
+/** 一次呼叫落定成什麼，`onResult` 的 listener 看到的樣子（#1469）。對應 `@nexus/core` 的 `PipelineResult`。 */
 export interface ToolResultOutcome {
   /** 最終回給模型的結果是不是錯誤。 */
   readonly isError: boolean;
+  /**
+   * 最終那則訊息的內容區塊，凍結；字串內容視為一格 `text`。結果是 `Command` 時沒有。`2.4.0` 起才有。
+   */
+  readonly blocks?: readonly Readonly<{ type: string } & Record<string, unknown>>[];
+  /** `blocks` 的文字（只串 `text` 區塊）。結果是 `Command` 時沒有。 */
+  readonly content?: string;
 }
 
 /**
