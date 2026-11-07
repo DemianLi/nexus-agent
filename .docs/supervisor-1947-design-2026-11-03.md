@@ -187,7 +187,7 @@ nexus-agent serve（Node 啟動器，檢查完平台與設定就 process.execve�
 | 對話 → 監督 | `ready`、`bound(threadId)`、`turn(begin\|end)`、`idle(idleMs)`、`busy`、`heartbeat` | 生命週期；`idle` 用今天的 `isIdle` 判斷，帶送出時已經閒置的毫秒數，不帶絕對時間（兩個行程的時鐘不同源） |
 | 監督 → 對話 | `drain`（準備收）、stdin EOF（收） | 逐出與停機 |
 | 對話 → 監督 | `drained`、`busy` | `drain` 的回答：確認仍閒置、不再接新的請求才回 `drained`，否則回 `busy`（§7-2） |
-| 前台 → 監督 | `ensure(threadId, run\|read-only)`、`release(threadId)` | 要一條 thread 的對話行程（打開方式見 §7-3）、讀完歷史後可以先收 |
+| 前台 → 監督 | `ensure(threadId, run\|read-only)`、`release(threadId)` | 要一條 thread 的對話行程（打開方式見 §7-3）、讀完歷史後可以先收（只收只讀開啟的，見 §7-3） |
 | 監督 → 前台 | `up(threadId, socket)`、`down(threadId, cause)` | 前台轉送與死因回報（七類，§6-2） |
 | 監督 → 前台 | `capacity(threadId, current, limit)` | `ensure` 滿了、沒有可逐出的：前台回 `thread_at_capacity`（§7-1）；`current` 含預熱池與起動中的行程 |
 | 監督 → 前台 | `stats(live, warm, rssKib, deaths)` | 給 `/metrics`（§4-3、C6） |
@@ -256,6 +256,7 @@ dsh 只回 `{exitCode, signal}`，分類交給呼叫方。nexus 的呼叫方是�
 
 - 這種行程標成「只讀開啟」，閒置時間用短的（出廠 5 分鐘，可設定），而且滿了的時候最先被逐出。
 - 在這個行程上一旦有 `run.start` 等會跑 agent 的指令，就轉成一般行程：監督行程收到它的 `turn(begin)` 就照一般行程算。
+- 前台讀完歷史送的 `release` 只收只讀開啟的。已經轉成一般行程的不理，照一般的閒置時限收；轉成一般之前記著的 `release` 也作廢。轉沒轉看的是 `ensure(run)` 與 `turn(begin)`；目標輪與背景子代理結算後在主對話開的輪都算，子代理自己的輪不算。`turn(begin)` 只有監督行程看得到（前台看不到，重起之後也會忘），所以由監督行程判斷；前台只在等 `ensure` 回答時記著送出的開啟方式，回答之後就不記。
 
 ### 7-4 預熱池
 

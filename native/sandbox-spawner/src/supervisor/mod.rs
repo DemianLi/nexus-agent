@@ -11,13 +11,14 @@
 //! 前台的控制通道是它的 stdin／stdout：
 //!
 //! - `ensure(thread, open)`：停機中一律回 `down(thread, shutdown)`。這條 thread 已經有對話行程就再回一次 `up`；正在起就等它；
-//!   正在收就不理（收完會回 `down`，前台要再要一次）；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
+//!   逐出、正在收的就排隊（已經在排的只升 `open`），跟其他排著的一起重算名額：有名額就等它收完，先回 `down(evicted)` 再照排隊順序起；
+//!   沒名額當場回 `capacity`，收完照樣送 `down(evicted)`。死因不是 `evicted`、正在收、又沒在等 `drain` 回答的不理，收完回的 `down` 就是回答；送了 `drain` 還沒回答就等：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，
 //!   前台先收到 `down(evicted)`，這條跟其他排著的一起重算名額，收完照排隊順序起，沒名額回 `capacity`。等回答期間它跟自己的行程互抵，
 //!   不回 `capacity`，別的行程讓出的名額也不拿去替它起第二個。
 //!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
 //!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
 //!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
-//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置（含正在等 `drain` 回答的）就記著，一回報閒置就送，之間再被 `ensure` 就作廢。
+//! - `release(thread)`：只收只讀開啟的，已經轉成一般的不理。已經閒置就送 `drain`；還沒閒置（含正在等 `drain` 回答的）就記著，一回報閒置就送，之間再被 `ensure` 或轉成一般的就作廢。
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
@@ -159,7 +160,7 @@ struct Conversation {
     used_at: Instant,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
-    /// 前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 就清掉。
+    /// 只讀開啟時被前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 或收到 `turn(begin)` 就清掉。
     released: bool,
     /// 最近一次輪詢到的 RSS（kB），給 `stats` 加總。
     rss_now_kb: u64,
@@ -681,13 +682,15 @@ impl Supervisor {
             } else if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
                 let socket = conversation.socket.as_os_str().as_bytes().to_vec();
                 self.tell_front(&FrontEvent::Up { thread_id: thread, socket });
+            } else if conversation.proc.stop.is_some() && conversation.cause == Some(DeathCause::Evicted) {
+                // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
+                // 別的死因不理：收完回的 `down` 就是回答。
+                self.queue(thread, open);
+                self.make_room();
             }
             return;
         }
-        if let Some(waiting) = self.pending.iter_mut().find(|(t, _)| *t == thread) {
-            if open == OpenMode::Run {
-                waiting.1 = OpenMode::Run;
-            }
+        if self.upgrade_pending(&thread, open) {
             return;
         }
         if self.take_warm(&thread, open) {
@@ -702,10 +705,20 @@ impl Supervisor {
         self.make_room();
     }
 
+    /// 排進等名額的隊伍；已經在排的不重排，見 [`Self::upgrade_pending`]。
     fn queue(&mut self, thread: Vec<u8>, open: OpenMode) {
-        if !self.pending.iter().any(|(t, _)| *t == thread) {
+        if !self.upgrade_pending(&thread, open) {
             self.pending.push((thread, open));
         }
+    }
+
+    /// 這條 thread 在排的話，要的是 `run` 就把排著的升成 `run`；回它在不在排。
+    fn upgrade_pending(&mut self, thread: &[u8], open: OpenMode) -> bool {
+        let Some(waiting) = self.pending.iter_mut().find(|(t, _)| t == thread) else { return false };
+        if open == OpenMode::Run {
+            waiting.1 = OpenMode::Run;
+        }
+        true
     }
 
     /// 把預熱池裡的一個指派給 `thread`，先挑已經 `ready` 的。還沒 `ready` 的等它 `ready` 再送 `bind`。
@@ -812,6 +825,9 @@ impl Supervisor {
 
     fn release(&mut self, thread: &[u8]) {
         let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread.as_deref() == Some(thread)) else { return };
+        if !conversation.read_only {
+            return;
+        }
         if conversation.evictable() {
             Self::drain(conversation);
         } else if conversation.proc.stop.is_none() {
@@ -974,6 +990,7 @@ impl Supervisor {
                 ConversationReport::Turn { phase: TurnPhase::Begin } => {
                     conversation.turns = conversation.turns.saturating_add(1);
                     conversation.read_only = false;
+                    conversation.released = false;
                 }
                 ConversationReport::Idle { idle_ms } => {
                     let now = Instant::now();
