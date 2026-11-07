@@ -418,15 +418,20 @@ function rebuildMessage(
   return code === undefined ? replaced : markToolError(replaced, code);
 }
 
-/** 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時，或叫了 `next()` 而本體回的不是 `ToolMessage` 時。 */
-function materialize(view: PipelineExecuteResult, exec: PipelineExecution): ToolMessage {
+/**
+ * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時，或叫了 `next()` 而本體回的不是 `ToolMessage` 時。
+ * 交回的是 `command` 結果就拋 `TypeError`，訊息照 `calledNext` 分兩句：模型看得到這段文字，要講出實際的情形。
+ */
+function materialize(
+  view: PipelineExecuteResult,
+  exec: PipelineExecution,
+  calledNext: boolean,
+): ToolMessage {
   const body = view.kind === 'message' ? bodyOf(view) : undefined;
   if (body === undefined) {
     throw view.kind === 'message'
       ? badDecision('tools/execute', view)
-      : new TypeError(
-          'tools/execute 的監聽者回了 command 結果，但沒有呼叫 next()：Command 造不出來（偏離 2）',
-        );
+      : new TypeError(calledNext ? COMMAND_NOT_FROM_NEXT : COMMAND_WITHOUT_NEXT);
   }
   const message = new ToolMessage({
     content: body as ToolMessage['content'],
@@ -436,6 +441,11 @@ function materialize(view: PipelineExecuteResult, exec: PipelineExecution): Tool
   });
   return view.error === undefined ? message : markToolError(message, view.error);
 }
+
+const COMMAND_WITHOUT_NEXT =
+  'tools/execute 的監聽者回了 command 結果，但沒有呼叫 next()：Command 造不出來（偏離 2）';
+const COMMAND_NOT_FROM_NEXT =
+  'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）';
 
 const ALLOW: PipelinePreDecision = Object.freeze({ kind: 'allow' });
 const ACCEPT: PipelinePostDecision = Object.freeze({ kind: 'accept' });
@@ -501,7 +511,7 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
       if (body === undefined) throw badDecision('tools/execute', view);
       return rebuildMessage(raw, body, view);
     }
-    return materialize(view, exec);
+    return materialize(view, exec, viewOfRaw !== undefined);
   });
 }
 
