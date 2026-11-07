@@ -17,7 +17,7 @@
 //!   都沒有就從預熱池拿一個（先拿已經 `ready` 的）；池裡沒有、名額也還有就起一個；名額滿了就排隊，見下面的容量。已經在排的再要，只把 `open` 升成 `run`。
 //!   對話行程送 `ready` 之後，已經指派了 thread 的送它 `bind(thread)`，沒指派的留在預熱池；回同一個 id 的 `bound` 之後回前台 `up(thread, socket)`。
 //!   `open` 是 `read-only` 的標成只讀開啟；同一條 thread 之後收到 `ensure(run)` 或 `turn(begin)` 就轉成一般的。
-//! - `release(thread)`：已經閒置就送 `drain`；還沒閒置（含正在等 `drain` 回答的）就記著，一回報閒置就送，之間再被 `ensure` 就作廢。
+//! - `release(thread)`：只收只讀開啟的，已經轉成一般的不理。已經閒置就送 `drain`；還沒閒置（含正在等 `drain` 回答的）就記著，一回報閒置就送，之間再被 `ensure` 或轉成一般的就作廢。
 //! - 前台結束（不是停機）：寫稽核，隔 `--front-restart-ms` 重起；重起之後對每條已經 `up` 的對話行程再送一次 `up`。
 //!   前台不在的期間要給它的訊息丟掉。
 //!
@@ -159,7 +159,7 @@ struct Conversation {
     used_at: Instant,
     /// 送出 `drain`、還沒收到回答的時間點。
     drain: Option<Instant>,
-    /// 前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 就清掉。
+    /// 只讀開啟時被前台 `release` 過、還沒閒置（含在等 `drain` 回答時，回了 `busy` 或逾時）：一回報閒置就送 `drain`；再被 `ensure` 或收到 `turn(begin)` 就清掉。
     released: bool,
     /// 最近一次輪詢到的 RSS（kB），給 `stats` 加總。
     rss_now_kb: u64,
@@ -812,6 +812,9 @@ impl Supervisor {
 
     fn release(&mut self, thread: &[u8]) {
         let Some(conversation) = self.conversations.iter_mut().find(|c| c.thread.as_deref() == Some(thread)) else { return };
+        if !conversation.read_only {
+            return;
+        }
         if conversation.evictable() {
             Self::drain(conversation);
         } else if conversation.proc.stop.is_none() {
@@ -974,6 +977,7 @@ impl Supervisor {
                 ConversationReport::Turn { phase: TurnPhase::Begin } => {
                     conversation.turns = conversation.turns.saturating_add(1);
                     conversation.read_only = false;
+                    conversation.released = false;
                 }
                 ConversationReport::Idle { idle_ms } => {
                     let now = Instant::now();
