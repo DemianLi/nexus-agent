@@ -640,22 +640,31 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     };
-    // 串流中的那條日誌一直在寫，前台冷讀它時穩定觀察可能兩次都對不上，回 `persistence-failed`（同 single 與 dsh 的規則，
-    // 只是前台要讀那個檔，窗口比較長）。這種當作還沒搜到；其餘原因照丟，不穩的次數印出來、設上限。
+    // 串流中的那條日誌一直在寫，前台冷讀它時穩定觀察可能兩次都對不上：ThreadSearch 拋 `persistence-failed`，線上只回
+    // `unknown_error`、原因只進 serve 日誌，所以從日誌的 `[搜尋]` 行分辨。single 也會，只是前台要冷讀那個檔，窗口比較長。
+    // 這種當作還沒搜到；其餘原因照丟。日誌經 pipe 進來，可能比回應晚到：每次失敗都等到多出一行才判。
+    // 上限 1/20 遠高於實測（2 顆 CPU 約 5,400 次裡 2 次），只擋不穩退化成常態。
     const tally = { searches: 0, unstable: 0 };
+    const searchLines = (): string[] =>
+      running
+        .log()
+        .split('\n')
+        .filter((line) => line.includes('[搜尋]'));
     const hit = (query: string, threadId: string) => async () => {
       tally.searches += 1;
+      const seen = searchLines().length;
       const outcome = await client.searchThreads(query);
       if (outcome.kind !== 'ok') {
-        const reasons = running
-          .log()
-          .split('\n')
-          .filter((line) => line.includes('[搜尋]'));
-        if (reasons.length > 0 && reasons.every((line) => line.includes('一直在變'))) {
-          tally.unstable = reasons.length;
+        const began = performance.now();
+        while (searchLines().length === seen && performance.now() - began < 5_000) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        const fresh = searchLines().slice(seen);
+        if (fresh.length > 0 && fresh.every((line) => line.includes('一直在變'))) {
+          tally.unstable += 1;
           return undefined;
         }
-        throw new Error(`${outcome.message}\n${reasons.join('\n')}`);
+        throw new Error(`${outcome.message}\n${searchLines().join('\n')}`);
       }
       return outcome.result.items.find((item) => item.threadId === threadId);
     };
