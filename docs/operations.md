@@ -1637,9 +1637,11 @@ nexus-agent serve --process-model per-thread
 - **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
 - 前台與對話行程之間走 home 底下 `run/` 的 Unix socket，目錄權限 0700；監督行程的稽核紀錄寫在 home 的 `supervisor-audit.jsonl`。
 - `thread-capacity` 的 `idleEvictAfterMs` 交給監督行程：對話行程閒置這麼久就收掉（`0` 不收）。
-  只讀打開（看歷史、附件）的行程閒置 5 分鐘就收，不吃這一格；落盤那一列關掉時一律不照時間收（收掉的行程不留日誌）。`maxThreads` 在 `per-thread` 下不管用：
+  只讀打開（開了 thread 沒講話、看歷史、附件）的行程閒置 5 分鐘就收，不吃這一格，名額滿時也先收它；開著的下行不算閒置，5 分鐘從下行關掉算起。落盤那一列關掉時一律不照時間收（收掉的行程不留日誌）。`maxThreads` 在 `per-thread` 下不管用：
   同時活著的對話行程數由監督行程照記憶體上限算（含一個預熱的空行程）。
 - 前台掛了監督行程會重起它，對話行程不斷；網頁重連即可。
+- **分叉（從某一輪開一條新 thread）在 `per-thread` 下不能用**，回 `not_supported`；要分叉就用 `single`。
+- 帶 `--inspect` 這類旗標起 serve，inspector 開在前台；對話行程不帶。
 - **嵌入對話框（`<nexus-chat>`）照常可用**。登入、嵌入 cookie 與身分對應表只在前台；前台驗過人之後把身分放進內部標頭轉給對話行程，
   轉送前一律刪掉客戶端帶來的同名標頭。對話行程只在 `run/` 的 socket 上讀這個標頭，TCP 入口從不讀它。擁有者檢查前台先擋一次、對話行程再核一次；
   轉送中的嵌入版下行由前台每秒對一次身分對應表，從表上拿掉的人 2 秒內斷線，稽核同 `single`。

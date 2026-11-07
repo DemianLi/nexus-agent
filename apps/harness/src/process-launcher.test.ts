@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  childExecArgv,
   isPrintOnly,
   pdeathsigHazards,
   processModelSetting,
@@ -136,6 +137,40 @@ describe('supervisorLaunch', () => {
         '--live',
       ],
     });
+  });
+});
+
+describe('childExecArgv', () => {
+  it('supervisorLaunch：前台照原樣帶 inspector 旗標，對話行程不帶', () => {
+    const { args } = supervisorLaunch({
+      supervisor: '/s',
+      home: '/h',
+      execPath: '/node',
+      execArgv: ['--inspect=9229', '--import', 'tsx'],
+      frontEntry: '/front.js',
+      conversationEntry: '/conversation.js',
+      serveArgv: [],
+    });
+    const values = (flag: string) => args.filter((_, index) => args[index - 1] === flag);
+    expect(values('--front-arg')).toEqual(['--inspect=9229', '--import', 'tsx', '/front.js']);
+    expect(values('--conversation-arg')).toEqual(['--import', 'tsx', '/conversation.js']);
+  });
+
+  it('拿掉 inspector 的旗標（連分開寫的值），其餘照原樣', () => {
+    expect(
+      childExecArgv([
+        '--import',
+        'tsx',
+        '--inspect',
+        '--inspect-brk=0.0.0.0:9230',
+        '--inspect-wait',
+        '--inspect-port',
+        '9231',
+        '--debug-port=9232',
+        '--inspect-publish-uid=http',
+        '--max-old-space-size=4096',
+      ]),
+    ).toEqual(['--import', 'tsx', '--max-old-space-size=4096']);
   });
 });
 
