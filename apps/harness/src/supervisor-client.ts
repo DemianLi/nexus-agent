@@ -143,7 +143,7 @@ export class SupervisorClient {
     });
   }
 
-  /** 前台用完了這條 thread（只讀開啟的讀完歷史），監督行程可以先收。 */
+  /** 前台用完了這條 thread。監督行程只收只讀開啟的；轉成一般的不理，照 `--idle-ms` 收（`native/sandbox-spawner/README.md` 的逐出那一條）。 */
   release(threadId: string): void {
     if (!this.#gone) this.#send({ type: 'release', threadId });
   }

@@ -37,7 +37,7 @@ export type ConversationReport =
 /** `ensure` 這次打開是為了什麼。`read-only`：只讀歷史（設計 §7-3），閒置時間短、名額滿時最先被逐出。 */
 export type OpenMode = 'run' | 'read-only';
 
-/** 前台 → 監督行程。`ensure` 的回答是 `up`、`down` 或 `capacity`；`release`：前台用完了，這條 thread 的行程可以先收。 */
+/** 前台 → 監督行程。`ensure` 的回答是 `up`、`down` 或 `capacity`；`release`：前台用完了這條 thread，只讀開啟的可以先收；已經轉成一般的（`ensure(run)` 或 `turn(begin)` 過）監督行程不理，照 `--idle-ms` 收。 */
 export type FrontRequest =
   | { readonly type: 'ensure'; readonly threadId: string; readonly open: OpenMode }
   | { readonly type: 'release'; readonly threadId: string };
