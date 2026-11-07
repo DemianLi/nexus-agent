@@ -16,6 +16,7 @@ import { createContainmentMiddleware } from './containment.js';
 import { EventBus } from './events.js';
 import { SessionLog } from './session-log.js';
 import { FS_SANDBOX_DENIED } from './fs-tool-errors.js';
+import { TOOL_ABORTED, TOOL_TIMEOUT } from './tool-error-codes.js';
 import { markToolError, toolErrorOf, UNKNOWN_TOOL } from './tool-events.js';
 import {
   createToolExecuteMiddleware,
@@ -25,6 +26,7 @@ import {
   toolResultView,
 } from './tool-pipeline.js';
 import type { PipelineExecution, PipelineResult } from './tool-pipeline.js';
+import { TurnCancelledError } from './turn-cancel.js';
 
 type Handler = (request: unknown) => Promise<unknown>;
 type Wrapper = (request: unknown, handler: Handler) => Promise<unknown>;
@@ -475,10 +477,23 @@ describe('tools/post-execute 的生產者', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it('本體拋錯 → 原樣往外拋，監聽者沒被叫（偏離 3）', async () => {
+  it('本體拋錯、沒有監聽者 → 同一個錯原樣往外拋', async () => {
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(new EventBus()));
+    const boom = new Error('壞了');
+    await expect(
+      wrap(requestFor(), async () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+  });
+
+  it('本體拋錯、監聽者接受 → 看到圍堵會翻的那則錯誤訊息；再拋的是同一個錯物件（偏離 3）', async () => {
     const bus = new EventBus();
-    const listener = vi.fn();
-    bus.on('tools/post-execute', listener as never);
+    const views: PipelineResult[] = [];
+    bus.on('tools/post-execute', (_exec, result, next) => {
+      views.push(result);
+      return next();
+    });
     const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
     const boom = new Error('壞了');
     await expect(
@@ -486,7 +501,90 @@ describe('tools/post-execute 的生產者', () => {
         throw boom;
       }),
     ).rejects.toBe(boom);
+    expect(views).toEqual([
+      {
+        kind: 'message',
+        blocks: [{ type: 'text', text: 'Error: 工具 probe 執行失敗：壞了' }],
+        content: 'Error: 工具 probe 執行失敗：壞了',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('本體拋錯、監聽者替換 → 回替換過的那則：status 是 error，碼照拋的錯分類', async () => {
+    const bus = new EventBus();
+    bus.on('tools/post-execute', () => Promise.resolve({ kind: 'replace', content: '補了上下文' }));
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const aborted = Object.assign(new Error('停了'), { name: 'AbortError' });
+    const result = (await wrap(requestFor(), async () => {
+      throw aborted;
+    })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.content).toBe('補了上下文');
+    expect([result.tool_call_id, result.name, result.status]).toEqual(['call-1', 'probe', 'error']);
+    expect(toolErrorOf(result)).toEqual({ name: 'AbortError', code: TOOL_ABORTED });
+  });
+
+  it('逾時 → 監聽者看到逾時那句與 TOOL_TIMEOUT 的碼', async () => {
+    const bus = new EventBus();
+    const views: PipelineResult[] = [];
+    bus.on('tools/post-execute', (_exec, result, next) => {
+      views.push(result);
+      return next();
+    });
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    await expect(
+      wrap(requestFor(), async () => {
+        throw timeout;
+      }),
+    ).rejects.toBe(timeout);
+    expect(views[0]).toMatchObject({ isError: true, error: { code: TOOL_TIMEOUT } });
+    expect((views[0] as { content: string }).content).toMatch(
+      /^Error: 工具 probe 超時：等了 \d+ms。$/,
+    );
+  });
+
+  it.each([
+    ['核准的中斷（GraphInterrupt）', () => new GraphInterrupt()],
+    ['這一輪被中止（TurnCancelledError）', () => new TurnCancelledError()],
+  ])('本體拋 %s → 同一個錯原樣往外拋，監聽者沒被叫', async (_label, make) => {
+    const bus = new EventBus();
+    const listener = vi.fn();
+    bus.on('tools/post-execute', listener as never);
+    const wrap = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const thrown = make();
+    await expect(
+      wrap(requestFor(), async () => {
+        throw thrown;
+      }),
+    ).rejects.toBe(thrown);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('經圍堵：接受 → 模型收到圍堵翻的那則；替換 → 收到替換過的那則，`tool/result` 記它的碼', async () => {
+    const bus = new EventBus();
+    let replace = false;
+    bus.on('tools/post-execute', (_exec, _result, next) =>
+      replace ? Promise.resolve({ kind: 'replace', content: '換掉了' }) : next(),
+    );
+    const post = wrapperOf(createToolPostExecuteMiddleware(bus));
+    const contain = wrapperOf(createContainmentMiddleware());
+    const aborted = Object.assign(new Error('停了'), { name: 'AbortError' });
+    const run = () =>
+      contain(requestFor(), (request) =>
+        post(request, async () => {
+          throw aborted;
+        }),
+      ) as Promise<ToolMessage>;
+    const accepted = await run();
+    expect(accepted.content).toBe('Error: 工具 probe 執行失敗：停了');
+    replace = true;
+    const replaced = await run();
+    expect(replaced.content).toBe('換掉了');
+    expect(toolErrorOf(replaced)).toEqual({ name: 'AbortError', code: TOOL_ABORTED });
   });
 
   it('回了不認得的決定 → 拋 TypeError', async () => {

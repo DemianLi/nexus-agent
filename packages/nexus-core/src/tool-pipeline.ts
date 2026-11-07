@@ -41,8 +41,10 @@
  *    `tools/execute` 只能環繞（計時、計量、短路），不能換訊號。逾時今天由圍堵與工具宣告處理，不受影響。
  * 2. **`Command` 結果表達不出 `replace`。** 帶狀態更新的工具回 `Command`，沒有可替換的 `content`。退到：`tools/post-execute`
  *    只對 `ToolMessage` 結果派發；`Command` 只走 `tools/result`（`kind: 'command'`，不能改）。
- * 3. **拋出來的錯不經過 `tools/post-execute`。** dsh 的工具拋錯一樣會走 post-execute；我們這側「拋錯翻成訊息」是圍堵（最外層）的
- *    事，翻之前的錯到不了內側的 post-execute。退到：拋錯只走 `tools/result`。要補（例如失敗時補上下文）得先把翻譯搬進來，等到有消費者再說。
+ * 3. **拋出來的錯到 `tools/post-execute` 時是圍堵會翻的那則訊息，接受就原樣再拋。** 「拋錯翻成訊息」仍是圍堵（最外層）的事；
+ *    post 先用同一組翻譯（`containment.ts` 的 `formatToolFailure`／`formatToolTimeout`／`classifyThrownToolError`）造一則給監聽者看，
+ *    接受就把同一個錯物件往外拋、由圍堵照舊翻與記，替換就回替換過的那則。逾時那句的毫秒數各自量，接受之後模型收到的可能差幾毫秒。
+ *    中斷與這一輪被中止的錯不派發。
  * 4. **resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次。** 核准的 `interrupt()` 穿過之後，同一個呼叫以同一個 `callId`
  *    重進（見 `containment.ts`）。dsh 沒有這回事。**`tools/pre-execute` 的監聽者必須冪等。**
  * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`）。要重試得在 `next()` 外面自己重造呼叫，不能重叫
@@ -57,15 +59,29 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
+import { isGraphBubbleUp } from '@langchain/langgraph';
 import type { PreToolDecision } from './approval.js';
 import type { AgentMiddleware } from './base-types.js';
+import {
+  classifyThrownToolError,
+  declaredToolTimeoutMs,
+  formatToolFailure,
+  formatToolTimeout,
+  isToolTimeout,
+} from './containment.js';
 import type { EventDispatcher, EventListenerInfo } from './events.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
-import { createToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
+import {
+  createToolCallStepMiddleware,
+  toolNameOfCall,
+  wrappedRequestOf,
+} from './tool-call-step.js';
+import type { ToolCallSite } from './tool-call-step.js';
 import { markToolError, readToolOutcome, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
+import { isTurnCancelled } from './turn-cancel.js';
 
 /**
  * 一次工具呼叫，監聽者看到的樣子。唯讀。
@@ -191,8 +207,8 @@ declare module './events.js' {
     ): Promise<PipelineExecuteResult>;
     /**
      * 接受或替換一則工具結果。`next()` 即接受；回 `{ kind: 'replace', content }` 或 `{ kind: 'replace', blocks }` 換掉模型收到的內容
-     * （`status`、`artifact`、`additional_kwargs`、錯誤碼沿用原本的）。**只對 `ToolMessage` 結果派發**：`Command` 不經過這裡（偏離 2），
-     * 工具拋的錯也不經過這裡（偏離 3）。
+     * （`status`、`artifact`、`additional_kwargs`、錯誤碼沿用原本的）。**只對 `ToolMessage` 結果派發**：`Command` 不經過這裡（偏離 2）。
+     * 工具拋的錯也到這裡，`result` 是圍堵會翻出來的那則錯誤訊息；`next()`（接受）就原樣再拋那個錯（偏離 3）。
      * @param exec - 剛跑完的這次呼叫。
      * @param result - 工具落定的結果，唯讀。
      * @param next - 往內一位；最內層回 `accept`。
@@ -494,30 +510,83 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
 /**
  * `tools/post-execute` 的生產者。沒有監聽者、結果是 `Command`、或決定是 `accept`，都回內層原本的那個物件。
  *
- * **工具拋的錯不經過這裡**（偏離 3）：它們從 `next()` 往外拋，由外面的圍堵翻成訊息。
+ * **工具拋的錯也派發**：監聽者看到的是圍堵會翻出來的那則錯誤訊息（文字與碼同 `containment.ts`）。`accept` 時把**同一個錯物件**
+ * 原樣再拋，交給外面的圍堵照舊翻；`replace` 時回替換過的那則（`status: 'error'`，碼沿用）。中斷與 `Command` 這類控制流
+ * （`isGraphBubbleUp`）和這一輪被中止的錯（`isTurnCancelled`，交給外面的 `turn-cancel` 換成 `ABORTED`）不派發，原樣往外拋。
  *
  * @param events - 宿主持有的派發面。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
 export function createToolPostExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
   return createToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
-    const result = await next();
-    if (events.count('tools/post-execute') === 0) return result;
-    if (!ToolMessage.isInstance(result)) return result;
-    const exec = toolExecutionOf(wrappedRequestOf(call));
-    const view = toolResultView(result, exec.callId);
-    const decision = await events.waterfall('tools/post-execute', exec, view, () =>
-      Promise.resolve(ACCEPT),
-    );
-    if (decision.kind === 'accept') return result;
-    if (decision.kind === 'replace') {
-      const hasBlocks = (decision.blocks as unknown) !== undefined;
-      const hasContent = (decision.content as unknown) !== undefined;
-      const body = hasBlocks === hasContent ? undefined : bodyOf(decision);
-      if (body !== undefined) return rebuildMessage(result, body);
+    if (events.count('tools/post-execute') === 0) return next();
+    const startedAt = Date.now();
+    let result: unknown;
+    try {
+      result = await next();
+    } catch (error) {
+      if (isGraphBubbleUp(error) || isTurnCancelled(error)) throw error;
+      return postExecuteThrown(events, call, error, Date.now() - startedAt);
     }
-    throw badDecision('tools/post-execute', decision);
+    if (!ToolMessage.isInstance(result)) return result;
+    return postExecuteMessage(events, toolExecutionOf(wrappedRequestOf(call)), result);
   });
+}
+
+/** 對一則 `ToolMessage` 結果派發 `tools/post-execute`；`accept` 回原物件。 */
+async function postExecuteMessage(
+  events: EventDispatcher,
+  exec: PipelineExecution,
+  result: ToolMessage,
+): Promise<ToolMessage> {
+  const view = toolResultView(result, exec.callId);
+  const decision = await events.waterfall('tools/post-execute', exec, view, () =>
+    Promise.resolve(ACCEPT),
+  );
+  const replaced = replacedBy(decision, result);
+  if (replaced === undefined) throw badDecision('tools/post-execute', decision);
+  return replaced;
+}
+
+/**
+ * 本體拋了錯：把圍堵會翻出來的那則訊息交給監聽者。`accept` 原樣再拋那個錯。
+ *
+ * 逾時那句的毫秒數從這一層量起，圍堵量的是它自己那一層，accept 之後模型收到的那則可能多幾毫秒。
+ */
+async function postExecuteThrown(
+  events: EventDispatcher,
+  call: ToolCallSite,
+  error: unknown,
+  elapsedMs: number,
+): Promise<ToolMessage> {
+  const request = wrappedRequestOf(call);
+  const exec = toolExecutionOf(request);
+  const toolName = toolNameOfCall(call);
+  const kind = classifyThrownToolError(error);
+  const message = toolRefusal(
+    isToolTimeout(error)
+      ? formatToolTimeout(toolName, elapsedMs, declaredToolTimeoutMs(request))
+      : formatToolFailure(toolName, error),
+    { callId: exec.callId, name: toolName, ...(kind !== undefined && { error: kind }) },
+  );
+  const view = toolResultView(message, exec.callId);
+  const decision = await events.waterfall('tools/post-execute', exec, view, () =>
+    Promise.resolve(ACCEPT),
+  );
+  if (decision.kind === 'accept') throw error;
+  const replaced = replacedBy(decision, message);
+  if (replaced === undefined) throw badDecision('tools/post-execute', decision);
+  return replaced;
+}
+
+/** `accept` 回 `result` 本身，合規的 `replace` 回替換過的那則，其餘 `undefined`。 */
+function replacedBy(decision: PipelinePostDecision, result: ToolMessage): ToolMessage | undefined {
+  if (decision.kind === 'accept') return result;
+  if (decision.kind !== 'replace') return undefined;
+  const hasBlocks = (decision.blocks as unknown) !== undefined;
+  const hasContent = (decision.content as unknown) !== undefined;
+  const body = hasBlocks === hasContent ? undefined : bodyOf(decision);
+  return body === undefined ? undefined : rebuildMessage(result, body);
 }
 
 /**
