@@ -139,6 +139,52 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   const streams = new Set<ForwardedEmbedStream>();
   let scan: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  /** 每條 thread 轉送中的下行有幾條；降到 0 就 `release`。 */
+  const downlinks = new Map<string, number>();
+
+  /**
+   * 數這條下行：本文讀完、被取消或出錯時減一，這條 thread 一條都不剩就告訴監督行程可以先收。監督行程只收只讀開的，
+   * 講過話（`turn(begin)` 或 `ensure(run)`）的照一般的閒置時間收。讀歷史不 `release`：網頁先開下行、再讀歷史，下行開著就不收。
+   */
+  function countDownlink(threadId: string, response: Response): Response {
+    const source = response.body;
+    if (source === null || response.status !== 200) return response;
+    downlinks.set(threadId, (downlinks.get(threadId) ?? 0) + 1);
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      const left = (downlinks.get(threadId) ?? 1) - 1;
+      if (left > 0) {
+        downlinks.set(threadId, left);
+        return;
+      }
+      downlinks.delete(threadId);
+      supervisor.release(threadId);
+    };
+    const reader = source.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            finish();
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk.value);
+        } catch (error) {
+          finish();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        finish();
+        await reader.cancel(reason);
+      },
+    });
+    return new Response(body, { status: response.status, headers: response.headers });
+  }
 
   function scanStreams(active: EmbedStreamGuard): void {
     const verdicts = new Map<string, ReturnType<EmbedStreamGuard['recheck']>>();
@@ -339,14 +385,17 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
       response.headers.delete(EMBED_REFUSED_HEADER);
       if (principal.kind === 'embed') await recordAccess(principal, route.threadId, route, refused);
     }
-    if (
-      guarded &&
+    const eventStream =
+      route.kind === 'stream' &&
       response.body !== null &&
-      (response.headers.get('content-type') ?? '').startsWith('text/event-stream')
-    ) {
-      return guardStream(guard, response, upstream, request, route.threadId, principal);
-    }
-    return response;
+      (response.headers.get('content-type') ?? '').startsWith('text/event-stream');
+    if (!eventStream) return response;
+    return countDownlink(
+      route.threadId,
+      guarded
+        ? await guardStream(guard, response, upstream, request, route.threadId, principal)
+        : response,
+    );
   }
 
   return {

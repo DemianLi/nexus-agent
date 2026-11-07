@@ -278,6 +278,25 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(after).toHaveLength(WARM);
   }, 180_000);
 
+  it('講過話的 thread：下行收掉前台送 release，監督行程不收它（只收只讀開的）', async () => {
+    const running = await start([{ content: '回覆。' }], '', undefined, [
+      '--read-only-idle-ms',
+      '1500',
+    ]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    // 下行用 signal 收：沒讀完就 `return()` 的產生器不會取消本文，連線還開著。
+    const downlink = new AbortController();
+    const events = await client.openEvents('thread-run', { signal: downlink.signal });
+    await client.runStart('thread-run', '你好');
+    expect(replies(await foldTurn(events))).toEqual(['回覆。']);
+    downlink.abort();
+    const spoken = await settled(supervisor, 'conversation-process', 1 + WARM);
+    expect(spoken).toHaveLength(1 + WARM);
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect(childrenRunning(supervisor, 'conversation-process')).toEqual(spoken);
+  }, 180_000);
+
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {
     const running = await start([{ content: '回覆。' }]);
     const supervisor = running.child.pid!;
