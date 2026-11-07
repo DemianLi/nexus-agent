@@ -240,6 +240,45 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(childrenRunning(supervisor, 'conversation-process')).toEqual(conversations);
   }, 180_000);
 
+  it('前台被殺時有一輪在跑：舊的 cookie 照樣列得出來、全域下行重開得了，新前台從對話行程接回在跑與跑完', async () => {
+    const reply = `慢慢串的回覆${'，還在串'.repeat(10)}。`;
+    const running = await start([{ content: reply, tokenDelayMs: 80 }]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    const downlink = new AbortController();
+    await client.openEvents('thread-r', { signal: downlink.signal });
+    await client.runStart('thread-r', '你好');
+
+    const [front] = childrenRunning(supervisor, 'front-process');
+    signalPid(front!, 'SIGKILL');
+    await running.loginUrl(2);
+
+    // 網頁手上的是重啟之前那顆 cookie：瀏覽器重連時不會重新登入。
+    const runningInList = async (): Promise<boolean | undefined> => {
+      const outcome = await client.listThreads();
+      if (outcome.kind !== 'ok') return undefined;
+      return outcome.result.items.find(({ threadId }) => threadId === 'thread-r')?.running;
+    };
+    const feedLine = new AbortController();
+    const feed = await client.openThreadFeed(feedLine.signal);
+    const statuses: boolean[] = [];
+    void (async () => {
+      for await (const frame of feed) {
+        if (frame.type === 'status' && frame.threadId === 'thread-r') statuses.push(frame.running);
+      }
+    })().catch(() => {});
+    // 狀態不補送（`openThreadFeed` 的契約）：線開好之後的「在跑」從列表拿，跑完那一顆由新前台的線送。
+    await expect.poll(runningInList, { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => statuses.at(-1), { timeout: 30_000 }).toBe(false);
+    await expect.poll(runningInList, { timeout: 20_000 }).toBe(false);
+
+    const history = await client.threadHistory('thread-r');
+    expect(history.kind).toBe('ok');
+    expect(JSON.stringify(history)).toContain('還在串');
+    downlink.abort();
+    feedLine.abort();
+  }, 180_000);
+
   it('下行走 WebSocket mux：經前台轉給對話行程，一輪照常串完', async () => {
     const running = await start([{ content: '經 mux 串過來的回覆。', tokenDelayMs: 10 }]);
     const client = await muxClientOf(await running.loginUrl(1));
