@@ -17,7 +17,7 @@
  *
  * 檔案系統工具不在 registry 裡，是子代理 middleware stack 裡 `createFilesystemMiddleware` 帶的
  * （`apps/harness/src/base-tools.ts`）。要「從請求消失、叫了也不執行」，只能在它的外側攔：
- * `wrapModelCall` 把名字從 `request.tools` 拿掉，`wrapToolCall` 對手寫的呼叫回一則錯誤結果、工具本體不跑。
+ * `wrapModelCall` 把名字從 `request.tools` 拿掉；手寫的呼叫由 `tools/pre-execute` 的 core 監聽者拒絕，工具本體不跑。
  * 形狀同 deepagents 內部（沒有公開匯出）的 `createToolExclusionMiddleware`。
  *
  * **偏離（登記）：基座檔案工具的系統提示段落仍會描述被遮掉的工具。** dsh 的提示是從可見工具現算的，所以濾掉的
@@ -29,11 +29,9 @@
  */
 
 import { createMiddleware } from 'langchain';
-import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
 
 import type { AgentMiddleware } from './base-types.js';
-import { toolRefusal } from './tool-events.js';
+import type { Events } from './events.js';
 import { withToolListStep, wrapModelCallWith } from './tool-list-step.js';
 import type { ToolListStep } from './tool-list-step.js';
 import { admittedTools } from './tool-resolution.js';
@@ -101,38 +99,37 @@ export function filteredToolRefusal(name: string): string {
 }
 
 /**
- * 工具那一半：不放行的名字回一則錯誤結果，工具本體與更內層都不跑。
+ * 工具那一半：`tools/pre-execute` 的 core 監聽者，排在插件監聽者外側。被遮的名字直接拒絕，插件監聽者、核准閘門與工具本體都不跑。
  *
- * @param admission - 放不放行。
- * @returns 環繞工具呼叫的一步。
+ * 只交給子代理那一份生產者（`fold.ts`），所以不看 `exec.agent`。
+ *
+ * @param hidden - 要遮的工具名。
+ * @returns 監聽者。
  */
-export function admissionToolStep(admission: ToolAdmission): ToolCallStep {
-  return (call, next) =>
-    admission.admits(call.name)
-      ? next()
-      : toolRefusal(filteredToolRefusal(call.name), { callId: call.callId ?? '', name: call.name });
+export function subagentToolFilterListener(
+  hidden: ReadonlySet<string>,
+): Events['tools/pre-execute'] {
+  return (exec, next) =>
+    hidden.has(exec.name)
+      ? Promise.resolve({ kind: 'deny', reason: filteredToolRefusal(exec.name) })
+      : next();
 }
 
 /**
- * 建一顆把 `hidden` 裡的工具從請求拿掉、叫了也不執行的 middleware。
+ * 建一顆把 `hidden` 裡的工具從請求拿掉的 middleware。叫了也不執行的那一半是 {@link subagentToolFilterListener}。
  *
- * 逐個子代理各建一份（`hidden` 不同的話）；本身無狀態。
+ * 本身無狀態。
  *
  * @param hidden - 要遮的工具名（基座工具，registry 工具另走 `foldSubAgents`）。
  */
 export function createSubagentToolFilterMiddleware(hidden: ReadonlySet<string>): AgentMiddleware {
   const admission: ToolAdmission = { admits: (name) => !hidden.has(name) };
-  const toolStep = admissionToolStep(admission);
   const listStep: ToolListStep = (request) => admittedTools(request.tools, admission);
   return withToolListStep(
-    withToolCallStep(
-      createMiddleware({
-        name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
-        wrapModelCall: wrapModelCallWith(listStep) as never,
-        wrapToolCall: wrapToolCallWith(toolStep),
-      }),
-      toolStep,
-    ),
+    createMiddleware({
+      name: SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+      wrapModelCall: wrapModelCallWith(listStep) as never,
+    }),
     listStep,
   );
 }

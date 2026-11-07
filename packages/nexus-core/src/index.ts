@@ -212,6 +212,7 @@ export type {
 } from './events.js';
 export { EventBus, isBailed } from './events.js';
 export type {
+  CoreToolListeners,
   PipelineExecution,
   PipelinePostDecision,
   PipelinePreDecision,
