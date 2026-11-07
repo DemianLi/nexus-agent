@@ -13,7 +13,7 @@ import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import {
-  createObservationPolicy,
+  createObservationListener,
   createVersionHasher,
   noteReadVersion,
   observationGuidance,
@@ -24,7 +24,13 @@ import {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 import { applySections } from './prompt-sections.js';
-import { toolErrorOf } from './tool-events.js';
+import { TOOL_ERROR_PREFIX, toolErrorOf, toolRefusal } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
+
+/** 正式組裝裡策略住的位置：`tools/execute` 的內層。 */
+function createObservationPolicy(backend: AnyBackendProtocol): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [createObservationListener(backend)] });
+}
 
 /** `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -639,5 +645,51 @@ describe('backend 回報讀檔版本（#1530）', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
     // 下一次讀沒回報，照舊 readRaw 一次——沒有拿到上一次殘留的版本。
     expect(calls() - before).toBe(1);
+  });
+});
+
+describe('拒絕訊息的位元組', () => {
+  /** 拒絕從 execute 短路造出來；跟直接用 `toolRefusal` 造的那則逐欄位、逐位元組比。 */
+  function sameAsToolRefusal(result: ToolMessage, toolName: string): void {
+    const content = String(result.content);
+    expect(content.startsWith(TOOL_ERROR_PREFIX)).toBe(true);
+    const code = toolErrorOf(result)?.code;
+    expect(code).toBeDefined();
+    const expected = toolRefusal(content.slice(TOOL_ERROR_PREFIX.length), {
+      callId: 'call-1',
+      name: toolName,
+      error: { name: 'FsError', code: code as string },
+    });
+    expect(Object.keys(result)).toEqual(Object.keys(expected));
+    expect(JSON.stringify(result)).toBe(JSON.stringify(expected));
+    expect(JSON.stringify(result.toDict())).toBe(JSON.stringify(expected.toDict()));
+  }
+
+  it('FS_NOT_OBSERVED', async () => {
+    const { backend } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    sameAsToolRefusal(result, OBSERVED_EDIT_TOOL);
+  });
+
+  it('FS_NOT_FOUND', async () => {
+    const { backend } = fakeBackend(new Map());
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/nope.md'), handler);
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/nope.md'), handler)) as ToolMessage;
+    sameAsToolRefusal(result, OBSERVED_EDIT_TOOL);
+  });
+
+  it('FS_STALE_VERSION', async () => {
+    const { backend, set } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
+    set('/a.md', '別人改過');
+    const result = (await wrap(requestFor(OBSERVED_WRITE_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
+    sameAsToolRefusal(result, OBSERVED_WRITE_TOOL);
   });
 });

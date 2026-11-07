@@ -65,9 +65,10 @@ import { withModelCallStep } from './model-call-step.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
-import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
-import { abortedBeforeDispatch, toolCallAborted } from './turn-cancel.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH } from './tool-error-codes.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH_REASON, toolCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。不撞基座任何一個。 */
 export const SESSION_CHECKPOINT_MIDDLEWARE_NAME = 'nexusSessionCheckpoint';
@@ -94,13 +95,16 @@ function callConfigOf(request: unknown): { configurable: unknown } {
 }
 
 /**
- * 工具那一半：動手之前排空這次呼叫所屬的那一份日誌，排空之後再問一次中止。找不到日誌就照常放行。
+ * 工具那一半：`tools/execute` 的 core 外層監聽者。動手之前排空這次呼叫所屬的那一份日誌，排空之後再問一次中止，
+ * 中止了就短路成「還沒動手就被中止」。找不到日誌就照常放行。無狀態，root 與每個子代理共用同一位。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
- * @returns 環繞工具呼叫的一步。
+ * @returns 掛在 `tools/execute` 外層的監聽者。
  */
-export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCallStep {
-  return async (call, next) => {
+export function createSessionCheckpointListener(
+  sessions: CheckpointSessions,
+): CoreToolListener<'tools/execute'> {
+  return async (_exec, next, call) => {
     const found = sessions.forCall({ configurable: call.configurable });
     // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
     // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
@@ -109,14 +113,21 @@ export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCal
     await sessions.flush(found.log);
     // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
     // 外層的 guard 只在動手前與動手後問，擋不到這一段。
-    if (toolCallAborted(call)) return abortedBeforeDispatch(call);
+    if (toolCallAborted(call)) return ABORTED_BEFORE_DISPATCH;
     return next();
   };
 }
 
+const ABORTED_BEFORE_DISPATCH: PipelineExecuteResult = Object.freeze({
+  kind: 'message',
+  content: `${TOOL_ERROR_PREFIX}${TOOL_ABORTED_BEFORE_DISPATCH_REASON}`,
+  isError: true,
+  error: Object.freeze({ name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH }),
+});
+
 /**
- * 建那顆 middleware。**無狀態，一份實例走遍 root 與每個子代理**：日誌每次從執行期的
- * `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
+ * 建模型那一半的 middleware（工具那一半是 {@link createSessionCheckpointListener}）。**無狀態，一份實例走遍 root 與每個子代理**：
+ * 日誌每次從執行期的 `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
  *
  * 找不到日誌（`forCall` 不是 `ok`）就不排空、照常放行：那次呼叫本來就沒有日誌可以寫，
  * 同其他掛在 `forCall` 上的 middleware。
@@ -125,22 +136,17 @@ export function sessionCheckpointToolStep(sessions: CheckpointSessions): ToolCal
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createSessionCheckpointMiddleware(sessions: CheckpointSessions): AgentMiddleware {
-  const toolStep = sessionCheckpointToolStep(sessions);
-  return withToolCallStep(
-    withModelCallStep(
-      async (request, handler) => {
-        const found = sessions.forCall(callConfigOf(request));
-        if (found.kind === 'ok') await sessions.flush(found.log);
-        return handler(request);
-      },
-      (wrapModelCall) =>
-        createMiddleware({
-          name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
-          wrapModelCall: wrapModelCall as never,
-          wrapToolCall: wrapToolCallWith(toolStep),
-        }) as unknown as AgentMiddleware,
-    ),
-    toolStep,
+  return withModelCallStep(
+    async (request, handler) => {
+      const found = sessions.forCall(callConfigOf(request));
+      if (found.kind === 'ok') await sessions.flush(found.log);
+      return handler(request);
+    },
+    (wrapModelCall) =>
+      createMiddleware({
+        name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
   );
 }
 

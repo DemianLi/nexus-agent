@@ -768,7 +768,7 @@ const withApprovalPolicyNotice = (chain: readonly string[]): string[] =>
   );
 
 /**
- * 中段是段（#2414），`b0a74042` 錄的名單沒有轉接格：fold 在 `plugins.prepended` 最後、先讀後改策略正外側、`plugins.rest` 最前面各放一格轉接，
+ * 中段是段（#2414），`b0a74042` 錄的名單沒有轉接格：fold 在 `plugins.prepended` 最後、名單上先讀後改策略那一格的正外側、`plugins.rest` 最前面各放一格轉接，
  * `nexusFileReference` 只剩段、整顆拿掉。`nexusSandboxPolicy` 有圍堵時還要包 `task`，留著；出貨清單不經樹、沒有 `fsContainment`，
  * 只剩段，也拿掉（`contained`）。同上，只在這裡插這三格、拿這一兩格。
  */
@@ -781,6 +781,18 @@ const withPromptSections = (chain: readonly string[], contained: boolean): strin
     if (name === 'AgentInstructionsMiddleware') return ['nexusPromptSections:plugins', name];
     return [name];
   });
+
+/**
+ * 搜尋上限、先讀後改、檔案工具的失敗標成錯誤是 `tools/execute` 的 core 監聽者（#2416），不佔 stack 的格子：鏈上**恰好少這三格**，
+ * 它們的行為由那一格 `nexusToolExecute` 帶。同上，只在這裡拿這三格。
+ */
+const withToolListeners = (chain: readonly string[]): string[] =>
+  chain.filter(
+    (name) =>
+      name !== 'nexusSearchOverflow' &&
+      name !== 'nexusFileObservationPolicy' &&
+      name !== 'nexusFsToolErrors',
+  );
 
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
   it('出貨清單（createNexusAgent）', async () => {
@@ -796,7 +808,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
     });
     try {
       expect(middlewareNames(agent)).toEqual(
-        withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED)), false),
+        withToolListeners(
+          withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED)), false),
+        ),
       );
     } finally {
       await dispose();
@@ -815,9 +829,11 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       });
       try {
         expect(middlewareNames(thread.built.agent)).toEqual(
-          withPromptSections(
-            withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
-            true,
+          withToolListeners(
+            withPromptSections(
+              withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+              true,
+            ),
           ),
         );
       } finally {

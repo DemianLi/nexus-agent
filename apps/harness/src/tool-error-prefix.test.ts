@@ -58,18 +58,14 @@ function codeLinesMatching(pattern: RegExp): string[] {
 
 describe('Error: 前綴只有一個主人', () => {
   /**
-   * 手寫 `status: 'error'` 的只剩三處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
-   * 與推導端補的那兩句共用），
-   * `fs-tool-errors.ts` 包基座文字的那一則（文字不是我們寫的，可能是文字塊陣列），與 native loop 找不到工具時那一則
+   * 手寫 `status: 'error'` 的只剩兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
+   * 與推導端補的那兩句共用），與 native loop 找不到工具時那一則
    * （`native-loop/invalid-tool.ts`）：逐字照 langchain `ToolNode` 的 `getInvalidToolError`，兩個 loop 才回同一句。
-   *
-   * 2026-09-14 在改之前的 develop（`473d12a`）上數到 10 處、10 個檔：圍堵、核准、先讀後改、輸出 schema、
-   * fs-tool-errors、ask-user、submit_record、sandbox-escalation、pump 的 `#withdraw`，與 `tool-events.ts`
-   * 自己。其中 8 處是 #318 補前綴的出口，全部改走 `toolRefusal`。
+   * `tools/execute` 的 core 監聽者（fs-tool-errors、先讀後改、耐久檢查點）交回的是 `isError`，狀態由 `tool-pipeline.ts` 從那一格推，
+   * 也不手寫。
    */
-  it('手寫 error 狀態的只有錯誤結果的建構點、fs-tool-errors 與 native 照抄 langchain 的那一則', () => {
+  it('手寫 error 狀態的只有錯誤結果的建構點與 native 照抄 langchain 的那一則', () => {
     expect(codeLinesMatching(/status:\s*['"]error['"]/u)).toEqual([
-      "packages/nexus-core/src/fs-tool-errors.ts: status: 'error',",
       "packages/nexus-core/src/native-loop/invalid-tool.ts: status: 'error',",
       "packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
     ]);

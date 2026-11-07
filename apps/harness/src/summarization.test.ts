@@ -191,7 +191,6 @@ describe('同名取代是唯一的縫', () => {
         'nexusToolPreExecute',
         'nexusApprovalGate',
         'nexusPromptSections:observation',
-        'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
         // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
@@ -203,15 +202,13 @@ describe('同名取代是唯一的縫', () => {
         'nexusSessionCheckpoint',
         // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
         'nexusApprovalPolicyPrompt',
-        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
+        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等靠工具本體那幾顆的外側、plugin middleware 內側。
         'nexusToolPostExecute',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
         'nexusToolOutputSchema',
-        // 檔案工具的失敗標成錯誤（#293）：有 backend 就有，貼著工具本體。
-        'nexusFsToolErrors',
-        // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，同一個理由貼著工具本體。
+        // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，在 `tools/execute` 外側。
         'nexusReadContinuation',
-        // `grep` 參數說明的換法（#1605）：同一個時刻、同一個理由，緊接讀檔續讀。
+        // `grep` 參數說明的換法（#1605）。
         'nexusSearchDescriptions',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
@@ -244,7 +241,7 @@ describe('同名取代是唯一的縫', () => {
    *
    * **[#327](https://github.com/DemianLi/nexus-agent/issues/327) 之後這條是選的，不再是基座給的。** fold 把 plugin 的
    * middleware 攤進每個子代理，**唯獨名字撞上摘要器的那一顆不攤**（`fold.ts` 的 `subagentPluginMiddleware`）：它是一份
-   * 實例、`sessionId` 在閉包裡，攤過去會讓 root 與子代理的歷史混進同一個檔。這條紅了，就是那個例外被拿掉了。
+   * 實例，認不出身分的呼叫用實例自己的會話名，攤過去會讓 root 與子代理的那種呼叫混進同一個檔。這條紅了，就是那個例外被拿掉了。
    *
    * **這條的意思在 [#142](https://github.com/DemianLi/nexus-agent/issues/142) 之後變了一半。**
    * 註冊點的射程沒變（仍然只到 root），但 subagent 那一輪拿的**不再是基座那個**：
@@ -952,7 +949,7 @@ describe('正式路徑上的門檻是我們選的', () => {
  *
  * 判準是 `historyPathPrefix`：基座那份寫死用 `/conversation_history`，我們配的用別的。
  * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——摘要器逐個 agent 各建一份，
- * 會話名跟著實例走，所以 subagent 有自己的 session id），而
+ * 每次委派各有自己的 session id），而
  * `/conversation_history` 底下一份都沒有。少了打底的話，subagent 那份會落在後者。
  */
 describe('我們配的那份打底到每個 subagent', () => {
