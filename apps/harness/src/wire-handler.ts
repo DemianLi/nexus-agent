@@ -4801,7 +4801,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (state !== undefined)
         return { idle: isIdle(threadId, state), lastActiveAt: state.lastActiveAt };
       const since = threads.has(threadId) ? undefined : unbuiltSince.get(threadId);
-      return since === undefined ? undefined : { idle: true, lastActiveAt: since };
+      return since === undefined
+        ? undefined
+        : { idle: (httpInFlight.get(threadId) ?? 0) === 0, lastActiveAt: since };
     },
     open: async (threadId) => {
       // 磁碟上還沒有的不先建：設定檔與擁有者要照第一個請求的路由與身分記（`threadOrError`），先用 `full` 建起來，嵌入版就再也開不了它。
