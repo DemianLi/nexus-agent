@@ -10,7 +10,7 @@
 - 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
 - test-harness 與 native agent loop 各自的四片讀同一份耗時（兩者分開存）、合併後那一輪各片存回自己那一份（#2093、#2498）；
 - sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
-- web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）；
+- web 的真瀏覽器 e2e 只在合併後完整一輪跑，是自己 build 的獨立 job，不在 static 裡（#1602、#2517）；
 - 輕的模式 plan 成功、rust 為 false、其餘全是 skipped 時 gate 不起 job，條件涵蓋 gate 的每一個 needs；plan 也寫輕的模式的摘要（#2334）；
 - setup 的 node_modules 快取：只接受完全命中、鍵涵蓋影響內容的檔、存取同一組路徑、只有合併後那一輪的 typecheck 存（#2334）。
 """
@@ -137,9 +137,9 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64 與 e2e-per-thread 看是不是合併後完整一輪，都不看模式；
-        # 另有 SandboxSpawner、E2ePerThread 兩組。
-        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-per-thread'}:
+        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 看是不是合併後完整一輪，都不看模式；
+        # 另有 SandboxSpawner、WebE2e、E2ePerThread 三組。
+        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread'}:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -204,7 +204,7 @@ def full_peak(jobs: dict) -> int:
 
 class Budget(unittest.TestCase):
     def test_peak_matches_header(self) -> None:
-        self.assertEqual(full_peak(load(CI)['jobs']), 12)
+        self.assertEqual(full_peak(load(CI)['jobs']), 13)
 
     def test_post_merge_and_two_light_gates_fit(self) -> None:
         """ci.yml 檔頭的算式：合併後一輪的峰值（ci.yml 中間那一段加上 post-merge.yml 的 native agent loop），加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
@@ -213,15 +213,16 @@ class Budget(unittest.TestCase):
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
-        # sandbox-spawner-arm64 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
-        self.assertEqual(jobs['sandbox-spawner-arm64']['if'], 'inputs.full')
-        self.assertEqual(jobs['e2e-per-thread']['if'], 'inputs.full')
+        # sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
+        post_merge_only = ('sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread')
+        for name in post_merge_only:
+            self.assertEqual(jobs[name]['if'], 'inputs.full', name)
         for name, job in jobs.items():
-            if name not in ('plan', 'gate', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-per-thread'):
+            if name not in ('plan', 'gate', 'sandbox-spawner', *post_merge_only):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         native = load(CI.with_name('post-merge.yml'))['jobs']['native-loop']['strategy']['matrix']['shard']
-        self.assertEqual(full_peak(jobs) + len(native) + 2 * light_peak, 18)
+        self.assertEqual(full_peak(jobs) + len(native) + 2 * light_peak, 19)
         self.assertLessEqual(full_peak(jobs) + len(native) + 2 * light_peak, JOB_LIMIT)
 
 
@@ -244,12 +245,10 @@ class E2ePerThread(unittest.TestCase):
         uses = [s.get('uses') for s in self.job['steps']]
         self.assertLess(uses.index('./.github/actions/sandbox-spawner'), list(self.steps).index('真瀏覽器 e2e（per-thread）'))
 
-    def test_builds_like_static(self) -> None:
-        """e2e 起的 serve 供應 web 的 dist；前置條件照抄 static 那一步的 e2e：先 build:lib、再 build web。"""
-        build = self.steps['建置 lib 與 web']['run'].split('\n')
-        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
-        static = self.ci['jobs']['static']['steps']
-        self.assertIn('pnpm run build:lib', next(s for s in static if s.get('name') == '建置 lib 並驗 manifest')['run'])
+    def test_builds_like_e2e_single(self) -> None:
+        """e2e 起的 serve 供應 web 的 dist；兩種行程模型的前置建置要一樣，差異才只在行程模型。"""
+        single = next(s for s in self.ci['jobs']['e2e-single']['steps'] if s.get('name') == '建置 lib 與 web')
+        self.assertEqual(self.steps['建置 lib 與 web']['run'], single['run'])
 
     def test_only_in_the_post_merge_run_and_judged_by_gate(self) -> None:
         self.assertEqual(self.job['if'], 'inputs.full')
@@ -629,15 +628,34 @@ class Mode(unittest.TestCase):
 
 
 class WebE2e(unittest.TestCase):
-    """真瀏覽器 e2e（#1602）只在合併後完整一輪跑：沒有 `if` 就進了 PR 的全跑，排到 build 前面就開不到 dist。"""
+    """真瀏覽器 e2e（#1602）只在合併後完整一輪跑：沒有 `if` 就進了 PR 的全跑，排到 build 前面就開不到 dist。
+    它是跟 static 平行的獨立 job（#2517）：放進 static 就跟護欄依序跑，static 成了整輪最長的那一段。"""
+
+    def setUp(self) -> None:
+        self.ci = load(CI)
+        self.job = self.ci['jobs']['e2e-single']
+        self.names = [step.get('name') for step in self.job['steps']]
 
     def test_runs_only_post_merge_after_build(self) -> None:
-        steps = load(CI)['jobs']['static']['steps']
-        names = [step.get('name') for step in steps]
-        e2e = steps[names.index('真瀏覽器 e2e')]
-        self.assertEqual(e2e['if'], 'inputs.full')
+        self.assertEqual(self.job['if'], 'inputs.full')
+        self.assertEqual(self.job['needs'], 'plan')
+        e2e = self.job['steps'][self.names.index('真瀏覽器 e2e')]
         self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
-        self.assertLess(names.index('Format、Lint、Build'), names.index('真瀏覽器 e2e'))
+        # 這裡帶了 NEXUS_E2E_PROCESS_MODEL，兩個 job 都跑 per-thread，single 沒人測也照樣綠。
+        self.assertNotIn('env', e2e)
+        build = self.job['steps'][self.names.index('建置 lib 與 web')]['run'].split('\n')
+        self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
+        self.assertLess(self.names.index('建置 lib 與 web'), self.names.index('真瀏覽器 e2e'))
+
+    def test_not_serialized_in_static(self) -> None:
+        runs = [step.get('run', '') for step in self.ci['jobs']['static']['steps']]
+        self.assertFalse(any('test:e2e' in run for run in runs))
+
+    def test_judged_by_gate(self) -> None:
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['E2E_SINGLE'], '${{ needs.e2e-single.result }}')
+        self.assertIn('[ "$E2E_SINGLE" = "success" ] || fail', step['run'])
+        self.assertIn('[ "$E2E_SINGLE" = "skipped" ] || fail', step['run'])
 
 
 class TypecheckCache(unittest.TestCase):
