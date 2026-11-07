@@ -32,6 +32,10 @@ import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import { FrontForwarder } from './front-forward.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
+import { composeEntries, defaultSources } from './plugin-config.js';
+import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
+import { readJournal } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
@@ -457,6 +461,88 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     await expect.poll(liveThreads, { timeout: 15_000 }).toEqual(['thread-p']);
     // 只讀的閒置時間一到，監督行程收掉那個行程（`down`）：快照不再列它。
     await expect.poll(liveThreads, { timeout: 15_000 }).toEqual([]);
+  }, 180_000);
+
+  it('對話行程的內部路由不經前台：帶擁有者 cookie 打前台的 activity／plugins／stop 落到靜態檔（404／405），行程照常', async () => {
+    const running = await start([{ content: '回覆。' }, { content: '第二輪。' }]);
+    const url = await running.loginUrl(1);
+    const client = await clientOf(url);
+    // 先讓這條的行程起來：前台若把這幾條轉下去，對話行程會當擁有者答。
+    expect(replies(await turn(client, 'thread-i', '你好'))).toEqual(['回覆。']);
+    const fetchAsOwner = fetchWithCookie(await exchangeServeToken(url));
+    const { origin } = new URL(url);
+    for (const [action, method] of [
+      ['activity', 'GET'],
+      ['plugins', 'GET'],
+      ['stop', 'POST'],
+    ] as const) {
+      const response = await fetchAsOwner(`${origin}/internal/threads/thread-i/${action}`, {
+        method,
+      });
+      const body = await response.text();
+      // 不是 `/threads` 底下的路徑，前台交給靜態檔：GET 找不到檔是 404，POST 是 405。
+      expect({ action, status: response.status, body }).toEqual({
+        action,
+        status: method === 'GET' ? 404 : 405,
+        body: expect.not.stringMatching(/activity|bindings/u) as string,
+      });
+    }
+    expect(replies(await turn(client, 'thread-i', '再一輪'))).toEqual(['第二輪。']);
+    const history = await client.threadHistory('thread-i');
+    expect(JSON.stringify(history)).toContain('再一輪');
+  }, 180_000);
+
+  it('掉列紀錄：同一列在兩個對話行程都掛不上，紀錄裡只有一筆 failed', async () => {
+    const probe = [
+      'export default {',
+      "  name: 'probe',",
+      '  apply(_registry, config) {',
+      "    if (config?.ok !== true) throw new Error('故意在 apply 裡壞掉');",
+      '  },',
+      '};',
+      '',
+    ].join('\n');
+    let harnessHome = '';
+    const running = await start([{ content: '回覆。' }], '', async (home) => {
+      harnessHome = home;
+      await writeFile(join(home, 'probe.ts'), probe, { mode: 0o600 });
+      seedHomePatch(
+        home,
+        "- insert:\n    - id: probe\n      name: './probe.ts'\n      config:\n        ok: true\n",
+      );
+    });
+    const client = await clientOf(await running.loginUrl(1));
+    expect(replies(await turn(client, 'thread-warm', '你好'))).toEqual(['回覆。']);
+    const failed = (): number =>
+      (readJournal(journalPathOf(harnessHome))?.records ?? []).filter(({ op }) => op === 'failed')
+        .length;
+    expect(failed()).toBe(0);
+
+    // 繞過寫入口追加一筆讓 probe 掛不上的設定（同 `serve-plugin-failed-record.test.ts` 的 `setProbe`）。
+    const env = { [HARNESS_HOME_ENV]: harnessHome };
+    const name = composeEntries(defaultSources({ serve: true, env })).find(
+      ({ id }) => id === 'probe',
+    )?.name;
+    expect(name).toBeDefined();
+    await appendRaw(harnessHome, {
+      op: 'config-set',
+      id: 'probe',
+      name: name!,
+      before: { ok: true },
+      after: { ok: false },
+    });
+    const [a, b] = await Promise.all([
+      turn(client, 'thread-x', '你好'),
+      turn(client, 'thread-y', '你好'),
+    ]);
+    expect([replies(a), replies(b)]).toEqual([['回覆。'], ['回覆。']]);
+    expect(await settled(running.child.pid!, 'conversation-process', 3 + WARM)).toHaveLength(
+      3 + WARM,
+    );
+    await expect.poll(failed, { timeout: 10_000 }).toBe(1);
+    expect(replies(await turn(client, 'thread-z', '你好'))).toEqual(['回覆。']);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(failed()).toBe(1);
   }, 180_000);
 
   it('只讀開的下行：開著就不照只讀的閒置時間收，關掉之後才收', async () => {

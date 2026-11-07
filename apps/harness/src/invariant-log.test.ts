@@ -120,7 +120,7 @@ describe('記錄器', () => {
       script,
       `import { createInvariantLog } from ${JSON.stringify(fileURLToPath(new URL('./invariant-log.ts', import.meta.url)))};\n` +
         `const tap = createInvariantLog(${JSON.stringify(path)});\n` +
-        `for (let i = 0; i < ${String(PER_WRITER)}; i += 1) tap.violation?.({ sessionId: process.argv[2], packageName: '@nexus/a', message: '長'.repeat(${String(MAX_MESSAGE_CHARS)}) });\n`,
+        `for (let i = 0; i < ${String(PER_WRITER)}; i += 1) tap.violation?.({ sessionId: process.argv[2], packageName: '@nexus/a', message: '\\u0001'.repeat(${String(MAX_MESSAGE_CHARS)}) });\n`,
     );
     const env = {
       ...process.env,
@@ -139,6 +139,8 @@ describe('記錄器', () => {
 
     const lines = readFileSync(path, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(PER_WRITER * 2);
+    // 最長的一行：截斷後的每個字元都跳脫成六個位元組（`\u0001`，`JSON.stringify` 最長的跳脫），訊息就有 3000 位元組。
+    expect(Buffer.byteLength(lines[0]!)).toBeGreaterThan(MAX_MESSAGE_CHARS * 6);
     const parsed = lines.map(
       (line) => JSON.parse(line) as InvariantLogLine & { sessionId: string },
     );
