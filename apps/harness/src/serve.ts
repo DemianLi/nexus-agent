@@ -139,6 +139,7 @@ import { createWireHandler, SubagentSessionError } from './wire-handler.js';
 import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
 import type { FrontFeed } from './front-feed.js';
+import type { FrontPluginBindings } from './front-plugins.js';
 import type { SupervisorClient } from './supervisor-client.js';
 import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
@@ -588,11 +589,12 @@ export interface RunServeOptions {
   readonly front?: FrontProcessMode;
 }
 
-/** per-thread 前台要的：監督行程的控制面、往對話行程的轉送器、從對話行程接進來的全域下行。 */
+/** per-thread 前台要的：監督行程的控制面、往對話行程的轉送器、從對話行程接進來的全域下行、對話行程回報的 plugin 綁定。 */
 export interface FrontProcessMode {
   readonly supervisor: SupervisorClient;
   readonly forwarder: FrontForwarder;
   readonly feed: FrontFeed;
+  readonly plugins: FrontPluginBindings;
 }
 
 /**
@@ -1239,6 +1241,10 @@ async function startServer(
       liveVersions: { sign: (signature: string) => hmacHashOf(signature, liveVersionKey) },
     }),
   });
+  // per-thread 的前台（#2341）：thread 組在對話行程裡，綁著哪幾列由 `front-plugins.ts` 問來、綁進這張表，快照照樣列。
+  options.front?.plugins.bindWith((threadId, bindings) =>
+    threadPluginList.bindElsewhere(threadId, bindings),
+  );
   // 啟動那一份先寫下去（檔在 server 起來之前就在），摘要留到下面啟動那幾行印完再記，不插在網址前面。
   const startupSnapshot = threadPluginList.snapshot();
   const startupSnapshotWritten =
@@ -1558,10 +1564,11 @@ async function startServer(
       threadFeed: options.front.feed.feed,
       runningElsewhere: (threadId: string) => options.front?.feed.running(threadId),
     }),
-    // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
+    // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。快照歸前台寫，綁著哪幾列由前台來問（#2341）。
     ...(options.conversation !== undefined && {
       reportEmbedRefusals: true,
       boundThread: options.conversation.boundThread,
+      liveBindings: (threadId: string) => threadPluginList.liveBindings(threadId),
       onTurn: options.conversation.onTurn,
     }),
     // 哪些事走它見 `WireHandlerOptions.warn`。
@@ -2126,6 +2133,7 @@ async function startServer(
         : createFrontWireHandler({
             local: handler,
             ...options.front,
+            onForwarded: (threadId) => options.front?.plugins.touched(threadId),
             auth,
             ...(embedStreamGuard !== undefined && { embedStreams: embedStreamGuard }),
             warn,

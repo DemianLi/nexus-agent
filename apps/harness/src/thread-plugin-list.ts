@@ -66,7 +66,11 @@ import { failedRowsOf } from './plugin-failure-recorder.js';
 import type { FailedRow, FailureRecorder } from './plugin-failure-recorder.js';
 import { legacyPatchIgnoredMessage } from './plugin-config.js';
 import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
-import { createLiveVersionTable, liveBindingsOf } from './plugin-live-versions.js';
+import {
+  createLiveVersionTable,
+  liveBindingsOf,
+  type LiveRowBinding,
+} from './plugin-live-versions.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
 import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
@@ -204,6 +208,21 @@ export interface ThreadPluginReader {
    * （`plugin-snapshot.ts` 的 `PluginSnapshotWriter.publish`），所以不會擋住逐出。
    */
   republishSnapshot(): Promise<void>;
+  /**
+   * 這條 thread 在這個行程裡綁著的那幾列（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：per-thread 的對話行程答前台用。
+   * 沒給 `liveVersions` 或還沒綁是 `undefined`。
+   */
+  liveBindings(threadId: string): readonly LiveRowBinding[] | undefined;
+  /**
+   * 綁上**別的行程**組裝的 thread（#2341）：per-thread 的前台拿對話行程回報的 {@link liveBindings}，快照照樣列它。
+   * 沒給 `liveVersions` 就什麼也不做。
+   *
+   * @returns 放掉並重寫快照；呼叫第二次是空操作。
+   */
+  bindElsewhere(
+    threadId: string,
+    bindings: readonly LiveRowBinding[],
+  ): Promise<() => Promise<void>>;
 }
 
 /**
@@ -435,6 +454,22 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       const release = liveTable.bind(threadId, liveBindingsOf(list, dropped));
       await options.publishSnapshot?.(snapshotFor(latestRead ?? list));
       return release;
+    },
+    liveBindings(threadId) {
+      return liveTable?.bindingsOf(threadId);
+    },
+    async bindElsewhere(threadId, bindings) {
+      if (liveTable === undefined) return async () => {};
+      const release = liveTable.bind(threadId, bindings);
+      // 前台自己不組 thread，沒讀過清單：「已儲存」那一側就是啟動那一份，同啟動時寫的快照。
+      await options.publishSnapshot?.(snapshotFor(latestRead));
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        release();
+        await options.publishSnapshot?.(snapshotFor(latestRead));
+      };
     },
     async republishSnapshot() {
       if (liveTable === undefined || latestRead === undefined) return;

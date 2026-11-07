@@ -69,6 +69,8 @@ export interface FrontWireOptions {
   readonly auth: WireAuth;
   /** 同本地那支的 `embedStreams`；缺席就是沒有嵌入方，嵌入身分不會出現。 */
   readonly embedStreams?: EmbedStreamGuard;
+  /** 轉送給一條 thread 的請求拿到回應了（那條 thread 這時已在對話行程裡建好）。前台拿它去問 plugin 綁定（`front-plugins.ts`）。 */
+  readonly onForwarded?: (threadId: string) => void;
   readonly warn?: (message: string) => void;
 }
 
@@ -379,6 +381,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         errorResponse(id, 'unknown_error', `thread "${route.threadId}" 的對話行程連不上，請重試。`),
       );
     }
+    options.onForwarded?.(route.threadId);
     const refused = response.headers.get(EMBED_REFUSED_HEADER);
     if (refused !== null) {
       response.headers.delete(EMBED_REFUSED_HEADER);

@@ -12,6 +12,7 @@
 import { Writable } from 'node:stream';
 
 import { FrontFeed } from './front-feed.js';
+import { FrontPluginBindings } from './front-plugins.js';
 import { FrontForwarder } from './front-forward.js';
 import { installServeProcessLifecycle, runServe } from './serve.js';
 import { SupervisorClient } from './supervisor-client.js';
@@ -29,12 +30,17 @@ async function main(): Promise<void> {
   const forwarder = new FrontForwarder();
   const warn = (message: string): void => console.error(message);
   const feed = new FrontFeed({ forwarder, warn });
+  const plugins = new FrontPluginBindings({ forwarder, warn });
   const supervisor = new SupervisorClient({
     input: process.stdin,
     output: frames,
-    onUp: (threadId, socket) => feed.up(threadId, socket),
+    onUp: (threadId, socket) => {
+      feed.up(threadId, socket);
+      plugins.up(threadId, socket);
+    },
     onDown: (threadId, _cause, socket) => {
       feed.down(threadId);
+      plugins.down(threadId);
       if (socket !== undefined) forwarder.forget(socket);
     },
     warn,
@@ -43,7 +49,7 @@ async function main(): Promise<void> {
   try {
     const running = await runServe({
       argv: process.argv.slice(2),
-      front: { supervisor, forwarder, feed },
+      front: { supervisor, forwarder, feed, plugins },
     });
     if (running === undefined) {
       lifecycle.uninstall();
@@ -56,6 +62,7 @@ async function main(): Promise<void> {
           await running.close(options);
         } finally {
           feed.close();
+          plugins.close();
           forwarder.close();
         }
       },

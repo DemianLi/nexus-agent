@@ -32,6 +32,7 @@ import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import { FrontForwarder } from './front-forward.js';
+import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { signalPid } from './test-pids.fixture.js';
@@ -433,6 +434,29 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(await settled(running.child.pid!, 'conversation-process', 2 + WARM)).toHaveLength(
       2 + WARM,
     );
+  }, 180_000);
+
+  it('plugin 對照快照：前台列出對話行程裡活著的 thread（只看過歷史的也算），行程收掉就拿掉', async () => {
+    const running = await start([{ content: '回覆。' }], '', undefined, [
+      '--read-only-idle-ms',
+      '1500',
+    ]);
+    const client = await clientOf(await running.loginUrl(1));
+    const snapshot = join(running.home, PLUGIN_SNAPSHOT_FILE_NAME);
+    const liveThreads = async (): Promise<string[]> => {
+      const rows = (
+        JSON.parse(await readFile(snapshot, 'utf8')) as {
+          rows: { live?: { threads: string[] }[] }[];
+        }
+      ).rows;
+      return [...new Set(rows.flatMap((row) => row.live ?? []).flatMap(({ threads }) => threads))];
+    };
+    expect(await liveThreads()).toEqual([]);
+
+    expect((await client.threadHistory('thread-p')).kind).toBe('ok');
+    await expect.poll(liveThreads, { timeout: 15_000 }).toEqual(['thread-p']);
+    // 只讀的閒置時間一到，監督行程收掉那個行程（`down`）：快照不再列它。
+    await expect.poll(liveThreads, { timeout: 15_000 }).toEqual([]);
   }, 180_000);
 
   it('只讀開的下行：開著就不照只讀的閒置時間收，關掉之後才收', async () => {
