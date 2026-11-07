@@ -1610,7 +1610,7 @@ function repeatReminderDisposition(
  * **回工廠而不是一份實例。** 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`。`summarization.ts` 的 `createSummarizer`
  * 照切點表的鍵（thread 加呼叫身分）每次委派各生一個 `sessionId`，認不出身分的呼叫退回那顆實例自己的一個（#2451）。
  * 一份實例同時掛在 root 與每個 subagent 上的話，那種呼叫**共用實例那個會話名**，root 與 subagent 的歷史
- * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話（#2416）。
+ * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話（PR #156 量過）。
  *
  * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次
  * `createSummarizationMiddleware({ backend })`，不共用。基座的 `task` 工具另外還替 subagent 的 state

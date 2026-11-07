@@ -32,7 +32,7 @@ export type EngineContextSize =
   | { readonly type: 'tokens'; readonly value: number }
   | { readonly type: 'fraction'; readonly value: number };
 
-/** 引擎的設定，欄位同基座的 `SummarizationMiddlewareOptions`（只留 nexus 給的那幾個）。 */
+/** 引擎的設定，欄位同基座的 `SummarizationMiddlewareOptions`（只留 nexus 給的那幾個；`sessionIdOf` 基座沒有）。 */
 export interface SummarizerEngineOptions {
   readonly backend: AnyBackendProtocol;
   readonly summaryPrompt: string;
@@ -42,9 +42,10 @@ export interface SummarizerEngineOptions {
   /**
    * 這次呼叫的歷史檔會話名（`<historyPathPrefix>/<sessionId>.md`）。每次要寫歷史檔時拿那次的 `request` 問一次。
    *
-   * @param request - 這次的 `wrapModelCall` 請求（帶 `runtime.configurable`）。
+   * @param request - 這次的 `wrapModelCall` 請求。
+   * @returns 會話名，不含前綴與 `.md`；同一個呼叫身分要回同一個值。
    */
-  readonly sessionIdOf: (request: unknown) => string;
+  readonly sessionIdOf: (request: SessionRequest) => string;
   readonly truncateArgsSettings: {
     readonly trigger?: EngineContextSize;
     readonly keep?: EngineContextSize;
@@ -53,7 +54,12 @@ export interface SummarizerEngineOptions {
   };
 }
 
-interface EngineRequest {
+/** {@link SummarizerEngineOptions.sessionIdOf} 讀得到的那一部分請求。 */
+export interface SessionRequest {
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+interface EngineRequest extends SessionRequest {
   readonly messages?: BaseMessage[];
   readonly state: unknown;
   readonly model?: unknown;

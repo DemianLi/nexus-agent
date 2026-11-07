@@ -102,7 +102,8 @@ export class SummaryCutoffTable {
  * 這次呼叫在切點表上的鍵：`thread_id` 加上呼叫身分，見檔頭〈鍵〉。
  *
  * @param config - `{ configurable }`，同 `sessions.forCall`。
- * @returns 鍵；認不出身分（不在圖裡）回 `undefined`。沒有 `thread_id` 的呼叫共用空字串那一格。
+ * @returns 鍵；認不出身分（不在圖裡）回 `undefined`，切點表那次呼叫不讀也不寫。沒有 `thread_id` 的呼叫共用空字串那一格：
+ *   切點表靠訊息驗證分開，歷史檔的會話名不驗、共用一份。
  */
 export function summaryCallKey(config: unknown): string | undefined {
   const address = toolCallSessionAddress(config);

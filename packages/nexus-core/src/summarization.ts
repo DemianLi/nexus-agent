@@ -150,6 +150,7 @@ import {
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
 import { createSummarizerEngine } from './summarizer-engine.js';
+import type { SessionRequest } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
@@ -728,15 +729,14 @@ export function createSummarizer(
   const warn = report ?? ((message: string) => console.warn(message));
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
-  // 歷史檔的會話名：每把切點表的鍵（thread 加呼叫身分，所以每次委派各一把）第一次寫時生一個，各保留則數的實例共用這張表
-  // （{@link withRetainedTail}）。認不出身分的呼叫用這顆摘要器自己那一個。
+  // 歷史檔的會話名：每把切點表的鍵（thread 加呼叫身分，所以每次委派各一把）第一次寫時生一個，各保留則數的實例共用同一個
+  // `sessionIdOf`（{@link withRetainedTail}）。認不出身分的呼叫用這顆摘要器自己那一個。表每次委派一格、不設上限，跟著這顆
+  // 摘要器（組裝）丟，同切點表。
   const newSessionId = () => `session_${randomUUID().substring(0, 8)}`;
   const ownSessionId = newSessionId();
   const sessionIds = new Map<string, string>();
-  const sessionIdOf = (request: unknown): string => {
-    const key = summaryCallKey({
-      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-    });
+  const sessionIdOf = (request: SessionRequest): string => {
+    const key = summaryCallKey({ configurable: request.runtime?.configurable });
     if (key === undefined) return ownSessionId;
     let sessionId = sessionIds.get(key);
     if (sessionId === undefined) sessionIds.set(key, (sessionId = newSessionId()));
@@ -1355,10 +1355,9 @@ const MAX_RETAIN_CHAINS = 32;
  * ## 實例之間沒有狀態要同步
  *
  * 引擎實例的 closure 裡只有 `tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
- * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名
- * 在 {@link createSummarizer} 生一次、交給每一顆實例，所以不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。
- * 範圍是每個 agent 各一份：摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理不共用；同型的前景子代理
- * 共用同一份，所以同型子代理的歷史檔也是同一個。
+ * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名由 {@link createSummarizer} 的同一個 `sessionIdOf`
+ * 交給每一顆實例，所以同一次呼叫不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。範圍是每次委派各一份：
+ * 會話名照切點表的鍵（thread 加呼叫身分）分，同型前景子代理的兩次委派各一個檔。
  *
  * @param makeChain - 建「`keep` 是 N 則」的那一顆（含它外面貼著的兩層）。
  * @param settings - 補滿的設定。
