@@ -110,7 +110,7 @@ import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 import { ThreadSessions } from './thread-sessions.js';
 import { DEFAULT_THREAD_SERVICE_GRANTS, deniedThreadServices } from './thread-service-grants.js';
 import type { ThreadServiceGrants } from './thread-service-grants.js';
-import type { FoldedThreadSource } from './thread-source.js';
+import type { FoldedThreadSource } from '@nexus/tool-adapter';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';

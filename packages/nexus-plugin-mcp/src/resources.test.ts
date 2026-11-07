@@ -10,13 +10,14 @@
 import { fileURLToPath } from 'node:url';
 import { SystemMessage } from '@langchain/core/messages';
 import type { PluginRegistry } from '@nexus/core';
+import { runThreadSources } from '@nexus/tool-adapter';
 import {
   applySections,
   EXTERNAL_MCP_CONTENT_NOTICE,
   REFERENCE_RULE,
   REFERENCE_WARNING,
 } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
 import { RESOURCE_TOOL_NAMES } from './hub.js';
 import {
@@ -27,8 +28,6 @@ import {
   UNTRUSTED_CONTENT_PROMPT,
 } from './hub.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
-import { createMcpPlugin } from './index.js';
-import { registryThread } from './registry-thread.js';
 import {
   LOGO_BASE64,
   LOGO_URI,
@@ -58,7 +57,7 @@ function row(
   env: Record<string, string>,
   extra: { serverName?: string; maxInstructionBytes?: number; failOnStartupError?: boolean } = {},
 ) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName: extra.serverName ?? 'srv',
     connection: {
       transport: 'stdio',
@@ -75,7 +74,7 @@ function row(
 
 /** 起不來的一列。 */
 function brokenRow(serverName = 'srv', failOnStartupError = false) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName,
     connection: { transport: 'stdio', command: '/nonexistent/nexus-mcp-fixture' },
     failOnStartupError,
@@ -367,7 +366,11 @@ describe('hub：翻頁與中止訊號原樣交給 server', () => {
         plugin: {
           name: 'stub-host',
           apply(registry: PluginRegistry) {
-            ensureHub(registryThread(registry)).add(source);
+            return runThreadSources(
+              registry,
+              [{ threadSource: (thread) => void ensureHub(thread).add(source), services: [] }],
+              { id: 'stub-host', module: {} },
+            );
           },
         },
         config: {},

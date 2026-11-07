@@ -15,10 +15,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRegistry, loadPlugins } from '@nexus/core';
 import type { PluginRegistry } from '@nexus/core';
-import { createMcpPlugin, MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
+import { MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
 import { toLangChainTool } from '@nexus/tool-adapter';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { createMcpSandboxWrapper } from './mcp-sandbox.js';
 
 const BINARY = process.env.NEXUS_SPAWNER_BIN;
@@ -186,7 +187,7 @@ describe.skipIf(BINARY === undefined).each(servers)(
               apply: (host) => void host.services.provide(MCP_SANDBOX_SERVICE, wrap),
             },
           },
-          createMcpPlugin({
+          ...(await mcpRows({
             serverName: 'srv',
             connection: {
               transport: 'stdio',
@@ -196,7 +197,7 @@ describe.skipIf(BINARY === undefined).each(servers)(
               ...(sandbox === undefined ? {} : { sandbox }),
             },
             approval: { default: 'allow' },
-          }),
+          })),
         ],
         createRegistry({ adaptTool: toLangChainTool }),
       );

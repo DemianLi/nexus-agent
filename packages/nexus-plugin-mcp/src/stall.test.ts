@@ -11,13 +11,12 @@ import { fileURLToPath } from 'node:url';
 import type { Client } from '@modelcontextprotocol/client';
 import type { PluginRegistry } from '@nexus/core';
 import { createHostServicesPlugin, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectGeneration, generationOf, isRequestTimeout, probeLiveness } from './connection.js';
 import type { Generation, SdkClient } from './connection.js';
 import { RELEASE_NOTE } from './fixture-tools.js';
 import {
-  createMcpPlugin,
   MAX_LIVENESS_TIMEOUT_MS,
   MCP_POOL_SERVICE,
   McpConnectionPool,
@@ -78,7 +77,7 @@ function options(file: string, marker: string, extra: Partial<McpPluginOptions> 
 
 async function assemble(file: string, extra: Partial<McpPluginOptions> = {}) {
   const marker = `--marker-${randomUUID()}`;
-  const { registry, dispose } = await loadPlugins([createMcpPlugin(options(file, marker, extra))]);
+  const { registry, dispose } = await loadPlugins([mcpEntry(options(file, marker, extra))]);
   cleanup.push(dispose);
   return { registry, pids: () => pidsOf(marker), marker };
 }
@@ -198,7 +197,7 @@ describe('卡死之後', () => {
     const marker = `--marker-${randomUUID()}`;
     const { registry, dispose } = await loadPlugins([
       createHostServicesPlugin({ [MCP_POOL_SERVICE]: pool }),
-      createMcpPlugin(options(OLD_PROTOCOL, marker)),
+      mcpEntry(options(OLD_PROTOCOL, marker)),
     ]);
     cleanup.push(dispose);
     const [before] = pidsOf(marker);

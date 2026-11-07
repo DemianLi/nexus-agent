@@ -27,8 +27,8 @@
  * 寫入全走 MCP，部署方忘了寫宣告時，結果應該是多問一次，不是寫入沒經過人。唯讀的 server 明寫 `approval: { default: allow }`，
  * 就回到 dsh 的行為。
  *
- * **機制本身不算偏離**：MCP 還在相容層，閘門直接掛 `registry.approvals.gate()`，這條 waterfall 的形狀照 dsh 的
- * `tools/pre-execute`（core `approval.ts` 檔頭）。遷上樹之後改用 `tools.gate()`，宣告形狀不變。
+ * **機制本身不算偏離**：閘門經逐條 thread 的 `thread.gate()` 登記（`index.ts` 的 `mountServer` 與 `applyShared`），宿主轉給這條
+ * thread 的 `registry.approvals.gate()`，跟其他核准閘門同一條 waterfall；形狀照 dsh 的 `tools/pre-execute`（core `approval.ts` 檔頭）。
  *
  * **不讀 MCP 的 tool annotations**（Q3 (a)）：SDK 說明寫明那些只是 hint，client 不該依不受信任的 server 給的 annotations 做決定。
  *

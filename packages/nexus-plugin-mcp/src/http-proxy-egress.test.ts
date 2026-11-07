@@ -11,9 +11,8 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { installProxyFromEnvironment } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createMcpPlugin } from './index.js';
 import { withoutNotice } from './untrusted-fixtures.js';
 
 let seen: string[] = [];
@@ -59,7 +58,7 @@ afterEach(() => {
 
 /** 載入一個 http MCP，連不連得上不重要——假代理答的不是 MCP。要看的是請求到了哪裡。 */
 async function loadRemote(): Promise<void> {
-  const plugin = createMcpPlugin({
+  const plugin = mcpEntry({
     serverName: 'remote',
     connection: { transport: 'http', url: 'http://mcp-remote.invalid/mcp' },
   });
@@ -105,7 +104,7 @@ describe.skipIf(!childHonorsFlag)('stdio MCP server 子行程的連線', () => {
 
   /** 起假 server，叫它連 `.invalid` 主機一次，回它報的結果。 */
   async function childFetch(): Promise<string> {
-    const plugin = createMcpPlugin({
+    const plugin = mcpEntry({
       serverName: 'fixture',
       connection: {
         transport: 'stdio',

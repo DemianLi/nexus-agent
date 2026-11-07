@@ -7,12 +7,12 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PreToolDecision, PreToolListener } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { createMcpPlugin, mcpConfigSchema, mcpPlugin } from './index.js';
+import { mcpConfigSchema } from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { publicToolName } from './names.js';
 
@@ -27,7 +27,7 @@ async function decide(gate: PreToolListener, name: string): Promise<PreToolDecis
 }
 
 function fixtureRow(approval?: McpPluginOptions['approval'], env?: Record<string, string>) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName: 'fixture',
     connection: {
       transport: 'stdio',
@@ -55,14 +55,11 @@ describe('設定', () => {
 
   it('default: allow 又寫了 exempt：載入失敗，訊息指名那一列與 exempt（J）', async () => {
     const bad = [
-      {
-        plugin: mcpPlugin,
-        config: {
-          serverName: 'x',
-          connection: { transport: 'stdio', command: 'x' },
-          approval: { default: 'allow', exempt: ['get_order'] },
-        },
-      },
+      mcpEntry({
+        serverName: 'x',
+        connection: { transport: 'stdio', command: 'x' },
+        approval: { default: 'allow', exempt: ['get_order'] },
+      }),
     ];
     await expect(loadPlugins(bad)).rejects.toThrow('mcp#0 (mcp)');
     await expect(loadPlugins(bad)).rejects.toThrow(/approval\.exempt/);
@@ -190,7 +187,7 @@ describe('接上一台真的 MCP server', () => {
   });
 
   it('列出工具之後才失敗（指引超過上限）：閘門跟工具一起撤掉', async () => {
-    const plugin = createMcpPlugin({
+    const plugin = mcpEntry({
       serverName: 'fixture',
       connection: {
         transport: 'stdio',
@@ -211,7 +208,7 @@ describe('接上一台真的 MCP server', () => {
 
   it('tools/list 回零支：沒有工具可擋，不登記閘門', async () => {
     const { registry, dispose } = await loadPlugins([
-      createMcpPlugin({
+      mcpEntry({
         serverName: 'empty',
         connection: {
           transport: 'stdio',
@@ -235,7 +232,7 @@ describe('接上一台真的 MCP server', () => {
 
   it('連不上：沒有工具，也沒有閘門', async () => {
     const { registry, dispose } = await loadPlugins([
-      createMcpPlugin({
+      mcpEntry({
         serverName: 'missing',
         connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
       }),

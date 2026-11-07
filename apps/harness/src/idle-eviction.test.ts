@@ -25,10 +25,10 @@ import { fileURLToPath } from 'node:url';
 
 import { THREAD_AT_CAPACITY } from '@nexus/wire';
 import type { PromptAttachment } from '@nexus/wire';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { foldTurn, loopbackRequest } from './fixtures.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import {
@@ -504,7 +504,7 @@ describe('H：MCP 收尾有期限（#1543）', () => {
       const r = track(rig());
       r.extras.set('t1', {
         plugins: [
-          createMcpPlugin({
+          ...(await mcpRows({
             serverName: 'srv',
             connection: {
               transport: 'stdio',
@@ -513,7 +513,7 @@ describe('H：MCP 收尾有期限（#1543）', () => {
               env: { FIXTURE_HANG_IF_FILE: flag },
             },
             reconnect: { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 },
-          }),
+          })),
         ],
       });
       expect((await touch(r, 't1')).type).toBe('success');

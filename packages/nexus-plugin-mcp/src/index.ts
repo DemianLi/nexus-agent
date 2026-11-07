@@ -13,14 +13,8 @@ import type { Tool } from '@modelcontextprotocol/client';
 import type { Context } from '@nexus/cordis';
 // eslint-disable-next-line no-restricted-imports -- 答題管道的服務名今天只在 core 匯出，#2537 拿掉
 import { CHANNEL_SERVICE } from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- ApprovalChannel、ToolAdmission 今天只在 core 匯出，#2537 拿掉；其餘是相容層暫時路徑用的，#2535 拿掉
-import type {
-  ApprovalChannel,
-  NexusPlugin,
-  PluginEntry,
-  PluginRegistry,
-  ToolAdmission,
-} from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- ApprovalChannel 只在 core 定義（mcp 不相依轉出它的 @nexus/approval-channel）；ToolAdmission 改取 @nexus/tools 歸 #2537
+import type { ApprovalChannel, ToolAdmission } from '@nexus/core';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { toolsToken } from '@nexus/tools';
 import type { NexusTool, ToolThread } from '@nexus/tools';
@@ -37,7 +31,6 @@ import {
 import type { McpCredentials, ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient } from './connection.js';
 import { ensureHub } from './hub.js';
-import { registryThread } from './registry-thread.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -229,7 +222,7 @@ export const mcpConfigSchema = z.strictObject({
 /** 驗過的設定。 */
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 
-/** 工廠收的東西：schema 的輸入面。 */
+/** 一列 mcp 的 config 輸入面（`Config` 解析之前）：清單與測試照這個形狀寫。 */
 export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 
 /** `thread.shared` 上放已預留的 `serverName` 的那一格。 */
@@ -598,32 +591,6 @@ export function apply(ctx: Context, config: McpConfig): void {
     throw new Error('mcp 要宿主的 tools.threadSource()，這個宿主沒有提供');
   }
   tools.threadSource((thread) => mountServer(thread, config), { services: HOST_SERVICES });
-}
-
-/**
- * 相容層的 mcp 插件。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉**；產品路徑走樹上的 {@link apply}。
- *
- * 名字先佔進 `mcp:server:<serverName>` 這個服務：撞名時 `services.provide` 的重名錯誤指名兩列。
- */
-export const mcpPlugin: NexusPlugin<McpConfig> = {
-  name,
-  Config: mcpConfigSchema,
-  async apply(registry: PluginRegistry, declared: McpConfig): Promise<void> {
-    registry.services.provide(`mcp:server:${declared.serverName}`, {
-      serverName: declared.serverName,
-    });
-    await mountServer(registryThread(registry), declared);
-  },
-};
-
-/**
- * 建一個相容層條目。**只給還沒搬的測試用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
- *
- * @param options - 設定，形狀見 {@link mcpConfigSchema}。
- * @returns 可以放進組裝點清單的條目。
- */
-export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
-  return { plugin: mcpPlugin, config: options };
 }
 
 /**

@@ -6,13 +6,12 @@
 
 import { fileURLToPath } from 'node:url';
 import { configToJsonSchema, createHostServicesPlugin } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { poolKey } from './pool.js';
 import { startModernHttp } from './http-fixtures.js';
 import {
-  createMcpPlugin,
   CREDENTIAL_REF_PATTERN,
   MCP_CREDENTIALS_SERVICE,
   MCP_POOL_SERVICE,
@@ -79,7 +78,7 @@ describe('stdio 的 env 引用憑證', () => {
     const { service } = credentials({ GITHUB_PAT: SECRET });
     const { registry } = await load([
       createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service }),
-      createMcpPlugin(stdioRow()),
+      mcpEntry(stdioRow()),
     ]);
     expect(await readEnv(registry)).toEqual({
       MCP_TOKEN: SECRET,
@@ -106,7 +105,7 @@ describe('stdio 的 env 引用憑證', () => {
       ...(service === undefined
         ? []
         : [createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service })]),
-      createMcpPlugin(stdioRow()),
+      mcpEntry(stdioRow()),
     ]);
     expect(registry.tools.resolve('mcp__srv__read_env')).toBeUndefined();
     const [warning] = warned(registry);
@@ -119,7 +118,7 @@ describe('stdio 的 env 引用憑證', () => {
     await expect(
       loadPlugins([
         createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: credentials({}).service }),
-        createMcpPlugin(stdioRow({ failOnStartupError: true })),
+        mcpEntry(stdioRow({ failOnStartupError: true })),
       ]),
     ).rejects.toThrow('引用的憑證 "GITHUB_PAT" 沒有值');
   });
@@ -128,7 +127,7 @@ describe('stdio 的 env 引用憑證', () => {
     const { service, asked } = credentials({ GITHUB_PAT: SECRET });
     const { registry } = await load([
       createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service }),
-      createMcpPlugin(
+      mcpEntry(
         stdioRow({
           connection: {
             transport: 'stdio',
@@ -152,7 +151,7 @@ describe('HTTP 的 headers 引用憑證', () => {
     const { service } = credentials({ MCP_BEARER: SECRET });
     const { registry } = await load([
       createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service }),
-      createMcpPlugin({
+      mcpEntry({
         serverName: 'srv',
         connection: {
           transport: 'http',
@@ -188,7 +187,7 @@ describe('池鍵與換值', () => {
           [MCP_POOL_SERVICE]: pool,
           [MCP_CREDENTIALS_SERVICE]: service,
         }),
-        createMcpPlugin(stdioRow()),
+        mcpEntry(stdioRow()),
       ]);
     const first = await assemble();
     values['GITHUB_PAT'] = 'second-value';

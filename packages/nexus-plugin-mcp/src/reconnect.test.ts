@@ -14,10 +14,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginRegistry } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import type { PluginEntry, PluginRegistry } from '@nexus/core';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
-import { createMcpPlugin } from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { RELEASE_NOTE } from './fixture-tools.js';
 import { MEMO_URI } from './resource-fixtures.js';
@@ -48,12 +47,12 @@ function pidsOf(marker: string): number[] {
 function server(
   overrides: Partial<McpPluginOptions> = {},
   env: Record<string, string> = {},
-): { plugin: ReturnType<typeof createMcpPlugin>; pids: () => number[]; marker: string } {
+): { plugin: PluginEntry; pids: () => number[]; marker: string } {
   const marker = `--marker-${randomUUID()}`;
   return {
     marker,
     pids: () => pidsOf(marker),
-    plugin: createMcpPlugin({
+    plugin: mcpEntry({
       serverName: 'srv',
       connection: {
         transport: 'stdio',
@@ -322,7 +321,7 @@ describe('握手卡住時關閉', () => {
     const marker = `--marker-${randomUUID()}`;
     const pids = () => pidsOf(marker);
     const { registry, dispose } = await loadPlugins([
-      createMcpPlugin({
+      mcpEntry({
         serverName: 'srv',
         connection: {
           transport: 'stdio',
@@ -372,7 +371,7 @@ describe('重連前的關閉屏障', () => {
     const marker = `--marker-${randomUUID()}`;
     const pids = () => pidsOf(marker);
     const { registry, dispose } = await loadPlugins([
-      createMcpPlugin({
+      mcpEntry({
         serverName: 'srv',
         connection: {
           transport: 'stdio',

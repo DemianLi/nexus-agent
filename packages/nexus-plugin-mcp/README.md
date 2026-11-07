@@ -27,10 +27,8 @@
 thread 時由 `mountServer` 建，每條 thread 各一份；連線在 CLI 是每條 thread 自己開，serve 向連線池取用、同一份設定整台共用一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
 在宿主的授權表上（`apps/harness/src/thread-service-grants.ts`）。
 
-**相容層的 `mcpPlugin` 與 `createMcpPlugin` 只給還沒搬的測試和 cli-mcp 手動夾具用，[#2535](https://github.com/DemianLi/nexus-agent/issues/2535) 拿掉。**
-它們把 registry 包成一條 thread 交給同一個 `mountServer`，跟宿主的 `threadSource` 不同的地方：`services.get` 不檢查宣告；`shared` 以
-那一次組裝為範圍、不分插件；`onDispose` 直接交給 `registry.lifecycle`（那一列 `apply` 失敗時被 rollback 撤掉、不跑）；`apply` 結束之後
-再叫各方法不拋；撞名另外經 `mcp:server:<serverName>` 服務先佔一次，訊息指名兩列。
+套件自己的測試經 `src/load-with-adapter.ts` 的 `mcpEntry` 組裝：樹上的 `apply(ctx)` 加宿主用的同一份 `runThreadSources`
+（`@nexus/tool-adapter`），授權表全給。同一條 thread 上兩列撞 `serverName` 時，訊息指名後掛的那一列。
 
 模型看到的是 `mcp__github__create_issue`、`mcp__web__search`——與 Claude Code、Codex 同一種
 server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化過的那些不會，見明文限制。）

@@ -13,10 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANNEL_SERVICE, createHostServicesPlugin } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool } from './index.js';
+import { MCP_POOL_SERVICE, McpConnectionPool } from './index.js';
 import type { McpPluginOptions } from './index.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -73,7 +73,7 @@ async function expectRefusal(registry: PluginRegistry, calls: () => string[]): P
 describe('taskSupport: required 的工具（#1572 N0516）', () => {
   it('CLI（plugin 自己連）：叫用當場拒絕，server 沒收到 tools/call', async () => {
     const { options, calls } = row();
-    const { registry, dispose } = await loadPlugins([createMcpPlugin(options)]);
+    const { registry, dispose } = await loadPlugins([mcpEntry(options)]);
     cleanup.push(dispose);
     await expectRefusal(registry, calls);
   }, 30_000);
@@ -84,7 +84,7 @@ describe('taskSupport: required 的工具（#1572 N0516）', () => {
     cleanup.push(() => shared.close());
     const { registry, dispose } = await loadPlugins([
       createHostServicesPlugin({ [MCP_POOL_SERVICE]: shared, [CHANNEL_SERVICE]: undefined }),
-      createMcpPlugin(options),
+      mcpEntry(options),
     ]);
     cleanup.push(dispose);
     await expectRefusal(registry, calls);
