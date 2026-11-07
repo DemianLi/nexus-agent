@@ -8,7 +8,7 @@ import type { Conversation } from '@/hooks/use-conversation';
 
 afterEach(cleanup);
 
-/** 狀態列用得到的那幾格；其餘欄位這裡不讀。 */
+/** `ConversationNotices` 讀到的必填欄位；其他必填欄位它不讀，所以用 `as` 轉。 */
 function conversation(overrides: Partial<Conversation>): Conversation {
   return {
     state: emptyConversation(),

@@ -67,7 +67,10 @@ function RunningElapsed({ since }: { since: number | undefined }) {
 export const SLOW_CONNECT_TEXT =
   '連線比平常久。可能是這個瀏覽器開了太多 nexus-agent 分頁，關掉其他分頁試試。';
 
-/** 第一次開線等了一下還沒好（#2343）：多半是伺服器正在為這條對話起執行程序。不講行程，講使用者看得到的事。 */
+/**
+ * 開線等了一下還沒好、又不在重接中時的狀態字（#2343）。per-thread 行程模型下多半是伺服器在起這條對話的行程；
+ * 字面不講行程，講使用者看得到的事。
+ */
 export const OPENING_TEXT = '正在開啟這條對話…';
 
 /**
@@ -114,7 +117,10 @@ export function StatusLine({
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
   slowConnect?: boolean;
-  /** 第一次開線等了一下還沒好（見 `useConversation` 的 `opening`）；重接中不講，那時講的是斷線那一行。 */
+  /**
+   * 這次開線等了一下還沒好（見 `useConversation` 的 `opening`）。重接中不講，那時講的是斷線那一行；
+   * 等太久（`slowConnect`）時講的是那一句。
+   */
   opening?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;
