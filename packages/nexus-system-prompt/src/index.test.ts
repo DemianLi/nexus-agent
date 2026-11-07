@@ -25,10 +25,11 @@ describe('@nexus/system-prompt 的定義', () => {
     expect(SYSTEM_PROMPT_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('SECTION_ORDERS 數值照 dsh，只放用到的三格', () => {
+  it('SECTION_ORDERS 的每一格都釘住：頭尾三格加插件的政策段', () => {
     expect(SECTION_ORDERS).toEqual({
       HARNESS_IDENTITY: -1000,
       DEPLOYMENT_PERSONA_PREFIX: 0,
+      PLUGIN_POLICY: 2000,
       DEPLOYMENT_PERSONA_SUFFIX: 10200,
     });
     expect(SYSTEM_PROMPT_MIDDLEWARE_NAME).toBe('nexusSystemPrompt');
