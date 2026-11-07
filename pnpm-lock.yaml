@@ -1591,6 +1591,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../nexus-subprocess
       '@nexus/timeout':
         specifier: workspace:*
         version: link:../nexus-timeout
@@ -1604,9 +1607,6 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
-      '@nexus/subprocess':
-        specifier: workspace:*
-        version: link:../nexus-subprocess
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

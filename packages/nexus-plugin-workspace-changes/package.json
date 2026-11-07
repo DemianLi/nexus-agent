@@ -22,7 +22,6 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@nexus/subprocess": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "tsx": "^4.22.4",
@@ -31,12 +30,10 @@
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/timeout": "workspace:*",
     "diff": "^9.0.0",
     "langchain": "^1.5.10",
     "zod": "^4.6.7"
-  },
-  "peerDependencies": {
-    "@nexus/subprocess": "workspace:*"
   }
 }
