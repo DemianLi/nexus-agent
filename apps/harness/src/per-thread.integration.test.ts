@@ -640,9 +640,23 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     };
+    // 串流中的那條日誌一直在寫，前台冷讀它時穩定觀察可能兩次都對不上，回 `persistence-failed`（同 single 與 dsh 的規則，
+    // 只是前台要讀那個檔，窗口比較長）。這種當作還沒搜到；其餘原因照丟，不穩的次數印出來、設上限。
+    const tally = { searches: 0, unstable: 0 };
     const hit = (query: string, threadId: string) => async () => {
+      tally.searches += 1;
       const outcome = await client.searchThreads(query);
-      if (outcome.kind !== 'ok') throw new Error(outcome.message);
+      if (outcome.kind !== 'ok') {
+        const reasons = running
+          .log()
+          .split('\n')
+          .filter((line) => line.includes('[搜尋]'));
+        if (reasons.length > 0 && reasons.every((line) => line.includes('一直在變'))) {
+          tally.unstable = reasons.length;
+          return undefined;
+        }
+        throw new Error(`${outcome.message}\n${reasons.join('\n')}`);
+      }
       return outcome.result.items.find((item) => item.threadId === threadId);
     };
     const candidate = (from: string, threadId: string) => async () => {
@@ -679,8 +693,10 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     console.log(
       `[C3 落後量測] 送出後搜得到使用者那句 ${JSON.stringify(round(lags.userMessage))} ms；` +
         `回覆在一輪結束之後幾毫秒搜得到（負的是還在串就搜得到）${JSON.stringify(round(lags.reply))} ms；` +
-        `送出後別條 thread 的 @ 候選看得到 ${JSON.stringify(round(lags.reference))} ms`,
+        `送出後別條 thread 的 @ 候選看得到 ${JSON.stringify(round(lags.reference))} ms；` +
+        `搜尋 ${String(tally.searches)} 次，對帳不穩 ${String(tally.unstable)} 次`,
     );
+    expect(tally.unstable).toBeLessThan(tally.searches / 20);
   }, 180_000);
 
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {

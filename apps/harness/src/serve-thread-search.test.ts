@@ -330,6 +330,7 @@ async function hits(client: WireClient, query: string): Promise<string[]> {
 
 describe('活的 thread 讀記憶體（#1599）', () => {
   // per-thread 下搜尋由前台冷讀磁碟，看不到批次窗口裡還沒落盤的那一句（docs/operations.md〈行程模型〉）。
+  // TODO(#2531): per-thread 補上活的讀記憶體之後，拿掉這個 skip。
   it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread')(
     '新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判',
     async () => {

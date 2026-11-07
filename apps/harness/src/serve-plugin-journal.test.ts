@@ -207,12 +207,17 @@ describe('--patch 是不經過紀錄的路（驗收 E）', () => {
     expect(notice[0]).toContain('goal');
 
     const snap = snapshot(dir);
-    const overlays = snap.layers?.overlays.filter(
-      ({ file }) => !file.includes(FIXTURE_PATCH_DIR_PREFIX),
-    );
+    const overlays =
+      PROCESS_MODEL_UNDER_TEST === 'per-thread'
+        ? snap.layers?.overlays.filter(({ file }) => !file.includes(FIXTURE_PATCH_DIR_PREFIX))
+        : snap.layers?.overlays;
     expect(overlays).toEqual([{ file: overlay, rows: ['todo', 'goal'] }]);
     const marked = snap.rows
-      .filter((row) => row.unaudited === true && row.id !== 'process-model')
+      .filter(
+        (row) =>
+          row.unaudited === true &&
+          (PROCESS_MODEL_UNDER_TEST !== 'per-thread' || row.id !== 'process-model'),
+      )
       .map((row) => row.id);
     expect([...marked].sort()).toEqual(['goal', 'todo']);
 

@@ -280,6 +280,7 @@ describe('createFrontWireHandler 的內部路由', () => {
       ['plugins', 'GET'],
       ['activity', 'GET'],
       ['turn-failures', 'GET'],
+      ['stop', 'POST'],
       ['fork-seed', 'POST'],
       ['fork-adopt', 'POST'],
     ] as const) {
