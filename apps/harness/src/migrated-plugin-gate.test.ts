@@ -39,6 +39,7 @@ const EXPECTED_MIGRATED = [
   '@nexus/plugin-echo',
   '@nexus/plugin-feedback',
   '@nexus/plugin-goal',
+  '@nexus/plugin-mcp',
   '@nexus/plugin-permission-presets',
   '@nexus/plugin-present',
   '@nexus/plugin-quickjs',
@@ -66,7 +67,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
     expect(failed.map(([dir]) => dir)).toEqual([]);
   });
 
-  it('遷出的集合正好是 agent-instructions、ask-user、echo、feedback、goal、permission-presets、present、quickjs、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory；舊插件不在裡面', () => {
+  it('遷出的集合正好是 agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、present、quickjs、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory；舊插件不在裡面', () => {
     expect(migratedPackages(packages, loaded).map((pkg) => pkg.name)).toEqual(EXPECTED_MIGRATED);
     const older = packages
       .map((pkg) => pkg.name)
@@ -76,7 +77,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
     expect(older).not.toContain('@nexus/plugin-present');
   });
 
-  it('現在零違規（驗收 C：agent-instructions、ask-user、echo、feedback、goal、permission-presets、present、quickjs、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
+  it('現在零違規（驗收 C：agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、present、quickjs、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
     const violations = await collectMigratedPluginViolations(ROOT, packages, loaded);
     expect(violations.map(formatMigratedPluginViolation)).toEqual([]);
   });

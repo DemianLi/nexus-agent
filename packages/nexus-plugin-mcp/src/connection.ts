@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/client';
 import type { Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+// eslint-disable-next-line no-restricted-imports -- 子行程環境的清洗今天只在 core 匯出，#2537 拿掉
 import { scrubbedParentEnv } from '@nexus/core';
 import { substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';

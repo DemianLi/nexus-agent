@@ -4,8 +4,11 @@
  * @module
  */
 
+// eslint-disable-next-line no-restricted-imports -- 測試輔助檔，只給測試用
 import { createRegistry, loadPlugins as load } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 測試輔助檔，只給測試用
 import type { PluginEntry } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 測試輔助檔，只給測試用
 import { toLangChainTool } from '@nexus/tool-adapter';
 
 /** 同 `@nexus/core` 的 `loadPlugins`，沒給註冊表時建一個帶 `adaptTool` 的。 */
