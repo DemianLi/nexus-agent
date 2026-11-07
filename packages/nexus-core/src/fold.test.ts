@@ -467,7 +467,7 @@ describe('工具事件的三顆生產者（#1248）', () => {
     expect(names(params.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
   });
 
-  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算；pre 在有工具過濾時另一份，見 subagent-tool-filter.test.ts）', async () => {
+  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算；pre 在有基座工具被遮時另一份，見 subagent-tool-filter.test.ts）', async () => {
     const params = await fold(
       [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
       { events: new EventBus() },

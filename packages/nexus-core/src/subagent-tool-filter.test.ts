@@ -254,7 +254,7 @@ describe('遮罩的工具那一半：子代理那一份 pre 的外層 core 段',
   const call = (pre: Pre, name: string, id: string, run: () => unknown) =>
     pre.wrapToolCall({ toolCall: { name, id, args: {} } }, run);
 
-  /** 掛一位 `prepend` 的插件 pre 監聽者，記下它看到的每一個名字。 */
+  /** 掛一位 `prepend` 的插件 pre 監聽者，記下它看到的每一個名字；`events` 為假時 fold 不給派發面。 */
   async function foldWithHook(heard: string[], events: boolean) {
     const { registry } = await loadPlugins([
       ...team(),

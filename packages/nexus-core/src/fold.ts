@@ -616,7 +616,7 @@ export function foldRegistry(
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions, options.events);
   // 工具事件的三顆生產者（#1248）：無狀態，呼叫者身分從每次請求現算。post 與 execute 一份實例走遍 root 與每個子代理；
-  // pre 子代理另一份，帶工具過濾那一位 core 監聽者（見下面槽位表的 `toolPreExecute`）。
+  // pre 在有基座工具被遮時，子代理另一份，帶工具過濾那一位 core 監聽者（見下面的 `subagentToolPreExecute`）。
   const toolPreExecute =
     options.events === undefined ? undefined : createToolPreExecuteMiddleware(options.events);
   const toolPostExecute =
@@ -851,7 +851,7 @@ export function foldRegistry(
     ),
     // `tools/pre-execute`（#1248）緊貼閘門外側：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成
     // 「先跳核准卡、再被拒」。拒絕在問人之前，同 dsh（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
-    // 子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件監聽者、閘門與工具本體。
+    // 有基座工具被遮時，子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件監聽者、閘門與工具本體。
     { name: 'toolPreExecute', root: same(toolPreExecute), subagent: same(subagentToolPreExecute) },
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。

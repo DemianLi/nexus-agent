@@ -11,7 +11,8 @@
  * ## core 監聽者排在固定的兩段
  *
  * 外層 core → 匯流排上的插件監聽者 → 內層 core（{@link CoreToolListeners}）。core 的監聽者不掛在匯流排上：同一個事件裡，有的要在插件外側
- * （工具過濾：被遮的呼叫插件看不到），有的要在內側，只靠註冊順序的話，插件的 `prepend` 或晚掛的監聽者就會插進去。
+ * （工具過濾：被遮的呼叫連最外側的插件監聽者也看不到），只靠註冊順序的話，插件的 `prepend` 或晚掛的監聽者就會排到它外面。內層段給要排在
+ * 每位插件監聽者之後的 core 監聽者。
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
@@ -35,10 +36,11 @@
  * 與請求形狀（`wrappedRequestOf`）只出現在生產者裡。**沒有人替換時，生產者把原物件原樣交回**：`tool-events.ts` 的錯誤碼掛在
  * 以訊息物件為鍵的 `WeakMap` 上，中途複製訊息碼就斷。
  *
- * ## agent 身分（草稿 D4）
+ * ## agent 身分
  *
- * `exec.agent` 是 {@link SessionAddress}：root 或某個子代理的 `runId`，來源與圍堵相同（`toolCallSessionAddress`）。三顆生產者是
- * root 與每個子代理共用的一份實例，**沒有 `Scoped<Agent>` 過濾**，監聽者自己看 `exec.agent`。認不出來是誰（不在圖裡）時是 `undefined`。
+ * `exec.agent` 是 {@link SessionAddress}：root 或某個子代理的 `runId`，來源與圍堵相同（`toolCallSessionAddress`）。`execute` 與
+ * `post-execute` 是 root 與每個子代理共用的一份實例；`pre-execute` 在有基座工具被遮時，子代理另一份，外層 core 段帶工具過濾。
+ * 匯流排上的插件監聽者**沒有 `Scoped<Agent>` 過濾**，自己看 `exec.agent`。認不出來是誰（不在圖裡）時是 `undefined`。
  *
  * ## 與 dsh 的偏離（動工前登記在 #1248，這裡逐條對）
  *
@@ -190,7 +192,7 @@ declare module './events.js' {
      * 派發前允許或拒絕。`next()` 即允許；回 `{ kind: 'deny', reason, error? }` 拒絕，模型收到 `Error: <reason>` 那一則
      * （`toolRefusal`，掛 `error` 的碼），工具本體與更內層都不跑。**沒有 `ask`／`cancel`**：問人還在 `approvals` 註冊點，取消歸 `turn-cancel`。
      * 位置在核准閘門外側，所以被拒的呼叫不會先跳核准卡。**同一個 `callId` 在核准 resume 之後會再跑一次，監聽者必須冪等。**
-     * 沒有 `Scoped<Agent>`：所有 agent 的呼叫都派發，看 `exec.agent` 自己過濾。
+     * 沒有 `Scoped<Agent>`：每個 agent 的呼叫都派發（子代理被工具過濾遮掉的基座工具除外：在插件監聽者外側就被拒），看 `exec.agent` 自己過濾。
      * @param exec - 這次呼叫（名字、解析後的參數、呼叫者）。
      * @param next - 往內一位；最內層回 `allow`。
      * @mode waterfall
@@ -465,12 +467,13 @@ export const TOOL_EXECUTE_MIDDLEWARE_NAME = 'nexusToolExecute';
 /** middleware 的名字。 */
 export const TOOL_POST_EXECUTE_MIDDLEWARE_NAME = 'nexusToolPostExecute';
 
-/** 三個會改結果的工具事件。 */
+/** 以 waterfall 派發、能放 core 監聽者的三個工具事件；`tools/result` 是 emit，不在內。 */
 type LayeredToolEvent = 'tools/pre-execute' | 'tools/execute' | 'tools/post-execute';
 
 /**
- * core 自己的監聽者，簽名同事件表那一格。**不掛在匯流排上**：`outer` 固定排在每位插件監聽者外側，`inner` 固定排在內側，
- * 插件怎麼註冊（含 `prepend`）、什麼時候註冊都插不進兩段之間，也拿不到它們。
+ * core 自己的監聽者，簽名與語意同事件表那一格（`next()` 只能叫一次，第二次拋；不叫就是否決或自己交出結果）。**不掛在匯流排上**：
+ * `outer` 固定排在每位插件監聽者外側，`inner` 固定排在內側；插件怎麼註冊（含 `prepend`）、什麼時候註冊，都只落在兩段之間。
+ * 它們也不出現在 `registry.events.listeners()` 的清單上。
  */
 export interface CoreToolListeners<K extends LayeredToolEvent> {
   /** 插件監聽者外側，依陣列順序由外而內。 */
@@ -526,7 +529,7 @@ function dispatchLayered<K extends LayeredToolEvent>(
  *
  * 拒絕回的是 `toolRefusal(reason, …)`，外面的圍堵像對待任何一則回來的錯誤訊息一樣把它記成 `tool/result`。
  *
- * @param events - 宿主持有的派發面；省略即只有 `core` 那兩段。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
  * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
@@ -562,7 +565,7 @@ export function createToolPreExecuteMiddleware(
  *
  * **沒有人短路時，回的是內層原本回的那個物件**（同一個 `ToolMessage` 或 `Command`），不是重建的。
  *
- * @param events - 宿主持有的派發面；省略即只有 `core` 那兩段。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
  * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
@@ -604,7 +607,7 @@ export function createToolExecuteMiddleware(
  * 原樣再拋，交給外面的圍堵照舊翻；`replace` 時回替換過的那則（`status: 'error'`，碼沿用）。中斷與 `Command` 這類控制流
  * （`isGraphBubbleUp`）和這一輪被中止的錯（`isTurnCancelled`，交給外面的 `turn-cancel` 換成 `ABORTED`）不派發，原樣往外拋。
  *
- * @param events - 宿主持有的派發面；省略即只有 `core` 那兩段。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
  * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */

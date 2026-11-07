@@ -10,10 +10,11 @@
  * - 空 filter 拋錯、未知名字拋錯並列出已知名單；
  * - **只遮繼承來的全域工具**，子代理自己那一層註冊的不受影響。
  *
- * 這個檔只有**純的部分**：驗 filter、判一個名字留不留、以及遮基座工具的那顆 middleware。registry 工具的扣除在
+ * 這個檔只有**純的部分**：驗 filter、判一個名字留不留、遮基座工具的 middleware（請求那一半），以及
+ * `tools/pre-execute` 的 core 監聽者（呼叫那一半）。registry 工具的扣除在
  * {@link ./fold.ts} 的 `foldSubAgents`。
  *
- * ## 基座工具為什麼要另外一顆 middleware
+ * ## 基座工具為什麼要另外攔
  *
  * 檔案系統工具不在 registry 裡，是子代理 middleware stack 裡 `createFilesystemMiddleware` 帶的
  * （`apps/harness/src/base-tools.ts`）。要「從請求消失、叫了也不執行」，只能在它的外側攔：

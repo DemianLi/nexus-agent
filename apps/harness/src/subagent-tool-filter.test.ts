@@ -56,7 +56,7 @@ async function assemble(options: {
   workerTurns: ScriptedTurn[];
   filter: ToolFilter | undefined;
   background: boolean;
-  /** 插件掛在 `tools/pre-execute` 的監聽者看到的每次呼叫，記成 `<root|subagent>:<工具名>`。 */
+  /** 插件掛在 `tools/pre-execute` 的監聽者看到的每次呼叫，記成 `<root|subagent|none>:<工具名>`（認不出身分時是 `none`）。 */
   preSeen?: string[];
 }) {
   const rootModel = new ScriptedChatModel({ turns: options.rootTurns });
