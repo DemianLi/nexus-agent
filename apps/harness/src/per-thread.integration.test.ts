@@ -297,6 +297,39 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     expect(childrenRunning(supervisor, 'conversation-process')).toEqual(spoken);
   }, 180_000);
 
+  it('全域下行與列表的在跑：前台從對話行程接過來，跟 single 一樣', async () => {
+    const running = await start([
+      { content: '慢慢串的一段回覆，好讓列表問得到它在跑。', tokenDelayMs: 150 },
+    ]);
+    const client = await clientOf(await running.loginUrl(1));
+    const feedLine = new AbortController();
+    const feed = await client.openThreadFeed(feedLine.signal);
+    const statuses: boolean[] = [];
+    void (async () => {
+      for await (const frame of feed) {
+        if (frame.type === 'status' && frame.threadId === 'thread-live')
+          statuses.push(frame.running);
+      }
+    })().catch(() => {});
+    const runningInList = async (): Promise<boolean | undefined> => {
+      const outcome = await client.listThreads();
+      if (outcome.kind !== 'ok') return undefined;
+      return outcome.result.items.find(({ threadId }) => threadId === 'thread-live')?.running;
+    };
+
+    const downlink = new AbortController();
+    const events = await client.openEvents('thread-live', { signal: downlink.signal });
+    await client.runStart('thread-live', '你好');
+    await expect.poll(() => statuses, { timeout: 20_000 }).toContain(true);
+    await expect.poll(runningInList, { timeout: 20_000 }).toBe(true);
+
+    expect(replies(await foldTurn(events))).toEqual(['慢慢串的一段回覆，好讓列表問得到它在跑。']);
+    await expect.poll(() => statuses.at(-1), { timeout: 20_000 }).toBe(false);
+    await expect.poll(runningInList, { timeout: 20_000 }).toBe(false);
+    downlink.abort();
+    feedLine.abort();
+  }, 180_000);
+
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {
     const running = await start([{ content: '回覆。' }]);
     const supervisor = running.child.pid!;

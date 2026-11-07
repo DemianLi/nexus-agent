@@ -689,6 +689,15 @@ export interface WireHandlerOptions {
     stop(threadId: string): Promise<void>;
   };
   /**
+   * 全域下行用這一條，不自己建（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台：每件都由 `front-feed.ts`
+   * 從對話行程接進來）。handler 收尾時照樣關它。
+   */
+  readonly threadFeed?: ThreadFeed;
+  /**
+   * 本地沒建的 thread 在不在跑（列表的 `running`），per-thread 的前台問 `front-feed.ts`。回 `undefined` 當閒著。
+   */
+  readonly runningElsewhere?: (threadId: string) => boolean | undefined;
+  /**
    * 主對話一輪開始與結束時叫（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)）：`begin` 是 root 日誌寫下 `turn/start`，`end` 是 `turn/end` 或
    * `turn/failed`。背景子代理的輪寫在它自己的日誌，不算。thread 建好之後才開始聽，續接時補寫的收尾可能只看到 `end`。
    */
@@ -1850,10 +1859,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著，直到第一個請求把它建起來。 */
   const unbuiltSince = new Map<string, number>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
-  const feed = new ThreadFeed({
-    ...(options.downlinkMaxBytes === undefined ? {} : { maxQueuedBytes: options.downlinkMaxBytes }),
-    warn: (message) => options.warn?.(message),
-  });
+  const feed =
+    options.threadFeed ??
+    new ThreadFeed({
+      ...(options.downlinkMaxBytes === undefined
+        ? {}
+        : { maxQueuedBytes: options.downlinkMaxBytes }),
+      warn: (message) => options.warn?.(message),
+    });
   /**
    * 上傳收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：thread → 收據 id → 存好的檔案參照。
    * **收據只在收下它的那條 thread 有效**（查表以 thread 為鍵，拿別條 thread 的收據查不到），行程重開就失效——沒送出去的上傳不續命。
@@ -3959,7 +3972,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         items: stored.items.map((item) => ({
           ...item,
           // 同全域下行的狀態（#632）：停在等人回答也算在跑，兩邊是同一個判準。
-          running: ready.get(item.threadId)?.pump.agentRunning ?? false,
+          running:
+            ready.get(item.threadId)?.pump.agentRunning ??
+            options.runningElsewhere?.(item.threadId) ??
+            false,
         })),
       },
     };

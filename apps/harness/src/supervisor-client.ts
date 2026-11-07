@@ -37,6 +37,8 @@ export interface SupervisorClientOptions {
   readonly input: Readable;
   /** 前台 → 監督行程（前台真正的 stdout）。 */
   readonly output: Writable;
+  /** 一條 thread 的行程起來了（或前台重起之後監督行程補講一次）。同一條同一個 socket 會講很多次：每個 `ensure` 的回答都是一顆 `up`。 */
+  readonly onUp?: (threadId: string, socket: string) => void;
   /** 一條 thread 的行程結束了；`socket` 是它原本聽的那個（表上沒有就是 `undefined`），前台用它收掉往那裡的連線。 */
   readonly onDown?: (threadId: string, cause: DeathCause, socket: string | undefined) => void;
   readonly warn?: (message: string) => void;
@@ -67,6 +69,7 @@ export class SupervisorGoneError extends Error {
  */
 export class SupervisorClient {
   readonly #output: Writable;
+  readonly #onUp: SupervisorClientOptions['onUp'];
   readonly #onDown: SupervisorClientOptions['onDown'];
   readonly #warn: (message: string) => void;
   readonly #live = new Map<string, string>();
@@ -77,6 +80,7 @@ export class SupervisorClient {
 
   constructor(options: SupervisorClientOptions) {
     this.#output = options.output;
+    this.#onUp = options.onUp;
     this.#onDown = options.onDown;
     this.#warn = options.warn ?? (() => {});
     options.input.on('data', (chunk: Buffer) => this.#receive(chunk));
@@ -175,6 +179,7 @@ export class SupervisorClient {
     switch (event.type) {
       case 'up':
         this.#live.set(event.threadId, event.socket);
+        this.#onUp?.(event.threadId, event.socket);
         this.#settle(event.threadId, { type: 'up', socket: event.socket });
         return;
       case 'down': {

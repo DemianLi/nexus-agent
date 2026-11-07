@@ -24,7 +24,7 @@ import {
   DOWNLINK_MAX_DEPTH,
   boundFrame,
 } from './bounded-event-queue.js';
-import type { PumpActivity, ThreadPump } from './thread-pump.js';
+import type { PendingInterrupt, PumpActivity } from './thread-pump.js';
 
 interface FeedSubscriber {
   readonly queue: BoundedQueue<ThreadFeedFrame>;
@@ -39,10 +39,20 @@ export interface ThreadFeedOptions {
   readonly warn?: (message: string) => void;
 }
 
+/**
+ * 接得上這條線的一條 thread：本行程的 `ThreadPump`，或 per-thread 前台轉來的那條對話行程（`front-feed.ts`）。
+ * `pendings` 是現在還掛著的題，開線時補送；`watch` 之後講的每一件照原樣廣播。
+ */
+export interface FeedSource {
+  readonly threadId: string;
+  readonly pendings: readonly Pick<PendingInterrupt, 'request'>[];
+  watch(listener: (activity: PumpActivity) => void): () => void;
+}
+
 export class ThreadFeed {
   readonly #maxQueuedBytes: number;
   readonly #warn: ((message: string) => void) | undefined;
-  readonly #pumps = new Map<string, ThreadPump>();
+  readonly #pumps = new Map<string, FeedSource>();
   readonly #subscribers = new Set<FeedSubscriber>();
   #closed = false;
 
@@ -56,7 +66,7 @@ export class ThreadFeed {
    *
    * @returns 拆掉。
    */
-  attach(pump: ThreadPump): () => void {
+  attach(pump: FeedSource): () => void {
     const threadId = pump.threadId;
     this.#pumps.set(threadId, pump);
     const unwatch = pump.watch((activity: PumpActivity) => {

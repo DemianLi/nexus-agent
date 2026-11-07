@@ -138,6 +138,7 @@ import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
 import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
+import type { FrontFeed } from './front-feed.js';
 import type { SupervisorClient } from './supervisor-client.js';
 import type { EmbedStreamGuard, ThreadForkSeed, WireAuth, WireHandler } from './wire-handler.js';
 import type { ControlledHandler } from './conversation-control.js';
@@ -587,10 +588,11 @@ export interface RunServeOptions {
   readonly front?: FrontProcessMode;
 }
 
-/** per-thread 前台要的兩樣：監督行程的控制面、往對話行程的轉送器。 */
+/** per-thread 前台要的：監督行程的控制面、往對話行程的轉送器、從對話行程接進來的全域下行。 */
 export interface FrontProcessMode {
   readonly supervisor: SupervisorClient;
   readonly forwarder: FrontForwarder;
+  readonly feed: FrontFeed;
 }
 
 /**
@@ -1553,6 +1555,8 @@ async function startServer(
         options.front.supervisor,
         options.front.forwarder,
       ),
+      threadFeed: options.front.feed.feed,
+      runningElsewhere: (threadId: string) => options.front?.feed.running(threadId),
     }),
     // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。
     ...(options.conversation !== undefined && {
