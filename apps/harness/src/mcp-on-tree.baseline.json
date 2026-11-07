@@ -4,9 +4,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -60,9 +58,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -116,9 +112,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -174,9 +168,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -232,9 +224,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -277,9 +267,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -322,10 +310,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -380,10 +365,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -438,10 +420,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -496,10 +475,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -554,10 +530,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -612,10 +585,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -670,10 +640,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -728,10 +695,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -786,10 +750,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -844,10 +805,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -902,10 +860,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -960,10 +915,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1018,10 +970,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1076,10 +1025,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1134,10 +1080,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1192,10 +1135,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1250,10 +1190,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1308,10 +1245,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1366,10 +1300,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1424,10 +1355,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1482,10 +1410,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1540,10 +1465,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1598,10 +1520,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1656,10 +1575,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1714,10 +1630,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1774,10 +1687,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1834,10 +1744,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1894,10 +1801,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -1954,10 +1858,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2014,10 +1915,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2074,10 +1972,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2134,10 +2029,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2194,10 +2086,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2254,10 +2143,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2314,10 +2200,7 @@
     "warnings": [],
     "raised": "[{\"type\":\"mcp_elicitation\",\"server\":\"srv\",\"tool\":\"ask\",\"arguments\":{},\"requests\":{\"confirm\":{\"mode\":\"form\",\"message\":\"要不要繼續？\",\"requestedSchema\":{\"type\":\"object\",\"properties\":{\"confirm\":{\"type\":\"boolean\"}},\"required\":[\"confirm\"],\"$schema\":\"https://json-schema.org/draft/2020-12/schema\"}}}}]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2374,10 +2257,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2434,10 +2314,7 @@
     "warnings": [],
     "raised": "[{\"type\":\"mcp_elicitation\",\"server\":\"srv\",\"tool\":\"ask_url\",\"arguments\":{},\"requests\":{\"auth\":{\"mode\":\"url\",\"message\":\"請授權\",\"url\":\"https://example.test/authorize\"}}}]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2494,10 +2371,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2554,10 +2428,7 @@
     "warnings": [],
     "raised": "[{\"type\":\"mcp_elicitation\",\"server\":\"srv\",\"tool\":\"ask_twice\",\"arguments\":{},\"requests\":{\"one\":{\"mode\":\"url\",\"message\":\"請授權 one\",\"url\":\"https://example.test/authorize\"}}},{\"type\":\"mcp_elicitation\",\"server\":\"srv\",\"tool\":\"ask_twice\",\"arguments\":{},\"requests\":{\"two\":{\"mode\":\"url\",\"message\":\"請授權 two\",\"url\":\"https://example.test/authorize\"}}}]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2614,10 +2485,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2674,10 +2542,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2734,10 +2599,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2794,10 +2656,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2854,10 +2713,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2914,10 +2770,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -2974,10 +2827,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3034,10 +2884,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3094,10 +2941,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3154,10 +2998,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3201,10 +3042,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3248,10 +3086,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3295,10 +3130,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3342,10 +3174,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3389,10 +3218,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3436,10 +3262,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3483,10 +3306,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3530,10 +3350,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3577,10 +3394,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3624,10 +3438,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3671,10 +3482,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3718,10 +3526,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3765,10 +3570,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3814,9 +3616,7 @@
     ],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3858,9 +3658,7 @@
     ],
     "raised": "[]",
     "calls": 1,
-    "binds": [
-      0
-    ],
+    "binds": [0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3900,10 +3698,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -3976,10 +3771,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4052,12 +3844,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 4,
-    "binds": [
-      0,
-      1,
-      1,
-      0
-    ],
+    "binds": [0, 1, 1, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4157,12 +3944,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 4,
-    "binds": [
-      0,
-      1,
-      1,
-      0
-    ],
+    "binds": [0, 1, 1, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4262,12 +4044,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 4,
-    "binds": [
-      0,
-      0,
-      1,
-      1
-    ],
+    "binds": [0, 0, 1, 1],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4346,12 +4123,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 4,
-    "binds": [
-      0,
-      0,
-      1,
-      1
-    ],
+    "binds": [0, 0, 1, 1],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4430,10 +4202,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4488,10 +4257,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4546,10 +4312,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4604,10 +4367,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4662,10 +4422,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
@@ -4720,10 +4477,7 @@
     "warnings": [],
     "raised": "[]",
     "calls": 2,
-    "binds": [
-      0,
-      0
-    ],
+    "binds": [0, 0],
     "toolLists": [
       [
         "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
