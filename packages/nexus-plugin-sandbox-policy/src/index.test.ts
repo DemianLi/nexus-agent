@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createHostServicesPlugin, createRegistry, loadPlugins, REFERENCE_RULE } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
+import type { PipelineExecution, PipelineResult, PluginEntry } from '@nexus/core';
 import { toLangChainTool } from '@nexus/tool-adapter';
 
 import {
@@ -175,13 +175,14 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
     expect(registry.services.use('sandboxPolicy').controller.source()).toBe('danger-full-access');
   });
 
-  it('沒有圍堵：載得起來、只貢獻那一句（一段，沒有 middleware），不要控制器', async () => {
+  it('沒有圍堵：載得起來、只貢獻那一句（一段，沒有 middleware、沒有 `tools/execute` 監聽者），不要控制器', async () => {
     const { registry } = await load([createSandboxPolicyPlugin()]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
     expect(registry.prompt.sections().map((section) => section.name)).toEqual([
       SANDBOX_POLICY_SECTION_NAME,
     ]);
     expect(registry.middleware.list()).toHaveLength(0);
+    expect(registry.events.listeners().filter((each) => each.name === 'tools/execute')).toEqual([]);
   });
 
   it('沒有圍堵時就算交了 sandboxPolicy 也不掛控制器那半（訊號是 fsContainment，不是控制器在不在）', async () => {
@@ -191,6 +192,70 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
       createSandboxPolicyPlugin(),
     ]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
+  });
+});
+
+/** 一次 `tools/execute` 派發的那一筆；這組測試只看 `name`。 */
+function execution(name: string): PipelineExecution {
+  return { callId: 'c1', name, args: {}, agent: undefined, thread: undefined, signal: undefined };
+}
+
+/** 有圍堵、交了控制器的那一份註冊表。 */
+async function loadContained(controller: SandboxModeController): ReturnType<typeof load> {
+  return load([
+    createHostServicesPlugin({
+      fsContainment: CONTAINED_FILESYSTEM,
+      sandboxPolicy: { controller, rootDir: '/workspace' },
+    }),
+    createSandboxPolicyPlugin(),
+  ]);
+}
+
+/** 本體回的那一則；這組測試不看它。 */
+const RESULT: PipelineResult = { kind: 'message', blocks: [], content: '', isError: false };
+
+describe('委派那一刻拍下這一格（#326）', () => {
+  it('有圍堵時掛一位 `tools/execute` 監聽者，不掛 middleware', async () => {
+    const { registry } = await loadContained(new SandboxModeController('workspace-write'));
+    expect(registry.middleware.list()).toHaveLength(0);
+    expect(
+      registry.events.listeners().filter((each) => each.name === 'tools/execute'),
+    ).toHaveLength(1);
+  });
+
+  it('`task`：派發的那一刻同步拍，往內交之後 root 再切，本體（含 await 之後）讀到的仍是委派那一格', async () => {
+    const controller = new SandboxModeController('workspace-write');
+    const { registry } = await loadContained(controller);
+    const seen: (string | undefined)[] = [];
+    const pending = registry.dispatch.waterfall('tools/execute', execution('task'), async () => {
+      seen.push(controller.current, controller.delegatedMode);
+      await Promise.resolve();
+      seen.push(controller.current, controller.delegatedMode);
+      return RESULT;
+    });
+    controller.switchTo('read-only');
+    await pending;
+    expect(seen).toEqual([
+      'workspace-write',
+      'workspace-write',
+      'workspace-write',
+      'workspace-write',
+    ]);
+    expect(controller.current).toBe('read-only');
+  });
+
+  it('不是 `task` 的工具不進委派：本體讀到的是 root 當下那一格', async () => {
+    const controller = new SandboxModeController('workspace-write');
+    const { registry } = await loadContained(controller);
+    const seen: (string | undefined)[] = [];
+    const pending = registry.dispatch.waterfall('tools/execute', execution('ls'), async () => {
+      await Promise.resolve();
+      seen.push(controller.current, controller.delegatedMode);
+      return RESULT;
+    });
+    controller.switchTo('read-only');
+    await pending;
+    expect(seen).toEqual(['read-only', undefined]);
   });
 });
 
