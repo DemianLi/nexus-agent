@@ -245,7 +245,7 @@ class E2ePerThread(unittest.TestCase):
         self.assertLess(uses.index('./.github/actions/sandbox-spawner'), list(self.steps).index('真瀏覽器 e2e（per-thread）'))
 
     def test_builds_like_static(self) -> None:
-        """e2e 供應的是 web 的 dist；順序照 static：先 lib、再 web。"""
+        """e2e 起的 serve 供應 web 的 dist；前置條件照抄 static 那一步的 e2e：先 build:lib、再 build web。"""
         build = self.steps['建置 lib 與 web']['run'].split('\n')
         self.assertLess(build.index('pnpm run build:lib'), build.index('pnpm --filter @nexus/web run build'))
         static = self.ci['jobs']['static']['steps']

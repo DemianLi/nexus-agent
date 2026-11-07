@@ -50,12 +50,12 @@ permissions:
 #         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
 #         ├─ sandbox-spawner ──┤   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
 #         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
-#         ├─ sandbox-spawner-arm64 ┤ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
-#         └─ e2e (per-thread) ─┘   只在合併後完整一輪：真瀏覽器 e2e 換成 per-thread 行程模型再跑一輪（#2341）
+#         ├─ spawner-arm64 ────┤   sandbox-spawner-arm64，只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
+#         └─ e2e-per-thread ───┘   只在合併後完整一輪：真瀏覽器 e2e 換成 per-thread 行程模型再跑一輪（#2341）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 4 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
-# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e (per-thread) 1 ＝ 12。plan 在它之前、gate 在它之後，不同時。
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e-per-thread 1 ＝ 12。plan 在它之前、gate 在它之後，不同時。
 # 合併後那一輪的 post-merge.yml 另有 native agent loop 4 片，跟這一段同時跑。
 # 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate（rust 為 true 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
 # 所以合併後的一輪加上兩張功能 PR 同時跑是 12 ＋ 4 ＋ 1 ＋ 1 ＝ 18，在 20 之內。
@@ -545,7 +545,8 @@ jobs:
 
   # 真瀏覽器 e2e 換成 per-thread 行程模型（#2341）：serve 由監督行程起前台與每條 thread 的對話行程，瀏覽器從前台的 port 打。
   # 跟 static 那一步的 e2e 同一套測試、同樣只在合併後完整一輪跑；另開 job 是為了跟 static 平行，不拉長最長的那一段。
-  # 監督行程在這台機器上用 spawner 那個 action 編（同一個 crate）。建置的順序照 static：先 lib，再 web 的 dist。
+  # 監督行程在這台機器上用 spawner 那個 action 編（同一個 crate）。e2e 的前置條件照抄 static 那一步：它跑在 build:lib 與 web build 之後，
+  # 只有這個組合驗證過；e2e 用不用得到 lib 沒查。
   e2e-per-thread:
     name: e2e (per-thread)
     needs: plan
@@ -555,8 +556,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/sandbox-spawner
-        with:
-          cache: 'false'
       - uses: ./.github/actions/setup
       - name: 建置 lib 與 web
         run: |
