@@ -69,7 +69,13 @@ import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { probeLivez } from '@/lib/livez-probe';
-import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
+import {
+  OPENING_NOTICE_MS,
+  RECOVERED_NOTICE_MS,
+  reconnectDelay,
+  SLOW_CONNECT_MS,
+} from '@/lib/reconnect';
+import { StreamHaltedError } from '@/lib/stream-halted';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -249,16 +255,23 @@ export interface Conversation {
   readonly connections: number;
   /**
    * 下行斷了（或第一次就沒開成），等著重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：多半是照退避自動重接；
-   * 伺服器送來看不懂的資料時（#1601 `N0758`）停止自動重連，只等人按 {@link reconnectNow}，這時 {@link refusal} 有那一句。
+   * 伺服器送來看不懂的資料時（#1601 `N0758`）、或下行拋 `StreamHaltedError`（#2343）時停止自動重連，只等人按 {@link reconnectNow}，
+   * 這時 {@link refusal} 有那一句。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
-   * 回到線上才從頭算。
+   * 回到線上才從頭算。`actionLabel` 是按鈕上的字，只有 `StreamHaltedError` 給；不在就用狀態列的預設字（`lib/stream-halted.ts` 的 `RECONNECT_ACTION_LABEL`）。
    */
-  readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  readonly reconnecting?: {
+    readonly wasConnected: boolean;
+    readonly offline: boolean;
+    readonly actionLabel?: string;
+  };
   /**
    * 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗，而且 `/livez` 探測也逾時
    * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
    */
   readonly slowConnect: boolean;
+  /** 這次連線等了 {@link OPENING_NOTICE_MS} 還沒成功或失敗（#2343）；等退避的時間不算。 */
+  readonly opening: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
@@ -495,13 +508,14 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [slowConnect, setSlowConnect] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
   const [generation, setGeneration] = useState(0);
   /**
    * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
    * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」；
-   * `halted` 是最後一次失敗是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`）：「立刻重連」、接上、一般的斷線都清掉它。
+   * `halted` 是最後一次失敗停了自動重連（看不懂的資料 #1601 `N0758`，或 `StreamHaltedError` #2343）：`reconnectNow`、接上、一般的斷線都清掉它。
    * `unauthorized` 是最後一次失敗是嵌入版的 401（#2490），等 `signIns` 變了才重開；每次開線都清掉。
    */
   const retry = useRef<{
@@ -647,10 +661,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
       });
     }, SLOW_CONNECT_MS);
+    const openingTimer = setTimeout(() => setOpening(true), OPENING_NOTICE_MS);
     const settled = () => {
       clearTimeout(slowTimer);
+      clearTimeout(openingTimer);
       probe.abort();
       setSlowConnect(false);
+      setOpening(false);
     };
     /**
      * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
@@ -659,7 +676,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
-      // 這次是一般的斷線：`halted` 只講「最後一次失敗是看不懂的資料」，在路上那次停住過也不算數（#1601）。
+      // 這次是一般的斷線：`halted` 只講「最後一次失敗停了自動重連」，在路上那次停住過也不算數（#1601）。
       book.halted = false;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
@@ -685,11 +702,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setReconnecting(undefined);
     };
     /**
-     * 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。**不排重試**：
-     * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`packages/api/session-controller/README.md:54`）協定錯誤終止串流。
-     * `lost` 照設，「立刻重連」按得到；`halted` 擋掉 `online`／`offline` 的自動重排。原文只進 `console.warn`，不進畫面。
+     * 停止自動重連：`lost` 照設，所以 `reconnectNow`（狀態列那顆按鈕）按得到；`halted` 擋掉 `online`／`offline` 的自動重排。
+     * 狀態列講 `text`、按鈕寫 `actionLabel`（不給就是預設字）；錯誤物件只進 `console.warn`。兩種來源：
+     * - 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。歷史裡的壞資料
+     *   每次重連都抓到同一份，所以不排重試；文案固定 `THREAD_PROTOCOL_ERROR_TEXT`，伺服器原文不進畫面。
+     * - 開線、讀歷史或抽下行時拋 `StreamHaltedError`（#2343）：文案與按鈕字由它給。
      */
-    const halt = (error: WireProtocolError) => {
+    const halt = (
+      error: WireProtocolError | StreamHaltedError,
+      text: string,
+      actionLabel?: string,
+    ) => {
       console.warn(error);
       const book = retry.current;
       book.lost = true;
@@ -700,8 +723,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setRecovered(false);
       setConnected(false);
       setConnectionError(undefined);
-      setRefusal(THREAD_PROTOCOL_ERROR_TEXT);
-      setReconnecting({ wasConnected: book.everConnected, offline: false });
+      setRefusal(text);
+      setReconnecting({
+        wasConnected: book.everConnected,
+        offline: false,
+        ...(actionLabel === undefined ? {} : { actionLabel }),
+      });
     };
 
     retry.current.unauthorized = false;
@@ -802,7 +829,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) {
           settled();
           if (error instanceof WireProtocolError) {
-            halt(error);
+            halt(error, THREAD_PROTOCOL_ERROR_TEXT);
+            return;
+          }
+          if (error instanceof StreamHaltedError) {
+            halt(error, error.text, error.actionLabel);
             return;
           }
           if (error instanceof StreamUnauthorizedError) {
@@ -1460,6 +1491,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     connected,
     attempted,
     slowConnect,
+    opening,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),

@@ -44,6 +44,7 @@ import { createToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step
 import type { AgentMiddleware } from './base-types.js';
 import type { SessionLookup } from './registry.js';
 import { toolCallOwner } from './tool-call-owner.js';
+import type { ToolCallOwnerRequest } from './tool-call-owner.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 
 /** 工具 `metadata` 上宣告「同一步可以跟別顆重疊」的鍵。只有剛好是 `true` 才算（fail-closed，同 dsh）。 */
@@ -62,13 +63,21 @@ export const DEFAULT_PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
 /** {@link createToolBarrierMiddleware} 的名字，診斷與索引用。 */
 export const TOOL_BARRIER_MIDDLEWARE_NAME = 'nexusToolBarrier';
 
-/** 工具能不能跟別顆重疊。 */
+/**
+ * 工具能不能跟別顆重疊。
+ *
+ * @param tool - 工具本體，任何值都收；不是物件、或 `metadata` 上的 {@link CONCURRENCY_SAFE_METADATA_KEY} 不剛好是 `true`，都當沒宣告。
+ * @param name - 模型叫的名字，拿去對 `safeNames`。
+ * @param safeNames - 用名字宣告可以重疊的工具；省略即 {@link DEFAULT_PARALLEL_SAFE_TOOLS}。
+ * @returns 宣告了 `true`，或名字在 `safeNames` 裡。
+ */
 export function isConcurrencySafe(
-  tool: { readonly name?: string; readonly metadata?: unknown } | undefined,
+  tool: unknown,
   name: string,
   safeNames: ReadonlySet<string> = DEFAULT_PARALLEL_SAFE_TOOLS,
 ): boolean {
-  const declared = (tool?.metadata as Record<string, unknown> | undefined)?.[
+  const metadata = (tool as { readonly metadata?: unknown } | null | undefined)?.metadata;
+  const declared = (metadata as Record<string, unknown> | undefined)?.[
     CONCURRENCY_SAFE_METADATA_KEY
   ];
   return declared === true || safeNames.has(name);
@@ -111,16 +120,9 @@ function freshSlot(): Slot {
 /** 保留的步數上限：被放棄的步（中斷之後沒人 resume）不會無限累積。 */
 const MAX_RECORDS = 256;
 
-interface ToolBarrierRequest {
-  readonly toolCall: { readonly id?: string; readonly name: string };
-  readonly tool?: { readonly name?: string; readonly metadata?: unknown } | undefined;
-  readonly state?: unknown;
-  readonly runtime?: { readonly configurable?: unknown };
-}
-
 /** 找出這顆呼叫屬於的那則 AI 訊息（{@link toolCallOwner}）：那一步的鍵與每一顆的 id。 */
 function owningMessage(
-  request: ToolBarrierRequest,
+  request: ToolCallOwnerRequest,
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
 ): { readonly key: string; readonly ids: string[] } | undefined {
   const message = toolCallOwner(request, sessions);
@@ -174,7 +176,7 @@ export function createToolBarrierMiddleware(
 
   return createToolCallStepMiddleware(TOOL_BARRIER_MIDDLEWARE_NAME, async (call, next) => {
     const request = wrappedRequestOf(call);
-    const owner = owningMessage(request as unknown as ToolBarrierRequest, sessions);
+    const owner = owningMessage(request, sessions);
     // 一步只有一顆，或認不出屬於哪一步：沒有屏障可言，原樣放行。
     if (owner === undefined || owner.ids.length < 2) return next();
     const at = owner.ids.indexOf(request.toolCall.id ?? '');
@@ -185,19 +187,13 @@ export function createToolBarrierMiddleware(
     // 這個位置在之前的 attempt 已經跑完（resume 不會重跑它，來到這裡只可能是同一個 id 的再次呼叫）：不設屏障。
     if (slot.status === 'complete') return next();
 
-    const safe =
-      !serial &&
-      isConcurrencySafe(
-        (request as unknown as ToolBarrierRequest).tool,
-        request.toolCall.name,
-        safeNames,
-      );
+    const safe = !serial && isConcurrencySafe(request.tool, request.toolCall.name, safeNames);
     slot.status = 'running';
     slot.safe = safe;
     slot.entered.resolve();
 
     const signal = turnCancelSignalOf({
-      configurable: (request as unknown as ToolBarrierRequest).runtime?.configurable,
+      configurable: request.runtime.configurable,
     });
     const settle = (outcome: Outcome): void => {
       slot.status = outcome;

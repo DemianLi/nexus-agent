@@ -1,6 +1,6 @@
 /**
  * `tool-call-step.ts` 的轉接：一步拿到的那次呼叫、往內交時內層拿到的請求（換名字、換工具、換參數）、一步在同一個 tick 被呼叫，
- * 以及 `createToolCallStepMiddleware` 造的那顆登記了這一步。
+ * 以及 `createToolCallStepMiddleware` 造的那顆登記了這一步、`withToolCallStep` 登記時核對 `wrapToolCall` 就是用那一步造的。
  * 掛進各顆 middleware 之後的行為在各顆自己的測試；兩個 loop 都經這一層，native loop 那一套見 `apps/harness/vitest.native.config.ts`。
  */
 
@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createToolCallStepMiddleware,
   toolCallStepOf,
+  withToolCallStep,
   wrapToolCallWith,
 } from './tool-call-step.js';
 import type { ToolCallSite } from './tool-call-step.js';
@@ -170,5 +171,32 @@ describe('createToolCallStepMiddleware', () => {
   it('造出來的那顆登記了這一步', () => {
     const step = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
     expect(toolCallStepOf(createToolCallStepMiddleware('m', step))).toBe(step);
+  });
+});
+
+describe('withToolCallStep', () => {
+  it('同一步，wrapToolCallWith 每次給同一支', () => {
+    const step = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
+    expect(wrapToolCallWith(step)).toBe(wrapToolCallWith(step));
+  });
+
+  it('wrapToolCall 就是 wrapToolCallWith(step)：登記，回同一個物件', () => {
+    const step = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
+    const middleware = { name: 'm', wrapToolCall: wrapToolCallWith(step) };
+    expect(withToolCallStep(middleware, step)).toBe(middleware);
+    expect(toolCallStepOf(middleware)).toBe(step);
+  });
+
+  it('wrapToolCall 不是用登記的那一步造的：登記時就拋，不登記', () => {
+    const running = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
+    const registered = () => 'refused';
+    const middleware = { name: 'm', wrapToolCall: wrapToolCallWith(running) };
+    expect(() => withToolCallStep(middleware, registered)).toThrow(/"m" 的 wrapToolCall/);
+    expect(toolCallStepOf(middleware)).toBeUndefined();
+  });
+
+  it('沒有 wrapToolCall：登記時就拋', () => {
+    const step = (_call: ToolCallSite, next: () => Promise<unknown>) => next();
+    expect(() => withToolCallStep({ name: 'm' }, step)).toThrow(/"m" 的 wrapToolCall/);
   });
 });
