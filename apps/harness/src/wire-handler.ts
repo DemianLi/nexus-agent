@@ -696,7 +696,7 @@ export interface WireHandlerOptions {
   };
   /**
    * 全域下行用這一條，不自己建（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，per-thread 的前台：每件都由 `front-feed.ts`
-   * 從對話行程接進來）。handler 收尾時照樣關它。
+   * 從對話行程接進來）。帶了它，{@link downlinkMaxBytes} 就不管全域下行，上限照這一條建時給的。handler 收尾時照樣關它。
    */
   readonly threadFeed?: ThreadFeed;
   /**
@@ -1868,7 +1868,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `close()` 一起收，那裡整張清掉。再有新的逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
-  /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著，直到第一個請求把它建起來。 */
+  /** `open` 時磁碟上還沒有、所以沒先建的 thread（#2341）：從那時起算閒著（有請求在途時不算），直到第一個請求把它建起來。 */
   const unbuiltSince = new Map<string, number>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
   const feed =

@@ -2,8 +2,8 @@
  * per-thread 前台的 plugin 對照快照（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §4-3）：
  * thread 在對話行程裡組裝、綁上它掛上的列，`plugin-snapshot.json` 由前台寫，所以前台去問那幾列（`internalThreadPath(id, 'plugins')`）、綁進自己那張表。
  *
- * - **什麼時候問**：監督行程送 `up` 時，與之後每一次轉送拿到回應時，直到問到一份不是空的。組裝在對話行程收到第一個指名這條
- *   thread 的請求時發生（開下行、讀歷史、送指令），所以只看過歷史的 thread 也列得出來，同 `single`。
+ * - **什麼時候問**：監督行程送 `up` 時，與之後每一次轉送拿到回應時，直到問到一份不是空的。磁碟上已有的 thread 在對話行程綁上時
+ *   就組裝（`up` 之前）；新的 thread 等第一個會組裝它的請求（開下行、讀歷史、送指令），所以只看過歷史的 thread 也列得出來，同 `single`。
  * - **綁一次**：同一個行程裡一條 thread 只組裝一次，問到之後不再問；行程換了（`up` 換 socket）重問。
  * - `down`：放掉，快照不再列它。
  *
@@ -27,7 +27,6 @@ export interface FrontPluginBindingsOptions {
 
 interface Tracked {
   readonly socket: string;
-  /** 正在問；問完清掉。 */
   asking?: Promise<void>;
   release?: () => Promise<void>;
   gone: boolean;
@@ -42,6 +41,7 @@ function isBinding(value: unknown): value is LiveRowBinding {
   );
 }
 
+/** per-thread 前台的 plugin 綁定：跟著監督行程的 `up`／`down` 與每次轉送（{@link FrontPluginBindings.touched}），向對話行程問它綁著的列、綁進前台那張表。 */
 export class FrontPluginBindings {
   readonly #forwarder: FrontForwarder;
   readonly #warn: (message: string) => void;
@@ -95,6 +95,7 @@ export class FrontPluginBindings {
     void tracked.release?.();
   }
 
+  /** 收掉：之後的 `up`、`touched` 不理，問到一半的不綁（正在綁的綁完就放）；已經綁上的不放、快照不重寫。只在前台收尾時叫，下一個前台起來時重寫快照。 */
   close(): void {
     this.#closed = true;
     for (const tracked of this.#threads.values()) tracked.gone = true;

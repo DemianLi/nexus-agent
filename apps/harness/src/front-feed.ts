@@ -26,8 +26,6 @@ const RECONNECT_MS = 1_000;
 
 export interface FrontFeedOptions {
   readonly forwarder: FrontForwarder;
-  /** 每條前台的線排著的位元組上限；省略照 {@link ThreadFeed} 的預設。 */
-  readonly maxQueuedBytes?: number;
   readonly warn?: (message: string) => void;
 }
 
@@ -182,40 +180,54 @@ class RemoteThread implements FeedSource {
   }
 }
 
-/** 前台的全域下行：{@link feed} 交給前台本地那一支 handler（`WireHandlerOptions.threadFeed`），其餘跟著監督行程的 `up`／`down` 走。 */
+/**
+ * 前台的全域下行：跟著監督行程的 `up`／`down`，把每個對話行程那條線接進 {@link FrontFeed.connect} 給的 {@link ThreadFeed}
+ * （前台本地那一支 handler 的 `WireHandlerOptions.threadFeed`）。`connect` 之前的 `up` 先記著，接上時一起接。
+ */
 export class FrontFeed {
-  readonly feed: ThreadFeed;
   readonly #forwarder: FrontForwarder;
   readonly #warn: (message: string) => void;
+  /** 監督行程講過、還在的每一條 thread 在哪個 socket 上。 */
+  readonly #sockets = new Map<string, string>();
   readonly #threads = new Map<
     string,
     { readonly remote: RemoteThread; readonly detach: () => void }
   >();
+  #feed: ThreadFeed | undefined;
   #closed = false;
 
   constructor(options: FrontFeedOptions) {
     this.#forwarder = options.forwarder;
     this.#warn = options.warn ?? (() => {});
-    this.feed = new ThreadFeed({
-      ...(options.maxQueuedBytes !== undefined && { maxQueuedBytes: options.maxQueuedBytes }),
-      warn: this.#warn,
-    });
+  }
+
+  /** 接上前台的全域下行（serve 照下行那一列的上限建好之後）。只接一次。 */
+  connect(feed: ThreadFeed): void {
+    if (this.#closed || this.#feed !== undefined) return;
+    this.#feed = feed;
+    for (const [threadId, socket] of this.#sockets) this.#attach(threadId, socket);
   }
 
   /** 監督行程說這條 thread 在 `socket` 上。同一個 socket 重複講不重接；換了 socket 就拆掉舊的再接。 */
   up(threadId: string, socket: string): void {
     if (this.#closed) return;
-    const current = this.#threads.get(threadId);
-    if (current?.remote.socket === socket) return;
+    const current = this.#sockets.get(threadId);
+    if (current === socket) return;
     if (current !== undefined) this.down(threadId);
+    this.#sockets.set(threadId, socket);
+    if (this.#feed !== undefined) this.#attach(threadId, socket);
+  }
+
+  #attach(threadId: string, socket: string): void {
     const remote = new RemoteThread(threadId, socket, this.#forwarder, this.#warn);
-    const detach = this.feed.attach(remote);
+    const detach = this.#feed!.attach(remote);
     this.#threads.set(threadId, { remote, detach });
     remote.start();
   }
 
   /** 這條的行程走了。 */
   down(threadId: string): void {
+    this.#sockets.delete(threadId);
     const current = this.#threads.get(threadId);
     if (current === undefined) return;
     this.#threads.delete(threadId);
@@ -228,10 +240,9 @@ export class FrontFeed {
     return this.#threads.get(threadId)?.remote.running;
   }
 
-  /** 收掉：拆掉每一條、關掉前台的線。 */
+  /** 收掉：拆掉每一條。前台的線由持有它的 handler 關。 */
   close(): void {
     this.#closed = true;
-    for (const threadId of [...this.#threads.keys()]) this.down(threadId);
-    this.feed.close();
+    for (const threadId of [...this.#sockets.keys()]) this.down(threadId);
   }
 }

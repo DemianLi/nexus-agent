@@ -139,7 +139,7 @@ describe('記錄器', () => {
 
     const lines = readFileSync(path, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(PER_WRITER * 2);
-    // 最長的一行：截斷後的每個字元都跳脫成六個位元組（`\u0001`，`JSON.stringify` 最長的跳脫），訊息就有 3000 位元組。
+    // 最長的一行：訊息剛好 `MAX_MESSAGE_CHARS` 個字元（不截），每個都跳脫成六個位元組（`\u0001`，`JSON.stringify` 最長的跳脫），訊息就有 3000 位元組。
     expect(Buffer.byteLength(lines[0]!)).toBeGreaterThan(MAX_MESSAGE_CHARS * 6);
     const parsed = lines.map(
       (line) => JSON.parse(line) as InvariantLogLine & { sessionId: string },

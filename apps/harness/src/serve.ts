@@ -80,6 +80,7 @@ import {
   listStoredThreads,
   readStoredSubagentSession,
 } from './session-list.js';
+import { ThreadFeed } from './thread-feed.js';
 import { ThreadOrganization } from './thread-organization.js';
 import {
   attachSessionPersistence,
@@ -1532,6 +1533,12 @@ async function startServer(
           recheck: (headers: Headers) => streamCookies.recheckOpenStream(headers),
           audit: () => embedAudit,
         };
+  // per-thread 的前台（#2341）：全域下行照下行那一列的上限建，由 `FrontFeed` 把每個對話行程的線接進來。
+  const frontThreadFeed =
+    options.front === undefined
+      ? undefined
+      : new ThreadFeed({ maxQueuedBytes: downlink.maxQueuedBytes, warn });
+  if (frontThreadFeed !== undefined) options.front?.feed.connect(frontThreadFeed);
   const handler = createWireHandler({
     auth,
     trustedHosts: invocation.trustedHosts,
@@ -1555,13 +1562,13 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
-    // 前台（#2341）：手上沒有 thread，封存問的「還有什麼在跑」與停，問那條的對話行程。
+    // 前台（#2341）：手上沒有 thread。封存問的「還有什麼在跑」與停、全域下行、列表的在跑，都從那條的對話行程來（`front-wire.ts`、`front-feed.ts`）。
     ...(options.front !== undefined && {
       threadActivityElsewhere: threadActivityOverSocket(
         options.front.supervisor,
         options.front.forwarder,
       ),
-      threadFeed: options.front.feed.feed,
+      ...(frontThreadFeed !== undefined && { threadFeed: frontThreadFeed }),
       runningElsewhere: (threadId: string) => options.front?.feed.running(threadId),
     }),
     // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。快照歸前台寫，綁著哪幾列由前台來問（#2341）。

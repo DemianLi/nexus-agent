@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { FrontFeed } from './front-feed.js';
 import { FrontForwarder } from './front-forward.js';
+import { ThreadFeed } from './thread-feed.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 
@@ -68,22 +69,25 @@ async function conversation(threadId: string, activity: string[] = []) {
   };
 }
 
-function frontFeed() {
+function frontFeed(connected = true) {
   const forwarder = new FrontForwarder();
   const warnings: string[] = [];
   const feed = new FrontFeed({ forwarder, warn: (message) => warnings.push(message) });
+  const line = new ThreadFeed();
+  if (connected) feed.connect(line);
   cleanups.push(() => {
     feed.close();
+    line.close();
     forwarder.close();
   });
-  return { feed, warnings };
+  return { feed, line, warnings };
 }
 
 /** 開一條前台的線，收到的照順序記在 `frames`。 */
-function listen(feed: FrontFeed) {
+function listen(feed: ThreadFeed) {
   const controller = new AbortController();
   const frames: ThreadFeedFrame[] = [];
-  const line = feed.feed.subscribe(controller.signal);
+  const line = feed.subscribe(controller.signal);
   void (async () => {
     for await (const frame of line) frames.push(frame);
   })();
@@ -94,8 +98,8 @@ function listen(feed: FrontFeed) {
 describe('FrontFeed', () => {
   it('對話行程那條線上的每一顆照原樣轉給前台的線；還掛著的題由前台補送給後開的線', async () => {
     const upstream = await conversation('t1');
-    const { feed } = frontFeed();
-    const early = listen(feed);
+    const { feed, line } = frontFeed();
+    const early = listen(line);
     feed.up('t1', upstream.socket);
     await expect.poll(() => upstream.lines()).toBe(1);
 
@@ -112,15 +116,15 @@ describe('FrontFeed', () => {
     ]);
     expect(feed.running('t1')).toBe(true);
 
-    const late = listen(feed);
+    const late = listen(line);
     await expect.poll(() => late.length).toBe(1);
     expect(late[0]).toEqual({ type: 'input-requested', threadId: 't1', event: question('i2') });
   });
 
   it('接上時問一次在跑沒：在跑就補一顆狀態框，列表也答在跑', async () => {
     const upstream = await conversation('t1', ['turn']);
-    const { feed } = frontFeed();
-    const frames = listen(feed);
+    const { feed, line } = frontFeed();
+    const frames = listen(line);
     expect(feed.running('t1')).toBeUndefined();
     feed.up('t1', upstream.socket);
     await expect.poll(() => feed.running('t1')).toBe(true);
@@ -140,8 +144,8 @@ describe('FrontFeed', () => {
 
   it('行程走了（down）：還掛著的題撤回，在跑的補一顆閒著，列表不再知道它', async () => {
     const upstream = await conversation('t1');
-    const { feed } = frontFeed();
-    const frames = listen(feed);
+    const { feed, line } = frontFeed();
+    const frames = listen(line);
     feed.up('t1', upstream.socket);
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'status', threadId: 't1', running: true });
@@ -160,8 +164,8 @@ describe('FrontFeed', () => {
 
   it('對話行程那條線斷了：先撤回記著的題，重連後由它再補送', async () => {
     const upstream = await conversation('t1');
-    const { feed, warnings } = frontFeed();
-    const frames = listen(feed);
+    const { feed, line, warnings } = frontFeed();
+    const frames = listen(line);
     feed.up('t1', upstream.socket);
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'input-requested', threadId: 't1', event: question('i1') });
@@ -177,13 +181,31 @@ describe('FrontFeed', () => {
 
   it('別條 thread 的框不轉', async () => {
     const upstream = await conversation('t1');
-    const { feed } = frontFeed();
-    const frames = listen(feed);
+    const { feed, line } = frontFeed();
+    const frames = listen(line);
     feed.up('t1', upstream.socket);
     await expect.poll(() => upstream.lines()).toBe(1);
     upstream.push({ type: 'input-requested', threadId: 'other', event: question('i1') });
     upstream.push({ type: 'status', threadId: 't1', running: true });
     await expect.poll(() => frames.some(({ type }) => type === 'status')).toBe(true);
     expect(frames).toEqual([{ type: 'status', threadId: 't1', running: true }]);
+  });
+
+  it('接上前台的線之前的 up 先記著：接上時才開對話行程那條線；之前走掉的不接', async () => {
+    const upstream = await conversation('t1');
+    const gone = await conversation('t2');
+    const { feed, line } = frontFeed(false);
+    feed.up('t1', upstream.socket);
+    feed.up('t2', gone.socket);
+    feed.down('t2');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(upstream.opened()).toBe(0);
+
+    const frames = listen(line);
+    feed.connect(line);
+    await expect.poll(() => upstream.lines()).toBe(1);
+    upstream.push({ type: 'status', threadId: 't1', running: true });
+    await expect.poll(() => frames).toEqual([{ type: 'status', threadId: 't1', running: true }]);
+    expect(gone.opened()).toBe(0);
   });
 });

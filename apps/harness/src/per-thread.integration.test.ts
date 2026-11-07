@@ -327,7 +327,7 @@ describe.skipIf(SUPERVISOR === undefined || MEASURE_STREAMS === 0)(
       const ticksBefore = cpuTicks(frontPid!);
       const began = performance.now();
       await Promise.all(threads.map((thread) => client.runStart(thread, '開始')));
-      // 每條等到三條都收了同樣多顆、而且一秒沒有新的。
+      // 停的條件：每條的三條線收到一樣多顆（而且超過 2000）、一秒沒有新的；最多等 120 秒。
       for (;;) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
         const last = Math.max(...lines.flatMap(({ viaFront }) => viaFront.slice(-1)));

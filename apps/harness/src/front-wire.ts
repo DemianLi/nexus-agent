@@ -11,8 +11,8 @@
  * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）、`@` 的會話候選（冷讀磁碟，看不到還沒落盤的事件）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
  *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
  *   前台不載 thread，本地答只會是「還沒開過」。
- * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開了下行不講話就走的
- *   thread 照只讀的閒置時間收；開著的下行讓對話行程不回報閒置，所以只讀的閒置時間只從下行關掉之後算。
+ * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開著的下行讓對話行程不回報閒置；
+ *   這條 thread 經前台的最後一條下行收掉時送 `release`（見 `countDownlink`）。只讀過歷史、沒開下行的照只讀的閒置時間收。
  *
  * @module
  */
@@ -69,7 +69,7 @@ export interface FrontWireOptions {
   readonly auth: WireAuth;
   /** 同本地那支的 `embedStreams`；缺席就是沒有嵌入方，嵌入身分不會出現。 */
   readonly embedStreams?: EmbedStreamGuard;
-  /** 轉送給一條 thread 的請求拿到回應了（那條 thread 這時已在對話行程裡建好）。前台拿它去問 plugin 綁定（`front-plugins.ts`）。 */
+  /** 轉送給一條 thread 的請求拿到了對話行程的回應（不論狀態碼；那條 thread 不一定已組裝，看路由）。前台拿它去問 plugin 綁定（`front-plugins.ts`）。 */
   readonly onForwarded?: (threadId: string) => void;
   readonly warn?: (message: string) => void;
 }
@@ -145,7 +145,8 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
 
   /**
    * 數這條下行：本文讀完、被取消或出錯時減一，這條 thread 一條都不剩就告訴監督行程可以先收。監督行程只收只讀開的，
-   * 講過話（`turn(begin)` 或 `ensure(run)`）的照一般的閒置時間收。讀歷史不 `release`：網頁先開下行、再讀歷史，下行開著就不收。
+   * 講過話（`turn(begin)` 或 `ensure(run)`）的照一般的閒置時間收。讀歷史不 `release`：監督行程會把它記到行程閒置為止，
+   * 送了的話，只讀過歷史的那條一閒置就收，不留只讀的閒置時間。
    */
   function countDownlink(threadId: string, response: Response): Response {
     const source = response.body;
@@ -450,7 +451,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
 
 /**
  * 前台封存時問對話行程的那一組（{@link WireHandlerOptions.threadActivityElsewhere}）：沒有行程就是閒著、停無可停；
- * 連不上而行程剛好走了也一樣，其餘的錯照拋（封存不寫）。
+ * 連不上而行程剛好走了也一樣。其餘的錯照拋：`activity` 拋了封存不寫，`stop` 拋了封存照舊、由封存那一側講一聲（`ArchiveDeps.stop`）。
  */
 export function threadActivityOverSocket(
   supervisor: SupervisorClient,

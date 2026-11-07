@@ -59,7 +59,7 @@ async function conversation(handle: (request: IncomingMessage, response: ServerR
   return { socket, seen, closed };
 }
 
-/** 監督行程那一端：每個 `ensure` 都回同一個 socket 的 `up`，收到的 thread id 記在 `ensured`。 */
+/** 監督行程那一端：每個 `ensure` 都回同一個 socket 的 `up`；收到的 thread id、打開方式、`release` 各記在 `ensured`、`modes`、`released`。 */
 function supervisorAnswering(
   socket: string,
   ensured: string[] = [],

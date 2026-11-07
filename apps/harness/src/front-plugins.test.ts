@@ -72,7 +72,7 @@ describe('FrontPluginBindings', () => {
     const asked = upstream.state.asked;
     subject.touched('t1');
     subject.touched('t1');
-    // 監督行程重送同一個 socket 的 `up`（例如前台重連控制面）：不放掉、不重綁。
+    // 監督行程重送同一個 socket 的 `up`（每個 `ensure` 的回答都是一顆 `up`）：不放掉、不重綁。
     subject.up('t1', upstream.socket);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(upstream.state.asked).toBe(asked);

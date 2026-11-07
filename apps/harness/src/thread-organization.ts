@@ -99,7 +99,7 @@ export interface ArchiveDeps {
   readonly stopActivity?: boolean;
   /** 會話存不存在（活著的，或落盤的）。**儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。 */
   readonly known: () => Promise<boolean>;
-  /** 這條會話還有什麼在跑；空陣列＝閒著。沒帶 `stopActivity` 才問。 */
+  /** 這條會話還有什麼在跑；空陣列＝閒著。沒帶 `stopActivity` 才問。**問不到要拋（或 reject），不要回空陣列**：問不到不是閒著，拋了封存不寫。 */
   readonly activity: () => readonly ThreadActivityKind[] | Promise<readonly ThreadActivityKind[]>;
   /** 帶 `stopActivity` 時，封存寫下去**之後**請它去停。發出去就算，不等停穩；拋了由 {@link ArchiveDeps.warn} 講一聲。 */
   readonly stop: () => Promise<void> | void;
