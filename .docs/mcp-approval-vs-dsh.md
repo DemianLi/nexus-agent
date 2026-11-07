@@ -61,7 +61,7 @@ dsh 的 web 工具不管本文空不空都先放前綴（`fetch.ts:329` 的 head
 - **dsh 怎麼做**：只有 tool-web 要模型引用來源，用兩個地方要求：
   - 工具結果的結尾一句：`Cite the relevant URLs above as markdown links in your answer.`（`packages/web/tool-web/src/search.ts:105`）。
   - 系統提示詞的段落：`web_search` 在 `search.ts:358-359`，`web_fetch` 在 `fetch.ts:455`。工具不在這一輪的工具集合裡，段落就是空的（`search.ts:355`、`fetch.ts:453`）。
-- **nexus 怎麼做**：同一個做法搬到 MCP，也分兩處：系統提示詞這一段（`CITATION_PROMPT`）在有任何一台 MCP 登記進來時出現；工具結果結尾那一句（`CITE_RESOURCE_LINKS`，`packages/nexus-plugin-mcp/src/project-content.ts`）只在結果含 resource link 時才接。提示詞這一段跟 dsh 的差別有兩個：
+- **nexus 怎麼做**：同一個做法搬到 MCP，也分兩處：系統提示詞這一段（`CITATION_PROMPT`）在有任何一台 MCP 登記進來時出現；工具結果結尾那一句（`CITE_RESOURCE_LINKS`，`packages/nexus-plugin-mcp/src/project-content.ts`）只在結果含名稱與 URI 都在的 resource link 時才接，措辭照 dsh `search.ts:105`，只把 `URLs` 換成 `resource links`，因為 MCP 的 URI 不一定是 URL。提示詞這一段跟 dsh 的差別有兩個：
   - 多要求「說出是哪個 MCP server」：內部有多套系統，使用者要知道答案出自哪一套。
   - 多一組「只講結果裡有的事實」的要求：只拿到標題或連結時說讀不到內容；什麼都沒找到時先說沒找到。dsh 的 tool-web 段落全文（上面三處）沒有這類句子。
 

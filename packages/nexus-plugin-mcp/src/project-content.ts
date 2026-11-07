@@ -23,18 +23,15 @@
  * - **不併相鄰的文字**：dsh 把連續的文字（連同音訊、resource link 的說明）用換行併成一塊，我們每塊換成各自一塊
  *   文字、其餘原樣。只有文字的結果照舊不碰。
  * - **超出 dsh：結果含 resource link 時，結尾多一塊引用提示**（{@link CITE_RESOURCE_LINKS}）。dsh 只對
- *   `web_search`／`web_fetch` 要求引用（`packages/web/tool-web/src/search.ts:92` 的結果結尾
- *   `Cite the relevant URLs above as markdown links in your answer.`），MCP 沒有。我們的 web 搜尋判過不做（T-10），
+ *   `web_search`／`web_fetch` 要求引用（`packages/web/tool-web/src/search.ts:105` 的結果結尾，`05b1cae8`
+ *   `Cite the relevant URLs above as markdown links in your answer.`），MCP 沒有。我們的 web 搜尋判過不做（`.docs/seven-layer-inventory-2026-09-26.md`），
  *   內部資料全走 MCP，而產品定位（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）需要讓使用者知道答案出自
  *   哪裡，所以把 dsh 的同一個做法移到 MCP：觸發條件與措辭比照 `search.ts`，差別有兩個——只有**真的帶了連結**的結果才加
  *   （沒有連結的呼叫不加，免得每次 MCP 呼叫都多一句雜訊）；措辭是「resource links」而不是「URLs」，因為 MCP 的 URI 不一定是
  *   http。系統提示詞那一半在 `hub.ts` 的 {@link hubPromptText}。
  */
 
-/**
- * 結果含 resource link 時接在結尾的一句，比照 dsh `search.ts:92`（`Cite the relevant URLs above as markdown links in your
- * answer.`），措辭改成 resource links——MCP 的 URI 不一定是 URL。
- */
+/** 結果含拼得出 `Resource link: …` 的 resource link（名稱與 URI 都在）時接在結尾的一句。措辭用 resource links，因為 MCP 的 URI 不一定是 URL。 */
 export const CITE_RESOURCE_LINKS =
   'Cite the relevant resource links above as markdown links in your answer.';
 
