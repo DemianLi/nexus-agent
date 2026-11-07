@@ -151,7 +151,7 @@ function outcomeFailure(
 }
 
 /**
- * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，換掉 `handle` 與 `close`（先收轉送中的嵌入下行、補記 `closed`，再收本地那一支）；
+ * 包成前台的 handler。`admit` 與其餘欄位照本地那一支，換掉 `handle`、`close`（先收轉送中的嵌入下行、補記 `closed`，再收本地那一支）與 `stopAdmission`（停准入之後轉送的請求帶 `FRONT_CLOSING_HEADER`）；
  * 轉送器由入口收。
  */
 export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingWireHandler {
@@ -166,7 +166,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
 
   /**
    * 數這條下行：本文讀完、被取消或出錯時減一，這條 thread 一條都不剩就告訴監督行程可以先收。監督行程只收只讀開的，
-   * 講過話（`turn(begin)` 或 `ensure(run)`）的照一般的閒置時間收。讀歷史不 `release`：監督行程會把它記到行程閒置為止，
+   * 已經轉成一般的（收到過 `ensure(run)` 或 `turn(begin)`）照一般的閒置時間收。讀歷史不 `release`：監督行程會把它記到行程閒置為止，
    * 送了的話，只讀過歷史的那條一閒置就收，不留只讀的閒置時間。
    */
   function countDownlink(threadId: string, response: Response): Response {
@@ -410,7 +410,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
   /**
    * 分叉（`.docs/supervisor-1947-design-2026-11-03.md` §4-3）：來源的對話行程照 `handleFork`（`wire-handler.ts`）的第 1 到 4 步算出子 thread 的 seed
    * （`fork-seed`；冷的來源用 `read-only` 開：照樣佔一格，名額滿時先被收），分得出去才替子 thread 開一個行程、交給它照第 5、6 步建（`fork-adopt`）。
-   * 分不出去的、子 thread 建不起來的，原樣回對話行程的那一份；`fork-adopt` 回的不是 2xx（例如本文超過上限的 413）時回 `unknown_error`，
+   * 來源開不起來（名額滿）時回那一份，排在參數與切點的檢查之前；分不出去的、子 thread 建不起來的，原樣回對話行程的那一份；`fork-adopt` 回的不是 2xx（例如本文超過上限的 413）時回 `unknown_error`，
    * 已經開好的子行程照閒置時間收。
    */
   async function forkAcross(request: Request, route: Route, id: number): Promise<Response> {
@@ -559,7 +559,7 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
         }
         // 收尾中不開新一輪（#1787），同本地那支：`subagent.send` 一律擋；`run.start` 只擋沒有行程的（有行程的轉過去，
         // 窗前收過的重送由對話行程照 request_id 去重、拿回原本的 run_id）。不為一句不會收的話起一個對話行程。
-        // 讀不出 id 的 `thread.fork` 照一般轉送，封包的錯由對話行程照 single 回。
+        // 嵌入路由的 `thread.fork` 與讀不出 id 的照一般轉送；後者封包的錯由對話行程照 single 回。
         const forkId =
           route.method === 'thread.fork' && embedded === undefined
             ? await envelopeId(request, route)

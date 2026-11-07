@@ -326,7 +326,7 @@ describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 5
   ];
 
   // per-thread 下 close() 是對監督行程送 SIGTERM，它先收對話行程、最後才叫前台收尾，/readyz 在那之前一直是 200。
-  // 監督行程的收尾順序在 #2524 改；改了之後拿掉這個 skip。
+  // TODO(#2524): 監督行程改成先讓前台停准入之後，拿掉這個 skip。
   it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread')(
     '抓過 /readyz → close() 一開始立刻看得到 503 closing；時間窗過了 listener 才關',
     async () => {

@@ -230,15 +230,15 @@ export interface ThreadPluginReader {
   ): Promise<() => Promise<void>>;
 }
 
+/** `single` 下「已儲存，待重啟」講的生效時機。 */
+const SINGLE_STARTUP_READ_EFFECT = '這一列在啟動時讀一次，新對話照舊用啟動時的值';
+
 /**
  * 建一支每條 thread 重讀清單的讀取器。
  *
  * @param options - 啟動那一份、試組掉了的列、起動期讀的列、伺服器日誌。
  * @returns 讀取器。
  */
-
-/** `single` 下「已儲存，待重啟」講的生效時機。 */
-const SINGLE_STARTUP_READ_EFFECT = '這一列在啟動時讀一次，新對話照舊用啟動時的值';
 export function createThreadPluginList(options: ThreadPluginListOptions): ThreadPluginReader {
   const { startup, audit, log } = options;
   const logWarn = options.warn ?? log;
@@ -383,7 +383,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   let latestRead: ThreadPluginList | undefined;
   /**
    * per-thread 的前台不組 thread、從不 `read()`：「已儲存」照這一刻磁碟上的那一份另讀。**讀清單的日誌由這裡講**（#2341）：
-   * 對話行程不講（serve 給它的 `log`／`warn` 是空的，每個行程各講一次就是同一句 N 次），前台每次綁上、放掉時讀一次，
+   * 對話行程不講（serve 給它的 `log`／`warn` 是空的，每個行程各講一次就是同一句 N 次），落盤開著時前台每次綁上、放掉時讀一次（落盤關掉就沒有 `liveVersions`，{@link ThreadPluginReader.bindElsewhere} 不做事，這幾句沒人講），
    * 用的是同一套去重（讀的警告、未稽核的覆蓋層、掛不上的列、待重啟），同 `single` 每建一條 thread 讀一次。
    * 讀不起來就退回最近一次讀到的（前台是啟動那一份）。
    */

@@ -997,7 +997,7 @@ async function startServer(
       serve: true,
       env,
       ...(invocation.patches !== undefined && { patches: invocation.patches }),
-      // 讀清單的警告前台起動時講過，之後由前台綁上時講（`thread-plugin-list.ts` 的 `bindElsewhere`）：對話行程不講。
+      // 讀清單的警告前台起動時講過，之後落盤開著時由前台綁上時講（`thread-plugin-list.ts` 的 `bindElsewhere`）：對話行程不講。
       ...(options.conversation !== undefined && { warn: () => {} }),
     },
     { tree: root.tree },
@@ -1249,7 +1249,7 @@ async function startServer(
       startupReadEffect:
         '這一列在每個對話行程起動時讀一次：之後起來的對話行程用新值，已經起著的（含預熱池）照舊，要全部生效就重啟 serve',
     }),
-    // 讀清單的日誌歸前台講（`bindElsewhere`）：對話行程各講一次就是同一句 N 次。
+    // 讀清單的日誌歸前台講（`bindElsewhere`，落盤開著時）：對話行程各講一次就是同一句 N 次。
     log: options.conversation === undefined ? log : () => {},
     warn: options.conversation === undefined ? warn : () => {},
     publishSnapshot: async (snapshot) => {
