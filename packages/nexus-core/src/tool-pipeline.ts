@@ -523,7 +523,8 @@ function listenerCount<K extends LayeredToolEvent>(
 
 /**
  * 外層 core → 匯流排上的插件監聽者 → 內層 core → `innermost`，語意同 `EventDispatcher.waterfall`：每位拿自己的一支 `next`，
- * 只能叫一次，不叫就是否決。
+ * 只能叫一次，不叫就是否決。**`next` 同步呼叫下一位**，中間不 `await`：沙箱政策的 `tools/execute` 監聽者在委派那一刻同步拍快照
+ * （`@nexus/plugin-sandbox-policy`），靠的就是這一點。
  *
  * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
  */
