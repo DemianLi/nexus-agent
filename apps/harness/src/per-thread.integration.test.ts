@@ -11,9 +11,17 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
-import { createMuxFetch, createWireClient, EMBED_PATH_PREFIX, WIRE_MUX_PATH } from '@nexus/wire';
+import {
+  createMuxFetch,
+  createWireClient,
+  decodeSseData,
+  EMBED_PATH_PREFIX,
+  WIRE_CHANNELS,
+  WIRE_MUX_PATH,
+} from '@nexus/wire';
 import type { AiEntry, ConversationState, MuxSocket, WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
@@ -23,6 +31,7 @@ import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
+import { FrontForwarder } from './front-forward.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { signalPid } from './test-pids.fixture.js';
@@ -217,6 +226,137 @@ async function turn(client: WireClient, thread: string, text: string): Promise<C
   await events.return?.(undefined);
   return state;
 }
+
+/** 量前台的併發（#2341 驗收）：設成要開幾條串流才跑，量完印數字，不斷言門檻。 */
+const MEASURE_STREAMS = Number(process.env.NEXUS_MEASURE_FRONT ?? '0');
+
+/** `/proc/<pid>/stat` 的 utime＋stime，單位是 clock tick（Linux 是 100 Hz）。 */
+function cpuTicks(pid: number): number {
+  const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  return Number(fields[11]) + Number(fields[12]);
+}
+
+function socketOf(pid: number): string | undefined {
+  const argv = readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').split('\0');
+  const index = argv.indexOf('--socket');
+  return index === -1 ? undefined : argv[index + 1];
+}
+
+function percentile(values: readonly number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length * p) / 100))] ?? Number.NaN;
+}
+
+describe.skipIf(SUPERVISOR === undefined || MEASURE_STREAMS === 0)(
+  'per-thread：前台併發量測',
+  () => {
+    it('每輪約 2400 顆、開到指定條數：前台 CPU 與每顆經前台多出來的時間', async () => {
+      const running = await start([{ content: 'x'.repeat(2400), tokenDelayMs: 2 }]);
+      const supervisor = running.child.pid!;
+      const client = await clientOf(await running.loginUrl(1));
+      const forwarder = new FrontForwarder();
+      const abort = new AbortController();
+      const threads = Array.from({ length: MEASURE_STREAMS }, (_, i) => `thread-load-${String(i)}`);
+      const body = JSON.stringify({ channels: [...WIRE_CHANNELS] });
+      const openDirect = (thread: string, socket: string) =>
+        forwarder.forward(
+          new Request(`http://localhost/threads/${thread}/stream`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body,
+            signal: abort.signal,
+          }),
+          socket,
+        );
+
+      /** 一條線上每一顆到的時間。 */
+      const follow = async (stream: AsyncIterable<unknown>, times: number[]): Promise<void> => {
+        for await (const _frame of stream) times.push(performance.now());
+      };
+      const lines: {
+        viaFront: number[];
+        direct: number[];
+        control: number[];
+        done: Promise<unknown>;
+      }[] = [];
+      for (const thread of threads) {
+        const front = await client.openEvents(thread, { signal: abort.signal });
+        // 這條綁到哪個 socket 監督行程沒講出來：每個對話行程都試，綁著的那一個才回 event-stream。
+        let bound: { socket: string; body: ReadableStream<Uint8Array> } | undefined;
+        for (let attempt = 0; bound === undefined && attempt < 50; attempt += 1) {
+          for (const pid of childrenRunning(supervisor, 'conversation-process')) {
+            const socket = socketOf(pid);
+            if (socket === undefined) continue;
+            const response = await openDirect(thread, socket).catch(() => undefined);
+            if (
+              response?.body != null &&
+              response.headers.get('content-type')?.startsWith('text/event-stream') === true
+            ) {
+              bound = { socket, body: response.body };
+              break;
+            }
+            await response?.body?.cancel();
+          }
+          if (bound === undefined) await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(bound).toBeDefined();
+        // 對照組：同一個 socket 再直接開一條，兩條直連之間的差是量具本身（這支測試的事件圈、排程）的雜訊。
+        const controlBody = (await openDirect(thread, bound!.socket)).body!;
+        const line = { viaFront: [], direct: [], control: [] } as Omit<
+          (typeof lines)[number],
+          'done'
+        >;
+        lines.push({
+          ...line,
+          done: Promise.all([
+            follow(front, line.viaFront).catch(() => {}),
+            follow(decodeSseData(bound!.body), line.direct).catch(() => {}),
+            follow(decodeSseData(controlBody), line.control).catch(() => {}),
+          ]),
+        });
+      }
+      const [frontPid] = childrenRunning(supervisor, 'front-process');
+      const loop = monitorEventLoopDelay({ resolution: 1 });
+      loop.enable();
+      const ticksBefore = cpuTicks(frontPid!);
+      const began = performance.now();
+      await Promise.all(threads.map((thread) => client.runStart(thread, '開始')));
+      // 每條等到三條都收了同樣多顆、而且一秒沒有新的。
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        const last = Math.max(...lines.flatMap(({ viaFront }) => viaFront.slice(-1)));
+        const even = lines.every(
+          ({ viaFront, direct, control }) =>
+            viaFront.length > 2000 &&
+            viaFront.length === direct.length &&
+            direct.length === control.length,
+        );
+        if (even && performance.now() - last > 1_000) break;
+        if (performance.now() - began > 120_000) break;
+      }
+      const cpu = (cpuTicks(frontPid!) - ticksBefore) / 100;
+      loop.disable();
+      const lastFrame = Math.max(...lines.flatMap(({ viaFront }) => viaFront.slice(-1)));
+      const wall = (lastFrame - began) / 1_000;
+      const diff = (a: number[], b: number[]) => a.slice(0, b.length).map((at, i) => at - b[i]!);
+      const hops = lines.flatMap(({ viaFront, direct }) => diff(viaFront, direct));
+      const noise = lines.flatMap(({ control, direct }) => diff(control, direct));
+      const ms = (values: number[]) =>
+        `p50 ${percentile(values, 50).toFixed(3)}、p99 ${percentile(values, 99).toFixed(3)}、最大 ${percentile(values, 100).toFixed(3)} ms`;
+      console.log(
+        `[C3 併發量測] 條數 ${String(MEASURE_STREAMS)}；` +
+          `每條顆數 ${JSON.stringify(lines.map(({ viaFront, direct, control }) => [viaFront.length, direct.length, control.length]))}；` +
+          `前台 CPU ${cpu.toFixed(2)} 秒／牆鐘 ${wall.toFixed(2)} 秒＝${((cpu / wall) * 100).toFixed(1)}% 一核；` +
+          `經前台多出來的時間 ${ms(hops)}（${String(hops.length)} 顆）；對照（兩條直連之差）${ms(noise)}；` +
+          `量測端事件圈延遲 p99 ${(loop.percentile(99) / 1e6).toFixed(1)} ms、最大 ${(loop.max / 1e6).toFixed(1)} ms`,
+      );
+      abort.abort();
+      await Promise.all(lines.map(({ done }) => done));
+      forwarder.close();
+    }, 600_000);
+  },
+);
 
 describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與對話行程', () => {
   it('一條 thread 一個對話行程；前台被殺，監督行程重起它，對話行程不斷、下一輪照常', async () => {
