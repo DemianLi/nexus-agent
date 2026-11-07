@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { createHostServicesPlugin } from '@nexus/core';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
+import { MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
 import {
   answerResponse,
   appendAnswers,
@@ -25,6 +25,7 @@ import {
 import type { ConversationState, Event } from '@nexus/wire';
 import { afterEach, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import {
   emptyCommandPoint,
   loopbackRequest,
@@ -72,7 +73,7 @@ async function open(
         'wire-elicit-channel',
       ),
       ...shipped,
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -81,7 +82,7 @@ async function open(
           command: process.execPath,
           args: ['--import', 'tsx', SERVER, ...(shared === undefined ? [] : [shared.marker])],
         },
-      }),
+      })),
     ],
   });
   const handler = createWireHandler({

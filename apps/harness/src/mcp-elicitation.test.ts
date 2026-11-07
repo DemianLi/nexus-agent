@@ -16,10 +16,10 @@ import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { createHostServicesPlugin, hasUnansweredInterrupt } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { shippedPlugins } from './fixtures.js';
 import {
   answerElicitation,
@@ -207,7 +207,7 @@ async function rig(turns: ScriptedTurn[], channel: 'human' | 'none' = 'human'): 
         ? [createHostServicesPlugin({ channel: { kind: 'human' } }, 'elicit-test-channel')]
         : []),
       ...shipped,
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -216,7 +216,7 @@ async function rig(turns: ScriptedTurn[], channel: 'human' | 'none' = 'human'): 
           command: process.execPath,
           args: ['--import', 'tsx', SERVER],
         },
-      }),
+      })),
     ],
   });
   const warnings: string[] = [];

@@ -14,16 +14,11 @@ import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { EXTERNAL_MCP_CONTENT_NOTICE, installProxyFromEnvironment } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import type { PluginRegistry } from '@nexus/core';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import {
-  createMcpPlugin,
-  DEFAULT_TOOL_CALL_TIMEOUT_MS,
-  hiddenAfterGiveUp,
-  mcpConfigSchema,
-  mcpPlugin,
-} from './index.js';
+import { DEFAULT_TOOL_CALL_TIMEOUT_MS, hiddenAfterGiveUp, mcpConfigSchema } from './index.js';
 import { CITE_LINKS, CITE_TEXT, EMBED_URI, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { publicToolName } from './names.js';
@@ -39,7 +34,7 @@ const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.
  * node，不必猜 `.bin` 在哪裡，也不會因為 PATH 不同而在 CI 上換一個行為。
  */
 function fixturePlugin(serverName = 'fixture', env?: Record<string, string>) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName,
     connection: {
       transport: 'stdio',
@@ -97,22 +92,17 @@ describe('publicToolName', () => {
 
 describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', () => {
   it('serverName 不合法時載入就失敗，不必等到連線', async () => {
-    // **翻面過的絆索**：原本是 `createMcpPlugin()` 當場拋。工廠現在只是薄薄一層，檢查搬到
+    // **翻面過的絆索**：原本是 `mcpEntry()` 當場拋。工廠現在只是薄薄一層，檢查搬到
     // schema，所以訊息帶得出是清單裡哪一個條目——那正是從 YAML 載入時唯一指得到的東西。
     for (const serverName of ['has space', '', 'x'.repeat(33)]) {
-      const bad = [createMcpPlugin({ serverName, connection: emptyStdio() })];
+      const bad = [mcpEntry({ serverName, connection: emptyStdio() })];
       await expect(loadPlugins(bad)).rejects.toThrow('mcp#0 (mcp)');
       await expect(loadPlugins(bad)).rejects.toThrow('[A-Za-z0-9_-]');
     }
   });
 
   it('連線那一層的未知欄位也擋得住，而且路徑指得到那一層', async () => {
-    const typo = [
-      {
-        plugin: mcpPlugin,
-        config: { serverName: 'x', connection: { ...emptyStdio(), commnd: 'npx' } },
-      },
-    ];
+    const typo = [mcpEntry({ serverName: 'x', connection: { ...emptyStdio(), commnd: 'npx' } })];
     await expect(loadPlugins(typo)).rejects.toThrow('mcp#0 (mcp)');
     await expect(loadPlugins(typo)).rejects.toThrow(/connection(\.|:)/);
   });
@@ -120,20 +110,13 @@ describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', 
   it('判別式聯集：stdio 那格打錯時只抱怨 stdio，不連 http 分支一起念', async () => {
     // **這一條才擋得住「換成一般 `z.union`」**：一般聯集會把兩個分支的抱怨一起印出來，
     // 於是使用者被告知「少了 url」——而他根本沒打算走 http。
-    const typo = [
-      {
-        plugin: mcpPlugin,
-        config: { serverName: 'x', connection: { transport: 'stdio', commnd: 'npx' } },
-      },
-    ];
+    const typo = [mcpEntry({ serverName: 'x', connection: { transport: 'stdio', commnd: 'npx' } })];
     await expect(loadPlugins(typo)).rejects.toThrow(/commnd|command/);
     await expect(loadPlugins(typo)).rejects.not.toThrow(/url/);
   });
 
   it('transport 自己打錯時，訊息講的是 transport', async () => {
-    const bad = [
-      { plugin: mcpPlugin, config: { serverName: 'x', connection: { transport: 'stdout' } } },
-    ];
+    const bad = [mcpEntry({ serverName: 'x', connection: { transport: 'stdout' } })];
     await expect(loadPlugins(bad)).rejects.toThrow(/transport/);
   });
 
@@ -347,11 +330,13 @@ describe('接上一台真的 MCP server', () => {
    * 同一個 `serverName` 掛兩次：照 dsh 在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
    * 不是伺服器不在，不收成警告（#751）。
    */
-  it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名兩個 plugin', async () => {
+  it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名後來那一列與 serverName', async () => {
     // `name` 不唯一是刻意的，所以撞不在 plugin 清單那一層——撞在它們預留的伺服器名上。
-    await expect(loadPlugins([fixturePlugin(), fixturePlugin()])).rejects.toThrow(
-      /mcp#0 \(mcp\)[\s\S]*mcp#1 \(mcp\)/,
+    const loading = loadPlugins([fixturePlugin(), fixturePlugin()]);
+    await expect(loading).rejects.toThrow(
+      /^mcp#1 \(mcp\) 的 apply 失敗[\s\S]*MCP 伺服器 "fixture" 在這條 thread 上已經有一列掛了/,
     );
+    await expect(loading).rejects.not.toThrow(/mcp#0/);
   });
 
   it('不同 serverName 的兩台各自有命名空間，互不干擾', async () => {
@@ -403,7 +388,7 @@ describe('接上一台真的 MCP server', () => {
     const squatter = {
       plugin: {
         name: 'squatter',
-        apply: (r: Parameters<typeof mcpPlugin.apply>[0]) =>
+        apply: (r: PluginRegistry) =>
           void r.tools.register(
             tool(() => '別人的', {
               name: 'mcp__fixture__snapshot',
@@ -442,7 +427,7 @@ describe('接上一台真的 MCP server', () => {
  * 測試通過時 CI 的輸出是乾淨的——子行程的 stderr 預設 inherit。
  */
 function missingServer(extra: { failOnStartupError?: boolean } = {}) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName: 'missing',
     connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
     ...extra,

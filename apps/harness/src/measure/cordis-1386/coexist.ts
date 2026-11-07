@@ -2,13 +2,14 @@
  * [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 驗收 ③：同一顆插件的兩個版本各在一個 isolate realm、各被不同 thread 使用；
  * 舊版的最後一個 thread 結束後由引用計數撤掉，活資源回到載入前。
  *
- * 選 `nexus-plugin-mcp`，因為它是出貨插件裡少數 `apply` 會開**真的**行程級資源的：一台 stdio 的 MCP server 子行程
- * （它自己的 `fixture-server.ts`）加三條管線。用不開資源的插件量「回到載入前」是空的通過。
+ * 選 `nexus-plugin-mcp`，因為它是出貨插件裡少數掛上時會開**真的**行程級資源的：一台 stdio 的 MCP server 子行程
+ * （它自己的 `fixture-server.ts`）加三條管線，在它的逐條 thread 來源跑的那一刻開。用不開資源的插件量「回到載入前」是空的通過。
  *
  * 各層是什麼：
  *
  * - **版本副本**：`packages/nexus-plugin-mcp/src` 複製成 `v1`、`v2` 兩份放在套件目錄底下（相依住在套件自己的
- *   `node_modules`，見 `plugin-coexist-real.ts`），各自 `import()`——兩份模組、兩個實例。
+ *   `node_modules`，見 `plugin-coexist-real.ts`），各自 `import()`——兩份模組、兩個實例。每一份的樹上 `apply` 經
+ *   {@link treeVersion} 與宿主的 `runThreadSources` 包成一顆 `NexusPlugin`。
  * - **一個版本＝Loader 的一列**：{@link nexusVersion} 把一顆 `NexusPlugin` 包成 Cordis 插件，`apply` 裡
  *   `loadPlugins` 並把載好的 registry 以服務 `mcp` 提供出去，回傳的收尾函式就是 `dispose`。列上帶
  *   `isolate: { mcp: <版本標籤> }`，所以兩個版本的同名服務各在一個 GlobalRealm 裡。
@@ -25,11 +26,12 @@
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Context } from '@nexus/cordis';
+import { Context } from '@nexus/cordis';
 import type { Loader } from '@nexus/cordis-plugin-loader';
 import { createRegistry, loadPlugins } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
-import { toLangChainTool } from '@nexus/tool-adapter';
+import { runThreadSources, toLangChainTool } from '@nexus/tool-adapter';
+import { createToolsProvider } from '@nexus/tools/provider';
 import { STATE, boot, createEntry, fiberOf } from './tree.js';
 
 const REPO = join(import.meta.dirname, '../../../../..');
@@ -216,10 +218,46 @@ async function pinWorkspaceImports(dir: string): Promise<void> {
   }
 }
 
-/** 把 mcp 的 src 複製成 v1、v2，各自 import。回傳兩顆插件與收拾函式。 */
+/** mcp 套件入口的命名空間：樹上的函式插件（`name`、`inject`、`apply`）。 */
+type McpModule = typeof import('@nexus/plugin-mcp');
+type McpConfig = Parameters<McpModule['apply']>[1];
+
+/**
+ * 把一份 mcp 副本的樹上 `apply` 包成一顆 `NexusPlugin`，給 {@link nexusVersion} 交給 `loadPlugins`：自己的 Cordis 根上掛
+ * `createToolsProvider` 與那一份的 `apply(ctx)`，它登記的來源交給宿主那一份 `runThreadSources` 掛進註冊表（同宿主沒有樹時單獨掛一列）。
+ * 子行程與管線在 `runThreadSources` 那一刻開，收尾跟著註冊表走。授權表全給：量的不是授權。
+ */
+function treeVersion(module: McpModule): NexusPlugin<McpConfig> {
+  return {
+    name: module.name,
+    Config: module.Config,
+    async apply(registry, config) {
+      const provider = createToolsProvider({ authorizeThreadServices: () => [] });
+      const root = new Context();
+      try {
+        await root.plugin(provider.Provider);
+        await root.plugin(
+          { name: module.name, inject: module.inject, apply: module.apply },
+          config,
+        );
+        const sources = provider
+          .threadSources()
+          .map(({ threadSource, services }) => ({ threadSource, services }));
+        registry.lifecycle.onDispose(() => root.fiber.dispose());
+        await runThreadSources(registry, sources, { id: module.name, module });
+      } catch (error) {
+        await root.fiber.dispose();
+        throw error;
+      }
+    },
+  };
+}
+
+/** 把 mcp 的 src 複製成 v1、v2，各自 import。回傳兩份模組、各自包好的插件與收拾函式。 */
 async function copies(): Promise<{
-  v1: NexusPlugin<unknown>;
-  v2: NexusPlugin<unknown>;
+  v1: NexusPlugin<McpConfig>;
+  v2: NexusPlugin<McpConfig>;
+  distinct: boolean;
   cleanup: () => Promise<void>;
 }> {
   // 放在套件自己的 node_modules 底下：相依照樣往上找得到，而掃整棵樹的測試（例如 known-event-types）
@@ -231,14 +269,15 @@ async function copies(): Promise<{
       filter: (source) => !/\.test\.ts$/u.test(source),
     });
     await pinWorkspaceImports(join(root, version));
-    // 量的是相容層那一顆（`mcpPlugin`）；它在 #2535 拿掉時，這裡要改成樹上的 `apply` 搭兩版。
-    const module = (await import(pathToFileURL(join(root, version, 'index.ts')).href)) as {
-      mcpPlugin: NexusPlugin<unknown>;
-    };
-    return module.mcpPlugin;
+    return (await import(pathToFileURL(join(root, version, 'index.ts')).href)) as McpModule;
   };
-  const [v1, v2] = [await load('v1'), await load('v2')];
-  return { v1, v2, cleanup: () => rm(root, { recursive: true, force: true }) };
+  const [m1, m2] = [await load('v1'), await load('v2')];
+  return {
+    v1: treeVersion(m1),
+    v2: treeVersion(m2),
+    distinct: m1 !== m2 && m1.apply !== m2.apply,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
 }
 
 /** 主流程的量測結果。 */
@@ -264,7 +303,7 @@ export interface CoexistReport {
 
 /** 主流程：v1 → thread-a → v2 → thread-b → thread-a 結束（v1 排水）→ thread-b 結束、撤 v2。 */
 export async function runCoexist(): Promise<CoexistReport> {
-  const { v1, v2, cleanup } = await copies();
+  const { v1, v2, distinct, cleanup } = await copies();
   const served: { thread: string; label: string; result: string }[] = [];
   try {
     const t = await boot({
@@ -305,7 +344,7 @@ export async function runCoexist(): Promise<CoexistReport> {
     await t.loader.await();
     await settle();
     return {
-      distinctModules: v1 !== v2,
+      distinctModules: distinct,
       served,
       v1KeptWhileInUse,
       v1Opened,

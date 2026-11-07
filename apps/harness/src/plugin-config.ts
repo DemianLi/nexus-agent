@@ -74,6 +74,8 @@ import type {
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
 import type { SystemPromptAssembly } from '@nexus/system-prompt';
+import { runThreadSources } from '@nexus/tool-adapter';
+import type { FoldedThreadSource } from '@nexus/tool-adapter';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -83,8 +85,6 @@ import {
   systemPromptDefaultsOf,
 } from './system-prompt-middleware.js';
 import { registryFsForThread, registryFsLookup } from './registry-fs-lookup.js';
-import { runThreadSources } from './thread-source.js';
-import type { FoldedThreadSource } from './thread-source.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
   createJournalFile,

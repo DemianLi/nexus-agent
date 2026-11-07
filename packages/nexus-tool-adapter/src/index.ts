@@ -274,3 +274,6 @@ function objectZodOf(node: { readonly [key: string]: JsonValue }, toolName: stri
     `工具 ${toolName} 的 parameters 有一個物件同時帶 properties 與 additionalProperties`,
   );
 }
+
+export { runThreadSources } from './thread-source.js';
+export type { FoldedThreadSource, ThreadSourceOwner } from './thread-source.js';

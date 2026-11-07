@@ -19,9 +19,9 @@
 
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { virtualFilesOf } from './fixtures.js';
 import { CHANGELOG, FAILURE_TEXT } from './mcp-fixture-server.js';
 import { toAgentInvocation } from './messages.js';
@@ -55,7 +55,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [
-        createMcpPlugin({
+        ...(await mcpRows({
           serverName: 'docs',
           // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
           approval: { default: 'allow' },
@@ -64,7 +64,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
             command: process.execPath,
             args: ['--import', 'tsx', FIXTURE_SERVER],
           },
-        }),
+        })),
       ],
     });
 
@@ -101,7 +101,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [
-        createMcpPlugin({
+        ...(await mcpRows({
           serverName: 'docs',
           // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
           approval: { default: 'allow' },
@@ -110,7 +110,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
             command: process.execPath,
             args: ['--import', 'tsx', FIXTURE_SERVER],
           },
-        }),
+        })),
       ],
     });
     try {
@@ -146,7 +146,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
         model,
         ...(checkpointer && { checkpointer: new MemorySaver() }),
         plugins: [
-          createMcpPlugin({
+          ...(await mcpRows({
             serverName: 'modern',
             // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
             approval: { default: 'allow' },
@@ -155,7 +155,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
               command: process.execPath,
               args: ['--import', 'tsx', MODERN_SERVER],
             },
-          }),
+          })),
         ],
       });
       try {

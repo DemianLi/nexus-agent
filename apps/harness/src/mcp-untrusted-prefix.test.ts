@@ -21,15 +21,11 @@ import {
   SessionRegistry,
 } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import {
-  createMcpPlugin,
-  MCP_POOL_SERVICE,
-  McpConnectionPool,
-  UNTRUSTED_CONTENT_PROMPT,
-} from '@nexus/plugin-mcp';
+import { MCP_POOL_SERVICE, McpConnectionPool, UNTRUSTED_CONTENT_PROMPT } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -72,7 +68,7 @@ async function run(
     plugins: mcp
       ? [
           ...(pool === undefined ? [] : [createHostServicesPlugin({ [MCP_POOL_SERVICE]: pool })]),
-          createMcpPlugin({
+          ...(await mcpRows({
             serverName: 'srv',
             // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
             approval: { default: 'allow' },
@@ -82,7 +78,7 @@ async function run(
               args: ['--import', 'tsx', SERVER],
               env: { FIXTURE_RESOURCES: '1' },
             },
-          }),
+          })),
         ]
       : [],
   });

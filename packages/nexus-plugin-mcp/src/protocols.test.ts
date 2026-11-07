@@ -16,10 +16,9 @@ import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
-import { loadPlugins } from './load-with-adapter.js';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMcpPlugin } from './index.js';
 import { CITE_LINKS, CITE_TEXT, EMBED_URI, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
@@ -56,7 +55,7 @@ const TARGETS: readonly Target[] = [
     transport: 'stdio',
     start: () =>
       Promise.resolve({
-        plugin: createMcpPlugin({
+        plugin: mcpEntry({
           serverName: 'srv',
           connection: {
             transport: 'stdio',
@@ -83,7 +82,7 @@ const TARGETS: readonly Target[] = [
 
 function httpRunning(http: HttpFixture, headers?: Record<string, string>): Running {
   return {
-    plugin: createMcpPlugin({
+    plugin: mcpEntry({
       serverName: 'srv',
       connection: { transport: 'http', url: http.url, ...(headers !== undefined && { headers }) },
     }),
@@ -388,7 +387,7 @@ describe.each(TARGETS.filter((target) => target.transport === 'http'))(
       try {
         await expect(
           loadPlugins([
-            createMcpPlugin({
+            mcpEntry({
               serverName: 'srv',
               connection: { transport: 'http', url: http.url },
               failOnStartupError: true,
@@ -434,7 +433,7 @@ describe('HTTP 連不上', () => {
     vi.stubEnv('NO_PROXY', '127.0.0.1');
     const url = await closedPort();
     const { registry, dispose } = await loadPlugins([
-      createMcpPlugin({ serverName: 'srv', connection: { transport: 'http', url } }),
+      mcpEntry({ serverName: 'srv', connection: { transport: 'http', url } }),
     ]);
     try {
       expect(modelToolNames(registry)).toEqual([]);
@@ -452,7 +451,7 @@ describe('HTTP 連不上', () => {
     const url = await closedPort();
     await expect(
       loadPlugins([
-        createMcpPlugin({
+        mcpEntry({
           serverName: 'srv',
           connection: { transport: 'http', url },
           failOnStartupError: true,

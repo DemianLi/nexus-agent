@@ -99,7 +99,7 @@ export interface PluginEntry {
    * 要一個不隨清單變動的名字就自己寫——`name` 不用動，它本來就不唯一：
    *
    * ```ts
-   * { ...createMcpPlugin({ serverName: 'github', connection }), id: 'mcp-github' }
+   * { ...createEchoPlugin(options), id: 'echo-main' }
    * ```
    *
    * 射程見 {@link PluginOrigin}。

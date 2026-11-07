@@ -249,7 +249,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
 - **工具接縫 2.5.0：逐條 thread 的工具來源**（`@nexus/tools`，#2533）。`ToolRegistry` 多一個**選配**方法 `threadSource(source, { services? })`：登記一個來源，宿主每組一條 thread 就在那一列
   折進 thread 的位置 await 它一次，交給它這條 thread 的 `ToolThread`：`register`、`gate`、`admit`、`section`（2.6.0 起）、`onDispose`、`logger`、`services.get` 與 `shared`。**消費者**宣告 `^2.5.0`（用 `section` 的宣告 `^2.6.0`），並在 `apply` 裡檢查
-  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`apps/harness/src/thread-source.ts`）；
+  `threadSource` 存在。**折進去**：`RowVerdict.active.threadSources` → `FoldedContributions.threadSources` → 橋接列的 `apply` 在 `registerFolded` 之後依序 await（`packages/nexus-tool-adapter/src/thread-source.ts`；授權表留在宿主的 `apps/harness/src/thread-service-grants.ts`）；
   沒有樹的呼叫端走 `mountDetached` 取同一格，授權一律查出廠的表。樹上沒有來源的列，`apply` 只做 `registerFolded`、同步回傳。
   - **給誰用**：工具、閘門與隱藏規則要**每條 thread 各一份**、而且要在組 thread 當下讀宿主服務才定得出來的插件。消費者是 mcp（#2533 把它搬上樹），目前只有它用：憑證逐 thread 輪替（池鍵帶憑證指紋，#1989）、serve 用連線池而 CLI 每列自己連、
     放棄重連之後工具藏起來但呼叫得到說明（#2430），這些都要在那一條 thread 的組裝裡讀 `channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`。只需要行程級工具的插件照舊用 `register`。
@@ -263,7 +263,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     **先照反序跑完這一列每個來源已登記的 `onDispose`**（含先前已 resolve 的），再原樣拋出原本的錯誤（收資源失敗不蓋掉它）；全部 resolve 之後才交給這條 thread 的收尾。
     來源結束（resolve 或 reject）之後再呼叫 `register`、`gate`、`admit`、`section`、`onDispose` 會拋，`services.get`、`shared`、`logger.warn` 不受限。
   - **為什麼不做行程級的 `admit`**：要藏的工具是那一條 thread 自己連出去的那一份（放棄重連是逐條 thread、逐份連線的事），行程級的規則看不到是哪一條 thread 的哪一份連線，只能藏所有 thread 的同名工具。
-  - **撤除條件**：憑證與連線池改成行程級服務、mcp 能在 `apply` 裡連一次線的那一天，這一格連同 `thread-source.ts` 與授權表一起拿掉，mcp 改用 `register` 與 `gate`。
+  - **撤除條件**：憑證與連線池改成行程級服務、mcp 能在 `apply` 裡連一次線的那一天，這一格連同 `packages/nexus-tool-adapter/src/thread-source.ts` 與授權表一起拿掉，mcp 改用 `register` 與 `gate`。
 - **fs 接縫 1.1.0：工作區事實跟著把手走**（`@nexus/fs`，#1469 Q2 (a)）。`FsService` 多 `hasWorkspace(): boolean`；`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的路由前綴也併進來（組裝點明著交的在前、plugin 掛的在後，重複 fold 不累加）。
   兩樣都在 **fold 填 backend 的同一處**算（`settleFsService(service, backend, facts)` 是唯一的算法，`fold.ts` 把 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 與 `registry.backend.mounts()` 當 `facts` 交進去），不在別處再算一次。
   **`backend.mount()` 的前綴限制（#1775）**：外掛掛的路由前綴不得與組裝點自己的路由重疊——`/shared`、`/attachments`、`/conversation_history`、`/large_tool_results`——相同、更深、更上層（含根 `/`）一律被拒：`fold` 的 `reservedBackendPrefixes` 當場拋，訊息點名外掛與重疊的前綴。外掛的路由包在組裝點預設路由的外面，不擋的話外掛可以遮住唯讀共用區。CLI 與 serve 都生效；沒有啟用的路由（沒有附件、沒有工具結果暫存、沒有共用區）不在保留清單裡，該前綴照常可掛——沒有暫存時組裝點那一格只是記憶體墊底，被遮住沒有安全後果。

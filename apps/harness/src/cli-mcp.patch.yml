@@ -1,10 +1,22 @@
-# 把假的 MCP server 插到出貨清單上。
+# 手動驗證用：把假的 MCP server 插到出貨清單上，證明 CLI 跑完會退出。
 #
-# `name` 是相對這個檔的路徑，載入前會轉成 file URL（#499）。模組要 `export default` 那顆
-# plugin——一個 patch 條目對一顆，不是對一份清單。
+# ```bash
+# pnpm --filter @nexus/harness run cli --patch src/cli-mcp.patch.yml "回聲一下"
+# ```
 #
-# **這裡沒有 `config`**：server 的路徑要在執行期算，patch 檔只寫得下字面值，所以那份設定
-# 留在模組裡。理由寫在 `cli-mcp.fixture.ts` 的檔頭。
+# 自動測試證明不了的是這一件事：MCP server 是 stdio 子行程，它的 pipe 是活的 handle，收線那條路
+# 斷了的話，CLI 印完答案會停在那裡不動，而那個症狀在 vitest 裡看不到（worker 自己會被收掉）。
+#
+# 路徑是相對的：`pnpm --filter` 在 `apps/harness` 底下跑，子行程繼承這個工作目錄（#455 不寫絕對路徑的理由）。
 - insert:
     - id: mcp-fixture
-      name: './cli-mcp.fixture.ts'
+      name: '@nexus/plugin-mcp'
+      config:
+        serverName: docs
+        connection:
+          transport: stdio
+          command: node
+          args: ['--import', 'tsx', 'src/mcp-fixture-server.ts']
+        # 夾具 server 只回資料、不寫東西：照 #1622 的寫法明著宣告整台不問。
+        approval:
+          default: allow

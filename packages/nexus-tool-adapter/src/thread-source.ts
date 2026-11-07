@@ -1,6 +1,9 @@
 /**
  * 宿主這一側的 `tools.threadSource`（#2533）：組一條 thread 時，照樹上那一列登記的順序叫它的每個來源，交給它這條 thread 的
- * {@link ToolThread}。
+ * {@link ToolThread}。宿主（harness 的 `plugin-config.ts`）與插件自己的測試用的是這同一份。
+ *
+ * 這裡只有橋接本身。哪些宿主服務授權給哪顆插件是宿主的政策，留在宿主（harness 的 `thread-service-grants.ts`），
+ * 傳進來的 `services` 是宿主已經授權過的。
  *
  * 在橋接列的 `apply` 裡被 await，所以來源 reject 走的是相容層那一列 `apply` 拋錯的同一條路：預設模式整次組裝失敗、`perEntry`
  * 模式那一列掉了，訊息帶的是那一列的 origin。差別只有一處：這一列每個來源已登記的 `onDispose`（含先前已 resolve 的）會先照反序跑完，
@@ -12,7 +15,7 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { admittedTools, createToolListStepMiddleware } from '@nexus/core';
 import type { Disposer, NexusPlugin, RegisterOptions } from '@nexus/core';
-import { langChainToolOf } from '@nexus/tool-adapter';
+import { langChainToolOf } from './index.js';
 import type { ToolThread, ToolThreadSource } from '@nexus/tools';
 
 type Registry = Parameters<NexusPlugin<unknown>['apply']>[0];

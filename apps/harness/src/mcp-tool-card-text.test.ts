@@ -10,10 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EXTERNAL_MCP_CONTENT_NOTICE, SessionRegistry } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -68,7 +68,7 @@ async function run(
       toolResultStash: { rootDir: spill.stashRoot, session: 'tool-card-text' },
     }),
     plugins: [
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         approval: { default: 'allow' },
         connection: {
@@ -77,7 +77,7 @@ async function run(
           args: ['--import', 'tsx', SERVER],
           env: { FIXTURE_RESOURCES: '1' },
         },
-      }),
+      })),
     ],
   });
   const handler = createWireHandler({
