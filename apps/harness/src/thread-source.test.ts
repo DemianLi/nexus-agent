@@ -12,10 +12,14 @@ import { join } from 'node:path';
 import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import type { InternalPluginRegistry, PluginEntry } from '@nexus/core';
 import { MCP_CREDENTIALS_SERVICE } from '@nexus/plugin-mcp';
+import { MemorySaver } from '@langchain/langgraph';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createNexusAgent } from './agent-factory.js';
+import { shippedPlugins } from './fixtures.js';
 
 import { loadPluginConfig } from './plugin-config.js';
 import { PluginTree } from './plugin-tree.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import type { ThreadServiceGrants } from './thread-service-grants.js';
 
 const temporary: string[] = [];
@@ -41,6 +45,7 @@ interface Probe {
   /** 最後一次交給來源的 `thread`。 */
   lastThread(): {
     register(tool: unknown): unknown;
+    section(section: unknown): unknown;
     logger: { warn(message: string): void };
   };
 }
@@ -57,7 +62,7 @@ function scratch(): string {
   return dir;
 }
 
-/** 一顆夾具插件。設定：`tool` 工具名、`declare` 宣告的服務、`read` 要讀的服務、`fail` 最後拋錯、`second` 再登記第二個來源（`fail` 是它拋錯）。 */
+/** 一顆夾具插件。設定：`tool` 工具名、`declare` 宣告的服務、`read` 要讀的服務、`fail` 最後拋錯、`second` 再登記第二個來源（`fail` 是它拋錯）、`section` 登記一段系統提示詞（文字取自 `sectionText`，叫工具就換成 `after`）。 */
 function probe(dir: string, file = 'probe.mjs'): Probe {
   seed += 1;
   const key = `__threadSource2533_${String(Date.now())}_${String(seed)}`;
@@ -66,21 +71,22 @@ function probe(dir: string, file = 'probe.mjs'): Probe {
     module,
     `import { z } from 'zod';
 export const name = 'probe';
-export const inject = { tools: { range: '^2.5.0' } };
+export const inject = { tools: { range: '^2.6.0' } };
 export const Config = z.strictObject({
   tool: z.string(),
   declare: z.array(z.string()).optional(),
   read: z.string().optional(),
   fail: z.boolean().optional(),
   second: z.enum(['ok', 'fail']).optional(),
+  section: z.boolean().optional(),
 });
 export const manifest = {
   id: 'probe', version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^2.5.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.6.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx, config) {
-  const log = (globalThis[${JSON.stringify(key)}] ??= { events: [], thread: undefined });
+  const log = (globalThis[${JSON.stringify(key)}] ??= { events: [], thread: undefined, sectionText: 'before' });
   ctx.tools.threadSource(async (thread) => {
     log.thread = thread;
     log.events.push({ kind: 'source', row: config.tool, shared: thread.shared });
@@ -89,10 +95,11 @@ export function apply(ctx, config) {
       name: config.tool,
       description: '夾具的工具',
       parameters: z.toJSONSchema(z.strictObject({}), { io: 'input' }),
-      execute: async () => ({ content: 'ok' }),
+      execute: async () => { log.sectionText = 'after'; return { ok: true, content: 'ok' }; },
     });
-    thread.gate(() => undefined);
+    thread.gate((_exec, next) => next());
     thread.admit({ admits: (name) => name !== ${JSON.stringify(HIDDEN)} });
+    if (config.section === true) thread.section({ name: 'probe:section', order: 2000, text: () => '段：' + log.sectionText });
     thread.onDispose(() => { log.events.push({ kind: 'dispose', row: config.tool }); });
     await Promise.resolve();
     if (config.fail === true) throw new Error(${JSON.stringify(REASON)});
@@ -211,6 +218,9 @@ describe('tools.threadSource', () => {
       expect(hidden.seen.tools).toEqual([{ name: 'a' }]);
 
       expect(() => p.lastThread().register({})).toThrow(/已經 resolve/);
+      expect(() => p.lastThread().section({ name: 'late', order: 2000, text: '' })).toThrow(
+        /已經 resolve/,
+      );
       expect(() => p.lastThread().logger.warn('之後的警告')).not.toThrow();
 
       expect(p.log().filter((event) => event.kind === 'dispose')).toEqual([]);
@@ -370,7 +380,11 @@ describe('tools.threadSource', () => {
     const bad = probe(dir, 'bad.mjs');
     const good = probe(dir, 'good.mjs');
     const { plugins } = await compose(dir, [
-      { id: 'bad', specifier: bad.specifier, config: { tool: 'bad-tool', fail: true } },
+      {
+        id: 'bad',
+        specifier: bad.specifier,
+        config: { tool: 'bad-tool', fail: true, section: true },
+      },
       { id: 'good', specifier: good.specifier, config: { tool: 'good-tool' } },
     ]);
     const result = await loadPlugins(plugins, undefined, { perEntry: true });
@@ -384,10 +398,63 @@ describe('tools.threadSource', () => {
         .list()
         .some((entry) => entry.value.middleware?.name === 'bad:admit:1'),
     ).toBe(false);
+    expect(result.registry.prompt.sections().map((section) => section.name)).not.toContain(
+      'probe:section',
+    );
     expect(result.registry.tools.resolve('good-tool')?.origin.id).toBe('good');
     expect(bad.log().filter((event) => event.kind === 'dispose')).toHaveLength(1);
     await result.dispose();
     expect(bad.log().filter((event) => event.kind === 'dispose')).toHaveLength(1);
     expect(good.log().filter((event) => event.kind === 'dispose')).toHaveLength(1);
+  }, 60000);
+  it('section：同一條 thread 兩次模型呼叫之間文字變了，系統提示詞裡那一段跟著變', async () => {
+    const dir = scratch();
+    const p = probe(dir);
+    const { loaded } = await compose(
+      dir,
+      [{ id: 'probe', specifier: p.specifier, config: { tool: 'probe-tool', section: true } }],
+      { detached: true },
+    );
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '叫工具。', toolCalls: [{ name: 'probe-tool', args: {} }] },
+        { content: '收工。' },
+      ],
+    });
+    const built = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [...(await shippedPlugins()), ...loaded.plugins],
+    });
+    try {
+      await (
+        built.agent as unknown as {
+          invoke: (input: unknown, config: unknown) => Promise<unknown>;
+        }
+      ).invoke(
+        { messages: [{ role: 'user', content: '開工' }] },
+        { configurable: { thread_id: 'thread-section' }, recursionLimit: 20 },
+      );
+      const systems = model.prompts.map(
+        (prompt) => prompt.find((message) => message.getType() === 'system')?.text ?? '',
+      );
+      expect(systems).toHaveLength(2);
+      expect(systems[0]).toContain('段：before');
+      expect(systems[0]).not.toContain('段：after');
+      expect(systems[1]).toContain('段：after');
+      expect(systems[1]).not.toContain('段：before');
+    } finally {
+      await built.dispose();
+    }
+  }, 60000);
+
+  it('section：同一條 thread 上兩列登記同名的段，整次組裝失敗', async () => {
+    const dir = scratch();
+    const p = probe(dir);
+    const { plugins } = await compose(dir, [
+      { id: 'a', specifier: p.specifier, config: { tool: 'a-tool', section: true } },
+      { id: 'b', specifier: p.specifier, config: { tool: 'b-tool', section: true } },
+    ]);
+    await expect(loadPlugins(plugins)).rejects.toThrow(/"probe:section" 已經登記過了/);
   }, 60000);
 });
