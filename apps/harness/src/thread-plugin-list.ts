@@ -373,6 +373,18 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const liveTable = options.liveVersions === undefined ? undefined : createLiveVersionTable();
   // 最近一次 `read()` 回的那一份：綁定之後重寫快照時當「已儲存」（見 {@link ThreadPluginReader.bindThread}）。
   let latestRead: ThreadPluginList | undefined;
+  /**
+   * per-thread 的前台不組 thread、從不 `read()`：「已儲存」照這一刻磁碟上的那一份另讀。讀的警告對話行程組裝時已經講過，這裡不再講；
+   * 讀不起來就退回最近一次讀到的（前台是啟動那一份）。
+   */
+  async function savedOnDisk(): Promise<ThreadPluginList | undefined> {
+    try {
+      const loaded = await options.load(() => {});
+      return { loaded, plugins: loaded.plugins, optionalEntries: optionalEntriesOf(loaded, audit) };
+    } catch {
+      return latestRead;
+    }
+  }
   function snapshotFor(saved?: ThreadPluginList): PluginSnapshot {
     return buildPluginSnapshot({
       running: runningSource,
@@ -461,14 +473,13 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
     async bindElsewhere(threadId, bindings) {
       if (liveTable === undefined) return async () => {};
       const release = liveTable.bind(threadId, bindings);
-      // 前台自己不組 thread，沒讀過清單：「已儲存」那一側就是啟動那一份，同啟動時寫的快照。
-      await options.publishSnapshot?.(snapshotFor(latestRead));
+      await options.publishSnapshot?.(snapshotFor(await savedOnDisk()));
       let released = false;
       return async () => {
         if (released) return;
         released = true;
         release();
-        await options.publishSnapshot?.(snapshotFor(latestRead));
+        await options.publishSnapshot?.(snapshotFor(await savedOnDisk()));
       };
     },
     async republishSnapshot() {

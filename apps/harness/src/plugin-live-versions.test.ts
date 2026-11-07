@@ -376,4 +376,24 @@ describe('ThreadPluginReader.bindThread', () => {
       't1',
     ]);
   });
+  it('bindElsewhere（per-thread 的前台，自己從不 read）：「已儲存」是綁的這一刻磁碟上的那一份，放掉時也是', async () => {
+    const h = home();
+    const published: PluginSnapshot[] = [];
+    const list = await reader(h.env, published);
+    const startup = await loadDefaultPlugins({ serve: true, env: h.env, warn: () => {} });
+    const bindings = liveBindingsOf({ loaded: startup, plugins: startup.plugins }, []);
+    // 前台起來之後，寫入口停用了一列；對話行程讀到新的清單組了 thread，前台綁它。
+    h.patch('- id: todo\n  disabled: true\n');
+    const release = await list.bindElsewhere('t1', bindings);
+    expect(published.at(-1)?.rows.find((row) => row.id === 'todo')).toMatchObject({
+      saved: { state: 'disabled' },
+      sync: 'next-thread',
+    });
+    h.patch('');
+    await release();
+    expect(published.at(-1)?.rows.find((row) => row.id === 'todo')).toMatchObject({
+      saved: { state: 'mounted' },
+      sync: 'same',
+    });
+  });
 });
