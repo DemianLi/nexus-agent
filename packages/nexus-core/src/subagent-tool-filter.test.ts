@@ -22,6 +22,7 @@ import {
   SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
   toolKept,
 } from './subagent-tool-filter.js';
+import { TOOL_PRE_EXECUTE_MIDDLEWARE_NAME } from './tool-pipeline.js';
 
 const BASE = ['ls', 'read_file', 'write_file', 'edit_file', 'delete', 'glob', 'grep', 'task'];
 
@@ -173,7 +174,7 @@ describe('fold：基座工具', () => {
     );
   });
 
-  it('遮罩 middleware 排在核准閘門外側（被遮的呼叫碰不到閘門）', async () => {
+  it('遮罩 middleware（清單那一半）排在核准閘門外側', async () => {
     const params = await fold(team(), {
       subagentToolFilter: { deny: ['write_file'] },
       checkpointer: true,
@@ -224,10 +225,6 @@ describe('遮罩 middleware 本身', () => {
       request: { tools: { name: string }[] },
       handler: (request: { tools: { name: string }[] }) => unknown,
     ) => unknown;
-    wrapToolCall: (
-      request: { toolCall: { name: string; id?: string } },
-      handler: (request: unknown) => unknown,
-    ) => unknown;
   };
 
   it('把被遮的從請求拿掉，別的原樣', async () => {
@@ -240,23 +237,96 @@ describe('遮罩 middleware 本身', () => {
     );
     expect(seen).toEqual(['read_file']);
   });
+});
 
-  it('叫到被遮的：回一則錯誤結果、工具本體不跑；沒被遮的原樣往下', async () => {
-    let ran = 0;
-    const answer = await middleware.wrapToolCall(
-      { toolCall: { name: 'write_file', id: 'c1' } },
-      () => void (ran += 1),
-    );
-    expect(ran).toBe(0);
+describe('遮罩的工具那一半：子代理那一份 pre 的外層 core 段', () => {
+  type Pre = {
+    wrapToolCall: (request: unknown, handler: (request: unknown) => unknown) => Promise<unknown>;
+  };
+  const preOf = (middleware: readonly unknown[] | undefined): Pre | undefined =>
+    (middleware ?? []).find(
+      (each) => (each as { name: string }).name === TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
+    ) as Pre | undefined;
+  const body = (counter: { ran: number }, id: string) => () => {
+    counter.ran += 1;
+    return new ToolMessage({ content: 'ok', tool_call_id: id });
+  };
+  const call = (pre: Pre, name: string, id: string, run: () => unknown) =>
+    pre.wrapToolCall({ toolCall: { name, id, args: {} } }, run);
+
+  /** 掛一位 `prepend` 的插件 pre 監聽者，記下它看到的每一個名字；`events` 為假時 fold 不給派發面。 */
+  async function foldWithHook(heard: string[], events: boolean) {
+    const { registry } = await loadPlugins([
+      ...team(),
+      fakePlugin(
+        'hook',
+        (r) =>
+          void r.events.on(
+            'tools/pre-execute',
+            (exec, next) => {
+              heard.push(exec.name);
+              return next();
+            },
+            { prepend: true },
+          ),
+      ),
+    ]);
+    return foldRegistry(registry, {
+      summarization: false,
+      repeatReminder: false,
+      observationPolicy: false,
+      baseToolNames: BASE,
+      subagentToolFilter: { deny: ['write_file'] },
+      ...(events && { events: registry.dispatch }),
+    });
+  }
+
+  it('叫到被遮的：拒絕，`prepend` 的插件監聽者與工具本體都不跑；沒被遮的照常往下', async () => {
+    const heard: string[] = [];
+    const params = await foldWithHook(heard, true);
+    const pre = preOf(byName(params.subagents, 'writer').middleware)!;
+    const counter = { ran: 0 };
+
+    const answer = await call(pre, 'write_file', 'c1', body(counter, 'c1'));
+    expect(counter.ran).toBe(0);
+    expect(heard).toEqual([]);
     expect(ToolMessage.isInstance(answer)).toBe(true);
     const message = answer as ToolMessage;
     expect(message.status).toBe('error');
     expect(message.tool_call_id).toBe('c1');
     expect(String(message.content)).toContain(filteredToolRefusal('write_file'));
 
-    await middleware.wrapToolCall({ toolCall: { name: 'read_file', id: 'c2' } }, () => {
-      ran += 1;
-    });
-    expect(ran).toBe(1);
+    await call(pre, 'read_file', 'c2', body(counter, 'c2'));
+    expect(counter.ran).toBe(1);
+    expect(heard).toEqual(['read_file']);
+  });
+
+  it('root 那一份沒有遮罩；子代理之間共用同一份', async () => {
+    const heard: string[] = [];
+    const params = await foldWithHook(heard, true);
+    const pre = preOf(byName(params.subagents, 'writer').middleware)!;
+    const rootPre = preOf(params.middleware)!;
+    expect(rootPre).not.toBe(pre);
+    for (const subagent of params.subagents) expect(preOf(subagent.middleware)).toBe(pre);
+
+    const counter = { ran: 0 };
+    await call(rootPre, 'write_file', 'c3', body(counter, 'c3'));
+    expect(counter.ran).toBe(1);
+    expect(heard).toEqual(['write_file']);
+  });
+
+  it('沒給派發面：子代理照樣有那一份 pre、照樣拒絕；root 沒有', async () => {
+    const heard: string[] = [];
+    const params = await foldWithHook(heard, false);
+    expect(preOf(params.middleware)).toBeUndefined();
+    const pre = preOf(byName(params.subagents, 'writer').middleware);
+    expect(pre).toBeDefined();
+
+    const counter = { ran: 0 };
+    const answer = await call(pre!, 'write_file', 'c4', body(counter, 'c4'));
+    expect(counter.ran).toBe(0);
+    expect((answer as ToolMessage).status).toBe('error');
+    await call(pre!, 'read_file', 'c5', body(counter, 'c5'));
+    expect(counter.ran).toBe(1);
   });
 });

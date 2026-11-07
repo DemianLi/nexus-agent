@@ -467,7 +467,7 @@ describe('工具事件的三顆生產者（#1248）', () => {
     expect(names(params.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
   });
 
-  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算）', async () => {
+  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算；pre 在有基座工具被遮時另一份，見 subagent-tool-filter.test.ts）', async () => {
     const params = await fold(
       [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
       { events: new EventBus() },
@@ -2588,10 +2588,10 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
     SUMMARIZATION_MIDDLEWARE_NAME,
   ]);
   /**
-   * 同名但是另一顆。**現在沒有了**：前景子代理的核准閘門跟 root 同一顆（#328 第 1 項，翻了 #324 的「管道固定 `policy-never`」）；
-   * 背景圖的 `policy-never` 那顆在編圖時換上（`compileSubagentGraph` 的 `approvalGate`），不在 fold 的產物裡。
+   * 同名但是另一顆，子代理之間共用一顆：`tools/pre-execute` 的生產者，子代理那一份的外層 core 段帶工具過濾。
+   * 前景子代理的核准閘門跟 root 同一顆（#328 第 1 項）；背景圖的 `policy-never` 那顆在編圖時換上，不在 fold 的產物裡。
    */
-  const OTHER_INSTANCE = new Set<string>();
+  const OTHER_INSTANCE = new Set<string>([TOOL_PRE_EXECUTE_MIDDLEWARE_NAME]);
 
   type Named = { name: string };
   const nameOf = (middleware: unknown): string => (middleware as Named).name;
@@ -2624,6 +2624,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
         baseToolNames: gatedTools,
         subagentToolFilter: { deny: ['write_file'] },
         checkpointer: true,
+        events: new EventBus(),
       },
     );
     return params;
@@ -2702,7 +2703,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
         }
       });
     }
-    // 逐個建的：三個子代理各一份，彼此不同。另一顆（核准閘門）無狀態，一顆走遍每個子代理。
+    // 逐個建的：三個子代理各一份，彼此不同。另一顆無狀態，一顆走遍每個子代理。
     for (const name of FRESH_PER_AGENT) {
       expect(new Set(seen.get(name)).size, name).toBe(params.subagents.length);
     }

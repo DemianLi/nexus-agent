@@ -181,7 +181,6 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
           "nexusTurnCancel",
           "nexusSpillPolicy",
           "nexusSearchOverflow",
-          "nexusSubagentToolFilter",
           "nexusToolPreExecute",
           "nexusApprovalGate",
           "nexusFileObservationPolicy",

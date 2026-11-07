@@ -683,6 +683,121 @@ describe('tools/post-execute 的生產者', () => {
   });
 });
 
+describe('core 監聽者的兩段：外層在每位插件監聽者外側，內層在內側', () => {
+  /** 記下誰被叫、依序；每位都放行。 */
+  const tracer = (log: string[], who: string) => (_exec: unknown, next: () => unknown) => {
+    log.push(who);
+    return next();
+  };
+
+  it('pre：外層 core → 插件（含 `prepend`、晚掛的）→ 內層 core → 本體', async () => {
+    const log: string[] = [];
+    const bus = new EventBus();
+    bus.on('tools/pre-execute', tracer(log, 'plugin') as never);
+    const wrap = wrapperOf(
+      createToolPreExecuteMiddleware(bus, {
+        outer: [tracer(log, 'outer') as never],
+        inner: [tracer(log, 'inner') as never],
+      }),
+    );
+    // 建好之後才掛的、帶 `prepend` 的，也只排在插件那一段裡。
+    bus.on('tools/pre-execute', tracer(log, 'late') as never, { prepend: true });
+    await wrap(requestFor(), async () => {
+      log.push('body');
+      return codedError();
+    });
+    expect(log).toEqual(['outer', 'late', 'plugin', 'inner', 'body']);
+  });
+
+  it('execute 與 post：同一個順序', async () => {
+    const log: string[] = [];
+    const bus = new EventBus();
+    bus.on('tools/execute', tracer(log, 'plugin') as never);
+    bus.on('tools/post-execute', ((_exec: unknown, _view: unknown, next: () => unknown) => {
+      log.push('post-plugin');
+      return next();
+    }) as never);
+    const post = (who: string) => (_exec: unknown, _view: unknown, next: () => unknown) => {
+      log.push(who);
+      return next();
+    };
+    const execute = wrapperOf(
+      createToolExecuteMiddleware(bus, {
+        outer: [tracer(log, 'outer') as never],
+        inner: [tracer(log, 'inner') as never],
+      }),
+    );
+    const postExecute = wrapperOf(
+      createToolPostExecuteMiddleware(bus, {
+        outer: [post('post-outer') as never],
+        inner: [post('post-inner') as never],
+      }),
+    );
+    const message = codedError();
+    expect(
+      await postExecute(requestFor(), () =>
+        execute(requestFor(), async () => {
+          log.push('body');
+          return message;
+        }),
+      ),
+    ).toBe(message);
+    expect(log).toEqual([
+      'outer',
+      'plugin',
+      'inner',
+      'body',
+      'post-outer',
+      'post-plugin',
+      'post-inner',
+    ]);
+  });
+
+  it('外層 core 不叫 `next()` → 插件與內層都不跑', async () => {
+    const log: string[] = [];
+    const bus = new EventBus();
+    bus.on('tools/pre-execute', tracer(log, 'plugin') as never);
+    const wrap = wrapperOf(
+      createToolPreExecuteMiddleware(bus, {
+        outer: [(() => Promise.resolve({ kind: 'deny', reason: '不准' })) as never],
+        inner: [tracer(log, 'inner') as never],
+      }),
+    );
+    const answer = (await wrap(requestFor(), async () => codedError())) as ToolMessage;
+    expect(answer.status).toBe('error');
+    expect(log).toEqual([]);
+  });
+
+  it('core 監聽者叫第二次 `next()` → 拋', async () => {
+    const wrap = wrapperOf(
+      createToolPreExecuteMiddleware(new EventBus(), {
+        outer: [
+          (async (_exec: unknown, next: () => Promise<unknown>) => {
+            await next();
+            return next();
+          }) as never,
+        ],
+      }),
+    );
+    await expect(wrap(requestFor(), async () => codedError())).rejects.toThrow(
+      'tools/pre-execute 的監聽者呼叫了第二次 next()',
+    );
+  });
+
+  it('沒給派發面：core 兩段照跑；兩段都空 → 直通，原物件', async () => {
+    const log: string[] = [];
+    const wrap = wrapperOf(
+      createToolPreExecuteMiddleware(undefined, { outer: [tracer(log, 'outer') as never] }),
+    );
+    await wrap(requestFor(), async () => codedError());
+    expect(log).toEqual(['outer']);
+    const message = codedError();
+    expect(
+      await wrapperOf(createToolPreExecuteMiddleware(undefined))(requestFor(), async () => message),
+    ).toBe(message);
+  });
+});
+
 describe('tools/result（圍堵派發）', () => {
   function containment(
     bus: EventBus,

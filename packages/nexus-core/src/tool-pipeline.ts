@@ -3,9 +3,16 @@
  * （[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)，事件契約草稿的 S1a）。
  *
  * 事件名與時刻照 dsh 的 `packages/core/tools/src/index.ts`（`5badb15009a`，`docs/tool-execution-pipeline.zh.md`）：
- * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**；消費者目前只有一顆：
- * `@nexus/plugin-present` 的交付寫入掛在 `tools/result`（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)，S1c）。
- * 其餘三個事件沒有監聽者，所以沒有任何監聽者時，每顆工具呼叫的行為與位元組都跟這個檔案不存在時一樣。
+ * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**。出廠的插件監聽者只有
+ * `@nexus/plugin-present` 的交付寫入，掛在 `tools/result`（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）；core 自己的監聽者
+ * 由 `fold.ts` 交給生產者（{@link CoreToolListeners}），目前只有子代理工具過濾的那一位（`subagent-tool-filter.ts`，在 `tools/pre-execute`）。
+ * 沒有任何監聽者時，生產者直接交給下一層，行為與位元組都跟這個檔案不存在時一樣。
+ *
+ * ## core 監聽者排在固定的兩段
+ *
+ * 外層 core → 匯流排上的插件監聽者 → 內層 core（{@link CoreToolListeners}）。core 的監聽者不掛在匯流排上：同一個事件裡，有的要在插件外側
+ * （工具過濾：被遮的呼叫連最外側的插件監聽者也看不到），有的要在內側。只靠註冊順序的話，以 `prepend` 掛的（或比它早掛的）插件監聽者
+ * 會排到外層那位的外面，晚掛的會排到內層那位的裡面。
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
@@ -29,10 +36,11 @@
  * 與請求形狀（`wrappedRequestOf`）只出現在生產者裡。**沒有人替換時，生產者把原物件原樣交回**：`tool-events.ts` 的錯誤碼掛在
  * 以訊息物件為鍵的 `WeakMap` 上，中途複製訊息碼就斷。
  *
- * ## agent 身分（草稿 D4）
+ * ## agent 身分
  *
- * `exec.agent` 是 {@link SessionAddress}：root 或某個子代理的 `runId`，來源與圍堵相同（`toolCallSessionAddress`）。三顆生產者是
- * root 與每個子代理共用的一份實例，**沒有 `Scoped<Agent>` 過濾**，監聽者自己看 `exec.agent`。認不出來是誰（不在圖裡）時是 `undefined`。
+ * `exec.agent` 是 {@link SessionAddress}：root 或某個子代理的 `runId`，來源與圍堵相同（`toolCallSessionAddress`）。`execute` 與
+ * `post-execute` 是 root 與每個子代理共用的一份實例；`pre-execute` 在有基座工具被遮時，子代理另一份，外層 core 段帶工具過濾。
+ * 匯流排上的插件監聽者**沒有 `Scoped<Agent>` 過濾**，自己看 `exec.agent`。認不出來是誰（不在圖裡）時是 `undefined`。
  *
  * ## 與 dsh 的偏離（動工前登記在 #1248，這裡逐條對）
  *
@@ -69,7 +77,7 @@ import {
   formatToolTimeout,
   isToolTimeout,
 } from './containment.js';
-import type { EventDispatcher, EventListenerInfo } from './events.js';
+import type { EventDispatcher, EventListenerInfo, Events } from './events.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
@@ -184,7 +192,7 @@ declare module './events.js' {
      * 派發前允許或拒絕。`next()` 即允許；回 `{ kind: 'deny', reason, error? }` 拒絕，模型收到 `Error: <reason>` 那一則
      * （`toolRefusal`，掛 `error` 的碼），工具本體與更內層都不跑。**沒有 `ask`／`cancel`**：問人還在 `approvals` 註冊點，取消歸 `turn-cancel`。
      * 位置在核准閘門外側，所以被拒的呼叫不會先跳核准卡。**同一個 `callId` 在核准 resume 之後會再跑一次，監聽者必須冪等。**
-     * 沒有 `Scoped<Agent>`：所有 agent 的呼叫都派發，看 `exec.agent` 自己過濾。
+     * 沒有 `Scoped<Agent>`：每個 agent 的呼叫都派發（子代理被工具過濾遮掉的基座工具除外：在插件監聽者外側就被拒），看 `exec.agent` 自己過濾。
      * @param exec - 這次呼叫（名字、解析後的參數、呼叫者）。
      * @param next - 往內一位；最內層回 `allow`。
      * @mode waterfall
@@ -459,19 +467,84 @@ export const TOOL_EXECUTE_MIDDLEWARE_NAME = 'nexusToolExecute';
 /** middleware 的名字。 */
 export const TOOL_POST_EXECUTE_MIDDLEWARE_NAME = 'nexusToolPostExecute';
 
+/** 以 waterfall 派發、能放 core 監聽者的三個工具事件；`tools/result` 是 emit，不在內。 */
+type LayeredToolEvent = 'tools/pre-execute' | 'tools/execute' | 'tools/post-execute';
+
+/**
+ * core 自己的監聽者，簽名與語意同事件表那一格（`next()` 只能叫一次，第二次拋；不叫就是否決或自己交出結果）。**不掛在匯流排上**：
+ * `outer` 固定排在每位插件監聽者外側，`inner` 固定排在內側；插件怎麼註冊（含 `prepend`）、什麼時候註冊，都只落在兩段之間。
+ * 它們也不出現在 `registry.events.listeners()` 的清單上。
+ */
+export interface CoreToolListeners<K extends LayeredToolEvent> {
+  /** 插件監聽者外側，依陣列順序由外而內。 */
+  readonly outer?: readonly Events[K][];
+  /** 插件監聽者內側，依陣列順序由外而內。 */
+  readonly inner?: readonly Events[K][];
+}
+
+/** 這一次派發有幾位監聽者：core 兩段加匯流排上的。 */
+function listenerCount<K extends LayeredToolEvent>(
+  events: EventDispatcher | undefined,
+  name: K,
+  core: CoreToolListeners<K>,
+): number {
+  return (core.outer?.length ?? 0) + (events?.count(name) ?? 0) + (core.inner?.length ?? 0);
+}
+
+/**
+ * 外層 core → 匯流排上的插件監聽者 → 內層 core → `innermost`，語意同 `EventDispatcher.waterfall`：每位拿自己的一支 `next`，
+ * 只能叫一次，不叫就是否決。
+ *
+ * @param bus - 呼叫端以事件名字面量寫的 `events.waterfall(…)`：`apps/harness/src/event-table-scan.ts` 的 `scanEventProducers` 只認事件名是字串字面量的呼叫；沒有插件監聽者時傳 `undefined`。
+ */
+function dispatchLayered<K extends LayeredToolEvent>(
+  name: K,
+  core: CoreToolListeners<K>,
+  bus: Events[K] | undefined,
+  args: readonly unknown[],
+  innermost: () => unknown,
+): ReturnType<Events[K]> {
+  type Stage = (...stageArgs: unknown[]) => unknown;
+  const stages: Stage[] = [
+    ...((core.outer ?? []) as unknown as Stage[]),
+    ...(bus === undefined ? [] : [bus as unknown as Stage]),
+    ...((core.inner ?? []) as unknown as Stage[]),
+  ];
+  const dispatch = (at: number): unknown => {
+    const stage = stages[at];
+    if (stage === undefined) return innermost();
+    let called = false;
+    const next = (): unknown => {
+      if (called) throw new Error(`${name} 的監聽者呼叫了第二次 next()`);
+      called = true;
+      return dispatch(at + 1);
+    };
+    return stage(...args, next);
+  };
+  return dispatch(0) as ReturnType<Events[K]>;
+}
+
 /**
  * `tools/pre-execute` 的生產者。**沒有監聽者時直接交給下一層**，連 `exec` 都不造。
  *
  * 拒絕回的是 `toolRefusal(reason, …)`，外面的圍堵像對待任何一則回來的錯誤訊息一樣把它記成 `tool/result`。
  *
- * @param events - 宿主持有的派發面。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
+ * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createToolPreExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
+export function createToolPreExecuteMiddleware(
+  events: EventDispatcher | undefined,
+  core: CoreToolListeners<'tools/pre-execute'> = {},
+): AgentMiddleware {
   return createToolCallStepMiddleware(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
-    if (events.count('tools/pre-execute') === 0) return next();
+    if (listenerCount(events, 'tools/pre-execute', core) === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
-    const decision = await events.waterfall('tools/pre-execute', exec, () =>
+    const bus: Events['tools/pre-execute'] | undefined =
+      events === undefined || events.count('tools/pre-execute') === 0
+        ? undefined
+        : (e, n) => events.waterfall('tools/pre-execute', e, n);
+    const decision = await dispatchLayered('tools/pre-execute', core, bus, [exec], () =>
       Promise.resolve(ALLOW),
     );
     if (decision.kind === 'allow') return next();
@@ -492,17 +565,25 @@ export function createToolPreExecuteMiddleware(events: EventDispatcher): AgentMi
  *
  * **沒有人短路時，回的是內層原本回的那個物件**（同一個 `ToolMessage` 或 `Command`），不是重建的。
  *
- * @param events - 宿主持有的派發面。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
+ * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
+export function createToolExecuteMiddleware(
+  events: EventDispatcher | undefined,
+  core: CoreToolListeners<'tools/execute'> = {},
+): AgentMiddleware {
   return createToolCallStepMiddleware(TOOL_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
-    if (events.count('tools/execute') === 0) return next();
+    if (listenerCount(events, 'tools/execute', core) === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
     let raw: unknown;
     let viewOfRaw: PipelineResult | undefined;
     let bodyRan = false;
-    const view = await events.waterfall('tools/execute', exec, async () => {
+    const bus: Events['tools/execute'] | undefined =
+      events === undefined || events.count('tools/execute') === 0
+        ? undefined
+        : (e, n) => events.waterfall('tools/execute', e, n);
+    const view = await dispatchLayered('tools/execute', core, bus, [exec], async () => {
       bodyRan = true;
       raw = await next();
       viewOfRaw = toolResultView(raw, exec.callId);
@@ -526,35 +607,52 @@ export function createToolExecuteMiddleware(events: EventDispatcher): AgentMiddl
  * 原樣再拋，交給外面的圍堵照舊翻；`replace` 時回替換過的那則（`status: 'error'`，碼沿用）。中斷與 `Command` 這類控制流
  * （`isGraphBubbleUp`）和這一輪被中止的錯（`isTurnCancelled`，交給外面的 `turn-cancel` 換成 `ABORTED`）不派發，原樣往外拋。
  *
- * @param events - 宿主持有的派發面。
+ * @param events - 宿主持有的派發面；`undefined` 時只有 `core` 那兩段。
+ * @param core - core 自己的監聽者。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createToolPostExecuteMiddleware(events: EventDispatcher): AgentMiddleware {
+export function createToolPostExecuteMiddleware(
+  events: EventDispatcher | undefined,
+  core: CoreToolListeners<'tools/post-execute'> = {},
+): AgentMiddleware {
+  const post: PostDispatch = (exec, view) => {
+    const bus: Events['tools/post-execute'] | undefined =
+      events === undefined || events.count('tools/post-execute') === 0
+        ? undefined
+        : (e, v, n) => events.waterfall('tools/post-execute', e, v, n);
+    return dispatchLayered('tools/post-execute', core, bus, [exec, view], () =>
+      Promise.resolve(ACCEPT),
+    );
+  };
   return createToolCallStepMiddleware(TOOL_POST_EXECUTE_MIDDLEWARE_NAME, async (call, next) => {
-    if (events.count('tools/post-execute') === 0) return next();
+    if (listenerCount(events, 'tools/post-execute', core) === 0) return next();
     const startedAt = Date.now();
     let result: unknown;
     try {
       result = await next();
     } catch (error) {
       if (isGraphBubbleUp(error) || isTurnCancelled(error)) throw error;
-      return postExecuteThrown(events, call, error, Date.now() - startedAt);
+      return postExecuteThrown(post, call, error, Date.now() - startedAt);
     }
     if (!ToolMessage.isInstance(result)) return result;
-    return postExecuteMessage(events, toolExecutionOf(wrappedRequestOf(call)), result);
+    return postExecuteMessage(post, toolExecutionOf(wrappedRequestOf(call)), result);
   });
 }
 
+/** 派發一次 `tools/post-execute`（core 兩段加匯流排）。 */
+type PostDispatch = (
+  exec: PipelineExecution,
+  view: PipelineResult,
+) => Promise<PipelinePostDecision>;
+
 /** 對一則 `ToolMessage` 結果派發 `tools/post-execute`；`accept` 回原物件。 */
 async function postExecuteMessage(
-  events: EventDispatcher,
+  post: PostDispatch,
   exec: PipelineExecution,
   result: ToolMessage,
 ): Promise<ToolMessage> {
   const view = toolResultView(result, exec.callId);
-  const decision = await events.waterfall('tools/post-execute', exec, view, () =>
-    Promise.resolve(ACCEPT),
-  );
+  const decision = await post(exec, view);
   const replaced = replacedBy(decision, result);
   if (replaced === undefined) throw badDecision('tools/post-execute', decision);
   return replaced;
@@ -566,7 +664,7 @@ async function postExecuteMessage(
  * 逾時那句的毫秒數從這一層量起，圍堵量的是它自己那一層，accept 之後模型收到的那則可能多幾毫秒。
  */
 async function postExecuteThrown(
-  events: EventDispatcher,
+  post: PostDispatch,
   call: ToolCallSite,
   error: unknown,
   elapsedMs: number,
@@ -582,9 +680,7 @@ async function postExecuteThrown(
     { callId: exec.callId, name: toolName, ...(kind !== undefined && { error: kind }) },
   );
   const view = toolResultView(message, exec.callId);
-  const decision = await events.waterfall('tools/post-execute', exec, view, () =>
-    Promise.resolve(ACCEPT),
-  );
+  const decision = await post(exec, view);
   if (decision.kind === 'accept') throw error;
   const replaced = replacedBy(decision, message);
   if (replaced === undefined) throw badDecision('tools/post-execute', decision);
