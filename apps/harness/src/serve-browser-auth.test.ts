@@ -17,14 +17,14 @@ import { THREADS_PATH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import { bodyLog } from './fixtures.js';
+import { PROCESS_MODEL_UNDER_TEST, startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const POSIX = process.platform !== 'win32';
 const INDEX = '<!doctype html><title>nexus web</title>';
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -59,14 +59,14 @@ async function start(
     readonly argv?: readonly string[];
   },
   lines: string[] = [],
-): Promise<RunningServe> {
-  running = await runServe({
+): Promise<ServeUnderTest> {
+  running = await startServeUnderTest({
     argv: ['--port', String(options.port ?? 0), ...(options.argv ?? [])],
     log: bodyLog(lines),
     env: options.home === undefined ? {} : { [HARNESS_HOME_ENV]: options.home },
     ...(options.webDist === undefined ? {} : { webDist: options.webDist }),
   });
-  return running as RunningServe;
+  return running as ServeUnderTest;
 }
 
 /** 用 node:http 打，才帶得了任意的 `Host`（fetch 會照網址自己填）。 */
@@ -124,100 +124,109 @@ function rawRequest(port: number, text: string): Promise<string> {
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
+/** 要指定網頁 dist（`webDist`，行程內的接縫，per-thread 跨不了行程）的幾支：per-thread 底下跳過，其餘照跑。 */
+const itWithWebDist = it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread');
+
 describe('serve 的瀏覽器會話', () => {
-  it('印出來的網址是唯一的入口：偽造 loopback Host 沒用，換到 cookie 才打得到 API', async () => {
-    const home = await tmp('nexus-serve-home-');
-    const lines: string[] = [];
-    const server = await start({ home, webDist: await builtDist() }, lines);
+  itWithWebDist(
+    '印出來的網址是唯一的入口：偽造 loopback Host 沒用，換到 cookie 才打得到 API',
+    async () => {
+      const home = await tmp('nexus-serve-home-');
+      const lines: string[] = [];
+      const server = await start({ home, webDist: await builtDist() }, lines);
 
-    expect(lines[0]).toBe(`nexus-agent 在 ${server.authenticatedUrl}`);
-    expect(new URL(server.authenticatedUrl).searchParams.get('token')).toMatch(
-      /^[A-Za-z0-9_-]{43}$/,
-    );
-    // token 只出現在那一行。
-    expect(lines.filter((line) => line.includes('token='))).toHaveLength(1);
+      expect(lines[0]).toBe(`nexus-agent 在 ${server.authenticatedUrl}`);
+      expect(new URL(server.authenticatedUrl).searchParams.get('token')).toMatch(
+        /^[A-Za-z0-9_-]{43}$/,
+      );
+      // token 只出現在那一行。
+      expect(lines.filter((line) => line.includes('token='))).toHaveLength(1);
 
-    // 同機別的使用者：loopback 的 Host 過得了圍欄，過不了會話。
-    for (const host of ['localhost', 'localhost:8787', new URL(server.url).host]) {
-      const forged = await rawGet(server.url, THREADS_PATH, { host, ...JSON_HEADERS });
-      expect({ host, status: forged.status }).toEqual({ host, status: 401 });
-    }
-    expect((await fetch(`${server.url}${THREADS_PATH}`, { headers: JSON_HEADERS })).status).toBe(
-      401,
-    );
-    const index = await fetch(`${server.url}/`);
-    expect(index.status).toBe(401);
-    expect(await index.text()).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
-    // 資產公開，照 dsh。
-    expect((await fetch(`${server.url}/assets/app.js`)).status).toBe(200);
+      // 同機別的使用者：loopback 的 Host 過得了圍欄，過不了會話。
+      for (const host of ['localhost', 'localhost:8787', new URL(server.url).host]) {
+        const forged = await rawGet(server.url, THREADS_PATH, { host, ...JSON_HEADERS });
+        expect({ host, status: forged.status }).toEqual({ host, status: 401 });
+      }
+      expect((await fetch(`${server.url}${THREADS_PATH}`, { headers: JSON_HEADERS })).status).toBe(
+        401,
+      );
+      const index = await fetch(`${server.url}/`);
+      expect(index.status).toBe(401);
+      expect(await index.text()).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
+      // 資產公開，照 dsh。
+      expect((await fetch(`${server.url}/assets/app.js`)).status).toBe(200);
 
-    const { cookie, setCookie } = await exchange(server.authenticatedUrl);
-    expect(setCookie).toMatch(
-      /; Max-Age=2592000; Path=\/; Expires=.*; HttpOnly; SameSite=Strict$/u,
-    );
-    expect(setCookie).not.toContain('Secure');
+      const { cookie, setCookie } = await exchange(server.authenticatedUrl);
+      expect(setCookie).toMatch(
+        /; Max-Age=2592000; Path=\/; Expires=.*; HttpOnly; SameSite=Strict$/u,
+      );
+      expect(setCookie).not.toContain('Secure');
 
-    const listed = await fetch(`${server.url}${THREADS_PATH}`, {
-      headers: { ...JSON_HEADERS, cookie },
-    });
-    expect(listed.status).toBe(200);
-    const page = await fetch(`${server.url}/`, { headers: { cookie } });
-    expect(page.status).toBe(200);
-    expect(await page.text()).toBe(INDEX);
-    // cookie 綁 authority：同一顆拿去配別的 Host 不認。
-    expect(
-      (await rawGet(server.url, THREADS_PATH, { host: 'localhost', cookie, ...JSON_HEADERS }))
-        .status,
-    ).toBe(401);
-  });
-
-  it('放在反向代理後面：指名的 Host 過得了圍欄、印的是公開網址；沒指名的照樣 403（#2369）', async () => {
-    const home = await tmp('nexus-serve-home-');
-    const lines: string[] = [];
-    const server = await start(
-      {
-        home,
-        webDist: await builtDist(),
-        argv: ['--trusted-host', 'app.example', '--public-url', 'https://app.example/nexus'],
-      },
-      lines,
-    );
-
-    const launch = new URL(server.authenticatedUrl);
-    expect(`${launch.origin}${launch.pathname}`).toBe('https://app.example/nexus/');
-    expect(lines[0]).toBe(`nexus-agent 在 ${server.authenticatedUrl}`);
-
-    // 代理剝掉 `/nexus` 之後轉給 serve，Host 原樣保留。
-    const proxied = { host: 'app.example', 'x-forwarded-proto': 'https' };
-    const login = await rawGet(server.url, `/${launch.search}`, proxied);
-    expect(login.status).toBe(303);
-    expect(login.headers['location']).toBe('./');
-    const setCookie = String(login.headers['set-cookie']);
-    // 代理說前面是 https 也不加 `Secure`：只看 serve 自己的 listener。
-    expect(setCookie).not.toContain('Secure');
-    const cookie = setCookie.split(';', 1)[0]!;
-
-    const sameOrigin = { ...proxied, cookie, origin: 'https://app.example', ...JSON_HEADERS };
-    expect((await rawGet(server.url, THREADS_PATH, sameOrigin)).status).toBe(200);
-    expect((await rawGet(server.url, '/', { ...proxied, cookie })).status).toBe(200);
-    expect((await rawGet(server.url, '/livez', proxied)).status).toBe(200);
-
-    // 沒指名的代理名字：同一顆 cookie 也進不來，圍欄先擋。
-    for (const host of ['other.example', 'app.example.evil', 'evil.example']) {
-      // Origin 跟著 Host 走，只剩 Host 這一道在判。
-      const refused = await rawGet(server.url, THREADS_PATH, {
-        ...sameOrigin,
-        host,
-        origin: `https://${host}`,
+      const listed = await fetch(`${server.url}${THREADS_PATH}`, {
+        headers: { ...JSON_HEADERS, cookie },
       });
-      expect({ host, status: refused.status }).toEqual({ host, status: 403 });
-    }
-    // 指名只放行 Host，Origin 照樣要同源。
-    expect(
-      (await rawGet(server.url, THREADS_PATH, { ...sameOrigin, origin: 'https://evil.example' }))
-        .status,
-    ).toBe(403);
-  });
+      expect(listed.status).toBe(200);
+      const page = await fetch(`${server.url}/`, { headers: { cookie } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toBe(INDEX);
+      // cookie 綁 authority：同一顆拿去配別的 Host 不認。
+      expect(
+        (await rawGet(server.url, THREADS_PATH, { host: 'localhost', cookie, ...JSON_HEADERS }))
+          .status,
+      ).toBe(401);
+    },
+  );
+
+  itWithWebDist(
+    '放在反向代理後面：指名的 Host 過得了圍欄、印的是公開網址；沒指名的照樣 403（#2369）',
+    async () => {
+      const home = await tmp('nexus-serve-home-');
+      const lines: string[] = [];
+      const server = await start(
+        {
+          home,
+          webDist: await builtDist(),
+          argv: ['--trusted-host', 'app.example', '--public-url', 'https://app.example/nexus'],
+        },
+        lines,
+      );
+
+      const launch = new URL(server.authenticatedUrl);
+      expect(`${launch.origin}${launch.pathname}`).toBe('https://app.example/nexus/');
+      expect(lines[0]).toBe(`nexus-agent 在 ${server.authenticatedUrl}`);
+
+      // 代理剝掉 `/nexus` 之後轉給 serve，Host 原樣保留。
+      const proxied = { host: 'app.example', 'x-forwarded-proto': 'https' };
+      const login = await rawGet(server.url, `/${launch.search}`, proxied);
+      expect(login.status).toBe(303);
+      expect(login.headers['location']).toBe('./');
+      const setCookie = String(login.headers['set-cookie']);
+      // 代理說前面是 https 也不加 `Secure`：只看 serve 自己的 listener。
+      expect(setCookie).not.toContain('Secure');
+      const cookie = setCookie.split(';', 1)[0]!;
+
+      const sameOrigin = { ...proxied, cookie, origin: 'https://app.example', ...JSON_HEADERS };
+      expect((await rawGet(server.url, THREADS_PATH, sameOrigin)).status).toBe(200);
+      expect((await rawGet(server.url, '/', { ...proxied, cookie })).status).toBe(200);
+      expect((await rawGet(server.url, '/livez', proxied)).status).toBe(200);
+
+      // 沒指名的代理名字：同一顆 cookie 也進不來，圍欄先擋。
+      for (const host of ['other.example', 'app.example.evil', 'evil.example']) {
+        // Origin 跟著 Host 走，只剩 Host 這一道在判。
+        const refused = await rawGet(server.url, THREADS_PATH, {
+          ...sameOrigin,
+          host,
+          origin: `https://${host}`,
+        });
+        expect({ host, status: refused.status }).toEqual({ host, status: 403 });
+      }
+      // 指名只放行 Host，Origin 照樣要同源。
+      expect(
+        (await rawGet(server.url, THREADS_PATH, { ...sameOrigin, origin: 'https://evil.example' }))
+          .status,
+      ).toBe(403);
+    },
+  );
 
   it('--trusted-host、--public-url 寫錯就起不來，不留到請求一律 403 才發現', async () => {
     for (const argv of [
@@ -292,38 +301,41 @@ describe('serve 的瀏覽器會話', () => {
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
   });
 
-  it('同機的人送畸形請求打不掉 serve：absolute-form、壞掉的百分比編碼都只收在那個請求上', async () => {
-    const home = await tmp('nexus-serve-home-');
-    const lines: string[] = [];
-    const server = await start({ home, webDist: await builtDist() }, lines);
-    const port = Number(new URL(server.url).port);
-    const status = (reply: string) => reply.split('\r\n', 1)[0];
+  itWithWebDist(
+    '同機的人送畸形請求打不掉 serve：absolute-form、壞掉的百分比編碼都只收在那個請求上',
+    async () => {
+      const home = await tmp('nexus-serve-home-');
+      const lines: string[] = [];
+      const server = await start({ home, webDist: await builtDist() }, lines);
+      const port = Number(new URL(server.url).port);
+      const status = (reply: string) => reply.split('\r\n', 1)[0];
 
-    // absolute-form：只取路徑，照樣走圍欄與會話——沒有 cookie 就是 401，不是崩潰。
-    const absolute = await rawRequest(
-      port,
-      `GET http://evil.example/threads HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
-    );
-    expect(status(absolute)).toBe('HTTP/1.1 401 Unauthorized');
-    const badEscape = await rawRequest(
-      port,
-      `GET /%E0%A4%A HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
-    );
-    expect(status(badEscape)).toBe('HTTP/1.1 400 Bad Request');
-    // 畸形的百分比編碼照樣印得出方法與路徑（#1536：用切的、不解析）。
-    expect(lines.some((line) => line.startsWith('[請求] GET /%E0%A4%A 處理失敗，回 400'))).toBe(
-      true,
-    );
+      // absolute-form：只取路徑，照樣走圍欄與會話——沒有 cookie 就是 401，不是崩潰。
+      const absolute = await rawRequest(
+        port,
+        `GET http://evil.example/threads HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+      expect(status(absolute)).toBe('HTTP/1.1 401 Unauthorized');
+      const badEscape = await rawRequest(
+        port,
+        `GET /%E0%A4%A HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+      expect(status(badEscape)).toBe('HTTP/1.1 400 Bad Request');
+      // 畸形的百分比編碼照樣印得出方法與路徑（#1536：用切的、不解析）。
+      expect(lines.some((line) => line.startsWith('[請求] GET /%E0%A4%A 處理失敗，回 400'))).toBe(
+        true,
+      );
 
-    // 沒帶 content-type、不存在的路徑：401 排在 415、404 前面。
-    expect(
-      (await rawGet(server.url, '/threads/nope', { host: new URL(server.url).host })).status,
-    ).toBe(401);
-    // 行程還活著。
-    expect((await fetch(`${server.url}/`)).status).toBe(401);
-  });
+      // 沒帶 content-type、不存在的路徑：401 排在 415、404 前面。
+      expect(
+        (await rawGet(server.url, '/threads/nope', { host: new URL(server.url).host })).status,
+      ).toBe(401);
+      // 行程還活著。
+      expect((await fetch(`${server.url}/`)).status).toBe(401);
+    },
+  );
 
-  it('沒 build 過的 dist：照樣起得來，畫面上講得出要先 build', async () => {
+  itWithWebDist('沒 build 過的 dist：照樣起得來，畫面上講得出要先 build', async () => {
     const home = await tmp('nexus-serve-home-');
     const lines: string[] = [];
     const server = await start({ home, webDist: join(await tmp('nexus-no-dist-'), 'dist') }, lines);

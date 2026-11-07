@@ -27,12 +27,12 @@ import {
   seedHomePatch,
   writeJournalText,
 } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import { sessionHeaderOf } from './session-files.fixture.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const temporary: string[] = [];
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -105,18 +105,18 @@ function probeRow(config: string, extra = ''): string {
   return `- insert:\n    - id: probe\n      name: './probe.ts'\n${config}${extra}`;
 }
 
-async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<RunningServe> {
-  const server = (await runServe({
+async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<ServeUnderTest> {
+  const server = (await startServeUnderTest({
     argv: ['--port', '0'],
     log: bodyLog(lines),
     env,
-  })) as RunningServe;
+  })) as ServeUnderTest;
   running = server;
   return server;
 }
 
 /** 在這條 thread 上說一句，跑完一輪；建不起來就回錯誤訊息。 */
-async function say(server: RunningServe, thread: string): Promise<string | undefined> {
+async function say(server: ServeUnderTest, thread: string): Promise<string | undefined> {
   const client = await serveClient(server);
   // 建不起來的 thread，開下行那一步就被拒，原因在 serve 的日誌。
   const events = await client.openEvents(thread).catch((error: unknown) => error as Error);

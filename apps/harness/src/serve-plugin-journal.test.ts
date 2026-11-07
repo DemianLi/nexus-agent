@@ -29,11 +29,15 @@ import {
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
 import type { ScriptedChatModel } from './scripted-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import {
+  FIXTURE_PATCH_DIR_PREFIX,
+  PROCESS_MODEL_UNDER_TEST,
+  startServeUnderTest,
+} from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const temporary: string[] = [];
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -52,17 +56,17 @@ async function start(
   env: NodeJS.ProcessEnv,
   lines: string[],
   extra: string[] = [],
-): Promise<RunningServe> {
-  const server = (await runServe({
+): Promise<ServeUnderTest> {
+  const server = (await startServeUnderTest({
     argv: ['--port', '0', ...extra],
     log: (line) => lines.push(line),
     env,
-  })) as RunningServe;
+  })) as ServeUnderTest;
   running = server;
   return server;
 }
 
-async function say(server: RunningServe, thread: string): Promise<string | undefined> {
+async function say(server: ServeUnderTest, thread: string): Promise<string | undefined> {
   const client = await serveClient(server);
   const events = await client.openEvents(thread).catch((error: unknown) => error as Error);
   if (events instanceof Error) return events.message;
@@ -112,13 +116,25 @@ describe('第一次啟動', () => {
     const { dir, env } = home();
     const lines: string[] = [];
     await start(env, lines);
-    expect(lines.filter((line) => /變更紀錄|遷進|覆蓋層|cordis\.patch/u.test(line))).toEqual([]);
+    expect(
+      lines
+        .filter((line) => !line.includes(FIXTURE_PATCH_DIR_PREFIX))
+        .filter((line) => /變更紀錄|遷進|覆蓋層|cordis\.patch/u.test(line)),
+    ).toEqual([]);
     // 空的紀錄檔是界線，不是一層：疊出來的跟只有出貨層的一個字不差。
     expect(readJournalText(dir)).toBe('');
-    // 快照也沒有多出任何東西：`layers` 在沒有東西可講的時候整個不出現。
-    expect(
-      JSON.parse(readFileSync(join(dir, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8')),
-    ).not.toHaveProperty('layers');
+    // 快照也沒有多出任何東西：`layers` 在沒有東西可講的時候整個不出現。per-thread 底下唯一講得出的是 fixture 自己那一層 `--patch`。
+    const layers = (
+      JSON.parse(readFileSync(join(dir, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8')) as PluginSnapshot
+    ).layers;
+    if (PROCESS_MODEL_UNDER_TEST === 'per-thread') {
+      expect(layers?.journal).toMatchObject({ records: 0 });
+      expect(
+        layers?.overlays?.map((overlay) => overlay.file.includes(FIXTURE_PATCH_DIR_PREFIX)),
+      ).toEqual([true]);
+    } else {
+      expect(layers).toBeUndefined();
+    }
     expect(renderLayeredConfigDump({ serve: true, env })).toBe(
       renderShippedConfigDump({ serve: true }),
     );
@@ -134,7 +150,11 @@ describe('第一次啟動', () => {
       overlays: [],
     });
     expect(snapshot(dir).summary['next-thread']).toBe(0);
-    expect(snapshot(dir).rows.some((row) => row.unaudited === true)).toBe(false);
+    expect(
+      snapshot(dir)
+        .rows.filter((row) => row.unaudited === true)
+        .map((row) => row.id),
+    ).toEqual(PROCESS_MODEL_UNDER_TEST === 'per-thread' ? ['process-model'] : []);
   }, 60000);
 });
 
@@ -233,9 +253,9 @@ describe('壞掉的紀錄（驗收 G）', () => {
     // 中間壞一行：起不來，指名第 2 行。
     const [first] = good.split('\n');
     writeJournalText(dir, `${first ?? ''}\n{壞掉\n${good.split('\n')[1] ?? ''}\n`);
-    await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
-      /plugin-journal\.jsonl 第 2 行不是合法的 JSON/u,
-    );
+    await expect(
+      startServeUnderTest({ argv: ['--port', '0'], log: () => undefined, env }),
+    ).rejects.toThrow(/plugin-journal\.jsonl 第 2 行不是合法的 JSON/u);
   }, 60000);
 });
 

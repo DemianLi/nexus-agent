@@ -19,15 +19,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { attachmentsRootOf } from './attachment-store.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const THREAD = 'serve-attachments';
 const SECRET = 'MURASAKI-7391';
 const TEXT = `${SECRET}\n第二行\n`;
 
 const roots: string[] = [];
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -42,7 +42,7 @@ async function scratch(prefix: string): Promise<string> {
 }
 
 /** 起一台 serve：腳本模型第一輪 `read_file` 讀 `readPath`，第二輪收尾。 */
-async function startServe(home: string, readPath: string): Promise<RunningServe> {
+async function startServe(home: string, readPath: string): Promise<ServeUnderTest> {
   const workspace = await scratch('nexus-serve-att-ws-');
   const patch = join(workspace, '..', `${workspace.split('/').pop()}.patch.yml`);
   roots.push(patch);
@@ -63,11 +63,11 @@ async function startServe(home: string, readPath: string): Promise<RunningServe>
 `,
     'utf8',
   );
-  return (await runServe({
+  return (await startServeUnderTest({
     argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
     log: () => undefined,
     env: { [HARNESS_HOME_ENV]: home },
-  })) as RunningServe;
+  })) as ServeUnderTest;
 }
 
 describe('serve：上傳的檔案存進 NEXUS_AGENT_HOME，模型讀得到', () => {

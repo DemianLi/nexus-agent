@@ -29,21 +29,21 @@ import type { RequestSnapshotsView, TrajectoryView } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const DISABLED = fileURLToPath(new URL('./trajectory-disabled.patch.yml', import.meta.url));
 const METER_DISABLED = fileURLToPath(new URL('./token-meter-disabled.patch.yml', import.meta.url));
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
   running = undefined;
 });
 
-async function start(root: string, patch?: string): Promise<RunningServe> {
-  const server = (await runServe({
+async function start(root: string, patch?: string): Promise<ServeUnderTest> {
+  const server = (await startServeUnderTest({
     argv: [
       '--port',
       '0',
@@ -53,7 +53,7 @@ async function start(root: string, patch?: string): Promise<RunningServe> {
     ],
     log: () => {},
     env: {},
-  })) as RunningServe;
+  })) as ServeUnderTest;
   running = server;
   return server;
 }

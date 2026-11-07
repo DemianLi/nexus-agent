@@ -29,6 +29,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
+import { PROCESS_MODEL_UNDER_TEST } from './serve-under-test.fixture.js';
 import { findSession, sessionEvents, sessionsUnder, sessionOf } from './session-files.fixture.js';
 
 const opened: ScriptedServe[] = [];
@@ -162,8 +163,15 @@ function seqOfTurnEnd(events: readonly SessionEvent[], nth: number): number {
   return end.seq;
 }
 
+const PER_THREAD = PROCESS_MODEL_UNDER_TEST === 'per-thread';
+/**
+ * 要分得出去的幾支。per-thread 的對話行程不在自己這裡分叉（新 thread 要另起一個行程，#2341 的已知缺口），
+ * 這幾支在 per-thread 底下跳過，缺口現在的行為由下面 `runIf(PER_THREAD)` 那一支釘住。
+ */
+const itForks = it.skipIf(PER_THREAD);
+
 describe('serve 上的 thread.fork', () => {
-  it('分出來的長相、各走各的、回傳之後馬上重啟（驗收 2、3、5）', async () => {
+  itForks('分出來的長相、各走各的、回傳之後馬上重啟（驗收 2、3、5）', async () => {
     const root = await tempDir('nexus-fork-log-');
     const workspace = await tempDir('nexus-fork-ws-');
     const argv = ['--session-log', root];
@@ -256,7 +264,7 @@ describe('serve 上的 thread.fork', () => {
     });
   });
 
-  it('讀活的：落盤窗口拉長、來源的尾巴還在記憶體，照樣分得出去（驗收 4）', async () => {
+  itForks('讀活的：落盤窗口拉長、來源的尾巴還在記憶體，照樣分得出去（驗收 4）', async () => {
     const root = await tempDir('nexus-fork-live-');
     const serve = await start(TURNS, {
       argv: ['--session-log', root],
@@ -284,6 +292,23 @@ describe('serve 上的 thread.fork', () => {
     ]);
   });
 
+  it.runIf(PER_THREAD)(
+    'per-thread：分叉回 not_supported（已知缺口），來源 thread 照常',
+    async () => {
+      const root = await tempDir('nexus-fork-log-');
+      const serve = await start(TURNS, { argv: ['--session-log', root] });
+      const client = await serveClient(serve.running);
+      await say(client, 'src', '一');
+      const [tail] = await tailIds(client, 'src');
+      expect(await client.threadFork('src', tail!)).toMatchObject({
+        kind: 'rejected',
+        code: 'not_supported',
+      });
+      await say(client, 'src', '二');
+      expect(await tailIds(client, 'src')).toHaveLength(2);
+    },
+  );
+
   it('沒開落盤：not_supported', async () => {
     const serve = await start(TURNS, {
       extraRows: '- id: session-persistence\n  disabled: true\n',
@@ -296,7 +321,7 @@ describe('serve 上的 thread.fork', () => {
     });
   });
 
-  it('名額滿：thread_at_capacity，磁碟上沒有多出檔（驗收 6）', async () => {
+  itForks('名額滿：thread_at_capacity，磁碟上沒有多出檔（驗收 6）', async () => {
     const root = await tempDir('nexus-fork-cap-');
     const serve = await start(TURNS, {
       argv: ['--session-log', root],
@@ -316,132 +341,138 @@ describe('serve 上的 thread.fork', () => {
     expect((await sessionsUnder(root)).map((session) => session.header.id)).toEqual(['src']);
   });
 
-  it('指名子代理的回覆：fork_unavailable；拿子代理的會話當來源：thread_not_found（驗收 6）', async () => {
-    const root = await tempDir('nexus-fork-subagent-');
-    // 根對話派一個背景子代理（子代理與根對話共用同一顆腳本模型，輪到誰誰吃），同 `serve-subagent-ownership.test.ts`。
-    const turns: ScriptedTurn[] = [
-      {
-        content: '委派。',
-        toolCalls: [
-          {
-            name: 'subagent',
-            args: {
-              description: '幹活',
-              subagent_type: 'general-purpose',
-              run_in_background: true,
+  itForks(
+    '指名子代理的回覆：fork_unavailable；拿子代理的會話當來源：thread_not_found（驗收 6）',
+    async () => {
+      const root = await tempDir('nexus-fork-subagent-');
+      // 根對話派一個背景子代理（子代理與根對話共用同一顆腳本模型，輪到誰誰吃），同 `serve-subagent-ownership.test.ts`。
+      const turns: ScriptedTurn[] = [
+        {
+          content: '委派。',
+          toolCalls: [
+            {
+              name: 'subagent',
+              args: {
+                description: '幹活',
+                subagent_type: 'general-purpose',
+                run_in_background: true,
+              },
             },
-          },
-        ],
-      },
-      ...Array.from({ length: 6 }, () => ({ content: '好。' })),
-    ];
-    const serve = await start(turns, { argv: ['--session-log', root] });
-    const client = await serveClient(serve.running);
-    await say(client, 'src', '請派一個子代理');
-    const subagent = await until(root, 'src', '背景子代理跑完第一輪', async () => {
-      const found = (await sessionsUnder(root)).find((session) => session.id.startsWith('src/bg-'));
-      if (found === undefined) return undefined;
-      const { events } = await sessionEvents(found);
-      return events.some((event) => event.type === 'turn/end') ? { found, events } : undefined;
-    });
-    const replyId = subagent.events.flatMap((event) =>
-      event.type === 'assistant/message' ? [loggedMessageId(event.data.message)] : [],
-    )[0];
-    expect(replyId).toBeDefined();
-    // 前提：根對話那一份裡沒有這個 id（子代理的回覆只在它自己那一份）。
-    const rootEvents = await eventsOnDisk(root, 'src');
-    expect(
-      rootEvents.some(
-        (event) =>
-          event.type === 'assistant/message' && loggedMessageId(event.data.message) === replyId,
-      ),
-    ).toBe(false);
-    expect(await client.threadFork('src', replyId!)).toEqual({
-      kind: 'ok',
-      result: { ok: false, error: { code: 'fork_unavailable' } },
-    });
-    expect(await client.threadFork(subagent.found.id, replyId!)).toEqual({
-      kind: 'ok',
-      result: { ok: false, error: { code: 'thread_not_found' } },
-    });
-  });
+          ],
+        },
+        ...Array.from({ length: 6 }, () => ({ content: '好。' })),
+      ];
+      const serve = await start(turns, { argv: ['--session-log', root] });
+      const client = await serveClient(serve.running);
+      await say(client, 'src', '請派一個子代理');
+      const subagent = await until(root, 'src', '背景子代理跑完第一輪', async () => {
+        const found = (await sessionsUnder(root)).find((session) =>
+          session.id.startsWith('src/bg-'),
+        );
+        if (found === undefined) return undefined;
+        const { events } = await sessionEvents(found);
+        return events.some((event) => event.type === 'turn/end') ? { found, events } : undefined;
+      });
+      const replyId = subagent.events.flatMap((event) =>
+        event.type === 'assistant/message' ? [loggedMessageId(event.data.message)] : [],
+      )[0];
+      expect(replyId).toBeDefined();
+      // 前提：根對話那一份裡沒有這個 id（子代理的回覆只在它自己那一份）。
+      const rootEvents = await eventsOnDisk(root, 'src');
+      expect(
+        rootEvents.some(
+          (event) =>
+            event.type === 'assistant/message' && loggedMessageId(event.data.message) === replyId,
+        ),
+      ).toBe(false);
+      expect(await client.threadFork('src', replyId!)).toEqual({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'fork_unavailable' } },
+      });
+      expect(await client.threadFork(subagent.found.id, replyId!)).toEqual({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'thread_not_found' } },
+      });
+    },
+  );
 
-  it('不會自己跑：前綴有執行中的 goal、切點上還排著一句，分叉之後子 thread 不開新的一輪、佇列是空的（驗收 8）', async ({
-    onTestFailed,
-  }) => {
-    const step = stepTimer(onTestFailed);
-    step('起 serve');
-    const root = await tempDir('nexus-fork-idle-');
-    // 來源：建目標，續行排程器開的第一輪慢慢吐字；那一輪跑著的時候送一句，排進佇列。之後佇列那句與續行的輪次各吃一份腳本，給足。
-    const turns: ScriptedTurn[] = [
-      { content: '慢慢說的一輪', tokenDelayMs: 150 },
-      ...Array.from({ length: 30 }, () => ({ content: '好' })),
-    ];
-    const serve = await start(turns, { argv: ['--session-log', root] });
-    const client = await serveClient(serve.running);
-    step('開來源的下行');
-    const events = await client.openEvents('src');
-    step('建目標');
-    expect(await client.slashRun('src', '/goal 把藍鯨計畫做完')).toMatchObject({
-      kind: 'success',
-    });
-    step('等目標那一輪開始落盤');
-    const goalTurn = await until(root, 'src', '目標那一輪的 turn/start', (list) =>
-      list.find(
-        (event) =>
-          event.type === 'turn/start' && (event.data as { kind?: unknown }).kind === 'goal',
-      ),
-    );
-    step('送排著的一句');
-    expect((await client.runStart('src', '排著的一句')).type).toBe('success');
-    step('等目標那一輪結束落盤');
-    await until(root, 'src', '目標那一輪的 turn/end', (list) =>
-      list.find((event) => event.type === 'turn/end' && event.seq > goalTurn.seq),
-    );
-    step('關來源的下行、暫停目標');
-    await events.return?.(undefined);
-    // 收掉來源的目標，免得它在背景一直跑。
-    expect(await client.slashRun('src', '/goal pause')).toMatchObject({ kind: 'success' });
+  itForks(
+    '不會自己跑：前綴有執行中的 goal、切點上還排著一句，分叉之後子 thread 不開新的一輪、佇列是空的（驗收 8）',
+    async ({ onTestFailed }) => {
+      const step = stepTimer(onTestFailed);
+      step('起 serve');
+      const root = await tempDir('nexus-fork-idle-');
+      // 來源：建目標，續行排程器開的第一輪慢慢吐字；那一輪跑著的時候送一句，排進佇列。之後佇列那句與續行的輪次各吃一份腳本，給足。
+      const turns: ScriptedTurn[] = [
+        { content: '慢慢說的一輪', tokenDelayMs: 150 },
+        ...Array.from({ length: 30 }, () => ({ content: '好' })),
+      ];
+      const serve = await start(turns, { argv: ['--session-log', root] });
+      const client = await serveClient(serve.running);
+      step('開來源的下行');
+      const events = await client.openEvents('src');
+      step('建目標');
+      expect(await client.slashRun('src', '/goal 把藍鯨計畫做完')).toMatchObject({
+        kind: 'success',
+      });
+      step('等目標那一輪開始落盤');
+      const goalTurn = await until(root, 'src', '目標那一輪的 turn/start', (list) =>
+        list.find(
+          (event) =>
+            event.type === 'turn/start' && (event.data as { kind?: unknown }).kind === 'goal',
+        ),
+      );
+      step('送排著的一句');
+      expect((await client.runStart('src', '排著的一句')).type).toBe('success');
+      step('等目標那一輪結束落盤');
+      await until(root, 'src', '目標那一輪的 turn/end', (list) =>
+        list.find((event) => event.type === 'turn/end' && event.seq > goalTurn.seq),
+      );
+      step('關來源的下行、暫停目標');
+      await events.return?.(undefined);
+      // 收掉來源的目標，免得它在背景一直跑。
+      expect(await client.slashRun('src', '/goal pause')).toMatchObject({ kind: 'success' });
 
-    step('讀來源的歷史');
-    const goalTail = (await entries(client, 'src')).find(
-      (entry) => entry.kind === 'ai' && entry.text === '慢慢說的一輪',
-    );
-    if (goalTail?.kind !== 'ai' || goalTail.messageId === undefined) {
-      throw new Error('找不到慢的那一輪的回覆');
-    }
-    step('分叉');
-    const childId = await forkOk(client, 'src', goalTail.messageId);
+      step('讀來源的歷史');
+      const goalTail = (await entries(client, 'src')).find(
+        (entry) => entry.kind === 'ai' && entry.text === '慢慢說的一輪',
+      );
+      if (goalTail?.kind !== 'ai' || goalTail.messageId === undefined) {
+        throw new Error('找不到慢的那一輪的回覆');
+      }
+      step('分叉');
+      const childId = await forkOk(client, 'src', goalTail.messageId);
 
-    step('讀子 thread 的 seed');
-    const seeded = await eventsOnDisk(root, childId);
-    const inherited = seeded.slice(0, inheritedEventCount(seeded));
-    // 前提：切點上真的有排著的一句，前綴裡真的有執行中的目標（不是兩個「本來就沒有」相等）。
-    expect(foldInbox(inherited)['next-turn'].map((item) => item.text)).toEqual(['排著的一句']);
-    const goals = inherited.filter((event) => event.type === 'goal/change');
-    expect((goals.at(-1)?.data as { operation?: unknown } | undefined)?.operation).toBe('create');
+      step('讀子 thread 的 seed');
+      const seeded = await eventsOnDisk(root, childId);
+      const inherited = seeded.slice(0, inheritedEventCount(seeded));
+      // 前提：切點上真的有排著的一句，前綴裡真的有執行中的目標（不是兩個「本來就沒有」相等）。
+      expect(foldInbox(inherited)['next-turn'].map((item) => item.text)).toEqual(['排著的一句']);
+      const goals = inherited.filter((event) => event.type === 'goal/change');
+      expect((goals.at(-1)?.data as { operation?: unknown } | undefined)?.operation).toBe('create');
 
-    expect(foldInbox(seeded)).toEqual(EMPTY_INBOX);
+      expect(foldInbox(seeded)).toEqual(EMPTY_INBOX);
 
-    // 能讓子 thread 跑出不是人送的那一輪的有兩條：續行（排程器只在授權是 armed 時排）與繼承來的佇列（折回來會停住，
-    // 但下一次送出時會先跑它；上面已驗是空的）。開子 thread 的下行，拿補送的授權。
-    step('開子 thread 的下行、等續行授權');
-    const childEvents = await client.openEvents(childId);
-    let child = emptyConversation();
-    while (child.goalActivation === null) {
-      const next = await childEvents.next();
-      if (next.done === true) throw new Error('子 thread 的下行斷了，還沒收到續行授權');
-      child = reduceConversation(child, next.value);
-    }
-    expect(child.goalActivation).toBe('disarmed');
-    await childEvents.return(undefined);
+      // 能讓子 thread 跑出不是人送的那一輪的有兩條：續行（排程器只在授權是 armed 時排）與繼承來的佇列（折回來會停住，
+      // 但下一次送出時會先跑它；上面已驗是空的）。開子 thread 的下行，拿補送的授權。
+      step('開子 thread 的下行、等續行授權');
+      const childEvents = await client.openEvents(childId);
+      let child = emptyConversation();
+      while (child.goalActivation === null) {
+        const next = await childEvents.next();
+        if (next.done === true) throw new Error('子 thread 的下行斷了，還沒收到續行授權');
+        child = reduceConversation(child, next.value);
+      }
+      expect(child.goalActivation).toBe('disarmed');
+      await childEvents.return(undefined);
 
-    // 多一次往返，讓延後一個 tick 的排程（例如續行的 setImmediate）有機會先跑；收掉 serve 會把日誌全部落盤，之後再比。
-    step('往返、收掉 serve');
-    expect(await client.threadHistory(childId)).toMatchObject({ kind: 'ok' });
-    await stop(serve);
-    step('比對落盤');
-    // 沒有新的一輪、沒有新的模型呼叫：子 thread 的日誌跟分叉回傳時一樣，一顆都沒多。
-    expect(await eventsOnDisk(root, childId)).toEqual(seeded);
-  });
+      // 多一次往返，讓延後一個 tick 的排程（例如續行的 setImmediate）有機會先跑；收掉 serve 會把日誌全部落盤，之後再比。
+      step('往返、收掉 serve');
+      expect(await client.threadHistory(childId)).toMatchObject({ kind: 'ok' });
+      await stop(serve);
+      step('比對落盤');
+      // 沒有新的一輪、沒有新的模型呼叫：子 thread 的日誌跟分叉回傳時一樣，一顆都沒多。
+      expect(await eventsOnDisk(root, childId)).toEqual(seeded);
+    },
+  );
 });

@@ -28,11 +28,11 @@ import { EMBED_SESSION_PATH } from './embed-session.js';
 import { principalHeaders } from './forwarded-principal.js';
 import { bodyLog, exchangeServeToken } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const temporary: string[] = [];
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -76,18 +76,18 @@ function layout(rows: string[] = [], identities: unknown = ALICE_TABLE) {
 async function start(
   where: ReturnType<typeof layout>,
   lines: string[] = [],
-): Promise<RunningServe> {
-  running = (await runServe({
+): Promise<ServeUnderTest> {
+  running = (await startServeUnderTest({
     argv: ['--port', '0', '--patch', where.patch],
     log: bodyLog(lines),
     env: { [HARNESS_HOME_ENV]: where.home },
     cwd: where.cwd,
-  })) as RunningServe;
+  })) as ServeUnderTest;
   return running;
 }
 
 function post(
-  server: RunningServe,
+  server: ServeUnderTest,
   headers: Record<string, string>,
   subject = 'alice',
 ): Promise<Response> {
@@ -253,7 +253,7 @@ describe('有嵌入方', () => {
 });
 
 describe('兌換成嵌入 cookie（POST /embed/session）', () => {
-  async function embedCookie(server: RunningServe, home: string): Promise<string> {
+  async function embedCookie(server: ServeUnderTest, home: string): Promise<string> {
     const credential = (await readFile(join(home, 'embed-credential-crm'), 'utf8')).trim();
     const exchanged = await post(server, { authorization: `Bearer ${credential}` });
     const { ticket } = (await exchanged.json()) as { ticket: string };
@@ -266,14 +266,14 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
     return redeemed.headers.get('set-cookie')!.split(';', 1)[0]!;
   }
 
-  function get(server: RunningServe, path: string, cookie?: string): Promise<Response> {
+  function get(server: ServeUnderTest, path: string, cookie?: string): Promise<Response> {
     return fetch(`${server.url}${path}`, {
       redirect: 'manual',
       headers: { origin: server.url, ...(cookie !== undefined && { cookie }) },
     });
   }
 
-  function upgrade(server: RunningServe, path: string, cookie: string): Promise<number> {
+  function upgrade(server: ServeUnderTest, path: string, cookie: string): Promise<number> {
     const socket = new WebSocket(`${server.url.replace(/^http/u, 'ws')}${path}`, {
       headers: { origin: server.url, cookie },
     });
@@ -329,7 +329,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
   });
 
   /** 開一條嵌入版 SSE 下行，讀掉開線那一行。 */
-  async function openDownlink(server: RunningServe, cookie: string, thread: string) {
+  async function openDownlink(server: ServeUnderTest, cookie: string, thread: string) {
     const response = await fetch(`${server.url}/embed/threads/${thread}/stream`, {
       method: 'POST',
       headers: { origin: server.url, cookie, 'content-type': 'application/json' },
@@ -380,7 +380,7 @@ describe('兌換成嵌入 cookie（POST /embed/session）', () => {
   });
 
   /** 在 `/embed/threads/mux` 上開一條下行；回收到的每則訊息（已解析）與 socket。 */
-  async function openMuxDownlink(server: RunningServe, cookie: string, thread: string) {
+  async function openMuxDownlink(server: ServeUnderTest, cookie: string, thread: string) {
     const socket = new WebSocket(`${server.url.replace(/^http/u, 'ws')}/embed/threads/mux`, {
       headers: { origin: server.url, cookie },
     });

@@ -26,8 +26,6 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import {
   findSession,
   rewriteSessionHeader,
@@ -35,11 +33,13 @@ import {
   sessionsUnder,
 } from './session-files.fixture.js';
 import { THREAD_SEARCH_DISABLED_MESSAGE } from './thread-search.js';
+import { PROCESS_MODEL_UNDER_TEST, startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const harnessDir = fileURLToPath(new URL('../', import.meta.url));
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
@@ -59,8 +59,8 @@ async function patch(body: string): Promise<string> {
 
 const OPEN_ON_FIRST_SEARCH = '- id: thread-search\n  config:\n    openAt: first-search\n';
 
-async function start(root: string, patchFile?: string): Promise<RunningServe> {
-  running = await runServe({
+async function start(root: string, patchFile?: string): Promise<ServeUnderTest> {
+  running = await startServeUnderTest({
     argv: [
       '--port',
       '0',
@@ -71,10 +71,10 @@ async function start(root: string, patchFile?: string): Promise<RunningServe> {
     log: () => undefined,
     env: {},
   });
-  return running as RunningServe;
+  return running as ServeUnderTest;
 }
 
-async function stop(server: RunningServe): Promise<void> {
+async function stop(server: ServeUnderTest): Promise<void> {
   await server.close();
   running = undefined;
 }
@@ -329,36 +329,44 @@ async function hits(client: WireClient, query: string): Promise<string[]> {
 }
 
 describe('活的 thread 讀記憶體（#1599）', () => {
-  it('新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判', async () => {
-    const root = await tmp();
-    const first = await startLive(root);
-    await driveTurn(first.client, 'src', '一');
-    // 分叉回傳時子 thread 的檔就在（seed 在回應之前排空）。
-    const childId = await forkOk(first.client, 'src', await firstTailId(first.client, 'src'));
-    await driveTurn(first.client, childId, '子一');
-    await driveTurn(first.client, childId, '子二');
-    await driveTurn(first.client, 'src', '二');
-    // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
-    expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
-    expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
-    expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
-    for (const threadId of [childId, 'src']) {
-      await conflictsWhenDiskHeaderChanges(first.client, root, threadId, '第二輪的回覆暗號');
-    }
-    await stopLive(first.serve);
+  // 要分叉出子 thread：per-thread 的對話行程不在自己這裡分叉（#2341 的已知缺口，`serve-thread-fork.test.ts` 釘住它現在的行為）。
+  it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread')(
+    '新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判',
+    async () => {
+      const root = await tmp();
+      const first = await startLive(root);
+      await driveTurn(first.client, 'src', '一');
+      // 分叉回傳時子 thread 的檔就在（seed 在回應之前排空）。
+      const childId = await forkOk(first.client, 'src', await firstTailId(first.client, 'src'));
+      await driveTurn(first.client, childId, '子一');
+      await driveTurn(first.client, childId, '子二');
+      await driveTurn(first.client, 'src', '二');
+      // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
+      expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
+      expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
+      expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual(
+        [childId, 'src'].sort(),
+      );
+      for (const threadId of [childId, 'src']) {
+        await conflictsWhenDiskHeaderChanges(first.client, root, threadId, '第二輪的回覆暗號');
+      }
+      await stopLive(first.serve);
 
-    // 續接：root 的 header 是讀回來的那一份。重啟後腳本從第一輪重來，第三輪的回覆兩條都沒回過。
-    const second = await startLive(root);
-    for (const threadId of [childId, 'src']) {
-      for (const text of ['再一', '再二', '再三']) await driveTurn(second.client, threadId, text);
-    }
-    expect(await repliedOnDisk(root, 'src', '第三輪的回覆暗號')).toBe(false);
-    expect(await repliedOnDisk(root, childId, '第三輪的回覆暗號')).toBe(false);
-    expect((await hits(second.client, '第三輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
-    for (const threadId of [childId, 'src']) {
-      await conflictsWhenDiskHeaderChanges(second.client, root, threadId, '第三輪的回覆暗號');
-    }
-  });
+      // 續接：root 的 header 是讀回來的那一份。重啟後腳本從第一輪重來，第三輪的回覆兩條都沒回過。
+      const second = await startLive(root);
+      for (const threadId of [childId, 'src']) {
+        for (const text of ['再一', '再二', '再三']) await driveTurn(second.client, threadId, text);
+      }
+      expect(await repliedOnDisk(root, 'src', '第三輪的回覆暗號')).toBe(false);
+      expect(await repliedOnDisk(root, childId, '第三輪的回覆暗號')).toBe(false);
+      expect((await hits(second.client, '第三輪的回覆暗號')).sort()).toEqual(
+        [childId, 'src'].sort(),
+      );
+      for (const threadId of [childId, 'src']) {
+        await conflictsWhenDiskHeaderChanges(second.client, root, threadId, '第三輪的回覆暗號');
+      }
+    },
+  );
 
   it('還沒實體化的 thread：搜不到（不進索引），搜過之後磁碟上也沒有多出它的檔', async () => {
     const root = await tmp();
