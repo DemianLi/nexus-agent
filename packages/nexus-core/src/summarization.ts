@@ -143,12 +143,14 @@ import {
   applySummaryCutoff,
   noteSummaryCutoff,
   previousSummaryCutoff,
+  summaryCallKey,
   summaryCutoffIndex,
   SummaryCutoffTable,
   withSummaryCutoffs,
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
 import { createSummarizerEngine } from './summarizer-engine.js';
+import type { SessionRequest } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
@@ -727,12 +729,23 @@ export function createSummarizer(
   const warn = report ?? ((message: string) => console.warn(message));
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
-  // 歷史檔的會話名：這顆摘要器一個，各保留則數的實例共用（{@link withRetainedTail}）。
-  const sessionId = `session_${randomUUID().substring(0, 8)}`;
+  // 歷史檔的會話名：每把切點表的鍵（thread 加呼叫身分，所以每次委派各一把）第一次寫時生一個，各保留則數的實例共用同一個
+  // `sessionIdOf`（{@link withRetainedTail}）。認不出身分的呼叫用這顆摘要器自己那一個。表每次委派一格、不設上限，跟著這顆
+  // 摘要器（組裝）丟，同切點表。
+  const newSessionId = () => `session_${randomUUID().substring(0, 8)}`;
+  const ownSessionId = newSessionId();
+  const sessionIds = new Map<string, string>();
+  const sessionIdOf = (request: SessionRequest): string => {
+    const key = summaryCallKey({ configurable: request.runtime?.configurable });
+    if (key === undefined) return ownSessionId;
+    let sessionId = sessionIds.get(key);
+    if (sessionId === undefined) sessionIds.set(key, (sessionId = newSessionId()));
+    return sessionId;
+  };
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
     const base = createSummarizerEngine({
       backend: staging?.backend ?? backend,
-      sessionId,
+      sessionIdOf,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
       // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
@@ -1342,10 +1355,9 @@ const MAX_RETAIN_CHAINS = 32;
  * ## 實例之間沒有狀態要同步
  *
  * 引擎實例的 closure 裡只有 `tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
- * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名
- * 在 {@link createSummarizer} 生一次、交給每一顆實例，所以不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。
- * 範圍是每個 agent 各一份：摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理不共用；同型的前景子代理
- * 共用同一份，所以同型子代理的歷史檔也是同一個。
+ * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名由 {@link createSummarizer} 的同一個 `sessionIdOf`
+ * 交給每一顆實例，所以同一次呼叫不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。範圍是每次委派各一份：
+ * 會話名照切點表的鍵（thread 加呼叫身分）分，同型前景子代理的兩次委派各一個檔。
  *
  * @param makeChain - 建「`keep` 是 N 則」的那一顆（含它外面貼著的兩層）。
  * @param settings - 補滿的設定。
@@ -2217,7 +2229,7 @@ export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
  *
  * 它只做一件事：把驗過的設定提供成 {@link SUMMARIZATION_SERVICE} 服務。
  * **摘要器不在這裡建**——它由 {@link ./fold.ts | foldRegistry} 逐個 agent 各建一份
- * （`sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史寫進同一個檔）。
+ * （認不出身分的呼叫用實例自己的會話名，共用會讓兩個 agent 的那種呼叫寫進同一個檔）。
  *
  * **關掉它跟前兩顆不同形。** `disabled: true` 之後 fold 發出去的不是「沒有」，是一顆
  * **同名空殼**——基座無條件建的那顆摘要器靠同名取代才消得掉，真的不掛的話它會補回來。

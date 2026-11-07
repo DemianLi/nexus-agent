@@ -21,7 +21,7 @@ import {
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
 
-type Options = Omit<SummarizerEngineOptions, 'backend' | 'sessionId'>;
+type Options = Omit<SummarizerEngineOptions, 'backend' | 'sessionIdOf'>;
 
 const ROOT = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
 
@@ -172,7 +172,7 @@ function engineWith(options: { failWrite?: boolean; sessionId?: string } & Parti
   const store = memoryBackend({}, failWrite);
   const engine = createSummarizerEngine({
     ...settings(over),
-    sessionId: sessionId ?? 'session_fixed',
+    sessionIdOf: () => sessionId ?? 'session_fixed',
     backend: store.backend as never,
   });
   return { store, engine };

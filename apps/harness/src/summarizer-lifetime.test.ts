@@ -2,7 +2,7 @@
  * 摘要器狀態的壽命：切點與歷史檔的會話名跟著哪一段生命走。
  *
  * - 前景子代理：同型的子代理委派兩次，各是一段生命，身分（去尾的 `checkpoint_ns`，切點跟著它）不同；歷史檔的會話名跟著
- *   摘要器實例（每個子代理規格一份），同型兩次共用一份檔、跟 root 的不同。
+ *   同一個身分，每次委派各一份檔、跟 root 的不同。同一步派出的兩次各寫各的檔，回到 root 時兩段都在。
  * - 續接：壓縮過、重啟、續接之後又壓縮，新的那次從灌回串的座標算起。
  * - 沒有 checkpointer：切點的壽命等於訊息 state 的壽命。langgraph 沒有 checkpointer 時 invoke 之間 state 不延續；native 的
  *   per-thread state 在實例裡，沒有 checkpointer 也延續。同一張表上留著舊切點、這一次交進來的串比切點短，也不套。
@@ -64,7 +64,7 @@ const markerOf = (body: Body): string => {
 };
 
 describe('前景子代理：每次委派各一段生命', () => {
-  it('同型子代理連兩次前景委派：兩份日誌、身分不同、各自摘要；歷史檔同型共用、跟 root 的不同', async () => {
+  it('同型子代理連兩次前景委派：兩份日誌、身分不同、各自摘要；歷史檔各一份、跟 root 的不同', async () => {
     const counters = new Map<string, number>();
     const child = (mark: string, k: number): Reply => {
       if (k <= 2) return { tools: [echo(`call_${mark}${String(k)}`, `小${String(k)}${PAD}`)] };
@@ -128,10 +128,10 @@ describe('前景子代理：每次委派各一段生命', () => {
       return found.at(-1)!.data.filePath;
     });
     expect(filePaths.every((path) => typeof path === 'string')).toBe(true);
-    expect(new Set(filePaths).size, `歷史檔：${filePaths.join(', ')}`).toBe(1);
+    expect(new Set(filePaths).size, `歷史檔：${filePaths.join(', ')}`).toBe(2);
     const rootSummaries = summaries(rootLogOf(run).events);
     expect(rootSummaries.length, 'root 應該摘要過').toBeGreaterThan(0);
-    expect(rootSummaries.at(-1)!.data.filePath).not.toBe(filePaths[0]);
+    expect(filePaths).not.toContain(rootSummaries.at(-1)!.data.filePath);
 
     for (const log of children) {
       const mark = /CHILD-[A-Z]/.exec(
@@ -143,6 +143,123 @@ describe('前景子代理：每次委派各一段生命', () => {
       );
       expect(verdicts.filter((v) => v.kinds.length > 0 || !v.systemMatches)).toEqual([]);
     }
+  }, 180_000);
+});
+
+describe('前景子代理：歷史檔每次委派各一份', () => {
+  /** 一個子代理：第一句帶暗號，接著撐到摘要，摘要之後再一步收尾。 */
+  const child = (mark: string, k: number): Reply => {
+    if (k === 0) return { tools: [echo(`call_${mark}0`, `暗號-${mark}${PAD}`)] };
+    if (k === 1) return { tools: [echo(`call_${mark}1`, `小1${PAD}`)] };
+    if (k === 2) return { tools: [echo(`call_${mark}_big`, '中'.repeat(10_000))] };
+    if (k === 3) return { tools: [echo(`call_${mark}_after`, '之後')] };
+    return { content: `${mark} 完成。` };
+  };
+  const summaryOf = (body: Body): Reply => {
+    const mark = /CHILD-[A-Z]/.exec(JSON.stringify(body.messages))?.[0];
+    return { content: mark === undefined ? '標題' : `摘要 ${mark}` };
+  };
+  const task = (id: string, description: string) => ({
+    id,
+    name: 'task',
+    args: { description, subagent_type: 'general-purpose' },
+  });
+  const toolResults = (events: readonly SessionEvent[]) =>
+    events
+      .filter((e): e is SessionEvent<'tool/result'> => e.type === 'tool/result')
+      .map((e) => JSON.stringify(e.data));
+  const serve = (script: Script, opening: string) =>
+    runServeDriver(
+      async (ctx) => {
+        await ctx.client.runStart('alpha', opening);
+        await ctx.fold(
+          (state) =>
+            idleWithContent(state) &&
+            state.entries.some((e) => e.kind === 'ai' && !e.streaming && e.text === '好。'),
+          60_000,
+        );
+      },
+      script,
+      [
+        '- id: background-subagents',
+        '  config:',
+        '    backgroundMode: one-shot',
+        '    maxActiveSubagents: 8',
+        LOW_SUMMARIZATION,
+      ].join('\n'),
+    );
+
+  it('同一步派兩次同型前景委派：兩段歷史都留在 root 的 backend 上', async () => {
+    const counters = new Map<string, number>();
+    const script: Script = (_index, body) => {
+      if (!hasTools(body)) return summaryOf(body);
+      const mark = markerOf(body);
+      const k = counters.get(mark) ?? 0;
+      counters.set(mark, k + 1);
+      if (mark !== 'ROOT') return child(mark, k);
+      if (k === 0)
+        return { tools: [task('call_ta', 'CHILD-A 做事'), task('call_tb', 'CHILD-B 做事')] };
+      if (k === 1)
+        return {
+          tools: [
+            { id: 'call_ls', name: 'ls', args: { path: '/conversation_history' } },
+            {
+              id: 'call_grep',
+              name: 'grep',
+              args: { pattern: '暗號-CHILD-', path: '/conversation_history' },
+            },
+          ],
+        };
+      return {};
+    };
+    const run = await serve(script, '同一步派兩次');
+
+    const children = childLogsOf(run);
+    expect(children.length).toBe(2);
+    for (const log of children)
+      expect(summaries(log.events).length, `${log.id} 應該摘要過`).toBeGreaterThan(0);
+    const results = toolResults(rootLogOf(run).events);
+    const listing = results.find((text) => text.includes('call_ls')) ?? results.join('\n');
+    // backend 上的鍵就是歷史檔路徑：每次委派一個 `session_<8hex>.md`。
+    const keys = new Set(listing.match(/\/conversation_history\/session_[0-9a-f]{8}\.md/g) ?? []);
+    expect(keys.size, `root 的 /conversation_history：${listing}`).toBe(2);
+    const grep = results.find((text) => text.includes('call_grep')) ?? results.join('\n');
+    expect(grep).toContain('暗號-CHILD-A');
+    expect(grep).toContain('暗號-CHILD-B');
+  }, 180_000);
+
+  it('同型前景委派兩次：第二次的歷史檔不含第一次的暗號', async () => {
+    const counters = new Map<string, number>();
+    const script: Script = (_index, body) => {
+      if (!hasTools(body)) return summaryOf(body);
+      const mark = markerOf(body);
+      const k = counters.get(mark) ?? 0;
+      counters.set(mark, k + 1);
+      if (mark === 'ROOT') {
+        if (k === 0) return { tools: [task('call_ta', 'CHILD-A 做事')] };
+        if (k === 1) return { tools: [task('call_tb', 'CHILD-B 做事')] };
+        return {};
+      }
+      if (mark === 'CHILD-B' && k === 4) {
+        // 摘要過的串裡有那句「完整歷史存在 <路徑>」：照它讀回自己的歷史檔。
+        const path = /saved to (\S+?\.md)/.exec(JSON.stringify(body.messages))?.[1];
+        if (path !== undefined)
+          return { tools: [{ id: 'call_read', name: 'read_file', args: { file_path: path } }] };
+      }
+      return child(mark, mark === 'CHILD-B' && k > 4 ? k - 1 : k);
+    };
+    const run = await serve(script, '派兩次');
+
+    const second = childLogsOf(run).find((log) =>
+      JSON.stringify(log.events.find((e) => e.type === 'user/message')?.data ?? '').includes(
+        'CHILD-B',
+      ),
+    );
+    expect(second, '找不到第二次委派的日誌').toBeDefined();
+    const read = toolResults(second!.events).find((text) => text.includes('call_read'));
+    expect(read, '第二次委派沒有讀到自己的歷史檔').toBeDefined();
+    expect(read).toContain('暗號-CHILD-B');
+    expect(read).not.toContain('暗號-CHILD-A');
   }, 180_000);
 });
 

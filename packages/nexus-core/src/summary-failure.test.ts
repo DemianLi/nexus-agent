@@ -21,7 +21,8 @@ import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
-// 歷史檔的會話名是摘要器建構時生的（`session_` 加 `randomUUID()` 的前 8 碼）；要固定它的那一條換掉前 8 碼，其餘照真的生。
+// 歷史檔的會話名是 `session_` 加 `randomUUID()` 的前 8 碼（認不出身分的呼叫在摘要器建構時生，其餘在第一次寫時生）；
+// 要固定它的那一條換掉前 8 碼，其餘照真的生。
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };

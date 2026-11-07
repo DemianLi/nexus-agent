@@ -32,15 +32,20 @@ export type EngineContextSize =
   | { readonly type: 'tokens'; readonly value: number }
   | { readonly type: 'fraction'; readonly value: number };
 
-/** 引擎的設定，欄位同基座的 `SummarizationMiddlewareOptions`（只留 nexus 給的那幾個）。 */
+/** 引擎的設定，欄位同基座的 `SummarizationMiddlewareOptions`（只留 nexus 給的那幾個；`sessionIdOf` 基座沒有）。 */
 export interface SummarizerEngineOptions {
   readonly backend: AnyBackendProtocol;
   readonly summaryPrompt: string;
   readonly trigger: readonly EngineContextSize[];
   readonly keep: EngineContextSize;
   readonly historyPathPrefix?: string;
-  /** 歷史檔的會話名（`<historyPathPrefix>/<sessionId>.md`）。 */
-  readonly sessionId: string;
+  /**
+   * 這次呼叫的歷史檔會話名（`<historyPathPrefix>/<sessionId>.md`）。每次要寫歷史檔時拿那次的 `request` 問一次。
+   *
+   * @param request - 這次的 `wrapModelCall` 請求。
+   * @returns 會話名，不含前綴與 `.md`；同一個呼叫身分要回同一個值。
+   */
+  readonly sessionIdOf: (request: SessionRequest) => string;
   readonly truncateArgsSettings: {
     readonly trigger?: EngineContextSize;
     readonly keep?: EngineContextSize;
@@ -49,7 +54,12 @@ export interface SummarizerEngineOptions {
   };
 }
 
-interface EngineRequest {
+/** {@link SummarizerEngineOptions.sessionIdOf} 讀得到的那一部分請求。 */
+export interface SessionRequest {
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+interface EngineRequest extends SessionRequest {
   readonly messages?: BaseMessage[];
   readonly state: unknown;
   readonly model?: unknown;
@@ -88,7 +98,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   const {
     backend,
     summaryPrompt,
-    sessionId,
+    sessionIdOf,
     historyPathPrefix = '/conversation_history',
   } = options;
   const trigger = options.trigger;
@@ -101,7 +111,6 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   const maxArgLength = options.truncateArgsSettings.maxLength ?? 2e3;
   const truncationText = options.truncateArgsSettings.truncationText ?? '...(argument truncated)';
 
-  const historyPath = `${historyPathPrefix}/${sessionId}.md`;
   let tokenEstimationMultiplier = 1;
 
   function getMaxInputTokens(resolvedModel: unknown): number | undefined {
@@ -329,10 +338,10 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
 
   async function offloadToBackend(
     messages: readonly BaseMessage[],
-    state: unknown,
+    request: EngineRequest,
   ): Promise<string | null> {
-    const resolvedBackend = await resolveBackend(backend, { state } as never);
-    const filePath = historyPath;
+    const resolvedBackend = await resolveBackend(backend, { state: request.state } as never);
+    const filePath = `${historyPathPrefix}/${sessionIdOf(request)}.md`;
     const filteredMessages = messages.filter((msg) => !isSummaryMessage(msg));
     const newSection = `## Summarized at ${new Date().toISOString()}\n\n${getBufferString(filteredMessages)}\n\n`;
     const sectionBytes = new TextEncoder().encode(newSection);
@@ -407,9 +416,9 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   async function summarizeMessages(
     messagesToSummarize: readonly BaseMessage[],
     resolvedModel: unknown,
-    state: unknown,
+    request: EngineRequest,
   ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
-    const filePath = await offloadToBackend(messagesToSummarize, state);
+    const filePath = await offloadToBackend(messagesToSummarize, request);
     if (filePath === null)
       console.warn(
         '[SummarizationMiddleware] Backend offload failed during summarization. Proceeding with summary generation.',
@@ -448,11 +457,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
           if (!isContextOverflow(err)) throw err;
         }
     }
-    const { summaryMessage } = await summarizeMessages(
-      messagesToSummarize,
-      resolvedModel,
-      request.state,
-    );
+    const { summaryMessage } = await summarizeMessages(messagesToSummarize, resolvedModel, request);
     const modifiedMessages: BaseMessage[] = [summaryMessage, ...preservedMessages];
     const modifiedTokens = countTotalTokens(modifiedMessages, request.systemMessage, request.tools);
     try {
@@ -467,7 +472,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
       const reSumResult = await summarizeMessages(
         [...messagesToSummarize, ...preservedMessages],
         resolvedModel,
-        request.state,
+        request,
       );
       return await handler({ ...request, messages: [reSumResult.summaryMessage] });
     }
