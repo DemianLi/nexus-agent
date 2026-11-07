@@ -33,7 +33,11 @@ import type { EmbedAccessRoute, StreamRecord } from './embed-audit.js';
 import { IDENTITY_TABLE_STAT_INTERVAL_MS } from './embed-identities.js';
 import { EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './embed-profile.js';
 import type { EmbedCookieRefusal } from './embed-session.js';
-import { EMBED_REFUSED_HEADER, principalHeaders } from './forwarded-principal.js';
+import {
+  EMBED_REFUSED_HEADER,
+  FRONT_CLOSING_HEADER,
+  principalHeaders,
+} from './forwarded-principal.js';
 import type { FrontForwarder } from './front-forward.js';
 import { StreamCutError } from './sse-response.js';
 import type { EnsureOutcome, SupervisorClient } from './supervisor-client.js';
@@ -386,7 +390,12 @@ export function createFrontWireHandler(options: FrontWireOptions): IdleSweepingW
       : request;
     let response: Response;
     try {
-      response = await forwarder.forward(outgoing, outcome.socket, principalHeaders(principal));
+      // 停准入之後轉的每一個都帶標頭，對話行程照它擋這一個請求（有行程的 `run.start`、會 steer 的 `slash.run`）：
+      // 停准入只在前台，對話行程的那一支沒被叫過。
+      response = await forwarder.forward(outgoing, outcome.socket, {
+        ...principalHeaders(principal),
+        ...(admissionStopped && { [FRONT_CLOSING_HEADER]: '1' }),
+      });
     } catch (error) {
       if (request.signal.aborted) throw error;
       // 連不上（行程剛走、`down` 還沒到）才收掉整個 socket 的連線；其餘的錯只丟閒置的，同一條 thread 開著的下行不跟著斷。

@@ -15,6 +15,7 @@ import type { AccessRecord, StreamRecord } from './embed-audit.js';
 import type { EmbedCookieVerdict } from './embed-session.js';
 import {
   EMBED_REFUSED_HEADER,
+  FRONT_CLOSING_HEADER,
   forwardedPrincipal,
   PRINCIPAL_HEADER,
 } from './forwarded-principal.js';
@@ -370,6 +371,24 @@ describe('createFrontWireHandler 的收尾（#1787）', () => {
       expect(upstream.seen).toEqual([]);
     },
   );
+
+  it('有行程的照轉，停准入之後帶標頭（對話行程照它擋這一個請求）；之前客戶端自己帶的被刪掉', async () => {
+    const upstream = await conversation((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"id":7}');
+    });
+    const { handler } = front(upstream.socket, () => ({ ok: true, principal: ALICE }));
+    const spoofed = command('/threads/t1', 'run.start', { text: '窗前' });
+    spoofed.headers.set(FRONT_CLOSING_HEADER, '1');
+    await handler.handle(spoofed);
+    handler.stopAdmission();
+    const response = await handler.handle(command('/threads/t1', 'run.start', { text: '窗內' }));
+    expect(response.status).toBe(200);
+    expect(upstream.seen.map((request) => request.headers[FRONT_CLOSING_HEADER])).toEqual([
+      undefined,
+      '1',
+    ]);
+  });
 
   it('監督行程答 shutdown：回 server_closing，不是 unknown_error', async () => {
     const input = new PassThrough();

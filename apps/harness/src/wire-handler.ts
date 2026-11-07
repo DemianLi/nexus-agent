@@ -29,6 +29,7 @@
  * 見 [`browser-auth.ts`](./browser-auth.ts)（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import type {
@@ -586,6 +587,13 @@ export interface WireHandlerOptions {
    * 不是這道檢查。
    */
   readonly auth: WireAuth;
+  /**
+   * per-thread 的對話行程：這個請求是前台停准入（{@link IdleSweepingWireHandler.stopAdmission}）之後轉來的
+   * （[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)、[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）。
+   * 是的話**只這一個請求**照停准入處理：前台收尾不等於這個行程要收（前台換一個之後照常收），所以不叫 `stopAdmission`。
+   * 只有對話行程的 socket 接這一項；前台與 single 不接，客戶端帶同名標頭也沒用（前台轉送前刪掉）。
+   */
+  readonly frontClosing?: (headers: Headers) => boolean;
   /**
    * 指名的非 loopback authority（`--trusted-host`，#2369），交給 `request-trust.ts` 的圍欄。省略就只認 loopback。
    */
@@ -1907,6 +1915,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 所以「檢查過、旗標才立」只會發生在 `admitAttachmentsCore` 那種 `await` 的前後——那一處在 `await` 回來之後重查。
    */
   let admissionStopped = false;
+  /** 正在處理的這個請求是不是前台停准入之後轉來的（{@link WireHandlerOptions.frontClosing}）；跟著請求的 async 鏈走。 */
+  const frontClosingScope = new AsyncLocalStorage<true>();
+  /** 這一刻還收不收會開新一輪的命令：整台停了，或這個請求是收尾中的前台轉來的。 */
+  const admissionClosed = (): boolean => admissionStopped || frontClosingScope.getStore() === true;
 
   /** 收尾中拒收這一句：附件收據由呼叫端放回去，這裡只負責回應。 */
   function serverClosing(id: number | null): Response {
@@ -2273,12 +2285,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用就讓命令在動任何東西之前失敗。
             acceptSteer: (text) => {
               // 收尾中不替命令開新一輪（#1787）：在命令動任何域之前就拒收，命令落定成 `error`、什麼都沒改。`handleSlash` 認這個例外回 `server_closing`。
-              if (admissionStopped) throw new ServerClosingError();
+              if (admissionClosed()) throw new ServerClosingError();
               void pump.referencedText(text);
             },
             // 同一道閘，給「不 steer、但改了域之後排程器自己開一輪」的命令（`/goal <目標>`、`/goal resume`，#1787）：在寫日誌之前拒。
             acceptOpenTurn: () => {
-              if (admissionStopped) throw new ServerClosingError();
+              if (admissionClosed()) throw new ServerClosingError();
             },
           }),
           feedback: threadAgent.feedback,
@@ -2957,7 +2969,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // **收尾中不開新一輪**（#1787）。冷 thread 擋在 `threadFor` 之前：不為一句不會收的話組 agent、起 MCP 子行程再拆掉。熱的 thread 的
     // `run.start` 在下面、request_id 去重**之後**才擋（窗前收過的重送要拿回原本的 `run_id`）。`slash.run` 看不出一行會不會 steer，
     // 交給 `acceptSteer`（命令真的呼叫 `steer` 時才拒）與 `acceptOpenTurn`（命令要改的域狀態會讓排程器自己開一輪時才拒，`/goal` 的建立／續上／改進行中的目標）。
-    if (admissionStopped) {
+    if (admissionClosed()) {
       if (method === SUBAGENT_SEND_METHOD) return serverClosing(envelope.id);
       if (method === 'run.start' && !threads.has(threadId)) return serverClosing(envelope.id);
     }
@@ -3147,7 +3159,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       // 收尾中拒收（#1787）：**排在去重之後**——窗前收過的那一筆重送已經在上面拿回原本的 `run_id`；排在 `promptRequestsInFlight.set` 之前，
       // 拒收不留任何痕跡。不合法的輸入在上面先擋，不論收不收尾都是同一個回應。
-      if (admissionStopped) return serverClosing(command.id);
+      if (admissionClosed()) return serverClosing(command.id);
       let settleRequest: ((runId: string | undefined) => void) | undefined;
       if (requestId !== undefined) {
         const inFlight = new Promise<string | undefined>((resolve) => (settleRequest = resolve));
@@ -3224,7 +3236,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           }
           // **准入的 `await` 回來之後再查一次**（#1787，同 dsh `commands.ts:342-347`：await 之後重查 agent 還在不在）：等附件的那段時間
           // 收尾可能開始了。收據已經用掉，放回去，使用者稍後重送不必重傳。
-          if (admissionStopped) {
+          if (admissionClosed()) {
             outcome.restore();
             return serverClosing(command.id);
           }
@@ -3557,7 +3569,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     // 上面那道閘在 `threadFor` 之前，而冷的 thread 在這條路上要先建 agent（`await`）：窗可能在建的期間才開。投遞之前再查一次，
     // 同 `run.start` 在准入 `await` 之後的第二次檢查（#1787）。
-    if (admissionStopped) return serverClosing(id);
+    if (admissionClosed()) return serverClosing(id);
     try {
       // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
       await background.sendFromUser(params.run_id, params.text, clientTimeZone);
@@ -4818,10 +4830,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
       const held = holdThread(request);
       const embedded = withoutEmbedPrefix(pathname);
-      try {
-        return await (embedded === undefined
+      const dispatch = (): Promise<Response> =>
+        embedded === undefined
           ? dispatchRequest(request, pathname, 'full', principal)
-          : dispatchRequest(request, embedded, 'embed', principal));
+          : dispatchRequest(request, embedded, 'embed', principal);
+      try {
+        return await (options.frontClosing?.(request.headers) === true
+          ? frontClosingScope.run(true, dispatch)
+          : dispatch());
       } finally {
         held?.();
       }

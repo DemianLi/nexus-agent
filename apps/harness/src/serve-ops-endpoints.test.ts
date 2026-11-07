@@ -369,6 +369,11 @@ describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 5
       .toBe(503);
     const refused = await client.runStart('closing-window', '窗內');
     expect(refused).toMatchObject({ type: 'error', error: 'server_closing' });
+    // 已開的 thread 送新的一句一樣擋（per-thread 下它有行程，前台照轉、對話行程照前台的標頭擋）。
+    expect(await client.runStart('closing-before', '窗內')).toMatchObject({
+      type: 'error',
+      error: 'server_closing',
+    });
     await closing;
     running = undefined;
   });

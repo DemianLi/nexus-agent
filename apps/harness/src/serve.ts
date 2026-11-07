@@ -137,6 +137,7 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
+import { forwardedFromClosingFront } from './forwarded-principal.js';
 import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
 import type { FrontFeed } from './front-feed.js';
@@ -1580,6 +1581,7 @@ async function startServer(
     // 對話行程（#2338）：只認綁著的那一條；逐出由監督行程決定，上面那格不傳。快照歸前台寫，綁著哪幾列由前台來問（#2341）。
     ...(options.conversation !== undefined && {
       reportEmbedRefusals: true,
+      frontClosing: forwardedFromClosingFront,
       boundThread: options.conversation.boundThread,
       liveBindings: (threadId: string) => threadPluginList.liveBindings(threadId),
       onTurn: options.conversation.onTurn,

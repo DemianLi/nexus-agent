@@ -16,7 +16,7 @@
 import { Agent, request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { PRINCIPAL_HEADER } from './forwarded-principal.js';
+import { FRONT_CLOSING_HEADER, PRINCIPAL_HEADER } from './forwarded-principal.js';
 
 /** 不往對話行程傳的請求標頭。 */
 const DROPPED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
@@ -35,6 +35,8 @@ const DROPPED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
   'referer',
   // 身分只由前台放（`forwarded-principal.ts`）：客戶端帶來的一律刪，不然誰都能冒充別人。
   PRINCIPAL_HEADER,
+  // 同上：客戶端帶來的不能讓對話行程拒收別人的話。
+  FRONT_CLOSING_HEADER,
 ]);
 
 /** 不往客戶端傳的回應標頭。 */
