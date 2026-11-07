@@ -23,8 +23,8 @@
 
 完整的 patch 寫法見 [`docs/operations.md`](../../docs/operations.md)。
 
-`apply` 只登記一個逐條 thread 的工具來源（`tools.threadSource`，要 `@nexus/tools` `^2.6.0`）；連線、工具、閘門與 hub 都在組每一條 thread
-時由 `mountServer` 建，每條 thread 各一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
+`apply` 只登記一個逐條 thread 的工具來源（`tools.threadSource`，要 `@nexus/tools` `^2.6.0`）；工具、閘門、隱藏規則與 hub 都在組每一條
+thread 時由 `mountServer` 建，每條 thread 各一份；連線在 CLI 是每條 thread 自己開，serve 向連線池取用、同一份設定整台共用一份。它讀的五個宿主服務（`channel`、`mcp:pool`、`mcp:credentials`、`mcpSandbox`、`mcpGuard`）
 在宿主的授權表上（`apps/harness/src/thread-service-grants.ts`）。
 
 **相容層的 `mcpPlugin` 與 `createMcpPlugin` 只給還沒搬的測試和 cli-mcp 手動夾具用，[#2535](https://github.com/DemianLi/nexus-agent/issues/2535) 拿掉。**
@@ -182,8 +182,8 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **提示詞另有一段 `## MCP resource servers`**，列出所有已登記的 server 名字，讓模型知道 `server` 參數能填什麼。
 - **連不上的那一列也登記**（照 dsh）：名字照列，叫它得到 dsh 那句 `mcp-client(<name>): server is disconnected`；問不存在的名字得到 `MCP resource server "<name>" is unavailable in this agent's scope`。寫了
   `failOnStartupError: true` 而掉了的列不留任何東西。
-- **提示詞的段**：各台的指引與資源 server 清單是同一段，經 `thread.section` 登記在這條 thread 的系統提示詞中段，同 dsh 的
-  `systemPrompt.section(...)`。段的文字每次模型呼叫現算，但讀的東西只在組這條 thread 時增加、收尾時移除，所以組好的 thread 每一輪逐位元組相同。
+- **提示詞的段**：各台的指引與資源 server 清單是同一段，經 `thread.section` 登記在這條 thread 的系統提示詞中段。dsh 是兩段
+  `systemPrompt.section(...)`（`mcp-client` 的 server 指引與 `mcp-resources` 的 `mcp-resource-servers`），這裡併成一段。段的文字每次模型呼叫現算，但讀的東西只在組這條 thread 時增加、收尾時移除，所以組好的 thread 每一輪逐位元組相同。
   dsh 的 `instructions()` 讀最近一次成功連線的快照、重連成功會換；我們重連之後不換（工具集合與提示詞都在組裝時定下，`supervisor.ts` 檔頭偏離 3）。
   Prompts（`prompts/*`）dsh 也不支援（「MCP prompt templates are unsupported」），這裡同樣不做。
 

@@ -15,7 +15,7 @@ import type { ToolThread } from '@nexus/tools';
 const sharedByRegistry = new WeakMap<PluginRegistry, object>();
 
 /**
- * 把相容層的 registry 包成一條 {@link ToolThread}。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉。**
+ * 把相容層的 registry 包成一條 {@link ToolThread}。
  *
  * 跟宿主的 `threadSource` 不同的地方：`services.get` 不檢查宣告、什麼都給；`shared` 以 registry 為範圍，不分插件；`onDispose`
  * 直接交給 `registry.lifecycle`，這一列 `apply` 失敗時被 rollback 撤掉、不跑；`apply` 結束之後再叫各方法不拋。

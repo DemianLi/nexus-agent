@@ -246,16 +246,17 @@ const SERVERS = Symbol('mcp:servers');
  * - **同一條 thread 上同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，後來那一列在連線之前就拋。
  *   名字預留在 `thread.shared`，那一列收掉（或在組裝裡失敗）時釋放。
  * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、經 `thread.logger`
- *   交出一則警告，那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。連線、列工具、註冊三步在同一個 `try` 裡。
+ *   交出一則警告，那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
  * **掛上那一刻就連不上的列，這一條 thread 補不了工具**：一條 thread 組好之後工具就定了（`packages/nexus-core/src/load.ts` 檔頭）。
  * serve 有連線池（[`pool.ts`](./pool.ts)，[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）在背景重試，連上之後組的 thread 有工具，
- * 之前組好的沒有；CLI 一次組裝就是整個行程，不重連。
+ * 之前組好的沒有；CLI 不在背景重試首連。
  *
  * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），見 [`supervisor.ts`](./supervisor.ts) 檔頭：
  * 已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
  *
- * **每條 thread 才有的狀態一律活在這裡**：行程級的 {@link apply} 只登記來源，連線、工具與 hub 都是每條 thread 各一份。
+ * **每條 thread 才有的狀態一律活在這裡**：行程級的 {@link apply} 只登記來源；工具、閘門、隱藏規則與 hub 每條
+ * thread 各一份。連線在沒有池時（CLI）每條 thread 一份，有池時（serve）向池取用、同一份設定整個行程共用（`pool.ts` 檔頭）。
  *
  * @param thread - 這條 thread。
  * @param declared - 驗過的設定。
@@ -399,8 +400,7 @@ export async function mountServer(thread: ToolThread, declared: McpConfig): Prom
     // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
     // 之後載入器因為別的理由再撤一次也沒事）。
     for (const undo of registered.reverse()) undo();
-    // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
-    // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
+    // 這裡的資源要自己收：`thread.onDispose` 在 try 之後才登記，還沒有人接得到它。連線已經開了就得收掉，否則這個
     // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
     await supervisor?.dispose();
     await attempts.close();
@@ -558,13 +558,13 @@ async function applyShared(
 /** 樹上那一列的插件名：橋接列的 `origin.name` 取它，embed 的審批靠它認出 mcp 的工具。 */
 export const name = 'mcp';
 
-/** 要宿主的工具接縫，`threadSource` 與 `ToolThread.section` 是 2.6.0 才有的。 */
+/** 要宿主的工具接縫 `^2.6.0`：`threadSource` 從 2.5.0 起、`ToolThread.section` 從 2.6.0 起。 */
 export const inject = injectOf(need(toolsToken, '^2.6.0'));
 
 /** 這一列的設定。 */
 export const Config = mcpConfigSchema;
 
-/** 樹上的宣告：不提供服務，只用工具接縫；連線是逐條 thread 建的，改設定從下一條 thread 起生效。 */
+/** 樹上的宣告：不提供服務，只用工具接縫；每條 thread 組的時候才掛 server，改設定從下一條 thread 起生效。 */
 export const manifest = defineManifest({
   id: 'mcp',
   version: '0.6.0',
@@ -603,7 +603,7 @@ export function apply(ctx: Context, config: McpConfig): void {
 /**
  * 相容層的 mcp 插件。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉**；產品路徑走樹上的 {@link apply}。
  *
- * 名字先佔進 `mcp:server:<serverName>` 這個服務：撞名時訊息指名兩列，跟搬之前一樣。
+ * 名字先佔進 `mcp:server:<serverName>` 這個服務：撞名時 `services.provide` 的重名錯誤指名兩列。
  */
 export const mcpPlugin: NexusPlugin<McpConfig> = {
   name,
@@ -617,7 +617,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 };
 
 /**
- * 建一個相容層條目。**只給還沒搬的測試和 cli-mcp 手動夾具用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * 建一個相容層條目。**只給還沒搬的測試用，#2535 拿掉。** 設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
  *
  * @param options - 設定，形狀見 {@link mcpConfigSchema}。
  * @returns 可以放進組裝點清單的條目。

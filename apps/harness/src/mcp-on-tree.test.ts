@@ -1,10 +1,10 @@
 /**
- * MCP 那一列上樹（[#2533](https://github.com/DemianLi/nexus-agent/issues/2533)）前後，兩個 loop 各自的請求本文、每次模型呼叫的工具清單、
- * 中斷酬載、組裝警告與整份會話日誌的落盤位元組，與 `mcp-on-tree.baseline.json` 逐字相同。
+ * MCP 那一列掛在樹上（[#2533](https://github.com/DemianLi/nexus-agent/issues/2533)）時，兩個 loop 各自的請求本文、每次模型呼叫的工具清單、
+ * 中斷酬載、組裝警告與整份會話日誌的落盤位元組，與 `mcp-on-tree.baseline.json` 逐字相同；對照組是這一列還經相容層掛載時錄的（見下）。
  *
  * 走部署方掛它的那條路（出貨清單疊一份 `--patch`，`insert` 一列 `@nexus/plugin-mcp`），`langgraph` 與 `native` 各跑一次。場景是
- * `mcp-migration.test.ts` 的全部，再加首連失敗、放棄重連、憑證引用、連線池、預設要問人五種組裝路徑。
- * 對照組在 `develop` `36624090`（這一列還掛在相容層時）以 `K7C_RECORD=1` 錄的；`K7C_RECORD=1` 會拿當下的輸出覆寫對照組。
+ * `mcp-migration.test.ts` 的全部，再加七種組裝路徑：首連失敗、兩台共用 hub、子代理、放棄重連、憑證引用、連線池、預設要問人。
+ * 對照組在 `36624090` 錄（這一列當時經相容層掛載）；`MCP_ON_TREE_RECORD=1` 拿當下的輸出覆寫對照組，`MCP_ON_TREE_ONLY=<字串>` 只跑標籤含它的案例。
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -272,7 +272,7 @@ const cases: readonly (readonly [string, Case])[] = [
   ],
 ];
 
-/** 疊在出貨清單上的那一份 patch：插一列 MCP、換掉腳本模型的 `turns`。`marker` 讓這一列的子行程在 `ps` 裡認得出來。 */
+/** 疊在出貨清單上的那一份 patch：插一列 MCP（`second` 時兩列）、換掉腳本模型的 `turns`。`marker` 讓這些列的子行程在 `ps` 裡認得出來。 */
 function overlay(dir: string, spec: Case, marker: string): string {
   const name =
     spec.tool === undefined
@@ -494,7 +494,7 @@ it(
   async () => {
     const root = createCordisRoot();
     cleanups.push(() => root.dispose());
-    const only = process.env.K7C_ONLY;
+    const only = process.env.MCP_ON_TREE_ONLY;
     const now: Record<string, unknown> = {};
     for (const [label, spec] of cases) {
       if (only !== undefined && !label.includes(only)) continue;
@@ -503,7 +503,7 @@ it(
         now[`${label}｜${loop}`] = normalized(result, dir);
       }
     }
-    if (process.env.K7C_RECORD === '1') {
+    if (process.env.MCP_ON_TREE_RECORD === '1') {
       writeFileSync(BASELINE, `${JSON.stringify(now, null, 2)}\n`);
       return;
     }

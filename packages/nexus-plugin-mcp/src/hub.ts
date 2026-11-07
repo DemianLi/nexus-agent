@@ -11,7 +11,7 @@
  * 所以文字要到渲染時才定。每台 server 的指引在它 `add` 那一刻定下，重連之後不換（`supervisor.ts` 檔頭）；sources 只在組裝期間增加、
  * thread 收掉時移除，所以一條組好的 thread 每一輪逐位元組相同。
  *
- * **起不來的那一列也登記**：名字照列、工具照在，呼叫時才得到 `mcp-client(<name>): server is disconnected`。
+ * **起不來的那一列也登記**（沒寫 `failOnStartupError: true` 的）：名字照列、工具照在，呼叫時才得到 `mcp-client(<name>): server is disconnected`。
  *
  * **只要有任何一台 MCP 登記進來，提示詞就有引用要求與外部內容兩段**（{@link CITATION_PROMPT}、{@link UNTRUSTED_CONTENT_PROMPT}，
  * [#1319](https://github.com/DemianLi/nexus-agent/issues/1319)、[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)、
