@@ -302,12 +302,11 @@ const INDEX: readonly InterceptionRow[] = [
     eventOccupant: 'tools/post-execute',
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
-    occupants: ['packages/nexus-core/src/output-schema.ts'],
+    occupants: ['packages/nexus-core/src/shared-read-mark.ts'],
     permissionDelta:
-      '佔用者是 dsh 在這一格**之前**的那一步（`createSuccessResult` 驗 `output.schema`），' +
-      '不是 post-execute 的 listener——我們這側兩者共用一個 `wrapToolCall` 載體。' +
-      '位置 2026-09-13 起由 fold 決定（[#252](https://github.com/DemianLi/nexus-agent/issues/252)，' +
-      '檔頭缺口帳第 1 筆收掉）。另外 `additionalContexts` 的射程只到' +
+      '佔用者是共用區讀出內容的前綴（#1676），`tools/post-execute` 內層的 core 監聽者，在每一位插件監聽者內側；' +
+      '位置由 fold 決定。輸出校驗（dsh 在這一格**之前**的 `createSuccessResult`）在第 6 格的內層。' +
+      '另外 `additionalContexts` 的射程只到' +
       '「單一生產者、一則脈絡、成功路徑」——交錯順序、失敗路徑收集、被外層阻止時丟棄' +
       '三條契約今天零生產者也就零驗證，**第二個生產者出現就要重判這一格**。',
     recordDelta: undefined,
@@ -318,7 +317,7 @@ const INDEX: readonly InterceptionRow[] = [
 /** 索引的列數。**釘死是刻意的**：只 grep 不數，刪掉一列這份測試照樣綠。 */
 const EXPECTED_ROWS = 5;
 
-/** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
+/** 佔用位址的總數（列可以共用檔案，數的是位址，不是檔案）。 */
 const EXPECTED_SITES = 16;
 
 /**

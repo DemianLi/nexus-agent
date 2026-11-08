@@ -10,26 +10,14 @@
  * `turn/end` 不帶原因，日誌與畫面都當它正常結束，goal 續行照樣排下一輪。子代理被截斷時，基座的
  * `task` 往回找最後一則有字的回覆交給父代理，都沒有就交一句 `Task completed`。
  *
- * ## dsh 怎麼做（`477b4f4`）
+ * ## 我們怎麼做：模型與工具各一半，共用一份載體，加一個讀日誌的判準
  *
- * - pi-ai 轉接器把 `length` 對到 `{ kind: 'max-tokens' }`（`packages/llm/llm-pi-ai/src/stream.ts:109`）；
- * - 組訊息時丟掉**這一則的每一顆**工具呼叫（`packages/llm/llm/src/assembler.ts:135-140`）；
- * - 記下 `assistant/message` 之後、派發工具之前就結束這一步（`packages/core/agent-loop/src/agent.ts:513`），
- *   這一輪以 `max-tokens` 收尾，而且 sticky（`:332-337`）；中止與失敗蓋過它（`:349-363`）；
- * - 子代理：這一輪的原因變成 `SubagentResult.stopReason`（`packages/subagent/subagent/src/lifecycle.ts:240`），
- *   前景的 `task` 拋 `subagent run hit its token limit before finishing`，後面接已經寫出的那段
- *   （`packages/subagent/tool-subagent/src/index.ts:165`、`:184-196`、`:215`），註冊表接住渲染成錯誤；
- * - goal 看到就收回續行授權（`packages/goal/goal-round-driver/src/index.ts:329-331`）；
- * - 送下一次請求時，沒有內容的那則助手訊息不送（`packages/core/session/src/surface.ts:142-147`）。
- *
- * ## 我們怎麼做：一顆 middleware、兩個鉤子，加一個讀日誌的判準
- *
- * - **`wrapModelCall`** 認出截斷就清掉這一則的工具呼叫（{@link dropToolCalls}），`response_metadata`
+ * - **模型那一半**（{@link createMaxTokensMiddleware}，`wrapModelCall`）認出截斷就清掉這一則的工具呼叫（{@link dropToolCalls}），`response_metadata`
  *   原樣留著——日誌 `assistant/message` 記的就是這一則，判準讀的就是那一格。在 LangChain 的 agent
  *   迴圈裡，**沒有工具呼叫就是這一輪收尾**，所以「丟掉」與「結束這一步」是同一件事，不用另外中斷。
  *   這次呼叫來自子代理的話，順手在{@link MaxTokensCarrier | 載體}記一筆。
- * - **`wrapToolCall`** 只看 `task`：載體裡有這次呼叫派出去的那個子代理，就把結果換成 dsh 那句錯誤
- *   （{@link subagentMaxTokensResult}）。
+ * - **工具那一半**（{@link createMaxTokensListener}，`tools/execute` 的 core 監聽者）只看 `task`：載體裡有這次呼叫派出去的
+ *   那個子代理，就把結果換成撞限的錯誤，後面接已經寫出的那段（{@link subagentMaxTokensResult}）；子代理的結果記成截斷，不是正常收。
  * - **這一輪的原因**由收尾的人從 root 日誌讀（{@link turnReachedMaxTokens}）：CLI 與 web 的 pump
  *   各自寫 `turn/end`，兩條共用這一個判準。子代理的截斷不算 root 這一輪的，同 dsh 每個 agent 各記
  *   各的；它對父代理的效果是那一則錯誤。
@@ -39,8 +27,8 @@
  *
  * 清在修補之前：被切斷的那一顆本來會被 {@link ./invalid-tool-args.ts} 改寫成 `{}` 參數的正常呼叫，
  * 清掉之後它看到的是一則沒有壞呼叫的回覆，什麼都不做。外面每一顆（起訖紀錄器記進日誌的那一則、
- * 用量記錄器）看到的都是清過的。`wrapToolCall` 那一側排在圍堵與每個 plugin 的內側，圍堵記進
- * `tool/result` 的是換過的那則；時刻是 `tools/execute`，見 `apps/harness/src/interception-index.test.ts`。
+ * 用量記錄器）看到的都是清過的。工具那一半是 `tools/execute` 內層最內一位，在圍堵、每個 plugin 與輸出校驗的內側，圍堵記進
+ * `tool/result` 的是換過的那則；時刻索引見 `apps/harness/src/interception-index.test.ts`。
  *
  * ## 登記的偏離
  *
