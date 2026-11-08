@@ -54,7 +54,7 @@ export const KNOWN_DIFFERENCE_KINDS = {
     card: 2363,
     reason:
       '這一條斷言 `agent/turn-stopping` 的 `step`：langgraph 下由轉接格（`turn-stopping.ts`）派，拿不到步數，step 給 0；' +
-      'native 給真的步數。到 K13 #2363 拿掉。',
+      'native 給真的步數。到 #2363 拿掉。',
   },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;
 
