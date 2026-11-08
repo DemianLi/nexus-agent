@@ -41,8 +41,8 @@
  *
  * ## 模型 id
  *
- * `request/header` 落在配對的 `model/start` **之後**、而且變了才記，所以 id 要在 `model/end`／`model/usage` 的當下才讀（那時
- * 這次呼叫的快照已經在）；日誌上還沒有快照就是 `null`，不猜。
+ * `request/header` 變了才記；格式 54 以前落在配對的 `model/start` **之後**，55 起落在**之前**。兩種在 `model/end`／`model/usage`
+ * 的當下這次呼叫的快照都已經在，所以 id 在那時才讀；日誌上還沒有快照就是 `null`，不猜。
  *
  * @module
  */

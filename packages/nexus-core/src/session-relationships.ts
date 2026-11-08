@@ -28,7 +28,11 @@ export type SessionRelationshipRule =
   | 'tool-result-without-call'
   | 'retry-chain'
   | 'retry-started-unscheduled'
-  | 'inbox-splice';
+  | 'inbox-splice'
+  | 'request-outside-turn'
+  | 'request-without-model-start'
+  | 'attempt-outside-turn'
+  | 'attempt-before-failed-end';
 
 /** 一筆違規。`message` 指認那一顆（型別與 `seq`），說哪一條關係錯了。 */
 export interface SessionRelationshipViolation {
@@ -61,6 +65,13 @@ export interface SessionRelationshipChecker {
  *   同一對只能開跑一次。
  * - **送出佇列**（`inbox/spliced`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）**不重設**：佇列本來就跨行程活著，
  *   一顆合規與否要對著從檔頭折起的清單判，檢的是範圍超出與 id 重複。
+ * - **請求快照**（`request/system`、`request/header`，格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：帶 `modelCall`
+ *   的是 54 以前的形狀，只檢它指得到 `model/start`。不帶的是 55 的形狀，歸屬看位置，所以兩條：要落在開著的輪內；落在任何開著的
+ *   呼叫之外的，這一輪收工之前要等到一顆 `model/start`，等不到就是寫丟了它那次呼叫。**被 `interrupted` 收掉的輪不檢第二條**：
+ *   行程死在快照落盤之後、`model/start` 落盤之前（兩顆同一批排空，批寫到一半就斷），續接補結的就是那一輪（`interrupted-turn.ts`）。輪內那條同核准稽核，只在出現過
+ *   `turn/start` 的日誌上判：子代理的日誌沒有 `turn/*`，第二條在那裡也就沒有收工點可檢。
+ * - **作廢的嘗試**（`assistant/attempt`）要落在開著的輪內；帶 `modelCall` 的，那次呼叫要已經以 `error` 或 `aborted` 收尾。跟下一次嘗試的
+ *   `model/start` 誰先誰後不檢：pump 在圖外收通知，下一次嘗試在圖裡照跑。
  *
  * 不認得的事件種類不解讀，歸它們自己的擁有者。
  *
@@ -110,6 +121,12 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
   const scheduledRetries = new Set<string>();
   /** 從檔頭折起的送出佇列。**跨 `session/end-seed` 不重設**。 */
   let inbox: InboxState = EMPTY_INBOX;
+  /** 以 `error` 或 `aborted` 收尾的呼叫（`model/end` 帶的 `modelCall`）。跨 `session/end-seed` 不清，理由同 `startSeqs`。 */
+  const failedCalls = new Set<number>();
+  /**
+   * 這一輪裡第一顆還沒等到 `model/start` 的 55 形狀快照的 `seq`。跟著輪走：帶過去的輪照帶，接手那一顆 `turn/start` 清。
+   */
+  let danglingSnapshot: number | undefined;
 
   const accept = (event: SessionEvent): readonly SessionRelationshipViolation[] => {
     const { seq } = event;
@@ -143,6 +160,37 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
       case 'model/start': {
         openModelCalls += 1;
         startSeqs.add(seq);
+        danglingSnapshot = undefined;
+        break;
+      }
+      case 'request/system':
+      case 'request/header': {
+        if (field(event, 'modelCall') !== undefined) {
+          checkModelCall();
+          break;
+        }
+        if (hasTurns && !open) {
+          report('request-outside-turn', `${event.type}（seq ${seq}）落在任何開著的輪之外`);
+        }
+        if (openModelCalls === 0 && danglingSnapshot === undefined) danglingSnapshot = seq;
+        break;
+      }
+      case 'assistant/attempt': {
+        checkModelCall();
+        if (!open) {
+          report('attempt-outside-turn', `assistant/attempt（seq ${seq}）落在任何開著的輪之外`);
+        }
+        const modelCall = field(event, 'modelCall');
+        if (
+          typeof modelCall === 'number' &&
+          startSeqs.has(modelCall) &&
+          !failedCalls.has(modelCall)
+        ) {
+          report(
+            'attempt-before-failed-end',
+            `assistant/attempt（seq ${seq}）指的那次呼叫（model/start seq ${modelCall}）還沒以 error 或 aborted 收尾`,
+          );
+        }
         break;
       }
       case 'model/usage':
@@ -178,6 +226,11 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
       }
       case 'model/end': {
         checkModelCall();
+        const ended = field(event, 'modelCall');
+        const outcome = field(event, 'outcome');
+        if (typeof ended === 'number' && (outcome === 'error' || outcome === 'aborted')) {
+          failedCalls.add(ended);
+        }
         if (openModelCalls === 0) {
           report('model-end-without-start', `model/end（seq ${seq}）前面沒有開著的 model/start`);
         } else {
@@ -213,6 +266,7 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
           carried = false;
           pendingCalls.clear();
           openModelCalls = 0;
+          danglingSnapshot = undefined;
         }
         open = true;
         hasTurns = true;
@@ -221,6 +275,15 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
       case 'turn/end':
       case 'turn/failed': {
         if (!open) report('turn-not-open', `${event.type}（seq ${seq}）關了一個沒有開著的輪`);
+        const reason = field(event, 'reason');
+        const interrupted = isRecord(reason) && reason['kind'] === 'interrupted';
+        if (danglingSnapshot !== undefined && !(event.type === 'turn/end' && interrupted)) {
+          report(
+            'request-without-model-start',
+            `請求快照（seq ${danglingSnapshot}）之後到 ${event.type}（seq ${seq}）都沒有 model/start`,
+          );
+        }
+        danglingSnapshot = undefined;
         open = false;
         carried = false;
         break;

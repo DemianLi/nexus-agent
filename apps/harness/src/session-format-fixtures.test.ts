@@ -45,6 +45,8 @@ import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 import { historyFrames } from './conversation-history.js';
 import { imageOffloadCalls } from './image-offload-calls.fixture.js';
 import type { ImageOffloadCall } from './image-offload-calls.fixture.js';
+import { attemptCalls, requestSnapshotCalls } from './request-snapshot-calls.fixture.js';
+import type { AttemptCall, RequestSnapshotCall } from './request-snapshot-calls.fixture.js';
 import { ratingsByTurn } from './eval/session-scan.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import {
@@ -104,6 +106,8 @@ interface Expected {
     readonly subagent?: boolean;
     readonly profile?: string;
     readonly pageContexts?: readonly (string | null)[];
+    readonly snapshotCalls?: readonly RequestSnapshotCall[];
+    readonly attemptCalls?: readonly AttemptCall[];
   }[];
 }
 
@@ -476,6 +480,13 @@ describe.each(names)('夾具 %s', (name) => {
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
       }
+      // 打得開就是讀盤的關係驗證（55 起的快照與嘗試位置規則）讀得過；歸屬再逐筆比。
+      if (trigger.snapshotCalls !== undefined) {
+        expect(requestSnapshotCalls(events)).toEqual(trigger.snapshotCalls);
+      }
+      if (trigger.attemptCalls !== undefined) {
+        expect(attemptCalls(events)).toEqual(trigger.attemptCalls);
+      }
       if (trigger.imageOffloadCalls !== undefined) {
         const calls = imageOffloadCalls(events);
         expect(calls).toEqual(trigger.imageOffloadCalls);
@@ -597,6 +608,7 @@ describe('規則（驗收 D）', () => {
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
       [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
       [52, "if (site.layout === 'two-file') {"],
+      [55, "if (field(event, 'modelCall') !== undefined) {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);

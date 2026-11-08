@@ -223,9 +223,9 @@ describe('todo_write 在真的圖上', () => {
     // 呼叫記的那一對工具事件（#264），以及前後兩次模型呼叫的起訖（#266）與量測（#528）。
     expect(todosIn(sessions.root.events)).toEqual([]);
     expect(sessions.root.events.map((event) => event.type)).toEqual([
-      'model/start',
       'request/system',
       'request/header',
+      'model/start',
       'assistant/message',
       'model/end',
       'context/measure',

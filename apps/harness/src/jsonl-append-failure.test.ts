@@ -368,7 +368,7 @@ describe('F 走協調器的整條路', () => {
 
     fault.writeThrowsAfter = 12;
     log.append('turn/start', { kind: 'message', text: 'p' });
-    log.append('turn/end', { reason: 'completed' } as never);
+    log.append('turn/end', {});
     await vi.waitFor(() => {
       expect(warn).toHaveBeenCalledTimes(1);
     });

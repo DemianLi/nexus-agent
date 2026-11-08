@@ -325,6 +325,18 @@ interface CallAt {
   readonly call: number;
 }
 
+/**
+ * 還沒收尾的那次呼叫。格式 55 起的快照不帶 `modelCall`，寫在 `model/start` 之前，由 {@link startCall} 帶進下一次呼叫；
+ * 落在開著的呼叫裡的，是同一次呼叫裡重送的那一份，歸這一次。
+ */
+function openCallOf(state: TrajectoryState): CallAt | undefined {
+  const t = state.turns.length - 1;
+  const calls = state.turns[t]?.calls;
+  const last = calls?.at(-1);
+  if (calls === undefined || last === undefined || last.endTime !== undefined) return undefined;
+  return { turn: t, call: calls.length - 1 };
+}
+
 /** 在窗口裡由新到舊找一次呼叫。窗口外（已成摘要）的找不到——遲到的事件靜靜丟掉。 */
 function locateCall(state: TrajectoryState, id: number): CallAt | undefined {
   for (let t = state.turns.length - 1; t >= 0; t -= 1) {
@@ -1103,7 +1115,7 @@ function noteSnapshot(
   }
   const next: TrajectoryState = { ...state, [which]: event.seq, model };
   const at =
-    typeof data['modelCall'] === 'number' ? locateCall(next, data['modelCall']) : undefined;
+    typeof data['modelCall'] === 'number' ? locateCall(next, data['modelCall']) : openCallOf(next);
   if (at === undefined) return next;
   return updateCall(next, at, (call) => ({
     ...call,

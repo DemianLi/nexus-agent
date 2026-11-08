@@ -6,8 +6,8 @@
  * 計數做法同 `summarizer-cell.test.ts`：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層
  * `AsyncLocalStorage`，沒有那一層就是經 `wrapModelCall`。哪一邊照 state 的第一則訊息分。
  *
- * 起訖紀錄器用 `AsyncLocalStorage` 把這次呼叫的識別往內帶（`model-call-scope.ts` 的 `runInModelCall`）：最後一條比對兩個 loop
- * 的 root 日誌，用量、回覆與請求快照指到的 `model/start` 要相同。
+ * 起訖紀錄器用 `AsyncLocalStorage` 把這次呼叫的範圍往內帶（`model-call-scope.ts` 的 `openModelCall`）：最後兩條比對兩個 loop
+ * 的 root 日誌，用量與回覆指到的 `model/start` 要相同；請求快照（格式 55 起不帶識別）看位置，歸給它之後的第一顆 `model/start`。
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -134,6 +134,15 @@ function attribution(root: Awaited<ReturnType<typeof run>>['root']) {
   });
 }
 
+/** root 日誌上的請求快照：型別與它之後的第一顆 `model/start` 是第幾次（從 0 數），格式 55 起看位置。 */
+function snapshotOwners(root: Awaited<ReturnType<typeof run>>['root']) {
+  const starts = root.events.filter((event) => event.type === 'model/start');
+  return root.events.flatMap((event) => {
+    if (!event.type.startsWith('request/')) return [];
+    return [`${event.type} → ${starts.findIndex((start) => start.seq > event.seq)}`];
+  });
+}
+
 describe('native 模型那一串只記錄的七格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
   it('每一格 root 三次都由 native 直接呼叫，子代理兩次都經 wrapModelCall', async () => {
     const { messages } = await run('native');
@@ -168,5 +177,19 @@ describe('native 模型那一串只記錄的七格：root 由 native 原位呼�
       expect(native).toContain(`model/end → ${index}`);
     }
     expect(native.some((line) => line.endsWith('→ -1'))).toBe(false);
+  });
+
+  it('格式 55：第一顆 request/* 在 model/start 之前，快照照位置歸給同一次，兩個 loop 相同', async () => {
+    const nativeRoot = (await run('native')).root;
+    const langgraphRoot = (await run('langgraph')).root;
+    for (const root of [nativeRoot, langgraphRoot]) {
+      const types = root.events.map((event) => event.type);
+      expect(types.findIndex((type) => type.startsWith('request/'))).toBeLessThan(
+        types.indexOf('model/start'),
+      );
+    }
+    const native = snapshotOwners(nativeRoot);
+    expect(native).toEqual(snapshotOwners(langgraphRoot));
+    expect(native).toEqual(['request/system → 0', 'request/header → 0']);
   });
 });

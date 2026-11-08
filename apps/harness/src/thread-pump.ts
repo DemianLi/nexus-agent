@@ -3417,7 +3417,7 @@ export class ThreadPump {
   }
 
   /**
-   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
    *
    * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
@@ -3442,7 +3442,6 @@ export class ThreadPump {
       this.#sessions.root.append(
         'assistant/attempt',
         withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
-        { ignorable: true },
       );
     } catch (error: unknown) {
       // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
@@ -3453,8 +3452,8 @@ export class ThreadPump {
       // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
       // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
       // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
-      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。這一顆 `ignorable`、不進模型歷史，吞掉不會
-      // 讓 state 與日誌分岔，只是少了作廢那半段的紀錄。
+      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。它不進模型歷史，吞掉不會讓 state 與日誌
+      // 分岔，只是少了作廢那半段的紀錄。
       // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
       this.#warn?.(
         `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,

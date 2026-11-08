@@ -81,6 +81,10 @@ describe('形狀不對的 data 不拋（讀盤只驗過信封）', () => {
       'llm/retry-started',
       'inbox/spliced',
       'turn/start',
+      'request/system',
+      'request/header',
+      'assistant/attempt',
+      'turn/end',
     ]) {
       expect(() => violationsOf([{ type, data }])).not.toThrow();
     }
@@ -101,5 +105,101 @@ describe('形狀不對的 data 不拋（讀盤只驗過信封）', () => {
         (v) => v.rule,
       ),
     ).toEqual(['model-call-unknown']);
+  });
+});
+
+describe('請求快照與作廢嘗試的位置（格式 55，#2416）', () => {
+  const system = { type: 'request/system', data: { system: '', reason: 'initial' } };
+  const header = { type: 'request/header', data: { header: { config: {} }, reason: 'initial' } };
+  const end = (outcome?: string, modelCall = 2) => ({
+    type: 'model/end',
+    data: { modelCall, ...(outcome === undefined ? {} : { outcome }) },
+  });
+  const turnEnd = (reason?: unknown) => ({
+    type: 'turn/end',
+    data: reason === undefined ? {} : { reason },
+  });
+  const attempt = (modelCall?: number) => ({
+    type: 'assistant/attempt',
+    data: { message: {}, ...(modelCall === undefined ? {} : { modelCall }) },
+  });
+  const rules = (events: Parameters<typeof violationsOf>[0]) =>
+    violationsOf(events).map((v) => [v.seq, v.rule]);
+
+  it('55 的形狀：快照 → model/start → … → 收工，沒有違規；同一次呼叫裡重送的快照落在 model/start 之後也收', () => {
+    expect(
+      rules([turnStart, system, header, modelStart, header, end(undefined, 3), turnEnd()]),
+    ).toEqual([]);
+  });
+
+  it('快照之後等不到 model/start 就收工：報在快照上那一顆的 seq', () => {
+    expect(rules([turnStart, system, header, turnEnd()])).toEqual([
+      [3, 'request-without-model-start'],
+    ]);
+    expect(rules([turnStart, system, { type: 'turn/failed', data: { message: 'x' } }])).toEqual([
+      [2, 'request-without-model-start'],
+    ]);
+  });
+
+  it('被 interrupted 收掉的輪不檢「等不到 model/start」：行程在快照之後死掉', () => {
+    expect(rules([turnStart, system, header, turnEnd({ kind: 'interrupted' })])).toEqual([]);
+    // 別的收尾理由照檢。
+    expect(
+      rules([turnStart, system, turnEnd({ kind: 'aborted', cause: { kind: 'user' } })]),
+    ).toEqual([[2, 'request-without-model-start']]);
+  });
+
+  it('輪外的快照：有輪的日誌報 request-outside-turn；從沒有輪的日誌（子代理）不報', () => {
+    expect(rules([turnStart, turnEnd(), system, modelStart])).toEqual([
+      [2, 'request-outside-turn'],
+    ]);
+    expect(rules([system, header, modelStart, end(undefined, 2)])).toEqual([]);
+  });
+
+  it('54 的形狀（帶 modelCall）：只檢它指得到 model/start，位置不管', () => {
+    const legacy = (modelCall: number) => ({
+      type: 'request/system',
+      data: { system: '', reason: 'initial', modelCall },
+    });
+    expect(rules([turnStart, modelStart, legacy(1), end(undefined, 1), turnEnd()])).toEqual([]);
+    expect(rules([turnStart, modelStart, legacy(7), end(undefined, 1), turnEnd()])).toEqual([
+      [2, 'model-call-unknown'],
+    ]);
+  });
+
+  it('帶過去的輪由下一顆 turn/start 接手：上一個行程留下的快照不算這一輪的', () => {
+    expect(
+      rules([
+        turnStart,
+        system,
+        { type: 'session/end-seed', data: {} },
+        turnStart,
+        modelStart,
+        end(undefined, 4),
+        turnEnd(),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('作廢的嘗試落在失敗收尾之後：error 與 aborted 都收；不帶 modelCall 的只檢在輪內', () => {
+    expect(rules([turnStart, system, modelStart, end('error'), attempt(2), turnEnd()])).toEqual([]);
+    expect(rules([turnStart, system, modelStart, end('aborted'), attempt(2), turnEnd()])).toEqual(
+      [],
+    );
+    expect(rules([turnStart, attempt(), turnEnd()])).toEqual([]);
+  });
+
+  it('作廢的嘗試在它那次呼叫失敗收尾之前、或那次正常收尾：attempt-before-failed-end', () => {
+    expect(rules([turnStart, system, modelStart, attempt(2), end('error'), turnEnd()])).toEqual([
+      [3, 'attempt-before-failed-end'],
+    ]);
+    expect(rules([turnStart, system, modelStart, end(), attempt(2), turnEnd()])).toEqual([
+      [4, 'attempt-before-failed-end'],
+    ]);
+  });
+
+  it('作廢的嘗試落在輪外：attempt-outside-turn；指不到 model/start：model-call-unknown', () => {
+    expect(rules([attempt()])).toEqual([[0, 'attempt-outside-turn']]);
+    expect(rules([turnStart, attempt(9), turnEnd()])).toEqual([[1, 'model-call-unknown']]);
   });
 });

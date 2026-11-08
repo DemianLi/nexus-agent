@@ -649,10 +649,12 @@ export function foldRegistry(
       ? undefined
       : createStreamRetryMiddleware(options.streamRetry, registry.sessions);
   // 請求快照（#1020）：同上，無狀態、一份走遍；基準住在日誌上。排在最內層，見 {@link ./request-snapshot.ts}。
-  const requestSnapshot = createRequestSnapshotRecorder(registry.sessions);
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
-  // 理由見 {@link foldMiddleware}。
+  // 理由見 {@link foldMiddleware}。快照送出前的那次排空跟著它開關。
   const sessionCheckpoint = foldSessionCheckpoint(registry);
+  const requestSnapshot = createRequestSnapshotRecorder(registry.sessions, {
+    flushBeforeDispatch: sessionCheckpoint !== undefined,
+  });
   const sessionCheckpointListener =
     sessionCheckpoint === undefined
       ? undefined
@@ -906,7 +908,8 @@ export function foldRegistry(
     // 空回覆算失敗（#1437）：在起訖內側（失敗那次不記 `assistant/message`）、用量外側（用量照記）。
     shared('emptyResponse', emptyResponse),
     shared('modelUsage', modelUsage),
-    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，排的是記好的請求前綴；在其餘 plugin
+    // 耐久檢查點排在起訖紀錄器內側，排的是這一步之前記好的事件（`model/start` 還沒寫：它跟請求快照在送出前另排空一次，
+    // 見 {@link ./request-snapshot.ts}）；在其餘 plugin
     // middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次。子代理的模型呼叫排空的是子代理那一份日誌。
     // 工具那一側是 `tools/execute` 外層的那一位（下面 `toolExecute` 那一格）；圍堵在它外側先記 `tool/call`（有 `callId`、找得到日誌時）。
     // 見 {@link ./session-checkpoint-policy.ts}。

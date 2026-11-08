@@ -176,7 +176,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 29,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'packages/nexus-core/src/session-relationships.ts:230',
+    readerBranch: 'packages/nexus-core/src/session-relationships.ts:293',
   },
   { from: 29, to: 30, kind: 'additive', ref: '#1025' },
   { from: 30, to: 31, kind: 'additive', ref: '#1023' },
@@ -222,7 +222,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:841',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:861',
   },
   {
     from: 51,
@@ -233,6 +233,13 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
   },
   { from: 52, to: 53, kind: 'additive', ref: '#2367' },
   { from: 53, to: 54, kind: 'additive', ref: '#2370' },
+  {
+    from: 54,
+    to: 55,
+    kind: 'additive',
+    ref: '#2416',
+    readerBranch: 'packages/nexus-core/src/session-relationships.ts:168',
+  },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */
