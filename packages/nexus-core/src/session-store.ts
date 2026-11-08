@@ -669,8 +669,28 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：53 以前沒有這兩格，等於沒有擁有者：嵌入身分打不開，主機擁有者照開。續接改寫 header 時只動 `version`，不補。
  * **回滾的後果**同 52：被 54 碰過的 thread，53 的 runtime 以格式太新拒讀。
+ *
+ * ## 55：請求快照排到 `model/start` 之前，`turn/end` 認得 `max-turns`
+ *
+ * [#2416](https://github.com/DemianLi/nexus-agent/issues/2416)：
+ * - `request/system`、`request/header` 寫在它那次呼叫的 `model/start` **之前**，不帶 `modelCall`、不標 `ignorable`；屬於哪一次看位置
+ *   （之後的第一顆 `model/start`）。`model/start` 等到第一個要它的地方才寫，見 `model-call-scope.ts` 檔頭。
+ * - `assistant/attempt` 不標 `ignorable`，位置與觸發條件不變。
+ * - `turn/end` 的 `reason` 多一種 `{kind:'max-turns'}`（讀得懂，還沒有生產者），寫入與讀盤都驗 `reason` 的形狀（`session-log.ts` 的
+ *   `validateTurnEndReason`）。
+ *
+ * 非升不可的是 `max-turns`：54 的讀方認不得的收尾理由一律當成正常完成——軌跡與 token-meter 的 `endOf` 落到 `default`（token-meter
+ * 那一輪記過暫停的話是 `paused`），對話史畫成完成、那一輪記過 `interrupt/raised` 的話畫成停在核准點等人；#2359 會在 55 之下寫它，
+ * 之後不再為它升版，所以要讓 54 的讀方以格式太新拒讀，不靜靜讀錯。寫入與讀盤都驗 `reason` 也是為了同一件事。快照與嘗試的位置
+ * 單看不必升：54 的軌跡與 token-meter 讀不帶 `modelCall` 的快照照樣歸對（軌跡把最近一份記在狀態上、下一次呼叫開時帶走；token-meter
+ * 在 `model/end` 當下讀最近一份 header），`assistant/attempt` 的種類 54 認得、拿掉 `ignorable` 不影響它。
+ *
+ * **讀舊檔**：54 以前的檔直接讀。讀快照的一方看有沒有 `modelCall` 分新舊（帶的照舊歸給它指的那次）；讀盤的關係檢查對兩種形狀各判各的
+ * （`session-relationships.ts`）。54 以前寫得出的 `turn/end` 理由（不帶、`aborted`、`max-tokens`、`blocked`、`interrupted`）都在驗證認得的
+ * 範圍裡，照驗。
+ * **回滾的後果**同 52：被 55 碰過的 thread，54 的 runtime 以格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 54;
+export const SESSION_LOG_FORMAT_VERSION = 55;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

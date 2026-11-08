@@ -4,7 +4,7 @@
     {
       "key": "SessionHeader",
       "kind": "header",
-      "digest": "96bd0f041fb2f4aec011aa1efde651187eff546fc48286ad538a4db0aa561daa",
+      "digest": "c23241c37cc35eae25c73173ec39370bd96086793b5dc04cc49185fff01fa694",
       "schema": {
         "root": 0,
         "nodes": [
@@ -201,7 +201,7 @@
           },
           {
             "kind": "literal",
-            "value": 54
+            "value": 55
           }
         ]
       }
@@ -209,7 +209,7 @@
     {
       "key": "JsonlHeaderLine",
       "kind": "header",
-      "digest": "9b58747b97c44275d593e33f8c76451e79da95c93458ccb258df9ea0d2989d67",
+      "digest": "14f9bedc96f1450e500a8d5992044fadc3abb856816d3e8217088c8a87de15d7",
       "schema": {
         "root": 0,
         "nodes": [
@@ -441,7 +441,7 @@
           },
           {
             "kind": "literal",
-            "value": 54
+            "value": 55
           }
         ]
       }
@@ -5905,7 +5905,7 @@
       "kind": "event",
       "event": "turn/end",
       "surface": false,
-      "digest": "560df94130c71b659aa2354e4b5130f822f9fc023f48fee6cbb34d39f7ca5a7b",
+      "digest": "faedc6dc8eb7cbf70b93fddef8c04f743f68877a0a3e4b0778ac6d12e6c20428",
       "schema": {
         "root": 0,
         "nodes": [
@@ -5919,22 +5919,22 @@
               },
               {
                 "name": "ignorable",
-                "type": 19,
+                "type": 21,
                 "optional": true
               },
               {
                 "name": "seq",
-                "type": 20,
+                "type": 22,
                 "optional": false
               },
               {
                 "name": "time",
-                "type": 20,
+                "type": 22,
                 "optional": false
               },
               {
                 "name": "type",
-                "type": 21,
+                "type": 23,
                 "optional": false
               }
             ],
@@ -5957,7 +5957,8 @@
               3,
               13,
               15,
-              17
+              17,
+              19
             ]
           },
           {
@@ -5980,7 +5981,7 @@
             "kind": "union",
             "types": [
               5,
-              8,
+              7,
               10
             ]
           },
@@ -5991,10 +5992,25 @@
                 "name": "kind",
                 "type": 6,
                 "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 8,
+                "optional": false
               },
               {
                 "name": "reason",
-                "type": 7,
+                "type": 9,
                 "optional": false
               }
             ],
@@ -6013,21 +6029,6 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 9,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "parent"
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "kind",
                 "type": 11,
                 "optional": false
               }
@@ -6036,7 +6037,7 @@
           },
           {
             "kind": "literal",
-            "value": "user"
+            "value": "parent"
           },
           {
             "kind": "literal",
@@ -6086,6 +6087,21 @@
           {
             "kind": "literal",
             "value": "max-tokens"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 20,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "max-turns"
           },
           {
             "kind": "literal",
@@ -7314,21 +7330,21 @@
       "digest": "00e48d103633cb22f81bf38b9c4882ed15493afe73e2f738a344d59eb88173e2",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:778"
+        "packages/nexus-core/src/session-log.ts:784"
       ]
     },
     {
       "digest": "0449d2c1a11097c8362ad7e19d426efcc5f158ce7a12e3b5a2b7934255b9cd66",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:543"
+        "packages/nexus-core/src/session-log.ts:547"
       ]
     },
     {
       "digest": "04b6f40c567154ea53d65d4a06882da212d158c30fa58a8ea92fe791c8cdf047",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:894"
+        "packages/nexus-core/src/session-log.ts:902"
       ]
     },
     {
@@ -7385,14 +7401,14 @@
       "digest": "0d2720e89f07b8c0aff1363e57c66b15356dcf70ab3561bea82bbf2054112cee",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "103dc14ad4179a892386a0b3a7e4ee80672501b55d4cd8482d726f5739ea2518",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7430,7 +7446,7 @@
       "digest": "13afaca2ef2b10644ddefb070647a562b0bb31ba8bd2c4b3264ad3cf2eb28864",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:758"
+        "packages/nexus-core/src/session-log.ts:762"
       ]
     },
     {
@@ -7444,14 +7460,23 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestConfig"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:150"
+        "packages/nexus-core/src/request-snapshot.ts:168"
+      ]
+    },
+    {
+      "digest": "14f9bedc96f1450e500a8d5992044fadc3abb856816d3e8217088c8a87de15d7",
+      "names": [
+        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
+      ],
+      "sources": [
+        "apps/harness/src/jsonl-session-store.ts:573"
       ]
     },
     {
       "digest": "1630d387d4cb5af25b307b25d1caa5ef402078c977397b2640535209a5b2f346",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:698"
+        "packages/nexus-core/src/session-log.ts:702"
       ]
     },
     {
@@ -7482,14 +7507,14 @@
       "digest": "1e1c35d03c129bbdb663cd411431185d2670e4377096c4fd3adcaae4c03925b8",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "1ece56332fab8cb84493c6583e2ae11aaf3acd43101ffc823b12c11a4bf64259",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:747"
+        "packages/nexus-core/src/session-log.ts:751"
       ]
     },
     {
@@ -7519,14 +7544,14 @@
       "digest": "20d009a9d3d8202e68b7d006eb8e26000534b20c1bf375ddfe729b1e63dcec02",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "2187ed08d62b636eed42674cc2376d2d91b4855174f4bd5e68bfe6d0aa4a86aa",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:830"
+        "packages/nexus-core/src/session-log.ts:838"
       ]
     },
     {
@@ -7542,7 +7567,7 @@
       "digest": "244dbff07648bba800ef7d9c6f819b54fe0f0752a0583b911eee168ea2c8fa0d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7568,13 +7593,8 @@
       "digest": "26833d34e07d376c6a2bd21cbb1cd2671e63c076d6dec6bc9e78f192695d93d3",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
-    },
-    {
-      "digest": "28c36624c215448a4c0b02511cdc1a01d31006cb46693e2bf8c88edff9339057",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "2974ed3fa606e8af535dfe3531501fcf30267c89f3c6a7ad839ce42a77fd2caf",
@@ -7585,7 +7605,7 @@
       "digest": "29a3062425c7534df445dd3edcf1aebb6a6761daaadc53fe6e440909d244cb76",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7616,21 +7636,21 @@
       "digest": "2d3dabed3152115b860f980810068d8baa1978b3cd88ec7dfcba03051e999d41",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "2d78ab9620754902e3d5458f776293138edc3cb69d091365f5b0e5609668ecae",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "2e090119c24e7524b02a177de69fc41e092d4ca1ec40f4b7a79e4d93e8cdf769",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:966"
+        "packages/nexus-core/src/session-log.ts:974"
       ]
     },
     {
@@ -7669,10 +7689,15 @@
       "sources": []
     },
     {
+      "digest": "349cb930266f0a626969cb94b512ada52dd1b33dde2f28fdc241dde90e4b5605",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "363fbac0050a27f87a2aa81e5b73ad8889ec3dee969fc89b589444bc0bdd10c0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7688,7 +7713,7 @@
       "digest": "38313ef65c9df3616bf507a75f7043c2edbac1730ae2b6d035461492caa112df",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:661"
+        "packages/nexus-core/src/session-log.ts:665"
       ]
     },
     {
@@ -7704,7 +7729,7 @@
       "digest": "3a1db36b8232545cf78fb5cc8b8f4df22a1a4d6e07206d80cb64da40d3a0c9ff",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7716,21 +7741,21 @@
       "digest": "3c31a638acc2ab09b7a87b0b037c81be8d49f2f40aa5ef120812022e57f0adea",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1109"
+        "packages/nexus-core/src/session-log.ts:1117"
       ]
     },
     {
       "digest": "3d1cf966423bf2b390fabe2efbfe34194968fc342e597bed74ae6b595ae5b473",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:505"
+        "packages/nexus-core/src/session-log.ts:509"
       ]
     },
     {
       "digest": "4094ff354433fb29c7af1f1d2756dee3b00db99f9425d9d4a043a3d45e3a5e36",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1451"
+        "packages/nexus-core/src/session-log.ts:1459"
       ]
     },
     {
@@ -7776,7 +7801,7 @@
       "digest": "4658006180707225ea21a3764eb07cabcd388c36e533083d131c1877e10a71b6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7788,21 +7813,21 @@
       "digest": "46c2b6c4d5dbc4271ebe4ef5ec5209ddfc5b267bbe354fc87ce9c5bb3bc70e16",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "47639d5613e9a68ab31f2939096c04c0f7631b5ffad93f500fdb41091a097411",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:426"
+        "packages/nexus-core/src/session-log.ts:430"
       ]
     },
     {
       "digest": "477291c0f5e37c0b04a2da90de6ddecc62b069f58c994de6933cc6fda672fdb4",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7823,7 +7848,7 @@
       "digest": "4aa70134429ca16499c0df9dec90ea71cc08106c613fbfd2e727202dbc570da2",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7839,6 +7864,13 @@
       "digest": "4ae5c341d865890b71a9227c14ccbf3b9c029f402965d7561a217791ac48310d",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "4ba769eed21c9e0dae9799b6d10a702adbee81d8dd9d4dcb9edd2009a643b015",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:236"
+      ]
     },
     {
       "digest": "4d1cdc9d4b568a6a61061ff52f9916d9c4af59528bd13317633bff6a1636320b",
@@ -7881,14 +7913,14 @@
       "digest": "5343d0aadb5fc0080dcb9edba251610cdfde89ae79ed629d6a52369b96bc776c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:870"
+        "packages/nexus-core/src/session-log.ts:878"
       ]
     },
     {
       "digest": "538e8474f6b59eea70bf4b80e18c13cbb910e2924575a7e5506684966a573000",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:386"
+        "packages/nexus-core/src/session-log.ts:390"
       ]
     },
     {
@@ -7897,21 +7929,14 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionBuild"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:681"
+        "packages/nexus-core/src/session-store.ts:701"
       ]
     },
     {
       "digest": "552ee49e52c11df19b41e74647becb8adc8e8ee1e167631fcfa9a18a52bf33d0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
-      ]
-    },
-    {
-      "digest": "560df94130c71b659aa2354e4b5130f822f9fc023f48fee6cbb34d39f7ca5a7b",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7923,7 +7948,7 @@
       "digest": "56af1dd63d02bb41d1b26d5735fe079c5e36e119da2d33c602d86fc8813047a9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7937,7 +7962,7 @@
       "digest": "575e4c1377d9b31802e69a38bb96248065397e05af6d0818a78c4758dd069835",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7949,7 +7974,7 @@
       "digest": "57b3f3db0c978e9b8b1df770ee90d520df15558c438cc4ffbfbaf163c2e33ce5",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7961,7 +7986,7 @@
       "digest": "59c29e2a970325ea7b9fdf41f4c329f6e9f186957d1f12c4e82690cf45f0fd8a",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7973,14 +7998,14 @@
       "digest": "5a93e368c61210defa821ea3979f699fb94b1127184b14ef37c7791774f69c24",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:371"
+        "packages/nexus-core/src/session-log.ts:375"
       ]
     },
     {
       "digest": "5b44009b73d65cc51f868a8e0875a7d9a6a0c6c9c261e67830e84a08313c4644",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -7996,7 +8021,7 @@
       "digest": "5d28ab79ee2bbcc1b02930177e71984e97ccddcce3b3f0aa26b62f95145ca10f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1279"
+        "packages/nexus-core/src/session-log.ts:1287"
       ]
     },
     {
@@ -8012,7 +8037,7 @@
       "digest": "5ee0e1c632983a170547d0eb214bb74adfa1e95e5fc8cd600de9bf2efd1bd77d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:580"
+        "packages/nexus-core/src/session-log.ts:584"
       ]
     },
     {
@@ -8029,7 +8054,7 @@
       "digest": "5f3b74a932e5979052c7a3a3d7a676979f3a80871d0b1065db21e86852ed8a01",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1062"
+        "packages/nexus-core/src/session-log.ts:1070"
       ]
     },
     {
@@ -8061,7 +8086,7 @@
       "digest": "6583c61555b2abaab85d0b31f5edcd998a25dcc6477a4fe705a3a247c21c5648",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:736"
+        "packages/nexus-core/src/session-log.ts:740"
       ]
     },
     {
@@ -8084,7 +8109,7 @@
       "digest": "66d9aeeb2176131221e636ac440e02b78c3cf171a2949e189754a93bc0cb207e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8100,7 +8125,7 @@
       "digest": "67a5d3e4f7ef1db7980ddbe236264bb094e34ba15e235098da5981f0e6043908",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8150,14 +8175,14 @@
       "digest": "6b5566a03f01edb2a4819ac08315632ff0e0ea12b7e6cb88f0b049bb9a6a3427",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1156"
+        "packages/nexus-core/src/session-log.ts:1164"
       ]
     },
     {
       "digest": "6ba34f5b6935c84aed499079ec749800e3e350f1433078b04d9b89fa95ab55b8",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:485"
+        "packages/nexus-core/src/session-log.ts:489"
       ]
     },
     {
@@ -8183,7 +8208,7 @@
       "digest": "6d9822a08de29960dfba096b8244ae846c09c3d0e176bee753f901d2a34c512c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8204,7 +8229,7 @@
       "digest": "6eea28afdf064f0382681d2b3f7ff22e177e598ad4461627466194427836475e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8226,7 +8251,7 @@
       "digest": "74585b8ee1364035461dc3731b81c779712f543d75d32786e79a708c72c6cc01",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8243,7 +8268,7 @@
       "digest": "78d8c22a038fd8714e31156fb5eae3b1b4c129484edbd6d211b33e70da79c193",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8299,7 +8324,7 @@
       "digest": "7e04c01aa7a3f73c7b65533397a9de2cabddb4dc2abd1180bfac9b1b312e817f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1217"
+        "packages/nexus-core/src/session-log.ts:1225"
       ]
     },
     {
@@ -8320,6 +8345,11 @@
       "sources": [
         "packages/nexus-core/src/todo.ts:40"
       ]
+    },
+    {
+      "digest": "821a2b4a6d0987294300cb82b5864c95d3e9b53310bdde9440cfc684248dc909",
+      "names": [],
+      "sources": []
     },
     {
       "digest": "8257b77f4c36a70076c12f3623cf51d34b637ba57b0ef7ad12def4938baaa5f4",
@@ -8353,11 +8383,16 @@
       "digest": "835bc5eec7b4c22c2212dac42c884731ea203c6b0ee0e0feaf9accbdfe6fe84f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1131"
+        "packages/nexus-core/src/session-log.ts:1139"
       ]
     },
     {
       "digest": "836290b1931b1742e8179f16fe288eed306a4735cbc7e8b5e10578846504cbd2",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "83bbb71548a7c78d2880bd29ee23395752ce4e96ecbf8418006c391f9de807b5",
       "names": [],
       "sources": []
     },
@@ -8367,7 +8402,7 @@
         "packages/nexus-core/src/session-log.ts#UserMessageSource"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:338"
+        "packages/nexus-core/src/session-log.ts:342"
       ]
     },
     {
@@ -8393,7 +8428,7 @@
       "digest": "85a5bab3a2d4270b4a842900dbb938f3591ac999e512d26a65373caa38bbc10c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:471"
+        "packages/nexus-core/src/session-log.ts:475"
       ]
     },
     {
@@ -8405,7 +8440,7 @@
       "digest": "862a004b959bb3ca00be41584a0fe738522f696af131ba91a5e14efc0c48884f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:283"
+        "packages/nexus-core/src/session-log.ts:287"
       ]
     },
     {
@@ -8434,7 +8469,7 @@
         "packages/nexus-core/src/session-store.ts#SessionHeaderBuildMetadata"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:724"
+        "packages/nexus-core/src/session-store.ts:744"
       ]
     },
     {
@@ -8467,7 +8502,7 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/session-log.ts:194",
-        "packages/nexus-core/src/session-log.ts:284",
+        "packages/nexus-core/src/session-log.ts:288",
         "packages/nexus-plugin-commands/src/index.ts:456"
       ]
     },
@@ -8484,7 +8519,7 @@
       "digest": "8ce7d58ecb2675c0ad02d1513108e397327ef44bcf36655a3586c64266ba1527",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8496,7 +8531,7 @@
       "digest": "90cf7a34c5c388f3e2b83b68a3a17107014003ce01090f59cfd0c2fbc909a4e6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:807"
+        "packages/nexus-core/src/session-log.ts:815"
       ]
     },
     {
@@ -8508,7 +8543,7 @@
       "digest": "9208c016a6f294e1b938cdda50232c7a72c220f668aa23ba0c8743e69159f279",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8528,29 +8563,20 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/inbox.ts:56",
-        "packages/nexus-core/src/session-log.ts:349"
+        "packages/nexus-core/src/session-log.ts:353"
       ]
     },
     {
       "digest": "95821133a709b653adf5cda9b50645a4679f1cf457666a9429abe6db281ba3d4",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:339"
+        "packages/nexus-core/src/session-log.ts:343"
       ]
     },
     {
       "digest": "96b113ee75d750c0b7d0ffa92c1bf1be3004ceeaaef60bbcd738fb0aee66c00e",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "96bd0f041fb2f4aec011aa1efde651187eff546fc48286ad538a4db0aa561daa",
-      "names": [
-        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
-      ],
-      "sources": [
-        "packages/nexus-core/src/session-store.ts:737"
-      ]
     },
     {
       "digest": "970ba1b320ec4813b31c64f20b9922c955526173248aedde372d6d6779a1e329",
@@ -8565,7 +8591,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionOwner"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:708"
+        "packages/nexus-core/src/session-store.ts:728"
       ]
     },
     {
@@ -8574,14 +8600,14 @@
         "packages/nexus-core/src/session-log.ts#SessionTitleSource"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:282"
+        "packages/nexus-core/src/session-log.ts:286"
       ]
     },
     {
       "digest": "9940c1ec0906483f53546b800f0d42abb22f10cb42f3835935b637978378d5fc",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1053"
+        "packages/nexus-core/src/session-log.ts:1061"
       ]
     },
     {
@@ -8599,33 +8625,24 @@
       "sources": []
     },
     {
-      "digest": "9b58747b97c44275d593e33f8c76451e79da95c93458ccb258df9ea0d2989d67",
-      "names": [
-        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
-      ],
-      "sources": [
-        "apps/harness/src/jsonl-session-store.ts:573"
-      ]
-    },
-    {
       "digest": "9b595015033039754b43ef831a701d4cdcc0cf548c41dd26f9cc4425bc08fa43",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:677"
+        "packages/nexus-core/src/session-log.ts:681"
       ]
     },
     {
       "digest": "9b6b08a57be7ca6b0162cc154f6c802aa6ed8e22a3acae211514cdab04a54e9b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "9c132a41fbb1d9de99436b37b08e9864d2be5289919d6289c1cd5e64312c799e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:636"
+        "packages/nexus-core/src/session-log.ts:640"
       ]
     },
     {
@@ -8642,7 +8659,7 @@
       "digest": "a119881bd9722e8c782630a5f47902e552e0b526016581c4e696e29d556a8575",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1006"
+        "packages/nexus-core/src/session-log.ts:1014"
       ]
     },
     {
@@ -8654,7 +8671,7 @@
       "digest": "a2d48282011c134f6aac1aba64efac90ef8639eec05489af0b06998721ddf5a6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1165"
+        "packages/nexus-core/src/session-log.ts:1173"
       ]
     },
     {
@@ -8677,7 +8694,7 @@
       "digest": "a4ba17585678f177ebd69d71a59c326727360e6fc8da578cf504f561f0c1fda6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8691,7 +8708,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestSnapshotReason"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:139"
+        "packages/nexus-core/src/request-snapshot.ts:157"
       ]
     },
     {
@@ -8714,7 +8731,7 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestToolSchema"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:142"
+        "packages/nexus-core/src/request-snapshot.ts:160"
       ]
     },
     {
@@ -8736,14 +8753,14 @@
       "digest": "ac9f8c6675f9582200e611f73344ebefecb012ec351091dfbbc816d58ec4c162",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:935"
+        "packages/nexus-core/src/session-log.ts:943"
       ]
     },
     {
       "digest": "ad13e82544c23e588faca57ad9ac2f42cf039f79debe610432be2dc7cdda6a93",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:790"
+        "packages/nexus-core/src/session-log.ts:797"
       ]
     },
     {
@@ -8755,28 +8772,28 @@
       "digest": "af50268e9099c2469557669086d817f0262dbb4e96afd334a5a86e639cdf5f50",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1415"
+        "packages/nexus-core/src/session-log.ts:1423"
       ]
     },
     {
       "digest": "b149312a7bd621ed5802608fd19577c605f254c112855c739cde09902544d620",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1188"
+        "packages/nexus-core/src/session-log.ts:1196"
       ]
     },
     {
       "digest": "b3468825b74ff7999d216117c105526b0996045271e5ce5cd3193e514ebee7da",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1005"
+        "packages/nexus-core/src/session-log.ts:1013"
       ]
     },
     {
       "digest": "b3aab765b83af1d938f60de6c5e378a70b8b9bc4ee1aa7a469deb23ef60ec87d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8815,14 +8832,14 @@
         "packages/nexus-core/src/session-log.ts#LlmFailure"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:251"
+        "packages/nexus-core/src/session-log.ts:255"
       ]
     },
     {
       "digest": "b9236851030931931f5684abb4ad03cb4b7164049ef05192601dc1a6772f1b15",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8834,7 +8851,7 @@
       "digest": "ba057765895c08b419b1ea73ee3bd701cf8e246416885047aa6c5c075ec6ec82",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:965"
+        "packages/nexus-core/src/session-log.ts:973"
       ]
     },
     {
@@ -8860,7 +8877,7 @@
       "digest": "bacc05209fcf59f93091376bb7ab894397c6a3d691d1533cbc40576c7f0e8723",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:234"
+        "packages/nexus-core/src/session-log.ts:238"
       ]
     },
     {
@@ -8872,7 +8889,7 @@
       "digest": "bcbc70365955647ffb0ce2f54e029c6ebc54dd404299f1f90de4df4fa9aa30bd",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:555"
+        "packages/nexus-core/src/session-log.ts:559"
       ]
     },
     {
@@ -8881,7 +8898,7 @@
         "packages/nexus-core/src/session-log.ts#SessionTitleModelIdentity"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:265"
+        "packages/nexus-core/src/session-log.ts:269"
       ]
     },
     {
@@ -8893,14 +8910,14 @@
       "digest": "beab7f65c0aae46d18359377431c6e8c43df48b6174b7648e10fbece371f9b5b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "beb7e7ac726b7a277b7fdf60854b59f5aee9576634229b0e68ed9dccfa4777ff",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8935,10 +8952,19 @@
       "sources": []
     },
     {
+      "digest": "c23241c37cc35eae25c73173ec39370bd96086793b5dc04cc49185fff01fa694",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:757"
+      ]
+    },
+    {
       "digest": "c2629cef9d55faec17007cbfa334e4956ce5f5a59a184e7b48f816d9ce41dbf2",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -8950,14 +8976,21 @@
       "digest": "c3753109ad73a4a5ee17d6e0149d9264cb1709099041b3d5c6904d8254e6f550",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:470"
+        "packages/nexus-core/src/session-log.ts:474"
+      ]
+    },
+    {
+      "digest": "c3c527fc06d26b5cc41f0ef47d6c746c2e850919680e9e5a867da858974421eb",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:534"
       ]
     },
     {
       "digest": "c3f44b4e9d59c2a98794688686a37dc73b83f34696f0b7c322dda3b90344586e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1330"
+        "packages/nexus-core/src/session-log.ts:1338"
       ]
     },
     {
@@ -8980,7 +9013,7 @@
         "packages/nexus-core/src/session-log.ts#SessionTitleLlmMessage"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:292"
+        "packages/nexus-core/src/session-log.ts:296"
       ]
     },
     {
@@ -9018,7 +9051,7 @@
         "packages/nexus-core/src/session-log.ts#SessionReferenceSourceEntry"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:301"
+        "packages/nexus-core/src/session-log.ts:305"
       ]
     },
     {
@@ -9057,7 +9090,7 @@
       "digest": "cf252cf0e7bdb286501224f79867a13b16b6b4b6c79da218e23b3d7dc41a3e85",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9079,21 +9112,21 @@
       "digest": "d1ca2a64271055b36f2497cd42722edc3ae55fee41a3c89e7e00640c029bac51",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1390"
+        "packages/nexus-core/src/session-log.ts:1398"
       ]
     },
     {
       "digest": "d1e9e4f1f9892fa7faf9fec3dcb160e2a6b4e24bcbf55e323232f5645a43b068",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:233"
+        "packages/nexus-core/src/session-log.ts:237"
       ]
     },
     {
       "digest": "d2f4e8cd880ba5679d4c6aaf69cd1aad269533eabbb27ffa97da71e4b028bb8d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1054"
+        "packages/nexus-core/src/session-log.ts:1062"
       ]
     },
     {
@@ -9105,21 +9138,21 @@
       "digest": "d45ef53414a2399b712c1dfb656e90d509709ba4cb0761cb13c2b868a5816a4e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "d4e4fdef4ac125aa6a25e64a999eaa92ce8b93bea64581722b92c2c9a31a9839",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:393"
+        "packages/nexus-core/src/session-log.ts:397"
       ]
     },
     {
       "digest": "d5a5b88770bd6cc55aebacc5d9149ddab84fad10ad4c8efb6ea6196fabeeb310",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9128,14 +9161,14 @@
         "packages/nexus-core/src/request-snapshot.ts#RequestHeader"
       ],
       "sources": [
-        "packages/nexus-core/src/request-snapshot.ts:162"
+        "packages/nexus-core/src/request-snapshot.ts:180"
       ]
     },
     {
       "digest": "d7e0aa1a0e8a989c4e38841d832f17635ae56aa995eba5609c2825ff2db71b9b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:597"
+        "packages/nexus-core/src/session-log.ts:601"
       ]
     },
     {
@@ -9157,7 +9190,7 @@
       "digest": "d9d7f36f5837957be407f076b986a13e957723d3e3ee1fa61a90262c4fedd9f9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9171,7 +9204,7 @@
       "digest": "dbd94ed5e91b70e2f24a7834cbb6d4f80f2364f2482dc5996c7b5ab518eaafd0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9185,7 +9218,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionEmbedOrigin"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:713"
+        "packages/nexus-core/src/session-store.ts:733"
       ]
     },
     {
@@ -9221,7 +9254,7 @@
       "digest": "dda12a5bc2750ba4b3f508a1e46adb244f727738355e589e0047292072ba720a",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9248,7 +9281,7 @@
       "digest": "df2bc195e6e8823cfa1fb4062085be6529809eabfafb14843805e6ef82316e2e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9270,14 +9303,14 @@
       "digest": "e3397373141213208d1af021433328a7992bcb50f5899e0b27e7e0e66a721597",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
       "digest": "e436ba3b86f7031927b102f4f361626674b71ed304910e4e8269c03e88530d25",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9304,7 +9337,7 @@
       "digest": "e8e1cc3bd9d96cc47e7859eba13bdd726bd99144a1f2f50577b3d2874c0aeaf8",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:285"
+        "packages/nexus-core/src/session-log.ts:289"
       ]
     },
     {
@@ -9375,7 +9408,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionPluginRow"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:693"
+        "packages/nexus-core/src/session-store.ts:713"
       ]
     },
     {
@@ -9401,20 +9434,8 @@
       "digest": "f625441d11da14fa318ba4b11d24906b8197bc43803d2a3d2be0f23c92fa3bb6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:364"
+        "packages/nexus-core/src/session-log.ts:368"
       ]
-    },
-    {
-      "digest": "f6304d755594247b31cae37f706ff3caf6b891a6be7c3b72f1465f35312e8411",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:530"
-      ]
-    },
-    {
-      "digest": "f68795351edd5cac2838ef517568746baf56f9cbba9d124e80d2a56cdc93c1ff",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "f6a8e5377dc38c49507efa4861a896c272280b265b36f060ebdf1fc4008a1a49",
@@ -9422,14 +9443,14 @@
         "packages/nexus-core/src/session-log.ts#SessionSeq"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1474"
+        "packages/nexus-core/src/session-log.ts:1482"
       ]
     },
     {
       "digest": "f78589344bbb8d05af36277f97ba311931933e90786aadc7f747ea01c6f4cfd9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1518"
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9441,7 +9462,14 @@
       "digest": "fa3deae9d0f03a0f3ae00dfc5d4a1e637f5b2b74d5a614a782f4bf4149fd5cd5",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:231"
+        "packages/nexus-core/src/session-log.ts:234"
+      ]
+    },
+    {
+      "digest": "faedc6dc8eb7cbf70b93fddef8c04f743f68877a0a3e4b0778ac6d12e6c20428",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1526"
       ]
     },
     {
@@ -9458,14 +9486,14 @@
       "digest": "fd8953f307c857b5b84b8a18eb8e457b288418e5ddaf2d258c488ba25920606e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:545"
+        "packages/nexus-core/src/session-log.ts:549"
       ]
     },
     {
       "digest": "fdbac135052fcc5bc0ee95197a8faab1b1ec84eadd90feca06c168cca16c0ff0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:232"
+        "packages/nexus-core/src/session-log.ts:235"
       ]
     },
     {

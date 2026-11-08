@@ -1180,6 +1180,10 @@ export function historyFrames(
           // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
           // 舊檔形狀（補結接在 end-seed 後面）那一輪已在 end-seed 收掉，這顆不再收第二次。
           if (turnOpen || suspended) close(event.time, { event: 'completed' });
+        } else if (event.data.reason?.kind === 'max-turns') {
+          // 撞到輪數上限：這一輪收掉了，不是停在核准點等人，所以不走下面 `interrupted` 那一支。
+          // TODO(#2359): 收尾 frame 補上對應的旗標（跟寫入方一起）。
+          close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;

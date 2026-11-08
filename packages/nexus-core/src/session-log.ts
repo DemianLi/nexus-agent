@@ -196,7 +196,7 @@ export type TurnAbortCause =
   | { readonly kind: 'hook'; readonly reason: string };
 
 /**
- * 一輪為什麼沒有正常結束。四種：
+ * 一輪為什麼沒有正常結束。五種：
  *
  * - **`aborted`**：被中止。原因三種：`user`（人按了停止）、`parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -210,6 +210,9 @@ export type TurnAbortCause =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
+ *   **還沒有生產者**（寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）；讀盤驗證與對話史認得它，軌跡與
+ *   token-meter 的 `endOf` 還沒有這一支、落到 `completed`。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
@@ -230,6 +233,7 @@ export type TurnAbortCause =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: TurnAbortCause }
   | { readonly kind: 'max-tokens' }
+  | { readonly kind: 'max-turns' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'blocked' };
 
@@ -769,15 +773,18 @@ export interface SessionEventMap {
    * 照 dsh 的 `request/header`（`packages/core/session/src/types.ts:390-397`，`5badb15`）。記錄點在模型被叫的那一刻
    * （callback），不是 middleware——見 `request-snapshot.ts` 檔頭，那裡有偏離與理由。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；會話遙測的鏡像**不送**它
-   * （`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
+   * **不進模型**；會話遙測的鏡像**不送**它（`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
    *
-   * 落在配對的 `model/start` 之後、回覆之前；`modelCall` 指回記下它的那次呼叫。這份日誌沒有快照時第一份的
-   * `reason` 是 `'initial'`，之後不同才記、`reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
+   * **格式 55 起**（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：寫在它那次呼叫的 `model/start` **之前**、不帶
+   * `modelCall`、不標 `ignorable`；屬於哪一次看位置，是它之後的第一顆 `model/start`。同一次呼叫裡被重送時，
+   * 後來那份落在已寫的 `model/start` 之後，歸給還開著的那一次。格式 54 以前帶 `modelCall`、落在 `model/start` 之後、標
+   * `ignorable`；讀的一方看有沒有 `modelCall` 分新舊。這份日誌沒有快照時第一份的 `reason` 是 `'initial'`，之後不同才記、
+   * `reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
    */
   'request/header': {
     readonly header: RequestHeader;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有：記下它的那次呼叫的 `model/start` 的 `seq`。55 起不寫，看位置。 */
     readonly modelCall?: number;
   };
   /**
@@ -790,6 +797,7 @@ export interface SessionEventMap {
   'request/system': {
     readonly system: string;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有，同 `request/header`。 */
     readonly modelCall?: number;
   };
   /**
@@ -881,10 +889,10 @@ export interface SessionEventMap {
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；推模型歷史的一側不讀。**由 pump 寫**
-   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在失敗那一對
-   * `model/start`／`model/end`（`outcome: 'error'`）與配對的 `llm/retry` 之後、下一次嘗試的 `model/start` 之前（等退避時按停止也有這一顆）。
-   * `modelCall` 指回失敗那一對。
+   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
+   * `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在同一輪裡、失敗那一對
+   * `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）之後。跟下一次嘗試的 `model/start` 誰先誰後不固定：pump
+   * 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。`modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。
@@ -1578,10 +1586,11 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * 一筆事件自己的資料規則，照 dsh `validateSessionEventData`（`packages/core/session/src/surface.ts:166-219`，`687f282e`）。
- * **只放 nexus 有詞彙的兩條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
+ * **只放 nexus 有詞彙的三條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
  *
  * - `request/header` 不帶空的 `header.tools`（dsh `:205-207`）：寫方沒有工具時整格省略（`request-snapshot.ts`）。
  * - `tool/result` 帶了 `error` 就必須 `isError: true`（dsh `:212-218`）：`error` 只在失敗時出現。
+ * - `turn/end` 的 `reason` 只准認得的種類，見 {@link validateTurnEndReason}。
  *
  * dsh 其餘幾條（developer 角色與工具增減區塊、`header.system`、空的 `adapterDefaults`）nexus 沒有那些格，不適用。不驗整份 payload。
  * 呼叫點照 dsh：{@link SessionLog.append}（`index.ts:824`）、seed 的信封檢查（`:230`）、後端讀盤（`storage-contract.ts:95`）。
@@ -1607,6 +1616,52 @@ export function validateSessionEventData(
     if (data['error'] !== undefined && data['isError'] !== true) {
       throw new TypeError(`${subject} 帶了 data.error，data.isError 卻不是 true`);
     }
+  } else if (event.type === 'turn/end') {
+    if (!isJsonObject(data)) throw new TypeError(`${subject} 的 data 要是物件`);
+    if (data['reason'] !== undefined) validateTurnEndReason(data['reason'], subject);
+  }
+}
+
+/** 型別綁死：{@link TurnEndReason} 多一種或少一種，這張表都編不過。 */
+const TURN_END_REASON_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({
+    aborted: true,
+    'max-tokens': true,
+    'max-turns': true,
+    interrupted: true,
+    blocked: true,
+  } satisfies Record<TurnEndReason['kind'], true>),
+);
+/** 同上，綁 {@link TurnAbortCause}。 */
+const TURN_ABORT_CAUSE_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({ user: true, parent: true, hook: true } satisfies Record<
+    TurnAbortCause['kind'],
+    true
+  >),
+);
+
+/**
+ * `turn/end` 的 `reason` 只准 {@link TurnEndReason} 的成員。不認得的理由要拒：有讀方把不認得的理由當成正常完成
+ * （`@nexus/plugin-trajectory` 與 `@nexus/plugin-token-meter` 的 `endOf`），新版寫的理由給舊讀方讀就會靜靜讀錯。
+ * {@link TurnEndReason} 是封閉聯集，所以驗得了。
+ */
+function validateTurnEndReason(reason: unknown, subject: string): void {
+  if (!isJsonObject(reason)) throw new TypeError(`${subject} 的 data.reason 要是物件`);
+  const kind = reason['kind'];
+  if (typeof kind !== 'string' || !TURN_END_REASON_KINDS.has(kind)) {
+    throw new TypeError(`${subject} 的 data.reason.kind 不認得：${JSON.stringify(kind)}`);
+  }
+  if (kind !== 'aborted') return;
+  const cause = reason['cause'];
+  if (!isJsonObject(cause)) throw new TypeError(`${subject} 的 data.reason.cause 要是物件`);
+  const causeKind = cause['kind'];
+  if (typeof causeKind !== 'string' || !TURN_ABORT_CAUSE_KINDS.has(causeKind)) {
+    throw new TypeError(
+      `${subject} 的 data.reason.cause.kind 不認得：${JSON.stringify(causeKind)}`,
+    );
+  }
+  if (causeKind === 'hook' && typeof cause['reason'] !== 'string') {
+    throw new TypeError(`${subject} 的 data.reason.cause.reason 要是字串`);
   }
 }
 

@@ -498,13 +498,13 @@ export async function compareToLog(
       });
       continue;
     }
+    // 格式 54 以前帶 `modelCall`、寫在 `model/start` 之後；55 起不帶、寫在它之前，看位置。
     const system = events
-      .filter(
-        (event) =>
-          event.type === 'request/system' &&
-          (event.data as { modelCall?: number }).modelCall !== undefined &&
-          (event.data as { modelCall: number }).modelCall <= start.seq,
-      )
+      .filter((event) => {
+        if (event.type !== 'request/system') return false;
+        const modelCall = (event.data as { modelCall?: number }).modelCall;
+        return modelCall === undefined ? event.seq < start.seq : modelCall <= start.seq;
+      })
       .at(-1);
     const logged = system === undefined ? undefined : (system.data as { system: string }).system;
 

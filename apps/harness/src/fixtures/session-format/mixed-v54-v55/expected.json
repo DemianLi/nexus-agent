@@ -1,0 +1,123 @@
+{
+  "writer": {
+    "rev": "eab4b1c6c9b412f1b866b101a9362450b2c8b277 → 46482f18671a32be4d921f9a0e8e0c8386c7260b",
+    "commit": "eab4b1c6c9b412f1b866b101a9362450b2c8b277 → 46482f18671a32be4d921f9a0e8e0c8386c7260b",
+    "formatVersion": 54,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "84c0c46f4799dc2e63fda292156403d66b10a7f1",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 55,
+      "eventCount": 44,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end",
+        "session/end-seed",
+        "session/resumed",
+        "turn/start",
+        "request/system",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 55,
+      "session": "cli",
+      "computedBy": "today",
+      "snapshotCalls": [
+        {
+          "type": "request/system",
+          "modelCall": 4,
+          "call": 4
+        },
+        {
+          "type": "request/header",
+          "modelCall": 4,
+          "call": 4
+        },
+        {
+          "type": "request/system",
+          "modelCall": null,
+          "call": 27
+        }
+      ],
+      "firstHalf": {
+        "eventCount": 23,
+        "replay": {
+          "computedBy": "eab4b1c6c9b412f1b866b101a9362450b2c8b277",
+          "kind": "replayed",
+          "roles": [
+            "human",
+            "human",
+            "ai",
+            "tool",
+            "ai",
+            "tool",
+            "ai"
+          ]
+        }
+      }
+    }
+  ]
+}

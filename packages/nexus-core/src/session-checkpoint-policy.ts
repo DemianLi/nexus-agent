@@ -30,8 +30,8 @@
  *
  * 1. **三個點併成兩個掛點。** dsh 的 `llm/stream` 與 `agent/pre-step` 在我們這裡是同一個時刻：
  *    一步就是一次模型呼叫，`wrapModelCall` 在它之前。所以一顆 `wrapModelCall` 兩件都做——排空的
- *    是這一步之前所有已記的事件，包含 {@link ./model-calls.ts | 起訖紀錄器} 剛寫的 `model/start`
- *    （它排在這一顆外層）。
+ *    是這一步之前所有已記的事件。{@link ./model-calls.ts | 起訖紀錄器} 排在這一顆外層，但 `model/start`
+ *    等到請求快照才寫，跟快照一起在送出前由 {@link ./request-snapshot.ts} 再排空一次。
  * 2. **摘要那次呼叫之前不排空。** dsh 的摘要走 `llm/stream`，所以也會先排空；我們的摘要器在
  *    自己的 `wrapModelCall` 裡直接 `request.model.invoke`（{@link ./summarization.ts}），不經過
  *    這一顆。緊接著的那次主呼叫仍會先排空，摘要寫下的事件在那時一起落地。

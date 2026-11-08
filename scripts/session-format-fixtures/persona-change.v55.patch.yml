@@ -1,0 +1,7 @@
+# 混版夾具 `mixed-v54-v55` 的後半（`V55_WRITER` 續寫）：換掉系統提示詞的結尾，續接後第一次呼叫就記一份新形狀的 `request/system`
+# （`reason: 'change'`）。config 是整份替換，照那一版出貨那一列寫，只改 `personaSuffix`。
+- id: system-prompt
+  config:
+    includeHarnessIdentity: true
+    personaPrefix: 'You are a helpful assistant powered by the {{model}} model.'
+    personaSuffix: 'Your working directory is {{cwd}}. 這一段是夾具續寫時換上的。'

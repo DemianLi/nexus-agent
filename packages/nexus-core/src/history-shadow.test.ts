@@ -121,7 +121,7 @@ describe('eventsForModelCall：這次呼叫要推的那一段', () => {
     expect(eventsForModelCall(closed).events).toBe(closed);
   });
 
-  it('model/start 之後的 image/offload 留著，其餘不留', () => {
+  it('model/start 之後的 image/offload 留著，其餘不留（54 的快照形狀落在 model/start 之後）', () => {
     const log = secondCallOpen();
     log.append('request/system', { modelCall: 6, system: '系統', reason: 'change' });
     const offload = log.append('image/offload', { targets: [{ seq: 0, imageIndexes: [0] }] });

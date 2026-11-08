@@ -408,7 +408,8 @@ describe('串流第一則事件之後才出錯（#520）', () => {
       // 作廢的是第一次呼叫：指回第一顆 model/start。
       const firstStart = run.events.find((event) => event.type === 'model/start')!;
       expect((attempt.data as SessionEventMap['assistant/attempt']).modelCall).toBe(firstStart.seq);
-      expect(attempt.ignorable).toBe(true);
+      // 格式 55 起不可略過（#2416）：讀不懂它的讀方要拒讀，不能當作沒這一顆。
+      expect(attempt.ignorable).toBeUndefined();
       const messages = run.events.filter((event) => event.type === 'assistant/message');
       expect(messages).toHaveLength(1);
       expect(JSON.stringify(messages[0]!.data)).toContain('丙丁');

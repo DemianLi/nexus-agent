@@ -1,0 +1,109 @@
+{
+  "writer": {
+    "rev": "eab4b1c6c9b412f1b866b101a9362450b2c8b277",
+    "commit": "eab4b1c6c9b412f1b866b101a9362450b2c8b277",
+    "formatVersion": 54,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "699af79d1de09305f95ce0d36b9ef7d64f890b46",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 54,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "eab4b1c6c9b412f1b866b101a9362450b2c8b277",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "retry-attempt": {
+      "headerVersion": 54,
+      "eventCount": 9,
+      "types": [
+        "turn/start",
+        "model/start",
+        "model/end",
+        "llm/retry",
+        "assistant/attempt",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "eab4b1c6c9b412f1b866b101a9362450b2c8b277",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 55,
+      "session": "cli",
+      "computedBy": "today",
+      "snapshotCalls": [
+        {
+          "type": "request/system",
+          "modelCall": 4,
+          "call": 4
+        },
+        {
+          "type": "request/header",
+          "modelCall": 4,
+          "call": 4
+        }
+      ]
+    },
+    {
+      "edge": 55,
+      "session": "retry-attempt",
+      "computedBy": "today",
+      "attemptCalls": [
+        {
+          "modelCall": 1,
+          "afterFailedEnd": true
+        }
+      ]
+    }
+  ]
+}
