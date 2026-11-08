@@ -62,8 +62,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.6.1`（#2416）：`tools/execute` 的監聽者交回改過的結果、`blocks` 仍是工具本體那則造出的那一份時，內容的形狀照本體回的那則：`content` 沒換就沿用原本的內容，
  * 換了就照原本是字串或陣列給新的文字（陣列裡的非文字塊不留）。修補號：介面不變，只改這種交回怎麼造回訊息。
+ *
+ * `2.7.0`（#2533）：{@link ToolThread} 多三個選填方法 {@link ToolThread.on}、{@link ToolThread.join}、{@link ToolThread.provide}。向後相容的新增：
+ * 不呼叫它們的來源照常；要用的消費者宣告 `^2.7.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.6.1';
+export const TOOLS_CONTRACT_VERSION = '2.7.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -324,9 +327,46 @@ export interface ToolThreadSection {
   readonly separator?: string;
 }
 
+declare const toolExecuteOutcome: unique symbol;
+
+/**
+ * {@link ToolExecuteListener} 的 `next()` 交回的結果（`2.7.0` 起）。**不透明**：監聽者只能把 `next()` 交回的那一份原樣交出去，
+ * 造不出、也換不了一個結果。
+ */
+export interface ToolExecuteOutcome {
+  readonly [toolExecuteOutcome]: never;
+}
+
+/**
+ * 一位 `tools/execute` 監聽者（`2.7.0` 起）：包住一次工具呼叫往內交的那一段。`next()` 只能呼叫一次；拋錯等於這次呼叫拋錯。
+ *
+ * @param exec - 這次呼叫，形狀同 {@link ToolResultExecution}。
+ * @param next - 往內一位；最內層跑工具本體。
+ * @returns `next()` 交回的那一份。
+ */
+export type ToolExecuteListener = (
+  exec: ToolResultExecution,
+  next: () => Promise<ToolExecuteOutcome>,
+) => Promise<ToolExecuteOutcome>;
+
+/**
+ * 一位會話參與者（`2.7.0` 起）：這條 thread 每開一份會話日誌（root 與每個子代理各一份）就被叫一次。
+ *
+ * `subject` 是 `@nexus/session` 的 `SessionSubject`；這個套件不相依它，所以留成 `unknown`，由消費者自己轉型（同 {@link ToolThread.services}）。
+ *
+ * @returns 收拾函式，或什麼都不回。
+ */
+export type ToolThreadParticipant = (subject: unknown) => (() => void) | void;
+
+/** {@link ToolThread.provide} 收的能力（`2.7.0` 起）。只開放今天有消費者的這一種：這次組裝有工作區。 */
+export type ToolThreadCapability = 'workspace';
+
 /**
  * 一條 thread 的組裝，{@link ToolThreadSource} 看到的樣子（`2.5.0` 起）。來源結束（resolve 或 reject）之後再呼叫
- * `register`、`gate`、`admit`、`section`、`onDispose` 會拋；`services.get`、`shared`、`logger.warn` 不受限。
+ * `register`、`gate`、`admit`、`section`、`on`、`join`、`provide`、`onDispose` 會拋；`services.get`、`shared`、`logger.warn` 不受限。
+ *
+ * `on`、`join`、`provide` 放在這裡、不放各自的定義套件，是因為它們要登記在**這條 thread 的** registry 上（沙箱模式與核准政策的控制器
+ * 每條 thread 一份），樹上的插件只有經這條 thread 的來源碰得到。**撤除條件**：這兩顆控制器改成以會話為參數、由日誌投影提供的行程級服務（#2554）之後，三者改回各自的定義套件。
  */
 export interface ToolThread {
   /** 這條 thread 的宿主服務。 */
@@ -364,6 +404,32 @@ export interface ToolThread {
    * @throws 段的形狀不對（`TypeError`）、`order` 不是開放給插件的值（`RangeError`），或同一條 thread 上已有同名的段。
    */
   section(section: ToolThreadSection): () => void;
+  /**
+   * 在這條 thread 上登記一位 `tools/execute` 監聽者（`2.7.0` 起）。排在這一列在清單上的位置，落在宿主固定的兩段 core 監聽者之間；
+   * 不開放 `prepend`。
+   *
+   * **選填**：`2.5.0`、`2.6.x` 的宿主沒有它。消費者宣告 `^2.7.0` 就保證有。
+   *
+   * @returns 只撤這一位的冪等 disposer；這一列在組裝中掉了，宿主一併撤；這條 thread 收掉時也清掉。
+   */
+  on?(event: 'tools/execute', listener: ToolExecuteListener): () => void;
+  /**
+   * 在這條 thread 上掛一位會話參與者（`2.7.0` 起）。多位參與者依清單上的列序安裝，這一列的排在這一列的位置。
+   *
+   * **選填**：同 {@link ToolThread.on}。
+   *
+   * @returns 只撤這一位的冪等 disposer。這條 thread 接上會話之後才撤，已接上的會話（含之後在那裡開的子代理會話）照樣裝這一位；
+   *   這一列在組裝中掉了，宿主一併撤。
+   */
+  join?(participant: ToolThreadParticipant): () => void;
+  /**
+   * 宣告這次組裝提供某個能力（`2.7.0` 起）。重複宣告冪等。
+   *
+   * **選填**：同 {@link ToolThread.on}。
+   *
+   * @returns 只撤這一次宣告的冪等 disposer。這條 thread 組好之後才撤，這次組裝有沒有工作區不跟著改；這一列在組裝中掉了，宿主一併撤。
+   */
+  provide?(capability: ToolThreadCapability): () => void;
   /** 這條 thread 收掉時要做的事，照登記的反序跑。這一列有任何來源失敗時，它所有來源已登記的會當場跑。 */
   onDispose(dispose: () => void | Promise<void>): void;
   /** 這條 thread 的警告，記在這一列名下；thread 收掉之前任何時候都能叫。 */

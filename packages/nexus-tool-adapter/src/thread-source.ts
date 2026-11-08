@@ -13,10 +13,10 @@
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
-import { admittedTools, createToolListStepMiddleware } from '@nexus/core';
-import type { Disposer, NexusPlugin, RegisterOptions } from '@nexus/core';
+import { admittedTools, createToolListStepMiddleware, WORKSPACE_CAPABILITY } from '@nexus/core';
+import type { Disposer, Events, NexusPlugin, RegisterOptions } from '@nexus/core';
 import { langChainToolOf } from './index.js';
-import type { ToolThread, ToolThreadSource } from '@nexus/tools';
+import type { ToolExecuteOutcome, ToolThread, ToolThreadSource } from '@nexus/tools';
 
 type Registry = Parameters<NexusPlugin<unknown>['apply']>[0];
 
@@ -110,6 +110,31 @@ export async function runThreadSources(
       section(section) {
         live('section');
         return registry.prompt.section(section);
+      },
+      on(event, listener) {
+        live('on');
+        if (event !== 'tools/execute')
+          throw new TypeError(`thread.on() 只收 'tools/execute'，收到 ${String(event)}`);
+        // `ToolExecuteOutcome` 只是型別上的不透明殼，執行期就是管線的結果，原樣往內交、原樣往外交。
+        const bridged: Events['tools/execute'] = (exec, next) =>
+          listener(
+            exec,
+            next as unknown as () => Promise<ToolExecuteOutcome>,
+          ) as unknown as ReturnType<Events['tools/execute']>;
+        return registry.events.on('tools/execute', bridged);
+      },
+      join(participant) {
+        live('join');
+        return registry.sessions.join(participant);
+      },
+      provide(capability) {
+        live('provide');
+        if (capability !== WORKSPACE_CAPABILITY) {
+          throw new TypeError(
+            `thread.provide() 只收 '${WORKSPACE_CAPABILITY}'，收到 ${String(capability)}`,
+          );
+        }
+        return registry.capabilities.provide(capability);
       },
       onDispose(dispose) {
         live('onDispose');
