@@ -105,7 +105,7 @@ nexus-host --socket <路徑>
 - **V**：已驗過身分。
 - **R**：撤過。驗過身分的連線一被撤就斷，所以留在這一格的都還沒送過 `hello`。
 
-宿主每驗一個 `hello`、每判一次違規，都先把控制通道讀乾淨，所以已經寫進 pipe 的 `revoke`／`grant` 一定先生效。表裡的「撤 pid」是宿主自己撤：表上拿掉那一筆，那個 pid 的連線全部記成撤過，驗過身分的當場斷，不收 backlog。
+宿主每驗一個 `hello`、每判一次違規，都先把控制通道讀乾淨，所以已經寫進 pipe 的 `revoke`／`grant` 一定先生效。表裡的「撤 pid」是宿主自己撤：表上拿掉那一筆，那個 pid 的連線全部記成撤過，驗過身分的當場斷，不收 backlog（這四件事各由哪條測試釘住見 [n8]）。
 
 **宿主這邊**（方括號是釘住這一格的測試，n 開頭的是不測的原因，見下面的清單）
 
@@ -120,7 +120,7 @@ nexus-host --socket <路徑>
 
 **監督行程這邊**（宿主的回報 × 那個 pid 是誰）
 
-| 回報 | 活著、沒被隔離的前台或對話行程 | 已隔離的 | 不是我們的（含 pid 0） |
+| 回報 | 活著、沒被隔離的前台或對話行程 [n7] | 已隔離的 | 不是我們的（含 pid 0） |
 | --- | --- | --- | --- |
 | `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9] | 再寫一行稽核，再補送一次 `revoke` [s3]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
 | `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4][s7] | 照 `violation` 那一格 [s5][s8] |
@@ -152,18 +152,19 @@ nexus-host --socket <路徑>
 - s5 `a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown`
 - s6 `an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits`
 - s7 `an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hosts_reason`（假宿主報的理由不是「沒有登記」，理由寫死就紅）
-- s8 `reports_for_a_pid_that_is_not_ours_send_no_revoke`（pid 0）
+- s8 `reports_for_a_pid_that_is_not_ours_send_no_revoke`（pid 0；非 0 的表外 pid 走同一道 `role` 判斷，讀碼）
 - s9 `a_quarantined_conversation_is_left_out_of_the_table_sent_to_a_restarted_host`
 
 **不測的格與原因**
 
-- n1 A⁰：要另一個 uid 的行程才造得出來；CI 的 `cargo test` 不用 root 跑，測試沒有另一個 uid 可用。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
-- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時監督行程已經對宿主的 stdin 叫了 `finish`：排著的寫完就關寫端，寫端關了之後補送的 `revoke` 直接丟掉；只有 `finish` 當下 pipe 還滿著時，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。
+- n1 A⁰：要另一個 uid 的行程才造得出來；測試行程不是 root，換不了 uid；要另開 uid 得靠 sudo 或容器，目前不做。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
+- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：寫端關了之後補送的 `revoke` 直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。
 - n3 accept 出錯（例如 fd 用完）時沒收進來的連線，之後會被當成 A 收進來：t10 確認宿主起來時已把開檔數的軟上限拉到硬上限，出錯的情形沒有另外造。
 - n4 A⁺、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
 - n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。新登記只改表、不碰連線，`hello` 驗的是驗那一刻的表（先讀乾淨控制通道），所以登記在 accept 之前或之後到，結果一樣；accept 不讀資料，EOF 照 A 那幾列的 `retain` 處理（讀碼）。
 - n6 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果跟 R 那一列的壞框格一樣：回 `rejected`、報 `unregistered`，理由照違規（`重複的 hello` 或框的錯），不撤表上那一筆。窗口只有幾行程式，測試造不穩。
 - n7 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
+- n8 「撤 pid」的四件事都在同一個 `Host::revoke`（違規時由 `violate` 呼叫）：表上拿掉由 t1、t2、t3、t14 釘住；還沒送 `hello` 的記成撤過由 t13、t18；驗過身分的斷由 t2；不收 backlog 沒有測試，要讓連線停在 backlog 得先把連線數撐到上限（t8 的做法），沒另外造。
 
 **已知限制**
 

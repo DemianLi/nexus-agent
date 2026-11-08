@@ -11,7 +11,7 @@
 //! - `--violate-conversations`：每收到一筆對話行程的身分，就對那個 pid 回報 `violation`（理由「測試違規」），照常跑下去。
 //! - `--violate-twice`：同上，但每一筆連報兩次。
 //! - `--then-unregistered`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆 `unregistered`，理由照給的。
-//! - `--report-strangers`：同 `--violate-conversations`，但先對 pid 0 各報一筆 `violation` 與 `unregistered`。
+//! - `--report-strangers`：同 `--violate-conversations`，但先對 pid 0 各報一筆 `violation`（理由「測試違規」）與 `unregistered`（理由「沒有登記」）。
 //! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};

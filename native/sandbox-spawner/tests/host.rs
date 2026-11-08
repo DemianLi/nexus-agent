@@ -62,6 +62,7 @@ fn newer_hello_frame(token: &str) -> Vec<u8> {
 }
 
 /// 前面那些連線都沒報任何東西：送一條壞框，下一筆回報就要是它的 `violation`。多報的不管是哪一種，都排在它前面、先被讀到。
+/// 壞框會撤掉測試行程的 pid，所以放在測試最後。
 fn assert_nothing_reported_before_a_bad_frame(socket: &Path, host: &mut HostProc) {
     let (_, reply) = exchange(socket, &frame(&[0xff]));
     let Some(HostMessage::Rejected { reason }) = reply else { panic!("{reply:?}") };
@@ -76,10 +77,13 @@ fn accepted() -> Option<HostMessage> {
     Some(HostMessage::Hello { version: PROTOCOL_VERSION })
 }
 
-/// 斷線了：讀到 EOF（或對方重設連線）。
+/// 斷線了：讀逾時之前讀到 EOF，或對方重設連線。逾時（還連著）與讀到資料都不算。
 fn closed(stream: &mut UnixStream) -> bool {
     let mut buf = [0u8; 1];
-    matches!(stream.read(&mut buf), Ok(0) | Err(_))
+    match stream.read(&mut buf) {
+        Ok(n) => n == 0,
+        Err(err) => matches!(err.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe),
+    }
 }
 
 #[test]
@@ -410,6 +414,7 @@ fn a_bad_frame_from_a_pid_that_is_not_on_the_table_is_a_violation() {
     let mut host = HostProc::start(&socket);
     let mut pending = UnixStream::connect(&socket).unwrap();
     pending.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    // 這條拿到回答時，先連的 `pending` 已經 accept 了：宿主自己撤 pid 不收 backlog，還在 backlog 的不會記成撤過。
     let (mut stream, reply) = exchange(&socket, &frame(&[0xff]));
     let Some(HostMessage::Rejected { reason }) = reply else { panic!("{reply:?}") };
     assert!(closed(&mut stream));
@@ -445,6 +450,9 @@ fn a_connection_that_closes_reports_nothing_and_leaves_the_grant() {
     let socket = dir.join("host.sock");
     let mut host = HostProc::start(&socket);
     drop(UnixStream::connect(&socket).unwrap());
+    // 宿主讀到上一條的 EOF 不會晚於驗這一條的 `hello`：上一條斷的時候 pid 確實不在表上。
+    assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
+    assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
     host.grant(me(), TOKEN, Role::Conversation, "a");
     drop(UnixStream::connect(&socket).unwrap());
     let (verified, reply) = exchange(&socket, &hello_frame(TOKEN));

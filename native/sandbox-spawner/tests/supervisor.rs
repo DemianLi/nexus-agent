@@ -1644,7 +1644,7 @@ fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hos
     assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
 }
 
-/// 不是我們的 pid（這裡是 0：`SO_PEERCRED` 讀不到時宿主報的）被報 `violation` 與 `unregistered`：兩筆都寫稽核、`role` 是 `unknown`，
+/// 不是我們的 pid（這裡是 0：宿主讀不到連線的 pid，或對方 uid 跟它不同時報的）被報 `violation` 與 `unregistered`：兩筆都寫稽核、`role` 是 `unknown`，
 /// 不送 `revoke`、不記那行警告。假宿主接著對 a 報違規，a 的 `revoke` 出現時，排在它前面的 pid 0 那兩筆早就處理完了。
 #[test]
 fn reports_for_a_pid_that_is_not_ours_send_no_revoke() {
