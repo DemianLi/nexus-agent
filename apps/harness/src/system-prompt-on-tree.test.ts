@@ -156,14 +156,14 @@ describe('B：出貨清單上的 system-prompt 經樹進來，提供 systemPromp
     });
   }, 60000);
 
-  it('樹上的 systemPrompt 服務：歸屬是 system-prompt 那一列、契約 1.1.0', async () => {
+  it('樹上的 systemPrompt 服務：歸屬是 system-prompt 那一列、契約 1.2.0', async () => {
     const root = newRoot();
     await loadDefaultPlugins({ env: home().env, warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     const service = tree.get('systemPrompt') as
       { provider?: string; contractVersion?: string } | undefined;
     expect(service?.provider).toBe(`include:${ID}`);
-    expect(service?.contractVersion).toBe('1.1.0');
+    expect(service?.contractVersion).toBe('1.2.0');
   }, 60000);
 
   it('一條 thread 組裝後模型讀到身分句開頭、出貨前後綴；兩條 thread 各組一次也一樣', async () => {
