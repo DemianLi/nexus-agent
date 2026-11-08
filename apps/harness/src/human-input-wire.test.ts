@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
+import { DynamicStructuredTool, tool } from '@langchain/core/tools';
 import { interrupt, MemorySaver } from '@langchain/langgraph';
 import {
   attachSessionPersistence,
@@ -51,6 +51,8 @@ const NATIVE = process.env['NEXUS_TEST_AGENT_LOOP'] === 'native';
 const ASK = 'ask_probe';
 /** 同一個提問工具，但不宣告可並行：同一步兩顆照模型順序一顆一顆跑（屏障，`tool-barrier.ts`）。 */
 const ASK_EXCLUSIVE = 'ask_exclusive';
+/** 同一個提問工具，但不是 `tool()` 包的：沒有替它接中止，這一輪或這一批中止時本體照樣等在 `ask` 上。 */
+const ASK_DEAF = 'ask_deaf';
 /** 不問人，一直等到這一輪的中止訊號舉起來才回（{@link Probe.holdAfterAbort} 給了就再等它）。 */
 const HOLD = 'hold_probe';
 /** 回一則日誌記不下的結果（`BigInt`）：`tool/result` 落盤時拋，錯穿過圍堵。 */
@@ -122,6 +124,15 @@ function askPlugin(probe: Probe): PluginEntry {
         );
         registry.tools.register(
           tool(body, { name: ASK_EXCLUSIVE, description: '問人一個問題，一次一顆。', schema }),
+        );
+        registry.tools.register(
+          new DynamicStructuredTool({
+            name: ASK_DEAF,
+            description: '問人一個問題，不理中止。',
+            schema,
+            metadata: parallel,
+            func: (input, _runManager, config) => body(input, config),
+          }),
         );
         registry.tools.register(
           tool(
@@ -958,10 +969,11 @@ describe('收線與重開', () => {
 });
 
 describe('同一批一顆的結果記不進日誌、一顆在問人', () => {
-  // TODO(#2594)：`langgraph` 在這裡交出中斷、同時記 `turn/failed`，人答了也沒有東西收下。修好之後拿掉跳過，這條就是那張卡的驗收。
-  it.skipIf(!NATIVE)(
-    '這一輪失敗：沒有中斷、沒有掛著的提問，問人那顆被收回，下一句照常跑',
-    async () => {
+  // 問人那顆不理中止（`ASK_DEAF`）時，兄弟失敗舉起的這一批中止要由等人服務自己接：不然它一直等在 `ask` 上，這一批會停在等待點。
+  // TODO(#2594)：`langgraph` 在這裡交出中斷、同時記 `turn/failed`，人答了也沒有東西收下。修好之後拿掉跳過，這兩條就是那張卡的驗收。
+  it.skipIf(!NATIVE).each([ASK, ASK_DEAF])(
+    '問人那顆是 %s：這一輪失敗，沒有中斷、沒有掛著的提問，問人那顆以中止收，下一句照常跑',
+    async (asker) => {
       const probe = newProbe();
       const session = await open(
         't-break',
@@ -969,7 +981,7 @@ describe('同一批一顆的結果記不進日誌、一顆在問人', () => {
           {
             content: '',
             toolCalls: [
-              { id: 'q1', name: ASK, args: { q: '哪一個', approval: true } },
+              { id: 'q1', name: asker, args: { q: '哪一個', approval: true } },
               { id: 'b1', name: BREAK, args: {} },
             ],
           },
@@ -1005,7 +1017,8 @@ describe('同一批一顆的結果記不進日誌、一顆在問人', () => {
         b1: { isError: true, code: 'TOOL_OUTCOME_UNKNOWN' },
         q1: { isError: true, code: 'ABORTED' },
       });
-      expect(probe.withdrawn).toBe(1);
+      // 拿到的是這一批的中止（`AbortError`），不是收回。
+      expect(probe.withdrawn).toBe(0);
       expect(probe.answers).toEqual([]);
 
       // 線上：這一輪是失敗收的，沒交出過提問；拿一顆形狀相同的 id 去答也沒有東西收下。

@@ -158,4 +158,65 @@ describe('RunSuspension', () => {
     expect(onPark).toHaveBeenCalledTimes(1);
     expect(onPark.mock.calls[0]?.[0]).toMatchObject([{ callId: 'c4', value: 'q4' }]);
   });
+
+  it('這一批的中止舉起時（兄弟失敗），停在提問上、不理中止的那顆也不會停在等待點：提問以中止的原因拒絕，之後的提問與 idle 當場拒絕', async () => {
+    const onPark = vi.fn();
+    const suspension = new RunSuspension(onPark, () => {});
+    const step = new AbortController();
+    const asking = suspension.slot('q1', ['tools:q1'], step.signal);
+    asking.enter();
+    const failing = suspension.slot('b1', ['tools:b1'], step.signal);
+    failing.enter();
+    const asked = asking.service.ask('q').catch((error: unknown) => error);
+    // 同 `runBounded`：失敗那顆先收完（這一拍數到 0、一顆在問），之後才舉起這一批的中止。
+    failing.exit();
+    step.abort();
+
+    expect(await asked).toBe(step.signal.reason);
+    expect(step.signal.reason).toMatchObject({ name: 'AbortError' });
+    await expect(asking.service.ask('again')).rejects.toBe(step.signal.reason);
+    await expect(asking.service.idle(new Promise<never>(() => {}))).rejects.toBe(
+      step.signal.reason,
+    );
+    await tick();
+    await tick();
+    expect(onPark).not.toHaveBeenCalled();
+    expect(suspension.pending).toEqual([]);
+  });
+
+  it('收回之後才開始等的 idle：當場拒絕，不留著等', async () => {
+    const suspension = new RunSuspension(
+      () => {},
+      () => {},
+    );
+    const late = started(suspension, 'c1');
+    suspension.withdraw();
+    await tick();
+    const outcome = late.service.idle(new Promise<never>(() => {})).then(
+      () => 'resolved',
+      (error: unknown) => error,
+    );
+    const first = await Promise.race([outcome, tick().then(() => 'pending')]);
+
+    expect(isHumanInputWithdrawn(first)).toBe(true);
+  });
+
+  it('接回時一顆答覆都沒帶：當場拋，什麼都沒動；之後帶著答覆照常接回', async () => {
+    const suspension = new RunSuspension(
+      () => {},
+      () => {},
+    );
+    const { service } = started(suspension, 'c1');
+    const resumed = vi.fn();
+    service.onResumed(resumed);
+    const asked = service.ask('q');
+    await tick();
+    const [ask] = suspension.pending;
+
+    expect(() => suspension.resume({})).toThrow('沒有帶任何一顆答覆');
+    expect(resumed).not.toHaveBeenCalled();
+    expect(suspension.pending.map((pending) => pending.id)).toEqual([ask!.id]);
+    suspension.resume({ [ask!.id]: 'A' });
+    expect(await asked).toBe('A');
+  });
 });

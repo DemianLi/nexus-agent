@@ -29,6 +29,7 @@ export interface HumanInput {
    * @returns 人的答覆，同 `interrupt()` 的回傳值。
    * @throws {HumanInputWithdrawn} 還沒答就被收回（停止、收線）；收回之後再問也當場拒絕。要原樣往外拋，不要接住：接住了正常回傳，
    *   這顆呼叫就算完成，寫入照套。
+   * @throws 同一批的兄弟失敗、這一批中止時，以中止的原因（`AbortError`）拒絕，之後再問也是。
    */
   ask(value: unknown): Promise<unknown>;
   /**
@@ -37,7 +38,7 @@ export interface HumanInput {
    * @param waiting - 要等的那件事。
    * @returns 它的值。
    * @throws `waiting` 拒絕的那個錯。都在 `idle`、沒有一顆在問人時，以判成的那個錯拒絕。收回時先讓它跟著別顆的拒絕落定，下一個
-   *   `setImmediate` 還沒落定的以 {@link HumanInputWithdrawn} 拒絕。
+   *   `setImmediate` 還沒落定的以 {@link HumanInputWithdrawn} 拒絕；收回之後再等也當場拒絕。
    */
   idle<T>(waiting: Promise<T>): Promise<T>;
   /**

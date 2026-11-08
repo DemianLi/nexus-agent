@@ -266,17 +266,14 @@ class RunLink {
    * @param answers - 中斷 id → 答覆。
    * @param config - 接回這一段的 config。
    * @returns 這一段的串流。
-   * @throws {Error} 有一顆 id 不在還沒答的提問裡；這時什麼都還沒動。
+   * @throws {Error} 一顆都沒答，或有一顆 id 不在還沒答的提問裡；這時什麼都還沒動。
    */
   resume(
     answers: Readonly<Record<string, unknown>>,
     config: RunnableConfig,
   ): AsyncQueue<NativeProtocolEvent> {
+    this.suspension.check(answers);
     const pending = this.suspension.pending;
-    const unknown = Object.keys(answers).filter((id) => !pending.some((ask) => ask.id === id));
-    if (unknown.length > 0) {
-      throw new Error(`native agent loop 沒有這顆掛著的中斷：${unknown.join('、')}`);
-    }
     const queue = this.open();
     this.rebind?.(config);
     this.emitter.lifecycle('running');
@@ -982,7 +979,7 @@ export class NativeAgent {
         suspension === undefined
           ? undefined
           : (ns) => {
-              const slot = suspension.slot(call.id ?? '', [ns]);
+              const slot = suspension.slot(call.id ?? '', [ns], step.signal);
               slots[index] = slot;
               return { [HUMAN_INPUT_CONFIG_KEY]: slot.service };
             },

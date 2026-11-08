@@ -10,7 +10,8 @@
  * `onStuck`），不靜靜掛著；在 `idle` 等的每一顆以同一個錯拒絕。
  *
  * **收回**（{@link RunSuspension.withdraw}）拒絕每一顆 `ask`。在 `idle` 等的多半跟著前一顆的拒絕落定（例：屏障上等它的那顆一起退出）；
- * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。
+ * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。收回之後的 `ask`、`idle`
+ * 當場拒絕。
  *
  * @module
  */
@@ -39,7 +40,7 @@ export interface CallSlot {
   readonly service: HumanInput;
   /** 起跑。 */
   enter(): void;
-  /** 收完（不論成敗）。還沒落定的 `ask`、`idle` 以 {@link HumanInputWithdrawn} 拒絕，不再算在掛著的提問裡。 */
+  /** 收完（不論成敗）。還沒落定的 `ask`、`idle` 以 {@link HumanInputWithdrawn} 拒絕，不再算在掛著的提問裡，之後的也當場拒絕。 */
   exit(): void;
 }
 
@@ -78,29 +79,51 @@ export class RunSuspension {
    * 一顆呼叫的位子：發給它的服務，加上起跑與收完。
    * @param callId - 那顆呼叫的 id。
    * @param namespace - 那顆呼叫的命名空間。
+   * @param halt - 這一批的中止訊號（兄弟失敗時舉起）。舉起之後這顆還沒落定的 `ask`、`idle` 以它的 `reason` 拒絕，之後的也當場
+   *   拒絕：這一批不會再停在等待點，不論那顆呼叫自己理不理這個訊號。
    */
-  slot(callId: string, namespace: readonly string[]): CallSlot {
-    // 這顆呼叫自己還沒落定的 `ask`／`idle`：收完時還留著的（外層先把它收掉了，例：兄弟失敗舉起 step 的中止），在這裡清掉。
+  slot(callId: string, namespace: readonly string[], halt?: AbortSignal): CallSlot {
+    // 這顆呼叫自己還沒落定的 `ask`／`idle`。
     const asks = new Set<string>();
     const idlers = new Set<(reason: unknown) => void>();
-    /** `idlers` 裡每一顆在收完時怎麼拒絕。 */
-    const drops = new Map<(reason: unknown) => void, () => void>();
-    let waits = 0;
     let exited = false;
     const listeners = new Set<() => void>();
     const resumed = (): void => {
       for (const listener of [...listeners]) listener();
     };
+    // 不再收新的等待時拒絕的原因：收回、收完是 `HumanInputWithdrawn`；這一批中止了是中止的原因，同 `tool()` 替呼叫接的中止。
+    const refusal = (): unknown =>
+      this.#withdrawn || exited
+        ? new HumanInputWithdrawn()
+        : halt?.aborted === true
+          ? halt.reason
+          : undefined;
+    // 拒絕這顆呼叫還沒落定的每一個等待，每一個把扣掉的那一顆加回來：呼叫拿到拒絕之後是在自己往前跑。
+    const cancel = (reason: () => unknown): void => {
+      for (const id of [...asks]) {
+        const ask = this.#asks.get(id);
+        if (ask === undefined) continue;
+        this.#asks.delete(id);
+        this.#active += 1;
+        ask.reject(reason());
+      }
+      for (const release of [...idlers]) release(reason());
+    };
+    const onHalt = (): void => {
+      cancel(() => halt?.reason);
+      this.#maybePark();
+    };
+    halt?.addEventListener('abort', onHalt, { once: true });
     const service: HumanInput = {
       ask: (value) => {
-        if (this.#withdrawn || exited) return Promise.reject(new HumanInputWithdrawn());
+        const refused = refusal();
+        if (refused !== undefined) return Promise.reject(refused);
         const id = randomUUID().replaceAll('-', '');
         return new Promise((resolve, reject) => {
           const settle =
             <A extends unknown[]>(then: (...args: A) => void) =>
             (...args: A): void => {
               asks.delete(id);
-              waits -= 1;
               then(...args);
             };
           this.#asks.set(id, {
@@ -113,42 +136,38 @@ export class RunSuspension {
             resumed,
           });
           asks.add(id);
-          waits += 1;
           this.#active -= 1;
           this.#maybePark();
         });
       },
-      idle: <T>(waiting: Promise<T>): Promise<T> =>
-        new Promise<T>((resolve, reject) => {
+      idle: <T>(waiting: Promise<T>): Promise<T> => {
+        const refused = refusal();
+        if (refused !== undefined) {
+          waiting.catch(() => undefined);
+          return Promise.reject(refused);
+        }
+        return new Promise<T>((resolve, reject) => {
           const drop = (): boolean => {
             if (!this.#idlers.delete(release)) return false;
             idlers.delete(release);
-            drops.delete(release);
-            waits -= 1;
+            this.#active += 1;
             return true;
           };
           const release = (reason: unknown): void => {
-            if (!drop()) return;
-            this.#active += 1;
-            reject(reason);
+            if (drop()) reject(reason);
           };
           this.#idlers.add(release);
           idlers.add(release);
-          waits += 1;
           this.#active -= 1;
           this.#maybePark();
           waiting.then(
             (value) => {
-              if (!drop()) return;
-              this.#active += 1;
-              resolve(value);
+              if (drop()) resolve(value);
             },
             (error: unknown) => release(error),
           );
-          drops.set(release, () => {
-            if (drop()) reject(new HumanInputWithdrawn());
-          });
-        }),
+        });
+      },
       onResumed: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -161,29 +180,35 @@ export class RunSuspension {
       },
       exit: () => {
         exited = true;
-        // 起跑算一顆，每一個還沒落定的等待已經扣過一顆：這顆收完要拿掉的是它此刻還佔著的那一份。
-        this.#active -= 1 - waits;
-        for (const id of [...asks]) {
-          const ask = this.#asks.get(id);
-          this.#asks.delete(id);
-          ask?.reject(new HumanInputWithdrawn());
-        }
-        for (const release of [...idlers]) drops.get(release)?.();
+        halt?.removeEventListener('abort', onHalt);
+        cancel(() => new HumanInputWithdrawn());
+        this.#active -= 1;
         this.#maybePark();
       },
     };
   }
 
   /**
-   * 送回答覆：每一顆照 id 解開，這次 run 接著跑。沒答到的照舊掛著，同一批又都停住時帶著原 id 再交一次。
+   * 驗答覆收不收得下，不動任何狀態。
    * @param answers - 中斷 id → 答覆。
-   * @throws {Error} 有一顆 id 不在還沒答的提問裡。
+   * @throws {Error} 一顆都沒答，或有一顆 id 不在還沒答的提問裡。
    */
-  resume(answers: Readonly<Record<string, unknown>>): void {
-    const unknown = Object.keys(answers).filter((id) => !this.#asks.has(id));
+  check(answers: Readonly<Record<string, unknown>>): void {
+    const ids = Object.keys(answers);
+    if (ids.length === 0) throw new Error('native agent loop 接回時沒有帶任何一顆答覆');
+    const unknown = ids.filter((id) => !this.#asks.has(id));
     if (unknown.length > 0) {
       throw new Error(`native agent loop 沒有這顆掛著的中斷：${unknown.join('、')}`);
     }
+  }
+
+  /**
+   * 送回答覆：每一顆照 id 解開，這次 run 接著跑。沒答到的照舊掛著，同一批又都停住時帶著原 id 再交一次。
+   * @param answers - 中斷 id → 答覆。
+   * @throws {Error} 同 {@link RunSuspension.check}；拋的時候什麼都還沒動。
+   */
+  resume(answers: Readonly<Record<string, unknown>>): void {
+    this.check(answers);
     this.#parked = false;
     const failed = new Map<string, unknown>();
     for (const ask of this.#asks.values()) {
@@ -214,7 +239,10 @@ export class RunSuspension {
     this.#withdrawn = true;
     const asks = [...this.#asks.values()];
     this.#asks.clear();
-    for (const ask of asks) ask.reject(new HumanInputWithdrawn());
+    for (const ask of asks) {
+      this.#active += 1;
+      ask.reject(new HumanInputWithdrawn());
+    }
     setImmediate(() => this.#releaseIdlers(new HumanInputWithdrawn()));
   }
 
