@@ -3,7 +3,7 @@
  *
  * 節點照 langchain `createAgent` 的順序排，每一格直接呼叫 middleware 上登記的那一步（`hook-node.ts`、`model-node.ts`、
  * `tool-node.ts`）；沒登記、也不在 `native-noop-cells.ts` 清單上的格，建構時就拋。日誌、圍堵、重試由那幾步寫與做，
- * TODO(#2357)：搬成事件與服務。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
+ * TODO(#2363)：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時搬成事件與服務。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
  *
  * 一次 run 的順序（同 `ReactAgent.js` 的邊）：
  *

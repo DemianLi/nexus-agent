@@ -74,7 +74,7 @@ const registeredCells = new WeakMap<object, ReadonlyMap<HookKind, HookStepCell>>
 /**
  * 造一顆 middleware：`beforeAgent`、`beforeModel`、`afterAgent` 給的是一步，hook 由 {@link hookWith} 從它造，並登記在這一顆上；
  * 其餘欄位（`name`、`stateSchema`、`wrapModelCall`、`wrapToolCall` 等）原樣交給 `createMiddleware`。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param options - `createMiddleware` 的選項，三種 hook 換成一步。
  * @returns 可以放進 middleware 陣列的實例。
@@ -101,7 +101,7 @@ export function createHookStepMiddleware(
 
 /**
  * 這顆 middleware 的這一種 hook 登記的那一步（{@link createHookStepMiddleware}）；沒登記是 `undefined`。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param middleware - 那一顆，照身分查：複製出來的物件查不到。
  * @param kind - 哪一種 hook。

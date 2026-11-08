@@ -4,8 +4,9 @@
  * 另由 `turn-stopping.ts` 的轉接格派。監聽者只有 `agent/turn-stopping` 有（`@nexus/plugin-workspace-changes`）；`@nexus/agent-loop`
  * 同名的 pre-step listener 經宿主建成 `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
  *
- * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 登記的那幾步改，所以 `agent/pre-step` 不帶 `messages`，`llm/stream` 環繞的是一次
- * `invoke` 而不是串流。TODO(#2357)：middleware 搬成這些事件的監聽者時補齊載荷，契約可能跟著改。
+ * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 登記的那幾步改，所以 `agent/pre-step` 不帶 `messages`。TODO(#2363)：訊息搬出
+ * LangGraph 形狀的 state、那幾步搬成這些事件的監聽者時補上，契約可能跟著改。模型層還是 LangChain 的 chat model（`model-node.ts`
+ * 呼叫它的 `invoke`），所以 `llm/stream` 環繞的是一次 `invoke` 而不是串流。TODO(#2361)：模型轉接器換掉時改成環繞串流。
  *
  * @module
  */
