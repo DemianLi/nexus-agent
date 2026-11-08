@@ -1632,13 +1632,57 @@ fn a_second_violation_for_a_quarantined_conversation_is_audited_and_revoked_agai
 fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hosts_reason() {
     let mut h = Harness::start(Options { host: fake_host(&["--then-unregistered", "框太大"]), ..Options::default() });
     let a = h.up("a");
-    let pid = format!("\"pid\":{},", logged_pid(&a, "pid"));
+    let a_pid = logged_pid(&a, "pid");
+    let revoke = format!("revoke {a_pid}");
+    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "兩次都補送 revoke：{:?}", host_log(&h));
+    let pid = format!("\"pid\":{a_pid},");
     let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
     assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
     for (line, reason) in lines().iter().zip(["測試違規", "框太大"]) {
         assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
     }
     assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+}
+
+/// 不是我們的 pid（這裡是 0：`SO_PEERCRED` 讀不到時宿主報的）被報 `violation` 與 `unregistered`：兩筆都寫稽核、`role` 是 `unknown`，
+/// 不送 `revoke`、不記那行警告。假宿主接著對 a 報違規，a 的 `revoke` 出現時，排在它前面的 pid 0 那兩筆早就處理完了。
+#[test]
+fn reports_for_a_pid_that_is_not_ours_send_no_revoke() {
+    let mut h = Harness::start(Options { host: fake_host(&["--report-strangers"]), ..Options::default() });
+    let a = h.up("a");
+    let revoke = format!("revoke {}", logged_pid(&a, "pid"));
+    assert!(wait_until(|| host_log(&h).contains(&revoke)), "{:?}", host_log(&h));
+    assert!(!host_log(&h).contains(&"revoke 0".to_string()), "{:?}", host_log(&h));
+    let lines: Vec<String> = h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains("\"pid\":0,")).collect();
+    assert_eq!(lines.len(), 2, "{:?}", h.audit());
+    assert!(lines.iter().all(|l| l.contains("\"role\":\"unknown\"")), "{lines:?}");
+    assert!(lines[0].contains("測試違規") && lines[1].contains("沒有登記"), "{lines:?}");
+    assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+}
+
+/// 隔離到行程結束：宿主重起之後重送的表裡沒有它。之後才起的對話行程 c 那一筆排在整張表後面，它出現時表已經送完了。
+#[test]
+fn a_quarantined_conversation_is_left_out_of_the_table_sent_to_a_restarted_host() {
+    let mut h = Harness::start(Options { host: fake_host(&["--violate-conversations"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    assert!(wait_until(|| host_log(&h).contains(&format!("revoke {a_pid}"))), "{:?}", host_log(&h));
+    let fake = children(h.pid())
+        .into_iter()
+        .find(|&pid| String::from_utf8_lossy(&proc_file(pid, "cmdline")).contains("fake_host"))
+        .expect("假宿主");
+    kill(fake, libc::SIGKILL);
+    let after_restart = |h: &Harness| {
+        let log = host_log(h);
+        let second = log.iter().enumerate().filter(|(_, l)| l.starts_with("start ")).nth(1).map(|(i, _)| i);
+        second.map(|i| log[i..].to_vec()).unwrap_or_default()
+    };
+    assert!(wait_until(|| after_restart(&h).iter().any(|l| l.starts_with("grant ") && l.contains(" front"))), "{:?}", host_log(&h));
+    h.up("c");
+    assert!(wait_until(|| after_restart(&h).iter().any(|l| l.ends_with(" conversation c"))), "{:?}", host_log(&h));
+    let regranted = format!("grant {a_pid} ");
+    assert!(after_restart(&h).iter().all(|l| !l.starts_with(&regranted)), "{:?}", after_restart(&h));
+    assert!(!gone(a_pid), "被隔離的對話行程照跑");
 }
 
 /// 真的宿主被殺掉重起：對話行程用原本的 token 重連得上，因為監督行程把整張表重送給新的宿主。
