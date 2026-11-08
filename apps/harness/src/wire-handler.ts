@@ -2289,11 +2289,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           executor: createCommandExecutor({
             commands: threadAgent.commands,
             sessionLog: pump.sessionLog,
-            // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用就讓命令在動任何東西之前失敗。
+            // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用、native 下太大，都讓命令在動任何東西之前失敗。
             acceptSteer: (text) => {
               // 收尾中不替命令開新一輪（#1787）：在命令動任何域之前就拒收，命令落定成 `error`、什麼都沒改。`handleSlash` 認這個例外回 `server_closing`。
               if (admissionClosed()) throw new ServerClosingError();
-              void pump.referencedText(text);
+              const referenced = pump.referencedText(text).text;
+              if (options.agentLoop !== 'native') return;
+              const rejection = humanMessageRejection(referenced);
+              if (rejection !== undefined) throw new Error(rejection);
             },
             // 同一道閘，給「不 steer、但改了域之後排程器自己開一輪」的命令（`/goal <目標>`、`/goal resume`，#1787）：在寫日誌之前拒。
             acceptOpenTurn: () => {
