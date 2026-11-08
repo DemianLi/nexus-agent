@@ -17,6 +17,7 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 - **`tools/execute` 能交回改過內容的 `command` 結果**（`PipelineCommandInput`）：只換 `Command` 裡這次呼叫的那則，`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，同一個 `callId` 的其餘幾則丟掉，`update.messages` 裡沒有就加在最後。
   - 內容給 `content` 或 `blocks` 其中一個，同 `PipelineMessageInput`。
   - 本體回的 `Command` 的 `update` 不是物件（例如 tuple 陣列），或本體回的不是 `Command`：放不進那則，整個換成用交回內容新造的一則 `ToolMessage`。
+  - 照舊拋 `TypeError`：本體沒跑（被內側短路）；或不帶內容、又不是 `next()` 回的那一個。
   - 舊行為：交回的 `command` 結果不是 `next()` 回的那一個，一律拋 `TypeError`。
 - **`fresh: true`**：`tools/execute` 交回的訊息結果帶它，換上的那則就是新造的，只帶 `tool_call_id`、`name`、`status` 與錯誤碼，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。不帶的照舊沿用。
 
@@ -30,6 +31,8 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
   - 換過的那一份是完整的結果：`blocks` 是 `content` 那一格 `text`，`shape` 是 `text`。這個 `blocks` 由 `content` 導出，生產者認的是參照：
     - 原樣交回，或只換 `content`（`{ ...result, content }`）：模型收到字串。
     - 給新的 `blocks`，連複製一份（`[...result.blocks]`）也算：模型收到陣列。要保持字串就別複製，改 `content`。
+  - 先讀後改的拒絕（在工具本體跑之前短路交回的那則）同樣是這種完整的結果，認參照的規則相同；以前它只帶 `content`。
+  - 例外：檔案工具失敗時補上 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的提示，這兩處只改 `content`，`blocks` 仍是工具本體原本那一份，兩者的文字對不上。模型收到的是 `content`。要讀這兩種結果的文字，讀 `content`。
   - `ToolThread.on('tools/execute', …)` 登記的監聽者拿到的是不透明的 `ToolExecuteOutcome`，讀不到內容，只有時刻變了。
 - **`tools/post-execute`**：共用區的讀檔前綴排在匯流排上的插件監聽者內側。
   - 舊行為：插件監聽者收到的 `result` 已經加過前綴。

@@ -923,7 +923,7 @@ export function foldRegistry(
     ),
     // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的是段的最後；記憶在基座最內層，還接在它之後。
     { name: 'plugins.last', root: same(plugins.last), subagent: same(subagentPlugins.last) },
-    // `tools/post-execute`（#1248）在讀到哪等貼著工具本體的那幾顆外側、在每一個 plugin
+    // `tools/post-execute`（#1248）在讀到哪與 `tools/execute` 外側、在每一個 plugin
     // middleware 內側：plugin 與圍堵看到的是替換過的那則。共用區的前綴是它內層的 core 監聽者。
     shared('toolPostExecute', toolPostExecute),
     // 讀檔結果最後補上讀到哪：在 `tools/execute` 外側，看到的是失敗已經標成錯誤的結果，只補成功的；

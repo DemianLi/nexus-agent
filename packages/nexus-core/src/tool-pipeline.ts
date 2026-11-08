@@ -24,7 +24,7 @@
  * | 事件 | 生產者 | 位置 |
  * | --- | --- | --- |
  * | `tools/pre-execute` | {@link createToolPreExecuteMiddleware} | **緊貼核准閘門外側**：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成「先跳核准卡再被拒」 |
- * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 讀到哪等貼著工具本體的那幾顆外側、plugin middleware 內側；輸出校驗在 `tools/execute` 的內層，比它早 |
+ * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 讀到哪與 `tools/execute` 外側、plugin middleware 內側；輸出校驗在 `tools/execute` 的內層，比它早 |
  * | `tools/execute` | {@link createToolExecuteMiddleware} | 環繞工具本體：在 `invalidToolArgs` 內側，工具那一側沒有別的 middleware 在它內側；輸出校驗與 `task` 撞限的替換是它內層的 core 監聽者（`fold.ts`） |
  * | `tools/result` | `containment.ts` | 圍堵：只有它同時看得到內層拋出的錯與回來的結果；在記 `tool/result` 之前派發（同 dsh 的 `notifyResult` 先於迴圈的 `appendToolResult`） |
  *
@@ -171,9 +171,10 @@ export type PipelineResultView =
 
 /**
  * 一次呼叫的結果：`tools/execute` 的 `next()` 回的、監聽者原樣交回的。形狀同 {@link PipelineResultView}，只是 `shape` 選填：
- * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。內層 core 監聽者換掉結果時（輸出不合 schema、`task` 撞限），
- * 先讀後改的拒絕也一樣：交回的 `blocks` 是 `content` 那一格 `text`、`shape` 是 `text`（落地規則見檔頭第 7 條）。例外：檔案工具的失敗
- * （`fs-tool-errors.ts`）改了 `content`，`blocks` 仍是工具本體那一份，兩者的文字對不上（由 #2584 收掉）。
+ * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。內層 core 監聽者換掉結果或短路時（先讀後改的拒絕、輸出校驗、
+ * `task` 撞限），交回的 `blocks` 是 `content` 那一格 `text`、`shape` 是 `text`（落地規則見檔頭第 7 條）。例外：`fs-tool-errors.ts` 只改
+ * `content` 的兩處——檔案工具失敗時補 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的那句——`blocks` 仍是工具本體那一份，兩者的文字對不上
+ * （由 #2584 收掉）。
  */
 export type PipelineResult =
   | (Omit<Extract<PipelineResultView, { kind: 'message' }>, 'shape'> & {
@@ -254,14 +255,14 @@ declare module './events.js' {
     ): Promise<PipelinePreDecision>;
     /**
      * 環繞派發：計時、計量、短路。`next()` 回內側那一位交回的結果：最內層是工具本體的視圖（{@link PipelineResultView}），內層 core 監聽者
-     * 換掉的結果也帶 `blocks`、`shape`，例外見 {@link PipelineResult}。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
+     * 換掉的結果也帶 `blocks`、`shape`；`blocks` 跟 `content` 文字對不上的例外見 {@link PipelineResult}。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
      * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑。
      * 呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則；
      * 帶 `fresh: true` 就換成新造的一則，不沿用後三格。
      * 本體回的是 `Command` 時：交回 `message` 結果，整個 `Command` 不採用，換成那一則；交回帶 `content` 或 `blocks` 的 `command` 結果，只換 `Command`
      * 裡屬於這次呼叫的那則（規則同上，沒有那一則就加在 `update.messages` 最後），`update` 的其餘鍵與 `graph`、`goto` 原樣；`update` 不是物件時
      * 放不進那則，整個換成新造的一則。本體回的不是 `ToolMessage` 也不是 `Command` 時，帶內容的 `command` 結果同樣換成新造的一則。
-     * 交回不帶內容的 `command` 結果、又不是工具本體回的那一個（本體沒跑，或自己另造了一個）就拋 `TypeError`。
+     * 交回 `command` 結果而本體沒跑（被內側短路），或不帶內容、又不是工具本體回的那一個（自己另造了一個），就拋 `TypeError`。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
      * @mode waterfall
@@ -463,7 +464,8 @@ const derivedTextBlocks = new WeakSet<object>();
  * core 監聽者換掉結果時造的一則文字結果：完整的 {@link PipelineResult}（`blocks` 是 `content` 那一格 `text`，`shape: 'text'`），
  * 帶 `fresh: true`。`blocks` 登記成由 `content` 導出：原樣交回或只換 `content` 都落成字串，外側另給（含複製一份）的 `blocks` 才落成陣列。
  * @param kind - `message`：整個換成這一則（本體回 `Command` 時整個不採用）。`command`：只換本體回的 `Command` 裡這次呼叫的那則，
- *   `update` 其餘原樣；本體回的不是 `Command`、或 `update` 不是物件時，同樣換成新造的一則。
+ *   `update` 其餘原樣，同一個 `callId` 的其餘幾則丟掉；本體回的不是 `Command`、或 `update` 不是物件時，同樣換成新造的一則；
+ *   本體沒跑（被內側短路）時拋 `TypeError`。
  * @param content - 模型收到的文字。
  * @param outcome - `isError` 與要掛的碼。
  * @returns 要交回 `tools/execute` 的結果。
