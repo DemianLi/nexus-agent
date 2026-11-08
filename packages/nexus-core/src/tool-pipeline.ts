@@ -65,7 +65,7 @@
  *    `tools/execute` 交回的結果兩者都在時以 `blocks` 為準；`replace` 只能給其中一個，兩個都給或都不給拋 `TypeError`。`content` 留著是給只讀文字的監聽者，不必自己串區塊。
  *    `tools/execute` 交回的 `blocks` 跟工具本體那則造出的視圖是同一個參照（`{ ...view, … }` 一路展開帶過去的也是）時，算沒給新的區塊：內容的形狀照本體回的那則，
  *    `content` 沒換就沿用原本的內容，換了就照原本是字串或陣列給新的文字。陣列裡的圖之類的非文字塊這時不留；要留就自己給新的 `blocks`。
- *    內層 core 監聽者換掉結果時交回的 `blocks`（{@link freshTextResult}）同樣認參照：原樣交回或只換 `content` 落成字串；複製一份（`[...blocks]`）再交回算給了新的區塊，落成陣列。
+ *    先讀後改的拒絕、輸出校驗與撞限替換交回的 `blocks`（{@link freshTextResult}）同樣認參照：原樣交回或只換 `content` 落成字串；複製一份（`[...blocks]`）再交回算給了新的區塊，落成陣列。
  * 8. **`tools/post-execute` 只有 `accept`／`replace`**（範圍，不是表達不出來）：沒有 dsh 的 `block` 與 `additionalContexts`，
  *    等到有消費者要用再加。
  *
@@ -172,7 +172,8 @@ export type PipelineResultView =
 /**
  * 一次呼叫的結果：`tools/execute` 的 `next()` 回的、監聽者原樣交回的。形狀同 {@link PipelineResultView}，只是 `shape` 選填：
  * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。內層 core 監聽者換掉結果時（輸出不合 schema、`task` 撞限），
- * 交回的是 {@link freshTextResult} 造的完整結果，`blocks`、`shape` 都在。
+ * 先讀後改的拒絕也一樣：交回的 `blocks` 是 `content` 那一格 `text`、`shape` 是 `text`（落地規則見檔頭第 7 條）。例外：檔案工具的失敗
+ * （`fs-tool-errors.ts`）改了 `content`，`blocks` 仍是工具本體那一份，兩者的文字對不上（由 #2584 收掉）。
  */
 export type PipelineResult =
   | (Omit<Extract<PipelineResultView, { kind: 'message' }>, 'shape'> & {
@@ -253,7 +254,7 @@ declare module './events.js' {
     ): Promise<PipelinePreDecision>;
     /**
      * 環繞派發：計時、計量、短路。`next()` 回內側那一位交回的結果：最內層是工具本體的視圖（{@link PipelineResultView}），內層 core 監聽者
-     * 換掉時是它造的完整結果（{@link freshTextResult}）。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
+     * 換掉的結果也帶 `blocks`、`shape`，例外見 {@link PipelineResult}。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
      * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑。
      * 呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則；
      * 帶 `fresh: true` 就換成新造的一則，不沿用後三格。

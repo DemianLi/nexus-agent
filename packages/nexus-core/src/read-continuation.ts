@@ -50,9 +50,8 @@
  * 格式化後的 80,000 字元上限去截（下面「已知的界線」那一條）。**範圍縮到不自己建頁的 backend**：
  * contained backend 自己建頁（下一段），每行先截到 2000 字元，第一行永遠塞得下，跟 dsh 一樣。
  *
- * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到同
- * {@link ./fs-tool-errors.ts} 的做法——一顆貼著工具本體的 `wrapToolCall`，時刻是 dsh 的
- * `tools/execute`。它要的總行數從 backend 取：
+ * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到一顆排在 `tools/execute` 外側的
+ * `wrapToolCall`（看到的是檔案工具的失敗已經標成錯誤的結果），時刻是 dsh 的 `tools/execute`。它要的總行數從 backend 取：
  *
  * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，backend 可以用
  *   {@link currentReadWindow} 領走這一頁的請求（offset、limit、行長與位元組上限），**自己讀、自己建頁**，

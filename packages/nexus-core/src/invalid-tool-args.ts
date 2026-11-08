@@ -49,7 +49,7 @@
  *
  * 排在 `turnCancelModelSignal` 之前（那一顆只有 `wrapModelCall`，而且只綁訊號）。核准閘門與 plugin
  * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在其餘
- * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**比它更內側的只有 {@link ./max-tokens.ts}**
+ * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**模型那一側比它更內側、會動回覆裡工具呼叫的只有 {@link ./max-tokens.ts}**
  * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
  * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
