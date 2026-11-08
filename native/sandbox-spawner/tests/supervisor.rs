@@ -1550,7 +1550,8 @@ fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits
     assert!(!h.audit().iter().any(|l| l.contains("\"event\":\"protocol\"")), "{:?}", h.audit());
 }
 
-/// 隔離一個活著的身分時，監督行程經同一條通道送 `revoke`：那一筆 `grant` 若還排在監督行程這邊沒寫出去，撤銷排在它後面，宿主表上不會留著被隔離的 pid。
+/// 宿主對活著的對話行程回報 `violation`：監督行程寫稽核（`role` 是 `conversation`）、不殺它，並經控制通道對那個 pid 送 `revoke`；
+/// 行程還活著，所以這筆撤銷來自隔離，不是收屍前那一筆。撤銷排在還沒寫出去的 `grant` 後面，靠的是同一條通道先進先出，這裡沒有造出 `grant` 還排著的情況。
 #[test]
 fn a_violation_revokes_the_live_identity_on_the_host() {
     let mut h = Harness::start(Options { host: fake_host(&["--violate-conversations"]), ..Options::default() });

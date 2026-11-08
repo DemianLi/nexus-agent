@@ -116,7 +116,7 @@ fn a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections(
     assert_eq!(reply, accepted());
     assert_eq!(exchange(&socket, &hello_frame(OTHER)).1, rejected("token 不對"));
     assert_eq!(host.report(), Some(violation(me(), "token 不對")));
-    assert!(closed(&mut first), "隔離時它其他的連線要一起斷");
+    assert!(closed(&mut first), "隔離時它其他驗過身分的連線要一起斷");
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
     assert_eq!(host.report(), Some(unregistered(me())));
 
@@ -174,7 +174,7 @@ fn a_hello_after_a_revoke_is_always_rejected() {
         assert_eq!(reply, accepted(), "第 {round} 輪");
         host.command(&HostCommand::Revoke { pid: me() });
         assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "第 {round} 輪");
-        assert!(closed(&mut live), "撤銷時它的連線要一起斷（第 {round} 輪）");
+        assert!(closed(&mut live), "撤銷時它驗過身分的連線要一起斷（第 {round} 輪）");
         assert_eq!(host.report(), Some(unregistered(me())));
     }
 }
@@ -194,6 +194,28 @@ fn a_revoke_leaves_connections_that_have_not_said_hello_to_be_rejected() {
         assert_eq!(reply, accepted(), "第 {round} 輪");
         host.command(&HostCommand::Revoke { pid: me() });
         assert!(closed(&mut live), "驗過身分的要斷（第 {round} 輪）");
+        pending.write_all(&hello_frame(TOKEN)).unwrap();
+        assert_eq!(read_message(&mut pending), rejected("沒有登記"), "第 {round} 輪");
+        assert_eq!(host.report(), Some(unregistered(me())));
+    }
+}
+
+/// 撤銷之前就連上、還沒送 `hello` 的連線，之後同一個 pid 號碼重新登記（pid 被重用）也不算數：它的 `hello` 一律被拒，
+/// 不照新的那一筆驗，免得舊行程留下的連線冒充新行程，或送錯 token 害新行程被隔離。
+#[test]
+fn a_connection_from_before_a_revoke_is_not_verified_against_a_later_grant() {
+    let dir = temp_dir("reuse");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start(&socket);
+    for round in 0..50 {
+        host.grant(me(), TOKEN, Role::Conversation, "a");
+        let mut pending = UnixStream::connect(&socket).unwrap();
+        pending.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let (mut live, reply) = exchange(&socket, &hello_frame(TOKEN));
+        assert_eq!(reply, accepted(), "第 {round} 輪");
+        host.command(&HostCommand::Revoke { pid: me() });
+        assert!(closed(&mut live), "第 {round} 輪");
+        host.grant(me(), TOKEN, Role::Conversation, "b");
         pending.write_all(&hello_frame(TOKEN)).unwrap();
         assert_eq!(read_message(&mut pending), rejected("沒有登記"), "第 {round} 輪");
         assert_eq!(host.report(), Some(unregistered(me())));

@@ -6,7 +6,7 @@
 //! ```
 //!
 //! 控制通道是 stdin／stdout（[`crate::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
-//! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 就刪掉 socket、回 0。
+//! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
 //!
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
@@ -54,6 +54,8 @@ struct Conn {
     pid: Option<u32>,
     opened: Instant,
     hello: bool,
+    /// 還沒送 `hello` 時那個 pid 就被撤了：之後的 `hello` 一律回 `rejected`，就算同一個 pid 號碼又登記了也不照新的那一筆驗。
+    revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
     dead: bool,
 }
@@ -207,11 +209,16 @@ impl Host {
         !self.control.read_closed()
     }
 
-    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著：送來時表上已經沒有它，照樣回 `rejected`。
+    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著、記成撤過：送來時一律回 `rejected`，
+    /// pid 被重用、同一個號碼又登記了也一樣，舊行程留下的連線不能拿新的那一筆驗。
     fn revoke(&mut self, pid: u32) {
         self.grants.remove(&pid);
-        for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid) && conn.hello) {
-            conn.dead = true;
+        for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid)) {
+            if conn.hello {
+                conn.dead = true;
+            } else {
+                conn.revoked = true;
+            }
         }
     }
 
@@ -262,7 +269,7 @@ impl Host {
                     let fd = OwnedFd::from(stream);
                     let Ok(write) = fd.try_clone() else { continue };
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
-                    self.conns.push(Conn { chan, pid, opened: Instant::now(), hello: false, dead: false });
+                    self.conns.push(Conn { chan, pid, opened: Instant::now(), hello: false, revoked: false, dead: false });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
@@ -312,7 +319,7 @@ impl Host {
             self.violate(i, "重複的 hello");
             return false;
         }
-        let Some(grant) = conn.pid.and_then(|pid| self.grants.get(&pid)) else {
+        let Some(grant) = conn.pid.filter(|_| !conn.revoked).and_then(|pid| self.grants.get(&pid)) else {
             let pid = self.refuse(i, "沒有登記");
             self.report(&HostReport::Unregistered { pid });
             return false;
