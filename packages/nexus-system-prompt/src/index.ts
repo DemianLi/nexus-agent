@@ -34,7 +34,7 @@
  * | 7 | Config 五格（另有 `includeRuntimeContext`、`toolOrder`） | 三格 | 另兩格管執行期上下文與工具段，第一刀沒有 |
  * | 8 | 沒有 `cwd` 變數 | 有，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
  * | 9 | 渲染時才嚴格插值、才拋，訊息是英文 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
- * | 10 | section 的 order 任意 | 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLUGIN_POLICY` 中段不算 |
+ * | 10 | section 的 order 任意 | 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLAN_POLICY` 與 `PLUGIN_POLICY` 中段不算 |
  *
  * **撤除條件**：第 1、4、6、9 列各有各的卡（中間段、逐步 `assemble`、渲染時才拋）；撤除時先重審這張表。
  *
@@ -52,11 +52,12 @@ import { defineToken } from '@nexus/sdk';
 export const SYSTEM_PROMPT_CONTRACT_VERSION = '1.2.0';
 
 /**
- * 段的排序值。只放有消費者從這裡取的格，其餘的值等第一個從這裡取它的遷移卡再加。
+ * 段的排序值。只放有消費者從這裡取、或已開卡的遷移要取的格（`PLAN_POLICY`：[#2551](https://github.com/DemianLi/nexus-agent/issues/2551)），
+ * 其餘的值等第一個要取它的遷移卡再加。
  *
- * 頭尾三格由 `system-prompt` 那一列登記。`PLAN_POLICY`（契約 `1.2.0` 起）與 `PLUGIN_POLICY`（`1.1.0` 起）是遷出的插件經
- * `thread.section()` 交的中段：宿主只收 `@nexus/core` 開放給插件的中段值，所以它們必須等於 core 的 `MIDDLE_SECTION_ORDERS`
- * 同名格，兩邊相等由 `apps/harness/src/middle-section-orders.test.ts` 釘住。
+ * 頭尾三格由 `system-prompt` 那一列登記。`PLUGIN_POLICY`（契約 `1.1.0` 起）與 `PLAN_POLICY`（`1.2.0` 起）是開給插件經
+ * `thread.section()` 交的中段值；`PLAN_POLICY` 給計劃模式的 `plan:policy` 段。宿主只收 `@nexus/core` 開放給插件的中段值，
+ * 所以兩格必須等於 core 的 `MIDDLE_SECTION_ORDERS` 同名格，兩邊相等由 `apps/harness/src/middle-section-orders.test.ts` 釘住。
  */
 export const SECTION_ORDERS = {
   /** 最前面一句身分句。 */
