@@ -9164,7 +9164,7 @@
       "digest": "db7b8ada4b383c1bdf67b54aae617691bbe50a95bd5a33f3d646f9a3d19e5957",
       "names": [],
       "sources": [
-        "packages/nexus-plugin-plan-mode/src/index.ts:815"
+        "packages/nexus-plugin-plan-mode/src/index.ts:784"
       ]
     },
     {

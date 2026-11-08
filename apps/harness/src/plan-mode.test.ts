@@ -75,11 +75,12 @@ import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
-import { createCliAgent } from './assembly-root.js';
+import { createCliAgent, THREAD_ID } from './assembly-root.js';
 import { restoreConversation } from './conversation-restore.js';
 import { runRepl } from './cli.js';
 import {
   shippedPlugins,
+  shippedPluginsWithConfig,
   testPlanModePlugin,
   withoutTimeContext,
   withScriptedModel,
@@ -99,12 +100,16 @@ const SHIPPED_GUIDANCE = (
 )?.guidance as string;
 
 /** 出貨清單上 `plan-mode` 那一列換 config，其餘不動。不給就是出貨的樣子（`startActive` 關）。 */
-function withPlanMode(config?: { startActive?: boolean; guidance?: string }): PluginEntry[] {
-  return shipped.map((entry) =>
-    entry.id === 'plan-mode' && config
-      ? { ...entry, config: { guidance: SHIPPED_GUIDANCE, ...config } }
-      : entry,
-  );
+async function withPlanMode(config?: {
+  startActive?: boolean;
+  guidance?: string;
+}): Promise<PluginEntry[]> {
+  if (config === undefined) return [...shipped];
+  return [
+    ...withoutTimeContext(
+      await shippedPluginsWithConfig('plan-mode', { guidance: SHIPPED_GUIDANCE, ...config }),
+    ),
+  ];
 }
 
 /** 暫存的 workspace，測完收掉。 */
@@ -133,7 +138,7 @@ interface AssembleOptions {
 
 /** 在產品組裝上跑：出貨清單＋這一檔要的改動＋腳本模型。 */
 async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions = {}) {
-  const base = [...(options.before ?? []), ...withPlanMode(options.plan)];
+  const base = [...(options.before ?? []), ...(await withPlanMode(options.plan))];
   const plugins = withScriptedModel(options.patch ? options.patch(base) : base, turns);
   const built = await createCliAgent(
     {
@@ -187,7 +192,7 @@ describe('計劃指引進不進 system prompt', () => {
     const { agent, model, dispose } = await assemble(quiet(), { plan: { startActive: true } });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'guidance-on' } });
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: THREAD_ID } });
     } finally {
       await dispose();
     }
@@ -207,7 +212,7 @@ describe('計劃指引進不進 system prompt', () => {
 
     try {
       await agent.invoke(toAgentInvocation('嗨。'), {
-        configurable: { thread_id: 'guidance-off' },
+        configurable: { thread_id: THREAD_ID },
       });
     } finally {
       await dispose();
@@ -224,7 +229,7 @@ describe('計劃指引進不進 system prompt', () => {
 
     try {
       await agent.invoke(toAgentInvocation('嗨。'), {
-        configurable: { thread_id: 'guidance-own' },
+        configurable: { thread_id: THREAD_ID },
       });
     } finally {
       await dispose();
@@ -258,7 +263,7 @@ describe('計劃指引進不進 system prompt', () => {
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'memory' } });
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: THREAD_ID } });
     } finally {
       await dispose();
     }
@@ -310,7 +315,7 @@ describe('計劃指引進不進 system prompt', () => {
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'outer' } });
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: THREAD_ID } });
     } finally {
       await dispose();
     }
@@ -332,7 +337,6 @@ interface RaisedInterrupt {
 
 /** 一份會呼叫 `exit_plan_mode`、給了回覆再收工的一輪：先停在提問上，再用 `reply` 接回去。 */
 async function reviewPlan(
-  threadId: string,
   reply: QuestionReply,
   inbox?: StepInbox,
   script: readonly ScriptedTurn[] = PLAN_SCRIPT,
@@ -348,7 +352,7 @@ async function reviewPlan(
   });
   const config = {
     configurable: {
-      thread_id: threadId,
+      thread_id: THREAD_ID,
       ...(inbox !== undefined && { [STEP_INBOX_CONFIG_KEY]: inbox }),
     },
   };
@@ -400,7 +404,7 @@ describe('exit_plan_mode 的結局', () => {
    * 計劃全文在 `detail`；`intent.callId` 是日誌上那顆 `tool/call` 的 id，歷史重播時計劃卡從它的參數畫。
    */
   it('停在一顆提問上：計劃全文在 detail，intent 指得到那顆呼叫，沒有核准', async () => {
-    const { raised, events } = await reviewPlan('review-shape', { cancelled: true });
+    const { raised, events } = await reviewPlan({ cancelled: true });
 
     expect(raised).toHaveLength(1);
     expect(raised[0]?.value?.kind).toBe('question');
@@ -434,7 +438,7 @@ describe('exit_plan_mode 的結局', () => {
    * **之後**、下一次模型呼叫的 `model/end` 之前。當場寫的實作會把它排在 `tool/result` 前面。
    */
   it('同意 → 工具成功；plan/mode 落在工具結果之後、下一步回覆之前；下一步沒有指引', async () => {
-    const { after, events, model } = await reviewPlan('review-approve', {
+    const { after, events, model } = await reviewPlan({
       answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
     });
 
@@ -461,7 +465,7 @@ describe('exit_plan_mode 的結局', () => {
     ['選了同意但也寫了字', [PLAN_APPROVE_LABEL], '改成兩步', '改成兩步'],
     ['同意與繼續規劃都選了', [PLAN_APPROVE_LABEL, PLAN_KEEP_PLANNING_LABEL], undefined, ''],
   ] as const)('%s → 拒絕、模式留著', async (_label, selected, custom, feedback) => {
-    const { after, events, model } = await reviewPlan(`review-keep-${String(selected)}`, {
+    const { after, events, model } = await reviewPlan({
       answers: [
         { id: PLAN_REVIEW_QUESTION_ID, selected, ...(custom === undefined ? {} : { custom }) },
       ],
@@ -482,7 +486,7 @@ describe('exit_plan_mode 的結局', () => {
    * `Error:`。**只有一次模型呼叫**——以前這裡還有第二次，模型讀到「停在這裡」才停。
    */
   it('關掉這一題 → 成功結果、只有一次模型呼叫，模式留著，這一輪沒有被中止', async () => {
-    const { after, events, model } = await reviewPlan('review-dismiss', { cancelled: true });
+    const { after, events, model } = await reviewPlan({ cancelled: true });
 
     const tool = lastToolMessage(after.messages) as ToolMessage;
     expect(tool.text).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
@@ -519,11 +523,7 @@ describe('exit_plan_mode 的結局', () => {
         return Promise.resolve(taken);
       },
     };
-    const { after, events, model } = await reviewPlan(
-      'review-dismiss-inbox',
-      { cancelled: true },
-      inbox,
-    );
+    const { after, events, model } = await reviewPlan({ cancelled: true }, inbox);
 
     // 第一次收尾領走那一件、跳回模型；第二次收尾（模型說完）窗是空的。
     expect(finishCalls).toEqual([1, 0]);
@@ -549,7 +549,7 @@ describe('exit_plan_mode 的結局', () => {
         return Promise.resolve([]);
       },
     };
-    const { model } = await reviewPlan('review-dismiss-closed', { cancelled: true }, inbox);
+    const { model } = await reviewPlan({ cancelled: true }, inbox);
 
     expect(finishCalls).toEqual([0]);
     expect(model.prompts).toHaveLength(1);
@@ -579,8 +579,8 @@ describe('exit_plan_mode 的結局', () => {
     ],
   ] as const)(
     '熱續與冷續接（%s）→ 進模型請求時帶 name，供應商側位元組不變',
-    async (label, reply, text) => {
-      const { events, model: warm, after } = await reviewPlan(`review-cold-${label}`, reply);
+    async (_label, reply, text) => {
+      const { events, model: warm, after } = await reviewPlan(reply);
       const expected = {
         role: 'tool',
         content: text,
@@ -602,9 +602,9 @@ describe('exit_plan_mode 的結局', () => {
 
       const fresh = await assemble(quiet('續接後的回覆。'), { plan: { startActive: true } });
       try {
-        await restoreConversation(fresh.agent as never, 'cold-thread', events);
+        await restoreConversation(fresh.agent as never, THREAD_ID, events);
         await fresh.agent.invoke(toAgentInvocation('接著說。'), {
-          configurable: { thread_id: 'cold-thread' },
+          configurable: { thread_id: THREAD_ID },
         });
       } finally {
         await fresh.dispose();
@@ -639,12 +639,10 @@ describe('exit_plan_mode 的結局', () => {
         return Promise.resolve([]);
       },
     };
-    const { after, events, model } = await reviewPlan(
-      'review-dismiss-batch',
-      { cancelled: true },
-      inbox,
-      [{ content: '並行。', toolCalls: calls }, { content: '再說一句。' }],
-    );
+    const { after, events, model } = await reviewPlan({ cancelled: true }, inbox, [
+      { content: '並行。', toolCalls: calls },
+      { content: '再說一句。' },
+    ]);
 
     expect(model.prompts).toHaveLength(2);
     expect(finishCalls).toEqual([0]);
@@ -677,7 +675,7 @@ describe('exit_plan_mode 的結局', () => {
     let result;
     try {
       result = await agent.invoke(toAgentInvocation('幫我改一下。'), {
-        configurable: { thread_id: 'headless' },
+        configurable: { thread_id: THREAD_ID },
       });
     } finally {
       detach();
@@ -719,7 +717,7 @@ describe('exit_plan_mode 的結局', () => {
     let result;
     try {
       result = await agent.invoke(toAgentInvocation('幫我改一下。'), {
-        configurable: { thread_id: 'not-in-mode' },
+        configurable: { thread_id: THREAD_ID },
       });
     } finally {
       detach();
@@ -746,7 +744,7 @@ describe('模式狀態活得過什麼', () => {
       [{ content: '第一輪。' }, { content: '第二輪。' }],
       { plan: { startActive: true } },
     );
-    const config = { configurable: { thread_id: 'across-turns' } };
+    const config = { configurable: { thread_id: THREAD_ID } };
 
     try {
       await agent.invoke(toAgentInvocation('第一句。'), config);
@@ -789,7 +787,7 @@ describe('模式狀態活得過什麼', () => {
       Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
       { plan: { startActive: true }, workspace: root, patch: lowThreshold },
     );
-    const config = { configurable: { thread_id: 'summarize' } };
+    const config = { configurable: { thread_id: THREAD_ID } };
     const detach = attachSession(sessions);
 
     let last;
@@ -825,7 +823,7 @@ describe('工具目錄不隨模式變動', () => {
     const { agent, model, dispose } = await assemble(quiet());
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'catalog' } });
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: THREAD_ID } });
     } finally {
       await dispose();
     }

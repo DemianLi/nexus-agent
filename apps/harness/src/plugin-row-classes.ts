@@ -130,6 +130,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   ['time-context', next],
   ['skills', next],
   ['plan-mode', next],
+  ['plan-mode-model-call', next],
   ['goal', next],
   ['todo', next],
   ['feedback', next],

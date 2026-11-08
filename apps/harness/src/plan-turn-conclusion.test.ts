@@ -32,8 +32,13 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { HEADLESS_APPROVALS } from './agent-factory.js';
-import { createCliAgent } from './assembly-root.js';
-import { shippedPlugins, withoutTimeContext, withScriptedModel } from './fixtures.js';
+import { createCliAgent, THREAD_ID } from './assembly-root.js';
+import {
+  shippedPlugins,
+  shippedPluginsWithConfig,
+  withoutTimeContext,
+  withScriptedModel,
+} from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -80,10 +85,11 @@ async function run(
 ): Promise<Ran> {
   const plugins = [
     ...(options.before ?? []),
-    ...shipped.map((entry) =>
-      entry.id === 'plan-mode'
-        ? { ...entry, config: { guidance: GUIDANCE, startActive: options.startActive ?? true } }
-        : entry,
+    ...withoutTimeContext(
+      await shippedPluginsWithConfig('plan-mode', {
+        guidance: GUIDANCE,
+        startActive: options.startActive ?? true,
+      }),
     ),
   ];
   const built = await createCliAgent(
@@ -95,7 +101,7 @@ async function run(
   const detach = built.attachSession(built.sessions);
   try {
     const out = (await built.agent.invoke(toAgentInvocation('規劃一下'), {
-      configurable: { thread_id: `conclusion-${Math.random()}` },
+      configurable: { thread_id: THREAD_ID },
     })) as { messages: BaseMessage[] };
     return {
       model: built.model as ScriptedChatModel,

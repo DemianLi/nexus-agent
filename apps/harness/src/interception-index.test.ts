@@ -194,12 +194,12 @@ const INDEX: readonly InterceptionRow[] = [
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
       'apps/harness/src/pre-step-middleware.ts',
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
-      // 載體是 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
-      'packages/nexus-plugin-plan-mode/src/index.ts',
+      // 載體是相容層那一格 `plan-mode-model-call` 的 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
+      'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
     ],
     permissionDelta:
       '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一次模型呼叫' +
-      '前由它的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
+      '前由相容層那一格 `plan-mode-model-call` 的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
       '`wrapModelCall` 每次模型呼叫都跑、不是圖節點，所以那一半的節奏與 dsh 同（每一步），也不多一格。' +
       '**注入那半只佔了一部分**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
       '我們的 `beforeAgent` 只能**追加**——刪不掉、也指定不了位置，位置由基座決定' +
@@ -339,15 +339,15 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
  *
- * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是它本來就有的
- * `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
+ * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是相容層那一格
+ * `plan-mode-model-call` 的 `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
  * 是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
  *
  * agent-instructions（#1474）是**消費者**：它經 `@nexus/agent-loop` 登記 listener、自己不碰 `beforeAgent`，載體是宿主的
  * `apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
  */
 const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
-  'packages/nexus-plugin-plan-mode/src/index.ts',
+  'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
   // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
   'packages/nexus-plugin-agent-instructions/src/index.ts',
   // time-context（#1625）同上：第二位 `preStep` 消費者。

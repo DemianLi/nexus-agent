@@ -488,3 +488,27 @@ describe('重播（驗收 I）', () => {
     }
   });
 });
+
+describe('開關主列時講出從列跟著怎麼了（#2551）', () => {
+  it('disable plan-mode：註記 plan-mode-model-call 一併關掉；enable plan-mode：註記一併恢復', async () => {
+    const { env } = home();
+    const disabled = await changePlugin({ op: 'disable', id: 'plan-mode' }, { env });
+    expect(disabled.outcome).toBe('recorded');
+    expect(disabled.notes).toEqual(['"plan-mode-model-call" 跟著 "plan-mode" 一併關掉。']);
+    const enabled = await changePlugin({ op: 'enable', id: 'plan-mode' }, { env });
+    expect(enabled.outcome).toBe('recorded');
+    expect(enabled.notes).toEqual(['"plan-mode-model-call" 跟著 "plan-mode" 一併恢復。']);
+  });
+
+  it('開關別的列：沒有這句', async () => {
+    const { env } = home();
+    expect((await changePlugin({ op: 'disable', id: 'todo' }, { env })).notes).toEqual([]);
+  });
+
+  it('只關從列：拒絕，訊息指名主列（主開著時從列不能單獨關）', async () => {
+    const { env } = home();
+    await expect(
+      changePlugin({ op: 'disable', id: 'plan-mode-model-call' }, { env }),
+    ).rejects.toThrow('不能單獨關');
+  });
+});
