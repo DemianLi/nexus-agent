@@ -329,7 +329,7 @@ fn children_are_collected_with_their_parent() {
     struct Parent;
     impl Plugin for Parent {
         fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
-            cx.plugin(&PROVIDER, cfg(r#"{"tag":"child"}"#))?;
+            cx.plugin(&PROVIDER, cfg(r#"{"tag":"child","dispose_pending":true}"#))?;
             Ok(Applied::Done)
         }
     }
@@ -339,7 +339,12 @@ fn children_are_collected_with_their_parent() {
     let child = k.report().into_iter().find(|r| r.parent == Some(parent)).unwrap().id;
     assert_eq!(k.state(child), Some(State::Active));
     k.dispose(parent).unwrap();
-    settle(&mut k, t0);
+    k.run(t0);
+    assert_eq!(k.state(child), Some(State::Unloading), "子 fiber 的收尾還沒完");
+    assert_eq!(k.state(parent), Some(State::Unloading), "父 fiber 等子 fiber 收完");
+    let late = t0 + Limits::default().dispose;
+    k.run(late);
+    settle(&mut k, late);
     assert_eq!(k.state(child), None);
     assert_eq!(k.state(parent), None);
     assert!(take_log().contains(&"child:dispose:None".to_string()));
@@ -390,6 +395,9 @@ fn a_rejected_update_changes_nothing() {
     assert_eq!(k.state(id), Some(State::Active));
     assert!(take_log().is_empty(), "沒有重新 apply");
     assert_eq!(k.service::<Counter>().unwrap().0, 3);
+    k.update(id, &cfg(r#"{"provide":4}"#)).expect("被拒的鍵沒有留在設定裡");
+    settle(&mut k, t0);
+    assert_eq!(k.service::<Counter>().unwrap().0, 4);
 }
 
 #[test]
@@ -450,10 +458,14 @@ fn a_dispose_past_its_deadline_is_cancelled_and_the_fiber_still_goes_away() {
 fn a_fiber_that_never_activated_still_goes_through_unloading() {
     let (mut k, t0) = kernel();
     let c = k.mount(k.root(), &CONSUMER, cfg(r#"{"tag":"c"}"#)).unwrap();
+    let child = k.mount(c, &PROVIDER, cfg(r#"{"tag":"child"}"#)).unwrap();
     settle(&mut k, t0);
+    take_log();
     k.dispose(c).unwrap();
     settle(&mut k, t0);
     assert_eq!(statuses(&k.drain_events(), c), vec![(State::Pending, State::Unloading), (State::Unloading, State::Disposed)]);
+    assert_eq!(k.state(child), None);
+    assert_eq!(take_log(), vec!["child:dispose:None"], "PENDING 底下的子 fiber 也收了");
 }
 
 #[test]
@@ -461,10 +473,15 @@ fn a_failed_fiber_still_goes_through_unloading() {
     let (mut k, t0) = kernel();
     let id = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"p","fail":"x"}"#)).unwrap();
     settle(&mut k, t0);
+    let child = k.mount(id, &PROVIDER, cfg(r#"{"tag":"child"}"#)).unwrap();
+    settle(&mut k, t0);
     k.drain_events();
+    take_log();
     k.dispose(id).unwrap();
     settle(&mut k, t0);
     assert_eq!(statuses(&k.drain_events(), id), vec![(State::Failed, State::Unloading), (State::Unloading, State::Disposed)]);
+    assert_eq!(k.state(child), None);
+    assert_eq!(take_log(), vec!["child:dispose:None"], "FAILED 底下的子 fiber 也收了");
 }
 
 #[test]
@@ -584,7 +601,7 @@ fn group_rows(disabled: bool) -> Vec<Row> {
 }
 
 #[test]
-fn the_same_group_mounts_its_rows_in_order_once_enabled() {
+fn a_group_mounts_its_rows_in_order_unless_it_is_disabled() {
     let (mut k, t0) = kernel();
     k.load(k.root(), &group_rows(true)).unwrap();
     settle(&mut k, t0);
@@ -965,4 +982,182 @@ fn a_rejected_row_is_reported_once_after_its_parent_is_applied_again() {
     k.dispose(id).unwrap();
     settle(&mut k, t0);
     assert_eq!(k.check_required(), Ok(()), "父 fiber 卸載，底下被拒的列一起作廢");
+}
+
+#[test]
+fn an_ancestor_that_injects_a_descendant_service_can_still_go_away() {
+    for action in ["dispose", "update", "dispose-root"] {
+        let (mut k, t0) = kernel();
+        let c = k.mount(k.root(), &CONSUMER, cfg(r#"{"tag":"c","read":true}"#)).unwrap();
+        let p = k.mount(c, &PROVIDER, cfg(r#"{"tag":"p","provide":1}"#)).unwrap();
+        settle(&mut k, t0);
+        assert_eq!(k.state(c), Some(State::Active), "{action}");
+        match action {
+            "dispose" => k.dispose(c).unwrap(),
+            "update" => k.update(c, &cfg(r#"{"tag":"c2"}"#)).unwrap(),
+            _ => k.dispose(k.root()).unwrap(),
+        }
+        settle(&mut k, t0);
+        assert_eq!(k.state(p), None, "{action}：子孫提供者收完了");
+        let expected = if action == "update" { Some(State::Pending) } else { None };
+        assert_eq!(k.state(c), expected, "{action}：祖先沒有卡在 UNLOADING");
+    }
+}
+
+#[test]
+fn durations_that_overflow_are_clamped_and_a_zero_interval_is_refused() {
+    struct Far;
+    impl Plugin for Far {
+        fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            cx.timeout("once", Duration::MAX, |_| Ok(()))?;
+            cx.interval("every", Duration::MAX, |_| {
+                log("far:tick".into());
+                Ok(())
+            })?;
+            log(format!("{:?}", cx.interval("zero", Duration::ZERO, |_| Ok(()))));
+            Ok(Applied::Done)
+        }
+    }
+    static FAR: Spec = Spec { name: "far", inject: &[], required: false, build: |_| Ok(Box::new(Far)) };
+    let t0 = Instant::now();
+    let mut k = Kernel::new(Limits { apply: Duration::MAX, dispose: Duration::MAX, ..Limits::default() }, t0);
+    k.mount(k.root(), &FAR, Value::Null).unwrap();
+    let slow = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"slow","pending":-1}"#)).unwrap();
+    let stuck = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"stuck","dispose_pending":true}"#)).unwrap();
+    k.run(t0);
+    k.dispose(stuck).unwrap();
+    k.run(t0);
+    assert!(take_log().contains(&"Err(ZeroInterval)".to_string()));
+    assert_eq!(k.state(slow), Some(State::Loading));
+    assert_eq!(k.state(stuck), Some(State::Unloading));
+    let due = k.next_deadline().expect("夾住之後仍然有時限");
+    assert!(due > t0);
+    k.run(due);
+    settle(&mut k, due);
+    assert!(take_log().contains(&"far:tick".to_string()), "到了夾住的時間會響，下一次的時間也夾住");
+}
+
+#[test]
+fn an_update_during_a_pending_apply_is_applied_after_the_old_one_fails() {
+    let (mut k, t0) = kernel();
+    let id = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"p","pending":-1}"#)).unwrap();
+    k.run(t0);
+    assert_eq!(k.state(id), Some(State::Loading));
+    k.update(id, &cfg(r#"{"pending":0}"#)).unwrap();
+    let late = t0 + Limits::default().apply;
+    k.run(late);
+    settle(&mut k, late);
+    assert_eq!(k.state(id), Some(State::Active), "新設定接著 apply，不停在 FAILED");
+    assert!(
+        k.drain_events().iter().any(|e| matches!(e, KernelEvent::ApplyFailed { fiber, .. } if *fiber == id)),
+        "舊的逾時照樣回報"
+    );
+    assert_eq!(take_log().iter().filter(|l| *l == "p:apply").count(), 2);
+}
+
+#[test]
+fn a_provider_reads_its_own_service_in_a_dispose_registered_after_providing() {
+    struct Own;
+    impl Plugin for Own {
+        fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            cx.provide(Counter(7))?;
+            cx.on_dispose("read", |cx| {
+                log(format!("own:{:?}", cx.service::<Counter>().map(|c| c.0).ok()));
+                Ok(())
+            })?;
+            Ok(Applied::Done)
+        }
+    }
+    static OWN: Spec = Spec { name: "own", inject: &[], required: false, build: |_| Ok(Box::new(Own)) };
+    let (mut k, t0) = kernel();
+    let id = k.mount(k.root(), &OWN, Value::Null).unwrap();
+    settle(&mut k, t0);
+    k.dispose(id).unwrap();
+    settle(&mut k, t0);
+    assert_eq!(take_log(), vec!["own:Some(7)"]);
+}
+
+#[test]
+fn every_effect_starts_disposing_even_after_one_is_pending() {
+    struct Slow(&'static str);
+    impl Effect for Slow {
+        fn dispose(&mut self, _cx: &mut Cx<'_>) -> Result<Step, PluginError> {
+            log(format!("{}:dispose", self.0));
+            Ok(Step::Pending)
+        }
+    }
+    struct Two;
+    impl Plugin for Two {
+        fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            cx.effect("a", Slow("a"))?;
+            cx.effect("b", Slow("b"))?;
+            Ok(Applied::Done)
+        }
+    }
+    static TWO: Spec = Spec { name: "two-slow", inject: &[], required: false, build: |_| Ok(Box::new(Two)) };
+    let (mut k, t0) = kernel();
+    let id = k.mount(k.root(), &TWO, Value::Null).unwrap();
+    settle(&mut k, t0);
+    k.dispose(id).unwrap();
+    k.run(t0);
+    assert_eq!(take_log(), vec!["b:dispose", "a:dispose"]);
+}
+
+#[test]
+fn registering_on_a_fiber_that_was_asked_to_go_is_refused() {
+    let (mut k, t0) = kernel();
+    let id = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"p"}"#)).unwrap();
+    settle(&mut k, t0);
+    k.dispose(id).unwrap();
+    assert_eq!(k.mount(id, &PROVIDER, cfg(r#"{"tag":"late"}"#)).err(), Some(KernelError::InactiveEffect));
+}
+
+#[test]
+fn a_dependency_lost_during_a_pending_apply_sends_the_fiber_back_to_waiting() {
+    let (mut k, t0) = kernel();
+    let p = k.mount(k.root(), &PROVIDER, cfg(r#"{"tag":"p","provide":1}"#)).unwrap();
+    let c = k.mount(k.root(), &CONSUMER, cfg(r#"{"tag":"c","pending":2}"#)).unwrap();
+    k.run(t0);
+    assert_eq!(k.state(c), Some(State::Loading));
+    k.dispose(p).unwrap();
+    settle(&mut k, t0);
+    assert_eq!(k.state(p), None);
+    assert_eq!(k.state(c), Some(State::Pending), "apply 完成時依賴已經不在，不轉 ACTIVE");
+}
+
+#[test]
+fn an_update_during_a_pending_apply_outlives_its_self_disable() {
+    /// `disable` 為真時 apply 回 `Pending`，第二次 poll 才自我停用；否則 apply 直接完成。
+    struct Flaky {
+        disable: bool,
+        polls: u32,
+    }
+    impl Plugin for Flaky {
+        fn apply(&mut self, _cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            Ok(if self.disable { Applied::Pending } else { Applied::Done })
+        }
+        fn poll(&mut self, _cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            self.polls += 1;
+            Ok(if self.polls >= 2 { Applied::Disabled("x".into()) } else { Applied::Pending })
+        }
+    }
+    static FLAKY: Spec = Spec {
+        name: "flaky",
+        inject: &[],
+        required: false,
+        build: |v| {
+            let mut f = Fields::new(v)?;
+            let disable = f.opt_bool("disable")?.unwrap_or(false);
+            f.finish()?;
+            Ok(Box::new(Flaky { disable, polls: 0 }))
+        },
+    };
+    let (mut k, t0) = kernel();
+    let id = k.mount(k.root(), &FLAKY, cfg(r#"{"disable":true}"#)).unwrap();
+    k.run(t0);
+    assert_eq!(k.state(id), Some(State::Loading));
+    k.update(id, &cfg(r#"{"disable":false}"#)).unwrap();
+    settle(&mut k, t0);
+    assert_eq!(k.state(id), Some(State::Active), "新設定接著 apply，不停在自我停用");
+    assert!(k.drain_events().iter().any(|e| matches!(e, KernelEvent::SelfDisabled { fiber, .. } if *fiber == id)));
 }
