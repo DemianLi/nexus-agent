@@ -214,7 +214,7 @@ describe('格式 55：model/start 延後寫，識別照樣傳到每個寫入點'
     );
     const calls = hookOf(createModelCallRecorder(sessions));
     const usage = hookOf(createModelUsageRecorder(sessions));
-    const snapshot = hookOf(createRequestSnapshotRecorder(sessions));
+    const snapshot = hookOf(createRequestSnapshotRecorder(sessions, { flushBeforeDispatch: true }));
     const request = { model, runtime: { configurable: {} } };
     return retry(request, (outer) =>
       calls(outer, (r1) =>

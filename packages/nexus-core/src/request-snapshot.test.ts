@@ -392,7 +392,7 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
       }
       return append(...args);
     };
-    const recorder = createRequestSnapshotRecorder(sessionsOf(log));
+    const recorder = createRequestSnapshotRecorder(sessionsOf(log), { flushBeforeDispatch: true });
     const hook = (
       recorder as unknown as {
         wrapModelCall: (
@@ -439,7 +439,7 @@ describe('格式 55：快照在 model/start 之前，排空完才送（#2416）'
   const hookOf = (recorder: unknown): Hook => (recorder as { wrapModelCall: Hook }).wrapModelCall;
 
   /** 在一次 `model/start` 還沒寫的呼叫範圍裡叫模型；`trace` 依序記下寫入、排空與送出。 */
-  function setup(flush?: () => Promise<void>) {
+  function setup(flush?: () => Promise<void>, flushBeforeDispatch = true) {
     const log = new SessionLog('s');
     const trace: string[] = [];
     log.subscribe((event) => trace.push(event.type));
@@ -458,6 +458,7 @@ describe('格式 55：快照在 model/start 之前，排空完才送（#2416）'
               trace.push('flush');
             }),
         ),
+        { flushBeforeDispatch },
       ),
     );
     const opened = openModelCall(log, () => log.append('model/start', {}).seq);
@@ -474,6 +475,13 @@ describe('格式 55：快照在 model/start 之前，排空完才送（#2416）'
     const { trace, opened, call } = setup();
     await call();
     expect(trace).toEqual(['request/system', 'request/header', 'model/start', 'flush', 'send']);
+    expect(opened.ensureStarted()).toBe(2);
+  });
+
+  it('耐久檢查點關掉時不排空：照寫 model/start 就送出（#599）', async () => {
+    const { trace, opened, call } = setup(undefined, false);
+    await call();
+    expect(trace).toEqual(['request/system', 'request/header', 'model/start', 'send']);
     expect(opened.ensureStarted()).toBe(2);
   });
 
@@ -507,7 +515,9 @@ describe('格式 55：快照在 model/start 之前，排空完才送（#2416）'
   it('範圍的日誌跟 forCall 問到的不是同一份：這次請求不送，兩份都沒寫', async () => {
     const scoped = new SessionLog('scoped');
     const other = new SessionLog('other');
-    const hook = hookOf(createRequestSnapshotRecorder(sessionsOf(other)));
+    const hook = hookOf(
+      createRequestSnapshotRecorder(sessionsOf(other), { flushBeforeDispatch: true }),
+    );
     const model = new FakeListChatModel({ responses: ['好'] });
     const opened = openModelCall(scoped, () => scoped.append('model/start', {}).seq);
     await expect(
@@ -523,7 +533,9 @@ describe('格式 55：快照在 model/start 之前，排空完才送（#2416）'
 
   it('動態模型（函式）：不記快照，model/start 照樣在交出去之前寫好', async () => {
     const log = new SessionLog('s');
-    const hook = hookOf(createRequestSnapshotRecorder(sessionsOf(log)));
+    const hook = hookOf(
+      createRequestSnapshotRecorder(sessionsOf(log), { flushBeforeDispatch: true }),
+    );
     const opened = openModelCall(log, () => log.append('model/start', {}).seq);
     const seen: string[] = [];
     await opened.run(() =>

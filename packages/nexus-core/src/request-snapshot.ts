@@ -27,7 +27,8 @@
  *
  * 一次呼叫的範圍由 {@link ./model-calls.ts} 開，`model/start` 等到第一個要它的地方才寫（{@link ./model-call-scope.ts}）。
  * 這裡是第一個：handler 記完快照，**同一段同步程式碼裡**接著寫 `model/start`，中間沒有 `await`，別的寫入插不進來；
- * 然後排空這份日誌（`sessions.flush`），排空完才放 LangChain 送出。排空失敗照「記不進去，這次請求不送」。
+ * 然後排空這份日誌（`sessions.flush`），排空完才放 LangChain 送出。排空失敗照「記不進去，這次請求不送」。耐久檢查點
+ * 被關掉時不排空（見 {@link createRequestSnapshotRecorder} 的 `flushBeforeDispatch`）。
  * 同一個範圍裡被重送（`imageOffloadRecovery` 在範圍裡重打，`fold.ts` 的順序），第二次之後的快照落在已寫的
  * `model/start` 之後，讀的一方照位置歸給同一次呼叫。
  *
@@ -444,6 +445,7 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
     private readonly log: SessionLog,
     private readonly call: ModelCallHandle | undefined,
     private readonly sessions: CheckpointSessions,
+    private readonly flushBeforeDispatch: boolean,
   ) {
     super();
   }
@@ -467,7 +469,7 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
       ),
     );
     this.call?.ensureStarted();
-    await this.sessions.flush(this.log);
+    if (this.flushBeforeDispatch) await this.sessions.flush(this.log);
   }
 }
 
@@ -479,8 +481,13 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
  * 所以外面每一顆 middleware 看到的仍是原本的模型。見檔頭「記錄點」一節，為什麼記錄點不在 middleware 這一層。
  *
  * @param sessions - 註冊表的 `sessions` 通道：問「這次呼叫該寫進哪一份」，與送出前把那一份排空。
+ * @param options.flushBeforeDispatch - 送出前排空與否，跟耐久檢查點（{@link ./session-checkpoint-policy.ts}）的開關走：
+ *   檢查點被關掉時不排空，`model/start` 與快照照寫、等之後的排空才落盤（#599 的「關掉就不在模型請求前排空」）。
  */
-export function createRequestSnapshotRecorder(sessions: CheckpointSessions): AgentMiddleware {
+export function createRequestSnapshotRecorder(
+  sessions: CheckpointSessions,
+  options: { readonly flushBeforeDispatch: boolean },
+): AgentMiddleware {
   return withModelCallStep(
     (rawRequest, handler) => {
       const request = rawRequest as { readonly model?: unknown };
@@ -499,7 +506,7 @@ export function createRequestSnapshotRecorder(sessions: CheckpointSessions): Age
         call?.ensureStarted();
         return handler(request);
       }
-      const watcher = new RequestSnapshotHandler(log, call, sessions);
+      const watcher = new RequestSnapshotHandler(log, call, sessions, options.flushBeforeDispatch);
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({

@@ -649,10 +649,12 @@ export function foldRegistry(
       ? undefined
       : createStreamRetryMiddleware(options.streamRetry, registry.sessions);
   // 請求快照（#1020）：同上，無狀態、一份走遍；基準住在日誌上。排在最內層，見 {@link ./request-snapshot.ts}。
-  const requestSnapshot = createRequestSnapshotRecorder(registry.sessions);
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
-  // 理由見 {@link foldMiddleware}。
+  // 理由見 {@link foldMiddleware}。快照送出前的那次排空跟著它開關。
   const sessionCheckpoint = foldSessionCheckpoint(registry);
+  const requestSnapshot = createRequestSnapshotRecorder(registry.sessions, {
+    flushBeforeDispatch: sessionCheckpoint !== undefined,
+  });
   const sessionCheckpointListener =
     sessionCheckpoint === undefined
       ? undefined
