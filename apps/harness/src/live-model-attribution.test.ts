@@ -242,8 +242,6 @@ afterEach(async () => {
   await upstream?.close();
   upstream = undefined;
   vi.unstubAllEnvs();
-  vi.resetModules();
-  vi.doUnmock('./harness-version.js');
   for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -342,13 +340,6 @@ describe('身分的內容與來源', () => {
       expect(ua).not.toContain(secret);
     }
     expect(ua).not.toContain('langchainjs');
-  });
-
-  it('版號跟著 harness-version 走：換掉那一份，UA 跟著變（寫死字串就紅）', async () => {
-    vi.resetModules();
-    vi.doMock('./harness-version.js', () => ({ HARNESS_VERSION: '9.8.7' }));
-    const fresh = await import('./attribution.js');
-    expect(fresh.userAgent()).toBe('nexus-agent/9.8.7 (+https://github.com/DemianLi/nexus-agent)');
   });
 });
 

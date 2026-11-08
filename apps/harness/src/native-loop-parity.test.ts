@@ -17,11 +17,13 @@ import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import {
+  createHookStepMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SESSION_EVENT_MAX_DEPTH,
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
   TURN_CANCEL_CONFIG_KEY,
+  withModelCallStep,
 } from '@nexus/core';
 import type { AgentLoopKind, PluginEntry, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -277,12 +279,12 @@ describe('native loop 對照 LangGraph', () => {
           name: 'native-parity-jumps',
           apply(registry) {
             registry.middleware.use(
-              createMiddleware({
+              createHookStepMiddleware({
                 name: 'nativeParityJumps',
-                beforeAgent: { canJumpTo: ['end'], hook: () => ({ jumpTo: 'end' as const }) },
+                beforeAgent: { canJumpTo: ['end'], step: () => ({ jumpTo: 'end' as const }) },
                 afterAgent: {
                   canJumpTo: ['model'],
-                  hook: () => (exits++ === 0 ? { jumpTo: 'model' as const } : undefined),
+                  step: () => (exits++ === 0 ? { jumpTo: 'model' as const } : undefined),
                 },
               }),
             );
@@ -446,9 +448,9 @@ describe('native 不支援的跳轉', () => {
         name: 'native-parity-tools-jump',
         apply(registry) {
           registry.middleware.use(
-            createMiddleware({
+            createHookStepMiddleware({
               name: 'nativeParityToolsJump',
-              beforeModel: { canJumpTo: ['tools'], hook: () => undefined },
+              beforeModel: { canJumpTo: ['tools'], step: () => undefined },
             }),
           );
         },
@@ -509,7 +511,7 @@ function markerPlugin(): PluginEntry {
       name: 'native-parity-marker',
       apply(registry) {
         registry.middleware.use(
-          createMiddleware({
+          createHookStepMiddleware({
             name: 'nativeParityMarker',
             stateSchema: z.object({
               _secret: z.string().optional(),
@@ -621,7 +623,7 @@ const hookWritesPlugin: PluginEntry = {
     name: 'native-parity-hook-writes',
     apply(registry) {
       registry.middleware.use(
-        createMiddleware({
+        createHookStepMiddleware({
           name: 'nativeParityHookWrites',
           beforeAgent: () => undefined,
           beforeModel: () => ({ messages: [new HumanMessage('提醒')] }),
@@ -870,28 +872,32 @@ function abortAt(where: string, controller: AbortController, ran: string[] = [])
           return next();
         });
         registry.middleware.use(
-          createMiddleware({
-            name: 'nativeParityAbortAt',
-            beforeModel: () => {
-              if (where === 'beforeModel') abort();
-              return undefined;
-            },
-            wrapModelCall: async (request, handler) => {
+          withModelCallStep(
+            async (request, next) => {
               (
-                request.runtime as {
+                (request as { runtime: unknown }).runtime as {
                   configurable?: { __pregel_send?: (w: [string, unknown][]) => void };
                 }
               ).configurable?.__pregel_send?.([['marker', '模型節點寫的']]);
               if (where === 'before handler') abort();
-              const response = await handler(request);
+              const response = await next(request);
               if (where === 'after handler') abort();
               return response;
             },
-            afterAgent: () => {
-              if (where === 'afterAgent') abort();
-              return undefined;
-            },
-          }),
+            (wrapModelCall) =>
+              createHookStepMiddleware({
+                name: 'nativeParityAbortAt',
+                beforeModel: () => {
+                  if (where === 'beforeModel') abort();
+                  return undefined;
+                },
+                wrapModelCall: wrapModelCall as never,
+                afterAgent: () => {
+                  if (where === 'afterAgent') abort();
+                  return undefined;
+                },
+              }),
+          ),
         );
       },
     },
@@ -950,12 +956,12 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
       name: 'native-parity-bag',
       apply(registry) {
         registry.middleware.use(
-          createMiddleware({
+          createHookStepMiddleware({
             name: 'nativeParityBag',
             stateSchema: z.object({ bag: z.array(z.string()).default([]) }),
             beforeModel: (state) => {
-              seen.push(Object.keys(state).sort());
-              state.bag.push('推了');
+              seen.push(Object.keys(state as object).sort());
+              (state as { bag: string[] }).bag.push('推了');
               return undefined;
             },
           }),
@@ -979,11 +985,11 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
           name: 'native-parity-given',
           apply(registry) {
             registry.middleware.use(
-              createMiddleware({
+              createHookStepMiddleware({
                 name: 'nativeParityGiven',
                 stateSchema: z.object({ _given: z.string().optional() }),
                 beforeAgent: (state) => {
-                  seen.push(state._given);
+                  seen.push((state as { _given?: string })._given);
                   return undefined;
                 },
               }),
@@ -1054,7 +1060,7 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
             ),
           );
           registry.middleware.use(
-            createMiddleware({
+            createHookStepMiddleware({
               name: 'nativeParityUndeclared',
               afterAgent: () => ({ hookUndeclared: 'hook 寫的' }) as never,
             }),
@@ -1084,18 +1090,22 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
         name: 'native-parity-model-sends',
         apply(registry) {
           registry.middleware.use(
-            createMiddleware({
-              name: 'nativeParityModelSends',
-              wrapModelCall: async (request, handler) => {
+            withModelCallStep(
+              async (request, next) => {
                 const send = (
-                  request.runtime as {
+                  (request as { runtime: unknown }).runtime as {
                     configurable?: { __pregel_send?: (w: [string, unknown][]) => void };
                   }
                 ).configurable?.__pregel_send;
                 send?.([['marker', '模型前寫的']]);
-                return handler(request);
+                return next(request);
               },
-            }),
+              (wrapModelCall) =>
+                createMiddleware({
+                  name: 'nativeParityModelSends',
+                  wrapModelCall: wrapModelCall as never,
+                }),
+            ),
           );
         },
       },

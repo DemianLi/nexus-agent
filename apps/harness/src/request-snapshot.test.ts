@@ -26,7 +26,7 @@ import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
-import { SessionRegistry } from '@nexus/core';
+import { SessionRegistry, withModelCallStep } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { createEchoPlugin } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
@@ -114,17 +114,18 @@ function observer(
       name,
       apply: (registry) =>
         void registry.middleware.use(
-          {
-            name,
-            wrapModelCall: (
-              request: { systemMessage?: { text: string }; tools?: { name?: string }[] },
-              handler: (next: unknown) => unknown,
-            ) => {
+          withModelCallStep(
+            (raw, next) => {
+              const request = raw as {
+                systemMessage?: { text: string };
+                tools?: { name?: string }[];
+              };
               seen.system.push(request.systemMessage?.text ?? '');
               seen.tools.push((request.tools ?? []).map((tool) => tool.name ?? ''));
-              return handler(request);
+              return next(raw);
             },
-          } as never,
+            (wrapModelCall) => ({ name, wrapModelCall }),
+          ) as never,
           where === 'outermost' ? { prepend: true } : { last: true },
         ),
     },
@@ -138,21 +139,20 @@ function innerRewriter(): PluginEntry {
       name: 'inner-rewriter',
       apply: (registry) =>
         void registry.middleware.use(
-          {
-            name: 'innerRewriter',
-            wrapModelCall: (
-              request: {
+          withModelCallStep(
+            (raw, next) => {
+              const request = raw as {
                 systemMessage: { concat: (text: string) => unknown };
                 tools?: { name?: string }[];
-              },
-              handler: (next: unknown) => unknown,
-            ) =>
-              handler({
+              };
+              return next({
                 ...request,
                 systemMessage: request.systemMessage.concat(`\n${INNER_MARK}`),
                 tools: (request.tools ?? []).filter((tool) => tool.name !== 'echo'),
-              }),
-          } as never,
+              } as never);
+            },
+            (wrapModelCall) => ({ name: 'innerRewriter', wrapModelCall }),
+          ) as never,
           { last: true },
         ),
     },

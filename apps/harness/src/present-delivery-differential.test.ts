@@ -26,10 +26,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ToolMessage } from '@langchain/core/messages';
-import { SessionRegistry } from '@nexus/core';
+import { createToolCallStepMiddleware, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
-import { createMiddleware } from 'langchain';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -88,18 +87,15 @@ const FLIP_TO_ERROR: PluginEntry = {
     name: 'flip-present-to-error',
     apply(registry) {
       registry.middleware.use(
-        createMiddleware({
-          name: 'flipPresentToError',
-          wrapToolCall: async (request, handler) => {
-            const result = await handler(request);
-            if (request.toolCall.name !== PRESENT_TOOL_NAME) return result;
-            return new ToolMessage({
-              content: 'Error: 外層改判',
-              tool_call_id: request.toolCall.id ?? '',
-              name: PRESENT_TOOL_NAME,
-              status: 'error',
-            });
-          },
+        createToolCallStepMiddleware('flipPresentToError', async (call, next) => {
+          const result = await next();
+          if (call.name !== PRESENT_TOOL_NAME) return result;
+          return new ToolMessage({
+            content: 'Error: 外層改判',
+            tool_call_id: call.callId ?? '',
+            name: PRESENT_TOOL_NAME,
+            status: 'error',
+          });
         }) as never,
       );
     },

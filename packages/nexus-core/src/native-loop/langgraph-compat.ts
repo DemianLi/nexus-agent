@@ -69,7 +69,7 @@ export class NodeTask {
   /**
    * 在這個節點的 config 裡跑，照呼叫端的 signal 中止，同 LangGraph 的一個節點（`PregelRunner` 起跑前那一檢，加上節點那串
    * `RunnableSequence` 的 `raceWithSignal`）：起跑前已中止拋 `Abort`；跑著時中止拋 signal 的 reason（`abort.ts` 的 `abortReason`），
-   * 這個節點的寫入不套。不多包一層 `async`：兄弟失敗時 `stepSignal` 要趕在兄弟進工具之前舉起來（`onion.ts` 的 `runTool`）。
+   * 這個節點的寫入不套。不多包一層 `async`：兄弟失敗時 `stepSignal` 要趕在兄弟進工具之前舉起來（`tool-node.ts` 的 `runTool`）。
    * @param body - 要跑的東西。
    * @returns 它的結果。
    */

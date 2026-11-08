@@ -28,6 +28,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
+import { withModelCallStep } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -104,15 +105,19 @@ function wrapPlugin(when: 'before' | 'after' | 'pass'): PluginEntry {
       name: `probe-wrap-model-${when}`,
       apply(registry) {
         registry.middleware.use(
-          createMiddleware({
-            name: `probe-wrap-model-${when}`,
-            wrapModelCall: async (request, handler) => {
+          withModelCallStep(
+            async (request, next) => {
               if (when === 'before') throw refused();
-              const response = await handler(request);
+              const response = await next(request);
               if (when === 'after') throw refused();
               return response;
             },
-          }),
+            (wrapModelCall) =>
+              createMiddleware({
+                name: `probe-wrap-model-${when}`,
+                wrapModelCall: wrapModelCall as never,
+              }),
+          ),
         );
       },
     },

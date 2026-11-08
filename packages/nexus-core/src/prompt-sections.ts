@@ -233,7 +233,7 @@ function sectionCell(sections: readonly MiddleSection[]): SystemPromptCell {
 /**
  * 把這幾段接上一次模型請求。
  *
- * 沒有 `systemMessage` 的請求在兩個 loop 上都不會出現（`langchain` 的 `AgentNode` 與 native 的洋蔥起點都先建好一則），這裡當它是空的
+ * 沒有 `systemMessage` 的請求在兩個 loop 上都不會出現（`langchain` 的 `AgentNode` 與 native 的模型節點（`native-loop/model-node.ts`）都先建好一則），這裡當它是空的
  * 一則接。
  *
  * @param request - 模型請求。

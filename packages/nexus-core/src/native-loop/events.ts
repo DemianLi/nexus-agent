@@ -4,7 +4,7 @@
  * 另由 `turn-stopping.ts` 的轉接格派。監聽者只有 `agent/turn-stopping` 有（`@nexus/plugin-workspace-changes`）；`@nexus/agent-loop`
  * 同名的 pre-step listener 經宿主建成 `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
  *
- * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 洋蔥改，所以 `agent/pre-step` 不帶 `messages`，`llm/stream` 環繞的是一次
+ * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 登記的那幾步改，所以 `agent/pre-step` 不帶 `messages`，`llm/stream` 環繞的是一次
  * `invoke` 而不是串流。TODO(#2357)：middleware 搬成這些事件的監聽者時補齊載荷，契約可能跟著改。
  *
  * @module
@@ -58,7 +58,7 @@ declare module '../events.js' {
      */
     'agent/turn-stopping'(payload: AgentStepPayload): Promise<void> | void;
     /**
-     * 環繞每一次 root 的模型呼叫（洋蔥最內層，綁好工具之後）。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
+     * 環繞每一次 root 的模型呼叫（`wrapModelCall` 那一串的最內層，綁好工具之後）。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
      * 而回自己的訊息即短路。
      * @param payload - thread、步數、中止訊號。
      * @param next - 打模型。

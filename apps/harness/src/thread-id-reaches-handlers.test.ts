@@ -20,7 +20,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import type { PluginEntry } from '@nexus/core';
-import { toolCallSessionAddress } from '@nexus/core';
+import type { ToolCallStep } from '@nexus/core';
+import {
+  toolCallSessionAddress,
+  withModelCallStep,
+  withToolCallStep,
+  wrapToolCallWith,
+} from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -118,20 +124,28 @@ async function assemble(turns: readonly ScriptedTurn[]) {
           systemPrompt: '幹活。',
           tools: [probe('probe_worker')],
         });
-        registry.middleware.use({
-          name: 'thread-id-probe-middleware',
-          wrapToolCall: (request: unknown, handler: (request: unknown) => unknown) => {
-            const runtime = (request as { runtime?: { configurable?: unknown } }).runtime;
-            const name = (request as { toolCall?: { name?: string } }).toolCall?.name;
-            seen.push(observe('wrapToolCall', name, runtime?.configurable));
-            return handler(request);
-          },
-          wrapModelCall: (request: unknown, handler: (request: unknown) => unknown) => {
-            const runtime = (request as { runtime?: { configurable?: unknown } }).runtime;
-            seen.push(observe('wrapModelCall', undefined, runtime?.configurable));
-            return handler(request);
-          },
-        } as never);
+        const toolStep: ToolCallStep = (call, next) => {
+          seen.push(observe('wrapToolCall', call.name, call.configurable));
+          return next();
+        };
+        registry.middleware.use(
+          withModelCallStep(
+            (request, next) => {
+              const runtime = (request as { runtime?: { configurable?: unknown } }).runtime;
+              seen.push(observe('wrapModelCall', undefined, runtime?.configurable));
+              return next(request);
+            },
+            (wrapModelCall) =>
+              withToolCallStep(
+                {
+                  name: 'thread-id-probe-middleware',
+                  wrapModelCall,
+                  wrapToolCall: wrapToolCallWith(toolStep),
+                },
+                toolStep,
+              ),
+          ) as never,
+        );
       },
     },
   };

@@ -8,7 +8,7 @@
  * 回 `Promise` 的一步（例如要解析 backend 的檔案工具那一格）不論換不換，都等它解開才往內交。
  *
  * **登記了這一步的格**（{@link withToolListStep}；{@link createToolListStepMiddleware} 造的自動登記）由 native 的 root 的模型那一串
- * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；沒登記的格照洋蔥驅動 `wrapModelCall`。
+ * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；工具清單、系統提示、環繞步三種都沒登記的 `wrapModelCall`，native 建構時就拋。
  *
  * @module
  */
@@ -102,8 +102,7 @@ const registeredCells = new WeakMap<object, ToolListCell>();
  * 登記這顆 middleware 的模型那一格就是 `step`（再經 `inner`）：native 的 root 在這一格直接呼叫它，不經這顆的 `wrapModelCall`
  * （{@link toolListCellOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapModelCall`。
  * 所以 `wrapModelCall` 必須就是 `wrapModelCallWith(step, inner)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
- * 模型那一串在建構時就算好。`wrapModelCall` 標成由洋蔥外面做的格（`handledOutsideOnion`），在那一串裡讀到 `undefined`，native 的 root
- * 不跑這一步。
+ * 模型那一串在建構時就算好。
  * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。

@@ -15,7 +15,7 @@ import { foldRegistry } from '../fold.js';
 import { HUMAN_MESSAGE_LIMIT_CHARS } from '../human-message-admission.js';
 import { loadPlugins } from '../load.js';
 import { NATIVE_NOOP_CELLS, withNativeNoopCells } from './native-noop-cells.js';
-import type { LoopMiddleware } from './onion.js';
+import type { LoopMiddleware } from './middleware.js';
 
 describe('native 以空函式取代的格', () => {
   it('清單只有 FilesystemMiddleware.beforeAgent 一條，附理由與出處', () => {

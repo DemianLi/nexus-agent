@@ -21,11 +21,13 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionLog } from '@nexus/core';
 import {
   createHostServicesPlugin,
+  createToolCallStepMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
   TOOL_ERROR_PREFIX,
   toolDescriptionOf,
+  withModelCallStep,
 } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
@@ -231,13 +233,15 @@ describe('不給選項：完全不變', () => {
 /** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求（`task` 在那裡是 core 逐字造的定義）。 */
 async function describedTool(background: boolean, name: 'task' | 'subagent'): Promise<string> {
   let seen = '';
-  const spy = createMiddleware({
-    name: 'zzDescriptionSpy',
-    wrapModelCall: (request, handler) => {
-      seen = toolDescriptionOf(request.tools.find((each) => each.name === name)) ?? '';
-      return handler(request);
+  const spy = withModelCallStep(
+    (request, next) => {
+      const tools = (request as { tools: { name: string }[] }).tools;
+      seen = toolDescriptionOf(tools.find((each) => each.name === name)) ?? '';
+      return next(request);
     },
-  });
+    (wrapModelCall) =>
+      createMiddleware({ name: 'zzDescriptionSpy', wrapModelCall: wrapModelCall as never }),
+  );
   const run = await assemble({
     rootTurns: [{ content: '好' }],
     workerTurns: [],
@@ -280,23 +284,24 @@ describe('模型面的描述', () => {
  * 上游絆索：釘住 `background-delegation.ts` 檔頭引的 langchain 第一條規則——`wrapModelCall` 裡把已註冊的工具換成
  * 同名的另一個實例一律拒絕（`dist/agents/nodes/AgentNode.js:246-257`）。這裡用 `tool()` 造的實例去換，正好落在檢查內。
  * 預設的 langgraph loop 下轉紅，代表 langchain 改了這條規則，檔頭那段說明要照新版重讀；`vitest.native.config.ts`
- * 下丟錯的是 `native-loop/onion.ts` 照同一套寫的那份檢查，轉紅是我們自己改了它。委派工具的命名與前景委派不因此改，
+ * 下丟錯的是 `native-loop/model-node.ts` 照同一套寫的那份檢查，轉紅是我們自己改了它。委派工具的命名與前景委派不因此改，
  * 在 [#2363](https://github.com/DemianLi/nexus-agent/issues/2363#issuecomment-6653783737) 處理。
  */
 describe('上游絆索：wrapModelCall 不能改已註冊的工具', () => {
   it('換掉 task 會拋 “You have modified a tool”', async () => {
-    const swap = createMiddleware({
-      name: 'zzSwapTask',
-      wrapModelCall: (request, handler) =>
-        handler({
+    const swap = withModelCallStep(
+      (request, next) =>
+        next({
           ...request,
-          tools: request.tools.map((each) =>
+          tools: (request as { tools: { name: string }[] }).tools.map((each) =>
             each.name === 'task'
               ? tool(() => '', { name: 'task', description: '換掉的', schema: z.object({}) })
               : each,
           ),
         }),
-    });
+      (wrapModelCall) =>
+        createMiddleware({ name: 'zzSwapTask', wrapModelCall: wrapModelCall as never }),
+    );
     const run = await assemble({
       rootTurns: [{ content: '好' }],
       workerTurns: [],
@@ -378,12 +383,9 @@ describe('前景（run_in_background: false）：改派給基座的 task', () =>
   it('內層看到的是 task：名字改回 task、工具是基座那顆（不是模型看到的定義）', async () => {
     const seen: { name: string; tool: unknown }[] = [];
     // spy 用預設的 `use`，排在 prepend 的背景委派裡面，看到的是改派之後交給內層的那一份。
-    const spy = createMiddleware({
-      name: 'zzToolCallSpy',
-      wrapToolCall: (request, handler) => {
-        seen.push({ name: request.toolCall.name, tool: request.tool });
-        return handler(request);
-      },
+    const spy = createToolCallStepMiddleware('zzToolCallSpy', (call, next) => {
+      seen.push({ name: call.name, tool: call.tool });
+      return next();
     });
     const run = await assemble({
       rootTurns: [delegate(false), { content: '根收尾' }],
