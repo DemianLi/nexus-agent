@@ -11,11 +11,12 @@
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
 //! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就先殺掉宿主的群組，再收屍），pid 被重用之後才 `connect()` 的連線，
-//! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。
+//! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。反過來，`revoke` 之前就連上的連線都是舊行程的：撤銷時先把 listen backlog 收完，
+//! 一條不漏地記成撤過，之後它們送什麼都只回 `rejected`、報 `unregistered`，不照同一個號碼後來的登記驗，也不撤那一筆。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
-//! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷（還沒送 `hello` 的，送來時回 `rejected`），直到監督行程重送（它不會：那個身分隔離到行程結束）。
-//! pid 不在表上的只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），沒有身分可以撤。宿主自己不因為任何一條連線結束。
+//! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程不會重送那個身分：它隔離到行程結束。
+//! pid 不在表上的，與撤過的連線，只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。宿主自己不因為任何一條連線結束。
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
@@ -62,6 +63,8 @@ struct Conn {
 
 struct Host {
     control: Chan,
+    /// `ready` 之前是 `None`。
+    listener: Option<UnixListener>,
     grants: HashMap<u32, Grant>,
     conns: Vec<Conn>,
 }
@@ -90,22 +93,22 @@ pub fn run(args: Vec<OsString>) -> i32 {
     };
     // SAFETY：fd 0、1 是監督行程接好的控制通道，整個行程只有這裡拿它們。
     let control = unsafe { Chan::from_fds(OwnedFd::from_raw_fd(0), OwnedFd::from_raw_fd(1), crate::protocol::MAX_FRAME) };
-    let mut host = Host { control, grants: HashMap::new(), conns: Vec::new() };
+    let mut host = Host { control, listener: None, grants: HashMap::new(), conns: Vec::new() };
     host.report(&HostReport::Hello { version: PROTOCOL_VERSION });
     match host.await_hello() {
         Ok(()) => {}
         Err(code) => return code,
     }
     let _ = std::fs::remove_file(&socket);
-    let listener = match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
-        Ok(listener) => listener,
+    match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
+        Ok(listener) => host.listener = Some(listener),
         Err(err) => {
             say!("綁不了 {}：{err}", socket.display());
             return 1;
         }
-    };
+    }
     host.report(&HostReport::Ready);
-    let code = host.serve(&listener);
+    let code = host.serve();
     let _ = std::fs::remove_file(&socket);
     code
 }
@@ -209,9 +212,13 @@ impl Host {
         !self.control.read_closed()
     }
 
-    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著、記成撤過：送來時一律回 `rejected`，
-    /// pid 被重用、同一個號碼又登記了也一樣，舊行程留下的連線不能拿新的那一筆驗。
+    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著、記成撤過：之後不管送什麼都只回 `rejected`、
+    /// 報 `unregistered`，pid 被重用、同一個號碼又登記了也一樣，舊行程留下的連線不能拿新的那一筆驗，也不能害它被撤。
+    ///
+    /// 撤之前先把 listen backlog 收完，不管連線數上限：監督行程收屍之前送的 `revoke` 讀到的時候，那個行程已經死了，
+    /// 它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡，收完才抓得齊。超過上限的最多是一個 backlog 的量。
     fn revoke(&mut self, pid: u32) {
+        self.accept(usize::MAX);
         self.grants.remove(&pid);
         for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid)) {
             if conn.hello {
@@ -222,7 +229,8 @@ impl Host {
         }
     }
 
-    fn serve(&mut self, listener: &UnixListener) -> i32 {
+    fn serve(&mut self) -> i32 {
+        let listen_fd = self.listener.as_ref().map_or(-1, AsRawFd::as_raw_fd);
         loop {
             let now = Instant::now();
             let deadline = self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).min();
@@ -231,7 +239,7 @@ impl Host {
             fds.push(pollfd(read.unwrap_or(-1), libc::POLLIN));
             fds.push(pollfd(write.unwrap_or(-1), libc::POLLOUT));
             let accepting = self.conns.len() < MAX_CONNECTIONS;
-            fds.push(pollfd(if accepting { listener.as_raw_fd() } else { -1 }, libc::POLLIN));
+            fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
                 let events = if write.is_some() { libc::POLLIN | libc::POLLOUT } else { libc::POLLIN };
@@ -244,7 +252,7 @@ impl Host {
                 return 0;
             }
             if accepting && fds[2].revents != 0 {
-                self.accept(listener);
+                self.accept(MAX_CONNECTIONS);
             }
             // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
             for (i, fd) in fds.iter().skip(3).enumerate() {
@@ -261,8 +269,10 @@ impl Host {
         }
     }
 
-    fn accept(&mut self, listener: &UnixListener) {
-        while self.conns.len() < MAX_CONNECTIONS {
+    /// 收排著的連線，收到 EAGAIN 或連線數到 `limit` 為止。
+    fn accept(&mut self, limit: usize) {
+        let Some(listener) = &self.listener else { return };
+        while self.conns.len() < limit {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let pid = peer_pid(stream.as_raw_fd());
@@ -355,7 +365,13 @@ impl Host {
     }
 
     /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他驗過身分的連線；這條由呼叫方斷。
+    /// 撤過的連線只回 `rejected`、報 `unregistered`：它是舊行程留下的，表上同一個號碼的那一筆不是它的。
     fn violate(&mut self, i: usize, reason: &str) {
+        if self.conns.get(i).is_some_and(|conn| conn.revoked) {
+            let pid = self.refuse(i, reason);
+            self.report(&HostReport::Unregistered { pid });
+            return;
+        }
         let pid = self.refuse(i, reason);
         self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });
         let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else { return };

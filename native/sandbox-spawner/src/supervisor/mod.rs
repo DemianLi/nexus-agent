@@ -59,7 +59,7 @@
 //! 那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
 //! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它；宿主 `ready` 了、沒在收的，也再送一次 `revoke`，蓋掉可能還排在這邊、沒寫出去的那一筆 `grant`。回報的是 pid 不在宿主表上（`unregistered`）、
 //! 而那個 pid 是活著、沒被隔離的前台或對話行程的，不算違規、不寫稽核：那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、
-//! 這邊還沒處理它的 `ready`，或那一筆還排在這邊）。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
+//! 這邊還沒處理它的 `ready`，或那一筆還排在這邊），或那是 pid 被重用、同一個號碼上一個行程留下的連線。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
 //! 之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、
 //! `--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗只退避重起，
 //! 不會讓整台結束：在 `ready` 之前宿主還沒開始收連線，那之前的失敗一定是它自己（執行檔、設定、環境）的問題，之後的可能是客戶端觸發的。
@@ -1416,21 +1416,21 @@ impl Supervisor {
         }
     }
 
-    /// 宿主拒了一條 pid 不在它表上的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
-    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）：
-    /// 不算違規，只記一行訊息，不隔離、不寫稽核。其餘的（不是我們的 pid、已經隔離的）照違規記。
+    /// 宿主拒了一條 pid 不在它表上的連線，或一條撤過的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
+    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線則是
+    /// 同一個號碼上一個行程留下的。兩種都不是它的錯：只記一行訊息，不隔離、不寫稽核。其餘的（不是我們的 pid、已經隔離的）照違規記。
     fn on_unregistered(&mut self, pid: u32) {
         let live = libc::pid_t::try_from(pid).ok().filter(|&pid| pid > 0).is_some_and(|pid| self.grant_of(pid).is_some());
         if live {
-            say!("宿主還沒有 pid {pid} 的身分就收到它的連線：表還在路上，不算違規");
+            say!("宿主拒了 pid {pid} 的連線：表還在路上，或是這個號碼上一個行程留下的連線，不算違規");
             return;
         }
         self.on_violation(pid, "沒有登記".as_bytes());
     }
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
-    /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`。宿主那邊雖然已經撤了它，它那一筆 `grant`
-    /// 卻可能還排在這邊沒寫出去，撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。
+    /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
+    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。
     /// 不是我們的 pid（含 0），只寫稽核，`role` 記 `unknown`。
     fn on_violation(&mut self, pid: u32, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
@@ -1462,7 +1462,7 @@ impl Supervisor {
             .chain(self.host.as_ref().map(|h| h.proc.pid))
             .collect();
         // 隔離中的也算：它那一筆 `grant` 與隔離時補送的 `revoke` 可能還排在這邊沒寫出去，收屍前要一起寫進 pipe。
-        let granted: Vec<libc::pid_t> = self.identities().collect();
+        let identities: Vec<libc::pid_t> = self.identities().collect();
         let host = &mut self.host;
         let mut exited = Vec::new();
         process::reap(
@@ -1473,7 +1473,7 @@ impl Supervisor {
                 // 收屍之前撤掉它的身分：這時 pid 還沒被收，不會被重用。撤銷要在收屍之前真的進 pipe；宿主每一輪先讀乾淨控制通道才處理連線，
                 // 所以 pid 被重用之後才來的連線，一定排在撤銷後面。寫不進去就當場殺掉宿主：新的宿主拿到的表本來就沒有這個 pid。
                 if let (true, Ok(pid), Some(host)) =
-                    (granted.contains(&pid), u32::try_from(pid), host.as_mut().filter(|host| host.ready))
+                    (identities.contains(&pid), u32::try_from(pid), host.as_mut().filter(|host| host.ready))
                 {
                     host.proc.chan.send(&encode_host_command(&HostCommand::Revoke { pid }));
                     if !host.proc.chan.flush_until(Instant::now() + REVOKE_WRITE_LIMIT) {
