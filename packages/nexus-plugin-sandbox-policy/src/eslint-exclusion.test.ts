@@ -8,12 +8,15 @@
  * 2. 另一個**不在排除名單**的檔（一個不存在的違規檔路徑）同樣紅，而同一份違規碼放在 `src/invariant.ts` 這個路徑不紅——
  *    排除的範圍就是那一個檔，不多不少。
  *
+ * 另外證受管的產品檔**不靠行內 `eslint-disable`** 也沒有 `no-restricted-*` 違規：用 `allowInlineConfig: false` 的同一份設定 lint 真檔
+ * （[#2557](https://github.com/DemianLi/nexus-agent/issues/2557)）。
+ *
  * 量的是這個套件**真的那份** `eslint.config.js`（`overrideConfigFile`），不是手搭一份相似的設定。違規碼放在記憶體裡、不落成檔：
  * 落地的違規夾具會被 `pnpm -r run lint`、typecheck 與 prettier 掃到（理由同 `packages/nexus-sdk/src/lint.test.ts` 檔頭）；
  * `lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一個檔——「暫存的違規檔」就是這個。
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { pluginLintConfig } from '@nexus/sdk/lint';
@@ -26,6 +29,19 @@ const eslint = new ESLint({
   cwd: PACKAGE,
   overrideConfigFile: `${PACKAGE}eslint.config.js`,
 });
+
+/** 同一份設定，但**不認行內的 `eslint-disable`**：檔裡有被 disable 蓋住的違規，用它 lint 就會露出來。 */
+const eslintIgnoringInline = new ESLint({
+  cwd: PACKAGE,
+  overrideConfigFile: `${PACKAGE}eslint.config.js`,
+  allowInlineConfig: false,
+});
+
+/** `src/` 頂層的 `.ts` 產品檔：排除名單那一個與測試檔以外的全部（今天就是 SDK 管的全部，「受管的就是這三個檔」釘住）。 */
+const MANAGED = readdirSync(`${PACKAGE}src`)
+  .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts') && name !== 'invariant.ts')
+  .map((name) => `src/${name}`)
+  .sort();
 
 /**
  * **暖身：ESLint 第一次載入設定的一次性成本不能算在第一條測試頭上**（[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)）。
@@ -60,8 +76,30 @@ async function restricted(code: string, file: string): Promise<string[]> {
     .map((m) => m.message);
 }
 
+describe('受管的產品檔沒有靠 eslint-disable 放行的 SDK 違規（#2557）', () => {
+  it('受管的就是這三個檔', () => {
+    expect(MANAGED).toEqual(['src/index.ts', 'src/sandbox-escalation.ts', 'src/sandbox-mode.ts']);
+  });
+
+  it.each(MANAGED)('%s：不認行內 disable 照樣沒有 no-restricted-* 的違規', async (file) => {
+    const [result] = await eslintIgnoringInline.lintText(
+      readFileSync(`${PACKAGE}${file}`, 'utf8'),
+      {
+        filePath: `${PACKAGE}${file}`,
+      },
+    );
+    const messages = result?.messages ?? [];
+    expect(messages.filter((m) => m.fatal === true).map((m) => m.message)).toEqual([]);
+    expect(
+      messages
+        .filter((m) => m.ruleId === 'no-restricted-syntax' || m.ruleId === 'no-restricted-imports')
+        .map((m) => `${m.line}: ${m.message}`),
+    ).toEqual([]);
+  });
+});
+
 describe('SDK lint 在 @nexus/plugin-sandbox-policy 的範圍', () => {
-  it('src/index.ts：逐行 eslint-disable（清理在 #2557）之外沒有違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
+  it('src/index.ts：沒有違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
     const real = readFileSync(`${PACKAGE}src/index.ts`, 'utf8');
     expect(await restricted(real, 'src/index.ts')).toEqual([]);
     expect((await restricted(VIOLATING, 'src/index.ts')).length).toBeGreaterThan(0);

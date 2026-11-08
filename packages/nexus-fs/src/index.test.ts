@@ -5,10 +5,19 @@ import Loader from '@nexus/cordis-plugin-loader';
 import { injectOf, need, service } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createFsService, virtualPathOf as coreVirtualPathOf } from '@nexus/core';
+import {
+  createFsService,
+  SHARED_WORKSPACE_SERVICE as CORE_SHARED_WORKSPACE_SERVICE,
+  virtualPathOf as coreVirtualPathOf,
+} from '@nexus/core';
 import type { FsService } from '@nexus/core';
 
-import { FS_LOOKUP_CONTRACT_VERSION, fsToken, virtualPathOf } from './index.js';
+import {
+  FS_LOOKUP_CONTRACT_VERSION,
+  fsToken,
+  SHARED_WORKSPACE_SERVICE,
+  virtualPathOf,
+} from './index.js';
 import type { FsLookup } from './index.js';
 import { createFsLookupProvider } from './provider.js';
 
@@ -29,6 +38,10 @@ describe('@nexus/fs 的定義', () => {
     expect(virtualPathOf('report.md')).toBe('/report.md');
     expect(virtualPathOf('a/../b.md')).toBe('/b.md');
     expect(virtualPathOf('../x.md')).toBe('/x.md');
+  });
+
+  it('SHARED_WORKSPACE_SERVICE 是 core 那一格的單向轉出（#2557）', () => {
+    expect(SHARED_WORKSPACE_SERVICE).toBe(CORE_SHARED_WORKSPACE_SERVICE);
   });
 
   it('提供者的服務：每次呼叫都問宿主交進來的函式（不快取），config 原樣傳入', async () => {

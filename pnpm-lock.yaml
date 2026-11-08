@@ -1232,21 +1232,39 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
       '@nexus/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../nexus-permission-presets
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
       '@nexus/system-prompt':
         specifier: workspace:*
         version: link:../nexus-system-prompt
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
       '@nexus/tools':
         specifier: workspace:*
         version: link:../nexus-tools
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

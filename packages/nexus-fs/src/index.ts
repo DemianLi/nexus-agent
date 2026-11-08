@@ -59,6 +59,10 @@ export { virtualPathOf } from '@nexus/core';
 // 路由前綴的判斷（#2082）：「在不在 `offWorkspacePrefixes()` 某一個底下」跟上面同一個理由跟 fs 走，實作同樣留在 core。
 export { isUnderAnyPrefix } from '@nexus/core';
 
+// 共用區的服務名（#2557）：值是這條 thread 的唯讀共用區前綴，fold 讀它填 `FsService.sharedWorkspacePrefix()`，所以跟 fs 走。
+// `sandbox-policy` 據它在政策句多講一句，升級工具也據它不為共用區底下的目標問人。定義留在 core。
+export { SHARED_WORKSPACE_SERVICE } from '@nexus/core';
+
 /**
  * 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。
  *

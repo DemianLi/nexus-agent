@@ -31,9 +31,11 @@
  *
  * ## 相依
  *
- * 型別與常數（`SandboxMode`、`SANDBOX_MODES`、`ApprovalPolicyValue`、`APPROVAL_POLICIES`）留在 `@nexus/core`，由這個套件**單向轉出**
+ * 型別與常數（`SandboxMode`、`SANDBOX_MODES`、`ApprovalPolicyValue`、`APPROVAL_POLICIES`，以及 `sandbox-policy` 用的 `SandboxGrant`、
+ * `SandboxDenial`、`SandboxGrantLedger`、`SandboxModeSource`、`ApprovalPolicySource`、`APPROVAL_POLICY_SERVICE`，#2557）留在 `@nexus/core`，由這個套件**單向轉出**
  * （照 `@nexus/projections` 的 #1421 Q2 (a)）；`PermissionCatalog` 取自 `@nexus/wire`（web 的協定也讀它）。**`@nexus/core`、`@nexus/wire`
  * 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**。撤除條件併入 #1421 Q2 (b)。
+ * 沙箱與核准政策的詞彙只有這個定義套件在轉出，所以 grant 那幾個型別跟著 `SandboxMode` 放這裡。
  *
  * `permission/preset` 的事件宣告（`SessionEventMap`）住在 `@nexus/core` 的 `session-log.ts`（前例 `feedback/*`、`todo/write`），遷出的插件因此
  * 不必對 core 寫 `declare module`。
@@ -47,8 +49,16 @@ import type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 import type { PermissionCatalog } from '@nexus/wire';
 
-export { APPROVAL_POLICIES, SANDBOX_MODES } from '@nexus/core';
-export type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
+export { APPROVAL_POLICIES, APPROVAL_POLICY_SERVICE, SANDBOX_MODES } from '@nexus/core';
+export type {
+  ApprovalPolicySource,
+  ApprovalPolicyValue,
+  SandboxDenial,
+  SandboxGrant,
+  SandboxGrantLedger,
+  SandboxMode,
+  SandboxModeSource,
+} from '@nexus/core';
 export type { PermissionCatalog } from '@nexus/wire';
 
 /**
