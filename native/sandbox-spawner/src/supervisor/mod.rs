@@ -51,13 +51,14 @@
 //!
 //! 每條控制通道的第一框都是 `hello`（[`crate::supervisor_protocol`] 的檔頭）：子行程一起來監督行程就先送自己的（給對話行程與前台的帶身分 token），
 //! 子行程送來的第一框也要是 `hello`、版本相等。對話行程不是：死因 `protocol`，當場 SIGKILL。前台或宿主不是：重起也是同一支執行檔、一樣對不上，
-//! 所以不重起，整台停機、回 3。第一框解不開的照解不開的框處置（對話行程 `crash`，前台殺掉重起）。
+//! 所以不重起，整台停機、回 3。第一框解不開的照解不開的框處置（對話行程 `crash`，前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗）。
 //!
 //! 宿主（`--host`，[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)；沒給就不起）：跟前台一起起，不擋前台。它的 stdin／stdout 是控制通道，
 //! stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表整張送過去：每個前台與對話行程一筆（pid、token、角色、綁的 thread）。
 //! 之後起的行程，spawn 當下先送宿主那一筆、再把 token 交給它；指派 thread 時更新那一筆；收屍之前撤掉（[`process::reap`] 的 `before_reap`，
-//! 那時 pid 還沒被收，撤銷寫進 pipe 才收）。宿主回報某個 pid 違反協定時寫一行稽核
-//! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
+//! 那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
+//! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它。回報的是 pid 不在宿主表上（`unregistered`）、
+//! 而那個 pid 是活著的前台或對話行程的，不算違規：那一筆還在通道裡，宿主還沒讀到。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
 //! 之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、
 //! `--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗只退避重起，
 //! 不會讓整台結束：在 `ready` 之前宿主還沒開始收連線，那之前的失敗一定是它自己（執行檔、設定、環境）的問題，之後的可能是客戶端觸發的。
@@ -734,7 +735,7 @@ impl Supervisor {
     fn start_front(&mut self) {
         match new_token().and_then(|token| Ok((process::spawn(&self.args.front, &self.args.front_args, false)?, token))) {
             Ok(((pid, chan, _), token)) => {
-                // 先登記、再交 token：前台拿到 token 時，宿主的通道裡已經有它那一筆。
+                // 先登記、再交 token：宿主 ready 了，那一筆先排進宿主的通道；還沒的，等它 ready 時整張送。連線比那一筆先到，見 `on_unregistered`。
                 self.front = Some(Proc::new(pid, chan));
                 self.front_token = token.clone();
                 self.front_quarantined = false;
@@ -1072,7 +1073,7 @@ impl Supervisor {
                     token: token.clone(),
                     quarantined: false,
                 });
-                // 先登記、再交 token：對話行程拿到 token 時，宿主的通道裡已經有它那一筆。
+                // 先登記、再交 token：同 `start_front`。
                 self.regrant(pid);
                 if let Some(conversation) = self.conversations.last_mut() {
                     let hello = ConversationCommand::Hello { version: PROTOCOL_VERSION, token };
@@ -1381,6 +1382,7 @@ impl Supervisor {
                     }
                 }
                 HostReport::Violation { pid, reason } => self.on_violation(pid, &reason),
+                HostReport::Unregistered { pid } => self.on_unregistered(pid),
                 _ => {}
             }
         }
@@ -1413,7 +1415,20 @@ impl Supervisor {
         }
     }
 
-    /// 宿主斷了一條違反協定的連線：寫稽核，那個身分隔離到它結束。宿主那邊已經撤了它，這裡只是之後重送身分表時不再放進去。
+    /// 宿主拒了一條 pid 不在它表上的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它的身分 spawn 當下就登記了，
+    /// 宿主沒有只會是那一筆還沒讀到（宿主剛重起，或通道一時寫不進去），不算違規，什麼都不做。其餘的（不是我們的 pid、
+    /// 已經隔離的）照違規記。
+    fn on_unregistered(&mut self, pid: u32) {
+        let live = libc::pid_t::try_from(pid).ok().filter(|&pid| pid > 0).is_some_and(|pid| self.grant_of(pid).is_some());
+        if live {
+            say!("宿主還沒有 pid {pid} 的身分就收到它的連線：表還在路上，不算違規");
+            return;
+        }
+        self.on_violation(pid, "沒有登記".as_bytes());
+    }
+
+    /// 宿主斷了一條違反協定的連線：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：宿主那邊已經撤了它，
+    /// 這裡讓之後重送身分表時不再放進去。不是我們的 pid（含 0），只寫稽核，`role` 記 `unknown`。
     fn on_violation(&mut self, pid: u32, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
         let pid = libc::pid_t::try_from(pid).unwrap_or(-1);

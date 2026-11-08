@@ -2,7 +2,7 @@
 //! 物件（[`crate::json`]），`type` 欄位分種類。兩邊從同一份向量檔 `host-vectors.json` 驗。
 //!
 //! 連上之後客戶端的第一框是 `hello`，帶協定版本與監督行程在控制通道上交給它的 token。宿主照 `SO_PEERCRED` 的 pid 查監督行程給的身分表：
-//! pid 對得上、token 相同、版本相等才回 `hello`；否則回 `rejected` 並斷線。這個版本只有 `hello`，之後的服務在後續卡加種類。
+//! pid 對得上、token 相同、版本相等才回 `hello`；否則回 `rejected` 並斷線。目前只有 `hello` 一種（服務的種類見 #2569）。
 //!
 //! 上限都是常數：一框最長 [`MAX_FRAME`]，JSON 巢狀最多 [`crate::json::MAX_DEPTH`] 層，每條連線未處理的位元組最多
 //! [`crate::supervisor::process::INBOX_FRAMES`] 個框長。超過、解不開、種類不認得，都算違反協定。
@@ -61,6 +61,7 @@ fn string(value: &Value) -> Result<String, DecodeError> {
     value.as_str().map(str::to_string).ok_or(DecodeError("要是字串"))
 }
 
+/// 解一份 JSON 物件：`type` 不認得、欄位少了或多了、型別不對都回 [`DecodeError`]，不 panic。
 pub fn decode_client_message(payload: &[u8]) -> Result<ClientMessage, DecodeError> {
     let (kind, all) = object(payload)?;
     match kind.as_str() {
@@ -72,6 +73,7 @@ pub fn decode_client_message(payload: &[u8]) -> Result<ClientMessage, DecodeErro
     }
 }
 
+/// 編成緊湊 JSON，鍵照 `type` 在前的固定順序；不會失敗。
 pub fn encode_client_message(message: &ClientMessage) -> Vec<u8> {
     let fields = match message {
         ClientMessage::Hello { version, token } => vec![
@@ -83,6 +85,7 @@ pub fn encode_client_message(message: &ClientMessage) -> Vec<u8> {
     json::encode(&Value::Object(fields))
 }
 
+/// 同 [`decode_client_message`]，解宿主送給客戶端的。
 pub fn decode_host_message(payload: &[u8]) -> Result<HostMessage, DecodeError> {
     let (kind, all) = object(payload)?;
     match kind.as_str() {
@@ -98,6 +101,7 @@ pub fn decode_host_message(payload: &[u8]) -> Result<HostMessage, DecodeError> {
     }
 }
 
+/// 同 [`encode_client_message`]，編宿主送給客戶端的。
 pub fn encode_host_message(message: &HostMessage) -> Vec<u8> {
     let fields = match message {
         HostMessage::Hello { version } => vec![
@@ -112,7 +116,7 @@ pub fn encode_host_message(message: &HostMessage) -> Vec<u8> {
     json::encode(&Value::Object(fields))
 }
 
-/// 這一版的 `hello`。
+/// 帶 [`PROTOCOL_VERSION`] 的 `hello`。
 pub fn hello(token: &str) -> ClientMessage {
     ClientMessage::Hello { version: PROTOCOL_VERSION, token: token.to_string() }
 }

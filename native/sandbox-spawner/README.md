@@ -38,10 +38,10 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 對話行程的 leader 本身要是跑 V8 的 `node`（node 的旗標放在腳本前面；或用 `exec` 換成 node），不能多一層會留下來的外層行程（shell、`tsx` CLI）：外層不是以 SIGABRT 結束，heap 會判成 `crash`，RSS 量到的也是外層。
 - 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
-- 每條控制通道的第一框都是 `hello`，協定版本是 `src/supervisor_protocol.rs` 的 `PROTOCOL_VERSION`：子行程一起來監督行程先送自己的，給前台與對話行程的帶連宿主用的 token（只在這一框，不放 env 也不放 argv）；子行程送來的第一框也要是版本相等的 `hello`。對話行程不是就當場 SIGKILL，死因 `protocol`；前台或宿主不是就不重起，整台停機、回 3。
+- 每條控制通道的第一框都是 `hello`，協定版本是 `src/supervisor_protocol.rs` 的 `PROTOCOL_VERSION`：子行程一起來監督行程先送自己的，給前台與對話行程的帶連宿主用的 token（只在這一框，不放 env 也不放 argv）；子行程送來的第一框也要是版本相等的 `hello`。對話行程不是就當場 SIGKILL，死因 `protocol`；前台或宿主送來的解得開卻不是，就不重起，整台停機、回 3。第一框解不開的照壞框處置：前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。
 - 拆除梯度：關 stdin → `--eof-grace-ms` → 群組 SIGTERM → `--term-grace-ms` → 群組 SIGKILL；leader 結束時再對它的群組送一次 SIGKILL。RSS 超過上限與心跳斷了太久的不走梯度，當場對群組送 SIGKILL。
-- 宿主（`--host`，#2569）：見下面〈宿主 `nexus-host`〉。argv 是 `<程式> <--host-arg>... --socket <--run-dir>/host.sock`，stdin／stdout 是控制通道，stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表（每個前台與對話行程一筆：pid、token、角色、綁的 thread）整張送過去；之後起的行程在 spawn 當下、把 token 交給它之前先送那一筆，指派 thread 時更新，收屍之前撤掉：撤銷寫進給宿主的 pipe 才收屍，500 ms 內寫不進去就殺掉宿主的群組。宿主回報某個 pid 違反協定時寫一行稽核，那個身分隔離到它結束，宿主重起重送的表裡也不再有它。宿主結束就照退避重起：第一次等 `--host-backoff-ms`，之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、`--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗不算，只退避重起。
+- 宿主（`--host`，#2569）：見下面〈宿主 `nexus-host`〉。argv 是 `<程式> <--host-arg>... --socket <--run-dir>/host.sock`，stdin／stdout 是控制通道，stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表（每個前台與對話行程一筆：pid、token、角色、綁的 thread）整張送過去；之後起的行程在 spawn 當下、把 token 交給它之前先送那一筆，指派 thread 時更新，收屍之前撤掉：撤銷寫進給宿主的 pipe 才收屍，500 ms 內寫不進去就殺掉宿主的群組。宿主回報某個 pid 違反協定（`violation`）時寫一行稽核，那個 pid 是現在的前台或對話行程的，就隔離到它結束，宿主重起重送的表裡也不再有它。回報 pid 不在宿主表上（`unregistered`）的，是活著、沒被隔離的前台或對話行程就不算違規（那一筆還在通道裡），其餘照違規記。宿主結束就照退避重起：第一次等 `--host-backoff-ms`，之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、`--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗不算，只退避重起。
 - 停機（SIGINT／SIGTERM／SIGHUP）：① 送前台 `stop-admission`，等它回 `admission-stopped` 最多 `--admission-timeout-ms`（前台不在、或等的時候結束了就不等）；② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次。停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL。
 - 心跳：送出 `bind` 起開始計時，之後收到對話行程的任何一個框都算聽到。超過 `--stall-ms` 沒聽到就殺（死因 `stalled`；壓住期間只算放它跑的時間，見下一條）；判之前先讀一次它的控制通道，監督行程自己停住過時（fd 2 阻塞、被 SIGSTOP）回報可能還在管線裡。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、cgroup freezer、VM 暫停），所有對話行程的沉默從醒來起重新算、記一行訊息；為了量得出來，有已送出 `bind` 的對話行程時，最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值。`ready` 之前不判。對話行程從收到 `bind` 起每 1 s 送一次 `heartbeat`（`apps/harness/src/conversation-process.ts` 的 `HEARTBEAT_MS`），一直送到行程結束；`turn` 不參與判斷。`--stall-ms 0` 是不判。
 - 壓住吃滿 CPU 的對話行程（#2496）：已經 `up`、沒在收、沒在等 `drain` 回答的對話行程，沉默滿 `--throttle-ms`，而且這段期間 leader 一直要 CPU（`/proc/<pid>/schedstat` 的在 CPU 上加上在可執行佇列上等的時間，至少是牆鐘的 0.9 倍），就對 leader 交替送 SIGSTOP（`--throttle-stop-ms`）與 SIGCONT（`--throttle-run-ms`），預設值下它只拿到約 run／(run＋stop)＝四分之一的 CPU。取樣跟著 `--rss-poll-ms`，取樣的跨度不到 `--throttle-ms` 的一半不判。聽到它任何一個框就 SIGCONT、不再壓；開始收（`drain`、拆除梯度）之前也先 SIGCONT。壓住期間 `stalled` 只算放它跑的時間：停住的時間不算沉默，真的卡死的要多等，預設值下約 2＋13×4＝54 s 才被殺。`bind` 到 `bound` 之間（冷開）不壓；沉默但不吃 CPU 的同步等待（`execSync`）不壓。訊號只送 leader，不送群組：監督行程在壓住期間死掉時，leader 靠 `PR_SET_PDEATHSIG` 被殺，群組裡被停住的子行程卻沒人叫醒。`--throttle-ms 0` 是不壓。
@@ -86,10 +86,10 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 nexus-host --socket <路徑>
 ```
 
-- 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`。之後收身分表的 `grant`／`revoke`，回報 `violation`。stdin EOF 就刪 socket、回 0。
+- 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`。之後收身分表的 `grant`／`revoke`，回報 `violation`／`unregistered`。stdin EOF 就刪 socket、回 0。
 - 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON，協定在 `src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條；連上 5 s 內沒送 `hello` 就斷。
 - 驗身分：用 `SO_PEERCRED` 取連線的 pid（uid 要跟宿主相同），驗 `hello` 之前先把控制通道讀乾淨，所以監督行程已經寫進 pipe 的撤銷一定先生效。客戶端報的 thread 不看。
-  - pid 不在表上：回 `rejected`、報 `violation`，表上沒有它可以隔離。
+  - pid 不在表上：回 `rejected`、報 `unregistered`，表上沒有它可以撤；算不算違規由監督行程判斷。
   - token 或版本不對、重複的 `hello`、框太大、JSON 或訊息解不開：回 `rejected`、報 `violation`，把那個 pid 從表上拿掉，它其他的連線一起斷。
 - 整合測試 `tests/host.rs` 由測試站在監督行程的位置；`examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
 

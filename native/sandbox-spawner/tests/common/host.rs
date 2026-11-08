@@ -125,3 +125,7 @@ impl Drop for HostProc {
 pub fn violation(pid: u32, reason: &str) -> HostReport {
     HostReport::Violation { pid, reason: reason.as_bytes().to_vec() }
 }
+
+pub fn unregistered(pid: u32) -> HostReport {
+    HostReport::Unregistered { pid }
+}

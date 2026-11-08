@@ -1,5 +1,5 @@
 //! 宿主（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：監督行程起的第三種子行程，全機共用一個，不在資料路徑上。
-//! 這一版只有骨架：跟監督行程握手、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分；服務在後續卡加。
+//! 目前只做三件事：跟監督行程握手、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分；還沒有任何服務（#2569）。
 //!
 //! ```text
 //! nexus-host --socket <路徑>
@@ -10,11 +10,12 @@
 //!
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
-//! 監督行程收屍之前就把 `revoke` 寫進 pipe，pid 被重用之後才 `connect()` 的連線，它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。
+//! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就殺掉宿主，不收屍），pid 被重用之後才 `connect()` 的連線，
+//! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
 //! （`violation`，它寫稽核），表上那個 pid 撤掉、它的其他連線一起斷，直到監督行程重送（它不會：那個身分隔離到行程結束）。
-//! pid 不在表上的只回 `rejected`、斷線、回報，沒有身分可以撤。宿主自己不因為任何一條連線結束。
+//! pid 不在表上的只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），沒有身分可以撤。宿主自己不因為任何一條連線結束。
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
@@ -75,7 +76,8 @@ fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
     socket.ok_or_else(|| "少了 --socket".to_string())
 }
 
-/// 跑宿主，回結束碼。
+/// 跑宿主，回結束碼：0 是 stdin 讀到 EOF（監督行程要它收）；1 是 `hello` 之前 stdin 就 EOF，或綁不了 socket；2 是參數不對；
+/// 3 是監督行程的第一框不是這一版的 `hello`，或解不開。
 pub fn run(args: Vec<OsString>) -> i32 {
     let socket = match parse(args) {
         Ok(socket) => socket,
@@ -311,7 +313,8 @@ impl Host {
             return false;
         }
         let Some(grant) = conn.pid.and_then(|pid| self.grants.get(&pid)) else {
-            self.reject(i, "沒有登記");
+            let pid = self.refuse(i, "沒有登記");
+            self.report(&HostReport::Unregistered { pid });
             return false;
         };
         if version != PROTOCOL_VERSION {
@@ -335,18 +338,19 @@ impl Host {
         true
     }
 
-    /// 回 `rejected`、回報監督行程；這條由呼叫方斷。表上沒有這個 pid，沒有身分可以撤。
-    fn reject(&mut self, i: usize, reason: &str) {
-        let Some(conn) = self.conns.get_mut(i) else { return };
+    /// 回 `rejected`，回傳要報給監督行程的 pid（讀不到是 0）；這條由呼叫方斷。
+    fn refuse(&mut self, i: usize, reason: &str) -> u32 {
+        let Some(conn) = self.conns.get_mut(i) else { return 0 };
         conn.chan.send(&encode_host_message(&HostMessage::Rejected { reason: reason.to_string() }));
         let pid = conn.pid.unwrap_or(0);
         say!("拒絕 pid {pid} 的連線：{reason}");
-        self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });
+        pid
     }
 
     /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他的連線；這條由呼叫方斷。
     fn violate(&mut self, i: usize, reason: &str) {
-        self.reject(i, reason);
+        let pid = self.refuse(i, reason);
+        self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });
         let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else { return };
         if self.grants.contains_key(&pid) {
             say!("pid {pid} 隔離到它結束");

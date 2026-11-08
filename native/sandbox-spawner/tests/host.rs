@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::host::{example, violation, HostProc};
+use common::host::{example, unregistered, violation, HostProc};
 use nexus_sandbox_spawner::host_protocol::{decode_host_message, encode_client_message, hello, HostMessage, MAX_FRAME};
 use nexus_sandbox_spawner::json::{self, Value};
 use nexus_sandbox_spawner::protocol::frame;
@@ -103,7 +103,7 @@ fn a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation() {
     assert_eq!(host.report(), Some(violation(me(), "重複的 hello")));
     // 隔離：同一個 pid 再連，表上已經沒有它。
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
-    assert_eq!(host.report(), Some(violation(me(), "沒有登記")));
+    assert_eq!(host.report(), Some(unregistered(me())));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections(
     assert_eq!(host.report(), Some(violation(me(), "token 不對")));
     assert!(closed(&mut first), "隔離時它其他的連線要一起斷");
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
-    assert_eq!(host.report(), Some(violation(me(), "沒有登記")));
+    assert_eq!(host.report(), Some(unregistered(me())));
 
     host.grant(me(), TOKEN, Role::Front, "");
     let old = frame(&encode_client_message(&nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
@@ -175,7 +175,7 @@ fn a_hello_after_a_revoke_is_always_rejected() {
         host.command(&HostCommand::Revoke { pid: me() });
         assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "第 {round} 輪");
         assert!(closed(&mut live), "撤銷時它的連線要一起斷（第 {round} 輪）");
-        assert_eq!(host.report(), Some(violation(me(), "沒有登記")));
+        assert_eq!(host.report(), Some(unregistered(me())));
     }
 }
 
@@ -207,7 +207,7 @@ fn an_unsandboxed_mcp_server_with_a_stolen_token_is_rejected() {
     let guard_pid = guard.id();
     let out = guard.wait_with_output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "host rejected 沒有登記");
-    assert_eq!(host.report(), Some(violation(guard_pid, "沒有登記")));
+    assert_eq!(host.report(), Some(unregistered(guard_pid)));
 
     legit.stdin.take().unwrap().write_all(b"go\n").unwrap();
     let out = legit.wait_with_output().unwrap();

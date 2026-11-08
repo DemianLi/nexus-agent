@@ -1,13 +1,14 @@
 //! 監督行程整合測試用的假宿主：照控制通道的協定握手、記下收到的身分表，不收連線。真的宿主是 `nexus-host`。
 //!
 //! ```text
-//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] --socket <路徑>
+//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] --socket <路徑>
 //! ```
 //!
 //! - 一起來送 `hello`（版本照 `--version`，預設 [`PROTOCOL_VERSION`]），等到監督行程的 `hello` 才往下。
 //! - `--exit-before-ready`：收到 `hello` 就以這個碼結束。`--no-ready`：不送 `ready`，一直等到 stdin EOF。
 //! - `--crash-once`：送 `ready`、收到第一筆身分之後，標記檔不在就建它、以 9 結束；在就照常。
-//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`eof`。
+//! - `--unregistered-once`：收到第一筆對話行程的身分之後，標記檔不在就建它、回報那個 pid「沒有登記」、以 9 結束；在就照常。
+//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -23,6 +24,7 @@ fn main() {
     let exit_before_ready: Option<i32> = value("--exit-before-ready").map(|v| v.parse().unwrap());
     let no_ready = args.iter().any(|a| a == "--no-ready");
     let crash_once = value("--crash-once");
+    let unregistered_once = value("--unregistered-once");
 
     let mut log_file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
     let mut log = move |line: &str| {
@@ -65,6 +67,13 @@ fn main() {
                         Role::Conversation => "conversation",
                     };
                     log(&format!("grant {pid} {role} {}", String::from_utf8_lossy(&thread)));
+                    if let Some(marker) = unregistered_once.as_ref().filter(|_| role == "conversation") {
+                        if std::fs::metadata(marker).is_err() {
+                            std::fs::write(marker, b"").unwrap();
+                            report(&HostReport::Unregistered { pid });
+                            std::process::exit(9);
+                        }
+                    }
                     if let Some(marker) = &crash_once {
                         if std::fs::metadata(marker).is_err() {
                             std::fs::write(marker, b"").unwrap();

@@ -309,6 +309,13 @@
         "reason": "框太大"
       },
       "hex": "509210000009000000e6a186e5a4aae5a4a7"
+    },
+    {
+      "value": {
+        "type": "unregistered",
+        "pid": 4242
+      },
+      "hex": "4e92100000"
     }
   ]
 }

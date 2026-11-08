@@ -22,6 +22,7 @@
 use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
+/// 連宿主 socket 的協定（[`crate::host_protocol`]）用同一個版本，`host-vectors.json` 的 `protocolVersion` 也核對。
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// 監督行程 → 對話行程。
@@ -167,9 +168,12 @@ pub enum HostReport {
     Hello { version: u32 },
     /// 在聽了，可以收身分表。在這之前的失敗（含沒起成）算「ready 之前的失敗」，見監督行程的退避。
     Ready,
-    /// 一條連線違反協定（框太大、內容解不開、`hello` 不對、身分不符），宿主已經斷了它，那個 pid 的身分也在宿主那邊作廢了。
-    /// `pid` 是 `SO_PEERCRED` 讀到的；`reason` 是給人看的一句話（UTF-8）。
+    /// 一條連線違反協定（框太大、內容解不開、重複的 `hello`、版本或 token 不對），宿主已經斷了它，那個 pid 的身分也在宿主那邊作廢了。
+    /// `pid` 是 `SO_PEERCRED` 讀到的，讀不到或 uid 不同是 0；`reason` 是給人看的一句話（UTF-8）。
     Violation { pid: u32, reason: Vec<u8> },
+    /// 一條連線送了 `hello`，但它的 pid 不在宿主的表上，宿主已經斷了它。`pid` 同上。不一定是違規：身分表還在通道裡、
+    /// 宿主還沒讀到的時候（宿主剛重起、或通道一時寫不進去）也是這樣，要不要算違規由監督行程判斷。
+    Unregistered { pid: u32 },
 }
 
 const CMD_HELLO: u8 = b'w';
@@ -199,6 +203,7 @@ const HCMD_REVOKE: u8 = b'r';
 const HREP_HELLO: u8 = b'K';
 const HREP_READY: u8 = b'Q';
 const HREP_VIOLATION: u8 = b'P';
+const HREP_UNREGISTERED: u8 = b'N';
 
 fn decoded<T>(mut r: Reader<'_>, read: impl FnOnce(&mut Reader<'_>, u8) -> Result<T, DecodeError>) -> Result<T, DecodeError> {
     let kind = r.u8()?;
@@ -441,6 +446,10 @@ pub fn encode_host_report(report: &HostReport) -> Vec<u8> {
             w.u32(*pid);
             w.bytes(reason);
         }
+        HostReport::Unregistered { pid } => {
+            w.u8(HREP_UNREGISTERED);
+            w.u32(*pid);
+        }
     }
     w.0
 }
@@ -451,6 +460,7 @@ pub fn decode_host_report(payload: &[u8]) -> Result<HostReport, DecodeError> {
             HREP_HELLO => HostReport::Hello { version: r.u32()? },
             HREP_READY => HostReport::Ready,
             HREP_VIOLATION => HostReport::Violation { pid: r.u32()?, reason: r.bytes()? },
+            HREP_UNREGISTERED => HostReport::Unregistered { pid: r.u32()? },
             _ => return Err(DecodeError("不認得的種類")),
         })
     })
@@ -551,6 +561,7 @@ mod tests {
             HostReport::Hello { version: PROTOCOL_VERSION },
             HostReport::Ready,
             HostReport::Violation { pid: 4242, reason: "框太大".as_bytes().to_vec() },
+            HostReport::Unregistered { pid: 4242 },
         ]
     }
 
@@ -600,7 +611,7 @@ mod tests {
         expect("frontRequests", &[REQ_HELLO, REQ_ADMISSION_STOPPED, REQ_ENSURE, REQ_RELEASE]);
         expect("frontEvents", &[EV_HELLO, EV_STOP_ADMISSION, EV_UP, EV_DOWN, EV_CAPACITY, EV_STATS]);
         expect("hostCommands", &[HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE]);
-        expect("hostReports", &[HREP_HELLO, HREP_READY, HREP_VIOLATION]);
+        expect("hostReports", &[HREP_HELLO, HREP_READY, HREP_VIOLATION, HREP_UNREGISTERED]);
         let downs: Vec<DeathCause> = events()
             .into_iter()
             .filter_map(|e| match e {

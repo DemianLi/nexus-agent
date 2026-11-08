@@ -1532,6 +1532,24 @@ fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_ev
     assert!(!gone(logged_pid(&a, "pid")));
 }
 
+/// 宿主回報「沒有登記」的是活著的對話行程：那是身分表還沒送到（宿主剛重起、或通道還沒寫完），不隔離、不寫稽核，下一個宿主照樣拿到它。
+#[test]
+fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits() {
+    let marker = temp_dir("marker").join("unregistered");
+    let mut h = Harness::start(Options { host: fake_host(&["--unregistered-once", marker.to_str().unwrap()]), ..Options::default() });
+    h.up("a");
+    assert!(
+        wait_until(|| {
+            let log = host_log(&h);
+            let second = log.iter().enumerate().filter(|(_, l)| l.starts_with("start ")).nth(1).map(|(i, _)| i);
+            second.is_some_and(|i| log[i..].iter().any(|l| l.ends_with(" conversation a")))
+        }),
+        "{:?}",
+        host_log(&h)
+    );
+    assert!(!h.audit().iter().any(|l| l.contains("\"event\":\"protocol\"")), "{:?}", h.audit());
+}
+
 /// 真的宿主被殺掉重起：對話行程用原本的 token 重連得上，因為監督行程把整張表重送給新的宿主。
 #[test]
 fn after_a_host_restart_conversations_reconnect_with_the_same_token() {

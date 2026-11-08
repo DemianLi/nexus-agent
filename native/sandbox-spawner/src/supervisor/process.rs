@@ -230,7 +230,7 @@ impl Chan {
                 }
             }
             let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return Ok(frames) };
-            // 切完之後 inbox 只剩不到一框，讀一塊進來也不會超過 cap。
+            // 切完之後 inbox 不到一框（< cap 的一半），room 是 0 只會是 budget 用完。
             let room = cap.saturating_sub(self.inbox.len()).min(4096).min(budget);
             if room == 0 {
                 return Ok(frames);
