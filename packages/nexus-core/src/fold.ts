@@ -107,6 +107,7 @@ import {
 import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
+import { createTurnStoppingMiddleware } from './turn-stopping.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
@@ -787,8 +788,21 @@ export function foldRegistry(
   // **槽位表：root 與每個子代理的 middleware 疊都從這一張導出**（#664），順序就是兩邊的包裹順序。
   // 新增一顆 core middleware = 上面建一個實例、這裡加一列。子代理那一欄要寫「不給」得明著寫，漏接在這裡寫不出來。
   const slots: readonly MiddlewareSlot[] = [
-    // 插話排最前面：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
-    // `afterAgent` 最後才問（排在它後面的 `afterAgent` 先走完）。它沒有 `wrap*`，不影響洋蔥的層次。
+    // 這一輪要停的轉接格排在插話前面：`afterAgent` 反序跑，插話跳回模型時它不跑，真的要停時它最後跑。只在 `langgraph` 下、
+    // 有監聽者時掛（native 由迴圈自己派），只折進 root。見 {@link ./turn-stopping.ts}。
+    rootOnly(
+      'turnStopping',
+      same(
+        options.loop === 'native' ||
+          options.events === undefined ||
+          options.events.count('agent/turn-stopping') === 0
+          ? undefined
+          : createTurnStoppingMiddleware(options.events),
+      ),
+    ),
+    // 插話排在除了轉接格之外的每一顆前面（轉接格沒有 `beforeModel`）：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
+    // `afterAgent` 在轉接格以外的每一顆之後才問（排在它後面的先走完）；轉接格在它之後才跑，但不改 state、不跳轉，所以它看到的
+    // 仍是其餘每一顆收完的 state。它沒有 `wrap*`，不影響洋蔥的層次。
     // 只折進 root。見 {@link ./step-inbox.ts}。
     rootOnly(
       'stepInbox',

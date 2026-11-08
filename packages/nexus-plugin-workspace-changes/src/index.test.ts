@@ -1,10 +1,10 @@
 /**
- * 記錄器在真的 registry、真的 session runner 上：日誌事件怎麼推動它，middleware 的兩個鉤子什麼時候擷取、什麼時候記。
+ * 記錄器在真的 registry、真的 session runner 上：日誌事件怎麼推動它，三位監聽者什麼時候擷取、什麼時候記。
  *
  * 走真的圖、真的 wire 的那一條在 `@nexus/harness` 的 `workspace-changes.test.ts`；這裡驗那條路製造不出來的時序：
  * 停在核准點、中止之後補記、下一輪已經開始、子代理的呼叫、上限與收尾。
  *
- * 工具本體由測試自己扮演：`wrapToolCall` 的 `handler` 就是那次改檔。
+ * 工具本體由測試自己扮演：`tools/execute` 最內層的 `next` 就是那次改檔。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -35,12 +35,19 @@ import {
   SessionRegistry,
   WORKSPACE_ROOT_SERVICE,
 } from '@nexus/core';
-import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
+import type {
+  PipelineExecution,
+  PluginEntry,
+  SessionAddress,
+  SessionEvent,
+  SessionLog,
+} from '@nexus/core';
 
 import {
   createWorkspaceChanges,
   directGitStarter,
   GIT_STARTER_SERVICE,
+  mutationPath,
   WORKSPACE_CHANGES_LIMITS,
   WORKSPACE_CHANGES_SERVICE,
   workspaceChangesConfigSchema,
@@ -86,11 +93,48 @@ async function directory(prefix: string): Promise<string> {
   return path;
 }
 
-/** root 的工具呼叫長這樣；子代理的多一段父圖那次 `task`。 */
-const ROOT_TOOL = { checkpoint_ns: 'tools:root-1' };
-const SUBAGENT_TOOL = { checkpoint_ns: 'tools:task-1|tools:sub-1' };
-const ROOT_AFTER = { checkpoint_ns: 'afterAgent:root-1' };
-const SUBAGENT_AFTER = { checkpoint_ns: 'tools:task-1|afterAgent:sub-1' };
+/** 呼叫者：root，或 `task` 委派出去的子代理。 */
+const ROOT_TOOL: SessionAddress = { kind: 'root' };
+const SUBAGENT_TOOL: SessionAddress = { kind: 'subagent', runId: 'task-1' };
+
+/** 一次工具呼叫在匯流排上的樣子。 */
+function execution(name: string, args: unknown, agent: SessionAddress): PipelineExecution {
+  return { callId: `call-${name}`, name, args, agent, thread: undefined, signal: undefined };
+}
+
+/**
+ * 扮演一次工具呼叫：`tools/pre-execute` 放行之後派 `tools/execute`，最內層跑 `body`（那次改檔）。
+ * 子代理的工具過濾在插件監聽者外側，被它擋下的呼叫兩個事件都不派；核准閘門在 `tools/pre-execute` 內側、`tools/execute`
+ * 外側，被它拒絕的呼叫只派到 `tools/pre-execute`（`tool-pipeline.ts`、`fold.ts` 槽位表）。
+ */
+async function dispatchTool(
+  registry: ReturnType<typeof createRegistry>,
+  exec: PipelineExecution,
+  body: () => Promise<void>,
+): Promise<void> {
+  const decision = await registry.dispatch.waterfall('tools/pre-execute', exec, async () => ({
+    kind: 'allow' as const,
+  }));
+  expect(decision).toEqual({ kind: 'allow' });
+  await registry.dispatch.waterfall('tools/execute', exec, async () => {
+    await body();
+    return {
+      kind: 'message',
+      content: 'ok',
+      blocks: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    };
+  });
+}
+
+/** 這一輪要停：派 `agent/turn-stopping`（只有 root 派）。 */
+async function turnStopping(registry: ReturnType<typeof createRegistry>): Promise<void> {
+  await registry.dispatch.serial('agent/turn-stopping', {
+    threadId: undefined,
+    step: 1,
+    signal: new AbortController().signal,
+  });
+}
 
 interface Mounted {
   readonly root: string;
@@ -98,15 +142,15 @@ interface Mounted {
   readonly log: SessionLog;
   readonly warnings: string[];
   readonly service: WorkspaceChanges;
+  readonly registry: ReturnType<typeof createRegistry>;
   /** 扮演一顆檔案工具：擷取、等排著的工作，然後跑 `body`（那次改檔）。 */
   tool(
     name: string,
     args: Record<string, unknown>,
     body: () => Promise<void>,
-    configurable?: unknown,
+    agent?: SessionAddress,
   ): Promise<void>;
-  /** 正常收尾那一步。 */
-  afterAgent(configurable?: unknown): Promise<void>;
+  turnStopping(): Promise<void>;
   /** 收掉這次組裝：跑 lifecycle 的每一個收尾。 */
   dispose(): Promise<void>;
   /** 開一份子代理的會話接上這次組裝，回它的日誌；`seed` 先寫進去的事件在接上時重播。 */
@@ -114,8 +158,8 @@ interface Mounted {
   /** 這份日誌上的改動紀錄。 */
   changes(): SessionEvent[];
   /**
-   * 等記錄器排著的工作全部落定。**走產品路徑上的那一條**：任何一顆工具經過 `wrapToolCall` 都會等它
-   * （照 dsh 的 `tools/pre-execute`），這裡叫一顆不改檔的。繞事件迴圈幾圈等不到——擷取與比較是檔案 I/O。
+   * 等記錄器排著的工作全部落定。**走產品路徑上的那一條**：任何一顆工具在 `tools/pre-execute` 都會等它，
+   * 這裡叫一顆不改檔的。繞事件迴圈幾圈等不到——擷取與比較是檔案 I/O。
    */
   settle(): Promise<void>;
 }
@@ -154,32 +198,17 @@ async function mount(
     rootLog: log,
     installers: registry.sessions.installers(),
   });
-  const [entry] = registry.middleware.list();
-  const middleware = entry!.value.middleware as unknown as {
-    wrapToolCall: (
-      request: unknown,
-      handler: (request: unknown) => Promise<unknown>,
-    ) => Promise<unknown>;
-    afterAgent: (state: unknown, runtime: unknown) => Promise<unknown>;
-  };
   return {
     root,
     tempRoot,
     log,
     warnings,
     service,
-    async tool(name, args, body, configurable = ROOT_TOOL) {
-      await middleware.wrapToolCall(
-        { toolCall: { id: `call-${name}`, name, args }, runtime: { configurable } },
-        async () => {
-          await body();
-          return 'ok';
-        },
-      );
+    registry,
+    async tool(name, args, body, agent = ROOT_TOOL) {
+      await dispatchTool(registry, execution(name, args, agent), body);
     },
-    async afterAgent(configurable = ROOT_AFTER) {
-      await middleware.afterAgent({}, { configurable });
-    },
+    turnStopping: () => turnStopping(registry),
     async dispose() {
       for (const { value } of registry.lifecycle.disposers()) await value();
     },
@@ -196,13 +225,7 @@ async function mount(
     },
     changes: () => log.events.filter((event) => event.type === 'workspace/changes'),
     async settle() {
-      await middleware.wrapToolCall(
-        {
-          toolCall: { id: 'settle', name: 'read_file', args: {} },
-          runtime: { configurable: ROOT_TOOL },
-        },
-        async () => 'ok',
-      );
+      await dispatchTool(registry, execution('read_file', {}, ROOT_TOOL), async () => undefined);
     },
   };
 }
@@ -238,7 +261,7 @@ describe('一輪', () => {
     );
     await m.tool('delete', { file_path: '/gone.md' }, () => unlink(join(m.root, 'gone.md')));
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
 
@@ -306,7 +329,7 @@ describe('一輪', () => {
       writeFile(join(m.root, 'c.md'), 'one\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
 
@@ -330,7 +353,7 @@ describe('一輪', () => {
       writeFile(join(m.root, 'a.md'), 'b\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
     expect(m.changes()).toHaveLength(1);
@@ -339,7 +362,7 @@ describe('一輪', () => {
   it('沒有工具結果的一輪、改回原樣的檔：都不記', async () => {
     const m = await mount({ 'a.md': 'a\n' });
     m.log.append('turn/start', { kind: 'message', text: '聊天。' });
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     m.log.append('turn/start', { kind: 'message', text: '改了又改回來。' });
     await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
@@ -349,7 +372,7 @@ describe('一輪', () => {
       writeFile(join(m.root, 'a.md'), 'a\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
     expect(m.changes()).toEqual([]);
@@ -364,7 +387,7 @@ describe('一輪', () => {
       );
     }
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     const diff = await m.service.diff(event!.seq, 0, new AbortController().signal);
     expect(diff).toMatchObject({ hunks: [{ lines: ['-v1', '+v3'] }] });
@@ -389,7 +412,7 @@ describe('輪的邊界', () => {
       writeFile(join(m.root, 'b.md'), 'B\n'),
     );
     result(m.log, 'c2');
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
     const [event] = m.changes();
@@ -431,7 +454,49 @@ describe('輪的邊界', () => {
     expect(m.warnings).toEqual(['workspace-changes: 下一輪已經開始，上一輪的改動紀錄不記']);
   });
 
-  it('子代理的擷取算進 root 這一輪；子代理自己收尾不記', async () => {
+  it('擷取在 `tools/execute`：只過了 `tools/pre-execute` 的呼叫（之後被核准閘門拒絕）不擷取', async () => {
+    const m = await mount({ 'a.md': 'a\n' });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    const exec = execution(
+      'edit_file',
+      { file_path: 'a.md', old_string: 'a', new_string: 'b' },
+      ROOT_TOOL,
+    );
+    await m.registry.dispatch.waterfall('tools/pre-execute', exec, async () => ({
+      kind: 'allow' as const,
+    }));
+    // 沒派 `tools/execute`：本體沒跑。之後同一個檔被不是檔案工具的東西改了，沒有擷取就列不出來。
+    await writeFile(join(m.root, 'a.md'), 'b\n');
+    result(m.log);
+    await m.turnStopping();
+    expect(m.changes()).toEqual([]);
+  });
+
+  it('不改檔的工具（`task`）在 `tools/execute` 同步往內交，排著的工作再慢也不等', async () => {
+    const m = await mount({ 'a.md': 'a\n' });
+    m.log.append('turn/start', { kind: 'message', text: '委派。' });
+    expect(
+      mutationPath('task', { description: '叫一下', subagent_type: 'worker' }),
+    ).toBeUndefined();
+    let entered = false;
+    const pending = m.registry.dispatch.waterfall(
+      'tools/execute',
+      execution('task', { description: '叫一下', subagent_type: 'worker' }, ROOT_TOOL),
+      async () => {
+        entered = true;
+        return {
+          kind: 'message',
+          content: 'ok',
+          blocks: [{ type: 'text', text: 'ok' }],
+          isError: false,
+        };
+      },
+    );
+    expect(entered).toBe(true);
+    await pending;
+  });
+
+  it('子代理的擷取算進 root 這一輪', async () => {
     const m = await mount({ 'a.md': 'a\n' });
     m.log.append('turn/start', { kind: 'message', text: '委派。' });
     await m.tool(
@@ -440,11 +505,9 @@ describe('輪的邊界', () => {
       () => writeFile(join(m.root, 'a.md'), 'b\n'),
       SUBAGENT_TOOL,
     );
-    await m.afterAgent(SUBAGENT_AFTER);
-    // 子代理收工時 root 那一份還沒有這一輪的結果；`task` 的結果回到 root 才有。
     expect(m.changes()).toEqual([]);
     result(m.log, 'task');
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
   });
@@ -461,7 +524,7 @@ describe('輪的邊界', () => {
     );
     sub.append('tool/result', { callId: 'sub-1', isError: false, meta: COPY_META });
     result(m.log, 'task');
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
 
@@ -492,7 +555,7 @@ describe('輪的邊界', () => {
       SUBAGENT_TOOL,
     );
     result(m.log, 'task');
-    await m.afterAgent();
+    await m.turnStopping();
     await m.settle();
 
     const [event] = m.changes();
@@ -557,7 +620,7 @@ describe('上限與內容', () => {
       writeFile(join(m.root, 'c.md'), 'd\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     const summary = m.service.summary(event!.seq);
     expect(summary).toEqual({
@@ -628,7 +691,7 @@ describe('上限與內容', () => {
       writeFile(join(m.root, 'a.md'), 'b\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
     expect(second.summary(event!.seq)).toBeUndefined();
@@ -658,13 +721,16 @@ describe('上限與內容', () => {
 });
 
 describe('合格與否（#669，照 dsh 的 eligible）', () => {
-  it('沒有工作區根：什麼都不註冊——沒有服務、沒有 middleware、不接會話', async () => {
+  it('沒有工作區根：什麼都不註冊——沒有服務、沒有監聽者、不接會話', async () => {
     const registry = createRegistry();
     const exit = registry.enter({ id: 'workspace-changes#0', name: 'workspace-changes' });
     workspaceChangesPlugin.apply(registry, workspaceChangesConfigSchema.parse({}));
     exit();
     expect(registry.services.get(WORKSPACE_CHANGES_SERVICE)).toBeUndefined();
     expect(registry.middleware.list()).toHaveLength(0);
+    for (const event of ['tools/pre-execute', 'tools/execute', 'agent/turn-stopping'] as const) {
+      expect([event, registry.dispatch.count(event)]).toEqual([event, 0]);
+    }
     expect(registry.sessions.installers()).toHaveLength(0);
   });
 
@@ -700,7 +766,7 @@ describe('合格與否（#669，照 dsh 的 eligible）', () => {
     log.append('turn/end', {});
     await drain();
     expect(log.events.some((event) => event.type === 'workspace/changes')).toBe(false);
-    // 錯接上記錄器的話，這一輪開始排的基準快照會在 tempRoot 底下建暫存目錄（收尾的寫入走 afterAgent，這裡驅動不到）。
+    // 錯接上記錄器的話，這一輪開始排的基準快照會在 tempRoot 底下建暫存目錄（收尾的寫入走 agent/turn-stopping，這裡沒派）。
     // 基準是背景 I/O，沒有可等的把手；給它足夠的時間，突變驗證過接錯時這裡會紅。
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(await readdir(tempRoot)).toEqual([]);
@@ -715,7 +781,7 @@ describe('暫存目錄', () => {
       writeFile(join(m.root, 'a.md'), 'x\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [scratch] = await readdir(m.tempRoot);
     expect(scratch).toMatch(/^nexus-workspace-changes-/);
     const path = join(m.tempRoot, scratch!);
@@ -825,7 +891,7 @@ describe('git 快照（#461）', () => {
       writeFile(join(root, 'rows.csv'), 'a\n1\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)).toEqual({
       files: [
@@ -864,7 +930,7 @@ describe('git 快照（#461）', () => {
     m.log.append('turn/start', { kind: 'message', text: '聊天。' });
     await m.settle();
     await writeFile(join(root, 'a.md'), 'b\n');
-    await m.afterAgent();
+    await m.turnStopping();
     m.log.append('turn/end', {});
     await m.settle();
     expect(m.changes()).toEqual([]);
@@ -889,7 +955,7 @@ describe('git 快照（#461）', () => {
       // 收尾那次快照要落在下一秒，副本的時間戳才會比項目新。
       await new Promise((resolve) => setTimeout(resolve, 1100));
       result(m.log);
-      await m.afterAgent();
+      await m.turnStopping();
       const [event] = m.changes();
       expect(m.service.summary(event!.seq)?.files).toEqual([
         { path: 'a.md', display: 'a.md', added: 1, deleted: 1 },
@@ -907,7 +973,7 @@ describe('git 快照（#461）', () => {
     await writeFile(join(root, 'a.md'), 'b\n');
     await writeFile(join(root, 'new.md'), 'n\n');
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     expect(m.changes()).toHaveLength(1);
     expect(await fingerprint(join(root, '.git'))).toEqual(before);
 
@@ -946,7 +1012,7 @@ describe('git 快照（#461）', () => {
       writeFile(join(nested, 'v.md'), 'w\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files).toEqual([
       { path: 'out/tool.txt', display: 'out/tool.txt', added: 1, deleted: 0 },
@@ -961,7 +1027,7 @@ describe('git 快照（#461）', () => {
     await writeFile(join(repo, 'README.md'), 'r\ns\n');
     await writeFile(join(repo, 'app', 'a.md'), 'b\n');
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files).toEqual([
       {
@@ -991,7 +1057,7 @@ describe('git 快照（#461）', () => {
       writeFile(join(link, 'b.md'), 'B\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files).toEqual([
       { path: 'b.md', display: 'b.md', added: 1, deleted: 1 },
@@ -1009,7 +1075,7 @@ describe('git 快照（#461）', () => {
     );
     await writeFile(join(root, 'b.md'), 'B\n');
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
     // 沒有快照就沒有私有物件庫。
@@ -1043,7 +1109,7 @@ describe('git 快照（#461）', () => {
         writeFile(join(root, 'a.md'), 'b\n'),
       );
       result(m.log);
-      await m.afterAgent();
+      await m.turnStopping();
       m.log.append('turn/end', {});
       await m.settle();
       expect(m.changes()).toEqual([]);
@@ -1052,7 +1118,7 @@ describe('git 快照（#461）', () => {
       await turn(m);
       await writeFile(join(root, 'a.md'), 'c\n');
       result(m.log, 'd');
-      await m.afterAgent();
+      await m.turnStopping();
       const [event] = m.changes();
       expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
       expect(m.warnings).toEqual([]);
@@ -1065,7 +1131,7 @@ describe('git 快照（#461）', () => {
         m.log.append('turn/start', { kind: 'message', text: '改。' });
         await m.settle();
         result(m.log, id);
-        await m.afterAgent();
+        await m.turnStopping();
         m.log.append('turn/end', {});
         await m.settle();
       }
@@ -1083,7 +1149,7 @@ describe('git 快照（#461）', () => {
       writeFile(join(root, 'a.md'), 'b\n'),
     );
     result(m.log);
-    await m.afterAgent();
+    await m.turnStopping();
     expect(m.changes()).toEqual([]);
     expect(m.warnings).toHaveLength(1);
     expect(m.warnings[0]).toMatch(/^workspace-changes: Error: spawn .*not-git ENOENT/);
@@ -1117,20 +1183,9 @@ describe('git 快照（#461）', () => {
       rootLog: log,
       installers: registry.sessions.installers(),
     });
-    const [entry] = registry.middleware.list();
-    const middleware = entry!.value.middleware as unknown as {
-      wrapToolCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
-      afterAgent: (state: unknown, runtime: unknown) => Promise<unknown>;
-    };
     /** 等排著的工作落定，走產品路徑（同 `mount` 的 `settle`）：git 是子行程，繞事件迴圈等不到。 */
     const settle = () =>
-      middleware.wrapToolCall(
-        {
-          toolCall: { id: 'settle', name: 'read_file', args: {} },
-          runtime: { configurable: ROOT_TOOL },
-        },
-        async () => 'ok',
-      );
+      dispatchTool(registry, execution('read_file', {}, ROOT_TOOL), async () => undefined);
     await settle();
     // 重播完：沒有找 repo、沒有快照，所以連暫存目錄都沒建。
     expect(await readdir(tempRoot)).toEqual([]);
@@ -1142,7 +1197,7 @@ describe('git 快照（#461）', () => {
     await settle();
     await writeFile(join(root, 'b.md'), 'B\n');
     log.append('tool/result', { callId: 'after-restart', isError: false });
-    await middleware.afterAgent({}, { configurable: ROOT_AFTER });
+    await turnStopping(registry);
     const [event] = log.events.filter((e) => e.type === 'workspace/changes');
     expect(service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['b.md']);
     for (const { value } of registry.lifecycle.disposers()) await value();

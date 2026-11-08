@@ -1,7 +1,8 @@
 /**
  * native loop 的四個 agent 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：`agent/pre-step`、`agent/request-error`、
- * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，只在 `--agent-loop=native` 下派發。`EventDispatcher` 上還沒有監聽者
- * （`@nexus/agent-loop` 同名的 pre-step listener 經宿主建成 `beforeAgent` middleware，不聽這個事件）；沒有監聽者時每一個都直通。
+ * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，在 `--agent-loop=native` 下派發；`agent/turn-stopping` 在 `langgraph` 下
+ * 另由 `turn-stopping.ts` 的轉接格派。監聽者只有 `agent/turn-stopping` 有（`@nexus/plugin-workspace-changes`）；`@nexus/agent-loop`
+ * 同名的 pre-step listener 經宿主建成 `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
  *
  * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 洋蔥改，所以 `agent/pre-step` 不帶 `messages`，`llm/stream` 環繞的是一次
  * `invoke` 而不是串流。TODO(#2357)：middleware 搬成這些事件的監聽者時補齊載荷，契約可能跟著改。
@@ -51,7 +52,8 @@ declare module '../events.js' {
     ): Promise<RequestErrorAction>;
     /**
      * 這一輪正常收尾（`afterAgent` 跑完、沒有跳回模型）時依序 await，回傳值不看；`beforeModel` 跳 `end` 或這一輪拋錯時不派。
-     * @param payload - thread、這一輪最後一步的步數、中止訊號。
+     * 只對 root 派。`langgraph` 下由轉接格派（`turn-stopping.ts`），**`step` 一律是 `0`**：那邊沒有 `agent/pre-step` 可數。
+     * @param payload - thread、這一輪最後一步的步數（`langgraph` 下是 `0`）、中止訊號。
      * @mode serial
      */
     'agent/turn-stopping'(payload: AgentStepPayload): Promise<void> | void;

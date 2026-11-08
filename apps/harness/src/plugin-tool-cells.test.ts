@@ -1,5 +1,5 @@
 /**
- * 插件與 harness 的三格在 native 的工具鏈上（#2416）：workspace-changes、host-tools、background-delegation
+ * harness 的兩格在 native 的工具鏈上（#2416）：host-tools、background-delegation
  * 都登記了工具步驟（`@nexus/core` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經那顆的 `wrapToolCall`；
  * 子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapToolCall`。`langgraph` 兩邊都經 `wrapToolCall`。
  *
@@ -18,10 +18,7 @@ import { SessionRegistry, toolCallStepOf, withToolCallStep, wrapToolCallWith } f
 import type { PluginEntry, ToolCallStep } from '@nexus/core';
 import { SANDBOX_POLICY_SERVICE } from '@nexus/plugin-sandbox-policy';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import {
-  WORKSPACE_CHANGES_MIDDLEWARE_NAME,
-  workspaceChangesPlugin,
-} from '@nexus/plugin-workspace-changes';
+import { workspaceChangesPlugin } from '@nexus/plugin-workspace-changes';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -32,11 +29,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 
 const shipped = await shippedPlugins();
 
-const CELLS = [
-  BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
-  HOST_TOOLS_MIDDLEWARE_NAME,
-  WORKSPACE_CHANGES_MIDDLEWARE_NAME,
-] as const;
+const CELLS = [BACKGROUND_DELEGATION_MIDDLEWARE_NAME, HOST_TOOLS_MIDDLEWARE_NAME] as const;
 
 type Via = 'native' | 'wrapToolCall';
 
@@ -237,11 +230,10 @@ describe.each(['native', 'langgraph'] as const)(
 
     it('前景委派：內層看到 task，模型拿回的結果叫 subagent，日誌記的是 subagent', async () => {
       const { seen, messages, toolEvents } = await run(loop);
-      // 改名的那一格在 workspace-changes 外面：它自己看到 `subagent`，workspace-changes 看到 `task`。
+      // 改名的那一格自己看到 `subagent`；匯流排上的監聽者看到 `task`（沙箱那一條斷言 `exec.name`）。
       expect(seen.names.get(BACKGROUND_DELEGATION_MIDDLEWARE_NAME)?.get('root-sub')).toEqual([
         'subagent',
       ]);
-      expect(seen.names.get(WORKSPACE_CHANGES_MIDDLEWARE_NAME)?.get('root-sub')).toEqual(['task']);
       const result = messages.find(
         (message): message is ToolMessage =>
           ToolMessage.isInstance(message) && message.tool_call_id === 'root-sub',

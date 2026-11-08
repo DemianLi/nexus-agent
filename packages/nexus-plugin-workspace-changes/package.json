@@ -33,7 +33,6 @@
     "@nexus/subprocess": "workspace:*",
     "@nexus/timeout": "workspace:*",
     "diff": "^9.0.0",
-    "langchain": "^1.5.10",
     "zod": "^4.6.7"
   }
 }

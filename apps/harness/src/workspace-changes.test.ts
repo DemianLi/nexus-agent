@@ -5,13 +5,14 @@
  * `@nexus/plugin-workspace-changes` 自己的測試走 registry 那一層，證得了時序（核准點、中止、下一輪已開）；
  * 證不了的是：
  *
- * 1. 基座真的經過那顆 `wrapToolCall`、真的跑到 `afterAgent`——事件落在 root 日誌那一輪的 `turn/end` 之前。
+ * 1. 工具真的經過 `tools/execute`、一輪真的派到 `agent/turn-stopping`——事件落在 root 日誌那一輪的 `turn/end` 之前。
  * 2. **即時與重新整理產出同一顆 `custom` frame**，帶的 `seq` 拿得到摘要；折疊器各折出同一格，拿掉它畫面不變。
  * 3. 兩條路由的載體：座標、media type、404、`no-store`。
  * 4. 子代理用檔案工具改的檔算進 root 那一輪。
  * 5. 暫存目錄是 `0700`，thread 收掉時整個刪掉。
  * 6. 組裝點只在 serve、有 `--workspace` 時掛。
  * 7. 工作區是 git repo 時，檔案工具以外的改動也在摘要裡（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
+ * 8. 被核准閘門拒絕、被子代理工具過濾擋下的呼叫不擷取；插話跳回模型時不算一輪停了，真的停時只記一次。
  *
  * **走產品組裝**（#670）：agent 是 `createCliAgent`（`workspaceChanges: true`、`--workspace`、`--sandbox`）組的，改動紀錄那顆 plugin、
  * backend、沙箱控制器都是組裝點建的，模型換成清單上的腳本提供者。暫存根產品組裝不給（預設 `os.tmpdir()`），
@@ -35,7 +36,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
+import type {
+  InvariantError,
+  PluginEntry,
+  SandboxMode,
+  SessionEvent,
+  SessionRegistry,
+} from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
@@ -49,6 +56,7 @@ import {
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
+import { createMiddleware } from 'langchain';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -61,6 +69,7 @@ import {
   shippedServePlugins,
   withScriptedModel,
 } from './fixtures.js';
+import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -129,6 +138,10 @@ async function run(
     rows?: readonly PluginEntry[];
     /** `false` ＝ 不給 `--workspace`（檔案落在虛擬檔案系統）；省略是給。 */
     workspace?: boolean;
+    /** `never` ＝ 沒有人核准，閘門說要問的呼叫一律拒絕；省略照 `--sandbox` 推。 */
+    approvalPolicy?: 'never';
+    /** 第 `afterModelCall` 次模型呼叫回來時，經 wire 插一句話（`mode: 'steer'`）；給了才開插話。 */
+    steer?: { readonly afterModelCall: number; readonly text: string };
   } = {},
 ): Promise<Outcome> {
   const root = await directory('nexus-changes-e2e-');
@@ -139,11 +152,48 @@ async function run(
   // 才量得到它的內容；`afterEach` 還原。
   vi.stubEnv('TMPDIR', tempRoot);
   const violations: string[] = [];
+  const steerTo: { client?: ReturnType<typeof createWireClient> } = {};
+  const steer = options.steer;
+  const steerRow: readonly PluginEntry[] =
+    steer === undefined
+      ? []
+      : [
+          {
+            plugin: {
+              name: 'steer-after-model-call',
+              apply(registry) {
+                let calls = 0;
+                registry.middleware.use(
+                  createMiddleware({
+                    name: 'steerAfterModelCall',
+                    wrapModelCall: async (request, handler) => {
+                      const response = await handler(request);
+                      calls += 1;
+                      if (calls === steer.afterModelCall) {
+                        await steerTo.client!.runStart(THREAD_ID, steer.text, { mode: 'steer' });
+                      }
+                      return response;
+                    },
+                  }),
+                );
+              },
+            },
+          },
+        ];
   const built = await createCliAgent(
-    options.workspace === false
-      ? { live: false }
-      : { live: false, workspace: root, sandbox: options.mode ?? 'workspace-write' },
-    withScriptedModel([...(options.rows ?? shipped), WORKER, ...(options.plugins ?? [])], turns),
+    {
+      live: false,
+      ...(options.workspace !== false && {
+        workspace: root,
+        sandbox: options.mode ?? 'workspace-write',
+      }),
+      ...(options.approvalPolicy !== undefined && { approvalPolicy: options.approvalPolicy }),
+      ...(steer !== undefined && { stepInbox: true }),
+    },
+    withScriptedModel(
+      [...(options.rows ?? shipped), WORKER, ...steerRow, ...(options.plugins ?? [])],
+      turns,
+    ),
     root,
     { onInvariantViolation: (error: InvariantError) => void violations.push(error.message) },
   );
@@ -156,6 +206,7 @@ async function run(
       commands: built.commands,
       dispose: built.dispose,
       workspaceChanges: built.workspaceChanges,
+      stepInbox: built.stepInbox,
       attachSessions: (registry, backgroundPort) => {
         sessions = registry;
         return built.attachSessions(registry, backgroundPort);
@@ -166,6 +217,7 @@ async function run(
     baseUrl: BASE_URL,
     fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
   });
+  steerTo.client = client;
   const live: Event[] = [];
   try {
     const events = await client.openEvents(THREAD_ID);
@@ -754,6 +806,196 @@ describe('工作區是 git repo（#461）', () => {
         hunks: [{ lines: ['+n1', '+n2'] }],
       });
       expect(outcome.violations).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+});
+
+/** 一個在外面寫 `/b.md` 的工具。工作區不是 git repo 時，改動紀錄只認檔案工具：這一顆寫的檔，只有先被擷取過才會列出來。 */
+function bWriter(root: () => string): PluginEntry {
+  return {
+    plugin: {
+      name: 'b-writer',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            async () => {
+              await writeFile(join(root(), 'b.md'), 'from outside\n');
+              return '寫好了';
+            },
+            { name: 'write_b', description: '在外面寫 b.md。', schema: z.object({}) },
+          ),
+        );
+      },
+    },
+  };
+}
+
+/** 記下每一次 `agent/turn-stopping` 的 `step`。 */
+function turnStoppingSteps(): { readonly entry: PluginEntry; readonly steps: number[] } {
+  const steps: number[] = [];
+  return {
+    steps,
+    entry: {
+      plugin: {
+        name: 'turn-stopping-probe',
+        apply(registry) {
+          registry.events.on('agent/turn-stopping', ({ step }) => void steps.push(step));
+        },
+      },
+    },
+  };
+}
+
+/** 這份日誌上叫 `name` 的那幾顆呼叫的 `tool/result`。 */
+function resultsOf(events: readonly SessionEvent[], name: string): { isError: boolean }[] {
+  const ids = new Set(
+    events
+      .filter((event) => event.type === 'tool/call')
+      .map((event) => event.data as { callId: string; name: string })
+      .filter((call) => call.name === name)
+      .map((call) => call.callId),
+  );
+  return events
+    .filter((event) => event.type === 'tool/result')
+    .map((event) => event.data as { callId: string; isError: boolean })
+    .filter((result) => ids.has(result.callId))
+    .map(({ isError }) => ({ isError }));
+}
+
+const WRITE_B: ScriptedTurn = {
+  content: '寫 b。',
+  toolCalls: [{ name: 'write_file', args: { file_path: '/b.md', content: 'b\n' } }],
+};
+const OUTSIDE_B: ScriptedTurn = {
+  content: '在外面寫。',
+  toolCalls: [{ name: 'write_b', args: {} }],
+};
+
+/** serve 出貨清單疊一份 patch，把子代理的 `write_file` 遮掉（`background-subagents` 的 `toolFilter`）。 */
+async function serveRowsDenyingWriteFile(): Promise<readonly PluginEntry[]> {
+  const dir = await directory('nexus-changes-patch-');
+  const patch = join(dir, 'deny.patch.yml');
+  await writeFile(
+    patch,
+    JSON.stringify([
+      { id: 'background-subagents', config: { toolFilter: { deny: ['write_file'] } } },
+    ]),
+  );
+  const { plugins, dropped } = await loadPluginConfig({
+    shippedLayers: [serveShippedConfigPath()],
+    overlays: [patch],
+  });
+  expect(dropped).toEqual([]);
+  return plugins;
+}
+
+describe('擷取的時點與一輪停在哪', () => {
+  it('被核准閘門拒絕的 write_file 不擷取：之後同一個檔在外面被寫，這一輪不列', async () => {
+    let workspace = '';
+    const gate: PluginEntry = {
+      plugin: {
+        name: 'gate-write-file',
+        apply(registry) {
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'write_file' ? { kind: 'ask', reason: '先給人看' } : next(),
+          );
+        },
+      },
+    };
+    const outcome = await run([WRITE_B, OUTSIDE_B, { content: '好了。' }], FILES, {
+      plugins: [gate, bWriter(() => workspace)],
+      approvalPolicy: 'never',
+      setup: async (root) => void (workspace = root),
+    });
+    try {
+      const events = outcome.sessions.root.events;
+      expect(resultsOf(events, 'write_file')).toEqual([{ isError: true }]);
+      expect(await readFile(join(outcome.root, 'b.md'), 'utf8')).toBe('from outside\n');
+      expect(events.some((event) => event.type === 'workspace/changes')).toBe(false);
+      expect(changesIn(outcome.live)).toEqual([]);
+      expect(outcome.violations).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('子代理被工具過濾擋下的 write_file 不擷取：之後同一個檔在外面被寫，root 這一輪不列', async () => {
+    let workspace = '';
+    const outcome = await run(
+      [
+        {
+          content: '委派。',
+          toolCalls: [{ name: 'task', args: { description: '寫檔', subagent_type: 'worker' } }],
+        },
+        WRITE_B,
+        { content: '子代理收工。' },
+        OUTSIDE_B,
+        { content: '根收工。' },
+      ],
+      FILES,
+      {
+        rows: await serveRowsDenyingWriteFile(),
+        plugins: [bWriter(() => workspace)],
+        setup: async (root) => void (workspace = root),
+      },
+    );
+    try {
+      const subagentEvents = outcome.sessions
+        .list()
+        .filter((entry) => entry.address.kind === 'subagent')
+        .flatMap((entry) => entry.log.events);
+      expect(resultsOf(subagentEvents, 'write_file')).toEqual([{ isError: true }]);
+      expect(await readFile(join(outcome.root, 'b.md'), 'utf8')).toBe('from outside\n');
+      expect(outcome.sessions.root.events.some((event) => event.type === 'workspace/changes')).toBe(
+        false,
+      );
+      expect(outcome.violations).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('插話跳回模型時不算停：agent/turn-stopping 只派一次，兩段改的檔記在同一顆 workspace/changes', async () => {
+    const probe = turnStoppingSteps();
+    const outcome = await run(
+      [
+        WRITE_B,
+        { content: '說完了。' },
+        {
+          content: '收到插話。',
+          toolCalls: [{ name: 'write_file', args: { file_path: '/c.md', content: 'c\n' } }],
+        },
+        { content: '都好了。' },
+      ],
+      FILES,
+      { plugins: [probe.entry], steer: { afterModelCall: 2, text: '再寫一個。' } },
+    );
+    try {
+      const events = outcome.sessions.root.events;
+      expect(await readFile(join(outcome.root, 'c.md'), 'utf8')).toBe('c\n');
+      expect(events.filter((event) => event.type === 'turn/start')).toHaveLength(1);
+      expect(events.filter((event) => event.type === 'turn/end')).toHaveLength(1);
+      expect(probe.steps).toHaveLength(1);
+      const changes = events.filter((event) => event.type === 'workspace/changes');
+      expect(changes).toHaveLength(1);
+      const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${changes[0]!.seq}`);
+      expect(await summary.json()).toMatchObject({
+        files: [{ path: 'b.md' }, { path: 'c.md' }],
+        total: 2,
+      });
+      expect(outcome.violations).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('langgraph 下轉接格派的 step 是 0', async () => {
+    const probe = turnStoppingSteps();
+    const outcome = await run([WRITE_B, { content: '好了。' }], FILES, { plugins: [probe.entry] });
+    try {
+      expect(probe.steps).toEqual([0]);
     } finally {
       await outcome.close();
     }

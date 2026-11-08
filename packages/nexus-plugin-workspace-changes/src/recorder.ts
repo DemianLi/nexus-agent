@@ -12,7 +12,7 @@
  * 1. **沒有 `turn`**。dsh 每一輪一個狀態物件，靠輪號對上 `tool/result` 與 `turn/end`。我們的日誌沒有輪號，
  *    事件也不帶（同 #441），在日誌上由 `seq` 往前找最近一顆不是 resume 的 `turn/start` 認輪，web 由折疊出來
  *    那一格的位置認。所以一顆事件**必須落在它那一輪的 `turn/start` 之後、下一輪的 `turn/start` 之前**：
- *    - 正常收尾在輪內記（{@link TurnRecorder.stopping}，由 `afterAgent` 叫，對應 dsh 的 `agent/turn-stopping`）。
+ *    - 正常收尾在輪內記（{@link TurnRecorder.stopping}，由 `agent/turn-stopping` 的監聽者叫）。
  *    - 中止、失敗的在 `turn/end`／`turn/failed` 之後補記（{@link TurnRecorder.end}，同 dsh）。**這時如果
  *      下一輪已經開始，就不記**，留一行 warn——記下去會被算進下一輪。dsh 有輪號，不必丟。
  * 2. **停在核准點不是收尾**。我們的核准把一輪切成兩段（`turn/end` ＋ 一顆 resume 的 `turn/start`），dsh 的
