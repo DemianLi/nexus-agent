@@ -14,9 +14,9 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 - **`shape: 'text' | 'blocks'`**：生產者交給監聽者的結果視圖（`PipelineResultView`）多這一格，標出工具本體那則的 `content` 原本是字串還是陣列。`tools/post-execute` 的 `replace` 給 `content` 落成字串、給 `blocks` 落成陣列，要照原本的形狀交回就看它。
   監聽者自己造來交回的結果（`PipelineResult`、`PipelineMessageInput`）不必帶，只帶舊欄位的照樣編得過。
 - **`command` 視圖帶內容**：工具回 `Command` 時，`Command` 裡有這次呼叫的那則訊息（`tool_call_id` 等於 `callId`），視圖就帶它的 `blocks`、`content`、`shape`；沒有就三格都不帶。
-- **`tools/execute` 能交回改過內容的 `command` 結果**（`PipelineCommandInput`）：只換 `Command` 裡這次呼叫的那則，`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，`update.messages` 裡沒有就加在最後。
+- **`tools/execute` 能交回改過內容的 `command` 結果**（`PipelineCommandInput`）：只換 `Command` 裡這次呼叫的那則，`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，同一個 `callId` 的其餘幾則丟掉，`update.messages` 裡沒有就加在最後。
   - 內容給 `content` 或 `blocks` 其中一個，同 `PipelineMessageInput`。
-  - 本體回的 `Command` 的 `update` 不是物件（例如 tuple 陣列）時拋 `TypeError`：放不進一則訊息。
+  - 本體回的 `Command` 的 `update` 不是物件（例如 tuple 陣列），或本體回的不是 `Command`：放不進那則，整個換成用交回內容新造的一則 `ToolMessage`。
   - 舊行為：交回的 `command` 結果不是 `next()` 回的那一個，一律拋 `TypeError`。
 - **`fresh: true`**：`tools/execute` 交回的訊息結果帶它，換上的那則就是新造的，只帶 `tool_call_id`、`name`、`status` 與錯誤碼，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。不帶的照舊沿用。
 
