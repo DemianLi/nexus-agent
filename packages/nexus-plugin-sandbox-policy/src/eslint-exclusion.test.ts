@@ -8,6 +8,9 @@
  * 2. 另一個**不在排除名單**的檔（一個不存在的違規檔路徑）同樣紅，而同一份違規碼放在 `src/invariant.ts` 這個路徑不紅——
  *    排除的範圍就是那一個檔，不多不少。
  *
+ * 另外證受管的產品檔**不靠行內 `eslint-disable`** 也沒有 `no-restricted-*` 違規：用 `allowInlineConfig: false` 的同一份設定 lint 真檔
+ * （[#2557](https://github.com/DemianLi/nexus-agent/issues/2557)）。
+ *
  * 量的是這個套件**真的那份** `eslint.config.js`（`overrideConfigFile`），不是手搭一份相似的設定。違規碼放在記憶體裡、不落成檔：
  * 落地的違規夾具會被 `pnpm -r run lint`、typecheck 與 prettier 掃到（理由同 `packages/nexus-sdk/src/lint.test.ts` 檔頭）；
  * `lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一個檔——「暫存的違規檔」就是這個。
@@ -34,7 +37,7 @@ const eslintIgnoringInline = new ESLint({
   allowInlineConfig: false,
 });
 
-/** `src/` 底下受 SDK lint 管的產品檔：排除名單那一個與測試檔以外的全部。 */
+/** `src/` 頂層的 `.ts` 產品檔：排除名單那一個與測試檔以外的全部（今天就是 SDK 管的全部，「受管的就是這三個檔」釘住）。 */
 const MANAGED = readdirSync(`${PACKAGE}src`)
   .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts') && name !== 'invariant.ts')
   .map((name) => `src/${name}`)

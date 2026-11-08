@@ -31,13 +31,14 @@
  * Q1 (c) 之後不再依 thread 查答題管道，所以 #1458 時沒放；這裡是檔頭預留的「等逐條 thread 的消費者出現」。
  *
  * **`EXTERNAL_MCP_CONTENT_NOTICE`、`REFERENCE_RULE`**（#2537）的消費者是 `@nexus/plugin-mcp`：前者是它接在工具結果與資源結果本文
- * 前面的一行，後者是它系統提示詞那一句的規則子句。實作留在 core 的 `untrusted-content.ts`、只轉出不複製：`REFERENCE_RULE` 是從
+ * 前面的一行，後者是它系統提示詞那一句的規則子句；`@nexus/plugin-sandbox-policy` 的政策句也接 `REFERENCE_RULE`（#2557）。實作留在 core 的 `untrusted-content.ts`、只轉出不複製：`REFERENCE_RULE` 是從
  * core 的 `REFERENCE_WARNING`（harness 引用會話時用）切出來的，複製一份就有兩個出處；撤除時 `REFERENCE_WARNING` 要跟著一起搬。
  * `REFERENCE_RULE` 是提示詞的字句、不是工具結果的寫法；字句更貼切的 `@nexus/system-prompt` 只相依 `@nexus/sdk`、不 import core，
  * 轉不出它。
  *
  * **`approvalDenied`、`APPROVAL_REJECTED_BY_USER`、`APPROVAL_INVALID_REPLY`**（#2557）的消費者是 `@nexus/plugin-sandbox-policy` 的升級工具：
- * 問人被拒或回覆認不得時，拒絕結果標上的錯誤碼。跟 `markToolError` 同一份錯誤碼表，實作留在 core 的 `tool-error-codes.ts`。
+ * 問人被拒或回覆認不得時，它放在拒絕結果 `error` 上的 `ToolErrorInfo`，碼與核准閘門（core 的 `approval.ts`）同一組。實作留在 core 的
+ * `tool-error-codes.ts`。
  *
  * @module
  */
@@ -55,5 +56,5 @@ export {
   toolRefusal,
 } from '@nexus/core';
 
-// 錯誤碼的型別：`markToolError` 的第二個參數、`rootOnly` 拒絕樁的 `error`。
+// 錯誤碼的型別：`markToolError` 的第二個參數、`rootOnly` 拒絕樁與升級工具拒絕結果的 `error`。
 export type { ToolErrorInfo } from '@nexus/core';
