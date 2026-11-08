@@ -36,10 +36,16 @@
  * `REFERENCE_RULE` 是提示詞的字句、不是工具結果的寫法；字句更貼切的 `@nexus/system-prompt` 只相依 `@nexus/sdk`、不 import core，
  * 轉不出它。
  *
+ * **`approvalDenied`、`APPROVAL_REJECTED_BY_USER`、`APPROVAL_INVALID_REPLY`**（#2557）的消費者是 `@nexus/plugin-sandbox-policy` 的升級工具：
+ * 問人被拒或回覆認不得時，拒絕結果標上的錯誤碼。跟 `markToolError` 同一份錯誤碼表，實作留在 core 的 `tool-error-codes.ts`。
+ *
  * @module
  */
 
 export {
+  APPROVAL_INVALID_REPLY,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
   callThreadId,
   EXTERNAL_MCP_CONTENT_NOTICE,
   markToolError,

@@ -80,17 +80,14 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-// eslint-disable-next-line no-restricted-imports -- 沙箱模式、grant、會話日誌的型別還在 core，清理在 #2557
 import type {
   SandboxDenial,
   SandboxGrant,
   SandboxGrantLedger,
   SandboxMode,
   SandboxModeSource,
-  SessionEvent,
-  SessionLog,
-  SessionSubject,
-} from '@nexus/core';
+} from '@nexus/permission-presets';
+import type { SessionEvent, SessionLog, SessionSubject } from '@nexus/session';
 
 import { canEscalateFrom } from './sandbox-escalation.js';
 

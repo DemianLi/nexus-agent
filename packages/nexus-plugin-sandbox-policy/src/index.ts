@@ -74,18 +74,15 @@
  * @module
  */
 
+import { CHANNEL_SERVICE } from '@nexus/approval-channel';
 import type { Context } from '@nexus/cordis';
-// eslint-disable-next-line no-restricted-imports -- 引用規則句與三個宿主服務名（共用區、核准政策、答題管道）還沒有 core 以外的出處，清理在 #2557
-import {
-  APPROVAL_POLICY_SERVICE,
-  CHANNEL_SERVICE,
-  REFERENCE_RULE,
-  SHARED_WORKSPACE_SERVICE,
-} from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- 模式、會話與服務表的型別還在 core，清理在 #2557
-import type { NexusServices, SandboxMode, SessionSubject } from '@nexus/core';
+import { SHARED_WORKSPACE_SERVICE } from '@nexus/fs';
+import { APPROVAL_POLICY_SERVICE } from '@nexus/permission-presets';
+import type { SandboxMode } from '@nexus/permission-presets';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import type { SessionSubject } from '@nexus/session';
 import { SECTION_ORDERS } from '@nexus/system-prompt';
+import { REFERENCE_RULE } from '@nexus/tool-result';
 import { toolsToken } from '@nexus/tools';
 import type { ToolThread, ToolThreadSection } from '@nexus/tools';
 import { z } from 'zod';
@@ -331,8 +328,7 @@ export function mountSandboxPolicy(thread: ToolThread): void {
     return;
   }
   // 有圍堵卻沒有控制器：當場拋，訊息指名缺什麼。
-  const policy = thread.services.get(SANDBOX_POLICY_SERVICE) as
-    NexusServices[typeof SANDBOX_POLICY_SERVICE] | undefined;
+  const policy = thread.services.get(SANDBOX_POLICY_SERVICE) as SandboxPolicyService | undefined;
   if (policy === undefined) {
     throw new Error(
       `sandbox-policy：檔案系統有圍堵（${FS_CONTAINMENT_SERVICE} 服務在），卻沒有 ${SANDBOX_POLICY_SERVICE} 服務` +

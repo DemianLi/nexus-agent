@@ -13,7 +13,7 @@
  * `lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一個檔——「暫存的違規檔」就是這個。
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { pluginLintConfig } from '@nexus/sdk/lint';
@@ -26,6 +26,19 @@ const eslint = new ESLint({
   cwd: PACKAGE,
   overrideConfigFile: `${PACKAGE}eslint.config.js`,
 });
+
+/** 同一份設定，但**不認行內的 `eslint-disable`**：檔裡有被 disable 蓋住的違規，用它 lint 就會露出來。 */
+const eslintIgnoringInline = new ESLint({
+  cwd: PACKAGE,
+  overrideConfigFile: `${PACKAGE}eslint.config.js`,
+  allowInlineConfig: false,
+});
+
+/** `src/` 底下受 SDK lint 管的產品檔：排除名單那一個與測試檔以外的全部。 */
+const MANAGED = readdirSync(`${PACKAGE}src`)
+  .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts') && name !== 'invariant.ts')
+  .map((name) => `src/${name}`)
+  .sort();
 
 /**
  * **暖身：ESLint 第一次載入設定的一次性成本不能算在第一條測試頭上**（[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)）。
@@ -60,8 +73,30 @@ async function restricted(code: string, file: string): Promise<string[]> {
     .map((m) => m.message);
 }
 
+describe('受管的產品檔沒有靠 eslint-disable 放行的 SDK 違規（#2557）', () => {
+  it('受管的就是這三個檔', () => {
+    expect(MANAGED).toEqual(['src/index.ts', 'src/sandbox-escalation.ts', 'src/sandbox-mode.ts']);
+  });
+
+  it.each(MANAGED)('%s：不認行內 disable 照樣沒有 no-restricted-* 的違規', async (file) => {
+    const [result] = await eslintIgnoringInline.lintText(
+      readFileSync(`${PACKAGE}${file}`, 'utf8'),
+      {
+        filePath: `${PACKAGE}${file}`,
+      },
+    );
+    const messages = result?.messages ?? [];
+    expect(messages.filter((m) => m.fatal === true).map((m) => m.message)).toEqual([]);
+    expect(
+      messages
+        .filter((m) => m.ruleId === 'no-restricted-syntax' || m.ruleId === 'no-restricted-imports')
+        .map((m) => `${m.line}: ${m.message}`),
+    ).toEqual([]);
+  });
+});
+
 describe('SDK lint 在 @nexus/plugin-sandbox-policy 的範圍', () => {
-  it('src/index.ts：逐行 eslint-disable（清理在 #2557）之外沒有違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
+  it('src/index.ts：沒有違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
     const real = readFileSync(`${PACKAGE}src/index.ts`, 'utf8');
     expect(await restricted(real, 'src/index.ts')).toEqual([]);
     expect((await restricted(VIOLATING, 'src/index.ts')).length).toBeGreaterThan(0);

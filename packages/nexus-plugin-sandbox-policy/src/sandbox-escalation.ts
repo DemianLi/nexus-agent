@@ -88,24 +88,17 @@
  * @module
  */
 
-// eslint-disable-next-line no-restricted-imports -- 核准管道、核准政策、模式與錯誤資訊的型別還在 core，清理在 #2557
-import type {
-  ApprovalChannel,
-  ApprovalPolicySource,
-  NexusServices,
-  SandboxMode,
-  ToolErrorInfo,
-} from '@nexus/core';
-// eslint-disable-next-line no-restricted-imports -- 核准中斷的常數、拒絕句、服務名與虛擬路徑規則還沒有 core 以外的出處，清理在 #2557
+import { APPROVAL_INTERRUPT_KIND, CHANNEL_SERVICE } from '@nexus/approval-channel';
+import type { ApprovalChannel } from '@nexus/approval-channel';
+import { virtualPathOf } from '@nexus/fs';
+import { APPROVAL_POLICY_SERVICE } from '@nexus/permission-presets';
+import type { ApprovalPolicySource, SandboxMode } from '@nexus/permission-presets';
 import {
-  APPROVAL_INTERRUPT_KIND,
   APPROVAL_INVALID_REPLY,
-  APPROVAL_POLICY_SERVICE,
   APPROVAL_REJECTED_BY_USER,
   approvalDenied,
-  CHANNEL_SERVICE,
-  virtualPathOf,
-} from '@nexus/core';
+} from '@nexus/tool-result';
+import type { ToolErrorInfo } from '@nexus/tool-result';
 import type { JsonValue, NexusTool, NexusToolResult, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 
@@ -462,7 +455,7 @@ export function registerSandboxEscalation(
 ): void {
   const channel = thread.services.get(CHANNEL_SERVICE) as ApprovalChannel | undefined;
   const approvalPolicy = thread.services.get(APPROVAL_POLICY_SERVICE) as
-    NexusServices[typeof APPROVAL_POLICY_SERVICE] | undefined;
+    { readonly source: ApprovalPolicySource } | undefined;
   thread.register(createEscalationTool(controller, channel, approvalPolicy?.source, targets));
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);
 }

@@ -45,6 +45,8 @@ import type { ApprovalChannel } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
 export { CHANNEL_FOR_THREAD_SERVICE, CHANNEL_SERVICE, QUESTION_INTERRUPT_KIND } from '@nexus/core';
+// 核准請求的判別式（#2557）：消費者是 `sandbox-policy` 的升級工具，它的中斷酬載帶這個 `kind`。
+export { APPROVAL_INTERRUPT_KIND } from '@nexus/core';
 export type {
   ApprovalChannel,
   ChannelForThread,
