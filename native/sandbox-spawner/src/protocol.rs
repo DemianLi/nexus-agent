@@ -293,11 +293,16 @@ pub fn frame(payload: &[u8]) -> Vec<u8> {
 
 /// 從累積的輸入切出完整的框。框長超過 [`MAX_FRAME`] 回錯。
 pub fn take_frame(buf: &mut Vec<u8>) -> Result<Option<Vec<u8>>, DecodeError> {
+    take_frame_within(buf, MAX_FRAME)
+}
+
+/// 同 [`take_frame`]，上限是 `max`。長度欄位一超過就回錯，不等內容到齊、也不先配置。
+pub fn take_frame_within(buf: &mut Vec<u8>, max: usize) -> Result<Option<Vec<u8>>, DecodeError> {
     if buf.len() < 4 {
         return Ok(None);
     }
     let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-    if len > MAX_FRAME {
+    if len > max {
         return Err(DecodeError("框太大"));
     }
     if buf.len() < 4 + len {

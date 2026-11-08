@@ -3,6 +3,8 @@
 //!
 //! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid）。
 
+mod common;
+
 use nexus_sandbox_spawner::protocol::{self, Event, FailKind, Mode, Request, Spawn};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -298,6 +300,25 @@ fn x32_and_i386_calls_kill_the_child() {
         let (_, exit) = s.run(request(id, &ws, &[p.to_str().unwrap(), what]));
         assert_eq!(exit, Event::Exited { id, code: -1, signal: libc::SIGSYS }, "{what}");
     }
+}
+
+/// 宿主的 socket 是 pathname Unix socket，Landlock（ABI 6）管不到 `connect()`；擋住工具的是 seccomp：`socket(AF_UNIX)` 回 EPERM。
+/// 這裡連的是一個活著、握過手的宿主，表上也登記了這個 token。
+#[test]
+fn a_tool_cannot_reach_a_live_host_socket() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    let socket = temp_dir("run").join("host.sock");
+    let mut host = common::host::HostProc::start(&socket);
+    let token = "00112233445566778899aabbccddeeff";
+    host.grant(std::process::id(), token, nexus_sandbox_spawner::supervisor_protocol::Role::Conversation, "a");
+    // 跟探針同一個理由複製一份，放在探針的目錄（可讀清單裡有它）。
+    let client = probe().parent().unwrap().join("host_client");
+    assert!(Command::new("cp").arg(common::host::example("host_client")).arg(&client).status().unwrap().success());
+    let (out, exit) = s.run(request(1, &ws, &[client.to_str().unwrap(), socket.to_str().unwrap(), token]));
+    assert!(matches!(exit, Event::Exited { code: 0, .. }), "{exit:?}");
+    assert_eq!(out.trim(), format!("host error {}", libc::EPERM));
+    assert!(host.reports_so_far().is_empty(), "連都連不上，宿主不會有回報");
 }
 
 #[test]

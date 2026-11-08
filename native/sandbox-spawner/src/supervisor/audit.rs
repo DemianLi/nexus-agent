@@ -1,4 +1,5 @@
-//! 稽核紀錄：每個行程結束寫一行 JSON，只追加。檔案以 `O_APPEND` 開，一行一次 `write`；
+//! 稽核紀錄：每個行程結束寫一行 JSON，只追加；宿主回報的違反協定也寫一行（[`Record::Protocol`]，那個行程沒有結束）。
+//! 欄位與值只加不改：讀它的人照 `role`（行程結束）或 `event`（事件）分辨每一行。檔案以 `O_APPEND` 開，一行一次 `write`；
 //! 短寫（磁碟滿、被訊號打斷）會留下沒有換行的殘行，下一筆先補一個換行，不黏上去。
 
 use crate::supervisor_protocol::DeathCause;
@@ -46,6 +47,11 @@ pub enum Record<'a> {
         error: Option<&'a str>,
     },
     Front { pid: i32, exit: Exit, error: Option<&'a str> },
+    /// 宿主結束了。`ready`：它結束前送過 `ready` 沒有。
+    Host { pid: i32, exit: Exit, ready: bool, error: Option<&'a str> },
+    /// 宿主斷了一條違反協定的連線（[`crate::supervisor_protocol::HostReport::Violation`]）。`role` 是那個 pid 在身分表上是誰
+    /// （不在表上是 `unknown`），`thread` 是它綁的那條（沒有是空的）。
+    Protocol { pid: i32, role: &'a str, thread: &'a [u8], reason: &'a str },
 }
 
 pub fn cause_name(cause: DeathCause) -> &'static str {
@@ -57,6 +63,7 @@ pub fn cause_name(cause: DeathCause) -> &'static str {
         DeathCause::Crash => "crash",
         DeathCause::Evicted => "evicted",
         DeathCause::Shutdown => "shutdown",
+        DeathCause::Protocol => "protocol",
     }
 }
 
@@ -117,6 +124,20 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
         Record::Front { pid, exit, error } => {
             out.push_str(&format!(",\"role\":\"front\",\"pid\":{pid}"));
             (exit, error)
+        }
+        Record::Host { pid, exit, ready, error } => {
+            out.push_str(&format!(",\"role\":\"host\",\"pid\":{pid},\"ready\":{ready}"));
+            (exit, error)
+        }
+        Record::Protocol { pid, role, thread, reason } => {
+            out.push_str(&format!(",\"event\":\"protocol\",\"pid\":{pid},\"role\":"));
+            json_string(&mut out, role);
+            out.push_str(",\"thread\":");
+            json_string(&mut out, &String::from_utf8_lossy(thread));
+            out.push_str(",\"reason\":");
+            json_string(&mut out, reason);
+            out.push_str("}\n");
+            return out;
         }
     };
     out.push_str(&format!(",\"exit_code\":{},\"signal\":{}", json_number(exit.code), json_number(exit.signal)));
@@ -198,9 +219,30 @@ mod tests {
     }
 
     #[test]
+    fn host_line_and_protocol_event() {
+        let record = Record::Host { pid: 9, exit: Exit { code: None, signal: Some(9) }, ready: true, error: None };
+        assert_eq!(
+            line(1, &record),
+            "{\"ts_ms\":1,\"role\":\"host\",\"pid\":9,\"ready\":true,\"exit_code\":null,\"signal\":9}\n"
+        );
+        let record = Record::Host { pid: 0, exit: Exit::NOT_STARTED, ready: false, error: Some("ENOENT") };
+        assert_eq!(
+            line(1, &record),
+            "{\"ts_ms\":1,\"role\":\"host\",\"pid\":0,\"ready\":false,\"exit_code\":null,\"signal\":null,\"error\":\"ENOENT\"}\n"
+        );
+        let record = Record::Protocol { pid: 42, role: "conversation", thread: b"t\"1", reason: "框太大" };
+        assert_eq!(
+            line(2, &record),
+            "{\"ts_ms\":2,\"event\":\"protocol\",\"pid\":42,\"role\":\"conversation\",\"thread\":\"t\\\"1\",\"reason\":\"框太大\"}\n"
+        );
+    }
+
+    #[test]
     fn every_cause_has_a_distinct_name() {
-        let names: std::collections::HashSet<_> = (1..=7).map(|c| cause_name(DeathCause::from_u8(c).unwrap())).collect();
-        assert_eq!(names.len(), 7);
+        let count = crate::supervisor_protocol::DEATH_CAUSES;
+        let names: std::collections::HashSet<_> =
+            (1..=count as u8).map(|c| cause_name(DeathCause::from_u8(c).unwrap())).collect();
+        assert_eq!(names.len(), count);
     }
 
     #[test]

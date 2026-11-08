@@ -34,6 +34,9 @@ import type { ProcessModel, ProcessModelConfig } from './settings/process-model.
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
 export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 
+/** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 crate 編出來）。 */
+export const HOST_BINARY_NAME = 'nexus-host';
+
 /** 對話行程的 socket 放在 home 底下這個目錄（監督行程建成 0700）。 */
 export const SUPERVISOR_RUN_DIR = 'run';
 
@@ -249,6 +252,8 @@ export interface SupervisorLaunch {
 
 export interface SupervisorLaunchInput {
   readonly supervisor: string;
+  /** 宿主執行檔；省略就不起宿主。 */
+  readonly host?: string;
   readonly home: string;
   readonly execPath: string;
   readonly execArgv: readonly string[];
@@ -298,6 +303,7 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       '--audit',
       join(input.home, SUPERVISOR_AUDIT_FILE),
       ...(input.idleMs === undefined ? [] : ['--idle-ms', String(input.idleMs)]),
+      ...(input.host === undefined ? [] : ['--host', input.host]),
       '--front',
       input.execPath,
       ...each('--front-arg', [...input.execArgv, input.frontEntry, ...front]),
@@ -388,7 +394,7 @@ export function resolveProcessModel(context: LaunchContext): {
 /**
  * `per-thread` 就換成監督行程，不會回來；`single` 回 `false`，呼叫端照單行程起 server。
  *
- * @throws 平台不對、設定列寫壞、找不到監督行程、PDEATHSIG 會被清掉，或 `execve` 失敗。
+ * @throws 平台不對、設定列寫壞、找不到監督行程或它旁邊的宿主、PDEATHSIG 會被清掉，或 `execve` 失敗。
  */
 export function launchProcessModel(context: LaunchContext): false {
   const model = resolveProcessModel(context);
@@ -399,9 +405,16 @@ export function launchProcessModel(context: LaunchContext): false {
       `找不到監督行程（往上找 ${SUPERVISOR_PATH}）：在 #settings/process-model 寫 supervisorBinary，或改用 single`,
     );
   }
+  const host = join(dirname(supervisor), HOST_BINARY_NAME);
+  if (!existsSync(host)) {
+    throw new Error(
+      `找不到宿主（監督行程旁邊的 ${HOST_BINARY_NAME}，${host}）：兩支要放在同一個目錄`,
+    );
+  }
   const hazards = pdeathsigHazards([
     { label: 'node', path: process.execPath },
     { label: '監督行程', path: supervisor },
+    { label: '宿主', path: host },
   ]);
   if (hazards.length > 0) {
     throw new Error(
@@ -412,6 +425,7 @@ export function launchProcessModel(context: LaunchContext): false {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const launch = supervisorLaunch({
     supervisor,
+    host,
     home,
     execPath: process.execPath,
     execArgv: process.execArgv,

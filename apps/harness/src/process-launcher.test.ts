@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   childExecArgv,
   isPrintOnly,
+  launchProcessModel,
   pdeathsigHazards,
   processModelSetting,
   SERVE_FLAG_TAKES_VALUE,
@@ -292,5 +293,41 @@ describe('resolveProcessModel', () => {
     expect(
       resolveProcessModel({ ...base, platform: 'darwin', argv: ['--help'], flag: 'per-thread' }),
     ).toEqual({ mode: 'single' });
+  });
+});
+
+describe('宿主', () => {
+  it('supervisorLaunch：給了 host 就帶 --host，放在 --front 之前', () => {
+    const { args } = supervisorLaunch({
+      supervisor: '/opt/nexus/native/nexus-supervisor',
+      host: '/opt/nexus/native/nexus-host',
+      home: '/h',
+      execPath: '/usr/bin/node',
+      execArgv: [],
+      frontEntry: '/front.js',
+      conversationEntry: '/conversation.js',
+      serveArgv: [],
+    });
+    const at = args.indexOf('--host');
+    expect(args.slice(at, at + 2)).toEqual(['--host', '/opt/nexus/native/nexus-host']);
+    expect(at).toBeLessThan(args.indexOf('--front'));
+  });
+
+  it('launchProcessModel：監督行程旁邊沒有 nexus-host 就拒起，不換成監督行程', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'process-launcher-host-'));
+    dirs.push(dir);
+    const supervisor = join(dir, 'nexus-supervisor');
+    await writeFile(supervisor, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const patch = await patchFile(
+      `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisor}\n`,
+    );
+    expect(() =>
+      launchProcessModel({
+        argv: ['--patch', patch],
+        flag: undefined,
+        env: { NEXUS_AGENT_HOME: join(dir, 'home') },
+        platform: 'linux',
+      }),
+    ).toThrow(`找不到宿主（監督行程旁邊的 nexus-host，${join(dir, 'nexus-host')}）`);
   });
 });

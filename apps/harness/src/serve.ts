@@ -647,6 +647,11 @@ export interface RunningServe {
    * 而且那一段時間 serve 還在收新回合，跟「不讓壞掉的 serve 存活」衝突。預設（省略）照舊等時間窗，SIGTERM／SIGINT 走這條。
    */
   close(options?: { readonly drain?: boolean }): Promise<void>;
+  /**
+   * 停收新的請求、不關 listener：`close` 的第一步單獨拿出來（`/readyz` 回 503，會開新一輪的命令回 `server_closing`）。
+   * per-thread 的前台收到監督行程的 `stop-admission` 時叫它，之後監督行程才收對話行程。叫幾次都一樣。
+   */
+  stopAdmission(): void;
   /** 伺服器日誌 `serve` logger 的 `warn`。行程層的收尾逾時那一行從這裡寫（{@link installServeProcessLifecycle}）。 */
   readonly warn: (line: string) => void;
   /**
@@ -2384,6 +2389,10 @@ async function startServer(
     warn,
     historyShadow,
     ...(options.conversation !== undefined && { conversationHandler: handler }),
+    stopAdmission: () => {
+      closing = true;
+      servedHandler.stopAdmission();
+    },
     close: async (options) => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;

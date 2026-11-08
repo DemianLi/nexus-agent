@@ -1,9 +1,11 @@
 //! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`，收到 `bind` 回 `bound`，之後照 thread id 做事。
 //!
 //! ```text
-//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] --socket <路徑>
+//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--skip-hello] --socket <路徑>
 //! ```
 //!
+//! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]）；`--skip-hello` 不送，直接送 `ready`。
+//!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
 //! - `--die-before-ready`：一起來就以 7 結束。
 //! - `--ready-after-ms`：等這麼久才送 `ready`。
 //! - thread id 以逗號分段，第一段是名字，之後每段是一個動作，回 `bound` 之後依序做：
@@ -15,14 +17,21 @@
 //!   `hang`（停掉心跳，之後什麼都不做、不讀 stdin）、`silent:<毫秒>`（心跳停這麼久、主執行緒也睡這麼久，
 //!   之後恢復）、`spin:<毫秒>`（心跳停這麼久、主執行緒空轉這麼久，之後恢復；0 是一直轉）、`idle:<毫秒>`（送 `idle`，帶這個毫秒數）、`busy-on-drain`（收到 `drain` 回 `busy`）、`ignore-drain`（收到 `drain` 不回）、`slow-drain:<毫秒>`（收到 `drain` 等這麼久才回）、
 //!   `busy-then-idle`（第一次收到 `drain` 回 `busy`，接著送 `idle(0)`、記一行 `idle`；之後的照預設回 `drained`）。
+//!   連宿主（socket 在自己 socket 的同一個目錄，`host.sock`），回答記一行（`common/host_client.rs` 的格式）：`host-hello`（用監督行程給的 token）、
+//!   `host-bad-token`（用別的 token）、`host-garbage`（送一個超過上限的框長）、`host-retry:<毫秒>`（每 50 ms 送一次 `hello`，
+//!   直到宿主收下或過了這麼久，只記最後一次）。
 //! - 緊接在名字後面的 `idle:<毫秒>` 例外，在 `bound` 之前送：監督行程照順序讀同一條管線，前台收到 `up` 時它已經讀到這幾個 `idle`。
 //! - 收到 `drain` 預設回 `drained`，記一行 `drain`。
 //! - 收到 `bind` 起就有一條執行緒每 [`HEARTBEAT`] 送一次 `heartbeat`，跟真的對話行程一樣一綁上就一直送。
 //! - 每件事記一行到 `<socket 路徑>.log`：`pid <n>`、`bind <thread>`、`grandchild <n>`、`idle`（送出之後）、`drain`、`eof`、`sigterm`。
 
+#[path = "common/host_client.rs"]
+mod host_client;
+
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
     decode_conversation_command, encode_conversation_report, ConversationCommand, ConversationReport, TurnPhase,
+    PROTOCOL_VERSION,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -78,6 +87,7 @@ fn main() {
         std::process::exit(7);
     }
     let socket = args.iter().position(|a| a == "--socket").and_then(|i| args.get(i + 1)).expect("--socket").clone();
+    let host_socket = std::path::Path::new(&socket).with_file_name("host.sock");
     let file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
     LOG_FD.store(std::os::fd::IntoRawFd::into_raw_fd(file), Ordering::SeqCst);
     // SAFETY：不留 core 檔（`signal:6`、`heap` 會 abort）。
@@ -88,7 +98,16 @@ fn main() {
     if let Some(ms) = args.iter().position(|a| a == "--ready-after-ms").and_then(|i| args.get(i + 1)) {
         std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
     }
+    if !args.iter().any(|a| a == "--skip-hello") {
+        let version = args
+            .iter()
+            .position(|a| a == "--hello-version")
+            .and_then(|i| args.get(i + 1))
+            .map_or(PROTOCOL_VERSION, |v| v.parse().unwrap());
+        report(&ConversationReport::Hello { version });
+    }
     report(&ConversationReport::Ready);
+    let mut token = Vec::new();
 
     let mut ignore_eof = false;
     let mut on_drain = Some(ConversationReport::Drained);
@@ -113,6 +132,11 @@ fn main() {
         input.extend_from_slice(&buf[..n]);
         while let Some(payload) = take_frame(&mut input).unwrap() {
             let thread_id = match decode_conversation_command(&payload).unwrap() {
+                ConversationCommand::Hello { token: given, .. } => {
+                    token = given;
+                    log(&format!("hello {}", token.len()));
+                    continue;
+                }
                 ConversationCommand::Bind { thread_id } => thread_id,
                 ConversationCommand::Drain => {
                     log("drain");
@@ -205,6 +229,24 @@ fn main() {
                         unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
                     }
                     ("wrong-bound", _) => {}
+                    ("host-hello", _) => log(&host_client::hello_line(&host_socket, &String::from_utf8_lossy(&token))),
+                    ("host-bad-token", _) => log(&host_client::hello_line(&host_socket, &"f".repeat(token.len()))),
+                    ("host-garbage", _) => {
+                        let too_long = nexus_sandbox_spawner::host_protocol::MAX_FRAME as u32 + 1;
+                        log(&host_client::send_line(&host_socket, &too_long.to_le_bytes()));
+                    }
+                    ("host-retry", ms) => {
+                        let until = std::time::Instant::now() + Duration::from_millis(ms.parse().unwrap());
+                        let token = String::from_utf8_lossy(&token).into_owned();
+                        let line = loop {
+                            let line = host_client::hello_line(&host_socket, &token);
+                            if line == "host hello" || std::time::Instant::now() > until {
+                                break line;
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        };
+                        log(&line);
+                    }
                     ("stderr-flood", _) => {
                         let batch = vec![b'e'; 1 << 20];
                         let mut err = std::io::stderr().lock();

@@ -4,7 +4,8 @@
  *
  * - 跟一般的 serve 一樣聽 port 或 `--unix-socket`、帶登入、網頁與營運端點，拿 home 鎖；指名 thread 的 wire 請求轉給對話行程（`front-wire.ts`）。
  * - 控制面在 stdin／stdout（`supervisor-client.ts`）。**stdout 只有框**：serve 的日誌與登入網址交 stderr，同 `conversation-process.ts`。
- * - stdin 讀到 EOF（監督行程走了）跟 `SIGTERM` 走同一條收尾。
+ * - stdin 讀到 EOF（監督行程走了）跟 `SIGTERM` 走同一條收尾。監督行程要停機時先送 `stop-admission`，這裡停收新的請求；
+ *   serve 還沒起好就收到的，直接回答。
  *
  * @module
  */
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   const feed = new FrontFeed({ forwarder, warn });
   const plugins = new FrontPluginBindings({ forwarder, warn });
   const turnFailures = new FrontTurnFailures({ forwarder, warn });
+  let stopAdmission: (() => void) | undefined;
   const supervisor = new SupervisorClient({
     input: process.stdin,
     output: frames,
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
       turnFailures.down(threadId);
       if (socket !== undefined) forwarder.forget(socket);
     },
+    onStopAdmission: () => stopAdmission?.(),
     warn,
   });
   process.stdin.once('end', () => lifecycle.stop());
@@ -59,6 +62,7 @@ async function main(): Promise<void> {
       lifecycle.uninstall();
       return;
     }
+    stopAdmission = () => running.stopAdmission();
     lifecycle.attach({
       ...running,
       close: async (options) => {

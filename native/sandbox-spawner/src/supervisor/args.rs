@@ -9,7 +9,8 @@ pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --fro
 --conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
 [--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--capacity <條>] [--warm <個>] [--idle-ms <毫秒>] \
 [--read-only-idle-ms <毫秒>] [--drain-timeout-ms <毫秒>] [--stats-ms <毫秒>] [--throttle-ms <毫秒>] [--throttle-run-ms <毫秒>] \
-[--throttle-stop-ms <毫秒>]";
+[--throttle-stop-ms <毫秒>] [--admission-timeout-ms <毫秒>] [--host <程式> [--host-arg <參數>]... [--host-backoff-ms <毫秒>] \
+[--host-backoff-max-ms <毫秒>] [--host-start-failures <次>] [--host-stable-ms <毫秒>] [--host-ready-timeout-ms <毫秒>]]";
 
 /// stdin EOF 之後等多久才送 SIGTERM。
 pub const DEFAULT_EOF_GRACE: Duration = Duration::from_millis(6_000);
@@ -37,6 +38,30 @@ pub const DEFAULT_READ_ONLY_IDLE: Duration = Duration::from_millis(5 * 60 * 1000
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(5_000);
 /// 多久給前台一次 `stats`。
 pub const DEFAULT_STATS: Duration = Duration::from_millis(10_000);
+/// 停機時等前台回「已停准入」多久。
+pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_millis(5_000);
+/// 宿主結束後第一次重起前等多久；之後每次加倍，到 [`DEFAULT_HOST_BACKOFF_MAX`] 為止。
+pub const DEFAULT_HOST_BACKOFF: Duration = Duration::from_millis(1_000);
+pub const DEFAULT_HOST_BACKOFF_MAX: Duration = Duration::from_millis(30_000);
+/// 宿主在 `ready` 之前連續失敗幾次，整台以非 0 結束。
+pub const DEFAULT_HOST_START_FAILURES: u32 = 5;
+/// 宿主活過這麼久才結束，下一次重起的等待回到 [`DEFAULT_HOST_BACKOFF`]。
+pub const DEFAULT_HOST_STABLE: Duration = Duration::from_millis(60_000);
+/// 宿主起了這麼久還沒 `ready`，當它起不來：殺掉，算一次 `ready` 之前的失敗。
+pub const DEFAULT_HOST_READY_TIMEOUT: Duration = Duration::from_millis(30_000);
+
+/// 宿主（#2569）：第三種子行程，整台一個。argv 是 `<程式> <--host-arg>... --socket <--run-dir>/host.sock`。
+#[derive(Debug, PartialEq, Eq)]
+pub struct HostArgs {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+    pub backoff: Duration,
+    pub backoff_max: Duration,
+    /// `ready` 之前連續失敗到這個次數，整台結束。`ready` 之後的失敗不算，一律照退避重起。
+    pub start_failures: u32,
+    pub stable: Duration,
+    pub ready_timeout: Duration,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -71,6 +96,10 @@ pub struct Args {
     pub stats: Option<Duration>,
     /// 壓住吃滿 CPU 的對話行程（[`super::cpu`]）。`None`（`--throttle-ms 0`）是不壓。
     pub throttle: Option<Config>,
+    /// 停機時送前台 `stop-admission`，等它回答最多這麼久，才開始收對話行程。
+    pub admission_timeout: Duration,
+    /// 沒給 `--host` 就不起宿主。
+    pub host: Option<HostArgs>,
 }
 
 pub fn parse(args: &[OsString]) -> Result<Args, String> {
@@ -95,6 +124,14 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut throttle = Some(DEFAULT_THROTTLE);
     let mut throttle_run = DEFAULT_THROTTLE_RUN;
     let mut throttle_stop = DEFAULT_THROTTLE_STOP;
+    let mut admission_timeout = DEFAULT_ADMISSION_TIMEOUT;
+    let mut host = None;
+    let mut host_args = Vec::new();
+    let mut host_backoff = DEFAULT_HOST_BACKOFF;
+    let mut host_backoff_max = DEFAULT_HOST_BACKOFF_MAX;
+    let mut host_start_failures = DEFAULT_HOST_START_FAILURES;
+    let mut host_stable = DEFAULT_HOST_STABLE;
+    let mut host_ready_timeout = DEFAULT_HOST_READY_TIMEOUT;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_str().ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
@@ -121,6 +158,16 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--throttle-ms" => throttle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
             "--throttle-run-ms" => throttle_run = Duration::from_millis(positive(flag, value()?)?),
             "--throttle-stop-ms" => throttle_stop = Duration::from_millis(positive(flag, value()?)?),
+            "--admission-timeout-ms" => admission_timeout = millis(flag, value()?)?,
+            "--host" => host = Some(value()?),
+            "--host-arg" => host_args.push(value()?),
+            "--host-backoff-ms" => host_backoff = Duration::from_millis(positive(flag, value()?)?),
+            "--host-backoff-max-ms" => host_backoff_max = Duration::from_millis(positive(flag, value()?)?),
+            "--host-start-failures" => {
+                host_start_failures = Some(count(flag, value()?)?).filter(|&n| n > 0).ok_or(format!("{flag} 要正整數"))?
+            }
+            "--host-stable-ms" => host_stable = Duration::from_millis(positive(flag, value()?)?),
+            "--host-ready-timeout-ms" => host_ready_timeout = Duration::from_millis(positive(flag, value()?)?),
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
@@ -144,6 +191,20 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         drain_timeout,
         stats,
         throttle: throttle.map(|after| Config { after, run: throttle_run, stop: throttle_stop }),
+        admission_timeout,
+        host: match host {
+            Some(program) => Some(HostArgs {
+                program,
+                args: host_args,
+                backoff: host_backoff,
+                backoff_max: host_backoff_max.max(host_backoff),
+                start_failures: host_start_failures,
+                stable: host_stable,
+                ready_timeout: host_ready_timeout,
+            }),
+            None if !host_args.is_empty() => return Err("--host-arg 要配 --host".into()),
+            None => None,
+        },
     })
 }
 
@@ -236,6 +297,48 @@ mod tests {
         assert_eq!(args.drain_timeout, Duration::from_millis(70));
         assert_eq!(args.stats, None);
         for bad in [["--capacity", "0"], ["--capacity", "-1"], ["--warm", "x"], ["--drain-timeout-ms", "0"]] {
+            let mut items = base.to_vec();
+            items.extend(bad);
+            assert!(parse(&os(&items)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn host_flags() {
+        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let args = parse(&os(&base)).unwrap();
+        assert_eq!(args.host, None);
+        assert_eq!(args.admission_timeout, DEFAULT_ADMISSION_TIMEOUT);
+        let mut items = base.to_vec();
+        items.extend(["--host", "h", "--host-arg", "x"]);
+        let host = parse(&os(&items)).unwrap().host.unwrap();
+        assert_eq!(
+            host,
+            HostArgs {
+                program: "h".into(),
+                args: os(&["x"]),
+                backoff: DEFAULT_HOST_BACKOFF,
+                backoff_max: DEFAULT_HOST_BACKOFF_MAX,
+                start_failures: DEFAULT_HOST_START_FAILURES,
+                stable: DEFAULT_HOST_STABLE,
+                ready_timeout: DEFAULT_HOST_READY_TIMEOUT,
+            }
+        );
+        let mut items = base.to_vec();
+        items.extend([
+            "--host", "h", "--host-backoff-ms", "50", "--host-backoff-max-ms", "20", "--host-start-failures", "2",
+            "--host-stable-ms", "300", "--host-ready-timeout-ms", "400", "--admission-timeout-ms", "0",
+        ]);
+        let args = parse(&os(&items)).unwrap();
+        assert_eq!(args.admission_timeout, Duration::ZERO);
+        let host = args.host.unwrap();
+        assert_eq!(host.backoff, Duration::from_millis(50));
+        // 上限比起始小時取起始。
+        assert_eq!(host.backoff_max, Duration::from_millis(50));
+        assert_eq!(host.start_failures, 2);
+        assert_eq!(host.stable, Duration::from_millis(300));
+        assert_eq!(host.ready_timeout, Duration::from_millis(400));
+        for bad in [["--host-start-failures", "0"], ["--host-backoff-ms", "0"], ["--host-arg", "x"]] {
             let mut items = base.to_vec();
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
