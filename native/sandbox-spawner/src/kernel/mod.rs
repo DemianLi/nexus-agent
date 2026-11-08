@@ -17,8 +17,10 @@
 //! - 依賴的實體換了（提供者換手，epoch 變了），已經 ACTIVE 的 fiber 先卸載再重新 apply。
 //! - apply 失敗或逾時：已經登記的 effect 全部收掉（回滾），停在 FAILED，送一筆 [`KernelEvent::ApplyFailed`]。之後只有 [`Kernel::update`] 救得回來。
 //!   apply 回 [`Applied::Disabled`] 也一樣回滾、停在 FAILED，送的是 [`KernelEvent::SelfDisabled`]。
+//!   例外：apply 期間來了 `update`，事件照送，但不停在 FAILED，卸載後改用新設定重來。
 //! - 從沒啟用過的（PENDING）與 FAILED 的 fiber 被收掉時，照樣經過 UNLOADING，收掉它們在啟用之前就登記的 effect，再到 DISPOSED。
-//! - 卸載順序：先等依賴自己服務的 fiber 都卸載完（這段期間自己的 listener 與計時器照常被呼叫），再收自己的 effect。
+//! - 卸載順序：先等依賴自己服務的 fiber 都卸載完（這段期間自己的 listener 與計時器照常被呼叫），再收自己的 effect；
+//!   依賴者是自己的祖先、而且已經開始收 effect 的不等，因為它在等這個 fiber 收完。
 //!   effect 照登記的反序開始收：同步的當場收完，回 `Pending` 的交錯推進。子 fiber 是父 fiber 的 effect，輪到時只被要求收掉，
 //!   實際卸載在之後的步驟；父 fiber 等全部子 fiber 收完才結束卸載。
 //!
@@ -119,6 +121,8 @@ pub enum KernelError {
     /// 編號查不到（已經收掉，或是舊編號）；對已經被要求收掉的 fiber 呼叫 `update` 也回這個。
     UnknownFiber,
     Config(ConfigError),
+    /// `interval` 的間隔是 0。
+    ZeroInterval,
     NotImplemented { what: &'static str, card: u32 },
 }
 
@@ -133,6 +137,7 @@ impl fmt::Display for KernelError {
             KernelError::Reserved { event } => write!(f, "事件 {event} 只給內核用"),
             KernelError::UnknownFiber => f.write_str("沒有這個 fiber"),
             KernelError::Config(error) => write!(f, "設定不合法：{error}"),
+            KernelError::ZeroInterval => f.write_str("interval 的間隔不能是 0"),
             KernelError::NotImplemented { what, card } => write!(f, "{what} 還沒實作（#{card}）"),
         }
     }
@@ -180,7 +185,8 @@ pub enum KernelEvent {
     Status { fiber: FiberId, name: &'static str, from: State, to: State },
     /// 設定解析不過，那一列沒有掛上去。
     ConfigRejected { parent: FiberId, name: &'static str, error: String },
-    /// apply 或 poll 回錯、或逾時。回滾在這筆事件之後開始，收完時 fiber 轉到 FAILED（看 `Status`）。
+    /// apply 或 poll 回錯、或逾時。回滾在這筆事件之後開始，收完時 fiber 轉到 FAILED（看 `Status`）；
+    /// apply 期間來了 `update` 的例外，改用新設定重來。
     ApplyFailed { fiber: FiberId, name: &'static str, error: String },
     SelfDisabled { fiber: FiberId, name: &'static str, reason: String },
     /// 一個 effect 的收尾回錯或逾時；其他收尾照跑。
@@ -329,6 +335,8 @@ impl Kernel {
 
     /// 把 `patch` 疊到這個 fiber 現在的設定上（`null` 的欄位不覆寫），整份重新嚴格解析；解析不過什麼都不改。
     /// 解析過了就清掉之前的失敗與自我停用。下一次 `run`：ACTIVE 的先卸載，再用新設定 apply；依賴不在的照樣等。
+    /// 舊的 apply 還在 `Pending`，就等它結束（完成、失敗、自我停用或逾時）再卸載、換新設定；舊的結果照樣發
+    /// [`KernelEvent::ApplyFailed`] 或 [`KernelEvent::SelfDisabled`]，但不會讓 fiber 停在 FAILED。
     pub fn update(&mut self, id: FiberId, patch: &Value) -> Result<(), KernelError> {
         let fiber = self.fiber(id).filter(|f| f.alive).ok_or(KernelError::UnknownFiber)?;
         let spec = fiber.spec.ok_or_else(|| KernelError::Config(ConfigError(format!("{} 沒有設定可以改", fiber.name))))?;
@@ -760,12 +768,16 @@ impl Cx<'_> {
     }
 
     /// 每 `every` 跑一次，從 [`Cx::now`] 起算。晚了不補跑；下一次從觸發它的那次 `run` 的時間再起算。
+    /// `every` 是 0 回 [`KernelError::ZeroInterval`]：否則 [`Kernel::next_deadline`] 永遠是現在，宿主會空轉。
     pub fn interval(
         &mut self,
         label: &str,
         every: Duration,
         f: impl for<'a> FnMut(&mut Cx<'a>) -> Result<(), PluginError> + 'static,
     ) -> Result<(), KernelError> {
+        if every.is_zero() {
+            return Err(KernelError::ZeroInterval);
+        }
         self.add_timer(label, every, Some(every), Box::new(f))
     }
 
@@ -782,7 +794,7 @@ impl Cx<'_> {
         let id = k.next_timer;
         k.timers.insert(
             id,
-            Timer { owner: self.fiber, label: label.to_string(), due: k.now + after, every, callback: Some(callback) },
+            Timer { owner: self.fiber, label: label.to_string(), due: deadline::later(k.now, after), every, callback: Some(callback) },
         );
         if let Some(f) = k.fiber_mut(self.fiber) {
             f.entries.push(Entry::Timer(id));

@@ -75,6 +75,17 @@ impl Default for Limits {
     }
 }
 
+/// `now + d`，加不上去就把 `d` 減半再試，直到 `Instant` 表示得到：時長來自 `Limits` 與插件傳入的計時器時長，
+/// 溢位不能讓行程 panic。
+pub(crate) fn later(now: Instant, mut d: Duration) -> Instant {
+    loop {
+        if let Some(t) = now.checked_add(d) {
+            return t;
+        }
+        d /= 2;
+    }
+}
+
 pub(crate) type TimerCallback = Box<dyn for<'a> FnMut(&mut Cx<'a>) -> Result<(), PluginError>>;
 
 pub(crate) struct Timer {

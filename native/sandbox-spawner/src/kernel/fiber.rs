@@ -9,7 +9,7 @@
 use std::mem;
 use std::time::Instant;
 
-use super::deadline::{Effect, Step};
+use super::deadline::{later, Effect, Step};
 use super::{
     Applied, Cx, FiberId, Health, Kernel, KernelError, KernelEvent, Plugin, PluginError, Range, Spec, State,
 };
@@ -34,7 +34,7 @@ pub(crate) enum Phase {
     Idle,
     /// apply 回了 `Pending`。
     Loading { deadline: Instant },
-    /// 已經進 UNLOADING，等依賴自己服務的 fiber 卸載完。
+    /// 已經進 UNLOADING，等依賴自己服務的 fiber 卸載完；已經開始收 effect 的祖先不等（它在等這個 fiber 收完）。
     WaitDependents,
     /// effect 都已開始收，等回 `Pending` 的與子 fiber 收完。
     Disposing { pending: Vec<PendingDispose> },
@@ -290,7 +290,7 @@ impl Kernel {
         match result {
             None | Some(Ok(Applied::Done)) => self.finish_load(id),
             Some(Ok(Applied::Pending)) => {
-                let deadline = self.now + self.limits.apply;
+                let deadline = later(self.now, self.limits.apply);
                 if let Some(f) = self.fiber_mut(id) {
                     if !matches!(f.phase, Phase::Loading { .. }) {
                         f.phase = Phase::Loading { deadline };
@@ -299,7 +299,8 @@ impl Kernel {
             }
             Some(Ok(Applied::Disabled(reason))) => {
                 let name = self.fiber_name(id);
-                if let Some(f) = self.fiber_mut(id) {
+                let superseded = self.superseded(id);
+                if let Some(f) = self.fiber_mut(id).filter(|_| !superseded) {
                     f.disabled = Some(reason.clone());
                     f.target = None;
                 }
@@ -326,12 +327,18 @@ impl Kernel {
 
     fn fail(&mut self, id: FiberId, error: String) {
         let name = self.fiber_name(id);
-        if let Some(f) = self.fiber_mut(id) {
+        let superseded = self.superseded(id);
+        if let Some(f) = self.fiber_mut(id).filter(|_| !superseded) {
             f.error = Some(error.clone());
             f.target = None;
         }
         self.push_event(KernelEvent::ApplyFailed { fiber: id, name, error });
         self.start_unload(id);
+    }
+
+    /// apply 跑的期間來了 `update`：這次 apply 的結果不算數，卸載後用新設定重來；事件照發，但不記成失敗或自我停用。
+    fn superseded(&self, id: FiberId) -> bool {
+        self.fiber(id).is_some_and(|f| f.next_plugin.is_some())
     }
 
     fn start_unload(&mut self, id: FiberId) {
@@ -344,9 +351,9 @@ impl Kernel {
     fn advance_unload(&mut self, id: FiberId) {
         let Some(f) = self.fiber(id) else { return };
         if matches!(f.phase, Phase::WaitDependents) {
-            let waiting = f
-                .provisions()
-                .any(|uid| self.store.get(uid).is_some_and(|i| i.dependents.iter().any(|d| *d != id)));
+            let waiting = f.provisions().any(|uid| {
+                self.store.get(uid).is_some_and(|i| i.dependents.iter().any(|d| *d != id && !self.collecting(*d, id)))
+            });
             if waiting {
                 return;
             }
@@ -373,15 +380,30 @@ impl Kernel {
         }
     }
 
-    /// 照登記的反序開始收每一個 effect。
+    /// `dependent` 是 `id` 的祖先、而且已經開始收 effect：它在等 `id` 這個子孫收完，`id` 不能反過來等它。
+    fn collecting(&self, dependent: FiberId, id: FiberId) -> bool {
+        if !matches!(self.fiber(dependent).map(|f| &f.phase), Some(Phase::Disposing { .. })) {
+            return false;
+        }
+        let mut at = self.fiber(id).and_then(|f| f.parent);
+        while let Some(p) = at {
+            if p == dependent {
+                return true;
+            }
+            at = self.fiber(p).and_then(|f| f.parent);
+        }
+        false
+    }
+
+    /// 照登記的反序開始收每一個 effect。一次從 `entries` 尾端拿一個：還沒輪到的服務留在原處，比服務晚登記的 effect
+    /// 在 dispose 裡讀得到；回 `Pending` 之後的 poll 讀不到。
     fn begin_disposing(&mut self, id: FiberId) {
         let Some(f) = self.fiber_mut(id) else { return };
-        let entries = mem::take(&mut f.entries);
         f.phase = Phase::Disposing { pending: Vec::new() };
         // 這個 fiber 底下被拒的列跟子 fiber 一起作廢；重新 apply 時 load 會再記一次。
         self.rejected.retain(|r| r.parent != id);
         let mut pending = Vec::new();
-        for entry in entries.into_iter().rev() {
+        while let Some(entry) = self.fiber_mut(id).and_then(|f| f.entries.pop()) {
             match entry {
                 Entry::Child(child) => {
                     if self.fiber(child).is_some() {
@@ -405,7 +427,7 @@ impl Kernel {
                     match result {
                         Ok(Step::Done) => {}
                         Ok(Step::Pending) => {
-                            let deadline = self.now + self.limits.dispose;
+                            let deadline = later(self.now, self.limits.dispose);
                             pending.push(PendingDispose::Effect { label, effect, deadline });
                         }
                         Err(error) => self.dispose_failed(id, label, error.0),
@@ -585,7 +607,7 @@ impl Kernel {
             let repeat = match self.timers.get_mut(&tid) {
                 Some(timer) => match timer.every {
                     Some(every) => {
-                        timer.due = now + every;
+                        timer.due = later(now, every);
                         timer.callback = Some(callback);
                         true
                     }
