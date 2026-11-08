@@ -239,6 +239,28 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 - **工具接縫 2.6.1：`tools/execute` 交回結果的內容形狀**（`@nexus/tools`，#2416）。監聽者交回改過的 `message` 結果時：給了新的 `blocks`（跟工具本體那則造出的視圖不是同一個參照）就照 `blocks`；
   `blocks` 還是那一份（`{ ...view, … }` 一路展開帶過去的也算）時，形狀照本體回的那則——`content` 沒換就沿用原本的內容，換了就照原本是字串或陣列給新的文字，
   陣列裡的圖之類的非文字塊這時不留，要留就自己給新的 `blocks`。修補號：介面不變，消費者的範圍不用改。
+- **工具接縫 2.9.0：`shape`、`command` 視圖的內容與行為改變**（`@nexus/tools`，#2575；升級指南 [`tools-contract-2-9`](upgrade-guide/v0.6.0/tools-contract-2-9/guide.md)）。
+  `@nexus/tools` 自己的型別不變，改的是 `@nexus/core` 的工具事件契約（`tools/execute`、`tools/post-execute`、`tools/result`），經 `registry.events.on` 登記的監聽者看得到；
+  `ToolThread.on('tools/execute', …)`（2.7.0）拿到的是不透明的 `ToolExecuteOutcome`，只有時刻改變。要用新欄位的消費者宣告 `^2.9.0`，不用的不必改範圍；受行為改變影響的見下面。
+  - **新增**（向後相容）：
+    - 視圖（`PipelineResultView`）多 `shape: 'text' | 'blocks'`，標出那則訊息的 `content` 原本是字串還是陣列；監聽者自己造來交回的結果不必帶。
+    - 工具回 `Command` 時，`command` 視圖帶 `Command` 裡這次呼叫那則（`tool_call_id` 等於 `callId`）的 `blocks`、`content`、`shape`，沒有那則就三格都不帶。
+    - `tools/execute` 能交回帶內容的 `command` 結果（`PipelineCommandInput`）：只換 `Command` 裡這次呼叫的那則，同一個 `callId` 的其餘幾則丟掉，`update` 的其餘鍵與 `graph`、`goto` 原樣；
+      沒有那則就加在 `update.messages` 最後（`messages` 不是陣列時整格換成只有那一則）。本體回的不是 `Command`、或 `update` 不是物件（例如 tuple 陣列）時，整個換成新造的一則。
+      本體沒跑（自己沒叫 `next()`，或叫了而被內側短路），或不帶內容、又不是工具本體回的那一個，拋 `TypeError`。
+    - `tools/execute` 交回的結果（`message`，或帶內容的 `command`）帶 `fresh: true`，換上的那則就是新造的，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。
+  - **行為改變**：
+    - `tools/result` 與 `onResult`：結果是 `Command` 時，也帶這次呼叫那則的 `blocks`、`content`（`tools/result` 另帶 `shape`），沒有那則就照舊不帶；靠「沒有內容」判斷結果是 `Command` 的監聽者要改。
+    - 輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區前綴改成工具事件上的 core 監聽者（`packages/nexus-core/src/fold.ts` 組裝）；插件監聽者看得到的時刻改變只有兩處：
+      - `tools/execute`：輸出校驗改排在插件監聽者內側，`next()` 交回的就是驗過的那一份，插件監聽者自己交回的結果不再經輸出校驗；撞限替換原本就在內側，時刻不變。
+      - `tools/post-execute`：共用區前綴在插件監聽者內側，`result` 是加前綴之前的那份。要加前綴的 `read_file`、`grep`（`content` 模式）成功結果（共用區路由上、非空、不在技能來源底下，見 `packages/nexus-core/src/shared-read-mark.ts` 檔頭〈標哪些〉），這時 `next()` 交回的是 `replace`，不是 `accept`；
+        原樣交回 `next()` 的決定，模型收到的仍帶前綴；自己回 `accept` 或 `replace`，前綴都不加。
+        例外：`content` 模式的 `grep` 超過搜尋上限、完整清單有共用區命中時，外側的搜尋上限層照樣加前綴（`packages/nexus-core/src/search-overflow.ts`）。
+  - **`blocks` 認參照**（`tools/execute`；延伸 2.6.1 的規則：內層 core 監聽者造的 `blocks` 不算新的區塊，`command` 結果裡那一則同樣適用）：
+    - 內層 core 監聽者換掉結果或短路時（先讀後改的拒絕、輸出校驗、`task` 撞限），交回完整的結果：`blocks` 是 `content` 那一格 `text`、`shape` 是 `text`，帶 `fresh: true`。
+    - 這份 `blocks` 由 `content` 導出，生產者認的是參照：原樣交回或只換 `content`（`{ ...result, content }`），模型收到字串；給新的 `blocks`，連複製一份（`[...result.blocks]`）也算，模型收到陣列。
+    - 代價：外側監聽者複製一份 `blocks` 就會把字串變成陣列；要保持字串就別複製，改 `content`。
+    - 例外：檔案工具失敗時補 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的提示，這兩處只改 `content`，`blocks` 仍是工具本體那一份，兩者的文字對不上（#2584 追蹤）；要讀這兩種結果的文字，讀 `content`。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，
