@@ -63,8 +63,7 @@
  * @module
  */
 
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
-import { Command, isCommand } from '@langchain/langgraph';
+import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { withModelCallStep } from './model-call-step.js';
@@ -75,9 +74,8 @@ import {
 } from './session-address.js';
 import { currentTurnStart } from './session-log.js';
 import type { SessionEvent, TurnEndReason } from './session-log.js';
-import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
 import { toolRefusal } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult, PipelineResult } from './tool-pipeline.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
 export const MAX_TOKENS_MIDDLEWARE_NAME = 'nexusMaxTokens';
@@ -201,35 +199,26 @@ export function createMaxTokensCarrier(): MaxTokensCarrier {
  * **不帶碼**：dsh 那側是一般拋錯，註冊表不給碼，同圍堵對一般拋錯的做法（`containment.ts` 的
  * `classifyThrownToolError`）。
  *
- * **`Command` 只換那則 ToolMessage**：基座的 `task` 回的 `Command` 還帶著子代理寫進 state 的檔案
- * 與其他欄位（`deepagents@1.13.1` 的 `returnCommandWithStateUpdate`），那些是真的做了的事，不能跟著丟。
+ * 交回的是新造的一則（`fresh`），同拋錯翻出來的那種。**`Command` 只換那則 ToolMessage**（交回帶內容的 `command` 結果）：
+ * 基座的 `task` 回的 `Command` 還帶著子代理寫進 state 的檔案與其他欄位（`deepagents@1.13.1` 的
+ * `returnCommandWithStateUpdate`），那些是真的做了的事，不能跟著丟。
  *
- * @param result - 基座 `task` 回來的值。
+ * @param result - 基座 `task` 回來的結果（`next()` 的視圖）。
  * @param callId - 這次呼叫的 id。
  * @param partial - 子代理那一則已經寫出的文字。
- * @returns 換過的結果。
+ * @returns 要交回 `tools/execute` 的結果。
  */
 export function subagentMaxTokensResult(
-  result: unknown,
+  result: PipelineResult,
   callId: string,
   partial: string,
-): ToolMessage | Command {
+): PipelineExecuteResult {
   const text = partial.trim() === '' ? '' : `\n${PARTIAL_OUTPUT_HEADING}\n${partial}`;
   const refusal = toolRefusal(SUBAGENT_MAX_TOKENS_REASON + text, { callId, name: TASK_TOOL });
-  if (!isCommand(result)) return refusal;
-  const update = result.update;
-  if (typeof update !== 'object' || update === null || Array.isArray(update)) return refusal;
-  const messages = (update as { messages?: unknown }).messages;
-  const kept = Array.isArray(messages)
-    ? messages.filter(
-        (message: unknown) => !(ToolMessage.isInstance(message) && message.tool_call_id === callId),
-      )
-    : [];
-  return new Command({
-    ...(result.graph === undefined ? {} : { graph: result.graph }),
-    ...(result.goto === undefined ? {} : { goto: result.goto }),
-    update: { ...(update as Record<string, unknown>), messages: [...kept, refusal] },
-  });
+  const content = refusal.text;
+  return result.kind === 'message'
+    ? { kind: 'message', content, isError: true, fresh: true }
+    : { kind: 'command', content, isError: true, fresh: true };
 }
 
 /**
@@ -259,52 +248,50 @@ interface RuntimeRequest {
 }
 
 /**
- * 造這顆 middleware。
+ * 造這顆 middleware：模型那一半。工具那一半是 {@link createMaxTokensListener}，兩半共用同一份載體。
  *
  * @param carrier - 這份組裝的載體，root 與每個子代理同一份。
  * @returns 要排在 `invalidToolArgs` 內側的 middleware。
  */
 export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddleware {
-  const toolStep = maxTokensToolStep(carrier);
-  return withToolCallStep(
-    withModelCallStep(
-      async (request, handler) => {
-        const response = await handler(request);
-        if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
-          return response;
-        }
-        const where = { configurable: (request as RuntimeRequest).runtime?.configurable };
-        const address = toolCallSessionAddress(where);
-        // 背景子代理不記：載體是父圖的 `task` 取走的，背景位址沒有人取（#858）。它的撞限由日誌上回覆的
-        // `finish_reason` 讀（結算摘要的 `max-tokens`）。
-        if (address?.kind === 'subagent' && !isBackgroundCall(where)) {
-          carrier.record(address.runId, response.text);
-        }
-        return dropToolCalls(response);
-      },
-      (wrapModelCall) =>
-        createMiddleware({
-          name: MAX_TOKENS_MIDDLEWARE_NAME,
-          wrapModelCall: wrapModelCall as never,
-          wrapToolCall: wrapToolCallWith(toolStep),
-        }) as unknown as AgentMiddleware,
-    ),
-    toolStep,
+  return withModelCallStep(
+    async (request, handler) => {
+      const response = await handler(request);
+      if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
+        return response;
+      }
+      const where = { configurable: (request as RuntimeRequest).runtime?.configurable };
+      const address = toolCallSessionAddress(where);
+      // 背景子代理不記：載體是父圖的 `task` 取走的，背景位址沒有人取（#858）。它的撞限由日誌上回覆的
+      // `finish_reason` 讀（結算摘要的 `max-tokens`）。
+      if (address?.kind === 'subagent' && !isBackgroundCall(where)) {
+        carrier.record(address.runId, response.text);
+      }
+      return dropToolCalls(response);
+    },
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MAX_TOKENS_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
   );
 }
 
 /**
- * 這顆的工具那一半：`task` 往內交，載體裡有這次派出去的子代理撞限留下的部分回覆，就把結果換成撞限的錯誤。
+ * 這顆的工具那一半，`tools/execute` 內層最內一位的 core 監聽者：`task` 往內交，載體裡有這次派出去的子代理撞限留下的部分回覆，
+ * 就把結果換成撞限的錯誤（{@link subagentMaxTokensResult}）。
  *
- * @param carrier - 這份組裝的載體。
- * @returns 這一步。
+ * @param carrier - 這份組裝的載體，與 {@link createMaxTokensMiddleware} 同一份。
+ * @returns 交給 fold 排進 `tools/execute` 內層的監聽者。
  */
-export function maxTokensToolStep(carrier: MaxTokensCarrier): ToolCallStep {
-  return async (call, next) => {
-    if (call.name !== TASK_TOOL) return next();
-    const runId = spawnedSubagentRunId({ configurable: call.configurable });
+export function createMaxTokensListener(
+  carrier: MaxTokensCarrier,
+): CoreToolListener<'tools/execute'> {
+  return async (exec, next, site) => {
+    if (site.name !== TASK_TOOL) return next();
+    const runId = spawnedSubagentRunId({ configurable: site.configurable });
     if (runId === undefined) return next();
-    let result: unknown;
+    let result: PipelineResult;
     try {
       result = await next();
     } catch (error: unknown) {
@@ -314,6 +301,6 @@ export function maxTokensToolStep(carrier: MaxTokensCarrier): ToolCallStep {
     }
     const partial = carrier.take(runId);
     if (partial === undefined) return result;
-    return subagentMaxTokensResult(result, call.callId ?? '', partial);
+    return subagentMaxTokensResult(result, exec.callId, partial);
   };
 }

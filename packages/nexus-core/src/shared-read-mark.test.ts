@@ -9,7 +9,8 @@ import { CompositeBackend, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
 import { EMPTY_CONTENT_WARNING } from './read-continuation.js';
-import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
+import { createSharedGrepMark, createSharedReadMarkListener } from './shared-read-mark.js';
+import { createToolPostExecuteMiddleware } from './tool-pipeline.js';
 import { SHARED_WORKSPACE_CONTENT_NOTICE as NOTICE } from './untrusted-content.js';
 
 type Wrapper = (
@@ -17,10 +18,16 @@ type Wrapper = (
   handler: (request: unknown) => Promise<unknown>,
 ) => Promise<unknown>;
 
-const wrap = (createSharedReadMarkMiddleware('/shared') as unknown as { wrapToolCall: Wrapper })
-  .wrapToolCall;
+/** 前綴監聽者掛在 `tools/post-execute` 內層、沒有派發面的那一顆生產者。 */
+function createSharedReadMarkMiddleware(prefix: string, skillSources?: readonly string[]): unknown {
+  return createToolPostExecuteMiddleware(undefined, {
+    inner: [createSharedReadMarkListener(prefix, skillSources)],
+  });
+}
 
-/** 叫一次：工具回 `result`，回 middleware 交出的東西。 */
+const wrap = (createSharedReadMarkMiddleware('/shared') as { wrapToolCall: Wrapper }).wrapToolCall;
+
+/** 叫一次：工具回 `result`，回生產者交出的東西。 */
 async function through(name: string, args: Record<string, unknown>, result: unknown) {
   return wrap(
     { toolCall: { name, args, id: 'call-1' }, state: {}, runtime: {} },
@@ -105,7 +112,7 @@ describe('read_file', () => {
     expect(String(textOf(result)).startsWith(NOTICE)).toBe(true);
   });
 
-  it('只換內容：id、狀態、artifact 與兩份 kwargs 原樣帶過去', async () => {
+  it('只換內容：id、名字、狀態、artifact 與 `additional_kwargs` 原樣帶過去，`response_metadata` 不帶', async () => {
     const original = new ToolMessage({
       content: 'body',
       tool_call_id: 'call-1',
@@ -136,7 +143,7 @@ describe('read_file', () => {
       status: original.status,
       artifact: { raw: true },
       additional_kwargs: { k: 1 },
-      response_metadata: { r: 2 },
+      response_metadata: {},
     });
   });
 
@@ -195,7 +202,7 @@ describe('grep', () => {
 
 describe('技能來源底下不標', () => {
   const skilled = (
-    createSharedReadMarkMiddleware('/shared', ['/shared/skills/', '/plugin/skills']) as unknown as {
+    createSharedReadMarkMiddleware('/shared', ['/shared/skills/', '/plugin/skills']) as {
       wrapToolCall: Wrapper;
     }
   ).wrapToolCall;

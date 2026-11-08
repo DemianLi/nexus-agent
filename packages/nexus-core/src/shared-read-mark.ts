@@ -12,7 +12,7 @@
  *   兩種模式只有檔名或計數，不標。
  * - **超過搜尋上限的 `grep`**（[#2065](https://github.com/DemianLi/nexus-agent/issues/2065)）：完整清單從槽位重排、不經過這一層，所以由搜尋上限那一層
  *   用同一份判準（{@link createSharedGrepMark}）判完整清單：有要標的命中，行內與存檔兩份開頭都加；行內已經被這一層標過的不再加。
- * - 失敗的（`status: 'error'`，由貼著工具本體的 `fsToolErrors` 標好）、不是 `ToolMessage` 的（`Command`）原樣放過。
+ * - 失敗的（`status: 'error'`，由貼著工具本體的 `fsToolErrors` 標好）原樣放過；`Command` 不經 `tools/post-execute`，也不標。
  * - `glob`、`ls`、附件、私有根、工具結果存檔都不標。
  * - **這條 thread 的技能來源底下不標**，含同目錄的範本與腳本：基座的技能提示詞要模型讀 `SKILL.md` 再照做，有共用區的 thread
  *   技能來源就在共用區底下。來源清單是 fold 交進來的那一份，跟模型清單、`/名字` 掃的同一組（`FsService.skillSources()`）。
@@ -29,21 +29,18 @@
  * - 內容塊陣列、第一塊是文字（`read_file` 的文字結果）：前綴併進那一塊，塊數不變。
  * - 第一塊不是文字（圖片、檔案）：最前面多一塊只有前綴的文字塊，其餘原樣、順序不變。
  *
- * 槽位在 fold 的槽位表裡：輸出校驗與讀到哪的外側（它們看到的是沒標過的文字），搜尋上限、外溢與圍堵的內側（`Found … matches` 排在
- * 前綴之前，日誌與外溢預覽都帶前綴）。root 與每個子代理共用同一份實例，無狀態。
+ * 位置是 `tools/post-execute` 內層（{@link createSharedReadMarkListener}）：每一位 post 監聽者（含搜尋上限與外溢）的內側，它們先叫
+ * `next()` 再讀決定，所以看到的是標過的那一則（`Found … matches` 排在前綴之前，日誌與外溢預覽都帶前綴）；它們拿到的 `result` 參數
+ * 是標之前那一份。輸出校驗與讀到哪在 `tools/execute`，看到的是沒標過的文字。root 與每個子代理共用同一份，無狀態。
  *
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
+import type { ToolMessage } from '@langchain/core/messages';
+import { toolNameOfCall } from './tool-call-step.js';
+import type { CoreToolListener, PipelineContentBlock } from './tool-pipeline.js';
 import { EMPTY_CONTENT_WARNING } from './read-continuation.js';
 import { SHARED_WORKSPACE_CONTENT_NOTICE } from './untrusted-content.js';
-
-/** 這一層 middleware 的名字。 */
-export const SHARED_READ_MARK_MIDDLEWARE_NAME = 'nexusSharedReadMark';
 
 /** 空檔提示那一句：backend 直接回、沒編行號的，與被基座編上行號的那一行（`ContainedFilesystemBackend` 讀空頁時回它）。 */
 const EMPTY_READ = new RegExp(`^(?:\\s*1\\t)?${EMPTY_CONTENT_WARNING}$`);
@@ -143,7 +140,7 @@ export interface SharedGrepMark {
 }
 
 /**
- * `grep` 的判準與加法，跟 {@link createSharedReadMarkMiddleware} 同一套，交給搜尋上限那一層判完整清單。
+ * `grep` 的判準與加法，跟 {@link createSharedReadMarkListener} 同一套，交給搜尋上限那一層判完整清單。
  *
  * @param prefix - 這條 thread 的共用區前綴（不含結尾斜線）。
  * @param skillSources - 這條 thread 的技能來源，底下的不標。省略即沒有。
@@ -160,54 +157,33 @@ export function createSharedGrepMark(
 }
 
 /**
- * 造一顆替共用區讀出來的內容加前綴的 middleware。
+ * 造替共用區讀出來的內容加前綴的 `tools/post-execute` core 監聽者：`read_file`／`grep` 的成功結果讀自共用區就 `replace`，
+ * 照視圖的 `shape` 給 `content`（字串）或 `blocks`（陣列），落盤的形狀跟本體那則一樣；`id`、狀態、`artifact`、`additional_kwargs`
+ * 與錯誤碼由生產者沿用。
  *
  * @param prefix - 這條 thread 的共用區前綴（模型位址空間，不含結尾斜線，例如 `/shared`）。
  * @param skillSources - 這條 thread 的技能來源，底下的不標。省略即沒有。
- * @returns 交給 fold 排位置的 `wrapToolCall` middleware。
+ * @returns 交給 fold 排進 `tools/post-execute` 內層的監聽者。
  */
-export function createSharedReadMarkMiddleware(
+export function createSharedReadMarkListener(
   prefix: string,
   skillSources: readonly string[] = [],
-): AgentMiddleware {
-  return createToolCallStepMiddleware(
-    SHARED_READ_MARK_MIDDLEWARE_NAME,
-    sharedReadMarkToolStep(prefix, skillSources),
-  );
-}
-
-/**
- * 替共用區讀出來的內容加前綴的一步：`read_file`／`grep` 往內交，結果讀自共用區就標。
- *
- * @param prefix - 這條 thread 的共用區前綴。
- * @param skillSources - 這條 thread 的技能來源，底下的不標。
- * @returns 這一步。
- */
-export function sharedReadMarkToolStep(
-  prefix: string,
-  skillSources: readonly string[] = [],
-): ToolCallStep {
-  return async (call, next) => {
-    const toolName = toolNameOfCall(call);
-    if (toolName !== 'read_file' && toolName !== 'grep') return next();
-    const result = await next();
-    if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-    const args: unknown = call.args;
+): CoreToolListener<'tools/post-execute'> {
+  return async (exec, result, next, site) => {
+    const decision = await next();
+    const toolName = toolNameOfCall(site);
+    if (toolName !== 'read_file' && toolName !== 'grep') return decision;
+    if (decision.kind !== 'accept' || result.kind !== 'message' || result.isError) return decision;
+    const content: ToolMessage['content'] =
+      result.shape === 'text' ? result.content : (result.blocks as ToolMessage['content']);
     const mark =
       toolName === 'read_file'
-        ? readIsMarked(args, result.content, prefix, skillSources)
-        : grepIsMarked(args, result.content, prefix, skillSources);
-    if (!mark || result.content.length === 0) return result;
-    // 只換內容；id、狀態、artifact 與兩份 kwargs 原樣帶過去，沒有名字時補上工具名。
-    return new ToolMessage({
-      content: marked(result.content),
-      tool_call_id: result.tool_call_id,
-      name: result.name ?? toolName,
-      id: result.id,
-      status: result.status,
-      artifact: result.artifact,
-      additional_kwargs: result.additional_kwargs,
-      response_metadata: result.response_metadata,
-    });
+        ? readIsMarked(exec.args, content, prefix, skillSources)
+        : grepIsMarked(exec.args, content, prefix, skillSources);
+    if (!mark || content.length === 0) return decision;
+    const withNotice = marked(content);
+    return typeof withNotice === 'string'
+      ? { kind: 'replace', content: withNotice }
+      : { kind: 'replace', blocks: withNotice as readonly PipelineContentBlock[] };
   };
 }

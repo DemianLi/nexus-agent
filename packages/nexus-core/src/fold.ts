@@ -42,7 +42,7 @@ import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createToolBarrierMiddleware } from './tool-barrier.js';
-import { createOutputSchemaMiddleware } from './output-schema.js';
+import { createOutputSchemaListener } from './output-schema.js';
 import { fsToolErrorsListener, recordBackendOutcomes } from './fs-tool-errors.js';
 import { limitGlobPatterns } from './glob-pattern-limit.js';
 import { FS_SERVICE, settleFsService } from './fs-service.js';
@@ -59,12 +59,16 @@ import { createSearchDescriptionsMiddleware } from './search-descriptions.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
-import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
+import {
+  createMaxTokensCarrier,
+  createMaxTokensListener,
+  createMaxTokensMiddleware,
+} from './max-tokens.js';
 import { createSpillPolicyListener } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
 import { capSearchResults, createSearchOverflowListeners } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
-import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
+import { createSharedGrepMark, createSharedReadMarkListener } from './shared-read-mark.js';
 import {
   createObservationListener,
   OBSERVATION_POLICY_PLUGIN_NAME,
@@ -593,12 +597,14 @@ export function foldRegistry(
   // 解不開的參數的原字串記在那則 AI 訊息上，三個讀者（圍堵、核准閘門、最內層那顆）各自經
   // `toolCallOwner` 找那則訊息（怎麼找見 {@link ./tool-call-owner.ts}），沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
   const invalidToolArgs = createInvalidToolArgsMiddleware(registry.sessions);
-  // **撞到輸出上限（#433）也是一份載體、一顆實例走遍 root 與每個子代理**：子代理的模型呼叫記、
-  // 父圖的 `task` 取，得看到同一份。見 {@link ./max-tokens.ts}。
-  const maxTokens = createMaxTokensMiddleware(createMaxTokensCarrier());
+  // **撞到輸出上限（#433）也是一份載體走遍 root 與每個子代理**：子代理的模型呼叫記（middleware 那一半）、
+  // 父圖的 `task` 取（`tools/execute` 監聽者那一半），得看到同一份。見 {@link ./max-tokens.ts}。
+  const maxTokensCarrier = createMaxTokensCarrier();
+  const maxTokens = createMaxTokensMiddleware(maxTokensCarrier);
+  const maxTokensListener = createMaxTokensListener(maxTokensCarrier);
   // **輸出校驗也是一份走遍**：無狀態，schema 每次從那一顆工具實例現查（#252）。它是性質不是
   // 功能，理由同圍堵，見 {@link ./output-schema.ts}。
-  const outputSchema = createOutputSchemaMiddleware((tool) => registry.tools.outputSchemaOf(tool));
+  const outputSchema = createOutputSchemaListener((tool) => registry.tools.outputSchemaOf(tool));
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions, options.events);
@@ -707,7 +713,7 @@ export function foldRegistry(
   const sharedReadMark =
     backend === undefined || sharedWorkspacePrefix === undefined
       ? undefined
-      : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
+      : createSharedReadMarkListener(sharedWorkspacePrefix, skills);
   // 搜尋結果的筆數上限（#735）：監聽者（execute／post 兩半）與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
   // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
   const searchOverflow =
@@ -728,28 +734,32 @@ export function foldRegistry(
                 sharedMark: createSharedGrepMark(sharedWorkspacePrefix, skills),
               },
         );
-  // `tools/post-execute`：外層第一位是外溢，第二位是搜尋上限的後半，所以外溢量的是排好版、接上定位的那一則。
+  // `tools/post-execute`：外層第一位是外溢，第二位是搜尋上限的後半，所以外溢量的是排好版、接上定位的那一則；內層是共用區的前綴，
+  // 外層的兩位先叫 `next()` 再讀決定，量的是加過前綴的那一則。
   // 一份走遍 root 與每個子代理；沒有派發面也照樣有，core 監聽者不能跟著消失。搜尋上限的 `scope` 交給這一顆，
   // 包住它的整步（execute 那一半在它的內層跑），native 的 root 直接呼叫那一步時也一樣。
-  const postOuter = [spill, searchOverflowListeners?.post].filter(isPresent);
-  const toolPostExecute =
-    options.events === undefined && postOuter.length === 0
-      ? undefined
-      : createToolPostExecuteMiddleware(
-          options.events,
-          { outer: postOuter },
-          searchOverflowListeners?.scope,
-        );
-  // `tools/execute`：外層是耐久檢查點（動手前排空），內層由外而內是先讀後改、搜尋上限的開槽、檔案工具的失敗。
-  // 先讀後改在檔案工具的失敗外側，讀失敗時它看到的已經是錯誤。**逐個 agent 各建一份**：先讀後改的觀測紀錄在 closure 裡。
-  const toolExecute = (): AgentMiddleware | undefined => {
+  const toolPostExecute = createToolPostExecuteMiddleware(
+    options.events,
+    {
+      outer: [spill, searchOverflowListeners?.post].filter(isPresent),
+      inner: [sharedReadMark].filter(isPresent),
+    },
+    searchOverflowListeners?.scope,
+  );
+  // `tools/execute`：外層是耐久檢查點（動手前排空），內層由外而內是先讀後改、搜尋上限的開槽、檔案工具的失敗、輸出校驗、撞到輸出上限。
+  // 先讀後改在檔案工具的失敗外側，讀失敗時它看到的已經是錯誤。輸出校驗在檔案工具的失敗內側（失敗的不驗），解不開參數的那顆換上的樁
+  // 是另一顆實例，查不到 schema。撞到輸出上限最貼本體：它只對 `task` 把結果換成撞限的錯誤，代表 `task` 本體自己的結果，
+  // 外面每一位（含輸出校驗）看到的都是換過的。**逐個 agent 各建一份**：先讀後改的觀測紀錄在 closure 裡。
+  const toolExecute = (): AgentMiddleware => {
     const outer = [sessionCheckpointListener].filter(isPresent);
-    const inner = [observationPolicy?.(), searchOverflowListeners?.execute, fsToolErrors].filter(
-      isPresent,
-    );
-    return options.events === undefined && outer.length === 0 && inner.length === 0
-      ? undefined
-      : createToolExecuteMiddleware(options.events, { outer, inner });
+    const inner = [
+      observationPolicy?.(),
+      searchOverflowListeners?.execute,
+      fsToolErrors,
+      outputSchema,
+      maxTokensListener,
+    ].filter(isPresent);
+    return createToolExecuteMiddleware(options.events, { outer, inner });
   };
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
@@ -913,15 +923,9 @@ export function foldRegistry(
     ),
     // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的是段的最後；記憶在基座最內層，還接在它之後。
     { name: 'plugins.last', root: same(plugins.last), subagent: same(subagentPlugins.last) },
-    // `tools/post-execute`（#1248）在輸出校驗等貼著工具本體的那幾顆外側、在每一個 plugin
-    // middleware 內側：plugin 與圍堵看到的是替換過的那則。
+    // `tools/post-execute`（#1248）在讀到哪等貼著工具本體的那幾顆外側、在每一個 plugin
+    // middleware 內側：plugin 與圍堵看到的是替換過的那則。共用區的前綴是它內層的 core 監聽者。
     shared('toolPostExecute', toolPostExecute),
-    // 共用區讀出來的內容加前綴：在輸出校驗與讀到哪的外側（它們看到沒標過的文字），在搜尋上限、外溢與圍堵的內側（`Found … matches`
-    // 排在前綴之前，日誌與外溢預覽都帶前綴）。子代理的檔案工具也經過它。見 {@link ./shared-read-mark.ts}。
-    shared('sharedReadMark', sharedReadMark),
-    // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
-    // 見 {@link ./output-schema.ts}。
-    shared('outputSchema', outputSchema),
     // 讀檔結果最後補上讀到哪：在 `tools/execute` 外側，看到的是失敗已經標成錯誤的結果，只補成功的；
     // 外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     shared('readContinuation', readContinuation),
@@ -930,10 +934,10 @@ export function foldRegistry(
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（參數在執行時才驗），改寫在其餘 `wrapModelCall`
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
-    // `tools/execute`（#1248）環繞工具本體，排在解不開參數那顆的內側（樁回的錯誤它看得到）、撞到輸出上限那顆的外側：後者的
-    // `wrapToolCall` 只對 `task` 把結果換成撞限的錯誤；這個替換代表 `task` 本體自己的結果，所以排在 execute 的內側。
+    // `tools/execute`（#1248）環繞工具本體，排在解不開參數那顆的內側（樁回的錯誤它看得到）。輸出校驗與撞到輸出上限的
+    // `task` 替換是它內層的 core 監聽者。
     perAgent('toolExecute', toolExecute),
-    // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
+    // 撞到輸出上限的模型那一半：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
     shared('maxTokens', maxTokens),
     // `image/offload` 的接住端（#1270）：adapter 在請求轉換前量到圖超過額度，以 `IMAGE_OFFLOAD_REQUIRED` 失敗；這一顆接住、下決定、再送一次。

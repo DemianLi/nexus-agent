@@ -303,10 +303,7 @@ export {
   REFERENCE_WARNING,
   SHARED_WORKSPACE_CONTENT_NOTICE,
 } from './untrusted-content.js';
-export {
-  createSharedReadMarkMiddleware,
-  SHARED_READ_MARK_MIDDLEWARE_NAME,
-} from './shared-read-mark.js';
+export { createSharedReadMarkListener } from './shared-read-mark.js';
 export type { HostExitChild } from './host-exit-children.js';
 export { trackHostExitChild } from './host-exit-children.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
@@ -336,10 +333,9 @@ export {
 
 export type { OutputSchemaLookup } from './output-schema.js';
 export {
-  createOutputSchemaMiddleware,
+  createOutputSchemaListener,
   formatSchemaViolation,
   formatValidatorFailure,
-  OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
 export type {
@@ -564,6 +560,7 @@ export { concludeTurn, putToolResultMeta } from './tool-result-meta.js';
 export type { MaxTokensCarrier } from './max-tokens.js';
 export {
   createMaxTokensCarrier,
+  createMaxTokensListener,
   createMaxTokensMiddleware,
   dropToolCalls,
   isMaxTokensFinish,

@@ -1,5 +1,5 @@
 /**
- * 輸出 schema 校驗 middleware 自己的邏輯——直接餵它一個假的 `handler`，看它把什麼交回來。
+ * 輸出 schema 校驗監聽者自己的邏輯——掛進 `tools/execute` 生產者的內層，直接餵一個假的 `handler`，看生產者把什麼交回來。
  * 「fold 有沒有把它打底進去、排在哪」在 `fold.test.ts`；「掛進真的 agent 之後行為對不對」在
  * `apps/harness/src/validation.test.ts`。
  */
@@ -8,8 +8,10 @@ import { ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createOutputSchemaMiddleware } from './output-schema.js';
+import { createOutputSchemaListener } from './output-schema.js';
+import type { OutputSchemaLookup } from './output-schema.js';
 import { INVALID_TOOL_OUTPUT, toolErrorOf } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -22,6 +24,11 @@ function wrapperOf(middleware: unknown): Wrapper {
   const wrap = (middleware as { wrapToolCall?: Wrapper }).wrapToolCall;
   if (wrap === undefined) throw new Error('這個 middleware 沒有 wrapToolCall');
   return wrap;
+}
+
+/** 校驗監聽者掛在 `tools/execute` 內層、沒有派發面的那一顆生產者。 */
+function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [createOutputSchemaListener(schemaOf)] });
 }
 
 /** 兩顆同名、不同實例的工具——校驗器以實例查 schema。 */
