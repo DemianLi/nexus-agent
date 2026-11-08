@@ -10,6 +10,7 @@
 pub mod host;
 pub mod host_protocol;
 pub mod json;
+pub mod kernel;
 pub mod landlock;
 pub mod protocol;
 pub mod seccomp;
