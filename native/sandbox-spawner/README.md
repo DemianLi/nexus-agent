@@ -94,6 +94,78 @@ nexus-host --socket <路徑>
   - 撤過的連線：收到監督行程的 `revoke` 時先把 listen backlog 收完，那個 pid 的連線全部記成撤過（驗過身分的當場斷）；上一條的違規也一樣記，只是不收 backlog。撤過的連線之後送什麼都只回 `rejected`、報 `unregistered`，同一個 pid 號碼再登記也不照新的那一筆驗，也不撤它。pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會這樣被拒，重連就好（不會被隔離）。
 - 整合測試 `tests/host.rs` 由測試站在監督行程的位置；`examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
 
+### 連線身分的狀態表
+
+一條連線在宿主這邊的狀態：
+
+- **B**：還在 listen backlog，宿主還沒 accept。
+- **A⁺**：已 accept、還沒送 `hello`，pid 在表上。
+- **A⁻**：同上，pid 不在表上。
+- **A⁰**：同上，`SO_PEERCRED` 讀不到 pid 或 uid 不同。
+- **V**：已驗過身分。
+- **R**：撤過。驗過身分的連線一被撤就斷，所以留在這一格的都還沒送過 `hello`。
+
+宿主每驗一個 `hello`、每判一次違規，都先把控制通道讀乾淨，所以已經寫進 pipe 的 `revoke`／`grant` 一定先生效。表裡的「撤 pid」是宿主自己撤：表上拿掉那一筆，那個 pid 的連線全部記成撤過，驗過身分的當場斷，不收 backlog。
+
+**宿主這邊**（方括號是釘住這一格的測試，見下面的清單）
+
+| 狀態 | `hello`，token 與版本都對 | `hello`，token 或版本錯 | 壞框（框太大、解不開） | 重複的 `hello` | 監督行程的 `revoke` | 同 pid 的新登記 | EOF／5 s 沒送 `hello` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B | accept 之後照 A 那幾列 [n5] | 同左 | 同左 | — | 先收進來，記成撤過，變 R [t8]；accept 出錯的除外 [n3] | accept 之後照 A⁺ | accept 之後照 A |
+| A⁺ | 回 `hello`，變 V，不報 [t1] | 回 `rejected token 不對`／`版本不對`，報 `violation`，撤 pid [t2] | 回 `rejected <理由>`，報 `violation`，撤 pid [t3] | — | 變 R，不回 [t5] | 整筆換掉，之後照新的驗 [t11] | 斷，不報 [t15][n4] |
+| A⁻ | 回 `rejected 沒有登記`，報 `unregistered` [t9][t17] | 同左（不看 token 與版本）[t17] | 回 `rejected <理由>`，報 `violation`，撤 pid [t13] | — | 變 R [t12] | 變 A⁺ [t11] | 斷，不報 [t15][t16] |
+| A⁰ | 回 `rejected 沒有登記`，報 `unregistered`，pid 0 [n1] | 同左 [n1] | 回 `rejected <理由>`，報 `violation`，pid 0，沒有 pid 可撤 [n1] | — | 不適用 | 不適用 | 斷，不報 [n1] |
+| V | — | — | 回 `rejected <理由>`，報 `violation`，撤 pid [t14] | 回 `rejected 重複的 hello`，報 `violation`，撤 pid [t1]；token 與版本不看 | 斷，不回、不報 [t4] | 照樣連著，不重驗 [t11] | 斷，不報 [t15] |
+| R | 回 `rejected 沒有登記`，報 `unregistered`，不撤表上那一筆 [t5][t6][t8] | 同左 [t8] | 回 `rejected <理由>`，報 `unregistered`（理由照框），不撤表上那一筆 [t7] | — | 照舊是 R [t15] | 照舊是 R，不照新的驗 [t6][t8] | 斷，不報 [t15] |
+
+**監督行程這邊**（宿主的回報 × 那個 pid 是誰）
+
+| 回報 | 活著、沒被隔離的前台或對話行程 | 已隔離的 | 不是我們的（含 pid 0） |
+| --- | --- | --- | --- |
+| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2] | 再寫一行稽核，再補送一次 `revoke`；不記警告 [s3][s4] | 寫稽核，`role` 是 `unknown`；不隔離、不送 `revoke`、不記警告 [s5] |
+| `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4] | 照 `violation` 那一格 [s5] |
+
+**釘住各格的測試**（`tests/host.rs` 是 t，`tests/supervisor.rs` 是 s）
+
+- t1 `a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation`
+- t2 `a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections`
+- t3 `every_invalid_vector_is_rejected_and_the_host_keeps_serving`
+- t4 `a_hello_after_a_revoke_is_always_rejected`
+- t5 `a_revoke_leaves_connections_that_have_not_said_hello_to_be_rejected`
+- t6 `a_connection_from_before_a_revoke_is_not_verified_against_a_later_grant`
+- t7 `a_bad_frame_on_a_revoked_connection_leaves_a_later_grant_alone`
+- t8 `a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later_grant`
+- t9 `unregistered_reports_number_each_connection`
+- t10 `the_host_raises_its_open_file_soft_limit_to_the_hard_limit`（n3 的前提）
+- t11 `a_regrant_replaces_the_token_and_keeps_verified_connections`
+- t12 `a_connection_from_a_pid_not_on_the_table_is_also_marked_by_a_revoke`
+- t13 `a_bad_frame_from_a_pid_that_is_not_on_the_table_is_a_violation`
+- t14 `a_bad_frame_after_hello_quarantines_the_pid`
+- t15 `a_connection_that_closes_reports_nothing_and_leaves_the_grant`（A⁻、A⁺、V、R 的 EOF，與 R 再撤一次）
+- t16 `a_client_that_never_says_hello_is_dropped`（A⁻ 逾時）
+- t17 `an_unsandboxed_mcp_server_with_a_stolen_token_is_rejected`（別的 pid 拿正主的 token）
+- s1 `a_violation_revokes_the_live_identity_on_the_host`
+- s2 `conversations_reach_the_host_and_violations_are_audited_and_quarantined`
+- s3 `a_second_violation_for_a_quarantined_conversation_is_audited_and_revoked_again`
+- s4 `a_quarantined_conversation_is_audited_on_every_later_rejection`
+- s5 `a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown`
+- s6 `an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits`
+
+**不測的格與原因**
+
+- n1 A⁰：要另一個 uid 的行程才造得出來；CI 不是 root，測試換不了 uid。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
+- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停的那一段只有幾行程式的窗口，測試造不穩。
+- n3 accept 出錯（例如 fd 用完）時沒收進來的連線，之後會被當成 A 收進來：t10 確認宿主起來時已把開檔數的軟上限拉到硬上限，出錯的情形沒有另外造。
+- n4 A⁺、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
+- 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果照 R 那一列。窗口只有幾行程式，測試造不穩。
+- n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。
+- 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
+
+**已知限制**
+
+- pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會在收到 `revoke` 時被記成撤過，照 R 那一列被拒，要重連；它不會被隔離。
+- 不是我們起、但跟我們同 uid 的行程，它死後留下的 A⁻ 連線送壞框，報的 `violation` 會落在重用同一個 pid 的新行程頭上。同 uid 的行程本來就在信任範圍內（能讀別的行程的記憶體），不修。
+
 ## 建置與測試
 
 需要 Linux。Mac 上用容器跑，例如：

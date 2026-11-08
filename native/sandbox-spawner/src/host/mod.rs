@@ -22,6 +22,8 @@
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
 //! 宿主自己不因為任何一條連線結束。
 //!
+//! 每種狀態的連線收到每種輸入時怎麼處理，整理成表在 `README.md`〈連線身分的狀態表〉，每一格附釘住它的測試。
+//!
 //! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
 use crate::host_protocol::{self, decode_client_message, encode_host_message, ClientMessage, HostMessage};
@@ -387,7 +389,7 @@ impl Host {
     fn unregistered(&mut self, i: usize, reason: &str) {
         let pid = self.refuse(i, reason);
         let conn = self.conns.get(i).map_or(0, |conn| conn.id);
-        self.report(&HostReport::Unregistered { pid, conn });
+        self.report(&HostReport::Unregistered { pid, conn, reason: reason.as_bytes().to_vec() });
     }
 
     /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他驗過身分的連線；這條由呼叫方斷。

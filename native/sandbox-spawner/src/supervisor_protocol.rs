@@ -178,7 +178,8 @@ pub enum HostReport {
     /// 不一定是違規：合法行程那一筆還沒寫進宿主的 pipe 時（宿主剛起來或剛重起、監督行程還沒送表，或那一筆還排在監督行程這邊），
     /// 或 pid 被重用、這是同一個號碼上一個行程留下的連線，也是這樣；要不要算違規由監督行程判斷。
     /// `conn` 是宿主替連線編的號（這個宿主行程裡依 accept 的順序從 1 起），宿主自己的 log 也寫這個號，兩邊對得起來。
-    Unregistered { pid: u32, conn: u32 },
+    /// `reason` 是宿主回給那條連線的理由（UTF-8）：送 `hello` 的是「沒有登記」，撤過的連線送壞框是那個框的錯；監督行程判成違規時照它寫稽核。
+    Unregistered { pid: u32, conn: u32, reason: Vec<u8> },
 }
 
 const CMD_HELLO: u8 = b'w';
@@ -451,10 +452,11 @@ pub fn encode_host_report(report: &HostReport) -> Vec<u8> {
             w.u32(*pid);
             w.bytes(reason);
         }
-        HostReport::Unregistered { pid, conn } => {
+        HostReport::Unregistered { pid, conn, reason } => {
             w.u8(HREP_UNREGISTERED);
             w.u32(*pid);
             w.u32(*conn);
+            w.bytes(reason);
         }
     }
     w.0
@@ -466,7 +468,7 @@ pub fn decode_host_report(payload: &[u8]) -> Result<HostReport, DecodeError> {
             HREP_HELLO => HostReport::Hello { version: r.u32()? },
             HREP_READY => HostReport::Ready,
             HREP_VIOLATION => HostReport::Violation { pid: r.u32()?, reason: r.bytes()? },
-            HREP_UNREGISTERED => HostReport::Unregistered { pid: r.u32()?, conn: r.u32()? },
+            HREP_UNREGISTERED => HostReport::Unregistered { pid: r.u32()?, conn: r.u32()?, reason: r.bytes()? },
             _ => return Err(DecodeError("不認得的種類")),
         })
     })
@@ -567,7 +569,7 @@ mod tests {
             HostReport::Hello { version: PROTOCOL_VERSION },
             HostReport::Ready,
             HostReport::Violation { pid: 4242, reason: "框太大".as_bytes().to_vec() },
-            HostReport::Unregistered { pid: 4242, conn: 7 },
+            HostReport::Unregistered { pid: 4242, conn: 7, reason: "沒有登記".as_bytes().to_vec() },
         ]
     }
 

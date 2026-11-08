@@ -1383,7 +1383,7 @@ impl Supervisor {
                     }
                 }
                 HostReport::Violation { pid, reason } => self.on_violation(pid, &reason),
-                HostReport::Unregistered { pid, conn } => self.on_unregistered(pid, conn),
+                HostReport::Unregistered { pid, conn, reason } => self.on_unregistered(pid, conn, &reason),
                 _ => {}
             }
         }
@@ -1419,14 +1419,14 @@ impl Supervisor {
     /// 宿主拒了一條 pid 不在它表上的連線，或一條撤過的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
     /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線多半是
     /// 同一個號碼上一個行程留下的。兩種都不是它的錯：不隔離、不寫稽核，只在運作 log 記一行警告，帶 pid 與宿主的連線編號（`conn`，
-    /// 宿主自己的 log 也寫這個號）。其餘的（不是我們的 pid、已經隔離的）照違規記。
-    fn on_unregistered(&mut self, pid: u32, conn: u32) {
+    /// 宿主自己的 log 也寫這個號）。其餘的（不是我們的 pid、已經隔離的）照違規記，稽核的理由是宿主回給那條連線的。
+    fn on_unregistered(&mut self, pid: u32, conn: u32, reason: &[u8]) {
         let live = libc::pid_t::try_from(pid).ok().filter(|&pid| pid > 0).is_some_and(|pid| self.grant_of(pid).is_some());
         if live {
             say!("警告：宿主拒了 pid {pid} 的連線 #{conn}：表還在路上，或是這個號碼上一個行程留下的連線；不隔離、不寫稽核");
             return;
         }
-        self.on_violation(pid, "沒有登記".as_bytes());
+        self.on_violation(pid, reason);
     }
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：

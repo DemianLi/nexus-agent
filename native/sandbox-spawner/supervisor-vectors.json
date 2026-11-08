@@ -314,9 +314,10 @@
       "value": {
         "type": "unregistered",
         "pid": 4242,
-        "conn": 7
+        "conn": 7,
+        "reason": "沒有登記"
       },
-      "hex": "4e9210000007000000"
+      "hex": "4e92100000070000000c000000e6b292e69c89e799bbe8a898"
     }
   ]
 }

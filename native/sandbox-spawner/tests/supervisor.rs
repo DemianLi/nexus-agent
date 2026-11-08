@@ -1422,6 +1422,49 @@ fn conversations_reach_the_host_and_violations_are_audited_and_quarantined() {
     assert!(host_lines(&h).is_empty(), "宿主不因為任何一條連線結束：{:?}", h.audit());
 }
 
+/// 被隔離的對話行程之後每一次被拒都再寫一行稽核，`role` 仍是 `conversation`，身分不再回來：新連線送壞框（`violation`）
+/// 與再送 `hello`（`unregistered`）都一樣。它已經被隔離，所以不算「表還在路上」，不記那行警告。
+#[test]
+fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let b = h.up("b,host-bad-token,host-garbage,host-hello");
+    assert!(wait_until(|| log(&b).len() >= 5), "{:?}", log(&b));
+    assert_eq!(log(&b)[2..], ["host rejected token 不對", "host rejected 框太大", "host rejected 沒有登記"]);
+    let pid = format!("\"pid\":{},", logged_pid(&b, "pid"));
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 3), "{:?}", h.audit());
+    for (line, reason) in lines().iter().zip(["token 不對", "框太大", "沒有登記"]) {
+        assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
+    }
+    assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+}
+
+/// 不是我們起的行程（這裡是測試行程自己）連真的宿主：送 `hello` 報 `unregistered`、送壞框報 `violation`，
+/// 監督行程兩種都寫稽核、`role` 記 `unknown`，不隔離任何人，也不記那行警告。
+#[test]
+fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
+    use nexus_sandbox_spawner::host_protocol::{encode_client_message, hello};
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let a = h.up("a,host-hello");
+    assert!(wait_until(|| log(&a).contains(&"host hello".to_string())), "{:?}", log(&a));
+    let socket = h.dir.join("run/host.sock");
+    for bytes in [frame(&encode_client_message(&hello(&"0".repeat(32)))), frame(&[0xff])] {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream.write_all(&bytes).unwrap();
+        let mut rest = Vec::new();
+        let _ = stream.read_to_end(&mut rest);
+    }
+    let pid = format!("\"pid\":{},", std::process::id());
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
+    assert!(lines()[0].contains("沒有登記"), "{:?}", lines());
+    assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+    let a = log(&a);
+    assert!(a.iter().all(|l| !l.contains("rejected")), "a 沒被波及：{a:?}");
+}
+
 /// 停機順序：前台停准入（等它回答）→ 對話行程 → 宿主 → 前台。
 #[test]
 fn shutdown_stops_admission_first_then_conversations_then_the_host_then_the_front() {
@@ -1565,6 +1608,21 @@ fn a_violation_revokes_the_live_identity_on_the_host() {
     let line = h.audit_line("測試違規");
     assert!(line.contains("\"role\":\"conversation\""), "{line}");
     assert!(!gone(a_pid), "被隔離的對話行程照跑");
+}
+
+/// 已經隔離的對話行程又被報違規：再寫一行稽核，也再送一次 `revoke`（宿主那邊可能又被還排著的 `grant` 登記回去）。
+#[test]
+fn a_second_violation_for_a_quarantined_conversation_is_audited_and_revoked_again() {
+    let mut h = Harness::start(Options { host: fake_host(&["--violate-twice"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let revoke = format!("revoke {a_pid}");
+    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "{:?}", host_log(&h));
+    let pid = format!("\"pid\":{a_pid},");
+    let lines: Vec<String> = h.audit().into_iter().filter(|l| l.contains("測試違規") && l.contains(&pid)).collect();
+    assert_eq!(lines.len(), 2, "{:?}", h.audit());
+    assert!(lines.iter().all(|l| l.contains("\"role\":\"conversation\"")), "{lines:?}");
+    assert!(!gone(a_pid));
 }
 
 /// 真的宿主被殺掉重起：對話行程用原本的 token 重連得上，因為監督行程把整張表重送給新的宿主。
