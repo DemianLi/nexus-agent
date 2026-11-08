@@ -70,7 +70,7 @@ rutis 和 nexus 形狀 B 的主機層同形（Rust 主機＋Node 子行程裡跑
 | `agentLoop.preStep`（waterfall，可改寫或拒絕整步） | agent-instructions `src/index.ts:375`、permission-presets `src/index.ts:244`、skills `src/invocation.ts:104`、time-context `src/index.ts:476` |
 | `registry.middleware.use`（工具 middleware 鏈，順序有意義） | mcp `src/index.ts:358`、`:500`；plan-mode `src/index.ts:757`；sandbox-policy `src/index.ts:318`；workspace-changes `src/index.ts:347` |
 
-數法：在 `packages/nexus-plugin-*/src` 的非測試檔 grep `preStep|middleware|intercept`，再逐行看過。沒走圖譜，也沒有 `check_index_coverage`，所以是「至少 8 個」，不是全部。K7（#2357，middleware 遷成事件與服務，未合）做完後，第二列會改成事件監聽者，仍是 #2336 設計 §八 的 F 類。
+數法：在 `packages/nexus-plugin-*/src` 的非測試檔 grep `preStep|middleware|intercept`，再逐行看過。沒走圖譜，也沒有 `check_index_coverage`，所以是「至少 8 個」，不是全部。這條 grep 漏了 `gate` 這種掛法（也沒搜 `onResult`，但它只觀察、不改寫）；在 `7392e602` 補上重數，會改寫或擋下的是 9 個，清單與數法見 [`core-base-rust-reeval-2026-11-08.md`](core-base-rust-reeval-2026-11-08.md) §三-7。K7（#2357，middleware 遷成事件與服務，未合）做完後，第二列會改成事件監聽者，仍是 #2336 設計 §八 的 F 類。
 
 葉子行程要成立，這 8 個不是把攔截邏輯搬進主機，就是改寫成「按名字呼叫的 RPC」。後者就是 D168 Q9 定為不在 #2336 這一串的那件事。
 
@@ -103,6 +103,6 @@ R1 答「是」時，D149 的說法改成「過渡做法，終點是葉子行程
 - 「Agent Harness 設計選項比較」只讀了與 Cordis、Rust、行程切分有關的段落。
 - rutis 的 `design-function-refs` 與 `design-dsh-bridge` 只讀了前段。
 - Cordis 論文 §6.1、§6.4 沒讀（ADR 自己也註明沒讀）。
-- 本機 rutis clone 停在 `921892d9`，dsh clone 停在 `05b1cae8`，都沒更新。
+- rutis 讀的是上游 `3f87e6b1`（〈讀的版本〉），沒有對本機 clone `921892d9` 核對；dsh 的引用都以 `05b1cae8` 為準，沒有對新版重核。本機兩份 clone 的版本見 [`core-base-rust-reeval-2026-11-08.md`](core-base-rust-reeval-2026-11-08.md)〈讀的版本〉。
 - 8 個攔截插件是 grep 的結果，沒走圖譜。
 - 跨行程的工具呼叫成本只有 C0 的數字，葉子行程的形狀沒有量過。
