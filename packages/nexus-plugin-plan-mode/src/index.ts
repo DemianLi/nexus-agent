@@ -601,7 +601,7 @@ function createExitPlanModeTool(
  *
  * 段掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
  * - 認得出來、是這條 thread 接著的 root 那份日誌 → 讀它的模式。
- * - 認得出來、是別的日誌（子代理、別條 thread）→ 不在計劃模式。照 dsh，子代理讀的是它自己的 session。
+ * - 認得出來、是別的日誌（子代理、別條 thread）→ 不在計劃模式。
  * - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 這條 thread 剛好接了一份就讀它，否則退回初值。
  *   不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜消失，沒有東西會紅。接了不只一份時不猜：
  *   猜一份的話指引會照著別人的模式夾。
@@ -668,9 +668,8 @@ export interface PlanModeMountHost {
  * 把計劃模式掛上去。**樹上那一列（{@link apply}）與相容層的測試外殼共用這一份**，兩邊只差宿主那幾格怎麼接。
  *
  * - **逐條 thread**：會話參與者與指引那一段（{@link mountPlanModeThread}）。
- * - **`exit_plan_mode`**：行程級登記，**不用 `AgentMiddleware` 自帶的 `tools`**。那條路繞過 `toolOrder`，而工具呈現順序是我們自建的機制
- *   （dsh 那邊註冊順序造成過真實 CI flake）。**工具一律註冊，不看模式**，照 dsh：模式沒啟用時它仍然留在面向模型的 schema 裡，
- *   「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。代價是模式關著的時候它是活的 schema、死的執行路徑。
+ * - **`exit_plan_mode`**：行程級登記（`registerTool`），照工具呈現順序排。**一律註冊，不看模式**：模式沒啟用時它仍留在面向模型的
+ *   schema 裡，模式切換不會額外改動工具目錄。代價是模式關著的時候它是活的 schema、死的執行路徑。
  * - **`/plan`**：行程級登記。**命令不進模型**——它是人對工具說的話，結果直接印給打字的人看（`/plan <message>` 的那句話例外：它經
  *   `steer` 成為命令落定後的一輪人話）。要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`）。
  *

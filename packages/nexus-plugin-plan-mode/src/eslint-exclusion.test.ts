@@ -10,7 +10,7 @@
  *
  * 量的是這個套件**真的那份** `eslint.config.js`（`overrideConfigFile`），不是手搭一份相似的設定。違規碼放在記憶體裡、不落成檔：
  * 落地的違規夾具會被 `pnpm -r run lint`、typecheck 與 prettier 掃到（理由同 `packages/nexus-sdk/src/lint.test.ts` 檔頭）；
- * `lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一個檔。
+ * `lintText` 的 `filePath` 是虛擬路徑，決定它被當成哪一個檔——「暫存的違規檔」就是這個。
  */
 
 import { readFileSync } from 'node:fs';

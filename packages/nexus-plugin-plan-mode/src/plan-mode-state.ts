@@ -17,7 +17,7 @@ import type { SessionLog } from '@nexus/session';
  * 一份 root 日誌上的模式。
  *
  * `log` 是寫的那一份，`active()` 是讀的那一份——**兩者是同一份日誌**，讀的那一半是觀察面折出來的，所以 `append` 之後 `active()`
- * 當場就是新的值（觀察面同步送）。
+ * 當場就是新的值（觀察面同步送，見 `@nexus/core` 的 `SessionSubject.observe`）。
  */
 export interface PlanModeSession {
   readonly log: SessionLog;
@@ -26,7 +26,7 @@ export interface PlanModeSession {
 
 // eslint-disable-next-line no-restricted-syntax -- 兩列分屬樹上與相容層、各有自己的 apply，共用的狀態放不進任一邊的閉包；WeakMap 以 root 日誌為鍵，日誌回收就跟著走
 const sessionsByLog = new WeakMap<SessionLog, PlanModeSession>();
-// `exit_plan_mode` 同意之後排著、等下一次模型呼叫交出去的待關。同 dsh 的 `pendingIntents`。
+// `exit_plan_mode` 同意之後排著、等下一次模型呼叫交出去的待關。
 // eslint-disable-next-line no-restricted-syntax -- 理由同上一張表；WeakSet 以模式物件為鍵，收掉那份日誌的模式就跟著走
 const pendingExits = new WeakSet<PlanModeSession>();
 

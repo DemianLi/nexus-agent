@@ -3,14 +3,15 @@
  *
  * 它做兩件事，樹上都還沒有對應的接縫：
  *
- * - **交出待關**：`exit_plan_mode` 同意之後排的那一格（見 `./index.ts` 檔頭「模式在下一個模型步驟之前才關」），在請求組起來之前交出去，佔 dsh `agent/pre-step` 的邊界提交那半（`apps/harness/src/interception-index.test.ts` 第 2 列）。
- * - **補回 `name`**：core 拿掉 `exit_plan_mode` 結果的 `name`（`./index.ts` 的 `EXIT_PLAN_MODE_CONCLUDES_TURN`），送給模型之前補回去。
+ * - **交出待關**：`exit_plan_mode` 同意之後排的那一格（見 `./index.ts` 檔頭「模式在下一個模型步驟之前才關」），在請求組起來之前交出去（`agent/pre-step` 那一格，見 `apps/harness/src/interception-index.test.ts` 第 2 列）。
+ * - **補回 `name`**：core 拿掉沒標記收尾的 `exit_plan_mode` 結果的 `name`（`./index.ts` 的 `EXIT_PLAN_MODE_CONCLUDES_TURN`），送給模型之前補回去。
  *
  * 這是封閉的單一例外，歸 [#2358](https://github.com/DemianLi/nexus-agent/issues/2358)：這個檔不受 SDK lint 管（`eslint.config.js`），
  * `apps/harness/src/migrated-plugin-gate.test.ts` 列舉 plan-mode 的 import，多一個或少一個都紅。
  *
- * 狀態不在這裡：待關與模式由樹上那一列登記在 `./plan-mode-state.ts`，這一格只讀它。**這一列必須緊接在 `plan-mode` 之後**，
- * 兩列成對出現，由宿主在載入清單時檢查（`apps/harness/src/plugin-config.ts`）。
+ * 狀態不在這裡：待關與模式由樹上那一列登記在 `./plan-mode-state.ts`，這一格在模型呼叫前交出待關（`settlePlanModeExit`）。
+ * 兩列成對開關，由宿主在載入清單時檢查（`apps/harness/src/plugin-config.ts` 的 `DEPENDENT_ENTRY_PAIRS`）；出貨清單把它排在
+ * `plan-mode` 正後方。
  *
  * @module
  */
@@ -101,7 +102,7 @@ function createPlanModeMiddleware(registry: PluginRegistry): AgentMiddleware {
 
 /**
  * 相容層那一格。不收設定，所以沒有 `Config`。`plan-mode` 那一列不在時，表裡沒有任何一份日誌，交待關那一半什麼都不做；
- * 宿主仍拒絕這種清單（見檔頭）。
+ * 宿主不會讓這一格單獨掛上：主沒寫就拒絕，主關掉就一併關掉（見檔頭）。
  */
 export const planModeModelCallPlugin: NexusPlugin = {
   name: 'plan-mode-model-call',

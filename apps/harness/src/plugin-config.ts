@@ -321,7 +321,7 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
  */
 export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(PROTECTED_ENTRY_REASONS.keys());
 
-/** 一對主從列，以 `name` 為鍵（理由同 {@link PROTECTED_ENTRY_NAMES}）。 */
+/** 一對主從列，以 `name` 為鍵（理由同 {@link PROTECTED_ENTRY_REASONS}）。 */
 export interface DependentEntryPair {
   /** 主：決定這一對開不開。 */
   readonly primary: string;
