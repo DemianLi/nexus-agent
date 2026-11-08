@@ -61,7 +61,7 @@ async function restricted(code: string, file: string): Promise<string[]> {
 }
 
 describe('SDK lint 在 @nexus/plugin-sandbox-policy 的範圍', () => {
-  it('src/index.ts：現在零違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
+  it('src/index.ts：逐行 eslint-disable（清理在 #2557）之外沒有違規，而且同一份違規碼放在這個路徑會紅（規則真的落在它身上）', async () => {
     const real = readFileSync(`${PACKAGE}src/index.ts`, 'utf8');
     expect(await restricted(real, 'src/index.ts')).toEqual([]);
     expect((await restricted(VIOLATING, 'src/index.ts')).length).toBeGreaterThan(0);
@@ -75,7 +75,7 @@ describe('SDK lint 在 @nexus/plugin-sandbox-policy 的範圍', () => {
     expect(await restricted(VIOLATING, 'src/invariant.ts')).toEqual([]);
   });
 
-  it('排除名單就是那一個檔：src/index.ts 的解析後規則與 SDK 的設定逐條相同，invariant.ts 沒有', async () => {
+  it('排除名單就是那一個檔：src/index.ts 的解析後規則與 SDK 的設定逐條相同，invariant.ts 拿不到 SDK 的 no-restricted-syntax', async () => {
     const config = (await eslint.calculateConfigForFile(`${PACKAGE}src/index.ts`)) as {
       rules?: Record<string, unknown>;
     };

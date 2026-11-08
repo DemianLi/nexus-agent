@@ -34,7 +34,7 @@
  * | 7 | Config 五格（另有 `includeRuntimeContext`、`toolOrder`） | 三格 | 另兩格管執行期上下文與工具段，第一刀沒有 |
  * | 8 | 沒有 `cwd` 變數 | 有，而且出貨值（`cordis.yml` 的後綴）依賴它 | 我們的出貨文案引用了 `{{cwd}}`；要不要拿掉不在 #1477。見 `@nexus/plugin-system-prompt` 檔頭 |
  * | 9 | 渲染時才嚴格插值、才拋，訊息是英文 | **掛載當下**驗語法與名字（寫壞起不來，#720），渲染照 `interpolateStrict`，訊息是中文 | #1446 Q1 (a)：遷移卡不改行為，#720 由 demian 拍板 |
- * | 10 | section 的 order 任意 | 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交純字串的 `PLUGIN_POLICY` 不算 |
+ * | 10 | section 的 order 任意 | 只收 ≤ `DEPLOYMENT_PERSONA_PREFIX` 或 ≥ `DEPLOYMENT_PERSONA_SUFFIX`，中間的登記時拋 | 帶 `complete`／`interpolate` 的中間段與由服務組裝的中間段，渲染規則留給第一個用到它的遷移卡；插件經 `thread.section()` 交、不經這個服務的 `PLUGIN_POLICY` 中段不算 |
  *
  * **撤除條件**：第 1、4、6、9 列各有各的卡（中間段、逐步 `assemble`、渲染時才拋）；撤除時先重審這張表。
  *
