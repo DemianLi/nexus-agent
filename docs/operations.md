@@ -1661,6 +1661,43 @@ nexus-agent serve --process-model per-thread
   轉送前一律刪掉客戶端帶來的同名標頭。對話行程只在 `run/` 的 socket 上讀這個標頭，TCP 入口從不讀它。擁有者檢查前台先擋一次、對話行程再核一次；
   轉送中的嵌入版下行由前台每秒對一次身分對應表，從表上拿掉的人 2 秒內斷線，稽核同 `single`。
 
+### 宿主 `nexus-host`
+
+`per-thread` 下，監督行程除了前台與對話行程，還會起一個宿主 `nexus-host`（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)），整台只有一個。
+它聽 home 底下的 `run/host.sock`，連線時驗明對方是誰。
+
+- **執行檔要跟監督行程放在同一個目錄**：`supervisorBinary` 指到哪，`nexus-host` 就要在它旁邊。兩支由同一個 crate 編出來，找不到宿主就拒起。
+  setuid／setgid 的限制同監督行程。
+- **連線身分**：監督行程起前台或對話行程時，替它發一個 token。token 只經控制通道交給那個行程，同時把 pid、token、角色與 thread 送給宿主；
+  不放環境變數，也不放命令列。宿主用 `SO_PEERCRED` 取得連線的 pid，與身分表對照：pid 不在表上，或 token 不對，就拒絕連線。
+  客戶端自己報的 thread 宿主不看。行程結束時，監督行程收屍之前先撤掉它的身分，所以 pid 被重用時，新行程拿不到舊身分。
+  - 違反協定的連線（token 或版本不對、重複的 hello、壞框、超過 256 KiB 的框）只斷那一條，稽核記一行 `"event":"protocol"`。
+    那個 pid 的身分接著被隔離，到它結束為止，它的其他連線一起斷。
+  - 不在身分表上的 pid（例如沒宣告 sandbox 的 MCP stdio 伺服器拿到別人的 token 來連）同樣被拒、同樣記一行，`role` 是 `unknown`。
+- **重起**：宿主結束之後照退避重起：第一次等 1 秒，之後每次加倍，最長 30 秒；活過 60 秒才結束的，下一次回到 1 秒。
+  重起之後，監督行程把整張身分表重送一次，已經在跑的前台與對話行程拿原本的 token 重連就好。
+  - 宿主在 `ready` 之前連續失敗 5 次，整台停機，結束碼 4。起了 30 秒還沒 `ready` 的，殺掉，也算一次失敗。
+  - `ready` 之後才死的不算進這個次數，一律照退避重起，不會讓整台停機。
+- **剩下的風險：每 30 秒重起一次**。宿主自己的 bug 若被某個合法的框反覆觸發，宿主每次 `ready` 之後都會死、活不過 60 秒，
+  於是退避停在最長的 30 秒，一直重起下去，整台不會停。從稽核紀錄認得出來：
+
+  ```bash
+  jq -c 'select(.role == "host") | {ts_ms, pid, ready, exit_code, signal, error}' "$NEXUS_AGENT_HOME/supervisor-audit.jsonl" | tail -n 20
+  ```
+
+  一直有新的 `ready: true` 行、兩行的 `ts_ms` 間隔約 30 秒多、`exit_code` 或 `signal` 每次都一樣，就是這種情況。
+  監督行程的標準錯誤同時會一再出現「宿主 30000 ms 後重起」。這時要做的是把宿主的結束碼或訊號回報給維護者，重起 serve 救不了。
+- **停機順序**：收到 `SIGTERM` 時，監督行程先請前台停收新的請求，等它回「已停」，最多等 5 秒。
+  接著依序收對話行程、宿主、前台。停機中再收到一次停止訊號，所有對話行程與宿主當場 `SIGKILL`。
+- **版本對不上**：前台、對話行程與宿主起來時，第一框都要是同一個協定版本的 hello。
+  - 對話行程對不上：當場殺掉，死因是 `protocol`。
+  - 前台或宿主對不上：重起它也還是同一支執行檔，所以整台停機，結束碼 3。看到 3，多半是升級時只換了其中一支執行檔，
+    或 `supervisorBinary` 指到舊版。
+- **`supervisor-audit.jsonl` 只追加**，0600，不能是連結。
+  - 每個行程結束寫一行，用 `role`（`conversation`、`front`、`host`）分辨；事件寫一行，用 `event`（目前只有 `protocol`）分辨。
+  - 欄位與值只加不改：讀它的工具遇到不認得的欄位或死因要略過，不要報錯。對話行程的死因（`cause`）多了 `protocol`。
+  - 這份檔是稽核用的，serve 不讀、不輪替、不截斷。要清，先停 serve 再處理。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEATH_CAUSES,
+  PROTOCOL_VERSION,
   SupervisorProtocolError,
   type ConversationCommand,
   type ConversationReport,
@@ -37,6 +38,7 @@ const VECTORS = JSON.parse(
     'utf8',
   ),
 ) as {
+  protocolVersion: number;
   conversationCommands: Vector<ConversationCommand>[];
   conversationReports: Vector<ConversationReport>[];
   frontRequests: Vector<FrontRequest>[];
@@ -61,13 +63,14 @@ const CODECS: Record<string, AnyCodec> = {
     vectors: VECTORS.conversationCommands,
     encode: encodeConversationCommand,
     decode: decodeConversationCommand,
-    types: { bind: true, drain: true },
+    types: { hello: true, bind: true, drain: true },
   }),
   conversationReports: codec<ConversationReport>({
     vectors: VECTORS.conversationReports,
     encode: encodeConversationReport,
     decode: decodeConversationReport,
     types: {
+      hello: true,
       ready: true,
       bound: true,
       turn: true,
@@ -81,13 +84,20 @@ const CODECS: Record<string, AnyCodec> = {
     vectors: VECTORS.frontRequests,
     encode: encodeFrontRequest,
     decode: decodeFrontRequest,
-    types: { ensure: true, release: true },
+    types: { hello: true, ensure: true, release: true, 'admission-stopped': true },
   }),
   frontEvents: codec<FrontEvent>({
     vectors: VECTORS.frontEvents,
     encode: encodeFrontEvent,
     decode: decodeFrontEvent,
-    types: { up: true, down: true, capacity: true, stats: true },
+    types: {
+      hello: true,
+      'stop-admission': true,
+      up: true,
+      down: true,
+      capacity: true,
+      stats: true,
+    },
   }),
 };
 
@@ -96,6 +106,10 @@ const cases = Object.entries(CODECS).flatMap(([group, c]) =>
 );
 
 describe('supervisor-protocol', () => {
+  it('協定版本跟向量檔（也就是 Rust 那一側）相同', () => {
+    expect(PROTOCOL_VERSION).toBe(VECTORS.protocolVersion);
+  });
+
   it.each(cases)('%s 照向量檔編碼', (_, c, { value, hex }) => {
     expect(c.encode(value).toString('hex')).toBe(hex);
   });
@@ -152,7 +166,7 @@ describe('supervisor-protocol', () => {
     const ensure = encodeFrontRequest({ type: 'ensure', threadId: '', open: 'run' });
     ensure[ensure.length - 1] = 2;
     expect(() => decodeFrontRequest(ensure)).toThrow('不認得的打開方式');
-    for (const code of [0, 8, 255]) {
+    for (const code of [0, DEATH_CAUSES.length + 1, 255]) {
       const down = encodeFrontEvent({ type: 'down', threadId: '', cause: 'heap' });
       down[down.length - 1] = code;
       expect(() => decodeFrontEvent(down)).toThrow('不認得的死因');
