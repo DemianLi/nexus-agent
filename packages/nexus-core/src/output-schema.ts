@@ -13,16 +13,14 @@
  * （[#252](https://github.com/DemianLi/nexus-agent/issues/252)）。
  *
  * **宣告跟著工具走**：`registry.tools.register(tool, { outputSchema })`，同 dsh「`output` 是
- * `defineTool` 的一個欄位」。fold 打底一份實例進 root 與每個 subagent，每次呼叫從
- * `call.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
+ * `defineTool` 的一個欄位」。fold 打底一份進 root 與每個 subagent，每次呼叫從
+ * `site.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
  * 不以名字查**：同名的工具在不同層可以是不同的東西，fold 換上去的拒絕樁也是另一顆實例。
  *
- * **時刻：dsh 的 `createSuccessResult`，在 `tools/post-execute` 之前。** 載體是掛在
- * `tools/execute` 位置的一個 `wrapToolCall`（{@link outputSchemaToolStep}），真正做事的是 `await next()` **之後**那一段——
- * 兩個時刻在我們這側共用一個載體，索引見 `apps/harness/src/interception-index.test.ts`。
- * 位置由 fold 決定——每一個
- * plugin middleware 的內側，所以看到的是工具原本的輸出，不是外層改過的版本。以前那個
- * 「只有 `prepend` 一根槓桿、最內只能靠註冊在最後」的缺口因此不在了。
+ * **時刻：在 `tools/post-execute` 之前。** 它是 `tools/execute` 內層的一位 core 監聽者
+ * （{@link createOutputSchemaListener}），在每一位插件監聽者內側、只有撞到輸出上限的 `task` 替換（`max-tokens.ts` 的 `createMaxTokensListener`）在它更內側；真正做事的是 `await next()`
+ * **之後**那一段，所以每一位 `tools/execute` 插件監聽者與 `tools/post-execute` 看到的都是驗過的結果。時刻索引見
+ * `apps/harness/src/interception-index.test.ts`。
  *
  * ## 兩條對 dsh 的偏離
  *
@@ -44,16 +42,11 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import { Command, isCommand } from '@langchain/langgraph';
 import type { ZodType } from 'zod';
-import type { AgentMiddleware } from './base-types.js';
-import { createToolCallStepMiddleware, toolNameOfCall } from './tool-call-step.js';
-import type { ToolCallStep } from './tool-call-step.js';
-import { INVALID_TOOL_OUTPUT, toolRefusal } from './tool-events.js';
-
-/** 校驗 middleware 的名字。 */
-export const OUTPUT_SCHEMA_MIDDLEWARE_NAME = 'nexusToolOutputSchema';
+import { toolNameOfCall } from './tool-call-step.js';
+import { INVALID_TOOL_OUTPUT, TOOL_ERROR_PREFIX } from './tool-events.js';
+import { freshTextResult } from './tool-pipeline.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
 
 /** 一顆工具實例 → 它註冊時宣告的輸出 schema；沒宣告就是 `undefined`。 */
 export type OutputSchemaLookup = (tool: unknown) => ZodType | undefined;
@@ -112,94 +105,45 @@ function verify(toolName: string, content: unknown, schema: ZodType): Verdict {
   return { ok: false, feedback: formatSchemaViolation(toolName, issues) };
 }
 
-/**
- * 造一則取代原輸出的 error ToolMessage。帶 `Error: `：dsh 的 `ToolOutputError` 是用拋的
- * （`packages/core/tools/src/index.ts:506-511`），由 `toolErrorResult` 渲染（#318）。
- */
-function reject(feedback: string, toolCallId: string, toolName: string): ToolMessage {
-  return toolRefusal(feedback, { callId: toolCallId, name: toolName });
-}
-
-/**
- * 同 {@link reject}，**另外標上 `INVALID_TOOL_OUTPUT`**，給會話日誌的 `tool/result` 讀
- * （[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。只有 schema 真的不合才標；
- * 校驗器自己壞掉那一格不標——那是我們的 bug，不是工具的輸出不合。
- */
-function rejectOutput(feedback: string, toolCallId: string, toolName: string): ToolMessage {
-  return toolRefusal(feedback, {
-    callId: toolCallId,
-    name: toolName,
+/** 輸出不合時交回的那則：新造一則錯誤，帶 `INVALID_TOOL_OUTPUT`，給會話日誌的 `tool/result` 讀（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。 */
+function rejectOutput(feedback: string): PipelineExecuteResult {
+  return freshTextResult('message', TOOL_ERROR_PREFIX + feedback, {
+    isError: true,
     error: { name: 'ToolOutputError', code: INVALID_TOOL_OUTPUT },
   });
 }
 
-/**
- * 造一個驗工具輸出的 middleware。fold 打底一份，root 與每個 subagent 共用——它無狀態，
- * schema 每次從那一顆工具實例現查。
- *
- * @param schemaOf - 工具實例 → 它宣告的 schema。
- * @returns 交給 fold 排位置的 middleware。
- */
-export function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): AgentMiddleware {
-  return createToolCallStepMiddleware(
-    OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-    outputSchemaToolStep(schemaOf),
-  );
+/** 校驗器自己壞掉時交回的那則：新造一則錯誤，**不掛碼**——那是我們的 bug，不是工具的輸出不合。 */
+function reject(feedback: string): PipelineExecuteResult {
+  return freshTextResult('message', TOOL_ERROR_PREFIX + feedback, { isError: true });
 }
 
 /**
- * 驗工具輸出的一步：往內交，工具宣告了 schema 就驗結果，不通過換成錯誤結果。
+ * 造驗工具輸出的 `tools/execute` core 監聽者。fold 打底一份，root 與每個 subagent 共用——它無狀態，
+ * schema 每次從那一顆工具實例（`site.tool`）現查。
+ *
+ * 往內交，工具宣告了 schema 就驗結果；已經是錯誤的不驗：
+ * - 本體回 `ToolMessage`：驗那則；
+ * - 本體回 `Command`：驗裡面屬於這次呼叫的那則（`command` 視圖的內容），沒有那一則就放行。**不通過就整個 `Command` 不採用**：
+ *   `Command` 除了訊息還可能帶狀態更新，那些更新正是那個不合格的輸出算出來的，只換掉訊息會留下半套；
+ * - 驗的是 `content` 原本的字串；原本是陣列（`shape: 'blocks'`）判為不合。
  *
  * @param schemaOf - 工具實例 → 它宣告的 schema。
- * @returns 這一步。
+ * @returns 交給 fold 排進 `tools/execute` 內層的監聽者。
  */
-export function outputSchemaToolStep(schemaOf: OutputSchemaLookup): ToolCallStep {
-  return async (call, next) => {
+export function createOutputSchemaListener(
+  schemaOf: OutputSchemaLookup,
+): CoreToolListener<'tools/execute'> {
+  return async (_exec, next, site) => {
     const result = await next();
-    const schema = schemaOf(call.tool);
-    if (schema === undefined) return result;
-    const toolName = toolNameOfCall(call);
-    const toolCallId = call.callId ?? '';
+    const schema = schemaOf(site.tool);
+    if (schema === undefined || result.isError || result.content === undefined) return result;
+    const toolName = toolNameOfCall(site);
     try {
-      if (ToolMessage.isInstance(result)) {
-        if (result.status === 'error') return result;
-        const verdict = verify(toolName, result.content, schema);
-        return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
-      }
-      if (isCommand(result)) {
-        // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
-        // 就是 `Command`，ToolMessage 埋在 `update.messages` 裡。基座自己的
-        // `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
-        return validateCommand(result, toolName, toolCallId, schema);
-      }
-      return result;
+      const verdict = verify(toolName, result.shape === 'blocks' ? [] : result.content, schema);
+      return verdict.ok ? result : rejectOutput(verdict.feedback);
     } catch (error) {
-      return reject(formatValidatorFailure(toolName, error), toolCallId, toolName);
+      return reject(formatValidatorFailure(toolName, error));
     }
   };
-}
-
-/**
- * 驗一個 `Command` 裡夾帶的 ToolMessage。**不通過就整個 Command 不採用**：Command 除了訊息
- * 還可能帶 state 更新，而那些更新正是那個不合格的輸出算出來的——只換掉訊息會留下半套。
- */
-function validateCommand(
-  command: Command,
-  toolName: string,
-  toolCallId: string,
-  schema: ZodType,
-): Command | ToolMessage {
-  const update: unknown = command.update;
-  const messages =
-    typeof update === 'object' && update !== null && 'messages' in update
-      ? (update as { messages: unknown }).messages
-      : undefined;
-  if (!Array.isArray(messages)) return command;
-  for (const message of messages) {
-    if (!ToolMessage.isInstance(message)) continue;
-    if (message.status === 'error') continue;
-    const verdict = verify(toolName, message.content, schema);
-    if (!verdict.ok) return rejectOutput(verdict.feedback, toolCallId, toolName);
-  }
-  return command;
 }

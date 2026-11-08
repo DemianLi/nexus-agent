@@ -23,8 +23,7 @@ import { shippedPlugins, shippedServePlugins, withScriptedModel } from './fixtur
  * - loop 自己做的：barrier、圍堵；
  * - 工具事件由 loop 派發的點：pre-execute、execute、post-execute；
  * - 核准不搬上匯流排（#1466）：核准閘門；
- * - 維持登記一步的：invalidToolArgs、readContinuation、背景委派、host-tools（#2522），outputSchema、maxTokens、
- *   sharedReadMark，turnCancel（併進 loop，TODO(#2363)）；
+ * - 維持登記一步的：invalidToolArgs、readContinuation、背景委派、host-tools（#2522），turnCancel（併進 loop，TODO(#2363)）；
  * - 基座帶進來的：基座 Filesystem 的工具結果搬檔。
  */
 const TOOL_STEPS_IN_PLACE = [
@@ -33,13 +32,10 @@ const TOOL_STEPS_IN_PLACE = [
   'nexusApprovalGate',
   'nexusBackgroundDelegation',
   'nexusInvalidToolArgs',
-  'nexusMaxTokens',
   'nexusReadContinuation',
-  'nexusSharedReadMark',
   'nexusToolBarrier',
   'nexusToolExecute',
   'nexusToolFailureContainment',
-  'nexusToolOutputSchema',
   'nexusToolPostExecute',
   'nexusToolPreExecute',
   'nexusTurnCancel',

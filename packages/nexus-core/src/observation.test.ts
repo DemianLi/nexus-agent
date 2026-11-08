@@ -23,9 +23,11 @@ import {
   OBSERVATION_SECTION,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
+import { EventBus } from './events.js';
 import { applySections } from './prompt-sections.js';
 import { TOOL_ERROR_PREFIX, toolErrorOf, toolRefusal } from './tool-events.js';
 import { createToolExecuteMiddleware } from './tool-pipeline.js';
+import type { PipelineResult } from './tool-pipeline.js';
 
 /** 正式組裝裡策略住的位置：`tools/execute` 的內層。 */
 function createObservationPolicy(backend: AnyBackendProtocol): unknown {
@@ -148,6 +150,26 @@ describe('三個狀態', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/nope.md'), handler);
     await wrap(requestFor(OBSERVED_WRITE_TOOL, '/nope.md'), handler);
     expect(calls).toEqual([OBSERVED_READ_TOOL, OBSERVED_WRITE_TOOL]);
+  });
+});
+
+describe('拒絕交回的結果帶 `blocks` 與 `shape`：外側的 `next()` 照型別讀得到', () => {
+  it('沒觀測過就 edit：外側拿到的拒絕有 `content` 那一格 `text`，模型收到的仍是字串', async () => {
+    const { backend } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const bus = new EventBus();
+    let seen: PipelineResult | undefined;
+    bus.on('tools/execute', async (_exec, next) => (seen = await next()));
+    const wrap = wrapperOf(
+      createToolExecuteMiddleware(bus, { inner: [createObservationListener(backend)] }),
+    );
+    const { handler } = probe();
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(seen).toMatchObject({ kind: 'message', shape: 'text', isError: true });
+    expect(seen?.kind === 'message' && seen.blocks).toEqual([
+      { type: 'text', text: seen?.content },
+    ]);
+    expect(typeof result.content).toBe('string');
+    expect(result.content).toBe(seen?.content);
   });
 });
 

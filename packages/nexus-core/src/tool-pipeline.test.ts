@@ -22,10 +22,11 @@ import {
   createToolExecuteMiddleware,
   createToolPostExecuteMiddleware,
   createToolPreExecuteMiddleware,
+  freshTextResult,
   pipelineTextOf,
   toolResultView,
 } from './tool-pipeline.js';
-import type { PipelineExecution, PipelineResult } from './tool-pipeline.js';
+import type { PipelineExecution, PipelineResult, PipelineResultView } from './tool-pipeline.js';
 import { TurnCancelledError } from './turn-cancel.js';
 
 type Handler = (request: unknown) => Promise<unknown>;
@@ -277,6 +278,7 @@ describe('tools/execute 的生產者', () => {
         kind: 'message',
         blocks: [{ type: 'text', text: '沒這顆' }],
         content: '沒這顆',
+        shape: 'text',
         isError: true,
         error: { name: 'ToolNotFoundError', code: UNKNOWN_TOOL },
       },
@@ -396,7 +398,7 @@ describe('tools/execute 的生產者', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('叫了 `next()`、本體回 `Command`，卻交回另造的 `command` 結果 → 拋 TypeError，訊息說不是 next() 回的那一個', async () => {
+  it('叫了 `next()`、本體回不含這次呼叫那則的 `Command`，卻交回另造的 `command` 結果 → 拋 TypeError，訊息說不是 next() 回的那一個', async () => {
     const bus = new EventBus();
     bus.on('tools/execute', async (_exec, next) => {
       const view = await next();
@@ -404,7 +406,7 @@ describe('tools/execute 的生產者', () => {
     });
     const wrap = wrapperOf(createToolExecuteMiddleware(bus));
     const command = new Command({
-      update: { messages: [new ToolMessage({ content: '好', tool_call_id: 'call-1' })] },
+      update: { messages: [new ToolMessage({ content: '好', tool_call_id: 'call-2' })] },
     });
     const failure = wrap(requestFor(), async () => command);
     await expect(failure).rejects.toBeInstanceOf(TypeError);
@@ -544,6 +546,336 @@ describe('tools/execute 交回改過的結果：內容的形狀', () => {
   });
 });
 
+describe('視圖的 `shape` 與 `command` 視圖的內容', () => {
+  it('字串內容是 `text`、陣列內容是 `blocks`', () => {
+    const text = toolResultView(
+      new ToolMessage({ content: '一', tool_call_id: 'call-1' }),
+      'call-1',
+    );
+    const blocks = toolResultView(
+      new ToolMessage({ content: [{ type: 'text', text: '一' }], tool_call_id: 'call-1' }),
+      'call-1',
+    );
+    expect(text).toMatchObject({ kind: 'message', shape: 'text', content: '一' });
+    expect(blocks).toMatchObject({ kind: 'message', shape: 'blocks', content: '一' });
+  });
+
+  it('`Command` 裡有這次呼叫那則：視圖帶它的內容與形狀；別的呼叫的訊息不算', () => {
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({ content: '別人的', tool_call_id: 'call-2' }),
+          new ToolMessage({ content: [{ type: 'text', text: '我的' }], tool_call_id: 'call-1' }),
+          new HumanMessage('附帶的'),
+        ],
+      },
+    });
+    expect(toolResultView(command, 'call-1')).toEqual({
+      kind: 'command',
+      blocks: [{ type: 'text', text: '我的' }],
+      content: '我的',
+      shape: 'blocks',
+      isError: false,
+    });
+  });
+
+  it('`Command` 裡沒有這次呼叫那則：視圖不帶內容三格', () => {
+    const command = new Command({ update: { messages: [new HumanMessage('附帶的')] } });
+    const view = toolResultView(command, 'call-1');
+    expect(view).toEqual({ kind: 'command', isError: false });
+    expect(Object.keys(view)).toEqual(['kind', 'isError']);
+  });
+});
+
+describe('tools/execute 交回帶內容的 `command` 結果：只換 `Command` 裡這次呼叫那則', () => {
+  /** 本體回的 `Command`：前後各一則別人的訊息，這次呼叫那則帶 `artifact`、`id`。 */
+  function bodyCommand(): Command {
+    return new Command({
+      graph: Command.PARENT,
+      goto: 'next-node',
+      update: {
+        files: { '/a': '寫了' },
+        messages: [
+          new HumanMessage('前面的'),
+          new ToolMessage({
+            content: '子代理說完了',
+            tool_call_id: 'call-1',
+            name: 'probe',
+            artifact: { kept: true },
+            id: 'msg-1',
+          }),
+          new HumanMessage('後面的'),
+        ],
+      },
+    });
+  }
+
+  function messagesOf(result: unknown): unknown[] {
+    return ((result as Command).update as { messages?: unknown[] } | undefined)?.messages ?? [];
+  }
+
+  it('那則在原位換掉，`update` 其餘鍵與 `graph`、`goto` 原樣；沒帶 `fresh` 時沿用 `artifact`、`id`', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', content: 'Error: 撞限', isError: true };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const original = bodyCommand();
+    const result = (await wrap(requestFor(), async () => original)) as Command;
+    expect(result).not.toBe(original);
+    expect(result.graph).toBe(Command.PARENT);
+    expect(result.goto).toEqual(original.goto);
+    expect((result.update as { files?: unknown }).files).toEqual({ '/a': '寫了' });
+    const [before, replaced, after] = messagesOf(result);
+    expect(before).toBe(messagesOf(original)[0]);
+    expect(after).toBe(messagesOf(original)[2]);
+    expect(messagesOf(result)).toHaveLength(3);
+    expect(ToolMessage.isInstance(replaced)).toBe(true);
+    const message = replaced as ToolMessage;
+    expect(message.content).toBe('Error: 撞限');
+    expect(message.status).toBe('error');
+    expect(message.tool_call_id).toBe('call-1');
+    expect(message.artifact).toEqual({ kept: true });
+    expect(message.id).toBe('msg-1');
+  });
+
+  it('帶 `fresh: true`：那則是新造的，不帶 `artifact`、`id`', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', content: 'Error: 撞限', isError: true, fresh: true };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const result = await wrap(requestFor(), async () => bodyCommand());
+    const message = messagesOf(result)[1] as ToolMessage;
+    expect(message.content).toBe('Error: 撞限');
+    expect(message.name).toBe('probe');
+    expect(message.artifact).toBeUndefined();
+    expect(message.id).toBeUndefined();
+  });
+
+  it('`Command` 裡沒有這次呼叫那則：加在 `update.messages` 最後', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', content: '補上的', isError: false };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const human = new HumanMessage('附帶的');
+    const result = await wrap(
+      requestFor(),
+      async () => new Command({ update: { messages: [human] } }),
+    );
+    const [first, added] = messagesOf(result);
+    expect(first).toBe(human);
+    expect((added as ToolMessage).content).toBe('補上的');
+    expect((added as ToolMessage).tool_call_id).toBe('call-1');
+  });
+
+  it('`{ ...view }` 換掉 `content`：形狀照原本那則（陣列就給一格文字）', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      const view = await next();
+      return { ...view, content: '換了' };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({
+            content: [
+              { type: 'text', text: '原本' },
+              { type: 'image_url', image_url: 'x' },
+            ],
+            tool_call_id: 'call-1',
+          }),
+        ],
+      },
+    });
+    const result = await wrap(requestFor(), async () => command);
+    expect((messagesOf(result)[0] as ToolMessage).content).toEqual([
+      { type: 'text', text: '換了' },
+    ]);
+  });
+
+  it('本體回的 `Command` 的 `update` 不是物件、或回的不是 `Command` → 換成新造的一則', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'command', content: '換了', isError: true };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    for (const raw of [new Command({ update: [['messages', []]] }), '純文字']) {
+      const result = (await wrap(requestFor(), async () => raw)) as ToolMessage;
+      expect(ToolMessage.isInstance(result)).toBe(true);
+      expect(result.content).toBe('換了');
+      expect(result.status).toBe('error');
+    }
+  });
+
+  it('本體沒跑（短路）就交回帶內容的 `command` 結果 → 照舊拋「工具本體沒有跑」', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', () =>
+      Promise.resolve({ kind: 'command' as const, content: '換了', isError: false }),
+    );
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    await expect(wrap(requestFor(), async () => bodyCommand())).rejects.toThrow(
+      'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）',
+    );
+  });
+});
+
+describe('tools/execute 交回 `fresh: true` 的 `message` 結果：新造一則', () => {
+  function bodyMessage(): ToolMessage {
+    return new ToolMessage({
+      content: '{"ok":1}',
+      tool_call_id: 'call-1',
+      name: 'probe',
+      artifact: { raw: true },
+      id: 'msg-1',
+      additional_kwargs: { extra: 1 },
+    });
+  }
+
+  it('本體回 `ToolMessage`：不沿用 `artifact`、`id`、`additional_kwargs`，碼照交回的', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return {
+        kind: 'message',
+        content: 'Error: 不合',
+        isError: true,
+        error: { name: 'ToolOutputError', code: 'X' },
+        fresh: true,
+      };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const message = (await wrap(requestFor(), async () => bodyMessage())) as ToolMessage;
+    expect(message.content).toBe('Error: 不合');
+    expect(message.status).toBe('error');
+    expect(message.name).toBe('probe');
+    expect(message.artifact).toBeUndefined();
+    expect(message.id).toBeUndefined();
+    expect(message.additional_kwargs).toEqual({});
+    expect(toolErrorOf(message)).toEqual({ name: 'ToolOutputError', code: 'X' });
+  });
+
+  it('沒帶 `fresh`：照舊沿用本體那則的 `artifact`、`id`、`additional_kwargs`', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'message', content: 'Error: 不合', isError: true };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const message = (await wrap(requestFor(), async () => bodyMessage())) as ToolMessage;
+    expect(message.artifact).toEqual({ raw: true });
+    expect(message.id).toBe('msg-1');
+    expect(message.additional_kwargs).toEqual({ extra: 1 });
+  });
+
+  it('本體回 `Command`：整個 `Command` 不採用，換成新造的那一則', async () => {
+    const bus = new EventBus();
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return { kind: 'message', content: 'Error: 不合', isError: true, fresh: true };
+    });
+    const wrap = wrapperOf(createToolExecuteMiddleware(bus));
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({ content: '好', tool_call_id: 'call-1' }),
+          new HumanMessage('附帶的'),
+        ],
+      },
+    });
+    const result = await wrap(requestFor(), async () => command);
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect((result as ToolMessage).content).toBe('Error: 不合');
+  });
+});
+
+describe('core 監聽者造的文字結果（`freshTextResult`）：`blocks` 認參照', () => {
+  /** 內層 core 監聽者把結果換成新造的一則文字，外側那位插件監聽者照 `reshape` 交回。本體回字串內容的 `ToolMessage`。 */
+  async function run(
+    reshape: (result: PipelineResult) => PipelineResult | Record<string, unknown>,
+  ): Promise<{ message: ToolMessage; seen: PipelineResult }> {
+    const bus = new EventBus();
+    let seen: PipelineResult | undefined;
+    bus.on('tools/execute', async (_exec, next) => {
+      seen = await next();
+      return reshape(seen) as PipelineResult;
+    });
+    const wrap = wrapperOf(
+      createToolExecuteMiddleware(bus, {
+        inner: [
+          async (_exec, next) => {
+            await next();
+            return freshTextResult('message', 'Error: 換掉了', { isError: true });
+          },
+        ],
+      }),
+    );
+    const message = (await wrap(
+      requestFor(),
+      async () => new ToolMessage({ content: '原本', tool_call_id: 'call-1', name: 'probe' }),
+    )) as ToolMessage;
+    return { message, seen: seen as PipelineResult };
+  }
+
+  it('外側的 `next()` 拿到完整的結果：`blocks` 是 `content` 那一格，`shape` 是 `text`', async () => {
+    const { seen } = await run((result) => result);
+    expect(seen).toMatchObject({
+      kind: 'message',
+      content: 'Error: 換掉了',
+      blocks: [{ type: 'text', text: 'Error: 換掉了' }],
+      shape: 'text',
+      isError: true,
+    });
+  });
+
+  it('原樣交回：落成字串', async () => {
+    const { message } = await run((result) => result);
+    expect(message.content).toBe('Error: 換掉了');
+  });
+
+  it('只換 `content`、`blocks` 照原參照帶著：落成新的字串', async () => {
+    const { message } = await run((result) => ({ ...result, content: 'Error: 外側改的' }));
+    expect(message.content).toBe('Error: 外側改的');
+  });
+
+  it('把 `blocks` 複製一份（`[...blocks]`）再交回：算給了新的區塊，落成陣列', async () => {
+    const { message } = await run((result) =>
+      result.kind === 'message' ? { ...result, blocks: [...result.blocks] } : result,
+    );
+    expect(message.content).toEqual([{ type: 'text', text: 'Error: 換掉了' }]);
+  });
+});
+
+describe('型別：只帶舊欄位的值照樣編得過', () => {
+  it('不帶 `shape` 的 `PipelineResult`、`tools/execute` 的交回值', async () => {
+    const result: PipelineResult = { kind: 'message', blocks: [], content: '', isError: false };
+    const command: PipelineResult = { kind: 'command', isError: false };
+    const bus = new EventBus();
+    bus.on('tools/execute', async () => result);
+    bus.on('tools/execute', async () => ({ kind: 'message', content: '舊的', isError: false }));
+    bus.on('tools/execute', async () => ({ kind: 'message', blocks: [], isError: false }));
+    bus.on('tools/execute', async (_exec, next) => {
+      await next();
+      return command;
+    });
+    const view: PipelineResultView = toolResultView(
+      new ToolMessage({ content: '一', tool_call_id: 'call-1' }),
+      'call-1',
+    );
+    const widened: PipelineResult = view;
+    // @ts-expect-error 視圖的 `shape` 必填。
+    const missing: PipelineResultView = result;
+    expect([widened, missing, command]).toHaveLength(3);
+    expect(bus.count('tools/execute')).toBe(4);
+  });
+});
+
 describe('tools/post-execute 的生產者', () => {
   it('沒有監聽者 → 直通，原物件、碼還在', async () => {
     const wrap = wrapperOf(createToolPostExecuteMiddleware(new EventBus()));
@@ -669,6 +1001,7 @@ describe('tools/post-execute 的生產者', () => {
         kind: 'message',
         blocks: [{ type: 'text', text: 'Error: 工具 probe 執行失敗：壞了' }],
         content: 'Error: 工具 probe 執行失敗：壞了',
+        shape: 'text',
         isError: true,
       },
     ]);

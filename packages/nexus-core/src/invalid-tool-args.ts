@@ -49,7 +49,7 @@
  *
  * 排在 `turnCancelModelSignal` 之前（那一顆只有 `wrapModelCall`，而且只綁訊號）。核准閘門與 plugin
  * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在其餘
- * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**比它更內側的只有 {@link ./max-tokens.ts}**
+ * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**模型那一側比它更內側、會動回覆裡工具呼叫的只有 {@link ./max-tokens.ts}**
  * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
  * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
@@ -68,8 +68,8 @@
  * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
  * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
  *
- * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 {@link ./max-tokens.ts}，它只看 `task`、
- * 原樣交回結果）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
+ * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（工具那一側比它更內側的只有 `tools/execute` 那一顆：它的監聽者讀得到請求，
+ * 但往內交的 `next()` 不收參數，換不了 `request.tool`）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
  * `request.tool`。哪天有一層只改名不設工具，基座會按新名字找到工具，這裡卻還以為沒有。
  *
  * ## 登記的偏離

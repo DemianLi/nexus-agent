@@ -1,5 +1,5 @@
 /**
- * 輸出 schema 校驗 middleware 自己的邏輯——直接餵它一個假的 `handler`，看它把什麼交回來。
+ * 輸出 schema 校驗監聽者自己的邏輯——掛進 `tools/execute` 生產者的內層，直接餵一個假的 `handler`，看生產者把什麼交回來。
  * 「fold 有沒有把它打底進去、排在哪」在 `fold.test.ts`；「掛進真的 agent 之後行為對不對」在
  * `apps/harness/src/validation.test.ts`。
  */
@@ -8,8 +8,12 @@ import { ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createOutputSchemaMiddleware } from './output-schema.js';
+import { createOutputSchemaListener } from './output-schema.js';
+import type { OutputSchemaLookup } from './output-schema.js';
 import { INVALID_TOOL_OUTPUT, toolErrorOf } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
+import type { PipelineExecution, PipelineResult } from './tool-pipeline.js';
+import type { ToolCallSite } from './tool-call-step.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -22,6 +26,11 @@ function wrapperOf(middleware: unknown): Wrapper {
   const wrap = (middleware as { wrapToolCall?: Wrapper }).wrapToolCall;
   if (wrap === undefined) throw new Error('這個 middleware 沒有 wrapToolCall');
   return wrap;
+}
+
+/** 校驗監聽者掛在 `tools/execute` 內層、沒有派發面的那一顆生產者。 */
+function outputSchemaProducer(schemaOf: OutputSchemaLookup): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [createOutputSchemaListener(schemaOf)] });
 }
 
 /** 兩顆同名、不同實例的工具——校驗器以實例查 schema。 */
@@ -40,9 +49,7 @@ function ok(content: string): ToolMessage {
 
 describe('輸出 schema 校驗', () => {
   const schema = z.object({ count: z.number() });
-  const wrap = wrapperOf(
-    createOutputSchemaMiddleware((tool) => (tool === probe ? schema : undefined)),
-  );
+  const wrap = wrapperOf(outputSchemaProducer((tool) => (tool === probe ? schema : undefined)));
 
   it('合的原樣放行', async () => {
     const message = ok('{"count":3}');
@@ -102,10 +109,42 @@ describe('輸出 schema 校驗', () => {
         throw new Error('schema 自己炸了');
       },
     } as unknown as z.ZodType;
-    const broken = wrapperOf(createOutputSchemaMiddleware(() => brokenSchema));
+    const broken = wrapperOf(outputSchemaProducer(() => brokenSchema));
     const result = (await broken(requestFor(probe), async () => ok('{"count":3}'))) as ToolMessage;
     expect(result.status).toBe('error');
     expect(String(result.content)).toContain('不予採信');
     expect(toolErrorOf(result)).toBeUndefined();
+  });
+});
+
+describe('換掉時交回的結果帶 `blocks` 與 `shape`：外側的 `next()` 照型別讀得到', () => {
+  const schema = z.object({ count: z.number() });
+  const site = { tool: probe, name: 'probe' } as unknown as ToolCallSite;
+  const exec = {} as PipelineExecution;
+  const body = (content: string): PipelineResult => ({
+    kind: 'message',
+    content,
+    blocks: [{ type: 'text', text: content }],
+    shape: 'text',
+    isError: false,
+  });
+
+  it('輸出不合', async () => {
+    const listener = createOutputSchemaListener(() => schema);
+    const result = await listener(exec, async () => body('{"count":"三"}'), site);
+    expect(result).toMatchObject({ kind: 'message', shape: 'text', isError: true, fresh: true });
+    expect(result.blocks).toEqual([{ type: 'text', text: result.content }]);
+  });
+
+  it('校驗器自己壞掉', async () => {
+    const brokenSchema = {
+      safeParse() {
+        throw new Error('schema 自己炸了');
+      },
+    } as unknown as z.ZodType;
+    const listener = createOutputSchemaListener(() => brokenSchema);
+    const result = await listener(exec, async () => body('{"count":3}'), site);
+    expect(result).toMatchObject({ kind: 'message', shape: 'text', isError: true, fresh: true });
+    expect(result.blocks).toEqual([{ type: 'text', text: result.content }]);
   });
 });

@@ -23,7 +23,7 @@
  *   只有壞掉的模型才會送；行為與前景一致，所以不值得為它多一條錯誤路徑（探針實測，#831）。
  *
  * **這顆在疊上的位置（量到的）**：`nexusToolFailureContainment` ＞ `nexusTurnCancel`（外層守衛）＞ **這顆** ＞
- * `nexusApprovalGate` ＞ … ＞ `nexusMaxTokens`；沙箱政策的 `tools/execute` 監聽者也在這顆裡面。所以前景改派後，
+ * `nexusApprovalGate` ＞ … ＞ `nexusToolExecute`；輸出上限的替換與沙箱政策的快照是它的 `tools/execute` 監聽者，也在這顆裡面。所以前景改派後，
  * 核准閘門、輸出上限、沙箱快照看到的是 `task`；**圍堵與外層的中止守衛在外面，看到的是 `subagent`**（圍堵的日誌事件名、
  * 中止後回的「還沒動手」結果都用 `subagent`）。`thread-pump.ts` 收回時選碼用 `@nexus/wire` 的
  * `DELEGATION_TOOL_NAMES`，`task` 與 `subagent` 都認；wire 的子代理卡以 `task` 認歸屬，前景改派後內層看到的正是 `task`。
