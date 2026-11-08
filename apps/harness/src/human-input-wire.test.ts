@@ -12,7 +12,8 @@
  * - 拿掉閒置判定的「沒有掛著的中斷」：「閒置驅逐」紅；
  * - 拿掉屏障的 `idle`：「兩顆 exclusive 核准，分兩次答」與屏障四條掛到逾時；
  * - 拿掉圍堵接回時補記 `tool/call`：「問一題」與「日誌整串對齊」三條紅；
- * - 補記只給答到的那顆：「一批兩顆核准，只答一顆」紅。
+ * - 補記只給答到的那顆：「一批兩顆核准，只答一顆」紅；
+ * - 拿掉 `slot` 接這一批的中止：「記不進日誌」兩條紅（`ask_deaf` 停住、掛到逾時）。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -51,7 +52,7 @@ const NATIVE = process.env['NEXUS_TEST_AGENT_LOOP'] === 'native';
 const ASK = 'ask_probe';
 /** 同一個提問工具，但不宣告可並行：同一步兩顆照模型順序一顆一顆跑（屏障，`tool-barrier.ts`）。 */
 const ASK_EXCLUSIVE = 'ask_exclusive';
-/** 同一個提問工具，但不是 `tool()` 包的：沒有替它接中止，這一輪或這一批中止時本體照樣等在 `ask` 上。 */
+/** 同一個提問工具，但不是 `tool()` 包的：工具這一層沒有替它接中止，這一批中止時它的 `ask` 要由等人服務拒絕才落定。 */
 const ASK_DEAF = 'ask_deaf';
 /** 不問人，一直等到這一輪的中止訊號舉起來才回（{@link Probe.holdAfterAbort} 給了就再等它）。 */
 const HOLD = 'hold_probe';

@@ -7,7 +7,7 @@
  * 到下一顆起跑（或 `idle` 等的那件事兌現）之間隔著幾個 microtask，那一拍數到的 0 不算。
  *
  * **都在 `idle`、沒有一顆在 `ask`** 照理不會發生：`idle` 等的是要人答了才會動的事，沒人在問就永遠不會動。它判成錯誤（建構時給的
- * `onStuck`），不靜靜掛著；在 `idle` 等的每一顆以同一個錯拒絕。
+ * `onStuck`），不靜靜掛著；當下在 `idle` 等的每一顆以同一個錯拒絕，之後的 `ask`、`idle` 當場以 {@link HumanInputWithdrawn} 拒絕。
  *
  * **收回**（{@link RunSuspension.withdraw}）拒絕每一顆 `ask`。在 `idle` 等的多半跟著前一顆的拒絕落定（例：屏障上等它的那顆一起退出）；
  * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。收回之後的 `ask`、`idle`
@@ -58,14 +58,15 @@ export class RunSuspension {
 
   /**
    * @param onPark - 停在等待點的那一刻，帶著所有還沒答的提問（照問的先後）。
-   * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；之後在 `idle` 等的每一顆以它拒絕。
+   * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；當下在 `idle` 等的每一顆以它拒絕，之後的 `ask`、`idle`
+   *   以 {@link HumanInputWithdrawn} 當場拒絕。
    */
   constructor(
     private readonly onPark: (asks: readonly PendingAsk[]) => void,
     private readonly onStuck: (error: Error) => void,
   ) {}
 
-  /** 收回過了。`#toolStep` 看到它就不套這一步的寫入。 */
+  /** 收回過了（卡死判成錯誤時也算）。`#toolStep` 看到它就不套這一步的寫入。 */
   get withdrawn(): boolean {
     return this.#withdrawn;
   }
@@ -79,11 +80,11 @@ export class RunSuspension {
    * 一顆呼叫的位子：發給它的服務，加上起跑與收完。
    * @param callId - 那顆呼叫的 id。
    * @param namespace - 那顆呼叫的命名空間。
-   * @param halt - 這一批的中止訊號（兄弟失敗時舉起）。舉起之後這顆還沒落定的 `ask`、`idle` 以它的 `reason` 拒絕，之後的也當場
+   * @param halt - 這一批的中止訊號（一顆失敗時舉起，含呼叫端中止讓節點被拒絕）。舉起之後這顆還沒落定的 `ask`、`idle` 以它的 `reason` 拒絕，之後的也當場
    *   拒絕：這一批不會再停在等待點，不論那顆呼叫自己理不理這個訊號。
    */
   slot(callId: string, namespace: readonly string[], halt?: AbortSignal): CallSlot {
-    // 這顆呼叫自己還沒落定的 `ask`／`idle`。
+    // 這顆呼叫自己還沒落定的 `ask`／`idle`。收完時還會有：呼叫的外層先落定、本體還在等（例：`tool()` 接的中止讓呼叫先拒絕）。
     const asks = new Set<string>();
     const idlers = new Set<(reason: unknown) => void>();
     let exited = false;
@@ -234,7 +235,10 @@ export class RunSuspension {
     }
   }
 
-  /** 收回所有還沒答的提問：每一顆以 {@link HumanInputWithdrawn} 拒絕，之後的提問當場拒絕。 */
+  /**
+   * 收回：每一顆還沒答的提問以 {@link HumanInputWithdrawn} 拒絕；一個 `setImmediate` 之後還在 `idle` 等的也以它拒絕；之後的
+   * `ask`、`idle` 當場拒絕。
+   */
   withdraw(): void {
     this.#withdrawn = true;
     const asks = [...this.#asks.values()];

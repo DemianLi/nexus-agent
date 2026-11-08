@@ -596,7 +596,7 @@ export class NativeAgent {
     }).then(
       () => link.close(),
       (error: unknown) => {
-        // 失敗時同一批可能還有一顆停在問人上（例：兄弟的結果記不進日誌，這一步拋了）：收回它，那顆呼叫的 await 才落定，不留在記憶體裡。
+        // 失敗時把這次 run 標成收回：之後的 `ask`、`idle` 當場拒絕，還留著的等待一併拒絕。同一批還沒落定的，多半已在各顆收完或這一批中止時拒絕。
         link.suspension.withdraw();
         link.fail(error);
       },
