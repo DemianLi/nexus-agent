@@ -43,6 +43,7 @@ import type {
   SessionEvent,
   SessionRegistry,
 } from '@nexus/core';
+import { withModelCallStep } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
@@ -164,17 +165,21 @@ async function run(
               apply(registry) {
                 let calls = 0;
                 registry.middleware.use(
-                  createMiddleware({
-                    name: 'steerAfterModelCall',
-                    wrapModelCall: async (request, handler) => {
-                      const response = await handler(request);
+                  withModelCallStep(
+                    async (request, next) => {
+                      const response = await next(request);
                       calls += 1;
                       if (calls === steer.afterModelCall) {
                         await steerTo.client!.runStart(THREAD_ID, steer.text, { mode: 'steer' });
                       }
                       return response;
                     },
-                  }),
+                    (wrapModelCall) =>
+                      createMiddleware({
+                        name: 'steerAfterModelCall',
+                        wrapModelCall: wrapModelCall as never,
+                      }),
+                  ),
                 );
               },
             },

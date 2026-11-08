@@ -8,7 +8,7 @@
  * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（core 的 `ToolAdmission` 與 `ToolAddition`），
  * `wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的 `ToolCallStep`。langchain 在 `wrapModelCall` 裡對工具清單
  * 有兩條規則：已註冊的工具換成同名的另一個實例一律拒絕；新加的工具要有 middleware 帶 `wrapToolCall` 才放行
- * （`langchain@1.5.10` `dist/agents/nodes/AgentNode.js:246-257`；native loop 照同一套，`native-loop/onion.ts`）。
+ * （`langchain@1.5.10` `dist/agents/nodes/AgentNode.js:246-257`；native loop 照同一套，`native-loop/model-node.ts`）。
  * 拿掉工具、換成不是 `Runnable` 的定義都不在檢查內（探針見 #831）。
  *
  * 基座 `task` 的 schema 只有 `description`／`subagent_type`，執行時 zod 剝掉其餘欄位，所以模型直接送 `task` 帶的

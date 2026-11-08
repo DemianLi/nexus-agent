@@ -8,7 +8,7 @@
  * @module
  */
 
-import type { LoopMiddleware } from './onion.js';
+import type { LoopMiddleware } from './middleware.js';
 
 /** 可以換成空函式的格。 */
 export type NativeNoopPart = 'beforeAgent';
@@ -42,13 +42,22 @@ export const NATIVE_NOOP_CELLS: readonly NativeNoopCell[] = Object.freeze([
   }),
 ]);
 
+/**
+ * 這一格在不在清單上。
+ * @param middleware - middleware 的名字。
+ * @param part - 那一格。
+ */
+export function isNativeNoopCell(middleware: string, part: string): boolean {
+  return NATIVE_NOOP_CELLS.some((cell) => cell.middleware === middleware && cell.part === part);
+}
+
 /** 取代清單上那一格的空函式：不改 state、不寫檔。 */
 const noop = (): undefined => undefined;
 
 /**
  * native 實際跑的那一份：名字在清單上的，清單上的格換成什麼都不做、回 `undefined` 的函式，其餘照讀原物件；不在清單上的原樣回。
  *
- * @param middleware - 組裝好的那一顆（洋蔥驅動的那一份）。
+ * @param middleware - 組裝好的那一顆。
  * @returns native 要跑的那一份。
  * @throws {Error} 名字在清單上、卻沒有清單上的那一格：基座換了形狀，這條宣告已經不對。
  */

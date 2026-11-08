@@ -54,7 +54,8 @@ import { z } from 'zod';
 import { Command } from '@langchain/langgraph';
 import { createMiddleware, tool } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-import type { PluginEntry } from '@nexus/core';
+import { withModelCallStep, withToolCallStep, wrapToolCallWith } from '@nexus/core';
+import type { PluginEntry, ToolCallStep } from '@nexus/core';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -138,10 +139,9 @@ describe('模型看到的那份工具清單，基座准我們動到哪裡', () =
   }
 
   it('**換掉**同名的 `write_file`（新實例）會被基座擋下來', async () => {
-    const middleware = createMiddleware({
-      name: 'WidenBuiltinWriteFile',
-      wrapModelCall: (request, handler) => {
-        const tools = (request.tools as unknown[]).map((candidate) => {
+    const middleware = withModelCallStep(
+      (request, next) => {
+        const tools = ((request as { tools: unknown[] }).tools as unknown[]).map((candidate) => {
           if ((candidate as { name?: string }).name !== 'write_file') return candidate;
           // 一份忠實的複本，只多兩個欄位。**內容不是重點**——上面那條檢查比的是
           // `original !== tool`，所以連原封不動的複本也會被拒。
@@ -158,9 +158,11 @@ describe('模型看到的那份工具清單，基座准我們動到哪裡', () =
             },
           );
         });
-        return handler({ ...request, tools } as typeof request);
+        return next({ ...request, tools });
       },
-    }) as AgentMiddleware;
+      (wrapModelCall) =>
+        createMiddleware({ name: 'WidenBuiltinWriteFile', wrapModelCall: wrapModelCall as never }),
+    ) as AgentMiddleware;
 
     await expect(run(middleware, [{ content: '走不到這裡。' }])).rejects.toThrow(
       /You have modified a tool in "wrapModelCall"[\s\S]*write_file/,
@@ -175,27 +177,34 @@ describe('模型看到的那份工具清單，基座准我們動到哪裡', () =
       schema: z.object({ sandbox_permissions: z.string(), justification: z.string() }),
     });
 
-    const middleware = createMiddleware({
-      name: 'AddEscalationTool',
-      wrapModelCall: (request, handler) =>
-        handler({
+    const toolStep: ToolCallStep = (call, next) => {
+      if (call.name !== ESCALATION_TOOL_NAME) return next();
+      executedArgs.push(call.args);
+      // `Command` 是 middleware 自己交差的方式（同 `@nexus/plugin-plan-mode` 擋掉
+      // 模式外的 `exit_plan_mode` 那一格）。**`ToolMessage` 不能省**，少了它那顆
+      // `tool_call` 永遠沒有回覆。
+      return new Command({
+        update: {
+          messages: [{ type: 'tool', content: '收到升級請求。', tool_call_id: call.callId ?? '' }],
+        },
+      }) as never;
+    };
+    const middleware = withModelCallStep(
+      (request, next) =>
+        next({
           ...request,
-          tools: [...(request.tools as unknown[]), escalation],
-        } as typeof request),
-      wrapToolCall: (request, handler) => {
-        const call = request.toolCall as { name?: string; id?: string; args?: unknown };
-        if (call.name !== ESCALATION_TOOL_NAME) return handler(request);
-        executedArgs.push(call.args);
-        // `Command` 是 middleware 自己交差的方式（同 `@nexus/plugin-plan-mode` 擋掉
-        // 模式外的 `exit_plan_mode` 那一格）。**`ToolMessage` 不能省**，少了它那顆
-        // `tool_call` 永遠沒有回覆。
-        return new Command({
-          update: {
-            messages: [{ type: 'tool', content: '收到升級請求。', tool_call_id: call.id ?? '' }],
-          },
-        }) as never;
-      },
-    }) as AgentMiddleware;
+          tools: [...((request as { tools: unknown[] }).tools as unknown[]), escalation],
+        }),
+      (wrapModelCall) =>
+        withToolCallStep(
+          createMiddleware({
+            name: 'AddEscalationTool',
+            wrapModelCall: wrapModelCall as never,
+            wrapToolCall: wrapToolCallWith(toolStep),
+          }),
+          toolStep,
+        ),
+    ) as AgentMiddleware;
 
     const { model, toolTexts } = await run(middleware, [
       {

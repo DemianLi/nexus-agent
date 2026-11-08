@@ -258,7 +258,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   // native loop 的相容層照 `createAgent` 把 state 交給 `wrapToolCall` 的那一處，自己不讀。TODO(#2357)：隨相容層拿掉。
   // 轉交基座的記憶中介層；基座在這裡拿 state 讀的是 `memoryContents`，不讀訊息（設計 §四 W9）。渲染讀宿主的那一份，不讀 state。
   'packages/nexus-core/src/memory-middleware.ts › createMemoryMiddleware 掛鉤的 state 參數': 1,
-  'packages/nexus-core/src/native-loop/onion.ts › runTool request.state': 1,
+  'packages/nexus-core/src/native-loop/tool-node.ts › runTool request.state': 1,
   'packages/nexus-core/src/patch-tool-calls.ts › createPatchToolCallsMiddleware 掛鉤的 state 參數': 1,
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,
   // 轉交基座的 skills 中介層；基座在這裡拿 state 讀的是 `skillsMetadata`，不讀訊息（設計 §四 W9）。

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { BaseMessage } from '@langchain/core/messages';
+import { withModelCallStep } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { HARNESS_IDENTITY_SENTENCE } from '@nexus/plugin-system-prompt';
@@ -164,11 +165,17 @@ describe('掛了 skills 與 task 的組裝', () => {
 
   /** 往 system prompt 附加一句話的 middleware，模擬「任何會附加文字的 plugin」。 */
   function appender(sentence: string) {
-    return createMiddleware({
-      name: `appender${sentence}`,
-      wrapModelCall: (request, handler) =>
-        handler({ ...request, systemMessage: request.systemMessage.concat(`\n${sentence}`) }),
-    });
+    return withModelCallStep(
+      (request, next) =>
+        next({
+          ...request,
+          systemMessage: (
+            request as { systemMessage: { concat(text: string): unknown } }
+          ).systemMessage.concat(`\n${sentence}`),
+        }),
+      (wrapModelCall) =>
+        createMiddleware({ name: `appender${sentence}`, wrapModelCall: wrapModelCall as never }),
+    );
   }
 
   /** 排在出貨清單**後面**的全域附加者：沒有 `last` 的話，後綴會排在它前面。 */

@@ -1,8 +1,9 @@
 /**
  * native agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：不經 LangGraph 的 Pregel，自己跑 turn／step。
  *
- * middleware 洋蔥還在：每一步照 langchain `createAgent` 的節點順序跑它（`onion.ts`，TODO(#2357)），日誌、圍堵、重試由
- * middleware 寫與做。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
+ * 節點照 langchain `createAgent` 的順序排，每一格直接呼叫 middleware 上登記的那一步（`hook-node.ts`、`model-node.ts`、
+ * `tool-node.ts`）；沒登記、也不在 `native-noop-cells.ts` 清單上的格，建構時就拋。日誌、圍堵、重試由那幾步寫與做，
+ * TODO(#2357)：搬成事件與服務。對 pump 交出跟 LangGraph 同形的 v3 事件（`protocol.ts`），所以 `thread-pump.ts` 不必分兩條路。
  *
  * 一次 run 的順序（同 `ReactAgent.js` 的邊）：
  *
@@ -43,17 +44,11 @@ import './events.js';
 import type { AgentStepPayload } from './events.js';
 import { abortReason, raceAbort } from './abort.js';
 import { NodeTask } from './langgraph-compat.js';
-import {
-  callModel,
-  drivenByOnion,
-  hookTargets,
-  runHook,
-  runTool,
-  systemMessageOf,
-  type InvokableTool,
-  type LoopMiddleware,
-} from './onion.js';
-import { withNativeNoopCells } from './native-noop-cells.js';
+import { runHook } from './hook-node.js';
+import { hookTargets, type InvokableTool, type LoopMiddleware } from './middleware.js';
+import { callModel, systemMessageOf } from './model-node.js';
+import { isNativeNoopCell, withNativeNoopCells } from './native-noop-cells.js';
+import { runTool } from './tool-node.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
 import { emptyState, StateChannels, type LoopState } from './state.js';
 
@@ -165,6 +160,17 @@ function runBounded(
   });
 }
 
+/**
+ * 沒登記一步、也不在 {@link NATIVE_NOOP_CELLS} 上的那一格：native 只呼叫登記了的一步，建構時就拋，不在跑到時才發現。
+ * @param middleware - 那一顆。
+ * @param part - 那一格。
+ */
+function unregisteredCell(middleware: LoopMiddleware, part: string): Error {
+  return new Error(
+    `native agent loop 只跑登記了一步的格：middleware "${middleware.name}" 的 ${part} 沒有登記，也不在 NATIVE_NOOP_CELLS 上`,
+  );
+}
+
 /** 用來計步：每一個「節點那一格」算一步，算法同 LangGraph 的 super-step（同一步的工具合起來算一格）。 */
 class StepBudget {
   #used = 0;
@@ -196,26 +202,20 @@ export class NativeAgent {
   readonly #defaults: LoopDefaults;
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
-  /**
-   * 洋蔥實際驅動的那一份（{@link drivenByOnion}），再把清單上的格換成空函式（{@link withNativeNoopCells}），跟
-   * {@link NativeAgent.middleware} 一一對應。
-   */
-  readonly #driven: readonly LoopMiddleware[];
-  /** 有沒有誰執行 `wrapModelCall` 新加的工具，照原物件算：標成由洋蔥外面做的 `wrapToolCall` 也算。 */
+  /** 清單上的格換成空函式之後的那一份（{@link withNativeNoopCells}），跟 {@link NativeAgent.middleware} 一一對應。 */
+  readonly #withNoops: readonly LoopMiddleware[];
+  /** 有沒有誰執行 `wrapModelCall` 新加的工具：任一顆有 `wrapToolCall`。 */
   readonly #executesAddedTools: boolean;
-  /**
-   * 一次工具呼叫由外到內經過的那幾格，照組裝順序：登記了工具步驟的（{@link toolCallStepOf}）由 native 直接呼叫那一步，其餘照洋蔥驅動的那一份。
-   * 標成由洋蔥外面做的 `wrapToolCall` 不在裡面。
-   */
+  /** 一次工具呼叫由外到內經過的那幾格，照組裝順序，每一格直接呼叫它登記的工具步驟（{@link toolCallStepOf}）。 */
   readonly #toolCells: readonly LoopMiddleware[];
   /**
-   * 一次模型呼叫由外到內經過的那幾格，跟 {@link NativeAgent.middleware} 一一對應：登記了工具清單那一步的（{@link toolListCellOf}）
-   * 由 native 直接呼叫那一步（有登記 `inner` 就再交給它），登記了系統提示那一步的（{@link systemPromptCellOf}）與環繞步的（{@link modelCallStepOf}）同樣直接呼叫，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 `wrapModelCall` 讀到 `undefined`，洋蔥照樣略過。
+   * 一次模型呼叫由外到內經過的那幾格，跟 {@link NativeAgent.middleware} 一一對應。有 `wrapModelCall` 的，直接呼叫它登記的那一步：
+   * 工具清單（{@link toolListCellOf}，有登記 `inner` 就再交給它）、系統提示（{@link systemPromptCellOf}）或環繞步（{@link modelCallStepOf}）。
    */
   readonly #modelCells: readonly LoopMiddleware[];
   /**
    * `beforeAgent`、`beforeModel`、`afterAgent` 實際跑的那一份，跟 {@link NativeAgent.middleware} 一一對應：登記了一步的 hook
-   * （{@link hookStepOf}）換成 native 從那一步造的，其餘照洋蔥驅動的那一份。標成由洋蔥外面做的 hook 讀到 `undefined`，照樣略過。
+   * （{@link hookStepOf}）換成 native 從那一步造的，清單上的格是空函式。
    */
   readonly #hookCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
@@ -226,7 +226,8 @@ export class NativeAgent {
    * @param params - 模型、提示詞、工具、middleware。
    * @param threads - thread 的 state；`withConfig` 出來的那一份共用同一張表。
    * @param defaults - `withConfig` 給的上限。
-   * @throws {Error} 有一顆 middleware 在模型那一格登記了不只一步（工具清單、系統提示、環繞步）。
+   * @throws {Error} 有一格沒登記一步、也不在 {@link NATIVE_NOOP_CELLS} 上；或一顆 middleware 在模型那一格登記了不只一步
+   * （工具清單、系統提示、環繞步）。
    */
   constructor(
     params: NativeAgentParams,
@@ -237,24 +238,24 @@ export class NativeAgent {
     this.#threads = threads;
     this.#defaults = defaults;
     this.middleware = params.middleware as readonly LoopMiddleware[];
-    this.#driven = this.middleware.map((m) => withNativeNoopCells(drivenByOnion(m)));
+    const unsupported = this.middleware.find((m) => m.afterModel !== undefined);
+    if (unsupported !== undefined) {
+      throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
+    }
+    this.#withNoops = this.middleware.map((m) => withNativeNoopCells(m));
     this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
-    this.#toolCells = this.middleware.flatMap((m, index) => {
-      const wrapToolCall = this.#driven[index]!.wrapToolCall;
-      if (wrapToolCall === undefined) return [];
+    this.#toolCells = this.middleware.flatMap((m) => {
+      if (m.wrapToolCall === undefined) return [];
       const step = toolCallStepOf(m);
+      if (step === undefined) throw unregisteredCell(m, 'wrapToolCall');
       return [
         {
           name: m.name,
-          wrapToolCall:
-            step === undefined
-              ? wrapToolCall
-              : (wrapToolCallWith(step) as NonNullable<LoopMiddleware['wrapToolCall']>),
+          wrapToolCall: wrapToolCallWith(step) as NonNullable<LoopMiddleware['wrapToolCall']>,
         },
       ];
     });
-    this.#modelCells = this.middleware.map((m, index) => {
-      const driven = this.#driven[index]!;
+    this.#modelCells = this.middleware.map((m) => {
       const cell = toolListCellOf(m);
       const prompt = systemPromptCellOf(m);
       const around = modelCallStepOf(m);
@@ -263,7 +264,7 @@ export class NativeAgent {
           `middleware "${m.name}" 在模型那一格登記了不只一步（工具清單、系統提示、環繞步），native 只能直接呼叫其中一個`,
         );
       }
-      if (driven.wrapModelCall === undefined) return driven;
+      if (m.wrapModelCall === undefined) return m;
       if (around !== undefined) {
         return {
           name: m.name,
@@ -288,28 +289,24 @@ export class NativeAgent {
           >,
         };
       }
-      return driven;
+      throw unregisteredCell(m, 'wrapModelCall');
     });
     this.#hookCells = this.middleware.map((m, index) => {
-      const driven = this.#driven[index]!;
+      const withNoops = this.#withNoops[index]!;
       const replaced = HOOK_KINDS.flatMap((kind) => {
+        if (m[kind] === undefined || isNativeNoopCell(m.name, kind)) return [];
         const cell = hookStepOf(m, kind);
-        return driven[kind] === undefined || cell === undefined
-          ? []
-          : [[kind, hookWith(cell)] as const];
+        if (cell === undefined) throw unregisteredCell(m, kind);
+        return [[kind, hookWith(cell)] as const];
       });
-      if (replaced.length === 0) return driven;
-      const view = Object.create(driven) as Record<string, unknown>;
+      if (replaced.length === 0) return withNoops;
+      const view = Object.create(withNoops) as Record<string, unknown>;
       for (const [kind, hook] of replaced) {
         Object.defineProperty(view, kind, { value: hook, enumerable: true });
       }
       return view as unknown as LoopMiddleware;
     });
-    const unsupported = this.#driven.find((m) => m.afterModel !== undefined);
-    if (unsupported !== undefined) {
-      throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
-    }
-    for (const m of this.#driven) {
+    for (const m of this.#withNoops) {
       for (const [kind, allowed] of SUPPORTED_JUMPS) {
         const hook = m[kind];
         const extra =
@@ -321,7 +318,7 @@ export class NativeAgent {
         }
       }
     }
-    const middlewareTools = this.#driven.flatMap(
+    const middlewareTools = this.middleware.flatMap(
       (m) => ((m as { tools?: readonly unknown[] }).tools ?? []) as readonly InvokableTool[],
     );
     this.#tools = [...(params.tools as readonly InvokableTool[]), ...middlewareTools];
