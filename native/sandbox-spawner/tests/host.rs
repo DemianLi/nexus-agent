@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::host::{example, unregistered, violation, HostProc};
+use common::host::{example, ignoring_conn, unregistered, violation, HostProc};
 use nexus_sandbox_spawner::host_protocol::{decode_host_message, encode_client_message, hello, HostMessage, MAX_FRAME};
 use nexus_sandbox_spawner::json::{self, Value};
 use nexus_sandbox_spawner::protocol::frame;
@@ -103,7 +103,7 @@ fn a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation() {
     assert_eq!(host.report(), Some(violation(me(), "重複的 hello")));
     // 隔離：同一個 pid 再連，表上已經沒有它。
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
-    assert_eq!(host.report(), Some(unregistered(me())));
+    assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections(
     assert_eq!(host.report(), Some(violation(me(), "token 不對")));
     assert!(closed(&mut first), "隔離時它其他驗過身分的連線要一起斷");
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
-    assert_eq!(host.report(), Some(unregistered(me())));
+    assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
 
     host.grant(me(), TOKEN, Role::Front, "");
     let old = frame(&encode_client_message(&nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
@@ -175,7 +175,7 @@ fn a_hello_after_a_revoke_is_always_rejected() {
         host.command(&HostCommand::Revoke { pid: me() });
         assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "第 {round} 輪");
         assert!(closed(&mut live), "撤銷時它驗過身分的連線要一起斷（第 {round} 輪）");
-        assert_eq!(host.report(), Some(unregistered(me())));
+        assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
     }
 }
 
@@ -189,14 +189,15 @@ fn a_revoke_leaves_connections_that_have_not_said_hello_to_be_rejected() {
         host.grant(me(), TOKEN, Role::Conversation, "a");
         let mut pending = UnixStream::connect(&socket).unwrap();
         pending.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        // 後連的這條拿到回答時，先連的那條一定已經 accept 了：宿主一次把排著的連線收完。
+        // 後連的這條拿到回答時，先連的那條已經 accept 了（backlog 先進先出）：這裡測的是撤銷時已經 accept 的；
+        // 還在 backlog 的見 `a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later_grant`。
         let (mut live, reply) = exchange(&socket, &hello_frame(TOKEN));
         assert_eq!(reply, accepted(), "第 {round} 輪");
         host.command(&HostCommand::Revoke { pid: me() });
         assert!(closed(&mut live), "驗過身分的要斷（第 {round} 輪）");
         pending.write_all(&hello_frame(TOKEN)).unwrap();
         assert_eq!(read_message(&mut pending), rejected("沒有登記"), "第 {round} 輪");
-        assert_eq!(host.report(), Some(unregistered(me())));
+        assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
     }
 }
 
@@ -211,7 +212,8 @@ fn a_connection_from_before_a_revoke_is_not_verified_against_a_later_grant() {
         host.grant(me(), TOKEN, Role::Conversation, "a");
         let mut pending = UnixStream::connect(&socket).unwrap();
         pending.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        // 後連的這條拿到回答時，先連的那條一定已經 accept 了：宿主一次把排著的連線收完。
+        // 後連的這條拿到回答時，先連的那條已經 accept 了（backlog 先進先出）：這裡測的是撤銷時已經 accept 的；
+        // 還在 backlog 的見 `a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later_grant`。
         let (mut live, reply) = exchange(&socket, &hello_frame(TOKEN));
         assert_eq!(reply, accepted(), "第 {round} 輪");
         host.command(&HostCommand::Revoke { pid: me() });
@@ -219,7 +221,7 @@ fn a_connection_from_before_a_revoke_is_not_verified_against_a_later_grant() {
         host.grant(me(), TOKEN, Role::Conversation, "b");
         pending.write_all(&hello_frame(TOKEN)).unwrap();
         assert_eq!(read_message(&mut pending), rejected("沒有登記"), "第 {round} 輪");
-        assert_eq!(host.report(), Some(unregistered(me())));
+        assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
     }
 }
 
@@ -241,7 +243,7 @@ fn a_bad_frame_on_a_revoked_connection_leaves_a_later_grant_alone() {
         host.grant(me(), OTHER, Role::Conversation, "b");
         pending.write_all(&frame(&[0xff])).unwrap();
         assert!(matches!(read_message(&mut pending), Some(HostMessage::Rejected { .. })), "第 {round} 輪");
-        assert_eq!(host.report(), Some(unregistered(me())), "第 {round} 輪");
+        assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())), "第 {round} 輪");
         let (_later, reply) = exchange(&socket, &hello_frame(OTHER));
         assert_eq!(reply, accepted(), "後來的登記還在（第 {round} 輪）");
     }
@@ -272,10 +274,39 @@ fn a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later
     }
     queued.write_all(&hello_frame(OTHER)).unwrap();
     assert_eq!(read_message(&mut queued), rejected("沒有登記"));
-    assert_eq!(host.report(), Some(unregistered(me())));
+    assert_eq!(ignoring_conn(host.report()), Some(unregistered(me())));
 }
 
-/// 測試行程與宿主都要開上千條連線：軟上限拉到硬上限。
+/// 宿主一起來就把開檔數的軟上限拉到硬上限：每條連線佔兩個 fd，撤銷時收 backlog 也要收得完，不能靠啟動它的那一方替它拉。
+#[test]
+fn the_host_raises_its_open_file_soft_limit_to_the_hard_limit() {
+    use std::os::unix::process::CommandExt;
+    let dir = temp_dir("nofile");
+    let mut cmd = Command::new(common::host::HOST);
+    cmd.arg("--socket").arg(dir.join("host.sock")).stdin(Stdio::piped()).stdout(Stdio::piped());
+    // SAFETY：fork 之後只呼叫 async-signal-safe 的 getrlimit／setrlimit。
+    unsafe {
+        cmd.pre_exec(|| {
+            let mut limit: libc::rlimit = std::mem::zeroed();
+            libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit);
+            limit.rlim_cur = limit.rlim_max.min(64);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().unwrap();
+    // 第一框 `hello` 送出來時，上限已經拉好了。
+    let mut head = [0u8; 4];
+    child.stdout.as_mut().unwrap().read_exact(&mut head).unwrap();
+    let limits = std::fs::read_to_string(format!("/proc/{}/limits", child.id())).unwrap();
+    let line = limits.lines().find(|l| l.starts_with("Max open files")).unwrap().to_string();
+    let _ = child.kill();
+    let _ = child.wait();
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(fields[3], fields[4], "{line}");
+}
+
+/// 測試行程要開上千條連線：軟上限拉到硬上限（宿主自己會拉）。
 fn raise_fd_limit() {
     // SAFETY：rlimit 是純資料，全零合法；只改自己的 RLIMIT_NOFILE。
     unsafe {
@@ -284,6 +315,26 @@ fn raise_fd_limit() {
         limit.rlim_cur = limit.rlim_max;
         assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &limit), 0);
     }
+}
+
+/// `unregistered` 帶宿主替每條連線編的號，依 accept 的順序遞增，監督行程的警告與宿主自己的 log 才對得起來。
+#[test]
+fn unregistered_reports_number_each_connection() {
+    let dir = temp_dir("conn-id");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start(&socket);
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
+        match host.report() {
+            Some(HostReport::Unregistered { pid, conn }) => {
+                assert_eq!(pid, me());
+                ids.push(conn);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(ids, [1, 2, 3]);
 }
 
 /// 出廠預設下沒宣告 sandbox 的 MCP stdio 伺服器跑在 `--guard` 底下，沒有 seccomp，連得到 socket；就算拿到了別人的 token，
@@ -314,7 +365,7 @@ fn an_unsandboxed_mcp_server_with_a_stolen_token_is_rejected() {
     let guard_pid = guard.id();
     let out = guard.wait_with_output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "host rejected 沒有登記");
-    assert_eq!(host.report(), Some(unregistered(guard_pid)));
+    assert_eq!(ignoring_conn(host.report()), Some(unregistered(guard_pid)));
 
     legit.stdin.take().unwrap().write_all(b"go\n").unwrap();
     let out = legit.wait_with_output().unwrap();

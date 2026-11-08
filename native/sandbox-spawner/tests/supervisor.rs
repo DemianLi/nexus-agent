@@ -1532,12 +1532,14 @@ fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_ev
     assert!(!gone(logged_pid(&a, "pid")));
 }
 
-/// 宿主對活著的對話行程回報 `unregistered`：那是它那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、或還排在監督行程這邊），不隔離、不寫稽核，下一個宿主照樣拿到它。
+/// 宿主對活著的對話行程回報 `unregistered`：那是它那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、或還排在監督行程這邊），
+/// 或同一個 pid 號碼上一個行程留下的連線。不隔離、不寫稽核，下一個宿主照樣拿到它；運作 log 記一行警告，只帶 pid 與宿主的連線編號。
 #[test]
 fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits() {
     let marker = temp_dir("marker").join("unregistered");
     let mut h = Harness::start(Options { host: fake_host(&["--unregistered-once", marker.to_str().unwrap()]), ..Options::default() });
-    h.up("a");
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
     assert!(
         wait_until(|| {
             let log = host_log(&h);
@@ -1547,7 +1549,9 @@ fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits
         "{:?}",
         host_log(&h)
     );
-    assert!(!h.audit().iter().any(|l| l.contains("\"event\":\"protocol\"")), "{:?}", h.audit());
+    let expected = format!("[nexus-supervisor] 警告：宿主拒了 pid {a_pid} 的連線 #7：表還在路上，或是這個號碼上一個行程留下的連線；不隔離、不寫稽核");
+    assert!(wait_until(|| supervisor_stderr(&h).lines().any(|l| l == expected)), "{}", supervisor_stderr(&h));
+    assert_eq!(h.audit().iter().filter(|l| l.contains("\"event\":\"protocol\"")).count(), 0, "{:?}", h.audit());
 }
 
 /// 宿主對活著的對話行程回報 `violation`：監督行程寫稽核（`role` 是 `conversation`）、不殺它，並經控制通道對那個 pid 送 `revoke`；

@@ -59,7 +59,7 @@
 //! 那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
 //! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它；宿主 `ready` 了、沒在收的，也再送一次 `revoke`，蓋掉可能還排在這邊、沒寫出去的那一筆 `grant`。回報的是 pid 不在宿主表上（`unregistered`）、
 //! 而那個 pid 是活著、沒被隔離的前台或對話行程的，不算違規、不寫稽核：那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、
-//! 這邊還沒處理它的 `ready`，或那一筆還排在這邊），或那是 pid 被重用、同一個號碼上一個行程留下的連線。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
+//! 這邊還沒處理它的 `ready`，或那一筆還排在這邊），或那是 pid 被重用、同一個號碼上一個行程留下的連線；只記一行警告，帶 pid 與宿主的連線編號。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
 //! 之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、
 //! `--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗只退避重起，
 //! 不會讓整台結束：在 `ready` 之前宿主還沒開始收連線，那之前的失敗一定是它自己（執行檔、設定、環境）的問題，之後的可能是客戶端觸發的。
@@ -1383,7 +1383,7 @@ impl Supervisor {
                     }
                 }
                 HostReport::Violation { pid, reason } => self.on_violation(pid, &reason),
-                HostReport::Unregistered { pid } => self.on_unregistered(pid),
+                HostReport::Unregistered { pid, conn } => self.on_unregistered(pid, conn),
                 _ => {}
             }
         }
@@ -1417,12 +1417,13 @@ impl Supervisor {
     }
 
     /// 宿主拒了一條 pid 不在它表上的連線，或一條撤過的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
-    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線則是
-    /// 同一個號碼上一個行程留下的。兩種都不是它的錯：只記一行訊息，不隔離、不寫稽核。其餘的（不是我們的 pid、已經隔離的）照違規記。
-    fn on_unregistered(&mut self, pid: u32) {
+    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線多半是
+    /// 同一個號碼上一個行程留下的。兩種都不是它的錯：不隔離、不寫稽核，只在運作 log 記一行警告，帶 pid 與宿主的連線編號（`conn`，
+    /// 宿主自己的 log 也寫這個號）。其餘的（不是我們的 pid、已經隔離的）照違規記。
+    fn on_unregistered(&mut self, pid: u32, conn: u32) {
         let live = libc::pid_t::try_from(pid).ok().filter(|&pid| pid > 0).is_some_and(|pid| self.grant_of(pid).is_some());
         if live {
-            say!("宿主拒了 pid {pid} 的連線：表還在路上，或是這個號碼上一個行程留下的連線，不算違規");
+            say!("警告：宿主拒了 pid {pid} 的連線 #{conn}：表還在路上，或是這個號碼上一個行程留下的連線；不隔離、不寫稽核");
             return;
         }
         self.on_violation(pid, "沒有登記".as_bytes());

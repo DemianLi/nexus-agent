@@ -75,7 +75,7 @@ fn main() {
                     if let Some(marker) = unregistered_once.as_ref().filter(|_| role == "conversation") {
                         if std::fs::metadata(marker).is_err() {
                             std::fs::write(marker, b"").unwrap();
-                            report(&HostReport::Unregistered { pid });
+                            report(&HostReport::Unregistered { pid, conn: 7 });
                             std::process::exit(9);
                         }
                     }

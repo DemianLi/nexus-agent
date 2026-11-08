@@ -11,14 +11,18 @@
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
 //! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就先殺掉宿主的群組，再收屍），pid 被重用之後才 `connect()` 的連線，
-//! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。反過來，`revoke` 之前就連上的連線都是舊行程的：撤銷時先把 listen backlog 收完，
-//! 一條不漏地記成撤過，之後它們送什麼都只回 `rejected`、報 `unregistered`，不照同一個號碼後來的登記驗，也不撤那一筆。
+//! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。反過來，宿主讀到監督行程的 `revoke` 時，那個 pid 上已經連上的連線（已 accept 的，
+//! 與還在 listen backlog 的）全部記成撤過，之後它們送什麼都只回 `rejected`、報 `unregistered`，不照同一個號碼後來的登記驗，也不撤那一筆。
+//! accept 出錯時沒收進來的不算在內；起來時把開檔數的軟上限拉到硬上限，就是為了不在這裡用完 fd。pid 被重用得比宿主讀 pipe 還快時，
+//! 新行程先連上的連線也會這樣被拒，要重連（它不會被隔離）。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
-//! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程不會重送那個身分：它隔離到行程結束。
-//! pid 不在表上的，與撤過的連線，只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。宿主自己不因為任何一條連線結束。
+//! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程把那個身分隔離到行程結束：
+//! 之後不再重送；排著沒寫出去的那一筆 `grant` 後面，它會補一筆 `revoke`。
+//! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
+//! 宿主自己不因為任何一條連線結束。
 //!
-//! 連線數最多 [`MAX_CONNECTIONS`]；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
+//! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
 use crate::host_protocol::{self, decode_client_message, encode_host_message, ClientMessage, HostMessage};
 use crate::supervisor::process::Chan;
@@ -30,7 +34,7 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// 同時最多幾條客戶端連線；滿了先不 accept。
+/// 同時最多幾條客戶端連線；滿了先不 accept（收監督行程的 `revoke` 時除外）。
 pub const MAX_CONNECTIONS: usize = 1024;
 /// 連上之後多久內要送 `hello`。
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,12 +54,14 @@ struct Grant {
 }
 
 struct Conn {
+    /// 這個宿主行程裡依 accept 的順序編的號，從 1 起；log 與 `unregistered` 都寫它。
+    id: u32,
     chan: Chan,
     /// `SO_PEERCRED` 的 pid；取不到或 uid 不同是 `None`，它的 `hello` 一律不收。
     pid: Option<u32>,
     opened: Instant,
     hello: bool,
-    /// 還沒送 `hello` 時那個 pid 就被撤了：之後的 `hello` 一律回 `rejected`，就算同一個 pid 號碼又登記了也不照新的那一筆驗。
+    /// 那個 pid 被撤過：之後送什麼都只回 `rejected`、報 `unregistered`；同一個 pid 號碼又登記了，也不照新的那一筆驗、不撤它。
     revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
     dead: bool,
@@ -63,10 +69,11 @@ struct Conn {
 
 struct Host {
     control: Chan,
-    /// `ready` 之前是 `None`。
-    listener: Option<UnixListener>,
+    listener: UnixListener,
     grants: HashMap<u32, Grant>,
     conns: Vec<Conn>,
+    /// 上一條連線的編號。
+    last_conn: u32,
 }
 
 fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
@@ -91,26 +98,40 @@ pub fn run(args: Vec<OsString>) -> i32 {
             return 2;
         }
     };
+    raise_open_file_limit();
     // SAFETY：fd 0、1 是監督行程接好的控制通道，整個行程只有這裡拿它們。
-    let control = unsafe { Chan::from_fds(OwnedFd::from_raw_fd(0), OwnedFd::from_raw_fd(1), crate::protocol::MAX_FRAME) };
-    let mut host = Host { control, listener: None, grants: HashMap::new(), conns: Vec::new() };
-    host.report(&HostReport::Hello { version: PROTOCOL_VERSION });
-    match host.await_hello() {
-        Ok(()) => {}
-        Err(code) => return code,
+    let mut control = unsafe { Chan::from_fds(OwnedFd::from_raw_fd(0), OwnedFd::from_raw_fd(1), crate::protocol::MAX_FRAME) };
+    control.send(&encode_host_report(&HostReport::Hello { version: PROTOCOL_VERSION }));
+    if let Err(code) = await_hello(&mut control) {
+        return code;
     }
     let _ = std::fs::remove_file(&socket);
-    match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
-        Ok(listener) => host.listener = Some(listener),
+    let listener = match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
+        Ok(listener) => listener,
         Err(err) => {
             say!("綁不了 {}：{err}", socket.display());
             return 1;
         }
-    }
+    };
+    let mut host = Host { control, listener, grants: HashMap::new(), conns: Vec::new(), last_conn: 0 };
     host.report(&HostReport::Ready);
     let code = host.serve();
     let _ = std::fs::remove_file(&socket);
     code
+}
+
+/// 開檔數的軟上限拉到硬上限：每條連線佔兩個 fd。拉不了就照原本的跑。
+fn raise_open_file_limit() {
+    // SAFETY：rlimit 是純資料，全零合法；只改自己的 RLIMIT_NOFILE。
+    unsafe {
+        let mut limit: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < limit.rlim_max {
+            limit.rlim_cur = limit.rlim_max;
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                say!("拉不高開檔數上限：{}", std::io::Error::last_os_error());
+            }
+        }
+    }
 }
 
 fn poll(fds: &mut [libc::pollfd], timeout: Option<Duration>) {
@@ -148,48 +169,48 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
+/// 等監督行程的 `hello`：版本相等回 `Ok`，否則回結束碼。
+fn await_hello(control: &mut Chan) -> Result<(), i32> {
+    loop {
+        let (read, write) = control.poll_fds();
+        let mut fds: Vec<libc::pollfd> = read.map(|fd| pollfd(fd, libc::POLLIN)).into_iter().collect();
+        fds.extend(write.map(|fd| pollfd(fd, libc::POLLOUT)));
+        if fds.is_empty() {
+            say!("監督行程在 hello 之前就斷了");
+            return Err(1);
+        }
+        poll(&mut fds, None);
+        control.flush();
+        let frames = control.receive().map_err(|err| {
+            say!("監督行程送來解不開的框：{}", err.0);
+            EXIT_PROTOCOL
+        })?;
+        if let Some(first) = frames.first() {
+            return match decode_host_command(first) {
+                Ok(HostCommand::Hello { version: PROTOCOL_VERSION }) => {
+                    // 同一批裡跟在 hello 後面的不會有：監督行程等 ready 才送身分表。
+                    Ok(())
+                }
+                Ok(other) => {
+                    say!("監督行程的第一框不是這一版的 hello：{other:?}");
+                    Err(EXIT_PROTOCOL)
+                }
+                Err(err) => {
+                    say!("監督行程的第一框解不開：{}", err.0);
+                    Err(EXIT_PROTOCOL)
+                }
+            };
+        }
+        if control.read_closed() {
+            say!("監督行程在 hello 之前就斷了");
+            return Err(1);
+        }
+    }
+}
+
 impl Host {
     fn report(&mut self, report: &HostReport) {
         self.control.send(&encode_host_report(report));
-    }
-
-    /// 等監督行程的 `hello`：版本相等回 `Ok`，否則回結束碼。
-    fn await_hello(&mut self) -> Result<(), i32> {
-        loop {
-            let (read, write) = self.control.poll_fds();
-            let mut fds: Vec<libc::pollfd> = read.map(|fd| pollfd(fd, libc::POLLIN)).into_iter().collect();
-            fds.extend(write.map(|fd| pollfd(fd, libc::POLLOUT)));
-            if fds.is_empty() {
-                say!("監督行程在 hello 之前就斷了");
-                return Err(1);
-            }
-            poll(&mut fds, None);
-            self.control.flush();
-            let frames = self.control.receive().map_err(|err| {
-                say!("監督行程送來解不開的框：{}", err.0);
-                EXIT_PROTOCOL
-            })?;
-            if let Some(first) = frames.first() {
-                return match decode_host_command(first) {
-                    Ok(HostCommand::Hello { version: PROTOCOL_VERSION }) => {
-                        // 同一批裡跟在 hello 後面的不會有：監督行程等 ready 才送身分表。
-                        Ok(())
-                    }
-                    Ok(other) => {
-                        say!("監督行程的第一框不是這一版的 hello：{other:?}");
-                        Err(EXIT_PROTOCOL)
-                    }
-                    Err(err) => {
-                        say!("監督行程的第一框解不開：{}", err.0);
-                        Err(EXIT_PROTOCOL)
-                    }
-                };
-            }
-            if self.control.read_closed() {
-                say!("監督行程在 hello 之前就斷了");
-                return Err(1);
-            }
-        }
     }
 
     /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。
@@ -201,7 +222,12 @@ impl Host {
                         Ok(HostCommand::Grant { pid, token, role, thread }) => {
                             self.grants.insert(pid, Grant { token, role, thread });
                         }
-                        Ok(HostCommand::Revoke { pid }) => self.revoke(pid),
+                        Ok(HostCommand::Revoke { pid }) => {
+                            // 收屍前送的：那個行程已經死了，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡。
+                            // 先收完 backlog（不管連線數上限）才抓得齊；每次最多多收一個 backlog，沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
+                            self.accept(usize::MAX);
+                            self.revoke(pid);
+                        }
                         Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
                         Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
                     }
@@ -212,25 +238,18 @@ impl Host {
         !self.control.read_closed()
     }
 
-    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著、記成撤過：之後不管送什麼都只回 `rejected`、
+    /// 表上撤掉這個 pid，它的連線全部記成撤過，驗過身分的當場斷掉。還沒送 `hello` 的留著：之後不管送什麼都只回 `rejected`、
     /// 報 `unregistered`，pid 被重用、同一個號碼又登記了也一樣，舊行程留下的連線不能拿新的那一筆驗，也不能害它被撤。
-    ///
-    /// 撤之前先把 listen backlog 收完，不管連線數上限：監督行程收屍之前送的 `revoke` 讀到的時候，那個行程已經死了，
-    /// 它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡，收完才抓得齊。超過上限的最多是一個 backlog 的量。
     fn revoke(&mut self, pid: u32) {
-        self.accept(usize::MAX);
         self.grants.remove(&pid);
         for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid)) {
-            if conn.hello {
-                conn.dead = true;
-            } else {
-                conn.revoked = true;
-            }
+            conn.revoked = true;
+            conn.dead |= conn.hello;
         }
     }
 
     fn serve(&mut self) -> i32 {
-        let listen_fd = self.listener.as_ref().map_or(-1, AsRawFd::as_raw_fd);
+        let listen_fd = self.listener.as_raw_fd();
         loop {
             let now = Instant::now();
             let deadline = self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).min();
@@ -269,17 +288,18 @@ impl Host {
         }
     }
 
-    /// 收排著的連線，收到 EAGAIN 或連線數到 `limit` 為止。
+    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或 accept 出錯（記一行）為止。
     fn accept(&mut self, limit: usize) {
-        let Some(listener) = &self.listener else { return };
         while self.conns.len() < limit {
-            match listener.accept() {
+            match self.listener.accept() {
                 Ok((stream, _)) => {
                     let pid = peer_pid(stream.as_raw_fd());
                     let fd = OwnedFd::from(stream);
                     let Ok(write) = fd.try_clone() else { continue };
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
-                    self.conns.push(Conn { chan, pid, opened: Instant::now(), hello: false, revoked: false, dead: false });
+                    self.last_conn = self.last_conn.wrapping_add(1);
+                    let id = self.last_conn;
+                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, revoked: false, dead: false });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
@@ -330,8 +350,7 @@ impl Host {
             return false;
         }
         let Some(grant) = conn.pid.filter(|_| !conn.revoked).and_then(|pid| self.grants.get(&pid)) else {
-            let pid = self.refuse(i, "沒有登記");
-            self.report(&HostReport::Unregistered { pid });
+            self.unregistered(i, "沒有登記");
             return false;
         };
         if version != PROTOCOL_VERSION {
@@ -360,16 +379,24 @@ impl Host {
         let Some(conn) = self.conns.get_mut(i) else { return 0 };
         conn.chan.send(&encode_host_message(&HostMessage::Rejected { reason: reason.to_string() }));
         let pid = conn.pid.unwrap_or(0);
-        say!("拒絕 pid {pid} 的連線：{reason}");
+        say!("拒絕 pid {pid} 的連線 #{}：{reason}", conn.id);
         pid
     }
 
+    /// 回 `rejected`、報 `unregistered`，不撤任何身分；這條由呼叫方斷。
+    fn unregistered(&mut self, i: usize, reason: &str) {
+        let pid = self.refuse(i, reason);
+        let conn = self.conns.get(i).map_or(0, |conn| conn.id);
+        self.report(&HostReport::Unregistered { pid, conn });
+    }
+
     /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他驗過身分的連線；這條由呼叫方斷。
-    /// 撤過的連線只回 `rejected`、報 `unregistered`：它是舊行程留下的，表上同一個號碼的那一筆不是它的。
+    /// 撤過的連線只回 `rejected`、報 `unregistered`，不撤表上同一個號碼的那一筆：那一筆若在，是撤銷之後才登記的，不是它的。
+    /// 判斷之前先讀乾淨控制通道，已經寫進 pipe 的撤銷先生效。
     fn violate(&mut self, i: usize, reason: &str) {
+        self.sync();
         if self.conns.get(i).is_some_and(|conn| conn.revoked) {
-            let pid = self.refuse(i, reason);
-            self.report(&HostReport::Unregistered { pid });
+            self.unregistered(i, reason);
             return;
         }
         let pid = self.refuse(i, reason);
