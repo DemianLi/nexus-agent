@@ -182,7 +182,7 @@ export type PipelineResult =
 
 /**
  * 監聽者交回的一則訊息結果（`tools/execute` 短路、或改了 `next()` 的結果）：內容給 `content`（字串）或 `blocks`（區塊）其中一個。
- * 原樣交回收到的 {@link PipelineResult} 也可以；兩個都在時以 `blocks` 為準，`blocks` 是工具本體那則造出的那一份（同一個參照）時例外，見檔頭第 7 條。
+ * 原樣交回收到的 {@link PipelineResult} 也可以；兩個都在時以 `blocks` 為準，例外見檔頭第 7 條。
  */
 export type PipelineMessageInput = {
   readonly kind: 'message';
@@ -461,7 +461,8 @@ const derivedTextBlocks = new WeakSet<object>();
 /**
  * core 監聽者換掉結果時造的一則文字結果：完整的 {@link PipelineResult}（`blocks` 是 `content` 那一格 `text`，`shape: 'text'`），
  * 帶 `fresh: true`。`blocks` 登記成由 `content` 導出：原樣交回或只換 `content` 都落成字串，外側另給（含複製一份）的 `blocks` 才落成陣列。
- * @param kind - 本體回的是 `ToolMessage`（`message`）還是 `Command`（`command`，只換裡面這次呼叫的那則）。
+ * @param kind - `message`：整個換成這一則（本體回 `Command` 時整個不採用）。`command`：只換本體回的 `Command` 裡這次呼叫的那則，
+ *   `update` 其餘原樣；本體回的不是 `Command`、或 `update` 不是物件時，同樣換成新造的一則。
  * @param content - 模型收到的文字。
  * @param outcome - `isError` 與要掛的碼。
  * @returns 要交回 `tools/execute` 的結果。

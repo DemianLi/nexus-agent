@@ -68,8 +68,8 @@
  * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
  * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
  *
- * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 `tools/execute` 那一顆，它的監聽者讀 `exec`、
- * 不碰請求）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
+ * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 `tools/execute` 那一顆：它的監聽者讀得到請求，
+ * 但往內交的 `next()` 不收參數，換不了 `request.tool`）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
  * `request.tool`。哪天有一層只改名不設工具，基座會按新名字找到工具，這裡卻還以為沒有。
  *
  * ## 登記的偏離
