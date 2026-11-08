@@ -210,9 +210,9 @@ export type TurnAbortCause =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
- * - **`max-turns`**：這一輪撞到輪數上限收掉（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
- *   **還沒有生產者**：讀方與讀盤驗證先認得它，寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)。
- *   dsh 的 `TurnEndReasonMap` 沒有這一種（dsh 沒有輪數上限）。
+ * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
+ *   **還沒有生產者**（寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）；讀盤驗證與對話史認得它，軌跡與
+ *   token-meter 的 `endOf` 還沒有這一支、落到 `completed`。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
@@ -776,7 +776,7 @@ export interface SessionEventMap {
    * **不進模型**；會話遙測的鏡像**不送**它（`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
    *
    * **格式 55 起**（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：寫在它那次呼叫的 `model/start` **之前**、不帶
-   * `modelCall`、不標 `ignorable`，同 dsh；屬於哪一次看位置，是它之後的第一顆 `model/start`。同一次呼叫裡被重送時，
+   * `modelCall`、不標 `ignorable`；屬於哪一次看位置，是它之後的第一顆 `model/start`。同一次呼叫裡被重送時，
    * 後來那份落在已寫的 `model/start` 之後，歸給還開著的那一次。格式 54 以前帶 `modelCall`、落在 `model/start` 之後、標
    * `ignorable`；讀的一方看有沒有 `modelCall` 分新舊。這份日誌沒有快照時第一份的 `reason` 是 `'initial'`，之後不同才記、
    * `reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
@@ -889,8 +889,7 @@ export interface SessionEventMap {
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
-   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416，同 dsh：它只對外掛紀錄設，
-   * `packages/core/session/src/index.ts:470-513`、`:861`），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
+   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
    * `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在同一輪裡、失敗那一對
    * `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）之後。跟下一次嘗試的 `model/start` 誰先誰後不固定：pump
    * 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。`modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
@@ -1591,7 +1590,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
  *
  * - `request/header` 不帶空的 `header.tools`（dsh `:205-207`）：寫方沒有工具時整格省略（`request-snapshot.ts`）。
  * - `tool/result` 帶了 `error` 就必須 `isError: true`（dsh `:212-218`）：`error` 只在失敗時出現。
- * - `turn/end` 的 `reason` 只准認得的種類（格式 55，dsh 沒有這一條），見 {@link validateTurnEndReason}。
+ * - `turn/end` 的 `reason` 只准認得的種類，見 {@link validateTurnEndReason}。
  *
  * dsh 其餘幾條（developer 角色與工具增減區塊、`header.system`、空的 `adapterDefaults`）nexus 沒有那些格，不適用。不驗整份 payload。
  * 呼叫點照 dsh：{@link SessionLog.append}（`index.ts:824`）、seed 的信封檢查（`:230`）、後端讀盤（`storage-contract.ts:95`）。
@@ -1642,9 +1641,9 @@ const TURN_ABORT_CAUSE_KINDS: ReadonlySet<string> = new Set(
 );
 
 /**
- * `turn/end` 的 `reason` 只准 {@link TurnEndReason} 的成員（格式 55）。不認得的理由要拒：有讀方把不認得的理由當成正常完成
+ * `turn/end` 的 `reason` 只准 {@link TurnEndReason} 的成員。不認得的理由要拒：有讀方把不認得的理由當成正常完成
  * （`@nexus/plugin-trajectory` 與 `@nexus/plugin-token-meter` 的 `endOf`），新版寫的理由給舊讀方讀就會靜靜讀錯。
- * dsh 的讀方不驗，因為它的理由是外掛可以合併擴充的；這裡的是封閉聯集，所以驗得了。
+ * {@link TurnEndReason} 是封閉聯集，所以驗得了。
  */
 function validateTurnEndReason(reason: unknown, subject: string): void {
   if (!isJsonObject(reason)) throw new TypeError(`${subject} 的 data.reason 要是物件`);

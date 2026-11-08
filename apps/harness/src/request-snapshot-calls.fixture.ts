@@ -9,7 +9,9 @@
 
 import type { SessionEvent } from '@nexus/core';
 
+/** 一顆請求快照歸哪次呼叫。 */
 export interface RequestSnapshotCall {
+  /** `request/system` 或 `request/header`。 */
   readonly type: string;
   /** 事件自己帶的 `modelCall`；新形狀不帶，是 `null`。 */
   readonly modelCall: number | null;
@@ -17,6 +19,7 @@ export interface RequestSnapshotCall {
   readonly call: number | null;
 }
 
+/** 一顆作廢的嘗試歸哪次呼叫。 */
 export interface AttemptCall {
   readonly modelCall: number | null;
   /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前。 */
@@ -28,6 +31,7 @@ function modelCallOf(event: SessionEvent): number | null {
   return typeof value === 'number' ? value : null;
 }
 
+/** 日誌上每顆請求快照依序歸哪次呼叫，規則見檔頭。 */
 export function requestSnapshotCalls(events: readonly SessionEvent[]): RequestSnapshotCall[] {
   return events.flatMap((event, index): RequestSnapshotCall[] => {
     if (event.type !== 'request/system' && event.type !== 'request/header') return [];
@@ -49,6 +53,7 @@ export function requestSnapshotCalls(events: readonly SessionEvent[]): RequestSn
   });
 }
 
+/** 日誌上每顆 `assistant/attempt` 依序歸哪次呼叫、失敗收尾在不在它前面。 */
 export function attemptCalls(events: readonly SessionEvent[]): AttemptCall[] {
   return events.flatMap((event, index): AttemptCall[] => {
     if (event.type !== 'assistant/attempt') return [];

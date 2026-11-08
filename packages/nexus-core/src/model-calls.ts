@@ -1,6 +1,6 @@
 /**
- * 每一次模型呼叫的**起訖**，記進這次呼叫所屬的那一份會話日誌：`model/start` 在請求送出之前（格式 55 起排在請求快照之後，
- * 見 {@link ./model-call-scope.ts}）、`model/end` 在 `finally` 裡。會話統計（{@link ./session-stats.ts}）拿它數步數、量模型耗時。
+ * 每一次模型呼叫的**起訖**，記進這次呼叫所屬的那一份會話日誌：`model/start` 在請求快照之後、請求送出之前（見
+ * {@link ./model-call-scope.ts}）、`model/end` 在 `finally` 裡。會話統計（{@link ./session-stats.ts}）拿它數步數、量模型耗時。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  *
  * ## dsh 的 `step/*`，以及為什麼不叫那個名字
@@ -73,8 +73,9 @@
  * dsh 沒有 `model/start`／`model/end`，最接近的是請求前的 `request/header`（`agent.ts:637-650`）與結算那次呼叫的
  * `assistant/message`／`assistant/attempt`（`:484-510`、`:537-558`）：全部直接 `append`、不吞，寫不進去這一輪失敗。照它：
  *
- * - **`model/start` 記不進去**：在寫的那一刻拋（快照的 callback 裡、或範圍裡第一個要識別的寫入點），這次請求沒送出去。
- *   失敗路徑上補寫一次，配成一對；補寫也記不進去，兩個錯一起拋，原錯在前、也是 `cause`。
+ * - **`model/start` 記不進去**：在寫的那一刻拋，這次請求沒送出去。寫在快照的 callback 裡、或範圍裡第一個要識別的寫入點時，
+ *   失敗路徑上補寫一次，配成一對；補寫也記不進去，兩個錯一起拋，原錯在前、也是 `cause`。動態模型（`request.model` 不是
+ *   Runnable）在進 `try` 之前就寫，拋了直接往外拋，不叫 `handler`、也沒有 `model/end`。
  * - **`model/end` 記不進去**：正常回來的那次，寫入錯往外拋，回覆不進 graph state；**已經在失敗路徑上**（`handler` 拋了、
  *   回覆記不進去）的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `:495-499` 的 `AggregateError`），不蓋掉原錯。
  * - `forCall` 不是 `ok`（這次呼叫不屬於任何一份日誌）照舊不記、照常呼叫：那不是寫入失敗。
@@ -153,13 +154,13 @@ export function createModelCallRecorder(sessions: {
       if (found.kind !== 'ok') return handler(request);
       const { log } = found;
       const route = routeOfModel(request.model);
-      // `model/start` 先不寫：等請求快照寫完、送出之前才寫（格式 55，見 `model-call-scope.ts` 的檔頭）。
+      // `model/start` 先不寫：等請求快照寫完、送出之前才寫（見 `model-call-scope.ts` 的檔頭）。
       // 記不進去從寫的那一刻拋，請求不送出（#1702，見檔頭）。
       const call = openModelCall(
         log,
         () => log.append('model/start', route === undefined ? {} : { route }).seq,
       );
-      // 動態模型（函式）不會有快照的 callback，照舊一進來就寫。
+      // 動態模型（函式）掛不了快照的 callback，一進來就寫。
       if (!RunnableBinding.isRunnable(request.model)) call.ensureStarted();
       let response;
       let modelCall: number;

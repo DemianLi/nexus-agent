@@ -3417,7 +3417,7 @@ export class ThreadPump {
   }
 
   /**
-   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，格式 55 起不可略過），線上送
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
    *
    * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。

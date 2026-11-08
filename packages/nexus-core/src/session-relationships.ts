@@ -68,7 +68,7 @@ export interface SessionRelationshipChecker {
  * - **請求快照**（`request/system`、`request/header`，格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：帶 `modelCall`
  *   的是 54 以前的形狀，只檢它指得到 `model/start`。不帶的是 55 的形狀，歸屬看位置，所以兩條：要落在開著的輪內；落在任何開著的
  *   呼叫之外的，這一輪收工之前要等到一顆 `model/start`，等不到就是寫丟了它那次呼叫。**被 `interrupted` 收掉的輪不檢第二條**：
- *   行程在快照與 `model/start` 之間死掉、落盤只到快照，續接補結的就是那一顆（`interrupted-turn.ts`）。輪內那條同核准稽核，只在出現過
+ *   行程死在快照落盤之後、`model/start` 落盤之前（兩顆同一批排空，批寫到一半就斷），續接補結的就是那一輪（`interrupted-turn.ts`）。輪內那條同核准稽核，只在出現過
  *   `turn/start` 的日誌上判：子代理的日誌沒有 `turn/*`，第二條在那裡也就沒有收工點可檢。
  * - **作廢的嘗試**（`assistant/attempt`）要落在開著的輪內；帶 `modelCall` 的，那次呼叫要已經以 `error` 或 `aborted` 收尾。跟下一次嘗試的
  *   `model/start` 誰先誰後不檢：pump 在圖外收通知，下一次嘗試在圖裡照跑。
@@ -181,7 +181,11 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
           report('attempt-outside-turn', `assistant/attempt（seq ${seq}）落在任何開著的輪之外`);
         }
         const modelCall = field(event, 'modelCall');
-        if (typeof modelCall === 'number' && startSeqs.has(modelCall) && !failedCalls.has(modelCall)) {
+        if (
+          typeof modelCall === 'number' &&
+          startSeqs.has(modelCall) &&
+          !failedCalls.has(modelCall)
+        ) {
           report(
             'attempt-before-failed-end',
             `assistant/attempt（seq ${seq}）指的那次呼叫（model/start seq ${modelCall}）還沒以 error 或 aborted 收尾`,

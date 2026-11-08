@@ -31,13 +31,14 @@
  * `seq` 是某一份日誌裡的號碼，拿到別份日誌上只會指到不相干的事件。root 與子代理各有日誌，一個寫入點若解析出別份，
  * 寧可不附也不附錯。
  *
- * ## `model/start` 等到第一個要它的地方才寫（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
+ * ## `model/start` 等到第一個要它的地方才寫（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
  *
  * 請求快照（`request/system`、`request/header`）要排在 `model/start` 之前，而快照要等模型被叫的那一刻才拿得到
  * （{@link ./request-snapshot.ts}）。所以起訖紀錄器一進來只開範圍（{@link openModelCall}），`model/start` 由下面三者中最先到的寫：
  *
  * 1. 請求快照的 callback：寫完快照接著寫，同一段同步程式裡、中間沒有 `await`，然後才排空、送出；
- * 2. 範圍內第一個要識別的寫入點（{@link currentModelCall}），只會發生在請求還沒送出就失敗的那次；
+ * 2. 範圍內第一個要識別的寫入點（{@link currentModelCall}，今天只有用量記錄器）：回覆沒經過請求快照的 callback 就回來時
+ *    （內層沒叫到模型、直接回了一則帶用量的回覆）；
  * 3. 起訖紀錄器自己，`handler` 回來或拋出時還沒寫的話。
  *
  * 寫的那一刻（{@link ModelCallHandle.ensureStarted}）一次補齊範圍進來時沒辦法給的三樣：範圍裡的識別、這份日誌「最近開的那一次」、

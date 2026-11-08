@@ -91,7 +91,7 @@ const PROMPT = '你好';
 /**
  * 夾具要留存的形狀的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root`、`approval-policy-missing`、
  * `two-file-layout` 與 `request-snapshot-shape` 不用補寫（12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有
- * `approval/policy`，52 以前的寫入器本來就寫舊兩檔，54 以前的 CLI 一輪本來就寫帶 `modelCall` 的 `request/*`），只記今天的讀方
+ * `approval/policy`，52 以前的寫入器本來就寫舊兩檔，54 的 CLI 一輪本來就寫帶 `modelCall` 的 `request/*`），只記今天的讀方
  * 對它的輸出。
  */
 type Trigger =

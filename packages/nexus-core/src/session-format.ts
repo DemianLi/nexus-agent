@@ -176,7 +176,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 29,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'packages/nexus-core/src/session-relationships.ts:289',
+    readerBranch: 'packages/nexus-core/src/session-relationships.ts:293',
   },
   { from: 29, to: 30, kind: 'additive', ref: '#1025' },
   { from: 30, to: 31, kind: 'additive', ref: '#1023' },

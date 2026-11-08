@@ -672,7 +672,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * ## 55：請求快照排到 `model/start` 之前，`turn/end` 認得 `max-turns`
  *
- * [#2416](https://github.com/DemianLi/nexus-agent/issues/2416)（K7c c-2c），照 dsh 的事件順序：
+ * [#2416](https://github.com/DemianLi/nexus-agent/issues/2416)：
  * - `request/system`、`request/header` 寫在它那次呼叫的 `model/start` **之前**，不帶 `modelCall`、不標 `ignorable`；屬於哪一次看位置
  *   （之後的第一顆 `model/start`）。`model/start` 等到第一個要它的地方才寫，見 `model-call-scope.ts` 檔頭。
  * - `assistant/attempt` 不標 `ignorable`，位置與觸發條件不變。

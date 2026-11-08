@@ -906,7 +906,8 @@ export function foldRegistry(
     // 空回覆算失敗（#1437）：在起訖內側（失敗那次不記 `assistant/message`）、用量外側（用量照記）。
     shared('emptyResponse', emptyResponse),
     shared('modelUsage', modelUsage),
-    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，排的是記好的請求前綴；在其餘 plugin
+    // 耐久檢查點排在起訖紀錄器內側，排的是這一步之前記好的事件（`model/start` 還沒寫：它跟請求快照在送出前另排空一次，
+    // 見 {@link ./request-snapshot.ts}）；在其餘 plugin
     // middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次。子代理的模型呼叫排空的是子代理那一份日誌。
     // 工具那一側是 `tools/execute` 外層的那一位（下面 `toolExecute` 那一格）；圍堵在它外側先記 `tool/call`（有 `callId`、找得到日誌時）。
     // 見 {@link ./session-checkpoint-policy.ts}。

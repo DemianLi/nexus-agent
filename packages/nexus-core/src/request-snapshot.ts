@@ -20,11 +20,10 @@
  *
  * `reason` 是 `'initial'`（這份日誌第一份）或 `'change'`（跟上一份不同）。
  *
- * ## 寫在 `model/start` 之前，不帶 `modelCall`（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
+ * ## 寫在 `model/start` 之前，不帶 `modelCall`（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
  *
- * 照 dsh 的順序：`request/header` 先落、`step/start` 後落（`packages/core/agent-loop/src/agent.ts:637-650`），`request/header`
- * 也不帶呼叫識別（`packages/core/session/src/types.ts:398-403`）。屬於哪一次呼叫看位置：**快照之後的第一顆 `model/start`**。
- * 格式 54 以前兩顆帶 `modelCall`、排在 `model/start` 之後；讀的一方看有沒有 `modelCall` 分新舊。
+ * 屬於哪一次呼叫看位置：**快照之後的第一顆 `model/start`**（同一次呼叫裡重送的見下段）。日誌上也有格式 54 以前寫的舊形狀：
+ * 帶 `modelCall`、排在 `model/start` 之後；讀的一方看有沒有 `modelCall` 分新舊。
  *
  * 一次呼叫的範圍由 {@link ./model-calls.ts} 開，`model/start` 等到第一個要它的地方才寫（{@link ./model-call-scope.ts}）。
  * 這裡是第一個：handler 記完快照，**同一段同步程式碼裡**接著寫 `model/start`，中間沒有 `await`，別的寫入插不進來；
@@ -80,8 +79,8 @@
  *
  * ## 不進模型，遙測不放行
  *
- * 兩顆不在 `MODEL_VISIBLE_EVENT_TABLE`。格式 55 起不帶 `ignorable`：位置成了「這次呼叫送了什麼」的唯一線索，不能略過，
- * 同 dsh（它只對外掛紀錄設 `ignorable`，`packages/core/session/src/index.ts:470-513`、`:861`）。會話遙測的鏡像**不送**它們
+ * 兩顆不在 `MODEL_VISIBLE_EVENT_TABLE`，也不標 `ignorable`：位置是「這次呼叫送了什麼」的唯一線索，讀不懂它的 runtime 不能略過。
+ * 會話遙測的鏡像**不送**它們
  * （系統提示詞可能含工作區內容，見 {@link ./session-telemetry.ts | isMirroredEvent}）。
  *
  * ## 記不進去，這次請求不送（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）
@@ -96,7 +95,8 @@
  * 基準只在**記成功之後**才前進（dsh 的 `requestHeaderLogged` 也是寫成功才設），所以下一次呼叫會再試、第一份照樣是 `initial`。
  *
  * 兩顆的寫入順序是先 `request/system` 後 `request/header`：**`append` 寫 header 時拋**（含超過深度上限），日誌上已經有這次的
- * `request/system`；`model/start` 由 {@link ./model-calls.ts} 失敗那條路補寫，緊接著 `model/end{outcome:'error'}`，沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
+ * `request/system`；`model/start` 由 {@link ./model-calls.ts} 失敗那條路補寫，緊接著 `model/end{outcome:'error'}`，沒有送出。
+ * 形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
  * （`:430-439`），再寫 `request/header`（`:637-650`），header 寫不進去時那一步的 system 與 user 一樣留在日誌上。dsh 的不變量是
  * 「送出的必定在送出之前就在日誌上」，不是「日誌上的必定被送出」；讀 `request/system` 的地方取的是最近（生效）的那一份
  * （`packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`apps/harness/src/log-derived-history.fixture.ts`）。
@@ -494,7 +494,7 @@ export function createRequestSnapshotRecorder(sessions: CheckpointSessions): Age
         );
       }
       const log = call?.log ?? (found.kind === 'ok' ? found.log : undefined);
-      // 動態模型（函式）包不了，照舊交出去——那條路上不記，`model/start` 照樣在送出前寫好。
+      // 動態模型（函式）包不了，原樣交出去——那條路上不記，`model/start` 在送出前寫好。
       if (log === undefined || !RunnableBinding.isRunnable(request.model)) {
         call?.ensureStarted();
         return handler(request);
