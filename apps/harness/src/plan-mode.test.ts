@@ -40,7 +40,12 @@ import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { convertMessagesToCompletionsMessageParams } from '@langchain/openai';
 import { HumanMessage } from '@langchain/core/messages';
-import { APPROVAL_POLICY_NEVER, SessionRegistry, STEP_INBOX_CONFIG_KEY } from '@nexus/core';
+import {
+  APPROVAL_POLICY_NEVER,
+  SessionRegistry,
+  STEP_INBOX_CONFIG_KEY,
+  withModelCallStep,
+} from '@nexus/core';
 import type {
   PluginEntry,
   QuestionInterruptItem,
@@ -280,18 +285,20 @@ describe('計劃指引進不進 system prompt', () => {
         name: 'outer-prompt',
         apply: (registry) =>
           void registry.middleware.use(
-            {
-              name: 'outerPrompt',
-              wrapModelCall: (
-                request: { systemMessage?: { concat: (text: string) => unknown } },
-                handler: (next: unknown) => unknown,
-              ) =>
-                handler(
-                  request.systemMessage === undefined
+            withModelCallStep(
+              (raw, next) => {
+                const request = raw as { systemMessage?: { concat: (text: string) => unknown } };
+                return next(
+                  (request.systemMessage === undefined
                     ? { ...request, systemPrompt: marker }
-                    : { ...request, systemMessage: request.systemMessage.concat(`\n${marker}`) },
-                ),
-            } as never,
+                    : {
+                        ...request,
+                        systemMessage: request.systemMessage.concat(`\n${marker}`),
+                      }) as never,
+                );
+              },
+              (wrapModelCall) => ({ name: 'outerPrompt', wrapModelCall }),
+            ) as never,
             { prepend: true },
           ),
       },

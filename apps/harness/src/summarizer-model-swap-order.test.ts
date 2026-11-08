@@ -56,6 +56,7 @@ import {
   TokenAnchorBook,
   tagModelRoute,
   windowThreshold,
+  withModelCallStep,
 } from '@nexus/core';
 import type { ModelContextLimits, PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -164,13 +165,15 @@ async function observe(options: RunOptions): Promise<Observation> {
     plugin: {
       name: 'swap-order-observer',
       apply: (registry) =>
-        void registry.middleware.use({
-          name: 'swapOrderObserver',
-          wrapModelCall: (request: { model: unknown }, handler: (next: unknown) => unknown) => {
-            innerSaw.push(labelOf(request.model));
-            return handler(request);
-          },
-        } as never),
+        void registry.middleware.use(
+          withModelCallStep(
+            (request, next) => {
+              innerSaw.push(labelOf((request as { model: unknown }).model));
+              return next(request);
+            },
+            (wrapModelCall) => ({ name: 'swapOrderObserver', wrapModelCall }),
+          ) as never,
+        ),
     },
   };
   const poker: PluginEntry = {

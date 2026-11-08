@@ -56,6 +56,12 @@ export const KNOWN_DIFFERENCE_KINDS = {
       '這一條斷言 `agent/turn-stopping` 的 `step`：langgraph 下由轉接格（`turn-stopping.ts`）派，拿不到步數，step 給 0；' +
       'native 給真的步數。到 #2363 拿掉。',
   },
+  unregisteredCell: {
+    card: 2363,
+    reason:
+      '這一條用 plugin 把摘要器換成基座 langchain 原版的 `SummarizationMiddleware`（同名取代）。基座那顆的 `wrapModelCall` 沒有登記一步，' +
+      'native 建構時就拋（`packages/nexus-core/src/native-loop/agent.ts` 的建構檢查）。出貨組裝沒有這種組法（`native-shipped-cells.test.ts`）。',
+  },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;
 
 /** 一條登記：哪個檔的哪一條（`describe > … > it`，同 vitest 報告），哪一種差異，native 下怎麼跑。 */
@@ -2164,6 +2170,66 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '沒有 --workspace 的那條路（`serve` 的預設） > **寫進去的東西下一輪讀得回來**——`filesUpdate` 沒包成 `Command` 的話這裡是空的',
     kind: 'interrupt',
     run: 'skip',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'deny 規則擋得住工具，擋不住 offload > 經 offload 寫同一個路徑：規則形同不存在，歷史照樣落檔',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'fraction 型別的門檻在我們的模型上是壞的 > fraction keep 一則逐字訊息都不留，而且每輪重新摘要一次',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'fraction 型別的門檻在我們的模型上是壞的 > fraction trigger 連 0.01% 都碰不到——一次都沒觸發',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'fraction 型別的門檻在我們的模型上是壞的 > 對照：兩邊都用 messages 就正常',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'offload 失敗是 fail-open > fence 擋住的時候歷史消失，但對話照樣走完',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'offload 失敗是 fail-open > 可寫的時候歷史真的落檔',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: 'read-only 的逃生口：摘要器的 backend 是獨立的一格 > 唯讀根一個檔案都沒多，歷史落在另一個根裡，對話照樣走完',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: '同名取代是唯一的縫 > stack 裡只有一個 SummarizationMiddleware，而且是我們的',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: '同名取代是唯一的縫 > 註冊點只蓋到 root，記號不會外溢到 subagent 那輪',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: '壓縮前先剪掉過大的工具結果 > 拔掉剪刀（換成基座原版摘要器）就多一次模型呼叫',
+    kind: 'unregisteredCell',
+    run: 'fails',
   },
   {
     file: 'src/summarizer-model-swap-order.test.ts',
