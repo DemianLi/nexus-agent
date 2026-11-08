@@ -88,7 +88,15 @@
  * @module
  */
 
-import type { ApprovalChannel, ApprovalPolicySource, NexusPlugin } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 核准管道、核准政策、模式與錯誤資訊的型別還在 core，清理在 #2557
+import type {
+  ApprovalChannel,
+  ApprovalPolicySource,
+  NexusServices,
+  SandboxMode,
+  ToolErrorInfo,
+} from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 核准中斷的常數、拒絕句、服務名與虛擬路徑規則還沒有 core 以外的出處，清理在 #2557
 import {
   APPROVAL_INTERRUPT_KIND,
   APPROVAL_INVALID_REPLY,
@@ -98,10 +106,9 @@ import {
   CHANNEL_SERVICE,
   virtualPathOf,
 } from '@nexus/core';
-import type { JsonValue, NexusTool, NexusToolResult } from '@nexus/tools';
+import type { JsonValue, NexusTool, NexusToolResult, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 
-import type { SandboxMode, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 模型看到的工具名。核准卡（中斷酬載的 `actionRequests[].name`）帶的就是這個字串，所以它是導出的。 */
@@ -441,24 +448,21 @@ function createEscalationTool(
  *
  * **問人沒有開關**：這顆工具存在的意義就是讓人看過。
  *
- * 升級工具是 `NexusTool`：組裝點的 `createRegistry` 要交 `adaptTool`，沒交就在註冊當下拋。
+ * 升級工具是 `NexusTool`：宿主在 `thread.register` 那一步轉成基座的工具。
  *
- * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
+ * @param thread - 這條 thread 的組裝。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）；它與
+ *   {@link APPROVAL_POLICY_SERVICE} 都要在 `threadSource` 宣告過。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
  * @param targets - 不問人的目標：唯讀共用區前綴（#1800）、寫不進去的目標（#2078）。
  */
 export function registerSandboxEscalation(
-  registry: Parameters<NexusPlugin['apply']>[0],
+  thread: ToolThread,
   controller: SandboxModeController,
   targets: EscalationTargets = {},
 ): void {
-  registry.tools.register(
-    createEscalationTool(
-      controller,
-      registry.services.get(CHANNEL_SERVICE),
-      registry.services.get(APPROVAL_POLICY_SERVICE)?.source,
-      targets,
-    ),
-  );
+  const channel = thread.services.get(CHANNEL_SERVICE) as ApprovalChannel | undefined;
+  const approvalPolicy = thread.services.get(APPROVAL_POLICY_SERVICE) as
+    NexusServices[typeof APPROVAL_POLICY_SERVICE] | undefined;
+  thread.register(createEscalationTool(controller, channel, approvalPolicy?.source, targets));
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);
 }

@@ -32,7 +32,6 @@ import { createAskUserPlugin } from './ask-user.fixture.js';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
   unaskedRefusal,
@@ -51,6 +50,14 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 const OVERLOADED = 'Service temporarily overloaded';
 
@@ -1064,7 +1071,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
                 fsContainment: CONTAINED_FILESYSTEM,
                 sandboxPolicy: { controller, rootDir: dir },
               }),
-              createSandboxPolicyPlugin(),
+              sandboxPolicyRow,
             ]
           : [],
       }),
@@ -1123,7 +1130,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
           fsContainment: CONTAINED_FILESYSTEM,
           sandboxPolicy: { controller, rootDir: dir },
         }),
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow,
       ],
     });
     return { controller, run };

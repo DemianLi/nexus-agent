@@ -931,7 +931,7 @@
 #
 # **有圍堵時這一列關不掉**：組裝點起動時檢查，有 `--workspace` 而這一列不在（或被停用）就起不來——fence 還在擋，
 # 模型卻不知道、也請不到升級，看起來像關了護欄其實沒有。沒有圍堵時關掉它是合法的（只是少了那一句）。
-# 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
+# `Config` 是空的：沒有可設的欄位，模式由 `--sandbox` 決定。
 - id: sandbox-policy
   name: '@nexus/plugin-sandbox-policy'
 

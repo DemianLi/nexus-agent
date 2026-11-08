@@ -1232,9 +1232,15 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter

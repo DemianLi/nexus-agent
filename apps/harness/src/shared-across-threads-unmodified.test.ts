@@ -25,7 +25,6 @@ import { createRegistry, loadPlugins } from '@nexus/core';
 import * as systemPromptModule from '@nexus/plugin-system-prompt';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   SANDBOX_POLICY_SECTION_NAME,
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
@@ -37,6 +36,14 @@ import { describe, expect, it } from 'vitest';
 
 import { mountDetached } from './plugin-tree.js';
 import { createSystemPromptMiddleware } from './system-prompt-middleware.js';
+import { shippedPlugins } from './fixtures.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 /** 兩條 thread 各自的工作目錄：提示詞裡 `{{cwd}}` 該代入的值。 */
 const CWD_OF: Readonly<Record<string, string>> = { a: '/work/alpha', b: '/work/beta' };
@@ -86,7 +93,7 @@ async function mountSandboxPolicy(mode: 'read-only' | 'workspace-write'): Promis
           },
         },
       },
-      createSandboxPolicyPlugin(),
+      sandboxPolicyRow,
     ],
     createRegistry({ adaptTool: toLangChainTool }),
   );

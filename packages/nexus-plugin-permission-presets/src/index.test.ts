@@ -428,6 +428,13 @@ describe('掛上之後', () => {
     });
   });
 
+  it('/permission 沒有宣告 runWhileBusy：一輪跑著時切不了核准，子代理的組名才能由參與者在接上時讀（`@nexus/permission-presets` 檔頭「子代理的組名」那一條的前提）', async () => {
+    const run = await mountFor(['t']);
+    expect(run.commands.entries().map((entry) => entry.definition.runWhileBusy)).toEqual([
+      undefined,
+    ]);
+  });
+
   it('壞設定在掛載當下就拋，那一列起不來、什麼都沒註冊：空表、保留字 custom、defaultPreset 不在表裡', async () => {
     const cases: [object, string][] = [
       [{ presets: {} }, '空的'],
