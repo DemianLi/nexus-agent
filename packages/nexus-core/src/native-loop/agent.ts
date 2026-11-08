@@ -53,7 +53,7 @@ import {
   type InvokableTool,
   type LoopMiddleware,
 } from './onion.js';
-import { withoutNativeSkippedCells } from './native-skipped-cells.js';
+import { withNativeNoopCells } from './native-noop-cells.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
 import { emptyState, StateChannels, type LoopState } from './state.js';
 
@@ -197,7 +197,7 @@ export class NativeAgent {
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
   /**
-   * 洋蔥實際驅動的那一份（{@link drivenByOnion}），再把清單上的格換成空函式（{@link withoutNativeSkippedCells}），跟
+   * 洋蔥實際驅動的那一份（{@link drivenByOnion}），再把清單上的格換成空函式（{@link withNativeNoopCells}），跟
    * {@link NativeAgent.middleware} 一一對應。
    */
   readonly #driven: readonly LoopMiddleware[];
@@ -237,7 +237,7 @@ export class NativeAgent {
     this.#threads = threads;
     this.#defaults = defaults;
     this.middleware = params.middleware as readonly LoopMiddleware[];
-    this.#driven = this.middleware.map((m) => withoutNativeSkippedCells(drivenByOnion(m)));
+    this.#driven = this.middleware.map((m) => withNativeNoopCells(drivenByOnion(m)));
     this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
     this.#toolCells = this.middleware.flatMap((m, index) => {
       const wrapToolCall = this.#driven[index]!.wrapToolCall;

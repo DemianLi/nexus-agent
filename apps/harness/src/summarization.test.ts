@@ -386,7 +386,7 @@ describe('offload 失敗是 fail-open', () => {
 describe('/conversation_history 的另一個寫入者', () => {
   /** 剛好越過 `4 * 5e4` 那條線。 */
   const HUGE = '長'.repeat(200001);
-  /** native 的 root 把基座搬人話的那一格換成空函式（`native-skipped-cells.ts`，#1827 D234），超大的人話改在宿主的入口拒收。 */
+  /** native 的 root 把基座搬人話的那一格換成空函式（`native-noop-cells.ts`，#1827 D234），超大的人話改在宿主的入口拒收。 */
   const native = process.env.NEXUS_TEST_AGENT_LOOP === 'native';
 
   async function evict(mode: 'workspace-write' | 'read-only'): Promise<{

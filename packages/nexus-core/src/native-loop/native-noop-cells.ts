@@ -3,7 +3,7 @@
  * update，只是什麼都不做；兩個 loop 的節點序列與遞迴預算因此一致，人話超過門檻時那一筆 update 的內容不同。`langgraph` 與子代理（native 下仍是 LangGraph 子圖，
  * TODO(#2359)）照舊跑基座的實作。
  *
- * 往清單加一條要先經過決策；`native-skipped-cells.test.ts` 列舉整份清單，多一條、少一條都紅。
+ * 往清單加一條要先經過決策；`native-noop-cells.test.ts` 列舉整份清單，多一條、少一條都紅。
  *
  * @module
  */
@@ -11,14 +11,14 @@
 import type { LoopMiddleware } from './onion.js';
 
 /** 可以換成空函式的格。 */
-export type NativeSkippedPart = 'beforeAgent';
+export type NativeNoopPart = 'beforeAgent';
 
 /** 清單上的一條。 */
-export interface NativeSkippedCell {
+export interface NativeNoopCell {
   /** middleware 的名字。 */
   readonly middleware: string;
   /** 換成空函式的那一格。 */
-  readonly part: NativeSkippedPart;
+  readonly part: NativeNoopPart;
   /** 為什麼 native 不跑基座的實作。 */
   readonly reason: string;
   /** 決策出處。 */
@@ -32,7 +32,7 @@ export interface NativeSkippedCell {
  * 節點照留，是因為 native 的遞迴預算照 langgraph 的節點數算。TODO(#2363)：拿掉 langgraph 時，
  * 這一格連同這份清單一起拿掉。
  */
-export const NATIVE_SKIPPED_CELLS: readonly NativeSkippedCell[] = Object.freeze([
+export const NATIVE_NOOP_CELLS: readonly NativeNoopCell[] = Object.freeze([
   Object.freeze({
     middleware: 'FilesystemMiddleware',
     part: 'beforeAgent',
@@ -52,8 +52,8 @@ const noop = (): undefined => undefined;
  * @returns native 要跑的那一份。
  * @throws {Error} 名字在清單上、卻沒有清單上的那一格：基座換了形狀，這條宣告已經不對。
  */
-export function withoutNativeSkippedCells(middleware: LoopMiddleware): LoopMiddleware {
-  const parts = NATIVE_SKIPPED_CELLS.filter((cell) => cell.middleware === middleware.name).map(
+export function withNativeNoopCells(middleware: LoopMiddleware): LoopMiddleware {
+  const parts = NATIVE_NOOP_CELLS.filter((cell) => cell.middleware === middleware.name).map(
     (cell) => cell.part,
   );
   if (parts.length === 0) return middleware;
@@ -61,7 +61,7 @@ export function withoutNativeSkippedCells(middleware: LoopMiddleware): LoopMiddl
   for (const part of parts) {
     if (middleware[part] === undefined) {
       throw new Error(
-        `middleware "${middleware.name}" 沒有 ${part}，native 以空函式取代的清單（NATIVE_SKIPPED_CELLS）跟它對不上`,
+        `middleware "${middleware.name}" 沒有 ${part}，native 以空函式取代的清單（NATIVE_NOOP_CELLS）跟它對不上`,
       );
     }
     Object.defineProperty(view, part, { value: noop, enumerable: true });

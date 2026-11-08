@@ -1,5 +1,5 @@
 /**
- * native 以空函式取代的格（`native-skipped-cells.ts`）：清單是封閉的，這支檔列舉整份，多一條、少一條都紅；往清單加東西要先經過決策。
+ * native 以空函式取代的格（`native-noop-cells.ts`）：清單是封閉的，這支檔列舉整份，多一條、少一條都紅；往清單加東西要先經過決策。
  * 另外驗它真的生效：同一份組裝、同一則超過 200,000 字的人話，`langgraph` 照基座搬到 `/conversation_history`，native 什麼都不寫。
  */
 
@@ -14,13 +14,13 @@ import { assembleAgent } from '../agent-assembly.js';
 import { foldRegistry } from '../fold.js';
 import { HUMAN_MESSAGE_LIMIT_CHARS } from '../human-message-admission.js';
 import { loadPlugins } from '../load.js';
-import { NATIVE_SKIPPED_CELLS, withoutNativeSkippedCells } from './native-skipped-cells.js';
+import { NATIVE_NOOP_CELLS, withNativeNoopCells } from './native-noop-cells.js';
 import type { LoopMiddleware } from './onion.js';
 
 describe('native 以空函式取代的格', () => {
   it('清單只有 FilesystemMiddleware.beforeAgent 一條，附理由與出處', () => {
     expect(
-      NATIVE_SKIPPED_CELLS.map(({ middleware, part, decision }) => ({
+      NATIVE_NOOP_CELLS.map(({ middleware, part, decision }) => ({
         middleware,
         part,
         decision,
@@ -28,14 +28,14 @@ describe('native 以空函式取代的格', () => {
     ).toEqual([
       { middleware: 'FilesystemMiddleware', part: 'beforeAgent', decision: '#1827 D234' },
     ]);
-    for (const cell of NATIVE_SKIPPED_CELLS) expect(cell.reason.length).toBeGreaterThan(0);
+    for (const cell of NATIVE_NOOP_CELLS) expect(cell.reason.length).toBeGreaterThan(0);
   });
 
   it('清單上的那顆：那一格換成回 undefined 的空函式，其餘照讀原物件；不在清單上的原樣回', () => {
     const beforeAgent = () => ({ messages: [] });
     const wrapToolCall = async () => undefined;
     const listed = { name: 'FilesystemMiddleware', beforeAgent, wrapToolCall } as LoopMiddleware;
-    const view = withoutNativeSkippedCells(listed);
+    const view = withNativeNoopCells(listed);
     expect(typeof view.beforeAgent).toBe('function');
     expect(view.beforeAgent).not.toBe(beforeAgent);
     expect(
@@ -46,13 +46,13 @@ describe('native 以空函式取代的格', () => {
     expect(listed.beforeAgent).toBe(beforeAgent);
 
     const other = { name: 'Other', beforeAgent } as LoopMiddleware;
-    expect(withoutNativeSkippedCells(other)).toBe(other);
+    expect(withNativeNoopCells(other)).toBe(other);
   });
 
   it('清單上的那顆沒有那一格：拋，宣告對不上不會靜靜沒作用', () => {
-    expect(() =>
-      withoutNativeSkippedCells({ name: 'FilesystemMiddleware' } as LoopMiddleware),
-    ).toThrow('middleware "FilesystemMiddleware" 沒有 beforeAgent');
+    expect(() => withNativeNoopCells({ name: 'FilesystemMiddleware' } as LoopMiddleware)).toThrow(
+      'middleware "FilesystemMiddleware" 沒有 beforeAgent',
+    );
   });
 });
 
