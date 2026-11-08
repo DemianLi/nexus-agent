@@ -222,7 +222,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:859',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:861',
   },
   {
     from: 51,
