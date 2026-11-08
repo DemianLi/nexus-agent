@@ -19,15 +19,15 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
   - 本體回的 `Command` 的 `update` 不是物件（例如 tuple 陣列），或本體回的不是 `Command`：放不進那則，整個換成用交回內容新造的一則 `ToolMessage`。
   - 照舊拋 `TypeError`：本體沒跑（自己沒叫 `next()`，或叫了而被內側短路）；或不帶內容、又不是工具本體回的那一個。
   - 舊行為：交回的 `command` 結果不是 `next()` 回的那一個，一律拋 `TypeError`。
-- **`fresh: true`**：`tools/execute` 交回的訊息結果帶它，換上的那則就是新造的，只帶 `tool_call_id`、`name`、`status` 與錯誤碼，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。不帶的照舊沿用。
+- **`fresh: true`**：`tools/execute` 交回的結果（`message`，或帶內容的 `command`）帶它，換上的那則就是新造的，只帶 `tool_call_id`、`name`、`status` 與錯誤碼，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。不帶的照舊沿用。
 
 **插件監聽者看到的兩處時刻改變**（行為改變）：
 
-輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區的讀檔前綴，原本是三顆各自的 middleware，現在是工具事件上的 core 監聽者。模型收到的內容、會話日誌、工具清單都跟以前一樣。
+輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區的讀檔前綴，原本是三顆各自的 middleware，現在是工具事件上的 core 監聽者。出廠組裝（沒有插件監聽者改 `tools/execute` 或 `tools/post-execute` 的結果）下，模型收到的內容、會話日誌、工具清單都跟以前一樣。
 
-- **`tools/execute`**：輸出校驗與撞限替換排在插件監聽者內側。
-  - 舊行為：插件監聽者的 `next()` 交回的是還沒驗輸出、還沒換掉撞限結果的那一份，校驗與替換在插件監聽者外面才發生。
-  - 新行為：`next()` 交回的就是驗過、換過的那一份。輸出不合 schema 時，`next()` 交回的已是那則錯誤（`isError: true`，碼是 `INVALID_TOOL_OUTPUT`）。
+- **`tools/execute`**：輸出校驗改排在插件監聽者內側；撞限替換原本就在內側，時刻不變。
+  - 舊行為：插件監聽者的 `next()` 交回的是還沒驗輸出的那一份，校驗在插件監聽者外面才發生，插件監聽者交回的結果也會被驗。
+  - 新行為：`next()` 交回的就是驗過的那一份；插件監聽者自己交回的結果不再經輸出校驗。輸出不合 schema 時，`next()` 交回的已是那則錯誤（`isError: true`，碼是 `INVALID_TOOL_OUTPUT`）。
   - 換過的那一份是完整的結果：`blocks` 是 `content` 那一格 `text`，`shape` 是 `text`。這個 `blocks` 由 `content` 導出，生產者認的是參照：
     - 原樣交回，或只換 `content`（`{ ...result, content }`）：模型收到字串。
     - 給新的 `blocks`，連複製一份（`[...result.blocks]`）也算：模型收到陣列。要保持字串就別複製，改 `content`。
@@ -36,8 +36,9 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
   - `ToolThread.on('tools/execute', …)` 登記的監聽者拿到的是不透明的 `ToolExecuteOutcome`，讀不到內容，只有時刻變了。
 - **`tools/post-execute`**：共用區的讀檔前綴排在匯流排上的插件監聽者內側。
   - 舊行為：插件監聽者收到的 `result` 已經加過前綴。
-  - 新行為：`result` 是加前綴之前的那份。監聽者接受（`next()`）時，模型收到的仍是加過前綴的。
-  - 監聽者自己 `replace` 時，前綴不會再加：以前從 `result` 改出來的內容帶著前綴，現在不帶。
+  - 新行為：`result` 是加前綴之前的那份。監聽者原樣交回 `next()` 的決定時，模型收到的仍是加過前綴的；要加前綴的 `read_file`、`grep`（`content` 模式）成功結果（共用區路由上、非空、不在技能來源底下），這時 `next()` 交回的是 `replace`，不是 `accept`。
+  - 監聽者自己回 `accept` 或 `replace` 時，前綴不會再加：以前自己回 `accept` 時模型收到帶前綴的，從 `result` 改出來的 `replace` 也帶；現在都不帶。
+  - 例外：`content` 模式的 `grep` 超過搜尋上限、完整清單有共用區命中時，外側的搜尋上限層照樣在監聽者的決定上加前綴。
 - **`tools/result`、`onResult` 看到的仍是模型最後收到的那一則**。結果是 `Command` 時多了內容：
   - 舊行為：`blocks`、`content` 一律沒有。
   - 新行為：`Command` 裡有這次呼叫的那則，就帶它的 `blocks`、`content`（`tools/result` 的視圖另帶 `shape`）；沒有就照舊沒有。
@@ -45,7 +46,7 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 **受影響的是：**
 
 - 經 `registry.events.on('tools/post-execute', …)` 登記、讀 `read_file` 或 `grep` 結果內容的插件。出廠的插件都沒有掛 `tools/post-execute`。
-- 經 `registry.events.on('tools/execute', …)` 登記、讀 `next()` 交回內容的插件，在宣告了輸出 schema 的工具上，或在 `task` 撞到輸出上限時。出廠的兩位（`@nexus/plugin-sandbox-policy`、`@nexus/plugin-workspace-changes`）都只原樣交回 `next()` 的結果。
+- 經 `registry.events.on('tools/execute', …)` 登記、讀 `next()` 交回內容、或改寫交回內容的插件，在宣告了輸出 schema 的工具上。出廠的兩位（`@nexus/plugin-sandbox-policy`、`@nexus/plugin-workspace-changes`）都只原樣交回 `next()` 的結果。
 - 讀 `onResult` 的 `blocks`、`content`，而且靠「沒有內容」判斷結果是 `Command` 的插件。出廠的 `@nexus/plugin-present` 只讀 `isError`。
 - 想用新欄位的插件。
 
@@ -55,10 +56,10 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 
 1. 掛 `tools/post-execute`、讀 `read_file` 或 `grep` 的 `result.content`、`result.blocks` 的監聽者：前綴已不在 `result` 裡。
    - 要看模型最後收到的內容，改掛 `tools/result`（或 `onResult`）。
-   - 會 `replace` 這兩顆結果、又要模型看到前綴的，自己把前綴接回去。
+   - 自己回 `accept` 或 `replace`、又要模型看到前綴的：原樣交回 `next()` 的決定，或自己把前綴接回去。
 2. 掛 `tools/execute`、讀 `next()` 交回內容的監聽者：在宣告了輸出 schema 的工具上，不合的輸出已經換成錯誤。
-   要看本體原本回的輸出，這個時刻已經看不到。
+   要看本體原本回的輸出，這個時刻已經看不到。自己改寫交回內容的，改出來的不再經輸出校驗，要合 schema 得自己保證。
 3. 要讀 `shape`、`command` 視圖的內容，或交回 `PipelineCommandInput`、`fresh` 的插件：把 `inject` 裡 `tools` 的範圍改成 `'^2.9.0'`，`manifest.consumes` 裡 `token: 'tools'` 那一格的 `range` 改成同一個值。
    不用的插件不必動。
-4. 確認改好了：跑一次在共用區叫到 `read_file` 的對話，日誌上那顆 `tool/result` 的內容應符合你的監聽者的決定（接受就以共用區前綴開頭）：
+4. 確認改好了：跑一次在共用區對一個非技能來源、非空的檔叫 `read_file` 的對話，日誌上那顆 `tool/result` 的內容應符合你的監聽者的決定（原樣交回 `next()` 的決定，就以共用區前綴開頭；自己回 `accept`，或回 `replace` 而沒有自己接回前綴，則不帶）：
    `jq -c 'select(.type == "tool/result") | .data.message.data.content' <會話日誌>`。
