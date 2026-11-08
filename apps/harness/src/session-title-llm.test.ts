@@ -270,7 +270,10 @@ describe('送出去的是什麼、寫了什麼', () => {
     };
     const recorder = createModelCallRecorder(sessions) as unknown as Hook;
     const usage = createModelUsageRecorder(sessions) as unknown as Hook;
-    const request = { model: new FakeListChatModel({ responses: [] }), runtime: { configurable: {} } };
+    const request = {
+      model: new FakeListChatModel({ responses: [] }),
+      runtime: { configurable: {} },
+    };
     const outcome = await retryModelCall(
       { maxRetries: 2, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
       { log: t.log },

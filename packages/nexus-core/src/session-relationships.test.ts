@@ -136,9 +136,9 @@ describe('請求快照與作廢嘗試的位置（格式 55，#2416）', () => {
     expect(rules([turnStart, system, header, turnEnd()])).toEqual([
       [3, 'request-without-model-start'],
     ]);
-    expect(
-      rules([turnStart, system, { type: 'turn/failed', data: { message: 'x' } }]),
-    ).toEqual([[2, 'request-without-model-start']]);
+    expect(rules([turnStart, system, { type: 'turn/failed', data: { message: 'x' } }])).toEqual([
+      [2, 'request-without-model-start'],
+    ]);
   });
 
   it('被 interrupted 收掉的輪不檢「等不到 model/start」：行程在快照之後死掉', () => {
@@ -182,12 +182,10 @@ describe('請求快照與作廢嘗試的位置（格式 55，#2416）', () => {
   });
 
   it('作廢的嘗試落在失敗收尾之後：error 與 aborted 都收；不帶 modelCall 的只檢在輪內', () => {
-    expect(rules([turnStart, system, modelStart, end('error'), attempt(2), turnEnd()])).toEqual(
+    expect(rules([turnStart, system, modelStart, end('error'), attempt(2), turnEnd()])).toEqual([]);
+    expect(rules([turnStart, system, modelStart, end('aborted'), attempt(2), turnEnd()])).toEqual(
       [],
     );
-    expect(
-      rules([turnStart, system, modelStart, end('aborted'), attempt(2), turnEnd()]),
-    ).toEqual([]);
     expect(rules([turnStart, attempt(), turnEnd()])).toEqual([]);
   });
 

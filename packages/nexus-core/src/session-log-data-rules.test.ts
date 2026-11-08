@@ -85,9 +85,9 @@ describe('N0785 資料規則', () => {
     const log = new SessionLog('e');
     expect(() => log.append('turn/end', data as never)).toThrow(TypeError);
     expect(log.length).toBe(0);
-    expect(() => new SessionLog('e2', { seed: [row(0), row(1, { type: 'turn/end', data })] })).toThrow(
-      TypeError,
-    );
+    expect(
+      () => new SessionLog('e2', { seed: [row(0), row(1, { type: 'turn/end', data })] }),
+    ).toThrow(TypeError);
   });
 
   it('不認得規則的種類不看：validateSessionEventData 對其他種類不拋', () => {
