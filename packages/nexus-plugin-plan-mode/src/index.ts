@@ -668,7 +668,7 @@ export interface PlanModeMountHost {
  * 把計劃模式掛上去。**樹上那一列（{@link apply}）與相容層的測試外殼共用這一份**，兩邊只差宿主那幾格怎麼接。
  *
  * - **逐條 thread**：會話參與者與指引那一段（{@link mountPlanModeThread}）。
- * - **`exit_plan_mode`**：行程級登記（`registerTool`），照工具呈現順序排。**一律註冊，不看模式**：模式沒啟用時它仍留在面向模型的
+ * - **`exit_plan_mode`**：行程級登記（`registerTool`），照工具呈現順序排（不放進相容層 middleware 的 `tools`：那條路不經 `toolOrder`）。**一律註冊，不看模式**：模式沒啟用時它仍留在面向模型的
  *   schema 裡，模式切換不會額外改動工具目錄。代價是模式關著的時候它是活的 schema、死的執行路徑。
  * - **`/plan`**：行程級登記。**命令不進模型**——它是人對工具說的話，結果直接印給打字的人看（`/plan <message>` 的那句話例外：它經
  *   `steer` 成為命令落定後的一輪人話）。要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`）。

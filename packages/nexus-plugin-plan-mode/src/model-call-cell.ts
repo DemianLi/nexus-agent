@@ -9,7 +9,7 @@
  * 這是封閉的單一例外，歸 [#2358](https://github.com/DemianLi/nexus-agent/issues/2358)：這個檔不受 SDK lint 管（`eslint.config.js`），
  * `apps/harness/src/migrated-plugin-gate.test.ts` 列舉 plan-mode 的 import，多一個或少一個都紅。
  *
- * 狀態不在這裡：待關與模式由樹上那一列登記在 `./plan-mode-state.ts`，這一格在模型呼叫前交出待關（`settlePlanModeExit`）。
+ * 狀態不在這裡：待關與模式由樹上那一列登記在 `./plan-mode-state.ts`，這一格只經 `settlePlanModeExit` 動它。
  * 兩列成對開關，由宿主在載入清單時檢查（`apps/harness/src/plugin-config.ts` 的 `DEPENDENT_ENTRY_PAIRS`）；出貨清單把它排在
  * `plan-mode` 正後方。
  *
