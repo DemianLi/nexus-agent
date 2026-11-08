@@ -1124,6 +1124,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
       '@nexus/tool-adapter':
         specifier: workspace:*
         version: link:../nexus-tool-adapter

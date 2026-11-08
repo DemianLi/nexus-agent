@@ -191,6 +191,7 @@ import type { Context } from '@nexus/cordis';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
 import type { SessionEvent, SessionLog, SessionLookup, SessionSubject } from '@nexus/session';
+import { SECTION_ORDERS } from '@nexus/system-prompt';
 import { toolsToken } from '@nexus/tools';
 import type {
   JsonValue,
@@ -434,9 +435,6 @@ function planCommandResult(
   return { kind: 'success', text: entering ? PLAN_ENTERED_MESSAGE : PLAN_LEFT_MESSAGE };
 }
 
-/** 指引那一段的排序值，同 dsh 的 500。 */
-const PLAN_POLICY_ORDER = 500;
-
 /**
  * 計劃模式的指引這一段：呼叫者在計劃模式裡才接。
  *
@@ -455,7 +453,7 @@ function planPolicySection(
 ): ToolThreadSection {
   return {
     name: PLAN_POLICY_SECTION_NAME,
-    order: PLAN_POLICY_ORDER,
+    order: SECTION_ORDERS.PLAN_POLICY,
     separator: '\n',
     text: (context) => (active(context.call) ? guidance : ''),
   };

@@ -28,6 +28,7 @@
     "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
@@ -48,6 +49,7 @@
     "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/tools": "workspace:*"
   }
 }
