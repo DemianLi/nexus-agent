@@ -9,7 +9,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
-import { HUMAN_MESSAGE_LIMIT_CHARS, SessionLog } from '@nexus/core';
+import { HUMAN_MESSAGE_LIMIT_CHARS, SessionLog, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
@@ -486,6 +486,76 @@ describe('runTurn 照 loop 拒收太大的人話（#2415）', () => {
     await runTurn(agent, tooLarge, printer, sessionLog);
     expect(sessionLog.events[0]?.type).toBe('turn/start');
     expect(stdout()).toContain('收到。');
+  });
+});
+
+/**
+ * CLI 收人話的每個入口照 loop 拒收太大的人話（#1827 D234）：REPL 打的那一句、REPL 的 `/plan <message>`、一次性的 prompt。
+ * native 下拒收、日誌不開那一輪；langgraph 照收（基座的 `beforeAgent` 照舊搬檔）。
+ */
+describe('CLI 收人話的入口照 loop 拒收', () => {
+  const tooLarge = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
+  const REJECTION = 'message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字';
+
+  async function repl(line: string, loop: 'native' | 'langgraph') {
+    const { agent, commands, attachSession, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '收到。' }] }),
+      plugins: shipped,
+      checkpointer: new MemorySaver(),
+    });
+    // 接上日誌：`/plan` 要有地方記下模式，才會走到接著送的那句話。
+    const sessions = new SessionRegistry('t');
+    const detach = attachSession(sessions);
+    const { printer, stderr } = recorder();
+    const input = new PassThrough();
+    input.end(`${line}\n/exit\n`);
+    try {
+      await runRepl(
+        agent,
+        { input, output: new PassThrough() },
+        printer,
+        sessions.root,
+        commands,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        loop,
+      );
+    } finally {
+      detach();
+      await dispose();
+    }
+    return { stderr, types: sessions.root.events.map((event) => event.type) };
+  }
+
+  it('native：REPL 打的那一句太大，印錯誤、不開那一輪', async () => {
+    const { stderr, types } = await repl(tooLarge, 'native');
+    expect(stderr()).toContain(REJECTION);
+    expect(types).not.toContain('turn/start');
+  });
+
+  it('native：REPL 的 /plan <message> 太大，命令落定成 error、計劃模式沒打開、不開那一輪', async () => {
+    const { stderr, types } = await repl(`/plan ${tooLarge}`, 'native');
+    expect(stderr()).toContain(REJECTION);
+    expect(types).toEqual(['command/run', 'command/done']);
+  });
+
+  it('langgraph：REPL 打的那一句與 /plan <message> 都照收', async () => {
+    expect((await repl(tooLarge, 'langgraph')).types).toContain('turn/start');
+    expect((await repl(`/plan ${tooLarge}`, 'langgraph')).types).toContain('turn/start');
+  });
+
+  it('native：一次性的 prompt 太大，runCli 拋', async () => {
+    const { printer } = recorder();
+    await expect(
+      runCli({
+        argv: ['--agent-loop', 'native', tooLarge],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow(REJECTION);
   });
 });
 

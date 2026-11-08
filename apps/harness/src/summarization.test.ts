@@ -386,6 +386,8 @@ describe('offload 失敗是 fail-open', () => {
 describe('/conversation_history 的另一個寫入者', () => {
   /** 剛好越過 `4 * 5e4` 那條線。 */
   const HUGE = '長'.repeat(200001);
+  /** native 的 root 把基座搬人話的那一格換成空函式（`native-noop-cells.ts`，#1827 D234），超大的人話改在宿主的入口拒收。 */
+  const native = process.env.NEXUS_TEST_AGENT_LOOP === 'native';
 
   async function evict(mode: 'workspace-write' | 'read-only'): Promise<{
     readonly files: string[];
@@ -420,19 +422,29 @@ describe('/conversation_history 的另一個寫入者', () => {
     return { files, sentToModel };
   }
 
-  it('可寫的時候原話搬走，但不落在工作區，模型只收到一句佔位', async () => {
+  it('可寫的時候：langgraph 原話搬走、不落在工作區，模型只收到一句佔位；native 不搬，原話進 context', async () => {
     const { files, sentToModel } = await evict('workspace-write');
 
     // #348 之前是 1：原話落在 `<workspace>/conversation_history/`。
     expect(files).toEqual([]);
+    if (native) {
+      expect(sentToModel).toBe(HUGE);
+      expect(sentToModel).not.toContain('Message content too large');
+      return;
+    }
     expect(sentToModel).toContain('Message content too large');
     expect(sentToModel.length).toBeLessThan(HUGE.length);
   });
 
-  it('fence 擋住的根上照樣搬得走，20 萬字元不再原封不動進 context', async () => {
+  it('fence 擋住的根上：langgraph 照樣搬得走，20 萬字元不原封不動進 context；native 不搬', async () => {
     const { files, sentToModel } = await evict('read-only');
 
     expect(files).toEqual([]);
+    if (native) {
+      expect(sentToModel).toBe(HUGE);
+      expect(sentToModel).not.toContain('Message content too large');
+      return;
+    }
     // #348 之前這裡是 `toContain(HUGE)`：寫入被 fence 擋掉，該搬走的沒搬走。
     expect(sentToModel).toContain('Message content too large');
     expect(sentToModel).not.toContain(HUGE);

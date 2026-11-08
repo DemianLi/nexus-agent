@@ -1,10 +1,12 @@
 /**
- * 人話太大就在收下之前拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：native loop 的入口用它，
- * 那句話不進佇列、日誌一個字都不寫。
+ * 人話太大就在收下之前拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：native loop 收人打的話的入口都用它
+ * （serve 的送出、插話、改排隊那一件，命令接著送的話；CLI 的輸入、一次性 prompt、命令接著送的話）。`/goal` 的續行輪不經這裡
+ * （TODO(#2558)）。送出、插話與改排隊被拒時，佇列與日誌都不動；命令接著送的話被拒時，`steer` 拋錯，照 `acceptSteer` 的契約，
+ * 命令在動任何東西之前就失敗、落定成 `error`，不開那一輪。
  *
  * 門檻與量法照基座 `FilesystemMiddleware` 的 `beforeAgent`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的
- * `extractTextFromMessage` 與 `4 * humanMessageTokenLimitBeforeEvict`）：拒收的那一刀與基座搬移的那一刀落在同一處，經過入口的
- * 人話因此到不了基座的搬移；命令接著送的話（`/plan <message>`）不經這裡，仍可能被基座搬移。已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
+ * `extractTextFromMessage` 與 `4 * humanMessageTokenLimitBeforeEvict`）：拒收的那一刀與基座搬移的那一刀落在同一處。native 的 root
+ * 把那一格換成空函式（`native-loop/native-noop-cells.ts`），`langgraph` 照舊搬。已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
  *
  * @module
  */
@@ -43,7 +45,8 @@ export function humanMessageText(content: MessageContent): string {
 /**
  * 這則人話收不收。
  *
- * @param content - 送進圖的那則 `HumanMessage` 的內容（wire 那側是 `userContent` 組出來、引用已換成 `@標題` 的那一份）。
+ * @param content - 送進圖的那則 `HumanMessage` 的內容（wire 那側是 `userContent` 組出來、引用已換成 `@標題` 的那一份；命令接著送的話是
+ *   `referencedText` 換過引用的文字）。
  * @returns 收就是 `undefined`；不收是 `<代碼>: <說法>`，帶實際字數與上限。
  */
 export function humanMessageRejection(content: MessageContent): string | undefined {
