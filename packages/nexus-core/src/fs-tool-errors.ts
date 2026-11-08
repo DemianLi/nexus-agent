@@ -31,7 +31,8 @@
  * 也該帶。記錄每一顆工具呼叫都開；換狀態、補前綴仍只對基座那七個，其餘只補碼（`withSandboxCode`）。
  *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
- * `tools/execute` 最內層的一位監聽者，結果離開之前換狀態（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * `tools/execute` 內層的一位 core 監聽者，結果離開之前換狀態（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * 更內側只有輸出校驗與撞限替換：前者只驗宣告了 schema 的工具，後者只看 `task`，都不碰基座的檔案工具。
  * 判準是結構訊號而不是字面：
  *
  * - {@link recordBackendOutcomes} 包住交給基座的 backend，記下**這一次呼叫**裡每個方法最後一次
@@ -307,7 +308,7 @@ function withSkippedNotice(
 }
 
 /**
- * 把檔案工具的失敗標成錯誤：`tools/execute` 的 core 內層監聽者，貼著工具本體。開一份記錄包住本體，照記錄換結果的狀態與碼。
+ * 把檔案工具的失敗標成錯誤：`tools/execute` 的 core 內層監聽者，內側只剩輸出校驗與撞限替換。開一份記錄包住本體，照記錄換結果的狀態與碼。
  * **無狀態**：記錄每次呼叫各一份，root 與每個 subagent 共用同一位。
  */
 export const fsToolErrorsListener: CoreToolListener<'tools/execute'> = async (
