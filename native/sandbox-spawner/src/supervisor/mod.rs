@@ -77,7 +77,7 @@ mod args;
 mod audit;
 mod cpu;
 mod memory;
-mod process;
+pub(crate) mod process;
 
 use crate::supervisor_protocol::{
     decode_conversation_report, decode_front_request, decode_host_report, encode_conversation_command, encode_front_event,

@@ -81,11 +81,13 @@ struct Options {
     front_hello: Option<u32>,
     /// 讀到 `stop-admission` 時回 `admission-stopped`（並略過它，不交給測試）。
     answer_stop_admission: bool,
+    /// `--host` 與它的 `--host-arg`；`None` 是不起宿主。
+    host: Option<(PathBuf, Vec<String>)>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false, front_hello: Some(PROTOCOL_VERSION), answer_stop_admission: true }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false, front_hello: Some(PROTOCOL_VERSION), answer_stop_admission: true, host: None }
     }
 }
 
@@ -121,6 +123,14 @@ impl Harness {
         cmd.args(["--warm", "0", "--capacity", "64", "--stats-ms", "0"]);
         // 停機時不等前台回答 `stop-admission`：多數測試不讀前台的訊息，等了只會慢；要測它的從 `extra` 蓋過去。
         cmd.args(["--admission-timeout-ms", "0"]);
+        if let Some((host, args)) = &options.host {
+            cmd.arg("--host").arg(host);
+            for arg in args {
+                cmd.arg("--host-arg").arg(arg);
+            }
+            // 退避縮短，免得要測重起的測試等滿一秒。
+            cmd.args(["--host-backoff-ms", "50", "--host-backoff-max-ms", "200"]);
+        }
         cmd.args(&options.extra);
         let mut stderr_read = None;
         let stderr = if options.piped_stderr {
@@ -1311,4 +1321,231 @@ fn shutdown_answers_a_thread_waiting_for_its_drain_answer_once() {
             FrontEvent::Down { thread_id: b"b".to_vec(), cause: DeathCause::Shutdown },
         ]
     );
+}
+
+const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
+
+fn children(pid: u32) -> Vec<u32> {
+    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|p| p.parse().unwrap())
+        .collect()
+}
+
+fn proc_file(pid: u32, name: &str) -> Vec<u8> {
+    std::fs::read(format!("/proc/{pid}/{name}")).unwrap_or_default()
+}
+
+fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
+    Some((example("fake_host"), args.iter().map(|a| a.to_string()).collect()))
+}
+
+fn real_host() -> Option<(PathBuf, Vec<String>)> {
+    Some((PathBuf::from(HOST), Vec::new()))
+}
+
+/// 假宿主的紀錄（`examples/fake_host.rs`）。
+fn host_log(h: &Harness) -> Vec<String> {
+    raw_log(&h.dir.join("run/host.sock"))
+}
+
+fn host_lines(h: &Harness) -> Vec<String> {
+    h.audit().into_iter().filter(|line| line.contains("\"role\":\"host\"")).collect()
+}
+
+fn running_host(h: &Harness) -> Option<u32> {
+    children(h.pid()).into_iter().find(|&pid| String::from_utf8_lossy(&proc_file(pid, "cmdline")).contains("nexus-host"))
+}
+
+#[test]
+fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
+    for args in [["--hello-version", "99"].as_slice(), ["--skip-hello"].as_slice()] {
+        let mut h = Harness::start(Options { conversation_args: args.iter().map(|a| a.to_string()).collect(), ..Options::default() });
+        assert_eq!(h.down("a"), DeathCause::Protocol, "{args:?}");
+        let line = h.audit_line("\"cause\":\"protocol\"");
+        assert!(line.contains("\"thread\":\"a\""), "{line}");
+    }
+}
+
+#[test]
+fn a_front_whose_first_frame_is_not_a_matching_hello_stops_everything_with_3() {
+    let wrong = [FrontRequest::Hello { version: PROTOCOL_VERSION + 1 }, FrontRequest::Ensure { thread_id: b"a".to_vec(), open: OpenMode::Run }];
+    for first in wrong {
+        let mut h = Harness::start(Options { front_hello: None, ..Options::default() });
+        h.request(&first);
+        assert_eq!(h.wait_exit().code(), Some(3), "{first:?}");
+    }
+}
+
+/// token 只走控制通道：不在任何子行程的 argv 與環境變數，也不在稽核與監督行程的 stderr。
+#[test]
+fn the_token_travels_only_on_the_control_channel() {
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let socket = h.up("a,host-hello");
+    assert!(wait_until(|| log(&socket).contains(&"host hello".to_string())), "{:?}", raw_log(&socket));
+    assert!(raw_log(&socket).contains(&"hello 32".to_string()), "對話行程收到的 token 要是 32 個字元");
+    let token = h.front_token.clone();
+    assert_eq!(token.len(), 32);
+    assert!(token.iter().all(u8::is_ascii_hexdigit));
+    let contains = |haystack: &[u8]| haystack.windows(token.len()).any(|w| w == token.as_slice());
+    let mut pids = vec![h.pid()];
+    pids.extend(children(h.pid()));
+    assert!(pids.len() >= 4, "監督行程、前台、宿主、對話行程：{pids:?}");
+    for pid in pids {
+        assert!(!contains(&proc_file(pid, "cmdline")), "pid {pid} 的 argv 有 token");
+        assert!(!contains(&proc_file(pid, "environ")), "pid {pid} 的環境變數有 token");
+    }
+    assert!(!contains(&std::fs::read(h.dir.join("audit.jsonl")).unwrap_or_default()));
+    assert!(!contains(&std::fs::read(h.dir.join("supervisor.err")).unwrap_or_default()));
+}
+
+/// 真的宿主：對話行程用監督行程給的 token 連得上；token 不對、框太大的被斷線、寫稽核、隔離到它結束，那個對話行程照跑。
+#[test]
+fn conversations_reach_the_host_and_violations_are_audited_and_quarantined() {
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let a = h.up("a,host-hello");
+    assert!(wait_until(|| log(&a).contains(&"host hello".to_string())), "{:?}", log(&a));
+
+    let b = h.up("b,host-bad-token,host-hello");
+    assert!(wait_until(|| log(&b).len() >= 4), "{:?}", log(&b));
+    assert_eq!(log(&b)[2..], ["host rejected token 不對", "host rejected 沒有登記"]);
+    let line = h.audit_line("token 不對");
+    assert!(line.contains("\"event\":\"protocol\"") && line.contains("\"role\":\"conversation\""), "{line}");
+    assert!(line.contains("\"thread\":\"b,host-bad-token,host-hello\""), "{line}");
+
+    let g = h.up("g,host-garbage");
+    assert!(wait_until(|| log(&g).contains(&"host rejected 框太大".to_string())), "{:?}", log(&g));
+    h.audit_line("框太大");
+
+    assert!(!gone(logged_pid(&b, "pid")), "被隔離的對話行程照跑");
+    assert!(host_lines(&h).is_empty(), "宿主不因為任何一條連線結束：{:?}", h.audit());
+}
+
+/// 停機順序：前台停准入（等它回答）→ 對話行程 → 宿主 → 前台。
+#[test]
+fn shutdown_stops_admission_first_then_conversations_then_the_host_then_the_front() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        host: fake_host(&[]),
+        ..Options::default()
+    });
+    let a = h.up("a");
+    assert!(wait_until(|| host_log(&h).iter().any(|l| l.ends_with(" conversation a"))), "{:?}", host_log(&h));
+    let a_pid = logged_pid(&a, "pid");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    // 前台還沒回答：對話行程與宿主都還不能收。
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!log(&a).contains(&"eof".to_string()), "{:?}", log(&a));
+    assert!(!host_log(&h).contains(&"eof".to_string()));
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    assert_eq!(h.next_event(), None);
+    assert!(h.wait_exit().success());
+
+    let audit = h.audit();
+    let at = |needle: &str| audit.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("{needle}：{audit:?}"));
+    assert!(at("\"cause\":\"shutdown\"") < at("\"role\":\"host\""));
+    assert!(at("\"role\":\"host\"") < at("\"role\":\"front\""));
+    let log = host_log(&h);
+    let revoke = log.iter().position(|l| *l == format!("revoke {a_pid}")).unwrap_or_else(|| panic!("{log:?}"));
+    assert!(revoke < log.iter().position(|l| l == "eof").unwrap(), "收對話行程時撤掉它，之後宿主才收：{log:?}");
+}
+
+#[test]
+fn the_admission_wait_is_bounded() {
+    let mut h = Harness::start(Options { answer_stop_admission: false, extra: vec!["--admission-timeout-ms", "300"], ..Options::default() });
+    h.up("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    assert!(h.wait_exit().success());
+}
+
+#[test]
+fn a_host_that_keeps_failing_before_ready_stops_everything_with_4() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--exit-before-ready", "1"]),
+        extra: vec!["--host-start-failures", "3"],
+        // 整台很快就停：不寫前台，免得撞上已經關掉的連線。
+        front_hello: None,
+        ..Options::default()
+    });
+    assert_eq!(h.wait_exit().code(), Some(4));
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 3, "{hosts:?}");
+    assert!(hosts.iter().all(|line| line.contains("\"ready\":false") && line.contains("\"exit_code\":1")), "{hosts:?}");
+}
+
+#[test]
+fn a_host_that_never_gets_ready_is_killed_and_counts_as_a_failure() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--no-ready"]),
+        extra: vec!["--host-ready-timeout-ms", "200", "--host-start-failures", "2"],
+        front_hello: None,
+        ..Options::default()
+    });
+    assert_eq!(h.wait_exit().code(), Some(4));
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 2, "{hosts:?}");
+    assert!(hosts.iter().all(|line| line.contains("ready 之前逾時")), "{hosts:?}");
+}
+
+#[test]
+fn a_host_with_the_wrong_version_stops_everything_with_3() {
+    let mut h = Harness::start(Options { host: fake_host(&["--version", "99"]), front_hello: None, ..Options::default() });
+    assert_eq!(h.wait_exit().code(), Some(3));
+    assert_eq!(host_lines(&h).len(), 1, "{:?}", h.audit());
+}
+
+/// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
+#[test]
+fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_everything() {
+    let marker = temp_dir("marker").join("crashed");
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--crash-once", marker.to_str().unwrap()]),
+        extra: vec!["--host-start-failures", "1"],
+        ..Options::default()
+    });
+    let front_grant = |l: &String| l.starts_with("grant ") && l.contains(" front");
+    assert!(
+        wait_until(|| {
+            let log = host_log(&h);
+            let second = log.iter().enumerate().filter(|(_, l)| l.starts_with("start ")).nth(1).map(|(i, _)| i);
+            second.is_some_and(|i| log[i..].iter().any(front_grant))
+        }),
+        "{:?}",
+        host_log(&h)
+    );
+    let a = h.up("a");
+    assert!(wait_until(|| host_log(&h).iter().any(|l| l.ends_with(" conversation a"))), "{:?}", host_log(&h));
+    let b = h.up("b,exit:3");
+    let b_pid = logged_pid(&b, "pid");
+    assert_eq!(h.down_of("b,exit:3"), DeathCause::Crash);
+    assert!(wait_until(|| host_log(&h).contains(&format!("revoke {b_pid}"))), "{:?}", host_log(&h));
+    assert!(h.child.try_wait().unwrap().is_none(), "ready 之後的失敗不讓整台結束");
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 1, "{hosts:?}");
+    assert!(hosts[0].contains("\"ready\":true") && hosts[0].contains("\"exit_code\":9"), "{hosts:?}");
+    assert!(!gone(logged_pid(&a, "pid")));
+}
+
+/// 真的宿主被殺掉重起：對話行程用原本的 token 重連得上，因為監督行程把整張表重送給新的宿主。
+#[test]
+fn after_a_host_restart_conversations_reconnect_with_the_same_token() {
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let a = h.up("a,wait-go,host-retry:15000");
+    let mut old = None;
+    assert!(wait_until(|| {
+        old = running_host(&h);
+        old.is_some()
+    }));
+    let old = old.unwrap();
+    kill(old, libc::SIGKILL);
+    h.audit_line("\"role\":\"host\"");
+    std::fs::write(format!("{}.go", a.display()), b"").unwrap();
+    assert!(wait_until(|| log(&a).contains(&"host hello".to_string())), "{:?}", log(&a));
+    assert!(running_host(&h).is_some_and(|pid| pid != old));
 }

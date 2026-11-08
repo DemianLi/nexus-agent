@@ -1,7 +1,7 @@
 //! 子行程：怎麼起、控制通道怎麼讀寫、stderr 怎麼轉送、怎麼收。
 
 use super::memory::{HEAP_LINE_PREFIX, HEAP_MARKER, HEAP_TAIL};
-use crate::protocol::{frame, take_frame, DecodeError};
+use crate::protocol::{frame, take_frame_within, DecodeError, MAX_FRAME};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,7 +63,7 @@ pub fn spawn(
     for fd in [&stdin, &stdout, &stderr].into_iter().flatten() {
         set_nonblocking(fd);
     }
-    let chan = Chan { write: stdin, read: stdout, inbox: Vec::new(), outbox: Vec::new(), finishing: false };
+    let chan = Chan { write: stdin, read: stdout, inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: MAX_FRAME };
     Ok((pid, chan, stderr.map(StderrTap::new)))
 }
 
@@ -107,9 +107,31 @@ pub struct Chan {
     outbox: Vec<u8>,
     /// 排著的寫完就關寫端。
     finishing: bool,
+    /// 一框最長多少；`inbox` 最多放 [`INBOX_FRAMES`] 個這麼長的框。
+    max_frame: usize,
 }
 
+/// 每條通道還沒切成框的位元組，最多幾個框長。
+pub const INBOX_FRAMES: usize = 2;
+
 impl Chan {
+    /// 用現成的 fd 建一條通道（兩邊設成非阻塞），一框最長 `max_frame`。同一個 socket 兩個方向都用的，傳兩個 dup 出來的 fd。
+    pub fn from_fds(read: OwnedFd, write: OwnedFd, max_frame: usize) -> Chan {
+        set_nonblocking(&read);
+        set_nonblocking(&write);
+        Chan { write: Some(write), read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame }
+    }
+
+    /// 讀端讀到 EOF 或讀錯了。
+    pub fn read_closed(&self) -> bool {
+        self.read.is_none()
+    }
+
+    /// 寫端關了（對方不收，或叫過 `close_write`）。
+    pub fn write_closed(&self) -> bool {
+        self.write.is_none()
+    }
+
     /// 要 poll 的 fd：讀端還開著就要 `POLLIN`；寫端只在還有沒寫完的才要 `POLLOUT`。
     pub fn poll_fds(&self) -> (Option<libc::c_int>, Option<libc::c_int>) {
         let read = self.read.as_ref().map(AsRawFd::as_raw_fd);
@@ -181,42 +203,54 @@ impl Chan {
         self.outbox.clear();
     }
 
-    /// 讀到 EAGAIN 或讀滿 `READ_BUDGET` 為止，切出完整的框；沒讀完的留給下一次 poll。讀到 EOF 或讀錯就關讀端，已經讀到的照樣切。
-    /// 框太大回錯（之後的位元組都對不上了），讀端也關掉。
+    /// 讀到 EAGAIN 或讀滿 `READ_BUDGET` 為止，邊讀邊切出完整的框；沒讀完的留給下一次 poll。讀到 EOF 或讀錯就關讀端，已經讀到的照樣切。
+    /// 框太大回錯（之後的位元組都對不上了），讀端也關掉；長度欄位一到就判，不等內容。
     pub fn receive(&mut self) -> Result<Vec<Vec<u8>>, DecodeError> {
-        if let Some(fd) = &self.read {
-            let fd = fd.as_raw_fd();
-            let mut buf = [0u8; 4096];
-            let mut budget = READ_BUDGET;
-            while budget > 0 {
-                // SAFETY：讀進 buf。
-                let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-                if n > 0 {
-                    self.inbox.extend_from_slice(&buf[..n as usize]);
-                    budget = budget.saturating_sub(n as usize);
-                    continue;
-                }
-                if n < 0 && errno() == libc::EINTR {
-                    continue;
-                }
-                if n < 0 && errno() == libc::EAGAIN {
-                    break;
-                }
-                self.close_read();
-                break;
-            }
-        }
+        self.receive_up_to(READ_BUDGET)
+    }
+
+    /// 同 [`Chan::receive`]，但一直讀到 EAGAIN（或 EOF）為止：要確定「到這一刻為止對方送出的都讀進來了」時用。
+    pub fn receive_all(&mut self) -> Result<Vec<Vec<u8>>, DecodeError> {
+        self.receive_up_to(usize::MAX)
+    }
+
+    fn receive_up_to(&mut self, mut budget: usize) -> Result<Vec<Vec<u8>>, DecodeError> {
         let mut frames = Vec::new();
+        let cap = INBOX_FRAMES.saturating_mul(self.max_frame.saturating_add(4));
         loop {
-            match take_frame(&mut self.inbox) {
-                Ok(Some(payload)) => frames.push(payload),
-                Ok(None) => return Ok(frames),
-                Err(err) => {
-                    self.close_read();
-                    self.inbox.clear();
-                    return Err(err);
+            loop {
+                match take_frame_within(&mut self.inbox, self.max_frame) {
+                    Ok(Some(payload)) => frames.push(payload),
+                    Ok(None) => break,
+                    Err(err) => {
+                        self.close_read();
+                        self.inbox.clear();
+                        return Err(err);
+                    }
                 }
             }
+            let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return Ok(frames) };
+            // 切完之後 inbox 只剩不到一框，讀一塊進來也不會超過 cap。
+            let room = cap.saturating_sub(self.inbox.len()).min(4096).min(budget);
+            if room == 0 {
+                return Ok(frames);
+            }
+            let mut buf = [0u8; 4096];
+            // SAFETY：讀進 buf 的前 room 個 byte。
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), room) };
+            if n > 0 {
+                let n = n as usize;
+                self.inbox.extend_from_slice(&buf[..n]);
+                budget = budget.saturating_sub(n);
+                continue;
+            }
+            if n < 0 && errno() == libc::EINTR {
+                continue;
+            }
+            if n < 0 && errno() == libc::EAGAIN {
+                return Ok(frames);
+            }
+            self.close_read();
         }
     }
 
@@ -359,7 +393,7 @@ mod tests {
         // SAFETY：兩個 fd 都是剛開的，各交給一個擁有者。
         let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         set_nonblocking(&write);
-        let mut chan = Chan { write: Some(write), read: None, inbox: Vec::new(), outbox: Vec::new(), finishing: false };
+        let mut chan = Chan { write: Some(write), read: None, inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: MAX_FRAME };
         let big = vec![7u8; 256 * 1024];
         chan.send(&big);
         chan.finish();
