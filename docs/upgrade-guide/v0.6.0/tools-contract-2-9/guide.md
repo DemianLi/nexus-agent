@@ -27,6 +27,9 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 - **`tools/execute`**：輸出校驗與撞限替換排在插件監聽者內側。
   - 舊行為：插件監聽者的 `next()` 交回的是還沒驗輸出、還沒換掉撞限結果的那一份，校驗與替換在插件監聽者外面才發生。
   - 新行為：`next()` 交回的就是驗過、換過的那一份。輸出不合 schema 時，`next()` 交回的已是那則錯誤（`isError: true`，碼是 `INVALID_TOOL_OUTPUT`）。
+  - 換過的那一份是完整的結果：`blocks` 是 `content` 那一格 `text`，`shape` 是 `text`。這個 `blocks` 由 `content` 導出，生產者認的是參照：
+    - 原樣交回，或只換 `content`（`{ ...result, content }`）：模型收到字串。
+    - 給新的 `blocks`，連複製一份（`[...result.blocks]`）也算：模型收到陣列。要保持字串就別複製，改 `content`。
   - `ToolThread.on('tools/execute', …)` 登記的監聽者拿到的是不透明的 `ToolExecuteOutcome`，讀不到內容，只有時刻變了。
 - **`tools/post-execute`**：共用區的讀檔前綴排在匯流排上的插件監聽者內側。
   - 舊行為：插件監聽者收到的 `result` 已經加過前綴。

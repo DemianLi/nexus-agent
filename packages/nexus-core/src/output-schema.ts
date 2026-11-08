@@ -45,6 +45,7 @@
 import type { ZodType } from 'zod';
 import { toolNameOfCall } from './tool-call-step.js';
 import { INVALID_TOOL_OUTPUT, TOOL_ERROR_PREFIX } from './tool-events.js';
+import { freshTextResult } from './tool-pipeline.js';
 import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
 
 /** 一顆工具實例 → 它註冊時宣告的輸出 schema；沒宣告就是 `undefined`。 */
@@ -106,18 +107,15 @@ function verify(toolName: string, content: unknown, schema: ZodType): Verdict {
 
 /** 輸出不合時交回的那則：新造一則錯誤，帶 `INVALID_TOOL_OUTPUT`，給會話日誌的 `tool/result` 讀（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。 */
 function rejectOutput(feedback: string): PipelineExecuteResult {
-  return {
-    kind: 'message',
-    content: TOOL_ERROR_PREFIX + feedback,
+  return freshTextResult('message', TOOL_ERROR_PREFIX + feedback, {
     isError: true,
     error: { name: 'ToolOutputError', code: INVALID_TOOL_OUTPUT },
-    fresh: true,
-  };
+  });
 }
 
 /** 校驗器自己壞掉時交回的那則：新造一則錯誤，**不掛碼**——那是我們的 bug，不是工具的輸出不合。 */
 function reject(feedback: string): PipelineExecuteResult {
-  return { kind: 'message', content: TOOL_ERROR_PREFIX + feedback, isError: true, fresh: true };
+  return freshTextResult('message', TOOL_ERROR_PREFIX + feedback, { isError: true });
 }
 
 /**

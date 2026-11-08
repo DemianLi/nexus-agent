@@ -22,6 +22,7 @@ import {
   createToolExecuteMiddleware,
   createToolPostExecuteMiddleware,
   createToolPreExecuteMiddleware,
+  freshTextResult,
   pipelineTextOf,
   toolResultView,
 } from './tool-pipeline.js';
@@ -791,6 +792,63 @@ describe('tools/execute 交回 `fresh: true` 的 `message` 結果：新造一則
     const result = await wrap(requestFor(), async () => command);
     expect(ToolMessage.isInstance(result)).toBe(true);
     expect((result as ToolMessage).content).toBe('Error: 不合');
+  });
+});
+
+describe('core 監聽者造的文字結果（`freshTextResult`）：`blocks` 認參照', () => {
+  /** 內層 core 監聽者把結果換成新造的一則文字，外側那位插件監聽者照 `reshape` 交回。本體回字串內容的 `ToolMessage`。 */
+  async function run(
+    reshape: (result: PipelineResult) => PipelineResult | Record<string, unknown>,
+  ): Promise<{ message: ToolMessage; seen: PipelineResult }> {
+    const bus = new EventBus();
+    let seen: PipelineResult | undefined;
+    bus.on('tools/execute', async (_exec, next) => {
+      seen = await next();
+      return reshape(seen) as PipelineResult;
+    });
+    const wrap = wrapperOf(
+      createToolExecuteMiddleware(bus, {
+        inner: [
+          async (_exec, next) => {
+            await next();
+            return freshTextResult('message', 'Error: 換掉了', { isError: true });
+          },
+        ],
+      }),
+    );
+    const message = (await wrap(
+      requestFor(),
+      async () => new ToolMessage({ content: '原本', tool_call_id: 'call-1', name: 'probe' }),
+    )) as ToolMessage;
+    return { message, seen: seen as PipelineResult };
+  }
+
+  it('外側的 `next()` 拿到完整的結果：`blocks` 是 `content` 那一格，`shape` 是 `text`', async () => {
+    const { seen } = await run((result) => result);
+    expect(seen).toMatchObject({
+      kind: 'message',
+      content: 'Error: 換掉了',
+      blocks: [{ type: 'text', text: 'Error: 換掉了' }],
+      shape: 'text',
+      isError: true,
+    });
+  });
+
+  it('原樣交回：落成字串', async () => {
+    const { message } = await run((result) => result);
+    expect(message.content).toBe('Error: 換掉了');
+  });
+
+  it('只換 `content`、`blocks` 照原參照帶著：落成新的字串', async () => {
+    const { message } = await run((result) => ({ ...result, content: 'Error: 外側改的' }));
+    expect(message.content).toBe('Error: 外側改的');
+  });
+
+  it('把 `blocks` 複製一份（`[...blocks]`）再交回：算給了新的區塊，落成陣列', async () => {
+    const { message } = await run((result) =>
+      result.kind === 'message' ? { ...result, blocks: [...result.blocks] } : result,
+    );
+    expect(message.content).toEqual([{ type: 'text', text: 'Error: 換掉了' }]);
   });
 });
 

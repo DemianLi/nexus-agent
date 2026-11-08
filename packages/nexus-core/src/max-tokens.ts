@@ -63,6 +63,7 @@ import {
 import { currentTurnStart } from './session-log.js';
 import type { SessionEvent, TurnEndReason } from './session-log.js';
 import { toolRefusal } from './tool-events.js';
+import { freshTextResult } from './tool-pipeline.js';
 import type { CoreToolListener, PipelineExecuteResult, PipelineResult } from './tool-pipeline.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
@@ -204,10 +205,7 @@ export function subagentMaxTokensResult(
 ): PipelineExecuteResult {
   const text = partial.trim() === '' ? '' : `\n${PARTIAL_OUTPUT_HEADING}\n${partial}`;
   const refusal = toolRefusal(SUBAGENT_MAX_TOKENS_REASON + text, { callId, name: TASK_TOOL });
-  const content = refusal.text;
-  return result.kind === 'message'
-    ? { kind: 'message', content, isError: true, fresh: true }
-    : { kind: 'command', content, isError: true, fresh: true };
+  return freshTextResult(result.kind, refusal.text, { isError: true });
 }
 
 /**

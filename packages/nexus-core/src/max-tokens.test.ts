@@ -15,6 +15,7 @@ import {
   dropToolCalls,
   isMaxTokensFinish,
   SUBAGENT_MAX_TOKENS_REASON,
+  subagentMaxTokensResult,
   turnReachedMaxTokens,
 } from './max-tokens.js';
 import { SessionLog } from './session-log.js';
@@ -231,6 +232,16 @@ describe('子代理撞到上限時 task 的結果', () => {
     expect(result.tool_call_id).toBe('call_task');
     expect(result.status).toBe('error');
     expect(result.content).toBe(HEADLINE);
+  });
+
+  it('交回的結果帶 `blocks` 與 `shape`：外側的 `next()` 照型別讀得到', () => {
+    const result = subagentMaxTokensResult(
+      { kind: 'message', content: '', blocks: [], shape: 'text', isError: false },
+      'call_task',
+      '寫到一半',
+    );
+    expect(result).toMatchObject({ kind: 'message', shape: 'text', isError: true, fresh: true });
+    expect(result.blocks).toEqual([{ type: 'text', text: result.content }]);
   });
 
   it('載體裡沒有這次的子代理：本體回的原物件', async () => {
