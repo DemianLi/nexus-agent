@@ -166,18 +166,23 @@ export function shippedPluginsWithFullAccess(
  *
  * @param rowId - 要換設定的列 id。
  * @param config - 那一列新的設定。
+ * @param options.serve - 底下是 serve 的出貨清單（{@link shippedServePlugins}）；省略是 CLI 的（{@link shippedPlugins}）。
  * @returns 其餘照出貨清單的清單。
  */
 export async function shippedPluginsWithConfig(
   rowId: string,
   config: object,
+  options: { readonly serve?: boolean } = {},
 ): Promise<readonly PluginEntry[]> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-patch-config-'));
   try {
     const patch = join(dir, 'row.patch.yml');
     // JSON 是合法的 YAML：不必在這裡再寫一份序列化。
     await writeFile(patch, JSON.stringify([{ id: rowId, config }]));
-    const { plugins, dropped } = await loadPluginConfig({ overlays: [patch] });
+    const { plugins, dropped } = await loadPluginConfig({
+      ...(options.serve === true && { shippedLayers: [serveShippedConfigPath()] }),
+      overlays: [patch],
+    });
     if (dropped.length > 0) {
       throw new Error(`換設定的清單有列沒掛上：${dropped.map((drop) => drop.message).join('；')}`);
     }

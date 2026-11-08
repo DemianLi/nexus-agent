@@ -21,8 +21,13 @@ import {
 import { expect, it } from 'vitest';
 
 import { HEADLESS_APPROVALS } from './agent-factory.js';
-import { createCliAgent } from './assembly-root.js';
-import { shippedPlugins, withoutTimeContext, withScriptedModel } from './fixtures.js';
+import { createCliAgent, THREAD_ID } from './assembly-root.js';
+import {
+  shippedPlugins,
+  shippedPluginsWithConfig,
+  withoutTimeContext,
+  withScriptedModel,
+} from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 
@@ -77,13 +82,14 @@ const cases: readonly (readonly [string, Case])[] = [
   ['多一個鍵', { args: { plan: PLAN, extra: 1 }, reply: answer([PLAN_APPROVE_LABEL]) }],
 ];
 
-async function runOne(label: string, spec: Case): Promise<unknown> {
+async function runOne(_label: string, spec: Case): Promise<unknown> {
   const plugins = [
     ...(spec.before === undefined ? [] : [spec.before()]),
-    ...shipped.map((entry) =>
-      entry.id === 'plan-mode'
-        ? { ...entry, config: { guidance: GUIDANCE, startActive: spec.startActive ?? true } }
-        : entry,
+    ...withoutTimeContext(
+      await shippedPluginsWithConfig('plan-mode', {
+        guidance: GUIDANCE,
+        startActive: spec.startActive ?? true,
+      }),
     ),
   ];
   const built = await createCliAgent(
@@ -99,7 +105,7 @@ async function runOne(label: string, spec: Case): Promise<unknown> {
     spec.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
   );
   const detach = spec.attach === false ? () => {} : built.attachSession(built.sessions);
-  const config = { configurable: { thread_id: `plan-migration-${label}` } };
+  const config = { configurable: { thread_id: THREAD_ID } };
   let raised: unknown;
   let messages: readonly BaseMessage[];
   try {

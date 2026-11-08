@@ -615,6 +615,18 @@ export function validateEntries(
 }
 
 /**
+ * 一份驗過的清單上，哪幾列是被主連帶關掉的從：位置 → 原因（同 `--dump-config` 來源註解那一句）。給列出插件的地方（plugin 對照快照）用，
+ * 寫明這一列為什麼沒有跑。
+ *
+ * @param entries - {@link validateEntries} 交出的條目。
+ */
+export function dependentDisabledReasons(
+  entries: readonly ConfigEntry[],
+): ReadonlyMap<number, string> {
+  return applyDependentPairs(entries, '這份清單').cascaded;
+}
+
+/**
  * 照 {@link DEPENDENT_ENTRY_PAIRS} 檢查主從列、把被主連帶關掉的從改寫成 `disabled: true`。
  *
  * @param entries - 驗過形狀的條目。

@@ -500,6 +500,64 @@ describe('同意之後的待關', () => {
 });
 
 /**
+ * **卸下再載入，接回同一份日誌**：模式照日誌上的 `plan/mode` 接回來，同意之後排著的待關不跨過去。
+ *
+ * 卸下的兩種樣子都量：卸下時有收掉接線，與沒收（舊的那一次組裝留著、新的一次接上同一份日誌）。新的那一次的下一步都不寫
+ * `plan/mode false`。
+ */
+describe('卸下再載入同一份日誌', () => {
+  const CALL = {
+    name: EXIT_PLAN_MODE_TOOL_NAME,
+    args: { plan: '# 計劃' },
+    id: 'call-1',
+    type: 'tool_call',
+  };
+
+  async function mounted(sessions: SessionRegistry): Promise<{
+    registry: PluginRegistry;
+    detach: () => void;
+  }> {
+    const { registry } = await load([
+      createHostServicesPlugin({ channel: { kind: 'human' } }),
+      planPlugin(),
+    ]);
+    registry.sessions.bind(sessions);
+    return { registry, detach: attach(registry, sessions.root) };
+  }
+
+  it.each([
+    ['卸下時收掉接線', true],
+    ['卸下時沒收接線', false],
+  ] as const)('%s：模式接回來還開著，待關沒有跨過去', async (_label, detachOnUnload) => {
+    vi.mocked(interrupt).mockReturnValue({
+      answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
+    });
+    const sessions = new SessionRegistry('plan');
+    const first = await mounted(sessions);
+    expect(await runPlan(first.registry.commands, '')).toMatchObject({ kind: 'success' });
+    const exit = first.registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
+    const result = await exit?.invoke(
+      CALL as never,
+      { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
+    );
+    expect(verdictOf(result)).toMatchObject({ text: PLAN_APPROVED_MESSAGE, status: 'success' });
+    if (detachOnUnload) first.detach();
+
+    const second = await mounted(sessions);
+    expect(await modelStepText(second.registry, { checkpoint_ns: 'model_request:b' })).toContain(
+      GUIDANCE,
+    );
+    expect(modes(sessions.root)).toEqual([true]);
+    expect(await runPlan(second.registry.commands, '')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+    second.detach();
+    if (!detachOnUnload) first.detach();
+  });
+});
+
+/**
  * `/plan` 的兩個結果，**兩個都要到得了**，而且 `committed` **當場就在日誌上**。
  *
  * `queued` 與 `cancelled` 不在裡面是刻意的（見 `index.ts` 檔頭）：兩個都要「輪還開著、

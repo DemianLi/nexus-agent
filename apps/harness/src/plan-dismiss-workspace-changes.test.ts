@@ -29,6 +29,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCliAgent } from './assembly-root.js';
 import {
   loopbackRequest,
+  shippedPluginsWithConfig,
   shippedServePlugins,
   TEST_BROWSER_AUTH,
   withScriptedModel,
@@ -53,12 +54,15 @@ async function directory(prefix: string): Promise<string> {
 }
 
 /** 計劃模式開著（`startActive`），其餘照 serve 的出貨清單；出貨的指引照用。 */
-function withPlanModeOn(plugins: readonly PluginEntry[]): PluginEntry[] {
-  return plugins.map((entry) => {
-    if (entry.id !== 'plan-mode') return entry;
-    const config = entry.config as { guidance: string };
-    return { ...entry, config: { ...config, startActive: true } };
-  });
+async function withPlanModeOn(plugins: readonly PluginEntry[]): Promise<PluginEntry[]> {
+  const config = plugins.find((entry) => entry.id === 'plan-mode')?.config as { guidance: string };
+  return [
+    ...(await shippedPluginsWithConfig(
+      'plan-mode',
+      { ...config, startActive: true },
+      { serve: true },
+    )),
+  ];
 }
 
 const PLAN = '# 計劃\n\n先寫一個檔。';
@@ -86,7 +90,7 @@ async function dismissAfterWriting(): Promise<{
   vi.stubEnv('TMPDIR', tempRoot);
   const built = await createCliAgent(
     { live: false, workspace: root, sandbox: 'workspace-write' },
-    withScriptedModel(withPlanModeOn(shipped), TURNS),
+    withScriptedModel(await withPlanModeOn(shipped), TURNS),
     root,
   );
   const model = built.model as ScriptedChatModel;
