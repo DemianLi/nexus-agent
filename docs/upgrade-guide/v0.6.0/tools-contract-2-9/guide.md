@@ -40,7 +40,7 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
 - 經 `registry.events.on('tools/execute', …)` 登記、讀 `next()` 交回內容的插件，在宣告了輸出 schema 的工具上，或在 `task` 撞到輸出上限時。出廠的兩位（`@nexus/plugin-sandbox-policy`、`@nexus/plugin-workspace-changes`）都只原樣交回 `next()` 的結果。
 - 想用新欄位的插件。
 
-`@nexus/core` 拿掉三個匯出：`createOutputSchemaMiddleware`、`createSharedReadMarkMiddleware`，以及它們的名字常數 `OUTPUT_SCHEMA_MIDDLEWARE_NAME`、`SHARED_READ_MARK_MIDDLEWARE_NAME`；換成 `createOutputSchemaListener`、`createSharedReadMarkListener`。`createMaxTokensMiddleware` 還在，只剩模型那一半，工具那一半是 `createMaxTokensListener`。這幾個由 `fold.ts` 組裝，插件不經它們。
+`@nexus/core` 拿掉四個匯出：`createOutputSchemaMiddleware`、`createSharedReadMarkMiddleware`，以及它們的名字常數 `OUTPUT_SCHEMA_MIDDLEWARE_NAME`、`SHARED_READ_MARK_MIDDLEWARE_NAME`；換成 `createOutputSchemaListener`、`createSharedReadMarkListener`。`createMaxTokensMiddleware` 還在，只剩模型那一半，工具那一半是 `createMaxTokensListener`。這幾個由 `fold.ts` 組裝，插件不經它們。
 
 ## 遷移
 
