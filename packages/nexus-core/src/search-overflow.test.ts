@@ -9,7 +9,7 @@ import { GraphInterrupt } from '@langchain/langgraph';
 import { describe, expect, it, vi } from 'vitest';
 import {
   capSearchResults,
-  createSearchOverflowListeners,
+  createSearchOverflowListeners as createListenerHalves,
   SEARCH_OVERFLOW_SCOPE_MISSING,
   previewLine,
   searchSeenOf,
@@ -28,7 +28,7 @@ type WrapHook = (
  * `executeAlone` 是不在任何 `scope` 裡跑的 execute 那一半；`unscoped` 是同樣組好、但 post 那一顆不自己開 `scope` 的版本，
  * 配 `scope` 用來在同一個範圍裡連跑兩次呼叫。
  */
-function createSearchOverflowMiddleware(
+function createSearchOverflowListeners(
   options: SearchOverflowOptions,
   between: (inner: () => Promise<unknown>) => Promise<unknown> = (inner) => inner(),
 ): {
@@ -37,7 +37,7 @@ function createSearchOverflowMiddleware(
   readonly unscoped: WrapHook;
   readonly scope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
-  const halves = createSearchOverflowListeners(options);
+  const halves = createListenerHalves(options);
   const post = createToolPostExecuteMiddleware(
     undefined,
     { outer: [halves.post] },
@@ -95,7 +95,7 @@ async function inSlot<T>(
   body: () => Promise<T>,
   extra: { grepMaxLineBytes?: number } = {},
 ): Promise<T> {
-  const middleware = createSearchOverflowMiddleware({
+  const middleware = createSearchOverflowListeners({
     limits: { grepMaxMatches: limit, globMaxResults: limit, ...extra },
   });
   const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
@@ -215,7 +215,7 @@ describe('每行限長（grepMaxLineBytes）', () => {
 
   it('超過筆數上限時，存檔的完整結果也是限過長的那一份', async () => {
     const saved: string[] = [];
-    const middleware = createSearchOverflowMiddleware({
+    const middleware = createSearchOverflowListeners({
       limits: { grepMaxMatches: 1, globMaxResults: 1, grepMaxLineBytes: 30 },
       store: {
         saveText: (input: { content: string }) => {
@@ -243,7 +243,7 @@ describe('每行限長（grepMaxLineBytes）', () => {
 describe('沒有 tool_call.id 的呼叫', () => {
   it('存檔的來源用這次呼叫的 callId，不看結果上的 tool_call_id', async () => {
     const sources: unknown[] = [];
-    const middleware = createSearchOverflowMiddleware({
+    const middleware = createSearchOverflowListeners({
       limits: { grepMaxMatches: 1, globMaxResults: 1 },
       store: {
         saveText: (input: { source: unknown }) => {
@@ -262,7 +262,7 @@ describe('沒有 tool_call.id 的呼叫', () => {
   });
 });
 
-type Middleware = ReturnType<typeof createSearchOverflowMiddleware>;
+type Middleware = ReturnType<typeof createSearchOverflowListeners>;
 
 const readRequest = { toolCall: { name: 'read_file', id: 'call_1', args: { file_path: '/a' } } };
 const readBody = () =>
@@ -287,7 +287,7 @@ async function expectClearedAfter(
 
 describe('交接格', () => {
   const overflowing = () =>
-    createSearchOverflowMiddleware({
+    createSearchOverflowListeners({
       limits: { grepMaxMatches: 1, globMaxResults: 1 },
       store: {
         saveText: () => Promise.resolve({ locator: '/saved', retrievalHint: 'read it' }),
@@ -326,7 +326,7 @@ describe('交接格', () => {
 
   it('兩半之間的層在超過上限之後拋中斷：下一次同一個 callId、沒超過的搜尋不會被拿去排版', async () => {
     let interrupt = true;
-    const middleware = createSearchOverflowMiddleware(
+    const middleware = createSearchOverflowListeners(
       {
         limits: { grepMaxMatches: 1, globMaxResults: 1 },
         store: {
@@ -357,7 +357,7 @@ describe('交接格', () => {
 
   it('兩半之間的層在超過上限之後拋中斷：下一次同一個 callId 若是別顆工具，也不會被拿去排版', async () => {
     let interrupt = true;
-    const middleware = createSearchOverflowMiddleware(
+    const middleware = createSearchOverflowListeners(
       {
         limits: { grepMaxMatches: 1, globMaxResults: 1 },
         store: {
@@ -386,7 +386,7 @@ describe('交接格', () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let calls = 0;
-    const middleware = createSearchOverflowMiddleware(
+    const middleware = createSearchOverflowListeners(
       {
         limits: { grepMaxMatches: 1, globMaxResults: 1 },
         store: {
