@@ -773,15 +773,18 @@ export interface SessionEventMap {
    * 照 dsh 的 `request/header`（`packages/core/session/src/types.ts:390-397`，`5badb15`）。記錄點在模型被叫的那一刻
    * （callback），不是 middleware——見 `request-snapshot.ts` 檔頭，那裡有偏離與理由。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；會話遙測的鏡像**不送**它
-   * （`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
+   * **不進模型**；會話遙測的鏡像**不送**它（`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
    *
-   * 落在配對的 `model/start` 之後、回覆之前；`modelCall` 指回記下它的那次呼叫。這份日誌沒有快照時第一份的
-   * `reason` 是 `'initial'`，之後不同才記、`reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
+   * **格式 55 起**（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：寫在它那次呼叫的 `model/start` **之前**、不帶
+   * `modelCall`、不標 `ignorable`，同 dsh；屬於哪一次看位置，是它之後的第一顆 `model/start`。同一次呼叫裡被重送時，
+   * 後來那份落在已寫的 `model/start` 之後，歸給還開著的那一次。格式 54 以前帶 `modelCall`、落在 `model/start` 之後、標
+   * `ignorable`；讀的一方看有沒有 `modelCall` 分新舊。這份日誌沒有快照時第一份的 `reason` 是 `'initial'`，之後不同才記、
+   * `reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
    */
   'request/header': {
     readonly header: RequestHeader;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有：記下它的那次呼叫的 `model/start` 的 `seq`。55 起不寫，看位置。 */
     readonly modelCall?: number;
   };
   /**
@@ -794,6 +797,7 @@ export interface SessionEventMap {
   'request/system': {
     readonly system: string;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有，同 `request/header`。 */
     readonly modelCall?: number;
   };
   /**
@@ -885,10 +889,11 @@ export interface SessionEventMap {
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；推模型歷史的一側不讀。**由 pump 寫**
-   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在失敗那一對
-   * `model/start`／`model/end`（`outcome: 'error'`）與配對的 `llm/retry` 之後、下一次嘗試的 `model/start` 之前（等退避時按停止也有這一顆）。
-   * `modelCall` 指回失敗那一對。
+   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416，同 dsh：它只對外掛紀錄設，
+   * `packages/core/session/src/index.ts:470-513`、`:861`），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
+   * `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在同一輪裡、失敗那一對
+   * `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）之後。跟下一次嘗試的 `model/start` 誰先誰後不固定：pump
+   * 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。`modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。

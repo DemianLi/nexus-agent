@@ -47,8 +47,8 @@
  *
  * 標題呼叫由 `model/start` 的訂閱者排起，訂閱者綁在接上日誌那一刻的 context 上跑（`session-title-llm.ts` 的
  * `AsyncResource.bind`，為的是 LangChain 的 callbacks，見該檔頭），所以不會落在主呼叫的範圍裡，標題的重試不會帶上主呼叫的識別。
- * 寫在快照 callback（上面第 1 條）與起訖紀錄器（第 3 條）的，寫的那一刻本來就不在範圍的 `scopes.run` 裡；第 2 條在範圍裡寫，
- * 只靠 `bind` 那一層。`session-title-llm.test.ts` 用強制重試釘著這一條。
+ * 上面第 1、2 條在範圍裡寫（LangChain 的 callback 讀得到外面的 `AsyncLocalStorage`），只靠 `bind` 那一層；第 3 條寫的那一刻
+ * 已經出了 `scopes.run`。`session-title-llm.test.ts` 用強制重試釘著這一條。
  *
  * @module
  */

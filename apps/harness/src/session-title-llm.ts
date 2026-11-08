@@ -16,8 +16,12 @@
  * `pending` 留到下一顆 `request/header`。
  *
  * **偏離：觸發點用 `model/start`，不是 `request/header`。** dsh 等主請求的路由記下來才開始，路由就從那一顆讀。
- * 我們沒有 `request/header` 這種事件，路由也不必從日誌讀——一個組裝只有一條連線，建構時就知道。最接近「主請求
- * 已經送出」的一顆是 `model/start`（模型呼叫的 middleware 在呼叫之前寫）。
+ * 我們的 `request/header` 變了才記，同一條 thread 的第二輪以後通常沒有它，等它的話第一句之後的標題就排不上；路由也不必從
+ * 日誌讀——一個組裝只有一條連線，建構時就知道。
+ *
+ * 格式 55 起（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）`model/start` 等到第一個要它的地方才寫，所以觸發點
+ * **往後移**：通常是請求快照記完、排空與送出之前那一刻（`request-snapshot.ts`），比 dsh 的「`request/header` 記下來」只晚同一段
+ * 同步程式碼；範圍裡有寫入點先要這次呼叫的識別（`model-call-scope.ts` 檔頭第 2 條路），就在那一刻；動態模型在範圍一開就寫。
  *
  * ## 寫什麼
  *

@@ -16,8 +16,10 @@ import { PassThrough } from 'node:stream';
 
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import { FakeListChatModel } from '@langchain/core/utils/testing';
 import {
   createModelCallRecorder,
+  createModelUsageRecorder,
   noteStreamFailure,
   retryModelCall,
   SessionLog,
@@ -241,6 +243,64 @@ describe('送出去的是什麼、寫了什麼', () => {
     expect(mainCalls).toBe(1);
     expect(outcome).toEqual({ kind: 'rejected', error: mainError });
     expect(t.log.events.filter((event) => event.type.startsWith('llm/retry'))).toEqual([]);
+    await t.detach();
+  });
+
+  /**
+   * 同上，但 `model/start` 走 `model-call-scope.ts` 檔頭的**第 2 條路**（格式 55，#2416）：模型是 Runnable，所以起訖紀錄器
+   * 一進來不寫；請求沒送出，回一則帶用量的回覆，用量那一格要這次呼叫的識別，在範圍**裡面**補寫 `model/start`。標題的訂閱者因此
+   * 跑在主呼叫的 `AsyncLocalStorage` 裡，只剩 `bind` 那一層擋著。
+   */
+  it('model/start 在範圍裡補寫（第 2 條路）：標題的失敗照樣不讓主呼叫重打', async () => {
+    let titleReported = false;
+    let mainCalls = 0;
+    const mainError = new Error('主呼叫自己的錯，沒有向重試那一層回報過');
+    const t = attached(async () => {
+      noteStreamFailure({ code: 'SERVER', status: 500 });
+      titleReported = true;
+      return stopReply();
+    });
+    t.log.append('turn/start', { kind: 'message', text: FIRST });
+    ensureFallbackTitle(t.log, LIMITS);
+    type Hook = {
+      wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+    };
+    const sessions = {
+      forCall: () => ({ kind: 'ok' as const, address: { kind: 'root' as const }, log: t.log }),
+    };
+    const recorder = createModelCallRecorder(sessions) as unknown as Hook;
+    const usage = createModelUsageRecorder(sessions) as unknown as Hook;
+    const request = { model: new FakeListChatModel({ responses: [] }), runtime: { configurable: {} } };
+    const outcome = await retryModelCall(
+      { maxRetries: 2, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
+      { log: t.log },
+      () =>
+        recorder.wrapModelCall(request, async () => {
+          mainCalls += 1;
+          await usage.wrapModelCall(
+            request,
+            async () =>
+              new AIMessage({
+                content: '',
+                usage_metadata: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+              }),
+          );
+          await until(() => titleReported);
+          throw mainError;
+        }),
+    ).then(
+      () => ({ kind: 'resolved' as const }),
+      (error: unknown) => ({ kind: 'rejected' as const, error }),
+    );
+    await until(() => titleEvents(t.log.events).length === 2);
+    const types = t.log.events.map((event) => event.type);
+    // 前提：`model/start` 真的是用量那一格補寫的，緊接著就是 `model/usage`。
+    expect(types[types.indexOf('model/start') + 1]).toBe('model/usage');
+    expect(types.some((type) => type.startsWith('request/'))).toBe(false);
+    expect(titleReported).toBe(true);
+    expect(mainCalls).toBe(1);
+    expect(outcome).toEqual({ kind: 'rejected', error: mainError });
+    expect(types.filter((type) => type.startsWith('llm/retry'))).toEqual([]);
     await t.detach();
   });
 

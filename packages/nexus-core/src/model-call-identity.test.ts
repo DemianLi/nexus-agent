@@ -6,11 +6,20 @@
  * 的那一次。
  */
 
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import type { Runnable } from '@langchain/core/runnables';
+import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { describe, expect, it } from 'vitest';
-import { captureModelCall, currentModelCall, lastModelCall } from './model-call-scope.js';
+import {
+  beginAttemptReport,
+  captureModelCall,
+  captureModelCallSettled,
+  currentModelCall,
+  lastModelCall,
+} from './model-call-scope.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
+import { createRequestSnapshotRecorder } from './request-snapshot.js';
 import { indexModelCalls } from './model-call-index.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
@@ -187,5 +196,133 @@ describe('captureModelCall：外層拿回裡面那次的識別', () => {
         throw new Error('裡面拋');
       }),
     ).rejects.toThrow('裡面拋');
+  });
+});
+
+/**
+ * 格式 55（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：模型是 Runnable，起訖紀錄器一進來不寫 `model/start`，
+ * 由請求快照的 callback 在送出前寫。上面那組的 request 沒有 `model`，走的是「範圍一開就寫」，碰不到延後寫。
+ */
+describe('格式 55：model/start 延後寫，識別照樣傳到每個寫入點', () => {
+  type Send = (model: Runnable) => Promise<unknown>;
+
+  /** 重試 → 起訖 → 用量 → 請求快照（最內）→ handler；handler 拿到綁上 callback 的模型。 */
+  function onion55(log: SessionLog, model: FakeListChatModel, send: Send): Promise<unknown> {
+    const sessions = { forCall: () => ok(log), flush: async () => undefined };
+    const retry = hookOf(
+      createStreamRetryMiddleware({ maxRetries: 3, initialDelayMs: 1, jitterRatio: 0 }, sessions),
+    );
+    const calls = hookOf(createModelCallRecorder(sessions));
+    const usage = hookOf(createModelUsageRecorder(sessions));
+    const snapshot = hookOf(createRequestSnapshotRecorder(sessions));
+    const request = { model, runtime: { configurable: {} } };
+    return retry(request, (outer) =>
+      calls(outer, (r1) =>
+        usage(r1, (r2) => snapshot(r2, (r3) => send((r3 as { model: Runnable }).model))),
+      ),
+    );
+  }
+
+  const HELLO = [new HumanMessage('嗨')];
+
+  /** 送出去（快照 callback 跑、`model/start` 寫下），第一次報 500 然後拋，之後回帶用量的回覆。 */
+  function sendFailOnce(): Send {
+    let attempt = 0;
+    return async (model) => {
+      attempt += 1;
+      await model.invoke(HELLO);
+      if (attempt > 1) return withUsage();
+      noteStreamFailure({ code: 'SERVER', status: 500 });
+      throw new Error('壞了');
+    };
+  }
+
+  it('順序與識別：快照 → model/start → …；llm/retry 指回失敗那次，用量與回覆指向成功那次', async () => {
+    const log = new SessionLog('lazy');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    await onion55(log, new FakeListChatModel({ responses: ['甲', '乙'] }), sendFailOnce());
+    expect(log.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'request/system',
+      'request/header',
+      'model/start',
+      'model/end',
+      'llm/retry',
+      'llm/retry-started',
+      'model/start',
+      'model/usage',
+      'assistant/message',
+      'model/end',
+    ]);
+    const [failed, succeeded] = log.events.filter((event) => event.type === 'model/start');
+    const identity = (type: string) =>
+      log.events
+        .filter((event) => event.type === type)
+        .map((event) => (event.data as { modelCall?: number }).modelCall);
+    expect(identity('model/end')).toEqual([failed!.seq, succeeded!.seq]);
+    expect(identity('llm/retry')).toEqual([failed!.seq]);
+    expect(identity('llm/retry-started')).toEqual([failed!.seq]);
+    expect(identity('model/usage')).toEqual([succeeded!.seq]);
+    expect(identity('assistant/message')).toEqual([succeeded!.seq]);
+    expect(indexModelCalls(log.events).unattributed).toEqual([]);
+  });
+
+  it('外層的格子（context/measure 那一格）拿得到延後寫的那一次', async () => {
+    const log = new SessionLog('lazy-capture');
+    const { call } = await captureModelCall(() =>
+      onion55(log, new FakeListChatModel({ responses: ['甲'] }), async (model) => {
+        await model.invoke(HELLO);
+        return withUsage();
+      }),
+    );
+    const start = log.events.find((event) => event.type === 'model/start')!;
+    expect(start.seq).toBe(2);
+    expect(call.of(log)).toBe(start.seq);
+  });
+
+  it('沒送就拋（第 3 條路）：起訖紀錄器補寫 model/start，外層格子與 lastModelCall 都是它', async () => {
+    const log = new SessionLog('lazy-throw');
+    const { outcome, call } = await captureModelCallSettled(() =>
+      onion55(log, new FakeListChatModel({ responses: [] }), () => {
+        throw new Error('還沒送就炸了');
+      }),
+    );
+    expect(outcome.status).toBe('rejected');
+    expect(log.events.map((event) => event.type)).toEqual(['model/start', 'model/end']);
+    expect(call.of(log)).toBe(0);
+    expect(lastModelCall(log)).toBe(0);
+  });
+
+  it('pump 的 lastModelCall：送出後被切斷，最近開的那次就是延後寫的那顆', async () => {
+    const log = new SessionLog('lazy-last');
+    await onion55(log, new FakeListChatModel({ responses: ['甲'] }), async (model) => {
+      await model.invoke(HELLO);
+      return withUsage();
+    });
+    await expect(
+      onion55(log, new FakeListChatModel({ responses: ['乙'] }), async (model) => {
+        await model.invoke(HELLO);
+        throw new Error('被切斷');
+      }),
+    ).rejects.toThrow('被切斷');
+    const starts = log.events.filter((event) => event.type === 'model/start');
+    expect(starts).toHaveLength(2);
+    expect(lastModelCall(log)).toBe(starts[1]!.seq);
+  });
+
+  it('adapter 報的用量進得了那一格：失敗的呼叫記一筆帶 outcome 的 model/usage，指向延後寫的那次', async () => {
+    const log = new SessionLog('lazy-usage');
+    await expect(
+      onion55(log, new FakeListChatModel({ responses: ['甲'] }), async (model) => {
+        await model.invoke(HELLO);
+        // 同 adapter：請求開跑時拿回報函式（`model/start` 這時已經寫好），串流裡看到用量就回報。
+        beginAttemptReport()?.({ inputTokens: 5, outputTokens: 2, totalTokens: 7 });
+        throw new Error('串流斷了');
+      }),
+    ).rejects.toThrow('串流斷了');
+    const start = log.events.find((event) => event.type === 'model/start')!;
+    const usage = log.events.find((event) => event.type === 'model/usage');
+    expect(usage?.data).toMatchObject({ outcome: 'error', modelCall: start.seq });
+    expect(usage!.seq).toBeGreaterThan(start.seq);
   });
 });
