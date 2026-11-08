@@ -22,7 +22,7 @@
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
 //! 宿主自己不因為任何一條連線結束。
 //!
-//! 每種狀態的連線收到每種輸入時怎麼處理，整理成表在 `README.md`〈連線身分的狀態表〉，每一格附釘住它的測試。
+//! 每種狀態的連線收到每種輸入時怎麼處理，整理成表在 `README.md`〈連線身分的狀態表〉，每一格附釘住它的測試或不測的原因。
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
@@ -226,7 +226,7 @@ impl Host {
                         }
                         Ok(HostCommand::Revoke { pid }) => {
                             // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
-                            // 都先收完 backlog（不管連線數上限）才抓得齊；每一筆最多超收一個 backlog 的量，沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
+                            // 都先把 backlog 收到空（不管連線數上限）才抓得齊，連線數可能暫時超過上限；沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
                             self.accept(usize::MAX);
                             self.revoke(pid);
                         }

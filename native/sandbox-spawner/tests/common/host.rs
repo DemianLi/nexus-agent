@@ -126,7 +126,7 @@ pub fn violation(pid: u32, reason: &str) -> HostReport {
     HostReport::Violation { pid, reason: reason.as_bytes().to_vec() }
 }
 
-/// `unregistered` 回報的 pid 與理由；收到別種回報就 panic。
+/// `unregistered` 回報的 pid 與理由；連線編號不比，另有 `unregistered_reports_number_each_connection`。收到別種回報就 panic。
 pub fn unregistered(report: Option<HostReport>) -> Option<(u32, String)> {
     match report? {
         HostReport::Unregistered { pid, reason, .. } => Some((pid, String::from_utf8(reason).unwrap())),

@@ -1,7 +1,7 @@
 //! 監督行程整合測試用的假宿主：照控制通道的協定握手、記下收到的身分表，不收連線。真的宿主是 `nexus-host`。
 //!
 //! ```text
-//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] --socket <路徑>
+//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] --socket <路徑>
 //! ```
 //!
 //! - 一起來送 `hello`（版本照 `--version`，預設 [`PROTOCOL_VERSION`]），等到監督行程的 `hello` 才往下。
@@ -10,6 +10,7 @@
 //! - `--unregistered-once`：收到第一筆對話行程的身分之後，標記檔不在就建它、對那個 pid 回報 `unregistered`、以 9 結束；在就照常。
 //! - `--violate-conversations`：每收到一筆對話行程的身分，就對那個 pid 回報 `violation`（理由「測試違規」），照常跑下去。
 //! - `--violate-twice`：同上，但每一筆連報兩次。
+//! - `--then-unregistered`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆 `unregistered`，理由照給的。
 //! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -28,7 +29,8 @@ fn main() {
     let crash_once = value("--crash-once");
     let unregistered_once = value("--unregistered-once");
     let violate_twice = args.iter().any(|a| a == "--violate-twice");
-    let violate_conversations = violate_twice || args.iter().any(|a| a == "--violate-conversations");
+    let then_unregistered = value("--then-unregistered");
+    let violate_conversations = violate_twice || then_unregistered.is_some() || args.iter().any(|a| a == "--violate-conversations");
 
     let mut log_file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
     let mut log = move |line: &str| {
@@ -74,6 +76,9 @@ fn main() {
                     if violate_conversations && role == "conversation" {
                         for _ in 0..if violate_twice { 2 } else { 1 } {
                             report(&HostReport::Violation { pid, reason: "測試違規".as_bytes().to_vec() });
+                        }
+                        if let Some(reason) = &then_unregistered {
+                            report(&HostReport::Unregistered { pid, conn: 7, reason: reason.as_bytes().to_vec() });
                         }
                     }
                     if let Some(marker) = unregistered_once.as_ref().filter(|_| role == "conversation") {
