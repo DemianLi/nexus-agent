@@ -254,10 +254,13 @@ describe('一輪的結構', () => {
   });
 
   it('被中止的一輪帶停止原因（#1847）：摘要也有，別的收尾、舊日誌與認不得的值都沒有', () => {
-    const log = new SessionLog('t');
+    // 認不得的三種，寫入與讀盤那一關都拒（格式 55 起驗 `turn/end` 的 reason）；讀方仍要撐得住，所以直接組事件，不經 `append`。
+    const events: SessionEvent[] = [];
+    const push = (type: string, data: unknown) =>
+      events.push({ type, seq: events.length, time: 1, data } as unknown as SessionEvent);
     const end = (reason?: unknown) => {
-      log.append('turn/start', { kind: 'message', text: 'x' });
-      log.append('turn/end', reason === undefined ? {} : ({ reason } as never));
+      push('turn/start', { kind: 'message', text: 'x' });
+      push('turn/end', reason === undefined ? {} : { reason });
     };
     end({ kind: 'aborted', cause: { kind: 'user' } });
     end({ kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } });
@@ -277,9 +280,9 @@ describe('一輪的結構', () => {
       undefined,
       undefined,
     ];
-    expect(foldAll(log.events).turns.map((t) => t.endCause)).toEqual(expected);
+    expect(foldAll(events).turns.map((t) => t.endCause)).toEqual(expected);
     for (let i = 0; i < TRAJECTORY_DETAIL_TURNS; i += 1) end();
-    const { digests } = foldWindowed(log.events);
+    const { digests } = foldWindowed(events);
     expect(digests.slice(0, expected.length).map((t) => t.endCause)).toEqual(expected);
   });
 });

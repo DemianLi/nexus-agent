@@ -31,12 +31,24 @@
  * `seq` 是某一份日誌裡的號碼，拿到別份日誌上只會指到不相干的事件。root 與子代理各有日誌，一個寫入點若解析出別份，
  * 寧可不附也不附錯。
  *
+ * ## `model/start` 等到第一個要它的地方才寫（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
+ *
+ * 請求快照（`request/system`、`request/header`）要排在 `model/start` 之前，而快照要等模型被叫的那一刻才拿得到
+ * （{@link ./request-snapshot.ts}）。所以起訖紀錄器一進來只開範圍（{@link openModelCall}），`model/start` 由下面三者中最先到的寫：
+ *
+ * 1. 請求快照的 callback：寫完快照接著寫，同一段同步程式裡、中間沒有 `await`，然後才排空、送出；
+ * 2. 範圍內第一個要識別的寫入點（{@link currentModelCall}），只會發生在請求還沒送出就失敗的那次；
+ * 3. 起訖紀錄器自己，`handler` 回來或拋出時還沒寫的話。
+ *
+ * 寫的那一刻（{@link ModelCallHandle.ensureStarted}）一次補齊範圍進來時沒辦法給的三樣：範圍裡的識別、這份日誌「最近開的那一次」、
+ * 外層放的格子。外層的格子在**開範圍那一刻**就抓住，不在寫的那一刻問 `AsyncLocalStorage`。
+ *
  * ## 標題請求不在裡面
  *
- * 標題呼叫由 `model/start` 的訂閱者排起。`model/start` 是在**開範圍之前**寫的（起訖紀錄器先 `append`、拿到 `seq`，才
- * {@link runInModelCall}），所以訂閱者跑的那一刻沒有任何範圍；它又綁在接上日誌那一刻的 context 上跑
- * （`session-title-llm.ts` 的 `AsyncResource.bind`，為的是 LangChain 的 callbacks，見該檔頭）。兩層各自都擋得住，
- * 標題的重試不會掉進主呼叫、帶上主呼叫的識別。`session-title-llm.test.ts` 用強制重試釘著這一條。
+ * 標題呼叫由 `model/start` 的訂閱者排起，訂閱者綁在接上日誌那一刻的 context 上跑（`session-title-llm.ts` 的
+ * `AsyncResource.bind`，為的是 LangChain 的 callbacks，見該檔頭），所以不會落在主呼叫的範圍裡，標題的重試不會帶上主呼叫的識別。
+ * 寫在快照 callback（上面第 1 條）與起訖紀錄器（第 3 條）的，寫的那一刻本來就不在範圍的 `scopes.run` 裡；第 2 條在範圍裡寫，
+ * 只靠 `bind` 那一層。`session-title-llm.test.ts` 用強制重試釘著這一條。
  *
  * @module
  */
@@ -67,9 +79,14 @@ interface AttemptCell {
 /** 起訖紀錄器為一次呼叫開的範圍，給它內側的寫入點讀。 */
 interface CallScope {
   readonly log: SessionLog;
-  readonly modelCall: number;
+  /** 這次呼叫的 `model/start` 的 `seq`；`undefined` ＝ 還沒寫。 */
+  modelCall: number | undefined;
   /** 最近那次請求的用量格（#1022）。`undefined` ＝ 還沒有請求開跑。 */
   attempt: AttemptCell | undefined;
+  /** 開範圍那一刻外層放的格子（最近的一格），寫 `model/start` 時沿它往外填。 */
+  readonly probe: CallProbe | undefined;
+  /** 寫 `model/start`，交回它的 `seq`。 */
+  readonly writeStart: () => number;
 }
 
 /** 外層放的格子，內層的起訖紀錄器填。 */
@@ -88,9 +105,60 @@ const probes = new AsyncLocalStorage<CallProbe>();
 /** 每份日誌最近開的那次呼叫，與它有沒有記過正常回覆。 */
 const lastCalls = new WeakMap<SessionLog, { readonly modelCall: number; replied: boolean }>();
 
+/** 一次模型呼叫的控制柄：寫進哪一份日誌，與「還沒寫 `model/start` 就現在寫」。 */
+export interface ModelCallHandle {
+  readonly log: SessionLog;
+  /**
+   * 交回這次呼叫的 `model/start` 的 `seq`；還沒寫就現在寫，同時登記成這份日誌最近開的那一次、填進外層放的格子。
+   * 寫不進去照拋，範圍維持「還沒寫」。
+   */
+  ensureStarted(): number;
+}
+
+/** {@link openModelCall} 交回的：控制柄，加上在這個範圍裡跑的方法。 */
+export interface OpenedModelCall extends ModelCallHandle {
+  /** 在這次呼叫的範圍裡跑 `call`：內側的寫入點用 {@link currentModelCall} 讀得到識別。 */
+  run<T>(call: () => T | Promise<T>): Promise<T>;
+}
+
+function ensureStarted(scope: CallScope): number {
+  if (scope.modelCall !== undefined) return scope.modelCall;
+  const modelCall = scope.writeStart();
+  scope.modelCall = modelCall;
+  lastCalls.set(scope.log, { modelCall, replied: false });
+  for (let probe = scope.probe; probe !== undefined; probe = probe.parent) {
+    probe.log = scope.log;
+    probe.modelCall = modelCall;
+  }
+  return modelCall;
+}
+
+function handleOf(scope: CallScope): ModelCallHandle {
+  return { log: scope.log, ensureStarted: () => ensureStarted(scope) };
+}
+
 /**
- * 在一次模型呼叫的範圍裡跑 `call`：它內側的寫入點用 {@link currentModelCall} 讀得到識別。
- * 同時登記成這份日誌「最近開的那一次」（{@link lastModelCall}），並填進外層放的格子（{@link captureModelCall}）。
+ * 開一次模型呼叫的範圍，`model/start` 先不寫，見檔頭。外層放的格子在這一刻抓住。
+ *
+ * @param log - 這次呼叫寫進的日誌。
+ * @param writeStart - 寫 `model/start`、交回 `seq`。
+ */
+export function openModelCall(log: SessionLog, writeStart: () => number): OpenedModelCall {
+  const scope: CallScope = {
+    log,
+    modelCall: undefined,
+    attempt: undefined,
+    probe: probes.getStore(),
+    writeStart,
+  };
+  return {
+    ...handleOf(scope),
+    run: async (call) => scopes.run(scope, call),
+  };
+}
+
+/**
+ * 在一次 `model/start` **已經寫好**的呼叫範圍裡跑 `call`：{@link openModelCall} 接著立刻寫，給手上已經有 `seq` 的呼叫端。
  *
  * @param log - 這次呼叫寫進的日誌。
  * @param modelCall - 這次呼叫的 `model/start` 的 `seq`。
@@ -100,21 +168,27 @@ export function runInModelCall<T>(
   modelCall: number,
   call: () => T | Promise<T>,
 ): Promise<T> {
-  lastCalls.set(log, { modelCall, replied: false });
-  for (let probe = probes.getStore(); probe !== undefined; probe = probe.parent) {
-    probe.log = log;
-    probe.modelCall = modelCall;
-  }
-  return Promise.resolve(scopes.run({ log, modelCall, attempt: undefined }, call));
+  const opened = openModelCall(log, () => modelCall);
+  opened.ensureStarted();
+  return opened.run(call);
 }
 
 /**
- * 此刻所在那次模型呼叫的識別——**只在那次呼叫寫進的就是 `log` 這一份時**才給。
- * 不在任何呼叫範圍裡（標題請求、pump、測試直接叫）一律 `undefined`。
+ * 此刻所在那次模型呼叫的識別——**只在那次呼叫寫進的就是 `log` 這一份時**才給。還沒寫 `model/start` 的話現在寫
+ * （檔頭第 2 條），所以寫不進去會拋。不在任何呼叫範圍裡（標題請求、pump、測試直接叫）一律 `undefined`。
  */
 export function currentModelCall(log: SessionLog): number | undefined {
   const scope = scopes.getStore();
-  return scope !== undefined && scope.log === log ? scope.modelCall : undefined;
+  return scope !== undefined && scope.log === log ? ensureStarted(scope) : undefined;
+}
+
+/**
+ * 此刻所在那次模型呼叫的控制柄，**不比日誌**：給請求快照，它拿控制柄上的日誌寫、自己再比一次身分（{@link ./request-snapshot.ts}）。
+ * 不在任何呼叫範圍裡是 `undefined`。
+ */
+export function currentModelCallHandle(): ModelCallHandle | undefined {
+  const scope = scopes.getStore();
+  return scope === undefined ? undefined : handleOf(scope);
 }
 
 /**

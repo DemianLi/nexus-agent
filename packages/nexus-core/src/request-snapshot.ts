@@ -18,8 +18,22 @@
  * 兩顆分開（dsh 也分開，`header.system` 明令不准有）：系統提示詞很長、很少變；工具與設定短、變得勤。合成一顆的話，工具清單
  * 一變就得把幾十 KB 的提示詞再抄一遍。
  *
- * 兩顆都帶 `modelCall`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)），指回**記下它的那次呼叫**的
- * `model/start`。`reason` 是 `'initial'`（這份日誌第一份）或 `'change'`（跟上一份不同）。
+ * `reason` 是 `'initial'`（這份日誌第一份）或 `'change'`（跟上一份不同）。
+ *
+ * ## 寫在 `model/start` 之前，不帶 `modelCall`（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）
+ *
+ * 照 dsh 的順序：`request/header` 先落、`step/start` 後落（`packages/core/agent-loop/src/agent.ts:637-650`），`request/header`
+ * 也不帶呼叫識別（`packages/core/session/src/types.ts:398-403`）。屬於哪一次呼叫看位置：**快照之後的第一顆 `model/start`**。
+ * 格式 54 以前兩顆帶 `modelCall`、排在 `model/start` 之後；讀的一方看有沒有 `modelCall` 分新舊。
+ *
+ * 一次呼叫的範圍由 {@link ./model-calls.ts} 開，`model/start` 等到第一個要它的地方才寫（{@link ./model-call-scope.ts}）。
+ * 這裡是第一個：handler 記完快照，**同一段同步程式碼裡**接著寫 `model/start`，中間沒有 `await`，別的寫入插不進來；
+ * 然後排空這份日誌（`sessions.flush`），排空完才放 LangChain 送出。排空失敗照「記不進去，這次請求不送」。
+ * 同一個範圍裡被重送（`imageOffloadRecovery` 在範圍裡重打，`fold.ts` 的順序），第二次之後的快照落在已寫的
+ * `model/start` 之後，讀的一方照位置歸給同一次呼叫。
+ *
+ * 寫哪一份日誌拿範圍控制柄上的，再跟 `sessions.forCall` 自己問到的比一次；兩邊不是同一份就讓這次請求不送：快照跟
+ * `model/start` 寫進不同的日誌，位置就對不上了。不在任何範圍裡（直接叫這顆 middleware 的測試）才用自己問到的。
  *
  * ## 記錄點：模型本身，不是 middleware
  *
@@ -36,7 +50,9 @@
  * 掛 callback 要往 `request.model` 上綁設定，而基座之後綁工具只認**一層** `RunnableBinding`；中止訊號那顆也在綁，所以兩顆經
  * {@link ./model-binding.ts} 併成同一層，不各包一層（疊兩層，產品路徑上整輪失敗）。
  *
- * handler 設 `awaitHandlers = true`：事件在請求送出**之前**落地，不會被背景化到回覆之後。
+ * handler 設 `awaitHandlers = true`：事件在請求送出**之前**落地，不會被背景化到回覆之後。LangChain 送出的三條路
+ * （`@langchain/core@1.2.9` `language_models/chat_models.js` 的 `_streamIterator`、`_generateUncached`、`_generateCached`）都先
+ * `await` 這個 callback 才送，所以 handler 是 `async`、排空也等得到。
  *
  * ## 偏離 dsh
  *
@@ -64,9 +80,9 @@
  *
  * ## 不進模型，遙測不放行
  *
- * 兩顆都用 `{ ignorable: true }` 寫（[#507](https://github.com/DemianLi/nexus-agent/issues/507)：純資訊性的新種類不升格式版本），
- * 不在 `MODEL_VISIBLE_EVENT_TABLE`。會話遙測的鏡像**不送**它們（系統提示詞可能含工作區內容，見
- * {@link ./session-telemetry.ts | isMirroredEvent}）。
+ * 兩顆不在 `MODEL_VISIBLE_EVENT_TABLE`。格式 55 起不帶 `ignorable`：位置成了「這次呼叫送了什麼」的唯一線索，不能略過，
+ * 同 dsh（它只對外掛紀錄設 `ignorable`，`packages/core/session/src/index.ts:470-513`、`:861`）。會話遙測的鏡像**不送**它們
+ * （系統提示詞可能含工作區內容，見 {@link ./session-telemetry.ts | isMirroredEvent}）。
  *
  * ## 記不進去，這次請求不送（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）
  *
@@ -80,7 +96,7 @@
  * 基準只在**記成功之後**才前進（dsh 的 `requestHeaderLogged` 也是寫成功才設），所以下一次呼叫會再試、第一份照樣是 `initial`。
  *
  * 兩顆的寫入順序是先 `request/system` 後 `request/header`：**`append` 寫 header 時拋**（含超過深度上限），日誌上已經有這次的
- * `request/system`，它指回的那次呼叫 `model/end` 是 `outcome:'error'`、沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
+ * `request/system`；`model/start` 由 {@link ./model-calls.ts} 失敗那條路補寫，緊接著 `model/end{outcome:'error'}`，沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
  * （`:430-439`），再寫 `request/header`（`:637-650`），header 寫不進去時那一步的 system 與 user 一樣留在日誌上。dsh 的不變量是
  * 「送出的必定在送出之前就在日誌上」，不是「日誌上的必定被送出」；讀 `request/system` 的地方取的是最近（生效）的那一份
  * （`packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`apps/harness/src/log-derived-history.fixture.ts`）。
@@ -121,9 +137,10 @@ import { RunnableBinding } from '@langchain/core/runnables';
 import { createMiddleware } from 'langchain';
 import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
-import { currentModelCall, withModelCall } from './model-call-scope.js';
+import { currentModelCallHandle } from './model-call-scope.js';
+import type { ModelCallHandle } from './model-call-scope.js';
 import { bindModelConfig } from './model-binding.js';
-import type { SessionLookup } from './registry.js';
+import type { CheckpointSessions } from './session-checkpoint-policy.js';
 import { nestingExceeds } from './logged-message.js';
 import {
   SESSION_EVENT_MAX_DEPTH,
@@ -392,49 +409,30 @@ function baselineOf(log: SessionLog): Baseline {
 }
 
 /**
- * 比對基準，變了（或第一份）就記。記成功才前進基準。
+ * 比對基準，變了（或第一份）就記。記成功才前進基準。不寫 `model/start`，那是呼叫端的事（見檔頭）。
  *
  * @param log - 這次呼叫寫進的日誌。
- * @param modelCall - 這次呼叫的識別，見 {@link ./model-call-scope.ts}；沒有就不附。
  */
-export function recordRequestSnapshot(
-  log: SessionLog,
-  request: ExtractedRequest,
-  modelCall: number | undefined,
-): void {
+export function recordRequestSnapshot(log: SessionLog, request: ExtractedRequest): void {
   const baseline = baselineOf(log);
   if (baseline.system !== request.system) {
-    log.append(
-      'request/system',
-      withModelCall(
-        {
-          system: request.system,
-          reason: baseline.system === undefined ? ('initial' as const) : ('change' as const),
-        },
-        modelCall,
-      ),
-      { ignorable: true },
-    );
+    log.append('request/system', {
+      system: request.system,
+      reason: baseline.system === undefined ? 'initial' : 'change',
+    });
     baseline.system = request.system;
   }
   const header = JSON.stringify(request.header);
   if (baseline.header !== header) {
-    log.append(
-      'request/header',
-      withModelCall(
-        {
-          header: request.header,
-          reason: baseline.header === undefined ? ('initial' as const) : ('change' as const),
-        },
-        modelCall,
-      ),
-      { ignorable: true },
-    );
+    log.append('request/header', {
+      header: request.header,
+      reason: baseline.header === undefined ? 'initial' : 'change',
+    });
     baseline.header = header;
   }
 }
 
-/** 模型被叫的那一刻抓請求。每次呼叫一個，綁著那次呼叫要寫進的日誌與識別。 */
+/** 模型被叫的那一刻抓請求。每次呼叫一個，綁著那次呼叫要寫進的日誌與範圍控制柄。 */
 class RequestSnapshotHandler extends BaseCallbackHandler {
   readonly name = 'nexusRequestSnapshot';
   /** 請求送出**之前**落地，不背景化。 */
@@ -444,18 +442,19 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
 
   constructor(
     private readonly log: SessionLog,
-    private readonly modelCall: number | undefined,
+    private readonly call: ModelCallHandle | undefined,
+    private readonly sessions: CheckpointSessions,
   ) {
     super();
   }
 
-  override handleChatModelStart(
+  override async handleChatModelStart(
     llm: Serialized,
     messages: BaseMessage[][],
     _runId: string,
     _parentRunId?: string,
     extraParams?: Record<string, unknown>,
-  ): void {
+  ): Promise<void> {
     const kwargs = (llm as { kwargs?: Record<string, unknown> }).kwargs ?? {};
     const fallback = kwargs['model'] ?? kwargs['model_name'] ?? kwargs['modelName'];
     recordRequestSnapshot(
@@ -466,8 +465,9 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
         extraParams?.['options'],
         typeof fallback === 'string' ? fallback : undefined,
       ),
-      this.modelCall,
     );
+    this.call?.ensureStarted();
+    await this.sessions.flush(this.log);
   }
 }
 
@@ -478,22 +478,28 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
  * **要排在我們交出去那串的最內層、緊貼 `turnCancelModelSignal` 外面**：它也包 `request.model`，這一顆在它外面，
  * 所以外面每一顆 middleware 看到的仍是原本的模型。見檔頭「記錄點」一節，為什麼記錄點不在 middleware 這一層。
  *
- * @param sessions - 註冊表的 `sessions` 通道，用來問「這次呼叫該寫進哪一份」。
+ * @param sessions - 註冊表的 `sessions` 通道：問「這次呼叫該寫進哪一份」，與送出前把那一份排空。
  */
-export function createRequestSnapshotRecorder(sessions: {
-  forCall(config: unknown): SessionLookup;
-}): AgentMiddleware {
+export function createRequestSnapshotRecorder(sessions: CheckpointSessions): AgentMiddleware {
   return withModelCallStep(
     (rawRequest, handler) => {
       const request = rawRequest as { readonly model?: unknown };
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
-      // 動態模型（函式）包不了，照舊交出去——那條路上不記。
-      if (found.kind !== 'ok' || !RunnableBinding.isRunnable(request.model)) {
+      const call = currentModelCallHandle();
+      if (call !== undefined && (found.kind !== 'ok' || found.log !== call.log)) {
+        throw new Error(
+          `請求快照要寫的日誌跟這次模型呼叫的不是同一份（${call.log.sessionId}），這次請求不送`,
+        );
+      }
+      const log = call?.log ?? (found.kind === 'ok' ? found.log : undefined);
+      // 動態模型（函式）包不了，照舊交出去——那條路上不記，`model/start` 照樣在送出前寫好。
+      if (log === undefined || !RunnableBinding.isRunnable(request.model)) {
+        call?.ensureStarted();
         return handler(request);
       }
-      const watcher = new RequestSnapshotHandler(found.log, currentModelCall(found.log));
+      const watcher = new RequestSnapshotHandler(log, call, sessions);
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({

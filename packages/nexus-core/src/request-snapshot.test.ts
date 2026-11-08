@@ -18,6 +18,7 @@ import {
   recordRequestSnapshot,
 } from './request-snapshot.js';
 import type { ExtractedRequest } from './request-snapshot.js';
+import { openModelCall } from './model-call-scope.js';
 import { SessionEventDepthError, SessionLog } from './session-log.js';
 
 const ECHO = {
@@ -198,7 +199,7 @@ describe('拷不動的參數不再靜靜丟掉（#1731，照 dsh snapshotJsonVal
     // data(1) → header(2) → tools(3) → 一顆工具(4)，parameters 的根是第 5 層：596 層 parameters 剛好 600 層。
     const ok = extractRequest(messages, { tools: [toolOf('edge', nested(596))] }, {});
     const log = new SessionLog('s');
-    expect(() => recordRequestSnapshot(log, ok, 0)).not.toThrow();
+    expect(() => recordRequestSnapshot(log, ok)).not.toThrow();
     expect(kinds(log)).toContain('request/header:initial');
 
     const call = () => extractRequest(messages, { tools: [toolOf('edge', nested(597))] }, {});
@@ -247,6 +248,12 @@ const request = (system: string, tool = 'echo', temperature = 0): ExtractedReque
   header: { config: { model: 'm', temperature }, tools: [{ name: tool }] },
 });
 
+/** 只認一份日誌的 `sessions` 通道；`flush` 可以換掉，拿來看排空與送出的先後。 */
+const sessionsOf = (log: SessionLog, flush: () => Promise<void> = async () => undefined) => ({
+  forCall: () => ({ kind: 'ok' as const, address: { kind: 'root' as const }, log }),
+  flush,
+});
+
 const kinds = (log: SessionLog) =>
   log.events
     .filter((event) => event.type === 'request/system' || event.type === 'request/header')
@@ -255,18 +262,18 @@ const kinds = (log: SessionLog) =>
 describe('recordRequestSnapshot：變了才記', () => {
   it('第一次兩種都記（initial），沒變就什麼都不記', () => {
     const log = new SessionLog('s');
-    recordRequestSnapshot(log, request('提示'), 0);
-    recordRequestSnapshot(log, request('提示'), 1);
-    recordRequestSnapshot(log, request('提示'), 2);
+    recordRequestSnapshot(log, request('提示'));
+    recordRequestSnapshot(log, request('提示'));
+    recordRequestSnapshot(log, request('提示'));
     expect(kinds(log)).toEqual(['request/system:initial', 'request/header:initial']);
   });
 
   it('只動系統提示詞就只記一顆 system；只動工具或設定就只記一顆 header', () => {
     const log = new SessionLog('s');
-    recordRequestSnapshot(log, request('甲'), 0);
-    recordRequestSnapshot(log, request('乙'), 1);
-    recordRequestSnapshot(log, request('乙', 'other'), 2);
-    recordRequestSnapshot(log, request('乙', 'other', 0.5), 3);
+    recordRequestSnapshot(log, request('甲'));
+    recordRequestSnapshot(log, request('乙'));
+    recordRequestSnapshot(log, request('乙', 'other'));
+    recordRequestSnapshot(log, request('乙', 'other', 0.5));
     expect(kinds(log)).toEqual([
       'request/system:initial',
       'request/header:initial',
@@ -278,9 +285,9 @@ describe('recordRequestSnapshot：變了才記', () => {
 
   it('改回原樣算變：基準是上一份，不是第一份', () => {
     const log = new SessionLog('s');
-    recordRequestSnapshot(log, request('甲'), 0);
-    recordRequestSnapshot(log, request('乙'), 1);
-    recordRequestSnapshot(log, request('甲'), 2);
+    recordRequestSnapshot(log, request('甲'));
+    recordRequestSnapshot(log, request('乙'));
+    recordRequestSnapshot(log, request('甲'));
     expect(
       log.events.filter((event) => event.type === 'request/system').map((e) => e.data),
     ).toMatchObject([{ reason: 'initial' }, { reason: 'change' }, { reason: 'change' }]);
@@ -289,40 +296,31 @@ describe('recordRequestSnapshot：變了才記', () => {
   it('長提示詞：呼叫幾次都只記一份，日誌不隨呼叫數線性長', () => {
     const log = new SessionLog('s');
     const long = '很長的系統提示詞。'.repeat(2000);
-    for (let call = 0; call < 50; call += 1) recordRequestSnapshot(log, request(long), call);
+    for (let call = 0; call < 50; call += 1) recordRequestSnapshot(log, request(long));
     expect(log.events.filter((event) => event.type === 'request/system')).toHaveLength(1);
   });
 
-  it('識別附在兩顆上；沒有識別就不附這一格', () => {
+  it('格式 55：兩顆都不帶 modelCall、不標 ignorable，也不寫 model/start', () => {
     const log = new SessionLog('s');
-    recordRequestSnapshot(log, request('甲'), 7);
-    recordRequestSnapshot(log, request('乙', 'other'), undefined);
-    expect(log.events.map((event) => (event.data as { modelCall?: number }).modelCall)).toEqual([
-      7,
-      7,
-      undefined,
-      undefined,
-    ]);
-    expect(log.events[2]!.data).not.toHaveProperty('modelCall');
-  });
-
-  it('兩種都標 ignorable，也不進模型', () => {
-    const log = new SessionLog('s');
-    recordRequestSnapshot(log, request('甲'), 0);
-    expect(log.events.every((event) => event.ignorable === true)).toBe(true);
+    recordRequestSnapshot(log, request('甲'));
+    expect(log.events.map((event) => event.type)).toEqual(['request/system', 'request/header']);
+    for (const event of log.events) {
+      expect(event.data).not.toHaveProperty('modelCall');
+      expect(event).not.toHaveProperty('ignorable');
+    }
   });
 
   it('續接：新行程碰到帶快照的舊日誌，設定沒變就不重記；變了才記', () => {
     const before = new SessionLog('s');
-    recordRequestSnapshot(before, request('甲'), 0);
+    recordRequestSnapshot(before, request('甲'));
 
     // 同一份事件當 seed 開出新日誌 = 新行程的 resume（基準住在日誌物件上，所以是全新的一份）。
     const same = new SessionLog('s', { seed: before.events });
-    recordRequestSnapshot(same, request('甲'), 1);
+    recordRequestSnapshot(same, request('甲'));
     expect(kinds(same)).toEqual(['request/system:initial', 'request/header:initial']);
 
     const changed = new SessionLog('s', { seed: before.events });
-    recordRequestSnapshot(changed, request('乙'), 1);
+    recordRequestSnapshot(changed, request('乙'));
     expect(kinds(changed)).toEqual([
       'request/system:initial',
       'request/header:initial',
@@ -337,7 +335,7 @@ describe('recordRequestSnapshot：變了才記', () => {
     for (let level = 0; level < 3_000; level++) deep = [deep];
     const before = new SessionLog('s');
     const shallow = request('甲');
-    recordRequestSnapshot(before, shallow, 0);
+    recordRequestSnapshot(before, shallow);
     // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下的舊日誌裡：把記下的 header 換成深的再續接。
     const seed = before.events.map((event) =>
       event.type === 'request/header'
@@ -356,7 +354,7 @@ describe('recordRequestSnapshot：變了才記', () => {
     // 前提：基準讀的是日誌裡凍過的那一份（見上：凍過的那一份直接序列化會拋）。
     expect(Object.isFrozen((header.data as { header: object }).header)).toBe(true);
     // 改之前：基準在 stringify 那一行拋，產品路徑上被 handler 的 `catch` 吞掉，之後每次呼叫兩種快照都不記。
-    recordRequestSnapshot(resumed, shallow, 1);
+    recordRequestSnapshot(resumed, shallow);
     expect(kinds(resumed)).toEqual([
       'request/system:initial',
       'request/header:initial',
@@ -375,8 +373,8 @@ describe('recordRequestSnapshot：變了才記', () => {
       }
       return append(...args);
     };
-    expect(() => recordRequestSnapshot(log, request('甲'), 0)).toThrow('壞了');
-    recordRequestSnapshot(log, request('甲'), 1);
+    expect(() => recordRequestSnapshot(log, request('甲'))).toThrow('壞了');
+    recordRequestSnapshot(log, request('甲'));
     expect(kinds(log)).toContain('request/system:initial');
   });
 });
@@ -394,9 +392,7 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
       }
       return append(...args);
     };
-    const recorder = createRequestSnapshotRecorder({
-      forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
-    });
+    const recorder = createRequestSnapshotRecorder(sessionsOf(log));
     const hook = (
       recorder as unknown as {
         wrapModelCall: (
@@ -432,5 +428,110 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
     expect(reply.content).toBe('好');
     expect(generated).toBe(1);
     expect(kinds(log)).toEqual(['request/system:initial', 'request/header:initial']);
+  });
+});
+
+describe('格式 55：快照在 model/start 之前，排空完才送（#2416）', () => {
+  type Hook = (
+    request: unknown,
+    handler: (next: { model: Runnable }) => Promise<unknown>,
+  ) => Promise<unknown>;
+  const hookOf = (recorder: unknown): Hook => (recorder as { wrapModelCall: Hook }).wrapModelCall;
+
+  /** 在一次 `model/start` 還沒寫的呼叫範圍裡叫模型；`trace` 依序記下寫入、排空與送出。 */
+  function setup(flush?: () => Promise<void>) {
+    const log = new SessionLog('s');
+    const trace: string[] = [];
+    log.subscribe((event) => trace.push(event.type));
+    const model = new FakeListChatModel({ responses: ['好', '好'] });
+    const generate = model._generate.bind(model);
+    model._generate = (...args: Parameters<typeof model._generate>) => {
+      trace.push('send');
+      return generate(...args);
+    };
+    const hook = hookOf(
+      createRequestSnapshotRecorder(
+        sessionsOf(
+          log,
+          flush ??
+            (async () => {
+              trace.push('flush');
+            }),
+        ),
+      ),
+    );
+    const opened = openModelCall(log, () => log.append('model/start', {}).seq);
+    const call = () =>
+      opened.run(() =>
+        hook({ model, messages: [], runtime: { configurable: {} } }, (next) =>
+          next.model.invoke(messages[0]!),
+        ),
+      );
+    return { log, trace, opened, call };
+  }
+
+  it('順序：request/system → request/header → model/start → 排空 → 送出', async () => {
+    const { trace, opened, call } = setup();
+    await call();
+    expect(trace).toEqual(['request/system', 'request/header', 'model/start', 'flush', 'send']);
+    expect(opened.ensureStarted()).toBe(2);
+  });
+
+  it('同一個範圍裡重送：model/start 只有一顆，沒變的快照不重記', async () => {
+    const { trace, call } = setup();
+    await call();
+    await call();
+    expect(trace.filter((type) => type === 'model/start')).toHaveLength(1);
+    expect(trace.filter((type) => type === 'send')).toHaveLength(2);
+  });
+
+  it('排空失敗：這次請求不送，model/start 已經在日誌上', async () => {
+    const broken = new Error('排空失敗');
+    const { log, trace, call } = setup(async () => {
+      throw broken;
+    });
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(call()).rejects.toBe(broken);
+    } finally {
+      printed.mockRestore();
+    }
+    expect(trace).not.toContain('send');
+    expect(log.events.map((event) => event.type)).toEqual([
+      'request/system',
+      'request/header',
+      'model/start',
+    ]);
+  });
+
+  it('範圍的日誌跟 forCall 問到的不是同一份：這次請求不送，兩份都沒寫', async () => {
+    const scoped = new SessionLog('scoped');
+    const other = new SessionLog('other');
+    const hook = hookOf(createRequestSnapshotRecorder(sessionsOf(other)));
+    const model = new FakeListChatModel({ responses: ['好'] });
+    const opened = openModelCall(scoped, () => scoped.append('model/start', {}).seq);
+    await expect(
+      opened.run(() =>
+        hook({ model, messages: [], runtime: { configurable: {} } }, (next) =>
+          next.model.invoke(messages[0]!),
+        ),
+      ),
+    ).rejects.toThrow(/不是同一份/);
+    expect(scoped.length).toBe(0);
+    expect(other.length).toBe(0);
+  });
+
+  it('動態模型（函式）：不記快照，model/start 照樣在交出去之前寫好', async () => {
+    const log = new SessionLog('s');
+    const hook = hookOf(createRequestSnapshotRecorder(sessionsOf(log)));
+    const opened = openModelCall(log, () => log.append('model/start', {}).seq);
+    const seen: string[] = [];
+    await opened.run(() =>
+      hook({ model: () => undefined, messages: [], runtime: { configurable: {} } }, async () => {
+        seen.push(...log.events.map((event) => event.type));
+        return undefined;
+      }),
+    );
+    expect(seen).toEqual(['model/start']);
   });
 });
