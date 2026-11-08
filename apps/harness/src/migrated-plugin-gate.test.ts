@@ -41,6 +41,7 @@ const EXPECTED_MIGRATED = [
   '@nexus/plugin-goal',
   '@nexus/plugin-mcp',
   '@nexus/plugin-permission-presets',
+  '@nexus/plugin-plan-mode',
   '@nexus/plugin-present',
   '@nexus/plugin-quickjs',
   '@nexus/plugin-sandbox-policy',
@@ -68,19 +69,117 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
     expect(failed.map(([dir]) => dir)).toEqual([]);
   });
 
-  it('遷出的集合正好是 agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、present、quickjs、sandbox-policy、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory；舊插件不在裡面', () => {
+  it('遷出的集合正好是 agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、plan-mode、present、quickjs、sandbox-policy、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory；舊插件不在裡面', () => {
     expect(migratedPackages(packages, loaded).map((pkg) => pkg.name)).toEqual(EXPECTED_MIGRATED);
     const older = packages
       .map((pkg) => pkg.name)
       .filter((name) => !EXPECTED_MIGRATED.includes(name));
     expect(older).toHaveLength(EXPECTED_PLUGIN_PACKAGES - EXPECTED_MIGRATED.length);
-    expect(older).toContain('@nexus/plugin-plan-mode');
+    expect(older).toContain('@nexus/plugin-memory');
     expect(older).not.toContain('@nexus/plugin-present');
   });
 
-  it('現在零違規（驗收 C：agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、present、quickjs、sandbox-policy、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
+  it('現在零違規（驗收 C：agent-instructions、ask-user、echo、feedback、goal、mcp、permission-presets、plan-mode、present、quickjs、sandbox-policy、skills、submit-record、system-prompt、time-context、todo、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
     const violations = await collectMigratedPluginViolations(ROOT, packages, loaded);
     expect(violations.map(formatMigratedPluginViolation)).toEqual([]);
+  });
+});
+
+/**
+ * plan-mode 還留在相容層的 import（#2551）：照 #2363 的範圍（`@nexus/core`、`@langchain/*`、`langchain`、`deepagents`），只算
+ * `import`、`export … from` 與 `import()`，不算 `*.test.*`／`*.spec.*`（SDK lint 的 `PLUGIN_LINT_IGNORES`）。`declare module` 不是 import。
+ *
+ * 兩份都是封閉清單：掃到的檔多一個或少一個都紅。
+ */
+const PLAN_MODE_SRC = 'packages/nexus-plugin-plan-mode/src';
+/** 封閉的單一例外：留在相容層的那一格，檔 → 撤除它的卡。 */
+const PLAN_MODE_COMPAT_EXCEPTIONS: Readonly<Record<string, string>> = {
+  'model-call-cell.ts': '#2358',
+};
+/** 相容層的配套入口（`plan-mode-invariant` 那一列）。 */
+const PLAN_MODE_COMPANIONS: readonly string[] = ['invariant.ts'];
+
+const COMPAT_SPECIFIER =
+  /^(?:@nexus\/core(?:\/.*)?|@langchain\/.+|langchain(?:\/.*)?|deepagents(?:\/.*)?)$/u;
+
+/** 一份原始碼裡指到相容層的 import specifier，照出現順序。 */
+function compatImportsOf(fileName: string, text: string): string[] {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    let specifier: ts.Expression | undefined;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      specifier = node.moduleSpecifier;
+    else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments.length > 0
+    ) {
+      specifier = node.arguments[0];
+    }
+    if (
+      specifier !== undefined &&
+      ts.isStringLiteralLike(specifier) &&
+      COMPAT_SPECIFIER.test(specifier.text)
+    ) {
+      found.push(specifier.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/** 一個目錄底下（含子目錄，不算測試檔）用到相容層的檔：相對路徑 → specifier。 */
+function compatImportersIn(dir: string): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  const walk = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+        continue;
+      }
+      if (!/\.(?:ts|tsx|mts|cts)$/u.test(entry.name) || /\.(?:test|spec)\./u.test(entry.name))
+        continue;
+      const imports = compatImportsOf(path, readFileSync(path, 'utf8'));
+      if (imports.length > 0) result[relative(dir, path)] = imports;
+    }
+  };
+  walk(dir);
+  return result;
+}
+
+describe('plan-mode 還留在相容層的 import 是封閉清單（#2551）', () => {
+  it('掃到的檔正好是例外的那一格與配套入口，多一個或少一個都紅', () => {
+    const importers = compatImportersIn(join(ROOT, PLAN_MODE_SRC));
+    expect(Object.keys(importers).sort()).toEqual(
+      [...Object.keys(PLAN_MODE_COMPAT_EXCEPTIONS), ...PLAN_MODE_COMPANIONS].sort(),
+    );
+  });
+
+  it('例外只有一格，指到 #2358；產品入口 index.ts 不在裡面', () => {
+    expect(PLAN_MODE_COMPAT_EXCEPTIONS).toEqual({ 'model-call-cell.ts': '#2358' });
+    expect(PLAN_MODE_COMPANIONS).toEqual(['invariant.ts']);
+    expect(compatImportersIn(join(ROOT, PLAN_MODE_SRC))['index.ts']).toBeUndefined();
+  });
+
+  it('掃描器認得四種 import 寫法，不算 `declare module` 與字串', () => {
+    const text = [
+      "import type { A } from '@nexus/core';",
+      "export { B } from '@langchain/core/messages';",
+      "const c = await import('langchain');",
+      "import { d } from 'deepagents';",
+      "declare module '@nexus/core' { interface X { y: 1 } }",
+      "const e = '@nexus/core';",
+      "import { f } from '@nexus/sdk';",
+    ].join('\n');
+    expect(compatImportsOf('probe.ts', text)).toEqual([
+      '@nexus/core',
+      '@langchain/core/messages',
+      'langchain',
+      'deepagents',
+    ]);
   });
 });
 

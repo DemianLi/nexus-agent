@@ -7,6 +7,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./invariant": "./lib/invariant.js",
+    "./model-call": "./lib/model-call-cell.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -22,7 +23,11 @@
   },
   "devDependencies": {
     "@langchain/langgraph": "^1.4.13",
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
@@ -38,6 +43,11 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
     "@nexus/tools": "workspace:*"
   }
 }

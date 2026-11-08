@@ -1,6 +1,7 @@
 import { AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
   applySections,
+  CHANNEL_SERVICE,
   createHostServicesPlugin,
   createRegistry,
   createSessionRunner,
@@ -15,17 +16,30 @@ import type {
   AttachmentRef,
   CommandRegistrationPoint,
   CommandResult,
+  NexusPlugin,
   PluginEntry,
   PluginRegistry,
   SessionEvent,
 } from '@nexus/core';
-import { toLangChainTool } from '@nexus/tool-adapter';
+import { runThreadSources, toLangChainTool } from '@nexus/tool-adapter';
+import type { ToolThreadSource } from '@nexus/tools';
 import { interrupt } from '@langchain/langgraph';
+import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
+import { createCommandsProvider } from '@nexus/commands/provider';
+import { checkConformance } from '@nexus/sdk';
+import { createSessionLookupProvider } from '@nexus/session/provider';
+import { createToolsProvider } from '@nexus/tools/provider';
 import { describe, expect, it, vi } from 'vitest';
+import * as planModeModule from './index.js';
 import {
-  createPlanModePlugin,
+  attachPlanModeSession,
+  planModeSessionOf,
+  queuePlanModeExit,
+  settlePlanModeExit,
+} from './plan-mode-state.js';
+import {
+  mountPlanMode,
   planModeConfigSchema,
-  planModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_ACTIVE_MESSAGE,
@@ -47,7 +61,8 @@ import {
   PLAN_OFF_ATTACHMENTS_MESSAGE,
   recordedPlanMode,
 } from './index.js';
-import type { PlanModePluginOptions } from './index.js';
+import type { PlanModeConfig, PlanModePluginOptions } from './index.js';
+import { planModeModelCallPlugin } from './model-call-cell.js';
 
 /**
  * 測試用的計劃指引。**套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `apps/harness/cordis.yml`；
@@ -60,11 +75,37 @@ function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
   return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
 }
 
-/** 補上指引的 `createPlanModePlugin`：這個檔的案例大多不關心指引寫什麼。 */
-function planPlugin(
-  options: Partial<PlanModePluginOptions> = {},
-): ReturnType<typeof createPlanModePlugin> {
-  return createPlanModePlugin({ guidance: GUIDANCE, ...options });
+/**
+ * 相容層外殼：一個條目同時掛樹上那一半（{@link mountPlanMode}，經 `runThreadSources` 接上這條 thread）與相容層那一格
+ * （`plan-mode-model-call`）。宿主那幾格照相容層的 registry 接，所以這個檔照舊用 `loadPlugins` 組。
+ */
+const planModeShell: NexusPlugin<PlanModeConfig> = {
+  name: 'plan-mode',
+  Config: planModeConfigSchema,
+  async apply(registry, config) {
+    planModeModelCallPlugin.apply(registry, undefined);
+    const sources: ToolThreadSource[] = [];
+    mountPlanMode(
+      {
+        registerTool: (tool) => void registry.tools.register(tool),
+        registerCommand: (definition) => void registry.commands.register(definition),
+        threadSource: (source) => void sources.push(source),
+        forCall: (invocation) => registry.sessions.forCall(invocation),
+        channel: () => registry.services.get(CHANNEL_SERVICE),
+      },
+      config,
+    );
+    await runThreadSources(
+      registry,
+      sources.map((threadSource) => ({ threadSource, services: [] })),
+      { id: 'plan-mode', module: planModeShell },
+    );
+  },
+};
+
+/** 補上指引的外殼條目：這個檔的案例大多不關心指引寫什麼。 */
+function planPlugin(options: Partial<PlanModePluginOptions> = {}): PluginEntry {
+  return { plugin: planModeShell, config: { guidance: GUIDANCE, ...options } };
 }
 
 // `exit_plan_mode` 在本體裡呼叫 `interrupt()`，圖外呼叫會拋。這個檔只有「待關」那一組會走到它，
@@ -268,7 +309,7 @@ describe('exit_plan_mode 沒有生效時', () => {
  * 計劃模式**真的有沒有作用**的驗收在組裝點（`apps/harness` 的 `plan-mode.test.ts`）
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容、`/plan` 的提示與交出的請求。
  */
-describe('createPlanModePlugin', () => {
+describe('計劃模式的組裝', () => {
   it('那顆 middleware 登記了環繞步：native 直接呼叫那一步，跟經 wrapModelCall 一樣補上退出工具的名字', async () => {
     const { registry } = await load([planPlugin()]);
     const middleware = registry.middleware
@@ -800,10 +841,9 @@ describe('recordedPlanMode', () => {
 });
 
 /**
- * **那兩格必須是一組裝一份。**
+ * **兩次組裝、兩份日誌，模式互不相干。**
  *
- * 它們放在 `apply()` 裡而不是 `createPlanModePlugin()` 的閉包裡，因為 `load.ts` 一次組裝
- * 呼叫一次 `plugin.apply(tracked)`。放錯地方**不會拋任何東西**——兩次組裝共用一份，
+ * 模式與待關以 root 日誌為鍵，住在 `plan-mode-state.ts` 的模組層（兩列共用）。鍵錯了**不會拋任何東西**——兩次組裝共用一份，
  * 症狀是一個 thread 的模式開到另一個 thread 上。所以要有人釘著。
  */
 describe('模式的作用範圍', () => {
@@ -844,7 +884,7 @@ describe('設定（#453）', () => {
     ['空字串', { guidance: '' }],
     ['只有空白', { guidance: '   \n\t ' }],
   ] as const)('指引%s：載入失敗，訊息帶 `<id> (<name>)` 與 guidance', async (_label, config) => {
-    const bad = [{ plugin: planModePlugin, config }];
+    const bad = [{ plugin: planModeShell, config }];
     await expect(load(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
     await expect(load(bad)).rejects.toThrow('guidance');
   });
@@ -859,14 +899,99 @@ describe('設定（#453）', () => {
   });
 
   it('型別錯就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
-    const bad = [{ plugin: planModePlugin, config: { startActive: 'yes' } }];
+    const bad = [{ plugin: planModeShell, config: { startActive: 'yes' } }];
     await expect(load(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
     await expect(load(bad)).rejects.toThrow('startActive');
   });
 
   it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
-    await expect(
-      load([{ plugin: planModePlugin, config: { guidence: '講清楚' } }]),
-    ).rejects.toThrow(/guidence/);
+    await expect(load([{ plugin: planModeShell, config: { guidence: '講清楚' } }])).rejects.toThrow(
+      /guidence/,
+    );
+  });
+});
+
+describe('一致性套件：真的提供者、真的 Loader（#2551）', () => {
+  it('plan-mode 全格通過：manifest、匯出形式、卸載後工具與命令都撤掉、缺提供者停在 PENDING', async () => {
+    let latestTools = createToolsProvider();
+    let latestCommands = createCommandsProvider();
+    const failures = await checkConformance({
+      row: 'plan-mode',
+      module: planModeModule,
+      config: { guidance: '計劃模式。' },
+      providers: {
+        tools: () => {
+          latestTools = createToolsProvider();
+          return latestTools.Provider;
+        },
+        commands: () => {
+          latestCommands = createCommandsProvider();
+          return latestCommands.Provider;
+        },
+        sessionLookup: () => createSessionLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+        approvalChannel: () => createApprovalChannelProvider({ kind: 'human' }).Provider,
+      },
+      residue: () => latestTools.entries().length + latestCommands.registrations(),
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it('manifest：消費 tools／commands／sessionLookup／approvalChannel，不提供服務；沒有 default 匯出', () => {
+    expect(planModeModule.manifest.consumes).toEqual([
+      { token: 'tools', range: '^2.8.0' },
+      { token: 'commands', range: '^1.0.0' },
+      { token: 'sessionLookup', range: '^1.0.0' },
+      { token: 'approvalChannel', range: '^1.0.0' },
+    ]);
+    expect(planModeModule.manifest.provides).toEqual([]);
+    expect('default' in planModeModule).toBe(false);
+  });
+});
+
+describe('兩列共用的狀態以 root 日誌為鍵（#2551）', () => {
+  /** 一份日誌上的模式：讀日誌上最後一顆 `plan/mode`，沒有就是開著。 */
+  function sessionOn(id: string) {
+    const log = new SessionLog(id);
+    const session = {
+      log,
+      active: () =>
+        (
+          log.events.filter((event) => event.type === 'plan/mode').at(-1)?.data as
+            { active?: boolean } | undefined
+        )?.active ?? true,
+    };
+    return { log, session, detach: attachPlanModeSession(session) };
+  }
+  const modes = (log: SessionLog): unknown[] =>
+    log.events.filter((event) => event.type === 'plan/mode').map((event) => event.data);
+
+  it('兩份日誌互不影響：a 排的待關，交 b 的時候不動，交 a 的時候才寫', () => {
+    const a = sessionOn('thread-a');
+    const b = sessionOn('thread-b');
+    try {
+      expect(planModeSessionOf(a.log)).toBe(a.session);
+      expect(planModeSessionOf(b.log)).toBe(b.session);
+      queuePlanModeExit(a.session);
+      settlePlanModeExit(b.log);
+      expect(modes(b.log)).toEqual([]);
+      expect(modes(a.log)).toEqual([]);
+      settlePlanModeExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+      // 交過一次就沒了：再交不會多寫。
+      settlePlanModeExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+    } finally {
+      a.detach();
+      b.detach();
+    }
+  });
+
+  it('收掉之後查不到，排著的待關一起丟掉', () => {
+    const a = sessionOn('thread-a');
+    queuePlanModeExit(a.session);
+    a.detach();
+    expect(planModeSessionOf(a.log)).toBeUndefined();
+    settlePlanModeExit(a.log);
+    expect(modes(a.log)).toEqual([]);
   });
 });

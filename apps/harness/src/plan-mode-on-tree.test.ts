@@ -648,6 +648,47 @@ function withRenames(baseline: Registration): Registration {
 
 const isPlanMode = (origin: string): boolean => origin.startsWith('plan-mode｜');
 
+/**
+ * 上樹之後跟對照組不同的格，**封閉清單**：每一筆都要真的用到，對照組在那一格的值也要正好是 `before`。
+ *
+ * - 多條 thread 那張表「a 進計劃模式」時，a 的指引段拿到「別條 thread 的 root」的呼叫身分：舊的相容層查找每次組裝一份，只綁一份
+ *   註冊表時不核對 `thread_id`，所以認成 a 自己；樹上的會話查找是行程層的，照 `thread_id` 認到 b，b 不在計劃模式。產品上兩邊相同：
+ *   CLI 的 `thread_id` 就是 root 日誌的 id（`THREAD_ID`），serve 的每條 thread 也是。
+ */
+const KNOWN_DIFFERENCES: readonly {
+  readonly label: string;
+  readonly path: readonly string[];
+  readonly before: unknown;
+  readonly after: unknown;
+}[] = LOOPS.map((loop) => ({
+  label: `多條 thread｜serve｜${loop}`,
+  path: ['a 進計劃模式', 'a', '別條 thread 的 root'],
+  before: '夾',
+  after: '不夾',
+}));
+const usedDifferences = new Set<number>();
+
+/** 對照組的一格套上 {@link KNOWN_DIFFERENCES}；對照組在那一格的值不是 `before` 就紅。 */
+function withKnownDifferences(label: string, baseline: unknown): unknown {
+  const expected = structuredClone(baseline);
+  for (const [index, difference] of KNOWN_DIFFERENCES.entries()) {
+    if (difference.label !== label) continue;
+    const parent = difference.path
+      .slice(0, -1)
+      .reduce<Record<string, unknown>>(
+        (node, key) => node[key] as Record<string, unknown>,
+        expected as Record<string, unknown>,
+      );
+    const leaf = difference.path.at(-1)!;
+    expect(parent[leaf], `${label} ${difference.path.join(' › ')} 的對照值`).toEqual(
+      difference.before,
+    );
+    parent[leaf] = difference.after;
+    usedDifferences.add(index);
+  }
+  return expected;
+}
+
 it(
   'plan-mode 那一列的四樣順序、六個情境的位元組與多條 thread 的認法，與對照組逐字相同',
   { timeout: 900_000 },
@@ -705,14 +746,43 @@ it(
     for (const key of Object.keys(now)) {
       const expected = key.startsWith('順序｜')
         ? withRenames(baseline[key] as Registration)
-        : baseline[key];
+        : withKnownDifferences(key, baseline[key]);
       expect(now[key], key).toEqual(expected);
     }
     if (only === undefined) {
       expect([...usedRenames].sort(), '改名表上每一條都要用到').toEqual([...RENAMED.keys()].sort());
+      expect([...usedDifferences].sort(), '已知差異每一條都要用到').toEqual(
+        KNOWN_DIFFERENCES.map((_difference, index) => index),
+      );
       expect([...touched].sort(), '每一條易變欄位都要真的換到').toEqual(
         Object.keys(VOLATILE).sort(),
       );
     }
+  },
+);
+
+/**
+ * 兩列共用同一份模組狀態（#2551）：樹上那一列排的待關，相容層那一格交得出去。兩列各拿一份 `plan-mode-state.js` 的話，同意之後
+ * root 日誌上不會有 `plan/mode { active: false }`，模式關不掉。出貨清單與 CLI 的樹各量一次。
+ */
+it.each(['shipped', 'tree'] as const)(
+  '同意之後模式真的關了：樹上那一半排的待關，相容層那一格看得到（%s）',
+  { timeout: 120_000 },
+  async (source) => {
+    const spec = SCENARIOS.find(([name]) => name === '同意')?.[1];
+    if (spec === undefined) throw new Error('沒有「同意」情境');
+    const result = (await scenarioCase(spec, source, 'langgraph')) as {
+      readonly logs: readonly { readonly address: string; readonly bytes: string }[];
+    };
+    const root = result.logs.find(
+      (log) => (JSON.parse(log.address) as { kind?: string }).kind === 'root',
+    );
+    const modes = (root?.bytes ?? '')
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as { type: string; data?: { active?: boolean } })
+      .filter((event) => event.type === 'plan/mode')
+      .map((event) => event.data?.active);
+    expect(modes).toEqual([true, false]);
   },
 );
