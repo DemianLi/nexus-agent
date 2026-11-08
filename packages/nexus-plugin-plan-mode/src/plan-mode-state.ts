@@ -24,7 +24,7 @@ export interface PlanModeSession {
   active(): boolean;
 }
 
-// eslint-disable-next-line no-restricted-syntax -- 兩列分屬樹上與相容層、各有自己的 apply，共用的狀態放不進任一邊的閉包；WeakMap 以 root 日誌為鍵，日誌回收就跟著走
+// eslint-disable-next-line no-restricted-syntax -- 兩列分屬樹上與相容層、各有自己的 apply，共用的狀態放不進任一邊的閉包；WeakMap 以 root 日誌為鍵，日誌回收就跟著走；#2358 拿掉相容層那一列後收回閉包
 const sessionsByLog = new WeakMap<SessionLog, PlanModeSession>();
 // `exit_plan_mode` 同意之後排著、等下一次模型呼叫交出去的待關。
 // eslint-disable-next-line no-restricted-syntax -- 理由同上一張表；WeakSet 以模式物件為鍵，收掉那份日誌的模式就跟著走
