@@ -217,6 +217,8 @@ export type {
   PipelinePostDecision,
   PipelinePreDecision,
   PipelineResult,
+  PipelineResultShape,
+  PipelineResultView,
 } from './tool-pipeline.js';
 export {
   createToolExecuteMiddleware,

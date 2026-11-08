@@ -48,8 +48,9 @@
  * 1. **`tools/execute` 換不了 `exec.signal`。** dsh 允許環繞監聽者換訊號。LangChain `ToolNode` 的 `baseHandler` 用 closure 裡的
  *    `config.signal`，不讀 `request.runtime.signal`，所以表達不出來。退到：`exec.signal` 唯讀（看得到這次呼叫的那一支），
  *    `tools/execute` 只能環繞（計時、計量、短路），不能換訊號。逾時今天由圍堵與工具宣告處理，不受影響。
- * 2. **`Command` 結果表達不出 `replace`。** 帶狀態更新的工具回 `Command`，沒有可替換的 `content`。退到：`tools/post-execute`
- *    只對 `ToolMessage` 結果派發；`Command` 只走 `tools/result`（`kind: 'command'`，不能改）。
+ * 2. **`tools/post-execute` 不經 `Command`。** 帶狀態更新的工具回 `Command`。`tools/post-execute` 只對 `ToolMessage` 結果派發；
+ *    要改 `Command` 裡這次呼叫的那則，在 `tools/execute` 交回帶內容的 `command` 結果（只換那一則，`update` 其餘原樣），
+ *    或交回 `message` 結果（整個 `Command` 不採用）。`command` 視圖帶那則的內容（沒有那一則就不帶）。
  * 3. **拋出來的錯到 `tools/post-execute` 時是圍堵會翻的那則訊息，接受就原樣再拋。** 「拋錯翻成訊息」仍是圍堵（最外層）的事；
  *    post 先用同一組翻譯（`containment.ts` 的 `formatToolFailure`／`formatToolTimeout`／`classifyThrownToolError`）造一則給監聽者看，
  *    接受就把同一個錯物件往外拋、由圍堵照舊翻與記，替換就回替換過的那則。
@@ -59,7 +60,8 @@
  * 5. **每位監聽者的 `next()` 只能呼叫一次**，叫第二次就拋（見 `events.ts`），所以「重試包住 `next()`」表達不出來：
  *    `tools/execute` 的監聽者重跑不了工具本體。短路（不呼叫 `next()`、回自己的結果）可以。
  * 6. **`tools/pre-execute` 沒有 `ask`／`cancel`**：範圍，不是表達不出來。
- * 7. **結果多一份文字視圖**：`PipelineResult.blocks` 是內容區塊，`content` 是由它導出的文字（{@link pipelineTextOf}）。
+ * 7. **結果多一份文字視圖與形狀**：`PipelineResultView.blocks` 是內容區塊，`content` 是由它導出的文字（{@link pipelineTextOf}），
+ *    `shape` 是本體那則的 `content` 原本是字串（`text`）還是陣列（`blocks`）。
  *    `tools/execute` 交回的結果兩者都在時以 `blocks` 為準；`replace` 只能給其中一個，兩個都給或都不給拋 `TypeError`。`content` 留著是給只讀文字的監聽者，不必自己串區塊。
  *    `tools/execute` 交回的 `blocks` 跟工具本體那則造出的視圖是同一個參照（`{ ...view, … }` 一路展開帶過去的也是）時，算沒給新的區塊：內容的形狀照本體回的那則，
  *    `content` 沒換就沿用原本的內容，換了就照原本是字串或陣列給新的文字。陣列裡的圖之類的非文字塊這時不留；要留就自己給新的 `blocks`。
@@ -70,7 +72,7 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { isGraphBubbleUp } from '@langchain/langgraph';
+import { Command, isCommand, isGraphBubbleUp } from '@langchain/langgraph';
 import type { PreToolDecision } from './approval.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
@@ -90,7 +92,13 @@ import {
   wrappedRequestOf,
 } from './tool-call-step.js';
 import type { ToolCallSite, ToolCallStep } from './tool-call-step.js';
-import { markToolError, readToolOutcome, toolErrorOf, toolRefusal } from './tool-events.js';
+import {
+  markToolError,
+  readToolOutcome,
+  readToolResultMessage,
+  toolErrorOf,
+  toolRefusal,
+} from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 import { isTurnCancelled } from './turn-cancel.js';
 
@@ -126,21 +134,27 @@ export interface PipelineExecution {
  */
 export type PipelineContentBlock = Readonly<{ type: string } & Record<string, unknown>>;
 
+/** 本體那則 `ToolMessage` 的 `content` 原本的形狀：字串是 `text`，陣列是 `blocks`。 */
+export type PipelineResultShape = 'text' | 'blocks';
+
 /**
- * 一次呼叫落定成什麼，監聽者看到的樣子。唯讀。
+ * 一次呼叫落定成什麼，生產者交給監聽者的視圖。唯讀。
  *
  * - `message`：工具回了一則 `ToolMessage`。**`blocks` 是它的內容，`content` 由 `blocks` 導出**（{@link pipelineTextOf}：只串
- *   `text` 區塊，同 `ToolMessage.text`）。
- * - `command`：工具回了 `Command`（帶狀態更新）或別的非訊息值；**沒有可看的 `content`**，也不能被 `tools/post-execute` 替換
- *   （偏離 2）。`isError` 讀的是 `Command` 裡屬於這次呼叫的那則訊息。
+ *   `text` 區塊，同 `ToolMessage.text`）。`shape` 是那則訊息的 `content` 原本的形狀：`blocks` 一律是陣列，字串也算一格 `text`，
+ *   要照原本的形狀交回內容就看它（`tools/post-execute` 的 `replace` 給 `content` 落成字串、給 `blocks` 落成陣列）。
+ * - `command`：工具回了 `Command`（帶狀態更新）或別的非訊息值；不能被 `tools/post-execute` 替換（偏離 2）。`isError` 讀的是
+ *   `Command` 裡屬於這次呼叫的那則訊息（`tool_call_id` 等於 `callId`）；有那一則時，`blocks`、`content`、`shape` 是它的內容，
+ *   沒有就三格都不帶。
  */
-export type PipelineResult =
+export type PipelineResultView =
   | {
       readonly kind: 'message';
       /** 訊息的內容，凍結的複本；第一次讀才複製。 */
       readonly blocks: readonly PipelineContentBlock[];
       /** `blocks` 的文字（{@link pipelineTextOf}）。 */
       readonly content: string;
+      readonly shape: PipelineResultShape;
       readonly isError: boolean;
       /** 認得出種類的失敗才有（`tool-events.ts` 的碼）。 */
       readonly error?: ToolErrorInfo;
@@ -149,7 +163,20 @@ export type PipelineResult =
       readonly kind: 'command';
       readonly isError: boolean;
       readonly error?: ToolErrorInfo;
+      readonly blocks?: readonly PipelineContentBlock[];
+      readonly content?: string;
+      readonly shape?: PipelineResultShape;
     };
+
+/**
+ * 一次呼叫的結果：`tools/execute` 的 `next()` 回的、監聽者原樣交回的。形狀同 {@link PipelineResultView}，只是 `shape` 選填：
+ * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。
+ */
+export type PipelineResult =
+  | (Omit<Extract<PipelineResultView, { kind: 'message' }>, 'shape'> & {
+      readonly shape?: PipelineResultShape;
+    })
+  | Extract<PipelineResultView, { kind: 'command' }>;
 
 /**
  * 監聽者交回的一則訊息結果（`tools/execute` 短路、或改了 `next()` 的結果）：內容給 `content`（字串）或 `blocks`（區塊）其中一個。
@@ -164,8 +191,26 @@ export type PipelineMessageInput = {
   | { readonly blocks: readonly PipelineContentBlock[]; readonly content?: never }
 );
 
-/** `tools/execute` 的監聽者可以交回的結果。 */
-export type PipelineExecuteResult = PipelineResult | PipelineMessageInput;
+/**
+ * 監聽者交回的、改過內容的 `command` 結果（本體回 `Command` 時）：只換 `Command` 裡屬於這次呼叫的那則訊息，`update` 的其餘鍵與
+ * `graph`、`goto` 原樣。內容同 {@link PipelineMessageInput} 給其中一個。
+ */
+export type PipelineCommandInput = {
+  readonly kind: 'command';
+  readonly isError: boolean;
+  readonly error?: ToolErrorInfo;
+} & (
+  | { readonly content: string; readonly blocks?: never }
+  | { readonly blocks: readonly PipelineContentBlock[]; readonly content?: never }
+);
+
+/**
+ * `tools/execute` 的監聽者可以交回的結果。`fresh: true` 時，換上的那則訊息是新造的：只帶 `tool_call_id`、`name`、`status` 與錯誤碼，
+ * 不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。
+ */
+export type PipelineExecuteResult = (
+  PipelineResult | PipelineMessageInput | PipelineCommandInput
+) & { readonly fresh?: true };
 
 /**
  * `tools/pre-execute` 的決定。`next()` 回 `allow`。
@@ -205,9 +250,13 @@ declare module './events.js' {
       next: () => Promise<PipelinePreDecision>,
     ): Promise<PipelinePreDecision>;
     /**
-     * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
-     * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑；交回的 `command` 結果
-     * 不是工具本體回的那一個（本體沒跑，或自己另造了一個）就拋 `TypeError`。呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則。
+     * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果（{@link PipelineResultView}）。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
+     * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑。
+     * 呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則；
+     * 帶 `fresh: true` 就換成新造的一則，不沿用後三格。
+     * 本體回的是 `Command` 時：交回 `message` 結果，整個 `Command` 不採用，換成那一則；交回帶 `content` 或 `blocks` 的 `command` 結果，只換 `Command`
+     * 裡屬於這次呼叫的那則（規則同上，沒有那一則就加在 `update.messages` 最後），`update` 的其餘鍵與 `graph`、`goto` 原樣。
+     * 交回不帶內容的 `command` 結果、又不是工具本體回的那一個（本體沒跑，或自己另造了一個）就拋 `TypeError`。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
      * @mode waterfall
@@ -227,7 +276,7 @@ declare module './events.js' {
      */
     'tools/post-execute'(
       exec: PipelineExecution,
-      result: Readonly<PipelineResult>,
+      result: Readonly<PipelineResultView>,
       next: () => Promise<PipelinePostDecision>,
     ): Promise<PipelinePostDecision>;
     /**
@@ -237,7 +286,7 @@ declare module './events.js' {
      * @param result - 最終回給模型的結果，凍結。
      * @mode emit
      */
-    'tools/result'(exec: Readonly<PipelineExecution>, result: Readonly<PipelineResult>): void;
+    'tools/result'(exec: Readonly<PipelineExecution>, result: Readonly<PipelineResultView>): void;
   }
 }
 
@@ -337,7 +386,7 @@ function frozenBlocksOf(content: unknown): readonly PipelineContentBlock[] {
 }
 
 /**
- * 由內層（`next()`）回來的值造出監聽者看的 {@link PipelineResult}（凍結）。
+ * 由內層（`next()`）回來的值造出監聽者看的 {@link PipelineResultView}（凍結）。
  *
  * `blocks` 第一次讀才複製（getter）：有 `tools/result` 監聽者時，圍堵每次呼叫都造視圖給它；出廠的那一位（present）只讀 `isError`，帶大圖的結果不必每次都複製。
  *
@@ -345,28 +394,49 @@ function frozenBlocksOf(content: unknown): readonly PipelineContentBlock[] {
  * @param callId - 這次呼叫的 id，用來在 `Command` 裡認出屬於它的那則。
  * @returns 凍結的視圖。
  */
-export function toolResultView(result: unknown, callId: string): PipelineResult {
+export function toolResultView(result: unknown, callId: string): PipelineResultView {
   const outcome = readToolOutcome(result, callId);
   const error =
     outcome.isError && outcome.error !== undefined
       ? { error: Object.freeze({ ...outcome.error }) }
       : {};
   if (ToolMessage.isInstance(result)) {
-    const raw: unknown = result.content;
-    let blocks: readonly PipelineContentBlock[] | undefined;
-    const view = {
-      kind: 'message' as const,
-      content: typeof raw === 'string' || Array.isArray(raw) ? pipelineTextOf(raw) : '',
-      isError: outcome.isError,
-      ...error,
-    };
-    Object.defineProperty(view, 'blocks', {
-      enumerable: true,
-      get: () => (blocks ??= frozenBlocksOf(raw)),
-    });
-    return Object.freeze(view) as PipelineResult;
+    return Object.freeze(
+      withContent({ kind: 'message' as const }, result.content, outcome.isError, error),
+    ) as PipelineResultView;
   }
-  return Object.freeze({ kind: 'command', isError: outcome.isError, ...error });
+  const message = readToolResultMessage(result, callId);
+  const view =
+    message === undefined
+      ? { kind: 'command' as const, isError: outcome.isError, ...error }
+      : withContent({ kind: 'command' as const }, message.content, outcome.isError, error);
+  return Object.freeze(view) as PipelineResultView;
+}
+
+/** 視圖的內容那幾格：`content`、`shape`，加上第一次讀才複製的 `blocks`。 */
+function withContent<T extends object>(
+  head: T,
+  raw: unknown,
+  isError: boolean,
+  error: { readonly error?: ToolErrorInfo },
+): T & {
+  readonly content: string;
+  readonly shape: PipelineResultShape;
+  readonly isError: boolean;
+} {
+  let blocks: readonly PipelineContentBlock[] | undefined;
+  const view = {
+    ...head,
+    content: typeof raw === 'string' || Array.isArray(raw) ? pipelineTextOf(raw) : '',
+    shape: typeof raw === 'string' ? ('text' as const) : ('blocks' as const),
+    isError,
+    ...error,
+  };
+  Object.defineProperty(view, 'blocks', {
+    enumerable: true,
+    get: () => (blocks ??= frozenBlocksOf(raw)),
+  });
+  return view;
 }
 
 function isErrorInfo(value: unknown): value is ToolErrorInfo {
@@ -402,7 +472,7 @@ function bodyOf(value: {
 }
 
 /**
- * execute 監聽者改過、交回的 `message` 結果要造成的內容（本體回的是 `ToolMessage` 時）。
+ * execute 監聽者改過、交回的結果要造成的內容：本體回的 `ToolMessage`，或本體回的 `Command` 裡屬於這次呼叫的那則（`raw`）。
  *
  * - 給了新的 `blocks`（跟原視圖不是同一個參照），或沒給 `blocks`：同 {@link bodyOf}。
  * - `blocks` 跟原視圖是同一個參照（例如 `{ ...view, isError: true }`），形狀照本體那則：`content` 沒換就沿用原本的內容；
@@ -411,12 +481,10 @@ function bodyOf(value: {
  */
 function executeBody(
   raw: ToolMessage,
-  original: PipelineResult,
+  original: PipelineResultView,
   view: { readonly content?: unknown; readonly blocks?: unknown },
 ): string | Record<string, unknown>[] | undefined {
-  if (view.blocks === undefined || original.kind !== 'message' || view.blocks !== original.blocks) {
-    return bodyOf(view);
-  }
+  if (view.blocks === undefined || view.blocks !== original.blocks) return bodyOf(view);
   if (view.content === original.content) return raw.content as string | Record<string, unknown>[];
   if (typeof view.content !== 'string') return undefined;
   return typeof raw.content === 'string' ? view.content : [{ type: 'text', text: view.content }];
@@ -467,19 +535,72 @@ function materialize(
       ? badDecision('tools/execute', view)
       : new TypeError(bodyRan ? COMMAND_NOT_FROM_BODY : COMMAND_WITHOUT_BODY);
   }
+  return freshMessage(body, exec, view);
+}
+
+/** 新造的一則：只帶 `tool_call_id`、`name`、`status`，有 `error` 就掛它的碼。 */
+function freshMessage(
+  body: string | Record<string, unknown>[],
+  exec: PipelineExecution,
+  outcome: { readonly isError: boolean; readonly error?: ToolErrorInfo },
+): ToolMessage {
   const message = new ToolMessage({
     content: body as ToolMessage['content'],
     tool_call_id: exec.callId,
     name: exec.name,
-    status: view.isError ? 'error' : 'success',
+    status: outcome.isError ? 'error' : 'success',
   });
-  return view.error === undefined ? message : markToolError(message, view.error);
+  return outcome.error === undefined ? message : markToolError(message, outcome.error);
+}
+
+/** 交回的 `command` 結果帶內容：要換 `Command` 裡這次呼叫的那則。 */
+function carriesBody(view: PipelineExecuteResult): boolean {
+  return view.kind === 'command' && (view.content !== undefined || view.blocks !== undefined);
+}
+
+/**
+ * 本體回的 `Command`，屬於這次呼叫的那則換成交回的內容；`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，沒有就加在
+ * `update.messages` 最後。`update` 不是物件（例如 tuple 陣列）時拋 `TypeError`：放不進一則訊息。
+ */
+function replaceInCommand(
+  raw: Command,
+  original: PipelineResultView,
+  view: PipelineExecuteResult,
+  exec: PipelineExecution,
+): Command {
+  const update: unknown = raw.update;
+  if (typeof update !== 'object' || update === null || Array.isArray(update)) {
+    throw new TypeError(COMMAND_UPDATE_NOT_RECORD);
+  }
+  const target = readToolResultMessage(raw, exec.callId);
+  const body = target === undefined ? bodyOf(view) : executeBody(target, original, view);
+  if (body === undefined) throw badDecision('tools/execute', view);
+  const message =
+    target === undefined || view.fresh === true
+      ? freshMessage(body, exec, view)
+      : rebuildMessage(target, body, view);
+  const before = (update as { messages?: unknown }).messages;
+  let placed = false;
+  const messages = (Array.isArray(before) ? (before as unknown[]) : []).flatMap((each) => {
+    if (!ToolMessage.isInstance(each) || each.tool_call_id !== exec.callId) return [each];
+    if (placed) return [];
+    placed = true;
+    return [message];
+  });
+  if (!placed) messages.push(message);
+  return new Command({
+    ...(raw.graph === undefined ? {} : { graph: raw.graph }),
+    ...(raw.goto === undefined ? {} : { goto: raw.goto }),
+    update: { ...(update as Record<string, unknown>), messages },
+  });
 }
 
 const COMMAND_WITHOUT_BODY =
   'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）';
 const COMMAND_NOT_FROM_BODY =
   'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）';
+const COMMAND_UPDATE_NOT_RECORD =
+  'tools/execute 的監聽者交回了帶內容的 command 結果，但工具本體回的 Command 的 update 不是物件：放不進那則訊息';
 
 const ALLOW: PipelinePreDecision = Object.freeze({ kind: 'allow' });
 const ACCEPT: PipelinePostDecision = Object.freeze({ kind: 'accept' });
@@ -611,7 +732,7 @@ export function createToolExecuteMiddleware(
     if (listenerCount(events, 'tools/execute', core) === 0) return next();
     const exec = toolExecutionOf(wrappedRequestOf(call));
     let raw: unknown;
-    let viewOfRaw: PipelineResult | undefined;
+    let viewOfRaw: PipelineResultView | undefined;
     let bodyRan = false;
     const bus: Events['tools/execute'] | undefined =
       events === undefined || events.count('tools/execute') === 0
@@ -625,10 +746,14 @@ export function createToolExecuteMiddleware(
     });
     // 沒人短路（或原樣回了 `next()` 的結果）：把內層原本的物件交回去，錯誤碼掛在它身上。
     if (viewOfRaw !== undefined && view === viewOfRaw) return raw;
+    if (view.kind === 'message' && view.fresh === true) return materialize(view, exec, bodyRan);
     if (viewOfRaw !== undefined && ToolMessage.isInstance(raw) && view.kind === 'message') {
       const body = executeBody(raw, viewOfRaw, view);
       if (body === undefined) throw badDecision('tools/execute', view);
       return rebuildMessage(raw, body, view);
+    }
+    if (viewOfRaw !== undefined && isCommand(raw) && carriesBody(view)) {
+      return replaceInCommand(raw, viewOfRaw, view, exec);
     }
     return materialize(view, exec, bodyRan);
   });
@@ -683,7 +808,7 @@ export function createToolPostExecuteMiddleware(
 /** 派發一次 `tools/post-execute`（core 兩段加匯流排）。 */
 type PostDispatch = (
   exec: PipelineExecution,
-  view: PipelineResult,
+  view: PipelineResultView,
   site: ToolCallSite,
 ) => Promise<PipelinePostDecision>;
 
