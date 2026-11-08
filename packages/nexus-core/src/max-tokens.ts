@@ -189,7 +189,8 @@ export function createMaxTokensCarrier(): MaxTokensCarrier {
  *
  * 交回的是新造的一則（`fresh`），同拋錯翻出來的那種。**`Command` 只換那則 ToolMessage**（交回帶內容的 `command` 結果）：
  * 基座的 `task` 回的 `Command` 還帶著子代理寫進 state 的檔案與其他欄位（`deepagents@1.13.1` 的
- * `returnCommandWithStateUpdate`），那些是真的做了的事，不能跟著丟。
+ * `returnCommandWithStateUpdate`），那些是真的做了的事，不能跟著丟。`update` 不是物件、或本體回的不是 `Command` 時放不進那則，
+ * 整個換成新造的一則。
  *
  * @param result - 基座 `task` 回來的結果（`next()` 的視圖）。
  * @param callId - 這次呼叫的 id。

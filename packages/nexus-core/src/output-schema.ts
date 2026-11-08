@@ -17,8 +17,8 @@
  * `site.tool`（那一顆工具實例）查它註冊時帶的 schema，沒宣告的原樣放行。**以實例查，
  * 不以名字查**：同名的工具在不同層可以是不同的東西，fold 換上去的拒絕樁也是另一顆實例。
  *
- * **時刻：dsh 的 `createSuccessResult`，在 `tools/post-execute` 之前。** 它是 `tools/execute` 內層的一位 core 監聽者
- * （{@link createOutputSchemaListener}），在每一位插件監聽者內側、只有 `maxTokens` 在它更內側；真正做事的是 `await next()`
+ * **時刻：在 `tools/post-execute` 之前。** 它是 `tools/execute` 內層的一位 core 監聽者
+ * （{@link createOutputSchemaListener}），在每一位插件監聽者內側、只有撞到輸出上限的 `task` 替換（`max-tokens.ts` 的 `createMaxTokensListener`）在它更內側；真正做事的是 `await next()`
  * **之後**那一段，所以每一位 `tools/execute` 插件監聽者與 `tools/post-execute` 看到的都是驗過的結果。時刻索引見
  * `apps/harness/src/interception-index.test.ts`。
  *
@@ -104,7 +104,7 @@ function verify(toolName: string, content: unknown, schema: ZodType): Verdict {
   return { ok: false, feedback: formatSchemaViolation(toolName, issues) };
 }
 
-/** 輸出不合時交回的那則：新造一則錯誤，帶 `INVALID_TOOL_OUTPUT`，給會話日誌的 `tool/result` 讀。 */
+/** 輸出不合時交回的那則：新造一則錯誤，帶 `INVALID_TOOL_OUTPUT`，給會話日誌的 `tool/result` 讀（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。 */
 function rejectOutput(feedback: string): PipelineExecuteResult {
   return {
     kind: 'message',
@@ -124,8 +124,8 @@ function reject(feedback: string): PipelineExecuteResult {
  * 造驗工具輸出的 `tools/execute` core 監聽者。fold 打底一份，root 與每個 subagent 共用——它無狀態，
  * schema 每次從那一顆工具實例（`site.tool`）現查。
  *
- * 往內交，工具宣告了 schema 就驗結果：
- * - 本體回 `ToolMessage`：已經是錯誤就不驗；
+ * 往內交，工具宣告了 schema 就驗結果；已經是錯誤的不驗：
+ * - 本體回 `ToolMessage`：驗那則；
  * - 本體回 `Command`：驗裡面屬於這次呼叫的那則（`command` 視圖的內容），沒有那一則就放行。**不通過就整個 `Command` 不採用**：
  *   `Command` 除了訊息還可能帶狀態更新，那些更新正是那個不合格的輸出算出來的，只換掉訊息會留下半套；
  * - 驗的是 `content` 原本的字串；原本是陣列（`shape: 'blocks'`）判為不合。

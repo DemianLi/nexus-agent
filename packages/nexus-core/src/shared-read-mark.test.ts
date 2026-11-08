@@ -19,13 +19,13 @@ type Wrapper = (
 ) => Promise<unknown>;
 
 /** 前綴監聽者掛在 `tools/post-execute` 內層、沒有派發面的那一顆生產者。 */
-function createSharedReadMarkMiddleware(prefix: string, skillSources?: readonly string[]): unknown {
+function sharedReadMarkProducer(prefix: string, skillSources?: readonly string[]): unknown {
   return createToolPostExecuteMiddleware(undefined, {
     inner: [createSharedReadMarkListener(prefix, skillSources)],
   });
 }
 
-const wrap = (createSharedReadMarkMiddleware('/shared') as { wrapToolCall: Wrapper }).wrapToolCall;
+const wrap = (sharedReadMarkProducer('/shared') as { wrapToolCall: Wrapper }).wrapToolCall;
 
 /** 叫一次：工具回 `result`，回生產者交出的東西。 */
 async function through(name: string, args: Record<string, unknown>, result: unknown) {
@@ -202,7 +202,7 @@ describe('grep', () => {
 
 describe('技能來源底下不標', () => {
   const skilled = (
-    createSharedReadMarkMiddleware('/shared', ['/shared/skills/', '/plugin/skills']) as {
+    sharedReadMarkProducer('/shared', ['/shared/skills/', '/plugin/skills']) as {
       wrapToolCall: Wrapper;
     }
   ).wrapToolCall;

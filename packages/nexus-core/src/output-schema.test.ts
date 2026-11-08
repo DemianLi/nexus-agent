@@ -27,7 +27,7 @@ function wrapperOf(middleware: unknown): Wrapper {
 }
 
 /** 校驗監聽者掛在 `tools/execute` 內層、沒有派發面的那一顆生產者。 */
-function createOutputSchemaMiddleware(schemaOf: OutputSchemaLookup): unknown {
+function outputSchemaProducer(schemaOf: OutputSchemaLookup): unknown {
   return createToolExecuteMiddleware(undefined, { inner: [createOutputSchemaListener(schemaOf)] });
 }
 
@@ -47,9 +47,7 @@ function ok(content: string): ToolMessage {
 
 describe('輸出 schema 校驗', () => {
   const schema = z.object({ count: z.number() });
-  const wrap = wrapperOf(
-    createOutputSchemaMiddleware((tool) => (tool === probe ? schema : undefined)),
-  );
+  const wrap = wrapperOf(outputSchemaProducer((tool) => (tool === probe ? schema : undefined)));
 
   it('合的原樣放行', async () => {
     const message = ok('{"count":3}');
@@ -109,7 +107,7 @@ describe('輸出 schema 校驗', () => {
         throw new Error('schema 自己炸了');
       },
     } as unknown as z.ZodType;
-    const broken = wrapperOf(createOutputSchemaMiddleware(() => brokenSchema));
+    const broken = wrapperOf(outputSchemaProducer(() => brokenSchema));
     const result = (await broken(requestFor(probe), async () => ok('{"count":3}'))) as ToolMessage;
     expect(result.status).toBe('error');
     expect(String(result.content)).toContain('不予採信');

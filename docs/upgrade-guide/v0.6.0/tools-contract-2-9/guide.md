@@ -32,12 +32,15 @@ description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖�
   - 舊行為：插件監聽者收到的 `result` 已經加過前綴。
   - 新行為：`result` 是加前綴之前的那份。監聽者接受（`next()`）時，模型收到的仍是加過前綴的。
   - 監聽者自己 `replace` 時，前綴不會再加：以前從 `result` 改出來的內容帶著前綴，現在不帶。
-- **`tools/result`、`onResult` 不變**：看到的仍是模型最後收到的那一則。
+- **`tools/result`、`onResult` 看到的仍是模型最後收到的那一則**。結果是 `Command` 時多了內容：
+  - 舊行為：`blocks`、`content` 一律沒有。
+  - 新行為：`Command` 裡有這次呼叫的那則，就帶它的 `blocks`、`content`（`tools/result` 的視圖另帶 `shape`）；沒有就照舊沒有。
 
 **受影響的是：**
 
 - 經 `registry.events.on('tools/post-execute', …)` 登記、讀 `read_file` 或 `grep` 結果內容的插件。出廠的插件都沒有掛 `tools/post-execute`。
 - 經 `registry.events.on('tools/execute', …)` 登記、讀 `next()` 交回內容的插件，在宣告了輸出 schema 的工具上，或在 `task` 撞到輸出上限時。出廠的兩位（`@nexus/plugin-sandbox-policy`、`@nexus/plugin-workspace-changes`）都只原樣交回 `next()` 的結果。
+- 讀 `onResult` 的 `blocks`、`content`，而且靠「沒有內容」判斷結果是 `Command` 的插件。出廠的 `@nexus/plugin-present` 只讀 `isError`。
 - 想用新欄位的插件。
 
 `@nexus/core` 拿掉四個匯出：`createOutputSchemaMiddleware`、`createSharedReadMarkMiddleware`，以及它們的名字常數 `OUTPUT_SCHEMA_MIDDLEWARE_NAME`、`SHARED_READ_MARK_MIDDLEWARE_NAME`；換成 `createOutputSchemaListener`、`createSharedReadMarkListener`。`createMaxTokensMiddleware` 還在，只剩模型那一半，工具那一半是 `createMaxTokensListener`。這幾個由 `fold.ts` 組裝，插件不經它們。

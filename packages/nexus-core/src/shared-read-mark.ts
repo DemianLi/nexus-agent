@@ -12,7 +12,7 @@
  *   兩種模式只有檔名或計數，不標。
  * - **超過搜尋上限的 `grep`**（[#2065](https://github.com/DemianLi/nexus-agent/issues/2065)）：完整清單從槽位重排、不經過這一層，所以由搜尋上限那一層
  *   用同一份判準（{@link createSharedGrepMark}）判完整清單：有要標的命中，行內與存檔兩份開頭都加；行內已經被這一層標過的不再加。
- * - 失敗的（`status: 'error'`，由貼著工具本體的 `fsToolErrors` 標好）原樣放過；`Command` 不經 `tools/post-execute`，也不標。
+ * - 失敗的（`status: 'error'`，由 `tools/execute` 內層的 `fsToolErrors` 標好）原樣放過；`Command` 不經 `tools/post-execute`，也不標。
  * - `glob`、`ls`、附件、私有根、工具結果存檔都不標。
  * - **這條 thread 的技能來源底下不標**，含同目錄的範本與腳本：基座的技能提示詞要模型讀 `SKILL.md` 再照做，有共用區的 thread
  *   技能來源就在共用區底下。來源清單是 fold 交進來的那一份，跟模型清單、`/名字` 掃的同一組（`FsService.skillSources()`）。
@@ -29,9 +29,10 @@
  * - 內容塊陣列、第一塊是文字（`read_file` 的文字結果）：前綴併進那一塊，塊數不變。
  * - 第一塊不是文字（圖片、檔案）：最前面多一塊只有前綴的文字塊，其餘原樣、順序不變。
  *
- * 位置是 `tools/post-execute` 內層（{@link createSharedReadMarkListener}）：每一位 post 監聽者（含搜尋上限與外溢）的內側，它們先叫
- * `next()` 再讀決定，所以看到的是標過的那一則（`Found … matches` 排在前綴之前，日誌與外溢預覽都帶前綴）；它們拿到的 `result` 參數
- * 是標之前那一份。輸出校驗與讀到哪在 `tools/execute`，看到的是沒標過的文字。root 與每個子代理共用同一份，無狀態。
+ * 位置是 `tools/post-execute` 內層（{@link createSharedReadMarkListener}）：在每一位 post 監聽者的內側。搜尋上限與外溢先叫
+ * `next()` 再讀決定，所以看到的是標過的那一則（`Found … matches` 排在前綴之前，日誌與外溢預覽都帶前綴）；每一位拿到的 `result` 參數
+ * 是標之前那一份。輸出校驗（`tools/execute` 的內層監聽者）與讀到哪（`tools/post-execute` 內側那一格 middleware）都在這一層裡面，
+ * 看到的是沒標過的文字。root 與每個子代理共用同一份，無狀態。
  *
  * @module
  */

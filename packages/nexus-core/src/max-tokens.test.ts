@@ -158,7 +158,7 @@ describe('子代理撞到上限時 task 的結果', () => {
     );
   }
 
-  it('逐字照 dsh：錯誤一句，後面接已經寫出的那段；status 是 error、不帶碼、新造的一則', async () => {
+  it('逐字：錯誤一句，後面接已經寫出的那段；status 是 error、不帶碼、新造的一則', async () => {
     const result = (await run(
       async () =>
         new ToolMessage({

@@ -24,8 +24,8 @@
  * | 事件 | 生產者 | 位置 |
  * | --- | --- | --- |
  * | `tools/pre-execute` | {@link createToolPreExecuteMiddleware} | **緊貼核准閘門外側**：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成「先跳核准卡再被拒」 |
- * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、plugin middleware 內側 |
- * | `tools/execute` | {@link createToolExecuteMiddleware} | 環繞工具本體：在 `invalidToolArgs` 內側，只有 `max-tokens.ts` 對 `task` 結果的替換還在它內側（dsh 在前景 `task` 本體裡拋，替換在 execute 裡才對得上） |
+ * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 讀到哪等貼著工具本體的那幾顆外側、plugin middleware 內側；輸出校驗在 `tools/execute` 的內層，比它早 |
+ * | `tools/execute` | {@link createToolExecuteMiddleware} | 環繞工具本體：在 `invalidToolArgs` 內側，工具那一側沒有別的 middleware 在它內側；輸出校驗與 `task` 撞限的替換是它內層的 core 監聽者（`fold.ts`） |
  * | `tools/result` | `containment.ts` | 圍堵：只有它同時看得到內層拋出的錯與回來的結果；在記 `tool/result` 之前派發（同 dsh 的 `notifyResult` 先於迴圈的 `appendToolResult`） |
  *
  * **核准閘門沒有搬**（demian 2026-10-09）：`approvalGate` 仍是自己的 middleware，問人的那條 waterfall 還在 `approvals` 註冊點。
@@ -33,7 +33,7 @@
  *
  * ## 契約不帶 LangChain 型別
  *
- * 簽名只用這個檔案自己的形狀（{@link PipelineExecution}、{@link PipelineResult}），LangChain 的 `ToolMessage`／`Command`
+ * 簽名只用這個檔案自己的形狀（{@link PipelineExecution}、{@link PipelineResultView}、{@link PipelineResult}），LangChain 的 `ToolMessage`／`Command`
  * 與請求形狀（`wrappedRequestOf`）只出現在生產者裡。**沒有人替換時，生產者把原物件原樣交回**：`tool-events.ts` 的錯誤碼掛在
  * 以訊息物件為鍵的 `WeakMap` 上，中途複製訊息碼就斷。
  *
@@ -170,7 +170,8 @@ export type PipelineResultView =
 
 /**
  * 一次呼叫的結果：`tools/execute` 的 `next()` 回的、監聽者原樣交回的。形狀同 {@link PipelineResultView}，只是 `shape` 選填：
- * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。
+ * 生產者給的一定帶，監聽者自己造來交回（或測試裡代替工具本體）的不必帶。內層 core 監聽者換掉結果時（輸出不合 schema、`task` 撞限），
+ * 外側拿到的是它交回的 {@link PipelineExecuteResult}，可能只帶 `content`、沒有 `blocks`。
  */
 export type PipelineResult =
   | (Omit<Extract<PipelineResultView, { kind: 'message' }>, 'shape'> & {
@@ -250,12 +251,14 @@ declare module './events.js' {
       next: () => Promise<PipelinePreDecision>,
     ): Promise<PipelinePreDecision>;
     /**
-     * 環繞派發：計時、計量、短路。`next()` 跑工具本體並回正規化的結果（{@link PipelineResultView}）。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
+     * 環繞派發：計時、計量、短路。`next()` 回內側那一位交回的結果：最內層是工具本體的視圖（{@link PipelineResultView}），內層 core 監聽者
+     * 換掉時可能只帶 `content`（見 {@link PipelineResult}）。`exec` 唯讀，**換不了 `exec.signal`**（偏離 1）；
      * `next()` 只能呼叫一次（偏離 5）。不呼叫 `next()` 而回自己的 `message` 結果即短路，工具本體不跑。
      * 呼叫了 `next()`、本體回的是 `ToolMessage`、又交回別的 `message` 結果時，換掉的是內容、`status` 與錯誤碼（照交回的 `isError`／`error`；`isError` 為假或省略 `error` 就不掛碼），`tool_call_id`、`name`、`artifact`、`id`、`additional_kwargs` 沿用本體那則；
      * 帶 `fresh: true` 就換成新造的一則，不沿用後三格。
      * 本體回的是 `Command` 時：交回 `message` 結果，整個 `Command` 不採用，換成那一則；交回帶 `content` 或 `blocks` 的 `command` 結果，只換 `Command`
-     * 裡屬於這次呼叫的那則（規則同上，沒有那一則就加在 `update.messages` 最後），`update` 的其餘鍵與 `graph`、`goto` 原樣。
+     * 裡屬於這次呼叫的那則（規則同上，沒有那一則就加在 `update.messages` 最後），`update` 的其餘鍵與 `graph`、`goto` 原樣；`update` 不是物件時
+     * 放不進那則，整個換成新造的一則。本體回的不是 `ToolMessage` 也不是 `Command` 時，帶內容的 `command` 結果同樣換成新造的一則。
      * 交回不帶內容的 `command` 結果、又不是工具本體回的那一個（本體沒跑，或自己另造了一個）就拋 `TypeError`。
      * @param exec - 通過 `tools/pre-execute` 的這次呼叫。
      * @param next - 往內一位；最內層跑工具並回結果。
@@ -519,8 +522,8 @@ function rebuildMessage(
 }
 
 /**
- * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時、本體拋錯而監聽者接住時，或叫了 `next()` 而本體回的不是
- * `ToolMessage` 時。本體跑了、交回帶內容的 `command` 結果，而本體回的放不進那則（不是 `Command`，或 `update` 不是物件）時，也造新的一則。
+ * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時、本體拋錯而監聽者接住時、結果帶 `fresh: true` 時，或叫了
+ * `next()` 而本體回的不是 `ToolMessage` 時。本體跑了、交回帶內容的 `command` 結果，而本體回的放不進那則（不是 `Command`，或 `update` 不是物件）時，也造新的一則。
  * 其餘的 `command` 結果拋 `TypeError`，訊息照 `bodyRan`（工具本體跑了沒）分兩句：模型看得到這段文字，要講出實際的情形。
  * 判準是本體跑了沒，不是交回的那位叫了 `next()` 沒：有多位監聽者時，叫了 `next()` 也可能被內層短路。
  */
@@ -559,8 +562,8 @@ function carriesBody(view: PipelineExecuteResult): boolean {
 }
 
 /**
- * 本體回的 `Command`，屬於這次呼叫的那則換成交回的內容；`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，沒有就加在
- * `update.messages` 最後。`update` 不是物件（例如 tuple 陣列）時放不進一則訊息，整個換成新造的那則。
+ * 本體回的 `Command`，屬於這次呼叫的那則換成交回的內容；`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，同一個 `callId` 的其餘幾則
+ * 丟掉，沒有就加在 `update.messages` 最後（`messages` 不是陣列時整格換成只有那一則）。`update` 不是物件（例如 tuple 陣列）時放不進一則訊息，整個換成新造的那則。
  */
 function replaceInCommand(
   raw: Command,
