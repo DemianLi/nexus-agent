@@ -1262,6 +1262,9 @@ importers:
       '@nexus/tools':
         specifier: workspace:*
         version: link:../nexus-tools
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

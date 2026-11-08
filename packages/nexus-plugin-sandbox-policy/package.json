@@ -31,6 +31,7 @@
     "@nexus/tool-adapter": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
+    "@nexus/wire": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -51,6 +52,7 @@
     "@nexus/session": "workspace:*",
     "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-result": "workspace:*",
-    "@nexus/tools": "workspace:*"
+    "@nexus/tools": "workspace:*",
+    "@nexus/wire": "workspace:*"
   }
 }
