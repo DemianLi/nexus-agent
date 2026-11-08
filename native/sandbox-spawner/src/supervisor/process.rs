@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 /// `receive` 與 stderr 轉送一次最多讀這麼多：對方一直寫也會交回迴圈，計時器、訊號與別的通道照樣輪得到。
 pub const READ_BUDGET: usize = 64 * 1024;
@@ -146,6 +147,25 @@ impl Chan {
         }
         if self.finishing {
             self.close_write();
+        }
+    }
+
+    /// 一直寫到排著的全部寫出去，最多等到 `deadline`；寫完回 `true`。只給「這一框必須在下一步之前進 pipe」的地方用，會擋住整個事件迴圈。
+    pub fn flush_until(&mut self, deadline: Instant) -> bool {
+        loop {
+            self.flush();
+            let Some(fd) = self.write.as_ref().map(AsRawFd::as_raw_fd) else { return false };
+            if self.outbox.is_empty() {
+                return true;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            let mut pfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+            let ms = libc::c_int::try_from(left.as_millis().max(1)).unwrap_or(libc::c_int::MAX);
+            // SAFETY：一個 pollfd。
+            unsafe { libc::poll(&mut pfd, 1, ms) };
         }
     }
 

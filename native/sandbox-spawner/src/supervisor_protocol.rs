@@ -1,13 +1,18 @@
 //! 監督行程的控制面（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計
-//! `.docs/supervisor-1947-design-2026-11-03.md` §五）：監督行程與它起的兩種 Node 行程（每條對話一個的對話行程、一個前台）之間的訊息。
-//! 這裡只定每則訊息的格式與意思（含哪一則回答哪一則）；什麼時候送、收到後怎麼處置，屬於監督行程（#2340）與兩種 Node 行程
-//! （對話行程 #2338、前台 #2341）。
+//! `.docs/supervisor-1947-design-2026-11-03.md` §五）：監督行程與它起的三種子行程（每條對話一個的對話行程、一個前台、一個宿主
+//! [#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）之間的訊息。
+//! 這裡只定每則訊息的格式與意思（含哪一則回答哪一則）；什麼時候送、收到後怎麼處置，屬於監督行程（#2340）與各個子行程
+//! （對話行程 #2338、前台 #2341、宿主 #2569）。
+//!
+//! **每條通道兩個方向的第一框都是 `hello`**，帶 [`PROTOCOL_VERSION`]：監督行程起了子行程就先送自己的，子行程送出的第一框也要是它的。
+//! 版本不相等就是錯配（同一次建置出貨的兩邊才相容，不做跨版本協商），判法見監督行程。給對話行程與前台的 `hello` 另帶一個身分 token：
+//! 它們連宿主時拿它證明自己是誰（宿主照監督行程給的身分表核對，見 [`HostCommand::Grant`]）。token 只走這條通道，不放環境變數或命令列。
 //!
 //! 框與欄位同 spawner 的控制通道（[`crate::protocol`] 的檔頭）：`u32 LE 長度` 接著內容，內容第一個 byte 是種類；數字是 `u32 LE`，
 //! 字串是 `u32 LE 長度 + UTF-8 bytes`，列舉是一個 byte。送端只送 UTF-8；這裡照 bytes 收、不驗，TS 端解到壞序列換成 U+FFFD、不丟錯。資料（對話本身的請求與回應）不經這裡，前台直接連對話行程的 socket。
 //!
-//! 兩條通道、四個方向，各有一組種類 byte、各自一支解碼器。**種類 byte 在四個方向之間不重複**：大寫是送給監督行程的，小寫是監督行程送出的。
-//! 這兩條通道之間送錯通道或方向時，解碼器回「不認得的種類」，不會把它當成另一則形狀相同的訊息。跟 spawner 控制通道的種類 byte
+//! 三條通道、六個方向，各有一組種類 byte、各自一支解碼器。**種類 byte 在六個方向之間不重複**：大寫是送給監督行程的，小寫是監督行程送出的。
+//! 這幾條通道之間送錯通道或方向時，解碼器回「不認得的種類」，不會把它當成另一則形狀相同的訊息。跟 spawner 控制通道的種類 byte
 //! 有重疊（`R`、`E`），那條通道的框送到這裡不在保證內。
 //!
 //! `decode_*` 遇到截斷、框尾多餘、不認得的種類或列舉碼都回 [`DecodeError`]；`encode_*` 不會失敗。
@@ -16,9 +21,14 @@
 
 use crate::protocol::{DecodeError, Reader, Writer};
 
+/// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// 監督行程 → 對話行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationCommand {
+    /// 第一框。`token` 是這個行程連宿主時用的身分（ASCII）。
+    Hello { version: u32, token: Vec<u8> },
     /// 綁定一條 thread。預熱池裡的行程與一開始就為某條 thread 起的行程都走這一則。
     Bind { thread_id: Vec<u8> },
     /// 準備收：對話行程確認自己仍閒置才回 [`ConversationReport::Drained`]，否則回 [`ConversationReport::Busy`]。收掉是接著關 stdin。
@@ -35,6 +45,8 @@ pub enum TurnPhase {
 /// 對話行程 → 監督行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationReport {
+    /// 第一框。
+    Hello { version: u32 },
     /// 根建好、插件載完，可以綁 thread。
     Ready,
     /// 已綁定 `thread_id`，帶回同一個 id。
@@ -62,13 +74,17 @@ pub enum OpenMode {
 /// 前台 → 監督行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrontRequest {
+    /// 第一框。
+    Hello { version: u32 },
+    /// 回 [`FrontEvent::StopAdmission`]：前台已經不收新的請求了。
+    AdmissionStopped,
     /// 要這條 thread 的對話行程；監督行程回 [`FrontEvent::Up`]、[`FrontEvent::Down`] 或 [`FrontEvent::Capacity`]。
     Ensure { thread_id: Vec<u8>, open: OpenMode },
     /// 前台用完了（例如讀完歷史），這條 thread 的行程可以先收。只收只讀開啟的；已經轉成一般的（收到過 `ensure(run)` 或 `turn(begin)`）不理，照閒置時限收。
     Release { thread_id: Vec<u8> },
 }
 
-/// 對話行程為什麼結束（設計 §6-2 的七類）。碼從 1 起，[`FrontEvent::Stats`] 的 `deaths` 依碼的順序排。
+/// 對話行程為什麼結束（設計 §6-2 的七類，加上 [`DeathCause::Protocol`]）。碼從 1 起，[`FrontEvent::Stats`] 的 `deaths` 依碼的順序排。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeathCause {
     /// V8 的 heap 上限。
@@ -85,10 +101,12 @@ pub enum DeathCause {
     Evicted = 6,
     /// 整台停機。
     Shutdown = 7,
+    /// 控制通道的第一框不是 `hello`，或協定版本對不上。
+    Protocol = 8,
 }
 
 /// 死因的種數，也是 [`FrontEvent::Stats`] 的 `deaths` 的長度。
-pub const DEATH_CAUSES: usize = 7;
+pub const DEATH_CAUSES: usize = 8;
 
 impl DeathCause {
     pub fn from_u8(v: u8) -> Option<DeathCause> {
@@ -100,6 +118,7 @@ impl DeathCause {
             5 => DeathCause::Crash,
             6 => DeathCause::Evicted,
             7 => DeathCause::Shutdown,
+            8 => DeathCause::Protocol,
             _ => return None,
         })
     }
@@ -108,6 +127,10 @@ impl DeathCause {
 /// 監督行程 → 前台。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrontEvent {
+    /// 第一框。`token` 是前台連宿主時用的身分（ASCII）；前台每次（重）起都換一個。
+    Hello { version: u32, token: Vec<u8> },
+    /// 整台要停機了：前台不再收新的請求，做到了回 [`FrontRequest::AdmissionStopped`]。監督行程等這個回答（有上限）才開始收對話行程。
+    StopAdmission,
     /// 這條 thread 的對話行程在 `socket` 上聽，前台直接連。
     Up { thread_id: Vec<u8>, socket: Vec<u8> },
     /// 這條 thread 的對話行程結束了，或沒起成（`Crash`）。
@@ -118,8 +141,41 @@ pub enum FrontEvent {
     Stats { live: u32, warm: u32, rss_kib: u32, deaths: [u32; DEATH_CAUSES] },
 }
 
+/// 宿主連線的身分是誰的。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Front = 0,
+    Conversation = 1,
+}
+
+/// 監督行程 → 宿主。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostCommand {
+    /// 第一框。
+    Hello { version: u32 },
+    /// 這個 pid 拿這個 token 連進來就是它：前台，或對話行程（`thread` 是它綁的那條；還沒綁是空的）。同一個 pid 再送一次就整筆換掉
+    /// （對話行程綁了 thread 時）。宿主每次（重）起送出 [`HostReport::Ready`] 之後，監督行程把當下整張表重送一遍。
+    Grant { pid: u32, token: Vec<u8>, role: Role, thread: Vec<u8> },
+    /// 這個 pid 的身分作廢。監督行程在收屍之前送：那時 pid 還沒被收，不會被別的行程拿去用。
+    Revoke { pid: u32 },
+}
+
+/// 宿主 → 監督行程。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostReport {
+    /// 第一框。
+    Hello { version: u32 },
+    /// 在聽了，可以收身分表。在這之前的失敗（含沒起成）算「ready 之前的失敗」，見監督行程的退避。
+    Ready,
+    /// 一條連線違反協定（框太大、內容解不開、`hello` 不對、身分不符），宿主已經斷了它，那個 pid 的身分也在宿主那邊作廢了。
+    /// `pid` 是 `SO_PEERCRED` 讀到的；`reason` 是給人看的一句話（UTF-8）。
+    Violation { pid: u32, reason: Vec<u8> },
+}
+
+const CMD_HELLO: u8 = b'w';
 const CMD_BIND: u8 = b'b';
 const CMD_DRAIN: u8 = b'd';
+const REP_HELLO: u8 = b'V';
 const REP_READY: u8 = b'R';
 const REP_BOUND: u8 = b'B';
 const REP_TURN: u8 = b'T';
@@ -127,12 +183,22 @@ const REP_IDLE: u8 = b'I';
 const REP_BUSY: u8 = b'Y';
 const REP_HEARTBEAT: u8 = b'H';
 const REP_DRAINED: u8 = b'D';
+const REQ_HELLO: u8 = b'F';
+const REQ_ADMISSION_STOPPED: u8 = b'S';
 const REQ_ENSURE: u8 = b'E';
 const REQ_RELEASE: u8 = b'L';
+const EV_HELLO: u8 = b'f';
+const EV_STOP_ADMISSION: u8 = b's';
 const EV_UP: u8 = b'u';
 const EV_DOWN: u8 = b'x';
 const EV_CAPACITY: u8 = b'c';
 const EV_STATS: u8 = b'm';
+const HCMD_HELLO: u8 = b'k';
+const HCMD_GRANT: u8 = b'a';
+const HCMD_REVOKE: u8 = b'r';
+const HREP_HELLO: u8 = b'K';
+const HREP_READY: u8 = b'Q';
+const HREP_VIOLATION: u8 = b'P';
 
 fn decoded<T>(mut r: Reader<'_>, read: impl FnOnce(&mut Reader<'_>, u8) -> Result<T, DecodeError>) -> Result<T, DecodeError> {
     let kind = r.u8()?;
@@ -144,6 +210,11 @@ fn decoded<T>(mut r: Reader<'_>, read: impl FnOnce(&mut Reader<'_>, u8) -> Resul
 pub fn encode_conversation_command(command: &ConversationCommand) -> Vec<u8> {
     let mut w = Writer(Vec::new());
     match command {
+        ConversationCommand::Hello { version, token } => {
+            w.u8(CMD_HELLO);
+            w.u32(*version);
+            w.bytes(token);
+        }
         ConversationCommand::Bind { thread_id } => {
             w.u8(CMD_BIND);
             w.bytes(thread_id);
@@ -156,6 +227,7 @@ pub fn encode_conversation_command(command: &ConversationCommand) -> Vec<u8> {
 pub fn decode_conversation_command(payload: &[u8]) -> Result<ConversationCommand, DecodeError> {
     decoded(Reader { buf: payload }, |r, kind| {
         Ok(match kind {
+            CMD_HELLO => ConversationCommand::Hello { version: r.u32()?, token: r.bytes()? },
             CMD_BIND => ConversationCommand::Bind { thread_id: r.bytes()? },
             CMD_DRAIN => ConversationCommand::Drain,
             _ => return Err(DecodeError("不認得的種類")),
@@ -166,6 +238,10 @@ pub fn decode_conversation_command(payload: &[u8]) -> Result<ConversationCommand
 pub fn encode_conversation_report(report: &ConversationReport) -> Vec<u8> {
     let mut w = Writer(Vec::new());
     match report {
+        ConversationReport::Hello { version } => {
+            w.u8(REP_HELLO);
+            w.u32(*version);
+        }
         ConversationReport::Ready => w.u8(REP_READY),
         ConversationReport::Bound { thread_id } => {
             w.u8(REP_BOUND);
@@ -189,6 +265,7 @@ pub fn encode_conversation_report(report: &ConversationReport) -> Vec<u8> {
 pub fn decode_conversation_report(payload: &[u8]) -> Result<ConversationReport, DecodeError> {
     decoded(Reader { buf: payload }, |r, kind| {
         Ok(match kind {
+            REP_HELLO => ConversationReport::Hello { version: r.u32()? },
             REP_READY => ConversationReport::Ready,
             REP_BOUND => ConversationReport::Bound { thread_id: r.bytes()? },
             REP_TURN => ConversationReport::Turn {
@@ -210,6 +287,11 @@ pub fn decode_conversation_report(payload: &[u8]) -> Result<ConversationReport, 
 pub fn encode_front_request(request: &FrontRequest) -> Vec<u8> {
     let mut w = Writer(Vec::new());
     match request {
+        FrontRequest::Hello { version } => {
+            w.u8(REQ_HELLO);
+            w.u32(*version);
+        }
+        FrontRequest::AdmissionStopped => w.u8(REQ_ADMISSION_STOPPED),
         FrontRequest::Ensure { thread_id, open } => {
             w.u8(REQ_ENSURE);
             w.bytes(thread_id);
@@ -226,6 +308,8 @@ pub fn encode_front_request(request: &FrontRequest) -> Vec<u8> {
 pub fn decode_front_request(payload: &[u8]) -> Result<FrontRequest, DecodeError> {
     decoded(Reader { buf: payload }, |r, kind| {
         Ok(match kind {
+            REQ_HELLO => FrontRequest::Hello { version: r.u32()? },
+            REQ_ADMISSION_STOPPED => FrontRequest::AdmissionStopped,
             REQ_ENSURE => FrontRequest::Ensure {
                 thread_id: r.bytes()?,
                 open: match r.u8()? {
@@ -243,6 +327,12 @@ pub fn decode_front_request(payload: &[u8]) -> Result<FrontRequest, DecodeError>
 pub fn encode_front_event(event: &FrontEvent) -> Vec<u8> {
     let mut w = Writer(Vec::new());
     match event {
+        FrontEvent::Hello { version, token } => {
+            w.u8(EV_HELLO);
+            w.u32(*version);
+            w.bytes(token);
+        }
+        FrontEvent::StopAdmission => w.u8(EV_STOP_ADMISSION),
         FrontEvent::Up { thread_id, socket } => {
             w.u8(EV_UP);
             w.bytes(thread_id);
@@ -275,6 +365,8 @@ pub fn encode_front_event(event: &FrontEvent) -> Vec<u8> {
 pub fn decode_front_event(payload: &[u8]) -> Result<FrontEvent, DecodeError> {
     decoded(Reader { buf: payload }, |r, kind| {
         Ok(match kind {
+            EV_HELLO => FrontEvent::Hello { version: r.u32()?, token: r.bytes()? },
+            EV_STOP_ADMISSION => FrontEvent::StopAdmission,
             EV_UP => FrontEvent::Up { thread_id: r.bytes()?, socket: r.bytes()? },
             EV_DOWN => FrontEvent::Down {
                 thread_id: r.bytes()?,
@@ -294,15 +386,86 @@ pub fn decode_front_event(payload: &[u8]) -> Result<FrontEvent, DecodeError> {
     })
 }
 
+pub fn encode_host_command(command: &HostCommand) -> Vec<u8> {
+    let mut w = Writer(Vec::new());
+    match command {
+        HostCommand::Hello { version } => {
+            w.u8(HCMD_HELLO);
+            w.u32(*version);
+        }
+        HostCommand::Grant { pid, token, role, thread } => {
+            w.u8(HCMD_GRANT);
+            w.u32(*pid);
+            w.bytes(token);
+            w.u8(*role as u8);
+            w.bytes(thread);
+        }
+        HostCommand::Revoke { pid } => {
+            w.u8(HCMD_REVOKE);
+            w.u32(*pid);
+        }
+    }
+    w.0
+}
+
+pub fn decode_host_command(payload: &[u8]) -> Result<HostCommand, DecodeError> {
+    decoded(Reader { buf: payload }, |r, kind| {
+        Ok(match kind {
+            HCMD_HELLO => HostCommand::Hello { version: r.u32()? },
+            HCMD_GRANT => HostCommand::Grant {
+                pid: r.u32()?,
+                token: r.bytes()?,
+                role: match r.u8()? {
+                    0 => Role::Front,
+                    1 => Role::Conversation,
+                    _ => return Err(DecodeError("不認得的角色")),
+                },
+                thread: r.bytes()?,
+            },
+            HCMD_REVOKE => HostCommand::Revoke { pid: r.u32()? },
+            _ => return Err(DecodeError("不認得的種類")),
+        })
+    })
+}
+
+pub fn encode_host_report(report: &HostReport) -> Vec<u8> {
+    let mut w = Writer(Vec::new());
+    match report {
+        HostReport::Hello { version } => {
+            w.u8(HREP_HELLO);
+            w.u32(*version);
+        }
+        HostReport::Ready => w.u8(HREP_READY),
+        HostReport::Violation { pid, reason } => {
+            w.u8(HREP_VIOLATION);
+            w.u32(*pid);
+            w.bytes(reason);
+        }
+    }
+    w.0
+}
+
+pub fn decode_host_report(payload: &[u8]) -> Result<HostReport, DecodeError> {
+    decoded(Reader { buf: payload }, |r, kind| {
+        Ok(match kind {
+            HREP_HELLO => HostReport::Hello { version: r.u32()? },
+            HREP_READY => HostReport::Ready,
+            HREP_VIOLATION => HostReport::Violation { pid: r.u32()?, reason: r.bytes()? },
+            _ => return Err(DecodeError("不認得的種類")),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const VECTORS: &str = include_str!("../supervisor-vectors.json");
+
     /// `supervisor-vectors.json` 每一組依序的 `hex`，Node 端對同一份測。用字串切的：組內的值不能含 `]`，也不能含 `"hex": "`。
     fn vectors(group: &str) -> Vec<Vec<u8>> {
-        let json = include_str!("../supervisor-vectors.json");
-        let start = json.find(&format!("\"{group}\"")).unwrap();
-        let section = &json[start..];
+        let start = VECTORS.find(&format!("\"{group}\"")).unwrap();
+        let section = &VECTORS[start..];
         let section = &section[..section.find(']').map_or(section.len(), |end| end)];
         section
             .split("\"hex\": \"")
@@ -315,9 +478,11 @@ mod tests {
     }
 
     const T: &[u8] = b"0c4f1c8e-thread";
+    const TOKEN: &[u8] = b"00112233445566778899aabbccddeeff";
 
     fn commands() -> Vec<ConversationCommand> {
         vec![
+            ConversationCommand::Hello { version: PROTOCOL_VERSION, token: TOKEN.to_vec() },
             ConversationCommand::Bind { thread_id: T.to_vec() },
             ConversationCommand::Bind { thread_id: "é\n\t".as_bytes().to_vec() },
             ConversationCommand::Drain,
@@ -326,6 +491,7 @@ mod tests {
 
     fn reports() -> Vec<ConversationReport> {
         vec![
+            ConversationReport::Hello { version: PROTOCOL_VERSION },
             ConversationReport::Ready,
             ConversationReport::Bound { thread_id: T.to_vec() },
             ConversationReport::Turn { phase: TurnPhase::Begin },
@@ -340,6 +506,8 @@ mod tests {
 
     fn requests() -> Vec<FrontRequest> {
         vec![
+            FrontRequest::Hello { version: PROTOCOL_VERSION },
+            FrontRequest::AdmissionStopped,
             FrontRequest::Ensure { thread_id: T.to_vec(), open: OpenMode::Run },
             FrontRequest::Ensure { thread_id: Vec::new(), open: OpenMode::ReadOnly },
             FrontRequest::Release { thread_id: T.to_vec() },
@@ -354,14 +522,36 @@ mod tests {
         DeathCause::Crash,
         DeathCause::Evicted,
         DeathCause::Shutdown,
+        DeathCause::Protocol,
     ];
 
     fn events() -> Vec<FrontEvent> {
-        let mut events = vec![FrontEvent::Up { thread_id: T.to_vec(), socket: b"/run/nexus/s-0700/thread a.sock".to_vec() }];
+        let mut events = vec![
+            FrontEvent::Hello { version: PROTOCOL_VERSION, token: TOKEN.to_vec() },
+            FrontEvent::StopAdmission,
+            FrontEvent::Up { thread_id: T.to_vec(), socket: b"/run/nexus/s-0700/thread a.sock".to_vec() },
+        ];
         events.extend(CAUSES.map(|cause| FrontEvent::Down { thread_id: T.to_vec(), cause }));
         events.push(FrontEvent::Capacity { thread_id: T.to_vec(), current: 156, limit: 155 });
-        events.push(FrontEvent::Stats { live: 3, warm: 1, rss_kib: u32::MAX, deaths: [1, 2, 3, 4, 5, 6, 7] });
+        events.push(FrontEvent::Stats { live: 3, warm: 1, rss_kib: u32::MAX, deaths: [1, 2, 3, 4, 5, 6, 7, 8] });
         events
+    }
+
+    fn host_commands() -> Vec<HostCommand> {
+        vec![
+            HostCommand::Hello { version: PROTOCOL_VERSION },
+            HostCommand::Grant { pid: 4242, token: TOKEN.to_vec(), role: Role::Front, thread: Vec::new() },
+            HostCommand::Grant { pid: u32::MAX, token: TOKEN.to_vec(), role: Role::Conversation, thread: T.to_vec() },
+            HostCommand::Revoke { pid: 4242 },
+        ]
+    }
+
+    fn host_reports() -> Vec<HostReport> {
+        vec![
+            HostReport::Hello { version: PROTOCOL_VERSION },
+            HostReport::Ready,
+            HostReport::Violation { pid: 4242, reason: "框太大".as_bytes().to_vec() },
+        ]
     }
 
     /// `cases` 要跟向量檔同一組同一順序，數量也要相等。
@@ -385,6 +575,16 @@ mod tests {
         check("conversationReports", &reports(), encode_conversation_report, decode_conversation_report);
         check("frontRequests", &requests(), encode_front_request, decode_front_request);
         check("frontEvents", &events(), encode_front_event, decode_front_event);
+        check("hostCommands", &host_commands(), encode_host_command, decode_host_command);
+        check("hostReports", &host_reports(), encode_host_report, decode_host_report);
+    }
+
+    #[test]
+    fn the_protocol_version_matches_the_vector_file() {
+        let key = "\"protocolVersion\": ";
+        let at = VECTORS.find(key).unwrap() + key.len();
+        let digits: String = VECTORS[at..].chars().take_while(char::is_ascii_digit).collect();
+        assert_eq!(digits.parse::<u32>().unwrap(), PROTOCOL_VERSION);
     }
 
     /// 這裡列出的每個種類 byte、每一類死因都要有向量。清單是手寫的，新增種類要同時加進來（TS 那一側由型別強制）。
@@ -392,10 +592,15 @@ mod tests {
     fn every_kind_and_cause_has_a_vector() {
         let kinds = |group: &str| vectors(group).iter().map(|v| v[0]).collect::<std::collections::BTreeSet<u8>>();
         let expect = |group: &str, all: &[u8]| assert_eq!(kinds(group), all.iter().copied().collect(), "{group}");
-        expect("conversationCommands", &[CMD_BIND, CMD_DRAIN]);
-        expect("conversationReports", &[REP_READY, REP_BOUND, REP_TURN, REP_IDLE, REP_BUSY, REP_HEARTBEAT, REP_DRAINED]);
-        expect("frontRequests", &[REQ_ENSURE, REQ_RELEASE]);
-        expect("frontEvents", &[EV_UP, EV_DOWN, EV_CAPACITY, EV_STATS]);
+        expect("conversationCommands", &[CMD_HELLO, CMD_BIND, CMD_DRAIN]);
+        expect(
+            "conversationReports",
+            &[REP_HELLO, REP_READY, REP_BOUND, REP_TURN, REP_IDLE, REP_BUSY, REP_HEARTBEAT, REP_DRAINED],
+        );
+        expect("frontRequests", &[REQ_HELLO, REQ_ADMISSION_STOPPED, REQ_ENSURE, REQ_RELEASE]);
+        expect("frontEvents", &[EV_HELLO, EV_STOP_ADMISSION, EV_UP, EV_DOWN, EV_CAPACITY, EV_STATS]);
+        expect("hostCommands", &[HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE]);
+        expect("hostReports", &[HREP_HELLO, HREP_READY, HREP_VIOLATION]);
         let downs: Vec<DeathCause> = events()
             .into_iter()
             .filter_map(|e| match e {
@@ -410,23 +615,27 @@ mod tests {
         }
     }
 
+    const DECODERS: [(&str, fn(&[u8]) -> bool); 6] = [
+        ("conversationCommands", |b| decode_conversation_command(b).is_ok()),
+        ("conversationReports", |b| decode_conversation_report(b).is_ok()),
+        ("frontRequests", |b| decode_front_request(b).is_ok()),
+        ("frontEvents", |b| decode_front_event(b).is_ok()),
+        ("hostCommands", |b| decode_host_command(b).is_ok()),
+        ("hostReports", |b| decode_host_report(b).is_ok()),
+    ];
+
     #[test]
     fn kind_bytes_do_not_repeat_across_directions() {
         let all = [
-            CMD_BIND, CMD_DRAIN, REP_READY, REP_BOUND, REP_TURN, REP_IDLE, REP_BUSY, REP_HEARTBEAT, REP_DRAINED, REQ_ENSURE,
-            REQ_RELEASE, EV_UP, EV_DOWN, EV_CAPACITY, EV_STATS,
+            CMD_HELLO, CMD_BIND, CMD_DRAIN, REP_HELLO, REP_READY, REP_BOUND, REP_TURN, REP_IDLE, REP_BUSY, REP_HEARTBEAT,
+            REP_DRAINED, REQ_HELLO, REQ_ADMISSION_STOPPED, REQ_ENSURE, REQ_RELEASE, EV_HELLO, EV_STOP_ADMISSION, EV_UP,
+            EV_DOWN, EV_CAPACITY, EV_STATS, HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE, HREP_HELLO, HREP_READY, HREP_VIOLATION,
         ];
         assert_eq!(all.iter().collect::<std::collections::BTreeSet<_>>().len(), all.len());
-        // 送錯方向的框：每一組的每一則，其他三支解碼器都不收。
-        let decoders: [(&str, fn(&[u8]) -> bool); 4] = [
-            ("conversationCommands", |b| decode_conversation_command(b).is_ok()),
-            ("conversationReports", |b| decode_conversation_report(b).is_ok()),
-            ("frontRequests", |b| decode_front_request(b).is_ok()),
-            ("frontEvents", |b| decode_front_event(b).is_ok()),
-        ];
-        for (group, _) in decoders {
+        // 送錯方向的框：每一組的每一則，其他五支解碼器都不收。
+        for (group, _) in DECODERS {
             for bytes in vectors(group) {
-                for (other, accepts) in decoders {
+                for (other, accepts) in DECODERS {
                     assert_eq!(accepts(&bytes), group == other, "{group} 的 {bytes:02x?} 給 {other}");
                 }
             }
@@ -435,13 +644,7 @@ mod tests {
 
     #[test]
     fn truncated_trailing_or_unknown_input_is_rejected() {
-        let decoders: [(&str, fn(&[u8]) -> bool); 4] = [
-            ("conversationCommands", |b| decode_conversation_command(b).is_ok()),
-            ("conversationReports", |b| decode_conversation_report(b).is_ok()),
-            ("frontRequests", |b| decode_front_request(b).is_ok()),
-            ("frontEvents", |b| decode_front_event(b).is_ok()),
-        ];
-        for (group, accepts) in decoders {
+        for (group, accepts) in DECODERS {
             for bytes in vectors(group) {
                 for cut in 0..bytes.len() {
                     assert!(!accepts(&bytes[..cut]), "{group} 截在 {cut}");
@@ -457,10 +660,48 @@ mod tests {
         let mut ensure = encode_front_request(&FrontRequest::Ensure { thread_id: Vec::new(), open: OpenMode::Run });
         *ensure.last_mut().unwrap() = 2;
         assert_eq!(decode_front_request(&ensure), Err(DecodeError("不認得的打開方式")));
-        for code in [0, 8, u8::MAX] {
+        for code in [0, DEATH_CAUSES as u8 + 1, u8::MAX] {
             let mut down = encode_front_event(&FrontEvent::Down { thread_id: Vec::new(), cause: DeathCause::Heap });
             *down.last_mut().unwrap() = code;
             assert_eq!(decode_front_event(&down), Err(DecodeError("不認得的死因")));
         }
+        let mut grant = encode_host_command(&HostCommand::Grant { pid: 1, token: Vec::new(), role: Role::Front, thread: Vec::new() });
+        grant[9] = 2;
+        assert_eq!(decode_host_command(&grant), Err(DecodeError("不認得的角色")));
+    }
+
+    /// 每一個合法向量逐 byte 截斷、逐位元翻轉：解碼器只回 `Ok` 或 `Err`，不 panic（panic 會讓這條測試失敗）。
+    /// 翻轉後解得開的，重新編碼要得回同一串 bytes：解碼器不會把兩種輸入讀成同一個值。
+    #[test]
+    fn every_truncation_and_bit_flip_decodes_without_panicking() {
+        fn roundtrip<T>(bytes: &[u8], decode: fn(&[u8]) -> Result<T, DecodeError>, encode: fn(&T) -> Vec<u8>) {
+            if let Ok(value) = decode(bytes) {
+                assert_eq!(encode(&value), bytes, "{bytes:02x?}");
+            }
+        }
+        let codecs: [(&str, fn(&[u8])); 6] = [
+            ("conversationCommands", |b| roundtrip(b, decode_conversation_command, encode_conversation_command)),
+            ("conversationReports", |b| roundtrip(b, decode_conversation_report, encode_conversation_report)),
+            ("frontRequests", |b| roundtrip(b, decode_front_request, encode_front_request)),
+            ("frontEvents", |b| roundtrip(b, decode_front_event, encode_front_event)),
+            ("hostCommands", |b| roundtrip(b, decode_host_command, encode_host_command)),
+            ("hostReports", |b| roundtrip(b, decode_host_report, encode_host_report)),
+        ];
+        let mut tried = 0;
+        for (group, run) in codecs {
+            for bytes in vectors(group) {
+                for cut in 0..=bytes.len() {
+                    run(&bytes[..cut]);
+                    tried += 1;
+                }
+                for bit in 0..bytes.len() * 8 {
+                    let mut flipped = bytes.clone();
+                    flipped[bit / 8] ^= 1 << (bit % 8);
+                    run(&flipped);
+                    tried += 1;
+                }
+            }
+        }
+        assert!(tried > 1000, "{tried}");
     }
 }

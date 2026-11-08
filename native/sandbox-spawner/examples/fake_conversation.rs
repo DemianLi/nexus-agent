@@ -1,9 +1,11 @@
 //! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`，收到 `bind` 回 `bound`，之後照 thread id 做事。
 //!
 //! ```text
-//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] --socket <路徑>
+//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--skip-hello] --socket <路徑>
 //! ```
 //!
+//! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]）；`--skip-hello` 不送，直接送 `ready`。
+//!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
 //! - `--die-before-ready`：一起來就以 7 結束。
 //! - `--ready-after-ms`：等這麼久才送 `ready`。
 //! - thread id 以逗號分段，第一段是名字，之後每段是一個動作，回 `bound` 之後依序做：
@@ -23,6 +25,7 @@
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
     decode_conversation_command, encode_conversation_report, ConversationCommand, ConversationReport, TurnPhase,
+    PROTOCOL_VERSION,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -88,7 +91,16 @@ fn main() {
     if let Some(ms) = args.iter().position(|a| a == "--ready-after-ms").and_then(|i| args.get(i + 1)) {
         std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
     }
+    if !args.iter().any(|a| a == "--skip-hello") {
+        let version = args
+            .iter()
+            .position(|a| a == "--hello-version")
+            .and_then(|i| args.get(i + 1))
+            .map_or(PROTOCOL_VERSION, |v| v.parse().unwrap());
+        report(&ConversationReport::Hello { version });
+    }
     report(&ConversationReport::Ready);
+    let mut token = Vec::new();
 
     let mut ignore_eof = false;
     let mut on_drain = Some(ConversationReport::Drained);
@@ -113,6 +125,11 @@ fn main() {
         input.extend_from_slice(&buf[..n]);
         while let Some(payload) = take_frame(&mut input).unwrap() {
             let thread_id = match decode_conversation_command(&payload).unwrap() {
+                ConversationCommand::Hello { token: given, .. } => {
+                    token = given;
+                    log(&format!("hello {}", token.len()));
+                    continue;
+                }
                 ConversationCommand::Bind { thread_id } => thread_id,
                 ConversationCommand::Drain => {
                     log("drain");

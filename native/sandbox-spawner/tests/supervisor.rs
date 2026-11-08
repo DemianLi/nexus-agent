@@ -8,7 +8,7 @@
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
-    decode_front_event, encode_front_request, DeathCause, FrontEvent, FrontRequest, OpenMode,
+    decode_front_event, encode_front_request, DeathCause, FrontEvent, FrontRequest, OpenMode, PROTOCOL_VERSION,
 };
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -77,11 +77,15 @@ struct Options {
     broken_stderr: bool,
     /// 監督行程的 stderr 接一條管線，讀端留在 `Harness::stderr`，測試不讀它就會滿。
     piped_stderr: bool,
+    /// 前台連上之後送的 `hello` 版本；`None` 是不送（測試自己送）。
+    front_hello: Option<u32>,
+    /// 讀到 `stop-admission` 時回 `admission-stopped`（並略過它，不交給測試）。
+    answer_stop_admission: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false }
+        Options { conversation: example("fake_conversation"), conversation_args: Vec::new(), eof_grace_ms: 300, term_grace_ms: 300, extra: Vec::new(), discard_stderr: false, broken_stderr: false, piped_stderr: false, front_hello: Some(PROTOCOL_VERSION), answer_stop_admission: true }
     }
 }
 
@@ -92,6 +96,10 @@ struct Harness {
     inbox: Vec<u8>,
     dir: PathBuf,
     stderr: Option<std::fs::File>,
+    front_hello: Option<u32>,
+    answer_stop_admission: bool,
+    /// 前台最近一次收到的 `hello` 帶的 token。
+    front_token: Vec<u8>,
 }
 
 impl Harness {
@@ -111,6 +119,8 @@ impl Harness {
         cmd.args(["--term-grace-ms", &options.term_grace_ms.to_string(), "--front-restart-ms", "100"]);
         // 預熱池與定時的 `stats` 預設關掉，免得每條測試多一個行程、多出沒預期的訊息；容量固定，不跟著跑測試那台的記憶體變。要測它們的測試從 `extra` 蓋過去。
         cmd.args(["--warm", "0", "--capacity", "64", "--stats-ms", "0"]);
+        // 停機時不等前台回答 `stop-admission`：多數測試不讀前台的訊息，等了只會慢；要測它的從 `extra` 蓋過去。
+        cmd.args(["--admission-timeout-ms", "0"]);
         cmd.args(&options.extra);
         let mut stderr_read = None;
         let stderr = if options.piped_stderr {
@@ -134,7 +144,17 @@ impl Harness {
             Stdio::from(std::fs::File::create(dir.join("supervisor.err")).unwrap())
         };
         let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn().unwrap();
-        let mut harness = Harness { child, listener, front: None, inbox: Vec::new(), dir, stderr: stderr_read };
+        let mut harness = Harness {
+            child,
+            listener,
+            front: None,
+            inbox: Vec::new(),
+            dir,
+            stderr: stderr_read,
+            front_hello: options.front_hello,
+            answer_stop_admission: options.answer_stop_admission,
+            front_token: Vec::new(),
+        };
         harness.accept_front();
         harness
     }
@@ -143,8 +163,19 @@ impl Harness {
         self.child.id()
     }
 
-    /// 等前台（`fake_front`）連進來。
+    /// 等前台（`fake_front`）連進來；照 `front_hello` 送 `hello`，並收下監督行程的 `hello`。
     fn accept_front(&mut self) {
+        self.accept_front_raw();
+        if let Some(version) = self.front_hello {
+            self.request(&FrontRequest::Hello { version });
+            match self.event() {
+                FrontEvent::Hello { version: PROTOCOL_VERSION, token } => self.front_token = token,
+                other => panic!("前台的第一框要是 hello，拿到 {other:?}"),
+            }
+        }
+    }
+
+    fn accept_front_raw(&mut self) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.listener.accept() {
@@ -194,7 +225,12 @@ impl Harness {
         let front = self.front.as_mut().unwrap();
         loop {
             if let Some(payload) = take_frame(&mut self.inbox).unwrap() {
-                return Some(decode_front_event(&payload).unwrap());
+                let event = decode_front_event(&payload).unwrap();
+                if event == FrontEvent::StopAdmission && self.answer_stop_admission {
+                    let _ = front.write_all(&frame(&encode_front_request(&FrontRequest::AdmissionStopped)));
+                    continue;
+                }
+                return Some(event);
             }
             let mut buf = [0u8; 4096];
             match front.read(&mut buf) {
@@ -275,7 +311,12 @@ impl Drop for Harness {
     }
 }
 
+/// 假對話行程的紀錄，濾掉 `hello` 那一行，其他測試照行號比對；要看它用 [`raw_log`]。
 fn log(socket: &Path) -> Vec<String> {
+    raw_log(socket).into_iter().filter(|line| !line.starts_with("hello ")).collect()
+}
+
+fn raw_log(socket: &Path) -> Vec<String> {
     std::fs::read_to_string(format!("{}.log", socket.display())).unwrap_or_default().lines().map(String::from).collect()
 }
 
