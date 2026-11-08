@@ -215,6 +215,24 @@ describe('子代理撞到上限時 task 的結果', () => {
     expect(String(replaced.content).startsWith(HEADLINE)).toBe(true);
   });
 
+  it('Command 的 update 不是物件：整個換成那則錯誤', async () => {
+    const result = (await run(async () => new Command({ update: [['messages', []]] }), {
+      partial: '半份',
+    })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.tool_call_id).toBe('call_task');
+    expect(result.status).toBe('error');
+    expect(result.content).toBe(`${HEADLINE}\nPartial output before the run ended:\n半份`);
+  });
+
+  it('本體回的既不是 ToolMessage 也不是 Command：換成那則錯誤', async () => {
+    const result = (await run(async () => '純文字', { partial: '' })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.tool_call_id).toBe('call_task');
+    expect(result.status).toBe('error');
+    expect(result.content).toBe(HEADLINE);
+  });
+
   it('載體裡沒有這次的子代理：本體回的原物件', async () => {
     const message = new ToolMessage({ content: '好了', tool_call_id: 'call_task', name: 'task' });
     expect(await run(async () => message)).toBe(message);

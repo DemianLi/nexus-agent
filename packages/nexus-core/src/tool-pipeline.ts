@@ -520,8 +520,8 @@ function rebuildMessage(
 
 /**
  * 把監聽者交回的 `message` 結果從 `exec` 造成一則新的 `ToolMessage`：短路時、本體拋錯而監聽者接住時，或叫了 `next()` 而本體回的不是
- * `ToolMessage` 時。
- * 交回的是 `command` 結果就拋 `TypeError`，訊息照 `bodyRan`（工具本體跑了沒）分兩句：模型看得到這段文字，要講出實際的情形。
+ * `ToolMessage` 時。本體跑了、交回帶內容的 `command` 結果，而本體回的放不進那則（不是 `Command`，或 `update` 不是物件）時，也造新的一則。
+ * 其餘的 `command` 結果拋 `TypeError`，訊息照 `bodyRan`（工具本體跑了沒）分兩句：模型看得到這段文字，要講出實際的情形。
  * 判準是本體跑了沒，不是交回的那位叫了 `next()` 沒：有多位監聽者時，叫了 `next()` 也可能被內層短路。
  */
 function materialize(
@@ -529,7 +529,7 @@ function materialize(
   exec: PipelineExecution,
   bodyRan: boolean,
 ): ToolMessage {
-  const body = view.kind === 'message' ? bodyOf(view) : undefined;
+  const body = view.kind === 'message' || (bodyRan && carriesBody(view)) ? bodyOf(view) : undefined;
   if (body === undefined) {
     throw view.kind === 'message'
       ? badDecision('tools/execute', view)
@@ -560,17 +560,17 @@ function carriesBody(view: PipelineExecuteResult): boolean {
 
 /**
  * 本體回的 `Command`，屬於這次呼叫的那則換成交回的內容；`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，沒有就加在
- * `update.messages` 最後。`update` 不是物件（例如 tuple 陣列）時拋 `TypeError`：放不進一則訊息。
+ * `update.messages` 最後。`update` 不是物件（例如 tuple 陣列）時放不進一則訊息，整個換成新造的那則。
  */
 function replaceInCommand(
   raw: Command,
   original: PipelineResultView,
   view: PipelineExecuteResult,
   exec: PipelineExecution,
-): Command {
+): Command | ToolMessage {
   const update: unknown = raw.update;
   if (typeof update !== 'object' || update === null || Array.isArray(update)) {
-    throw new TypeError(COMMAND_UPDATE_NOT_RECORD);
+    return materialize(view, exec, true);
   }
   const target = readToolResultMessage(raw, exec.callId);
   const body = target === undefined ? bodyOf(view) : executeBody(target, original, view);
@@ -599,8 +599,6 @@ const COMMAND_WITHOUT_BODY =
   'tools/execute 的監聽者回了 command 結果，但工具本體沒有跑：Command 造不出來（偏離 2）';
 const COMMAND_NOT_FROM_BODY =
   'tools/execute 的監聽者交回的 command 結果不是 next() 回的那一個：Command 造不出來（偏離 2）';
-const COMMAND_UPDATE_NOT_RECORD =
-  'tools/execute 的監聽者交回了帶內容的 command 結果，但工具本體回的 Command 的 update 不是物件：放不進那則訊息';
 
 const ALLOW: PipelinePreDecision = Object.freeze({ kind: 'allow' });
 const ACCEPT: PipelinePostDecision = Object.freeze({ kind: 'accept' });

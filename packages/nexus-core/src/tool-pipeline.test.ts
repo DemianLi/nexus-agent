@@ -698,15 +698,19 @@ describe('tools/execute 交回帶內容的 `command` 結果：只換 `Command` �
     ]);
   });
 
-  it('本體回的 `Command` 的 `update` 不是物件 → 拋 TypeError', async () => {
+  it('本體回的 `Command` 的 `update` 不是物件、或回的不是 `Command` → 換成新造的一則', async () => {
     const bus = new EventBus();
     bus.on('tools/execute', async (_exec, next) => {
       await next();
-      return { kind: 'command', content: '換了', isError: false };
+      return { kind: 'command', content: '換了', isError: true };
     });
     const wrap = wrapperOf(createToolExecuteMiddleware(bus));
-    const command = new Command({ update: [['messages', []]] });
-    await expect(wrap(requestFor(), async () => command)).rejects.toBeInstanceOf(TypeError);
+    for (const raw of [new Command({ update: [['messages', []]] }), '純文字']) {
+      const result = (await wrap(requestFor(), async () => raw)) as ToolMessage;
+      expect(ToolMessage.isInstance(result)).toBe(true);
+      expect(result.content).toBe('換了');
+      expect(result.status).toBe('error');
+    }
   });
 
   it('本體沒跑（短路）就交回帶內容的 `command` 結果 → 照舊拋「工具本體沒有跑」', async () => {
