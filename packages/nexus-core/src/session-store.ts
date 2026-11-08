@@ -679,13 +679,15 @@ import type { SessionEvent } from './session-log.js';
  * - `turn/end` 的 `reason` 多一種 `{kind:'max-turns'}`（讀得懂，還沒有生產者），寫入與讀盤都驗 `reason` 的形狀（`session-log.ts` 的
  *   `validateTurnEndReason`）。
  *
- * 升版照新增詞彙的慣例（同 22、50），不是非升不可。54 的讀方逐一核過：軌跡與 token-meter 讀不帶 `modelCall` 的快照照樣歸對
- * （軌跡把最近一份記在狀態上、下一次呼叫開時帶走；token-meter 在 `model/end` 當下讀最近一份 header），`assistant/attempt` 的種類
- * 54 認得、拿掉 `ignorable` 不影響它。真的會讀錯的只有 `max-turns`：54 的歷史認不得，那一輪記過 `interrupt/raised` 的話會畫成停在
- * 核准點等人；它今天沒有生產者（#2359 才寫）。
+ * 非升不可的是 `max-turns`：54 的讀方認不得的收尾理由一律當成正常完成——軌跡與 token-meter 的 `endOf` 落到 `default`（token-meter
+ * 那一輪記過暫停的話是 `paused`），對話史畫成完成、那一輪記過 `interrupt/raised` 的話畫成停在核准點等人；#2359 會在 55 之下寫它，
+ * 之後不再為它升版，所以要讓 54 的讀方以格式太新拒讀，不靜靜讀錯。寫入與讀盤都驗 `reason` 也是為了同一件事。快照與嘗試的位置
+ * 單看不必升：54 的軌跡與 token-meter 讀不帶 `modelCall` 的快照照樣歸對（軌跡把最近一份記在狀態上、下一次呼叫開時帶走；token-meter
+ * 在 `model/end` 當下讀最近一份 header），`assistant/attempt` 的種類 54 認得、拿掉 `ignorable` 不影響它。
  *
  * **讀舊檔**：54 以前的檔直接讀。讀快照的一方看有沒有 `modelCall` 分新舊（帶的照舊歸給它指的那次）；讀盤的關係檢查對兩種形狀各判各的
- * （`session-relationships.ts`）。舊檔的 `turn/end` 只有不帶 `reason` 與 `aborted` 兩種，照驗。
+ * （`session-relationships.ts`）。54 以前寫得出的 `turn/end` 理由（不帶、`aborted`、`max-tokens`、`blocked`、`interrupted`）都在驗證認得的
+ * 範圍裡，照驗。
  * **回滾的後果**同 52：被 55 碰過的 thread，54 的 runtime 以格式太新拒讀。
  */
 export const SESSION_LOG_FORMAT_VERSION = 55;

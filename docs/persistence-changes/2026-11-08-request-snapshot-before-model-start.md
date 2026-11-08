@@ -41,7 +41,7 @@ changes:
 <a id="compatibility"></a>
 ## 相容性
 
-升版。新讀方讀舊紀錄：讀方以有沒有 `modelCall` 分快照的形狀（`packages/nexus-core/src/session-relationships.ts:168`），54 以前帶 `modelCall` 的只檢它指得到 `model/start`，不套新的位置規則；54 的產品路徑上快照一定帶 `modelCall`（兩顆中介層只在 `fold.ts` 一起掛、用同一個 `forCall`，`modelCalls` 在外層，eab4b1c6）。54 寫的 `assistant/attempt` 本來就落在失敗收尾之後、輪內，過得了新規則；54 以前的 `turn/end` 理由都在白名單內。續接照 53 的規則遷成 `session.v55.jsonl`。舊讀方（develop eab4b1c6）讀新紀錄：世代檔與墓碑的版號 55 比它認得的新，報格式不支援、不當損壞、不截尾、不覆寫；退回舊版之後，55 寫的會話在舊版打不開。升版的理由是沿用版號慣例（事件的形狀與讀盤規則都變了，拿版號當拒絕訊號），不是 54 的讀方非讀錯不可：54 的軌跡與 token-meter 照位置歸屬讀 55 的快照不會錯，`max-turns` 也還沒有生產者。
+升版。新讀方讀舊紀錄：讀方以有沒有 `modelCall` 分快照的形狀（`packages/nexus-core/src/session-relationships.ts:168`），54 以前帶 `modelCall` 的只檢它指得到 `model/start`，不套新的位置規則；54 的產品路徑上快照一定帶 `modelCall`（兩顆中介層只在 `fold.ts` 一起掛、用同一個 `forCall`，`modelCalls` 在外層，eab4b1c6）。54 寫的 `assistant/attempt` 本來就落在失敗收尾之後、輪內，過得了新規則；54 以前的 `turn/end` 理由都在白名單內。續接照 53 的規則遷成 `session.v55.jsonl`。舊讀方（develop eab4b1c6）讀新紀錄：世代檔與墓碑的版號 55 比它認得的新，報格式不支援、不當損壞、不截尾、不覆寫；退回舊版之後，55 寫的會話在舊版打不開。非升不可的是 `turn/end` 的 `max-turns`：54 的讀方認不得的收尾理由一律當成正常完成（軌跡與 token-meter 的 `endOf` 落到 `default`，對話史畫成完成或停在核准點等人，eab4b1c6），#2359 會在 55 之下寫它、之後不再為它升版，所以要讓 54 的讀方以格式太新拒讀；寫入與讀盤驗 `reason` 是同一件事。快照與嘗試的位置單看不必升：54 的軌跡與 token-meter 照位置讀不帶 `modelCall` 的快照照樣歸對。
 
 <a id="verification"></a>
 ## 驗證
