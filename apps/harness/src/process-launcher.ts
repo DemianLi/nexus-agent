@@ -407,7 +407,9 @@ export function launchProcessModel(context: LaunchContext): false {
   }
   const host = join(dirname(supervisor), HOST_BINARY_NAME);
   if (!existsSync(host)) {
-    throw new Error(`找不到宿主（監督行程旁邊的 ${HOST_BINARY_NAME}，${host}）：兩支要放在同一個目錄`);
+    throw new Error(
+      `找不到宿主（監督行程旁邊的 ${HOST_BINARY_NAME}，${host}）：兩支要放在同一個目錄`,
+    );
   }
   const hazards = pdeathsigHazards([
     { label: 'node', path: process.execPath },

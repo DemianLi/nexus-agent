@@ -12,6 +12,7 @@ import {
   decodeConversationReport,
   encodeConversationCommand,
   frame,
+  PROTOCOL_VERSION,
   takeFrames,
 } from './supervisor-protocol.js';
 import type { ConversationCommand, ConversationReport } from './supervisor-protocol.js';
@@ -19,8 +20,10 @@ import type { ConversationCommand, ConversationReport } from './supervisor-proto
 interface Harness {
   readonly control: ConversationControl;
   readonly input: PassThrough;
-  /** 到目前為止 stdout 上的每一則回報；呼叫一次就清掉。 */
+  /** 到目前為止 stdout 上的每一則回報，不含一起來就送的 `hello`；呼叫一次就清掉。 */
   reports(): ConversationReport[];
+  /** 同 `reports`，含 `hello`。 */
+  rawReports(): ConversationReport[];
   send(command: ConversationCommand): void;
   readonly state: { idle: boolean; lastActiveAt: number; ready: boolean };
   readonly opened: string[];
@@ -38,7 +41,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(open: (threadId: string) => Promise<void> = async () => undefined): Harness {
+const TOKEN = '00112233445566778899aabbccddeeff';
+
+/** `hello`：先替監督行程送一顆版本相等的 `hello`；預設送。 */
+function harness(
+  open: (threadId: string) => Promise<void> = async () => undefined,
+  hello = true,
+): Harness {
   const input = new PassThrough();
   const output = new PassThrough();
   let pending: Buffer = Buffer.alloc(0);
@@ -53,7 +62,7 @@ function harness(open: (threadId: string) => Promise<void> = async () => undefin
     ended: 0,
     warnings: [] as string[],
     clock: 1_000,
-  } as Omit<Harness, 'control' | 'reports' | 'send'> & Partial<Harness>;
+  } as Omit<Harness, 'control' | 'reports' | 'rawReports' | 'send'> & Partial<Harness>;
   const handler: ControlledHandler = {
     idleState: () =>
       h.state!.ready ? { idle: h.state!.idle, lastActiveAt: h.state!.lastActiveAt } : undefined,
@@ -79,14 +88,19 @@ function harness(open: (threadId: string) => Promise<void> = async () => undefin
     warn: (message) => h.warnings!.push(message),
   });
   controls.push(control);
+  const rawReports = (): ConversationReport[] => {
+    const { frames, rest } = takeFrames(pending);
+    pending = rest;
+    return frames.map(decodeConversationReport);
+  };
+  const send = (command: ConversationCommand) =>
+    input.write(frame(encodeConversationCommand(command)));
+  if (hello) send({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
   return Object.assign(h, {
     control,
-    reports: () => {
-      const { frames, rest } = takeFrames(pending);
-      pending = rest;
-      return frames.map(decodeConversationReport);
-    },
-    send: (command: ConversationCommand) => input.write(frame(encodeConversationCommand(command))),
+    rawReports,
+    reports: () => rawReports().filter((report) => report.type !== 'hello'),
+    send,
   }) as Harness;
 }
 
@@ -300,5 +314,42 @@ describe('stdin', () => {
       { type: 'ready' },
       { type: 'bound', threadId: '長一點的-thread' },
     ]);
+  });
+});
+
+describe('hello', () => {
+  it('一建構就先送自己的 hello；監督行程的 hello 帶來 token，之後照常 bind', async () => {
+    const h = harness(undefined, false);
+    await settle();
+    expect(h.rawReports()).toEqual([{ type: 'hello', version: PROTOCOL_VERSION }]);
+    expect(h.control.hostToken).toBeUndefined();
+    h.send({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
+    await settle();
+    expect(h.control.hostToken).toBe(TOKEN);
+    await bound(h);
+  });
+
+  it.each<[string, ConversationCommand]>([
+    ['不是 hello', { type: 'bind', threadId: 't1' }],
+    ['版本不對', { type: 'hello', version: PROTOCOL_VERSION + 1, token: TOKEN }],
+  ])('第一框%s：當成解不開的框，結束、記一行，之後的框不理', async (_name, first) => {
+    const h = harness(undefined, false);
+    h.control.ready();
+    h.send(first);
+    h.send({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
+    h.send({ type: 'bind', threadId: 't1' });
+    await settle();
+    expect(h.ended).toBe(1);
+    expect(h.opened).toEqual([]);
+    expect(h.control.hostToken).toBeUndefined();
+    expect(h.warnings).toEqual([expect.stringContaining('第一框要是版本')]);
+  });
+
+  it('之後又來的 hello 不換 token、記一行', async () => {
+    const h = harness();
+    h.send({ type: 'hello', version: PROTOCOL_VERSION, token: 'ffeeddccbbaa99887766554433221100' });
+    await settle();
+    expect(h.control.hostToken).toBe(TOKEN);
+    expect(h.warnings).toEqual([expect.stringContaining('又送了一次 hello')]);
   });
 });

@@ -7,28 +7,63 @@ import {
   decodeFrontRequest,
   encodeFrontEvent,
   frame,
+  PROTOCOL_VERSION,
   takeFrames,
   type DeathCause,
   type FrontEvent,
   type FrontRequest,
 } from './supervisor-protocol.js';
 
-function harness(onDown?: (threadId: string, cause: DeathCause, socket?: string) => void) {
+const TOKEN = '00112233445566778899aabbccddeeff';
+
+interface HarnessOptions {
+  readonly onStopAdmission?: () => void;
+  /** 先替監督行程送一顆版本相等的 `hello`；預設送。 */
+  readonly hello?: boolean;
+}
+
+/** `sent` 不含前台一起來就送的那顆 `hello`，`raw` 含。 */
+function harness(
+  onDown?: (threadId: string, cause: DeathCause, socket?: string) => void,
+  options: HarnessOptions = {},
+) {
   const input = new PassThrough();
   const output = new PassThrough();
   let pending = Buffer.alloc(0);
+  const raw: FrontRequest[] = [];
   const sent: FrontRequest[] = [];
+  const warnings: string[] = [];
   output.on('data', (chunk: Buffer) => {
     const taken = takeFrames(Buffer.concat([pending, chunk]));
     pending = Buffer.from(taken.rest);
-    for (const payload of taken.frames) sent.push(decodeFrontRequest(payload));
+    for (const payload of taken.frames) {
+      const request = decodeFrontRequest(payload);
+      raw.push(request);
+      if (request.type !== 'hello') sent.push(request);
+    }
   });
-  const client = new SupervisorClient({ input, output, ...(onDown && { onDown }) });
+  const client = new SupervisorClient({
+    input,
+    output,
+    ...(onDown && { onDown }),
+    ...(options.onStopAdmission && { onStopAdmission: options.onStopAdmission }),
+    warn: (message) => warnings.push(message),
+  });
+  if (options.hello !== false) {
+    input.write(
+      frame(encodeFrontEvent({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN })),
+    );
+  }
   return {
     client,
+    raw,
     sent,
+    warnings,
     emit(event: FrontEvent) {
       input.write(frame(encodeFrontEvent(event)));
+    },
+    emitRaw(bytes: Buffer) {
+      input.write(bytes);
     },
     end() {
       input.end();
@@ -120,9 +155,72 @@ describe('SupervisorClient', () => {
   it('一框拆成好幾段送來也解得開', async () => {
     const input = new PassThrough();
     const client = new SupervisorClient({ input, output: new PassThrough() });
-    const bytes = frame(encodeFrontEvent({ type: 'up', threadId: 't1', socket: '/run/c1.sock' }));
+    const bytes = Buffer.concat([
+      frame(encodeFrontEvent({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN })),
+      frame(encodeFrontEvent({ type: 'up', threadId: 't1', socket: '/run/c1.sock' })),
+    ]);
     for (const byte of bytes) input.write(Buffer.from([byte]));
     await tick();
+    expect(client.hostToken).toBe(TOKEN);
     expect(client.socketOf('t1')).toBe('/run/c1.sock');
+  });
+});
+
+describe('hello', () => {
+  it('一建構就先送自己的 hello；監督行程的 hello 帶來 token', async () => {
+    const h = harness(undefined, { hello: false });
+    await tick();
+    expect(h.raw).toEqual([{ type: 'hello', version: PROTOCOL_VERSION }]);
+    expect(h.client.hostToken).toBeUndefined();
+    h.emit({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
+    await tick();
+    expect(h.client.hostToken).toBe(TOKEN);
+  });
+
+  it.each<[string, FrontEvent]>([
+    ['不是 hello', { type: 'up', threadId: 't1', socket: '/run/c1.sock' }],
+    ['版本不對', { type: 'hello', version: PROTOCOL_VERSION + 1, token: TOKEN }],
+  ])('第一框%s：控制通道當成斷了', async (_name, first) => {
+    const h = harness(undefined, { hello: false });
+    const ensured = h.client.ensure('t1', 'run');
+    h.emit(first);
+    await expect(ensured).rejects.toBeInstanceOf(SupervisorGoneError);
+    expect(h.client.socketOf('t1')).toBeUndefined();
+    expect(h.client.hostToken).toBeUndefined();
+    expect(h.warnings).toEqual([expect.stringContaining('第一框不是')]);
+  });
+
+  it('第一框解不開：控制通道當成斷了', async () => {
+    const h = harness(undefined, { hello: false });
+    const ensured = h.client.ensure('t1', 'run');
+    h.emitRaw(frame(Buffer.from([0x7f])));
+    await expect(ensured).rejects.toBeInstanceOf(SupervisorGoneError);
+    expect(h.warnings).toEqual([expect.stringContaining('第一框解不開')]);
+  });
+
+  it('之後又來的 hello 不換 token、記一行', async () => {
+    const h = harness();
+    h.emit({ type: 'hello', version: PROTOCOL_VERSION, token: 'ffeeddccbbaa99887766554433221100' });
+    await tick();
+    expect(h.client.hostToken).toBe(TOKEN);
+    expect(h.warnings).toEqual([expect.stringContaining('又收到一次 hello')]);
+  });
+});
+
+describe('stop-admission', () => {
+  it('先停收，再回 admission-stopped', async () => {
+    const order: string[] = [];
+    const h = harness(undefined, { onStopAdmission: () => order.push('stopped') });
+    h.emit({ type: 'stop-admission' });
+    await tick();
+    expect(order).toEqual(['stopped']);
+    expect(h.sent).toEqual([{ type: 'admission-stopped' }]);
+  });
+
+  it('沒給 onStopAdmission 也照回', async () => {
+    const h = harness();
+    h.emit({ type: 'stop-admission' });
+    await tick();
+    expect(h.sent).toEqual([{ type: 'admission-stopped' }]);
   });
 });

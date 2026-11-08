@@ -42,6 +42,7 @@ import {
   decodeConversationReport,
   encodeConversationCommand,
   frame,
+  PROTOCOL_VERSION,
   takeFrames,
 } from './supervisor-protocol.js';
 import type { ConversationCommand, ConversationReport } from './supervisor-protocol.js';
@@ -111,7 +112,7 @@ async function conversation(
     reports: () => {
       const { frames, rest } = takeFrames(pending);
       pending = rest;
-      return frames.map(decodeConversationReport);
+      return frames.map(decodeConversationReport).filter(({ type }) => type !== 'hello');
     },
     idleReports: () =>
       process.reports().filter(({ type }) => type !== 'turn' && type !== 'heartbeat'),
@@ -121,6 +122,11 @@ async function conversation(
     },
   };
   running.push(process);
+  await process.send({
+    type: 'hello',
+    version: PROTOCOL_VERSION,
+    token: '00112233445566778899aabbccddeeff',
+  });
   control.ready();
   await process.send({ type: 'bind', threadId: 't1' });
   await until(() => r.created.length === 1);

@@ -1633,7 +1633,7 @@ nexus-agent serve --process-model per-thread
 
 - 旗標蓋過設定列；起動期讀一次，改了要重啟。關掉這一列就是 `single`。
 - **只在 Linux 起得來**，其他平台起動就停下來講原因。
-- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去。
+- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去；宿主 `nexus-host` 也要放在它旁邊（見〈宿主 `nexus-host`〉）。
 - **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
 - 前台與對話行程之間走 home 底下 `run/` 的 Unix socket，目錄權限 0700；監督行程的稽核紀錄寫在 home 的 `supervisor-audit.jsonl`。
 - `thread-capacity` 的 `idleEvictAfterMs` 交給監督行程：對話行程閒置這麼久就收掉（`0` 不收）。
