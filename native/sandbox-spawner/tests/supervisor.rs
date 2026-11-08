@@ -1592,7 +1592,7 @@ fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits
         "{:?}",
         host_log(&h)
     );
-    let expected = format!("[nexus-supervisor] 警告：宿主拒了 pid {a_pid} 的連線 #7：表還在路上，或是這個號碼上一個行程留下的連線；不隔離、不寫稽核");
+    let expected = format!("[nexus-supervisor] 警告：宿主拒了 pid {a_pid} 的連線 #7：表還在路上，或是撤銷之前就連上的連線；不隔離、不寫稽核");
     assert!(wait_until(|| supervisor_stderr(&h).lines().any(|l| l == expected)), "{}", supervisor_stderr(&h));
     assert_eq!(h.audit().iter().filter(|l| l.contains("\"event\":\"protocol\"")).count(), 0, "{:?}", h.audit());
 }

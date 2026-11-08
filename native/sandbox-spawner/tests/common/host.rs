@@ -126,19 +126,10 @@ pub fn violation(pid: u32, reason: &str) -> HostReport {
     HostReport::Violation { pid, reason: reason.as_bytes().to_vec() }
 }
 
-/// 送 `hello` 被拒的那一種，連線編號記 0：跟 [`ignoring_conn`] 處理過的回報比。
-pub fn unregistered(pid: u32) -> HostReport {
-    unregistered_because(pid, "沒有登記")
-}
-
-pub fn unregistered_because(pid: u32, reason: &str) -> HostReport {
-    HostReport::Unregistered { pid, conn: 0, reason: reason.as_bytes().to_vec() }
-}
-
-/// `unregistered` 的連線編號換成 0，只比 pid。編號本身另有測試。
-pub fn ignoring_conn(report: Option<HostReport>) -> Option<HostReport> {
-    report.map(|report| match report {
-        HostReport::Unregistered { pid, reason, .. } => HostReport::Unregistered { pid, conn: 0, reason },
-        other => other,
-    })
+/// `unregistered` 回報的 pid 與理由；收到別種回報就 panic。
+pub fn unregistered(report: Option<HostReport>) -> Option<(u32, String)> {
+    match report? {
+        HostReport::Unregistered { pid, reason, .. } => Some((pid, String::from_utf8(reason).unwrap())),
+        other => panic!("不是 unregistered：{other:?}"),
+    }
 }

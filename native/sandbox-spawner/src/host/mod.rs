@@ -13,12 +13,12 @@
 //! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就先殺掉宿主的群組，再收屍），pid 被重用之後才 `connect()` 的連線，
 //! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。反過來，宿主讀到監督行程的 `revoke` 時，那個 pid 上已經連上的連線（已 accept 的，
 //! 與還在 listen backlog 的）全部記成撤過，之後它們送什麼都只回 `rejected`、報 `unregistered`，不照同一個號碼後來的登記驗，也不撤那一筆。
-//! accept 出錯時沒收進來的不算在內；起來時把開檔數的軟上限拉到硬上限，就是為了不在這裡用完 fd。pid 被重用得比宿主讀 pipe 還快時，
+//! accept 出錯而沒收進來的連線不會記成撤過，之後被 accept 時照當下的表驗；起來時把開檔數的軟上限拉到硬上限，就是為了不在這裡用完 fd。pid 被重用得比宿主讀 pipe 還快時，
 //! 新行程先連上的連線也會這樣被拒，要重連（它不會被隔離）。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
 //! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程把那個身分隔離到行程結束：
-//! 之後不再重送；排著沒寫出去的那一筆 `grant` 後面，它會補一筆 `revoke`。
+//! 之後重送的表裡不再有它；宿主 `ready` 了、沒在收的，再送一筆 `revoke`，蓋掉可能還排在監督行程那邊、沒寫出去的 `grant`（這一筆也照上面收 backlog）。
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
 //! 宿主自己不因為任何一條連線結束。
 //!
@@ -56,7 +56,7 @@ struct Grant {
 }
 
 struct Conn {
-    /// 這個宿主行程裡依 accept 的順序編的號，從 1 起；log 與 `unregistered` 都寫它。
+    /// 這個宿主行程裡依 accept 的順序編的號，從 1 起；拒絕時的 log 與 `unregistered` 都寫它。
     id: u32,
     chan: Chan,
     /// `SO_PEERCRED` 的 pid；取不到或 uid 不同是 `None`，它的 `hello` 一律不收。
@@ -74,7 +74,7 @@ struct Host {
     listener: UnixListener,
     grants: HashMap<u32, Grant>,
     conns: Vec<Conn>,
-    /// 上一條連線的編號。
+    /// 最後一條 accept 的連線的編號，還沒有是 0。
     last_conn: u32,
 }
 
@@ -225,8 +225,8 @@ impl Host {
                             self.grants.insert(pid, Grant { token, role, thread });
                         }
                         Ok(HostCommand::Revoke { pid }) => {
-                            // 收屍前送的：那個行程已經死了，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡。
-                            // 先收完 backlog（不管連線數上限）才抓得齊；每次最多多收一個 backlog，沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
+                            // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
+                            // 都先收完 backlog（不管連線數上限）才抓得齊；每一筆最多超收一個 backlog 的量，沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
                             self.accept(usize::MAX);
                             self.revoke(pid);
                         }
@@ -253,6 +253,10 @@ impl Host {
     fn serve(&mut self) -> i32 {
         let listen_fd = self.listener.as_raw_fd();
         loop {
+            // 驗 `hello` 與判違規時的那一讀也可能讀到 EOF：讀端關了就不再 poll 它，沒有等 `hello` 的連線時會一直等下去。
+            if self.control.read_closed() {
+                return 0;
+            }
             let now = Instant::now();
             let deadline = self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).min();
             let (read, write) = self.control.poll_fds();
