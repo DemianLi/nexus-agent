@@ -59,8 +59,9 @@ export const KNOWN_DIFFERENCE_KINDS = {
   unregisteredCell: {
     card: 2363,
     reason:
-      '這一條用 plugin 把摘要器換成基座 langchain 原版的 `SummarizationMiddleware`（同名取代）。基座那顆的 `wrapModelCall` 沒有登記一步，' +
-      'native 建構時就拋（`packages/nexus-core/src/native-loop/agent.ts` 的建構檢查）。出貨組裝沒有這種組法（`native-shipped-cells.test.ts`）。',
+      '這一條掛了一顆沒登記一步的外部 plugin 格：換上基座 langchain 原版的 `SummarizationMiddleware`（同名取代），或不 import core 的 ' +
+      '`.mjs` plugin 直接寫 `wrapModelCall`。native 建構時就拋（`packages/nexus-core/src/native-loop/agent.ts` 的建構檢查）。' +
+      '出貨組裝沒有這種組法（`native-shipped-cells.test.ts`）。',
   },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;
 
@@ -1047,6 +1048,36 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/measure/cordis-1386/compat.test.ts',
     test: '相容層讓出貨清單原樣跑（#1386 ②） > serve 清單：請求、工具、middleware、命令逐位元組相同',
     kind: 'langgraphInternals',
+    run: 'fails',
+  },
+  {
+    file: 'src/measure/old-thread-disposal.test.ts',
+    test: '仍在用舊版插件的 thread > 問題 1：header 的插件清單分得出誰用哪一版；線上的列表分不出',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/measure/old-thread-disposal.test.ts',
+    test: '仍在用舊版插件的 thread > 問題 2a：取消之後那一輪正常收尾，關機不再動日誌',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/measure/old-thread-disposal.test.ts',
+    test: '仍在用舊版插件的 thread > 問題 2b：取消之後同一條 thread 照收新輸入，而且照用 v1',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/measure/old-thread-disposal.test.ts',
+    test: '仍在用舊版插件的 thread > 問題 2c：不取消直接關機，日誌停在進行中的那一輪，仍讀得完',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/measure/old-thread-disposal.test.ts',
+    test: '仍在用舊版插件的 thread > 問題 3：換成 v2 之後 resume，走的是 v2、歷史完整；header 不更新，另記的 session/resumed 才是現在',
+    kind: 'unregisteredCell',
     run: 'fails',
   },
   {
