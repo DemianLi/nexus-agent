@@ -374,9 +374,9 @@ function recordToolCall(
   };
   // 寫不進去原錯當場拋，見上面。
   log.append('tool/call', call);
-  // 停在提問上的呼叫不從頭重進（等人服務，`human-input.ts`）：拿到答覆時同一顆再記一次，結果才跟呼叫落在接回那一輪
-  // （見 `session-log.ts` 的 `tool/call`：配對取最後那一顆）。重進的那條路由上面那一行記。
-  const unlisten = humanInputOf(where)?.onAnswered(() => log.append('tool/call', call));
+  // 停在提問上的呼叫不從頭重進（等人服務，`human-input.ts`）：接回時同一顆再記一次，日誌同從頭重進的那條路，結果也才跟呼叫落在
+  // 同一輪（見 `session-log.ts` 的 `tool/call`：配對取最後那一顆）。從頭重進的那條（LangGraph 的 `interrupt()`）由上面那一行記。
+  const unlisten = humanInputOf(where)?.onResumed(() => log.append('tool/call', call));
   const runId = spawnedSubagentRunId(where);
   // 子代理的輸入：`task` 與前景的 `subagent`（會被改寫成 `task`）都以 `description` 當那一句話。
   const { args } = request.toolCall;

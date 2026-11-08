@@ -5,14 +5,14 @@
  * `vitest.config.ts`（`langgraph`）與 `vitest.native.config.ts`（`native`）下各跑一次，斷言兩個 loop 共用；只有 native 才有的
  * （掛著的呼叫被收掉、本體只進一次）照 {@link NATIVE} 分開寫。
  *
- * 量的是：掛起與答覆、`no_such_interrupt`、一批兩顆分兩次答、停在中斷上按停止、接回之後那一段按停止與逾時、閒置驅逐、
- * 收線與重開。
- *
- * 突變（量過，見 PR 內文）：
- * - 拿掉 pump `#withdraw` 收掉掛著的 run：「停在中斷上按停止」那條紅；
- * - 拿掉 pump `close()` 收掉掛著的 run：「收線與重開」那條紅；
- * - 拿掉 native 接回時換上那一段的中止訊號：「接回之後那一段」的兩條紅；
- * - 拿掉閒置判定的「沒有掛著的中斷」：閒置驅逐那條紅。
+ * 突變（量過，見 PR 內文；都在 native 下量：`langgraph` 讀不到服務，這幾處它不經過）：
+ * - 拿掉 pump `#withdraw` 收掉掛著的 run：屏障「停在前一顆的提問上按停止」、「停在中斷上按停止」、「同一批還有一顆在跑」紅；
+ * - 拿掉 pump `close()` 收掉掛著的 run：「收線與重開」紅；
+ * - 拿掉 native 接回時換上那一段的中止訊號：屏障「前一顆拿到答覆後被中止」、「接回之後那一段按停止」、「一輪的時鐘」紅；
+ * - 拿掉閒置判定的「沒有掛著的中斷」：「閒置驅逐」紅；
+ * - 拿掉屏障的 `idle`：「兩顆 exclusive 核准，分兩次答」與屏障四條掛到逾時；
+ * - 拿掉圍堵接回時補記 `tool/call`：「問一題」與「日誌整串對齊」三條紅；
+ * - 補記只給答到的那顆：「一批兩顆核准，只答一顆」紅。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -49,6 +49,10 @@ import type { IdleSweepingWireHandler } from './wire-handler.js';
 const NATIVE = process.env['NEXUS_TEST_AGENT_LOOP'] === 'native';
 
 const ASK = 'ask_probe';
+/** 同一個提問工具，但不宣告可並行：同一步兩顆照模型順序一顆一顆跑（屏障，`tool-barrier.ts`）。 */
+const ASK_EXCLUSIVE = 'ask_exclusive';
+/** 不問人，一直等到這一輪的中止訊號舉起來才回（{@link Probe.holdAfterAbort} 給了就再等它）。 */
+const HOLD = 'hold_probe';
 const BASE_URL = 'http://human-input.test';
 const TIMEOUT_MS = 1_000;
 const GRACE_MS = 50;
@@ -62,41 +66,74 @@ interface Probe {
   withdrawn: number;
   /** 拿到答覆之後、回結果之前：給了就等它。 */
   afterAnswer?: (config: unknown) => Promise<void>;
+  /** {@link HOLD} 的本體進來時叫。 */
+  onHold?: () => void;
+  /** 給了，{@link HOLD} 收到中止之後還要等它才回（不理中止的工具）。 */
+  holdAfterAbort?: Promise<void>;
 }
+
+/** 答覆是這個字串時，提問工具拿到答覆後拋錯（像被拒絕的核准，那顆呼叫以錯誤收）。 */
+const REFUSE = '拒絕';
 
 function newProbe(): Probe {
   return { entered: 0, answers: [], withdrawn: 0 };
 }
 
 function askPlugin(probe: Probe): PluginEntry {
+  const body = async (
+    { q, approval }: { q: string; approval?: boolean | undefined },
+    config: unknown,
+  ): Promise<string> => {
+    probe.entered += 1;
+    // 線上的折疊器認得的兩種形狀：問答（`kind: 'question'`），或核准（`kind: 'approval'`，pump 為它記
+    // `approval/asked`／`approval/decided`）。
+    const question =
+      approval === true
+        ? {
+            kind: 'approval',
+            actionRequests: [{ name: ASK, args: { q } }],
+            reviewConfigs: [{ actionName: ASK, allowedDecisions: ['approve', 'reject'] }],
+          }
+        : { kind: 'question', questions: [{ id: q, question: q }] };
+    const service = humanInputOf(config);
+    let answer: unknown;
+    try {
+      answer = service === undefined ? interrupt(question) : await service.ask(question);
+    } catch (error) {
+      if (isHumanInputWithdrawn(error)) probe.withdrawn += 1;
+      throw error;
+    }
+    probe.answers.push(answer);
+    if (answer === REFUSE) throw new Error(`「${q}」被拒絕`);
+    await probe.afterAnswer?.(config);
+    return `答覆：${JSON.stringify(answer)}`;
+  };
+  const schema = z.object({ q: z.string(), approval: z.boolean().optional() });
+  // 同一步兩顆可以一起問（同 `pending-replay.test.ts` 的兩顆核准）。
+  const parallel = { [CONCURRENCY_SAFE_METADATA_KEY]: true };
   return {
     plugin: {
       name: 'ask-probe',
       apply(registry) {
         registry.tools.register(
+          tool(body, { name: ASK, description: '問人一個問題。', schema, metadata: parallel }),
+        );
+        registry.tools.register(
+          tool(body, { name: ASK_EXCLUSIVE, description: '問人一個問題，一次一顆。', schema }),
+        );
+        registry.tools.register(
           tool(
-            async ({ q }, config) => {
-              probe.entered += 1;
-              // 問答的形狀（`kind: 'question'`），線上的折疊器認得它，不必另造一種卡。
-              const question = { kind: 'question', questions: [{ id: q, question: q }] };
-              const service = humanInputOf(config);
-              let answer: unknown;
-              try {
-                answer = service === undefined ? interrupt(question) : await service.ask(question);
-              } catch (error) {
-                if (isHumanInputWithdrawn(error)) probe.withdrawn += 1;
-                throw error;
-              }
-              probe.answers.push(answer);
-              await probe.afterAnswer?.(config);
-              return `答覆：${JSON.stringify(answer)}`;
+            async (_input, config) => {
+              probe.onHold?.();
+              await untilAborted(config);
+              await probe.holdAfterAbort;
+              return '停了';
             },
             {
-              name: ASK,
-              description: '問人一個問題。',
-              schema: z.object({ q: z.string() }),
-              // 同一步兩顆可以一起問（同 `pending-replay.test.ts` 的兩顆核准）。
-              metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
+              name: HOLD,
+              description: '等到這一輪停下。',
+              schema: z.object({}),
+              metadata: parallel,
             },
           ),
         );
@@ -270,7 +307,8 @@ function pendingOf(session: Session, q?: string) {
   const found = session.state.pendings.find(
     (pending) =>
       q === undefined ||
-      (pending.kind === 'question' && (pending.questions[0] as { id?: unknown })?.id === q),
+      (pending.kind === 'question' && (pending.questions[0] as { id?: unknown })?.id === q) ||
+      (pending.kind === 'approval' && (pending.actions[0]?.args as { q?: unknown })?.q === q),
   );
   if (found === undefined) throw new Error(`沒有掛著的提問${q === undefined ? '' : `「${q}」`}`);
   return found;
@@ -403,22 +441,319 @@ describe('掛起與答覆', () => {
     expect(pendingOf(session).interruptId).toBe(second);
     // 答了的那顆接著跑完、先記它的結果；沒答的那顆照舊掛著。
     expect(
-      rootEvents(session, ['tool/result']).map((event) => (event.data as { callId: string }).callId),
+      rootEvents(session, ['tool/result']).map(
+        (event) => (event.data as { callId: string }).callId,
+      ),
     ).toEqual(['q1']);
 
     await answer(session, 'h3', '二', '第二題');
     await until(session, settled(2));
     expect(probe.answers).toEqual(['一', '二']);
     expect(
-      rootEvents(session, ['tool/result']).map((event) => (event.data as { callId: string }).callId),
+      rootEvents(session, ['tool/result']).map(
+        (event) => (event.data as { callId: string }).callId,
+      ),
     ).toEqual(['q1', 'q2']);
   });
 });
 
-describe('停止', () => {
-  it('停在中斷上按停止：收回那一輪照今天的形狀寫，之後沒有任何晚到的寫入，下一句照常跑', async () => {
+/** 同一步兩顆 exclusive 的提問。 */
+const TWO_EXCLUSIVE: readonly ScriptedTurn[] = [
+  {
+    content: '',
+    toolCalls: [
+      { id: 'e1', name: ASK_EXCLUSIVE, args: { q: '甲' } },
+      { id: 'e2', name: ASK_EXCLUSIVE, args: { q: '乙' } },
+    ],
+  },
+  { content: '兩顆都收到' },
+  { content: '好' },
+];
+
+const APPROVE = { decisions: [{ type: 'approve' }] };
+
+/** 等到只掛著「q」那一顆，而且 pump 收完了第 `turns` 輪。 */
+async function untilAsked(session: Session, q: string, turns: number): Promise<void> {
+  await until(session, (s) => {
+    if (!awaiting(1)(s)) return false;
+    try {
+      pendingOf(s, q);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  await untilLogged(session, 'turn/end', turns);
+}
+
+/** 日誌整串的形狀：每顆事件的種類，帶 `callId` 或 `kind` 的再帶上它。 */
+function shapeOf(session: Session): string[] {
+  return rootEvents(session).map((event) => {
+    const data = event.data as { callId?: unknown; kind?: unknown; outcome?: unknown };
+    const tag = data.callId ?? data.kind ?? data.outcome;
+    return typeof tag === 'string' ? `${event.type}:${tag}` : event.type;
+  });
+}
+
+/** 同一個 `callId` 的每一顆 `tool/call`，逐欄位相同（接回那一輪補記的那顆，對 langgraph 是重進時記的那顆）。 */
+function expectSameCalls(session: Session, callId: string, count: number): void {
+  const calls = rootEvents(session, ['tool/call']).filter(
+    (event) => (event.data as { callId: string }).callId === callId,
+  );
+  expect(calls).toHaveLength(count);
+  for (const call of calls) expect(call.data).toEqual(calls[0]?.data);
+}
+
+const MODEL_ROUND = ['model/start', 'assistant/message', 'model/end', 'context/measure'];
+const OPENING = [
+  'inbox/spliced',
+  'turn/start:message',
+  'inbox/spliced',
+  'session/title',
+  'request/system',
+  'request/header',
+];
+
+describe('日誌整串對齊：兩個 loop 同一個情境，事件的種類與順序一樣', () => {
+  it('單顆核准', async () => {
     const probe = newProbe();
-    const session = await open('s1', [...ONE_QUESTION.slice(0, 1), { content: '好，換一題' }], probe);
+    const session = await open(
+      'a1',
+      [
+        {
+          content: '',
+          toolCalls: [{ id: 'p1', name: ASK, args: { q: '可以嗎', approval: true } }],
+        },
+        { content: '收到' },
+      ],
+      probe,
+    );
+    await untilAsked(session, '可以嗎', 1);
+    await answer(session, 'a1', APPROVE, '可以嗎');
+    await until(session, settled(2));
+    await untilLogged(session, 'turn/end', 2);
+
+    expect(shapeOf(session)).toEqual([
+      ...OPENING,
+      ...MODEL_ROUND,
+      'tool/call:p1',
+      'interrupt/raised',
+      'approval/asked',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided:allowed-once',
+      'tool/call:p1',
+      'tool/result:p1',
+      ...MODEL_ROUND,
+      'turn/end',
+    ]);
+    expectSameCalls(session, 'p1', 2);
+    expect(rootEvents(session, ['tool/call'])[0]?.data).toEqual({
+      callId: 'p1',
+      name: ASK,
+      arguments: JSON.stringify({ q: '可以嗎', approval: true }),
+    });
+  });
+
+  it('兩顆 exclusive 核准，分兩次答', async () => {
+    const probe = newProbe();
+    const session = await open(
+      'a2',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { id: 'e1', name: ASK_EXCLUSIVE, args: { q: '甲', approval: true } },
+            { id: 'e2', name: ASK_EXCLUSIVE, args: { q: '乙', approval: true } },
+          ],
+        },
+        { content: '收到' },
+      ],
+      probe,
+    );
+    await untilAsked(session, '甲', 1);
+    await answer(session, 'a2', APPROVE, '甲');
+    await untilAsked(session, '乙', 2);
+    await answer(session, 'a2', APPROVE, '乙');
+    await until(session, settled(2));
+    await untilLogged(session, 'turn/end', 3);
+
+    expect(shapeOf(session)).toEqual([
+      ...OPENING,
+      ...MODEL_ROUND,
+      'tool/call:e1',
+      'interrupt/raised',
+      'approval/asked',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided:allowed-once',
+      'tool/call:e1',
+      'tool/result:e1',
+      'tool/call:e2',
+      'interrupt/raised',
+      'approval/asked',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided:allowed-once',
+      'tool/call:e2',
+      'tool/result:e2',
+      ...MODEL_ROUND,
+      'turn/end',
+    ]);
+    expectSameCalls(session, 'e1', 2);
+    expectSameCalls(session, 'e2', 2);
+  });
+
+  it('一批兩顆核准，只答一顆、再答另一顆', async () => {
+    const probe = newProbe();
+    const session = await open(
+      'a3',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { id: 'p1', name: ASK, args: { q: '一', approval: true } },
+            { id: 'p2', name: ASK, args: { q: '二', approval: true } },
+          ],
+        },
+        { content: '收到' },
+      ],
+      probe,
+    );
+    await until(session, awaiting(2));
+    await untilLogged(session, 'turn/end', 1);
+    await answer(session, 'a3', APPROVE, '一');
+    await untilAsked(session, '二', 2);
+    await answer(session, 'a3', APPROVE, '二');
+    await until(session, settled(2));
+    await untilLogged(session, 'turn/end', 3);
+
+    // 第一次接回時沒答到的 p2 也再記一顆：langgraph 把同一批還沒收完的都從頭重進。
+    expect(shapeOf(session)).toEqual([
+      ...OPENING,
+      ...MODEL_ROUND,
+      'tool/call:p1',
+      'tool/call:p2',
+      'interrupt/raised',
+      'approval/asked',
+      'interrupt/raised',
+      'approval/asked',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided:allowed-once',
+      'tool/call:p1',
+      'tool/call:p2',
+      'tool/result:p1',
+      'interrupt/raised',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided:allowed-once',
+      'tool/call:p2',
+      'tool/result:p2',
+      ...MODEL_ROUND,
+      'turn/end',
+    ]);
+    expectSameCalls(session, 'p1', 2);
+    expectSameCalls(session, 'p2', 3);
+  });
+});
+
+describe('屏障：同一步兩顆 exclusive 都問人', () => {
+  it('一次只掛一顆：前一顆答完才輪到後一顆問；兩次都答完才收', async () => {
+    const probe = newProbe();
+    const session = await open('x1', TWO_EXCLUSIVE, probe);
+    await until(session, awaiting(1));
+    expect(pendingOf(session, '甲')).toBeDefined();
+    await untilLogged(session, 'turn/end', 1);
+
+    await answer(session, 'x1', 'A', '甲');
+    await until(
+      session,
+      (s) =>
+        awaiting(1)(s) &&
+        s.state.pendings[0]?.kind === 'question' &&
+        (s.state.pendings[0].questions[0] as { id?: unknown }).id === '乙',
+    );
+    await untilLogged(session, 'turn/end', 2);
+    await answer(session, 'x1', 'B', '乙');
+    await until(session, settled(2));
+
+    expect(probe.answers).toEqual(['A', 'B']);
+  });
+
+  it('前一顆拿到答覆後失敗：後一顆照屏障往下跑、照常問人', async () => {
+    const probe = newProbe();
+    const session = await open('x2', TWO_EXCLUSIVE, probe);
+    await until(session, awaiting(1));
+    await untilLogged(session, 'turn/end', 1);
+
+    await answer(session, 'x2', REFUSE, '甲');
+    await until(
+      session,
+      (s) =>
+        awaiting(1)(s) &&
+        (s.state.pendings[0] as { questions?: { id?: unknown }[] }).questions?.[0]?.id === '乙',
+    );
+    await untilLogged(session, 'turn/end', 2);
+    await answer(session, 'x2', 'B', '乙');
+    await until(session, settled(2));
+
+    expect(probe.answers).toEqual([REFUSE, 'B']);
+  });
+
+  it('前一顆拿到答覆後被中止：後一顆不再等它、照中止的規則收，不留在 idle', async () => {
+    const probe = newProbe();
+    let reached!: () => void;
+    const answered = new Promise<void>((resolve) => (reached = resolve));
+    probe.afterAnswer = (config) => {
+      reached();
+      return untilAborted(config);
+    };
+    const session = await open('x3', TWO_EXCLUSIVE, probe);
+    await until(session, awaiting(1));
+    await untilLogged(session, 'turn/end', 1);
+
+    await answer(session, 'x3', 'A', '甲');
+    await answered;
+    await session.client.runCancel('x3');
+    await until(session, stopped);
+    await untilLogged(session, 'turn/end', 2);
+
+    expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({
+      reason: { kind: 'aborted', cause: { kind: 'user' } },
+    });
+    expect(probe.entered).toBe(NATIVE ? 1 : 2);
+
+    await session.client.runStart('x3', '再來');
+    await until(session, settled(2));
+  });
+
+  it('停在前一顆的提問上按停止：兩顆都放掉，後一顆的本體沒進去過', async () => {
+    const probe = newProbe();
+    const session = await open('x4', TWO_EXCLUSIVE, probe);
+    await until(session, awaiting(1));
+    await untilLogged(session, 'turn/end', 1);
+
+    await session.client.runCancel('x4');
+    await until(session, stopped);
+    await untilLogged(session, 'turn/end', 2);
+
+    expect(probe.entered).toBe(1);
+    expect(probe.withdrawn).toBe(NATIVE ? 1 : 0);
+
+    await session.client.runStart('x4', '再來');
+    await until(session, settled(2));
+  });
+});
+
+describe('停止', () => {
+  it('停在中斷上按停止：收回那一輪照停在核准點時收回的形狀寫（turn/start resume → tool/result → turn/end aborted），之後沒有任何晚到的寫入，下一句照常跑', async () => {
+    const probe = newProbe();
+    const session = await open(
+      's1',
+      [...ONE_QUESTION.slice(0, 1), { content: '好，換一題' }],
+      probe,
+    );
     await until(session, awaiting());
     await untilLogged(session, 'turn/end', 1);
 
@@ -500,6 +835,55 @@ describe('一輪的時鐘', () => {
 
     expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({
       reason: { kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } },
+    });
+  });
+});
+
+describe('一輪的時鐘：同一批還有一顆在跑', () => {
+  it('一顆在問人、一顆不理中止還在跑時到點：等那顆落定，這一批照常停在中斷上；按停止才收掉', async () => {
+    const timers = new ManualTimers();
+    const probe = newProbe();
+    let holding!: () => void;
+    const held = new Promise<void>((resolve) => (holding = resolve));
+    probe.onHold = () => holding();
+    let letGo!: () => void;
+    probe.holdAfterAbort = new Promise<void>((resolve) => (letGo = resolve));
+    const session = await open(
+      't2',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { id: 'q1', name: ASK, args: { q: '哪一個' } },
+            { id: 'h1', name: HOLD, args: {} },
+          ],
+        },
+        { content: '好' },
+      ],
+      probe,
+      { turnClock: { timeoutMs: TIMEOUT_MS, graceMs: GRACE_MS, timers } },
+    );
+    await held;
+    for (let i = 0; i < 1_000 && probe.entered === 0; i += 1) await drain();
+    expect(probe.entered).toBe(1);
+
+    timers.fire(TIMEOUT_MS);
+    await drain();
+    // 中止不砍還在跑的工具，等它落定（`turn-cancel.ts`）：這一輪還沒收。
+    expect(rootEvents(session, ['turn/end'])).toEqual([]);
+    letGo();
+    await until(session, awaiting(1));
+    await untilLogged(session, 'turn/end', 1);
+    // 收尾那顆 frame 是中斷，不是中止：這一輪照停在中斷上收（同 pump「中止照上線那顆收尾 frame 判」）。
+    expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({});
+    expect(probe.withdrawn).toBe(0);
+
+    await session.client.runCancel('t2');
+    await until(session, stopped);
+    await untilLogged(session, 'turn/end', 2);
+    expect(probe.withdrawn).toBe(NATIVE ? 1 : 0);
+    expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({
+      reason: { kind: 'aborted', cause: { kind: 'user' } },
     });
   });
 });

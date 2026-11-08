@@ -2,12 +2,16 @@
  * 等人回答的服務（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：工具呼叫裡要停下來問人的地方，await 這裡的
  * {@link HumanInput.ask}，答覆就是它的回傳值。
  *
- * 由 agent loop 放在節點 config 的 `configurable` 上（{@link HUMAN_INPUT_CONFIG_KEY}），用 {@link humanInputOf} 讀。今天只有 native loop
- * 放（`native-loop/suspension.ts`）；`langgraph` 那條讀不到，照舊用 LangGraph 的 `interrupt()`。
+ * 由 agent loop 放在節點 config 的 `configurable` 上（{@link HUMAN_INPUT_CONFIG_KEY}），用 {@link humanInputOf} 讀。native loop 只在
+ * `streamEvents`、帶 thread 的 run 放（`native-loop/agent.ts` 的 `#toolStep`，服務本身在 `native-loop/suspension.ts`）；`langgraph`
+ * 那條讀不到，用 LangGraph 的 `interrupt()`。
  *
- * 對外的樣子同 `interrupt()`：一顆呼叫問了人、而且同一批其餘的呼叫都停著（在問人，或用 {@link HumanInput.idle} 等著要人答了才會動的
- * 東西）時，這次 run 交出 `updates` 的 `__interrupt__` 就收尾，run 留在記憶體裡等答覆。答覆經 `streamEvents(new Command({ resume }))`
- * 送回同一顆 id，這次 await 接著往下跑，不從頭重跑。
+ * **停在等待點**的定義：同一批起跑了的呼叫裡，沒有一顆在自己往前跑（都在 {@link HumanInput.ask}，或在 {@link HumanInput.idle} 等），
+ * 而且至少一顆在問人。那一刻這一段串流交出 `updates` 的 `__interrupt__` 就收尾，run 留在記憶體裡等答覆，對外的樣子同
+ * `interrupt()`。答覆經 `streamEvents(new Command({ resume }))` 送回同一顆 id，這次 await 接著往下跑，不從頭重跑。
+ *
+ * **都在 `idle`、沒有一顆在問人**照理不會發生：`idle` 等的是要人答了才會動的事，沒人在問就永遠不會動。它判成錯誤，這次 run 以那個錯
+ * 失敗，不靜靜掛著。
  *
  * @module
  */
@@ -23,21 +27,27 @@ export interface HumanInput {
    * 問人，等答覆。
    * @param value - 問題的酬載，原樣交給 `input.requested`，同 `interrupt(value)` 的參數。
    * @returns 人的答覆，同 `interrupt()` 的回傳值。
-   * @throws {HumanInputWithdrawn} 還沒答就被收回（停止、收線）。
+   * @throws {HumanInputWithdrawn} 還沒答就被收回（停止、收線）；收回之後再問也當場拒絕。要原樣往外拋，不要接住：接住了正常回傳，
+   *   這顆呼叫就算完成，寫入照套。
    */
   ask(value: unknown): Promise<unknown>;
   /**
-   * 等一件要人答了才會動的事（例：排在一顆正在問人的呼叫後面）。等的期間這顆呼叫不算在跑，同一批其餘的都停著時照樣交出中斷。
+   * 等一件要人答了才會動的事（例：排在一顆正在問人的呼叫後面，`tool-barrier.ts`）。等的期間這顆呼叫不算在跑，同一批其餘的都停著時
+   * 照樣交出中斷。
    * @param waiting - 要等的那件事。
    * @returns 它的值。
+   * @throws `waiting` 拒絕的那個錯。都在 `idle`、沒有一顆在問人時，以判成的那個錯拒絕。收回時先讓它跟著別顆的拒絕落定，下一個
+   *   `setImmediate` 還沒落定的以 {@link HumanInputWithdrawn} 拒絕。
    */
   idle<T>(waiting: Promise<T>): Promise<T>;
   /**
-   * 這顆呼叫的提問拿到答覆時叫 `listener`，在答覆交回 {@link HumanInput.ask} 之前、同步叫。給記日誌的那一層在接回那一輪補記用。
-   * @param listener - 每拿到一次答覆叫一次。
+   * 這顆呼叫停在 {@link HumanInput.ask} 上、這次 run 被接回時叫 `listener`：這一顆答到了沒都叫（沒答到的照舊掛著），同 LangGraph
+   * 接回時把同一批還沒收完的呼叫都從頭重進一次。同一次接回裡，每一顆的 `listener` 都叫完才交回任何答覆，同步叫。給記日誌的那一層在
+   * 接回那一輪補記用。`listener` 拋錯時，這顆的 `ask` 以同一個錯拒絕。
+   * @param listener - 每接回一次叫一次。
    * @returns 取消登記。
    */
-  onAnswered(listener: () => void): () => void;
+  onResumed(listener: () => void): () => void;
 }
 
 /**
@@ -58,13 +68,14 @@ function isHumanInput(value: unknown): value is HumanInput {
     value !== null &&
     typeof (value as HumanInput).ask === 'function' &&
     typeof (value as HumanInput).idle === 'function' &&
-    typeof (value as HumanInput).onAnswered === 'function'
+    typeof (value as HumanInput).onResumed === 'function'
   );
 }
 
 /**
- * 還沒答就被收回：{@link HumanInput.ask} 以它拒絕。是 `GraphInterrupt`，所以閘門、圍堵、屏障、工具節點都當成控制流往外拋，
- * 不記 `tool/result`、不套寫入；收回那一側自己寫日誌與對話（`apps/harness` 的 pump 的 `#withdraw`）。
+ * 還沒答就被收回：{@link HumanInput.ask} 以它拒絕。是 `GraphInterrupt`，所以閘門、圍堵、屏障都當成控制流往外拋，不記
+ * `tool/result`。不套寫入靠的是 native 的 `#toolStep` 看到收回過了就丟掉這一步。日誌與對話由收回那一側寫：停止時是
+ * `apps/harness` 的 pump 的 `#withdraw`；收線（`close()`）兩樣都不寫。
  */
 export class HumanInputWithdrawn extends GraphInterrupt {
   constructor() {

@@ -17,8 +17,8 @@
  * `Send(model_request)`。
  *
  * 停下來問人：工具呼叫 await 等人服務（`human-input.ts`），同一批都停住時 `streamEvents` 交出中斷、run 留在記憶體裡，用
- * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。今天的生產者還是呼叫
- * LangGraph 的 `interrupt()`，核准管道在組裝點判成 `no-channel`，TODO(#2358)。
+ * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。核准閘門、`ask_user` 這些
+ * 生產者呼叫的是 LangGraph 的 `interrupt()`，native 不接它；核准管道在組裝點判成 `no-channel`，TODO(#2358)。
  *
  * 不支援：`interrupt()`、`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）。子代理仍是 LangGraph 子圖，
  * TODO(#2359)。
@@ -216,11 +216,14 @@ class SignalRelay {
  *
  * - 停在等待點：本體發過 `tool-started` 的那顆補一顆 `tool-error`（訊息是中斷清單，pump 據此換成 `tool-suspended`），接著
  *   `updates` 的 `__interrupt__`、root `lifecycle completed`。
- * - 接回：root `lifecycle running`，還沒答的每一顆重發它的 `tool-started`（LangGraph 從頭重跑那幾顆），再解開答到的那幾顆。
+ * - 接回：root `lifecycle running`，接回前掛著的每一顆（含這次答到的）重發它的 `tool-started`（LangGraph 從頭重跑那幾顆），再解開答到的那幾顆。
  */
 class RunLink {
   #sink: AsyncQueue<NativeProtocolEvent> | undefined;
-  readonly #toolStarts = new Map<string, { readonly namespace: string[]; readonly data: unknown }>();
+  readonly #toolStarts = new Map<
+    string,
+    { readonly namespace: string[]; readonly data: unknown }
+  >();
   readonly emitter = new ProtocolEmitter((event) => this.#deliver(event));
   readonly suspension: RunSuspension;
   /** `#turn` 登記：換上接回那一段的 config。 */
@@ -230,10 +233,13 @@ class RunLink {
    * @param onPark - 停在等待點、這一條串流收尾之後。
    */
   constructor(onPark: (link: RunLink) => void) {
-    this.suspension = new RunSuspension((asks) => {
-      this.#park(asks);
-      onPark(this);
-    });
+    this.suspension = new RunSuspension(
+      (asks) => {
+        this.#park(asks);
+        onPark(this);
+      },
+      (error) => this.fail(error),
+    );
   }
 
   /** 換一條新的串流。 */
@@ -262,7 +268,10 @@ class RunLink {
    * @returns 這一段的串流。
    * @throws {Error} 有一顆 id 不在還沒答的提問裡；這時什麼都還沒動。
    */
-  resume(answers: Readonly<Record<string, unknown>>, config: RunnableConfig): AsyncQueue<NativeProtocolEvent> {
+  resume(
+    answers: Readonly<Record<string, unknown>>,
+    config: RunnableConfig,
+  ): AsyncQueue<NativeProtocolEvent> {
     const pending = this.suspension.pending;
     const unknown = Object.keys(answers).filter((id) => !pending.some((ask) => ask.id === id));
     if (unknown.length > 0) {
@@ -595,8 +604,8 @@ export class NativeAgent {
   }
 
   /**
-   * 收回這條 thread 停在等待點的那次 run：每一顆還沒答的提問以 `HumanInputWithdrawn` 拒絕，run 照控制流退出，**不發事件、不改 state**。
-   * 收回那一側自己寫日誌與對話（pump 的 `#withdraw`）。沒有掛著的 run 就什麼都不做。
+   * 收回這條 thread 停在等待點的那次 run：每一顆還沒答的提問以 `HumanInputWithdrawn` 拒絕，run 照控制流退出，**不發協定事件、不改 state**。
+   * 日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
    * @param config - 帶 `configurable.thread_id`。
    */
   discardSuspended(config: RunnableConfig): void {
@@ -621,7 +630,9 @@ export class NativeAgent {
       command.update !== undefined ||
       (command.goto !== undefined && (!Array.isArray(command.goto) || command.goto.length > 0))
     ) {
-      throw new Error('native agent loop 的 resume 只收逐 id 的答覆：`new Command({ resume: { [中斷 id]: 答覆 } })`');
+      throw new Error(
+        'native agent loop 的 resume 只收逐 id 的答覆：`new Command({ resume: { [中斷 id]: 答覆 } })`',
+      );
     }
     const queue = link.resume(answers as Record<string, unknown>, config);
     this.#parked.delete(threadId);
@@ -703,12 +714,17 @@ export class NativeAgent {
     const segmentSignal = turnCancelSignalOf(config);
     // 會掛起的 run，這一輪的中止訊號換成跨過掛起的那一顆（{@link SignalRelay}），工具與模型讀到的都是它。
     const relay =
-      link !== undefined && segmentSignal !== undefined ? new SignalRelay(segmentSignal) : undefined;
+      link !== undefined && segmentSignal !== undefined
+        ? new SignalRelay(segmentSignal)
+        : undefined;
     const signal = relay?.signal ?? segmentSignal ?? new AbortController().signal;
     const withRelay = (segment: RunnableConfig): RunnableConfig =>
       relay === undefined
         ? segment
-        : { ...segment, configurable: { ...segment.configurable, [TURN_CANCEL_CONFIG_KEY]: relay.signal } };
+        : {
+            ...segment,
+            configurable: { ...segment.configurable, [TURN_CANCEL_CONFIG_KEY]: relay.signal },
+          };
     // 呼叫時給的贏過 `withConfig` 的，同 LangGraph 的 `ensureLangGraphConfig(this.config, options)`。兩格都留在節點的 config 上：
     // 工具裡跑的 LangGraph 子圖（前景子代理）從執行脈絡讀同一個上限。
     const recursionLimit =

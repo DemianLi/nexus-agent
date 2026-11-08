@@ -40,6 +40,7 @@
  */
 
 import { isGraphBubbleUp, GraphInterrupt } from '@langchain/langgraph';
+import { humanInputOf } from './human-input.js';
 import { createToolCallStepMiddleware, wrappedRequestOf } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { SessionLookup } from './registry.js';
@@ -195,6 +196,10 @@ export function createToolBarrierMiddleware(
     const signal = turnCancelSignalOf({
       configurable: request.runtime.configurable,
     });
+    // 等前面那顆的時候不算在跑：前面那顆停在問人上時，這一批才交得出中斷（`human-input.ts` 的 `idle`）。讀不到服務的 loop 直接等。
+    const human = humanInputOf({ configurable: request.runtime.configurable });
+    const wait = <T>(promise: Promise<T>): Promise<T> =>
+      human === undefined ? raceAbort(promise, signal) : human.idle(raceAbort(promise, signal));
     const settle = (outcome: Outcome): void => {
       slot.status = outcome;
       slot.settled.resolve(outcome);
@@ -205,10 +210,10 @@ export function createToolBarrierMiddleware(
       for (let before = 0; before < at; before += 1) {
         const earlier = record.slots[before] as Slot;
         if (earlier.status === 'complete') continue;
-        await raceAbort(earlier.entered.promise, signal);
+        await wait(earlier.entered.promise);
         // 兩顆都是 parallel：不用等。
         if (safe && earlier.safe === true) continue;
-        const outcome = await raceAbort(earlier.settled.promise, signal);
+        const outcome = await wait(earlier.settled.promise);
         if (outcome === 'interrupted') {
           // 前面那顆中斷了：一起退出，不留任何寫入，resume 時重跑（見檔頭）。
           settle('interrupted');

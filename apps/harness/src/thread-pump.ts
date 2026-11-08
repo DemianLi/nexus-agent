@@ -2980,17 +2980,17 @@ export class ThreadPump {
     return 'updated';
   }
 
+  /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
+  #discardSuspended(): void {
+    this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
+  }
+
   /**
    * 那一輪收成了中止：按停止時的請求這時才算數，排著的開新一輪的停住（#637 的 Q2）。
    *
    * 續行那一輪（沒有 `itemId` 的）直接拿掉：中止之後目標不續行（#265 的 Q8），停住它等人再送的話，那時跑的是
    * 一份過期的輪次。
    */
-  /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
-  #discardSuspended(): void {
-    this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
-  }
-
   #parkIfStopped(): void {
     if (!this.#stopRequested) return;
     this.#stopRequested = false;

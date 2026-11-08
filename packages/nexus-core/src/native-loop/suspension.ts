@@ -2,8 +2,15 @@
  * native loop 一次 run 的等人狀態（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：發給每顆工具呼叫的
  * {@link HumanInput}，以及「什麼時候算停在等待點」。
  *
- * **停在等待點**照 LangGraph 的 superstep：同一批起跑了的呼叫裡沒有一顆還在自己往前跑（都在 `ask`，或在 `idle` 等），而且至少一顆
- * 在 `ask`。判定排在 `setImmediate` 之後再看一次：一顆呼叫收完到上限放下一顆起跑之間隔著幾個 microtask，那一拍數到的 0 不算。
+ * **停在等待點**的定義：同一批起跑了的呼叫裡，沒有一顆在自己往前跑（都在 `ask`，或在 `idle` 等），而且至少一顆在 `ask`。
+ * 同 LangGraph 的 superstep：一顆中斷了，要等同一批其餘的都停下才交出中斷。判定排在 `setImmediate` 之後再看一次：一顆呼叫收完
+ * 到下一顆起跑（或 `idle` 等的那件事兌現）之間隔著幾個 microtask，那一拍數到的 0 不算。
+ *
+ * **都在 `idle`、沒有一顆在 `ask`** 照理不會發生：`idle` 等的是要人答了才會動的事，沒人在問就永遠不會動。它判成錯誤（建構時給的
+ * `onStuck`），不靜靜掛著；在 `idle` 等的每一顆以同一個錯拒絕。
+ *
+ * **收回**（{@link RunSuspension.withdraw}）拒絕每一顆 `ask`。在 `idle` 等的多半跟著前一顆的拒絕落定（例：屏障上等它的那顆一起退出）；
+ * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。
  *
  * @module
  */
@@ -21,24 +28,33 @@ export interface PendingAsk {
   /** 那顆呼叫的 `tools:<id>` 命名空間。 */
   readonly namespace: readonly string[];
   readonly resolve: (answer: unknown) => void;
-  /** 拿到答覆、交回之前叫：那顆呼叫的 {@link HumanInput.onAnswered}。 */
-  readonly answered: () => void;
+  /** 接回時叫：那顆呼叫的 {@link HumanInput.onResumed}。 */
+  readonly resumed: () => void;
   readonly reject: (reason: unknown) => void;
 }
 
+/**
+ * 一次 run 的等人狀態：發服務給每顆呼叫，數有幾顆在自己往前跑，判定停在等待點或卡死。只數已經起跑的呼叫；排在併發上限後面的，
+ * 要等接回之後才起跑。
+ */
 export class RunSuspension {
   #active = 0;
   readonly #asks = new Map<string, PendingAsk>();
   #scheduled = false;
   #parked = false;
   #withdrawn = false;
+  readonly #idlers = new Set<(reason: unknown) => void>();
 
   /**
    * @param onPark - 停在等待點的那一刻，帶著所有還沒答的提問（照問的先後）。
+   * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；之後在 `idle` 等的每一顆以它拒絕。
    */
-  constructor(private readonly onPark: (asks: readonly PendingAsk[]) => void) {}
+  constructor(
+    private readonly onPark: (asks: readonly PendingAsk[]) => void,
+    private readonly onStuck: (error: Error) => void,
+  ) {}
 
-  /** 收回過了：之後拋出的錯都是收回造成的，寫入一律丟掉。 */
+  /** 收回過了。`#toolStep` 看到它就不套這一步的寫入。 */
   get withdrawn(): boolean {
     return this.#withdrawn;
   }
@@ -66,7 +82,7 @@ export class RunSuspension {
    */
   serviceFor(callId: string, namespace: readonly string[]): HumanInput {
     const listeners = new Set<() => void>();
-    const answered = (): void => {
+    const resumed = (): void => {
       for (const listener of [...listeners]) listener();
     };
     return {
@@ -74,19 +90,31 @@ export class RunSuspension {
         if (this.#withdrawn) return Promise.reject(new HumanInputWithdrawn());
         const id = randomUUID().replaceAll('-', '');
         return new Promise((resolve, reject) => {
-          this.#asks.set(id, { id, value, callId, namespace, resolve, reject, answered });
+          this.#asks.set(id, { id, value, callId, namespace, resolve, reject, resumed });
           this.#active -= 1;
           this.#maybePark();
         });
       },
-      idle: <T>(waiting: Promise<T>): Promise<T> => {
-        this.#active -= 1;
-        this.#maybePark();
-        return waiting.finally(() => {
-          this.#active += 1;
-        });
-      },
-      onAnswered: (listener) => {
+      idle: <T>(waiting: Promise<T>): Promise<T> =>
+        new Promise<T>((resolve, reject) => {
+          const release = (reason: unknown): void => {
+            if (!this.#idlers.delete(release)) return;
+            this.#active += 1;
+            reject(reason);
+          };
+          this.#idlers.add(release);
+          this.#active -= 1;
+          this.#maybePark();
+          waiting.then(
+            (value) => {
+              if (!this.#idlers.delete(release)) return;
+              this.#active += 1;
+              resolve(value);
+            },
+            (error: unknown) => release(error),
+          );
+        }),
+      onResumed: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
@@ -104,11 +132,26 @@ export class RunSuspension {
       throw new Error(`native agent loop 沒有這顆掛著的中斷：${unknown.join('、')}`);
     }
     this.#parked = false;
-    for (const [id, answer] of Object.entries(answers)) {
+    const failed = new Map<string, unknown>();
+    for (const ask of this.#asks.values()) {
+      try {
+        ask.resumed();
+      } catch (error) {
+        failed.set(ask.id, error);
+      }
+    }
+    // 接回的 listener 拋了（例：日誌拒收補記）：那顆以那個錯拒絕，由它自己的規則收，不讓它懸著。
+    for (const [id, error] of failed) {
       const ask = this.#asks.get(id)!;
       this.#asks.delete(id);
       this.#active += 1;
-      ask.answered();
+      ask.reject(error);
+    }
+    for (const [id, answer] of Object.entries(answers)) {
+      const ask = this.#asks.get(id);
+      if (ask === undefined) continue;
+      this.#asks.delete(id);
+      this.#active += 1;
       ask.resolve(answer);
     }
   }
@@ -119,13 +162,27 @@ export class RunSuspension {
     const asks = [...this.#asks.values()];
     this.#asks.clear();
     for (const ask of asks) ask.reject(new HumanInputWithdrawn());
+    setImmediate(() => this.#releaseIdlers(new HumanInputWithdrawn()));
+  }
+
+  #releaseIdlers(reason: unknown): void {
+    for (const release of [...this.#idlers]) release(reason);
   }
 
   #maybePark(): void {
-    if (this.#scheduled || !this.#ready()) return;
+    if (this.#scheduled || (!this.#ready() && !this.#stuck())) return;
     this.#scheduled = true;
     setImmediate(() => {
       this.#scheduled = false;
+      if (this.#stuck()) {
+        const error = new Error(
+          'native agent loop：同一批起跑了的呼叫都在 idle 等，沒有一顆在問人，也沒有一顆在跑',
+        );
+        this.#withdrawn = true;
+        this.onStuck(error);
+        this.#releaseIdlers(error);
+        return;
+      }
       if (!this.#ready()) return;
       this.#parked = true;
       this.onPark(this.pending);
@@ -134,5 +191,9 @@ export class RunSuspension {
 
   #ready(): boolean {
     return !this.#parked && !this.#withdrawn && this.#active === 0 && this.#asks.size > 0;
+  }
+
+  #stuck(): boolean {
+    return !this.#withdrawn && this.#active === 0 && this.#asks.size === 0 && this.#idlers.size > 0;
   }
 }
