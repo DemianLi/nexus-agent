@@ -218,7 +218,7 @@ const registeredSteps = new WeakMap<object, ToolCallStep>();
  * （{@link toolCallStepOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapToolCall`。
  * 所以 `wrapToolCall` 必須就是 `wrapToolCallWith(step)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
  * 工具鏈在建構時就算好。
- * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：最後一顆工具步驟改成監聽者或併進 native loop 時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。
  * @param step - 它的工具那一步。
@@ -238,7 +238,7 @@ export function withToolCallStep<M extends object>(middleware: M, step: ToolCall
 
 /**
  * 這顆 middleware 登記的工具那一步（{@link withToolCallStep}）；沒登記是 `undefined`。
- * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：最後一顆工具步驟改成監聽者或併進 native loop 時收掉。
  *
  * @param middleware - 那一顆，照身分查：複製出來的物件查不到。
  * @returns 那一步。

@@ -1,8 +1,8 @@
 /**
  * `User-Agent` 的版號跟著 `harness-version.ts` 走（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)）。
  *
- * 這一條要 `vi.resetModules()` 加 `vi.doMock` 換掉那一份，獨立成一支檔：reset 之後動態載入的插件會拿到另一份 core，
- * 跟靜態 import 的組裝對不上，同一支檔裡其他起 serve／CLI 的測試在 native 下會建構失敗。
+ * 這一條要 `vi.resetModules()` 加 `vi.doMock` 換掉 `harness-version.js`，所以自成一檔：reset 之後動態載入的插件拿到另一份
+ * `@nexus/core`，跟靜態 import 的組裝對不上；跟起 serve／CLI 的測試放在同一支檔，那些測試在 native 下會建構失敗。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
