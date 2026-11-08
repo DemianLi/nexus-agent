@@ -14,7 +14,7 @@
 //! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
-//! （`violation`，它寫稽核），表上那個 pid 撤掉、它的其他連線一起斷，直到監督行程重送（它不會：那個身分隔離到行程結束）。
+//! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷（還沒送 `hello` 的，送來時回 `rejected`），直到監督行程重送（它不會：那個身分隔離到行程結束）。
 //! pid 不在表上的只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），沒有身分可以撤。宿主自己不因為任何一條連線結束。
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
@@ -207,10 +207,10 @@ impl Host {
         !self.control.read_closed()
     }
 
-    /// 表上撤掉這個 pid，它的連線全部斷掉。
+    /// 表上撤掉這個 pid，它驗過身分的連線全部斷掉。還沒送 `hello` 的留著：送來時表上已經沒有它，照樣回 `rejected`。
     fn revoke(&mut self, pid: u32) {
         self.grants.remove(&pid);
-        for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid)) {
+        for conn in self.conns.iter_mut().filter(|conn| conn.pid == Some(pid) && conn.hello) {
             conn.dead = true;
         }
     }
@@ -347,7 +347,7 @@ impl Host {
         pid
     }
 
-    /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他的連線；這條由呼叫方斷。
+    /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他驗過身分的連線；這條由呼叫方斷。
     fn violate(&mut self, i: usize, reason: &str) {
         let pid = self.refuse(i, reason);
         self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });

@@ -90,7 +90,7 @@ nexus-host --socket <路徑>
 - 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON，協定在 `src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條；連上 5 s 內沒送 `hello` 就斷。
 - 驗身分：用 `SO_PEERCRED` 取連線的 pid（uid 要跟宿主相同），驗 `hello` 之前先把控制通道讀乾淨，所以監督行程已經寫進 pipe 的撤銷一定先生效。客戶端報的 thread 不看。
   - pid 不在表上：回 `rejected`、報 `unregistered`，表上沒有它可以撤；算不算違規由監督行程判斷。
-  - token 或版本不對、重複的 `hello`、框太大、JSON 或訊息解不開：回 `rejected`、報 `violation`，把那個 pid 從表上拿掉，它其他的連線一起斷。
+  - token 或版本不對、重複的 `hello`、框太大、JSON 或訊息解不開：回 `rejected`、報 `violation`，把那個 pid 從表上拿掉，它其他驗過身分的連線一起斷；還沒送 `hello` 的，送來時回 `rejected`。
 - 整合測試 `tests/host.rs` 由測試站在監督行程的位置；`examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
 
 ## 建置與測試

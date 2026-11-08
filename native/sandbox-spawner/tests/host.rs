@@ -179,6 +179,27 @@ fn a_hello_after_a_revoke_is_always_rejected() {
     }
 }
 
+/// 撤銷只斷已經驗過身分的連線；連上了、還沒送 `hello` 的，等它送來時照表拒絕，回 `rejected`，不是不吭聲地斷掉。
+#[test]
+fn a_revoke_leaves_connections_that_have_not_said_hello_to_be_rejected() {
+    let dir = temp_dir("pending");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start(&socket);
+    for round in 0..50 {
+        host.grant(me(), TOKEN, Role::Conversation, "a");
+        let mut pending = UnixStream::connect(&socket).unwrap();
+        pending.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        // 後連的這條拿到回答時，先連的那條一定已經 accept 了：宿主一次把排著的連線收完。
+        let (mut live, reply) = exchange(&socket, &hello_frame(TOKEN));
+        assert_eq!(reply, accepted(), "第 {round} 輪");
+        host.command(&HostCommand::Revoke { pid: me() });
+        assert!(closed(&mut live), "驗過身分的要斷（第 {round} 輪）");
+        pending.write_all(&hello_frame(TOKEN)).unwrap();
+        assert_eq!(read_message(&mut pending), rejected("沒有登記"), "第 {round} 輪");
+        assert_eq!(host.report(), Some(unregistered(me())));
+    }
+}
+
 /// 出廠預設下沒宣告 sandbox 的 MCP stdio 伺服器跑在 `--guard` 底下，沒有 seccomp，連得到 socket；就算拿到了別人的 token，
 /// 它的 pid 不在表上，照樣被拒。
 #[test]
