@@ -3290,6 +3290,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // 基座只認「有沒有中斷掛著」、不比對 id，實測拿掉之後一個**完全不存在**的
     // interrupt_id 照樣把掛著的那顆核准掉，工具真的跑了。差別在同一輪多顆之後，
     // 「不是最後那顆」不再等於「不存在」——第一顆是認得的，回答它是對的。
+    //
+    // **`no_such_interrupt` 只看收到的這一刻**（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：id 不在 pump 掛著的那些
+    // 裡就退，兩個 agent loop 一樣。涵蓋從來沒有過的 id、答過或已經收回的（停止、宿主頁逾時、系統代答）、行程重啟過（掛著的只在
+    // 記憶體裡）、同一輪多顆而答的不是其中任何一顆。不當成答過了而靜靜回成功：答覆沒有被誰收下，畫面要知道。
     const pending = pump.pendingFor(params.interrupt_id);
     if (pending === undefined) {
       return json(

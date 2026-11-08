@@ -329,6 +329,11 @@ export interface PumpAgent {
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
+  /**
+   * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件、不改 state。
+   * 只有停在中斷時 JS 呼叫沒結束的 loop 有這一支；LangGraph 的中斷當場收掉那次 run，沒有東西可收。
+   */
+  discardSuspended?(config: ThreadConfig): void;
 }
 
 /**
@@ -2335,6 +2340,8 @@ export class ThreadPump {
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
+    // 停在中斷時呼叫還沒結束的 loop：先收掉那次 run，下面讀到的 state 才是它不會再寫的那一份。
+    this.#discardSuspended();
     // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
     for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
     const started = (name: string) => DELEGATION_TOOLS.includes(name);
@@ -2410,6 +2417,8 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#closing.abort();
+    // 收線時還停在中斷上（沒人答，或按了停止、收回還沒輪到）：那次 run 一起收掉，不留在記憶體裡等一個不會來的答覆。
+    this.#discardSuspended();
     for (const interruptId of [...this.#hostToolTimers.keys()])
       this.#clearHostToolTimer(interruptId);
     this.#hostToolsByItem.clear();
@@ -2977,6 +2986,11 @@ export class ThreadPump {
    * 續行那一輪（沒有 `itemId` 的）直接拿掉：中止之後目標不續行（#265 的 Q8），停住它等人再送的話，那時跑的是
    * 一份過期的輪次。
    */
+  /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
+  #discardSuspended(): void {
+    this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
+  }
+
   #parkIfStopped(): void {
     if (!this.#stopRequested) return;
     this.#stopRequested = false;
