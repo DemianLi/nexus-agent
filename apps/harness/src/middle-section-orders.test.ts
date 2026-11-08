@@ -1,6 +1,6 @@
 /**
  * 中段的值（`@nexus/core` 的 `MIDDLE_SECTION_ORDERS`）與 `@nexus/system-prompt` 的 `SECTION_ORDERS`（頭尾兩段的值，加上遷出的插件取的
- * `PLUGIN_POLICY`）是兩個套件各自寫的，這裡是兩邊對得上的紅燈（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。放在 harness：core 的 runtime 不經
+ * `PLAN_POLICY` 與 `PLUGIN_POLICY`）是兩個套件各自寫的，這裡是兩邊對得上的紅燈（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。放在 harness：core 的 runtime 不經
  * `@nexus/system-prompt`，兩個都看得到的是宿主。
  */
 
@@ -28,7 +28,10 @@ describe('中段的值', () => {
     },
   );
 
-  it('插件的政策段兩邊同值：遷出的插件從 @nexus/system-prompt 取，宿主照 core 的值收', () => {
-    expect(SECTION_ORDERS.PLUGIN_POLICY).toBe(MIDDLE_SECTION_ORDERS.PLUGIN_POLICY);
-  });
+  it.each(['PLAN_POLICY', 'PLUGIN_POLICY'] as const)(
+    '%s 兩邊同值：遷出的插件從 @nexus/system-prompt 取，宿主照 core 的值收',
+    (name) => {
+      expect(SECTION_ORDERS[name]).toBe(MIDDLE_SECTION_ORDERS[name]);
+    },
+  );
 });
