@@ -48,6 +48,48 @@ describe('N0785 資料規則', () => {
     expect(() => new SessionLog('c', { seed })).toThrow(TypeError);
   });
 
+  it.each([
+    ['不帶 reason', {}],
+    ['aborted／user', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+    ['aborted／parent', { reason: { kind: 'aborted', cause: { kind: 'parent' } } }],
+    [
+      'aborted／hook',
+      { reason: { kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } } },
+    ],
+    ['max-tokens', { reason: { kind: 'max-tokens' } }],
+    ['max-turns', { reason: { kind: 'max-turns' } }],
+    ['interrupted', { reason: { kind: 'interrupted' } }],
+    ['blocked', { reason: { kind: 'blocked' } }],
+  ])('D：turn/end %s 照收', (_name, data) => {
+    expect(() => validateSessionEventData({ type: 'turn/end', data }, 'x')).not.toThrow();
+  });
+
+  it.each([
+    ['data 不是物件', 1, /data 要是物件/],
+    ['reason 不是物件', { reason: 'max-turns' }, /reason 要是物件/],
+    ['不認得的 kind', { reason: { kind: 'completed' } }, /reason\.kind 不認得/],
+    ['少了 kind', { reason: {} }, /reason\.kind 不認得/],
+    ['aborted 少了 cause', { reason: { kind: 'aborted' } }, /cause 要是物件/],
+    [
+      '不認得的 cause',
+      { reason: { kind: 'aborted', cause: { kind: 'disposed' } } },
+      /cause\.kind 不認得/,
+    ],
+    [
+      'hook 少了 reason',
+      { reason: { kind: 'aborted', cause: { kind: 'hook' } } },
+      /cause\.reason 要是字串/,
+    ],
+  ])('E：turn/end %s 要拋，append 與 seed 都擋', (_name, data, message) => {
+    expect(() => validateSessionEventData({ type: 'turn/end', data }, 'x')).toThrow(message);
+    const log = new SessionLog('e');
+    expect(() => log.append('turn/end', data as never)).toThrow(TypeError);
+    expect(log.length).toBe(0);
+    expect(() => new SessionLog('e2', { seed: [row(0), row(1, { type: 'turn/end', data })] })).toThrow(
+      TypeError,
+    );
+  });
+
   it('不認得規則的種類不看：validateSessionEventData 對其他種類不拋', () => {
     expect(() => validateSessionEventData({ type: 'model/usage', data: 1 }, 'x')).not.toThrow();
   });

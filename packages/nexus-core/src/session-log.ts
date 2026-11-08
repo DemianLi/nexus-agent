@@ -196,7 +196,7 @@ export type TurnAbortCause =
   | { readonly kind: 'hook'; readonly reason: string };
 
 /**
- * 一輪為什麼沒有正常結束。四種：
+ * 一輪為什麼沒有正常結束。五種：
  *
  * - **`aborted`**：被中止。原因三種：`user`（人按了停止）、`parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -210,6 +210,9 @@ export type TurnAbortCause =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ * - **`max-turns`**：這一輪撞到輪數上限收掉（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
+ *   **還沒有生產者**：讀方與讀盤驗證先認得它，寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)。
+ *   dsh 的 `TurnEndReasonMap` 沒有這一種（dsh 沒有輪數上限）。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
@@ -230,6 +233,7 @@ export type TurnAbortCause =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: TurnAbortCause }
   | { readonly kind: 'max-tokens' }
+  | { readonly kind: 'max-turns' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'blocked' };
 
@@ -1578,10 +1582,11 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * 一筆事件自己的資料規則，照 dsh `validateSessionEventData`（`packages/core/session/src/surface.ts:166-219`，`687f282e`）。
- * **只放 nexus 有詞彙的兩條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
+ * **只放 nexus 有詞彙的三條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
  *
  * - `request/header` 不帶空的 `header.tools`（dsh `:205-207`）：寫方沒有工具時整格省略（`request-snapshot.ts`）。
  * - `tool/result` 帶了 `error` 就必須 `isError: true`（dsh `:212-218`）：`error` 只在失敗時出現。
+ * - `turn/end` 的 `reason` 只准認得的種類（格式 55，dsh 沒有這一條），見 {@link validateTurnEndReason}。
  *
  * dsh 其餘幾條（developer 角色與工具增減區塊、`header.system`、空的 `adapterDefaults`）nexus 沒有那些格，不適用。不驗整份 payload。
  * 呼叫點照 dsh：{@link SessionLog.append}（`index.ts:824`）、seed 的信封檢查（`:230`）、後端讀盤（`storage-contract.ts:95`）。
@@ -1607,6 +1612,52 @@ export function validateSessionEventData(
     if (data['error'] !== undefined && data['isError'] !== true) {
       throw new TypeError(`${subject} 帶了 data.error，data.isError 卻不是 true`);
     }
+  } else if (event.type === 'turn/end') {
+    if (!isJsonObject(data)) throw new TypeError(`${subject} 的 data 要是物件`);
+    if (data['reason'] !== undefined) validateTurnEndReason(data['reason'], subject);
+  }
+}
+
+/** 型別綁死：{@link TurnEndReason} 多一種或少一種，這張表都編不過。 */
+const TURN_END_REASON_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({
+    aborted: true,
+    'max-tokens': true,
+    'max-turns': true,
+    interrupted: true,
+    blocked: true,
+  } satisfies Record<TurnEndReason['kind'], true>),
+);
+/** 同上，綁 {@link TurnAbortCause}。 */
+const TURN_ABORT_CAUSE_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({ user: true, parent: true, hook: true } satisfies Record<
+    TurnAbortCause['kind'],
+    true
+  >),
+);
+
+/**
+ * `turn/end` 的 `reason` 只准 {@link TurnEndReason} 的成員（格式 55）。不認得的理由要拒：有讀方把不認得的理由當成正常完成
+ * （`@nexus/plugin-trajectory` 與 `@nexus/plugin-token-meter` 的 `endOf`），新版寫的理由給舊讀方讀就會靜靜讀錯。
+ * dsh 的讀方不驗，因為它的理由是外掛可以合併擴充的；這裡的是封閉聯集，所以驗得了。
+ */
+function validateTurnEndReason(reason: unknown, subject: string): void {
+  if (!isJsonObject(reason)) throw new TypeError(`${subject} 的 data.reason 要是物件`);
+  const kind = reason['kind'];
+  if (typeof kind !== 'string' || !TURN_END_REASON_KINDS.has(kind)) {
+    throw new TypeError(`${subject} 的 data.reason.kind 不認得：${JSON.stringify(kind)}`);
+  }
+  if (kind !== 'aborted') return;
+  const cause = reason['cause'];
+  if (!isJsonObject(cause)) throw new TypeError(`${subject} 的 data.reason.cause 要是物件`);
+  const causeKind = cause['kind'];
+  if (typeof causeKind !== 'string' || !TURN_ABORT_CAUSE_KINDS.has(causeKind)) {
+    throw new TypeError(
+      `${subject} 的 data.reason.cause.kind 不認得：${JSON.stringify(causeKind)}`,
+    );
+  }
+  if (causeKind === 'hook' && typeof cause['reason'] !== 'string') {
+    throw new TypeError(`${subject} 的 data.reason.cause.reason 要是字串`);
   }
 }
 
