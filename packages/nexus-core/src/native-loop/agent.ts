@@ -1019,7 +1019,7 @@ export class NativeAgent {
         await raceAbort(batch, caller);
       }
     } catch (error) {
-      // 收回了停在等待點的 run：這一步的寫入一律不套，收回那一側自己寫對話。
+      // 收回了停在等待點的 run：這一步的寫入一律不套。日誌與對話由收回的那一方決定寫不寫：按停止時 pump 的 `#withdraw` 寫，收線（`close()`）不寫。
       if (suspension?.withdrawn === true) throw error;
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
