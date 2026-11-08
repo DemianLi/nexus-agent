@@ -22,6 +22,18 @@ import { HARNESS_VERSION } from './harness-version.js';
 
 const run = promisify(execFile);
 
+/**
+ * 一次子行程的預算。子行程從原始碼冷啟動，要先載完入口整張靜態模組圖（約 1500 個模組；本機冷快取量測 tsx 轉譯約 0.5–0.6
+ * 秒）才跑得到 main。60 秒只是卡死時的上限，不是預期耗時。
+ */
+const CHILD_BUDGET_MS = 60_000;
+
+/**
+ * vitest 那一格的逾時。CI 忙時一格會超過 vitest 預設的 5 秒（量測見 #2539），所以要覆寫；比子行程多 10 秒，子行程卡死時先浮出的是
+ * `execFile` 帶 stderr 的錯誤，不是 vitest 的逾時。
+ */
+const TEST_TIMEOUT_MS = CHILD_BUDGET_MS + 10_000;
+
 const roots: string[] = [];
 afterAll(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -37,21 +49,29 @@ function linkTo(name: string): string {
 }
 
 describe.each(['serve', 'cli', 'plugin-cli'])('%s 經符號連結啟動', (name) => {
-  it('main 會跑：--version 印出 manifest 的版本，不是靜靜以 0 結束', async () => {
-    const { stdout } = await run(process.execPath, ['--import', 'tsx', linkTo(name), '--version'], {
-      timeout: 60_000,
-    });
-    expect(stdout.trim()).toBe(HARNESS_VERSION);
-  });
+  it(
+    'main 會跑：--version 印出 manifest 的版本，不是靜靜以 0 結束',
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const { stdout } = await run(
+        process.execPath,
+        ['--import', 'tsx', linkTo(name), '--version'],
+        {
+          timeout: CHILD_BUDGET_MS,
+        },
+      );
+      expect(stdout.trim()).toBe(HARNESS_VERSION);
+    },
+  );
 });
 
 describe('被 import 時不執行 main', () => {
-  it('import 入口模組不印版本、不起 server', async () => {
+  it('import 入口模組不印版本、不起 server', { timeout: TEST_TIMEOUT_MS }, async () => {
     const entry = fileURLToPath(new URL('./cli.ts', import.meta.url));
     const { stdout } = await run(
       process.execPath,
       ['--import', 'tsx', '--input-type=module', '-e', `await import(${JSON.stringify(entry)});`],
-      { timeout: 60_000 },
+      { timeout: CHILD_BUDGET_MS },
     );
     expect(stdout).toBe('');
   });
