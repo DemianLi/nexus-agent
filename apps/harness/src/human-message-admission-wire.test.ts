@@ -2,23 +2,18 @@
  * 太大的人話在 wire 上的拒收（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。量法對著基座比在
  * `@nexus/core` 的 `human-message-admission.test.ts`；這一檔問的是接線：
  *
- * 1. `native` 下 `run.start` 與 `queue.update` 的 `edit` 拒收，日誌一個字都不寫；剛好等於上限的照收；點名的提示字算進去。
- * 2. `langgraph` 下照收。
- * 3. 產品路徑上的 serve 照 `--agent-loop` 決定：沒給就是 `langgraph`；native 套件把它當成 `native`（`native-loop.setup.ts`）。
+ * 1. `native` 下 `run.start`（送出與插話）與 `queue.update` 的 `edit` 拒收，日誌一個字都不寫；剛好等於上限的照收；點名的提示字算進去。
+ * 2. `native` 下命令接著送的話（`slash.run` 的 `steer`，例如 `/plan <message>`）拒收：命令在動任何東西之前失敗、落定成 `error`，不開那一輪。
+ * 3. `langgraph` 下照收。
+ * 4. 產品路徑上的 serve 照 `--agent-loop` 決定：沒給就是 `langgraph`；native 套件把它當成 `native`（`native-loop.setup.ts`）。
  */
 
-import { HUMAN_MESSAGE_LIMIT_CHARS, mentionHintText } from '@nexus/core';
+import { createRegistry, HUMAN_MESSAGE_LIMIT_CHARS, mentionHintText } from '@nexus/core';
 import type { AgentLoopKind, SessionEvent } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  emptyCommandPoint,
-  foldTurn,
-  loopbackRequest,
-  serveClient,
-  TEST_BROWSER_AUTH,
-} from './fixtures.js';
+import { foldTurn, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -28,6 +23,23 @@ import type { WireHandler } from './wire-handler.js';
 const TOO_LARGE = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
 const AT_LIMIT = 'y'.repeat(HUMAN_MESSAGE_LIMIT_CHARS);
 const REJECTION = 'message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字';
+
+/** `/say <話>`：先 `steer` 那句話，再記一筆「動過了」。`steer` 被拒時拋出去，`touched` 不會記。 */
+function sayCommand(touched: string[]) {
+  const registry = createRegistry();
+  registry.enter({ id: 'say-test#0', name: 'say-test' });
+  registry.commands.register({
+    name: 'say',
+    description: '接著送一句話',
+    input: { hint: '<話>' },
+    handler: ({ rawInput, steer }) => {
+      steer(rawInput.trim());
+      touched.push('say');
+      return { kind: 'success' };
+    },
+  });
+  return registry.commands;
+}
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -67,7 +79,7 @@ describe('wire handler 照 agentLoop 拒收', () => {
     for (const handler of opened.splice(0)) await handler.close();
   });
 
-  function wire(agentLoop: AgentLoopKind) {
+  function wire(agentLoop: AgentLoopKind, touched: string[] = []) {
     const hold = new Promise<void>((resolve) => (release = resolve));
     let pumpLog: (() => readonly SessionEvent[]) | undefined;
     const handler = createWireHandler({
@@ -76,7 +88,7 @@ describe('wire handler 照 agentLoop 拒收', () => {
       createAgent: async () => ({
         agent: heldAgent(hold),
         subagentKinds: [{ name: 'reviewer', description: '審稿' }],
-        commands: emptyCommandPoint(),
+        commands: sayCommand(touched),
         dispose: async () => {},
         attachSessions: (sessions) => {
           pumpLog = () => sessions.root.events;
@@ -104,6 +116,36 @@ describe('wire handler 照 agentLoop 拒收', () => {
     });
     expect(types()).toEqual([]);
     expect((await client.runStart(thread, AT_LIMIT)).type).toBe('success');
+    await until(() => types().includes('turn/start'));
+  });
+
+  it('native：插話（mode steer）太大的回 invalid_argument，日誌不多一筆', async () => {
+    const { client, types } = wire('native');
+    const thread = 'native-steer';
+    await client.runStart(thread, '第一句');
+    await until(() => types().includes('turn/start'));
+    const before = types().length;
+    expect(await client.runStart(thread, TOO_LARGE, { mode: 'steer' })).toMatchObject({
+      type: 'error',
+      error: 'invalid_argument',
+      message: REJECTION,
+    });
+    expect(types()).toHaveLength(before);
+    expect((await client.runStart(thread, AT_LIMIT, { mode: 'steer' })).type).toBe('success');
+  });
+
+  it('native：命令接著送的話太大，命令落定成 error、什麼都沒動，不開那一輪', async () => {
+    const touched: string[] = [];
+    const { client, types } = wire('native', touched);
+    const thread = 'native-slash-steer';
+    expect(await client.slashRun(thread, `/say ${TOO_LARGE}`)).toMatchObject({
+      kind: 'error',
+      text: expect.stringContaining(REJECTION),
+    });
+    expect(touched).toEqual([]);
+    expect(types()).not.toContain('turn/start');
+    expect(await client.slashRun(thread, `/say ${AT_LIMIT}`)).toMatchObject({ kind: 'success' });
+    expect(touched).toEqual(['say']);
     await until(() => types().includes('turn/start'));
   });
 
@@ -140,8 +182,9 @@ describe('wire handler 照 agentLoop 拒收', () => {
     ).toMatchObject({ type: 'success' });
   });
 
-  it('langgraph：run.start 與 queue.update 都照收', async () => {
-    const { client, types } = wire('langgraph');
+  it('langgraph：run.start、插話、queue.update 與命令接著送的話都照收', async () => {
+    const touched: string[] = [];
+    const { client, types } = wire('langgraph', touched);
     const thread = 'langgraph-both';
     expect((await client.runStart(thread, TOO_LARGE)).type).toBe('success');
     await until(() => types().includes('turn/start'));
@@ -150,6 +193,12 @@ describe('wire handler 照 agentLoop 拒收', () => {
     expect(
       await client.queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: TOO_LARGE } }),
     ).toMatchObject({ type: 'success' });
+    expect((await client.runStart(thread, TOO_LARGE, { mode: 'steer' })).type).toBe('success');
+    // 命令在閒著的 thread 上送：跑著的那一輪會讓命令被擋在忙碌那一關，量不到大小。
+    expect(await client.slashRun('langgraph-slash', `/say ${TOO_LARGE}`)).toMatchObject({
+      kind: 'success',
+    });
+    expect(touched).toEqual(['say']);
   });
 });
 

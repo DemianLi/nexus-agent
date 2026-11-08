@@ -74,7 +74,8 @@ import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
-import { toolResultEvictionWrap } from './tool-result-eviction.js';
+import { toolResultEvictionStep } from './tool-result-eviction.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
 import { filesystemToolListStep } from './filesystem-tool-admission.js';
 import { taskToolOverride } from './task-tool-definition.js';
 import { wrapModelCallWith, withToolListStep } from './tool-list-step.js';
@@ -199,8 +200,9 @@ export function filesystemMiddlewareOptions(input: {
 }
 
 /**
- * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionWrap}，`wrapModelCall` 先套 core 的
- * {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。
+ * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionStep} 並登記那一步（{@link withToolCallStep}），
+ * `wrapModelCall` 先套 core 的 {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；
+ * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
  *
  * @param options - {@link filesystemMiddlewareOptions} 給的選項。
  * @returns 掛進疊裡的那一顆。
@@ -213,14 +215,18 @@ function filesystemMiddleware(
   if (inner === undefined)
     throw new Error('基座的 FilesystemMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
   const step = filesystemToolListStep(options.backend);
-  return withToolListStep(
-    {
-      ...base,
-      wrapModelCall: wrapModelCallWith(step, inner) as unknown as typeof inner,
-      wrapToolCall: toolResultEvictionWrap(options.backend) as unknown as typeof base.wrapToolCall,
-    },
-    step,
-    inner,
+  const eviction = toolResultEvictionStep(options.backend);
+  return withToolCallStep(
+    withToolListStep(
+      {
+        ...base,
+        wrapModelCall: wrapModelCallWith(step, inner) as unknown as typeof inner,
+        wrapToolCall: wrapToolCallWith(eviction) as unknown as typeof base.wrapToolCall,
+      },
+      step,
+      inner,
+    ),
+    eviction,
   );
 }
 

@@ -796,7 +796,18 @@ export async function runRepl(
   loop?: AgentLoopKind,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
-  const executor = createCommandExecutor({ commands, sessionLog });
+  // 命令接著送的話（`/plan <message>`）跟人打的那一句同一道驗：native 下太大的在命令動任何東西之前就拒收，
+  // 命令落定成 `error`、不開那一輪（同 serve 的 `acceptSteer`）。
+  const executor = createCommandExecutor({
+    commands,
+    sessionLog,
+    ...(loop === 'native' && {
+      acceptSteer: (text: string) => {
+        const rejection = humanMessageRejection(text);
+        if (rejection !== undefined) throw new Error(rejection);
+      },
+    }),
+  });
   const rl = createInterface({ input: io.input, output: io.output, prompt: '> ' });
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
   let closed = false;

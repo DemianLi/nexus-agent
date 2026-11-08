@@ -5,8 +5,10 @@
  * `createContentPreview`、`formatContentWithLineNumbers`、`TOO_LARGE_TOOL_MSG`、`TOOLS_EXCLUDED_FROM_EVICTION`），基座沒有匯出它們。
  * 逐字是因為已記下的日誌續接時要重算出模型當時看到的那則；`tool-result-eviction.test.ts` 對著真的基座比，基座升級改了字就紅在那裡。
  *
- * 組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionWrap}；
- * 名字、工具、`beforeAgent` 仍是基座的，`wrapModelCall` 先經過 core 的 `filesystemToolListStep` 再交給基座那一支，洋蔥裡的位置不變。
+ * 組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionStep}
+ * 轉成的那一支，並登記這一步：native 的 root 在這一格直接呼叫它，`langgraph` 與子代理經 `wrapToolCall`，兩邊跑同一份。
+ * 名字、工具、`beforeAgent` 仍是基座的（native 的 root 把 `beforeAgent` 換成空函式，見 `native-loop/native-noop-cells.ts`），
+ * `wrapModelCall` 先經過 core 的 `filesystemToolListStep` 再交給基座那一支，洋蔥裡的位置不變。
  * `toolTokenLimitBeforeEvict` 不能拿來關掉基座那一份：`read_file` 本體的截斷也讀同一個選項。
  *
  * 這一格在圍堵外層，所以日誌記的是換之前的全文；推模型歷史的一側照 {@link toolResultEvictionPath} 與
@@ -20,6 +22,8 @@ import type { MessageContent } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
 import { resolveBackend } from 'deepagents';
 import { context } from 'langchain';
+import { wrappedRequestOf } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 
 /** 基座的 `toolTokenLimitBeforeEvict` 預設 `2e4`，乘 4 是字元數。組裝點沒改它。 */
 export const TOOL_RESULT_EVICTION_THRESHOLD_CHARS = 2e4 * 4;
@@ -287,4 +291,18 @@ export function toolResultEvictionWrap(
     }
     return result;
   };
+}
+
+/**
+ * {@link toolResultEvictionWrap} 換成工具那一步，給組裝點登記（`withToolCallStep`）。
+ *
+ * 往內交時不換任何格，內層拿到的是原本那個請求。解析 backend 用的 runtime 是 `wrappedRequestOf` 造的那一份，只有
+ * `configurable` 與 `signal`：`resolveBackend` 只在 backend 是工廠時才讀 runtime，組裝點交的是實例。
+ *
+ * @param backend - 同 {@link toolResultEvictionWrap}。
+ * @returns 那一步。
+ */
+export function toolResultEvictionStep(backend: unknown): ToolCallStep {
+  const wrap = toolResultEvictionWrap(backend);
+  return (call, next) => wrap(wrappedRequestOf(call), () => next());
 }
