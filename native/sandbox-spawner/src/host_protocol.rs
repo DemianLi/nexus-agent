@@ -2,7 +2,7 @@
 //! 物件（[`crate::json`]），`type` 欄位分種類。兩邊從同一份向量檔 `host-vectors.json` 驗。
 //!
 //! 連上之後客戶端的第一框是 `hello`，帶協定版本與監督行程在控制通道上交給它的 token。宿主照 `SO_PEERCRED` 的 pid 查監督行程給的身分表：
-//! pid 對得上、token 相同、版本相等才回 `hello`；否則回 `rejected` 並斷線。目前只有 `hello` 一種（服務的種類見 #2569）。
+//! pid 對得上、token 相同、版本相等才回 `hello`；否則回 `rejected` 並斷線。客戶端目前只送 `hello` 一種（服務的種類見 #2569）。
 //!
 //! 上限都是常數：一框最長 [`MAX_FRAME`]，JSON 巢狀最多 [`crate::json::MAX_DEPTH`] 層，每條連線未處理的位元組最多
 //! [`crate::supervisor::process::INBOX_FRAMES`] 個框長。超過、解不開、種類不認得，都算違反協定。

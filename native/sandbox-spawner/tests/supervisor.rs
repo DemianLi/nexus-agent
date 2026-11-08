@@ -1532,7 +1532,7 @@ fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_ev
     assert!(!gone(logged_pid(&a, "pid")));
 }
 
-/// 宿主回報「沒有登記」的是活著的對話行程：那是身分表還沒送到（宿主剛重起、或通道還沒寫完），不隔離、不寫稽核，下一個宿主照樣拿到它。
+/// 宿主對活著的對話行程回報 `unregistered`：那是它那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、或還排在監督行程這邊），不隔離、不寫稽核，下一個宿主照樣拿到它。
 #[test]
 fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits() {
     let marker = temp_dir("marker").join("unregistered");
@@ -1548,6 +1548,18 @@ fn an_unregistered_report_for_a_live_conversation_neither_quarantines_nor_audits
         host_log(&h)
     );
     assert!(!h.audit().iter().any(|l| l.contains("\"event\":\"protocol\"")), "{:?}", h.audit());
+}
+
+/// 隔離一個活著的身分時，監督行程經同一條通道送 `revoke`：那一筆 `grant` 若還排在監督行程這邊沒寫出去，撤銷排在它後面，宿主表上不會留著被隔離的 pid。
+#[test]
+fn a_violation_revokes_the_live_identity_on_the_host() {
+    let mut h = Harness::start(Options { host: fake_host(&["--violate-conversations"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    assert!(wait_until(|| host_log(&h).contains(&format!("revoke {a_pid}"))), "{:?}", host_log(&h));
+    let line = h.audit_line("測試違規");
+    assert!(line.contains("\"role\":\"conversation\""), "{line}");
+    assert!(!gone(a_pid), "被隔離的對話行程照跑");
 }
 
 /// 真的宿主被殺掉重起：對話行程用原本的 token 重連得上，因為監督行程把整張表重送給新的宿主。

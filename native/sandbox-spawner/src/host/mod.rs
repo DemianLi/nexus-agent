@@ -10,7 +10,7 @@
 //!
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
 //! uid 要跟自己相同；`hello` 帶的 token 要跟表上那個 pid 的相同、版本要相等。驗每一個 `hello` 之前，先把控制通道讀到 EAGAIN：
-//! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就殺掉宿主，不收屍），pid 被重用之後才 `connect()` 的連線，
+//! 宿主 `ready` 之後，監督行程收屍之前就把 `revoke` 寫進 pipe（500 ms 內寫不進去就先殺掉宿主的群組，再收屍），pid 被重用之後才 `connect()` 的連線，
 //! 它的 `hello` 一定比那一筆晚，所以這一讀一定讀得到。
 //!
 //! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
@@ -76,7 +76,7 @@ fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
     socket.ok_or_else(|| "少了 --socket".to_string())
 }
 
-/// 跑宿主，回結束碼：0 是 stdin 讀到 EOF（監督行程要它收）；1 是 `hello` 之前 stdin 就 EOF，或綁不了 socket；2 是參數不對；
+/// 跑宿主，回結束碼：0 是 `ready` 之後 stdin 讀到 EOF 或讀不下去（監督行程要它收，或控制通道送來超長的框）；1 是 `hello` 之前 stdin 就 EOF，或綁不了 socket；2 是參數不對；
 /// 3 是監督行程的第一框不是這一版的 `hello`，或解不開。
 pub fn run(args: Vec<OsString>) -> i32 {
     let socket = match parse(args) {
