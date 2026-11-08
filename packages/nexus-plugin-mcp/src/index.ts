@@ -28,7 +28,7 @@ import {
 } from './credentials.js';
 import type { McpCredentials, ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient } from './connection.js';
-import { ensureHub } from './hub.js';
+import { asAbort, ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -655,15 +655,6 @@ function nexusToolOf(
       }
     },
   };
-}
-
-/** 一次呼叫的 reject 換成 `AbortError`（原錯放在 `cause`），讓圍堵照既有分類記成 `ABORTED`。 */
-function asAbort(error: unknown): Error {
-  const aborted = new Error(error instanceof Error ? error.message : String(error), {
-    cause: error,
-  });
-  aborted.name = 'AbortError';
-  return aborted;
 }
 
 /**
