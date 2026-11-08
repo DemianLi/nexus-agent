@@ -53,6 +53,8 @@ const ASK = 'ask_probe';
 const ASK_EXCLUSIVE = 'ask_exclusive';
 /** 不問人，一直等到這一輪的中止訊號舉起來才回（{@link Probe.holdAfterAbort} 給了就再等它）。 */
 const HOLD = 'hold_probe';
+/** 回一則日誌記不下的結果（`BigInt`）：`tool/result` 落盤時拋，錯穿過圍堵。 */
+const BREAK = 'break_probe';
 const BASE_URL = 'http://human-input.test';
 const TIMEOUT_MS = 1_000;
 const GRACE_MS = 50;
@@ -120,6 +122,22 @@ function askPlugin(probe: Probe): PluginEntry {
         );
         registry.tools.register(
           tool(body, { name: ASK_EXCLUSIVE, description: '問人一個問題，一次一顆。', schema }),
+        );
+        registry.tools.register(
+          tool(
+            async (_input, config) =>
+              new ToolMessage({
+                content: '結果',
+                tool_call_id: (config as { toolCall?: { id?: string } }).toolCall?.id ?? '',
+                additional_kwargs: { n: BigInt(1) },
+              }),
+            {
+              name: BREAK,
+              description: '回一則記不進日誌的結果。',
+              schema: z.object({}),
+              metadata: parallel,
+            },
+          ),
         );
         registry.tools.register(
           tool(
@@ -936,5 +954,35 @@ describe('收線與重開', () => {
       error: 'no_such_interrupt',
       message: '這條 thread 上沒有等著回答的中斷',
     });
+  });
+});
+
+describe('同一批一顆的結果記不進日誌、一顆在問人', () => {
+  // 兩個 loop 在這裡走法不同（`langgraph` 交出中斷、同時記 `turn/failed`），這裡只釘 native 不留下掛著的提問。
+  it.skipIf(!NATIVE)('native：這一輪失敗，問人那顆被收回，下一句照常跑', async () => {
+    const probe = newProbe();
+    const session = await open(
+      't-break',
+      [
+        {
+          content: '',
+          toolCalls: [
+            { id: 'q1', name: ASK, args: { q: '哪一個' } },
+            { id: 'b1', name: BREAK, args: {} },
+          ],
+        },
+        { content: '收到' },
+      ],
+      probe,
+    );
+    await until(session, (each) => each.state.status === 'failed');
+    await untilLogged(session, 'turn/failed', 1);
+    expect(session.state.pendings).toEqual([]);
+    expect(probe.withdrawn).toBe(1);
+    expect(rootEvents(session, ['interrupt/raised'])).toEqual([]);
+
+    await session.client.runStart('t-break', '再一句');
+    await until(session, settled(1));
+    expect(session.state.status).toBe('idle');
   });
 });

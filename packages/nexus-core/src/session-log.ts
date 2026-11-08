@@ -1275,6 +1275,8 @@ export interface SessionEventMap {
    * ## 同一個 `callId` 可能有兩顆
    *
    * 被核准閘門中斷的那次，resume 之後以同一個 `callId` 再進一次（實測；同批沒被擋的不重跑）。
+   * native loop 不重進：接回時圍堵替每一顆還停在提問上的呼叫補記同一顆
+   * （`containment.ts`，`human-input.ts` 的 `onResumed`），日誌一樣。
    * 所以暫停那一輪留一顆沒配對的、後面跟著 `interrupt/raised`，resume 那一輪再一對——
    * **配對取最後那一顆**。這樣結果永遠跟呼叫落在同一輪，dsh `session-stats` 在 `turn/end`
    * 丟掉沒配對的呼叫那條規則（`packages/session/session-stats/src/projection.ts:190-194`）

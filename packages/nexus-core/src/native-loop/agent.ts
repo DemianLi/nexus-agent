@@ -598,7 +598,11 @@ export class NativeAgent {
       ...(threadId !== undefined && { link }),
     }).then(
       () => link.close(),
-      (error: unknown) => link.fail(error),
+      (error: unknown) => {
+        // 失敗時同一批可能還有一顆停在問人上（例：兄弟的結果記不進日誌，這一步拋了）：收回它，那顆呼叫的 await 才落定，不留在記憶體裡。
+        link.suspension.withdraw();
+        link.fail(error);
+      },
     );
     return queue;
   }
