@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   APPROVAL_CHANNEL_CONTRACT_VERSION,
+  APPROVAL_INTERRUPT_KIND,
   approvalChannelToken,
   CHANNEL_FOR_THREAD_SERVICE,
   CHANNEL_SERVICE,
@@ -70,6 +71,7 @@ describe('@nexus/approval-channel 的定義', () => {
     expect(CHANNEL_FOR_THREAD_SERVICE).toBe(core.CHANNEL_FOR_THREAD_SERVICE);
     expect(CHANNEL_SERVICE).toBe(core.CHANNEL_SERVICE);
     expect(QUESTION_INTERRUPT_KIND).toBe(core.QUESTION_INTERRUPT_KIND);
+    expect(APPROVAL_INTERRUPT_KIND).toBe(core.APPROVAL_INTERRUPT_KIND);
   });
 
   it('三角色：定義套件把 @nexus/core 放 peer、不進 dependencies（不能讓安裝結果出現第二份 core）', () => {
