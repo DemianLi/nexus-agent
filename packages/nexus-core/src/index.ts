@@ -690,6 +690,7 @@ export {
   STEP_INBOX_MIDDLEWARE_NAME,
   stepInboxOf,
 } from './step-inbox.js';
+export { createTurnStoppingMiddleware, TURN_STOPPING_MIDDLEWARE_NAME } from './turn-stopping.js';
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,

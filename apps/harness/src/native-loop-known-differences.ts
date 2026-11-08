@@ -50,6 +50,12 @@ export const KNOWN_DIFFERENCE_KINDS = {
       "這一條斷言 LangGraph 本身的東西：編好的圖的節點（`graph.nodes`，native 不編圖）或 `streamMode: 'messages'`" +
       '（native 的 `stream()` 只做 updates 與 values）。',
   },
+  turnStoppingStep: {
+    card: 2363,
+    reason:
+      '這一條斷言 `agent/turn-stopping` 的 `step`：langgraph 下由轉接格（`turn-stopping.ts`）派，拿不到步數，step 給 0；' +
+      'native 給真的步數。到 K13 #2363 拿掉。',
+  },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;
 
 /** 一條登記：哪個檔的哪一條（`describe > … > it`，同 vitest 報告），哪一種差異，native 下怎麼跑。 */
@@ -2529,6 +2535,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/wire-entry-timestamps.test.ts',
     test: '條目時刻在真的線上（#1030） > 續接：同一顆呼叫的 `tool-started` 在兩條路上都到兩次，startedAt 取第一顆，等人回答的時間算在裡面',
     kind: 'interrupt',
+    run: 'fails',
+  },
+  {
+    file: 'src/workspace-changes.test.ts',
+    test: '擷取的時點與一輪停在哪 > langgraph 下轉接格派的 step 是 0',
+    kind: 'turnStoppingStep',
     run: 'fails',
   },
   {
