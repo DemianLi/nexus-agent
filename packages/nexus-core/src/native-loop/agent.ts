@@ -197,7 +197,7 @@ export class NativeAgent {
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
   /**
-   * 洋蔥實際驅動的那一份（{@link drivenByOnion}），再去掉 native 不跑的格（{@link withoutNativeSkippedCells}），跟
+   * 洋蔥實際驅動的那一份（{@link drivenByOnion}），再把清單上的格換成空函式（{@link withoutNativeSkippedCells}），跟
    * {@link NativeAgent.middleware} 一一對應。
    */
   readonly #driven: readonly LoopMiddleware[];

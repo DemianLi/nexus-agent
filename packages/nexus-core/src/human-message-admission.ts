@@ -6,7 +6,7 @@
  *
  * 門檻與量法照基座 `FilesystemMiddleware` 的 `beforeAgent`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的
  * `extractTextFromMessage` 與 `4 * humanMessageTokenLimitBeforeEvict`）：拒收的那一刀與基座搬移的那一刀落在同一處。native 的 root
- * 不跑那一格（`native-loop/native-skipped-cells.ts`），`langgraph` 照舊搬。已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
+ * 把那一格換成空函式（`native-loop/native-skipped-cells.ts`），`langgraph` 照舊搬。已經搬過、帶 `lc_evicted_to` 的舊訊息照基座原路畫。組裝點沒改那個選項。
  *
  * @module
  */

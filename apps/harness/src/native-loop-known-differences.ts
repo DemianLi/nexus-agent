@@ -56,12 +56,6 @@ export const KNOWN_DIFFERENCE_KINDS = {
       '這一條斷言 `agent/turn-stopping` 的 `step`：langgraph 下由轉接格（`turn-stopping.ts`）派，拿不到步數，step 給 0；' +
       'native 給真的步數。到 #2363 拿掉。',
   },
-  nativeSkippedHook: {
-    card: 2363,
-    reason:
-      'native 不跑 `FilesystemMiddleware` 的 `beforeAgent`（`native-skipped-cells.ts`，#1827 D234），每次 invoke 少一個節點、' +
-      '少扣一格遞迴預算；同一個上限下，輪數到臺階附近會多一輪（上限 100 時 native 32 輪、langgraph 31 輪）。這一條斷言的是 langgraph 的輪數。',
-  },
 } as const satisfies Record<string, KnownDifferenceKindInfo>;
 
 /** 一條登記：哪個檔的哪一條（`describe > … > it`，同 vitest 報告），哪一種差異，native 下怎麼跑。 */
@@ -2560,17 +2554,5 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     test: '每一輪的改動紀錄在真的圖上 > 子代理的 copy_file（#2311）：root 那一輪的摘要裡目的地帶 copiedFrom，跟子代理日誌的 meta 一樣',
     kind: 'approvalChannel',
     run: 'passes',
-  },
-  {
-    file: 'src/time-context-on-tree.test.ts',
-    test: 'J：代價——有沒有這一列，預設上限 100 下的輪數 > 出貨清單 31 輪；拿掉 time-context 是 32；pre-step 消費者全拿掉也是 32（floor 吃掉）',
-    kind: 'nativeSkippedHook',
-    run: 'fails',
-  },
-  {
-    file: 'src/time-context-on-tree.test.ts',
-    test: 'J：代價——有沒有這一列，預設上限 100 下的輪數 > 每顆 `beforeAgent` 節點把臺階往上推一格：上限 100 時這一列吃一輪（32→31），101、102 不影響，103 又吃一輪（33→32）',
-    kind: 'nativeSkippedHook',
-    run: 'fails',
   },
 ];

@@ -7,7 +7,7 @@
  *
  * 組裝點（`agent-assembly.ts` 的 `filesystemMiddleware`）建基座那一顆時，把它的 `wrapToolCall` 換成 {@link toolResultEvictionStep}
  * 轉成的那一支，並登記這一步：native 的 root 在這一格直接呼叫它，`langgraph` 與子代理經 `wrapToolCall`，兩邊跑同一份。
- * 名字、工具、`beforeAgent` 仍是基座的（native 的 root 不跑 `beforeAgent`，見 `native-loop/native-skipped-cells.ts`），
+ * 名字、工具、`beforeAgent` 仍是基座的（native 的 root 把 `beforeAgent` 換成空函式，見 `native-loop/native-skipped-cells.ts`），
  * `wrapModelCall` 先經過 core 的 `filesystemToolListStep` 再交給基座那一支，洋蔥裡的位置不變。
  * `toolTokenLimitBeforeEvict` 不能拿來關掉基座那一份：`read_file` 本體的截斷也讀同一個選項。
  *
