@@ -7,6 +7,9 @@
  *   接著重算名額再回 `up` 或 `capacity`（`native/sandbox-spawner/README.md` 的逐出那一條）。
  * - **活著的行程表只由 `up`／`down` 維護**。前台重啟之後監督行程先把每條活著的送一次 `up`，表就這樣重建，不用另外問。
  * - 控制通道斷了（監督行程走了），在等的全部丟錯，之後的 `ensure` 也直接丟。
+ * - **第一框是 `hello`**：建構時就先送自己的；監督行程送來的第一框也要是版本相等的 `hello`，帶著連宿主用的 token
+ *   （{@link SupervisorClient.hostToken}）。不是就當控制通道壞了。
+ * - 收到 `stop-admission`（監督行程要停機）就呼叫 `onStopAdmission`，回來之後回 `admission-stopped`。
  *
  * @module
  */
@@ -17,6 +20,7 @@ import {
   decodeFrontEvent,
   encodeFrontRequest,
   frame,
+  PROTOCOL_VERSION,
   takeFrames,
   type DeathCause,
   type FrontEvent,
@@ -41,6 +45,8 @@ export interface SupervisorClientOptions {
   readonly onUp?: (threadId: string, socket: string) => void;
   /** 一條 thread 的行程結束了；`socket` 是它原本聽的那個（表上沒有就是 `undefined`），前台用它收掉往那裡的連線。 */
   readonly onDown?: (threadId: string, cause: DeathCause, socket: string | undefined) => void;
+  /** 監督行程要停機：停收新的請求。回來之後就回 `admission-stopped`；沒給就收到時直接回。 */
+  readonly onStopAdmission?: () => void;
   readonly warn?: (message: string) => void;
 }
 
@@ -71,18 +77,22 @@ export class SupervisorClient {
   readonly #output: Writable;
   readonly #onUp: SupervisorClientOptions['onUp'];
   readonly #onDown: SupervisorClientOptions['onDown'];
+  readonly #onStopAdmission: SupervisorClientOptions['onStopAdmission'];
   readonly #warn: (message: string) => void;
   readonly #live = new Map<string, string>();
   readonly #pending = new Map<string, Pending>();
   #buffer: Buffer = Buffer.alloc(0);
   #gone = false;
   #stats: SupervisorStats | undefined;
+  #hostToken: string | undefined;
 
   constructor(options: SupervisorClientOptions) {
     this.#output = options.output;
     this.#onUp = options.onUp;
     this.#onDown = options.onDown;
+    this.#onStopAdmission = options.onStopAdmission;
     this.#warn = options.warn ?? (() => {});
+    this.#send({ type: 'hello', version: PROTOCOL_VERSION });
     options.input.on('data', (chunk: Buffer) => this.#receive(chunk));
     options.input.once('end', () => this.#close());
     options.input.once('error', () => this.#close());
@@ -96,6 +106,11 @@ export class SupervisorClient {
   /** 活著的對話行程綁的 thread。 */
   liveThreads(): readonly string[] {
     return [...this.#live.keys()];
+  }
+
+  /** 監督行程的 `hello` 帶來的、連宿主用的 token；還沒收到是 `undefined`。 */
+  get hostToken(): string | undefined {
+    return this.#hostToken;
   }
 
   /** 監督行程最近一次送來的 `stats`；還沒收到過是 `undefined`（監督行程每 `--stats-ms` 送一次，前台（重）起時也送）。 */
@@ -164,11 +179,27 @@ export class SupervisorClient {
       return;
     }
     for (const payload of frames) {
+      if (this.#gone) return;
       let event: FrontEvent;
       try {
         event = decodeFrontEvent(payload);
       } catch (error) {
+        if (this.#hostToken === undefined) {
+          this.#warn(`[supervisor] 第一框解不開：${String(error)}`);
+          this.#close();
+          return;
+        }
         this.#warn(`[supervisor] 解不開的事件，略過：${String(error)}`);
+        continue;
+      }
+      if (this.#hostToken === undefined) {
+        if (event.type !== 'hello' || event.version !== PROTOCOL_VERSION) {
+          const got = event.type === 'hello' ? `版本 ${String(event.version)}` : event.type;
+          this.#warn(`[supervisor] 第一框不是版本 ${String(PROTOCOL_VERSION)} 的 hello（${got}）`);
+          this.#close();
+          return;
+        }
+        this.#hostToken = event.token;
         continue;
       }
       this.#apply(event);
@@ -200,6 +231,13 @@ export class SupervisorClient {
         return;
       case 'stats':
         this.#stats = event;
+        return;
+      case 'hello':
+        this.#warn('[supervisor] 又收到一次 hello，略過');
+        return;
+      case 'stop-admission':
+        this.#onStopAdmission?.();
+        this.#send({ type: 'admission-stopped' });
         return;
     }
   }

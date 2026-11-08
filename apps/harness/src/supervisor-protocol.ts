@@ -5,6 +5,10 @@
  *
  * 框（長度前綴）與 spawner 的控制通道同一個格式，用 {@link frame}、{@link takeFrames}。四個方向各一對編解碼，種類 byte 在四個方向之間不重複：
  * 這兩條通道之間框送錯方向時，解碼器丟「不認得的種類」。跟 spawner 控制通道的種類 byte 有重疊（`R`、`E`），那條通道的框不在保證內。
+ * 監督行程與宿主之間的兩個方向只在 Rust 那一側，這裡沒有。
+ *
+ * 每條通道的第一框都是 `hello`，帶 {@link PROTOCOL_VERSION}：監督行程一起起子行程就先送它的（帶這個行程連宿主用的 token），子行程送的第一框
+ * 也要是 `hello`。版本要完全相等：兩邊一起出貨，對不上就是裝錯了。
  *
  * 編碼器不夾值：數字欄位超出 0 到 2³²−1 就丟 `RangeError`（小數截掉、`NaN` 寫成 0，照 Node 的 `writeUInt32LE`）。解碼遇到不是 UTF-8 的字串換成 U+FFFD，不丟錯。
  *
@@ -14,12 +18,19 @@
 /** 框的長度前綴與切框，同 spawner 那一份。`takeFrames` 遇到超過 `MAX_FRAME` 的框丟 `SpawnerProtocolError`；`frame` 不檢查大小。 */
 export { MAX_FRAME, frame, takeFrames } from './sandbox-protocol.js';
 
-/** 監督行程 → 對話行程。`bind`：綁定一條 thread，預熱池裡的與一開始就為某條 thread 起的行程都走這一則。`drain`：對話行程確認仍閒置才回 `drained`，否則回 `busy`；收掉是接著關 stdin。 */
+/** 控制面協定的版本，跟 `supervisor_protocol.rs` 的 `PROTOCOL_VERSION` 與向量檔的 `protocolVersion` 相同。 */
+export const PROTOCOL_VERSION = 1;
+
+/** 監督行程 → 對話行程。`hello`：第一框，帶這個行程連宿主用的 token（只在這條通道上，不放環境變數與參數）。`bind`：綁定一條 thread，預熱池裡的與一開始就為某條 thread 起的行程都走這一則。`drain`：對話行程確認仍閒置才回 `drained`，否則回 `busy`；收掉是接著關 stdin。 */
 export type ConversationCommand =
-  { readonly type: 'bind'; readonly threadId: string } | { readonly type: 'drain' };
+  | { readonly type: 'hello'; readonly version: number; readonly token: string }
+  | { readonly type: 'bind'; readonly threadId: string }
+  | { readonly type: 'drain' };
 
 /** 對話行程 → 監督行程。 */
 export type ConversationReport =
+  /** 第一框。版本不對或第一框不是它，監督行程以 `protocol` 收掉這個行程。 */
+  | { readonly type: 'hello'; readonly version: number }
   /** 根建好、插件載完，可以綁 thread。 */
   | { readonly type: 'ready' }
   /** 已綁定，帶回同一個 id。 */
@@ -39,10 +50,14 @@ export type OpenMode = 'run' | 'read-only';
 
 /** 前台 → 監督行程。`ensure` 的回答是 `up`、`down` 或 `capacity`；`release`：前台用完了這條 thread，只讀開啟的可以先收；已經轉成一般的（`ensure(run)` 或 `turn(begin)` 過）監督行程不理，照 `--idle-ms` 收。 */
 export type FrontRequest =
+  /** 第一框。版本不對或第一框不是它，監督行程整台停機、結束碼 3。 */
+  | { readonly type: 'hello'; readonly version: number }
   | { readonly type: 'ensure'; readonly threadId: string; readonly open: OpenMode }
-  | { readonly type: 'release'; readonly threadId: string };
+  | { readonly type: 'release'; readonly threadId: string }
+  /** 回 `stop-admission`：不再收新的請求了。 */
+  | { readonly type: 'admission-stopped' };
 
-/** 對話行程為什麼結束（設計 §6-2 的七類），依碼（1 起）的順序。 */
+/** 對話行程為什麼結束，依碼（1 起）的順序。前七類見設計 §6-2；`protocol`：控制通道的第一框不是版本相同的 `hello`。 */
 export const DEATH_CAUSES = [
   'heap',
   'memory',
@@ -51,12 +66,17 @@ export const DEATH_CAUSES = [
   'crash',
   'evicted',
   'shutdown',
+  'protocol',
 ] as const;
 
 export type DeathCause = (typeof DEATH_CAUSES)[number];
 
 /** 監督行程 → 前台。 */
 export type FrontEvent =
+  /** 第一框，帶前台連宿主用的 token。 */
+  | { readonly type: 'hello'; readonly version: number; readonly token: string }
+  /** 停機的第一步：停收新的請求，停好了回 `admission-stopped`。監督行程等它回答（有上限），之後才收對話行程。 */
+  | { readonly type: 'stop-admission' }
   /** 這條 thread 的對話行程在 `socket` 上聽，前台直接連。 */
   | { readonly type: 'up'; readonly threadId: string; readonly socket: string }
   /** 結束了，或沒起成（`crash`）。 */
@@ -77,8 +97,10 @@ export type FrontEvent =
       readonly deaths: Readonly<Record<DeathCause, number>>;
     };
 
+const CMD_HELLO = 0x77; // w
 const CMD_BIND = 0x62; // b
 const CMD_DRAIN = 0x64; // d
+const REP_HELLO = 0x56; // V
 const REP_READY = 0x52; // R
 const REP_BOUND = 0x42; // B
 const REP_TURN = 0x54; // T
@@ -86,8 +108,12 @@ const REP_IDLE = 0x49; // I
 const REP_BUSY = 0x59; // Y
 const REP_HEARTBEAT = 0x48; // H
 const REP_DRAINED = 0x44; // D
+const REQ_HELLO = 0x46; // F
 const REQ_ENSURE = 0x45; // E
 const REQ_RELEASE = 0x4c; // L
+const REQ_ADMISSION_STOPPED = 0x53; // S
+const EV_HELLO = 0x66; // f
+const EV_STOP_ADMISSION = 0x73; // s
 const EV_UP = 0x75; // u
 const EV_DOWN = 0x78; // x
 const EV_CAPACITY = 0x63; // c
@@ -181,14 +207,21 @@ function decoded<T>(payload: Buffer, read: (r: Reader, kind: number) => T | unde
 
 /** 編一則給對話行程的命令（不含長度前綴，用 {@link frame} 加）。 */
 export function encodeConversationCommand(command: ConversationCommand): Buffer {
-  return command.type === 'bind'
-    ? new Writer().u8(CMD_BIND).text(command.threadId).done()
-    : new Writer().u8(CMD_DRAIN).done();
+  const w = new Writer();
+  switch (command.type) {
+    case 'hello':
+      return w.u8(CMD_HELLO).u32(command.version).text(command.token).done();
+    case 'bind':
+      return w.u8(CMD_BIND).text(command.threadId).done();
+    case 'drain':
+      return w.u8(CMD_DRAIN).done();
+  }
 }
 
 /** 解一框給對話行程的命令。截斷、框尾多出來、不認得的種類都丟 {@link SupervisorProtocolError}。 */
 export function decodeConversationCommand(payload: Buffer): ConversationCommand {
   return decoded<ConversationCommand>(payload, (r, kind) => {
+    if (kind === CMD_HELLO) return { type: 'hello', version: r.u32(), token: r.text() };
     if (kind === CMD_BIND) return { type: 'bind', threadId: r.text() };
     if (kind === CMD_DRAIN) return { type: 'drain' };
     return undefined;
@@ -199,6 +232,8 @@ export function decodeConversationCommand(payload: Buffer): ConversationCommand 
 export function encodeConversationReport(report: ConversationReport): Buffer {
   const w = new Writer();
   switch (report.type) {
+    case 'hello':
+      return w.u8(REP_HELLO).u32(report.version).done();
     case 'ready':
       return w.u8(REP_READY).done();
     case 'bound':
@@ -220,6 +255,8 @@ export function encodeConversationReport(report: ConversationReport): Buffer {
 export function decodeConversationReport(payload: Buffer): ConversationReport {
   return decoded<ConversationReport>(payload, (r, kind) => {
     switch (kind) {
+      case REP_HELLO:
+        return { type: 'hello', version: r.u32() };
       case REP_READY:
         return { type: 'ready' };
       case REP_BOUND:
@@ -242,9 +279,17 @@ export function decodeConversationReport(payload: Buffer): ConversationReport {
 
 /** 編一則前台的要求（不含長度前綴）。 */
 export function encodeFrontRequest(request: FrontRequest): Buffer {
-  return request.type === 'ensure'
-    ? new Writer().u8(REQ_ENSURE).text(request.threadId).u8(OPEN_MODES.indexOf(request.open)).done()
-    : new Writer().u8(REQ_RELEASE).text(request.threadId).done();
+  const w = new Writer();
+  switch (request.type) {
+    case 'hello':
+      return w.u8(REQ_HELLO).u32(request.version).done();
+    case 'ensure':
+      return w.u8(REQ_ENSURE).text(request.threadId).u8(OPEN_MODES.indexOf(request.open)).done();
+    case 'release':
+      return w.u8(REQ_RELEASE).text(request.threadId).done();
+    case 'admission-stopped':
+      return w.u8(REQ_ADMISSION_STOPPED).done();
+  }
 }
 
 /** 解一框前台的要求。截斷、框尾多出來、不認得的種類或打開方式都丟 {@link SupervisorProtocolError}。 */
@@ -254,6 +299,8 @@ export function decodeFrontRequest(payload: Buffer): FrontRequest {
       return { type: 'ensure', threadId: r.text(), open: r.pick(OPEN_MODES, 0, '打開方式') };
     }
     if (kind === REQ_RELEASE) return { type: 'release', threadId: r.text() };
+    if (kind === REQ_HELLO) return { type: 'hello', version: r.u32() };
+    if (kind === REQ_ADMISSION_STOPPED) return { type: 'admission-stopped' };
     return undefined;
   });
 }
@@ -262,6 +309,10 @@ export function decodeFrontRequest(payload: Buffer): FrontRequest {
 export function encodeFrontEvent(event: FrontEvent): Buffer {
   const w = new Writer();
   switch (event.type) {
+    case 'hello':
+      return w.u8(EV_HELLO).u32(event.version).text(event.token).done();
+    case 'stop-admission':
+      return w.u8(EV_STOP_ADMISSION).done();
     case 'up':
       return w.u8(EV_UP).text(event.threadId).text(event.socket).done();
     case 'down':
@@ -283,6 +334,10 @@ export function encodeFrontEvent(event: FrontEvent): Buffer {
 export function decodeFrontEvent(payload: Buffer): FrontEvent {
   return decoded<FrontEvent>(payload, (r, kind) => {
     switch (kind) {
+      case EV_HELLO:
+        return { type: 'hello', version: r.u32(), token: r.text() };
+      case EV_STOP_ADMISSION:
+        return { type: 'stop-admission' };
       case EV_UP:
         return { type: 'up', threadId: r.text(), socket: r.text() };
       case EV_DOWN:

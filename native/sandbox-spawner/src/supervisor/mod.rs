@@ -49,8 +49,24 @@
 //! 沉默又一直要 CPU 的 leader 交替送 SIGSTOP／SIGCONT（[`cpu`]）；走拆除梯度或送 `drain` 之前先 SIGCONT。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
 //!
-//! 停機：收到 SIGINT／SIGTERM／SIGHUP，所有對話行程走拆除梯度；全部收完之後前台也走一次；前台收完就回 0。
-//! 停機中再收到一次這些訊號，所有對話行程的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
+//! 每條控制通道的第一框都是 `hello`（[`crate::supervisor_protocol`] 的檔頭）：子行程一起來監督行程就先送自己的（給對話行程與前台的帶身分 token），
+//! 子行程送來的第一框也要是 `hello`、版本相等。對話行程不是：死因 `protocol`，當場 SIGKILL。前台或宿主不是：重起也是同一支執行檔、一樣對不上，
+//! 所以不重起，整台停機、回 3。第一框解不開的照解不開的框處置（對話行程 `crash`，前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗）。
+//!
+//! 宿主（`--host`，[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)；沒給就不起）：跟前台一起起，不擋前台。它的 stdin／stdout 是控制通道，
+//! stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表整張送過去：每個前台與對話行程一筆（pid、token、角色、綁的 thread）。
+//! 之後起的行程，spawn 當下先送宿主那一筆、再把 token 交給它；指派 thread 時更新那一筆；收屍之前撤掉（[`process::reap`] 的 `before_reap`，
+//! 那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
+//! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它；宿主 `ready` 了、沒在收的，也再送一次 `revoke`，蓋掉可能還排在這邊、沒寫出去的那一筆 `grant`。回報的是 pid 不在宿主表上（`unregistered`）、
+//! 而那個 pid 是活著、沒被隔離的前台或對話行程的，不算違規、不寫稽核：那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、
+//! 這邊還沒處理它的 `ready`，或那一筆還排在這邊），或那是撤銷之前就連上的連線（pid 被重用、同一個號碼上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的）；只記一行警告，帶 pid 與宿主的連線編號。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
+//! 之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、
+//! `--host-ready-timeout-ms` 內沒 `ready`）連續 `--host-start-failures` 次，整台停機、回 4；`ready` 一次就歸零。`ready` 之後的失敗只退避重起，
+//! 不會讓整台結束：在 `ready` 之前宿主還沒開始收連線，那之前的失敗一定是它自己（執行檔、設定、環境）的問題，之後的可能是客戶端觸發的。
+//!
+//! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
+//! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
+//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
 
 /// 監督行程自己的一行訊息，走跟轉送對話行程 stderr 同一條路（[`process::write_stderr`]）：寫不出去就丟掉、記數，不 panic。
 macro_rules! say {
@@ -63,11 +79,12 @@ mod args;
 mod audit;
 mod cpu;
 mod memory;
-mod process;
+pub(crate) mod process;
 
 use crate::supervisor_protocol::{
-    decode_conversation_report, decode_front_request, encode_conversation_command, encode_front_event, ConversationCommand,
-    ConversationReport, DeathCause, FrontEvent, FrontRequest, OpenMode, TurnPhase, DEATH_CAUSES,
+    decode_conversation_report, decode_front_request, decode_host_report, encode_conversation_command, encode_front_event,
+    encode_host_command, ConversationCommand, ConversationReport, DeathCause, FrontEvent, FrontRequest, HostCommand, HostReport,
+    OpenMode, Role, TurnPhase, DEATH_CAUSES, PROTOCOL_VERSION,
 };
 use audit::{Audit, Exit, Record};
 use memory::OomCounter;
@@ -104,9 +121,15 @@ struct Proc {
     chan: Chan,
     /// 拆除梯度：哪一步、下一步的期限。
     stop: Option<(Step, Option<Instant>)>,
+    /// 收到它版本相等的 `hello` 了。
+    hello: bool,
 }
 
 impl Proc {
+    fn new(pid: libc::pid_t, chan: Chan) -> Proc {
+        Proc { pid, chan, stop: None, hello: false }
+    }
+
     fn begin_stop(&mut self, now: Instant, eof_grace: Duration) {
         if self.stop.is_none() {
             self.chan.finish();
@@ -179,6 +202,10 @@ struct Conversation {
     max_silence: Duration,
     /// 吃滿 CPU 時的壓制（[`cpu`]）。
     cpu: cpu::Guard,
+    /// 連宿主用的身分（ASCII），隨 `hello` 交給它。
+    token: Vec<u8>,
+    /// 宿主回報它違反協定：不再放進身分表，到它結束為止。
+    quarantined: bool,
 }
 
 impl Conversation {
@@ -234,6 +261,22 @@ impl Conversation {
     }
 }
 
+struct Host {
+    proc: Proc,
+    /// 送過 `ready` 了。
+    ready: bool,
+    started: Instant,
+    /// 在 `--host-ready-timeout-ms` 內沒 `ready`，是監督行程殺的。
+    timed_out: bool,
+}
+
+/// `hello` 對不上（前台或宿主）而停機時的結束碼。
+const EXIT_PROTOCOL: i32 = 3;
+/// 宿主在 `ready` 之前連續失敗到上限而停機時的結束碼。
+const EXIT_HOST_FAILED: i32 = 4;
+/// 撤銷寫進宿主控制通道最多等這麼久；收屍會等它，所以要短。
+const REVOKE_WRITE_LIMIT: Duration = Duration::from_millis(500);
+
 struct Supervisor {
     args: args::Args,
     audit: Audit,
@@ -255,10 +298,23 @@ struct Supervisor {
     stats_at: Option<Instant>,
     /// 各類死因的累計，依死因碼的順序。
     deaths: [u32; DEATH_CAUSES],
+    /// 現在這個前台的身分 token。
+    front_token: Vec<u8>,
+    front_quarantined: bool,
+    host: Option<Host>,
+    host_restart_at: Option<Instant>,
+    /// 下一次重起前要等多久。
+    host_backoff: Duration,
+    /// `ready` 之前連續失敗了幾次。
+    host_failures: u32,
+    /// 停機中、還在等前台回答 `stop-admission` 的期限。
+    admission_until: Option<Instant>,
+    /// 停機完成時回的碼。
+    exit_code: i32,
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
-/// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯。
+/// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯；3：前台或宿主的 `hello` 對不上，停機完成；4：宿主 `ready` 之前連續失敗到上限，停機完成。
 pub fn run(argv: Vec<OsString>) -> i32 {
     let args = match args::parse(&argv) {
         Ok(args) => args,
@@ -296,6 +352,7 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         }
     };
     let stats_at = args.stats.map(|every| Instant::now() + every);
+    let host_backoff = args.host.as_ref().map_or(Duration::ZERO, |host| host.backoff);
     let mut supervisor = Supervisor {
         args,
         audit,
@@ -312,8 +369,17 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         warm_retry_at: None,
         stats_at,
         deaths: [0; DEATH_CAUSES],
+        front_token: Vec::new(),
+        front_quarantined: false,
+        host_backoff,
+        host: None,
+        host_restart_at: None,
+        host_failures: 0,
+        admission_until: None,
+        exit_code: 0,
     };
     supervisor.fill_warm();
+    supervisor.start_host();
     supervisor.start_front();
     Ok(supervisor)
 }
@@ -364,11 +430,39 @@ fn prepare_run_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 連宿主用的身分 token：16 個隨機 byte 的十六進位（32 個 ASCII 字元）。
+fn new_token() -> std::io::Result<Vec<u8>> {
+    let mut raw = [0u8; 16];
+    let mut filled = 0;
+    while filled < raw.len() {
+        // SAFETY：寫進 raw 還沒填的那一段。
+        let n = unsafe { libc::getrandom(raw[filled..].as_mut_ptr().cast(), raw.len() - filled, 0) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(err);
+        }
+        filled += n as usize;
+    }
+    Ok(raw.iter().flat_map(|b| format!("{b:02x}").into_bytes()).collect())
+}
+
+/// 第一框不是對的 `hello` 時，寫進訊息的那一段。
+fn hello_mismatch(request: &FrontRequest) -> String {
+    match request {
+        FrontRequest::Hello { version } => format!("版本 {version}"),
+        _ => "別的訊息".to_string(),
+    }
+}
+
 /// poll 的一格是誰的、讀還是寫。
 #[derive(Clone, Copy)]
 enum Slot {
     Signal,
     Front { write: bool },
+    Host { write: bool },
     Conversation { pid: libc::pid_t, write: bool },
     ConversationStderr { pid: libc::pid_t },
 }
@@ -378,10 +472,9 @@ impl Supervisor {
         loop {
             let now = Instant::now();
             self.on_timers(now);
-            if self.shutting_down && self.conversations.is_empty() {
-                match self.front.as_mut() {
-                    None => return 0,
-                    Some(front) => front.begin_stop(now, self.args.eof_grace),
+            if self.shutting_down {
+                if let Some(code) = self.advance_shutdown(now) {
+                    return code;
                 }
             }
 
@@ -400,6 +493,9 @@ impl Supervisor {
             };
             if let Some(front) = &self.front {
                 watch(&front.chan, Slot::Front { write: false }, Slot::Front { write: true });
+            }
+            if let Some(host) = &self.host {
+                watch(&host.proc.chan, Slot::Host { write: false }, Slot::Host { write: true });
             }
             for conversation in &self.conversations {
                 watch(
@@ -449,6 +545,12 @@ impl Supervisor {
                         }
                     }
                     Slot::Front { write: false } => self.on_front_readable(),
+                    Slot::Host { write: true } => {
+                        if let Some(host) = self.host.as_mut() {
+                            host.proc.chan.flush();
+                        }
+                    }
+                    Slot::Host { write: false } => self.on_host_readable(),
                     Slot::ConversationStderr { pid } => {
                         let conversation = self.conversations.iter_mut().find(|c| c.proc.pid == pid);
                         if let Some(tap) = conversation.and_then(|c| c.stderr.as_mut()) {
@@ -478,6 +580,20 @@ impl Supervisor {
         }
         if let Some(front) = self.front.as_mut() {
             front.advance_stop(now, term_grace);
+        }
+        if let Some(host) = self.host.as_mut() {
+            host.proc.advance_stop(now, term_grace);
+            if self.host_ready_deadline().is_some_and(|at| at <= now) {
+                say!("宿主起了 {} ms 還沒 ready，殺掉", self.args.host.as_ref().map_or(0, |h| h.ready_timeout.as_millis()));
+                if let Some(host) = self.host.as_mut() {
+                    host.timed_out = true;
+                    host.proc.kill_now();
+                }
+            }
+        }
+        if self.host_restart_at.is_some_and(|at| at <= now) && !self.shutting_down {
+            self.host_restart_at = None;
+            self.start_host();
         }
         if self.rss_poll_at <= now {
             self.rss_poll_at = now + self.args.rss_poll;
@@ -525,7 +641,17 @@ impl Supervisor {
             .chain(self.conversations.iter().filter_map(|c| self.idle_deadline(c)))
             .chain(self.warm_retry_at.filter(|_| !self.shutting_down))
             .chain(self.stats_at)
+            .chain(self.host.as_ref().and_then(|host| host.proc.deadline()))
+            .chain(self.host_ready_deadline())
+            .chain(self.host_restart_at.filter(|_| !self.shutting_down))
+            .chain(self.admission_until)
             .min()
+    }
+
+    /// 宿主還沒 `ready`、還沒在收：到這個時間點就當它起不來。
+    fn host_ready_deadline(&self) -> Option<Instant> {
+        let host = self.host.as_ref().filter(|host| !host.ready && host.proc.stop.is_none())?;
+        Some(host.started + self.args.host.as_ref()?.ready_timeout)
     }
 
     /// 監督行程比預定的時間晚了超過 `--stall-ms` 的一半才醒，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、
@@ -608,9 +734,15 @@ impl Supervisor {
     }
 
     fn start_front(&mut self) {
-        match process::spawn(&self.args.front, &self.args.front_args, false) {
-            Ok((pid, chan, _)) => {
-                let mut front = Proc { pid, chan, stop: None };
+        match new_token().and_then(|token| Ok((process::spawn(&self.args.front, &self.args.front_args, false)?, token))) {
+            Ok(((pid, chan, _), token)) => {
+                // 先登記、再交 token：宿主 ready 了，那一筆先排進宿主的通道；還沒的，等它 ready 時整張送。連線比那一筆先到，見 `on_unregistered`。
+                self.front = Some(Proc::new(pid, chan));
+                self.front_token = token.clone();
+                self.front_quarantined = false;
+                self.regrant(pid);
+                let Some(mut front) = self.front.take() else { return };
+                front.chan.send(&encode_front_event(&FrontEvent::Hello { version: PROTOCOL_VERSION, token }));
                 for conversation in self.conversations.iter().filter(|c| c.phase == Phase::Up && c.proc.stop.is_none()) {
                     let Some(thread) = &conversation.thread else { continue };
                     front.chan.send(&encode_front_event(&FrontEvent::Up {
@@ -650,9 +782,27 @@ impl Supervisor {
             }
         };
         for payload in frames {
-            match decode_front_request(&payload) {
+            let request = decode_front_request(&payload);
+            if let Some(front) = self.front.as_mut().filter(|front| !front.hello) {
+                match &request {
+                    Ok(FrontRequest::Hello { version: PROTOCOL_VERSION }) => {
+                        front.hello = true;
+                        continue;
+                    }
+                    Ok(other) => {
+                        say!("前台的第一框不是版本 {PROTOCOL_VERSION} 的 hello（{}），整台停機", hello_mismatch(other));
+                        front.kill_now();
+                        self.begin_shutdown(EXIT_PROTOCOL);
+                        return;
+                    }
+                    Err(_) => {}
+                }
+            }
+            match request {
                 Ok(FrontRequest::Ensure { thread_id, open }) => self.ensure(thread_id, open),
                 Ok(FrontRequest::Release { thread_id }) => self.release(&thread_id),
+                Ok(FrontRequest::AdmissionStopped) => self.admission_until = None,
+                Ok(FrontRequest::Hello { .. }) => {}
                 Err(err) => {
                     say!("前台送來解不開的訊息（{}），殺掉前台", err.0);
                     if let Some(front) = self.front.as_mut() {
@@ -738,6 +888,8 @@ impl Supervisor {
         if conversation.phase == Phase::Warm {
             Self::bind(conversation);
         }
+        let pid = conversation.proc.pid;
+        self.regrant(pid);
         true
     }
 
@@ -899,26 +1051,36 @@ impl Supervisor {
         let mut args = self.args.conversation_args.clone();
         args.push("--socket".into());
         args.push(socket.clone().into_os_string());
-        match process::spawn(&self.args.conversation, &args, true) {
-            Ok((pid, chan, stderr)) => self.conversations.push(Conversation {
-                proc: Proc { pid, chan, stop: None },
-                thread,
-                read_only: open == OpenMode::ReadOnly,
-                idle_since: None,
-                used_at: Instant::now(),
-                drain: None,
-                released: false,
-                rss_now_kb: 0,
-                socket,
-                phase: Phase::Starting,
-                turns: 0,
-                cause: None,
-                stderr,
-                rss_kb: 0,
-                heard_at: None,
-                max_silence: Duration::ZERO,
-                cpu: cpu::Guard::default(),
-            }),
+        match new_token().and_then(|token| Ok((process::spawn(&self.args.conversation, &args, true)?, token))) {
+            Ok(((pid, chan, stderr), token)) => {
+                self.conversations.push(Conversation {
+                    proc: Proc::new(pid, chan),
+                    thread,
+                    read_only: open == OpenMode::ReadOnly,
+                    idle_since: None,
+                    used_at: Instant::now(),
+                    drain: None,
+                    released: false,
+                    rss_now_kb: 0,
+                    socket,
+                    phase: Phase::Starting,
+                    turns: 0,
+                    cause: None,
+                    stderr,
+                    rss_kb: 0,
+                    heard_at: None,
+                    max_silence: Duration::ZERO,
+                    cpu: cpu::Guard::default(),
+                    token: token.clone(),
+                    quarantined: false,
+                });
+                // 先登記、再交 token：同 `start_front`。
+                self.regrant(pid);
+                if let Some(conversation) = self.conversations.last_mut() {
+                    let hello = ConversationCommand::Hello { version: PROTOCOL_VERSION, token };
+                    conversation.proc.chan.send(&encode_conversation_command(&hello));
+                }
+            }
             Err(err) => {
                 say!("對話行程起不來：{err}");
                 let error = err.to_string();
@@ -966,6 +1128,23 @@ impl Supervisor {
                     return;
                 }
             };
+            if !conversation.proc.hello {
+                if report == (ConversationReport::Hello { version: PROTOCOL_VERSION }) {
+                    conversation.proc.hello = true;
+                    continue;
+                }
+                say!(
+                    "對話行程 {} 的第一框不是版本 {PROTOCOL_VERSION} 的 hello（{}），殺掉",
+                    conversation.proc.pid,
+                    match report {
+                        ConversationReport::Hello { version } => format!("版本 {version}"),
+                        _ => "別的訊息".to_string(),
+                    }
+                );
+                conversation.cause.get_or_insert(DeathCause::Protocol);
+                conversation.proc.kill_now();
+                return;
+            }
             match report {
                 ConversationReport::Ready if conversation.phase == Phase::Starting => {
                     if conversation.thread.is_some() {
@@ -1041,24 +1220,65 @@ impl Supervisor {
         }
         if stop {
             if self.shutting_down {
-                say!("停機中又收到停止訊號，所有對話行程當場 SIGKILL");
+                say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
                 for conversation in &mut self.conversations {
                     conversation.proc.kill_now();
                 }
+                if let Some(host) = self.host.as_mut() {
+                    host.proc.kill_now();
+                }
             } else {
-                self.shutting_down = true;
-                // 還有行程的那幾條，等那個行程結束時回 `down`。
-                for (thread, _) in std::mem::take(&mut self.pending) {
-                    if self.conversations.iter().any(|c| c.thread.as_ref() == Some(&thread)) {
-                        continue;
-                    }
-                    self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Shutdown });
-                }
-                let now = Instant::now();
-                for conversation in &mut self.conversations {
-                    conversation.cause.get_or_insert(DeathCause::Shutdown);
-                    conversation.begin_stop(now, self.args.eof_grace);
-                }
+                self.begin_shutdown(0);
+            }
+        }
+    }
+
+    /// 開始停機（見檔頭的順序）；已經在停機的只記下結束碼（先記到的非 0 碼優先）。
+    fn begin_shutdown(&mut self, code: i32) {
+        if self.exit_code == 0 {
+            self.exit_code = code;
+        }
+        if self.shutting_down {
+            return;
+        }
+        self.shutting_down = true;
+        self.host_restart_at = None;
+        // 還有行程的那幾條，等那個行程結束時回 `down`。
+        for (thread, _) in std::mem::take(&mut self.pending) {
+            if self.conversations.iter().any(|c| c.thread.as_ref() == Some(&thread)) {
+                continue;
+            }
+            self.tell_front(&FrontEvent::Down { thread_id: thread, cause: DeathCause::Shutdown });
+        }
+        if self.front.as_ref().is_some_and(|front| front.stop.is_none()) {
+            self.tell_front(&FrontEvent::StopAdmission);
+            self.admission_until = Some(Instant::now() + self.args.admission_timeout);
+        }
+    }
+
+    /// 停機的下一步；全部收完回結束碼。
+    fn advance_shutdown(&mut self, now: Instant) -> Option<i32> {
+        let front_admitting = self.front.as_ref().is_some_and(|front| front.stop.is_none());
+        if front_admitting && self.admission_until.is_some_and(|at| at > now) {
+            return None;
+        }
+        self.admission_until = None;
+        if !self.conversations.is_empty() {
+            for conversation in &mut self.conversations {
+                conversation.cause.get_or_insert(DeathCause::Shutdown);
+                conversation.begin_stop(now, self.args.eof_grace);
+            }
+            return None;
+        }
+        if let Some(host) = self.host.as_mut() {
+            host.proc.begin_stop(now, self.args.eof_grace);
+            return None;
+        }
+        match self.front.as_mut() {
+            None => Some(self.exit_code),
+            Some(front) => {
+                front.begin_stop(now, self.args.eof_grace);
+                None
             }
         }
     }
@@ -1068,19 +1288,199 @@ impl Supervisor {
             conversation.cause.get_or_insert(DeathCause::Shutdown);
             conversation.proc.kill_now();
         }
+        if let Some(host) = self.host.as_mut() {
+            host.proc.kill_now();
+        }
         if let Some(front) = self.front.as_mut() {
             front.kill_now();
         }
     }
 
+    fn start_host(&mut self) {
+        let Some(config) = &self.args.host else { return };
+        let socket = self.args.run_dir.join("host.sock");
+        let mut args = config.args.clone();
+        args.push("--socket".into());
+        args.push(socket.into_os_string());
+        match process::spawn(&config.program, &args, false) {
+            Ok((pid, chan, _)) => {
+                let mut proc = Proc::new(pid, chan);
+                proc.chan.send(&encode_host_command(&HostCommand::Hello { version: PROTOCOL_VERSION }));
+                self.host = Some(Host { proc, ready: false, started: Instant::now(), timed_out: false });
+            }
+            Err(err) => {
+                say!("宿主起不來：{err}");
+                let error = err.to_string();
+                self.audit.record(&Record::Host { pid: 0, exit: Exit::NOT_STARTED, ready: false, error: Some(&error) });
+                self.host_failed(false, Duration::ZERO);
+            }
+        }
+    }
+
+    /// 宿主沒了（沒起成或結束了）：`ready` 之前的失敗連續到上限就停機，否則照退避排下一次重起。停機中不重起。
+    fn host_failed(&mut self, ready: bool, lived: Duration) {
+        let Some(config) = &self.args.host else { return };
+        if self.shutting_down {
+            return;
+        }
+        if !ready {
+            self.host_failures += 1;
+            if self.host_failures >= config.start_failures {
+                say!("宿主在 ready 之前連續失敗 {} 次，整台停機", self.host_failures);
+                self.begin_shutdown(EXIT_HOST_FAILED);
+                return;
+            }
+        }
+        if lived >= config.stable {
+            self.host_backoff = config.backoff;
+        }
+        let wait = self.host_backoff;
+        self.host_backoff = (wait * 2).min(config.backoff_max);
+        say!("宿主 {} ms 後重起", wait.as_millis());
+        self.host_restart_at = Some(Instant::now() + wait);
+    }
+
+    fn on_host_readable(&mut self) {
+        let Some(host) = self.host.as_mut() else { return };
+        let frames = match host.proc.chan.receive() {
+            Ok(frames) => frames,
+            Err(err) => {
+                say!("宿主送來解不開的框（{}），殺掉宿主", err.0);
+                host.proc.kill_now();
+                return;
+            }
+        };
+        for payload in frames {
+            let Some(host) = self.host.as_mut() else { return };
+            let report = match decode_host_report(&payload) {
+                Ok(report) => report,
+                Err(err) => {
+                    say!("宿主送來解不開的訊息（{}），殺掉宿主", err.0);
+                    host.proc.kill_now();
+                    return;
+                }
+            };
+            if !host.proc.hello {
+                if report == (HostReport::Hello { version: PROTOCOL_VERSION }) {
+                    host.proc.hello = true;
+                    continue;
+                }
+                say!("宿主的第一框不是版本 {PROTOCOL_VERSION} 的 hello，整台停機");
+                host.proc.kill_now();
+                self.begin_shutdown(EXIT_PROTOCOL);
+                return;
+            }
+            match report {
+                HostReport::Ready if !host.ready && host.proc.stop.is_none() => {
+                    host.ready = true;
+                    self.host_failures = 0;
+                    say!("宿主 {} ready", host.proc.pid);
+                    let grants: Vec<HostCommand> = self.identities().filter_map(|pid| self.grant_of(pid)).collect();
+                    if let Some(host) = self.host.as_mut() {
+                        for grant in grants {
+                            host.proc.chan.send(&encode_host_command(&grant));
+                        }
+                    }
+                }
+                HostReport::Violation { pid, reason } => self.on_violation(pid, &reason),
+                HostReport::Unregistered { pid, conn, reason } => self.on_unregistered(pid, conn, &reason),
+                _ => {}
+            }
+        }
+    }
+
+    /// 前台與每個對話行程的 pid。
+    fn identities(&self) -> impl Iterator<Item = libc::pid_t> + '_ {
+        self.front.iter().map(|front| front.pid).chain(self.conversations.iter().map(|c| c.proc.pid))
+    }
+
+    /// 這個 pid 在身分表上的那一筆：沒被隔離的前台或對話行程才有。spawn 當下就有，`hello` 對不上的會被殺掉、收屍前撤掉。
+    fn grant_of(&self, pid: libc::pid_t) -> Option<HostCommand> {
+        let (token, role, thread) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
+            if self.front_quarantined {
+                return None;
+            }
+            (self.front_token.clone(), Role::Front, Vec::new())
+        } else {
+            let conversation = self.conversations.iter().find(|c| c.proc.pid == pid && !c.quarantined)?;
+            (conversation.token.clone(), Role::Conversation, conversation.thread.clone().unwrap_or_default())
+        };
+        Some(HostCommand::Grant { pid: u32::try_from(pid).ok()?, token, role, thread })
+    }
+
+    /// 這個 pid 的那一筆有了或變了：宿主 `ready` 了就送過去（還沒 `ready` 的，等它 `ready` 時整張送）。
+    fn regrant(&mut self, pid: libc::pid_t) {
+        let Some(grant) = self.grant_of(pid) else { return };
+        if let Some(host) = self.host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()) {
+            host.proc.chan.send(&encode_host_command(&grant));
+        }
+    }
+
+    /// 宿主拒了一條 pid 不在它表上的連線，或一條撤過的連線。那個 pid 是活著、沒被隔離的前台或對話行程時，它那一筆 spawn 當下就登記了，
+    /// 宿主沒有只會是還沒寫進宿主的 pipe（宿主剛起來或剛重起、這邊還沒處理它的 `ready`，或排在這邊沒寫出去）；撤過的連線是撤銷之前
+    /// 就連上的：同一個號碼上一個行程留下的，或 pid 重用得比宿主讀 pipe 快、新行程先連上的。兩種都不是它的錯：不隔離、不寫稽核，只在運作 log 記一行警告，帶 pid 與宿主的連線編號（`conn`，
+    /// 宿主自己的 log 也寫這個號）。其餘的（不是我們的 pid、已經隔離的）照違規記，稽核的理由是宿主回給那條連線的。
+    fn on_unregistered(&mut self, pid: u32, conn: u32, reason: &[u8]) {
+        let live = libc::pid_t::try_from(pid).ok().filter(|&pid| pid > 0).is_some_and(|pid| self.grant_of(pid).is_some());
+        if live {
+            say!("警告：宿主拒了 pid {pid} 的連線 #{conn}：表還在路上，或是撤銷之前就連上的連線；不隔離、不寫稽核");
+            return;
+        }
+        self.on_violation(pid, reason);
+    }
+
+    /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
+    /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
+    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。
+    /// 不是我們的 pid（含 0），只寫稽核，`role` 記 `unknown`。
+    fn on_violation(&mut self, pid: u32, reason: &[u8]) {
+        let reason = String::from_utf8_lossy(reason);
+        let pid = libc::pid_t::try_from(pid).unwrap_or(-1);
+        let (role, thread) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
+            self.front_quarantined = true;
+            ("front", Vec::new())
+        } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid) {
+            conversation.quarantined = true;
+            ("conversation", conversation.thread.clone().unwrap_or_default())
+        } else {
+            ("unknown", Vec::new())
+        };
+        say!("宿主斷了 pid {pid}（{role}）的連線：{reason}；這個身分隔離到它結束");
+        self.audit.record(&Record::Protocol { pid, role, thread: &thread, reason: &reason });
+        if let (true, Ok(pid), Some(host)) =
+            (role != "unknown", u32::try_from(pid), self.host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()))
+        {
+            host.proc.chan.send(&encode_host_command(&HostCommand::Revoke { pid }));
+        }
+    }
+
     fn reap(&mut self) {
-        let leaders: Vec<libc::pid_t> =
-            self.conversations.iter().map(|c| c.proc.pid).chain(self.front.as_ref().map(|f| f.pid)).collect();
+        let leaders: Vec<libc::pid_t> = self
+            .conversations
+            .iter()
+            .map(|c| c.proc.pid)
+            .chain(self.front.as_ref().map(|f| f.pid))
+            .chain(self.host.as_ref().map(|h| h.proc.pid))
+            .collect();
+        // 隔離中的也算：它那一筆 `grant` 與隔離時補送的 `revoke` 可能還排在這邊沒寫出去，收屍前要一起寫進 pipe。
+        let identities: Vec<libc::pid_t> = self.identities().collect();
+        let host = &mut self.host;
         let mut exited = Vec::new();
         process::reap(
             |pid| {
                 if leaders.contains(&pid) {
                     process::signal_group(pid, libc::SIGKILL);
+                }
+                // 收屍之前撤掉它的身分：這時 pid 還沒被收，不會被重用。撤銷要在收屍之前真的進 pipe；宿主每一輪先讀乾淨控制通道才處理連線，
+                // 所以 pid 被重用之後才來的連線，一定排在撤銷後面。寫不進去就當場殺掉宿主：新的宿主拿到的表本來就沒有這個 pid。
+                if let (true, Ok(pid), Some(host)) =
+                    (identities.contains(&pid), u32::try_from(pid), host.as_mut().filter(|host| host.ready))
+                {
+                    host.proc.chan.send(&encode_host_command(&HostCommand::Revoke { pid }));
+                    if !host.proc.chan.flush_until(Instant::now() + REVOKE_WRITE_LIMIT) {
+                        eprintln!("nexus-supervisor: 宿主 {} 收不下撤銷，殺掉重起", host.proc.pid);
+                        process::signal_group(host.proc.pid, libc::SIGKILL);
+                    }
                 }
             },
             |pid, status| exited.push((pid, Exit::from_status(status))),
@@ -1091,6 +1491,16 @@ impl Supervisor {
     }
 
     fn on_exit(&mut self, pid: libc::pid_t, exit: Exit) {
+        if self.host.as_ref().is_some_and(|host| host.proc.pid == pid) {
+            let Some(host) = self.host.take() else { return };
+            let error = host.timed_out.then_some("ready 之前逾時");
+            self.audit.record(&Record::Host { pid, exit, ready: host.ready, error });
+            if !self.shutting_down {
+                say!("宿主結束了（{exit:?}，{}）", if host.ready { "ready 之後" } else { "ready 之前" });
+            }
+            self.host_failed(host.ready, host.started.elapsed());
+            return;
+        }
         if self.front.as_ref().is_some_and(|front| front.pid == pid) {
             self.front = None;
             self.audit.record(&Record::Front { pid, exit, error: None });

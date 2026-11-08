@@ -2,6 +2,8 @@
  * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §5-2、§7-2）：
  * 從 stdin 讀監督行程的命令，往 stdout 寫回報，框格式與編解碼在 `supervisor-protocol.ts`。**stdout 只寫框**，日誌一律走 stderr。
  *
+ * - `hello`：建構時就送自己的。監督行程的第一框也要是版本相同的 `hello`，不是就當讀到解不開的框；它帶的 token 留在 {@link ConversationControl.hostToken}，
+ *   給連宿主用。
  * - `bind(threadId)`：記下綁哪一條，叫 `open` 把它建起來，回 `bound`。建不起來也回 `bound`、記一行：之後經這條 thread 的請求會再建一次，
  *   失敗的話回的是 wire 上那個原因的專用碼（例如日誌太大），前台照常轉給瀏覽器。
  * - 閒置：每 `pollMs` 問一次 `idleState`。變成閒置時送 `idle(idleMs)`，`idleMs` 從「handler 的最後活動時間」與「上一次問到不閒的時間」
@@ -20,6 +22,7 @@
 import type { Readable, Writable } from 'node:stream';
 
 import {
+  PROTOCOL_VERSION,
   decodeConversationCommand,
   encodeConversationReport,
   frame,
@@ -69,11 +72,18 @@ export class ConversationControl {
   #poll: ReturnType<typeof setInterval> | undefined;
   #pending: Buffer = Buffer.alloc(0);
   #ended = false;
+  #hostToken: string | undefined;
 
   constructor(options: ConversationControlOptions) {
     this.#options = options;
+    this.#send({ type: 'hello', version: PROTOCOL_VERSION });
     options.input.on('data', (chunk: Buffer) => this.#receive(chunk));
     options.input.on('end', () => this.#end());
+  }
+
+  /** 監督行程在 `hello` 裡給的 token；還沒收到是 `undefined`。 */
+  get hostToken(): string | undefined {
+    return this.#hostToken;
   }
 
   /** 這個行程綁著的 thread；還沒綁是 `undefined`。給 `WireHandlerOptions.boundThread`。 */
@@ -155,7 +165,20 @@ export class ConversationControl {
         this.#fail(error);
         return;
       }
-      if (command.type === 'bind') void this.#bind(command.threadId);
+      if (this.#hostToken === undefined) {
+        if (command.type !== 'hello' || command.version !== PROTOCOL_VERSION) {
+          this.#fail(
+            new Error(
+              `第一框要是版本 ${String(PROTOCOL_VERSION)} 的 hello，收到 ${command.type === 'hello' ? `版本 ${String(command.version)}` : command.type}`,
+            ),
+          );
+          return;
+        }
+        this.#hostToken = command.token;
+        continue;
+      }
+      if (command.type === 'hello') this.#options.warn('[控制面] 監督行程又送了一次 hello，不理');
+      else if (command.type === 'bind') void this.#bind(command.threadId);
       else this.#drain();
     }
   }

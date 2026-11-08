@@ -26,6 +26,7 @@ import {
   decodeConversationReport,
   encodeConversationCommand,
   frame,
+  PROTOCOL_VERSION,
   takeFrames,
 } from './supervisor-protocol.js';
 import type { ConversationCommand, ConversationReport } from './supervisor-protocol.js';
@@ -127,6 +128,15 @@ async function start(turns: readonly ScriptedTurn[]): Promise<Running> {
     },
   );
   children.push(child);
+  child.stdin?.write(
+    frame(
+      encodeConversationCommand({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        token: '00112233445566778899aabbccddeeff',
+      }),
+    ),
+  );
   let pending: Buffer = Buffer.alloc(0);
   const reports: ConversationReport[] = [];
   const waiters: ((report: ConversationReport) => void)[] = [];
@@ -139,7 +149,7 @@ async function start(turns: readonly ScriptedTurn[]): Promise<Running> {
     pending = taken.rest;
     for (const payload of taken.frames) {
       const report = decodeConversationReport(payload);
-      if (report.type === 'heartbeat') continue;
+      if (report.type === 'heartbeat' || report.type === 'hello') continue;
       const waiter = waiters.shift();
       if (waiter === undefined) reports.push(report);
       else waiter(report);

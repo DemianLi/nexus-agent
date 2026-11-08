@@ -22,7 +22,22 @@ import {
 import { FrontForwarder } from './front-forward.js';
 import { createFrontWireHandler } from './front-wire.js';
 import { SupervisorClient } from './supervisor-client.js';
-import { decodeFrontRequest, encodeFrontEvent, frame, takeFrames } from './supervisor-protocol.js';
+import {
+  decodeFrontRequest,
+  encodeFrontEvent,
+  frame,
+  PROTOCOL_VERSION,
+  takeFrames,
+} from './supervisor-protocol.js';
+
+/** 監督行程一起來就送的那顆 `hello`。 */
+const HELLO = frame(
+  encodeFrontEvent({
+    type: 'hello',
+    version: PROTOCOL_VERSION,
+    token: '00112233445566778899aabbccddeeff',
+  }),
+);
 import type { IdleSweepingWireHandler } from './wire-handler.js';
 import { OWNER_PRINCIPAL } from './wire-principal.js';
 import type { EmbedPrincipal } from './wire-principal.js';
@@ -85,6 +100,7 @@ function supervisorAnswering(
     }
   });
   const client = new SupervisorClient({ input, output });
+  input.write(HELLO);
   cleanups.push(() => {
     input.end();
   });
@@ -542,6 +558,7 @@ describe('createFrontWireHandler 的收尾（#1787）', () => {
         }
       }
     });
+    input.write(HELLO);
     cleanups.push(() => {
       input.end();
     });

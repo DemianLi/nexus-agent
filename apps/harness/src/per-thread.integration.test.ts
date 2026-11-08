@@ -7,10 +7,10 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
@@ -96,11 +96,13 @@ async function start(
   roots.push(dir);
   const patch = join(dir, 'script.patch.yml');
   // 監督行程的旗標由啟動器組，測試要加的經一支 `exec` 包裝：pid 不變，`childrenRunning` 照樣找得到子行程。
+  // 啟動器在 `supervisorBinary` 旁邊找宿主，所以包裝旁邊也要有一個。
   let supervisorBinary = SUPERVISOR!;
   if (supervisorArgs.length > 0) {
     supervisorBinary = join(dir, 'supervisor-wrapper.sh');
     const quoted = [SUPERVISOR!, ...supervisorArgs].map((arg) => `'${arg}'`).join(' ');
     await writeFile(supervisorBinary, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+    await symlink(join(dirname(SUPERVISOR!), 'nexus-host'), join(dir, 'nexus-host'));
   }
   await writeFile(
     patch,
