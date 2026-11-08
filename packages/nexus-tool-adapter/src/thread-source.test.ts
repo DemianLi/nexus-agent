@@ -213,3 +213,31 @@ describe('ToolThread.on／join／provide 撤得掉', () => {
     expect(calls).toBe(0);
   });
 });
+
+describe('ToolThread.section 的 text 收到的 context（2.8.0）', () => {
+  it('函式只拿到 { call }，call 是相容層交給段的那一份身分；字串原樣登記', async () => {
+    const seen: unknown[] = [];
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        thread.section({
+          name: 'probe:fn',
+          order: 2000,
+          text: (context) => {
+            seen.push(context);
+            return '段';
+          },
+        });
+        thread.section({ name: 'probe:str', order: 2000, text: '原文' });
+      }),
+    ]);
+    const [fn, str] = registry.prompt.sections();
+    const call = { configurable: { thread_id: 't-1' } };
+    const text = fn?.text;
+    if (typeof text !== 'function') throw new Error('probe:fn 應該登記成函式');
+
+    expect(text({ agent: { kind: 'root' }, call, tools: ['probe'] })).toBe('段');
+    expect(seen).toEqual([{ call }]);
+    expect((seen[0] as { call: unknown }).call).toBe(call);
+    expect(str?.text).toBe('原文');
+  });
+});
