@@ -7,7 +7,7 @@ kind: persistence-change
 
 ## 摘要
 
-會話格式 54 → 55（#2416）：`model/start` 延後到請求快照之後才寫，`request/system`、`request/header` 改寫在它所屬那次 `model/start` 之前、不帶 `modelCall`，快照與 `model/start` 一起排空之後才送出請求；`assistant/attempt` 不再標 `ignorable`；`turn/end` 的 `reason.kind` 多一種 `max-turns`（讀得懂、還沒有生產者），append、seed 與讀盤拒不認得的收尾理由。讀盤的關係驗證多四條：新形狀的快照要在輪內、輪收之前要等到 `model/start`（被 `interrupted` 收掉的輪不檢）；作廢的嘗試要在輪內、要在它那次呼叫以 `error` 或 `aborted` 收尾之後。`SessionHeader` 與 `JsonlHeaderLine` 的 `version` 字面量從 54 變 55。
+會話格式 54 → 55（#2416）：`model/start` 延後到請求快照之後才寫，`request/system`、`request/header` 改寫在它所屬那次 `model/start` 之前、不帶 `modelCall`，快照與 `model/start` 一起排空之後才送出請求（耐久檢查點被關掉時不排空，同 #599）；`assistant/attempt` 不再標 `ignorable`；`turn/end` 的 `reason.kind` 多一種 `max-turns`（讀得懂、還沒有生產者），append、seed 與讀盤拒不認得的收尾理由。讀盤的關係驗證多四條：新形狀的快照要在輪內、輪收之前要等到 `model/start`（被 `interrupted` 收掉的輪不檢）；作廢的嘗試要在輪內、要在它那次呼叫以 `error` 或 `aborted` 收尾之後。`SessionHeader` 與 `JsonlHeaderLine` 的 `version` 字面量從 54 變 55。
 
 ## 目錄
 
