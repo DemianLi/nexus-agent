@@ -10,17 +10,17 @@
 
 讀的版本：nexus `origin/develop` `b0cf55cd`；dsh 本機 clone，一律 `git show 8bd0733:`。
 
-本篇只讀程式碼：沒有量測，沒有下載，沒有改產品碼。程式碼的事實由兩個子代理讀出，我逐條抽查過下面引用的檔:行（抽查清單見 §八）。
+本篇只讀程式碼：沒有量測，沒有下載，沒有改產品碼。程式碼的事實先由兩個子代理讀出，再由我用 `git show` 逐條核對引用的檔:行；核到哪裡、哪幾條沒核，見 §十一。
 
 ## 結論
 
 | 題 | 推薦 | 要不要 demian 拍板 |
 | --- | --- | --- |
 | 1 宿主由誰起 | 監督行程把它當成第三種子行程來起，跟前台、對話行程同一套 `spawn`；重起要有退避與上限 | 不用，D245 留給本卡定 |
-| 2 宿主死了帶走什麼 | 對話行程與前台不跟著死。在跑的 turn 全部中斷，靠租約釋放與 log 修補恢復。終點的爆炸半徑比今天的共用 Node 前台大，要用「宿主裡不跑第三方程式」換 | **要**，見 §六 是非題 A |
+| 2 宿主死了帶走什麼 | 對話行程與前台不跟著死。在跑的 turn 全部中斷，靠租約釋放與 log 修補恢復。終點的爆炸半徑比今天的共用 Node 前台大，要用「宿主裡不跑第三方程式」換 | **要**，見 §九 是非題 A |
 | 4 協定 | 傳輸沿用 #2339 的長度前綴框；所有管道先補版本握手；收尾先擋准入。訊息內容的形狀不在本輪 | 不用 |
-| 5 沙箱與 spawner | spawner 照舊每個要跑工具的行程各一支；宿主另起一支自己的 spawner 子行程給 MCP stdio 伺服器用 | **要**，見 §六 是非題 B |
-| 7 稽核寫入者 | 行程生死的稽核留在監督行程，不併進宿主；會話與政策的事件 log 由宿主寫 | **要**，見 §六 是非題 C |
+| 5 沙箱與 spawner | spawner 照舊每個要跑工具的行程各一支；宿主另起一支自己的 spawner 子行程給 MCP stdio 伺服器用 | **要**，見 §九 是非題 B |
+| 7 稽核寫入者 | 行程生死的稽核留在監督行程，不併進宿主；會話與政策的事件 log 由宿主寫 | **要**，見 §九 是非題 C |
 | 8 瘦身功能歸誰 | HTTP、靜態檔、登入、探針與指標留在前台；搜尋、引用候選、釘選封存、列 thread 搬進宿主；記錄檔各寫各的。記憶體**沒量** | 不用 |
 
 ## 一、今天的行程樹（per-thread）
@@ -94,13 +94,15 @@ dsh 在解決的問題：桌機上把後端跟 Electron main、renderer 隔開�
 | #2571、#2572 落地後 | 加上事件 log 的寫入、政策 hook | 所有正在跑的 turn（每一步都要寫 log、過政策） |
 | 終點（#2573） | 加上 agent loop | 所有正在跑的 turn |
 
+表是按「宿主裡多了什麼」分組，不是排程。#2570、#2571、#2572 的前置都只寫 #2569，彼此沒有先後；#2571 另外等落盤格式升版，#2572 另外等 K7 #2357。D245「event log 與 policy hook 先、loop 最後」說的是組合層的順序，MCP 與並行上限不屬於組合層，所以跟這張表不衝突。
+
 **這跟 #2562 的論證有張力，要照實寫。** #2562 推 Q1a 的理由之一是「共用組合層的爆炸半徑」：共用的 Node 前台裡放組合層，一個插件把行程弄掛，所有對話一起停。到了終點，Rust 宿主一樣是所有 thread 共用的；它一死，所有正在跑的 turn 也一起斷。兩者的差別不在「死了斷多少」，而在「多容易死」與「死了怎麼回來」：
 
 1. **宿主裡不跑第三方程式。** TS 插件照 Q21 留在對話行程的對話級樹；宿主裡只有 Rust 側插件，編進執行檔、用設定開關（#1948 Q18，已帶進 #2569）。前台若放組合層，裡面跑的是 TS 插件，一個插件的未捕捉例外或記憶體失控就會讓它掛掉。這一條是爆炸半徑可以接受的前提；它要守住，否則論證不成立。
 2. **死了靠租約與 log 修補回來，不靠行程活著。** 做法照 dsh：寫入租約用核心 flock，行程一死就釋放、刻意不設逾期（`lease.ts:1-13@8bd0733`）；重起時截掉撕裂的尾巴，替開著的 turn 補合成的 `turn/end`，工具標「結果不明」（`repair.ts:14-35@8bd0733`）。nexus 今天每條對話行程已經各拿 `session.lock` 寫租約（`apps/harness/src/session-lease.ts`），搬進宿主時沿用同一個鎖檔，換一個持有者。
 3. **前台在宿主不在時回 503，不把請求排進去。** 理由跟收尾一樣：准入在前台擋（#2524 的方向）。
 
-說不圓的地方：第 1 條是一條要一直守的紀律，不是結構保證。如果哪天要讓第三方程式進宿主，爆炸半徑的論證就要重來。另一條路是**宿主分片**（每 N 條 thread 一個宿主），代價是 MCP 連線池與並行上限又變回不是全機的，跟 #1948 偏離 #5、#6 的理由衝突。本篇不推薦分片，寫成 §六 是非題 A 交 demian。
+說不圓的地方：第 1 條是一條要一直守的紀律，不是結構保證。如果哪天要讓第三方程式進宿主，爆炸半徑的論證就要重來。另一條路是**宿主分片**（每 N 條 thread 一個宿主），代價是 MCP 連線池與並行上限又變回不是全機的，跟 #1948 偏離 #5、#6 的理由衝突。本篇不推薦分片，寫成 §九 是非題 A 交 demian。
 
 ## 五、第 4 題：協定
 
@@ -110,7 +112,7 @@ dsh 在解決的問題：桌機上把後端跟 Electron main、renderer 隔開�
 
 **版本握手**：今天所有控制管道都沒有版本欄位，框解不開就把對話行程判成 `crash` 收掉。多一類行程之後，四種角色要一起升級，錯配的機會變多。推薦每條管道的第一個框是 `hello`，帶協定版本，對不上就以明確的死因結束，而不是判成 crash。dsh 不做執行期協商，因為 shell 與 runtime 一起出貨（`host-protocol.ts:4@8bd0733`）；nexus 的四種角色也從同一份產物出貨，所以版本規則可以照 dsh 要求完全相等，差別只在 nexus 要在執行期驗、驗不過要給明確的原因。
 
-**收尾順序**：先讓前台停准入，再讓宿主把在跑的 turn 收尾寫進 log，再收對話行程，最後收 spawner。前台先停准入，跟 #2524 B 案的方向一致；#2524 選哪一案由那張卡定，本篇不替它選。每一步的時限照 dsh 的階梯（`host-process.ts:347-361@8bd0733`：10 s、5 s、5 s），總長要放進 nexus 現有的 5 s 收尾上限，怎麼分配留給 #2569。
+**收尾順序**：先讓前台停准入，再讓宿主把在跑的 turn 收尾寫進 log，再收對話行程，最後收 spawner。前台先停准入，跟 #2524 B 案的方向一致；#2524 選哪一案由那張卡定，本篇不替它選。每一步的時限可以參考 dsh 的階梯（`host-process.ts:347-361@8bd0733`：10 s、5 s、5 s，總長 20 s）。nexus 今天每個 Node 行程各自的收尾上限是 5 s（`apps/harness/src/process-shutdown.ts:26`），整台多一層宿主之後總長與分配怎麼定，留給 #2569。
 
 ## 六、第 5 題：沙箱與 spawner
 
@@ -143,7 +145,7 @@ dsh 在解決的問題：桌機上把後端跟 Electron main、renderer 隔開�
 
 **推薦**：第 2 種由宿主寫（#2571 照原定）；第 1 種**留在監督行程，不併進宿主**。理由：宿主自己死掉的那一筆，不能靠宿主來寫。監督行程是唯一看得到所有行程生死的行程，它本來就寫這一份。dsh 沒有獨立的稽核日誌，核准寫進 session log（`escalation.ts:187@8bd0733`）；nexus 的政策決定也照這樣寫進事件 log，但行程生死這一份 dsh 沒有對應，因為 dsh 沒有監督行程。
 
-**這會推翻今天剛做的處理**：#2344（監督行程稽核的輪替與指標）今天以 not planned 關掉，需求併進 #2571，理由是「可能跟宿主的事件 log 重複」。照本篇的推薦，它不重複，需求應該回到 #2576。寫成是非題 C。
+**這會推翻今天剛做的處理**：#2344（監督行程稽核的輪替與指標）今天以 not planned 關掉，需求併進 #2571，關卡留言的理由是「替監督行程那份獨立的稽核 JSONL 做輪替，跟 D245『一個不跟著對話行程崩潰的寫入者』可能重複」，而且留言寫明「稽核要不要併進事件 log 由 #2568 第 7 題定」。照本篇的推薦，它不重複，需求應該回到 #2576。寫成是非題 C。
 
 ## 八、第 8 題：瘦身功能歸誰
 
@@ -186,6 +188,8 @@ dsh 在解決的問題：桌機上把後端跟 Electron main、renderer 隔開�
 
 - 第 3、6 題沒做（D247）。
 - 記憶體與 CPU 都沒量。
-- dsh 引用的檔:行都用 `git show 8bd0733:` 核過開頭幾行：`host-process.ts:64-68`、`:212-224`、`:347-361`，`backend-controller.ts:138-148`，`lease.ts:1-13`，`repair.ts:14-35`，`desktop-host/src/index.ts:31-36`，`cli/src/bin.ts:32-42`，`subprocess-local/src/index.ts:92-96`，`mcp-client/src/transport.ts:3-4`，`session-query-sqlite/src/index.ts:2`，`workspace-controller/src/index.ts:159-162`，`escalation.ts:187`。`fatal-recovery.ts:51-125` 只讀了子代理的摘要。
-- nexus 自己核過的：`process.rs:31-56`、`mod.rs:1-12`、`mod.rs:1093-1101`、`supervisor_protocol.rs:6-7`、`audit.rs:72-75`、`child.rs:58-61`、`peer-socket-auth.ts:1-12`、`front-wire.ts:11`、`sandbox-spawner-client.ts:294-298`、`serve.ts:2271-2274`。§八表裡 `serve.ts` 的其他行號是子代理讀的，沒逐一核。
+- 核對的做法：dsh 用 `git -C <主 checkout>/references/deepseek-harness show 8bd0733:<path>`，nexus 用 `git show origin/develop:<path>`（`b0cf55cd`），讀出引用範圍確認是那段程式。範圍長的只讀了開頭與結尾幾行。
+- dsh 核過：`desktop-host/src/index.ts:31-36`、`cli/src/bin.ts:32-42`、`host-process.ts:64-111`（讀開頭）、`:212-224`、`:347-361`，`host-protocol.ts:4`，`backend-controller.ts:138-148`，`lease.ts:1-13`，`repair.ts:14-35`，`session-persistence-jsonl/src/index.ts:423`，`subprocess-local/src/index.ts:92-120`（讀開頭），`mcp-client/src/transport.ts:3-19`（讀開頭），`session-query-sqlite/src/index.ts:2`，`workspace-controller/src/index.ts:159-171`（讀開頭），`escalation.ts:187`。
+- dsh 只核了一半：`fatal-recovery.ts:51-125` 只確認 `DesktopFatalRecovery` 這個類別在那裡；「對話框、由人選離開或重起」是子代理讀的，我沒逐行核。
+- nexus 核過：`process-launcher.ts:393-424`、`process.rs:31-56`、`mod.rs:1-12`、`mod.rs:1093-1101`、`supervisor_protocol.rs:6-7`、`audit.rs:72-120`（讀開頭與結尾）、`child.rs:58-61`、`peer-socket-auth.ts:1-40`（讀開頭）、`front-wire.ts:11`、`sandbox-spawner-client.ts:296`、`process-shutdown.ts:26`，以及 §八 表裡 `serve.ts` 的每一個行號。`session-lease.ts` 只核了檔在、用 `session.lock`，沒讀全檔。
 - 宿主的 5 s 收尾上限怎麼分配、重起的上限與退避數字，都沒定。
