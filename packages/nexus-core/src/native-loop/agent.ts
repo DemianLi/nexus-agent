@@ -56,7 +56,7 @@ import { isNativeNoopCell, withNativeNoopCells } from './native-noop-cells.js';
 import { runTool } from './tool-node.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
 import { emptyState, StateChannels, type LoopState } from './state.js';
-import { RunSuspension, type PendingAsk } from './suspension.js';
+import { RunSuspension, type CallSlot, type PendingAsk } from './suspension.js';
 
 /** {@link createNativeAgent} 的參數，同 `createAgent` 用得到的那幾格。 */
 export interface NativeAgentParams {
@@ -973,14 +973,19 @@ export class NativeAgent {
     suspension: RunSuspension | undefined,
   ): Promise<boolean> {
     const step = new AbortController();
-    const tasks = calls.map((call) =>
+    const slots = new Array<CallSlot | undefined>(calls.length);
+    const tasks = calls.map((call, index) =>
       node(
         'tools',
         { ...state, lg_tool_call: call },
         step.signal,
         suspension === undefined
           ? undefined
-          : (ns) => ({ [HUMAN_INPUT_CONFIG_KEY]: suspension.serviceFor(call.id ?? '', [ns]) }),
+          : (ns) => {
+              const slot = suspension.slot(call.id ?? '', [ns]);
+              slots[index] = slot;
+              return { [HUMAN_INPUT_CONFIG_KEY]: slot.service };
+            },
       ),
     );
     const results = new Array<ToolMessage | Command | undefined>(calls.length);
@@ -1004,13 +1009,13 @@ export class NativeAgent {
     if (caller?.aborted === true) throw new Error('Abort');
     const batch = runBounded(
       calls.map((call, index) => async () => {
-        suspension?.enter();
+        slots[index]?.enter();
         try {
           const result = await runTool(call, this.#tools, this.#toolCells, tasks[index]!, owner);
           results[index] = result;
           note('tools', isCommand(result) ? commandUpdateOf(result) : { messages: [result] });
         } finally {
-          suspension?.exit();
+          slots[index]?.exit();
         }
       }),
       Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),

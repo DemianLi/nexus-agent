@@ -1,23 +1,29 @@
 /**
  * {@link RunSuspension} 的判定：停在等待點、都在 `idle` 卻沒人問、補記拋錯、收回放掉在 `idle` 等的。
  *
- * 經 harness 的線一路跑的見 `apps/harness/src/human-input-wire.test.ts`；這裡量的是那條路上造不出來的兩種情形。
+ * 經 harness 的線一路跑的見 `apps/harness/src/human-input-wire.test.ts`；這裡量的是那條路上不好造出來的情形。
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { isHumanInputWithdrawn } from '../human-input.js';
-import { RunSuspension } from './suspension.js';
+import { RunSuspension, type CallSlot } from './suspension.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/** 起跑一顆呼叫，回它的位子。 */
+function started(suspension: RunSuspension, callId: string): CallSlot {
+  const slot = suspension.slot(callId, [`tools:${callId}`]);
+  slot.enter();
+  return slot;
+}
 
 describe('RunSuspension', () => {
   it('都在 idle、沒有一顆在問：判成錯誤，交給 onStuck，在 idle 等的以同一個錯拒絕，不停在等待點', async () => {
     const onPark = vi.fn();
     const onStuck = vi.fn();
     const suspension = new RunSuspension(onPark, onStuck);
-    suspension.enter();
-    const waiting = suspension.serviceFor('c1', ['tools:c1']).idle(new Promise<never>(() => {}));
+    const waiting = started(suspension, 'c1').service.idle(new Promise<never>(() => {}));
     const outcome = waiting.then(
       () => 'resolved',
       (error: unknown) => error,
@@ -36,10 +42,8 @@ describe('RunSuspension', () => {
     const onPark = vi.fn();
     const onStuck = vi.fn();
     const suspension = new RunSuspension(onPark, onStuck);
-    suspension.enter();
-    suspension.enter();
-    void suspension.serviceFor('c1', ['tools:c1']).ask({ q: 1 });
-    void suspension.serviceFor('c2', ['tools:c2']).idle(new Promise<never>(() => {}));
+    void started(suspension, 'c1').service.ask({ q: 1 });
+    void started(suspension, 'c2').service.idle(new Promise<never>(() => {}));
     await tick();
     await tick();
 
@@ -52,14 +56,13 @@ describe('RunSuspension', () => {
     const onPark = vi.fn();
     const onStuck = vi.fn();
     const suspension = new RunSuspension(onPark, onStuck);
-    suspension.enter();
-    suspension.enter();
-    void suspension.serviceFor('c1', ['tools:c1']).ask('q');
+    void started(suspension, 'c1').service.ask('q');
+    const running = started(suspension, 'c2');
     await tick();
     await tick();
     expect(onPark).not.toHaveBeenCalled();
 
-    suspension.exit();
+    running.exit();
     await tick();
     expect(onPark).toHaveBeenCalledTimes(1);
     expect(onStuck).not.toHaveBeenCalled();
@@ -70,8 +73,7 @@ describe('RunSuspension', () => {
       () => {},
       () => {},
     );
-    suspension.enter();
-    const service = suspension.serviceFor('c1', ['tools:c1']);
+    const { service } = started(suspension, 'c1');
     const failure = new Error('日誌拒收');
     service.onResumed(() => {
       throw failure;
@@ -92,11 +94,9 @@ describe('RunSuspension', () => {
       () => {},
       () => {},
     );
-    suspension.enter();
-    suspension.enter();
     const order: string[] = [];
-    const first = suspension.serviceFor('c1', ['tools:c1']);
-    const second = suspension.serviceFor('c2', ['tools:c2']);
+    const first = started(suspension, 'c1').service;
+    const second = started(suspension, 'c2').service;
     first.onResumed(() => order.push('c1 resumed'));
     second.onResumed(() => order.push('c2 resumed'));
     const asked = first.ask('q1').then((answer) => order.push(`c1 got ${String(answer)}`));
@@ -115,23 +115,47 @@ describe('RunSuspension', () => {
       () => {},
       () => {},
     );
-    suspension.enter();
-    suspension.enter();
-    const asked = suspension
-      .serviceFor('c1', ['tools:c1'])
-      .ask('q')
+    const asked = started(suspension, 'c1')
+      .service.ask('q')
       .catch((error: unknown) => error);
-    const idled = suspension
-      .serviceFor('c2', ['tools:c2'])
-      .idle(new Promise<never>(() => {}))
+    const idled = started(suspension, 'c2')
+      .service.idle(new Promise<never>(() => {}))
       .catch((error: unknown) => error);
     await tick();
     suspension.withdraw();
 
     expect(isHumanInputWithdrawn(await asked)).toBe(true);
     expect(isHumanInputWithdrawn(await idled)).toBe(true);
-    await expect(suspension.serviceFor('c3', ['tools:c3']).ask('q')).rejects.toSatisfy(
+    await expect(started(suspension, 'c3').service.ask('q')).rejects.toSatisfy(
       isHumanInputWithdrawn,
     );
+  });
+
+  it('呼叫在提問還沒落定時就收完（外層先收掉它）：那次提問拒絕、不再掛著；之後的呼叫照常停在等待點', async () => {
+    const onPark = vi.fn();
+    const suspension = new RunSuspension(onPark, () => {});
+    const first = started(suspension, 'c1');
+    const asked = first.service.ask('q1').catch((error: unknown) => error);
+    const idling = started(suspension, 'c2');
+    const idled = idling.service
+      .idle(new Promise<never>(() => {}))
+      .catch((error: unknown) => error);
+    const running = started(suspension, 'c3');
+    first.exit();
+    idling.exit();
+
+    expect(isHumanInputWithdrawn(await asked)).toBe(true);
+    expect(isHumanInputWithdrawn(await idled)).toBe(true);
+    expect(suspension.pending).toEqual([]);
+    await expect(first.service.ask('again')).rejects.toSatisfy(isHumanInputWithdrawn);
+    running.exit();
+    await tick();
+    expect(onPark).not.toHaveBeenCalled();
+
+    void started(suspension, 'c4').service.ask('q4');
+    await tick();
+    await tick();
+    expect(onPark).toHaveBeenCalledTimes(1);
+    expect(onPark.mock.calls[0]?.[0]).toMatchObject([{ callId: 'c4', value: 'q4' }]);
   });
 });

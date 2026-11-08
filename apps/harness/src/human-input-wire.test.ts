@@ -958,31 +958,76 @@ describe('收線與重開', () => {
 });
 
 describe('同一批一顆的結果記不進日誌、一顆在問人', () => {
-  // 兩個 loop 在這裡走法不同（`langgraph` 交出中斷、同時記 `turn/failed`），這裡只釘 native 不留下掛著的提問。
-  it.skipIf(!NATIVE)('native：這一輪失敗，問人那顆被收回，下一句照常跑', async () => {
-    const probe = newProbe();
-    const session = await open(
-      't-break',
-      [
-        {
-          content: '',
-          toolCalls: [
-            { id: 'q1', name: ASK, args: { q: '哪一個' } },
-            { id: 'b1', name: BREAK, args: {} },
-          ],
-        },
-        { content: '收到' },
-      ],
-      probe,
-    );
-    await until(session, (each) => each.state.status === 'failed');
-    await untilLogged(session, 'turn/failed', 1);
-    expect(session.state.pendings).toEqual([]);
-    expect(probe.withdrawn).toBe(1);
-    expect(rootEvents(session, ['interrupt/raised'])).toEqual([]);
+  // TODO(#2594)：`langgraph` 在這裡交出中斷、同時記 `turn/failed`，人答了也沒有東西收下。修好之後拿掉跳過，這條就是那張卡的驗收。
+  it.skipIf(!NATIVE)(
+    '這一輪失敗：沒有中斷、沒有掛著的提問，問人那顆被收回，下一句照常跑',
+    async () => {
+      const probe = newProbe();
+      const session = await open(
+        't-break',
+        [
+          {
+            content: '',
+            toolCalls: [
+              { id: 'q1', name: ASK, args: { q: '哪一個', approval: true } },
+              { id: 'b1', name: BREAK, args: {} },
+            ],
+          },
+          { content: '收到' },
+        ],
+        probe,
+      );
+      await until(session, (each) => each.state.status === 'failed');
+      await untilLogged(session, 'turn/failed', 1);
+      expect(shapeOf(session)).toEqual([
+        ...OPENING,
+        ...MODEL_ROUND,
+        'tool/call:q1',
+        'tool/call:b1',
+        'tool/result:b1',
+        'tool/result:q1',
+        'turn/failed',
+      ]);
+      expect(
+        rootEvents(session, ['interrupt/raised', 'approval/asked', 'approval/decided']),
+      ).toEqual([]);
+      const results = Object.fromEntries(
+        rootEvents(session, ['tool/result']).map((event) => {
+          const data = event.data as {
+            callId: string;
+            isError: boolean;
+            error?: { code?: string };
+          };
+          return [data.callId, { isError: data.isError, code: data.error?.code }];
+        }),
+      );
+      expect(results).toEqual({
+        b1: { isError: true, code: 'TOOL_OUTCOME_UNKNOWN' },
+        q1: { isError: true, code: 'ABORTED' },
+      });
+      expect(probe.withdrawn).toBe(1);
+      expect(probe.answers).toEqual([]);
 
-    await session.client.runStart('t-break', '再一句');
-    await until(session, settled(1));
-    expect(session.state.status).toBe('idle');
-  });
+      // 線上：這一輪是失敗收的，沒交出過提問；拿一顆形狀相同的 id 去答也沒有東西收下。
+      expect(session.state.status).toBe('failed');
+      expect(session.state.pendings).toEqual([]);
+      expect(session.frames.filter((frame) => frame.method === 'input.requested')).toEqual([]);
+      expect(
+        await session.client.inputRespond('t-break', {
+          namespace: ['tools:q1'],
+          interrupt_id: '0'.repeat(32),
+          response: APPROVE,
+        }),
+      ).toMatchObject({
+        type: 'error',
+        error: 'no_such_interrupt',
+        message: '這條 thread 上沒有等著回答的中斷',
+      });
+      expect(probe.answers).toEqual([]);
+
+      await session.client.runStart('t-break', '再一句');
+      await until(session, settled(1));
+      expect(session.state.status).toBe('idle');
+    },
+  );
 });
