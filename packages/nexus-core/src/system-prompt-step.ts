@@ -115,7 +115,7 @@ const registeredCells = new WeakMap<object, SystemPromptCell>();
 
 /**
  * 用 `cell` 造 `wrapModelCall` 交給 `build`，再把同一份 `cell` 登記在 `build` 造出來的那顆上（{@link systemPromptCellOf}）。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param cell - 這一格。
  * @param build - 拿 `wrapModelCall` 造那顆 middleware。
@@ -153,7 +153,7 @@ export function createSystemPromptStepMiddleware(
 
 /**
  * 這顆 middleware 登記的系統提示那一格；沒登記是 `undefined`。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param middleware - 那一顆，照身分查：複製出來的物件查不到。
  * @returns 那一格。

@@ -44,7 +44,7 @@ export interface ToolCallSite {
   readonly configurable: unknown;
   /**
    * 這次呼叫的取消訊號（`runtime.signal`），原樣讀穿，不合併、不替換。
-   * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：轉接層的過渡，改由 `@nexus/tools` 的訊號合約取代。
+   * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：轉接層的過渡，`wrapToolCall` 這層拿掉時一起收；之後訊號只走 `@nexus/tools` 的 `ToolExec.signal`。
    */
   readonly signal: AbortSignal | undefined;
 }

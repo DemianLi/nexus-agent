@@ -103,7 +103,7 @@ const registeredCells = new WeakMap<object, ToolListCell>();
  * （{@link toolListCellOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapModelCall`。
  * 所以 `wrapModelCall` 必須就是 `wrapModelCallWith(step, inner)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
  * 模型那一串在建構時就算好。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param middleware - 那一顆；不複製，回同一個物件。
  * @param step - 它的工具清單那一步。
@@ -130,7 +130,7 @@ export function withToolListStep<M extends object>(
 
 /**
  * 這顆 middleware 登記的工具清單那一格（{@link withToolListStep}）；沒登記是 `undefined`。
- * TODO([#2416](https://github.com/DemianLi/nexus-agent/issues/2416))：改成監聽者時收掉。
+ * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉、內建不再造成 middleware 時收掉。
  *
  * @param middleware - 那一顆，照身分查：複製出來的物件查不到。
  * @returns 那一步與 `inner`。
