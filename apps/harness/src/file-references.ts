@@ -477,7 +477,7 @@ export const FILE_REFERENCE_SECTION_NAME = 'file-reference';
 /**
  * 把 {@link FILE_REFERENCE_PROMPT} 登記成系統提示詞的一段，fold 接在 `plugins.rest` 區頭那一格（#2414）。
  *
- * **只在有工作區的組裝上掛**，條件跟 `createSandboxPolicyPlugin()` 同一個，理由見模組註解的偏離 2。
+ * **只在有工作區的組裝上掛**，條件跟組裝點交 `fsContainment` 服務的那一格同一個（有工作區根），理由見模組註解的偏離 2。
  */
 export const fileReferencePlugin: NexusPlugin = {
   name: 'file-reference',

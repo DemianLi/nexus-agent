@@ -28,7 +28,6 @@ import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
@@ -41,11 +40,18 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { historyFrames } from './conversation-history.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { humanChannelPlugin } from './fixtures.js';
+import { humanChannelPlugin, shippedPlugins } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
@@ -219,7 +225,7 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
           fsContainment: CONTAINED_FILESYSTEM,
           sandboxPolicy: { controller: escalationController, rootDir: root },
         }),
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow,
       ],
       (root) =>
         new ContainedFilesystemBackend({

@@ -152,7 +152,7 @@ export function auditStartupEntries(
 /**
  * 組裝時可以少掛的條目：清單交出來的列裡，不在必掛名單上的那些。
  *
- * **只有清單交出來的列照名單判**（卡上第 2 項）：組裝點自己加的外掛（`host-services`、`sandbox-policy`……）不在
+ * **只有清單交出來的列照名單判**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：組裝點自己加的外掛（`host-services`、`file-reference`……）不在
  * {@link LoadedPluginConfig.rows} 裡，所以不在這份裡，掉了照舊整個起不來。
  */
 export function optionalEntriesOf(

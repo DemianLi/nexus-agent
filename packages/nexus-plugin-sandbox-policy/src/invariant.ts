@@ -27,7 +27,9 @@
  * @module
  */
 
+// eslint-disable-next-line no-restricted-imports -- 配套入口照舊是相容層的插件（sandbox-policy-invariant 那一列），清理在 #2557
 import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
+// eslint-disable-next-line no-restricted-imports -- 模式清單還沒有 core 以外的出處，清理在 #2557
 import { SANDBOX_MODES } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */

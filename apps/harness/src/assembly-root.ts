@@ -90,7 +90,10 @@ import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  name as SANDBOX_POLICY_PLUGIN_NAME,
+} from '@nexus/plugin-sandbox-policy';
 import {
   PERMISSION_PRESETS_PLUGIN_NAME,
   PERMISSION_PRESETS_SERVICE,
@@ -1180,7 +1183,10 @@ export async function createCliAgent(
   const sharedWorkspaceRoot = invocation.sharedWorkspaceRoot;
   // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
   // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
-  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
+  if (
+    workspaceRoot !== undefined &&
+    !startupEntryMounted(plugins, { name: SANDBOX_POLICY_PLUGIN_NAME })
+  ) {
     throw new Error(
       '有 --workspace（檔案系統有圍堵），但清單上的 sandbox-policy 那一列沒有掛（不存在或被停用）。' +
         '它負責把檔案政策講給模型、記進日誌與提供升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +

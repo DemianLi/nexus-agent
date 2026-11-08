@@ -45,7 +45,6 @@ import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
@@ -66,6 +65,13 @@ import {
   toolErrorOf,
 } from '@nexus/core';
 import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 const shipped = await shippedPlugins();
 
@@ -206,7 +212,7 @@ describe('升級', () => {
               }),
         }),
         ...(options.permissive === true ? [permissiveGate()] : []),
-        ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
+        ...(options.plugin === false ? [] : [sandboxPolicyRow]),
       ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {

@@ -21,7 +21,9 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/cordis": "workspace:*",
     "@nexus/sdk": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/tool-adapter": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
@@ -36,6 +38,9 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@nexus/cordis": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/tools": "workspace:*"
   }
 }

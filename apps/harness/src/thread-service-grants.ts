@@ -7,18 +7,19 @@
  * @module
  */
 
-import { CHANNEL_SERVICE } from '@nexus/core';
+import { APPROVAL_POLICY_SERVICE, CHANNEL_SERVICE, SHARED_WORKSPACE_SERVICE } from '@nexus/core';
 import {
   MCP_CREDENTIALS_SERVICE,
   MCP_GUARD_SERVICE,
   MCP_POOL_SERVICE,
   MCP_SANDBOX_SERVICE,
 } from '@nexus/plugin-mcp';
+import { FS_CONTAINMENT_SERVICE, SANDBOX_POLICY_SERVICE } from '@nexus/plugin-sandbox-policy';
 
 /** 模組 specifier → 允許它讀的宿主服務名。 */
 export type ThreadServiceGrants = ReadonlyMap<string, readonly string[]>;
 
-/** 出廠的授權表：只有 mcp。 */
+/** 出廠的授權表。 */
 export const DEFAULT_THREAD_SERVICE_GRANTS: ThreadServiceGrants = new Map([
   [
     '@nexus/plugin-mcp',
@@ -28,6 +29,16 @@ export const DEFAULT_THREAD_SERVICE_GRANTS: ThreadServiceGrants = new Map([
       MCP_CREDENTIALS_SERVICE,
       MCP_SANDBOX_SERVICE,
       MCP_GUARD_SERVICE,
+    ],
+  ],
+  [
+    '@nexus/plugin-sandbox-policy',
+    [
+      SHARED_WORKSPACE_SERVICE,
+      FS_CONTAINMENT_SERVICE,
+      SANDBOX_POLICY_SERVICE,
+      CHANNEL_SERVICE,
+      APPROVAL_POLICY_SERVICE,
     ],
   ],
 ]);
