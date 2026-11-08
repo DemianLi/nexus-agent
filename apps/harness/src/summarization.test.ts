@@ -202,10 +202,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusSessionCheckpoint',
         // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
         'nexusApprovalPolicyPrompt',
-        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等靠工具本體那幾顆的外側、plugin middleware 內側。
+        // `tools/post-execute` 的生產者（#1248）：在讀到哪等靠工具本體那幾顆的外側、plugin middleware 內側。
         'nexusToolPostExecute',
-        // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
-        'nexusToolOutputSchema',
         // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，在 `tools/execute` 外側。
         'nexusReadContinuation',
         // `grep` 參數說明的換法（#1605）。
@@ -213,9 +211,9 @@ describe('同名取代是唯一的縫', () => {
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',
-        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側、撞到輸出上限那顆（只對 `task`）外側。
+        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側；輸出 schema 校驗（#252）與 `task` 撞到輸出上限的替換是它內層的 core 監聽者。
         'nexusToolExecute',
-        // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
+        // 撞到輸出上限的模型那一半（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
         'nexusMaxTokens',
         // 請求快照（#1020）：模型呼叫上的 callback，緊貼綁訊號那顆外面（兩顆併成同一層綁定，見 `model-binding.ts`）。
         'nexusRequestSnapshot',

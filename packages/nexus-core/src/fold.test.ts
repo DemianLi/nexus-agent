@@ -26,7 +26,6 @@ import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
 import { OBSERVATION_SECTION_MIDDLEWARE_NAME } from './prompt-sections.js';
-import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import {
@@ -235,7 +234,7 @@ describe('middleware 註冊點', () => {
       'b',
       'c',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -264,7 +263,7 @@ describe('middleware 註冊點', () => {
       'a',
       'c',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -293,7 +292,7 @@ describe('middleware 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -325,7 +324,7 @@ describe('middleware 註冊點', () => {
       // 兩顆 last 之間仍是註冊順序。
       'a',
       'd',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -374,7 +373,7 @@ describe('middleware 註冊點', () => {
         APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
         // plugin 打底、子代理自帶的在內側。
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
-        OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
         INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
         TOOL_EXECUTE_MIDDLEWARE_NAME,
         MAX_TOKENS_MIDDLEWARE_NAME,
@@ -474,7 +473,7 @@ describe('工具事件的三顆生產者（#1248）', () => {
   const names = (list: readonly unknown[]): string[] =>
     list.map((mw) => (mw as { name: string }).name);
 
-  it('給了 events 才掛：pre 緊貼閘門外側、post 在輸出校驗外側、execute 在 invalidToolArgs 內側', async () => {
+  it('給了 events 才掛 pre：pre 緊貼閘門外側、post 在 invalidToolArgs 外側、execute 在 invalidToolArgs 內側', async () => {
     const params = await fold(
       [fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a')))],
       { events: new EventBus() },
@@ -483,22 +482,23 @@ describe('工具事件的三顆生產者（#1248）', () => {
     const at = (name: string): number => list.indexOf(name);
     // pre：緊貼閘門外側（相鄰、在前）。
     expect(at(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME)).toBe(at(APPROVAL_GATE_MIDDLEWARE_NAME) - 1);
-    // post：plugin middleware 的內側、輸出校驗的外側。
+    // post：plugin middleware 的內側、解不開參數那顆的外側。
     expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeGreaterThan(at('a'));
-    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBe(at(OUTPUT_SCHEMA_MIDDLEWARE_NAME) - 1);
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeLessThan(
+      at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME),
+    );
     // execute：解不開參數那顆的內側，緊貼。
     expect(at(TOOL_EXECUTE_MIDDLEWARE_NAME)).toBe(at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME) + 1);
   });
 
-  it('沒給 events：pre 不掛；execute 與 post 只在有 core 監聽者時掛', async () => {
+  it('沒給 events：pre 不掛；execute 與 post 照樣掛', async () => {
     const params = await fold([]);
     expect(names(params.middleware)).not.toContain(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME);
-    // 這個組裝沒有外溢與搜尋上限，post 沒有 core 監聽者。
-    expect(names(params.middleware)).not.toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
-    // 耐久檢查點的工具那一半是 execute 的外層 core 監聽者，沒有派發面也要在。
+    expect(names(params.middleware)).toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
     expect(names(params.middleware)).toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+    // 耐久檢查點關掉也在：輸出校驗與撞限替換是 execute 的內層 core 監聽者。
     const bare = await fold([{ plugin: sessionCheckpointPlugin, disabled: true }]);
-    expect(names(bare.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(bare.middleware)).toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
   });
 
   it('每個子代理也有：pre 與 post 與 root 共用同一份實例，execute 逐個建（pre 在有基座工具被遮時另一份，見 subagent-tool-filter.test.ts）', async () => {
@@ -552,7 +552,7 @@ describe('「先讀後改」策略打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       // 有 backend 就有：讀檔結果最後補上讀到哪（#594）。
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -591,7 +591,7 @@ describe('「先讀後改」策略打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
@@ -823,7 +823,7 @@ describe('approvals 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -857,7 +857,7 @@ describe('approvals 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -885,7 +885,7 @@ describe('approvals 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -1516,7 +1516,7 @@ describe('摘要器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
@@ -1554,7 +1554,7 @@ describe('摘要器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
@@ -1697,7 +1697,7 @@ describe('提醒器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
@@ -1736,7 +1736,7 @@ describe('提醒器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,

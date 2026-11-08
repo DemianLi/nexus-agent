@@ -68,8 +68,14 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.8.0`（#2551）：{@link ToolThreadSection.text} 的函式收一個 {@link ToolThreadSectionContext}，帶這一次模型呼叫的身分。向後相容的新增：
  * 不帶參數的函式照樣可以指派；要讀它的消費者宣告 `^2.8.0`。
+ *
+ * `2.9.0`（#2575）：宿主的工具事件契約（`@nexus/core` 的 `tools/execute`、`tools/post-execute`）多四處向後相容的新增：
+ * `command` 視圖帶這次呼叫那則的內容、`tools/execute` 能交回只換 `Command` 裡那一則的結果、視圖多 `shape` 標出內容原本是字串還是陣列、
+ * 交回的結果可帶 `fresh` 造一則新訊息。輸出校驗、撞到輸出上限的替換、共用區前綴改成 core 監聽者，插件監聽者看得到兩處時刻變化：
+ * {@link ToolExecuteListener} 的 `next()` 交回的是驗過輸出的那一份；匯流排上 `tools/post-execute` 監聽者拿到的 `result` 是加共用區前綴之前的那份。
+ * {@link ToolResultOutcome} 在結果是 `Command` 時也帶 `Command` 裡這次呼叫那則的內容。這個檔的型別不變（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-9/guide.md`）。
  */
-export const TOOLS_CONTRACT_VERSION = '2.8.0';
+export const TOOLS_CONTRACT_VERSION = '2.9.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -273,15 +279,16 @@ export interface ToolResultExecution {
   readonly signal?: AbortSignal | undefined;
 }
 
-/** 一次呼叫落定成什麼，`onResult` 的 listener 看到的樣子（#1469）。對應 `@nexus/core` 的 `PipelineResult`。 */
+/** 一次呼叫落定成什麼，`onResult` 的 listener 看到的樣子（#1469）。對應 `@nexus/core` 的 `PipelineResultView`。 */
 export interface ToolResultOutcome {
   /** 最終回給模型的結果是不是錯誤。 */
   readonly isError: boolean;
   /**
-   * 最終那則訊息的內容區塊，凍結；字串內容視為一格 `text`。結果是 `Command` 時沒有。`2.4.0` 起才有。
+   * 最終那則訊息的內容區塊，凍結；字串內容視為一格 `text`。`2.4.0` 起才有。結果是 `Command` 時，帶 `Command` 裡屬於這次呼叫那則的內容，
+   * 沒有那一則就沒有（`2.9.0` 起）。
    */
   readonly blocks?: readonly Readonly<{ type: string } & Record<string, unknown>>[];
-  /** `blocks` 的文字（只串 `text` 區塊）。結果是 `Command` 時沒有。`2.4.0` 起才有。 */
+  /** `blocks` 的文字（只串 `text` 區塊）。`2.4.0` 起才有；結果是 `Command` 時同 {@link ToolResultOutcome.blocks}。 */
   readonly content?: string;
 }
 

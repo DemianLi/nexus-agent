@@ -163,12 +163,9 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
           "nexusToolPreExecute",
           "nexusApprovalGate",
           "nexusToolPostExecute",
-          "nexusSharedReadMark",
-          "nexusToolOutputSchema",
           "nexusReadContinuation",
           "nexusInvalidToolArgs",
           "nexusToolExecute",
-          "nexusMaxTokens",
         ],
         "subagent": [
           "nexusToolBarrier",
@@ -177,12 +174,9 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
           "nexusToolPreExecute",
           "nexusApprovalGate",
           "nexusToolPostExecute",
-          "nexusSharedReadMark",
-          "nexusToolOutputSchema",
           "nexusReadContinuation",
           "nexusInvalidToolArgs",
           "nexusToolExecute",
-          "nexusMaxTokens",
         ],
       }
     `);

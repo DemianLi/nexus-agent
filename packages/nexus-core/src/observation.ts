@@ -62,6 +62,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import type { NexusPlugin } from './plugin.js';
 import { toolNameOfCall } from './tool-call-step.js';
 import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import { freshTextResult } from './tool-pipeline.js';
 import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
 import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import type { MiddleSection } from './prompt-sections.js';
@@ -274,12 +275,10 @@ export async function fileVersionOf(backend: unknown, path: string): Promise<Fil
 function refusal(code: string, reason: string): PipelineExecuteResult {
   // 碼標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
   // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
-  return {
-    kind: 'message',
-    content: `${TOOL_ERROR_PREFIX}${reason}`,
+  return freshTextResult('message', `${TOOL_ERROR_PREFIX}${reason}`, {
     isError: true,
     error: { name: 'FsError', code },
-  };
+  });
 }
 
 /** 這次呼叫的 `file_path`，不是字串就回 `undefined`（表示這一格不歸我們管）。 */

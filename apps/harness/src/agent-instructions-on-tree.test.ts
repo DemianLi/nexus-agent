@@ -781,15 +781,16 @@ const withPromptSections = (chain: readonly string[]): string[] =>
   });
 
 /**
- * 先讀後改、檔案工具的失敗標成錯誤與搜尋上限的開槽是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的（#2416），
- * 沙箱政策委派時拍快照是插件掛在匯流排上的 `tools/execute` 監聽者（#2416；出貨清單沒有 `fsContainment`，連它都不掛）：
- * 都不佔 stack 的格子，鏈上**恰好少這四格**，
- * 行為由 `nexusToolExecute` 與 `nexusToolPostExecute` 帶。同上，只在這裡拿這四格。
+ * 先讀後改、檔案工具的失敗標成錯誤、搜尋上限的開槽與輸出校驗是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的
+ * （#2416、#2575），沙箱政策委派時拍快照是插件掛在匯流排上的 `tools/execute` 監聽者（#2416；出貨清單沒有 `fsContainment`，連它都不掛）：
+ * 都不佔 stack 的格子，鏈上**恰好少這五格**，
+ * 行為由 `nexusToolExecute` 與 `nexusToolPostExecute` 帶。同上，只在這裡拿這五格。
  */
 const withToolListeners = (chain: readonly string[]): string[] =>
   chain.filter(
     (name) =>
       name !== 'nexusSearchOverflow' &&
+      name !== 'nexusToolOutputSchema' &&
       name !== 'nexusFileObservationPolicy' &&
       name !== 'nexusFsToolErrors' &&
       name !== 'nexusSandboxPolicy',
