@@ -22,7 +22,8 @@
  *
  * - `mixed-v44-v49`：`0c9e389c^`（格式 44，#1321 把摘要事件挪到呼叫之前的前一個 commit）寫前半，格式 52 那個 commit 續寫後半；
  *   兩邊都用 patch 把摘要門檻壓低，讓舊順序與新順序的 `compaction/summary` 各出現一次。
- * - `mixed-v54-v55`：格式 54 寫前半、55 續寫後半，舊形狀與新形狀的 `request/*` 在同一份日誌裡各出現一次（#2416）。
+ * - `mixed-v54-v55`：格式 54 寫前半、55 換一個檔案政策續寫後半，舊形狀的 `request/*` 與新形狀的 `request/system` 在同一份日誌裡
+ *   各出現一次（#2416）。
  *
  * ## 固定的東西
  *
@@ -228,6 +229,8 @@ interface MixedHalf {
   readonly version: number;
   /** 壓低摘要門檻之類的 patch，給 CLI 的 `--patch`。 */
   readonly patch?: string;
+  /** 其餘 CLI 旗標。 */
+  readonly args?: readonly string[];
 }
 
 interface Mixed {
@@ -271,7 +274,8 @@ const MIXED: readonly Mixed[] = [
   {
     name: 'mixed-v54-v55',
     first: { rev: V54_WRITER, version: 54 },
-    second: { rev: V55_WRITER, version: 55 },
+    // 換檔案政策改的是系統提示詞，續接後第一次呼叫就記一份新形狀的 `request/system`（`reason: 'change'`）。
+    second: { rev: V55_WRITER, version: 55, args: ['--sandbox', 'read-only'] },
     expect: (events) => ({ edge: 55, snapshotCalls: requestSnapshotCalls(events) }),
   },
 ];
@@ -714,8 +718,10 @@ function generateMixed(mixed: Mixed): void {
   const { name, first, second } = mixed;
   log(`\n== ${name}（${first.rev} 寫前半，${second.rev} 續寫後半）`);
   const scratch = mkdtempSync(join(realpathSync('/var/tmp'), 'nexus-session-format-'));
-  const patch = (half: MixedHalf): string[] =>
-    half.patch === undefined ? [] : ['--patch', join(HERE, half.patch)];
+  const patch = (half: MixedHalf): string[] => [
+    ...(half.patch === undefined ? [] : ['--patch', join(HERE, half.patch)]),
+    ...(half.args ?? []),
+  ];
   let tree: string | undefined;
   try {
     tree = checkout(scratch, first.rev);
