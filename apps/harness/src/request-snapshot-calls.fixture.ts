@@ -1,0 +1,63 @@
+/**
+ * 請求快照與作廢的嘗試各歸哪次模型呼叫（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)，格式 55），夾具產生器與
+ * `session-format-fixtures.test.ts` 共用。
+ *
+ * - `request/*` 有兩種形狀：54 以前帶 `modelCall`、寫在 `model/start` 之後；55 起不帶、寫在它所屬那次的 `model/start` 之前。
+ *   帶的照它指的那顆；不帶的歸下一顆 `model/start`，在那之前輪就收了的是 `null`。
+ * - `assistant/attempt` 照它帶的 `modelCall`，並記那次呼叫失敗收尾的 `model/end` 落在它前面沒有。
+ */
+
+import type { SessionEvent } from '@nexus/core';
+
+export interface RequestSnapshotCall {
+  readonly type: string;
+  /** 事件自己帶的 `modelCall`；新形狀不帶，是 `null`。 */
+  readonly modelCall: number | null;
+  /** 歸屬那次呼叫的 `model/start` 的 `seq`。 */
+  readonly call: number | null;
+}
+
+export interface AttemptCall {
+  readonly modelCall: number | null;
+  /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前。 */
+  readonly afterFailedEnd: boolean;
+}
+
+function modelCallOf(event: SessionEvent): number | null {
+  const value = (event.data as { modelCall?: unknown }).modelCall;
+  return typeof value === 'number' ? value : null;
+}
+
+export function requestSnapshotCalls(events: readonly SessionEvent[]): RequestSnapshotCall[] {
+  return events.flatMap((event, index): RequestSnapshotCall[] => {
+    if (event.type !== 'request/system' && event.type !== 'request/header') return [];
+    const modelCall = modelCallOf(event);
+    if (modelCall !== null) return [{ type: event.type, modelCall, call: modelCall }];
+    const next = events
+      .slice(index + 1)
+      .find(
+        (later) =>
+          later.type === 'model/start' || later.type === 'turn/end' || later.type === 'turn/failed',
+      );
+    return [
+      {
+        type: event.type,
+        modelCall,
+        call: next?.type === 'model/start' ? (next.seq as number) : null,
+      },
+    ];
+  });
+}
+
+export function attemptCalls(events: readonly SessionEvent[]): AttemptCall[] {
+  return events.flatMap((event, index): AttemptCall[] => {
+    if (event.type !== 'assistant/attempt') return [];
+    const modelCall = modelCallOf(event);
+    const afterFailedEnd = events.slice(0, index).some((earlier) => {
+      if (earlier.type !== 'model/end' || modelCallOf(earlier) !== modelCall) return false;
+      const outcome = (earlier.data as { outcome?: unknown }).outcome;
+      return outcome === 'error' || outcome === 'aborted';
+    });
+    return [{ modelCall, afterFailedEnd }];
+  });
+}
