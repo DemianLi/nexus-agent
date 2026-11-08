@@ -597,6 +597,7 @@ describe('規則（驗收 D）', () => {
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
       [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
       [52, "if (site.layout === 'two-file') {"],
+      [55, "if (field(event, 'modelCall') !== undefined) {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);
