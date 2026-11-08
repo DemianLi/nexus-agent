@@ -1,6 +1,6 @@
 # fold.ts 的 dsh 對照紀錄
 
-這份收 `packages/nexus-core/src/fold.ts` 移出程式碼的 dsh 對照，出處 #2416（b5c）與 #2431 issuecomment-6712218714。
+這份收 `packages/nexus-core/src/fold.ts` 移出程式碼的 dsh 對照，出處 #2416 與 #2431 issuecomment-6712218714。
 
 下面的 dsh 出處（路徑、行號、SHA）照原註解抄錄，**未重新核對**，以 SHA `05b1cae8` 為準的核對還沒做。
 
@@ -61,8 +61,8 @@
 
 ## modelSelection（每會話模型選擇）
 
-- nexus：子代理另有一顆跟隨的 middleware：每次叫模型前，換成定義釘住的模型；沒釘就是父代理當下選的那顆。
-- dsh：子代理沿用父代理當下路由，即 `requestedAgentOptions`（未重新核對 SHA 05b1cae8）。`compileSubagentGraph` 在模型自己挑的時候把這一顆濾掉，模型自己挑的勝過一切。
+- nexus：子代理另有一顆跟隨的 middleware：每次叫模型前，換成定義釘住的模型；沒釘就是父代理當下選的那顆。`compileSubagentGraph` 在模型自己挑的時候把這一顆濾掉，模型自己挑的勝過一切。
+- dsh：子代理沿用父代理當下路由，即 `requestedAgentOptions`（未重新核對 SHA 05b1cae8）。
 
 ## subagentToolFilter（工具過濾的宇宙）
 
@@ -81,7 +81,7 @@
 
 ## 閘門的雙時刻（approval gate，wrapToolCall）
 
-- nexus：閘門答的是 `tools/pre-execute`，但承載它的是 `tools/execute` 位置的 `wrapToolCall`。這兩個時刻是兩層權限不同的東西，這裡是同一種機制的兩個陣列位置，位置由 `fold.ts` 決定、不由註冊順序決定。索引見 `apps/harness/src/interception-index.test.ts`。
+- nexus：閘門答的是 `tools/pre-execute`，但承載它的是 `tools/execute` 位置的 `wrapToolCall`。兩個時刻在這裡是同一種機制的兩個陣列位置，位置由 `fold.ts` 決定、不由註冊順序決定。索引見 `apps/harness/src/interception-index.test.ts`。
 - dsh：兩個權限時刻，兩層權限不同（未重新核對 SHA 05b1cae8）。
 
 ## 槽位表的形狀（buildRootStack）
@@ -111,7 +111,7 @@
 
 ## 委派（subagentDelegation）
 
-- nexus：委派子代理由 fold 明著註冊，不會在沒人設定時自動冒出來而繞過閘門。
+- nexus：委派子代理沒人註冊時 fold 也補上，但走 `foldSubAgents`，閘門照管，不會繞過。
 - dsh：標準 preset 的委派是明著掛的一列 `tool-subagent`（`provider: spawn`），出處 `packages/preset/agent-presets/presets/standard/agent.cordis.yml`，SHA `c291e7961a515f6d7af9304e7fd1d257929aef26`（未重新核對 SHA 05b1cae8）。spawn 出來的是同一個 cordis context 上的一般 child agent，全域的 `tools/pre-execute` 照樣經過它，出處 `packages/core/tools/src/index.ts` 的 `scopeTarget(this, exec.agent)`（未重新核對 SHA 05b1cae8）。
 
 ## 子代理共用 plugin middleware（subagentPluginMiddleware，#327）
@@ -131,12 +131,12 @@
 
 ## 中介層的位置（toolPostExecute、outputSchema、invalidToolArgs、toolExecute）
 
-- nexus：`tools/post-execute` 在輸出校驗等貼著工具本體的那幾顆外側，在每一個 plugin middleware 內側。輸出校驗看到的是工具原本的輸出。解不開參數的那顆在 `wrapToolCall` 的核准與 plugin 內側，參數在執行時才驗。`tools/execute` 排在解不開參數那顆的內側、撞到輸出上限那顆的外側；`task` 的錯誤替換在 execute 內側才對得上前景 `task` 本體會拋的那句錯誤。
+- nexus：`tools/post-execute` 在輸出校驗等貼著工具本體的那幾顆外側，在每一個 plugin middleware 內側。輸出校驗看到的是工具原本的輸出。解不開參數的那顆在 `wrapToolCall` 的核准與 plugin 內側，參數在執行時才驗。`tools/execute` 排在解不開參數那顆的內側、撞到輸出上限那顆的外側；`task` 的錯誤替換排在 execute 內側，代表 `task` 本體自己的結果。
 - dsh：在 `post-execute` 之前驗輸出（未重新核對 SHA 05b1cae8）；執行時才驗參數（未重新核對 SHA 05b1cae8）；前景 `task` 本體裡拋錯（未重新核對 SHA 05b1cae8）。
 
 ## 圍堵與 hooks 的先後（toolPreExecute）
 
-- nexus：`tools/pre-execute` 緊貼閘門外側。拒絕在問人之前（hooks／permission／sandbox 先於 approval），所以不會先跳核准卡、再被拒。核准本身沒有搬上去。
+- nexus：`tools/pre-execute` 緊貼閘門外側：它的監聽者先於核准，所以不會先跳核准卡、再被拒。核准本身沒有搬上去。
 - dsh：hooks、permission、sandbox 先於 approval（未重新核對 SHA 05b1cae8）。
 
 ## 子代理的次數上限（subagentMaxTurns）

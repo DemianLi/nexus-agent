@@ -1,5 +1,5 @@
 /**
- * core 的工具事件夾在插件監聽者外側與內側（#2416 驗收）。插件只剩事件監聽者以後，兩件事要成立：
+ * core 的工具事件夾在插件監聽者外側與內側（#2416 驗收）。插件以事件監聽者掛進工具呼叫時，兩件事要成立：
  *
  * - 外溢排在每一位插件監聽者外側，量到的是插件換過的結果；
  * - 先讀後改排在插件的 execute 監聽者內側：監聽者短路掉的 `read_file` 沒有讀到磁碟，不算讀過，之後的寫入照樣被拒。
@@ -24,7 +24,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 
 const MARK = 'PLUGIN-REPLACED-7731';
 
-/** 每行都不一樣、約 4 萬字元，遠超下面的預算。 */
+/** 每行都不一樣、約 5 萬字元，遠超下面的預算。 */
 const BIG = Array.from(
   { length: 1_000 },
   (_, index) => `${MARK} line ${index} alpha beta ${index * 7919}`,

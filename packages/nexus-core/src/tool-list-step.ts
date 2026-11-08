@@ -8,7 +8,7 @@
  * 回 `Promise` 的一步（例如要解析 backend 的檔案工具那一格）不論換不換，都等它解開才往內交。
  *
  * **登記了這一步的格**（{@link withToolListStep}；{@link createToolListStepMiddleware} 造的自動登記）由 native 的 root 的模型那一串
- * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；沒登記的格，native 建構時就拋。
+ * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；工具清單、系統提示、環繞步三種都沒登記的 `wrapModelCall`，native 建構時就拋。
  *
  * @module
  */

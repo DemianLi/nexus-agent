@@ -157,7 +157,7 @@ import type { ToolResultPruneConfig } from './tool-result-pruner.js';
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
  *
  * 語義：列到的工具站在它被列的位置，沒列到的在這一格依字典序插進來。deepagents 沒有
- * 對應機制——註冊順序是 plugin 載入順序的產物，會造成 CI flake，所以呈現順序不靠它。
+ * 對應機制——註冊順序隨 plugin 載入順序變，所以呈現順序不靠它。
  */
 export const TOOL_ORDER_REST = '<unlisted-tools>';
 
@@ -234,10 +234,8 @@ export interface ApprovalPolicy {
    * **這一格問的是政策，不是能力。** 「根本沒有核准管道」是另一個問題，由缺席的
    * checkpointer 表達，兩者的拒絕理由刻意不同（見 {@link ApprovalChannel}）。
    *
-   * 舊版在這裡是**建構期直接拋**：關著卻有 plugin 宣告了核准需求，fold 報錯，於是任何
-   * bundle 了 approval-gated 工具的 plugin 在批次／CI 模式下變成載不起來。
-   * [#111](https://github.com/DemianLi/nexus-agent/issues/111) 的 (c) 拍板拿掉它——
-   * 那道拋嚴在錯的地方：關著時 agent 在 headless 下本來就跑得起來。
+   * 關著時不在建構期拋：bundle 了 approval-gated 工具的 plugin 在批次／CI 模式下照樣載得起來，需要核准的呼叫在執行期
+   * 確定性回絕（[#111](https://github.com/DemianLi/nexus-agent/issues/111) 的 (c)）。
    */
   enabled?: boolean;
   /**
@@ -320,7 +318,7 @@ export interface FoldOptions {
    * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
    * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
    * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也不剪新的工具結果（日誌上記過的剪法與參數截斷仍由這顆空殼
-   * 換上去，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。**這是不掛 compaction 的形狀。連帶沒有的**：上下文溢出時基座那條緊急摘要——不掛 compaction 時，溢出後也沒有恢復。
+   * 換上去，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。**連帶沒有的**：上下文溢出時基座那條緊急摘要。
    *
    * 建摘要器需要一個 backend。**用的是這裡的 {@link FoldOptions.defaultBackend}，不是
    * {@link foldBackend} 折出來的那個**，理由見 {@link foldRegistry}。所以沒給
@@ -379,7 +377,7 @@ export interface FoldOptions {
    * **沒有設定**，所以它只有三態而不是四態，理由見
    * {@link ./observation.ts | observationPolicyPlugin}。
    *
-   * **預設開著**：「先讀後改」是寫入的安全預設，要關得是明著的選擇。關掉的意思是「這個組裝接受盲改」——例如一個
+   * **預設開著**：「先讀後改」是寫入的安全預設，要關就得明著選。關掉的意思是「這個組裝接受盲改」——例如一個
    * 只寫新檔、從不編輯的批次流程。
    *
    * **它需要一個 backend，而且是折出來的那個**（{@link foldBackend} 的產物，可能是
@@ -867,7 +865,7 @@ export function foldRegistry(
       ),
     ),
     // `tools/pre-execute`（#1248）緊貼閘門外側：`prepend: true` 的 plugin 今天就在閘門外側，派發點放內側，被拒的呼叫會變成
-    // 「先跳核准卡、再被拒」。拒絕在問人之前（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
+    // 「先跳核准卡、再被拒」。拒絕在問人之前（`tools/pre-execute` 的監聽者先於核准）。核准本身沒有搬上去。
     // 有基座工具被遮時，子代理拿另一份（遮罩在外層 core 段）：被遮的呼叫碰不到插件的 `tools/pre-execute` 監聽者、閘門與工具本體；
     // `tools/result` 仍收到那則拒絕。
     { name: 'toolPreExecute', root: same(toolPreExecute), subagent: same(subagentToolPreExecute) },
@@ -890,7 +888,7 @@ export function foldRegistry(
     shared('repeatReminder', repeatReminder),
     // 委派聲明排在 `spec.middleware` 外層：子代理自己帶的 middleware 看到的是接好聲明的請求。只給子代理。
     subagentOnly('delegation', same(subagentDelegation)),
-    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算一步（重試都在這一步之內）。摘要器不管排哪都在它外面，見 `model-calls.ts`。
+    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算一步。摘要器不管排哪都在它外面，見 `model-calls.ts`。
     // 串流中段出錯的整次重打（#520）在起訖與用量外面：每次嘗試各有自己的 `model/start`／`model/end` 與用量，失敗那次帶
     // `outcome: 'error'`。見 {@link ./stream-retry.ts}。
     shared('streamRetry', streamRetry),
@@ -933,7 +931,7 @@ export function foldRegistry(
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
     // `tools/execute`（#1248）環繞工具本體，排在解不開參數那顆的內側（樁回的錯誤它看得到）、撞到輸出上限那顆的外側：後者的
-    // `wrapToolCall` 只對 `task` 把結果換成前景 `task` 本體裡會拋的那句錯誤，所以那個替換在 execute 的內側才對得上。
+    // `wrapToolCall` 只對 `task` 把結果換成撞限的錯誤；這個替換代表 `task` 本體自己的結果，所以排在 execute 的內側。
     perAgent('toolExecute', toolExecute),
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
@@ -1381,14 +1379,14 @@ function foldSubagentMiddleware(
  * 漏核准閘門「默默地讓 subagent 失去核准」，漏用量記錄器「沒有人會紅」。現在新增一顆只寫一列，子代理那一疊自動
  * 跟上；要漏掉就得在那一列明寫 {@link NONE}。
  *
- * **表達不出來的理由**：deepagents 1.13.1 沒有「子代理繼承 root middleware」的通道——
+ * **為什麼是一張表**：deepagents 1.13.1 沒有「子代理繼承 root middleware」的通道——
  * `SubAgentBase.middleware` 的說明是 “Additional middleware to append after default_middleware”
  * （`dist/agent-D50BBbJT.d.ts`），執行期的 `buildSubagentMiddleware` 只合子代理預設 stack、這個 spec 的 `middleware`、
  * harness profile 的 `extraMiddleware` 與快取／記憶那幾顆，root 的 `middleware` 參數不在裡面；唯一的例外是基座自己補的
  * `general-purpose`（`appendNew: false`，只原地換掉同名的預設），而 fold 一律自己補它。同時進 root 與子代理的只有
  * harness profile 的 `extraMiddleware`，它落在 tail 段、又是以模型為鍵的全域註冊，排不出「圍堵在第 0 格」
- * 「plugin 在 `spec.middleware` 外層」這些位置。**退到**：fold 內一張有序的槽位表導出兩份陣列，這是在只能逐個注的
- * 前提下最接近 `composeFrom` 的形狀。
+ * 「plugin 在 `spec.middleware` 外層」這些位置。**退到**：fold 內一張有序的槽位表導出兩份陣列，在只能逐個注的
+ * 前提下，讓 root 與子代理的位置從同一處決定。
  */
 interface MiddlewareSlot {
   /** 這一列的名字，診斷與讀表用；不是 middleware 自己的 `name`。 */
@@ -1527,7 +1525,7 @@ interface PluginMiddleware {
 /**
  * 攤進子代理的那一份：{@link pluginMiddleware} 去掉名字撞上摘要器的那一顆。
  *
- * **偏離（登記，#327 動工時 demian 拍板）**：plugin 用同名換掉摘要器（`apps/harness/src/contained-backend.ts`
+ * **只到 root**（#327）：plugin 用同名換掉摘要器（`apps/harness/src/contained-backend.ts`
  * 教的那條路）的那一顆是**一份實例**，而摘要器認不出身分的呼叫用實例自己的會話名。攤過去的話它會蓋掉 {@link foldSubAgents}
  * 替每個子代理各建的那份，root 與子代理的那種呼叫混進同一個檔——{@link foldSummarizer} 做成工廠要防的正是這件事。
  * 沒有「逐個建」的註冊介面，所以退一步：**那一顆只到
@@ -1876,8 +1874,6 @@ function foldBackend(
  * 同名的就不補了。**有 plugin 註冊了同名的就不補**——明著換掉這一份是那個 plugin 的事，
  * 它拿到的一樣是整組 stack。
  *
- * 委派子代理由 fold 明著註冊，不會在沒人設定時自動冒出來而繞過閘門。
- *
  * 照抄的：名字、描述、提示詞與 `mode` 取基座匯出的 `GENERAL_PURPOSE_SUBAGENT`；root 的
  * `skills` 照基座那份傳過去（`apps/harness/src/skills.test.ts` 守著）。
  *
@@ -1918,11 +1914,11 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  *
  * **交的方式是從同一張槽位表導出**（{@link MiddlewareSlot}，#664），不是各自手寫一份清單：理由沒變（基座
  * 沒有繼承的通道），變的是漏接的後果——以前新增一顆只補 root、子代理漏掉沒有任何東西會紅，現在每一列都得為
- * 子代理那一欄表態，不給也要明寫。偏離的登記與表達不出來的理由寫在 {@link MiddlewareSlot} 上。
+ * 子代理那一欄表態，不給也要明寫。理由寫在 {@link MiddlewareSlot} 上。
  *
- * **注進去的是另一顆，管道固定 `policy-never`**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）：
- * 子代理不停下來等人，需要核准的操作一律自動拒絕。listener 同一組，所以該問的照樣被判成「要問」，
- * 只是問不到人——不注的話那些工具在子代理裡會**直接執行**，那是更糟的一邊。同一張卡的另外兩面：問答那顆
+ * **核准閘門**：前景子代理共用 root 那一顆（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 中斷冒到使用者面前；背景子代理在編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalGate}），
+ * listener 同一組，所以該問的照樣被判成「要問」，只是問不到人。不注的話那些工具在子代理裡會**直接執行**，那是更糟的一邊。[#324](https://github.com/DemianLi/nexus-agent/issues/324) 的另外兩面：問答那顆
  * 以 `rootOnly` 換成樁，以及只放進子代理的委派聲明（{@link ./subagent-delegation.ts}）。
  *
  * **圍堵同樣明著交給每個 subagent，理由同上一條。** 它以前是 plugin middleware，而那時 plugin
@@ -1935,10 +1931,10 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  * 狀態，`try/catch` 裡讀到的一切都來自那一次呼叫的 `request`。
  *
  * **plugin 的 middleware 也逐個注進去，同一批實例、同 root 的位置**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
- * 子代理拿到同一批 plugin 物件、同樣的提示詞段落，沒有「只給 root」的註冊。共用一份的 middleware 要從這一次呼叫的身分分出
+ * 子代理拿到同一批 plugin 物件、同樣的提示詞段落，沒有「只給 root」的註冊（撞上摘要器名字的那一顆除外）。共用一份的 middleware 要從這一次呼叫的身分分出
  * 是誰（子代理的沙箱模式、永遠沒開的計劃模式都是它自己的），不能把逐 agent 的狀態放在閉包裡——契約寫在 `MiddlewareRegistrationPoint.use` 上。
  *
- * **偏離（登記）：共用一份、不逐個建。** 摘要器與先讀後改做成工廠，是因為它們的狀態在閉包裡；plugin
+ * **共用一份、不逐個建。** 摘要器與先讀後改做成工廠，是因為它們的狀態在閉包裡；plugin
  * middleware 今天全樹零顆帶逐 agent 的閉包狀態，所以不先做工廠介面。後果是**沒有絆索**：哪天有一顆
  * 帶閉包狀態的掛進來，root 與子代理會靜靜串台，沒有測試會紅。
  *

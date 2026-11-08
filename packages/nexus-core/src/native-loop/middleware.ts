@@ -2,6 +2,7 @@
  * native loop 讀 middleware 用的形狀，照 `langchain@1.5.10` 的 `createMiddleware` 產物與 `dist/agents/nodes/middleware.js` 的 runtime。
  *
  * native 只呼叫登記了一步的格（`agent.ts` 的建構檢查），這些型別描述的是那幾格的簽名，以及節點交給它們的 runtime。
+ * TODO(#2357)：middleware 搬成事件與服務之後拿掉這些型別。
  *
  * @module
  */

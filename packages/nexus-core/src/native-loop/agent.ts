@@ -161,7 +161,7 @@ function runBounded(
 }
 
 /**
- * 沒登記一步、也不在 {@link NATIVE_NOOP_CELLS} 上的那一格：native 只呼叫登記了的一步，建構時就拋，不在跑到時才發現。
+ * 沒登記一步、也不在 `NATIVE_NOOP_CELLS`（`native-noop-cells.ts`） 上的那一格：native 只呼叫登記了的一步，建構時就拋，不在跑到時才發現。
  * @param middleware - 那一顆。
  * @param part - 那一格。
  */
@@ -226,7 +226,7 @@ export class NativeAgent {
    * @param params - 模型、提示詞、工具、middleware。
    * @param threads - thread 的 state；`withConfig` 出來的那一份共用同一張表。
    * @param defaults - `withConfig` 給的上限。
-   * @throws {Error} 有一格沒登記一步、也不在 {@link NATIVE_NOOP_CELLS} 上；或一顆 middleware 在模型那一格登記了不只一步
+   * @throws {Error} 有一格沒登記一步、也不在 `NATIVE_NOOP_CELLS`（`native-noop-cells.ts`） 上；或一顆 middleware 在模型那一格登記了不只一步
    * （工具清單、系統提示、環繞步）。
    */
   constructor(
