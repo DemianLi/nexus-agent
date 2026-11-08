@@ -157,14 +157,14 @@ nexus-host --socket <路徑>
 
 **不測的格與原因**
 
-- n1 A⁰：要另一個 uid 的行程才造得出來；測試行程不是 root，換不了 uid；要另開 uid 得靠 sudo 或容器，目前不做。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
-- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：寫端關了之後補送的 `revoke` 直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。
+- n1 A⁰：要另一個 uid 的行程才造得出來；CI 的 `cargo test` 不用 root 跑（`ubuntu-latest`、沒有 container），測試行程換不了 uid，測試也不另用 sudo 或容器開 uid。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
+- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：就算送了，寫端關了之後補送的 `revoke` 也直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。
 - n3 accept 出錯（例如 fd 用完）時沒收進來的連線，之後會被當成 A 收進來：t10 確認宿主起來時已把開檔數的軟上限拉到硬上限，出錯的情形沒有另外造。
 - n4 A⁺、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
 - n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。新登記只改表、不碰連線，`hello` 驗的是驗那一刻的表（先讀乾淨控制通道），所以登記在 accept 之前或之後到，結果一樣；accept 不讀資料，EOF 照 A 那幾列的 `retain` 處理（讀碼）。
 - n6 已驗過身分的連線送重複的 `hello` 或壞框時，撤銷剛好已經寫進 pipe、宿主還沒讀：宿主先讀乾淨控制通道，這條連線先變成撤過，結果跟 R 那一列的壞框格一樣：回 `rejected`、報 `unregistered`，理由照違規（`重複的 hello` 或框的錯），不撤表上那一筆。窗口只有幾行程式，測試造不穩。
 - n7 前台的格跟對話行程走同一段程式（`role` 換成 `front`），監督行程這邊的測試只用對話行程。
-- n8 「撤 pid」的四件事都在同一個 `Host::revoke`（違規時由 `violate` 呼叫）：表上拿掉由 t1、t2、t3、t14 釘住；還沒送 `hello` 的記成撤過由 t13、t18；驗過身分的斷由 t2；不收 backlog 沒有測試，要讓連線停在 backlog 得先把連線數撐到上限（t8 的做法），沒另外造。
+- n8 「撤 pid」的前三件在 `Host::revoke`；不收 backlog 是因為違規時 `violate` 直接呼叫它，收監督行程的 `revoke` 時才由 `Host::sync` 先 `accept(usize::MAX)` 再呼叫它。表上拿掉由 t1、t2、t3、t14 釘住；還沒送 `hello` 的記成撤過由 t13、t18；驗過身分的斷由 t2；不收 backlog 沒有測試，要讓連線停在 backlog 得先把連線數撐到上限（t8 的做法），沒另外造。
 
 **已知限制**
 

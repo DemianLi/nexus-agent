@@ -82,7 +82,7 @@ fn closed(stream: &mut UnixStream) -> bool {
     let mut buf = [0u8; 1];
     match stream.read(&mut buf) {
         Ok(n) => n == 0,
-        Err(err) => matches!(err.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe),
+        Err(err) => err.kind() == std::io::ErrorKind::ConnectionReset,
     }
 }
 
