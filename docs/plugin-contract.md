@@ -260,7 +260,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     `thread.services.get` 對沒宣告的也拋。出廠的授權表只有 `@nexus/plugin-mcp` 那五格。樹上的插件不一定是我們寫的，而這些服務裡有憑證、連線池與答題管道，所以不給「任何插件讀任何服務」。
   - **`shared`**：同一條 thread 上、**同一顆插件**（同一個模組命名空間）的各列共用一份物件，給同一顆插件的多列互相協調（例如 server 名撞名、共用一顆資源工具的 hub）；不同插件拿到不同份，下一條 thread 是新的一份。
   - **`admit`**：在這條 thread 的工具清單那一步（`createToolListStepMiddleware`）拿掉不放行的工具；一個名字都沒拿掉時請求原樣往內交。名字省略時是 `<列 id>:admit:<序號>`。
-  - **`section`**（2.6.0）：在這條 thread 的系統提示詞中段登記一段，轉給這條 thread 的 `registry.prompt.section`，名字、`order`、`separator` 與重名、`order` 的檢查都跟相容層那一格相同。
+  - **`section`**（2.6.0）：在這條 thread 的系統提示詞中段登記一段，轉給這條 thread 的 `registry.prompt.section`，名字、`order`、`separator` 與重名、`order` 的檢查都跟相容層那一格相同。`text` 給函式時（2.8.0 起，用的宣告 `^2.8.0`），每次模型呼叫收 `{ call }`：這一次呼叫的身分，交給 `sessionLookup.forCall` 認出 root 還是哪一個子代理（同一段會接到 root 與每個子代理的呼叫上）。相容層那一格的段 context 另帶 `agent` 與 `tools`，橋接不轉出。形狀照 dsh：`PromptSection.text` 每次組裝收一份 `AssembleContext`（`packages/core/system-prompt/src/index.ts:66`@`8bd0733`），那裡是不透明的 `scope` 加 `signal`；這裡只交身分 `call`，不帶 `signal`。
     `text` 給函式就是每次模型呼叫現算：段的內容要等這條 thread 上所有列都掛完才定得下來的（mcp 的 server 指引與可用的資源 server，後掛的列也要算進去）用它。
   - **`on`、`join`、`provide`**（2.7.0，用的宣告 `^2.7.0`）：轉給這條 thread 的 `registry.events.on`、`registry.sessions.join`、`registry.capabilities.provide`，落在那一列在清單上的位置，跟相容層那一列直接登記的一樣。
     範圍刻意收窄：`on` 只收 `'tools/execute'`、不開 `prepend`，所以監聽者落在那一列的位置，不會跳到前面各列之前；它跟任何插件監聽者一樣在兩段 core 監聽者之間（`packages/nexus-core/src/tool-pipeline.ts` 的 `outer`／`inner`）；`provide` 只收 `'workspace'`；別的值拋 `TypeError`。

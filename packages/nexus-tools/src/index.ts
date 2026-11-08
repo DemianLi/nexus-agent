@@ -65,8 +65,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `2.7.0`（#2533）：{@link ToolThread} 多三個選填方法 {@link ToolThread.on}、{@link ToolThread.join}、{@link ToolThread.provide}。向後相容的新增：
  * 不呼叫它們的來源照常；要用的消費者宣告 `^2.7.0`。
+ *
+ * `2.8.0`（#2551）：{@link ToolThreadSection.text} 的函式收一個 {@link ToolThreadSectionContext}，帶這一次模型呼叫的身分。向後相容的新增：
+ * 不帶參數的函式照樣可以指派；要讀它的消費者宣告 `^2.8.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.7.0';
+export const TOOLS_CONTRACT_VERSION = '2.8.0';
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -315,14 +318,25 @@ export interface ToolThreadSourceOptions {
   readonly services?: readonly string[];
 }
 
+/** {@link ToolThreadSection.text} 的函式收到的這一次模型呼叫（`2.8.0` 起）。 */
+export interface ToolThreadSectionContext {
+  /**
+   * 這一次模型呼叫的身分，原樣交給 `@nexus/session` 的 `sessionLookup.forCall`，認出呼叫者是 root 還是哪一個子代理；段不自己解析它。
+   * 同一段會接到這條 thread 的 root 與每個子代理的呼叫上。
+   */
+  readonly call: unknown;
+}
+
 /** {@link ToolThread.section} 登記的一段系統提示詞（`2.6.0` 起）。 */
 export interface ToolThreadSection {
   /** 段的名字，同一條 thread 上不能重複。 */
   readonly name: string;
   /** 排序值，只收宿主開放給插件的那幾個（`@nexus/core` 的 `PLUGIN_SECTION_ORDERS`）。 */
   readonly order: number;
-  /** 文字，照原文接。給函式就是每次模型呼叫現算，回 `''` 那一次不接。 */
-  readonly text: string | (() => string);
+  /**
+   * 文字，照原文接。給函式就是每次模型呼叫現算，回 `''` 那一次不接；`2.8.0` 起函式收這一次呼叫的 {@link ToolThreadSectionContext}。
+   */
+  readonly text: string | ((context: ToolThreadSectionContext) => string);
   /** 這一段開頭加的字（這一次不接時也不加）；省略即 `'\n\n'`。 */
   readonly separator?: string;
 }

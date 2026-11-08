@@ -109,7 +109,14 @@ export async function runThreadSources(
       },
       section(section) {
         live('section');
-        return registry.prompt.section(section);
+        const { text } = section;
+        // 相容層的段 context 是 `ToolThreadSectionContext` 的超集，原樣轉交也編得過，插件會在執行期讀到 `agent` 與 `tools`；
+        // 這裡收窄成契約上的 `call`（`thread-source.test.ts` 釘住）。
+        return registry.prompt.section(
+          typeof text === 'function'
+            ? { ...section, text: (context) => text({ call: context.call }) }
+            : section,
+        );
       },
       on(event, listener) {
         live('on');
