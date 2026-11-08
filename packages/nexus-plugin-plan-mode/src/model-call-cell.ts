@@ -3,7 +3,7 @@
  *
  * 它做兩件事，樹上都還沒有對應的接縫：
  *
- * - **交出待關**：`exit_plan_mode` 同意之後排的那一格（見 `./index.ts` 檔頭「模式在下一個模型步驟之前才關」），在請求組起來之前交出去。
+ * - **交出待關**：`exit_plan_mode` 同意之後排的那一格（見 `./index.ts` 檔頭「模式在下一個模型步驟之前才關」），在請求組起來之前交出去，佔 dsh `agent/pre-step` 的邊界提交那半（`apps/harness/src/interception-index.test.ts` 第 2 列）。
  * - **補回 `name`**：core 拿掉 `exit_plan_mode` 結果的 `name`（`./index.ts` 的 `EXIT_PLAN_MODE_CONCLUDES_TURN`），送給模型之前補回去。
  *
  * 這是封閉的單一例外，歸 [#2358](https://github.com/DemianLi/nexus-agent/issues/2358)：這個檔不受 SDK lint 管（`eslint.config.js`），
