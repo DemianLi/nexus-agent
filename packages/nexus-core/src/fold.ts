@@ -112,6 +112,8 @@ import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 import { createTurnStoppingMiddleware } from './turn-stopping.js';
+import { createPreStepAdapterMiddleware } from './pre-step-adapter.js';
+import { createToolNameRestoreMiddleware } from './tool-name-restore.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
@@ -864,6 +866,25 @@ export function foldRegistry(
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。
     // root 按了停止，訊號經 `configurable` 傳到子代理（#265 的 Q10）。見 {@link ./turn-cancel.ts}。
     shared('turnCancel', turnCancel),
+    // `langgraph` 下派 `agent/pre-step` 的轉接格：排在插件那一批外面，監聽者交完狀態，插件的 `wrapModelCall` 與提示詞段
+    // 照交完的判。只在 `langgraph` 下、有監聽者時掛（native 由迴圈自己派），只折進 root。見 {@link ./pre-step-adapter.ts}。
+    rootOnly(
+      'preStep',
+      same(
+        options.loop === 'native' ||
+          options.events === undefined ||
+          options.events.count('agent/pre-step') === 0
+          ? undefined
+          : createPreStepAdapterMiddleware(options.events),
+      ),
+    ),
+    // 補回圍堵拿掉的 `name`，模型看的那一份跟沒拿掉時相同。只在那一份工具清單裡有 `returnDirect` 工具時掛，
+    // root 與每個子代理各看自己的清單。見 {@link ./tool-name-restore.ts}。
+    {
+      name: 'toolNameRestore',
+      root: same(toolNameRestoreFor(orderTools(globalTools, toolOrder))),
+      subagent: make((_spec, tools) => toolNameRestoreFor(tools)),
+    },
     // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
     {
       name: 'plugins.prepended',
@@ -1370,13 +1391,29 @@ function foldMiddleware(slots: readonly MiddlewareSlot[]): AgentMiddleware[] {
  *
  * @param slots - 槽位表。
  * @param spec - 這個子代理的規格；「子代理自帶」那一列從它取。
+ * @param tools - 這個子代理折好的工具清單；看工具決定掛不掛的那幾列從它取。
  * @returns 依表的順序展開的 middleware。
  */
 function foldSubagentMiddleware(
   slots: readonly MiddlewareSlot[],
   spec: NexusSubAgent,
+  tools: readonly StructuredTool[],
 ): AgentMiddleware[] {
-  return slots.flatMap((slot) => takeFrom(slot.subagent, spec));
+  return slots.flatMap((slot) => takeFrom(slot.subagent, spec, tools));
+}
+
+/**
+ * 補回 `name` 那一顆：這一份工具清單裡有 `returnDirect` 工具才建，沒有就不掛。
+ *
+ * @param tools - 這個 agent 的工具清單。
+ */
+function toolNameRestoreFor(tools: readonly StructuredTool[]): AgentMiddleware | undefined {
+  const names = new Set(
+    tools
+      .filter((tool) => (tool as { returnDirect?: unknown }).returnDirect === true)
+      .map((tool) => tool.name),
+  );
+  return names.size === 0 ? undefined : createToolNameRestoreMiddleware(names);
 }
 
 /**
@@ -1402,7 +1439,7 @@ interface MiddlewareSlot {
   /** root 取什麼。 */
   readonly root: SlotTake<[]>;
   /** 每個子代理取什麼；`spec` 是那個子代理的規格。 */
-  readonly subagent: SlotTake<[spec: NexusSubAgent]>;
+  readonly subagent: SlotTake<[spec: NexusSubAgent, tools: readonly StructuredTool[]]>;
 }
 
 /** 濾掉 `undefined` 的型別守衛。 */
@@ -1457,7 +1494,10 @@ function rootOnly(name: string, root: SlotTake<[]>): MiddlewareSlot {
 }
 
 /** 只給子代理。 */
-function subagentOnly(name: string, subagent: SlotTake<[spec: NexusSubAgent]>): MiddlewareSlot {
+function subagentOnly(
+  name: string,
+  subagent: SlotTake<[spec: NexusSubAgent, tools: readonly StructuredTool[]]>,
+): MiddlewareSlot {
   return { name, root: NONE, subagent };
 }
 
@@ -1493,7 +1533,7 @@ function pluginMiddleware(
   const isMiddleware = (value: AgentMiddleware | undefined): value is AgentMiddleware =>
     value !== undefined;
   const entries = registry.middleware.list();
-  // 插件登記的系統提示詞中段（#2414）。`prepended` 接在區尾：計劃模式那一顆先交出排著的待關，指引才照交完的模式判。
+  // 插件登記的系統提示詞中段（#2414）。`prepended` 接在區尾：段照插件 middleware 改過之後的狀態判。
   // `rest` 接在區頭，區裡沒有別的會讀系統訊息。
   const sections = registry.prompt.sections();
   const slot = (name: string, orders: readonly number[]): AgentMiddleware[] => {
@@ -2032,12 +2072,13 @@ function foldSubAgents(
     // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
     const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;
     if (typeof declared.model === 'string') delete declared.model;
+    const tools = orderTools(merged, context.toolOrder);
     const next: SubAgent = {
       ...declared,
-      tools: orderTools(merged, context.toolOrder),
+      tools,
       // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
       // 哪些共用一份、哪些逐個建、哪些只給子代理。
-      middleware: foldSubagentMiddleware(context.slots, spec),
+      middleware: foldSubagentMiddleware(context.slots, spec, tools),
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成
     // 沒有規則」）。
