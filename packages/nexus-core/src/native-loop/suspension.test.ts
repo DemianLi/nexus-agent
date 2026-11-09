@@ -7,7 +7,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { isHumanInputWithdrawn, waitClockOf, HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
-import { delegationOf, RunSuspension, type CallPermit, type CallSlot, type Delegation } from './suspension.js';
+import {
+  delegationOf,
+  RunSuspension,
+  type CallPermit,
+  type CallSlot,
+  type Delegation,
+} from './suspension.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -336,7 +342,10 @@ describe('RunSuspension', () => {
 
   describe('委派：前景子代理在 root 那顆 task 呼叫底下開自己的呼叫', () => {
     /** root 起跑一顆 task，回它與它的委派。 */
-    function delegating(suspension: RunSuspension, callId = 'task'): {
+    function delegating(
+      suspension: RunSuspension,
+      callId = 'task',
+    ): {
       readonly slot: CallSlot;
       readonly delegation: Delegation;
     } {
@@ -445,7 +454,9 @@ describe('RunSuspension', () => {
     it('root 自己的呼叫沒有委派以外的影響：沒開委派的 slot 照舊', () => {
       const suspension = new RunSuspension(vi.fn(), vi.fn());
       expect(delegationOf(started(suspension, 'c').service)).toBeDefined();
-      expect(delegationOf({ ask: vi.fn(), idle: vi.fn(), onResumed: vi.fn() } as never)).toBeUndefined();
+      expect(
+        delegationOf({ ask: vi.fn(), idle: vi.fn(), onResumed: vi.fn() } as never),
+      ).toBeUndefined();
     });
   });
 });

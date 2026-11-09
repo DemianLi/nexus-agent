@@ -402,9 +402,15 @@ class RunLink {
     }
     for (const [key, group] of nested) {
       const values = group.asks.map(({ id, value }) => ({ id, value }));
-      this.emitter.emit('updates', group.namespace, { node: '__interrupt__', values }, '__interrupt__');
+      this.emitter.emit(
+        'updates',
+        group.namespace,
+        { node: '__interrupt__', values },
+        '__interrupt__',
+      );
       const started = this.#toolStarts.get(key);
-      const callId = (started?.data as { readonly tool_call_id?: unknown } | undefined)?.tool_call_id;
+      const callId = (started?.data as { readonly tool_call_id?: unknown } | undefined)
+        ?.tool_call_id;
       if (started === undefined) continue;
       this.emitter.emit('tools', started.namespace, {
         event: 'tool-error',
@@ -1098,12 +1104,7 @@ export class NativeAgent {
         suspension === undefined
           ? () => ({ [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT })
           : (ns) => {
-              const slot = suspension.slot(
-                call.id ?? '',
-                ns.split('|'),
-                halt,
-                permits.of(index),
-              );
+              const slot = suspension.slot(call.id ?? '', ns.split('|'), halt, permits.of(index));
               slots[index] = slot;
               return { [HUMAN_INPUT_CONFIG_KEY]: slot.service };
             },

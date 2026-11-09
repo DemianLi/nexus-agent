@@ -37,9 +37,9 @@ async function run(): Promise<Record<Counted, number>> {
         counts['llm/stream'] += 1;
         return next();
       });
-      r.events.on('agent/request-error', (_payload, next) => {
+      r.events.on('agent/request-error', async (_payload, next) => {
         counts['agent/request-error'] += 1;
-        return counts['agent/request-error'] === 1 ? { kind: 'retry' } : next();
+        return counts['agent/request-error'] === 1 ? { kind: 'retry' as const } : next();
       });
     }),
   ]);

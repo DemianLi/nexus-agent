@@ -399,8 +399,7 @@ export class RunSuspension {
       get withdrawn() {
         return withdrawn();
       },
-      slot: (callId, namespace, halt, permit) =>
-        this.#slot(tally, callId, namespace, halt, permit),
+      slot: (callId, namespace, halt, permit) => this.#slot(tally, callId, namespace, halt, permit),
       away: (waiting) => {
         tally.add(-1);
         this.#maybePark();
@@ -438,6 +437,8 @@ export class RunSuspension {
   }
 
   #stuck(): boolean {
-    return !this.#withdrawn && this.#root.count === 0 && this.#asks.size === 0 && this.#idlers.size > 0;
+    return (
+      !this.#withdrawn && this.#root.count === 0 && this.#asks.size === 0 && this.#idlers.size > 0
+    );
   }
 }
