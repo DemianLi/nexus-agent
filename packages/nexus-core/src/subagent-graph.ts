@@ -68,7 +68,10 @@ export type SubagentGraphParams = Pick<
   'subagents' | 'model' | 'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
 >;
 
-/** 編出來的圖：帶 checkpointer 的 `createAgent` 圖；`native` 下是 native agent，型別照前者，呼叫端只叫兩者都有的成員。 */
+/**
+ * 編出來的圖：帶 checkpointer 的 `createAgent` 圖；`native` 下是 native agent，型別仍標成前者。背景 host 經自己的 `BackgroundAgent`
+ * 結構型別用它，只有 native 有的 `discardSuspended` 在那裡是選填。
+ */
 export type SubagentGraph = ReturnType<typeof createAgent>;
 
 /** 編圖的選項。 */
@@ -182,8 +185,8 @@ export function compileSubagentGraph(
 
   const middleware = mergeMiddlewareByName(
     defaults,
-    // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
-    // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
+    // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的，
+    // 跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
     ((declarative.middleware ?? []) as AgentMiddleware[])
       .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
       // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
@@ -199,7 +202,6 @@ export function compileSubagentGraph(
       ),
   );
   if (options.loop === 'native') {
-    // 呼叫端拿到的型別同 langgraph 那一支：host 只叫兩者都有的成員（`streamEvents`、`updateState`、`withConfig`）。
     return createNativeAgent({
       model,
       name: declarative.name,

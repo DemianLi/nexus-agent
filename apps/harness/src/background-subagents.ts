@@ -1640,7 +1640,7 @@ export class BackgroundSubagentHost {
       configurable: { thread_id: log.sessionId },
     });
     // 背景子代理背後沒有人：MCP server 反問（#1098）一律回絕，讓它的工具照常收尾，而不是停在一顆沒人會答的中斷上。
-    // 上限防的是一支一直反問的工具；超過就照原樣收（中斷留在存檔點或 native 的記憶體，下一輪開頭收回）。
+    // 上限防的是一支一直反問的工具；超過就照原樣收（langgraph 的中斷留在存檔點；native 的留在記憶體，下一輪開頭收回）。
     for (let answered = 0; ; answered += 1) {
       const run = await this.#agentFor(job.subagent, job.choice).streamEvents(input as never, {
         version: 'v3',
