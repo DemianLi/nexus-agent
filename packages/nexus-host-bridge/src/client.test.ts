@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { HostClient } from './client.js';
 import { FrameReader, PROTOCOL_VERSION, frame } from './protocol.js';
 
-type Reply = 'hello' | 'rejected' | 'wrong-version' | 'garbage' | 'result-first' | 'hello-then-event';
+type Reply =
+  'hello' | 'rejected' | 'wrong-version' | 'garbage' | 'result-first' | 'hello-then-event';
 
 /** 假宿主：每條連線收到第一框之後照 `replies` 的第 n 個回答（用完就重複最後一個），收到的框都記下來。 */
 function fakeHost(path: string, replies: readonly Reply[]) {

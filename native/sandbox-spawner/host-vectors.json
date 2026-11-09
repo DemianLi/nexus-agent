@@ -30,13 +30,7 @@
         "method": "echo",
         "payload": {
           "text": "引號\"",
-          "list": [
-            1,
-            -2,
-            null,
-            true,
-            false
-          ],
+          "list": [1, -2, null, true, false],
           "nested": {
             "a": {}
           }

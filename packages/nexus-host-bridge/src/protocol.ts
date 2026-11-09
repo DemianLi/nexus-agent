@@ -44,8 +44,9 @@ export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];
 
 export type Side = 'c' | 'h';
 
-/** 過橋的資料：宿主的 JSON 收得下的那一部分。 */
-export type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
+/** 過橋的資料。型別是一般的 JSON 值；宿主收得比較少（見檔頭），由 {@link encodeClientMessage} 在送出前核。 */
+export type Json =
+  null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 
 export type ClientMessage =
   | { readonly type: 'hello'; readonly version: number; readonly token: string }
@@ -114,22 +115,29 @@ function checkJson(value: unknown, depth: number): void {
   }
 }
 
+function checkString(value: string, field: string): void {
+  if (LONE_SURROGATE.test(value)) throw new HostProtocolError(`${field} 有落單的代理對`);
+}
+
 function checkId(id: number): void {
   if (!Number.isSafeInteger(id) || id < 0) throw new HostProtocolError('id 不在範圍內');
 }
 
 /**
- * 編成緊湊 JSON，鍵照 `type` 在前的固定順序，跟宿主那一側編出來的一字不差。`call` 的 `payload` 不合宿主的 JSON、或整框超過
- * {@link MAX_FRAME}，丟 {@link HostProtocolError}。
+ * 編成緊湊 JSON，鍵照 `type` 在前的固定順序，跟宿主那一側編出來的一字不差。字串欄位有落單的代理對、`call`／`cancel` 的 `id`
+ * 不是 0 到 {@link MAX_ID} 的整數、`call` 的 `payload` 不合宿主的 JSON、或整框超過 {@link MAX_FRAME}，丟 {@link HostProtocolError}。
  */
 export function encodeClientMessage(message: ClientMessage): Buffer {
   let text: string;
   switch (message.type) {
     case 'hello':
+      checkString(message.token, 'token');
       text = JSON.stringify({ type: 'hello', version: message.version, token: message.token });
       break;
     case 'call':
       checkId(message.id);
+      checkString(message.service, 'service');
+      checkString(message.method, 'method');
       checkJson(message.payload, 1);
       text = JSON.stringify({
         type: 'call',

@@ -1,13 +1,13 @@
 //! 主機級插件樹的內核（#2569）：fiber 樹、服務、事件、時限、設定。宿主與每條對話的 Rust 組合行程共用。
 //!
-//! 目前沒有執行檔用到它。設計與語意清單的逐條對照見 `.docs/rust-kernel-2569-2026-11-09.md`。
+//! 設計與語意清單的逐條對照見 `.docs/rust-kernel-2569-2026-11-09.md`。
 //!
 //! # 怎麼推進
 //!
 //! 單執行緒、不用 async runtime。狀態轉換一律在 [`Kernel::run`] 裡發生：[`Kernel::mount`]、[`Kernel::dispose`]、
 //! [`Kernel::update`] 與插件經 [`Cx`] 做的登記，都只把 fiber 排進待做。例外是 emit：它當場同步呼叫 listener，
 //! 但 listener 一樣不會觸發狀態轉換。所以插件的回呼裡不會重入狀態機。
-//! 宿主的事件迴圈每次醒來呼叫一次 `run`，睡多久看 [`Kernel::next_deadline`]，醒來後用 [`Kernel::drain_events`] 取走內核的事件寫 log 與稽核。
+//! 宿主的事件迴圈每次醒來呼叫一次 `run`，睡多久看 [`Kernel::next_deadline`]（宿主再併入過橋服務的 [`Remote::next_deadline`]），醒來後用 [`Kernel::drain_events`] 取走內核的事件寫 log 與稽核。
 //!
 //! # fiber 的狀態
 //!

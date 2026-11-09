@@ -937,9 +937,9 @@ mod plugins {
     }
 }
 
-/// 分開之前宿主連線跟控制通道共用版本 3：舊的客戶端送 3 進來，判版本不對。
+/// 控制通道的版本是 3：客戶端送 3 進來，宿主判版本不對（報 violation），不當成這一版。
 #[test]
-fn a_hello_with_the_old_shared_version_is_a_version_mismatch() {
+fn a_hello_with_the_control_channel_version_is_a_version_mismatch() {
     let dir = temp_dir("old-version");
     let socket = dir.join("host.sock");
     let mut host = HostProc::start(&socket);

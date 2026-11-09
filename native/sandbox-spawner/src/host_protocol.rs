@@ -17,7 +17,7 @@ use crate::json::{self, Value};
 use crate::protocol::DecodeError;
 
 /// 宿主連線的協定版本。跟監督行程控制通道的版本（[`crate::supervisor_protocol::PROTOCOL_VERSION`]）各自獨立。
-/// 從 4 起跳：分開之前兩條共用 3，舊的客戶端送 3 進來會得到明確的版本不符，不會被當成新版。
+/// 不用 3：那是控制通道的版本，送 3 進來的客戶端判版本不對，不當成這一版。
 pub const HOST_PROTOCOL_VERSION: u32 = 4;
 
 /// 宿主連線上一框最長多少。
@@ -33,7 +33,7 @@ pub enum Side {
     Host,
 }
 
-/// 一次呼叫失敗的原因。客戶端那一側另有「宿主不在」的三種，不上線。
+/// 一次呼叫失敗的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     UnknownService,
@@ -48,6 +48,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// 全部的錯誤碼；順序跟向量檔的 `errorCodes` 相同（兩邊的測試逐項比）。
     pub const ALL: [ErrorCode; 7] = [
         ErrorCode::UnknownService,
         ErrorCode::UnknownMethod,

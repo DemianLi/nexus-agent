@@ -112,7 +112,19 @@ describe('encodeClientMessage 只送宿主解得開的', () => {
   it('巢狀的上限連框本身算：payload 最多 MAX_DEPTH - 1 層', () => {
     const nest = (n: number): unknown => (n === 0 ? null : [nest(n - 1)]);
     expect(() => encodeClientMessage(call(nest(MAX_DEPTH - 1)))).not.toThrow();
-    expect(() => encodeClientMessage(call(nest(MAX_DEPTH)))).toThrow(new HostProtocolError('巢狀太深'));
+    expect(() => encodeClientMessage(call(nest(MAX_DEPTH)))).toThrow(
+      new HostProtocolError('巢狀太深'),
+    );
+  });
+
+  it.each<[string, ClientMessage]>([
+    ['token', { type: 'hello', version: 4, token: 'a\ud800' }],
+    ['service', { type: 'call', side: 'c', id: 1, service: '\udc00', method: 'm', payload: null }],
+    ['method', { type: 'call', side: 'c', id: 1, service: 's', method: '\ud800', payload: null }],
+  ])('%s 有落單的代理對丟 HostProtocolError', (field, message) => {
+    expect(() => encodeClientMessage(message)).toThrow(
+      new HostProtocolError(`${field} 有落單的代理對`),
+    );
   });
 
   it('id 要是 0 到 MAX_ID 的整數', () => {

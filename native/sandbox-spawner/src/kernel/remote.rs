@@ -1,7 +1,7 @@
 //! 過橋的服務：宿主連線上的 `call` 照服務名找到用 [`super::Cx::expose`] 提供的實體，資料進、資料出。
 //!
-//! 一次呼叫由宿主開始（[`Remote::start`]），沒當場結束的回 [`Progress::Pending`]，之後宿主每次醒來 [`Remote::poll`] 它，直到回
-//! `Ok` 或 `Err`；呼叫端取消或斷線時宿主叫 [`Remote::cancel`]，之後不再 poll 那一次。服務自己決定什麼時候要被叫醒
+//! 一次呼叫由宿主開始（[`Remote::start`]），沒當場結束的回 [`Progress::Pending`]，之後宿主醒來就 [`Remote::poll`] 它（那條連線排著沒寫出去的太多時先跳過），
+//! 直到回 `Ok` 或 `Err`；呼叫端取消、斷線，或宿主提早收尾（塊太大、單次的方法推了塊）時宿主叫 [`Remote::cancel`]，之後不再 poll 那一次。服務自己決定什麼時候要被叫醒
 //! （[`Remote::next_deadline`]）：宿主不忙等，沒寫時限的 `Pending` 只在宿主因別的事醒來時被 poll 到。
 //!
 //! 串流的方法在 `start`／`poll` 裡把一塊一塊推進 `chunks`，最後照樣以 `Ok`／`Err` 收尾。單次的方法推了塊，宿主當成服務的錯。
@@ -37,6 +37,7 @@ pub enum Fault {
     Failed,
 }
 
+/// 一次呼叫推進到哪。`Pending` 之後宿主會再 poll；`Ok`／`Err` 是終點，`Err` 的字串原樣成為回給客戶端的 `error.message`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Progress {
     Pending,
@@ -62,7 +63,7 @@ pub trait Remote {
     /// 推進一次還在跑的呼叫。
     fn poll(&mut self, key: CallKey, now: Instant, chunks: &mut Vec<Value>) -> Progress;
 
-    /// 呼叫端不要了：放掉這一次的狀態。之後不會再 poll 它。
+    /// 這一次不跑了（呼叫端取消、斷線，或宿主提早收尾）：放掉它的狀態。之後不會再 poll 它。
     fn cancel(&mut self, key: CallKey);
 
     /// 還在跑的呼叫最晚什麼時候要被 poll。
@@ -76,7 +77,7 @@ pub trait Remote {
     }
 }
 
-/// 從型別抹掉的值取回 `dyn Remote`。provide 時照實際型別產生一個，跟值一起存。
+/// 從型別抹掉的值取回 `dyn Remote`。expose 時照實際型別產生一個，跟值一起存。
 pub(crate) type AsRemote = fn(&mut dyn Any) -> Option<&mut dyn Remote>;
 
 pub(crate) fn as_remote<S: Remote + 'static>(value: &mut dyn Any) -> Option<&mut dyn Remote> {
