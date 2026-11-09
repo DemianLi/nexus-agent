@@ -222,7 +222,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 51,
     kind: 'additive',
     ref: '#1579',
-    readerBranch: 'packages/nexus-core/src/session-store.ts:861',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:874',
   },
   {
     from: 51,
@@ -239,6 +239,13 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     kind: 'additive',
     ref: '#2416',
     readerBranch: 'packages/nexus-core/src/session-relationships.ts:168',
+  },
+  {
+    from: 55,
+    to: 56,
+    kind: 'additive',
+    ref: '#2649',
+    readerBranch: 'packages/nexus-core/src/subagent-mention.ts:55',
   },
 ];
 

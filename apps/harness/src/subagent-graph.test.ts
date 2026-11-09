@@ -129,10 +129,13 @@ describe('漂移絆索：同一份規格，task 那條路與背景圖，模型�
       expect(compiled.tools).toEqual(task.tools);
       // 刻意的差別有兩處，其餘逐字相同：
       // - 委派聲明（#328 第 1 項）：前景說核准交給使用者，背景說會自動被拒絕；
-      // - 核准政策句（#1986）：前景共用 root 的管道（有人在、ask），背景的管道是 `policy-never`。
+      // - 核准政策句（#1986）：前景共用 root 的管道（有人在、ask），背景的管道是帶 `background-subagent` 的 `policy-never`（#2649）。
       // 先斷言兩邊被換掉的各是預期的那一句、各只一次，換掉之後再比，替換才藏不住別的漂移。
       const foregroundPolicy = approvalPolicySentence({ kind: 'human' }, 'ask');
-      const backgroundPolicy = approvalPolicySentence({ kind: 'policy-never' }, 'ask');
+      const backgroundPolicy = approvalPolicySentence(
+        { kind: 'policy-never', reason: 'background-subagent' },
+        'ask',
+      );
       expect(foregroundPolicy).not.toBe(backgroundPolicy);
       expect(task.system).toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
       expect(compiled.system).toContain(SUBAGENT_DELEGATION_CONTEXT);

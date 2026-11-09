@@ -108,7 +108,8 @@ type Trigger =
   | 'subagent-header'
   | 'embed-profile'
   | 'request-snapshot-shape'
-  | 'retry-attempt';
+  | 'retry-attempt'
+  | 'mention';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -222,6 +223,14 @@ const TARGETS: readonly Target[] = [
     triggers: ['request-snapshot-shape', 'retry-attempt'],
     ownReplay: true,
     released: false,
+  },
+  // CLI 一輪碰不到點名：`turn/start`、佇列項的 `mention` 與插話接著的提示區塊由觸發補寫。
+  {
+    name: 'v55',
+    rev: 'v0.6.1',
+    version: 55,
+    triggers: ['mention'],
+    ownReplay: true,
   },
 ];
 interface MixedHalf {
@@ -629,6 +638,18 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             session: 'retry-attempt',
             computedBy: 'today',
             attemptCalls: attemptCalls(readEvents(directory, 'retry-attempt')),
+          },
+        ];
+      case 'mention':
+        return [
+          {
+            edge: 56,
+            session: 'mention',
+            computedBy: 'today',
+            // 55 自己的 `replayConversation` 推出的每一則人話內容（觸發寫的），就是當初送給模型的位元組。
+            ownHumanContents: JSON.parse(
+              readFileSync(join(directory, 'mention.own-human.json'), 'utf8'),
+            ) as unknown,
           },
         ];
       case 'subagent-header': {

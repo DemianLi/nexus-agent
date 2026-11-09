@@ -43,12 +43,14 @@ afterEach(async () => {
   for (const handler of opened.splice(0)) await handler.close();
 });
 
-async function open() {
+/** @param background - 掛背景續行（出廠 serve 的 `continuable`）：root 手上的委派工具是 `subagent`，不是 `task`。 */
+async function open(background = false) {
   const model = new ScriptedChatModel({ turns: [{ content: '好，我派它。' }] });
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
     plugins: [CREW],
+    ...(background && { backgroundSubagents: {} }),
   });
   let registry: SessionRegistry | undefined;
   const handler = createWireHandler({
@@ -58,6 +60,7 @@ async function open() {
       commands: emptyCommandPoint(),
       projections: built.projections,
       subagentKinds: built.subagentKinds,
+      ...(built.delegationTool !== undefined && { delegationTool: built.delegationTool }),
       dispose: () => built.dispose(),
       attachSessions: (sessions, port) => {
         registry = sessions;
@@ -119,6 +122,38 @@ describe('subagent.list', () => {
 });
 
 describe('run.start 的 mention', () => {
+  it.each([
+    ['one-shot', false, 'task', 'subagent 的'],
+    ['continuable（出廠 serve）', true, 'subagent', 'task'],
+  ] as const)(
+    '%s：提示只提 root 手上的委派工具，日誌記下它（#2649）',
+    async (_mode, background, tool, absent) => {
+      const run = await open(background);
+      try {
+        const reply = await run.client.runStart(THREAD, '請看一下這份 diff', {
+          mention: { kind: 'subagent', name: 'reviewer' },
+        });
+        expect(reply).toMatchObject({ type: 'success' });
+        await run.pump(() => run.state().status === 'idle' && run.state().entries.length >= 2);
+
+        const human = run.model.prompts[0]!.find((message) => message.getType() === 'human')!;
+        const hint = (human.content as { text: string }[])[1]!.text;
+        expect(hint).toBe(mentionHintText({ kind: 'subagent', name: 'reviewer', tool }));
+        expect(hint).toContain(`${tool} 的 subagent_type`);
+        expect(hint).not.toContain(absent);
+        expect(run.turnStarts().map((event) => event.data)).toMatchObject([
+          { kind: 'message', mention: { kind: 'subagent', name: 'reviewer', tool } },
+        ]);
+        // 歷史照樣認得提示：泡泡帶 mention、文字不含提示。
+        expect(humansOf(run.state())).toMatchObject([
+          { text: '請看一下這份 diff', mention: { kind: 'subagent', name: 'reviewer' } },
+        ]);
+      } finally {
+        await run.close();
+      }
+    },
+  );
+
   it('合格的點名：模型讀到提示；即時與冷載入的人話泡泡都帶 mention，文字不含提示', async () => {
     const run = await open();
     try {

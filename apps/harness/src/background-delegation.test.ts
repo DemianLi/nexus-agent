@@ -1042,6 +1042,9 @@ describe('背景路徑上的 #324：核准自動拒絕、問答拒絕樁', () =>
         .flat()
         .find((message) => message.getType() === 'tool');
       expect(refusal?.text).toContain('沒有人被問到');
+      // 原因是背景子代理沒有人可以問，不是設定關掉了核准（#2649）。
+      expect(refusal?.text).toContain('背景子代理沒有人可以問');
+      expect(refusal?.text).not.toContain('關掉了人工核准');
     } finally {
       await run.close();
     }
