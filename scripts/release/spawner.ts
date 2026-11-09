@@ -208,7 +208,7 @@ export function spawnerLockedCrates(text: string): LockedCrate[] {
 }
 
 /**
- * 連進執行檔的 crate（{@link SPAWNER_CRATES} 標了 `runtime` 的），版本與 checksum 取自 `Cargo.lock`。
+ * 連進執行檔的 crate：{@link spawnerLockedCrates} 裡 {@link SPAWNER_CRATES} 標了 `runtime` 的，版本與 checksum 取自 `Cargo.lock`。
  *
  * @param lockText - `Cargo.lock` 全文。
  * @returns 依 `Cargo.lock` 的順序，同名多版本各一列。
@@ -218,7 +218,7 @@ export function runtimeCrates(lockText: string): (LockedCrate & { license: strin
   const runtime = new Map(
     SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => [entry.name, entry.license]),
   );
-  return lockedCrates(lockText).flatMap((entry) => {
+  return spawnerLockedCrates(lockText).flatMap((entry) => {
     const license = runtime.get(entry.name);
     return license === undefined ? [] : [{ ...entry, license }];
   });

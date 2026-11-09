@@ -196,4 +196,4 @@ perl -MPOSIX -e 'my $p = fork(); if ($p == 0) { POSIX::setsid(); exec @ARGV or d
 
 ## 本機跑 spawner 的 fmt 與 clippy（#2620）
 
-CI 在 `.github/actions/sandbox-spawner` 跑這兩步，本機在 `native/sandbox-spawner` 下照抄：`cargo fmt --check`、`cargo clippy --locked --all-targets --features test-hooks -- -D warnings`。前提是 rust-toolchain.toml 釘的那版已裝 `clippy`、`rustfmt` 兩個元件（`rustup component add clippy rustfmt`）。`src/` 直接呼叫 Landlock、seccomp 這類 Linux 系統呼叫，`tests/` 的整合測試帶 `#![cfg(target_os = "linux")]`，所以 clippy 要在 Linux 上跑才跟 CI 看到同一份程式碼；fmt 不受平台影響，macOS 上也能跑，clippy 看分支 CI。
+CI 在 `.github/actions/sandbox-spawner` 跑這兩步，本機在 `native/sandbox-spawner` 下照抄：`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings`。宿主在 workspace 的另一個 package（`host/`），不帶 `--all`／`--workspace` 就只檢查根那個 package。前提是 rust-toolchain.toml 釘的那版已裝 `clippy`、`rustfmt` 兩個元件（`rustup component add clippy rustfmt`）。`src/` 直接呼叫 Landlock、seccomp 這類 Linux 系統呼叫，`tests/` 的整合測試帶 `#![cfg(target_os = "linux")]`，所以 clippy 要在 Linux 上跑才跟 CI 看到同一份程式碼；fmt 不受平台影響，macOS 上也能跑，clippy 看分支 CI。

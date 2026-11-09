@@ -34,7 +34,7 @@ import type { ProcessModel, ProcessModelConfig } from './settings/process-model.
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
 export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 
-/** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 crate 編出來）。 */
+/** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 Cargo workspace 編出來）。 */
 export const HOST_BINARY_NAME = 'nexus-host';
 
 /** 宿主的插件清單在 home 底下的檔名。有宿主就一律傳給它：檔不在，宿主照常起、不掛插件，放了檔要等宿主重起才讀到。 */

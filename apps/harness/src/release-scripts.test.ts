@@ -633,6 +633,19 @@ describe('沙箱 spawner 的 crate 清單', () => {
     expect(spawnerCrateProblems(mutated)).toEqual([]);
   });
 
+  it('突變：宿主帶進連進執行檔的 crate 的另一版，spawner 的授權目錄與核對都不變', () => {
+    const version = lockedCrates(lock).find((entry) => entry.name === 'thiserror')?.version;
+    const mutated = depend(
+      `${lock.replace(/^ "thiserror",$/gmu, ` "thiserror ${version}",`)}\n${block('thiserror', '9.9.9')}`,
+      'nexus-host',
+      'thiserror 9.9.9',
+    );
+    expect(lockedCrates(mutated).filter((entry) => entry.name === 'thiserror')).toHaveLength(2);
+    expect(runtimeLicenseDirs(mutated)).toEqual(runtimeLicenseDirs(lock));
+    expect(names(mutated)).toEqual(names(lock));
+    expect(spawnerCrateProblems(mutated)).toEqual([]);
+  });
+
   it('dependencies 帶版本的照版本走：宿主用的另一版不算進來', () => {
     const text = [
       block('nexus-host', '0.0.0', ['nexus-sandbox-spawner', 'syn 3.0.1']),
@@ -1155,6 +1168,10 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       '[[package]]',
       'name = "nexus-sandbox-spawner"',
       'version = "0.0.0"',
+      'dependencies = [',
+      ' "libc",',
+      ' "syn",',
+      ']',
       '',
       '[[package]]',
       'name = "syn"',
