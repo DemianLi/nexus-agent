@@ -67,6 +67,8 @@ const DELEGATE = Symbol('nexus.native-loop.delegate');
 
 /** 一顆 `task` 呼叫底下，前景子代理那一層。 */
 export interface Delegation {
+  /** root 那次 run 收回過了，同 {@link RunSuspension.withdrawn}。 */
+  readonly withdrawn: boolean;
   /** 子代理的一顆呼叫的位子，參數同 {@link RunSuspension.slot}；命名空間是巢狀的那一份。 */
   slot(
     callId: string,
@@ -242,7 +244,10 @@ export class RunSuspension {
           throw error;
         },
       );
-    const service: HumanInput & { readonly [WAIT_CLOCK]: WaitClock } = {
+    const service: HumanInput & {
+      readonly [WAIT_CLOCK]: WaitClock;
+      readonly [DELEGATE]: () => Delegation;
+    } = {
       [WAIT_CLOCK]: clock,
       ask: (value) => {
         const refused = refusal();
@@ -389,7 +394,11 @@ export class RunSuspension {
   /** `parent` 那一層的一顆呼叫底下開一層：開的時候算子代理本身在跑。 */
   #delegation(parent: Tally): Delegation {
     const tally = new Tally(1, (delta) => parent.add(delta));
+    const withdrawn = (): boolean => this.#withdrawn;
     return {
+      get withdrawn() {
+        return withdrawn();
+      },
       slot: (callId, namespace, halt, permit) =>
         this.#slot(tally, callId, namespace, halt, permit),
       away: (waiting) => {

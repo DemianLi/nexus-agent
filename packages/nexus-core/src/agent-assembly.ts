@@ -53,18 +53,16 @@
  * @module
  */
 
-import type { RunnableConfig } from '@langchain/core/runnables';
 import {
   createFilesystemMiddleware,
   createSubAgentMiddleware,
   createSummarizationMiddleware,
 } from 'deepagents';
-import type { SubAgent } from 'deepagents';
+import type { CompiledSubAgent, SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
-import { HUMAN_INPUT_CONFIG_KEY, NO_HUMAN_INPUT } from './human-input.js';
 import type { FoldedAgentParams } from './fold.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
@@ -234,8 +232,7 @@ function filesystemMiddleware(
 
 /**
  * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
- * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`，經 {@link withoutHumanInput} 把
- * 交給子代理的等人服務換成 `NO_HUMAN_INPUT`）與洋蔥裡的位置照基座。
+ * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
  *
  * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
  *
@@ -249,10 +246,7 @@ function subAgentMiddleware(
   >,
 ): ReturnType<typeof createSubAgentMiddleware> {
   const created = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
-  const base = {
-    ...created,
-    tools: created.tools?.map(withoutHumanInput) as typeof created.tools,
-  };
+  const base = created;
   const inner = base.wrapModelCall;
   if (inner === undefined)
     throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
@@ -272,34 +266,6 @@ function subAgentMiddleware(
     step,
     inner,
   );
-}
-
-/**
- * 基座的 `task`：交給子代理的 config 把等人服務換成「這裡沒人可問」（`human-input.ts` 的 `NO_HUMAN_INPUT`），子代理裡的閘門走沒有
- * 核准管道那一格、工具的 `exec.interrupt` 當場拒絕。子代理仍是 LangGraph 子圖（TODO(#2359)），它的呼叫不在 root 那顆 `task` 呼叫的
- * 計數裡；讀得到服務的話，子代理的屏障一 `idle`，root 那顆就算成不在跑，同一批沒有別顆在跑或在問時判成卡死，這次 run 失敗
- * （`native-loop/suspension.ts`）。只有 native 放這一格，`langgraph` 下沒有，原樣交下去。
- * root 這一層的屏障與圍堵讀的是工具呼叫請求上的 `configurable`，不經這裡，照樣讀得到。
- * 只覆寫 `invoke`：基座經 `invoke` 叫子代理；`stream`、`call` 或展開成新物件的路徑不經這裡。
- * @param tool - 基座給的工具。
- * @returns 以 `tool` 為原型的新物件，只覆寫 `invoke`，其餘經原型讀到。
- */
-function withoutHumanInput<T extends { invoke(input: unknown, config?: RunnableConfig): unknown }>(
-  tool: T,
-): T {
-  return Object.create(tool, {
-    invoke: {
-      value: (input: unknown, config?: RunnableConfig) => {
-        const configurable = config?.configurable;
-        if (configurable === undefined || !(HUMAN_INPUT_CONFIG_KEY in configurable))
-          return tool.invoke(input, config);
-        return tool.invoke(input, {
-          ...config,
-          configurable: { ...configurable, [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT },
-        });
-      },
-    },
-  }) as T;
 }
 
 /**
@@ -342,6 +308,14 @@ export function subagentDefaultMiddleware(
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
   ] as unknown as AgentMiddleware[];
+}
+
+/** native 的系統提示詞只收字串；fold 給的一律是字串，`SystemMessage` 當場拋，不靜靜丟掉。 */
+function nativeSystemPrompt(name: string, prompt: string | object): string {
+  if (typeof prompt !== 'string') {
+    throw new Error(`子代理 "${name}" 的 systemPrompt 不是字串，native agent loop 不收`);
+  }
+  return prompt;
 }
 
 /** 規格帶了這個組裝點不支援的東西時拋。 */
@@ -393,7 +367,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     );
   }
 
-  const inlineSubagents = params.subagents.map((spec) =>
+  const resolvedSubagents = params.subagents.map((spec) =>
     'runnable' in spec
       ? spec
       : {
@@ -412,6 +386,28 @@ export function assembleAgent(params: AssembleAgentParams) {
           ),
         },
   );
+  // native：前景子代理也跑 native，以編好的 `runnable` 交給基座，基座的 `task` 照樣 `invoke` 它。
+  const inlineSubagents =
+    params.loop === 'native'
+      ? resolvedSubagents.map((spec) =>
+          'runnable' in spec
+            ? spec
+            : {
+                name: spec.name,
+                description: spec.description,
+                runnable: createNativeAgent({
+                  model: spec.model ?? model,
+                  ...(spec.systemPrompt !== undefined && {
+                    systemPrompt: nativeSystemPrompt(spec.name, spec.systemPrompt),
+                  }),
+                  tools: spec.tools,
+                  middleware: spec.middleware,
+                  ...(params.events !== undefined && { events: params.events }),
+                  subagent: true,
+                }) as unknown as CompiledSubAgent['runnable'],
+              },
+        )
+      : resolvedSubagents;
 
   const core = [
     // 選填的 root skills，排在檔案工具前面。

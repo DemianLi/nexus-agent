@@ -57,7 +57,13 @@ import { isNativeNoopCell, withNativeNoopCells } from './native-noop-cells.js';
 import { runTool } from './tool-node.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
 import { emptyState, StateChannels, type LoopState } from './state.js';
-import { RunSuspension, type CallPermit, type CallSlot, type PendingAsk } from './suspension.js';
+import {
+  delegationOf,
+  RunSuspension,
+  type CallPermit,
+  type CallSlot,
+  type PendingAsk,
+} from './suspension.js';
 
 /** {@link createNativeAgent} 的參數，同 `createAgent` 用得到的那幾格。 */
 export interface NativeAgentParams {
@@ -69,6 +75,12 @@ export interface NativeAgentParams {
   readonly events?: EventDispatcher;
   /** 節點的 `config.store`，呼叫時給的優先，同 LangGraph。 */
   readonly store?: unknown;
+  /**
+   * 前景子代理：由 root 的 `task` 呼叫叫起。每次從空的 state 跑、跑完不留；節點的命名空間接在那顆 `task` 呼叫的
+   * `checkpoint_ns` 後面；工具的提問經那顆呼叫的委派（`suspension.ts` 的 {@link delegationOf}）交給 root 的使用者；
+   * 不派 `agent/pre-step` 與 `agent/turn-stopping`（`docs/plugin-contract.md`：只有 root 派）。
+   */
+  readonly subagent?: boolean;
 }
 
 /** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
@@ -340,9 +352,16 @@ class RunLink {
     const queue = this.open();
     this.rebind?.(config);
     this.emitter.lifecycle('running');
+    // 由外往內：叫起子代理的那顆 `task` 先，子代理裡的那顆後，同 LangGraph 從 `task` 重跑、子圖再接回。
+    const replayed = new Set<string>();
     for (const ask of pending) {
-      const started = this.#toolStarts.get(ask.namespace.join('|'));
-      if (started !== undefined) this.emitter.emit('tools', started.namespace, started.data);
+      for (let length = 1; length <= ask.namespace.length; length++) {
+        const key = ask.namespace.slice(0, length).join('|');
+        const started = this.#toolStarts.get(key);
+        if (started === undefined || replayed.has(key)) continue;
+        replayed.add(key);
+        this.emitter.emit('tools', started.namespace, started.data);
+      }
     }
     this.suspension.resume(answers);
     return queue;
@@ -366,6 +385,29 @@ class RunLink {
         event: 'tool-error',
         tool_call_id: ask.callId,
         message: new GraphInterrupt([{ id: ask.id, value: ask.value }]).message,
+      });
+    }
+    // 子代理那一層的：先在子代理的命名空間交一次，再替叫起它的那顆 `task` 補 `tool-error`，最後跟 root 的一起在 root 層交，
+    // 同 LangGraph 的中斷從子圖一路往外拋。pump 靠第一次露面的命名空間認出是子代理的。
+    const nested = new Map<string, { readonly namespace: string[]; readonly asks: PendingAsk[] }>();
+    for (const ask of asks) {
+      if (ask.namespace.length < 2) continue;
+      const namespace = ask.namespace.slice(0, -1);
+      const key = namespace.join('|');
+      const group = nested.get(key) ?? { namespace, asks: [] };
+      group.asks.push(ask);
+      nested.set(key, group);
+    }
+    for (const [key, group] of nested) {
+      const values = group.asks.map(({ id, value }) => ({ id, value }));
+      this.emitter.emit('updates', group.namespace, { node: '__interrupt__', values }, '__interrupt__');
+      const started = this.#toolStarts.get(key);
+      const callId = (started?.data as { readonly tool_call_id?: unknown } | undefined)?.tool_call_id;
+      if (started === undefined) continue;
+      this.emitter.emit('tools', started.namespace, {
+        event: 'tool-error',
+        tool_call_id: callId,
+        message: new GraphInterrupt(values).message,
       });
     }
     this.emitter.emit(
@@ -767,7 +809,11 @@ export class NativeAgent {
     if (config.signal?.aborted === true) throw abortReason(config.signal);
     // 沒給 thread 的一輪從空的 state 跑、跑完不留，同 LangGraph 沒有存檔點時。
     const threadId = optionalThreadIdOf(config);
-    const state = threadId === undefined ? emptyState() : this.#stateOf(threadId);
+    const subagent = this.#params.subagent === true;
+    const state = threadId === undefined || subagent ? emptyState() : this.#stateOf(threadId);
+    const parentNs = subagent ? parentNamespaceOf(config) : undefined;
+    // 子代理那一層的節點寫回時，在 root 那條串流補它那一層的 `completed`，同 LangGraph 子圖的節點收完時。
+    const completer = observer.emitter ?? (subagent ? parentEmitterOf(config) : undefined);
     this.#channels.apply(state, {
       ...this.#channels.inputOf(input),
       messages: [...(input.messages ?? [])],
@@ -815,7 +861,8 @@ export class NativeAgent {
       };
     }
     const budget = new StepBudget(recursionLimit);
-    const events = this.#params.events;
+    // 子代理的步驟不往共用派發面派這兩個事件；`llm/stream`、`agent/request-error` 照派。
+    const stepEvents = this.#params.subagent === true ? undefined : this.#params.events;
     // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走
     // `configurable`，不在這裡。
     const node = (
@@ -824,7 +871,8 @@ export class NativeAgent {
       stepSignal?: AbortSignal,
       extra?: (ns: string) => Record<string, unknown>,
     ): NodeTask => {
-      const ns = `${name}:${randomUUID()}`;
+      const own = `${name}:${randomUUID()}`;
+      const ns = parentNs === undefined ? own : `${parentNs}|${own}`;
       const signaled =
         stepSignal === undefined
           ? base
@@ -844,7 +892,7 @@ export class NativeAgent {
         state,
         this.#channels,
         taskInput,
-        () => observer.emitter?.complete([ns]),
+        () => completer?.complete(ns.split('|')),
         stepSignal,
         base.signal,
       );
@@ -876,9 +924,9 @@ export class NativeAgent {
           step += 1;
           const payload: AgentStepPayload = { threadId, step, signal };
           const decision =
-            events === undefined
+            stepEvents === undefined
               ? { kind: 'continue' as const }
-              : await events.waterfall('agent/pre-step', payload, async () => ({
+              : await stepEvents.waterfall('agent/pre-step', payload, async () => ({
                   kind: 'continue' as const,
                 }));
           if (decision.kind === 'reject') throw new TurnBlockedError();
@@ -912,7 +960,7 @@ export class NativeAgent {
             node,
             note,
             base.signal,
-            link?.suspension,
+            subagent ? delegatedWaits(base) : link?.suspension,
           );
         }
         if (!concluded) continue;
@@ -923,8 +971,8 @@ export class NativeAgent {
         skipBeforeModel = true;
         continue;
       }
-      if (events !== undefined) {
-        await events.serial('agent/turn-stopping', { threadId, step, signal });
+      if (stepEvents !== undefined) {
+        await stepEvents.serial('agent/turn-stopping', { threadId, step, signal });
       }
       return state;
     }
@@ -1030,9 +1078,14 @@ export class NativeAgent {
     ) => NodeTask,
     note: (name: string, update: Record<string, unknown>) => void,
     caller: AbortSignal | undefined,
-    suspension: RunSuspension | undefined,
+    suspension: ToolWaits | undefined,
   ): Promise<boolean> {
     const step = new AbortController();
+    // 子代理那一層的提問掛在 root 的 run 上：呼叫端中止時也要撤掉，不留在 root 那份掛著的提問裡。
+    const halt =
+      suspension?.away === undefined || caller === undefined
+        ? step.signal
+        : AbortSignal.any([step.signal, caller]);
     const permits = new Permits();
     const slots = new Array<CallSlot | undefined>(calls.length);
     const tasks = calls.map((call, index) =>
@@ -1043,7 +1096,12 @@ export class NativeAgent {
         suspension === undefined
           ? () => ({ [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT })
           : (ns) => {
-              const slot = suspension.slot(call.id ?? '', [ns], step.signal, permits.of(index));
+              const slot = suspension.slot(
+                call.id ?? '',
+                ns.split('|'),
+                halt,
+                permits.of(index),
+              );
               slots[index] = slot;
               return { [HUMAN_INPUT_CONFIG_KEY]: slot.service };
             },
@@ -1069,7 +1127,7 @@ export class NativeAgent {
     // 呼叫端已中止就當場拋，不起跑，同 LangGraph `_executeTasksWithRetry` 起跑前那一檢。
     if (caller?.aborted === true) throw new Error('Abort');
     permits.limit = Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED);
-    const batch = runBounded(
+    const running = runBounded(
       calls.map((call, index) => async () => {
         slots[index]?.enter();
         try {
@@ -1083,6 +1141,7 @@ export class NativeAgent {
       permits,
       step,
     );
+    const batch = suspension?.away === undefined ? running : suspension.away(running);
     try {
       if (caller === undefined) await batch;
       else {
@@ -1132,7 +1191,10 @@ export class NativeAgent {
       recursionLimit,
       ...(maxConcurrency !== undefined && { maxConcurrency }),
       callbacks,
-      configurable: { ...config.configurable },
+      configurable: {
+        ...config.configurable,
+        ...(emitter !== undefined && { [PROTOCOL_EMITTER_CONFIG_KEY]: emitter }),
+      },
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
     } as RunnableConfig;
   }
@@ -1167,6 +1229,37 @@ function outputOf(state: LoopState): LoopState {
   return Object.fromEntries(
     Object.entries(state).filter(([key]) => !key.startsWith('_')),
   ) as LoopState;
+}
+
+/** 工具步要的等人那一面：root 是這次 run 的 {@link RunSuspension}，前景子代理是那顆 `task` 呼叫的委派。 */
+interface ToolWaits {
+  readonly withdrawn: boolean;
+  slot(
+    callId: string,
+    namespace: readonly string[],
+    halt?: AbortSignal,
+    permit?: CallPermit,
+  ): CallSlot;
+  away?<T>(waiting: Promise<T>): Promise<T>;
+}
+
+/** 前景子代理從叫起它的那顆 `task` 呼叫拿委派；那顆呼叫沒人可問（`NO_HUMAN_INPUT`、沒放）就沒有。 */
+function delegatedWaits(config: RunnableConfig): ToolWaits | undefined {
+  return delegationOf(config.configurable?.[HUMAN_INPUT_CONFIG_KEY]);
+}
+
+/** root 那條串流的事件出口，放在節點的 `configurable` 上給前景子代理補它那一層的 `completed`。 */
+const PROTOCOL_EMITTER_CONFIG_KEY = 'nexus_native_protocol_emitter';
+
+function parentEmitterOf(config: RunnableConfig): ProtocolEmitter | undefined {
+  const emitter: unknown = config.configurable?.[PROTOCOL_EMITTER_CONFIG_KEY];
+  return emitter instanceof ProtocolEmitter ? emitter : undefined;
+}
+
+/** 叫起前景子代理的那顆 `task` 呼叫的命名空間；不在圖裡被叫（沒有這一格）就沒有前綴。 */
+function parentNamespaceOf(config: RunnableConfig): string | undefined {
+  const ns: unknown = config.configurable?.['checkpoint_ns'];
+  return typeof ns === 'string' && ns !== '' ? ns : undefined;
 }
 
 function optionalThreadIdOf(config: RunnableConfig): string | undefined {
