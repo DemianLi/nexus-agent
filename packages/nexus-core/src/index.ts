@@ -60,6 +60,7 @@ export {
 } from './approval-policy.js';
 export {
   APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_BACKGROUND_SENTENCE,
   APPROVAL_POLICY_NEVER_SENTENCE,
   APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
   approvalPolicySection,
@@ -789,7 +790,7 @@ export {
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
 export type { MessageSource } from './message-source.js';
-export type { SubagentMentionRef } from './subagent-mention.js';
+export type { DelegationToolName, SubagentMentionRef } from './subagent-mention.js';
 export type { PageContextRef } from './page-context.js';
 export {
   isPageContextBlock,

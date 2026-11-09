@@ -689,8 +689,21 @@ import type { SessionEvent } from './session-log.js';
  * （`session-relationships.ts`）。54 以前寫得出的 `turn/end` 理由（不帶、`aborted`、`max-tokens`、`blocked`、`interrupted`）都在驗證認得的
  * 範圍裡，照驗。
  * **回滾的後果**同 52：被 55 碰過的 thread，54 的 runtime 以格式太新拒讀。
+ *
+ * ## 56：點名記下 root 手上的委派工具（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)）
+ *
+ * `turn/start`（`kind: 'message'`）與 `inbox/spliced` 裡那一件（`QueuedInput`）的 `mention` 多一格選填的 `tool: 'task' | 'subagent'`：
+ * 收下點名那一刻 root 的模型手上的委派工具（背景續行模式是 `subagent`，一次性模式是 `task`）。送進模型的提示照它組字（`subagent-mention.ts`），
+ * 重放從日誌讀同一格，所以續接之後同一個位置的訊息與即時的逐位元組相同。
+ *
+ * **升版，不標 `ignorable`**——同 42、48：這一格**左右續接之後的行為**。一台 55 的 runtime 讀到新檔會把 `tool` 略過，重放時照 `task` 的字組提示：
+ * 背景續行模式下那則人話跟當初送出的不同，而且叫模型去用它手上沒有的 `task`，沒有任何東西報錯。這是既有事件上多的選填欄位，沒有 `ignorable` 可標。
+ *
+ * **讀舊檔**：55 以前的 `mention` 沒有 `tool`，提示照 `task` 的字組，跟當初送出的逐位元組相同，不補寫歷史。輪中插話落盤的 `user/message` 內容裡，
+ * 舊的提示字照樣認得（歷史與搜尋照樣剝掉、照樣讀回點名）。
+ * **回滾的後果**同 52：被 56 碰過的 thread，55 的 runtime 以格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 55;
+export const SESSION_LOG_FORMAT_VERSION = 56;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -1,0 +1,12 @@
+{"type":"session","version":55,"id":"mention","createdAt":1794245964583,"cwd":"/private/var/tmp/nexus-session-format-cwd"}
+{"type":"turn/start","seq":0,"time":1794245964584,"data":{"kind":"message","text":"幫我登記阿明","mention":{"kind":"subagent","name":"general-purpose"}}}
+{"type":"model/start","seq":1,"time":1794245964584,"data":{}}
+{"type":"inbox/spliced","seq":2,"time":1794245964584,"data":{"target":"next-step","start":0,"inserted":[{"id":"run-steer","text":"順便看一下","source":{"kind":"user"},"mention":{"kind":"subagent","name":"reviewer"}}]}}
+{"type":"assistant/message","seq":3,"time":1794245964584,"data":{"message":{"type":"ai","data":{"content":"我派給 general-purpose。","tool_calls":[],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{},"id":"fixture-reply-1"}}}}
+{"type":"model/end","seq":4,"time":1794245964584,"data":{}}
+{"type":"inbox/spliced","seq":5,"time":1794245964584,"data":{"target":"next-step","start":0,"removedCount":1,"inserted":[]}}
+{"type":"user/message","seq":6,"time":1794245964584,"data":{"message":{"type":"human","data":{"content":[{"type":"text","text":"順便看一下"},{"type":"text","text":"<system-reminder>使用者點名要你把這句話交給子代理 \"reviewer\" 處理：請用委派工具（task 的 subagent_type 填這個名字）把這句話派給它，並把它需要的背景一併交代。</system-reminder>"}],"additional_kwargs":{},"response_metadata":{},"id":"fixture-steer"}},"source":{"kind":"user"}}}
+{"type":"model/start","seq":7,"time":1794245964584,"data":{}}
+{"type":"assistant/message","seq":8,"time":1794245964584,"data":{"message":{"type":"ai","data":{"content":"也派給 reviewer 了。","tool_calls":[],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{},"id":"fixture-reply-2"}}}}
+{"type":"model/end","seq":9,"time":1794245964584,"data":{}}
+{"type":"turn/end","seq":10,"time":1794245964584,"data":{}}

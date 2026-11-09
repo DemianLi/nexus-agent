@@ -5,6 +5,7 @@ import type { ApprovalChannel } from './approval.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import {
   APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_BACKGROUND_SENTENCE,
   APPROVAL_POLICY_NEVER_SENTENCE,
   approvalPolicySentence,
   createApprovalPolicyPromptMiddleware,
@@ -12,6 +13,7 @@ import {
 
 const HUMAN: ApprovalChannel = { kind: 'human' };
 const POLICY_NEVER: ApprovalChannel = { kind: 'policy-never' };
+const BACKGROUND: ApprovalChannel = { kind: 'policy-never', reason: 'background-subagent' };
 const NO_CHANNEL: ApprovalChannel = { kind: 'no-channel' };
 
 describe('approvalPolicySentence：句子跟閘門用同一組事實推', () => {
@@ -19,12 +21,19 @@ describe('approvalPolicySentence：句子跟閘門用同一組事實推', () => 
     ['human、ask：會去問', HUMAN, 'ask', APPROVAL_POLICY_ASK_SENTENCE],
     ['human、never：政策關掉了', HUMAN, 'never', APPROVAL_POLICY_NEVER_SENTENCE],
     [
-      'policy-never、ask：管道一律回絕，不看政策（CLI、背景子代理）',
+      'policy-never、ask：管道一律回絕，不看政策（CLI）',
       POLICY_NEVER,
       'ask',
       APPROVAL_POLICY_NEVER_SENTENCE,
     ],
     ['policy-never、never', POLICY_NEVER, 'never', APPROVAL_POLICY_NEVER_SENTENCE],
+    [
+      '背景子代理、ask：講沒有人可以問，不說 session 關掉了核准',
+      BACKGROUND,
+      'ask',
+      APPROVAL_POLICY_BACKGROUND_SENTENCE,
+    ],
+    ['背景子代理、never', BACKGROUND, 'never', APPROVAL_POLICY_BACKGROUND_SENTENCE],
     [
       'no-channel、ask：照政策講，沒有可用管道由 ASK 句後半說',
       NO_CHANNEL,
