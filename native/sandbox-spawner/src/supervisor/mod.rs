@@ -653,7 +653,7 @@ impl Supervisor {
             .filter_map(|c| c.proc.deadline())
             .chain(self.front.as_ref().and_then(Proc::deadline))
             .chain(restart)
-            .chain(Some(self.rss_poll_at).filter(|_| !self.conversations.is_empty()))
+            .chain((!self.conversations.is_empty()).then_some(self.rss_poll_at))
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations.iter().filter(|c| c.proc.stop.is_none()).filter_map(move |c| c.cpu.stall_at(c.heard_at?, stall))
             }))
