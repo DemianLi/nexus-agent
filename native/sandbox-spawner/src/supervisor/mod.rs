@@ -1459,8 +1459,9 @@ impl Supervisor {
     /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到），
     /// 只寫稽核，`role` 記 `unknown`。序號 0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的，只有已經隔離的照它的身分記：
     /// 它那一筆撤掉了，之後報的就是 0；而宿主在上一個行程收屍之前回報的 0，排在能讓重用同一個 pid 的新行程被隔離的任何回報前面
-    /// （新行程的回報帶它自己的序號，宿主讀到它那一筆才有，那一筆在撤銷、收屍之後才寫），讀到時新行程還沒隔離，記 `unknown`。
-    /// 「已經隔離」是那一筆 [`Conversation`]（前台是 `front_quarantined`，起新的前台時清掉）自己的狀態，收屍時跟著它收掉，新行程不繼承。代價是活著、那一筆還沒寫進宿主 pipe 的行程在 `hello` 之前送壞框，只記 `unknown`、不隔離：
+    /// （新行程的回報帶它自己的序號，宿主讀到它那一筆才有，那一筆在收屍之後才寫），讀到時新行程還沒隔離，記 `unknown`。
+    /// 「已經隔離」是那一筆 [`Conversation`]（前台是 `front_quarantined`，起新的前台時清掉）自己的狀態，收屍時跟著它收掉，新行程不繼承。
+    /// 代價是活著、那一筆還沒寫進宿主 pipe 的行程在 `hello` 之前送壞框，只記 `unknown`、不隔離：
     /// 那條連線已經斷了，沒通過 `hello` 拿不到任何東西，那一筆到了之後再犯，帶的就是它自己的序號。`None` 只比 pid：它是
     /// `on_unregistered` 轉來的，那時 pid 已經不在身分表上。
     fn on_violation(&mut self, pid: u32, generation: Option<u32>, reason: &[u8]) {
@@ -1621,7 +1622,7 @@ mod tests {
         }
     }
 
-    /// 已隔離的 P1 收屍之後，P2 重用同一個 pid；這時才讀到的序號 0（P1 收屍之前寫進 pipe 的）記 `unknown`，P2 不隔離：
+    /// 已隔離的 P1 收屍之後，P2 重用同一個 pid；這時才讀到的序號 0（宿主在 P1 收屍之前回報的）記 `unknown`，P2 不隔離：
     /// 「已隔離」是 P1 那一筆自己的狀態，跟著它收掉，P2 不繼承。
     #[test]
     fn a_zero_generation_read_after_the_pid_is_reused_does_not_inherit_the_quarantine() {

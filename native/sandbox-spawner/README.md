@@ -122,10 +122,10 @@ nexus-host --socket <路徑>
 
 | 回報 | 活著、沒被隔離的前台或對話行程 [n7] | 已隔離的 | 不是我們的（含 pid 0） |
 | --- | --- | --- | --- |
-| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照右邊那一格 [s10][s12][s13] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
+| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照最右邊「不是我們的」那一格 [s10][s12][s13] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
 | `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4][s7] | 照 `violation` 那一格 [s5][s8] |
 
-**釘住各格的測試**（`tests/host.rs` 是 t，`tests/supervisor.rs` 是 s）
+**釘住各格的測試**（`tests/host.rs` 是 t，`tests/supervisor.rs` 與 `src/supervisor/mod.rs` 的單元測試是 s）
 
 - t1 `a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation`
 - t2 `a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections`
