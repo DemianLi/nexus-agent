@@ -1,7 +1,7 @@
 name: 沙箱 spawner
 description: >-
   編沙箱 spawner（#1946，`native/sandbox-spawner/`）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust
-  與這台架構的 musl target，編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
+  與這台架構的 musl target，跑 clippy（警告即錯），編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
   給了 `bundle` 就把 release 執行檔與連進去的程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留
   執行權限，tar 保留。
   ci.yml 與 release.yml 共用。
@@ -24,7 +24,7 @@ runs:
       working-directory: native/sandbox-spawner
       run: |
         rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal \
-          --target "$(uname -m)-unknown-linux-musl"
+          --component clippy --target "$(uname -m)-unknown-linux-musl"
         echo "SPAWNER_TARGET=$(uname -m)-unknown-linux-musl" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
@@ -38,6 +38,10 @@ runs:
       run: |
         uname -r
         cat /sys/kernel/security/lsm
+    - name: clippy
+      shell: bash
+      working-directory: native/sandbox-spawner
+      run: cargo clippy --locked --all-targets --features test-hooks -- -D warnings
     # 出貨的形狀：不帶 test-hooks。
     - name: 編譯
       shell: bash

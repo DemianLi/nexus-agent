@@ -30,7 +30,7 @@ import {
   reduceAll,
   reduceConversation,
 } from '@nexus/wire';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
@@ -334,11 +334,7 @@ describe('計劃審核在線上', () => {
     const session = await open('review-stop');
     await pendingReview(session);
 
-    // 卡一上線就按的話，pump 那一輪可能還沒收完，停止會落在「中止正在跑的那一輪」那一格（撞上核准點、
-    // 請求作廢）。要量的是停穩之後按：停在提問上的那一輪記下 `turn/end` 時，pump 已經同步放掉它了。
-    await vi.waitFor(() => {
-      expect(session.log().some((event) => event.type === 'turn/end')).toBe(true);
-    });
+    // 卡一上線就按，停止可能落在那一輪還沒收尾的時候；那一輪收完之後一樣收回（#2592），不用等它停穩。
     await session.client.runCancel(session.threadId);
     await until(session, turnEnded);
 
@@ -360,10 +356,6 @@ describe('計劃審核在線上', () => {
     const STOPPED_ON_REVIEW = 'ABORTED_BEFORE_DISPATCH';
     const session = await open('review-stop-code');
     await pendingReview(session);
-    // 同上一條：停穩之後按，走的才是收回那條路。
-    await vi.waitFor(() => {
-      expect(session.log().some((event) => event.type === 'turn/end')).toBe(true);
-    });
     await session.client.runCancel(session.threadId);
     await until(session, (s) => s.state.status === 'stopped');
 
