@@ -368,7 +368,8 @@ function createEscalationTool(
       const reserved = await reservedReason?.(target);
       if (reserved !== undefined) return refuse(reservedTargetRefusal(reserved));
       // 加寬與要不要問人這兩格，在**人按下去之後**要再判一次：人看卡片的那段時間裡，`/permission` 可能已經換過格子或政策。
-      // `langgraph` resume 時本體整個重跑、自然再判；native 在行程內等，由答覆之後那一次呼叫補上，順序與拒絕的話一樣。
+      // 答覆之後這一次兩個 loop 都跑：`langgraph` resume 時本體整個重跑，問之前那一次已讀到換過的格子，這一次結果相同；native 在
+      // 行程內等，靠這一次補上，順序與拒絕的話一樣。
       const recheck = (): NexusToolResult | undefined => {
         const current = controller.current;
         if (!canEscalate(current, requested)) return refuse(nonWideningRefusal(requested, current));

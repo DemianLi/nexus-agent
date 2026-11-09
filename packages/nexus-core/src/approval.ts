@@ -376,7 +376,7 @@ function auditDecision(
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
  * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
- * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前問一次**。
+ * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前、以及讀得到等人服務時拿到答覆之後，各讀一次**。
  *   `never` 時確定性回絕、不發中斷；省略即 `ask`（手搭的測試組裝）。只在管道是 `human` 時才讀：管道非人
  *   （入口沒有人在、沒有 checkpointer，或這顆呼叫上是 `NO_HUMAN_INPUT`）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
@@ -396,7 +396,8 @@ export function createApprovalGateMiddleware(
 /**
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
  * 要問人時讀得到等人服務就 await 它；讀不到經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡；
- * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。
+ * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。讀得到等人服務時，拿到答覆之後把問人之前的幾格（listener、管道、政策）照同一個
+ * 順序再跑一次：再判放行就直接往內交、不看答覆，再判回絕就回那一格的拒絕；`langgraph` 接回時本體重跑，結果相同。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
@@ -416,8 +417,8 @@ export function approvalGateToolStep(
       args: (call.args ?? {}) as Record<string, unknown>,
       callId: call.callId,
     };
-    // 問人之前的幾格。`langgraph` 接回時本體整段重跑、這幾格自然再判一次；native 在行程內等，拿到答覆之後由下面照同一個順序再判一次，
-    // 人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了。
+    // 問人之前的幾格。人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了，答覆之後要照同一個順序再判一次：
+    // `langgraph` 接回時本體整段重跑、自然再判；讀得到等人服務（native）時由下面那一次補上。再判放行就直接跑、不看答覆，兩個 loop 一樣。
     const beforeAsking = async (): Promise<
       { readonly done: ToolCallResult } | { readonly ask: string }
     > => {
@@ -460,9 +461,8 @@ export function approvalGateToolStep(
         };
       }
 
-      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
-      // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
-      // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
+      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。政策每次判都現讀：`/permission` 切換之後，
+      // 下一次呼叫與還在等答覆的這一顆都照新的一格。
       if (policy() === 'never') {
         auditDecision(sessions, call, exec, because, 'rejected');
         return {

@@ -303,7 +303,8 @@ export class RunSuspension {
       this.#active += 1;
       ask.reject(error);
     }
-    // 照呼叫的先後交，不照 `answers` 的鍵序：交回之後各自排隊取回名額，先交的先排到（{@link CallPermit.acquire}）。
+    // 照呼叫的先後交，不照 `answers` 的鍵序：交回之後各自取回名額，名額空著時先叫 `acquire` 的當場拿到、排隊的才照索引
+    // （`agent.ts` 的 `Permits`），所以交的順序決定誰先接著跑。
     const answered = [...this.#asks.values()]
       .filter((ask) => Object.hasOwn(answers, ask.id))
       .sort((a, b) => a.order - b.order);

@@ -213,7 +213,7 @@ describe.each(LOOPS)('%s：中斷 id', (loop) => {
 });
 
 describe('native：併發上限 1、同一批兩顆都問人', () => {
-  /** 問人，答了之後記下自己的名字。 */
+  /** 答了之後記下名字：`log` 的順序就是誰先取回名額接著跑。 */
   const named = (log: string[], name: string) =>
     tool(
       async (_input, config) => {
