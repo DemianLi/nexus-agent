@@ -1,6 +1,6 @@
 //! 宿主（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：監督行程起的第三種子行程，全機共用一個，不在資料路徑上。
-//! 目前做四件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分。
-//! 出貨的建置還沒有任何插件，所以還沒有任何服務（#2569）。
+//! 做五件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分、
+//! 把驗過身分的連線上的呼叫交給樹上的服務（[`calls`]）。出貨的建置還沒有任何插件，所以還沒有任何服務。
 //!
 //! ```text
 //! nexus-host [--plugins <檔>] --socket <路徑>
@@ -19,7 +19,7 @@
 //! accept 出錯而沒收進來的連線不會記成撤過，之後被 accept 時照當下的表驗；起來時把開檔數的軟上限拉到硬上限，就是為了不在這裡用完 fd。pid 被重用得比宿主讀 pipe 還快時，
 //! 新行程先連上的連線也會這樣被拒，要重連（它不會被隔離）。
 //!
-//! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
+//! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`，以及 [`calls`] 列的那幾種）：回 `rejected`、斷線，經控制通道回報監督行程
 //! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程把那個身分隔離到行程結束：
 //! 之後重送的表裡不再有它；宿主 `ready` 了、沒在收的，再送一筆 `revoke`，蓋掉可能還排在監督行程那邊、沒寫出去的 `grant`（這一筆也照上面收 backlog）。
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
@@ -35,6 +35,7 @@ mod test_plugin;
 
 use crate::host_protocol::{
     self, decode_client_message, encode_host_message, ClientMessage, HostMessage,
+    HOST_PROTOCOL_VERSION,
 };
 use crate::kernel::{Kernel, KernelEvent, Limits};
 use crate::supervisor::process::Chan;
@@ -65,6 +66,8 @@ macro_rules! say {
     ($($arg:tt)*) => { eprintln!("nexus-host: {}", format_args!($($arg)*)) };
 }
 
+pub mod calls;
+
 struct Grant {
     generation: u32,
     token: Vec<u8>,
@@ -86,6 +89,8 @@ struct Conn {
     revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
     dead: bool,
+    /// 還在跑的呼叫，以客戶端給的 `id` 為鍵。
+    calls: HashMap<u64, calls::Call>,
 }
 
 struct Host {
@@ -401,6 +406,7 @@ impl Host {
             }
             let now = Instant::now();
             self.accept_paused_until = self.accept_paused_until.filter(|&until| now < until);
+            let calls_deadline = self.calls_deadline();
             let deadline = self
                 .conns
                 .iter()
@@ -408,6 +414,7 @@ impl Host {
                 .map(|c| c.opened + HELLO_TIMEOUT)
                 .chain(self.accept_paused_until)
                 .chain(self.kernel.next_deadline())
+                .chain(calls_deadline)
                 .min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
@@ -446,13 +453,20 @@ impl Host {
                 }
             }
             self.step_kernel();
+            self.pump_calls();
             let now = Instant::now();
-            self.conns.retain(|conn| {
+            let keep = |conn: &Conn| {
                 !conn.dead
                     && !conn.chan.read_closed()
                     && !conn.chan.write_closed()
                     && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
-            });
+            };
+            for i in 0..self.conns.len() {
+                if !keep(&self.conns[i]) {
+                    self.drop_calls(i);
+                }
+            }
+            self.conns.retain(keep);
         }
     }
 
@@ -481,6 +495,7 @@ impl Host {
                         generation: 0,
                         revoked: false,
                         dead: false,
+                        calls: HashMap::new(),
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -546,6 +561,22 @@ impl Host {
                         return false;
                     }
                 }
+                ClientMessage::Call {
+                    side,
+                    id,
+                    service,
+                    method,
+                    payload,
+                } => {
+                    if !self.on_call(i, side, id, service, &method, payload) {
+                        return false;
+                    }
+                }
+                ClientMessage::Cancel { side, id } => {
+                    if !self.on_cancel(i, side, id) {
+                        return false;
+                    }
+                }
             }
         }
         true
@@ -569,7 +600,7 @@ impl Host {
             self.unregistered(i, "沒有登記");
             return false;
         };
-        if version != PROTOCOL_VERSION {
+        if version != HOST_PROTOCOL_VERSION {
             self.violate(i, "版本不對");
             return false;
         }
@@ -588,7 +619,7 @@ impl Host {
             conn.hello = true;
             conn.generation = generation;
             conn.chan.send(&encode_host_message(&HostMessage::Hello {
-                version: PROTOCOL_VERSION,
+                version: HOST_PROTOCOL_VERSION,
             }));
         }
         true

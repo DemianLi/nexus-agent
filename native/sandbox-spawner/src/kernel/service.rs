@@ -44,6 +44,8 @@ pub(crate) struct Impl {
     pub version: Option<Version>,
     /// 目前 committed 了這個實體的 fiber。不是空的，提供者就不能收掉自己的 effect。
     pub dependents: Vec<FiberId>,
+    /// 用 `expose` 提供的才有：宿主照名字把它當成過橋的服務叫。
+    pub remote: Option<super::remote::AsRemote>,
 }
 
 #[derive(Default)]
@@ -84,6 +86,10 @@ impl Store {
 
     pub fn get_mut(&mut self, uid: u64) -> Option<&mut Impl> {
         self.impls.get_mut(&uid)
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u64, &mut Impl)> {
+        self.impls.iter_mut().map(|(&uid, imp)| (uid, imp))
     }
 }
 

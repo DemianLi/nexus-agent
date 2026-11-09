@@ -13,12 +13,18 @@ export {
 } from './client.js';
 export {
   FrameReader,
+  HOST_ERROR_CODES,
   HostProtocolError,
+  MAX_DEPTH,
   MAX_FRAME,
+  MAX_ID,
   PROTOCOL_VERSION,
   decodeHostMessage,
   encodeClientMessage,
   frame,
   type ClientMessage,
+  type HostErrorCode,
   type HostMessage,
+  type Json,
+  type Side,
 } from './protocol.js';

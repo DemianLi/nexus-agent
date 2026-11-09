@@ -36,6 +36,7 @@ pub mod config;
 pub mod deadline;
 pub mod event;
 mod fiber;
+pub mod remote;
 pub mod service;
 
 use std::collections::{HashMap, VecDeque};
@@ -47,6 +48,7 @@ use crate::json::Value;
 pub use config::{ConfigError, Fields};
 pub use deadline::{Applied, Effect, Limits, OnDispose, Step};
 pub use event::Event;
+pub use remote::{CallKey, Fault, MethodKind, Progress, Remote};
 pub use service::{Inject, Range, SemverError, Service, Version};
 
 use deadline::Timer;
@@ -472,6 +474,33 @@ impl Kernel {
         )
     }
 
+    /// 照名字取一個用 [`Cx::expose`] 提供、提供者是 ACTIVE 的服務，連同它這次 provide 的 uid：uid 變了就是換了一個實體。
+    pub fn remote(&mut self, name: &str) -> Option<(u64, &mut dyn Remote)> {
+        let uid = self.visible_uid(name)?;
+        let imp = self.store.get_mut(uid)?;
+        let as_remote = imp.remote?;
+        Some((uid, as_remote(imp.value.as_mut())?))
+    }
+
+    /// 每一個提供者是 ACTIVE 的過橋服務各叫一次 `f(名字, 服務)`。
+    pub fn for_each_remote(&mut self, mut f: impl FnMut(&'static str, &mut dyn Remote)) {
+        let slots = &self.slots;
+        for (_, imp) in self.store.iter_mut() {
+            let Some(as_remote) = imp.remote else { continue };
+            let active = slots
+                .get(imp.owner.index as usize)
+                .filter(|slot| slot.generation == imp.owner.generation)
+                .and_then(|slot| slot.fiber.as_ref())
+                .is_some_and(|fiber| fiber.state == State::Active);
+            if !active {
+                continue;
+            }
+            if let Some(remote) = as_remote(imp.value.as_mut()) {
+                f(imp.name, remote);
+            }
+        }
+    }
+
     /// 推進到 `now`：先做記下來的轉換，再 poll 回 `Pending` 的工作（逾時的取消），再跑到期的計時器，最後把這些引起的轉換做完。
     pub fn run(&mut self, now: Instant) {
         self.now = now;
@@ -852,7 +881,12 @@ impl Cx<'_> {
     /// 同名已經有人提供（包括自己）回 [`KernelError::AlreadyProvided`]；fiber 正在卸載回 [`KernelError::InactiveEffect`]。
     /// 每次 provide 都是新實體，依賴者會跟著重載。
     pub fn provide<S: Service>(&mut self, value: S) -> Result<(), KernelError> {
-        self.provide_inner(value, None)
+        self.provide_inner(value, None, None)
+    }
+
+    /// 同 [`Cx::provide`]，另外讓宿主連線上的 `call` 照 `S::NAME` 叫得到它（[`Remote`]）。
+    pub fn expose<S: Service + Remote>(&mut self, value: S) -> Result<(), KernelError> {
+        self.provide_inner(value, None, Some(remote::as_remote::<S>))
     }
 
     /// 帶版本提供；依賴者宣告的 semver 範圍拿這個版本比。
@@ -862,13 +896,14 @@ impl Cx<'_> {
         version: &str,
     ) -> Result<(), KernelError> {
         let version = Version::parse(version).map_err(|e| KernelError::Config(ConfigError(e.0)))?;
-        self.provide_inner(value, Some(version))
+        self.provide_inner(value, Some(version), None)
     }
 
     fn provide_inner<S: Service>(
         &mut self,
         value: S,
         version: Option<Version>,
+        remote: Option<remote::AsRemote>,
     ) -> Result<(), KernelError> {
         let k = &mut *self.kernel;
         k.can_register(self.fiber)?;
@@ -879,6 +914,7 @@ impl Cx<'_> {
             owner: self.fiber,
             version,
             dependents: Vec::new(),
+            remote,
         };
         let uid = match k.store.insert(imp) {
             Ok(uid) => uid,
