@@ -1,7 +1,7 @@
 //! 監督行程整合測試用的假宿主：照控制通道的協定握手、記下收到的身分表，不收連線。真的宿主是 `nexus-host`。
 //!
 //! ```text
-//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] --socket <路徑>
+//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] [--stale-generation] --socket <路徑>
 //! ```
 //!
 //! - 一起來送 `hello`（版本照 `--version`，預設 [`PROTOCOL_VERSION`]），等到監督行程的 `hello` 才往下。
@@ -12,6 +12,8 @@
 //! - `--violate-twice`：同上，但每一筆連報兩次。
 //! - `--then-unregistered`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆 `unregistered`，理由照給的。
 //! - `--report-strangers`：同 `--violate-conversations`，但先對 pid 0 各報一筆 `violation`（理由「測試違規」）與 `unregistered`（理由「沒有登記」）。
+//! - `--stale-generation`：每收到一筆對話行程的身分，就對那個 pid 回報一筆序號比那一筆大 1 的 `violation`（理由「舊序號的違規」），照常跑下去。
+//!   其他的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。
 //! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -32,6 +34,7 @@ fn main() {
     let violate_twice = args.iter().any(|a| a == "--violate-twice");
     let then_unregistered = value("--then-unregistered");
     let report_strangers = args.iter().any(|a| a == "--report-strangers");
+    let stale_generation = args.iter().any(|a| a == "--stale-generation");
     let violate_conversations =
         violate_twice || then_unregistered.is_some() || report_strangers || args.iter().any(|a| a == "--violate-conversations");
 
@@ -70,19 +73,23 @@ fn main() {
                     }
                 }
                 HostCommand::Hello { .. } => log("hello again"),
-                HostCommand::Grant { pid, role, thread, .. } => {
+                HostCommand::Grant { pid, generation, role, thread, .. } => {
                     let role = match role {
                         Role::Front => "front",
                         Role::Conversation => "conversation",
                     };
                     log(&format!("grant {pid} {role} {}", String::from_utf8_lossy(&thread)));
                     if report_strangers && role == "conversation" {
-                        report(&HostReport::Violation { pid: 0, reason: "測試違規".as_bytes().to_vec() });
+                        report(&HostReport::Violation { pid: 0, generation: 0, reason: "測試違規".as_bytes().to_vec() });
                         report(&HostReport::Unregistered { pid: 0, conn: 7, reason: "沒有登記".as_bytes().to_vec() });
+                    }
+                    if stale_generation && role == "conversation" {
+                        let generation = generation.wrapping_add(1);
+                        report(&HostReport::Violation { pid, generation, reason: "舊序號的違規".as_bytes().to_vec() });
                     }
                     if violate_conversations && role == "conversation" {
                         for _ in 0..if violate_twice { 2 } else { 1 } {
-                            report(&HostReport::Violation { pid, reason: "測試違規".as_bytes().to_vec() });
+                            report(&HostReport::Violation { pid, generation, reason: "測試違規".as_bytes().to_vec() });
                         }
                         if let Some(reason) = &then_unregistered {
                             report(&HostReport::Unregistered { pid, conn: 7, reason: reason.as_bytes().to_vec() });

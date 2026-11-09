@@ -50,6 +50,7 @@ macro_rules! say {
 }
 
 struct Grant {
+    generation: u32,
     token: Vec<u8>,
     role: Role,
     thread: Vec<u8>,
@@ -63,6 +64,8 @@ struct Conn {
     pid: Option<u32>,
     opened: Instant,
     hello: bool,
+    /// 送過 `hello` 的：驗它時那一筆的序號，報違規時帶回去。還沒送是 0。
+    generation: u32,
     /// 那個 pid 被撤過：之後送什麼都只回 `rejected`、報 `unregistered`；同一個 pid 號碼又登記了，也不照新的那一筆驗、不撤它。
     revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
@@ -244,8 +247,8 @@ impl Host {
         let (frames, err) = self.control.receive_all();
         for frame in frames {
             match decode_host_command(&frame) {
-                Ok(HostCommand::Grant { pid, token, role, thread }) => {
-                    self.grants.insert(pid, Grant { token, role, thread });
+                Ok(HostCommand::Grant { pid, generation, token, role, thread }) => {
+                    self.grants.insert(pid, Grant { generation, token, role, thread });
                 }
                 Ok(HostCommand::Revoke { pid }) => {
                     // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
@@ -335,7 +338,7 @@ impl Host {
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
                     self.last_conn = self.last_conn.wrapping_add(1);
                     let id = self.last_conn;
-                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, revoked: false, dead: false });
+                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, generation: 0, revoked: false, dead: false });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
@@ -428,8 +431,10 @@ impl Host {
             role_name(grant.role),
             String::from_utf8_lossy(&grant.thread)
         );
+        let generation = grant.generation;
         if let Some(conn) = self.conns.get_mut(i) {
             conn.hello = true;
+            conn.generation = generation;
             conn.chan.send(&encode_host_message(&HostMessage::Hello { version: PROTOCOL_VERSION }));
         }
         true
@@ -460,8 +465,13 @@ impl Host {
             self.unregistered(i, reason);
             return;
         }
+        let generation = match self.conns.get(i) {
+            Some(conn) if conn.hello => conn.generation,
+            Some(conn) => conn.pid.and_then(|pid| self.grants.get(&pid)).map_or(0, |grant| grant.generation),
+            None => 0,
+        };
         let pid = self.refuse(i, reason);
-        self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });
+        self.report(&HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() });
         let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else { return };
         if self.grants.contains_key(&pid) {
             say!("pid {pid} 隔離到它結束");

@@ -206,6 +206,8 @@ struct Conversation {
     token: Vec<u8>,
     /// 宿主回報它違反協定：不再放進身分表，到它結束為止。
     quarantined: bool,
+    /// spawn 它時發的序號，見 [`HostCommand::Grant`]。
+    generation: u32,
 }
 
 impl Conversation {
@@ -301,6 +303,9 @@ struct Supervisor {
     /// 現在這個前台的身分 token。
     front_token: Vec<u8>,
     front_quarantined: bool,
+    front_generation: u32,
+    /// 最後發出的序號；還沒發過是 0。
+    last_generation: u32,
     host: Option<Host>,
     host_restart_at: Option<Instant>,
     /// 下一次重起前要等多久。
@@ -371,6 +376,8 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
         deaths: [0; DEATH_CAUSES],
         front_token: Vec::new(),
         front_quarantined: false,
+        front_generation: 0,
+        last_generation: 0,
         host_backoff,
         host: None,
         host_restart_at: None,
@@ -740,6 +747,7 @@ impl Supervisor {
                 self.front = Some(Proc::new(pid, chan));
                 self.front_token = token.clone();
                 self.front_quarantined = false;
+                self.front_generation = self.next_generation();
                 self.regrant(pid);
                 let Some(mut front) = self.front.take() else { return };
                 front.chan.send(&encode_front_event(&FrontEvent::Hello { version: PROTOCOL_VERSION, token }));
@@ -1039,6 +1047,12 @@ impl Supervisor {
         self.tell_front(&FrontEvent::Stats { live, warm, rss_kib, deaths: self.deaths });
     }
 
+    /// 發一個新的序號：從 1 起遞增，繞回時跳過 0。
+    fn next_generation(&mut self) -> u32 {
+        self.last_generation = self.last_generation.checked_add(1).unwrap_or(1);
+        self.last_generation
+    }
+
     fn count_death(&mut self, cause: DeathCause) {
         let slot = &mut self.deaths[cause as usize - 1];
         *slot = slot.saturating_add(1);
@@ -1053,6 +1067,7 @@ impl Supervisor {
         args.push(socket.clone().into_os_string());
         match new_token().and_then(|token| Ok((process::spawn(&self.args.conversation, &args, true)?, token))) {
             Ok(((pid, chan, stderr), token)) => {
+                let generation = self.next_generation();
                 self.conversations.push(Conversation {
                     proc: Proc::new(pid, chan),
                     thread,
@@ -1073,6 +1088,7 @@ impl Supervisor {
                     cpu: cpu::Guard::default(),
                     token: token.clone(),
                     quarantined: false,
+                    generation,
                 });
                 // 先登記、再交 token：同 `start_front`。
                 self.regrant(pid);
@@ -1382,7 +1398,7 @@ impl Supervisor {
                         }
                     }
                 }
-                HostReport::Violation { pid, reason } => self.on_violation(pid, &reason),
+                HostReport::Violation { pid, generation, reason } => self.on_violation(pid, Some(generation), &reason),
                 HostReport::Unregistered { pid, conn, reason } => self.on_unregistered(pid, conn, &reason),
                 _ => {}
             }
@@ -1396,16 +1412,16 @@ impl Supervisor {
 
     /// 這個 pid 在身分表上的那一筆：沒被隔離的前台或對話行程才有。spawn 當下就有，`hello` 對不上的會被殺掉、收屍前撤掉。
     fn grant_of(&self, pid: libc::pid_t) -> Option<HostCommand> {
-        let (token, role, thread) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
+        let (generation, token, role, thread) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
             if self.front_quarantined {
                 return None;
             }
-            (self.front_token.clone(), Role::Front, Vec::new())
+            (self.front_generation, self.front_token.clone(), Role::Front, Vec::new())
         } else {
             let conversation = self.conversations.iter().find(|c| c.proc.pid == pid && !c.quarantined)?;
-            (conversation.token.clone(), Role::Conversation, conversation.thread.clone().unwrap_or_default())
+            (conversation.generation, conversation.token.clone(), Role::Conversation, conversation.thread.clone().unwrap_or_default())
         };
-        Some(HostCommand::Grant { pid: u32::try_from(pid).ok()?, token, role, thread })
+        Some(HostCommand::Grant { pid: u32::try_from(pid).ok()?, generation, token, role, thread })
     }
 
     /// 這個 pid 的那一筆有了或變了：宿主 `ready` 了就送過去（還沒 `ready` 的，等它 `ready` 時整張送）。
@@ -1426,26 +1442,30 @@ impl Supervisor {
             say!("警告：宿主拒了 pid {pid} 的連線 #{conn}：表還在路上，或是撤銷之前就連上的連線；不隔離、不寫稽核");
             return;
         }
-        self.on_violation(pid, reason);
+        self.on_violation(pid, None, reason);
     }
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
     /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
     /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。已經隔離的不再送：隔離之後不會再送它的
     /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
-    /// 不是我們的 pid（含 0），只寫稽核，`role` 記 `unknown`。
-    fn on_violation(&mut self, pid: u32, reason: &[u8]) {
+    /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到；
+    /// 序號 0 是宿主表上沒有那個 pid），只寫稽核，`role` 記 `unknown`。`generation` 是 `None` 的（`on_unregistered` 轉來的，那時 pid 已經不在
+    /// 身分表上）只比 pid。
+    fn on_violation(&mut self, pid: u32, generation: Option<u32>, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
         let pid = libc::pid_t::try_from(pid).unwrap_or(-1);
-        let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
+        let current = |own: u32| generation.is_none_or(|g| g == own);
+        let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid) && current(self.front_generation) {
             ("front", Vec::new(), !std::mem::replace(&mut self.front_quarantined, true))
-        } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid) {
+        } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid && current(c.generation)) {
             ("conversation", conversation.thread.clone().unwrap_or_default(), !std::mem::replace(&mut conversation.quarantined, true))
         } else {
             ("unknown", Vec::new(), false)
         };
         if role == "unknown" {
-            say!("宿主斷了 pid {pid} 的連線：{reason}；這個 pid 不是這邊起的行程，只寫稽核");
+            let generation = generation.map_or_else(String::new, |g| format!("，序號 {g}"));
+            say!("宿主斷了 pid {pid}{generation} 的連線：{reason}；不是現在這邊起的哪個行程，只寫稽核");
         } else {
             say!("宿主斷了 pid {pid}（{role}）的連線：{reason}；這個身分隔離到它結束");
         }

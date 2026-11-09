@@ -1637,6 +1637,20 @@ fn a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_
     assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "{:?}", host_log(&h));
 }
 
+/// 違規帶的序號不是現在那個行程的（同一個 pid 號碼上一個行程的回報，在號碼被重用之後才讀到）：只寫稽核、`role` 記 `unknown`，
+/// 不隔離、不補送 `revoke`：`revoke` 只有收屍那一次。
+#[test]
+fn a_violation_with_a_stale_generation_neither_quarantines_nor_revokes() {
+    let mut h = Harness::start(Options { host: fake_host(&["--stale-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("舊序號的違規") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "{:?}", host_log(&h));
+}
+
 /// 已經隔離的對話行程被報 `unregistered`：照違規寫稽核，理由是宿主回給那條連線的，不是寫死的「沒有登記」；不記那行警告。
 #[test]
 fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hosts_reason() {

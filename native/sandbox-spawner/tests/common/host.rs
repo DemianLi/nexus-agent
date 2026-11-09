@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
 
+/// [`HostProc::grant`] 送的序號。
+pub const GRANTED: u32 = 1;
+
 pub fn example(name: &str) -> PathBuf {
     Path::new(HOST).parent().unwrap().join("examples").join(name)
 }
@@ -80,8 +83,14 @@ impl HostProc {
         self.stdin.as_mut().unwrap().write_all(&frame(&encode_host_command(command))).unwrap();
     }
 
+    /// 送一筆序號 [`GRANTED`] 的身分。
     pub fn grant(&mut self, pid: u32, token: &str, role: Role, thread: &str) {
-        self.command(&HostCommand::Grant { pid, token: token.as_bytes().to_vec(), role, thread: thread.as_bytes().to_vec() });
+        self.grant_as(pid, GRANTED, token, role, thread);
+    }
+
+    pub fn grant_as(&mut self, pid: u32, generation: u32, token: &str, role: Role, thread: &str) {
+        let (token, thread) = (token.as_bytes().to_vec(), thread.as_bytes().to_vec());
+        self.command(&HostCommand::Grant { pid, generation, token, role, thread });
     }
 
     /// 關 stdin（監督行程走拆除梯度的第一步）。
@@ -144,8 +153,8 @@ impl Drop for HostProc {
     }
 }
 
-pub fn violation(pid: u32, reason: &str) -> HostReport {
-    HostReport::Violation { pid, reason: reason.as_bytes().to_vec() }
+pub fn violation(pid: u32, generation: u32, reason: &str) -> HostReport {
+    HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() }
 }
 
 /// `unregistered` 回報的 pid 與理由；連線編號不比，另有 `unregistered_reports_number_each_connection`。收到別種回報就 panic。
