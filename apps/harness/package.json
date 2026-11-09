@@ -73,6 +73,7 @@
     "@nexus/feedback": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/goal": "workspace:*",
+    "@nexus/host-bridge": "workspace:*",
     "@nexus/permission-presets": "workspace:*",
     "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",

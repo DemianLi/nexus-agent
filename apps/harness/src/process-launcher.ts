@@ -37,6 +37,9 @@ export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 /** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 crate 編出來）。 */
 export const HOST_BINARY_NAME = 'nexus-host';
 
+/** 宿主的插件清單在 home 底下的檔名。有宿主就一律傳給它：檔不在，宿主照常起、不掛插件，放了檔要等宿主重起才讀到。 */
+export const HOST_PLUGINS_FILE = 'host-plugins.json';
+
 /** 對話行程的 socket 放在 home 底下這個目錄（監督行程建成 0700）。 */
 export const SUPERVISOR_RUN_DIR = 'run';
 
@@ -303,7 +306,9 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       '--audit',
       join(input.home, SUPERVISOR_AUDIT_FILE),
       ...(input.idleMs === undefined ? [] : ['--idle-ms', String(input.idleMs)]),
-      ...(input.host === undefined ? [] : ['--host', input.host]),
+      ...(input.host === undefined
+        ? []
+        : ['--host', input.host, ...each('--host-arg', ['--plugins', join(input.home, HOST_PLUGINS_FILE)])]),
       '--front',
       input.execPath,
       ...each('--front-arg', [...input.execArgv, input.frontEntry, ...front]),
