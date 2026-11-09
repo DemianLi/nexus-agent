@@ -1,0 +1,107 @@
+回合數 24
+標記： {('run1', 1): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 2): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 3): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 4): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 5): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 6): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 7): ['L:outcome', 'L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 8): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 9): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 10): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 11): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run1', 12): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 1): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 2): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 3): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 4): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SK:vmload>3', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 5): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 6): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 7): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 8): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 9): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})', 'SF:notevicted'], ('run2', 10): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 11): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})'], ('run2', 12): ['L:llmReqCounter({4: 12})', 'SK:llmReqCounter({4: 12})', 'SF:llmReqCounter({4: 12, 5: 1})', 'SF2:llmReqCounter({4: 12})']}
+VM loadavg1 範圍 0.20–3.25
+
+== run1（n=12）
+  第1–10輪 CPU 中位（ms，跨回合中位）：L 66.3 SK 84.6 SF 56.8 SF2 56.1
+    L/SF: 中位 1.160  90% 區間 1.120–1.187  範圍 1.091–1.308  >1 的回合 12/12
+    SF2/SF: 中位 1.024  90% 區間 0.956–1.051  範圍 0.877–1.090  >1 的回合 7/12
+    SK/SF: 中位 1.459  90% 區間 1.411–1.492  範圍 1.329–1.624  >1 的回合 12/12
+    L/SK: 中位 0.810  90% 區間 0.766–0.830  範圍 0.673–0.866  >1 的回合 0/12
+  第11–20輪 CPU 中位（ms，跨回合中位）：L 65.4 SK 81.0 SF 56.7 SF2 58.7
+    L/SF: 中位 1.171  90% 區間 1.108–1.288  範圍 1.021–1.363  >1 的回合 12/12
+    SF2/SF: 中位 1.016  90% 區間 0.997–1.058  範圍 0.881–1.209  >1 的回合 9/12
+    SK/SF: 中位 1.404  90% 區間 1.364–1.563  範圍 1.263–1.682  >1 的回合 12/12
+    L/SK: 中位 0.823  90% 區間 0.765–0.858  範圍 0.724–0.955  >1 的回合 0/12
+  第21–40輪 CPU 中位（ms，跨回合中位）：L 66.9 SK 81.0 SF 57.4 SF2 57.3
+    L/SF: 中位 1.179  90% 區間 1.120–1.219  範圍 1.077–1.278  >1 的回合 12/12
+    SF2/SF: 中位 1.020  90% 區間 0.981–1.063  範圍 0.886–1.091  >1 的回合 8/12
+    SK/SF: 中位 1.426  90% 區間 1.346–1.512  範圍 1.260–1.548  >1 的回合 12/12
+    L/SK: 中位 0.815  90% 區間 0.792–0.846  範圍 0.769–0.900  >1 的回合 0/12
+
+== run2（n=12）
+  第1–10輪 CPU 中位（ms，跨回合中位）：L 69.1 SK 80.3 SF 54.7 SF2 57.3
+    L/SF: 中位 1.224  90% 區間 1.175–1.309  範圍 1.094–1.419  >1 的回合 12/12
+    SF2/SF: 中位 1.029  90% 區間 0.997–1.082  範圍 0.939–1.175  >1 的回合 8/12
+    SK/SF: 中位 1.445  90% 區間 1.368–1.508  範圍 1.308–1.622  >1 的回合 12/12
+    L/SK: 中位 0.852  90% 區間 0.846–0.866  範圍 0.715–0.941  >1 的回合 0/12
+  第11–20輪 CPU 中位（ms，跨回合中位）：L 66.8 SK 80.1 SF 57.3 SF2 58.2
+    L/SF: 中位 1.172  90% 區間 1.137–1.240  範圍 1.067–1.288  >1 的回合 12/12
+    SF2/SF: 中位 0.999  90% 區間 0.981–1.014  範圍 0.942–1.094  >1 的回合 6/12
+    SK/SF: 中位 1.413  90% 區間 1.345–1.467  範圍 1.229–1.512  >1 的回合 12/12
+    L/SK: 中位 0.839  90% 區間 0.820–0.878  範圍 0.760–0.927  >1 的回合 0/12
+  第21–40輪 CPU 中位（ms，跨回合中位）：L 67.5 SK 82.2 SF 57.2 SF2 57.7
+    L/SF: 中位 1.164  90% 區間 1.135–1.197  範圍 1.100–1.242  >1 的回合 12/12
+    SF2/SF: 中位 0.997  90% 區間 0.980–1.038  範圍 0.947–1.058  >1 的回合 6/12
+    SK/SF: 中位 1.448  90% 區間 1.382–1.515  範圍 1.341–1.559  >1 的回合 12/12
+    L/SK: 中位 0.804  90% 區間 0.789–0.832  範圍 0.729–0.875  >1 的回合 0/12
+
+== 合併 24 回合（n=24）
+  第1–10輪 CPU 中位（ms，跨回合中位）：L 67.7 SK 82.3 SF 56.3 SF2 57.0
+    L/SF: 中位 1.181  90% 區間 1.158–1.223  範圍 1.091–1.419  >1 的回合 24/24
+    SF2/SF: 中位 1.028  90% 區間 0.995–1.051  範圍 0.877–1.175  >1 的回合 15/24
+    SK/SF: 中位 1.455  90% 區間 1.426–1.492  範圍 1.308–1.624  >1 的回合 24/24
+    L/SK: 中位 0.842  90% 區間 0.815–0.852  範圍 0.673–0.941  >1 的回合 0/24
+  第11–20輪 CPU 中位（ms，跨回合中位）：L 66.3 SK 80.7 SF 57.1 SF2 58.4
+    L/SF: 中位 1.171  90% 區間 1.132–1.229  範圍 1.021–1.363  >1 的回合 24/24
+    SF2/SF: 中位 1.010  90% 區間 0.994–1.021  範圍 0.881–1.209  >1 的回合 15/24
+    SK/SF: 中位 1.405  90% 區間 1.377–1.467  範圍 1.229–1.682  >1 的回合 24/24
+    L/SK: 中位 0.829  90% 區間 0.809–0.857  範圍 0.724–0.955  >1 的回合 0/24
+  第21–40輪 CPU 中位（ms，跨回合中位）：L 67.2 SK 81.0 SF 57.2 SF2 57.5
+    L/SF: 中位 1.166  90% 區間 1.131–1.201  範圍 1.077–1.278  >1 的回合 24/24
+    SF2/SF: 中位 1.012  90% 區間 0.991–1.038  範圍 0.886–1.091  >1 的回合 14/24
+    SK/SF: 中位 1.448  90% 區間 1.382–1.511  範圍 1.260–1.559  >1 的回合 24/24
+    L/SK: 中位 0.806  90% 區間 0.796–0.833  範圍 0.729–0.900  >1 的回合 0/24
+
+== wall（合併，量測輪全部，跨回合中位的中位，ms）
+  L: 139.9
+  SK: 140.2
+  SF: 139.2
+  SF2: 139.6
+
+== CPU 按 thread 拆（合併，各窗跨回合中位，ms）
+  出現過的 comm： {'node': 4320, 'main': 4320, 'libuv-worker': 3025, 'V8': 576}
+  第1–10輪 L: node 5.4 main 61.2 libuv-worker 0.5 V8 0.0
+  第1–10輪 SF: node 5.7 main 49.1 libuv-worker 0.7 V8 0.0
+  第1–10輪 SK: node 5.7 main 75.5 libuv-worker 0.3 V8 0.0
+  第11–20輪 L: node 5.5 main 59.9 libuv-worker 0.4 V8 0.0
+  第11–20輪 SF: node 5.5 main 51.2 libuv-worker 0.5 V8 0.0
+  第11–20輪 SK: node 5.6 main 74.3 libuv-worker 0.6 V8 0.0
+  第21–40輪 L: node 5.5 main 60.3 libuv-worker 0.6 V8 0.0
+  第21–40輪 SF: node 5.6 main 50.6 libuv-worker 0.6 V8 0.0
+  第21–40輪 SK: node 5.6 main 75.1 libuv-worker 0.4 V8 0.0
+
+== 各回合第 1–40 輪 CPU 中位（看共用行程隨回合的變化）
+  run1 r 1: L 66.5 SK 82.0 SF 56.3 SF2 57.5  L ready 619.52 啟動 CPU 856.11
+  run1 r 2: L 65.4 SK 84.1 SF 56.4 SF2 57.2  L ready 600 啟動 CPU 843.91
+  run1 r 3: L 64.7 SK 81.4 SF 56.8 SF2 57.5  L ready 607.81 啟動 CPU 868.25
+  run1 r 4: L 65.2 SK 80.2 SF 58.2 SF2 60.0  L ready 619.9 啟動 CPU 865.07
+  run1 r 5: L 70.1 SK 82.7 SF 58.6 SF2 55.5  L ready 617.57 啟動 CPU 851.55
+  run1 r 6: L 66.3 SK 83.3 SF 57.4 SF2 55.0  L ready 601.87 啟動 CPU 860.96
+  run1 r 7: L 66.7 SK 79.9 SF 57.2 SF2 61.2  L ready 606.83 啟動 CPU 842.4
+  run1 r 8: L 65.1 SK 78.9 SF 57.4 SF2 56.7  L ready 608.56 啟動 CPU 858.35
+  run1 r 9: L 66.8 SK 81.0 SF 54.6 SF2 56.1  L ready 609.6 啟動 CPU 847.82
+  run1 r10: L 64.1 SK 78.2 SF 56.0 SF2 57.8  L ready 602.02 啟動 CPU 849.51
+  run1 r11: L 64.5 SK 82.4 SF 55.6 SF2 58.2  L ready 611.19 啟動 CPU 849.19
+  run1 r12: L 69.2 SK 80.1 SF 56.1 SF2 56.2  L ready 615.94 啟動 CPU 850.69
+  run2 r 1: L 65.9 SK 80.5 SF 53.5 SF2 58.4  L ready 612.5 啟動 CPU 849.49
+  run2 r 2: L 67.1 SK 80.2 SF 57.1 SF2 54.9  L ready 600 啟動 CPU 845.16
+  run2 r 3: L 66.2 SK 83.6 SF 57.9 SF2 60.0  L ready 603.64 啟動 CPU 855.07
+  run2 r 4: L 69.9 SK 80.0 SF 56.2 SF2 56.7  L ready 607.1 啟動 CPU 867.31
+  run2 r 5: L 69.2 SK 83.5 SF 55.0 SF2 57.9  L ready 602.14 啟動 CPU 866.23
+  run2 r 6: L 66.9 SK 78.1 SF 57.3 SF2 57.6  L ready 603.5 啟動 CPU 842.54
+  run2 r 7: L 68.0 SK 81.5 SF 56.0 SF2 58.0  L ready 610.44 啟動 CPU 854.05
+  run2 r 8: L 64.7 SK 83.3 SF 57.5 SF2 56.9  L ready 608.75 啟動 CPU 852.28
+  run2 r 9: L 67.8 SK 79.3 SF 57.0 SF2 58.1  L ready 616.87 啟動 CPU 869.24
+  run2 r10: L 67.0 SK 79.7 SF 58.9 SF2 56.2  L ready 603.5 啟動 CPU 866.18
+  run2 r11: L 66.3 SK 79.3 SF 55.1 SF2 56.2  L ready 616.82 啟動 CPU 859.55
+  run2 r12: L 64.0 SK 83.7 SF 55.5 SF2 53.6  L ready 604.86 啟動 CPU 848.01
+
+== 回合結束時各臂 anon（MB）與 thread 數
+  run1 r1: L 233.22 SK 231.03 SF 234.41 SF2 234.32
+  run1 r12: L 232.21 SK 238.91 SF 237.65 SF2 237.73
+  run2 r1: L 233.21 SK 237.73 SF 234.61 SF2 231.81
+  run2 r12: L 235.52 SK 237.49 SF 238.56 SF2 232.33
+
+== 量測輪的 llmReq 分布： {('L', 3): 672, ('L', 4): 288, ('SK', 3): 672, ('SK', 4): 288, ('SF', 3): 648, ('SF', 4): 288, ('SF', 5): 24, ('SF2', 3): 672, ('SF2', 4): 288}
+== 暖機輪的 llmReq 分布： {('L', 4): 24, ('L', 3): 96, ('SK', 4): 24, ('SK', 3): 96, ('SF', 4): 24, ('SF', 3): 96, ('SF2', 4): 24, ('SF2', 3): 96}
