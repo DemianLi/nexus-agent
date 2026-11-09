@@ -22,7 +22,11 @@ async function boundToolNames(
 ): Promise<string[][]> {
   const { registry } = await loadPlugins([
     fakePlugin('worker', (r) => {
-      r.subagents.register({ name: 'worker', description: '幹活的。', systemPrompt: '你是 worker。' });
+      r.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker。',
+      });
     }),
   ]);
   const model = fakeModel().respond(new AIMessage('好了'));
