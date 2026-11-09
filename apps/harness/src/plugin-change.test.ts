@@ -15,7 +15,12 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { changePlugin, hostActor, PluginChangeRejected } from './plugin-change.js';
 import type { PluginChange } from './plugin-change.js';
-import { composeEntries, defaultSources, loadDefaultPlugins } from './plugin-config.js';
+import {
+  composeEntries,
+  defaultSources,
+  loadDefaultPlugins,
+  REMOVED_ENTRY_IDS,
+} from './plugin-config.js';
 import { appendRaw, journalPathOf, writeJournalText } from './plugin-journal.fixture.js';
 import { foldJournal, readJournal } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
@@ -122,6 +127,19 @@ describe('停用、啟用（驗收 A）', () => {
     expect(again.notes.join('')).toContain('已經是停用');
     expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
   });
+
+  it.each(['disable', 'enable'] as const)(
+    '%s 已移除的列：回移除說明與升級指南，不報錯、不寫紀錄',
+    async (op) => {
+      const { dir, env } = home();
+      await changePlugin({ op: 'disable', id: 'todo' }, { env });
+      const bytes = readFileSync(journalPathOf(dir));
+      const result = await changePlugin({ op, id: 'plan-mode-model-call' }, { env });
+      expect(result.outcome).toBe('unchanged');
+      expect(result.notes).toEqual([`${REMOVED_ENTRY_IDS.get('plan-mode-model-call')!}沒有寫。`]);
+      expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
+    },
+  );
 });
 
 describe('改設定、恢復成繼承值（驗收 B、C）', () => {

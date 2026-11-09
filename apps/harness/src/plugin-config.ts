@@ -449,6 +449,22 @@ function anchorInsertedNames(patch: ConfigPatch, file: string): ConfigPatch {
 }
 
 /**
+ * 出貨清單上拿掉的列：id → 講給操作的人聽的那一句（含升級指南的路徑）。兩個地方讀它，所以講法只有一份：
+ *
+ * - {@link applyEntryPatches}：patch 或變更紀錄指到這些 id 時，警告換成這一句，照樣跳過；
+ * - `plugin-change.ts`：`plugin disable／enable／config-*` 指到這些 id 時回這一句，不寫紀錄、不報錯。
+ *
+ * 只在疊完之後找不到這個 id 時才用：自己的 patch 用同一個 id 插了別的列，照一般的列處理。
+ */
+export const REMOVED_ENTRY_IDS: ReadonlyMap<string, string> = new Map([
+  [
+    'plan-mode-model-call',
+    '`plan-mode-model-call` 這一列已移除，它做的事併進了 `plan-mode` 與 core（#2358），' +
+      '見 docs/upgrade-guide/v0.6.1/plan-mode-model-call/guide.md。',
+  ],
+]);
+
+/**
  * 把 patch 疊到條目清單上。
  *
  * **逐條照 dsh 的 `applyEntryPatches`**（`vendor/include/src/index.ts:57`）：
@@ -504,7 +520,12 @@ export function applyEntryPatches(
 
     const target = index.get(id);
     if (target === undefined) {
-      warn(`patch：找不到 id 為 ${JSON.stringify(id)} 的條目，這一條跳過。`);
+      const removed = REMOVED_ENTRY_IDS.get(id);
+      warn(
+        removed === undefined
+          ? `patch：找不到 id 為 ${JSON.stringify(id)} 的條目，這一條跳過。`
+          : `patch：${removed}這一條跳過。`,
+      );
       continue;
     }
 

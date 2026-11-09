@@ -64,6 +64,7 @@ import {
   loadPluginConfig,
   PluginConfigError,
   prepareJournal,
+  REMOVED_ENTRY_IDS,
   resolveEntryModule,
 } from './plugin-config.js';
 import type { ConfigEntry } from './plugin-config.js';
@@ -303,6 +304,11 @@ export async function changePlugin(
         const current = composeEntries(own, { allowDisabledProtected: true });
         const target: ConfigEntry | undefined = current.find((entry) => entry.id === change.id);
         if (target === undefined) {
+          const removed = REMOVED_ENTRY_IDS.get(change.id);
+          if (removed !== undefined) {
+            unchangedReason = `${removed}沒有寫。`;
+            return undefined;
+          }
           return reject(
             `沒有 id 為 ${JSON.stringify(change.id)} 的列。` +
               '清單上有哪些 id，用 `--dump-config`（serve 的清單另含 cordis.serve.yml 那幾列）。',

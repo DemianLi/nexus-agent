@@ -61,6 +61,7 @@ import {
   assertPrivateFile,
   PROTECTED_ENTRY_NAMES,
   PROTECTED_ENTRY_REASONS,
+  REMOVED_ENTRY_IDS,
 } from './plugin-config.js';
 import { DEFAULT_PERSISTENCE_WINDOW_MS } from '@nexus/core';
 
@@ -522,6 +523,16 @@ describe('疊加', () => {
     const out = applyEntryPatches(base, [{ id: '不在', config: {} }], (m) => said.push(m));
     expect(out).toEqual(base);
     expect(said[0]).toContain('"不在"');
+  });
+
+  it('指到已移除的列：照樣跳過，警告換成那一列的移除說明與升級指南', () => {
+    const said: string[] = [];
+    const out = applyEntryPatches(base, [{ id: 'plan-mode-model-call', disabled: true }], (m) =>
+      said.push(m),
+    );
+    expect(out).toEqual(base);
+    expect(said).toEqual([`patch：${REMOVED_ENTRY_IDS.get('plan-mode-model-call')!}這一條跳過。`]);
+    expect(said[0]).toContain('docs/upgrade-guide/v0.6.1/plan-mode-model-call/guide.md');
   });
 
   it('name 是斷言不是選擇器：對不上就跳過，原列一個字都不動', () => {
