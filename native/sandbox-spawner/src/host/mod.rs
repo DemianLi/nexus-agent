@@ -1,9 +1,13 @@
 //! 宿主（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：監督行程起的第三種子行程，全機共用一個，不在資料路徑上。
-//! 目前只做三件事：跟監督行程握手、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分；還沒有任何服務（#2569）。
+//! 目前做四件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分。
+//! 出貨的建置還沒有任何插件，所以還沒有任何服務（#2569）。
 //!
 //! ```text
-//! nexus-host --socket <路徑>
+//! nexus-host [--plugins <檔>] --socket <路徑>
 //! ```
+//!
+//! 沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了或解析不過，寫一行 log、回 4，不綁 socket、不送 `ready`：
+//! 設定錯每次重起都一樣，重起沒用。插件的事件（狀態轉換、設定被插件拒絕、apply 失敗…）每一筆寫一行 log。
 //!
 //! 控制通道是 stdin／stdout（[`crate::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
 //! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
@@ -26,7 +30,12 @@
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
+pub mod plugins;
+#[cfg(feature = "test-hooks")]
+mod test_plugin;
+
 use crate::host_protocol::{self, decode_client_message, encode_host_message, ClientMessage, HostMessage};
+use crate::kernel::{Kernel, KernelEvent, Limits};
 use crate::supervisor::process::Chan;
 use crate::supervisor_protocol::{decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION};
 use std::collections::HashMap;
@@ -42,8 +51,10 @@ pub const MAX_CONNECTIONS: usize = 1024;
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 const EXIT_PROTOCOL: i32 = 3;
+/// `--plugins` 的檔案讀不了或解析不過。
+pub const EXIT_CONFIG: i32 = 4;
 
-const USAGE: &str = "nexus-host --socket <路徑>";
+const USAGE: &str = "nexus-host [--plugins <檔>] --socket <路徑>";
 
 macro_rules! say {
     ($($arg:tt)*) => { eprintln!("nexus-host: {}", format_args!($($arg)*)) };
@@ -86,6 +97,7 @@ struct Host {
     accept_paused_until: Option<Instant>,
     /// 這一段開檔數用完的期間已經記過 log：接下一條連線之後才再記。
     out_of_fds: bool,
+    kernel: Kernel,
 }
 
 /// accept 要退避時（見 `accept_paused_until`），停 poll listener 這麼久再試。
@@ -95,23 +107,54 @@ fn open_spare() -> Option<OwnedFd> {
     std::fs::File::open("/dev/null").ok().map(OwnedFd::from)
 }
 
-fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
+struct Args {
+    socket: PathBuf,
+    plugins: Option<PathBuf>,
+}
+
+fn parse(args: Vec<OsString>) -> Result<Args, String> {
     let mut args = args.into_iter();
     let mut socket = None;
+    let mut plugins = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--socket") => socket = Some(PathBuf::from(args.next().ok_or("--socket 要一個路徑")?)),
+            Some("--plugins") => plugins = Some(PathBuf::from(args.next().ok_or("--plugins 要一個路徑")?)),
             _ => return Err(format!("不認得的參數 {}", arg.to_string_lossy())),
         }
     }
-    socket.ok_or_else(|| "少了 --socket".to_string())
+    Ok(Args { socket: socket.ok_or("少了 --socket")?, plugins })
+}
+
+/// 照 `--plugins` 建樹；沒帶或檔案不存在是空樹。
+fn build_kernel(path: Option<&std::path::Path>) -> Result<Kernel, String> {
+    let mut kernel = Kernel::new(Limits::default(), Instant::now());
+    kernel.set_log(|line| say!("{line}"));
+    let Some(path) = path else { return Ok(kernel) };
+    match plugins::load(path, plugins::specs())? {
+        plugins::Loaded::Missing => say!("{} 不存在，不掛插件", path.display()),
+        plugins::Loaded::Rows(rows) => {
+            let root = kernel.root();
+            kernel.load(root, &rows).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(kernel)
+}
+
+fn log_kernel_event(event: &KernelEvent) {
+    match event {
+        KernelEvent::Status { name, from, to, .. } => say!("插件 {name}：{from:?} → {to:?}"),
+        KernelEvent::ConfigRejected { name, error, .. } => say!("插件 {name} 沒掛：{error}"),
+        KernelEvent::ApplyFailed { name, error, .. } => say!("插件 {name} apply 失敗：{error}"),
+        other => say!("插件事件：{other:?}"),
+    }
 }
 
 /// 跑宿主，回結束碼：0 是 `ready` 之後 stdin 讀到 EOF 或讀不下去（監督行程要它收，或控制通道送來超長的框）；1 是 `hello` 之前 stdin 就 EOF，或綁不了 socket；2 是參數不對；
-/// 3 是監督行程的第一框不是這一版的 `hello`，或解不開。
+/// 3 是監督行程的第一框不是這一版的 `hello`，或解不開；4 是 `--plugins` 的檔案讀不了或解析不過（[`EXIT_CONFIG`]）。
 pub fn run(args: Vec<OsString>) -> i32 {
-    let socket = match parse(args) {
-        Ok(socket) => socket,
+    let Args { socket, plugins } = match parse(args) {
+        Ok(args) => args,
         Err(err) => {
             say!("{err}\n用法：{USAGE}");
             return 2;
@@ -124,6 +167,13 @@ pub fn run(args: Vec<OsString>) -> i32 {
     if let Err(code) = await_hello(&mut control) {
         return code;
     }
+    let kernel = match build_kernel(plugins.as_deref()) {
+        Ok(kernel) => kernel,
+        Err(err) => {
+            say!("插件清單壞了：{err}");
+            return EXIT_CONFIG;
+        }
+    };
     let _ = std::fs::remove_file(&socket);
     let listener = match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
         Ok(listener) => listener,
@@ -141,7 +191,9 @@ pub fn run(args: Vec<OsString>) -> i32 {
         spare: open_spare(),
         accept_paused_until: None,
         out_of_fds: false,
+        kernel,
     };
+    host.step_kernel();
     host.report(&HostReport::Ready);
     let code = host.serve();
     let _ = std::fs::remove_file(&socket);
@@ -241,6 +293,13 @@ impl Host {
         self.control.send(&encode_host_report(report));
     }
 
+    fn step_kernel(&mut self) {
+        self.kernel.run(Instant::now());
+        for event in self.kernel.drain_events() {
+            log_kernel_event(&event);
+        }
+    }
+
     /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。框太大時讀端會關掉、宿主隨後結束，但在那之前切出來的框照樣先套用：
     /// [`Host::on_hello`] 與 [`Host::violate`] 呼叫它之後不看回傳值，接著就拿這張表驗連線、查序號。
     fn sync(&mut self) -> bool {
@@ -285,8 +344,14 @@ impl Host {
             }
             let now = Instant::now();
             self.accept_paused_until = self.accept_paused_until.filter(|&until| now < until);
-            let deadline =
-                self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).chain(self.accept_paused_until).min();
+            let deadline = self
+                .conns
+                .iter()
+                .filter(|c| !c.hello)
+                .map(|c| c.opened + HELLO_TIMEOUT)
+                .chain(self.accept_paused_until)
+                .chain(self.kernel.next_deadline())
+                .min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
             fds.push(pollfd(read.unwrap_or(-1), libc::POLLIN));
@@ -315,6 +380,7 @@ impl Host {
                     }
                 }
             }
+            self.step_kernel();
             let now = Instant::now();
             self.conns.retain(|conn| {
                 !conn.dead && !conn.chan.read_closed() && !conn.chan.write_closed() && (conn.hello || now < conn.opened + HELLO_TIMEOUT)

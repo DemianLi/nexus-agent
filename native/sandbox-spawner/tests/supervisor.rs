@@ -1553,6 +1553,25 @@ fn a_host_with_the_wrong_version_stops_everything_with_3() {
     }
 }
 
+/// 設定錯每次重起都一樣：真的宿主讀到壞掉的 `--plugins` 回 4，監督行程不重起、不算失敗，整台以 5 停機。
+#[test]
+fn a_host_with_a_broken_plugin_list_stops_everything_with_5_without_restarting_it() {
+    let list = temp_dir("plugins").join("host-plugins.json");
+    std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
+    let mut h = Harness::start(Options {
+        host: Some((PathBuf::from(HOST), vec!["--plugins".to_string(), list.display().to_string()])),
+        extra: vec!["--host-start-failures", "3"],
+        front_hello: None,
+        ..Options::default()
+    });
+    assert_eq!(h.wait_exit().code(), Some(5));
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 1, "只起過一次：{hosts:?}");
+    assert!(hosts[0].contains("\"exit_code\":4") && hosts[0].contains("宿主設定壞了"), "{hosts:?}");
+    let stderr = supervisor_stderr(&h);
+    assert!(stderr.contains("宿主設定壞了") && stderr.contains("沒有叫 沒有這支 的插件"), "{stderr}");
+}
+
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
 #[test]
 fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_everything() {

@@ -276,6 +276,8 @@ struct Host {
 const EXIT_PROTOCOL: i32 = 3;
 /// 宿主在 `ready` 之前連續失敗到上限而停機時的結束碼。
 const EXIT_HOST_FAILED: i32 = 4;
+/// 宿主的插件清單壞了（宿主回 [`crate::host::EXIT_CONFIG`]）而停機時的結束碼。
+const EXIT_HOST_CONFIG: i32 = 5;
 /// 撤銷寫進宿主控制通道最多等這麼久；收屍會等它，所以要短。
 const REVOKE_WRITE_LIMIT: Duration = Duration::from_millis(500);
 
@@ -319,7 +321,8 @@ struct Supervisor {
 }
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
-/// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯；3：前台或宿主的 `hello` 對不上，停機完成；4：宿主 `ready` 之前連續失敗到上限，停機完成。
+/// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯；3：前台或宿主的 `hello` 對不上，停機完成；4：宿主 `ready` 之前連續失敗到上限，停機完成；
+/// 5：宿主的插件清單壞了，停機完成。
 pub fn run(argv: Vec<OsString>) -> i32 {
     let args = match args::parse(&argv) {
         Ok(args) => args,
@@ -1530,8 +1533,17 @@ impl Supervisor {
     fn on_exit(&mut self, pid: libc::pid_t, exit: Exit) {
         if self.host.as_ref().is_some_and(|host| host.proc.pid == pid) {
             let Some(host) = self.host.take() else { return };
-            let error = host.timed_out.then_some("ready 之前逾時");
+            // 設定錯每次重起都一樣：不算失敗、不重起，直接停機。
+            let config_broken = !host.ready && exit.code == Some(crate::host::EXIT_CONFIG);
+            let error = if config_broken { Some("宿主設定壞了") } else { host.timed_out.then_some("ready 之前逾時") };
             self.audit.record(&Record::Host { pid, exit, ready: host.ready, error });
+            if config_broken {
+                if !self.shutting_down {
+                    say!("宿主設定壞了（宿主自己的那一行寫了原因），整台停機");
+                    self.begin_shutdown(EXIT_HOST_CONFIG);
+                }
+                return;
+            }
             if !self.shutting_down {
                 say!("宿主結束了（{exit:?}，{}）", if host.ready { "ready 之後" } else { "ready 之前" });
             }
