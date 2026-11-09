@@ -106,6 +106,7 @@ export type RunStopReason = { readonly kind: 'max-turns'; readonly limit: number
 
 /**
  * 呼叫端放在 `configurable` 上、接 {@link RunStopReason} 的回呼的鍵。只給這一次 run：不往節點的 config 傳，工具裡叫起的子代理拿不到。
+ * 撞上限時在這次 run 交回之前同步叫，至多一次。
  */
 export const RUN_STOP_CONFIG_KEY = 'nexus_run_stop';
 

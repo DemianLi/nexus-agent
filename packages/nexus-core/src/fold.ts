@@ -1944,6 +1944,15 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
 }
 
 /**
+ * native 下 fold 交出的子代理規格帶著的 `maxTurns`，做成 `NativeAgentParams` 的那一格；沒有就是空物件。`langgraph` 下 fold 拿掉它、改掛
+ * `modelCallLimitMiddleware`，這裡讀到的也是空物件。native 的兩個建構點（前景 `agent-assembly.ts`、背景 `subagent-graph.ts`）攤進參數。
+ */
+export function nativeMaxTurns(spec: SubAgent): { readonly maxTurns?: number } {
+  const value: unknown = (spec as { maxTurns?: unknown }).maxTurns;
+  return typeof value === 'number' ? { maxTurns: value } : {};
+}
+
+/**
  * 每個 subagent 的有效集合。
  *
  * 三件事在這裡合起來，共同的軸線是**全域的東西主動併進每個 subagent**：基座對
@@ -1997,15 +2006,6 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  * **沒有人註冊 `general-purpose` 時，清單最前面多一個 fold 自己補的**，走的是同一條路。
  * 理由見 {@link generalPurposeSpec}。
  */
-/**
- * native 下 fold 交出的子代理規格帶著的 `maxTurns`，做成 `NativeAgentParams` 的那一格；沒有就是空物件。`langgraph` 下 fold 拿掉它、改掛
- * `modelCallLimitMiddleware`，這裡讀到的也是空物件。native 的兩個建構點（前景 `agent-assembly.ts`、背景 `subagent-graph.ts`）攤進參數。
- */
-export function nativeMaxTurns(spec: SubAgent): { readonly maxTurns?: number } {
-  const value: unknown = (spec as { maxTurns?: unknown }).maxTurns;
-  return typeof value === 'number' ? { maxTurns: value } : {};
-}
-
 function foldSubAgents(
   registry: PluginRegistry,
   context: {
@@ -2075,7 +2075,8 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
-    // 我們自己的三格不交給基座：`maxTurns`（native 下留著，交給 native agent，見 {@link nativeMaxTurns}）、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
+    // 我們自己的三格不照原樣交給基座：`maxTurns` langgraph 下拿掉、改掛中介層，native 下留給 {@link nativeMaxTurns}（基座只拿到
+    // 編好的 runnable）；`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
     // `provider:model` 去 `initChatModel`，所以拿掉，由跟隨的 middleware 每次叫模型前換成那條路由的實例（沒有控制器時，
     // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
     const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;

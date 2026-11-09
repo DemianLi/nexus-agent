@@ -39,6 +39,6 @@ description: "`--agent-loop native` 下子代理改跑 native loop：`subagent.s
 3. 自己寫的插件：找出 `llm/stream` 與 `agent/request-error` 的監聽者，
    `grep -rnE "events\.on\('(llm/stream|agent/request-error)'" <插件原始碼目錄>`。
    監聽者要能接受子代理的模型呼叫也進來；照 `threadId` 只分得出背景子代理，不要靠它分 root 與前景子代理。
-4. 照 `Model call limits exceeded` 判斷子代理撞上限的：前景改認 `task` 結果裡的 `reached its model call limit`，背景改認子日誌 `turn/end` 的 `reason.kind === 'max-turns'`。
+4. 照 `Model call limits exceeded` 判斷子代理撞上限的：前景改認 `task` 結果裡的 `reaching its model call limit`，背景改認子日誌 `turn/end` 的 `reason.kind === 'max-turns'`。
 5. 確認改好了：在 native 下讓 root 派一個背景子代理，對它 `subagent.send` 一句超過 200,000 字的話，應該收到上面那則 `invalid_argument`；
    插件的監聽者在子代理叫模型時被叫到，行為符合預期。

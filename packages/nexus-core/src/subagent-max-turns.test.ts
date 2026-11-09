@@ -1,15 +1,16 @@
 /**
  * 子代理的 `maxTurns`：native agent 自己數（`NativeAgentParams.maxTurns`）跟 langgraph 用的 `modelCallLimitMiddleware` 撞上限的那一刻要一樣：
- * 模型被叫了幾次、`task` 拿回去的那句英文、工具跑了幾次。
+ * 模型被叫了幾次、工具跑了幾次；`task` 拿回的那句兩個 loop 不同。
  *
- * afterAgent 跳回模型的那一次照原版也算。跳回的那一格是子代理自己帶的
- * middleware，排在上限那一顆之後，所以它的 afterAgent 先跑、先跳，上限那一顆的歸零沒跑到。這一次要是沒算進去，子代理會多叫一次模型。
+ * afterAgent 跳回模型的那一次兩個 loop 都算：langgraph 下跳回的那一格是子代理自己帶的 middleware，排在上限那一顆之後，它的 afterAgent
+ * 先跑、先跳，上限那一顆的歸零沒跑到；native 的計數每次 run 一份，跳回那次照樣加。這一次要是沒算進去，子代理會多叫一次模型。
  * 重試只算一次的那一條在 `apps/harness/src/subagent-config.test.ts`：重打只看 adapter 回報的失敗碼（`stream-retry.ts`），假模型拋的錯沒有碼、
  * 不會重打，要經真的 adapter 打假端點。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import { Command, MemorySaver } from '@langchain/langgraph';
 import { StateBackend } from 'deepagents';
 import { fakeModel } from 'langchain';
 import { describe, expect, it } from 'vitest';
@@ -20,7 +21,12 @@ import { fakePlugin } from './fixtures.js';
 import { foldRegistry } from './fold.js';
 import { createHookStepMiddleware } from './hook-step.js';
 import { loadPlugins } from './load.js';
-import { LOOPS, type Loop } from './native-loop/human-input-loops.fixture.js';
+import {
+  interruptIds,
+  LOOPS,
+  type Loop,
+  type LoopEvent,
+} from './native-loop/human-input-loops.fixture.js';
 import { subagentTurnLimitNote } from './subagent-turn-limit.js';
 
 type Reply = AIMessage;
@@ -157,5 +163,82 @@ describe('子代理 maxTurns：兩個 loop 撞上限的那一刻一樣', () => {
       ...langgraph,
       task: `子代理收完\n\n${subagentTurnLimitNote(3)}`,
     });
+  });
+});
+
+describe('native：前景子代理停在核准點、接回之後才撞上限', () => {
+  it('task 拿回的仍是上限說明', async () => {
+    const ran: string[] = [];
+    const { registry } = await loadPlugins([
+      fakePlugin('worker', (r) => {
+        r.tools.register(
+          tool(
+            () => {
+              ran.push('danger');
+              return '做了';
+            },
+            { name: 'danger', description: '要核准。', schema: z.object({}) },
+          ),
+        );
+        r.tools.register(
+          tool(() => '戳了', { name: 'poke', description: '戳一下。', schema: z.object({}) }),
+        );
+        r.approvals.gate(async (exec, next) =>
+          exec.name === 'danger' ? { kind: 'ask', reason: '要人核准' } : next(),
+        );
+        r.subagents.register({
+          name: 'worker',
+          description: '幹活的。',
+          systemPrompt: '你是 worker。',
+          maxTurns: 2,
+        });
+      }),
+    ]);
+    const model = fakeModel()
+      .respond(delegate)
+      .respond(new AIMessage({ content: '', tool_calls: [{ name: 'danger', args: {}, id: 's1' }] }))
+      .respond(poke('s2'))
+      .respond(new AIMessage('root 收完'));
+    const backend = new StateBackend();
+    const checkpointer = new MemorySaver();
+    const params = foldRegistry(registry, {
+      summarization: false,
+      defaultBackend: backend,
+      events: registry.dispatch,
+      checkpointer,
+      loop: 'native',
+    });
+    const agent = assembleAgent({
+      ...params,
+      model,
+      backend: params.backend ?? backend,
+      checkpointer,
+      loop: 'native',
+      events: registry.dispatch,
+    }) as unknown as {
+      streamEvents(input: unknown, config: object): Promise<AsyncIterable<LoopEvent>>;
+      getState(config: object): Promise<{ values: { messages: readonly unknown[] } }>;
+    };
+    const options = { version: 'v3', configurable: { thread_id: 't' } };
+    const drain = async (input: unknown): Promise<LoopEvent[]> => {
+      const events: LoopEvent[] = [];
+      for await (const event of await agent.streamEvents(input, options)) events.push(event);
+      return events;
+    };
+
+    const parked = await drain({ messages: [new HumanMessage('動手')] });
+    const ids = interruptIds(parked);
+    expect(ids).toHaveLength(1);
+    expect(ran).toEqual([]);
+    await drain(new Command({ resume: { [ids[0]!]: { decisions: [{ type: 'approve' }] } } }));
+
+    expect(ran).toEqual(['danger']);
+    expect(model.calls).toHaveLength(4);
+    const { messages } = (await agent.getState(options)).values;
+    const task = messages.find(
+      (message): message is ToolMessage =>
+        ToolMessage.isInstance(message) && message.name === 'task',
+    );
+    expect(task?.text).toBe(subagentTurnLimitNote(2));
   });
 });

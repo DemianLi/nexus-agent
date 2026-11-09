@@ -253,8 +253,8 @@ export function settlementSummary(runId: string, reason: BackgroundStopReason): 
 }
 
 /**
- * 撞到規格的 `maxTurns` 收掉的那一輪的摘要。結算原因照舊是 `completed`（日誌、wire 與 web 的形狀不動，結算原因加 `max-turns`
- * 見 #2644），只有給主對話模型看的這一句不說 finished。
+ * 撞到規格的 `maxTurns` 收掉的那一輪的結算摘要。結算原因是 `completed`（`SubagentSettleReason` 沒有 `max-turns`，加上它見 #2644）；
+ * 只有這一句不說 finished。
  */
 export function maxTurnsSettlementSummary(runId: string): string {
   return `Background subagent ${runId} reached its model call limit before it finished.`;
@@ -1469,8 +1469,8 @@ export class BackgroundSubagentHost {
       if (this.#isArchived?.() === true) running.blocked = true;
       else await this.#enter(log, () => this.#drive(log!, job, running));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
-      // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立；擋下的那一輪沒叫到模型，
-      // 也不會同時撞上限。
+      // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立。撞上限在叫模型之前就收掉
+      // 這一輪、不再經過閘門，所以也不會跟 `blocked` 同時成立。
       const blocked = running.blocked && !controller.signal.aborted;
       log.append(
         'turn/end',
@@ -1672,7 +1672,7 @@ export class BackgroundSubagentHost {
           [BACKGROUND_SESSION_CONFIG_KEY]: job.runId,
           [TURN_CANCEL_CONFIG_KEY]: cancel,
           [STEP_INBOX_CONFIG_KEY]: this.#stepInboxFor(log, round),
-          // 只有 native 會叫（langgraph 撞上限照舊由 `modelCallLimitMiddleware` 收，不經這裡）。
+          // 只有 native agent 讀這把鍵；langgraph 撞上限由 `modelCallLimitMiddleware` 收，不經這裡。
           [RUN_STOP_CONFIG_KEY]: () => {
             round.maxTurns = true;
           },
