@@ -122,7 +122,7 @@ nexus-host --socket <路徑>
 
 | 回報 | 活著、沒被隔離的前台或對話行程 [n7] | 已隔離的 | 不是我們的（含 pid 0） |
 | --- | --- | --- | --- |
-| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照右邊那一格 [s10][s12] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
+| `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 了、沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照右邊那一格 [s10][s12][s13] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
 | `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4][s7] | 照 `violation` 那一格 [s5][s8] |
 
 **釘住各格的測試**（`tests/host.rs` 是 t，`tests/supervisor.rs` 是 s）
@@ -158,7 +158,8 @@ nexus-host --socket <路徑>
 - s9 `a_quarantined_conversation_is_left_out_of_the_table_sent_to_a_restarted_host`
 - s10 `a_violation_with_a_stale_generation_neither_quarantines_nor_revokes`
 - s11 `a_zero_generation_violation_for_a_quarantined_conversation_keeps_its_role`（序號 0：撤銷之後宿主表上沒有它，還沒送 `hello` 的連線報的就是 0）
-- s12 `a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited`（序號 0：上一個行程收屍之前寫進 pipe 的回報，或那一筆還沒寫進宿主 pipe 的活行程）
+- s12 `a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited`（序號 0：宿主在上一個行程收屍之前回報的，或那一筆還沒寫進宿主 pipe 的活行程）
+- s13 `a_zero_generation_read_after_the_pid_is_reused_does_not_inherit_the_quarantine`（`src/supervisor/mod.rs` 的單元測試：pid 重用在整合測試造不出來，直接建監督行程，P1 隔離、收屍，P2 重用 pid 後讀到 0）
 
 **不測的格與原因**
 
@@ -175,7 +176,7 @@ nexus-host --socket <路徑>
 
 - pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會在收到 `revoke` 時被記成撤過，照 R 那一列被拒，要重連；它不會被隔離。
 - 收 `revoke` 時 accept 出錯、又沒能把那條連線接下來關掉（整台主機的 fd 用完，預留的 fd 開不回來；或 EMFILE、ENFILE 以外的錯）而留在 backlog 的連線，不會記成撤過，之後被 accept 時照當下的表驗。它若是死掉的行程留下、還被子孫拿著的，pid 被重用之後送舊 token，報的 `violation` 帶的是新行程那一筆的序號，會落在新行程頭上（還沒送 `hello` 的報 0，只寫稽核）。
-- 收屍時宿主還沒 `ready`（剛起來或剛重起、監督行程還沒處理它的 `ready`）就不送撤銷：新宿主 bind 之後、`ready` 被處理之前連上的行程死掉，它留下的連線不會記成撤過。pid 被重用、新行程那一筆到了之後它才送舊 token，報的 `violation` 帶新行程的序號，會落在新行程頭上。
+- 收屍時宿主還沒 `ready`（剛起來或剛重起、監督行程還沒處理它的 `ready`）就不送撤銷：新宿主 bind 之後連上、在監督行程處理它的 `ready` 之前就被收屍的行程，它留下的連線不會記成撤過。pid 被重用、新行程那一筆到了之後它才送舊 token 或壞框，報的 `violation` 帶新行程的序號，會落在新行程頭上。
 - 不是我們起、但跟我們同 uid 的行程，它死後留下的 A⁻ 連線送 `hello` 或壞框，報的 `violation` 會落在重用同一個 pid 的新行程頭上。同 uid 的行程本來就在信任範圍內（能讀別的行程的記憶體），不修。
 
 ## 建置與測試

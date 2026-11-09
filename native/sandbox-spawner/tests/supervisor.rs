@@ -1659,7 +1659,7 @@ fn a_violation_with_a_stale_generation_neither_quarantines_nor_revokes() {
     assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "{:?}", host_log(&h));
 }
 
-/// 沒被隔離的對話行程被報序號 0 的違規：只寫稽核、`role` 記 `unknown`，不隔離、不補送 `revoke`。上一個行程在收屍之前寫進 pipe 的 0，
+/// 沒被隔離的對話行程被報序號 0 的違規：只寫稽核、`role` 記 `unknown`，不隔離、不補送 `revoke`。宿主在上一個行程收屍之前回報的 0，
 /// 讀到時重用同一個 pid 的新行程正是這個狀態；那一筆還沒寫進宿主 pipe 的活行程，報的也是 0，同樣不隔離。
 #[test]
 fn a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited() {

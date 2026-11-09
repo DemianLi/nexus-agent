@@ -356,39 +356,46 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
             capacity
         }
     };
-    let stats_at = args.stats.map(|every| Instant::now() + every);
-    let host_backoff = args.host.as_ref().map_or(Duration::ZERO, |host| host.backoff);
-    let mut supervisor = Supervisor {
-        args,
-        audit,
-        sigfd,
-        front: None,
-        front_restart_at: None,
-        conversations: Vec::new(),
-        next_socket: 0,
-        shutting_down: false,
-        oom: OomCounter::open(),
-        rss_poll_at: Instant::now(),
-        capacity,
-        pending: Vec::new(),
-        warm_retry_at: None,
-        stats_at,
-        deaths: [0; DEATH_CAUSES],
-        front_token: Vec::new(),
-        front_quarantined: false,
-        front_generation: 0,
-        last_generation: 0,
-        host_backoff,
-        host: None,
-        host_restart_at: None,
-        host_failures: 0,
-        admission_until: None,
-        exit_code: 0,
-    };
+    let mut supervisor = Supervisor::assemble(args, audit, sigfd, capacity);
     supervisor.fill_warm();
     supervisor.start_host();
     supervisor.start_front();
     Ok(supervisor)
+}
+
+impl Supervisor {
+    /// 還沒起任何行程的監督行程。
+    fn assemble(args: args::Args, audit: Audit, sigfd: libc::c_int, capacity: u32) -> Supervisor {
+        let stats_at = args.stats.map(|every| Instant::now() + every);
+        let host_backoff = args.host.as_ref().map_or(Duration::ZERO, |host| host.backoff);
+        Supervisor {
+            args,
+            audit,
+            sigfd,
+            front: None,
+            front_restart_at: None,
+            conversations: Vec::new(),
+            next_socket: 0,
+            shutting_down: false,
+            oom: OomCounter::open(),
+            rss_poll_at: Instant::now(),
+            capacity,
+            pending: Vec::new(),
+            warm_retry_at: None,
+            stats_at,
+            deaths: [0; DEATH_CAUSES],
+            front_token: Vec::new(),
+            front_quarantined: false,
+            front_generation: 0,
+            last_generation: 0,
+            host_backoff,
+            host: None,
+            host_restart_at: None,
+            host_failures: 0,
+            admission_until: None,
+            exit_code: 0,
+        }
+    }
 }
 
 /// 擋下要改由 signalfd 收的訊號，回 signalfd。SIGPIPE 忽略：對方不收了由寫的那一側處理。
@@ -1451,8 +1458,9 @@ impl Supervisor {
     /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
     /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到），
     /// 只寫稽核，`role` 記 `unknown`。序號 0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的，只有已經隔離的照它的身分記：
-    /// 它那一筆撤掉了，之後報的就是 0；而上一個行程在收屍之前寫進 pipe 的 0，排在能讓重用同一個 pid 的新行程被隔離的任何回報前面，
-    /// 讀到時新行程還沒隔離，記 `unknown`。代價是活著、那一筆還沒寫進宿主 pipe 的行程在 `hello` 之前送壞框，只記 `unknown`、不隔離：
+    /// 它那一筆撤掉了，之後報的就是 0；而宿主在上一個行程收屍之前回報的 0，排在能讓重用同一個 pid 的新行程被隔離的任何回報前面
+    /// （新行程的回報帶它自己的序號，宿主讀到它那一筆才有，那一筆在撤銷、收屍之後才寫），讀到時新行程還沒隔離，記 `unknown`。
+    /// 「已經隔離」是那一筆 [`Conversation`]（前台是 `front_quarantined`，起新的前台時清掉）自己的狀態，收屍時跟著它收掉，新行程不繼承。代價是活著、那一筆還沒寫進宿主 pipe 的行程在 `hello` 之前送壞框，只記 `unknown`、不隔離：
     /// 那條連線已經斷了，沒通過 `hello` 拿不到任何東西，那一筆到了之後再犯，帶的就是它自己的序號。`None` 只比 pid：它是
     /// `on_unregistered` 轉來的，那時 pid 已經不在身分表上。
     fn on_violation(&mut self, pid: u32, generation: Option<u32>, reason: &[u8]) {
@@ -1584,6 +1592,56 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nsup-unit-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 只用來呼叫 [`Supervisor::on_violation`] 的對話行程：pid 是假的，`on_violation` 不送訊號。
+    fn conversation(pid: libc::pid_t, generation: u32, quarantined: bool) -> Conversation {
+        let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+        Conversation {
+            proc: Proc::new(pid, process::Chan::from_fds(std::os::fd::OwnedFd::from(read), std::os::fd::OwnedFd::from(write), 1024)),
+            thread: Some(b"t".to_vec()),
+            read_only: false,
+            idle_since: None,
+            used_at: Instant::now(),
+            drain: None,
+            released: false,
+            rss_now_kb: 0,
+            socket: PathBuf::new(),
+            phase: Phase::Up,
+            turns: 0,
+            cause: None,
+            stderr: None,
+            rss_kb: 0,
+            heard_at: None,
+            max_silence: Duration::ZERO,
+            cpu: cpu::Guard::default(),
+            token: Vec::new(),
+            quarantined,
+            generation,
+        }
+    }
+
+    /// 已隔離的 P1 收屍之後，P2 重用同一個 pid；這時才讀到的序號 0（P1 收屍之前寫進 pipe 的）記 `unknown`，P2 不隔離：
+    /// 「已隔離」是 P1 那一筆自己的狀態，跟著它收掉，P2 不繼承。
+    #[test]
+    fn a_zero_generation_read_after_the_pid_is_reused_does_not_inherit_the_quarantine() {
+        let dir = temp("reuse");
+        let audit = dir.join("audit.jsonl");
+        let argv: Vec<OsString> = ["--run-dir", "r", "--audit", "a", "--front", "/bin/true", "--conversation", "/bin/true"].iter().map(OsString::from).collect();
+        let mut supervisor = Supervisor::assemble(args::parse(&argv).unwrap(), Audit::open(&audit).unwrap(), -1, 4);
+        supervisor.conversations.push(conversation(4242, 1, false));
+        supervisor.on_violation(4242, Some(1), "測試違規".as_bytes());
+        assert!(supervisor.conversations[0].quarantined);
+        supervisor.conversations.remove(0);
+        supervisor.conversations.push(conversation(4242, 2, false));
+        supervisor.on_violation(4242, Some(0), "框太大".as_bytes());
+        let lines = std::fs::read_to_string(&audit).unwrap();
+        let stale = lines.lines().find(|l| l.contains("框太大")).unwrap();
+        assert!(stale.contains("\"role\":\"unknown\""), "{lines}");
+        assert!(!supervisor.conversations[0].quarantined);
+        supervisor.conversations[0].quarantined = true;
+        supervisor.on_violation(4242, Some(0), "框太大".as_bytes());
+        assert!(std::fs::read_to_string(&audit).unwrap().contains("\"role\":\"conversation\""));
     }
 
     #[test]
