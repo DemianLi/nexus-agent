@@ -1821,6 +1821,90 @@ describe('產品組裝上的背景子代理', () => {
     const log = run.pump.sessions.list().find((s) => s.address.kind === 'subagent')?.log;
     return log?.events.find((event) => event.type === 'turn/end');
   }
+
+  it('撞過 maxTurns 的子代理再收到話：這一輪照樣叫模型，run 層的計數每輪重算、thread 層的照累計（#2638）', async () => {
+    const worker = new ScriptedChatModel({
+      turns: [call('look', {}), call('look', {})],
+    });
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'capped-worker',
+        apply(registry) {
+          registry.subagents.register({
+            name: 'worker',
+            description: '幹活的。',
+            systemPrompt: '幹活。',
+            model: worker as never,
+            maxTurns: 1,
+            tools: [
+              tool(() => '看過了', { name: 'look', description: '看一眼。', schema: z.object({}) }),
+            ],
+          });
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      checkpointer: new PrunedMemorySaver(),
+      plugins: [plugin],
+      backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
+    });
+    const sessions = new SessionRegistry('root-1');
+    let graph: BackgroundAgent | undefined;
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: (name) => {
+        graph = built.compileSubagent(name, new PrunedMemorySaver()) as unknown as BackgroundAgent;
+        return graph;
+      },
+    });
+    const counts = async (threadId: string) => {
+      const { values } = await (
+        graph as unknown as {
+          getState(config: object): Promise<{ values: Record<string, unknown> }>;
+        }
+      ).getState({ configurable: { thread_id: threadId } });
+      return {
+        run: values['runModelCallCount'],
+        thread: values['threadModelCallCount'],
+        messages: (values['messages'] as BaseMessage[]).map((m) => `${m.getType()}:${m.text}`),
+      };
+    };
+    try {
+      const first = host.start({ subagent: 'worker', text: '一' });
+      await first.outcome;
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      // 第一輪：叫一次就撞上限，第二次沒發出去。
+      expect(worker.prompts).toHaveLength(1);
+      expect(await counts(log.sessionId)).toMatchObject({ run: 1, thread: 1 });
+
+      expect(await host.send({ runId: first.runId, message: '二' })).toEqual({ ok: true });
+      await host.idle();
+      // 第二輪照樣叫到模型：歸零之後叫一次，又撞上限。沒歸零的話第二輪一開頭就收掉，這裡會停在 1。
+      expect(worker.prompts).toHaveLength(2);
+      // 第一輪撞上限時合成的那則，第二輪的模型讀得到。
+      expect(worker.prompts[1]?.map((m) => m.text)).toContain(
+        'Model call limits exceeded: run level call limit reached with 1 model calls',
+      );
+      const second = await counts(log.sessionId);
+      expect(second).toMatchObject({ run: 1, thread: 2 });
+      // 第一輪撞上限時合成的那則留在 state 的歷史裡，第二輪撞上限再合成一則。
+      expect(second.messages).toEqual([
+        'human:一',
+        'ai:',
+        'tool:看過了',
+        'ai:Model call limits exceeded: run level call limit reached with 1 model calls',
+        'human:Agent root-1 sent a message: 二',
+        'ai:',
+        'tool:看過了',
+        'ai:Model call limits exceeded: run level call limit reached with 1 model calls',
+      ]);
+      expect(types(log)).toEqual(['turn/start', 'turn/end', 'turn/start', 'turn/end']);
+    } finally {
+      await host.close();
+      await built.dispose();
+    }
+  });
 });
 
 // ───────────────────────────── 結算通知（#840） ─────────────────────────────
