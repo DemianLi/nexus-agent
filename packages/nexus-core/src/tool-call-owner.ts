@@ -4,8 +4,7 @@
  * - `history-source=log` 而且是 root 的呼叫：從那一份會話日誌的 `assistant/message` 找（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)，
  *   `.docs/agent-loop-off-langchain-design-2026-11-03.md` §四 W6）。歷史從日誌推，讀者讀的也是日誌。
  * - 其餘（`state`／`shadow`、子代理）：native loop 把正在跑的那一批的助手訊息放進請求（{@link ToolCallOwnerRequest.owner}），
- *   就用那一則。`langgraph` 的請求沒有這一格，從 `request.state.messages` 找；子代理今天都是 LangGraph 子圖（native root
- *   底下也是，TODO([#2359](https://github.com/DemianLi/nexus-agent/issues/2359))），歷史由 state 送，讀者跟著讀 state。
+ *   就用那一則。`langgraph` 的請求沒有這一格，從 `request.state.messages` 找：歷史由 state 送，讀者跟著讀 state。
  *
  * 讀日誌與讀 state 都是**倒著找、認 callId**：供應商重用 callId 時最近的那則才是這一次；`langgraph` 的 ToolNode 執行時，
  * 那則就在 `state.messages` 的尾巴附近。
