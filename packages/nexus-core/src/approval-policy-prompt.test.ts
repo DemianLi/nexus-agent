@@ -27,7 +27,12 @@ describe('approvalPolicySentence：句子跟閘門用同一組事實推', () => 
       APPROVAL_POLICY_NEVER_SENTENCE,
     ],
     ['policy-never、never', POLICY_NEVER, 'never', APPROVAL_POLICY_NEVER_SENTENCE],
-    ['背景子代理、ask：講沒有人可以問，不說 session 關掉了核准', BACKGROUND, 'ask', APPROVAL_POLICY_BACKGROUND_SENTENCE],
+    [
+      '背景子代理、ask：講沒有人可以問，不說 session 關掉了核准',
+      BACKGROUND,
+      'ask',
+      APPROVAL_POLICY_BACKGROUND_SENTENCE,
+    ],
     ['背景子代理、never', BACKGROUND, 'never', APPROVAL_POLICY_BACKGROUND_SENTENCE],
     [
       'no-channel、ask：照政策講，沒有可用管道由 ASK 句後半說',

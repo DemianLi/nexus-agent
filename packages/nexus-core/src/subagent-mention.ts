@@ -89,7 +89,11 @@ export function mentionOfHintBlock(block: unknown): SubagentMentionRef | undefin
   }
   if (typeof name !== 'string') return undefined;
   for (const tool of HINT_TOOLS) {
-    const mention: SubagentMentionRef = { kind: 'subagent', name, ...(tool !== undefined && { tool }) };
+    const mention: SubagentMentionRef = {
+      kind: 'subagent',
+      name,
+      ...(tool !== undefined && { tool }),
+    };
     if (text === mentionHintText(mention)) return mention;
   }
   return undefined;

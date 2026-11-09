@@ -87,9 +87,9 @@ describe('提示裡的委派工具', () => {
     expect(
       mentionOfHintBlock(mentionHintBlock({ kind: 'subagent', name, tool: 'subagent' })),
     ).toEqual({ kind: 'subagent', name, tool: 'subagent' });
-    expect(isMentionHintBlock({ type: 'text', text: SENT_BEFORE_2649.slice('幫我登記阿明'.length) })).toBe(
-      true,
-    );
+    expect(
+      isMentionHintBlock({ type: 'text', text: SENT_BEFORE_2649.slice('幫我登記阿明'.length) }),
+    ).toBe(true);
   });
 
   it('舊日誌（continuable，`mention` 沒有 `tool`）重放出來的人話，與當初送出的逐位元組相同', () => {
@@ -102,20 +102,23 @@ describe('提示裡的委派工具', () => {
     expect(replay.messages.map((message) => message.text)).toEqual([SENT_BEFORE_2649]);
   });
 
-  it.each(['task', 'subagent'] as const)('新日誌（`tool: %s`）：live 組的與重放組的是同一段字', (tool) => {
-    const data = {
-      kind: 'message' as const,
-      text: '幫我登記阿明',
-      mention: { kind: 'subagent' as const, name: 'general-purpose', tool },
-    };
-    const live = turnStartMessage(data).data.content;
-    // 輪中插話那條路不經 `turn/start`，直接用 `userContent` 組。
-    expect(userContent(data.text, undefined, data.mention)).toEqual(live);
-    const replay = replayConversation([
-      { type: 'turn/start', seq: 0, time: 0, data } as unknown as SessionEvent,
-    ]);
-    if (replay.kind !== 'replayed') throw new Error(`推不出來：${replay.reason}`);
-    expect(replay.messages[0]!.content).toEqual(live);
-    expect(JSON.stringify(live)).toContain(`${tool} 的 subagent_type`);
-  });
+  it.each(['task', 'subagent'] as const)(
+    '新日誌（`tool: %s`）：live 組的與重放組的是同一段字',
+    (tool) => {
+      const data = {
+        kind: 'message' as const,
+        text: '幫我登記阿明',
+        mention: { kind: 'subagent' as const, name: 'general-purpose', tool },
+      };
+      const live = turnStartMessage(data).data.content;
+      // 輪中插話那條路不經 `turn/start`，直接用 `userContent` 組。
+      expect(userContent(data.text, undefined, data.mention)).toEqual(live);
+      const replay = replayConversation([
+        { type: 'turn/start', seq: 0, time: 0, data } as unknown as SessionEvent,
+      ]);
+      if (replay.kind !== 'replayed') throw new Error(`推不出來：${replay.reason}`);
+      expect(replay.messages[0]!.content).toEqual(live);
+      expect(JSON.stringify(live)).toContain(`${tool} 的 subagent_type`);
+    },
+  );
 });

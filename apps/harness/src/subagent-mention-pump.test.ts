@@ -354,7 +354,12 @@ describe('歷史讀回三種提示字（#2649）', () => {
     ] as const) {
       log.append('user/message', {
         message: toLoggedMessage(
-          new HumanMessage({ content: [{ type: 'text', text }, { type: 'text', text: hint }] }),
+          new HumanMessage({
+            content: [
+              { type: 'text', text },
+              { type: 'text', text: hint },
+            ],
+          }),
         ),
         source: { kind: 'user' },
       });

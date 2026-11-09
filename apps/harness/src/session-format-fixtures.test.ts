@@ -108,6 +108,8 @@ interface Expected {
     readonly pageContexts?: readonly (string | null)[];
     readonly snapshotCalls?: readonly RequestSnapshotCall[];
     readonly attemptCalls?: readonly AttemptCall[];
+    /** 寫入器自己的 `replayConversation` 推出的每一則人話內容（`JSON.stringify` 過）。 */
+    readonly ownHumanContents?: readonly string[];
   }[];
 }
 
@@ -477,6 +479,16 @@ describe.each(names)('夾具 %s', (name) => {
         expect(opened.header.profile).toBe(trigger.profile);
         expect(humanPageContexts(events)).toEqual(trigger.pageContexts);
       }
+      if (trigger.ownHumanContents !== undefined) {
+        // 點名提示照日誌上的 `mention.tool` 組字，缺席照舊的 `task` 字：今天重放出來的人話要跟 55 當初送出的逐位元組相同（#2649）。
+        const replay = replayConversation(events);
+        if (replay.kind !== 'replayed') throw new Error(`推不回對話歷史：${replay.reason}`);
+        expect(
+          replay.messages
+            .filter((message) => message.getType() === 'human')
+            .map((message) => JSON.stringify(message.content)),
+        ).toEqual(trigger.ownHumanContents);
+      }
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
       }
@@ -609,6 +621,7 @@ describe('規則（驗收 D）', () => {
       [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
       [52, "if (site.layout === 'two-file') {"],
       [55, "if (field(event, 'modelCall') !== undefined) {"],
+      [56, "const tool = mention.tool ?? 'task';"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);

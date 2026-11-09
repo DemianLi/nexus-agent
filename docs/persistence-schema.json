@@ -4,7 +4,7 @@
     {
       "key": "SessionHeader",
       "kind": "header",
-      "digest": "c23241c37cc35eae25c73173ec39370bd96086793b5dc04cc49185fff01fa694",
+      "digest": "2e881995dc8fcd62174e7b1c3654014df0cebd9c638074f25f41e5a9ea762854",
       "schema": {
         "root": 0,
         "nodes": [
@@ -201,7 +201,7 @@
           },
           {
             "kind": "literal",
-            "value": 55
+            "value": 56
           }
         ]
       }
@@ -209,7 +209,7 @@
     {
       "key": "JsonlHeaderLine",
       "kind": "header",
-      "digest": "14f9bedc96f1450e500a8d5992044fadc3abb856816d3e8217088c8a87de15d7",
+      "digest": "831805cd4c3a07e320f07a7006def3dabb87eab6bc31d0811e0d29ce93adc039",
       "schema": {
         "root": 0,
         "nodes": [
@@ -441,7 +441,7 @@
           },
           {
             "kind": "literal",
-            "value": 55
+            "value": 56
           }
         ]
       }
@@ -2961,7 +2961,7 @@
       "kind": "event",
       "event": "inbox/spliced",
       "surface": false,
-      "digest": "4aa70134429ca16499c0df9dec90ea71cc08106c613fbfd2e727202dbc570da2",
+      "digest": "54701af63be8855e21f69b7b3ada2940c6d4419b0e510bcc4f6f2cf1a90f4a9e",
       "schema": {
         "root": 0,
         "nodes": [
@@ -2975,7 +2975,7 @@
               },
               {
                 "name": "ignorable",
-                "type": 46,
+                "type": 48,
                 "optional": true
               },
               {
@@ -2990,7 +2990,7 @@
               },
               {
                 "name": "type",
-                "type": 47,
+                "type": 49,
                 "optional": false
               }
             ],
@@ -3006,7 +3006,7 @@
               },
               {
                 "name": "outcome",
-                "type": 42,
+                "type": 44,
                 "optional": true
               },
               {
@@ -3021,7 +3021,7 @@
               },
               {
                 "name": "target",
-                "type": 43,
+                "type": 45,
                 "optional": false
               }
             ],
@@ -3056,7 +3056,7 @@
               },
               {
                 "name": "source",
-                "type": 21,
+                "type": 23,
                 "optional": false
               },
               {
@@ -3230,6 +3230,11 @@
                 "name": "name",
                 "type": 7,
                 "optional": false
+              },
+              {
+                "name": "tool",
+                "type": 21,
+                "optional": true
               }
             ],
             "indices": []
@@ -3241,10 +3246,21 @@
           {
             "kind": "union",
             "types": [
-              22,
-              37,
-              38,
-              40
+              20,
+              22
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "task"
+          },
+          {
+            "kind": "union",
+            "types": [
+              24,
+              39,
+              40,
+              42
             ]
           },
           {
@@ -3252,17 +3268,17 @@
             "properties": [
               {
                 "name": "cause",
-                "type": 23,
+                "type": 25,
                 "optional": true
               },
               {
                 "name": "kind",
-                "type": 30,
+                "type": 32,
                 "optional": false
               },
               {
                 "name": "reason",
-                "type": 31,
+                "type": 33,
                 "optional": true
               },
               {
@@ -3281,9 +3297,9 @@
           {
             "kind": "union",
             "types": [
-              24,
               26,
-              28
+              28,
+              30
             ]
           },
           {
@@ -3291,7 +3307,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 25,
+                "type": 27,
                 "optional": false
               },
               {
@@ -3311,7 +3327,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 27,
+                "type": 29,
                 "optional": false
               }
             ],
@@ -3326,7 +3342,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 29,
+                "type": 31,
                 "optional": false
               }
             ],
@@ -3343,11 +3359,11 @@
           {
             "kind": "union",
             "types": [
-              32,
-              33,
               34,
               35,
-              36
+              36,
+              37,
+              38
             ]
           },
           {
@@ -3380,7 +3396,7 @@
               },
               {
                 "name": "kind",
-                "type": 29,
+                "type": 31,
                 "optional": false
               },
               {
@@ -3401,7 +3417,7 @@
               },
               {
                 "name": "kind",
-                "type": 39,
+                "type": 41,
                 "optional": false
               },
               {
@@ -3426,7 +3442,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 41,
+                "type": 43,
                 "optional": false
               },
               {
@@ -3448,8 +3464,8 @@
           {
             "kind": "union",
             "types": [
-              44,
-              45
+              46,
+              47
             ]
           },
           {
@@ -6224,7 +6240,7 @@
       "kind": "event",
       "event": "turn/start",
       "surface": false,
-      "digest": "552ee49e52c11df19b41e74647becb8adc8e8ee1e167631fcfa9a18a52bf33d0",
+      "digest": "396e48cc21e51be749fd2f084515c5467ec7f6d8f24b143ea2a311316c5f99c7",
       "schema": {
         "root": 0,
         "nodes": [
@@ -6238,7 +6254,7 @@
               },
               {
                 "name": "ignorable",
-                "type": 42,
+                "type": 44,
                 "optional": true
               },
               {
@@ -6253,7 +6269,7 @@
               },
               {
                 "name": "type",
-                "type": 43,
+                "type": 45,
                 "optional": false
               }
             ],
@@ -6263,10 +6279,10 @@
             "kind": "union",
             "types": [
               2,
-              21,
-              36,
+              23,
               38,
-              40
+              40,
+              42
             ]
           },
           {
@@ -6482,6 +6498,11 @@
                 "name": "name",
                 "type": 6,
                 "optional": false
+              },
+              {
+                "name": "tool",
+                "type": 21,
+                "optional": true
               }
             ],
             "indices": []
@@ -6491,21 +6512,32 @@
             "value": "subagent"
           },
           {
+            "kind": "union",
+            "types": [
+              20,
+              22
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "task"
+          },
+          {
             "kind": "object",
             "properties": [
               {
                 "name": "cause",
-                "type": 22,
+                "type": 24,
                 "optional": true
               },
               {
                 "name": "kind",
-                "type": 29,
+                "type": 31,
                 "optional": false
               },
               {
                 "name": "reason",
-                "type": 30,
+                "type": 32,
                 "optional": true
               },
               {
@@ -6529,9 +6561,9 @@
           {
             "kind": "union",
             "types": [
-              23,
               25,
-              27
+              27,
+              29
             ]
           },
           {
@@ -6539,7 +6571,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 24,
+                "type": 26,
                 "optional": false
               },
               {
@@ -6559,7 +6591,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 26,
+                "type": 28,
                 "optional": false
               }
             ],
@@ -6574,7 +6606,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 28,
+                "type": 30,
                 "optional": false
               }
             ],
@@ -6591,11 +6623,11 @@
           {
             "kind": "union",
             "types": [
-              31,
-              32,
               33,
               34,
-              35
+              35,
+              36,
+              37
             ]
           },
           {
@@ -6628,7 +6660,7 @@
               },
               {
                 "name": "kind",
-                "type": 37,
+                "type": 39,
                 "optional": false
               },
               {
@@ -6658,7 +6690,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 39,
+                "type": 41,
                 "optional": false
               },
               {
@@ -6683,7 +6715,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 41,
+                "type": 43,
                 "optional": false
               }
             ],
@@ -7368,6 +7400,11 @@
       "sources": []
     },
     {
+      "digest": "06e4a1858e95677dcd425c8447e0b58473fee1900ee785a4f4ab8eef8f6b8208",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "0717265a49209f174de990dbec9414dc1ed0b46e500bf0f2e20079b4dddeae11",
       "names": [],
       "sources": []
@@ -7461,15 +7498,6 @@
       ],
       "sources": [
         "packages/nexus-core/src/request-snapshot.ts:168"
-      ]
-    },
-    {
-      "digest": "14f9bedc96f1450e500a8d5992044fadc3abb856816d3e8217088c8a87de15d7",
-      "names": [
-        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
-      ],
-      "sources": [
-        "apps/harness/src/jsonl-session-store.ts:573"
       ]
     },
     {
@@ -7654,6 +7682,15 @@
       ]
     },
     {
+      "digest": "2e881995dc8fcd62174e7b1c3654014df0cebd9c638074f25f41e5a9ea762854",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:770"
+      ]
+    },
+    {
       "digest": "2fce6485a2e17b6be07f5a84b7e75f07eea6a443140f42bee61e6aed1119e645",
       "names": [],
       "sources": []
@@ -7689,11 +7726,6 @@
       "sources": []
     },
     {
-      "digest": "349cb930266f0a626969cb94b512ada52dd1b33dde2f28fdc241dde90e4b5605",
-      "names": [],
-      "sources": []
-    },
-    {
       "digest": "363fbac0050a27f87a2aa81e5b73ad8889ec3dee969fc89b589444bc0bdd10c0",
       "names": [],
       "sources": [
@@ -7714,6 +7746,13 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/session-log.ts:665"
+      ]
+    },
+    {
+      "digest": "396e48cc21e51be749fd2f084515c5467ec7f6d8f24b143ea2a311316c5f99c7",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1528"
       ]
     },
     {
@@ -7757,11 +7796,6 @@
       "sources": [
         "packages/nexus-core/src/session-log.ts:1461"
       ]
-    },
-    {
-      "digest": "40a6440e014f40b6a39c6b1abec9771030290832d39d85abc8a74457cf7089c8",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "410cd5045a48a57489f259de2d91a9ea2d71e46573e307254a5bcd11a7f73427",
@@ -7817,11 +7851,9 @@
       ]
     },
     {
-      "digest": "47639d5613e9a68ab31f2939096c04c0f7631b5ffad93f500fdb41091a097411",
+      "digest": "4737c1e4874b662d1a2e72aec919e176f003e430d4ad3283eb26ca0e11cf9a22",
       "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:430"
-      ]
+      "sources": []
     },
     {
       "digest": "477291c0f5e37c0b04a2da90de6ddecc62b069f58c994de6933cc6fda672fdb4",
@@ -7845,10 +7877,12 @@
       "sources": []
     },
     {
-      "digest": "4aa70134429ca16499c0df9dec90ea71cc08106c613fbfd2e727202dbc570da2",
-      "names": [],
+      "digest": "4ac69f1071474a441162cfd716c8052f0cc715bef9df40cd9559fe00cc97ca08",
+      "names": [
+        "packages/nexus-core/src/subagent-mention.ts#SubagentMentionRef"
+      ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1528"
+        "packages/nexus-core/src/subagent-mention.ts:25"
       ]
     },
     {
@@ -7924,19 +7958,19 @@
       ]
     },
     {
+      "digest": "54701af63be8855e21f69b7b3ada2940c6d4419b0e510bcc4f6f2cf1a90f4a9e",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1528"
+      ]
+    },
+    {
       "digest": "54e90a3fdea3ccef42baf5689bf1cadcc137560f6f866c93fbe3bc625ad6a15d",
       "names": [
         "packages/nexus-core/src/session-store.ts#StoredSessionBuild"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:701"
-      ]
-    },
-    {
-      "digest": "552ee49e52c11df19b41e74647becb8adc8e8ee1e167631fcfa9a18a52bf33d0",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1528"
+        "packages/nexus-core/src/session-store.ts:714"
       ]
     },
     {
@@ -8090,15 +8124,6 @@
       ]
     },
     {
-      "digest": "6664f483cfb15870bc5d7c6192a8fa5e64681b7fc6c7c146bcbf0c99d6a6fb4d",
-      "names": [
-        "packages/nexus-core/src/subagent-mention.ts#SubagentMentionRef"
-      ],
-      "sources": [
-        "packages/nexus-core/src/subagent-mention.ts:25"
-      ]
-    },
-    {
       "digest": "66900a491ae6787a50dbbb829a017de5ab8e954dff1a6c7368495f8fcbb6f4ea",
       "names": [],
       "sources": [
@@ -8172,6 +8197,11 @@
       "sources": []
     },
     {
+      "digest": "6b4749acec982bf4e55a1ff79c7962f50126efa2471912f15793bce3ca6fa765",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "6b5566a03f01edb2a4819ac08315632ff0e0ea12b7e6cb88f0b049bb9a6a3427",
       "names": [],
       "sources": [
@@ -8210,11 +8240,6 @@
       "sources": [
         "packages/nexus-core/src/session-log.ts:1528"
       ]
-    },
-    {
-      "digest": "6e064a52e0b17740a6d8411296ac7b7f0b0a04eb90d46b293663f2de88642834",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "6ed77328fd6cc0f04bf2a981bd5b8b49739ef1848565c3567bb934415195da2a",
@@ -8352,18 +8377,18 @@
       "sources": []
     },
     {
-      "digest": "8257b77f4c36a70076c12f3623cf51d34b637ba57b0ef7ad12def4938baaa5f4",
-      "names": [
-        "packages/nexus-core/src/inbox.ts#InboxSplice"
-      ],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:128"
-      ]
-    },
-    {
       "digest": "82ff76e2f33e6b2e165990d069601e5408e91ce52996212ce0269d74d18a49c6",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "831805cd4c3a07e320f07a7006def3dabb87eab6bc31d0811e0d29ce93adc039",
+      "names": [
+        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
+      ],
+      "sources": [
+        "apps/harness/src/jsonl-session-store.ts:573"
+      ]
     },
     {
       "digest": "83204a53ea52a98592a78721020bb143baa2812459f199714706096545c0381c",
@@ -8469,7 +8494,7 @@
         "packages/nexus-core/src/session-store.ts#SessionHeaderBuildMetadata"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:744"
+        "packages/nexus-core/src/session-store.ts:757"
       ]
     },
     {
@@ -8591,7 +8616,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionOwner"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:728"
+        "packages/nexus-core/src/session-store.ts:741"
       ]
     },
     {
@@ -8776,6 +8801,15 @@
       ]
     },
     {
+      "digest": "af533c94e9d48278ff0944d013c6642d7aca6f859fc067d3b298365f87979ed2",
+      "names": [
+        "packages/nexus-core/src/inbox.ts#QueuedInput"
+      ],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:105"
+      ]
+    },
+    {
       "digest": "b149312a7bd621ed5802608fd19577c605f254c112855c739cde09902544d620",
       "names": [],
       "sources": [
@@ -8952,15 +8986,6 @@
       "sources": []
     },
     {
-      "digest": "c23241c37cc35eae25c73173ec39370bd96086793b5dc04cc49185fff01fa694",
-      "names": [
-        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
-      ],
-      "sources": [
-        "packages/nexus-core/src/session-store.ts:757"
-      ]
-    },
-    {
       "digest": "c2629cef9d55faec17007cbfa334e4956ce5f5a59a184e7b48f816d9ce41dbf2",
       "names": [],
       "sources": [
@@ -9004,6 +9029,11 @@
     },
     {
       "digest": "c56e4ded5efa7631c1d03042e71a762bfafcaf84612e5700dfd1104defcd12bd",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "c5da8aa3a62268cdaa6b2c0ccda724fb568c2cd766c4e6585b3fa6a81294f299",
       "names": [],
       "sources": []
     },
@@ -9055,6 +9085,11 @@
       ]
     },
     {
+      "digest": "c99748a89643c28546953f0d8f04f8e865ee2e45c31a10f0a128bca49e42b50b",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "c9cd811f116e3899c6fa50df6f380210a497572501f1084e8090a16c40c71f75",
       "names": [],
       "sources": []
@@ -9070,6 +9105,15 @@
       "digest": "cc0ee3cc75b2b200b688200d55dcbba5424dac8e02b42fa47815757e7711ed86",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "cd2382c17575ad076b29f9a6569746d4dabdc02c417828de354818e52ae2d486",
+      "names": [
+        "packages/nexus-core/src/inbox.ts#InboxSplice"
+      ],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:128"
+      ]
     },
     {
       "digest": "cd756735b6b5ea947876953d5ad12811835066bb0058ddc2f19882e545c00966",
@@ -9218,22 +9262,13 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionEmbedOrigin"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:733"
+        "packages/nexus-core/src/session-store.ts:746"
       ]
     },
     {
       "digest": "dcd249366e892c36b59d7fd447cd0155cb62e2b50a31fb00df4e4ee727cb2633",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "dd0120ba8136e0891a35b178b6059a116061185bd39dd4ce075cd1c291e24586",
-      "names": [
-        "packages/nexus-core/src/inbox.ts#QueuedInput"
-      ],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:105"
-      ]
     },
     {
       "digest": "dd7985a0b9663485f8076e3159b22ef07ee8feb927f4db06db69a82acf8f59a5",
@@ -9408,7 +9443,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionPluginRow"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:713"
+        "packages/nexus-core/src/session-store.ts:726"
       ]
     },
     {
@@ -9470,6 +9505,13 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/session-log.ts:1528"
+      ]
+    },
+    {
+      "digest": "fbc0897d1da98b2440b6090ca90a28c3da6411e0dcdb46e88591823fb6f4ddb9",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:430"
       ]
     },
     {
