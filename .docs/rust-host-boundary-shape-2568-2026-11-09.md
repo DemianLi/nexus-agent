@@ -48,6 +48,7 @@ dsh 這樣做的理由：邊界兩邊一起出貨，資料加判別式最好驗�
 | --- | --- | --- | --- |
 | MCP 工具呼叫與資源操作 | 對話行程 → 宿主 | 工具呼叫是 `ToolCall(args, exec)` 回 `NexusToolResult`（`packages/nexus-plugin-mcp/src/tool-call.ts:39-43`）；資源操作是 `McpSource.request(req, signal)`，資料進資料出（`hub.ts:36-54`）；連線池 `acquire` 回活的連線（`pool.ts:52-66`、`:131-135`），但它留在宿主裡，不過界 | 否 |
 | MCP 執行到一半要問人（elicitation） | 伺服器 → client | 走 `input_required` 輪次，不是伺服器發給 client 的請求：一輪回 `input_required`，client 經 `exec.interrupt` 問人，帶 `inputResponses` 再送下一輪（`packages/nexus-plugin-mcp/src/tool-call.ts:70-80`、`:189-221`）。只收 `elicitation/create`，sampling、roots 都拒（`:224-228`） | 否。宿主每次只跑一輪，`input_required` 當資料回給對話行程，問人與下一輪由對話行程發起 |
+| MCP 起伺服器要的沙箱包裝、守護包裝、憑證 | 今天：harness 交給 MCP 插件 | 三個都是 harness 在組裝時 provide 給插件的服務（`apps/harness/src/assembly-root.ts:1282`、`:1287`、`:1289`）：`mcpSandbox`／`mcpGuard` 是 `(req) => Promise<{command, args}>`（`packages/nexus-plugin-mcp/src/index.ts:76-89`），`mcp:credentials` 是同步的 `resolve(name)`（`packages/nexus-plugin-mcp/src/credentials.ts:21-23`） | 否，但連線池搬進宿主時，這三個**不能變成宿主反過來叫對話行程**。推薦：沙箱與守護由宿主自己用它那支 spawner 做（D248 B），用 Rust 寫；憑證由宿主自己讀同一份來源，值不經 host.sock。對話行程送給宿主的只有 MCP 列的設定與憑證名字（`credentials.ts:4-6` 今天就只讓名字進設定與池鍵）。憑證來源在宿主行程裡怎麼讀，#2570 動工時定 |
 | 插件版本登記 | 對話行程 → 前台 | 過界的只有 `{id, signature}`（`apps/harness/src/plugin-live-versions.ts:51-54`）；`bind` 回一個放掉的函式（`:113`） | 否。放掉改成「連線斷了就放」（§四） |
 | 搜尋、釘選封存 | 前台 → 服務 | 介面帶閉包反過來叫對話行程：封存的 `known`、`activity`、`stop`（`apps/harness/src/thread-organization.ts:97-107`），搜尋的 `liveThreads()`（`thread-search.ts:349-370`） | 否，改成服務發請求給對話行程；但這兩項先不進宿主（§五） |
 
@@ -72,7 +73,7 @@ HostMessage
 - **Rust 插件契約要多的**：服務除了 `NAME`，要能宣告它接哪些 `method`、每個是不是串流，並給一個「Json 進、Json 或串流出」的分派。值本身照舊放在樹上，不過界（偏離 #8a 的「服務值只存資料」照舊）。
 - **生命週期跟著連線**：對話行程在一條連線上登記的東西（MCP 綁定等），連線一斷宿主就全部放掉；重連後對話行程重新登記，這是 P3c 已經做的重連（`packages/nexus-host-bridge/src/client.ts:37-38`、`:159-163`）。不需要 `Release` 框，也不需要引用計數。
 - **錯誤碼要分得出「宿主不在」**：橋把它翻成 survival 文件 §三 的「停」或「降級」（MCP 呼叫等宿主重連，有上限；正在跑的那一次回「結果不明」）。
-- **巢狀請求這條先不做**：宿主今天沒有要反過來叫對話行程的服務；MCP 的 elicitation 照上表，由對話行程一輪一輪發。框格式留一個方向位就好，等真的有服務需要再加。
+- **巢狀請求這條先不做**：宿主今天沒有要反過來叫對話行程的服務，前提是上表 MCP 的沙箱、守護、憑證由宿主自己做；MCP 的 elicitation 照上表，由對話行程一輪一輪發。框格式留一個方向位就好，等真的有服務需要再加。
 
 ## 二、組合行程 ↔ 葉子行程：今天會變成過界呼叫的每一類
 
@@ -139,6 +140,8 @@ dev-infra 的輸入經 PM 轉來，我自己核過：
 
 這要改的是 Q21（主機級的樹含「TS 插件的版本登記」）、D249 D（宿主放「插件版本登記」）和 #2569 第 5 步，所以寫成是非題 G。
 
+**#2583 之後綁定怎麼到前台**：TS 插件在葉子裡，綁定由葉子組裝時算出（`liveBindingsOf`，`plugin-live-versions.ts:69-98`）。§七 推薦前台連組合行程，所以葉子在跟組合行程的 `hello` 之後把綁定交給組合行程，前台照今天的路由（`/internal/threads/:id/plugins`）向組合行程問。過界的照舊只有 `{id, signature}`。
+
 **版本登記跟過界形狀有沒有關係**：沒有。不管搬不搬，過界的都只有 `{id, signature}`，是純資料。
 
 ## 五、搜尋、釘選封存：第一輪 §八 的理由不成立了
@@ -180,6 +183,7 @@ dev-infra 的輸入經 PM 轉來，我自己核過：
 ## 八、要改的卡與文件（PM 審過再動）
 
 - **survival 文件 §三** 最後一張表「插件版本登記」那列：改成「不經宿主，不受影響（第三輪 §四）」。G 答否時，改成以程式碼為準：組裝成功之後才綁、不擋組裝，宿主不在時綁定延後。
+- **第一輪 §八 的表**（`.docs/rust-host-design-2568-2026-11-08.md`）：G 答是時，「plugin 對照快照」那列終點改成「前台」；I 答是時，會話搜尋、`@` 引用候選、釘選與封存、`listThreads` 等那幾列的終點改成「照今天，#2571 動工時重答」。
 - **#2569**：第 4 步的橋照 §一 的框做；第 5 步 G 答是時改成不做，答否時照 §四 的分岔重開。
 - **#2583**：第 1、2、3、5 條照 §七 寫進正文；前置的「第 6 題」改成已答。
 - **#2572**：插件契約加一條「插件放在記憶體裡的狀態，葉子重起之後會遺失」（§六）。
