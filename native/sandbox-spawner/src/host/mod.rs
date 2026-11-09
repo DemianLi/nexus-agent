@@ -1,6 +1,6 @@
 //! 宿主（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：監督行程起的第三種子行程，全機共用一個，不在資料路徑上。
-//! 目前做四件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分。
-//! 出貨的建置還沒有任何插件，所以還沒有任何服務（#2569）。
+//! 做五件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分、
+//! 把驗過身分的連線上的呼叫交給樹上的服務（[`calls`]）。出貨的建置還沒有任何插件，所以還沒有任何服務。
 //!
 //! ```text
 //! nexus-host [--plugins <檔>] --socket <路徑>
@@ -19,7 +19,7 @@
 //! accept 出錯而沒收進來的連線不會記成撤過，之後被 accept 時照當下的表驗；起來時把開檔數的軟上限拉到硬上限，就是為了不在這裡用完 fd。pid 被重用得比宿主讀 pipe 還快時，
 //! 新行程先連上的連線也會這樣被拒，要重連（它不會被隔離）。
 //!
-//! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`）：回 `rejected`、斷線，經控制通道回報監督行程
+//! 違反協定（框太大、解不開、種類不認得、版本或 token 不對、重複的 `hello`，以及 [`calls`] 列的那幾種）：回 `rejected`、斷線，經控制通道回報監督行程
 //! （`violation`，它寫稽核），表上那個 pid 撤掉、它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。監督行程把那個身分隔離到行程結束：
 //! 之後重送的表裡不再有它；宿主 `ready` 了、沒在收的，再送一筆 `revoke`，蓋掉可能還排在監督行程那邊、沒寫出去的 `grant`（這一筆也照上面收 backlog）。
 //! `hello` 的 pid 不在表上的，與撤過的連線（送什麼都算），只回 `rejected`、斷線、回報 `unregistered`（算不算違規由監督行程判斷），不撤表上那一筆。
@@ -35,13 +35,14 @@ mod test_plugin;
 
 use crate::host_protocol::{
     self, decode_client_message, encode_host_message, ClientMessage, HostMessage,
+    HOST_PROTOCOL_VERSION,
 };
 use crate::kernel::{Kernel, KernelEvent, Limits};
 use crate::supervisor::process::Chan;
 use crate::supervisor_protocol::{
     decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
@@ -65,6 +66,8 @@ macro_rules! say {
     ($($arg:tt)*) => { eprintln!("nexus-host: {}", format_args!($($arg)*)) };
 }
 
+pub mod calls;
+
 struct Grant {
     generation: u32,
     token: Vec<u8>,
@@ -86,6 +89,22 @@ struct Conn {
     revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
     dead: bool,
+    /// 還在跑的呼叫，以客戶端給的 `id` 為鍵。
+    calls: HashMap<u64, calls::Call>,
+    /// 讀進來、還沒處理的框。寫出去的排到 [`calls::OUTBOX_PAUSE`] 時停在這裡，對方讀走之後再接著處理。
+    backlog: VecDeque<Vec<u8>>,
+}
+
+impl Conn {
+    /// 排著沒寫出去的到了 [`calls::OUTBOX_PAUSE`]：不讀它、不處理它的框、不 poll 它的呼叫，等對方讀走。
+    fn paused(&self) -> bool {
+        self.chan.queued() >= calls::OUTBOX_PAUSE
+    }
+
+    /// 有留著的框可以處理：沒有新的輸入也要叫醒事件迴圈。
+    fn backlog_ready(&self) -> bool {
+        !self.dead && !self.backlog.is_empty() && !self.paused()
+    }
 }
 
 struct Host {
@@ -401,6 +420,7 @@ impl Host {
             }
             let now = Instant::now();
             self.accept_paused_until = self.accept_paused_until.filter(|&until| now < until);
+            let calls_deadline = self.calls_deadline();
             let deadline = self
                 .conns
                 .iter()
@@ -408,6 +428,8 @@ impl Host {
                 .map(|c| c.opened + HELLO_TIMEOUT)
                 .chain(self.accept_paused_until)
                 .chain(self.kernel.next_deadline())
+                .chain(calls_deadline)
+                .chain(self.conns.iter().any(Conn::backlog_ready).then_some(now))
                 .min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
@@ -418,11 +440,10 @@ impl Host {
             fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
-                let events = if write.is_some() {
-                    libc::POLLIN | libc::POLLOUT
-                } else {
-                    libc::POLLIN
-                };
+                let mut events = if write.is_some() { libc::POLLOUT } else { 0 };
+                if !conn.paused() {
+                    events |= libc::POLLIN;
+                }
                 fds.push(pollfd(read.or(write).unwrap_or(-1), events));
             }
             poll(&mut fds, deadline.map(|d| d.saturating_duration_since(now)));
@@ -436,23 +457,33 @@ impl Host {
             }
             // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
             for (i, fd) in fds.iter().skip(3).enumerate() {
-                if fd.revents != 0
-                    && self.conns.get(i).is_some_and(|conn| !conn.dead)
-                    && !self.on_readable(i)
-                {
+                let Some(conn) = self.conns.get(i) else {
+                    continue;
+                };
+                if conn.dead || (fd.revents == 0 && !conn.backlog_ready()) {
+                    continue;
+                }
+                if !self.on_readable(i) {
                     if let Some(conn) = self.conns.get_mut(i) {
                         conn.dead = true;
                     }
                 }
             }
             self.step_kernel();
+            self.pump_calls();
             let now = Instant::now();
-            self.conns.retain(|conn| {
+            let keep = |conn: &Conn| {
                 !conn.dead
                     && !conn.chan.read_closed()
                     && !conn.chan.write_closed()
                     && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
-            });
+            };
+            for i in 0..self.conns.len() {
+                if !keep(&self.conns[i]) {
+                    self.drop_calls(i);
+                }
+            }
+            self.conns.retain(keep);
         }
     }
 
@@ -481,6 +512,8 @@ impl Host {
                         generation: 0,
                         revoked: false,
                         dead: false,
+                        calls: HashMap::new(),
+                        backlog: VecDeque::new(),
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -519,36 +552,58 @@ impl Host {
         }
     }
 
-    /// 讀第 `i` 條連線、處理讀到的框。這條要斷回 `false`。
+    /// 第 `i` 條連線的 fd 有事件（可讀、可寫、掛斷）或有留著的框時叫。留著的框處理完才再讀，框照序處理，留著的最多是一次
+    /// `receive` 讀進來的；停著時不讀也不處理。這條要斷回 `false`。
     fn on_readable(&mut self, i: usize) -> bool {
         let Some(conn) = self.conns.get_mut(i) else {
             return false;
         };
         conn.chan.flush();
-        let frames = match conn.chan.receive() {
-            Ok(frames) => frames,
+        if conn.backlog.is_empty() && !conn.paused() {
+            match conn.chan.receive() {
+                Ok(frames) => conn.backlog.extend(frames),
+                Err(err) => {
+                    self.violate(i, err.0);
+                    return false;
+                }
+            }
+        }
+        loop {
+            let Some(conn) = self.conns.get_mut(i) else {
+                return false;
+            };
+            if conn.paused() {
+                return true;
+            }
+            let Some(frame) = conn.backlog.pop_front() else {
+                return true;
+            };
+            if !self.on_frame(i, &frame) {
+                return false;
+            }
+        }
+    }
+
+    /// 處理第 `i` 條連線的一框。這條要斷回 `false`。
+    fn on_frame(&mut self, i: usize, frame: &[u8]) -> bool {
+        let message = match decode_client_message(frame) {
+            Ok(message) => message,
             Err(err) => {
                 self.violate(i, err.0);
                 return false;
             }
         };
-        for frame in frames {
-            let message = match decode_client_message(&frame) {
-                Ok(message) => message,
-                Err(err) => {
-                    self.violate(i, err.0);
-                    return false;
-                }
-            };
-            match message {
-                ClientMessage::Hello { version, token } => {
-                    if !self.on_hello(i, version, token.as_bytes()) {
-                        return false;
-                    }
-                }
-            }
+        match message {
+            ClientMessage::Hello { version, token } => self.on_hello(i, version, token.as_bytes()),
+            ClientMessage::Call {
+                side,
+                id,
+                service,
+                method,
+                payload,
+            } => self.on_call(i, side, id, service, &method, payload),
+            ClientMessage::Cancel { side, id } => self.on_cancel(i, side, id),
         }
-        true
     }
 
     fn on_hello(&mut self, i: usize, version: u32, token: &[u8]) -> bool {
@@ -569,7 +624,7 @@ impl Host {
             self.unregistered(i, "沒有登記");
             return false;
         };
-        if version != PROTOCOL_VERSION {
+        if version != HOST_PROTOCOL_VERSION {
             self.violate(i, "版本不對");
             return false;
         }
@@ -588,7 +643,7 @@ impl Host {
             conn.hello = true;
             conn.generation = generation;
             conn.chan.send(&encode_host_message(&HostMessage::Hello {
-                version: PROTOCOL_VERSION,
+                version: HOST_PROTOCOL_VERSION,
             }));
         }
         true

@@ -8,7 +8,8 @@ mod common;
 
 use common::host::{example, unregistered, violation, HostProc, GRANTED};
 use nexus_sandbox_spawner::host_protocol::{
-    decode_host_message, encode_client_message, hello, HostMessage, MAX_FRAME,
+    decode_host_message, encode_client_message, hello, HostMessage, HOST_PROTOCOL_VERSION,
+    MAX_FRAME,
 };
 use nexus_sandbox_spawner::json::{self, Value};
 use nexus_sandbox_spawner::protocol::frame;
@@ -17,7 +18,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SPAWNER: &str = env!("CARGO_BIN_EXE_nexus-sandbox-spawner");
 const TOKEN: &str = "00112233445566778899aabbccddeeff";
@@ -61,7 +62,7 @@ fn hello_frame(token: &str) -> Vec<u8> {
 fn newer_hello_frame(token: &str) -> Vec<u8> {
     frame(&encode_client_message(
         &nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
-            version: PROTOCOL_VERSION + 1,
+            version: HOST_PROTOCOL_VERSION + 1,
             token: token.into(),
         },
     ))
@@ -85,7 +86,7 @@ fn rejected(reason: &str) -> Option<HostMessage> {
 
 fn accepted() -> Option<HostMessage> {
     Some(HostMessage::Hello {
-        version: PROTOCOL_VERSION,
+        version: HOST_PROTOCOL_VERSION,
     })
 }
 
@@ -933,5 +934,414 @@ mod plugins {
             "{stderr}"
         );
         assert!(!stderr.contains("test-echo apply"), "{stderr}");
+    }
+}
+
+/// 控制通道的版本是 3：客戶端送 3 進來，宿主判版本不對（報 violation），不當成這一版。
+#[test]
+fn a_hello_with_the_control_channel_version_is_a_version_mismatch() {
+    let dir = temp_dir("old-version");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start(&socket);
+    host.grant(me(), TOKEN, Role::Conversation, "a");
+    let old = frame(&encode_client_message(
+        &nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
+            version: 3,
+            token: TOKEN.into(),
+        },
+    ));
+    assert_eq!(exchange(&socket, &old).1, rejected("版本不對"));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "版本不對")));
+}
+
+/// 驗過身分的連線上的呼叫（`src/host/calls.rs`）。服務是 `test-echo/echo`（`src/host/test_plugin.rs`）。
+mod calls {
+    use super::*;
+    use nexus_sandbox_spawner::host::calls::MAX_CALLS;
+    use nexus_sandbox_spawner::host_protocol::{CallError, ClientMessage, ErrorCode, Side};
+
+    const ECHO: &str = "test-echo/echo";
+
+    /// 掛著 `test-echo` 的宿主，測試行程已經登記。
+    fn host(tag: &str) -> (HostProc, PathBuf) {
+        let dir = temp_dir(tag);
+        let plugins = dir.join("host-plugins.json");
+        std::fs::write(&plugins, r#"[{"name":"test-echo"}]"#).unwrap();
+        let socket = dir.join("host.sock");
+        let mut host = HostProc::start_with_plugins(&socket, &plugins);
+        host.grant(me(), TOKEN, Role::Conversation, "a");
+        (host, socket)
+    }
+
+    fn connect(socket: &Path) -> UnixStream {
+        let (stream, reply) = exchange(socket, &hello_frame(TOKEN));
+        assert_eq!(reply, accepted());
+        stream
+    }
+
+    fn send(stream: &mut UnixStream, message: &ClientMessage) {
+        stream
+            .write_all(&frame(&encode_client_message(message)))
+            .unwrap();
+    }
+
+    fn call(stream: &mut UnixStream, id: u64, method: &str, payload: &str) {
+        call_to(stream, id, ECHO, method, payload);
+    }
+
+    fn call_to(stream: &mut UnixStream, id: u64, service: &str, method: &str, payload: &str) {
+        send(
+            stream,
+            &ClientMessage::Call {
+                side: Side::Client,
+                id,
+                service: service.into(),
+                method: method.into(),
+                payload: json::parse(payload.as_bytes()).unwrap(),
+            },
+        );
+    }
+
+    fn cancel(stream: &mut UnixStream, id: u64) {
+        send(
+            stream,
+            &ClientMessage::Cancel {
+                side: Side::Client,
+                id,
+            },
+        );
+    }
+
+    fn ok(id: u64, value: &str) -> Option<HostMessage> {
+        Some(HostMessage::Result {
+            side: Side::Client,
+            id,
+            outcome: Ok(json::parse(value.as_bytes()).unwrap()),
+        })
+    }
+
+    /// 下一框是 `id` 的失敗結果，回它的錯誤碼。
+    fn error_code(stream: &mut UnixStream, id: u64) -> ErrorCode {
+        match read_message(stream) {
+            Some(HostMessage::Result {
+                side: Side::Client,
+                id: got,
+                outcome: Err(CallError { code, .. }),
+            }) if got == id => code,
+            other => panic!("要 {id} 的失敗結果，收到 {other:?}"),
+        }
+    }
+
+    fn cancels(stream: &mut UnixStream, id: u64) -> i64 {
+        call(stream, id, "cancels", "null");
+        match read_message(stream) {
+            Some(HostMessage::Result {
+                outcome: Ok(Value::Int(n)),
+                ..
+            }) => n,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_call_gets_exactly_one_result_and_errors_keep_the_connection() {
+        let (_host, socket) = host("call-basic");
+        let mut stream = connect(&socket);
+        call(&mut stream, 1, "echo", r#"{"a":[1,null,true],"b":"字"}"#);
+        assert_eq!(
+            read_message(&mut stream),
+            ok(1, r#"{"a":[1,null,true],"b":"字"}"#)
+        );
+        call_to(&mut stream, 2, "nope", "m", "null");
+        assert_eq!(error_code(&mut stream, 2), ErrorCode::UnknownService);
+        call(&mut stream, 3, "nope", "null");
+        assert_eq!(error_code(&mut stream, 3), ErrorCode::UnknownMethod);
+        call(&mut stream, 4, "fail", "null");
+        assert_eq!(error_code(&mut stream, 4), ErrorCode::ServiceError);
+        call(&mut stream, 5, "reject", "null");
+        assert_eq!(error_code(&mut stream, 5), ErrorCode::BadPayload);
+        // 結束了的 id 可以再用。
+        call(&mut stream, 1, "echo", "7");
+        assert_eq!(read_message(&mut stream), ok(1, "7"));
+    }
+
+    #[test]
+    fn a_stream_sends_numbered_chunks_then_its_result() {
+        let (_host, socket) = host("call-stream");
+        let mut stream = connect(&socket);
+        call(&mut stream, 9, "stream", r#"{"count":3}"#);
+        for seq in 0..3 {
+            assert_eq!(
+                read_message(&mut stream),
+                Some(HostMessage::Chunk {
+                    side: Side::Client,
+                    id: 9,
+                    seq,
+                    payload: Value::Int(seq as i64),
+                })
+            );
+        }
+        assert_eq!(read_message(&mut stream), ok(9, "3"));
+    }
+
+    #[test]
+    fn a_pending_call_finishes_on_the_deadline_the_service_asks_for() {
+        let (_host, socket) = host("call-wait");
+        let mut stream = connect(&socket);
+        let started = std::time::Instant::now();
+        call(&mut stream, 1, "wait", r#"{"ms":200}"#);
+        assert_eq!(read_message(&mut stream), ok(1, r#""done""#));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn a_cancel_ends_the_call_once_and_a_late_cancel_gets_nothing() {
+        let (_host, socket) = host("call-cancel");
+        let mut stream = connect(&socket);
+        call(&mut stream, 1, "hang", "null");
+        cancel(&mut stream, 1);
+        assert_eq!(error_code(&mut stream, 1), ErrorCode::Cancelled);
+        // 已經結束的與從沒開始的：都不回，下一框就是後面那次呼叫的。
+        cancel(&mut stream, 1);
+        cancel(&mut stream, 99);
+        assert_eq!(cancels(&mut stream, 2), 1);
+    }
+
+    #[test]
+    fn closing_the_connection_cancels_its_calls_in_the_service() {
+        let (_host, socket) = host("call-drop");
+        let mut first = connect(&socket);
+        call(&mut first, 1, "hang", "null");
+        call(&mut first, 2, "hang", "null");
+        let mut second = connect(&socket);
+        assert_eq!(cancels(&mut second, 1), 0);
+        drop(first);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut id = 2;
+        while cancels(&mut second, id) != 2 {
+            assert!(std::time::Instant::now() < deadline, "斷線之後兩次都要取消");
+            std::thread::sleep(Duration::from_millis(20));
+            id += 1;
+        }
+    }
+
+    #[test]
+    fn calls_over_the_limit_are_busy_and_the_rest_keep_running() {
+        let (_host, socket) = host("call-busy");
+        let mut stream = connect(&socket);
+        for id in 0..MAX_CALLS as u64 {
+            call(&mut stream, id, "hang", "null");
+        }
+        call(&mut stream, 1000, "echo", "null");
+        assert_eq!(error_code(&mut stream, 1000), ErrorCode::Busy);
+        cancel(&mut stream, 0);
+        assert_eq!(error_code(&mut stream, 0), ErrorCode::Cancelled);
+        call(&mut stream, 1001, "echo", "null");
+        assert_eq!(read_message(&mut stream), ok(1001, "null"));
+    }
+
+    #[test]
+    fn oversized_results_and_chunks_become_too_large() {
+        let (_host, socket) = host("call-large");
+        let mut stream = connect(&socket);
+        call(&mut stream, 1, "big", "null");
+        assert_eq!(error_code(&mut stream, 1), ErrorCode::TooLarge);
+        call(&mut stream, 2, "big-chunk", "null");
+        assert_eq!(error_code(&mut stream, 2), ErrorCode::TooLarge);
+        call(&mut stream, 3, "unary-chunk", "null");
+        assert_eq!(error_code(&mut stream, 3), ErrorCode::ServiceError);
+        assert_eq!(
+            cancels(&mut stream, 4),
+            2,
+            "宿主收尾時，掛著的那兩次要在服務那邊取消"
+        );
+    }
+
+    #[test]
+    fn an_event_goes_only_to_the_connection_the_service_names() {
+        let (_host, socket) = host("call-event");
+        let mut first = connect(&socket);
+        let mut second = connect(&socket);
+        call(&mut first, 1, "emit", r#"{"n":1}"#);
+        let event = Some(HostMessage::Event {
+            service: ECHO.into(),
+            topic: "ping".into(),
+            payload: json::parse(br#"{"n":1}"#).unwrap(),
+        });
+        assert_eq!(read_message(&mut first), ok(1, "null"));
+        assert_eq!(read_message(&mut first), event);
+        // 第二條沒收到事件：它的下一框就是它自己這次呼叫的結果。
+        call(&mut second, 2, "echo", "2");
+        assert_eq!(read_message(&mut second), ok(2, "2"));
+    }
+
+    /// 不讀回答的連線，宿主也不再讀它：送的一方卡住，別的連線照常；讀走之後每個 `id` 照樣剛好一框。
+    #[test]
+    fn a_connection_that_does_not_read_is_not_read_either() {
+        // 十萬個呼叫的回答遠超過 OUTBOX_PAUSE 加兩邊 socket 的緩衝，宿主不停讀就一定送得完。
+        const CALLS: u64 = 100_000;
+        let (_host, socket) = host("call-backpressure");
+        let mut stream = connect(&socket);
+        let frames: Vec<u8> = (0..CALLS)
+            .flat_map(|id| {
+                frame(&encode_client_message(&ClientMessage::Call {
+                    side: Side::Client,
+                    id,
+                    service: "nope".into(),
+                    method: "m".into(),
+                    payload: Value::Null,
+                }))
+            })
+            .collect();
+        stream.set_nonblocking(true).unwrap();
+        let mut sent = 0;
+        let mut progressed = Instant::now();
+        while sent < frames.len() && progressed.elapsed() < Duration::from_secs(1) {
+            match stream.write(&frames[sent..]) {
+                Ok(n) => {
+                    sent += n;
+                    progressed = Instant::now();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("{err}"),
+            }
+        }
+        assert!(
+            sent < frames.len(),
+            "宿主一直在讀：{CALLS} 個呼叫全送出去了"
+        );
+
+        let mut other = connect(&socket);
+        call(&mut other, 1, "echo", "1");
+        assert_eq!(read_message(&mut other), ok(1, "1"));
+
+        stream.set_nonblocking(false).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let rest = std::thread::spawn(move || writer.write_all(&frames[sent..]).unwrap());
+        for id in 0..CALLS {
+            assert_eq!(error_code(&mut stream, id), ErrorCode::UnknownService);
+        }
+        rest.join().unwrap();
+    }
+
+    /// 事件排到上限就斷掉那條連線，不悄悄丟；上限以內的照送，別的連線不受影響。
+    #[test]
+    fn a_connection_whose_events_pile_up_is_dropped() {
+        let (_host, socket) = host("call-event-limit");
+        let mut small = connect(&socket);
+        call(&mut small, 1, "burst", r#"{"count":5,"bytes":200000}"#);
+        assert_eq!(read_message(&mut small), ok(1, "null"));
+        for _ in 0..5 {
+            assert!(matches!(
+                read_message(&mut small),
+                Some(HostMessage::Event { .. })
+            ));
+        }
+
+        let mut flooded = connect(&socket);
+        call(&mut flooded, 1, "burst", r#"{"count":20,"bytes":200000}"#);
+        // 先不讀：宿主一口氣排 20 個事件，排到上限時這條連線還沒讀走多少。
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(read_message(&mut flooded), ok(1, "null"));
+        let mut events = 0;
+        while let Some(message) = read_message(&mut flooded) {
+            assert!(matches!(message, HostMessage::Event { .. }), "{message:?}");
+            events += 1;
+        }
+        assert!(events < 20, "20 個事件全送到了");
+
+        call(&mut small, 2, "echo", "2");
+        assert_eq!(read_message(&mut small), ok(2, "2"));
+    }
+
+    #[test]
+    fn chunks_of_one_step_past_the_bound_end_the_call() {
+        let (_host, socket) = host("call-flood");
+        let mut stream = connect(&socket);
+        call(&mut stream, 3, "flood", "null");
+        // flood 一步推五塊、每塊約 250 KB：前四塊加起來還在 OUTBOX_PAUSE 以內照送，第五塊起不送。
+        for seq in 0..4 {
+            assert!(matches!(
+                read_message(&mut stream),
+                Some(HostMessage::Chunk { id: 3, seq: got, .. }) if got == seq
+            ));
+        }
+        assert_eq!(error_code(&mut stream, 3), ErrorCode::ServiceError);
+        assert_eq!(
+            cancels(&mut stream, 4),
+            1,
+            "超過上限收尾時，還掛著的 flood 要在服務那邊取消"
+        );
+    }
+
+    #[test]
+    fn an_empty_tree_answers_unknown_service() {
+        let dir = temp_dir("call-empty");
+        let socket = dir.join("host.sock");
+        let mut host = HostProc::start(&socket);
+        host.grant(me(), TOKEN, Role::Conversation, "a");
+        let mut stream = connect(&socket);
+        call(&mut stream, 1, "echo", "null");
+        assert_eq!(error_code(&mut stream, 1), ErrorCode::UnknownService);
+    }
+
+    /// 違規之後宿主撤掉這個 pid，所以每一種各用一個宿主。
+    fn violates(tag: &str, script: impl FnOnce(&Path) -> UnixStream, reason: &str) {
+        let (mut host, socket) = host(tag);
+        let mut stream = script(&socket);
+        assert_eq!(read_message(&mut stream), rejected(reason));
+        assert!(closed(&mut stream));
+        assert_eq!(host.report(), Some(violation(me(), GRANTED, reason)));
+    }
+
+    #[test]
+    fn a_call_before_hello_is_a_violation() {
+        violates(
+            "call-early",
+            |socket| {
+                let mut stream = UnixStream::connect(socket).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                call(&mut stream, 1, "echo", "null");
+                stream
+            },
+            "還沒 hello",
+        );
+    }
+
+    #[test]
+    fn a_call_from_the_host_side_is_a_violation() {
+        violates(
+            "call-side",
+            |socket| {
+                let mut stream = connect(socket);
+                send(
+                    &mut stream,
+                    &ClientMessage::Cancel {
+                        side: Side::Host,
+                        id: 1,
+                    },
+                );
+                stream
+            },
+            "宿主還不收反方向的呼叫",
+        );
+    }
+
+    #[test]
+    fn reusing_a_running_id_is_a_violation() {
+        violates(
+            "call-dup",
+            |socket| {
+                let mut stream = connect(socket);
+                call(&mut stream, 1, "hang", "null");
+                call(&mut stream, 1, "echo", "null");
+                stream
+            },
+            "重複的呼叫編號",
+        );
     }
 }

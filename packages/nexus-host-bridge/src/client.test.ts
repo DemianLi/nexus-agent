@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { HostClient } from './client.js';
 import { FrameReader, PROTOCOL_VERSION, frame } from './protocol.js';
 
-type Reply = 'hello' | 'rejected' | 'wrong-version' | 'garbage';
+type Reply =
+  'hello' | 'rejected' | 'wrong-version' | 'garbage' | 'result-first' | 'hello-then-event';
 
 /** 假宿主：每條連線收到第一框之後照 `replies` 的第 n 個回答（用完就重複最後一個），收到的框都記下來。 */
 function fakeHost(path: string, replies: readonly Reply[]) {
@@ -30,6 +31,22 @@ function fakeHost(path: string, replies: readonly Reply[]) {
         if (reply === 'wrong-version')
           socket.write(frame(Buffer.from(JSON.stringify({ type: 'hello', version: 99 }))));
         if (reply === 'garbage') socket.write(frame(Buffer.from('[')));
+        if (reply === 'result-first')
+          socket.write(
+            frame(Buffer.from(JSON.stringify({ type: 'result', side: 'c', id: 1, ok: null }))),
+          );
+        if (reply === 'hello-then-event') {
+          socket.write(
+            frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))),
+          );
+          socket.write(
+            frame(
+              Buffer.from(
+                JSON.stringify({ type: 'event', service: 's', topic: 't', payload: { n: 1 } }),
+              ),
+            ),
+          );
+        }
         if (reply === 'rejected')
           socket.end(frame(Buffer.from(JSON.stringify({ type: 'rejected', reason: '沒有登記' }))));
       }
@@ -120,7 +137,20 @@ describe('HostClient', () => {
     expect(logs[1]).toBe('[宿主] 連上了');
   });
 
-  it.each<Reply>(['rejected', 'wrong-version', 'garbage'])(
+  it('ready 之後宿主推事件：照樣連著，不重連', async () => {
+    const { path, logs, client } = setup();
+    const host = fakeHost(path, ['hello-then-event']);
+    cleanups.push(host.close);
+    await host.listening;
+    const c = client();
+    expect(await c.waitReady(5_000)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(c.state).toBe('ready');
+    expect(host.connections()).toBe(1);
+    expect(logs).toEqual(['[宿主] 連上了']);
+  });
+
+  it.each<Reply>(['rejected', 'wrong-version', 'garbage', 'result-first'])(
     '宿主回 %s：關掉重連，下一次收下就 ready',
     async (first) => {
       const { path, logs, client } = setup();

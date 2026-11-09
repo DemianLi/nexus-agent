@@ -1674,3 +1674,83 @@ fn an_update_during_a_pending_apply_outlives_its_self_disable() {
         .iter()
         .any(|e| matches!(e, KernelEvent::SelfDisabled { fiber, .. } if *fiber == id)));
 }
+
+/// 用 `expose` 提供的服務，宿主照名字叫得到；`provide` 的叫不到；提供者收掉之後也叫不到。
+mod remote {
+    use super::*;
+    use nexus_sandbox_spawner::kernel::{CallKey, MethodKind, Progress, Remote};
+
+    struct Shout;
+    impl Service for Shout {
+        const NAME: &'static str = "shout";
+    }
+    impl Remote for Shout {
+        fn method(&self, name: &str) -> Option<MethodKind> {
+            (name == "say").then_some(MethodKind::Unary)
+        }
+        fn start(
+            &mut self,
+            _key: CallKey,
+            _method: &str,
+            payload: Value,
+            _now: Instant,
+            _chunks: &mut Vec<Value>,
+        ) -> Progress {
+            Progress::Ok(payload)
+        }
+        fn poll(&mut self, _key: CallKey, _now: Instant, _chunks: &mut Vec<Value>) -> Progress {
+            Progress::Pending
+        }
+        fn cancel(&mut self, _key: CallKey) {}
+    }
+
+    struct Exposer;
+    impl Plugin for Exposer {
+        fn apply(&mut self, cx: &mut Cx<'_>) -> Result<Applied, PluginError> {
+            cx.expose(Shout)?;
+            cx.provide(Counter(1))?;
+            Ok(Applied::Done)
+        }
+    }
+
+    static EXPOSER: Spec = Spec {
+        name: "exposer",
+        inject: &[],
+        required: false,
+        build: |_| Ok(Box::new(Exposer)),
+    };
+
+    #[test]
+    fn only_exposed_services_of_active_providers_are_callable() {
+        let (mut k, t0) = kernel();
+        assert!(k.remote("shout").is_none());
+        let fiber = k.mount(k.root(), &EXPOSER, Value::Null).unwrap();
+        settle(&mut k, t0);
+        let key = CallKey { conn: 1, id: 1 };
+        let (uid, remote) = k.remote("shout").expect("expose 的叫得到");
+        assert_eq!(remote.method("say"), Some(MethodKind::Unary));
+        assert_eq!(remote.method("nope"), None);
+        let mut chunks = Vec::new();
+        assert_eq!(
+            remote.start(key, "say", Value::Int(3), t0, &mut chunks),
+            Progress::Ok(Value::Int(3))
+        );
+        assert!(k.remote("counter").is_none(), "provide 的叫不到");
+        assert!(k.service::<Shout>().is_ok(), "照樣是一般的服務");
+        let mut names = Vec::new();
+        k.for_each_remote(|name, _| names.push(name));
+        assert_eq!(names, ["shout"]);
+
+        k.dispose(fiber).unwrap();
+        settle(&mut k, t0);
+        assert!(k.remote("shout").is_none(), "提供者收掉之後叫不到");
+        let mut names = Vec::new();
+        k.for_each_remote(|name, _| names.push(name));
+        assert!(names.is_empty());
+
+        k.mount(k.root(), &EXPOSER, Value::Null).unwrap();
+        settle(&mut k, t0);
+        let (again, _) = k.remote("shout").unwrap();
+        assert_ne!(again, uid, "重新 provide 是新的實體");
+    }
+}

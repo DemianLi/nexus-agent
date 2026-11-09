@@ -2,7 +2,7 @@
  * 對話行程到宿主的一條連線（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：連上 socket 先送 `hello`（帶監督行程給的 token），
  * 宿主回版本相同的 `hello` 就算 ready。
  *
- * - 宿主不在、拒絕（例如監督行程那一筆身分還沒寫到宿主）、回的版本不同、斷線、送來解不開的框，或 ready 之後又送來任何一框，都關掉這條、隔一段時間重連：第一次等 `backoffMs`，
+ * - 宿主不在、拒絕（例如監督行程那一筆身分還沒寫到宿主）、回的版本不同、斷線、送來解不開的框、`hello` 之前送來別種框，或 ready 之後又送來 `hello`／`rejected`，都關掉這條、隔一段時間重連：第一次等 `backoffMs`，
  *   之後每次加倍到 `backoffMaxMs`；ready 過一次就回到 `backoffMs`。宿主重起之後，監督行程把身分表整張重送，同一個 token 照樣有效。
  * - 一段連不上的期間只記第一次失敗與重新連上，不每次重試都記。
  * - socket 與計時器都 `unref`：這條連線不撐住行程，serve 收尾時不用等它。
@@ -116,7 +116,12 @@ export class HostClient {
         for (const payload of reader.push(chunk)) {
           const message = decodeHostMessage(payload);
           if (this.#state === 'ready') {
-            fail(`ready 之後收到 ${message.type}`);
+            // 這條連線只送 hello：ready 之後的 chunk／result／event 沒有人收，丟掉。
+            if (message.type === 'hello' || message.type === 'rejected') {
+              fail(`ready 之後收到 ${message.type}`);
+            }
+          } else if (message.type !== 'hello' && message.type !== 'rejected') {
+            fail(`hello 之前收到 ${message.type}`);
           } else if (message.type === 'rejected') {
             fail(`宿主拒絕：${message.reason}`);
           } else if (message.version !== PROTOCOL_VERSION) {

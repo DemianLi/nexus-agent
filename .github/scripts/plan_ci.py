@@ -69,7 +69,7 @@ def read_changed(path: str = 'changed.txt') -> list[str]:
 FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 
-# 沙箱 spawner 的 Rust（#1946）在這幾種情況編：動到它、TS 那一側的接縫與 client、CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
+# 沙箱 spawner 的 Rust（#1946）在這幾種情況編：動到它、TS 那一側的接縫與 client（含 `nexus-host-bridge`：per-thread 整合測試的對話行程用它連真的 nexus-host）、CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
 # 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
 # per-thread 行程模型（#2341）在 TS 那一側的檔也算接縫（清單見下面 regex 的最後一行）：sandbox-spawner 那個 job 拿同一個 crate 編出的監督行程
 # 跑 `per-thread.integration.test.ts`。serve.ts 與 wire-handler.ts 刻意不算：這兩支常被碰到（量測：2026-11-07 往前 30 天，origin/develop 上碰
@@ -77,8 +77,9 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 RUST_RE = re.compile(
     r'^native/sandbox-spawner/'
     r'|^packages/nexus-plugin-workspace-changes/src/git\.'
+    r'|^packages/nexus-host-bridge/'
     r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
-    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
+    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|host-client|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
 )
 
 

@@ -537,8 +537,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['packages/nexus-host-bridge/src/protocol.ts']), 'true')
+        self.assertEqual(self.rust(['packages/nexus-host-bridge/package.json']), 'true')
         for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
-                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'peer-socket-auth',
+                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'host-client', 'peer-socket-auth',
                      'forwarded-principal', 'per-thread.integration.test'):
             self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
         # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。

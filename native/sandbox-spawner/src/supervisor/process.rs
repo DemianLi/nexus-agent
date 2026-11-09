@@ -154,6 +154,11 @@ impl Chan {
         self.read.is_none()
     }
 
+    /// 排著還沒寫出去的位元組數。
+    pub fn queued(&self) -> usize {
+        self.outbox.len()
+    }
+
     /// 寫端關了（對方不收，或叫過 `close_write`）。
     pub fn write_closed(&self) -> bool {
         self.write.is_none()
