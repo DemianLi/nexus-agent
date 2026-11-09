@@ -1774,6 +1774,40 @@ describe('產品組裝上的背景子代理', () => {
     }
   });
 
+  it('背景那一輪被中斷之後再收到話：下一輪照樣開跑、叫模型，看得到被中斷前的話', async () => {
+    const run = await assemble([
+      call('spawn_bg', { text: '背景的活', hold: true }),
+      call('hold_bg', {}),
+      { content: '根收尾' },
+      { content: '背景第二輪' },
+    ]);
+    try {
+      const submitted = run.pump.submit({ kind: 'message', text: '派' });
+      await run.startedBg.opened;
+      expect(run.host!.interrupt('bg-1')).toBe(true);
+      run.bgRelease.open();
+      expect(await run.outcome).toMatchObject({ ok: true });
+      run.rootHold.open();
+      await submitted;
+      await run.pump.whenIdle();
+
+      const before = run.model.prompts.length;
+      expect(await run.host!.send({ runId: 'bg-1', message: '再來' })).toEqual({ ok: true });
+      await run.host!.idle();
+      // 第二輪叫到模型，而且看得到第一輪的話與這一句。
+      expect(run.model.prompts).toHaveLength(before + 1);
+      expect(humanTexts(run.model.prompts.at(-1)!)).toEqual(
+        expect.arrayContaining(['背景的活', expect.stringContaining('再來')]),
+      );
+      const background = run.pump.sessions.list().find((s) => s.address.kind === 'subagent')!;
+      expect(
+        background.log.events.filter((event) => event.type === 'turn/end').map((e) => e.data),
+      ).toEqual([{ reason: { kind: 'aborted', cause: { kind: 'parent' } } }, {}]);
+    } finally {
+      await run.close();
+    }
+  });
+
   /** 等到條件成立。 */
   async function settleUntil(predicate: () => Promise<boolean>, ms = 5000): Promise<void> {
     const start = Date.now();
