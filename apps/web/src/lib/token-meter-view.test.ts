@@ -390,6 +390,7 @@ describe('其他格式', () => {
     expect(METER_END_LABEL.completed).toBe('完成');
     expect(METER_END_LABEL.interrupted).toBe('意外中斷');
     expect(METER_END_LABEL.blocked).toBe('已擋下（會話已封存）');
+    expect(METER_END_LABEL['max-turns']).toBe('超過步數上限，已停止');
   });
 
   it('依模型、依工具：缺快照的模型寫明不明，超過名額的併成「其他」', () => {

@@ -199,6 +199,7 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
   completed: '完成',
   aborted: '已停止',
   'max-tokens': '輸出上限',
+  'max-turns': '超過步數上限，已停止',
   interrupted: '意外中斷',
   blocked: '已擋下（會話已封存）',
   failed: '失敗',
