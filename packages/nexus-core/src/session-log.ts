@@ -119,7 +119,7 @@ import type { ToolErrorInfo } from './tool-error-codes.js';
  * pre-step 提交）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
  *
  * `tool/call`／`tool/result` 生產者同第四種（fold 自己建的 middleware），而且就是**圍堵那一顆**
- * （{@link ./containment.ts | createContainmentMiddleware}）：只有第 0 格同時看得到內層拋出的
+ * （{@link ./containment.ts | createContainmentMiddleware}；例外見下面 pump 那段）：只有第 0 格同時看得到內層拋出的
  * 錯與內層回的錯誤訊息。「兩條路都產得出來嗎」同 `model/usage`：它就是那一份組裝本身，而
  * 工具結果在兩條路上都是一則完整的 ToolMessage，檔頭那條「顆粒度對不齊」在這裡沒有指涉對象。
  * 跟 `model/usage` 一樣寫得進 subagent 那份。見 [#264](https://github.com/DemianLi/nexus-agent/issues/264)。
@@ -128,11 +128,11 @@ import type { ToolErrorInfo } from './tool-error-codes.js';
  * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  *
- * **`tool/result` 有第二個寫者：web 的 pump**，兩種情況。一輪失敗時替沒配到結果的呼叫補結（#2029，`#closeUnansweredCalls`）；以及停在核准點時被人中止
+ * **`tool/result` 有第二個寫者：web 的 pump**，收回時也補 `tool/call`，兩種情況。一輪失敗時替沒配到結果的呼叫補結（#2029，`#closeUnansweredCalls`）；以及停在核准點時被人中止
  * （停止鍵、暫停目標、封存時一起停下工作），那幾顆等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。收回時沒有 run 在跑，
  * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
- * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
- * `tool/call`。
+ * （`ABORTED_BEFORE_DISPATCH`；已經起跑的委派那顆是 `ABORTED`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
+ * `tool/call`；同一批排在核准那顆後面、還沒起跑的呼叫沒有 `tool/call`，由 pump 在結果前面先補一顆。
  *
  * `feedback/*` 三顆**沒有帶來新的生產者，帶來的是新的觸發者：人在事後按的**，只寫 root 那一份。
  * `feedback/record` 兩個寫者各走一條舊路：`/feedback` 走 `goal/change` 那條（經 `registry.sessions`
@@ -211,7 +211,7 @@ export type TurnAbortCause =
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
  * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
- *   **還沒有生產者**（寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）；讀盤驗證、對話史與軌跡、
+ *   寫它的只有 native 下的背景子代理（撞到規格的 `maxTurns`，`apps/harness/src/background-subagents.ts`）；讀盤驗證、對話史與軌跡、
  *   token-meter 的 `endOf` 都認得它。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。

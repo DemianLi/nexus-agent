@@ -93,7 +93,22 @@ export interface NativeAgentParams {
    * `agent/pre-step` 與 `agent/turn-stopping`。
    */
   readonly background?: boolean;
+  /**
+   * 子代理（前景、背景）一次 run 最多叫幾次模型。到了就在下一次叫模型之前收尾：不合成訊息、`afterAgent` 不跑，經
+   * {@link RUN_STOP_CONFIG_KEY} 告訴呼叫端。算的是這次 run 裡成功回來的模型呼叫，重試成功只算一次；`afterAgent` 跳回模型的那一次
+   * 不受上限擋。root 不收（建構時拋），root 的上限是步數上限。
+   */
+  readonly maxTurns?: number;
 }
+
+/** 一次 run 不是自己走完、而是被 agent 收掉的理由；`max-turns` 是撞到 {@link NativeAgentParams.maxTurns}。 */
+export type RunStopReason = { readonly kind: 'max-turns'; readonly limit: number };
+
+/**
+ * 呼叫端放在 `configurable` 上、接 {@link RunStopReason} 的回呼的鍵。只給這一次 run：不往節點的 config 傳，工具裡叫起的子代理拿不到。
+ * 撞上限時在這次 run 交回之前同步叫，至多一次。
+ */
+export const RUN_STOP_CONFIG_KEY = 'nexus_run_stop';
 
 /** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
 interface LoopDefaults {
@@ -116,6 +131,13 @@ const DEFAULT_RECURSION_LIMIT = 25;
 
 /** 沒給 `maxConcurrency` 時同一步的工具全部一起起跑，同 LangGraph。 */
 const UNBOUNDED = Number.POSITIVE_INFINITY;
+
+/**
+ * 每個帶 `ToolWaits` 的工具步跑的期間登記一個：把這一步已經收完的寫入套進 state。鍵是那一步的 `ToolWaits`。
+ * 只有 root 那一步（鍵是 `RunSuspension`）會被 {@link NativeAgent.discardSuspended} 在 `withdraw()` 之前同步叫；
+ * 前景子代理那一層（鍵是 `Delegation`）只登記，不會被叫。叫一次就退掉；那一步結束時也退掉。
+ */
+const settledWrites = new WeakMap<object, () => void>();
 
 /** 一次 run 收到的輸入。 */
 type LoopInput =
@@ -509,6 +531,9 @@ export class NativeAgent {
     defaults: LoopDefaults = {},
     parked = new Map<string, RunLink>(),
   ) {
+    if (params.maxTurns !== undefined && params.subagent !== true && params.background !== true) {
+      throw new Error('native agent loop：maxTurns 只給子代理，root 的上限是步數上限');
+    }
     this.#params = params;
     this.#threads = threads;
     this.#parked = parked;
@@ -734,8 +759,9 @@ export class NativeAgent {
   }
 
   /**
-   * 收回這條 thread 停在等待點的那次 run：每一顆還沒答的提問以 `HumanInputWithdrawn` 拒絕，run 照控制流退出，**不發協定事件、不改 state**。
-   * 日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
+   * 收回這條 thread 停在等待點的那次 run：先把 root 那一步**已經收完**的呼叫寫入同步套進 state（同 LangGraph 存檔點上已經有的那幾顆），
+   * 沒收完的寫入，以及前景子代理那一層的寫入，都丟掉；再以 `HumanInputWithdrawn` 拒絕每一顆還沒答的提問，run 照控制流退出。不發協定事件。
+   * 等核准那幾顆的日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
    * @param config - 帶 `configurable.thread_id`。
    */
   discardSuspended(config: RunnableConfig): void {
@@ -743,6 +769,7 @@ export class NativeAgent {
     const link = this.#parked.get(threadId);
     if (link === undefined) return;
     this.#parked.delete(threadId);
+    settledWrites.get(link.suspension)?.();
     link.suspension.withdraw();
   }
 
@@ -943,11 +970,18 @@ export class NativeAgent {
 
     let step = 0;
     let skipBeforeModel = false;
+    const { maxTurns } = this.#params;
+    let modelCalls = 0;
     for (;;) {
       if (exiting) {
         exiting = false;
       } else {
         if (!skipBeforeModel) {
+          // 撞上限同 `beforeModel` 跳 `end`：直接到 END，`afterAgent` 不跑。
+          if (maxTurns !== undefined && modelCalls >= maxTurns) {
+            runStopOf(config)?.({ kind: 'max-turns', limit: maxTurns });
+            return state;
+          }
           step += 1;
           const payload: AgentStepPayload = { threadId, step, signal };
           const decision =
@@ -976,6 +1010,7 @@ export class NativeAgent {
 
         budget.take();
         const ai = await this.#modelStep(state, threadId, step, signal, node, note);
+        if (ai !== undefined) modelCalls += 1;
         const calls = ai === undefined ? [] : liveToolCalls(ai);
         let concluded = calls.length === 0;
         if (!concluded && ai !== undefined) {
@@ -1165,6 +1200,13 @@ export class NativeAgent {
       step,
     );
     const batch = suspension?.away === undefined ? running : suspension.away(running);
+    if (suspension !== undefined) {
+      const apply = (): void => {
+        settledWrites.delete(suspension);
+        commit(false);
+      };
+      settledWrites.set(suspension, apply);
+    }
     try {
       if (caller === undefined) await batch;
       else {
@@ -1172,12 +1214,15 @@ export class NativeAgent {
         await raceAbort(batch, caller);
       }
     } catch (error) {
-      // 收回了停在等待點的 run：這一步的寫入一律不套。日誌與對話由收回的那一方決定寫不寫：按停止時 pump 的 `#withdraw` 寫，收線（`close()`）不寫。
+      // `withdrawn` 為真時這一步的寫入不在這裡套：經 `discardSuspended` 收回的，root 那一步收完的寫入已在收回那一刻套過；
+      // 卡死判定（`suspension.ts` 的 `#maybePark`）與前景子代理那一層，收完的寫入也丟掉。
       if (suspension?.withdrawn === true) throw error;
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
       commit(!(caller?.aborted ?? false));
       throw error;
+    } finally {
+      if (suspension !== undefined) settledWrites.delete(suspension);
     }
     commit(true);
     const last = state.messages.at(-1);
@@ -1215,7 +1260,7 @@ export class NativeAgent {
       ...(maxConcurrency !== undefined && { maxConcurrency }),
       callbacks,
       configurable: {
-        ...config.configurable,
+        ...withoutKey(config.configurable, RUN_STOP_CONFIG_KEY),
         ...(emitter !== undefined && { [PROTOCOL_EMITTER_CONFIG_KEY]: emitter }),
       },
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
@@ -1240,6 +1285,21 @@ const RUN_OPTION_KEYS = [
   'subgraphs',
   'encoding',
 ] as const;
+
+function withoutKey(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (record === undefined || !(key in record)) return record;
+  const { [key]: _dropped, ...rest } = record;
+  return rest;
+}
+
+/** 呼叫端放的 {@link RUN_STOP_CONFIG_KEY} 回呼；沒放或不是函式就沒有。 */
+function runStopOf(config: RunnableConfig): ((reason: RunStopReason) => void) | undefined {
+  const value: unknown = config.configurable?.[RUN_STOP_CONFIG_KEY];
+  return typeof value === 'function' ? (value as (reason: RunStopReason) => void) : undefined;
+}
 
 function withoutRunOptions(config: RunnableConfig): RunnableConfig {
   const rest: Record<string, unknown> = { ...config };

@@ -55,7 +55,7 @@ import {
 import type { AgentCheckpointer } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { createNativeAgent } from './native-loop/agent.js';
-import type { FoldedAgentParams } from './fold.js';
+import { nativeMaxTurns, type FoldedAgentParams } from './fold.js';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
 import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
@@ -211,6 +211,7 @@ export function compileSubagentGraph(
       tools,
       middleware,
       ...(options.events !== undefined && { events: options.events }),
+      ...nativeMaxTurns(declarative),
       background: true,
     }) as unknown as SubagentGraph;
   }
