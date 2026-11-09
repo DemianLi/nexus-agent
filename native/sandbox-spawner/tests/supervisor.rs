@@ -990,7 +990,7 @@ fn ensure_while_waiting_for_the_drain_answer_gets_up_when_it_stays() {
     h.ensure("b");
     assert!(saw_drain(&a));
     h.ensure("a,idle:1000,ignore-drain");
-    let mut events = vec![h.event(), h.event()];
+    let mut events = [h.event(), h.event()];
     events.sort_by_key(|e| matches!(e, FrontEvent::Capacity { .. }));
     assert_eq!(events[0], FrontEvent::Up { thread_id: b"a,idle:1000,ignore-drain".to_vec(), socket: a.to_str().unwrap().as_bytes().to_vec() });
     assert_eq!(events[1], capacity("b", 1, 1));

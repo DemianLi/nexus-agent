@@ -430,14 +430,14 @@ impl Spawner {
             return Err((FailKind::SandboxUnavailable, libc::ENOSYS, "Landlock 不能用（核心不支援或沒開）".to_string()));
         }
         let devnull = c"/dev/null";
-        for i in 0..3 {
-            if fds[i] < 0 {
+        for slot in fds.iter_mut() {
+            if *slot < 0 {
                 // SAFETY：開 /dev/null 放進 fds，不論成敗都由呼叫端的 close_all 關掉。
                 let fd = unsafe { libc::open(devnull.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
                 if fd < 0 {
                     return Err((FailKind::Resource, errno(), "open /dev/null".to_string()));
                 }
-                fds[i] = fd;
+                *slot = fd;
             }
         }
         let mut status = [-1; 2];

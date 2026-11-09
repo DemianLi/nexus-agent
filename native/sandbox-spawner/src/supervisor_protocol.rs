@@ -499,7 +499,7 @@ mod tests {
     fn vectors(group: &str) -> Vec<Vec<u8>> {
         let start = VECTORS.find(&format!("\"{group}\"")).unwrap();
         let section = &VECTORS[start..];
-        let section = &section[..section.find(']').map_or(section.len(), |end| end)];
+        let section = &section[..section.find(']').unwrap_or(section.len())];
         section
             .split("\"hex\": \"")
             .skip(1)
@@ -650,7 +650,9 @@ mod tests {
         }
     }
 
-    const DECODERS: [(&str, fn(&[u8]) -> bool); 6] = [
+    type Accepts = fn(&[u8]) -> bool;
+
+    const DECODERS: [(&str, Accepts); 6] = [
         ("conversationCommands", |b| decode_conversation_command(b).is_ok()),
         ("conversationReports", |b| decode_conversation_report(b).is_ok()),
         ("frontRequests", |b| decode_front_request(b).is_ok()),
@@ -715,7 +717,8 @@ mod tests {
                 assert_eq!(encode(&value), bytes, "{bytes:02x?}");
             }
         }
-        let codecs: [(&str, fn(&[u8])); 6] = [
+        type Run = fn(&[u8]);
+        let codecs: [(&str, Run); 6] = [
             ("conversationCommands", |b| roundtrip(b, decode_conversation_command, encode_conversation_command)),
             ("conversationReports", |b| roundtrip(b, decode_conversation_report, encode_conversation_report)),
             ("frontRequests", |b| roundtrip(b, decode_front_request, encode_front_request)),
