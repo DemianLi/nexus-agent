@@ -330,7 +330,7 @@ export interface PumpAgent {
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
   /**
-   * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件、不改 state。
+   * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件；停住那一步已經收完的呼叫寫入同步套進 state，等核准那幾顆的不寫。
    * 只有停在中斷時 JS 呼叫沒結束的 loop 有這一支；LangGraph 的中斷當場收掉那次 run，沒有東西可收。
    */
   discardSuspended?(config: ThreadConfig): void;
@@ -1214,7 +1214,7 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 停在核准點時是那幾顆等核准的，加上同一批排在後面、還沒起跑的呼叫（見 {@link loggedCallIds}）。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
  * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
 function danglingToolCalls(
@@ -2352,11 +2352,11 @@ export class ThreadPump {
   }
 
   /**
-   * 把停在核准點的那幾顆等核准的呼叫收回（#265 的 Q7，日誌形狀是 Q15），由 {@link ThreadPump.#withdrawPending} 排進來。
+   * 把停在核准點的那幾顆等核准的呼叫、連同同一批排在後面還沒起跑的呼叫收回（#265 的 Q7，日誌形狀是 Q15），由 {@link ThreadPump.#withdrawPending} 排進來。
    *
    * 那時沒有 run 在跑，圍堵看不到它們，所以日誌由這裡寫：**一輪 `resume`**（那張核准卡被回覆了，
    * 回覆的內容是「停」）→ 每一顆懸著的呼叫一個 `tool/result` → `turn/end` 帶 aborted。同一批排在核准那顆後面、
-   * 還沒起跑的呼叫沒有 `tool/call`，先補一顆再寫結果（同 dsh `tools/src/batch.ts` 的 `skip()`）。不變量的配對
+   * 還沒起跑的呼叫沒有 `tool/call`，先補一顆再寫結果。不變量的配對
    * 成立，那顆中斷也就算答了（日誌上「答了」的樣子本來就是下一顆 `resume`）。
    *
    * 對話那一側也由這裡寫：每一顆一則 dsh 原字串的錯誤 ToolMessage。**不讓基座補**——
@@ -2388,7 +2388,6 @@ export class ThreadPump {
         }),
       );
       for (const [index, call] of dangling.entries()) {
-        // 還沒起跑的先記 `tool/call`，結果才有配對。
         if (!logged.has(call.id)) {
           log.append('tool/call', {
             callId: call.id,

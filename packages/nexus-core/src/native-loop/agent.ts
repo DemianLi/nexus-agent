@@ -118,8 +118,9 @@ const DEFAULT_RECURSION_LIMIT = 25;
 const UNBOUNDED = Number.POSITIVE_INFINITY;
 
 /**
- * 停在等待點的那一步：把已經收完的寫入套進 state。鍵是那一步的等人服務，{@link NativeAgent.discardSuspended} 收回之前同步叫，
- * 叫一次就退掉；那一步結束時也退掉。
+ * 每個帶 `ToolWaits` 的工具步跑的期間登記一個：把這一步已經收完的寫入套進 state。鍵是那一步的 `ToolWaits`。
+ * 只有 root 那一步（鍵是 `RunSuspension`）會被 {@link NativeAgent.discardSuspended} 在 `withdraw()` 之前同步叫；
+ * 前景子代理那一層（鍵是 `Delegation`）只登記，不會被叫。叫一次就退掉；那一步結束時也退掉。
  */
 const settledWrites = new WeakMap<object, () => void>();
 
@@ -740,8 +741,8 @@ export class NativeAgent {
   }
 
   /**
-   * 收回這條 thread 停在等待點的那次 run：先把停住的那一步**已經收完**的呼叫寫入同步套進 state（同 LangGraph 存檔點上已經有的那幾顆），
-   * 沒收完的寫入丟掉；再以 `HumanInputWithdrawn` 拒絕每一顆還沒答的提問，run 照控制流退出。不發協定事件。
+   * 收回這條 thread 停在等待點的那次 run：先把 root 那一步**已經收完**的呼叫寫入同步套進 state（同 LangGraph 存檔點上已經有的那幾顆），
+   * 沒收完的寫入，以及前景子代理那一層的寫入，都丟掉；再以 `HumanInputWithdrawn` 拒絕每一顆還沒答的提問，run 照控制流退出。不發協定事件。
    * 等核准那幾顆的日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
    * @param config - 帶 `configurable.thread_id`。
    */
@@ -1187,7 +1188,8 @@ export class NativeAgent {
         await raceAbort(batch, caller);
       }
     } catch (error) {
-      // 收回了停在等待點的 run：收完的寫入已經在收回那一刻套過（`discardSuspended`），這裡不再套。
+      // `withdrawn` 為真時這一步的寫入不在這裡套：經 `discardSuspended` 收回的，root 那一步收完的寫入已在收回那一刻套過；
+      // 卡死判定（`suspension.ts` 的 `#maybePark`）與前景子代理那一層，收完的寫入也丟掉。
       if (suspension?.withdrawn === true) throw error;
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。

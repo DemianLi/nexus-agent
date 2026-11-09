@@ -150,7 +150,7 @@ function namesOf(events: readonly SessionEvent[]): Map<string, string> {
   return names;
 }
 
-/** 每顆呼叫記了幾筆 `tool/result`，鍵是工具名。 */
+/** 每個工具名記了幾筆 `tool/result`（同名加總）；配不到 `tool/call` 的算在 `(沒有 tool/call)`，孤兒結果會讓等式不成立。 */
 function resultCounts(events: readonly SessionEvent[]): Record<string, number> {
   const names = namesOf(events);
   const counts: Record<string, number> = {};
@@ -281,7 +281,7 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
 
     expect(run.ran.other).toBe(0);
     await expectOneResultEach(run);
-    // 沒收完的那顆不套任何寫入，對話裡只有收回寫的那一則。
+    // 還沒起跑的那顆沒有寫入可套，對話裡只有收回寫的那一則。
     expect(await otherReply(run)).toBe('Error: tool call aborted before dispatch');
     // 收回那一輪裡，它的 `tool/call` 緊接在它的結果前面。
     const resumed = run.log().findLastIndex((event) => event.type === 'turn/start');
