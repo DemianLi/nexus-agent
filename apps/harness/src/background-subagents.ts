@@ -1634,8 +1634,9 @@ export class BackgroundSubagentHost {
 
   async #drive(log: SessionLog, job: Job, round: RunningRound): Promise<void> {
     const cancel = round.controller.signal;
-    // `maxTurns` 是一次執行的上限，每一輪重算。run 層的計數在 state 上、存檔點會存，歸零只在 `afterAgent`；撞上限那條路跳過
-    // `afterAgent`，不在這裡歸零的話，撞過一次之後每一輪一開頭就收掉。thread 層的計數照累計。沒掛上限那一格的圖不認這一鍵、照丟。
+    // `maxTurns` 是一次執行的上限，每一輪重算。run 層的計數跨輪留在這條 thread 的 state 上，中介層只在 `afterAgent` 歸零；撞上限從
+    // `beforeModel` 直跳 END、不經 `afterAgent`，不在這裡歸零的話，撞過一次之後每一輪一開頭就收掉。thread 層的計數照累計。
+    // 沒掛上限那一格的圖不認這一鍵、照丟。
     let input: unknown = { messages: [new HumanMessage(job.text)], runModelCallCount: 0 };
     // 上一輪停在沒答完的反問上（被中止、代答到上限）：先收回，這一輪才開得起來。
     this.#agentFor(job.subagent, job.choice).discardSuspended?.({
