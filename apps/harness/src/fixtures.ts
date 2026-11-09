@@ -32,7 +32,6 @@ import { CHANNEL_SERVICE, createHostServicesPlugin, createRegistry } from '@nexu
 import type { NexusPlugin } from '@nexus/core';
 import { mountPlanMode, planModeConfigSchema } from '@nexus/plugin-plan-mode';
 import type { PlanModeConfig } from '@nexus/plugin-plan-mode';
-import { planModeModelCallPlugin } from '@nexus/plugin-plan-mode/model-call';
 import { runThreadSources } from '@nexus/tool-adapter';
 import type { ToolThreadSource } from '@nexus/tools';
 import { StateBackend } from 'deepagents';
@@ -565,14 +564,13 @@ export const TEST_PLAN_GUIDANCE =
   '【測試用計劃指引】現在在計劃模式，先探索與設計，不要動手改東西。';
 
 /**
- * plan-mode 的相容層外殼：一個條目同時掛樹上那一半（`mountPlanMode`，經 `runThreadSources` 接上這條 thread）與相容層那一格
- * （`plan-mode-model-call`），給還在相容層手搭組裝的測試用。宿主那幾格照相容層的 registry 接。
+ * plan-mode 的相容層外殼：一個條目掛 `mountPlanMode`，逐條 thread 的那一半經 `runThreadSources` 接上這條 thread，給還在相容層手搭組裝的
+ * 測試用。宿主那幾格照相容層的 registry 接。
  */
 const planModeShell: NexusPlugin<PlanModeConfig> = {
   name: 'plan-mode',
   Config: planModeConfigSchema,
   async apply(registry, config) {
-    planModeModelCallPlugin.apply(registry, undefined);
     const sources: ToolThreadSource[] = [];
     mountPlanMode(
       {

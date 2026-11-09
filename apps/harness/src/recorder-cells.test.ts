@@ -41,14 +41,14 @@ const CELLS = [
  * 會改請求或回覆、這裡的組裝（`live: false`）上 root 會掛、這裡要檢查登記的格（摘要器另由 core 的 `summarizer-cell.test.ts`
  * 數）。換模型與圖片省略只在 `live` 時掛，影子比對與從日誌推要歷史來源是 `shadow` 或 `log`（`--history-source` 或
  * `#settings/history-source` 那一列，出廠是 `state`）；這四格與這裡前三格的次數與路徑由 core 的
- * `native-loop/mutator-cells.test.ts` 數。計劃模式在 plugin 套件，core 數不到，只有 `nexus-plugin-plan-mode` 的
- * `index.test.ts` 比對兩支交出的請求。
+ * `native-loop/mutator-cells.test.ts` 數。補回 `name` 那一格只在工具清單有 `returnDirect` 工具時掛（出貨有 `exit_plan_mode`），
+ * 兩支交出的請求由 core 的 `tool-name-restore.test.ts` 比對。
  */
 const MUTATOR_CELLS = [
   'nexusInvalidToolArgs',
   'nexusMaxTokens',
   'patchToolCallsMiddleware',
-  'nexusPlanMode',
+  'nexusToolNameRestore',
 ];
 
 const worker: PluginEntry = {
@@ -183,7 +183,7 @@ describe('出貨組裝上登記成環繞步的格', () => {
         .withConfig({})
         .invoke({ messages: [new HumanMessage('動手')] }, { configurable: { thread_id: 'order' } });
       expect(entered).toEqual(registered.map((m) => m.name));
-      expect(entered).toEqual(expect.arrayContaining(['nexusTurnCancel', 'nexusPlanMode']));
+      expect(entered).toEqual(expect.arrayContaining(['nexusTurnCancel', 'nexusToolNameRestore']));
     } finally {
       detach();
       await built.dispose();

@@ -92,10 +92,8 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
  * 兩份都是封閉清單：掃到的檔多一個或少一個都紅。
  */
 const PLAN_MODE_SRC = 'packages/nexus-plugin-plan-mode/src';
-/** 封閉的單一例外：留在相容層的那一格，檔 → 撤除它的卡。 */
-const PLAN_MODE_COMPAT_EXCEPTIONS: Readonly<Record<string, string>> = {
-  'model-call-cell.ts': '#2358',
-};
+/** 封閉的例外：留在相容層的那一格，檔 → 撤除它的卡。#2358 把唯一的那一格搬上樹之後是空的，再長出來就紅。 */
+const PLAN_MODE_COMPAT_EXCEPTIONS: Readonly<Record<string, string>> = {};
 /** 相容層的配套入口（`plan-mode-invariant` 那一列）。 */
 const PLAN_MODE_COMPANIONS: readonly string[] = ['invariant.ts'];
 
@@ -151,15 +149,15 @@ function compatImportersIn(dir: string): Record<string, string[]> {
 }
 
 describe('plan-mode 還留在相容層的 import 是封閉清單（#2551）', () => {
-  it('掃到的檔正好是例外的那一格與配套入口，多一個或少一個都紅', () => {
+  it('掃到的檔正好是配套入口，多一個或少一個都紅', () => {
     const importers = compatImportersIn(join(ROOT, PLAN_MODE_SRC));
     expect(Object.keys(importers).sort()).toEqual(
       [...Object.keys(PLAN_MODE_COMPAT_EXCEPTIONS), ...PLAN_MODE_COMPANIONS].sort(),
     );
   });
 
-  it('例外只有一格，指到 #2358；產品入口 index.ts 不在裡面', () => {
-    expect(PLAN_MODE_COMPAT_EXCEPTIONS).toEqual({ 'model-call-cell.ts': '#2358' });
+  it('沒有例外；產品入口 index.ts 不在裡面', () => {
+    expect(PLAN_MODE_COMPAT_EXCEPTIONS).toEqual({});
     expect(PLAN_MODE_COMPANIONS).toEqual(['invariant.ts']);
     expect(compatImportersIn(join(ROOT, PLAN_MODE_SRC))['index.ts']).toBeUndefined();
   });

@@ -16,7 +16,13 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { admittedTools, createToolListStepMiddleware, WORKSPACE_CAPABILITY } from '@nexus/core';
 import type { Disposer, Events, NexusPlugin, RegisterOptions } from '@nexus/core';
 import { langChainToolOf } from './index.js';
-import type { ToolExecuteOutcome, ToolThread, ToolThreadSource } from '@nexus/tools';
+import type {
+  ToolExecuteListener,
+  ToolExecuteOutcome,
+  ToolPreStepListener,
+  ToolThread,
+  ToolThreadSource,
+} from '@nexus/tools';
 
 type Registry = Parameters<NexusPlugin<unknown>['apply']>[0];
 
@@ -118,13 +124,29 @@ export async function runThreadSources(
             : section,
         );
       },
-      on(event, listener) {
+      on(event: 'tools/execute' | 'agent/pre-step', listener: unknown) {
         live('on');
+        if (event === 'agent/pre-step') {
+          const preStep = listener as ToolPreStepListener;
+          // 回傳值不往外交：插件改不了這一步、也擋不下這一輪，`reject` 只開放給宿主自己的監聽者。拋錯照樣往外拋，同 `tools/execute`。
+          const bridged: Events['agent/pre-step'] = async (payload, next) => {
+            await preStep({
+              threadId: payload.threadId,
+              step: payload.step,
+              signal: payload.signal,
+            });
+            return next();
+          };
+          return registry.events.on('agent/pre-step', bridged);
+        }
         if (event !== 'tools/execute')
-          throw new TypeError(`thread.on() 只收 'tools/execute'，收到 ${String(event)}`);
+          throw new TypeError(
+            `thread.on() 只收 'tools/execute' 與 'agent/pre-step'，收到 ${String(event)}`,
+          );
+        const execute = listener as ToolExecuteListener;
         // `ToolExecuteOutcome` 只是型別上的不透明殼，執行期就是管線的結果，原樣往內交、原樣往外交。
         const bridged: Events['tools/execute'] = (exec, next) =>
-          listener(
+          execute(
             exec,
             next as unknown as () => Promise<ToolExecuteOutcome>,
           ) as unknown as ReturnType<Events['tools/execute']>;

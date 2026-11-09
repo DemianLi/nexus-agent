@@ -120,7 +120,7 @@ describe('ToolThread.on／join／provide 的範圍', () => {
     );
   }
 
-  it("on 只收 'tools/execute'、provide 只收 'workspace'：別的值拋 TypeError", async () => {
+  it("on 只收 'tools/execute' 與 'agent/pre-step'、provide 只收 'workspace'：別的值拋 TypeError", async () => {
     const offEvent = await rejectionOf((thread) => {
       (thread.on as (event: string, listener: unknown) => unknown)('tools/result', () => {});
     });
@@ -210,6 +210,91 @@ describe('ToolThread.on／join／provide 撤得掉', () => {
     await loaded.dispose();
     expect(loaded.registry.dispatch.count('tools/execute')).toBe(0);
     await loaded.registry.dispatch.waterfall('tools/execute', EXEC, () => Promise.resolve(INNER));
+    expect(calls).toBe(0);
+  });
+});
+
+describe("ToolThread.on('agent/pre-step')（2.11.0）", () => {
+  const SIGNAL = new AbortController().signal;
+  const PAYLOAD = { threadId: 't-1', step: 3, signal: SIGNAL };
+  const CONTINUE = { kind: 'continue' } as const;
+
+  it('拿到 thread、步數、中止訊號；等它做完才往內交；排在前後兩列之間', async () => {
+    const order: string[] = [];
+    let seen: unknown;
+    const { registry } = await loadPlugins([
+      plugin(
+        'a',
+        (r) => void r.events.on('agent/pre-step', (_p, next) => (order.push('a'), next())),
+      ),
+      viaThread('b', (thread) => {
+        thread.on?.('agent/pre-step', async (step) => {
+          seen = step;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          order.push('b');
+        });
+      }),
+      plugin(
+        'c',
+        (r) => void r.events.on('agent/pre-step', (_p, next) => (order.push('c'), next())),
+      ),
+    ]);
+    const decision = await registry.dispatch.waterfall('agent/pre-step', PAYLOAD, async () => {
+      order.push('inner');
+      return CONTINUE;
+    });
+    expect(order).toEqual(['a', 'b', 'c', 'inner']);
+    expect(decision).toEqual(CONTINUE);
+    expect(seen).toEqual(PAYLOAD);
+    expect((seen as { signal: AbortSignal }).signal).toBe(SIGNAL);
+  });
+
+  it('回傳值改不了這一步：回什麼都照樣往內交、交出內層的決定', async () => {
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        thread.on?.('agent/pre-step', (() => ({ kind: 'reject', reason: '擋' })) as never);
+      }),
+    ]);
+    let inner = 0;
+    const decision = await registry.dispatch.waterfall('agent/pre-step', PAYLOAD, async () => {
+      inner += 1;
+      return CONTINUE;
+    });
+    expect(inner).toBe(1);
+    expect(decision).toEqual(CONTINUE);
+  });
+
+  it('拋錯同 tools/execute：原樣往外拋，不往內交', async () => {
+    const boom = new Error('pre-step 壞了');
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        thread.on?.('agent/pre-step', () => {
+          throw boom;
+        });
+      }),
+    ]);
+    let inner = 0;
+    await expect(
+      registry.dispatch.waterfall('agent/pre-step', PAYLOAD, async () => {
+        inner += 1;
+        return CONTINUE;
+      }),
+    ).rejects.toBe(boom);
+    expect(inner).toBe(0);
+  });
+
+  it('撤得掉：撤了之後不再被叫', async () => {
+    let calls = 0;
+    let off: (() => void) | undefined;
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        off = thread.on?.('agent/pre-step', () => {
+          calls += 1;
+        });
+      }),
+    ]);
+    off?.();
+    await registry.dispatch.waterfall('agent/pre-step', PAYLOAD, async () => CONTINUE);
     expect(calls).toBe(0);
   });
 });

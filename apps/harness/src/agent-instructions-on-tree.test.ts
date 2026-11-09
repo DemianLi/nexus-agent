@@ -781,6 +781,16 @@ const withPromptSections = (chain: readonly string[]): string[] =>
   });
 
 /**
+ * 計劃模式改聽 `agent/pre-step`（#2358），樹上不再佔 stack 的格子：`nexusPlanMode` 那一格換成 core 的兩格——`plugins.prepended`
+ * 裡、langgraph 下有 `agent/pre-step` 監聽者才派的 `nexusPreStep`，與補回 `concludesTurn` 工具結果 `name` 的 `nexusToolNameRestore`。
+ * 同上，只在這裡換這一格。
+ */
+const withPlanModeOnPreStep = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'nexusPlanMode' ? ['nexusPreStep', 'nexusToolNameRestore'] : [name],
+  );
+
+/**
  * 先讀後改、檔案工具的失敗標成錯誤、搜尋上限的開槽與輸出校驗是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的
  * （#2416、#2575），沙箱政策委派時拍快照是插件掛在匯流排上的 `tools/execute` 監聽者（#2416；出貨清單沒有 `fsContainment`，連它都不掛）：
  * 都不佔 stack 的格子，鏈上**恰好少這五格**，
@@ -810,8 +820,10 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
     });
     try {
       expect(middlewareNames(agent)).toEqual(
-        withToolListeners(
-          withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
+        withPlanModeOnPreStep(
+          withToolListeners(
+            withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
+          ),
         ),
       );
     } finally {
@@ -831,9 +843,11 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       });
       try {
         expect(middlewareNames(thread.built.agent)).toEqual(
-          withToolListeners(
-            withPromptSections(
-              withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+          withPlanModeOnPreStep(
+            withToolListeners(
+              withPromptSections(
+                withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+              ),
             ),
           ),
         );

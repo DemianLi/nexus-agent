@@ -203,8 +203,6 @@ describe('一次性模式', () => {
       // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
       'skills',
       'plan-mode',
-      // plan-mode 留在相容層的那一格（#2551，撤除見 #2358）：緊接在 `plan-mode` 之後、跟著它開關，不算另一顆功能。
-      'plan-mode-model-call',
       'goal',
       'todo',
       'feedback',

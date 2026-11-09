@@ -644,6 +644,32 @@ function withRenames(baseline: Registration): Registration {
   };
 }
 
+/**
+ * 計劃模式改聽 `agent/pre-step`（#2358）之後，四樣順序跟對照組不同的地方，**只有這兩處**：
+ *
+ * - listeners 多一位 `plan-mode` 的 `agent/pre-step`（交出排著的待關）；
+ * - middleware 上 `nexusPlanMode` 那一格不在了，換成 core 的 `nexusPreStep`（langgraph 下有 `agent/pre-step` 監聽者才掛）與
+ *   `nexusToolNameRestore`（補回 `concludesTurn` 工具結果的 `name`）。
+ */
+function withPreStepHandoff(baseline: Registration, loop: string): Registration {
+  const at = baseline.middleware.indexOf('nexusPlanMode');
+  expect(at, '對照組上 nexusPlanMode 那一格').toBeGreaterThanOrEqual(0);
+  const replacement =
+    loop === 'langgraph' ? ['nexusPreStep', 'nexusToolNameRestore'] : ['nexusToolNameRestore'];
+  return {
+    ...baseline,
+    listeners: [
+      { event: 'agent/pre-step', origin: 'plan-mode｜plan-mode', prepend: false },
+      ...baseline.listeners,
+    ],
+    middleware: [
+      ...baseline.middleware.slice(0, at),
+      ...replacement,
+      ...baseline.middleware.slice(at + 1),
+    ],
+  };
+}
+
 const isPlanMode = (origin: string): boolean => origin.startsWith('plan-mode｜');
 
 /**
@@ -743,7 +769,7 @@ it(
     if (only === undefined) expect(Object.keys(now)).toEqual(Object.keys(baseline));
     for (const key of Object.keys(now)) {
       const expected = key.startsWith('順序｜')
-        ? withRenames(baseline[key] as Registration)
+        ? withPreStepHandoff(withRenames(baseline[key] as Registration), key.split('｜').at(-1)!)
         : withKnownDifferences(key, baseline[key]);
       expect(now[key], key).toEqual(expected);
     }
@@ -760,11 +786,11 @@ it(
 );
 
 /**
- * 兩列共用同一份模組狀態（#2551）：樹上那一列排的待關，相容層那一格交得出去。兩列各拿一份 `plan-mode-state.js` 的話，同意之後
+ * 退出工具排的待關，在下一步開頭由同一列的 `agent/pre-step` 監聽者交出（#2358）：兩邊拿到的不是同一份狀態表的話，同意之後
  * root 日誌上不會有 `plan/mode { active: false }`，模式關不掉。出貨清單與 CLI 的樹各量一次。
  */
 it.each(['shipped', 'tree'] as const)(
-  '同意之後模式真的關了：樹上那一半排的待關，相容層那一格看得到（%s）',
+  '同意之後模式真的關了：退出工具排的待關，下一步開頭交得出去（%s）',
   { timeout: 120_000 },
   async (source) => {
     const spec = SCENARIOS.find(([name]) => name === '同意')?.[1];

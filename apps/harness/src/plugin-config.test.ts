@@ -125,15 +125,15 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 61 = 17 個功能 ＋ plan-mode 留在相容層的那一格（`plan-mode-model-call`，#2551）＋ 8 個 core 的條目（5 顆 middleware 設定、關不掉的核准閘門、`session-persistence`、`session-checkpoint-policy`）
+    // 60 = 17 個功能 ＋ 8 個 core 的條目（5 顆 middleware 設定、關不掉的核准閘門、`session-persistence`、`session-checkpoint-policy`）
     // ＋ 27 個 harness 自己的設定條目（`#settings/…`，含 `agent-default-model` 旁那列出貨的腳本提供者 `cli-script`）＋ 8 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個配套入口
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 61。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(61);
+    // 解析、import、而且長得像一顆 plugin，才數得到 60。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(60);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -865,14 +865,12 @@ describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => 
     const { plugins, dropped } = await loadRows(
       "- id: echo\n  name: '@nexus/plugin-echo'\n" +
         "- id: todo\n  name: '@nexus/plugin-todo'\n  config:\n    allowParallelInProgress: '不是布林'\n" +
-        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n  config:\n    guidance: 計劃指引\n" +
-        "- id: plan-model-call\n  name: '@nexus/plugin-plan-mode/model-call'\n",
+        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n  config:\n    guidance: 計劃指引\n",
     );
     expect(plugins.map((entry) => [entry.id, entry.disabled === true])).toEqual([
       ['echo', false],
       ['todo', true],
       ['plan', false],
-      ['plan-model-call', false],
     ]);
     expect(dropped).toEqual([
       {

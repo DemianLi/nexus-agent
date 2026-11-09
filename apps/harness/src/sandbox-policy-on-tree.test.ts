@@ -455,6 +455,32 @@ function withRenames(baseline: Registration): Registration {
 const SANDBOX_POLICY_ID = 'sandbox-policy';
 const isSandboxPolicy = (origin: string): boolean => origin.startsWith(`${SANDBOX_POLICY_ID}｜`);
 
+/**
+ * 計劃模式改聽 `agent/pre-step`（#2358）之後，四樣順序跟對照組不同的地方，**只有這兩處**：
+ *
+ * - listeners 多一位 `plan-mode` 的 `agent/pre-step`（交出排著的待關）；
+ * - middleware 上 `nexusPlanMode` 那一格不在了，換成 core 的 `nexusPreStep`（langgraph 下有 `agent/pre-step` 監聽者才掛）與
+ *   `nexusToolNameRestore`（補回 `concludesTurn` 工具結果的 `name`）。
+ */
+function withPreStepHandoff(baseline: Registration, loop: string): Registration {
+  const at = baseline.middleware.indexOf('nexusPlanMode');
+  expect(at, '對照組上 nexusPlanMode 那一格').toBeGreaterThanOrEqual(0);
+  const replacement =
+    loop === 'langgraph' ? ['nexusPreStep', 'nexusToolNameRestore'] : ['nexusToolNameRestore'];
+  return {
+    ...baseline,
+    listeners: [
+      { event: 'agent/pre-step', origin: 'plan-mode｜plan-mode', prepend: false },
+      ...baseline.listeners,
+    ],
+    middleware: [
+      ...baseline.middleware.slice(0, at),
+      ...replacement,
+      ...baseline.middleware.slice(at + 1),
+    ],
+  };
+}
+
 it(
   'sandbox-policy 那一列的四樣順序與三個情境的日誌位元組，與對照組逐字相同',
   { timeout: 600_000 },
@@ -509,7 +535,7 @@ it(
     if (only === undefined) expect(Object.keys(now)).toEqual(Object.keys(baseline));
     for (const key of Object.keys(now)) {
       const expected = key.startsWith('順序｜')
-        ? withRenames(baseline[key] as Registration)
+        ? withPreStepHandoff(withRenames(baseline[key] as Registration), key.split('｜').at(-1)!)
         : baseline[key];
       expect(now[key], key).toEqual(expected);
     }

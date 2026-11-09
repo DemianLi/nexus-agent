@@ -31,7 +31,7 @@ description: 出貨清單拿掉 `plan-mode-model-call` 那一列，指到它的 
 ## 遷移
 
 1. 找出指到那一列的地方：
-   `grep -n 'plan-mode-model-call\|plugin-plan-mode/model-call' <每一個 --patch 檔>`，以及
+   `grep -nE 'plan-mode-model-call|plugin-plan-mode/model-call' <每一個 --patch 檔>`，以及
    `grep -c '"id":"plan-mode-model-call"' <home>/plugin-journal.jsonl`。
 2. `--patch` 檔裡指到 `plan-mode-model-call` 的條目、`insert` 了 `@nexus/plugin-plan-mode/model-call` 的列，整條刪掉。
    原本要關計劃模式的，改成關 `plan-mode`：在 patch 檔寫 `- id: plan-mode` 配 `disabled: true`，或跑 `plugin disable plan-mode`。

@@ -114,10 +114,6 @@
   name: '@nexus/plugin-plan-mode'
   config:
     guidance: '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。'
-# **plan-mode 留在相容層的那一格**（#2551，歸 #2358）：交出 `exit_plan_mode` 同意之後的待關、送模型之前補回結果的 `name`。
-# 它讀 `plan-mode` 那一列登記的模式，排在 `plan-mode` 正後方。
-- id: plan-mode-model-call
-  name: '@nexus/plugin-plan-mode/model-call'
 
 # **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
 # 一句閒聊。代價一筆：模型側多三顆工具（`create_goal`／`get_goal`／`update_goal`，#177 之後
