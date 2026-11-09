@@ -149,6 +149,8 @@ export function registerModernTools(server: McpServer): void {
   );
 
   // 要問使用者的工具。client 宣告了 elicitation 才會有人回答；沒宣告時，server 端的 SDK 拒絕這一輪、工具呼叫失敗。
+  // 收到 decline／cancel 就收尾、回報 server 收到什麼，不再重問：沒有人可問的 client 每輪都回 decline，client 端又沒有
+  // 輪數上限（#2612），重問的話這顆呼叫要等到工具時限才收尾。
   server.registerTool(
     'ask',
     { description: '要先問使用者一個是非題才做事。', inputSchema: z.object({}) },
@@ -156,6 +158,10 @@ export function registerModernTools(server: McpServer): void {
       const schema = z.object({ confirm: z.boolean() });
       const answer = acceptedContent(ctx.mcpReq.inputResponses, 'confirm', schema);
       if (answer === undefined) {
+        const refused = inputResponse(ctx.mcpReq.inputResponses as never, 'confirm');
+        if (refused.kind === 'elicit' && refused.action !== 'accept') {
+          return { content: [{ type: 'text', text: `server 收到：confirm=${refused.action}` }] };
+        }
         return inputRequired({
           inputRequests: {
             confirm: inputRequired.elicit({ message: ASK_MESSAGE, requestedSchema: schema }),
