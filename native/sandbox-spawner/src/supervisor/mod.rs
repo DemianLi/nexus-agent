@@ -85,7 +85,7 @@ use crate::supervisor_protocol::{
     decode_conversation_report, decode_front_request, decode_host_report,
     encode_conversation_command, encode_front_event, encode_host_command, ConversationCommand,
     ConversationReport, DeathCause, FrontEvent, FrontRequest, HostCommand, HostReport, OpenMode,
-    Role, TurnPhase, DEATH_CAUSES, PROTOCOL_VERSION,
+    Role, TurnPhase, DEATH_CAUSES, HOST_EXIT_CONFIG, PROTOCOL_VERSION,
 };
 use audit::{Audit, Exit, Record};
 use memory::OomCounter;
@@ -1942,7 +1942,7 @@ impl Supervisor {
     fn on_exit(&mut self, pid: libc::pid_t, exit: Exit) {
         if self.host.as_ref().is_some_and(|host| host.proc.pid == pid) {
             let Some(host) = self.host.take() else { return };
-            let config_broken = (!host.ready && exit.code == Some(crate::supervisor_protocol::HOST_EXIT_CONFIG))
+            let config_broken = (!host.ready && exit.code == Some(HOST_EXIT_CONFIG))
                 || host.config_broken.is_some();
             let error = match (&host.config_broken, config_broken) {
                 (Some(reason), _) => Some(format!("宿主設定壞了：{reason}")),

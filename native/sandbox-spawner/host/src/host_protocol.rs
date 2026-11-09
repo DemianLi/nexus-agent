@@ -417,6 +417,7 @@ pub fn hello(token: &str) -> ClientMessage {
 mod tests {
     use super::*;
     use nexus_sandbox_spawner::protocol::take_frame_within;
+    use nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES;
 
     const VECTORS: &str = include_str!("../../host-vectors.json");
 
@@ -469,7 +470,7 @@ mod tests {
         );
         assert_eq!(
             all.get("bufferedFrames").and_then(Value::as_int),
-            Some(nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES as i64)
+            Some(INBOX_FRAMES as i64)
         );
     }
 
