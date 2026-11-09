@@ -1,8 +1,7 @@
 /**
  * native 模型那一串會改請求或回覆的格（#2416）：換模型、子代理跟隨、圖片省略、修工具參數、輸出上限、影子比對、歷史從日誌推、
  * 補懸空呼叫（摘要器也會改請求、也登記了一步，次數另由 `summarizer-cell.test.ts` 數）。每一格登記成一步（`model-call-step.ts`
- * 的 `withModelCallStep`），root 由 native 在模型那一串原位直接呼叫，子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），
- * 經 `wrapModelCall`。
+ * 的 `withModelCallStep`），root 與前景子代理都由 native 在模型那一串原位直接呼叫。
  *
  * 計數做法同 `recorder-cells.test.ts`：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層
  * `AsyncLocalStorage`，沒有那一層就是經 `wrapModelCall`。哪一邊照 state 的第一則訊息分。
@@ -135,10 +134,10 @@ const cellCounts = () =>
 const rootOrder = () =>
   entered.flatMap((line) => (line.startsWith('動手 › ') ? [line.slice('動手 › '.length)] : []));
 
-/** 這一輪預期的計數：root 三次、子代理兩次，`root` 那一邊由 `rootVia` 叫。 */
-function expected(rootVia: Via, historyCell: string) {
-  const root = { native: rootVia === 'native' ? 3 : 0, hook: rootVia === 'hook' ? 3 : 0 };
-  const sub = { native: 0, hook: 2 };
+/** 這一輪預期的計數：root 三次、子代理兩次，兩邊都由 `via` 叫。 */
+function expected(via: Via, historyCell: string) {
+  const root = { native: via === 'native' ? 3 : 0, hook: via === 'hook' ? 3 : 0 };
+  const sub = { native: via === 'native' ? 2 : 0, hook: via === 'hook' ? 2 : 0 };
   return Object.fromEntries(
     [
       ...[...ROOT_ONLY, historyCell].map((cell) => [`${cell} › 動手`, root] as const),
@@ -151,10 +150,10 @@ function expected(rootVia: Via, historyCell: string) {
   );
 }
 
-describe('native 模型那一串改請求或回覆的格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
+describe('native 模型那一串改請求或回覆的格：root 與前景子代理都由 native 原位呼叫', () => {
   for (const history of ['shadow', 'log'] as const) {
     const historyCell = history === 'shadow' ? 'historyShadow' : 'historyFromLog';
-    it(`native（${historyCell}）：root 三次都由 native 直接呼叫，子代理兩次都經 wrapModelCall`, async () => {
+    it(`native（${historyCell}）：root 三次、子代理兩次都由 native 直接呼叫`, async () => {
       const messages = await run('native', history);
       expect(messages.at(-1)?.text).toBe('好了');
       expect(cellCounts()).toEqual(expected('native', historyCell));

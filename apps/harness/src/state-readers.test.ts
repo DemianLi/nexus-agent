@@ -263,6 +263,9 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'packages/nexus-core/src/repeat-reminder.ts › createRepeatReminder 掛鉤的 state 參數': 1,
   // 轉交基座的 skills 中介層；基座在這裡拿 state 讀的是 `skillsMetadata`，不讀訊息（設計 §四 W9）。
   'packages/nexus-core/src/skills-middleware.ts › createSkillsMiddlewareQuietWhenEmpty 掛鉤的 state 參數': 1,
+  // native 子代理 `maxTurns` 的計數存在 state 上，同 `modelCallLimitMiddleware`。TODO(#2359)：隨那一格拿掉。
+  'packages/nexus-core/src/subagent-max-turns.ts › createSubagentMaxTurnsMiddleware request.state': 1,
+  'packages/nexus-core/src/subagent-max-turns.ts › createSubagentMaxTurnsMiddleware 掛鉤的 state 參數': 1,
   // 同 `filesystemToolListStep`：照基座把 state 交給 `resolveBackend` 寫歷史檔（生摘要、溢出重摘共用這一處），給工廠 backend 用；自己不讀（#2416）。
   'packages/nexus-core/src/summarizer-engine.ts › createSummarizerEngine request.state': 1,
   // 環繞工具呼叫的一步拿到的 `state`，自己不讀；只有解不開參數與核准閘門兩步轉給 `toolCallOwner`（#2355）。

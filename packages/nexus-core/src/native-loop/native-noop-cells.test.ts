@@ -1,6 +1,6 @@
 /**
- * native 以空函式取代的格（`native-noop-cells.ts`）：清單是封閉的，這支檔列舉整份，多一條、少一條都紅；往清單加東西要先經過決策。
- * 另外驗它真的生效：同一份組裝、同一則超過 200,000 字的人話，`langgraph` 照基座搬到 `/conversation_history`，native 什麼都不寫。
+ * native 的 root 以空函式取代的格（`native-noop-cells.ts`）：清單是封閉的，這支檔列舉整份，多一條、少一條都紅；往清單加東西要先經過決策。
+ * 另外驗它真的生效：同一份組裝、同一則超過 200,000 字的人話，`langgraph` 照基座搬到 `/conversation_history`，native 的 root 什麼都不寫。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';

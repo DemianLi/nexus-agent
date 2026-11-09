@@ -16,7 +16,7 @@
  *
  * ## 接法
  *
- * - 每一格登記成系統提示那一步（`system-prompt-step.ts`）：native 的 root 原位直接呼叫，`langgraph` 與子代理經 `wrapModelCall`。
+ * - 每一格登記成系統提示那一步（`system-prompt-step.ts`）：native 的 root 與前景子代理原位直接呼叫，`langgraph` 與背景子代理經 `wrapModelCall`。
  * - 每一段各成請求裡的一塊：`SystemMessage.concat(字串)` 在內容是區塊陣列時另開一塊（`@langchain/core` `messages/base.js` 的 `mergeContent`），
  *   開頭是段自己的 `separator`。
  * - 函式型的段每次模型呼叫現算，回 `''` 就這一次不接（先讀後改在沒有寫檔工具時、平行句在這一格看不到 `subagent` 時）。

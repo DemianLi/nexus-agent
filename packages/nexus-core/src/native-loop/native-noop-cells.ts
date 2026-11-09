@@ -1,7 +1,7 @@
 /**
  * native 的 root 以空函式取代的格：封閉清單，一條一條寫理由與決策出處。那一格的節點照留、照扣一格遞迴預算、照吐一筆（空的）
- * update，只是什麼都不做；兩個 loop 的節點序列與遞迴預算因此一致，人話超過門檻時那一筆 update 的內容不同。`langgraph` 與子代理（native 下仍是 LangGraph 子圖，
- * TODO(#2359)）照舊跑基座的實作。
+ * update，只是什麼都不做；兩個 loop 的節點序列與遞迴預算因此一致，人話超過門檻時那一筆 update 的內容不同。`langgraph`、前景子代理
+ * （人話是 `task` 的 description，不經宿主的入口）與背景子代理（native 下仍是 LangGraph 的圖，TODO(#2359)）照舊跑基座的實作。
  *
  * 往清單加一條要先經過決策；`native-noop-cells.test.ts` 列舉整份清單，多一條、少一條都紅。
  *
@@ -55,7 +55,7 @@ export function isNativeNoopCell(middleware: string, part: string): boolean {
 const noop = (): undefined => undefined;
 
 /**
- * native 實際跑的那一份：名字在清單上的，清單上的格換成什麼都不做、回 `undefined` 的函式，其餘照讀原物件；不在清單上的原樣回。
+ * native 的 root 實際跑的那一份：名字在清單上的，清單上的格換成什麼都不做、回 `undefined` 的函式，其餘照讀原物件；不在清單上的原樣回。
  *
  * @param middleware - 組裝好的那一顆。
  * @returns native 要跑的那一份。

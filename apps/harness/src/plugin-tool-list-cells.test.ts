@@ -1,7 +1,6 @@
 /**
  * harness 的兩格在 native 的模型那一串上（#2416）：host-tools、background-delegation 都登記了工具清單那一步（`@nexus/core` 的
- * `withToolListStep`），root 由 native 直接呼叫那一步、不經那顆的 `wrapModelCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），
- * 照舊經 `wrapModelCall`。`langgraph` 兩邊都經 `wrapModelCall`。
+ * `withToolListStep`），root 與前景子代理由 native 直接呼叫那一步、不經那顆的 `wrapModelCall`。`langgraph` 兩邊都經 `wrapModelCall`。
  *
  * 計數掛在登記上：從 `@nexus/core` 登記的每一顆，那一步與那顆的 `wrapModelCall` 各包一個計數。走 `createCliAgent` 的真組裝，跑一輪
  * 「root 叫 `ls` → root 前景委派 `worker` → worker 叫 `ls` → 回答」，數每一格在 root 與子代理的模型呼叫各被叫了幾次。
@@ -154,12 +153,11 @@ describe.each(['native', 'langgraph'] as const)(
       expect(messages.at(-1)?.text).toBe('好了');
       const root =
         loop === 'native' ? { native: 3, wrapModelCall: 0 } : { native: 0, wrapModelCall: 3 };
+      const subagent =
+        loop === 'native' ? { native: 2, wrapModelCall: 0 } : { native: 0, wrapModelCall: 2 };
       for (const cell of CELLS) {
         expect([cell, counts.get(cell)?.get(ROOT)]).toEqual([cell, root]);
-        expect([cell, counts.get(cell)?.get(SUBAGENT)]).toEqual([
-          cell,
-          { native: 0, wrapModelCall: 2 },
-        ]);
+        expect([cell, counts.get(cell)?.get(SUBAGENT)]).toEqual([cell, subagent]);
       }
     });
   },

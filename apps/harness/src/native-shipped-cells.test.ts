@@ -1,5 +1,5 @@
 /**
- * native 下每一種出貨組裝都建得起來（#2416）：native 只呼叫 middleware 上登記的那一步，沒登記、也不在 noop 清單上的格，
+ * native 下每一種出貨組裝都建得起來（#2416）：native 只呼叫 middleware 上登記的那一步（noop 清單上的格：root 換空函式、前景子代理跑基座的實作），沒登記、也不在 noop 清單上的格，
  * `createNativeAgent` 建構時就拋（`packages/nexus-core/src/native-loop/agent.ts`）。這裡把產品會組的每一種都用 native 建一次。
  *
  * 另外列舉 native 還在原位呼叫的工具步驟（有 `wrapToolCall` 的那幾顆）。這份清單是封閉的：多一顆、少一顆都紅，
