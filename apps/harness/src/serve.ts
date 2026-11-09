@@ -835,7 +835,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     // 行程級只留「有沒有圍堵」（#1774）：可寫根是逐條 thread 的，每條 thread 組裝時才依 thread 取。
     const contained = resolveWorkspaceRoot(invocation.workspace, cwd) !== undefined;
     root = createCordisRoot({
-      channel: entryApprovalChannel(undefined, invocation.agentLoop),
+      channel: entryApprovalChannel(undefined),
       ...(contained && { contained }),
     });
     serverLog = createServerLog(await root.tree.context(), log);

@@ -17,8 +17,8 @@
  * `Send(model_request)`。
  *
  * 停下來問人：工具呼叫 await 等人服務（`human-input.ts`），同一批都停住時 `streamEvents` 交出中斷、run 留在記憶體裡，用
- * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。核准閘門、`ask_user` 這些
- * 生產者呼叫的是 LangGraph 的 `interrupt()`，native 不接它；核准管道在組裝點判成 `no-channel`，TODO(#2358)。
+ * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。沒帶 thread 的 run 與子代理
+ * 那一層，呼叫上放的是 `NO_HUMAN_INPUT`：核准閘門走沒有管道那一格，工具的 `exec.interrupt` 拒絕，都不退回 LangGraph 的 `interrupt()`。
  *
  * 不支援：`interrupt()`、`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）。子代理仍是 LangGraph 子圖，
  * TODO(#2359)。
@@ -38,7 +38,7 @@ import { Command, GraphInterrupt, GraphRecursionError, isCommand } from '@langch
 
 import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
-import { HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
+import { HUMAN_INPUT_CONFIG_KEY, NO_HUMAN_INPUT } from '../human-input.js';
 import { TURN_CANCEL_CONFIG_KEY, turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
 import { modelCallStepOf, wrapModelCallFromStep } from '../model-call-step.js';
@@ -1040,7 +1040,7 @@ export class NativeAgent {
         { ...state, lg_tool_call: call },
         step.signal,
         suspension === undefined
-          ? undefined
+          ? () => ({ [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT })
           : (ns) => {
               const slot = suspension.slot(call.id ?? '', [ns], step.signal, permits.of(index));
               slots[index] = slot;

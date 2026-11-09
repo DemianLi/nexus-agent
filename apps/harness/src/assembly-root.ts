@@ -1154,12 +1154,12 @@ export async function createCliAgent(
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
-  // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 在行程內等人回答，同一個條件；沒人可問的呼叫
+  // 由那顆呼叫上的 `NO_HUMAN_INPUT` 判（`@nexus/core` 的 `human-input.ts`），同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined && invocation.agentLoop !== 'native',
+    hasCheckpointer: checkpointer !== undefined,
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——

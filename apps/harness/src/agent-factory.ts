@@ -480,9 +480,9 @@ export interface CreateNexusAgentOptions {
   readonly historyShadow?: HistoryShadowSink;
   /**
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
-   * `native` 下核准閘門當成沒有存檔點（`no-channel`），要核准的操作確定性回絕（接回中斷 TODO(#2358)）。ask_user 與沙箱升級讀
-   * 呼叫端給的管道，要它們不問人得由入口照同一個條件算（`entryApprovalChannel`、`createCliAgent`）。子代理（前景、背景）的圖仍是
-   * LangGraph，TODO(#2359)。
+   * 入口給的管道兩個 loop 一樣（`entryApprovalChannel`）。`native` 下只有帶 thread 的 `streamEvents` 那一層停下來問人，`invoke`／
+   * `stream` 與子代理那一層沒人可問，閘門與 `exec.interrupt` 照沒有管道回絕（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+   * 子代理（前景、背景）的圖仍是 LangGraph，TODO(#2359)。
    */
   readonly agentLoop?: AgentLoopKind;
 }

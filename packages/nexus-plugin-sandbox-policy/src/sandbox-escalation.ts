@@ -99,6 +99,7 @@ import {
   approvalDenied,
 } from '@nexus/tool-result';
 import type { ToolErrorInfo } from '@nexus/tool-result';
+import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusTool, NexusToolResult, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 
@@ -386,8 +387,8 @@ function createEscalationTool(
                 : undefined;
       if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
 
-      // `exec.interrupt` 用拋例外傳播，**不能包在 try/catch 裡**。
-      const answer = (await exec.interrupt({
+      // `exec.interrupt` 用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋。
+      const asked = exec.interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [
           {
@@ -401,7 +402,14 @@ function createEscalationTool(
         reviewConfigs: [
           { actionName: SANDBOX_ESCALATION_TOOL_NAME, allowedDecisions: ['approve', 'reject'] },
         ],
-      } as unknown as JsonValue)) as EscalationVerdict | undefined;
+      } as unknown as JsonValue);
+      let answer: EscalationVerdict | undefined;
+      try {
+        answer = (await asked) as EscalationVerdict | undefined;
+      } catch (error) {
+        if (isHumanInputUnavailable(error)) return refuse(unaskedRefusal('no-channel', requested));
+        throw error;
+      }
 
       const verdict = answer?.decisions?.[0];
       if (verdict?.type === 'reject') {

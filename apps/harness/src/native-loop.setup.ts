@@ -1,11 +1,10 @@
 /**
  * `vitest.native.config.ts` 的 setupFile：沒指定 loop 的組裝一律跑 native（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。
  *
- * 換四個地方：
+ * 換三個地方：
  *
  * - `createNexusAgent`：直接組 agent 的測試。
- * - `createCliAgent`：產品組裝根，它照 `invocation.agentLoop` 算答題管道再交給 `createNexusAgent`。
- * - `entryApprovalChannel`：入口給樹上那一列的預設答題管道。
+ * - `createCliAgent`：產品組裝根，它把 `invocation.agentLoop` 交給 `createNexusAgent`。
  * - `createWireHandler`：serve 收人話時照 loop 決定太大的拒不拒收。
  *
  * 產品上 `--agent-loop native` 另外還交給 CLI 的 `runTurn`／`runRepl`；那兩個沒換，要 native 的測試明給 loop（`cli.test.ts`）。
@@ -32,15 +31,6 @@ vi.mock('./assembly-root.js', async (importActual) => {
       invocation: Parameters<typeof actual.createCliAgent>[0],
       ...rest: Parameters<typeof actual.createCliAgent> extends [unknown, ...infer R] ? R : never
     ) => actual.createCliAgent({ agentLoop: 'native', ...invocation }, ...rest),
-  };
-});
-
-vi.mock('./cordis-root.js', async (importActual) => {
-  const actual = await importActual<typeof import('./cordis-root.js')>();
-  return {
-    ...actual,
-    entryApprovalChannel: (...args: Parameters<typeof actual.entryApprovalChannel>) =>
-      actual.entryApprovalChannel(args[0], args[1] ?? 'native'),
   };
 });
 

@@ -302,8 +302,8 @@ export interface FoldOptions {
   /** checkpointer。`false` 與缺席同義。 */
   checkpointer?: AgentCheckpointer;
   /**
-   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 沒有中斷可接回（TODO(#2358)），
-   * 核准管道當成沒有存檔點：要核准的操作確定性回絕，不發 `interrupt()`。
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 在行程內等人回答（`human-input.ts`），
+   * 核准管道照 checkpointer 算；沒人可問的呼叫（沒帶 thread 的 run、子代理那一層）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
    */
   loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */
@@ -630,8 +630,11 @@ export function foldRegistry(
     approvalChannel,
     approvalPolicySource,
   );
+  // native 的子代理那一層沒人可問（呼叫上放的是 `NO_HUMAN_INPUT`，閘門一律回絕），聲明照沒有管道選句，子代理改跑 native 之前都是（#2359）。
+  const foregroundChannel: ApprovalChannel =
+    options.loop === 'native' ? { kind: 'no-channel' } : approvalChannel;
   const subagentDelegation = createSubagentDelegationMiddleware(() =>
-    foregroundDelegationContext(approvalChannel, approvalPolicySource()),
+    foregroundDelegationContext(foregroundChannel, approvalPolicySource()),
   );
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
@@ -1274,10 +1277,7 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
-    hasCheckpointer:
-      options.checkpointer !== undefined &&
-      options.checkpointer !== false &&
-      options.loop !== 'native',
+    hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
 }
 

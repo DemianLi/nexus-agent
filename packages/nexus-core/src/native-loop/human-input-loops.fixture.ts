@@ -3,7 +3,7 @@
  * 工具裡問人時讀得到等人服務就 await 它，讀不到（`langgraph`）就用 LangGraph 的 `interrupt()`。
  */
 
-import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { StructuredTool } from '@langchain/core/tools';
 import { Command, MemorySaver, interrupt } from '@langchain/langgraph';
 import { StateBackend } from 'deepagents';
 import type { fakeModel } from 'langchain';
@@ -56,7 +56,7 @@ export interface LoopRun {
  */
 export async function loopRun(
   loop: Loop,
-  tools: readonly StructuredToolInterface[],
+  tools: readonly StructuredTool[],
   model: ReturnType<typeof fakeModel>,
   config: Readonly<Record<string, unknown>> = {},
 ): Promise<LoopRun> {
