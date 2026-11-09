@@ -2,7 +2,7 @@
  * 每一顆工具呼叫上放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 帶 thread 的 `streamEvents` 放等人
  * 服務，其餘（`invoke`、子代理那一層）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
  * 那一格，不問人、不跑工具本體。人答了之後再判一次：等人期間政策切到 `never`，答核准也照政策回絕、本體不跑，兩個 loop 結局一樣；
- * native 的補判只收緊，listener 翻成 allow 也照人的拒絕（langgraph 那邊見 #2613）。
+ * native 只在人核准之後補判：人按拒絕就照人的拒絕，listener 翻成 allow 或政策切到 `never` 都一樣（langgraph 那邊見 #2613）。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
@@ -264,7 +264,7 @@ describe.each(LOOPS)('%s：答了核准之後再判一次', (loop) => {
   });
 });
 
-describe('native：答了之後再判只收緊', () => {
+describe('native：只在人核准之後再判', () => {
   it('等人期間 listener 從 ask 翻成 allow、人按拒絕：照人的拒絕，本體不跑', async () => {
     const ran: string[] = [];
     let allow = false;
@@ -282,6 +282,36 @@ describe('native：答了之後再判只收緊', () => {
     expect(id).toBeDefined();
 
     allow = true;
+    await drain(
+      agent.streamEvents(
+        new Command({ resume: { [id!]: { decisions: [{ type: 'reject' }] } } }),
+        options,
+      ),
+    );
+    expect(ran).toEqual([]);
+    const messages = (await agent.getState(options)).values.messages ?? [];
+    const result = messages.find(
+      (message) => (message as { tool_call_id?: string }).tool_call_id === 'r1',
+    );
+    expect(toolErrorOf(result)?.code).toBe(APPROVAL_REJECTED_BY_USER);
+  });
+
+  it('等人期間政策切到 never、人按拒絕：照人的拒絕，碼是 APPROVAL_REJECTED_BY_USER，本體不跑', async () => {
+    const ran: string[] = [];
+    let policy: 'ask' | 'never' = 'ask';
+    const agent = await assemble(
+      'native',
+      (r) => void r.tools.register(danger(ran)),
+      fakeModel()
+        .respondWithTools([{ name: 'danger', args: { at: 'root' }, id: 'r1' }])
+        .respond(new AIMessage('root 收完')),
+      {},
+      () => policy,
+    );
+    const [id] = interruptIds(await drain(agent.streamEvents(input, options)));
+    expect(id).toBeDefined();
+
+    policy = 'never';
     await drain(
       agent.streamEvents(
         new Command({ resume: { [id!]: { decisions: [{ type: 'reject' }] } } }),

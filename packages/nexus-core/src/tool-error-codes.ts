@@ -76,8 +76,9 @@ export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
  * `approval/policy` 事件（#437）記政策的值（`ask`／`never`）；日誌上 `approval/decided` 的 `rejected` 分不出人拒與政策拒，要看這些碼。
  *
  * - {@link APPROVAL_REJECTED_BY_USER}：有人看過並按了拒絕。
- * - {@link APPROVAL_POLICY_NEVER}：確定性拒絕，沒有人被問到。兩種原因共用這個碼：入口沒有人在（`approvals.enabled: false`，CLI／評測），
- *   或使用者把核准政策選成不問（`never`，#437）；兩種的話不同，分辨看 `tool/result.message`。
+ * - {@link APPROVAL_POLICY_NEVER}：照政策拒絕。三種情況共用這個碼：入口沒有人在（`approvals.enabled: false`，CLI／評測）；使用者把核准政策選成
+ *   不問（`never`，#437）；`native` 在人核准之後才發現政策已切到 `never`。前兩種沒有人被問到，第三種人被問過；三種的話不同，分辨看
+ *   `tool/result.message`。
  * - {@link APPROVAL_NO_CHANNEL}：沒有可用的核准管道（沒有 checkpointer），沒有人被問到。
  * - {@link APPROVAL_INVALID_REPLY}：問了人，但收到的回覆不是 `approve` 也不是 `reject`（[#2027](https://github.com/DemianLi/nexus-agent/issues/2027)），
  *   沒有拿到有效的決定，照拒絕處理。稽核上的結局是 `unavailable`。

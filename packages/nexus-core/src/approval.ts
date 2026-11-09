@@ -309,7 +309,7 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *
  * **人那條路不在這裡寫**：`langgraph` 下閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
- * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。例外：答覆之後再判、政策已切到
+ * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。例外：人核准之後再判、政策已切到
  * `never` 時，這裡照樣寫一對 `rejected`，pump 那一對照答覆記。
  */
 function auditDecision(
@@ -359,8 +359,8 @@ function auditDecision(
  *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
  *   asked 才配得上 `tool/call`。
  * - **不必問人就確定的由這裡寫**（{@link auditDecision}）：政策關掉 → `rejected`，沒有管道 → `unavailable`，
- *   背景子代理的閘門管道固定 `policy-never`（#324）走前者、native 前景子代理那一層走後者，寫進子代理自己的日誌。答覆之後再判、
- *   政策已切到 `never` 時也由這裡寫一對 `rejected`，人其實問過了，pump 那一對照答覆記。
+ *   背景子代理的閘門管道固定 `policy-never`（#324）走前者、native 前景子代理那一層走後者，寫進子代理自己的日誌。人核准之後再判、
+ *   政策已切到 `never` 時也由這裡寫一對 `rejected`，人其實問過了，pump 那一對照答覆記；人拒絕時不再判，這裡不寫。
  * - **listener 直接回 `deny` 不寫**：沒有問任何人，dsh 也不寫（只有 `ask` 才進核准服務）。
  *
  * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
@@ -378,7 +378,7 @@ function auditDecision(
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
  * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
- * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前讀一次；讀得到等人服務時，拿到答覆之後、listener 沒回 deny 就再讀一次**。
+ * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前讀一次；讀得到等人服務時，人核准之後、listener 沒回 deny 就再讀一次**。
  *   `never` 時確定性回絕、不發中斷；省略即 `ask`（手搭的測試組裝）。只在管道是 `human` 時才讀：管道非人
  *   （入口沒有人在、沒有 checkpointer，或這顆呼叫上是 `NO_HUMAN_INPUT`）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
@@ -398,9 +398,9 @@ export function createApprovalGateMiddleware(
 /**
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
  * 要問人時讀得到等人服務就 await 它；讀不到經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡；
- * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。讀得到等人服務時，拿到答覆之後把問人之前的幾格（listener、管道、政策）照同一個
- * 順序再判一次，**只收緊**：listener 改判 deny 或政策切到 `never`，就回那一格的拒絕；listener 回 allow 或 ask 都照人的答覆走，approve
- * 才往內交（管道那兩格答覆前後不會變）。`langgraph` 接回時本體重跑，listener 回 allow 就直接往內交、蓋過人的拒絕（#2613），這一格兩個 loop 不一樣。
+ * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。讀得到等人服務時，**只在人核准之後**把問人之前的幾格（listener、管道、政策）
+ * 照同一個順序再判一次：listener 改判 deny 或政策切到 `never`，就回那一格的拒絕，否則往內交（管道那兩格答覆前後不會變）。人拒絕或
+ * 答覆看不懂時本來就不跑，不再判，回的是人拒絕或看不懂那一格的碼。`langgraph` 接回時本體重跑，listener 回 allow 就直接往內交、蓋過人的拒絕（#2613），這一格兩個 loop 不一樣。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
@@ -421,14 +421,13 @@ export function approvalGateToolStep(
       callId: call.callId,
     };
     // 問人之前的幾格。人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了，答覆之後要照同一個順序再判一次：
-    // `langgraph` 接回時本體整段重跑、自然再判（那邊 listener 回 allow 會直接放行，#2613）；讀得到等人服務（native）時由下面那一次
-    // 補上，帶著 `asked`（問人時的理由）。
-    // 補判只收緊：listener 回 allow 不放行，照樣往下判管道與政策，判完照人的答覆走。
+    // `langgraph` 接回時本體整段重跑、自然再判（那邊 listener 回 allow 會直接放行，#2613）；讀得到等人服務（native）時由人核准之後
+    // 那一次補上，帶著 `asked`（問人時的理由）。
     const beforeAsking = async (
       asked?: string,
     ): Promise<{ readonly done: ToolCallResult } | { readonly ask: string }> => {
       const decision = await runApprovalGate(listeners, exec);
-      if (decision.kind === 'allow' && asked === undefined) return { done: await next() };
+      if (decision.kind === 'allow') return { done: await next() };
       if (decision.kind === 'deny') {
         return {
           done: denial(exec, decision.reason, {
@@ -474,7 +473,7 @@ export function approvalGateToolStep(
         return {
           done: denial(
             exec,
-            // 答覆之後再判（帶著 `asked`）時人已經被問過，不能說「沒有人被問到」。
+            // 人核准之後再判（帶著 `asked`）時人已經被問過，不能說「沒有人被問到」。
             asked === undefined
               ? `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
                   `這不是有人拒絕了它——是沒有人被問到。`
@@ -509,13 +508,13 @@ export function approvalGateToolStep(
       reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
     })) as { decisions?: { type?: string; message?: string }[] } | undefined;
 
-    if (human !== undefined) {
-      const again = await beforeAsking(because);
-      if ('done' in again) return again.done;
-    }
-
     const verdict = answer?.decisions?.[0];
-    if (verdict?.type === 'approve') return next();
+    if (verdict?.type === 'approve') {
+      // 補判只攔本來會放行的答覆：人拒絕或答覆看不懂本來就不跑。
+      if (human === undefined) return next();
+      const again = await beforeAsking(because);
+      return 'done' in again ? again.done : next();
+    }
     if (verdict?.type === 'reject') {
       return denial(
         exec,
