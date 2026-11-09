@@ -5,7 +5,7 @@
  * 所以這一檔只能用可剝除的語法，也不 import 本 repo 的其他檔。
  *
  * 每個事件追加一行 JSON 到 `MCP_POOL_LOG`：`start`（行程起來）、`initialized`（握手完成）、`call`（收到一次 `tools/call`）。
- * 驅動拿它數 initialize 次數、算首次呼叫延遲。`--tag <字串>` 只是讓 cmdline 分得出是哪一組起的。
+ * 驅動拿它數握手次數、算首次呼叫延遲。`--tag <字串>` 只是讓 cmdline 分得出是哪一臂起的。
  */
 
 import { appendFileSync } from 'node:fs';

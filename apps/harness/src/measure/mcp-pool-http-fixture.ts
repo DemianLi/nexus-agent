@@ -33,15 +33,17 @@ export interface HttpPoolCounters {
 export interface HttpPoolFixture {
   readonly url: string;
   counters(): HttpPoolCounters;
-  /** 歸零計數（峰值從現在開著的連線數重新起算）；換一組量測時用。 */
-  reset(): void;
   close(): Promise<void>;
 }
 
+/**
+ * 起一台 fixture：在 127.0.0.1 的隨機埠 listen 好才 resolve。每個請求各建一份 McpServer 與無狀態 transport；
+ * `name` 進 server 名稱與 `lookup` 的回覆文字。
+ */
 export async function startHttpPoolFixture(name = 'http'): Promise<HttpPoolFixture> {
-  let methods: Record<string, number> = {};
-  let initializeAt: number[] = [];
-  let callAt: number[] = [];
+  const methods: Record<string, number> = {};
+  const initializeAt: number[] = [];
+  const callAt: number[] = [];
   const sockets = new Set<Socket>();
   let peak = 0;
   let accepted = 0;
@@ -98,13 +100,6 @@ export async function startHttpPoolFixture(name = 'http'): Promise<HttpPoolFixtu
       peakConnections: peak,
       acceptedConnections: accepted,
     }),
-    reset: () => {
-      methods = {};
-      initializeAt = [];
-      callAt = [];
-      peak = sockets.size;
-      accepted = 0;
-    },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

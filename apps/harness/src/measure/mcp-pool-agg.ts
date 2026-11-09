@@ -4,17 +4,9 @@
  * 跟 #1947 的彙總同一個定義。
  */
 
-import { bootstrapMedian90, fixed, median } from './mcp-pool-stats.js';
+import { WINDOWS, bootstrapMedian90, fixed, median } from './mcp-pool-stats.js';
 
-export const ARMS = ['single', 'per-thread'] as const;
-export type Arm = (typeof ARMS)[number];
-
-/** 量測輪的窗：暖機之後的第幾輪到第幾輪（含兩端），同 #1947（D162 的第 6–15／16–25／26–45 輪）。 */
-export const WINDOWS: readonly (readonly [number, number])[] = [
-  [1, 10],
-  [11, 20],
-  [21, 40],
-];
+export type Arm = 'single' | 'per-thread';
 
 /** 一道柵欄：驅動寫的 `turns[臂][i]`。 */
 export interface Barrier {
@@ -34,6 +26,7 @@ export interface Barrier {
   readonly threadWallMs: readonly number[];
 }
 
+/** 驅動 `census()` 寫的：各角色的行程數與 RSS／PSS。 */
 export interface Census {
   readonly roles: Readonly<
     Record<string, { readonly count: number; readonly rssMB: number; readonly pssMB: number }>
@@ -41,6 +34,7 @@ export interface Census {
   readonly readErrors: number;
 }
 
+/** 驅動 `poolMetrics()` 寫的。 */
 export interface PoolMetrics {
   readonly stdioStarted: Readonly<Record<string, number>>;
   readonly stdioInitialized: Readonly<Record<string, number>>;
@@ -79,7 +73,7 @@ export interface Group {
   readonly results: readonly unknown[];
 }
 
-export function roundsOf(group: Group): Round[] {
+function roundsOf(group: Group): Round[] {
   return group.results.filter((row): row is Round =>
     String((row as { label?: unknown }).label ?? '').startsWith('round'),
   );
@@ -98,7 +92,7 @@ export function perTurnCpu(b: Barrier, n: number): number {
   return b.cpuMs / n;
 }
 
-/** 一道柵欄裡每條對話行程的 CPU：取最大的 N 個（預熱池那一個這一輪沒接 thread），回中位數。 */
+/** 一道柵欄裡每條對話行程的 CPU：取最大的 N 個（預熱池那一個這一輪沒接 thread），回中位數；沒有對話行程（single 臂）回 undefined。 */
 export function conversationMedian(b: Barrier, n: number): number | undefined {
   const top = [...b.conversations].sort((x, y) => y - x).slice(0, n);
   return top.length === 0 ? undefined : median(top);
@@ -154,10 +148,11 @@ function summary(xs: readonly number[], digits: number): string {
 const medOf = (xs: readonly number[]): number => (xs.length === 0 ? Number.NaN : median(xs));
 
 /**
- * 整份報告。
+ * 整份報告。主統計量只用有效回合；有回合被標記時，每窗另印一段含它們的值。per-thread 的值標成「代用值」。
  *
  * @param groups - 依序的各組 JSON（每組是驅動一次執行）。
  * @returns 報告全文，每行以換行結尾。
+ * @throws 某回合缺一臂，或某窗在用到的回合裡沒有值（例如 T < 21）。
  */
 export function reportMcpPool(groups: readonly Group[]): string {
   const lines: string[] = [];
@@ -177,12 +172,19 @@ export function reportMcpPool(groups: readonly Group[]): string {
       print();
       continue;
     }
+    const proxy = (a: Arm): string => (a === 'per-thread' ? '（代用值）' : '');
     for (const [lo, hi] of WINDOWS) {
       print(`  第${String(lo)}–${String(hi)}輪 每輪 CPU 總和（ms，跨回合中位）`);
       const per: Partial<Record<Arm, number[]>> = {};
       for (const a of arms) {
         per[a] = rs.map((r) => windowMedian(r, a, lo, hi, (b) => perTurnCpu(b, N)));
-        print(`    ${a}: ${summary(per[a] ?? [], 1)}`);
+        print(`    ${a}${proxy(a)}: ${summary(per[a] ?? [], 1)}`);
+      }
+      if (bad.length > 0) {
+        for (const a of arms) {
+          const xs = all.map((r) => windowMedian(r, a, lo, hi, (b) => perTurnCpu(b, N)));
+          print(`    含被標記回合 ${a}${proxy(a)}: ${summary(xs, 1)}`);
+        }
       }
       const s = per.single;
       const p = per['per-thread'];
@@ -212,7 +214,7 @@ export function reportMcpPool(groups: readonly Group[]): string {
         const conv = rs.map((r) =>
           windowMedian(r, 'per-thread', lo, hi, (b) => conversationMedian(b, N)),
         );
-        print(`    per-thread 每條對話行程每輪（D162）：${summary(conv, 1)}`);
+        print(`    per-thread 每條對話行程每輪（D162，代用值）：${summary(conv, 1)}`);
       }
     }
     print('  池與記憶體（跨回合中位）');

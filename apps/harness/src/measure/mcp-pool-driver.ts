@@ -1,6 +1,6 @@
 /**
- * MCP 連線池前後測（#2570 PR-A）的量測驅動。基底是 #1947 第 1 步（#1827 D157）的穩態每輪 CPU 驅動：假模型、/proc 量具、
- * patch 與 SSE 收尾判準沿用；臂、負載與 CPU 的加總範圍改成 MCP 池的情境。分析規則見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`。
+ * MCP 連線池前後測（#2570 PR-A）的量測驅動。假模型、/proc 量具、patch 與 SSE 收尾判準與 #1947 第 1 步（#1827 D157）
+ * 的穩態每輪 CPU 驅動同一套，數字才能對照。分析規則見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`。
  *
  * 兩臂同時活著、逐輪交錯（第 k 輪兩臂的先後依 (k + r) 輪轉）：
  *   single      一個 `node lib/serve.js` 放所有 thread，MCP 連線池整個行程一份。
@@ -10,7 +10,8 @@
  * 每台 serve 掛 M=3 台 MCP server：兩台 stdio（{@link ./mcp-pool-stdio-server.ts}，純 node）、一台 HTTP（{@link ./mcp-pool-http-fixture.ts}，
  * 起在驅動裡、每臂一台）。假模型一輪依序叫三台的 `lookup`，再回一段文字。
  *
- * 每輪 CPU 是該臂整棵行程樹（根 pid 的所有後代，加上 cmdline 帶 `--tag <臂>` 的行程）所有 thread 的 schedstat 增量，只在柵欄上取樣。
+ * 每道柵欄的 `cpuMs` 是該臂整棵行程樹（根 pid 的所有後代，加上 cmdline 帶 `--tag <臂>` 的行程）所有 thread 的 schedstat 增量，
+ * 只在柵欄上取樣；除以 N 的每輪 CPU 總和在彙總算。
  * 柵欄之間出生的行程從 0 起算；死掉的行程丟了增量，記在 `died`。讀不到的（不是消失的）記在 `readErrors`。
  *
  * 環境變數：OUT、TAG、ARMS（逗號分隔，預設兩臂）、N、R、W、T、HARNESS。
@@ -81,7 +82,6 @@ function flush(extra: Json = {}): void {
   );
 }
 
-// ---------- 假模型：依序叫三台 MCP 的 lookup，再回 3000 字，串流 20 段 ----------
 const llmStats = { requests: 0, tool: 0, reply: 0, notools: 0, missingTool: 0, bad: 0 };
 function replyText(seed: number): string {
   const parts: string[] = [];
@@ -225,7 +225,6 @@ const llm = createServer((req, res) => {
 });
 await new Promise<void>((resolve) => llm.listen(LLM_PORT, '127.0.0.1', resolve));
 
-// ---------- /proc 量具 ----------
 const CLK = 100;
 const loadavg = (): string => readFileSync('/proc/loadavg', 'utf8').trim();
 
@@ -244,7 +243,7 @@ interface Scan {
   readonly procs: Map<number, ProcSample>;
   /** 讀的時候已經消失的（不算錯）。 */
   readonly vanished: number;
-  /** 讀不到、但還在的（權限之類）：每個窗都要是 0。 */
+  /** 讀不到、但還在的（權限之類）：量測輪的每道柵欄都要是 0，彙總照這條標記回合。 */
   readonly readErrors: number;
 }
 const isGone = (error: unknown): boolean =>
@@ -301,7 +300,7 @@ function readDetail(b: ProcBasic, withMem: boolean): ProcSample {
 
 /**
  * 這一臂的行程樹：根的所有後代，加上 cmdline 帶 `--tag <臂>` 的（被 reparent 的 MCP 子行程只能這樣撈到）。
- * `readErrors` 只算認得出、卻讀不到細節的被量行程，加上連 `stat` 都讀不到（認不出是誰）的；後者在容器裡應該也是 0。
+ * `readErrors` 只算認得出、卻讀不到細節的被量行程，加上連 `stat` 都讀不到（認不出是誰）的；後者在容器裡也必須是 0，否則整回合被標記。
  */
 function scanArm(root: number, arm: Arm, withMem = false): Scan {
   const all = new Map<number, ProcBasic>();
@@ -342,7 +341,6 @@ function scanArm(root: number, arm: Arm, withMem = false): Scan {
   return { procs, vanished, readErrors };
 }
 
-/** 行程的角色，照 cmdline 認。 */
 function roleOf(cmd: string): string {
   if (cmd.includes('mcp-pool-stdio-server')) return 'mcp-stdio';
   if (cmd.includes('nexus-supervisor')) return 'supervisor';
@@ -400,7 +398,6 @@ function census(s: Scan): Json {
 const stdioCount = (s: Scan): number =>
   [...s.procs.values()].filter((p) => roleOf(p.cmd) === 'mcp-stdio').length;
 
-// ---------- patch ----------
 function patchFor(arm: Arm, http: HttpPoolFixture, logFile: string): string {
   const stdio = (id: string, server: string): string => `  - id: mcp-pool-${id}
     name: '@nexus/plugin-mcp'
@@ -454,6 +451,7 @@ ${stdio('a', 'mcpa')}${stdio('b', 'mcpb')}  - id: mcp-pool-h
 `;
 }
 
+// 驅動自己跑在 tsx 底下；拿掉它的 loader 設定，被量的 serve 與子行程才是純 node，RSS 與 CPU 不含轉譯器。
 function childEnv(home: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -483,7 +481,6 @@ function isRootEnd(v: unknown): string | undefined {
   return undefined;
 }
 
-// ---------- 一臂 ----------
 interface ArmProc {
   readonly arm: Arm;
   readonly proc: ChildProcess;
@@ -534,7 +531,7 @@ async function startArm(arm: Arm, round: number): Promise<ArmProc> {
     const timer = setTimeout(() => {
       reject(new Error(`${arm} 120 秒內沒印出網址`));
     }, 120000);
-    // per-thread 的前台由監督行程轉印，網址落在 stderr；兩條都看。
+    // per-thread 的前台把 stdout 留給跟監督行程的控制框，自己的輸出改寫到 stderr；兩條都看。
     const onData = (d: Buffer): void => {
       const s = d.toString();
       onText(s);
@@ -585,7 +582,7 @@ async function stopArm(p: ArmProc): Promise<Json> {
     await done;
     clearTimeout(timer);
   }
-  // 收完之後還留著的（孤兒）：記下來再清掉，不讓它吃下一回合的 CPU。
+  // 收完之後還留著、cmdline 帶 --tag <臂> 的（孤兒）：記下來再清掉，不讓它吃下一回合的 CPU。
   await sleep(500);
   const left = [...scanArm(-1, p.arm).procs.values()].map((x) => ({
     pid: x.pid,
@@ -616,7 +613,7 @@ function stdioEvents(file: string): StdioEvent[] {
     .map((l) => JSON.parse(l) as StdioEvent);
 }
 
-/** 池的指標：stdio 的行程數與 initialize 次數（server 自己記的）、HTTP 的 initialize 與連線數（fixture 記的）。 */
+/** 池的指標：stdio 起了幾個行程、完成幾次握手、收到幾次呼叫（server 自己記的）；HTTP 的方法次數、initialize、呼叫與連線數（fixture 記的）。 */
 function poolMetrics(p: ArmProc, sinceAt: number): Json {
   const evs = stdioEvents(p.logFile);
   const per = (ev: string): Record<string, number> => {
@@ -711,7 +708,6 @@ async function closeDownlink(d: Downlink): Promise<void> {
   }
 }
 
-// ---------- 主流程 ----------
 log('start', { ARMS, N, R, T, W, loadavg: loadavg(), node: process.version });
 try {
   for (let r = 1; r <= R; r++) {

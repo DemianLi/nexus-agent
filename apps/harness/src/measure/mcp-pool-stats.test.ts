@@ -8,12 +8,13 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { WINDOWS_1947, report1947 } from './mcp-pool-agg-1947.js';
+import { report1947 } from './mcp-pool-agg-1947.js';
 import { synthetic1947Runs } from './mcp-pool-agg-1947.fixture.js';
 import {
   PyCounter,
   PyRandom,
   PyTuple,
+  WINDOWS,
   bootstrapMedian90,
   fixed,
   median,
@@ -94,7 +95,7 @@ describe('pyRepr', () => {
 
 describe('#1947 的彙總改寫成 TS，輸出跟 agg.py 逐字相同', () => {
   it('窗是暖機之後的第 1–10、11–20、21–40 輪', () => {
-    expect(WINDOWS_1947).toEqual([
+    expect(WINDOWS).toEqual([
       [1, 10],
       [11, 20],
       [21, 40],

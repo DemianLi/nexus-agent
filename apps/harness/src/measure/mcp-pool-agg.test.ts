@@ -1,7 +1,3 @@
-/**
- * MCP 池前測的彙總：每輪 CPU 的除法、對話行程取最大 N 個、有效性的六條，與整份報告的形狀。
- */
-
 import { describe, expect, it } from 'vitest';
 import { conversationMedian, perTurnCpu, reportMcpPool, roundFlags } from './mcp-pool-agg.js';
 import type { Arm, Barrier, Group, Round } from './mcp-pool-agg.js';
@@ -138,13 +134,16 @@ describe('報告', () => {
     const text = reportMcpPool([group]);
     expect(text).toContain('== n4（N=4，臂 single、per-thread，回合 3）');
     expect(text).toContain('標記：無');
+    expect(text).not.toContain('含被標記回合');
     expect(text).toContain('    single: 100.0（90% 100.0–100.0，範圍 100.0–100.0，n=3）');
-    expect(text).toContain('    per-thread: 220.0（90% 210.0–230.0，範圍 210.0–230.0，n=3）');
+    expect(text).toContain(
+      '    per-thread（代用值）: 220.0（90% 210.0–230.0，範圍 210.0–230.0，n=3）',
+    );
     expect(text).toContain(
       '    per-thread/single: 2.200（90% 2.100–2.300，範圍 2.100–2.300，n=3）',
     );
     expect(text).toContain('    single 按角色：mcp-stdio 5.0 serve 95.0');
-    expect(text).toContain('    per-thread 每條對話行程每輪（D162）：97.5');
+    expect(text).toContain('    per-thread 每條對話行程每輪（D162，代用值）：97.5');
     expect(text).toContain('stdio 子行程 12，stdio 起了 4 次、握手 2 次');
     expect(text).toContain(
       '首次呼叫 mcpa 120 mcpb 140 mcph 160 ms；第 1 輪 thread wall 中位 115 ms',
@@ -165,6 +164,9 @@ describe('報告', () => {
     };
     const text = reportMcpPool([group]);
     expect(text).toContain('標記：r2 single:leftovers');
-    expect(text).toContain('    per-thread: 200.0（90% 200.0–200.0，範圍 200.0–200.0，n=2）');
+    expect(text).toContain(
+      '    per-thread（代用值）: 200.0（90% 200.0–200.0，範圍 200.0–200.0，n=2）',
+    );
+    expect(text).toMatch(/ {4}含被標記回合 per-thread（代用值）: 200\.0（.*，n=3）/u);
   });
 });

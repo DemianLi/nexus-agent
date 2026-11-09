@@ -1,12 +1,20 @@
 /**
- * #1947 第 1 步的彙總（`agg.py`），改寫成 TS，輸出逐字相同。用途只有一個：拿 #1947 留下的原始數據兩邊各跑一次、逐字比對，
- * 證明 {@link ./mcp-pool-stats.ts} 的窗、中位數與 bootstrap 區間跟 Python 版是同一個定義。MCP 前後測的彙總另寫，
- * 共用同一組統計工具。
+ * #1947 第 1 步的彙總（`agg.py`），改寫成 TS，輸出逐字相同。拿 #1947 留下的原始數據兩邊各跑一次、逐字比對，證明
+ * {@link ./mcp-pool-stats.ts} 的窗、中位數與 bootstrap 區間跟 Python 版是同一個定義；CI 拿合成數據釘住同一件事。
+ * MCP 前後測的彙總是 {@link ./mcp-pool-agg.ts}，共用同一組統計工具。
  */
 
-import { PyCounter, PyTuple, bootstrapMedian90, fixed, median, pyRepr } from './mcp-pool-stats.js';
+import {
+  PyCounter,
+  PyTuple,
+  WINDOWS,
+  bootstrapMedian90,
+  fixed,
+  median,
+  pyRepr,
+} from './mcp-pool-stats.js';
 
-/** 一輪：`mcp-pool-driver.ts` 寫進 JSON 的 `turns[臂][i]`。 */
+/** 一輪：#1947 的驅動寫進 JSON 的 `turns[臂][i]`。 */
 export interface Turn1947 {
   readonly warm: boolean;
   readonly wallMs: number;
@@ -26,13 +34,6 @@ export interface Round1947 {
   readonly L: { readonly readyMs: number; readonly startupCpuMs: number };
   readonly memAfter: Readonly<Record<string, { readonly anonMB: number }>>;
 }
-
-/** 量測輪的窗：暖機之後的第幾輪到第幾輪（含兩端），等於 D162 從第 1 輪算起的第 6–15／16–25／26–45 輪。 */
-export const WINDOWS_1947: readonly (readonly [number, number])[] = [
-  [1, 10],
-  [11, 20],
-  [21, 40],
-];
 
 const ARMS = ['L', 'SK', 'SF', 'SF2'] as const;
 
@@ -89,8 +90,9 @@ class TupleCounter {
 /**
  * 照 `agg.py` 的順序與格式印出整份報告。
  *
- * @param runs - 依序的 `[tag, JSON 的 results]`；`agg.py` 讀的是 `run1`、`run2`。
+ * @param runs - 依序的 `[tag, JSON 的 results]`；`agg.py` 讀的是 `run1`、`run2`，只有這兩個 tag 會分組列出。
  * @returns 報告全文，每行以換行結尾（同 Python 的 `print`）。
+ * @throws 回合數不到 13，或某回合缺臂。
  */
 export function report1947(runs: readonly (readonly [string, readonly unknown[]])[]): string {
   const lines: string[] = [];
@@ -132,7 +134,7 @@ export function report1947(runs: readonly (readonly [string, readonly unknown[]]
   ];
   for (const [label, rs] of groups) {
     print(`\n== ${label}（n=${rs.length}）`);
-    for (const [lo, hi] of WINDOWS_1947) {
+    for (const [lo, hi] of WINDOWS) {
       const meds = ARMS.map((a) => median(rs.map((r) => median(wv(r, a, lo, hi)))));
       print(
         `  第${lo}–${hi}輪 CPU 中位（ms，跨回合中位）：` +
@@ -167,7 +169,7 @@ export function report1947(runs: readonly (readonly [string, readonly unknown[]]
   }
   print('  出現過的 comm：', pyRepr(comms.counts));
   const top = comms.mostCommon(6).map(([c]) => c);
-  for (const [lo, hi] of WINDOWS_1947) {
+  for (const [lo, hi] of WINDOWS) {
     for (const a of ['L', 'SF', 'SK']) {
       print(
         `  第${lo}–${hi}輪 ${a}: ` +

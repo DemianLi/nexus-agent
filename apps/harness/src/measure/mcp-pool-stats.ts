@@ -1,7 +1,18 @@
 /**
- * MCP 連線池前後測（#2570）的統計工具。#1947 的彙總是 Python 寫的（`random.Random`、`statistics.median`、
- * `f'{x:.3f}'`）；這裡逐位重現它的行為，同一份原始數據兩邊印出來的報告才能逐字相同，窗與區間的定義也才沒有走樣。
+ * MCP 連線池前後測（#2570）的統計工具。#1947 的彙總 `agg.py`（#1947 issuecomment-6591734365，腳本在該則記的本機證據目錄，
+ * 不進 repo）是 Python 寫的（`random.Random`、`statistics.median`、`f'{x:.3f}'`）；這裡逐位重現它的行為，同一份原始數據
+ * 兩邊印出來的報告才能逐字相同，窗與區間的定義也才沒有走樣。
  */
+
+/**
+ * 量測輪的窗：暖機之後的第幾輪到第幾輪（含兩端）。暖機 5 輪時，等於 #1947 issuecomment-6592108353（D162）
+ * 從第 1 輪算起的第 6–15／16–25／26–45 輪。
+ */
+export const WINDOWS: readonly (readonly [number, number])[] = [
+  [1, 10],
+  [11, 20],
+  [21, 40],
+];
 
 const N = 624;
 const M = 397;
@@ -105,7 +116,7 @@ export function median(xs: readonly number[]): number {
 }
 
 /**
- * 中位數的 bootstrap 90% 區間：重抽 `n` 次、各取中位數、排序後取第 5% 與第 95% 位（#1947 `agg.py` 的 `boot`）。
+ * 中位數的 bootstrap 90% 區間：重抽 `n` 次、各取中位數，排序後取第 ⌊0.05n⌋ 與第 ⌊0.95n⌋−1 個（0 起算，同 `agg.py` 的 `boot`）。
  *
  * @returns `[下緣, 上緣]`。
  */
