@@ -51,11 +51,13 @@ permissions:
 #         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
 #         ├─ spawner-arm64 ────┤   sandbox-spawner-arm64，只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
 #         ├─ e2e-single ───────┤   只在合併後完整一輪：真瀏覽器 e2e（#1602）
+#         │  └ e2e-native ─────┤   接在 e2e-single 後面：同一套換成 native agent loop 再跑一輪、上傳截圖（#2358）。e2e-single 紅了照跑
 #         └─ e2e-per-thread ───┘   只在合併後完整一輪：真瀏覽器 e2e 換成 per-thread 行程模型再跑一輪（#2341）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 4 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
-# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e-single 1 ＋ e2e-per-thread 1 ＝ 13。plan 在它之前、gate 在它之後，不同時。
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e-single 接 e2e-native 1（依序）
+# ＋ e2e-per-thread 1 ＝ 13。plan 在它之前、gate 在它之後，不同時。
 # 合併後那一輪的 post-merge.yml 另有 native agent loop 4 片，跟這一段同時跑。
 # 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate（rust 為 true 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
 # 所以合併後的一輪加上兩張功能 PR 同時跑是 13 ＋ 4 ＋ 1 ＋ 1 ＝ 19，在 20 之內。
@@ -581,6 +583,37 @@ jobs:
           NEXUS_E2E_PROCESS_MODEL: per-thread
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
+  # 真瀏覽器 e2e 換成 native agent loop（#2358）：同一套測試、single 行程模型，存截圖（embed 的照情境名，核准卡四種收法的帶 `native-` 前綴），
+  # 成敗都上傳。
+  # 接在 e2e-single 後面、不另佔一格（job 預算見檔頭）。兩個 job 不共用工作目錄，所以自己 build。
+  # e2e-single 紅了照樣跑（`!cancelled()`），結果由 gate 單獨判；plan 沒成功就不跑。
+  e2e-native:
+    name: e2e (native)
+    needs: [plan, e2e-single]
+    if: ${{ !cancelled() && inputs.full && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: 建置 lib 與 web
+        run: |
+          pnpm run build:lib
+          pnpm --filter @nexus/web run build
+      - name: 真瀏覽器 e2e（native）
+        run: pnpm --filter @nexus/web run test:e2e
+        env:
+          NEXUS_E2E_AGENT_LOOP: native
+          NEXUS_E2E_SHOTS: ${{ runner.temp }}/e2e-shots
+      - name: 上傳截圖
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-native-shots
+          path: ${{ runner.temp }}/e2e-shots
+          retention-days: 7
+          if-no-files-found: warn
+
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
@@ -588,8 +621,8 @@ jobs:
   #   - plan 必須是 success（它掛了，其餘全 skip，不能因此綠燈；輕的模式的檢查也在它裡面）；
   #   - 該跑的 job 必須是 success，failure / cancelled 一律紅；
   #   - 只有 plan 明說「輕的模式」或「不用掃」時，其餘才允許是 skipped。
-  #     四個例外不看模式：sandbox-spawner 看 plan 的 rust（true 要 success、false 要 skipped）；sandbox-spawner-arm64、
-  #     e2e-single 與 e2e-per-thread 看是不是合併後完整一輪（`inputs.full`，是要 success、不是要 skipped）。
+  #     五個例外不看模式：sandbox-spawner 看 plan 的 rust（true 要 success、false 要 skipped）；sandbox-spawner-arm64、
+  #     e2e-single、e2e-native 與 e2e-per-thread 看是不是合併後完整一輪（`inputs.full`，是要 success、不是要 skipped）。
   #
   # 輕的模式下擋合併的檢查都在 plan 裡，plan 成功、rust 為 false（沒動到 spawner 與它的接縫）、其餘全是 skipped 時，下面的判斷不會有別的結論，
   # gate 就不起 job：skipped 的 `gate` 照樣算通過，省掉一個 job 的排隊與啟動。四個條件少一個就照跑、照判。
@@ -609,6 +642,7 @@ jobs:
         sandbox-spawner,
         sandbox-spawner-arm64,
         e2e-single,
+        e2e-native,
         e2e-per-thread,
       ]
     if: >-
@@ -619,7 +653,7 @@ jobs:
         && needs.test-harness.result == 'skipped' && needs.packed-install.result == 'skipped'
         && needs.node-compat.result == 'skipped' && needs.sandbox-spawner.result == 'skipped'
         && needs.sandbox-spawner-arm64.result == 'skipped' && needs.e2e-single.result == 'skipped'
-        && needs.e2e-per-thread.result == 'skipped'
+        && needs.e2e-native.result == 'skipped' && needs.e2e-per-thread.result == 'skipped'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -642,6 +676,7 @@ jobs:
           FULL: ${{ inputs.full }}
           SANDBOX_SPAWNER_ARM64: ${{ needs.sandbox-spawner-arm64.result }}
           E2E_SINGLE: ${{ needs.e2e-single.result }}
+          E2E_NATIVE: ${{ needs.e2e-native.result }}
           E2E_PER_THREAD: ${{ needs.e2e-per-thread.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
@@ -666,6 +701,7 @@ jobs:
             echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
             echo "| sandbox-spawner-arm64 | $SANDBOX_SPAWNER_ARM64 |"
             echo "| e2e (single) | $E2E_SINGLE |"
+            echo "| e2e (native) | $E2E_NATIVE |"
             echo "| e2e (per-thread) | $E2E_PER_THREAD |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -698,9 +734,11 @@ jobs:
           if [ "$FULL" = "true" ]; then
             [ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail "sandbox-spawner-arm64 的結果是 '$SANDBOX_SPAWNER_ARM64'，需要 success。"
             [ "$E2E_SINGLE" = "success" ] || fail "e2e (single) 的結果是 '$E2E_SINGLE'，需要 success。"
+            [ "$E2E_NATIVE" = "success" ] || fail "e2e (native) 的結果是 '$E2E_NATIVE'，需要 success。"
             [ "$E2E_PER_THREAD" = "success" ] || fail "e2e (per-thread) 的結果是 '$E2E_PER_THREAD'，需要 success。"
           else
             [ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail "不是合併後完整一輪，sandbox-spawner-arm64 卻是 '$SANDBOX_SPAWNER_ARM64'。"
             [ "$E2E_SINGLE" = "skipped" ] || fail "不是合併後完整一輪，e2e (single) 卻是 '$E2E_SINGLE'。"
+            [ "$E2E_NATIVE" = "skipped" ] || fail "不是合併後完整一輪，e2e (native) 卻是 '$E2E_NATIVE'。"
             [ "$E2E_PER_THREAD" = "skipped" ] || fail "不是合併後完整一輪，e2e (per-thread) 卻是 '$E2E_PER_THREAD'。"
           fi

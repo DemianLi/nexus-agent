@@ -81,6 +81,46 @@ ${SCRIPT_ROWS}`);
   });
 });
 
+describe('e2eServeInvocation：NEXUS_E2E_AGENT_LOOP', () => {
+  it.each([
+    ['沒設', {}],
+    ['空字串', { NEXUS_E2E_AGENT_LOOP: '' }],
+  ])('%s：不加 --agent-loop', (_name, env) => {
+    expect(invoke(env).args).not.toContain('--agent-loop');
+  });
+
+  it.each(['native', 'langgraph'])('%s：加 --agent-loop <值>，patch 不變', (loop) => {
+    const invocation = invoke({ NEXUS_E2E_AGENT_LOOP: loop });
+    expect(invocation.args.slice(3)).toEqual([
+      '--port',
+      '0',
+      '--patch',
+      PATCH_PATH,
+      '--agent-loop',
+      loop,
+    ]);
+    expect(invocation.patch).toBe(SCRIPT_ROWS);
+  });
+
+  it('跟 per-thread 一起設：--agent-loop 接在 --process-model 前面', () => {
+    const invocation = invoke({
+      NEXUS_E2E_AGENT_LOOP: 'native',
+      NEXUS_E2E_PROCESS_MODEL: 'per-thread',
+      NEXUS_SUPERVISOR_BIN: SUPERVISOR,
+    });
+    expect(invocation.args.slice(7)).toEqual([
+      '--agent-loop',
+      'native',
+      '--process-model',
+      'per-thread',
+    ]);
+  });
+
+  it.each(['Native', 'cordis', ' native'])('%s：拋錯，不悄悄跑預設', (value) => {
+    expect(() => invoke({ NEXUS_E2E_AGENT_LOOP: value })).toThrow(/NEXUS_E2E_AGENT_LOOP/u);
+  });
+});
+
 describe('e2eServeInvocation：NEXUS_E2E_PROCESS_MODEL 是別的值', () => {
   it.each(['single', 'per_thread', 'PER-THREAD'])('%s：拋錯，不悄悄跑 single', (value) => {
     expect(() =>
