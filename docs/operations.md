@@ -1666,7 +1666,7 @@ nexus-agent serve --process-model per-thread
 `per-thread` 下，監督行程除了前台與對話行程，還會起一個宿主 `nexus-host`（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)），整台只有一個。
 它聽 home 底下的 `run/host.sock`，連線時驗明對方是誰。
 
-- **執行檔要跟監督行程放在同一個目錄**：`supervisorBinary` 指到哪，`nexus-host` 就要在它旁邊。兩支由同一個 crate 編出來，找不到宿主就拒起。
+- **執行檔要跟監督行程放在同一個目錄**：`supervisorBinary` 指到哪，`nexus-host` 就要在它旁邊。兩支一起編、一起出貨，找不到宿主就拒起。
   setuid／setgid 的限制同監督行程。
 - **連線身分**：監督行程起前台或對話行程時，替它發一個 token。token 只經控制通道交給那個行程，同時把 pid、token、角色與 thread 送給宿主；
   不放環境變數，也不放命令列。宿主用 `SO_PEERCRED` 取得連線的 pid，與身分表對照：pid 不在表上，或 token 不對，就拒絕連線。

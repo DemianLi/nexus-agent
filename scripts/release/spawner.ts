@@ -37,7 +37,7 @@ export interface SpawnerCrate {
 }
 
 /**
- * `Cargo.lock` 裡每一個外部 crate。`Cargo.lock` 不帶授權，所以授權與 repository 寫在這裡（取自各 crate 的 `Cargo.toml`），
+ * `Cargo.lock` 裡 spawner 用得到的每一個外部 crate（{@link spawnerLockedCrates}，宿主的不算）。`Cargo.lock` 不帶授權，所以授權與 repository 寫在這裡（取自各 crate 的 `Cargo.toml`），
  * `Cargo.lock` 多一個或少一個都由 {@link spawnerCrateProblems} 擋。`runtime` 要跟 CI 的
  * `cargo tree -e normal,no-proc-macro` 收到的一致，產物裡的授權目錄由 {@link spawnerProblems} 對。
  */
@@ -136,7 +136,7 @@ export function nativeLicenseDirs(): string[] {
   return SPAWNER_NATIVE_LIBS.map((entry) => `${entry.name}-${entry.version}`).sort();
 }
 
-/** spawner 自己在 `Cargo.lock` 裡的名字，不算外部 crate。 */
+/** spawner 自己在 `Cargo.lock` 裡的名字，不算外部 crate；{@link spawnerLockedCrates} 從它往下走。 */
 const SELF = 'nexus-sandbox-spawner';
 
 /** `Cargo.lock` 的一個 `[[package]]`。`checksum` 是 registry 上 `.crate` 檔的 SHA-256（十六進位），自己的 crate 沒有。 */
@@ -167,7 +167,48 @@ export function lockedCrates(text: string): LockedCrate[] {
 }
 
 /**
- * 連進執行檔的 crate（{@link SPAWNER_CRATES} 標了 `runtime` 的），版本與 checksum 取自 `Cargo.lock`。
+ * spawner 用得到的外部 crate：從 {@link SELF} 沿 `Cargo.lock` 的 `dependencies` 走到的每一個 `[[package]]`。同一個 workspace
+ * 裡的宿主有自己的相依，那些不進 spawner 的產物，不算。
+ *
+ * @param text - `Cargo.lock` 全文。
+ * @returns 依 `Cargo.lock` 的順序，同名多版本各一列，不含 {@link SELF}。
+ * @throws 有讀不出 name 或 version 的 `[[package]]`、沒有 {@link SELF}，或 `dependencies` 指到 `Cargo.lock` 裡找不到的 crate。
+ */
+export function spawnerLockedCrates(text: string): LockedCrate[] {
+  const blocks = text.split(/^\[\[package\]\]$/mu).slice(1);
+  const crates = lockedCrates(text);
+  const deps = blocks.map((block) =>
+    [
+      ...(/^dependencies = \[\n([^\]]*)\]$/mu.exec(block)?.[1] ?? '').matchAll(/^ "([^"]+)",$/gmu),
+    ].map((match) => match[1] ?? ''),
+  );
+  const resolve = (dep: string): number => {
+    const [name, version] = dep.split(' ');
+    const found = crates.findIndex(
+      (entry) => entry.name === name && (version === undefined || entry.version === version),
+    );
+    if (found === -1)
+      throw new Error(`${SPAWNER_LOCK} 的 dependencies 有 ${dep}，找不到這個 [[package]]`);
+    return found;
+  };
+  const start = crates.findIndex((entry) => entry.name === SELF);
+  if (start === -1) throw new Error(`${SPAWNER_LOCK} 沒有 ${SELF}`);
+  const seen = new Set([start]);
+  const queue = [start];
+  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+    for (const dep of deps[next] ?? []) {
+      const index = resolve(dep);
+      if (!seen.has(index)) {
+        seen.add(index);
+        queue.push(index);
+      }
+    }
+  }
+  return crates.filter((_, index) => index !== start && seen.has(index));
+}
+
+/**
+ * 連進執行檔的 crate：{@link spawnerLockedCrates} 裡 {@link SPAWNER_CRATES} 標了 `runtime` 的，版本與 checksum 取自 `Cargo.lock`。
  *
  * @param lockText - `Cargo.lock` 全文。
  * @returns 依 `Cargo.lock` 的順序，同名多版本各一列。
@@ -177,7 +218,7 @@ export function runtimeCrates(lockText: string): (LockedCrate & { license: strin
   const runtime = new Map(
     SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => [entry.name, entry.license]),
   );
-  return lockedCrates(lockText).flatMap((entry) => {
+  return spawnerLockedCrates(lockText).flatMap((entry) => {
     const license = runtime.get(entry.name);
     return license === undefined ? [] : [{ ...entry, license }];
   });
@@ -227,11 +268,7 @@ export function rustChannel(
  * @returns 問題清單；空代表對上。
  */
 export function spawnerCrateProblems(lockText: string): string[] {
-  const locked = new Set(
-    lockedCrates(lockText)
-      .map((entry) => entry.name)
-      .filter((name) => name !== SELF),
-  );
+  const locked = new Set(spawnerLockedCrates(lockText).map((entry) => entry.name));
   const listed = new Set(SPAWNER_CRATES.map((entry) => entry.name));
   return [
     ...[...locked]

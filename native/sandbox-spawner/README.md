@@ -76,22 +76,22 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 - 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`front`／`host`）、`pid`、`exit_code`、`signal`；`ready`（結束前送過 `ready` 沒有）只有 `host` 有；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 有；沒起成的，與宿主 `ready` 之前逾時、插件清單壞了的，多一個 `error`。宿主回報的違反協定另寫一行：`ts_ms`、`event`（`protocol`）、`pid`、`role`（那個 pid 在身分表上是 `front`、`conversation`，不在表上是 `unknown`）、`thread`、`reason`。欄位與值只加不改，讀的人照 `role` 或 `event` 分辨每一行。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2；前台或宿主的 `hello` 對不上 3；宿主在 `ready` 之前連續失敗 4；這個監督行程起來之後宿主還沒 `ready` 過、插件清單就壞了 5。
 
-整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`examples/fake_conversation.rs`、`examples/fake_host.rs` 三支假程式站在前台、對話行程與宿主的位置；真宿主的端到端也在這裡。
+整合測試 `tests/supervisor.rs` 用 `examples/fake_front.rs`、`host/examples/fake_conversation.rs`、`examples/fake_host.rs` 三支假程式站在前台、對話行程與宿主的位置；真宿主的端到端也在這裡。`fake_conversation` 要用宿主的協定，所以編在宿主那個 package。
 
 ## 宿主 `nexus-host`
 
-同一個 crate 的第三支執行檔（#2569，`src/bin/nexus-host.rs`，邏輯在 `src/host/`），由監督行程起、整台一個，聽 `--socket` 給的 Unix socket，驗明連進來的是誰。不裝 seccomp。
+同一個 workspace 的另一個 package（#2569，`host/`；執行檔 `host/src/main.rs`，邏輯在 `host/src/host/`），由監督行程起、整台一個，聽 `--socket` 給的 Unix socket，驗明連進來的是誰。不裝 seccomp。
 
 ```text
 nexus-host [--plugins <檔>] --socket <路徑>
 ```
 
-- 插件清單（`--plugins`，`src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置還沒有任何一支）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了，或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
+- 插件清單（`--plugins`，`host/src/host/plugins.rs`）：跟監督行程換完 `hello`、bind socket 之前讀。JSON 陣列，一列一個插件：`name`（必填，編進執行檔的插件名；出貨的建置還沒有任何一支）、`config`（選填，原封不動交給插件，裡面的鍵由插件自己判）、`disabled`（選填，只收字面布林；`null` 當沒寫）。沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了、超過 1 MiB、JSON 壞了，或哪一列少了 `name`、是不認得的鍵、名字對不上、型別不對，整份拒絕：寫一行 stderr、送 `config-broken`（帶同一句錯誤）取代 `ready`、回 4，不 bind。`intercept` 還沒做（#2596），寫了一樣整份拒絕，錯誤指到那張卡。插件自己不收它的 `config` 的，只有那一列沒掛（寫一行 stderr），其他照掛。插件的每一筆事件（狀態轉換、apply 失敗…）寫一行 stderr。整合測試用的 `test-echo` 只在 `test-hooks` 的建置裡有。
 
 - 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表的 `grant`／`revoke`，回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
-- 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON，協定在 `src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
-- 呼叫（`src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給服務指名的那一條連線（它的某個呼叫所在的連線），不廣播。只傳資料。
-  - 服務是插件用 `Cx::expose` 提供的（`src/kernel/remote.rs`），照服務名找；沒有就回 `unknown_service`，沒有那個方法回 `unknown_method`。
+- 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON，協定在 `host/src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
+- 呼叫（`host/src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給服務指名的那一條連線（它的某個呼叫所在的連線），不廣播。只傳資料。
+  - 服務是插件用 `Cx::expose` 提供的（`host/src/kernel/remote.rs`），照服務名找；沒有就回 `unknown_service`，沒有那個方法回 `unknown_method`。
   - 每個 `id` 剛好一框 `result`，取消的也有（`cancelled`）；`cancel` 已經結束或不存在的 `id` 不回。結束了的 `id` 可以再用。
   - 一條連線同時最多 64 個呼叫，再來的回 `busy`。一塊或結果編出來超過一框回 `too_large`，大的結果由服務自己切塊串流。排著沒寫出去的到了 1 MiB，先不 poll 那條連線的呼叫，也先不讀它送來的框，排著的降回 1 MiB 以下就恢復；一次讀進來的框照序處理，停下時剩的留著，恢復後接著處理。
   - 服務在一步裡推的塊加起來超過 1 MiB，超過的那一塊起不送（前面的照送），那個呼叫回 `service_error`，服務還當它在跑的話在服務那邊取消。事件不受讀端暫停管：要推給的連線排著的已經到了 2 MiB、又有事件要推，就斷掉那條連線，不丟掉那個事件；客戶端重連後要再發呼叫，服務才知道新的連線。單一事件編出來超過一框的不送，宿主只記一行 log，連線不斷。
@@ -101,7 +101,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
   - pid 不在表上：回 `rejected`、報 `unregistered`（帶 pid 與連線編號，編號依 accept 的順序從 1 起，宿主自己的 stderr 也寫它），表上沒有它可以撤；算不算違規由監督行程判斷。
   - token 或版本不對、重複的 `hello`、框太大、JSON 或訊息解不開（送的若是撤過的連線，見下一條）：回 `rejected`、報 `violation`，把那個 pid 從表上拿掉，它其他驗過身分的連線一起斷，還沒送 `hello` 的記成撤過。
   - 撤過的連線：收到監督行程的 `revoke` 時先把 listen backlog 收完，那個 pid 的連線全部記成撤過（驗過身分的當場斷）；上一條的違規也一樣記，只是不收 backlog。撤過的連線之後送什麼都只回 `rejected`、報 `unregistered`，同一個 pid 號碼再登記也不照新的那一筆驗，也不撤它。pid 被重用得比宿主讀 pipe 還快時，新行程先連上的連線也會這樣被拒，重連就好（不會被隔離）。
-- 整合測試 `tests/host.rs` 由測試站在監督行程的位置；`examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
+- 整合測試 `host/tests/host.rs` 由測試站在監督行程的位置；`host/examples/host_client.rs` 是另一個 pid 的客戶端，`tests/spawner.rs` 用它驗工具子行程連不了 socket（seccomp 擋 `socket(AF_UNIX)`，回 EPERM）。
 
 ### 連線身分的狀態表
 
@@ -134,7 +134,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 | `violation` | 隔離到它結束；寫 `protocol` 稽核（`role` 是 `front`／`conversation`）；宿主 `ready` 而且沒在停，就補送 `revoke`；不記警告 [s1][s2][n2]；宿主重起重送的表裡沒有它 [s9]；序號對不上的、序號 0 的照最右邊「不是我們的」那一格 [s10][s12][s13] | 再寫一行稽核，只在剛隔離時送過那一次 `revoke` [s3]；序號 0 的也照它的身分記 [s11]；不記警告 [s4] | 寫稽核，`role` 是 `unknown`；不隔離、不記警告、不送 `revoke` [s5][s8] |
 | `unregistered` | 不隔離、不寫稽核；運作 log（監督行程的 stderr）記一行警告，帶 pid 與宿主的連線編號，不帶 token [s6] | 照 `violation` 那一格，稽核的理由是宿主回給連線的 [s4][s7] | 照 `violation` 那一格 [s5][s8] |
 
-**釘住各格的測試**（`tests/host.rs` 是 t，`tests/supervisor.rs` 與 `src/supervisor/mod.rs` 的單元測試是 s）
+**釘住各格的測試**（`host/tests/host.rs` 是 t，`tests/supervisor.rs` 與 `src/supervisor/mod.rs` 的單元測試是 s）
 
 - t1 `a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation`
 - t2 `a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections`
@@ -195,8 +195,10 @@ nexus-host [--plugins <檔>] --socket <路徑>
 需要 Linux。Mac 上用容器跑，例如：
 
 ```bash
-docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/tmp/target rust:1.98.1-slim-bookworm cargo test --features test-hooks
+docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/tmp/target rust:1.98.1-slim-bookworm cargo test --workspace --features test-hooks
 ```
+
+- `--workspace`：根是 spawner 與監督行程的 package，cargo 預設只動它；宿主在 `host/`，要一起編、一起測。兩邊的整合測試會起對方的執行檔（從同一個 target 目錄找），只測一個 package 時對方的執行檔可能還沒編出來。
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
 - `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下。出貨的建置不帶它。

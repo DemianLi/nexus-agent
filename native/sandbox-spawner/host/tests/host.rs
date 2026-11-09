@@ -4,14 +4,15 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "../../tests/common/mod.rs"]
 mod common;
 
 use common::host::{example, unregistered, violation, HostProc, GRANTED};
-use nexus_sandbox_spawner::host_protocol::{
+use nexus_host::host_protocol::{
     decode_host_message, encode_client_message, hello, HostMessage, HOST_PROTOCOL_VERSION,
     MAX_FRAME,
 };
-use nexus_sandbox_spawner::json::{self, Value};
+use nexus_host::json::{self, Value};
 use nexus_sandbox_spawner::protocol::frame;
 use nexus_sandbox_spawner::supervisor_protocol::{HostCommand, HostReport, Role, PROTOCOL_VERSION};
 use std::io::{Read, Write};
@@ -20,7 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const SPAWNER: &str = env!("CARGO_BIN_EXE_nexus-sandbox-spawner");
+/// spawner 在另一個 package，見 `common::built`。
+fn spawner() -> std::path::PathBuf {
+    common::built("nexus-sandbox-spawner")
+}
 const TOKEN: &str = "00112233445566778899aabbccddeeff";
 const OTHER: &str = "ffeeddccbbaa99887766554433221100";
 
@@ -61,7 +65,7 @@ fn hello_frame(token: &str) -> Vec<u8> {
 
 fn newer_hello_frame(token: &str) -> Vec<u8> {
     frame(&encode_client_message(
-        &nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
+        &nexus_host::host_protocol::ClientMessage::Hello {
             version: HOST_PROTOCOL_VERSION + 1,
             token: token.into(),
         },
@@ -267,7 +271,7 @@ fn a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections(
 
 #[test]
 fn every_invalid_vector_is_rejected_and_the_host_keeps_serving() {
-    let vectors = json::parse(include_bytes!("../host-vectors.json")).unwrap();
+    let vectors = json::parse(include_bytes!("../../host-vectors.json")).unwrap();
     let dir = temp_dir("invalid");
     let socket = dir.join("host.sock");
     let mut host = HostProc::start(&socket);
@@ -452,7 +456,7 @@ fn a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later
     let socket = dir.join("host.sock");
     let mut host = HostProc::start(&socket);
     host.grant(me(), TOKEN, Role::Conversation, "a");
-    let mut full: Vec<UnixStream> = (0..nexus_sandbox_spawner::host::MAX_CONNECTIONS)
+    let mut full: Vec<UnixStream> = (0..nexus_host::host::MAX_CONNECTIONS)
         .map(|n| {
             let (stream, reply) = exchange(&socket, &hello_frame(TOKEN));
             assert_eq!(reply, accepted(), "第 {n} 條");
@@ -479,7 +483,7 @@ fn a_connection_still_in_the_backlog_at_a_revoke_is_not_verified_against_a_later
 fn the_host_raises_its_open_file_soft_limit_to_the_hard_limit() {
     use std::os::unix::process::CommandExt;
     let dir = temp_dir("nofile");
-    let mut cmd = Command::new(common::host::HOST);
+    let mut cmd = Command::new(common::host::host());
     cmd.arg("--socket")
         .arg(dir.join("host.sock"))
         .stdin(Stdio::piped())
@@ -782,7 +786,7 @@ fn an_unsandboxed_mcp_server_with_a_stolen_token_is_rejected() {
         .unwrap();
     host.grant(legit.id(), TOKEN, Role::Conversation, "a");
 
-    let guard = Command::new(SPAWNER)
+    let guard = Command::new(spawner())
         .args(["--guard", "--"])
         .arg(example("host_client"))
         .arg(&socket)
@@ -818,7 +822,7 @@ fn a_client_that_never_says_hello_is_dropped() {
     let mut host = HostProc::start(&socket);
     let mut stream = UnixStream::connect(&socket).unwrap();
     stream
-        .set_read_timeout(Some(nexus_sandbox_spawner::host::HELLO_TIMEOUT * 3))
+        .set_read_timeout(Some(nexus_host::host::HELLO_TIMEOUT * 3))
         .unwrap();
     let mut buf = [0u8; 1];
     assert_eq!(
@@ -832,7 +836,7 @@ fn a_client_that_never_says_hello_is_dropped() {
 /// `--plugins` 的清單（`src/host/plugins.rs`）。`test-echo` 只在 `test-hooks` 的建置裡有。
 mod plugins {
     use super::*;
-    use nexus_sandbox_spawner::host::EXIT_CONFIG;
+    use nexus_host::host::EXIT_CONFIG;
 
     fn host_with(tag: &str, list: Option<&str>) -> (PathBuf, PathBuf) {
         let dir = temp_dir(tag);
@@ -945,7 +949,7 @@ fn a_hello_with_the_control_channel_version_is_a_version_mismatch() {
     let mut host = HostProc::start(&socket);
     host.grant(me(), TOKEN, Role::Conversation, "a");
     let old = frame(&encode_client_message(
-        &nexus_sandbox_spawner::host_protocol::ClientMessage::Hello {
+        &nexus_host::host_protocol::ClientMessage::Hello {
             version: 3,
             token: TOKEN.into(),
         },
@@ -957,8 +961,8 @@ fn a_hello_with_the_control_channel_version_is_a_version_mismatch() {
 /// 驗過身分的連線上的呼叫（`src/host/calls.rs`）。服務是 `test-echo/echo`（`src/host/test_plugin.rs`）。
 mod calls {
     use super::*;
-    use nexus_sandbox_spawner::host::calls::MAX_CALLS;
-    use nexus_sandbox_spawner::host_protocol::{CallError, ClientMessage, ErrorCode, Side};
+    use nexus_host::host::calls::MAX_CALLS;
+    use nexus_host::host_protocol::{CallError, ClientMessage, ErrorCode, Side};
 
     const ECHO: &str = "test-echo/echo";
 

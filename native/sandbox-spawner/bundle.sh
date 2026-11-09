@@ -3,7 +3,7 @@
 # bundle 的形狀與產物裡的檢查在 scripts/release/spawner.ts。
 #
 # 用法：在這個目錄、`cargo build --release --locked --target "$(uname -m)-unknown-linux-musl"` 之後跑 `./bundle.sh <輸出目錄>`。
-# 連進執行檔的 crate 用 `cargo tree -e normal,no-proc-macro` 收，授權檔從 cargo 的 registry 原始碼複製；
+# 連進執行檔的 crate 用 `cargo tree -p nexus-sandbox-spawner -e normal,no-proc-macro` 收（只收 spawner 這個 package，宿主的相依不算），授權檔從 cargo 的 registry 原始碼複製；
 # 標準函式庫的版權說明從工具鏈複製；musl 與 LLVM libunwind 的授權原文從 licenses/ 複製。
 set -eu
 
@@ -23,7 +23,7 @@ if [ ! -d "licenses/llvm-libunwind-$llvm" ]; then
 fi
 cp -R licenses/. "$licenses/"
 
-cargo tree --locked --target "$target" -e normal,no-proc-macro --prefix none --format '{p}' | sort -u |
+cargo tree --locked -p nexus-sandbox-spawner --target "$target" -e normal,no-proc-macro --prefix none --format '{p}' | sort -u |
   while read -r name version _; do
     [ "$name" = nexus-sandbox-spawner ] && continue
     version=${version#v}

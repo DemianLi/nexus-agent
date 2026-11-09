@@ -1,5 +1,5 @@
 /**
- * 對話行程連宿主 socket 的協定，客戶端這一側；宿主那一側是 `native/sandbox-spawner/src/host_protocol.rs`，兩邊對同一份向量檔
+ * 對話行程連宿主 socket 的協定，客戶端這一側；宿主那一側是 `native/sandbox-spawner/host/src/host_protocol.rs`，兩邊對同一份向量檔
  * （`native/sandbox-spawner/host-vectors.json`）測。
  *
  * 框是 `u32` LE 長度加內容，內容是一份 JSON 物件，`type` 分種類。客戶端第一框送 `hello`（帶協定版本與監督行程在控制通道上給的 token）；
@@ -8,7 +8,7 @@
  *
  * `side` 是 `id` 由哪一邊發的：現在只有客戶端發呼叫（`'c'`），`'h'` 留給宿主反過來發請求。
  *
- * 宿主的 JSON 收得比標準少（`native/sandbox-spawner/src/json.rs`）：數字只收整數，`\u` 跳脫的代理對要成對，巢狀最多 {@link MAX_DEPTH} 層。
+ * 宿主的 JSON 收得比標準少（`native/sandbox-spawner/host/src/json.rs`）：數字只收整數，`\u` 跳脫的代理對要成對，巢狀最多 {@link MAX_DEPTH} 層。
  * 送出去的框宿主解不開就判違反協定、隔離這個行程，所以 {@link encodeClientMessage} 先把 `payload` 核過，不合就丟、不送。
  *
  * @module
