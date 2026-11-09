@@ -782,13 +782,15 @@ const withPromptSections = (chain: readonly string[]): string[] =>
 
 /**
  * 對照組錄的鏈上有 `nexusPlanMode`；計劃模式聽 `agent/pre-step`（#2358），樹上不佔 stack 的格子，那一格在 HEAD 是 core 的兩格——`plugins.prepended`
- * 裡、langgraph 下有 `agent/pre-step` 監聽者才派的 `nexusPreStep`，與補回 `concludesTurn` 工具結果 `name` 的 `nexusToolNameRestore`。
- * 同上，只在這裡換這一格。
+ * 裡、langgraph 下有 `agent/pre-step` 監聽者才派的 `nexusPreStep`（native 由迴圈自己派，不掛），與補回 `concludesTurn` 工具結果
+ * `name` 的 `nexusToolNameRestore`。同上，只在這裡換這一格。
  */
+const PLAN_MODE_CELLS =
+  process.env['NEXUS_TEST_AGENT_LOOP'] === 'native'
+    ? ['nexusToolNameRestore']
+    : ['nexusPreStep', 'nexusToolNameRestore'];
 const withPlanModeOnPreStep = (chain: readonly string[]): string[] =>
-  chain.flatMap((name) =>
-    name === 'nexusPlanMode' ? ['nexusPreStep', 'nexusToolNameRestore'] : [name],
-  );
+  chain.flatMap((name) => (name === 'nexusPlanMode' ? PLAN_MODE_CELLS : [name]));
 
 /**
  * 先讀後改、檔案工具的失敗標成錯誤、搜尋上限的開槽與輸出校驗是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的
