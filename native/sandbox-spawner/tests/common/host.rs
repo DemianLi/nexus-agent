@@ -6,11 +6,15 @@ use nexus_sandbox_spawner::supervisor_protocol::{
 };
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
+
+/// [`HostProc::grant`] 送的序號。
+pub const GRANTED: u32 = 1;
 
 pub fn example(name: &str) -> PathBuf {
     Path::new(HOST).parent().unwrap().join("examples").join(name)
@@ -27,13 +31,30 @@ pub struct HostProc {
 impl HostProc {
     /// 起宿主、還沒握手。
     pub fn spawn(socket: &Path) -> HostProc {
-        let mut child = Command::new(HOST)
-            .arg("--socket")
-            .arg(socket)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+        HostProc::spawn_with(socket, Command::new(HOST))
+    }
+
+    /// 同 [`HostProc::start`]，但宿主的開檔數軟硬上限都是 `limit`：它拉不高，連線到一定數量開檔數就會用完。
+    pub fn start_with_open_file_limit(socket: &Path, limit: u64) -> HostProc {
+        let mut command = Command::new(HOST);
+        // SAFETY：fork 之後只呼叫 setrlimit。
+        unsafe {
+            command.pre_exec(move || {
+                let rlimit = libc::rlimit { rlim_cur: limit, rlim_max: limit };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &rlimit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut host = HostProc::spawn_with(socket, command);
+        host.handshake();
+        host
+    }
+
+    fn spawn_with(socket: &Path, mut command: Command) -> HostProc {
+        let mut child = command.arg("--socket").arg(socket).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         // SAFETY：只改這個 fd 的狀態旗標。
@@ -47,19 +68,29 @@ impl HostProc {
     /// 起宿主、握手、等到 `ready`。
     pub fn start(socket: &Path) -> HostProc {
         let mut host = HostProc::spawn(socket);
-        assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-        host.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
-        assert_eq!(host.report(), Some(HostReport::Ready));
-        assert!(socket.exists());
+        host.handshake();
         host
+    }
+
+    fn handshake(&mut self) {
+        assert_eq!(self.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
+        self.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
+        assert_eq!(self.report(), Some(HostReport::Ready));
+        assert!(self.socket.exists());
     }
 
     pub fn command(&mut self, command: &HostCommand) {
         self.stdin.as_mut().unwrap().write_all(&frame(&encode_host_command(command))).unwrap();
     }
 
+    /// 送一筆序號 [`GRANTED`] 的身分。
     pub fn grant(&mut self, pid: u32, token: &str, role: Role, thread: &str) {
-        self.command(&HostCommand::Grant { pid, token: token.as_bytes().to_vec(), role, thread: thread.as_bytes().to_vec() });
+        self.grant_as(pid, GRANTED, token, role, thread);
+    }
+
+    pub fn grant_as(&mut self, pid: u32, generation: u32, token: &str, role: Role, thread: &str) {
+        let (token, thread) = (token.as_bytes().to_vec(), thread.as_bytes().to_vec());
+        self.command(&HostCommand::Grant { pid, generation, token, role, thread });
     }
 
     /// 關 stdin（監督行程走拆除梯度的第一步）。
@@ -122,8 +153,8 @@ impl Drop for HostProc {
     }
 }
 
-pub fn violation(pid: u32, reason: &str) -> HostReport {
-    HostReport::Violation { pid, reason: reason.as_bytes().to_vec() }
+pub fn violation(pid: u32, generation: u32, reason: &str) -> HostReport {
+    HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() }
 }
 
 /// `unregistered` 回報的 pid 與理由；連線編號不比，另有 `unregistered_reports_number_each_connection`。收到別種回報就 panic。

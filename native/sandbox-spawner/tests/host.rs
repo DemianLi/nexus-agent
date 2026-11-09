@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::host::{example, unregistered, violation, HostProc};
+use common::host::{example, unregistered, violation, HostProc, GRANTED};
 use nexus_sandbox_spawner::host_protocol::{decode_host_message, encode_client_message, hello, HostMessage, MAX_FRAME};
 use nexus_sandbox_spawner::json::{self, Value};
 use nexus_sandbox_spawner::protocol::frame;
@@ -62,11 +62,11 @@ fn newer_hello_frame(token: &str) -> Vec<u8> {
 }
 
 /// 前面那些連線都沒報任何東西：送一條壞框，下一筆回報就要是它的 `violation`。多報的不管是哪一種，都排在它前面、先被讀到。
-/// 壞框會撤掉測試行程的 pid，所以放在測試最後。
-fn assert_nothing_reported_before_a_bad_frame(socket: &Path, host: &mut HostProc) {
+/// 壞框會撤掉測試行程的 pid，所以放在測試最後。`generation` 是那時表上測試行程那一筆的序號，沒有是 0。
+fn assert_nothing_reported_before_a_bad_frame(socket: &Path, host: &mut HostProc, generation: u32) {
     let (_, reply) = exchange(socket, &frame(&[0xff]));
     let Some(HostMessage::Rejected { reason }) = reply else { panic!("{reply:?}") };
-    assert_eq!(host.report(), Some(violation(me(), &reason)));
+    assert_eq!(host.report(), Some(violation(me(), generation, &reason)));
 }
 
 fn rejected(reason: &str) -> Option<HostMessage> {
@@ -86,6 +86,74 @@ fn closed(stream: &mut UnixStream) -> bool {
     }
 }
 
+/// 這個行程累計用掉的 CPU（clock tick，一般是 10 ms）。
+fn cpu_ticks(pid: u32) -> u64 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<&str> = stat.rsplit_once(") ").unwrap().1.split(' ').collect();
+    // 括號後第 12、13 欄是 utime、stime（stat 的第 14、15 欄）。
+    fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+}
+
+/// 開檔數用完：排著的連線接下來就關，宿主不空轉；fd 空出來之後照常收連線。每條連線佔 2 個 fd：剩 1 個時 accept 成功、
+/// 複製 fd 失敗，連線當場關掉，碰不到 EMFILE；所以兩個相鄰的上限各跑一次，其中一個剩 0 個、一定走到 EMFILE。
+#[test]
+fn running_out_of_fds_closes_queued_connections_instead_of_spinning() {
+    for limit in [12, 13] {
+        out_of_fds_at(limit);
+    }
+}
+
+fn out_of_fds_at(limit: u64) {
+    let dir = temp_dir("emfile");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start_with_open_file_limit(&socket, limit);
+    let mut streams: Vec<UnixStream> = (0..8).map(|_| UnixStream::connect(&socket).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let pid = host.child.id();
+    let before = cpu_ticks(pid);
+    std::thread::sleep(Duration::from_secs(1));
+    let spent = cpu_ticks(pid) - before;
+    assert!(spent < 20, "上限 {limit}：宿主 1 秒內用了 {spent} 個 tick");
+
+    for stream in &streams {
+        stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap();
+    }
+    let shed = streams.iter_mut().rev().take(4).map(closed).filter(|&c| c).count();
+    assert_eq!(shed, 4, "上限 {limit}：排在後面的連線沒被關掉");
+
+    drop(streams);
+    host.grant(me(), TOKEN, Role::Conversation, "a");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_stream, reply) = exchange(&socket, &hello_frame(TOKEN));
+        if reply == accepted() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "上限 {limit}：fd 空出來之後還是收不了連線：{reply:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 違規帶回那條連線所屬那一筆的序號：送過 `hello` 的是驗它時那一筆的，表上那個 pid 之後換了一筆也一樣；還沒送的是表上現在那一筆的。
+#[test]
+fn a_violation_carries_the_generation_of_the_grant_it_belongs_to() {
+    let dir = temp_dir("gen");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start(&socket);
+    host.grant_as(me(), 41, TOKEN, Role::Conversation, "a");
+    let (mut stream, reply) = exchange(&socket, &hello_frame(TOKEN));
+    assert_eq!(reply, accepted());
+    host.grant_as(me(), 42, TOKEN, Role::Conversation, "a");
+    stream.write_all(&hello_frame(TOKEN)).unwrap();
+    assert_eq!(read_message(&mut stream), rejected("重複的 hello"));
+    assert_eq!(host.report(), Some(violation(me(), 41, "重複的 hello")));
+
+    host.grant_as(me(), 43, TOKEN, Role::Conversation, "a");
+    let (_, reply) = exchange(&socket, &hello_frame(OTHER));
+    assert_eq!(reply, rejected("token 不對"));
+    assert_eq!(host.report(), Some(violation(me(), 43, "token 不對")));
+}
+
 #[test]
 fn handshake_then_eof_removes_the_socket_and_exits_0() {
     let dir = temp_dir("eof");
@@ -98,13 +166,15 @@ fn handshake_then_eof_removes_the_socket_and_exits_0() {
 
 #[test]
 fn a_wrong_supervisor_hello_exits_3_before_binding() {
-    let dir = temp_dir("ver");
-    let socket = dir.join("host.sock");
-    let mut host = HostProc::spawn(&socket);
-    assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-    host.command(&HostCommand::Hello { version: PROTOCOL_VERSION + 1 });
-    assert_eq!(host.wait().code(), Some(3));
-    assert!(!socket.exists());
+    for version in [PROTOCOL_VERSION + 1, PROTOCOL_VERSION - 1] {
+        let dir = temp_dir("ver");
+        let socket = dir.join("host.sock");
+        let mut host = HostProc::spawn(&socket);
+        assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
+        host.command(&HostCommand::Hello { version });
+        assert_eq!(host.wait().code(), Some(3), "{version}");
+        assert!(!socket.exists());
+    }
 }
 
 #[test]
@@ -118,7 +188,7 @@ fn a_granted_pid_with_its_token_gets_hello_and_a_second_hello_is_a_violation() {
     stream.write_all(&hello_frame(TOKEN)).unwrap();
     assert_eq!(read_message(&mut stream), rejected("重複的 hello"));
     assert!(closed(&mut stream));
-    assert_eq!(host.report(), Some(violation(me(), "重複的 hello")));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "重複的 hello")));
     // 隔離：同一個 pid 再連，表上已經沒有它。
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
     assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
@@ -133,14 +203,14 @@ fn a_wrong_token_or_version_quarantines_the_pid_and_drops_its_other_connections(
     let (mut first, reply) = exchange(&socket, &hello_frame(TOKEN));
     assert_eq!(reply, accepted());
     assert_eq!(exchange(&socket, &hello_frame(OTHER)).1, rejected("token 不對"));
-    assert_eq!(host.report(), Some(violation(me(), "token 不對")));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "token 不對")));
     assert!(closed(&mut first), "隔離時它其他驗過身分的連線要一起斷");
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
     assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
 
     host.grant(me(), TOKEN, Role::Front, "");
     assert_eq!(exchange(&socket, &newer_hello_frame(TOKEN)).1, rejected("版本不對"));
-    assert_eq!(host.report(), Some(violation(me(), "版本不對")));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "版本不對")));
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "版本不對也撤 pid");
     assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
 }
@@ -159,7 +229,7 @@ fn every_invalid_vector_is_rejected_and_the_host_keeps_serving() {
         let (mut stream, reply) = exchange(&socket, &frame(&unhex(&text(entry, "hex"))));
         assert_eq!(reply, rejected(&reason), "{}", text(entry, "name"));
         assert!(closed(&mut stream));
-        assert_eq!(host.report(), Some(violation(me(), &reason)));
+        assert_eq!(host.report(), Some(violation(me(), GRANTED, &reason)));
         assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "{}：pid 撤掉了", text(entry, "name"));
         assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
     }
@@ -170,7 +240,7 @@ fn every_invalid_vector_is_rejected_and_the_host_keeps_serving() {
         host.grant(me(), TOKEN, Role::Conversation, "a");
         let (_, reply) = exchange(&socket, &unhex(&text(entry, "hex")));
         assert_eq!(reply, rejected("框太大"), "{}", text(entry, "name"));
-        assert_eq!(host.report(), Some(violation(me(), "框太大")));
+        assert_eq!(host.report(), Some(violation(me(), GRANTED, "框太大")));
         assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"), "{}：pid 撤掉了", text(entry, "name"));
         assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
     }
@@ -197,7 +267,7 @@ fn a_hello_after_a_revoke_is_always_rejected() {
         assert!(closed(&mut live), "撤銷時它驗過身分的連線要一起斷（第 {round} 輪）");
         assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
     }
-    assert_nothing_reported_before_a_bad_frame(&socket, &mut host);
+    assert_nothing_reported_before_a_bad_frame(&socket, &mut host, 0);
 }
 
 /// 撤銷只斷已經驗過身分的連線；連上了、還沒送 `hello` 的，等它送來時一律回 `rejected`，不是不吭聲地斷掉。
@@ -385,7 +455,7 @@ fn a_regrant_replaces_the_token_and_keeps_verified_connections() {
     let mut buf = [0u8; 1];
     assert!(matches!(verified.read(&mut buf), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock), "驗過身分的照樣連著");
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("token 不對"));
-    assert_eq!(host.report(), Some(violation(me(), "token 不對")));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "token 不對")));
 }
 
 /// pid 不在表上、還沒送 `hello` 的連線，撤銷時也記成撤過：之後同一個號碼登記了，它也不照那一筆驗。
@@ -418,7 +488,7 @@ fn a_bad_frame_from_a_pid_that_is_not_on_the_table_is_a_violation() {
     let (mut stream, reply) = exchange(&socket, &frame(&[0xff]));
     let Some(HostMessage::Rejected { reason }) = reply else { panic!("{reply:?}") };
     assert!(closed(&mut stream));
-    assert_eq!(host.report(), Some(violation(me(), &reason)));
+    assert_eq!(host.report(), Some(violation(me(), 0, &reason)));
     // 表上沒有它可以拿掉；撤 pid 看得到的是同一個 pid 還沒送 `hello` 的連線記成撤過，之後登記了也不照那一筆驗。
     host.grant(me(), TOKEN, Role::Conversation, "a");
     pending.write_all(&hello_frame(TOKEN)).unwrap();
@@ -438,7 +508,7 @@ fn a_bad_frame_after_hello_quarantines_the_pid() {
     stream.write_all(&frame(&[0xff])).unwrap();
     let Some(HostMessage::Rejected { reason }) = read_message(&mut stream) else { panic!() };
     assert!(closed(&mut stream));
-    assert_eq!(host.report(), Some(violation(me(), &reason)));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, &reason)));
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, rejected("沒有登記"));
     assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
 }
@@ -472,7 +542,7 @@ fn a_connection_that_closes_reports_nothing_and_leaves_the_grant() {
     assert_eq!(unregistered(host.report()), Some((me(), "沒有登記".into())));
     drop(revoked);
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, accepted(), "撤過的連線斷了不撤新的那一筆");
-    assert_nothing_reported_before_a_bad_frame(&socket, &mut host);
+    assert_nothing_reported_before_a_bad_frame(&socket, &mut host, GRANTED);
 }
 
 /// 驗 `hello` 先看連線的狀態，再比版本與 token：pid 不在表上、撤過的連線送錯版本與 token 照樣是「沒有登記」，
@@ -494,7 +564,7 @@ fn a_hello_is_judged_by_the_connection_state_before_its_version_or_token() {
     assert_eq!(exchange(&socket, &hello_frame(TOKEN)).1, accepted());
     verified.write_all(&newer_hello_frame(OTHER)).unwrap();
     assert_eq!(read_message(&mut verified), rejected("重複的 hello"));
-    assert_eq!(host.report(), Some(violation(me(), "重複的 hello")));
+    assert_eq!(host.report(), Some(violation(me(), GRANTED, "重複的 hello")));
 
     host.grant(me(), TOKEN, Role::Conversation, "a");
     pending.write_all(&newer_hello_frame(OTHER)).unwrap();
@@ -548,5 +618,5 @@ fn a_client_that_never_says_hello_is_dropped() {
     stream.set_read_timeout(Some(nexus_sandbox_spawner::host::HELLO_TIMEOUT * 3)).unwrap();
     let mut buf = [0u8; 1];
     assert_eq!(stream.read(&mut buf).unwrap(), 0, "超過 HELLO_TIMEOUT 要被斷");
-    assert_nothing_reported_before_a_bad_frame(&socket, &mut host);
+    assert_nothing_reported_before_a_bad_frame(&socket, &mut host, 0);
 }

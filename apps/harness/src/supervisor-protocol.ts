@@ -19,7 +19,7 @@
 export { MAX_FRAME, frame, takeFrames } from './sandbox-protocol.js';
 
 /** 控制面協定的版本，跟 `supervisor_protocol.rs` 的 `PROTOCOL_VERSION` 與向量檔的 `protocolVersion` 相同。 */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** 監督行程 → 對話行程。`hello`：第一框，帶這個行程連宿主用的 token（只在這條通道上，不放環境變數與參數）。`bind`：綁定一條 thread，預熱池裡的與一開始就為某條 thread 起的行程都走這一則。`drain`：對話行程確認仍閒置才回 `drained`，否則回 `busy`；收掉是接著關 stdin。 */
 export type ConversationCommand =
