@@ -65,6 +65,7 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
 import { nativeMaxTurns, type FoldedAgentParams } from './fold.js';
+import { withSubagentTurnLimitReply } from './subagent-turn-limit.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
@@ -390,26 +391,30 @@ export function assembleAgent(params: AssembleAgentParams) {
   // native：前景子代理也跑 native，以編好的 `runnable` 交給基座，基座的 `task` 照樣 `invoke` 它。
   const inlineSubagents =
     params.loop === 'native'
-      ? resolvedSubagents.map((spec) =>
-          'runnable' in spec
-            ? spec
-            : {
-                name: spec.name,
-                description: spec.description,
-                runnable: createNativeAgent({
-                  model: spec.model ?? model,
-                  name: spec.name,
-                  ...(spec.systemPrompt !== undefined && {
-                    systemPrompt: nativeSystemPrompt(spec.name, spec.systemPrompt),
-                  }),
-                  tools: spec.tools,
-                  middleware: spec.middleware,
-                  ...(params.events !== undefined && { events: params.events }),
-                  ...nativeMaxTurns(spec),
-                  subagent: true,
-                }) as unknown as CompiledSubAgent['runnable'],
-              },
-        )
+      ? resolvedSubagents.map((spec) => {
+          if ('runnable' in spec) return spec;
+          const limit = nativeMaxTurns(spec);
+          const agent = createNativeAgent({
+            model: spec.model ?? model,
+            name: spec.name,
+            ...(spec.systemPrompt !== undefined && {
+              systemPrompt: nativeSystemPrompt(spec.name, spec.systemPrompt),
+            }),
+            tools: spec.tools,
+            middleware: spec.middleware,
+            ...(params.events !== undefined && { events: params.events }),
+            ...limit,
+            subagent: true,
+          });
+          return {
+            name: spec.name,
+            description: spec.description,
+            // 撞上限只經 `task` 的結果讓 root 知道（見 {@link withSubagentTurnLimitReply}）。
+            runnable: (limit.maxTurns === undefined
+              ? agent
+              : withSubagentTurnLimitReply(agent)) as unknown as CompiledSubAgent['runnable'],
+          };
+        })
       : resolvedSubagents;
 
   const core = [

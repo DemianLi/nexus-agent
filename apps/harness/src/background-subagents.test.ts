@@ -39,6 +39,7 @@ import {
   BackgroundSubagentError,
   BackgroundSubagentHost,
   backgroundRefusalInfo,
+  maxTurnsSettlementSummary,
   settlementSummary,
   withReturnGuidance,
 } from './background-subagents.js';
@@ -1690,6 +1691,88 @@ describe('產品組裝上的背景子代理', () => {
       }
     });
   }
+
+  it('撞到 maxTurns 收掉的那一輪：結算原因照舊是 completed；native 的子日誌與摘要說撞上限、再收到話照樣叫模型，langgraph 照舊', async () => {
+    const native = process.env.NEXUS_TEST_AGENT_LOOP === 'native';
+    const worker = new ScriptedChatModel({
+      turns: [call('look', {}), call('look', {}), { content: '做完' }],
+    });
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'capped-worker',
+        apply(registry) {
+          registry.subagents.register({
+            name: 'worker',
+            description: '幹活的。',
+            systemPrompt: '幹活。',
+            model: worker as never,
+            maxTurns: 1,
+            tools: [
+              tool(() => '看過了', { name: 'look', description: '看一眼。', schema: z.object({}) }),
+            ],
+          });
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      checkpointer: new PrunedMemorySaver(),
+      plugins: [plugin],
+      backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
+    });
+    const sessions = new SessionRegistry('root-1');
+    const settled: BackgroundSettlement[] = [];
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: (name) =>
+        built.compileSubagent(name, new PrunedMemorySaver()) as unknown as BackgroundAgent,
+      onSettled: (settlement) => settled.push(settlement),
+    });
+    const ends = (log: SessionLog) =>
+      log.events.filter((event) => event.type === 'turn/end').map((event) => event.data);
+    try {
+      const first = host.start({ subagent: 'worker', text: '一' });
+      await first.outcome;
+      await host.idle();
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      // 叫一次就撞上限，第二次沒發出去。
+      expect(worker.prompts).toHaveLength(1);
+      if (!native) {
+        // langgraph 撞上限由中介層收：`turn/end` 不帶原因，摘要照舊說 finished。
+        expect(ends(log)).toEqual([{}]);
+        expect(settled.map(({ reason, summary }) => ({ reason, summary }))).toEqual([
+          { reason: 'completed', summary: settlementSummary(first.runId, 'completed') },
+        ]);
+        return;
+      }
+      expect(ends(log)).toEqual([{ reason: { kind: 'max-turns' } }]);
+      expect(settled.map(({ reason, summary }) => ({ reason, summary }))).toEqual([
+        { reason: 'completed', summary: maxTurnsSettlementSummary(first.runId) },
+      ]);
+
+      // 再收到話：這一輪照樣叫模型，又撞上限。
+      expect(await host.send({ runId: first.runId, message: '二' })).toEqual({ ok: true });
+      await host.idle();
+      expect(worker.prompts).toHaveLength(2);
+      // 正常收尾的那一輪：`turn/end` 不帶原因，摘要照舊說 finished。
+      expect(await host.send({ runId: first.runId, message: '三' })).toEqual({ ok: true });
+      await host.idle();
+      expect(worker.prompts).toHaveLength(3);
+      expect(ends(log)).toEqual([
+        { reason: { kind: 'max-turns' } },
+        { reason: { kind: 'max-turns' } },
+        {},
+      ]);
+      expect(settled.map(({ summary }) => summary)).toEqual([
+        maxTurnsSettlementSummary(first.runId),
+        maxTurnsSettlementSummary(first.runId),
+        settlementSummary(first.runId, 'completed'),
+      ]);
+    } finally {
+      await host.close();
+      await built.dispose();
+    }
+  });
 
   /** 等到條件成立。 */
   async function settleUntil(predicate: () => Promise<boolean>, ms = 5000): Promise<void> {

@@ -21,6 +21,7 @@ import { foldRegistry } from './fold.js';
 import { createHookStepMiddleware } from './hook-step.js';
 import { loadPlugins } from './load.js';
 import { LOOPS, type Loop } from './native-loop/human-input-loops.fixture.js';
+import { subagentTurnLimitNote } from './subagent-turn-limit.js';
 
 type Reply = AIMessage;
 
@@ -128,13 +129,15 @@ const both = async (
 ): Promise<readonly Outcome[]> => Promise.all(LOOPS.map((loop) => run(loop, replies, options)));
 
 describe('子代理 maxTurns：兩個 loop 撞上限的那一刻一樣', () => {
-  it('子代理一直要叫工具：叫滿上限就收尾，task 拿回原版那句英文', async () => {
+  // `task` 拿回的那句兩個 loop 不同：langgraph 照原版的英文（釘住它不變），native 是 `subagentTurnLimitReply`。
+  it('子代理一直要叫工具：叫滿上限就收尾；task 拿回的，langgraph 是原版那句，native 只有上限說明', async () => {
     // 模型是 root 與子代理共用的一份腳本：子代理叫滿兩次之後，下一則輪到 root。
     const replies = [delegate, poke('p1'), poke('p2'), new AIMessage('root 收完')];
     const [langgraph, native] = await both(replies, { maxTurns: 2 });
     // root 一次、子代理兩次、root 收尾一次：子代理的第三次沒有發出去。
     expect(langgraph).toEqual({ calls: 4, pokes: 2, task: limitText(2), last: 'root 收完' });
-    expect(native).toEqual(langgraph);
+    // 子代理兩則回覆都只有工具呼叫、沒有字，所以只有說明。
+    expect(native).toEqual({ ...langgraph, task: subagentTurnLimitNote(2) });
   });
 
   it('afterAgent 跳回模型的那一次也算：跳回之後的下一步就撞上限', async () => {
@@ -149,6 +152,10 @@ describe('子代理 maxTurns：兩個 loop 撞上限的那一刻一樣', () => {
     const [langgraph, native] = await both(replies, { maxTurns: 3, jumpBack: true });
     // 子代理叫了三次：poke、收尾、跳回後的 poke。第三次算進去，所以下一步就撞上限，不會再叫第四次。
     expect(langgraph).toEqual({ calls: 5, pokes: 2, task: limitText(3), last: 'root 收完' });
-    expect(native).toEqual(langgraph);
+    // 最後一則有字的回覆是跳回之前那句，接上說明。
+    expect(native).toEqual({
+      ...langgraph,
+      task: `子代理收完\n\n${subagentTurnLimitNote(3)}`,
+    });
   });
 });

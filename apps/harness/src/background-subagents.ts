@@ -253,6 +253,14 @@ export function settlementSummary(runId: string, reason: BackgroundStopReason): 
 }
 
 /**
+ * 撞到規格的 `maxTurns` 收掉的那一輪的摘要。結算原因照舊是 `completed`（日誌、wire 與 web 的形狀不動，結算原因加 `max-turns`
+ * 見 #2644），只有給主對話模型看的這一句不說 finished。
+ */
+export function maxTurnsSettlementSummary(runId: string): string {
+  return `Background subagent ${runId} reached its model call limit before it finished.`;
+}
+
+/**
  * 結算通知的整段字。dsh 是幾個 text 區塊（摘要、`Its closing message:`、子代理的文字區塊）；我們的 `turn/start.text` 與
  * `HumanMessage` 是一個字串，區塊之間空一行。
  *
@@ -1518,7 +1526,10 @@ export class BackgroundSubagentHost {
     if (log !== undefined) await this.#flushFinal(job.runId, log);
     let settlement: BackgroundSettlement | undefined;
     if (log !== undefined) {
-      const summary = settlementSummary(job.runId, stop);
+      const summary =
+        stop === 'completed' && running.maxTurns
+          ? maxTurnsSettlementSummary(job.runId)
+          : settlementSummary(job.runId, stop);
       const epoch = this.#epochs.get(job.runId);
       settlement = {
         runId: job.runId,

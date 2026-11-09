@@ -1081,6 +1081,7 @@ export { createSessionRelationshipChecker } from './session-relationships.js';
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
+export { subagentTurnLimitNote } from './subagent-turn-limit.js';
 export { createNativeAgent, NativeAgent, RUN_STOP_CONFIG_KEY } from './native-loop/agent.js';
 export type { NativeAgentParams, NativeStateSnapshot, RunStopReason } from './native-loop/agent.js';
 export type {
