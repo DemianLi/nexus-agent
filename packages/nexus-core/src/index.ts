@@ -682,6 +682,13 @@ export {
   isTurnBlocked,
   TurnBlockedError,
 } from './archive-gate.js';
+export type { HumanInput } from './human-input.js';
+export {
+  HUMAN_INPUT_CONFIG_KEY,
+  humanInputOf,
+  HumanInputWithdrawn,
+  isHumanInputWithdrawn,
+} from './human-input.js';
 export type { StepInbox } from './step-inbox.js';
 export {
   createStepInboxMiddleware,

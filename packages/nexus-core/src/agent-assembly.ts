@@ -53,6 +53,7 @@
  * @module
  */
 
+import type { RunnableConfig } from '@langchain/core/runnables';
 import {
   createFilesystemMiddleware,
   createSubAgentMiddleware,
@@ -63,6 +64,7 @@ import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
+import { HUMAN_INPUT_CONFIG_KEY } from './human-input.js';
 import type { FoldedAgentParams } from './fold.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
@@ -232,7 +234,8 @@ function filesystemMiddleware(
 
 /**
  * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
- * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
+ * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`，經 {@link withoutHumanInput} 拿掉
+ * 交給子代理的等人服務）與洋蔥裡的位置照基座。
  *
  * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
  *
@@ -245,7 +248,11 @@ function subAgentMiddleware(
     'taskDescription' | 'generalPurposeAgent'
   >,
 ): ReturnType<typeof createSubAgentMiddleware> {
-  const base = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const created = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const base = {
+    ...created,
+    tools: created.tools?.map(withoutHumanInput) as typeof created.tools,
+  };
   const inner = base.wrapModelCall;
   if (inner === undefined)
     throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
@@ -265,6 +272,30 @@ function subAgentMiddleware(
     step,
     inner,
   );
+}
+
+/**
+ * 基座的 `task`：交給子代理的 config 拿掉等人服務（`human-input.ts`）。子代理仍是 LangGraph 子圖（TODO(#2359)），它的呼叫不在
+ * root 那顆 `task` 呼叫的計數裡；讀得到的話，子代理的屏障一 `idle`，root 那顆就算成不在跑，同一批沒有別顆在跑或在問時判成卡死，
+ * 這次 run 失敗（`native-loop/suspension.ts`）。
+ * root 這一層的屏障與圍堵讀的是工具呼叫請求上的 `configurable`，不經這裡，照樣讀得到。
+ * @param tool - 基座給的工具。
+ * @returns 以 `tool` 為原型的新物件，只覆寫 `invoke`，其餘經原型讀到。
+ */
+function withoutHumanInput<T extends { invoke(input: unknown, config?: RunnableConfig): unknown }>(
+  tool: T,
+): T {
+  return Object.create(tool, {
+    invoke: {
+      value: (input: unknown, config?: RunnableConfig) => {
+        const configurable = config?.configurable;
+        if (configurable === undefined || !(HUMAN_INPUT_CONFIG_KEY in configurable))
+          return tool.invoke(input, config);
+        const { [HUMAN_INPUT_CONFIG_KEY]: _omitted, ...rest } = configurable;
+        return tool.invoke(input, { ...config, configurable: rest });
+      },
+    },
+  }) as T;
 }
 
 /**
