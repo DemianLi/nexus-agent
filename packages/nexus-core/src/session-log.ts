@@ -132,7 +132,7 @@ import type { ToolErrorInfo } from './tool-error-codes.js';
  * （停止鍵、暫停目標、封存時一起停下工作），那幾顆等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。收回時沒有 run 在跑，
  * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
  * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
- * `tool/call`。
+ * `tool/call`；同一批排在核准那顆後面、還沒起跑的呼叫沒有 `tool/call`，由 pump 在結果前面先補一顆。
  *
  * `feedback/*` 三顆**沒有帶來新的生產者，帶來的是新的觸發者：人在事後按的**，只寫 root 那一份。
  * `feedback/record` 兩個寫者各走一條舊路：`/feedback` 走 `goal/change` 那條（經 `registry.sessions`

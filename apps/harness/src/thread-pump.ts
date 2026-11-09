@@ -1217,7 +1217,9 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
  * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
  * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
-function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
+function danglingToolCalls(
+  values: unknown,
+): { readonly id: string; readonly name: string; readonly args: unknown }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;
   if (!Array.isArray(messages)) return [];
   let last = -1;
@@ -1236,7 +1238,22 @@ function danglingToolCalls(values: unknown): { readonly id: string; readonly nam
   const ai = messages[last] as AIMessage;
   return (ai.tool_calls ?? [])
     .filter((call) => call.id !== undefined && !answered.has(call.id))
-    .map((call) => ({ id: call.id as string, name: call.name }));
+    .map((call) => ({ id: call.id as string, name: call.name, args: call.args }));
+}
+
+/**
+ * 最後一則 `assistant/message` 之後記過 `tool/call` 的那幾顆。停在核准點時，同一批排在後面、還沒起跑的呼叫不在裡面。
+ *
+ * @param events - 這份日誌的事件，照 `seq` 排。
+ */
+function loggedCallIds(events: readonly SessionEvent[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at]!;
+    if (event.type === 'assistant/message') break;
+    if (event.type === 'tool/call') ids.add((event as SessionEvent<'tool/call'>).data.callId);
+  }
+  return ids;
 }
 
 export class ThreadPump {
@@ -2338,7 +2355,8 @@ export class ThreadPump {
    * 把停在核准點的那幾顆等核准的呼叫收回（#265 的 Q7，日誌形狀是 Q15），由 {@link ThreadPump.#withdrawPending} 排進來。
    *
    * 那時沒有 run 在跑，圍堵看不到它們，所以日誌由這裡寫：**一輪 `resume`**（那張核准卡被回覆了，
-   * 回覆的內容是「停」）→ 每一顆懸著的呼叫一個 `tool/result` → `turn/end` 帶 aborted。不變量的配對
+   * 回覆的內容是「停」）→ 每一顆懸著的呼叫一個 `tool/result` → `turn/end` 帶 aborted。同一批排在核准那顆後面、
+   * 還沒起跑的呼叫沒有 `tool/call`，先補一顆再寫結果（同 dsh `tools/src/batch.ts` 的 `skip()`）。不變量的配對
    * 成立，那顆中斷也就算答了（日誌上「答了」的樣子本來就是下一顆 `resume`）。
    *
    * 對話那一側也由這裡寫：每一顆一則 dsh 原字串的錯誤 ToolMessage。**不讓基座補**——
@@ -2354,25 +2372,36 @@ export class ThreadPump {
     this.#discardSuspended();
     // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
     for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
-    const started = (name: string) => DELEGATION_TOOLS.includes(name);
-    let dangling: { readonly id: string; readonly name: string }[];
+    let dangling: { readonly id: string; readonly name: string; readonly args: unknown }[];
+    let started: (call: { readonly id: string; readonly name: string }) => boolean;
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
       dangling = danglingToolCalls((await this.#agent.getState(config)).values);
+      const logged = loggedCallIds(log.events);
+      // 委派的那顆停在核准點時本體已經開始；沒記過 `tool/call` 的就是還沒起跑。
+      started = (call) => logged.has(call.id) && DELEGATION_TOOLS.includes(call.name);
       // 碼不在訊息上標：這裡直接寫日誌，下面那顆 `tool/result` 自己帶。
       const withdrawn = dangling.map((call) =>
-        toolRefusal(
-          started(call.name) ? TOOL_ABORTED_REASON : TOOL_ABORTED_BEFORE_DISPATCH_REASON,
-          { callId: call.id, name: call.name },
-        ),
+        toolRefusal(started(call) ? TOOL_ABORTED_REASON : TOOL_ABORTED_BEFORE_DISPATCH_REASON, {
+          callId: call.id,
+          name: call.name,
+        }),
       );
       for (const [index, call] of dangling.entries()) {
+        // 還沒起跑的先記 `tool/call`，結果才有配對。
+        if (!logged.has(call.id)) {
+          log.append('tool/call', {
+            callId: call.id,
+            name: call.name,
+            arguments: JSON.stringify(call.args ?? {}),
+          });
+        }
         log.append('tool/result', {
           callId: call.id,
           isError: true,
           error: {
             name: 'AbortError',
-            code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
+            code: started(call) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
           },
           message: toLoggedMessage(withdrawn[index]!),
         });
@@ -2394,8 +2423,8 @@ export class ThreadPump {
     for (const call of dangling) {
       this.#closeCard(call.id, {
         failed: true,
-        text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
-        code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
+        text: started(call) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+        code: started(call) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
       });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
