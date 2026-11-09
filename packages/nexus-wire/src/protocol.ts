@@ -362,7 +362,8 @@ export const STEER_UNAVAILABLE = 'steer_unavailable';
  *   （dsh 明寫，也不讓呼叫端靠回應試探編號）。
  *
  * `subagent.send` 的話跟 `run.start` 同一道准入（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：serve 是 `--agent-loop native`
- * 時太大的回 `invalid_argument`（`message-too-large: …`），排在找編號之前；`langgraph` 照收，由子代理那一輪開頭搬到 `/conversation_history/`。
+ * 時太大的回 `invalid_argument`（`message-too-large: …`），排在找編號之前；`langgraph` 照收，閒著的子代理收到話開新的一輪，由那一輪開頭搬到
+ * `/conversation_history/`。
  *
  * **兩個都回 `{ accepted: true }`，不等那一輪跑完**；子代理說了什麼、做了什麼走主串流（`agent-message` 與委派卡）。
  * 人說的那句話目前**不回播到主串流**：它寫在子代理自己的日誌裡，主對話日誌沒有對應的事件（今天不加）。

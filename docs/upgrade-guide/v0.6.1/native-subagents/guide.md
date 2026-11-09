@@ -12,7 +12,7 @@ description: "`--agent-loop native` 下子代理改跑 native loop：`subagent.s
 **子代理改由 native loop 驅動**：前景子代理（`task`，#2632）與背景子代理（`subagent` 帶 `run_in_background`）。
 
 - **`subagent.send` 太大的話改成拒收。**
-  - 舊行為：照收；子代理那一輪開頭由基座把整段搬到 `/conversation_history/`，模型看到的是指向那個檔的一句話。
+  - 舊行為：照收。子代理閒著時收到話會開新的一輪，那一輪開頭由基座把整段搬到 `/conversation_history/`，模型看到的是指向那個檔的一句話。
   - 新行為：超過 200,000 字的回 `invalid_argument`，訊息是 `message-too-large: 這則訊息有 <字數> 字，超過上限 200,000 字`；子代理的日誌一個字都不寫。
   - 跟 `run.start` 對 root 的那句話同一道准入（#2415），而且排在找 `run_id` 之前：編號不存在時，太大的話一樣回 `invalid_argument`，不是 `subagent_not_found`。
   - 子代理收到的、由模型寫的話（`task` 的 description、背景委派的那句、agent 轉來的）不擋，超過門檻照舊由基座搬檔。
