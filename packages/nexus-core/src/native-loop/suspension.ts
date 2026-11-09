@@ -13,6 +13,9 @@
  * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。收回之後的 `ask`、`idle`
  * 當場拒絕。
  *
+ * **委派**（{@link delegationOf}）：工具裡跑的前景子代理在 root 那顆 `task` 呼叫底下開自己的呼叫，提問進同一份掛著的提問。
+ * 子代理那一層自己數在跑的：它在叫模型、跑 hook，或它的呼叫有一顆在跑，那顆 `task` 就算在跑；那一層都停下了，`task` 才算停下。
+ *
  * @module
  */
 
@@ -59,13 +62,64 @@ export interface CallSlot {
   exit(): void;
 }
 
+/** 一個服務上的委派入口：只有 {@link RunSuspension} 發的服務帶它。 */
+const DELEGATE = Symbol('nexus.native-loop.delegate');
+
+/** 一顆 `task` 呼叫底下，前景子代理那一層。 */
+export interface Delegation {
+  /** 子代理的一顆呼叫的位子，參數同 {@link RunSuspension.slot}；命名空間是巢狀的那一份。 */
+  slot(
+    callId: string,
+    namespace: readonly string[],
+    halt?: AbortSignal,
+    permit?: CallPermit,
+  ): CallSlot;
+  /** 子代理本身在等 `waiting`（它那一批工具）：等的期間不算它自己在跑，跑不跑看那一批的呼叫。 */
+  away<T>(waiting: Promise<T>): Promise<T>;
+}
+
+/**
+ * 服務上的委派，沒有就是 `undefined`（不是 {@link RunSuspension} 發的，例如 `NO_HUMAN_INPUT`）。
+ * @param service - 工具呼叫拿到的等人服務。
+ */
+export function delegationOf(service: unknown): Delegation | undefined {
+  if (typeof service !== 'object' || service === null) return undefined;
+  const open = (service as { readonly [DELEGATE]?: () => Delegation })[DELEGATE];
+  return open?.();
+}
+
+/** 一層在跑的有幾顆。歸零與離開零時告訴上一層，上一層只把這一層算成一顆。 */
+class Tally {
+  #count: number;
+
+  constructor(
+    initial: number,
+    private readonly onCross?: (delta: 1 | -1) => void,
+  ) {
+    this.#count = initial;
+  }
+
+  get count(): number {
+    return this.#count;
+  }
+
+  add(delta: number): void {
+    const before = this.#count;
+    this.#count += delta;
+    if (before > 0 && this.#count === 0) this.onCross?.(-1);
+    else if (before === 0 && this.#count > 0) this.onCross?.(1);
+  }
+}
+
 /**
  * 一次 run 的等人狀態：發服務給每顆呼叫，數有幾顆在自己往前跑，判定停在等待點或卡死。只數已經起跑的呼叫；排在併發上限後面的，
  * 要等接回之後才起跑。
  */
 export class RunSuspension {
-  #active = 0;
+  readonly #root = new Tally(0);
   readonly #asks = new Map<string, PendingAsk>();
+  /** 每顆提問算在哪一層。 */
+  readonly #tallies = new Map<string, Tally>();
   #slots = 0;
   #scheduled = false;
   #parked = false;
@@ -102,6 +156,16 @@ export class RunSuspension {
    *   讓出名額；等完先照呼叫的先後取回，拿到才把答覆交回本體。收回、收完或這一批中止了就不取，直接交回。
    */
   slot(
+    callId: string,
+    namespace: readonly string[],
+    halt?: AbortSignal,
+    permit?: CallPermit,
+  ): CallSlot {
+    return this.#slot(this.#root, callId, namespace, halt, permit);
+  }
+
+  #slot(
+    tally: Tally,
     callId: string,
     namespace: readonly string[],
     halt?: AbortSignal,
@@ -154,13 +218,7 @@ export class RunSuspension {
           : undefined;
     // 拒絕這顆呼叫還沒落定的每一個等待，每一個把扣掉的那一顆加回來：呼叫拿到拒絕之後是在自己往前跑。
     const cancel = (reason: () => unknown): void => {
-      for (const id of [...asks]) {
-        const ask = this.#asks.get(id);
-        if (ask === undefined) continue;
-        this.#asks.delete(id);
-        this.#active += 1;
-        ask.reject(reason());
-      }
+      for (const id of [...asks]) this.#take(id)?.reject(reason());
       for (const release of [...idlers]) release(reason());
     };
     const onHalt = (): void => {
@@ -209,8 +267,9 @@ export class RunSuspension {
             reject: settle(reject),
             resumed,
           });
+          this.#tallies.set(id, tally);
           asks.add(id);
-          this.#active -= 1;
+          tally.add(-1);
           beginWait();
           this.#maybePark();
         });
@@ -226,7 +285,7 @@ export class RunSuspension {
           const drop = (): boolean => {
             if (!this.#idlers.delete(release)) return false;
             idlers.delete(release);
-            this.#active += 1;
+            tally.add(1);
             return true;
           };
           const release = (reason: unknown): void => {
@@ -234,7 +293,7 @@ export class RunSuspension {
           };
           this.#idlers.add(release);
           idlers.add(release);
-          this.#active -= 1;
+          tally.add(-1);
           beginWait();
           this.#maybePark();
           waiting.then(
@@ -250,17 +309,18 @@ export class RunSuspension {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      [DELEGATE]: () => this.#delegation(tally),
     };
     return {
       service,
       enter: () => {
-        this.#active += 1;
+        tally.add(1);
       },
       exit: () => {
         exited = true;
         halt?.removeEventListener('abort', onHalt);
         cancel(() => new HumanInputWithdrawn());
-        this.#active -= 1;
+        tally.add(-1);
         this.#maybePark();
       },
     };
@@ -297,22 +357,13 @@ export class RunSuspension {
       }
     }
     // 接回的 listener 拋了（例：日誌拒收補記）：那顆以那個錯拒絕，由它自己的規則收，不讓它懸著。
-    for (const [id, error] of failed) {
-      const ask = this.#asks.get(id)!;
-      this.#asks.delete(id);
-      this.#active += 1;
-      ask.reject(error);
-    }
+    for (const [id, error] of failed) this.#take(id)!.reject(error);
     // 照呼叫的先後交，不照 `answers` 的鍵序：交回之後各自取回名額，名額空著時先叫 `acquire` 的當場拿到、排隊的才照索引
     // （`agent.ts` 的 `Permits`），所以交的順序決定誰先接著跑。
     const answered = [...this.#asks.values()]
       .filter((ask) => Object.hasOwn(answers, ask.id))
       .sort((a, b) => a.order - b.order);
-    for (const ask of answered) {
-      this.#asks.delete(ask.id);
-      this.#active += 1;
-      ask.resolve(answers[ask.id]);
-    }
+    for (const ask of answered) this.#take(ask.id)!.resolve(answers[ask.id]);
   }
 
   /**
@@ -321,13 +372,32 @@ export class RunSuspension {
    */
   withdraw(): void {
     this.#withdrawn = true;
-    const asks = [...this.#asks.values()];
-    this.#asks.clear();
-    for (const ask of asks) {
-      this.#active += 1;
-      ask.reject(new HumanInputWithdrawn());
-    }
+    for (const id of [...this.#asks.keys()]) this.#take(id)!.reject(new HumanInputWithdrawn());
     setImmediate(() => this.#releaseIdlers(new HumanInputWithdrawn()));
+  }
+
+  /** 拿掉一顆還沒答的提問，它那一層多一顆在跑：拿到答覆或拒絕之後，那顆呼叫是在自己往前跑。 */
+  #take(id: string): PendingAsk | undefined {
+    const ask = this.#asks.get(id);
+    if (ask === undefined) return undefined;
+    this.#asks.delete(id);
+    this.#tallies.get(id)?.add(1);
+    this.#tallies.delete(id);
+    return ask;
+  }
+
+  /** `parent` 那一層的一顆呼叫底下開一層：開的時候算子代理本身在跑。 */
+  #delegation(parent: Tally): Delegation {
+    const tally = new Tally(1, (delta) => parent.add(delta));
+    return {
+      slot: (callId, namespace, halt, permit) =>
+        this.#slot(tally, callId, namespace, halt, permit),
+      away: (waiting) => {
+        tally.add(-1);
+        this.#maybePark();
+        return waiting.finally(() => tally.add(1));
+      },
+    };
   }
 
   #releaseIdlers(reason: unknown): void {
@@ -355,10 +425,10 @@ export class RunSuspension {
   }
 
   #ready(): boolean {
-    return !this.#parked && !this.#withdrawn && this.#active === 0 && this.#asks.size > 0;
+    return !this.#parked && !this.#withdrawn && this.#root.count === 0 && this.#asks.size > 0;
   }
 
   #stuck(): boolean {
-    return !this.#withdrawn && this.#active === 0 && this.#asks.size === 0 && this.#idlers.size > 0;
+    return !this.#withdrawn && this.#root.count === 0 && this.#asks.size === 0 && this.#idlers.size > 0;
   }
 }

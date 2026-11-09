@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { isHumanInputWithdrawn, waitClockOf, HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
-import { RunSuspension, type CallPermit, type CallSlot } from './suspension.js';
+import { delegationOf, RunSuspension, type CallPermit, type CallSlot, type Delegation } from './suspension.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -331,6 +331,121 @@ describe('RunSuspension', () => {
       suspension.withdraw();
       expect(isHumanInputWithdrawn(await asked)).toBe(true);
       expect(withdrawn.log).toEqual(['release']);
+    });
+  });
+
+  describe('委派：前景子代理在 root 那顆 task 呼叫底下開自己的呼叫', () => {
+    /** root 起跑一顆 task，回它與它的委派。 */
+    function delegating(suspension: RunSuspension, callId = 'task'): {
+      readonly slot: CallSlot;
+      readonly delegation: Delegation;
+    } {
+      const slot = started(suspension, callId);
+      const delegation = delegationOf(slot.service);
+      if (delegation === undefined) throw new Error('slot 的服務沒有委派');
+      return { slot, delegation };
+    }
+
+    /** 子代理起跑一批工具：子代理本身在等這一批，它的呼叫各自起跑。 */
+    function childBatch(
+      delegation: Delegation,
+      callIds: readonly string[],
+    ): { readonly slots: CallSlot[]; readonly done: () => void } {
+      let finish!: () => void;
+      void delegation.away(new Promise<void>((resolve) => (finish = resolve)));
+      const slots = callIds.map((id) => {
+        const slot = delegation.slot(id, ['tools:task', `tools:${id}`]);
+        slot.enter();
+        return slot;
+      });
+      return { slots, done: () => finish() };
+    }
+
+    it('子代理還在叫模型、root 的另一顆在問：不停在等待點', async () => {
+      const onPark = vi.fn();
+      const suspension = new RunSuspension(onPark, vi.fn());
+      delegating(suspension);
+      void started(suspension, 'x').service.ask('q');
+      await tick();
+      await tick();
+      expect(onPark).not.toHaveBeenCalled();
+    });
+
+    it('子代理還在叫模型、root 的另一顆在 idle：不判成卡死', async () => {
+      const onStuck = vi.fn();
+      const suspension = new RunSuspension(vi.fn(), onStuck);
+      delegating(suspension);
+      void started(suspension, 'x').service.idle(new Promise<never>(() => {}));
+      await tick();
+      await tick();
+      expect(onStuck).not.toHaveBeenCalled();
+    });
+
+    it('子代理那一批都在問：停在等待點，提問帶子代理那顆呼叫的巢狀命名空間', async () => {
+      const onPark = vi.fn();
+      const suspension = new RunSuspension(onPark, vi.fn());
+      const { delegation } = delegating(suspension);
+      const { slots } = childBatch(delegation, ['c1']);
+      void slots[0]!.service.ask('q');
+      await tick();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(1);
+      expect(onPark.mock.calls[0]?.[0]).toMatchObject([
+        { callId: 'c1', value: 'q', namespace: ['tools:task', 'tools:c1'] },
+      ]);
+    });
+
+    it('子代理那一批一顆在問、一顆還在跑：不停；跑的那顆收完才停', async () => {
+      const onPark = vi.fn();
+      const suspension = new RunSuspension(onPark, vi.fn());
+      const { delegation } = delegating(suspension);
+      const { slots } = childBatch(delegation, ['c1', 'c2']);
+      void slots[0]!.service.ask('q');
+      await tick();
+      await tick();
+      expect(onPark).not.toHaveBeenCalled();
+      slots[1]!.exit();
+      await tick();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(1);
+    });
+
+    it('子代理那一批都在 idle、沒有一顆在問，root 也沒別的在跑：判成卡死', async () => {
+      const onStuck = vi.fn();
+      const suspension = new RunSuspension(vi.fn(), onStuck);
+      const { delegation } = delegating(suspension);
+      const { slots } = childBatch(delegation, ['c1']);
+      void slots[0]!.service.idle(new Promise<never>(() => {})).catch(() => undefined);
+      await tick();
+      await tick();
+      expect(onStuck).toHaveBeenCalledTimes(1);
+    });
+
+    it('接回子代理那顆：子代理接著跑，root 另一顆再問也不停；子代理那一批收完、回去叫模型時照舊算在跑', async () => {
+      const onPark = vi.fn();
+      const suspension = new RunSuspension(onPark, vi.fn());
+      const { delegation } = delegating(suspension);
+      const { slots, done } = childBatch(delegation, ['c1']);
+      const asked = slots[0]!.service.ask('q');
+      await tick();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(1);
+      const id = suspension.pending[0]!.id;
+      suspension.resume({ [id]: 'A' });
+      expect(await asked).toBe('A');
+      slots[0]!.exit();
+      done();
+      await tick();
+      void started(suspension, 'x').service.ask('q2');
+      await tick();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(1);
+    });
+
+    it('root 自己的呼叫沒有委派以外的影響：沒開委派的 slot 照舊', () => {
+      const suspension = new RunSuspension(vi.fn(), vi.fn());
+      expect(delegationOf(started(suspension, 'c').service)).toBeDefined();
+      expect(delegationOf({ ask: vi.fn(), idle: vi.fn(), onResumed: vi.fn() } as never)).toBeUndefined();
     });
   });
 });
