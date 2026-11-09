@@ -466,7 +466,10 @@ export class NativeAgent {
   readonly #defaults: LoopDefaults;
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
-  /** 清單上的格換成空函式之後的那一份（{@link withNativeNoopCells}），跟 {@link NativeAgent.middleware} 一一對應。 */
+  /**
+   * 清單上的格換成空函式之後的那一份（{@link withNativeNoopCells}），跟 {@link NativeAgent.middleware} 一一對應。前景子代理不換、
+   * 照跑基座的實作：它的人話是 `task` 的 description，不經宿主收人話的入口。
+   */
   readonly #withNoops: readonly LoopMiddleware[];
   /** 有沒有誰執行 `wrapModelCall` 新加的工具：任一顆有 `wrapToolCall`。 */
   readonly #executesAddedTools: boolean;
@@ -509,7 +512,10 @@ export class NativeAgent {
     if (unsupported !== undefined) {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
     }
-    this.#withNoops = this.middleware.map((m) => withNativeNoopCells(m));
+    this.#withNoops =
+      params.subagent === true
+        ? this.middleware
+        : this.middleware.map((m) => withNativeNoopCells(m));
     this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
     this.#toolCells = this.middleware.flatMap((m) => {
       if (m.wrapToolCall === undefined) return [];
