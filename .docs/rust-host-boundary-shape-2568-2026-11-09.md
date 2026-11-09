@@ -20,7 +20,7 @@ D249 之後，過界的地方有兩條，答案分開寫：
 - **版本登記留在前台，不搬進宿主**（是非題 G）。今天它已經不靠宿主：前台跟著監督行程的 `up`／`down` 向各對話行程問綁定，放掉的時機跟著行程生死走（§四）。dev-infra 問的兩個分岔，這樣都不用選。
 - **搜尋索引、釘選封存先從宿主的清單拿掉**（是非題 I）。第一輪 §八 把它們放進宿主，理由是「宿主是 log 的寫入者」；D249 D 之後寫入者是每條對話的組合行程，這個理由不成立了（§五）。
 
-照 G、I 都答是，宿主的服務只剩 MCP 連線池（加上給 MCP stdio 用的那支 spawner）。#2569 第 4 步的橋照 §一 的框做，第一個真的消費者是 #2570。
+照 G、I 都答是，宿主的服務只剩 MCP 連線池（MCP stdio 伺服器由宿主用 spawner 的單次模式起，D268）。#2569 第 4 步的橋照 §一 的框做，第一個真的消費者是 #2570。
 
 葉子行程死掉之後：**「監督行程重起葉子行程、組合行程把那一步收尾成結果不明、那一輪繼續」是終點，要 #2571 與 #2573 都做完才成立**。之前的每一段都寫在 §六。
 
@@ -48,7 +48,7 @@ dsh 這樣做的理由：邊界兩邊一起出貨，資料加判別式最好驗�
 | --- | --- | --- | --- |
 | MCP 工具呼叫與資源操作 | 對話行程 → 宿主 | 工具呼叫是 `ToolCall(args, exec)` 回 `NexusToolResult`（`packages/nexus-plugin-mcp/src/tool-call.ts:39-43`）；資源操作是 `McpSource.request(req, signal)`，資料進資料出（`hub.ts:36-54`）；連線池 `acquire` 回活的連線（`pool.ts:52-66`、`:131-135`），但它留在宿主裡，不過界 | 否 |
 | MCP 執行到一半要問人（elicitation） | 伺服器 → client | 走 `input_required` 輪次，不是伺服器發給 client 的請求：一輪回 `input_required`，client 經 `exec.interrupt` 問人，帶 `inputResponses` 再送下一輪（`packages/nexus-plugin-mcp/src/tool-call.ts:70-80`、`:189-221`）。只收 `elicitation/create`，sampling、roots 都拒（`:224-228`） | 否。宿主每次只跑一輪，`input_required` 當資料回給對話行程，問人與下一輪由對話行程發起 |
-| MCP 起伺服器要的沙箱包裝、守護包裝、憑證 | 今天：harness 交給 MCP 插件 | 三個都是 harness 在組裝時 provide 給插件的服務（`apps/harness/src/assembly-root.ts:1282`、`:1287`、`:1289`）：`mcpSandbox`／`mcpGuard` 是 `(req) => Promise<{command, args}>`（`packages/nexus-plugin-mcp/src/index.ts:76-89`），`mcp:credentials` 是同步的 `resolve(name)`（`packages/nexus-plugin-mcp/src/credentials.ts:21-23`） | 否，但連線池搬進宿主時，這三個**不能變成宿主反過來叫對話行程**。推薦：沙箱與守護由宿主自己用它那支 spawner 做（D248 B），用 Rust 寫；憑證由宿主自己讀同一份來源，值不經 host.sock。對話行程送給宿主的只有 MCP 列的設定與憑證名字（`credentials.ts:4-6` 今天就只讓名字進設定與池鍵）。憑證來源在宿主行程裡怎麼讀，#2570 動工時定 |
+| MCP 起伺服器要的沙箱包裝、守護包裝、憑證 | 今天：harness 交給 MCP 插件 | 三個都是 harness 在組裝時 provide 給插件的服務（`apps/harness/src/assembly-root.ts:1282`、`:1287`、`:1289`）：`mcpSandbox`／`mcpGuard` 是 `(req) => Promise<{command, args}>`（`packages/nexus-plugin-mcp/src/index.ts:76-89`），`mcp:credentials` 是同步的 `resolve(name)`（`packages/nexus-plugin-mcp/src/credentials.ts:21-23`） | 否，但連線池搬進宿主時，這三個**不能變成宿主反過來叫對話行程**。推薦：沙箱與守護由宿主自己做（D248 B），用 Rust 寫：宣告了 `sandbox` 的起 spawner 的單次模式 `--exec`，沒宣告的起 `--guard`，都不經常駐 spawner，因為常駐 spawner 的子行程繼承 seccomp、連不到網路（D268；`.docs/rust-host-design-2568-2026-11-08.md` §六）；憑證由宿主自己讀同一份來源，值不經 host.sock。對話行程送給宿主的只有 MCP 列的設定與憑證名字（`credentials.ts:4-6` 今天就只讓名字進設定與池鍵）。憑證來源在宿主行程裡怎麼讀，#2570 動工時定 |
 | 插件版本登記 | 對話行程 → 前台 | 過界的只有 `{id, signature}`（`apps/harness/src/plugin-live-versions.ts:51-54`）；`bind` 回一個放掉的函式（`:113`） | 否。放掉改成「連線斷了就放」（§四） |
 | 搜尋、釘選封存 | 前台 → 服務 | 介面帶閉包反過來叫對話行程：封存的 `known`、`activity`、`stop`（`apps/harness/src/thread-organization.ts:97-107`），搜尋的 `liveThreads()`（`thread-search.ts:349-370`） | 否，改成服務發請求給對話行程；但這兩項先不進宿主（§五） |
 
