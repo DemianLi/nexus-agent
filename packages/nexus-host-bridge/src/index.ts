@@ -8,9 +8,17 @@ export {
   DEFAULT_BACKOFF_MAX_MS,
   DEFAULT_BACKOFF_MS,
   HostClient,
+  type HostCallOptions,
   type HostClientOptions,
   type HostConnectionState,
+  type HostEvent,
 } from './client.js';
+export {
+  HOST_ABSENCE_CODES,
+  HostCallError,
+  type HostAbsenceCode,
+  type HostCallErrorCode,
+} from './errors.js';
 export {
   FrameReader,
   HOST_ERROR_CODES,
@@ -28,3 +36,14 @@ export {
   type Json,
   type Side,
 } from './protocol.js';
+export {
+  ABSENT_HOST_BRIDGE,
+  DEFAULT_HOST_WAIT_MS,
+  HOST_BRIDGE_SERVICE,
+  createHostBridge,
+  defineHostService,
+  type HostBridge,
+  type HostBridgeHandle,
+  type HostBridgeOptions,
+  type HostService,
+} from './service.js';

@@ -58,6 +58,7 @@ import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
 import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
+import { ABSENT_HOST_BRIDGE, HOST_BRIDGE_SERVICE, type HostBridge } from '@nexus/host-bridge';
 import {
   AGENT_LOOP_KINDS,
   ApprovalPolicyController,
@@ -875,6 +876,11 @@ export interface CreateCliAgentSession {
    * 一份連線。**serve 傳**（起動期建一份、試組與每條 thread 傳同一份）；CLI 一個行程一個組裝，省略就是每列自己連，行為不變。
    */
   readonly mcpPool?: McpConnectionPool;
+  /**
+   * 宿主服務的門面（`@nexus/host-bridge`）：**只有對話行程傳**，監督行程有起宿主時建一個，每條 thread 的組裝交同一個。
+   * 省略＝這個行程沒有宿主（單行程 serve、CLI），組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
+   */
+  readonly hostBridge?: HostBridge;
 }
 
 /**
@@ -1027,6 +1033,7 @@ export async function createCliAgent(
     tokenAnchorBook,
     sessionLookup,
     mcpPool,
+    hostBridge,
   }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
@@ -1277,6 +1284,8 @@ export async function createCliAgent(
         approvalPolicy,
         // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
         [MCP_POOL_SERVICE]: mcpPool,
+        // 宿主服務的門面（#2569）：一定有這一格，沒有宿主時呼叫回 host_absent。
+        [HOST_BRIDGE_SERVICE]: hostBridge ?? ABSENT_HOST_BRIDGE,
         // MCP 設定裡的憑證引用（#1989）：跟模型 key 同一份憑證服務、同一條規則；缺席＝寫了引用的列連不上。
         ...(invocation.credentials !== undefined && {
           [MCP_CREDENTIALS_SERVICE]: mcpCredentialsOf(invocation.credentials),

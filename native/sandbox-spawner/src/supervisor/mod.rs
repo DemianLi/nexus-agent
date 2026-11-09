@@ -856,7 +856,7 @@ impl Supervisor {
     /// 讀每個對話行程 leader 的 RSS，記最高值；超過 `--rss-limit-mb` 而還沒送過 SIGKILL 的，當場殺掉整個群組。死因記 `memory`，
     /// 已經在收的（例如停機）照原本的理由。
     ///
-    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程；spawner 與工具又各自 `setsid`，群組 SIGKILL 也打不到（TODO(#2494)）。
+    /// 只量 leader：只讀它自己的 `VmRSS`，不含子孫行程（TODO(#2494)）。常駐的 spawner 不 `setsid`，跟著群組一起被殺；它起的工具與 `--exec` 單次模式起的 MCP 伺服器各自 `setsid`，群組 SIGKILL 打不到。
     fn poll_rss(&mut self) {
         let now = Instant::now();
         for conversation in &mut self.conversations {
