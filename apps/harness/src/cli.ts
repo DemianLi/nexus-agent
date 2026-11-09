@@ -160,7 +160,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
                        log：送日誌推出來的；推不出來這一輪就失敗
   --agent-loop <langgraph|native>
-                       驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
+                       驅動 middleware 的迴圈（預設 langgraph）；CLI 沒有人可問，兩種都一樣：要核准、要問人的工具一律回絕，不停下來等
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）

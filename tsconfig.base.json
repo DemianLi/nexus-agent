@@ -61,9 +61,6 @@
       ],
       "@nexus/plugin-plan-mode": ["./packages/nexus-plugin-plan-mode/src/index.ts"],
       "@nexus/plugin-plan-mode/invariant": ["./packages/nexus-plugin-plan-mode/src/invariant.ts"],
-      "@nexus/plugin-plan-mode/model-call": [
-        "./packages/nexus-plugin-plan-mode/src/model-call-cell.ts"
-      ],
       "@nexus/plugin-present": ["./packages/nexus-plugin-present/src/index.ts"],
       "@nexus/plugin-present/invariant": ["./packages/nexus-plugin-present/src/invariant.ts"],
       "@nexus/plugin-quickjs": ["./packages/nexus-plugin-quickjs/src/index.ts"],

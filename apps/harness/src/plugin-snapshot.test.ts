@@ -475,34 +475,3 @@ describe('createThreadPluginList 的快照', () => {
     expect(published[0]?.generatedAt).toBe(AT.toISOString());
   });
 });
-
-describe('被主列連帶關掉的從列（#2551）', () => {
-  it('關掉 plan-mode：plan-mode-model-call 在快照上是 disabled，原因指名主那一列；主那一列沒有原因', async () => {
-    const loaded = await load('- id: plan-mode\n  disabled: true\n');
-    const snapshot = buildPluginSnapshot({
-      running: sourceOf(loaded),
-      saved: sourceOf(loaded),
-      generatedAt: AT,
-    });
-    const row = (id: string) => snapshot.rows.find((candidate) => candidate.id === id);
-    const expected = {
-      state: 'disabled',
-      disabledReason: '連帶關閉：主 "@nexus/plugin-plan-mode" 是 disabled: true',
-    };
-    expect(row('plan-mode-model-call')?.running).toEqual(expected);
-    expect(row('plan-mode-model-call')?.saved).toEqual(expected);
-    expect(row('plan-mode')?.running).toEqual({ state: 'disabled' });
-  });
-
-  it('出貨清單上兩列都開著：沒有原因欄位', async () => {
-    const loaded = await load();
-    const snapshot = buildPluginSnapshot({
-      running: sourceOf(loaded),
-      saved: sourceOf(loaded),
-      generatedAt: AT,
-    });
-    expect(snapshot.rows.find((row) => row.id === 'plan-mode-model-call')?.running).toEqual({
-      state: 'mounted',
-    });
-  });
-});

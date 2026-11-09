@@ -27,17 +27,12 @@
  * | 退出工具 | `exit_plan_mode` 漸進揭露（對讀 `ce7073d5`）：從第一個啟用計劃模式的步驟起才進工具清單，之後整個會話都留著；模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，一律註冊、模式外拒絕（只在本體裡；沒有排在核准閘門之前的另一層，#1276） |
  * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊；送上線給畫面的那一份是 pump 另外合成的 `custom` 事件，只有 `active`，見 `@nexus/wire` 的 `plan-mode.ts`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)） |
  *
- * ## 兩列：樹上這一列與相容層那一格
+ * ## 樹上的一列
  *
- * 計劃模式在清單上是兩列（[#2551](https://github.com/DemianLi/nexus-agent/issues/2551)）：
- *
- * - **`plan-mode`**（這個入口）：樹上的函式插件。逐條 thread 接上 root 日誌、登記指引段（{@link mountPlanModeThread}），
- *   行程級登記 `exit_plan_mode` 與 `/plan`（{@link mountPlanMode}）。
- * - **`plan-mode-model-call`**（`./model-call-cell.ts`）：留在相容層的那一格，交出待關、送模型之前補回 `name`。歸
- *   [#2358](https://github.com/DemianLi/nexus-agent/issues/2358)。
- *
- * 兩列共用的狀態（每份 root 日誌上的模式、排著的待關）以那份日誌為鍵，放在 `./plan-mode-state.ts` 的模組頂層，兩列都從那裡讀寫；
- * 前提是兩列來自同一份套件，見那個檔的檔頭。宿主要兩列成對出現（`apps/harness/src/plugin-config.ts` 的 `DEPENDENT_ENTRY_PAIRS`）。
+ * **`plan-mode`**（這個入口）是樹上的函式插件：逐條 thread 接上 root 日誌、聽 `agent/pre-step` 交出待關、登記指引段
+ * （{@link mountPlanModeThread}），行程級登記 `exit_plan_mode` 與 `/plan`（{@link mountPlanMode}）。每份 root 日誌上的模式與排著的待關
+ * 以那份日誌為鍵，放在一次掛載一份的狀態表（`./plan-mode-state.ts`）。`exit_plan_mode` 被 core 拿掉的 `name`，送模型之前由 core 補回
+ * （`@nexus/core` 的 `tool-name-restore.ts`），不歸這裡。
  *
  * ## 交出計劃走提問通道——曾經走核准，已照 dsh 改回（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）
  *
@@ -72,11 +67,12 @@
  *
  * 照 dsh：同意之後不當場寫 `plan/mode`，排一格待關，到下一個 `agent/pre-step`（請求組起來之前）才寫。
  * 所以同一批工具裡其他呼叫照樣看到計劃模式開著，日誌上那顆 `plan/mode { active: false }` 落在
- * `exit_plan_mode` 的 `tool/result` 之後。交出去的是相容層那一格（`./model-call-cell.ts`，{@link PLAN_MODE_MIDDLEWARE_NAME}）的
- * `wrapModelCall`：每次模型呼叫前在那裡先把待關交出去，不多一格圖節點。
- * **只認 root 那份日誌**：子代理的模型呼叫交不出 root 的待關。
+ * `exit_plan_mode` 的 `tool/result` 之後。這一列經 `thread.on('agent/pre-step')` 自己聽那一步（`@nexus/tools` 2.11.0），
+ * 不多一格圖節點。**只認 root 那份日誌**：監聽者自己用 `threadId` 對 root 日誌的 id，子代理那一步交不出 root 的待關，
+ * 不靠宿主只在 root 派。被內側擋下或已經中止的那一步不叫這位監聽者（`@nexus/tools` 的 `ToolPreStepListener`），`afterAgent` 插話跳回模型的那一次，
+ * native 不派 pre-step：兩種情形待關都等到下一步。
  *
- * 待關只活在記憶體裡，同 dsh 的 `pendingIntents`：同意之後這一輪被停掉，它等到下一輪第一次模型呼叫才交出去；
+ * 待關只活在記憶體裡：同意之後這一輪被停掉，它等到下一輪第一步才交出去；
  * 行程在那之前重開，它就沒了，模式留在開著。
  *
  * ## 模式狀態走事件日誌——原本的偏離，收回了
@@ -216,22 +212,14 @@ import {
   PLAN_NOT_ATTACHED_MESSAGE,
   PLAN_OFF_ATTACHMENTS_MESSAGE,
 } from './command.js';
-import {
-  attachPlanModeSession,
-  dropPlanModeExit,
-  planModeSessionOf,
-  queuePlanModeExit,
-} from './plan-mode-state.js';
-import type { PlanModeSession } from './plan-mode-state.js';
+import { createPlanModeState } from './plan-mode-state.js';
+import type { PlanModeSession, PlanModeState } from './plan-mode-state.js';
 
 // `/plan` 的詞彙是這個套件的公開介面的一部分（測試與組裝點都讀得到），所以整段轉出去。
 export * from './command.js';
 
 /** 註冊出來的工具名。組裝點要把它排進 `toolOrder` 時用得到。 */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
-
-/** middleware 的名字。**同名會取代基座 stack 裡的同名者**，所以帶著前綴。 */
-export const PLAN_MODE_MIDDLEWARE_NAME = 'nexusPlanMode';
 
 /** 指引那一段的名字。 */
 export const PLAN_POLICY_SECTION_NAME = 'plan:policy';
@@ -398,6 +386,7 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  *
  * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
  *
+ * @param state - 這次掛載的狀態表，丟掉排著的待關用。
  * @param session - 執行器交來的那份日誌上的計劃模式；那份日誌沒接計劃模式時是 `undefined`。
  * @param rawInput - 命令名之後的原文。
  * @param attachments - 這次呼叫收下的附件參照（`CommandInvocation.attachments`，#732）。`/plan off` 帶附件回 `error`；進入時
@@ -406,6 +395,7 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  * @returns 直接印給人看的結果。
  */
 function planCommandResult(
+  state: PlanModeState,
   session: PlanModeSession | undefined,
   rawInput: string,
   attachments: readonly AttachmentRef[],
@@ -423,7 +413,7 @@ function planCommandResult(
   if (request.kind === 'enter' && (request.message !== undefined || attachments.length > 0)) {
     steer(request.message ?? '', attachments);
   }
-  dropPlanModeExit(session);
+  state.dropExit(session);
   const entering = request.kind === 'enter';
   if (session.active() === entering) {
     return {
@@ -522,11 +512,13 @@ const exitPlanModeParameters = z.toJSONSchema(
  *
  * @param lookup - 認這次呼叫的日誌。
  * @param channelOf - 這次呼叫有沒有人可以回答，呼叫當下才問；宿主沒有指定答題者時是 `undefined`。
+ * @param queueExit - 同意之後排一格待關。
  * @returns 可以交給 `tools.register()` 的工具。
  */
 function createExitPlanModeTool(
   lookup: (exec: ToolExec) => PlanModeLookup,
   channelOf: () => ApprovalChannel | undefined,
+  queueExit: (session: PlanModeSession) => void,
 ): NexusTool {
   const refuse = (content: string): NexusToolResult => ({ ok: false, content });
   return {
@@ -591,7 +583,7 @@ function createExitPlanModeTool(
       ) {
         return refuse(planFeedbackMessage(item?.custom ?? ''));
       }
-      queuePlanModeExit(found.session);
+      queueExit(found.session);
       return { ok: true, content: PLAN_APPROVED_MESSAGE };
     },
   };
@@ -601,9 +593,10 @@ function createExitPlanModeTool(
  * 掛在一條 thread 上：接上 root 那份日誌、折它的 `plan/mode`，再登記指引那一段。
  *
  * - **會話參與者**（`thread.join`）：**只管 root**，同 goal：模式是人對這個會話選的，subagent 沒有人可以選。接上時把這份日誌的模式登記進
- *   `./plan-mode-state.ts`，退出工具、`/plan` 與相容層那一格都從那裡讀。
- * - **段**（`thread.section`）：指引那一段（{@link PLAN_POLICY_SECTION_NAME}），模式生效才接。fold 把它接在 `plugins.prepended` 的區尾，
- *   在相容層那一格交完待關之後（#2414）；記憶由基座最內層接，所以照樣在指引後面。
+ *   這次掛載的狀態表，退出工具、`/plan` 與 pre-step 監聽者都從那裡讀。
+ * - **pre-step 監聽者**（`thread.on('agent/pre-step')`）：交出這條 thread 的 root 日誌排著的待關，見檔頭「模式在下一個模型步驟之前才關」。
+ * - **段**（`thread.section`）：指引那一段（{@link PLAN_POLICY_SECTION_NAME}），模式生效才接。段在模型呼叫那一刻才判，在 pre-step 交完待關之後
+ *   （#2414）；記憶由基座最內層接，所以照樣在指引後面。
  *
  * 段掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
  * - 認得出來、是這條 thread 接著的 root 那份日誌 → 讀它的模式。
@@ -615,18 +608,20 @@ function createExitPlanModeTool(
  * @param thread - 這條 thread 的組裝。
  * @param forCall - 認這一次呼叫屬於哪份日誌。
  * @param config - 驗過的設定。
- * @throws 宿主的 `ToolThread` 沒有 `join`（`@nexus/tools` 2.7.0 起）。
+ * @param state - 這次掛載的狀態表。
+ * @throws 宿主的 `ToolThread` 沒有 `join`，或 `on` 不收 `agent/pre-step`（`@nexus/tools` 2.11.0 起）。
  */
 function mountPlanModeThread(
   thread: ToolThread,
   forCall: (invocation: unknown) => SessionLookup,
   config: PlanModeConfig,
+  state: PlanModeState,
 ): void {
   const { guidance, startActive } = config;
-  const { join } = thread;
-  if (join === undefined) {
+  const { join, on } = thread;
+  if (join === undefined || on === undefined) {
     throw new Error(
-      'plan-mode 要宿主的 ToolThread 有 join（@nexus/tools 2.7.0 起），這個宿主沒有提供',
+      'plan-mode 要宿主的 ToolThread 有 join 與收 agent/pre-step 的 on（@nexus/tools 2.11.0 起），這個宿主沒有提供',
     );
   }
   const attachedHere = new Set<PlanModeSession>();
@@ -635,7 +630,7 @@ function mountPlanModeThread(
     const subject = value as SessionSubject;
     if (subject.address.kind !== 'root') return undefined;
     const session = trackPlanMode(subject, startActive);
-    const detach = attachPlanModeSession(session);
+    const detach = state.attach(session);
     attachedHere.add(session);
     sessionsHere.set(subject.log, session);
     return () => {
@@ -644,10 +639,19 @@ function mountPlanModeThread(
       attachedHere.delete(session);
     };
   });
-  const fallback = (): boolean => {
+  const onlyAttached = (): PlanModeSession | undefined => {
     const [only, ...rest] = attachedHere;
-    return only !== undefined && rest.length === 0 ? only.active() : startActive;
+    return rest.length === 0 ? only : undefined;
   };
+  const fallback = (): boolean => onlyAttached()?.active() ?? startActive;
+  // root 那份日誌的 id 就是 thread id；子代理的不是，所以子代理那一步交不出 root 的待關。沒帶 thread id 時同指引那一格：剛好接了一份就是它。
+  on.call(thread, 'agent/pre-step', ({ threadId }) => {
+    const session =
+      threadId === undefined
+        ? onlyAttached()
+        : [...attachedHere].find((each) => each.log.sessionId === threadId);
+    if (session !== undefined) state.settleExit(session.log);
+  });
   const active = (call: unknown): boolean => {
     const found = forCall(call);
     if (found.kind !== 'ok') return fallback();
@@ -679,15 +683,16 @@ export interface PlanModeMountHost {
  * - **`/plan`**：行程級登記。**命令不進模型**——它是人對工具說的話，結果直接印給打字的人看（`/plan <message>` 的那句話例外：它經
  *   `steer` 成為命令落定後的一輪人話）。要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`）。
  *
- * 交出待關與補回 `name` 不在這裡，在相容層那一格（`./model-call-cell.ts`）。**不註冊核准閘門**（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）：
+ * **不註冊核准閘門**（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）：
  * 交出計劃走提問通道，見檔頭。
  *
  * @param host - 登記處、會話查找與答題管道。
  * @param config - 驗過的設定。
  */
 export function mountPlanMode(host: PlanModeMountHost, config: PlanModeConfig): void {
+  const state = createPlanModeState();
   host.threadSource((thread) => {
-    mountPlanModeThread(thread, (invocation) => host.forCall(invocation), config);
+    mountPlanModeThread(thread, (invocation) => host.forCall(invocation), config, state);
   });
   host.registerTool(
     createExitPlanModeTool(
@@ -695,10 +700,11 @@ export function mountPlanMode(host: PlanModeMountHost, config: PlanModeConfig): 
         const found = host.forCall(exec);
         if (found.kind === 'not-attached') return { kind: 'not-attached' };
         if (found.kind !== 'ok') return { kind: 'not-root' };
-        const session = planModeSessionOf(found.log);
+        const session = state.sessionOf(found.log);
         return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
       },
       () => host.channel(),
+      (session) => state.queueExit(session),
     ),
   );
   host.registerCommand({
@@ -706,7 +712,7 @@ export function mountPlanMode(host: PlanModeMountHost, config: PlanModeConfig): 
     description: PLAN_COMMAND_DESCRIPTION,
     input: { hint: PLAN_COMMAND_HINT, attachments: true },
     handler: ({ rawInput, attachments, steer, sessionLog }) =>
-      planCommandResult(planModeSessionOf(sessionLog), rawInput, attachments, steer),
+      planCommandResult(state, state.sessionOf(sessionLog), rawInput, attachments, steer),
   });
 }
 
@@ -714,11 +720,11 @@ export function mountPlanMode(host: PlanModeMountHost, config: PlanModeConfig): 
 export const name = 'plan-mode';
 
 /**
- * 要的服務：`tools`（`^2.8.0`，段收這一次呼叫的身分）、`commands`、`sessionLookup` 與 `approvalChannel`。範圍在這裡宣告，經
+ * 要的服務：`tools`（`^2.11.0`，`thread.on` 收 `agent/pre-step`）、`commands`、`sessionLookup` 與 `approvalChannel`。範圍在這裡宣告，經
  * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^2.8.0'),
+  need(toolsToken, '^2.11.0'),
   need(commandsToken, '^1.0.0'),
   need(sessionLookupToken, '^1.0.0'),
   need(approvalChannelToken, '^1.0.0'),
@@ -733,7 +739,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^2.8.0' },
+    { token: toolsToken.name, range: '^2.11.0' },
     { token: commandsToken.name, range: '^1.0.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
     { token: approvalChannelToken.name, range: '^1.0.0' },
