@@ -85,11 +85,22 @@ impl Kernel {
                 continue;
             };
             let started = Instant::now();
-            let result = f(&mut Cx { kernel: self, fiber: owner }, event);
+            let result = f(
+                &mut Cx {
+                    kernel: self,
+                    fiber: owner,
+                },
+                event,
+            );
             drop(f);
             self.note_slow(owner, E::NAME, started);
             if let Err(error) = result {
-                self.push_event(KernelEvent::ListenerFailed { fiber: owner, name, event: E::NAME, error: error.0 });
+                self.push_event(KernelEvent::ListenerFailed {
+                    fiber: owner,
+                    name,
+                    event: E::NAME,
+                    error: error.0,
+                });
             }
         }
     }
@@ -98,7 +109,12 @@ impl Kernel {
         let elapsed = started.elapsed();
         if elapsed > self.limits.slow_callback {
             let name = self.fiber_name(owner);
-            self.push_event(KernelEvent::SlowCallback { fiber: owner, name, what: what.to_string(), elapsed });
+            self.push_event(KernelEvent::SlowCallback {
+                fiber: owner,
+                name,
+                what: what.to_string(),
+                elapsed,
+            });
         }
     }
 }

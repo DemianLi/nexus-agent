@@ -33,10 +33,14 @@ pub mod plugins;
 #[cfg(feature = "test-hooks")]
 mod test_plugin;
 
-use crate::host_protocol::{self, decode_client_message, encode_host_message, ClientMessage, HostMessage};
+use crate::host_protocol::{
+    self, decode_client_message, encode_host_message, ClientMessage, HostMessage,
+};
 use crate::kernel::{Kernel, KernelEvent, Limits};
 use crate::supervisor::process::Chan;
-use crate::supervisor_protocol::{decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION};
+use crate::supervisor_protocol::{
+    decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION,
+};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -119,12 +123,19 @@ fn parse(args: Vec<OsString>) -> Result<Args, String> {
     let mut plugins = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--socket") => socket = Some(PathBuf::from(args.next().ok_or("--socket 要一個路徑")?)),
-            Some("--plugins") => plugins = Some(PathBuf::from(args.next().ok_or("--plugins 要一個路徑")?)),
+            Some("--socket") => {
+                socket = Some(PathBuf::from(args.next().ok_or("--socket 要一個路徑")?))
+            }
+            Some("--plugins") => {
+                plugins = Some(PathBuf::from(args.next().ok_or("--plugins 要一個路徑")?))
+            }
             _ => return Err(format!("不認得的參數 {}", arg.to_string_lossy())),
         }
     }
-    Ok(Args { socket: socket.ok_or("少了 --socket")?, plugins })
+    Ok(Args {
+        socket: socket.ok_or("少了 --socket")?,
+        plugins,
+    })
 }
 
 /// 照 `--plugins` 建樹；沒帶或檔案不存在是空樹。
@@ -163,8 +174,16 @@ pub fn run(args: Vec<OsString>) -> i32 {
     };
     raise_open_file_limit();
     // SAFETY：fd 0、1 是監督行程接好的控制通道，整個行程只有這裡拿它們。
-    let mut control = unsafe { Chan::from_fds(OwnedFd::from_raw_fd(0), OwnedFd::from_raw_fd(1), crate::protocol::MAX_FRAME) };
-    control.send(&encode_host_report(&HostReport::Hello { version: PROTOCOL_VERSION }));
+    let mut control = unsafe {
+        Chan::from_fds(
+            OwnedFd::from_raw_fd(0),
+            OwnedFd::from_raw_fd(1),
+            crate::protocol::MAX_FRAME,
+        )
+    };
+    control.send(&encode_host_report(&HostReport::Hello {
+        version: PROTOCOL_VERSION,
+    }));
     if let Err(code) = await_hello(&mut control) {
         return code;
     }
@@ -172,19 +191,22 @@ pub fn run(args: Vec<OsString>) -> i32 {
         Ok(kernel) => kernel,
         Err(err) => {
             say!("插件清單壞了：{err}");
-            control.send(&encode_host_report(&HostReport::ConfigBroken { reason: err.into_bytes() }));
+            control.send(&encode_host_report(&HostReport::ConfigBroken {
+                reason: err.into_bytes(),
+            }));
             control.flush_until(Instant::now() + CONFIG_BROKEN_WRITE_LIMIT);
             return EXIT_CONFIG;
         }
     };
     let _ = std::fs::remove_file(&socket);
-    let listener = match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
-        Ok(listener) => listener,
-        Err(err) => {
-            say!("綁不了 {}：{err}", socket.display());
-            return 1;
-        }
-    };
+    let listener =
+        match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
+            Ok(listener) => listener,
+            Err(err) => {
+                say!("綁不了 {}：{err}", socket.display());
+                return 1;
+            }
+        };
     let mut host = Host {
         control,
         listener,
@@ -208,7 +230,8 @@ fn raise_open_file_limit() {
     // SAFETY：rlimit 是純資料，全零合法；只改自己的 RLIMIT_NOFILE。
     unsafe {
         let mut limit: libc::rlimit = std::mem::zeroed();
-        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < limit.rlim_max {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < limit.rlim_max
+        {
             limit.rlim_cur = limit.rlim_max;
             if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
                 say!("拉不高開檔數上限：{}", std::io::Error::last_os_error());
@@ -218,14 +241,20 @@ fn raise_open_file_limit() {
 }
 
 fn poll(fds: &mut [libc::pollfd], timeout: Option<Duration>) {
-    let ms = timeout.map_or(-1, |t| libc::c_int::try_from(t.as_millis().max(1)).unwrap_or(libc::c_int::MAX));
+    let ms = timeout.map_or(-1, |t| {
+        libc::c_int::try_from(t.as_millis().max(1)).unwrap_or(libc::c_int::MAX)
+    });
     let n = libc::nfds_t::try_from(fds.len()).unwrap_or(libc::nfds_t::MAX);
     // SAFETY：fds 是一段 pollfd。
     unsafe { libc::poll(fds.as_mut_ptr(), n, ms) };
 }
 
 fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
-    libc::pollfd { fd, events, revents: 0 }
+    libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    }
 }
 
 /// 連線那一端的 pid：uid 要跟自己相同。
@@ -235,7 +264,13 @@ fn peer_pid(fd: libc::c_int) -> Option<u32> {
     let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>()).ok()?;
     // SAFETY：照 SO_PEERCRED 的大小傳 cred。
     let rc = unsafe {
-        libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len)
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
     };
     // SAFETY：沒有參數。
     let uid = unsafe { libc::getuid() };
@@ -256,7 +291,10 @@ fn role_name(role: Role) -> &'static str {
 fn await_hello(control: &mut Chan) -> Result<(), i32> {
     loop {
         let (read, write) = control.poll_fds();
-        let mut fds: Vec<libc::pollfd> = read.map(|fd| pollfd(fd, libc::POLLIN)).into_iter().collect();
+        let mut fds: Vec<libc::pollfd> = read
+            .map(|fd| pollfd(fd, libc::POLLIN))
+            .into_iter()
+            .collect();
         fds.extend(write.map(|fd| pollfd(fd, libc::POLLOUT)));
         if fds.is_empty() {
             say!("監督行程在 hello 之前就斷了");
@@ -270,7 +308,9 @@ fn await_hello(control: &mut Chan) -> Result<(), i32> {
         })?;
         if let Some(first) = frames.first() {
             return match decode_host_command(first) {
-                Ok(HostCommand::Hello { version: PROTOCOL_VERSION }) => {
+                Ok(HostCommand::Hello {
+                    version: PROTOCOL_VERSION,
+                }) => {
                     // 同一批裡跟在 hello 後面的不會有：監督行程等 ready 才送身分表。
                     Ok(())
                 }
@@ -309,8 +349,22 @@ impl Host {
         let (frames, err) = self.control.receive_all();
         for frame in frames {
             match decode_host_command(&frame) {
-                Ok(HostCommand::Grant { pid, generation, token, role, thread }) => {
-                    self.grants.insert(pid, Grant { generation, token, role, thread });
+                Ok(HostCommand::Grant {
+                    pid,
+                    generation,
+                    token,
+                    role,
+                    thread,
+                }) => {
+                    self.grants.insert(
+                        pid,
+                        Grant {
+                            generation,
+                            token,
+                            role,
+                            thread,
+                        },
+                    );
                 }
                 Ok(HostCommand::Revoke { pid }) => {
                     // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
@@ -359,11 +413,16 @@ impl Host {
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
             fds.push(pollfd(read.unwrap_or(-1), libc::POLLIN));
             fds.push(pollfd(write.unwrap_or(-1), libc::POLLOUT));
-            let accepting = self.conns.len() < MAX_CONNECTIONS && self.accept_paused_until.is_none();
+            let accepting =
+                self.conns.len() < MAX_CONNECTIONS && self.accept_paused_until.is_none();
             fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
-                let events = if write.is_some() { libc::POLLIN | libc::POLLOUT } else { libc::POLLIN };
+                let events = if write.is_some() {
+                    libc::POLLIN | libc::POLLOUT
+                } else {
+                    libc::POLLIN
+                };
                 fds.push(pollfd(read.or(write).unwrap_or(-1), events));
             }
             poll(&mut fds, deadline.map(|d| d.saturating_duration_since(now)));
@@ -377,7 +436,10 @@ impl Host {
             }
             // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
             for (i, fd) in fds.iter().skip(3).enumerate() {
-                if fd.revents != 0 && self.conns.get(i).is_some_and(|conn| !conn.dead) && !self.on_readable(i) {
+                if fd.revents != 0
+                    && self.conns.get(i).is_some_and(|conn| !conn.dead)
+                    && !self.on_readable(i)
+                {
                     if let Some(conn) = self.conns.get_mut(i) {
                         conn.dead = true;
                     }
@@ -386,7 +448,10 @@ impl Host {
             self.step_kernel();
             let now = Instant::now();
             self.conns.retain(|conn| {
-                !conn.dead && !conn.chan.read_closed() && !conn.chan.write_closed() && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
+                !conn.dead
+                    && !conn.chan.read_closed()
+                    && !conn.chan.write_closed()
+                    && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
             });
         }
     }
@@ -407,7 +472,16 @@ impl Host {
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
                     self.last_conn = self.last_conn.wrapping_add(1);
                     let id = self.last_conn;
-                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, generation: 0, revoked: false, dead: false });
+                    self.conns.push(Conn {
+                        id,
+                        chan,
+                        pid,
+                        opened: Instant::now(),
+                        hello: false,
+                        generation: 0,
+                        revoked: false,
+                        dead: false,
+                    });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
@@ -447,7 +521,9 @@ impl Host {
 
     /// 讀第 `i` 條連線、處理讀到的框。這條要斷回 `false`。
     fn on_readable(&mut self, i: usize) -> bool {
-        let Some(conn) = self.conns.get_mut(i) else { return false };
+        let Some(conn) = self.conns.get_mut(i) else {
+            return false;
+        };
         conn.chan.flush();
         let frames = match conn.chan.receive() {
             Ok(frames) => frames,
@@ -478,12 +554,18 @@ impl Host {
     fn on_hello(&mut self, i: usize, version: u32, token: &[u8]) -> bool {
         // 驗之前先讀乾淨控制通道：見檔頭。
         self.sync();
-        let Some(conn) = self.conns.get(i) else { return false };
+        let Some(conn) = self.conns.get(i) else {
+            return false;
+        };
         if conn.hello {
             self.violate(i, "重複的 hello");
             return false;
         }
-        let Some(grant) = conn.pid.filter(|_| !conn.revoked).and_then(|pid| self.grants.get(&pid)) else {
+        let Some(grant) = conn
+            .pid
+            .filter(|_| !conn.revoked)
+            .and_then(|pid| self.grants.get(&pid))
+        else {
             self.unregistered(i, "沒有登記");
             return false;
         };
@@ -505,15 +587,21 @@ impl Host {
         if let Some(conn) = self.conns.get_mut(i) {
             conn.hello = true;
             conn.generation = generation;
-            conn.chan.send(&encode_host_message(&HostMessage::Hello { version: PROTOCOL_VERSION }));
+            conn.chan.send(&encode_host_message(&HostMessage::Hello {
+                version: PROTOCOL_VERSION,
+            }));
         }
         true
     }
 
     /// 回 `rejected`，回傳要報給監督行程的 pid（讀不到是 0）；這條由呼叫方斷。
     fn refuse(&mut self, i: usize, reason: &str) -> u32 {
-        let Some(conn) = self.conns.get_mut(i) else { return 0 };
-        conn.chan.send(&encode_host_message(&HostMessage::Rejected { reason: reason.to_string() }));
+        let Some(conn) = self.conns.get_mut(i) else {
+            return 0;
+        };
+        conn.chan.send(&encode_host_message(&HostMessage::Rejected {
+            reason: reason.to_string(),
+        }));
         let pid = conn.pid.unwrap_or(0);
         say!("拒絕 pid {pid} 的連線 #{}：{reason}", conn.id);
         pid
@@ -523,7 +611,11 @@ impl Host {
     fn unregistered(&mut self, i: usize, reason: &str) {
         let pid = self.refuse(i, reason);
         let conn = self.conns.get(i).map_or(0, |conn| conn.id);
-        self.report(&HostReport::Unregistered { pid, conn, reason: reason.as_bytes().to_vec() });
+        self.report(&HostReport::Unregistered {
+            pid,
+            conn,
+            reason: reason.as_bytes().to_vec(),
+        });
     }
 
     /// 違反協定：回 `rejected`、回報監督行程，撤掉那個 pid 在表上的身分、斷掉它其他驗過身分的連線；這條由呼叫方斷。
@@ -537,12 +629,21 @@ impl Host {
         }
         let generation = match self.conns.get(i) {
             Some(conn) if conn.hello => conn.generation,
-            Some(conn) => conn.pid.and_then(|pid| self.grants.get(&pid)).map_or(0, |grant| grant.generation),
+            Some(conn) => conn
+                .pid
+                .and_then(|pid| self.grants.get(&pid))
+                .map_or(0, |grant| grant.generation),
             None => 0,
         };
         let pid = self.refuse(i, reason);
-        self.report(&HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() });
-        let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else { return };
+        self.report(&HostReport::Violation {
+            pid,
+            generation,
+            reason: reason.as_bytes().to_vec(),
+        });
+        let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else {
+            return;
+        };
         if self.grants.contains_key(&pid) {
             say!("pid {pid} 隔離到它結束");
         }

@@ -27,7 +27,12 @@ use std::io::{Read, Write};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
     let socket = value("--socket").expect("--socket");
     let version: u32 = value("--version").map_or(PROTOCOL_VERSION, |v| v.parse().unwrap());
     let exit_before_ready: Option<i32> = value("--exit-before-ready").map(|v| v.parse().unwrap());
@@ -47,7 +52,11 @@ fn main() {
         || then_zero_generation
         || args.iter().any(|a| a == "--violate-conversations");
 
-    let mut log_file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
+    let mut log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{socket}.log"))
+        .unwrap();
     let mut log = move |line: &str| {
         log_file.write_all(format!("{line}\n").as_bytes()).unwrap();
     };
@@ -82,36 +91,76 @@ fn main() {
                     }
                 }
                 HostCommand::Hello { .. } => log("hello again"),
-                HostCommand::Grant { pid, generation, role, thread, .. } => {
+                HostCommand::Grant {
+                    pid,
+                    generation,
+                    role,
+                    thread,
+                    ..
+                } => {
                     let role = match role {
                         Role::Front => "front",
                         Role::Conversation => "conversation",
                     };
-                    log(&format!("grant {pid} {role} {}", String::from_utf8_lossy(&thread)));
+                    log(&format!(
+                        "grant {pid} {role} {}",
+                        String::from_utf8_lossy(&thread)
+                    ));
                     if report_strangers && role == "conversation" {
-                        report(&HostReport::Violation { pid: 0, generation: 0, reason: "測試違規".as_bytes().to_vec() });
-                        report(&HostReport::Unregistered { pid: 0, conn: 7, reason: "沒有登記".as_bytes().to_vec() });
+                        report(&HostReport::Violation {
+                            pid: 0,
+                            generation: 0,
+                            reason: "測試違規".as_bytes().to_vec(),
+                        });
+                        report(&HostReport::Unregistered {
+                            pid: 0,
+                            conn: 7,
+                            reason: "沒有登記".as_bytes().to_vec(),
+                        });
                     }
                     if stale_generation && role == "conversation" {
                         let generation = generation.wrapping_add(1);
-                        report(&HostReport::Violation { pid, generation, reason: "舊序號的違規".as_bytes().to_vec() });
+                        report(&HostReport::Violation {
+                            pid,
+                            generation,
+                            reason: "舊序號的違規".as_bytes().to_vec(),
+                        });
                     }
                     if violate_conversations && role == "conversation" {
                         let generation = if zero_generation { 0 } else { generation };
                         for _ in 0..if violate_twice { 2 } else { 1 } {
-                            report(&HostReport::Violation { pid, generation, reason: "測試違規".as_bytes().to_vec() });
+                            report(&HostReport::Violation {
+                                pid,
+                                generation,
+                                reason: "測試違規".as_bytes().to_vec(),
+                            });
                         }
                         if let Some(reason) = &then_unregistered {
-                            report(&HostReport::Unregistered { pid, conn: 7, reason: reason.as_bytes().to_vec() });
+                            report(&HostReport::Unregistered {
+                                pid,
+                                conn: 7,
+                                reason: reason.as_bytes().to_vec(),
+                            });
                         }
                         if then_zero_generation {
-                            report(&HostReport::Violation { pid, generation: 0, reason: "表上沒有了".as_bytes().to_vec() });
+                            report(&HostReport::Violation {
+                                pid,
+                                generation: 0,
+                                reason: "表上沒有了".as_bytes().to_vec(),
+                            });
                         }
                     }
-                    if let Some(marker) = unregistered_once.as_ref().filter(|_| role == "conversation") {
+                    if let Some(marker) = unregistered_once
+                        .as_ref()
+                        .filter(|_| role == "conversation")
+                    {
                         if std::fs::metadata(marker).is_err() {
                             std::fs::write(marker, b"").unwrap();
-                            report(&HostReport::Unregistered { pid, conn: 7, reason: "沒有登記".as_bytes().to_vec() });
+                            report(&HostReport::Unregistered {
+                                pid,
+                                conn: 7,
+                                reason: "沒有登記".as_bytes().to_vec(),
+                            });
                             std::process::exit(9);
                         }
                     }

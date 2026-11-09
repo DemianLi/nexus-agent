@@ -73,13 +73,18 @@ fn emit(event: &Event) -> bool {
 
 fn unavailable(err: i32, detail: &str) -> ! {
     eprintln!("nexus-sandbox-spawner: {detail}");
-    emit(&Event::Unavailable { errno: err, detail: detail.as_bytes().to_vec() });
+    emit(&Event::Unavailable {
+        errno: err,
+        detail: detail.as_bytes().to_vec(),
+    });
     std::process::exit(125);
 }
 
 #[cfg(feature = "test-hooks")]
 fn test_abi_cap() -> Option<i32> {
-    std::env::var("NEXUS_SPAWNER_TEST_ABI_CAP").ok().and_then(|v| v.parse().ok())
+    std::env::var("NEXUS_SPAWNER_TEST_ABI_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
 }
 
 #[cfg(not(feature = "test-hooks"))]
@@ -89,7 +94,10 @@ fn test_abi_cap() -> Option<i32> {
 
 #[cfg(feature = "test-hooks")]
 fn test_child_delay_us() -> u32 {
-    std::env::var("NEXUS_SPAWNER_TEST_CHILD_DELAY_US").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    std::env::var("NEXUS_SPAWNER_TEST_CHILD_DELAY_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(not(feature = "test-hooks"))]
@@ -140,7 +148,9 @@ fn self_check() -> Result<(), String> {
         }
         let got = errno();
         if got != want {
-            return Err(format!("自我檢查：socket({family}) 拿到 errno {got}，應該是 {want}"));
+            return Err(format!(
+                "自我檢查：socket({family}) 拿到 errno {got}，應該是 {want}"
+            ));
         }
     }
     Ok(())
@@ -203,7 +213,12 @@ struct Pending {
 
 impl Pending {
     fn new(deadline: Instant) -> Pending {
-        Pending { request: None, fds: [-1; 3], deadline, queued: Vec::new() }
+        Pending {
+            request: None,
+            fds: [-1; 3],
+            deadline,
+            queued: Vec::new(),
+        }
     }
 
     fn close_all(&mut self) {
@@ -268,11 +283,18 @@ fn candidates(argv0: &[u8], env: &[Vec<u8>]) -> Vec<Vec<u8>> {
 }
 
 fn cstrings(items: &[Vec<u8>]) -> Option<Vec<CString>> {
-    items.iter().map(|item| CString::new(item.clone()).ok()).collect()
+    items
+        .iter()
+        .map(|item| CString::new(item.clone()).ok())
+        .collect()
 }
 
 fn null_terminated(items: &[CString]) -> Vec<*const libc::c_char> {
-    items.iter().map(|c| c.as_ptr()).chain(std::iter::once(std::ptr::null())).collect()
+    items
+        .iter()
+        .map(|c| c.as_ptr())
+        .chain(std::iter::once(std::ptr::null()))
+        .collect()
 }
 
 impl Spawner {
@@ -283,18 +305,28 @@ impl Spawner {
     }
 
     fn fail(&mut self, id: u32, kind: FailKind, err: i32, detail: &str) {
-        self.emit(&Event::Failed { id, kind, errno: err, detail: detail.as_bytes().to_vec() });
+        self.emit(&Event::Failed {
+            id,
+            kind,
+            errno: err,
+            detail: detail.as_bytes().to_vec(),
+        });
     }
 
     fn on_request(&mut self, request: Request) {
         match request {
             Request::Spawn(spawn) => {
                 let id = spawn.id;
-                if self.children.contains_key(&id) || self.pending.get(&id).is_some_and(|p| p.request.is_some()) {
+                if self.children.contains_key(&id)
+                    || self.pending.get(&id).is_some_and(|p| p.request.is_some())
+                {
                     self.fail(id, FailKind::Protocol, 0, "id 重複");
                     return;
                 }
-                let entry = self.pending.entry(id).or_insert_with(|| Pending::new(Instant::now() + STDIO_WAIT));
+                let entry = self
+                    .pending
+                    .entry(id)
+                    .or_insert_with(|| Pending::new(Instant::now() + STDIO_WAIT));
                 entry.deadline = Instant::now() + STDIO_WAIT;
                 // 先到的連線裡，有要求沒要的 fd：整筆不成立。
                 let unwanted = (0..3).any(|i| entry.fds[i] >= 0 && spawn.pipes & (1 << i) == 0);
@@ -328,7 +360,12 @@ impl Spawner {
     fn on_accept(&mut self) {
         // SAFETY：accept 回來的 fd 由這裡接手。
         let fd = unsafe {
-            libc::accept4(self.listen, std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK)
+            libc::accept4(
+                self.listen,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            )
         };
         if fd < 0 {
             return;
@@ -337,19 +374,34 @@ impl Spawner {
         let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
         // SAFETY：cred 夠大，len 是它的大小。
         let ok = unsafe {
-            libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len)
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut cred as *mut libc::ucred).cast(),
+                &mut len,
+            )
         } == 0;
         if !ok || cred.pid != self.parent || cred.uid != self.uid {
-            eprintln!("nexus-sandbox-spawner: 拒絕連線：pid {} uid {}", cred.pid, cred.uid);
+            eprintln!(
+                "nexus-sandbox-spawner: 拒絕連線：pid {} uid {}",
+                cred.pid, cred.uid
+            );
             close(fd);
             return;
         }
-        self.conns.push(Conn { fd, header: Vec::new(), deadline: Instant::now() + STDIO_WAIT });
+        self.conns.push(Conn {
+            fd,
+            header: Vec::new(),
+            deadline: Instant::now() + STDIO_WAIT,
+        });
     }
 
     /// 讀連線的標頭；讀齊了就交給那個 id。用 fd 找連線：同一輪前面的呼叫會 swap_remove，index 不穩。
     fn on_conn(&mut self, fd: libc::c_int) {
-        let Some(index) = self.conns.iter().position(|c| c.fd == fd) else { return };
+        let Some(index) = self.conns.iter().position(|c| c.fd == fd) else {
+            return;
+        };
         let conn = &mut self.conns[index];
         let mut buf = [0u8; 8];
         let want = 8 - conn.header.len();
@@ -381,8 +433,14 @@ impl Spawner {
             close(conn.fd);
             return;
         }
-        let entry = self.pending.entry(id).or_insert_with(|| Pending::new(Instant::now() + STDIO_WAIT));
-        let unwanted = entry.request.as_ref().is_some_and(|r| r.pipes & (1 << which) == 0);
+        let entry = self
+            .pending
+            .entry(id)
+            .or_insert_with(|| Pending::new(Instant::now() + STDIO_WAIT));
+        let unwanted = entry
+            .request
+            .as_ref()
+            .is_some_and(|r| r.pipes & (1 << which) == 0);
         if entry.fds[which] >= 0 || unwanted {
             close(conn.fd);
             return;
@@ -393,7 +451,11 @@ impl Spawner {
 
     fn try_spawn(&mut self, id: u32) {
         let ready = match self.pending.get(&id) {
-            Some(Pending { request: Some(r), fds, .. }) => (0..3).all(|i| r.pipes & (1 << i) == 0 || fds[i] >= 0),
+            Some(Pending {
+                request: Some(r),
+                fds,
+                ..
+            }) => (0..3).all(|i| r.pipes & (1 << i) == 0 || fds[i] >= 0),
             _ => false,
         };
         if !ready {
@@ -413,7 +475,11 @@ impl Spawner {
         }
     }
 
-    fn spawn(&mut self, r: &Spawn, fds: &mut [libc::c_int; 3]) -> Result<Child, (FailKind, i32, String)> {
+    fn spawn(
+        &mut self,
+        r: &Spawn,
+        fds: &mut [libc::c_int; 3],
+    ) -> Result<Child, (FailKind, i32, String)> {
         let protocol_error = |detail: &str| (FailKind::Protocol, 0, detail.to_string());
         if r.argv.first().is_none_or(Vec::is_empty) {
             return Err(protocol_error("argv 或 argv[0] 是空的"));
@@ -427,7 +493,11 @@ impl Spawner {
         let candidates = cstrings(&candidates(&r.argv[0], &r.env)).expect("候選路徑不含 NUL");
         let cwd = CString::new(r.cwd.clone()).map_err(|_| protocol_error("cwd 含 NUL"))?;
         if r.mode != Mode::FullAccess && self.abi < 1 {
-            return Err((FailKind::SandboxUnavailable, libc::ENOSYS, "Landlock 不能用（核心不支援或沒開）".to_string()));
+            return Err((
+                FailKind::SandboxUnavailable,
+                libc::ENOSYS,
+                "Landlock 不能用（核心不支援或沒開）".to_string(),
+            ));
         }
         let devnull = c"/dev/null";
         for slot in fds.iter_mut() {
@@ -452,7 +522,11 @@ impl Spawner {
             cwd,
             landlock: (r.mode != Mode::FullAccess).then_some(self.abi),
             readable: r.readable.clone(),
-            writable: if r.mode == Mode::WorkspaceWrite { r.writable.clone() } else { Vec::new() },
+            writable: if r.mode == Mode::WorkspaceWrite {
+                r.writable.clone()
+            } else {
+                Vec::new()
+            },
             candidates,
             argv: null_terminated(&argv),
             envp: null_terminated(&env),
@@ -480,13 +554,22 @@ impl Spawner {
             close(status[0]);
             return Err((FailKind::Resource, err, "pidfd_open".to_string()));
         }
-        Ok(Child { pid, pidfd, status: status[0], partial: r.mode != Mode::FullAccess && self.abi < landlock::WANTED_ABI, phase: Phase::Launching, queued: Vec::new() })
+        Ok(Child {
+            pid,
+            pidfd,
+            status: status[0],
+            partial: r.mode != Mode::FullAccess && self.abi < landlock::WANTED_ABI,
+            phase: Phase::Launching,
+            queued: Vec::new(),
+        })
     }
 
     /// 狀態 pipe 有結果：EOF 是 exec 成功，有字是失敗紀錄（子行程每條失敗路徑都會寫）。
     /// 例外：exec 之前被外部殺掉（例如 OOM killer）也是 EOF，會被看成 `Started`，接著的 `Exited` 帶那個訊號。
     fn on_status(&mut self, id: u32) {
-        let Some(child) = self.children.get_mut(&id) else { return };
+        let Some(child) = self.children.get_mut(&id) else {
+            return;
+        };
         let mut record = Vec::new();
         let mut buf = [0u8; 512];
         loop {
@@ -504,7 +587,11 @@ impl Spawner {
         child.status = -1;
         if record.is_empty() {
             child.phase = Phase::Running;
-            let event = Event::Started { id, pid: child.pid as u32, partial: child.partial };
+            let event = Event::Started {
+                id,
+                pid: child.pid as u32,
+                partial: child.partial,
+            };
             for signo in std::mem::take(&mut child.queued) {
                 // SAFETY：送訊號給自己起的群組，leader 還沒被收屍。
                 unsafe { libc::kill(-child.pid, signo) };
@@ -521,7 +608,12 @@ impl Spawner {
             ),
             _ => (FailKind::Resource, 0, record.clone()),
         };
-        self.emit(&Event::Failed { id, kind, errno: err, detail });
+        self.emit(&Event::Failed {
+            id,
+            kind,
+            errno: err,
+            detail,
+        });
     }
 
     /// leader 結束了：先把狀態讀完（它可能 exec 完馬上結束），群組整個 SIGKILL，再收屍。
@@ -529,7 +621,9 @@ impl Spawner {
         if self.children.get(&id).is_some_and(|c| c.status >= 0) {
             self.on_status(id);
         }
-        let Some(child) = self.children.remove(&id) else { return };
+        let Some(child) = self.children.remove(&id) else {
+            return;
+        };
         let mut st = 0;
         // SAFETY：leader 還是殭屍，pgid 還在它身上；之後才收屍。
         unsafe {
@@ -550,7 +644,12 @@ impl Spawner {
     }
 
     fn expire(&mut self, now: Instant) {
-        let expired: Vec<u32> = self.pending.iter().filter(|(_, p)| p.deadline <= now).map(|(&id, _)| id).collect();
+        let expired: Vec<u32> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.deadline <= now)
+            .map(|(&id, _)| id)
+            .collect();
         for id in expired {
             let mut p = self.pending.remove(&id).unwrap();
             p.close_all();
@@ -568,7 +667,11 @@ impl Spawner {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        self.pending.values().map(|p| p.deadline).chain(self.conns.iter().map(|c| c.deadline)).min()
+        self.pending
+            .values()
+            .map(|p| p.deadline)
+            .chain(self.conns.iter().map(|c| c.deadline))
+            .min()
     }
 
     /// 殺掉所有群組、收完、結束。先殺再收：還沒 exec 的子行程可能卡在 chdir 之類的地方，`on_exit` 讀它的狀態 pipe 會等到它死。
@@ -586,7 +689,12 @@ impl Spawner {
         for id in ids {
             self.on_exit(id);
         }
-        let waiting: Vec<u32> = self.pending.iter().filter(|(_, p)| p.request.is_some()).map(|(&id, _)| id).collect();
+        let waiting: Vec<u32> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.request.is_some())
+            .map(|(&id, _)| id)
+            .collect();
         for id in waiting {
             self.fail(id, FailKind::Resource, 0, "spawner 結束");
         }
@@ -617,11 +725,18 @@ fn parse_exec(args: &[OsString]) -> Result<ExecRequest, String> {
         };
         target.push(rest.next().ok_or("旗標後面少了路徑")?.as_bytes().to_vec());
     }
-    let argv = rest.map(|arg| CString::new(arg.as_bytes())).collect::<Result<Vec<_>, _>>().map_err(|_| "參數含 NUL")?;
+    let argv = rest
+        .map(|arg| CString::new(arg.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "參數含 NUL")?;
     if argv.is_empty() {
         return Err("少了程式".to_string());
     }
-    Ok(ExecRequest { readable, writable, argv })
+    Ok(ExecRequest {
+        readable,
+        writable,
+        argv,
+    })
 }
 
 /// 單次模式：替這個行程自己上沙箱再 exec，給一條連線只起一次、stdio 由呼叫端接好的行程用。
@@ -645,7 +760,10 @@ fn exec_confined(args: &[OsString]) -> ! {
         die("這台主機沒有 Landlock".to_string());
     }
     if abi < landlock::WANTED_ABI {
-        eprintln!("nexus-sandbox-spawner: Landlock ABI {abi}，只有部分強制（完整強制要 ABI {}）", landlock::WANTED_ABI);
+        eprintln!(
+            "nexus-sandbox-spawner: Landlock ABI {abi}，只有部分強制（完整強制要 ABI {}）",
+            landlock::WANTED_ABI
+        );
     }
     let caller = unsafe { libc::getppid() };
     // 脫離呼叫端的控制終端與行程群組、呼叫端死了跟著走、fd 3 以上不留給它。
@@ -680,7 +798,11 @@ fn exec_confined(args: &[OsString]) -> ! {
     unsafe { libc::execv(argv[0], argv.as_ptr()) };
     let err = std::io::Error::last_os_error();
     eprintln!("nexus-sandbox-spawner: exec：{err}");
-    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
+    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) {
+        127
+    } else {
+        126
+    });
 }
 
 /// 單次模式：不上沙箱，只讓這個行程跟著呼叫端走，再 exec（#2197）。給沒宣告沙箱的 MCP：呼叫端被 SIGKILL 時沒有人收它，
@@ -695,7 +817,11 @@ fn exec_guarded(args: &[OsString]) -> ! {
     if args.first().is_none_or(|arg| arg != "--") || args.len() < 2 {
         die("--guard 的用法是 --guard -- <程式> [參數]...");
     }
-    let Ok(argv) = args[1..].iter().map(|arg| CString::new(arg.as_bytes())).collect::<Result<Vec<_>, _>>() else {
+    let Ok(argv) = args[1..]
+        .iter()
+        .map(|arg| CString::new(arg.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
         die("參數含 NUL");
     };
     let caller = unsafe { libc::getppid() };
@@ -714,7 +840,11 @@ fn exec_guarded(args: &[OsString]) -> ! {
     unsafe { libc::execvp(pointers[0], pointers.as_ptr()) };
     let err = std::io::Error::last_os_error();
     eprintln!("nexus-sandbox-spawner: exec：{err}");
-    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
+    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) {
+        127
+    } else {
+        126
+    });
 }
 
 /// `--flock` 的結束碼：別的 open file description 握著這把鎖。
@@ -749,23 +879,33 @@ fn main() {
         exec_guarded(&raw[2..]);
     }
     let args: Vec<String> = std::env::args().collect();
-    let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
+    let Some(path) = args
+        .iter()
+        .position(|a| a == "--listen")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+    else {
         eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --guard -- <program> [args]... | --flock | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
         std::process::exit(2);
     };
-    let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));
+    let cpath =
+        CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));
 
     let abi = landlock::effective_abi(landlock::kernel_abi(), test_abi_cap());
     let sigfd = signal_fd().unwrap_or_else(|e| unavailable(errno(), &e));
     let lfd = listen(&path).unwrap_or_else(|e| unavailable(errno(), &e));
-    let insns = seccomp::install().unwrap_or_else(|e| unavailable(e.raw_os_error().unwrap_or(0), &format!("seccomp: {e}")));
+    let insns = seccomp::install()
+        .unwrap_or_else(|e| unavailable(e.raw_os_error().unwrap_or(0), &format!("seccomp: {e}")));
     if let Err(e) = self_check() {
         unavailable(0, &e);
     }
     if kernel_lacks_pidfd() {
         unavailable(libc::ENOSYS, "pidfd_open：核心要 5.3 以上");
     }
-    if !emit(&Event::Ready { filter_insns: insns as u32, landlock_abi: abi as u32 }) {
+    if !emit(&Event::Ready {
+        filter_insns: insns as u32,
+        landlock_abi: abi as u32,
+    }) {
         std::process::exit(3);
     }
 
@@ -790,24 +930,53 @@ fn main() {
         }
         // 前兩格固定是 stdin 與 signalfd，第三格是監聽 socket；之後依序是連線、狀態 pipe、pidfd。
         let mut fds = vec![
-            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: sigfd, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: lfd, events: libc::POLLIN, revents: 0 },
+            libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: sigfd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: lfd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
         let conns: Vec<libc::c_int> = s.conns.iter().map(|c| c.fd).collect();
-        fds.extend(conns.iter().map(|&fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 }));
+        fds.extend(conns.iter().map(|&fd| libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }));
         let mut owners: Vec<(u32, bool)> = Vec::new();
         for (&id, child) in &s.children {
             if child.status >= 0 {
-                fds.push(libc::pollfd { fd: child.status, events: libc::POLLIN, revents: 0 });
+                fds.push(libc::pollfd {
+                    fd: child.status,
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
                 owners.push((id, true));
             }
-            fds.push(libc::pollfd { fd: child.pidfd, events: libc::POLLIN, revents: 0 });
+            fds.push(libc::pollfd {
+                fd: child.pidfd,
+                events: libc::POLLIN,
+                revents: 0,
+            });
             owners.push((id, false));
         }
         let timeout = s
             .next_deadline()
-            .map(|d| d.saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32 + 1)
+            .map(|d| {
+                d.saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .min(i32::MAX as u128) as i32
+                    + 1
+            })
             .unwrap_or(-1);
         // SAFETY：fds 在呼叫期間存活。
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
@@ -815,7 +984,10 @@ fn main() {
             if errno() == libc::EINTR {
                 continue;
             }
-            eprintln!("nexus-sandbox-spawner: poll: {}", std::io::Error::last_os_error());
+            eprintln!(
+                "nexus-sandbox-spawner: poll: {}",
+                std::io::Error::last_os_error()
+            );
             s.shutdown(&cpath);
         }
         s.expire(Instant::now());
@@ -880,7 +1052,10 @@ mod tests {
 
     #[test]
     fn a_slash_in_argv0_skips_the_path_search() {
-        assert_eq!(candidates(b"./rg", &[b"PATH=/usr/bin".to_vec()]), vec![b"./rg".to_vec()]);
+        assert_eq!(
+            candidates(b"./rg", &[b"PATH=/usr/bin".to_vec()]),
+            vec![b"./rg".to_vec()]
+        );
     }
 
     #[test]
@@ -890,6 +1065,9 @@ mod tests {
             candidates(b"git", &env),
             vec![b"/c/git".to_vec(), b"./git".to_vec(), b"/d/git".to_vec()]
         );
-        assert_eq!(candidates(b"git", &[]), vec![b"/bin/git".to_vec(), b"/usr/bin/git".to_vec()]);
+        assert_eq!(
+            candidates(b"git", &[]),
+            vec![b"/bin/git".to_vec(), b"/usr/bin/git".to_vec()]
+        );
     }
 }
