@@ -138,7 +138,8 @@ export class RunSuspension {
   /**
    * @param onPark - 停在等待點的那一刻，帶著所有還沒答的提問（照問的先後）。
    * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；在 {@link RunSuspension.onWithdraw} 登記的都叫過之後、
-   *   拒絕當下在 `idle` 等的之前叫。之後的 `ask`、`idle` 以 {@link HumanInputWithdrawn} 當場拒絕。
+   *   拒絕當下在 `idle` 等的之前叫。登記的有拋錯時改帶 `AggregateError`：第一個是判成的錯，後面是拋出的。之後的 `ask`、`idle`
+   *   以 {@link HumanInputWithdrawn} 當場拒絕。
    */
   constructor(
     private readonly onPark: (asks: readonly PendingAsk[]) => void,
@@ -391,10 +392,12 @@ export class RunSuspension {
   /**
    * 收回：先叫 {@link RunSuspension.onWithdraw} 登記的每一個，再以 {@link HumanInputWithdrawn} 拒絕每一顆還沒答的提問；一個
    * `setImmediate` 之後還在 `idle` 等的也以它拒絕；之後的 `ask`、`idle` 當場拒絕。
+   * @throws 登記的拋出的第一個錯，同步拋給呼叫端，這時還沒拒絕任何提問。
    */
   withdraw(): void {
     this.#withdrawn = true;
-    this.#settleWithdrawn();
+    const failures = this.#settleWithdrawn();
+    if (failures.length > 0) throw failures[0];
     for (const id of [...this.#asks.keys()]) this.#take(id)!.reject(new HumanInputWithdrawn());
     setImmediate(() => this.#releaseIdlers(new HumanInputWithdrawn()));
   }
@@ -426,10 +429,19 @@ export class RunSuspension {
     };
   }
 
-  #settleWithdrawn(): void {
+  /** 叫每一個登記的，一個拋錯不擋後面的；拋出的照順序回傳。 */
+  #settleWithdrawn(): unknown[] {
     const listeners = [...this.#withdrawListeners];
     this.#withdrawListeners.clear();
-    for (const listener of listeners) listener();
+    const failures: unknown[] = [];
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+    return failures;
   }
 
   #releaseIdlers(reason: unknown): void {
@@ -446,8 +458,10 @@ export class RunSuspension {
           'native agent loop：同一批起跑了的呼叫都在 idle 等，沒有一顆在問人，也沒有一顆在跑',
         );
         this.#withdrawn = true;
-        this.#settleWithdrawn();
-        this.onStuck(error);
+        const failures = this.#settleWithdrawn();
+        this.onStuck(
+          failures.length === 0 ? error : new AggregateError([error, ...failures], error.message),
+        );
         this.#releaseIdlers(new HumanInputWithdrawn());
         return;
       }

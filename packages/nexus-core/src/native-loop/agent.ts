@@ -42,7 +42,7 @@ import { Command, GraphInterrupt, GraphRecursionError, isCommand } from '@langch
 
 import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
-import { HUMAN_INPUT_CONFIG_KEY, NO_HUMAN_INPUT } from '../human-input.js';
+import { HUMAN_INPUT_CONFIG_KEY, HumanInputWithdrawn, NO_HUMAN_INPUT } from '../human-input.js';
 import { TURN_CANCEL_CONFIG_KEY, turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
 import { modelCallStepOf, wrapModelCallFromStep } from '../model-call-step.js';
@@ -1210,6 +1210,8 @@ export class NativeAgent {
     } finally {
       unsubscribe?.();
     }
+    // 工具把收回的拒絕接住、正常回傳時這一批照樣落定；寫入已由 `onWithdraw` 套過，不再套，跟 catch 那條一樣停下。
+    if (suspension?.withdrawn === true) throw new HumanInputWithdrawn();
     commit(true);
     const last = state.messages.at(-1);
     return (

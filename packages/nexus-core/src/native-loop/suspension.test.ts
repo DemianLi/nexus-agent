@@ -83,6 +83,25 @@ describe('RunSuspension', () => {
     expect(order).toEqual(['settled', 'stuck', 'idle rejected']);
   });
 
+  it('判成卡死：onWithdraw 登記的拋錯，跟判成的錯一起交出去，照樣拒絕在 idle 等的', async () => {
+    const onStuck = vi.fn();
+    const suspension = new RunSuspension(vi.fn(), onStuck);
+    const failure = new Error('套寫入失敗');
+    suspension.onWithdraw(() => {
+      throw failure;
+    });
+    const idle = started(suspension, 'c1').service.idle(new Promise<never>(() => {}));
+    idle.catch(() => undefined);
+    await tick();
+    await tick();
+
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    const error: unknown = onStuck.mock.calls[0]?.[0];
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors.slice(1)).toEqual([failure]);
+    await expect(idle).rejects.toBeInstanceOf(HumanInputWithdrawn);
+  });
+
   it('收回：onWithdraw 登記的先叫，再拒絕還沒答的提問', async () => {
     const order: string[] = [];
     const suspension = new RunSuspension(vi.fn(), vi.fn());

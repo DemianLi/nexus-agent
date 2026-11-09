@@ -30,6 +30,7 @@ const LOOPS = ['langgraph', 'native'] as const;
 const OTHER_TEXT = '另一顆做完';
 const FILE = '/stuck.txt';
 const TERMINAL = new Set(['turn/end', 'turn/failed']);
+const SWALLOWED = '吞掉了';
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -37,7 +38,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const plugin = (ran: { other: number }): PluginEntry => ({
+const plugin = (ran: { other: number }, options: { goto?: boolean } = {}): PluginEntry => ({
   plugin: {
     name: 'stuck-run-stops',
     apply(registry) {
@@ -47,6 +48,7 @@ const plugin = (ran: { other: number }): PluginEntry => ({
             ran.other += 1;
             const stamp = '2026-11-10T00:00:00Z';
             return new Command({
+              ...(options.goto === true ? { goto: 'elsewhere' } : {}),
               update: {
                 files: { [FILE]: { content: ['寫了'], created_at: stamp, modified_at: stamp } },
                 messages: [
@@ -71,17 +73,35 @@ const plugin = (ran: { other: number }): PluginEntry => ({
           { name: 'stall', description: '等一件不會來的事。', schema: z.object({}) },
         ),
       );
+      // 把收回的拒絕接住、正常回傳：外掛工具常見的 try/catch。
+      for (const name of ['asker', 'idler'] as const) {
+        registry.tools.register(
+          tool(
+            async (_input: unknown, config: unknown) => {
+              const human = humanInputOf(config)!;
+              try {
+                if (name === 'asker') await human.ask({ q: '可以嗎' });
+                else await human.idle(new Promise<string>(() => {}));
+              } catch {
+                return SWALLOWED;
+              }
+              return '不該走到';
+            },
+            { name, description: '等，被收回就吞掉。', schema: z.object({}) },
+          ),
+        );
+      }
     },
   },
 });
 
-async function assemble(loop: Loop, turns: ScriptedTurn[]) {
+async function assemble(loop: Loop, turns: ScriptedTurn[], options: { goto?: boolean } = {}) {
   const ran = { other: 0 };
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new PrunedMemorySaver(),
     agentLoop: loop,
-    plugins: [plugin(ran)],
+    plugins: [plugin(ran, options)],
   });
   const threadId = `stuck-run-stops-${loop}`;
   const agent = built.agent as unknown as PumpAgent;
@@ -243,6 +263,93 @@ describe('同一批都在等、沒有一顆在問人：這一輪收尾之後什�
     await expectEndedCleanly(loop, run);
     expect(run.ran.other).toBe(0);
     expect((await run.state()).files ?? {}).toEqual({});
+    expect(run.log().filter((event) => event.type === 'assistant/message')).toHaveLength(1);
+  });
+});
+
+/**
+ * 工具接住拒絕、正常回傳之後：收尾之後不再叫模型、不再起新的呼叫；對話裡每顆呼叫恰好一則 ToolMessage。
+ * 那顆工具晚到的 `tool/result` 仍會記進日誌，這裡不斷言日誌在收尾之後是空的。
+ */
+async function expectStoppedOnce(run: Awaited<ReturnType<typeof assemble>>, terminal: string) {
+  const events = run.log();
+  const end = events.findLastIndex((event) => event.type === terminal);
+  expect(end).toBeGreaterThan(0);
+  expect(
+    events
+      .slice(end + 1)
+      .map((event) => event.type)
+      .filter((type) => type !== 'tool/result'),
+  ).toEqual([]);
+  const replies: Record<string, number> = {};
+  for (const callId of namesOf(events).keys()) replies[callId] = 0;
+  for (const message of (await run.state()).messages) {
+    if (ToolMessage.isInstance(message)) {
+      replies[message.tool_call_id] = (replies[message.tool_call_id] ?? 0) + 1;
+    }
+  }
+  expect(Object.values(replies)).toEqual([1, 1]);
+}
+
+const TWO_CALLS_THEN_MORE = (second: string): ScriptedTurn[] => [
+  {
+    content: '動手。',
+    toolCalls: [
+      { name: 'other', args: {} },
+      { name: second, args: {} },
+    ],
+  },
+  { content: '再一顆。', toolCalls: [{ name: 'other', args: {} }] },
+  { content: '不該走到。' },
+];
+
+describe('native：工具把收回的拒絕接住、正常回傳', () => {
+  it('判成卡死：收完的寫入只套一次，不再叫模型', async () => {
+    const run = await assemble('native', TWO_CALLS_THEN_MORE('idler'));
+    await runToEnd('native', run, () => true);
+
+    await expectStoppedOnce(run, 'turn/failed');
+    expect(run.ran.other).toBe(1);
+    expect(await otherReply(run)).toBe(OTHER_TEXT);
+    expect(run.log().filter((event) => event.type === 'assistant/message')).toHaveLength(1);
+  });
+
+  it('收回：收完的寫入只套一次，不再叫模型', async () => {
+    const run = await assemble('native', TWO_CALLS_THEN_MORE('asker'));
+    await run.pump.submit({ kind: 'message', text: '做' });
+    await run.pump.whenIdle();
+    expect(run.pump.awaitingInput).toBe(true);
+    expect(run.pump.cancel()).toBe('withdrawn');
+    await run.pump.whenIdle();
+    await settle(50);
+
+    await expectStoppedOnce(run, 'turn/end');
+    expect(run.ran.other).toBe(1);
+    expect(await otherReply(run)).toBe(OTHER_TEXT);
+    expect(run.log().filter((event) => event.type === 'assistant/message')).toHaveLength(1);
+  });
+});
+
+describe('native：判成卡死時套寫入拋錯', () => {
+  it('這一輪以錯誤收尾，行程不會多一個未捕捉例外', async () => {
+    const run = await assemble(
+      'native',
+      [
+        {
+          content: '動手。',
+          toolCalls: [
+            { name: 'other', args: {} },
+            { name: 'stall', args: {} },
+          ],
+        },
+        { content: '不該走到。' },
+      ],
+      { goto: true },
+    );
+    await runToEnd('native', run, () => true);
+
+    const events = run.log();
+    expect(events.at(-1)?.type).toBe('turn/failed');
     expect(run.log().filter((event) => event.type === 'assistant/message')).toHaveLength(1);
   });
 });
