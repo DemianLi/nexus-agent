@@ -21,7 +21,11 @@ fn stderr_path(socket: &Path) -> PathBuf {
 }
 
 pub fn example(name: &str) -> PathBuf {
-    Path::new(HOST).parent().unwrap().join("examples").join(name)
+    Path::new(HOST)
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(name)
 }
 
 pub struct HostProc {
@@ -44,7 +48,10 @@ impl HostProc {
         // SAFETY：fork 之後只呼叫 setrlimit。
         unsafe {
             command.pre_exec(move || {
-                let rlimit = libc::rlimit { rlim_cur: limit, rlim_max: limit };
+                let rlimit = libc::rlimit {
+                    rlim_cur: limit,
+                    rlim_max: limit,
+                };
                 if libc::setrlimit(libc::RLIMIT_NOFILE, &rlimit) == 0 {
                     Ok(())
                 } else {
@@ -60,7 +67,10 @@ impl HostProc {
     /// 帶 `--plugins <plugins>` 起宿主、還沒握手；stderr 寫到 `<socket>.stderr`，用 [`HostProc::stderr`] 讀。
     pub fn spawn_with_plugins(socket: &Path, plugins: &Path) -> HostProc {
         let mut command = Command::new(HOST);
-        command.arg("--plugins").arg(plugins).stderr(std::fs::File::create(stderr_path(socket)).unwrap());
+        command
+            .arg("--plugins")
+            .arg(plugins)
+            .stderr(std::fs::File::create(stderr_path(socket)).unwrap());
         HostProc::spawn_with(socket, command)
     }
 
@@ -73,8 +83,15 @@ impl HostProc {
 
     /// 等宿主的 `hello`、回它監督行程的 `hello`，不等 `ready`。
     pub fn hello_only(&mut self) {
-        assert_eq!(self.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-        self.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
+        assert_eq!(
+            self.report(),
+            Some(HostReport::Hello {
+                version: PROTOCOL_VERSION
+            })
+        );
+        self.command(&HostCommand::Hello {
+            version: PROTOCOL_VERSION,
+        });
     }
 
     /// [`HostProc::spawn_with_plugins`] 起的宿主到目前為止寫的 stderr。
@@ -83,15 +100,31 @@ impl HostProc {
     }
 
     fn spawn_with(socket: &Path, mut command: Command) -> HostProc {
-        let mut child = command.arg("--socket").arg(socket).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut child = command
+            .arg("--socket")
+            .arg(socket)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         // SAFETY：只改這個 fd 的狀態旗標。
         unsafe {
             let fd = stdout.as_raw_fd();
-            libc::fcntl(fd, libc::F_SETFL, libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK);
+            libc::fcntl(
+                fd,
+                libc::F_SETFL,
+                libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK,
+            );
         }
-        HostProc { child, socket: socket.to_path_buf(), stdin, stdout, inbox: Vec::new() }
+        HostProc {
+            child,
+            socket: socket.to_path_buf(),
+            stdin,
+            stdout,
+            inbox: Vec::new(),
+        }
     }
 
     /// 起宿主、握手、等到 `ready`。
@@ -102,14 +135,25 @@ impl HostProc {
     }
 
     fn handshake(&mut self) {
-        assert_eq!(self.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-        self.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
+        assert_eq!(
+            self.report(),
+            Some(HostReport::Hello {
+                version: PROTOCOL_VERSION
+            })
+        );
+        self.command(&HostCommand::Hello {
+            version: PROTOCOL_VERSION,
+        });
         assert_eq!(self.report(), Some(HostReport::Ready));
         assert!(self.socket.exists());
     }
 
     pub fn command(&mut self, command: &HostCommand) {
-        self.stdin.as_mut().unwrap().write_all(&frame(&encode_host_command(command))).unwrap();
+        self.stdin
+            .as_mut()
+            .unwrap()
+            .write_all(&frame(&encode_host_command(command)))
+            .unwrap();
     }
 
     /// 送一筆序號 [`GRANTED`] 的身分。
@@ -119,7 +163,13 @@ impl HostProc {
 
     pub fn grant_as(&mut self, pid: u32, generation: u32, token: &str, role: Role, thread: &str) {
         let (token, thread) = (token.as_bytes().to_vec(), thread.as_bytes().to_vec());
-        self.command(&HostCommand::Grant { pid, generation, token, role, thread });
+        self.command(&HostCommand::Grant {
+            pid,
+            generation,
+            token,
+            role,
+            thread,
+        });
     }
 
     /// 關 stdin（監督行程走拆除梯度的第一步）。
@@ -183,13 +233,19 @@ impl Drop for HostProc {
 }
 
 pub fn violation(pid: u32, generation: u32, reason: &str) -> HostReport {
-    HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() }
+    HostReport::Violation {
+        pid,
+        generation,
+        reason: reason.as_bytes().to_vec(),
+    }
 }
 
 /// `unregistered` 回報的 pid 與理由；連線編號不比，另有 `unregistered_reports_number_each_connection`。收到別種回報就 panic。
 pub fn unregistered(report: Option<HostReport>) -> Option<(u32, String)> {
     match report? {
-        HostReport::Unregistered { pid, reason, .. } => Some((pid, String::from_utf8(reason).unwrap())),
+        HostReport::Unregistered { pid, reason, .. } => {
+            Some((pid, String::from_utf8(reason).unwrap()))
+        }
         other => panic!("不是 unregistered：{other:?}"),
     }
 }

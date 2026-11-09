@@ -39,7 +39,10 @@ pub enum Request {
     Spawn(Spawn),
     /// 送訊號給整個行程群組。不回任何事件：id 不認得、已經 `Failed` 或已經結束都靜靜忽略；
     /// 要求已到、還沒讀到 exec 結果時（含還在等 stdio 連線）先排著，讀到 exec 成功之後、送 `Started` 之前送出。
-    Signal { id: u32, signo: i32 },
+    Signal {
+        id: u32,
+        signo: i32,
+    },
 }
 
 /// 沒起成的原因。種類讓 Node 不必解析文字就能分流：沙箱不可用要照 fail-closed 處理，跟工具自己起不來不能混在同一條判斷。
@@ -78,11 +81,19 @@ pub enum Event {
     Unavailable { errno: i32, detail: Vec<u8> },
     /// spawner 準備好了：過濾器裝好、自我檢查通過。帶上過濾器的指令數與 Landlock 的 ABI 版本；版本是 0（none）時，
     /// 只有 `FullAccess` 的要求起得來，其餘回 `Failed`（`SandboxUnavailable`）。
-    Ready { filter_insns: u32, landlock_abi: u32 },
+    Ready {
+        filter_insns: u32,
+        landlock_abi: u32,
+    },
     /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊），照跑。`FullAccess` 不上 Landlock，一律是 false。
     Started { id: u32, pid: u32, partial: bool },
     /// 沒 exec。`errno` 是失敗那一步的錯誤碼（沒有就是 0）。
-    Failed { id: u32, kind: FailKind, errno: i32, detail: Vec<u8> },
+    Failed {
+        id: u32,
+        kind: FailKind,
+        errno: i32,
+        detail: Vec<u8>,
+    },
     /// 結束。被訊號殺掉時 `code` 是 -1、`signal` 是訊號編號。spawner 關機時還在跑的也會送（被 SIGKILL；事件還寫得出去時）。
     Exited { id: u32, code: i32, signal: i32 },
 }
@@ -195,7 +206,10 @@ pub fn decode_request(payload: &[u8]) -> Result<Request, DecodeError> {
                 env: r.list()?,
             })
         }
-        REQ_SIGNAL => Request::Signal { id: r.u32()?, signo: r.u32()? as i32 },
+        REQ_SIGNAL => Request::Signal {
+            id: r.u32()?,
+            signo: r.u32()? as i32,
+        },
         _ => return Err(DecodeError("不認得的要求")),
     };
     r.end()?;
@@ -237,7 +251,10 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
             w.u32(*errno as u32);
             w.bytes(detail);
         }
-        Event::Ready { filter_insns, landlock_abi } => {
+        Event::Ready {
+            filter_insns,
+            landlock_abi,
+        } => {
             w.u8(EV_READY);
             w.u32(*filter_insns);
             w.u32(*landlock_abi);
@@ -248,7 +265,12 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
             w.u32(*pid);
             w.u8(u8::from(*partial));
         }
-        Event::Failed { id, kind, errno, detail } => {
+        Event::Failed {
+            id,
+            kind,
+            errno,
+            detail,
+        } => {
             w.u8(EV_FAILED);
             w.u32(*id);
             w.u8(*kind as u8);
@@ -268,15 +290,34 @@ pub fn encode_event(event: &Event) -> Vec<u8> {
 pub fn decode_event(payload: &[u8]) -> Result<Event, DecodeError> {
     let mut r = Reader { buf: payload };
     let event = match r.u8()? {
-        EV_UNAVAILABLE => Event::Unavailable { errno: r.u32()? as i32, detail: r.bytes()? },
-        EV_READY => Event::Ready { filter_insns: r.u32()?, landlock_abi: r.u32()? },
-        EV_STARTED => Event::Started { id: r.u32()?, pid: r.u32()?, partial: r.u8()? != 0 },
+        EV_UNAVAILABLE => Event::Unavailable {
+            errno: r.u32()? as i32,
+            detail: r.bytes()?,
+        },
+        EV_READY => Event::Ready {
+            filter_insns: r.u32()?,
+            landlock_abi: r.u32()?,
+        },
+        EV_STARTED => Event::Started {
+            id: r.u32()?,
+            pid: r.u32()?,
+            partial: r.u8()? != 0,
+        },
         EV_FAILED => {
             let id = r.u32()?;
             let kind = FailKind::from_u8(r.u8()?).ok_or(DecodeError("不認得的失敗種類"))?;
-            Event::Failed { id, kind, errno: r.u32()? as i32, detail: r.bytes()? }
+            Event::Failed {
+                id,
+                kind,
+                errno: r.u32()? as i32,
+                detail: r.bytes()?,
+            }
         }
-        EV_EXITED => Event::Exited { id: r.u32()?, code: r.u32()? as i32, signal: r.u32()? as i32 },
+        EV_EXITED => Event::Exited {
+            id: r.u32()?,
+            code: r.u32()? as i32,
+            signal: r.u32()? as i32,
+        },
         _ => return Err(DecodeError("不認得的事件")),
     };
     r.end()?;
@@ -332,8 +373,12 @@ mod tests {
 
     #[test]
     fn requests_round_trip_with_separator_bytes_inside_fields() {
-        let modes = [Mode::ReadOnly, Mode::WorkspaceWrite, Mode::FullAccess].map(|mode| Request::Spawn(Spawn { mode, ..spawn() }));
-        for request in modes.into_iter().chain([Request::Signal { id: 3, signo: libc::SIGTERM }]) {
+        let modes = [Mode::ReadOnly, Mode::WorkspaceWrite, Mode::FullAccess]
+            .map(|mode| Request::Spawn(Spawn { mode, ..spawn() }));
+        for request in modes.into_iter().chain([Request::Signal {
+            id: 3,
+            signo: libc::SIGTERM,
+        }]) {
             assert_eq!(decode_request(&encode_request(&request)), Ok(request));
         }
     }
@@ -341,11 +386,30 @@ mod tests {
     #[test]
     fn events_round_trip() {
         for event in [
-            Event::Unavailable { errno: libc::ENOSYS, detail: b"landlock".to_vec() },
-            Event::Ready { filter_insns: 70, landlock_abi: 5 },
-            Event::Started { id: 1, pid: 4242, partial: true },
-            Event::Failed { id: 2, kind: FailKind::StartDir, errno: libc::ENOENT, detail: b"chdir".to_vec() },
-            Event::Exited { id: 3, code: -1, signal: libc::SIGKILL },
+            Event::Unavailable {
+                errno: libc::ENOSYS,
+                detail: b"landlock".to_vec(),
+            },
+            Event::Ready {
+                filter_insns: 70,
+                landlock_abi: 5,
+            },
+            Event::Started {
+                id: 1,
+                pid: 4242,
+                partial: true,
+            },
+            Event::Failed {
+                id: 2,
+                kind: FailKind::StartDir,
+                errno: libc::ENOENT,
+                detail: b"chdir".to_vec(),
+            },
+            Event::Exited {
+                id: 3,
+                code: -1,
+                signal: libc::SIGKILL,
+            },
         ] {
             assert_eq!(decode_event(&encode_event(&event)), Ok(event));
         }
@@ -358,7 +422,10 @@ mod tests {
             .skip(1)
             .map(|rest| {
                 let hex = &rest[..rest.find('"').unwrap()];
-                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                    .collect()
             })
             .collect()
     }
@@ -397,15 +464,42 @@ mod tests {
                 argv: vec![s("true")],
                 env: vec![s("A=é")],
             }),
-            Request::Signal { id: 3, signo: libc::SIGTERM },
+            Request::Signal {
+                id: 3,
+                signo: libc::SIGTERM,
+            },
         ];
         let events = [
-            Event::Unavailable { errno: libc::EINVAL, detail: s("seccomp: Invalid argument") },
-            Event::Ready { filter_insns: 70, landlock_abi: 0 },
-            Event::Started { id: 1, pid: 4242, partial: true },
-            Event::Failed { id: 2, kind: FailKind::StartDir, errno: libc::ENOENT, detail: s("chdir") },
-            Event::Failed { id: 9, kind: FailKind::Resource, errno: libc::EMFILE, detail: s("open /dev/null") },
-            Event::Exited { id: 3, code: -1, signal: libc::SIGKILL },
+            Event::Unavailable {
+                errno: libc::EINVAL,
+                detail: s("seccomp: Invalid argument"),
+            },
+            Event::Ready {
+                filter_insns: 70,
+                landlock_abi: 0,
+            },
+            Event::Started {
+                id: 1,
+                pid: 4242,
+                partial: true,
+            },
+            Event::Failed {
+                id: 2,
+                kind: FailKind::StartDir,
+                errno: libc::ENOENT,
+                detail: s("chdir"),
+            },
+            Event::Failed {
+                id: 9,
+                kind: FailKind::Resource,
+                errno: libc::EMFILE,
+                detail: s("open /dev/null"),
+            },
+            Event::Exited {
+                id: 3,
+                code: -1,
+                signal: libc::SIGKILL,
+            },
         ];
         let vectors = vectors();
         assert_eq!(vectors.len(), requests.len() + events.len());
@@ -429,9 +523,15 @@ mod tests {
         extra.push(0);
         assert!(decode_request(&extra).is_err());
         assert!(decode_request(b"Z").is_err());
-        let mut bad_pipes = encode_request(&Request::Spawn(Spawn { pipes: 0, ..spawn() }));
+        let mut bad_pipes = encode_request(&Request::Spawn(Spawn {
+            pipes: 0,
+            ..spawn()
+        }));
         bad_pipes[6] = 0b1000;
-        assert_eq!(decode_request(&bad_pipes), Err(DecodeError("stdio 位元超出 0..2")));
+        assert_eq!(
+            decode_request(&bad_pipes),
+            Err(DecodeError("stdio 位元超出 0..2"))
+        );
         let mut bad_mode = bytes.clone();
         bad_mode[5] = 3;
         assert_eq!(decode_request(&bad_mode), Err(DecodeError("不認得的模式")));

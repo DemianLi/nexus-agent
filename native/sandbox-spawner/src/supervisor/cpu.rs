@@ -104,7 +104,8 @@ impl Guard {
     fn demand(&self, after: Duration) -> Option<f64> {
         let ((t0, d0), (t1, d1)) = (self.first?, self.last?);
         let span = t1.saturating_duration_since(t0);
-        (span >= after / 2 && !span.is_zero()).then(|| d1.saturating_sub(d0) as f64 / 1e9 / span.as_secs_f64())
+        (span >= after / 2 && !span.is_zero())
+            .then(|| d1.saturating_sub(d0) as f64 / 1e9 / span.as_secs_f64())
     }
 
     /// 扣掉停住的時間之後，`heard_at` 起沉默了多久。
@@ -113,7 +114,8 @@ impl Guard {
             Some(Hold::Stopped { since, .. }) => now.saturating_duration_since(since),
             _ => Duration::ZERO,
         };
-        now.saturating_duration_since(heard_at).saturating_sub(self.paused + ongoing)
+        now.saturating_duration_since(heard_at)
+            .saturating_sub(self.paused + ongoing)
     }
 
     /// 照沉默算，最早什麼時候會滿 `stall`。停住的時候不會滿（放它跑的時候才算），回 `None`，由 [`Self::deadline`] 叫醒。
@@ -133,19 +135,31 @@ impl Guard {
         match self.hold {
             None => {
                 let silent = now.saturating_duration_since(heard_at) >= config.after;
-                if silent && self.demand(config.after).is_some_and(|demand| demand >= BUSY) {
-                    self.hold = Some(Hold::Stopped { since: now, until: now + config.stop });
+                if silent
+                    && self
+                        .demand(config.after)
+                        .is_some_and(|demand| demand >= BUSY)
+                {
+                    self.hold = Some(Hold::Stopped {
+                        since: now,
+                        until: now + config.stop,
+                    });
                     return Some(Signal::Stop);
                 }
                 None
             }
             Some(Hold::Stopped { since, until }) if until <= now => {
                 self.paused += now.saturating_duration_since(since);
-                self.hold = Some(Hold::Running { until: now + config.run });
+                self.hold = Some(Hold::Running {
+                    until: now + config.run,
+                });
                 Some(Signal::Cont)
             }
             Some(Hold::Running { until }) if until <= now => {
-                self.hold = Some(Hold::Stopped { since: now, until: now + config.stop });
+                self.hold = Some(Hold::Stopped {
+                    since: now,
+                    until: now + config.stop,
+                });
                 Some(Signal::Stop)
             }
             Some(_) => None,
@@ -156,7 +170,9 @@ impl Guard {
 /// 讀 leader 的 `/proc/<pid>/schedstat`：在 CPU 上的時間加上在可執行佇列上等的時間（奈秒）。只算 leader 的主執行緒（事件迴圈），不含它的其他執行緒，所以每秒最多長 1 秒。讀不到（行程沒了、核心沒開 schedstat）回 `None`。
 pub fn demand_ns(pid: libc::pid_t) -> Option<u64> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/schedstat")).ok()?;
-    let mut fields = text.split_whitespace().map(|field| field.parse::<u64>().ok());
+    let mut fields = text
+        .split_whitespace()
+        .map(|field| field.parse::<u64>().ok());
     Some(fields.next()??.saturating_add(fields.next()??))
 }
 
@@ -175,7 +191,11 @@ mod tests {
     use super::*;
 
     const MS: Duration = Duration::from_millis(1);
-    const CONFIG: Config = Config { after: Duration::from_millis(2_000), run: Duration::from_millis(25), stop: Duration::from_millis(75) };
+    const CONFIG: Config = Config {
+        after: Duration::from_millis(2_000),
+        run: Duration::from_millis(25),
+        stop: Duration::from_millis(75),
+    };
 
     /// 從 `heard_at` 起每 250 ms 取樣一次，每秒要 `rate` 秒 CPU，取樣到 `until`。
     fn feed(guard: &mut Guard, heard_at: Instant, rate: f64, until: Duration) {
@@ -360,7 +380,10 @@ mod tests {
             if guard.silence(now, t) >= stall {
                 break;
             }
-            now = guard.deadline().unwrap().min(guard.stall_at(t, stall).unwrap_or(now + 1_000_000 * MS));
+            now = guard
+                .deadline()
+                .unwrap()
+                .min(guard.stall_at(t, stall).unwrap_or(now + 1_000_000 * MS));
         }
         assert_eq!(now - t, 2_000 * MS + 13_000 * MS * 4);
     }

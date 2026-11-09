@@ -575,8 +575,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(cache['if'], "inputs.cache == 'true'")
 
     def test_lints_with_the_pinned_toolchain(self) -> None:
-        """clippy 用安裝那一步裝的元件，警告即錯（#2620）。"""
-        self.assertIn('--component clippy', self.steps['安裝釘住的 Rust']['run'])
+        """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑，clippy 警告即錯（#2620）。"""
+        self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
+        self.assertEqual(self.steps['格式']['run'], 'cargo fmt --check')
+        self.assertEqual(self.steps['clippy']['if'], '${{ !cancelled() }}')
         self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --all-targets --features test-hooks -- -D warnings')
         names = list(self.steps)
         self.assertLess(names.index('clippy'), names.index('編譯'))

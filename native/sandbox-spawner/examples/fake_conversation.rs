@@ -30,8 +30,8 @@ mod host_client;
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
-    decode_conversation_command, encode_conversation_report, ConversationCommand, ConversationReport, TurnPhase,
-    PROTOCOL_VERSION,
+    decode_conversation_command, encode_conversation_report, ConversationCommand,
+    ConversationReport, TurnPhase, PROTOCOL_VERSION,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -45,26 +45,39 @@ const HEARTBEAT: Duration = Duration::from_millis(50);
 fn log(line: &str) {
     let text = format!("{line}\n");
     // SAFETY：寫一個開著的 fd。
-    unsafe { libc::write(LOG_FD.load(Ordering::SeqCst), text.as_ptr().cast(), text.len()) };
+    unsafe {
+        libc::write(
+            LOG_FD.load(Ordering::SeqCst),
+            text.as_ptr().cast(),
+            text.len(),
+        )
+    };
 }
 
 extern "C" fn on_sigterm(_: libc::c_int) {
     let text = b"sigterm\n";
     // SAFETY：handler 裡只用 async-signal-safe 的 write 與 _exit。
     unsafe {
-        libc::write(LOG_FD.load(Ordering::SeqCst), text.as_ptr().cast(), text.len());
+        libc::write(
+            LOG_FD.load(Ordering::SeqCst),
+            text.as_ptr().cast(),
+            text.len(),
+        );
         libc::_exit(0);
     }
 }
 
 fn report(report: &ConversationReport) {
     let mut out = std::io::stdout().lock();
-    out.write_all(&frame(&encode_conversation_report(report))).unwrap();
+    out.write_all(&frame(&encode_conversation_report(report)))
+        .unwrap();
     out.flush().unwrap();
 }
 
 fn idle(ms: &str) {
-    report(&ConversationReport::Idle { idle_ms: ms.parse().unwrap() });
+    report(&ConversationReport::Idle {
+        idle_ms: ms.parse().unwrap(),
+    });
     log("idle");
 }
 
@@ -76,7 +89,9 @@ fn start_heartbeat() {
         }
         // 一則框在同一把 stdout 鎖裡寫完，不會跟主執行緒的框交錯；寫不出去（stdout 關了）就不寫。
         let mut out = std::io::stdout().lock();
-        let _ = out.write_all(&frame(&encode_conversation_report(&ConversationReport::Heartbeat)));
+        let _ = out.write_all(&frame(&encode_conversation_report(
+            &ConversationReport::Heartbeat,
+        )));
         let _ = out.flush();
     });
 }
@@ -86,16 +101,46 @@ fn main() {
     if args.iter().any(|a| a == "--die-before-ready") {
         std::process::exit(7);
     }
-    let socket = args.iter().position(|a| a == "--socket").and_then(|i| args.get(i + 1)).expect("--socket").clone();
-    let host_socket = args.iter().position(|a| a == "--host-socket").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
+    let socket = args
+        .iter()
+        .position(|a| a == "--socket")
+        .and_then(|i| args.get(i + 1))
+        .expect("--socket")
+        .clone();
+    let host_socket = args
+        .iter()
+        .position(|a| a == "--host-socket")
+        .and_then(|i| args.get(i + 1))
+        .map(std::path::PathBuf::from);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{socket}.log"))
+        .unwrap();
     LOG_FD.store(std::os::fd::IntoRawFd::into_raw_fd(file), Ordering::SeqCst);
     // SAFETY：不留 core 檔（`signal:6`、`heap` 會 abort）。
-    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &libc::rlimit { rlim_cur: 0, rlim_max: 0 }) };
+    unsafe {
+        libc::setrlimit(
+            libc::RLIMIT_CORE,
+            &libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            },
+        )
+    };
     // SAFETY：裝 handler。
-    unsafe { libc::signal(libc::SIGTERM, on_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    unsafe {
+        libc::signal(
+            libc::SIGTERM,
+            on_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        )
+    };
     log(&format!("pid {}", std::process::id()));
-    if let Some(ms) = args.iter().position(|a| a == "--ready-after-ms").and_then(|i| args.get(i + 1)) {
+    if let Some(ms) = args
+        .iter()
+        .position(|a| a == "--ready-after-ms")
+        .and_then(|i| args.get(i + 1))
+    {
         std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
     }
     if !args.iter().any(|a| a == "--skip-hello") {
@@ -161,8 +206,15 @@ fn main() {
                 out.flush().unwrap();
                 continue;
             }
-            let bound = if actions.contains(&"wrong-bound") { b"someone-else".to_vec() } else { thread_id };
-            let leading_idle = actions.iter().take_while(|action| action.starts_with("idle:")).count();
+            let bound = if actions.contains(&"wrong-bound") {
+                b"someone-else".to_vec()
+            } else {
+                thread_id
+            };
+            let leading_idle = actions
+                .iter()
+                .take_while(|action| action.starts_with("idle:"))
+                .count();
             for action in actions.drain(..leading_idle) {
                 idle(&action["idle:".len()..]);
             }
@@ -176,8 +228,12 @@ fn main() {
                         libc::raise(signal.parse().unwrap());
                     },
                     ("turn", _) => {
-                        report(&ConversationReport::Turn { phase: TurnPhase::Begin });
-                        report(&ConversationReport::Turn { phase: TurnPhase::End });
+                        report(&ConversationReport::Turn {
+                            phase: TurnPhase::Begin,
+                        });
+                        report(&ConversationReport::Turn {
+                            phase: TurnPhase::End,
+                        });
                     }
                     // SAFETY：fork 之後子行程只睡。
                     ("grandchild", _) => unsafe {
@@ -229,16 +285,28 @@ fn main() {
                         unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
                     }
                     ("wrong-bound", _) => {}
-                    (action, _) if action.starts_with("host-") && host_socket.is_none() => log("host no-socket"),
-                    ("host-hello", _) => log(&host_client::hello_line(host_socket.as_deref().unwrap(), &String::from_utf8_lossy(&token))),
-                    ("host-bad-token", _) => log(&host_client::hello_line(host_socket.as_deref().unwrap(), &"f".repeat(token.len()))),
+                    (action, _) if action.starts_with("host-") && host_socket.is_none() => {
+                        log("host no-socket")
+                    }
+                    ("host-hello", _) => log(&host_client::hello_line(
+                        host_socket.as_deref().unwrap(),
+                        &String::from_utf8_lossy(&token),
+                    )),
+                    ("host-bad-token", _) => log(&host_client::hello_line(
+                        host_socket.as_deref().unwrap(),
+                        &"f".repeat(token.len()),
+                    )),
                     ("host-garbage", _) => {
                         let too_long = nexus_sandbox_spawner::host_protocol::MAX_FRAME as u32 + 1;
-                        log(&host_client::send_line(host_socket.as_deref().unwrap(), &too_long.to_le_bytes()));
+                        log(&host_client::send_line(
+                            host_socket.as_deref().unwrap(),
+                            &too_long.to_le_bytes(),
+                        ));
                     }
                     ("host-retry", ms) => {
                         let host_socket = host_socket.as_deref().unwrap();
-                        let until = std::time::Instant::now() + Duration::from_millis(ms.parse().unwrap());
+                        let until =
+                            std::time::Instant::now() + Duration::from_millis(ms.parse().unwrap());
                         let token = String::from_utf8_lossy(&token).into_owned();
                         let line = loop {
                             let line = host_client::hello_line(host_socket, &token);
@@ -277,9 +345,17 @@ fn main() {
                         std::io::stderr().lock().write_all(&junk).unwrap();
                     }
                     // black_box：免得最佳化把沒人讀的配置整個省掉。
-                    ("alloc", mib) => std::mem::forget(std::hint::black_box(vec![1u8; mib.parse::<usize>().unwrap() << 20])),
+                    ("alloc", mib) => std::mem::forget(std::hint::black_box(vec![
+                        1u8;
+                        mib.parse::<usize>().unwrap()
+                            << 20
+                    ])),
                     ("flood", _) => {
-                        let batch: Vec<u8> = (0..65536).flat_map(|_| frame(&encode_conversation_report(&ConversationReport::Heartbeat))).collect();
+                        let batch: Vec<u8> = (0..65536)
+                            .flat_map(|_| {
+                                frame(&encode_conversation_report(&ConversationReport::Heartbeat))
+                            })
+                            .collect();
                         let mut out = std::io::stdout().lock();
                         while out.write_all(&batch).is_ok() {}
                         loop {

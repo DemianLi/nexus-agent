@@ -62,7 +62,10 @@ impl Value {
 /// 解一整份文件：前後可以有空白，之後不能再有別的。
 pub fn parse(input: &[u8]) -> Result<Value, JsonError> {
     let text = std::str::from_utf8(input).map_err(|_| JsonError("不是合法的 UTF-8"))?;
-    let mut parser = Parser { bytes: text.as_bytes(), at: 0 };
+    let mut parser = Parser {
+        bytes: text.as_bytes(),
+        at: 0,
+    };
     let value = parser.value(0)?;
     parser.skip_space();
     if parser.at != parser.bytes.len() {
@@ -210,7 +213,9 @@ impl Parser<'_> {
     fn hex4(&mut self) -> Result<u32, JsonError> {
         let mut n = 0u32;
         for _ in 0..4 {
-            let digit = char::from(self.next()?).to_digit(16).ok_or(JsonError("\\u 之後要四個十六進位數字"))?;
+            let digit = char::from(self.next()?)
+                .to_digit(16)
+                .ok_or(JsonError("\\u 之後要四個十六進位數字"))?;
             n = n * 16 + digit;
         }
         Ok(n)
@@ -315,7 +320,9 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
             '\n' => out.extend_from_slice(b"\\n"),
             '\r' => out.extend_from_slice(b"\\r"),
             '\t' => out.extend_from_slice(b"\\t"),
-            c if (c as u32) < 0x20 => out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes()),
+            c if (c as u32) < 0x20 => {
+                out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes())
+            }
             c => {
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
@@ -334,9 +341,15 @@ mod tests {
         let text = br#"{"type":"hello","version":1,"token":"ab\"\\\n\u0001\u00e9","list":[true,false,null,-42,[]],"empty":{}}"#;
         let value = parse(text).unwrap();
         assert_eq!(value.get("version").and_then(Value::as_int), Some(1));
-        assert_eq!(value.get("token").and_then(Value::as_str), Some("ab\"\\\n\u{1}\u{e9}"));
+        assert_eq!(
+            value.get("token").and_then(Value::as_str),
+            Some("ab\"\\\n\u{1}\u{e9}")
+        );
         assert_eq!(parse(&encode(&value)).unwrap(), value);
-        assert_eq!(parse(" [ 1 , \"\\ud83d\\ude00\" ] ".as_bytes()).unwrap(), Value::Array(vec![Value::Int(1), Value::Str("😀".into())]));
+        assert_eq!(
+            parse(" [ 1 , \"\\ud83d\\ude00\" ] ".as_bytes()).unwrap(),
+            Value::Array(vec![Value::Int(1), Value::Str("😀".into())])
+        );
     }
 
     #[test]
@@ -372,7 +385,12 @@ mod tests {
             (b"1 2", "文件之後還有東西"),
             (b"", "截斷"),
         ] {
-            assert_eq!(parse(input), Err(JsonError(why)), "{}", String::from_utf8_lossy(input));
+            assert_eq!(
+                parse(input),
+                Err(JsonError(why)),
+                "{}",
+                String::from_utf8_lossy(input)
+            );
         }
     }
 }

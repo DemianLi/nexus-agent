@@ -1,8 +1,8 @@
 //! 監督行程的命令列。
 
+use super::cpu::Config;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use super::cpu::Config;
 use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
@@ -134,7 +134,9 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut host_ready_timeout = DEFAULT_HOST_READY_TIMEOUT;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
-        let flag = flag.to_str().ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
+        let flag = flag
+            .to_str()
+            .ok_or_else(|| format!("看不懂的參數 {flag:?}"))?;
         let mut value = || it.next().cloned().ok_or_else(|| format!("{flag} 少了值"));
         match flag {
             "--run-dir" => run_dir = Some(PathBuf::from(value()?)),
@@ -149,25 +151,43 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--rss-limit-mb" => rss_limit_kb = Some(positive(flag, value()?)?.saturating_mul(1024)),
             "--rss-poll-ms" => rss_poll = Duration::from_millis(positive(flag, value()?)?),
             "--stall-ms" => stall = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
-            "--capacity" => capacity = Some(Some(count(flag, value()?)?).filter(|&n| n > 0).ok_or(format!("{flag} 要正整數"))?),
+            "--capacity" => {
+                capacity = Some(
+                    Some(count(flag, value()?)?)
+                        .filter(|&n| n > 0)
+                        .ok_or(format!("{flag} 要正整數"))?,
+                )
+            }
             "--warm" => warm = count(flag, value()?)?,
             "--idle-ms" => idle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
-            "--read-only-idle-ms" => read_only_idle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
-            "--drain-timeout-ms" => drain_timeout = Duration::from_millis(positive(flag, value()?)?),
+            "--read-only-idle-ms" => {
+                read_only_idle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero())
+            }
+            "--drain-timeout-ms" => {
+                drain_timeout = Duration::from_millis(positive(flag, value()?)?)
+            }
             "--stats-ms" => stats = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
             "--throttle-ms" => throttle = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
             "--throttle-run-ms" => throttle_run = Duration::from_millis(positive(flag, value()?)?),
-            "--throttle-stop-ms" => throttle_stop = Duration::from_millis(positive(flag, value()?)?),
+            "--throttle-stop-ms" => {
+                throttle_stop = Duration::from_millis(positive(flag, value()?)?)
+            }
             "--admission-timeout-ms" => admission_timeout = millis(flag, value()?)?,
             "--host" => host = Some(value()?),
             "--host-arg" => host_args.push(value()?),
             "--host-backoff-ms" => host_backoff = Duration::from_millis(positive(flag, value()?)?),
-            "--host-backoff-max-ms" => host_backoff_max = Duration::from_millis(positive(flag, value()?)?),
+            "--host-backoff-max-ms" => {
+                host_backoff_max = Duration::from_millis(positive(flag, value()?)?)
+            }
             "--host-start-failures" => {
-                host_start_failures = Some(count(flag, value()?)?).filter(|&n| n > 0).ok_or(format!("{flag} 要正整數"))?
+                host_start_failures = Some(count(flag, value()?)?)
+                    .filter(|&n| n > 0)
+                    .ok_or(format!("{flag} 要正整數"))?
             }
             "--host-stable-ms" => host_stable = Duration::from_millis(positive(flag, value()?)?),
-            "--host-ready-timeout-ms" => host_ready_timeout = Duration::from_millis(positive(flag, value()?)?),
+            "--host-ready-timeout-ms" => {
+                host_ready_timeout = Duration::from_millis(positive(flag, value()?)?)
+            }
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
@@ -190,7 +210,11 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         read_only_idle,
         drain_timeout,
         stats,
-        throttle: throttle.map(|after| Config { after, run: throttle_run, stop: throttle_stop }),
+        throttle: throttle.map(|after| Config {
+            after,
+            run: throttle_run,
+            stop: throttle_stop,
+        }),
         admission_timeout,
         host: match host {
             Some(program) => Some(HostArgs {
@@ -217,7 +241,10 @@ fn positive(flag: &str, value: OsString) -> Result<u64, String> {
 }
 
 fn count(flag: &str, value: OsString) -> Result<u32, String> {
-    value.to_str().and_then(|v| v.parse::<u32>().ok()).ok_or_else(|| format!("{flag} 要整數，拿到 {value:?}"))
+    value
+        .to_str()
+        .and_then(|v| v.parse::<u32>().ok())
+        .ok_or_else(|| format!("{flag} 要整數，拿到 {value:?}"))
 }
 
 fn millis(flag: &str, value: OsString) -> Result<Duration, String> {
@@ -239,8 +266,22 @@ mod tests {
     #[test]
     fn parses_required_and_repeated_flags() {
         let args = parse(&os(&[
-            "--run-dir", "/r", "--audit", "/a.jsonl", "--front", "node", "--front-arg", "front.js", "--front-arg", "--x",
-            "--conversation", "node", "--conversation-arg", "conv.js", "--term-grace-ms", "50",
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a.jsonl",
+            "--front",
+            "node",
+            "--front-arg",
+            "front.js",
+            "--front-arg",
+            "--x",
+            "--conversation",
+            "node",
+            "--conversation-arg",
+            "conv.js",
+            "--term-grace-ms",
+            "50",
         ]))
         .unwrap();
         assert_eq!(args.run_dir, PathBuf::from("/r"));
@@ -260,24 +301,52 @@ mod tests {
         assert_eq!(args.stats, Some(DEFAULT_STATS));
         assert_eq!(
             args.throttle,
-            Some(Config { after: DEFAULT_THROTTLE, run: DEFAULT_THROTTLE_RUN, stop: DEFAULT_THROTTLE_STOP })
+            Some(Config {
+                after: DEFAULT_THROTTLE,
+                run: DEFAULT_THROTTLE_RUN,
+                stop: DEFAULT_THROTTLE_STOP
+            })
         );
     }
 
     #[test]
     fn throttle_flags() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         let mut items = base.to_vec();
-        items.extend(["--throttle-ms", "300", "--throttle-run-ms", "10", "--throttle-stop-ms", "40"]);
+        items.extend([
+            "--throttle-ms",
+            "300",
+            "--throttle-run-ms",
+            "10",
+            "--throttle-stop-ms",
+            "40",
+        ]);
         let args = parse(&os(&items)).unwrap();
         assert_eq!(
             args.throttle,
-            Some(Config { after: Duration::from_millis(300), run: Duration::from_millis(10), stop: Duration::from_millis(40) })
+            Some(Config {
+                after: Duration::from_millis(300),
+                run: Duration::from_millis(10),
+                stop: Duration::from_millis(40)
+            })
         );
         let mut items = base.to_vec();
         items.extend(["--throttle-ms", "0"]);
         assert_eq!(parse(&os(&items)).unwrap().throttle, None);
-        for bad in [["--throttle-run-ms", "0"], ["--throttle-stop-ms", "0"], ["--throttle-ms", "x"]] {
+        for bad in [
+            ["--throttle-run-ms", "0"],
+            ["--throttle-stop-ms", "0"],
+            ["--throttle-ms", "x"],
+        ] {
             let mut items = base.to_vec();
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
@@ -286,9 +355,31 @@ mod tests {
 
     #[test]
     fn capacity_warm_and_eviction_flags() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         let mut items = base.to_vec();
-        items.extend(["--capacity", "3", "--warm", "0", "--idle-ms", "0", "--read-only-idle-ms", "40", "--drain-timeout-ms", "70", "--stats-ms", "0"]);
+        items.extend([
+            "--capacity",
+            "3",
+            "--warm",
+            "0",
+            "--idle-ms",
+            "0",
+            "--read-only-idle-ms",
+            "40",
+            "--drain-timeout-ms",
+            "70",
+            "--stats-ms",
+            "0",
+        ]);
         let args = parse(&os(&items)).unwrap();
         assert_eq!(args.capacity, Some(3));
         assert_eq!(args.warm, 0);
@@ -296,7 +387,12 @@ mod tests {
         assert_eq!(args.read_only_idle, Some(Duration::from_millis(40)));
         assert_eq!(args.drain_timeout, Duration::from_millis(70));
         assert_eq!(args.stats, None);
-        for bad in [["--capacity", "0"], ["--capacity", "-1"], ["--warm", "x"], ["--drain-timeout-ms", "0"]] {
+        for bad in [
+            ["--capacity", "0"],
+            ["--capacity", "-1"],
+            ["--warm", "x"],
+            ["--drain-timeout-ms", "0"],
+        ] {
             let mut items = base.to_vec();
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
@@ -305,7 +401,16 @@ mod tests {
 
     #[test]
     fn host_flags() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         let args = parse(&os(&base)).unwrap();
         assert_eq!(args.host, None);
         assert_eq!(args.admission_timeout, DEFAULT_ADMISSION_TIMEOUT);
@@ -326,8 +431,20 @@ mod tests {
         );
         let mut items = base.to_vec();
         items.extend([
-            "--host", "h", "--host-backoff-ms", "50", "--host-backoff-max-ms", "20", "--host-start-failures", "2",
-            "--host-stable-ms", "300", "--host-ready-timeout-ms", "400", "--admission-timeout-ms", "0",
+            "--host",
+            "h",
+            "--host-backoff-ms",
+            "50",
+            "--host-backoff-max-ms",
+            "20",
+            "--host-start-failures",
+            "2",
+            "--host-stable-ms",
+            "300",
+            "--host-ready-timeout-ms",
+            "400",
+            "--admission-timeout-ms",
+            "0",
         ]);
         let args = parse(&os(&items)).unwrap();
         assert_eq!(args.admission_timeout, Duration::ZERO);
@@ -338,7 +455,11 @@ mod tests {
         assert_eq!(host.start_failures, 2);
         assert_eq!(host.stable, Duration::from_millis(300));
         assert_eq!(host.ready_timeout, Duration::from_millis(400));
-        for bad in [["--host-start-failures", "0"], ["--host-backoff-ms", "0"], ["--host-arg", "x"]] {
+        for bad in [
+            ["--host-start-failures", "0"],
+            ["--host-backoff-ms", "0"],
+            ["--host-arg", "x"],
+        ] {
             let mut items = base.to_vec();
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
@@ -347,24 +468,49 @@ mod tests {
 
     #[test]
     fn zero_turns_stall_off() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         let mut items = base.to_vec();
         items.extend(["--stall-ms", "0"]);
         assert_eq!(parse(&os(&items)).unwrap().stall, None);
         let mut items = base.to_vec();
         items.extend(["--stall-ms", "300"]);
-        assert_eq!(parse(&os(&items)).unwrap().stall, Some(Duration::from_millis(300)));
+        assert_eq!(
+            parse(&os(&items)).unwrap().stall,
+            Some(Duration::from_millis(300))
+        );
     }
 
     #[test]
     fn rss_limit_is_mib_and_must_be_positive() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         let mut items = base.to_vec();
         items.extend(["--rss-limit-mb", "512", "--rss-poll-ms", "100"]);
         let args = parse(&os(&items)).unwrap();
         assert_eq!(args.rss_limit_kb, Some(512 * 1024));
         assert_eq!(args.rss_poll, Duration::from_millis(100));
-        for bad in [["--rss-limit-mb", "0"], ["--rss-poll-ms", "0"], ["--rss-limit-mb", "big"]] {
+        for bad in [
+            ["--rss-limit-mb", "0"],
+            ["--rss-poll-ms", "0"],
+            ["--rss-limit-mb", "big"],
+        ] {
             let mut items = base.to_vec();
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
@@ -373,7 +519,16 @@ mod tests {
 
     #[test]
     fn rejects_missing_unknown_and_bad_values() {
-        let base = ["--run-dir", "/r", "--audit", "/a", "--front", "f", "--conversation", "c"];
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
         assert!(parse(&os(&base)).is_ok());
         for drop in [0, 2, 4, 6] {
             let mut items = base.to_vec();

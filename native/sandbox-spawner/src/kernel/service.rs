@@ -28,7 +28,10 @@ impl Inject {
     }
 
     pub const fn with_range(name: &'static str, range: &'static str) -> Inject {
-        Inject { name, range: Some(range) }
+        Inject {
+            name,
+            range: Some(range),
+        }
     }
 }
 
@@ -89,14 +92,18 @@ pub(crate) fn downcast<S: Service>(imp: &Impl) -> Result<&S, KernelError> {
     if imp.type_id != TypeId::of::<S>() {
         return Err(KernelError::TypeMismatch { service: S::NAME });
     }
-    imp.value.downcast_ref::<S>().ok_or(KernelError::TypeMismatch { service: S::NAME })
+    imp.value
+        .downcast_ref::<S>()
+        .ok_or(KernelError::TypeMismatch { service: S::NAME })
 }
 
 pub(crate) fn downcast_mut<S: Service>(imp: &mut Impl) -> Result<&mut S, KernelError> {
     if imp.type_id != TypeId::of::<S>() {
         return Err(KernelError::TypeMismatch { service: S::NAME });
     }
-    imp.value.downcast_mut::<S>().ok_or(KernelError::TypeMismatch { service: S::NAME })
+    imp.value
+        .downcast_mut::<S>()
+        .ok_or(KernelError::TypeMismatch { service: S::NAME })
 }
 
 /// `主.次.修`，三段都是十進位整數，不帶前導 0。不收 pre-release 與 build metadata：契約檢查只比這三段。
@@ -125,12 +132,19 @@ impl Version {
         }
         let mut nums = [0u64; 3];
         for (slot, part) in nums.iter_mut().zip(&parts) {
-            if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) || (part.len() > 1 && part.starts_with('0')) {
+            if part.is_empty()
+                || !part.bytes().all(|b| b.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+            {
                 return Err(bad());
             }
             *slot = part.parse().map_err(|_| bad())?;
         }
-        Ok(Version { major: nums[0], minor: nums[1], patch: nums[2] })
+        Ok(Version {
+            major: nums[0],
+            minor: nums[1],
+            patch: nums[2],
+        })
     }
 }
 

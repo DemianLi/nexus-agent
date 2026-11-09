@@ -2,7 +2,9 @@
 //!
 //! 結果：`host hello`、`host rejected <理由>`、`host garbled <理由>`（宿主的回答解不開）、`host closed`（宿主沒回答就斷了）、`host error <errno>`（連不上，或 socket 建不起來）。
 
-use nexus_sandbox_spawner::host_protocol::{decode_host_message, encode_client_message, hello, HostMessage};
+use nexus_sandbox_spawner::host_protocol::{
+    decode_host_message, encode_client_message, hello, HostMessage,
+};
 use nexus_sandbox_spawner::protocol::frame;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -20,7 +22,9 @@ pub fn send_line(socket: &Path, bytes: &[u8]) -> String {
         Ok(stream) => stream,
         Err(err) => return format!("host error {}", err.raw_os_error().unwrap_or(0)),
     };
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let _ = stream.write_all(bytes);
     let mut head = [0u8; 4];
     if stream.read_exact(&mut head).is_err() {

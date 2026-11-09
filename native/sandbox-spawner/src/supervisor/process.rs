@@ -4,9 +4,9 @@ use super::memory::{HEAP_LINE_PREFIX, HEAP_MARKER, HEAP_TAIL};
 use crate::protocol::{frame, take_frame_within, DecodeError, MAX_FRAME};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// `receive` 與 stderr 轉送一次最多讀這麼多：對方一直寫也會交回迴圈，計時器、訊號與別的通道照樣輪得到。
@@ -37,7 +37,11 @@ pub fn spawn(
     let parent = std::process::id() as libc::pid_t;
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped());
-    cmd.stderr(if tap_stderr { Stdio::piped() } else { Stdio::inherit() });
+    cmd.stderr(if tap_stderr {
+        Stdio::piped()
+    } else {
+        Stdio::inherit()
+    });
     // SAFETY：pre_exec 在 fork 之後的子行程裡跑，這裡只做系統呼叫，不配置記憶體。
     unsafe {
         cmd.pre_exec(move || {
@@ -63,7 +67,14 @@ pub fn spawn(
     for fd in [&stdin, &stdout, &stderr].into_iter().flatten() {
         set_nonblocking(fd);
     }
-    let chan = Chan { write: stdin, read: stdout, inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: MAX_FRAME };
+    let chan = Chan {
+        write: stdin,
+        read: stdout,
+        inbox: Vec::new(),
+        outbox: Vec::new(),
+        finishing: false,
+        max_frame: MAX_FRAME,
+    };
     Ok((pid, chan, stderr.map(StderrTap::new)))
 }
 
@@ -77,12 +88,21 @@ pub fn signal_group(pid: libc::pid_t, signal: libc::c_int) {
 ///
 /// 先用 `WNOWAIT` 看是誰結束，叫 `before_reap(pid)` 之後才真的收：leader 還是 zombie 時，它的 pid（也是它的群組號）不會被重用，
 /// 這時對群組送的 SIGKILL 不會打到別人。
-pub fn reap(mut before_reap: impl FnMut(libc::pid_t), mut on_exit: impl FnMut(libc::pid_t, libc::c_int)) {
+pub fn reap(
+    mut before_reap: impl FnMut(libc::pid_t),
+    mut on_exit: impl FnMut(libc::pid_t, libc::c_int),
+) {
     loop {
         // SAFETY：`info` 歸零後交給 waitid 填；WNOHANG 下沒有結束的子行程時 si_pid 留在 0。
         let pid = unsafe {
             let mut info: libc::siginfo_t = std::mem::zeroed();
-            if libc::waitid(libc::P_ALL, 0, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) != 0 {
+            if libc::waitid(
+                libc::P_ALL,
+                0,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            ) != 0
+            {
                 return;
             }
             info.si_pid()
@@ -119,7 +139,14 @@ impl Chan {
     pub fn from_fds(read: OwnedFd, write: OwnedFd, max_frame: usize) -> Chan {
         set_nonblocking(&read);
         set_nonblocking(&write);
-        Chan { write: Some(write), read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame }
+        Chan {
+            write: Some(write),
+            read: Some(read),
+            inbox: Vec::new(),
+            outbox: Vec::new(),
+            finishing: false,
+            max_frame,
+        }
     }
 
     /// 讀端讀到 EOF 或讀錯了。
@@ -135,7 +162,11 @@ impl Chan {
     /// 要 poll 的 fd：讀端還開著就要 `POLLIN`；寫端只在還有沒寫完的才要 `POLLOUT`。
     pub fn poll_fds(&self) -> (Option<libc::c_int>, Option<libc::c_int>) {
         let read = self.read.as_ref().map(AsRawFd::as_raw_fd);
-        let write = self.write.as_ref().filter(|_| !self.outbox.is_empty()).map(AsRawFd::as_raw_fd);
+        let write = self
+            .write
+            .as_ref()
+            .filter(|_| !self.outbox.is_empty())
+            .map(AsRawFd::as_raw_fd);
         (read, write)
     }
 
@@ -150,7 +181,9 @@ impl Chan {
 
     /// 把排著的寫出去，寫到 EAGAIN 為止；寫完了而且叫過 `finish` 就關寫端。對方不收了（EPIPE 之類）就關掉寫端、丟掉排著的。
     pub fn flush(&mut self) {
-        let Some(fd) = self.write.as_ref().map(AsRawFd::as_raw_fd) else { return };
+        let Some(fd) = self.write.as_ref().map(AsRawFd::as_raw_fd) else {
+            return;
+        };
         while !self.outbox.is_empty() {
             // SAFETY：寫 outbox 的內容。
             let n = unsafe { libc::write(fd, self.outbox.as_ptr().cast(), self.outbox.len()) };
@@ -176,7 +209,9 @@ impl Chan {
     pub fn flush_until(&mut self, deadline: Instant) -> bool {
         loop {
             self.flush();
-            let Some(fd) = self.write.as_ref().map(AsRawFd::as_raw_fd) else { return false };
+            let Some(fd) = self.write.as_ref().map(AsRawFd::as_raw_fd) else {
+                return false;
+            };
             if self.outbox.is_empty() {
                 return true;
             }
@@ -184,7 +219,11 @@ impl Chan {
             if left.is_zero() {
                 return false;
             }
-            let mut pfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLOUT,
+                revents: 0,
+            };
             let ms = libc::c_int::try_from(left.as_millis().max(1)).unwrap_or(libc::c_int::MAX);
             // SAFETY：一個 pollfd。
             unsafe { libc::poll(&mut pfd, 1, ms) };
@@ -233,7 +272,9 @@ impl Chan {
                     }
                 }
             }
-            let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return (frames, None) };
+            let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else {
+                return (frames, None);
+            };
             // 切完之後 inbox 不到一框（< cap 的一半），room 是 0 只會是 budget 用完。
             let room = cap.saturating_sub(self.inbox.len()).min(4096).min(budget);
             if room == 0 {
@@ -281,7 +322,13 @@ const LINE_CAP: usize = 512;
 
 impl StderrTap {
     pub fn new(read: OwnedFd) -> StderrTap {
-        StderrTap { read: Some(read), line: Vec::new(), line_overflow: false, total: 0, heap_line_end: None }
+        StderrTap {
+            read: Some(read),
+            line: Vec::new(),
+            line_overflow: false,
+            total: 0,
+            heap_line_end: None,
+        }
     }
 
     pub fn poll_fd(&self) -> Option<libc::c_int> {
@@ -292,12 +339,15 @@ impl StderrTap {
     /// 位元組內。還沒換行的那一行會被當成結束：只在讀完之後（收屍時）呼叫。
     pub fn heap_message_near_end(&mut self) -> bool {
         self.end_line();
-        self.heap_line_end.is_some_and(|end| self.total - end <= HEAP_TAIL)
+        self.heap_line_end
+            .is_some_and(|end| self.total - end <= HEAP_TAIL)
     }
 
     /// 讀到 EAGAIN 或讀滿 `budget` 為止，轉出去；讀到 EOF 或讀錯就關掉。
     pub fn pump(&mut self, budget: usize) {
-        let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return };
+        let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else {
+            return;
+        };
         let mut buf = [0u8; 4096];
         let mut left = budget;
         while left > 0 {
@@ -344,7 +394,9 @@ impl StderrTap {
         let line = std::mem::take(&mut self.line);
         if !std::mem::take(&mut self.line_overflow)
             && line.starts_with(HEAP_LINE_PREFIX)
-            && line.windows(HEAP_MARKER.len()).any(|window| window == HEAP_MARKER)
+            && line
+                .windows(HEAP_MARKER.len())
+                .any(|window| window == HEAP_MARKER)
         {
             self.heap_line_end = Some(self.total);
         }
@@ -397,7 +449,14 @@ mod tests {
         // SAFETY：兩個 fd 都是剛開的，各交給一個擁有者。
         let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         set_nonblocking(&write);
-        let mut chan = Chan { write: Some(write), read: None, inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: MAX_FRAME };
+        let mut chan = Chan {
+            write: Some(write),
+            read: None,
+            inbox: Vec::new(),
+            outbox: Vec::new(),
+            finishing: false,
+            max_frame: MAX_FRAME,
+        };
         let big = vec![7u8; 256 * 1024];
         chan.send(&big);
         chan.finish();
@@ -429,7 +488,9 @@ mod tests {
         // 一個位元組一個位元組來，最後一行沒換行也算。
         let (r, _w) = pipe();
         let mut tap = StderrTap::new(r);
-        for byte in b"FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory" {
+        for byte in
+            b"FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory"
+        {
             tap.scan(&[*byte]);
         }
         assert!(tap.heap_message_near_end());
@@ -446,7 +507,9 @@ mod tests {
         // 真的印過，但之後又寫了超過 HEAP_TAIL 才死。
         let (r, _w) = pipe();
         let mut tap = StderrTap::new(r);
-        tap.scan(b"FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n");
+        tap.scan(
+            b"FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n",
+        );
         // 那一行的換行加上之後的填充，剛好 HEAP_TAIL 還算。
         tap.scan(&vec![b'x'; HEAP_TAIL as usize - 1]);
         assert!(tap.heap_message_near_end());
@@ -476,7 +539,14 @@ mod tests {
     fn receive_all_returns_the_frames_cut_before_an_oversized_one() {
         let (read, write) = pipe();
         set_nonblocking(&read);
-        let mut chan = Chan { write: None, read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: 16 };
+        let mut chan = Chan {
+            write: None,
+            read: Some(read),
+            inbox: Vec::new(),
+            outbox: Vec::new(),
+            finishing: false,
+            max_frame: 16,
+        };
         let mut bytes = frame(b"one");
         bytes.extend(frame(b"two"));
         bytes.extend(((chan.max_frame + 1) as u32).to_le_bytes());
@@ -491,7 +561,14 @@ mod tests {
     fn receive_reports_an_oversized_frame_as_an_error() {
         let (read, write) = pipe();
         set_nonblocking(&read);
-        let mut chan = Chan { write: None, read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: 16 };
+        let mut chan = Chan {
+            write: None,
+            read: Some(read),
+            inbox: Vec::new(),
+            outbox: Vec::new(),
+            finishing: false,
+            max_frame: 16,
+        };
         let mut bytes = frame(b"one");
         bytes.extend(((chan.max_frame + 1) as u32).to_le_bytes());
         std::fs::File::from(write).write_all(&bytes).unwrap();
