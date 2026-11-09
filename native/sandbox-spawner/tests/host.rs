@@ -166,13 +166,15 @@ fn handshake_then_eof_removes_the_socket_and_exits_0() {
 
 #[test]
 fn a_wrong_supervisor_hello_exits_3_before_binding() {
-    let dir = temp_dir("ver");
-    let socket = dir.join("host.sock");
-    let mut host = HostProc::spawn(&socket);
-    assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-    host.command(&HostCommand::Hello { version: PROTOCOL_VERSION + 1 });
-    assert_eq!(host.wait().code(), Some(3));
-    assert!(!socket.exists());
+    for version in [PROTOCOL_VERSION + 1, PROTOCOL_VERSION - 1] {
+        let dir = temp_dir("ver");
+        let socket = dir.join("host.sock");
+        let mut host = HostProc::spawn(&socket);
+        assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
+        host.command(&HostCommand::Hello { version });
+        assert_eq!(host.wait().code(), Some(3), "{version}");
+        assert!(!socket.exists());
+    }
 }
 
 #[test]

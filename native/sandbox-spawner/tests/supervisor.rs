@@ -1358,9 +1358,11 @@ fn running_host(h: &Harness) -> Option<u32> {
     children(h.pid()).into_iter().find(|&pid| String::from_utf8_lossy(&proc_file(pid, "cmdline")).contains("nexus-host"))
 }
 
+/// 版本不符含上一版（`PROTOCOL_VERSION - 1`）：上一版的子行程照樣被擋下。
 #[test]
 fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
-    for args in [["--hello-version", "99"].as_slice(), ["--skip-hello"].as_slice()] {
+    let previous = (PROTOCOL_VERSION - 1).to_string();
+    for args in [["--hello-version", "99"].as_slice(), ["--hello-version", &previous].as_slice(), ["--skip-hello"].as_slice()] {
         let mut h = Harness::start(Options { conversation_args: args.iter().map(|a| a.to_string()).collect(), ..Options::default() });
         assert_eq!(h.down("a"), DeathCause::Protocol, "{args:?}");
         let line = h.audit_line("\"cause\":\"protocol\"");
@@ -1370,7 +1372,11 @@ fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
 
 #[test]
 fn a_front_whose_first_frame_is_not_a_matching_hello_stops_everything_with_3() {
-    let wrong = [FrontRequest::Hello { version: PROTOCOL_VERSION + 1 }, FrontRequest::Ensure { thread_id: b"a".to_vec(), open: OpenMode::Run }];
+    let wrong = [
+        FrontRequest::Hello { version: PROTOCOL_VERSION + 1 },
+        FrontRequest::Hello { version: PROTOCOL_VERSION - 1 },
+        FrontRequest::Ensure { thread_id: b"a".to_vec(), open: OpenMode::Run },
+    ];
     for first in wrong {
         let mut h = Harness::start(Options { front_hello: None, ..Options::default() });
         h.request(&first);
@@ -1540,9 +1546,11 @@ fn a_host_that_never_gets_ready_is_killed_and_counts_as_a_failure() {
 
 #[test]
 fn a_host_with_the_wrong_version_stops_everything_with_3() {
-    let mut h = Harness::start(Options { host: fake_host(&["--version", "99"]), front_hello: None, ..Options::default() });
-    assert_eq!(h.wait_exit().code(), Some(3));
-    assert_eq!(host_lines(&h).len(), 1, "{:?}", h.audit());
+    for version in ["99".to_string(), (PROTOCOL_VERSION - 1).to_string()] {
+        let mut h = Harness::start(Options { host: fake_host(&["--version", &version]), front_hello: None, ..Options::default() });
+        assert_eq!(h.wait_exit().code(), Some(3), "{version}");
+        assert_eq!(host_lines(&h).len(), 1, "{version}：{:?}", h.audit());
+    }
 }
 
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
