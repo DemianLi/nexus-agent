@@ -360,8 +360,8 @@ describe('maxTurns 的計數只算成功回來的模型呼叫', () => {
 });
 
 describe('maxTurns 的計數不外漏到下一次委派', () => {
-  // 前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），`modelCallLimitMiddleware` 的計數也在 state 裡：
-  // 外漏的話第二次委派一開始就已經到上限。
+  // langgraph 下前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），上限的計數也在 state 裡：
+  // 外漏的話第二次委派一開始就已經到上限。native 下前景子代理每次從空 state 跑，這一條釘的是同一個結果。
   it('同一輪派兩次、再開一輪派第三次：每次都叫滿 2 次', async () => {
     const endpoint = await fakeEndpoint((seen) => {
       if (seen.role === 'root') {
