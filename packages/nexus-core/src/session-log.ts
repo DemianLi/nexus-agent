@@ -211,7 +211,7 @@ export type TurnAbortCause =
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
  * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
- *   **還沒有生產者**（寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）；讀盤驗證、對話史與軌跡、
+ *   寫它的只有 native 下的背景子代理（撞到規格的 `maxTurns`，`apps/harness/src/background-subagents.ts`）；讀盤驗證、對話史與軌跡、
  *   token-meter 的 `endOf` 都認得它。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
