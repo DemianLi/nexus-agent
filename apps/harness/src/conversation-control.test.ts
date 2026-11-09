@@ -30,6 +30,8 @@ interface Harness {
   stopped: number;
   ended: number;
   readonly warnings: string[];
+  /** `onHostToken` 收到的。 */
+  readonly tokens: string[];
   clock: number;
 }
 
@@ -61,6 +63,7 @@ function harness(
     stopped: 0,
     ended: 0,
     warnings: [] as string[],
+    tokens: [] as string[],
     clock: 1_000,
   } as Omit<Harness, 'control' | 'reports' | 'rawReports' | 'send'> & Partial<Harness>;
   const handler: ControlledHandler = {
@@ -86,6 +89,7 @@ function harness(
       h.ended! += 1;
     },
     warn: (message) => h.warnings!.push(message),
+    onHostToken: (token) => h.tokens!.push(token),
   });
   controls.push(control);
   const rawReports = (): ConversationReport[] => {
@@ -326,6 +330,7 @@ describe('hello', () => {
     h.send({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
     await settle();
     expect(h.control.hostToken).toBe(TOKEN);
+    expect(h.tokens).toEqual([TOKEN]);
     await bound(h);
   });
 
@@ -342,6 +347,7 @@ describe('hello', () => {
     expect(h.ended).toBe(1);
     expect(h.opened).toEqual([]);
     expect(h.control.hostToken).toBeUndefined();
+    expect(h.tokens).toEqual([]);
     expect(h.warnings).toEqual([expect.stringContaining('第一框要是版本')]);
   });
 
@@ -350,6 +356,7 @@ describe('hello', () => {
     h.send({ type: 'hello', version: PROTOCOL_VERSION, token: 'ffeeddccbbaa99887766554433221100' });
     await settle();
     expect(h.control.hostToken).toBe(TOKEN);
+    expect(h.tokens).toEqual([TOKEN]);
     expect(h.warnings).toEqual([expect.stringContaining('又送了一次 hello')]);
   });
 });

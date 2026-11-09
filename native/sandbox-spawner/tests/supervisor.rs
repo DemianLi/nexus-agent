@@ -1384,6 +1384,17 @@ fn a_front_whose_first_frame_is_not_a_matching_hello_stops_everything_with_3() {
     }
 }
 
+/// 假對話行程只照 `--host-socket` 連宿主，連得上就表示傳下去的路徑是宿主 bind 的那一個；沒給 `--host` 就不帶這個參數。
+#[test]
+fn conversations_get_the_socket_the_host_binds_only_when_there_is_a_host() {
+    let mut h = Harness::start(Options { host: real_host(), ..Options::default() });
+    let socket = h.up("a,host-hello");
+    assert!(wait_until(|| log(&socket).contains(&"host hello".to_string())), "{:?}", raw_log(&socket));
+    let mut h = Harness::start(Options::default());
+    let socket = h.up("b,host-hello");
+    assert!(wait_until(|| log(&socket).contains(&"host no-socket".to_string())), "{:?}", raw_log(&socket));
+}
+
 /// token 只走控制通道：不在任何子行程的 argv 與環境變數，也不在稽核與監督行程的 stderr。
 #[test]
 fn the_token_travels_only_on_the_control_channel() {

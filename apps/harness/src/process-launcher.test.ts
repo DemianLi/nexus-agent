@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   childExecArgv,
+  HOST_PLUGINS_FILE,
   isPrintOnly,
   launchProcessModel,
   pdeathsigHazards,
@@ -309,8 +310,30 @@ describe('宿主', () => {
       serveArgv: [],
     });
     const at = args.indexOf('--host');
-    expect(args.slice(at, at + 2)).toEqual(['--host', '/opt/nexus/native/nexus-host']);
+    expect(args.slice(at, at + 6)).toEqual([
+      '--host',
+      '/opt/nexus/native/nexus-host',
+      '--host-arg',
+      '--plugins',
+      '--host-arg',
+      `/h/${HOST_PLUGINS_FILE}`,
+    ]);
     expect(at).toBeLessThan(args.indexOf('--front'));
+  });
+
+  it('supervisorLaunch：沒給 host 就不帶 --host，也不帶任何 --host-arg', () => {
+    const { args } = supervisorLaunch({
+      supervisor: '/opt/nexus/native/nexus-supervisor',
+      home: '/h',
+      execPath: '/usr/bin/node',
+      execArgv: [],
+      frontEntry: '/front.js',
+      conversationEntry: '/conversation.js',
+      serveArgv: [],
+    });
+    expect(args).not.toContain('--host');
+    expect(args).not.toContain('--host-arg');
+    expect(args.join(' ')).not.toContain(HOST_PLUGINS_FILE);
   });
 
   it('launchProcessModel：監督行程旁邊沒有 nexus-host 就拒起，不換成監督行程', async () => {
