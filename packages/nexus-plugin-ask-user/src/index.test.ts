@@ -21,7 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const interrupted: unknown[] = [];
 let resumeWith: unknown;
 
-vi.mock('@langchain/langgraph', () => ({
+vi.mock('@langchain/langgraph', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@langchain/langgraph')>()),
   interrupt: (payload: unknown) => {
     interrupted.push(payload);
     return resumeWith;
