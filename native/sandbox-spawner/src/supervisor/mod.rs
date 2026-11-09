@@ -1350,7 +1350,7 @@ impl Supervisor {
     }
 
     /// 宿主沒了（沒起成或結束了）：`ready` 之前的失敗連續到上限就停機，否則照退避排下一次重起。停機中不重起。
-    /// `config_broken`：這次失敗是插件清單壞了；壞到上限時死因寫設定壞了，不寫成連續失敗。
+    /// `config_broken`：這次失敗是插件清單壞了；到上限時以 5 停機、stderr 記設定壞了，不回 4。
     fn host_failed(&mut self, ready: bool, lived: Duration, config_broken: bool) {
         let Some(config) = &self.args.host else { return };
         if self.shutting_down {

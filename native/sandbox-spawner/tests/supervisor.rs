@@ -1609,7 +1609,7 @@ fn a_list_that_breaks_after_ready_restarts_the_host_and_conversations_keep_runni
     assert!(h.child.try_wait().unwrap().is_none());
 }
 
-/// ready 過之後重起時一直設定壞了，到了連續失敗的上限照樣停機，死因寫設定壞了、結束碼 5，不寫成連續失敗的 4。
+/// ready 過之後重起時一直設定壞了，到了連續失敗的上限照樣停機，stderr 寫設定壞了、結束碼 5，不寫成連續失敗的 4。
 #[test]
 fn a_list_that_stays_broken_after_ready_stops_everything_with_5_at_the_failure_limit() {
     let (mut h, _list, _a, _a_pid) = break_the_list_after_ready("2");
