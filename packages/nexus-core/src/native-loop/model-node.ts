@@ -70,6 +70,8 @@ export interface ModelStepResult {
 /** 一次模型呼叫的固定參數。 */
 export interface ModelChain {
   readonly model: unknown;
+  /** 蓋在 AI 訊息上的 `name`，同 `AgentNode` 蓋上的 agent 名字。 */
+  readonly name: string;
   readonly systemMessage: SystemMessage;
   readonly tools: readonly InvokableTool[];
   readonly middleware: readonly LoopMiddleware[];
@@ -83,7 +85,7 @@ export interface ModelChain {
  * 跑一次模型呼叫，經過整串 `wrapModelCall`。照 `AgentNode.js` 的 `#invokeModel`，拿掉結構化輸出（nexus 不用 `responseFormat`）。
  * @param chain - 模型、系統訊息、工具、middleware。
  * @param task - 這次呼叫的環境（`model_request:<id>`）。
- * @returns AI 訊息（蓋上 `name = 'model'`）與收集到的 `Command`。
+ * @returns AI 訊息（蓋上 `chain.name`）與收集到的 `Command`。
  */
 export async function callModel(chain: ModelChain, task: NodeTask): Promise<ModelStepResult> {
   const state = task.state;
@@ -204,8 +206,8 @@ export async function callModel(chain: ModelChain, task: NodeTask): Promise<Mode
   );
   const message = AIMessage.isInstance(response) ? response : lastAiMessage;
   if (message !== undefined) {
-    message.name = 'model';
-    message.lc_kwargs.name = 'model';
+    message.name = chain.name;
+    message.lc_kwargs.name = chain.name;
   }
   const commands = [...collected];
   if (isCommand(response) && !commands.includes(response)) commands.unshift(response);

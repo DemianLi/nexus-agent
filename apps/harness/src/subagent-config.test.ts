@@ -41,7 +41,8 @@ interface Seen {
   readonly toolResult?: string;
 }
 
-type Reply = { text: string } | { call: { id: string; name: string; arguments: string } };
+type Reply =
+  { text: string } | { call: { id: string; name: string; arguments: string } } | { status: number };
 
 /** 依角色與次序回答的假端點（一律走 SSE）。`onRequest` 在請求到達、回答之前呼叫。 */
 async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Seen) => void) {
@@ -75,6 +76,11 @@ async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Se
           model: 'fake',
           choices: [{ index: 0, delta, finish_reason: finish }],
         })}\n\n`;
+      if ('status' in reply) {
+        res.writeHead(reply.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: '暫時不行', type: 'server_error' } }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if ('text' in reply) {
         res.write(chunk({ role: 'assistant', content: reply.text }));
@@ -133,7 +139,7 @@ afterEach(() => {
 });
 
 /** 兩顆：A 預設、B 窗口小且沒有推理資訊。 */
-function configFor(baseUrl: string) {
+function configFor(baseUrl: string, retries = 0) {
   const entry = (id: string, extra: Record<string, unknown> = {}) => ({
     ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY),
     id,
@@ -141,7 +147,11 @@ function configFor(baseUrl: string) {
   });
   return liveModelConfigSchema.parse({
     baseUrl,
-    retryPolicy: { mode: 'normal', maxRetries: 0 },
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries: retries,
+      backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    },
     modelId: A,
     models: [
       entry(A),
@@ -167,12 +177,12 @@ const workerPlugin = (definition: Partial<NexusSubAgent>): PluginEntry => ({
 async function assemble(
   baseUrl: string,
   definition: Partial<NexusSubAgent>,
-  options: { background?: boolean; policy?: boolean } = {},
+  options: { background?: boolean; policy?: boolean; retries?: number } = {},
 ) {
   const built = await createCliAgent(
     {
       live: true,
-      liveModel: configFor(baseUrl),
+      liveModel: configFor(baseUrl, options.retries),
       ...(options.background === true && { backgroundSubagents: { maxActive: 2 } }),
       ...(options.policy === true && { modelSelectionPolicy: { allowedModels: [A, B] } }),
     },
@@ -310,6 +320,38 @@ describe('定義釘的 model 與 maxTurns', () => {
       await run.say('委派');
       expect(endpoint.models('worker')).toHaveLength(2);
       expect(endpoint.models('root')).toHaveLength(2);
+      // `task` 回給 root 的是上限那一顆合成的那句，兩個 loop 逐字相同。
+      expect(rootToolResults(endpoint)).toEqual([JSON.stringify(LIMIT_REACHED(2))]);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+});
+
+const LIMIT_REACHED = (n: number): string =>
+  `Model call limits exceeded: run level call limit reached with ${n} model calls`;
+
+/** root 每次請求看到的最後一則工具結果，跳過沒有的那幾次。 */
+const rootToolResults = (endpoint: { requests: readonly Seen[] }): readonly string[] =>
+  endpoint.requests.flatMap((seen) =>
+    seen.role === 'root' && seen.toolResult !== undefined ? [seen.toolResult] : [],
+  );
+
+describe('maxTurns 的計數只算成功回來的模型呼叫', () => {
+  it('子代理第一次請求 503、重打成功：重打只算一次，成功的仍叫滿上限', async () => {
+    const endpoint = await fakeEndpoint((seen) => {
+      if (seen.role === 'root') return seen.nth === 1 ? delegateForeground : { text: '根收尾。' };
+      if (seen.nth === 1) return { status: 503 };
+      return seen.nth >= 8 ? { text: '放棄。' } : listFiles;
+    });
+    const run = await assemble(endpoint.baseUrl, { maxTurns: 2 }, { retries: 1 });
+    try {
+      await run.say('委派');
+      // 503 那次、重打成功那次、第二次：端點收到三次，上限只算後兩次。
+      expect(endpoint.models('worker')).toHaveLength(3);
+      expect(endpoint.models('root')).toHaveLength(2);
+      expect(rootToolResults(endpoint)).toEqual([JSON.stringify(LIMIT_REACHED(2))]);
     } finally {
       await run.close();
       await endpoint.close();
@@ -318,8 +360,8 @@ describe('定義釘的 model 與 maxTurns', () => {
 });
 
 describe('maxTurns 的計數不外漏到下一次委派', () => {
-  // 前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），`modelCallLimitMiddleware` 的計數也在 state 裡：
-  // 外漏的話第二次委派一開始就已經到上限。
+  // langgraph 下前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），上限的計數也在 state 裡：
+  // 外漏的話第二次委派一開始就已經到上限。native 下前景子代理每次從空 state 跑，這一條釘的是同一個結果。
   it('同一輪派兩次、再開一輪派第三次：每次都叫滿 2 次', async () => {
     const endpoint = await fakeEndpoint((seen) => {
       if (seen.role === 'root') {

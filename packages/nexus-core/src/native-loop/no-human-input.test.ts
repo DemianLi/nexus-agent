@@ -1,6 +1,6 @@
 /**
  * 每一顆工具呼叫上放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 帶 thread 的 `streamEvents` 放等人
- * 服務，其餘（`invoke`、子代理那一層）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
+ * 服務（前景子代理那一層也放，經 root 那顆 `task` 呼叫的委派），其餘（`invoke`）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
  * 那一格，不問人、不跑工具本體。人答了之後再判一次：等人期間政策切到 `never`，答核准也照政策回絕、本體不跑，兩個 loop 結局一樣；
  * native 只在人核准之後補判：人按拒絕就照人的拒絕，listener 翻成 allow 或政策切到 `never` 都一樣（langgraph 接回時整段重跑：listener 翻成 allow 會放行，見 #2613；政策切到 `never` 時回政策那一格的碼）。
  */
@@ -129,7 +129,7 @@ describe.each(LOOPS)('%s：每顆呼叫的 config 上放什麼', (loop) => {
       loop === 'native'
         ? [
             { at: 'root', service: true, unavailable: false },
-            { at: 'sub', service: false, unavailable: true },
+            { at: 'sub', service: true, unavailable: false },
           ]
         : [
             { at: 'root', service: false, unavailable: false },
@@ -154,7 +154,7 @@ describe.each(LOOPS)('%s：每顆呼叫的 config 上放什麼', (loop) => {
 });
 
 describe.each(LOOPS)('%s：前景子代理的委派聲明', (loop) => {
-  it('跟子代理那一層的閘門一致：native 沒人可問，講自動回絕；langgraph 講等使用者', async () => {
+  it('跟子代理那一層的閘門一致：講等使用者', async () => {
     const model = fakeModel()
       .respondWithTools([
         { name: 'task', args: { description: '讀', subagent_type: 'general-purpose' }, id: 'r1' },
@@ -169,21 +169,16 @@ describe.each(LOOPS)('%s：前景子代理的委派聲明', (loop) => {
       .filter((message) => message.getType() === 'system')
       .map((message) => message.text)
       .join('\n');
-    const [said, notSaid] =
-      loop === 'native'
-        ? [SUBAGENT_DELEGATION_CONTEXT, FOREGROUND_SUBAGENT_DELEGATION_CONTEXT]
-        : [FOREGROUND_SUBAGENT_DELEGATION_CONTEXT, SUBAGENT_DELEGATION_CONTEXT];
-    expect(system).toContain(said);
-    expect(system).not.toContain(notSaid);
+    expect(system).toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
+    expect(system).not.toContain(SUBAGENT_DELEGATION_CONTEXT);
   });
 });
 
-describe('native：讀到「這裡沒人可問」的閘門', () => {
-  it('子代理那一層要核准：沒有管道那一格，本體不跑；root 那一層照常停下來問，核准了才跑', async () => {
+describe.each(LOOPS)('%s：前景子代理那一層要核准', (loop) => {
+  it('停下來問 root 的使用者，中斷先在子代理的命名空間露面；核准了才跑，root 那一層接著照常問', async () => {
     const ran: string[] = [];
-    const results: Record<string, string> = {};
     const agent = await assemble(
-      'native',
+      loop,
       (r) => void r.tools.register(danger(ran)),
       fakeModel()
         .respondWithTools([
@@ -193,26 +188,37 @@ describe('native：讀到「這裡沒人可問」的閘門', () => {
         .respond(new AIMessage('子代理收完'))
         .respondWithTools([{ name: 'danger', args: { at: 'root' }, id: 'r2' }])
         .respond(new AIMessage('root 收完')),
-      results,
     );
-    const parked = await drain(agent.streamEvents(input, options));
-    // 子代理那一顆沒問就回絕（它那則訊息在子代理自己的對話裡，不在 root 的事件上），停下來問的只有 root 那一顆。
-    expect(ran).toEqual([]);
-    expect(results['s1']).toContain('沒有可用的核准管道');
-    const ids = interruptIds(parked);
-    expect(ids).toHaveLength(1);
-    const [id] = ids;
+    const approve = async (parked: LoopEvent[]): Promise<LoopEvent[]> => {
+      const ids = interruptIds(parked);
+      expect(ids).toHaveLength(1);
+      return drain(
+        agent.streamEvents(
+          new Command({ resume: { [ids[0]!]: { decisions: [{ type: 'approve' }] } } }),
+          options,
+        ),
+      );
+    };
 
-    const done = await drain(
-      agent.streamEvents(
-        new Command({ resume: { [id!]: { decisions: [{ type: 'approve' }] } } }),
-        options,
-      ),
+    const parked = await drain(agent.streamEvents(input, options));
+    expect(ran).toEqual([]);
+    const first = parked.find(
+      (event) =>
+        event.method === 'updates' &&
+        (event.params as { readonly node?: unknown }).node === '__interrupt__',
     );
-    expect(ran).toEqual(['root']);
+    expect(first?.params.namespace).toHaveLength(1);
+    expect(first?.params.namespace?.[0]).toMatch(/^tools:/);
+
+    const rootAsks = await approve(parked);
+    expect(ran).toEqual(['sub']);
+    const done = await approve(rootAsks);
+    expect(ran).toEqual(['sub', 'root']);
     expect(JSON.stringify(done)).toContain('root 收完');
   });
+});
 
+describe('native：讀到「這裡沒人可問」的閘門', () => {
   it('invoke：root 那一層要核准也是沒有管道那一格，本體不跑，照常收尾', async () => {
     const ran: string[] = [];
     const agent = await assemble(

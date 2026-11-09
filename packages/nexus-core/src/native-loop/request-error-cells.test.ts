@@ -1,7 +1,7 @@
 /**
  * native 模型那一串接住失敗、再往內交一次的兩格（#2416）：串流重打（`nexusStreamRetry`）與圖片省略的接住端
- * （`nexusImageOffloadRecovery`）。兩格都登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 由 native 在模型那一串
- * 原位直接呼叫，子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），經 `wrapModelCall`。摘要器裝不下時換保留量重走也在它那一步
+ * （`nexusImageOffloadRecovery`）。兩格都登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 與前景子代理都由 native 在模型那一串
+ * 原位直接呼叫。摘要器裝不下時換保留量重走也在它那一步
  * 裡面，次數由 `summarizer-cell.test.ts` 數。
  *
  * 這兩格在登記的那一步裡叫 `next` 不只一次，所以這裡多看兩件事：每叫一次 `next`，這一格內層的各格都重跑一次（串流重打每次重交，
@@ -177,23 +177,22 @@ const cellCounts = () =>
   );
 
 /**
- * 這一輪預期的計數，`root` 那一邊由 `rootVia` 叫。root 叫了兩次模型（委派、收尾）：串流重打兩次各進一次；第一次在裡面重交一次，
+ * 這一輪預期的計數，兩邊都由 `via` 叫。root 叫了兩次模型（委派、收尾）：串流重打兩次各進一次；第一次在裡面重交一次，
  * 接住端與起訖紀錄器那一次各進兩次（第二次嘗試被拋碼、接住端在起訖裡面重交，不算一次新的呼叫），所以起訖 3 次、接住端 3 次。
  * 子代理：串流重打與起訖各進一次（一次就回，不重交）；接住端只折進 root。
  */
-function expected(rootVia: Via) {
+function expected(via: Via) {
   const of = (n: number) => ({
-    native: rootVia === 'native' ? n : 0,
-    hook: rootVia === 'hook' ? n : 0,
+    native: via === 'native' ? n : 0,
+    hook: via === 'hook' ? n : 0,
   });
-  const hook = (n: number) => ({ native: 0, hook: n });
   return Object.fromEntries(
     [
       [`${RETRY} › 動手`, of(2)],
       [`${RECOVERY} › 動手`, of(3)],
       [`${CALLS} › 動手`, of(3)],
-      [`${RETRY} › 叫一下`, hook(1)],
-      [`${CALLS} › 叫一下`, hook(1)],
+      [`${RETRY} › 叫一下`, of(1)],
+      [`${CALLS} › 叫一下`, of(1)],
     ].sort(),
   );
 }
@@ -202,8 +201,8 @@ function expected(rootVia: Via) {
 const rootOrder = () =>
   entered.flatMap((line) => (line.startsWith('動手 › ') ? [line.slice('動手 › '.length)] : []));
 
-describe('native 模型那一串重交的兩格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
-  it('native：root 兩格都由 native 直接呼叫，重交時內層各格都重跑；子代理經 wrapModelCall', async () => {
+describe('native 模型那一串重交的兩格：root 與前景子代理都由 native 原位呼叫', () => {
+  it('native：root 兩格都由 native 直接呼叫，重交時內層各格都重跑；子代理也由 native 直接呼叫', async () => {
     const { seen, signals, log } = await run('native');
     expect(cellCounts()).toEqual(expected('native'));
     expect(seen).toEqual([[true, false]]);

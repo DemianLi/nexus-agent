@@ -1112,7 +1112,7 @@ export interface ThreadInputRequestedFrame {
   readonly event: Event;
 }
 
-/** 那一題不用再問了：答掉，或收回（按停止）。 */
+/** 那一題不用再問了：答掉，或收回（按停止，或一輪的時鐘到點撞上核准點）。 */
 export interface ThreadInputWithdrawnFrame {
   readonly type: 'input-withdrawn';
   readonly threadId: string;

@@ -194,7 +194,7 @@ export interface ToolRegistrationPoint {
  *   沒給＝沿用父代理**當下**的選擇（#723，照 dsh 子代理沿用父代理當下路由）。
  * - **`reasoningEffort`**：這個子代理的推理強度（型錄宣告過的等級名）。只給它沒給 `model`＝父代理當下那顆模型，換這個強度。
  *   dsh 的 `agentOptions` 有 reasoningEffort；**我們另外有** {@link maxTurns}，dsh 沒有。
- * - **`maxTurns`**：這個子代理一次執行最多叫幾次模型，到了就收尾（`modelCallLimitMiddleware`，`exitBehavior: 'end'`）。dsh 沒有；
+ * - **`maxTurns`**：這個子代理一次執行最多叫幾次模型，到了就收尾（langgraph 用 `modelCallLimitMiddleware`，`exitBehavior: 'end'`；native 用同算法的 `subagent-max-turns.ts`）。dsh 沒有；
  *   做它是因為 Claude Code 的子代理定義有 `maxTurns`，而沒有上限的子代理打轉時只能靠 root 的遞迴上限兜底。
  */
 export type NexusSubAgent = SubAgent & {

@@ -1,6 +1,6 @@
 /**
- * native 的摘要器那一格（#2416）：整串登記成一個環繞步（`model-call-step.ts` 的 `withModelCallStep`），root 由 native 在模型那一串
- * 原位直接呼叫那一步、不經那顆的 `wrapModelCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
+ * native 的摘要器那一格（#2416）：整串登記成一個環繞步（`model-call-step.ts` 的 `withModelCallStep`），root 與前景子代理都由 native 在模型那一串
+ * 原位直接呼叫那一步、不經那顆的 `wrapModelCall`。
  * 摘要關掉時同一格是空殼（`createRecordedProjectionShell`），有 `sessions` 時一樣登記。
  *
  * 計數掛在登記上：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層 `AsyncLocalStorage`，
@@ -118,8 +118,8 @@ async function run(options: { summarization: boolean; overflow?: boolean }) {
 
 const countsOf = () => Object.fromEntries(counts);
 
-describe('native 的摘要器那一格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
-  it('摘要開著：root 三次都由 native 直接呼叫，子代理兩次都經 wrapModelCall，各往內交一次', async () => {
+describe('native 的摘要器那一格：root 與前景子代理都由 native 原位呼叫', () => {
+  it('摘要開著：root 三次都由 native 直接呼叫，子代理兩次都由 native 直接呼叫，各往內交一次', async () => {
     const { messages } = await run({ summarization: true });
     expect(messages.at(-1)?.text).toBe('好了');
     expect(countsOf()).toMatchInlineSnapshot(`
@@ -130,8 +130,8 @@ describe('native 的摘要器那一格：root 由 native 原位呼叫、子代�
           "next": 3,
         },
         "叫一下 alpha": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
           "next": 2,
         },
       }
@@ -150,15 +150,15 @@ describe('native 的摘要器那一格：root 由 native 原位呼叫、子代�
           "next": 4,
         },
         "叫一下 alpha": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
           "next": 2,
         },
       }
     `);
   });
 
-  it('摘要關掉（有 sessions 的空殼）：同樣 root 由 native 直接呼叫、子代理經 wrapModelCall', async () => {
+  it('摘要關掉（有 sessions 的空殼）：同樣 root 與子代理都由 native 直接呼叫', async () => {
     const { messages } = await run({ summarization: false });
     expect(messages.at(-1)?.text).toBe('好了');
     expect(countsOf()).toMatchInlineSnapshot(`
@@ -169,8 +169,8 @@ describe('native 的摘要器那一格：root 由 native 原位呼叫、子代�
           "next": 3,
         },
         "叫一下 alpha": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
           "next": 2,
         },
       }

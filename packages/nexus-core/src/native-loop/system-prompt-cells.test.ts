@@ -1,6 +1,6 @@
 /**
- * native 的系統提示那幾格（#2416）：登記了一步的（`system-prompt-step.ts` 的 `withSystemPromptStep`），root 由 native 在模型那一串
- * 原位直接呼叫那一步、不經那顆的 `wrapModelCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
+ * native 的系統提示那幾格（#2416）：登記了一步的（`system-prompt-step.ts` 的 `withSystemPromptStep`），root 與前景子代理都由 native 在模型那一串
+ * 原位直接呼叫那一步、不經那顆的 `wrapModelCall`。
  *
  * 計數掛在登記上，做法同 `hook-cells.test.ts`：登記的那一步包一個計數，交給那顆的 `wrapModelCall` 再包一層 `AsyncLocalStorage`。
  * 跑一輪「root 叫工具 → 委派子代理、子代理叫工具」，數每一格在 root 與子代理各被叫了幾次。哪一邊照 state 的第一則訊息分。
@@ -126,7 +126,7 @@ const countsOn = (side: string) =>
       .map(([cell, bySide]) => [cell, bySide.get(side)]),
   );
 
-describe('native 的系統提示那幾格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
+describe('native 的系統提示那幾格：root 與前景子代理都由 native 原位呼叫', () => {
   it('root：每一格都由 native 直接呼叫那一步，經 wrapModelCall 一次都沒有', async () => {
     const { messages } = await run();
     expect(messages.at(-1)?.text).toBe('好了');
@@ -160,33 +160,33 @@ describe('native 的系統提示那幾格：root 由 native 原位呼叫、子�
     `);
   });
 
-  it('子代理：每一格都經 wrapModelCall，native 一次都沒有', async () => {
+  it('子代理：每一格都由 native 直接呼叫那一步，經 wrapModelCall 一次都沒有', async () => {
     await run();
     expect(countsOn('叫一下 alpha')).toMatchInlineSnapshot(`
       {
         "SkillsMiddleware": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "nexusApprovalPolicyPrompt": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "nexusPromptSections:observation": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "nexusPromptSections:plugins": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "nexusPromptSections:prepended": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "nexusSubagentDelegation": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
       }
     `);

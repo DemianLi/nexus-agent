@@ -111,6 +111,7 @@ import {
 import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
+import { createSubagentMaxTurnsMiddleware } from './subagent-max-turns.js';
 import { createTurnStoppingMiddleware } from './turn-stopping.js';
 import { createPreStepAdapterMiddleware } from './pre-step-adapter.js';
 import { createToolNameRestoreMiddleware } from './tool-name-restore.js';
@@ -305,8 +306,7 @@ export interface FoldOptions {
   checkpointer?: AgentCheckpointer;
   /**
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 在行程內等人回答（`human-input.ts`），
-   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run、前景子代理那一層）由那顆呼叫上的
-   * `NO_HUMAN_INPUT` 判成沒有管道。`native` 時前景子代理的委派聲明也照沒有管道選句。
+   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
    */
   loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */
@@ -621,23 +621,20 @@ export function foldRegistry(
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options);
   // **前景子代理共用 root 這一顆閘門**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324）：前景時主對話本來就停著等，
-  // `langgraph` 下子代理要核准的操作把中斷冒到使用者面前（native 那一格見下面的 `foregroundChannel`；基座的 `task` 在同一次呼叫裡跑子圖，中斷會往上傳；#1098 的 MCP 反問已經走這條），
+  // 子代理要核准的操作把中斷冒到使用者面前（基座的 `task` 在同一次呼叫裡跑子代理：`langgraph` 下中斷往上傳，native 下提問經那顆 `task` 呼叫的委派進 root 的 run；#1098 的 MCP 反問已經走這條），
   // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
   // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
   // 那一顆（管道固定 `policy-never`，#324／#737）在編圖時換掉。
   // 核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）跟閘門用同一組事實：同一個管道、同一個政策來源，
-  // 所以前景子代理也共用這一顆（`langgraph` 下成立；native 的前景子代理那一層閘門照沒有管道回絕，政策句仍照 root 的管道）；背景圖編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalPolicyPrompt}）。
+  // 所以前景子代理也共用這一顆；背景圖編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalPolicyPrompt}）。
   const approvalChannel = foldApprovalChannel(options);
   const approvalPolicySource = options.approvals?.policy ?? (() => DEFAULT_APPROVAL_POLICY);
   const approvalPolicyPrompt = createApprovalPolicyPromptMiddleware(
     approvalChannel,
     approvalPolicySource,
   );
-  // native 的子代理那一層沒人可問（呼叫上放的是 `NO_HUMAN_INPUT`，要核准的一律以沒有管道回絕），聲明照沒有管道選句，子代理改跑 native 之前都是（#2359）。
-  const foregroundChannel: ApprovalChannel =
-    options.loop === 'native' ? { kind: 'no-channel' } : approvalChannel;
   const subagentDelegation = createSubagentDelegationMiddleware(() =>
-    foregroundDelegationContext(foregroundChannel, approvalPolicySource()),
+    foregroundDelegationContext(approvalChannel, approvalPolicySource()),
   );
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
@@ -850,10 +847,12 @@ export function foldRegistry(
       make((spec) =>
         spec.maxTurns === undefined
           ? undefined
-          : (modelCallLimitMiddleware({
-              runLimit: spec.maxTurns,
-              exitBehavior: 'end',
-            }) as unknown as AgentMiddleware),
+          : options.loop === 'native'
+            ? createSubagentMaxTurnsMiddleware(spec.maxTurns)
+            : (modelCallLimitMiddleware({
+                runLimit: spec.maxTurns,
+                exitBehavior: 'end',
+              }) as unknown as AgentMiddleware),
       ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆

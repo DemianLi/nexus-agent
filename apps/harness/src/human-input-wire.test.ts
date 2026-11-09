@@ -870,7 +870,7 @@ describe('一輪的時鐘', () => {
 });
 
 describe('一輪的時鐘：同一批還有一顆在跑', () => {
-  it('一顆在問人、一顆不理中止還在跑時到點：等那顆落定，這一批照常停在中斷上；按停止才收掉', async () => {
+  it('一顆在問人、一顆不理中止還在跑時到點：等那顆落定，這一批照常停在中斷上，收完之後收回，原因記時鐘到點', async () => {
     const timers = new ManualTimers();
     const probe = newProbe();
     let holding!: () => void;
@@ -903,18 +903,15 @@ describe('一輪的時鐘：同一批還有一顆在跑', () => {
     expect(rootEvents(session, ['turn/end'])).toEqual([]);
     letGo();
     await until(session, awaiting(1));
-    await untilLogged(session, 'turn/end', 1);
-    // 收尾那顆 frame 是中斷，不是中止：這一輪照停在中斷上收（同 pump「中止照上線那顆收尾 frame 判」）。
-    expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({});
-    expect(probe.withdrawn).toBe(0);
-
-    await session.client.runCancel('t2');
     await until(session, stopped);
     await untilLogged(session, 'turn/end', 2);
+    // 收尾那顆 frame 是中斷，不是中止：這一輪照停在中斷上收（同 pump「中止照上線那顆收尾 frame 判」），
+    // 接著由這一輪的中止收回掛著的那顆（#2592），原因是到點，不是人按的。
+    expect(rootEvents(session, ['turn/end']).map((event) => event.data)).toEqual([
+      {},
+      { reason: { kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } } },
+    ]);
     expect(probe.withdrawn).toBe(NATIVE ? 1 : 0);
-    expect(rootEvents(session, ['turn/end']).at(-1)?.data).toEqual({
-      reason: { kind: 'aborted', cause: { kind: 'user' } },
-    });
   });
 });
 

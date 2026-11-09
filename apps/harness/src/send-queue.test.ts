@@ -6,8 +6,8 @@
  *
  * 三層：
  *
- * - **假的 agent**：日誌上 splice 的形狀與先後、推送、改刪、停住與喚醒、重啟、收線。只有它排得出「停止撞上核准點」
- *   這種先後。
+ * - **假的 agent**：日誌上 splice 的形狀與先後、推送、改刪、停住與喚醒、重啟、收線，以及「停止撞上核准點」
+ *   這種先後（真的組裝排同一段見 `stop-at-approval-point.test.ts`）。
  * - **真的組裝**：停在核准點時送的那句要等核准答完才跑，模型讀到的是核准後的真結果。
  * - **wire**：`run.start` 回的 `run_id` 就是那一件的 id、停在核准點時也收、`queue.update` 的三種錯誤。
  *
@@ -677,29 +677,39 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
     }
   });
 
-  it('停止撞上核准點：那一輪照常停在核准點，排著的是在等核准，不是停住', async () => {
+  it('停止撞上核准點：那一輪照常停在核准點，收完之後收回，排著的停住（#2592）', async () => {
     const hold = gate();
     const run = open(scriptedAgent([{ interrupt: 'i1', hold: hold.opened }]));
     try {
       const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await until(() => run.pump.awaitingInput);
-      const second = run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
-      // 那一輪還在跑（還沒收尾），按停止中止的是它；它接著照常停在核准點，不落 aborted。
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
+      // 那一輪還在跑（還沒收尾），按停止中止的是它；它照常停在核准點、不落 aborted，收完之後才收回。
       expect(run.pump.cancel()).toBe('run');
       hold.open();
       await first;
-      expect(run.marks()).toEqual(['insert:A', 'start:message:A', 'claim', 'insert:B', 'end']);
-      expect(run.pump.awaitingInput).toBe(true);
-      // 同 #629 那張表：停在核准點時排著的算在飛。
-      expect(run.pump.running).toBe(true);
+      await run.pump.whenIdle();
+      expect(run.marks()).toEqual([
+        'insert:A',
+        'start:message:A',
+        'claim',
+        'insert:B',
+        'end',
+        'start:resume',
+        'end:aborted',
+      ]);
+      // 同停在核准點時按停止（#637 的 Q2）：排著的停住，不算在飛。
+      expect(run.pump.awaitingInput).toBe(false);
+      expect(run.pump.running).toBe(false);
+      expect(run.pump.inbox.map((item) => item.id)).toEqual(['b']);
 
-      await run.pump.submit(approve('i1'));
-      await second;
+      await run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
       await run.pump.whenIdle();
       expect(run.marks().filter((mark) => mark.startsWith('start:'))).toEqual([
         'start:message:A',
         'start:resume',
         'start:message:B',
+        'start:message:C',
       ]);
     } finally {
       await run.close();
