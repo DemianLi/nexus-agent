@@ -1612,19 +1612,29 @@ fn a_violation_revokes_the_live_identity_on_the_host() {
     assert!(!gone(a_pid), "被隔離的對話行程照跑");
 }
 
-/// 已經隔離的對話行程又被報違規：再寫一行稽核，也再送一次 `revoke`。
+/// 收掉對話行程 a，再起一條 b、等 b 那一筆 `grant` 進宿主：pipe 照順序，這時 a 的 `revoke` 都已經進宿主的 log。回 a 的 `revoke` 筆數。
+fn revokes_after_reaping(h: &mut Harness, a_pid: i32) -> usize {
+    kill(a_pid as u32, libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    let b = h.up("b");
+    let b_grant = format!("grant {} conversation b", logged_pid(&b, "pid"));
+    assert!(wait_until(|| host_log(h).contains(&b_grant)), "{:?}", host_log(h));
+    let revoke = format!("revoke {a_pid}");
+    host_log(h).iter().filter(|l| **l == revoke).count()
+}
+
+/// 已經隔離的對話行程又被報違規：再寫一行稽核，但不再送 `revoke`：`revoke` 只有隔離那一次與收屍那一次。
 #[test]
-fn a_second_violation_for_a_quarantined_conversation_is_audited_and_revoked_again() {
+fn a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again() {
     let mut h = Harness::start(Options { host: fake_host(&["--violate-twice"]), ..Options::default() });
     let a = h.up("a");
     let a_pid = logged_pid(&a, "pid");
-    let revoke = format!("revoke {a_pid}");
-    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "{:?}", host_log(&h));
     let pid = format!("\"pid\":{a_pid},");
-    let lines: Vec<String> = h.audit().into_iter().filter(|l| l.contains("測試違規") && l.contains(&pid)).collect();
-    assert_eq!(lines.len(), 2, "{:?}", h.audit());
-    assert!(lines.iter().all(|l| l.contains("\"role\":\"conversation\"")), "{lines:?}");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("測試違規") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"conversation\"")), "{:?}", lines());
     assert!(!gone(a_pid));
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "{:?}", host_log(&h));
 }
 
 /// 已經隔離的對話行程被報 `unregistered`：照違規寫稽核，理由是宿主回給那條連線的，不是寫死的「沒有登記」；不記那行警告。
@@ -1633,8 +1643,6 @@ fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hos
     let mut h = Harness::start(Options { host: fake_host(&["--then-unregistered", "框太大"]), ..Options::default() });
     let a = h.up("a");
     let a_pid = logged_pid(&a, "pid");
-    let revoke = format!("revoke {a_pid}");
-    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "兩次都補送 revoke：{:?}", host_log(&h));
     let pid = format!("\"pid\":{a_pid},");
     let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
     assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
@@ -1642,6 +1650,7 @@ fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hos
         assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
     }
     assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
 }
 
 /// 不是我們的 pid（這裡是 0：宿主讀不到連線的 pid，或對方 uid 跟它不同時報的）被報 `violation` 與 `unregistered`：兩筆都寫稽核、`role` 是 `unknown`，

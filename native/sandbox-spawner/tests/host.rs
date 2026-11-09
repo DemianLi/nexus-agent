@@ -86,6 +86,54 @@ fn closed(stream: &mut UnixStream) -> bool {
     }
 }
 
+/// 這個行程累計用掉的 CPU（clock tick，一般是 10 ms）。
+fn cpu_ticks(pid: u32) -> u64 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<&str> = stat.rsplit_once(") ").unwrap().1.split(' ').collect();
+    // 括號後第 12、13 欄是 utime、stime（stat 的第 14、15 欄）。
+    fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+}
+
+/// 開檔數用完：排著的連線接下來就關，宿主不空轉；fd 空出來之後照常收連線。每條連線佔 2 個 fd：剩 1 個時 accept 成功、
+/// 複製 fd 失敗，連線當場關掉，碰不到 EMFILE；所以兩個相鄰的上限各跑一次，其中一個剩 0 個、一定走到 EMFILE。
+#[test]
+fn running_out_of_fds_closes_queued_connections_instead_of_spinning() {
+    for limit in [12, 13] {
+        out_of_fds_at(limit);
+    }
+}
+
+fn out_of_fds_at(limit: u64) {
+    let dir = temp_dir("emfile");
+    let socket = dir.join("host.sock");
+    let mut host = HostProc::start_with_open_file_limit(&socket, limit);
+    let mut streams: Vec<UnixStream> = (0..8).map(|_| UnixStream::connect(&socket).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let pid = host.child.id();
+    let before = cpu_ticks(pid);
+    std::thread::sleep(Duration::from_secs(1));
+    let spent = cpu_ticks(pid) - before;
+    assert!(spent < 20, "上限 {limit}：宿主 1 秒內用了 {spent} 個 tick");
+
+    for stream in &streams {
+        stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap();
+    }
+    let shed = streams.iter_mut().rev().take(4).map(closed).filter(|&c| c).count();
+    assert_eq!(shed, 4, "上限 {limit}：排在後面的連線沒被關掉");
+
+    drop(streams);
+    host.grant(me(), TOKEN, Role::Conversation, "a");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_stream, reply) = exchange(&socket, &hello_frame(TOKEN));
+        if reply == accepted() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "上限 {limit}：fd 空出來之後還是收不了連線：{reply:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn handshake_then_eof_removes_the_socket_and_exits_0() {
     let dir = temp_dir("eof");

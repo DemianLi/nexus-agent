@@ -6,6 +6,7 @@ use nexus_sandbox_spawner::supervisor_protocol::{
 };
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -27,13 +28,30 @@ pub struct HostProc {
 impl HostProc {
     /// 起宿主、還沒握手。
     pub fn spawn(socket: &Path) -> HostProc {
-        let mut child = Command::new(HOST)
-            .arg("--socket")
-            .arg(socket)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+        HostProc::spawn_with(socket, Command::new(HOST))
+    }
+
+    /// 同 [`HostProc::start`]，但宿主的開檔數軟硬上限都是 `limit`：它拉不高，連線到一定數量 accept 就會遇到 EMFILE。
+    pub fn start_with_open_file_limit(socket: &Path, limit: u64) -> HostProc {
+        let mut command = Command::new(HOST);
+        // SAFETY：fork 之後只呼叫 setrlimit。
+        unsafe {
+            command.pre_exec(move || {
+                let rlimit = libc::rlimit { rlim_cur: limit, rlim_max: limit };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &rlimit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut host = HostProc::spawn_with(socket, command);
+        host.handshake();
+        host
+    }
+
+    fn spawn_with(socket: &Path, mut command: Command) -> HostProc {
+        let mut child = command.arg("--socket").arg(socket).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         // SAFETY：只改這個 fd 的狀態旗標。
@@ -47,11 +65,15 @@ impl HostProc {
     /// 起宿主、握手、等到 `ready`。
     pub fn start(socket: &Path) -> HostProc {
         let mut host = HostProc::spawn(socket);
-        assert_eq!(host.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
-        host.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
-        assert_eq!(host.report(), Some(HostReport::Ready));
-        assert!(socket.exists());
+        host.handshake();
         host
+    }
+
+    fn handshake(&mut self) {
+        assert_eq!(self.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
+        self.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
+        assert_eq!(self.report(), Some(HostReport::Ready));
+        assert!(self.socket.exists());
     }
 
     pub fn command(&mut self, command: &HostCommand) {

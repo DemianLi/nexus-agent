@@ -1431,24 +1431,27 @@ impl Supervisor {
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
     /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
-    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。
+    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。已經隔離的不再送：隔離之後不會再送它的
+    /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
     /// 不是我們的 pid（含 0），只寫稽核，`role` 記 `unknown`。
     fn on_violation(&mut self, pid: u32, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
         let pid = libc::pid_t::try_from(pid).unwrap_or(-1);
-        let (role, thread) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
-            self.front_quarantined = true;
-            ("front", Vec::new())
+        let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid) {
+            ("front", Vec::new(), !std::mem::replace(&mut self.front_quarantined, true))
         } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid) {
-            conversation.quarantined = true;
-            ("conversation", conversation.thread.clone().unwrap_or_default())
+            ("conversation", conversation.thread.clone().unwrap_or_default(), !std::mem::replace(&mut conversation.quarantined, true))
         } else {
-            ("unknown", Vec::new())
+            ("unknown", Vec::new(), false)
         };
-        say!("宿主斷了 pid {pid}（{role}）的連線：{reason}；這個身分隔離到它結束");
+        if role == "unknown" {
+            say!("宿主斷了 pid {pid} 的連線：{reason}；這個 pid 不是這邊起的行程，只寫稽核");
+        } else {
+            say!("宿主斷了 pid {pid}（{role}）的連線：{reason}；這個身分隔離到它結束");
+        }
         self.audit.record(&Record::Protocol { pid, role, thread: &thread, reason: &reason });
         if let (true, Ok(pid), Some(host)) =
-            (role != "unknown", u32::try_from(pid), self.host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()))
+            (newly, u32::try_from(pid), self.host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()))
         {
             host.proc.chan.send(&encode_host_command(&HostCommand::Revoke { pid }));
         }

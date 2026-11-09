@@ -76,6 +76,20 @@ struct Host {
     conns: Vec<Conn>,
     /// 最後一條 accept 的連線的編號，還沒有是 0。
     last_conn: u32,
+    /// 預留的一個 fd（開 `/dev/null`）：accept 遇到開檔數用完時先關掉它，騰出位子把排著的那條接下來就關，backlog 才收得乾淨，
+    /// listener 也不會一直可讀、讓 poll 空轉。整台主機的 fd 都用完時可能開不回來，是 `None`。
+    spare: Option<OwnedFd>,
+    /// 開不回預留的 fd、只能等的時候，這一刻之前不 poll listener。
+    accept_paused_until: Option<Instant>,
+    /// 這一段開檔數用完的期間已經記過 log：接下一條連線之後才再記。
+    out_of_fds: bool,
+}
+
+/// 開檔數用完、又開不回預留的 fd 時，停 poll listener 這麼久再試。
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
+fn open_spare() -> Option<OwnedFd> {
+    std::fs::File::open("/dev/null").ok().map(OwnedFd::from)
 }
 
 fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
@@ -115,7 +129,16 @@ pub fn run(args: Vec<OsString>) -> i32 {
             return 1;
         }
     };
-    let mut host = Host { control, listener, grants: HashMap::new(), conns: Vec::new(), last_conn: 0 };
+    let mut host = Host {
+        control,
+        listener,
+        grants: HashMap::new(),
+        conns: Vec::new(),
+        last_conn: 0,
+        spare: open_spare(),
+        accept_paused_until: None,
+        out_of_fds: false,
+    };
     host.report(&HostReport::Ready);
     let code = host.serve();
     let _ = std::fs::remove_file(&socket);
@@ -215,27 +238,27 @@ impl Host {
         self.control.send(&encode_host_report(report));
     }
 
-    /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。
+    /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。框太大時讀端會關掉、宿主隨後結束，但在那之前切出來的框照樣先套用：
+    /// 呼叫的一方（例如 `hello` 迴圈中途）接著還會拿這張表驗連線。
     fn sync(&mut self) -> bool {
-        match self.control.receive_all() {
-            Ok(frames) => {
-                for frame in frames {
-                    match decode_host_command(&frame) {
-                        Ok(HostCommand::Grant { pid, token, role, thread }) => {
-                            self.grants.insert(pid, Grant { token, role, thread });
-                        }
-                        Ok(HostCommand::Revoke { pid }) => {
-                            // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
-                            // 都先把 backlog 收到空（不管連線數上限）才抓得齊，連線數可能暫時超過上限；沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
-                            self.accept(usize::MAX);
-                            self.revoke(pid);
-                        }
-                        Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
-                        Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
-                    }
+        let (frames, err) = self.control.receive_all();
+        for frame in frames {
+            match decode_host_command(&frame) {
+                Ok(HostCommand::Grant { pid, token, role, thread }) => {
+                    self.grants.insert(pid, Grant { token, role, thread });
                 }
+                Ok(HostCommand::Revoke { pid }) => {
+                    // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
+                    // 都先把 backlog 收到空（不管連線數上限）才抓得齊，連線數可能暫時超過上限；沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
+                    self.accept(usize::MAX);
+                    self.revoke(pid);
+                }
+                Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
+                Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
             }
-            Err(err) => say!("監督行程送來解不開的框（{}）", err.0),
+        }
+        if let Some(err) = err {
+            say!("監督行程送來解不開的框（{}）", err.0);
         }
         !self.control.read_closed()
     }
@@ -258,12 +281,14 @@ impl Host {
                 return 0;
             }
             let now = Instant::now();
-            let deadline = self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).min();
+            self.accept_paused_until = self.accept_paused_until.filter(|&until| now < until);
+            let deadline =
+                self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).chain(self.accept_paused_until).min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
             fds.push(pollfd(read.unwrap_or(-1), libc::POLLIN));
             fds.push(pollfd(write.unwrap_or(-1), libc::POLLOUT));
-            let accepting = self.conns.len() < MAX_CONNECTIONS;
+            let accepting = self.conns.len() < MAX_CONNECTIONS && self.accept_paused_until.is_none();
             fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
@@ -294,14 +319,19 @@ impl Host {
         }
     }
 
-    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或 accept 出錯（記一行）為止。
+    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或 accept 出錯（記一行）為止。開檔數用完時排著的連線接下來就關（見 [`Host::shed`]），
+    /// 不是留在 backlog：之後再接到的連線不會是這段期間排進來的舊連線。
     fn accept(&mut self, limit: usize) {
         while self.conns.len() < limit {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     let pid = peer_pid(stream.as_raw_fd());
                     let fd = OwnedFd::from(stream);
-                    let Ok(write) = fd.try_clone() else { continue };
+                    let Ok(write) = fd.try_clone() else {
+                        self.note_out_of_fds();
+                        continue;
+                    };
+                    self.out_of_fds = false;
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
                     self.last_conn = self.last_conn.wrapping_add(1);
                     let id = self.last_conn;
@@ -309,11 +339,36 @@ impl Host {
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
+                Err(err) if matches!(err.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)) => {
+                    self.note_out_of_fds();
+                    if !self.shed() {
+                        self.accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
+                        return;
+                    }
+                }
                 Err(err) => {
                     say!("accept 失敗：{err}");
+                    self.accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
                     return;
                 }
             }
+        }
+    }
+
+    /// 關掉預留的 fd、接下排著的一條連線就關，再把預留的開回來。接到了回 `true`；沒有預留的 fd、騰出位子還是接不到，回 `false`。
+    fn shed(&mut self) -> bool {
+        if self.spare.take().is_none() {
+            self.spare = open_spare();
+            return false;
+        }
+        let shed = self.listener.accept().is_ok();
+        self.spare = open_spare();
+        shed
+    }
+
+    fn note_out_of_fds(&mut self) {
+        if !std::mem::replace(&mut self.out_of_fds, true) {
+            say!("開檔數用完了：排著的連線接下來就關，直到 fd 空出來");
         }
     }
 

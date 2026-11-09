@@ -206,15 +206,19 @@ impl Chan {
     /// 讀到 EAGAIN 或讀滿 `READ_BUDGET` 為止，邊讀邊切出完整的框；沒讀完的留給下一次 poll。讀到 EOF 或讀錯就關讀端，已經讀到的照樣切。
     /// 框太大回錯（之後的位元組都對不上了），讀端也關掉；長度欄位一到就判，不等內容。
     pub fn receive(&mut self) -> Result<Vec<Vec<u8>>, DecodeError> {
-        self.receive_up_to(READ_BUDGET)
+        match self.receive_up_to(READ_BUDGET) {
+            (frames, None) => Ok(frames),
+            (_, Some(err)) => Err(err),
+        }
     }
 
-    /// 同 [`Chan::receive`]，但一直讀到 EAGAIN（或 EOF）為止：要確定「到這一刻為止對方送出的都讀進來了」時用。
-    pub fn receive_all(&mut self) -> Result<Vec<Vec<u8>>, DecodeError> {
+    /// 一直讀到 EAGAIN（或 EOF）為止：要確定「到這一刻為止對方送出的都讀進來了」時用。跟 [`Chan::receive`] 不同，出錯時連同錯誤
+    /// 一起回出錯之前已經切出來的框：它們是對方在壞掉的那一框之前好好送出的，呼叫的一方可以先套用。
+    pub fn receive_all(&mut self) -> (Vec<Vec<u8>>, Option<DecodeError>) {
         self.receive_up_to(usize::MAX)
     }
 
-    fn receive_up_to(&mut self, mut budget: usize) -> Result<Vec<Vec<u8>>, DecodeError> {
+    fn receive_up_to(&mut self, mut budget: usize) -> (Vec<Vec<u8>>, Option<DecodeError>) {
         let mut frames = Vec::new();
         let cap = INBOX_FRAMES.saturating_mul(self.max_frame.saturating_add(4));
         loop {
@@ -225,15 +229,15 @@ impl Chan {
                     Err(err) => {
                         self.close_read();
                         self.inbox.clear();
-                        return Err(err);
+                        return (frames, Some(err));
                     }
                 }
             }
-            let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return Ok(frames) };
+            let Some(fd) = self.read.as_ref().map(AsRawFd::as_raw_fd) else { return (frames, None) };
             // 切完之後 inbox 不到一框（< cap 的一半），room 是 0 只會是 budget 用完。
             let room = cap.saturating_sub(self.inbox.len()).min(4096).min(budget);
             if room == 0 {
-                return Ok(frames);
+                return (frames, None);
             }
             let mut buf = [0u8; 4096];
             // SAFETY：讀進 buf 的前 room 個 byte。
@@ -248,7 +252,7 @@ impl Chan {
                 continue;
             }
             if n < 0 && errno() == libc::EAGAIN {
-                return Ok(frames);
+                return (frames, None);
             }
             self.close_read();
         }
@@ -382,7 +386,7 @@ fn write_all(fd: libc::c_int, mut bytes: &[u8]) -> Result<(), usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::os::fd::FromRawFd;
 
     #[test]
@@ -466,6 +470,33 @@ mod tests {
         long.push(b'\n');
         tap.scan(&long);
         assert!(!tap.heap_message_near_end());
+    }
+
+    #[test]
+    fn receive_all_returns_the_frames_cut_before_an_oversized_one() {
+        let (read, write) = pipe();
+        set_nonblocking(&read);
+        let mut chan = Chan { write: None, read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: 16 };
+        let mut bytes = frame(b"one");
+        bytes.extend(frame(b"two"));
+        bytes.extend(((chan.max_frame + 1) as u32).to_le_bytes());
+        std::fs::File::from(write).write_all(&bytes).unwrap();
+        let (frames, err) = chan.receive_all();
+        assert_eq!(frames, vec![b"one".to_vec(), b"two".to_vec()]);
+        assert!(err.is_some());
+        assert!(chan.read_closed());
+    }
+
+    #[test]
+    fn receive_reports_an_oversized_frame_as_an_error() {
+        let (read, write) = pipe();
+        set_nonblocking(&read);
+        let mut chan = Chan { write: None, read: Some(read), inbox: Vec::new(), outbox: Vec::new(), finishing: false, max_frame: 16 };
+        let mut bytes = frame(b"one");
+        bytes.extend(((chan.max_frame + 1) as u32).to_le_bytes());
+        std::fs::File::from(write).write_all(&bytes).unwrap();
+        assert!(chan.receive().is_err());
+        assert!(chan.read_closed());
     }
 
     fn pipe() -> (OwnedFd, OwnedFd) {
