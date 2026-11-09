@@ -111,7 +111,6 @@ import {
 import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
-import { createSubagentMaxTurnsMiddleware } from './subagent-max-turns.js';
 import { createTurnStoppingMiddleware } from './turn-stopping.js';
 import { createPreStepAdapterMiddleware } from './pre-step-adapter.js';
 import { createToolNameRestoreMiddleware } from './tool-name-restore.js';
@@ -842,17 +841,16 @@ export function foldRegistry(
       ),
     ),
     // 子代理一次執行最多叫幾次模型（#328 第 3 項）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
+    // native 不掛：native agent 自己數（`NativeAgentParams.maxTurns`，由 {@link nativeMaxTurns} 交過去）。
     subagentOnly(
       'subagentMaxTurns',
       make((spec) =>
-        spec.maxTurns === undefined
+        spec.maxTurns === undefined || options.loop === 'native'
           ? undefined
-          : options.loop === 'native'
-            ? createSubagentMaxTurnsMiddleware(spec.maxTurns)
-            : (modelCallLimitMiddleware({
-                runLimit: spec.maxTurns,
-                exitBehavior: 'end',
-              }) as unknown as AgentMiddleware),
+          : (modelCallLimitMiddleware({
+              runLimit: spec.maxTurns,
+              exitBehavior: 'end',
+            }) as unknown as AgentMiddleware),
       ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
@@ -1012,6 +1010,7 @@ export function foldRegistry(
       skills,
       permissions,
       slots,
+      loop: options.loop,
     }),
     middleware: foldMiddleware(slots),
   };
@@ -1998,6 +1997,15 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  * **沒有人註冊 `general-purpose` 時，清單最前面多一個 fold 自己補的**，走的是同一條路。
  * 理由見 {@link generalPurposeSpec}。
  */
+/**
+ * native 下 fold 交出的子代理規格帶著的 `maxTurns`，做成 `NativeAgentParams` 的那一格；沒有就是空物件。`langgraph` 下 fold 拿掉它、改掛
+ * `modelCallLimitMiddleware`，這裡讀到的也是空物件。native 的兩個建構點（前景 `agent-assembly.ts`、背景 `subagent-graph.ts`）攤進參數。
+ */
+export function nativeMaxTurns(spec: SubAgent): { readonly maxTurns?: number } {
+  const value: unknown = (spec as { maxTurns?: unknown }).maxTurns;
+  return typeof value === 'number' ? { maxTurns: value } : {};
+}
+
 function foldSubAgents(
   registry: PluginRegistry,
   context: {
@@ -2011,6 +2019,7 @@ function foldSubAgents(
     permissions: readonly FilesystemPermission[];
     /** middleware 槽位表：每個子代理的疊從它導出，見 {@link MiddlewareSlot}。 */
     slots: readonly MiddlewareSlot[];
+    loop: AgentLoopKind | undefined;
   },
 ): SubAgent[] {
   // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
@@ -2066,7 +2075,7 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
-    // 我們自己的三格不交給基座：`maxTurns`、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
+    // 我們自己的三格不交給基座：`maxTurns`（native 下留著，交給 native agent，見 {@link nativeMaxTurns}）、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
     // `provider:model` 去 `initChatModel`，所以拿掉，由跟隨的 middleware 每次叫模型前換成那條路由的實例（沒有控制器時，
     // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
     const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;
@@ -2074,6 +2083,7 @@ function foldSubAgents(
     const tools = orderTools(merged, context.toolOrder);
     const next: SubAgent = {
       ...declared,
+      ...(context.loop === 'native' && spec.maxTurns !== undefined && { maxTurns: spec.maxTurns }),
       tools,
       // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
       // 哪些共用一份、哪些逐個建、哪些只給子代理。

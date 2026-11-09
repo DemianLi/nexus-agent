@@ -1,5 +1,5 @@
 /**
- * 子代理的 `maxTurns`：native 用的等價格（`subagent-max-turns.ts`）跟 langgraph 用的 `modelCallLimitMiddleware` 撞上限的那一刻要一樣：
+ * 子代理的 `maxTurns`：native agent 自己數（`NativeAgentParams.maxTurns`）跟 langgraph 用的 `modelCallLimitMiddleware` 撞上限的那一刻要一樣：
  * 模型被叫了幾次、`task` 拿回去的那句英文、工具跑了幾次。
  *
  * afterAgent 跳回模型的那一次照原版也算。跳回的那一格是子代理自己帶的

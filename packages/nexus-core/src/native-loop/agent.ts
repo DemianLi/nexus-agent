@@ -93,7 +93,21 @@ export interface NativeAgentParams {
    * `agent/pre-step` 與 `agent/turn-stopping`。
    */
   readonly background?: boolean;
+  /**
+   * 子代理（前景、背景）一次 run 最多叫幾次模型。到了就在下一次叫模型之前收尾：不合成訊息、`afterAgent` 不跑，經
+   * {@link RUN_STOP_CONFIG_KEY} 告訴呼叫端。算的是這次 run 裡成功回來的模型呼叫，重試成功只算一次；`afterAgent` 跳回模型的那一次
+   * 不受上限擋。root 不收（建構時拋），root 的上限是步數上限。
+   */
+  readonly maxTurns?: number;
 }
+
+/** 一次 run 不是自己走完、而是被 agent 收掉的理由；`max-turns` 是撞到 {@link NativeAgentParams.maxTurns}。 */
+export type RunStopReason = { readonly kind: 'max-turns'; readonly limit: number };
+
+/**
+ * 呼叫端放在 `configurable` 上、接 {@link RunStopReason} 的回呼的鍵。只給這一次 run：不往節點的 config 傳，工具裡叫起的子代理拿不到。
+ */
+export const RUN_STOP_CONFIG_KEY = 'nexus_run_stop';
 
 /** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
 interface LoopDefaults {
@@ -509,6 +523,9 @@ export class NativeAgent {
     defaults: LoopDefaults = {},
     parked = new Map<string, RunLink>(),
   ) {
+    if (params.maxTurns !== undefined && params.subagent !== true && params.background !== true) {
+      throw new Error('native agent loop：maxTurns 只給子代理，root 的上限是步數上限');
+    }
     this.#params = params;
     this.#threads = threads;
     this.#parked = parked;
@@ -943,11 +960,18 @@ export class NativeAgent {
 
     let step = 0;
     let skipBeforeModel = false;
+    const { maxTurns } = this.#params;
+    let modelCalls = 0;
     for (;;) {
       if (exiting) {
         exiting = false;
       } else {
         if (!skipBeforeModel) {
+          // 撞上限同 `beforeModel` 跳 `end`：直接到 END，`afterAgent` 不跑。
+          if (maxTurns !== undefined && modelCalls >= maxTurns) {
+            runStopOf(config)?.({ kind: 'max-turns', limit: maxTurns });
+            return state;
+          }
           step += 1;
           const payload: AgentStepPayload = { threadId, step, signal };
           const decision =
@@ -976,6 +1000,7 @@ export class NativeAgent {
 
         budget.take();
         const ai = await this.#modelStep(state, threadId, step, signal, node, note);
+        if (ai !== undefined) modelCalls += 1;
         const calls = ai === undefined ? [] : liveToolCalls(ai);
         let concluded = calls.length === 0;
         if (!concluded && ai !== undefined) {
@@ -1215,7 +1240,7 @@ export class NativeAgent {
       ...(maxConcurrency !== undefined && { maxConcurrency }),
       callbacks,
       configurable: {
-        ...config.configurable,
+        ...withoutKey(config.configurable, RUN_STOP_CONFIG_KEY),
         ...(emitter !== undefined && { [PROTOCOL_EMITTER_CONFIG_KEY]: emitter }),
       },
       ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
@@ -1240,6 +1265,21 @@ const RUN_OPTION_KEYS = [
   'subgraphs',
   'encoding',
 ] as const;
+
+function withoutKey(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (record === undefined || !(key in record)) return record;
+  const { [key]: _dropped, ...rest } = record;
+  return rest;
+}
+
+/** 呼叫端放的 {@link RUN_STOP_CONFIG_KEY} 回呼；沒放或不是函式就沒有。 */
+function runStopOf(config: RunnableConfig): ((reason: RunStopReason) => void) | undefined {
+  const value: unknown = config.configurable?.[RUN_STOP_CONFIG_KEY];
+  return typeof value === 'function' ? (value as (reason: RunStopReason) => void) : undefined;
+}
 
 function withoutRunOptions(config: RunnableConfig): RunnableConfig {
   const rest: Record<string, unknown> = { ...config };

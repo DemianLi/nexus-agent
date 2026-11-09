@@ -59,6 +59,7 @@ import { Command } from '@langchain/langgraph';
 import {
   ARCHIVE_GATE_CONFIG_KEY,
   BACKGROUND_SESSION_CONFIG_KEY,
+  RUN_STOP_CONFIG_KEY,
   STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
   appendSubagentCatalog,
@@ -514,6 +515,8 @@ interface RunningRound {
   closed: boolean;
   /** 封存閘門擋下過這一輪的模型呼叫（#633）：這一輪以 `blocked` 收、結算原因是 `refusal`。 */
   blocked: boolean;
+  /** 撞到規格的 `maxTurns` 收掉的（native agent 經 `RUN_STOP_CONFIG_KEY` 告知）：這一輪以 `max-turns` 收。 */
+  maxTurns: boolean;
   /**
    * 這一輪為什麼被中止（#1624）；`undefined` 是父代理那一側（`interrupt`、`interruptAll`、`close`）。理由同 `ThreadPump` 的
    * `CurrentRun.cause`：不放進 `controller.abort(reason)`。
@@ -1428,6 +1431,7 @@ export class BackgroundSubagentHost {
       steers: [],
       closed: false,
       blocked: false,
+      maxTurns: false,
     };
     this.#running.set(job.runId, running);
     let stopClock = (): void => {};
@@ -1457,7 +1461,8 @@ export class BackgroundSubagentHost {
       if (this.#isArchived?.() === true) running.blocked = true;
       else await this.#enter(log, () => this.#drive(log!, job, running));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
-      // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立。
+      // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立；擋下的那一輪沒叫到模型，
+      // 也不會同時撞上限。
       const blocked = running.blocked && !controller.signal.aborted;
       log.append(
         'turn/end',
@@ -1465,7 +1470,9 @@ export class BackgroundSubagentHost {
           ? { reason: { kind: 'aborted', cause: running.cause ?? { kind: 'parent' } } }
           : blocked
             ? { reason: { kind: 'blocked' } }
-            : {},
+            : running.maxTurns
+              ? { reason: { kind: 'max-turns' } }
+              : {},
       );
       // 中止先判，蓋過輸出上限，同 dsh（`agent-loop/src/agent.ts:349-355`）。
       stop = controller.signal.aborted
@@ -1654,6 +1661,10 @@ export class BackgroundSubagentHost {
           [BACKGROUND_SESSION_CONFIG_KEY]: job.runId,
           [TURN_CANCEL_CONFIG_KEY]: cancel,
           [STEP_INBOX_CONFIG_KEY]: this.#stepInboxFor(log, round),
+          // 只有 native 會叫（langgraph 撞上限照舊由 `modelCallLimitMiddleware` 收，不經這裡）。
+          [RUN_STOP_CONFIG_KEY]: () => {
+            round.maxTurns = true;
+          },
           ...(this.#isArchived !== undefined && {
             [ARCHIVE_GATE_CONFIG_KEY]: () => {
               const archived = this.#isArchived!();

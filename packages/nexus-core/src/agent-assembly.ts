@@ -64,7 +64,7 @@ import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
-import type { FoldedAgentParams } from './fold.js';
+import { nativeMaxTurns, type FoldedAgentParams } from './fold.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
@@ -405,6 +405,7 @@ export function assembleAgent(params: AssembleAgentParams) {
                   tools: spec.tools,
                   middleware: spec.middleware,
                   ...(params.events !== undefined && { events: params.events }),
+                  ...nativeMaxTurns(spec),
                   subagent: true,
                 }) as unknown as CompiledSubAgent['runnable'],
               },
