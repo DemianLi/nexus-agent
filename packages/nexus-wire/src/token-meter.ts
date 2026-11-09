@@ -167,9 +167,19 @@ export interface TokenMeterSpan {
   readonly modelsOther?: TokenMeterModelsOther;
 }
 
-/** 一輪是怎麼結束的；還沒結束就沒有這一格。`paused` ＝ 停在核准點、還沒等到 resume。 */
+/**
+ * 一輪是怎麼結束的；還沒結束就沒有這一格。`paused` ＝ 停在核准點、還沒等到 resume；`max-turns` ＝ 子代理撞到規格的
+ * `maxTurns`（一次執行叫模型的次數上限）收掉。
+ */
 export type TokenMeterEnd =
-  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'blocked' | 'failed' | 'paused';
+  | 'completed'
+  | 'aborted'
+  | 'max-tokens'
+  | 'max-turns'
+  | 'interrupted'
+  | 'blocked'
+  | 'failed'
+  | 'paused';
 
 /** 一個邏輯輪（`resume` 併回前一輪）。 */
 export interface TokenMeterTurn extends TokenMeterSpan {

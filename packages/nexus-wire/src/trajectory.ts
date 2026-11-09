@@ -79,9 +79,12 @@ export const REQUEST_SYSTEM_MAX_CHARS = 64 * 1024;
 export type TrajectoryTurnKind =
   'message' | 'resume' | 'agent-message' | 'subagent-settled' | 'goal' | 'run';
 
-/** 一輪怎麼結束的；還沒結束就沒有這一格。 */
+/**
+ * 一輪是怎麼結束的；還沒結束就沒有這一格。`failed` 來自 `turn/failed`，其餘照 `turn/end` 的 `reason.kind`（沒帶或認不得就是
+ * `completed`）。`max-turns` ＝ 子代理撞到規格的 `maxTurns`（一次執行叫模型的次數上限）收掉。
+ */
 export type TrajectoryEnd =
-  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'blocked' | 'failed';
+  'completed' | 'aborted' | 'max-tokens' | 'max-turns' | 'interrupted' | 'blocked' | 'failed';
 
 /** 一次重試。第一次嘗試本身沒有事件，所以 `retry` 從 1 起。 */
 export interface TrajectoryRetry {

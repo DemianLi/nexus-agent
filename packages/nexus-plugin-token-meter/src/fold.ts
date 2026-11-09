@@ -498,6 +498,8 @@ function endOf(reason: unknown, paused: boolean): TokenMeterEnd {
         return 'aborted';
       case 'max-tokens':
         return 'max-tokens';
+      case 'max-turns':
+        return 'max-turns';
       case 'interrupted':
         return 'interrupted';
       case 'blocked':
