@@ -1,7 +1,8 @@
 /**
  * 每一顆工具呼叫上放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 帶 thread 的 `streamEvents` 放等人
  * 服務，其餘（`invoke`、子代理那一層）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
- * 那一格，不問人、不跑工具本體。人答了核准之後再判一次：等人期間政策切到 `never`，答核准也照政策回絕、本體不跑，兩個 loop 結局一樣。
+ * 那一格，不問人、不跑工具本體。人答了之後再判一次：等人期間政策切到 `never`，答核准也照政策回絕、本體不跑，兩個 loop 結局一樣；
+ * native 的補判只收緊，listener 翻成 allow 也照人的拒絕（langgraph 那邊見 #2613）。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
@@ -17,6 +18,7 @@ import type { PreToolListener } from '../approval.js';
 import { fakePlugin } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { humanInputOf, humanInputUnavailable } from '../human-input.js';
+import { APPROVAL_REJECTED_BY_USER, toolErrorOf } from '../tool-events.js';
 import { loadPlugins } from '../load.js';
 import {
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
@@ -93,6 +95,7 @@ async function assemble(
   }) as unknown as {
     streamEvents(input: unknown, config: object): Promise<AsyncIterable<LoopEvent>>;
     invoke(input: unknown, config: object): Promise<unknown>;
+    getState(config: object): Promise<{ values: { messages?: readonly unknown[] } }>;
   };
 }
 
@@ -254,5 +257,38 @@ describe.each(LOOPS)('%s：答了核准之後再判一次', (loop) => {
     expect(ran).toEqual([]);
     expect(results['r1']).toContain('核准政策是不問（never）');
     expect(JSON.stringify(done)).toContain('root 收完');
+  });
+});
+
+describe('native：答了之後再判只收緊', () => {
+  it('等人期間 listener 從 ask 翻成 allow、人按拒絕：照人的拒絕，本體不跑', async () => {
+    const ran: string[] = [];
+    let allow = false;
+    const agent = await assemble(
+      'native',
+      (r) => {
+        r.tools.register(danger(ran));
+        r.approvals.gate((_exec, next) => (allow ? { kind: 'allow' } : next()));
+      },
+      fakeModel()
+        .respondWithTools([{ name: 'danger', args: { at: 'root' }, id: 'r1' }])
+        .respond(new AIMessage('root 收完')),
+    );
+    const [id] = interruptIds(await drain(agent.streamEvents(input, options)));
+    expect(id).toBeDefined();
+
+    allow = true;
+    await drain(
+      agent.streamEvents(
+        new Command({ resume: { [id!]: { decisions: [{ type: 'reject' }] } } }),
+        options,
+      ),
+    );
+    expect(ran).toEqual([]);
+    const messages = (await agent.getState(options)).values.messages ?? [];
+    const result = messages.find(
+      (message) => (message as { tool_call_id?: string }).tool_call_id === 'r1',
+    );
+    expect(toolErrorOf(result)?.code).toBe(APPROVAL_REJECTED_BY_USER);
   });
 });

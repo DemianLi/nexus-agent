@@ -397,7 +397,8 @@ export function createApprovalGateMiddleware(
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
  * 要問人時讀得到等人服務就 await 它；讀不到經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡；
  * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。讀得到等人服務時，拿到答覆之後把問人之前的幾格（listener、管道、政策）照同一個
- * 順序再跑一次：再判放行就直接往內交、不看答覆，再判回絕就回那一格的拒絕；`langgraph` 接回時本體重跑，結果相同。
+ * 順序再判一次，**只收緊**：listener 改回 deny、管道或政策不讓問，就回那一格的拒絕；listener 回 allow 或 ask 都照人的答覆走，approve
+ * 才往內交。`langgraph` 接回時本體重跑，listener 回 allow 就直接往內交、蓋過人的拒絕（#2613），這一格兩個 loop 不一樣。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
@@ -418,12 +419,13 @@ export function approvalGateToolStep(
       callId: call.callId,
     };
     // 問人之前的幾格。人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了，答覆之後要照同一個順序再判一次：
-    // `langgraph` 接回時本體整段重跑、自然再判；讀得到等人服務（native）時由下面那一次補上。再判放行就直接跑、不看答覆，兩個 loop 一樣。
-    const beforeAsking = async (): Promise<
-      { readonly done: ToolCallResult } | { readonly ask: string }
-    > => {
+    // `langgraph` 接回時本體整段重跑、自然再判；讀得到等人服務（native）時由下面那一次補上，帶著 `asked`（問人時的理由）。
+    // 補判只收緊：listener 回 allow 不放行，照樣往下判管道與政策，判完照人的答覆走。
+    const beforeAsking = async (
+      asked?: string,
+    ): Promise<{ readonly done: ToolCallResult } | { readonly ask: string }> => {
       const decision = await runApprovalGate(listeners, exec);
-      if (decision.kind === 'allow') return { done: await next() };
+      if (decision.kind === 'allow' && asked === undefined) return { done: await next() };
       if (decision.kind === 'deny') {
         return {
           done: denial(exec, decision.reason, {
@@ -433,7 +435,8 @@ export function approvalGateToolStep(
         };
       }
 
-      const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
+      const because =
+        (decision.kind === 'ask' ? decision.reason : asked) ?? `"${exec.name}" 需要人工核准`;
       if (channel.kind === 'policy-never') {
         auditDecision(sessions, call, exec, because, 'rejected');
         return {
@@ -501,7 +504,7 @@ export function approvalGateToolStep(
     })) as { decisions?: { type?: string; message?: string }[] } | undefined;
 
     if (human !== undefined) {
-      const again = await beforeAsking();
+      const again = await beforeAsking(because);
       if ('done' in again) return again.done;
     }
 
