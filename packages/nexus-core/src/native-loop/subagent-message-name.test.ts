@@ -1,6 +1,6 @@
 /**
  * 子代理自己那則 AI 訊息的 `name` 是子代理的名字，兩個 loop 一樣：langchain 的 `AgentNode` 蓋上 agent 的 `name`，
- * deepagents 建子代理時給的是子代理名字。這個欄位跟著訊息串送進模型請求（OpenAI 的 `name`）。
+ * deepagents 照規格建子代理時給的是子代理名字（直接給 `runnable` 的不經這一步）。這個欄位跟著訊息串送進模型請求（OpenAI 的 `name`）。
  */
 
 import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messages';
