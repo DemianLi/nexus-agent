@@ -1321,7 +1321,8 @@ export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMid
 
 /**
  * 背景子代理的核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）：管道固定 `policy-never`，跟
- * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是「一律自動回絕」那句。同樣由
+ * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是
+ * {@link ./approval-policy-prompt.ts | APPROVAL_POLICY_BACKGROUND_SENTENCE}。同樣由
  * {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去，換掉規格裡跟 root 同一顆的那個。
  */
 export function createBackgroundApprovalPolicyPrompt(): AgentMiddleware {

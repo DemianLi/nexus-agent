@@ -338,8 +338,8 @@ describe('落盤再讀回', () => {
   }, 20000);
 });
 
-describe('歷史讀回三種提示字（#2649）', () => {
-  /** 2649 以前插話落盤的提示區塊原文（`task` 的字）。 */
+describe('歷史讀回舊字（＝`task`）與 `subagent` 的提示字（#2649）', () => {
+  /** `mention` 沒有 `tool`（格式 56 以前）時插話落盤的提示區塊原文，也就是 `task` 的字。 */
   const LEGACY_HINT =
     '<system-reminder>使用者點名要你把這句話交給子代理 "reviewer" 處理：' +
     '請用委派工具（task 的 subagent_type 填這個名字）把這句話派給它，並把它需要的背景一併交代。</system-reminder>';

@@ -480,7 +480,7 @@ describe.each(names)('夾具 %s', (name) => {
         expect(humanPageContexts(events)).toEqual(trigger.pageContexts);
       }
       if (trigger.ownHumanContents !== undefined) {
-        // 點名提示照日誌上的 `mention.tool` 組字，缺席照舊的 `task` 字：今天重放出來的人話要跟 55 當初送出的逐位元組相同（#2649）。
+        // 點名提示照日誌上的 `mention.tool` 組字，缺席照 `task` 的字：今天重放出來的人話要跟 55 自己重放出來的（＝55 送給模型的）逐位元組相同（#2649）。
         const replay = replayConversation(events);
         if (replay.kind !== 'replayed') throw new Error(`推不回對話歷史：${replay.reason}`);
         expect(

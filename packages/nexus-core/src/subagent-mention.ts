@@ -28,7 +28,7 @@ export interface SubagentMentionRef {
   readonly name: string;
   /**
    * 收下這句話時 root 手上的委派工具，提示照它組字（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)）。
-   * 記在日誌上，重放才組得出同一段字；缺席是這一格出現以前的日誌，照 `task` 的字組。
+   * 記在日誌上，重放才組得出同一段字；格式 56 起才有。缺席（56 以前的日誌、沒給委派工具的組裝、從 `task` 的提示字讀回）照 `task` 的字組。
    */
   readonly tool?: DelegationToolName;
 }

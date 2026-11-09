@@ -1451,7 +1451,7 @@ function hostToolsOf(
 
 /**
  * `run.start` 的 `mention`（#328 第 2 項）：省略＝沒點名；有值就要形狀合格、名字在這個組裝的子代理清單上。
- * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。收下的點名蓋上 root 手上的委派工具（#2649），
+ * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。組裝給了委派工具時，收下的點名蓋上它（#2649）；
  * 日誌記這一格，live 與重放照它組同一段提示。
  */
 function mentionOf(

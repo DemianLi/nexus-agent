@@ -50,7 +50,7 @@ changes:
 <a id="verification"></a>
 ## 驗證
 
-`packages/nexus-core/src/subagent-mention.test.ts`：舊日誌（55 的 `turn/start` 原樣一行）重放出來的人話，與 #2359 實機重跑當時送出的原文逐位元組相同；`task`／`subagent` 兩種新日誌，live（`turnStartMessage`）、插話（`userContent`）與重放組出同一段字。`apps/harness/src/subagent-mention-wire.test.ts`：one-shot 與 continuable 兩種組裝下，`run.start` 的點名提示只提 root 手上的工具，`turn/start.mention.tool` 記下它。`apps/harness/src/subagent-mention-pump.test.ts`：舊字與 `subagent` 的字在歷史裡都剝得掉、泡泡帶點名。
+`packages/nexus-core/src/subagent-mention.test.ts`：舊日誌（55 的 `turn/start` 原樣一行）重放出來的人話，與 #2359 實機重跑當時送出的原文逐位元組相同；`task`／`subagent` 兩種新日誌，live（`turnStartMessage`）、插話（`userContent`）與重放組出同一段字。`apps/harness/src/subagent-mention-wire.test.ts`：one-shot 與 continuable 兩種組裝下，`run.start` 的點名提示只提 root 手上的工具，`turn/start.mention.tool` 記下它。`apps/harness/src/subagent-mention-pump.test.ts`：舊字與 `subagent` 的字在歷史裡都剝得掉、泡泡帶點名。`apps/harness/src/session-format-fixtures.test.ts`：v0.6.1（格式 55）寫入器實際寫出的點名夾具 `v55`，今天重放出來的人話與 55 自己重放出來的逐位元組相同。
 
 <a id="dev-note"></a>
 ## 開發備註

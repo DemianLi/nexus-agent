@@ -133,9 +133,6 @@ const V53_WRITER = '771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3';
 /** 格式 54 的寫入器（#2370 之後 develop 上的 commit）。54 還沒出貨，同 `v52` 釘在 develop 上。 */
 const V54_WRITER = 'eab4b1c6c9b412f1b866b101a9362450b2c8b277';
 
-/** 格式 55 在 develop 上的寫入器（#2649 之前的最後一個 commit）。`mixed-v54-v55` 的後半另釘分支 commit（{@link V55_WRITER}）。 */
-const V55_DEVELOP_WRITER = 'cb2628bbba4bbddec3e28008216b4524ac749998';
-
 const TARGETS: readonly Target[] = [
   { name: 'v2', rev: 'v0.4.6', version: 2, ownReplay: false },
   { name: 'v3', rev: 'v0.4.7', version: 3, ownReplay: false },
@@ -230,11 +227,10 @@ const TARGETS: readonly Target[] = [
   // CLI 一輪碰不到點名：`turn/start`、佇列項的 `mention` 與插話接著的提示區塊由觸發補寫。
   {
     name: 'v55',
-    rev: V55_DEVELOP_WRITER,
+    rev: 'v0.6.1',
     version: 55,
     triggers: ['mention'],
     ownReplay: true,
-    released: false,
   },
 ];
 interface MixedHalf {

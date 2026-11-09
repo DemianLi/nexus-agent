@@ -1,12 +1,12 @@
 {
   "writer": {
-    "rev": "cb2628bbba4bbddec3e28008216b4524ac749998",
-    "commit": "cb2628bbba4bbddec3e28008216b4524ac749998",
+    "rev": "v0.6.1",
+    "commit": "4545d50c04ba308a937a5b37bfad652d2f52fed7",
     "formatVersion": 55,
-    "released": false
+    "released": true
   },
   "computedByToday": {
-    "head": "a4105aa1c8a3bfb2aee9615af897031711c664d1",
+    "head": "7491ee975e6202359ef5a94504e95feb13b32aca",
     "dirty": true
   },
   "sessions": {
@@ -39,7 +39,7 @@
         "turn/end"
       ],
       "replay": {
-        "computedBy": "cb2628bbba4bbddec3e28008216b4524ac749998",
+        "computedBy": "v0.6.1",
         "kind": "replayed",
         "roles": [
           "human",
@@ -69,7 +69,7 @@
         "turn/end"
       ],
       "replay": {
-        "computedBy": "cb2628bbba4bbddec3e28008216b4524ac749998",
+        "computedBy": "v0.6.1",
         "kind": "replayed",
         "roles": [
           "human",

@@ -20,7 +20,7 @@ import type { MiddleSection } from './prompt-sections.js';
 /** middleware 的名字。 */
 export const APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME = 'nexusApprovalPolicyPrompt';
 
-/** 這張圖確定性回絕每一次核准時講的那句。 */
+/** 確定性回絕每一次核准時講的那句（`policy-never` 不帶 `reason`，或政策是 `never`）；背景子代理講 {@link APPROVAL_POLICY_BACKGROUND_SENTENCE}。 */
 export const APPROVAL_POLICY_NEVER_SENTENCE =
   '這個 session 關掉了核准提示：需要核准的動作一律自動回絕——不要請求沙箱升級（不要設 `sandbox_permissions`）。';
 
