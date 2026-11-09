@@ -78,6 +78,8 @@ export interface NativeAgentParams {
   readonly events?: EventDispatcher;
   /** 節點的 `config.store`，呼叫時給的優先，同 LangGraph。 */
   readonly store?: unknown;
+  /** 蓋在 AI 訊息上的 `name`，同 `createAgent` 的 `name`；不給是 `'model'`。 */
+  readonly name?: string;
   /**
    * 前景子代理：由 root 的 `task` 呼叫叫起。每次從空的 state 跑、跑完不留；節點的命名空間接在那顆 `task` 呼叫的
    * `checkpoint_ns` 後面；工具的提問經那顆呼叫的委派（`suspension.ts` 的 {@link delegationOf}）交給 root 的使用者，那顆呼叫沒人可問時
@@ -1034,6 +1036,7 @@ export class NativeAgent {
         const { message, commands } = await callModel(
           {
             model: this.#params.model,
+            name: this.#params.name ?? 'model',
             systemMessage: systemMessageOf(this.#params.systemPrompt),
             tools: this.#tools,
             middleware: this.#modelCells,

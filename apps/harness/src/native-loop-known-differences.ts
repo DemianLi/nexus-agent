@@ -745,6 +745,18 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/summarization.test.ts',
+    test: 'subagent 自帶的 middleware 到得了那個 subagent > 記號只出現在 subagent 那一輪，root 的兩輪都沒有',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
+    file: 'src/summarization.test.ts',
+    test: '我們配的那份打底到每個 subagent > subagent 自帶一個同名的，贏的是它',
+    kind: 'unregisteredCell',
+    run: 'fails',
+  },
+  {
     file: 'src/todo-on-tree.test.ts',
     test: 'E：同一棵樹上多條 thread 同時活著，每一次呼叫靠 thread_id 認出主人 > 第二條 thread 活著時，問答中斷（ask_user_question）之後 resume 的那一次呼叫，仍寫進自己的日誌',
     kind: 'noHumanInput',

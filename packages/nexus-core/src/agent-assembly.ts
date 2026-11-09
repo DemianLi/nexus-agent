@@ -398,6 +398,7 @@ export function assembleAgent(params: AssembleAgentParams) {
                 description: spec.description,
                 runnable: createNativeAgent({
                   model: spec.model ?? model,
+                  name: spec.name,
                   ...(spec.systemPrompt !== undefined && {
                     systemPrompt: nativeSystemPrompt(spec.name, spec.systemPrompt),
                   }),
