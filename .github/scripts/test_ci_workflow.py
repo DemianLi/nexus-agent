@@ -137,9 +137,16 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 看是不是合併後完整一輪，都不看模式；
-        # 另有 SandboxSpawner、WebE2e、E2ePerThread 三組。
-        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread'}:
+        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64、e2e-single、e2e-native 與 e2e-per-thread 看是不是合併後完整一輪，
+        # 都不看模式；另有 SandboxSpawner、WebE2e、E2eNative、E2ePerThread 四組。
+        for job in set(self.gate['needs']) - {
+            'plan',
+            'sandbox-spawner',
+            'sandbox-spawner-arm64',
+            'e2e-single',
+            'e2e-native',
+            'e2e-per-thread',
+        }:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -177,7 +184,7 @@ class Gate(unittest.TestCase):
 
 
 # 接在中間那一段某個 job 後面跑的：跟它依序，不另外佔一格。
-CHAINED = {'packed-install': 'sandbox-spawner'}
+CHAINED = {'packed-install': 'sandbox-spawner', 'e2e-native': 'e2e-single'}
 
 
 def full_peak(jobs: dict) -> int:
@@ -213,12 +220,14 @@ class Budget(unittest.TestCase):
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
-        # sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
+        # sandbox-spawner-arm64、e2e-single、e2e-native 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
+        # e2e-native 的 if 另外帶 `!cancelled()`（理由見 E2eNative），也要 `inputs.full`。
         post_merge_only = ('sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread')
         for name in post_merge_only:
             self.assertEqual(jobs[name]['if'], 'inputs.full', name)
+        self.assertIn('&& inputs.full &&', jobs['e2e-native']['if'])
         for name, job in jobs.items():
-            if name not in ('plan', 'gate', 'sandbox-spawner', *post_merge_only):
+            if name not in ('plan', 'gate', 'sandbox-spawner', 'e2e-native', *post_merge_only):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         native = load(CI.with_name('post-merge.yml'))['jobs']['native-loop']['strategy']['matrix']['shard']
@@ -257,6 +266,54 @@ class E2ePerThread(unittest.TestCase):
         self.assertEqual(step['env']['E2E_PER_THREAD'], '${{ needs.e2e-per-thread.result }}')
         self.assertIn('[ "$E2E_PER_THREAD" = "success" ] || fail', step['run'])
         self.assertIn('[ "$E2E_PER_THREAD" = "skipped" ] || fail', step['run'])
+
+
+class E2eNative(unittest.TestCase):
+    """真瀏覽器 e2e 用 native agent loop 再跑一輪（#2358）：`NEXUS_E2E_AGENT_LOOP` 沒設時 e2e 照 langgraph 跑、照樣綠，所以 env 要釘。"""
+
+    STEP = '真瀏覽器 e2e（native）'
+
+    def setUp(self) -> None:
+        self.ci = load(CI)
+        self.job = self.ci['jobs']['e2e-native']
+        self.names = [s.get('name') for s in self.job['steps']]
+        self.steps = {s.get('name'): s for s in self.job['steps']}
+
+    def test_runs_e2e_on_the_native_loop(self) -> None:
+        step = self.steps[self.STEP]
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['env']['NEXUS_E2E_AGENT_LOOP'], 'native')
+        # 不跟 per-thread 交叉：帶了它，single 下的 native 就沒人測。
+        self.assertNotIn('NEXUS_E2E_PROCESS_MODEL', step['env'])
+
+    def test_builds_like_e2e_single(self) -> None:
+        single = next(s for s in self.ci['jobs']['e2e-single']['steps'] if s.get('name') == '建置 lib 與 web')
+        self.assertEqual(self.steps['建置 lib 與 web']['run'], single['run'])
+
+    def test_uploads_screenshots_even_when_red(self) -> None:
+        """截圖是交審的證據，紅的那一輪更要看得到：e2e 存到 `NEXUS_E2E_SHOTS`，之後那一步不管成敗都上傳。"""
+        shots = self.steps[self.STEP]['env']['NEXUS_E2E_SHOTS']
+        upload = next(s for s in self.job['steps'] if str(s.get('uses', '')).startswith('actions/upload-artifact@'))
+        self.assertLess(self.names.index(self.STEP), self.job['steps'].index(upload))
+        self.assertEqual(upload['if'], 'always()')
+        self.assertEqual(upload['with']['path'], shots)
+        self.assertEqual(upload['with']['retention-days'], 7)
+        # 大版號釘在跟 checkout 同一代（#2358 的派工）。
+        checkout = next(s['uses'] for s in self.job['steps'] if str(s.get('uses', '')).startswith('actions/checkout@'))
+        self.assertEqual(upload['uses'].split('@')[1], checkout.split('@')[1])
+
+    def test_chained_after_e2e_single_but_runs_when_it_is_red(self) -> None:
+        """接在 e2e-single 後面不另佔一格；needs 預設要前一個成功才跑，single 紅了 native 會被 skip，這一輪就看不到 native 本身過不過。
+        所以 if 用 `!cancelled()` 換掉預設，plan 沒成功仍不跑。"""
+        self.assertEqual(self.job['needs'], ['plan', 'e2e-single'])
+        cond = self.job['if'].removeprefix('${{').removesuffix('}}').strip()
+        self.assertEqual(cond, "!cancelled() && inputs.full && needs.plan.result == 'success'")
+
+    def test_judged_by_gate(self) -> None:
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['E2E_NATIVE'], '${{ needs.e2e-native.result }}')
+        self.assertIn('[ "$E2E_NATIVE" = "success" ] || fail', step['run'])
+        self.assertIn('[ "$E2E_NATIVE" = "skipped" ] || fail', step['run'])
 
 
 class UpgradeGuideGate(unittest.TestCase):

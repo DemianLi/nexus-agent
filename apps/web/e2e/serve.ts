@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
  * - **行程模型**：跑 e2e 的環境設了 `NEXUS_E2E_PROCESS_MODEL=per-thread` 就用 per-thread 起（#2341，只在 Linux
- *   起得來），監督行程的路徑由 `NEXUS_SUPERVISOR_BIN` 給。兩個都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
+ *   起得來），監督行程的路徑由 `NEXUS_SUPERVISOR_BIN` 給。
+ * - **agent loop**：設了 `NEXUS_E2E_AGENT_LOOP` 就照它帶 `--agent-loop`（#2358），沒設是 serve 的預設 `langgraph`。
+ * - 這幾個變數都在這一端讀，不傳進子行程，見 {@link e2eServeInvocation}。
  */
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -48,6 +50,12 @@ export interface E2eServe {
   readonly url: string;
   /** serve 的 home（`NEXUS_AGENT_HOME`），例如嵌入方的服務憑證檔建在這裡。 */
   readonly home: string;
+  /**
+   * 收掉子行程、留著 home（`prepareHome` 不再跑，`extraRows` 照帶），換這份腳本在同一個 home 上再起一次，回傳新的登入網址
+   * （port 重新分配）。腳本從第一輪重新吃：吃到第幾輪記在 serve 的記憶體裡，重起就歸零。
+   * 新的起不來就跟 `close` 一樣整個收掉（home 與暫存目錄一起刪）再拋，錯誤同 {@link startE2eServe}；之後再呼叫 `close` 無害。
+   */
+  restart(turns: readonly ScriptTurn[]): Promise<string>;
   /** 收掉子行程與暫存目錄。 */
   close(): Promise<void>;
 }
@@ -77,6 +85,8 @@ export interface E2eServeInvocation {
  * - `per-thread`：加 `--process-model per-thread`，patch 最前面改 `process-model` 那一列，`supervisorBinary` 是 `NEXUS_SUPERVISOR_BIN`
  *   （旗標不收路徑）。沒給 `NEXUS_SUPERVISOR_BIN` 就拋，不退回 harness 的 `findSupervisorBinary`（`apps/harness/src/process-launcher.ts`）。home 一律先建（`0700`）。
  * - 其他值拋錯。
+ *
+ * `NEXUS_E2E_AGENT_LOOP` 沒設或是空字串不加旗標；`langgraph`、`native` 加 `--agent-loop <值>`，接在 `--process-model` 前面；其他值拋錯。
  */
 export function e2eServeInvocation(options: {
   readonly turns: readonly ScriptTurn[];
@@ -85,7 +95,22 @@ export function e2eServeInvocation(options: {
   readonly patchPath: string;
   readonly env: Readonly<Record<string, string | undefined>>;
 }): E2eServeInvocation {
-  const base = ['--tsconfig', TSCONFIG, SERVE, '--port', '0', '--patch', options.patchPath];
+  const loop = options.env.NEXUS_E2E_AGENT_LOOP ?? '';
+  if (loop !== '' && loop !== 'langgraph' && loop !== 'native') {
+    throw new Error(
+      `NEXUS_E2E_AGENT_LOOP 只認 langgraph、native（或不設），收到 ${JSON.stringify(loop)}`,
+    );
+  }
+  const base = [
+    '--tsconfig',
+    TSCONFIG,
+    SERVE,
+    '--port',
+    '0',
+    '--patch',
+    options.patchPath,
+    ...(loop === '' ? [] : ['--agent-loop', loop]),
+  ];
   const rows = `${options.extraRows}${scriptRows(options.turns)}`;
   const model = options.env.NEXUS_E2E_PROCESS_MODEL ?? '';
   if (model === '') return { args: base, patch: rows, createHome: options.prepareHome };
@@ -123,8 +148,9 @@ function exited(child: ChildProcess): Promise<void> {
  * @param turns - 腳本。
  * @param extraRows - 接在腳本前面的 patch 列（YAML 頂層清單項目，換行結尾），例如改 `host-tools` 那一列。
  * @param prepareHome - serve 起動之前在它的 home 裡放檔，例如嵌入身分對應表。目錄已經建好。
- * @returns 登入網址、serve 的 home 與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
- *   `NEXUS_E2E_PROCESS_MODEL` 不是 `per-thread`／空，或 per-thread 卻沒給 `NEXUS_SUPERVISOR_BIN`，也拋（見 {@link e2eServeInvocation}）。
+ * @returns 登入網址、serve 的 home、重起與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
+ *   `NEXUS_E2E_PROCESS_MODEL` 不是 `per-thread`／空、`NEXUS_E2E_AGENT_LOOP` 不是 `langgraph`／`native`／空，或 per-thread 卻沒給
+ *   `NEXUS_SUPERVISOR_BIN`，也拋（見 {@link e2eServeInvocation}）。
  */
 export async function startE2eServe(
   turns: readonly ScriptTurn[],
@@ -133,60 +159,86 @@ export async function startE2eServe(
 ): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
   const patch = join(dir, 'script.patch.yml');
-  let invocation: E2eServeInvocation;
-  try {
-    invocation = e2eServeInvocation({
-      turns,
+  const invoke = (script: readonly ScriptTurn[]): E2eServeInvocation =>
+    e2eServeInvocation({
+      turns: script,
       extraRows,
       prepareHome: prepareHome !== undefined,
       patchPath: patch,
       env: process.env,
     });
+  let invocation: E2eServeInvocation;
+  try {
+    invocation = invoke(turns);
   } catch (error) {
     await rm(dir, { recursive: true, force: true });
     throw error;
   }
-  await writeFile(patch, invocation.patch, 'utf8');
   const home = join(dir, 'home');
   const harnessHome = join(home, 'harness-home');
   if (invocation.createHome) await mkdir(harnessHome, { recursive: true, mode: 0o700 });
   await prepareHome?.(harnessHome);
-  const child = spawn(TSX, invocation.args, {
-    cwd: dir,
-    env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: harnessHome },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const close = async (): Promise<void> => {
+  let child: ChildProcess | undefined;
+  const stop = async (): Promise<void> => {
+    if (child === undefined) return;
     child.kill('SIGTERM');
     await exited(child);
+    child = undefined;
+  };
+  const close = async (): Promise<void> => {
+    await stop();
     await rm(dir, { recursive: true, force: true });
   };
-  let log = '';
-  try {
-    const url = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`serve 60 秒內沒起來：\n${log}`)), 60_000);
-      const onData = (chunk: Buffer): void => {
-        log += chunk.toString('utf8');
-        const found = AUTHENTICATED_URL.exec(log);
-        const model = MODEL_LINE.exec(log);
-        if (found === null || model === null) return;
-        clearTimeout(timer);
-        const skipped = SKIPPED_PATCH.exec(log);
-        if (skipped !== null) reject(new Error(`patch 有列沒套上（${skipped[0]}）：\n${log}`));
-        else if (model[1] !== SCRIPTED_MODEL) {
-          reject(new Error(`serve 起來了，模型卻不是腳本（${model[1]}）：\n${log}`));
-        } else resolve(found[0]);
-      };
-      child.stdout?.on('data', onData);
-      child.stderr?.on('data', onData);
-      child.once('exit', (code) => {
-        clearTimeout(timer);
-        reject(new Error(`serve 起動中結束（exit ${String(code)}）：\n${log}`));
-      });
+  const launch = async (next: E2eServeInvocation): Promise<string> => {
+    await writeFile(patch, next.patch, 'utf8');
+    child = spawn(TSX, next.args, {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? '', HOME: home, NEXUS_AGENT_HOME: harnessHome },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return { url, home: harnessHome, close };
+    return await authenticatedUrl(child);
+  };
+  const restart = async (script: readonly ScriptTurn[]): Promise<string> => {
+    const next = invoke(script);
+    await stop();
+    try {
+      return await launch(next);
+    } catch (error) {
+      await close();
+      throw error;
+    }
+  };
+  try {
+    const url = await launch(invocation);
+    return { url, home: harnessHome, restart, close };
   } catch (error) {
     await close();
     throw error;
   }
+}
+
+/** 等子行程的起動日誌印出登入網址；patch 有列沒套上、模型不是腳本、逾時或先結束就拋，訊息帶起動日誌。 */
+function authenticatedUrl(child: ChildProcess): Promise<string> {
+  let log = '';
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`serve 60 秒內沒起來：\n${log}`)), 60_000);
+    const onData = (chunk: Buffer): void => {
+      log += chunk.toString('utf8');
+      const found = AUTHENTICATED_URL.exec(log);
+      const model = MODEL_LINE.exec(log);
+      if (found === null || model === null) return;
+      clearTimeout(timer);
+      const skipped = SKIPPED_PATCH.exec(log);
+      if (skipped !== null) reject(new Error(`patch 有列沒套上（${skipped[0]}）：\n${log}`));
+      else if (model[1] !== SCRIPTED_MODEL) {
+        reject(new Error(`serve 起來了，模型卻不是腳本（${model[1]}）：\n${log}`));
+      } else resolve(found[0]);
+    };
+    child.stdout?.on('data', onData);
+    child.stderr?.on('data', onData);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`serve 起動中結束（exit ${String(code)}）：\n${log}`));
+    });
+  });
 }
