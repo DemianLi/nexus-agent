@@ -16,7 +16,9 @@
 use std::time::Instant;
 
 use super::Host;
-use crate::host_protocol::{encode_host_message, CallError, ErrorCode, HostMessage, Side, MAX_FRAME};
+use crate::host_protocol::{
+    encode_host_message, CallError, ErrorCode, HostMessage, Side, MAX_FRAME,
+};
 use crate::json::Value;
 use crate::kernel::{CallKey, Fault, MethodKind, Progress};
 

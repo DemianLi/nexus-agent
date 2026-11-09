@@ -72,7 +72,9 @@ impl ErrorCode {
     }
 
     fn parse(text: &str) -> Option<ErrorCode> {
-        ErrorCode::ALL.into_iter().find(|code| code.as_str() == text)
+        ErrorCode::ALL
+            .into_iter()
+            .find(|code| code.as_str() == text)
     }
 }
 

@@ -486,7 +486,9 @@ impl Kernel {
     pub fn for_each_remote(&mut self, mut f: impl FnMut(&'static str, &mut dyn Remote)) {
         let slots = &self.slots;
         for (_, imp) in self.store.iter_mut() {
-            let Some(as_remote) = imp.remote else { continue };
+            let Some(as_remote) = imp.remote else {
+                continue;
+            };
             let active = slots
                 .get(imp.owner.index as usize)
                 .filter(|slot| slot.generation == imp.owner.generation)

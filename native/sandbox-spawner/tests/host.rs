@@ -1048,7 +1048,10 @@ mod calls {
         let (_host, socket) = host("call-basic");
         let mut stream = connect(&socket);
         call(&mut stream, 1, "echo", r#"{"a":[1,null,true],"b":"字"}"#);
-        assert_eq!(read_message(&mut stream), ok(1, r#"{"a":[1,null,true],"b":"字"}"#));
+        assert_eq!(
+            read_message(&mut stream),
+            ok(1, r#"{"a":[1,null,true],"b":"字"}"#)
+        );
         call_to(&mut stream, 2, "nope", "m", "null");
         assert_eq!(error_code(&mut stream, 2), ErrorCode::UnknownService);
         call(&mut stream, 3, "nope", "null");
@@ -1147,7 +1150,11 @@ mod calls {
         assert_eq!(error_code(&mut stream, 2), ErrorCode::TooLarge);
         call(&mut stream, 3, "unary-chunk", "null");
         assert_eq!(error_code(&mut stream, 3), ErrorCode::ServiceError);
-        assert_eq!(cancels(&mut stream, 4), 2, "宿主收尾時，掛著的那兩次要在服務那邊取消");
+        assert_eq!(
+            cancels(&mut stream, 4),
+            2,
+            "宿主收尾時，掛著的那兩次要在服務那邊取消"
+        );
     }
 
     #[test]
@@ -1201,7 +1208,10 @@ mod calls {
                 Err(err) => panic!("{err}"),
             }
         }
-        assert!(sent < frames.len(), "宿主一直在讀：{CALLS} 個呼叫全送出去了");
+        assert!(
+            sent < frames.len(),
+            "宿主一直在讀：{CALLS} 個呼叫全送出去了"
+        );
 
         let mut other = connect(&socket);
         call(&mut other, 1, "echo", "1");
