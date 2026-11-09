@@ -645,7 +645,7 @@ function withRenames(baseline: Registration): Registration {
 }
 
 /**
- * 計劃模式改聽 `agent/pre-step`（#2358）之後，四樣順序跟對照組不同的地方，**只有這兩處**：
+ * 對照組錄的是計劃模式還佔 `nexusPlanMode` 那一格的鏈；計劃模式聽 `agent/pre-step`（#2358），四樣順序跟對照組只差這兩處：
  *
  * - listeners 多一位 `plan-mode` 的 `agent/pre-step`（交出排著的待關）；
  * - middleware 上 `nexusPlanMode` 那一格不在了，換成 core 的 `nexusPreStep`（langgraph 下有 `agent/pre-step` 監聽者才掛）與

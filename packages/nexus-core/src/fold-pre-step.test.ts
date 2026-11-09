@@ -1,7 +1,7 @@
 /**
  * fold 什麼時候掛 pre-step 轉接格與補回 `name` 那一顆、掛在哪：
  *
- * - pre-step 轉接格：只在 `langgraph` 下、派發面上有 `agent/pre-step` 監聽者時掛，只折進 root，排在插件 `prepend` 那一批正前面；
+ * - pre-step 轉接格：只在 `langgraph` 下、派發面上有 `agent/pre-step` 監聽者時掛，只折進 root，排在插件 `prepend` 那一批之前（有補回 `name` 那一顆時隔著它）；
  * - 補回 `name`：只在那一份工具清單裡有 `returnDirect` 工具時掛，root 與每個子代理各看自己的清單，排在 pre-step 轉接格之後、
  *   插件 `prepend` 那一批之前。
  *

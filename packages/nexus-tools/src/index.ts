@@ -79,7 +79,7 @@ import { defineToken } from '@nexus/sdk';
  * {@link isHumanInputUnavailable}。只有 native loop 會這樣拒絕，預設的 `langgraph` 照舊。向後相容的新增：不認它的消費者照常把它當成
  * 一般的錯；既有消費者的範圍不用改，舊宿主不會丟它。
  *
- * `2.11.0`（#2358）：{@link ToolThread.on} 多收 `'agent/pre-step'`（{@link ToolPreStepListener}），每一步叫模型之前叫一次。向後相容的新增：
+ * `2.11.0`（#2358）：{@link ToolThread.on} 多收 `'agent/pre-step'`（{@link ToolPreStepListener}），叫模型之前叫。向後相容的新增：
  * 不呼叫它的來源照常；要用的消費者宣告 `^2.11.0`。
  */
 export const TOOLS_CONTRACT_VERSION = '2.11.0';
@@ -408,10 +408,10 @@ export interface ToolPreStep {
 }
 
 /**
- * 一位 `agent/pre-step` 監聽者（`2.11.0` 起）：每一步叫模型之前叫一次，等它做完才叫模型。只在這一步定了要走下去時叫：宿主的監聽者擋下了這一步、
- * 或這一步已經中止，就不叫。**回傳值改不了這一步**，也擋不下這一輪；拋錯同 {@link ToolExecuteListener}：等於這一步拋錯，這一輪以那個錯收尾。
+ * 一位 `agent/pre-step` 監聽者（`2.11.0` 起）：叫模型之前叫，等它做完才叫模型。排在它內側的監聽者回 `reject`、或這一輪已經中止，
+ * 就不叫；排在外側的監聽者仍可能在它之後擋下這一步。**回傳值改不了這一步**，也擋不下這一輪；拋錯同 {@link ToolExecuteListener}：等於這一步拋錯，這一輪以那個錯收尾。
  *
- * 同一步可能被叫不只一次（重試、插話跳回模型），要冪等。宿主今天只在 root 派，但不保證：要只管 root 的，自己用 `threadId` 判。
+ * `--agent-loop=native` 每一步叫一次；`langgraph` 每次模型呼叫叫一次，含重試與 `afterAgent` 跳回模型那一次，所以要冪等。宿主今天只在 root 派，但不保證：要只管 root 的，自己用 `threadId` 判。
  */
 export type ToolPreStepListener = (step: ToolPreStep) => void | Promise<void>;
 

@@ -308,7 +308,7 @@ describe('計劃模式的組裝', () => {
 
     expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
-    // 交出待關改聽 `agent/pre-step`，補回 `name` 歸 core（#2358）：這個 plugin 沒有 middleware。
+    // 交出待關聽 `agent/pre-step`、補回 `name` 歸 core（#2358）：這個 plugin 沒有 middleware。
     expect(registry.middleware.list()).toEqual([]);
     // 指引是一段（#2414），不在 middleware 裡。
     expect(registry.prompt.sections().map((section) => section.name)).toEqual([
@@ -328,7 +328,7 @@ describe('計劃模式的組裝', () => {
     expect(PLAN_COMMAND_HINT).toBe('[off|message]');
   });
 
-  /** 照 dsh：模式外拒絕只在工具本體裡。匯流排上只有一位監聽者：交出待關的那一位。 */
+  /** 模式外拒絕只在工具本體裡。匯流排上只有一位監聽者：交出待關的那一位。 */
   it('只聽 agent/pre-step 一個事件', async () => {
     const { registry } = await load([planPlugin()]);
 

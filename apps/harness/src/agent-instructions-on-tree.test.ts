@@ -781,7 +781,7 @@ const withPromptSections = (chain: readonly string[]): string[] =>
   });
 
 /**
- * 計劃模式改聽 `agent/pre-step`（#2358），樹上不再佔 stack 的格子：`nexusPlanMode` 那一格換成 core 的兩格——`plugins.prepended`
+ * 對照組錄的鏈上有 `nexusPlanMode`；計劃模式聽 `agent/pre-step`（#2358），樹上不佔 stack 的格子，那一格在 HEAD 是 core 的兩格——`plugins.prepended`
  * 裡、langgraph 下有 `agent/pre-step` 監聽者才派的 `nexusPreStep`，與補回 `concludesTurn` 工具結果 `name` 的 `nexusToolNameRestore`。
  * 同上，只在這裡換這一格。
  */

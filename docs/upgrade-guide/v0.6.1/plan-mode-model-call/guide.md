@@ -12,8 +12,8 @@ description: 出貨清單拿掉 `plan-mode-model-call` 那一列，指到它的 
 - 舊行為：`cordis.yml` 有兩列計劃模式，`plan-mode`（`@nexus/plugin-plan-mode`）與 `plan-mode-model-call`（`@nexus/plugin-plan-mode/model-call`）。
   後者在送模型之前交出 `exit_plan_mode` 同意之後的待關、補回那則結果的 `name`。兩列成對開關：`plan-mode` 掛著時
   `plan-mode-model-call` 不能單獨關，關 `plan-mode` 時它一併當成關掉，`--dump-config` 與 `plugin` 對照快照會註明「連帶關閉」。
-- 新行為：只剩 `plan-mode` 一列。交出待關改由 `plan-mode` 自己在每一步開頭做；補回 `name` 改由 core 做，對每一顆宣告了
-  `concludesTurn` 的工具都補，不只 `exit_plan_mode`。開關計劃模式只看 `plan-mode` 那一列。
+- 新行為：只剩 `plan-mode` 一列。交出待關改由 `plan-mode` 自己在每一步開頭做；補回 `name` 改由 core 做，對每一顆 `returnDirect`
+  工具都補（`NexusTool` 宣告 `concludesTurn` 的就是），不只 `exit_plan_mode`。開關計劃模式只看 `plan-mode` 那一列。
   - patch 檔或變更紀錄裡指到 `plan-mode-model-call` 的那一條：載入時跳過，警告寫明這一列已移除、指到這份指南，不是失敗。
   - `plugin disable`、`plugin enable`、`plugin config-set`、`plugin config-reset` 指到 `plan-mode-model-call`：回同一句說明，
     不寫變更紀錄，也不報錯。

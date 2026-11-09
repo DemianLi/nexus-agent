@@ -92,7 +92,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
  * 兩份都是封閉清單：掃到的檔多一個或少一個都紅。
  */
 const PLAN_MODE_SRC = 'packages/nexus-plugin-plan-mode/src';
-/** 封閉的例外：留在相容層的那一格，檔 → 撤除它的卡。#2358 把唯一的那一格搬上樹之後是空的，再長出來就紅。 */
+/** 封閉的例外：留在相容層的那一格，檔 → 撤除它的卡。今天是空的，多出任何一格就紅。 */
 const PLAN_MODE_COMPAT_EXCEPTIONS: Readonly<Record<string, string>> = {};
 /** 相容層的配套入口（`plan-mode-invariant` 那一列）。 */
 const PLAN_MODE_COMPANIONS: readonly string[] = ['invariant.ts'];

@@ -1,8 +1,8 @@
 /**
- * 計劃模式的待關改在 `agent/pre-step` 交出之後，日誌上的順序（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+ * 同意之後的待關在 `agent/pre-step` 交出，日誌上的順序（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
  *
  * `exit_plan_mode` 被同意之後排一格待關，插件經 `ToolThread.on('agent/pre-step')` 在下一步開頭寫 `plan/mode {active:false}`。
- * native 迴圈在整條 `beforeModel` 與 model-call middleware 之前派 pre-step，所以這一步 `beforeModel` 寫的事件現在排在
+ * native 迴圈在整條 `beforeModel` 與 model-call middleware 之前派 pre-step，所以這一步 `beforeModel` 寫的事件排在
  * `plan/mode` 後面。這一支在真的 serve 上（腳本模型、`--agent-loop native`、`/plan` 進模式、人按同意）釘住那幾處：
  *
  * - 基準：同意之後沒有別的事件時，`plan/mode` 緊接在 `exit_plan_mode` 的結果之後。
@@ -258,7 +258,7 @@ describe('serve --agent-loop native：同意之後的待關在 pre-step 交出�
 
   /**
    * 同一批只有 `exit_plan_mode`、被同意時不收這一輪，所以「同意了、這一批要收、`next-step` 又有插話」那條（跳回模型那次 native 不派
-   * pre-step）走不到。量的是這一刻真的長怎樣：插話排著、同意，這一輪沒收，同一輪的下一次請求讀到插話、已經沒有指引。
+   * pre-step）走不到。量的是實際的行為：插話排著、同意，這一輪沒收，同一輪的下一次請求讀到插話、已經沒有指引。
    */
   it('同意時 next-step 有插話排著：這一輪不收，下一次模型請求帶著插話、已經沒有計劃模式的指引', async () => {
     const guidance = await shippedGuidance();
@@ -289,9 +289,9 @@ describe('serve --agent-loop native：同意之後的待關在 pre-step 交出�
   }, 60000);
 });
 
-/** 一顆樹上的函式插件夾具：經 `tools.threadSource` 掛一位一律拋錯的 `agent/pre-step` listener。 */
 const PRE_STEP_FAILURE = '測試：pre-step listener 壞了';
 
+/** 一顆樹上的函式插件夾具：經 `tools.threadSource` 掛一位一律拋錯的 `agent/pre-step` listener。 */
 function throwingPreStepRow(dir: string): string {
   const module = join(dir, 'pre-step-thrower.mjs');
   writeFileSync(

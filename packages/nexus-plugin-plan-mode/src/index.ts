@@ -69,10 +69,10 @@
  * 所以同一批工具裡其他呼叫照樣看到計劃模式開著，日誌上那顆 `plan/mode { active: false }` 落在
  * `exit_plan_mode` 的 `tool/result` 之後。這一列經 `thread.on('agent/pre-step')` 自己聽那一步（`@nexus/tools` 2.11.0），
  * 不多一格圖節點。**只認 root 那份日誌**：監聽者自己用 `threadId` 對 root 日誌的 id，子代理那一步交不出 root 的待關，
- * 不靠宿主只在 root 派。被擋下或已經中止的那一步不叫這位監聽者（`@nexus/tools` 的 `ToolPreStepListener`），`afterAgent` 插話跳回模型的那一次，
+ * 不靠宿主只在 root 派。被內側擋下或已經中止的那一步不叫這位監聽者（`@nexus/tools` 的 `ToolPreStepListener`），`afterAgent` 插話跳回模型的那一次，
  * native 不派 pre-step：兩種情形待關都等到下一步。
  *
- * 待關只活在記憶體裡，同 dsh 的 `pendingIntents`：同意之後這一輪被停掉，它等到下一輪第一步才交出去；
+ * 待關只活在記憶體裡：同意之後這一輪被停掉，它等到下一輪第一步才交出去；
  * 行程在那之前重開，它就沒了，模式留在開著。
  *
  * ## 模式狀態走事件日誌——原本的偏離，收回了

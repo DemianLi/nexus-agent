@@ -128,7 +128,7 @@ export async function runThreadSources(
         live('on');
         if (event === 'agent/pre-step') {
           const preStep = listener as ToolPreStepListener;
-          // 這一步定了才叫插件：內側的決定是 `reject`、或這一步已經中止，就不叫，插件看到的都是會走下去的步。回傳值不往外交：
+          // 內側定了才叫插件：內側的決定是 `reject`、或這一輪已經中止，就不叫；排在外側的監聽者仍可能在它之後擋下這一步。回傳值不往外交：
           // 插件改不了這一步、也擋不下這一輪，`reject` 只開放給宿主自己的監聽者。拋錯照樣往外拋，同 `tools/execute`。
           const bridged: Events['agent/pre-step'] = async (payload, next) => {
             const decision = await next();

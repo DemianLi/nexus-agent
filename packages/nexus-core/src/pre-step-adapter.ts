@@ -3,9 +3,9 @@
  * 由這一顆在 `wrapModelCall` 的頭上派同一個事件，監聽者只寫一份。
  *
  * **時機是每一次模型呼叫**，跟 native 的「每一步一次」不同：重試與 `afterAgent` 跳回模型那一次也派，監聽者要是冪等的。
- * 不改用 `beforeModel`：那會讓每一步多一個 super-step，改到步數上限。
+ * 不用 `beforeModel`：那會讓每一步多一個 super-step，改到步數上限。
  *
- * **排在 `plugins.prepended` 正前面**（槽位表）：插件 middleware 的 `wrapModelCall` 與它們登記的提示詞段都在這一顆裡面，
+ * **排在 `plugins.prepended` 之前**（槽位表；有補回 `name` 那一顆時隔著它）：插件 middleware 的 `wrapModelCall` 與它們登記的提示詞段都在這一顆裡面，
  * 所以監聽者在這裡改的狀態，同一次呼叫的提示詞段照改過的判。
  *
  * **只折進 root**，而且只在 `langgraph` 下、有監聽者時掛：native 掛了會派兩次；沒有監聽者時不多一顆。

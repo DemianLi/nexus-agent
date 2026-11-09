@@ -3,7 +3,7 @@
  * 路由因此不收這一輪；模型看的那一份要跟沒拿掉時逐位元組相同（Chat Completions 的轉換器會把 `name` 送出去）。
  *
  * 拿掉的是 core，補回也歸 core：兩個 loop、root 與每個子代理都掛，**只在那一份工具清單裡有 `returnDirect` 工具時才掛**
- * （槽位表）。工具清單在組裝時就定了：`returnDirect` 只能由 `NexusTool` 的 `concludesTurn` 經轉接器帶上，`wrapModelCall`
+ * （槽位表）。工具清單在組裝時就定了：出貨上 `returnDirect` 由 `NexusTool` 的 `concludesTurn` 經轉接器帶上，`wrapModelCall`
  * 動態加給模型的工具，圍堵查不到 `tool`，本來就不拿掉 `name`。
  *
  * 路由只看 state 裡的訊息，模型看的是這一份複本；沒有要補的就原物返回，不碰別的 middleware 看到的東西。

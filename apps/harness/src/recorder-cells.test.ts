@@ -42,7 +42,7 @@ const CELLS = [
  * 數）。換模型與圖片省略只在 `live` 時掛，影子比對與從日誌推要歷史來源是 `shadow` 或 `log`（`--history-source` 或
  * `#settings/history-source` 那一列，出廠是 `state`）；這四格與這裡前三格的次數與路徑由 core 的
  * `native-loop/mutator-cells.test.ts` 數。補回 `name` 那一格只在工具清單有 `returnDirect` 工具時掛（出貨有 `exit_plan_mode`），
- * 兩支交出的請求由 core 的 `tool-name-restore.test.ts` 比對。
+ * 兩支是同一步：`withModelCallStep` 從同一步造出 `wrapModelCall`（`model-call-step.ts`）；補什麼由 core 的 `tool-name-restore.test.ts` 驗。
  */
 const MUTATOR_CELLS = [
   'nexusInvalidToolArgs',
