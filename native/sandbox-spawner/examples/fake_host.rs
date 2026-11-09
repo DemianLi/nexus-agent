@@ -1,7 +1,7 @@
 //! 監督行程整合測試用的假宿主：照控制通道的協定握手、記下收到的身分表，不收連線。真的宿主是 `nexus-host`。
 //!
 //! ```text
-//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] [--stale-generation] [--zero-generation] [--then-zero-generation] --socket <路徑>
+//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] [--stale-generation] [--zero-generation] [--then-zero-generation] [--deaf-on <thread>] --socket <路徑>
 //! ```
 //!
 //! - 一起來送 `hello`（版本照 `--version`，預設 [`PROTOCOL_VERSION`]），等到監督行程的 `hello` 才往下。
@@ -16,8 +16,9 @@
 //! - `--zero-generation`：同 `--violate-conversations`，但那一筆 `violation` 帶序號 0（宿主表上沒有那個 pid 時，還沒送 `hello` 的連線報的就是 0）。
 //! - `--then-zero-generation`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆序號 0 的 `violation`（理由「表上沒有了」）：
 //!   撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時報的就是 0。
+//! - `--deaf-on`：收到綁那條 thread 的對話行程身分時關掉 stdin、記一行 `deaf`，之後一直睡到被殺：監督行程再寫控制通道就是 EPIPE。
 //! - 上面幾種之外的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。
-//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
+//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`、`deaf`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -45,6 +46,7 @@ fn main() {
     let stale_generation = args.iter().any(|a| a == "--stale-generation");
     let zero_generation = args.iter().any(|a| a == "--zero-generation");
     let then_zero_generation = args.iter().any(|a| a == "--then-zero-generation");
+    let deaf_on = value("--deaf-on");
     let violate_conversations = violate_twice
         || then_unregistered.is_some()
         || report_strangers
@@ -106,6 +108,16 @@ fn main() {
                         "grant {pid} {role} {}",
                         String::from_utf8_lossy(&thread)
                     ));
+                    if role == "conversation"
+                        && deaf_on.as_deref().map(str::as_bytes) == Some(&thread[..])
+                    {
+                        // SAFETY：只關自己的 fd 0，之後不再讀它。
+                        unsafe { libc::close(0) };
+                        log("deaf");
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(60));
+                        }
+                    }
                     if report_strangers && role == "conversation" {
                         report(&HostReport::Violation {
                             pid: 0,
