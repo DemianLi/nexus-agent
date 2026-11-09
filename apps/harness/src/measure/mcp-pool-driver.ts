@@ -501,6 +501,7 @@ async function startArm(arm: Arm, round: number): Promise<ArmProc> {
   const home = `/tmp/homes/${arm}-${round}`;
   mkdirSync(home, { recursive: true });
   const http = await startHttpPoolFixture(`${arm}-mcph`);
+  // session-file-exempt: stdio fixture 自己追加的 MCP 事件日誌（start／initialized／call），不是會話檔
   const logFile = `${MCP_LOG_DIR}/${arm}-${round}.jsonl`;
   writeFileSync(logFile, '');
   const patch = `/tmp/patch-${arm}-${round}.yml`;
