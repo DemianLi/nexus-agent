@@ -1913,7 +1913,8 @@ impl Supervisor {
                 if let (true, Ok(pid), Some(host)) = (
                     identities.contains(&pid),
                     u32::try_from(pid),
-                    host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()),
+                    host.as_mut()
+                        .filter(|host| host.ready && host.proc.stop.is_none()),
                 ) {
                     host.proc
                         .chan

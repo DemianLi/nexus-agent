@@ -2451,7 +2451,9 @@ fn a_second_stop_signal_sends_no_revoke_to_the_host_it_just_killed() {
     let socket = h.up("t,ignore-term");
     let granted = |h: &Harness| {
         let log = host_log(h);
-        let grants = log.iter().filter(|l| l.ends_with(" conversation t,ignore-term"));
+        let grants = log
+            .iter()
+            .filter(|l| l.ends_with(" conversation t,ignore-term"));
         grants.count()
     };
     assert!(wait_until(|| granted(&h) == 1), "{:?}", host_log(&h));
@@ -2491,7 +2493,12 @@ fn a_host_that_cannot_take_a_revoke_is_killed_once_per_reap_and_restarts() {
     }
     downs.sort();
     assert_eq!(downs, [b"a".to_vec(), b"b".to_vec()]);
-    let started = |h: &Harness| host_log(h).iter().filter(|l| l.starts_with("start ")).count();
+    let started = |h: &Harness| {
+        host_log(h)
+            .iter()
+            .filter(|l| l.starts_with("start "))
+            .count()
+    };
     assert!(wait_until(|| started(&h) == 2), "{:?}", host_log(&h));
     let err = std::fs::read(h.dir.join("supervisor.err")).unwrap();
     let err = String::from_utf8_lossy(&err);
