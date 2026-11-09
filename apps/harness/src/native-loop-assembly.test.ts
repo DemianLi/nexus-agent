@@ -2,7 +2,7 @@
  * `--agent-loop native` 在產品組裝上（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：組裝根、pump、wire。
  *
  * 兩個 loop 算出來的答題管道一樣（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 沒人可問的是那顆呼叫上放了
- * `NO_HUMAN_INPUT` 的（帶 thread 的 `streamEvents` 之外的 run、前景子代理那一層），由生產者自己判。serve 走帶 thread 的 `streamEvents`，樹上的 ask-user
+ * `NO_HUMAN_INPUT` 的（帶 thread 的 `streamEvents` 之外的 run），由生產者自己判。serve 走帶 thread 的 `streamEvents`，樹上的 ask-user
  * 停在問題上、答了收完，日誌跟 `langgraph` 寫的一樣；直接 `invoke` 組裝根時沙箱升級當下拒絕（no-channel），不掛核准卡。
  *
  * **零憑證、零外部連線**：模型是腳本。

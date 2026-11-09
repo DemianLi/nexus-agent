@@ -18,10 +18,8 @@ import { Command, MemorySaver } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import {
   createHookStepMiddleware,
-  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SESSION_EVENT_MAX_DEPTH,
   SessionRegistry,
-  SUBAGENT_DELEGATION_CONTEXT,
   TURN_CANCEL_CONFIG_KEY,
   withModelCallStep,
 } from '@nexus/core';
@@ -156,16 +154,6 @@ function logShape(events: readonly SessionEvent[]): string[] {
   );
 }
 
-/**
- * 已知差異（子代理類，TODO(#2359)）：native 的子代理那一層沒人可問，前景子代理的委派聲明因此是「會自動被拒絕」
- * 那一句（`subagent-delegation.ts` 的 `foregroundDelegationContext`）。換回 LangGraph 那一句再比，其餘一個字都不放過。
- */
-function withKnownDifferences(log: string[][]): string[][] {
-  const from = JSON.stringify(SUBAGENT_DELEGATION_CONTEXT).slice(1, -1);
-  const to = JSON.stringify(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT).slice(1, -1);
-  return log.map((lines) => lines.map((line) => line.replaceAll(from, to)));
-}
-
 async function runOnce(
   loop: AgentLoopKind,
   turns: readonly ScriptedTurn[],
@@ -267,7 +255,7 @@ describe('native loop 對照 LangGraph', () => {
     const native = await runOnce('native', turns, '開始。');
     expect(native.failure).toEqual(graph.failure);
     expect(native.events).toEqual(graph.events);
-    expect(withKnownDifferences(native.log)).toEqual(graph.log);
+    expect(native.log).toEqual(graph.log);
   });
 
   it('beforeAgent 跳 end 之後，afterAgent 照樣能跳回模型', async () => {

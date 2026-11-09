@@ -18,11 +18,13 @@
  *
  * 停下來問人：工具呼叫 await 等人服務（`human-input.ts`），同一批都停住時 `streamEvents` 交出中斷、run 留在記憶體裡，用
  * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。帶 thread 的 `streamEvents` 之外
- * （`invoke`／`stream` 帶不帶 thread 都是、沒帶 thread 的 `streamEvents`），與前景子代理那一層，呼叫上放的是 `NO_HUMAN_INPUT`：核准閘門走沒有管道那一格，工具的 `exec.interrupt` 拒絕，都不退回 LangGraph 的 `interrupt()`。
+ * （`invoke`／`stream` 帶不帶 thread 都是、沒帶 thread 的 `streamEvents`），呼叫上放的是 `NO_HUMAN_INPUT`：核准閘門走沒有管道那一格，工具的 `exec.interrupt` 拒絕，都不退回 LangGraph 的 `interrupt()`。
+ *
+ * 前景子代理也是這個類別（{@link NativeAgentParams.subagent}），由 root 的 `task` 呼叫叫起：它的提問經那顆呼叫的委派進 root 這次 run 的
+ * 等人狀態（`suspension.ts`），節點的事件經繼承的 callbacks 進 root 那條串流。
  *
  * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
- * 接不住，TODO(#2608)。子代理仍是 LangGraph 子圖，
- * TODO(#2359)。
+ * 接不住，TODO(#2608)。背景子代理仍是 LangGraph 的圖，TODO(#2359)。
  *
  * @module
  */

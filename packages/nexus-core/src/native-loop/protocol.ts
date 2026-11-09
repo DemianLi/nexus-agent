@@ -265,7 +265,7 @@ export class NativeStreamHandler extends BaseCallbackHandler {
   }
 
   /**
-   * 工具裡跑的子圖（前景子代理是 LangGraph 子圖，TODO(#2359)）：它的節點結束時補那一層的 `completed`。LangGraph 是看子圖的
+   * 工具裡跑的 LangGraph 子圖：它的節點結束時補那一層的 `completed`（前景子代理跑 native，由它自己的節點寫回時補）。LangGraph 是看子圖的
    * `updates` 補的，那份串流不經 callback，所以看節點那顆 chain run（名字等於 `langgraph_node`）的收尾。
    */
   override handleChainStart(

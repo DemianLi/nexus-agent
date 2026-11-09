@@ -305,8 +305,7 @@ export interface FoldOptions {
   checkpointer?: AgentCheckpointer;
   /**
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 在行程內等人回答（`human-input.ts`），
-   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run、前景子代理那一層）由那顆呼叫上的
-   * `NO_HUMAN_INPUT` 判成沒有管道。`native` 時前景子代理的委派聲明也照沒有管道選句。
+   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
    */
   loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */

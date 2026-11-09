@@ -1,9 +1,8 @@
 /**
- * 前景子代理讀不到 root 那顆 `task` 呼叫的等人服務：子代理仍是 LangGraph 子圖（TODO(#2359)），它的呼叫不在 root 那顆呼叫的計數裡。
- * 讀得到的話，子代理同一步兩顆 exclusive 呼叫，後一顆在屏障上 `idle` 等前一顆時，root 那顆就算成「不在跑」，這一批被判成都在
- * `idle` 等而失敗，前一顆其實還在跑。
+ * 前景子代理同一步兩顆 exclusive 呼叫：後一顆在屏障上 `idle` 等前一顆時，前一顆還在跑，子代理那一層就還在跑，root 那顆 `task` 不算停下，
+ * 這一批不會被判成都在 `idle` 等而失敗（`suspension.ts` 的委派）。
  *
- * `invoke` 不放服務（`human-input.ts`），沒有這個問題；一起釘住，兩條入口都照常收尾。
+ * `invoke` 不放服務（`human-input.ts`）；一起釘住，兩條入口都照常收尾。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
