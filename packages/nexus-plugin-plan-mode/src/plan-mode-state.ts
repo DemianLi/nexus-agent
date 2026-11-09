@@ -41,7 +41,9 @@ export interface PlanModeState {
   dropExit(session: PlanModeSession): boolean;
   /**
    * 交出這份日誌排著的待關：有排著、而且模式還開著，就寫 `plan/mode { active: false }`。不是計劃模式接著的 root 日誌、或沒有排著的，
-   * 什麼都不做。
+   * 什麼都不做。**寫成功才拿掉待關**：`append` 拋錯時日誌不變，待關留著，下一次再交。
+   *
+   * @throws `append` 拋的錯，原樣往外。
    */
   settleExit(log: SessionLog): void;
 }
@@ -65,8 +67,9 @@ export function createPlanModeState(): PlanModeState {
     dropExit: (session) => pendingExits.delete(session),
     settleExit(log) {
       const session = sessionsByLog.get(log);
-      if (session === undefined || !pendingExits.delete(session)) return;
+      if (session === undefined || !pendingExits.has(session)) return;
       if (session.active()) session.log.append('plan/mode', { active: false });
+      pendingExits.delete(session);
     },
   };
 }

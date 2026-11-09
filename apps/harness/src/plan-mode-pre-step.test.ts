@@ -12,11 +12,12 @@
  *
  * 圖片省略、摘要器、換模型那幾格在腳本 serve 上不寫事件（沒有型錄、沒到摘要門檻），這裡不量。
  *
- * 另外兩組在兩個 loop 上各跑一次：
+ * 另外三組在兩個 loop 上各跑一次：
  *
  * - 插件的 `agent/pre-step` listener 拋錯：錯原樣往外，這一輪以那個錯收尾，模型沒被叫到。插件是樹上的函式插件，經 serve 的 `--patch` 插進清單。
  * - pre-step 那一刻這一步已經中止（人按停止）：待關不交出，留到下一輪的第一步交出，那一步的請求沒有指引。停止的時機由一位宿主層的
  *   `agent/pre-step` 監聽者卡住：它在同意之後的第一步送 `run.cancel`，等這一步的 signal 中止才往內交。
+ * - 同意之後那一步寫 `plan/mode` 拋錯：這一步照常叫模型、仍在計劃模式，待關留到下一輪的第一步交出。拋錯的接縫是 root 日誌的 `append`。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
@@ -42,7 +43,7 @@ import {
   reduceConversation,
 } from '@nexus/wire';
 import type { ConversationState, Event, PendingQuestion, WireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import {
@@ -62,7 +63,7 @@ import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 import { composeAttachSessions } from './session-attach.js';
-import type { SessionRegistry } from '@nexus/core';
+import type { SessionLog, SessionRegistry } from '@nexus/core';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -375,6 +376,7 @@ interface WireSession {
   readonly events: AsyncGenerator<Event, void, undefined>;
   state: ConversationState;
   log(): readonly SessionEvent[];
+  rootLog(): SessionLog;
 }
 
 /** 真的 wire handler 與 pump，組裝是 `createNexusAgent`（計劃模式從一開始就開著），多掛幾顆條目。同 `plan-review-wire.test.ts`。 */
@@ -421,6 +423,11 @@ async function openWire(
         ?.list()
         .filter((entry) => entry.address.kind === 'root')
         .map((entry) => entry.log.events)[0] ?? [],
+    rootLog: () => {
+      const root = sessions?.list().find((entry) => entry.address.kind === 'root');
+      if (root === undefined) throw new Error('還沒有 root 日誌');
+      return root.log;
+    },
   };
 }
 
@@ -471,12 +478,7 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
       };
       const session = await openWire(
         loop,
-        // langgraph 那一次被中止的呼叫也吃掉一格腳本，所以多備一格。
-        [
-          { content: '我先規劃。', toolCalls: [EXIT] },
-          { content: '繼續做。' },
-          { content: '繼續做。' },
-        ],
+        [{ content: '我先規劃。', toolCalls: [EXIT] }, { content: '繼續做。' }],
         [stopper],
       );
       await session.client.runStart(session.thread, '幫我改一下');
@@ -503,25 +505,17 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
 
       expect(fired).toBe(1);
       const stopped = session.log().slice(before);
-      // native 在整條 model-call middleware 之前派 pre-step，中止的那一步沒有 `model/start`；langgraph 的轉接格在 `wrapModelCall` 裡、
-      // 起訖紀錄器的外側，往內交之後照樣叫模型，所以那一次呼叫記了一對 `model/start`／`model/end`（`outcome: 'aborted'`）。
-      expect(typesOf(stopped)).toEqual(
-        loop === 'native'
-          ? ['turn/start', 'tool/call', 'tool/result', 'turn/end']
-          : ['turn/start', 'tool/call', 'tool/result', 'model/start', 'model/end', 'turn/end'],
-      );
+      // 中止的那一步不叫模型，沒有 `model/start`（#2618）。
+      expect(typesOf(stopped)).toEqual(['turn/start', 'tool/call', 'tool/result', 'turn/end']);
       expect(stopped[0]?.data).toEqual({ kind: 'resume' });
       expect(
         (stopped[2]?.data as { message?: { data?: { content?: unknown } } }).message?.data?.content,
       ).toBe(PLAN_APPROVED_MESSAGE);
-      if (loop === 'langgraph') expect(stopped[4]?.data).toMatchObject({ outcome: 'aborted' });
       expect(stopped.at(-1)?.data).toEqual({
         reason: { kind: 'aborted', cause: { kind: 'user' } },
       });
       expect(typesOf(session.log())).not.toContain('plan/mode');
-      // native 中止的那一步沒叫模型。langgraph 的轉接格往內交之後照叫：模型收到了請求（這時還沒交待關，請求裡仍是計劃模式），
-      // 隨即以中止收掉，就是上面那顆 `outcome: 'aborted'`。
-      expect(session.model.prompts).toHaveLength(loop === 'native' ? 1 : 2);
+      expect(session.model.prompts).toHaveLength(1);
       expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
 
       // 下一輪：第一步交出待關，那一次請求已經沒有指引。
@@ -542,11 +536,94 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
         'turn/end',
       ]);
       expect(resumed[3]?.data).toEqual({ active: false });
-      expect(session.model.prompts).toHaveLength(loop === 'native' ? 2 : 3);
+      expect(session.model.prompts).toHaveLength(2);
       expect(systemPromptOf(session.model.prompts.at(-1))).not.toContain(TEST_PLAN_GUIDANCE);
       expect(systemsOf(session.log())).toHaveLength(2);
       expect(systemsOf(session.log())[0]).toContain(TEST_PLAN_GUIDANCE);
       expect(systemsOf(resumed)[0]).not.toContain(TEST_PLAN_GUIDANCE);
+    },
+    60000,
+  );
+});
+
+const APPEND_FAILURE = '測試：plan/mode 寫不進去';
+
+describe('同意之後那一步寫 plan/mode 拋錯', () => {
+  it.each(['native', 'langgraph'] as const)(
+    '%s：這一步照常叫模型、還有指引；待關留著，下一輪第一步交出',
+    async (loop: Loop) => {
+      const session = await openWire(
+        loop,
+        [
+          { content: '我先規劃。', toolCalls: [EXIT] },
+          { content: '繼續做。' },
+          { content: '再繼續。' },
+        ],
+        [],
+      );
+      await session.client.runStart(session.thread, '幫我改一下');
+      await until(session, () => session.state.status === 'awaiting-input');
+      const pending = session.state.pendings[0] as PendingQuestion | undefined;
+      if (pending === undefined || !isQuestionPending(pending)) throw new Error('沒有掛著的提問');
+      await until(session, () => turnEnds(session) === 1);
+
+      // 只有第一次寫 `plan/mode` 拋錯，之後照常：待關還在的話，下一次就寫得進去。
+      const log = session.rootLog();
+      const append = log.append.bind(log);
+      let thrown = 0;
+      vi.spyOn(log, 'append').mockImplementation(((type, data, options) => {
+        if (type === 'plan/mode' && thrown === 0) {
+          thrown += 1;
+          throw new Error(APPEND_FAILURE);
+        }
+        return append(type, data, options);
+      }) as SessionLog['append']);
+
+      const before = session.log().length;
+      await session.client.inputRespond(session.thread, {
+        namespace: [...pending.namespace],
+        interrupt_id: pending.interruptId,
+        response: APPROVE,
+      });
+      await until(session, () => turnEnds(session) === 2);
+
+      expect(thrown).toBe(1);
+      const approvedTurn = session.log().slice(before);
+      // 沒有 `request/system`：系統提示詞跟上一次一樣，指引還在。
+      expect(typesOf(approvedTurn)).toEqual([
+        'turn/start',
+        'tool/call',
+        'tool/result',
+        'model/start',
+        'assistant/message',
+        'model/end',
+        'context/measure',
+        'turn/end',
+      ]);
+      expect(approvedTurn.at(-1)?.data).toEqual({});
+      expect(session.model.prompts).toHaveLength(2);
+      expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
+
+      const next = session.log().length;
+      await session.client.runStart(session.thread, '那就繼續。');
+      await until(session, () => turnEnds(session) === 3);
+      const resumed = session.log().slice(next);
+      expect(typesOf(resumed)).toEqual([
+        'inbox/spliced',
+        'turn/start',
+        'inbox/spliced',
+        'plan/mode',
+        'request/system',
+        'model/start',
+        'assistant/message',
+        'model/end',
+        'context/measure',
+        'turn/end',
+      ]);
+      expect(resumed[3]?.data).toEqual({ active: false });
+      expect(typesOf(session.log()).filter((type) => type === 'plan/mode')).toHaveLength(1);
+      expect(session.model.prompts).toHaveLength(3);
+      expect(systemPromptOf(session.model.prompts.at(-1))).not.toContain(TEST_PLAN_GUIDANCE);
     },
     60000,
   );

@@ -10,7 +10,9 @@
  *
  * **只折進 root**，而且只在 `langgraph` 下、有監聽者時掛：native 掛了會派兩次；沒有監聽者時不多一顆。
  *
- * 監聽者回 `{ kind: 'reject' }` 時這一輪收成被擋下（拋 {@link TurnBlockedError}），同 native。載荷的 `step` 在這裡一律是 `0`：
+ * 監聽者回 `{ kind: 'reject' }` 時這一輪收成被擋下（拋 {@link TurnBlockedError}）；沒擋下、而這一輪在監聽者跑的期間中止了，
+ * 就不往內交（{@link stopHere}，拋 `TurnCancelledError`）：那一步的請求快照與起訖都不寫，模型不被叫。reject 先判。
+ * 兩條都同 native：native 在整串 middleware 之前派，中止由外層 `turn-cancel.ts` 的 guard 擋下。載荷的 `step` 在這裡一律是 `0`：
  * `langgraph` 沒有步數可數，同 `turn-stopping.ts`。
  *
  * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：`langgraph` 那條路徑拿掉時，跟 `turn-stopping.ts` 一起收掉。
@@ -24,7 +26,7 @@ import type { AgentMiddleware } from 'langchain';
 import { TurnBlockedError } from './archive-gate.js';
 import type { EventDispatcher } from './events.js';
 import { callThreadId } from './session-address.js';
-import { turnCancelSignalOf } from './turn-cancel.js';
+import { stopHere, turnCancelSignalOf } from './turn-cancel.js';
 
 /** 這一顆的名字。 */
 export const PRE_STEP_ADAPTER_MIDDLEWARE_NAME = 'nexusPreStep';
@@ -44,16 +46,15 @@ export function createPreStepAdapterMiddleware(events: EventDispatcher): AgentMi
     wrapModelCall: async (request, handler) => {
       const configurable = (request as { runtime?: { configurable?: unknown } }).runtime
         ?.configurable;
+      const signal = turnCancelSignalOf({ configurable }) ?? NEVER_ABORTED;
       const decision = await events.waterfall(
         'agent/pre-step',
-        {
-          threadId: callThreadId({ configurable }),
-          step: 0,
-          signal: turnCancelSignalOf({ configurable }) ?? NEVER_ABORTED,
-        },
+        { threadId: callThreadId({ configurable }), step: 0, signal },
         async () => ({ kind: 'continue' as const }),
       );
       if (decision.kind === 'reject') throw new TurnBlockedError();
+      // 監聽者跑的期間按了停止：外層的 guard 已經放行過，這裡不看就會往內寫起訖、叫模型。
+      if (signal.aborted) return stopHere(request);
       return handler(request);
     },
   }) as unknown as AgentMiddleware;
