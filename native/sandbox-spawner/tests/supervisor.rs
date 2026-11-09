@@ -2439,6 +2439,32 @@ fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_ev
     assert!(!gone(logged_pid(&a, "pid")));
 }
 
+/// 停機中再收到停止訊號：宿主與對話行程一起被 SIGKILL，之後收對話行程時不把寫端已關的宿主當成「收不下撤銷」而再殺一次。
+#[test]
+fn a_second_stop_signal_sends_no_revoke_to_the_host_it_just_killed() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 600_000,
+        term_grace_ms: 600_000,
+        host: fake_host(&[]),
+        ..Options::default()
+    });
+    let socket = h.up("t,ignore-term");
+    let granted = |h: &Harness| {
+        let log = host_log(h);
+        let grants = log.iter().filter(|l| l.ends_with(" conversation t,ignore-term"));
+        grants.count()
+    };
+    assert!(wait_until(|| granted(&h) == 1), "{:?}", host_log(&h));
+    kill(h.pid(), libc::SIGTERM);
+    assert!(wait_until(|| log(&socket).contains(&"eof".to_string())));
+    kill(h.pid(), libc::SIGINT);
+    assert_eq!(h.down_of("t,ignore-term"), DeathCause::Shutdown);
+    assert!(h.wait_exit().success());
+    let err = std::fs::read(h.dir.join("supervisor.err")).unwrap();
+    let err = String::from_utf8_lossy(&err);
+    assert!(!err.contains("收不下撤銷"), "{err}");
+}
+
 /// 宿主對活著的對話行程回報 `unregistered`：那是它那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、或還排在監督行程這邊），
 /// 或撤銷之前就連上的連線（pid 被重用、上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的）。不隔離、不寫稽核，下一個宿主照樣拿到它；運作 log 記一行警告，只帶 pid 與宿主的連線編號。
 #[test]

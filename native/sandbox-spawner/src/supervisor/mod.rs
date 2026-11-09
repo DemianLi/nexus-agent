@@ -1907,10 +1907,12 @@ impl Supervisor {
                 }
                 // 收屍之前撤掉它的身分：這時 pid 還沒被收，不會被重用。撤銷要在收屍之前真的進 pipe；宿主每一輪先讀乾淨控制通道才處理連線，
                 // 所以 pid 被重用之後才來的連線，一定排在撤銷後面。寫不進去就當場殺掉宿主：新的宿主拿到的表本來就沒有這個 pid。
+                // 宿主正在停（`stop` 是 Some）的不送：`kill_now` 之後寫端已經關了，送了也丟掉，`flush_until` 回 false 不代表它收不下；
+                // `begin_stop` 之後它讀到 EOF 就刪掉 socket 結束，表跟著行程沒了（`finish` 時還排著沒寫完的那段窗口見 README n2）。
                 if let (true, Ok(pid), Some(host)) = (
                     identities.contains(&pid),
                     u32::try_from(pid),
-                    host.as_mut().filter(|host| host.ready),
+                    host.as_mut().filter(|host| host.ready && host.proc.stop.is_none()),
                 ) {
                     host.proc
                         .chan

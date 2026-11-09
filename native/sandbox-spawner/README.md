@@ -169,11 +169,12 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - s11 `a_zero_generation_violation_for_a_quarantined_conversation_keeps_its_role`（序號 0：撤銷之後宿主表上沒有它，還沒送 `hello` 的連線報的就是 0）
 - s12 `a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited`（序號 0：宿主在上一個行程收屍之前回報的，或那一筆還沒寫進宿主 pipe 的活行程）
 - s13 `a_zero_generation_read_after_the_pid_is_reused_does_not_inherit_the_quarantine`（`src/supervisor/mod.rs` 的單元測試：pid 重用在整合測試造不出來，直接建監督行程，P1 隔離、收屍，P2 重用 pid 後讀到 0）
+- s14 `a_second_stop_signal_sends_no_revoke_to_the_host_it_just_killed`（收屍時宿主正在停：不送撤銷，寫端已經關了也不當成收不下而再殺一次）
 
 **不測的格與原因**
 
 - n1 A⁰：要另一個 uid 的行程才造得出來；CI 的 `cargo test` 不用 root 跑（`ubuntu-latest`、沒有 container），測試行程換不了 uid，測試也不另用 sudo 或容器開 uid。程式只有一條路：`pid` 是 `None` 時查不到表，`hello` 走 `unregistered`，壞框走 `violation` 且沒有 pid 可撤。
-- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：就算送了，寫端關了之後補送的 `revoke` 也直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。
+- n2 宿主沒 `ready` 或正在停時不補送 `revoke`：`ready` 之前宿主還沒有 socket，不會有回報；正在停時，監督行程已經對宿主的 stdin 叫了 `finish`，或當場關了寫端並殺掉它的群組（`kill_now`）：就算送了，寫端關了之後補送的 `revoke` 也直接丟掉；只有 `finish` 當下還有排著沒寫完的，它會排在後面、在 EOF 之前被宿主讀到，宿主接著讀到 EOF 就結束。這段窗口測試造不穩。收屍時也一樣，宿主正在停就不送撤銷（s14 測的是 `kill_now` 那條）。
 - n3 開檔數用完：t20 把宿主的軟硬上限壓到 12 與 13（每條連線 2 個 fd，兩個相鄰的上限裡一定有一個走到 EMFILE），確認排著的連線被關掉、宿主 1 秒內用不到 20 個 tick、fd 空出來之後照常收連線。整台主機的 fd 用完、預留的 fd 開不回來的退避沒有測試：要把整台主機的 fd 用完。
 - n4 A⁺、R 的 5 s 逾時：跟 A⁻ 同一行判斷（`retain` 只看有沒有送過 `hello` 與連上多久，不看表），只測 A⁻（t16）。
 - n5 B 的「accept 之後照 A」沒有專門的測試：每條測試的連線都先經過 backlog 才被 accept。新登記只改表、不碰連線，`hello` 驗的是驗那一刻的表（先讀乾淨控制通道），所以登記在 accept 之前或之後到，結果一樣；accept 不讀資料，EOF 照 A 那幾列的 `retain` 處理（讀碼）。
