@@ -438,16 +438,32 @@ describe('同意之後的待關', () => {
     expect(modes(log)).toEqual([false]);
   });
 
-  it('寫 plan/mode 拋錯：那一步以那個錯收尾，待關沒了，下一步照樣有指引', async () => {
-    const { log, modelStep } = await approved();
+  it('寫 plan/mode 拋錯：那一步照常往下、還有指引，記一行 warn；待關留著，下一步交出', async () => {
+    const { registry, log, modelStep } = await approved();
     const failing = failPlanModeAppendOnce(log);
 
-    await expect(modelStep('plan', 'model_request:b')).rejects.toThrow(APPEND_FAILURE);
+    expect(await modelStep('plan', 'model_request:b')).toContain(GUIDANCE);
     expect(failing.thrown()).toBe(1);
     expect(modes(log)).toEqual([]);
+    expect(registry.logger.warnings().map((warning) => warning.message)).toEqual([
+      expect.stringContaining(APPEND_FAILURE),
+    ]);
 
-    expect(await modelStep('plan', 'model_request:c')).toContain(GUIDANCE);
+    expect(await modelStep('plan', 'model_request:c')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
+    await modelStep('plan', 'model_request:d');
+    expect(modes(log)).toEqual([false]);
+  });
+
+  it('同意之後打 /plan off、寫 plan/mode 拋錯：命令拋出去，待關留著，下一步交出', async () => {
+    const { registry, log, modelStep } = await approved();
+    failPlanModeAppendOnce(log);
+
+    await expect(runPlan(registry.commands, 'off')).rejects.toThrow(APPEND_FAILURE);
     expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('plan', 'model_request:b')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
   });
 
   it('同意之後、下一步之前打 /plan：待關被丟掉，模式留著，下一步照樣有指引', async () => {
@@ -1016,6 +1032,23 @@ describe('狀態表以 root 日誌為鍵（#2551）', () => {
     } finally {
       a.detach();
       b.detach();
+    }
+  });
+
+  it('寫 plan/mode 拋錯：錯原樣往外，待關留著，下一次交出、只寫一顆', () => {
+    const a = sessionOn('thread-a');
+    try {
+      const failing = failPlanModeAppendOnce(a.log);
+      state.queueExit(a.session);
+      expect(() => state.settleExit(a.log)).toThrow(APPEND_FAILURE);
+      expect(failing.thrown()).toBe(1);
+      expect(modes(a.log)).toEqual([]);
+      state.settleExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+      state.settleExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+    } finally {
+      a.detach();
     }
   });
 

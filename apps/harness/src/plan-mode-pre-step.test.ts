@@ -12,11 +12,12 @@
  *
  * 圖片省略、摘要器、換模型那幾格在腳本 serve 上不寫事件（沒有型錄、沒到摘要門檻），這裡不量。
  *
- * 另外兩組在兩個 loop 上各跑一次：
+ * 另外三組在兩個 loop 上各跑一次：
  *
  * - 插件的 `agent/pre-step` listener 拋錯：錯原樣往外，這一輪以那個錯收尾，模型沒被叫到。插件是樹上的函式插件，經 serve 的 `--patch` 插進清單。
  * - pre-step 那一刻這一步已經中止（人按停止）：待關不交出，留到下一輪的第一步交出，那一步的請求沒有指引。停止的時機由一位宿主層的
  *   `agent/pre-step` 監聽者卡住：它在同意之後的第一步送 `run.cancel`，等這一步的 signal 中止才往內交。
+ * - 同意之後那一步寫 `plan/mode` 拋錯：這一步照常叫模型、仍在計劃模式，待關留到下一輪的第一步交出。拋錯的接縫是 root 日誌的 `append`。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
@@ -562,14 +563,14 @@ const APPEND_FAILURE = '測試：plan/mode 寫不進去';
 
 describe('同意之後那一步寫 plan/mode 拋錯', () => {
   it.each(['native', 'langgraph'] as const)(
-    '%s：這一輪以那個錯收尾，待關沒了，下一輪照樣有指引',
+    '%s：這一步照常叫模型、還有指引；待關留著，下一輪第一步交出',
     async (loop: Loop) => {
       const session = await openWire(
         loop,
         [
           { content: '我先規劃。', toolCalls: [EXIT] },
           { content: '繼續做。' },
-          { content: '繼續做。' },
+          { content: '再繼續。' },
         ],
         [],
       );
@@ -600,18 +601,42 @@ describe('同意之後那一步寫 plan/mode 拋錯', () => {
       await until(session, () => turnEnds(session) === 2);
 
       expect(thrown).toBe(1);
-      const failed = session.log().slice(before);
-      expect(typesOf(failed)).toEqual(['turn/start', 'tool/call', 'tool/result', 'turn/failed']);
-      expect(failed.at(-1)?.data).toMatchObject({ message: APPEND_FAILURE });
-      expect(session.model.prompts).toHaveLength(1);
+      const approvedTurn = session.log().slice(before);
+      // 沒有 `request/system`：系統提示詞跟上一次一樣，指引還在。
+      expect(typesOf(approvedTurn)).toEqual([
+        'turn/start',
+        'tool/call',
+        'tool/result',
+        'model/start',
+        'assistant/message',
+        'model/end',
+        'context/measure',
+        'turn/end',
+      ]);
+      expect(approvedTurn.at(-1)?.data).toEqual({});
+      expect(session.model.prompts).toHaveLength(2);
+      expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
 
       const next = session.log().length;
       await session.client.runStart(session.thread, '那就繼續。');
       await until(session, () => turnEnds(session) === 3);
       const resumed = session.log().slice(next);
-      expect(typesOf(resumed)).not.toContain('plan/mode');
-      expect(typesOf(session.log())).not.toContain('plan/mode');
-      expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
+      expect(typesOf(resumed)).toEqual([
+        'inbox/spliced',
+        'turn/start',
+        'inbox/spliced',
+        'plan/mode',
+        'request/system',
+        'model/start',
+        'assistant/message',
+        'model/end',
+        'context/measure',
+        'turn/end',
+      ]);
+      expect(resumed[3]?.data).toEqual({ active: false });
+      expect(typesOf(session.log()).filter((type) => type === 'plan/mode')).toHaveLength(1);
+      expect(session.model.prompts).toHaveLength(3);
+      expect(systemPromptOf(session.model.prompts.at(-1))).not.toContain(TEST_PLAN_GUIDANCE);
     },
     60000,
   );

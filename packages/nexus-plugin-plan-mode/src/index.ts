@@ -72,6 +72,9 @@
  * 不靠宿主只在 root 派。被內側擋下或已經中止的那一步不叫這位監聽者（`@nexus/tools` 的 `ToolPreStepListener`），`afterAgent` 插話跳回模型的那一次，
  * native 不派 pre-step：兩種情形待關都等到下一步。
  *
+ * **寫成功才拿掉待關。** 寫 `plan/mode` 拋錯時，監聽者把錯收成一行 `thread.logger` 的 warn，不往外拋：這一步照常往下，模式還開著、
+ * 指引照夾，待關留到下一個交得出它的步驟再寫。`/plan` 要寫 `plan/mode` 時同理，寫成功才丟待關；方向與模式已經一致、不用寫時直接丟。
+ *
  * 待關只活在記憶體裡：同意之後這一輪被停掉，它等到下一輪第一步才交出去；
  * 行程在那之前重開，它就沒了，模式留在開著。
  *
@@ -142,7 +145,7 @@
  * 「pending intent 還沒被 `beforeAgent` 交出去」，那一格已經不在了。）所以 `/plan` 之後緊接著
  * `/plan off` 是兩次 `committed`，日誌上兩顆 `plan/mode`。
  *
- * **兩輪之間唯一可能排著的是 `exit_plan_mode` 的待關**（同意之後那一輪被停掉）。命令先把它丟掉再判：
+ * **兩輪之間唯一可能排著的是 `exit_plan_mode` 的待關**（同意之後那一輪被停掉）。命令勝過它，成功落定時把它丟掉：
  * 人在兩輪之間打的那一行比模型上一輪的同意新。所以那時 `/plan` 是「已經在計劃模式」、模式留著；
  * `/plan off` 照常關。
  *
@@ -384,7 +387,7 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  * **`off` 以外的參數都是進入，非空的部分是要送進對話的話**，同 dsh（見 {@link parsePlanCommandArgs}）。
  * 「`/plan` 的方向與模式一致」這條關係由這個套件配套入口看日誌檢（見 `invariant.ts`）。
  *
- * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
+ * **命令勝過排著的待關**：成功落定時待關跟著丟（見檔頭「兩值」那節最後一段）；落定成 `error` 時待關照樣排著。
  *
  * @param state - 這次掛載的狀態表，丟掉排著的待關用。
  * @param session - 執行器交來的那份日誌上的計劃模式；那份日誌沒接計劃模式時是 `undefined`。
@@ -413,15 +416,17 @@ function planCommandResult(
   if (request.kind === 'enter' && (request.message !== undefined || attachments.length > 0)) {
     steer(request.message ?? '', attachments);
   }
-  state.dropExit(session);
   const entering = request.kind === 'enter';
   if (session.active() === entering) {
+    state.dropExit(session);
     return {
       kind: 'success',
       text: entering ? PLAN_ALREADY_ACTIVE_MESSAGE : PLAN_ALREADY_INACTIVE_MESSAGE,
     };
   }
+  // 寫成功才丟待關：寫日誌拋錯時命令落定成 `error`，待關照樣排著。
   session.log.append('plan/mode', { active: entering });
+  state.dropExit(session);
   return { kind: 'success', text: entering ? PLAN_ENTERED_MESSAGE : PLAN_LEFT_MESSAGE };
 }
 
@@ -618,7 +623,7 @@ function mountPlanModeThread(
   state: PlanModeState,
 ): void {
   const { guidance, startActive } = config;
-  const { join, on } = thread;
+  const { join, on, logger } = thread;
   if (join === undefined || on === undefined) {
     throw new Error(
       'plan-mode 要宿主的 ToolThread 有 join 與收 agent/pre-step 的 on（@nexus/tools 2.11.0 起），這個宿主沒有提供',
@@ -650,7 +655,12 @@ function mountPlanModeThread(
       threadId === undefined
         ? onlyAttached()
         : [...attachedHere].find((each) => each.log.sessionId === threadId);
-    if (session !== undefined) state.settleExit(session.log);
+    if (session === undefined) return;
+    try {
+      state.settleExit(session.log);
+    } catch (error) {
+      logger.warn(`plan-mode：寫 plan/mode 失敗，待關留到下一步再寫：${String(error)}`);
+    }
   });
   const active = (call: unknown): boolean => {
     const found = forCall(call);
