@@ -278,8 +278,7 @@ struct Host {
 const EXIT_PROTOCOL: i32 = 3;
 /// 宿主在 `ready` 之前連續失敗到上限而停機時的結束碼。
 const EXIT_HOST_FAILED: i32 = 4;
-/// 宿主的插件清單壞了（宿主報 `config-broken` 或在 `ready` 之前回 [`crate::host::EXIT_CONFIG`]）而停機時的結束碼：
-/// 宿主一次都還沒 `ready` 過就壞了，或 `ready` 過之後重起時壞到連續失敗的上限。
+/// 這個監督行程起來之後宿主一次都還沒 `ready` 過、插件清單就壞了（宿主報 `config-broken` 或回 [`crate::host::EXIT_CONFIG`]）而停機時的結束碼。
 const EXIT_HOST_CONFIG: i32 = 5;
 /// 撤銷寫進宿主控制通道最多等這麼久；收屍會等它，所以要短。
 const REVOKE_WRITE_LIMIT: Duration = Duration::from_millis(500);
@@ -327,7 +326,7 @@ struct Supervisor {
 
 /// 執行檔的入口。回 0：停機完成；1：起不來（signalfd、`PR_SET_CHILD_SUBREAPER`、`--run-dir`、`--audit`），
 /// 或執行中 poll 失敗（先殺掉所有群組）；2：參數錯；3：前台或宿主的 `hello` 對不上，停機完成；4：宿主 `ready` 之前連續失敗到上限，停機完成；
-/// 5：宿主的插件清單壞了（一次都還沒 `ready` 過，或重起時壞到連續失敗的上限），停機完成。
+/// 5：宿主一次都還沒 `ready` 過、插件清單就壞了，停機完成。
 pub fn run(argv: Vec<OsString>) -> i32 {
     let args = match args::parse(&argv) {
         Ok(args) => args,
@@ -1344,14 +1343,13 @@ impl Supervisor {
                 say!("宿主起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Host { pid: 0, exit: Exit::NOT_STARTED, ready: false, error: Some(&error) });
-                self.host_failed(false, Duration::ZERO, false);
+                self.host_failed(false, Duration::ZERO);
             }
         }
     }
 
     /// 宿主沒了（沒起成或結束了）：`ready` 之前的失敗連續到上限就停機，否則照退避排下一次重起。停機中不重起。
-    /// `config_broken`：這次失敗是插件清單壞了；到上限時以 5 停機、stderr 記設定壞了，不回 4。
-    fn host_failed(&mut self, ready: bool, lived: Duration, config_broken: bool) {
+    fn host_failed(&mut self, ready: bool, lived: Duration) {
         let Some(config) = &self.args.host else { return };
         if self.shutting_down {
             return;
@@ -1359,13 +1357,8 @@ impl Supervisor {
         if !ready {
             self.host_failures += 1;
             if self.host_failures >= config.start_failures {
-                if config_broken {
-                    say!("宿主設定壞了，ready 之前連續失敗 {} 次，整台停機", self.host_failures);
-                    self.begin_shutdown(EXIT_HOST_CONFIG);
-                } else {
-                    say!("宿主在 ready 之前連續失敗 {} 次，整台停機", self.host_failures);
-                    self.begin_shutdown(EXIT_HOST_FAILED);
-                }
+                say!("宿主在 ready 之前連續失敗 {} 次，整台停機", self.host_failures);
+                self.begin_shutdown(EXIT_HOST_FAILED);
                 return;
             }
         }
@@ -1556,7 +1549,8 @@ impl Supervisor {
                 (None, false) => host.timed_out.then(|| "ready 之前逾時".to_string()),
             };
             self.audit.record(&Record::Host { pid, exit, ready: host.ready, error: error.as_deref() });
-            // 設定錯每次重起都一樣。宿主還沒 ready 過就直接停機；ready 過的照退避重起，修好清單之後下一次重起就接上，宿主不在時對話照常跑。
+            // 設定錯每次重起都一樣。宿主還沒 ready 過就直接停機；ready 過的照退避重起、不算進連續失敗的次數（跟 ready 之後才死的一樣），
+            // 修好清單之後下一次重起就接上，宿主不在時對話照常跑。
             if let (true, Some(error)) = (config_broken, &error) {
                 if !self.shutting_down {
                     if self.host_ever_ready {
@@ -1567,13 +1561,13 @@ impl Supervisor {
                         return;
                     }
                 }
-                self.host_failed(false, host.started.elapsed(), true);
+                self.host_failed(true, host.started.elapsed());
                 return;
             }
             if !self.shutting_down {
                 say!("宿主結束了（{exit:?}，{}）", if host.ready { "ready 之後" } else { "ready 之前" });
             }
-            self.host_failed(host.ready, host.started.elapsed(), false);
+            self.host_failed(host.ready, host.started.elapsed());
             return;
         }
         if self.front.as_ref().is_some_and(|front| front.pid == pid) {

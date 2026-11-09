@@ -1609,15 +1609,18 @@ fn a_list_that_breaks_after_ready_restarts_the_host_and_conversations_keep_runni
     assert!(h.child.try_wait().unwrap().is_none());
 }
 
-/// ready 過之後重起時一直設定壞了，到了連續失敗的上限照樣停機，stderr 寫設定壞了、結束碼 5，不寫成連續失敗的 4。
+/// ready 過之後重起時一直設定壞了：不算進連續失敗的次數，超過 `--host-start-failures` 也不停機，對話照常跑；改好清單，宿主又 ready。
 #[test]
-fn a_list_that_stays_broken_after_ready_stops_everything_with_5_at_the_failure_limit() {
-    let (mut h, _list, _a, _a_pid) = break_the_list_after_ready("2");
-    assert_eq!(h.wait_exit().code(), Some(5));
-    let hosts = host_lines(&h);
-    assert_eq!(hosts.len(), 3, "ready 的那一個與壞掉的兩次：{hosts:?}");
-    let stderr = supervisor_stderr(&h);
-    assert!(stderr.contains("宿主設定壞了，ready 之前連續失敗 2 次，整台停機"), "{stderr}");
+fn a_list_that_stays_broken_after_ready_never_counts_toward_the_failure_limit() {
+    let (mut h, list, _a, a_pid) = break_the_list_after_ready("2");
+    let broken = |h: &Harness| host_lines(h).into_iter().filter(|l| l.contains("宿主設定壞了：")).count();
+    assert!(wait_until(|| broken(&h) >= 3), "{:?}", host_lines(&h));
+    assert!(h.child.try_wait().unwrap().is_none(), "設定壞了不算失敗，到不了上限：{}", supervisor_stderr(&h));
+    assert!(!gone(a_pid), "宿主不在時對話行程照跑");
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let b = h.up("b,host-retry:15000");
+    assert!(wait_until(|| log(&b).contains(&"host hello".to_string())), "{:?}", raw_log(&b));
+    assert!(h.child.try_wait().unwrap().is_none());
 }
 
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
