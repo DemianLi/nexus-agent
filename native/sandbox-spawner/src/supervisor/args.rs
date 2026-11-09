@@ -71,7 +71,7 @@ pub struct Args {
     pub audit: PathBuf,
     pub front: OsString,
     pub front_args: Vec<OsString>,
-    /// 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <路徑>`。
+    /// 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <路徑>`；有給 `--host` 時再加 `--host-socket <--run-dir>/host.sock`。
     pub conversation: OsString,
     pub conversation_args: Vec<OsString>,
     pub eof_grace: Duration,

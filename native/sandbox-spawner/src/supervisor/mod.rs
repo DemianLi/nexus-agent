@@ -1080,6 +1080,10 @@ impl Supervisor {
         let mut args = self.args.conversation_args.clone();
         args.push("--socket".into());
         args.push(socket.clone().into_os_string());
+        if self.args.host.is_some() {
+            args.push("--host-socket".into());
+            args.push(self.host_socket().into_os_string());
+        }
         match new_token().and_then(|token| Ok((process::spawn(&self.args.conversation, &args, true)?, token))) {
             Ok(((pid, chan, stderr), token)) => {
                 let generation = self.next_generation();
@@ -1327,9 +1331,14 @@ impl Supervisor {
         }
     }
 
+    /// 宿主 bind 的路徑；對話行程經 `--host-socket` 拿到的也是這一個。
+    fn host_socket(&self) -> PathBuf {
+        self.args.run_dir.join("host.sock")
+    }
+
     fn start_host(&mut self) {
+        let socket = self.host_socket();
         let Some(config) = &self.args.host else { return };
-        let socket = self.args.run_dir.join("host.sock");
         let mut args = config.args.clone();
         args.push("--socket".into());
         args.push(socket.into_os_string());

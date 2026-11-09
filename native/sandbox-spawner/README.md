@@ -36,7 +36,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 
 - 前台與對話行程的 stdin／stdout 是控制通道（框格式見上），stdout 只能寫框。前台的 stderr 照監督行程的；對話行程的 stderr 接到監督行程，由它原樣轉到自己的 stderr，同時找 V8 heap 用完的訊息（見死因）；leader 收屍時再讀最多 1 MiB 就關掉，之後群組外還活著的後代寫的不轉出。**監督行程的 stderr 一定要有人讀**：它是阻塞的而沒人讀時，整個監督行程（計時器、RSS 上限、拆除梯度）都停住；寫不出去（非阻塞而滿了、或壞了）的丟掉、記數，監督行程自己的訊息與轉出的對話行程 stderr 都一樣，下次寫得出去時先講一句丟了多少。
 - 對話行程的 leader 本身要是跑 V8 的 `node`（node 的旗標放在腳本前面；或用 `exec` 換成 node），不能多一層會留下來的外層行程（shell、`tsx` CLI）：外層不是以 SIGABRT 結束，heap 會判成 `crash`，RSS 量到的也是外層。
-- 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
+- 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <--run-dir>/c<序號>.sock`，有給 `--host` 時再加 `--host-socket <--run-dir>/host.sock`（就是宿主 bind 的那一個）。`--run-dir` 不在就建成 0700；已存在就要是自己擁有、0700 的目錄；也不能長到 socket 路徑放不進 `sun_path`（108 bytes）。否則不起。
 - 每個子行程自成一個行程群組，設 `PR_SET_PDEATHSIG`（SIGKILL）：監督行程被 SIGKILL，前台與對話行程跟著死。監督行程設了 `PR_SET_CHILD_SUBREAPER`，後代成了孤兒也由它收。
 - 每條控制通道的第一框都是 `hello`，協定版本是 `src/supervisor_protocol.rs` 的 `PROTOCOL_VERSION`：子行程一起來監督行程先送自己的，給前台與對話行程的帶連宿主用的 token（只在這一框，不放 env 也不放 argv）；子行程送來的第一框也要是版本相等的 `hello`。對話行程不是就當場 SIGKILL，死因 `protocol`；前台或宿主送來的解得開卻不是，就不重起，整台停機、回 3。第一框解不開的照壞框處置：前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗。
 - 前台結束（不是停機）就隔 `--front-restart-ms` 重起；新的前台會先收到每條已經 `up` 的對話行程的 `up`。前台不在的期間要給它的訊息丟掉。

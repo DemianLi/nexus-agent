@@ -478,12 +478,7 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
       };
       const session = await openWire(
         loop,
-        // langgraph 那一次被中止的呼叫也吃掉一格腳本，所以多備一格。
-        [
-          { content: '我先規劃。', toolCalls: [EXIT] },
-          { content: '繼續做。' },
-          { content: '繼續做。' },
-        ],
+        [{ content: '我先規劃。', toolCalls: [EXIT] }, { content: '繼續做。' }],
         [stopper],
       );
       await session.client.runStart(session.thread, '幫我改一下');
@@ -510,25 +505,17 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
 
       expect(fired).toBe(1);
       const stopped = session.log().slice(before);
-      // native 在整條 model-call middleware 之前派 pre-step，中止的那一步沒有 `model/start`；langgraph 的轉接格在 `wrapModelCall` 裡、
-      // 起訖紀錄器的外側，往內交之後照樣叫模型，所以那一次呼叫記了一對 `model/start`／`model/end`（`outcome: 'aborted'`）。
-      expect(typesOf(stopped)).toEqual(
-        loop === 'native'
-          ? ['turn/start', 'tool/call', 'tool/result', 'turn/end']
-          : ['turn/start', 'tool/call', 'tool/result', 'model/start', 'model/end', 'turn/end'],
-      );
+      // 中止的那一步不叫模型，沒有 `model/start`（#2618）。
+      expect(typesOf(stopped)).toEqual(['turn/start', 'tool/call', 'tool/result', 'turn/end']);
       expect(stopped[0]?.data).toEqual({ kind: 'resume' });
       expect(
         (stopped[2]?.data as { message?: { data?: { content?: unknown } } }).message?.data?.content,
       ).toBe(PLAN_APPROVED_MESSAGE);
-      if (loop === 'langgraph') expect(stopped[4]?.data).toMatchObject({ outcome: 'aborted' });
       expect(stopped.at(-1)?.data).toEqual({
         reason: { kind: 'aborted', cause: { kind: 'user' } },
       });
       expect(typesOf(session.log())).not.toContain('plan/mode');
-      // native 中止的那一步沒叫模型。langgraph 的轉接格往內交之後照叫：模型收到了請求（這時還沒交待關，請求裡仍是計劃模式），
-      // 隨即以中止收掉，就是上面那顆 `outcome: 'aborted'`。
-      expect(session.model.prompts).toHaveLength(loop === 'native' ? 1 : 2);
+      expect(session.model.prompts).toHaveLength(1);
       expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
 
       // 下一輪：第一步交出待關，那一次請求已經沒有指引。
@@ -549,7 +536,7 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
         'turn/end',
       ]);
       expect(resumed[3]?.data).toEqual({ active: false });
-      expect(session.model.prompts).toHaveLength(loop === 'native' ? 2 : 3);
+      expect(session.model.prompts).toHaveLength(2);
       expect(systemPromptOf(session.model.prompts.at(-1))).not.toContain(TEST_PLAN_GUIDANCE);
       expect(systemsOf(session.log())).toHaveLength(2);
       expect(systemsOf(session.log())[0]).toContain(TEST_PLAN_GUIDANCE);

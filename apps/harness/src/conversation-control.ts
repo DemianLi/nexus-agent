@@ -3,7 +3,7 @@
  * 從 stdin 讀監督行程的命令，往 stdout 寫回報，框格式與編解碼在 `supervisor-protocol.ts`。**stdout 只寫框**，日誌一律走 stderr。
  *
  * - `hello`：建構時就送自己的。監督行程的第一框也要是版本相同的 `hello`，不是就當讀到解不開的框；它帶的 token 留在 {@link ConversationControl.hostToken}，
- *   給連宿主用。
+ *   並交給 `onHostToken`，給連宿主用。
  * - `bind(threadId)`：記下綁哪一條，叫 `open` 把它建起來，回 `bound`。建不起來也回 `bound`、記一行：之後經這條 thread 的請求會再建一次，
  *   失敗的話回的是 wire 上那個原因的專用碼（例如日誌太大），前台照常轉給瀏覽器。
  * - 閒置：每 `pollMs` 問一次 `idleState`。變成閒置時送 `idle(idleMs)`，`idleMs` 從「handler 的最後活動時間」與「上一次問到不閒的時間」
@@ -52,6 +52,8 @@ export interface ConversationControlOptions {
   /** stdin 讀到 EOF，或讀到解不開的框（框格式錯了，之後的位元組都對不上）。只叫一次。 */
   readonly onEnd: () => void;
   readonly warn: (message: string) => void;
+  /** 收到監督行程 `hello` 帶的 token 時叫一次。 */
+  readonly onHostToken?: (token: string) => void;
 }
 
 /** 回報 `idle` 時 `idleMs` 的上限（u32）。 */
@@ -175,6 +177,7 @@ export class ConversationControl {
           return;
         }
         this.#hostToken = command.token;
+        this.#options.onHostToken?.(command.token);
         continue;
       }
       if (command.type === 'hello') this.#options.warn('[控制面] 監督行程又送了一次 hello，不理');
