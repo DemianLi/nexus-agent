@@ -23,7 +23,7 @@ use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
 /// 連宿主 socket 的協定（[`crate::host_protocol`]）用同一個版本，`host-vectors.json` 的 `protocolVersion` 也核對。
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// 監督行程 → 對話行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,7 +156,9 @@ pub enum HostCommand {
     Hello { version: u32 },
     /// 這個 pid 拿這個 token 連進來就是它：前台，或對話行程（`thread` 是它綁的那條；還沒綁是空的）。同一個 pid 再送一次就整筆換掉
     /// （對話行程綁了 thread 時）。宿主每次（重）起送出 [`HostReport::Ready`] 之後，監督行程把當下整張表重送一遍。
-    Grant { pid: u32, token: Vec<u8>, role: Role, thread: Vec<u8> },
+    /// `generation` 是監督行程每 spawn 一個行程就發的序號（從 1 起，0 保留給「沒有」）：同一個行程的每一筆都一樣，pid 被重用之後的新行程不同。
+    /// 宿主報 [`HostReport::Violation`] 時原樣帶回，監督行程才分得出那則回報是不是現在這個行程的。
+    Grant { pid: u32, generation: u32, token: Vec<u8>, role: Role, thread: Vec<u8> },
     /// 這個 pid 的身分作廢。監督行程在收屍之前送（那時 pid 還沒被收，不會被別的行程拿去用），隔離一個身分時也送。
     /// 宿主收到時先把 listen backlog 收完，再撤掉表上那一筆：它驗過身分的連線斷掉；還沒送 `hello` 的（含剛從 backlog 收進來的）
     /// 從此不管送什麼都只回 `rejected`、報 [`HostReport::Unregistered`]，同一個 pid 號碼之後再登記也不照新的那一筆驗。
@@ -173,13 +175,17 @@ pub enum HostReport {
     /// 一條連線違反協定（框太大、內容解不開、重複的 `hello`、版本或 token 不對），宿主已經斷了它，那個 pid 的身分也在宿主那邊作廢了
     /// （監督行程那邊還排著的 `grant` 寫過去會再登記，所以監督行程隔離時再送一次 `revoke`）。撤過的連線不會報這個，見 `Unregistered`。
     /// `pid` 是 `SO_PEERCRED` 讀到的，讀不到或 uid 不同是 0；`reason` 是給人看的一句話（UTF-8）。
-    Violation { pid: u32, reason: Vec<u8> },
+    /// `generation` 是那條連線所屬的那一筆 [`HostCommand::Grant`] 的序號：送過 `hello` 的是驗它時那一筆，還沒送的是宿主讀乾淨控制通道之後
+    /// 表上那個 pid 的那一筆；表上沒有是 0。監督行程只在 pid 與序號都對上現在的行程時隔離它。
+    Violation { pid: u32, generation: u32, reason: Vec<u8> },
     /// 宿主拒了一條連線、斷了它，沒有撤任何身分：它送了 `hello` 而 pid 不在宿主的表上，或它是撤過的連線（送什麼都算）。`pid` 同上。
     /// 不一定是違規：合法行程那一筆還沒寫進宿主的 pipe 時（宿主剛起來或剛重起、監督行程還沒送表，或那一筆還排在監督行程這邊），
     /// 或這是撤銷之前就連上的連線（pid 被重用、同一個號碼上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的），也是這樣；要不要算違規由監督行程判斷。
     /// `conn` 是宿主替連線編的號（這個宿主行程裡依 accept 的順序從 1 起），宿主自己的 log 也寫這個號，兩邊對得起來。
     /// `reason` 是宿主回給那條連線的理由（UTF-8）：送 `hello` 的是「沒有登記」；撤過的連線違反協定（壞框，或剛被撤的已驗連線送重複的 `hello`）是那個違規的理由；監督行程判成違規時照它寫稽核。
     Unregistered { pid: u32, conn: u32, reason: Vec<u8> },
+    /// `--plugins` 的插件清單讀不了或解析不過，取代 `ready`；送完宿主就以 [`crate::host::EXIT_CONFIG`] 結束。`reason` 是宿主寫的那句錯誤（UTF-8）。
+    ConfigBroken { reason: Vec<u8> },
 }
 
 const CMD_HELLO: u8 = b'w';
@@ -210,6 +216,7 @@ const HREP_HELLO: u8 = b'K';
 const HREP_READY: u8 = b'Q';
 const HREP_VIOLATION: u8 = b'P';
 const HREP_UNREGISTERED: u8 = b'N';
+const HREP_CONFIG_BROKEN: u8 = b'G';
 
 fn decoded<T>(mut r: Reader<'_>, read: impl FnOnce(&mut Reader<'_>, u8) -> Result<T, DecodeError>) -> Result<T, DecodeError> {
     let kind = r.u8()?;
@@ -404,9 +411,10 @@ pub fn encode_host_command(command: &HostCommand) -> Vec<u8> {
             w.u8(HCMD_HELLO);
             w.u32(*version);
         }
-        HostCommand::Grant { pid, token, role, thread } => {
+        HostCommand::Grant { pid, generation, token, role, thread } => {
             w.u8(HCMD_GRANT);
             w.u32(*pid);
+            w.u32(*generation);
             w.bytes(token);
             w.u8(*role as u8);
             w.bytes(thread);
@@ -425,6 +433,7 @@ pub fn decode_host_command(payload: &[u8]) -> Result<HostCommand, DecodeError> {
             HCMD_HELLO => HostCommand::Hello { version: r.u32()? },
             HCMD_GRANT => HostCommand::Grant {
                 pid: r.u32()?,
+                generation: r.u32()?,
                 token: r.bytes()?,
                 role: match r.u8()? {
                     0 => Role::Front,
@@ -447,9 +456,14 @@ pub fn encode_host_report(report: &HostReport) -> Vec<u8> {
             w.u32(*version);
         }
         HostReport::Ready => w.u8(HREP_READY),
-        HostReport::Violation { pid, reason } => {
+        HostReport::Violation { pid, generation, reason } => {
             w.u8(HREP_VIOLATION);
             w.u32(*pid);
+            w.u32(*generation);
+            w.bytes(reason);
+        }
+        HostReport::ConfigBroken { reason } => {
+            w.u8(HREP_CONFIG_BROKEN);
             w.bytes(reason);
         }
         HostReport::Unregistered { pid, conn, reason } => {
@@ -467,8 +481,9 @@ pub fn decode_host_report(payload: &[u8]) -> Result<HostReport, DecodeError> {
         Ok(match kind {
             HREP_HELLO => HostReport::Hello { version: r.u32()? },
             HREP_READY => HostReport::Ready,
-            HREP_VIOLATION => HostReport::Violation { pid: r.u32()?, reason: r.bytes()? },
+            HREP_VIOLATION => HostReport::Violation { pid: r.u32()?, generation: r.u32()?, reason: r.bytes()? },
             HREP_UNREGISTERED => HostReport::Unregistered { pid: r.u32()?, conn: r.u32()?, reason: r.bytes()? },
+            HREP_CONFIG_BROKEN => HostReport::ConfigBroken { reason: r.bytes()? },
             _ => return Err(DecodeError("不認得的種類")),
         })
     })
@@ -558,8 +573,8 @@ mod tests {
     fn host_commands() -> Vec<HostCommand> {
         vec![
             HostCommand::Hello { version: PROTOCOL_VERSION },
-            HostCommand::Grant { pid: 4242, token: TOKEN.to_vec(), role: Role::Front, thread: Vec::new() },
-            HostCommand::Grant { pid: u32::MAX, token: TOKEN.to_vec(), role: Role::Conversation, thread: T.to_vec() },
+            HostCommand::Grant { pid: 4242, generation: 1, token: TOKEN.to_vec(), role: Role::Front, thread: Vec::new() },
+            HostCommand::Grant { pid: u32::MAX, generation: u32::MAX, token: TOKEN.to_vec(), role: Role::Conversation, thread: T.to_vec() },
             HostCommand::Revoke { pid: 4242 },
         ]
     }
@@ -568,8 +583,9 @@ mod tests {
         vec![
             HostReport::Hello { version: PROTOCOL_VERSION },
             HostReport::Ready,
-            HostReport::Violation { pid: 4242, reason: "框太大".as_bytes().to_vec() },
+            HostReport::Violation { pid: 4242, generation: 7, reason: "框太大".as_bytes().to_vec() },
             HostReport::Unregistered { pid: 4242, conn: 7, reason: "沒有登記".as_bytes().to_vec() },
+            HostReport::ConfigBroken { reason: "清單壞了".as_bytes().to_vec() },
         ]
     }
 
@@ -619,7 +635,7 @@ mod tests {
         expect("frontRequests", &[REQ_HELLO, REQ_ADMISSION_STOPPED, REQ_ENSURE, REQ_RELEASE]);
         expect("frontEvents", &[EV_HELLO, EV_STOP_ADMISSION, EV_UP, EV_DOWN, EV_CAPACITY, EV_STATS]);
         expect("hostCommands", &[HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE]);
-        expect("hostReports", &[HREP_HELLO, HREP_READY, HREP_VIOLATION, HREP_UNREGISTERED]);
+        expect("hostReports", &[HREP_HELLO, HREP_READY, HREP_VIOLATION, HREP_UNREGISTERED, HREP_CONFIG_BROKEN]);
         let downs: Vec<DeathCause> = events()
             .into_iter()
             .filter_map(|e| match e {
@@ -649,6 +665,7 @@ mod tests {
             CMD_HELLO, CMD_BIND, CMD_DRAIN, REP_HELLO, REP_READY, REP_BOUND, REP_TURN, REP_IDLE, REP_BUSY, REP_HEARTBEAT,
             REP_DRAINED, REQ_HELLO, REQ_ADMISSION_STOPPED, REQ_ENSURE, REQ_RELEASE, EV_HELLO, EV_STOP_ADMISSION, EV_UP,
             EV_DOWN, EV_CAPACITY, EV_STATS, HCMD_HELLO, HCMD_GRANT, HCMD_REVOKE, HREP_HELLO, HREP_READY, HREP_VIOLATION,
+            HREP_UNREGISTERED, HREP_CONFIG_BROKEN,
         ];
         assert_eq!(all.iter().collect::<std::collections::BTreeSet<_>>().len(), all.len());
         // 送錯方向的框：每一組的每一則，其他五支解碼器都不收。
@@ -684,8 +701,8 @@ mod tests {
             *down.last_mut().unwrap() = code;
             assert_eq!(decode_front_event(&down), Err(DecodeError("不認得的死因")));
         }
-        let mut grant = encode_host_command(&HostCommand::Grant { pid: 1, token: Vec::new(), role: Role::Front, thread: Vec::new() });
-        grant[9] = 2;
+        let mut grant = encode_host_command(&HostCommand::Grant { pid: 1, generation: 1, token: Vec::new(), role: Role::Front, thread: Vec::new() });
+        grant[13] = 2;
         assert_eq!(decode_host_command(&grant), Err(DecodeError("不認得的角色")));
     }
 

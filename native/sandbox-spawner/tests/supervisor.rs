@@ -1358,9 +1358,11 @@ fn running_host(h: &Harness) -> Option<u32> {
     children(h.pid()).into_iter().find(|&pid| String::from_utf8_lossy(&proc_file(pid, "cmdline")).contains("nexus-host"))
 }
 
+/// 版本不符含上一版（`PROTOCOL_VERSION - 1`）：上一版的子行程照樣被擋下。
 #[test]
 fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
-    for args in [["--hello-version", "99"].as_slice(), ["--skip-hello"].as_slice()] {
+    let previous = (PROTOCOL_VERSION - 1).to_string();
+    for args in [["--hello-version", "99"].as_slice(), ["--hello-version", &previous].as_slice(), ["--skip-hello"].as_slice()] {
         let mut h = Harness::start(Options { conversation_args: args.iter().map(|a| a.to_string()).collect(), ..Options::default() });
         assert_eq!(h.down("a"), DeathCause::Protocol, "{args:?}");
         let line = h.audit_line("\"cause\":\"protocol\"");
@@ -1370,7 +1372,11 @@ fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
 
 #[test]
 fn a_front_whose_first_frame_is_not_a_matching_hello_stops_everything_with_3() {
-    let wrong = [FrontRequest::Hello { version: PROTOCOL_VERSION + 1 }, FrontRequest::Ensure { thread_id: b"a".to_vec(), open: OpenMode::Run }];
+    let wrong = [
+        FrontRequest::Hello { version: PROTOCOL_VERSION + 1 },
+        FrontRequest::Hello { version: PROTOCOL_VERSION - 1 },
+        FrontRequest::Ensure { thread_id: b"a".to_vec(), open: OpenMode::Run },
+    ];
     for first in wrong {
         let mut h = Harness::start(Options { front_hello: None, ..Options::default() });
         h.request(&first);
@@ -1540,9 +1546,81 @@ fn a_host_that_never_gets_ready_is_killed_and_counts_as_a_failure() {
 
 #[test]
 fn a_host_with_the_wrong_version_stops_everything_with_3() {
-    let mut h = Harness::start(Options { host: fake_host(&["--version", "99"]), front_hello: None, ..Options::default() });
-    assert_eq!(h.wait_exit().code(), Some(3));
-    assert_eq!(host_lines(&h).len(), 1, "{:?}", h.audit());
+    for version in ["99".to_string(), (PROTOCOL_VERSION - 1).to_string()] {
+        let mut h = Harness::start(Options { host: fake_host(&["--version", &version]), front_hello: None, ..Options::default() });
+        assert_eq!(h.wait_exit().code(), Some(3), "{version}");
+        assert_eq!(host_lines(&h).len(), 1, "{version}：{:?}", h.audit());
+    }
+}
+
+/// 設定錯每次重起都一樣：真的宿主讀到壞掉的 `--plugins` 回 4，監督行程不重起、不算失敗，整台以 5 停機。
+#[test]
+fn a_host_with_a_broken_plugin_list_stops_everything_with_5_without_restarting_it() {
+    let list = temp_dir("plugins").join("host-plugins.json");
+    std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
+    let mut h = Harness::start(Options {
+        host: Some((PathBuf::from(HOST), vec!["--plugins".to_string(), list.display().to_string()])),
+        extra: vec!["--host-start-failures", "3"],
+        front_hello: None,
+        ..Options::default()
+    });
+    assert_eq!(h.wait_exit().code(), Some(5));
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 1, "只起過一次：{hosts:?}");
+    assert!(hosts[0].contains("\"exit_code\":4") && hosts[0].contains("宿主設定壞了：") && hosts[0].contains("沒有叫 沒有這支 的插件"), "{hosts:?}");
+    let stderr = supervisor_stderr(&h);
+    assert!(stderr.contains("宿主設定壞了") && stderr.contains("沒有叫 沒有這支 的插件"), "{stderr}");
+}
+
+/// 起一台帶 `--plugins` 的真宿主，先用好的清單讓它 `ready`、起一條對話連上它，再把清單換成壞的、殺掉宿主。
+fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf, PathBuf, i32) {
+    let list = temp_dir("plugins").join("host-plugins.json");
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let mut h = Harness::start(Options {
+        host: Some((PathBuf::from(HOST), vec!["--plugins".to_string(), list.display().to_string()])),
+        extra: vec!["--host-start-failures", start_failures],
+        ..Options::default()
+    });
+    let a = h.up("a,host-hello");
+    assert!(wait_until(|| log(&a).contains(&"host hello".to_string())), "{:?}", raw_log(&a));
+    let a_pid = logged_pid(&a, "pid");
+    let host = running_host(&h).expect("宿主在跑");
+    std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
+    kill(host, libc::SIGKILL);
+    (h, list, a, a_pid)
+}
+
+/// 宿主 `ready` 過之後清單才壞：照退避重起，每次失敗稽核都寫設定壞了與原文，對話行程照跑、整台不停；改好清單，下一次重起就接上。
+#[test]
+fn a_list_that_breaks_after_ready_restarts_the_host_and_conversations_keep_running() {
+    let (mut h, list, _a, a_pid) = break_the_list_after_ready("100");
+    let broken = |h: &Harness| host_lines(h).into_iter().filter(|l| l.contains("宿主設定壞了：") && l.contains("沒有叫 沒有這支 的插件")).count();
+    assert!(wait_until(|| broken(&h) >= 2), "{:?}", host_lines(&h));
+    let hosts = host_lines(&h);
+    assert!(hosts[0].contains("\"ready\":true") && !hosts[0].contains("宿主設定壞了"), "被殺的那一個：{hosts:?}");
+    assert!(hosts[1..].iter().all(|l| l.contains("\"exit_code\":4") && l.contains("\"ready\":false")), "{hosts:?}");
+    assert!(h.child.try_wait().unwrap().is_none(), "ready 過之後設定壞了不停機");
+    assert!(!gone(a_pid), "宿主不在時對話行程照跑");
+    assert!(supervisor_stderr(&h).contains("照退避重起"), "{}", supervisor_stderr(&h));
+
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let b = h.up("b,host-retry:15000");
+    assert!(wait_until(|| log(&b).contains(&"host hello".to_string())), "{:?}", raw_log(&b));
+    assert!(h.child.try_wait().unwrap().is_none());
+}
+
+/// ready 過之後重起時一直設定壞了：不算進連續失敗的次數，超過 `--host-start-failures` 也不停機，對話照常跑；改好清單，宿主又 ready。
+#[test]
+fn a_list_that_stays_broken_after_ready_never_counts_toward_the_failure_limit() {
+    let (mut h, list, _a, a_pid) = break_the_list_after_ready("2");
+    let broken = |h: &Harness| host_lines(h).into_iter().filter(|l| l.contains("宿主設定壞了：")).count();
+    assert!(wait_until(|| broken(&h) >= 3), "{:?}", host_lines(&h));
+    assert!(h.child.try_wait().unwrap().is_none(), "設定壞了不算失敗，到不了上限：{}", supervisor_stderr(&h));
+    assert!(!gone(a_pid), "宿主不在時對話行程照跑");
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let b = h.up("b,host-retry:15000");
+    assert!(wait_until(|| log(&b).contains(&"host hello".to_string())), "{:?}", raw_log(&b));
+    assert!(h.child.try_wait().unwrap().is_none());
 }
 
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
@@ -1612,19 +1690,72 @@ fn a_violation_revokes_the_live_identity_on_the_host() {
     assert!(!gone(a_pid), "被隔離的對話行程照跑");
 }
 
-/// 已經隔離的對話行程又被報違規：再寫一行稽核，也再送一次 `revoke`。
+/// 收掉對話行程 a，再起一條 b、等 b 那一筆 `grant` 進宿主：pipe 照順序，這時 a 的 `revoke` 都已經進宿主的 log。回 a 的 `revoke` 筆數。
+fn revokes_after_reaping(h: &mut Harness, a_pid: i32) -> usize {
+    kill(a_pid as u32, libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    let b = h.up("b");
+    let b_grant = format!("grant {} conversation b", logged_pid(&b, "pid"));
+    assert!(wait_until(|| host_log(h).contains(&b_grant)), "{:?}", host_log(h));
+    let revoke = format!("revoke {a_pid}");
+    host_log(h).iter().filter(|l| **l == revoke).count()
+}
+
+/// 已經隔離的對話行程又被報違規：再寫一行稽核，但不補送第二次 `revoke`：`revoke` 只有隔離那一次與收屍那一次。
 #[test]
-fn a_second_violation_for_a_quarantined_conversation_is_audited_and_revoked_again() {
+fn a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again() {
     let mut h = Harness::start(Options { host: fake_host(&["--violate-twice"]), ..Options::default() });
     let a = h.up("a");
     let a_pid = logged_pid(&a, "pid");
-    let revoke = format!("revoke {a_pid}");
-    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "{:?}", host_log(&h));
     let pid = format!("\"pid\":{a_pid},");
-    let lines: Vec<String> = h.audit().into_iter().filter(|l| l.contains("測試違規") && l.contains(&pid)).collect();
-    assert_eq!(lines.len(), 2, "{:?}", h.audit());
-    assert!(lines.iter().all(|l| l.contains("\"role\":\"conversation\"")), "{lines:?}");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("測試違規") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"conversation\"")), "{:?}", lines());
     assert!(!gone(a_pid));
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "{:?}", host_log(&h));
+}
+
+/// 違規帶的序號不是現在那個行程的（同一個 pid 號碼上一個行程的回報，在號碼被重用之後才讀到）：只寫稽核、`role` 記 `unknown`，
+/// 不隔離、不補送 `revoke`：`revoke` 只有收屍那一次。
+#[test]
+fn a_violation_with_a_stale_generation_neither_quarantines_nor_revokes() {
+    let mut h = Harness::start(Options { host: fake_host(&["--stale-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("舊序號的違規") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "{:?}", host_log(&h));
+}
+
+/// 沒被隔離的對話行程被報序號 0 的違規：只寫稽核、`role` 記 `unknown`，不隔離、不補送 `revoke`。宿主在上一個行程收屍之前回報的 0，
+/// 讀到時重用同一個 pid 的新行程正是這個狀態；那一筆還沒寫進宿主 pipe 的活行程，報的也是 0，同樣不隔離。
+#[test]
+fn a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited() {
+    let mut h = Harness::start(Options { host: fake_host(&["--zero-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "只有收屍那一次：{:?}", host_log(&h));
+}
+
+/// 已經隔離的對話行程被報序號 0 的違規（撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時就報 0）：照它的身分寫稽核，不補送第二次 `revoke`。
+#[test]
+fn a_zero_generation_violation_for_a_quarantined_conversation_keeps_its_role() {
+    let mut h = Harness::start(Options { host: fake_host(&["--then-zero-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
+    for (line, reason) in lines().iter().zip(["測試違規", "表上沒有了"]) {
+        assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
+    }
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
 }
 
 /// 已經隔離的對話行程被報 `unregistered`：照違規寫稽核，理由是宿主回給那條連線的，不是寫死的「沒有登記」；不記那行警告。
@@ -1633,8 +1764,6 @@ fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hos
     let mut h = Harness::start(Options { host: fake_host(&["--then-unregistered", "框太大"]), ..Options::default() });
     let a = h.up("a");
     let a_pid = logged_pid(&a, "pid");
-    let revoke = format!("revoke {a_pid}");
-    assert!(wait_until(|| host_log(&h).iter().filter(|l| **l == revoke).count() == 2), "兩次都補送 revoke：{:?}", host_log(&h));
     let pid = format!("\"pid\":{a_pid},");
     let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
     assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
@@ -1642,6 +1771,7 @@ fn an_unregistered_report_for_a_quarantined_conversation_is_audited_with_the_hos
         assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
     }
     assert!(!supervisor_stderr(&h).contains("警告：宿主拒了"), "{}", supervisor_stderr(&h));
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
 }
 
 /// 不是我們的 pid（這裡是 0：宿主讀不到連線的 pid，或對方 uid 跟它不同時報的）被報 `violation` 與 `unregistered`：兩筆都寫稽核、`role` 是 `unknown`，

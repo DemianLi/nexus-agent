@@ -1,9 +1,12 @@
 //! 宿主（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）：監督行程起的第三種子行程，全機共用一個，不在資料路徑上。
-//! 目前只做三件事：跟監督行程握手、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分；還沒有任何服務（#2569）。
+//! 目前做四件事：跟監督行程握手、照 `--plugins` 掛主機級的插件樹（[`plugins`]）、收身分表、在 `--socket` 上收前台與對話行程的連線並驗身分。
+//! 出貨的建置還沒有任何插件，所以還沒有任何服務（#2569）。
 //!
 //! ```text
-//! nexus-host --socket <路徑>
+//! nexus-host [--plugins <檔>] --socket <路徑>
 //! ```
+//!
+//! 沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了或解析不過，寫一行 log、送 `config-broken`（帶那句錯誤）取代 `ready`、回 4，不綁 socket。插件的事件（狀態轉換、設定被插件拒絕、apply 失敗…）每一筆寫一行 log。
 //!
 //! 控制通道是 stdin／stdout（[`crate::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
 //! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
@@ -26,7 +29,12 @@
 //!
 //! 連線數最多 [`MAX_CONNECTIONS`]（收監督行程的 `revoke` 時收 backlog 不受這個上限，見 `Host::sync`）；連上之後 [`HELLO_TIMEOUT`] 內沒送 `hello` 的斷掉。
 
+pub mod plugins;
+#[cfg(feature = "test-hooks")]
+mod test_plugin;
+
 use crate::host_protocol::{self, decode_client_message, encode_host_message, ClientMessage, HostMessage};
+use crate::kernel::{Kernel, KernelEvent, Limits};
 use crate::supervisor::process::Chan;
 use crate::supervisor_protocol::{decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION};
 use std::collections::HashMap;
@@ -42,14 +50,19 @@ pub const MAX_CONNECTIONS: usize = 1024;
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 const EXIT_PROTOCOL: i32 = 3;
+/// `--plugins` 的檔案讀不了或解析不過。
+pub const EXIT_CONFIG: i32 = 4;
+/// 結束前把 `config-broken` 寫給監督行程最多等這麼久；寫不完照樣結束，監督行程看結束碼一樣知道。
+const CONFIG_BROKEN_WRITE_LIMIT: Duration = Duration::from_millis(500);
 
-const USAGE: &str = "nexus-host --socket <路徑>";
+const USAGE: &str = "nexus-host [--plugins <檔>] --socket <路徑>";
 
 macro_rules! say {
     ($($arg:tt)*) => { eprintln!("nexus-host: {}", format_args!($($arg)*)) };
 }
 
 struct Grant {
+    generation: u32,
     token: Vec<u8>,
     role: Role,
     thread: Vec<u8>,
@@ -63,6 +76,8 @@ struct Conn {
     pid: Option<u32>,
     opened: Instant,
     hello: bool,
+    /// 送過 `hello` 的：驗它時那一筆的序號，報違規時帶回去。還沒送是 0。
+    generation: u32,
     /// 那個 pid 被撤過：之後送什麼都只回 `rejected`、報 `unregistered`；同一個 pid 號碼又登記了，也不照新的那一筆驗、不撤它。
     revoked: bool,
     /// 要斷了：這一輪結束時清掉。輪中途不刪，索引才不會錯位。
@@ -76,25 +91,71 @@ struct Host {
     conns: Vec<Conn>,
     /// 最後一條 accept 的連線的編號，還沒有是 0。
     last_conn: u32,
+    /// 預留的一個 fd（開 `/dev/null`）：accept 遇到開檔數用完時先關掉它，騰出位子把排著的那條接下來就關，backlog 才收得乾淨，
+    /// listener 也不會一直可讀、讓 poll 空轉。整台主機的 fd 都用完時可能開不回來，是 `None`。
+    spare: Option<OwnedFd>,
+    /// 這一輪 accept 要退避時（開檔數用完而 [`Host::shed`] 沒接到連線，或 accept 的其他錯），這一刻之前不 poll listener；收 `revoke` 時的 accept 不看它。
+    accept_paused_until: Option<Instant>,
+    /// 這一段開檔數用完的期間已經記過 log：接下一條連線之後才再記。
+    out_of_fds: bool,
+    kernel: Kernel,
 }
 
-fn parse(args: Vec<OsString>) -> Result<PathBuf, String> {
+/// accept 要退避時（見 `accept_paused_until`），停 poll listener 這麼久再試。
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
+fn open_spare() -> Option<OwnedFd> {
+    std::fs::File::open("/dev/null").ok().map(OwnedFd::from)
+}
+
+struct Args {
+    socket: PathBuf,
+    plugins: Option<PathBuf>,
+}
+
+fn parse(args: Vec<OsString>) -> Result<Args, String> {
     let mut args = args.into_iter();
     let mut socket = None;
+    let mut plugins = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--socket") => socket = Some(PathBuf::from(args.next().ok_or("--socket 要一個路徑")?)),
+            Some("--plugins") => plugins = Some(PathBuf::from(args.next().ok_or("--plugins 要一個路徑")?)),
             _ => return Err(format!("不認得的參數 {}", arg.to_string_lossy())),
         }
     }
-    socket.ok_or_else(|| "少了 --socket".to_string())
+    Ok(Args { socket: socket.ok_or("少了 --socket")?, plugins })
+}
+
+/// 照 `--plugins` 建樹；沒帶或檔案不存在是空樹。
+fn build_kernel(path: Option<&std::path::Path>) -> Result<Kernel, String> {
+    let mut kernel = Kernel::new(Limits::default(), Instant::now());
+    kernel.set_log(|line| say!("{line}"));
+    let Some(path) = path else { return Ok(kernel) };
+    match plugins::load(path, plugins::specs())? {
+        plugins::Loaded::Missing => say!("{} 不存在，不掛插件", path.display()),
+        plugins::Loaded::Rows(rows) => {
+            let root = kernel.root();
+            kernel.load(root, &rows).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(kernel)
+}
+
+fn log_kernel_event(event: &KernelEvent) {
+    match event {
+        KernelEvent::Status { name, from, to, .. } => say!("插件 {name}：{from:?} → {to:?}"),
+        KernelEvent::ConfigRejected { name, error, .. } => say!("插件 {name} 沒掛：{error}"),
+        KernelEvent::ApplyFailed { name, error, .. } => say!("插件 {name} apply 失敗：{error}"),
+        other => say!("插件事件：{other:?}"),
+    }
 }
 
 /// 跑宿主，回結束碼：0 是 `ready` 之後 stdin 讀到 EOF 或讀不下去（監督行程要它收，或控制通道送來超長的框）；1 是 `hello` 之前 stdin 就 EOF，或綁不了 socket；2 是參數不對；
-/// 3 是監督行程的第一框不是這一版的 `hello`，或解不開。
+/// 3 是監督行程的第一框不是這一版的 `hello`，或解不開；4 是 `--plugins` 的檔案讀不了或解析不過（[`EXIT_CONFIG`]）。
 pub fn run(args: Vec<OsString>) -> i32 {
-    let socket = match parse(args) {
-        Ok(socket) => socket,
+    let Args { socket, plugins } = match parse(args) {
+        Ok(args) => args,
         Err(err) => {
             say!("{err}\n用法：{USAGE}");
             return 2;
@@ -107,6 +168,15 @@ pub fn run(args: Vec<OsString>) -> i32 {
     if let Err(code) = await_hello(&mut control) {
         return code;
     }
+    let kernel = match build_kernel(plugins.as_deref()) {
+        Ok(kernel) => kernel,
+        Err(err) => {
+            say!("插件清單壞了：{err}");
+            control.send(&encode_host_report(&HostReport::ConfigBroken { reason: err.into_bytes() }));
+            control.flush_until(Instant::now() + CONFIG_BROKEN_WRITE_LIMIT);
+            return EXIT_CONFIG;
+        }
+    };
     let _ = std::fs::remove_file(&socket);
     let listener = match UnixListener::bind(&socket).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
         Ok(listener) => listener,
@@ -115,7 +185,18 @@ pub fn run(args: Vec<OsString>) -> i32 {
             return 1;
         }
     };
-    let mut host = Host { control, listener, grants: HashMap::new(), conns: Vec::new(), last_conn: 0 };
+    let mut host = Host {
+        control,
+        listener,
+        grants: HashMap::new(),
+        conns: Vec::new(),
+        last_conn: 0,
+        spare: open_spare(),
+        accept_paused_until: None,
+        out_of_fds: false,
+        kernel,
+    };
+    host.step_kernel();
     host.report(&HostReport::Ready);
     let code = host.serve();
     let _ = std::fs::remove_file(&socket);
@@ -215,27 +296,34 @@ impl Host {
         self.control.send(&encode_host_report(report));
     }
 
-    /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。
+    fn step_kernel(&mut self) {
+        self.kernel.run(Instant::now());
+        for event in self.kernel.drain_events() {
+            log_kernel_event(&event);
+        }
+    }
+
+    /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。框太大時讀端會關掉、宿主隨後結束，但在那之前切出來的框照樣先套用：
+    /// [`Host::on_hello`] 與 [`Host::violate`] 呼叫它之後不看回傳值，接著就拿這張表驗連線、查序號。
     fn sync(&mut self) -> bool {
-        match self.control.receive_all() {
-            Ok(frames) => {
-                for frame in frames {
-                    match decode_host_command(&frame) {
-                        Ok(HostCommand::Grant { pid, token, role, thread }) => {
-                            self.grants.insert(pid, Grant { token, role, thread });
-                        }
-                        Ok(HostCommand::Revoke { pid }) => {
-                            // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
-                            // 都先把 backlog 收到空（不管連線數上限）才抓得齊，連線數可能暫時超過上限；沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
-                            self.accept(usize::MAX);
-                            self.revoke(pid);
-                        }
-                        Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
-                        Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
-                    }
+        let (frames, err) = self.control.receive_all();
+        for frame in frames {
+            match decode_host_command(&frame) {
+                Ok(HostCommand::Grant { pid, generation, token, role, thread }) => {
+                    self.grants.insert(pid, Grant { generation, token, role, thread });
                 }
+                Ok(HostCommand::Revoke { pid }) => {
+                    // 收屍前送的（行程已死，它 `connect()` 的連線不是已經 accept 了，就是還排在 backlog 裡）與隔離時補送的，
+                    // 都先把 backlog 收到空（不管連線數上限）才抓得齊，連線數可能暫時超過上限；沒送 `hello` 的 [`HELLO_TIMEOUT`] 內就斷。
+                    self.accept(usize::MAX);
+                    self.revoke(pid);
+                }
+                Ok(HostCommand::Hello { .. }) => say!("監督行程又送了一次 hello，不理"),
+                Err(err) => say!("監督行程送來解不開的訊息（{}），不理", err.0),
             }
-            Err(err) => say!("監督行程送來解不開的框（{}）", err.0),
+        }
+        if let Some(err) = err {
+            say!("監督行程送來解不開的框（{}）", err.0);
         }
         !self.control.read_closed()
     }
@@ -258,12 +346,20 @@ impl Host {
                 return 0;
             }
             let now = Instant::now();
-            let deadline = self.conns.iter().filter(|c| !c.hello).map(|c| c.opened + HELLO_TIMEOUT).min();
+            self.accept_paused_until = self.accept_paused_until.filter(|&until| now < until);
+            let deadline = self
+                .conns
+                .iter()
+                .filter(|c| !c.hello)
+                .map(|c| c.opened + HELLO_TIMEOUT)
+                .chain(self.accept_paused_until)
+                .chain(self.kernel.next_deadline())
+                .min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
             fds.push(pollfd(read.unwrap_or(-1), libc::POLLIN));
             fds.push(pollfd(write.unwrap_or(-1), libc::POLLOUT));
-            let accepting = self.conns.len() < MAX_CONNECTIONS;
+            let accepting = self.conns.len() < MAX_CONNECTIONS && self.accept_paused_until.is_none();
             fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
@@ -287,6 +383,7 @@ impl Host {
                     }
                 }
             }
+            self.step_kernel();
             let now = Instant::now();
             self.conns.retain(|conn| {
                 !conn.dead && !conn.chan.read_closed() && !conn.chan.write_closed() && (conn.hello || now < conn.opened + HELLO_TIMEOUT)
@@ -294,26 +391,57 @@ impl Host {
         }
     }
 
-    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或 accept 出錯（記一行）為止。
+    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或要退避為止。開檔數用完時排著的連線接下來就關（見 [`Host::shed`]），不是留在 backlog；
+    /// `shed` 接不到時（沒有預留的 fd、backlog 已空，或騰出位子還是接不到）停下來退避，那時還排著的連線留在 backlog。EMFILE、ENFILE 以外的錯記一行、退避。
     fn accept(&mut self, limit: usize) {
         while self.conns.len() < limit {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     let pid = peer_pid(stream.as_raw_fd());
                     let fd = OwnedFd::from(stream);
-                    let Ok(write) = fd.try_clone() else { continue };
+                    let Ok(write) = fd.try_clone() else {
+                        self.note_out_of_fds();
+                        continue;
+                    };
+                    self.out_of_fds = false;
                     let chan = Chan::from_fds(fd, write, host_protocol::MAX_FRAME);
                     self.last_conn = self.last_conn.wrapping_add(1);
                     let id = self.last_conn;
-                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, revoked: false, dead: false });
+                    self.conns.push(Conn { id, chan, pid, opened: Instant::now(), hello: false, generation: 0, revoked: false, dead: false });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
+                Err(err) if matches!(err.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)) => {
+                    self.note_out_of_fds();
+                    if !self.shed() {
+                        self.accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
+                        return;
+                    }
+                }
                 Err(err) => {
                     say!("accept 失敗：{err}");
+                    self.accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
                     return;
                 }
             }
+        }
+    }
+
+    /// 關掉預留的 fd、接下排著的一條連線就關，再把預留的開回來。接到了回 `true`；沒有預留的 fd（這時試著開回來），或騰出位子後 accept 沒接到
+    /// （含 backlog 已空），回 `false`。
+    fn shed(&mut self) -> bool {
+        if self.spare.take().is_none() {
+            self.spare = open_spare();
+            return false;
+        }
+        let shed = self.listener.accept().is_ok();
+        self.spare = open_spare();
+        shed
+    }
+
+    fn note_out_of_fds(&mut self) {
+        if !std::mem::replace(&mut self.out_of_fds, true) {
+            say!("開檔數用完了：排著的連線接下來就關（預留的 fd 開不回來時留在 backlog、每 100 ms 再試），直到 fd 空出來");
         }
     }
 
@@ -373,8 +501,10 @@ impl Host {
             role_name(grant.role),
             String::from_utf8_lossy(&grant.thread)
         );
+        let generation = grant.generation;
         if let Some(conn) = self.conns.get_mut(i) {
             conn.hello = true;
+            conn.generation = generation;
             conn.chan.send(&encode_host_message(&HostMessage::Hello { version: PROTOCOL_VERSION }));
         }
         true
@@ -405,8 +535,13 @@ impl Host {
             self.unregistered(i, reason);
             return;
         }
+        let generation = match self.conns.get(i) {
+            Some(conn) if conn.hello => conn.generation,
+            Some(conn) => conn.pid.and_then(|pid| self.grants.get(&pid)).map_or(0, |grant| grant.generation),
+            None => 0,
+        };
         let pid = self.refuse(i, reason);
-        self.report(&HostReport::Violation { pid, reason: reason.as_bytes().to_vec() });
+        self.report(&HostReport::Violation { pid, generation, reason: reason.as_bytes().to_vec() });
         let Some(pid) = self.conns.get(i).and_then(|conn| conn.pid) else { return };
         if self.grants.contains_key(&pid) {
             say!("pid {pid} 隔離到它結束");
