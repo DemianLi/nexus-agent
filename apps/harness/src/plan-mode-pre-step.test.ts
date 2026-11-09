@@ -42,7 +42,7 @@ import {
   reduceConversation,
 } from '@nexus/wire';
 import type { ConversationState, Event, PendingQuestion, WireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import {
@@ -62,7 +62,7 @@ import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 import { composeAttachSessions } from './session-attach.js';
-import type { SessionRegistry } from '@nexus/core';
+import type { SessionLog, SessionRegistry } from '@nexus/core';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -375,6 +375,7 @@ interface WireSession {
   readonly events: AsyncGenerator<Event, void, undefined>;
   state: ConversationState;
   log(): readonly SessionEvent[];
+  rootLog(): SessionLog;
 }
 
 /** 真的 wire handler 與 pump，組裝是 `createNexusAgent`（計劃模式從一開始就開著），多掛幾顆條目。同 `plan-review-wire.test.ts`。 */
@@ -421,6 +422,11 @@ async function openWire(
         ?.list()
         .filter((entry) => entry.address.kind === 'root')
         .map((entry) => entry.log.events)[0] ?? [],
+    rootLog: () => {
+      const root = sessions?.list().find((entry) => entry.address.kind === 'root');
+      if (root === undefined) throw new Error('還沒有 root 日誌');
+      return root.log;
+    },
   };
 }
 
@@ -547,6 +553,65 @@ describe('pre-step 那一刻這一步已經中止（人按停止）', () => {
       expect(systemsOf(session.log())).toHaveLength(2);
       expect(systemsOf(session.log())[0]).toContain(TEST_PLAN_GUIDANCE);
       expect(systemsOf(resumed)[0]).not.toContain(TEST_PLAN_GUIDANCE);
+    },
+    60000,
+  );
+});
+
+const APPEND_FAILURE = '測試：plan/mode 寫不進去';
+
+describe('同意之後那一步寫 plan/mode 拋錯', () => {
+  it.each(['native', 'langgraph'] as const)(
+    '%s：這一輪以那個錯收尾，待關沒了，下一輪照樣有指引',
+    async (loop: Loop) => {
+      const session = await openWire(
+        loop,
+        [
+          { content: '我先規劃。', toolCalls: [EXIT] },
+          { content: '繼續做。' },
+          { content: '繼續做。' },
+        ],
+        [],
+      );
+      await session.client.runStart(session.thread, '幫我改一下');
+      await until(session, () => session.state.status === 'awaiting-input');
+      const pending = session.state.pendings[0] as PendingQuestion | undefined;
+      if (pending === undefined || !isQuestionPending(pending)) throw new Error('沒有掛著的提問');
+      await until(session, () => turnEnds(session) === 1);
+
+      // 只有第一次寫 `plan/mode` 拋錯，之後照常：待關還在的話，下一次就寫得進去。
+      const log = session.rootLog();
+      const append = log.append.bind(log);
+      let thrown = 0;
+      vi.spyOn(log, 'append').mockImplementation(((type, data, options) => {
+        if (type === 'plan/mode' && thrown === 0) {
+          thrown += 1;
+          throw new Error(APPEND_FAILURE);
+        }
+        return append(type, data, options);
+      }) as SessionLog['append']);
+
+      const before = session.log().length;
+      await session.client.inputRespond(session.thread, {
+        namespace: [...pending.namespace],
+        interrupt_id: pending.interruptId,
+        response: APPROVE,
+      });
+      await until(session, () => turnEnds(session) === 2);
+
+      expect(thrown).toBe(1);
+      const failed = session.log().slice(before);
+      expect(typesOf(failed)).toEqual(['turn/start', 'tool/call', 'tool/result', 'turn/failed']);
+      expect(failed.at(-1)?.data).toMatchObject({ message: APPEND_FAILURE });
+      expect(session.model.prompts).toHaveLength(1);
+
+      const next = session.log().length;
+      await session.client.runStart(session.thread, '那就繼續。');
+      await until(session, () => turnEnds(session) === 3);
+      const resumed = session.log().slice(next);
+      expect(typesOf(resumed)).not.toContain('plan/mode');
+      expect(typesOf(session.log())).not.toContain('plan/mode');
+      expect(systemPromptOf(session.model.prompts.at(-1))).toContain(TEST_PLAN_GUIDANCE);
     },
     60000,
   );

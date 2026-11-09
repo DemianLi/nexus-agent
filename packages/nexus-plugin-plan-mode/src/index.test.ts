@@ -190,6 +190,22 @@ function modes(log: SessionLog): boolean[] {
   return log.events.flatMap((event) => (event.type === 'plan/mode' ? [event.data.active] : []));
 }
 
+const APPEND_FAILURE = '測試：plan/mode 寫不進去';
+
+/** 讓這份日誌第一次寫 `plan/mode` 時拋錯，之後照常寫；別的種類一律照常。 */
+function failPlanModeAppendOnce(log: SessionLog): { thrown(): number } {
+  const append = log.append.bind(log);
+  let thrown = 0;
+  vi.spyOn(log, 'append').mockImplementation(((type, data, options) => {
+    if (type === 'plan/mode' && thrown === 0) {
+      thrown += 1;
+      throw new Error(APPEND_FAILURE);
+    }
+    return append(type, data, options);
+  }) as SessionLog['append']);
+  return { thrown: () => thrown };
+}
+
 /** 上一個行程留下的日誌：開過一次計劃模式。 */
 function earlierEvents(active: boolean): readonly SessionEvent[] {
   const earlier = new SessionLog('plan');
@@ -420,6 +436,18 @@ describe('同意之後的待關', () => {
 
     expect(await modelStep('plan', 'model_request:b')).not.toContain(GUIDANCE);
     expect(modes(log)).toEqual([false]);
+  });
+
+  it('寫 plan/mode 拋錯：那一步以那個錯收尾，待關沒了，下一步照樣有指引', async () => {
+    const { log, modelStep } = await approved();
+    const failing = failPlanModeAppendOnce(log);
+
+    await expect(modelStep('plan', 'model_request:b')).rejects.toThrow(APPEND_FAILURE);
+    expect(failing.thrown()).toBe(1);
+    expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('plan', 'model_request:c')).toContain(GUIDANCE);
+    expect(modes(log)).toEqual([]);
   });
 
   it('同意之後、下一步之前打 /plan：待關被丟掉，模式留著，下一步照樣有指引', async () => {
