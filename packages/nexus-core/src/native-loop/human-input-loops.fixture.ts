@@ -126,7 +126,9 @@ export function interruptIds(events: readonly LoopEvent[]): string[] {
     .flatMap((event) => {
       const values = event.params.data?.values;
       return Array.isArray(values)
-        ? values.flatMap((value: { id?: unknown }) => (typeof value.id === 'string' ? [value.id] : []))
+        ? values.flatMap((value: { id?: unknown }) =>
+            typeof value.id === 'string' ? [value.id] : [],
+          )
         : [];
     });
   return [...new Set(ids)];

@@ -56,7 +56,10 @@ async function parkAndRespond(
   options: {
     readonly argv?: readonly string[];
     readonly workspace?: string;
-    readonly before?: (client: Awaited<ReturnType<typeof serveClient>>, thread: string) => Promise<void>;
+    readonly before?: (
+      client: Awaited<ReturnType<typeof serveClient>>,
+      thread: string,
+    ) => Promise<void>;
   } = {},
 ): Promise<Outcome> {
   const logs = await mkdtemp(join(tmpdir(), 'nexus-producer-wire-logs-'));
@@ -91,7 +94,10 @@ async function parkAndRespond(
 }
 
 /** 日誌裡 `name` 那顆工具每一顆 `tool/result` 的本文與是否失敗，照順序。 */
-function resultsOf(log: readonly SessionEvent[], name: string): { text: string; isError: boolean }[] {
+function resultsOf(
+  log: readonly SessionEvent[],
+  name: string,
+): { text: string; isError: boolean }[] {
   const callIds = new Set(
     log.flatMap((event) =>
       event.type === 'tool/call' && event.data.name === name ? [event.data.callId] : [],

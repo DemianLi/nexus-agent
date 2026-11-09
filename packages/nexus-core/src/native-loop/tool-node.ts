@@ -206,7 +206,7 @@ function pausableDeadline(
  * @returns 以 `tool` 為原型的新物件。
  */
 function withoutDeclaredTimeout(tool: InvokableTool): InvokableTool {
-  const { timeout: _timeout, ...rest } = (tool as { defaultConfig?: Record<string, unknown> })
-    .defaultConfig ?? {};
+  const { timeout: _timeout, ...rest } =
+    (tool as { defaultConfig?: Record<string, unknown> }).defaultConfig ?? {};
   return Object.create(tool, { defaultConfig: { value: rest } }) as InvokableTool;
 }

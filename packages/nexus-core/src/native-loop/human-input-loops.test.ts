@@ -115,7 +115,12 @@ const timed = (before: number, after: number, ask = true) =>
       await sleep(after);
       return `答覆：${String(answer)}`;
     },
-    { name: 'timed', description: '有時限。', schema: z.object({}), defaultConfig: { timeout: 100 } },
+    {
+      name: 'timed',
+      description: '有時限。',
+      schema: z.object({}),
+      defaultConfig: { timeout: 100 },
+    },
   );
 
 const oneCall = () =>
@@ -124,9 +129,12 @@ const oneCall = () =>
     .respond(new AIMessage('收完'));
 
 /** 對話裡逾時那一句，與它講的「等了多久」。 */
-function timeoutOf(contents: readonly unknown[]): { sentence: string; elapsedMs: number } | undefined {
+function timeoutOf(
+  contents: readonly unknown[],
+): { sentence: string; elapsedMs: number } | undefined {
   for (const content of contents) {
-    const match = typeof content === 'string' ? /工具 timed 超時：等了 (\d+)ms.*/.exec(content) : null;
+    const match =
+      typeof content === 'string' ? /工具 timed 超時：等了 (\d+)ms.*/.exec(content) : null;
     if (match !== null) return { sentence: match[0], elapsedMs: Number(match[1]) };
   }
   return undefined;

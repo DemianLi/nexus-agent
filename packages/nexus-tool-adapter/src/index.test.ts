@@ -477,7 +477,9 @@ describe('deferContext：結果之後補一則插件來源的人話', () => {
 
 describe('interrupt：讀得到等人服務就問它，否則 LangGraph 的 interrupt()', () => {
   it('config 上放的是「這裡沒人可問」：以 HumanInputUnavailable 拒絕，不退回 interrupt()', async () => {
-    const execOf = toolExecOf('ask', { configurable: { [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT } });
+    const execOf = toolExecOf('ask', {
+      configurable: { [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT },
+    });
     await expect(execOf.interrupt({ q: 1 })).rejects.toSatisfy(isHumanInputUnavailable);
   });
 
