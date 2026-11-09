@@ -42,9 +42,8 @@ export const KNOWN_DIFFERENCE_KINDS = {
   crossAgentOrder: {
     card: 2359,
     reason:
-      '背景子代理的第一顆工具呼叫與 root 的下一顆工具呼叫，兩個 loop 的先後不同：讓出事件迴圈的時點不一樣。' +
-      '這一條斷言各自的結果，不斷言跨 agent 的先後；背景與前景子代理共用一份 worker 腳本的（fails），前景子代理先叫到模型，' +
-      '拿到背景那位的 `hold`，懸到逾時。',
+      '背景子代理與同一輪其他 agent（root、前景子代理）叫到模型、跑工具的先後，兩個 loop 不同：讓出事件迴圈的時點不一樣。' +
+      '這一條背景與前景子代理共用一份 worker 腳本，native 下前景子代理先叫到模型、拿到背景那位的 `hold`，懸到逾時。',
   },
   langgraphInternals: {
     card: 2363,
@@ -73,8 +72,7 @@ export interface KnownDifference {
   readonly test: string;
   readonly kind: KnownDifferenceKind;
   /**
-   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，兩個 loop 送給模型的系統訊息或跨 agent 的
-   * 工具呼叫先後不同，斷言沒碰到。
+   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，差異在斷言之外。
    */
   readonly run: 'fails' | 'skip' | 'passes';
 }

@@ -3,8 +3,8 @@
  * （{@link SystemPromptPiece}），由 {@link applySystemPromptPieces} 照順序套到系統訊息上。一步回的那幾塊是純字串，不帶 LangChain 型別。
  *
  * **wrapModelCall 由登記的那一份造出來**（{@link withSystemPromptStep}）：同一份 cell 既造那顆的 `wrapModelCall`，也登記給 native，
- * 所以兩者分不開。native 的 root 在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link systemPromptWrapWith} 造的
- * 那一支，不經那顆的 `wrapModelCall`；`langgraph` 與子代理照舊經 `wrapModelCall`。一步是同步的，套完就在同一個 tick 往內交，中間沒有 `await`。
+ * 所以兩者分不開。native 的 root 與前景子代理在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link systemPromptWrapWith}
+ * 造的那一支，不經那顆的 `wrapModelCall`；`langgraph` 與背景子代理照舊經 `wrapModelCall`。一步是同步的，套完就在同一個 tick 往內交，中間沒有 `await`。
  *
  * @module
  */

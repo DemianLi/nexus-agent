@@ -34,8 +34,8 @@
  * 重打登記成模型那一串的一步（`model-call-step.ts` 的 `withModelCallStep`），排在 `modelCalls` 與用量記錄器的**外側**
  * （`fold.ts` 的槽位表），在摘要器內側（摘要器同名取代回預設疊，見 `fold.ts` 槽位表開頭）。每次嘗試在這一步裡往內再交一次，內層各格
  * 跟著重跑，所以每一次嘗試各是一對 `model/start`／`model/end`，失敗那次帶 `outcome: 'error'`、用量照記——「哪一次作廢了」在日誌上
- * 就有現成的識別，不需要新事件。內側（plugin）的做法會讓失敗那次沒有任何痕跡。native 的 root 在原位直接呼叫這一步，`langgraph` 與
- * 子代理經 `wrapModelCall`。重試計數只活在一次模型呼叫裡，不從日誌折出、不跨重啟接著數。
+ * 就有現成的識別，不需要新事件。內側（plugin）的做法會讓失敗那次沒有任何痕跡。native 的 root 與前景子代理在原位直接呼叫這一步，
+ * `langgraph` 與背景子代理經 `wrapModelCall`。重試計數只活在一次模型呼叫裡，不從日誌折出、不跨重啟接著數。
  *
  * ## 照 dsh 與偏離
  *

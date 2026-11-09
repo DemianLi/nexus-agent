@@ -17,7 +17,7 @@
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
- * LangChain 的 `wrapToolCall` 是層層相包的，而 dsh 那四個時刻在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
+ * LangChain 的 `wrapToolCall` 是層層相包的，而下表的四個事件在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
  * 不由註冊順序決定）。native 的 root 與前景子代理在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createToolCallStepMiddleware`），
  * 不經它們的 `wrapToolCall`；`langgraph` 與背景子代理仍經 `wrapToolCall`（TODO(#2359)）：
  *

@@ -1,6 +1,6 @@
 /**
- * native 的前景子代理往共用派發面派哪幾個 agent 事件：`agent/pre-step`、`agent/turn-stopping` 只有 root 派（`docs/plugin-contract.md`），
- * 子代理的步驟不派；`llm/stream` 與 `agent/request-error` 子代理照派（串流重打、重試的監聽者要接得到子代理那一次模型呼叫）。
+ * native 的前景子代理往共用派發面派哪幾個 agent 事件：`agent/pre-step` 只有 root 派（`docs/plugin-contract.md`）、
+ * `agent/turn-stopping` 只有 root 派（`turn-stopping.ts` 只折進 root），子代理的步驟都不派；`llm/stream` 與 `agent/request-error` 子代理照派（串流重打、重試的監聽者要接得到子代理那一次模型呼叫）。
  *
  * 一輪是：root 委派 → 子代理叫一次模型，第一次失敗、重試監聽者回 `retry`、第二次回話 → root 收尾。root 兩步、子代理一步。
  */

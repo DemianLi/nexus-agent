@@ -81,8 +81,11 @@ export interface Delegation {
 }
 
 /**
- * 服務上的委派，沒有就是 `undefined`（不是 {@link RunSuspension} 發的，例如 `NO_HUMAN_INPUT`）。
+ * 從服務開一層委派：不是 {@link RunSuspension} 發的服務（例如 `NO_HUMAN_INPUT`）回 `undefined`。
+ * 每叫一次開新的一層，開的時候算子代理本身在跑；那一層只在歸零與離開零時告訴叫起它的那顆呼叫。同一顆呼叫底下不能有兩層同時在
+ * {@link Delegation.away} 裡：兩層都歸零會把那顆呼叫多扣一次。
  * @param service - 工具呼叫拿到的等人服務。
+ * @returns 新開的一層；沒有就是 `undefined`。
  */
 export function delegationOf(service: unknown): Delegation | undefined {
   if (typeof service !== 'object' || service === null) return undefined;

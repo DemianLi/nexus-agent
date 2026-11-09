@@ -451,7 +451,7 @@ describe('RunSuspension', () => {
       expect(onPark).toHaveBeenCalledTimes(1);
     });
 
-    it('root 自己的呼叫沒有委派以外的影響：沒開委派的 slot 照舊', () => {
+    it('delegationOf：RunSuspension 發的服務開得出委派，別的服務沒有', () => {
       const suspension = new RunSuspension(vi.fn(), vi.fn());
       expect(delegationOf(started(suspension, 'c').service)).toBeDefined();
       expect(

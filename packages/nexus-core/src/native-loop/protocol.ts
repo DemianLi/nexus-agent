@@ -190,7 +190,7 @@ const NS_KEY = 'langgraph_checkpoint_ns';
 
 /**
  * 把 metadata 帶 {@link NS_KEY} 的模型呼叫轉成 `messages` 頻道、工具呼叫轉成 `tools` 頻道（後者同 LangGraph 的
- * `StreamToolsHandler`）：root 的節點與工具裡跑的子圖都帶這一格，命名空間照它。模型帶 `nostream`、工具帶 `langsmith:hidden` 的不發。
+ * `StreamToolsHandler`）：root 的節點與工具裡跑的子代理（native 前景子代理的節點、LangGraph 子圖）都帶這一格，命名空間照它。模型帶 `nostream`、工具帶 `langsmith:hidden` 的不發。
  */
 export class NativeStreamHandler extends BaseCallbackHandler {
   name = 'NativeStreamHandler';

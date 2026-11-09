@@ -42,9 +42,7 @@ interface Seen {
 }
 
 type Reply =
-  | { text: string }
-  | { call: { id: string; name: string; arguments: string } }
-  | { status: number };
+  { text: string } | { call: { id: string; name: string; arguments: string } } | { status: number };
 
 /** 依角色與次序回答的假端點（一律走 SSE）。`onRequest` 在請求到達、回答之前呼叫。 */
 async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Seen) => void) {

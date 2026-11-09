@@ -165,7 +165,7 @@ async function run(loop: 'native' | 'langgraph') {
 }
 
 describe.each(['native', 'langgraph'] as const)('%s：nexusSystemPrompt 那一格', (loop) => {
-  it('root 與前景子代理走對的那一條路，背景子代理都經 wrapModelCall', async () => {
+  it('root 與前景子代理走對的那一條路，背景子代理經 wrapModelCall', async () => {
     const messages = await run(loop);
     expect(messages.at(-1)?.text).toBe('好了');
     const root = loop === 'native' ? { native: 3, hook: 0 } : { native: 0, hook: 3 };

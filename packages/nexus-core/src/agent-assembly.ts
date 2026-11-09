@@ -16,7 +16,8 @@
  * ## 還走基座的東西
  *
  * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
- * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**。
+ * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**；例外是 native 下宣告式的前景子代理：這個檔用
+ * `createNativeAgent` 把它編成 `runnable`，交給基座的 `task` 照樣 `invoke`。
  * skills 與 memory 各包了一層：掃描與讀檔仍是基座的 `beforeAgent`，接進系統訊息的文字由 nexus 渲染
  * （`./skills-middleware.ts`、`./memory-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)、
  * [#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
@@ -202,7 +203,7 @@ export function filesystemMiddlewareOptions(input: {
 /**
  * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionStep} 並登記那一步（{@link withToolCallStep}），
  * `wrapModelCall` 先套 core 的 {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；
- * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
+ * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 與前景子代理把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
  *
  * @param options - {@link filesystemMiddlewareOptions} 給的選項。
  * @returns 掛進疊裡的那一顆。
@@ -310,7 +311,7 @@ export function subagentDefaultMiddleware(
   ] as unknown as AgentMiddleware[];
 }
 
-/** native 的系統提示詞只收字串；fold 給的一律是字串，`SystemMessage` 當場拋，不靜靜丟掉。 */
+/** native 的系統提示詞只收字串；規格帶 `SystemMessage`（`SubAgent` 的型別允許）就當場拋，不靜靜丟掉。 */
 function nativeSystemPrompt(name: string, prompt: string | object): string {
   if (typeof prompt !== 'string') {
     throw new Error(`子代理 "${name}" 的 systemPrompt 不是字串，native agent loop 不收`);

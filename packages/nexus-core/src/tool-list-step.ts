@@ -7,8 +7,8 @@
  * **同步的一步就同步往內交**：一步同步回清單或 `undefined` 時，{@link wrapModelCallWith} 在同一個 tick 往內交，中間沒有 `await`；
  * 回 `Promise` 的一步（例如要解析 backend 的檔案工具那一格）不論換不換，都等它解開才往內交。
  *
- * **登記了這一步的格**（{@link withToolListStep}；{@link createToolListStepMiddleware} 造的自動登記）由 native 的 root 的模型那一串
- * 直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；工具清單、系統提示、環繞步三種都沒登記的 `wrapModelCall`，native 建構時就拋。
+ * **登記了這一步的格**（{@link withToolListStep}；{@link createToolListStepMiddleware} 造的自動登記）由 native 的 root 與前景子代理的
+ * 模型那一串直接呼叫（`native-loop/agent.ts` 的 `#modelCells`）；工具清單、系統提示、環繞步三種都沒登記的 `wrapModelCall`，native 建構時就拋。
  *
  * @module
  */

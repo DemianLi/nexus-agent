@@ -21,7 +21,8 @@
  * （`invoke`／`stream` 帶不帶 thread 都是、沒帶 thread 的 `streamEvents`），呼叫上放的是 `NO_HUMAN_INPUT`：核准閘門走沒有管道那一格，工具的 `exec.interrupt` 拒絕，都不退回 LangGraph 的 `interrupt()`。
  *
  * 前景子代理也是這個類別（{@link NativeAgentParams.subagent}），由 root 的 `task` 呼叫叫起：它的提問經那顆呼叫的委派進 root 這次 run 的
- * 等人狀態（`suspension.ts`），節點的事件經繼承的 callbacks 進 root 那條串流。
+ * 等人狀態（`suspension.ts`）；模型與工具的事件經繼承的 callbacks 進 root 那條串流，節點收完的 `completed` 經 `configurable` 上 root 的
+ * 事件出口補。
  *
  * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
  * 接不住，TODO(#2608)。背景子代理仍是 LangGraph 的圖，TODO(#2359)。
@@ -79,8 +80,9 @@ export interface NativeAgentParams {
   readonly store?: unknown;
   /**
    * 前景子代理：由 root 的 `task` 呼叫叫起。每次從空的 state 跑、跑完不留；節點的命名空間接在那顆 `task` 呼叫的
-   * `checkpoint_ns` 後面；工具的提問經那顆呼叫的委派（`suspension.ts` 的 {@link delegationOf}）交給 root 的使用者；
-   * 不派 `agent/pre-step` 與 `agent/turn-stopping`（`docs/plugin-contract.md`：只有 root 派）。
+   * `checkpoint_ns` 後面；工具的提問經那顆呼叫的委派（`suspension.ts` 的 {@link delegationOf}）交給 root 的使用者，那顆呼叫沒人可問時
+   * 子代理的呼叫也放 `NO_HUMAN_INPUT`；不派 `agent/pre-step`（`docs/plugin-contract.md`：只有 root 會派）與 `agent/turn-stopping`
+   * （`turn-stopping.ts`：只折進 root），`llm/stream`、`agent/request-error` 照派。
    */
   readonly subagent?: boolean;
 }
@@ -844,7 +846,7 @@ export class NativeAgent {
             configurable: { ...segment.configurable, [TURN_CANCEL_CONFIG_KEY]: relay.signal },
           };
     // 呼叫時給的贏過 `withConfig` 的，同 LangGraph 的 `ensureLangGraphConfig(this.config, options)`。兩格都留在節點的 config 上：
-    // 工具裡跑的 LangGraph 子圖（前景子代理）從執行脈絡讀同一個上限。
+    // 工具裡叫起的子代理讀同一個上限（前景子代理經 `task` 交下的 config，LangGraph 子圖經執行脈絡）。
     const recursionLimit =
       config.recursionLimit ?? this.#defaults.recursionLimit ?? DEFAULT_RECURSION_LIMIT;
     const maxConcurrency = config.maxConcurrency ?? this.#defaults.maxConcurrency;
@@ -869,7 +871,7 @@ export class NativeAgent {
       };
     }
     const budget = new StepBudget(recursionLimit);
-    // 子代理的步驟不往共用派發面派這兩個事件；`llm/stream`、`agent/request-error` 照派。
+    // 子代理的步驟不派 `agent/pre-step`、`agent/turn-stopping`（只有 root 派）；`llm/stream`、`agent/request-error` 照派。
     const stepEvents = this.#params.subagent === true ? undefined : this.#params.events;
     // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走
     // `configurable`，不在這裡。

@@ -10,8 +10,8 @@
  *
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
  *
- * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 的工具鏈
- * 直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格，native 建構時就拋。
+ * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 與前景子代理的
+ * 工具鏈直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格，native 建構時就拋。
  *
  * @module
  */

@@ -162,7 +162,7 @@ async function run(loop: 'native' | 'langgraph') {
 describe.each(['native', 'langgraph'] as const)(
   '%s：四位 pre-step listener 每次 invoke 只跑一次',
   (loop) => {
-    it('root 與前景子代理走對的那一條路，背景子代理都經 hook', async () => {
+    it('root 與前景子代理走對的那一條路，背景子代理經 hook', async () => {
       const messages = await run(loop);
       expect(messages.at(-1)?.text).toBe('好了');
       const root = loop === 'native' ? { native: 1, hook: 0 } : { native: 0, hook: 1 };

@@ -26,7 +26,7 @@ export interface NativeNoopCell {
 }
 
 /**
- * native 的 root 以空函式取代的格。
+ * native 的 root 與前景子代理以空函式取代的格。
  *
  * `FilesystemMiddleware.beforeAgent`（#1827 D234）：理由見 `reason`；`/goal` 的續行輪不經宿主的入口（TODO(#2558)）。
  * 節點照留，是因為 native 的遞迴預算照 langgraph 的節點數算。TODO(#2363)：拿掉 langgraph 時，
