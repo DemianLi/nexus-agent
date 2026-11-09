@@ -36,11 +36,9 @@ async function delegateLong(loop: Loop): Promise<Seen> {
     fakePlugin('worker', (r) => {
       r.tools.register(
         tool(
-          (
-            { path }: { path: string },
-            runtime: { state?: { files?: Record<string, unknown> } },
-          ) => {
-            const file = runtime.state?.files?.[path] as { content?: unknown } | undefined;
+          ({ path }, runtime) => {
+            const { state } = runtime as { state?: { files?: Record<string, unknown> } };
+            const file = state?.files?.[path] as { content?: unknown } | undefined;
             const content = file?.content;
             const text = Array.isArray(content) ? content.join('\n') : String(content);
             return JSON.stringify({
