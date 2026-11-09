@@ -132,13 +132,21 @@ pub fn program() -> Vec<sock_filter> {
 /// 對目前的行程裝上 `NO_NEW_PRIVS` 與過濾器。之後 fork 的子行程都繼承，exec 也帶著走。
 pub fn install() -> Result<usize, std::io::Error> {
     let prog = program();
-    let fprog = libc::sock_fprog { len: prog.len() as u16, filter: prog.as_ptr() as *mut sock_filter };
+    let fprog = libc::sock_fprog {
+        len: prog.len() as u16,
+        filter: prog.as_ptr() as *mut sock_filter,
+    };
     // SAFETY：prctl 只讀 fprog 指到的陣列，prog 在呼叫期間存活。
     unsafe {
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        if libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const libc::sock_fprog) != 0 {
+        if libc::prctl(
+            libc::PR_SET_SECCOMP,
+            libc::SECCOMP_MODE_FILTER,
+            &fprog as *const libc::sock_fprog,
+        ) != 0
+        {
             return Err(std::io::Error::last_os_error());
         }
     }
@@ -179,15 +187,27 @@ mod tests {
 
     #[test]
     fn network_sockets_get_eacces() {
-        assert_eq!(run(libc::SYS_socket, libc::AF_INET as u32), errno(libc::EACCES));
-        assert_eq!(run(libc::SYS_socket, libc::AF_INET6 as u32), errno(libc::EACCES));
+        assert_eq!(
+            run(libc::SYS_socket, libc::AF_INET as u32),
+            errno(libc::EACCES)
+        );
+        assert_eq!(
+            run(libc::SYS_socket, libc::AF_INET6 as u32),
+            errno(libc::EACCES)
+        );
         assert_eq!(run(libc::SYS_io_uring_setup, 0), errno(libc::EACCES));
     }
 
     #[test]
     fn unix_and_vsock_sockets_get_eperm_but_socketpair_is_allowed() {
-        assert_eq!(run(libc::SYS_socket, libc::AF_UNIX as u32), errno(libc::EPERM));
-        assert_eq!(run(libc::SYS_socket, libc::AF_VSOCK as u32), errno(libc::EPERM));
+        assert_eq!(
+            run(libc::SYS_socket, libc::AF_UNIX as u32),
+            errno(libc::EPERM)
+        );
+        assert_eq!(
+            run(libc::SYS_socket, libc::AF_VSOCK as u32),
+            errno(libc::EPERM)
+        );
         assert_eq!(run(libc::SYS_socketpair, libc::AF_UNIX as u32), ALLOW);
         assert_eq!(run(libc::SYS_socket, libc::AF_NETLINK as u32), ALLOW);
     }
@@ -199,7 +219,12 @@ mod tests {
 
     #[test]
     fn io_uring_and_namespaces_get_eperm() {
-        for nr in [libc::SYS_io_uring_enter, libc::SYS_io_uring_register, libc::SYS_unshare, libc::SYS_setns] {
+        for nr in [
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
+            libc::SYS_unshare,
+            libc::SYS_setns,
+        ] {
             assert_eq!(run(nr, 0), errno(libc::EPERM), "nr {nr}");
         }
         for nr in MOUNT_SYSCALLS {
@@ -210,9 +235,25 @@ mod tests {
     #[test]
     fn clone_is_denied_only_with_a_new_namespace_flag() {
         assert_eq!(run(libc::SYS_clone, libc::SIGCHLD as u32), ALLOW);
-        assert_eq!(run(libc::SYS_clone, (libc::CLONE_VM | libc::CLONE_THREAD) as u32), ALLOW);
-        for flag in [libc::CLONE_NEWUSER, libc::CLONE_NEWNET, libc::CLONE_NEWNS, libc::CLONE_NEWPID, libc::CLONE_NEWTIME] {
-            assert_eq!(run(libc::SYS_clone, flag as u32 | libc::SIGCHLD as u32), errno(libc::EPERM), "flag {flag:#x}");
+        assert_eq!(
+            run(
+                libc::SYS_clone,
+                (libc::CLONE_VM | libc::CLONE_THREAD) as u32
+            ),
+            ALLOW
+        );
+        for flag in [
+            libc::CLONE_NEWUSER,
+            libc::CLONE_NEWNET,
+            libc::CLONE_NEWNS,
+            libc::CLONE_NEWPID,
+            libc::CLONE_NEWTIME,
+        ] {
+            assert_eq!(
+                run(libc::SYS_clone, flag as u32 | libc::SIGCHLD as u32),
+                errno(libc::EPERM),
+                "flag {flag:#x}"
+            );
         }
     }
 
@@ -223,18 +264,30 @@ mod tests {
 
     #[test]
     fn foreign_arch_is_killed() {
-        assert_eq!(evaluate(&program(), 0x4000_0003, libc::SYS_read as u32, 0), KILL_PROCESS);
+        assert_eq!(
+            evaluate(&program(), 0x4000_0003, libc::SYS_read as u32, 0),
+            KILL_PROCESS
+        );
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn x32_calls_are_killed() {
-        assert_eq!(run(libc::SYS_read | i64::from(X32_SYSCALL_BIT), 0), KILL_PROCESS);
+        assert_eq!(
+            run(libc::SYS_read | i64::from(X32_SYSCALL_BIT), 0),
+            KILL_PROCESS
+        );
     }
 
     #[test]
     fn ordinary_calls_are_allowed() {
-        for nr in [libc::SYS_read, libc::SYS_write, libc::SYS_openat, libc::SYS_execve, libc::SYS_close] {
+        for nr in [
+            libc::SYS_read,
+            libc::SYS_write,
+            libc::SYS_openat,
+            libc::SYS_execve,
+            libc::SYS_close,
+        ] {
             assert_eq!(run(nr, 0), ALLOW, "nr {nr}");
         }
     }

@@ -6,8 +6,8 @@
 //! 與同一個使用者的其他行程。
 
 use landlock::{
-    Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, Scope, ABI,
+    Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+    RulesetAttr, RulesetCreatedAttr, Scope, ABI,
 };
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, AsRawFd};
@@ -18,14 +18,23 @@ use std::os::unix::ffi::OsStrExt;
 /// 打不開就回錯：crate 的 `path_beneath_rules` 會默默跳過打不開的路徑，那等於縮小授權，所以不用它。
 fn rule(path: &[u8], access: BitFlags<AccessFs>, abi: ABI) -> Result<PathBeneath<PathFd>, String> {
     let path = OsStr::from_bytes(path);
-    let fd = PathFd::new(path).map_err(|e| format!("打不開授權路徑 {}: {e}", path.to_string_lossy()))?;
+    let fd =
+        PathFd::new(path).map_err(|e| format!("打不開授權路徑 {}: {e}", path.to_string_lossy()))?;
     // SAFETY：fstat 寫進本地結構，fd 由 PathFd 持有。
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(fd.as_fd().as_raw_fd(), &mut st) } != 0 {
-        return Err(format!("fstat {}: {}", path.to_string_lossy(), std::io::Error::last_os_error()));
+        return Err(format!(
+            "fstat {}: {}",
+            path.to_string_lossy(),
+            std::io::Error::last_os_error()
+        ));
     }
     let is_dir = st.st_mode & libc::S_IFMT == libc::S_IFDIR;
-    let access = if is_dir { access } else { access & AccessFs::from_file(abi) };
+    let access = if is_dir {
+        access
+    } else {
+        access & AccessFs::from_file(abi)
+    };
     Ok(PathBeneath::new(fd, access))
 }
 
@@ -78,7 +87,9 @@ pub fn restrict_self(abi: i32, readable: &[Vec<u8>], writable: &[Vec<u8>]) -> Re
         .handle_access(AccessFs::from_all(abi))
         .map_err(|e| e.to_string())?;
     if abi >= ABI::V4 {
-        ruleset = ruleset.handle_access(AccessNet::from_all(abi)).map_err(|e| e.to_string())?;
+        ruleset = ruleset
+            .handle_access(AccessNet::from_all(abi))
+            .map_err(|e| e.to_string())?;
     }
     if abi >= ABI::V6 {
         ruleset = ruleset.scope(Scope::Signal).map_err(|e| e.to_string())?;
@@ -87,7 +98,11 @@ pub fn restrict_self(abi: i32, readable: &[Vec<u8>], writable: &[Vec<u8>]) -> Re
     for path in readable {
         rules.push(rule(path, AccessFs::from_read(abi), abi)?);
     }
-    for path in writable.iter().map(Vec::as_slice).chain(std::iter::once(b"/dev/null".as_slice())) {
+    for path in writable
+        .iter()
+        .map(Vec::as_slice)
+        .chain(std::iter::once(b"/dev/null".as_slice()))
+    {
         rules.push(rule(path, AccessFs::from_all(abi), abi)?);
     }
     ruleset

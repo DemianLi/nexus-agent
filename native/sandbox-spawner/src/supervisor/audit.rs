@@ -17,14 +17,23 @@ pub struct Exit {
 }
 
 impl Exit {
-    pub const NOT_STARTED: Exit = Exit { code: None, signal: None };
+    pub const NOT_STARTED: Exit = Exit {
+        code: None,
+        signal: None,
+    };
 
     /// 從 `waitpid` 的狀態字。
     pub fn from_status(status: libc::c_int) -> Exit {
         if libc::WIFEXITED(status) {
-            Exit { code: Some(libc::WEXITSTATUS(status)), signal: None }
+            Exit {
+                code: Some(libc::WEXITSTATUS(status)),
+                signal: None,
+            }
         } else if libc::WIFSIGNALED(status) {
-            Exit { code: None, signal: Some(libc::WTERMSIG(status)) }
+            Exit {
+                code: None,
+                signal: Some(libc::WTERMSIG(status)),
+            }
         } else {
             Exit::NOT_STARTED
         }
@@ -46,12 +55,26 @@ pub enum Record<'a> {
         max_silence_ms: u64,
         error: Option<&'a str>,
     },
-    Front { pid: i32, exit: Exit, error: Option<&'a str> },
+    Front {
+        pid: i32,
+        exit: Exit,
+        error: Option<&'a str>,
+    },
     /// 宿主結束了。`ready`：它結束前送過 `ready` 沒有。
-    Host { pid: i32, exit: Exit, ready: bool, error: Option<&'a str> },
+    Host {
+        pid: i32,
+        exit: Exit,
+        ready: bool,
+        error: Option<&'a str>,
+    },
     /// 宿主斷了一條違反協定的連線（[`crate::supervisor_protocol::HostReport::Violation`]）。`role` 是那個 pid 在身分表上是誰
     /// （不在表上是 `unknown`），`thread` 是它綁的那條（沒有是空的）。
-    Protocol { pid: i32, role: &'a str, thread: &'a [u8], reason: &'a str },
+    Protocol {
+        pid: i32,
+        role: &'a str,
+        thread: &'a [u8],
+        reason: &'a str,
+    },
 }
 
 pub fn cause_name(cause: DeathCause) -> &'static str {
@@ -77,7 +100,12 @@ impl Audit {
     /// 開不了就回錯：沒有稽核紀錄就不起。主機多人共用：路徑不能是連結；已存在的要是自己擁有、0600 的一般檔，
     /// 別人不能先建好檔來讀，也不能用連結把紀錄導走。
     pub fn open(path: &Path) -> std::io::Result<Audit> {
-        let file = OpenOptions::new().append(true).create(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
         let meta = file.metadata()?;
         // SAFETY：geteuid 不會失敗。
         let me = unsafe { libc::geteuid() };
@@ -94,7 +122,10 @@ impl Audit {
 
     /// 寫不進去只往 stderr 講，不停下監督行程。
     pub fn record(&mut self, record: &Record<'_>) {
-        let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let mut line = line(ms, record);
         if self.torn {
             line.insert(0, '\n');
@@ -112,7 +143,16 @@ impl Audit {
 fn line(ts_ms: u128, record: &Record<'_>) -> String {
     let mut out = format!("{{\"ts_ms\":{ts_ms}");
     let (exit, error) = match record {
-        Record::Conversation { thread, pid, cause, exit, turns, rss_kb, max_silence_ms, error } => {
+        Record::Conversation {
+            thread,
+            pid,
+            cause,
+            exit,
+            turns,
+            rss_kb,
+            max_silence_ms,
+            error,
+        } => {
             out.push_str(",\"role\":\"conversation\",\"thread\":");
             json_string(&mut out, &String::from_utf8_lossy(thread));
             out.push_str(&format!(
@@ -125,11 +165,23 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
             out.push_str(&format!(",\"role\":\"front\",\"pid\":{pid}"));
             (exit, error)
         }
-        Record::Host { pid, exit, ready, error } => {
-            out.push_str(&format!(",\"role\":\"host\",\"pid\":{pid},\"ready\":{ready}"));
+        Record::Host {
+            pid,
+            exit,
+            ready,
+            error,
+        } => {
+            out.push_str(&format!(
+                ",\"role\":\"host\",\"pid\":{pid},\"ready\":{ready}"
+            ));
             (exit, error)
         }
-        Record::Protocol { pid, role, thread, reason } => {
+        Record::Protocol {
+            pid,
+            role,
+            thread,
+            reason,
+        } => {
             out.push_str(&format!(",\"event\":\"protocol\",\"pid\":{pid},\"role\":"));
             json_string(&mut out, role);
             out.push_str(",\"thread\":");
@@ -140,7 +192,11 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
             return out;
         }
     };
-    out.push_str(&format!(",\"exit_code\":{},\"signal\":{}", json_number(exit.code), json_number(exit.signal)));
+    out.push_str(&format!(
+        ",\"exit_code\":{},\"signal\":{}",
+        json_number(exit.code),
+        json_number(exit.signal)
+    ));
     if let Some(error) = error {
         out.push_str(",\"error\":");
         json_string(&mut out, error);
@@ -159,7 +215,9 @@ fn json_string(out: &mut String, value: &str) {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -172,8 +230,15 @@ mod tests {
 
     #[test]
     fn line_after_a_failed_write_starts_on_its_own_line() {
-        let record = Record::Front { pid: 1, exit: Exit::NOT_STARTED, error: None };
-        let mut audit = Audit { file: OpenOptions::new().append(true).open("/dev/full").unwrap(), torn: false };
+        let record = Record::Front {
+            pid: 1,
+            exit: Exit::NOT_STARTED,
+            error: None,
+        };
+        let mut audit = Audit {
+            file: OpenOptions::new().append(true).open("/dev/full").unwrap(),
+            torn: false,
+        };
         audit.record(&record);
         assert!(audit.torn);
         let path = std::env::temp_dir().join(format!("nsup-unit-torn-{}", std::process::id()));
@@ -186,7 +251,10 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3, "{text}");
         assert_eq!(lines[0], "{\"ts_ms\":1,\"ro");
-        assert!(lines[1].starts_with("{\"ts_ms\":") && lines[2].starts_with("{\"ts_ms\":"), "{text}");
+        assert!(
+            lines[1].starts_with("{\"ts_ms\":") && lines[2].starts_with("{\"ts_ms\":"),
+            "{text}"
+        );
         assert!(!audit.torn);
     }
 
@@ -196,7 +264,10 @@ mod tests {
             thread: b"t\"1\\\n\x01\xff",
             pid: 42,
             cause: DeathCause::Crash,
-            exit: Exit { code: Some(3), signal: None },
+            exit: Exit {
+                code: Some(3),
+                signal: None,
+            },
             turns: 2,
             rss_kb: 81920,
             max_silence_ms: 5012,
@@ -211,7 +282,11 @@ mod tests {
 
     #[test]
     fn front_line_with_error() {
-        let record = Record::Front { pid: 0, exit: Exit::NOT_STARTED, error: Some("ENOENT") };
+        let record = Record::Front {
+            pid: 0,
+            exit: Exit::NOT_STARTED,
+            error: Some("ENOENT"),
+        };
         assert_eq!(
             line(1, &record),
             "{\"ts_ms\":1,\"role\":\"front\",\"pid\":0,\"exit_code\":null,\"signal\":null,\"error\":\"ENOENT\"}\n"
@@ -220,17 +295,35 @@ mod tests {
 
     #[test]
     fn host_line_and_protocol_event() {
-        let record = Record::Host { pid: 9, exit: Exit { code: None, signal: Some(9) }, ready: true, error: None };
+        let record = Record::Host {
+            pid: 9,
+            exit: Exit {
+                code: None,
+                signal: Some(9),
+            },
+            ready: true,
+            error: None,
+        };
         assert_eq!(
             line(1, &record),
             "{\"ts_ms\":1,\"role\":\"host\",\"pid\":9,\"ready\":true,\"exit_code\":null,\"signal\":9}\n"
         );
-        let record = Record::Host { pid: 0, exit: Exit::NOT_STARTED, ready: false, error: Some("ENOENT") };
+        let record = Record::Host {
+            pid: 0,
+            exit: Exit::NOT_STARTED,
+            ready: false,
+            error: Some("ENOENT"),
+        };
         assert_eq!(
             line(1, &record),
             "{\"ts_ms\":1,\"role\":\"host\",\"pid\":0,\"ready\":false,\"exit_code\":null,\"signal\":null,\"error\":\"ENOENT\"}\n"
         );
-        let record = Record::Protocol { pid: 42, role: "conversation", thread: b"t\"1", reason: "框太大" };
+        let record = Record::Protocol {
+            pid: 42,
+            role: "conversation",
+            thread: b"t\"1",
+            reason: "框太大",
+        };
         assert_eq!(
             line(2, &record),
             "{\"ts_ms\":2,\"event\":\"protocol\",\"pid\":42,\"role\":\"conversation\",\"thread\":\"t\\\"1\",\"reason\":\"框太大\"}\n"
@@ -240,14 +333,27 @@ mod tests {
     #[test]
     fn every_cause_has_a_distinct_name() {
         let count = crate::supervisor_protocol::DEATH_CAUSES;
-        let names: std::collections::HashSet<_> =
-            (1..=count as u8).map(|c| cause_name(DeathCause::from_u8(c).unwrap())).collect();
+        let names: std::collections::HashSet<_> = (1..=count as u8)
+            .map(|c| cause_name(DeathCause::from_u8(c).unwrap()))
+            .collect();
         assert_eq!(names.len(), count);
     }
 
     #[test]
     fn exit_from_status() {
-        assert_eq!(Exit::from_status(3 << 8), Exit { code: Some(3), signal: None });
-        assert_eq!(Exit::from_status(libc::SIGKILL), Exit { code: None, signal: Some(libc::SIGKILL) });
+        assert_eq!(
+            Exit::from_status(3 << 8),
+            Exit {
+                code: Some(3),
+                signal: None
+            }
+        );
+        assert_eq!(
+            Exit::from_status(libc::SIGKILL),
+            Exit {
+                code: None,
+                signal: Some(libc::SIGKILL)
+            }
+        );
     }
 }

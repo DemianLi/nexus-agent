@@ -11,7 +11,8 @@ use std::time::Instant;
 
 use super::deadline::{later, Effect, Step};
 use super::{
-    Applied, Cx, FiberId, Health, Kernel, KernelError, KernelEvent, Plugin, PluginError, Range, Spec, State,
+    Applied, Cx, FiberId, Health, Kernel, KernelError, KernelEvent, Plugin, PluginError, Range,
+    Spec, State,
 };
 use crate::json::Value;
 
@@ -22,22 +23,33 @@ pub(crate) enum Entry {
     Provision(u64),
     Listener(u64),
     Timer(u64),
-    Effect { label: String, effect: Box<dyn Effect> },
+    Effect {
+        label: String,
+        effect: Box<dyn Effect>,
+    },
 }
 
 pub(crate) enum PendingDispose {
     Child(FiberId),
-    Effect { label: String, effect: Box<dyn Effect>, deadline: Instant },
+    Effect {
+        label: String,
+        effect: Box<dyn Effect>,
+        deadline: Instant,
+    },
 }
 
 pub(crate) enum Phase {
     Idle,
     /// apply 回了 `Pending`。
-    Loading { deadline: Instant },
+    Loading {
+        deadline: Instant,
+    },
     /// 已經進 UNLOADING，等依賴自己服務的 fiber 卸載完；已經開始收 effect 的祖先不等（它在等這個 fiber 收完）。
     WaitDependents,
     /// effect 都已開始收，等回 `Pending` 的與子 fiber 收完。
-    Disposing { pending: Vec<PendingDispose> },
+    Disposing {
+        pending: Vec<PendingDispose>,
+    },
 }
 
 pub(crate) struct Fiber {
@@ -128,7 +140,10 @@ impl Kernel {
     /// 宣告依賴 `name` 的 fiber 都重新看一次自己的依賴。
     pub(crate) fn notify_name(&mut self, name: &str) {
         for id in self.ids() {
-            if self.fiber(id).is_some_and(|f| f.inject.iter().any(|(n, _)| *n == name)) {
+            if self
+                .fiber(id)
+                .is_some_and(|f| f.inject.iter().any(|(n, _)| *n == name))
+            {
                 self.dirty.push_back(id);
             }
         }
@@ -145,11 +160,17 @@ impl Kernel {
         if !f.inject.iter().any(|(n, _)| *n == name) {
             return Err(KernelError::Undeclared { service: name });
         }
-        f.committed.iter().find(|(n, _)| *n == name).map(|(_, uid)| *uid).ok_or(KernelError::Inactive { service: name })
+        f.committed
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, uid)| *uid)
+            .ok_or(KernelError::Inactive { service: name })
     }
 
     pub(crate) fn health(&self, id: FiberId) -> Health {
-        let Some(f) = self.fiber(id) else { return Health::Disposed };
+        let Some(f) = self.fiber(id) else {
+            return Health::Disposed;
+        };
         match f.state {
             State::Active => Health::Active,
             State::Loading => Health::Loading,
@@ -172,8 +193,12 @@ impl Kernel {
     }
 
     fn resolve(&self, id: FiberId, (name, range): &InjectDecl) -> Resolve {
-        let Some(uid) = self.store.uid_of(name) else { return Resolve::Missing };
-        let Some(imp) = self.store.get(uid) else { return Resolve::Missing };
+        let Some(uid) = self.store.uid_of(name) else {
+            return Resolve::Missing;
+        };
+        let Some(imp) = self.store.get(uid) else {
+            return Resolve::Missing;
+        };
         if imp.owner == id || self.fiber(imp.owner).map(|f| f.state) != Some(State::Active) {
             return Resolve::Missing;
         }
@@ -207,7 +232,11 @@ impl Kernel {
     }
 
     fn report_mismatch(&mut self, id: FiberId, (service, range): &InjectDecl, uid: u64) {
-        let version = self.store.get(uid).and_then(|i| i.version).map(|v| v.to_string());
+        let version = self
+            .store
+            .get(uid)
+            .and_then(|i| i.version)
+            .map(|v| v.to_string());
         let Some(f) = self.fiber_mut(id) else { return };
         if f.mismatch_seen.contains(&uid) {
             return;
@@ -215,7 +244,13 @@ impl Kernel {
         f.mismatch_seen.push(uid);
         let name = f.name;
         let range = range.map_or_else(String::new, |(_, text)| text.to_string());
-        self.push_event(KernelEvent::ContractMismatch { fiber: id, name, service, range, version });
+        self.push_event(KernelEvent::ContractMismatch {
+            fiber: id,
+            name,
+            service,
+            range,
+            version,
+        });
     }
 
     /// 把 `dirty` 裡的 fiber 推進到推不動為止，最多 `max_steps` 步。
@@ -275,7 +310,12 @@ impl Kernel {
             f.plugin = Some(next);
         }
         let uids: Vec<u64> = f.loaded.as_ref().map_or_else(Vec::new, |e| e[1..].to_vec());
-        f.committed = f.inject.iter().map(|(name, _)| *name).zip(uids.iter().copied()).collect();
+        f.committed = f
+            .inject
+            .iter()
+            .map(|(name, _)| *name)
+            .zip(uids.iter().copied())
+            .collect();
         for uid in uids {
             if let Some(imp) = self.store.get_mut(uid) {
                 imp.dependents.push(id);
@@ -304,7 +344,11 @@ impl Kernel {
                     f.disabled = Some(reason.clone());
                     f.target = None;
                 }
-                self.push_event(KernelEvent::SelfDisabled { fiber: id, name, reason });
+                self.push_event(KernelEvent::SelfDisabled {
+                    fiber: id,
+                    name,
+                    reason,
+                });
                 self.start_unload(id);
             }
             Some(Err(error)) => self.fail(id, error.0),
@@ -332,7 +376,11 @@ impl Kernel {
             f.error = Some(error.clone());
             f.target = None;
         }
-        self.push_event(KernelEvent::ApplyFailed { fiber: id, name, error });
+        self.push_event(KernelEvent::ApplyFailed {
+            fiber: id,
+            name,
+            error,
+        });
         self.start_unload(id);
     }
 
@@ -352,7 +400,11 @@ impl Kernel {
         let Some(f) = self.fiber(id) else { return };
         if matches!(f.phase, Phase::WaitDependents) {
             let waiting = f.provisions().any(|uid| {
-                self.store.get(uid).is_some_and(|i| i.dependents.iter().any(|d| *d != id && !self.collecting(*d, id)))
+                self.store.get(uid).is_some_and(|i| {
+                    i.dependents
+                        .iter()
+                        .any(|d| *d != id && !self.collecting(*d, id))
+                })
             });
             if waiting {
                 return;
@@ -362,8 +414,16 @@ impl Kernel {
         let mut done = false;
         let mut alive_children = Vec::new();
         if let Some(Phase::Disposing { pending }) = self.fiber(id).map(|f| &f.phase) {
-            alive_children =
-                pending.iter().filter_map(|p| if let PendingDispose::Child(c) = p { Some(*c) } else { None }).collect();
+            alive_children = pending
+                .iter()
+                .filter_map(|p| {
+                    if let PendingDispose::Child(c) = p {
+                        Some(*c)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
         alive_children.retain(|c| self.fiber(*c).is_some());
         if let Some(f) = self.fiber_mut(id) {
@@ -382,7 +442,10 @@ impl Kernel {
 
     /// `dependent` 是 `id` 的祖先、而且已經開始收 effect：它在等 `id` 這個子孫收完，`id` 不能反過來等它。
     fn collecting(&self, dependent: FiberId, id: FiberId) -> bool {
-        if !matches!(self.fiber(dependent).map(|f| &f.phase), Some(Phase::Disposing { .. })) {
+        if !matches!(
+            self.fiber(dependent).map(|f| &f.phase),
+            Some(Phase::Disposing { .. })
+        ) {
             return false;
         }
         let mut at = self.fiber(id).and_then(|f| f.parent);
@@ -399,7 +462,9 @@ impl Kernel {
     /// 在 dispose 裡讀得到；回 `Pending` 之後的 poll 讀不到。
     fn begin_disposing(&mut self, id: FiberId) {
         let Some(f) = self.fiber_mut(id) else { return };
-        f.phase = Phase::Disposing { pending: Vec::new() };
+        f.phase = Phase::Disposing {
+            pending: Vec::new(),
+        };
         // 這個 fiber 底下被拒的列跟子 fiber 一起作廢；重新 apply 時 load 會再記一次。
         self.rejected.retain(|r| r.parent != id);
         let mut pending = Vec::new();
@@ -422,13 +487,20 @@ impl Kernel {
                 }
                 Entry::Effect { label, mut effect } => {
                     let started = Instant::now();
-                    let result = effect.dispose(&mut Cx { kernel: self, fiber: id });
+                    let result = effect.dispose(&mut Cx {
+                        kernel: self,
+                        fiber: id,
+                    });
                     self.note_slow(id, &label, started);
                     match result {
                         Ok(Step::Done) => {}
                         Ok(Step::Pending) => {
                             let deadline = later(self.now, self.limits.dispose);
-                            pending.push(PendingDispose::Effect { label, effect, deadline });
+                            pending.push(PendingDispose::Effect {
+                                label,
+                                effect,
+                                deadline,
+                            });
                         }
                         Err(error) => self.dispose_failed(id, label, error.0),
                     }
@@ -444,7 +516,12 @@ impl Kernel {
 
     fn dispose_failed(&mut self, id: FiberId, label: String, error: String) {
         let name = self.fiber_name(id);
-        self.push_event(KernelEvent::DisposeFailed { fiber: id, name, label, error });
+        self.push_event(KernelEvent::DisposeFailed {
+            fiber: id,
+            name,
+            label,
+            error,
+        });
     }
 
     fn finish_unload(&mut self, id: FiberId) {
@@ -472,7 +549,8 @@ impl Kernel {
         let parent = self.fiber(id).and_then(|f| f.parent);
         if let Some(parent) = parent {
             if let Some(p) = self.fiber_mut(parent) {
-                p.entries.retain(|e| !matches!(e, Entry::Child(c) if *c == id));
+                p.entries
+                    .retain(|e| !matches!(e, Entry::Child(c) if *c == id));
             }
             self.dirty.push_back(parent);
         }
@@ -488,7 +566,12 @@ impl Kernel {
         f.state = state;
         let name = f.name;
         let provided: Vec<u64> = f.provisions().collect();
-        self.push_event(KernelEvent::Status { fiber: id, name, from, to: state });
+        self.push_event(KernelEvent::Status {
+            fiber: id,
+            name,
+            from,
+            to: state,
+        });
         if from == State::Active || state == State::Active {
             for uid in provided {
                 if let Some(service) = self.store.get(uid).map(|i| i.name) {
@@ -503,7 +586,10 @@ impl Kernel {
         let mut plugin = self.fiber_mut(id)?.plugin.take()?;
         let started = Instant::now();
         let result = {
-            let mut cx = Cx { kernel: self, fiber: id };
+            let mut cx = Cx {
+                kernel: self,
+                fiber: id,
+            };
             match call {
                 Call::Apply => plugin.apply(&mut cx),
                 Call::Poll => plugin.poll(&mut cx),
@@ -563,18 +649,33 @@ impl Kernel {
         for p in pending {
             match p {
                 PendingDispose::Child(_) => keep.push(p),
-                PendingDispose::Effect { label, mut effect, deadline } => {
+                PendingDispose::Effect {
+                    label,
+                    mut effect,
+                    deadline,
+                } => {
                     if now >= deadline {
                         effect.cancel();
-                        self.dispose_failed(id, label, format!("收尾超過時限 {:?}", self.limits.dispose));
+                        self.dispose_failed(
+                            id,
+                            label,
+                            format!("收尾超過時限 {:?}", self.limits.dispose),
+                        );
                         continue;
                     }
                     let started = Instant::now();
-                    let result = effect.poll(&mut Cx { kernel: self, fiber: id });
+                    let result = effect.poll(&mut Cx {
+                        kernel: self,
+                        fiber: id,
+                    });
                     self.note_slow(id, &label, started);
                     match result {
                         Ok(Step::Done) => {}
-                        Ok(Step::Pending) => keep.push(PendingDispose::Effect { label, effect, deadline }),
+                        Ok(Step::Pending) => keep.push(PendingDispose::Effect {
+                            label,
+                            effect,
+                            deadline,
+                        }),
                         Err(error) => self.dispose_failed(id, label, error.0),
                     }
                 }
@@ -589,20 +690,36 @@ impl Kernel {
     /// 跑到期的計時器，照到期時間的先後。
     pub(crate) fn fire_timers(&mut self) {
         let now = self.now;
-        let mut due: Vec<(Instant, u64)> =
-            self.timers.iter().filter(|(_, t)| t.due <= now).map(|(id, t)| (t.due, *id)).collect();
+        let mut due: Vec<(Instant, u64)> = self
+            .timers
+            .iter()
+            .filter(|(_, t)| t.due <= now)
+            .map(|(id, t)| (t.due, *id))
+            .collect();
         due.sort();
         for (_, tid) in due {
-            let Some(timer) = self.timers.get_mut(&tid) else { continue };
-            let Some(mut callback) = timer.callback.take() else { continue };
+            let Some(timer) = self.timers.get_mut(&tid) else {
+                continue;
+            };
+            let Some(mut callback) = timer.callback.take() else {
+                continue;
+            };
             let owner = timer.owner;
             let label = timer.label.clone();
             let started = Instant::now();
-            let result = callback(&mut Cx { kernel: self, fiber: owner });
+            let result = callback(&mut Cx {
+                kernel: self,
+                fiber: owner,
+            });
             self.note_slow(owner, &label, started);
             if let Err(error) = result {
                 let name = self.fiber_name(owner);
-                self.push_event(KernelEvent::TimerFailed { fiber: owner, name, label, error: error.0 });
+                self.push_event(KernelEvent::TimerFailed {
+                    fiber: owner,
+                    name,
+                    label,
+                    error: error.0,
+                });
             }
             let repeat = match self.timers.get_mut(&tid) {
                 Some(timer) => match timer.every {
@@ -618,7 +735,8 @@ impl Kernel {
             if !repeat {
                 self.timers.remove(&tid);
                 if let Some(f) = self.fiber_mut(owner) {
-                    f.entries.retain(|e| !matches!(e, Entry::Timer(t) if *t == tid));
+                    f.entries
+                        .retain(|e| !matches!(e, Entry::Timer(t) if *t == tid));
                 }
             }
         }

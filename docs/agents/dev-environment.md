@@ -194,6 +194,6 @@ perl -MPOSIX -e 'my $p = fork(); if ($p == 0) { POSIX::setsid(); exec @ARGV or d
 
 （兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
 
-## 本機跑 spawner 的 clippy（#2620）
+## 本機跑 spawner 的 fmt 與 clippy（#2620）
 
-CI 在 `.github/actions/sandbox-spawner` 跑這一步，本機在 `native/sandbox-spawner` 下照抄：`cargo clippy --locked --all-targets --features test-hooks -- -D warnings`。前提是 rust-toolchain.toml 釘的那版已裝 `clippy` 元件（`rustup component add clippy`）。`src/` 直接呼叫 Landlock、seccomp 這類 Linux 系統呼叫，`tests/` 的整合測試帶 `#![cfg(target_os = "linux")]`，所以 clippy 要在 Linux 上跑才跟 CI 看到同一份程式碼；macOS 上看分支 CI。
+CI 在 `.github/actions/sandbox-spawner` 跑這兩步，本機在 `native/sandbox-spawner` 下照抄：`cargo fmt --check`、`cargo clippy --locked --all-targets --features test-hooks -- -D warnings`。前提是 rust-toolchain.toml 釘的那版已裝 `clippy`、`rustfmt` 兩個元件（`rustup component add clippy rustfmt`）。`src/` 直接呼叫 Landlock、seccomp 這類 Linux 系統呼叫，`tests/` 的整合測試帶 `#![cfg(target_os = "linux")]`，所以 clippy 要在 Linux 上跑才跟 CI 看到同一份程式碼；fmt 不受平台影響，macOS 上也能跑，clippy 看分支 CI。

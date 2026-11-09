@@ -30,7 +30,10 @@ pub fn reject_js_expr(value: &Value) -> Result<(), ConfigError> {
                 for (key, child) in fields {
                     path.push(key.clone());
                     if key == JS_EXPR_KEY {
-                        return Err(ConfigError(format!("設定不支援 {JS_EXPR_KEY}（在 {}）", path.join("."))));
+                        return Err(ConfigError(format!(
+                            "設定不支援 {JS_EXPR_KEY}（在 {}）",
+                            path.join(".")
+                        )));
                     }
                     walk(child, path)?;
                     path.pop();
@@ -84,7 +87,10 @@ impl<'a> Fields<'a> {
             Value::Null => &[],
             _ => return Err(ConfigError("設定必須是物件".to_string())),
         };
-        Ok(Fields { fields, used: vec![false; fields.len()] })
+        Ok(Fields {
+            fields,
+            used: vec![false; fields.len()],
+        })
     }
 
     /// 這個鍵的值；鍵不存在或值是 `null` 都回 `None`。
@@ -106,7 +112,8 @@ impl<'a> Fields<'a> {
     }
 
     pub fn int(&mut self, key: &str) -> Result<i64, ConfigError> {
-        self.opt_int(key)?.ok_or_else(|| ConfigError(format!("缺少 {key}")))
+        self.opt_int(key)?
+            .ok_or_else(|| ConfigError(format!("缺少 {key}")))
     }
 
     pub fn opt_str(&mut self, key: &str) -> Result<Option<&'a str>, ConfigError> {
@@ -118,7 +125,8 @@ impl<'a> Fields<'a> {
     }
 
     pub fn str(&mut self, key: &str) -> Result<&'a str, ConfigError> {
-        self.opt_str(key)?.ok_or_else(|| ConfigError(format!("缺少 {key}")))
+        self.opt_str(key)?
+            .ok_or_else(|| ConfigError(format!("缺少 {key}")))
     }
 
     pub fn opt_bool(&mut self, key: &str) -> Result<Option<bool>, ConfigError> {
@@ -131,12 +139,20 @@ impl<'a> Fields<'a> {
 
     /// 還有沒取過的鍵就回錯，錯誤列出全部。
     pub fn finish(self) -> Result<(), ConfigError> {
-        let unknown: Vec<&str> =
-            self.fields.iter().zip(&self.used).filter(|(_, used)| !**used).map(|((k, _), _)| k.as_str()).collect();
+        let unknown: Vec<&str> = self
+            .fields
+            .iter()
+            .zip(&self.used)
+            .filter(|(_, used)| !**used)
+            .map(|((k, _), _)| k.as_str())
+            .collect();
         if unknown.is_empty() {
             Ok(())
         } else {
-            Err(ConfigError(format!("不認得的設定鍵：{}", unknown.join(", "))))
+            Err(ConfigError(format!(
+                "不認得的設定鍵：{}",
+                unknown.join(", ")
+            )))
         }
     }
 }

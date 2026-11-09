@@ -23,7 +23,12 @@ fn probe() -> PathBuf {
         let built = Path::new(SPAWNER).parent().unwrap().join("examples/probe");
         let dir = temp_dir("probe");
         let copy = dir.join("probe");
-        assert!(Command::new("cp").arg(&built).arg(&copy).status().unwrap().success());
+        assert!(Command::new("cp")
+            .arg(&built)
+            .arg(&copy)
+            .status()
+            .unwrap()
+            .success());
         copy
     })
     .clone()
@@ -36,12 +41,24 @@ fn readable() -> Vec<Vec<u8>> {
         .filter(|p| Path::new(p).exists())
         .map(|p| p.as_bytes().to_vec())
         .collect();
-    roots.push(probe().parent().unwrap().to_str().unwrap().as_bytes().to_vec());
+    roots.push(
+        probe()
+            .parent()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec(),
+    );
     roots
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("nexus-spawner-{tag}-{}-{:?}", std::process::id(), Instant::now()));
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-spawner-{tag}-{}-{:?}",
+        std::process::id(),
+        Instant::now()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -62,7 +79,11 @@ fn start_with(envs: &[(&str, &str)], outer: Option<Vec<libc::sock_filter>>) -> (
     let dir = temp_dir("sock");
     let socket = dir.join("s");
     let mut cmd = Command::new(SPAWNER);
-    cmd.arg("--listen").arg(&socket).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+    cmd.arg("--listen")
+        .arg(&socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
     cmd.env("SPAWNER_OWN_ENV", "leak");
     for (k, v) in envs {
         cmd.env(k, v);
@@ -71,9 +92,16 @@ fn start_with(envs: &[(&str, &str)], outer: Option<Vec<libc::sock_filter>>) -> (
         // SAFETY：pre_exec 裡只做兩個 prctl；filter 在 fork 之前就配置好了。
         unsafe {
             cmd.pre_exec(move || {
-                let fprog = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_ptr() as *mut _ };
+                let fprog = libc::sock_fprog {
+                    len: filter.len() as u16,
+                    filter: filter.as_ptr() as *mut _,
+                };
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                    || libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const _) != 0
+                    || libc::prctl(
+                        libc::PR_SET_SECCOMP,
+                        libc::SECCOMP_MODE_FILTER,
+                        &fprog as *const _,
+                    ) != 0
                 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -84,7 +112,14 @@ fn start_with(envs: &[(&str, &str)], outer: Option<Vec<libc::sock_filter>>) -> (
     let mut child = cmd.spawn().unwrap();
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    let mut s = Spawner { child, stdin, stdout, socket, events: Vec::new(), landlock_abi: 0 };
+    let mut s = Spawner {
+        child,
+        stdin,
+        stdout,
+        socket,
+        events: Vec::new(),
+        landlock_abi: 0,
+    };
     let first = s.next_event();
     if let Event::Ready { landlock_abi, .. } = first {
         s.landlock_abi = landlock_abi;
@@ -95,7 +130,9 @@ fn start_with(envs: &[(&str, &str)], outer: Option<Vec<libc::sock_filter>>) -> (
 impl Spawner {
     fn next_event(&mut self) -> Event {
         let mut len = [0u8; 4];
-        self.stdout.read_exact(&mut len).expect("spawner 的 stdout 斷了");
+        self.stdout
+            .read_exact(&mut len)
+            .expect("spawner 的 stdout 斷了");
         let mut payload = vec![0u8; u32::from_le_bytes(len) as usize];
         self.stdout.read_exact(&mut payload).unwrap();
         protocol::decode_event(&payload).unwrap()
@@ -116,12 +153,15 @@ impl Spawner {
     }
 
     fn send(&mut self, request: &Request) {
-        self.stdin.write_all(&protocol::frame(&protocol::encode_request(request))).unwrap();
+        self.stdin
+            .write_all(&protocol::frame(&protocol::encode_request(request)))
+            .unwrap();
     }
 
     fn connect(&self, id: u32, fd: u32) -> UnixStream {
         let mut s = UnixStream::connect(&self.socket).unwrap();
-        s.write_all(&[id.to_le_bytes(), fd.to_le_bytes()].concat()).unwrap();
+        s.write_all(&[id.to_le_bytes(), fd.to_le_bytes()].concat())
+            .unwrap();
         s
     }
 
@@ -149,7 +189,9 @@ impl Spawner {
 
 fn event_id(e: &Event) -> Option<u32> {
     match e {
-        Event::Started { id, .. } | Event::Failed { id, .. } | Event::Exited { id, .. } => Some(*id),
+        Event::Started { id, .. } | Event::Failed { id, .. } | Event::Exited { id, .. } => {
+            Some(*id)
+        }
         _ => None,
     }
 }
@@ -175,11 +217,16 @@ fn request(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
 fn start() -> Option<Spawner> {
     let (s, first) = start_with(&[], None);
     match first {
-        Event::Ready { filter_insns, landlock_abi } => {
+        Event::Ready {
+            filter_insns,
+            landlock_abi,
+        } => {
             assert!(filter_insns > 10 && landlock_abi >= 1);
             Some(s)
         }
-        Event::Unavailable { .. } if std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref() != Ok("1") => {
+        Event::Unavailable { .. }
+            if std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref() != Ok("1") =>
+        {
             eprintln!("跳過：這個核心沒有 Landlock（{first:?}）");
             None
         }
@@ -198,16 +245,25 @@ macro_rules! spawner {
 
 fn probe_line(s: &mut Spawner, id: u32, ws: &Path, args: &[&str]) -> String {
     let p = probe();
-    let argv: Vec<&str> = std::iter::once(p.to_str().unwrap()).chain(args.iter().copied()).collect();
+    let argv: Vec<&str> = std::iter::once(p.to_str().unwrap())
+        .chain(args.iter().copied())
+        .collect();
     let (out, exit) = s.run(request(id, ws, &argv));
-    assert!(matches!(exit, Event::Exited { code: 0, .. }), "{args:?}: {exit:?}");
+    assert!(
+        matches!(exit, Event::Exited { code: 0, .. }),
+        "{args:?}: {exit:?}"
+    );
     out.trim().to_string()
 }
 
 /// 還活著（存在、而且不是等人收屍的殭屍）。容器裡的 PID 1 不一定會收孤兒，殭屍不算活著。
 fn alive(pid: &str) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map(|stat| stat.rsplit(") ").next().is_some_and(|rest| !rest.starts_with('Z')))
+        .map(|stat| {
+            stat.rsplit(") ")
+                .next()
+                .is_some_and(|rest| !rest.starts_with('Z'))
+        })
         .unwrap_or(false)
 }
 
@@ -234,19 +290,41 @@ fn s5_writes_inside_the_workspace_and_blocks_outside_secret_tcp_and_udp() {
     let outside = temp_dir("outside");
     std::fs::write(outside.join("token"), "secret").unwrap();
     let inside = ws.join("t");
-    assert_eq!(probe_line(&mut s, 1, &ws, &["write", inside.to_str().unwrap()]), "ok");
+    assert_eq!(
+        probe_line(&mut s, 1, &ws, &["write", inside.to_str().unwrap()]),
+        "ok"
+    );
     assert_eq!(std::fs::read_to_string(&inside).unwrap(), "x");
     assert_eq!(
-        probe_line(&mut s, 2, &ws, &["write", outside.join("w").to_str().unwrap()]),
+        probe_line(
+            &mut s,
+            2,
+            &ws,
+            &["write", outside.join("w").to_str().unwrap()]
+        ),
         errno_line(libc::EACCES)
     );
     assert_eq!(
-        probe_line(&mut s, 3, &ws, &["read", outside.join("token").to_str().unwrap()]),
+        probe_line(
+            &mut s,
+            3,
+            &ws,
+            &["read", outside.join("token").to_str().unwrap()]
+        ),
         errno_line(libc::EACCES)
     );
-    assert_eq!(probe_line(&mut s, 4, &ws, &["tcp"]), errno_line(libc::EACCES));
-    assert_eq!(probe_line(&mut s, 5, &ws, &["udp"]), errno_line(libc::EACCES));
-    assert_eq!(probe_line(&mut s, 6, &ws, &["udp6"]), errno_line(libc::EACCES));
+    assert_eq!(
+        probe_line(&mut s, 4, &ws, &["tcp"]),
+        errno_line(libc::EACCES)
+    );
+    assert_eq!(
+        probe_line(&mut s, 5, &ws, &["udp"]),
+        errno_line(libc::EACCES)
+    );
+    assert_eq!(
+        probe_line(&mut s, 6, &ws, &["udp6"]),
+        errno_line(libc::EACCES)
+    );
 }
 
 #[test]
@@ -255,7 +333,11 @@ fn read_only_mode_ignores_the_writable_roots() {
     let ws = temp_dir("ws");
     let p = probe();
     let target = ws.join("t");
-    let mut r = request(1, &ws, &[p.to_str().unwrap(), "write", target.to_str().unwrap()]);
+    let mut r = request(
+        1,
+        &ws,
+        &[p.to_str().unwrap(), "write", target.to_str().unwrap()],
+    );
     r.mode = Mode::ReadOnly;
     r.readable.push(bytes(ws.to_str().unwrap()));
     let (out, _) = s.run(r);
@@ -282,11 +364,22 @@ fn s1_rules_fire_inside_the_child() {
         ("thread", "ok".into()),
     ];
     for (i, (what, want)) in cases.iter().enumerate() {
-        assert_eq!(&probe_line(&mut s, 10 + i as u32, &ws, &[what]), want, "{what}");
+        assert_eq!(
+            &probe_line(&mut s, 10 + i as u32, &ws, &[what]),
+            want,
+            "{what}"
+        );
     }
     // mount 系列 10 條：參數全是 -1，沒被擋的話核心回的是 EBADF／EINVAL／EFAULT，不是 EPERM。
-    for (i, nr) in nexus_sandbox_spawner::seccomp::MOUNT_SYSCALLS.iter().enumerate() {
-        assert_eq!(probe_line(&mut s, 100 + i as u32, &ws, &["syscall", &nr.to_string()]), eperm, "nr {nr}");
+    for (i, nr) in nexus_sandbox_spawner::seccomp::MOUNT_SYSCALLS
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(
+            probe_line(&mut s, 100 + i as u32, &ws, &["syscall", &nr.to_string()]),
+            eperm,
+            "nr {nr}"
+        );
     }
 }
 
@@ -298,7 +391,15 @@ fn x32_and_i386_calls_kill_the_child() {
     let p = probe();
     for (id, what) in [(1, "x32"), (2, "i386")] {
         let (_, exit) = s.run(request(id, &ws, &[p.to_str().unwrap(), what]));
-        assert_eq!(exit, Event::Exited { id, code: -1, signal: libc::SIGSYS }, "{what}");
+        assert_eq!(
+            exit,
+            Event::Exited {
+                id,
+                code: -1,
+                signal: libc::SIGSYS
+            },
+            "{what}"
+        );
     }
 }
 
@@ -311,14 +412,31 @@ fn a_tool_cannot_reach_a_live_host_socket() {
     let socket = temp_dir("run").join("host.sock");
     let mut host = common::host::HostProc::start(&socket);
     let token = "00112233445566778899aabbccddeeff";
-    host.grant(std::process::id(), token, nexus_sandbox_spawner::supervisor_protocol::Role::Conversation, "a");
+    host.grant(
+        std::process::id(),
+        token,
+        nexus_sandbox_spawner::supervisor_protocol::Role::Conversation,
+        "a",
+    );
     // 跟探針同一個理由複製一份，放在探針的目錄（可讀清單裡有它）。
     let client = probe().parent().unwrap().join("host_client");
-    assert!(Command::new("cp").arg(common::host::example("host_client")).arg(&client).status().unwrap().success());
-    let (out, exit) = s.run(request(1, &ws, &[client.to_str().unwrap(), socket.to_str().unwrap(), token]));
+    assert!(Command::new("cp")
+        .arg(common::host::example("host_client"))
+        .arg(&client)
+        .status()
+        .unwrap()
+        .success());
+    let (out, exit) = s.run(request(
+        1,
+        &ws,
+        &[client.to_str().unwrap(), socket.to_str().unwrap(), token],
+    ));
     assert!(matches!(exit, Event::Exited { code: 0, .. }), "{exit:?}");
     assert_eq!(out.trim(), format!("host error {}", libc::EPERM));
-    assert!(host.reports_so_far().is_empty(), "連都連不上，宿主不會有回報");
+    assert!(
+        host.reports_so_far().is_empty(),
+        "連都連不上，宿主不會有回報"
+    );
 }
 
 #[test]
@@ -328,14 +446,31 @@ fn stdin_and_stdout_reach_the_child_and_the_exit_code_comes_back() {
     let mut r = request(1, &ws, &["/bin/sh", "-c", "cat; exit 3"]);
     r.pipes = 0b011;
     let (stdin, stdout, started) = s.launch(r);
-    assert!(matches!(started, Event::Started { id: 1, partial: false, .. }), "{started:?}");
+    assert!(
+        matches!(
+            started,
+            Event::Started {
+                id: 1,
+                partial: false,
+                ..
+            }
+        ),
+        "{started:?}"
+    );
     let mut stdin = stdin.unwrap();
     stdin.write_all(b"a\tb\nc").unwrap();
     drop(stdin);
     let mut out = String::new();
     stdout.unwrap().read_to_string(&mut out).unwrap();
     assert_eq!(out, "a\tb\nc");
-    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: 3, signal: 0 });
+    assert_eq!(
+        s.event_for(1),
+        Event::Exited {
+            id: 1,
+            code: 3,
+            signal: 0
+        }
+    );
 }
 
 #[test]
@@ -357,7 +492,18 @@ fn a_missing_start_dir_is_not_reported_as_sandbox_unavailable() {
     let mut r = request(1, &ws, &["/bin/true"]);
     r.cwd = bytes(ws.join("gone").to_str().unwrap());
     let (_, _, event) = s.launch(r);
-    assert!(matches!(event, Event::Failed { id: 1, kind: FailKind::StartDir, errno: libc::ENOENT, .. }), "{event:?}");
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 1,
+                kind: FailKind::StartDir,
+                errno: libc::ENOENT,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
 }
 
 #[test]
@@ -367,7 +513,17 @@ fn an_unopenable_grant_fails_closed_instead_of_shrinking() {
     let mut r = request(1, &ws, &["/bin/true"]);
     r.writable.push(bytes(ws.join("missing").to_str().unwrap()));
     let (_, _, event) = s.launch(r);
-    assert!(matches!(event, Event::Failed { id: 1, kind: FailKind::SandboxUnavailable, .. }), "{event:?}");
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 1,
+                kind: FailKind::SandboxUnavailable,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
 }
 
 #[test]
@@ -377,11 +533,18 @@ fn exec_failures_carry_the_execvp_errno() {
     std::fs::write(ws.join("not-exec"), "#!/bin/sh\n").unwrap();
     let cases = [
         (1, "no-such-tool".to_string(), libc::ENOENT),
-        (2, ws.join("not-exec").to_str().unwrap().to_string(), libc::EACCES),
+        (
+            2,
+            ws.join("not-exec").to_str().unwrap().to_string(),
+            libc::EACCES,
+        ),
     ];
     for (id, argv0, want) in cases {
         let (_, _, event) = s.launch(request(id, &ws, &[&argv0]));
-        assert!(matches!(event, Event::Failed { kind: FailKind::Exec, errno, .. } if errno == want), "{argv0}: {event:?}");
+        assert!(
+            matches!(event, Event::Failed { kind: FailKind::Exec, errno, .. } if errno == want),
+            "{argv0}: {event:?}"
+        );
     }
     // 沒有 `/` 的 argv[0] 照要求帶來的 PATH 找。
     let (out, _) = s.run(request(3, &ws, &["echo", "found"]));
@@ -393,28 +556,50 @@ fn signals_reach_the_whole_group_and_the_group_dies_with_the_leader() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
     // leader 收到 SIGTERM 後還活 3 秒：背景成員要在這段時間內就死，才證明訊號送到了整個群組，而不是 leader 結束時順便收掉。
-    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "trap 'sleep 3' TERM; sleep 100 & echo $!; wait"]));
+    let (_, stdout, _) = s.launch(request(
+        1,
+        &ws,
+        &[
+            "/bin/sh",
+            "-c",
+            "trap 'sleep 3' TERM; sleep 100 & echo $!; wait",
+        ],
+    ));
     let mut stdout = stdout.unwrap();
     let mut line = [0u8; 32];
     let n = stdout.read(&mut line).unwrap();
     let background: i32 = String::from_utf8_lossy(&line[..n]).trim().parse().unwrap();
     // 等背景成員 exec 成 sleep 再送：dash fork 出來、還沒清掉 trap 的那一小段，SIGTERM 會被 trap 接走、清 trap 時丟掉。
     let deadline = Instant::now() + Duration::from_secs(5);
-    while std::fs::read_to_string(format!("/proc/{background}/comm")).map_or(true, |c| c.trim() != "sleep") {
+    while std::fs::read_to_string(format!("/proc/{background}/comm"))
+        .map_or(true, |c| c.trim() != "sleep")
+    {
         assert!(Instant::now() < deadline, "背景成員沒有 exec 成 sleep");
         std::thread::sleep(Duration::from_millis(5));
     }
-    s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
+    s.send(&Request::Signal {
+        id: 1,
+        signo: libc::SIGTERM,
+    });
     assert!(dies_soon(&background.to_string()), "背景成員還在");
     assert!(matches!(s.event_for(1), Event::Exited { id: 1, .. }));
 
     // leader 自己先結束：留在背景的成員一起收掉，stdout 也因此關上（沒收掉的話 sleep 抓著 stdout，讀到期限就紅）。
     let (_, stdout, _) = s.launch(request(2, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!"]));
     let mut stdout = stdout.unwrap();
-    stdout.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stdout
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut out = String::new();
     stdout.read_to_string(&mut out).expect("stdout 沒有關上");
-    assert_eq!(s.event_for(2), Event::Exited { id: 2, code: 0, signal: 0 });
+    assert_eq!(
+        s.event_for(2),
+        Event::Exited {
+            id: 2,
+            code: 0,
+            signal: 0
+        }
+    );
     assert!(dies_soon(out.trim()), "背景成員還在");
 }
 
@@ -422,17 +607,66 @@ fn signals_reach_the_whole_group_and_the_group_dies_with_the_leader() {
 fn protocol_errors_get_a_failed_event() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
-    let (_, _, event) = s.launch(Spawn { argv: vec![], ..request(1, &ws, &[]) });
-    assert!(matches!(event, Event::Failed { id: 1, kind: FailKind::Protocol, .. }), "{event:?}");
-    let (_, _, event) = s.launch(Spawn { argv: vec![b"a\0b".to_vec()], ..request(2, &ws, &[]) });
-    assert!(matches!(event, Event::Failed { id: 2, kind: FailKind::Protocol, .. }), "{event:?}");
-    let (_, _, event) = s.launch(Spawn { argv: vec![vec![]], ..request(4, &ws, &[]) });
-    assert!(matches!(event, Event::Failed { id: 4, kind: FailKind::Protocol, .. }), "{event:?}");
+    let (_, _, event) = s.launch(Spawn {
+        argv: vec![],
+        ..request(1, &ws, &[])
+    });
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 1,
+                kind: FailKind::Protocol,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
+    let (_, _, event) = s.launch(Spawn {
+        argv: vec![b"a\0b".to_vec()],
+        ..request(2, &ws, &[])
+    });
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 2,
+                kind: FailKind::Protocol,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
+    let (_, _, event) = s.launch(Spawn {
+        argv: vec![vec![]],
+        ..request(4, &ws, &[])
+    });
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 4,
+                kind: FailKind::Protocol,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
     // 同一個 id 還在跑時再要一次。
     let (_, _, started) = s.launch(request(3, &ws, &["sleep", "100"]));
     assert!(matches!(started, Event::Started { .. }));
     let (_, _, event) = s.launch(request(3, &ws, &["/bin/true"]));
-    assert!(matches!(event, Event::Failed { id: 3, kind: FailKind::Protocol, .. }), "{event:?}");
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 3,
+                kind: FailKind::Protocol,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
 }
 
 #[test]
@@ -441,13 +675,29 @@ fn connections_from_another_process_are_rejected_and_the_request_times_out() {
     let ws = temp_dir("ws");
     s.send(&Request::Spawn(request(1, &ws, &["/bin/true"])));
     // 別的行程替 id 1 接 stdout：spawner 核 SO_PEERCRED 的 pid 不是自己的父行程，直接關掉。
-    let mut intruder = Command::new(probe()).args(["connect", s.socket.to_str().unwrap(), "1", "1"]).spawn().unwrap();
+    let mut intruder = Command::new(probe())
+        .args(["connect", s.socket.to_str().unwrap(), "1", "1"])
+        .spawn()
+        .unwrap();
     let started = Instant::now();
     let event = s.event_for(1);
     intruder.kill().ok();
     intruder.wait().ok();
-    assert!(matches!(event, Event::Failed { id: 1, kind: FailKind::Protocol, .. }), "{event:?}");
-    assert!(started.elapsed() >= Duration::from_secs(4), "應該是等到期限才失敗");
+    assert!(
+        matches!(
+            event,
+            Event::Failed {
+                id: 1,
+                kind: FailKind::Protocol,
+                ..
+            }
+        ),
+        "{event:?}"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(4),
+        "應該是等到期限才失敗"
+    );
 }
 
 #[test]
@@ -464,7 +714,14 @@ fn many_concurrent_spawns_all_finish() {
         let mut out = String::new();
         stdout.read_to_string(&mut out).unwrap();
         assert_eq!(out, format!("{id}\n"));
-        assert_eq!(s.event_for(id), Event::Exited { id, code: 0, signal: 0 });
+        assert_eq!(
+            s.event_for(id),
+            Event::Exited {
+                id,
+                code: 0,
+                signal: 0
+            }
+        );
     }
     // fork 之後子行程會配置記憶體，只有單執行緒才安全：跑過一輪之後 spawner 還是只有一條執行緒。
     let status = std::fs::read_to_string(format!("/proc/{}/status", s.child.id())).unwrap();
@@ -475,19 +732,45 @@ fn many_concurrent_spawns_all_finish() {
 fn partial_landlock_still_runs_and_says_so() {
     let (mut s, first) = start_with(&[("NEXUS_SPAWNER_TEST_ABI_CAP", "3")], None);
     if !matches!(first, Event::Ready { .. }) {
-        assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"), "{first:?}");
+        assert_ne!(
+            std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{first:?}"
+        );
         return;
     }
-    assert!(matches!(first, Event::Ready { landlock_abi: 3, .. }), "{first:?}");
+    assert!(
+        matches!(
+            first,
+            Event::Ready {
+                landlock_abi: 3,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
     let ws = temp_dir("ws");
     let (_, stdout, started) = s.launch(request(1, &ws, &["echo", "hi"]));
-    assert!(matches!(started, Event::Started { partial: true, .. }), "{started:?}");
+    assert!(
+        matches!(started, Event::Started { partial: true, .. }),
+        "{started:?}"
+    );
     let mut out = String::new();
     stdout.unwrap().read_to_string(&mut out).unwrap();
     assert_eq!(out, "hi\n");
     // 全權模式不上 Landlock，談不上部分生效。
     let (_, _, started) = s.launch(full_access(2, &ws, &["echo", "hi"]));
-    assert!(matches!(started, Event::Started { id: 2, partial: false, .. }), "{started:?}");
+    assert!(
+        matches!(
+            started,
+            Event::Started {
+                id: 2,
+                partial: false,
+                ..
+            }
+        ),
+        "{started:?}"
+    );
 }
 
 /// 測試設施的外層過濾器：`nr` 這條 syscall（第一個參數等於 `arg0` 時）回 `err`，其餘放行。
@@ -495,7 +778,12 @@ fn outer_filter(nr: i64, arg0: Option<u32>, err: i32) -> Vec<libc::sock_filter> 
     let f = |code: u16, jt: u8, jf: u8, k: u32| libc::sock_filter { code, jt, jf, k };
     let ret = 0x0005_0000 | err as u32;
     match arg0 {
-        None => vec![f(0x20, 0, 0, 0), f(0x15, 0, 1, nr as u32), f(0x06, 0, 0, ret), f(0x06, 0, 0, 0x7fff_0000)],
+        None => vec![
+            f(0x20, 0, 0, 0),
+            f(0x15, 0, 1, nr as u32),
+            f(0x06, 0, 0, ret),
+            f(0x06, 0, 0, 0x7fff_0000),
+        ],
         Some(v) => vec![
             f(0x20, 0, 0, 0),
             f(0x15, 0, 3, nr as u32),
@@ -509,7 +797,12 @@ fn outer_filter(nr: i64, arg0: Option<u32>, err: i32) -> Vec<libc::sock_filter> 
 
 /// 全權模式的要求：不帶讀根、寫根，工作目錄是 `ws`。
 fn full_access(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
-    Spawn { mode: Mode::FullAccess, readable: Vec::new(), writable: Vec::new(), ..request(id, ws, argv) }
+    Spawn {
+        mode: Mode::FullAccess,
+        readable: Vec::new(),
+        writable: Vec::new(),
+        ..request(id, ws, argv)
+    }
 }
 
 /// 全權模式不上 Landlock：工作區外寫得進、讀得到；seccomp 照樣擋網路與 namespace。
@@ -520,13 +813,28 @@ fn assert_full_access_skips_landlock_but_not_seccomp(s: &mut Spawner) {
     let p = probe();
     let p = p.to_str().unwrap();
     let target = outside.join("w");
-    let (_, stdout, started) = s.launch(full_access(1, &ws, &[p, "write", target.to_str().unwrap()]));
-    assert!(matches!(started, Event::Started { id: 1, partial: false, .. }), "{started:?}");
+    let (_, stdout, started) =
+        s.launch(full_access(1, &ws, &[p, "write", target.to_str().unwrap()]));
+    assert!(
+        matches!(
+            started,
+            Event::Started {
+                id: 1,
+                partial: false,
+                ..
+            }
+        ),
+        "{started:?}"
+    );
     let mut out = String::new();
     stdout.unwrap().read_to_string(&mut out).unwrap();
     assert_eq!(out.trim(), "ok");
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
-    let (out, _) = s.run(full_access(2, &ws, &[p, "read", outside.join("token").to_str().unwrap()]));
+    let (out, _) = s.run(full_access(
+        2,
+        &ws,
+        &[p, "read", outside.join("token").to_str().unwrap()],
+    ));
     assert_eq!(out.trim(), "ok");
     for (id, what) in [(3, "tcp"), (4, "udp")] {
         let (out, _) = s.run(full_access(id, &ws, &[p, what]));
@@ -544,13 +852,39 @@ fn full_access_skips_landlock_but_keeps_seccomp() {
 
 #[test]
 fn without_landlock_only_full_access_starts() {
-    let (mut s, first) = start_with(&[], Some(outer_filter(libc::SYS_landlock_create_ruleset, None, libc::ENOSYS)));
-    assert!(matches!(first, Event::Ready { landlock_abi: 0, .. }), "{first:?}");
+    let (mut s, first) = start_with(
+        &[],
+        Some(outer_filter(
+            libc::SYS_landlock_create_ruleset,
+            None,
+            libc::ENOSYS,
+        )),
+    );
+    assert!(
+        matches!(
+            first,
+            Event::Ready {
+                landlock_abi: 0,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
     let ws = temp_dir("ws");
     for (id, mode) in [(10, Mode::ReadOnly), (11, Mode::WorkspaceWrite)] {
-        let (_, _, event) = s.launch(Spawn { mode, ..request(id, &ws, &["/bin/true"]) });
+        let (_, _, event) = s.launch(Spawn {
+            mode,
+            ..request(id, &ws, &["/bin/true"])
+        });
         assert!(
-            matches!(event, Event::Failed { kind: FailKind::SandboxUnavailable, errno: libc::ENOSYS, .. }),
+            matches!(
+                event,
+                Event::Failed {
+                    kind: FailKind::SandboxUnavailable,
+                    errno: libc::ENOSYS,
+                    ..
+                }
+            ),
             "{mode:?}: {event:?}"
         );
     }
@@ -562,21 +896,42 @@ fn without_landlock_only_full_access_starts() {
 fn abi_6_keeps_signals_inside_the_tool() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
-    let (out, _) = s.run(request(1, &ws, &["/bin/sh", "-c", "sleep 1 & kill -0 $! && echo ok"]));
+    let (out, _) = s.run(request(
+        1,
+        &ws,
+        &["/bin/sh", "-c", "sleep 1 & kill -0 $! && echo ok"],
+    ));
     assert_eq!(out.trim(), "ok", "同一個 domain 裡的後代要送得到");
     let abi = s.landlock_abi;
     if abi < 6 {
-        assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"), "Landlock ABI 是 {abi}，要 6");
+        assert_ne!(
+            std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "Landlock ABI 是 {abi}，要 6"
+        );
         eprintln!("跳過：這個核心的 Landlock ABI 是 {abi}，沒有訊號 scope");
         return;
     }
     let spawner_pid = s.child.id().to_string();
     let me = std::process::id().to_string();
     for (id, target) in [(2, &spawner_pid), (3, &me)] {
-        assert_eq!(probe_line(&mut s, id, &ws, &["kill", target]), errno_line(libc::EPERM), "{target}");
+        assert_eq!(
+            probe_line(&mut s, id, &ws, &["kill", target]),
+            errno_line(libc::EPERM),
+            "{target}"
+        );
     }
     let (mut capped, first) = start_with(&[("NEXUS_SPAWNER_TEST_ABI_CAP", "5")], None);
-    assert!(matches!(first, Event::Ready { landlock_abi: 5, .. }), "{first:?}");
+    assert!(
+        matches!(
+            first,
+            Event::Ready {
+                landlock_abi: 5,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
     assert_eq!(probe_line(&mut capped, 4, &ws, &["kill", &me]), "ok");
 }
 
@@ -597,15 +952,40 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
     // 新開的 fd 取最小的空號，所以上限設在第二個空號之上：只開得了兩個，三個 /dev/null 開到第三個失敗。
     // 開著的 fd 中間可能有空號（CI 的 runner 上就有），不能用「最大的 fd 之上留兩格」。硬上限不動：降了之後一般使用者調不回來。
     let second_free = (0..).filter(|fd| !before.contains(fd)).nth(1).unwrap();
-    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
     // SAFETY：讀、改自己起的 spawner 的上限，limit 是本地值。
     unsafe {
-        assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, std::ptr::null(), &mut limit), 0);
+        assert_eq!(
+            libc::prlimit(
+                pid as libc::pid_t,
+                libc::RLIMIT_NOFILE,
+                std::ptr::null(),
+                &mut limit
+            ),
+            0
+        );
         limit.rlim_cur = (second_free + 1) as libc::rlim_t;
-        assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, &limit, std::ptr::null_mut()), 0);
+        assert_eq!(
+            libc::prlimit(
+                pid as libc::pid_t,
+                libc::RLIMIT_NOFILE,
+                &limit,
+                std::ptr::null_mut()
+            ),
+            0
+        );
     }
-    let (_, _, event) = s.launch(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
-    assert!(matches!(&event, Event::Failed { id: 1, kind: FailKind::Resource, errno: libc::EMFILE, detail } if detail == b"open /dev/null"), "{event:?}");
+    let (_, _, event) = s.launch(Spawn {
+        pipes: 0,
+        ..request(1, &ws, &["/bin/true"])
+    });
+    assert!(
+        matches!(&event, Event::Failed { id: 1, kind: FailKind::Resource, errno: libc::EMFILE, detail } if detail == b"open /dev/null"),
+        "{event:?}"
+    );
     assert_eq!(open_fds(pid).len(), before.len());
 }
 
@@ -613,7 +993,10 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
 fn kernel_without_pidfd_open_means_unavailable_at_startup() {
     let filter = outer_filter(libc::SYS_pidfd_open, None, libc::ENOSYS);
     let (mut s, first) = start_with(&[], Some(filter));
-    assert!(matches!(&first, Event::Unavailable { errno: libc::ENOSYS, detail } if detail.starts_with(b"pidfd_open")), "{first:?}");
+    assert!(
+        matches!(&first, Event::Unavailable { errno: libc::ENOSYS, detail } if detail.starts_with(b"pidfd_open")),
+        "{first:?}"
+    );
     assert_eq!(s.child.wait().unwrap().code(), Some(125));
 }
 
@@ -626,13 +1009,21 @@ fn pidfd_open_failing_for_other_reasons_is_not_unavailable_at_startup() {
 
 #[test]
 fn seccomp_that_cannot_be_installed_means_unavailable() {
-    let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
+    let filter = outer_filter(
+        libc::SYS_prctl,
+        Some(libc::PR_SET_SECCOMP as u32),
+        libc::EINVAL,
+    );
     let (mut s, first) = start_with(&[], Some(filter));
-    if matches!(&first, Event::Unavailable { detail, .. } if detail.starts_with("Landlock".as_bytes())) {
+    if matches!(&first, Event::Unavailable { detail, .. } if detail.starts_with("Landlock".as_bytes()))
+    {
         assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"));
         return;
     }
-    assert!(matches!(&first, Event::Unavailable { errno: libc::EINVAL, detail } if detail.starts_with(b"seccomp")), "{first:?}");
+    assert!(
+        matches!(&first, Event::Unavailable { errno: libc::EINVAL, detail } if detail.starts_with(b"seccomp")),
+        "{first:?}"
+    );
     assert_eq!(s.child.wait().unwrap().code(), Some(125));
 }
 
@@ -642,7 +1033,11 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
         let mut s = spawner!();
         let ws = temp_dir("ws");
         // 看背景成員：leader 有 PDEATHSIG，spawner 一死它就跟著死；背景成員只有群組 SIGKILL 收得掉。
-        let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!; wait"]));
+        let (_, stdout, _) = s.launch(request(
+            1,
+            &ws,
+            &["/bin/sh", "-c", "sleep 100 & echo $!; wait"],
+        ));
         let mut line = [0u8; 32];
         let n = stdout.unwrap().read(&mut line).unwrap();
         let pid = String::from_utf8_lossy(&line[..n]).trim().to_string();
@@ -652,9 +1047,20 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
             // SAFETY：送給自己起的 spawner。
             unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
             // 還在跑的工具照樣收到結局。
-            assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGKILL });
+            assert_eq!(
+                s.event_for(1),
+                Event::Exited {
+                    id: 1,
+                    code: -1,
+                    signal: libc::SIGKILL
+                }
+            );
         }
-        assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0), "{how}");
+        assert_eq!(
+            exits_within(&mut s.child, Duration::from_secs(5)),
+            Some(0),
+            "{how}"
+        );
         assert!(dies_soon(&pid), "{how}：工具還在");
     }
 }
@@ -664,17 +1070,38 @@ fn a_signal_sent_before_start_arrives_after_start() {
     // 子行程在 setsid 之前先睡 0.3 秒：這時對群組送訊號一定打不到（ESRCH），要等 Started 才送。
     let (mut s, first) = start_with(&[("NEXUS_SPAWNER_TEST_CHILD_DELAY_US", "300000")], None);
     if !matches!(first, Event::Ready { .. }) {
-        assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"), "{first:?}");
+        assert_ne!(
+            std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{first:?}"
+        );
         return;
     }
     let ws = temp_dir("ws");
     // 要求與訊號同一次寫進去：spawner 處理訊號時，子行程還在 Launching。訊號弄丟的話，sleep 5 會自己正常結束。
-    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["sleep", "5"]) });
-    let signal = Request::Signal { id: 1, signo: libc::SIGTERM };
-    let bytes = [protocol::frame(&protocol::encode_request(&spawn)), protocol::frame(&protocol::encode_request(&signal))].concat();
+    let spawn = Request::Spawn(Spawn {
+        pipes: 0,
+        ..request(1, &ws, &["sleep", "5"])
+    });
+    let signal = Request::Signal {
+        id: 1,
+        signo: libc::SIGTERM,
+    };
+    let bytes = [
+        protocol::frame(&protocol::encode_request(&spawn)),
+        protocol::frame(&protocol::encode_request(&signal)),
+    ]
+    .concat();
     s.stdin.write_all(&bytes).unwrap();
     assert!(matches!(s.event_for(1), Event::Started { id: 1, .. }));
-    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
+    assert_eq!(
+        s.event_for(1),
+        Event::Exited {
+            id: 1,
+            code: -1,
+            signal: libc::SIGTERM
+        }
+    );
 }
 
 /// 等 spawner 自己結束，最多 `limit`；回結束碼。
@@ -695,7 +1122,11 @@ fn an_undecodable_frame_ends_the_spawner_and_its_tools() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
     // 看背景成員：leader 有 PDEATHSIG，spawner 只要結束它就會死，分不出有沒有收尾。
-    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!; wait"]));
+    let (_, stdout, _) = s.launch(request(
+        1,
+        &ws,
+        &["/bin/sh", "-c", "sleep 100 & echo $!; wait"],
+    ));
     let mut line = [0u8; 32];
     let n = stdout.unwrap().read(&mut line).unwrap();
     let pid = String::from_utf8_lossy(&line[..n]).trim().to_string();
@@ -706,12 +1137,22 @@ fn an_undecodable_frame_ends_the_spawner_and_its_tools() {
 
 #[test]
 fn losing_the_event_channel_ends_the_spawner() {
-    let Spawner { mut child, mut stdin, stdout, .. } = spawner!();
+    let Spawner {
+        mut child,
+        mut stdin,
+        stdout,
+        ..
+    } = spawner!();
     drop(stdout);
     let ws = temp_dir("ws");
     // 下一筆事件寫不出去：stdin 還開著，spawner 也要自己收尾。
-    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
-    stdin.write_all(&protocol::frame(&protocol::encode_request(&spawn))).unwrap();
+    let spawn = Request::Spawn(Spawn {
+        pipes: 0,
+        ..request(1, &ws, &["/bin/true"])
+    });
+    stdin
+        .write_all(&protocol::frame(&protocol::encode_request(&spawn)))
+        .unwrap();
     assert_eq!(exits_within(&mut child, Duration::from_secs(5)), Some(0));
 }
 
@@ -721,10 +1162,20 @@ fn a_signal_sent_while_waiting_for_stdio_arrives_after_start() {
     let ws = temp_dir("ws");
     // stdout 還沒接上，spawner 還沒 fork；訊號弄丟的話，sleep 5 會自己正常結束。
     s.send(&Request::Spawn(request(1, &ws, &["sleep", "5"])));
-    s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
+    s.send(&Request::Signal {
+        id: 1,
+        signo: libc::SIGTERM,
+    });
     let _stdout = s.connect(1, 1);
     assert!(matches!(s.event_for(1), Event::Started { id: 1, .. }));
-    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
+    assert_eq!(
+        s.event_for(1),
+        Event::Exited {
+            id: 1,
+            code: -1,
+            signal: libc::SIGTERM
+        }
+    );
 }
 
 #[test]
@@ -733,12 +1184,25 @@ fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
     let ws = temp_dir("ws");
     s.send(&Request::Spawn(request(1, &ws, &["/bin/true"])));
     // 等這筆要求進了 spawner 再叫它結束：先跑完一筆不接 stdio 的，控制通道是依序處理的。
-    s.send(&Request::Spawn(Spawn { pipes: 0, ..request(2, &ws, &["/bin/true"]) }));
+    s.send(&Request::Spawn(Spawn {
+        pipes: 0,
+        ..request(2, &ws, &["/bin/true"])
+    }));
     assert!(matches!(s.event_for(2), Event::Started { id: 2, .. }));
-    assert!(matches!(s.event_for(2), Event::Exited { id: 2, code: 0, .. }));
+    assert!(matches!(
+        s.event_for(2),
+        Event::Exited { id: 2, code: 0, .. }
+    ));
     // SAFETY：送給自己起的 spawner。
     unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
-    assert!(matches!(s.event_for(1), Event::Failed { id: 1, kind: FailKind::Resource, .. }));
+    assert!(matches!(
+        s.event_for(1),
+        Event::Failed {
+            id: 1,
+            kind: FailKind::Resource,
+            ..
+        }
+    ));
     assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
 }
 
@@ -750,9 +1214,14 @@ fn exec_probe(envs: &[(&str, &str)], ws: &Path, args: &[&str]) -> (String, Optio
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
     cmd.arg("--write").arg(ws).arg("--").arg(probe()).args(args);
-    cmd.envs(envs.iter().copied()).current_dir(ws).stderr(Stdio::null());
+    cmd.envs(envs.iter().copied())
+        .current_dir(ws)
+        .stderr(Stdio::null());
     let out = cmd.output().unwrap();
-    (String::from_utf8_lossy(&out.stdout).trim().to_string(), out.status.code())
+    (
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        out.status.code(),
+    )
 }
 
 /// 單次模式只收 realpath：`/bin`、`/lib` 在多數發行版是連結。
@@ -761,7 +1230,12 @@ fn exec_readable() -> Vec<Vec<u8>> {
         .iter()
         .map(|root| {
             let path = Path::new(std::str::from_utf8(root).unwrap());
-            std::fs::canonicalize(path).unwrap().to_str().unwrap().as_bytes().to_vec()
+            std::fs::canonicalize(path)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec()
         })
         .collect();
     roots.sort();
@@ -814,15 +1288,30 @@ fn exec_mode_refuses_to_run_without_landlock() {
 #[test]
 fn exec_mode_refuses_to_run_without_seccomp() {
     let ws = temp_dir("ws");
-    let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
+    let filter = outer_filter(
+        libc::SYS_prctl,
+        Some(libc::PR_SET_SECCOMP as u32),
+        libc::EINVAL,
+    );
     let mut cmd = Command::new(SPAWNER);
-    cmd.args(["--exec", "--"]).arg(probe()).arg("tcp").current_dir(&ws).stderr(Stdio::null());
+    cmd.args(["--exec", "--"])
+        .arg(probe())
+        .arg("tcp")
+        .current_dir(&ws)
+        .stderr(Stdio::null());
     // SAFETY：同 start_with。
     unsafe {
         cmd.pre_exec(move || {
-            let fprog = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_ptr() as *mut _ };
+            let fprog = libc::sock_fprog {
+                len: filter.len() as u16,
+                filter: filter.as_ptr() as *mut _,
+            };
             libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-            libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const _);
+            libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                &fprog as *const _,
+            );
             Ok(())
         });
     }
@@ -834,12 +1323,20 @@ fn exec_mode_refuses_to_run_without_seccomp() {
 fn exec_mode_refuses_a_root_it_cannot_open_and_bad_usage() {
     let ws = temp_dir("ws");
     let run = |args: &[&str]| {
-        let out = Command::new(SPAWNER).args(args).current_dir(&ws).stderr(Stdio::null()).output().unwrap();
+        let out = Command::new(SPAWNER)
+            .args(args)
+            .current_dir(&ws)
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
         (out.stdout.len(), out.status.code())
     };
     let p = probe();
     let p = p.to_str().unwrap();
-    assert_eq!(run(&["--exec", "--read", "/no/such/root", "--", p, "tcp"]), (0, Some(125)));
+    assert_eq!(
+        run(&["--exec", "--read", "/no/such/root", "--", p, "tcp"]),
+        (0, Some(125))
+    );
     assert_eq!(run(&["--exec", "--bogus", "--", p]), (0, Some(125)));
     assert_eq!(run(&["--exec", p]), (0, Some(125)));
     assert_eq!(run(&["--exec", "--"]), (0, Some(125)));
@@ -860,7 +1357,10 @@ fn exec_mode_replaces_itself_and_keeps_stdio() {
         .unwrap();
     child.stdin.take().unwrap().write_all(b"hello").unwrap();
     let out = child.wait_with_output().unwrap();
-    assert_eq!((out.stdout.as_slice(), out.status.code()), (b"hello".as_slice(), Some(0)));
+    assert_eq!(
+        (out.stdout.as_slice(), out.status.code()),
+        (b"hello".as_slice(), Some(0))
+    );
 }
 
 #[test]
@@ -890,7 +1390,12 @@ fn exec_mode_detaches_like_a_daemon_child() {
     for root in exec_readable() {
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
-    cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat; grep SigIgn /proc/$$/status; ls /proc/$$/fd"]);
+    cmd.args([
+        "--",
+        "/bin/sh",
+        "-c",
+        "cat /proc/self/stat; grep SigIgn /proc/$$/status; ls /proc/$$/fd",
+    ]);
     // SAFETY：pre_exec 裡只有 dup2，不配置記憶體。fd 9 沒有 CLOEXEC，exec 之後還在，驗得出 close_range。
     unsafe {
         cmd.pre_exec(|| {
@@ -904,9 +1409,16 @@ fn exec_mode_detaches_like_a_daemon_child() {
     let session = fields.nth(5).unwrap();
     // SAFETY：getsid 只查詢。
     assert_ne!(session, unsafe { libc::getsid(0) }.to_string());
-    let ignored = text.lines().find_map(|line| line.strip_prefix("SigIgn:\t")).unwrap();
+    let ignored = text
+        .lines()
+        .find_map(|line| line.strip_prefix("SigIgn:\t"))
+        .unwrap();
     let sigpipe = 1u64 << (libc::SIGPIPE - 1);
-    assert_eq!(u64::from_str_radix(ignored, 16).unwrap() & sigpipe, 0, "{text}");
+    assert_eq!(
+        u64::from_str_radix(ignored, 16).unwrap() & sigpipe,
+        0,
+        "{text}"
+    );
     assert!(!text.lines().any(|line| line == "9"), "{text}");
 }
 
@@ -918,7 +1430,14 @@ fn exec_mode_says_so_when_landlock_is_partial() {
     for root in exec_readable() {
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
-    let out = cmd.arg("--write").arg(&ws).arg("--").arg(probe()).arg("tcp").output().unwrap();
+    let out = cmd
+        .arg("--write")
+        .arg(&ws)
+        .arg("--")
+        .arg(probe())
+        .arg("tcp")
+        .output()
+        .unwrap();
     assert!(String::from_utf8_lossy(&out.stderr).contains("部分強制"));
 }
 
@@ -926,7 +1445,13 @@ fn exec_mode_says_so_when_landlock_is_partial() {
 fn guard_mode_replaces_itself_and_keeps_stdio_path_and_session() {
     // `$$` 是 exec 之後的 pid：要等於 spawn 拿到的 pid，呼叫端的訊號才送得到。stat 第 6 欄是 session。
     let mut child = Command::new(SPAWNER)
-        .args(["--guard", "--", "sh", "-c", "echo $$; cut -d' ' -f6 /proc/self/stat; grep SigIgn /proc/$$/status; cat"])
+        .args([
+            "--guard",
+            "--",
+            "sh",
+            "-c",
+            "echo $$; cut -d' ' -f6 /proc/self/stat; grep SigIgn /proc/$$/status; cat",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -936,17 +1461,30 @@ fn guard_mode_replaces_itself_and_keeps_stdio_path_and_session() {
     let out = child.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!((lines[0], out.status.code()), (pid.as_str(), Some(0)), "{text}");
+    assert_eq!(
+        (lines[0], out.status.code()),
+        (pid.as_str(), Some(0)),
+        "{text}"
+    );
     // SAFETY：getsid 只查詢。
     assert_eq!(lines[1], unsafe { libc::getsid(0) }.to_string(), "{text}");
     let ignored = lines[2].strip_prefix("SigIgn:\t").unwrap();
-    assert_eq!(u64::from_str_radix(ignored, 16).unwrap() & (1u64 << (libc::SIGPIPE - 1)), 0, "{text}");
+    assert_eq!(
+        u64::from_str_radix(ignored, 16).unwrap() & (1u64 << (libc::SIGPIPE - 1)),
+        0,
+        "{text}"
+    );
     assert_eq!(lines[3], "hello", "{text}");
 }
 
 #[test]
 fn guard_mode_sets_pdeathsig() {
-    let out = Command::new(SPAWNER).args(["--guard", "--"]).arg(probe()).arg("pdeathsig").output().unwrap();
+    let out = Command::new(SPAWNER)
+        .args(["--guard", "--"])
+        .arg(probe())
+        .arg("pdeathsig")
+        .output()
+        .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "sig=9");
 }
 
@@ -961,7 +1499,11 @@ fn guard_mode_dies_with_a_killed_caller() {
         .spawn()
         .unwrap();
     let mut line = String::new();
-    std::io::BufRead::read_line(&mut std::io::BufReader::new(caller.stdout.take().unwrap()), &mut line).unwrap();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(caller.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
     let pid = line.trim().to_string();
     let comm = format!("/proc/{pid}/comm");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -971,7 +1513,13 @@ fn guard_mode_dies_with_a_killed_caller() {
     }
     caller.kill().unwrap();
     caller.wait().unwrap();
-    let gone = |stat: Option<String>| stat.is_none_or(|text| text.rsplit(") ").next().is_some_and(|tail| tail.starts_with('Z')));
+    let gone = |stat: Option<String>| {
+        stat.is_none_or(|text| {
+            text.rsplit(") ")
+                .next()
+                .is_some_and(|tail| tail.starts_with('Z'))
+        })
+    };
     let deadline = Instant::now() + Duration::from_secs(5);
     while !gone(std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()) {
         assert!(Instant::now() < deadline, "呼叫端死了，guard 的行程還在");
@@ -981,7 +1529,14 @@ fn guard_mode_dies_with_a_killed_caller() {
 
 #[test]
 fn guard_mode_reports_exec_failures_and_bad_usage() {
-    let code = |args: &[&str]| Command::new(SPAWNER).args(args).stderr(Stdio::null()).status().unwrap().code();
+    let code = |args: &[&str]| {
+        Command::new(SPAWNER)
+            .args(args)
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .code()
+    };
     assert_eq!(code(&["--guard", "--", "/no/such/program"]), Some(127));
     assert_eq!(code(&["--guard", "--", "/etc/hostname"]), Some(126));
     assert_eq!(code(&["--guard", "--"]), Some(125));
@@ -1002,9 +1557,16 @@ fn flock_on(lock: Option<&std::fs::File>) -> std::process::Output {
                 // 把手剛好就是 3 時 dup2 什麼都不做，close-on-exec 還在。
                 Some(3) => libc::fcntl(3, libc::F_SETFD, 0) == 0,
                 Some(fd) => libc::dup2(fd, 3) == 3,
-                None => libc::close(3) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF),
+                None => {
+                    libc::close(3) == 0
+                        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF)
+                }
             };
-            if ok { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+            if ok {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
         });
     }
     command.output().unwrap()
@@ -1029,5 +1591,8 @@ fn flock_mode_leaves_the_lock_with_the_caller() {
 fn flock_mode_reports_other_errors_as_errno() {
     let out = flock_on(None);
     assert_eq!(out.status.code(), Some(11));
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), libc::EBADF.to_string());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        libc::EBADF.to_string()
+    );
 }

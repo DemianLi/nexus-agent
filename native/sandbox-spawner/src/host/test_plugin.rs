@@ -5,7 +5,12 @@
 use crate::json::Value;
 use crate::kernel::{Applied, ConfigError, Cx, Fields, Plugin, PluginError, Service, Spec};
 
-pub static SPEC: Spec = Spec { name: "test-echo", inject: &[], required: false, build };
+pub static SPEC: Spec = Spec {
+    name: "test-echo",
+    inject: &[],
+    required: false,
+    build,
+};
 
 pub struct Greeting;
 

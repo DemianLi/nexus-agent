@@ -16,8 +16,13 @@ fn main() {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
     }
-    let (socket, tokens) = args.split_first().expect("用法：host_client [--wait-stdin] <socket> <token>...");
+    let (socket, tokens) = args
+        .split_first()
+        .expect("用法：host_client [--wait-stdin] <socket> <token>...");
     for token in tokens {
-        println!("{}", host_client::hello_line(std::path::Path::new(socket), token));
+        println!(
+            "{}",
+            host_client::hello_line(std::path::Path::new(socket), token)
+        );
     }
 }

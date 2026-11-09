@@ -105,34 +105,52 @@ impl From<KernelError> for PluginError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelError {
     /// 讀了 `inject` 沒宣告的服務。
-    Undeclared { service: &'static str },
+    Undeclared {
+        service: &'static str,
+    },
     /// 經 [`Cx`] 讀：宣告了，但這個 fiber 現在沒有 committed 的實體（還沒 apply，或已經卸載）。
     /// 經 [`Kernel::service`] 讀：沒有提供者，或提供者不是 ACTIVE。
-    Inactive { service: &'static str },
+    Inactive {
+        service: &'static str,
+    },
     /// 名稱對、型別不對。
-    TypeMismatch { service: &'static str },
+    TypeMismatch {
+        service: &'static str,
+    },
     /// 同名的服務已經有人提供（包括自己）。
-    AlreadyProvided { service: &'static str, by: &'static str },
+    AlreadyProvided {
+        service: &'static str,
+        by: &'static str,
+    },
     /// fiber 已經被要求收掉（dispose 過）或正在卸載，不能再登記 effect、服務、listener、計時器或子 fiber；
     /// 完全收掉之後的編號回 [`KernelError::UnknownFiber`]。
     InactiveEffect,
     /// 登記或送出 `internal/` 開頭的事件（包括 [`Kernel::emit`]）。
-    Reserved { event: &'static str },
+    Reserved {
+        event: &'static str,
+    },
     /// 編號查不到（已經收掉，或是舊編號）；對已經被要求收掉的 fiber 呼叫 `update` 也回這個。
     UnknownFiber,
     Config(ConfigError),
     /// `interval` 的間隔是 0。
     ZeroInterval,
-    NotImplemented { what: &'static str, card: u32 },
+    NotImplemented {
+        what: &'static str,
+        card: u32,
+    },
 }
 
 impl fmt::Display for KernelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            KernelError::Undeclared { service } => write!(f, "讀服務 {service} 之前沒有在 inject 宣告"),
+            KernelError::Undeclared { service } => {
+                write!(f, "讀服務 {service} 之前沒有在 inject 宣告")
+            }
             KernelError::Inactive { service } => write!(f, "服務 {service} 現在不可用"),
             KernelError::TypeMismatch { service } => write!(f, "服務 {service} 的型別不對"),
-            KernelError::AlreadyProvided { service, by } => write!(f, "服務 {service} 已經由 {by} 提供"),
+            KernelError::AlreadyProvided { service, by } => {
+                write!(f, "服務 {service} 已經由 {by} 提供")
+            }
             KernelError::InactiveEffect => f.write_str("fiber 已經收掉或正在卸載，不能再登記"),
             KernelError::Reserved { event } => write!(f, "事件 {event} 只給內核用"),
             KernelError::UnknownFiber => f.write_str("沒有這個 fiber"),
@@ -175,30 +193,84 @@ pub struct Spec {
 /// 啟動時照設定掛樹用的一列。`disabled` 的列不掛；停用的 group 整棵子樹都不掛。
 #[derive(Clone)]
 pub enum Row {
-    Plugin { spec: &'static Spec, config: Value, disabled: bool },
-    Group { name: &'static str, disabled: bool, rows: Vec<Row> },
+    Plugin {
+        spec: &'static Spec,
+        config: Value,
+        disabled: bool,
+    },
+    Group {
+        name: &'static str,
+        disabled: bool,
+        rows: Vec<Row>,
+    },
 }
 
 /// 內核送給宿主的事件。宿主決定哪些寫 log、哪些寫稽核。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelEvent {
-    Status { fiber: FiberId, name: &'static str, from: State, to: State },
+    Status {
+        fiber: FiberId,
+        name: &'static str,
+        from: State,
+        to: State,
+    },
     /// 設定解析不過，那一列沒有掛上去。
-    ConfigRejected { parent: FiberId, name: &'static str, error: String },
+    ConfigRejected {
+        parent: FiberId,
+        name: &'static str,
+        error: String,
+    },
     /// apply 或 poll 回錯、或逾時。回滾在這筆事件之後開始，收完時 fiber 轉到 FAILED（看 `Status`）；
     /// apply 期間來了 `update` 的例外，改用新設定重來。
-    ApplyFailed { fiber: FiberId, name: &'static str, error: String },
-    SelfDisabled { fiber: FiberId, name: &'static str, reason: String },
+    ApplyFailed {
+        fiber: FiberId,
+        name: &'static str,
+        error: String,
+    },
+    SelfDisabled {
+        fiber: FiberId,
+        name: &'static str,
+        reason: String,
+    },
     /// 一個 effect 的收尾回錯或逾時；其他收尾照跑。
-    DisposeFailed { fiber: FiberId, name: &'static str, label: String, error: String },
+    DisposeFailed {
+        fiber: FiberId,
+        name: &'static str,
+        label: String,
+        error: String,
+    },
     /// listener 回錯，或派發途中被重入、這一次沒有呼叫（`error` 寫明是哪一種）。
-    ListenerFailed { fiber: FiberId, name: &'static str, event: &'static str, error: String },
-    TimerFailed { fiber: FiberId, name: &'static str, label: String, error: String },
+    ListenerFailed {
+        fiber: FiberId,
+        name: &'static str,
+        event: &'static str,
+        error: String,
+    },
+    TimerFailed {
+        fiber: FiberId,
+        name: &'static str,
+        label: String,
+        error: String,
+    },
     /// 一次同步呼叫超過 [`Limits::slow_callback`]。`what` 是 apply、poll、收尾或計時器的 label，或事件名稱。
-    SlowCallback { fiber: FiberId, name: &'static str, what: String, elapsed: Duration },
+    SlowCallback {
+        fiber: FiberId,
+        name: &'static str,
+        what: String,
+        elapsed: Duration,
+    },
     /// 提供者的版本不符合依賴者宣告的範圍，那個依賴算不在。同一個 fiber 對同一個實體只送一次。
-    ContractMismatch { fiber: FiberId, name: &'static str, service: &'static str, range: String, version: Option<String> },
-    NotImplemented { what: &'static str, card: u32 },
+    ContractMismatch {
+        fiber: FiberId,
+        name: &'static str,
+        service: &'static str,
+        range: String,
+        version: Option<String>,
+    },
+    NotImplemented {
+        what: &'static str,
+        card: u32,
+    },
     /// 一次推進做到 [`Limits::max_steps`] 步還有剩，剩下的留到下一次推進。`run` 裡推進兩次，所以一次 `run` 最多送兩筆。
     Overrun,
 }
@@ -210,7 +282,9 @@ pub enum Health {
     Loading,
     Unloading,
     /// 等這些服務（沒有提供者、提供者不是 ACTIVE，或版本不符）。`missing` 是空的，表示依賴都在、還沒輪到 apply。
-    Waiting { missing: Vec<&'static str> },
+    Waiting {
+        missing: Vec<&'static str>,
+    },
     Failed(String),
     /// 插件自己決定不啟用，跟失敗、跟設定裡的停用分開。
     SelfDisabled(String),
@@ -280,7 +354,10 @@ impl Kernel {
         let mut kernel = Kernel {
             slots: Vec::new(),
             free: Vec::new(),
-            root: FiberId { index: 0, generation: 0 },
+            root: FiberId {
+                index: 0,
+                generation: 0,
+            },
             store: Store::default(),
             listeners: Vec::new(),
             next_listener: 0,
@@ -311,7 +388,12 @@ impl Kernel {
     }
 
     /// 在 `parent` 底下掛一個插件，回新 fiber 的編號；設定解析不過回錯，什麼都不掛。apply 在下一次 `run` 才發生。
-    pub fn mount(&mut self, parent: FiberId, spec: &'static Spec, config: Value) -> Result<FiberId, KernelError> {
+    pub fn mount(
+        &mut self,
+        parent: FiberId,
+        spec: &'static Spec,
+        config: Value,
+    ) -> Result<FiberId, KernelError> {
         self.mount_spec(parent, spec, config)
     }
 
@@ -338,8 +420,13 @@ impl Kernel {
     /// 舊的 apply 還在 `Pending`，就等它結束（完成、失敗、自我停用或逾時）再卸載、換新設定；舊的結果照樣發
     /// [`KernelEvent::ApplyFailed`] 或 [`KernelEvent::SelfDisabled`]，但不會讓 fiber 停在 FAILED。
     pub fn update(&mut self, id: FiberId, patch: &Value) -> Result<(), KernelError> {
-        let fiber = self.fiber(id).filter(|f| f.alive).ok_or(KernelError::UnknownFiber)?;
-        let spec = fiber.spec.ok_or_else(|| KernelError::Config(ConfigError(format!("{} 沒有設定可以改", fiber.name))))?;
+        let fiber = self
+            .fiber(id)
+            .filter(|f| f.alive)
+            .ok_or(KernelError::UnknownFiber)?;
+        let spec = fiber.spec.ok_or_else(|| {
+            KernelError::Config(ConfigError(format!("{} 沒有設定可以改", fiber.name)))
+        })?;
         let merged = config::merge(&fiber.config, patch);
         config::reject_js_expr(&merged)?;
         let plugin = (spec.build)(&merged)?;
@@ -363,14 +450,26 @@ impl Kernel {
 
     /// 以框架的身分讀一個服務：不經 `inject`，只要提供者是 ACTIVE。
     pub fn service<S: Service>(&self) -> Result<&S, KernelError> {
-        let uid = self.visible_uid(S::NAME).ok_or(KernelError::Inactive { service: S::NAME })?;
-        service::downcast(self.store.get(uid).ok_or(KernelError::Inactive { service: S::NAME })?)
+        let uid = self
+            .visible_uid(S::NAME)
+            .ok_or(KernelError::Inactive { service: S::NAME })?;
+        service::downcast(
+            self.store
+                .get(uid)
+                .ok_or(KernelError::Inactive { service: S::NAME })?,
+        )
     }
 
     /// 規則同 [`Kernel::service`]。改動不會通知依賴者。
     pub fn service_mut<S: Service>(&mut self) -> Result<&mut S, KernelError> {
-        let uid = self.visible_uid(S::NAME).ok_or(KernelError::Inactive { service: S::NAME })?;
-        service::downcast_mut(self.store.get_mut(uid).ok_or(KernelError::Inactive { service: S::NAME })?)
+        let uid = self
+            .visible_uid(S::NAME)
+            .ok_or(KernelError::Inactive { service: S::NAME })?;
+        service::downcast_mut(
+            self.store
+                .get_mut(uid)
+                .ok_or(KernelError::Inactive { service: S::NAME })?,
+        )
     }
 
     /// 推進到 `now`：先做記下來的轉換，再 poll 回 `Pending` 的工作（逾時的取消），再跑到期的計時器，最後把這些引起的轉換做完。
@@ -429,7 +528,10 @@ impl Kernel {
         let mut out = Vec::new();
         for (index, slot) in self.slots.iter().enumerate() {
             if let Some(f) = &slot.fiber {
-                let id = FiberId { index: index as u32, generation: slot.generation };
+                let id = FiberId {
+                    index: index as u32,
+                    generation: slot.generation,
+                };
                 out.push(FiberReport {
                     id,
                     name: f.name,
@@ -449,13 +551,19 @@ impl Kernel {
         let mut problems = Vec::new();
         for report in self.report() {
             if report.required && report.health != Health::Active {
-                problems.push(RequiredProblem::NotActive { name: report.name, health: report.health });
+                problems.push(RequiredProblem::NotActive {
+                    name: report.name,
+                    health: report.health,
+                });
             }
         }
         for r in self.rejected.iter().filter(|r| r.required) {
             problems.push(match &r.reason {
                 Reject::Off => RequiredProblem::Off { name: r.name },
-                Reject::Config(error) => RequiredProblem::Rejected { name: r.name, error: error.clone() },
+                Reject::Config(error) => RequiredProblem::Rejected {
+                    name: r.name,
+                    error: error.clone(),
+                },
             });
         }
         if problems.is_empty() {
@@ -483,13 +591,30 @@ impl Kernel {
         self.can_register(parent)?;
         for row in rows {
             match row {
-                Row::Plugin { spec, disabled: true, .. } => {
-                    self.rejected.push(Rejected { parent, name: spec.name, required: spec.required, reason: Reject::Off });
+                Row::Plugin {
+                    spec,
+                    disabled: true,
+                    ..
+                } => {
+                    self.rejected.push(Rejected {
+                        parent,
+                        name: spec.name,
+                        required: spec.required,
+                        reason: Reject::Off,
+                    });
                 }
-                Row::Plugin { spec, config, disabled: false } => {
+                Row::Plugin {
+                    spec,
+                    config,
+                    disabled: false,
+                } => {
                     if let Err(error) = self.mount_spec(parent, spec, config.clone()) {
                         let error = error.to_string();
-                        self.push_event(KernelEvent::ConfigRejected { parent, name: spec.name, error: error.clone() });
+                        self.push_event(KernelEvent::ConfigRejected {
+                            parent,
+                            name: spec.name,
+                            error: error.clone(),
+                        });
                         self.rejected.push(Rejected {
                             parent,
                             name: spec.name,
@@ -498,9 +623,25 @@ impl Kernel {
                         });
                     }
                 }
-                Row::Group { disabled: true, rows, .. } => self.reject_off(parent, rows),
-                Row::Group { name, disabled: false, rows } => {
-                    let group = Fiber::new(name, Some(parent), Vec::new(), false, None, Value::Null, None);
+                Row::Group {
+                    disabled: true,
+                    rows,
+                    ..
+                } => self.reject_off(parent, rows),
+                Row::Group {
+                    name,
+                    disabled: false,
+                    rows,
+                } => {
+                    let group = Fiber::new(
+                        name,
+                        Some(parent),
+                        Vec::new(),
+                        false,
+                        None,
+                        Value::Null,
+                        None,
+                    );
                     let id = self.alloc(group);
                     if let Some(f) = self.fiber_mut(id) {
                         f.plugin = Some(Box::new(Group { rows: rows.clone() }));
@@ -516,22 +657,32 @@ impl Kernel {
     fn reject_off(&mut self, parent: FiberId, rows: &[Row]) {
         for row in rows {
             match row {
-                Row::Plugin { spec, .. } => {
-                    self.rejected.push(Rejected { parent, name: spec.name, required: spec.required, reason: Reject::Off })
-                }
+                Row::Plugin { spec, .. } => self.rejected.push(Rejected {
+                    parent,
+                    name: spec.name,
+                    required: spec.required,
+                    reason: Reject::Off,
+                }),
                 Row::Group { rows, .. } => self.reject_off(parent, rows),
             }
         }
     }
 
-    fn mount_spec(&mut self, parent: FiberId, spec: &'static Spec, config: Value) -> Result<FiberId, KernelError> {
+    fn mount_spec(
+        &mut self,
+        parent: FiberId,
+        spec: &'static Spec,
+        config: Value,
+    ) -> Result<FiberId, KernelError> {
         self.can_register(parent)?;
         config::reject_js_expr(&config)?;
         let mut inject = Vec::with_capacity(spec.inject.len());
         for i in spec.inject {
             let range = match i.range {
                 Some(text) => Some((
-                    Range::parse(text).map_err(|e| ConfigError(format!("{} 的 inject {}：{e}", spec.name, i.name)))?,
+                    Range::parse(text).map_err(|e| {
+                        ConfigError(format!("{} 的 inject {}：{e}", spec.name, i.name))
+                    })?,
                     text,
                 )),
                 None => None,
@@ -539,7 +690,15 @@ impl Kernel {
             inject.push((i.name, range));
         }
         let plugin = (spec.build)(&config)?;
-        let id = self.alloc(Fiber::new(spec.name, Some(parent), inject, spec.required, Some(spec), config, Some(plugin)));
+        let id = self.alloc(Fiber::new(
+            spec.name,
+            Some(parent),
+            inject,
+            spec.required,
+            Some(spec),
+            config,
+            Some(plugin),
+        ));
         self.adopt(parent, id);
         Ok(id)
     }
@@ -554,7 +713,10 @@ impl Kernel {
     /// 這個 fiber 現在能不能再登記東西：還沒被收掉，也不在卸載途中。
     fn can_register(&self, id: FiberId) -> Result<(), KernelError> {
         let f = self.fiber(id).ok_or(KernelError::UnknownFiber)?;
-        if !f.alive || f.state == State::Unloading || !matches!(f.phase, Phase::Idle | Phase::Loading { .. }) {
+        if !f.alive
+            || f.state == State::Unloading
+            || !matches!(f.phase, Phase::Idle | Phase::Loading { .. })
+        {
             return Err(KernelError::InactiveEffect);
         }
         Ok(())
@@ -572,11 +734,20 @@ impl Kernel {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];
                 slot.fiber = Some(fiber);
-                FiberId { index, generation: slot.generation }
+                FiberId {
+                    index,
+                    generation: slot.generation,
+                }
             }
             None => {
-                self.slots.push(Slot { generation: 0, fiber: Some(fiber) });
-                FiberId { index: (self.slots.len() - 1) as u32, generation: 0 }
+                self.slots.push(Slot {
+                    generation: 0,
+                    fiber: Some(fiber),
+                });
+                FiberId {
+                    index: (self.slots.len() - 1) as u32,
+                    generation: 0,
+                }
             }
         }
     }
@@ -619,7 +790,10 @@ impl Kernel {
             .iter()
             .enumerate()
             .filter(|(_, s)| s.fiber.is_some())
-            .map(|(index, s)| FiberId { index: index as u32, generation: s.generation })
+            .map(|(index, s)| FiberId {
+                index: index as u32,
+                generation: s.generation,
+            })
             .collect()
     }
 }
@@ -655,13 +829,23 @@ impl Cx<'_> {
     /// 讀一個服務。只讀得到自己提供的，與 `inject` 宣告了、而且這次 apply 時 committed 的。
     pub fn service<S: Service>(&self) -> Result<&S, KernelError> {
         let uid = self.kernel.service_uid(self.fiber, S::NAME)?;
-        service::downcast(self.kernel.store.get(uid).ok_or(KernelError::Inactive { service: S::NAME })?)
+        service::downcast(
+            self.kernel
+                .store
+                .get(uid)
+                .ok_or(KernelError::Inactive { service: S::NAME })?,
+        )
     }
 
     /// 規則同 [`Cx::service`]。改動不會通知依賴者。
     pub fn service_mut<S: Service>(&mut self) -> Result<&mut S, KernelError> {
         let uid = self.kernel.service_uid(self.fiber, S::NAME)?;
-        service::downcast_mut(self.kernel.store.get_mut(uid).ok_or(KernelError::Inactive { service: S::NAME })?)
+        service::downcast_mut(
+            self.kernel
+                .store
+                .get_mut(uid)
+                .ok_or(KernelError::Inactive { service: S::NAME })?,
+        )
     }
 
     /// 提供一個服務，算這個 fiber 的 effect，卸載時收回；fiber 是 ACTIVE 時別的 fiber 才看得到。
@@ -672,12 +856,20 @@ impl Cx<'_> {
     }
 
     /// 帶版本提供；依賴者宣告的 semver 範圍拿這個版本比。
-    pub fn provide_versioned<S: Service>(&mut self, value: S, version: &str) -> Result<(), KernelError> {
+    pub fn provide_versioned<S: Service>(
+        &mut self,
+        value: S,
+        version: &str,
+    ) -> Result<(), KernelError> {
         let version = Version::parse(version).map_err(|e| KernelError::Config(ConfigError(e.0)))?;
         self.provide_inner(value, Some(version))
     }
 
-    fn provide_inner<S: Service>(&mut self, value: S, version: Option<Version>) -> Result<(), KernelError> {
+    fn provide_inner<S: Service>(
+        &mut self,
+        value: S,
+        version: Option<Version>,
+    ) -> Result<(), KernelError> {
         let k = &mut *self.kernel;
         k.can_register(self.fiber)?;
         let imp = Impl {
@@ -692,10 +884,15 @@ impl Cx<'_> {
             Ok(uid) => uid,
             Err(existing) => {
                 let by = k.store.get(existing).map_or("?", |i| k.fiber_name(i.owner));
-                return Err(KernelError::AlreadyProvided { service: S::NAME, by });
+                return Err(KernelError::AlreadyProvided {
+                    service: S::NAME,
+                    by,
+                });
             }
         };
-        let active = k.fiber(self.fiber).is_some_and(|f| f.state == State::Active);
+        let active = k
+            .fiber(self.fiber)
+            .is_some_and(|f| f.state == State::Active);
         if let Some(f) = k.fiber_mut(self.fiber) {
             f.entries.push(Entry::Provision(uid));
         }
@@ -740,10 +937,17 @@ impl Cx<'_> {
 
     /// 登記一個收尾工作：卸載時照登記的反序呼叫 [`Effect::dispose`]。fiber 已經被要求收掉或正在卸載回
     /// [`KernelError::InactiveEffect`]。
-    pub fn effect(&mut self, label: &str, effect: impl Effect + 'static) -> Result<(), KernelError> {
+    pub fn effect(
+        &mut self,
+        label: &str,
+        effect: impl Effect + 'static,
+    ) -> Result<(), KernelError> {
         self.kernel.can_register(self.fiber)?;
         if let Some(f) = self.kernel.fiber_mut(self.fiber) {
-            f.entries.push(Entry::Effect { label: label.to_string(), effect: Box::new(effect) });
+            f.entries.push(Entry::Effect {
+                label: label.to_string(),
+                effect: Box::new(effect),
+            });
         }
         Ok(())
     }
@@ -764,7 +968,12 @@ impl Cx<'_> {
         f: impl FnOnce(&mut Cx<'_>) -> Result<(), PluginError> + 'static,
     ) -> Result<(), KernelError> {
         let mut f = Some(f);
-        self.add_timer(label, after, None, Box::new(move |cx| f.take().map_or(Ok(()), |f| f(cx))))
+        self.add_timer(
+            label,
+            after,
+            None,
+            Box::new(move |cx| f.take().map_or(Ok(()), |f| f(cx))),
+        )
     }
 
     /// 每 `every` 跑一次，從 [`Cx::now`] 起算。晚了不補跑；下一次從觸發它的那次 `run` 的時間再起算。
@@ -794,7 +1003,13 @@ impl Cx<'_> {
         let id = k.next_timer;
         k.timers.insert(
             id,
-            Timer { owner: self.fiber, label: label.to_string(), due: deadline::later(k.now, after), every, callback: Some(callback) },
+            Timer {
+                owner: self.fiber,
+                label: label.to_string(),
+                due: deadline::later(k.now, after),
+                every,
+                callback: Some(callback),
+            },
         );
         if let Some(f) = k.fiber_mut(self.fiber) {
             f.entries.push(Entry::Timer(id));
