@@ -7,14 +7,17 @@
  * 到下一顆起跑（或 `idle` 等的那件事兌現）之間隔著幾個 microtask，那一拍數到的 0 不算。
  *
  * **都在 `idle`、沒有一顆在 `ask`** 照理不會發生：`idle` 等的是要人答了才會動的事，沒人在問就永遠不會動。它判成錯誤（建構時給的
- * `onStuck`），不靜靜掛著；當下在 `idle` 等的每一顆以同一個錯拒絕，之後的 `ask`、`idle` 當場以 {@link HumanInputWithdrawn} 拒絕。
+ * `onStuck`），不靜靜掛著：跟收回一樣先套已收完的寫入（{@link RunSuspension.onWithdraw}），再交出錯誤，當下在 `idle` 等的每一顆以
+ * {@link HumanInputWithdrawn} 拒絕，之後的 `ask`、`idle` 也當場以它拒絕。用它拒絕，是因為屏障與圍堵把它當控制流往外拋：這一批跟著拒絕、
+ * run 照控制流退出，不會把它當成一顆呼叫的錯誤結果收下、接著往下跑。
  *
- * **收回**（{@link RunSuspension.withdraw}）拒絕每一顆 `ask`。在 `idle` 等的多半跟著前一顆的拒絕落定（例：屏障上等它的那顆一起退出）；
+ * **收回**（{@link RunSuspension.withdraw}）先套已收完的寫入，再拒絕每一顆 `ask`。在 `idle` 等的多半跟著前一顆的拒絕落定（例：屏障上等它的那顆一起退出）；
  * 一個 `setImmediate` 之後還在等的，以 {@link HumanInputWithdrawn} 拒絕，收回的 run 不留下等不到的 promise。收回之後的 `ask`、`idle`
  * 當場拒絕。
  *
  * **委派**（{@link delegationOf}）：工具裡跑的前景子代理在 root 那顆 `task` 呼叫底下開自己的呼叫，提問進同一份掛著的提問。
  * 子代理那一層自己數在跑的：它在叫模型、跑 hook，或它的呼叫有一顆在跑，那顆 `task` 就算在跑；那一層都停下了，`task` 才算停下。
+ * 收回或判成卡死時，子代理那一層已收完的寫入不套：那顆 `task` 沒有收完，子代理的 state 不會交回 root，套了也沒有地方看得到。
  *
  * @module
  */
@@ -65,7 +68,7 @@ export interface CallSlot {
 /** 一個服務上的委派入口：只有 {@link RunSuspension} 發的服務帶它。 */
 const DELEGATE = Symbol('nexus.native-loop.delegate');
 
-/** 一顆 `task` 呼叫底下，前景子代理那一層。 */
+/** 一顆 `task` 呼叫底下，前景子代理那一層。沒有 {@link RunSuspension.onWithdraw}：理由見模組 doc 的「委派」。 */
 export interface Delegation {
   /** root 那次 run 收回過了，同 {@link RunSuspension.withdrawn}。 */
   readonly withdrawn: boolean;
@@ -130,20 +133,31 @@ export class RunSuspension {
   #parked = false;
   #withdrawn = false;
   readonly #idlers = new Set<(reason: unknown) => void>();
+  readonly #withdrawListeners = new Set<() => void>();
 
   /**
    * @param onPark - 停在等待點的那一刻，帶著所有還沒答的提問（照問的先後）。
-   * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；當下在 `idle` 等的每一顆以它拒絕，之後的 `ask`、`idle`
-   *   以 {@link HumanInputWithdrawn} 當場拒絕。
+   * @param onStuck - 都在 `idle`、沒有一顆在 `ask` 的那一刻，帶著判成的錯；在 {@link RunSuspension.onWithdraw} 登記的都叫過之後、
+   *   拒絕當下在 `idle` 等的之前叫。之後的 `ask`、`idle` 以 {@link HumanInputWithdrawn} 當場拒絕。
    */
   constructor(
     private readonly onPark: (asks: readonly PendingAsk[]) => void,
     private readonly onStuck: (error: Error) => void,
   ) {}
 
-  /** 收回過了（卡死判成錯誤時也算）。`#toolStep` 看到它就不套這一步的寫入。 */
+  /** 收回過了（卡死判成錯誤時也算）。 */
   get withdrawn(): boolean {
     return this.#withdrawn;
+  }
+
+  /**
+   * 收回或判成卡死的那一刻同步叫 `listener`，在拒絕任何一個等待之前：工具步在這裡套已經收完的呼叫寫入。叫過一次就退掉。
+   * @param listener - 收回或判成卡死時叫。
+   * @returns 取消登記；那一步結束時叫。
+   */
+  onWithdraw(listener: () => void): () => void {
+    this.#withdrawListeners.add(listener);
+    return () => this.#withdrawListeners.delete(listener);
   }
 
   /** 還沒答的提問，照問的先後。 */
@@ -375,11 +389,12 @@ export class RunSuspension {
   }
 
   /**
-   * 收回：每一顆還沒答的提問以 {@link HumanInputWithdrawn} 拒絕；一個 `setImmediate` 之後還在 `idle` 等的也以它拒絕；之後的
-   * `ask`、`idle` 當場拒絕。
+   * 收回：先叫 {@link RunSuspension.onWithdraw} 登記的每一個，再以 {@link HumanInputWithdrawn} 拒絕每一顆還沒答的提問；一個
+   * `setImmediate` 之後還在 `idle` 等的也以它拒絕；之後的 `ask`、`idle` 當場拒絕。
    */
   withdraw(): void {
     this.#withdrawn = true;
+    this.#settleWithdrawn();
     for (const id of [...this.#asks.keys()]) this.#take(id)!.reject(new HumanInputWithdrawn());
     setImmediate(() => this.#releaseIdlers(new HumanInputWithdrawn()));
   }
@@ -411,6 +426,12 @@ export class RunSuspension {
     };
   }
 
+  #settleWithdrawn(): void {
+    const listeners = [...this.#withdrawListeners];
+    this.#withdrawListeners.clear();
+    for (const listener of listeners) listener();
+  }
+
   #releaseIdlers(reason: unknown): void {
     for (const release of [...this.#idlers]) release(reason);
   }
@@ -425,8 +446,9 @@ export class RunSuspension {
           'native agent loop：同一批起跑了的呼叫都在 idle 等，沒有一顆在問人，也沒有一顆在跑',
         );
         this.#withdrawn = true;
+        this.#settleWithdrawn();
         this.onStuck(error);
-        this.#releaseIdlers(error);
+        this.#releaseIdlers(new HumanInputWithdrawn());
         return;
       }
       if (!this.#ready()) return;

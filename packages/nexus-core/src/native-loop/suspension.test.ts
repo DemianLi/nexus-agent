@@ -6,7 +6,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { isHumanInputWithdrawn, waitClockOf, HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
+import {
+  HumanInputWithdrawn,
+  isHumanInputWithdrawn,
+  waitClockOf,
+  HUMAN_INPUT_CONFIG_KEY,
+} from '../human-input.js';
 import {
   delegationOf,
   RunSuspension,
@@ -40,7 +45,7 @@ function fakePermit(): CallPermit & { readonly log: string[]; grant(granted: boo
 }
 
 describe('RunSuspension', () => {
-  it('都在 idle、沒有一顆在問：判成錯誤，交給 onStuck，在 idle 等的以同一個錯拒絕，不停在等待點', async () => {
+  it('都在 idle、沒有一顆在問：判成錯誤，交給 onStuck，在 idle 等的以 HumanInputWithdrawn 拒絕，不停在等待點', async () => {
     const onPark = vi.fn();
     const onStuck = vi.fn();
     const suspension = new RunSuspension(onPark, onStuck);
@@ -56,7 +61,42 @@ describe('RunSuspension', () => {
     expect(onStuck).toHaveBeenCalledTimes(1);
     const error = onStuck.mock.calls[0]?.[0] as Error;
     expect(error.message).toContain('沒有一顆在問人');
-    expect(await outcome).toBe(error);
+    expect(await outcome).toBeInstanceOf(HumanInputWithdrawn);
+    expect(suspension.withdrawn).toBe(true);
+  });
+
+  it('判成卡死：onWithdraw 登記的先叫，再交出錯誤；叫過一次就退掉', async () => {
+    const order: string[] = [];
+    const suspension = new RunSuspension(vi.fn(), () => order.push('stuck'));
+    suspension.onWithdraw(() => order.push('settled'));
+    const unsubscribed = vi.fn();
+    suspension.onWithdraw(unsubscribed)();
+    started(suspension, 'c1')
+      .service.idle(new Promise<never>(() => {}))
+      .catch(() => order.push('idle rejected'));
+    await tick();
+    await tick();
+
+    expect(order).toEqual(['settled', 'stuck', 'idle rejected']);
+    expect(unsubscribed).not.toHaveBeenCalled();
+    suspension.withdraw();
+    expect(order).toEqual(['settled', 'stuck', 'idle rejected']);
+  });
+
+  it('收回：onWithdraw 登記的先叫，再拒絕還沒答的提問', async () => {
+    const order: string[] = [];
+    const suspension = new RunSuspension(vi.fn(), vi.fn());
+    suspension.onWithdraw(() => order.push('settled'));
+    started(suspension, 'c1')
+      .service.ask('q')
+      .catch((error: unknown) =>
+        order.push(error instanceof HumanInputWithdrawn ? 'ask withdrawn' : 'other'),
+      );
+    await tick();
+
+    suspension.withdraw();
+    await tick();
+    expect(order).toEqual(['settled', 'ask withdrawn']);
   });
 
   it('一顆在問、一顆在 idle：停在等待點，不判成錯誤', async () => {

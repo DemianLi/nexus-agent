@@ -132,13 +132,6 @@ const DEFAULT_RECURSION_LIMIT = 25;
 /** 沒給 `maxConcurrency` 時同一步的工具全部一起起跑，同 LangGraph。 */
 const UNBOUNDED = Number.POSITIVE_INFINITY;
 
-/**
- * 每個帶 `ToolWaits` 的工具步跑的期間登記一個：把這一步已經收完的寫入套進 state。鍵是那一步的 `ToolWaits`。
- * 只有 root 那一步（鍵是 `RunSuspension`）會被 {@link NativeAgent.discardSuspended} 在 `withdraw()` 之前同步叫；
- * 前景子代理那一層（鍵是 `Delegation`）只登記，不會被叫。叫一次就退掉；那一步結束時也退掉。
- */
-const settledWrites = new WeakMap<object, () => void>();
-
 /** 一次 run 收到的輸入。 */
 type LoopInput =
   { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
@@ -769,7 +762,6 @@ export class NativeAgent {
     const link = this.#parked.get(threadId);
     if (link === undefined) return;
     this.#parked.delete(threadId);
-    settledWrites.get(link.suspension)?.();
     link.suspension.withdraw();
   }
 
@@ -1200,13 +1192,7 @@ export class NativeAgent {
       step,
     );
     const batch = suspension?.away === undefined ? running : suspension.away(running);
-    if (suspension !== undefined) {
-      const apply = (): void => {
-        settledWrites.delete(suspension);
-        commit(false);
-      };
-      settledWrites.set(suspension, apply);
-    }
+    const unsubscribe = suspension?.onWithdraw?.(() => commit(false));
     try {
       if (caller === undefined) await batch;
       else {
@@ -1214,15 +1200,15 @@ export class NativeAgent {
         await raceAbort(batch, caller);
       }
     } catch (error) {
-      // `withdrawn` 為真時這一步的寫入不在這裡套：經 `discardSuspended` 收回的，root 那一步收完的寫入已在收回那一刻套過；
-      // 卡死判定（`suspension.ts` 的 `#maybePark`）與前景子代理那一層，收完的寫入也丟掉。
+      // `withdrawn` 為真時這一步的寫入不在這裡套：root 那一步收完的，在收回或判成卡死的那一刻由 `onWithdraw` 套過了；
+      // 前景子代理那一層不登記，收完的寫入不套（`suspension.ts` 模組 doc 的「委派」）。
       if (suspension?.withdrawn === true) throw error;
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
       commit(!(caller?.aborted ?? false));
       throw error;
     } finally {
-      if (suspension !== undefined) settledWrites.delete(suspension);
+      unsubscribe?.();
     }
     commit(true);
     const last = state.messages.at(-1);
@@ -1324,6 +1310,8 @@ interface ToolWaits {
     permit?: CallPermit,
   ): CallSlot;
   away?<T>(waiting: Promise<T>): Promise<T>;
+  /** 只有 root 有：{@link RunSuspension.onWithdraw}。 */
+  onWithdraw?(listener: () => void): () => void;
 }
 
 /** 前景子代理從叫起它的那顆 `task` 呼叫拿委派；那顆呼叫沒人可問（`NO_HUMAN_INPUT`、沒放）就沒有。 */
