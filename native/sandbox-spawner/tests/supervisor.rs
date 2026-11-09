@@ -2128,9 +2128,7 @@ fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
     let lines = || {
         h.audit()
             .into_iter()
-            .filter(|l| {
-                l.contains("\"event\":\"protocol\"") && pids.iter().any(|p| l.contains(p))
-            })
+            .filter(|l| l.contains("\"event\":\"protocol\"") && pids.iter().any(|p| l.contains(p)))
             .collect::<Vec<_>>()
     };
     assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
