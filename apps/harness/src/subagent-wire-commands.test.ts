@@ -3,7 +3,7 @@
  *
  * 兩層：
  *
- * - **替身控制面**：參數驗證、回應形狀、host 的拒絕譯成三個錯誤碼、沒開過的 thread 與沒有背景派出的組裝。
+ * - **替身控制面**：參數驗證、回應形狀、host 的拒絕譯成三個錯誤碼、沒開過的 thread 與沒有背景派出的組裝、太大的話照 loop 拒不拒收。
  * - **真組裝**：真的 `createNexusAgent`＋背景子代理，從 wire 送 `subagent.send`，看子代理自己的日誌與它下一步讀到的字；
  *   `subagent.interrupt` 只停它、不連帶 root。
  *
@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { PluginEntry, SessionRegistry } from '@nexus/core';
+import { HUMAN_MESSAGE_LIMIT_CHARS } from '@nexus/core';
+import type { AgentLoopKind, PluginEntry, SessionRegistry } from '@nexus/core';
 import {
   createWireClient,
   SUBAGENT_AT_CAPACITY,
@@ -76,17 +77,23 @@ function rig(
 
 const ACCEPTED = { type: 'success', result: { accepted: true } };
 
+const TOO_LARGE = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
+const AT_LIMIT = 'y'.repeat(HUMAN_MESSAGE_LIMIT_CHARS);
+
 describe('替身控制面：wire 這一層', () => {
-  function stubbed(control: BackgroundSubagentControl | undefined) {
-    return rig(async () => ({
-      agent: {} as PumpAgent,
-      commands: emptyCommandPoint(),
-      dispose: async () => {},
-      attachSessions: () => ({
-        detach: async () => {},
-        ...(control !== undefined && { background: control }),
+  function stubbed(control: BackgroundSubagentControl | undefined, agentLoop?: AgentLoopKind) {
+    return rig(
+      async () => ({
+        agent: {} as PumpAgent,
+        commands: emptyCommandPoint(),
+        dispose: async () => {},
+        attachSessions: () => ({
+          detach: async () => {},
+          ...(control !== undefined && { background: control }),
+        }),
       }),
-    }));
+      agentLoop === undefined ? {} : { agentLoop },
+    );
   }
 
   /** 記下每一次呼叫；`reject` 設了，送話就拋它。 */
@@ -317,6 +324,33 @@ describe('替身控制面：wire 這一層', () => {
     expect(await client.subagentInterrupt('t1', 'bg-x')).toMatchObject(ACCEPTED);
   });
 
+  it('native：太大的話（#2415）回 invalid_argument、沒送到控制面，排在找編號之前；剛好等於上限的照送', async () => {
+    const { calls, control } = recorder();
+    const { client } = stubbed(control, 'native');
+    await client.slashList('t1');
+    const rejection = {
+      type: 'error',
+      error: 'invalid_argument',
+      message: 'message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字',
+    };
+    expect(await client.subagentSend('t1', 'bg-live', TOO_LARGE)).toMatchObject(rejection);
+    expect(calls).toEqual([]);
+    expect(await client.subagentSend('t1', 'bg-live', AT_LIMIT)).toMatchObject(ACCEPTED);
+    expect(calls).toEqual([`send:bg-live:${AT_LIMIT}`]);
+
+    const { client: bare } = stubbed(undefined, 'native');
+    await bare.slashList('t1');
+    expect(await bare.subagentSend('t1', 'bg-x', TOO_LARGE)).toMatchObject(rejection);
+  });
+
+  it('langgraph：太大的話照收，原文交給控制面', async () => {
+    const { calls, control } = recorder();
+    const { client } = stubbed(control, 'langgraph');
+    await client.slashList('t1');
+    expect(await client.subagentSend('t1', 'bg-live', TOO_LARGE)).toMatchObject(ACCEPTED);
+    expect(calls).toEqual([`send:bg-live:${TOO_LARGE}`]);
+  });
+
   it('封包的 method 與路徑不合照舊被擋', async () => {
     const { client } = stubbed(recorder().control);
     await client.slashList('t1');
@@ -354,7 +388,7 @@ describe('真組裝：從 wire 對背景子代理傳話、單獨停', () => {
     ],
   };
 
-  async function assemble(workerTurns: readonly ScriptedTurn[]) {
+  async function assemble(workerTurns: readonly ScriptedTurn[], agentLoop?: AgentLoopKind) {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -389,17 +423,21 @@ describe('真組裝：從 wire 對背景子代理傳話、單獨停', () => {
       plugins: [worker],
       backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
       backgroundSubagents: {},
+      ...(agentLoop !== undefined && { agentLoop }),
     });
     let sessions: SessionRegistry | undefined;
-    const { client } = rig(async () => ({
-      agent: built.agent as unknown as PumpAgent,
-      commands: emptyCommandPoint(),
-      dispose: () => built.dispose(),
-      attachSessions: (registry, backgroundPort) => {
-        sessions = registry;
-        return composeAttachSessions(built)(registry, backgroundPort);
-      },
-    }));
+    const { client } = rig(
+      async () => ({
+        agent: built.agent as unknown as PumpAgent,
+        commands: emptyCommandPoint(),
+        dispose: () => built.dispose(),
+        attachSessions: (registry, backgroundPort) => {
+          sessions = registry;
+          return composeAttachSessions(built)(registry, backgroundPort);
+        },
+      }),
+      agentLoop === undefined ? {} : { agentLoop },
+    );
     await client.runStart('t1', '委派');
     await until(() => sessions?.list().some((entry) => entry.address.kind === 'subagent') ?? false);
     const child = sessions!.list().find((entry) => entry.address.kind === 'subagent')!;
@@ -426,6 +464,19 @@ describe('真組裝：從 wire 對背景子代理傳話、單獨停', () => {
     expect(logged.map((event) => (event.data as { source: unknown }).source)).toEqual([
       { kind: 'user' },
     ]);
+  }, 20000);
+
+  it('langgraph：太大的話照收，子代理下一輪開頭由基座搬到 /conversation_history，模型看到的是搬走後的那句', async () => {
+    const rigged = await assemble([{ content: '做完了。' }, { content: '收到。' }], 'langgraph');
+    // 等第一輪收完再送：閒著的子代理收到話是開新的一輪，基座的 `beforeAgent` 在那時搬檔。
+    await until(() => rigged.child.events.some((event) => event.type === 'turn/end'));
+    expect(await rigged.client.subagentSend('t1', rigged.runId, TOO_LARGE)).toMatchObject(ACCEPTED);
+    await until(() => rigged.workerModel.prompts.length >= 2);
+    const humans = (rigged.workerModel.prompts[1] ?? [])
+      .filter((message) => message.getType() === 'human')
+      .map((message) => message.text);
+    expect(humans.at(-1)).toContain('/conversation_history/');
+    expect(humans.every((text) => text.length <= HUMAN_MESSAGE_LIMIT_CHARS)).toBe(true);
   }, 20000);
 
   it('subagent.send 對不是這條 thread 派出去的編號：subagent_not_found', async () => {

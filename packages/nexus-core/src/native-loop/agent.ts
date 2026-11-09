@@ -22,10 +22,10 @@
  *
  * 前景子代理也是這個類別（{@link NativeAgentParams.subagent}），由 root 的 `task` 呼叫叫起：它的提問經那顆呼叫的委派進 root 這次 run 的
  * 等人狀態（`suspension.ts`）；模型與工具的事件經繼承的 callbacks 進 root 那條串流，節點收完的 `completed` 經 `configurable` 上 root 的
- * 事件出口補。
+ * 事件出口補。背景子代理（{@link NativeAgentParams.background}）是 host 叫起的最上層 agent，跟 root 一樣按 thread 留 state、自己交出中斷。
  *
  * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
- * 接不住，TODO(#2608)。背景子代理仍是 LangGraph 的圖，TODO(#2359)。
+ * 接不住，TODO(#2608)。
  *
  * @module
  */
@@ -87,6 +87,12 @@ export interface NativeAgentParams {
    * （`turn-stopping.ts`：只折進 root），`llm/stream`、`agent/request-error` 照派。
    */
   readonly subagent?: boolean;
+  /**
+   * 背景子代理：host 一輪一輪叫起的最上層 agent，`thread_id` 是它子日誌的 session id。state 同 root 按 thread 留在記憶體裡、
+   * 停在等待點時同 root 交出中斷；跟前景子代理一樣照跑基座的格（不換 `NATIVE_NOOP_CELLS` 的空函式），也不派
+   * `agent/pre-step` 與 `agent/turn-stopping`。
+   */
+  readonly background?: boolean;
 }
 
 /** `withConfig` 收的那兩格：LangGraph 的步數上限與並行上限，語意同 LangGraph。 */
@@ -467,8 +473,8 @@ export class NativeAgent {
   /** 這張圖的 middleware，照組裝順序。 */
   readonly middleware: readonly LoopMiddleware[];
   /**
-   * 清單上的格換成空函式之後的那一份（{@link withNativeNoopCells}），跟 {@link NativeAgent.middleware} 一一對應。前景子代理不換、
-   * 照跑基座的實作：它的人話是 `task` 的 description，不經宿主收人話的入口。
+   * 清單上的格換成空函式之後的那一份（{@link withNativeNoopCells}），跟 {@link NativeAgent.middleware} 一一對應。前景與背景子代理不換、
+   * 照跑基座的實作：它們收到的話有模型寫的（`task` 的 description、背景委派的那句、agent 轉來的），這種話不擋，超過門檻由基座搬走。
    */
   readonly #withNoops: readonly LoopMiddleware[];
   /** 有沒有誰執行 `wrapModelCall` 新加的工具：任一顆有 `wrapToolCall`。 */
@@ -482,7 +488,7 @@ export class NativeAgent {
   readonly #modelCells: readonly LoopMiddleware[];
   /**
    * `beforeAgent`、`beforeModel`、`afterAgent` 實際跑的那一份，跟 {@link NativeAgent.middleware} 一一對應：登記了一步的 hook
-   * （{@link hookStepOf}）換成 native 從那一步造的；清單上的格照 {@link NativeAgent.#withNoops}：root 是空函式，前景子代理是基座的實作。
+   * （{@link hookStepOf}）換成 native 從那一步造的；清單上的格照 {@link NativeAgent.#withNoops}：root 是空函式，前景與背景子代理是基座的實作。
    */
   readonly #hookCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];
@@ -513,7 +519,7 @@ export class NativeAgent {
       throw new Error(`native agent loop 不支援 afterModel（middleware "${unsupported.name}"）`);
     }
     this.#withNoops =
-      params.subagent === true
+      params.subagent === true || params.background === true
         ? this.middleware
         : this.middleware.map((m) => withNativeNoopCells(m));
     this.#executesAddedTools = this.middleware.some((m) => m.wrapToolCall !== undefined);
@@ -879,8 +885,11 @@ export class NativeAgent {
       };
     }
     const budget = new StepBudget(recursionLimit);
-    // 子代理的步驟不派 `agent/pre-step`、`agent/turn-stopping`（只有 root 派）；`llm/stream`、`agent/request-error` 照派。
-    const stepEvents = this.#params.subagent === true ? undefined : this.#params.events;
+    // 子代理（前景、背景）的步驟不派 `agent/pre-step`、`agent/turn-stopping`（只有 root 派）；`llm/stream`、`agent/request-error` 照派。
+    const stepEvents =
+      this.#params.subagent === true || this.#params.background === true
+        ? undefined
+        : this.#params.events;
     // `stepSignal` 是一批工具共用的（一顆拋了就 abort 兄弟），跟呼叫端的 `config.signal` 合起來；這一輪的中止訊號走
     // `configurable`，不在這裡。
     const node = (

@@ -482,7 +482,7 @@ export interface CreateNexusAgentOptions {
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
    * 入口給的管道兩個 loop 一樣（`entryApprovalChannel`）。`native` 下帶 thread 的 `streamEvents` 停下來問人（前景子代理那一層也是，問的是 root
    * 的使用者），`invoke`／`stream` 沒人可問，閘門與 `exec.interrupt` 照沒有管道回絕（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
-   * 前景子代理跟 root 一樣跑 native；背景子代理的圖仍是 LangGraph，TODO(#2359)。
+   * 前景與背景子代理跟 root 一樣跑 native。
    */
   readonly agentLoop?: AgentLoopKind;
 }
@@ -1084,6 +1084,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
         // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
         delegation: createSubagentDelegationMiddleware(),
+        ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。

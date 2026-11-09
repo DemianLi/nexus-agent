@@ -3226,7 +3226,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         const referenceError = referenceRejection(pump, command.id, text);
         if (referenceError !== undefined) return json(referenceError);
         // 太大的人話（#2415）：同樣排在收下附件之前。
-        const sizeError = sizeRejection(pump, command.id, text, { mention, context });
+        const sizeError = sizeRejection(
+          command.id,
+          rootTurnContent(pump, text, { mention, context }),
+        );
         if (sizeError !== undefined) return json(sizeError);
         // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
         const mode = (params as { mode?: unknown }).mode;
@@ -3507,30 +3510,38 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是進圖的那一則——
-   * 引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來的內容。附件在那裡是參照區塊、不算字，所以
-   * `run.start` 在收下附件之前量也一樣。不收就是一則 `invalid_argument`。引用要先經 {@link referenceRejection} 驗過，否則拋
+   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是進圖的那一則。
+   * 不收就是一則 `invalid_argument`。
+   *
+   * @param content - root 的話（`run.start`、`queue.update` 的 edit）是 {@link rootTurnContent} 組出來的；`subagent.send` 不展開
+   *   引用、不帶附件，進背景子代理的那則就是原文。
+   */
+  function sizeRejection(id: number | null, content: ReturnType<typeof userContent>) {
+    if (options.agentLoop !== 'native') return undefined;
+    const rejection = humanMessageRejection(content as never);
+    return rejection === undefined ? undefined : errorResponse(id, 'invalid_argument', rejection);
+  }
+
+  /**
+   * root 收下的那句話進圖的內容：引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來。附件在那裡是參照
+   * 區塊、不算字，所以 `run.start` 在收下附件之前量也一樣。引用要先經 {@link referenceRejection} 驗過，否則拋
    * `SessionReferenceError`。
    */
-  function sizeRejection(
+  function rootTurnContent(
     pump: ThreadPump,
-    id: number | null,
     text: string,
     extras: {
       readonly attachments?: readonly AttachmentRef[];
       readonly mention?: SubagentMentionRef | undefined;
       readonly context?: PageContextRef | undefined;
     },
-  ) {
-    if (options.agentLoop !== 'native') return undefined;
-    const content = userContent(
+  ): ReturnType<typeof userContent> {
+    return userContent(
       pump.referencedText(text).text,
       extras.attachments,
       extras.mention,
       extras.context,
     );
-    const rejection = humanMessageRejection(content as never);
-    return rejection === undefined ? undefined : errorResponse(id, 'invalid_argument', rejection);
   }
 
   /**
@@ -3578,6 +3589,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
     }
+    // 太大的人話（#2415）：跟 `run.start` 同一道，同樣只在 `native` 下擋；也排在找編號之前。
+    const sizeError = sizeRejection(id, params.text);
+    if (sizeError !== undefined) return json(sizeError);
     if (background === undefined) {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
@@ -3640,7 +3654,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (referenceError !== undefined) return json(referenceError);
       // 改過的字配上那一件原本的附件、點名與情境量；找不到那一件就交給下面回 `not-found`。
       const queued = [...pump.inbox, ...pump.nextStep].find((item) => item.id === params.item_id);
-      const sizeError = queued === undefined ? undefined : sizeRejection(pump, id, text, queued);
+      const sizeError =
+        queued === undefined ? undefined : sizeRejection(id, rootTurnContent(pump, text, queued));
       if (sizeError !== undefined) return json(sizeError);
       action = { kind: 'edit', text };
     } else {
