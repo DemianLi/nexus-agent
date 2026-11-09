@@ -60,8 +60,6 @@ import {
   assertPrivateFile,
   composeEntries,
   defaultSources,
-  DEPENDENT_ENTRY_PAIRS,
-  dependentDisabledReasons,
   JOURNAL_FILE_ROLE,
   loadPluginConfig,
   PluginConfigError,
@@ -432,10 +430,6 @@ export async function changePlugin(
         if (composed === undefined) {
           return reject(`疊完之後找不到 ${JSON.stringify(change.id)}，這一筆不會有作用。`);
         }
-        // 開關的是主列（`DEPENDENT_ENTRY_PAIRS`）：從列跟著關或跟著回來，當場講給下指令的人聽。
-        if (body.op === 'disable' || body.op === 'enable') {
-          notes.push(...dependentNotes(loaded.entries, composed, body.op));
-        }
         // 停用的列不經過 `loadPluginConfig` 的設定驗證：新設定要照樣驗，不然寫進去的是下次啟用才爆的東西。
         let pluginName: string | undefined;
         try {
@@ -549,31 +543,4 @@ export async function changePlugin(
     warnings,
     snapshotPresent,
   };
-}
-
-/**
- * 開關主列時，跟著它的從列怎麼了（`DEPENDENT_ENTRY_PAIRS`）：關主列時從列被連帶關掉、開主列時從列跟著回來，各一句。不是主列就沒有。
- *
- * @param entries - 寫入這一筆之後疊完的條目。
- * @param target - 這一筆開關的那一列（疊完之後的樣子）。
- * @param op - 關或開。
- */
-function dependentNotes(
-  entries: readonly ConfigEntry[],
-  target: ConfigEntry,
-  op: 'disable' | 'enable',
-): string[] {
-  const reasons = dependentDisabledReasons(entries);
-  const label = JSON.stringify(target.id ?? target.name);
-  const notes: string[] = [];
-  for (const { primary, dependent } of DEPENDENT_ENTRY_PAIRS) {
-    if (primary !== target.name) continue;
-    for (const [position, entry] of entries.entries()) {
-      if (entry.name !== dependent) continue;
-      const id = JSON.stringify(entry.id ?? entry.name);
-      if (op === 'disable' && reasons.has(position)) notes.push(`${id} 跟著 ${label} 一併關掉。`);
-      if (op === 'enable' && entry.disabled !== true) notes.push(`${id} 跟著 ${label} 一併恢復。`);
-    }
-  }
-  return notes;
 }

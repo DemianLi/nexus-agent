@@ -37,7 +37,6 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 
 import {
   DEFAULT_REPEAT_REMINDER,
@@ -60,11 +59,9 @@ import {
   shippedConfigPath,
   validateEntries,
   assertPrivateFile,
-  DEPENDENT_ENTRY_PAIRS,
   PROTECTED_ENTRY_NAMES,
   PROTECTED_ENTRY_REASONS,
 } from './plugin-config.js';
-import type { ConfigEntry } from './plugin-config.js';
 import { DEFAULT_PERSISTENCE_WINDOW_MS } from '@nexus/core';
 
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
@@ -1254,96 +1251,6 @@ describe('保護名單', () => {
         "- id: echo\n  name: '@nexus/plugin-echo'\n",
     );
     expect(() => composeEntries({ shipped, warn: () => {} })).toThrow(/關不掉/);
-  });
-});
-
-describe('跟著主開關的從列（#2551）', () => {
-  const PLAN_MODE = '@nexus/plugin-plan-mode';
-  const MODEL_CALL = '@nexus/plugin-plan-mode/model-call';
-
-  type RowState = '沒寫' | '關掉' | '開著';
-
-  /** 一份只有這兩列的出貨清單：`沒寫` 就不寫那一列。 */
-  function shippedWith(primary: RowState, dependent: RowState): string {
-    const row = (id: string, name: string, state: RowState): string =>
-      state === '沒寫'
-        ? ''
-        : `- id: ${id}\n  name: '${name}'\n${state === '關掉' ? '  disabled: true\n' : ''}`;
-    const body =
-      row('plan-mode', PLAN_MODE, primary) + row('plan-mode-model-call', MODEL_CALL, dependent);
-    return writePrivate(privateDirectory(), 'cordis.yml', body === '' ? '[]\n' : body);
-  }
-
-  const PRIMARY_ON_DEPENDENT_OFF =
-    `掛了 "${PLAN_MODE}"，卻沒有掛 "${MODEL_CALL}"（沒寫，或 disabled: true）。"${MODEL_CALL}" 跟著 "${PLAN_MODE}" 開關：` +
-    `要關就關 "${PLAN_MODE}"，"${MODEL_CALL}" 會一併當成關掉；"${PLAN_MODE}" 開著時 "${MODEL_CALL}" 不能單獨關。`;
-  const DEPENDENT_WITHOUT_PRIMARY =
-    `掛了 "${MODEL_CALL}"，卻沒有寫 "${PLAN_MODE}"。"${MODEL_CALL}" 跟著 "${PLAN_MODE}" 開關：` +
-    `沒有 "${PLAN_MODE}" 那一列，"${MODEL_CALL}" 也不能掛。`;
-
-  /**
-   * 九格：主 × 從，各「沒寫／關掉／開著」。`dependent` 是從最後的樣子（`沒寫` 即清單上沒有這一列），`error` 是拋的訊息。
-   * 「主沒寫、從關掉」通過：兩列都沒有掛，跟兩列都沒寫同義。
-   */
-  const CELLS: readonly {
-    readonly primary: RowState;
-    readonly dependent: RowState;
-    readonly expected: { readonly dependent: RowState } | { readonly error: string };
-  }[] = [
-    { primary: '沒寫', dependent: '沒寫', expected: { dependent: '沒寫' } },
-    { primary: '沒寫', dependent: '關掉', expected: { dependent: '關掉' } },
-    { primary: '沒寫', dependent: '開著', expected: { error: DEPENDENT_WITHOUT_PRIMARY } },
-    { primary: '關掉', dependent: '沒寫', expected: { dependent: '沒寫' } },
-    { primary: '關掉', dependent: '關掉', expected: { dependent: '關掉' } },
-    { primary: '關掉', dependent: '開著', expected: { dependent: '關掉' } },
-    { primary: '開著', dependent: '沒寫', expected: { error: PRIMARY_ON_DEPENDENT_OFF } },
-    { primary: '開著', dependent: '關掉', expected: { error: PRIMARY_ON_DEPENDENT_OFF } },
-    { primary: '開著', dependent: '開著', expected: { dependent: '開著' } },
-  ];
-
-  it('表裡只有 plan-mode 那一對；出貨清單兩列都在，從緊接在主之後', () => {
-    expect(DEPENDENT_ENTRY_PAIRS).toEqual([{ primary: PLAN_MODE, dependent: MODEL_CALL }]);
-    const names = composeEntries({ shipped: shippedConfigPath(), warn: () => {} }).map(
-      (entry) => entry.name,
-    );
-    expect(names.indexOf(MODEL_CALL)).toBe(names.indexOf(PLAN_MODE) + 1);
-  });
-
-  it.each(CELLS)('主$primary × 從$dependent', ({ primary, dependent, expected }) => {
-    const shipped = shippedWith(primary, dependent);
-    const compose = (): ConfigEntry[] => composeEntries({ shipped, warn: () => {} });
-    if ('error' in expected) {
-      expect(compose).toThrow(PluginConfigError);
-      expect(compose).toThrow(expected.error);
-      return;
-    }
-    const row = compose().find((entry) => entry.name === MODEL_CALL);
-    const state: RowState = row === undefined ? '沒寫' : row.disabled === true ? '關掉' : '開著';
-    expect(state).toBe(expected.dependent);
-  });
-
-  it('`--dump-config` 印被連帶關掉的從：`disabled: true`，來源註解寫明是主關的', () => {
-    const dump = renderConfigDump({ shipped: shippedWith('關掉', '開著'), warn: () => {} });
-    const rows = parseYaml(dump.replaceAll(/^# ==.*$/gm, '')) as Record<string, unknown>[];
-    expect(rows.find((row) => row.name === MODEL_CALL)).toMatchObject({ disabled: true });
-    expect(dump).toContain(`patched by 連帶關閉：主 "${PLAN_MODE}" 是 disabled: true`);
-  });
-
-  it('`--dump-config` 那條也拋：檢查搬離 `validateEntries` 就會紅', () => {
-    expect(() =>
-      renderConfigDump({ shipped: shippedWith('開著', '關掉'), warn: () => {} }),
-    ).toThrow(PRIMARY_ON_DEPENDENT_OFF);
-  });
-
-  it('出貨清單疊上 `plan-mode` 的 `disabled: true`（`plugin disable plan-mode` 寫的那一筆）照常起來，從跟著關', () => {
-    const root = privateDirectory();
-    const overlay = writePrivate(root, 'o.yml', '- id: plan-mode\n  disabled: true\n');
-    const entries = composeEntries({
-      shipped: shippedConfigPath(),
-      overlays: [overlay],
-      warn: () => {},
-    });
-    expect(entries.find((entry) => entry.name === MODEL_CALL)?.disabled).toBe(true);
   });
 });
 
