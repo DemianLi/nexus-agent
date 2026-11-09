@@ -65,6 +65,45 @@ export function humanInputOf(config: unknown): HumanInput | undefined {
   return isHumanInput(value) ? value : undefined;
 }
 
+/**
+ * 一顆呼叫等人的時間（含等完之後排隊取回併發名額）：可暫停的工具時限（`native-loop/tool-node.ts`）照它停表，逾時措辭的「等了多久」
+ * 扣掉它（`containment.ts`、`tool-pipeline.ts`）。掛在服務物件的 {@link WAIT_CLOCK} 上，不在 {@link HumanInput} 介面裡。
+ */
+export interface WaitClock {
+  /** 到現在為止累計等了多久（毫秒），正在等的那一段也算進去。 */
+  readonly waitedMs: number;
+  /**
+   * 開始等（`true`）與等完、拿回名額（`false`）時叫。
+   * @param listener - 收狀態。
+   * @returns 取消登記。
+   */
+  onWaiting(listener: (waiting: boolean) => void): () => void;
+}
+
+/** 服務物件上放 {@link WaitClock} 的鍵。 */
+export const WAIT_CLOCK = Symbol('nexus.humanInput.waitClock');
+
+/**
+ * @param config - 節點或工具拿到的 config。
+ * @returns 那顆呼叫的 {@link WaitClock}；讀不到服務或服務沒帶就是 `undefined`。
+ */
+export function waitClockOf(config: unknown): WaitClock | undefined {
+  const service = humanInputOf(config) as { [WAIT_CLOCK]?: WaitClock } | undefined;
+  return service?.[WAIT_CLOCK];
+}
+
+/**
+ * 從現在起算這顆呼叫等了多久。
+ * @param config - 節點或工具拿到的 config。
+ * @returns 每次叫都回從建立這個函式到當下之間等的毫秒數；讀不到 {@link WaitClock} 時一律 0。
+ */
+export function waitedSince(config: unknown): () => number {
+  const clock = waitClockOf(config);
+  if (clock === undefined) return () => 0;
+  const from = clock.waitedMs;
+  return () => clock.waitedMs - from;
+}
+
 function isHumanInput(value: unknown): value is HumanInput {
   return (
     typeof value === 'object' &&

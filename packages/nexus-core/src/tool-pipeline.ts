@@ -84,6 +84,7 @@ import {
   isToolTimeout,
 } from './containment.js';
 import type { EventDispatcher, EventListenerInfo, Events } from './events.js';
+import { waitedSince } from './human-input.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
@@ -827,12 +828,14 @@ export function createToolPostExecuteMiddleware(
   const step: ToolCallStep = async (call, next) => {
     if (listenerCount(events, 'tools/post-execute', core) === 0) return next();
     const startedAt = Date.now();
+    // 等人的時間扣掉，同 `containment.ts`。
+    const waited = waitedSince({ configurable: call.configurable });
     let result: unknown;
     try {
       result = await next();
     } catch (error) {
       if (isGraphBubbleUp(error) || isTurnCancelled(error)) throw error;
-      return postExecuteThrown(post, call, error, Date.now() - startedAt);
+      return postExecuteThrown(post, call, error, Date.now() - startedAt - waited());
     }
     if (!ToolMessage.isInstance(result)) return result;
     return postExecuteMessage(post, call, result);
