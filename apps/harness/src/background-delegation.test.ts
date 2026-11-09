@@ -1288,7 +1288,8 @@ const backgroundTrace = (log: SessionLog): readonly string[] =>
   });
 
 describe('背景子代理的 maxTurns', () => {
-  // native 下背景子代理（仍是 LangGraph 的圖）也折進 native 那一格；兩種 vitest 設定斷言同一組字面值。撞上限時合成的那則不寫日誌。
+  // native 下背景子代理（仍是 LangGraph 的圖）掛的是 `createSubagentMaxTurnsMiddleware`（`subagent-max-turns.ts`），不是
+  // `modelCallLimitMiddleware`；兩種 vitest 設定斷言同一組字面值。撞上限時合成的那則不寫日誌，所以 trace 停在工具結果。
   async function delegateWithCap(maxTurns: number, workerTurns: readonly ScriptedTurn[]) {
     const run = await assemble({
       rootTurns: [delegate(true), { content: '根收尾' }],

@@ -482,7 +482,7 @@ export class NativeAgent {
   readonly #modelCells: readonly LoopMiddleware[];
   /**
    * `beforeAgent`、`beforeModel`、`afterAgent` 實際跑的那一份，跟 {@link NativeAgent.middleware} 一一對應：登記了一步的 hook
-   * （{@link hookStepOf}）換成 native 從那一步造的，清單上的格是空函式。
+   * （{@link hookStepOf}）換成 native 從那一步造的；清單上的格照 {@link NativeAgent.#withNoops}：root 是空函式，前景子代理是基座的實作。
    */
   readonly #hookCells: readonly LoopMiddleware[];
   readonly #tools: readonly InvokableTool[];

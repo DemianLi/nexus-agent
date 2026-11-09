@@ -55,7 +55,7 @@ export function isNativeNoopCell(middleware: string, part: string): boolean {
 const noop = (): undefined => undefined;
 
 /**
- * native 實際跑的那一份：名字在清單上的，清單上的格換成什麼都不做、回 `undefined` 的函式，其餘照讀原物件；不在清單上的原樣回。
+ * native 的 root 實際跑的那一份：名字在清單上的，清單上的格換成什麼都不做、回 `undefined` 的函式，其餘照讀原物件；不在清單上的原樣回。
  *
  * @param middleware - 組裝好的那一顆。
  * @returns native 要跑的那一份。
