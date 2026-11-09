@@ -251,6 +251,76 @@ describe('HostClient.call', () => {
     expect(host.connections()).toBe(1);
   });
 
+  it('同一塊裡壞框後面跟著 hello：那條已經關了，不算連上', async () => {
+    // 兩框要落在同一次 data 裡，才走得到「前一框關掉之後同一個迴圈還有下一框」。
+    const path = socketPath();
+    let connections = 0;
+    const server = createServer((socket) => {
+      connections += 1;
+      socket.once('data', () => {
+        socket.write(
+          Buffer.concat([
+            frame(
+              Buffer.from(
+                JSON.stringify({ type: 'event', service: 's', topic: 't', payload: null }),
+              ),
+            ),
+            frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))),
+          ]),
+        );
+      });
+      socket.on('error', () => undefined);
+    });
+    await new Promise<void>((resolve) => server.listen(path, resolve));
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => {
+            resolve();
+          });
+        }),
+    );
+    const logs: string[] = [];
+    const client = clientAt(path, logs);
+    let readies = 0;
+    client.onReady(() => {
+      readies += 1;
+    });
+    // 等它重連兩輪：每一輪都停在這種失敗，從沒被當成連上。
+    await eventually(() => connections >= 3);
+    client.close();
+    expect(readies).toBe(0);
+    expect(logs).not.toContain('[宿主] 連上了');
+  });
+
+  it('ready listener 裡 close 之後，同一塊裡的下一個 hello 不讓它復活', async () => {
+    const path = socketPath();
+    const hello = frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION })));
+    const server = createServer((socket) => {
+      socket.once('data', () => socket.write(Buffer.concat([hello, hello])));
+      socket.on('error', () => undefined);
+    });
+    await new Promise<void>((resolve) => server.listen(path, resolve));
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => {
+            resolve();
+          });
+        }),
+    );
+    const client = clientAt(path);
+    let readies = 0;
+    client.onReady(() => {
+      readies += 1;
+      client.close();
+    });
+    await eventually(() => readies > 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(readies).toBe(1);
+    expect(client.state).toBe('closed');
+  });
+
   it('ready 而且閒著時沒有任何計時器', async () => {
     // 連線的計時器都 unref，`process.getActiveResourcesInfo()` 看不到，所以用假計時器數。
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

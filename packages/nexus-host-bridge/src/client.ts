@@ -289,6 +289,9 @@ export class HostClient {
     socket.on('data', (chunk: Buffer) => {
       try {
         for (const payload of reader.push(chunk)) {
+          // 前一框已經讓這條關掉（`fail`，或 listener／`onChunk` 裡呼叫了 `close`）時，同一塊裡後面的框不再處理；
+          // 否則後面的 hello 會讓關掉的連線、甚至已經 close 的 client 進 `#ready()`。
+          if (socket.destroyed) return;
           const message = decodeHostMessage(payload);
           if (this.#state === 'ready') {
             if (message.type === 'hello' || message.type === 'rejected') {
@@ -299,7 +302,6 @@ export class HostClient {
               const wrong = this.#onCallFrame(socket, message);
               if (wrong !== undefined) fail(wrong);
             }
-            if (socket.destroyed) return;
           } else if (message.type !== 'hello' && message.type !== 'rejected') {
             fail(`hello 之前收到 ${message.type}`);
           } else if (message.type === 'rejected') {
