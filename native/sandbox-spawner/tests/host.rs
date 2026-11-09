@@ -640,9 +640,13 @@ mod plugins {
         let mut host = HostProc::spawn_with_plugins(socket, plugins);
         host.hello_only();
         assert_eq!(host.wait().code(), Some(EXIT_CONFIG));
+        let Some(HostReport::ConfigBroken { reason }) = host.report() else { panic!("要 config-broken") };
         assert_eq!(host.report(), None, "設定壞了不送 ready");
         assert!(!socket.exists());
-        host.stderr()
+        let stderr = host.stderr();
+        let reason = String::from_utf8(reason).expect("config-broken 的原因是 UTF-8");
+        assert!(stderr.contains(&reason), "config-broken 帶的是 log 那句：{reason}\n{stderr}");
+        stderr
     }
 
     #[test]

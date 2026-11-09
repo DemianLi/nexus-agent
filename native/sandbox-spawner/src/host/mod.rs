@@ -6,8 +6,7 @@
 //! nexus-host [--plugins <檔>] --socket <路徑>
 //! ```
 //!
-//! 沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了或解析不過，寫一行 log、回 4，不綁 socket、不送 `ready`：
-//! 設定錯每次重起都一樣，重起沒用。插件的事件（狀態轉換、設定被插件拒絕、apply 失敗…）每一筆寫一行 log。
+//! 沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了或解析不過，寫一行 log、送 `config-broken`（帶那句錯誤）取代 `ready`、回 4，不綁 socket。插件的事件（狀態轉換、設定被插件拒絕、apply 失敗…）每一筆寫一行 log。
 //!
 //! 控制通道是 stdin／stdout（[`crate::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
 //! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
@@ -53,6 +52,8 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const EXIT_PROTOCOL: i32 = 3;
 /// `--plugins` 的檔案讀不了或解析不過。
 pub const EXIT_CONFIG: i32 = 4;
+/// 結束前把 `config-broken` 寫給監督行程最多等這麼久；寫不完照樣結束，監督行程看結束碼一樣知道。
+const CONFIG_BROKEN_WRITE_LIMIT: Duration = Duration::from_millis(500);
 
 const USAGE: &str = "nexus-host [--plugins <檔>] --socket <路徑>";
 
@@ -171,6 +172,8 @@ pub fn run(args: Vec<OsString>) -> i32 {
         Ok(kernel) => kernel,
         Err(err) => {
             say!("插件清單壞了：{err}");
+            control.send(&encode_host_report(&HostReport::ConfigBroken { reason: err.into_bytes() }));
+            control.flush_until(Instant::now() + CONFIG_BROKEN_WRITE_LIMIT);
             return EXIT_CONFIG;
         }
     };

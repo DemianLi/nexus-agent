@@ -34,7 +34,7 @@ pub fn specs() -> &'static [&'static Spec] {
     SPECS
 }
 
-/// 讀出來的清單。
+/// [`load`] 的結果：缺檔跟空陣列分開，宿主才能記「不存在」那一行。
 pub enum Loaded {
     Rows(Vec<Row>),
     /// 檔案不存在：空樹。
@@ -56,7 +56,7 @@ pub fn load(path: &Path, specs: &[&'static Spec]) -> Result<Loaded, String> {
     parse(&bytes, specs).map(Loaded::Rows).map_err(|err| format!("{}：{err}", path.display()))
 }
 
-/// 解析清單的內容。
+/// 錯在某一列時，回的那句以「第 N 列：」開頭（N 從 1 起）。
 pub fn parse(bytes: &[u8], specs: &[&'static Spec]) -> Result<Vec<Row>, String> {
     let value = json::parse(bytes).map_err(|err| format!("不是合法的 JSON（{err}）"))?;
     let Value::Array(items) = value else { return Err("最外層必須是陣列".to_string()) };
