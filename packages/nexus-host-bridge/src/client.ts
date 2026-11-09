@@ -13,7 +13,13 @@
 
 import { createConnection, type Socket } from 'node:net';
 
-import { FrameReader, PROTOCOL_VERSION, decodeHostMessage, encodeClientMessage, frame } from './protocol.js';
+import {
+  FrameReader,
+  PROTOCOL_VERSION,
+  decodeHostMessage,
+  encodeClientMessage,
+  frame,
+} from './protocol.js';
 
 /** `connecting` 包括正在連與等下一次重連（斷線之後也回到這裡）；`closed` 只由 {@link HostClient.close} 進入。 */
 export type HostConnectionState = 'connecting' | 'ready' | 'closed';
@@ -95,7 +101,15 @@ export class HostClient {
       socket.destroy();
     };
     socket.on('connect', () => {
-      socket.write(frame(encodeClientMessage({ type: 'hello', version: PROTOCOL_VERSION, token: this.#options.token })));
+      socket.write(
+        frame(
+          encodeClientMessage({
+            type: 'hello',
+            version: PROTOCOL_VERSION,
+            token: this.#options.token,
+          }),
+        ),
+      );
     });
     socket.on('data', (chunk: Buffer) => {
       try {

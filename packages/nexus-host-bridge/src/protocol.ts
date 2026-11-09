@@ -14,7 +14,11 @@ export const PROTOCOL_VERSION = 3;
 /** 一框最長多少，跟 `host_protocol.rs` 的 `MAX_FRAME` 相同。 */
 export const MAX_FRAME = 256 * 1024;
 
-export type ClientMessage = { readonly type: 'hello'; readonly version: number; readonly token: string };
+export type ClientMessage = {
+  readonly type: 'hello';
+  readonly version: number;
+  readonly token: string;
+};
 
 export type HostMessage =
   | { readonly type: 'hello'; readonly version: number }
@@ -26,7 +30,10 @@ export class HostProtocolError extends Error {
 
 /** 編成緊湊 JSON，鍵照 `type` 在前的固定順序，跟宿主那一側編出來的一字不差。 */
 export function encodeClientMessage(message: ClientMessage): Buffer {
-  return Buffer.from(JSON.stringify({ type: message.type, version: message.version, token: message.token }), 'utf8');
+  return Buffer.from(
+    JSON.stringify({ type: message.type, version: message.version, token: message.token }),
+    'utf8',
+  );
 }
 
 /** 加上長度前綴。 */
@@ -51,12 +58,18 @@ export function decodeHostMessage(payload: Buffer): HostMessage {
   } catch {
     throw new HostProtocolError('不是 JSON');
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostProtocolError('不是物件');
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new HostProtocolError('不是物件');
   const fields = value as Record<string, unknown>;
   if (fields.type === 'hello') {
     exactFields(fields, ['version']);
     const { version } = fields;
-    if (typeof version !== 'number' || !Number.isInteger(version) || version < 0 || version > 0xffff_ffff) {
+    if (
+      typeof version !== 'number' ||
+      !Number.isInteger(version) ||
+      version < 0 ||
+      version > 0xffff_ffff
+    ) {
       throw new HostProtocolError('版本不是 u32');
     }
     return { type: 'hello', version };
@@ -78,7 +91,8 @@ export class FrameReader {
     const frames: Buffer[] = [];
     while (this.#pending.length >= 4) {
       const length = this.#pending.readUInt32LE(0);
-      if (length > MAX_FRAME) throw new HostProtocolError(`框長 ${String(length)} 超過上限 ${String(MAX_FRAME)}`);
+      if (length > MAX_FRAME)
+        throw new HostProtocolError(`框長 ${String(length)} 超過上限 ${String(MAX_FRAME)}`);
       if (this.#pending.length < 4 + length) break;
       frames.push(this.#pending.subarray(4, 4 + length));
       this.#pending = this.#pending.subarray(4 + length);

@@ -19,11 +19,18 @@ interface Vectors {
   readonly maxFrame: number;
   readonly clientMessages: readonly { readonly value: ClientMessage; readonly json: string }[];
   readonly hostMessages: readonly { readonly value: HostMessage; readonly json: string }[];
-  readonly invalidFrames: readonly { readonly name: string; readonly hex: string; readonly expect: 'error' | 'wait' }[];
+  readonly invalidFrames: readonly {
+    readonly name: string;
+    readonly hex: string;
+    readonly expect: 'error' | 'wait';
+  }[];
 }
 
 const vectors = JSON.parse(
-  readFileSync(new URL('../../../native/sandbox-spawner/host-vectors.json', import.meta.url), 'utf8'),
+  readFileSync(
+    new URL('../../../native/sandbox-spawner/host-vectors.json', import.meta.url),
+    'utf8',
+  ),
 ) as Vectors;
 
 describe('宿主協定，跟 host_protocol.rs 對同一份向量檔', () => {
@@ -69,6 +76,9 @@ describe('FrameReader', () => {
     const two = frame(Buffer.from('{"b":2}'));
     const reader = new FrameReader();
     expect(reader.push(one.subarray(0, 3))).toEqual([]);
-    expect(reader.push(Buffer.concat([one.subarray(3), two])).map(String)).toEqual(['{"a":1}', '{"b":2}']);
+    expect(reader.push(Buffer.concat([one.subarray(3), two])).map(String)).toEqual([
+      '{"a":1}',
+      '{"b":2}',
+    ]);
   });
 });

@@ -23,10 +23,15 @@ function fakeHost(path: string, replies: readonly Reply[]) {
     socket.on('data', (chunk: Buffer) => {
       for (const payload of reader.push(chunk)) {
         hellos.push(JSON.parse(payload.toString('utf8')));
-        if (reply === 'hello') socket.write(frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))));
-        if (reply === 'wrong-version') socket.write(frame(Buffer.from(JSON.stringify({ type: 'hello', version: 99 }))));
+        if (reply === 'hello')
+          socket.write(
+            frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))),
+          );
+        if (reply === 'wrong-version')
+          socket.write(frame(Buffer.from(JSON.stringify({ type: 'hello', version: 99 }))));
         if (reply === 'garbage') socket.write(frame(Buffer.from('[')));
-        if (reply === 'rejected') socket.end(frame(Buffer.from(JSON.stringify({ type: 'rejected', reason: '沒有登記' }))));
+        if (reply === 'rejected')
+          socket.end(frame(Buffer.from(JSON.stringify({ type: 'rejected', reason: '沒有登記' }))));
       }
     });
     socket.on('error', () => undefined);
@@ -65,7 +70,13 @@ function setup(): { path: string; logs: string[]; client: (path?: string) => Hos
     path,
     logs,
     client: (at = path) => {
-      const client = new HostClient({ socketPath: at, token: 'abc', log: (line) => logs.push(line), backoffMs: 10, backoffMaxMs: 40 });
+      const client = new HostClient({
+        socketPath: at,
+        token: 'abc',
+        log: (line) => logs.push(line),
+        backoffMs: 10,
+        backoffMaxMs: 40,
+      });
       cleanups.push(() => {
         client.close();
       });
@@ -109,17 +120,20 @@ describe('HostClient', () => {
     expect(logs[1]).toBe('[宿主] 連上了');
   });
 
-  it.each<Reply>(['rejected', 'wrong-version', 'garbage'])('宿主回 %s：關掉重連，下一次收下就 ready', async (first) => {
-    const { path, logs, client } = setup();
-    const host = fakeHost(path, [first, 'hello']);
-    cleanups.push(host.close);
-    await host.listening;
-    const c = client();
-    expect(await c.waitReady(5_000)).toBe(true);
-    expect(host.connections()).toBe(2);
-    expect(logs[0]).toMatch(/重連中$/);
-    if (first === 'rejected') expect(logs[0]).toContain('宿主拒絕：沒有登記');
-  });
+  it.each<Reply>(['rejected', 'wrong-version', 'garbage'])(
+    '宿主回 %s：關掉重連，下一次收下就 ready',
+    async (first) => {
+      const { path, logs, client } = setup();
+      const host = fakeHost(path, [first, 'hello']);
+      cleanups.push(host.close);
+      await host.listening;
+      const c = client();
+      expect(await c.waitReady(5_000)).toBe(true);
+      expect(host.connections()).toBe(2);
+      expect(logs[0]).toMatch(/重連中$/);
+      if (first === 'rejected') expect(logs[0]).toContain('宿主拒絕：沒有登記');
+    },
+  );
 
   it('ready 之後斷線：記一行、重連，同一個 token 再送一次', async () => {
     const { path, logs, client } = setup();

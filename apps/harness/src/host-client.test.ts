@@ -27,7 +27,9 @@ describe('parseHostSocketArg', () => {
 
 describe('connectHost', () => {
   it('沒有 --host-socket 就不連', () => {
-    expect(connectHost({ hostSocket: undefined, token: 't', log: () => undefined })).toBeUndefined();
+    expect(
+      connectHost({ hostSocket: undefined, token: 't', log: () => undefined }),
+    ).toBeUndefined();
   });
 
   it('有就用 token 連那個路徑', async () => {
@@ -39,7 +41,9 @@ describe('connectHost', () => {
       socket.on('data', (chunk: Buffer) => {
         for (const payload of reader.push(chunk)) {
           hellos.push(JSON.parse(payload.toString('utf8')));
-          socket.write(frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))));
+          socket.write(
+            frame(Buffer.from(JSON.stringify({ type: 'hello', version: PROTOCOL_VERSION }))),
+          );
         }
       });
     });

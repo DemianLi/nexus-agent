@@ -308,7 +308,11 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       ...(input.idleMs === undefined ? [] : ['--idle-ms', String(input.idleMs)]),
       ...(input.host === undefined
         ? []
-        : ['--host', input.host, ...each('--host-arg', ['--plugins', join(input.home, HOST_PLUGINS_FILE)])]),
+        : [
+            '--host',
+            input.host,
+            ...each('--host-arg', ['--plugins', join(input.home, HOST_PLUGINS_FILE)]),
+          ]),
       '--front',
       input.execPath,
       ...each('--front-arg', [...input.execArgv, input.frontEntry, ...front]),
