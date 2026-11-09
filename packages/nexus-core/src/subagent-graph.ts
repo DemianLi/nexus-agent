@@ -1,5 +1,5 @@
 /**
- * 把 fold 交出的子代理規格編成一張**帶存檔點的圖**（[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
+ * 把 fold 交出的子代理規格編成一張**帶存檔點的圖**（`native` 下是 native agent，見〈native〉；[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
  *
  * ## 為什麼要有這個出口
  *
@@ -33,6 +33,12 @@
  * 基座 `createSubAgent` 還處理 `interruptOn`、`responseFormat`。fold 交出的規格不會帶它們，所以這裡遇到就
  * **拋並指名**，不是默默略過。（基座的 harness profile 曾是第三個要拒絕的東西；自有組裝點不套 profile，那一項不存在了。）
  *
+ * ## native
+ *
+ * `loop: 'native'` 時同一疊 middleware 編成 native agent（`native-loop/agent.ts` 的 `background` 模式）：state 按 `thread_id` 留在
+ * 那個實例的記憶體裡，不寫存檔點，所以「第二輪看得到第一輪」靠呼叫端快取同一個實例（`background-subagents.ts` 的 `#agentFor`）；
+ * 行程重啟或換了實例，由冷復活從日誌灌回（`updateState`）。
+ *
  * @module
  */
 
@@ -62,12 +68,12 @@ export type SubagentGraphParams = Pick<
   'subagents' | 'model' | 'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
 >;
 
-/** 編出來的圖：帶 checkpointer 的 `createAgent` 圖。 */
+/** 編出來的圖：帶 checkpointer 的 `createAgent` 圖；`native` 下是 native agent，型別照前者，呼叫端只叫兩者都有的成員。 */
 export type SubagentGraph = ReturnType<typeof createAgent>;
 
 /** 編圖的選項。 */
 export interface SubagentGraphOptions {
-  /** 存檔點。**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。 */
+  /** 存檔點。`langgraph` 下**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。`native` 下不用（見 {@link loop}）。 */
   readonly checkpointer: NonNullable<AgentCheckpointer>;
   /**
    * 這張圖改用的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)），**勝過規格自己帶的與組裝點的**。
@@ -124,7 +130,7 @@ export function mergeMiddlewareByName(
  * @param params - fold 交出的參數（用到規格清單、模型、backend、全域 deny 規則）。
  * @param name - 子代理名。
  * @param options - 存檔點，以及選填的模型覆寫。
- * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪。
+ * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪（`native` 下要同一個實例）。
  * @throws 沒有這個子代理；規格是編好的 `runnable`、帶 `interruptOn`／`responseFormat`；缺工具、模型或 backend。
  */
 export function compileSubagentGraph(

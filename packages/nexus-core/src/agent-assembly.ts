@@ -203,7 +203,7 @@ export function filesystemMiddlewareOptions(input: {
 /**
  * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionStep} 並登記那一步（{@link withToolCallStep}），
  * `wrapModelCall` 先套 core 的 {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；
- * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 與前景子代理把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
+ * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
  *
  * @param options - {@link filesystemMiddlewareOptions} 給的選項。
  * @returns 掛進疊裡的那一顆。

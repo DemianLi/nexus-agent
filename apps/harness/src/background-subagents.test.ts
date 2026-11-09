@@ -127,6 +127,29 @@ describe('載體本身（假 agent）', () => {
     await host.close();
   });
 
+  it('每一輪開跑前先收回這條 thread 停在等待點的 run（native 的 run 停著就開不了下一次）', async () => {
+    const calls: string[] = [];
+    const agent: BackgroundAgent = {
+      async streamEvents(_input, config) {
+        calls.push(`stream:${String(config.configurable['thread_id'])}`);
+        return (async function* () {})() as never;
+      },
+      discardSuspended(config) {
+        calls.push(`discard:${config.configurable.thread_id}`);
+      },
+    };
+    const { host } = make(() => agent);
+    await host.submit({ runId: 'bg-1', subagent: 'worker', text: '第一句' });
+    await host.submit({ runId: 'bg-1', subagent: 'worker', text: '第二句' });
+    expect(calls).toEqual([
+      'discard:root-1/bg-1',
+      'stream:root-1/bg-1',
+      'discard:root-1/bg-1',
+      'stream:root-1/bg-1',
+    ]);
+    await host.close();
+  });
+
   it('載體的環境不跟呼叫端走：在別人的 ALS 環境裡 submit，被拉起的那一輪看不到它', async () => {
     const { agent, seen } = fakeAgent();
     const { host } = make(() => agent);
