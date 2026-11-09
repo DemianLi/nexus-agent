@@ -46,7 +46,7 @@ dsh 這樣做的理由：邊界兩邊一起出貨，資料加判別式最好驗�
 
 | 服務 | 方向 | 今天的形狀 | 非回呼不可？ |
 | --- | --- | --- | --- |
-| MCP 工具呼叫 | 對話行程 → 宿主 | `McpSource.request(req, signal)` 資料進資料出（`packages/nexus-plugin-mcp/src/hub.ts:41-54`）；連線池 `acquire` 回活的 `Supervisor`（`pool.ts:52-66`），但它留在宿主裡，不過界 | 否 |
+| MCP 工具呼叫與資源操作 | 對話行程 → 宿主 | 工具呼叫是 `ToolCall(args, exec)` 回 `NexusToolResult`（`packages/nexus-plugin-mcp/src/tool-call.ts:39-43`）；資源操作是 `McpSource.request(req, signal)`，資料進資料出（`hub.ts:36-54`）；連線池 `acquire` 回活的連線（`pool.ts:52-66`、`:131-135`），但它留在宿主裡，不過界 | 否 |
 | MCP 執行到一半要問人（elicitation） | 伺服器 → client | 走 `input_required` 輪次，不是伺服器發給 client 的請求：一輪回 `input_required`，client 經 `exec.interrupt` 問人，帶 `inputResponses` 再送下一輪（`packages/nexus-plugin-mcp/src/tool-call.ts:70-80`、`:189-221`）。只收 `elicitation/create`，sampling、roots 都拒（`:224-228`） | 否。宿主每次只跑一輪，`input_required` 當資料回給對話行程，問人與下一輪由對話行程發起 |
 | 插件版本登記 | 對話行程 → 前台 | 過界的只有 `{id, signature}`（`apps/harness/src/plugin-live-versions.ts:51-54`）；`bind` 回一個放掉的函式（`:113`） | 否。放掉改成「連線斷了就放」（§四） |
 | 搜尋、釘選封存 | 前台 → 服務 | 介面帶閉包反過來叫對話行程：封存的 `known`、`activity`、`stop`（`apps/harness/src/thread-organization.ts:97-107`），搜尋的 `liveThreads()`（`thread-search.ts:349-370`） | 否，改成服務發請求給對話行程；但這兩項先不進宿主（§五） |
@@ -84,8 +84,8 @@ HostMessage
 | 工具節點 | 組合 → 葉子 | `tool.invoke(toolCall, config)` 回 LangChain 的 `ToolMessage`／`Command`，外面包 `wrapToolCall(req, handler)` 洋蔥 | 有 | `packages/nexus-core/src/native-loop/tool-node.ts:43-127` |
 | 政策 hook | 組合 → 葉子 | 插件交函式註冊；`gate(listener)` 是 waterfall，決定 `allow／deny／ask` 是資料；`on('tools/execute', (exec, next))` | 有，含 `next` | `nexus-tools/src/index.ts:458`、`:272-285` |
 | 每一步的同步查詢 | 組合 → 葉子 | `ToolAdmission.admits(name)`、`section.text(ctx)`，都是同步 | 有（同步） | `nexus-tools/src/index.ts:332-373` |
-| 事件 | 組合 → 葉子 | 8 個事件，7 個是 waterfall 或依序，回傳值有人用；payload 是凍結的資料加 `next` | 有 | `packages/nexus-core/src/native-loop/events.ts:40-69` |
-| 會話日誌 | 葉子 → 組合 | `join` 交出活的 `SessionLog`；`append` 同步回事件；`subscribe` 同步推 | 有，活物件 | `apps/harness/src/session-log.ts:2520`、`:2542` |
+| 事件 | 組合 → 葉子 | 8 個事件：6 個 waterfall，回傳值有人用；1 個依序 await，回傳值不看；1 個 emit。只有 waterfall 帶 `next`；payload 是凍結的資料 | 有 | `packages/nexus-core/src/native-loop/events.ts:40-69`、`packages/nexus-core/src/tool-pipeline.ts:251-296` |
+| 會話日誌 | 葉子 → 組合 | `join` 交出活的 `SessionLog`；`append` 同步回事件；`subscribe` 同步推 | 有，活物件 | `packages/nexus-session/src/index.ts:140`、`packages/nexus-core/src/session-log.ts:2520`、`:2542` |
 | 投影 | 插件 → fold | `ProjectionUnit{init, apply, view}` 是插件交進來的程式碼 | 有 | `packages/nexus-core/src/projections.ts:42` |
 | 插件之間互相 inject | 留在葉子內 | `commands.register(handler)` 等 | 有 | 不過界 |
 
@@ -95,7 +95,7 @@ HostMessage
 
 1. **waterfall 的 `next`**（`gate`、`tools/execute`、`pre-execute`）：插件在前段做事，再交給內層。`ToolExecuteOutcome` 對插件不透明，插件改不了結果。所以拆成「前段請求 → 組合行程跑內層 → 後段回應」兩則訊息，用 callId 串起來就夠。
 2. **工具執行途中反過來叫 loop**（`exec.interrupt` 等）：是「工具那次呼叫還沒回，葉子先發一個請求給組合行程」，就是巢狀請求，不需要活的引用。
-3. **sandbox-policy 包住 `task` 的 `next()`**：委派那一刻同步拍下一格模式，子代理在 AsyncLocalStorage 的 context 裡讀它（`packages/nexus-plugin-sandbox-policy/src/index.ts:362-373`）。子代理的 loop 搬進 Rust 之後，ALS 就接不上了。替代：把那一格快照當資料，跟著子代理的 runId 一起帶過去。這是唯一一個依賴「內層執行期間的環境」的，live reference 也接不起 ALS。
+3. **sandbox-policy 包住 `task` 的 `next()`**：委派那一刻同步拍下一格模式，子代理在 AsyncLocalStorage 的 context 裡讀它（`packages/nexus-plugin-sandbox-policy/src/index.ts:365-373`、`sandbox-mode.ts:164`、`:229`）。子代理的 loop 搬進 Rust 之後，ALS 就接不上了。替代：把那一格快照當資料，跟著子代理的 runId 一起帶過去。這是唯一一個依賴「內層執行期間的環境」的，live reference 也接不起 ALS。
 4. **投影**：插件程式碼，fold 搬到 Rust 之後有三條路（每筆事件叫一次 TS、葉子訂閱事件串流自己 fold、投影用 Rust 重寫）。這題歸 #2571，本篇不定；三條路都不需要 live reference。
 
 ### 兩案比較
@@ -151,13 +151,13 @@ dev-infra 的輸入經 PM 轉來，我自己核過：
 
 ## 六、葉子行程死掉之後，分四段
 
-先記一件今天就有的事：**綁了 thread 的對話行程死掉，監督行程不會自己重起它**。它寫一行生死稽核、回前台 `down(thread, cause)`，等前台下一次為這條 thread 送 `ensure` 才起新的（`native/sandbox-spawner/src/supervisor/mod.rs:13-18`、`:1605-1623`）。重起沒有退避也沒有上限；退避與上限只有宿主有（`mod.rs:62-65`）。網頁那端重連是 0.5 秒起加倍、封頂 10 秒、不放棄（`apps/web/src/lib/reconnect.ts:5-16`）。所以一條「一續接就當掉」的 thread，會一直被重起。dsh 的 MCP 重連有每次故障共用的次數預算，`initialDelayMs` 500、`maxDelayMs` 30 000、`maxAttempts` 10，用完就註銷工具、放棄（`packages/mcp/mcp-client/src/connection.ts:7-13`、`:49-51@8bd0733`）。這件不屬於第 6 題，記在 §九 給 PM。
+先記一件今天就有的事：**綁了 thread 的對話行程死掉，監督行程不會自己重起它**。它寫一行生死稽核、回前台 `down(thread, cause)`，等前台下一次為這條 thread 送 `ensure` 才起新的（`native/sandbox-spawner/src/supervisor/mod.rs:13-18`、`:1605-1623`）。重起沒有退避也沒有上限；退避與上限只有宿主有（`mod.rs:62-65`）。網頁那端重連是 0.5 秒起加倍、封頂 10 秒、不放棄（`apps/web/src/lib/reconnect.ts:5-16`）。所以一條「一續接就當掉」的 thread，會一直被重起。dsh 的 MCP 重連有每次故障共用的次數預算，`initialDelayMs` 500、`maxDelayMs` 30 000、`maxAttempts` 10，連線撐過 `maxDelayMs` 才把預算歸零，用完就註銷工具、放棄（`packages/mcp/mcp-client/src/connection.ts:7-13`、`:40`、`:49-51@8bd0733`）。這件不屬於第 6 題，記在 §九 給 PM。
 
 | 段 | 葉子行程死了 | 那一輪 | 用尺 |
 | --- | --- | --- | --- |
-| **今天**（葉子＝今天的對話行程） | 監督行程記稽核、回 `down`；不重起，等下一個 `ensure` | 斷。網頁看到下行斷線，沒有終止 frame（`apps/harness/src/front-forward.ts:173-177`）。下次組裝時才修補：撕裂的尾巴截掉，沒配到結果的呼叫補 `TOOL_OUTCOME_UNKNOWN` 或 `TOOL_NOT_STARTED`，補 `turn/end{interrupted}`（`packages/nexus-core/src/interrupted-turn.ts:12-26`，措辭照 dsh `repair.ts:30-35@8bd0733`） | 斷，只斷這一條 |
+| **今天**（葉子＝今天的對話行程） | 監督行程記稽核、回 `down`；不重起，等下一個 `ensure` | 斷。這條 thread 的下行斷線，沒有終止 frame（`apps/harness/src/front-forward.ts:173-177`）；全域下行撤回還掛著的題、列表轉成閒著（`apps/harness/src/front-feed.ts:11`、`:81-87`）。下次組裝時才修補：撕裂的尾巴截掉（`apps/harness/src/jsonl-session-store.ts:953-956`），沒配到結果的呼叫補 `TOOL_OUTCOME_UNKNOWN` 或 `TOOL_NOT_STARTED`，補 `turn/end{interrupted}`（`packages/nexus-core/src/interrupted-turn.ts:12-26`，措辭照 dsh `repair.ts:30-35@8bd0733`） | 斷，只斷這一條 |
 | **#2583 做完，#2571 還沒** | 組合行程照活，但 log 還在葉子裡寫，loop 也還在葉子 | 跟今天一樣。組合行程沒有東西可以收尾；它向監督行程回報葉子死了，這條對話照今天的規則處理 | 斷，只斷這一條 |
-| **#2571 做完，#2573 還沒** | 組合行程是 log 的寫入者，但 loop 還在葉子 | 組合行程**當場**把沒配到結果的呼叫收成結果不明、補 `turn/end{interrupted}`，不用等下次組裝；網頁馬上看到「中斷」，不是只看到斷線。loop 跟葉子一起死了，那一輪不能繼續 | 斷，但收尾提前、網頁看得到 |
+| **#2571 做完，#2573 還沒** | 組合行程是 log 的寫入者，但 loop 還在葉子 | 組合行程**當場**把沒配到結果的呼叫收成結果不明、補 `turn/end{interrupted}`，不用等下次組裝；網頁馬上看到「中斷」，不是只看到斷線與轉成閒著。loop 跟葉子一起死了，那一輪不能繼續 | 斷，但收尾提前、網頁看得到 |
 | **#2573 之後（終點）** | 監督行程重起葉子行程；組合行程把那一步收尾成結果不明 | **那一輪繼續**：模型收到那支工具的結果不明，自己決定要不要重試。葉子回來之前的下一個工具呼叫等它（有上限），超過就回工具錯 | 停→降級 |
 
 終點這一段的細節：
@@ -203,6 +203,5 @@ dev-infra 的輸入經 PM 轉來，我自己核過：
 - **rutis**：沿用 #1948 issuecomment-6533525395 的行號，本輪沒有重讀原始碼。
 - **MCP SDK**：dsh 把 `AbortSignal` 交給 `callTool` 之後，SDK 會不會送 `notifications/cancelled`，沒讀 SDK。
 - **dsh desktop host 死了之後誰叫 `start()`**：只讀到 `backend-controller.ts:138-146` 發 `error`、`:60-64` 要重新 `start()`，誰去呼叫沒查。
-- **dsh MCP 的穩定窗長度**：`connection.ts:7-13` 寫了有穩定窗，數字沒核。
 - **codebase-memory 的圖**：§二 用到的檔大多報 missing 或 not_tracked（索引是 10-24 的），全部改讀檔加 grep；MCP 這一項，我在 `packages/nexus-plugin-mcp/src` 下 grep `setRequestHandler|sampling|elicitation|roots`，再讀 `tool-call.ts` 的 elicitation 輪次核過：沒有 `setRequestHandler`，elicitation 是工具結果的輪次。
-- **§二 的盤點與 §六 的今天那一段**，是兩個子代理讀的；文中引用的出處我抽查了 `host_protocol.rs:19-29`、`service.rs:36-44`、`sandbox-policy/src/index.ts:362-373`、`nexus-tools/src/index.ts` 的 `interrupt`／`admits`／`gate`、`thread-organization.ts:97-107`、`mod.rs:13-18`／`:62-65`／`:1605-1623`、`interrupted-turn.ts:12-26`，dsh 的 `connection.ts:7-13`／`:49-51`／`:282-296`、`tools.ts:150-165`、`repair.ts:30-35`、`host-protocol.ts:4`。其餘行號沒有逐一重核。
+- **§二 的盤點與 §六 的今天那一段**，是兩個子代理讀的；文中引用的出處我抽查了 `host_protocol.rs:19-29`、`service.rs:36-44`、`sandbox-policy/src/index.ts:365-373`、`sandbox-mode.ts:164`、`nexus-tools/src/index.ts` 的 `interrupt`／`admits`／`gate`、`thread-organization.ts:97-107`、`mod.rs:13-18`／`:62-65`／`:1605-1623`、`interrupted-turn.ts:12-26`，dsh 的 `connection.ts:7-13`／`:40`／`:49-51`／`:282-296`、`tools.ts:150-165`、`repair.ts:30-35`、`host-protocol.ts:4`。其餘行號由 comment-audit（report 模式，子代理）逐條對 HEAD 與 `8bd0733` 核過，它指出的七處更正我重核後已改。
