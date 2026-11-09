@@ -31,7 +31,9 @@ description: 匯流排 waterfall 的監聽者呼叫第二次 `next()` 改成拋�
 **新增的欄位**（向後相容）：
 
 - `exec.signal`：這次呼叫的中止訊號，唯讀。
-- 結果視圖多 `blocks`（內容區塊）；`content` 由 `blocks` 導出，只串 `text` 區塊。`tools/execute` 交回的結果兩者都在時以 `blocks` 為準。
+- 結果視圖多 `blocks`（內容區塊）；`content` 由 `blocks` 導出，只串 `text` 區塊。`tools/execute` 交回的結果兩者都在時以 `blocks` 為準，例外見下一點。
+  - 例外（工具契約 `2.6.1`，#2416）：交回的 `blocks` 跟工具本體那則造出的視圖是同一個參照（`{ ...view, … }` 一路展開帶過去的也算）時，算沒給新的區塊，形狀照本體回的那則：
+    `content` 沒換就沿用原本的內容，換了就照原本是字串或陣列給新的文字；陣列裡的圖之類的非文字塊這時不留，要留就自己給新的 `blocks`。這時換上的 `content` 必須是字串（省略也算換了），不是就拋 `TypeError`。
 - `tools/pre-execute` 的 `deny` 可帶 `error: { name, code }`。拒絕的那則訊息掛這個碼，日誌照它分類。`error` 的 `name` 或 `code` 不是字串就拋 `TypeError`。
 - `tools/post-execute` 的 `replace` 可改給 `blocks`。`content` 與 `blocks` 只能給一個，兩個都給或都不給會拋 `TypeError`。
 - `tools/execute` 的監聽者叫了 `next()`、本體回的是 `ToolMessage`、又交回別的訊息結果時，`artifact`、`id`、`additional_kwargs` 沿用本體那則，內容、狀態與錯誤碼照交回的結果（`isError` 為假或省略 `error` 就不掛碼）。替換也沿用 `additional_kwargs`。
