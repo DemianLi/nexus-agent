@@ -29,7 +29,7 @@
 
 **今天**：一個對話行程一條通道（stdin／stdout），對話行程回報 `ready`、`bound`、`turn`、`idle`、`busy`、`heartbeat`、`drained`（`native/sandbox-spawner/src/supervisor_protocol.rs:54-71`），監督行程送 `bind`、`drain`。每個行程一個 `Proc`，帶自己的 `chan`（`native/sandbox-spawner/src/supervisor/mod.rs:120-127`）。
 
-**dsh**：沒有每條對話一個行程，所有 session 在同一個 Host 行程裡。最接近的父子對照是 desktop 起一支 backend 子行程，父行程直接跟它講，沒有中間人（`apps/desktop/src/backend-controller.ts:32`、`:139-147@8bd0733`）。沒有「一組協作行程」的監督。
+**dsh**：沒有每條對話一個行程，所有 session 在同一個 Host 行程裡。最接近的父子對照是 desktop 起一支 backend 子行程，父行程直接跟它講，沒有中間人（`apps/desktop/src/backend-controller.ts:32`、`:41`、`:139-147@8bd0733`）。沒有「一組協作行程」的監督。
 
 **兩案**：
 
@@ -107,9 +107,9 @@ dsh 的協作行程（desktop backend、MCP stdio、PTC worker）各算各的，
 
 ## 二、預熱池
 
-**今天**：預熱池補到 `--warm` 個（出廠 k=1），池裡的已經送了 `ready`、還沒綁 thread；`ensure` 先拿池裡 `ready` 的（`mod.rs:20-21`、`:28-29`）。
+**今天**：預熱池補到 `--warm` 個（出廠 k=1），池裡的已經送了 `ready`、還沒綁 thread；`ensure` 先拿池裡 `ready` 的（`mod.rs:18-19`、`:30`；k=1 見 `native/sandbox-spawner/src/supervisor/args.rs:32`）。
 
-**dsh**：沒有預熱池。PTC worker 第一次用才起（`packages/ptc-runtime/ptc-runtime-node/src/execution.ts:99-108@8bd0733`）；persistent 模式把起好的留給同一個 owner 重用（同檔 `:90-91`），那是保留舊的，不是先起新的。叫 prewarm 的只有前端的命令目錄快取（`packages/client/ui-commands/src/client/directory.ts:67@8bd0733`），跟行程無關。否定宣稱的依據：在 `8bd0733` 上 `git grep` `warm.?(pool|up|start)|prewarm|pre-?spawn|prestart`，只命中這兩處與 benchmark。
+**dsh**：沒有預熱池。PTC worker 第一次用才起（`packages/ptc-runtime/ptc-runtime-node/src/execution.ts:99-108@8bd0733`）；persistent 模式把起好的留給同一個 owner 重用（同檔 `:90-91`），那是保留舊的，不是先起新的。叫 prewarm 的只有前端的命令目錄快取（`packages/client/ui-commands/src/client/directory.ts:67@8bd0733`），跟行程無關。否定宣稱的依據：在 `8bd0733` 上 `git grep` `warm.?(pool|up|start)|prewarm|pre-?spawn|prestart`，命中的都是前端快取或語法高亮的 warmup、文件轉檔的 prewarm、pre-spawn 失敗處理、測試與筆記，沒有行程預熱池。
 
 **兩案**：
 
@@ -139,9 +139,9 @@ dsh 的協作行程（desktop backend、MCP stdio、PTC worker）各算各的，
 
 **dsh**：
 - PTC 子行程的失敗類別裡，OOM、heap、被訊號殺全部併成 `worker-exit`（`packages/ptc-runtime/ptc-runtime/src/types.ts:138`、`:146@8bd0733`），細節只在訊息文字（`packages/ptc-runtime/ptc-runtime-node/src/worker.ts:237`）；
-- 資源上限是 `--max-old-space-size`（預設 512 MiB）與牆鐘逾時 120 s（`ptc-runtime-node/src/config.ts:36`、`:39`，`worker.ts:244`）；
+- 資源上限是 `--max-old-space-size`（預設 512 MiB，非 embedded 啟動時才帶，`worker.ts:243-245`）與牆鐘逾時 120 s（`ptc-runtime-node/src/config.ts:36`、`:39`，`worker.ts:244`）；
 - 沒有心跳或 stall 偵測；心跳只在 WebSocket 連線上（`packages/api/gateway/src/stream-server.ts:131-149`）；
-- cgroup 只用 `systemd-run --user --scope` 把子行程整棵樹圈住，方便一次收掉，沒有設記憶體上限（`packages/subprocess/subprocess-local/src/linux-scope.ts:129-131`）；在 `packages/subprocess`、`packages/sandbox` grep `MemoryMax|TasksMax|CPUQuota` 沒有結果；
+- cgroup 只用 `systemd-run --user --scope` 把子行程整棵樹圈住，方便一次收掉，沒有設記憶體上限（`packages/subprocess/subprocess-local/src/linux-scope.ts:548-553@8bd0733`）；在 `packages/subprocess`、`packages/sandbox` grep `MemoryMax|TasksMax|CPUQuota` 沒有結果；
 - 一組協作行程死一個時，另一個怎麼記，dsh 沒有對應的設計。
 
 dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §6-2）。下面四件都沒有 dsh 的對照，各自比兩案。
@@ -160,7 +160,7 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
 
 ### `--stall-ms` 管誰
 
-兩個行程各送各的心跳（§〇），同一個 `--stall-ms` 各看各的。壓住期間只算放它跑的時間、監督行程自己被停住時重新起算，這兩條今天就是按行程算的（`mod.rs:40-45`），不用改。葉子停住只殺葉子；組合行程停住整對收。沒有理由給兩個不同的時限，所以不加旗標。
+兩個行程各送各的心跳（§〇），同一個 `--stall-ms` 各看各的。壓住期間只算放它跑的時間、監督行程自己被停住時重新起算，這兩條今天就是按行程算的（`mod.rs:34`、`:43-44`、`:272-277`），不用改。葉子停住只殺葉子；組合行程停住整對收。沒有理由給兩個不同的時限，所以不加旗標。
 
 ### 一對裡死一個：稽核與 `down`
 
@@ -169,10 +169,10 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
   - 兩行都加 `pair` 欄位，值是那一對的序號，讀的人據此把兩行接起來；
   - 因為同伴死了而被監督行程收掉的那一個，`cause` 記新值 `peer`。
 - **`down`**：用先死那個的死因。它就是網頁要知道的「這條為什麼斷了」。
-- **`peer` 只進稽核，不進 `DeathCause`**。`DeathCause` 一加，`Stats.deaths` 定長陣列的長度就要變（`supervisor_protocol.rs:96-117`、`:420-430`），框的版面、`PROTOCOL_VERSION`（今天是 3，同檔 `:26`）、前台的解碼（`apps/harness/src/supervisor-protocol.ts`）都要跟著改。`Stats.deaths` 照 `down` 數，一對死一次只數一次，用不到 `peer`。
+- **`peer` 只進稽核，不進 `DeathCause`**。`DeathCause` 一加，`Stats.deaths` 定長陣列的長度就要變（`supervisor_protocol.rs:96-118`、`:420-430`），框的版面、`PROTOCOL_VERSION`（今天是 3，同檔 `:26`）、前台的解碼（`apps/harness/src/supervisor-protocol.ts`）都要跟著改。`Stats.deaths` 照 `down` 數，一對死一次只數一次，用不到 `peer`。
 - 另一案是新增 `DeathCause::Peer`、進 `Stats`：多一次協定改版，換來的只是 `/metrics` 上一個永遠等於「死掉的對數」的數字。不選。
 
-**OOM 計數被同伴領走**：`classify` 在看 `decided` 之前，只要是 SIGKILL 就先算一次 `oom_kill`（`memory.rs:160-166`）。如果監督行程在收到第一個行程的屍體之前，就因為通道 EOF 先對同伴送 SIGKILL，同伴可能先被收屍、帶著 `peer` 領走那一次 OOM，真正被核心殺的反而判成 `crash`。規則是：**同伴的 SIGKILL 一定在先死那個收完屍、判完死因之後才送**。兩個同時被核心 OOM kill 的，照今天 `oom_kill` 增加的次數各算一次，不受影響。
+**OOM 計數被同伴領走**：`classify` 在看 `decided` 之前，只要是 SIGKILL 就先算一次 `oom_kill`（`memory.rs:155-156`、`:167-170`）。如果監督行程在收到第一個行程的屍體之前，就因為通道 EOF 先對同伴送 SIGKILL，同伴可能先被收屍、帶著 `peer` 領走那一次 OOM，真正被核心殺的反而判成 `crash`。規則是：**同伴的 SIGKILL 一定在先死那個收完屍、判完死因之後才送**。兩個同時被核心 OOM kill 的，照今天 `oom_kill` 增加的次數各算一次，不受影響。
 
 ### cgroup 怎麼分
 
@@ -184,7 +184,7 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
 
 **選 (G1)**。分層等部署確認有委派之後再議；讀不到委派時照今天。
 
-另記一件：第 6 題文件 §六 寫「spawner 跟葉子同一個行程群組，葉子結束時監督行程對整個群組送 SIGKILL，工具接著被 PDEATHSIG 帶走」。實際上 spawner 自己 `setsid`、設 PDEATHSIG（`native/sandbox-spawner/src/main.rs:770-777`），工具也各自 `setsid`（`native/sandbox-spawner/src/child.rs:58-60`），群組 SIGKILL 打不到它們（`mod.rs:859`，TODO #2494）。結論不變：工具照樣跟著死，只是靠的是 PDEATHSIG 一層層帶走，不是群組訊號。
+另記一件，跟 `--rss-limit-mb` 量誰有關：葉子在 `supervisor/process.rs:51` 做 `setpgid(0, 0)`，自己是群組 leader；常駐 spawner 由葉子起、沒有脫離群組（`apps/harness/src/sandbox-spawner-client.ts:114-117`），所以群組 SIGKILL 帶得走它，第 6 題文件 §六 那句成立。工具各自 `setsid`、設 PDEATHSIG（`native/sandbox-spawner/src/child.rs:59-61`），群組訊號打不到，靠 PDEATHSIG 跟著死。RSS 只量 leader，spawner 與工具都不算進葉子的上限（`mod.rs:856-859`，TODO #2494；那段註解說 spawner 也 `setsid`，跟上面對不上，見 §八）。
 
 是非題 O、P、Q。
 
@@ -192,7 +192,7 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
 
 **今天**：閘是選配，出廠不開（`apps/harness/src/request-gate.ts`）。per-thread 下每個對話行程各有一份，「並行上限只數自己那條」是 #2576 宣告的退步。#2581 拍板把計數與 FIFO 放進監督行程，子行程結束時收回它握著的名額（D249 F）。#2581 還沒實作：監督行程協定裡沒有閘的框（`supervisor_protocol.rs` grep `acquire|permit|gate` 沒有結果）。
 
-**dsh**：沒有模型請求的並行閘（`request-gate.ts` 檔頭的偏離登記；`packages/llm/**`、`session/**`、`host/**`、`api/**` grep `semaphore|maxConcurrentRequests|maxInFlight` 沒有結果）。最接近「名額交給下一個持有者」的是 session 寫入 lease：對 `session.lock` 做 `flock`，綁在持有者的 fd 上，持有者死了由核心放；刻意不設逾時，避免搶走一個卡住但還活著的寫入者（`packages/session/session-persistence-jsonl/src/lease.ts:8-14@8bd0733`）。沒有兩個持有者之間交接的設計，只有「放掉之後別人再搶」。
+**dsh**：沒有模型請求的並行閘（`request-gate.ts` 檔頭的偏離登記；`packages/llm/**`、`session/**`、`host/**`、`api/**` grep `semaphore|maxConcurrentRequests|maxInFlight`，命中的只有 session 寫入鎖的 Windows semaphore 與測試夾具，都跟模型請求無關）。最接近「名額交給下一個持有者」的是 session 寫入 lease：對 `session.lock` 做 `flock`，綁在持有者的 fd 上，持有者死了由核心放；刻意不設逾時，避免搶走一個卡住但還活著的寫入者（`packages/session/session-persistence-jsonl/src/lease.ts:8-14@8bd0733`）。沒有兩個持有者之間交接的設計，只有「放掉之後別人再搶」。
 
 **三案**：
 
@@ -228,7 +228,6 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
   - 驗收：加「組合行程的 RSS 在 Linux 上用 R6 的量具量，填進容量公式」與「一對收屍時 `oom_kill` 不被同伴領走，有測試釘住」。
 - **`memory.rs` 的容量常數與測試**、`.docs/supervisor-1947-design-2026-11-03.md` §七與 #1947 正文的「64 GiB 約 155 條」：#2583 量到組合行程的數字時一起改。這兩處歸 dev-infra，本文不動。
 - **#2581**：要做的事加一句「per-thread 下兩種行程（葉子、組合行程）都可能持有名額，照持有的行程收回」。
-- **第 6 題文件 §六**：「spawner 跟葉子同一個行程群組」那句照 §三 末段更正。
 
 ## 六、要 demian 決定的題
 
@@ -255,7 +254,8 @@ dsh 的分類比 nexus 粗，nexus 的分法已經是自己的（#1947 設計 §
 
 - **沒量**：什麼都沒量。組合行程還不存在；監督行程只在 Linux 跑（signalfd、`/proc`、`PR_SET_PDEATHSIG`），這台是 macOS，在這裡量 Rust 行程的 RSS 去跟 R6 在 Linux 量的 209 相加，違反「同一套量具、同一台機器」。§一 的表只是敏感度。
 - **組合行程起動時間**：沒量。「預期毫秒級」是推論。
-- **dsh**：§〇～§四 的 dsh 段由一個子代理讀；我自己用 `git show 8bd0733:` 抽查了 `activation.ts:14-28`、`lease.ts:8-14`。其餘行號照子代理的報告，沒有逐條重核。否定宣稱（沒有預熱、沒有模型請求閘、沒有 cgroup 上限）只靠 `git grep`，沒有用 codebase-memory 的圖與 `check_index_coverage`。
+- **dsh**：§〇～§四 的 dsh 段由一個子代理讀；我自己用 `git show 8bd0733:` 抽查了 `activation.ts:14-28`、`lease.ts:8-14`。其餘行號由 comment-audit（report 模式，子代理）逐條以 `git show 8bd0733:` 核過，它指出的行號與一處漏寫的條件已改。否定宣稱（沒有預熱、沒有模型請求閘、沒有 cgroup 上限）只靠 `git grep`，沒有用 codebase-memory 的圖與 `check_index_coverage`。
 - **#2573 會不會分批開**：卡上沒寫推出方式（只寫前置是 K12 #2362 把 native loop 改成預設）。§〇 的 `hello` 宣告是照「可能分批」設計的；如果確定一次切換，這個宣告只是多一個欄位。
 - **前台怎麼處理「組合行程還在、葉子死了」**：D265 §六 第 2 段寫「這條對話照今天的規則處理」；今天的規則是 `down` 加等下一個 `ensure`。組合行程還活著時，下一個 `ensure` 是只補起葉子，還是整對重起，本文沒答，留給 #2583 實作時跟 dev-infra 對。
+- **`mod.rs:859` 的註解**：寫「spawner 與工具又各自 `setsid`」，但常駐 spawner 沒有 `setsid`（只有 `--exec` 單次模式的 `main.rs:774` 與工具的 `child.rs:59` 有）。註解歸 dev-infra，本文不動，交 PM 轉。
 - **宿主身分表**：今天的角色只有前台與對話行程（`supervisor_protocol.rs` 的 `Role`）；一對裡哪個行程要連宿主、表裡記幾筆，本文沒碰。
