@@ -63,7 +63,8 @@ describe('@nexus/tools 的定義', () => {
     // 2.8.0（#2551）：`ToolThreadSection.text` 的函式收這一次模型呼叫的 `call`。
     // 2.9.0（#2575）：工具事件的視圖帶 `shape`、`command` 視圖帶內容、execute 能只換 `Command` 裡那一則；三顆改成 core 監聽者。
     // 2.10.0（#2358）：`exec.interrupt` 多一種寫明的拒絕 `HumanInputUnavailable`。
-    expect(TOOLS_CONTRACT_VERSION).toBe('2.10.0');
+    // 2.11.0（#2358）：`ToolThread.on` 多收 `'agent/pre-step'`。
+    expect(TOOLS_CONTRACT_VERSION).toBe('2.11.0');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('2');
   });
 

@@ -7,7 +7,6 @@
   "exports": {
     ".": "./lib/index.js",
     "./invariant": "./lib/invariant.js",
-    "./model-call": "./lib/model-call-cell.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

@@ -700,6 +700,15 @@ export {
 } from './step-inbox.js';
 export { createTurnStoppingMiddleware, TURN_STOPPING_MIDDLEWARE_NAME } from './turn-stopping.js';
 export {
+  createPreStepAdapterMiddleware,
+  PRE_STEP_ADAPTER_MIDDLEWARE_NAME,
+} from './pre-step-adapter.js';
+export {
+  createToolNameRestoreMiddleware,
+  TOOL_NAME_RESTORE_MIDDLEWARE_NAME,
+  withToolNamesRestored,
+} from './tool-name-restore.js';
+export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,
   INTERRUPTED_REPLY_MARKER,

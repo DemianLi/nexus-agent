@@ -24,7 +24,7 @@
  *
  * **不帶設定值，也不帶 drop 訊息原文。** 一列的 `config` 可能放了秘密，而這台主機是多人共用、瀏覽器會話沒有角色概念。
  * 每列只有 `id`、`module`、`running`、`saved`、`sync`（與下面兩個選填的 `unaudited`、`live`），`running`／`saved` 裡只有
- * `state`、`dropStage` 與 `disabledReason`（被主列連帶關掉的從列，原因是固定的一句，不含設定值）。drop 的原文照舊只進伺服器日誌
+ * `state` 與 `dropStage`。drop 的原文照舊只進伺服器日誌
  * （`startup-audit.ts` 的 `describeDrop`）。
  *
  * ## 「已儲存」含變更紀錄（#1412）
@@ -80,7 +80,6 @@ import type { PluginEntry } from '@nexus/core';
 
 import { writeAtomic } from './atomic-file.js';
 import { resolveHarnessHome } from './harness-home.js';
-import { dependentDisabledReasons } from './plugin-config.js';
 import type { ConfigEntry, LayerReport, StartupDrop } from './plugin-config.js';
 import { classOfRow, STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
 import type { RowClass } from './plugin-row-classes.js';
@@ -117,8 +116,6 @@ export interface PluginSnapshotSide {
   readonly state: RowState;
   /** 只在 `state` 是 `dropped` 時有。 */
   readonly dropStage?: DropStage;
-  /** 被主列連帶關掉的從列（`plugin-config.ts` 的 `DEPENDENT_ENTRY_PAIRS`）：為什麼沒有跑。只在 `state` 是 `disabled` 時有。 */
-  readonly disabledReason?: string;
 }
 
 /** 快照上的一列。 */
@@ -186,7 +183,6 @@ interface SideRow {
   readonly module: string;
   readonly state: RowState;
   readonly dropStage?: DropStage;
-  readonly disabledReason?: string;
   readonly entry?: PluginEntry;
 }
 
@@ -197,7 +193,6 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
     const row = source.rows.get(entry);
     if (row !== undefined) entries.set(row.id, entry);
   }
-  const reasons = dependentDisabledReasons(source.entries);
   const result = new Map<string, SideRow>();
   for (const [index, declared] of source.entries.entries()) {
     const id = source.ids[index] ?? declared.id ?? declared.name;
@@ -217,7 +212,6 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
       module: declared.name,
       state,
       ...(stage !== undefined && { dropStage: stage }),
-      ...(state === 'disabled' && reasons.has(index) && { disabledReason: reasons.get(index) }),
       ...(entry !== undefined && { entry }),
     });
   }
@@ -336,7 +330,6 @@ function sideOf(row: SideRow | undefined): PluginSnapshotSide {
   return {
     state: row.state,
     ...(row.dropStage !== undefined && { dropStage: row.dropStage }),
-    ...(row.disabledReason !== undefined && { disabledReason: row.disabledReason }),
   };
 }
 
