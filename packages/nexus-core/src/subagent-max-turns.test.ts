@@ -4,7 +4,8 @@
  *
  * afterAgent 跳回模型的那一次照原版也算。跳回的那一格是子代理自己帶的
  * middleware，排在上限那一顆之後，所以它的 afterAgent 先跑、先跳，上限那一顆的歸零沒跑到。這一次要是沒算進去，子代理會多叫一次模型。
- * 重試只算一次的那一條在 `apps/harness/src/subagent-config.test.ts`：重試要經真的 adapter 回報失敗碼，假模型的錯誤進不了重試那一格。
+ * 重試只算一次的那一條在 `apps/harness/src/subagent-config.test.ts`：重打只看 adapter 回報的失敗碼（`stream-retry.ts`），假模型拋的錯沒有碼、
+ * 不會重打，要經真的 adapter 打假端點。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';

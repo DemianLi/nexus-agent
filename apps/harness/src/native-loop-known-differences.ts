@@ -72,7 +72,7 @@ export interface KnownDifference {
   readonly test: string;
   readonly kind: KnownDifferenceKind;
   /**
-   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，差異在斷言之外。
+   * `fails`：照跑、要失敗才算過；`skip`：不跑（懸住之後會漏到同檔下一條的）；`passes`：照跑、要過，差異在斷言之外。
    */
   readonly run: 'fails' | 'skip' | 'passes';
 }
