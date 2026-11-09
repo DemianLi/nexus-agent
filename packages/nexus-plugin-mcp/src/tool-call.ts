@@ -30,10 +30,14 @@ import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { markUntrusted } from './untrusted-mark.js';
 
-/** 一次呼叫：模型給的參數與這次呼叫的身分。 */
+/**
+ * 一次呼叫：模型給的參數與這次呼叫的身分。`client` 是每一輪送出前取的 SDK client，省略就是建這顆呼叫的那一代：在行程內等人回答的
+ * loop 不從頭重跑，等的期間重連過的話，下一輪要送到當下那一代（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+ */
 export type ToolCall = (
   args: { readonly [key: string]: JsonValue },
   exec: ToolExec,
+  client?: () => Pick<Client, 'callTool'>,
 ) => Promise<NexusToolResult>;
 
 /** 這個檔自己拋的失敗：已經是給模型看的句子，不再包 `Error calling tool`。 */
@@ -75,7 +79,7 @@ export function toolCallOf(
   const validateInput = lazyValidator(descriptor.inputSchema);
   const validateOutput =
     inBand && outputSchema !== undefined ? lazyValidator(outputSchema) : undefined;
-  return async (args, exec) => {
+  return async (args, exec, current = () => client) => {
     const { signal } = exec;
     const passthrough = new WeakSet<object>();
     let result: CallToolResult;
@@ -88,7 +92,7 @@ export function toolCallOf(
       }
       const request = { name: toolName, arguments: parsed.value as Record<string, unknown> };
       const round = (params: RoundParams): Promise<CallToolResult> =>
-        client.callTool(
+        current().callTool(
           { ...params, _meta } as never,
           {
             timeout: options.timeoutMs,

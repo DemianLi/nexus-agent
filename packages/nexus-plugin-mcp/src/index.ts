@@ -642,13 +642,21 @@ function nexusToolOf(
       if (call === undefined) {
         throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
       }
+      // 每一輪送出前取當下那一代：等人回答的期間重連過，下一輪送到新的那一代；斷線、探活記在最後送出的那一代上。
+      let used = generation;
+      const client = (): SdkClient => {
+        const now = supervisor.current();
+        if (now?.sdk === undefined) throw new Error(`${label}: server is disconnected`);
+        used = now;
+        return now.sdk;
+      };
       try {
-        return await call(args, exec);
+        return await call(args, exec, client);
       } catch (error) {
-        if (isConnectionLost(error)) supervisor.down(generation);
+        if (isConnectionLost(error)) supervisor.down(used);
         else if (isRequestTimeout(error)) {
-          probeLiveness(generation, () => {
-            supervisor.stalled(generation);
+          probeLiveness(used, () => {
+            supervisor.stalled(used);
           });
         }
         throw exec.signal?.aborted === true ? asAbort(error) : error;
