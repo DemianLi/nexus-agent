@@ -574,6 +574,16 @@ class SandboxSpawner(unittest.TestCase):
         cache = next(s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache@'))
         self.assertEqual(cache['if'], "inputs.cache == 'true'")
 
+    def test_lints_with_the_pinned_toolchain(self) -> None:
+        """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑（#2620）。"""
+        self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
+        self.assertEqual(self.steps['格式']['run'], 'cargo fmt --check')
+        clippy = self.steps['clippy']
+        self.assertEqual(clippy['run'], 'cargo clippy --locked --all-targets --features test-hooks -- -D warnings')
+        self.assertEqual(clippy['if'], '${{ !cancelled() }}')
+        names = list(self.steps)
+        self.assertLess(names.index('clippy'), names.index('編譯'))
+
     def test_bundle_keeps_the_exec_bit(self) -> None:
         """upload-artifact 不保留執行權限，所以先包成 tar。"""
         self.assertIn('tar -cf', self.steps['打 bundle']['run'])
