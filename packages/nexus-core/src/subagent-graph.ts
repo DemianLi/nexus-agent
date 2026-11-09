@@ -181,23 +181,22 @@ export function compileSubagentGraph(
   ];
 
   const middleware = mergeMiddlewareByName(
-      defaults,
-      // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
-      // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
-      ((declarative.middleware ?? []) as AgentMiddleware[])
-        .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
-        // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
-        .map((each) =>
-          options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
-            ? options.approvalGate
-            : options.approvalPolicyPrompt !== undefined &&
-                each.name === APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME
-              ? options.approvalPolicyPrompt
-              : options.delegation !== undefined &&
-                  each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
-                ? options.delegation
-                : each,
-        ),
+    defaults,
+    // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
+    // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
+    ((declarative.middleware ?? []) as AgentMiddleware[])
+      .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
+      // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
+      .map((each) =>
+        options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
+          ? options.approvalGate
+          : options.approvalPolicyPrompt !== undefined &&
+              each.name === APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME
+            ? options.approvalPolicyPrompt
+            : options.delegation !== undefined && each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
+              ? options.delegation
+              : each,
+      ),
   );
   if (options.loop === 'native') {
     // 呼叫端拿到的型別同 langgraph 那一支：host 只叫兩者都有的成員（`streamEvents`、`updateState`、`withConfig`）。
