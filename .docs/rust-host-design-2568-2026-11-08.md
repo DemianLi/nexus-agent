@@ -155,11 +155,11 @@ dsh 在解決的問題：桌機上把後端跟 Electron main、renderer 隔開�
 | --- | --- | --- | --- |
 | 綁 port、網頁靜態檔、BrowserAuth | 前台（`:616`、`:620`、`:1278`） | 前台 | 對外的邊緣，D166 Q1 定了監督行程不接 HTTP |
 | 探針與指標 | 前台出，數字來自監督行程的 `up`／`stats` 與對話行程推的事件（`:1315`、`:1542`） | 前台出，宿主補自己的指標 | 同上 |
-| 會話搜尋 | 前台冷讀磁碟（`:1463`） | 宿主 | 宿主是 log 的寫入者，讀得到還沒落盤的那一句（原 #2531 的問題）；dsh 的搜尋也在 host（`session-query-sqlite/src/index.ts:2@8bd0733`） |
-| `@` 引用候選 | 前台答清單，對話行程也建一份（`front-wire.ts:11`、`:1475`） | 宿主 | 同上 |
-| 釘選與封存 | 前台寫，對話行程 `follow` 只讀（`:1355-1361`） | 宿主 | 跟會話狀態同一個寫入者；dsh 也在 host（`workspace-controller/src/index.ts:159-171@8bd0733`） |
-| `listThreads`、`readSubagentSession`、`isSubagentSession` | 兩邊都有（`:1631-1680`） | 宿主 | 同上 |
-| plugin 對照快照 | 前台寫，對話行程回報綁了哪幾列（`:1256`、`:1610`） | 宿主 | 版本登記在 #2569 搬進宿主 |
+| 會話搜尋 | 前台冷讀磁碟（`:1463`） | 照今天，#2571 動工時重答 | D266：第一輪的理由「宿主是 log 的寫入者」在 D249 D 之後不成立（`.docs/rust-host-boundary-shape-2568-2026-11-09.md` §五）；dsh 的搜尋在 host（`session-query-sqlite/src/index.ts:2@8bd0733`） |
+| `@` 引用候選 | 前台答清單，對話行程也建一份（`front-wire.ts:11`、`:1475`） | 照今天，#2571 動工時重答 | 同上 |
+| 釘選與封存 | 前台寫，對話行程 `follow` 只讀（`:1355-1361`） | 照今天，#2571 動工時重答 | 同上；dsh 在 host（`workspace-controller/src/index.ts:159-171@8bd0733`） |
+| `listThreads`、`readSubagentSession`、`isSubagentSession` | 兩邊都有（`:1631-1680`） | 照今天，#2571 動工時重答 | 同上 |
+| plugin 對照快照 | 前台寫，對話行程回報綁了哪幾列（`:1256`、`:1610`） | 前台 | D264：版本登記照今天留在前台，前台跟著監督行程的 `up`／`down` 向對話行程問綁定（`.docs/rust-host-boundary-shape-2568-2026-11-09.md` §四） |
 | 掉列紀錄器、不變量記錄檔、memory-gauge | 每個行程各寫一份（`:987`、`:1154-1161`、`:2362`） | 照舊各寫各的 | 記的是自己行程的事 |
 
 記憶體：**沒量**。D247 定了本輪不量，要量時另外問 PM。
