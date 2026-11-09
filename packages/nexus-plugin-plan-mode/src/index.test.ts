@@ -190,6 +190,22 @@ function modes(log: SessionLog): boolean[] {
   return log.events.flatMap((event) => (event.type === 'plan/mode' ? [event.data.active] : []));
 }
 
+const APPEND_FAILURE = '測試：plan/mode 寫不進去';
+
+/** 讓這份日誌第一次寫 `plan/mode` 時拋錯，之後照常寫；別的種類一律照常。 */
+function failPlanModeAppendOnce(log: SessionLog): { thrown(): number } {
+  const append = log.append.bind(log);
+  let thrown = 0;
+  vi.spyOn(log, 'append').mockImplementation(((type, data, options) => {
+    if (type === 'plan/mode' && thrown === 0) {
+      thrown += 1;
+      throw new Error(APPEND_FAILURE);
+    }
+    return append(type, data, options);
+  }) as SessionLog['append']);
+  return { thrown: () => thrown };
+}
+
 /** 上一個行程留下的日誌：開過一次計劃模式。 */
 function earlierEvents(active: boolean): readonly SessionEvent[] {
   const earlier = new SessionLog('plan');
@@ -416,6 +432,34 @@ describe('同意之後的待關', () => {
       { threadId: 'plan', step: 2, signal: aborted.signal },
       async () => ({ kind: 'continue' }),
     );
+    expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('plan', 'model_request:b')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
+  });
+
+  it('寫 plan/mode 拋錯：那一步照常往下、還有指引，記一行 warn；待關留著，下一步交出', async () => {
+    const { registry, log, modelStep } = await approved();
+    const failing = failPlanModeAppendOnce(log);
+
+    expect(await modelStep('plan', 'model_request:b')).toContain(GUIDANCE);
+    expect(failing.thrown()).toBe(1);
+    expect(modes(log)).toEqual([]);
+    expect(registry.logger.warnings().map((warning) => warning.message)).toEqual([
+      expect.stringContaining(APPEND_FAILURE),
+    ]);
+
+    expect(await modelStep('plan', 'model_request:c')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
+    await modelStep('plan', 'model_request:d');
+    expect(modes(log)).toEqual([false]);
+  });
+
+  it('同意之後打 /plan off、寫 plan/mode 拋錯：命令拋出去，待關留著，下一步交出', async () => {
+    const { registry, log, modelStep } = await approved();
+    failPlanModeAppendOnce(log);
+
+    await expect(runPlan(registry.commands, 'off')).rejects.toThrow(APPEND_FAILURE);
     expect(modes(log)).toEqual([]);
 
     expect(await modelStep('plan', 'model_request:b')).not.toContain(GUIDANCE);
@@ -988,6 +1032,23 @@ describe('狀態表以 root 日誌為鍵（#2551）', () => {
     } finally {
       a.detach();
       b.detach();
+    }
+  });
+
+  it('寫 plan/mode 拋錯：錯原樣往外，待關留著，下一次交出、只寫一顆', () => {
+    const a = sessionOn('thread-a');
+    try {
+      const failing = failPlanModeAppendOnce(a.log);
+      state.queueExit(a.session);
+      expect(() => state.settleExit(a.log)).toThrow(APPEND_FAILURE);
+      expect(failing.thrown()).toBe(1);
+      expect(modes(a.log)).toEqual([]);
+      state.settleExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+      state.settleExit(a.log);
+      expect(modes(a.log)).toEqual([{ active: false }]);
+    } finally {
+      a.detach();
     }
   });
 
