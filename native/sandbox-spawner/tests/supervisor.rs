@@ -2465,6 +2465,39 @@ fn a_second_stop_signal_sends_no_revoke_to_the_host_it_just_killed() {
     assert!(!err.contains("收不下撤銷"), "{err}");
 }
 
+/// 宿主收不下撤銷時殺掉它，同一輪收屍裡後面的身分不再往它送：只印一次「收不下撤銷」，之後宿主照退避重起。
+#[test]
+fn a_host_that_cannot_take_a_revoke_is_killed_once_per_reap_and_restarts() {
+    let mut h = Harness::start(Options {
+        host: fake_host(&["--deaf-on", "b"]),
+        extra: vec!["--host-backoff-ms", "100"],
+        ..Options::default()
+    });
+    let a = logged_pid(&h.up("a"), "pid");
+    let b = logged_pid(&h.up("b"), "pid");
+    assert!(wait_until(|| host_log(&h).contains(&"deaf".to_string())));
+    // 監督行程停著的時候讓兩個對話行程都成了殭屍，醒來之後同一輪收屍收到兩個身分。
+    kill(h.pid(), libc::SIGSTOP);
+    kill(a as u32, libc::SIGKILL);
+    kill(b as u32, libc::SIGKILL);
+    let died = wait_until(|| gone(a) && gone(b));
+    kill(h.pid(), libc::SIGCONT);
+    assert!(died);
+    let mut downs = Vec::new();
+    while downs.len() < 2 {
+        if let FrontEvent::Down { thread_id, .. } = h.event() {
+            downs.push(thread_id);
+        }
+    }
+    downs.sort();
+    assert_eq!(downs, [b"a".to_vec(), b"b".to_vec()]);
+    let started = |h: &Harness| host_log(h).iter().filter(|l| l.starts_with("start ")).count();
+    assert!(wait_until(|| started(&h) == 2), "{:?}", host_log(&h));
+    let err = std::fs::read(h.dir.join("supervisor.err")).unwrap();
+    let err = String::from_utf8_lossy(&err);
+    assert_eq!(err.matches("收不下撤銷").count(), 1, "{err}");
+}
+
 /// 宿主對活著的對話行程回報 `unregistered`：那是它那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、或還排在監督行程這邊），
 /// 或撤銷之前就連上的連線（pid 被重用、上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的）。不隔離、不寫稽核，下一個宿主照樣拿到它；運作 log 記一行警告，只帶 pid 與宿主的連線編號。
 #[test]

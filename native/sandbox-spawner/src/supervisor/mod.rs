@@ -56,8 +56,8 @@
 //! 宿主（`--host`，[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)；沒給就不起）：跟前台一起起，不擋前台。它的 stdin／stdout 是控制通道，
 //! stderr 照監督行程的。它送 `ready` 之後，監督行程把身分表整張送過去：每個前台與對話行程一筆（pid、token、角色、綁的 thread）。
 //! 之後起的行程，spawn 當下先送宿主那一筆、再把 token 交給它；指派 thread 時更新那一筆；收屍之前撤掉（[`process::reap`] 的 `before_reap`，
-//! 那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
-//! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它；宿主 `ready` 了、沒在收的，也再送一次 `revoke`，蓋掉可能還排在這邊、沒寫出去的那一筆 `grant`。回報的是 pid 不在宿主表上（`unregistered`）、
+//! 宿主 `ready` 而且沒在停才送，那時 pid 還沒被收，撤銷寫進 pipe 才收；500 ms 內寫不進去就殺掉宿主）。宿主回報某個 pid 違反協定時寫一行稽核
+//! （`event: protocol`），那個身分隔離到它結束：之後宿主重起重送的表裡不再有它；宿主 `ready` 而且沒在停的，也再送一次 `revoke`，蓋掉可能還排在這邊、沒寫出去的那一筆 `grant`。回報的是 pid 不在宿主表上（`unregistered`）、
 //! 而那個 pid 是活著、沒被隔離的前台或對話行程的，不算違規、不寫稽核：那一筆還沒寫進宿主的 pipe（宿主剛起來或剛重起、
 //! 這邊還沒處理它的 `ready`，或那一筆還排在這邊），或那是撤銷之前就連上的連線（pid 被重用、同一個號碼上一個行程留下的，或重用得比宿主讀 pipe 快、新行程先連上的）；只記一行警告，帶 pid 與宿主的連線編號。其餘照違規記。宿主結束了就照退避重起：第一次等 `--host-backoff-ms`，
 //! 之後每次加倍到 `--host-backoff-max-ms`，活過 `--host-stable-ms` 才結束的回到起始。`ready` 之前的失敗（沒起成、`ready` 之前結束、
@@ -775,7 +775,7 @@ impl Supervisor {
             .min()
     }
 
-    /// 宿主還沒 `ready`、還沒在收：到這個時間點就當它起不來。
+    /// 宿主還沒 `ready`、還沒在停：到這個時間點就當它起不來。
     fn host_ready_deadline(&self) -> Option<Instant> {
         let host = self
             .host
@@ -890,7 +890,7 @@ impl Supervisor {
             ))
         }) {
             Ok(((pid, chan, _), token)) => {
-                // 先登記、再交 token：宿主 ready 了，那一筆先排進宿主的通道；還沒的，等它 ready 時整張送。連線比那一筆先到，見 `on_unregistered`。
+                // 先登記、再交 token：宿主 ready 而且沒在停，那一筆先排進宿主的通道；還沒的，等它 ready 時整張送。連線比那一筆先到，見 `on_unregistered`。
                 self.front = Some(Proc::new(pid, chan));
                 self.front_token = token.clone();
                 self.front_quarantined = false;
@@ -1794,7 +1794,7 @@ impl Supervisor {
         })
     }
 
-    /// 這個 pid 的那一筆有了或變了：宿主 `ready` 了就送過去（還沒 `ready` 的，等它 `ready` 時整張送）。
+    /// 這個 pid 的那一筆有了或變了：宿主 `ready` 而且沒在停就送過去（還沒 `ready` 的，等它 `ready` 時整張送）。
     fn regrant(&mut self, pid: libc::pid_t) {
         let Some(grant) = self.grant_of(pid) else {
             return;
@@ -1825,7 +1825,7 @@ impl Supervisor {
     }
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
-    /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
+    /// 之後重送身分表時不再放進去；宿主 `ready` 而且沒在停的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
     /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。只在剛隔離時送一次：隔離之後不會再送它的
     /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
     /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到），
@@ -1909,6 +1909,7 @@ impl Supervisor {
                 // 所以 pid 被重用之後才來的連線，一定排在撤銷後面。寫不進去就當場殺掉宿主：不在停機時它照退避重起，新的宿主拿到的表本來就沒有這個 pid。
                 // 宿主正在停（`stop` 是 Some）的不送：`kill_now` 之後寫端已經關了，送了也丟掉，`flush_until` 回 false 不代表它收不下；
                 // `begin_stop` 之後它讀到 EOF 就刪掉 socket 結束，表跟著行程沒了（`finish` 時還排著沒寫完的那段窗口見 README n2）。
+                // 寫端被 EPIPE 關掉、`stop` 還是 None 的，照收不下處理：殺用 `kill_now`，`stop` 跟著設上，同一輪後面的身分不再往它送，不會再印一次、再殺一次。
                 if let (true, Ok(pid), Some(host)) = (
                     identities.contains(&pid),
                     u32::try_from(pid),
@@ -1926,7 +1927,7 @@ impl Supervisor {
                             "nexus-supervisor: 宿主 {} 收不下撤銷，殺掉它",
                             host.proc.pid
                         );
-                        process::signal_group(host.proc.pid, libc::SIGKILL);
+                        host.proc.kill_now();
                     }
                 }
             },
