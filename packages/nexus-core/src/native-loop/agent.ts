@@ -117,6 +117,12 @@ const DEFAULT_RECURSION_LIMIT = 25;
 /** 沒給 `maxConcurrency` 時同一步的工具全部一起起跑，同 LangGraph。 */
 const UNBOUNDED = Number.POSITIVE_INFINITY;
 
+/**
+ * 停在等待點的那一步：把已經收完的寫入套進 state。鍵是那一步的等人服務，{@link NativeAgent.discardSuspended} 收回之前同步叫，
+ * 叫一次就退掉；那一步結束時也退掉。
+ */
+const settledWrites = new WeakMap<object, () => void>();
+
 /** 一次 run 收到的輸入。 */
 type LoopInput =
   { readonly messages?: readonly BaseMessage[]; readonly [key: string]: unknown } | Command;
@@ -734,8 +740,9 @@ export class NativeAgent {
   }
 
   /**
-   * 收回這條 thread 停在等待點的那次 run：每一顆還沒答的提問以 `HumanInputWithdrawn` 拒絕，run 照控制流退出，**不發協定事件、不改 state**。
-   * 日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
+   * 收回這條 thread 停在等待點的那次 run：先把停住的那一步**已經收完**的呼叫寫入同步套進 state（同 LangGraph 存檔點上已經有的那幾顆），
+   * 沒收完的寫入丟掉；再以 `HumanInputWithdrawn` 拒絕每一顆還沒答的提問，run 照控制流退出。不發協定事件。
+   * 等核准那幾顆的日誌與對話由呼叫端寫：停止時是 pump 的 `#withdraw`；pump 的 `close()` 收線時兩樣都不寫。沒有掛著的 run 就什麼都不做。
    * @param config - 帶 `configurable.thread_id`。
    */
   discardSuspended(config: RunnableConfig): void {
@@ -743,6 +750,7 @@ export class NativeAgent {
     const link = this.#parked.get(threadId);
     if (link === undefined) return;
     this.#parked.delete(threadId);
+    settledWrites.get(link.suspension)?.();
     link.suspension.withdraw();
   }
 
@@ -1165,6 +1173,13 @@ export class NativeAgent {
       step,
     );
     const batch = suspension?.away === undefined ? running : suspension.away(running);
+    if (suspension !== undefined) {
+      const apply = (): void => {
+        settledWrites.delete(suspension);
+        commit(false);
+      };
+      settledWrites.set(suspension, apply);
+    }
     try {
       if (caller === undefined) await batch;
       else {
@@ -1172,12 +1187,14 @@ export class NativeAgent {
         await raceAbort(batch, caller);
       }
     } catch (error) {
-      // 收回了停在等待點的 run：這一步的寫入一律不套。日誌與對話由收回的那一方決定寫不寫：按停止時 pump 的 `#withdraw` 寫，收線（`close()`）不寫。
+      // 收回了停在等待點的 run：收完的寫入已經在收回那一刻套過（`discardSuspended`），這裡不再套。
       if (suspension?.withdrawn === true) throw error;
       // 一顆失敗：跑完的兄弟結果照寫，沒收完的（含失敗那顆）送出的寫入照套、不算完成，同 LangGraph 把這一步存成 pending writes。
       // 呼叫端中止：只寫回收完的那幾顆，沒收完的寫入丟掉，同 `PregelRunner` 的 `abortPromise`。
       commit(!(caller?.aborted ?? false));
       throw error;
+    } finally {
+      if (suspension !== undefined) settledWrites.delete(suspension);
     }
     commit(true);
     const last = state.messages.at(-1);

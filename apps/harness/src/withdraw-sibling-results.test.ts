@@ -47,6 +47,7 @@ afterEach(async () => {
  * @param options.gate - 閘門同步回 `ask`，或先等一拍 macrotask。
  * @param options.onGate - 閘門判定 `danger` 要問、回 `ask` 之前叫一次。
  * @param options.command - `other` 回 `Command`：寫一個檔進 `files`，帶它的 ToolMessage。
+ * @param options.rounds - 模型叫幾批同樣的兩顆，預設一批。
  */
 async function assemble(
   loop: Loop,
@@ -55,16 +56,17 @@ async function assemble(
     gate?: 'sync' | 'async';
     onGate?: () => void;
     command?: boolean;
+    rounds?: number;
   },
 ) {
   const danger = { name: 'danger', args: {} };
   const other = { name: 'other', args: {} };
   const model = new ScriptedChatModel({
     turns: [
-      {
+      ...Array.from({ length: options.rounds ?? 1 }, () => ({
         content: '動手。',
         toolCalls: options.order === 'danger-first' ? [danger, other] : [other, danger],
-      },
+      })),
       { content: '好。' },
     ],
   });
@@ -178,8 +180,22 @@ async function otherReply(run: Awaited<ReturnType<typeof assemble>>): Promise<st
   return reply === undefined ? undefined : String(reply.content);
 }
 
-/** 收回之後的共同斷言。 */
-function expectOneResultEach(run: Awaited<ReturnType<typeof assemble>>): void {
+/** 對話裡每顆記過 `tool/call` 的呼叫各有幾則 ToolMessage。 */
+async function repliesPerCall(
+  run: Awaited<ReturnType<typeof assemble>>,
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const callId of namesOf(run.log()).keys()) counts[callId] = 0;
+  for (const message of (await run.state()).messages) {
+    if (ToolMessage.isInstance(message) && message.tool_call_id in counts) {
+      counts[message.tool_call_id] = (counts[message.tool_call_id] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+/** 收回之後的共同斷言：日誌與對話裡，每顆呼叫各恰好一筆結果。 */
+async function expectOneResultEach(run: Awaited<ReturnType<typeof assemble>>): Promise<void> {
   expect(run.pump.awaitingInput).toBe(false);
   expect(run.log().at(-1)).toMatchObject({
     type: 'turn/end',
@@ -187,6 +203,7 @@ function expectOneResultEach(run: Awaited<ReturnType<typeof assemble>>): void {
   });
   expect(resultCounts(run.log())).toEqual({ danger: 1, other: 1 });
   expect(violations(run.log())).toEqual([]);
+  expect(Object.values(await repliesPerCall(run))).toEqual([1, 1]);
 }
 
 /** 停在核准點、停穩之後按一次停止。 */
@@ -215,7 +232,7 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
 
     expect(landed).toBe('run');
     expect(run.ran.other).toBe(0);
-    expectOneResultEach(run);
+    await expectOneResultEach(run);
     expect(await otherReply(run)).toBe(`Error: tool call aborted before dispatch`);
   });
 
@@ -235,7 +252,7 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
 
     expect(landed).toBe('run');
     expect(run.ran.other).toBe(1);
-    expectOneResultEach(run);
+    await expectOneResultEach(run);
     expect(await otherReply(run)).toBe(OTHER_TEXT);
   });
 
@@ -244,7 +261,7 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
     await settleThenStop(run);
 
     expect(run.ran.other).toBe(1);
-    expectOneResultEach(run);
+    await expectOneResultEach(run);
     expect(await otherReply(run)).toBe(OTHER_TEXT);
   });
 
@@ -253,7 +270,7 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
     await settleThenStop(run);
 
     expect(run.ran.other).toBe(1);
-    expectOneResultEach(run);
+    await expectOneResultEach(run);
     expect(await otherReply(run)).toBe(OTHER_TEXT);
     expect(Object.keys((await run.state()).files ?? {})).toEqual([FILE]);
   });
@@ -263,7 +280,9 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
     await settleThenStop(run);
 
     expect(run.ran.other).toBe(0);
-    expectOneResultEach(run);
+    await expectOneResultEach(run);
+    // 沒收完的那顆不套任何寫入，對話裡只有收回寫的那一則。
+    expect(await otherReply(run)).toBe('Error: tool call aborted before dispatch');
     // 收回那一輪裡，它的 `tool/call` 緊接在它的結果前面。
     const resumed = run.log().findLastIndex((event) => event.type === 'turn/start');
     const tail = run.log().slice(resumed);
@@ -282,6 +301,32 @@ describe('停在核准點時收回：兄弟呼叫各一筆結果', () => {
       },
     });
     expect(names.get((tail[at] as SessionEvent<'tool/call'>).data.callId)).toBe('other');
+  });
+
+  it.each(LOOPS)('%s：收回之後同一條 thread 再停一次、再收回，兩批各一筆', async (loop) => {
+    const run = await assemble(loop, { order: 'other-first', rounds: 2 });
+    await settleThenStop(run);
+    await settleThenStop(run);
+
+    expect(run.ran.other).toBe(2);
+    const perCall: Record<string, number> = {};
+    for (const event of run.log()) {
+      if (event.type !== 'tool/result') continue;
+      const { callId } = (event as SessionEvent<'tool/result'>).data;
+      perCall[callId] = (perCall[callId] ?? 0) + 1;
+    }
+    expect(Object.values(perCall)).toEqual([1, 1, 1, 1]);
+    expect(violations(run.log())).toEqual([]);
+    expect(Object.values(await repliesPerCall(run))).toEqual([1, 1, 1, 1]);
+    const others = [...namesOf(run.log())].filter(([, name]) => name === 'other');
+    const messages = (await run.state()).messages;
+    for (const [callId] of others) {
+      const reply = messages.find(
+        (message): message is ToolMessage =>
+          ToolMessage.isInstance(message) && message.tool_call_id === callId,
+      );
+      expect(String(reply?.content)).toBe(OTHER_TEXT);
+    }
   });
 
   it.each(
