@@ -1,7 +1,8 @@
 /**
  * `task` 的 description 超過門檻時，兩個 loop 對前景子代理做的事一樣：基座的 `FilesystemMiddleware.beforeAgent` 把它搬到
- * `/conversation_history`，模型看到的是搬走後的那句，搬出去的檔在子代理自己的 state 裡、內容是原本那段。搬檔路徑的編號每次不同，
- * 比之前換成 `<id>`。檔的內容用 `peek` 從工具拿到的 state 直接讀：`read_file` 單行有長度上限，讀不完整段。
+ * `/conversation_history`，模型看到的是搬走後的那句；搬出去的檔在子代理自己的 state 裡，內容是原本那段。搬檔路徑的編號每次
+ * 不同，比對前換成 `<id>`。檔的內容用 `peek` 從工具拿到的 state 直接讀：`read_file` 會替每行加行號、把超過 5000 字的行切段，
+ * 整份輸出超過 80,000 字還會截斷，讀回的字串不等於原文。
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
@@ -109,7 +110,7 @@ async function delegateLong(loop: Loop): Promise<Seen> {
 describe('task 的 description 超過門檻', () => {
   it('兩個 loop 送進子代理模型的人話一樣，搬出去的檔都在子代理的 state 裡、是原本那段', async () => {
     const [langgraph, native] = await Promise.all(LOOPS.map(delegateLong));
-    // 先確定 langgraph 真的搬了、檔讀得到；兩邊都沒搬或都讀不到時，最後一條也會綠。
+    // 以 langgraph 為基準：兩邊都沒搬或都讀不到時，下面的 toEqual 也會綠，所以先釘 langgraph 真的搬了、檔讀得到。
     expect(langgraph?.human[0]).toContain('/conversation_history/<id>');
     expect(langgraph?.peek).toBe(JSON.stringify({ found: true, chars: LONG.length, same: true }));
     expect(native).toEqual(langgraph);
