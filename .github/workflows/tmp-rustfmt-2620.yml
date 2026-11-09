@@ -1,0 +1,21 @@
+name: tmp rustfmt patch
+on:
+  push:
+    branches: [ci/spawner-rustfmt]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - working-directory: native/sandbox-spawner
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
+          cargo fmt --version
+          cargo fmt
+          cd "$GITHUB_WORKSPACE"
+          git diff --stat | tail -1
+          git diff --binary > "$RUNNER_TEMP/fmt.patch"
+          sha256sum "$RUNNER_TEMP/fmt.patch"
+          echo PATCH-BEGIN
+          gzip -9c "$RUNNER_TEMP/fmt.patch" | base64 -w 76
+          echo PATCH-END
