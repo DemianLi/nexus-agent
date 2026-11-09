@@ -35,7 +35,7 @@ import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
 import { createToolCallStepMiddleware } from './tool-call-step.js';
-import type { ToolCallSite, ToolCallStep } from './tool-call-step.js';
+import type { ToolCallResult, ToolCallSite, ToolCallStep } from './tool-call-step.js';
 import {
   APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
@@ -416,51 +416,69 @@ export function approvalGateToolStep(
       args: (call.args ?? {}) as Record<string, unknown>,
       callId: call.callId,
     };
-    const decision = await runApprovalGate(listeners, exec);
-    if (decision.kind === 'allow') return next();
-    if (decision.kind === 'deny') {
-      return denial(exec, decision.reason, {
-        name: PRE_EXECUTE_DENIED,
-        code: TOOL_DENIED_BY_LISTENER,
-      });
-    }
+    // 問人之前的幾格。`langgraph` 接回時本體整段重跑、這幾格自然再判一次；native 在行程內等，拿到答覆之後由下面照同一個順序再判一次，
+    // 人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了。
+    const beforeAsking = async (): Promise<
+      { readonly done: ToolCallResult } | { readonly ask: string }
+    > => {
+      const decision = await runApprovalGate(listeners, exec);
+      if (decision.kind === 'allow') return { done: await next() };
+      if (decision.kind === 'deny') {
+        return {
+          done: denial(exec, decision.reason, {
+            name: PRE_EXECUTE_DENIED,
+            code: TOOL_DENIED_BY_LISTENER,
+          }),
+        };
+      }
 
-    const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
-    if (channel.kind === 'policy-never') {
-      auditDecision(sessions, call, exec, because, 'rejected');
-      return denial(
-        exec,
-        `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有人被問到。`,
-        approvalDenied(APPROVAL_POLICY_NEVER),
-      );
-    }
-    // native 在讀不到等人服務的呼叫上放「這裡沒人可問」（`human-input.ts`）：組裝的管道是 human，這一顆照樣是沒有管道那一格。
-    if (
-      channel.kind === 'no-channel' ||
-      humanInputUnavailable({ configurable: call.configurable })
-    ) {
-      auditDecision(sessions, call, exec, because, 'unavailable');
-      return denial(
-        exec,
-        `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有可用的核准管道。`,
-        approvalDenied(APPROVAL_NO_CHANNEL),
-      );
-    }
+      const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
+      if (channel.kind === 'policy-never') {
+        auditDecision(sessions, call, exec, because, 'rejected');
+        return {
+          done: denial(
+            exec,
+            `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
+              `這不是有人拒絕了它——是沒有人被問到。`,
+            approvalDenied(APPROVAL_POLICY_NEVER),
+          ),
+        };
+      }
+      // native 在讀不到等人服務的呼叫上放「這裡沒人可問」（`human-input.ts`）：組裝的管道是 human，這一顆照樣是沒有管道那一格。
+      if (
+        channel.kind === 'no-channel' ||
+        humanInputUnavailable({ configurable: call.configurable })
+      ) {
+        auditDecision(sessions, call, exec, because, 'unavailable');
+        return {
+          done: denial(
+            exec,
+            `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
+              `這不是有人拒絕了它——是沒有可用的核准管道。`,
+            approvalDenied(APPROVAL_NO_CHANNEL),
+          ),
+        };
+      }
 
-    // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
-    // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
-    // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
-    if (policy() === 'never') {
-      auditDecision(sessions, call, exec, because, 'rejected');
-      return denial(
-        exec,
-        `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有人被問到。`,
-        approvalDenied(APPROVAL_POLICY_NEVER),
-      );
-    }
+      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
+      // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
+      // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
+      if (policy() === 'never') {
+        auditDecision(sessions, call, exec, because, 'rejected');
+        return {
+          done: denial(
+            exec,
+            `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
+              `這不是有人拒絕了它——是沒有人被問到。`,
+            approvalDenied(APPROVAL_POLICY_NEVER),
+          ),
+        };
+      }
+      return { ask: because };
+    };
+    const before = await beforeAsking();
+    if ('done' in before) return before.done;
+    const because = before.ask;
 
     // 讀得到等人服務（native）就 await 它；讀不到用 `interrupt()`，它用拋例外傳播，**不能包在 try/catch 裡**
     // （`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
@@ -481,6 +499,11 @@ export function approvalGateToolStep(
       ],
       reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
     })) as { decisions?: { type?: string; message?: string }[] } | undefined;
+
+    if (human !== undefined) {
+      const again = await beforeAsking();
+      if ('done' in again) return again.done;
+    }
 
     const verdict = answer?.decisions?.[0];
     if (verdict?.type === 'approve') return next();

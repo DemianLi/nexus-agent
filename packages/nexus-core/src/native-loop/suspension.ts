@@ -31,6 +31,8 @@ export interface PendingAsk {
   readonly id: string;
   readonly value: unknown;
   readonly callId: string;
+  /** 那顆呼叫的位子是第幾個發的；同一批照呼叫的先後發，接回時照它交答覆。 */
+  readonly order: number;
   /** 那顆呼叫的 `tools:<id>` 命名空間。 */
   readonly namespace: readonly string[];
   readonly resolve: (answer: unknown) => void;
@@ -64,6 +66,7 @@ export interface CallSlot {
 export class RunSuspension {
   #active = 0;
   readonly #asks = new Map<string, PendingAsk>();
+  #slots = 0;
   #scheduled = false;
   #parked = false;
   #withdrawn = false;
@@ -104,6 +107,7 @@ export class RunSuspension {
     halt?: AbortSignal,
     permit?: CallPermit,
   ): CallSlot {
+    const order = this.#slots++;
     // 這顆呼叫自己還沒落定的 `ask`／`idle`。收完時還會有：呼叫的外層先落定、本體還在等（例：`tool()` 接的中止讓呼叫先拒絕）。
     const asks = new Set<string>();
     const idlers = new Set<(reason: unknown) => void>();
@@ -199,6 +203,7 @@ export class RunSuspension {
             id,
             value,
             callId,
+            order,
             namespace,
             resolve: settle(resolve),
             reject: settle(reject),
@@ -298,12 +303,14 @@ export class RunSuspension {
       this.#active += 1;
       ask.reject(error);
     }
-    for (const [id, answer] of Object.entries(answers)) {
-      const ask = this.#asks.get(id);
-      if (ask === undefined) continue;
-      this.#asks.delete(id);
+    // 照呼叫的先後交，不照 `answers` 的鍵序：交回之後各自排隊取回名額，先交的先排到（{@link CallPermit.acquire}）。
+    const answered = [...this.#asks.values()]
+      .filter((ask) => Object.hasOwn(answers, ask.id))
+      .sort((a, b) => a.order - b.order);
+    for (const ask of answered) {
+      this.#asks.delete(ask.id);
       this.#active += 1;
-      ask.resolve(answer);
+      ask.resolve(answers[ask.id]);
     }
   }
 

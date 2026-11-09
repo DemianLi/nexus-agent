@@ -211,3 +211,37 @@ describe.each(LOOPS)('%s：中斷 id', (loop) => {
     expect(JSON.stringify(done)).toContain('收完');
   });
 });
+
+describe('native：併發上限 1、同一批兩顆都問人', () => {
+  /** 問人，答了之後記下自己的名字。 */
+  const named = (log: string[], name: string) =>
+    tool(
+      async (_input, config) => {
+        const answer = await askHuman(config, { kind: 'question', name });
+        log.push(`${name}:${String(answer)}`);
+        return `${name} 好了`;
+      },
+      { name, description: name, schema: z.object({}), metadata: { concurrencySafe: true } },
+    );
+
+  it('答覆的鍵序跟呼叫相反：照呼叫的先後取回名額、接著跑', async () => {
+    const log: string[] = [];
+    const run = await loopRun(
+      'native',
+      [named(log, 'first'), named(log, 'second')],
+      fakeModel()
+        .respondWithTools([
+          { name: 'first', args: {}, id: 'f' },
+          { name: 'second', args: {}, id: 's' },
+        ])
+        .respond(new AIMessage('收完')),
+      { maxConcurrency: 1 },
+    );
+    const ids = interruptIds(await run.start('動手'));
+    expect(ids).toHaveLength(2);
+    const [first, second] = ids;
+
+    await run.resume({ [second!]: 'B', [first!]: 'A' });
+    expect(log).toEqual(['first:A', 'second:B']);
+  });
+});

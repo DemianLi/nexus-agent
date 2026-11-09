@@ -1,7 +1,7 @@
 /**
  * 每一顆工具呼叫上放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 帶 thread 的 `streamEvents` 放等人
  * 服務，其餘（`invoke`、子代理那一層）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
- * 那一格，不問人、不跑工具本體。
+ * 那一格，不問人、不跑工具本體。人答了核准之後，問人之前的幾格照同一個順序再判一次，兩個 loop 結局一樣。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
@@ -62,6 +62,7 @@ async function assemble(
   tools: Parameters<typeof fakePlugin>[1],
   model: ReturnType<typeof fakeModel>,
   results: Record<string, string> = {},
+  policy?: () => 'ask' | 'never',
 ) {
   const { registry } = await loadPlugins([
     fakePlugin('tools', (r) => {
@@ -80,6 +81,7 @@ async function assemble(
     events: registry.dispatch,
     checkpointer,
     loop,
+    ...(policy !== undefined && { approvals: { policy } }),
   });
   return assembleAgent({
     ...params,
@@ -222,5 +224,35 @@ describe('native：讀到「這裡沒人可問」的閘門', () => {
     expect(ran).toEqual([]);
     expect(JSON.stringify(result)).toContain('沒有可用的核准管道');
     expect(JSON.stringify(result)).toContain('root 收完');
+  });
+});
+
+describe.each(LOOPS)('%s：答了核准之後再判一次', (loop) => {
+  it('等人期間政策切到 never：答核准也照政策回絕，本體不跑', async () => {
+    const ran: string[] = [];
+    const results: Record<string, string> = {};
+    let policy: 'ask' | 'never' = 'ask';
+    const agent = await assemble(
+      loop,
+      (r) => void r.tools.register(danger(ran)),
+      fakeModel()
+        .respondWithTools([{ name: 'danger', args: { at: 'root' }, id: 'r1' }])
+        .respond(new AIMessage('root 收完')),
+      results,
+      () => policy,
+    );
+    const [id] = interruptIds(await drain(agent.streamEvents(input, options)));
+    expect(id).toBeDefined();
+
+    policy = 'never';
+    const done = await drain(
+      agent.streamEvents(
+        new Command({ resume: { [id!]: { decisions: [{ type: 'approve' }] } } }),
+        options,
+      ),
+    );
+    expect(ran).toEqual([]);
+    expect(results['r1']).toContain('核准政策是不問（never）');
+    expect(JSON.stringify(done)).toContain('root 收完');
   });
 });
