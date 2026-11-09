@@ -38,9 +38,10 @@ export interface HumanInput {
    * 照樣交出中斷。
    * @param waiting - 要等的那件事。
    * @returns 它的值。
-   * @throws `waiting` 拒絕的那個錯。都在 `idle`、沒有一顆在問人時，以判成的那個錯拒絕。收回時先讓它跟著別顆的拒絕落定，下一個
-   *   `setImmediate` 還沒落定的以 {@link HumanInputWithdrawn} 拒絕；收回之後再等也當場拒絕。這一批中止時（同 {@link HumanInput.ask}）
-   *   以中止的原因拒絕，之後再等也是。
+   * @throws `waiting` 拒絕的那個錯。都在 `idle`、沒有一顆在問人時，run 以判成的錯失敗，這裡以 {@link HumanInputWithdrawn} 拒絕。
+   *   收回時先讓它跟著別顆的拒絕落定，下一個 `setImmediate` 還沒落定的以 {@link HumanInputWithdrawn} 拒絕；收回之後再等也當場拒絕。
+   *   以 {@link HumanInputWithdrawn} 拒絕時要原樣往外拋，不要接住，理由同 {@link HumanInput.ask}。這一批中止時（同
+   *   {@link HumanInput.ask}）以中止的原因拒絕，之後再等也是。
    */
   idle<T>(waiting: Promise<T>): Promise<T>;
   /**
@@ -133,9 +134,10 @@ function isHumanInput(value: unknown): value is HumanInput {
 }
 
 /**
- * 還沒答就被收回、或那顆呼叫已經收完：{@link HumanInput.ask}、{@link HumanInput.idle} 以它拒絕。是 `GraphInterrupt`，所以閘門、圍堵、屏障都當成控制流往外拋，不記
- * `tool/result`。不套寫入靠的是 native 的 `#toolStep` 看到收回過了就丟掉這一步。日誌與對話由收回那一側寫：停止時是
- * `apps/harness` 的 pump 的 `#withdraw`；收線（`close()`）兩樣都不寫。
+ * 還沒答就被收回（含判成卡死）、或那顆呼叫已經收完：{@link HumanInput.ask}、{@link HumanInput.idle} 以它拒絕。是 `GraphInterrupt`，所以閘門、圍堵、屏障都當成控制流往外拋，不記
+ * `tool/result`。native 的 `#toolStep` 在收回那一刻套 root 那一步已收完的寫入；沒收完的，以及前景子代理那一層的，丟掉。日誌與對話
+ * 由收回那一側寫：停止時是 `apps/harness` 的 pump 的 `#withdraw`，判成卡死時是 pump 的 `#closeUnansweredCalls`；收線（`close()`）
+ * 兩樣都不寫。
  */
 export class HumanInputWithdrawn extends GraphInterrupt {
   constructor() {
