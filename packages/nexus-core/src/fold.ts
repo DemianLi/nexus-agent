@@ -111,6 +111,7 @@ import {
 import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
+import { createSubagentMaxTurnsMiddleware } from './subagent-max-turns.js';
 import { createTurnStoppingMiddleware } from './turn-stopping.js';
 import { createPreStepAdapterMiddleware } from './pre-step-adapter.js';
 import { createToolNameRestoreMiddleware } from './tool-name-restore.js';
@@ -846,10 +847,12 @@ export function foldRegistry(
       make((spec) =>
         spec.maxTurns === undefined
           ? undefined
-          : (modelCallLimitMiddleware({
-              runLimit: spec.maxTurns,
-              exitBehavior: 'end',
-            }) as unknown as AgentMiddleware),
+          : options.loop === 'native'
+            ? createSubagentMaxTurnsMiddleware(spec.maxTurns)
+            : (modelCallLimitMiddleware({
+                runLimit: spec.maxTurns,
+                exitBehavior: 'end',
+              }) as unknown as AgentMiddleware),
       ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆

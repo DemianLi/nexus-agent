@@ -43,8 +43,8 @@ export const KNOWN_DIFFERENCE_KINDS = {
     card: 2359,
     reason:
       '背景子代理的第一顆工具呼叫與 root 的下一顆工具呼叫，兩個 loop 的先後不同：讓出事件迴圈的時點不一樣。' +
-      '這一條斷言各自的結果，不斷言跨 agent 的先後；背景與前景子代理共用一份腳本的（skip），前景子代理先叫到模型，' +
-      '拿走背景那位的第一步，懸到逾時。',
+      '這一條斷言各自的結果，不斷言跨 agent 的先後；背景與前景子代理共用一份 worker 腳本的（fails），前景子代理先叫到模型，' +
+      '拿到背景那位的 `hold`，懸到逾時。',
   },
   langgraphInternals: {
     card: 2363,
@@ -150,7 +150,7 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/background-delegation.test.ts',
     test: 'list_agents（#837） > 沒派過：回 (no subagents)；派了一個還在跑：running；跑完：inactive；一次性的不列',
     kind: 'crossAgentOrder',
-    run: 'skip',
+    run: 'fails',
   },
   {
     file: 'src/background-delegation.test.ts',
