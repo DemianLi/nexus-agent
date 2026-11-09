@@ -120,6 +120,7 @@ interface Options {
   readonly flipTo?: SandboxModeController;
   /** 子代理寫話給主對話的出口（#849）。不給就是沒有出口。 */
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
+  readonly maxTurns?: number;
 }
 
 async function assemble(options: Options) {
@@ -134,6 +135,7 @@ async function assemble(options: Options) {
           description: '幹活的。',
           systemPrompt: '你是 worker，只做交代給你的事。',
           model: workerModel as never,
+          ...(options.maxTurns !== undefined && { maxTurns: options.maxTurns }),
         });
         // 子代理拿得到的小工具：`look` 什麼都不做；`flip` 在子代理那一輪裡切 root 的沙箱模式（同 `subagent-sandbox.test.ts`）。
         registry.tools.register(
@@ -1262,5 +1264,67 @@ describe('背景路徑上的 #326：沙箱快照', () => {
     } finally {
       await run.close();
     }
+  });
+});
+
+/** 背景那一輪的日誌投影：每則 AI 訊息的文字或叫的工具、每則工具結果，與 `turn/` 事件。 */
+const backgroundTrace = (log: SessionLog): readonly string[] =>
+  log.events.flatMap((event): string[] => {
+    if (event.type.startsWith('turn/')) return [event.type];
+    const data = event.data as {
+      message?: { data?: { content?: unknown; tool_calls?: { name: string }[] } };
+    };
+    if (event.type === 'assistant/message') {
+      const calls = data.message?.data?.tool_calls ?? [];
+      if (calls.length > 0) return [`ai→${calls.map((c) => c.name).join(',')}`];
+      const content = data.message?.data?.content;
+      const text = Array.isArray(content)
+        ? (content as { text?: string }[]).map((part) => part.text ?? '').join('')
+        : String(content);
+      return [`ai:${text}`];
+    }
+    if (event.type === 'tool/result') return [`tool:${String(data.message?.data?.content)}`];
+    return [];
+  });
+
+describe('背景子代理的 maxTurns', () => {
+  // native 下背景子代理（仍是 LangGraph 的圖）也折進 native 那一格；兩種 vitest 設定斷言同一組字面值。撞上限時合成的那則不寫日誌。
+  async function delegateWithCap(maxTurns: number, workerTurns: readonly ScriptedTurn[]) {
+    const run = await assemble({
+      rootTurns: [delegate(true), { content: '根收尾' }],
+      workerTurns,
+      background: {},
+      maxTurns,
+    });
+    try {
+      const result = await run.say();
+      await until(() => run.backgroundLogs().length === 1);
+      const [log] = run.backgroundLogs();
+      await run.backgroundDone(log!);
+      return {
+        calls: run.workerModel.prompts.length,
+        root: toolTexts(result.messages).map((text) => text.replace(/bg-[0-9a-f]{12}/, 'bg-<id>')),
+        trace: backgroundTrace(log!),
+      };
+    } finally {
+      await run.close();
+    }
+  }
+
+  it('沒撞上限：正常收尾，最後一則是子代理自己的回覆', async () => {
+    expect(await delegateWithCap(3, [call('look', {}), { content: '背景做完' }])).toEqual({
+      calls: 2,
+      root: ['子代理已在背景啟動，編號：bg-<id>（worker）。'],
+      trace: ['turn/start', 'ai→look', 'tool:看過了', 'ai:背景做完', 'turn/end'],
+    });
+  });
+
+  it('撞上限：叫滿兩次就收尾，第三次沒有發出去', async () => {
+    const turns = [call('look', {}), call('look', {}), call('look', {}), { content: '不該到這裡' }];
+    expect(await delegateWithCap(2, turns)).toEqual({
+      calls: 2,
+      root: ['子代理已在背景啟動，編號：bg-<id>（worker）。'],
+      trace: ['turn/start', 'ai→look', 'tool:看過了', 'ai→look', 'tool:看過了', 'turn/end'],
+    });
   });
 });
