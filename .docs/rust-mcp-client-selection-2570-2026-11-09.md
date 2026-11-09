@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | K：宿主裡接受 tokio，但只限 MCP 那條執行緒 | **是** | §五、§六 |
 | L：拿掉「Streamable HTTP 回 404／405 退回舊式 SSE」，當成宣告的退步 | **是**（照 dsh） | §四之一、§六 |
-| J：沒宣告 `sandbox` 的 stdio 伺服器不經常駐 spawner，宿主照今天的做法起單次模式 `--guard`／`--exec` | **是**；這是改 D248 B 的落點 | §三之五、§六 |
+| J：沒宣告 `sandbox` 的 stdio 伺服器不經常駐 spawner，宿主照今天的做法起單次模式 `--guard`／`--exec`（`--guard` 包不了的照今天直接起） | **是**；這是改 D248 B 的落點 | §三之五、§六 |
 
 跟選型無關、但不管選哪條都要做的：宿主要加完整的 JSON 實作（今天的 `json.rs` 不收小數，§三之三），宿主的執行檔要跟 spawner 分開，不讓 spawner 的相依跟著變多（§三之四）。
 
@@ -27,7 +27,7 @@
 | 今天的行為 | 出處 | 搬家後 |
 | --- | --- | --- |
 | 握手、版本協商 `auto`（先試新協定、再試舊協定）；SSE 走 `legacy` | `packages/nexus-plugin-mcp/src/connection.ts:269`、`:231` | 宿主 |
-| 兩代協定：新協定 `2026-07-28`（SDK 叫 `modern`）與舊協定到 `2025-11-25`。TS SDK `2.3.1` 兩代都支援 | `connection.ts:277`、`tool-call.ts:72`；`@modelcontextprotocol/core@2.3.1` 的 `SUPPORTED_PROTOCOL_VERSIONS` 列到 `2025-11-25`，dist 另有 258 處 `2026-07-28` | 宿主 |
+| 兩代協定：新協定 `2026-07-28`（SDK 叫 `modern`）與舊協定到 `2025-11-25`。TS SDK `2.3.1` 兩代都支援 | `connection.ts:277`、`tool-call.ts:72`；`@modelcontextprotocol/core@2.3.1` 的 `SUPPORTED_PROTOCOL_VERSIONS` 列到 `2025-11-25`，dist 另有 144 處 `2026-07-28`（不含 sourcemap） | 宿主 |
 | `tools/list` 分頁走完、同一個 cursor 再出現就停、空名字略過 | `connection.ts:140-160` | 宿主 |
 | `tools/call`：帶逾時（預設 60 秒）與取消訊號；取消時 SDK 送 `notifications/cancelled` | `tool-call.ts:96-105`；`index.ts:52-53` | 宿主（取消由橋的 `Cancel` 框觸發） |
 | 新協定的反問：`_meta` 宣告 client 能力 `elicitation: {form, url}`、`allowInputRequired`，下一輪帶 `inputResponses` 與 `requestState` | `tool-call.ts:78-80`、`:103`、`:188-217` | 宿主送一輪、把 `input_required` 原樣回；下一輪由對話行程帶 `inputResponses` 再發 |
@@ -39,7 +39,7 @@
 | server 指引：`initialize` 回的 `instructions`，超過位元組上限就拋 | `connection.ts:63`、`:375-385` | 宿主 |
 | `onclose` 判斷一代斷線、交監督者重連 | `connection.ts:421-438` | 宿主 |
 
-今天**沒有用**的：prompts、sampling、roots、progress 通知、資源訂閱（`resources/subscribe`）。client 握手時不宣告任何能力（`connection.ts:269` 只給 `versionNegotiation`），所以舊協定的 server 不會發 `elicitation/create` 過來；新協定的反問也只收 `elicitation/create`，sampling、roots 一律拒（`tool-call.ts:224-228`）。查法：對 `packages/nexus-plugin-mcp/src` 非測試檔 grep `prompts|getPrompt|listPrompts|createMessage|sampling|roots|progress|subscribeResource|setRequestHandler|setNotificationHandler`，只命中 `connection.ts:282` 的 `promptsListChanged: false` 與 `tool-call.ts:225` 的註解。插件以外沒有別的地方 import `@modelcontextprotocol/client`（全 repo 非測試、非 fixture 的 `.ts` 只有 `connection.ts`、`hub.ts`、`index.ts`、`tool-call.ts`）。
+今天**沒有用**的：prompts、sampling、roots、progress 通知、資源訂閱（`resources/subscribe`）。client 握手時不宣告任何能力（`connection.ts:269` 只給 `versionNegotiation`），所以舊協定的 server 不會發 `elicitation/create` 過來；新協定的反問也只收 `elicitation/create`，sampling、roots 一律拒（`tool-call.ts:224-228`）。查法：對 `packages/nexus-plugin-mcp/src` 非測試檔 grep `prompts|getPrompt|listPrompts|createMessage|sampling|roots|progress|subscribeResource|setRequestHandler|setNotificationHandler`，只命中 `connection.ts:282` 的 `promptsListChanged: false` 與 `tool-call.ts:225` 的註解。插件以外沒有別的地方 import `@modelcontextprotocol/client`（全 repo 非測試、非 fixture 的 `.ts` 只有 `connection.ts`、`index.ts`、`tool-call.ts`；`hub.ts` 只在註解提到它）。
 
 ### 留在對話行程：crate 不必管
 
@@ -60,7 +60,7 @@
 - 池：鍵是整份設定加 elicitation 旗標、舊的一份留到行程結束、非建立者最多等 5 秒（`pool.ts:1-35`、`:49`）。
 - 監督者：500 ms 起加倍、上限 30 秒、同一次中斷最多 10 次（`supervisor.ts:3-8`）。
 - stdio 子行程的環境：清洗過的父環境疊設定的 `env`，憑證引用在建連線那一刻代入（`connection.ts:187-189`；`credentials.ts`）。
-- 沙箱與守護包裝（`index.ts:410-437`）：見 §三之五。
+- 沙箱與守護包裝（`index.ts:410-440`）：見 §三之五。
 
 ## 二、dsh 怎麼做（`8bd0733`）
 
@@ -101,10 +101,10 @@ dsh 這樣做的理由：整棵樹在同一個 Node 行程，官方 SDK 就在�
 
 ### 三之五、#1946 的「要套沙箱」宣告欄位
 
-欄位在 `mcpStdioConnectionSchema` 的 `sandbox`（`packages/nexus-plugin-mcp/src/index.ts:116-128`）：鍵存在就套，`{}` 也算；`readable`、`writable` 另外列；沙箱不可用時不連線。今天的做法是 `wrapStdio`（`index.ts:410-437`）把 command 與 args 換成包過的，再交給 SDK 的 `StdioClientTransport` 起：
+欄位在 `mcpStdioConnectionSchema` 的 `sandbox`（`packages/nexus-plugin-mcp/src/index.ts:116-128`）：鍵存在就套，`{}` 也算；`readable`、`writable` 另外列；沙箱不可用時不連線。今天的做法是 `wrapStdio`（`index.ts:410-440`）把 command 與 args 換成包過的，再交給 SDK 的 `StdioClientTransport` 起：
 
 - 宣告了 `sandbox` 的，換成 spawner 的**單次模式** `--exec`：上 Landlock 與 seccomp 再 exec（`apps/harness/src/mcp-sandbox.ts:1-3`、`:96`；`native/sandbox-spawner/src/main.rs:746`、`:786`）。
-- 沒宣告的，換成單次模式 `--guard`：**不上沙箱、不裝 seccomp**，只設 PDEATHSIG 讓它跟著呼叫端走（`mcp-sandbox.ts:173-183`；`main.rs:808-812`）。
+- 沒宣告的，換成單次模式 `--guard`：**不上沙箱、不裝 seccomp**，只設 PDEATHSIG 讓它跟著呼叫端走（`mcp-sandbox.ts:173-183`；`main.rs:808-812`）。只有 Linux、找得到 spawner、command 是 ELF 或 `#!` 三件事都成立才包；任一不成立就原樣交給 SDK 直接起（`mcp-sandbox.ts:171`、`:178-180`；`index.ts:426`）。
 
 **今天的 MCP 不走常駐 spawner。** 這跟設計文件 §六 的 (a) 有一個衝突：常駐 spawner 在啟動時裝一次 seccomp，之後 fork 的子行程全部繼承，`AF_INET` 一律擋掉（`main.rs:18-20`；`protocol.rs:13-17` 的 `FullAccess` 也是「seccomp 照樣繼承（網路照擋）」）。所以**沒宣告 `sandbox` 的 stdio 伺服器經常駐 spawner 起，就連不到網路**。本產品的內部資料全走 MCP（#949），stdio 伺服器去連內網 API 是常態，這是行為退步。寫成 §六 是非題 J。
 
@@ -179,7 +179,7 @@ dsh 這樣做的理由：整棵樹在同一個 Node 行程，官方 SDK 就在�
 | 標準 | (A) rmcp＋專屬執行緒 | (B) 自己寫 | (C) turbomcp 4 alpha |
 | --- | --- | --- | --- |
 | 正確性 | 官方 SDK，兩代協定、協商、`listen`、`input_required` 都有；跟 TS 那份同一個組織維護 | 全部自己對規格；協定 7 月才大改，之後還會改 | 能力同 (A)，alpha |
-| 失敗與恢復 | MCP 執行緒 panic 等於宿主死（`panic = "abort"`，`kernel/mod.rs:30`），跟內核插件 panic 一樣；卡住的連線卡在 MCP 執行緒，不卡內核 | 一條連線的狀態機出錯，影響的就是內核本身 | 同 (A) |
+| 失敗與恢復 | release 建置是 `panic = "abort"`，MCP 執行緒 panic 等於宿主死（`kernel/mod.rs:30`；`native/sandbox-spawner/Cargo.toml:12-14`），跟內核插件 panic 一樣；卡住的連線卡在 MCP 執行緒，不卡內核 | 一條連線的狀態機出錯，影響的就是內核本身 | 同 (A) |
 | 效能 | 多一條執行緒、一次 channel 來回；MCP 呼叫本來就是毫秒到秒級 | 沒有 runtime | 同 (A) |
 | 維護 | 跟著官方升版；`rmcp` 10 月起發了四版，要釘版本、定期升 | 規格每改一次都要自己改；HTTP、TLS 也要自己維護 | 跟著 alpha 的 API 改 |
 | 相依 | 多 tokio、reqwest（含 hyper、TLS）等，數量沒量（§八） | 只多 serde、serde_json 與一個 TLS 實作 | 跟 (A) 同一個量級 |
@@ -190,7 +190,7 @@ dsh 這樣做的理由：整棵樹在同一個 Node 行程，官方 SDK 就在�
 
 - **正確性的差距最大。** 兩代協定加自動協商，是今天行為裡的必需品（§一），也是自己寫最容易漏的地方；rmcp 跟 nexus 今天用的 TS SDK 同一個組織出、同一套語意（`Auto` 對 `auto`、`call_tool_once` 對 `allowInputRequired` 的一輪）。這也是「比不出高下時照 dsh」最近的對應：dsh 用官方 SDK（§二）。
 - **tokio 被關在一條執行緒裡。** #2569 選單執行緒輪詢，理由是「一支插件出錯不會拖住宿主」（`.docs/rust-kernel-2569-2026-11-09.md:101`）。MCP 執行緒卡住時內核照跑，這個性質留得住；內核也不必改成 async。
-- **代價寫清楚**：相依多很多、宿主不再是單一執行緒、MCP 執行緒 panic 一樣帶走宿主。前兩項用「宿主跟 spawner 分開出貨」（§三之四）圈住，第三項跟內核插件 panic 是同一條規則。
+- **代價寫清楚**：相依多很多、宿主不再是單一執行緒、MCP 執行緒 panic 一樣帶走宿主。第一項用「宿主跟 spawner 分開出貨」（§三之四）圈住；第二項靠 tokio 只活在 MCP 那條執行緒、內核照舊單執行緒輪詢圈住（上一點）；第三項跟內核插件 panic 是同一條規則。
 
 (B) 只有在「宿主不准有 tokio」是硬限制時才值得，那時的工作量主要在 HTTP 那一半。(C) 留作備案：rmcp 哪天停在舊版或改授權，換它的成本最低，因為形狀一樣。
 
@@ -200,7 +200,7 @@ dsh 這樣做的理由：整棵樹在同一個 Node 行程，官方 SDK 就在�
 
 | # | 題目 | 推薦 | 理由 |
 | --- | --- | --- | --- |
-| J | 沒宣告 `sandbox` 的 stdio 伺服器，宿主照今天的做法起單次模式 `--guard`，宣告了的起 `--exec`；不經宿主的常駐 spawner？ | **是** | 常駐 spawner 的子行程繼承 seccomp，連不到網路（§三之五）；單次模式的 seccomp 是 exec 前才在子行程裝，宿主自己不帶 filter，設計文件 §六「宿主不能當 spawner」的理由不受影響。代價：宿主要 fork/exec，PDEATHSIG 綁的是宿主，宿主一死 MCP 伺服器跟著死，跟 survival 文件 §三（`:88`）一致。答否的話，常駐 spawner 要多一種不裝 seccomp 的起法，等於拆掉它的前提 |
+| J | 沒宣告 `sandbox` 的 stdio 伺服器，宿主照今天的做法起單次模式 `--guard`（包不了的照今天直接起），宣告了的起 `--exec`；不經宿主的常駐 spawner？ | **是** | 常駐 spawner 的子行程繼承 seccomp，連不到網路（§三之五）；單次模式的 seccomp 是 exec 前才在子行程裝，宿主自己不帶 filter，設計文件 §六「宿主不能當 spawner」的理由不受影響。代價：宿主要 fork/exec，PDEATHSIG 綁的是宿主，宿主一死 MCP 伺服器跟著死，跟 survival 文件 §三（`.docs/rust-host-survival-2568-2026-11-08.md:80`、`:88`）一致。答否的話，常駐 spawner 要多一種不裝 seccomp 的起法，等於拆掉它的前提 |
 | K | 宿主裡接受 tokio，限 MCP 那一條執行緒，內核照舊單執行緒輪詢？ | **是** | §五 |
 | L | 拿掉「Streamable HTTP 回 404／405 退回舊式 SSE」，寫成宣告的退步？ | **是** | rmcp 沒有舊式 SSE 的 client 傳輸（§四之一）；規格已標 Deprecated；dsh 也只有 stdio 與 Streamable HTTP（§二）。答否的話，要自己實作 rmcp 的 `Transport` trait 補一個 SSE client |
 
