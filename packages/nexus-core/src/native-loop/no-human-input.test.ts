@@ -2,7 +2,7 @@
  * 每一顆工具呼叫上放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 帶 thread 的 `streamEvents` 放等人
  * 服務，其餘（`invoke`、子代理那一層）放「這裡沒人可問」（`NO_HUMAN_INPUT`）；`langgraph` 一律不放。讀到標記的閘門走沒有核准管道
  * 那一格，不問人、不跑工具本體。人答了之後再判一次：等人期間政策切到 `never`，答核准也照政策回絕、本體不跑，兩個 loop 結局一樣；
- * native 只在人核准之後補判：人按拒絕就照人的拒絕，listener 翻成 allow 或政策切到 `never` 都一樣（langgraph 那邊見 #2613）。
+ * native 只在人核准之後補判：人按拒絕就照人的拒絕，listener 翻成 allow 或政策切到 `never` 都一樣（langgraph 接回時整段重跑：listener 翻成 allow 會放行，見 #2613；政策切到 `never` 時回政策那一格的碼）。
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
