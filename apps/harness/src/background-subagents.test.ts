@@ -20,6 +20,7 @@ import { LLM_FAILURE_FALLBACK_MESSAGE, dropToolCalls } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
+  RUN_STOP_CONFIG_KEY,
   SessionRegistry,
   STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
@@ -123,6 +124,8 @@ describe('載體本身（假 agent）', () => {
       [TURN_CANCEL_CONFIG_KEY]: expect.any(AbortSignal),
       // 這一輪自己的插話收件匣（#858），不是 root 的。
       [STEP_INBOX_CONFIG_KEY]: { claim: expect.any(Function), finish: expect.any(Function) },
+      // 這一輪撞上 `maxTurns` 時 native agent 叫它；langgraph 不讀。
+      [RUN_STOP_CONFIG_KEY]: expect.any(Function),
     });
     await host.close();
   });
