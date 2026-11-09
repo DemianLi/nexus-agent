@@ -407,6 +407,21 @@ describe('同意之後的待關', () => {
     expect(modes(log)).toEqual([false]);
   });
 
+  it('那一步已經中止：待關不交，留到下一步', async () => {
+    const { registry, log, modelStep } = await approved();
+    const aborted = new AbortController();
+    aborted.abort();
+    await registry.dispatch.waterfall(
+      'agent/pre-step',
+      { threadId: 'plan', step: 2, signal: aborted.signal },
+      async () => ({ kind: 'continue' }),
+    );
+    expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('plan', 'model_request:b')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
+  });
+
   it('同意之後、下一步之前打 /plan：待關被丟掉，模式留著，下一步照樣有指引', async () => {
     const { registry, log, modelStep } = await approved();
 

@@ -270,7 +270,8 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 - **工具接縫 2.11.0：`ToolThread.on` 多收 `'agent/pre-step'`**（`@nexus/tools`，#2358）。用的宣告 `^2.11.0`；宣告 `^2.10.0` 以前的不受影響。
   - **listener 拿到什麼**：`{ threadId, step, signal }`（`ToolPreStep`）。`threadId` 是這次呼叫的 thread id，認不出是 `undefined`；`step` 在 `native` 下從 `1` 數，
     `langgraph` 下一律是 `0`，不要拿它數步數或判是不是同一步；`signal` 是這一步的中止訊號。
-  - **改不了這一步**：回傳值不看，listener 做完才往內交；`reject` 不開放給插件。
+  - **只叫會走下去的步**：宿主的監聽者先定這一步，回 `reject`、或這一步的 `signal` 已經中止，就不叫插件的 listener。叫了的話，listener 做完才叫模型。
+  - **改不了這一步**：回傳值不看；`reject` 不開放給插件。
   - **拋錯**：同 `tools/execute`，原樣往外拋，這一步拋錯，這一輪以那個錯收尾。
   - **只有 root 會派**：子代理的步驟不派。要只管自己那份狀態的，仍照 `threadId` 自己認（計劃模式認 root 日誌的 `sessionId`）；同一步可能被叫不只一次（`langgraph` 下重試與 `afterAgent` 跳回模型的那一次也派），listener 要冪等。
   - 消費者是計劃模式：`exit_plan_mode` 同意之後排的待關，在下一步開頭交出。

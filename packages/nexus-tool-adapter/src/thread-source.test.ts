@@ -219,7 +219,7 @@ describe("ToolThread.on('agent/pre-step')（2.11.0）", () => {
   const PAYLOAD = { threadId: 't-1', step: 3, signal: SIGNAL };
   const CONTINUE = { kind: 'continue' } as const;
 
-  it('拿到 thread、步數、中止訊號；等它做完才往內交；排在前後兩列之間', async () => {
+  it('拿到 thread、步數、中止訊號；內側定了這一步才叫它，等它做完才往外交', async () => {
     const order: string[] = [];
     let seen: unknown;
     const { registry } = await loadPlugins([
@@ -243,7 +243,7 @@ describe("ToolThread.on('agent/pre-step')（2.11.0）", () => {
       order.push('inner');
       return CONTINUE;
     });
-    expect(order).toEqual(['a', 'b', 'c', 'inner']);
+    expect(order).toEqual(['a', 'c', 'inner', 'b']);
     expect(decision).toEqual(CONTINUE);
     expect(seen).toEqual(PAYLOAD);
     expect((seen as { signal: AbortSignal }).signal).toBe(SIGNAL);
@@ -264,7 +264,7 @@ describe("ToolThread.on('agent/pre-step')（2.11.0）", () => {
     expect(decision).toEqual(CONTINUE);
   });
 
-  it('拋錯同 tools/execute：原樣往外拋，不往內交', async () => {
+  it('拋錯同 tools/execute：原樣往外拋，這一步拋錯', async () => {
     const boom = new Error('pre-step 壞了');
     const { registry } = await loadPlugins([
       viaThread('b', (thread) => {
@@ -280,7 +280,46 @@ describe("ToolThread.on('agent/pre-step')（2.11.0）", () => {
         return CONTINUE;
       }),
     ).rejects.toBe(boom);
-    expect(inner).toBe(0);
+    expect(inner).toBe(1);
+  });
+
+  it('內側回 reject：不叫它，原樣交出 reject', async () => {
+    let calls = 0;
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        thread.on?.('agent/pre-step', () => {
+          calls += 1;
+        });
+      }),
+    ]);
+    const reject = { kind: 'reject', reason: '擋' } as const;
+    const decision = await registry.dispatch.waterfall(
+      'agent/pre-step',
+      PAYLOAD,
+      async () => reject,
+    );
+    expect(decision).toBe(reject);
+    expect(calls).toBe(0);
+  });
+
+  it('這一步已經中止：不叫它，交出內側的決定', async () => {
+    let calls = 0;
+    const { registry } = await loadPlugins([
+      viaThread('b', (thread) => {
+        thread.on?.('agent/pre-step', () => {
+          calls += 1;
+        });
+      }),
+    ]);
+    const aborted = new AbortController();
+    aborted.abort();
+    const decision = await registry.dispatch.waterfall(
+      'agent/pre-step',
+      { ...PAYLOAD, signal: aborted.signal },
+      async () => CONTINUE,
+    );
+    expect(decision).toEqual(CONTINUE);
+    expect(calls).toBe(0);
   });
 
   it('撤得掉：撤了之後不再被叫', async () => {
