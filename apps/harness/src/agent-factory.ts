@@ -1084,6 +1084,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
         // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
         delegation: createSubagentDelegationMiddleware(),
+        ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。

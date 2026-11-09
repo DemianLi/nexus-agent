@@ -40,8 +40,15 @@ import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
-import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembly.js';
+import {
+  type AgentLoopKind,
+  mergeMiddlewareStack,
+  nativeSystemPrompt,
+  subagentDefaultMiddleware,
+} from './agent-assembly.js';
 import type { AgentCheckpointer } from './base-types.js';
+import type { EventDispatcher } from './events.js';
+import { createNativeAgent } from './native-loop/agent.js';
 import type { FoldedAgentParams } from './fold.js';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
@@ -88,6 +95,13 @@ export interface SubagentGraphOptions {
    * `createSubagentDelegationMiddleware()`（預設那句：需要核准的操作會自動被拒）。**省略＝規格自己的那顆**。
    */
   readonly delegation?: AgentMiddleware;
+  /**
+   * 用哪一個 agent loop 跑這張圖，同組裝點的 `loop`。省略＝`langgraph`。`native` 下建的是 native agent：state 按 `thread_id` 留在
+   * 那個實例的記憶體裡，{@link checkpointer} 不用；下一輪看得到上一輪，要同一個實例（呼叫端按子代理快取編好的圖）。
+   */
+  readonly loop?: AgentLoopKind;
+  /** `native` 下派 `llm/stream` 與 `agent/request-error`，同組裝點的 `events`。`langgraph` 下不用。 */
+  readonly events?: EventDispatcher;
 }
 
 /**
@@ -160,11 +174,7 @@ export function compileSubagentGraph(
     createStepInboxMiddleware('background'),
   ];
 
-  return createAgent({
-    model: model as never,
-    systemPrompt: declarative.systemPrompt,
-    tools: tools as never,
-    middleware: mergeMiddlewareByName(
+  const middleware = mergeMiddlewareByName(
       defaults,
       // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
       // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
@@ -182,7 +192,26 @@ export function compileSubagentGraph(
                 ? options.delegation
                 : each,
         ),
-    ),
+  );
+  if (options.loop === 'native') {
+    // 呼叫端拿到的型別同 langgraph 那一支：host 只叫兩者都有的成員（`streamEvents`、`updateState`、`withConfig`）。
+    return createNativeAgent({
+      model,
+      name: declarative.name,
+      ...(declarative.systemPrompt !== undefined && {
+        systemPrompt: nativeSystemPrompt(declarative.name, declarative.systemPrompt),
+      }),
+      tools,
+      middleware,
+      ...(options.events !== undefined && { events: options.events }),
+      background: true,
+    }) as unknown as SubagentGraph;
+  }
+  return createAgent({
+    model: model as never,
+    systemPrompt: declarative.systemPrompt,
+    tools: tools as never,
+    middleware,
     name: declarative.name,
     checkpointer: options.checkpointer,
   });

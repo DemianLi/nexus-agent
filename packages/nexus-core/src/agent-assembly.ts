@@ -312,7 +312,7 @@ export function subagentDefaultMiddleware(
 }
 
 /** native 的系統提示詞只收字串；規格帶 `SystemMessage`（`SubAgent` 的型別允許）就當場拋，不靜靜丟掉。 */
-function nativeSystemPrompt(name: string, prompt: string | object): string {
+export function nativeSystemPrompt(name: string, prompt: string | object): string {
   if (typeof prompt !== 'string') {
     throw new Error(`子代理 "${name}" 的 systemPrompt 不是字串，native agent loop 不收`);
   }
