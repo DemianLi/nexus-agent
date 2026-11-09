@@ -1553,6 +1553,76 @@ fn a_host_with_the_wrong_version_stops_everything_with_3() {
     }
 }
 
+/// 設定錯每次重起都一樣：真的宿主讀到壞掉的 `--plugins` 回 4，監督行程不重起、不算失敗，整台以 5 停機。
+#[test]
+fn a_host_with_a_broken_plugin_list_stops_everything_with_5_without_restarting_it() {
+    let list = temp_dir("plugins").join("host-plugins.json");
+    std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
+    let mut h = Harness::start(Options {
+        host: Some((PathBuf::from(HOST), vec!["--plugins".to_string(), list.display().to_string()])),
+        extra: vec!["--host-start-failures", "3"],
+        front_hello: None,
+        ..Options::default()
+    });
+    assert_eq!(h.wait_exit().code(), Some(5));
+    let hosts = host_lines(&h);
+    assert_eq!(hosts.len(), 1, "只起過一次：{hosts:?}");
+    assert!(hosts[0].contains("\"exit_code\":4") && hosts[0].contains("宿主設定壞了：") && hosts[0].contains("沒有叫 沒有這支 的插件"), "{hosts:?}");
+    let stderr = supervisor_stderr(&h);
+    assert!(stderr.contains("宿主設定壞了") && stderr.contains("沒有叫 沒有這支 的插件"), "{stderr}");
+}
+
+/// 起一台帶 `--plugins` 的真宿主，先用好的清單讓它 `ready`、起一條對話連上它，再把清單換成壞的、殺掉宿主。
+fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf, PathBuf, i32) {
+    let list = temp_dir("plugins").join("host-plugins.json");
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let mut h = Harness::start(Options {
+        host: Some((PathBuf::from(HOST), vec!["--plugins".to_string(), list.display().to_string()])),
+        extra: vec!["--host-start-failures", start_failures],
+        ..Options::default()
+    });
+    let a = h.up("a,host-hello");
+    assert!(wait_until(|| log(&a).contains(&"host hello".to_string())), "{:?}", raw_log(&a));
+    let a_pid = logged_pid(&a, "pid");
+    let host = running_host(&h).expect("宿主在跑");
+    std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
+    kill(host, libc::SIGKILL);
+    (h, list, a, a_pid)
+}
+
+/// 宿主 `ready` 過之後清單才壞：照退避重起，每次失敗稽核都寫設定壞了與原文，對話行程照跑、整台不停；改好清單，下一次重起就接上。
+#[test]
+fn a_list_that_breaks_after_ready_restarts_the_host_and_conversations_keep_running() {
+    let (mut h, list, _a, a_pid) = break_the_list_after_ready("100");
+    let broken = |h: &Harness| host_lines(h).into_iter().filter(|l| l.contains("宿主設定壞了：") && l.contains("沒有叫 沒有這支 的插件")).count();
+    assert!(wait_until(|| broken(&h) >= 2), "{:?}", host_lines(&h));
+    let hosts = host_lines(&h);
+    assert!(hosts[0].contains("\"ready\":true") && !hosts[0].contains("宿主設定壞了"), "被殺的那一個：{hosts:?}");
+    assert!(hosts[1..].iter().all(|l| l.contains("\"exit_code\":4") && l.contains("\"ready\":false")), "{hosts:?}");
+    assert!(h.child.try_wait().unwrap().is_none(), "ready 過之後設定壞了不停機");
+    assert!(!gone(a_pid), "宿主不在時對話行程照跑");
+    assert!(supervisor_stderr(&h).contains("照退避重起"), "{}", supervisor_stderr(&h));
+
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let b = h.up("b,host-retry:15000");
+    assert!(wait_until(|| log(&b).contains(&"host hello".to_string())), "{:?}", raw_log(&b));
+    assert!(h.child.try_wait().unwrap().is_none());
+}
+
+/// ready 過之後重起時一直設定壞了：不算進連續失敗的次數，超過 `--host-start-failures` 也不停機，對話照常跑；改好清單，宿主又 ready。
+#[test]
+fn a_list_that_stays_broken_after_ready_never_counts_toward_the_failure_limit() {
+    let (mut h, list, _a, a_pid) = break_the_list_after_ready("2");
+    let broken = |h: &Harness| host_lines(h).into_iter().filter(|l| l.contains("宿主設定壞了：")).count();
+    assert!(wait_until(|| broken(&h) >= 3), "{:?}", host_lines(&h));
+    assert!(h.child.try_wait().unwrap().is_none(), "設定壞了不算失敗，到不了上限：{}", supervisor_stderr(&h));
+    assert!(!gone(a_pid), "宿主不在時對話行程照跑");
+    std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
+    let b = h.up("b,host-retry:15000");
+    assert!(wait_until(|| log(&b).contains(&"host hello".to_string())), "{:?}", raw_log(&b));
+    assert!(h.child.try_wait().unwrap().is_none());
+}
+
 /// `ready` 之後死了只退避重起，不算進整台退出的計數（上限 1 也不會停機）；新的宿主拿到整張表，之後的身分照常增減。
 #[test]
 fn a_host_that_dies_after_ready_restarts_with_the_whole_table_and_never_stops_everything() {

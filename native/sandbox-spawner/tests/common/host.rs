@@ -16,6 +16,10 @@ pub const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
 /// [`HostProc::grant`] 送的序號。
 pub const GRANTED: u32 = 1;
 
+fn stderr_path(socket: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.stderr", socket.display()))
+}
+
 pub fn example(name: &str) -> PathBuf {
     Path::new(HOST).parent().unwrap().join("examples").join(name)
 }
@@ -51,6 +55,31 @@ impl HostProc {
         let mut host = HostProc::spawn_with(socket, command);
         host.handshake();
         host
+    }
+
+    /// 帶 `--plugins <plugins>` 起宿主、還沒握手；stderr 寫到 `<socket>.stderr`，用 [`HostProc::stderr`] 讀。
+    pub fn spawn_with_plugins(socket: &Path, plugins: &Path) -> HostProc {
+        let mut command = Command::new(HOST);
+        command.arg("--plugins").arg(plugins).stderr(std::fs::File::create(stderr_path(socket)).unwrap());
+        HostProc::spawn_with(socket, command)
+    }
+
+    /// 同 [`HostProc::spawn_with_plugins`]，握手、等到 `ready`。
+    pub fn start_with_plugins(socket: &Path, plugins: &Path) -> HostProc {
+        let mut host = HostProc::spawn_with_plugins(socket, plugins);
+        host.handshake();
+        host
+    }
+
+    /// 等宿主的 `hello`、回它監督行程的 `hello`，不等 `ready`。
+    pub fn hello_only(&mut self) {
+        assert_eq!(self.report(), Some(HostReport::Hello { version: PROTOCOL_VERSION }));
+        self.command(&HostCommand::Hello { version: PROTOCOL_VERSION });
+    }
+
+    /// [`HostProc::spawn_with_plugins`] 起的宿主到目前為止寫的 stderr。
+    pub fn stderr(&self) -> String {
+        std::fs::read_to_string(stderr_path(&self.socket)).unwrap_or_default()
     }
 
     fn spawn_with(socket: &Path, mut command: Command) -> HostProc {

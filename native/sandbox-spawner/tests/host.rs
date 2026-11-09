@@ -620,3 +620,81 @@ fn a_client_that_never_says_hello_is_dropped() {
     assert_eq!(stream.read(&mut buf).unwrap(), 0, "超過 HELLO_TIMEOUT 要被斷");
     assert_nothing_reported_before_a_bad_frame(&socket, &mut host, 0);
 }
+
+/// `--plugins` 的清單（`src/host/plugins.rs`）。`test-echo` 只在 `test-hooks` 的建置裡有。
+mod plugins {
+    use super::*;
+    use nexus_sandbox_spawner::host::EXIT_CONFIG;
+
+    fn host_with(tag: &str, list: Option<&str>) -> (PathBuf, PathBuf) {
+        let dir = temp_dir(tag);
+        let plugins = dir.join("host-plugins.json");
+        if let Some(list) = list {
+            std::fs::write(&plugins, list).unwrap();
+        }
+        (dir.join("host.sock"), plugins)
+    }
+
+    /// 宿主換完 `hello` 就以設定壞了結束：不送 `ready`、不綁 socket。回它的 stderr。
+    fn refused(socket: &Path, plugins: &Path) -> String {
+        let mut host = HostProc::spawn_with_plugins(socket, plugins);
+        host.hello_only();
+        assert_eq!(host.wait().code(), Some(EXIT_CONFIG));
+        let Some(HostReport::ConfigBroken { reason }) = host.report() else { panic!("要 config-broken") };
+        assert_eq!(host.report(), None, "設定壞了不送 ready");
+        assert!(!socket.exists());
+        let stderr = host.stderr();
+        let reason = String::from_utf8(reason).expect("config-broken 的原因是 UTF-8");
+        assert!(stderr.contains(&reason), "config-broken 帶的是 log 那句：{reason}\n{stderr}");
+        stderr
+    }
+
+    #[test]
+    fn a_listed_plugin_is_mounted_before_ready() {
+        let (socket, plugins) = host_with("plugins-ok", Some(r#"[{"name":"test-echo","config":{"greeting":"早"}}]"#));
+        let host = HostProc::start_with_plugins(&socket, &plugins);
+        let stderr = host.stderr();
+        assert!(stderr.contains("test-echo apply：早"), "{stderr}");
+        assert!(stderr.contains("插件 test-echo：Loading → Active"), "{stderr}");
+    }
+
+    #[test]
+    fn a_missing_list_is_an_empty_tree() {
+        let (socket, plugins) = host_with("plugins-missing", None);
+        let host = HostProc::start_with_plugins(&socket, &plugins);
+        let stderr = host.stderr();
+        assert!(stderr.contains("不存在，不掛插件"), "{stderr}");
+        assert!(!stderr.contains("test-echo"), "{stderr}");
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_read_stops_the_host() {
+        let (socket, plugins) = host_with("plugins-unreadable", None);
+        std::fs::create_dir(&plugins).unwrap();
+        let stderr = refused(&socket, &plugins);
+        assert!(stderr.contains("插件清單壞了") && stderr.contains("讀不了"), "{stderr}");
+    }
+
+    #[test]
+    fn a_malformed_list_stops_the_host() {
+        let (socket, plugins) = host_with("plugins-bad", Some(r#"[{"name":"test-echo","confg":{}}]"#));
+        let stderr = refused(&socket, &plugins);
+        assert!(stderr.contains("插件清單壞了") && stderr.contains("confg"), "{stderr}");
+    }
+
+    #[test]
+    fn intercept_stops_the_host_and_points_to_its_card() {
+        let (socket, plugins) = host_with("plugins-intercept", Some(r#"[{"name":"test-echo","intercept":{}}]"#));
+        let stderr = refused(&socket, &plugins);
+        assert!(stderr.contains("intercept") && stderr.contains("/issues/2596"), "{stderr}");
+    }
+
+    #[test]
+    fn a_config_the_plugin_refuses_leaves_the_host_up_without_it() {
+        let (socket, plugins) = host_with("plugins-config", Some(r#"[{"name":"test-echo","config":{"greeting":1}}]"#));
+        let host = HostProc::start_with_plugins(&socket, &plugins);
+        let stderr = host.stderr();
+        assert!(stderr.contains("插件 test-echo 沒掛：設定不合法：greeting 必須是字串"), "{stderr}");
+        assert!(!stderr.contains("test-echo apply"), "{stderr}");
+    }
+}

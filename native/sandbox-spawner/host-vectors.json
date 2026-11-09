@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "maxFrame": 262144,
   "maxDepth": 32,
   "bufferedFrames": 2,
