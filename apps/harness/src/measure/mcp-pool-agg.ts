@@ -148,7 +148,7 @@ function summary(xs: readonly number[], digits: number): string {
 const medOf = (xs: readonly number[]): number => (xs.length === 0 ? Number.NaN : median(xs));
 
 /**
- * 整份報告。主統計量只用有效回合；有回合被標記時，每窗另印一段含它們的值。per-thread 的值標成「代用值」。
+ * 整份報告。主統計量只用有效回合；有回合被標記時，每窗的每輪 CPU 總和另印一段含它們的值。per-thread 的每輪 CPU 總和與每條對話行程每輪標成「代用值」。
  *
  * @param groups - 依序的各組 JSON（每組是驅動一次執行）。
  * @returns 報告全文，每行以換行結尾。

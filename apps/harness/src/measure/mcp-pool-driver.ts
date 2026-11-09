@@ -1,6 +1,7 @@
 /**
- * MCP 連線池前後測（#2570 PR-A）的量測驅動。假模型、/proc 量具、patch 與 SSE 收尾判準與 #1947 第 1 步（#1827 D157）
- * 的穩態每輪 CPU 驅動同一套，數字才能對照。分析規則見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`。
+ * MCP 連線池前後測（#2570 PR-A）的量測驅動。以 #1947 第 1 步（#1827 D157）的穩態每輪 CPU 驅動為基底，SSE 收尾判準、
+ * /proc 的讀法與 patch 的模型段沿用，數字才能對照；假模型叫的工具、臂與 CPU 的加總範圍是 MCP 池的情境。
+ * 分析規則見 `.docs/mcp-pool-baseline-2570-2026-11-10.md`。
  *
  * 兩臂同時活著、逐輪交錯（第 k 輪兩臂的先後依 (k + r) 輪轉）：
  *   single      一個 `node lib/serve.js` 放所有 thread，MCP 連線池整個行程一份。
@@ -300,7 +301,7 @@ function readDetail(b: ProcBasic, withMem: boolean): ProcSample {
 
 /**
  * 這一臂的行程樹：根的所有後代，加上 cmdline 帶 `--tag <臂>` 的（被 reparent 的 MCP 子行程只能這樣撈到）。
- * `readErrors` 只算認得出、卻讀不到細節的被量行程，加上連 `stat` 都讀不到（認不出是誰）的；後者在容器裡也必須是 0，否則整回合被標記。
+ * `readErrors` 只算認得出、卻讀不到細節的被量行程，加上連 `stat` 都讀不到（認不出是誰）的；後者在容器裡也必須是 0：量測輪的柵欄上不是 0，彙總就標記整回合。
  */
 function scanArm(root: number, arm: Arm, withMem = false): Scan {
   const all = new Map<number, ProcBasic>();

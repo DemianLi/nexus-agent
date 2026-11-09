@@ -2,7 +2,7 @@
  * {@link ./mcp-pool-agg-1947.ts} 測試用的合成數據：形狀同 #1947 的 `run1.json`、`run2.json`（各 12 回合、四臂、暖機 5 輪＋量測 40 輪），
  * 數值由固定種子產生。`mcp-pool-agg-1947.expected.txt` 是 `agg.py` 吃這份數據印出來的報告，產生方式見測試檔。
  *
- * 刻意埋了：run1 r7 L 第 20 輪 failed、run2 r4 SK 第 9 輪 load 3.25、SF 第 30 輪 llmReq 5、run2 r9 SF 沒逐出，
+ * 刻意埋了：run1 r7 L 第 20 輪 failed、run2 r4 SK 第 9 輪 load 3.25、每回合 SF 第 30 輪 llmReq 5、run2 r9 SF 沒逐出，
  * 讓 `agg.py` 的每種標記與 Counter repr 都印得出來。
  */
 
