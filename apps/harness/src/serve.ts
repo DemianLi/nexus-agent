@@ -1992,6 +1992,7 @@ async function startServer(
         workspaceChanges,
         permissionPresets,
         subagentKinds,
+        delegationTool,
         modelSelection: threadModelSelection,
         goals,
         workspaceRoot,
@@ -2022,6 +2023,8 @@ async function startServer(
         ...(permissionPresets !== undefined && { permissionPresets }),
         // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。嵌入版沒有，缺席。
         ...(subagentKinds !== undefined && { subagentKinds }),
+        // 點名提示照 root 手上的委派工具組字（#2649）。
+        ...(delegationTool !== undefined && { delegationTool }),
         profile,
         ...(owner !== undefined && { owner }),
         // `/名字` 叫得出的技能（#1574 N0929）：來源、backend 與「有沒有磁碟根」都讀這條 thread 的 fs 把手（#1919），在 `skill.list` 打進來的當下。

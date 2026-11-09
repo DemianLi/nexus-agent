@@ -65,7 +65,6 @@ import type {
   FeedbackMethod,
   ModelMethod,
   SubagentKind,
-  SubagentMention,
   WireFeedbackRating,
   DeliverableBytes,
   DeliverableMethod,
@@ -148,6 +147,7 @@ import type {
   SessionRegistry,
   SpillStore,
   StoredSessionHeader,
+  DelegationToolName,
   SubagentMentionRef,
 } from '@nexus/core';
 import {
@@ -310,6 +310,11 @@ export interface ThreadAgent {
    * **缺席就是這個組裝沒有清單**（手搭的組裝）：`subagent.list` 回 `not_supported`，`run.start` 帶 `mention` 也一樣。
    */
   readonly subagentKinds?: readonly SubagentKind[];
+  /**
+   * root 的模型手上的委派工具（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)），選配：`run.start` 收下點名時蓋進
+   * `mention.tool`，提示照它組字。有 {@link subagentKinds} 卻缺席（手搭的組裝）時不蓋，提示照 `task` 的字。
+   */
+  readonly delegationTool?: DelegationToolName;
   /**
    * 這條 thread 照哪一份設定檔組的（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），選配，省略即 `full`。
    * `embed` 的 thread 沒有斜線命令、不能點名子代理；嵌入連線只准碰 `embed` 的 thread。
@@ -1217,6 +1222,8 @@ interface ThreadState {
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
   readonly subagentKinds: readonly SubagentKind[] | undefined;
+  /** 見 {@link ThreadAgent.delegationTool}。 */
+  readonly delegationTool: DelegationToolName | undefined;
   /** 見 {@link ThreadAgent.profile}。 */
   readonly profile: ThreadProfile;
   /** 見 {@link ThreadAgent.owner}。 */
@@ -1444,13 +1451,15 @@ function hostToolsOf(
 
 /**
  * `run.start` 的 `mention`（#328 第 2 項）：省略＝沒點名；有值就要形狀合格、名字在這個組裝的子代理清單上。
- * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。
+ * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。收下的點名蓋上 root 手上的委派工具（#2649），
+ * 日誌記這一格，live 與重放照它組同一段提示。
  */
 function mentionOf(
   id: number,
   kinds: readonly SubagentKind[] | undefined,
+  tool: DelegationToolName | undefined,
   raw: unknown,
-): SubagentMention | undefined | Response {
+): SubagentMentionRef | undefined | Response {
   if (raw === undefined) return undefined;
   if (kinds === undefined) {
     return json(errorResponse(id, 'not_supported', '這個組裝沒有可點名的子代理清單'));
@@ -1474,7 +1483,7 @@ function mentionOf(
       ),
     );
   }
-  return { kind: 'subagent', name: raw.name };
+  return { kind: 'subagent', name: raw.name, ...(tool !== undefined && { tool }) };
 }
 
 /**
@@ -2307,6 +2316,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
           subagentKinds: threadAgent.subagentKinds,
+          delegationTool: threadAgent.delegationTool,
           profile: threadAgent.profile ?? 'full',
           owner: threadAgent.owner,
           hostTools: threadAgent.hostTools,
@@ -3199,6 +3209,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         const mention = mentionOf(
           command.id,
           thread.subagentKinds,
+          thread.delegationTool,
           (params as { mention?: unknown }).mention,
         );
         if (mention instanceof Response) return mention;

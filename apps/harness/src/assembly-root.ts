@@ -90,6 +90,7 @@ import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
+import type { DelegationToolName } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import {
   CONTAINED_FILESYSTEM,
@@ -1086,6 +1087,8 @@ export async function createCliAgent(
    * 嵌入版設定檔（#2367）不掛子代理，缺席。
    */
   subagentKinds: readonly { readonly name: string; readonly description: string }[] | undefined;
+  /** root 的模型手上的委派工具，點名提示照它組字（#2649）。跟 {@link subagentKinds} 同時有、同時缺席。 */
+  delegationTool: DelegationToolName | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -1269,6 +1272,7 @@ export async function createCliAgent(
     spillStore,
     hostTools,
     subagentKinds,
+    delegationTool,
     memorySources,
   } = await createNexusAgent({
     model,
@@ -1484,6 +1488,7 @@ export async function createCliAgent(
       return () => void delegationNarrowedListeners.delete(listener);
     },
     subagentKinds,
+    delegationTool,
     goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,

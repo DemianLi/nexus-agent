@@ -1314,7 +1314,7 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
 export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMiddleware {
   return createApprovalGateMiddleware(
     registry.approvals.listeners(),
-    { kind: 'policy-never' },
+    { kind: 'policy-never', reason: 'background-subagent' },
     registry.sessions,
   );
 }
@@ -1326,7 +1326,7 @@ export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMid
  */
 export function createBackgroundApprovalPolicyPrompt(): AgentMiddleware {
   return createApprovalPolicyPromptMiddleware(
-    { kind: 'policy-never' },
+    { kind: 'policy-never', reason: 'background-subagent' },
     () => DEFAULT_APPROVAL_POLICY,
   );
 }

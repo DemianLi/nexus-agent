@@ -22,6 +22,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_BACKGROUND_SENTENCE,
   APPROVAL_POLICY_NEVER_SENTENCE,
   ApprovalPolicyController,
   createHostServicesPlugin,
@@ -170,7 +171,8 @@ describe('同一個組裝裡句子跟著事實走', () => {
       expect(rootText).toContain(APPROVAL_POLICY_ASK_SENTENCE);
       expect(rootText).not.toContain(APPROVAL_POLICY_NEVER_SENTENCE);
       expect(backgroundText).toContain('你是 worker。');
-      expect(backgroundText).toContain(APPROVAL_POLICY_NEVER_SENTENCE);
+      expect(backgroundText).toContain(APPROVAL_POLICY_BACKGROUND_SENTENCE);
+      expect(backgroundText).not.toContain(APPROVAL_POLICY_NEVER_SENTENCE);
       expect(backgroundText).not.toContain(APPROVAL_POLICY_ASK_SENTENCE);
     } finally {
       await built.dispose();

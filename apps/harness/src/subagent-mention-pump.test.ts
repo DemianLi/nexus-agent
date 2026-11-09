@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import {
@@ -20,6 +21,8 @@ import {
   mentionHintText,
   replayConversation,
   SESSION_LOG_FORMAT_VERSION,
+  SessionLog,
+  toLoggedMessage,
 } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SubagentMentionRef } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
@@ -333,4 +336,46 @@ describe('落盤再讀回', () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+describe('歷史讀回三種提示字（#2649）', () => {
+  /** 2649 以前插話落盤的提示區塊原文（`task` 的字）。 */
+  const LEGACY_HINT =
+    '<system-reminder>使用者點名要你把這句話交給子代理 "reviewer" 處理：' +
+    '請用委派工具（task 的 subagent_type 填這個名字）把這句話派給它，並把它需要的背景一併交代。</system-reminder>';
+
+  it('舊字與 `subagent` 的字都剝得掉，泡泡照樣帶點名', () => {
+    const log = new SessionLog('legacy-hint');
+    log.append('turn/start', { kind: 'message', text: '開始' });
+    log.append('assistant/message', { message: toLoggedMessage(new AIMessage('好')) });
+    for (const [text, hint] of [
+      ['舊的插話', LEGACY_HINT],
+      ['新的插話', mentionHintText({ kind: 'subagent', name: 'writer', tool: 'subagent' })],
+    ] as const) {
+      log.append('user/message', {
+        message: toLoggedMessage(
+          new HumanMessage({ content: [{ type: 'text', text }, { type: 'text', text: hint }] }),
+        ),
+        source: { kind: 'user' },
+      });
+    }
+    log.append('assistant/message', { message: toLoggedMessage(new AIMessage('收到')) });
+    log.append('turn/end', {});
+
+    const frames = historyFrames(log.events, 100_000);
+    expect(
+      humanStarts(frames).map((f) => (f.params.data as { mention?: unknown }).mention),
+    ).toEqual([
+      undefined,
+      { kind: 'subagent', name: 'reviewer' },
+      { kind: 'subagent', name: 'writer' },
+    ]);
+    const historyText = frames
+      .filter((frame) => frame.method === 'messages')
+      .map((frame) => JSON.stringify(frame.params.data))
+      .join('\n');
+    expect(historyText).toContain('舊的插話');
+    expect(historyText).toContain('新的插話');
+    expect(historyText).not.toContain('system-reminder');
+  });
 });

@@ -228,8 +228,12 @@ export const CHANNEL_FOR_THREAD_SERVICE = 'channelForThread';
 export type ApprovalChannel =
   /** 有人在，`ask` 真的會停下來問。 */
   | { readonly kind: 'human' }
-  /** 政策：這個 session 關掉了核准（`approvals.enabled === false`），每次 ask 確定性地拒絕。 */
-  | { readonly kind: 'policy-never' }
+  /**
+   * 政策：這一層沒有人在，每次 ask 確定性地拒絕。`reason` 缺席是這個 session 關掉了核准（`approvals.enabled === false`，CLI／評測）；
+   * `background-subagent` 是背景子代理（#324／#737）：主對話沒有在等它，沒有人可以問（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)）。
+   * 兩者只差給模型的話。
+   */
+  | { readonly kind: 'policy-never'; readonly reason?: 'background-subagent' }
   /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問；或這一層沒人可問（native 的 `NO_HUMAN_INPUT`）。 */
   | { readonly kind: 'no-channel' };
 
@@ -447,8 +451,11 @@ export function approvalGateToolStep(
         return {
           done: denial(
             exec,
-            `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
-              `這不是有人拒絕了它——是沒有人被問到。`,
+            channel.reason === 'background-subagent'
+              ? `${because}，但背景子代理沒有人可以問（主對話沒有在等它），所以沒有執行。` +
+                  `這不是有人拒絕了它——是沒有人被問到。需要的話，在最終結果裡說明，讓委派你的 agent 處理。`
+              : `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
+                  `這不是有人拒絕了它——是沒有人被問到。`,
             approvalDenied(APPROVAL_POLICY_NEVER),
           ),
         };
