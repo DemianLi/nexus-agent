@@ -1,7 +1,7 @@
 //! 真的監督行程、真的子行程（#2340）。只在 Linux 跑。
 //!
-//! 前台與對話行程是 `examples/` 的兩支假程式：`fake_front` 把監督行程的前台通道轉到這裡聽著的 Unix socket，測試就站在前台的位置；
-//! `fake_conversation` 照協定回 `ready`／`bound`，之後照 thread id 做事、把收到的 EOF 與 SIGTERM 記進 `<socket>.log`。
+//! 前台與對話行程是兩支假程式：`fake_front`（`examples/`）把監督行程的前台通道轉到這裡聽著的 Unix socket，測試就站在前台的位置；
+//! `fake_conversation`（`host/examples/`，要用宿主的協定）照協定回 `ready`／`bound`，之後照 thread id 做事、把收到的 EOF 與 SIGTERM 記進 `<socket>.log`。
 //! 等待一律寫成「最多等多久、條件成立就過」，不拿牆鐘時間當斷言。空轉測試例外：固定量兩秒的 CPU tick。
 
 #![cfg(target_os = "linux")]
@@ -2090,7 +2090,7 @@ fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
     );
 }
 
-/// 不是我們起的行程連真的宿主：送 `hello` 報 `unregistered`（`examples/host_client`，它的 `hello` 在宿主那個 package 編）、
+/// 不是我們起的行程連真的宿主：送 `hello` 報 `unregistered`（`host/examples/host_client.rs`：這支測試連不到 `nexus_host` 的編碼器）、
 /// 送壞框報 `violation`（測試行程自己），監督行程兩種都寫稽核、`role` 記 `unknown`，不隔離任何人，也不記那行警告。
 #[test]
 fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {

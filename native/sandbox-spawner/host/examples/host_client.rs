@@ -1,4 +1,4 @@
-//! 宿主整合測試用的假客戶端：每個 `<token>` 依序各連一次 `<socket>`、送 `hello`，回答各印成一行（見 `common/host_client.rs`）。
+//! 整合測試用的假客戶端（宿主、spawner、監督行程三支都用）：每個 `<token>` 依序各連一次 `<socket>`、送 `hello`，回答各印成一行（見 `common/host_client.rs`）。
 //!
 //! ```text
 //! host_client [--wait-stdin] <socket> <token>...

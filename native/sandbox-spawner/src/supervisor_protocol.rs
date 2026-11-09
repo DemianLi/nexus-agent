@@ -22,7 +22,7 @@
 use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
-/// 連宿主 socket 的協定（`nexus-host` 的 `host_protocol`）用同一個版本，`host-vectors.json` 的 `protocolVersion` 也核對。
+/// 宿主 socket 的協定版本另算（`nexus-host` 的 `HOST_PROTOCOL_VERSION`，向量檔 `host-vectors.json`）。
 pub const PROTOCOL_VERSION: u32 = 3;
 
 /// 宿主的 `--plugins` 檔案讀不了或解析不過時的結束碼。監督行程看它判斷插件清單壞了，所以放在兩邊共用的協定這裡。

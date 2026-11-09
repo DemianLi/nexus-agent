@@ -1,7 +1,7 @@
 name: 沙箱 spawner
 description: >-
   編沙箱 spawner（#1946，`native/sandbox-spawner/`，是個 workspace：spawner 與監督行程一個 package，宿主在 `host/` 另一個）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust
-  與這台架構的 musl target，跑 `cargo fmt --check` 與 clippy（警告即錯），編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
+  與這台架構的 musl target，跑 `cargo fmt --all --check` 與 clippy（警告即錯），編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
   給了 `bundle` 就把 release 執行檔與連進去的程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留
   執行權限，tar 保留。
   ci.yml 與 release.yml 共用。
@@ -38,7 +38,7 @@ runs:
       run: |
         uname -r
         cat /sys/kernel/security/lsm
-    # fmt 紅了 clippy 照樣跑：一輪看得到兩邊的輸出。根是 package，cargo 預設只動它，所以每一步都要明寫整個 workspace。
+    # fmt 紅了 clippy 照樣跑：一輪看得到兩邊的輸出。根是 package，cargo 預設只動它，所以編、測、查的每個 cargo 步驟都要涵蓋整個 workspace（fmt 用 `--all`，其餘用 `--workspace`）；bundle 只收 spawner。
     - name: 格式
       shell: bash
       working-directory: native/sandbox-spawner

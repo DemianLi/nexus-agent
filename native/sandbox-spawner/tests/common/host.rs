@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// 宿主的執行檔，在另一個 package，見 [`super::built`]。
+/// 宿主的執行檔，照 [`super::built`] 從 target 目錄找：這份 common 兩個 package 的測試都會編，不能用 `CARGO_BIN_EXE_*`。
 pub fn host() -> PathBuf {
     super::built("nexus-host")
 }

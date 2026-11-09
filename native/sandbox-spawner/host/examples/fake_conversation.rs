@@ -1,4 +1,5 @@
 //! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`，收到 `bind` 回 `bound`，之後照 thread id 做事。
+//! 編在 `nexus-host` 這個 package（要用 `nexus_host::host_protocol`），由 spawner 的 `tests/supervisor.rs` 從共用的 target 目錄起。
 //!
 //! ```text
 //! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--skip-hello] --socket <路徑> [--host-socket <路徑>]

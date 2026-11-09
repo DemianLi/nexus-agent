@@ -669,7 +669,7 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
-        """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，每一步都要涵蓋整個 workspace。"""
+        """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
         native = ROOT / 'native' / 'sandbox-spawner'
         root = (native / 'Cargo.toml').read_text(encoding='utf-8')
         self.assertIn('[workspace]\nmembers = ["host"]\n', root)
