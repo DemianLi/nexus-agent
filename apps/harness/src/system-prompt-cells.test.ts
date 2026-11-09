@@ -1,7 +1,7 @@
 /**
  * `nexusSystemPrompt` 那一格（#2416）：宿主造的那一顆登記了系統提示那一步（`@nexus/core` 的 `createSystemPromptStepMiddleware`），
- * root 由 native 在模型那一串原位直接呼叫那一步、不經那顆的 `wrapModelCall`；前景子代理與背景子代理圖在 native 下仍是 LangGraph
- * （TODO(#2359)），照舊經 `wrapModelCall`。`langgraph` 全部經 `wrapModelCall`。
+ * root 與前景子代理由 native 在模型那一串原位直接呼叫那一步、不經那顆的 `wrapModelCall`；背景子代理圖是 LangGraph，
+ * 照舊經 `wrapModelCall`。`langgraph` 全部經 `wrapModelCall`。
  *
  * 計數掛在登記上，做法同 `plugin-pre-step-cells.test.ts`：宿主經 `@nexus/core` 造的那一顆（core 自己造的不經這個 mock），登記的那一步包一個
  * 計數，交給那顆的 `wrapModelCall` 再包一層 `AsyncLocalStorage`。跑同一輪「root 前景委派 `worker` → 背景委派 `worker` → 回答」，數 root、
@@ -165,17 +165,18 @@ async function run(loop: 'native' | 'langgraph') {
 }
 
 describe.each(['native', 'langgraph'] as const)('%s：nexusSystemPrompt 那一格', (loop) => {
-  it('root 走對的那一條路，前景與背景子代理都經 wrapModelCall', async () => {
+  it('root 與前景子代理走對的那一條路，背景子代理都經 wrapModelCall', async () => {
     const messages = await run(loop);
     expect(messages.at(-1)?.text).toBe('好了');
     const root = loop === 'native' ? { native: 3, hook: 0 } : { native: 0, hook: 3 };
+    const foreground = loop === 'native' ? { native: 1, hook: 0 } : { native: 0, hook: 1 };
     expect({
       root: countsOn(ROOT),
       foreground: countsOn(FOREGROUND),
       background: countsOn(BACKGROUND),
     }).toEqual({
       root: { [SYSTEM_PROMPT_MIDDLEWARE_NAME]: root },
-      foreground: { [SYSTEM_PROMPT_MIDDLEWARE_NAME]: { native: 0, hook: 1 } },
+      foreground: { [SYSTEM_PROMPT_MIDDLEWARE_NAME]: foreground },
       background: { [SYSTEM_PROMPT_MIDDLEWARE_NAME]: { native: 0, hook: 1 } },
     });
   });

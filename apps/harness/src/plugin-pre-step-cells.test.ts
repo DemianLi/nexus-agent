@@ -1,6 +1,6 @@
 /**
  * 四位 pre-step listener 的 `beforeAgent`（#2416）：宿主替每位建的那一顆登記了一步（`@nexus/core` 的 `createHookStepMiddleware`），
- * root 由 native 在原位直接呼叫那一步、不經那顆的 hook；前景子代理與背景子代理圖在 native 下仍是 LangGraph（TODO(#2359)），照舊經 hook。
+ * root 與前景子代理由 native 在原位直接呼叫那一步、不經那顆的 hook；背景子代理圖是 LangGraph，照舊經 hook。
  * `langgraph` 全部經 hook。
  *
  * 計數掛在登記上：宿主經 `@nexus/core` 造的每一顆（core 自己造的不經這個 mock），登記的那一步包一個計數，那顆的 hook 再包一層 `AsyncLocalStorage`，經 hook 進來的叫用落在
@@ -162,7 +162,7 @@ async function run(loop: 'native' | 'langgraph') {
 describe.each(['native', 'langgraph'] as const)(
   '%s：四位 pre-step listener 每次 invoke 只跑一次',
   (loop) => {
-    it('root 走對的那一條路，前景與背景子代理都經 hook', async () => {
+    it('root 與前景子代理走對的那一條路，背景子代理都經 hook', async () => {
       const messages = await run(loop);
       expect(messages.at(-1)?.text).toBe('好了');
       const root = loop === 'native' ? { native: 1, hook: 0 } : { native: 0, hook: 1 };
@@ -177,7 +177,7 @@ describe.each(['native', 'langgraph'] as const)(
       `);
       for (const name of names) {
         expect([name, countsOn(ROOT)[name]]).toEqual([name, root]);
-        expect([name, countsOn(FOREGROUND)[name]]).toEqual([name, { native: 0, hook: 1 }]);
+        expect([name, countsOn(FOREGROUND)[name]]).toEqual([name, root]);
         expect([name, countsOn(BACKGROUND)[name]]).toEqual([name, { native: 0, hook: 1 }]);
       }
     });

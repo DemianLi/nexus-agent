@@ -25,15 +25,8 @@ export const KNOWN_DIFFERENCE_KINDS = {
     reason:
       'native 的 invoke／stream 沒人可問：呼叫上放的是 `NO_HUMAN_INPUT`，核准閘門走沒有管道那一格，工具的 `exec.interrupt` 以 ' +
       '`HumanInputUnavailable` 拒絕，也不收 resume。中斷與接回只走帶 thread 的 streamEvents（serve）。這一條用 invoke 或 stream ' +
-      '斷言中斷、接回或停在核准點。同一組能力走 streamEvents 的涵蓋：`native-loop-assembly.test.ts`、' +
+      '斷言中斷、接回或停在核准點；前景子代理那一層跟 root 同一份 `NO_HUMAN_INPUT`。同一組能力走 streamEvents 的涵蓋：`native-loop-assembly.test.ts`、' +
       '`human-input-producers-wire.test.ts` 與各支 `*-wire.test.ts`。',
-  },
-  subagentHumanInput: {
-    card: 2359,
-    reason:
-      'native 的子代理那一層沒人可問：子代理的呼叫上放的是 `NO_HUMAN_INPUT`，閘門、ask-user、MCP 照沒有管道回絕，' +
-      '前景子代理的委派聲明照沒有管道選句（`packages/nexus-core/src/fold.ts`）。照跑要失敗的（fails）斷言了子代理冒出來的中斷，' +
-      '或有人在時的那一句，或政策 never 的碼（子代理那一層先撞上沒有管道那一格）；照跑會過的（passes）沒斷言到，差在子代理系統訊息裡的那一句委派聲明。',
   },
   rawInterrupt: {
     card: 2608,
@@ -50,8 +43,8 @@ export const KNOWN_DIFFERENCE_KINDS = {
     card: 2359,
     reason:
       '背景子代理的第一顆工具呼叫與 root 的下一顆工具呼叫，兩個 loop 的先後不同：讓出事件迴圈的時點不一樣。' +
-      '這一條斷言各自的結果，不斷言跨 agent 的先後。' +
-      '同一條也有前景子代理委派聲明的差異（subagentHumanInput 那一種），一條只登記一次，歸在這裡。',
+      '這一條斷言各自的結果，不斷言跨 agent 的先後；背景與前景子代理共用一份腳本的（skip），前景子代理先叫到模型，' +
+      '拿走背景那位的第一步，懸到逾時。',
   },
   langgraphInternals: {
     card: 2363,
@@ -157,7 +150,13 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/background-delegation.test.ts',
     test: 'list_agents（#837） > 沒派過：回 (no subagents)；派了一個還在跑：running；跑完：inactive；一次性的不列',
     kind: 'crossAgentOrder',
-    run: 'passes',
+    run: 'skip',
+  },
+  {
+    file: 'src/background-delegation.test.ts',
+    test: '背景路徑上的 #326：沙箱快照 > 子代理要核准的操作：前景改派問人，背景 start 回絕 > 前景改派：root 停在子代理冒出來的核准上，沒有自動拒絕',
+    kind: 'noHumanInput',
+    run: 'fails',
   },
   {
     file: 'src/checkpoint-serde.test.ts',
@@ -276,6 +275,30 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
   {
     file: 'src/interrupt.test.ts',
     test: '閘門本身的邊界 > resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不會殺掉整場 run**',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/interrupt.test.ts',
+    test: 'subagent 裡的閘門 > worker：呼叫 gated 工具 → 中斷冒到 root，工具還沒跑；核准 → 工具真的跑、root 收尾',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/interrupt.test.ts',
+    test: 'subagent 裡的閘門 > worker：拒絕 → 只拒那一次，工具沒跑，子代理收到拒絕、照常收尾，root 的 task 完成',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/interrupt.test.ts',
+    test: 'subagent 裡的閘門 > general-purpose：呼叫 gated 工具 → 中斷冒到 root，工具還沒跑；核准 → 工具真的跑、root 收尾',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/interrupt.test.ts',
+    test: 'subagent 裡的閘門 > general-purpose：拒絕 → 只拒那一次，工具沒跑，子代理收到拒絕、照常收尾，root 的 task 完成',
     kind: 'noHumanInput',
     run: 'fails',
   },
@@ -550,6 +573,24 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
+    file: 'src/subagent-delegation-claim.test.ts',
+    test: '前景子代理的委派聲明跟閘門一致（#2056） > serve 路徑、政策 never：政策拒，聲明講自動拒絕',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/subagent-delegation-claim.test.ts',
+    test: '前景子代理的委派聲明跟閘門一致（#2056） > 反例：serve 路徑、政策 ask：掛核准卡，聲明講等使用者',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/subagent-delegation-claim.test.ts',
+    test: '前景子代理的委派聲明跟閘門一致（#2056） > 同一輪裡切到 never：下一次模型呼叫就換句，閘門也跟著拒',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
     file: 'src/subagent-sandbox.test.ts',
     test: '子代理的沙箱模式 > root 手上一顆沒用掉的 grant：子代理同檔同操作認領不到，root 之後照樣認領得到',
     kind: 'noHumanInput',
@@ -618,6 +659,12 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
   {
     file: 'src/submit-record-on-tree.test.ts',
     test: '三個入口各有一條（拿掉任一入口的接線要紅） > 沒有樹的呼叫端：同一個行程裡兩份無樹組裝（同一個 thread id、各自的工作區）各用各的 backend，互不相見',
+    kind: 'noHumanInput',
+    run: 'fails',
+  },
+  {
+    file: 'src/submit-record-on-tree.test.ts',
+    test: 'E：同一棵樹上多條 thread 同時活著，每一次呼叫靠 thread_id 認出主人 > 第二條 thread 活著時，同步子代理（task）叫的 submit_record 寫進這條 thread 自己的工作區',
     kind: 'noHumanInput',
     run: 'fails',
   },

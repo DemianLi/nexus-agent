@@ -1,6 +1,6 @@
 /**
- * native 的工具鏈（#2416）：登記了工具步驟的那幾格（`tool-call-step.ts` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經
- * 那顆的 `wrapToolCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapToolCall`。這裡在 fold 之後、組裝之前，
+ * native 的工具鏈（#2416）：登記了工具步驟的那幾格（`tool-call-step.ts` 的 `withToolCallStep`），root 與前景子代理都由 native 直接呼叫那一步、不經
+ * 那顆的 `wrapToolCall`。這裡在 fold 之後、組裝之前，
  * 把每顆登記過的 middleware 的那一步與 `wrapToolCall` 各包一個計數，跑一輪「root 叫工具 → 委派子代理、子代理叫工具」，
  * 數每一格對每一次呼叫各被叫了幾次。
  */
@@ -135,13 +135,13 @@ describe('native 的工具鏈：登記了工具步驟的格每次呼叫只跑一
     }
   });
 
-  it('子代理的呼叫：每一格經 wrapToolCall 一次，native 一次都沒有；共用的實例在 root 那邊照樣算數', async () => {
+  it('子代理的呼叫：每一格由 native 直接呼叫那一步一次，wrapToolCall 一次都沒有；共用的實例在 root 那邊照樣算數', async () => {
     const { counts, rootCells, subagentCells } = await run();
     expect(subagentCells.length).toBeGreaterThan(0);
     for (const m of subagentCells) {
       expect([(m as { name: string }).name, count(counts, m, 'sub-alpha')]).toEqual([
         (m as { name: string }).name,
-        { native: 0, wrapToolCall: 1 },
+        { native: 1, wrapToolCall: 0 },
       ]);
     }
     const shared = subagentCells.filter((m) => rootCells.includes(m));

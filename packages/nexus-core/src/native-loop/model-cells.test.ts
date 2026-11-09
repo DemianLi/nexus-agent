@@ -1,6 +1,6 @@
 /**
- * native 的模型那一串（#2416）：登記了工具清單那一步的格（`tool-list-step.ts` 的 `withToolListStep`），root 由 native 直接呼叫那一步、
- * 不經那顆的 `wrapModelCall`；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
+ * native 的模型那一串（#2416）：登記了工具清單那一步的格（`tool-list-step.ts` 的 `withToolListStep`），root 與前景子代理都由 native 直接呼叫那一步、
+ * 不經那顆的 `wrapModelCall`。
  *
  * 基座的檔案工具、子代理兩顆是組裝時才建的，所以計數掛在登記上：每一次登記，那一步與那顆的 `wrapModelCall` 各包一個計數。
  * 跑一輪「root 叫工具 → 委派子代理、子代理叫工具」，數每一格在 root 與子代理的模型呼叫各被叫了幾次。哪一邊照請求的第一則訊息分：
@@ -134,13 +134,13 @@ describe('native 的模型那一串：登記了工具清單那一步的格每次
     }
   });
 
-  it('子代理的兩次模型呼叫：每一格經 wrapModelCall，native 一次都沒有', async () => {
+  it('子代理的兩次模型呼叫：每一格由 native 直接呼叫那一步，wrapModelCall 一次都沒有', async () => {
     await run();
     expect(cellsOn(SUBAGENT).length).toBeGreaterThan(0);
     for (const name of cellsOn(SUBAGENT)) {
       expect([name, counts.get(name)?.get(SUBAGENT)]).toEqual([
         name,
-        { native: 0, wrapModelCall: 2 },
+        { native: 2, wrapModelCall: 0 },
       ]);
     }
   });
