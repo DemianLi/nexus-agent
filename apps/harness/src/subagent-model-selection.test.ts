@@ -562,7 +562,8 @@ describe('產品路徑：subagent 工具帶 model／reasoning_effort', () => {
   it('什麼都沒指定（有政策與沒政策兩種）：meta 逐欄同今天，沒有 model、reasoningEffort', async () => {
     for (const selection of [config(['strong', 'cheap']), undefined]) {
       const run = await assemble({
-        rootTurns: [delegate({}), { content: '根收尾' }],
+        // 沒指定模型的背景子代理跟 root 共用這顆，它也要一輪；跟 root 收尾誰先拿到不定，這裡只看 meta。
+        rootTurns: [delegate({}), { content: '根收尾' }, { content: '好' }],
         selection,
         ...(selection !== undefined && {
           modelFor: () => new ScriptedChatModel({ turns: [{ content: '好' }] }),
