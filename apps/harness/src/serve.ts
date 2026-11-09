@@ -93,6 +93,7 @@ import {
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
+import type { HostBridge } from '@nexus/host-bridge';
 import { assertSameCwd } from './resume-guards.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
@@ -625,6 +626,8 @@ export interface ConversationProcessMode {
   readonly auth: WireAuth;
   readonly boundThread: () => string | undefined;
   readonly onTurn: (threadId: string, phase: 'begin' | 'end') => void;
+  /** 宿主服務的門面（`@nexus/host-bridge`），每條 thread 的組裝都交同一個。省略＝沒有宿主，組裝點交一律回 `host_absent` 的那一個。 */
+  readonly hostBridge?: HostBridge;
 }
 
 /**
@@ -1900,6 +1903,9 @@ async function startServer(
             session: {
               tokenAnchorBook,
               mcpPool,
+              ...(options.conversation?.hostBridge !== undefined && {
+                hostBridge: options.conversation.hostBridge,
+              }),
               onInvariantViolation: (error) => {
                 invariantLogger.error(error.message);
               },

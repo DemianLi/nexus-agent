@@ -6,7 +6,8 @@
  * - 控制面在 stdin／stdout（`conversation-control.ts`）。**stdout 只有框**：serve 的日誌交 stderr，起動期間與之後任何人寫
  *   `process.stdout` 也轉到 stderr，控制面拿的是轉之前那一支。
  * - stdin 讀到 EOF 跟 `SIGTERM` 走同一條收尾、回 0。
- * - 監督行程有起宿主時多帶 `--host-socket <path>`；收到控制通道 `hello` 帶的 token 之後才連宿主（`host-client.ts`）；stdin 讀到 EOF 時關掉，訊號那條不關（連線與計時器都 `unref`，不擋結束）。
+ * - 監督行程有起宿主時多帶 `--host-socket <path>`：組裝之前建好宿主服務的門面交給 serve，收到控制通道 `hello` 帶的 token 之後才連宿主、
+ *   接上門面（`host-client.ts`）；stdin 讀到 EOF 時關掉，訊號那條不關（連線與計時器都 `unref`，不擋結束）。
  *
  * @module
  */
@@ -16,7 +17,7 @@ import { Writable } from 'node:stream';
 import type { HostClient } from '@nexus/host-bridge';
 
 import { ConversationControl } from './conversation-control.js';
-import { connectHost, parseHostSocketArg } from './host-client.js';
+import { connectHost, createConversationHostBridge, parseHostSocketArg } from './host-client.js';
 import { openPeerSocketAuth } from './peer-socket-auth.js';
 import { installServeProcessLifecycle, runServe } from './serve.js';
 
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
     const { socketPath, serveArgv: rest } = parseConversationArgs(process.argv.slice(2));
     const { hostSocket, rest: serveArgv } = parseHostSocketArg(rest);
     const auth = await openPeerSocketAuth(socketPath);
+    const hostBridge = createConversationHostBridge(hostSocket);
     // serve 起好之後才有 handler 可以交給控制面；在那之前來的請求看到的是還沒綁。
     const bound: { control?: ConversationControl } = {};
     const running = await runServe({
@@ -62,6 +64,7 @@ async function main(): Promise<void> {
         auth,
         boundThread: () => bound.control?.boundThread,
         onTurn: (threadId, phase) => bound.control?.turn(threadId, phase),
+        ...(hostBridge !== undefined && { hostBridge: hostBridge.bridge }),
       },
     });
     if (running?.conversationHandler === undefined) {
@@ -83,7 +86,12 @@ async function main(): Promise<void> {
       },
       warn: (message) => console.error(message),
       onHostToken: (token) => {
-        host = connectHost({ hostSocket, token, log: (line) => console.error(line) });
+        host = connectHost({
+          hostSocket,
+          token,
+          log: (line) => console.error(line),
+          bridge: hostBridge,
+        });
       },
     });
     bound.control = control;
