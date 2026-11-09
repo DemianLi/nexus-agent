@@ -686,7 +686,9 @@ export type { HumanInput } from './human-input.js';
 export {
   HUMAN_INPUT_CONFIG_KEY,
   humanInputOf,
+  humanInputUnavailable,
   HumanInputWithdrawn,
+  NO_HUMAN_INPUT,
   isHumanInputWithdrawn,
 } from './human-input.js';
 export type { StepInbox } from './step-inbox.js';

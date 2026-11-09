@@ -6,8 +6,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { isHumanInputWithdrawn } from '../human-input.js';
-import { RunSuspension, type CallSlot } from './suspension.js';
+import { isHumanInputWithdrawn, waitClockOf, HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
+import { RunSuspension, type CallPermit, type CallSlot } from './suspension.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -16,6 +16,21 @@ function started(suspension: RunSuspension, callId: string): CallSlot {
   const slot = suspension.slot(callId, [`tools:${callId}`]);
   slot.enter();
   return slot;
+}
+
+/** 假的併發名額：記下還與取，`acquire` 要測試自己放行。 */
+function fakePermit(): CallPermit & { readonly log: string[]; grant(granted: boolean): void } {
+  const log: string[] = [];
+  const grants: ((granted: boolean) => void)[] = [];
+  return {
+    log,
+    release: () => log.push('release'),
+    acquire: () => {
+      log.push('acquire');
+      return new Promise((grant) => grants.push(grant));
+    },
+    grant: (granted) => grants.shift()?.(granted),
+  };
 }
 
 describe('RunSuspension', () => {
@@ -218,5 +233,104 @@ describe('RunSuspension', () => {
     expect(suspension.pending.map((pending) => pending.id)).toEqual([ask!.id]);
     suspension.resume({ [ask!.id]: 'A' });
     expect(await asked).toBe('A');
+  });
+
+  describe('併發名額', () => {
+    it('ask 上等時還回名額；答了先取回名額，拿到才交回答覆；時鐘只在取回之後才停', async () => {
+      const suspension = new RunSuspension(
+        () => {},
+        () => {},
+      );
+      const permit = fakePermit();
+      const slot = suspension.slot('c1', ['tools:c1'], undefined, permit);
+      slot.enter();
+      const clock = waitClockOf({ configurable: { [HUMAN_INPUT_CONFIG_KEY]: slot.service } })!;
+      const states: boolean[] = [];
+      clock.onWaiting((waiting) => states.push(waiting));
+      let answer: unknown = 'pending';
+      void slot.service.ask('q').then((value) => (answer = value));
+      await tick();
+      expect(permit.log).toEqual(['release']);
+      expect(states).toEqual([true]);
+
+      suspension.resume({ [suspension.pending[0]!.id]: 'A' });
+      await tick();
+      expect(permit.log).toEqual(['release', 'acquire']);
+      expect(answer).toBe('pending');
+      expect(states).toEqual([true]);
+
+      permit.grant(true);
+      await tick();
+      expect(answer).toBe('A');
+      expect(states).toEqual([true, false]);
+    });
+
+    it('排隊取回名額的那顆算在跑：同一批另一顆還在問，也不停在等待點；它收完才停', async () => {
+      const onPark = vi.fn();
+      const suspension = new RunSuspension(onPark, () => {});
+      const permit = fakePermit();
+      const first = suspension.slot('c1', ['tools:c1'], undefined, permit);
+      first.enter();
+      void first.service.ask('q1');
+      void started(suspension, 'c2').service.ask('q2');
+      await tick();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(1);
+
+      const [one] = suspension.pending;
+      suspension.resume({ [one!.id]: 'A' });
+      await tick();
+      await tick();
+      expect(permit.log).toEqual(['release', 'acquire']);
+      expect(onPark).toHaveBeenCalledTimes(1);
+
+      permit.grant(true);
+      await tick();
+      first.exit();
+      await tick();
+      expect(onPark).toHaveBeenCalledTimes(2);
+      expect(onPark.mock.calls[1]?.[0]).toMatchObject([{ callId: 'c2', value: 'q2' }]);
+    });
+
+    it('取回時這一批不再發名額（拿到 false）：照樣交回答覆，不懸著', async () => {
+      const suspension = new RunSuspension(
+        () => {},
+        () => {},
+      );
+      const permit = fakePermit();
+      const slot = suspension.slot('c1', ['tools:c1'], undefined, permit);
+      slot.enter();
+      const asked = slot.service.ask('q');
+      await tick();
+      suspension.resume({ [suspension.pending[0]!.id]: 'A' });
+      await tick();
+      permit.grant(false);
+
+      expect(await asked).toBe('A');
+    });
+
+    it('等的期間被拒絕（收回、這一批中止）：不去取名額，直接以那個錯交回', async () => {
+      const suspension = new RunSuspension(
+        () => {},
+        () => {},
+      );
+      const step = new AbortController();
+      const withdrawn = fakePermit();
+      const halted = fakePermit();
+      const first = suspension.slot('c1', ['tools:c1'], step.signal, halted);
+      first.enter();
+      const aborted = first.service.ask('q1').catch((error: unknown) => error);
+      step.abort();
+      expect(await aborted).toBe(step.signal.reason);
+      expect(halted.log).toEqual(['release']);
+
+      const second = suspension.slot('c2', ['tools:c2'], undefined, withdrawn);
+      second.enter();
+      const asked = second.service.ask('q2').catch((error: unknown) => error);
+      await tick();
+      suspension.withdraw();
+      expect(isHumanInputWithdrawn(await asked)).toBe(true);
+      expect(withdrawn.log).toEqual(['release']);
+    });
   });
 });

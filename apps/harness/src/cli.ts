@@ -995,7 +995,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const contained =
     resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd()) !== undefined;
   const root = createCordisRoot({
-    channel: entryApprovalChannel(HEADLESS_APPROVALS, invocation.agentLoop),
+    channel: entryApprovalChannel(HEADLESS_APPROVALS),
     ...(contained && { contained }),
   });
   try {

@@ -18,7 +18,12 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { HumanInputWithdrawn, type HumanInput } from '../human-input.js';
+import {
+  HumanInputWithdrawn,
+  WAIT_CLOCK,
+  type HumanInput,
+  type WaitClock,
+} from '../human-input.js';
 
 /** 一顆還沒答的提問。 */
 export interface PendingAsk {
@@ -26,12 +31,22 @@ export interface PendingAsk {
   readonly id: string;
   readonly value: unknown;
   readonly callId: string;
+  /** 那顆呼叫的位子是第幾個發的；同一批照呼叫的先後發，接回時照它交答覆。 */
+  readonly order: number;
   /** 那顆呼叫的 `tools:<id>` 命名空間。 */
   readonly namespace: readonly string[];
   readonly resolve: (answer: unknown) => void;
   /** 接回時叫：那顆呼叫的 {@link HumanInput.onResumed}。 */
   readonly resumed: () => void;
   readonly reject: (reason: unknown) => void;
+}
+
+/** 一顆呼叫手上的併發名額（`agent.ts` 的 `runBounded`）。 */
+export interface CallPermit {
+  /** 還名額；手上沒有就不做事。 */
+  release(): void;
+  /** 取回名額，照呼叫的先後排。回 `false` 是這一批不再發名額（有一顆失敗了），照樣往下走。 */
+  acquire(): Promise<boolean>;
 }
 
 /** 一顆呼叫在 {@link RunSuspension} 裡的位子。 */
@@ -51,6 +66,7 @@ export interface CallSlot {
 export class RunSuspension {
   #active = 0;
   readonly #asks = new Map<string, PendingAsk>();
+  #slots = 0;
   #scheduled = false;
   #parked = false;
   #withdrawn = false;
@@ -82,8 +98,16 @@ export class RunSuspension {
    * @param namespace - 那顆呼叫的命名空間。
    * @param halt - 這一批的中止訊號（一顆失敗時舉起，含呼叫端中止讓節點被拒絕）。舉起之後這顆還沒落定的 `ask`、`idle` 以它的 `reason` 拒絕，之後的也當場
    *   拒絕：這一批不會再停在等待點，不論那顆呼叫自己理不理這個訊號。
+   * @param permit - 這顆呼叫的併發名額。在 `ask`、`idle` 上等的期間還回去，讓排在上限後面的呼叫起跑，同 LangGraph 那顆中斷了就收掉、
+   *   讓出名額；等完先照呼叫的先後取回，拿到才把答覆交回本體。收回、收完或這一批中止了就不取，直接交回。
    */
-  slot(callId: string, namespace: readonly string[], halt?: AbortSignal): CallSlot {
+  slot(
+    callId: string,
+    namespace: readonly string[],
+    halt?: AbortSignal,
+    permit?: CallPermit,
+  ): CallSlot {
+    const order = this.#slots++;
     // 這顆呼叫自己還沒落定的 `ask`／`idle`。收完時還會有：呼叫的外層先落定、本體還在等（例：`tool()` 接的中止讓呼叫先拒絕）。
     const asks = new Set<string>();
     const idlers = new Set<(reason: unknown) => void>();
@@ -91,6 +115,35 @@ export class RunSuspension {
     const listeners = new Set<() => void>();
     const resumed = (): void => {
       for (const listener of [...listeners]) listener();
+    };
+    // 同一顆呼叫問好幾次（例：MCP 一輪一輪反問），前一次答完才沿用第一次的 id，同 LangGraph 一顆 task 裡的每一個 `interrupt()` 都是同一個 id。
+    let askId: string | undefined;
+    // 等人的時間（含等完排隊取回名額），給 {@link WaitClock}。
+    let waits = 0;
+    let waitingSince = 0;
+    let waitedMs = 0;
+    const clockListeners = new Set<(waiting: boolean) => void>();
+    const beginWait = (): void => {
+      waits += 1;
+      if (waits > 1) return;
+      waitingSince = Date.now();
+      permit?.release();
+      for (const listener of [...clockListeners]) listener(true);
+    };
+    const endWait = (): void => {
+      waits -= 1;
+      if (waits > 0) return;
+      waitedMs += Date.now() - waitingSince;
+      for (const listener of [...clockListeners]) listener(false);
+    };
+    const clock: WaitClock = {
+      get waitedMs() {
+        return waitedMs + (waits > 0 ? Date.now() - waitingSince : 0);
+      },
+      onWaiting: (listener) => {
+        clockListeners.add(listener);
+        return () => clockListeners.delete(listener);
+      },
     };
     // 不再收新的等待時拒絕的原因：收回、收完是 `HumanInputWithdrawn`；這一批中止了是中止的原因，同 `tool()` 替呼叫接的中止。
     const refusal = (): unknown =>
@@ -115,12 +168,31 @@ export class RunSuspension {
       this.#maybePark();
     };
     halt?.addEventListener('abort', onHalt, { once: true });
-    const service: HumanInput = {
+    // 等完：還能往下跑的先排隊取回名額，再交回本體。同一顆還有別的等待沒完的，名額留到最後一個等完才取。
+    const reclaim = async (): Promise<void> => {
+      if (waits === 1 && permit !== undefined && refusal() === undefined) await permit.acquire();
+      endWait();
+    };
+    const handBack = <T>(waited: Promise<T>): Promise<T> =>
+      waited.then(
+        async (value) => {
+          await reclaim();
+          return value;
+        },
+        async (error: unknown) => {
+          await reclaim();
+          throw error;
+        },
+      );
+    const service: HumanInput & { readonly [WAIT_CLOCK]: WaitClock } = {
+      [WAIT_CLOCK]: clock,
       ask: (value) => {
         const refused = refusal();
         if (refused !== undefined) return Promise.reject(refused);
-        const id = randomUUID().replaceAll('-', '');
-        return new Promise((resolve, reject) => {
+        const id =
+          askId !== undefined && !this.#asks.has(askId) ? askId : randomUUID().replaceAll('-', '');
+        askId ??= id;
+        const asked = new Promise((resolve, reject) => {
           const settle =
             <A extends unknown[]>(then: (...args: A) => void) =>
             (...args: A): void => {
@@ -131,6 +203,7 @@ export class RunSuspension {
             id,
             value,
             callId,
+            order,
             namespace,
             resolve: settle(resolve),
             reject: settle(reject),
@@ -138,8 +211,10 @@ export class RunSuspension {
           });
           asks.add(id);
           this.#active -= 1;
+          beginWait();
           this.#maybePark();
         });
+        return handBack(asked);
       },
       idle: <T>(waiting: Promise<T>): Promise<T> => {
         const refused = refusal();
@@ -147,7 +222,7 @@ export class RunSuspension {
           waiting.catch(() => undefined);
           return Promise.reject(refused);
         }
-        return new Promise<T>((resolve, reject) => {
+        const idled = new Promise<T>((resolve, reject) => {
           const drop = (): boolean => {
             if (!this.#idlers.delete(release)) return false;
             idlers.delete(release);
@@ -160,6 +235,7 @@ export class RunSuspension {
           this.#idlers.add(release);
           idlers.add(release);
           this.#active -= 1;
+          beginWait();
           this.#maybePark();
           waiting.then(
             (value) => {
@@ -168,6 +244,7 @@ export class RunSuspension {
             (error: unknown) => release(error),
           );
         });
+        return handBack(idled);
       },
       onResumed: (listener) => {
         listeners.add(listener);
@@ -226,12 +303,15 @@ export class RunSuspension {
       this.#active += 1;
       ask.reject(error);
     }
-    for (const [id, answer] of Object.entries(answers)) {
-      const ask = this.#asks.get(id);
-      if (ask === undefined) continue;
-      this.#asks.delete(id);
+    // 照呼叫的先後交，不照 `answers` 的鍵序：交回之後各自取回名額，名額空著時先叫 `acquire` 的當場拿到、排隊的才照索引
+    // （`agent.ts` 的 `Permits`），所以交的順序決定誰先接著跑。
+    const answered = [...this.#asks.values()]
+      .filter((ask) => Object.hasOwn(answers, ask.id))
+      .sort((a, b) => a.order - b.order);
+    for (const ask of answered) {
+      this.#asks.delete(ask.id);
       this.#active += 1;
-      ask.resolve(answer);
+      ask.resolve(answers[ask.id]);
     }
   }
 

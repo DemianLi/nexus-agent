@@ -83,7 +83,7 @@ import { isGraphBubbleUp } from '@langchain/langgraph';
 import { MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher } from './events.js';
-import { humanInputOf } from './human-input.js';
+import { humanInputOf, waitedSince } from './human-input.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
 import { closer, closerError } from './conversation-replay.js';
@@ -471,6 +471,8 @@ export function createContainmentMiddleware(
     // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
     // 的東西：模型等的就是這一段。
     const startedAt = Date.now();
+    // 停在提問上不從頭重進的那條（`human-input.ts`）不重設 `startedAt`：等人的時間扣掉，同從頭重進時只量到重跑的那一段。
+    const waited = waitedSince({ configurable: request.runtime?.configurable });
     // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
     const raw = rawArgumentsOf(request, sessions);
     // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
@@ -492,7 +494,11 @@ export function createContainmentMiddleware(
         // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
         const message = toolRefusal(
           isToolTimeout(error)
-            ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
+            ? formatToolTimeout(
+                toolName,
+                Date.now() - startedAt - waited(),
+                declaredToolTimeoutMs(request),
+              )
             : formatToolFailure(toolName, error),
           { callId: request.toolCall.id ?? '', name: toolName },
         );

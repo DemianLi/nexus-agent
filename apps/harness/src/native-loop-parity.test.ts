@@ -157,7 +157,7 @@ function logShape(events: readonly SessionEvent[]): string[] {
 }
 
 /**
- * 已知差異（中斷類，TODO(#2358)）：native 沒有存檔點，核准管道是 `no-channel`，前景子代理的委派聲明因此是「會自動被拒絕」
+ * 已知差異（子代理類，TODO(#2359)）：native 的子代理那一層沒人可問，前景子代理的委派聲明因此是「會自動被拒絕」
  * 那一句（`subagent-delegation.ts` 的 `foregroundDelegationContext`）。換回 LangGraph 那一句再比，其餘一個字都不放過。
  */
 function withKnownDifferences(log: string[][]): string[][] {

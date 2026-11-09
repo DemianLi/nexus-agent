@@ -294,13 +294,13 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
     });
   }, 60000);
 
-  it('契約版本：tools 服務 2.9.0（onResult 加 #1469、concludeTurn 加 #1607、#2351 加 NexusTool 後跳 major、#2352 加 deferContext 與 interrupt、#2353 加 concludesTurn（2.2.0）與 rawParameters、timeoutMs、artifact（2.3.0）、#2416 加 onResult 看得到的 signal、blocks、content（2.4.0）、#2533 加 threadSource（2.5.0）與 thread.section（2.6.0）、#2416 定 tools/execute 交回結果的內容形狀（2.6.1）、加 thread.on／join／provide（2.7.0）、#2551 讓 thread.section 的 text 收呼叫者（2.8.0）、#2575 讓工具事件的視圖帶 shape 與 command 的內容（2.9.0））、fs 查找服務 2.2.0（hasWorkspace 加 #1469、行程級 workspaceRoot 加 #1491、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）', async () => {
+  it('契約版本：tools 服務 2.10.0（onResult 加 #1469、concludeTurn 加 #1607、#2351 加 NexusTool 後跳 major、#2352 加 deferContext 與 interrupt、#2353 加 concludesTurn（2.2.0）與 rawParameters、timeoutMs、artifact（2.3.0）、#2416 加 onResult 看得到的 signal、blocks、content（2.4.0）、#2533 加 threadSource（2.5.0）與 thread.section（2.6.0）、#2416 定 tools/execute 交回結果的內容形狀（2.6.1）、加 thread.on／join／provide（2.7.0）、#2551 讓 thread.section 的 text 收呼叫者（2.8.0）、#2575 讓工具事件的視圖帶 shape 與 command 的內容（2.9.0）、#2358 讓 interrupt 多一種寫明的拒絕（2.10.0））、fs 查找服務 2.2.0（hasWorkspace 加 #1469、行程級 workspaceRoot 加 #1491、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     expect((tree.get('tools') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
-      '2.9.0',
+      '2.10.0',
     );
     expect((tree.get('fs') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
       '2.2.0',

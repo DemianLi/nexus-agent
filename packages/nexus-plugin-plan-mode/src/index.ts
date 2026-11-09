@@ -192,7 +192,7 @@ import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
 import type { SessionEvent, SessionLog, SessionLookup, SessionSubject } from '@nexus/session';
 import { SECTION_ORDERS } from '@nexus/system-prompt';
-import { toolsToken } from '@nexus/tools';
+import { isHumanInputUnavailable, toolsToken } from '@nexus/tools';
 import type {
   JsonValue,
   NexusTool,
@@ -499,18 +499,18 @@ const exitPlanModeParameters = z.toJSONSchema(
 /**
  * 造 `exit_plan_mode` 工具（`@nexus/tools` 的 `NexusTool`，#2353）。
  *
- * **先擋、再問、最後才排待關**，順序照 dsh（`packages/plan/plan-mode/src/index.ts:290-340`）：
+ * **先擋、再問、最後才排待關**：
  *
- * 1. 沒接會話日誌 → {@link PLAN_NOT_ATTACHED_TOOL_MESSAGE}（dsh 的「沒有呼叫方 agent」那一格）。
+ * 1. 沒接會話日誌 → {@link PLAN_NOT_ATTACHED_TOOL_MESSAGE}。
  * 2. 不在計劃模式、或不是 root 那一份 → {@link NOT_IN_PLAN_MODE_MESSAGE}。
  * 3. 計劃不是以 `#` 標題開頭 → {@link PLAN_HEADING_REQUIRED_MESSAGE}。
  * 4. 組裝點沒提供答題管道 → {@link PLAN_NO_CHANNEL_MESSAGE}；有、但沒有人可以回答 → {@link PLAN_NO_REVIEWER_MESSAGE}。
  * 5. 問一題，照答案落定（三種結局見檔頭）。
  *
  * 每一條拒絕都是 `ok: false`，不是 reject：有兩條發生在 **resume 之後**，那時拋出去的例外會從 LangGraph 的 stream mux 逸出
- * （`@nexus/plugin-ask-user` 實測過同一件事）。都不帶碼：dsh 在這裡拋的是一般 `Error`。
+ * （`@nexus/plugin-ask-user` 實測過同一件事）。都不帶碼。
  *
- * **`exec.interrupt()` 不能包在 try/catch 裡**：它用拋例外傳播。resume 時整個本體從頭再跑一次、
+ * **`exec.interrupt()` 在 `langgraph` 下用拋例外傳播**，只接住「這裡沒有人可以回答」（#2358，回 {@link PLAN_NO_REVIEWER_MESSAGE}），其餘原樣往外拋。`langgraph` resume 時整個本體從頭再跑一次、
  * `exec.interrupt()` 直接回人的答案，所以前面那幾條檢查會再判一次，結果不變（它們讀的東西在兩輪之間動不了：
  * 停在提問上時斜線命令一律拒收，見 `apps/harness` 的 `wire-handler.ts`）。
  *
@@ -563,8 +563,14 @@ function createExitPlanModeTool(
           },
         ],
       };
-      const reply = (await exec.interrupt(payload as unknown as JsonValue)) as
-        QuestionReply | undefined;
+      let reply: QuestionReply | undefined;
+      try {
+        reply = (await exec.interrupt(payload as unknown as JsonValue)) as
+          QuestionReply | undefined;
+      } catch (error) {
+        if (isHumanInputUnavailable(error)) return refuse(PLAN_NO_REVIEWER_MESSAGE);
+        throw error;
+      }
 
       // 照 dsh `:331-341`：成功結果，並請這一輪在這一批工具之後收（`exec.concludeTurn()`）。**只有走到這一行才標**——
       // 拋錯、被拒絕、參數不對、核准閘門擋下都不會到這裡，那些結局照常回頭叫模型（{@link EXIT_PLAN_MODE_CONCLUDES_TURN}）。

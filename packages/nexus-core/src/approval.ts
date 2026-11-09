@@ -30,11 +30,12 @@ import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { ownerRequestOf } from './tool-call-owner.js';
+import { humanInputOf, humanInputUnavailable } from './human-input.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
 import { createToolCallStepMiddleware } from './tool-call-step.js';
-import type { ToolCallSite, ToolCallStep } from './tool-call-step.js';
+import type { ToolCallResult, ToolCallSite, ToolCallStep } from './tool-call-step.js';
 import {
   APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
@@ -229,7 +230,7 @@ export type ApprovalChannel =
   | { readonly kind: 'human' }
   /** 政策：這個 session 關掉了核准（`approvals.enabled === false`），每次 ask 確定性地拒絕。 */
   | { readonly kind: 'policy-never' }
-  /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問。 */
+  /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問；或這一層沒人可問（native 的 `NO_HUMAN_INPUT`）。 */
   | { readonly kind: 'no-channel' };
 
 /**
@@ -307,8 +308,10 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  * 圍堵（`containment.ts` 的 `createContainmentMiddleware`）：它接住這裡拋的錯、翻成錯誤 ToolMessage 並記 `tool/result`。
  * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *
- * **人那條路不在這裡寫**：閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
- * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。
+ * **人那條路不在這裡寫**：`langgraph` 下閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
+ * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。例外：等人期間政策切到 `never` 時，
+ * 這裡照樣寫一對 `rejected`，pump 那一對照答覆記。native（讀得到等人服務）只在人核准之後這樣寫；`langgraph` 接回時整段重跑，不論人
+ * 答什麼都會寫。
  */
 function auditDecision(
   sessions: ToolEventSessions | undefined,
@@ -353,11 +356,13 @@ function auditDecision(
  * `5badb15`，log-only 審計）：
  *
  * - **人那條路由 pump 寫**（`apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
- *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：閘門在圖內，
+ *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：`langgraph` 下閘門在圖內，
  *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
  *   asked 才配得上 `tool/call`。
  * - **不必問人就確定的由這裡寫**（{@link auditDecision}）：政策關掉 → `rejected`，沒有管道 → `unavailable`，
- *   子代理的閘門管道固定 `policy-never`（#324）所以走前者，寫進子代理自己的日誌。
+ *   背景子代理的閘門管道固定 `policy-never`（#324）走前者、native 前景子代理那一層走後者，寫進子代理自己的日誌。native 人核准之後
+ *   補判、政策已切到 `never` 時也由這裡寫一對 `rejected`，人其實問過了，pump 那一對照答覆記；人拒絕或答覆看不懂時不補判，這裡不寫。
+ *   `langgraph` 接回時整段重跑，政策是 `never` 就寫，不看人答什麼。
  * - **listener 直接回 `deny` 不寫**：沒有問任何人，dsh 也不寫（只有 `ask` 才進核准服務）。
  *
  * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
@@ -375,9 +380,9 @@ function auditDecision(
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
  * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
- * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前問一次**。
+ * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前讀一次；讀得到等人服務時，人核准之後、listener 仍回 ask 就再讀一次**。
  *   `never` 時確定性回絕、不發中斷；省略即 `ask`（手搭的測試組裝）。只在管道是 `human` 時才讀：管道非人
- *   （入口沒有人在、沒有 checkpointer）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
+ *   （入口沒有人在、沒有 checkpointer，或這顆呼叫上是 `NO_HUMAN_INPUT`）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
@@ -394,7 +399,12 @@ export function createApprovalGateMiddleware(
 
 /**
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
- * 要問人時經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡。
+ * 要問人時讀得到等人服務就 await 它；讀不到經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡；
+ * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。讀得到等人服務時，**只在人核准之後**把問人之前的幾格（listener、管道、政策）
+ * 照同一個順序再判一次：listener 回 allow 就直接往內交、不讀政策；改判 deny 或政策切到 `never`，就回那一格的拒絕，否則往內交（管道
+ * 那兩格答覆前後不會變）。人拒絕或答覆看不懂時本來就不跑，不補判，回的是人拒絕或看不懂那一格的碼。`langgraph` 接回時本體整段重跑，
+ * 不論人答什麼都照問人之前的順序再判：listener 回 allow 會直接往內交、蓋過人的拒絕（#2613）；listener 改判 deny 或政策切到 `never`
+ * 回的是那一格的碼，不是人拒絕的碼。兩個 loop 在人拒絕或答覆看不懂時結局不同。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
@@ -414,52 +424,80 @@ export function approvalGateToolStep(
       args: (call.args ?? {}) as Record<string, unknown>,
       callId: call.callId,
     };
-    const decision = await runApprovalGate(listeners, exec);
-    if (decision.kind === 'allow') return next();
-    if (decision.kind === 'deny') {
-      return denial(exec, decision.reason, {
-        name: PRE_EXECUTE_DENIED,
-        code: TOOL_DENIED_BY_LISTENER,
-      });
-    }
+    // 問人之前的幾格。人看卡片的那段時間裡 listener 的判斷或政策（`/permission`）可能已經換了，答覆之後要照同一個順序再判一次：
+    // `langgraph` 接回時本體整段重跑、自然再判（那邊 listener 回 allow 會直接放行，#2613）；讀得到等人服務（native）時由人核准之後
+    // 那一次補上（`afterApproval`）。
+    const beforeAsking = async (
+      afterApproval = false,
+    ): Promise<{ readonly done: ToolCallResult } | { readonly ask: string }> => {
+      const decision = await runApprovalGate(listeners, exec);
+      if (decision.kind === 'allow') return { done: await next() };
+      if (decision.kind === 'deny') {
+        return {
+          done: denial(exec, decision.reason, {
+            name: PRE_EXECUTE_DENIED,
+            code: TOOL_DENIED_BY_LISTENER,
+          }),
+        };
+      }
 
-    const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
-    if (channel.kind === 'policy-never') {
-      auditDecision(sessions, call, exec, because, 'rejected');
-      return denial(
-        exec,
-        `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有人被問到。`,
-        approvalDenied(APPROVAL_POLICY_NEVER),
-      );
-    }
-    if (channel.kind === 'no-channel') {
-      auditDecision(sessions, call, exec, because, 'unavailable');
-      return denial(
-        exec,
-        `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有可用的核准管道。`,
-        approvalDenied(APPROVAL_NO_CHANNEL),
-      );
-    }
+      const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
+      if (channel.kind === 'policy-never') {
+        auditDecision(sessions, call, exec, because, 'rejected');
+        return {
+          done: denial(
+            exec,
+            `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
+              `這不是有人拒絕了它——是沒有人被問到。`,
+            approvalDenied(APPROVAL_POLICY_NEVER),
+          ),
+        };
+      }
+      // native 在讀不到等人服務的呼叫上放「這裡沒人可問」（`human-input.ts`）：組裝的管道是 human，這一顆照樣是沒有管道那一格。
+      if (
+        channel.kind === 'no-channel' ||
+        humanInputUnavailable({ configurable: call.configurable })
+      ) {
+        auditDecision(sessions, call, exec, because, 'unavailable');
+        return {
+          done: denial(
+            exec,
+            `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
+              `這不是有人拒絕了它——是沒有可用的核准管道。`,
+            approvalDenied(APPROVAL_NO_CHANNEL),
+          ),
+        };
+      }
 
-    // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
-    // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
-    // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
-    if (policy() === 'never') {
-      auditDecision(sessions, call, exec, because, 'rejected');
-      return denial(
-        exec,
-        `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有人被問到。`,
-        approvalDenied(APPROVAL_POLICY_NEVER),
-      );
-    }
+      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。政策每次判都現讀：`/permission` 切換之後，
+      // 下一次呼叫與還在等答覆的這一顆都照新的一格。
+      if (policy() === 'never') {
+        auditDecision(sessions, call, exec, because, 'rejected');
+        return {
+          done: denial(
+            exec,
+            // 人核准之後再判（`afterApproval`）時人已經被問過，不能說「沒有人被問到」。
+            !afterApproval
+              ? `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
+                  `這不是有人拒絕了它——是沒有人被問到。`
+              : `${because}，人答了之後，這個 session 的核准政策已切到不問（never），所以沒有執行。`,
+            approvalDenied(APPROVAL_POLICY_NEVER),
+          ),
+        };
+      }
+      return { ask: because };
+    };
+    const before = await beforeAsking();
+    if ('done' in before) return before.done;
+    const because = before.ask;
 
-    // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
-    // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+    // 讀得到等人服務（native）就 await 它；讀不到用 `interrupt()`，它用拋例外傳播，**不能包在 try/catch 裡**
+    // （`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
     const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
-    const answer = (await interrupt({
+    const human = humanInputOf({ configurable: call.configurable });
+    const ask = (value: unknown): Promise<unknown> =>
+      human === undefined ? Promise.resolve(interrupt(value)) : human.ask(value);
+    const answer = (await ask({
       kind: APPROVAL_INTERRUPT_KIND,
       actionRequests: [
         {
@@ -474,7 +512,13 @@ export function approvalGateToolStep(
     })) as { decisions?: { type?: string; message?: string }[] } | undefined;
 
     const verdict = answer?.decisions?.[0];
-    if (verdict?.type === 'approve') return next();
+    if (verdict?.type === 'approve') {
+      // 補判只攔本來會放行的答覆：人拒絕或答覆看不懂本來就不跑。`beforeAsking` 在 listener 回 allow 時會直接執行本體，所以只能在
+      // 這一支呼叫。讀不到等人服務（langgraph）時，接回已經整段重跑過一次，不補判。
+      if (human === undefined) return next();
+      const again = await beforeAsking(true);
+      return 'done' in again ? again.done : next();
+    }
     if (verdict?.type === 'reject') {
       return denial(
         exec,

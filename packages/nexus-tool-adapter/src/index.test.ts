@@ -6,11 +6,14 @@ import {
   callThreadId,
   MESSAGE_SOURCE_KWARG,
   concludeTurn,
+  HUMAN_INPUT_CONFIG_KEY,
+  NO_HUMAN_INPUT,
   toolCallSessionAddress,
   toolErrorOf,
   TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import { createEchoTool } from '@nexus/plugin-echo';
+import { isHumanInputUnavailable } from '@nexus/tools';
 import type { NexusTool, NexusToolResult, ToolExec } from '@nexus/tools';
 import { isCommand } from '@langchain/langgraph';
 import { describe, expect, it, vi } from 'vitest';
@@ -472,7 +475,42 @@ describe('deferContext：結果之後補一則插件來源的人話', () => {
   });
 });
 
-describe('interrupt：LangGraph 的 interrupt()', () => {
+describe('interrupt：讀得到等人服務就問它，否則 LangGraph 的 interrupt()', () => {
+  it('config 上放的是「這裡沒人可問」：以 HumanInputUnavailable 拒絕，不退回 interrupt()', async () => {
+    const execOf = toolExecOf('ask', {
+      configurable: { [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT },
+    });
+    await expect(execOf.interrupt({ q: 1 })).rejects.toSatisfy(isHumanInputUnavailable);
+  });
+
+  it('config 上有等人服務：問它、拿它的答覆，本體不重跑', async () => {
+    const runs: unknown[] = [];
+    const asking: NexusTool = {
+      ...tinyTool({ ok: true, content: '' }),
+      name: 'ask',
+      execute: async (_, exec) => {
+        runs.push('run');
+        return { ok: true, content: String(await exec.interrupt({ q: 1 })) };
+      },
+    };
+    const asked: unknown[] = [];
+    const service = {
+      ask: (value: unknown) => {
+        asked.push(value);
+        return Promise.resolve('A');
+      },
+      idle: <T>(waiting: Promise<T>) => waiting,
+      onResumed: () => () => {},
+    };
+    const message = await toLangChainTool(asking).invoke(call({ message: 'x' }), {
+      configurable: { [HUMAN_INPUT_CONFIG_KEY]: service },
+    });
+
+    expect(asked).toEqual([{ q: 1 }]);
+    expect(runs).toEqual(['run']);
+    expect(JSON.stringify(message)).toContain('"content":"A"');
+  });
+
   it('不在圖裡呼叫就照 LangGraph 拋，不吞掉', async () => {
     const asking: NexusTool = {
       ...tinyTool({ ok: true, content: '' }),

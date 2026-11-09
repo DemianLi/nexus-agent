@@ -17,10 +17,11 @@
  * `Send(model_request)`。
  *
  * 停下來問人：工具呼叫 await 等人服務（`human-input.ts`），同一批都停住時 `streamEvents` 交出中斷、run 留在記憶體裡，用
- * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。核准閘門、`ask_user` 這些
- * 生產者呼叫的是 LangGraph 的 `interrupt()`，native 不接它；核准管道在組裝點判成 `no-channel`，TODO(#2358)。
+ * `Command({ resume })` 接回同一次 run（{@link NativeAgent.streamEvents}）。沒有存檔點，行程重啟就沒了。帶 thread 的 `streamEvents` 之外
+ * （`invoke`／`stream` 帶不帶 thread 都是、沒帶 thread 的 `streamEvents`），與前景子代理那一層，呼叫上放的是 `NO_HUMAN_INPUT`：核准閘門走沒有管道那一格，工具的 `exec.interrupt` 拒絕，都不退回 LangGraph 的 `interrupt()`。
  *
- * 不支援：`interrupt()`、`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）。子代理仍是 LangGraph 子圖，
+ * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
+ * 接不住，TODO(#2608)。子代理仍是 LangGraph 子圖，
  * TODO(#2359)。
  *
  * @module
@@ -38,7 +39,7 @@ import { Command, GraphInterrupt, GraphRecursionError, isCommand } from '@langch
 
 import { TurnBlockedError } from '../archive-gate.js';
 import type { EventDispatcher } from '../events.js';
-import { HUMAN_INPUT_CONFIG_KEY } from '../human-input.js';
+import { HUMAN_INPUT_CONFIG_KEY, NO_HUMAN_INPUT } from '../human-input.js';
 import { TURN_CANCEL_CONFIG_KEY, turnCancelSignalOf } from '../turn-cancel.js';
 import { toolCallStepOf, wrapToolCallWith } from '../tool-call-step.js';
 import { modelCallStepOf, wrapModelCallFromStep } from '../model-call-step.js';
@@ -56,7 +57,7 @@ import { isNativeNoopCell, withNativeNoopCells } from './native-noop-cells.js';
 import { runTool } from './tool-node.js';
 import { NativeStreamHandler, ProtocolEmitter, type NativeProtocolEvent } from './protocol.js';
 import { emptyState, StateChannels, type LoopState } from './state.js';
-import { RunSuspension, type CallSlot, type PendingAsk } from './suspension.js';
+import { RunSuspension, type CallPermit, type CallSlot, type PendingAsk } from './suspension.js';
 
 /** {@link createNativeAgent} 的參數，同 `createAgent` 用得到的那幾格。 */
 export interface NativeAgentParams {
@@ -130,40 +131,102 @@ function recursionError(limit: number): GraphRecursionError {
 }
 
 /**
- * 依上限跑一批工作，**照索引起跑**：前面的先佔名額。屏障（`tool-barrier.ts`）等的是排在前面的呼叫，後面的先佔滿名額會互等。
- * 有一顆拋了就 abort `step`、排著的不再起跑，等跑著的收完再拋第一個錯，同 LangGraph 的 `PregelRunner.tick`。
+ * 一批工具呼叫的併發名額，**照索引發**：排著的裡面索引小的先拿。屏障（`tool-barrier.ts`）等的是排在前面的呼叫，後面的先佔滿名額會互等。
+ * 停在 `ask`、`idle` 上的呼叫把名額還回來，等完再排隊取回（{@link CallPermit}）。
+ */
+class Permits {
+  /** 同時跑的上限；建好工具節點才知道，所以起跑前才設。 */
+  limit = UNBOUNDED;
+  readonly #holders = new Set<number>();
+  #queue: { readonly index: number; readonly grant: (granted: boolean) => void }[] = [];
+  #closed = false;
+
+  /**
+   * @param index - 那顆呼叫在這一批的索引。
+   * @returns 拿到名額是 `true`；這一批已經 {@link Permits.close} 是 `false`。
+   */
+  acquire(index: number): Promise<boolean> {
+    if (this.#closed) return Promise.resolve(false);
+    if (this.#holders.has(index)) return Promise.resolve(true);
+    return new Promise((grant) => {
+      const at = this.#queue.findIndex((waiter) => waiter.index > index);
+      this.#queue.splice(at < 0 ? this.#queue.length : at, 0, { index, grant });
+      this.#drain();
+    });
+  }
+
+  /** @param index - 那顆呼叫的索引；手上沒有名額就不做事。 */
+  release(index: number): void {
+    if (!this.#holders.delete(index)) return;
+    this.#drain();
+  }
+
+  /** 不再發名額：排著的都拿到 `false`。 */
+  close(): void {
+    this.#closed = true;
+    const queue = this.#queue;
+    this.#queue = [];
+    for (const waiter of queue) waiter.grant(false);
+  }
+
+  /**
+   * @param index - 那顆呼叫的索引。
+   * @returns 交給 `RunSuspension.slot` 的名額。
+   */
+  of(index: number): CallPermit {
+    return { release: () => this.release(index), acquire: () => this.acquire(index) };
+  }
+
+  #drain(): void {
+    while (this.#holders.size < this.limit && this.#queue.length > 0) {
+      const waiter = this.#queue.shift()!;
+      this.#holders.add(waiter.index);
+      waiter.grant(true);
+    }
+  }
+}
+
+/**
+ * 依名額跑一批工作，照索引起跑。有一顆拋了就 abort `step`、不再發名額（排著的不起跑），等起跑了的都收完再拋第一個錯，同 LangGraph 的
+ * `PregelRunner.tick`。
  */
 function runBounded(
   jobs: readonly (() => Promise<void>)[],
-  limit: number,
+  permits: Permits,
   step: AbortController,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    let next = 0;
     let running = 0;
+    let left = jobs.length;
     let failure: { readonly reason: unknown } | undefined;
     const settle = (): void => {
       if (running > 0) return;
       if (failure !== undefined) reject(failure.reason);
-      else if (next >= jobs.length) resolve();
+      else if (left === 0) resolve();
     };
-    const start = (): void => {
-      while (failure === undefined && next < jobs.length && running < limit) {
+    jobs.forEach((job, index) => {
+      void permits.acquire(index).then((granted) => {
+        if (!granted) {
+          left -= 1;
+          settle();
+          return;
+        }
         running += 1;
-        jobs[next++]!()
+        job()
           .catch((reason: unknown) => {
             if (failure !== undefined) return;
             failure = { reason };
+            permits.close();
             step.abort();
           })
           .finally(() => {
             running -= 1;
-            start();
+            left -= 1;
+            permits.release(index);
             settle();
           });
-      }
-    };
-    start();
+      });
+    });
     settle();
   });
 }
@@ -970,6 +1033,7 @@ export class NativeAgent {
     suspension: RunSuspension | undefined,
   ): Promise<boolean> {
     const step = new AbortController();
+    const permits = new Permits();
     const slots = new Array<CallSlot | undefined>(calls.length);
     const tasks = calls.map((call, index) =>
       node(
@@ -977,9 +1041,9 @@ export class NativeAgent {
         { ...state, lg_tool_call: call },
         step.signal,
         suspension === undefined
-          ? undefined
+          ? () => ({ [HUMAN_INPUT_CONFIG_KEY]: NO_HUMAN_INPUT })
           : (ns) => {
-              const slot = suspension.slot(call.id ?? '', [ns], step.signal);
+              const slot = suspension.slot(call.id ?? '', [ns], step.signal, permits.of(index));
               slots[index] = slot;
               return { [HUMAN_INPUT_CONFIG_KEY]: slot.service };
             },
@@ -1004,6 +1068,7 @@ export class NativeAgent {
     };
     // 呼叫端已中止就當場拋，不起跑，同 LangGraph `_executeTasksWithRetry` 起跑前那一檢。
     if (caller?.aborted === true) throw new Error('Abort');
+    permits.limit = Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED);
     const batch = runBounded(
       calls.map((call, index) => async () => {
         slots[index]?.enter();
@@ -1015,7 +1080,7 @@ export class NativeAgent {
           slots[index]?.exit();
         }
       }),
-      Math.max(1, tasks[0]?.config.maxConcurrency ?? UNBOUNDED),
+      permits,
       step,
     );
     try {

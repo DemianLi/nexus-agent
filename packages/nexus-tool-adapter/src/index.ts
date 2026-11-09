@@ -15,7 +15,9 @@
  *   `signal` 是這一輪的停止訊號（放在 `configurable`，見 `@nexus/core` 的 `turn-cancel.ts`）併上 LangGraph 自己的 `signal`。
  * - **錯誤是結果上的資料欄**：`ok: false` 轉成 `toolRefusal`，碼掛在那則訊息上，`tool/result` 讀得到。
  *   `execute` reject 不接，照 LangChain 工具拋錯的路走。
- * - **`interrupt()` 是 LangGraph 的 `interrupt()`**：掛起靠拋例外，恢復時工具本體重跑。
+ * - **`interrupt()` 先找 loop 放的等人服務**（`@nexus/core` 的 `humanInputOf`，[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：
+ *   讀得到就 await 它，答覆就是回傳值、本體不重跑；讀到「這裡沒人可問」（`NO_HUMAN_INPUT`）就以 `HumanInputUnavailable` 拒絕；
+ *   都沒有才用 LangGraph 的 `interrupt()`，掛起靠拋例外，恢復時工具本體重跑。
  * - **`concludesTurn: true` 轉成 `returnDirect: true`**：沒宣告的工具不帶它，`concludeTurn()` 標了也不收。
  * - **`deferContext()` 補的訊息**：成功的結果與補的訊息包成一顆 `Command`，那則工具結果的 `ToolMessage` 由這裡造。
  *
@@ -36,13 +38,15 @@ import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import {
   callThreadId,
   concludeTurn,
+  humanInputOf,
+  humanInputUnavailable,
   sourceKwargs,
   toolCallSessionAddress,
   toolRefusal,
   turnCancelSignalOf,
 } from '@nexus/core';
 import { Command, interrupt } from '@langchain/langgraph';
-import { isNexusTool } from '@nexus/tools';
+import { HumanInputUnavailable, isNexusTool } from '@nexus/tools';
 import type { JsonSchema, JsonValue, NexusTool, ToolExec } from '@nexus/tools';
 import { z } from 'zod';
 
@@ -104,8 +108,14 @@ export function toolExecOf(
         }),
       );
     },
-    // `interrupt` 用拋例外傳播，呼叫端不能包在 try/catch 裡（`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
-    interrupt: (payload: JsonValue) => Promise.resolve(interrupt(payload)),
+    // LangGraph 的 `interrupt` 用拋例外傳播，呼叫端不能吞掉，要 catch 就原樣重拋（`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
+    interrupt: (payload: JsonValue) => {
+      if (humanInputUnavailable(config)) return Promise.reject(new HumanInputUnavailable());
+      const service = humanInputOf(config);
+      return service === undefined
+        ? Promise.resolve(interrupt(payload))
+        : (service.ask(payload) as Promise<JsonValue>);
+    },
   });
 }
 

@@ -74,8 +74,29 @@ import { defineToken } from '@nexus/sdk';
  * 交回的結果可帶 `fresh` 造一則新訊息。輸出校驗、撞到輸出上限的替換、共用區前綴改成 core 監聽者，插件監聽者看得到兩處時刻變化：
  * {@link ToolExecuteListener} 的 `next()` 交回的是驗過輸出的那一份；匯流排上 `tools/post-execute` 監聽者拿到的 `result` 是加共用區前綴之前的那份。
  * {@link ToolResultOutcome} 在結果是 `Command` 時也帶 `Command` 裡這次呼叫那則的內容。這個檔的型別不變（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-9/guide.md`）。
+ *
+ * `2.10.0`（#2358）：{@link ToolExec.interrupt} 多一種寫明的拒絕 {@link HumanInputUnavailable}（這裡沒有人可以回答），與認它的
+ * {@link isHumanInputUnavailable}。只有 native loop 會這樣拒絕，預設的 `langgraph` 照舊。向後相容的新增：不認它的消費者照常把它當成
+ * 一般的錯；既有消費者的範圍不用改，舊宿主不會丟它。
  */
-export const TOOLS_CONTRACT_VERSION = '2.9.0';
+export const TOOLS_CONTRACT_VERSION = '2.10.0';
+
+/** {@link ToolExec.interrupt} 沒有人可以回答時的拒絕（契約 `2.10.0`）。 */
+export class HumanInputUnavailable extends Error {
+  override name = 'HumanInputUnavailable';
+  constructor() {
+    super('這裡沒有人可以回答，所以沒有問人');
+  }
+}
+
+/**
+ * 認 {@link HumanInputUnavailable}。看 `name` 不看原型：插件與宿主可能各帶一份這個套件。
+ * @param error - 任何值。
+ * @returns 是它就是 `true`。
+ */
+export function isHumanInputUnavailable(error: unknown): error is HumanInputUnavailable {
+  return error instanceof Error && error.name === 'HumanInputUnavailable';
+}
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -123,11 +144,14 @@ export interface ToolExec {
    */
   deferContext(text: string, marks?: { readonly [key: string]: JsonValue }): void;
   /**
-   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。**掛起靠拋例外傳播**：不要用 try/catch 攔下它丟出的例外，
-   * 真要 catch 就原樣重拋。**恢復時本體從頭重跑一次**，這次呼叫在掛起之前做的事要能重做而不出錯。
+   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。**`langgraph` 下掛起靠拋例外傳播**，native 在行程內等、收回時以
+   * `HumanInputWithdrawn` 拒絕：兩種都不要用 try/catch 攔下，真要 catch 就原樣重拋。**恢復時本體可能從頭重跑一次**（預設的 `langgraph` 是這樣；native 在行程內等，答覆就是這次的回傳值），
+   * 這次呼叫在掛起之前做的事要能重做而不出錯。
    *
    * @param payload - 給答題端的酬載。
    * @returns 人回的值。
+   * @throws {HumanInputUnavailable} 這裡沒有人可以回答（契約 `2.10.0` 起；native 下帶 thread 的 `streamEvents` 之外的 run，與前景子代理那一層），沒有問人。
+   *   這一個可以接住、改走不問人的路；用 {@link isHumanInputUnavailable} 認。
    */
   interrupt(payload: JsonValue): Promise<unknown>;
 }

@@ -1145,8 +1145,8 @@ export async function createCliAgent(
         )
       : undefined;
   // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
-  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同三格算出：
-  // `approvals.enabled`、有沒有 checkpointer、哪一種 loop（native 算沒有 checkpointer）。輸入對不上時分岔的樣子是
+  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同兩格算出：
+  // `approvals.enabled`、有沒有 checkpointer。輸入對不上時分岔的樣子是
   // 「核准擋得下來、問答還掛在那裡」。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
@@ -1154,12 +1154,12 @@ export async function createCliAgent(
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
-  // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 在行程內等人回答，同一個條件；沒人可問的呼叫
+  // 由那顆呼叫上的 `NO_HUMAN_INPUT` 判（`@nexus/core` 的 `human-input.ts`），同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined && invocation.agentLoop !== 'native',
+    hasCheckpointer: checkpointer !== undefined,
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——

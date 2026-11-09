@@ -99,6 +99,7 @@ import {
   approvalDenied,
 } from '@nexus/tool-result';
 import type { ToolErrorInfo } from '@nexus/tool-result';
+import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusTool, NexusToolResult, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 
@@ -366,28 +367,31 @@ function createEscalationTool(
       // 舊 thread 的保留清單（#2078）：也判在加寬之前，fence 不論模式都不讓寫，見模組註解。
       const reserved = await reservedReason?.(target);
       if (reserved !== undefined) return refuse(reservedTargetRefusal(reserved));
-      // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
-      // `/permission` 可能已經換過格子。
-      const current = controller.current;
-      if (!canEscalate(current, requested)) {
-        return refuse(nonWideningRefusal(requested, current));
-      }
-      // 子代理不問人升級（#324／#328），見模組註解「子代理怎麼拒」。
-      const unasked: UnaskedReason | undefined =
-        controller.delegatedMode !== undefined
-          ? 'delegated'
-          : channel === undefined
-            ? 'no-service'
-            : channel.kind !== 'human'
-              ? channel.kind
-              : // 升級的核准是這個政策管的核准：切到 `never` 之後，這條路也要跟著回絕，不然只改了閘門、模型換條路還是問得到人。
-                approvalPolicy?.() === 'never'
-                ? 'approval-never'
-                : undefined;
-      if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
+      // 加寬與要不要問人這兩格，在**人按下去之後**要再判一次：人看卡片的那段時間裡，`/permission` 可能已經換過格子或政策。
+      // 答覆之後這一次兩個 loop 都跑：`langgraph` resume 時本體整個重跑，問之前那一次已讀到換過的格子，這一次結果相同；native 在
+      // 行程內等，靠這一次補上，順序與拒絕的話一樣。
+      const recheck = (): NexusToolResult | undefined => {
+        const current = controller.current;
+        if (!canEscalate(current, requested)) return refuse(nonWideningRefusal(requested, current));
+        // 子代理不問人升級（#324／#328），見模組註解「子代理怎麼拒」。
+        const unasked: UnaskedReason | undefined =
+          controller.delegatedMode !== undefined
+            ? 'delegated'
+            : channel === undefined
+              ? 'no-service'
+              : channel.kind !== 'human'
+                ? channel.kind
+                : // 升級的核准是這個政策管的核准：切到 `never` 之後，這條路也要跟著回絕，不然只改了閘門、模型換條路還是問得到人。
+                  approvalPolicy?.() === 'never'
+                  ? 'approval-never'
+                  : undefined;
+        return unasked === undefined ? undefined : refuse(unaskedRefusal(unasked, requested));
+      };
+      const before = recheck();
+      if (before !== undefined) return before;
 
-      // `exec.interrupt` 用拋例外傳播，**不能包在 try/catch 裡**。
-      const answer = (await exec.interrupt({
+      // `exec.interrupt` 在 `langgraph` 下用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋。
+      const asked = exec.interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [
           {
@@ -401,7 +405,16 @@ function createEscalationTool(
         reviewConfigs: [
           { actionName: SANDBOX_ESCALATION_TOOL_NAME, allowedDecisions: ['approve', 'reject'] },
         ],
-      } as unknown as JsonValue)) as EscalationVerdict | undefined;
+      } as unknown as JsonValue);
+      let answer: EscalationVerdict | undefined;
+      try {
+        answer = (await asked) as EscalationVerdict | undefined;
+      } catch (error) {
+        if (isHumanInputUnavailable(error)) return refuse(unaskedRefusal('no-channel', requested));
+        throw error;
+      }
+      const after = recheck();
+      if (after !== undefined) return after;
 
       const verdict = answer?.decisions?.[0];
       if (verdict?.type === 'reject') {

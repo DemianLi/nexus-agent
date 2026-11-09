@@ -62,7 +62,8 @@ describe('@nexus/tools 的定義', () => {
     // 2.6.1（#2416）：`tools/execute` 交回沿用原 `blocks` 的結果時，內容形狀照本體那則。2.7.0（#2533）：`ToolThread` 多選填的 `on`、`join`、`provide`。
     // 2.8.0（#2551）：`ToolThreadSection.text` 的函式收這一次模型呼叫的 `call`。
     // 2.9.0（#2575）：工具事件的視圖帶 `shape`、`command` 視圖帶內容、execute 能只換 `Command` 裡那一則；三顆改成 core 監聽者。
-    expect(TOOLS_CONTRACT_VERSION).toBe('2.9.0');
+    // 2.10.0（#2358）：`exec.interrupt` 多一種寫明的拒絕 `HumanInputUnavailable`。
+    expect(TOOLS_CONTRACT_VERSION).toBe('2.10.0');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('2');
   });
 

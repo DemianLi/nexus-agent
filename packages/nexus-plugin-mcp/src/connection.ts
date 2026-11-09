@@ -350,8 +350,8 @@ export function isRequestTimeout(error: unknown): boolean {
   return false;
 }
 
-/** SDK client 上，探活與資源會用到的那幾個方法；結構型別，測試換成假的。 */
-export interface SdkClient {
+/** SDK client 上，探活、資源與工具呼叫會用到的那幾個方法；結構型別，測試換成假的。 */
+export interface SdkClient extends Pick<Client, 'callTool'> {
   onclose?: () => void;
   close?(): Promise<void>;
   getInstructions(): string | undefined;
