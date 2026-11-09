@@ -323,7 +323,7 @@ impl Host {
     }
 
     /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或要退避為止。開檔數用完時排著的連線接下來就關（見 [`Host::shed`]），不是留在 backlog；
-    /// `shed` 接不到時（沒有預留的 fd，或 backlog 已空）停下來退避，那時還排著的連線留在 backlog。EMFILE、ENFILE 以外的錯記一行、退避。
+    /// `shed` 接不到時（沒有預留的 fd、backlog 已空，或騰出位子還是接不到）停下來退避，那時還排著的連線留在 backlog。EMFILE、ENFILE 以外的錯記一行、退避。
     fn accept(&mut self, limit: usize) {
         while self.conns.len() < limit {
             match self.listener.accept() {

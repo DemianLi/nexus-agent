@@ -13,7 +13,7 @@
 //! - `--then-unregistered`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆 `unregistered`，理由照給的。
 //! - `--report-strangers`：同 `--violate-conversations`，但先對 pid 0 各報一筆 `violation`（理由「測試違規」）與 `unregistered`（理由「沒有登記」）。
 //! - `--stale-generation`：每收到一筆對話行程的身分，就對那個 pid 回報一筆序號比那一筆大 1 的 `violation`（理由「舊序號的違規」），照常跑下去。
-//! - `--zero-generation`：同 `--violate-conversations`，但那一筆 `violation` 帶序號 0（宿主表上還沒有那個 pid 時，還沒送 `hello` 的連線報的就是 0）。
+//! - `--zero-generation`：同 `--violate-conversations`，但那一筆 `violation` 帶序號 0（宿主表上沒有那個 pid 時，還沒送 `hello` 的連線報的就是 0）。
 //! - `--then-zero-generation`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆序號 0 的 `violation`（理由「表上沒有了」）：
 //!   撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時報的就是 0。
 //! - 上面幾種之外的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。

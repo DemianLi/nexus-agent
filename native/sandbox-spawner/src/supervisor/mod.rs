@@ -1450,23 +1450,27 @@ impl Supervisor {
     /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。只在剛隔離時送一次：隔離之後不會再送它的
     /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
     /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到），
-    /// 只寫稽核，`role` 記 `unknown`。序號 0 與 `None` 只比 pid：0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的（那一筆還在 pipe 上，
-    /// 或已經隔離、撤掉了）；收屍之前先撤銷，宿主照順序讀 pipe，撤銷時把 backlog 收乾淨、記成撤過，上一個行程留下的連線報的是 `unregistered`，
-    /// 不會是序號 0 的 `violation`。`None` 是 `on_unregistered` 轉來的，那時 pid 已經不在身分表上。
+    /// 只寫稽核，`role` 記 `unknown`。序號 0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的，只有已經隔離的照它的身分記：
+    /// 它那一筆撤掉了，之後報的就是 0；而上一個行程在收屍之前寫進 pipe 的 0，排在能讓重用同一個 pid 的新行程被隔離的任何回報前面，
+    /// 讀到時新行程還沒隔離，記 `unknown`。代價是活著、那一筆還沒寫進宿主 pipe 的行程在 `hello` 之前送壞框，只記 `unknown`、不隔離：
+    /// 那條連線已經斷了，沒通過 `hello` 拿不到任何東西，那一筆到了之後再犯，帶的就是它自己的序號。`None` 只比 pid：它是
+    /// `on_unregistered` 轉來的，那時 pid 已經不在身分表上。
     fn on_violation(&mut self, pid: u32, generation: Option<u32>, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
         let pid = libc::pid_t::try_from(pid).unwrap_or(-1);
-        let current = |own: u32| generation.is_none_or(|g| g == 0 || g == own);
-        let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid) && current(self.front_generation) {
+        let current = |own: u32, quarantined: bool| generation.is_none_or(|g| g == own || (g == 0 && quarantined));
+        let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid)
+            && current(self.front_generation, self.front_quarantined)
+        {
             ("front", Vec::new(), !std::mem::replace(&mut self.front_quarantined, true))
-        } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid && current(c.generation)) {
+        } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid && current(c.generation, c.quarantined)) {
             ("conversation", conversation.thread.clone().unwrap_or_default(), !std::mem::replace(&mut conversation.quarantined, true))
         } else {
             ("unknown", Vec::new(), false)
         };
         if role == "unknown" {
             let generation = generation.map_or_else(String::new, |g| format!("，序號 {g}"));
-            say!("宿主斷了 pid {pid}{generation} 的連線：{reason}；不是現在這邊起的哪個行程，只寫稽核");
+            say!("宿主斷了 pid {pid}{generation} 的連線：{reason}；對不上現在這邊起的行程（序號 0 只對已隔離的），只寫稽核");
         } else {
             say!("宿主斷了 pid {pid}（{role}）的連線：{reason}；這個身分隔離到它結束");
         }

@@ -1659,17 +1659,18 @@ fn a_violation_with_a_stale_generation_neither_quarantines_nor_revokes() {
     assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "{:?}", host_log(&h));
 }
 
-/// 活著的對話行程被報序號 0 的違規（宿主表上還沒有它、還沒送 `hello` 的連線出事時就報 0）：照它的身分隔離，補送 `revoke`。
+/// 沒被隔離的對話行程被報序號 0 的違規：只寫稽核、`role` 記 `unknown`，不隔離、不補送 `revoke`。上一個行程在收屍之前寫進 pipe 的 0，
+/// 讀到時重用同一個 pid 的新行程正是這個狀態；那一筆還沒寫進宿主 pipe 的活行程，報的也是 0，同樣不隔離。
 #[test]
-fn a_zero_generation_violation_for_a_live_conversation_quarantines_it() {
+fn a_zero_generation_violation_for_a_conversation_that_is_not_quarantined_is_only_audited() {
     let mut h = Harness::start(Options { host: fake_host(&["--zero-generation"]), ..Options::default() });
     let a = h.up("a");
     let a_pid = logged_pid(&a, "pid");
     let pid = format!("\"pid\":{a_pid},");
     let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
     assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
-    assert!(lines().iter().all(|l| l.contains("\"role\":\"conversation\"")), "{:?}", lines());
-    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "只有收屍那一次：{:?}", host_log(&h));
 }
 
 /// 已經隔離的對話行程被報序號 0 的違規（撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時就報 0）：照它的身分寫稽核，不補送第二次 `revoke`。
