@@ -1,5 +1,5 @@
 /**
- * 把 fold 交出的子代理規格編成一張**帶存檔點的圖**（[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
+ * 把 fold 交出的子代理規格編成一張**帶存檔點的圖**（`native` 下是 native agent，見〈native〉；[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
  *
  * ## 為什麼要有這個出口
  *
@@ -33,6 +33,12 @@
  * 基座 `createSubAgent` 還處理 `interruptOn`、`responseFormat`。fold 交出的規格不會帶它們，所以這裡遇到就
  * **拋並指名**，不是默默略過。（基座的 harness profile 曾是第三個要拒絕的東西；自有組裝點不套 profile，那一項不存在了。）
  *
+ * ## native
+ *
+ * `loop: 'native'` 時同一疊 middleware 編成 native agent（`native-loop/agent.ts` 的 `background` 模式）：state 按 `thread_id` 留在
+ * 那個實例的記憶體裡，不寫存檔點，所以「第二輪看得到第一輪」靠呼叫端快取同一個實例（`background-subagents.ts` 的 `#agentFor`）；
+ * 行程重啟或換了實例，由冷復活從日誌灌回（`updateState`）。
+ *
  * @module
  */
 
@@ -40,8 +46,15 @@ import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
-import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembly.js';
+import {
+  type AgentLoopKind,
+  mergeMiddlewareStack,
+  nativeSystemPrompt,
+  subagentDefaultMiddleware,
+} from './agent-assembly.js';
 import type { AgentCheckpointer } from './base-types.js';
+import type { EventDispatcher } from './events.js';
+import { createNativeAgent } from './native-loop/agent.js';
 import type { FoldedAgentParams } from './fold.js';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
@@ -55,12 +68,15 @@ export type SubagentGraphParams = Pick<
   'subagents' | 'model' | 'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
 >;
 
-/** 編出來的圖：帶 checkpointer 的 `createAgent` 圖。 */
+/**
+ * 編出來的圖：帶 checkpointer 的 `createAgent` 圖；`native` 下是 native agent，型別仍標成前者。背景 host 經自己的 `BackgroundAgent`
+ * 結構型別用它，只有 native 有的 `discardSuspended` 在那裡是選填。
+ */
 export type SubagentGraph = ReturnType<typeof createAgent>;
 
 /** 編圖的選項。 */
 export interface SubagentGraphOptions {
-  /** 存檔點。**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。 */
+  /** 存檔點。`langgraph` 下**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。`native` 下不用（見 {@link loop}）。 */
   readonly checkpointer: NonNullable<AgentCheckpointer>;
   /**
    * 這張圖改用的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)），**勝過規格自己帶的與組裝點的**。
@@ -88,6 +104,13 @@ export interface SubagentGraphOptions {
    * `createSubagentDelegationMiddleware()`（預設那句：需要核准的操作會自動被拒）。**省略＝規格自己的那顆**。
    */
   readonly delegation?: AgentMiddleware;
+  /**
+   * 用哪一個 agent loop 跑這張圖，同組裝點的 `loop`。省略＝`langgraph`。`native` 下建的是 native agent：state 按 `thread_id` 留在
+   * 那個實例的記憶體裡，{@link checkpointer} 不用；下一輪看得到上一輪，要同一個實例（呼叫端按子代理快取編好的圖）。
+   */
+  readonly loop?: AgentLoopKind;
+  /** `native` 下派 `llm/stream` 與 `agent/request-error`，同組裝點的 `events`。`langgraph` 下不用。 */
+  readonly events?: EventDispatcher;
 }
 
 /**
@@ -110,7 +133,7 @@ export function mergeMiddlewareByName(
  * @param params - fold 交出的參數（用到規格清單、模型、backend、全域 deny 規則）。
  * @param name - 子代理名。
  * @param options - 存檔點，以及選填的模型覆寫。
- * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪。
+ * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪（`native` 下要同一個實例）。
  * @throws 沒有這個子代理；規格是編好的 `runnable`、帶 `interruptOn`／`responseFormat`；缺工具、模型或 backend。
  */
 export function compileSubagentGraph(
@@ -160,29 +183,42 @@ export function compileSubagentGraph(
     createStepInboxMiddleware('background'),
   ];
 
+  const middleware = mergeMiddlewareByName(
+    defaults,
+    // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的，
+    // 跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
+    ((declarative.middleware ?? []) as AgentMiddleware[])
+      .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
+      // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
+      .map((each) =>
+        options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
+          ? options.approvalGate
+          : options.approvalPolicyPrompt !== undefined &&
+              each.name === APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME
+            ? options.approvalPolicyPrompt
+            : options.delegation !== undefined && each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
+              ? options.delegation
+              : each,
+      ),
+  );
+  if (options.loop === 'native') {
+    return createNativeAgent({
+      model,
+      name: declarative.name,
+      ...(declarative.systemPrompt !== undefined && {
+        systemPrompt: nativeSystemPrompt(declarative.name, declarative.systemPrompt),
+      }),
+      tools,
+      middleware,
+      ...(options.events !== undefined && { events: options.events }),
+      background: true,
+    }) as unknown as SubagentGraph;
+  }
   return createAgent({
     model: model as never,
     systemPrompt: declarative.systemPrompt,
     tools: tools as never,
-    middleware: mergeMiddlewareByName(
-      defaults,
-      // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
-      // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
-      ((declarative.middleware ?? []) as AgentMiddleware[])
-        .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
-        // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
-        .map((each) =>
-          options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
-            ? options.approvalGate
-            : options.approvalPolicyPrompt !== undefined &&
-                each.name === APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME
-              ? options.approvalPolicyPrompt
-              : options.delegation !== undefined &&
-                  each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
-                ? options.delegation
-                : each,
-        ),
-    ),
+    middleware,
     name: declarative.name,
     checkpointer: options.checkpointer,
   });

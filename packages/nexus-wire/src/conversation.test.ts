@@ -655,6 +655,73 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
     expect(cards(state)).toEqual([['running', 'running', undefined, undefined]]);
   });
 
+  describe('背景子代理的卡不跟著 root 收', () => {
+    const key = { kind: 'background-subagent', runId: 'bg-abc123def456', subagentType: 'worker' };
+    const delegate = (callId: string, meta?: unknown) => [
+      frame('tools', [], {
+        event: 'tool-started',
+        tool_call_id: callId,
+        tool_name: 'subagent',
+        input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+      }),
+      frame('tools', [], {
+        event: 'tool-finished',
+        tool_call_id: callId,
+        message: '子代理已在背景啟動',
+        ...(meta === undefined ? {} : { meta }),
+      }),
+    ];
+    const closings = [
+      ['正常收尾', { event: 'completed', graph_name: 'root' }],
+      ['停止', { event: 'completed', graph_name: 'root', aborted: true }],
+      ['失敗', { event: 'failed', graph_name: 'root', error: '供應商掛了' }],
+    ] as const;
+
+    it.each(closings)('%s：背景的卡照舊在跑；同一輪 root 自己沒結果的卡照樣收', (_, closing) => {
+      const state = reduceAll(emptyConversation(), [
+        ...delegate('root-1', key),
+        open('bg-1', ['bg-abc123def456', 'tools']),
+        open('root-2', []),
+        frame('lifecycle', [], closing),
+      ]);
+      expect(cards(state)).toEqual([
+        ['root-1', 'done', undefined, undefined],
+        ['bg-1', 'running', undefined, undefined],
+        ['root-2', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ]);
+    });
+
+    it('背景的卡先到、委派卡後收尾：歸屬補上之後一樣不收', () => {
+      const state = reduceAll(emptyConversation(), [
+        delegate('root-1', key)[0]!,
+        open('bg-1', ['bg-abc123def456', 'tools']),
+        delegate('root-1', key)[1]!,
+        frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      ]);
+      expect(cards(state)).toEqual([
+        ['root-1', 'done', undefined, undefined],
+        ['bg-1', 'running', undefined, undefined],
+      ]);
+    });
+
+    it('前景子代理的卡照樣收：委派卡沒有背景 meta', () => {
+      const state = reduceAll(emptyConversation(), [
+        frame('tools', [], {
+          event: 'tool-started',
+          tool_call_id: 'task-1',
+          tool_name: 'task',
+          input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+        }),
+        open('fg-1', ['tools:task-1', 'tools']),
+        frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
+      ]);
+      expect(cards(state)).toEqual([
+        ['task-1', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+        ['fg-1', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ]);
+    });
+  });
+
   it('子代理那一層的收尾不算：只有 root 那顆在講「這一輪」', () => {
     const state = reduceAll(emptyConversation(), [
       open('running'),

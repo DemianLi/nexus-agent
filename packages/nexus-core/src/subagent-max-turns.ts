@@ -1,7 +1,7 @@
 /**
  * 子代理 `maxTurns` 在 `loop: 'native'` 下的那一格：跟 `modelCallLimitMiddleware({ runLimit, exitBehavior: 'end' })` 同一套算法，
- * 不用 native 不收的 `afterModel`。native 下每個子代理都折進它（`fold.ts` 的 `subagentMaxTurns`）：前景子代理由 native loop 直接呼叫
- * 登記的那一步，背景子代理（仍是 LangGraph 的圖，TODO(#2359)）經 `wrapModelCall`、`beforeModel`、`afterAgent`。
+ * 不用 native 不收的 `afterModel`。native 下每個子代理都折進它（`fold.ts` 的 `subagentMaxTurns`），前景與背景子代理都由 native loop
+ * 直接呼叫登記的那一步。
  *
  * - **算的是什麼**：這一次 run 裡成功回來的模型呼叫。afterAgent 跳回模型的那一次也算。
  * - **重試只算一次**：串流重打（`streamRetry`）排在這一格內層（`fold.ts` 槽位表），整次重打在這一格的 `next()` 裡完成，`next()` 只回來

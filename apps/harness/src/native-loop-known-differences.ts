@@ -39,12 +39,6 @@ export const KNOWN_DIFFERENCE_KINDS = {
       '這一條斷言 LangGraph 的存檔點：直接讀 `checkpointer.getTuple`、另一個 agent 實例經同一個 saver 接同一條 thread，' +
       '或存檔點寫入時的 seal 與層數守衛（#1658）。native 的 state 在實例的記憶體裡，不寫存檔點。',
   },
-  crossAgentOrder: {
-    card: 2359,
-    reason:
-      '背景子代理與同一輪其他 agent（root、前景子代理）叫到模型、跑工具的先後，兩個 loop 不同：讓出事件迴圈的時點不一樣。' +
-      '這一條背景與前景子代理共用一份 worker 腳本，native 下前景子代理先叫到模型、拿到背景那位的 `hold`，懸到逾時。',
-  },
   langgraphInternals: {
     card: 2363,
     reason:
@@ -142,12 +136,6 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/attachment-wire.test.ts',
     test: '內嵌的圖 > 送上線的是 image_url（位元組與原圖一致）；base64 不進日誌、不進存檔點',
     kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/background-delegation.test.ts',
-    test: 'list_agents（#837） > 沒派過：回 (no subagents)；派了一個還在跑：running；跑完：inactive；一次性的不列',
-    kind: 'crossAgentOrder',
     run: 'fails',
   },
   {
