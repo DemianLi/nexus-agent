@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SPAWNER: &str = env!("CARGO_BIN_EXE_nexus-sandbox-spawner");
 const TOKEN: &str = "00112233445566778899aabbccddeeff";
@@ -1151,7 +1151,7 @@ mod calls {
     }
 
     #[test]
-    fn an_event_goes_to_every_verified_connection() {
+    fn an_event_goes_only_to_the_connection_the_service_names() {
         let (_host, socket) = host("call-event");
         let mut first = connect(&socket);
         let mut second = connect(&socket);
@@ -1161,10 +1161,109 @@ mod calls {
             topic: "ping".into(),
             payload: json::parse(br#"{"n":1}"#).unwrap(),
         });
-        let mut got = [read_message(&mut first), read_message(&mut first)];
-        got.sort_by_key(|m| matches!(m, Some(HostMessage::Event { .. })));
-        assert_eq!(got, [ok(1, "null"), event.clone()]);
-        assert_eq!(read_message(&mut second), event);
+        assert_eq!(read_message(&mut first), ok(1, "null"));
+        assert_eq!(read_message(&mut first), event);
+        // 第二條沒收到事件：它的下一框就是它自己這次呼叫的結果。
+        call(&mut second, 2, "echo", "2");
+        assert_eq!(read_message(&mut second), ok(2, "2"));
+    }
+
+    /// 不讀回答的連線，宿主也不再讀它：送的一方卡住，別的連線照常；讀走之後每個 `id` 照樣剛好一框。
+    #[test]
+    fn a_connection_that_does_not_read_is_not_read_either() {
+        // 十萬個呼叫的回答遠超過 OUTBOX_PAUSE 加兩邊 socket 的緩衝，宿主不停讀就一定送得完。
+        const CALLS: u64 = 100_000;
+        let (_host, socket) = host("call-backpressure");
+        let mut stream = connect(&socket);
+        let frames: Vec<u8> = (0..CALLS)
+            .flat_map(|id| {
+                frame(&encode_client_message(&ClientMessage::Call {
+                    side: Side::Client,
+                    id,
+                    service: "nope".into(),
+                    method: "m".into(),
+                    payload: Value::Null,
+                }))
+            })
+            .collect();
+        stream.set_nonblocking(true).unwrap();
+        let mut sent = 0;
+        let mut progressed = Instant::now();
+        while sent < frames.len() && progressed.elapsed() < Duration::from_secs(1) {
+            match stream.write(&frames[sent..]) {
+                Ok(n) => {
+                    sent += n;
+                    progressed = Instant::now();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("{err}"),
+            }
+        }
+        assert!(sent < frames.len(), "宿主一直在讀：{CALLS} 個呼叫全送出去了");
+
+        let mut other = connect(&socket);
+        call(&mut other, 1, "echo", "1");
+        assert_eq!(read_message(&mut other), ok(1, "1"));
+
+        stream.set_nonblocking(false).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let rest = std::thread::spawn(move || writer.write_all(&frames[sent..]).unwrap());
+        for id in 0..CALLS {
+            assert_eq!(error_code(&mut stream, id), ErrorCode::UnknownService);
+        }
+        rest.join().unwrap();
+    }
+
+    /// 事件排到上限就斷掉那條連線，不悄悄丟；上限以內的照送，別的連線不受影響。
+    #[test]
+    fn a_connection_whose_events_pile_up_is_dropped() {
+        let (_host, socket) = host("call-event-limit");
+        let mut small = connect(&socket);
+        call(&mut small, 1, "burst", r#"{"count":5,"bytes":200000}"#);
+        assert_eq!(read_message(&mut small), ok(1, "null"));
+        for _ in 0..5 {
+            assert!(matches!(
+                read_message(&mut small),
+                Some(HostMessage::Event { .. })
+            ));
+        }
+
+        let mut flooded = connect(&socket);
+        call(&mut flooded, 1, "burst", r#"{"count":20,"bytes":200000}"#);
+        // 先不讀：宿主一口氣排 20 個事件，排到上限時這條連線還沒讀走多少。
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(read_message(&mut flooded), ok(1, "null"));
+        let mut events = 0;
+        while let Some(message) = read_message(&mut flooded) {
+            assert!(matches!(message, HostMessage::Event { .. }), "{message:?}");
+            events += 1;
+        }
+        assert!(events < 20, "20 個事件全送到了");
+
+        call(&mut small, 2, "echo", "2");
+        assert_eq!(read_message(&mut small), ok(2, "2"));
+    }
+
+    #[test]
+    fn chunks_of_one_step_past_the_bound_end_the_call() {
+        let (_host, socket) = host("call-flood");
+        let mut stream = connect(&socket);
+        call(&mut stream, 3, "flood", "null");
+        // flood 一步推五塊、每塊約 250 KB：前四塊加起來還在 OUTBOX_PAUSE 以內照送，第五塊起不送。
+        for seq in 0..4 {
+            assert!(matches!(
+                read_message(&mut stream),
+                Some(HostMessage::Chunk { id: 3, seq: got, .. }) if got == seq
+            ));
+        }
+        assert_eq!(error_code(&mut stream, 3), ErrorCode::ServiceError);
+        assert_eq!(
+            cancels(&mut stream, 4),
+            1,
+            "超過上限收尾時，還掛著的 flood 要在服務那邊取消"
+        );
     }
 
     #[test]

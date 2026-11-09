@@ -42,7 +42,7 @@ use crate::supervisor::process::Chan;
 use crate::supervisor_protocol::{
     decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
@@ -91,6 +91,20 @@ struct Conn {
     dead: bool,
     /// 還在跑的呼叫，以客戶端給的 `id` 為鍵。
     calls: HashMap<u64, calls::Call>,
+    /// 讀進來、還沒處理的框。寫出去的排到 [`calls::OUTBOX_PAUSE`] 時停在這裡，對方讀走之後再接著處理。
+    backlog: VecDeque<Vec<u8>>,
+}
+
+impl Conn {
+    /// 排著沒寫出去的到了 [`calls::OUTBOX_PAUSE`]：不讀它、不處理它的框、不 poll 它的呼叫，等對方讀走。
+    fn paused(&self) -> bool {
+        self.chan.queued() >= calls::OUTBOX_PAUSE
+    }
+
+    /// 有留著的框可以處理：沒有新的輸入也要叫醒事件迴圈。
+    fn backlog_ready(&self) -> bool {
+        !self.dead && !self.backlog.is_empty() && !self.paused()
+    }
 }
 
 struct Host {
@@ -415,6 +429,7 @@ impl Host {
                 .chain(self.accept_paused_until)
                 .chain(self.kernel.next_deadline())
                 .chain(calls_deadline)
+                .chain(self.conns.iter().any(Conn::backlog_ready).then_some(now))
                 .min();
             let (read, write) = self.control.poll_fds();
             let mut fds = Vec::with_capacity(self.conns.len() + 3);
@@ -425,11 +440,10 @@ impl Host {
             fds.push(pollfd(if accepting { listen_fd } else { -1 }, libc::POLLIN));
             for conn in &self.conns {
                 let (read, write) = conn.chan.poll_fds();
-                let events = if write.is_some() {
-                    libc::POLLIN | libc::POLLOUT
-                } else {
-                    libc::POLLIN
-                };
+                let mut events = if write.is_some() { libc::POLLOUT } else { 0 };
+                if !conn.paused() {
+                    events |= libc::POLLIN;
+                }
                 fds.push(pollfd(read.or(write).unwrap_or(-1), events));
             }
             poll(&mut fds, deadline.map(|d| d.saturating_duration_since(now)));
@@ -443,10 +457,13 @@ impl Host {
             }
             // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
             for (i, fd) in fds.iter().skip(3).enumerate() {
-                if fd.revents != 0
-                    && self.conns.get(i).is_some_and(|conn| !conn.dead)
-                    && !self.on_readable(i)
-                {
+                let Some(conn) = self.conns.get(i) else {
+                    continue;
+                };
+                if conn.dead || (fd.revents == 0 && !conn.backlog_ready()) {
+                    continue;
+                }
+                if !self.on_readable(i) {
                     if let Some(conn) = self.conns.get_mut(i) {
                         conn.dead = true;
                     }
@@ -496,6 +513,7 @@ impl Host {
                         revoked: false,
                         dead: false,
                         calls: HashMap::new(),
+                        backlog: VecDeque::new(),
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -534,52 +552,58 @@ impl Host {
         }
     }
 
-    /// 讀第 `i` 條連線、處理讀到的框。這條要斷回 `false`。
+    /// 第 `i` 條連線的 fd 有事件（可讀、可寫、掛斷）或有留著的框時叫。留著的框處理完才再讀，框照序處理，留著的最多是一次
+    /// `receive` 讀進來的；停著時不讀也不處理。這條要斷回 `false`。
     fn on_readable(&mut self, i: usize) -> bool {
         let Some(conn) = self.conns.get_mut(i) else {
             return false;
         };
         conn.chan.flush();
-        let frames = match conn.chan.receive() {
-            Ok(frames) => frames,
+        if conn.backlog.is_empty() && !conn.paused() {
+            match conn.chan.receive() {
+                Ok(frames) => conn.backlog.extend(frames),
+                Err(err) => {
+                    self.violate(i, err.0);
+                    return false;
+                }
+            }
+        }
+        loop {
+            let Some(conn) = self.conns.get_mut(i) else {
+                return false;
+            };
+            if conn.paused() {
+                return true;
+            }
+            let Some(frame) = conn.backlog.pop_front() else {
+                return true;
+            };
+            if !self.on_frame(i, &frame) {
+                return false;
+            }
+        }
+    }
+
+    /// 處理第 `i` 條連線的一框。這條要斷回 `false`。
+    fn on_frame(&mut self, i: usize, frame: &[u8]) -> bool {
+        let message = match decode_client_message(frame) {
+            Ok(message) => message,
             Err(err) => {
                 self.violate(i, err.0);
                 return false;
             }
         };
-        for frame in frames {
-            let message = match decode_client_message(&frame) {
-                Ok(message) => message,
-                Err(err) => {
-                    self.violate(i, err.0);
-                    return false;
-                }
-            };
-            match message {
-                ClientMessage::Hello { version, token } => {
-                    if !self.on_hello(i, version, token.as_bytes()) {
-                        return false;
-                    }
-                }
-                ClientMessage::Call {
-                    side,
-                    id,
-                    service,
-                    method,
-                    payload,
-                } => {
-                    if !self.on_call(i, side, id, service, &method, payload) {
-                        return false;
-                    }
-                }
-                ClientMessage::Cancel { side, id } => {
-                    if !self.on_cancel(i, side, id) {
-                        return false;
-                    }
-                }
-            }
+        match message {
+            ClientMessage::Hello { version, token } => self.on_hello(i, version, token.as_bytes()),
+            ClientMessage::Call {
+                side,
+                id,
+                service,
+                method,
+                payload,
+            } => self.on_call(i, side, id, service, &method, payload),
+            ClientMessage::Cancel { side, id } => self.on_cancel(i, side, id),
         }
-        true
     }
 
     fn on_hello(&mut self, i: usize, version: u32, token: &[u8]) -> bool {

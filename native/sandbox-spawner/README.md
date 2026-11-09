@@ -90,10 +90,11 @@ nexus-host [--plugins <檔>] --socket <路徑>
 
 - 控制通道（stdin／stdout）：起來先送 `hello`，等到監督行程版本相等的 `hello` 才 bind socket（版本不對回 3，`hello` 之前 EOF 回 1）；bind 好送 `ready`；插件清單壞了的改送 `config-broken`，不 bind（見上一條）。之後收身分表的 `grant`／`revoke`，回報 `violation`／`unregistered`。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪 socket、回 0。
 - 連線的框格式同控制通道（u32 LE 長度＋內容），內容是 JSON，協定在 `src/host_protocol.rs`，向量檔 `host-vectors.json`。客戶端第一框送 `{"type":"hello","version":…,"token":"…"}`，宿主回 `{"type":"hello","version":…}` 或 `{"type":"rejected","reason":"…"}`。版本是 `HOST_PROTOCOL_VERSION`（4），跟控制通道的版本各自獨立；不用 3（那是控制通道的版本）：客戶端送 3 進來會被判版本不對。上限：一框 256 KiB、JSON 巢狀 32 層、一條連線最多緩衝 2 框；連線最多 1024 條（收監督行程的 `revoke` 時收 backlog 不受這個上限），宿主起來時把開檔數的軟上限拉到硬上限；連上 5 s 內沒送 `hello` 就斷。開檔數還是用完時，排著的連線接下來就關（宿主先留著一個 fd，用完時關掉它騰出位子），不留在 backlog、也不空轉；連那個 fd 都開不回來（整台主機的 fd 用完）、或 backlog 收空了，停 100 ms 不 poll listener 再試（收 `revoke` 時照樣收 backlog）；EMFILE、ENFILE 以外的 accept 錯也一樣停 100 ms。
-- 呼叫（`src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給每一條驗過身分的連線。只傳資料。
+- 呼叫（`src/host/calls.rs`）：驗過身分之後，客戶端送 `call`（`side`、`id`、`service`、`method`、`payload`）與 `cancel`（`side`、`id`）；宿主回 `chunk`（`seq` 從 0 起）與 `result`（`ok` 或 `error{code,message}`），並主動推 `event`（`service`、`topic`、`payload`）給服務指名的那一條連線（它的某個呼叫所在的連線），不廣播。只傳資料。
   - 服務是插件用 `Cx::expose` 提供的（`src/kernel/remote.rs`），照服務名找；沒有就回 `unknown_service`，沒有那個方法回 `unknown_method`。
   - 每個 `id` 剛好一框 `result`，取消的也有（`cancelled`）；`cancel` 已經結束或不存在的 `id` 不回。結束了的 `id` 可以再用。
-  - 一條連線同時最多 64 個呼叫，再來的回 `busy`。一塊或結果編出來超過一框回 `too_large`，大的結果由服務自己切塊串流。排著沒寫出去的到了 1 MiB，先不 poll 那條連線的呼叫。
+  - 一條連線同時最多 64 個呼叫，再來的回 `busy`。一塊或結果編出來超過一框回 `too_large`，大的結果由服務自己切塊串流。排著沒寫出去的到了 1 MiB，先不 poll 那條連線的呼叫，也先不讀它送來的框，排著的降回 1 MiB 以下就恢復；一次讀進來的框照序處理，停下時剩的留著，恢復後接著處理。
+  - 服務在一步裡推的塊加起來超過 1 MiB，超過的那一塊起不送（前面的照送），那個呼叫回 `service_error`，服務還當它在跑的話在服務那邊取消。事件不受讀端暫停管：要推給的連線排著的已經到了 2 MiB、又有事件要推，就斷掉那條連線，不丟掉那個事件；客戶端重連後要再發呼叫，服務才知道新的連線。單一事件編出來超過一框的不送，宿主只記一行 log，連線不斷。
   - 綁定跟著連線走：連線一斷，它還在跑的呼叫在服務那邊全部取消，宿主不記跨連線的東西。提供服務的插件卸載或換了實體，還在跑的呼叫回 `service_error`。
   - `side` 是 `id` 由哪一邊發的，`"h"` 保留給宿主發起的請求，宿主收到 `"h"` 的 `call`／`cancel` 判違規。還沒送 `hello` 就送 `call`／`cancel`、還在跑的 `id` 又送一次，也判違規（照下面狀態表「壞框」那一欄）。
 - 驗身分：用 `SO_PEERCRED` 取連線的 pid（uid 要跟宿主相同），驗 `hello` 之前先把控制通道讀乾淨，所以監督行程已經寫進 pipe 的撤銷一定先生效。客戶端報的 thread 不看。

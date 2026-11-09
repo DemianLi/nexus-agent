@@ -59,8 +59,13 @@ describe('宿主協定，跟 host_protocol.rs 對同一份向量檔', () => {
     );
   });
 
+  // `side:'h'` 的向量給宿主那一側驗解碼與逐字重編（宿主收到時才判違規）；客戶端的編碼器在送出前就擋下。
   it.each(vectors.clientMessages)('客戶端訊息編出來一字不差：$json', ({ value, json }) => {
-    expect(encodeClientMessage(value).toString('utf8')).toBe(json);
+    if ('side' in value && value.side === 'h') {
+      expect(() => encodeClientMessage(value)).toThrow(HostProtocolError);
+    } else {
+      expect(encodeClientMessage(value).toString('utf8')).toBe(json);
+    }
   });
 
   it.each(vectors.hostMessages)('解得出宿主的訊息：$json', ({ value, json }) => {
@@ -125,6 +130,12 @@ describe('encodeClientMessage 只送宿主解得開的', () => {
     expect(() => encodeClientMessage(message)).toThrow(
       new HostProtocolError(`${field} 有落單的代理對`),
     );
+  });
+
+  it("call 與 cancel 的 side 是 'h' 丟 HostProtocolError", () => {
+    const error = new HostProtocolError('客戶端送的 side 只能是 c');
+    expect(() => encodeClientMessage({ ...call(null), side: 'h' } as ClientMessage)).toThrow(error);
+    expect(() => encodeClientMessage({ type: 'cancel', side: 'h', id: 1 })).toThrow(error);
   });
 
   it('id 要是 0 到 MAX_ID 的整數', () => {

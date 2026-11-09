@@ -17,7 +17,9 @@
 //! | `big` | 單次 | 回一個編出來超過一框的結果 |
 //! | `big-chunk` | 串流 | 送一塊超過一框的字串，之後掛著 |
 //! | `unary-chunk` | 單次 | 送一塊（單次的方法不該送），之後掛著 |
-//! | `emit` | 單次 | 推一個事件 `ping`（payload 原樣），回 null |
+//! | `emit` | 單次 | 推一個事件 `ping`（payload 原樣）給發出這次呼叫的連線，回 null |
+//! | `burst` | 單次 | payload `{"count": n, "bytes": b}`（n 在 0 到 1000、b 在 0 到 200000）：一次推 n 個事件 `burst` 給發出這次呼叫的連線，payload 是 b 個 x，回 null |
+//! | `flood` | 串流 | 一步推 5 塊、每塊 250000 個 x（加起來超過一步的上限），之後掛著 |
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -26,7 +28,7 @@ use crate::host_protocol::MAX_FRAME;
 use crate::json::Value;
 use crate::kernel::{
     Applied, CallKey, ConfigError, Cx, Fault, Fields, MethodKind, Plugin, PluginError, Progress,
-    Remote, Service, Spec,
+    Push, Remote, Service, Spec,
 };
 
 pub static SPEC: Spec = Spec {
@@ -47,7 +49,7 @@ pub struct Echo {
     /// 掛著的呼叫：有時限的到時回 `"done"`，沒有的等取消。
     pending: HashMap<CallKey, Option<Instant>>,
     cancels: i64,
-    events: Vec<(String, Value)>,
+    events: Vec<Push>,
 }
 
 impl Service for Echo {
@@ -62,8 +64,8 @@ impl Remote for Echo {
     fn method(&self, name: &str) -> Option<MethodKind> {
         match name {
             "echo" | "fail" | "reject" | "wait" | "hang" | "cancels" | "big" | "unary-chunk"
-            | "emit" => Some(MethodKind::Unary),
-            "stream" | "big-chunk" => Some(MethodKind::Stream),
+            | "emit" | "burst" => Some(MethodKind::Unary),
+            "stream" | "big-chunk" | "flood" => Some(MethodKind::Stream),
             _ => None,
         }
     }
@@ -112,8 +114,31 @@ impl Remote for Echo {
                 Progress::Pending
             }
             "emit" => {
-                self.events.push(("ping".into(), payload));
+                self.events.push(Push {
+                    conn: key.conn,
+                    topic: "ping".into(),
+                    payload,
+                });
                 Progress::Ok(Value::Null)
+            }
+            "burst" => {
+                let count = int(&payload, "count").filter(|n| (0..=1000).contains(n));
+                let bytes = int(&payload, "bytes").and_then(|n| usize::try_from(n).ok());
+                let (Some(count), Some(bytes)) = (count, bytes.filter(|n| *n <= 200_000)) else {
+                    return Progress::Err(Fault::BadPayload, "count 或 bytes 不在範圍內".into());
+                };
+                let event = Push {
+                    conn: key.conn,
+                    topic: "burst".into(),
+                    payload: Value::Str("x".repeat(bytes)),
+                };
+                self.events.extend((0..count).map(|_| event.clone()));
+                Progress::Ok(Value::Null)
+            }
+            "flood" => {
+                chunks.extend((0..5).map(|_| Value::Str("x".repeat(250_000))));
+                self.pending.insert(key, None);
+                Progress::Pending
             }
             _ => Progress::Err(Fault::Failed, "沒有這個方法".into()),
         }
@@ -139,7 +164,7 @@ impl Remote for Echo {
         self.pending.values().flatten().min().copied()
     }
 
-    fn take_events(&mut self) -> Vec<(String, Value)> {
+    fn take_events(&mut self) -> Vec<Push> {
         std::mem::take(&mut self.events)
     }
 }

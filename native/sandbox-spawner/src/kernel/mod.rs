@@ -48,7 +48,7 @@ use crate::json::Value;
 pub use config::{ConfigError, Fields};
 pub use deadline::{Applied, Effect, Limits, OnDispose, Step};
 pub use event::Event;
-pub use remote::{CallKey, Fault, MethodKind, Progress, Remote};
+pub use remote::{CallKey, Fault, MethodKind, Progress, Push, Remote};
 pub use service::{Inject, Range, SemverError, Service, Version};
 
 use deadline::Timer;

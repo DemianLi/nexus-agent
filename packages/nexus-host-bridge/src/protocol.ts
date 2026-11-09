@@ -123,9 +123,15 @@ function checkId(id: number): void {
   if (!Number.isSafeInteger(id) || id < 0) throw new HostProtocolError('id 不在範圍內');
 }
 
+/** 宿主把客戶端送來的 `side:'h'` 判違反協定、隔離整個行程，所以擋在送出之前。 */
+function checkSide(side: Side): void {
+  if (side !== 'c') throw new HostProtocolError('客戶端送的 side 只能是 c');
+}
+
 /**
- * 編成緊湊 JSON，鍵照 `type` 在前的固定順序，跟宿主那一側編出來的一字不差。字串欄位有落單的代理對、`call`／`cancel` 的 `id`
- * 不是 0 到 {@link MAX_ID} 的整數、`call` 的 `payload` 不合宿主的 JSON、或整框超過 {@link MAX_FRAME}，丟 {@link HostProtocolError}。
+ * 編成緊湊 JSON，鍵照 `type` 在前的固定順序，跟宿主那一側編出來的一字不差。字串欄位有落單的代理對、`call`／`cancel` 的 `side`
+ * 不是 `'c'` 或 `id` 不是 0 到 {@link MAX_ID} 的整數、`call` 的 `payload` 不合宿主的 JSON、或整框超過 {@link MAX_FRAME}，
+ * 丟 {@link HostProtocolError}。
  */
 export function encodeClientMessage(message: ClientMessage): Buffer {
   let text: string;
@@ -135,6 +141,7 @@ export function encodeClientMessage(message: ClientMessage): Buffer {
       text = JSON.stringify({ type: 'hello', version: message.version, token: message.token });
       break;
     case 'call':
+      checkSide(message.side);
       checkId(message.id);
       checkString(message.service, 'service');
       checkString(message.method, 'method');
@@ -149,6 +156,7 @@ export function encodeClientMessage(message: ClientMessage): Buffer {
       });
       break;
     case 'cancel':
+      checkSide(message.side);
       checkId(message.id);
       text = JSON.stringify({ type: 'cancel', side: message.side, id: message.id });
       break;

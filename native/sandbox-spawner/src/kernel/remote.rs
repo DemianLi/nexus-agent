@@ -1,11 +1,15 @@
 //! 過橋的服務：宿主連線上的 `call` 照服務名找到用 [`super::Cx::expose`] 提供的實體，資料進、資料出。
 //!
 //! 一次呼叫由宿主開始（[`Remote::start`]），沒當場結束的回 [`Progress::Pending`]，之後宿主醒來就 [`Remote::poll`] 它（那條連線排著沒寫出去的太多時先跳過），
-//! 直到回 `Ok` 或 `Err`；呼叫端取消、斷線，或宿主提早收尾（塊太大、單次的方法推了塊）時宿主叫 [`Remote::cancel`]，之後不再 poll 那一次。服務自己決定什麼時候要被叫醒
+//! 直到回 `Ok` 或 `Err`；呼叫端取消、斷線，或宿主提早收尾（塊太大、一步推的塊加起來超過上限、單次的方法推了塊）時宿主叫 [`Remote::cancel`]，之後不再 poll 那一次。服務自己決定什麼時候要被叫醒
 //! （[`Remote::next_deadline`]）：宿主不忙等，沒寫時限的 `Pending` 只在宿主因別的事醒來時被 poll 到。
 //!
 //! 串流的方法在 `start`／`poll` 裡把一塊一塊推進 `chunks`，最後照樣以 `Ok`／`Err` 收尾。單次的方法推了塊，宿主當成服務的錯。
-//! 服務也可以主動推事件（[`Remote::take_events`]），宿主送給每一條驗過身分的連線。
+//! 一步推的塊加起來有上限（`crate::host::calls::OUTBOX_PAUSE`），超過的那一塊起不送，那一次以服務的錯收尾。
+//! 服務也可以主動推事件（[`Remote::take_events`]），每個事件指定送給哪一條連線（[`CallKey::conn`]），宿主不廣播。
+//!
+//! 提供者離開 ACTIVE 時，還在跑的呼叫以服務的錯收尾，不另外叫 [`Remote::cancel`]：離開 ACTIVE 就是進卸載，宿主從那一刻起找不到
+//! 這個值；卸載時它連同記的每一次呼叫一起丟掉；再 apply 是新的值、新的 uid。
 //!
 //! 值都是 [`Value`]，不帶回呼或活物件：過界的只有資料。
 
@@ -35,6 +39,16 @@ pub enum Fault {
     BadPayload,
     /// 其他失敗。
     Failed,
+}
+
+/// 服務主動推的一個事件。編出來超過一框的，宿主不送、只記一行 log；指名的連線排著的到了
+/// `crate::host::calls::OUTBOX_LIMIT`，宿主斷掉那條連線。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Push {
+    /// 送給哪一條連線：從那條連線上某一次呼叫的 [`CallKey::conn`] 來。連線已經斷了就丟掉。
+    pub conn: u32,
+    pub topic: String,
+    pub payload: Value,
 }
 
 /// 一次呼叫推進到哪。`Pending` 之後宿主會再 poll；`Ok`／`Err` 是終點，`Err` 的字串原樣成為回給客戶端的 `error.message`。
@@ -71,8 +85,8 @@ pub trait Remote {
         None
     }
 
-    /// 取走要推給客戶端的事件：`(topic, payload)`。
-    fn take_events(&mut self) -> Vec<(String, Value)> {
+    /// 取走要推給客戶端的事件。
+    fn take_events(&mut self) -> Vec<Push> {
         Vec::new()
     }
 }
