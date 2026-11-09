@@ -317,7 +317,7 @@ const USAGE = `用法：
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
   --agent-loop <langgraph|native>
-                       驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
+                       驅動 middleware 的迴圈（預設 langgraph）；native 會停下來問人，沒人可問的呼叫（invoke、子代理那一層）照沒有管道回絕
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
   --trusted-host <host[:port]>
                        放在反向代理後面時，瀏覽器看到的 authority（可以給多次）；沒指名的非 loopback Host 一律 403
