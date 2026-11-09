@@ -8,7 +8,7 @@
 //!
 //! 沒帶 `--plugins`，或檔案不存在，是空樹。檔案讀不了或解析不過，寫一行 log、送 `config-broken`（帶那句錯誤）取代 `ready`、回 4，不綁 socket。插件的事件（狀態轉換、設定被插件拒絕、apply 失敗…）每一筆寫一行 log。
 //!
-//! 控制通道是 stdin／stdout（[`crate::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
+//! 控制通道是 stdin／stdout（[`nexus_sandbox_spawner::supervisor_protocol`] 的 `HostCommand`／`HostReport`）。一起來先送 `hello`，等監督行程的 `hello`，
 //! 版本不同就回 3。接著綁 socket（舊的先刪掉），之後才送 `ready`：`ready` 之前不可能有客戶端的輸入。stdin 讀到 EOF 或讀不下去（控制通道送來超長的框）就刪掉 socket、回 0。
 //!
 //! 身分表由監督行程給（`grant`／`revoke`），宿主不看客戶端自己說的身分：連線的 pid 取自 `SO_PEERCRED`（核心在 `connect()` 那一刻記下的），
@@ -38,8 +38,8 @@ use crate::host_protocol::{
     HOST_PROTOCOL_VERSION,
 };
 use crate::kernel::{Kernel, KernelEvent, Limits};
-use crate::supervisor::process::Chan;
-use crate::supervisor_protocol::{
+use nexus_sandbox_spawner::supervisor::process::Chan;
+use nexus_sandbox_spawner::supervisor_protocol::{
     decode_host_command, encode_host_report, HostCommand, HostReport, Role, PROTOCOL_VERSION,
 };
 use std::collections::{HashMap, VecDeque};
@@ -55,8 +55,8 @@ pub const MAX_CONNECTIONS: usize = 1024;
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 const EXIT_PROTOCOL: i32 = 3;
-/// `--plugins` 的檔案讀不了或解析不過。
-pub const EXIT_CONFIG: i32 = 4;
+/// `--plugins` 的檔案讀不了或解析不過。值由監督行程那邊的協定定。
+pub const EXIT_CONFIG: i32 = nexus_sandbox_spawner::supervisor_protocol::HOST_EXIT_CONFIG;
 /// 結束前把 `config-broken` 寫給監督行程最多等這麼久；寫不完照樣結束，監督行程看結束碼一樣知道。
 const CONFIG_BROKEN_WRITE_LIMIT: Duration = Duration::from_millis(500);
 
@@ -197,7 +197,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
         Chan::from_fds(
             OwnedFd::from_raw_fd(0),
             OwnedFd::from_raw_fd(1),
-            crate::protocol::MAX_FRAME,
+            nexus_sandbox_spawner::protocol::MAX_FRAME,
         )
     };
     control.send(&encode_host_report(&HostReport::Hello {

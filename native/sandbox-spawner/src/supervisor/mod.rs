@@ -79,7 +79,7 @@ mod args;
 mod audit;
 mod cpu;
 mod memory;
-pub(crate) mod process;
+pub mod process;
 
 use crate::supervisor_protocol::{
     decode_conversation_report, decode_front_request, decode_host_report,
@@ -293,7 +293,7 @@ struct Host {
 const EXIT_PROTOCOL: i32 = 3;
 /// 宿主在 `ready` 之前連續失敗到上限而停機時的結束碼。
 const EXIT_HOST_FAILED: i32 = 4;
-/// 這個監督行程起來之後宿主一次都還沒 `ready` 過、插件清單就壞了（宿主報 `config-broken` 或回 [`crate::host::EXIT_CONFIG`]）而停機時的結束碼。
+/// 這個監督行程起來之後宿主一次都還沒 `ready` 過、插件清單就壞了（宿主報 `config-broken` 或回 [`crate::supervisor_protocol::HOST_EXIT_CONFIG`]）而停機時的結束碼。
 const EXIT_HOST_CONFIG: i32 = 5;
 /// 撤銷寫進宿主控制通道最多等這麼久；收屍會等它，所以要短。
 const REVOKE_WRITE_LIMIT: Duration = Duration::from_millis(500);
@@ -1942,7 +1942,7 @@ impl Supervisor {
     fn on_exit(&mut self, pid: libc::pid_t, exit: Exit) {
         if self.host.as_ref().is_some_and(|host| host.proc.pid == pid) {
             let Some(host) = self.host.take() else { return };
-            let config_broken = (!host.ready && exit.code == Some(crate::host::EXIT_CONFIG))
+            let config_broken = (!host.ready && exit.code == Some(crate::supervisor_protocol::HOST_EXIT_CONFIG))
                 || host.config_broken.is_some();
             let error = match (&host.config_broken, config_broken) {
                 (Some(reason), _) => Some(format!("宿主設定壞了：{reason}")),

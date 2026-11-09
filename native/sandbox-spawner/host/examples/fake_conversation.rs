@@ -297,7 +297,7 @@ fn main() {
                         &"f".repeat(token.len()),
                     )),
                     ("host-garbage", _) => {
-                        let too_long = nexus_sandbox_spawner::host_protocol::MAX_FRAME as u32 + 1;
+                        let too_long = nexus_host::host_protocol::MAX_FRAME as u32 + 1;
                         log(&host_client::send_line(
                             host_socket.as_deref().unwrap(),
                             &too_long.to_le_bytes(),

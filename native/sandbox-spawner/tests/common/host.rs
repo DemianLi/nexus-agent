@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
+/// 宿主的執行檔，在另一個 package，見 [`super::built`]。
+pub fn host() -> PathBuf {
+    super::built("nexus-host")
+}
 
 /// [`HostProc::grant`] 送的序號。
 pub const GRANTED: u32 = 1;
@@ -21,11 +24,7 @@ fn stderr_path(socket: &Path) -> PathBuf {
 }
 
 pub fn example(name: &str) -> PathBuf {
-    Path::new(HOST)
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name)
+    super::built("examples").join(name)
 }
 
 pub struct HostProc {
@@ -39,12 +38,12 @@ pub struct HostProc {
 impl HostProc {
     /// 起宿主、還沒握手。
     pub fn spawn(socket: &Path) -> HostProc {
-        HostProc::spawn_with(socket, Command::new(HOST))
+        HostProc::spawn_with(socket, Command::new(host()))
     }
 
     /// 同 [`HostProc::start`]，但宿主的開檔數軟硬上限都是 `limit`：它拉不高，連線到一定數量開檔數就會用完。
     pub fn start_with_open_file_limit(socket: &Path, limit: u64) -> HostProc {
-        let mut command = Command::new(HOST);
+        let mut command = Command::new(host());
         // SAFETY：fork 之後只呼叫 setrlimit。
         unsafe {
             command.pre_exec(move || {
@@ -66,7 +65,7 @@ impl HostProc {
 
     /// 帶 `--plugins <plugins>` 起宿主、還沒握手；stderr 寫到 `<socket>.stderr`，用 [`HostProc::stderr`] 讀。
     pub fn spawn_with_plugins(socket: &Path, plugins: &Path) -> HostProc {
-        let mut command = Command::new(HOST);
+        let mut command = Command::new(host());
         command
             .arg("--plugins")
             .arg(plugins)

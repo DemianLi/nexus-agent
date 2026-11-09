@@ -579,9 +579,9 @@ class SandboxSpawner(unittest.TestCase):
     def test_lints_with_the_pinned_toolchain(self) -> None:
         """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑，clippy 警告即錯（#2620）。"""
         self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
-        self.assertEqual(self.steps['格式']['run'], 'cargo fmt --check')
+        self.assertEqual(self.steps['格式']['run'], 'cargo fmt --all --check')
         self.assertEqual(self.steps['clippy']['if'], '${{ !cancelled() }}')
-        self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --all-targets --features test-hooks -- -D warnings')
+        self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings')
         names = list(self.steps)
         self.assertLess(names.index('clippy'), names.index('編譯'))
 
@@ -667,6 +667,22 @@ class SandboxSpawner(unittest.TestCase):
         self.assertNotIn('--target', self.steps['測試（glibc 的子行程）']['run'])
         bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
+
+    def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
+        """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，每一步都要涵蓋整個 workspace。"""
+        native = ROOT / 'native' / 'sandbox-spawner'
+        root = (native / 'Cargo.toml').read_text(encoding='utf-8')
+        self.assertIn('[workspace]\nmembers = ["host"]\n', root)
+        deps = re.search(r'(?ms)^\[dependencies\]\n(.*?)(?:^\[|\Z)', root)
+        assert deps is not None
+        self.assertEqual(re.findall(r'(?m)^([a-z0-9_-]+) =', deps.group(1)), ['landlock', 'libc'])
+        host = (native / 'host' / 'Cargo.toml').read_text(encoding='utf-8')
+        self.assertIn('name = "nexus-host"', host)
+        self.assertNotIn('[profile', host, 'profile 只在 workspace 的根有效')
+        bundle = (native / 'bundle.sh').read_text(encoding='utf-8')
+        self.assertIn('cargo tree --locked -p nexus-sandbox-spawner ', bundle)
+        for name in ('clippy', '編譯', '測試（musl）', '測試（glibc 的子行程）'):
+            self.assertIn(' --workspace ', self.steps[name]['run'], name)
 
     def test_toolchain_is_pinned(self) -> None:
         toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')

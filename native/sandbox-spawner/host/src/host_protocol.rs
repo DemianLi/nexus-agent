@@ -1,4 +1,4 @@
-//! 前台與對話行程連宿主 socket（`<run dir>/host.sock`）的協定。框格式同 [`crate::protocol`]（u32 LE 長度＋內容），內容是一份 JSON
+//! 前台與對話行程連宿主 socket（`<run dir>/host.sock`）的協定。框格式同 [`nexus_sandbox_spawner::protocol`]（u32 LE 長度＋內容），內容是一份 JSON
 //! 物件（[`crate::json`]），`type` 欄位分種類。兩邊從同一份向量檔 `host-vectors.json` 驗。
 //!
 //! 連上之後客戶端的第一框是 `hello`，帶協定版本（[`HOST_PROTOCOL_VERSION`]）與監督行程在控制通道上交給它的 token。宿主照 `SO_PEERCRED`
@@ -11,12 +11,12 @@
 //! 解得開，但宿主收到就判違反協定。
 //!
 //! 上限都是常數：一框最長 [`MAX_FRAME`]，JSON 巢狀最多 [`crate::json::MAX_DEPTH`] 層，每條連線未處理的位元組最多
-//! [`crate::supervisor::process::INBOX_FRAMES`] 個框長，`id` 最大 [`MAX_ID`]。超過、解不開、種類不認得，都算違反協定。
+//! [`nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES`] 個框長，`id` 最大 [`MAX_ID`]。超過、解不開、種類不認得，都算違反協定。
 
 use crate::json::{self, Value};
-use crate::protocol::DecodeError;
+use nexus_sandbox_spawner::protocol::DecodeError;
 
-/// 宿主連線的協定版本。跟監督行程控制通道的版本（[`crate::supervisor_protocol::PROTOCOL_VERSION`]）各自獨立。
+/// 宿主連線的協定版本。跟監督行程控制通道的版本（[`nexus_sandbox_spawner::supervisor_protocol::PROTOCOL_VERSION`]）各自獨立。
 /// 不用 3：那是控制通道的版本，送 3 進來的客戶端判版本不對，不當成這一版。
 pub const HOST_PROTOCOL_VERSION: u32 = 4;
 
@@ -416,9 +416,9 @@ pub fn hello(token: &str) -> ClientMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::take_frame_within;
+    use nexus_sandbox_spawner::protocol::take_frame_within;
 
-    const VECTORS: &str = include_str!("../host-vectors.json");
+    const VECTORS: &str = include_str!("../../host-vectors.json");
 
     fn vectors() -> Value {
         json::parse(VECTORS.as_bytes()).unwrap()
@@ -469,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             all.get("bufferedFrames").and_then(Value::as_int),
-            Some(crate::supervisor::process::INBOX_FRAMES as i64)
+            Some(nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES as i64)
         );
     }
 

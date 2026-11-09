@@ -1,3 +1,8 @@
+# spawner 與監督行程在這個 package；宿主在 `host/`，相依分開算（bundle.sh 只收這個 package 的）。
+# release 的 profile 只在 workspace 的根有效，兩個 package 都照它編。
+[workspace]
+members = ["host"]
+
 [package]
 name = "nexus-sandbox-spawner"
 version = "0.0.0"

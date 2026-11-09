@@ -2,7 +2,7 @@
 //!
 //! 結果：`host hello`、`host rejected <理由>`、`host garbled <理由>`（宿主的回答解不開）、`host unexpected <框>`（宿主回的不是 `hello` 或 `rejected`）、`host closed`（宿主沒回答就斷了）、`host error <errno>`（連不上，或 socket 建不起來）。
 
-use nexus_sandbox_spawner::host_protocol::{
+use nexus_host::host_protocol::{
     decode_host_message, encode_client_message, hello, HostMessage,
 };
 use nexus_sandbox_spawner::protocol::frame;

@@ -4,13 +4,9 @@
 //! 同一個 crate 還有第二支執行檔 `nexus-supervisor`（`bin/nexus-supervisor.rs`，#1947 的監督行程），邏輯在 [`supervisor`]，
 //! 控制面協定在 [`supervisor_protocol`]，跟 spawner 共用框格式。spawner 的執行檔不用這兩個模組；監督行程不裝 seccomp（理由見 README）。
 //!
-//! 第三支執行檔 `nexus-host`（`bin/nexus-host.rs`，#2569 的宿主）由監督行程起，邏輯在 [`host`]；前台與對話行程連它的協定在
-//! [`host_protocol`]，框內容是 [`json`]。
+//! 宿主 `nexus-host`（#2569）在同一個 workspace 的另一個 package（`host/`），靠這裡的框格式、監督行程的控制面協定與 `Chan`。
+//! 分開的理由：宿主的相依會變多，spawner 與監督行程的執行檔不跟著連進那些 crate。依賴只有宿主往這裡一個方向。
 
-pub mod host;
-pub mod host_protocol;
-pub mod json;
-pub mod kernel;
 pub mod landlock;
 pub mod protocol;
 pub mod seccomp;

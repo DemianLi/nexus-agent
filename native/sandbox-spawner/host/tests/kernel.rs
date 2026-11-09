@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use nexus_sandbox_spawner::json::{self, Value};
-use nexus_sandbox_spawner::kernel::config::{self, Fields};
-use nexus_sandbox_spawner::kernel::{
+use nexus_host::json::{self, Value};
+use nexus_host::kernel::config::{self, Fields};
+use nexus_host::kernel::{
     Applied, ConfigError, Cx, Effect, Event, FiberId, Health, Inject, Kernel, KernelError,
     KernelEvent, Limits, Plugin, PluginError, Range, RequiredProblem, Row, Service, Spec, State,
     Step, Version, CARD_ISOLATE, CARD_LOADER_DIFF, CARD_UPDATE_VETO,
@@ -1678,7 +1678,7 @@ fn an_update_during_a_pending_apply_outlives_its_self_disable() {
 /// 用 `expose` 提供的服務，宿主照名字叫得到；`provide` 的叫不到；提供者收掉之後也叫不到。
 mod remote {
     use super::*;
-    use nexus_sandbox_spawner::kernel::{CallKey, MethodKind, Progress, Remote};
+    use nexus_host::kernel::{CallKey, MethodKind, Progress, Remote};
 
     struct Shout;
     impl Service for Shout {

@@ -1846,7 +1846,10 @@ fn shutdown_answers_a_thread_waiting_for_its_drain_answer_once() {
     );
 }
 
-const HOST: &str = env!("CARGO_BIN_EXE_nexus-host");
+/// 宿主在另一個 package，跟監督行程編進同一個 target 目錄。
+fn host_bin() -> PathBuf {
+    Path::new(SUPERVISOR).parent().unwrap().join("nexus-host")
+}
 
 fn children(pid: u32) -> Vec<u32> {
     std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
@@ -1868,7 +1871,7 @@ fn fake_host(args: &[&str]) -> Option<(PathBuf, Vec<String>)> {
 }
 
 fn real_host() -> Option<(PathBuf, Vec<String>)> {
-    Some((PathBuf::from(HOST), Vec::new()))
+    Some((host_bin(), Vec::new()))
 }
 
 /// 假宿主的紀錄（`examples/fake_host.rs`）。
@@ -2087,11 +2090,10 @@ fn a_quarantined_conversation_is_audited_on_every_later_rejection() {
     );
 }
 
-/// 不是我們起的行程（這裡是測試行程自己）連真的宿主：送 `hello` 報 `unregistered`、送壞框報 `violation`，
-/// 監督行程兩種都寫稽核、`role` 記 `unknown`，不隔離任何人，也不記那行警告。
+/// 不是我們起的行程連真的宿主：送 `hello` 報 `unregistered`（`examples/host_client`，它的 `hello` 在宿主那個 package 編）、
+/// 送壞框報 `violation`（測試行程自己），監督行程兩種都寫稽核、`role` 記 `unknown`，不隔離任何人，也不記那行警告。
 #[test]
 fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
-    use nexus_sandbox_spawner::host_protocol::{encode_client_message, hello};
     let mut h = Harness::start(Options {
         host: real_host(),
         ..Options::default()
@@ -2103,23 +2105,32 @@ fn a_connection_from_a_pid_that_is_not_ours_is_audited_as_unknown() {
         log(&a)
     );
     let socket = h.dir.join("run/host.sock");
-    for bytes in [
-        frame(&encode_client_message(&hello(&"0".repeat(32)))),
-        frame(&[0xff]),
-    ] {
-        let mut stream = UnixStream::connect(&socket).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        stream.write_all(&bytes).unwrap();
-        let mut rest = Vec::new();
-        let _ = stream.read_to_end(&mut rest);
-    }
-    let pid = format!("\"pid\":{},", std::process::id());
+    let client = Command::new(example("host_client"))
+        .arg(&socket)
+        .arg("0".repeat(32))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let client_pid = client.id();
+    let out = client.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(&frame(&[0xff])).unwrap();
+    let mut rest = Vec::new();
+    let _ = stream.read_to_end(&mut rest);
+    let pids = [
+        format!("\"pid\":{client_pid},"),
+        format!("\"pid\":{},", std::process::id()),
+    ];
     let lines = || {
         h.audit()
             .into_iter()
-            .filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid))
+            .filter(|l| {
+                l.contains("\"event\":\"protocol\"") && pids.iter().any(|p| l.contains(p))
+            })
             .collect::<Vec<_>>()
     };
     assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
@@ -2270,7 +2281,7 @@ fn a_host_with_a_broken_plugin_list_stops_everything_with_5_without_restarting_i
     std::fs::write(&list, r#"[{"name":"沒有這支"}]"#).unwrap();
     let mut h = Harness::start(Options {
         host: Some((
-            PathBuf::from(HOST),
+            host_bin(),
             vec!["--plugins".to_string(), list.display().to_string()],
         )),
         extra: vec!["--host-start-failures", "3"],
@@ -2299,7 +2310,7 @@ fn break_the_list_after_ready(start_failures: &'static str) -> (Harness, PathBuf
     std::fs::write(&list, r#"[{"name":"test-echo"}]"#).unwrap();
     let mut h = Harness::start(Options {
         host: Some((
-            PathBuf::from(HOST),
+            host_bin(),
             vec!["--plugins".to_string(), list.display().to_string()],
         )),
         extra: vec!["--host-start-failures", start_failures],

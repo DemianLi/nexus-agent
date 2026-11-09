@@ -22,8 +22,11 @@
 use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
-/// 連宿主 socket 的協定（[`crate::host_protocol`]）用同一個版本，`host-vectors.json` 的 `protocolVersion` 也核對。
+/// 連宿主 socket 的協定（`nexus-host` 的 `host_protocol`）用同一個版本，`host-vectors.json` 的 `protocolVersion` 也核對。
 pub const PROTOCOL_VERSION: u32 = 3;
+
+/// 宿主的 `--plugins` 檔案讀不了或解析不過時的結束碼。監督行程看它判斷插件清單壞了，所以放在兩邊共用的協定這裡。
+pub const HOST_EXIT_CONFIG: i32 = 4;
 
 /// 監督行程 → 對話行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -218,7 +221,7 @@ pub enum HostReport {
         conn: u32,
         reason: Vec<u8>,
     },
-    /// `--plugins` 的插件清單讀不了或解析不過，取代 `ready`；送完宿主就以 [`crate::host::EXIT_CONFIG`] 結束。`reason` 是宿主寫的那句錯誤（UTF-8）。
+    /// `--plugins` 的插件清單讀不了或解析不過，取代 `ready`；送完宿主就以 [`HOST_EXIT_CONFIG`] 結束。`reason` 是宿主寫的那句錯誤（UTF-8）。
     ConfigBroken { reason: Vec<u8> },
 }
 
