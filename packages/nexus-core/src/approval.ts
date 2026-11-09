@@ -474,7 +474,7 @@ export function approvalGateToolStep(
         return {
           done: denial(
             exec,
-            // 答覆之後再判（帶著 `asked`）時人其實問過了，話照實際發生的講。
+            // 答覆之後再判（帶著 `asked`）時人已經被問過，不能說「沒有人被問到」。
             asked === undefined
               ? `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
                   `這不是有人拒絕了它——是沒有人被問到。`
