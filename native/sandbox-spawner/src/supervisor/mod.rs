@@ -1343,18 +1343,19 @@ impl Supervisor {
                 say!("宿主起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Host { pid: 0, exit: Exit::NOT_STARTED, ready: false, error: Some(&error) });
-                self.host_failed(false, Duration::ZERO);
+                self.host_failed(true, Duration::ZERO);
             }
         }
     }
 
-    /// 宿主沒了（沒起成或結束了）：`ready` 之前的失敗連續到上限就停機，否則照退避排下一次重起。停機中不重起。
-    fn host_failed(&mut self, ready: bool, lived: Duration) {
+    /// 宿主沒了（沒起成或結束了），照退避排下一次重起；停機中不重起。
+    /// `counts`：這次失敗算進 `--host-start-failures` 的連續次數，到上限就停機；不算的只排退避。
+    fn host_failed(&mut self, counts: bool, lived: Duration) {
         let Some(config) = &self.args.host else { return };
         if self.shutting_down {
             return;
         }
-        if !ready {
+        if counts {
             self.host_failures += 1;
             if self.host_failures >= config.start_failures {
                 say!("宿主在 ready 之前連續失敗 {} 次，整台停機", self.host_failures);
@@ -1549,7 +1550,7 @@ impl Supervisor {
                 (None, false) => host.timed_out.then(|| "ready 之前逾時".to_string()),
             };
             self.audit.record(&Record::Host { pid, exit, ready: host.ready, error: error.as_deref() });
-            // 設定錯每次重起都一樣。宿主還沒 ready 過就直接停機；ready 過的照退避重起、不算進連續失敗的次數（跟 ready 之後才死的一樣），
+            // 設定錯每次重起都一樣。宿主還沒 ready 過就直接停機；ready 過的照退避重起、不算進連續失敗的次數，
             // 修好清單之後下一次重起就接上，宿主不在時對話照常跑。
             if let (true, Some(error)) = (config_broken, &error) {
                 if !self.shutting_down {
@@ -1561,13 +1562,13 @@ impl Supervisor {
                         return;
                     }
                 }
-                self.host_failed(true, host.started.elapsed());
+                self.host_failed(false, host.started.elapsed());
                 return;
             }
             if !self.shutting_down {
                 say!("宿主結束了（{exit:?}，{}）", if host.ready { "ready 之後" } else { "ready 之前" });
             }
-            self.host_failed(host.ready, host.started.elapsed());
+            self.host_failed(!host.ready, host.started.elapsed());
             return;
         }
         if self.front.as_ref().is_some_and(|front| front.pid == pid) {
