@@ -3,7 +3,7 @@
  * `--host-socket <路徑>`（就是宿主 bind 的那一個），token 則在控制通道的 `hello` 裡給。兩樣都到了才連，連線本身交給 `@nexus/host-bridge`。
  *
  * TS 插件經 `@nexus/host-bridge` 的門面（`hostBridge` 服務）呼叫宿主服務：有 `--host-socket` 時組裝之前就建好門面
- * （{@link createConversationHostBridge}），拿到 token、連上之後由 {@link connectHost} 接上；沒有就是一律回 `host_absent` 的那一個。
+ * （{@link createConversationHostBridge}），拿到 token 建連線時由 {@link connectHost} 接上（不等 ready）；沒有就是一律回 `host_absent` 的那一個。
  * 宿主死了、重起了，客戶端自己重連，對話不受影響；斷線時在跑的呼叫以 `host_lost` 結算。
  *
  * @module
@@ -36,7 +36,7 @@ export interface ConnectHostOptions {
   readonly hostSocket: string | undefined;
   readonly token: string;
   readonly log: (line: string) => void;
-  /** 組裝之前建好的門面；連線建好就接上去。 */
+  /** 組裝之前建好的門面；建好 `HostClient` 就接上去，不等 ready。 */
   readonly bridge?: HostBridgeHandle | undefined;
 }
 

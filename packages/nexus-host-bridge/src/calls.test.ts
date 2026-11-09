@@ -109,7 +109,7 @@ const codeOf = (promise: Promise<unknown>) =>
     (error: unknown) => (error instanceof HostCallError ? error.code : String(error)),
   );
 
-/** 照服務名回答的假宿主：echo 原樣回、stream 先推兩塊、hang 不回、fail 回錯。 */
+/** 照方法名回答的假宿主：echo 原樣回、stream 先推兩塊再回結果、fail 回錯，其他（例如 hang）不回。 */
 function echoHost(message: Received, reply: (value: object) => void): void {
   if (message.type !== 'call') return;
   const id = message.id;
@@ -209,7 +209,7 @@ describe('HostClient.call', () => {
     await eventually(() => readies === 1 && client.state === 'ready');
   });
 
-  it('還沒 ready 是 host_unavailable，close 之後是 host_absent，在跑的以 host_lost 結算；都不送出', async () => {
+  it('還沒 ready 是 host_unavailable，close 之後是 host_absent，在跑的以 host_lost 結算', async () => {
     const path = socketPath();
     const pending = clientAt(path);
     expect(await codeOf(pending.call('s', 'echo', 1))).toBe('host_unavailable');
@@ -331,6 +331,59 @@ describe('createHostBridge', () => {
 
     host.dropAll();
     await eventually(() => readies === 2 && late === 2);
+  });
+
+  it('等連線的期間取消：當場以 cancelled 結算，不送出', async () => {
+    const lonely = createHostBridge({ waitMs: 5_000 });
+    const controller = new AbortController();
+    const waiting = codeOf(lonely.bridge.call('s', 'echo', 1, { signal: controller.signal }));
+    controller.abort();
+    expect(await waiting).toBe('cancelled');
+
+    const path = socketPath();
+    const host = scriptedHost(path, echoHost);
+    cleanups.push(host.close);
+    const handle = createHostBridge({ waitMs: 5_000 });
+    handle.attach(clientAt(path));
+    const connecting = new AbortController();
+    const pending = codeOf(handle.bridge.call('s', 'echo', 2, { signal: connecting.signal }));
+    connecting.abort();
+    expect(await pending).toBe('cancelled');
+    await host.listening;
+    expect(await handle.bridge.call('s', 'echo', 3)).toBe(3);
+    expect(host.received.filter((m) => m.type === 'call').map((m) => m.payload)).toEqual([3]);
+  });
+
+  it('一個 listener 丟錯，其他照叫，錯由連線記 log', async () => {
+    const path = socketPath();
+    const host = scriptedHost(path, (message, reply) => {
+      if (message.type === 'call') {
+        reply({ type: 'event', service: 'a', topic: 'x', payload: 1 });
+        reply({ type: 'result', side: 'c', id: message.id, ok: null });
+      }
+    });
+    cleanups.push(host.close);
+    await host.listening;
+    const handle = createHostBridge();
+    let readies = 0;
+    handle.bridge.onReady(() => {
+      throw new Error('ready 壞了');
+    });
+    handle.bridge.onReady(() => {
+      readies += 1;
+    });
+    const seen: unknown[] = [];
+    handle.bridge.onEvent('a', () => {
+      throw new Error('事件壞了');
+    });
+    handle.bridge.onEvent('a', (topic) => seen.push(topic));
+    const logs: string[] = [];
+    handle.attach(clientAt(path, logs));
+    await eventually(() => readies === 1);
+    await handle.bridge.call('a', 'm', null);
+    expect(seen).toEqual(['x']);
+    expect(logs).toContain('[宿主] ready 的處理丟了錯：ready 壞了');
+    expect(logs).toContain('[宿主] 事件的處理丟了錯：事件壞了');
   });
 
   it('只能接一次', () => {

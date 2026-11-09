@@ -878,7 +878,7 @@ export interface CreateCliAgentSession {
   readonly mcpPool?: McpConnectionPool;
   /**
    * 宿主服務的門面（`@nexus/host-bridge`）：**只有對話行程傳**，監督行程有起宿主時建一個，每條 thread 的組裝交同一個。
-   * 省略＝這個行程沒有宿主（單行程 serve、CLI），組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
+   * 省略＝沒有宿主（單行程 serve、CLI），或是 serve 起動時的試組；組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
    */
   readonly hostBridge?: HostBridge;
 }

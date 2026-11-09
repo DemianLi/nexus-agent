@@ -1689,31 +1689,33 @@ nexus-agent serve --process-model per-thread
 - **對話行程連宿主**：監督行程起對話行程時多帶 `--host-socket <home>/run/host.sock`，就是宿主聽的那一個。對話行程收到 token 之後才去連。
   - 宿主不在、拒絕這條連線、送來解不開的框或斷線時，對話行程自己重連：第一次等 0.2 秒，之後每次加倍，最長 5 秒；宿主收下一次（記 `[宿主] 連上了`）之後回到 0.2 秒。對話照常跑，不受影響。
   - 對話行程的標準錯誤只在狀態變了時記一行：`[宿主] 連上了`、`[宿主] 斷線（…），重連中`、`[宿主] 連不上（…），重連中`。一段連不上的期間只記第一次。
-  - 宿主目前沒有服務，連上之後兩邊不再傳任何東西。
-- **插件呼叫宿主服務**：插件在 `apply` 時從服務表讀 `hostBridge`（`@nexus/host-bridge` 的 `HOST_BRIDGE_SERVICE`），用 `defineHostService('<服務名>')` 包成具名的把手，
-  再 `call(method, payload, { signal, onChunk })`。這一格一定在：單行程 serve 與 CLI 沒有宿主，交的是每個呼叫都回 `host_absent` 的那一個，插件不必分兩種情況。
-  - 呼叫還沒連上宿主時先等，預設最多 5 秒（`createHostBridge({ waitMs })` 可改）。連上之後閒著時，客戶端不留計時器。
-  - 每個呼叫剛好結算一次：成功回宿主給的 `ok`，失敗丟 `HostCallError`，看它的 `code`。宿主回的錯誤碼：
+  - 出貨的宿主還沒有任何服務；插件送來的呼叫會得到 `unknown_service`。
+- **插件呼叫宿主服務**：插件在 `apply` 時從服務表讀 `hostBridge`（`@nexus/host-bridge` 的 `HOST_BRIDGE_SERVICE`），用 `defineHostService('<服務名>')(bridge)` 包成具名的把手，
+  再 `call(method, payload, { signal, onChunk })`。這一格一定在：單行程 serve 與 CLI 沒有宿主，serve 起動時的試組也不連宿主，交的都是每個呼叫都回 `host_absent` 的那一個，插件不必分兩種情況。
+  - 呼叫還沒連上宿主時先等，最多 5 秒（`DEFAULT_HOST_WAIT_MS`；程式裡用 `createHostBridge({ waitMs })` 可改，對話行程用預設值，沒有營運設定可改）。
+    等的期間 `signal` 中止就以 `cancelled` 結算，不送出。連上之後閒著時，客戶端不留計時器。
+  - 每個呼叫剛好結算一次：成功回宿主給的 `ok`；失敗多半丟 `HostCallError`，看它的 `code`。例外是參數過不了橋（`HostProtocolError`，見下）與 `onChunk` 丟的錯（原樣結算）。宿主回的錯誤碼：
 
     | `code` | 意思 | 呼叫端怎麼做 |
     | --- | --- | --- |
-    | `unknown_service`／`unknown_method` | 宿主上沒有這個服務或方法 | 兩邊名字或版本對不上，是 bug，不要重試 |
+    | `unknown_service`／`unknown_method` | 宿主上沒有這個服務或方法 | 兩邊名字對不上，或宿主沒掛提供它的插件（見下面〈插件清單〉）；原樣重試沒用 |
     | `bad_payload` | 服務不收這份參數 | 改參數；原樣重試一樣失敗 |
     | `busy` | 這條連線同時在跑的呼叫已經 64 個 | 等手上的呼叫結束再送 |
-    | `cancelled` | 呼叫被取消（`signal` 中止，或 `onChunk` 丟了錯） | 自己取消的不用處理 |
-    | `too_large` | 結果或其中一塊超過 256 KiB 一框的上限 | 服務要改用串流或分段，重試沒用 |
-    | `service_error` | 服務自己失敗了 | 看 `message`；能不能重試由那個服務決定 |
+    | `cancelled` | 呼叫被 `signal` 中止；客戶端當場結算，宿主之後回的 `cancelled` 丟掉 | 自己取消的不用處理 |
+    | `too_large` | 結果或其中一塊編成一框超過 256 KiB（`MAX_FRAME`） | 服務要改用串流或分段，重試沒用 |
+    | `service_error` | 服務自己失敗了；或單次的方法推了塊、一步推的塊加起來超過 1 MiB、提供服務的插件在呼叫途中卸載或換了實體 | 看 `message`；能不能重試由那個服務決定 |
 
   - 「宿主不在」那一族是客戶端自己結算的，宿主沒回過：
 
     | `code` | 意思 | 呼叫端怎麼做 |
     | --- | --- | --- |
-    | `host_absent` | 這個行程沒有宿主（單行程 serve、CLI），或連線已經關掉 | 永久的，不要重試；走沒有宿主時的做法，或回報這個功能用不了 |
+    | `host_absent` | 這個行程沒有宿主（單行程 serve、CLI、serve 起動時的試組），或連線已經關掉 | 永久的，不要重試；走沒有宿主時的做法，或回報這個功能用不了 |
     | `host_unavailable` | 有宿主，但等到上限還沒連上；呼叫**沒有送出去** | 可以重試，重試前宜退避 |
     | `host_lost` | 呼叫送出去之後連線斷了，**宿主做了沒有不知道** | 不會自動重送；冪等的才自己重送，不冪等的先查狀態再決定 |
 
-  - 參數編出來超過 256 KiB 的，呼叫當場丟 `HostProtocolError`，不送出去。
-  - 宿主推來的事件用 `onEvent(listener)` 收，只會送到服務指名的那條連線。宿主那邊的登記跟著連線走，斷線重連之後要重新登記的，放在 `bridge.onReady(listener)` 裡：每次連上（包括重連）叫一次，登記時已經連上的話當下也叫一次。
+  - 呼叫編成一框（含服務名與方法名）超過 256 KiB，或參數裡有宿主收不下的值（非安全整數、落單的代理對、巢狀超過 32 層（框本身算一層）、不是純物件），呼叫以 `HostProtocolError` 結算，不送出去。
+    這要連上之後才檢查，所以沒有宿主或還沒連上時，先拿到的是 `host_absent` 或 `host_unavailable`。
+  - 宿主推來的事件用 `onEvent(listener)` 收，只會送到服務指名的那條連線。宿主那邊的登記跟著連線走，斷線重連之後要重新登記的，放在 `bridge.onReady(listener)` 裡：每次連上（包括重連）叫一次，登記時已經連上的話當下也叫一次。listener 丟的錯記一行 log，不影響其他 listener。
 - **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。出貨的宿主還沒有任何插件，所以清單裡目前寫不了任何一列。
   - 宿主只在起來時讀這個檔。放了檔或改了檔之後，要等宿主重起才讀得到：重起 serve，或結束宿主行程讓監督行程照上面〈重起〉的退避重起它（只重起宿主時，對話不斷）。
   - 檔案是 JSON 陣列，一列一個插件：`name`（必填）、`config`（選填，交給插件自己判）、`disabled`（選填，`true` 或 `false`；`null` 當沒寫）。

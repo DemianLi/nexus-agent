@@ -7,8 +7,8 @@
  * - 一段連不上的期間只記第一次失敗與重新連上，不每次重試都記。
  * - socket 與計時器都 `unref`：這條連線不撐住行程，serve 收尾時不用等它。
  * - {@link HostClient.waitReady} 是有上限的等待：ready 了回 `true`，到時限或 `close` 了回 `false`。
- * - ready 之後可以 {@link HostClient.call}。每個呼叫剛好結算一次：宿主回的 `result`、呼叫端取消（`cancelled`，同時送 `cancel`），
- *   或連線斷了（`host_lost`）。綁定跟著連線走：斷線之後宿主那邊已經放掉這條連線的一切，重連後要再登記的，掛 {@link HostClient.onReady}。
+ * - ready 之後可以 {@link HostClient.call}。每個呼叫剛好結算一次：宿主回的 `result`；呼叫端取消（`cancelled`）或 `onChunk` 丟錯
+ *   （以那個錯結算），這兩種在呼叫已經送出時另送 `cancel`；或連線斷了、`close` 了（`host_lost`）。綁定跟著連線走：斷線之後宿主那邊已經放掉這條連線的一切，重連後要再登記的，掛 {@link HostClient.onReady}。
  * - 宿主送來不認得的 `id`、`seq` 跳號、`side` 是 `'h'` 的 `chunk`／`result`，都當成這條連線壞了：關掉重連。
  * - 閒著（ready、沒有呼叫在跑）時沒有任何計時器。
  *
@@ -43,7 +43,7 @@ export interface HostClientOptions {
 }
 
 export interface HostCallOptions {
-  /** 中止就以 `cancelled` 結算，並送 `cancel` 叫宿主那邊停下。 */
+  /** 中止就以 `cancelled` 結算：送出之前就中止的不送出；送出之後中止的另送 `cancel`，叫宿主那邊停下。 */
   readonly signal?: AbortSignal;
   /**
    * 串流的方法每推一塊叫一次，照 `seq` 的順序，都在結果之前。丟出的錯會取消這個呼叫，呼叫以那個錯結算。
@@ -122,7 +122,8 @@ export class HostClient {
    *
    * @returns 宿主回的 `ok`。
    * @throws {@link HostCallError}：宿主回的錯誤碼；還沒 ready 是 `host_unavailable`、已經 `close` 是 `host_absent`（都沒送出去）；
-   *   送出去之後斷線是 `host_lost`；取消是 `cancelled`。`payload` 宿主收不下時丟 `HostProtocolError`，沒送出去。
+   *   送出去之後斷線是 `host_lost`；取消是 `cancelled`。呼叫編不成宿主收得下的框（`payload` 不合宿主的 JSON、字串有落單的代理對、
+   *   整框超過 {@link MAX_FRAME}）時丟 `HostProtocolError`，沒送出去；`onChunk` 丟的錯原樣結算。
    */
   call(
     service: string,
