@@ -34,7 +34,7 @@ impl HostProc {
         HostProc::spawn_with(socket, Command::new(HOST))
     }
 
-    /// 同 [`HostProc::start`]，但宿主的開檔數軟硬上限都是 `limit`：它拉不高，連線到一定數量 accept 就會遇到 EMFILE。
+    /// 同 [`HostProc::start`]，但宿主的開檔數軟硬上限都是 `limit`：它拉不高，連線到一定數量開檔數就會用完。
     pub fn start_with_open_file_limit(socket: &Path, limit: u64) -> HostProc {
         let mut command = Command::new(HOST);
         // SAFETY：fork 之後只呼叫 setrlimit。

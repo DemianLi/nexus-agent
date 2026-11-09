@@ -82,13 +82,13 @@ struct Host {
     /// 預留的一個 fd（開 `/dev/null`）：accept 遇到開檔數用完時先關掉它，騰出位子把排著的那條接下來就關，backlog 才收得乾淨，
     /// listener 也不會一直可讀、讓 poll 空轉。整台主機的 fd 都用完時可能開不回來，是 `None`。
     spare: Option<OwnedFd>,
-    /// 開不回預留的 fd、只能等的時候，這一刻之前不 poll listener。
+    /// 這一輪 accept 要退避時（開檔數用完而 [`Host::shed`] 沒接到連線，或 accept 的其他錯），這一刻之前不 poll listener；收 `revoke` 時的 accept 不看它。
     accept_paused_until: Option<Instant>,
     /// 這一段開檔數用完的期間已經記過 log：接下一條連線之後才再記。
     out_of_fds: bool,
 }
 
-/// 開檔數用完、又開不回預留的 fd 時，停 poll listener 這麼久再試。
+/// accept 要退避時（見 `accept_paused_until`），停 poll listener 這麼久再試。
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 fn open_spare() -> Option<OwnedFd> {
@@ -242,7 +242,7 @@ impl Host {
     }
 
     /// 把控制通道讀到 EAGAIN，套用身分表的變動。監督行程斷了回 `false`。框太大時讀端會關掉、宿主隨後結束，但在那之前切出來的框照樣先套用：
-    /// 呼叫的一方（例如 `hello` 迴圈中途）接著還會拿這張表驗連線。
+    /// [`Host::on_hello`] 與 [`Host::violate`] 呼叫它之後不看回傳值，接著就拿這張表驗連線、查序號。
     fn sync(&mut self) -> bool {
         let (frames, err) = self.control.receive_all();
         for frame in frames {
@@ -322,8 +322,8 @@ impl Host {
         }
     }
 
-    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或 accept 出錯（記一行）為止。開檔數用完時排著的連線接下來就關（見 [`Host::shed`]），
-    /// 不是留在 backlog：之後再接到的連線不會是這段期間排進來的舊連線。
+    /// 收排著的連線，收到 EAGAIN、連線數到 `limit`，或要退避為止。開檔數用完時排著的連線接下來就關（見 [`Host::shed`]），不是留在 backlog；
+    /// `shed` 接不到時（沒有預留的 fd，或 backlog 已空）停下來退避，那時還排著的連線留在 backlog。EMFILE、ENFILE 以外的錯記一行、退避。
     fn accept(&mut self, limit: usize) {
         while self.conns.len() < limit {
             match self.listener.accept() {
@@ -358,7 +358,8 @@ impl Host {
         }
     }
 
-    /// 關掉預留的 fd、接下排著的一條連線就關，再把預留的開回來。接到了回 `true`；沒有預留的 fd、騰出位子還是接不到，回 `false`。
+    /// 關掉預留的 fd、接下排著的一條連線就關，再把預留的開回來。接到了回 `true`；沒有預留的 fd（這時試著開回來），或騰出位子後 accept 沒接到
+    /// （含 backlog 已空），回 `false`。
     fn shed(&mut self) -> bool {
         if self.spare.take().is_none() {
             self.spare = open_spare();
@@ -371,7 +372,7 @@ impl Host {
 
     fn note_out_of_fds(&mut self) {
         if !std::mem::replace(&mut self.out_of_fds, true) {
-            say!("開檔數用完了：排著的連線接下來就關，直到 fd 空出來");
+            say!("開檔數用完了：排著的連線接下來就關（預留的 fd 開不回來時留在 backlog、每 100 ms 再試），直到 fd 空出來");
         }
     }
 

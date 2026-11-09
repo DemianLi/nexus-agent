@@ -1447,15 +1447,16 @@ impl Supervisor {
 
     /// 宿主斷了一條違反協定的連線（或 `on_unregistered` 判成違規的）：寫稽核。那個 pid 是前台或對話行程的，隔離到它結束：
     /// 之後重送身分表時不再放進去；宿主 `ready` 了、沒在收的，也再送一次 `revoke`：它那一筆 `grant` 可能還排在這邊沒寫出去，
-    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。已經隔離的不再送：隔離之後不會再送它的
+    /// 撤銷排在它後面才蓋得掉。還沒 `ready` 的不必送：`ready` 時整張送的表本來就沒有它。只在剛隔離時送一次：隔離之後不會再送它的
     /// `grant`，第一次那筆 `revoke` 就蓋得掉；每筆 `revoke` 都讓宿主把 backlog 收乾淨，重送只會讓違規的行程反覆觸發這件事。
-    /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到；
-    /// 序號 0 是宿主表上沒有那個 pid），只寫稽核，`role` 記 `unknown`。`generation` 是 `None` 的（`on_unregistered` 轉來的，那時 pid 已經不在
-    /// 身分表上）只比 pid。
+    /// 不是我們的 pid（含 0），或 `generation` 對不上現在那個行程的（同一個 pid 號碼上一個行程的回報，在它收屍、號碼被重用之後才讀到），
+    /// 只寫稽核，`role` 記 `unknown`。序號 0 與 `None` 只比 pid：0 是宿主表上沒有那個 pid 時、還沒送 `hello` 的連線報的（那一筆還在 pipe 上，
+    /// 或已經隔離、撤掉了）；收屍之前先撤銷，宿主照順序讀 pipe，撤銷時把 backlog 收乾淨、記成撤過，上一個行程留下的連線報的是 `unregistered`，
+    /// 不會是序號 0 的 `violation`。`None` 是 `on_unregistered` 轉來的，那時 pid 已經不在身分表上。
     fn on_violation(&mut self, pid: u32, generation: Option<u32>, reason: &[u8]) {
         let reason = String::from_utf8_lossy(reason);
         let pid = libc::pid_t::try_from(pid).unwrap_or(-1);
-        let current = |own: u32| generation.is_none_or(|g| g == own);
+        let current = |own: u32| generation.is_none_or(|g| g == 0 || g == own);
         let (role, thread, newly) = if self.front.as_ref().is_some_and(|front| front.pid == pid) && current(self.front_generation) {
             ("front", Vec::new(), !std::mem::replace(&mut self.front_quarantined, true))
         } else if let Some(conversation) = self.conversations.iter_mut().find(|c| c.proc.pid == pid && current(c.generation)) {

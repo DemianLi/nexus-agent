@@ -1,7 +1,7 @@
 //! 監督行程整合測試用的假宿主：照控制通道的協定握手、記下收到的身分表，不收連線。真的宿主是 `nexus-host`。
 //!
 //! ```text
-//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] [--stale-generation] --socket <路徑>
+//! fake_host [--version <n>] [--exit-before-ready <碼>] [--no-ready] [--crash-once <標記檔>] [--unregistered-once <標記檔>] [--violate-conversations] [--violate-twice] [--then-unregistered <理由>] [--report-strangers] [--stale-generation] [--zero-generation] [--then-zero-generation] --socket <路徑>
 //! ```
 //!
 //! - 一起來送 `hello`（版本照 `--version`，預設 [`PROTOCOL_VERSION`]），等到監督行程的 `hello` 才往下。
@@ -13,7 +13,10 @@
 //! - `--then-unregistered`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆 `unregistered`，理由照給的。
 //! - `--report-strangers`：同 `--violate-conversations`，但先對 pid 0 各報一筆 `violation`（理由「測試違規」）與 `unregistered`（理由「沒有登記」）。
 //! - `--stale-generation`：每收到一筆對話行程的身分，就對那個 pid 回報一筆序號比那一筆大 1 的 `violation`（理由「舊序號的違規」），照常跑下去。
-//!   其他的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。
+//! - `--zero-generation`：同 `--violate-conversations`，但那一筆 `violation` 帶序號 0（宿主表上還沒有那個 pid 時，還沒送 `hello` 的連線報的就是 0）。
+//! - `--then-zero-generation`：同 `--violate-conversations`，報完 `violation` 再對同一個 pid 報一筆序號 0 的 `violation`（理由「表上沒有了」）：
+//!   撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時報的就是 0。
+//! - 上面幾種之外的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。
 //! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
@@ -35,8 +38,14 @@ fn main() {
     let then_unregistered = value("--then-unregistered");
     let report_strangers = args.iter().any(|a| a == "--report-strangers");
     let stale_generation = args.iter().any(|a| a == "--stale-generation");
-    let violate_conversations =
-        violate_twice || then_unregistered.is_some() || report_strangers || args.iter().any(|a| a == "--violate-conversations");
+    let zero_generation = args.iter().any(|a| a == "--zero-generation");
+    let then_zero_generation = args.iter().any(|a| a == "--then-zero-generation");
+    let violate_conversations = violate_twice
+        || then_unregistered.is_some()
+        || report_strangers
+        || zero_generation
+        || then_zero_generation
+        || args.iter().any(|a| a == "--violate-conversations");
 
     let mut log_file = std::fs::OpenOptions::new().create(true).append(true).open(format!("{socket}.log")).unwrap();
     let mut log = move |line: &str| {
@@ -88,11 +97,15 @@ fn main() {
                         report(&HostReport::Violation { pid, generation, reason: "舊序號的違規".as_bytes().to_vec() });
                     }
                     if violate_conversations && role == "conversation" {
+                        let generation = if zero_generation { 0 } else { generation };
                         for _ in 0..if violate_twice { 2 } else { 1 } {
                             report(&HostReport::Violation { pid, generation, reason: "測試違規".as_bytes().to_vec() });
                         }
                         if let Some(reason) = &then_unregistered {
                             report(&HostReport::Unregistered { pid, conn: 7, reason: reason.as_bytes().to_vec() });
+                        }
+                        if then_zero_generation {
+                            report(&HostReport::Violation { pid, generation: 0, reason: "表上沒有了".as_bytes().to_vec() });
                         }
                     }
                     if let Some(marker) = unregistered_once.as_ref().filter(|_| role == "conversation") {

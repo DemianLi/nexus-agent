@@ -1631,7 +1631,7 @@ fn revokes_after_reaping(h: &mut Harness, a_pid: i32) -> usize {
     host_log(h).iter().filter(|l| **l == revoke).count()
 }
 
-/// 已經隔離的對話行程又被報違規：再寫一行稽核，但不再送 `revoke`：`revoke` 只有隔離那一次與收屍那一次。
+/// 已經隔離的對話行程又被報違規：再寫一行稽核，但不補送第二次 `revoke`：`revoke` 只有隔離那一次與收屍那一次。
 #[test]
 fn a_second_violation_for_a_quarantined_conversation_is_audited_but_not_revoked_again() {
     let mut h = Harness::start(Options { host: fake_host(&["--violate-twice"]), ..Options::default() });
@@ -1657,6 +1657,34 @@ fn a_violation_with_a_stale_generation_neither_quarantines_nor_revokes() {
     assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
     assert!(lines().iter().all(|l| l.contains("\"role\":\"unknown\"")), "{:?}", lines());
     assert_eq!(revokes_after_reaping(&mut h, a_pid), 1, "{:?}", host_log(&h));
+}
+
+/// 活著的對話行程被報序號 0 的違規（宿主表上還沒有它、還沒送 `hello` 的連線出事時就報 0）：照它的身分隔離，補送 `revoke`。
+#[test]
+fn a_zero_generation_violation_for_a_live_conversation_quarantines_it() {
+    let mut h = Harness::start(Options { host: fake_host(&["--zero-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| !lines().is_empty()), "{:?}", h.audit());
+    assert!(lines().iter().all(|l| l.contains("\"role\":\"conversation\"")), "{:?}", lines());
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
+}
+
+/// 已經隔離的對話行程被報序號 0 的違規（撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時就報 0）：照它的身分寫稽核，不補送第二次 `revoke`。
+#[test]
+fn a_zero_generation_violation_for_a_quarantined_conversation_keeps_its_role() {
+    let mut h = Harness::start(Options { host: fake_host(&["--then-zero-generation"]), ..Options::default() });
+    let a = h.up("a");
+    let a_pid = logged_pid(&a, "pid");
+    let pid = format!("\"pid\":{a_pid},");
+    let lines = || h.audit().into_iter().filter(|l| l.contains("\"event\":\"protocol\"") && l.contains(&pid)).collect::<Vec<_>>();
+    assert!(wait_until(|| lines().len() == 2), "{:?}", h.audit());
+    for (line, reason) in lines().iter().zip(["測試違規", "表上沒有了"]) {
+        assert!(line.contains("\"role\":\"conversation\"") && line.contains(reason), "{line} / {:?}", lines());
+    }
+    assert_eq!(revokes_after_reaping(&mut h, a_pid), 2, "隔離一次、收屍一次：{:?}", host_log(&h));
 }
 
 /// 已經隔離的對話行程被報 `unregistered`：照違規寫稽核，理由是宿主回給那條連線的，不是寫死的「沒有登記」；不記那行警告。
