@@ -4,10 +4,13 @@
  *
  * 工作區在 git repo 裡時，輪開始與收尾各拍一次工作樹快照，兩棵樹比出這一輪改了什麼——連檔案工具以外的改動
  * （使用者自己改的、`submit_record` 寫的、MCP 工具在外面改的）都在（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
- * 檔案工具（`write_file`、`edit_file`、`delete`）改一個檔之前，另外把那個檔整份複製一份，每一輪每個路徑只複製
+ * 檔案工具（`write_file`、`edit_file`、`delete`、`copy_file`）改一個檔之前，另外把那個檔整份複製一份，每一輪每個路徑只複製
  * 第一次、收尾時再複製一次，快照蓋不到的路徑（被忽略的、repo 外的）用這兩份比；不在 repo 裡、或沒有 git 時，
  * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
  * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
+ *
+ * `copy_file` 成功時，`tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）。
+ * 子代理的 `copy_file` 寫在子代理自己的日誌，從那裡讀，同樣帶上（#2311）。
  *
  * ## 掛法：出貨清單的 serve 專屬層，一列；不合格由工作區根缺席表達
  *
@@ -16,19 +19,16 @@
  *   [#669](https://github.com/DemianLi/nexus-agent/issues/669)），CLI 不載那一層，沒有人讀摘要。
  * - dsh 的 `eligible` 看會話 header 的 `cwd`，沒有就不記（`src/index.ts:58-61`）；我們的「沒有工作區」＝沒給 `--workspace`，
  *   組裝點只在有根的時候經 host 服務交 {@link WORKSPACE_ROOT_SERVICE}。**這一列在 `apply` 當下讀它，沒有就什麼都不註冊**
- *   （不提供 {@link WORKSPACE_CHANGES_SERVICE}、不掛 middleware、不接會話），消費者據此當作沒有改動紀錄。
- *   以前是組裝點「有根才把這個 plugin 放進清單」，現在分支搬進 plugin，這一列才進得了清單。
- * - dsh 跳過子代理的會話；我們在 `sessions.join` 只接 root 那一份（見偏離 5：子代理改的檔算進 root 這一輪）。
+ *   （不提供 {@link WORKSPACE_CHANGES_SERVICE}、不掛監聽者、不接會話），消費者據此當作沒有改動紀錄。
+ * - dsh 跳過子代理的會話；我們在 `sessions.join` 只替 root 那一份建記錄器，子代理那一份只讀它的 `copy_file`（見偏離 5：子代理改的檔算進 root 這一輪）。
  *
  * ## 與 dsh 的偏離
  *
  * 1. **git 由組裝點注入的 {@link GIT_STARTER_SERVICE} 起**。環境淨化、逾時、輸出上限、找執行檔見 `git.ts` 檔頭。
  * 2. **事件不帶 `turn`**，時序因此另有要求；接上時重播的舊輪不拍快照。見 `recorder.ts` 檔頭。
  * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
- * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的
- *    `wrapToolCall`、`afterAgent` 與 `sessions.join` 的 `observe`。`afterAgent` 是圖裡的一個節點，每一輪多走一步
- *    （root 與子代理都是，子代理那一步直接返回）；選它是因為它在輪內、在 pump 寫 `turn/end` 之前，而且只在
- *    正常收尾時才跑——停在核准點、中止、失敗都不會走到，那幾種由 `turn/end` 之後的補記收。
+ * 4. **擷取的位置**：擷取在 `tools/execute`（核准之後、本體之前），路徑由參數算（`capture.ts` 的 {@link mutationPath}）；
+ *    `tools/pre-execute` 只等排著的工作；正常收尾聽 `agent/turn-stopping`；會話事件走 `sessions.join` 的 `observe`。
  * 5. **子代理改的檔算進 root 這一輪**。dsh 不記子代理的會話（`eligible`），這一點照做：事件與摘要只在 root。
  *    dsh 的主路徑是 git 快照，子代理在這一輪裡改的檔本來就會出現在 root 的摘要裡；只有快照蓋不到的路徑、
  *    與「沒有 git」那條模式漏掉它們。所以子代理的檔案工具呼叫也在本體前擷取，記在 root 的記錄器上——
@@ -53,25 +53,28 @@
 
 import { tmpdir } from 'node:os';
 
-import { createMiddleware } from 'langchain';
-import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
 import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
+import type {
+  NexusPlugin,
+  PluginEntry,
+  PluginRegistry,
+  PipelineExecution,
+  SessionLog,
+} from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
+import { copyMetaOf, mutationPath } from './capture.js';
 import { GIT_STARTER_SERVICE, GitRunner, resolveGitExecutable } from './git.js';
 import { TurnRecorder } from './recorder.js';
 
-export { mutationPath } from './capture.js';
+export { copyMetaOf, mutationPath } from './capture.js';
+export type { CopyMeta } from './capture.js';
 export { directGitStarter, GIT_STARTER_SERVICE, GitRunner, resolveGitExecutable } from './git.js';
 export type { GitOutcome, GitProcess, GitStart, GitStarter, GitStartFailure } from './git.js';
 export { TurnRecorder } from './recorder.js';
 export type { RecorderEnvironment } from './recorder.js';
-
-/** middleware 的名字。 */
-export const WORKSPACE_CHANGES_MIDDLEWARE_NAME = 'WorkspaceChanges';
 
 /** 上限，照 dsh 的 Config。 */
 export interface WorkspaceChangesLimits {
@@ -253,8 +256,23 @@ function applyWorkspaceChanges(
   /** 已經開始收、還沒刪完暫存目錄的那些；組裝收掉時要等它們。 */
   const disposing = new Set<Promise<void>>();
   registry.sessions.join((subject) => {
-    // 照 dsh 的 `eligible`：子代理的會話不記。
-    if (subject.address.kind !== 'root') return;
+    // 子代理的會話不建記錄器、不寫事件。只把它成功的 `copy_file` 記到 root 這一輪（偏離 5），不推動 root 的輪：
+    // 它的 `seq` 屬於子代理自己的日誌。接上時重播的舊事件不收：子代理的日誌沒有 root 的輪界，重播出來的舊複製會被記進
+    // root 正在跑的這一輪。
+    if (subject.address.kind !== 'root') {
+      const joinedAt = subject.log.length;
+      subject.observe((event) => {
+        if (event.type !== 'tool/result' || event.seq < joinedAt) return;
+        const copy = copyMetaOf(event.data.meta);
+        if (copy === undefined) return;
+        current?.copied(copy.destination, {
+          source: copy.source,
+          bytes: copy.bytes,
+          sha256: copy.sha256,
+        });
+      });
+      return;
+    }
     const recorder = new TurnRecorder(subject.log, root, { ...env, git: git() });
     recorders.set(subject.log, recorder);
     current = recorder;
@@ -272,9 +290,18 @@ function applyWorkspaceChanges(
         case 'interrupt/raised':
           recorder.pause();
           break;
-        case 'tool/result':
+        case 'tool/result': {
           recorder.observe(event.seq);
+          const copy = copyMetaOf(event.data.meta);
+          if (copy !== undefined) {
+            recorder.copied(copy.destination, {
+              source: copy.source,
+              bytes: copy.bytes,
+              sha256: copy.sha256,
+            });
+          }
           break;
+        }
         case 'turn/end':
         case 'turn/failed':
           recorder.end();
@@ -304,7 +331,7 @@ function applyWorkspaceChanges(
     summary: (seq) => current?.summary(seq),
     diff: (seq, index, signal) => current?.diff(seq, index, signal) ?? Promise.resolve(undefined),
   } satisfies WorkspaceChanges);
-  registry.middleware.use(createWorkspaceChangesMiddleware(registry, recorders));
+  listenWorkspaceChanges(registry, recorders);
 }
 
 /**
@@ -349,41 +376,31 @@ export function createWorkspaceChanges(options: WorkspaceChangesOptions): Plugin
 }
 
 /**
- * 工具跑之前擷取、正常收尾時在輪內記錄。**同一份實例會走遍 root 與每個子代理**，所以從這一次呼叫的身分查
- * （`sessions.forCall`）：擷取認得出是這次組裝的呼叫就記到 root 的記錄器（見檔頭偏離 5），收尾只認 root。
+ * 掛三位監聽者：工具跑之前等排著的工作、本體跑之前擷取、這一輪要停時在輪內記錄。插件匯流排上的呼叫都屬於這次組裝，
+ * 所以認得出呼叫者（root 或子代理）就記到 root 的記錄器（見檔頭偏離 5）。`recorders` 裡只有 root 那一份
+ * （`sessions.join` 只接 root），一次組裝一份。`agent/turn-stopping` 只對 root 派，收尾那一位因此不看呼叫者。
  */
-function createWorkspaceChangesMiddleware(
+function listenWorkspaceChanges(
   registry: PluginRegistry,
   recorders: ReadonlyMap<SessionLog, TurnRecorder>,
-): AgentMiddleware {
-  // `recorders` 裡只有 root 那一份（`sessions.join` 只接 root），一次組裝一份。
+): void {
   const root = (): TurnRecorder | undefined => recorders.values().next().value;
-  const recorderFor = (configurable: unknown, scope: 'root' | 'any'): TurnRecorder | undefined => {
-    // `forCall` 收的是 handler 的 config 形狀，所以包回一層 `configurable`，同 `@nexus/core` 的 `model-usage.ts`。
-    const found = registry.sessions.forCall({ configurable });
-    if (found.kind !== 'ok') return undefined;
-    if (found.address.kind === 'root') return recorders.get(found.log);
-    return scope === 'any' ? root() : undefined;
-  };
-  return createMiddleware({
-    name: WORKSPACE_CHANGES_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const recorder = recorderFor(
-        (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-        'any',
-      );
-      if (recorder !== undefined) {
-        recorder.capture(request.toolCall.name, request.toolCall.args);
-        // 照 dsh：每一顆工具都等排著的工作，所以擷取不會被改檔搶先。
-        await recorder.settled();
-      }
-      return handler(request);
-    },
-    afterAgent: async (_state, runtime) => {
-      await recorderFor((runtime as { configurable?: unknown }).configurable, 'root')?.stopping();
-      return undefined;
-    },
-  }) as unknown as AgentMiddleware;
+  const recorderFor = (exec: PipelineExecution): TurnRecorder | undefined =>
+    exec.agent === undefined ? undefined : root();
+  // 每一顆工具都先等排著的工作，不只檔案工具：shell 這類工具也會改檔，不能搶在還沒落定的擷取前面。
+  registry.events.on('tools/pre-execute', async (exec, next) => {
+    await recorderFor(exec)?.settled();
+    return next();
+  });
+  // 擷取在核准之後、本體之前：被拒絕或被擋下的呼叫不擷取。`mutationPath` 算不出路徑的呼叫（不是檔案工具）不擷取、
+  // 不 await，同步往內交。
+  registry.events.on('tools/execute', (exec, next) => {
+    const recorder = recorderFor(exec);
+    if (recorder === undefined || mutationPath(exec.name, exec.args) === undefined) return next();
+    recorder.capture(exec.name, exec.args as Parameters<TurnRecorder['capture']>[1]);
+    return recorder.settled().then(next);
+  });
+  registry.events.on('agent/turn-stopping', () => root()?.stopping());
 }
 
 declare module '@nexus/core' {

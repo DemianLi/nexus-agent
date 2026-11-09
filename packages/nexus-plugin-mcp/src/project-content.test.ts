@@ -32,7 +32,7 @@ describe('非文字塊換成 dsh 形狀的文字說明', () => {
     expect(
       projectNonText([
         { type: 'audio', source_type: 'base64', data: 'AAAA', mime_type: 'audio/wav' },
-        // adapter 2.0.0 的內嵌二進位資源：`data` 加 `metadata: {uri}`，沒有 `url`、沒有 `name`。
+        // 內嵌二進位資源：`data` 加 `metadata: {uri}`，沒有 `url`、沒有 `name`。
         {
           type: 'file',
           data: 'AAAA',
@@ -54,7 +54,7 @@ describe('非文字塊換成 dsh 形狀的文字說明', () => {
   });
 });
 
-// adapter 2.0.0 把 `resource_link` 轉成 `file` 塊，`metadata` 帶 `{uri, name, title?}`（`dist/content.js`）。
+// `convertCallToolResult` 把 `resource_link` 轉成 `file` 塊，`metadata` 帶 `{uri, name, title?}`。
 describe('resource link：dsh 的 `Resource link: <name> (<uri>)`（#1319）', () => {
   const link = (url: string | undefined, name: string | undefined, title?: string) => ({
     type: 'file',

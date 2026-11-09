@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-workspace-changes",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -30,9 +30,9 @@
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
     "@nexus/timeout": "workspace:*",
     "diff": "^9.0.0",
-    "langchain": "^1.5.10",
     "zod": "^4.6.7"
   }
 }

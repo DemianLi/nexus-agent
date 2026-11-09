@@ -114,6 +114,11 @@
   name: '@nexus/plugin-plan-mode'
   config:
     guidance: '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。'
+# **plan-mode 留在相容層的那一格**（#2551，歸 #2358）：交出 `exit_plan_mode` 同意之後的待關、送模型之前補回結果的 `name`。
+# 它讀 `plan-mode` 那一列登記的模式，兩列成對開關：主掛著時從不能沒寫或關掉、從掛著時主不能沒寫，否則整份清單載入失敗；主 `disabled: true` 時從一併關掉
+# （`plugin-config.ts` 的 `DEPENDENT_ENTRY_PAIRS`）。排在 `plan-mode` 正後方（`plugin-config.test.ts` 釘住）。
+- id: plan-mode-model-call
+  name: '@nexus/plugin-plan-mode/model-call'
 
 # **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
 # 一句閒聊。代價一筆：模型側多三顆工具（`create_goal`／`get_goal`／`update_goal`，#177 之後
@@ -540,6 +545,22 @@
     metrics:
       enabled: false
 
+# 嵌入方換票登入（#2370，地圖 #2365 第 4 點）。對方的後端用服務憑證打 `POST /embed/exchange`（代理後面是 `/nexus/embed/exchange`），
+# 替一位使用者換一張只能用一次的短效登入票；元件拿票打 `POST /embed/session` 換嵌入專用的 cookie。**出廠沒有嵌入方，就沒有這兩條路由。**
+# - `embedders`：每個嵌入方一個 `id`（小寫英數與 -）與一把服務憑證；憑證在 `credentialFile`（絕對路徑，缺席是 `<home>/embed-credential-<id>`，
+#   `0600`，沒有就建；權限過寬或內容認不得就拒絕啟動）。把這個檔的內容交給嵌入方的後端。
+# - `ticketTtlSeconds`：票多久沒兌換就作廢（10 到 300，預設 60）。
+# - `cookieMaxAgeSeconds`：拿票換到的嵌入 cookie 多久到期（60 到 86400，預設 900）；它只打得到 `/embed/` 底下的路徑。
+# - 對方帳號對應到 nexus 身分的對應表還沒接上（#1827 D231）：**在那之前換票一律被拒**；過了服務憑證的換票與票查得到的兌換，每一次都記進
+#   `<home>/embed-audit.jsonl`（認不出是誰的按時間窗合併）。
+# 起動期讀一次、改了要重啟。patch 是整份替換 `config`，沒寫的格回到預設值。
+- id: embed-login
+  name: '#settings/embed-login'
+  config:
+    embedders: []
+    ticketTtlSeconds: 60
+    cookieMaxAgeSeconds: 900
+
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
 #
@@ -891,6 +912,17 @@
   config:
     maxParallelToolCalls: 10
 
+# 模型歷史從哪裡來（#2355）：`state` 把 LangGraph state 原樣送給模型，什麼都不掛；`shadow` 送的仍是 state，另在 root 緊貼請求快照外側
+# 拿從日誌推出來的歷史比一次。不是 `match` 的那幾次：serve 走伺服器日誌的 `history-shadow` logger（debug 等級，要看就把
+# `cordis.serve.yml` 裡 `logger-console` 的 `levels.history-shadow` 調成 `debug`），CLI 以 `[歷史比對]` 前綴印在標準錯誤；都不寫進會話日誌。
+# 值的家在 schema（`src/settings/history-source.ts`），這裡照抄同一個值讓人看得到。組裝期讀、新對話生效；CLI 的 `--history-source` 贏過這一列。
+# `log` 在同一格拿從日誌推出來的歷史換掉要送的那一串；找不到日誌、推不出來，這次呼叫就失敗，不退回 state。
+# **這一列關得掉**：關掉落回 `state`，跟寫 `state` 同一個結果。
+- id: history-source
+  name: '#settings/history-source'
+  config:
+    source: state
+
 # ── 檔案政策（#669）──────────────────────────────────────────────────────────
 #
 # **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，
@@ -904,7 +936,7 @@
 #
 # **有圍堵時這一列關不掉**：組裝點起動時檢查，有 `--workspace` 而這一列不在（或被停用）就起不來——fence 還在擋，
 # 模型卻不知道、也請不到升級，看起來像關了護欄其實沒有。沒有圍堵時關掉它是合法的（只是少了那一句）。
-# 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
+# `Config` 是空的：沒有可設的欄位，模式由 `--sandbox` 決定。
 - id: sandbox-policy
   name: '@nexus/plugin-sandbox-policy'
 

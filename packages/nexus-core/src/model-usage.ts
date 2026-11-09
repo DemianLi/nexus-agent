@@ -78,6 +78,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
   currentModelCall,
@@ -286,8 +287,8 @@ function recordUnfinished(
  * 建那顆 middleware。**無狀態，所以一份實例掛到哪裡都行**——鏈與身分每次都從執行期的
  * `configurable` 現算。
  *
- * 這是 [#142](https://github.com/DemianLi/nexus-agent/pull/156) 摘要器的相反面：那個的
- * `sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史混進同一個檔，所以必須逐個建。
+ * 這是 [#156](https://github.com/DemianLi/nexus-agent/pull/156) 摘要器的相反面：那個的
+ * closure 裡有認不出身分的呼叫用的會話名，共用會讓兩個 agent 的那種呼叫混進同一個檔，所以逐個建。
  * 這裡沒有 closure 狀態可以混。
  *
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次呼叫該寫進哪一份」。
@@ -296,9 +297,9 @@ function recordUnfinished(
 export function createModelUsageRecorder(sessions: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: MODEL_USAGE_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       let response: Awaited<ReturnType<typeof handler>>;
       try {
         response = await handler(request);
@@ -327,7 +328,12 @@ export function createModelUsageRecorder(sessions: {
       found.log.append('model/usage', withModelCall(usage, currentModelCall(found.log)));
       return response;
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MODEL_USAGE_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /**

@@ -24,20 +24,20 @@
  * （{@link noteFsError}，#1563）。其餘（基座的 `ls`／`glob`／`delete`）仍沒有碼，要分得解析基座的措辭。**文字只補
  * `Error: `**：原本是一字不變（[#271](https://github.com/DemianLi/nexus-agent/issues/271)），
  * [#318](https://github.com/DemianLi/nexus-agent/issues/318) 照 dsh 的 `toolErrorResult` 補上前綴，
- * 基座自己已經寫成錯誤的那幾句不補（見 middleware）。
+ * 基座自己已經寫成錯誤的那幾句不補（見 {@link fsToolErrorsListener}）。
  *
  * **碼不只給基座的檔案工具**（[#316](https://github.com/DemianLi/nexus-agent/issues/316)）：dsh 的註冊表
  * 從拋出來的錯誤通用地取碼，不看是哪顆工具，所以 plugin 工具（`submit_record`）被同一道 fence 擋下
  * 也該帶。記錄每一顆工具呼叫都開；換狀態、補前綴仍只對基座那七個，其餘只補碼（`withSandboxCode`）。
  *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
- * 一顆貼著工具本體的 `wrapToolCall`，結果離開之前換狀態。時刻是 dsh 的 `tools/execute`：拋在工具
- * 本體裡、註冊表接住的那一刻（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * `tools/execute` 內層的一位 core 監聽者，結果離開之前換狀態（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
+ * 更內側只有輸出校驗與撞限替換：前者只驗宣告了 schema 的工具，後者只看 `task`，都不碰基座的檔案工具。
  * 判準是結構訊號而不是字面：
  *
  * - {@link recordBackendOutcomes} 包住交給基座的 backend，記下**這一次呼叫**裡每個方法最後一次
  *   回的是不是 `{ error }`；
- * - middleware 只看那顆工具**主要的那個方法**（{@link FS_TOOL_PRIMARY_METHOD}）。基座的工具在主要
+ * - 監聽者只看那顆工具**主要的那個方法**（{@link FS_TOOL_PRIMARY_METHOD}）。基座的工具在主要
  *   方法回錯時一律立刻回報，其餘方法的錯不算——`delete` 先 `ls` 判斷是不是目錄，那一次的錯是
  *   它的判斷依據，不是失敗。
  *
@@ -61,14 +61,11 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
-import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
-import { markToolError, toolErrorOf, toolRefusal } from './tool-events.js';
-import type { ToolErrorInfo } from './tool-events.js';
+import { toolNameOfCall } from './tool-call-step.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult, PipelineResult } from './tool-pipeline.js';
 
-/** 這個 middleware 的名字。排序斷言用得到。 */
+/** 檔案工具失敗標成錯誤的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 
 /** fence 擋下一次變更的碼。dsh `FsErrorCode` 的同名成員。 */
@@ -77,7 +74,7 @@ export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
 /**
  * 檔案工具失敗的原因碼（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。除 `FS_NO_SPACE` 外字面照 dsh `FsErrorCode`
  * （`packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
- * （{@link noteFsError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
+ * （{@link noteFsError}），監聽者標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
  *
  * - `FS_NOT_FOUND`：路徑不存在（`read`／`edit`）。
  * - `FS_NOT_REGULAR_FILE`：路徑存在但不是一般檔（目錄等）。
@@ -111,7 +108,7 @@ export type FsErrorCode =
 /**
  * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
  * （`packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
- * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌
+ * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），監聽者標錯時帶出去，最後落進會話日誌
  * 那顆 `tool/result` 的 `error`。nexus 沒有 dsh 的 `HarnessError` 註冊表，這是 #293 已經用過的載體，不另立新的。
  */
 export const SEARCH_INVALID_PATTERN = 'SEARCH_INVALID_PATTERN';
@@ -128,27 +125,9 @@ export type SearchErrorCode =
 
 /**
  * 基座自己寫成錯誤的那幾句的開頭：`read_file` 的 `Error: …`、`ls`／`glob` 的 `Error listing files: …`
- * 與 `Error finding files: …`（`deepagents@1.13.1`，見檔頭）。這幾句不補前綴，理由見 middleware。
+ * 與 `Error finding files: …`（`deepagents@1.13.1`，見檔頭）。這幾句不補前綴，理由見 {@link fsToolErrorsListener}。
  */
 const BASE_ERROR_WORD = 'Error';
-
-/**
- * 基座的文字原樣、只換成錯誤狀態的那一則。**全樹除了 `tool-events.ts` 之外唯一手寫 `status: 'error'`
- * 的地方**（絆索見 `apps/harness/src/tool-error-prefix.test.ts`）：這裡的文字不是我們寫的，
- * 內容可能是文字塊陣列，`toolRefusal` 只收一句字串。
- */
-function markBaseFailure(
-  result: ToolMessage,
-  options: { readonly callId: string; readonly name: string; readonly error?: ToolErrorInfo },
-): ToolMessage {
-  const failure = new ToolMessage({
-    content: result.content,
-    tool_call_id: options.callId,
-    name: options.name,
-    status: 'error',
-  });
-  return options.error === undefined ? failure : markToolError(failure, options.error);
-}
 
 /**
  * 基座的檔案工具 → 它回報失敗所依據的那個 backend 方法。
@@ -222,11 +201,11 @@ export function noteSearchError(code: SearchErrorCode): void {
 
 /**
  * 搜尋成功了，但有路徑讀不到、被略過（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
- * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上一句「N 條路徑讀不到、已略過」。基座的 `GrepResult`／`GlobResult`
+ * 叫它，監聽者在 `grep`／`glob` 成功的結果後面接上一句「N 條路徑讀不到、已略過」。基座的 `GrepResult`／`GlobResult`
  * 沒有地方放這種話（`truncated` 會讓基座接上「hit the maximum match count」，說的是別的事），所以走跟 {@link noteSearchError}
  * 同一條載體。
  *
- * **記的是數字，句子在 middleware 組**：基座的 `CompositeBackend.grep('/')` 一次工具呼叫會依序搜預設 backend 與每一條 route，
+ * **記的是數字，句子在監聽者組**：基座的 `CompositeBackend.grep('/')` 一次工具呼叫會依序搜預設 backend 與每一條 route，
  * 每一個都可能略過一些；數字累加，各自記一句的話後面的會蓋掉前面的、N 少算。也讓 core 不必帶任意文字。
  * 不在任何一次工具呼叫裡、或 `count` 不是正整數時什麼都不做。
  *
@@ -250,7 +229,7 @@ export function noteFsError(code: FsErrorCode): void {
 
 /**
  * 正在跑的這一次工具呼叫的取消訊號（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。
- * langchain 的 `ToolNode.runTool` 把 `lgConfig.signal` 放進 `request.runtime.signal`，`wrapToolCall` 開記錄時帶上。
+ * langchain 的 `ToolNode.runTool` 把 `lgConfig.signal` 放進 `request.runtime.signal`，監聽者開記錄時從 `site.signal` 帶上。
  * 使用者按停止、工具逾時都經這個訊號；backend 自己起子行程時據此收掉它。
  *
  * @returns 不在工具呼叫裡、或這一次沒有訊號時是 `undefined`。
@@ -300,10 +279,10 @@ export function recordBackendOutcomes<T extends object>(backend: T): T {
  * （`packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
  * 包在 `Command` 裡的都原樣交出。
  */
-function withSandboxCode<T>(result: T, record: CallRecord): T {
-  if (!record.sandboxDenied || !ToolMessage.isInstance(result)) return result;
-  if (result.status !== 'error' || toolErrorOf(result) !== undefined) return result;
-  return markToolError(result, { name: 'FsError', code: FS_SANDBOX_DENIED });
+function withSandboxCode(result: PipelineResult, record: CallRecord): PipelineExecuteResult {
+  if (!record.sandboxDenied || result.kind !== 'message') return result;
+  if (!result.isError || result.error !== undefined) return result;
+  return { ...result, isError: true, error: { name: 'FsError', code: FS_SANDBOX_DENIED } };
 }
 
 /** 略過的路徑數 → 接在結果後面的那一句。只講數量，路徑是主機上別人的檔名。 */
@@ -313,82 +292,61 @@ function skippedNotice(count: number): string {
 }
 
 /**
- * 搜尋成功而 backend 記了略過幾條路徑（{@link noteSearchSkipped}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
- * 只管 `grep`／`glob`；錯誤的結果、不是文字的內容（文字區塊以外的形狀）原樣交出，不猜。
+ * 搜尋成功而 backend 記了略過幾條路徑（{@link noteSearchSkipped}）：把那句接在基座排好的結果後面，字串仍是字串、
+ * 文字塊陣列併成一塊。只管 `grep`／`glob`；錯誤的結果、含文字區塊以外的內容原樣交出，不猜。
  */
-function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): T {
+function withSkippedNotice(
+  result: PipelineResult,
+  toolName: string,
+  record: CallRecord,
+): PipelineExecuteResult {
   if (record.searchSkipped === 0 || (toolName !== 'grep' && toolName !== 'glob')) return result;
-  if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+  if (result.kind !== 'message' || result.isError) return result;
   const suffix = `\n\n(${skippedNotice(record.searchSkipped)})`;
-  let content: ToolMessage['content'];
-  if (typeof result.content === 'string') {
-    content = `${result.content}${suffix}`;
-  } else if (
-    result.content.every((block) => (block as { readonly type?: unknown }).type === 'text')
-  ) {
-    content = [...result.content, { type: 'text', text: suffix }];
-  } else {
-    return result;
-  }
-  return new ToolMessage({
-    content,
-    tool_call_id: result.tool_call_id,
-    name: result.name ?? toolName,
-    id: result.id,
-    status: result.status,
-    artifact: result.artifact,
-    additional_kwargs: result.additional_kwargs,
-    response_metadata: result.response_metadata,
-  }) as unknown as T;
+  if (!result.blocks.every((block) => block.type === 'text')) return result;
+  return { ...result, content: `${result.content}${suffix}` };
 }
 
 /**
- * 造一顆把檔案工具的失敗標成錯誤的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
- * subagent 共用同一顆。
- *
- * @returns 交給 fold 排位置的 middleware。
+ * 把檔案工具的失敗標成錯誤：`tools/execute` 的 core 內層監聽者，內側只剩輸出校驗與撞限替換。開一份記錄包住本體，照記錄換結果的狀態與碼。
+ * **無狀態**：記錄每次呼叫各一份，root 與每個 subagent 共用同一位。
  */
-export function createFsToolErrorsMiddleware(): AgentMiddleware {
-  return createMiddleware({
-    name: FS_TOOL_ERRORS_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
-      // （`submit_record`，#316），它的回報也要有地方落。
-      const record: CallRecord = {
-        failed: new Map(),
-        sandboxDenied: false,
-        signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
-        searchError: undefined,
-        fsError: undefined,
-        searchSkipped: 0,
-      };
-      const result = await currentCall.run(record, () => handler(request));
-      const toolName = resolveToolName(request);
-      const method = FS_TOOL_PRIMARY_METHOD[toolName];
-      if (method === undefined) return withSandboxCode(result, record);
-      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
-        return withSkippedNotice(result, toolName, record);
-      }
-      const error = record.sandboxDenied
-        ? { name: 'FsError', code: FS_SANDBOX_DENIED }
-        : record.searchError !== undefined
-          ? { name: 'SearchError', code: record.searchError }
-          : record.fsError === undefined
-            ? undefined
-            : { name: 'FsError', code: record.fsError };
-      // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
-      if (result.status === 'error' && error === undefined) return result;
-      const options = {
-        callId: result.tool_call_id,
-        name: result.name ?? resolveToolName(request),
-        ...(error === undefined ? {} : { error }),
-      };
-      // **前綴只補基座沒寫的**（#318）：`write_file`／`edit_file`／`grep` 回的是 backend 的裸錯誤，
-      // `read_file` 的 `Error: …` 與 `ls`／`glob` 的 `Error listing/finding files: …` 本來就讀得出是錯。
-      // 這是全樹唯一看文字決定前綴的地方：文字是基座寫的，我們不是它的主人。
-      return typeof result.content === 'string' && !result.content.startsWith(BASE_ERROR_WORD)
-        ? toolRefusal(result.content, options)
-        : markBaseFailure(result, options);
-    },
-  }) as AgentMiddleware;
-}
+export const fsToolErrorsListener: CoreToolListener<'tools/execute'> = async (
+  _exec,
+  next,
+  site,
+) => {
+  // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
+  // （`submit_record`，#316），它的回報也要有地方落。
+  const record: CallRecord = {
+    failed: new Map(),
+    sandboxDenied: false,
+    signal: site.signal,
+    searchError: undefined,
+    fsError: undefined,
+    searchSkipped: 0,
+  };
+  const result = await currentCall.run(record, () => next());
+  const toolName = toolNameOfCall(site);
+  const method = FS_TOOL_PRIMARY_METHOD[toolName];
+  if (method === undefined) return withSandboxCode(result, record);
+  if (record.failed.get(method) !== true || result.kind !== 'message') {
+    return withSkippedNotice(result, toolName, record);
+  }
+  const error = record.sandboxDenied
+    ? { name: 'FsError', code: FS_SANDBOX_DENIED }
+    : record.searchError !== undefined
+      ? { name: 'SearchError', code: record.searchError }
+      : record.fsError === undefined
+        ? undefined
+        : { name: 'FsError', code: record.fsError };
+  // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
+  if (result.isError && error === undefined) return result;
+  // **前綴只補基座沒寫的**（#318）：`write_file`／`edit_file`／`grep` 回的是 backend 的裸錯誤，
+  // `read_file` 的 `Error: …` 與 `ls`／`glob` 的 `Error listing/finding files: …` 本來就讀得出是錯。
+  // 這是全樹唯一看文字決定前綴的地方：文字是基座寫的，我們不是它的主人。
+  const marked = { ...result, isError: true, ...(error !== undefined && { error }) };
+  return result.content.startsWith(BASE_ERROR_WORD)
+    ? marked
+    : { ...marked, content: `${TOOL_ERROR_PREFIX}${result.content}` };
+};

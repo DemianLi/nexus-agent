@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-sandbox-policy",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -21,6 +21,17 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/fs": "workspace:*",
+    "@nexus/permission-presets": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
+    "@nexus/wire": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -28,9 +39,20 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.13",
     "@nexus/core": "workspace:*",
     "langchain": "^1.5.10",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/fs": "workspace:*",
+    "@nexus/permission-presets": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
+    "@nexus/wire": "workspace:*"
   }
 }

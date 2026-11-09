@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import {
   mentionHintText,
+  pageContextText,
   SESSION_LOG_FORMAT_VERSION,
   SessionLog,
   toLoggedMessage,
@@ -173,6 +174,31 @@ describe('搜得到哪幾則（searchDocuments）', () => {
     ]);
     expect(JSON.stringify(searchDocuments(log.events))).not.toContain(mentionHintText(mention));
     expect(JSON.stringify(searchDocuments(log.events))).not.toContain('system-reminder');
+  });
+
+  it('畫面情境（#2367）：情境區塊不收，只收使用者自己打的字（開場與輪中插話兩條路）', () => {
+    const context = { label: 'PUMP-07' };
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '它的溫度正常嗎', context });
+    log.append('assistant/message', { message: reply('正常') });
+    log.append('user/message', {
+      message: toLoggedMessage(
+        new HumanMessage({ content: userContent('那壓力呢', [], undefined, context) as never }),
+      ),
+      source: { kind: 'user' },
+    });
+    log.append('assistant/message', { message: reply('也正常') });
+    log.append('turn/end', {});
+
+    expect(searchDocuments(log.events).map((document) => document.text)).toEqual([
+      '它的溫度正常嗎',
+      '正常',
+      '那壓力呢',
+      '也正常',
+    ]);
+    expect(JSON.stringify(searchDocuments(log.events))).not.toContain(
+      pageContextText(context).slice(0, 20),
+    );
   });
 
   it('壓縮：被換掉的那幾則不收，換上去的摘要收（同 dsh 只查 current）', () => {

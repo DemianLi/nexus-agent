@@ -9,6 +9,9 @@
  *
  * **名字假設**：整棵樹裡任何叫 `Events` 的 interface 都被當成事件表。今天沒有同名的別的東西；哪天（例如 `apps/web`）出現無關的同名
  * interface，這裡會誤報，到時候要把掃描限制在 `@nexus/core` 的宣告與它的 `declare module` 區塊。
+ * 同一個假設的另一面：原始碼裡寫不出 `Events` 這個識別字的檔，不可能宣告名叫 `Events` 的 interface，所以 `scanEventTableTree`
+ * 不替它建 AST（建 AST 是掃整棵樹的主要成本，[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)；「寫不出」怎麼判見
+ * `mayContainIdentifier`）。
  *
  * 掃描看**語法**不看型別：`interface Events` 出現在兩種地方——`events.ts` 自己的宣告，與 `declare module '…' { interface Events {…} }`
  * 區塊。兩者都算。
@@ -33,8 +36,24 @@ export interface DeclaredEvent {
   readonly problems: readonly string[];
 }
 
+/** 事件表那個 interface 的名字。 */
+const EVENTS_INTERFACE = 'Events';
+
 function isEventsInterface(node: ts.Node): node is ts.InterfaceDeclaration {
-  return ts.isInterfaceDeclaration(node) && node.name.text === 'Events';
+  return ts.isInterfaceDeclaration(node) && node.name.text === EVENTS_INTERFACE;
+}
+
+/**
+ * 這份原始碼**可能**寫出名字在 `names` 裡的識別字：直接含其中一個名字，或含 `\u`（識別字可以用 `\u` 跳脫來寫，解析後才是那個名字）。
+ *
+ * @param text - 原始碼。
+ * @param names - 要找的識別字。
+ * @returns `false` 只在這份原始碼不可能有名字在 `names` 裡的識別字時；掃描器可以不替這種檔建 AST。
+ */
+function mayContainIdentifier(text: string, names: Iterable<string>): boolean {
+  if (text.includes('\\u')) return true;
+  for (const name of names) if (text.includes(name)) return true;
+  return false;
 }
 
 function tagText(tag: ts.JSDocTag): string {
@@ -142,15 +161,18 @@ function productFiles(root: string): string[] {
 }
 
 /**
- * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/*\/src`。
+ * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/*\/src`。寫不出 `Events` 這個識別字的檔不建 AST（前提見檔頭「名字假設」）。
  *
  * @param root - repo 根。
  * @returns 所有宣告在事件表上的成員。
  */
 export function scanEventTableTree(root: string): DeclaredEvent[] {
-  return productFiles(root).flatMap((path) =>
-    scanEventTable(relative(root, path), readFileSync(path, 'utf8')),
-  );
+  return productFiles(root).flatMap((path) => {
+    const text = readFileSync(path, 'utf8');
+    return mayContainIdentifier(text, [EVENTS_INTERFACE])
+      ? scanEventTable(relative(root, path), text)
+      : [];
+  });
 }
 
 /** 派發面的四個方法；第一個參數是事件名。 */
@@ -185,13 +207,18 @@ export function scanEventProducers(text: string): string[] {
 /**
  * 整棵樹產品碼裡每個事件名有哪些檔案派發它（排除測試）。
  *
+ * 寫不出 {@link DISPATCH_METHODS} 任何一個方法名的檔不建 AST：{@link scanEventProducers} 只認方法名在那份清單上的屬性存取呼叫，
+ * 這種檔不可能有這種呼叫，篩掉不會少掉任何生產者（[#2412](https://github.com/DemianLi/nexus-agent/issues/2412)）。
+ *
  * @param root - repo 根。
  * @returns 事件名 → 派發它的檔案（repo 相對路徑）。
  */
 export function scanEventProducersTree(root: string): Map<string, string[]> {
   const producers = new Map<string, string[]>();
   for (const path of productFiles(root)) {
-    for (const name of new Set(scanEventProducers(readFileSync(path, 'utf8')))) {
+    const text = readFileSync(path, 'utf8');
+    if (!mayContainIdentifier(text, DISPATCH_METHODS)) continue;
+    for (const name of new Set(scanEventProducers(text))) {
       producers.set(name, [...(producers.get(name) ?? []), relative(root, path)]);
     }
   }

@@ -28,8 +28,13 @@ import {
   isApprovalPending,
   reduceConversation,
 } from '@nexus/wire';
-import { createHostServicesPlugin, createRegistry } from '@nexus/core';
-import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
+import { CHANNEL_SERVICE, createHostServicesPlugin, createRegistry } from '@nexus/core';
+import type { NexusPlugin } from '@nexus/core';
+import { mountPlanMode, planModeConfigSchema } from '@nexus/plugin-plan-mode';
+import type { PlanModeConfig } from '@nexus/plugin-plan-mode';
+import { planModeModelCallPlugin } from '@nexus/plugin-plan-mode/model-call';
+import { runThreadSources } from '@nexus/tool-adapter';
+import type { ToolThreadSource } from '@nexus/tools';
 import { StateBackend } from 'deepagents';
 import type { FileData } from 'deepagents';
 import { z } from 'zod';
@@ -161,18 +166,23 @@ export function shippedPluginsWithFullAccess(
  *
  * @param rowId - 要換設定的列 id。
  * @param config - 那一列新的設定。
+ * @param options.serve - 底下是 serve 的出貨清單（{@link shippedServePlugins}）；省略是 CLI 的（{@link shippedPlugins}）。
  * @returns 其餘照出貨清單的清單。
  */
 export async function shippedPluginsWithConfig(
   rowId: string,
   config: object,
+  options: { readonly serve?: boolean } = {},
 ): Promise<readonly PluginEntry[]> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-patch-config-'));
   try {
     const patch = join(dir, 'row.patch.yml');
     // JSON 是合法的 YAML：不必在這裡再寫一份序列化。
     await writeFile(patch, JSON.stringify([{ id: rowId, config }]));
-    const { plugins, dropped } = await loadPluginConfig({ overlays: [patch] });
+    const { plugins, dropped } = await loadPluginConfig({
+      ...(options.serve === true && { shippedLayers: [serveShippedConfigPath()] }),
+      overlays: [patch],
+    });
     if (dropped.length > 0) {
       throw new Error(`換設定的清單有列沒掛上：${dropped.map((drop) => drop.message).join('；')}`);
     }
@@ -554,9 +564,37 @@ export function levelsOf(raw: readonly string[], prefix: string): (string | unde
 export const TEST_PLAN_GUIDANCE =
   '【測試用計劃指引】現在在計劃模式，先探索與設計，不要動手改東西。';
 
-/** 補上 {@link TEST_PLAN_GUIDANCE} 的 `createPlanModePlugin`：手搭組裝的測試大多不關心指引寫什麼。 */
+/**
+ * plan-mode 的相容層外殼：一個條目同時掛樹上那一半（`mountPlanMode`，經 `runThreadSources` 接上這條 thread）與相容層那一格
+ * （`plan-mode-model-call`），給還在相容層手搭組裝的測試用。宿主那幾格照相容層的 registry 接。
+ */
+const planModeShell: NexusPlugin<PlanModeConfig> = {
+  name: 'plan-mode',
+  Config: planModeConfigSchema,
+  async apply(registry, config) {
+    planModeModelCallPlugin.apply(registry, undefined);
+    const sources: ToolThreadSource[] = [];
+    mountPlanMode(
+      {
+        registerTool: (tool) => void registry.tools.register(tool),
+        registerCommand: (definition) => void registry.commands.register(definition),
+        threadSource: (source) => void sources.push(source),
+        forCall: (invocation) => registry.sessions.forCall(invocation),
+        channel: () => registry.services.get(CHANNEL_SERVICE),
+      },
+      config,
+    );
+    await runThreadSources(
+      registry,
+      sources.map((threadSource) => ({ threadSource, services: [] })),
+      { id: 'plan-mode', module: planModeShell },
+    );
+  },
+};
+
+/** 補上 {@link TEST_PLAN_GUIDANCE} 的 plan-mode 條目：手搭組裝的測試大多不關心指引寫什麼。 */
 export function testPlanModePlugin(
   options: { startActive?: boolean; guidance?: string } = {},
 ): PluginEntry {
-  return createPlanModePlugin({ guidance: TEST_PLAN_GUIDANCE, ...options });
+  return { plugin: planModeShell, config: { guidance: TEST_PLAN_GUIDANCE, ...options } };
 }

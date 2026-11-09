@@ -30,8 +30,8 @@
  *
  * 1. **三個點併成兩個掛點。** dsh 的 `llm/stream` 與 `agent/pre-step` 在我們這裡是同一個時刻：
  *    一步就是一次模型呼叫，`wrapModelCall` 在它之前。所以一顆 `wrapModelCall` 兩件都做——排空的
- *    是這一步之前所有已記的事件，包含 {@link ./model-calls.ts | 起訖紀錄器} 剛寫的 `model/start`
- *    （它排在這一顆外層）。
+ *    是這一步之前所有已記的事件。{@link ./model-calls.ts | 起訖紀錄器} 排在這一顆外層，但 `model/start`
+ *    等到請求快照才寫，跟快照一起在送出前由 {@link ./request-snapshot.ts} 再排空一次。
  * 2. **摘要那次呼叫之前不排空。** dsh 的摘要走 `llm/stream`，所以也會先排空；我們的摘要器在
  *    自己的 `wrapModelCall` 裡直接 `request.model.invoke`（{@link ./summarization.ts}），不經過
  *    這一顆。緊接著的那次主呼叫仍會先排空，摘要寫下的事件在那時一起落地。
@@ -61,10 +61,14 @@
 
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { withModelCallStep } from './model-call-step.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
-import { abortedBeforeDispatch, toolCallAborted } from './turn-cancel.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH } from './tool-error-codes.js';
+import { TOOL_ERROR_PREFIX } from './tool-events.js';
+import type { CoreToolListener, PipelineExecuteResult } from './tool-pipeline.js';
+import { TOOL_ABORTED_BEFORE_DISPATCH_REASON, toolCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。不撞基座任何一個。 */
 export const SESSION_CHECKPOINT_MIDDLEWARE_NAME = 'nexusSessionCheckpoint';
@@ -91,8 +95,40 @@ function callConfigOf(request: unknown): { configurable: unknown } {
 }
 
 /**
- * 建那顆 middleware。**無狀態，一份實例走遍 root 與每個子代理**：日誌每次從執行期的
- * `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
+ * 工具那一半：`tools/execute` 的 core 外層監聽者。動手之前排空這次呼叫所屬的那一份日誌，排空之後再問一次中止，
+ * 中止了就短路成「還沒動手就被中止」。找不到日誌就照常放行。無狀態，root 與每個子代理共用同一位。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 掛在 `tools/execute` 外層的監聽者。
+ */
+export function createSessionCheckpointListener(
+  sessions: CheckpointSessions,
+): CoreToolListener<'tools/execute'> {
+  return async (_exec, next, call) => {
+    const found = sessions.forCall({ configurable: call.configurable });
+    // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
+    // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
+    // 日誌上卻沒有那次呼叫。
+    if (found.kind !== 'ok') return next();
+    await sessions.flush(found.log);
+    // 排空要時間，那段時間裡使用者可能按了停止：排空之後再問一次，中止了就不叫工具本體。
+    // 外層的 guard 只在動手前與動手後問，擋不到這一段。
+    if (toolCallAborted(call)) return ABORTED_BEFORE_DISPATCH;
+    return next();
+  };
+}
+
+/** 經 `tools/execute` 造出來之後跟 `turn-cancel.ts` 的 `abortedBeforeDispatch` 逐位元組相同，`session-checkpoint-policy.test.ts` 釘著。 */
+const ABORTED_BEFORE_DISPATCH: PipelineExecuteResult = Object.freeze({
+  kind: 'message',
+  content: `${TOOL_ERROR_PREFIX}${TOOL_ABORTED_BEFORE_DISPATCH_REASON}`,
+  isError: true,
+  error: Object.freeze({ name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH }),
+});
+
+/**
+ * 建模型那一半的 middleware（工具那一半是 {@link createSessionCheckpointListener}）。**無狀態，一份實例走遍 root 與每個子代理**：
+ * 日誌每次從執行期的 `configurable` 現算，同 {@link ./model-calls.ts | createModelCallRecorder}。
  *
  * 找不到日誌（`forCall` 不是 `ok`）就不排空、照常放行：那次呼叫本來就沒有日誌可以寫，
  * 同其他掛在 `forCall` 上的 middleware。
@@ -101,26 +137,18 @@ function callConfigOf(request: unknown): { configurable: unknown } {
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createSessionCheckpointMiddleware(sessions: CheckpointSessions): AgentMiddleware {
-  return createMiddleware({
-    name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (request, handler) => {
       const found = sessions.forCall(callConfigOf(request));
       if (found.kind === 'ok') await sessions.flush(found.log);
       return handler(request);
     },
-    wrapToolCall: async (request, handler) => {
-      const found = sessions.forCall(callConfigOf(request));
-      // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
-      // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
-      // 日誌上卻沒有那次呼叫。
-      if (found.kind !== 'ok') return handler(request);
-      await sessions.flush(found.log);
-      // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
-      // 外層的 guard 只在動手前與動手後問，擋不到這一段。
-      if (toolCallAborted(request)) return abortedBeforeDispatch(request);
-      return handler(request);
-    },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }
 
 /**

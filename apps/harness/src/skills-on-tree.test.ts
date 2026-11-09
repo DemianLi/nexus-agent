@@ -7,6 +7,7 @@
  * 不是清單長什麼樣。驗收 C（行為不變的 golden）是一次性錄製，不在這個檔，做法與數字寫在 PR 內文。
  */
 
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -165,6 +166,18 @@ describe('B：出貨清單上的 skills 經樹進來，位置與名字不變', (
     expect(prompt).toContain('/skills/web-research/SKILL.md');
     await thread.built.dispose();
   }, 60000);
+
+  it('工作區裡有一個 SKILL.md 是 FIFO：列清單不卡住，其他 skill 照列（#2322）', async () => {
+    const { env } = home();
+    const ws = workspace({ skills: { 'web-research': '上網查資料。', stuck: '卡住的那個。' } });
+    rmSync(join(ws, 'skills', 'stuck', 'SKILL.md'));
+    execFileSync('mkfifo', [join(ws, 'skills', 'stuck', 'SKILL.md')]);
+    const thread = await openThread(newRoot(), env, { workspace: ws });
+    const prompt = await thread.prompt();
+    expect(prompt).toContain('/skills/web-research/SKILL.md');
+    expect(prompt).not.toContain('/skills/stuck/SKILL.md');
+    await thread.built.dispose();
+  }, 20000);
 
   it('reload 分類：manifest 宣告的不比宿主的分類寬；快照上停用後是「下一條 thread」那一類', async () => {
     const host = {

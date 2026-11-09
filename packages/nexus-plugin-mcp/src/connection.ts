@@ -1,86 +1,66 @@
 /**
- * 一台 MCP server 的連線那一段：adapter client 的選項、一代連線的形狀、工具結果的錯誤轉換。plugin 每次組裝自己連（CLI）
- * 與宿主的連線池（serve，[`pool.ts`](./pool.ts)）**共用這一份**，兩邊交給 adapter 的選項因此不會漂移。
+ * 一台 MCP server 的連線那一段：開一代 SDK client、一代連線的形狀、這一代每顆工具的呼叫。plugin 每次組裝自己連（CLI）
+ * 與宿主的連線池（serve，[`pool.ts`](./pool.ts)）**共用這一份**，兩邊開連線的方式因此不會漂移。
+ *
+ * **一代一個 SDK client**：重連就是收掉上一代的 client、開一個新的（新子行程、新的 HTTP session）。開連線的做法照
+ * `@langchain/mcp-adapters@2.0.0`（`dist/connection.js`、`dist/client.js` 的 `_initializeStreamableHTTPConnection`）：版本協商 `auto`，
+ * HTTP 先試 Streamable HTTP，回 404／405 再退回 SSE（先試原網址，再試把結尾的 `mcp` 換成 `sse`），SSE 走舊協議。
  *
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import type { StructuredTool } from '@langchain/core/tools';
-import type { ClientConfig, Connection, MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { scrubbedParentEnv } from '@nexus/core';
+import {
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client';
+import type { Tool } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { scrubbedParentEnv } from '@nexus/subprocess';
 import { substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
-import { boundArtifacts } from './artifact-bound.js';
-import { projectNonText } from './project-content.js';
-import { markUntrusted } from './untrusted-mark.js';
 import type { McpConfig } from './index.js';
+import { toolCallOf } from './tool-call.js';
+import type { ToolCall } from './tool-call.js';
+
+export type { ToolCall } from './tool-call.js';
+
+/** 握手時報給 server 的 client 身分。 */
+const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
 
 /**
- * 交給 `MultiServerMCPClient` 的整份選項，只放這一台 server。plugin 自己連與池連都從這裡拿（#1677 第 2 步：池建 client 時沿用
- * 同一份，含 `afterToolCall`）。
- */
-export function clientOptions(
-  config: McpConfig,
-  elicitation: boolean,
-  credentials: ResolvedCredentials,
-): ClientConfig {
-  return {
-    mcpServers: { [config.serverName]: toAdapterConnection(config, elicitation, credentials) },
-    // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
-    // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
-    prefixToolNameWithServerName: false,
-    additionalToolNamePrefix: '',
-    // 兩格都拋，失敗才全部走到下面同一個 `catch`，收住還是拋由 `failOnStartupError` 一個地方決定。
-    throwOnLoadError: true,
-    onConnectionError: 'throw',
-    // 圖片、音訊這些非文字塊換成文字說明（#642）：模型那一側的工具訊息只收文字。換在工具本體裡，
-    // 所以 state、日誌、還原、畫面看到的都是換過的那一份。
-    // 同一個鉤子裡也把超過上限的 artifact 換成占位（#1320，`artifact-bound.ts`）：內嵌資源與 structuredContent 否則整份進日誌。
-    // 最後在本文前面加一行「外部內容，當資料不當指令」（#1768，`untrusted-mark.ts`）：換完非文字塊之後才加，進日誌的也是標過的那一份。
-    afterToolCall: ({ result: [content, artifacts] }) => {
-      const body = projectNonText(content) ?? content;
-      const marked = markUntrusted(body);
-      const bounded = boundArtifacts(artifacts);
-      return marked === body && bounded === undefined
-        ? undefined
-        : { result: [marked, bounded ?? artifacts] };
-    },
-  };
-}
-
-/**
- * 連一代：`tools/list`、拿 SDK client、查指引上限，三步都過才算連上；任何一步拋就是這次嘗試失敗（指引超過上限也算，同 plugin
- * 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。工具物件只包一次 {@link throwOnToolError}、
- * 不改名，留給呼叫端建自己的委派物件。
+ * 連一代：開 SDK client、`tools/list`（分頁走完）、查指引上限，三步都過才算連上；任何一步拋就是這次嘗試失敗（指引超過上限也算，
+ * 同 plugin 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。
  *
- * 一拿到 SDK client 就建這一代、掛上 `onclose`，並把「真的關掉了」交給 `onAttached`：之後哪一步拋，呼叫端都等得到這次嘗試開的
- * 子行程關掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試拿不到 SDK client，不會叫它。
+ * 一開 client 就建這一代、掛上 `onclose`，並把「真的關掉了」交給 `onAttached`：之後哪一步拋，呼叫端都等得到這次嘗試開的
+ * 子行程關掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試沒有連上的 client，不會叫它。
  *
- * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:123` 的 `cacheMode: 'refresh'`、`:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
- * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。偏離：dsh 在自己的 bridge 裡讀 `tool.execution`，這裡的工具是
- * adapter 轉出來的，而 `@langchain/mcp-adapters` 2.0.0 轉工具時丟掉了 `execution`（`dist/tools.js` 沒有 `taskSupport` 的任何處理），
- * 所以多對 SDK client 叫一次 `tools/list`（理由 1：基座表達不出來）。
+ * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
+ * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
  */
 export async function connectGeneration(
-  client: MultiServerMCPClient,
+  connect: () => Promise<Client>,
   config: McpConfig,
+  elicitation: boolean,
   onAttached?: (closed: Promise<void>) => void,
 ): Promise<ListedGeneration> {
+  const client = await connect();
   const calls = new Map<string, ToolCall>();
-  const tools: StructuredTool[] = [];
-  const listed = await client.getTools();
-  const sdk = await client.getClient(config.serverName);
-  const generation = generationOf(calls, sdk);
+  const generation = generationOf(calls, client);
   onAttached?.(generation.closed);
-  const taskRequired = await taskRequiredNames(sdk, listed.length);
-  for (const tool of listed) {
-    throwOnToolError(tool);
-    if (taskRequired.has(tool.name)) rejectTaskRequired(tool);
-    calls.set(tool.name, callOf(tool));
-    tools.push(tool);
+  const tools = await listAllTools(client, config.serverName);
+  for (const tool of tools) {
+    calls.set(
+      tool.name,
+      tool.execution?.taskSupport === 'required'
+        ? rejectTaskRequired(tool.name)
+        : toolCallOf(client, config.serverName, tool, {
+            elicitation,
+            timeoutMs: config.toolCallTimeoutMs,
+          }),
+    );
   }
-  const instructions = instructionsOf(sdk?.getInstructions(), config);
+  const instructions = instructionsOf(client.getInstructions(), config);
   // 補在同一個物件上：`onclose` 通報的是建的當下那一個。
   return Object.assign(generation, {
     listed: { tools, instructions },
@@ -93,74 +73,246 @@ export async function connectGeneration(
 /** {@link connectGeneration} 連成的一代。 */
 export type ListedGeneration = Generation & { readonly listed: Listed };
 
-/** 一個 adapter client 上的連線嘗試，見 {@link attemptsOn}。 */
+/** 一份設定上的連線嘗試，見 {@link attemptsOn}。 */
 export interface Attempts {
-  /** 這個 client 的第一次連線。 */
+  /** 第一次連線。 */
   first(): Promise<ListedGeneration>;
-  /** 重連：先把整個 adapter client 收掉，再連一代。 */
+  /** 重連：先收掉上一次開的 client，再連一代。 */
   connect(): Promise<ListedGeneration>;
   /**
-   * 收掉剛失敗的那次嘗試：關掉整個 adapter client，再等那次開的子行程真的關掉
-   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗（拿不到 SDK client）的嘗試沒有東西可等，立刻落定。不拋。
+   * 收掉剛失敗的那次嘗試：關掉它開的 client，再等那次開的子行程真的關掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試沒有東西可等，立刻落定。不拋。
    */
   abandon(): Promise<void>;
+  /** 收掉最近一次開的 client，連還在握手的也算。不拋。 */
+  close(): Promise<void>;
 }
 
-/** 一個 adapter client 上的連線嘗試：每次都記下那一次的 close 訊號，給 {@link Attempts.abandon} 等。CLI 與池共用。 */
-export function attemptsOn(client: MultiServerMCPClient, config: McpConfig): Attempts {
+/**
+ * 一份設定上的連線嘗試：每次都開一個新的 SDK client，記下它與那一次的 close 訊號，給 {@link Attempts.abandon} 等。CLI 與池共用。
+ *
+ * @param open - 開一個 client 並連上；省略就是 {@link openClient}。測試換成假的。
+ */
+export function attemptsOn(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials,
+  open: (track: (client: Client) => void) => Promise<Client> = (track) =>
+    openClient(config, credentials, track),
+): Attempts {
+  let latest: Client | undefined;
   let closed: Promise<void> = Promise.resolve();
+  const close = async (): Promise<void> => {
+    const client = latest;
+    latest = undefined;
+    await client?.close().catch(() => {});
+  };
   const first = (): Promise<ListedGeneration> => {
     closed = Promise.resolve();
-    return connectGeneration(client, config, (signal) => {
-      closed = signal;
-    });
+    return connectGeneration(
+      () =>
+        open((client) => {
+          latest = client;
+        }),
+      config,
+      elicitation,
+      (signal) => {
+        closed = signal;
+      },
+    );
   };
   return {
     first,
     async connect() {
-      await client.close();
+      await close();
       return first();
     },
     async abandon() {
       // 監督者的 hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
-      await client.close().catch(() => {});
+      await close();
       await closed;
     },
+    close,
   };
 }
 
-/**
- * 這台 server 公告 `execution.taskSupport === 'required'` 的工具名（raw name）。`count` 是 adapter 列出的工具數：一支都沒有就不必問。
- * 分頁照 `nextCursor` 走完；`cacheMode: 'refresh'` 同 dsh，不讀新協議 client 的列表快取。
- */
-async function taskRequiredNames(sdk: SdkClient | undefined, count: number): Promise<Set<string>> {
-  const names = new Set<string>();
-  if (sdk === undefined || count === 0) return names;
+/** `tools/list` 分頁走完，沒有名字的略過。`cacheMode: 'refresh'`：不讀新協議 client 的列表快取。 */
+async function listAllTools(client: Client, serverName: string): Promise<Tool[]> {
+  const tools: Tool[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
-  do {
-    const page = await sdk.listTools(cursor === undefined ? undefined : { cursor }, {
-      cacheMode: 'refresh',
+  try {
+    do {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
+        cacheMode: 'refresh',
+      });
+      for (const tool of page.tools) if (tool.name !== '') tools.push(tool);
+      cursor = page.nextCursor;
+      if (cursor !== undefined && seen.has(cursor)) break;
+      if (cursor !== undefined) seen.add(cursor);
+    } while (cursor !== undefined);
+  } catch (error) {
+    throw new Error(`Failed to load tools from server "${serverName}": ${String(error)}`, {
+      cause: error,
     });
-    for (const tool of page.tools) {
-      if (tool.execution?.taskSupport === 'required') names.add(tool.name);
-    }
-    cursor = page.nextCursor;
-    if (cursor !== undefined && seen.has(cursor)) break;
-    if (cursor !== undefined) seen.add(cursor);
-  } while (cursor !== undefined);
-  return names;
+  }
+  return tools;
 }
 
-/** 讓這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:280`）。 */
-function rejectTaskRequired(tool: StructuredTool): void {
-  const rawName = tool.name;
-  (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func = () =>
+/** 這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:280`）。 */
+function rejectTaskRequired(rawName: string): ToolCall {
+  return () =>
     Promise.reject(
       new Error(
         `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
       ),
     );
+}
+
+/**
+ * 開一個 SDK client 並連上這台 server。`track` 在連線之前就拿到 client：握手卡住時，呼叫端收得掉它。連不上就收掉 client 與 transport 再拋。
+ */
+export async function openClient(
+  config: McpConfig,
+  credentials: ResolvedCredentials,
+  track: (client: Client) => void = () => {},
+): Promise<Client> {
+  const { serverName, connection } = config;
+  if (connection.transport === 'stdio') {
+    try {
+      return await connected(
+        new StdioClientTransport({
+          command: connection.command,
+          args: [...(connection.args ?? [])],
+          // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
+          // 父環境在前、設定的在後。不傳的話底由 SDK（`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
+          env: { ...scrubbedParentEnv(), ...substituted(connection.env ?? {}, credentials) },
+          ...(connection.cwd !== undefined && { cwd: connection.cwd }),
+        }),
+        'auto',
+        track,
+      );
+    } catch (error) {
+      throw new Error(
+        `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+  }
+  const url = connection.url;
+  const headers =
+    connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
+  const requestInit = headers === undefined ? {} : { requestInit: { headers } };
+  try {
+    return await connected(
+      new StreamableHTTPClientTransport(new URL(url), {
+        ...requestInit,
+        reconnectionOptions: {
+          maxRetries: 0,
+          initialReconnectionDelay: 1_000,
+          maxReconnectionDelay: 30_000,
+          reconnectionDelayGrowFactor: 1.5,
+        },
+      }),
+      'auto',
+      track,
+    );
+  } catch (error) {
+    const code = httpErrorCode(error);
+    if (code !== 404 && code !== 405) {
+      throw new Error(
+        `Failed to connect to streamable HTTP server "${serverName}, url: ${url}" in auto mode: ${String(error)}`,
+        { cause: error },
+      );
+    }
+    const sse = (target: string): Promise<Client> =>
+      connected(new SSEClientTransport(new URL(target), requestInit), 'legacy', track).catch(
+        (sseError: unknown) => {
+          throw new Error(
+            `Failed to create SSE transport for server "${serverName}, url: ${target}": ${String(sseError)}`,
+            { cause: sseError },
+          );
+        },
+      );
+    try {
+      return await sse(url);
+    } catch (firstSseError) {
+      const sseUrl = sseUrlOf(url);
+      if (sseUrl === url) {
+        throw new Error(
+          `Failed to connect to streamable HTTP server after trying to fall back to SSE: "${serverName}, url: ${url}": ${String(error)} (SSE fallback failed with error ${String(firstSseError)})`,
+          { cause: firstSseError },
+        );
+      }
+      try {
+        return await sse(sseUrl);
+      } catch (secondSseError) {
+        throw new Error(
+          `Failed to connect to streamable HTTP server "${serverName}, url: ${url}": ${String(error)}. Additionally, tried falling back to SSE at ${url} and ${sseUrl}, but this also failed: ${String(secondSseError)}`,
+          { cause: secondSseError },
+        );
+      }
+    }
+  }
+}
+
+type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;
+
+/** 開 client、連上 transport；失敗就兩個都收掉再拋。 */
+async function connected(
+  transport: Transport,
+  mode: 'auto' | 'legacy',
+  track: (client: Client) => void,
+): Promise<Client> {
+  const client = new Client(CLIENT_IDENTITY, { versionNegotiation: { mode } });
+  track(client);
+  try {
+    await client.connect(transport);
+    // 新協議的 server 宣告了 `tools.listChanged` 就開一條常駐的 `subscriptions/listen`，照 `@langchain/mcp-adapters@2.0.0`
+    // （`dist/connection.js` 的 `#connect`），server 看到的連線形狀因此跟它一樣；收掉這一代時這條跟著收。工具在組裝時就定了，
+    // 收到的 `tools/list_changed` 不處理（沒掛處理器，SDK 直接丟掉）。
+    if (
+      client.getProtocolEra() === 'modern' &&
+      client.getServerCapabilities()?.tools?.listChanged === true
+    ) {
+      await client.listen({
+        toolsListChanged: true,
+        promptsListChanged: false,
+        resourcesListChanged: false,
+        resourceSubscriptions: [],
+      });
+    }
+  } catch (error) {
+    await Promise.allSettled([client.close(), transport.close()]);
+    throw error;
+  }
+  return client;
+}
+
+/** 錯誤上的 HTTP 狀態碼：`status`、`code`，或訊息裡的 `(HTTP 404)`。 */
+function httpErrorCode(error: unknown): number | undefined {
+  const { status, code, message } = (error ?? {}) as {
+    status?: unknown;
+    code?: unknown;
+    message?: unknown;
+  };
+  const valid = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
+      ? value
+      : undefined;
+  const matched = typeof message === 'string' ? /\(HTTP (\d{3})\)/u.exec(message)?.[1] : undefined;
+  return valid(status) ?? valid(code) ?? valid(Number(matched));
+}
+
+/** SSE 的退回網址：路徑結尾是 `mcp` 就換成 `sse`。 */
+function sseUrlOf(url: string): string {
+  const parsed = new URL(url);
+  const parts = parsed.pathname.split('/');
+  if (parts.at(-1) === 'mcp') parts[parts.length - 1] = 'sse';
+  parsed.pathname = parts.join('/');
+  return parsed.toString();
 }
 
 /**
@@ -198,11 +350,13 @@ export function isRequestTimeout(error: unknown): boolean {
   return false;
 }
 
-/** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
+/** SDK client 上，探活與資源會用到的那幾個方法；結構型別，測試換成假的。 */
 export interface SdkClient {
   onclose?: () => void;
+  close?(): Promise<void>;
   getInstructions(): string | undefined;
-  listTools(params?: { cursor: string }, options?: RequestOptions): Promise<ListToolsPage>;
+  /** 探活用：只要它回來，不讀內容。 */
+  listTools(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   readResource(params: { uri: string }, options?: RequestOptions): Promise<unknown>;
@@ -212,12 +366,6 @@ export interface RequestOptions {
   signal?: AbortSignal;
   timeout?: number;
   cacheMode?: 'refresh';
-}
-
-/** `tools/list` 的一頁，只列這個檔讀的欄位。 */
-export interface ListToolsPage {
-  readonly tools: readonly { name: string; execution?: { taskSupport?: string } }[];
-  readonly nextCursor?: string | undefined;
 }
 
 /**
@@ -250,16 +398,21 @@ export interface Generation {
   probing?: boolean;
   /**
    * {@link connectGeneration} 建的一代才有（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：這一代 `tools/list` 列出的
-   * adapter 工具物件（已經過 {@link throwOnToolError}、名字仍是 raw name）與帶出處標頭的指引。池的每份組裝照它們建自己的委派物件，
-   * 不改這些物件；plugin 自己連的重連也帶著它，但沒有人讀（那條的工具與指引在載入期定了）。
+   * 工具描述（server 給的原樣）與帶出處標頭的指引。每份組裝照它們建自己的 `NexusTool`；plugin 自己連的重連也帶著它，但沒有人讀
+   * （那條的工具與指引在載入期定了）。
    */
   readonly listed?: Listed;
 }
 
 /** {@link connectGeneration} 建的一代多帶的東西，見 {@link Generation.listed}。 */
 export interface Listed {
-  readonly tools: readonly StructuredTool[];
+  readonly tools: readonly Tool[];
   readonly instructions: string;
+}
+
+/** 收掉一代的 SDK client。冪等，不拋：監督者忽略它的錯誤。 */
+export async function closeGeneration(generation: Generation): Promise<void> {
+  await generation.sdk?.close?.().catch(() => {});
 }
 
 /**
@@ -283,78 +436,4 @@ export function generationOf(
     generation.onDown?.();
   };
   return generation;
-}
-
-export type ToolCall = (...args: unknown[]) => Promise<unknown>;
-
-/** 一個工具目前的呼叫（已經過 {@link throwOnToolError} 的那一層）。 */
-export function callOf(tool: StructuredTool): ToolCall {
-  const func = (tool as unknown as { func: ToolCall }).func;
-  return (...args) => func.call(tool, ...args);
-}
-
-/**
- * 把 server 回的 `isError` 結果改成**拋**，照 dsh（`throw new Error(text)`）。
- *
- * adapter 2.0.0 在有 `tool_call_id` 時不拋，回一則 `status: 'error'` 的 `ToolMessage`，文字是 server 給的原文、
- * 沒有前綴；1.1.4 是拋 `ToolException`。回訊息的話不經過圍堵（`containment.ts`）那條「拋錯 → `Error: 工具 … 執行失敗：`」
- * 的路，而 Chat Completions 的轉換器只送 content，模型就只看到一段裸文字，分不出這是失敗。拋回去，
- * 失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用同一個出口。
- */
-export function throwOnToolError(tool: StructuredTool): void {
-  const inner = (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func;
-  (tool as unknown as { func: typeof inner }).func = async (...args) => {
-    const result = await inner.call(tool, ...args);
-    const message = Array.isArray(result) ? result[0] : result;
-    if (ToolMessage.isInstance(message) && message.status === 'error') {
-      throw new Error(textOf(message.content));
-    }
-    return result;
-  };
-}
-
-/** 一則訊息 content 裡的文字塊，換行接起來。 */
-export function textOf(content: ToolMessage['content']): string {
-  if (typeof content === 'string') return content;
-  return content
-    .map((block) => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-    .filter((text) => text !== '')
-    .join('\n');
-}
-
-/** 把我們的連線設定翻成 adapter 收的形狀；憑證引用換成 `credentials` 裡的值（`credentials.ts`）。 */
-export function toAdapterConnection(
-  config: McpConfig,
-  elicitation: boolean,
-  credentials: ResolvedCredentials,
-): Connection {
-  const timeout = config.toolCallTimeoutMs;
-  const connection = config.connection;
-  if (connection.transport === 'stdio') {
-    return {
-      transport: 'stdio',
-      command: connection.command,
-      // adapter 的 stdio schema 把 `args` 列為必填，沒有參數的 server 也要給一個空陣列。
-      args: [...(connection.args ?? [])],
-      // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
-      // 父環境在前、設定的在後。不傳或只傳設定那幾格的話，底由 adapter（只補 `PATH`）與 SDK
-      // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
-      env: { ...scrubbedParentEnv(), ...substituted(connection.env ?? {}, credentials) },
-      ...(connection.cwd !== undefined && { cwd: connection.cwd }),
-      // 2.0.0 的現代協定 server 要問使用者（elicitation）時走 LangGraph interrupt，等一次 resume。**有人可以回答才開**
-      // （{@link McpConfig.elicitation}）：沒人的話開著會讓那一輪停在沒人接的 interrupt 上；關掉之後 adapter 把這種呼叫當工具失敗，
-      // 走一般的錯誤出口。舊協定 server 要問的話需要 `onElicitation`，我們不給，所以它不會宣告這個能力。
-      elicitation,
-      defaultToolTimeout: timeout,
-    };
-  }
-  return {
-    transport: 'http',
-    url: connection.url,
-    ...(connection.headers !== undefined && {
-      headers: substituted(connection.headers, credentials),
-    }),
-    elicitation,
-    defaultToolTimeout: timeout,
-  };
 }

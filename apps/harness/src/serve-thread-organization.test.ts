@@ -16,32 +16,32 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
 import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionEventsOf } from './session-files.fixture.js';
+import { startServeUnderTest } from './serve-under-test.fixture.js';
+import type { ServeUnderTest } from './serve-under-test.fixture.js';
 
-let running: RunningServe | undefined;
+let running: ServeUnderTest | undefined;
 
 afterEach(async () => {
   await running?.close();
   running = undefined;
 });
 
-async function start(root: string): Promise<RunningServe> {
-  running = await runServe({
+async function start(root: string): Promise<ServeUnderTest> {
+  running = await startServeUnderTest({
     argv: ['--port', '0', '--session-log', root],
     log: () => undefined,
     env: {},
   });
-  return running as RunningServe;
+  return running as ServeUnderTest;
 }
 
-async function stop(server: RunningServe): Promise<void> {
+async function stop(server: ServeUnderTest): Promise<void> {
   await server.close();
   running = undefined;
 }
 
-async function driveTurn(server: RunningServe, threadId: string, prompt: string): Promise<void> {
+async function driveTurn(server: ServeUnderTest, threadId: string, prompt: string): Promise<void> {
   const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, prompt);
@@ -73,7 +73,7 @@ async function turnStarts(root: string, threadId: string): Promise<number> {
   return (await readEvents(root, threadId)).filter((event) => event.type === 'turn/start').length;
 }
 
-async function sets(server: RunningServe) {
+async function sets(server: ServeUnderTest) {
   const listed = await (await serveClient(server)).listThreads();
   if (listed.kind !== 'ok') throw new Error(`列表失敗：${listed.message}`);
   return {

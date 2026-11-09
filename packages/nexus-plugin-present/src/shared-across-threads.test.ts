@@ -31,6 +31,7 @@ import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { FilesystemBackend } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -113,7 +114,7 @@ async function mount(threads: readonly string[]): Promise<Mounted> {
   const entry = tools.entries().find((item) => item.tool.name === PRESENT_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒註冊上');
   return {
-    tool: entry.tool,
+    tool: langChainToolOf(entry.tool),
     listeners: tools.resultListeners().map((item) => item.listener),
     sessions,
     drop(thread) {

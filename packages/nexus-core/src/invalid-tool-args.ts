@@ -27,8 +27,8 @@
  *   `additional_kwargs.tool_calls` 與 content block，原字串以 callId 為鍵記在**同一則訊息**的
  *   `additional_kwargs`（{@link INVALID_ARGUMENTS_KEY}）上。從此 ToolNode 照常派發，下一輪回送的是
  *   `{}`，後面跟著那則 tool 訊息。
- * - **`wrapToolCall`** 從 `request.state.messages` 裡找到帶這個 callId 的那則 AI 訊息
- *   （{@link rawArgumentsOf}），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
+ * - **`wrapToolCall`** 找到帶這個 callId 的那則 AI 訊息
+ *   （{@link rawArgumentsOf}，經 `toolCallOwner`），記號在就照常往內交，但工具換成一顆同名的樁：
  *   樁不碰工具本體，回 {@link INVALID_ARGUMENTS_REFUSAL}、碼 `INVALID_ARGS`。
  *
  * **`INVALID_ARGS` 從這裡起有兩個生產者**：這一顆（JSON 都不合格）與圍堵認出的 schema 不合
@@ -49,7 +49,7 @@
  *
  * 排在 `turnCancelModelSignal` 之前（那一顆只有 `wrapModelCall`，而且只綁訊號）。核准閘門與 plugin
  * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在其餘
- * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**比它更內側的只有 {@link ./max-tokens.ts}**
+ * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**模型那一側比它更內側、會動回覆裡工具呼叫的只有 {@link ./max-tokens.ts}**
  * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
  * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
@@ -68,8 +68,8 @@
  * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
  * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
  *
- * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 {@link ./max-tokens.ts}，它只看 `task`、
- * 原樣交回結果）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
+ * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（工具那一側比它更內側的只有 `tools/execute` 那一顆：它的監聽者讀得到請求，
+ * 但往內交的 `next()` 不收參數，換不了 `request.tool`）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
  * `request.tool`。哪天有一層只改名不設工具，基座會按新名字找到工具，這裡卻還以為沒有。
  *
  * ## 登記的偏離
@@ -87,8 +87,8 @@
  * 模型節點不會因為 resume 重跑，所以改寫只發生一次；停在核准點再續接時，拒不拒要靠上次留下的記號。
  * 記號放在**那則 AI 訊息自己身上**，所以它活得跟那則訊息一樣久：進 checkpointer、進會話日誌
  * （`assistant/message`，`fromLoggedMessage` 推回來還在），不需要另一份以 callId 為鍵、只活在
- * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都從 `request.state.messages` 倒著找帶這個 callId
- * 的那則（{@link rawArgumentsOf}）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
+ * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都經 `toolCallOwner` 找帶這個 callId
+ * 的那則（{@link rawArgumentsOf}；怎麼找見 {@link toolCallOwner}）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
  * 新的呼叫在另一則訊息上，找到的就是另一個答案。
  *
  * 照 dsh 的方向（`tool-calls.ts:104-111`：解不開就把原字串留在呼叫資料本身，行程內沒有另存一份）。
@@ -111,6 +111,9 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import {
   INVALID_ARGS,
@@ -122,6 +125,9 @@ import {
   UNKNOWN_TOOL,
 } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
+import type { SessionLookup } from './registry.js';
+import { ownerRequestOf, toolCallOwner } from './tool-call-owner.js';
+import type { ToolCallOwnerRequest } from './tool-call-owner.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
 export const INVALID_TOOL_ARGS_MIDDLEWARE_NAME = 'nexusInvalidToolArgs';
@@ -173,31 +179,23 @@ function markUnknownTool<T>(result: T): T {
 export const INVALID_ARGUMENTS_KEY = 'nexusInvalidArguments';
 
 /**
- * 這一次呼叫的原字串：解不開的那顆有，其餘（含沒有 `state`、找不到那則訊息）是 `undefined`。
+ * 這一次呼叫的原字串：解不開的那顆有，其餘（含找不到那則訊息、交下來的那則不含這個 callId、讀 state 時沒有 `state`）是 `undefined`。
  *
- * **倒著找、認 callId**：ToolNode 執行時那則訊息就在尾巴附近，供應商重用 callId 時最近的那則才是
- * 這一次。記號查不到時是 `undefined`，**不是**「合法」的證明——呼叫端（`wrapToolCall`）照常放行。
+ * 那則訊息怎麼找見 {@link toolCallOwner}。記號查不到時是 `undefined`，**不是**「合法」的證明——呼叫端（`wrapToolCall`）照常放行。
  *
- * @param request - `wrapToolCall` 收到的請求，只讀 `toolCall.id` 與 `state.messages`。
+ * @param request - `wrapToolCall` 收到的請求，只讀 `toolCall.id`、`owner`、`state.messages` 與 `runtime.configurable`。
+ * @param sessions - 那條 thread 的 `registry.sessions`：`history-source=log` 時從日誌找那則訊息（{@link toolCallOwner}）。省略就不讀日誌。
  * @returns 模型吐的原字串，或 `undefined`。
+ * @throws `history-source=log` 時找不到這次呼叫的日誌（見 {@link toolCallOwner}）；不退回 state。
  */
-export function rawArgumentsOf(request: {
-  readonly toolCall: { readonly id?: string };
-  readonly state?: unknown;
-}): string | undefined {
-  const callId = request.toolCall.id;
-  if (callId === undefined || callId === '') return undefined;
-  const messages = (request.state as { messages?: unknown } | undefined)?.messages;
-  if (!Array.isArray(messages)) return undefined;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message = messages[at] as Partial<AIMessage> | undefined;
-    if (!(message?.tool_calls ?? []).some((call) => call.id === callId)) continue;
-    const marks = message?.additional_kwargs?.[INVALID_ARGUMENTS_KEY] as
-      Record<string, unknown> | undefined;
-    const raw = marks?.[callId];
-    return typeof raw === 'string' ? raw : undefined;
-  }
-  return undefined;
+export function rawArgumentsOf(
+  request: ToolCallOwnerRequest,
+  sessions?: { forCall(config: unknown): SessionLookup },
+): string | undefined {
+  const marks = toolCallOwner(request, sessions)?.additional_kwargs?.[INVALID_ARGUMENTS_KEY] as
+    Record<string, unknown> | undefined;
+  const raw = marks?.[request.toolCall.id ?? ''];
+  return typeof raw === 'string' ? raw : undefined;
 }
 
 /** 一顆解不開的呼叫。 */
@@ -294,30 +292,50 @@ function refusingStub(name: string): unknown {
 }
 
 /**
+ * 工具那一半：沒有這顆工具的，結果標成 `UNKNOWN_TOOL`；參數解不開的，工具本體換成回 {@link INVALID_ARGUMENTS_REFUSAL} 的樁再往內交。
+ *
+ * @param sessions - 那條 thread 的 `registry.sessions`，見 {@link rawArgumentsOf}。
+ * @returns 環繞工具呼叫的一步。
+ */
+export function invalidToolArgsToolStep(sessions?: {
+  forCall(config: unknown): SessionLookup;
+}): ToolCallStep {
+  return async (call, next) => {
+    // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
+    // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
+    if (call.tool === undefined) return markUnknownTool(await next());
+    const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
+    if (raw === undefined) return next();
+    // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
+    // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
+    // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。
+    return next({ tool: refusingStub(call.name) });
+  };
+}
+
+/**
  * 造這顆 middleware。
  *
+ * @param sessions - 那條 thread 的 `registry.sessions`，見 {@link rawArgumentsOf}。
  * @returns 要排在每一層內側（`nexusMaxTokens` 之外）的 middleware。
  */
-export function createInvalidToolArgsMiddleware(): AgentMiddleware {
-  return createMiddleware({
-    name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
-      const response = await handler(request);
-      return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
-    },
-    wrapToolCall: async (request, handler) => {
-      // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
-      // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
-      if (request.tool === undefined) return markUnknownTool(await handler(request));
-      const raw = rawArgumentsOf(request);
-      if (raw === undefined) return handler(request);
-      // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
-      // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
-      // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。
-      return handler({
-        ...request,
-        tool: refusingStub(request.toolCall.name) as typeof request.tool,
-      });
-    },
-  }) as AgentMiddleware;
+export function createInvalidToolArgsMiddleware(sessions?: {
+  forCall(config: unknown): SessionLookup;
+}): AgentMiddleware {
+  const toolStep = invalidToolArgsToolStep(sessions);
+  return withToolCallStep(
+    withModelCallStep(
+      async (request, handler) => {
+        const response = await handler(request);
+        return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
+      },
+      (wrapModelCall) =>
+        createMiddleware({
+          name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCall as never,
+          wrapToolCall: wrapToolCallWith(toolStep),
+        }) as unknown as AgentMiddleware,
+    ),
+    toolStep,
+  );
 }

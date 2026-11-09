@@ -3,15 +3,16 @@
  *
  * 它的功能刻意薄到沒有意義：一個把輸入原樣回聲的工具。**它的價值不在功能，在相依關係**
  * （[#30](https://github.com/DemianLi/nexus-agent/issues/30)）：這個套件只相依 `@nexus/sdk`（規範）、`@nexus/tools`
- * （服務定義）、`@nexus/cordis`（型別）、`@langchain/core` 與 `zod`，**沒有一行 import `@nexus/core` 或
- * `@nexus/harness`**——外部插件只該看見 SDK 與服務定義（決議 §3-4 第 17 條）。
+ * （服務定義）、`@nexus/cordis`（型別）與 `zod`，**沒有一行 import `@nexus/core`、`@nexus/harness` 或 LangChain**
+ * ——外部插件只該看見 SDK 與服務定義（`.docs/decisions-2026-10-11.md` §3-4 第 17 條）。工具是 `NexusTool`（契約 `2.0.0`，#2351），參數用 zod 寫、
+ * 交出去的是 `z.toJSONSchema()` 以 input 模式編出來的 JSON Schema。
  *
  * ## 形狀
  *
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**：Loader 的 `unwrapExports`
  * 有 default 就取 default，具名的 `inject`／`Config` 會被丟掉（一致性套件的 `export-form` 格擋這個）。
  *
- * - 要的服務經 `inject` 宣告（`tools`，`^1.0.0`），在 `apply` 裡經 token 取；沒宣告就讀，Cordis 當場拋。
+ * - 要的服務經 `inject` 宣告（`tools`，`^2.0.0`），在 `apply` 裡經 token 取；沒宣告就讀，Cordis 當場拋。
  * - 註冊工具是 effect：這一列卸載時登記處自己撤掉，不靠誰記得呼叫 disposer。
  * - 工具本體是純函式 {@link createEchoTool}，只閉包 `prefix`、不碰 `ctx`：樹上這一列卸了之後，開著的對話手上的舊工具
  *   物件照樣能跑（決議 §3-2 第 6 條，插件更新只給新對話）。
@@ -22,11 +23,10 @@
  * @module
  */
 
-import { tool } from '@langchain/core/tools';
-import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Context } from '@nexus/cordis';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { toolsToken } from '@nexus/tools';
+import type { JsonSchema, NexusTool } from '@nexus/tools';
 import { z } from 'zod';
 
 /** 註冊出來的工具名。組裝點要把它排進 `toolOrder` 時用得到。 */
@@ -64,21 +64,23 @@ const echoToolSchema = z.object({
  * @param prefix - 回聲前面加的前綴。
  * @returns 工具實例。
  */
-export function createEchoTool(
-  prefix: string = DEFAULT_ECHO_PREFIX,
-): DynamicStructuredTool<typeof echoToolSchema> {
-  return tool(({ message }) => `${prefix}：${message}`, {
+export function createEchoTool(prefix: string = DEFAULT_ECHO_PREFIX): NexusTool {
+  return {
     name: ECHO_TOOL_NAME,
     description: '把收到的訊息原樣回聲，用來確認工具接線是通的。',
-    schema: echoToolSchema,
-  });
+    parameters: z.toJSONSchema(echoToolSchema, { io: 'input' }) as JsonSchema,
+    execute: async (args) => {
+      const { message } = echoToolSchema.parse(args);
+      return { ok: true, content: `${prefix}：${message}` };
+    },
+  };
 }
 
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息與 log 用）。 */
 export const name = 'echo';
 
-/** 要的服務：`tools`，契約 `^1.0.0`。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。 */
-export const inject = injectOf(need(toolsToken, '^1.0.0'));
+/** 要的服務：`tools`，契約 `^2.0.0`。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。 */
+export const inject = injectOf(need(toolsToken, '^2.0.0'));
 
 /** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
 export const Config = echoConfigSchema;
@@ -88,7 +90,7 @@ export const manifest = defineManifest({
   version: '0.1.0',
   owner: '平台團隊',
   provides: [],
-  consumes: [{ token: toolsToken.name, range: '^1.0.0' }],
+  consumes: [{ token: toolsToken.name, range: '^2.0.0' }],
   config: echoConfigSchema,
   // 換程式碼要重啟行程；設定一改，下一條 thread 看到新值，開著的不動（#1405、決議 §3-2 第 6 條）。
   reload: { code: 'restart', config: 'next-thread' },

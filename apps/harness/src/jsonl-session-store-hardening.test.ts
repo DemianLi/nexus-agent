@@ -63,14 +63,15 @@ function headerOf(id: string, extra: Partial<StoredSessionHeader> = {}): StoredS
   return { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1, ...extra };
 }
 
-function turnStart(seq: number): SessionEvent {
-  return { type: 'turn/start', seq, time: seq + 1, data: { kind: 'resume' } } as SessionEvent;
+/** 不牽涉任何跨筆關係的一顆（沒有 `modelCall` 的 `model/usage`）：連放幾顆讀盤都不拒。 */
+function usage(seq: number): SessionEvent {
+  return { type: 'model/usage', seq, time: seq + 1, data: {} } as SessionEvent;
 }
 
-/** 建一份落了盤的會話：`count` 顆 `turn/start`，關掉。 */
+/** 建一份落了盤的會話：`count` 顆 `model/usage`，關掉。 */
 async function seed(store: JsonlSessionStore, id: string, count = 1): Promise<void> {
   const stored = store.create(headerOf(id));
-  await stored.append(Array.from({ length: count }, (_, seq) => turnStart(seq)));
+  await stored.append(Array.from({ length: count }, (_, seq) => usage(seq)));
   await stored.close();
 }
 
@@ -160,7 +161,7 @@ describe('N0622 建立驗證', () => {
     const first = store.create(headerOf('f'));
     await first.close();
     const again = store.create(headerOf('f'));
-    await again.append([turnStart(0)]);
+    await again.append([usage(0)]);
     await again.close();
   });
 
@@ -169,7 +170,7 @@ describe('N0622 建立驗證', () => {
     const store = openJsonlSessionStore({ directory });
     const late = store.create(headerOf('g'));
     await seed(openJsonlSessionStore({ directory }), 'g');
-    const failure = await late.append([turnStart(0)]).catch((error: unknown) => error);
+    const failure = await late.append([usage(0)]).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(SessionAlreadyExistsError);
     expect(((failure as Error).cause as { code?: unknown }).code).toBe('EEXIST');
     await late.close();
@@ -189,7 +190,7 @@ describe('N0622 建立驗證', () => {
     const paths = sessionPathsIn(directory, 'i');
     await mkdir(paths.sessionDirectory);
     await writeFile(paths.log, '');
-    const failure = await late.append([turnStart(0)]).catch((error: unknown) => error);
+    const failure = await late.append([usage(0)]).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(SessionAlreadyExistsError);
     expect(((failure as Error).cause as { code?: unknown }).code).toBe('EEXIST');
     await late.close();
@@ -201,7 +202,7 @@ describe('N0622 建立驗證', () => {
     const header = { ...headerOf('copy'), cwd: '/before' };
     const stored = store.create(header);
     header.cwd = '/after';
-    await stored.append([turnStart(0)]);
+    await stored.append([usage(0)]);
     await stored.close();
     expect((await store.open('copy', 'read')).header.cwd).toBe('/before');
   });
@@ -212,7 +213,7 @@ describe('N0644 關閉之後再用', () => {
     const store = openJsonlSessionStore({ directory: await tmp() });
     const stored = store.create(headerOf('closed'));
     await stored.close();
-    for (const attempt of [() => stored.append([turnStart(0)]), () => stored.flush()]) {
+    for (const attempt of [() => stored.append([usage(0)]), () => stored.flush()]) {
       const failure = await attempt().catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(SessionHandleClosedError);
       expect((failure as Error).message).toBe('會話 "closed" 的把手已經關掉了。');
@@ -320,7 +321,7 @@ describe('N0625 冷讀解析快取', () => {
     await seed(store, 'other');
     await (await store.open('other', 'read')).read();
     const elsewhere = await openJsonlSessionStore({ directory }).resume('other');
-    await elsewhere.stored.append([turnStart(1)]);
+    await elsewhere.stored.append([usage(1)]);
     await elsewhere.stored.close();
     const resumed = await store.resume('other');
     expect(resumed.events.map((event) => event.seq)).toEqual([0, 1]);
@@ -333,7 +334,7 @@ describe('N0625 冷讀解析快取', () => {
     await seed(store, 'own');
     await (await store.open('own', 'read')).read();
     const resumed = await store.resume('own');
-    await resumed.stored.append([turnStart(1)]);
+    await resumed.stored.append([usage(1)]);
     expect((await (await store.open('own', 'read')).read()).map((event) => event.seq)).toEqual([
       0, 1,
     ]);
@@ -359,7 +360,7 @@ describe('N0625 冷讀解析快取', () => {
     await seed(store, 'still');
     await (await store.open('still', 'read')).read();
     const resumed = await store.resume('still');
-    await resumed.stored.append([turnStart(1)]);
+    await resumed.stored.append([usage(1)]);
     expect((await (await store.open('still', 'read')).read()).map((event) => event.seq)).toEqual([
       0, 1,
     ]);
@@ -375,7 +376,7 @@ describe('N0625 冷讀解析快取', () => {
     await appendFile(log, '{"type":"turn/st');
     expect((await (await store.open('torn', 'read')).read()).length).toBe(2);
     const resumed = await store.resume('torn');
-    await resumed.stored.append([turnStart(2)]);
+    await resumed.stored.append([usage(2)]);
     await resumed.stored.close();
     // 第一行是 header 行，事件從第二行起。
     const lines = (await readFile(log, 'utf8'))
@@ -423,7 +424,7 @@ describe('N0625 冷讀解析快取', () => {
     expect(() => {
       (events[0] as { data: { kind: string } }).data.kind = 'changed';
     }).toThrow(TypeError);
-    expect(() => (events as SessionEvent[]).push(turnStart(1))).toThrow(TypeError);
+    expect(() => (events as SessionEvent[]).push(usage(1))).toThrow(TypeError);
   });
 });
 

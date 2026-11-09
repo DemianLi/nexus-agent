@@ -43,16 +43,28 @@
  *   次巨量配置跑多久不歸它管。所以擋「瘋狂配置記憶體」的是
  *   {@link QuickJsPluginOptions.memoryLimitBytes} 而不是逾時——**兩個上限不能互相代替**，
  *   各有一條測試釘住（`index.test.ts` 的「資源邊界」）。
+ *
+ * ## 形狀
+ *
+ * 樹上的函式插件（#2353），具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src` 不 import
+ * `@nexus/core` 與 LangChain。工具是 `NexusTool`（`@nexus/tools` 契約 `^2.0.0`），參數用 zod 寫、交出去的是
+ * `z.toJSONSchema()` 以 input 模式編出來的 JSON Schema。不在出廠清單上，部署方用 patch `insert` 一列
+ * `@nexus/plugin-quickjs` 才會掛。舊的 `NexusPlugin` 外殼住在 `apps/harness` 的 `quickjs.fixture.ts`，給不經樹的測試用。
  */
 
-import { tool } from '@langchain/core/tools';
-import { HarnessError } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import type { Context } from '@nexus/cordis';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { toolsToken } from '@nexus/tools';
+import type { JsonSchema, NexusTool, NexusToolResult } from '@nexus/tools';
 import { shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle, QuickJSWASMModule } from 'quickjs-emscripten';
 import { z } from 'zod';
 
-import { currentModule, replaceModule } from './module.js';
+import { createModuleHolder } from './module.js';
+import type { QuickJsModules } from './module.js';
+
+export { createModuleHolder };
+export type { QuickJsModules };
 
 /**
  * 註冊出來的工具名。
@@ -77,20 +89,20 @@ export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
  */
 export type CodeRunFailureKind = 'exception' | 'timeout' | 'invalid-output';
 
+/** 程式本身失敗時，會話日誌那顆 `tool/result` 的碼。 */
+export const CODE_RUN_FAILED = 'CODE_RUN_FAILED';
+
 /**
- * `run_javascript` 的程式本身失敗時拋的東西，照 dsh 的 `CodeRunFailedError`
- * （`packages/core/tools/src/ptc.ts:165-180`，`477b4f4`）：**拋，不回字串**。同 dsh 繼承
- * {@link HarnessError}，所以碼 `CODE_RUN_FAILED` 跟著進會話日誌那顆 `tool/result` 的 `error`。
- *
- * 接住它的是 `@nexus/core` 的圍堵（dsh 那側是註冊表的執行管線）：模型拿到 `status: 'error'` 的
- * ToolMessage、文字帶得出失敗種類與原因，會話日誌的 `tool/result` 是 `isError: true`，web 的
- * 工具卡因此是失敗狀態。以前回一句 `錯誤：…` 的字串，三處都記成成功
+ * `run_javascript` 的程式本身失敗時，求值那一層拋的東西。工具本體接住它，回 `ok: false`（{@link failed}）：
+ * 模型拿到 `status: 'error'` 的工具結果、文字帶得出失敗種類與原因，會話日誌的 `tool/result` 是 `isError: true`、
+ * 碼是 {@link CODE_RUN_FAILED}，web 的工具卡因此是失敗狀態。回字串的話，三處都會記成成功
  * （[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
  *
- * 訊息的形狀照 dsh 的 `code run failed (<kind>): <message>`（`ptc.ts:721`）。dsh 後面還接擷取到的
- * 輸出與沙箱資訊，這裡兩樣都沒有：VM 裡沒有 `console`，也沒有行程沙箱。
+ * 訊息的形狀是 `code run failed (<kind>): <message>`，不接擷取到的輸出與沙箱資訊：VM 裡沒有 `console`，也沒有行程沙箱。
  */
-export class CodeRunFailedError extends HarnessError {
+export class CodeRunFailedError extends Error {
+  /** 進會話日誌的碼。 */
+  readonly code = CODE_RUN_FAILED;
   /** 失敗種類。 */
   readonly kind: CodeRunFailureKind;
 
@@ -99,7 +111,7 @@ export class CodeRunFailedError extends HarnessError {
    * @param message - 原因，不含前綴。
    */
   constructor(kind: CodeRunFailureKind, message: string) {
-    super(`code run failed (${kind}): ${message}`, 'CODE_RUN_FAILED');
+    super(`code run failed (${kind}): ${message}`);
     this.name = 'CodeRunFailedError';
     this.kind = kind;
   }
@@ -140,77 +152,102 @@ export const quickJsConfigSchema = z.strictObject({
 /** 驗過的設定。 */
 export type QuickJsConfig = z.infer<typeof quickJsConfigSchema>;
 
-/** 工廠收的東西：schema 的輸入面，每一格都可以省略。 */
+/** 設定的輸入面，每一格都可以省略。 */
 export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
 
-/**
- * QuickJS plugin。
- *
- * `apply` 是 async 的，唯一的理由是**在載入期就把 WASM 模組拉起來**。載不起來就讓整份
- * plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串——
- * 共同軸線的 fail-closed 在這個 plugin 上的樣子。
- *
- * **WASM 模組由這個插件自己持有**（{@link currentModule}），不用 `getQuickJS()` 的單例：host 的堆疊用完會讓模組停在一半，
- * 那個模組要整個丟掉換新（見 {@link runInVm}），函式庫的單例換不掉。整個行程共用一個：每組一次 agent 就 `apply` 一次，
- * 各自持有的話每條對話都多一個模組。
- *
- * **這裡刻意不接 `lifecycle.onDispose`。** 那條通道是給「有活的 handle 要收」的 plugin
- * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組沒有要關的東西，丟掉就由 GC 收，runtime 與
- * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時不收，整個模組換掉，見 {@link runInVm}）。
- * 登記一個什麼都不做的 disposer 只會讓關機清單看起來比實際上熱鬧。
- *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
- * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
- */
-export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
-  name: 'quickjs',
-  Config: quickJsConfigSchema,
-  async apply(registry: PluginRegistry, config: QuickJsConfig): Promise<void> {
-    const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
-    const limits = { timeoutMs, memoryLimitBytes, maxStackSizeBytes };
-    await currentModule();
-
-    registry.tools.register(
-      tool(
-        async ({ code }) => {
-          const quickjs = await currentModule();
-          try {
-            return runInVm(quickjs, code, limits);
-          } catch (error) {
-            if (error instanceof CodeRunFailedError) throw error;
-            void replaceModule();
-            if (error instanceof RangeError) {
-              throw new CodeRunFailedError('exception', `${error.name}: ${error.message}`);
-            }
-            throw error;
-          }
-        },
-        {
-          name: RUN_JAVASCRIPT_TOOL_NAME,
-          description:
-            '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
-            `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
-            `執行超過 ${timeoutMs} 毫秒會被中斷。`,
-          schema: z.object({
-            code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
-          }),
-        },
-      ),
-    );
-  },
-};
-
-export default quickJsPlugin;
+const runJavascriptSchema = z.object({
+  code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
+});
 
 /**
- * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * 造 `run_javascript` 工具。
  *
- * @param options - 設定，形狀見 {@link quickJsConfigSchema}。
- * @returns 可以放進組裝點清單的條目。
+ * **WASM 模組由呼叫端給的持有者提供**（{@link createModuleHolder}），不用 `getQuickJS()` 的單例：host 的堆疊用完會讓模組停在
+ * 一半，那個模組要整個丟掉換新（見 {@link runInVm}），函式庫的單例換不掉。
+ *
+ * @param config - 驗過的設定：三條資源上限。`timeoutMs` 也寫進給模型看的描述。
+ * @param modules - WASM 模組的持有者。
+ * @returns 工具實例。
  */
-export function createQuickJsPlugin(options: QuickJsPluginOptions = {}): PluginEntry {
-  return { plugin: quickJsPlugin, config: options };
+export function createRunJavascriptTool(config: QuickJsConfig, modules: QuickJsModules): NexusTool {
+  const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
+  const limits = { timeoutMs, memoryLimitBytes, maxStackSizeBytes };
+  return {
+    name: RUN_JAVASCRIPT_TOOL_NAME,
+    description:
+      '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
+      `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
+      `執行超過 ${timeoutMs} 毫秒會被中斷。`,
+    parameters: z.toJSONSchema(runJavascriptSchema, { io: 'input' }) as JsonSchema,
+    execute: async (args) => {
+      const { code } = runJavascriptSchema.parse(args);
+      const quickjs = await modules.current();
+      try {
+        return { ok: true, content: runInVm(quickjs, code, limits) };
+      } catch (error) {
+        if (error instanceof CodeRunFailedError) return failed(error);
+        void modules.replace();
+        if (error instanceof RangeError) {
+          return failed(new CodeRunFailedError('exception', `${error.name}: ${error.message}`));
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * 程式本身失敗的結果。文字與 `@nexus/core` 的 `formatToolFailure` 逐字相同（`工具 <名字> 執行失敗：<訊息>`，前面的 `Error: `
+ * 由宿主加）：工具回 `ok: false` 與工具拋錯、由圍堵接住，模型看到的位元組一樣（`apps/harness` 的 `quickjs-migration.test.ts`
+ * 對著對照組逐字比）。插件不能 import core，所以這句只能照抄。
+ */
+function failed(error: CodeRunFailedError): NexusToolResult {
+  return {
+    ok: false,
+    content: `工具 ${RUN_JAVASCRIPT_TOOL_NAME} 執行失敗：${error.message}`,
+    error: { name: error.name, code: error.code },
+  };
+}
+
+/** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息與 log 用）。 */
+export const name = 'quickjs';
+
+/** 要的服務：`tools`，契約 `^2.0.0`。 */
+export const inject = injectOf(need(toolsToken, '^2.0.0'));
+
+/** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
+export const Config = quickJsConfigSchema;
+
+/** 插件的宣告：只消費 `tools` `^2.0.0`，不提供服務；設定與 {@link Config} 是同一個物件。 */
+export const manifest = defineManifest({
+  id: 'quickjs',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [{ token: toolsToken.name, range: '^2.0.0' }],
+  config: quickJsConfigSchema,
+  // 換程式碼要重啟行程；設定一改，下一條 thread 看到新值，開著的不動（#1405、決議 §3-2 第 6 條）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/**
+ * 掛上：建這一列的 WASM 模組，再把 `run_javascript` 登記進行程級的工具登記處。
+ *
+ * **async 的唯一理由是在載入期就把 WASM 模組拉起來**。載不起來就讓這一列掛不上，而不是等模型第一次呼叫工具時才在對話中間
+ * 變成一句錯誤——共同軸線的 fail-closed 在這個插件上的樣子。
+ *
+ * **模組的持有者活在這一次掛載的閉包裡**：這一列掛著的期間，每條 thread 用它登記的同一個工具、同一個模組；`serve` 每條 thread
+ * 組一次 agent，各自建模組的話每條對話都多一個。runtime 與 context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時
+ * 不收，整個模組換掉，見 {@link runInVm}），WASM 模組沒有要關的東西，卸載後由 GC 收，所以不登記收尾。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ * @param config - 驗過的設定。
+ */
+export async function apply(ctx: Context, config: QuickJsConfig): Promise<void> {
+  const modules = createModuleHolder();
+  await modules.current();
+  service(ctx, toolsToken).register(createRunJavascriptTool(config, modules));
 }
 
 /** {@link runInVm} 用到的那幾個上限。 */
@@ -365,7 +402,7 @@ function timedOut(run: Run): CodeRunFailedError {
  * 沒觸發過的一律是 `exception`，原樣轉述——`ReferenceError: require is not defined` 這種訊息本身就是模型需要的答案；
  * 程式自己丟一個 `InternalError: interrupted` 也只是一則訊息。
  *
- * **不帶 `錯誤：` 前綴**：圍堵會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
+ * **不帶 `錯誤：` 前綴**：{@link failed} 會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
  * 讀到的是兩層前綴。
  */
 function fail(detail: unknown, run: Run): never {

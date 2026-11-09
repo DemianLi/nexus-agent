@@ -2,10 +2,11 @@
  * 工具結果剪刀的決定在會話日誌裡的樣子，與把它們換上去的純函式
  * （[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)，日誌格式 46）。
  *
- * 剪刀（{@link ./tool-result-pruner.ts}）剪的是**請求**，以前不寫日誌，所以從日誌推不回模型實際看到的那一份。現在剪的當下記一筆
+ * 剪刀（{@link ./tool-result-pruner.ts}）剪的是**請求**，它本身不寫日誌，從日誌推不回模型實際看到的那一份；所以剪的當下記一筆
  * `compaction/prune`（`session-log.ts`），**每顆工具結果只記一次，之後每次請求都沿用**——照 dsh 的 `compaction/prune`，落盤的替換是永久的。
- * 兩個讀者共用這個檔：請求端的剪刀（每次呼叫前讀日誌、把記過的換上去）與推導端的 `replayConversation`（`applyPrunes` 選項），
- * 所以**兩邊換出來的東西逐位元組相同**不是巧合，是同一個函式。
+ * 兩個讀者共用「換成什麼」（{@link prunedContent}）：請求端的剪刀（每次呼叫前讀日誌、把記過的換上去，在 `BaseMessage` 上換，
+ * `langchain-message-adapter.ts` 的 `applyRecordedPrunes`）與推導端（`applyPrunes` 選項，在 {@link NexusMessage} 上換，{@link pruneLoggedMessages}），
+ * 所以**兩邊換出來的內容逐位元組相同**不是巧合，是同一個函式。
  *
  * ## 對得上才換
  *
@@ -15,8 +16,8 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import type { BaseMessage, MessageContent } from '@langchain/core/messages';
+import { nexusContent } from './nexus-message.js';
+import type { ContentBlock, MessageContent, NexusMessage } from './nexus-message.js';
 import { snapshotJsonValue } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 
@@ -38,7 +39,7 @@ export function codePointLength(text: string): number {
  * 複合內容裡的一個區塊。走陣列那條時，只有 `type === 'text'` 的區塊算進預算、也只有它們會被剪；圖片之類的
  * **原序留著**（dsh 的 `measureContent`／`pruneContent` 同款）。
  */
-export type ContentPart = Extract<BaseMessage['content'], readonly unknown[]>[number];
+export type ContentPart = ContentBlock;
 export type TextBlock = ContentPart & { type: 'text'; text: string };
 
 export function isTextBlock(block: ContentPart): block is TextBlock {
@@ -52,7 +53,7 @@ export function isTextBlock(block: ContentPart): block is TextBlock {
  * @param content - 工具結果的內容。
  * @returns 文字區塊的 code point 總數；非文字區塊算 0。
  */
-export function measureToolResultContent(content: BaseMessage['content']): number {
+export function measureToolResultContent(content: MessageContent): number {
   if (typeof content === 'string') return codePointLength(content);
   let chars = 0;
   for (const block of content) if (isTextBlock(block)) chars += codePointLength(block.text);
@@ -80,16 +81,41 @@ export type RecordedPrunes = ReadonlyMap<string, RecordedPrune>;
  */
 export function recordedPrunesOf(events: readonly SessionEvent[]): RecordedPrunes {
   const recorded = new Map<string, RecordedPrune>();
-  for (const event of events) {
-    if (event.type !== 'compaction/prune') continue;
-    for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
-      recorded.set(result.callId, {
-        originalChars: result.originalChars,
-        content: result.content,
-      });
-    }
-  }
+  for (const event of events) recordPruneInto(recorded, event);
   return recorded;
+}
+
+/**
+ * 把一顆事件記的剪法收進 `recorded`，規則同 {@link recordedPrunesOf}（後記的蓋前記的）。不是 `compaction/prune` 就不動。
+ * 給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ */
+export function recordPruneInto(recorded: Map<string, RecordedPrune>, event: SessionEvent): void {
+  if (event.type !== 'compaction/prune') return;
+  for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
+    recorded.set(result.callId, { originalChars: result.originalChars, content: result.content });
+  }
+}
+
+/**
+ * 一則工具結果換上記過的剪法之後的內容。
+ *
+ * @param toolCallId - 那則結果的 `tool_call_id`。
+ * @param content - 那則結果現在的內容。
+ * @param recorded - {@link recordedPrunesOf} 的結果。
+ * @returns 剪過的內容（拷過的一份）；沒記過、或文字量對不上就是 `undefined`。
+ */
+export function prunedContent(
+  toolCallId: string | undefined,
+  content: MessageContent,
+  recorded: RecordedPrunes,
+): MessageContent | undefined {
+  const prune = toolCallId === undefined ? undefined : recorded.get(toolCallId);
+  if (prune === undefined) return undefined;
+  if (measureToolResultContent(content) !== prune.originalChars) return undefined;
+  // 先拷一份：日誌裡的事件是凍過的，交出去的內容之後會進 `ToolMessage` 建構子（請求端直接建，推導端經 `toBaseMessage`），
+  // 建構子可能回頭改欄位（同 `fromLoggedMessage`）。拷法也同那支：用日誌自己的
+  // 迭代快照，不用遞迴的 `structuredClone`，深巢狀兩千層上下就 `RangeError`（#1526）。
+  return snapshotJsonValue(prune.content, '修剪記錄的 content') as MessageContent;
 }
 
 /**
@@ -97,17 +123,12 @@ export function recordedPrunesOf(events: readonly SessionEvent[]): RecordedPrune
  *
  * @param message - 任何一則訊息；不是工具結果的原樣回。
  * @param recorded - {@link recordedPrunesOf} 的結果。
- * @returns 換過的新 `ToolMessage`（只換 `content`，其餘欄位原樣）；沒記過、或文字量對不上就是**傳進來的那一則**。
+ * @returns 只換了 `content` 的新一則（其餘欄位原樣）；沒記過、或文字量對不上就是**傳進來的那一則**。
  */
-export function applyRecordedPrune(message: BaseMessage, recorded: RecordedPrunes): BaseMessage {
-  if (!ToolMessage.isInstance(message)) return message;
-  const prune = recorded.get(message.tool_call_id);
-  if (prune === undefined) return message;
-  if (measureToolResultContent(message.content) !== prune.originalChars) return message;
-  // 先拷一份：日誌裡的事件是凍過的，建構子可能回頭改欄位（同 `fromLoggedMessage`）。拷法也同那支：用日誌自己的
-  // 迭代快照，不用遞迴的 `structuredClone`，深巢狀兩千層上下就 `RangeError`（#1526）。
-  const content = snapshotJsonValue(prune.content, '修剪記錄的 content') as MessageContent;
-  return new ToolMessage({ ...message, content });
+export function pruneLoggedMessage(message: NexusMessage, recorded: RecordedPrunes): NexusMessage {
+  if (message.type !== 'tool') return message;
+  const content = prunedContent(message.data.tool_call_id, nexusContent(message), recorded);
+  return content === undefined ? message : { type: 'tool', data: { ...message.data, content } };
 }
 
 /**
@@ -117,14 +138,14 @@ export function applyRecordedPrune(message: BaseMessage, recorded: RecordedPrune
  * @param recorded - {@link recordedPrunesOf} 的結果。
  * @returns 一則都沒換時是**原本那個陣列**；否則長度與順序與輸入相同的新陣列。
  */
-export function applyRecordedPrunes(
-  messages: readonly BaseMessage[],
+export function pruneLoggedMessages(
+  messages: readonly NexusMessage[],
   recorded: RecordedPrunes,
-): readonly BaseMessage[] {
+): readonly NexusMessage[] {
   if (recorded.size === 0) return messages;
   let changed = false;
   const next = messages.map((message) => {
-    const replaced = applyRecordedPrune(message, recorded);
+    const replaced = pruneLoggedMessage(message, recorded);
     if (replaced !== message) changed = true;
     return replaced;
   });

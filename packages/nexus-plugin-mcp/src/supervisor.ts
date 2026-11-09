@@ -16,10 +16,8 @@
  *
  * ## 偏離登記
  *
- * 1. **重連走 adapter 的 `close()` 再 `getTools()`，不開 adapter 內建的 `restart`**。內建的是固定間隔、固定次數
- *    （`@langchain/mcp-adapters` 2.0.0 `client.js:337,502`），沒有指數退避也沒有穩定期重置，表達不出 dsh 的政策；而且它重連之後
- *    已註冊的舊工具物件仍綁著死掉的 client（實測：`Not connected`，只有重新 `getTools()` 的新物件通）。所以退避自己做，
- *    已註冊的工具把 `func` 換成「委派給目前這一代同名工具」的薄包裝，舊物件因此不死。
+ * 1. **已註冊的工具不綁某一代**：重連是收掉上一代的 SDK client、開一個新的（`connection.ts` 的 `attemptsOn`），已註冊的工具
+ *    每次呼叫都委派給目前這一代同名工具的呼叫（`index.ts` 的 `nexusToolOf`），舊工具物件因此不死。
  * 2. **工具集合不變**：dsh 重連之後重新同步工具（`syncTools`）、`tools/list_changed` 也會重新列出。deepagents 建好之後工具集合
  *    不可變，註冊表上的工具換不掉，所以**重連回來的新工具清單裡，原本沒有的工具不加、原本有的但這一代沒有的叫它回
  *    「不再提供」**；`tools/list_changed` 不處理，新工具在下一次組裝生效（PM 2026-10-08 決定維持明文限制）。
@@ -31,15 +29,14 @@
  *    組的對話拿得到工具；之前組好的照偏離 2 補不了。CLI 沒有池，一次組裝就是整個行程，補不了工具也就不重試
  *    （`index.ts` 檔頭既有的偏離）。
  * 6. **關閉期限退到最接近的做法**（#1543，三格）：
- *    - **握手中斷不了**（理由 1）：dsh 先關「連線中的那一代」來打斷握手（`connection.ts:277`、`:388-407`）。adapter
- *      （`@langchain/mcp-adapters` 2.0.0）不交出還沒連上的 client 或 transport，`close()` 也中止不了進行中的
- *      `_initializeConnection`，而且自己先等它（`connection.js` 的 `#closeAll`）。所以 dispose 照舊先等進行中的嘗試，但整段
+ *    - **期限內不打斷握手**：dsh 先關「連線中的那一代」來打斷握手（`connection.ts:277`、`:388-407`）；這裡 dispose
+ *      先等進行中的嘗試，才叫 {@link SupervisorHooks.release} 收 client，所以整段
  *      跟 {@link GENERATION_CLOSE_TIMEOUT_MS} 賽跑，到期就記 dsh 那一句、照常回來。被丟下的嘗試落定之後照樣收（連上了就關、
- *      失敗了 adapter 自己收），所以那個子行程比 dispose 多活一段，最久到握手逾時（版本協商 `auto` 兩輪各 60 秒，60 秒時
+ *      失敗了 `connection.ts` 當場收掉 client 與 transport），所以那個子行程比 dispose 多活一段，最久到握手逾時（版本協商 `auto` 兩輪各 60 秒，60 秒時
  *      會換一個子行程）。行程先結束的話（寫入口 `plugin-cli.ts` 排空輸出就 exit）沒有人收，子行程只能靠 stdin 的 EOF
  *      自己退出；掛著 `--guard` 的跟著行程走，其餘不理 EOF 的會留成孤兒（`docs/operations.md`〈孤兒行程〉）。
- *    - **失敗的嘗試當場收掉**（{@link SupervisorHooks.abandon}，#1835），期限內確認關掉了才排下一次。握手就失敗時 adapter
- *      自己收掉 client 與 transport（`@langchain/mcp-adapters` 2.0.0 `connection.js:122-124`），拿不到 close 訊號，這類嘗試
+ *    - **失敗的嘗試當場收掉**（{@link SupervisorHooks.abandon}，#1835），期限內確認關掉了才排下一次。握手就失敗時 `connection.ts`
+ *      當場收掉 client 與 transport，不交出 close 訊號（`connectGeneration` 連上之後才交），這類嘗試
  *      沒有屏障，靠 SDK stdio 自帶的兩段 2 秒寬限之後 SIGKILL；握手之後才失敗的（例如指引超過上限）等得到。已連上的那一代
  *      被 `down`（例如工具呼叫失敗判成斷線、transport 其實還開著）時，先關、確認它真的關掉，才排重連；確認不到就不排。
  *      期限包住「關」與「等關掉」整段，不是關完才起算。

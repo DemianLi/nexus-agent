@@ -378,3 +378,36 @@ describe('先讀後改的開關從條目來', () => {
     expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe(ORIGINAL);
   });
 });
+
+describe('讀失敗不算讀過', () => {
+  // 檔案在、讀卻失敗：基座回錯誤文字、fs-tool-errors 標成錯誤，策略看到的必須是那個錯誤，不能記成讀過、讓接著的覆蓋放行。
+  const cases: [string, (root: string) => Promise<void>, Record<string, unknown>][] = [
+    ['offset 超過檔尾', () => Promise.resolve(), { offset: 999 }],
+    [
+      '非 UTF-8',
+      (root) => writeFile(join(root, 'notes.md'), Buffer.from([0x61, 0xff, 0xfe, 0x62])),
+      {},
+    ],
+    [
+      '二進位（含 NUL）',
+      (root) => writeFile(join(root, 'notes.md'), Buffer.from([0x00, 0x01, 0x02, 0x00])),
+      {},
+    ],
+  ];
+  for (const [label, prepare, args] of cases) {
+    it(`${label}：讀回錯誤，接著的覆蓋被擋、磁碟沒動`, async () => {
+      const root = await workspace();
+      await prepare(root);
+      const before = await readFile(join(root, 'notes.md'));
+      const messages = await run(root, [
+        read('/notes.md', args),
+        write('/notes.md', '整個蓋掉'),
+        ...DONE,
+      ]);
+      expect(messages[0]?.status).toBe('error');
+      expect(messages[1]?.status).toBe('error');
+      expect(messages[1]?.text).toContain('覆蓋它之前要先讀過');
+      expect((await readFile(join(root, 'notes.md'))).equals(before)).toBe(true);
+    });
+  }
+});

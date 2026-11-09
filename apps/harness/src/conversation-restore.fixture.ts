@@ -10,6 +10,7 @@
  */
 
 import type { BaseMessage } from '@langchain/core/messages';
+import { withModelCallStep } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 
@@ -20,13 +21,14 @@ const recorder: NexusPlugin = {
   name: 'request-recorder',
   apply(registry) {
     registry.middleware.use(
-      createMiddleware({
-        name: 'RequestRecorder',
-        wrapModelCall: (request, handler) => {
-          seenRequests.push([...request.messages]);
-          return handler(request);
+      withModelCallStep(
+        (request, next) => {
+          seenRequests.push([...(request as { messages: readonly BaseMessage[] }).messages]);
+          return next(request);
         },
-      }),
+        (wrapModelCall) =>
+          createMiddleware({ name: 'RequestRecorder', wrapModelCall: wrapModelCall as never }),
+      ),
     );
   },
 };

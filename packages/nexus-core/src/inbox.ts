@@ -28,6 +28,7 @@
 import type { AttachmentRef } from './attachment-ref.js';
 import type { GoalId } from './goal.js';
 import type { TurnAbortCause } from './session-log.js';
+import type { PageContextRef } from './page-context.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 
 /**
@@ -116,6 +117,11 @@ export interface QueuedInput {
    * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 42 起才有**，不標 `ignorable`（見 `session-store.ts`）。
    */
   readonly mention?: SubagentMentionRef;
+  /**
+   * 這一件附的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，嵌入的對話框）。沒有就整個不放這個 key。
+   * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 53 起才有**，不標 `ignorable`（見 `session-store.ts`）。
+   */
+  readonly context?: PageContextRef;
 }
 
 /** 一次變動。形狀照 dsh 的 `agent/inbox/spliced`。 */

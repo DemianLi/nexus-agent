@@ -55,6 +55,8 @@ SCAN_RES = [
         r'^\.github/audit-exceptions\.json$',
         # 已出貨格式的會話日誌夾具（#1529）：`session-format-fixtures.test.ts` 讀它們，副檔名不是 .ts。
         r'^apps/harness/src/fixtures/session-format/',
+        # 重放快照的場景（#1556）：`snapshot/snapshot.test.ts` 讀它們，副檔名是 .jsonl、.json、.yml。
+        r'^apps/harness/src/snapshot/',
     )
 ]
 
@@ -69,10 +71,14 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 # 沙箱 spawner 的 Rust（#1946）在這幾種情況編：動到它、TS 那一側的接縫與 client、CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
 # 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
+# per-thread 行程模型（#2341）在 TS 那一側的檔也算接縫（清單見下面 regex 的最後一行）：sandbox-spawner 那個 job 拿同一個 crate 編出的監督行程
+# 跑 `per-thread.integration.test.ts`。serve.ts 與 wire-handler.ts 刻意不算：這兩支常被碰到（量測：2026-11-07 往前 30 天，origin/develop 上碰
+# apps/harness/src 的 434 個 commit 裡 134 個碰到其一），算進來這些 PR 都要編 Rust；只改它們的功能 PR 要等合併後完整一輪才測得到。
 RUST_RE = re.compile(
     r'^native/sandbox-spawner/'
     r'|^packages/nexus-plugin-workspace-changes/src/git\.'
     r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
+    r'|^apps/harness/src/(process-launcher|front-process|front-wire|front-forward|supervisor-client|supervisor-protocol|conversation-process|conversation-control|peer-socket-auth|forwarded-principal|per-thread\S*)\.'
 )
 
 
@@ -101,6 +107,18 @@ SOURCE_RE = re.compile(r'^(.*)\.(ts|tsx|mts|cts)$')
 TEST_EXCLUDE_RE = re.compile(r'^apps/web/guard/')
 # `*.md` 全在 `.prettierignore`：只改文件的 PR 不必為了 format 安裝相依。
 FORMAT_SKIP_RE = re.compile(r'\.md$')
+
+# 重放快照（#1556）在真的 serve 上重放、比對落盤日誌，同名規則排不到它：改到這些時輕的模式也跑 `SNAPSHOT_TEST`。
+# `snapshot/` 整個目錄（場景、夾具、重放 harness）、重放模型（`llm-replay.ts`、`settings/replay-model.ts`）、真模型提供者與
+# 它的設定列（`live-model.ts`、`settings/live-model.ts`，錄製走它們）、wire，以及會話日誌的寫法與格式。
+SNAPSHOT_TEST = 'apps/harness/src/snapshot/snapshot.test.ts'
+SNAPSHOT_TRIGGER_RE = re.compile(
+    r'^apps/harness/src/snapshot/'
+    r'|^apps/harness/src/(llm-replay|live-model|jsonl-session-store|session-log-[\w-]+)\.ts$'
+    r'|^apps/harness/src/settings/(replay-model|live-model)\.ts$'
+    r'|^packages/nexus-wire/src/(?!.*\.test\.ts$)'
+    r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
+)
 
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
@@ -143,6 +161,9 @@ def light(changed: list[str], names: dict[str, str], exists: Callable[[str], boo
         for c in candidates:
             if exists(c):
                 tests.setdefault(d, set()).add(c[len(d) + 1:])
+    if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and exists(SNAPSHOT_TEST):
+        d = 'apps/harness'
+        tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
 
     return {
         'typecheck': typecheck,

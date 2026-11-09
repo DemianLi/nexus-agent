@@ -12,6 +12,14 @@ describe('空白畫面（#1695 E1-C）', () => {
     expect(screen.getByRole('heading', { level: 2, name: '今天要做什麼？' })).toBeTruthy();
   });
 
+  it('預設提拖檔；`fileDrop={false}` 不提（#2384）', () => {
+    const view = render(<EmptyHero />);
+    expect(screen.getByText('在下面打字，或把檔案拖進來。')).toBeTruthy();
+    view.unmount();
+    render(<EmptyHero fileDrop={false} />);
+    expect(screen.getByText('在下面打字。')).toBeTruthy();
+  });
+
   it('圖示不唸、不會動', () => {
     const { container } = render(<EmptyHero />);
     expect(screen.queryByRole('img')).toBeNull();

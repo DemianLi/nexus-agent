@@ -9,7 +9,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
-import { SessionLog } from '@nexus/core';
+import { HUMAN_MESSAGE_LIMIT_CHARS, SessionLog, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
@@ -85,6 +85,18 @@ describe('parseCliArgs', () => {
       );
     }
   });
+
+  it('--history-source 只收 state、shadow、log，省略即不設（由組裝點照清單那一列）', () => {
+    expect(parseCliArgs(['--history-source', 'shadow']).historySource).toBe('shadow');
+    expect(parseCliArgs(['--history-source', 'state']).historySource).toBe('state');
+    expect(parseCliArgs(['--history-source', 'log']).historySource).toBe('log');
+    expect(parseCliArgs([])).not.toHaveProperty('historySource');
+    for (const raw of ['Log', 'Shadow', '']) {
+      expect(() => parseCliArgs([`--history-source=${raw}`])).toThrow(
+        /--history-source 只收 state、shadow、log[\s\S]*用法/,
+      );
+    }
+  });
 });
 
 /**
@@ -147,7 +159,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十二列 harness 設定 ＋ 八個配套入口', async () => {
+  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十三列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -191,6 +203,8 @@ describe('一次性模式', () => {
       // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
       'skills',
       'plan-mode',
+      // plan-mode 留在相容層的那一格（#2551，撤除見 #2358）：緊接在 `plan-mode` 之後、跟著它開關，不算另一顆功能。
+      'plan-mode-model-call',
       'goal',
       'todo',
       'feedback',
@@ -264,6 +278,7 @@ describe('一次性模式', () => {
       'thread-capacity',
       'memory-gauge',
       'ops-endpoints',
+      'embed-login',
       'browser-session',
       'deliverable-files',
       'tool-text',
@@ -286,6 +301,8 @@ describe('一次性模式', () => {
       // 續行排程器，起動期讀一次；續行沒開（CLI 預設）時它安靜地不起作用。關得掉，關掉就只剩目標自己的 `max_goal_rounds`。
       'goal-round-cap',
       'agent-loop',
+      // **`history-source` 講模型歷史從哪裡來**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：消費點在組裝期，出廠 `state` 什麼都不掛。
+      'history-source',
       // **`sandbox-policy` 進來的理由是它本來就在產品路徑上，只是藏在組裝點的條件裡**
       // （[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 3 步）：`--dump-config` 印不出來、patch 關不掉。
       // 不論有沒有 `--workspace` 都掛：有圍堵時註冊升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。
@@ -437,6 +454,110 @@ describe('停在核准點的那一輪', () => {
 
     expect(stdout()).toContain('沒事發生。');
     expect(stdout()).not.toContain('核准');
+  });
+});
+
+describe('runTurn 照 loop 拒收太大的人話（#2415）', () => {
+  const tooLarge = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
+
+  it('native：寫 turn/start 之前拋，日誌不動；剛好等於上限的照跑', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
+    const { agent } = await createNexusAgent({ model, plugins: [] });
+    const { printer } = recorder();
+    const sessionLog = new SessionLog('t');
+    await expect(
+      runTurn(agent, tooLarge, printer, sessionLog, undefined, 'native'),
+    ).rejects.toThrow('message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字');
+    expect(sessionLog.events).toEqual([]);
+    await runTurn(
+      agent,
+      'y'.repeat(HUMAN_MESSAGE_LIMIT_CHARS),
+      printer,
+      sessionLog,
+      undefined,
+      'native',
+    );
+    expect(sessionLog.events.map((event) => event.type)).toContain('turn/start');
+  });
+
+  it('省略 loop（langgraph）：不拒收，照跑', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
+    const { agent } = await createNexusAgent({ model, plugins: [] });
+    const { printer, stdout } = recorder();
+    const sessionLog = new SessionLog('t');
+    await runTurn(agent, tooLarge, printer, sessionLog);
+    expect(sessionLog.events[0]?.type).toBe('turn/start');
+    expect(stdout()).toContain('收到。');
+  });
+});
+
+/**
+ * CLI 收人話的每個入口照 loop 拒收太大的人話（#1827 D234）：REPL 打的那一句、REPL 的 `/plan <message>`、一次性的 prompt。
+ * native 下拒收、日誌不開那一輪；langgraph 照收（基座的 `beforeAgent` 照舊搬檔）。
+ */
+describe('CLI 收人話的入口照 loop 拒收', () => {
+  const tooLarge = 'x'.repeat(HUMAN_MESSAGE_LIMIT_CHARS + 1);
+  const REJECTION = 'message-too-large: 這則訊息有 200,001 字，超過上限 200,000 字';
+
+  async function repl(line: string, loop: 'native' | 'langgraph') {
+    const { agent, commands, attachSession, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '收到。' }] }),
+      plugins: shipped,
+      checkpointer: new MemorySaver(),
+    });
+    // 接上日誌：`/plan` 要有地方記下模式，才會走到接著送的那句話。
+    const sessions = new SessionRegistry('t');
+    const detach = attachSession(sessions);
+    const { printer, stderr } = recorder();
+    const input = new PassThrough();
+    input.end(`${line}\n/exit\n`);
+    try {
+      await runRepl(
+        agent,
+        { input, output: new PassThrough() },
+        printer,
+        sessions.root,
+        commands,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        loop,
+      );
+    } finally {
+      detach();
+      await dispose();
+    }
+    return { stderr, types: sessions.root.events.map((event) => event.type) };
+  }
+
+  it('native：REPL 打的那一句太大，印錯誤、不開那一輪', async () => {
+    const { stderr, types } = await repl(tooLarge, 'native');
+    expect(stderr()).toContain(REJECTION);
+    expect(types).not.toContain('turn/start');
+  });
+
+  it('native：REPL 的 /plan <message> 太大，命令落定成 error、計劃模式沒打開、不開那一輪', async () => {
+    const { stderr, types } = await repl(`/plan ${tooLarge}`, 'native');
+    expect(stderr()).toContain(REJECTION);
+    expect(types).toEqual(['command/run', 'command/done']);
+  });
+
+  it('langgraph：REPL 打的那一句與 /plan <message> 都照收', async () => {
+    expect((await repl(tooLarge, 'langgraph')).types).toContain('turn/start');
+    expect((await repl(`/plan ${tooLarge}`, 'langgraph')).types).toContain('turn/start');
+  });
+
+  it('native：一次性的 prompt 太大，runCli 拋', async () => {
+    const { printer } = recorder();
+    await expect(
+      runCli({
+        argv: ['--agent-loop', 'native', tooLarge],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow(REJECTION);
   });
 });
 

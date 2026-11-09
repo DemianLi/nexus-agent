@@ -93,6 +93,71 @@ describe('收尾控制器', () => {
     await pending;
   });
 
+  it('到了上限先叫 onTimeout 再強制結束；收完、收尾失敗、第二次訊號都不叫', async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    const timedOut = createProcessShutdown(
+      () => deferred().promise,
+      (code) => order.push(`exit ${String(code)}`),
+      vi.fn(),
+      PROCESS_SHUTDOWN_TIMEOUT_MS,
+      (code) => order.push(`timeout ${String(code)}`),
+    );
+    timedOut.interrupt(0);
+    await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
+    expect(order).toEqual(['timeout 0', 'exit 0']);
+
+    for (const dispose of [
+      () => Promise.resolve(),
+      () => Promise.reject(new Error('dispose failed')),
+    ]) {
+      const onTimeout = vi.fn();
+      const shutdown = createProcessShutdown(
+        dispose,
+        vi.fn(),
+        vi.fn(),
+        PROCESS_SHUTDOWN_TIMEOUT_MS,
+        onTimeout,
+      );
+      await shutdown.shutdown(0);
+      await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
+      expect(onTimeout).not.toHaveBeenCalled();
+    }
+
+    const onTimeout = vi.fn();
+    const repeated = createProcessShutdown(
+      () => deferred().promise,
+      vi.fn(),
+      vi.fn(),
+      PROCESS_SHUTDOWN_TIMEOUT_MS,
+      onTimeout,
+    );
+    repeated.interrupt(0);
+    repeated.interrupt(0);
+    await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it('onTimeout 拋錯也照樣強制結束', async () => {
+    vi.useFakeTimers();
+    const exit = vi.fn();
+    const shutdown = createProcessShutdown(
+      () => deferred().promise,
+      exit,
+      vi.fn(),
+      PROCESS_SHUTDOWN_TIMEOUT_MS,
+      () => {
+        throw new Error('notice failed');
+      },
+    );
+    shutdown.interrupt(130);
+    await expect(vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS)).rejects.toThrow(
+      'notice failed',
+    );
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
   it('正常收尾卡住時，Ctrl-C 強制結束', async () => {
     const disposal = deferred();
     const exit = vi.fn();

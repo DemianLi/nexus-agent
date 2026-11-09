@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { createHostServicesPlugin } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import {
   emptyCommandPoint,
@@ -91,7 +91,7 @@ it('背景子代理的工具被反問：系統回絕、工具照常回傳、子�
       createHostServicesPlugin({ channel: { kind: 'human' } }, 'bg-elicit-channel'),
       ...shipped,
       worker,
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -100,7 +100,7 @@ it('背景子代理的工具被反問：系統回絕、工具照常回傳、子�
           command: process.execPath,
           args: ['--import', 'tsx', SERVER],
         },
-      }),
+      })),
     ],
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
     backgroundSubagents: {},

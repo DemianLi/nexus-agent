@@ -171,6 +171,11 @@ export interface StartWireServerOptions {
   /** 預設 0——由作業系統挑一個空的，測試因此可以平行跑。 */
   readonly port?: number;
   readonly host?: string;
+  /**
+   * 改聽這個 Unix socket，不綁 port（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，對話行程用）；給了就不看 {@link port} 與 {@link host}。
+   * 請求的 origin 固定是 `http://localhost`：socket 沒有 port，`Request` 拼不出 `host:port`。誰連得到這個路徑，由它所在目錄的權限決定。
+   */
+  readonly socketPath?: string;
   /** 先收完整份的路由的本文上限（位元組）。預設 {@link DEFAULT_MAX_REQUEST_BODY_BYTES}；超過回 413。串流路由不受管。 */
   readonly maxRequestBodyBytes?: number;
   /**
@@ -188,7 +193,7 @@ export interface StartWireServerOptions {
    */
   readonly heartbeatIntervalMs?: number;
   /**
-   * 一條下行因為卡住被斷開時往哪裡講（一行訊息，不含 thread 內容）。預設 `console.warn`。
+   * 一條下行被斷開時往哪裡講（一行訊息，不含 thread 內容）：卡住被斷開，以及多工連線上被伺服器切掉的（`StreamCutError`，嵌入版撤權）。預設 `console.warn`。
    * **和 {@link StartWireServerOptions.warn} 分開**：那一個的呼叫端會把每則訊息包成「處理失敗，回 400」。
    */
   readonly warnDisconnect?: (message: string) => void;
@@ -450,6 +455,12 @@ export function pathnameOf(target: string | undefined): string {
 
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
+  const socketPath = options.socketPath;
+  /** 請求的 origin。綁 port 時要在 listen 之後才叫（port 是作業系統挑的）；聽 socket 固定 `http://localhost`。 */
+  const originOf = (): string =>
+    socketPath === undefined
+      ? `http://${host}:${String((server.address() as AddressInfo).port)}`
+      : 'http://localhost';
   const warn = options.warn ?? ((error: Error) => console.warn(error));
   const maxBodyBytes = options.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const heartbeat = new SseHeartbeat(
@@ -471,8 +482,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     report(path, status);
   };
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
-    const address = server.address() as AddressInfo;
-    const origin = `http://${host}:${address.port}`;
+    const origin = originOf();
     // 對方斷線就中止這個 request 的 signal——**中止的是這條線，不是 agent 的 run**。
     const aborted = new AbortController();
     // **這個 Request 要活到連線關掉。** `new Request(base, { signal })` 把來源 signal 的中止轉給自己的 signal，
@@ -556,7 +566,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
       : new WireMux({
           ...options.muxLimits,
           handler: options.mux,
-          origin: () => `http://${host}:${String((server.address() as AddressInfo).port)}`,
+          origin: originOf,
           heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
           warn,
           warnDisconnect: options.warnDisconnect ?? ((message: string) => console.warn(message)),
@@ -584,15 +594,16 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     // listen 失敗（最常見的是 port 被佔住）會走 'error' 事件而不是 callback——
     // 不接的話它變成一個沒人處理的 error 事件，呼叫端只看到行程莫名其妙地死掉。
     server.once('error', reject);
-    server.listen(options.port ?? 0, host, () => {
+    const listening = () => {
       server.removeListener('error', reject);
       resolve();
-    });
+    };
+    if (socketPath === undefined) server.listen(options.port ?? 0, host, listening);
+    else server.listen(socketPath, listening);
   });
-  const address = server.address() as AddressInfo;
 
   return {
-    url: `http://${host}:${address.port}`,
+    url: originOf(),
     close: async () => {
       // 計時器先清（#1504）：之後 `closeAllConnections` 觸發的 'close' 都不會再碰到它。
       heartbeat.close();

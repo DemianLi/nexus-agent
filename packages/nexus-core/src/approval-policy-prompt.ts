@@ -6,14 +6,16 @@
  *
  * **每次呼叫現算**：`/permission` 在兩輪之間切了政策，下一次模型呼叫看到的就是新的那一句。
  *
+ * 句子是系統提示詞的一段（{@link approvalPolicySection}），由 {@link createApprovalPolicyPromptMiddleware} 那一格的轉接接上（`prompt-sections.ts`，#2414）。
+ *
  * @module
  */
 
-import type { AgentMiddleware } from 'langchain';
-import { createMiddleware } from 'langchain';
-
+import type { AgentMiddleware } from './base-types.js';
 import type { ApprovalChannel } from './approval.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
+import { createSectionSlotMiddleware, MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
+import type { MiddleSection } from './prompt-sections.js';
 
 /** middleware 的名字。 */
 export const APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME = 'nexusApprovalPolicyPrompt';
@@ -45,9 +47,25 @@ export function approvalPolicySentence(
 }
 
 /**
- * 每次模型呼叫把 {@link approvalPolicySentence} 接到系統訊息後面的 middleware。
+ * 核准政策句這一段：每次模型呼叫照 {@link approvalPolicySentence} 現算。
  *
- * **用 `concat` 不用取代**，同沙箱政策句：`systemMessage` 在就接在它後面，不在就由 `systemPrompt` 承接；基座兩個都讀。
+ * @param channel - 這張圖的核准管道，組裝時就定了。
+ * @param policy - 每次模型呼叫問一次。
+ */
+export function approvalPolicySection(
+  channel: ApprovalChannel,
+  policy: () => ApprovalPolicyValue,
+): MiddleSection {
+  return {
+    name: 'nexus:approval-policy',
+    order: MIDDLE_SECTION_ORDERS.APPROVAL_POLICY,
+    separator: '\n',
+    text: () => approvalPolicySentence(channel, policy()),
+  };
+}
+
+/**
+ * 接 {@link approvalPolicySection} 的那一格。
  *
  * @param channel - 這張圖的核准管道，組裝時就定了。
  * @param policy - 每次模型呼叫問一次。
@@ -57,16 +75,7 @@ export function createApprovalPolicyPromptMiddleware(
   channel: ApprovalChannel,
   policy: () => ApprovalPolicyValue,
 ): AgentMiddleware {
-  return createMiddleware({
-    name: APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const sentence = approvalPolicySentence(channel, policy());
-      const { systemMessage } = request;
-      return handler(
-        systemMessage === undefined
-          ? { ...request, systemPrompt: sentence }
-          : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
-      );
-    },
-  }) as unknown as AgentMiddleware;
+  return createSectionSlotMiddleware(APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME, [
+    approvalPolicySection(channel, policy),
+  ]);
 }

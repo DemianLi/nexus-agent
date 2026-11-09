@@ -11,12 +11,8 @@ import { describe, expect, it } from 'vitest';
 import type { AgentMiddleware } from './base-types.js';
 import { resumedLog } from './fixtures.js';
 import { SessionLog } from './session-log.js';
-import {
-  applyRecordedPrune,
-  applyRecordedPrunes,
-  measureToolResultContent,
-  recordedPrunesOf,
-} from './tool-result-prune-log.js';
+import { applyRecordedPrune, applyRecordedPrunes } from './langchain-message-adapter.js';
+import { measureToolResultContent, recordedPrunesOf } from './tool-result-prune-log.js';
 import { TOOL_RESULT_PRUNE_MARKER, withToolResultPruning } from './tool-result-pruner.js';
 import type {
   NewlyPruned,

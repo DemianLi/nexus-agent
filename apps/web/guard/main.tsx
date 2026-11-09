@@ -2480,6 +2480,7 @@ function ComposerPage({ state }: { state: string }) {
                 seat={{
                   catalog: MODELS,
                   selection,
+                  recorded: selection,
                   select: async (next) => {
                     setSelection(next);
                     return undefined;

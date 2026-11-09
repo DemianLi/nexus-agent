@@ -1,34 +1,38 @@
 /**
  * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
- * [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 5 張）。**預設關**：
- * `createNexusAgent({ backgroundSubagents })` 不給就完全沒有這顆 middleware。
+ * [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 5 張）。`createNexusAgent({ backgroundSubagents })`
+ * 不給就完全沒有這顆 middleware；出貨的 serve 設定給了（`cordis.yml` 的 `background-subagents`，`continuable`）。
  *
- * ## 為什麼是新工具，不是給 `task` 加欄位（偏離登記）
+ * ## 模型看到的是 `subagent`，執行的前景仍是基座的 `task`
  *
- * dsh 的委派工具自己帶 `run_in_background`（`packages/subagent/tool-subagent/src/index.ts:111/303`，`477b4f4`）。
- * 基座的 `task` schema 固定，zod 會剝掉多的欄位；langchain 又禁止在 `wrapModelCall` 裡**修改**已註冊的工具
- * （`You have modified a tool in "wrapModelCall" hook … This is not supported.`）。表達不出來，退到最接近的：
- * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（兩件事 langchain 都允許，探針有斷言，見 #831），
- * `wrapToolCall`（最外層）承接它。
+ * `wrapModelCall` 把 `task` 從模型視野**拿掉**、**加上** `subagent`（core 的 `ToolAdmission` 與 `ToolAddition`），
+ * `wrapToolCall`（最外層）承接它：判斷與背景派出是 core 型別的 `ToolCallStep`。langchain 在 `wrapModelCall` 裡對工具清單
+ * 有兩條規則：已註冊的工具換成同名的另一個實例一律拒絕；新加的工具要有 middleware 帶 `wrapToolCall` 才放行
+ * （`langchain@1.5.10` `dist/agents/nodes/AgentNode.js:246-257`；native loop 照同一套，`native-loop/model-node.ts`）。
+ * 拿掉工具、換成不是 `Runnable` 的定義都不在檢查內（探針見 #831）。
+ *
+ * 基座 `task` 的 schema 只有 `description`／`subagent_type`，執行時 zod 剝掉其餘欄位，所以模型直接送 `task` 帶的
+ * `run_in_background` 不會生效、照前景跑。背景與否、模型選擇只在 `subagent` 的 schema 上，前景改派只交那兩格。
  *
  * - **`run_in_background: false`**：把呼叫改派給基座的 `task`（`toolCall.name` 換成 `task`、`request.tool` 換成
- *   `wrapModelCall` 順手記下的基座實例），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`，行為同今天。
+ *   工具清單那一步順手記下的基座實例：模型看到的是 core 逐字造的定義，實例由 `originalToolOf` 取回），內層的沙箱快照、圍堵、輸出上限、核准閘門看到的仍是 `task`。
  *   回給模型的結果名字改回 `subagent`。
- * - **`true`（預設，同 dsh continuable）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
+ * - **`true`（預設）**：在收件匣接受的那一刻把第一輪交給 {@link BackgroundSubagentHost}，
  *   當場回編號。
  * - **模型直接送 `task`**（藏起來的那顆）：**不攔**，基座照樣跑，等同 `run_in_background: false`。它沒被宣告過，
  *   只有壞掉的模型才會送；行為與前景一致，所以不值得為它多一條錯誤路徑（探針實測，#831）。
  *
  * **這顆在疊上的位置（量到的）**：`nexusToolFailureContainment` ＞ `nexusTurnCancel`（外層守衛）＞ **這顆** ＞
- * `nexusApprovalGate` ＞ … ＞ `nexusMaxTokens`；沙箱 plugin 的 `wrapToolCall` 也在這顆裡面。所以前景改派後，
+ * `nexusApprovalGate` ＞ … ＞ `nexusToolExecute`；輸出上限的替換與沙箱政策的快照是它的 `tools/execute` 監聽者，也在這顆裡面。所以前景改派後，
  * 核准閘門、輸出上限、沙箱快照看到的是 `task`；**圍堵與外層的中止守衛在外面，看到的是 `subagent`**（圍堵的日誌事件名、
- * 中止後回的「還沒動手」結果都用 `subagent`）。wire 的子代理卡、`thread-pump.ts` 收回時選碼的 `DELEGATION_TOOL`
- * 也還在比對 `task`——這幾處歸 #832，預設關的今天不會被走到。
+ * 中止後回的「還沒動手」結果都用 `subagent`）。`thread-pump.ts` 收回時選碼用 `@nexus/wire` 的
+ * `DELEGATION_TOOL_NAMES`，`task` 與 `subagent` 都認；wire 的子代理卡以 `task` 認歸屬，前景改派後內層看到的正是 `task`。
  *
- * `subagent` 的描述取自當次請求裡 `task` 的描述（改掉跟背景矛盾的兩句，見 {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
+ * `subagent` 的描述取自當次請求裡 `task` 的描述（core 的 `task-tool-definition.ts` 逐字造的那一份；改掉跟背景矛盾的兩句，見
+ * {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
  * （plugin middleware 也射進去，#327）沒有 `task`，`wrapModelCall` 在那裡不加 `subagent`；`wrapToolCall` 按呼叫者身分只接手
  * root 的，子代理幻覺出來的 `subagent` 呼叫原樣交下去、落到 `UNKNOWN_TOOL`（[#1045](https://github.com/DemianLi/nexus-agent/issues/1045)：
- * 之前只比工具名，子代理那一層也接手，前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
+ * 不按身分判的話，子代理那一層也會接手：前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
  *
  * ## 沙箱快照
  *
@@ -44,9 +48,32 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { INVALID_ARGS, putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
-import type { PluginEntry, SessionLog, SessionRegistry, ToolErrorInfo } from '@nexus/core';
+import {
+  addedTools,
+  admittedTools,
+  INVALID_ARGS,
+  originalToolOf,
+  putToolResultMeta,
+  toolCallSessionAddress,
+  toolDescriptionOf,
+  toolNameOf,
+  toolRefusal,
+  withToolCallStep,
+  withToolListStep,
+  wrapModelCallWith,
+  wrapToolCallWith,
+} from '@nexus/core';
+import type {
+  PluginEntry,
+  SessionLog,
+  SessionRegistry,
+  ToolAdmission,
+  ToolCallStep,
+  ToolErrorInfo,
+} from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
+import type { MiddleSection, ToolListStep } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
@@ -80,6 +107,8 @@ export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
 export const SEND_MESSAGE_TOOL_NAME = 'send_message';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
+/** 模型那一側拿掉 `task`。 */
+const WITHOUT_TASK: ToolAdmission = { admits: (name) => name !== BASE_DELEGATION_TOOL_NAME };
 /** `subagent` 參數不合 schema 時的碼，同圍堵認出 schema 不合時給的那一組（dsh `ToolArgsError`）。 */
 const SUBAGENT_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
 
@@ -171,13 +200,24 @@ const PARALLEL_SENTENCE =
   '要派幾個互不相依的子代理時，在同一則訊息裡一起呼叫 `subagent`，派出去後繼續做有用的事，不要乾等。';
 
 /**
+ * 那一句的段（#2414）：這一格看得到 `subagent` 才接。`subagent` 是上面那顆 middleware 換掉 `task` 換上的，fold 把段接在它內側，
+ * 所以子代理（沒有 `task`）不接。
+ */
+const PARALLEL_SECTION: MiddleSection = {
+  name: 'background-delegation:parallel',
+  order: MIDDLE_SECTION_ORDERS.BACKGROUND_DELEGATION,
+  separator: '\n',
+  text: (context) => (context.tools.includes(SUBAGENT_TOOL_NAME) ? PARALLEL_SENTENCE : ''),
+};
+
+/**
  * 背景派出的接線點：一份組裝一個。`createNexusAgent` 建它，`attachSession` 時 {@link BackgroundDelegation.attach}
  * 建 host（**在任何圖的環境之外**，見 `background-subagents.ts` 檔頭）。
  */
 export class BackgroundDelegation {
   readonly #options: BackgroundSubagentsOptions;
   #host: BackgroundSubagentHost | undefined;
-  /** 當次請求裡看到的基座 `task`。前景改派要用它的實例。 */
+  /** 當次請求裡那一份 `task` 頂替的基座實例。前景改派要用它。 */
   #baseTask: StructuredToolInterface | undefined;
   /** 描述沒變就重用同一個工具實例。 */
   #tool: { readonly description: string; readonly instance: StructuredToolInterface } | undefined;
@@ -228,13 +268,14 @@ export class BackgroundDelegation {
     return Object.assign(close, { control: host.control });
   }
 
-  /** 組裝用的條目：一顆最外層的 middleware。 */
+  /** 組裝用的條目：一顆最外層的 middleware，加上平行句那一段。 */
   entry(): PluginEntry {
     return {
       plugin: {
         name: 'background-delegation',
         apply: (registry) => {
           registry.middleware.use(this.#middleware(), { prepend: true });
+          registry.prompt.section(PARALLEL_SECTION);
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
@@ -420,165 +461,175 @@ export class BackgroundDelegation {
   }
 
   #middleware() {
-    return createMiddleware({
-      name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
-      wrapModelCall: (request, handler) => {
-        const base = request.tools.find((each) => each.name === BASE_DELEGATION_TOOL_NAME);
-        // 子代理的疊沒有 `task`：什麼都不做。
-        if (base === undefined) return handler(request);
-        this.#baseTask = base as unknown as StructuredToolInterface;
-        const description = typeof base.description === 'string' ? base.description : '';
-        const { systemMessage } = request;
-        return handler({
-          ...request,
-          tools: [
-            ...request.tools.filter((each) => each.name !== BASE_DELEGATION_TOOL_NAME),
-            this.#subagentTool(description),
-          ],
-          systemMessage: systemMessage.concat(`\n${PARALLEL_SENTENCE}`),
+    const step = this.#toolStep();
+    const listStep: ToolListStep = (request) => {
+      const base = request.tools.find((each) => toolNameOf(each) === BASE_DELEGATION_TOOL_NAME);
+      // 子代理的疊沒有 `task`：什麼都不做。
+      if (base === undefined) return undefined;
+      this.#baseTask = originalToolOf(base) as StructuredToolInterface;
+      const subagent = this.#subagentTool(toolDescriptionOf(base) ?? '');
+      return addedTools(admittedTools(request.tools, WITHOUT_TASK), {
+        additions: () => [subagent],
+      });
+    };
+    return withToolListStep(
+      withToolCallStep(
+        createMiddleware({
+          name: BACKGROUND_DELEGATION_MIDDLEWARE_NAME,
+          wrapModelCall: wrapModelCallWith(listStep) as never,
+          wrapToolCall: wrapToolCallWith(step),
+        }),
+        step,
+      ),
+      listStep,
+    );
+  }
+
+  /**
+   * 這顆的工具那一半：只接 root 叫的 `subagent`。前景改派給基座的 `task`（內層認 `task`），回來的結果名字改回 `subagent`；
+   * 背景在這裡交給 host、當場回編號；其餘原樣往內交。
+   *
+   * @returns 這一步。
+   */
+  #toolStep(): ToolCallStep {
+    return async (call, next) => {
+      if (call.name !== SUBAGENT_TOOL_NAME) return next();
+      // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
+      // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。同 dsh：派發與 schema 用同一份
+      // 逐 agent 視圖，看不到的呼叫在派發那一步是 `ToolNotFoundError`（`packages/core/tools/src/index.ts:1230-1252`、
+      // `:1578-1579`，`5badb15`）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
+      // 認不出身分的也不接手。前提：root 那一層有 `task`（`toolFilter` 只套在子代理上）。
+      const caller = toolCallSessionAddress({ configurable: call.configurable } as never);
+      if (caller?.kind !== 'root') return next();
+      const callId = call.callId ?? '';
+      const selection = this.#options.modelSelection;
+      // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。
+      if (selection === undefined) {
+        const raw = call.args as Record<string, unknown> | undefined;
+        if (raw !== undefined && ('model' in raw || 'reasoning_effort' in raw)) {
+          return toolRefusal('這個會話沒有開子代理選模型，不能指定 model 或 reasoning_effort', {
+            callId,
+            name: SUBAGENT_TOOL_NAME,
+          });
+        }
+      }
+      const parsed = (selection === undefined ? subagentSchema : selectingSubagentSchema).safeParse(
+        call.args,
+      );
+      // 參數不合 schema 帶 `INVALID_ARGS`，同 dsh `defineTool` 的 `ToolArgsError`（`packages/core/tools/src/schema.ts:599`，
+      // `5badb15`）。host 拒絕 `start`（名額滿、已關）照 dsh `SubagentError` 帶碼（#1046，見下面的 `catch`）；其餘拒絕
+      // 不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`（`packages/subagent/tool-subagent/src/index.ts:294-295`），
+      // 渲染出來沒有碼（#1024）。
+      if (!parsed.success) {
+        return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+          error: SUBAGENT_ARGS_ERROR,
         });
-      },
-      wrapToolCall: async (request, handler) => {
-        if (request.toolCall.name !== SUBAGENT_TOOL_NAME) return handler(request);
-        // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
-        // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。同 dsh：派發與 schema 用同一份
-        // 逐 agent 視圖，看不到的呼叫在派發那一步是 `ToolNotFoundError`（`packages/core/tools/src/index.ts:1230-1252`、
-        // `:1578-1579`，`5badb15`）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
-        // 認不出身分的也不接手。前提：root 那一層有 `task`——沒有 profile 拿掉它（基座內建的 profile 沒有）。
-        const caller = toolCallSessionAddress({ configurable: request.runtime?.configurable });
-        if (caller?.kind !== 'root') return handler(request);
-        const callId = request.toolCall.id ?? '';
-        const selection = this.#options.modelSelection;
-        // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。
-        if (selection === undefined) {
-          const raw = request.toolCall.args as Record<string, unknown> | undefined;
-          if (raw !== undefined && ('model' in raw || 'reasoning_effort' in raw)) {
-            return toolRefusal('這個會話沒有開子代理選模型，不能指定 model 或 reasoning_effort', {
-              callId,
-              name: SUBAGENT_TOOL_NAME,
-            });
-          }
-        }
-        const parsed = (
-          selection === undefined ? subagentSchema : selectingSubagentSchema
-        ).safeParse(request.toolCall.args);
-        // 參數不合 schema 帶 `INVALID_ARGS`，同 dsh `defineTool` 的 `ToolArgsError`（`packages/core/tools/src/schema.ts:599`，
-        // `5badb15`）。host 拒絕 `start`（名額滿、已關）照 dsh `SubagentError` 帶碼（#1046，見下面的 `catch`）；其餘拒絕
-        // 不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`（`packages/subagent/tool-subagent/src/index.ts:294-295`），
-        // 渲染出來沒有碼（#1024）。
-        if (!parsed.success) {
-          return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
-            callId,
-            name: SUBAGENT_TOOL_NAME,
-            error: SUBAGENT_ARGS_ERROR,
-          });
-        }
-        const {
-          description,
-          subagent_type: subagentType,
-          run_in_background: background,
-        } = parsed.data;
-        const requested = parsed.data as { model?: string; reasoning_effort?: string };
-        const asksForModel =
-          requested.model !== undefined || requested.reasoning_effort !== undefined;
+      }
+      const {
+        description,
+        subagent_type: subagentType,
+        run_in_background: background,
+      } = parsed.data;
+      const requested = parsed.data as { model?: string; reasoning_effort?: string };
+      const asksForModel =
+        requested.model !== undefined || requested.reasoning_effort !== undefined;
 
-        // 前景走基座的 `task`，它的圖與模型在組裝期寫死，帶不進去（#877 的偏離登記）：拒絕，不靜靜用 root 的。
-        if (background === false && asksForModel) {
-          return toolRefusal(
-            '只有背景委派能指定 model 或 reasoning_effort；前景（run_in_background 為 false）用你現在的模型',
-            { callId, name: SUBAGENT_TOOL_NAME },
-          );
+      // 前景走基座的 `task`，它的圖與模型在組裝期寫死，帶不進去（#877 的偏離登記）：拒絕，不靜靜用 root 的。
+      if (background === false && asksForModel) {
+        return toolRefusal(
+          '只有背景委派能指定 model 或 reasoning_effort；前景（run_in_background 為 false）用你現在的模型',
+          { callId, name: SUBAGENT_TOOL_NAME },
+        );
+      }
+      let choice: ModelChoice | undefined;
+      const baseline = this.#options.delegationBaseline?.(subagentType);
+      if (selection !== undefined) {
+        const resolved = resolveModelSelection(selection, requested, baseline);
+        if (!resolved.ok) {
+          return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
         }
-        let choice: ModelChoice | undefined;
-        const baseline = this.#options.delegationBaseline?.(subagentType);
-        if (selection !== undefined) {
-          const resolved = resolveModelSelection(selection, requested, baseline);
-          if (!resolved.ok) {
-            return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
-          }
-          choice = resolved.choice;
-        } else if (baseline !== undefined) {
-          // 沒開模型自己挑：走基線，定義釘的 ?? 父代理此刻的（#328）。
-          choice = baselineChoice(baseline);
-        }
+        choice = resolved.choice;
+      } else if (baseline !== undefined) {
+        // 沒開模型自己挑：走基線，定義釘的 ?? 父代理此刻的（#328）。
+        choice = baselineChoice(baseline);
+      }
 
-        if (background === false) {
-          const base = this.#baseTask;
-          if (base === undefined) {
-            return toolRefusal('沒有可用的 task 工具，前景委派做不了', {
-              callId,
-              name: SUBAGENT_TOOL_NAME,
-            });
-          }
-          const result = await handler({
-            ...request,
-            toolCall: {
-              ...request.toolCall,
-              name: BASE_DELEGATION_TOOL_NAME,
-              args: { description, subagent_type: subagentType },
-            },
-            tool: base,
-          } as never);
-          // 模型叫的是 `subagent`，回給它的結果也用這個名字。`task` 收尾回的是 `Command`（帶狀態更新），
-          // 訊息在 `update.messages` 裡；只換屬於這次呼叫的那一則，其餘原樣留著。
-          return renameResult(result, callId);
-        }
-
-        const host = this.#host;
-        if (host === undefined) {
-          return toolRefusal('背景子代理還沒接上會話，派不出去', {
+      if (background === false) {
+        if (this.#baseTask === undefined) {
+          return toolRefusal('沒有可用的 task 工具，前景委派做不了', {
             callId,
             name: SUBAGENT_TOOL_NAME,
           });
         }
-        try {
-          // **接受那一刻**：同步（沒有 await），包在沙箱的 delegate 裡。
-          const sandbox = this.#options.sandbox;
-          // 回報指引只接在背景派出去的（#849）：前景的 `task` 是一次性的，寄不出話，也不該被告知要寄。
-          const start = () =>
-            host.start({
-              subagent: subagentType,
-              text: withReturnGuidance(description, host.rootSessionId),
-              ...(choice !== undefined && { choice }),
-              // root 那一份記子代理目錄，指回這一顆呼叫（#1023）。
-              ...(callId !== '' && { callId }),
-            });
-          const started = sandbox === undefined ? start() : sandbox.delegate(start);
-          // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
-          // （#832）。寫在這次呼叫自己的槽裡，圍堵收尾時帶進 `tool/result`，即時與重播是同一份。
-          const key: BackgroundSubagentMeta = {
-            kind: 'background-subagent',
-            runId: started.runId,
-            subagentType,
-            // 被指定的模型與推理等級（#889）：畫面據它說這個子代理跑哪一顆；沒指定就不放，跟著主對話。
-            ...(choice !== undefined && {
-              model: choice.model,
-              ...(choice.effort !== undefined && { reasoningEffort: choice.effort }),
-            }),
-          };
-          putToolResultMeta(SUBAGENT_TOOL_NAME, key);
-          // 第一輪的下場不在這次呼叫裡等：失敗已記在它自己的日誌（`outcome` 永遠不 reject）。
-          return new ToolMessage({
-            content: `子代理已在背景啟動，編號：${started.runId}（${subagentType}）。`,
-            tool_call_id: callId,
-            name: SUBAGENT_TOOL_NAME,
+        return renameResult(
+          await next({
+            name: BASE_DELEGATION_TOOL_NAME,
+            tool: this.#baseTask,
+            args: { description, subagent_type: subagentType },
+          }),
+          callId,
+        );
+      }
+
+      const host = this.#host;
+      if (host === undefined) {
+        return toolRefusal('背景子代理還沒接上會話，派不出去', {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+        });
+      }
+      try {
+        // **接受那一刻**：同步（沒有 await），包在沙箱的 delegate 裡。
+        const sandbox = this.#options.sandbox;
+        // 回報指引只接在背景派出去的（#849）：前景的 `task` 是一次性的，寄不出話，也不該被告知要寄。
+        const start = () =>
+          host.start({
+            subagent: subagentType,
+            text: withReturnGuidance(description, host.rootSessionId),
+            ...(choice !== undefined && { choice }),
+            // root 那一份記子代理目錄，指回這一顆呼叫（#1023）。
+            ...(callId !== '' && { callId }),
           });
-        } catch (error) {
-          // host 拒絕（名額滿、已關）帶 dsh `SubagentError` 的碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
-          const info =
-            error instanceof BackgroundSubagentError ? backgroundRefusalInfo(error) : undefined;
-          return toolRefusal(error instanceof Error ? error.message : String(error), {
-            callId,
-            name: SUBAGENT_TOOL_NAME,
-            ...(info !== undefined && { error: info }),
-          });
-        }
-      },
-    });
+        const started = sandbox === undefined ? start() : sandbox.delegate(start);
+        // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
+        // （#832）。寫在這次呼叫自己的槽裡，圍堵收尾時帶進 `tool/result`，即時與重播是同一份。
+        const key: BackgroundSubagentMeta = {
+          kind: 'background-subagent',
+          runId: started.runId,
+          subagentType,
+          // 被指定的模型與推理等級（#889）：畫面據它說這個子代理跑哪一顆；沒指定就不放，跟著主對話。
+          ...(choice !== undefined && {
+            model: choice.model,
+            ...(choice.effort !== undefined && { reasoningEffort: choice.effort }),
+          }),
+        };
+        putToolResultMeta(SUBAGENT_TOOL_NAME, key);
+        // 第一輪的下場不在這次呼叫裡等：失敗已記在它自己的日誌（`outcome` 永遠不 reject）。
+        return new ToolMessage({
+          content: `子代理已在背景啟動，編號：${started.runId}（${subagentType}）。`,
+          tool_call_id: callId,
+          name: SUBAGENT_TOOL_NAME,
+        });
+      } catch (error) {
+        // host 拒絕（名額滿、已關）帶 dsh `SubagentError` 的碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
+        const info =
+          error instanceof BackgroundSubagentError ? backgroundRefusalInfo(error) : undefined;
+        return toolRefusal(error instanceof Error ? error.message : String(error), {
+          callId,
+          name: SUBAGENT_TOOL_NAME,
+          ...(info !== undefined && { error: info }),
+        });
+      }
+    };
   }
 }
 
-/** 一則工具結果改名成 `subagent`：ToolMessage 直接換；`Command` 換它 `update.messages` 裡屬於這次呼叫的那一則。 */
+/**
+ * 一則工具結果改名成 `subagent`：模型叫的是 `subagent`，回給它的結果也用這個名字。ToolMessage 直接換；`task` 收尾回的是
+ * `Command`（帶狀態更新），換它 `update.messages` 裡屬於這次呼叫的那一則，其餘原樣留著。
+ */
 function renameResult<T>(result: T, callId: string): T {
   const rename = (message: ToolMessage): ToolMessage =>
     new ToolMessage({

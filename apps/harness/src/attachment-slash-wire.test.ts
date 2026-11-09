@@ -45,7 +45,7 @@ const THREAD = 'attachment-slash';
 /** `attach` handler 看到的附件，照呼叫順序。 */
 let seen: (readonly AttachmentRef[])[];
 
-/** `attach`（宣告收附件）與 `plain`（沒宣告）。`attach` 的行為由 rawInput 決定：` steer`／` fail`／空白什麼都不做。 */
+/** `attach`（宣告收附件）與 `plain`（沒宣告）。`attach` 的行為由 rawInput 決定：` steer`／` steer-extra`（參照多帶型別以外的鍵）／` fail`／空白什麼都不做。 */
 function commandPoint() {
   const registry = createRegistry();
   registry.enter({ id: 'attach-test#0', name: 'attach-test' });
@@ -59,6 +59,13 @@ function commandPoint() {
       const mode = rawInput.trim();
       if (mode === 'fail') return { kind: 'error', text: '不成立' };
       if (mode === 'steer') steer('請看附件', attachments);
+      // 參照帶型別以外的鍵（#2323）：`steer` 的形狀檢查不擋多出來的鍵，日誌照記。
+      if (mode === 'steer-extra') {
+        steer(
+          '請看附件',
+          attachments.map((ref) => ({ ...ref, extra: { next: [{ next: 'leaf' }] } })),
+        );
+      }
       return { kind: 'success' };
     },
   });
@@ -251,6 +258,34 @@ describe('slash.run 帶附件', () => {
           .map((e) => e.type)
           .filter((t) => /^(command|turn)\/start|command\//u.test(t)),
       ).toEqual(['command/run', 'command/done', 'turn/start']);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('handler 經 steer 傳帶型別以外鍵的參照（#2323）：日誌照記，送進圖的那則訊息只留型別裡的欄位', async () => {
+    const { client, handler, events, checkpointer } = connect('vision');
+    try {
+      const receipt = await upload(client, '暗號', '說明.txt');
+      const result = await client.slashRun(THREAD, '/attach steer-extra', [
+        { type: 'file', receiptId: receipt.receiptId },
+      ]);
+      expect(result).toMatchObject({ kind: 'success' });
+      await settled(events, 1);
+
+      const [admitted] = seen[0]!;
+      const start = events().find((e) => e.type === 'turn/start');
+      expect((start?.data as unknown as { attachments: unknown[] }).attachments).toEqual([
+        { ...admitted, extra: { next: [{ next: 'leaf' }] } },
+      ]);
+      const { type: _, ...fields } = admitted!;
+      const tuple = await checkpointer.getTuple({ configurable: { thread_id: THREAD } });
+      const messages = (tuple?.checkpoint.channel_values as { messages: { content: unknown }[] })
+        .messages;
+      expect(messages[0]!.content).toEqual([
+        { type: 'nexus-file', attachment: fields },
+        { type: 'text', text: '請看附件' },
+      ]);
     } finally {
       await handler.close();
     }

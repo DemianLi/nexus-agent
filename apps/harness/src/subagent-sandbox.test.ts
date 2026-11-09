@@ -42,11 +42,7 @@ import {
   unaskedRefusal,
 } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import {
-  CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
-  sandboxPolicySentence,
-} from '@nexus/plugin-sandbox-policy';
+import { CONTAINED_FILESYSTEM, sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
 import {
   shippedPlugins,
   shippedPluginsWithFullAccess,
@@ -57,6 +53,13 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 const shipped = withoutTimeContext(await shippedPlugins());
 /** 部署方用 patch 加回全開那一組之後的清單（#1621：出廠表只有兩組，`--sandbox danger-full-access` 起不來）。 */
@@ -190,7 +193,7 @@ describe('子代理的沙箱模式', () => {
         }),
         WORKER,
         flipPlugin(controller),
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow,
       ],
       backend: new ContainedFilesystemBackend({
         rootDir: root,

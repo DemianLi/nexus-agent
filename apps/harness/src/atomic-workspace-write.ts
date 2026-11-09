@@ -18,9 +18,10 @@
  *
  * ## 偏離 dsh（AGENTS.md「技術實現標準」，#1531 卡上登記）
  *
- * 1. **理由 1（基座表達不出來）：`createIfAbsent` 的 hard link 發佈不做。** 那個意圖要從「先讀後改」的政策傳到寫入這一層，
+ * 1. **理由 1（基座表達不出來）：`write_file` 不走 `createIfAbsent` 的 hard link 發佈。** 那個意圖要從「先讀後改」的政策傳到寫入這一層，
  *    基座的 `write(filePath, content)` 沒有參數可以帶它（`packages/nexus-core/src/observation.ts` 的偏離一已登記同一個
- *    限制）。退到：一律用 `rename` 原子取代，`createIfAbsent` 仍由 observation 在呼叫前擋。
+ *    限制）。退到：`write_file` 一律用 `rename` 原子取代，`createIfAbsent` 仍由 observation 在呼叫前擋。`copy_file` 不經基座，
+ *    直接帶 {@link AtomicWriteOptions.createIfAbsent}。
  * 2. **理由 2（產品只部署 POSIX）：不做 Windows 那一支（DACL、`ReplaceFile`）。**
  *
  * 新檔權限是暫存檔的 `0600`（照 dsh，#1531 Q1 (a)）；取代既有檔時補回原檔的 mode，所以 `0640` 仍是 `0640`。
@@ -30,7 +31,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
+import { chmod, link, mkdir, open, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 /** 測試接縫：釘暫存名、在各個檢查點觀察或注入失敗（照 dsh 的 `FsIoInternals`）。 */
@@ -47,6 +48,35 @@ export interface AtomicWriteInternals {
   readonly removeStagingDir?: (path: string) => Promise<void>;
   /** `edit` 讀完原檔、算好新內容、寫入之前（鎖之內）。測試用它停住第一個 `edit` 來排出平行的交錯。 */
   readonly afterEditRead?: (absolutePath: string) => void | Promise<void>;
+  /** 複製的來源過完圍堵、開檔之前。測試用它在這段時間差把來源換掉。 */
+  readonly beforeCopyOpen?: (absolutePath: string) => void | Promise<void>;
+  /** `read`、`edit` 用路徑判完一般檔、開檔之前（`edit` 在鎖之內）。測試用它在這段時間差把檔換掉。 */
+  readonly beforeReadOpen?: (absolutePath: string) => void | Promise<void>;
+}
+
+/** {@link writeFileAtomic} 的發佈方式。 */
+export interface AtomicWriteOptions {
+  /**
+   * `true`：用 hard link 發佈（`link(暫存檔, 目的地)`），目的地已經存在就拋 {@link DestinationExistsError}、不取代，
+   * 跟它同時建出來的那一份也保得住。省略即 `rename` 原子取代。
+   */
+  readonly createIfAbsent?: boolean;
+  /**
+   * 暫存檔寫完、`sync`、關檔之後，發佈之前的核對。丟錯就不發佈：目的地從頭到尾沒出現過，暫存目錄照失敗收掉，錯誤原樣往外。
+   */
+  readonly verify?: (tempPath: string) => Promise<void>;
+}
+
+/** `createIfAbsent` 發佈時目的地已經存在。 */
+export class DestinationExistsError extends Error {
+  /**
+   * @param absolutePath - 目的地。
+   * @param options - 底層 `link` 的錯。
+   */
+  constructor(absolutePath: string, options?: ErrorOptions) {
+    super(`${absolutePath} already exists`, options);
+    this.name = 'DestinationExistsError';
+  }
 }
 
 /** 失敗時的收尾：暫存目錄清不掉，錯誤訊息要兩個原因都在。 */
@@ -74,16 +104,18 @@ function messageOf(error: unknown): string {
  * 經同目錄的私有暫存檔原子取代一個檔。
  *
  * @param absolutePath - 目的地；缺的父目錄會建。
- * @param content - 要寫的整份內容；字串以 UTF-8 寫，位元組原樣寫。
+ * @param content - 要寫的整份內容；字串以 UTF-8 寫，位元組與串流原樣寫。
  * @param mode - 既有目的地的 POSIX mode（補回去）；新檔給 `undefined`，留暫存檔的 `0600`。
  * @param internals - 測試接縫。
- * @throws 原錯誤；暫存目錄也清不掉時訊息帶兩個原因。
+ * @param options - 發佈方式，見 {@link AtomicWriteOptions}。
+ * @throws 原錯誤；`createIfAbsent` 撞上既有目的地時是 {@link DestinationExistsError}；暫存目錄也清不掉時訊息帶兩個原因。
  */
 export async function writeFileAtomic(
   absolutePath: string,
-  content: string | Uint8Array,
+  content: string | Uint8Array | AsyncIterable<Uint8Array>,
   mode: number | undefined,
   internals: AtomicWriteInternals = {},
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
   const directory = dirname(absolutePath);
   await mkdir(directory, { recursive: true });
@@ -115,8 +147,20 @@ export async function writeFileAtomic(
     if (mode !== undefined) await handle.chmod(mode);
     await handle.close();
     handle = undefined;
+    await options.verify?.(tempPath);
 
-    await rename(tempPath, absolutePath);
+    if (options.createIfAbsent === true) {
+      try {
+        await link(tempPath, absolutePath);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw new DestinationExistsError(absolutePath, { cause: error });
+        }
+        throw error;
+      }
+    } else {
+      await rename(tempPath, absolutePath);
+    }
     try {
       await removeStagingDir(stagingDir);
     } catch {

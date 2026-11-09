@@ -53,11 +53,7 @@ import {
 import { DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
 import type { SandboxMode } from '@nexus/core';
-import {
-  CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
-  SandboxModeController,
-} from '@nexus/plugin-sandbox-policy';
+import { CONTAINED_FILESYSTEM, SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import {
   createFilesystemMiddleware,
@@ -76,6 +72,14 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { shippedPlugins } from './fixtures.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 /** `assembleAgent` 收到的參數，最近一次（產品路徑自有組裝點，取代以前的 `createDeepAgent`）。 */
 const captured = vi.hoisted(() => ({ params: undefined as Record<string, unknown> | undefined }));
@@ -633,7 +637,7 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
           sandboxPolicy: { controller, rootDir: dir },
         }),
         WORKER,
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow,
       ],
       { backend },
     );
@@ -757,7 +761,7 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
             sandboxPolicy: { controller, rootDir: dir },
           }),
           WORKER,
-          createSandboxPolicyPlugin(),
+          sandboxPolicyRow,
         ],
         { backend },
       );

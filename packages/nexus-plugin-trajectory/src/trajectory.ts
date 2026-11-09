@@ -78,10 +78,10 @@ const OWNERS_CAP = 2000;
 
 /**
  * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
- * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一筆只複製塊清單與它碰到的塊，成本跟著塊數與這個數走，
- * 不跟著整張表的筆數。
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批複製一次塊清單與筆數清單；刪到、併到的塊每次另拷；往最後一塊追加的寫進
+ * 這一批自己拷出來的那份，不每筆再拷。成本跟著塊數與這個數走，不跟著整張表的筆數。
  */
-const OWNERS_CHUNK = 128;
+const OWNERS_CHUNK = 32;
 
 /**
  * 一輪被單輪上限摺掉的東西的累計。**計數要含它們**（`callCount`／`toolCount`…不能因為摺掉而變小），所以摺掉的當下就把
@@ -145,10 +145,12 @@ type TurnState = Omit<
 
 /**
  * callId → 呼叫的歸屬表，由舊到新分塊，每個 id 只在一塊裡，所以接起來就是一張照新舊排的表。
- * 塊一旦放進表就不再改：要動的那幾塊換成新的，其餘在前後兩份狀態之間共用。
+ * 塊與 `sizes` 一旦隨表交出就不再改：要動的那幾塊換成新的，其餘的塊在前後兩份狀態之間共用。
  */
 interface OwnerTable {
   readonly chunks: readonly Readonly<Record<string, number | null>>[];
+  /** 每一塊的筆數，跟 `chunks` 一一對應：併塊、加筆不必再數一次塊。 */
+  readonly sizes: readonly number[];
   /** 全部的筆數。 */
   readonly size: number;
 }
@@ -196,7 +198,7 @@ export function initialTrajectory(): TrajectoryState {
     digests: [],
     omitted: 0,
     total: 0,
-    owners: { chunks: [], size: 0 },
+    owners: { chunks: [], sizes: [], size: 0 },
     system: null,
     header: null,
     model: null,
@@ -321,6 +323,18 @@ function replaceAt<T>(list: readonly T[], at: number, value: T): readonly T[] {
 interface CallAt {
   readonly turn: number;
   readonly call: number;
+}
+
+/**
+ * 還沒收尾的那次呼叫。格式 55 起的快照不帶 `modelCall`，寫在 `model/start` 之前，由 {@link startCall} 帶進下一次呼叫；
+ * 落在開著的呼叫裡的，是同一次呼叫裡重送的那一份，歸這一次。
+ */
+function openCallOf(state: TrajectoryState): CallAt | undefined {
+  const t = state.turns.length - 1;
+  const calls = state.turns[t]?.calls;
+  const last = calls?.at(-1);
+  if (calls === undefined || last === undefined || last.endTime !== undefined) return undefined;
+  return { turn: t, call: calls.length - 1 };
 }
 
 /** 在窗口裡由新到舊找一次呼叫。窗口外（已成摘要）的找不到——遲到的事件靜靜丟掉。 */
@@ -453,7 +467,7 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
 
 /**
  * 工具表：把幾塊照傳入順序接成新的一塊。用無原型的物件：V8 讓它一開始就走字典模式，不必替每個不同的 id
- * 長一份隱藏類別。這張表每記一筆都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
+ * 長一份隱藏類別。這張表每記一批都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
  * s100 夾具，RSS 增量 +24 MiB，用一般物件是 +755 MiB）。
  */
 function ownerChunk(
@@ -464,10 +478,10 @@ function ownerChunk(
   return chunk;
 }
 
-/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。 */
+/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。塊沒有原型（{@link ownerChunk}），值只有數字與 `null`，所以讀到 `undefined` 就是沒有這個鍵。 */
 function ownerChunkAt(chunks: OwnerTable['chunks'], key: string): number {
   for (let at = chunks.length - 1; at >= 0; at -= 1) {
-    if (Object.hasOwn(chunks[at]!, key)) return at;
+    if (chunks[at]![key] !== undefined) return at;
   }
   return -1;
 }
@@ -479,27 +493,37 @@ function ownerOf(owners: OwnerTable, callId: string): number | null | undefined 
   return at < 0 ? undefined : owners.chunks[at]![key];
 }
 
-/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。`chunks` 是呼叫端自己的副本。 */
-function mergeOwnerChunks(chunks: Readonly<Record<string, number | null>>[], at: number): void {
-  const left = chunks[at];
-  const right = chunks[at + 1];
-  if (left === undefined || right === undefined) return;
-  if (Object.keys(left).length + Object.keys(right).length > OWNERS_CHUNK) return;
-  chunks.splice(at, 2, ownerChunk(left, right));
+/** 呼叫端自己的塊清單與筆數清單副本，兩者一一對應。 */
+interface OwnerDraft {
+  readonly chunks: Readonly<Record<string, number | null>>[];
+  readonly sizes: number[];
 }
 
-/** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉，再跟前後的塊併。`chunks` 是呼叫端自己的副本。 */
-function dropOwnerKeys(
-  chunks: Readonly<Record<string, number | null>>[],
-  at: number,
-  keys: readonly string[],
-): void {
-  const next = ownerChunk(chunks[at]!);
+/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。 */
+function mergeOwnerChunks(draft: OwnerDraft, at: number): void {
+  const left = draft.chunks[at];
+  const right = draft.chunks[at + 1];
+  if (left === undefined || right === undefined) return;
+  const merged = draft.sizes[at]! + draft.sizes[at + 1]!;
+  if (merged > OWNERS_CHUNK) return;
+  draft.chunks.splice(at, 2, ownerChunk(left, right));
+  draft.sizes.splice(at, 2, merged);
+}
+
+/** 工具表：第 `at` 塊換成拿掉 `keys` 之後的副本，空了就連塊拿掉，再跟前後的塊併。`keys` 必須都在這一塊、不重複：筆數照 `keys.length` 扣。 */
+function dropOwnerKeys(draft: OwnerDraft, at: number, keys: readonly string[]): void {
+  const next = ownerChunk(draft.chunks[at]!);
   for (const key of keys) delete next[key];
-  if (Object.keys(next).length === 0) chunks.splice(at, 1);
-  else chunks[at] = next;
-  mergeOwnerChunks(chunks, at);
-  mergeOwnerChunks(chunks, at - 1);
+  const kept = draft.sizes[at]! - keys.length;
+  if (kept === 0) {
+    draft.chunks.splice(at, 1);
+    draft.sizes.splice(at, 1);
+  } else {
+    draft.chunks[at] = next;
+    draft.sizes[at] = kept;
+  }
+  mergeOwnerChunks(draft, at);
+  mergeOwnerChunks(draft, at - 1);
 }
 
 /**
@@ -509,28 +533,40 @@ function dropOwnerKeys(
  */
 function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | null): OwnerTable {
   if (ids.length === 0) return owners;
-  const chunks = [...owners.chunks];
+  const draft: OwnerDraft = { chunks: [...owners.chunks], sizes: [...owners.sizes] };
+  const { chunks, sizes } = draft;
   let size = owners.size;
+  // 這一次呼叫自己建的最後一塊：還沒交出去，接著記的直接寫進去，不必每筆再拷一次。
+  let fresh: Record<string, number | null> | undefined;
   for (const id of ids) {
     const key = ownerKey(id);
     // 先刪再放：同一個 id 重新出現要排到最新。
     const at = ownerChunkAt(chunks, key);
     if (at >= 0) {
-      dropOwnerKeys(chunks, at, [key]);
+      dropOwnerKeys(draft, at, [key]);
       size -= 1;
     }
-    const last = chunks.at(-1);
-    if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK)
-      chunks.push(ownerChunk({ [key]: owner }));
-    else chunks[chunks.length - 1] = ownerChunk(last, { [key]: owner });
+    const last = chunks.length - 1;
+    if (last < 0 || sizes[last]! >= OWNERS_CHUNK) {
+      fresh = ownerChunk({ [key]: owner });
+      chunks.push(fresh);
+      sizes.push(1);
+    } else {
+      if (chunks[last] !== fresh) {
+        fresh = ownerChunk(chunks[last]!);
+        chunks[last] = fresh;
+      }
+      fresh![key] = owner;
+      sizes[last] = sizes[last]! + 1;
+    }
     size += 1;
   }
   while (size > OWNERS_CAP) {
     const oldest = Object.keys(chunks[0]!).slice(0, size - OWNERS_CAP);
-    dropOwnerKeys(chunks, 0, oldest);
+    dropOwnerKeys(draft, 0, oldest);
     size -= oldest.length;
   }
-  return { chunks, size };
+  return { chunks, sizes, size };
 }
 
 // ── 工具 ────────────────────────────────────────────────────────────────────────────
@@ -1079,7 +1115,7 @@ function noteSnapshot(
   }
   const next: TrajectoryState = { ...state, [which]: event.seq, model };
   const at =
-    typeof data['modelCall'] === 'number' ? locateCall(next, data['modelCall']) : undefined;
+    typeof data['modelCall'] === 'number' ? locateCall(next, data['modelCall']) : openCallOf(next);
   if (at === undefined) return next;
   return updateCall(next, at, (call) => ({
     ...call,

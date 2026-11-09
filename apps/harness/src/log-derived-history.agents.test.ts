@@ -22,6 +22,7 @@ import {
   aiDone,
   childLogsOf,
   compareToLog,
+  hasTools,
   idleWithContent,
   LOW_SUMMARIZATION,
   mainOnly,
@@ -101,6 +102,14 @@ async function expectAllSame(
   run: DriverRun,
   expected: Readonly<Record<string, number>>,
 ): Promise<void> {
+  // 影子比對（#2355）只掛在 root：root 的每一次主呼叫各比一次，沒有一次落在 `other`。`log` 時沒有比對。
+  if (run.shadow !== undefined) {
+    expect(run.shadow.other, `${name}：影子比對落在 other 的次數`).toBe(0);
+    expect(
+      Object.values(run.shadow).reduce((sum, n) => sum + n, 0),
+      `${name}：影子比對的次數（root 每一次主呼叫一次）`,
+    ).toBe(expected['ROOT']);
+  }
   const owners = [rootLogOf(run), ...childLogsOf(run)].map(
     (log) => [logOwner(log, run), log] as const,
   );
@@ -610,13 +619,19 @@ describe('中止與插話', () => {
     await expectRootSame('ST2', run, 4);
   }, 90_000);
 
-  /** 第一次模型呼叫就被按停：整份日誌沒有任何回覆（#1190 之前推導整份拒推，`reply-missing`）。 */
-  const firstCallStopped = mainOnly((k) =>
-    k === 0 ? { delay: 2500, content: '被停掉的長回覆。' } : {},
-  );
+  /**
+   * 第一次模型呼叫就被按停：按停那一刻日誌裡一則回覆都沒有；推導照樣推得出、不整份拒推成 `reply-missing`，使用者的話留著（#1190）。
+   * 每次 `runServeDriver` 呼叫各要一份（見 `mainOnly`）：共用時之後的呼叫拿不到 `k === 0` 的延遲，按停落在回覆之後，測試照樣綠。
+   */
+  const firstCallStopped = () =>
+    mainOnly((k) => (k === 0 ? { delay: 2500, content: '被停掉的長回覆。' } : {}));
   const stopFirst = async (ctx: DriverCtx) => {
+    const sent = ctx.bodies.filter(hasTools).length;
     await ctx.client.runStart('alpha', '第一句，會被停掉');
-    await settle(600);
+    await vi.waitFor(() => expect(ctx.bodies.filter(hasTools).length).toBeGreaterThan(sent), {
+      timeout: 10_000,
+      interval: 20,
+    });
     await ctx.client.runCancel('alpha');
     await settle(1500);
   };
@@ -628,7 +643,7 @@ describe('中止與插話', () => {
       await ctx.fold(aiDone(1));
       await ctx.client.runStart('alpha', '第三句');
       await ctx.fold(aiDone(2));
-    }, firstCallStopped);
+    }, firstCallStopped());
     await expectRootSame('ST4', run, 3);
     // 前提：第一次呼叫確實沒有回覆。
     const events = rootLogOf(run).events;
@@ -644,7 +659,7 @@ describe('中止與插話', () => {
       await stopFirst(ctx);
       await ctx.client.runStart('alpha', '第二句，真的要答');
       await ctx.fold(aiDone(1));
-    }, firstCallStopped);
+    }, firstCallStopped());
     const restart = await runServeDriver(
       [
         stopFirst,
@@ -653,7 +668,7 @@ describe('中止與插話', () => {
           await ctx.fold(aiDone(1));
         },
       ],
-      firstCallStopped,
+      firstCallStopped(),
     );
     await expectRootSame('SR5-restart', restart, 2);
     const lastOf = (r: DriverRun) =>
@@ -679,8 +694,8 @@ describe('中止與插話', () => {
     const control = await runServeDriver(async (ctx) => {
       await first(ctx);
       await third(2)(ctx);
-    }, firstCallStopped);
-    const restart = await runServeDriver([first, third(1)], firstCallStopped);
+    }, firstCallStopped());
+    const restart = await runServeDriver([first, third(1)], firstCallStopped());
     await expectRootSame('SR4-restart', restart, 3);
     const lastOf = (r: DriverRun) =>
       JSON.stringify(r.mainBodies.at(-1)!.messages.slice(1)).replace(

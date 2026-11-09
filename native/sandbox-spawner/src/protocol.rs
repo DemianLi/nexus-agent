@@ -98,18 +98,19 @@ const EV_EXITED: u8 = b'E';
 #[derive(Debug, PartialEq, Eq)]
 pub struct DecodeError(pub &'static str);
 
-struct Reader<'a> {
-    buf: &'a [u8],
+/// 讀一框內容的欄位；監督行程的控制面（[`crate::supervisor_protocol`]）也用這一份。
+pub(crate) struct Reader<'a> {
+    pub(crate) buf: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
-    fn u8(&mut self) -> Result<u8, DecodeError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         let (&b, rest) = self.buf.split_first().ok_or(DecodeError("截斷"))?;
         self.buf = rest;
         Ok(b)
     }
 
-    fn u32(&mut self) -> Result<u32, DecodeError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, DecodeError> {
         if self.buf.len() < 4 {
             return Err(DecodeError("截斷"));
         }
@@ -118,7 +119,7 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([head[0], head[1], head[2], head[3]]))
     }
 
-    fn bytes(&mut self) -> Result<Vec<u8>, DecodeError> {
+    pub(crate) fn bytes(&mut self) -> Result<Vec<u8>, DecodeError> {
         let len = self.u32()? as usize;
         if self.buf.len() < len {
             return Err(DecodeError("截斷"));
@@ -137,7 +138,7 @@ impl<'a> Reader<'a> {
         (0..count).map(|_| self.bytes()).collect()
     }
 
-    fn end(&self) -> Result<(), DecodeError> {
+    pub(crate) fn end(&self) -> Result<(), DecodeError> {
         if self.buf.is_empty() {
             Ok(())
         } else {
@@ -146,16 +147,17 @@ impl<'a> Reader<'a> {
     }
 }
 
-struct Writer(Vec<u8>);
+/// 寫一框內容的欄位；同 [`Reader`]，控制面也用。
+pub(crate) struct Writer(pub(crate) Vec<u8>);
 
 impl Writer {
-    fn u8(&mut self, v: u8) {
+    pub(crate) fn u8(&mut self, v: u8) {
         self.0.push(v);
     }
-    fn u32(&mut self, v: u32) {
+    pub(crate) fn u32(&mut self, v: u32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
-    fn bytes(&mut self, v: &[u8]) {
+    pub(crate) fn bytes(&mut self, v: &[u8]) {
         self.u32(v.len() as u32);
         self.0.extend_from_slice(v);
     }
@@ -291,11 +293,16 @@ pub fn frame(payload: &[u8]) -> Vec<u8> {
 
 /// 從累積的輸入切出完整的框。框長超過 [`MAX_FRAME`] 回錯。
 pub fn take_frame(buf: &mut Vec<u8>) -> Result<Option<Vec<u8>>, DecodeError> {
+    take_frame_within(buf, MAX_FRAME)
+}
+
+/// 同 [`take_frame`]，上限是 `max`。長度欄位一超過就回錯，不等內容到齊、也不先配置。
+pub fn take_frame_within(buf: &mut Vec<u8>, max: usize) -> Result<Option<Vec<u8>>, DecodeError> {
     if buf.len() < 4 {
         return Ok(None);
     }
     let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-    if len > MAX_FRAME {
+    if len > max {
         return Err(DecodeError("框太大"));
     }
     if buf.len() < 4 + len {

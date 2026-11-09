@@ -234,31 +234,31 @@ export function apply(ctx, config) {
 
   it('契約不相容：那一列在啟動就掉在 requires，日誌指名原因，echo 與 serve 其餘照常', async () => {
     const { dir, env } = home();
-    // 一列要 `tools ^2.0.0` 的函式插件，插在出貨的 cordis.yml 旁（`--patch` 的 insert）。Include 讀的是出貨檔，
+    // 一列要 `tools ^3.0.0` 的函式插件，插在出貨的 cordis.yml 旁（`--patch` 的 insert）。Include 讀的是出貨檔，
     // 所以這一列走的是「上不了樹」那條路（`cordis.yml` 沒有它）；契約不相容的那一條由 `echo-on-tree-edges.test.ts`
     // 用暫存的出貨檔量，這裡量的是 serve 把這一類的掉列講出來、不拖累其餘的列。
-    const module = join(dir, 'needs-v2.mjs');
+    const module = join(dir, 'needs-v3.mjs');
     writeFileSync(
       module,
       `import { z } from 'zod';
-export const name = 'needs-v2';
-export const inject = { tools: { range: '^2.0.0' } };
+export const name = 'needs-v3';
+export const inject = { tools: { range: '^3.0.0' } };
 export const Config = z.strictObject({});
-export const manifest = { id: 'needs-v2', version: '1.0.0', owner: 't', provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }], config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [] };
+export const manifest = { id: 'needs-v3', version: '1.0.0', owner: 't', provides: [], consumes: [{ token: 'tools', range: '^3.0.0' }], config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [] };
 export function apply() {}
 `,
       { mode: 0o600 },
     );
     chmodSync(module, 0o600);
     const patch = join(dir, 'overlay.yml');
-    writeFileSync(patch, `- insert:\n    - id: needs-v2\n      name: '${module}'\n`, {
+    writeFileSync(patch, `- insert:\n    - id: needs-v3\n      name: '${module}'\n`, {
       mode: 0o600,
     });
     chmodSync(patch, 0o600);
     const lines: string[] = [];
     const server = await start(env, lines, ['--patch', patch]);
     const text = lines.join('\n');
-    expect(text).toContain('needs-v2');
+    expect(text).toContain('needs-v3');
     expect(text).toMatch(/沒有掛上/u);
     expect(echoed(await openAndSay(server, 'a'))).toBe('回聲：CLI 接線測試');
   }, 90000);

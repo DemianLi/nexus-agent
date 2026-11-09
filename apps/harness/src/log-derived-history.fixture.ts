@@ -45,8 +45,23 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { stringify } from 'yaml';
-import { SessionRegistry, replayConversation } from '@nexus/core';
-import type { PluginEntry, SessionEvent } from '@nexus/core';
+import {
+  createHistoryShadowTally,
+  HISTORY_SHADOW_KINDS,
+  ModelHistoryCache,
+  SessionRegistry,
+  isBlankContent,
+  replayConversation,
+  toBaseMessage,
+  toLoggedMessage,
+} from '@nexus/core';
+import type {
+  DerivedConversation,
+  HistoryShadowKind,
+  HistorySource,
+  PluginEntry,
+  SessionEvent,
+} from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
@@ -105,6 +120,9 @@ export const hasTools = (body: Body): boolean => (body.tools?.length ?? 0) > 0;
 
 /**
  * 只對「主呼叫」（帶工具的）編號的腳本；標題、摘要這類不帶工具的呼叫一律回固定字串，不佔號。
+ *
+ * 腳本有狀態：主呼叫編號存在回傳的腳本裡、跨請求累計，一份只給一次 {@link runServeDriver}（或其他收 {@link Script} 的跑法）用。
+ * 同一次呼叫裡的重啟照樣接著數；對照組與重啟組是兩次呼叫，各要一份，共用時後一組的 `k` 不從 0 起算。
  */
 export const mainOnly = (script: (k: number) => Reply): Script => {
   let k = 0;
@@ -374,16 +392,10 @@ export function assistantNameLeaks(messages: readonly WireMessage[]): number[] {
   );
 }
 
-const isEmptyContent = (content: unknown): boolean =>
-  content === null ||
-  content === undefined ||
-  content === '' ||
-  (Array.isArray(content) && content.length === 0);
-
-/** 沒有內容也沒有工具呼叫的助手訊息（空內容可能是 `null`、空字串或空陣列，視 adapter 而定）。 */
+/** 沒有內容也沒有工具呼叫的助手訊息，判法同推導端與 `fetch` 層（`@nexus/core` 的 `isBlankContent`）。 */
 const isEmptyAssistant = (message: WireMessage | undefined): boolean =>
   message?.role === 'assistant' &&
-  isEmptyContent(message.content) &&
+  isBlankContent(message.content) &&
   (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0);
 
 /** 兩段字串從第一個不同的字元前後各截一小段（工具結果動輒上萬字，從頭截看不到差在哪）。 */
@@ -431,11 +443,25 @@ export function classify(
   return { kinds: [...kinds].sort(), ...(detail !== undefined && { detail }) };
 }
 
+/** 推的結果逐則序列化成日誌記訊息的形狀，比增量與整份重算用。 */
+function serializedReplay(
+  replay: ReturnType<typeof replayConversation> | DerivedConversation,
+): string {
+  return JSON.stringify(
+    replay.kind === 'replayed'
+      ? replay.messages.map((message) =>
+          toLoggedMessage('data' in message ? toBaseMessage(message) : message),
+        )
+      : replay,
+  );
+}
+
 /**
  * 對每次主呼叫比一次。`events` 是整份日誌，`mainBodies` 是假端點收到的、帶工具的 body，照順序。
  *
  * 主呼叫的數量必須等於日誌裡 root 的 `model/start` 數——對不上就是量具壞了（少一邊的話逐個配對會默默漏比），
- * 當場拋。
+ * 當場拋。每次主呼叫同時拿增量推導（{@link ModelHistoryCache}，#2349）跟整份重算比，逐則序列化不同也當場拋：
+ * 這份夾具的每個場景因此也是增量推導的等價夾具。
  */
 export async function compareToLog(
   events: readonly SessionEvent[],
@@ -448,14 +474,21 @@ export async function compareToLog(
     );
   }
   const out: Verdict[] = [];
+  const options = {
+    toolResultAsSeen,
+    applyPrunes: true,
+    applyArgTruncations: true,
+    applyImageOffloads: true,
+  };
+  const history = new ModelHistoryCache(options);
   for (const [index, start] of starts.entries()) {
     const body = mainBodies[index]!;
     const prefix = events.filter((event) => event.seq < start.seq);
-    const replay = replayConversation(prefix, {
-      toolResultAsSeen,
-      applyPrunes: true,
-      applyArgTruncations: true,
-    });
+    const replay = replayConversation(prefix, options);
+    const incremental = history.derive(prefix);
+    if (serializedReplay(incremental) !== serializedReplay(replay)) {
+      throw new Error(`第 ${String(index)} 次主呼叫：增量推導與整份重算不同。`);
+    }
     if (replay.kind !== 'replayed') {
       out.push({
         call: index,
@@ -465,13 +498,13 @@ export async function compareToLog(
       });
       continue;
     }
+    // 格式 54 以前帶 `modelCall`、寫在 `model/start` 之後；55 起不帶、寫在它之前，看位置。
     const system = events
-      .filter(
-        (event) =>
-          event.type === 'request/system' &&
-          (event.data as { modelCall?: number }).modelCall !== undefined &&
-          (event.data as { modelCall: number }).modelCall <= start.seq,
-      )
+      .filter((event) => {
+        if (event.type !== 'request/system') return false;
+        const modelCall = (event.data as { modelCall?: number }).modelCall;
+        return modelCall === undefined ? event.seq < start.seq : modelCall <= start.seq;
+      })
       .at(-1);
     const logged = system === undefined ? undefined : (system.data as { system: string }).system;
 
@@ -516,13 +549,54 @@ export interface Run {
   readonly events: SessionEvent[];
   readonly bodies: Body[];
   readonly mainBodies: Body[];
+  /**
+   * 影子比對（#2355）的計數：這一次跑的是 `shadow` 時，組裝點與 serve 兩條路徑有；CLI 數不到，只收得到不同的那幾行（{@link Run.shadowLines}）。
+   * `state`、`log` 沒有比對，兩格都不給。
+   */
+  readonly shadow?: ShadowCounts;
+  /** CLI 印在標準錯誤的 `[歷史比對]` 那幾行。 */
+  readonly shadowLines?: readonly string[];
 }
 
-const finish = (events: SessionEvent[], bodies: Body[]): Run => ({
-  events,
-  bodies,
-  mainBodies: bodies.filter(hasTools),
-});
+/** 影子比對各類別的次數。 */
+export type ShadowCounts = Readonly<Record<HistoryShadowKind, number>>;
+
+/**
+ * 夾具跑哪一種歷史來源（#2355）：預設 `shadow`；環境變數 `NEXUS_LDH_HISTORY_SOURCE=log` 時改跑 `log`，同一套場景再跑一次
+ * （`log-derived-history.log.test.ts` 與 `log-derived-history.agents.log.test.ts` 兩份入口）。兩種都不寫進會話日誌，所以不影響任何一份日誌的比對。
+ */
+export const HISTORY_SOURCE_UNDER_TEST: 'shadow' | 'log' =
+  process.env['NEXUS_LDH_HISTORY_SOURCE'] === 'log' ? 'log' : 'shadow';
+
+/** 夾具疊在每一份 patch 上的那一列：{@link HISTORY_SOURCE_UNDER_TEST}。 */
+export const HISTORY_SOURCE_PATCH_ROWS = `- id: history-source\n  config:\n    source: ${HISTORY_SOURCE_UNDER_TEST}\n`;
+
+/** `log` 時沒有比對，計數不交出去。 */
+const shadowOnly = <T>(value: T): T | undefined =>
+  HISTORY_SOURCE_UNDER_TEST === 'shadow' ? value : undefined;
+
+/** 幾份計數加起來（serve 每一段是一台、各一份）。 */
+export function addShadowCounts(counts: readonly ShadowCounts[]): ShadowCounts {
+  return Object.fromEntries(
+    HISTORY_SHADOW_KINDS.map((kind) => [kind, counts.reduce((sum, each) => sum + each[kind], 0)]),
+  ) as ShadowCounts;
+}
+
+const finish = (
+  events: SessionEvent[],
+  bodies: Body[],
+  shadow: { readonly shadow?: ShadowCounts; readonly shadowLines?: readonly string[] } = {},
+): Run => {
+  const counts = shadowOnly(shadow.shadow);
+  const lines = shadowOnly(shadow.shadowLines);
+  return {
+    events,
+    bodies,
+    mainBodies: bodies.filter(hasTools),
+    ...(counts !== undefined && { shadow: counts }),
+    ...(lines !== undefined && { shadowLines: lines }),
+  };
+};
 
 /** 一份落了盤的會話：讀取接縫交出來的 id 與日誌路徑，加上逐行解開的事件。 */
 interface SessionOnDisk {
@@ -580,23 +654,29 @@ export function liveModelPatch(
   };
   // `time-context` 關掉：兩次跑（不重啟與重啟）要逐位元組相同，而讀數帶牆鐘秒數（#1625，見 `withoutTimeContext`）。
   const off = options.timeContext === true ? '' : TIME_CONTEXT_OFF_PATCH_ROWS;
-  return `${stringify([row])}${off}${extra}\n`;
+  return `${stringify([row])}${off}${HISTORY_SOURCE_PATCH_ROWS}${extra}\n`;
 }
 
 /**
  * 組裝點路徑：`createNexusAgent` + `runRepl`，非串流，日誌從記憶體裡的 `SessionRegistry` 取。
  * 呼叫端要自己用 `vi.stubEnv` 之類保證不碰真環境；這條路徑不讀金鑰。
+ *
+ * @param historySource - 省略就是 {@link HISTORY_SOURCE_UNDER_TEST}；給了就跑那一種（`state` 對 `log` 的位元組對照用）。
  */
 export async function runAssembly(
   lines: string,
   script: Script,
   plugins: readonly PluginEntry[],
   summarization?: CreateNexusAgentOptions['summarization'],
+  historySource: HistorySource = HISTORY_SOURCE_UNDER_TEST,
 ): Promise<Run> {
   const upstream = await fakeEndpoint(script, false);
   const root = await mkdtemp(join(tmpdir(), 'nexus-lh-'));
   await writeFile(join(root, 'AGENTS.md'), '使用者的代號是胡桃。');
+  const historyShadow = createHistoryShadowTally();
   const { agent, commands, attachSession, dispose } = await createNexusAgent({
+    historySource,
+    historyShadow,
     model: model(upstream.baseURL),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     systemPrompt: '你是測試助手。',
@@ -621,7 +701,11 @@ export async function runAssembly(
     await dispose();
     await upstream.close();
   }
-  return finish([...sessions.root.events], upstream.bodies);
+  return finish(
+    [...sessions.root.events],
+    upstream.bodies,
+    historySource === 'shadow' ? { shadow: historyShadow.counts() } : {},
+  );
 }
 
 /** 出貨路徑之一：`runCli --live`（出貨清單、出貨設定、真的落盤），日誌從 root（`cli`）那一份讀回。 */
@@ -636,6 +720,7 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
   const input = new PassThrough();
   input.end(lines);
+  const shadowLines: string[] = [];
   try {
     await runCli({
       argv: ['--live', '--session-log', logs, '--workspace', workspace, '--patch', patch],
@@ -643,7 +728,12 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
       env: { [HARNESS_HOME_ENV]: home },
       input,
       output: new PassThrough(),
-      printer: { log: () => {}, error: () => {} },
+      printer: {
+        log: () => {},
+        error: (line: string) => {
+          if (line.startsWith('[歷史比對]')) shadowLines.push(line);
+        },
+      },
     });
   } finally {
     await upstream.close();
@@ -654,7 +744,7 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   if (root === undefined) {
     throw new Error(`root 日誌不在 ${logs} 底下：${sessions.map((s) => s.logPath).join(', ')}`);
   }
-  return finish(root.events, upstream.bodies);
+  return finish(root.events, upstream.bodies, { shadowLines });
 }
 
 /** 這一句人話之後，已經有一則收尾的 AI 訊息，而且對話回到 idle。 */
@@ -694,6 +784,7 @@ export async function runServePhases(
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
     mode: 0o600,
   });
+  const shadow: ShadowCounts[] = [];
   try {
     for (const [phaseIndex, texts] of phases.entries()) {
       if (phaseIndex > 0) patchOptions.beforePhase?.(phaseIndex);
@@ -731,6 +822,7 @@ export async function runServePhases(
         }
         await events.return?.(undefined);
       } finally {
+        if (running !== undefined) shadow.push(running.historyShadow.counts());
         await running?.close();
       }
     }
@@ -740,6 +832,7 @@ export async function runServePhases(
   return finish(
     await sessionEventsOf(join(logs, projectKey(process.cwd())), 'alpha'),
     upstream.bodies,
+    { shadow: addShadowCounts(shadow) },
   );
 }
 
@@ -772,6 +865,8 @@ export interface DriverRun {
   readonly logs: LogFile[];
   readonly bodies: Body[];
   readonly mainBodies: Body[];
+  /** 每一台 serve 的影子比對計數加起來，同 {@link Run.shadow}。只比 root 的呼叫；`log` 時沒有。 */
+  readonly shadow?: ShadowCounts;
 }
 
 /** root 的日誌：id 沒有 `/`。 */
@@ -826,6 +921,7 @@ export async function runServeDriver(
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
     mode: 0o600,
   });
+  const shadow: ShadowCounts[] = [];
   try {
     for (const driver of list) {
       let running: RunningServe | undefined;
@@ -857,6 +953,7 @@ export async function runServeDriver(
         await settle(600);
         await events.return?.(undefined);
       } finally {
+        if (running !== undefined) shadow.push(running.historyShadow.counts());
         await running?.close();
       }
     }
@@ -868,5 +965,6 @@ export async function runServeDriver(
     logs: await readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),
+    ...(HISTORY_SOURCE_UNDER_TEST === 'shadow' && { shadow: addShadowCounts(shadow) }),
   };
 }

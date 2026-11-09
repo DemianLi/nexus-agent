@@ -50,9 +50,8 @@
  * 格式化後的 80,000 字元上限去截（下面「已知的界線」那一條）。**範圍縮到不自己建頁的 backend**：
  * contained backend 自己建頁（下一段），每行先截到 2000 字元，第一行永遠塞得下，跟 dsh 一樣。
  *
- * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到同
- * {@link ./fs-tool-errors.ts} 的做法——一顆貼著工具本體的 `wrapToolCall`，時刻是 dsh 的
- * `tools/execute`。它要的總行數從 backend 取：
+ * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到一顆排在 `tools/execute` 外側的
+ * `wrapToolCall`（看到的是檔案工具的失敗已經標成錯誤的結果），時刻是 dsh 的 `tools/execute`。它要的總行數從 backend 取：
  *
  * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，backend 可以用
  *   {@link currentReadWindow} 領走這一頁的請求（offset、limit、行長與位元組上限），**自己讀、自己建頁**，
@@ -88,7 +87,12 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { readLangHintForPath } from './code-language.js';
-import { resolveToolName } from './containment.js';
+import { toolNameOfCall, withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
+import type { ToolCallStep } from './tool-call-step.js';
+import { withToolListStep, wrapModelCallWith } from './tool-list-step.js';
+import type { ToolListStep } from './tool-list-step.js';
+import { overriddenTools } from './tool-resolution.js';
+import type { ToolOverride } from './tool-resolution.js';
 import { putToolResultMeta } from './tool-result-meta.js';
 import type { ReadResultMeta } from './tool-result-meta.js';
 
@@ -443,9 +447,9 @@ interface FunctionParameters {
  * **是 OpenAI 形狀的一份定義，不是工具**：`Runnable` 才算 client tool，langchain 對同名換了實例的
  * client tool 會拒絕，定義則直接交給 `bindTools`。執行時 ToolNode 找的仍是基座那個實例。
  *
- * **帶一格不可列舉的 `name`**：基座的 `_ToolExclusionMiddleware` 排在最內層，用 `tool.name` 認
- * 要拿掉的工具（`hasToolName`，`dist/langsmith-zm0ILQsV.js:5446-5462`）。沒有這一格的話，profile 拿掉
- * 的 `read_file` 會以這個形狀溜回去。不可列舉，所以序列化進請求本體時不會多一格。
+ * **帶一格不可列舉的 `name`**：`toolNameOf` 讀這一格。`admittedTools` 對認不出名字的那筆一律留著，`overriddenTools`
+ * 也跳過它；沒有這一格，排在這顆內側的放行規則拿不掉 `read_file`，覆寫也套不上去。不可列舉，所以序列化進請求本體時
+ * 不會多一格。
  */
 function modelFacingReadTool(
   tool: object,
@@ -472,15 +476,6 @@ function modelFacingReadTool(
   // 已經換過的再進來（同一份請求被兩層看到）原樣留著。
   modelFacing.set(definition, definition);
   return definition;
-}
-
-/** 一個工具是不是基座的 `read_file`：工具實例或已經換過的那一份都叫這個名字。 */
-function isReadTool(tool: unknown): tool is object {
-  return (
-    typeof tool === 'object' &&
-    tool !== null &&
-    (tool as { readonly name?: unknown }).name === READ_TOOL
-  );
 }
 
 /**
@@ -511,55 +506,71 @@ export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMidd
   const readLimit = limits?.readLimit ?? READ_LIMIT;
   // 每顆 middleware 各一份：描述裡有這顆的行數上限，不同上限的兩顆不能共用同一個快取。
   const modelFacing = new WeakMap<object, object>();
-  return createMiddleware({
-    name: READ_CONTINUATION_MIDDLEWARE_NAME,
-    wrapModelCall: (request, handler) => {
-      const tools = request.tools as readonly unknown[] | undefined;
-      if (!Array.isArray(tools) || !tools.some(isReadTool)) return handler(request);
-      return handler({
-        ...request,
-        tools: tools.map((tool) =>
-          isReadTool(tool) ? modelFacingReadTool(tool, modelFacing, readLimit) : tool,
-        ),
-      } as typeof request);
-    },
-    wrapToolCall: async (request, handler) => {
-      if (resolveToolName(request) !== READ_TOOL) return handler(request);
-      const args = withReadLimit(request.toolCall.args, readLimit);
-      const call =
-        args === request.toolCall.args
-          ? request
-          : { ...request, toolCall: { ...request.toolCall, args } };
-      const record: CallRecord = {};
-      const result = await currentRead.run(record, () => handler(call));
-      const extent = record.extent;
-      // 失敗的、沒讀到文字的（二進位、空檔）、包在 `Command` 裡的：原樣交出。
-      if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
-        return result;
-      }
-      let shownText: string | undefined;
-      const content = appendFooter(result.content, (text) => {
-        shownText = text;
-        return continuationFooter(extent, text);
-      });
-      if (content === undefined) return result;
-      const path = (request.toolCall.args as { readonly file_path?: unknown } | undefined)
-        ?.file_path;
-      if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
-        const meta = readResultMeta(path, extent, record.lines, shownText);
-        if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
-      }
-      // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
-      return new ToolMessage({
-        content,
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? READ_TOOL,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
-    },
-  }) as AgentMiddleware;
+  const readOverride: ToolOverride = {
+    override: (tool, name) =>
+      name === READ_TOOL ? modelFacingReadTool(tool, modelFacing, readLimit) : undefined,
+  };
+  const toolStep = readContinuationToolStep(readLimit);
+  const listStep: ToolListStep = (request) => {
+    const tools = request.tools as readonly unknown[] | undefined;
+    if (!Array.isArray(tools)) return undefined;
+    const overridden = overriddenTools(tools, readOverride);
+    return overridden === tools ? undefined : overridden;
+  };
+  return withToolListStep(
+    withToolCallStep(
+      createMiddleware({
+        name: READ_CONTINUATION_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCallWith(listStep) as never,
+        wrapToolCall: wrapToolCallWith(toolStep),
+      }) as AgentMiddleware,
+      toolStep,
+    ),
+    listStep,
+  );
+}
+
+/**
+ * 這顆的工具那一半：`read_file` 沒給 `limit` 就補上行數上限再往內交（給的超過上限就拋錯、不往內交）；讀到文字就在結果最後
+ * 接上讀到哪一行，沒到檔尾的附續讀的 `offset`，並記下讀檔的 meta（`putToolResultMeta`）。
+ *
+ * @param readLimit - 一次最多讀幾行。
+ * @returns 這一步。
+ */
+export function readContinuationToolStep(readLimit: number): ToolCallStep {
+  return async (call, next) => {
+    if (toolNameOfCall(call) !== READ_TOOL) return next();
+    const args = withReadLimit(call.args, readLimit);
+    const record: CallRecord = {};
+    const result = await currentRead.run(record, () =>
+      next(args === call.args ? undefined : { args }),
+    );
+    const extent = record.extent;
+    // 失敗的、沒讀到文字的（二進位、空檔）、包在 `Command` 裡的：原樣交出。
+    if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
+      return result;
+    }
+    let shownText: string | undefined;
+    const content = appendFooter(result.content, (text) => {
+      shownText = text;
+      return continuationFooter(extent, text);
+    });
+    if (content === undefined) return result;
+    const path = (call.args as { readonly file_path?: unknown } | undefined)?.file_path;
+    if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
+      const meta = readResultMeta(path, extent, record.lines, shownText);
+      if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
+    }
+    // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
+    return new ToolMessage({
+      content,
+      tool_call_id: result.tool_call_id,
+      name: result.name ?? READ_TOOL,
+      id: result.id,
+      status: result.status,
+      artifact: result.artifact,
+      additional_kwargs: result.additional_kwargs,
+      response_metadata: result.response_metadata,
+    });
+  };
 }

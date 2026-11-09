@@ -61,16 +61,6 @@ export function parsePlanCommandArgs(rawInput: string): PlanCommandRequest {
 export const PLAN_NOT_ATTACHED_MESSAGE = `計劃模式還沒接上這個會話的日誌，/${PLAN_COMMAND_NAME} 沒有地方記下模式，所以沒有動。`;
 
 /**
- * 這一份組裝接了不只一份 root 日誌，挑不出要改哪一份。
- *
- * @param count - 接了幾份。
- * @returns 回給人的那一句。
- */
-export function planAmbiguousMessage(count: number): string {
-  return `這個組裝接了 ${String(count)} 份會話日誌，/${PLAN_COMMAND_NAME} 不知道要改哪一份，所以沒有動。`;
-}
-
-/**
  * `/plan off` 帶附件。照 dsh（`plan-mode/src/index.ts:237-239`）：離開不需要附件，帶了多半是打錯。
  * **在 steer 與寫日誌之前回**，所以什麼都沒改，輸入框的草稿與附件留著。
  */

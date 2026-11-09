@@ -13,8 +13,9 @@
  * 照常接在後面（實測）。兩個入口各叫一次：serve 碰到以前寫過的 thread（`serve.ts`），CLI 的 `--resume`
  * （`cli.ts`）。
  *
- * **只寫 `messages`，不碰 `_summarizationEvent`。** 壓縮過的會話灌回去的是「摘要＋之後的」，那一串就是新
- * state 的原始訊息串；帶著舊的切點進去，基座下一次壓縮會拿它當 `previousCutoffIndex`，切到別的地方去。
+ * **只寫 `messages`，不帶切點。** 壓縮過的會話灌回去的是「摘要＋之後的」，那一串就是新 state 的原始訊息串。
+ * 切點表（`@nexus/core` 的 `summary-cutoffs.ts`）上舊的條目對不上這一串（錨點那則已經被摘掉），等於沒有，下一次壓縮從這一串重新算起；
+ * 帶著舊切點進去的話會拿它當上一次切點，切到別的地方去。
  *
  * **寫不進去就讓這條 thread 起不來**：推的一側把「續接時灌回去的那一串」當成之後壓縮切點的座標
  * （`conversation-replay.ts` 的 end-seed 那一段），灌失敗了還接著跑，下一次續接就會拿錯的座標切。
@@ -31,14 +32,28 @@
  * 按會話分目錄（`tool-result-stash.ts`），不在 graph state 裡，所以這一條路灌回去的預覽指的路徑讀得到。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { replayConversation } from '@nexus/core';
-import type { ConversationReplay, SessionEvent, UnreplayableReason } from '@nexus/core';
-import { context } from 'langchain';
+import {
+  evictedToolResultText,
+  nexusContent,
+  parsesLoggedToolCalls,
+  replayConversation,
+  SESSION_EVENT_MAX_DEPTH,
+  storedEventDepth,
+  stringifyToolContent,
+  toolResultEvictionPath as coreToolResultEvictionPath,
+} from '@nexus/core';
+import type {
+  ConversationReplay,
+  LoggedMessage,
+  MessageContent,
+  NexusMessage,
+  SessionEvent,
+  UnreplayableReason,
+} from '@nexus/core';
 
-import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
 import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
+import { vouchCheckpointDepth } from './pruned-memory-saver.js';
 
 /** 灌得進去的 agent 那一面。 */
 export interface RestorableAgent {
@@ -49,154 +64,110 @@ export interface RestorableAgent {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 過大的工具結果：模型看到的是基座換過的預覽                                   */
+/* 過大的工具結果：模型看到的是組裝點換過的預覽                               */
 /* -------------------------------------------------------------------------- */
 //
-// 日誌記的是工具的輸出（`session-log.ts` 的 `tool/result`），模型看到的是基座 `FilesystemMiddleware` 換過的
-// 那則：超過 80,000 字元的，換成一句「存在這個路徑、用 read_file 自己讀」加上頭尾預覽。推回去的要是模型看到的
-// 那則，所以照同一條規則重算。**下面這幾樣逐字抄自基座**（`deepagents@1.13.1`，
-// `dist/langsmith-zm0ILQsV.js` 的 `processToolMessage`、`createContentPreview`、`formatContentWithLineNumbers`、
-// `TOO_LARGE_TOOL_MSG`），基座沒有匯出它們。`conversation-restore.test.ts` 拿真的基座換出來的那則逐字比對，
-// 升級基座時字變了就紅在那裡。
+// 日誌記的是工具的輸出（`session-log.ts` 的 `tool/result`），模型看到的是組裝點那一格（core 的 `toolResultEvictionWrap`）
+// 換過的那則：超過 80,000 字元的，換成一句「存在這個路徑、用 read_file 自己讀」加上頭尾預覽。推回去的要是模型看到的
+// 那則，所以照同一條規則重算；規則在 core 的 `tool-result-eviction.ts`（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）。
+// `conversation-restore.test.ts` 比的是重算出來的與組裝點實際換上的那則；與基座逐字相同，由 core 的
+// `tool-result-eviction.test.ts` 對著真的基座比。
 //
 // 預覽裡指的路徑**續接之後讀得到**（#734）：暫存在主機的私有目錄、按會話分目錄
 // （`tool-result-stash.ts`），續接用同一個 run 目錄當鑰匙，找得到原來那個檔。重算的仍然是模型當時看到的字。
 
-/** 基座的 `toolTokenLimitBeforeEvict` 預設 `2e4`，乘 4 是字元數。組裝點沒改它。 */
-const EVICTION_THRESHOLD_CHARS = 2e4 * 4;
-
-/** 基座不搬的那幾顆：`FILESYSTEM_TOOL_NAMES` 去掉 `execute`。 */
-const TOOLS_EXCLUDED_FROM_EVICTION: readonly string[] = [
-  'ls',
-  'read_file',
-  'write_file',
-  'edit_file',
-  'delete',
-  'glob',
-  'grep',
-];
-
-/** 基座的 `MAX_LINE_LENGTH`。 */
-const MAX_LINE_LENGTH = 5e3;
-
-const TOO_LARGE_TOOL_MSG = context`
-  Tool result too large, the result of this tool call {tool_call_id} was saved in the filesystem at this path: {file_path}
-  You can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.
-  You can do this by specifying an offset and limit in the read_file tool call.
-  For example, to read the first ${100} lines, you can use the read_file tool with offset=0 and limit=${100}.
-
-  Here is a preview showing the head and tail of the result (lines of the form
-  ... [N lines truncated] ...
-  indicate omitted lines in the middle of the content):
-
-  {content_sample}
-`;
-
-function stringifyToolContent(content: ToolMessage['content']): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block: unknown) =>
-        typeof block === 'object' &&
-        block !== null &&
-        'type' in block &&
-        block.type === 'text' &&
-        'text' in block &&
-        typeof block.text === 'string'
-          ? block.text
-          : JSON.stringify(block),
-      )
-      .join('\n');
-  }
-  return String(content);
-}
-
-function sanitizeToolCallId(toolCallId: string): string {
-  return toolCallId.replace(/\./g, '_').replace(/\//g, '_').replace(/\\/g, '_');
-}
-
-function formatContentWithLineNumbers(content: readonly string[], startLine: number): string {
-  const resultLines: string[] = [];
-  for (const [index, line] of content.entries()) {
-    const lineNum = index + startLine;
-    if (line.length <= MAX_LINE_LENGTH) {
-      resultLines.push(`${lineNum.toString().padStart(6)}\t${line}`);
-      continue;
-    }
-    const numChunks = Math.ceil(line.length / MAX_LINE_LENGTH);
-    for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx += 1) {
-      const start = chunkIdx * MAX_LINE_LENGTH;
-      const chunk = line.substring(start, Math.min(start + MAX_LINE_LENGTH, line.length));
-      const marker = chunkIdx === 0 ? lineNum.toString() : `${lineNum}.${chunkIdx}`;
-      resultLines.push(`${marker.padStart(6)}\t${chunk}`);
-    }
-  }
-  return resultLines.join('\n');
-}
-
-function createContentPreview(contentStr: string, headLines = 5, tailLines = 5): string {
-  const lines = contentStr.split('\n');
-  // 基座兩支都傳陣列進去，所以結尾的空行照留（它的字串版才會去掉）。
-  if (lines.length <= headLines + tailLines) {
-    return formatContentWithLineNumbers(
-      lines.map((line) => line.substring(0, 1e3)),
-      1,
-    );
-  }
-  const head = lines.slice(0, headLines).map((line) => line.substring(0, 1e3));
-  const tail = lines.slice(-tailLines).map((line) => line.substring(0, 1e3));
-  const truncationNotice = `\n... [${lines.length - headLines - tailLines} lines truncated] ...\n`;
-  return (
-    formatContentWithLineNumbers(head, 1) +
-    truncationNotice +
-    formatContentWithLineNumbers(tail, lines.length - tailLines + 1)
-  );
-}
-
 /**
- * 基座會把這則工具結果搬到哪個檔：沒過門檻或基座不搬的回 undefined。
+ * 組裝點會把這則工具結果搬到哪個檔：沒過門檻或那顆工具不搬的回 undefined。
  *
  * 重播（{@link toolResultAsSeen}）與分叉讀繼承檔的路由（`fork-stash.ts`）共用這一份規則。
  *
- * @param message - 日誌裡記的那則（工具的輸出）。
+ * @param message - 日誌裡記的那則（工具的輸出）：`ToolMessage`，或 nexus 訊息讀出來的同名三格。
  * @returns 搬去的虛擬路徑（`/large_tool_results/<呼叫編號>.txt`）；不搬就是 undefined。
  */
-export function toolResultEvictionPath(message: ToolMessage): string | undefined {
-  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
-    return undefined;
-  }
-  if (stringifyToolContent(message.content).length <= EVICTION_THRESHOLD_CHARS) return undefined;
-  return `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
+export function toolResultEvictionPath(message: {
+  readonly name?: string;
+  readonly content: MessageContent;
+  readonly tool_call_id: string;
+}): string | undefined {
+  return coreToolResultEvictionPath(message);
 }
 
 /**
- * 一則工具結果在模型那一格長什麼樣：照基座的規則，過大的換成預覽。
+ * 一則工具結果在模型那一格長什麼樣：照 core 的搬移規則，過大的換成預覽。
+ *
+ * 換出來的那則帶齊 `ToolMessage` 建構子收的那幾格（轉的時候 `data` 原樣交給建構子），沒有 `additional_kwargs`／`response_metadata` 時補空物件，同建構子。
  *
  * @param message - 日誌裡記的那則（工具的輸出）。
- * @returns 沒過門檻或基座不搬的原樣；過了的換成基座那則。
+ * @returns 沒過門檻或那顆工具不搬的原樣；過了的換成組裝點會換上的那則。
  */
-export function toolResultAsSeen(message: ToolMessage): ToolMessage {
-  const filePath = toolResultEvictionPath(message);
+export function toolResultAsSeen(message: NexusMessage): NexusMessage {
+  const data = message.data as NexusMessage['data'] & {
+    readonly artifact?: unknown;
+    readonly status?: unknown;
+    readonly metadata?: unknown;
+  };
+  const toolCallId = data.tool_call_id as string;
+  const content = nexusContent(message);
+  const filePath = toolResultEvictionPath({ name: data.name, content, tool_call_id: toolCallId });
   if (filePath === undefined) return message;
-  const text = stringifyToolContent(message.content);
-  return new ToolMessage({
-    content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', message.tool_call_id)
-      .replace('{file_path}', filePath)
-      .replace('{content_sample}', createContentPreview(text)),
-    tool_call_id: message.tool_call_id,
-    name: message.name,
-    id: message.id,
-    artifact: message.artifact,
-    status: message.status,
-    metadata: message.metadata,
-    additional_kwargs: message.additional_kwargs,
-    response_metadata: message.response_metadata,
-  });
+  const text = stringifyToolContent(content);
+  return {
+    type: 'tool',
+    data: {
+      content: evictedToolResultText(text, toolCallId, filePath),
+      tool_call_id: toolCallId,
+      name: data.name,
+      id: data.id,
+      artifact: data.artifact,
+      status: data.status,
+      metadata: data.metadata,
+      additional_kwargs: data.additional_kwargs ?? {},
+      response_metadata: data.response_metadata ?? {},
+    } as NexusMessage['data'],
+  };
 }
 
 /* -------------------------------------------------------------------------- */
 /* 灌回去                                                                        */
 /* -------------------------------------------------------------------------- */
+//
+// 讀盤共用過的事件（`storedEventDepth` 有值）推回時，巢狀的值與日誌共用（`shareStored`）。日誌那份整張深凍：下游就地改巢狀的值
+// 當場拋，改不到日誌。推回到第一次存檔之間只換訊息頂層的欄位（`stampImageOrigin` 換 `additional_kwargs`，reducer 補 `id`），
+// 不碰共用的值；第一次存檔時 `seal` 把訊息本身也凍起來。
+//
+// 這類事件讀盤時記下了層數；夠淺、建構子也不從字串解析新值的，推出的訊息登記給 `seal`（`vouchCheckpointDepth`），`seal` 不量。
+
+/**
+ * 事件不超過這個層數、建構子也不從字串解析新值（`parsesLoggedToolCalls`）的，推出來的訊息寫進存檔點一定在上限內，`seal` 不必量。
+ *
+ * 推出來的訊息在存檔點裡只比事件深固定幾層：日誌訊息的欄位在存檔點裡比在事件裡深 `CHECKPOINT_WRAPPER_DEPTH` 層
+ * （`checkpoint-serde.ts`；四種事件都把訊息放在 `data` 底下同一層）；`turn/start` 的附件包進內容區塊多固定幾層；
+ * `toJSON` 的跳脫（帶 `lc` 鍵的物件包一層 `__lc_escaped__`，包住的那顆裡面不再跳脫）最多多 1 層；建構子（`tool_call` 區塊、
+ * v1 的 `contentBlocks`）與 {@link toolResultAsSeen} 在外面只包固定幾層。取上限的一半，餘裕遠大於這幾層。
+ * 比這深的事件，與建構子會從字串解析的，`seal` 照常量。
+ */
+const VOUCHED_EVENT_DEPTH = SESSION_EVENT_MAX_DEPTH / 2;
+
+/** 推出這則訊息的那一則日誌訊息；`turn/start` 推出的訊息不是從日誌訊息建的，沒有。 */
+function loggedMessageOf(event: SessionEvent): LoggedMessage | undefined {
+  if (event.type === 'compaction/summary') return event.data.summary;
+  if (
+    event.type === 'assistant/message' ||
+    event.type === 'tool/result' ||
+    event.type === 'user/message'
+  ) {
+    return event.data.message;
+  }
+  return undefined;
+}
+
+/** 這顆事件推出的訊息，寫進存檔點的層數是不是一定在上限內，見 {@link VOUCHED_EVENT_DEPTH}。 */
+function depthBounded(event: SessionEvent): boolean {
+  const depth = storedEventDepth(event);
+  if (depth === undefined || depth > VOUCHED_EVENT_DEPTH) return false;
+  const logged = loggedMessageOf(event);
+  return logged === undefined || !parsesLoggedToolCalls(logged);
+}
 
 /**
  * 從日誌推出對話、灌回這條 thread 的 graph state。推不出來就不灌（#306 拍板 2），模型從空的開始。
@@ -207,7 +178,8 @@ export function toolResultAsSeen(message: ToolMessage): ToolMessage {
  * @returns 推的結果，給入口披露用。
  * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
- *   那一則不截斷、不改寫——上限出現之前寫下的舊日誌才會有，要人看過再決定怎麼辦。
+ *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、或舊格式 `additional_kwargs.tool_calls`
+ *   解析出來太深的，都會走到這裡。
  */
 export async function restoreConversation(
   agent: RestorableAgent,
@@ -217,7 +189,11 @@ export async function restoreConversation(
   const seqOf = new Map<BaseMessage, number>();
   const replay = replayConversation(events, {
     toolResultAsSeen,
-    origin: (message, event) => seqOf.set(message, event.seq),
+    shareStored: true,
+    origin: (message, event) => {
+      seqOf.set(message, event.seq);
+      if (depthBounded(event)) vouchCheckpointDepth(message);
+    },
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
     try {

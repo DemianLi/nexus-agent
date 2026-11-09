@@ -20,13 +20,12 @@ import {
   TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
   TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
 } from './tool-pipeline.js';
-import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
-import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
+import { OBSERVATION_SECTION_MIDDLEWARE_NAME } from './prompt-sections.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import {
@@ -37,8 +36,6 @@ import {
 import { REQUEST_SNAPSHOT_MIDDLEWARE_NAME } from './request-snapshot.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
-import { SPILL_POLICY_MIDDLEWARE_NAME } from './spill-policy.js';
-import { SEARCH_OVERFLOW_MIDDLEWARE_NAME } from './search-overflow.js';
 import { STEP_INBOX_MIDDLEWARE_NAME } from './step-inbox.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
@@ -140,6 +137,34 @@ function registered(params: { subagents: SubAgent[] }): SubAgent[] {
   return params.subagents.filter((subagent) => subagent.name !== GENERAL_PURPOSE_SUBAGENT.name);
 }
 
+/**
+ * 這一疊有沒有「先讀後改」：它住在 `tools/execute` 的內層，名字看不到，所以問行為——對一個沒讀過的檔叫 `edit_file`，
+ * 策略在就短路成拒絕，工具本體不跑。
+ */
+async function observes(stack: readonly unknown[]): Promise<boolean> {
+  const execute = stack.find(
+    (middleware) => (middleware as { name?: unknown }).name === TOOL_EXECUTE_MIDDLEWARE_NAME,
+  ) as
+    | { wrapToolCall?: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown> }
+    | undefined;
+  if (execute?.wrapToolCall === undefined) return false;
+  let ran = false;
+  await execute.wrapToolCall(
+    {
+      toolCall: { name: 'edit_file', id: 'probe', args: { file_path: '/never-read.txt' } },
+      state: {},
+      runtime: {},
+    },
+    () => {
+      ran = true;
+      return Promise.resolve(
+        new ToolMessage({ content: 'edited', tool_call_id: 'probe', name: 'edit_file' }),
+      );
+    },
+  );
+  return !ran;
+}
+
 describe('backend 註冊點', () => {
   it('同 routePrefix 的掛載點報錯，訊息指名兩個 plugin 與那個前綴', async () => {
     const plugins = [
@@ -209,8 +234,9 @@ describe('middleware 註冊點', () => {
       'b',
       'c',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -237,8 +263,9 @@ describe('middleware 註冊點', () => {
       'a',
       'c',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -265,8 +292,9 @@ describe('middleware 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -296,8 +324,9 @@ describe('middleware 註冊點', () => {
       // 兩顆 last 之間仍是註冊順序。
       'a',
       'd',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -344,8 +373,9 @@ describe('middleware 註冊點', () => {
         APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
         // plugin 打底、子代理自帶的在內側。
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
-        OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
         INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+        TOOL_EXECUTE_MIDDLEWARE_NAME,
         MAX_TOKENS_MIDDLEWARE_NAME,
         REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
         TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -358,8 +388,8 @@ describe('middleware 註冊點', () => {
   });
 
   /**
-   * **例外：名字撞上摘要器的那一顆只到 root**（#327 動工時拍板）。它是一份實例、狀態在閉包裡，攤過去會蓋掉 fold
-   * 替子代理各建的那份，root 與子代理的歷史混進同一個檔。行為面的證據在 `apps/harness/src/summarization.test.ts`
+   * **例外：名字撞上摘要器的那一顆只到 root**（#327）。它是一份實例，認不出身分的呼叫用實例自己的會話名，
+   * 攤過去會蓋掉 fold 替子代理各建的那份，root 與子代理的那種呼叫混進同一個檔。行為面的證據在 `apps/harness/src/summarization.test.ts`
    * 的「註冊點只蓋到 root」。
    */
   it('名字撞上摘要器的 plugin middleware 只到 root，不攤進子代理', async () => {
@@ -443,7 +473,7 @@ describe('工具事件的三顆生產者（#1248）', () => {
   const names = (list: readonly unknown[]): string[] =>
     list.map((mw) => (mw as { name: string }).name);
 
-  it('給了 events 才掛：pre 緊貼閘門外側、post 在輸出校驗外側、execute 在 invalidToolArgs 內側', async () => {
+  it('給了 events 才掛 pre：pre 緊貼閘門外側、post 在 invalidToolArgs 外側、execute 在 invalidToolArgs 內側', async () => {
     const params = await fold(
       [fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a')))],
       { events: new EventBus() },
@@ -452,39 +482,43 @@ describe('工具事件的三顆生產者（#1248）', () => {
     const at = (name: string): number => list.indexOf(name);
     // pre：緊貼閘門外側（相鄰、在前）。
     expect(at(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME)).toBe(at(APPROVAL_GATE_MIDDLEWARE_NAME) - 1);
-    // post：plugin middleware 的內側、輸出校驗的外側。
+    // post：plugin middleware 的內側、解不開參數那顆的外側。
     expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeGreaterThan(at('a'));
-    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBe(at(OUTPUT_SCHEMA_MIDDLEWARE_NAME) - 1);
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeLessThan(
+      at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME),
+    );
     // execute：解不開參數那顆的內側，緊貼。
     expect(at(TOOL_EXECUTE_MIDDLEWARE_NAME)).toBe(at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME) + 1);
   });
 
-  it('沒給 events 一顆都不掛（行為與沒有這一格時一樣）', async () => {
+  it('沒給 events：pre 不掛；execute 與 post 照樣掛', async () => {
     const params = await fold([]);
     expect(names(params.middleware)).not.toContain(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME);
-    expect(names(params.middleware)).not.toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
-    expect(names(params.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+    // 耐久檢查點關掉也在：輸出校驗與撞限替換是 execute 的內層 core 監聽者。
+    const bare = await fold([{ plugin: sessionCheckpointPlugin, disabled: true }]);
+    expect(names(bare.middleware)).toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
   });
 
-  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算）', async () => {
+  it('每個子代理也有：pre 與 post 與 root 共用同一份實例，execute 逐個建（pre 在有基座工具被遮時另一份，見 subagent-tool-filter.test.ts）', async () => {
     const params = await fold(
       [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
       { events: new EventBus() },
     );
+    const find = (list: readonly unknown[], name: string): unknown =>
+      list.find((mw) => (mw as { name: string }).name === name);
     for (const subagent of params.subagents) {
       const list = subagent.middleware ?? [];
-      for (const name of [
-        TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
-        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
-        TOOL_EXECUTE_MIDDLEWARE_NAME,
-      ]) {
-        const inSub = list.find((mw) => (mw as unknown as { name: string }).name === name);
-        const inRoot = params.middleware.find(
-          (mw) => (mw as unknown as { name: string }).name === name,
-        );
-        expect(inSub).toBeDefined();
-        expect(inSub).toBe(inRoot);
+      for (const name of [TOOL_PRE_EXECUTE_MIDDLEWARE_NAME, TOOL_POST_EXECUTE_MIDDLEWARE_NAME]) {
+        expect(find(list, name)).toBeDefined();
+        expect(find(list, name)).toBe(find(params.middleware, name));
       }
+      // execute 帶先讀後改的觀測紀錄（closure 裡），所以逐個 agent 各一份。
+      expect(find(list, TOOL_EXECUTE_MIDDLEWARE_NAME)).toBeDefined();
+      expect(find(list, TOOL_EXECUTE_MIDDLEWARE_NAME)).not.toBe(
+        find(params.middleware, TOOL_EXECUTE_MIDDLEWARE_NAME),
+      );
     }
   });
 });
@@ -493,7 +527,7 @@ describe('「先讀後改」策略打底', () => {
   /** 這一組明著打開它——這個檔的入口預設關著，理由見 {@link fold} 的檔頭。 */
   const on: FoldOptions = { observationPolicy: true, defaultBackend: fakeBackend('default') };
 
-  it('排在閘門之後、其餘 registry middleware 之前', async () => {
+  it('策略不佔 stack 的一格，規則那一段排在閘門之後', async () => {
     const params = await fold(
       [
         fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
@@ -501,15 +535,16 @@ describe('「先讀後改」策略打底', () => {
       ],
       on,
     );
-    // 排在閘門**裡面**：閘門是安全邊界，這個是正確性的門，兩者不換位。排在其餘 registry
-    // middleware **外面**：不然任何一個 plugin middleware 都可以在它之前把工具跑掉。
+    // 策略是 `tools/execute` 內層的監聽者，在閘門與每一個 plugin middleware 的內側：核准卡先出，
+    // plugin middleware 叫 handler 往內交時一定經過 `tools/execute`。
     expect(middlewareNames(params)).toEqual([
       TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
-      OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      // 規則那兩句是段，接在它自己那一格（#2414）；策略本身是 `tools/execute` 內層的監聽者。
+      OBSERVATION_SECTION_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
@@ -517,11 +552,11 @@ describe('「先讀後改」策略打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-      // 有 backend 就有：檔案工具的失敗標成錯誤，貼著工具本體（#293）。
-      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+      // 有 backend 就有：讀檔結果最後補上讀到哪（#594）。
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -546,7 +581,8 @@ describe('「先讀後改」策略打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
-      OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      // 規則那兩句是段，接在它自己那一格（#2414）；策略本身是 `tools/execute` 內層的監聽者。
+      OBSERVATION_SECTION_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
@@ -555,10 +591,10 @@ describe('「先讀後改」策略打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -582,12 +618,15 @@ describe('「先讀後改」策略打底', () => {
       ],
       on,
     );
+    // 策略住在 `tools/execute` 裡，那一顆逐個 agent 各建一份。
     const pick = (list: readonly unknown[]) =>
-      list.find((mw) => (mw as { name: string }).name === OBSERVATION_POLICY_MIDDLEWARE_NAME);
+      list.find((mw) => (mw as { name: string }).name === TOOL_EXECUTE_MIDDLEWARE_NAME);
     const rootOne = pick(params.middleware);
     const first = pick(registered(params)[0]?.middleware ?? []);
     const second = pick(registered(params)[1]?.middleware ?? []);
 
+    expect(await observes(params.middleware)).toBe(true);
+    expect(await observes(registered(params)[0]?.middleware ?? [])).toBe(true);
     expect(rootOne).toBeDefined();
     expect(first).toBeDefined();
     expect(first).not.toBe(rootOne);
@@ -601,11 +640,8 @@ describe('「先讀後改」策略打底', () => {
       [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one')))],
       { ...on, observationPolicy: false },
     );
-    expect(middlewareNames(params)).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
-    const names = (registered(params)[0]?.middleware ?? []).map(
-      (mw) => (mw as unknown as { name: string }).name,
-    );
-    expect(names).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+    expect(await observes(params.middleware)).toBe(false);
+    expect(await observes(registered(params)[0]?.middleware ?? [])).toBe(false);
   });
 
   it('**一個 backend 都沒有又沒關掉 → 拋**，不是靜默跳過', async () => {
@@ -621,7 +657,7 @@ describe('「先讀後改」策略打底', () => {
       [fakePlugin('r', (r) => void r.backend.mount('/data/', fakeBackend('routed')))],
       on,
     );
-    expect(middlewareNames(params)).toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+    expect(await observes(params.middleware)).toBe(true);
     expect(params.backend).toBeInstanceOf(CompositeBackend);
   });
 });
@@ -787,8 +823,9 @@ describe('approvals 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -820,8 +857,9 @@ describe('approvals 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -847,8 +885,9 @@ describe('approvals 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -1430,6 +1469,29 @@ describe('搜尋工具的說明（workspaceSearch，#1605）', () => {
   });
 });
 
+describe('檔案工具的描述跟著讀到哪與搜尋說明掛不掛（#2415）', () => {
+  it('有 backend：read_file 換；再說搜尋走工作區 backend，grep、glob 也換', async () => {
+    const plain = await fold([], { defaultBackend: fakeBackend('default') });
+    expect(Object.keys(plain.fileToolDescriptions ?? {})).toEqual(['read_file']);
+
+    const search = await fold([], {
+      defaultBackend: fakeBackend('default'),
+      workspaceSearch: true,
+    });
+    expect(Object.keys(search.fileToolDescriptions ?? {}).sort()).toEqual([
+      'glob',
+      'grep',
+      'read_file',
+    ]);
+  });
+
+  it('沒有 backend：兩顆都不掛，描述也不換', async () => {
+    const params = await fold([], {});
+    expect(middlewareNames(params)).not.toContain(READ_CONTINUATION_MIDDLEWARE_NAME);
+    expect(params.fileToolDescriptions).toBeUndefined();
+  });
+});
+
 describe('摘要器打底', () => {
   it('排在閘門之後、其餘 registry middleware 之前', async () => {
     const params = await fold(
@@ -1454,10 +1516,10 @@ describe('摘要器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -1492,10 +1554,10 @@ describe('摘要器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -1520,9 +1582,9 @@ describe('摘要器打底', () => {
       pick(registered(params)[1]?.middleware ?? []),
     ];
     expect(instances.every((instance) => instance !== undefined)).toBe(true);
-    // **共用會讓歷史寫進同一個檔**：`sessionId` 在 middleware 的 closure 裡，
-    // 檔名是 `${historyPathPrefix}/${sessionId}.md`。實測過共用時 root 與 subagent 的
-    // 對話 append 進同一份摘要——所以這條要求的是三個不同的物件。
+    // **共用會讓認不出身分的呼叫寫進同一個檔**：檔名是 `${historyPathPrefix}/${sessionId}.md`，
+    // 認不出身分時 `sessionId` 退回實例自己的那一個，
+    // 共用的話 root 與 subagent 的那種呼叫 append 進同一份摘要——所以這條要求的是三個不同的物件。
     expect(new Set(instances).size).toBe(3);
   });
 
@@ -1601,7 +1663,7 @@ describe('摘要器打底', () => {
 /**
  * 提醒器打底——**跟摘要器同一條軸線，但有兩格刻意相反**。
  *
- * 一、**共用同一份實例**。摘要器的 `sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史
+ * 一、**共用同一份實例**。摘要器認不出身分的呼叫用實例自己的會話名，共用會讓兩個 agent 的那種呼叫
  * 混進同一個檔，所以那邊逐個建；提醒器的鏈是從 `state.messages` 現算的，closure 裡只有
  * 設定，而 `state` 本來就逐 thread、逐 agent 各一份。
  *
@@ -1635,10 +1697,10 @@ describe('提醒器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
-      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -1674,8 +1736,9 @@ describe('提醒器打底', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
-      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TOOL_EXECUTE_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
       REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -2037,13 +2100,11 @@ describe('先讀後改的條目', () => {
     return foldRegistry(registry, { summarization: false, defaultBackend: fakeBackend('default') });
   }
 
-  /** 那一顆在不在 root 與每個 subagent 的 stack 裡。 */
-  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
-    const inRoot = middlewareNames(params).includes(OBSERVATION_POLICY_MIDDLEWARE_NAME);
-    const inSubagents = registered(params).map((subagent) =>
-      (subagent.middleware ?? [])
-        .map((mw) => (mw as unknown as { name: string }).name)
-        .includes(OBSERVATION_POLICY_MIDDLEWARE_NAME),
+  /** 策略在不在 root 與每個 subagent 的 stack 裡。 */
+  async function present(params: { middleware: unknown[]; subagents: SubAgent[] }) {
+    const inRoot = await observes(params.middleware);
+    const inSubagents = await Promise.all(
+      registered(params).map((subagent) => observes(subagent.middleware ?? [])),
     );
     return { inRoot, inSubagents };
   }
@@ -2075,7 +2136,7 @@ describe('先讀後改的條目', () => {
       defaultBackend: fakeBackend('default'),
       observationPolicy: true,
     });
-    expect(present(params)).toEqual({ inRoot: true, inSubagents: [true] });
+    expect(await present(params)).toEqual({ inRoot: true, inSubagents: [true] });
   });
 
   it('被關掉又沒有 backend 時不拋——`disabled` 是第二條正當的「不要」', async () => {
@@ -2083,7 +2144,7 @@ describe('先讀後改的條目', () => {
     // 沒 backend 要拋」那條不變式由下一條守著，兩條缺一不可。
     const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin, disabled: true }]);
     const params = foldRegistry(registry, { summarization: false });
-    expect(middlewareNames(params)).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+    expect(await observes(params.middleware)).toBe(false);
   });
 
   it('條目在清單上、沒被關，又一個 backend 都沒有時照樣拋', async () => {
@@ -2446,6 +2507,12 @@ describe('同名的一開一關：開著的那一列不被關掉', () => {
   const inStack = (stack: readonly unknown[], name: string): boolean =>
     stack.some((mw) => (mw as { name: string }).name === name);
 
+  /** 一疊裡有沒有那一顆；先讀後改住在 `tools/execute` 裡，問行為。 */
+  const has = (stack: readonly unknown[], name: string): Promise<boolean> =>
+    name === OBSERVATION_POLICY_MIDDLEWARE_NAME
+      ? observes(stack)
+      : Promise.resolve(inStack(stack, name));
+
   /** 三種條目各一條：先讀後改、用量記錄器、耐久檢查點。 */
   const cases = [
     { label: '先讀後改', plugin: observationPolicyPlugin, mw: OBSERVATION_POLICY_MIDDLEWARE_NAME },
@@ -2469,10 +2536,10 @@ describe('同名的一開一關：開著的那一列不被關掉', () => {
         repeatReminder: false,
         defaultBackend: fakeBackend('default'),
       });
-      expect(inStack(params.middleware, mw)).toBe(true);
+      expect(await has(params.middleware, mw)).toBe(true);
       expect(params.subagents.length).toBeGreaterThan(0);
       for (const subagent of params.subagents) {
-        expect(inStack(subagent.middleware ?? [], mw), subagent.name).toBe(true);
+        expect(await has(subagent.middleware ?? [], mw), subagent.name).toBe(true);
       }
     });
   }
@@ -2556,14 +2623,14 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
   /** 逐個 agent 各建一份的：狀態在閉包裡，共用會串台。 */
   const FRESH_PER_AGENT = new Set([
     TOOL_BARRIER_MIDDLEWARE_NAME,
-    OBSERVATION_POLICY_MIDDLEWARE_NAME,
+    TOOL_EXECUTE_MIDDLEWARE_NAME,
     SUMMARIZATION_MIDDLEWARE_NAME,
   ]);
   /**
-   * 同名但是另一顆。**現在沒有了**：前景子代理的核准閘門跟 root 同一顆（#328 第 1 項，翻了 #324 的「管道固定 `policy-never`」）；
-   * 背景圖的 `policy-never` 那顆在編圖時換上（`compileSubagentGraph` 的 `approvalGate`），不在 fold 的產物裡。
+   * 同名但是另一顆，子代理之間共用一顆：`tools/pre-execute` 的生產者，子代理那一份的外層 core 段帶工具過濾。
+   * 前景子代理的核准閘門跟 root 同一顆（#328 第 1 項）；背景圖的 `policy-never` 那顆在編圖時換上，不在 fold 的產物裡。
    */
-  const OTHER_INSTANCE = new Set<string>();
+  const OTHER_INSTANCE = new Set<string>([TOOL_PRE_EXECUTE_MIDDLEWARE_NAME]);
 
   type Named = { name: string };
   const nameOf = (middleware: unknown): string => (middleware as Named).name;
@@ -2596,6 +2663,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
         baseToolNames: gatedTools,
         subagentToolFilter: { deny: ['write_file'] },
         checkpointer: true,
+        events: new EventBus(),
       },
     );
     return params;
@@ -2606,14 +2674,12 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
     expect(middlewareNames(params)).toEqual(
       expect.arrayContaining([
         STEP_INBOX_MIDDLEWARE_NAME,
-        SPILL_POLICY_MIDDLEWARE_NAME,
-        SEARCH_OVERFLOW_MIDDLEWARE_NAME,
-        OBSERVATION_POLICY_MIDDLEWARE_NAME,
+        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+        TOOL_EXECUTE_MIDDLEWARE_NAME,
         SUMMARIZATION_MIDDLEWARE_NAME,
         REPEAT_REMINDER_MIDDLEWARE_NAME,
         MODEL_USAGE_MIDDLEWARE_NAME,
         SESSION_CHECKPOINT_MIDDLEWARE_NAME,
-        FS_TOOL_ERRORS_MIDDLEWARE_NAME,
         READ_CONTINUATION_MIDDLEWARE_NAME,
         SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
         'a',
@@ -2674,7 +2740,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
         }
       });
     }
-    // 逐個建的：三個子代理各一份，彼此不同。另一顆（核准閘門）無狀態，一顆走遍每個子代理。
+    // 逐個建的：三個子代理各一份，彼此不同。另一顆無狀態，一顆走遍每個子代理。
     for (const name of FRESH_PER_AGENT) {
       expect(new Set(seen.get(name)).size, name).toBe(params.subagents.length);
     }

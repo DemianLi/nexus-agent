@@ -11,8 +11,11 @@
  *    `request/header` 沒變就沒有第二顆。呼叫幾次，日誌都不隨呼叫數長。
  * 3. **記錄點在模型呼叫上，不在 middleware 這一層**：基座的 `memory` 注入發生在我們的 middleware 之後，
  *    站在外面看的 middleware 看不到記憶內容，快照看得到；最內側改寫提示詞與工具的 middleware，快照也跟著。
- * 4. **不進遙測**：見 `packages/nexus-core/src/session-telemetry-coordinator.test.ts`；這裡只確認它確實是 `ignorable`。
+ * 4. **寫在 `model/start` 之前、看位置歸屬**（格式 55，[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：兩顆不帶
+ *    `modelCall`、不帶 `ignorable`，緊接著就是它那次呼叫的 `model/start`。不進遙測見
+ *    `packages/nexus-core/src/session-telemetry-coordinator.test.ts`。
  * 5. **記不進去，這次請求不送**（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）：端點收到 0 個請求，呼叫原樣拋出寫入的錯。
+ * 6. **排空完才送**：快照與 `model/start` 落盤之後端點才收到請求；排空被拒，端點收不到。
  *
  * **零憑證、零外部連線**。
  */
@@ -26,7 +29,7 @@ import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
-import { SessionRegistry } from '@nexus/core';
+import { SessionRegistry, withModelCallStep } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { createEchoPlugin } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
@@ -100,6 +103,11 @@ function eventsOf<T extends keyof SessionEventMap>(
     .map((event) => ({ ...(event.data as SessionEventMap[T]), seq: event.seq }));
 }
 
+/** 快照歸給誰：格式 55 起是它之後的第一顆 `model/start`。 */
+function ownerOf(events: readonly SessionEvent[], seq: number): number | undefined {
+  return events.find((event) => event.type === 'model/start' && event.seq > seq)?.seq;
+}
+
 const INNER_MARK = '<<最內側改寫>>';
 const MEMORY_TEXT = '使用者的代號是胡桃。';
 
@@ -114,17 +122,18 @@ function observer(
       name,
       apply: (registry) =>
         void registry.middleware.use(
-          {
-            name,
-            wrapModelCall: (
-              request: { systemMessage?: { text: string }; tools?: { name?: string }[] },
-              handler: (next: unknown) => unknown,
-            ) => {
+          withModelCallStep(
+            (raw, next) => {
+              const request = raw as {
+                systemMessage?: { text: string };
+                tools?: { name?: string }[];
+              };
               seen.system.push(request.systemMessage?.text ?? '');
               seen.tools.push((request.tools ?? []).map((tool) => tool.name ?? ''));
-              return handler(request);
+              return next(raw);
             },
-          } as never,
+            (wrapModelCall) => ({ name, wrapModelCall }),
+          ) as never,
           where === 'outermost' ? { prepend: true } : { last: true },
         ),
     },
@@ -138,21 +147,20 @@ function innerRewriter(): PluginEntry {
       name: 'inner-rewriter',
       apply: (registry) =>
         void registry.middleware.use(
-          {
-            name: 'innerRewriter',
-            wrapModelCall: (
-              request: {
+          withModelCallStep(
+            (raw, next) => {
+              const request = raw as {
                 systemMessage: { concat: (text: string) => unknown };
                 tools?: { name?: string }[];
-              },
-              handler: (next: unknown) => unknown,
-            ) =>
-              handler({
+              };
+              return next({
                 ...request,
                 systemMessage: request.systemMessage.concat(`\n${INNER_MARK}`),
                 tools: (request.tools ?? []).filter((tool) => tool.name !== 'echo'),
-              }),
-          } as never,
+              } as never);
+            },
+            (wrapModelCall) => ({ name: 'innerRewriter', wrapModelCall }),
+          ) as never,
           { last: true },
         ),
     },
@@ -277,21 +285,21 @@ describe('請求快照 = 端點實際收到的（產品組裝）', () => {
     expect(bodies[0]).toMatchObject({ model: 'fake', temperature: 0.3 });
   });
 
-  it('每筆指回它那次呼叫的 model/start，且寫在 model/end 之前', async () => {
+  it('每筆寫在它那次呼叫的 model/start 之前，中間只隔別的快照；第一顆 request/* 在 model/start 之前', async () => {
     const { events } = await run('一\n/plan\n二\n/exit\n', [testPlanModePlugin()]);
-    const starts = eventsOf(events, 'model/start');
-    const ends = eventsOf(events, 'model/end');
-    const snapshots = [
-      ...eventsOf(events, 'request/system'),
-      ...eventsOf(events, 'request/header'),
-    ];
+    const snapshots = events.filter((event) => event.type.startsWith('request/'));
     expect(snapshots.length).toBeGreaterThan(0);
+    // 釘寫入端的順序：快照之後、它那顆 model/start 之前，沒有任何別的事件插進來。
     for (const snapshot of snapshots) {
-      const start = starts.find((each) => each.seq === snapshot.modelCall);
-      expect(start, `快照 ${String(snapshot.seq)} 沒指到 model/start`).toBeDefined();
-      const end = ends.find((each) => each.modelCall === start!.seq);
-      expect(snapshot.seq).toBeLessThan(end!.seq);
+      const owner = ownerOf(events, snapshot.seq);
+      expect(owner, `快照 ${String(snapshot.seq)} 之後沒有 model/start`).toBeDefined();
+      const between = events.filter((event) => event.seq > snapshot.seq && event.seq < owner!);
+      expect(between.every((event) => event.type.startsWith('request/'))).toBe(true);
+      expect(snapshot.data).not.toHaveProperty('modelCall');
     }
+    expect(events.findIndex((event) => event.type.startsWith('request/'))).toBeLessThan(
+      events.findIndex((event) => event.type === 'model/start'),
+    );
   });
 
   it('長提示詞：呼叫六次，日誌上只有一份', async () => {
@@ -302,13 +310,13 @@ describe('請求快照 = 端點實際收到的（產品組裝）', () => {
     expect(eventsOf(events, 'request/header')).toHaveLength(1);
   });
 
-  it('兩顆都是 ignorable（純資訊：舊 runtime 讀得回，不升格式版本）', async () => {
+  it('格式 55：兩顆都不帶 ignorable（位置是歸屬的唯一線索，不能略過）', async () => {
     const { events } = await run('一\n/exit\n', []);
     const snapshots = events.filter(
       (event) => event.type === 'request/system' || event.type === 'request/header',
     );
     expect(snapshots).toHaveLength(2);
-    expect(snapshots.every((event) => event.ignorable === true)).toBe(true);
+    expect(snapshots.some((event) => 'ignorable' in event)).toBe(false);
   });
 });
 
@@ -471,22 +479,25 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
     expect(result.lines).toEqual([
       `Error in handler RequestSnapshotHandler, handleLLMStart: Error: ${result.broken.message}`,
     ]);
-    // 第二輪照常送出，那一份快照指回第二次呼叫。
+    // 第二輪照常送出，那一份快照歸給第二次呼叫。
     expect(result.bodies).toHaveLength(1);
   }
 
   it('request/header 寫不進去：這次不送；system 已先記下，下一次只補記 header（initial）', async () => {
     const result = await failThenSucceed('request/header');
     expectNotSent(result);
-    // system 寫在 header 之前，那一顆已經落下、指向沒送出的那次呼叫（PR 內文交 PM 定）。
-    expect(eventsOf(result.first.events, 'request/system')).toHaveLength(1);
+    // system 寫在 header 之前，那一顆已經落下、歸給沒送出的那次呼叫（它後面的 model/start 是失敗那條路補寫的）。
+    const system = eventsOf(result.first.events, 'request/system');
+    expect(system).toHaveLength(1);
     expect(eventsOf(result.first.events, 'request/header')).toHaveLength(0);
+    const first = eventsOf(result.first.events, 'model/start')[0]!;
+    expect(ownerOf(result.first.events, system[0]!.seq)).toBe(first.seq);
 
     const second = eventsOf(result.events, 'model/start')[1]!;
     expect(eventsOf(result.events, 'request/system')).toHaveLength(1);
-    expect(eventsOf(result.events, 'request/header')).toEqual([
-      expect.objectContaining({ reason: 'initial', modelCall: second.seq }),
-    ]);
+    const headers = eventsOf(result.events, 'request/header');
+    expect(headers).toEqual([expect.objectContaining({ reason: 'initial' })]);
+    expect(ownerOf(result.events, headers[0]!.seq)).toBe(second.seq);
   });
 
   it('request/system 寫不進去：這次不送、header 沒試；下一次兩顆都記（initial）', async () => {
@@ -496,9 +507,9 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
 
     const second = eventsOf(result.events, 'model/start')[1]!;
     for (const type of ['request/system', 'request/header'] as const) {
-      expect(eventsOf(result.events, type)).toEqual([
-        expect.objectContaining({ reason: 'initial', modelCall: second.seq }),
-      ]);
+      const snapshots = eventsOf(result.events, type);
+      expect(snapshots).toEqual([expect.objectContaining({ reason: 'initial' })]);
+      expect(ownerOf(result.events, snapshots[0]!.seq)).toBe(second.seq);
     }
   });
 
@@ -647,5 +658,58 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
       printed.mockRestore();
       await close();
     }
+  });
+});
+
+describe('排空完才送（格式 55，#2416）', () => {
+  const quiet = { log: () => {}, error: () => {} };
+
+  it('快照與 model/start 先排空，端點才收到請求', async () => {
+    const { agent, sessions, bodies, close } = await assemble([], '你是測試助手。', {});
+    const flushes: { requests: number; types: string[] }[] = [];
+    sessions.onFlush(async (log) => {
+      flushes.push({ requests: bodies.length, types: log.events.map((event) => event.type) });
+    });
+    try {
+      await runTurn(agent, '一', quiet, sessions.root);
+    } finally {
+      await close();
+    }
+    expect(bodies).toHaveLength(1);
+    const ours = flushes.find((each) => each.types.includes('model/start'));
+    expect(ours, '沒有任何一次排空看得到 model/start').toBeDefined();
+    expect(ours!.requests).toBe(0);
+    expect(ours!.types.slice(-3)).toEqual(['request/system', 'request/header', 'model/start']);
+  });
+
+  it('排空被拒：端點收不到請求，這次呼叫記成 error 收尾', async () => {
+    const { agent, sessions, bodies, close } = await assemble([], '你是測試助手。', {});
+    const broken = new Error('排空被拒');
+    let armed = true;
+    sessions.onFlush(async (log) => {
+      if (armed && log.events.some((event) => event.type === 'model/start')) {
+        armed = false;
+        throw broken;
+      }
+    });
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let thrown: unknown;
+    try {
+      thrown = await runTurn(agent, '一', quiet, sessions.root).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+    expect(armed).toBe(false);
+    expect(bodies).toHaveLength(0);
+    expect(thrown).toBeDefined();
+    const starts = eventsOf(sessions.root.events, 'model/start');
+    expect(starts).toHaveLength(1);
+    expect(eventsOf(sessions.root.events, 'model/end')).toEqual([
+      expect.objectContaining({ outcome: 'error', modelCall: starts[0]!.seq }),
+    ]);
   });
 });

@@ -2,7 +2,7 @@
  * 測試用的 MCP server：一個真的走 stdio 的子行程。
  *
  * **不是 mock。** 這個 plugin 唯一有價值的斷言是「MCP 那條線真的通」——連線、
- * `tools/list`、`tools/call`、關機時子行程真的收掉。把 `MultiServerMCPClient` 換成假物件
+ * `tools/list`、`tools/call`、關機時子行程真的收掉。把 SDK client 換成假物件
  * 之後那四件事一件都驗不到，剩下的只是在驗我們自己寫的那幾行搬運。
  *
  * 由 [`index.test.ts`](./index.test.ts) 以 `node --import tsx <這個檔>` 啟動；不進

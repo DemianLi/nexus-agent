@@ -9,6 +9,7 @@ import {
   summaryImageText,
   textOnlyImageText,
   unavailableImageText,
+  unconvertibleImageText,
 } from './attachment-projection.js';
 import { fileHandleText, fileModelPath, isFileBlock } from './attachment-ref.js';
 
@@ -113,6 +114,19 @@ describe('附件區塊投影', () => {
       '"x.png" (sha256:cccccccc)',
     );
     expect(summaryImageText(IMAGE)).toContain('(sha256:cccccccc, 4x3)');
+  });
+});
+
+describe('做不出送模型那一份時的佔位字（#2071）', () => {
+  it('逐字：圖存著、轉不出能送的格式，請使用者換成 PNG／JPEG 重附，不要聲稱看過', () => {
+    expect(unconvertibleImageText({ ...IMAGE, name: 'x.heic' })).toBe(
+      '[image "x.heic" (sha256:cccccccc) is stored, but could not be converted into a format that can be sent to the model; ask the user to attach it again in a common format (PNG or JPEG) if needed. Do not claim to have seen it.]',
+    );
+  });
+
+  it('沒名字：只留雜湊前八碼；跟儲存裡沒有的那一句不同', () => {
+    expect(unconvertibleImageText(IMAGE)).toMatch(/^\[image \(sha256:cccccccc\) is stored, /u);
+    expect(unconvertibleImageText(IMAGE)).not.toBe(unavailableImageText(IMAGE));
   });
 });
 

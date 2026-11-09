@@ -46,8 +46,8 @@ import type {
   ReadResult,
 } from 'deepagents';
 
-import { SEARCH_FAILED, SEARCH_INVALID_PATTERN } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import { COPY_SOURCE, SEARCH_FAILED, SEARCH_INVALID_PATTERN } from '@nexus/core';
+import type { CopyRequest, CopySource, SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -205,6 +205,19 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     }
     // 基座的 `readRaw` 對不存在的檔是拋 `stat` 的 ENOENT，不是回錯誤結果。
     throw Object.assign(new Error(this.#notFoundMessage(filePath)), { code: 'ENOENT' });
+  }
+
+  /** 複製的來源那一半（`copy_file`，#2289）：沒引用過的檔跟不存在逐字一樣，判法同 {@link read}。 */
+  override async [COPY_SOURCE](
+    sourcePath: string,
+    request: CopyRequest,
+  ): Promise<CopySource | { error: string }> {
+    const visible = this.#visible();
+    const normal = this.#normalize(sourcePath);
+    if (normal === undefined || visible.files.has(normal) || visible.dirs.has(normal)) {
+      return super[COPY_SOURCE](sourcePath, request);
+    }
+    return { error: `Error copying '${request.from}': ENOENT: no such file or directory` };
   }
 
   override async downloadFiles(paths: string[]) {

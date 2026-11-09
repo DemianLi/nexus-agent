@@ -1,6 +1,6 @@
 {
   "name": "@nexus/core",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -29,6 +29,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/sdk": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "js-tiktoken": "^1.0.21",
@@ -48,5 +50,13 @@
     "undici": "^8.12.3",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/tools": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@nexus/tools": {
+      "optional": true
+    }
   }
 }

@@ -7,6 +7,8 @@ import {
   findModel,
   parseModelLine,
   parseSelectionProjection,
+  pickChangesNothing,
+  recordedSelection,
   seatText,
   selectionForModel,
 } from '@/lib/model-selection';
@@ -46,6 +48,33 @@ describe('effectiveSelection', () => {
       modelId: 'beta',
     });
     expect(effectiveSelection(CATALOG, [{ modelId: 'gone' }])).toEqual({ modelId: 'alpha' });
+  });
+});
+
+describe('伺服器記著的選擇與「選了沒換」（#2288）', () => {
+  it('取第一個非空的，型錄上沒有也照取；都沒有才是部署預設', () => {
+    expect(
+      recordedSelection(CATALOG, [undefined, { modelId: 'gone' }, { modelId: 'beta' }]),
+    ).toEqual({ modelId: 'gone' });
+    expect(recordedSelection(CATALOG, [null, undefined])).toEqual({ modelId: 'alpha' });
+  });
+
+  it('記的那顆下架、顯示退到部署預設：選部署預設算有換', () => {
+    expect(pickChangesNothing(CATALOG, { modelId: 'gone' }, { modelId: 'alpha' })).toBe(false);
+  });
+
+  it('同一顆時比實際用的強度：沒帶強度算預設等級，帶了沒宣告的也算預設等級', () => {
+    const beta = { modelId: 'beta' };
+    expect(pickChangesNothing(CATALOG, { modelId: 'alpha' }, { modelId: 'alpha' })).toBe(true);
+    expect(pickChangesNothing(CATALOG, beta, { modelId: 'beta', reasoningEffort: 'low' })).toBe(
+      true,
+    );
+    expect(pickChangesNothing(CATALOG, { modelId: 'beta', reasoningEffort: 'turbo' }, beta)).toBe(
+      true,
+    );
+    expect(pickChangesNothing(CATALOG, beta, { modelId: 'beta', reasoningEffort: 'high' })).toBe(
+      false,
+    );
   });
 });
 

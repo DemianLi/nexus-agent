@@ -8,21 +8,31 @@
 
 import { posix } from 'node:path';
 
-import { ToolMessage } from '@langchain/core/messages';
+import { SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import {
-  createObservationPolicy,
+  createObservationListener,
   createVersionHasher,
   noteReadVersion,
   observationGuidance,
   observationKey,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
+  OBSERVATION_SECTION,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
-import { toolErrorOf } from './tool-events.js';
+import { EventBus } from './events.js';
+import { applySections } from './prompt-sections.js';
+import { TOOL_ERROR_PREFIX, toolErrorOf, toolRefusal } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
+import type { PipelineResult } from './tool-pipeline.js';
+
+/** 正式組裝裡策略住的位置：`tools/execute` 的內層。 */
+function createObservationPolicy(backend: AnyBackendProtocol): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [createObservationListener(backend)] });
+}
 
 /** `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -140,6 +150,26 @@ describe('三個狀態', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/nope.md'), handler);
     await wrap(requestFor(OBSERVED_WRITE_TOOL, '/nope.md'), handler);
     expect(calls).toEqual([OBSERVED_READ_TOOL, OBSERVED_WRITE_TOOL]);
+  });
+});
+
+describe('拒絕交回的結果帶 `blocks` 與 `shape`：外側的 `next()` 照型別讀得到', () => {
+  it('沒觀測過就 edit：外側拿到的拒絕有 `content` 那一格 `text`，模型收到的仍是字串', async () => {
+    const { backend } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const bus = new EventBus();
+    let seen: PipelineResult | undefined;
+    bus.on('tools/execute', async (_exec, next) => (seen = await next()));
+    const wrap = wrapperOf(
+      createToolExecuteMiddleware(bus, { inner: [createObservationListener(backend)] }),
+    );
+    const { handler } = probe();
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(seen).toMatchObject({ kind: 'message', shape: 'text', isError: true });
+    expect(seen?.kind === 'message' && seen.blocks).toEqual([
+      { type: 'text', text: seen?.content },
+    ]);
+    expect(typeof result.content).toBe('string');
+    expect(result.content).toBe(seen?.content);
   });
 });
 
@@ -287,19 +317,10 @@ describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.sect
     expect(observationGuidance(new Set([OBSERVED_READ_TOOL, 'grep']))).toBe('');
   });
 
-  it('wrapModelCall：看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
-    const { backend } = fakeBackend(new Map());
-    const middleware = createObservationPolicy(backend) as unknown as {
-      wrapModelCall: (request: unknown, handler: (next: unknown) => unknown) => unknown;
-    };
-    const run = (tools: readonly { name: string }[]): string => {
-      let system = '';
-      middleware.wrapModelCall(
-        { tools, systemMessage: { concat: (text: string) => (system = `原本的${text}`) } },
-        (next) => next,
-      );
-      return system;
-    };
+  it('那一段看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
+    const run = (tools: readonly { name: string }[]): string =>
+      applySections({ tools, systemMessage: new SystemMessage('原本的') }, [OBSERVATION_SECTION])
+        .systemMessage.text;
     expect(
       run([
         { name: OBSERVED_READ_TOOL },
@@ -308,7 +329,14 @@ describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.sect
       ]),
     ).toBe(`原本的\n\n${WRITE_AND_EDIT}\n\n${EDIT}`);
     // 沒有 write_file／edit_file（例如唯讀模式把它們拿掉）→ 不追加，請求原樣交出去。
-    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('');
+    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('原本的');
+  });
+
+  it('策略本體不碰系統提示：文字只在段裡', () => {
+    const { backend } = fakeBackend(new Map());
+    expect(
+      (createObservationPolicy(backend) as unknown as { wrapModelCall?: unknown }).wrapModelCall,
+    ).toBeUndefined();
   });
 });
 
@@ -639,5 +667,51 @@ describe('backend 回報讀檔版本（#1530）', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
     // 下一次讀沒回報，照舊 readRaw 一次——沒有拿到上一次殘留的版本。
     expect(calls() - before).toBe(1);
+  });
+});
+
+describe('拒絕訊息的位元組', () => {
+  /** 拒絕從 execute 短路造出來；跟直接用 `toolRefusal` 造的那則逐欄位、逐位元組比。 */
+  function sameAsToolRefusal(result: ToolMessage, toolName: string): void {
+    const content = String(result.content);
+    expect(content.startsWith(TOOL_ERROR_PREFIX)).toBe(true);
+    const code = toolErrorOf(result)?.code;
+    expect(code).toBeDefined();
+    const expected = toolRefusal(content.slice(TOOL_ERROR_PREFIX.length), {
+      callId: 'call-1',
+      name: toolName,
+      error: { name: 'FsError', code: code as string },
+    });
+    expect(Object.keys(result)).toEqual(Object.keys(expected));
+    expect(JSON.stringify(result)).toBe(JSON.stringify(expected));
+    expect(JSON.stringify(result.toDict())).toBe(JSON.stringify(expected.toDict()));
+  }
+
+  it('FS_NOT_OBSERVED', async () => {
+    const { backend } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    sameAsToolRefusal(result, OBSERVED_EDIT_TOOL);
+  });
+
+  it('FS_NOT_FOUND', async () => {
+    const { backend } = fakeBackend(new Map());
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/nope.md'), handler);
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/nope.md'), handler)) as ToolMessage;
+    sameAsToolRefusal(result, OBSERVED_EDIT_TOOL);
+  });
+
+  it('FS_STALE_VERSION', async () => {
+    const { backend, set } = fakeBackend(new Map([['/a.md', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
+    set('/a.md', '別人改過');
+    const result = (await wrap(requestFor(OBSERVED_WRITE_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
+    sameAsToolRefusal(result, OBSERVED_WRITE_TOOL);
   });
 });

@@ -19,6 +19,8 @@
  * @module
  */
 
+import { HOST_TOOL_PREFIX } from '@nexus/wire';
+
 import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
 
 /** 工具卡的呈現類別。 */
@@ -64,6 +66,7 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   echo: '回聲',
   // 刪檔不能復原（基座的工具說明寫明），標題不能是一句「工具」；參數只有 `file_path`，摘要退到第一個字串值就是它（#672）。
   delete: '刪除檔案',
+  copy_file: '複製檔案',
   task: '委派子代理',
   subagent: '委派子代理',
   list_agents: '列出子代理',
@@ -92,7 +95,17 @@ export function isKnownTool(name: string): boolean {
   return name in TOOL_VARIANTS || name in TOOL_TITLES;
 }
 
+/** 宿主頁工具（#2374）的標題前面那幾個字，後面接宣告時的名字。 */
+const HOST_TOOL_TITLE_PREFIX = '頁面工具：';
+
+/**
+ * 工具卡的標題。`page__` 開頭的是宿主頁工具，名字是宿主頁執行期宣告的、不進表，標題是 {@link HOST_TOOL_TITLE_PREFIX} 加上宣告時的名字；
+ * 其餘查 {@link TOOL_TITLES}，查不到就用類別的通用標題。
+ */
 export function toolTitle(name: string): string {
+  if (name.startsWith(HOST_TOOL_PREFIX)) {
+    return `${HOST_TOOL_TITLE_PREFIX}${name.slice(HOST_TOOL_PREFIX.length)}`;
+  }
   return TOOL_TITLES[name] ?? VARIANT_TITLE[classifyTool(name)];
 }
 
@@ -137,11 +150,18 @@ function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
 
-/** 收合時那一行的摘要。挑不到欄位就拿第一個字串值，再不行就是參數原文的第一行。 */
+/** 收合時那一行的摘要。`copy_file` 兩個路徑都有時寫成「來源 → 目的」；其餘照類別挑欄位，挑不到就拿第一個字串值，再不行就是參數原文的第一行。 */
 export function toolSummary(name: string, input: string): string {
   const parsed = parseArgs(input);
   if (typeof parsed !== 'object' || parsed === null) return firstLine(input);
   const args = parsed as Record<string, unknown>;
+  if (name === 'copy_file') {
+    const { source_path: from, destination_path: to } = args;
+    // 只挑一個路徑看不出從哪裡複製到哪裡（#2289）；缺一個就退到下面的通用挑法。
+    if (typeof from === 'string' && from !== '' && typeof to === 'string' && to !== '') {
+      return firstLine(`${from} → ${to}`);
+    }
+  }
   for (const key of SUMMARY_KEYS[classifyTool(name)]) {
     const value = args[key];
     if (typeof value === 'string' && value !== '') return firstLine(value);

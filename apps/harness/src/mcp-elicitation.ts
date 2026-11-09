@@ -4,8 +4,8 @@
  *
  * ## 這一層在做什麼
  *
- * `@langchain/mcp-adapters` 2.0.0 在連線開了 `elicitation` 之後，server 反問時把工具呼叫停在一顆 `interrupt()` 上，酬載長這樣
- * （實測，見 `packages/nexus-plugin-mcp` 的 `modern-tools.ts`）：
+ * `@nexus/plugin-mcp` 在連線開了 `elicitation` 之後，server 反問時把工具呼叫停在一顆 `interrupt()` 上（它的 `tool-call.ts`），酬載長這樣
+ * （夾具見 `packages/nexus-plugin-mcp` 的 `modern-tools.ts`）：
  *
  * ```
  * { type: 'mcp_elicitation', server, tool, arguments,
@@ -13,7 +13,7 @@
  * ```
  *
  * 回程要的是 `{ responses: { <key>: { action: 'accept' | 'decline' | 'cancel', content? } } }`，**每一個 key 都要有**，
- * `accept` 的 `content` 由 adapter 照 `requestedSchema` 驗。
+ * `accept` 的 `content` 由 plugin 照 `requestedSchema` 驗。
  *
  * 線上已經有問答卡（`kind: 'question'`，[#231](https://github.com/DemianLi/nexus-agent/issues/231)）與它的 `origin`、
  * `declined` 回覆（wire 的 `QuestionOrigin`、`declineResponse`）。這一支只做翻譯：
@@ -39,7 +39,7 @@ import { QUESTION_INTERRUPT_KIND } from '@nexus/core';
 import type { QuestionInterruptItem } from '@nexus/core';
 import type { QuestionOrigin } from '@nexus/wire';
 
-/** adapter 發的中斷酬載的判別值。 */
+/** plugin 發的中斷酬載的判別值。 */
 export const MCP_ELICITATION_TYPE = 'mcp_elicitation';
 
 /** 一個反問。`form` 要人填欄位；`url` 要人去開網址。 */
@@ -51,7 +51,7 @@ export type ElicitationRequest =
     }
   | { readonly mode: 'url'; readonly message: string; readonly url: string };
 
-/** 驗過形狀的 adapter 酬載。 */
+/** 驗過形狀的 plugin 酬載。 */
 export interface McpElicitation {
   readonly server: string;
   readonly tool: string;
@@ -59,10 +59,10 @@ export interface McpElicitation {
   readonly requests: Readonly<Record<string, ElicitationRequest>>;
 }
 
-/** 回給 adapter 的一個 key 的動作。 */
+/** 回給 plugin 的一個 key 的動作。 */
 export type ElicitationAction = 'accept' | 'decline' | 'cancel';
 
-/** 回給 adapter 的整份回覆。 */
+/** 回給 plugin 的整份回覆。 */
 export interface ElicitationResponses {
   readonly responses: Readonly<
     Record<
@@ -79,7 +79,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * 認出 adapter 的反問酬載。**形狀不對就當作不是**（回 `undefined`），讓它走一般中斷的路——
+ * 認出 plugin 的反問酬載。**形狀不對就當作不是**（回 `undefined`），讓它走一般中斷的路——
  * 認錯的代價是把別的東西當成反問回絕。
  */
 export function parseMcpElicitation(value: unknown): McpElicitation | undefined {
@@ -312,13 +312,13 @@ interface WireAnswer {
 }
 
 /**
- * 人回來的東西 → adapter 要的 `{ responses }`。
+ * 人回來的東西 → plugin 要的 `{ responses }`。
  *
  * - `{ cancelled: true }` → 每個 key 都 `cancel`；`{ declined: true }` → 每個 key 都 `decline`。
  * - `{ answers }` → 每個 `form` 的 key 都 `accept`，欄位值照型別換回去；沒填的非必填欄位不放。`url` 的 key 一律 `decline`。
  *   沒有欄位的確認表單：選了「確認」才 `accept`，否則 `decline`。
  *
- * **不替人做合法性的決定**：數字欄位填了不是數字就把原字串送過去，由 adapter 照 schema 驗並讓工具報錯，而不是在這裡
+ * **不替人做合法性的決定**：數字欄位填了不是數字就把原字串送過去，由 plugin 照 schema 驗並讓工具報錯，而不是在這裡
  * 默默丟掉或改成別的值。
  *
  * @throws 回覆既不是 `cancelled`、`declined` 也不是 `{ answers: [...] }`。

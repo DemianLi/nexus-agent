@@ -22,6 +22,7 @@ import {
   fromLoggedMessage,
   SessionLog,
   SessionRegistry,
+  toBaseMessage,
   toLoggedMessage,
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
@@ -235,10 +236,12 @@ describe('CLI 的 --resume', () => {
     await cli(['--session-log', logs], '/exit\n');
     const [entry] = await readdir(logs);
     const runDir = join(logs, entry!);
+    // `modelCall` 是那顆 `model/start` 的 `seq`：接在第一次執行寫下的事件後面。
+    const modelStartSeq = (await readLog(runDir)).length + 1;
     await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '第一句，沒得到回覆' } },
       { type: 'model/start', data: {} },
-      { type: 'model/end', data: { outcome, modelCall: 1 } },
+      { type: 'model/end', data: { outcome, modelCall: modelStartSeq } },
       reason === undefined
         ? { type: 'turn/failed', data: { message: '供應商掛了' } }
         : { type: 'turn/end', data: { reason } },
@@ -329,8 +332,9 @@ describe('serve 重開之後', () => {
 });
 
 /**
- * **過大的工具結果推回去的是模型當時看到的那則**：日誌記的是全文，基座在模型那一格換成預覽。重算的程式碼抄自
- * 基座（它沒匯出），所以拿真的基座換出來的那則逐字比對——升級基座時字變了，紅在這裡。
+ * **過大的工具結果推回去的是模型當時看到的那則**：日誌記的是全文，組裝點那一格（core 的 `toolResultEvictionWrap`）在模型
+ * 那一格換成預覽。這裡比的是重算出來的與組裝好的 agent 實際換上的那則；兩者與基座逐字相同，由 core 的
+ * `tool-result-eviction.test.ts` 對著真的基座比。
  */
 describe('過大的工具結果', () => {
   async function evicted(body: string): Promise<{ seen: ToolMessage; logged: ToolMessage }> {
@@ -376,13 +380,13 @@ describe('過大的工具結果', () => {
   it.each([
     ['很多行（頭尾預覽）', manyLines.join('\n')],
     ['一整行、結尾有換行（不滿十行那一支）', `${'y'.repeat(90_000)}\n`],
-  ])('%s：重算出來的與基座換上的逐字相同', async (_, body) => {
+  ])('%s：重算出來的與組裝點換上的逐字相同', async (_, body) => {
     const { seen, logged } = await evicted(body);
 
-    // 前提：日誌記的是全文，基座真的換了。
+    // 前提：日誌記的是全文，組裝點真的換了。
     expect(logged.text).toBe(body);
     expect(seen.text).not.toBe(body);
-    expect(toolResultAsSeen(logged).text).toBe(seen.text);
+    expect(toBaseMessage(toolResultAsSeen(toLoggedMessage(logged))).text).toBe(seen.text);
   });
 
   it('灌回去的就是重算過的那則', async () => {
@@ -418,17 +422,45 @@ describe('過大的工具結果', () => {
     const [, , result] = written[0]?.messages as BaseMessage[];
     expect(result?.text).not.toBe(body);
     expect(result?.text).toBe(
-      toolResultAsSeen(new ToolMessage({ content: body, tool_call_id: 'c1', name: 'big' })).text,
+      toBaseMessage(
+        toolResultAsSeen(
+          toLoggedMessage(new ToolMessage({ content: body, tool_call_id: 'c1', name: 'big' })),
+        ),
+      ).text,
     );
   });
 
+  it('換成預覽的那則，內容以外的欄位照留', () => {
+    const logged = toLoggedMessage(
+      new ToolMessage({
+        content: manyLines.join('\n'),
+        tool_call_id: 'c1',
+        name: 'big',
+        id: 'm1',
+        status: 'success',
+        artifact: { kept: true },
+      }),
+    );
+
+    const seen = toBaseMessage(toolResultAsSeen(logged)) as ToolMessage;
+
+    expect(seen.text).not.toBe(manyLines.join('\n'));
+    expect([seen.tool_call_id, seen.name, seen.id, seen.status, seen.artifact]).toEqual([
+      'c1',
+      'big',
+      'm1',
+      'success',
+      { kept: true },
+    ]);
+  });
+
   it('沒過門檻、或是基座不搬的那幾顆：原樣', () => {
-    const small = new ToolMessage({ content: '小', tool_call_id: 'c1', name: 'big' });
-    const excluded = new ToolMessage({
-      content: 'z'.repeat(90_000),
-      tool_call_id: 'c2',
-      name: 'grep',
-    });
+    const small = toLoggedMessage(
+      new ToolMessage({ content: '小', tool_call_id: 'c1', name: 'big' }),
+    );
+    const excluded = toLoggedMessage(
+      new ToolMessage({ content: 'z'.repeat(90_000), tool_call_id: 'c2', name: 'grep' }),
+    );
 
     expect(toolResultAsSeen(small)).toBe(small);
     expect(toolResultAsSeen(excluded)).toBe(excluded);

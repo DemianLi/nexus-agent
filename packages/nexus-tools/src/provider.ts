@@ -20,15 +20,18 @@ import { ContractService } from '@nexus/sdk';
 
 import { toolsToken } from './index.js';
 import type {
+  NexusTool,
   ToolGateListener,
   ToolRegistry,
   ToolRegisterOptions,
   ToolResultListener,
+  ToolThreadSource,
+  ToolThreadSourceOptions,
 } from './index.js';
 
 /** 一筆登記：工具、登記它的那一列（Cordis 的列 id；沒有列就是插件名），與登記時帶的選項（#1458）。 */
 export interface ToolEntry {
-  readonly tool: StructuredToolInterface;
+  readonly tool: NexusTool | StructuredToolInterface;
   readonly source: string;
   /** 登記時帶的選項；沒帶就是 `undefined`（不是空物件）。宿主折進每條 thread 的組裝時一起交出去。 */
   readonly options?: ToolRegisterOptions;
@@ -46,6 +49,14 @@ export interface ToolResultEntry {
   readonly source: string;
 }
 
+/** 一個逐條 thread 的工具來源的登記（#2533）：來源、它宣告要讀的宿主服務，與登記它的那一列。 */
+export interface ToolThreadSourceEntry {
+  readonly threadSource: ToolThreadSource;
+  /** 宣告要讀的宿主服務名，已經過 {@link ToolsProviderOptions.authorizeThreadServices}；沒宣告是空陣列。 */
+  readonly services: readonly string[];
+  readonly source: string;
+}
+
 /** {@link createToolsProvider} 的回傳：交給 Loader 當內建插件的類別，與讀登記內容的那一面。 */
 export interface ToolsProviderHandle {
   /** 掛進 Loader 的 `builtins`（或 `ctx.plugin`）的那個服務類別。每次 {@link createToolsProvider} 的狀態都是新的。 */
@@ -56,6 +67,8 @@ export interface ToolsProviderHandle {
   gates(): readonly ToolGateEntry[];
   /** 目前每一位 `tools/result` 觀察者，依登記順序；快照（#1469）。宿主把登記者是某一列的那幾位折進那一條 thread 的 `registry.events`。 */
   resultListeners(): readonly ToolResultEntry[];
+  /** 目前每一個逐條 thread 的工具來源，依登記順序；快照（#2533）。宿主在組 thread 時叫登記者是那一列的那幾個。 */
+  threadSources(): readonly ToolThreadSourceEntry[];
 }
 
 /** {@link createToolsProvider} 的選項。 */
@@ -65,6 +78,14 @@ export interface ToolsProviderOptions {
    * 定義套件不相依 core，所以由宿主注入；沒給就是什麼都不做。
    */
   readonly concludeTurn?: (toolName: string) => void;
+  /**
+   * `tools.threadSource` 宣告的宿主服務能不能給登記的那一列（#2533）：回不授權的那幾個名字，空陣列是全部授權。宿主據自己的授權表
+   * 判斷；沒給就是一個都不授權，宣告了任何服務的登記都拋。
+   */
+  readonly authorizeThreadServices?: (
+    source: string,
+    services: readonly string[],
+  ) => readonly string[];
 }
 
 /** 造一個提供者。登記處的狀態活在回傳的 handle 裡，不在模組層級。 */
@@ -72,13 +93,14 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
   const items: ToolEntry[] = [];
   const gateItems: ToolGateEntry[] = [];
   const resultItems: ToolResultEntry[] = [];
+  const threadSourceItems: ToolThreadSourceEntry[] = [];
 
   class ToolsRegistryService extends ContractService<ToolRegistry> implements ToolRegistry {
     constructor(ctx: Context) {
       super(ctx, toolsToken);
     }
 
-    register(tool: StructuredToolInterface, options?: ToolRegisterOptions): () => void {
+    register(tool: NexusTool | StructuredToolInterface, options?: ToolRegisterOptions): () => void {
       // `this.ctx` 追蹤到呼叫者（消費者）：登記者那一列的 id 取自它。
       const caller = this.ctx.fiber;
       const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
@@ -98,7 +120,7 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
       }, 'tools.register()');
     }
 
-    list(): readonly StructuredToolInterface[] {
+    list(): readonly (NexusTool | StructuredToolInterface)[] {
       return items.map((item) => item.tool);
     }
 
@@ -131,6 +153,31 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
     concludeTurn(toolName: string): void {
       options.concludeTurn?.(toolName);
     }
+
+    threadSource(
+      threadSource: ToolThreadSource,
+      sourceOptions?: ToolThreadSourceOptions,
+    ): () => void {
+      const caller = this.ctx.fiber;
+      const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
+      const services = [...new Set(sourceOptions?.services ?? [])];
+      if (services.length > 0) {
+        const denied = options.authorizeThreadServices?.(source, services) ?? services;
+        if (denied.length > 0) {
+          throw new Error(
+            `${source} 宣告要讀的宿主服務 ${denied.join('、')} 沒有授權給這顆插件，tools.threadSource() 不收`,
+          );
+        }
+      }
+      return this.ctx.effect(() => {
+        const entry: ToolThreadSourceEntry = { threadSource, services, source };
+        threadSourceItems.push(entry);
+        return () => {
+          const index = threadSourceItems.indexOf(entry);
+          if (index >= 0) threadSourceItems.splice(index, 1);
+        };
+      }, 'tools.threadSource()');
+    }
   }
 
   return {
@@ -138,5 +185,6 @@ export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsPr
     entries: () => [...items],
     gates: () => [...gateItems],
     resultListeners: () => [...resultItems],
+    threadSources: () => [...threadSourceItems],
   };
 }

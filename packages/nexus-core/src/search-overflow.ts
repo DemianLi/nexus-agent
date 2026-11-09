@@ -20,13 +20,17 @@
  * （`truncateIfTooLong`，`dist/langsmith-zm0ILQsV.js:302`）。換不掉工具，也拿不到它手上的值，所以退到 #617 搜尋卡
  * 已經走過的那條路（`tool-result-meta.ts`）：**一對**——
  *
- * 1. {@link createSearchOverflowMiddleware}（`wrapToolCall`）在那三顆工具的呼叫外面開一個槽，記著上限；
+ * 1. {@link createSearchOverflowListeners} 的 execute 那一半在那三顆工具的本體外面開一個槽，記著上限；
  * 2. {@link capSearchResults} 包 backend，在**這次呼叫的第一次** `grep`／`glob`／`ls` 拿到結構化結果時，超過上限就把
  *    完整的放進槽、只把前段交給基座的工具本體；
- * 3. 工具回來之後，middleware 把完整的那份照基座的格式排好存檔，在基座排好的前段後面接上定位。有 `sharedMark` 時，`grep` 的完整清單
+ * 3. 工具回來之後，post 那一半從這次呼叫的交接格取回槽，把完整的那份照基座的格式排好存檔，在基座排好的前段後面接上定位。有 `sharedMark` 時，`grep` 的完整清單
  *    也在這裡判共用區前綴（前綴層只看得到行內那一份），判中了行內與存檔兩份開頭都加。
  *
  * 只掛一半會靜默失效（沒有槽，包裝什麼都不做；沒有包裝，槽永遠是空的），所以兩半都只由 `foldRegistry` 組起來（#698）。
+ *
+ * 兩半之間靠一個交接格傳：post 那一半的監聽者在本體跑完之後才被派發，開不了包住本體的範圍，所以 `foldRegistry` 把
+ * {@link SearchOverflowListeners.scope} 交給 `tools/post-execute` 那一格，包住它的整步、每次呼叫開一格（`AsyncLocalStorage`），execute 那一半寫進去、post 那一半讀出來。
+ * 格子跟著那一次呼叫的非同步脈絡走：並行的呼叫各一格，中斷或中止時跟著丟，呼叫走完就讀不到。
  *
  * ## 其餘偏離
  *
@@ -51,14 +55,12 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { ToolMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
-import type { AgentMiddleware } from './base-types.js';
-import { resolveToolName } from './containment.js';
 import type { SharedGrepMark } from './shared-read-mark.js';
 import type { SpillRef, SpillStore } from './spill-policy.js';
+import { toolNameOfCall } from './tool-call-step.js';
+import type { CoreToolListener } from './tool-pipeline.js';
 
-/** 這一層 middleware 的名字。 */
+/** 搜尋上限的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const SEARCH_OVERFLOW_MIDDLEWARE_NAME = 'nexusSearchOverflow';
 
 /** `grep` 行內最多留幾筆命中，同 dsh 的 `GREP_MAX_MATCHES`。 */
@@ -373,7 +375,7 @@ function decorate(text: string, overflow: Overflow, ref: SpillRef | undefined): 
 }
 
 /** 結果訊息的文字：字串，或全是文字區塊的陣列。其他形狀回 `undefined`。 */
-function plainText(content: ToolMessage['content']): string | undefined {
+function plainText(content: string | readonly unknown[]): string | undefined {
   if (typeof content === 'string') return content;
   const parts: string[] = [];
   for (const block of content) {
@@ -384,81 +386,123 @@ function plainText(content: ToolMessage['content']): string | undefined {
   return parts.join('\n');
 }
 
+/** 一次呼叫的交接格：那三顆工具進 execute 那一半時先清空，超過上限、內層交回非錯誤的訊息時寫進去；post 那一半讀出來並清空。 */
+interface HandoffCell {
+  entry: { readonly slot: SearchSlot; readonly overflow: Overflow } | undefined;
+}
+
+/** execute 那一半對那三顆工具找不到交接格時拋的那一句：兩半沒有照 {@link SearchOverflowListeners.scope} 組起來。 */
+export const SEARCH_OVERFLOW_SCOPE_MISSING =
+  'search-overflow: execute 那一半不在 scope 開的範圍裡跑，沒跑工具本體就拋錯；scope 要包住 tools/post-execute 那一顆';
+
 /**
- * 搜尋結果的筆數上限。**每個 agent（root 與子代理）掛同一份實例**：沒有 closure 狀態，槽逐次呼叫開。
+ * 搜尋上限的兩半：`tools/execute` 內層開槽，`tools/post-execute` 外層第二位存檔、排版，加上包住兩者的範圍。
+ */
+export interface SearchOverflowListeners {
+  /** 那三顆工具在槽裡往內交；超過上限、內層交回非錯誤的訊息時寫進這次呼叫的交接格。找不到交接格就拋 {@link SEARCH_OVERFLOW_SCOPE_MISSING}，不往內交、本體不跑。 */
+  readonly execute: CoreToolListener<'tools/execute'>;
+  /**
+   * 先取出並清空這次呼叫的交接格，再往內交；取出的有東西、結果是非錯誤的訊息、行內是純文字時，存完整清單並在行內前段的結尾講明；其餘交回內層的決定。
+   */
+  readonly post: CoreToolListener<'tools/post-execute'>;
+  /**
+   * 開這次呼叫的交接格，在裡面跑 `run`。交給 `createToolPostExecuteMiddleware`，包住那一格的整步（它的內層含 execute）。
+   */
+  scope<T>(run: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * 搜尋結果的筆數上限。**每個 agent（root 與子代理）掛同一份**：交接格每次呼叫開一格，槽逐次呼叫開。
  * **只給 `foldRegistry` 用**，見檔頭「載體」。
  *
  * @param options - 上限與存檔服務。
- * @returns 一顆 `wrapToolCall` middleware。
+ * @returns 兩半與包住它們的範圍。
  */
-export function createSearchOverflowMiddleware(options: SearchOverflowOptions): AgentMiddleware {
+export function createSearchOverflowListeners(
+  options: SearchOverflowOptions,
+): SearchOverflowListeners {
   const limitOf = (tool: string): number | undefined =>
     tool === 'grep'
       ? options.limits.grepMaxMatches
       : tool === 'glob' || tool === 'ls'
         ? options.limits.globMaxResults
         : undefined;
-  return createMiddleware({
-    name: SEARCH_OVERFLOW_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const toolName = resolveToolName(request);
-      const limit = limitOf(toolName);
-      if (limit === undefined) return handler(request);
-      const args = request.toolCall.args;
-      const slot: SearchSlot = {
-        tool: toolName as SearchTool,
-        args: typeof args === 'object' && args !== null ? args : {},
-        limit,
-        maxLineBytes: toolName === 'grep' ? options.limits.grepMaxLineBytes : undefined,
-        taken: false,
-      };
-      const result = await currentSlot.run(slot, () => handler(request));
-      const overflow = slot.overflow;
-      if (overflow === undefined) return result;
-      if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-      const inline = plainText(result.content);
-      if (inline === undefined) return result;
-      const full = fullText(overflow);
-      // 前綴層只看得到行內那一份，完整清單在這裡判；判中了兩份都標，行內已經標過的不重複。
-      const shared =
-        toolName === 'grep' && options.sharedMark?.isMarked(slot.args, full) === true
-          ? options.sharedMark
-          : undefined;
-      const text = shared?.mark(inline) ?? inline;
-      let ref: SpillRef | undefined;
-      if (options.store === undefined) {
-        options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
-      } else {
-        try {
-          // 來源與建議檔名照 dsh `tool-fs-search/src/search-core.ts:399-404`、`grep.ts:354`、`glob.ts:361`。
-          ref = await options.store.saveText({
-            source: {
-              kind: 'tool',
-              toolName,
-              callId: request.toolCall.id ?? result.tool_call_id,
-              label: 'result',
-            },
-            suggestedName: `${toolName}-results.txt`,
-            content: shared?.mark(full) ?? full,
-          });
-        } catch (error: unknown) {
-          // 照 dsh：存不下不讓搜尋失敗，也不藏起行內那份，結尾講明沒存到。
-          options.warn?.(
-            `search-overflow: ${toolName} 的完整結果存不下（${(error as Error).message}），只留前段`,
-          );
-        }
+  const handoff = new AsyncLocalStorage<HandoffCell>();
+
+  const execute: CoreToolListener<'tools/execute'> = async (_exec, next, call) => {
+    const toolName = toolNameOfCall(call);
+    const limit = limitOf(toolName);
+    if (limit === undefined) return next();
+    const cell = handoff.getStore();
+    if (cell === undefined) throw new Error(SEARCH_OVERFLOW_SCOPE_MISSING);
+    cell.entry = undefined;
+    const args = call.args;
+    const slot: SearchSlot = {
+      tool: toolName as SearchTool,
+      args:
+        typeof args === 'object' && args !== null
+          ? (args as Readonly<Record<string, unknown>>)
+          : {},
+      limit,
+      maxLineBytes: toolName === 'grep' ? options.limits.grepMaxLineBytes : undefined,
+      taken: false,
+    };
+    const result = await currentSlot.run(slot, () => next());
+    const overflow = slot.overflow;
+    if (overflow !== undefined && result.kind === 'message' && !result.isError) {
+      cell.entry = { slot, overflow };
+    }
+    return result;
+  };
+
+  const post: CoreToolListener<'tools/post-execute'> = async (exec, result, next, call) => {
+    const cell = handoff.getStore();
+    const entry = cell?.entry;
+    if (cell !== undefined) cell.entry = undefined;
+    const decision = await next();
+    const toolName = toolNameOfCall(call);
+    if (entry === undefined) return decision;
+    if (result.kind !== 'message' || result.isError) return decision;
+    const inline =
+      decision.kind !== 'replace'
+        ? plainText(result.blocks)
+        : decision.blocks === undefined
+          ? decision.content
+          : plainText(decision.blocks);
+    if (inline === undefined) return decision;
+    const { slot, overflow } = entry;
+    const full = fullText(overflow);
+    // 前綴層只看得到行內那一份，完整清單在這裡判；判中了兩份都標，行內已經標過的不重複。
+    const shared =
+      toolName === 'grep' && options.sharedMark?.isMarked(slot.args, full) === true
+        ? options.sharedMark
+        : undefined;
+    const text = shared?.mark(inline) ?? inline;
+    let ref: SpillRef | undefined;
+    if (options.store === undefined) {
+      options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
+    } else {
+      try {
+        // 來源與建議檔名照 dsh `tool-fs-search/src/search-core.ts:399-404`、`grep.ts:354`、`glob.ts:361`。
+        ref = await options.store.saveText({
+          source: {
+            kind: 'tool',
+            toolName,
+            callId: call.callId ?? exec.callId,
+            label: 'result',
+          },
+          suggestedName: `${toolName}-results.txt`,
+          content: shared?.mark(full) ?? full,
+        });
+      } catch (error: unknown) {
+        // 照 dsh：存不下不讓搜尋失敗，也不藏起行內那份，結尾講明沒存到。
+        options.warn?.(
+          `search-overflow: ${toolName} 的完整結果存不下（${(error as Error).message}），只留前段`,
+        );
       }
-      // 只換內容，其餘每一格原樣帶過去。
-      return new ToolMessage({
-        content: decorate(text, overflow, ref),
-        tool_call_id: result.tool_call_id,
-        name: result.name ?? toolName,
-        id: result.id,
-        status: result.status,
-        artifact: result.artifact,
-        additional_kwargs: result.additional_kwargs,
-        response_metadata: result.response_metadata,
-      });
-    },
-  }) as AgentMiddleware;
+    }
+    return { kind: 'replace', content: decorate(text, overflow, ref) };
+  };
+
+  return { execute, post, scope: (run) => handoff.run({ entry: undefined }, run) };
 }

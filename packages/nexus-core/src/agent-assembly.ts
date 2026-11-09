@@ -17,11 +17,12 @@
  *
  * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
  * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**。
- * 唯一的例外是 skills：基座那顆對空清單也會接一大段說明、又不快取空結果，包了一層
- * （`./skills-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
+ * skills 與 memory 各包了一層：掃描與讀檔仍是基座的 `beforeAgent`，接進系統訊息的文字由 nexus 渲染
+ * （`./skills-middleware.ts`、`./memory-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)、
+ * [#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
  *
  * **`read_file` 的描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：預設行數與行號格式經 `createFilesystemMiddleware` 的
- * `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有 read-continuation（`./fs-tool-descriptions.ts`）。這是跟
+ * `customToolDescriptions` 換掉，換成什麼由 fold 算好放在 {@link FoldedAgentParams.fileToolDescriptions}（`./fs-tool-descriptions.ts`）。這是跟
  * `createDeepAgent` 的**明文差異**，`assembly-parity.test.ts` 列出差在哪。「先讀後改」不在描述裡，照 dsh 在系統提示詞（`./observation.ts`）。
  *
  * ## 照抄基座的組裝順序，不是照猜
@@ -54,7 +55,6 @@
 
 import {
   createFilesystemMiddleware,
-  createMemoryMiddleware,
   createSubAgentMiddleware,
   createSummarizationMiddleware,
 } from 'deepagents';
@@ -62,22 +62,49 @@ import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
+import type { EventDispatcher } from './events.js';
 import type { FoldedAgentParams } from './fold.js';
-import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
   SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
 } from './model-selection.js';
+import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
+import { createMemoryMiddleware } from './memory-middleware.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
+import { toolResultEvictionStep } from './tool-result-eviction.js';
+import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
+import { filesystemToolListStep } from './filesystem-tool-admission.js';
+import { taskToolOverride } from './task-tool-definition.js';
+import { wrapModelCallWith, withToolListStep } from './tool-list-step.js';
+import type { ToolListRequest, ToolListStep } from './tool-list-step.js';
+import { overriddenTools } from './tool-resolution.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
 export interface AssembleAgentParams extends FoldedAgentParams {
   /** 系統提示詞。**原樣**送給模型，沒有基座 base prompt 墊在後面（基座預設本來就不注入）。 */
   systemPrompt?: string;
+  /**
+   * 不掛子代理中介層：模型看不到 `task`，也沒有它帶進系統提示的那一段（嵌入版設定檔，[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。
+   * 省略即照常掛。`subagents` 照收，每一項照 `assertSupportedSubagent` 驗，但不要求有 `general-purpose`；沒有人用它。
+   */
+  withoutSubagents?: boolean;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：`langgraph`（省略時）是 `createAgent` 編的圖，`native` 是
+   * `native-loop/agent.ts`，同一串 middleware 照 `createAgent` 的節點順序跑。
+   */
+  loop?: AgentLoopKind;
+  /** `native` 派發四個 agent 事件用；`langgraph` 不讀。 */
+  events?: EventDispatcher;
 }
+
+/** 誰跑 agent loop 的兩個值；`--agent-loop` 的驗證與錯誤訊息照這份列。 */
+export const AGENT_LOOP_KINDS = ['langgraph', 'native'] as const;
+
+/** 誰跑 agent loop。 */
+export type AgentLoopKind = (typeof AGENT_LOOP_KINDS)[number];
 
 /**
  * 排在**預設疊前面**的那幾顆的名字（#1369）：換模型（root 一顆、子代理跟隨一顆）與圖片省略。
@@ -153,16 +180,16 @@ export function mergeMiddlewareStack(
  * 傳了 `tools`（即使是全集）建出的工具跟不傳相同，`assembly-parity` 與模型看到的工具清單都看不出差別，但基座會改走白名單那條路，
  * 之後基座新增檔案工具，全開的部署要等我們更新名單才拿得到。
  *
- * @param input - 後端、權限，以及這一組實際會掛的 middleware（決定 `customToolDescriptions`）和 `tool-fs` 設定（決定 `tools` 白名單與描述裡的行數）。
+ * @param input - 後端、權限、fold 算好的檔案工具描述（`customToolDescriptions`），和 `tool-fs` 設定（決定 `tools` 白名單）。
  * @returns 選項；全開且沒有描述要換時只有 `backend`（與 `permissions`）。
  */
 export function filesystemMiddlewareOptions(input: {
   readonly backend: NonNullable<FoldedAgentParams['backend']>;
   readonly permissions?: FoldedAgentParams['permissions'];
-  readonly middleware: readonly { readonly name: string }[];
+  readonly descriptions?: FoldedAgentParams['fileToolDescriptions'];
   readonly fileTools?: FoldedAgentParams['fileTools'];
 }): NonNullable<Parameters<typeof createFilesystemMiddleware>[0]> {
-  const descriptions = filesystemToolDescriptions(input.middleware, input.fileTools);
+  const descriptions = input.descriptions;
   const whitelist = filesystemToolWhitelist(input.fileTools);
   return {
     backend: input.backend,
@@ -173,18 +200,89 @@ export function filesystemMiddlewareOptions(input: {
 }
 
 /**
+ * 基座的檔案系統那一顆：`wrapToolCall` 換成 core 的 {@link toolResultEvictionStep} 並登記那一步（{@link withToolCallStep}），
+ * `wrapModelCall` 先套 core 的 {@link filesystemToolListStep} 再交給基座原本的那一支，並登記這一步（{@link withToolListStep}）；
+ * 名字、工具、`beforeAgent` 與洋蔥裡的位置照基座。native 的 root 把這顆的 `beforeAgent` 換成空函式（`native-loop/native-noop-cells.ts`）。
+ *
+ * @param options - {@link filesystemMiddlewareOptions} 給的選項。
+ * @returns 掛進疊裡的那一顆。
+ */
+function filesystemMiddleware(
+  options: NonNullable<Parameters<typeof createFilesystemMiddleware>[0]>,
+): ReturnType<typeof createFilesystemMiddleware> {
+  const base = createFilesystemMiddleware(options);
+  const inner = base.wrapModelCall;
+  if (inner === undefined)
+    throw new Error('基座的 FilesystemMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
+  const step = filesystemToolListStep(options.backend);
+  const eviction = toolResultEvictionStep(options.backend);
+  return withToolCallStep(
+    withToolListStep(
+      {
+        ...base,
+        wrapModelCall: wrapModelCallWith(step, inner) as unknown as typeof inner,
+        wrapToolCall: wrapToolCallWith(eviction) as unknown as typeof base.wrapToolCall,
+      },
+      step,
+      inner,
+    ),
+    eviction,
+  );
+}
+
+/**
+ * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
+ * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`）與洋蔥裡的位置照基座。
+ *
+ * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
+ *
+ * @param options - 交給基座的其餘選項。
+ * @returns 掛進疊裡的那一顆。
+ */
+function subAgentMiddleware(
+  options: Omit<
+    Parameters<typeof createSubAgentMiddleware>[0],
+    'taskDescription' | 'generalPurposeAgent'
+  >,
+): ReturnType<typeof createSubAgentMiddleware> {
+  const base = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const inner = base.wrapModelCall;
+  if (inner === undefined)
+    throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
+  const override = taskToolOverride(options.subagents ?? []);
+  const step: ToolListStep = (request) => {
+    const tools = overriddenTools(request.tools, override);
+    return tools === request.tools ? undefined : tools;
+  };
+  return withToolListStep(
+    {
+      ...base,
+      wrapModelCall: wrapModelCallWith(
+        step,
+        inner as (r: ToolListRequest, h: unknown) => unknown,
+      ) as unknown as typeof inner,
+    },
+    step,
+    inner,
+  );
+}
+
+/**
  * 一個宣告式子代理的預設疊：檔案工具、摘要、補懸空呼叫，規格帶 `skills` 時再加 skills。
  *
- * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**——兩條路
- * 以前各自維護一份，靠漂移絆索測試維持一致。
+ * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**；`subagent-graph.test.ts` 的漂移絆索
+ * 守兩條路模型看到的一樣。
  *
  * @param spec - 子代理規格。
- * @param context - 後端與全域權限。
+ * @param context - 後端、全域權限、`tool-fs` 設定（白名單），與 fold 算好的檔案工具描述。
  * @returns 預設疊；呼叫端再用 {@link mergeMiddlewareStack} 併上規格自己帶的。
  */
 export function subagentDefaultMiddleware(
-  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills' | 'middleware'>,
-  context: Pick<FoldedAgentParams, 'backend' | 'permissions' | 'fileTools'>,
+  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills'>,
+  context: Pick<
+    FoldedAgentParams,
+    'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
+  >,
 ): AgentMiddleware[] {
   const backend = context.backend;
   if (backend === undefined) throw new Error('子代理沒有 backend，檔案系統 middleware 建不起來');
@@ -193,11 +291,13 @@ export function subagentDefaultMiddleware(
   const permissions = spec.permissions ?? context.permissions;
   const skills = spec.skills ?? [];
   return [
-    createFilesystemMiddleware(
+    filesystemMiddleware(
       filesystemMiddlewareOptions({
         backend,
         permissions,
-        middleware: spec.middleware ?? [],
+        ...(context.fileToolDescriptions !== undefined && {
+          descriptions: context.fileToolDescriptions,
+        }),
         fileTools: context.fileTools,
       }),
     ),
@@ -249,7 +349,10 @@ export function assembleAgent(params: AssembleAgentParams) {
   for (const spec of params.subagents) assertSupportedSubagent(spec);
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
   // 不照搬基座那段補件（它會讓 profile 的 `generalPurposeSubagent` 設定有作用，我們不要）。
-  if (!params.subagents.some((spec) => spec.name === 'general-purpose')) {
+  if (
+    params.withoutSubagents !== true &&
+    !params.subagents.some((spec) => spec.name === 'general-purpose')
+  ) {
     throw new Error(
       'fold 的產物沒有 general-purpose 子代理：fold 一律自己補它，缺了表示 fold 壞了',
     );
@@ -266,6 +369,9 @@ export function assembleAgent(params: AssembleAgentParams) {
               backend,
               permissions,
               ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
+              ...(params.fileToolDescriptions !== undefined && {
+                fileToolDescriptions: params.fileToolDescriptions,
+              }),
             }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
@@ -277,36 +383,51 @@ export function assembleAgent(params: AssembleAgentParams) {
     ...(skills.length > 0
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
-    createFilesystemMiddleware(
+    filesystemMiddleware(
       filesystemMiddlewareOptions({
         backend,
         permissions,
-        middleware: params.middleware,
+        ...(params.fileToolDescriptions !== undefined && {
+          descriptions: params.fileToolDescriptions,
+        }),
         fileTools: params.fileTools,
       }),
     ),
-    createSubAgentMiddleware({
-      defaultModel: model as never,
-      defaultTools: tools,
-      subagents: inlineSubagents,
-      generalPurposeAgent: false,
-      parentSystemPrompt: systemPrompt,
-    }),
+    ...(params.withoutSubagents === true
+      ? []
+      : [
+          subAgentMiddleware({
+            defaultModel: model as never,
+            defaultTools: tools,
+            subagents: inlineSubagents,
+            parentSystemPrompt: systemPrompt,
+          }),
+        ]),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
   ] as unknown as AgentMiddleware[];
   const tail = [
-    ...(memory.length > 0
-      ? [createMemoryMiddleware({ backend, sources: [...memory], addCacheControl: false })]
-      : []),
+    ...(memory.length > 0 ? [createMemoryMiddleware({ backend, sources: [...memory] })] : []),
   ] as unknown as AgentMiddleware[];
 
-  return createAgent({
+  const middleware = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
+  const agent = createAgent({
     model: model as never,
     ...(systemPrompt !== '' && { systemPrompt }),
     tools: tools as never,
-    middleware: mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail),
+    middleware,
     checkpointer,
     store,
   });
+  if (params.loop !== 'native') return agent;
+  // 呼叫端拿到的型別仍是 `createAgent` 推導出來的那一個：harness 只叫兩者都有的那幾個成員（見 `NativeAgent` 的類別說明），
+  // TODO(#2363) 拿掉 LangChain 時換成自己的介面。編好的圖不用，只為了型別與參數檢查留著。
+  return createNativeAgent({
+    model,
+    systemPrompt,
+    tools: tools ?? [],
+    middleware,
+    ...(params.events !== undefined && { events: params.events }),
+    ...(store !== undefined && { store }),
+  }) as unknown as typeof agent;
 }

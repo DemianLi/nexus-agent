@@ -103,6 +103,27 @@ const CHECKPOINT_NS_SEPARATOR = '|';
  */
 export const BACKGROUND_SESSION_CONFIG_KEY = 'nexus_background_session';
 
+/**
+ * 宿主交給 `@nexus/tools` 的 `NexusTool` 的那一份 `ToolExec`（#2351）：身分已經算好，直接讀。
+ * 認法是形狀，因為 core 不相依 `@nexus/tools`：有 `callId`、`threadId`、`agent` 三格，沒有 `configurable`。`agent` 形狀不對就當認不出來，不退回 root。
+ */
+function execIdentity(
+  config: unknown,
+): { readonly threadId: unknown; readonly agent: SessionAddress | undefined } | undefined {
+  if (typeof config !== 'object' || config === null || Object.hasOwn(config, 'configurable')) {
+    return undefined;
+  }
+  if (!['callId', 'threadId', 'agent'].every((key) => Object.hasOwn(config, key))) return undefined;
+  const { threadId, agent } = config as { threadId: unknown; agent: unknown };
+  if (typeof agent !== 'object' || agent === null) return { threadId, agent: undefined };
+  const { kind, runId } = agent as { kind?: unknown; runId?: unknown };
+  if (kind === 'root') return { threadId, agent: { kind: 'root' } };
+  if (kind === 'subagent' && typeof runId === 'string' && runId.length > 0) {
+    return { threadId, agent: { kind: 'subagent', runId } };
+  }
+  return { threadId, agent: undefined };
+}
+
 /** 從一份 `configurable` 裡把命名空間挖出來，形狀不對就當沒有。 */
 function checkpointNamespace(config: unknown): string | undefined {
   if (typeof config !== 'object' || config === null) return undefined;
@@ -143,7 +164,7 @@ function backgroundSessionId(config: unknown): string | null | undefined {
  * 給「背景子代理不走父圖那條路」的消費者問：載體之類是父圖的 `task` 取走的，背景位址沒有人取，記了只是漏
  * （[#858](https://github.com/DemianLi/nexus-agent/issues/858)）。
  *
- * @param config - 同 {@link toolCallSessionAddress}。
+ * @param config - 一份帶 `configurable` 的呼叫設定（工具的第二個參數，或 `{ configurable: runtime.configurable }`）；`ToolExec` 不收。
  */
 export function isBackgroundCall(config: unknown): boolean {
   return backgroundSessionId(config) !== undefined;
@@ -152,13 +173,15 @@ export function isBackgroundCall(config: unknown): boolean {
 /**
  * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
  *
- * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西。工具那條路傳的是
+ * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西，或 `NexusTool` 收到的 `ToolExec`。工具那條路傳的是
  *   handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）——宣告不出第二個參數的
- *   工具永遠拿不到身分，那不是這裡的 bug，是那顆工具沒有要。middleware 那條路傳的是
+ *   工具拿不到身分。middleware 那條路傳的是
  *   `{ configurable: request.runtime.configurable }`。
- * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡；背景身分鍵放壞了）。
+ * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡；背景身分鍵放壞了；`ToolExec` 的 `agent` 是 `undefined` 或形狀不對）。
  */
 export function toolCallSessionAddress(config: unknown): SessionAddress | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) return exec.agent;
   const background = backgroundSessionId(config);
   // 鍵在就以它為準，壞掉的鍵也是：退回 `checkpoint_ns` 會把壞掉的背景呼叫悄悄認成 root。
   if (background !== undefined) {
@@ -174,7 +197,7 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
 
 /**
  * 這次呼叫在哪一條 LangGraph thread 裡（`configurable.thread_id`）。**身分隨呼叫明確傳進來**，不靠環境式的「目前 thread」
- * （dsh 的 `exec.agent` 對應；[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3）。
+ * （[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3）。
  *
  * `apps/harness/src/thread-id-reaches-handlers.test.ts` 實測過三種呼叫都拿得到：
  *
@@ -182,10 +205,16 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
  * - 同步子代理（`task`，在父圖裡跑）：**沿用父 thread 的 id**，子代理是誰靠 {@link toolCallSessionAddress} 的 `checkpoint_ns`；
  * - 背景子代理：它自己的日誌 id（`<root>/<runId>`），另帶 {@link BACKGROUND_SESSION_CONFIG_KEY}。
  *
- * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數，或 `{ configurable: request.runtime.configurable }`。
+ * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數、`ToolExec`，或 `{ configurable: request.runtime.configurable }`。
  * @returns 非空字串的 `thread_id`；沒有（不在圖裡、手搭的測試呼叫）是 `undefined`。
  */
 export function callThreadId(config: unknown): string | undefined {
+  const exec = execIdentity(config);
+  if (exec !== undefined) {
+    return typeof exec.threadId === 'string' && exec.threadId.length > 0
+      ? exec.threadId
+      : undefined;
+  }
   if (typeof config !== 'object' || config === null) return undefined;
   const configurable = (config as { configurable?: unknown }).configurable;
   if (typeof configurable !== 'object' || configurable === null) return undefined;
@@ -201,7 +230,7 @@ export function callThreadId(config: unknown): string | undefined {
  * {@link toolCallSessionAddress} 算出的 `runId`）拿到的是同一個值，兩邊不必互相通知就對得上。
  * 解析照規矩只在這個檔裡。
  *
- * @param config - 同 {@link toolCallSessionAddress}。
+ * @param config - 一份帶 `configurable` 的呼叫設定（工具的第二個參數，或 `{ configurable: runtime.configurable }`）；`ToolExec` 不收。
  * @returns 那個 `runId`；這次呼叫不在圖裡時是 `undefined`。
  */
 export function spawnedSubagentRunId(config: unknown): string | undefined {

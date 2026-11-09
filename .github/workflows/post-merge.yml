@@ -24,16 +24,114 @@ jobs:
     with:
       full: true
 
-  # needs.full.result 是被呼叫那一輪所有 job 的彙總（gate 也在其中）；這裡只把結論對到 commit 與 PR。
+  # native agent loop 四片要讀的耗時（#2498），作法同 ci.yml plan 的 durations-*：只查鍵、不下載，四片拿同一組鍵去取，切法才一致。
+  # 跟 test-harness 分開存：同一批檔在 native agent loop 下的耗時不一樣。都沒有時四片退回 vitest 的雜湊切法。
+  native-durations:
+    name: native agent loop 的耗時
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
+      key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
+      key_3: ${{ steps.durations-3.outputs.cache-matched-key }}
+      key_4: ${{ steps.durations-4.outputs.cache-matched-key }}
+    steps:
+      - uses: actions/cache/restore@v6
+        id: durations-1
+        with:
+          path: .native-durations/results-1.json
+          key: native-durations-1-${{ github.sha }}
+          restore-keys: native-durations-1-
+          lookup-only: true
+      - uses: actions/cache/restore@v6
+        id: durations-2
+        with:
+          path: .native-durations/results-2.json
+          key: native-durations-2-${{ github.sha }}
+          restore-keys: native-durations-2-
+          lookup-only: true
+      - uses: actions/cache/restore@v6
+        id: durations-3
+        with:
+          path: .native-durations/results-3.json
+          key: native-durations-3-${{ github.sha }}
+          restore-keys: native-durations-3-
+          lookup-only: true
+      - uses: actions/cache/restore@v6
+        id: durations-4
+        with:
+          path: .native-durations/results-4.json
+          key: native-durations-4-${{ github.sha }}
+          restore-keys: native-durations-4-
+          lookup-only: true
+
+  # harness 全套在 native agent loop 下再跑一輪（#2356）：登記過的已知差異照登記跑（`apps/harness/native-loop.runner.ts`），其餘要跟
+  # LangGraph 一樣綠。只在這裡跑，不進 gate；紅了跟完整一輪一樣處理。切四片照耗時分，同 ci.yml 的 test-harness。
+  native-loop:
+    name: native agent loop (${{ matrix.shard }}/4)
+    needs: native-durations
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v6
+        if: needs.native-durations.outputs.key_1 != ''
+        with:
+          path: .native-durations/results-1.json
+          key: ${{ needs.native-durations.outputs.key_1 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.native-durations.outputs.key_2 != ''
+        with:
+          path: .native-durations/results-2.json
+          key: ${{ needs.native-durations.outputs.key_2 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.native-durations.outputs.key_3 != ''
+        with:
+          path: .native-durations/results-3.json
+          key: ${{ needs.native-durations.outputs.key_3 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.native-durations.outputs.key_4 != ''
+        with:
+          path: .native-durations/results-4.json
+          key: ${{ needs.native-durations.outputs.key_4 }}
+          fail-on-cache-miss: true
+      - name: Test
+        env:
+          NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.native-durations
+        run: pnpm --filter @nexus/harness exec vitest run --config vitest.native.config.ts --shard="${{ matrix.shard }}/4"
+      # 同 ci.yml 的 test-harness：vitest 把這一片每個檔的耗時寫進結果快取，存成這一片自己那一份。測試紅了也存。
+      - name: 收這一片的耗時
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p .native-durations
+          cp apps/harness/node_modules/.vite/vitest/*/results.json ".native-durations/results-${{ matrix.shard }}.json"
+      - name: 存這一片的耗時
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v6
+        with:
+          path: .native-durations/results-${{ matrix.shard }}.json
+          key: native-durations-${{ matrix.shard }}-${{ github.sha }}
+
+  # needs.full.result 是被呼叫那一輪所有 job 的彙總（gate 也在其中），needs.native-loop.result 是四片 native 的彙總；兩邊都
+  # success 才算綠。這裡只把結論對到 commit 與 PR。
   report:
     name: 結果
-    needs: full
+    needs: [full, native-loop]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: 寫出 commit 與 PR
         env:
           RESULT: ${{ needs.full.result }}
+          NATIVE_RESULT: ${{ needs.native-loop.result }}
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
@@ -54,12 +152,12 @@ jobs:
             pr_line="標題裡沒有 PR 號（$REF_NAME）"
           fi
           {
-            echo "### 合併後完整一輪：$RESULT"
+            echo "### 合併後完整一輪：$RESULT，native agent loop：$NATIVE_RESULT"
             echo ""
             echo "- commit：[\`${SHA:0:8}\`]($COMMIT_URL) ${title:-（手動觸發，沒有 commit 訊息）}"
             echo "- PR：$pr_line"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$RESULT" != "success" ]; then
-            echo "::error::完整一輪是 '$RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
+          if [ "$RESULT" != "success" ] || [ "$NATIVE_RESULT" != "success" ]; then
+            echo "::error::完整一輪是 '$RESULT'、native agent loop 是 '$NATIVE_RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
             exit 1
           fi

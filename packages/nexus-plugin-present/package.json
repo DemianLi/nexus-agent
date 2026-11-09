@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-present",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -27,6 +27,7 @@
     "@nexus/fs": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",

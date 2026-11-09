@@ -9,7 +9,7 @@
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 的 `runApprovalGate`；`src/index.ts` 不行。
  */
 
-import type { StructuredTool } from '@langchain/core/tools';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { runApprovalGate } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
@@ -18,12 +18,17 @@ import type { FsLookup, FsService } from '@nexus/fs';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkConformance, ContractService, defineToken, FIBER_STATE } from '@nexus/sdk';
 import type { ToolRegistry } from '@nexus/tools';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { AnyBackendProtocol, FileData, WriteResult } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import * as submitRecord from './index.js';
-import { SUBMIT_RECORD_NO_BACKEND_MESSAGE, SUBMIT_RECORD_TOOL_NAME } from './index.js';
+import {
+  SUBMIT_RECORD_NO_BACKEND_MESSAGE,
+  SUBMIT_RECORD_TOOL_NAME,
+  submitRecordStateUpdateMessage,
+} from './index.js';
 
 const opened: Context[] = [];
 afterEach(async () => {
@@ -55,7 +60,7 @@ function alwaysOk(handle: FsService): (config: unknown) => FsLookup {
 async function mount(lookup: (config: unknown) => FsLookup): Promise<{
   root: Context;
   tools: ReturnType<typeof createToolsProvider>;
-  tool: StructuredTool;
+  tool: StructuredToolInterface;
 }> {
   const tools = createToolsProvider();
   const root = new Context();
@@ -74,13 +79,13 @@ async function mount(lookup: (config: unknown) => FsLookup): Promise<{
   await root.loader.await();
   const entry = tools.entries().find((item) => item.tool.name === SUBMIT_RECORD_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return { root, tools, tool: entry.tool as StructuredTool };
+  return { root, tools, tool: langChainToolOf(entry.tool) };
 }
 
 /**
  * 一個記在物件裡的假 backend。
  *
- * `checkpoint` 開著時它學 `StateBackend`：`write` 回一份 `filesUpdate`，寫入要靠那份
+ * `checkpoint` 開著時它學帶 runtime 的舊式 `StateBackend`：`write` 回一份 `filesUpdate`，寫入要靠那份
  * state update 才算數。關著時學 `FilesystemBackend`：已經落盤了，`filesUpdate` 是 null。
  */
 function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
@@ -106,13 +111,13 @@ function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
   return { files, backend: backend as unknown as AnyBackendProtocol };
 }
 
-async function toolOf(backend: AnyBackendProtocol): Promise<StructuredTool> {
+async function toolOf(backend: AnyBackendProtocol): Promise<StructuredToolInterface> {
   return (await mount(alwaysOk(fsHandle(backend)))).tool;
 }
 
-/** 工具實際回的東西。`Command` 那一支不是 ToolMessage，所以這裡不預設形狀。 */
-async function call(tool: StructuredTool, args: unknown): Promise<unknown> {
-  return tool.invoke(args as never);
+/** 照模型的呼叫形狀（帶 `tool_call`）呼叫，回的是那則 ToolMessage。 */
+async function call(tool: StructuredToolInterface, args: unknown): Promise<unknown> {
+  return tool.invoke({ name: tool.name, args, id: 'c1', type: 'tool_call' } as never);
 }
 
 /** 斷言這是一則 `status: 'error'` 的 ToolMessage，並回它的內容。 */
@@ -196,7 +201,7 @@ describe('拒絕的那幾條', () => {
       file_path: '/v.csv',
       record: { 姓名: '阿明' },
     })) as { status?: string };
-    expect(result.status).toBeUndefined();
+    expect(result.status).toBe('success');
     expect(written).toEqual(['姓名\n阿明\n']);
   });
 
@@ -239,27 +244,25 @@ describe('拿不到 backend', () => {
   });
 });
 
-describe('checkpoint backend 那一支', () => {
-  it('**`filesUpdate` 要包成 `Command`**——只回 ToolMessage 的話 state 裡什麼都沒有', async () => {
+describe('backend 回不回 filesUpdate', () => {
+  it('**`filesUpdate` 那一支拒絕**：這個工具不送 state，不能說「已經寫進」（Q11）', async () => {
     const { backend } = fakeBackend({}, true);
-    const result = (await call(await toolOf(backend), {
+    const result = await call(await toolOf(backend), {
       file_path: '/v.csv',
       record: { 姓名: '阿明' },
-    })) as { update?: { files?: Record<string, unknown>; messages?: unknown[] } };
-    // 沒有 `--workspace` 的組裝走的就是這一支（`StateBackend`），漏掉它的樣子是
-    // 「工具說寫好了、檔案系統裡沒有這個檔」。
-    expect(Object.keys(result.update?.files ?? {})).toEqual(['/v.csv']);
-    expect(result.update?.messages).toHaveLength(1);
+    });
+    expect((result as { update?: unknown }).update).toBeUndefined();
+    expect(errorTextOf(result)).toBe(`Error: ${submitRecordStateUpdateMessage('/v.csv')}`);
   });
 
-  it('外部 backend 回 null 時就回 ToolMessage', async () => {
+  it('外部 backend 回 null 時就回成功的 ToolMessage', async () => {
     const { backend } = fakeBackend();
     const result = (await call(await toolOf(backend), {
       file_path: '/v.csv',
       record: { 姓名: '阿明' },
     })) as { status?: string; content?: unknown; update?: unknown };
     expect(result.update).toBeUndefined();
-    expect(result.status).toBeUndefined();
+    expect(result.status).toBe('success');
     expect(String(result.content)).toContain('/v.csv');
   });
 });
@@ -307,13 +310,13 @@ describe('樹上這一列（#1466）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.2.0，要有 gate）與 fs（^2.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^2.0.0，要有 gate）與 fs（^2.0.0）；沒有 default 匯出', () => {
     expect(submitRecord.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.2.0' },
+      { token: 'tools', range: '^2.0.0' },
       { token: fsToken.name, range: '^2.0.0' },
     ]);
     expect(submitRecord.manifest.provides).toEqual([]);
-    expect(submitRecord.inject).toEqual({ tools: { range: '^1.2.0' }, fs: { range: '^2.0.0' } });
+    expect(submitRecord.inject).toEqual({ tools: { range: '^2.0.0' }, fs: { range: '^2.0.0' } });
     expect('default' in submitRecord).toBe(false);
   });
 
@@ -323,7 +326,7 @@ describe('樹上這一列（#1466）', () => {
     await root.loader.resolve('fs').fiber?.ctx.fiber.dispose();
     expect(root.get('fs', false)).toBeUndefined();
     const result = await call(tool, { file_path: '/v.csv', record: { 姓名: '阿明' } });
-    expect((result as { status?: string }).status).toBeUndefined();
+    expect((result as { status?: string }).status).toBe('success');
     expect(files.get('/v.csv')).toBe('姓名\n阿明\n');
   });
 

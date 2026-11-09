@@ -42,8 +42,8 @@
  * - **表達得出來的**：按模型選門檻（就是這個檔）、每個 subagent 都吃到同一份
  *   （`foldSubAgents` 打底）、歷史去處是獨立的一格（`backend` 參數）。
  * - **部分表達得出來的**：事件三連退成**一顆**（`compaction/summary`，見
- *   {@link withCompactionLog}）。鎖與 `start`／`end` 表達不出來——基座只在成功走完之後回一個
- *   帶 `_summarizationEvent` 的 `Command`，沒有「開始壓縮」這個可觀測的時刻，硬記一顆
+ *   {@link withCompactionLog}）。鎖與 `start`／`end` 表達不出來——摘要器（照基座流程的引擎，`summarizer-engine.ts`）
+ *   在一次 `wrapModelCall` 裡生摘要、交下去，沒有「開始壓縮」這個可觀測的時刻，硬記一顆
  *   `start` 只能記在我們的猜測上。登記在
  *   [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
  * - **表達不出來的**：手動與指定範圍的動詞、供應商回上下文溢出之後的壓縮重試。各自登記在
@@ -106,7 +106,6 @@ import { randomUUID } from 'node:crypto';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage, MessageContent } from '@langchain/core/messages';
-import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
@@ -120,6 +119,8 @@ import { isFileBlock } from './attachment-ref.js';
 import { toLoggedMessage } from './logged-message.js';
 import { isMaxTokensFinish } from './max-tokens.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
+import { withModelCallStep } from './model-call-step.js';
+import type { ModelCallStep } from './model-call-step.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
@@ -133,13 +134,25 @@ import {
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
   applyRecordedArgTruncations,
+  applyRecordedPrunes,
   newlyTruncatedArgs,
   restoreNewlyTruncatedArgs,
-  recordedArgTruncationsOf,
-} from './tool-arg-truncation-log.js';
-import { withSummaryCatchUp } from './summary-catch-up.js';
+} from './langchain-message-adapter.js';
+import { recordedArgTruncationsOf } from './tool-arg-truncation-log.js';
+import {
+  applySummaryCutoff,
+  noteSummaryCutoff,
+  previousSummaryCutoff,
+  summaryCallKey,
+  summaryCutoffIndex,
+  SummaryCutoffTable,
+  withSummaryCutoffs,
+} from './summary-cutoffs.js';
+import type { SummaryCutoff } from './summary-cutoffs.js';
+import { createSummarizerEngine } from './summarizer-engine.js';
+import type { SessionRequest } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
-import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
+import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
@@ -389,7 +402,7 @@ export function retainedTailCount(messages: readonly BaseMessage[], retainTokens
  * 這時摘要只會拿新摘要換舊摘要，沒有新的內容卸得掉。少了這條，切點被一則自己就撐過保留量的大訊息卡住、
  * 訊息數門檻（`messages`）每一步都成立時，每一步都會多打一次摘要模型。
  *
- * @param messages - 摘要器眼中的那一串（{@link effectiveMessages}）。
+ * @param messages - 摘要器眼中的那一串（{@link applySummaryCutoff} 套上這一步開始時的切點）。
  * @param settings - 補滿的設定。
  * @param limits - 這一步模型的上限；不知道就是 `undefined`。
  * @returns 尾巴則數；`>= messages.length` 就是這一步摘不到東西（尾巴蓋住全部，或切點前只剩上一顆摘要），基座不摘要。
@@ -667,10 +680,8 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *
  * ## 它也負責把「壓縮發生過」記進日誌
  *
- * 同一層縫再包一次，方向相反：剪刀看的是**請求**，日誌看的是**回傳值**。基座只在成功
- * 走完之後回一個 `new Command({ update: { _summarizationEvent } })`，而那個回傳值只有包住
- * 它的人拿得到——一顆排在它後面的新名字 middleware 看到的是更內層，看不到它的回傳。
- * 見 {@link withCompactionLog}。
+ * 同一層縫再包一次：日誌記在摘要器把摘要過的請求交下去的那一刻，那一刻只有包住它的人看得到——一顆排在它後面的新名字
+ * middleware 看到的是更內層，看不到摘要器交下去之前的請求。見 {@link withCompactionLog}。
  *
  * ## 生摘要的那次模型呼叫不上線
  *
@@ -693,6 +704,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   `false` 就不剪新的（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：有 `sessions` 時仍包一層壓力永遠不到的剪刀，
  *   只把日誌上記過的剪法換上去（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)），沒有 `sessions` 就不包。
  * @param report - 摘要失敗時往哪裡講一條 warn（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）；省略即 `console.warn`。
+ * @param cutoffs - 這次組裝的切點表（`summary-cutoffs.ts`），`agent/pre-step` 問的也是這一張；省略就是這顆摘要器自己一張。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -705,6 +717,7 @@ export function createSummarizer(
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
   report?: (message: string) => void,
   retry?: StreamRetryOptions,
+  cutoffs: SummaryCutoffTable = new SummaryCutoffTable(),
 ): AgentMiddleware {
   // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
   // 沒有會話註冊表就查不了日誌，維持直接寫。
@@ -716,9 +729,23 @@ export function createSummarizer(
   const warn = report ?? ((message: string) => console.warn(message));
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
+  // 歷史檔的會話名：每把切點表的鍵（thread 加呼叫身分，所以每次委派各一把）第一次寫時生一個，各保留則數的實例共用同一個
+  // `sessionIdOf`（{@link withRetainedTail}）。認不出身分的呼叫用這顆摘要器自己那一個。表每次委派一格、不設上限，跟著這顆
+  // 摘要器（組裝）丟，同切點表。
+  const newSessionId = () => `session_${randomUUID().substring(0, 8)}`;
+  const ownSessionId = newSessionId();
+  const sessionIds = new Map<string, string>();
+  const sessionIdOf = (request: SessionRequest): string => {
+    const key = summaryCallKey({ configurable: request.runtime?.configurable });
+    if (key === undefined) return ownSessionId;
+    let sessionId = sessionIds.get(key);
+    if (sessionId === undefined) sessionIds.set(key, (sessionId = newSessionId()));
+    return sessionId;
+  };
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
-    const base = createSummarizationMiddleware({
+    const base = createSummarizerEngine({
       backend: staging?.backend ?? backend,
+      sessionIdOf,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
       // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
@@ -739,7 +766,7 @@ export function createSummarizer(
           maxLength: settings.truncateArgs.maxLength,
         }),
       },
-    }) as unknown as AgentMiddleware;
+    });
     // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
     return withQuietSummaryCall(withAttachmentText(base), summaryModelOf, retry);
   };
@@ -747,7 +774,7 @@ export function createSummarizer(
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
-  const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
+  const logged = withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
   const truncationLogged =
     sessions === undefined ? logged : withArgTruncationLog(logged, sessions, warn);
@@ -763,11 +790,9 @@ export function createSummarizer(
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
-  // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串要是補過的。
+  // 最外層：這一步開始時讀切點表（summary-cutoffs.ts），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串都從這個切點算。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
-    sessions === undefined
-      ? withTokenWarmup(middleware)
-      : withSummaryCatchUp(withTokenWarmup(middleware), sessions);
+    asModelCallStep(withSummaryCutoffs(withTokenWarmup(middleware), cutoffs));
   // 剪刀關掉：不剪新的，但記過的照樣換上去（#1567 N0780）。續接灌回 state 的是原文，換上去的只有這一層。
   if (pruning === false) {
     return catchUp(
@@ -787,6 +812,7 @@ export function createSummarizer(
       (request) =>
         isUnderCompactionPressure(
           request,
+          previousSummaryCutoff(),
           effectiveTrigger(settings.trigger, limitsOf?.(request.model)),
           book,
           (messages) => retainedMessageCount(messages, settings, limitsOf?.(request.model)),
@@ -817,7 +843,7 @@ function withTokenWarmup(base: AgentMiddleware): AgentMiddleware {
       let finished = true;
       try {
         finished = await warmMessageTokens(
-          effectiveMessages(request.messages ?? [], request.state),
+          applySummaryCutoff(request.messages ?? [], previousSummaryCutoff()),
           () => modelCallAborted(request),
         );
       } catch {
@@ -840,7 +866,7 @@ const NEVER_UNDER_PRESSURE = (): boolean => false;
  * （`apps/harness/src/conversation-restore.ts`），記過的 `compaction/prune` 與 `compaction/truncate-args` 沒人換上去，模型就拿到
  * 原文，日誌上卻記著它看到的是剪過的。這一顆只做「換上去」：順序同正常那條（剪刀在外、截斷在內）。
  *
- * 摘要的切點不歸這裡：續接灌回去的本來就是「摘要＋之後的」，不帶 `_summarizationEvent`。所以這一顆沒有 `stateSchema`，
+ * 摘要的切點不歸這裡：續接灌回去的本來就是「摘要＋之後的」，切點表是空的（`summary-cutoffs.ts`）。這一顆沒有 `stateSchema`，
  * 也沒有 `beforeModel` 之類會變成圖節點的鉤子，只有 `wrapModelCall`。
  *
  * 查不到這次屬於哪一份日誌（沒接註冊表、認不出呼叫者）就原樣往下交；套用記過的剪法時拋錯就往外拋，同剪刀開著時那條
@@ -853,7 +879,7 @@ export function createRecordedProjectionShell(sessions?: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
   if (sessions === undefined) return { name: SUMMARIZATION_MIDDLEWARE_NAME } as AgentMiddleware;
-  return {
+  return asModelCallStep({
     name: SUMMARIZATION_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
       const original: readonly BaseMessage[] = request.messages ?? [];
@@ -872,14 +898,30 @@ export function createRecordedProjectionShell(sessions?: {
           : { ...request, messages: [...messages] }) as typeof request,
       );
     },
-  } as AgentMiddleware;
+  } as AgentMiddleware);
+}
+
+/**
+ * 摘要器那一格整串登記成一個環繞步（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：那一步就是包好的整串
+ * `wrapModelCall`，{@link createSummarizer} 那串的 force 鏈（{@link withRetainedTail}）也在裡面；回的那顆用它造 `wrapModelCall`，
+ * 其餘欄位照舊。
+ *
+ * @param chain - 包好的整串，一定有 `wrapModelCall`。
+ * @returns 同名、同狀態、登記了那一步的 middleware。
+ */
+function asModelCallStep(chain: AgentMiddleware): AgentMiddleware {
+  const wrap = chain.wrapModelCall!.bind(chain) as unknown as ModelCallStep;
+  return withModelCallStep(
+    (request, next) => wrap(request, next),
+    (wrapModelCall) => ({ ...chain, wrapModelCall }) as unknown as AgentMiddleware,
+  );
 }
 
 /**
  * 剪刀的日誌接口（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）：讀出這次請求所屬那份日誌上記過的剪法，記下新剪的。
  *
  * **只記這次請求真正送得出去的那一段**：`request.messages` 是 graph state 的原始串，摘要之前的舊訊息還在裡面，但模型看不到
- * （{@link effectiveMessages}）。剪刀對整串動手，這裡只把落在有效串裡的記下來——日誌要證明的是「模型看到的那一份」，
+ * （{@link applySummaryCutoff}）。剪刀對整串動手，這裡只把落在有效串裡的記下來——日誌要證明的是「模型看到的那一份」，
  * 不是 state 裡每一顆大結果的剪法。
  *
  * **先記、記進去了才剪**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`append` 拋了就回 `false`、講一條 warn，
@@ -918,7 +960,7 @@ function pruneLogOf(
       }
       if (found.kind !== 'ok') return true;
       const sendable = new Set<string>();
-      for (const message of effectiveMessages(request.messages ?? [], request.state)) {
+      for (const message of applySummaryCutoff(request.messages ?? [], previousSummaryCutoff())) {
         if (ToolMessage.isInstance(message)) sendable.add(message.tool_call_id);
       }
       const kept = results.filter((result) => sendable.has(result.callId));
@@ -1145,7 +1187,7 @@ export class SummaryNotSmallerError extends Error {
  * 就判成摘不到、不會到這裡；端點超窗、保留量降到 0 時仍可能走到。
  *
  * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架與歷史檔路徑）。
- * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link effectiveMessages}），去掉交下去那份留下的尾巴。
+ * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link applySummaryCutoff}），去掉交下去那份留下的尾巴。
  * - **兩邊同一把量具**：{@link estimateMessageTokens}。**偏離 dsh**：它用 route price（`meter.estimateMessage` 對 `shadowedRouteTokenCount`），
  *   我們沒有逐路由的計價，退到這把與保留量選尾巴同一把的估算（#1383 的 D3 同一個理由）。被取代那段取的是參數截斷之前的有效串，
  *   所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。
@@ -1165,7 +1207,7 @@ function assertSummaryShrinks(
   let framed: number;
   let replaced = 0;
   try {
-    const before = effectiveMessages(request.messages ?? [], request.state);
+    const before = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
     const kept = Math.max(0, (sent.messages?.length ?? 1) - 1);
     const span = before.slice(0, Math.max(0, before.length - kept));
     if (span.length === 0) return;
@@ -1307,16 +1349,15 @@ const MAX_RETAIN_CHAINS = 32;
 /**
  * 每次請求算出「這一步該留幾則」，轉給對應那顆基座實例（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）。
  *
- * 見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節。回傳的是**一顆** middleware：`name` 與 `stateSchema` 取自參考實例，
- * 所有實例共用同一個 backend、同一份 `stateSchema`，疊上只有它一顆。
+ * 見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節。回傳的是**一顆** middleware：`name` 取自參考實例，
+ * 所有實例共用同一個 backend，疊上只有它一顆。
  *
  * ## 實例之間沒有狀態要同步
  *
- * 基座實例的 closure 裡有三樣：`tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
- * 見 {@link createSummarizer} 的絆索說明）、`cachedModel`（只在 `request.model` 缺席時用）、`sessionId`（歷史檔名的退路）。
- * 前兩樣不會動；第三樣這裡統一：state 上沒有 `_summarizationSessionId` 時補一個**這顆摘要器自己的**，所以不論用到哪顆實例，
- * 歷史都寫進同一個檔（`session_…` 名字與基座一致）。這一份與基座原本的「一顆摘要器一個 closure」同一個範圍：
- * 摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理照舊不共用。
+ * 引擎實例的 closure 裡只有 `tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
+ * 見 {@link createSummarizer} 的絆索說明），不會動。歷史檔的會話名由 {@link createSummarizer} 的同一個 `sessionIdOf`
+ * 交給每一顆實例，所以同一次呼叫不論用到哪顆，歷史都寫進同一個檔（`session_…` 名字與基座一致）。範圍是每次委派各一份：
+ * 會話名照切點表的鍵（thread 加呼叫身分）分，同型前景子代理的兩次委派各一個檔。
  *
  * @param makeChain - 建「`keep` 是 N 則」的那一顆（含它外面貼著的兩層）。
  * @param settings - 補滿的設定。
@@ -1345,12 +1386,11 @@ function withRetainedTail(
     return made;
   };
   const reference = makeChain(RETAIN_FALLBACK_MESSAGES);
-  const fallbackSessionId = `session_${randomUUID().substring(0, 8)}`;
   return {
     ...reference,
     wrapModelCall: (request, handler) => {
       const suppressed = (request as { [SUPPRESS_SUMMARY]?: boolean })[SUPPRESS_SUMMARY] === true;
-      const view = effectiveMessages(request.messages ?? [], request.state);
+      const view = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const retained = retainedMessageCount(view, settings, limitsOf?.(request.model));
       // 交出去的是保留政策下的決定：不要摘要的那一次也照算（問的是「門檻到了會不會摘」），端點超窗的升級不算。
       const decision = (request as { [RETAIN_DECISION]?: RetainDecision })[RETAIN_DECISION];
@@ -1359,12 +1399,6 @@ function withRetainedTail(
         decision.length = view.length;
       }
       const keepMessages = suppressed ? SUPPRESSED_CHAIN : retained;
-      const state = request.state as Record<string, unknown> | undefined;
-      const seeded = (
-        state !== undefined && typeof state._summarizationSessionId !== 'string'
-          ? { ...request, state: { ...state, _summarizationSessionId: fallbackSessionId } }
-          : request
-      ) as typeof request;
       const normal = keepMessages === SUPPRESSED_CHAIN ? keepMessages : Math.max(1, keepMessages);
       // 端點真的回超窗：照 dsh 的 overflow 路徑（`compaction-basic/src/index.ts:262`、`:294`）繞過保留政策，retain 取 0，
       // 只留工具呼叫與結果配對需要的尾巴（#1381）。**我們合成的預算超窗不算**：那不是端點說的，保留量照常。
@@ -1382,10 +1416,10 @@ function withRetainedTail(
             }
           }
         : handler;
-      if (!escalate) return chainFor(normal).wrapModelCall!(seeded, handler);
+      if (!escalate) return chainFor(normal).wrapModelCall!(request, handler);
       return (async () => {
         try {
-          return await chainFor(normal).wrapModelCall!(seeded, watched);
+          return await chainFor(normal).wrapModelCall!(request, watched);
         } catch (error) {
           if (!(error instanceof EndpointOverflowSignal) && !(error instanceof RetainLessSignal))
             throw error;
@@ -1393,7 +1427,7 @@ function withRetainedTail(
           // 摘要完重量仍超過門檻（{@link RetainLessSignal}，#2028）也走這裡：第一次的摘要沒有交出去，歷史檔由 #1389 的暫存只留這一次的。
           // 這一次已經是最小的保留量，`canRetainLess` 設成 false：這裡沒有 `try`，再拋 RetainLessSignal 會冒過 withTokenBudget，整輪失敗。
           if (decision !== undefined) decision.canRetainLess = false;
-          return chainFor(zero, true).wrapModelCall!(seeded, handler);
+          return chainFor(zero, true).wrapModelCall!(request, handler);
         }
       })();
     },
@@ -1559,32 +1593,30 @@ function quietInvoke<T extends object>(
  *
  * ## 為什麼是在「交下去」的那一刻記
  *
- * 基座生完摘要、**呼叫 `handler` 之前**，摘要、切點、歷史檔路徑都已經定了；但它交出摘要事件的方式只有一個：
- * 整個 `performSummarization` 走完（含 `await handler(...)`，也就是那次模型呼叫）之後
- * `return new Command({ update: { _summarizationEvent: {...} } })`（`dist/langsmith-zm0ILQsV.js:3181`）。
- * 讀回傳值就只能記在那次呼叫的回覆之後，而日誌要能「只取 `model/start` 之前的事件就推出那次請求的歷史」
- * （S2 的前置，地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298)），摘要必須在前面。
- * 所以這裡包的是**傳給基座的 `handler`**：基座把摘要過的請求交下去的那一刻，事件的欄位自己算出來：
+ * 引擎生完摘要、**呼叫 `handler` 之前**，摘要、切點、歷史檔路徑都已經定了。日誌要能「只取 `model/start` 之前的事件就推出
+ * 那次請求的歷史」（S2 的前置，地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298)），摘要必須在那次呼叫前面。
+ * 所以這裡包的是**傳給引擎的 `handler`**：引擎把摘要過的請求交下去的那一刻，事件的欄位自己算出來：
  *
  * - **認得「剛摘要過」**：{@link quietInvoke} 的替身每完成一次生摘要的 `invoke` 就把格子的 `summaries` 加一；
  *   `handler` 被叫到時 `summaries` 比記過的多，這一份就是剛摘要過的，`sent.messages[0]` 是摘要。基座把請求交下去有
  *   好幾處（沒摘要、切不出東西、壓縮工具結果、摘要、溢出後重摘），只有摘要那兩處前面有一次生摘要的呼叫。
- * - **`cutoffIndex`**：基座的 `stateCutoffIndex = 上一次的切點 + 這次在有效串裡的切點 - 1`（沒有上一次就是切點本身，
- *   `summarizeMessages`）；有效串是 {@link effectiveMessages}，這次在有效串裡的切點＝有效串長度 −（交下去的長度 − 1）。
+ * - **`cutoffIndex`**：`上一次的切點 + 這次在有效串裡的切點 − 1`（沒有上一次就是切點本身，{@link summaryCutoffIndex}，同基座的
+ *   `stateCutoffIndex`）；有效串是這一步開始時的切點（{@link previousSummaryCutoff}）套上去的那一串，這次在有效串裡的切點＝
+ *   有效串長度 −（交下去的長度 − 1）。
  * - **`filePath`**：從摘要文字讀（{@link summaryFilePathOf}）。基座寫歷史檔失敗時摘要文字沒有那句，就是 `null`（#66）。
  * - **`messagesBefore`**：`request.messages.length`，同以前；只是那時的 graph state 還沒有這次呼叫的回覆，所以推導端的
  *   則數檢查是 `messagesBefore`，不是舊順序的 `messagesBefore + 1`（`conversation-replay.ts`），事件帶 `beforeCall: true` 標明。
  *
- * **這幾個欄位是反推的，會跟基座的 `Command` 對不上就是基座改了內部**：`summarization.test.ts` 的差分測試拿真的基座，
- * 每條路徑（第一次、第二次、歷史檔失敗、預算觸發、真的溢出後重摘）逐欄比日誌與 `_summarizationEvent`。
+ * 算出的切點同時交給切點表（{@link noteSummaryCutoff}）：有日誌時在 `append` 成功之後，沒有日誌時在交下去的那一刻；表在這一步
+ * 結束時落定（{@link withSummaryCutoffs}），下一步的「上一次切點」就是它。
+ *
+ * **切點是反推的**：引擎不回報切點，這裡從交下去的那份反推（{@link summaryCutoffIndex}）；公式由 `summary-cutoffs.test.ts` 釘住，
+ * 反推值對得上引擎實際留下的尾巴由 `summarizer-engine.test.ts` 釘住。
  *
  * ## 摘要記了，那次呼叫卻失敗
  *
- * 以前拋錯的那次連 `compaction/summary` 都不記；現在它在呼叫之前，呼叫失敗了事件也已經在日誌上。這是 dsh 的行為：
- * 壓縮在 `agent/pre-step`（組請求之前）落地，事件是耐久的，之後的請求失敗不會收回它
- * （`packages/compaction/compaction-basic/src/index.ts`，`d7432673886`）。我們的 graph state 在那種情形沒有
- * `_summarizationEvent`（`Command` 沒回來），下一次呼叫基座會從沒摘要過的狀態重摘，日誌上就有兩顆摘要、中間沒有新訊息；
- * 推導以後面那顆為準（切點都是原始串的座標），結果相同。
+ * `compaction/summary` 在呼叫之前記，呼叫失敗了事件也已經在日誌上，之後的請求失敗不會收回它。切點表也一樣：這一步拋錯時照樣落定，
+ * 下一次呼叫接著這個切點、不重摘，跟日誌上最後一筆一致。
  *
  * ## 範圍怎麼表示：與 dsh 的偏離
  *
@@ -1598,32 +1630,28 @@ function quietInvoke<T extends object>(
  * 看不到基座交下去之前的那一刻。（例外是換模型、子代理跟隨與圖片省略：`mergeMiddlewareStack` 在合併時把它們搬到預設疊
  * 前面，所以它們在摘要器**外面**——#1369。）
  *
- * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
+ * ## subagent 那側**寫得進去**
  *
- * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是 `EXCLUDED_STATE_KEYS`（`:3263`）
- * 把 `_summarizationEvent` 擋在「傳進／傳出 subagent」兩個方向之外。**那條擋的是 root 的
- * 快照讀得到什麼，不是這裡。** 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建
- * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫
- * 屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ * 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建一份摘要器，subagent 那份的 `wrapModelCall` 就在
+ * subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ * 基座 `task` 的 `EXCLUDED_STATE_KEYS`（`:3263`）把摘要的私有鍵擋在「傳進／傳出 subagent」兩個方向之外，
+ * 擋的是 root 的快照讀得到什麼，不是這裡。
  *
  * ## 記不進去，這次摘要不生效（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * dsh 的不變量是日誌與送給模型的內容一致：壓縮是一筆事件，寫不進去就等於這次壓縮沒發生；自動壓縮的失敗在 pressure 路徑記 warn、
- * 這一輪照原樣繼續（`packages/compaction/compaction-basic/src/index.ts:163-173`），在 overflow 路徑記 warn、保留原本的請求錯誤
- * （`:204-227`）。我們的摘要事件在基座交下去的那一刻記，而摘要要生效還有三處：送出去的請求（`sent` 開頭那則摘要）、
- * 基座最後回的 `Command`（`_summarizationEvent` 進 graph state）、歷史檔（#1389 的暫存層依日誌與 `Command` 決定提交）。
+ * 不變量是日誌與送給模型的內容一致：壓縮是一筆事件，寫不進去就等於這次壓縮沒發生；門檻觸發的失敗記 warn、這一輪照原樣繼續，
+ * 端點超窗之後的失敗記 warn、保留原本的請求錯誤。摘要事件在引擎交下去的那一刻記，而摘要要生效還有三處：送出去的請求（`sent` 開頭那則摘要）、
+ * 切點表（只在日誌寫進去之後 {@link noteSummaryCutoff}）、歷史檔（#1389 的暫存層依日誌與這一步記下的切點決定提交）。
  *
  * 所以 `append` 拋了就**不叫 `handler`**，改拋一顆登記成「生摘要失敗」的錯（{@link summaryLogFailure}）：
  *
- * - 基座不認它是超窗，原樣往外拋，不會回 `Command`——state 沒有 `_summarizationEvent`；暫存層看不到事件也看不到 `Command`，
- *   歷史檔丟掉；#1390 的補回（{@link withSummaryCatchUp}）在日誌上找不到它，不會補。
- * - {@link withTokenBudget} 把它當成生摘要失敗走 dsh 的兩條路：我們自己的門檻觸發的，記 warn、照原請求（不摘要）送出；
+ * - 引擎不認它是超窗，原樣往外拋——切點表沒有這次的切點；暫存層看不到事件也看不到切點，歷史檔丟掉。
+ * - {@link withTokenBudget} 把它當成生摘要失敗，分兩條路：我們自己的門檻觸發的，記 warn、照原請求（不摘要）送出；
  *   端點回超窗之後的恢復，記 warn、拋原本的超窗錯。照原請求送出的那一次若又碰到端點超窗、基座再摘要又記不進去，
  *   也是拋原本的超窗錯，不再重摘（重摘的次數由基座與 {@link withRetainedTail} 各自最多一次界住）。
  *
- * **偏離 dsh，理由 1（基座表達不出來）。** dsh 的壓縮是一筆交易，寫不進去就沒有提交；基座的 `Command` 要等 `handler` 回來才組，
- * 寫日誌沒辦法跟 state 的提交合成一步，所以退到「交下去之前寫、寫不進去不交、錯走生摘要失敗那條路」。
- * **回頭點**：底座換成 Cordis、送給模型的內容改由日誌推出之後（#1385），壓縮改成一筆交易，拿掉 {@link summaryLogFailure} 這條繞路。
+ * 摘要器在 `wrapModelCall` 裡生摘要、交下去，日誌、切點表與送出的請求沒辦法合成一步，所以是「交下去之前寫、寫不進去不交、
+ * 錯走生摘要失敗那條路」。TODO(#1385)：送給模型的內容由日誌推出之後，壓縮就是一筆交易，{@link summaryLogFailure} 這條繞路可以拿掉。
  *
  * `forCall` 的三種非 `ok` 不是寫入失敗（這次呼叫不屬於任何一份日誌），照舊不記、`handler` 照常被叫。
  *
@@ -1633,7 +1661,7 @@ function quietInvoke<T extends object>(
  */
 function withCompactionLog(
   base: AgentMiddleware,
-  sessions: { forCall(config: unknown): SessionLookup },
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
@@ -1643,8 +1671,8 @@ function withCompactionLog(
     wrapModelCall: (request, handler) => {
       const cell: SummaryUsageCell = { usage: undefined, summaries: 0 };
       let logged = 0;
-      const effective = effectiveMessages(request.messages ?? [], request.state);
-      const previousCutoff = previousCutoffOf(request.state);
+      const effective = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
+      const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
       return summaryUsageCells.run(cell, () =>
         inner(request, (sent) => {
           // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
@@ -1652,19 +1680,24 @@ function withCompactionLog(
             logged = cell.summaries;
             const summary = sent.messages?.[0];
             if (summary !== undefined && isSummarizationMessage(summary)) {
+              const cutoffIndex = summaryCutoffIndex(
+                previousCutoff,
+                effective.length,
+                (sent.messages ?? []).length,
+              );
+              const filePath = summaryFilePathOf(summary);
               // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
               // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
-              const found = sessions.forCall({
+              const found = sessions?.forCall({
                 configurable: (request as { runtime?: { configurable?: unknown } }).runtime
                   ?.configurable,
               });
-              if (found.kind === 'ok') {
-                const local = effective.length - ((sent.messages ?? []).length - 1);
+              if (found?.kind === 'ok') {
                 try {
                   found.log.append('compaction/summary', {
-                    cutoffIndex: previousCutoff === undefined ? local : previousCutoff + local - 1,
+                    cutoffIndex,
                     messagesBefore: (request.messages ?? []).length,
-                    filePath: summaryFilePathOf(summary),
+                    filePath,
                     summary: toLoggedMessage(summary),
                     // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
                     ...(cell.usage === undefined ? {} : { usage: cell.usage }),
@@ -1675,6 +1708,7 @@ function withCompactionLog(
                   throw summaryLogFailure(error);
                 }
               }
+              noteSummaryCutoff({ cutoffIndex, summaryMessage: summary, filePath });
             }
           }
           return handler(sent);
@@ -1763,15 +1797,6 @@ export function isSummarizationMessage(message: BaseMessage): boolean {
   );
 }
 
-/** 上一次壓縮的切點（`request.state._summarizationEvent.cutoffIndex`）。沒有、或不是數字就是 `undefined`，同基座。 */
-function previousCutoffOf(state: unknown): number | undefined {
-  const event = (state as { readonly _summarizationEvent?: unknown } | null | undefined)
-    ?._summarizationEvent;
-  if (event === null || typeof event !== 'object') return undefined;
-  const { cutoffIndex } = event as { readonly cutoffIndex?: unknown };
-  return typeof cutoffIndex === 'number' ? cutoffIndex : undefined;
-}
-
 /**
  * 摘要文字裡寫的歷史檔路徑。基座的 `buildSummaryMessage`：寫成功時有一句
  * 「The full conversation history has been saved to <路徑> should you need to refer back to it for details.」，
@@ -1821,7 +1846,7 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
  * `handler` 包在 `try` 裡，接到 `ContextOverflowError` 就走緊急摘要：摘要、再叫一次 `handler`
  * （`:3219-3229`）。所以超過預算時這裡**拋一顆合成的 `ContextOverflowError`**，由基座自己摘要——保留、切點、
- * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次不拋溢出（已經拋過一次），由下一節的重量處理。
+ * 寫歷史全走引擎自己那套。摘要完再叫進來的那一次不拋溢出（已經拋過一次），由下一節的重量處理。
  *
  * ## 摘要完再量一次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）
  *
@@ -1860,7 +1885,7 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
  * 5. **`compactionRetries` 只收 0 或 1，重試固定用保留 0**；≥2 在載入時就拒（{@link assertCompactionRetries}）。兩條理由都在
  *    {@link withRetainedTail}：
- *    - 重試交下去的永遠是原請求 `seeded`，換的只有保留量（`chainFor(zero, true)`），再試一次切到的是同一段；
+ *    - 重試交下去的永遠是原請求，換的只有保留量（`chainFor(zero, true)`），再試一次切到的是同一段；
  *    - 保留 0 那一次在 `catch` 裡，外面沒有 `try`，再拋 {@link RetainLessSignal} 會冒過 {@link withTokenBudget}，整輪失敗。
  *
  * ## 量與記都不准拋
@@ -1901,7 +1926,7 @@ function withTokenBudget(
       const thresholds = effective.map(({ type, value }) => ({ type, value }));
       const budgets = effective.filter((t) => t.type === 'tokens').map((t) => t.value);
       const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
-      const view = effectiveMessages(request.messages ?? [], request.state);
+      const view = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const baseWillCatch = view.length > 0 && !byMessages.some((value) => view.length >= value);
       let thrown = false;
       // 內層 {@link withRetainedTail} 填的保留決定，`messagesCompactable` 讀它（#1443）。
@@ -2064,84 +2089,6 @@ function withTokenBudget(
 }
 
 /**
- * 從摘要器的回傳值裡認出「這一次真的壓縮了」。
- *
- * **鴨子型別，不是 `instanceof Command`。** `Command` 是 `@langchain/langgraph` 的 class，
- * 而 pnpm 的樹底下同一個套件可能有多份實例（基座相依的那份與我們相依的那份），
- * `instanceof` 跨實例是 `false`——那種錯不會拋，只會讓事件永遠記不到。
- *
- * 沒壓縮的那些輪回的是模型的回應，`update` 這個 key 根本不存在，所以判別是乾淨的。
- *
- * **`summaryMessage` 也是鴨子型別**，同一條理由：認的是它有 `toDict()`，也就是
- * {@link ./logged-message.ts | toLoggedMessage} 要的那一個方法。
- *
- * @param response - 摘要器 `wrapModelCall` 的回傳值。
- * @returns 這次壓縮的切點、落點與換上去的摘要訊息，或 `undefined`（這一輪沒壓縮）。
- */
-export function readSummarizationEvent(
-  response: unknown,
-): { cutoffIndex: number; filePath: string | null; summaryMessage?: BaseMessage } | undefined {
-  if (typeof response !== 'object' || response === null) return undefined;
-  const update = (response as { update?: unknown }).update;
-  if (typeof update !== 'object' || update === null) return undefined;
-  const event = (update as { _summarizationEvent?: unknown })._summarizationEvent;
-  if (typeof event !== 'object' || event === null) return undefined;
-  const { cutoffIndex, filePath, summaryMessage } = event as {
-    cutoffIndex?: unknown;
-    filePath?: unknown;
-    summaryMessage?: unknown;
-  };
-  if (typeof cutoffIndex !== 'number') return undefined;
-  const summary =
-    typeof summaryMessage === 'object' &&
-    summaryMessage !== null &&
-    typeof (summaryMessage as { toDict?: unknown }).toDict === 'function'
-      ? (summaryMessage as BaseMessage)
-      : undefined;
-  // `filePath` 是 `string | null`，而 `null` 是**有意義的那個值**（#66 的 fail-open），
-  // 所以它不能被當成「沒有」而讓整筆消失。其餘型別當成沒寫成功。
-  return {
-    cutoffIndex,
-    filePath: typeof filePath === 'string' ? filePath : null,
-    ...(summary === undefined ? {} : { summaryMessage: summary }),
-  };
-}
-
-/**
- * **摘要器眼中的那一串訊息**，也就是量壓力該量的東西。
- *
- * 基座的每一步計量走的都是 `getEffectiveMessages(request.messages, request.state)`：
- * 摘要發生過之後那是 `[摘要, ...messages.slice(cutoffIndex)]`——**一串短得多的東西**。
- *
- * 照 `request.messages` 原串去量會出一個很難看見的錯：**圖的狀態只會長不會縮**（原文都
- * 還在，那正是這個做法「原文沒有消失」的另一面），所以門檻**從第一次摘要起就永遠成立**，
- * 閘門卡在開，剪刀退化成「每次超預算就剪」——正是 [#149](https://github.com/DemianLi/nexus-agent/issues/149)
- * 明著否掉的那筆偏離，也正是 dsh 那句「低于压力的对话绝不被碰」禁止的事。而它不會拋、
- * 不會少剪，只會多剪，所以行為上幾乎看不出來。
- *
- * 這是**抄一份**基座那個函式，不是叫它——它沒有匯出。基座改了這個形狀時這裡不會紅，
- * 紅的是 `summarization.test.ts` 那條「摘要之後照樣剪得到」加這個檔的單元測試。
- *
- * @param messages - 這次請求的訊息串。
- * @param state - 這次請求的 graph state；摘要事件在裡面。
- * @returns 摘要器會拿去計量的那一串。沒有摘要事件時就是原串。
- */
-export function effectiveMessages(
-  messages: readonly BaseMessage[],
-  state: unknown,
-): readonly BaseMessage[] {
-  const event = (state as { readonly _summarizationEvent?: unknown } | null | undefined)
-    ?._summarizationEvent;
-  if (event === null || typeof event !== 'object') return messages;
-  const { summaryMessage, cutoffIndex } = event as {
-    readonly summaryMessage?: unknown;
-    readonly cutoffIndex?: unknown;
-  };
-  if (typeof cutoffIndex !== 'number' || summaryMessage === undefined) return messages;
-  return [summaryMessage as BaseMessage, ...messages.slice(cutoffIndex)];
-}
-
-/**
  * 壓力到了沒。
  *
  * dsh 那側「低于压力的对话绝不被碰」是**呼叫端**的性質——`compaction-basic` 壓力達標才
@@ -2153,7 +2100,7 @@ export function effectiveMessages(
  * 上一次剪過不會讓這一次誤判成沒壓力、下一次又剪（來回震盪）。差的是還沒截的工具參數那一截，有界，而且
  * 只會讓剪刀早一點動，不會讓摘要早一點發生。
  *
- * 要量的是 {@link effectiveMessages}，不是原串：摘要過之後原串只長不縮，照原串量門檻會從第一次摘要起永遠成立。
+ * 要量的是套上切點的有效串（{@link applySummaryCutoff}），不是原串：摘要過之後原串只長不縮，照原串量門檻會從第一次摘要起永遠成立。
  *
  * ## `messages` 門檻要「摘得到東西」才算
  *
@@ -2167,18 +2114,20 @@ export function effectiveMessages(
  * 與工具定義自己就占掉門檻八成以上——那時摘不到東西、剪刀照剪，而剪掉的確實是讓整份請求逼近窗口的那一截，所以不擋。
  *
  * @param request - 剪刀收到的那份請求。
+ * @param cutoff - 這一步的上一次切點，有效串由它算。
  * @param trigger - 我們配的那組門檻。
  * @param book - 錨定估算的帳。
  * @param retainedCount - 這一步摘要之後會留幾則，見 {@link retainedMessageCount}；收的是有效串。
  * @returns 任何一道門檻成立就 `true`。
  */
 export function isUnderCompactionPressure(
-  request: EstimatedRequest & { readonly state?: unknown },
+  request: EstimatedRequest,
+  cutoff: SummaryCutoff | undefined,
   trigger: readonly SummarizationThreshold[],
   book: TokenAnchorBook,
   retainedCount: (messages: readonly BaseMessage[]) => number,
 ): boolean {
-  const messages = effectiveMessages(request.messages ?? [], request.state);
+  const messages = applySummaryCutoff(request.messages ?? [], cutoff);
   let tokens: number | undefined;
   let compactable: boolean | undefined;
   for (const threshold of trigger) {
@@ -2280,7 +2229,7 @@ export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
  *
  * 它只做一件事：把驗過的設定提供成 {@link SUMMARIZATION_SERVICE} 服務。
  * **摘要器不在這裡建**——它由 {@link ./fold.ts | foldRegistry} 逐個 agent 各建一份
- * （`sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史寫進同一個檔）。
+ * （認不出身分的呼叫用實例自己的會話名，共用會讓兩個 agent 的那種呼叫寫進同一個檔）。
  *
  * **關掉它跟前兩顆不同形。** `disabled: true` 之後 fold 發出去的不是「沒有」，是一顆
  * **同名空殼**——基座無條件建的那顆摘要器靠同名取代才消得掉，真的不掛的話它會補回來。

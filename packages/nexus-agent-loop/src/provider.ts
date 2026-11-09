@@ -9,7 +9,7 @@
  * 一棵樹只掛一列提供者。每顆消費者經 `ctx.agentLoop.preStep(name, listener)` 登記，登記是 effect，消費者那一列卸載時登記處自己撤掉。
  * **宿主**（`apps/harness`）經 {@link AgentLoopProviderHandle.preSteps} 讀每一位 listener 連同登記者那一列的 id，把登記者是某一列的
  * 那幾位建成 middleware、折進每條 thread 的 `registry.middleware`；那一面不在 {@link AgentLoop} 的契約裡，消費者看不到。
- * 建 middleware 要 core 的 `effectiveMessages` 與 langchain 的 `createMiddleware`，定義套件不寫這種實作。
+ * 建 middleware 要 core 的 `applySummaryCutoff` 等與 langchain 的 `createMiddleware`，定義套件不寫這種實作。
  *
  * ## 重名
  *

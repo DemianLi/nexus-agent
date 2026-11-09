@@ -411,6 +411,30 @@ body {
 }
 
 /*
+ * 對話捲動區頂端也淡出（#2407，README 本地修改第 83 條）：vendor 的 viewport 只有 `scroll-fade-b`，頂端是硬切邊，緊貼著上面的
+ * 狀態列；捲到一行跨在切邊上時，切剩的半行貼在狀態列那行字底下，看起來像兩行疊在一起（嵌入版窄欄與獨立頁面都會）。這裡換成
+ * `shadcn/tailwind.css` 的 `@utility scroll-fade-y` 那一份雙向漸層與兩條捲動驅動動畫：捲離頂端才長出頂端淡出，捲在最上面
+ * 時是 0。在呼叫端加 `scroll-fade-y` 沒用：`scroll-fade-b` 設的 `--scroll-fade-mask` 優先於 `scroll-fade-y` 的
+ * `--scroll-fade-block`，產物裡 `scroll-fade-b` 又排在後面，`animation` 也被它蓋掉；所以這裡把同一份雙向漸層直接寫進
+ * `--scroll-fade-mask`。寫在 layer 外。不支援時下一段把 `-t`、`-b` 一起歸 0，照樣不遮字。
+ * 撤除條件：SG 上游的 viewport 改成雙向淡出。
+ */
+/* prettier-ignore */
+[data-slot="message-scroller-viewport"] {
+  --_scroll-fade-size-t: var(--scroll-fade-t-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-mask: linear-gradient(to bottom, transparent 0, #000 var(--scroll-fade-t, 0px), #000 calc(100% - var(--scroll-fade-b, 0px)), transparent 100%);
+}
+/* prettier-ignore */
+@supports (animation-timeline: scroll()) {
+  [data-slot="message-scroller-viewport"] {
+    animation: scroll-fade-reveal-t 1ms ease-in-out, scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)), calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+}
+
+/*
  * 不支援 scroll-driven 動畫的瀏覽器，對話區不淡出（#1638 PR B PM 判；README 本地修改第 43 條）：vendor 的 viewport 用
  * `scroll-fade-b`（`vendor/solid-glass/shadcn/tailwind.css` 的 `@utility scroll-fade-b`），退路是
  * `@supports not (animation-timeline: scroll())` 底下把 `--scroll-fade-b` 設成整段，淡出常駐：捲到底時最新那則的最後約 40px

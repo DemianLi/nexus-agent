@@ -254,10 +254,13 @@ describe('一輪的結構', () => {
   });
 
   it('被中止的一輪帶停止原因（#1847）：摘要也有，別的收尾、舊日誌與認不得的值都沒有', () => {
-    const log = new SessionLog('t');
+    // 認不得的三種，寫入與讀盤那一關都拒（格式 55 起驗 `turn/end` 的 reason）；讀方仍要撐得住，所以直接組事件，不經 `append`。
+    const events: SessionEvent[] = [];
+    const push = (type: string, data: unknown) =>
+      events.push({ type, seq: events.length, time: 1, data } as unknown as SessionEvent);
     const end = (reason?: unknown) => {
-      log.append('turn/start', { kind: 'message', text: 'x' });
-      log.append('turn/end', reason === undefined ? {} : ({ reason } as never));
+      push('turn/start', { kind: 'message', text: 'x' });
+      push('turn/end', reason === undefined ? {} : { reason });
     };
     end({ kind: 'aborted', cause: { kind: 'user' } });
     end({ kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } });
@@ -277,9 +280,9 @@ describe('一輪的結構', () => {
       undefined,
       undefined,
     ];
-    expect(foldAll(log.events).turns.map((t) => t.endCause)).toEqual(expected);
+    expect(foldAll(events).turns.map((t) => t.endCause)).toEqual(expected);
     for (let i = 0; i < TRAJECTORY_DETAIL_TURNS; i += 1) end();
-    const { digests } = foldWindowed(log.events);
+    const { digests } = foldWindowed(events);
     expect(digests.slice(0, expected.length).map((t) => t.endCause)).toEqual(expected);
   });
 });
@@ -1312,6 +1315,8 @@ describe('歸屬表分塊', () => {
     events.reduce((state, event) => applyTrajectory(state, event), initialTrajectory());
   const entriesOf = (state: ReturnType<typeof initialTrajectory>) =>
     state.owners.chunks.flatMap((chunk) => Object.entries(chunk));
+  const realSizes = (state: ReturnType<typeof initialTrajectory>) =>
+    state.owners.chunks.map((chunk) => Object.keys(chunk).length);
 
   /** 整張表一份的參考算法：先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
   function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
@@ -1351,15 +1356,17 @@ describe('歸屬表分塊', () => {
     const expected = referenceOwners(log.events);
     expect(entriesOf(state)).toEqual(expected);
     expect(state.owners.size).toBe(expected.length);
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
-    // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話每塊會被掏到只剩那一個新 id，塊數跟著重用次數長。
+    // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話，含新 id 的塊會被掏到只剩那一個新 id，其餘的塊掏空拿掉，
+    // 塊數跟著重用次數長。
     const ids = Array.from({ length: 3000 }, (_, n) => [
       n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
     ]);
     const { owners } = stateOf(logOf(ids).events);
-    expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 128 + 1);
+    expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 32 + 1);
   });
 
   it('每一塊都是無原型的物件，歸屬表才走得到字典模式', () => {
@@ -1378,9 +1385,9 @@ describe('歸屬表分塊', () => {
   it('記一筆只動幾塊：其餘的塊在前後兩份狀態之間是同一個參照', () => {
     const log = logOf(serial(2600));
     const before = stateOf(log.events);
-    expect(before.owners.chunks.length).toBeLessThanOrEqual(17);
+    expect(before.owners.chunks.length).toBeLessThanOrEqual(Math.ceil(2000 / 32) + 1);
     for (const chunk of before.owners.chunks) {
-      expect(Object.keys(chunk).length).toBeLessThanOrEqual(128);
+      expect(Object.keys(chunk).length).toBeLessThanOrEqual(32);
     }
     const start = log.append('model/start', {});
     const message = log.append('assistant/message', reply(start.seq, '', 'id_new'));
@@ -1409,6 +1416,34 @@ describe('歸屬表分塊', () => {
     expect(entriesOf(left).at(-1)![0]).toBe('#id_new');
     expect(entriesOf(right).at(-1)![0]).toBe('#id_2200');
     expect(entriesOf(right).some(([key]) => key === '#id_new')).toBe(false);
+  });
+
+  it('已交出的塊與筆數清單一律不就地寫：舊狀態的每一塊與 sizes 都凍住，接著記各種批次也不拋、結果與筆數都照整張表的算法', () => {
+    // 2010 筆：已到上限，接下來每批都要從凍住的最舊那塊擠掉；2010 不是 32 的倍數，最後一塊沒滿，下一批的頭一筆會拷它、
+    // 其餘寫進拷出來的那塊。
+    const log = logOf(serial(2010));
+    const base = stateOf(log.events);
+    expect(Object.keys(base.owners.chunks.at(-1)!).length).toBeLessThan(32);
+    for (const chunk of base.owners.chunks) Object.freeze(chunk);
+    Object.freeze(base.owners.sizes);
+    const batches = [
+      ['n_1', 'n_2', 'n_3'],
+      ['n_4', 'n_4', 'id_2005', 'id_15'],
+      Array.from({ length: 40 }, (_, at) => `w_${at}`),
+    ];
+    let state = base;
+    for (const batch of batches) {
+      const start = log.append('model/start', {});
+      state = applyTrajectory(state, start);
+      state = applyTrajectory(
+        state,
+        log.append('assistant/message', reply(start.seq, '', ...batch)),
+      );
+      for (const chunk of state.owners.chunks) Object.freeze(chunk);
+      Object.freeze(state.owners.sizes);
+    }
+    expect(entriesOf(state)).toEqual(referenceOwners(log.events));
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('`__proto__` 這種 id 照常歸屬', () => {

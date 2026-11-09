@@ -11,7 +11,7 @@
  * | 路徑 | 殘餘 |
  * | --- | --- |
  * | S1／S6：同一次呼叫內端點回超窗，分派器換 retain 0 重摘，**同一個檔又 append 一段** | 第 2 段把第 1 段又抄一遍；連續兩次超窗是三段巢狀 |
- * | S2：生摘要的那次模型呼叫自己失敗（基座吞掉、照原請求送出） | 檔寫了、沒有事件；下一輪摘要又 append 一段，原文兩份 |
+ * | S2：生摘要的那次模型呼叫自己失敗（`withTokenBudget` 吞掉、照原請求送出） | 檔寫了、沒有事件；下一輪摘要又 append 一段，原文兩份 |
  *
  * 摘要後**主請求**才失敗（S3、S4、S10）不在這裡：#1390 之後，那筆事件在下一步請求前補回 state，下一輪接著它的切點摘要，
  * 歷史檔的各段互不重複（#1389 在 `91c87252` 上重量，S3／S4／S10 都是互不重複的區段）。**那種情況檔案要留**——
@@ -25,8 +25,8 @@
  * - 範圍內對歷史前綴的 `write`／`edit`／`uploadFiles` **只記不寫**，同一個路徑最後一次勝出；`downloadFiles` 讀的是
  *   已提交的內容。所以第二次嘗試是「已提交的 ＋ 自己這一段」，不是「已提交的 ＋ 第一次那段 ＋ 自己這一段」（S1／S6）。
  * - 範圍結束（回傳或拋出都一樣）時，**這一步真的生出過摘要的路徑**才寫進去。判準是這一步的日誌上有一筆
- *   `compaction/summary` 指著它，或回傳的 `Command` 帶著 `filePath` 相同的 `_summarizationEvent`。
- *   生摘要失敗的那一步兩者都沒有，暫存丟掉（S2）。
+ *   `compaction/summary` 指著它，或這一步記下的切點（`summary-cutoffs.ts` 的 `latestSummaryCutoff`）帶著同一個 `filePath`。
+ *   只看摘要生出來沒有，之後那次模型呼叫成不成都一樣提交；生摘要失敗的那一步兩者都沒有，暫存丟掉（S2）。
  * - 寫回去用的是範圍結束那一刻、仍在這個節點的執行環境裡的真 backend 呼叫，所以與以前一樣是這個 task 的寫入，
  *   進同一次 checkpoint；寫入的內容就是基座原本要寫的那一份。
  *
@@ -45,9 +45,9 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isCommand } from '@langchain/langgraph';
 import type { AnyBackendProtocol } from 'deepagents';
 import type { AgentMiddleware } from './base-types.js';
+import { latestSummaryCutoff } from './summary-cutoffs.js';
 import type { SessionLookup } from './registry.js';
 
 /** 這一步暫存的寫入：路徑 → 提交時要做的那一個呼叫（同一路徑最後一次勝出）。 */
@@ -162,12 +162,10 @@ export function createHistoryStaging(
             // 找不到這次呼叫的日誌（註冊表異常）：只剩 `Command` 這一條判準，寫入照樣能提交。
             log = undefined;
           }
-          let outcome: unknown;
           try {
-            outcome = await scopes.run(scope, () => inner(request, handler));
-            return outcome as ReturnType<typeof inner>;
+            return await scopes.run(scope, () => inner(request, handler));
           } finally {
-            await commit(scope, log, start, outcome, report);
+            await commit(scope, log, start, latestSummaryCutoff()?.filePath, report);
           }
         },
       } as AgentMiddleware;
@@ -175,12 +173,12 @@ export function createHistoryStaging(
   };
 }
 
-/** 這一步生出過摘要的路徑：日誌上這一步新增的 `compaction/summary`，加上回傳 `Command` 帶的那一筆。 */
+/** 這一步生出過摘要的路徑：日誌上這一步新增的 `compaction/summary`，加上這一步要落表的那個切點的歷史檔。 */
 function summarizedPaths(
   log:
     { readonly events: readonly { readonly type: string; readonly data?: unknown }[] } | undefined,
   start: number,
-  outcome: unknown,
+  noted: string | null | undefined,
 ): Set<string> {
   const paths = new Set<string>();
   for (const event of log?.events.slice(start) ?? []) {
@@ -188,11 +186,7 @@ function summarizedPaths(
     const filePath = (event.data as { filePath?: unknown } | undefined)?.filePath;
     if (typeof filePath === 'string') paths.add(filePath);
   }
-  if (isCommand(outcome)) {
-    const update = outcome.update as { _summarizationEvent?: { filePath?: unknown } } | undefined;
-    const filePath = update?._summarizationEvent?.filePath;
-    if (typeof filePath === 'string') paths.add(filePath);
-  }
+  if (typeof noted === 'string') paths.add(noted);
   return paths;
 }
 
@@ -201,11 +195,11 @@ async function commit(
   log:
     { readonly events: readonly { readonly type: string; readonly data?: unknown }[] } | undefined,
   start: number,
-  outcome: unknown,
+  noted: string | null | undefined,
   report: (message: string) => void,
 ): Promise<void> {
   if (scope.pending.size === 0) return;
-  const keep = summarizedPaths(log, start, outcome);
+  const keep = summarizedPaths(log, start, noted);
   for (const [path, write] of scope.pending) {
     if (!keep.has(path)) continue;
     try {

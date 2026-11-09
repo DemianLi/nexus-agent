@@ -10,12 +10,9 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import {
-  replayConversation,
-  TOOL_NOT_STARTED_TEXT,
-  TOOL_OUTCOME_UNKNOWN_TEXT,
-} from './conversation-replay.js';
-import type { ConversationReplay } from './conversation-replay.js';
+import { TOOL_NOT_STARTED_TEXT, TOOL_OUTCOME_UNKNOWN_TEXT } from './conversation-replay.js';
+import { replayConversation } from './langchain-message-adapter.js';
+import type { ConversationReplay } from './langchain-message-adapter.js';
 import type { GoalId } from './goal.js';
 import { toLoggedMessage } from './logged-message.js';
 import {
@@ -314,8 +311,13 @@ describe('一批工具結果', () => {
     log.append('turn/end', {});
 
     const replay = replayConversation(log.events, {
-      toolResultAsSeen: (message) =>
-        new ToolMessage({ content: `預覽：${message.text}`, tool_call_id: message.tool_call_id }),
+      toolResultAsSeen: (message) => ({
+        type: 'tool',
+        data: {
+          content: `預覽：${String(message.data.content)}`,
+          tool_call_id: message.data.tool_call_id,
+        },
+      }),
     });
     expect(shape(replay)).toEqual(['human:讀', 'ai:好', 'tool:c1:預覽：很長的輸出', 'ai:讀完了']);
   });
@@ -405,6 +407,26 @@ describe('沒配到結果的呼叫', () => {
       `tool:unrecorded:${TOOL_NOT_STARTED_TEXT}`,
       'human:還在嗎',
       'ai:在',
+    ]);
+  });
+
+  it('配不到任何呼叫的結果（孤兒）照送，不丟：配對錯由送出那一層擋', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: reply('好') });
+    log.append('tool/result', {
+      callId: 'ghost',
+      isError: false,
+      message: result('ghost', 'grep', '舊的'),
+    });
+    log.append('turn/end', {});
+    chat(log, '再', '嗯');
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:查',
+      'ai:好',
+      'tool:ghost:舊的',
+      'human:再',
+      'ai:嗯',
     ]);
   });
 });
@@ -624,7 +646,8 @@ describe('壓縮（摘要事件在呼叫之前）', () => {
       summary: summaryMessage('摘要甲'),
       beforeCall: true,
     });
-    // 模型呼叫失敗，graph state 沒存到 `_summarizationEvent`，下一次呼叫從原始的五則再摘要：座標仍是原始串的。
+    // 模型呼叫失敗，切點沒落定，下一次呼叫從原始的五則再摘要：座標仍是原始串的。v0.6.0（會話日誌格式版本 52）寫的日誌有這個形狀；
+    // 格式版本 53 在 #2416 合併之前寫的也是。
     log.append('compaction/summary', {
       cutoffIndex: 3,
       messagesBefore: 5,
@@ -967,6 +990,45 @@ describe('空的助手訊息', () => {
         'ai:B',
       ]);
     }
+  });
+
+  it('只有空白的也不進推導結果：空白字串、只有空白或空字串的文字區塊', () => {
+    for (const content of [
+      '  \n',
+      [{ type: 'text' as const, text: ' ' }],
+      [{ type: 'text' as const, text: '' }],
+    ]) {
+      const log = new SessionLog('replay');
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('assistant/message', { message: toLoggedMessage(new AIMessage({ content })) });
+      log.append('turn/end', {});
+      chat(log, '二', 'B');
+
+      expect(shape(replayConversation(log.events)), JSON.stringify(content)).toEqual([
+        'human:一',
+        'human:二',
+        'ai:B',
+      ]);
+    }
+  });
+
+  it('只帶推理區塊的還在：它有一段不是文字', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: [{ type: 'reasoning', reasoning: '先想' }],
+          response_metadata: { output_version: 'v1' },
+        }),
+      ),
+    });
+    log.append('turn/end', {});
+    chat(log, '二', 'B');
+
+    const replay = replayConversation(log.events);
+    expect(shape(replay)).toHaveLength(4);
+    expect(shape(replay)[1]).toMatch(/^ai:/);
   });
 
   it('對照：有內容的、只有工具呼叫（內容空）的都還在', () => {

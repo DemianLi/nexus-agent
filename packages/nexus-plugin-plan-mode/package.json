@@ -1,12 +1,13 @@
 {
   "name": "@nexus/plugin-plan-mode",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./invariant": "./lib/invariant.js",
+    "./model-call": "./lib/model-call-cell.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -21,6 +22,15 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@langchain/langgraph": "^1.4.13",
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -28,10 +38,18 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.13",
     "@nexus/core": "workspace:*",
     "@nexus/plugin-commands": "workspace:*",
     "langchain": "^1.5.10",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tools": "workspace:*"
   }
 }

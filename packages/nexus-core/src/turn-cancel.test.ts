@@ -304,3 +304,22 @@ describe('turnCancelSignalOf', () => {
     expect(turnCancelSignalOf(undefined)).toBeUndefined();
   });
 });
+
+describe('沒有 tool_call.id 的呼叫', () => {
+  it('派發前中止與跑完才中止，結果的 tool_call_id 都是空字串', async () => {
+    const request = (signal: AbortSignal) =>
+      ({ toolCall: { name: 'write_file', args: {} }, runtime: runtime(signal) }) as never;
+    const before = (await guard.wrapToolCall(request(aborted()), async () =>
+      success(),
+    )) as ToolMessage;
+    expect(before.tool_call_id).toBe('');
+    expect(toolErrorOf(before)).toEqual({ name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH });
+
+    const controller = new AbortController();
+    const after = (await guard.wrapToolCall(request(controller.signal), async () => {
+      controller.abort();
+      return new ToolMessage({ content: '寫好了', tool_call_id: '', name: 'write_file' });
+    })) as ToolMessage;
+    expect(after).toMatchObject({ content: TOOL_ABORTED_TEXT, status: 'error', tool_call_id: '' });
+  });
+});

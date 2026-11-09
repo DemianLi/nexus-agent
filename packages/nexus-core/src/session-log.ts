@@ -35,10 +35,11 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
-import type { MessageContent } from '@langchain/core/messages';
+import type { MessageContent } from './nexus-message.js';
 import { brandNumber } from '@nexus/brand';
 import type { BrandedNumber } from '@nexus/brand';
 import type { AttachmentRef } from './attachment-ref.js';
+import type { PageContextRef } from './page-context.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
@@ -54,7 +55,7 @@ import type { SessionHeaderBuildMetadata } from './session-store.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { SubagentDescriptorData } from './subagent-descriptor.js';
 import type { TodoItem } from './todo.js';
-import type { ToolErrorInfo } from './tool-events.js';
+import type { ToolErrorInfo } from './tool-error-codes.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
@@ -101,8 +102,8 @@ import type { ToolErrorInfo } from './tool-events.js';
  *
  * `compaction/summary` 生產者同第四種，但**掛的位置不一樣**：它不是一顆新名字的
  * middleware，是{@link ./summarization.ts | 我們那個同名取代的摘要器}多包的一層。理由是
- * 基座**只在回傳值裡**交出摘要事件（`new Command({ update: { _summarizationEvent } })`），
- * 一顆排在它後面的新 middleware 看不到那個回傳值。「兩條路都產得出來嗎」跟 `model/usage`
+ * 摘要只在摘要器裡面看得到（生好、交下去的那一刻），一顆排在它後面的新 middleware 只看到摘要過的請求，
+ * 認不出這一步摘要過。「兩條路都產得出來嗎」跟 `model/usage`
  * 同一條理由：它就是那一份組裝本身。
  * 見 [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
  *
@@ -195,7 +196,7 @@ export type TurnAbortCause =
   | { readonly kind: 'hook'; readonly reason: string };
 
 /**
- * 一輪為什麼沒有正常結束。四種：
+ * 一輪為什麼沒有正常結束。五種：
  *
  * - **`aborted`**：被中止。原因三種：`user`（人按了停止）、`parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -209,6 +210,9 @@ export type TurnAbortCause =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ * - **`max-turns`**：這一輪撞到輪數上限收掉（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）。
+ *   **還沒有生產者**（寫入方在 [#2359](https://github.com/DemianLi/nexus-agent/issues/2359)）；讀盤驗證與對話史認得它，軌跡與
+ *   token-meter 的 `endOf` 還沒有這一支、落到 `completed`。
  * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
  *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
@@ -229,6 +233,7 @@ export type TurnAbortCause =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: TurnAbortCause }
   | { readonly kind: 'max-tokens' }
+  | { readonly kind: 'max-turns' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'blocked' };
 
@@ -440,6 +445,13 @@ export interface SessionEventMap {
          * **格式 42 起才有**，而且不標 `ignorable`：一台 41 的 runtime 讀到會把它略過，排著的項目被折回來重跑時點名就悄悄不見了。
          */
         readonly mention?: SubagentMentionRef;
+        /**
+         * 嵌入的對話框附在這句話上的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，`run.start` 的 `context`）。沒有就整個不放這個 key。
+         * 送進模型的 `HumanMessage` 由它和 `text` 造（同 `mention`），形狀見 `page-context.ts`。
+         *
+         * **格式 53 起才有**，而且不標 `ignorable`：一台 52 的 runtime 讀到會把它略過，排著的項目被折回來重跑時情境就悄悄不見了。
+         */
+        readonly context?: PageContextRef;
         /**
          * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
          * 照 dsh 落在 `user/message` 的 `source.rpcId`（`packages/api/session-controller/src/commands.ts:331-335`，`d7432673886`）；
@@ -761,15 +773,18 @@ export interface SessionEventMap {
    * 照 dsh 的 `request/header`（`packages/core/session/src/types.ts:390-397`，`5badb15`）。記錄點在模型被叫的那一刻
    * （callback），不是 middleware——見 `request-snapshot.ts` 檔頭，那裡有偏離與理由。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；會話遙測的鏡像**不送**它
-   * （`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
+   * **不進模型**；會話遙測的鏡像**不送**它（`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
    *
-   * 落在配對的 `model/start` 之後、回覆之前；`modelCall` 指回記下它的那次呼叫。這份日誌沒有快照時第一份的
-   * `reason` 是 `'initial'`，之後不同才記、`reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
+   * **格式 55 起**（[#2416](https://github.com/DemianLi/nexus-agent/issues/2416)）：寫在它那次呼叫的 `model/start` **之前**、不帶
+   * `modelCall`、不標 `ignorable`；屬於哪一次看位置，是它之後的第一顆 `model/start`。同一次呼叫裡被重送時，
+   * 後來那份落在已寫的 `model/start` 之後，歸給還開著的那一次。格式 54 以前帶 `modelCall`、落在 `model/start` 之後、標
+   * `ignorable`；讀的一方看有沒有 `modelCall` 分新舊。這份日誌沒有快照時第一份的 `reason` 是 `'initial'`，之後不同才記、
+   * `reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
    */
   'request/header': {
     readonly header: RequestHeader;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有：記下它的那次呼叫的 `model/start` 的 `seq`。55 起不寫，看位置。 */
     readonly modelCall?: number;
   };
   /**
@@ -782,6 +797,7 @@ export interface SessionEventMap {
   'request/system': {
     readonly system: string;
     readonly reason: RequestSnapshotReason;
+    /** 格式 54 以前才有，同 `request/header`。 */
     readonly modelCall?: number;
   };
   /**
@@ -873,10 +889,10 @@ export interface SessionEventMap {
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
-   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；推模型歷史的一側不讀。**由 pump 寫**
-   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在失敗那一對
-   * `model/start`／`model/end`（`outcome: 'error'`）與配對的 `llm/retry` 之後、下一次嘗試的 `model/start` 之前（等退避時按停止也有這一顆）。
-   * `modelCall` 指回失敗那一對。
+   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
+   * `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在同一輪裡、失敗那一對
+   * `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）之後。跟下一次嘗試的 `model/start` 誰先誰後不固定：pump
+   * 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。`modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。
@@ -1064,8 +1080,8 @@ export interface SessionEventMap {
    * 整個操作的鎖**串起來：中途崩潰的形態是可偵測的遺留鎖（有 `start` 沒有配對的 `end`），
    * 而不是一個謊稱完成的 `end`。
    *
-   * **我們湊不出那把鎖，所以只留中間那顆。** 基座沒有把「開始壓縮」與「壓縮結束」暴露成
-   * 任何東西——它只在**成功走完**之後回一個帶 `_summarizationEvent` 的 `Command`。硬記
+   * **我們湊不出那把鎖，所以只留中間那顆。** 摘要器（流程照搬基座，`summarizer-engine.ts`）沒有「開始壓縮」與
+   * 「壓縮結束」這兩個時刻——它只在**成功走完**之後把摘要過的請求交下去。硬記
    * 一顆 `start` 只能記在「我們猜它要壓了」的時間點，而那個猜測正是 dsh 的鎖要消滅的
    * 那種東西。一顆誠實的事件勝過三顆撐不起語義的。**代價明寫**：壓縮失敗在日誌裡是
    * 沉默的，不是一顆帶 `error` 的 `end`。
@@ -1084,16 +1100,16 @@ export interface SessionEventMap {
    * `historyPathPrefix` 與一個隨機 session id，不含使用者輸入，但它仍然是路徑不是計數。
    *
    * **`cutoffIndex` 與 `messagesBefore` 是同一組座標**：原始訊息串（不是摘要器眼中的
-   * 有效串）的索引與長度。基座存進 state 的就是原始座標——`getEffectiveMessages` 拿它去
-   * `messages.slice(cutoffIndex)`。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
+   * 有效串）的索引與長度。切點表記的就是原始座標——套用時拿它去
+   * `messages.slice(cutoffIndex)`（`summary-cutoffs.ts` 的 `applySummaryCutoff`）。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
    * 多前面的多少」。
    *
    * **`summary` 是換上去的那則摘要訊息**（從格式 9 起，[#305](https://github.com/DemianLi/nexus-agent/issues/305)），
    * 照 dsh 的 `compaction/summary` 帶 `summary`（`packages/compaction/compaction/src/types.ts`）。1 到 8 刻意
    * 不記，理由是檔頭那條「不記訊息內容」；推模型歷史的一側要把被壓掉的那一段換成它，所以它要在日誌裡。
    * dsh 由緊接著的一顆 `user/message {surfaceOp: replace}` 真正取代那一段；我們沒有 surface 那一軸，
-   * 取代的規則是基座的 `getEffectiveMessages`——`[summaryMessage, ...messages.slice(cutoffIndex)]`，
-   * graph state 裡的 `messages` 本身不動（`deepagents@1.13.1` `dist/langsmith-zm0ILQsV.js:2697-2702`）。
+   * 取代的規則是 `[summaryMessage, ...messages.slice(cutoffIndex)]`（`summary-cutoffs.ts` 的 `applySummaryCutoff`，同基座的
+   * `getEffectiveMessages`，`deepagents@1.13.1` `dist/langsmith-zm0ILQsV.js:2697-2702`），graph state 裡的 `messages` 本身不動。
    * 8 以前的檔沒有這一格，所以型別上是選填。
    *
    * ⚠️ 摘要本文原樣進遙測，同 `assistant/message`。
@@ -1570,10 +1586,11 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * 一筆事件自己的資料規則，照 dsh `validateSessionEventData`（`packages/core/session/src/surface.ts:166-219`，`687f282e`）。
- * **只放 nexus 有詞彙的兩條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
+ * **只放 nexus 有詞彙的三條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
  *
  * - `request/header` 不帶空的 `header.tools`（dsh `:205-207`）：寫方沒有工具時整格省略（`request-snapshot.ts`）。
  * - `tool/result` 帶了 `error` 就必須 `isError: true`（dsh `:212-218`）：`error` 只在失敗時出現。
+ * - `turn/end` 的 `reason` 只准認得的種類，見 {@link validateTurnEndReason}。
  *
  * dsh 其餘幾條（developer 角色與工具增減區塊、`header.system`、空的 `adapterDefaults`）nexus 沒有那些格，不適用。不驗整份 payload。
  * 呼叫點照 dsh：{@link SessionLog.append}（`index.ts:824`）、seed 的信封檢查（`:230`）、後端讀盤（`storage-contract.ts:95`）。
@@ -1599,6 +1616,52 @@ export function validateSessionEventData(
     if (data['error'] !== undefined && data['isError'] !== true) {
       throw new TypeError(`${subject} 帶了 data.error，data.isError 卻不是 true`);
     }
+  } else if (event.type === 'turn/end') {
+    if (!isJsonObject(data)) throw new TypeError(`${subject} 的 data 要是物件`);
+    if (data['reason'] !== undefined) validateTurnEndReason(data['reason'], subject);
+  }
+}
+
+/** 型別綁死：{@link TurnEndReason} 多一種或少一種，這張表都編不過。 */
+const TURN_END_REASON_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({
+    aborted: true,
+    'max-tokens': true,
+    'max-turns': true,
+    interrupted: true,
+    blocked: true,
+  } satisfies Record<TurnEndReason['kind'], true>),
+);
+/** 同上，綁 {@link TurnAbortCause}。 */
+const TURN_ABORT_CAUSE_KINDS: ReadonlySet<string> = new Set(
+  Object.keys({ user: true, parent: true, hook: true } satisfies Record<
+    TurnAbortCause['kind'],
+    true
+  >),
+);
+
+/**
+ * `turn/end` 的 `reason` 只准 {@link TurnEndReason} 的成員。不認得的理由要拒：有讀方把不認得的理由當成正常完成
+ * （`@nexus/plugin-trajectory` 與 `@nexus/plugin-token-meter` 的 `endOf`），新版寫的理由給舊讀方讀就會靜靜讀錯。
+ * {@link TurnEndReason} 是封閉聯集，所以驗得了。
+ */
+function validateTurnEndReason(reason: unknown, subject: string): void {
+  if (!isJsonObject(reason)) throw new TypeError(`${subject} 的 data.reason 要是物件`);
+  const kind = reason['kind'];
+  if (typeof kind !== 'string' || !TURN_END_REASON_KINDS.has(kind)) {
+    throw new TypeError(`${subject} 的 data.reason.kind 不認得：${JSON.stringify(kind)}`);
+  }
+  if (kind !== 'aborted') return;
+  const cause = reason['cause'];
+  if (!isJsonObject(cause)) throw new TypeError(`${subject} 的 data.reason.cause 要是物件`);
+  const causeKind = cause['kind'];
+  if (typeof causeKind !== 'string' || !TURN_ABORT_CAUSE_KINDS.has(causeKind)) {
+    throw new TypeError(
+      `${subject} 的 data.reason.cause.kind 不認得：${JSON.stringify(causeKind)}`,
+    );
+  }
+  if (causeKind === 'hook' && typeof cause['reason'] !== 'string') {
+    throw new TypeError(`${subject} 的 data.reason.cause.reason 要是字串`);
   }
 }
 
@@ -1621,13 +1684,15 @@ const SESSION_EVENT_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
  *
  * 兩個呼叫點（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)），兩層照 dsh 各驗各的：
  *
- * - {@link SessionLog} 的 seed（拷完之後），對到 dsh core 的這一支：`seq` 的形狀在這裡驗。
+ * - {@link SessionLog} 的 seed（沒標過的拷完之後；可共用的陣列不拷，見 {@link shareStoredEvents}），對到 dsh core 的這一支：
+ *   `seq` 的形狀在這裡驗。
  * - harness 讀盤的逐行判壞行（`jsonl-session-store.ts` 的 `parseJsonlSessionBody`），對到 dsh 讀檔器的 `decodeEvent`：
  *   傳 `checkSeq: false`，**不驗 `seq` 的形狀**，交給讀方的 `seq === 已接受的筆數`（dsh `codec.ts:104`；`-0` 會等於 `0`
  *   而放行，要到續接建 seed 時才拒，同 dsh）。
  *
  * `time` 拒 `-0` 照 dsh 讀檔器（`decodeEvent:143` 的 `sessionFormatSafeInteger`，`session-format/src/json.ts:37`）；dsh core
- * 這一支不檢，但 seed 一律先過 {@link snapshotJsonValue}，`-0` 在拷那一步就拒了，所以放在共用的這一支，seed 的行為不變。
+ * 這一支不檢，但沒標過的 seed 先過 {@link snapshotJsonValue}，`-0` 在拷那一步就拒了，所以放在共用的這一支，seed 的行為不變。
+ * 可共用的陣列不拷：`seq`、`time` 的 `-0` 照樣在這裡擋，`data` 裡的不擋。
  *
  * @param value - 要驗的那一筆。
  * @param subject - 錯誤訊息的開頭，指認是哪一筆（「seed 第 3 顆」「第 4 行」）。
@@ -2117,6 +2182,80 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/**
+ * {@link shareStoredEvents} 與 {@link appendSharedEvents} 交出去的陣列：只有那兩支加得進來，在這裡面就是整張圖深凍過
+ * （前提：交進來的是純 JSON）。
+ */
+const sharedStoredEvents = new WeakSet<readonly SessionEvent[]>();
+
+/**
+ * 把從磁碟解出來的一批事件原地深凍、標成可共用，回傳同一個陣列。當 {@link SessionLogOptions.seed} 時日誌直接收下這些物件：
+ * 不拷不凍；信封、資料規則與 `seq` 照驗。
+ *
+ * **只給從 JSON 解出來的事件用**：這裡只凍不拷，不檢查能不能無損表達成 JSON。
+ */
+export function shareStoredEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  freezeStoredEvents(events);
+  sharedStoredEvents.add(events);
+  return events;
+}
+
+/**
+ * 在一份可共用的陣列（{@link shareStoredEvents}）後面接幾顆純 JSON 的事件，交出一份新的、同樣可共用的陣列：只原地凍新接的
+ * 那幾顆（連 `more` 陣列）。`shared` 沒標過的話交出普通的串接，不凍也不標，當 seed 時照常拷、驗。
+ */
+export function appendSharedEvents(
+  shared: readonly SessionEvent[],
+  more: readonly SessionEvent[],
+): readonly SessionEvent[] {
+  if (!sharedStoredEvents.has(shared)) return [...shared, ...more];
+  freezeStoredEvents(more);
+  const joined = Object.freeze([...shared, ...more]);
+  sharedStoredEvents.add(joined);
+  return joined;
+}
+
+/** {@link shareStoredEvents}／{@link appendSharedEvents} 凍過的每一顆事件的層數，見 {@link storedEventDepth}。 */
+const storedEventDepths = new WeakMap<SessionEvent, number>();
+
+/**
+ * 一顆讀盤共用過的事件，`data`（與信封上其他物件欄位）巢狀幾層，算法同寫入時的上限檢查（`data` 本身是第 1 層，
+ * {@link SESSION_EVENT_MAX_DEPTH}）。
+ * 有值就表示這顆經過 {@link shareStoredEvents} 或 {@link appendSharedEvents}，整張深凍過；其餘的事件回 `undefined`。
+ *
+ * 讀方不設上限，上限出現之前寫下的舊日誌可能比上限深，這裡照實回。
+ */
+export function storedEventDepth(event: SessionEvent): number | undefined {
+  return storedEventDepths.get(event);
+}
+
+/**
+ * 原地深凍一批從 JSON 解出來的事件（連陣列本身），順便記下每一顆的層數（{@link storedEventDepth}）。迭代走訪，深巢狀不撞呼叫堆疊。
+ * 不去重：有環會轉不完，只給從 JSON 解出來的值。
+ */
+function freezeStoredEvents(events: readonly SessionEvent[]): void {
+  const nodes: object[] = [];
+  const depths: number[] = [];
+  for (const event of events) {
+    let most = 0;
+    nodes.push(event);
+    depths.push(0);
+    for (let node = nodes.pop(); node !== undefined; node = nodes.pop()) {
+      const depth = depths.pop()!;
+      if (depth > most) most = depth;
+      Object.freeze(node);
+      for (const child of Object.values(node)) {
+        if (child !== null && typeof child === 'object') {
+          nodes.push(child as object);
+          depths.push(depth + 1);
+        }
+      }
+    }
+    storedEventDepths.set(event, most);
+  }
+  Object.freeze(events);
+}
+
 /** 日誌的觀察者。**同步呼叫，在事件已經進到日誌之後**。 */
 export type SessionLogListener = (event: SessionEvent) => void;
 
@@ -2142,6 +2281,9 @@ export interface SessionLogOptions {
    * 每一顆照 `append` 的規矩拷、凍：從磁碟讀回來的是純物件，不凍的話「改不動」只對這個
    * 行程寫的那些成立。`seq` 必須等於它在陣列裡的位置——缺號或重號的 seed 開出來的日誌
    * `length` 與 `seq` 對不上，下一筆 append 會跟已存的撞號。
+   *
+   * {@link shareStoredEvents}／{@link appendSharedEvents} 交出的陣列已整張深凍，不拷不凍；驗信封、資料規則與 `seq`，
+   * 不驗能不能無損表達成 JSON（由交出方保證）。
    */
   readonly seed?: readonly SessionEvent[];
 }
@@ -2290,15 +2432,16 @@ export class SessionLog implements SessionLogView {
 
   /**
    * 接上 seed：逐顆拷、驗信封與資料規則、驗連續、凍，最後補一顆 `session/end-seed`。順序照 dsh 的 seed
-   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。
+   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。可共用的陣列不拷不凍，
    * 見 {@link SessionLogOptions.seed}。
    *
-   * @throws 某一顆帶了 JSON 表達不出來的東西、信封或資料規則不對（`TypeError`，#1549），或 `seq` 不等於它的位置。
+   * @throws 某一顆信封或資料規則不對、沒標過的 seed 某一顆帶了 JSON 表達不出來的東西（`TypeError`，#1549），或 `seq` 不等於它的位置。
    */
   #adoptSeed(seed: readonly SessionEvent[]): void {
+    const shared = sharedStoredEvents.has(seed);
     for (const [index, event] of seed.entries()) {
       const subject = `seed 第 ${index} 顆`;
-      const snapshot = snapshotJsonValue(event, subject);
+      const snapshot = shared ? event : snapshotJsonValue(event, subject);
       assertSessionEventEnvelope(snapshot, subject);
       validateSessionEventData(snapshot, `${subject}（${snapshot.type}）`);
       if (snapshot.seq !== index) {
@@ -2306,7 +2449,7 @@ export class SessionLog implements SessionLogView {
           `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${snapshot.seq}。`,
         );
       }
-      this.#events.push(deepFreeze(snapshot));
+      this.#events.push(shared ? snapshot : deepFreeze(snapshot));
     }
     // 切點從已收下的 seed 推（同 dsh 讀盤）。剛分叉的 seed 以 inherited 標記結尾，下面就不再補；續接一份分叉來的
     // 日誌時標記留在原位，結尾補的是普通的那顆（dsh `index.ts:691-698` 的 restore 那一支）。

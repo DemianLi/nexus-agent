@@ -102,17 +102,21 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  toBaseMessage,
   unansweredCallResults,
   stampImageOrigin,
   userContent,
   withModelCall,
   type ApprovalOutcome,
+  type LoggedMessage,
   type AttachmentRef,
+  type PageContextRef,
   type SubagentMentionRef,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
   type ProjectionSession,
+  type ProjectionValue,
   type ProjectionUnit,
   type QueuedInput,
   type QueuedInputSource,
@@ -140,7 +144,8 @@ import {
   SessionReferenceError,
   SUBAGENT_STATUS,
 } from '@nexus/wire';
-import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
+import type { CustomFrameData, HostToolDeclaration, SubagentStatusPayload } from '@nexus/wire';
+import { HOST_TOOL_TIMEOUT_ERROR } from '@nexus/wire';
 
 import {
   BoundedQueue,
@@ -157,6 +162,7 @@ import {
   type ClaimedInput,
   inboxData,
   type InboxClaim,
+  isLegacyLog,
   isTodosReset,
   modelUsageData,
   SessionTotals,
@@ -206,6 +212,8 @@ import {
   urlKeysOf,
 } from './mcp-elicitation.js';
 import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
+import { HOST_TOOL_TIMEOUT_REASON, isHostToolInterrupt } from './host-tools.js';
+import type { HostToolsSlot } from './host-tools.js';
 import { renderGoalRoundPrompt } from '@nexus/goal';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-workspace-changes';
@@ -345,6 +353,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
         ...(item.mention === undefined ? {} : { mention: item.mention }),
+        ...(item.context === undefined ? {} : { context: item.context }),
       };
     case 'subagent-settled':
       return {
@@ -447,6 +456,16 @@ export type PumpInput =
        * 進佇列、`turn/start`、插話的 `HumanMessage` 都帶著它，形狀見 `@nexus/core` 的 `subagent-mention.ts`。
        */
       readonly mention?: SubagentMentionRef;
+      /**
+       * 嵌入的對話框附的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）；呼叫端（`run.start`）已驗過這條 thread 是嵌入版、`label` 合格。
+       * 跟 `mention` 走同一條路，形狀見 `@nexus/core` 的 `page-context.ts`。
+       */
+      readonly context?: PageContextRef;
+      /**
+       * 嵌入的對話框替宿主頁宣告的工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）；呼叫端（`run.start`）已驗過。
+       * **不進佇列**（落盤的格式不動），記在 {@link ThreadPump.#hostToolsByItem}，這一句開跑時寫進 {@link HostToolsSlot}。
+       */
+      readonly hostTools?: readonly HostToolDeclaration[];
     }
   | {
       readonly kind: 'resume';
@@ -466,7 +485,7 @@ export type PumpInput =
        * `url` 模式與子代理）：這一輪裡記一顆 `interrupt/system-answered`。人答的路不帶。
        */
       readonly systemAnswered?: {
-        readonly reason: SystemAnswerReason;
+        readonly reason: SystemAnswerReason | typeof HOST_TOOL_TIMEOUT_REASON;
         readonly keys: readonly string[];
       };
     }
@@ -559,6 +578,8 @@ export interface PendingInterrupt {
    * 廣播出去的是翻成問答卡的那一份，人的回覆要靠它翻回 adapter 要的 `{ responses }`（{@link answerElicitation}）。
    */
   readonly elicitation?: McpElicitation;
+  /** 這顆是宿主頁工具的（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：回應要合 `@nexus/wire` 的 `hostToolResponseProblem`。 */
+  readonly hostTool?: true;
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
@@ -824,6 +845,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
           ? {}
           : { attachments: input.attachments }),
         ...(input.mention === undefined ? {} : { mention: input.mention }),
+        ...(input.context === undefined ? {} : { context: input.context }),
         // 兩格一起寫、一起缺（#1335）：沒有 `id` 的話（手搭的呼叫端）認出重送也回不了原本那一件，所以不寫半套。
         ...(input.requestId === undefined || input.id === undefined
           ? {}
@@ -1041,6 +1063,13 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
     default:
       return;
   }
+}
+
+/** 手上那則講到一半的回覆跟剛記進日誌的那則，兩邊都有 id 而且不同。 */
+function isOtherReply(reply: UnsettledReply | undefined, logged: LoggedMessage): boolean {
+  const live = (reply?.start as { id?: unknown } | undefined)?.id;
+  const written = (logged.data as { id?: unknown }).id;
+  return typeof live === 'string' && typeof written === 'string' && live !== written;
 }
 
 /** 一則已經上線、日誌還沒記的 root 回覆：開頭、到目前為止的推理與正文、收尾（有的話）。見 {@link CurrentRun.reply}。 */
@@ -1360,6 +1389,8 @@ export class ThreadPump {
   readonly #projectionUnits: readonly ProjectionUnit[];
   readonly #projectionFold: ProjectionFold;
   #projections: ProjectionSession | undefined;
+  /** {@link ThreadPump.legacyLog} 上一次算的值，與當時 root 日誌的長度。日誌只會長，長度沒變值就沒變。 */
+  #legacy: { readonly length: number; readonly value: boolean } | undefined;
   /**
    * 子代理自己的投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：只有宣告 `children` 的單元，一個子代理一份折疊
    * （`runId` → 折疊），形狀與理由見 `projection-children.ts`。`#childSeeds` 是上一個行程留下的子代理日誌（啟動時讀進來），
@@ -1409,6 +1440,12 @@ export class ThreadPump {
   readonly #spillStore: SpillStore | undefined;
   /** 引用別的會話的上限與預算（#1573 N0862），見建構參數 `referencePolicy`。 */
   readonly #referencePolicy: SessionReferencePolicy | undefined;
+  /** 宿主頁工具的插槽（#2374），見建構參數 `hostTools`。 */
+  readonly #hostTools: HostToolsSlot | undefined;
+  /** 排在佇列裡的句子各自帶的宿主頁工具宣告，鍵是佇列那一件的 id；開跑時取走。 */
+  readonly #hostToolsByItem = new Map<string, readonly HostToolDeclaration[]>();
+  /** 等宿主頁回應的中斷 → 逾時的計時器（#2374）。第一次廣播時起算，答掉、收回、收線時清掉。 */
+  readonly #hostToolTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1479,6 +1516,8 @@ export class ThreadPump {
    * @param referencePolicy - 引用別的會話的上限與預算（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
    *   `session-reference` 那一列）：一則訊息最多幾條，與每條來源的位元組預算（跟著這條 thread 下一步會走的模型）。
    *   **省略即 3 條、每條 64 KiB**（`MAX_SESSION_REFERENCES`、`DEFAULT_MAX_REFERENCE_BYTES`），同今天。
+   * @param hostTools - 嵌入版的宿主頁工具插槽（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，`createNexusAgent` 回的那一格）：
+   *   每一句開跑時寫進那一句帶的宣告。**省略即不是嵌入版**，帶了宣告也不收。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1500,7 +1539,9 @@ export class ThreadPump {
     turnClock?: TurnClock,
     spillStore?: SpillStore,
     referencePolicy?: SessionReferencePolicy,
+    hostTools?: HostToolsSlot,
   ) {
+    this.#hostTools = hostTools;
     this.#turnClock = turnClock;
     this.#spillStore = spillStore;
     this.#referencePolicy = referencePolicy;
@@ -1627,6 +1668,24 @@ export class ThreadPump {
    */
   get projectionUnits(): readonly ProjectionUnit[] {
     return this.#projectionUnits;
+  }
+
+  /**
+   * root 日誌此刻的投影值，就是即時下行送出的那一份（`ProjectionSession.current()`）：每顆 root 事件都在 `append` 的
+   * 同一個同步段裡經 `#noteLogEvent` 推進。與從頭 `fold(sessionLog.events)` 只有一處不同：某個單元的 `view` 在中途
+   * 的狀態拋錯時，這裡從那顆起就停用。歷史路由拿它當最新一頁的值，不必每頁從頭折。收線之後不再推進，回 `undefined`。
+   */
+  get projectionValues(): readonly ProjectionValue[] | undefined {
+    return this.#closed ? undefined : this.#projections?.current();
+  }
+
+  /** 同 {@link isLegacyLog}`(sessionLog.events)`，root 日誌長度沒變就沿用上一次的值。 */
+  legacyLog(): boolean {
+    const root = this.#sessions.root;
+    if (this.#legacy?.length !== root.length) {
+      this.#legacy = { length: root.length, value: isLegacyLog(root.events) };
+    }
+    return this.#legacy.value;
   }
 
   /**
@@ -1904,6 +1963,7 @@ export class ThreadPump {
           ? {}
           : { attachments: input.attachments }),
         ...(input.mention === undefined ? {} : { mention: input.mention }),
+        ...(input.context === undefined ? {} : { context: input.context }),
       };
       const steer = input.steer === true;
       const intoStep = steer && this.#acceptsSteer();
@@ -1921,6 +1981,10 @@ export class ThreadPump {
         return Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
       if (intoStep) return Promise.resolve();
+      // 插話被這一輪收下時不換工具集；退成排隊的照它自己的宣告開跑。
+      if (this.#hostTools !== undefined && input.hostTools !== undefined) {
+        this.#hostToolsByItem.set(id, input.hostTools);
+      }
       // **下一次送出喚醒停住的**（#637 的 Q2）：它們排在前面，照 FIFO 先跑。按了停止、那一輪還沒收尾就又送的話，
       // 那一句一樣是「下一次送出」，所以停住的請求也一起清掉。退成排隊的插話同樣是一次送出，同 dsh 中止之後的插話
       // 照樣叫醒迴圈（`agent.ts:157-158`）。
@@ -1964,6 +2028,7 @@ export class ThreadPump {
       if (this.#pending.delete(input.interruptId)) {
         this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
       }
+      this.#clearHostToolTimer(input.interruptId);
     }
     return input.kind === 'resume'
       ? this.#schedule(() => this.#runOnce(input), true, { resumes: true })
@@ -2207,6 +2272,7 @@ export class ThreadPump {
       // 喚醒停住的那幾件（#637）。
       const withdrawn = [...this.#pending.keys()];
       this.#pending.clear();
+      for (const interruptId of withdrawn) this.#clearHostToolTimer(interruptId);
       for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
       this.#stopRequested = true;
       void this.#schedule(() => this.#withdraw(), true).catch(() => {
@@ -2344,6 +2410,9 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#closing.abort();
+    for (const interruptId of [...this.#hostToolTimers.keys()])
+      this.#clearHostToolTimer(interruptId);
+    this.#hostToolsByItem.clear();
     this.#unobserveLogs();
     this.#projectionOut.dispose();
     // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
@@ -2797,7 +2866,12 @@ export class ThreadPump {
       if (job.text !== undefined) {
         // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
         const message = new HumanMessage({
-          content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
+          content: userContent(
+            job.text.text,
+            job.text.attachments,
+            job.text.mention,
+            job.text.context,
+          ) as never,
           id: job.text.id,
         });
         const logged = this.#sessions.root.append('user/message', {
@@ -2877,6 +2951,8 @@ export class ThreadPump {
       return 'steer-unavailable';
     }
     this.#spliceInbox({ target, start: index, removedCount: 1, inserted: [], outcome: 'canceled' });
+    // 不會照它自己開一輪了（刪掉、或轉成插話併進跑著的那一輪），它帶的宿主頁工具一起丟掉。
+    this.#hostToolsByItem.delete(itemId);
     if (action.kind === 'steer') {
       this.#spliceInbox({
         target: 'next-step',
@@ -2952,7 +3028,7 @@ export class ThreadPump {
       );
       const messages = results
         .filter(({ data }) => pending.has(data.callId))
-        .map(({ message }) => message);
+        .map(({ message }) => toBaseMessage(message));
       if (messages.length > 0) await this.#agent.updateState(config, { messages });
       return failure;
     } catch (recoveryError) {
@@ -2972,6 +3048,59 @@ export class ThreadPump {
       this.#warn?.(`[輪次] thread ${this.#threadId} ${failure.error.code}：${original}`);
     }
     return failure;
+  }
+
+  /**
+   * 宿主頁工具的中斷開始計時（#2374，設計 Q6）：到點還掛著就由系統代答 `{ ok: false, error: 'timeout' }`，這一輪接著跑，模型看到的是逾時。
+   * **只在第一次起算**：同一顆中斷再度出現（同 id 覆寫）不重算。走 {@link ThreadPump.submit}，排隊與日誌同人答的路，多記一顆
+   * `interrupt/system-answered`。
+   */
+  #armHostToolTimer(interruptId: string): void {
+    const slot = this.#hostTools;
+    if (slot === undefined || this.#hostToolTimers.has(interruptId)) return;
+    const timer = setTimeout(() => {
+      this.#hostToolTimers.delete(interruptId);
+      if (this.#closed || !this.#pending.has(interruptId)) return;
+      this.#warn?.(
+        `[宿主頁工具] thread ${this.#threadId}：中斷 ${interruptId} 等了 ${String(slot.timeoutMs)} ms 沒有回應，交回逾時`,
+      );
+      this.submit({
+        kind: 'resume',
+        interruptId,
+        response: { ok: false, error: HOST_TOOL_TIMEOUT_ERROR },
+        systemAnswered: { reason: HOST_TOOL_TIMEOUT_REASON, keys: [] },
+      }).catch(() => {
+        // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
+      });
+    }, slot.timeoutMs);
+    timer.unref?.();
+    this.#hostToolTimers.set(interruptId, timer);
+  }
+
+  #clearHostToolTimer(interruptId: string): void {
+    const timer = this.#hostToolTimers.get(interruptId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.#hostToolTimers.delete(interruptId);
+  }
+
+  /**
+   * 這一輪的宿主頁工具（#2374）：接著上一輪中斷的不換；一句話開跑換成它自己帶的宣告，沒帶就清空；其他輪（續行、背景結算）清空。
+   * 有宣告時記一顆可略過的 `host-tools/declared`。
+   */
+  #declareHostTools(input: PumpInput, claimed: QueuedInput | undefined): void {
+    const slot = this.#hostTools;
+    if (slot === undefined || input.kind === 'resume') return;
+    const declared = claimed === undefined ? undefined : this.#hostToolsByItem.get(claimed.id);
+    if (claimed !== undefined) this.#hostToolsByItem.delete(claimed.id);
+    slot.current = declared ?? [];
+    if (slot.current.length > 0) {
+      this.#sessions.root.append(
+        'host-tools/declared',
+        { tools: slot.current },
+        { ignorable: true },
+      );
+    }
   }
 
   /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
@@ -3003,6 +3132,7 @@ export class ThreadPump {
       input = { ...input, text: referenced.text };
     }
     const turnStart = this.#sessions.root.append('turn/start', turnStartOf(input));
+    this.#declareHostTools(input, claimed);
     if (claimed !== undefined) this.#inboxIdBySeq.set(turnStart.seq, claimed.id);
     // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
     if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);
@@ -3287,7 +3417,7 @@ export class ThreadPump {
   }
 
   /**
-   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
    *
    * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
@@ -3312,7 +3442,6 @@ export class ThreadPump {
       this.#sessions.root.append(
         'assistant/attempt',
         withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
-        { ignorable: true },
       );
     } catch (error: unknown) {
       // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
@@ -3323,8 +3452,8 @@ export class ThreadPump {
       // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
       // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
       // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
-      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。這一顆 `ignorable`、不進模型歷史，吞掉不會
-      // 讓 state 與日誌分岔，只是少了作廢那半段的紀錄。
+      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。它不進模型歷史，吞掉不會讓 state 與日誌
+      // 分岔，只是少了作廢那半段的紀錄。
       // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
       this.#warn?.(
         `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,
@@ -3561,12 +3690,15 @@ export class ThreadPump {
           },
         } as Event);
         // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
+        const hostTool = raw.params.namespace.length === 0 && isHostToolInterrupt(entry.value);
         this.#pending.set(entry.id, {
           interruptId: entry.id,
           actionCount: actionCountOf(entry.value),
           gatedTools: gatedToolsOf(entry.value, raw.params.namespace.length > 0),
           request,
+          ...(hostTool && { hostTool: true as const }),
         });
+        if (hostTool) this.#armHostToolTimer(entry.id);
         this.#tell({ type: 'input-requested', event: request });
         yield request;
       }
@@ -3759,6 +3891,9 @@ export class ThreadPump {
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
     // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
     if (entry.address.kind === 'root') {
+      // 投影先推進、照原位置送：前面哪一個拋了，即時折疊也不會漏掉這顆而從此跟日誌對不上——歷史的最新一頁讀的是它
+      // （{@link ThreadPump.projectionValues}）。
+      const projected = this.#projections?.push(event) ?? [];
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
       const goal = this.#goal.apply(event);
       if (goal !== undefined) this.#presentCustom(goal);
@@ -3768,7 +3903,7 @@ export class ThreadPump {
         if (event.data.operation === 'pause') this.#stopRunForHostPause();
       }
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
-      for (const value of this.#projections?.push(event) ?? []) {
+      for (const value of projected) {
         // 輪外（命令、接上時的 baseline）當場送；輪中才合併。
         this.#projectionOut.offer(value.key, projectionData(value), this.#current !== undefined);
       }
@@ -3782,11 +3917,13 @@ export class ThreadPump {
     }
     // 一輪收尾（root 的 `turn/end`）：合併視窗裡待送的當場全送，下行看到的就是最終值（#1071）。
     if (event.type === 'turn/end' && entry.address.kind === 'root') this.#projectionOut.flush();
-    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
+    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。日誌由圖寫、片段由 pump 讀，兩邊不同步：讀得慢的時候，記下來的
+    // 可能已經是重打那一次，而 pump 手上還是失敗那一次（還沒讀到重打記號）。兩邊都有 id 又不同就不清，留給作廢記號收。
     if (
       event.type === 'assistant/message' &&
       entry.address.kind === 'root' &&
-      this.#current !== undefined
+      this.#current !== undefined &&
+      !isOtherReply(this.#current.reply, event.data.message)
     ) {
       this.#current.reply = undefined;
     }

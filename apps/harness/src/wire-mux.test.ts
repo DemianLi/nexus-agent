@@ -2,7 +2,7 @@
  * 一條 WebSocket 上的下行（#2262）：smoke 與 eval 走 SSE，走不到這條路，所以這裡用真的 socket 量。閘門用真的
  * `createWireHandler`，其餘用替身控制回應本體的節奏。
  */
-import { createMuxFetch, createWireClient, WIRE_MUX_PATH } from '@nexus/wire';
+import { createMuxFetch, createWireClient, EMBED_PATH_PREFIX, WIRE_MUX_PATH } from '@nexus/wire';
 import type { MuxSocket } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { connect } from 'node:net';
@@ -277,6 +277,31 @@ describe('邏輯串流', () => {
     });
     await readText(await muxFetch(url)(STREAM, post));
     expect(seen).toEqual([`${WIRE_MUX_PATH} 101`, '/threads/t1/stream 404']);
+  });
+});
+
+describe('嵌入版的 socket（#2367）', () => {
+  it('`/embed/threads/mux` 上只開得了 `/embed` 開頭的下行；獨立頁面那條照舊', async () => {
+    const seen: string[] = [];
+    const url = await start((request) => {
+      seen.push(new URL(request.url).pathname);
+      return Promise.resolve(streamResponse(hanging('data: x\n\n')));
+    });
+    const embed = muxFetch(url.replace(WIRE_MUX_PATH, `${EMBED_PATH_PREFIX}${WIRE_MUX_PATH}`));
+    await expect(embed(STREAM, post)).rejects.toThrow('route not allowed');
+    const opened = await embed(`http://x${EMBED_PATH_PREFIX}/threads/t1/stream`, post);
+    await opened.body?.cancel();
+    const standalone = await muxFetch(url)(STREAM, post);
+    await standalone.body?.cancel();
+    expect(seen).toEqual([`${EMBED_PATH_PREFIX}/threads/t1/stream`, '/threads/t1/stream']);
+  });
+
+  it('嵌入版不收 thread feed', async () => {
+    const url = await start(() => Promise.resolve(new Response('x')));
+    const embed = muxFetch(url.replace(WIRE_MUX_PATH, `${EMBED_PATH_PREFIX}${WIRE_MUX_PATH}`));
+    await expect(embed(`http://x${EMBED_PATH_PREFIX}/threads/feed`)).rejects.toThrow(
+      'route not allowed',
+    );
   });
 });
 

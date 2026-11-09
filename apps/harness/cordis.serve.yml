@@ -42,3 +42,23 @@
   name: '#settings/attachment-images'
   config:
     imageCompressionConcurrency: 2
+
+# 嵌入對話框的宿主頁工具（#2374）：宿主頁在 `run.start` 宣告的工具，模型呼叫前預設都要人核准。
+# `approval.exempt` 列的是不先問人的工具名（宿主頁宣告時的名字，不帶 `page__`），只放轉鏡頭、高亮這種不改資料的；
+# 宿主頁在宣告裡帶 readOnly 會整句拒收。出廠是空的，每支都問。`timeoutMs` 是宿主頁幾毫秒沒回就把逾時交回模型、這一輪接著跑。
+# 起動期讀一次、改了要重啟。關掉這一列等於空名單、30 秒。
+- id: host-tools
+  name: '#settings/host-tools'
+  config:
+    approval:
+      exempt: []
+    timeoutMs: 30000
+
+# serve 的行程模型（#2341，設計 `.docs/supervisor-1947-design-2026-11-03.md` §八）。`single` 是一個行程放所有 thread；
+# `per-thread` 是監督行程起一個前台、每條 thread 一個對話行程，只在 Linux 起得來。`--process-model` 旗標蓋過 `mode`。
+# `supervisorBinary` 是監督行程執行檔的絕對路徑，省略就從 harness 往上找 `native/nexus-supervisor`。
+# 起動期讀一次、改了要重啟。關掉這一列就是 `single`。
+- id: process-model
+  name: '#settings/process-model'
+  config:
+    mode: single

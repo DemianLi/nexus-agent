@@ -39,6 +39,8 @@ describe('serve 的旗標', () => {
     expect(parseServeArgs([])).toEqual({
       live: false,
       port: DEFAULT_PORT,
+      // 只認 loopback；放在反向代理後面才要指名（#2369）。
+      trustedHosts: [],
       // **續行 serve 預設開、CLI 預設關**（#445）：serve 要核准時停下來等人，不會空轉；
       // CLI 的 `HEADLESS_APPROVALS` 確定性拒絕，續行只會一再撞同一個拒絕。
       goalDriver: true,
@@ -67,13 +69,47 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--no-goal-driver');
   });
 
+  it('--unix-socket（#2369）：要配 --socket-group 與 --public-url，不能配 --port', () => {
+    const url = ['--public-url', 'https://app.example/nexus'];
+    expect(
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101', ...url]).unixSocket,
+    ).toEqual({ path: '/run/nexus/s', group: 101 });
+    expect('unixSocket' in parseServeArgs([])).toBe(false);
+    expect(() => parseServeArgs(['--unix-socket', '/run/nexus/s', ...url])).toThrow(
+      '--unix-socket 要配 --socket-group',
+    );
+    expect(() => parseServeArgs(['--socket-group', '101', ...url])).toThrow(
+      '--socket-group 要配 --unix-socket',
+    );
+    expect(() => parseServeArgs(['--unix-socket', '', ...url])).toThrow(
+      '--unix-socket 要給 socket 的路徑',
+    );
+    expect(() =>
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', '101']),
+    ).toThrow('--unix-socket 要配 --public-url');
+    // 明著給的 port 才算撞：預設的 port 不擋。
+    expect(() =>
+      parseServeArgs([
+        '--unix-socket',
+        '/run/nexus/s',
+        '--socket-group',
+        '101',
+        '--port',
+        String(DEFAULT_PORT),
+        ...url,
+      ]),
+    ).toThrow('--unix-socket 不能配 --port');
+    expect(() =>
+      parseServeArgs(['--unix-socket', '/run/nexus/s', '--socket-group', 'nginx', ...url]),
+    ).toThrow('--socket-group 要給代理所在群組的數字 gid');
+  });
+
   it('port 不是合法整數就當場說清楚', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--port 要給 0 到 65535');
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');
   });
 
   it('壓縮旗標（#1570）：預設不壓；gzip 帶預設等級與門檻；不合法當場說清楚', () => {
-    // 預設：沒有 compression 這一格（跟以前的 ServeInvocation 一樣）。
     expect('compression' in parseServeArgs([])).toBe(false);
     expect(parseServeArgs(['--compression', 'none']).compression).toBeUndefined();
     expect(parseServeArgs(['--compression', 'gzip']).compression).toEqual({
@@ -101,7 +137,7 @@ describe('serve 的旗標', () => {
       /非負整數/u,
     );
     expect(() => parseServeArgs(['--compression', 'brotli'])).toThrow(/none 或 gzip/u);
-    // 逐欄獨立驗（dsh webserver/src/index.ts:295-296）：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
+    // 逐欄獨立驗：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
     expect(parseServeArgs(['--compression-level', '3']).compression).toBeUndefined();
     expect(
       parseServeArgs(['--compression', 'none', '--compression-threshold', '10']).compression,
@@ -198,7 +234,7 @@ describe('gzip 壓縮接上了 serve（#1570）', () => {
     );
   });
 
-  it('不給旗標：跟以前一樣，不壓', async () => {
+  it('不給旗標：不壓', async () => {
     expect(await listEncoding([])).toBeNull();
   });
 });

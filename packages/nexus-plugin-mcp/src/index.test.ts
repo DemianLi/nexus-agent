@@ -1,10 +1,10 @@
 /**
  * MCP plugin 的驗收。
  *
- * 分兩段：{@link publicToolName} 是純函式，用單測；其餘全部走一台**真的 stdio
- * 子行程**（[`fixture-server.ts`](./fixture-server.ts)）。判準照 dsh 的政策 4——
+ * 分兩段：{@link publicToolName} 與 {@link hiddenAfterGiveUp} 是純函式、設定檢查只驗 schema，都用單測；連線、`tools/list`、
+ * `tools/call`、關機走一台**真的 stdio 子行程**（[`fixture-server.ts`](./fixture-server.ts)）。判準照 dsh 的政策 4——
  * 「test denial through the executor」的同一條精神：要證明的是那條線真的通，而 mock
- * 掉 `MultiServerMCPClient` 之後連線、`tools/list`、`tools/call`、關機四件事一件都驗不到。
+ * 掉 SDK client 之後連線、`tools/list`、`tools/call`、關機四件事一件都驗不到。
  *
  * **不打網路、不需要任何 key**，所以進得了 CI（[#31](https://github.com/DemianLi/nexus-agent/issues/31)：
  * CI 不放模型 secret）。
@@ -13,15 +13,12 @@
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { EXTERNAL_MCP_CONTENT_NOTICE, installProxyFromEnvironment, loadPlugins } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE, installProxyFromEnvironment } from '@nexus/core';
+import type { PluginRegistry } from '@nexus/core';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import {
-  createMcpPlugin,
-  DEFAULT_TOOL_CALL_TIMEOUT_MS,
-  mcpConfigSchema,
-  mcpPlugin,
-} from './index.js';
+import { DEFAULT_TOOL_CALL_TIMEOUT_MS, hiddenAfterGiveUp, mcpConfigSchema } from './index.js';
 import { CITE_LINKS, CITE_TEXT, EMBED_URI, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { publicToolName } from './names.js';
@@ -37,7 +34,7 @@ const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.
  * node，不必猜 `.bin` 在哪裡，也不會因為 PATH 不同而在 CI 上換一個行為。
  */
 function fixturePlugin(serverName = 'fixture', env?: Record<string, string>) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName,
     connection: {
       transport: 'stdio',
@@ -93,24 +90,18 @@ describe('publicToolName', () => {
   });
 });
 
-describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', () => {
+describe('設定的檢查（#453：驗在載入的時候）', () => {
   it('serverName 不合法時載入就失敗，不必等到連線', async () => {
-    // **翻面過的絆索**：原本是 `createMcpPlugin()` 當場拋。工廠現在只是薄薄一層，檢查搬到
-    // schema，所以訊息帶得出是清單裡哪一個條目——那正是從 YAML 載入時唯一指得到的東西。
+    // 設定在載入時由 schema 驗，訊息才帶得出是清單裡哪一列——那正是從 YAML 載入時唯一指得到的東西。
     for (const serverName of ['has space', '', 'x'.repeat(33)]) {
-      const bad = [createMcpPlugin({ serverName, connection: emptyStdio() })];
+      const bad = [mcpEntry({ serverName, connection: emptyStdio() })];
       await expect(loadPlugins(bad)).rejects.toThrow('mcp#0 (mcp)');
       await expect(loadPlugins(bad)).rejects.toThrow('[A-Za-z0-9_-]');
     }
   });
 
   it('連線那一層的未知欄位也擋得住，而且路徑指得到那一層', async () => {
-    const typo = [
-      {
-        plugin: mcpPlugin,
-        config: { serverName: 'x', connection: { ...emptyStdio(), commnd: 'npx' } },
-      },
-    ];
+    const typo = [mcpEntry({ serverName: 'x', connection: { ...emptyStdio(), commnd: 'npx' } })];
     await expect(loadPlugins(typo)).rejects.toThrow('mcp#0 (mcp)');
     await expect(loadPlugins(typo)).rejects.toThrow(/connection(\.|:)/);
   });
@@ -118,20 +109,13 @@ describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', 
   it('判別式聯集：stdio 那格打錯時只抱怨 stdio，不連 http 分支一起念', async () => {
     // **這一條才擋得住「換成一般 `z.union`」**：一般聯集會把兩個分支的抱怨一起印出來，
     // 於是使用者被告知「少了 url」——而他根本沒打算走 http。
-    const typo = [
-      {
-        plugin: mcpPlugin,
-        config: { serverName: 'x', connection: { transport: 'stdio', commnd: 'npx' } },
-      },
-    ];
+    const typo = [mcpEntry({ serverName: 'x', connection: { transport: 'stdio', commnd: 'npx' } })];
     await expect(loadPlugins(typo)).rejects.toThrow(/commnd|command/);
     await expect(loadPlugins(typo)).rejects.not.toThrow(/url/);
   });
 
   it('transport 自己打錯時，訊息講的是 transport', async () => {
-    const bad = [
-      { plugin: mcpPlugin, config: { serverName: 'x', connection: { transport: 'stdout' } } },
-    ];
+    const bad = [mcpEntry({ serverName: 'x', connection: { transport: 'stdout' } })];
     await expect(loadPlugins(bad)).rejects.toThrow(/transport/);
   });
 
@@ -225,7 +209,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // #1319：server 回 `resource_link`，模型看到的是 dsh 的 `Resource link: <name> (<uri>)`（adapter 2.0.0 的 metadata 帶
+  // #1319：server 回 `resource_link`，模型看到的是 dsh 的 `Resource link: <name> (<uri>)`（轉出來的 metadata 帶
   // name），結尾多一句引用提示；回文字的工具（上面的 `fetch_release_note`）不帶。
   it('回 resource_link 的工具：名稱加網址，結尾有引用提示；只回文字的沒有', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
@@ -295,8 +279,8 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // adapter 2.0.0 對 server 回的 `isError` 不拋，回 `status: 'error'` 的訊息、文字是原文（#1074）。圍堵只替**拋出來**的
-  // 工具失敗補 `Error: 工具 … 執行失敗：`，回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
+  // server 回 `isError` 時工具拋出 server 的原文（只給參數時帶 `MCP tool … returned an error:` 前綴，#1074）。圍堵只替**拋出來**的工具失敗補 `Error: 工具 … 執行失敗：`，
+  // 回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
   it('server 回 isError：兩種呼叫形狀都拋，帶原文', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
     try {
@@ -310,7 +294,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // #1768：`isError` 的錯誤文字不加前綴——它不是 server 的內容，是失敗的回報（adapter 在 `afterToolCall` 之前就換成錯誤訊息）。
+  // #1768：`isError` 的錯誤文字不加前綴——它不是 server 的內容，是失敗的回報（`tool-call.ts` 在標記之前就拋）。
   it('server 回 isError：錯誤文字不帶外部內容前綴', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
     try {
@@ -326,7 +310,7 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  // 釘住現況：2.0.0 不簡化 schema，供應商看到的就是 server 原樣公告的 `anyOf`／`$schema`。供應商若有一天不收，
+  // 釘住現況：工具宣告 `rawParameters`、不簡化 schema，供應商看到的就是 server 原樣公告的 `anyOf`／`$schema`。供應商若有一天不收，
   // 這一條會是第一個指到那裡的絆索（真供應商的實跑見 #1074 的 PR 內文）。
   it('可為 null 與聯集的參數：schema 原樣，呼叫也走得通', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
@@ -342,14 +326,16 @@ describe('接上一台真的 MCP server', () => {
   });
 
   /**
-   * 同一個 `serverName` 掛兩次：照 dsh 在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
+   * 同一個 `serverName` 掛兩次：在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
    * 不是伺服器不在，不收成警告（#751）。
    */
-  it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名兩個 plugin', async () => {
+  it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名後來那一列與 serverName', async () => {
     // `name` 不唯一是刻意的，所以撞不在 plugin 清單那一層——撞在它們預留的伺服器名上。
-    await expect(loadPlugins([fixturePlugin(), fixturePlugin()])).rejects.toThrow(
-      /mcp#0 \(mcp\)[\s\S]*mcp#1 \(mcp\)/,
+    const loading = loadPlugins([fixturePlugin(), fixturePlugin()]);
+    await expect(loading).rejects.toThrow(
+      /^mcp#1 \(mcp\) 的 apply 失敗[\s\S]*MCP 伺服器 "fixture" 在這條 thread 上已經有一列掛了/,
     );
+    await expect(loading).rejects.not.toThrow(/mcp#0/);
   });
 
   it('不同 serverName 的兩台各自有命名空間，互不干擾', async () => {
@@ -401,7 +387,7 @@ describe('接上一台真的 MCP server', () => {
     const squatter = {
       plugin: {
         name: 'squatter',
-        apply: (r: Parameters<typeof mcpPlugin.apply>[0]) =>
+        apply: (r: PluginRegistry) =>
           void r.tools.register(
             tool(() => '別人的', {
               name: 'mcp__fixture__snapshot',
@@ -440,7 +426,7 @@ describe('接上一台真的 MCP server', () => {
  * 測試通過時 CI 的輸出是乾淨的——子行程的 stderr 預設 inherit。
  */
 function missingServer(extra: { failOnStartupError?: boolean } = {}) {
-  return createMcpPlugin({
+  return mcpEntry({
     serverName: 'missing',
     connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
     ...extra,
@@ -467,8 +453,8 @@ function childProcessCount(): number {
  * 卡上的驗收（#726）：stdio 子行程的環境**照 dsh 以清洗過的父環境為底**，設定裡的 `env` 疊在後面
  * （dsh `packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）。走真的子行程，問假 server 它看得到什麼。
  *
- * 這幾條同時是上游的絆索：底是 adapter（有 `env` 才傳、只補 `PATH`）與 SDK（`getDefaultEnvironment()` 只有六個
- * 名字）兩層合出來的，哪天它們改了合併方式，這裡會紅。
+ * 這幾條同時是上游的絆索：底是 `openClient` 傳的整份 env 與 SDK 的 stdio transport（`getDefaultEnvironment()` 只有六個
+ * 名字）兩層合出來的，哪天 SDK 改了合併方式，這裡會紅。
  */
 describe('子行程的環境（#726）', () => {
   const ASKED = ['KEEP_ME', 'HTTPS_PROXY', 'FAKE_API_TOKEN', 'NEXUS_X', 'GITHUB_TOKEN'];
@@ -582,5 +568,19 @@ describe('子行程的環境（#726）', () => {
       expect(seen['NODE_USE_ENV_PROXY']).toBeNull();
       expect(seen['HTTPS_PROXY']).toBe('socks5://proxy.internal:1080');
     });
+  });
+});
+
+describe('hiddenAfterGiveUp：放棄重連之後不放行這一台的工具', () => {
+  it('沒放棄全放行；放棄後只擋這一台的名字；每次現問 gaveUp', () => {
+    let gaveUp = false;
+    const admission = hiddenAfterGiveUp(['srv_a', 'srv_b'], () => gaveUp);
+    expect(['srv_a', 'other'].map((name) => admission.admits(name))).toEqual([true, true]);
+    gaveUp = true;
+    expect(['srv_a', 'srv_b', 'other'].map((name) => admission.admits(name))).toEqual([
+      false,
+      false,
+      true,
+    ]);
   });
 });

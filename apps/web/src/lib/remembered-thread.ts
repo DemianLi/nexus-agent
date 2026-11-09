@@ -19,7 +19,7 @@
 
 import { randomUuid } from '@/lib/uuid';
 
-/** 存在哪個鍵。 */
+/** 存在哪個鍵。嵌入版的 `<nexus-chat>` 記在自己的鍵（`embed/embedded-chat.tsx`），兩邊各接各的上一條。 */
 export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 
 /**
@@ -48,9 +48,9 @@ function storage(): Storage | undefined {
 }
 
 /** 讀回上一次那一條。沒有、讀不到、或存的東西不是那個形狀，都是 `undefined`。 */
-function recalled(): string | undefined {
+function recalled(key: string): string | undefined {
   try {
-    const raw = storage()?.getItem(REMEMBERED_THREAD_KEY);
+    const raw = storage()?.getItem(key);
     if (raw === null || raw === undefined) {
       return undefined;
     }
@@ -58,7 +58,7 @@ function recalled(): string | undefined {
     const threadId = (parsed as { threadId?: unknown } | null)?.threadId;
     return typeof threadId === 'string' && threadId !== '' ? threadId : undefined;
   } catch (error) {
-    console.error(`讀不回 ${REMEMBERED_THREAD_KEY}，開一條新的：`, error);
+    console.error(`讀不回 ${key}，開一條新的：`, error);
     return undefined;
   }
 }
@@ -70,18 +70,27 @@ function recalled(): string | undefined {
  * 丟掉其中一份；在這裡寫進去的話，存到的可能是被丟掉的那一個 id，下一次重新整理就接到一條
  * 從來沒開過的 thread 上。寫的那一半是 {@link rememberThread}，由 effect 呼叫。
  */
-export function recallThread(): ThreadChoice {
-  const threadId = recalled();
+export function recallThread(key: string = REMEMBERED_THREAD_KEY): ThreadChoice {
+  const threadId = recalled(key);
   return threadId === undefined
     ? { threadId: randomUuid(), origin: 'fresh' }
     : { threadId, origin: 'recalled' };
 }
 
 /** 記下這一條，下一次載入接它。寫不進去就算了（見模組說明）。 */
-export function rememberThread(threadId: string): void {
+export function rememberThread(threadId: string, key: string = REMEMBERED_THREAD_KEY): void {
   try {
-    storage()?.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId }));
+    storage()?.setItem(key, JSON.stringify({ threadId }));
   } catch (error) {
-    console.error(`寫不進 ${REMEMBERED_THREAD_KEY}，這一條 thread 下次載入接不回來：`, error);
+    console.error(`寫不進 ${key}，這一條 thread 下次載入接不回來：`, error);
+  }
+}
+
+/** 把記著的那一條清掉。清不掉就算了（見模組說明）。 */
+export function forgetThread(key: string = REMEMBERED_THREAD_KEY): void {
+  try {
+    storage()?.removeItem(key);
+  } catch (error) {
+    console.error(`清不掉 ${key}：`, error);
   }
 }

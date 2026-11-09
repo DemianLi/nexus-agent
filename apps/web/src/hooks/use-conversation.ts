@@ -12,6 +12,10 @@ import type {
   ConversationState,
   Event,
   GoalPauseResult,
+  HostToolDeclaration,
+  HostToolResponse,
+  PageContext,
+  PendingHostCall,
   PromptAttachment,
   SubagentMention,
   SkillEntry,
@@ -39,6 +43,7 @@ import {
   QUEUE_ITEM_NOT_FOUND,
   reduceAll,
   reduceConversation,
+  settleHostCall,
   STEER_UNAVAILABLE,
   uniformDecisions,
   WireProtocolError,
@@ -47,6 +52,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
+import { EMBED_UNAUTHORIZED_TEXT, StreamUnauthorizedError } from '@/lib/embed-unauthorized';
 import { sendRejectionText } from '@/lib/attachment-send';
 import { resolvedClientTimeZone } from '@/lib/client-time-zone';
 import { createConversationStore } from '@/lib/conversation-store';
@@ -63,7 +69,13 @@ import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { probeLivez } from '@/lib/livez-probe';
-import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
+import {
+  OPENING_NOTICE_MS,
+  RECOVERED_NOTICE_MS,
+  reconnectDelay,
+  SLOW_CONNECT_MS,
+} from '@/lib/reconnect';
+import { StreamHaltedError } from '@/lib/stream-halted';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -74,6 +86,8 @@ import {
   threadLogTooLargeText,
 } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { threadNotEmbeddedText } from '@/lib/thread-not-embedded';
+import { threadNotOwnedText } from '@/lib/thread-not-owned';
 import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
@@ -125,6 +139,13 @@ export interface UseConversationOptions {
   readonly client?: WireClient;
   /** 省略即這一次載入自己開一條新的。 */
   readonly threadId?: string;
+  /** `/livez` 探測打的 agent 位置；省略是 `agentBaseUrl()`，從頁面算。嵌入版跑在宿主頁上，要給從 `embed.js` 算的（#2426）。 */
+  readonly agentBaseUrl?: string;
+  /**
+   * 嵌入版的 `signIn` 成功過幾次（#2490）。下行被 401 擋下之後不排重試，等這個數變了才重開；開線之後、401 回來之前就變了的，
+   * 401 回來時當場重開。獨立頁面不給。
+   */
+  readonly signIns?: number;
 }
 
 /** 畫面上那段歷史的現況（#306）。 */
@@ -234,16 +255,23 @@ export interface Conversation {
   readonly connections: number;
   /**
    * 下行斷了（或第一次就沒開成），等著重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：多半是照退避自動重接；
-   * 伺服器送來看不懂的資料時（#1601 `N0758`）停止自動重連，只等人按 {@link reconnectNow}，這時 {@link refusal} 有那一句。
+   * 伺服器送來看不懂的資料時（#1601 `N0758`）、或下行拋 `StreamHaltedError`（#2343）時停止自動重連，只等人按 {@link reconnectNow}，
+   * 這時 {@link refusal} 有那一句。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
-   * 回到線上才從頭算。
+   * 回到線上才從頭算。`actionLabel` 是按鈕上的字，只有 `StreamHaltedError` 給；不在就用狀態列的預設字（`lib/stream-halted.ts` 的 `RECONNECT_ACTION_LABEL`）。
    */
-  readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  readonly reconnecting?: {
+    readonly wasConnected: boolean;
+    readonly offline: boolean;
+    readonly actionLabel?: string;
+  };
   /**
    * 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗，而且 `/livez` 探測也逾時
    * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
    */
   readonly slowConnect: boolean;
+  /** 這次連線等了 {@link OPENING_NOTICE_MS} 還沒成功或失敗（#2343）；等退避的時間不算。 */
+  readonly opening: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
@@ -309,6 +337,10 @@ export interface Conversation {
    * `requestId` 是這一句的請求編號（#1335，`lib/request-id.ts`）：**每一次 `run.start` 都帶**，沒給就這一次現產一個。
    * 草稿沒送出去時呼叫端要留著它，原樣重送同一句時傳回來——第一次其實已經到了的話，伺服器認得、不再排。斜線命令不看它
    * （`slash.run` 沒有編號，見 `docs/operations.md`）。
+   *
+   * `context` 是嵌入的對話框附的畫面情境（#2382），放進 `run.start`；斜線命令不看它。只有嵌入版開的 thread 收。
+   *
+   * `hostTools` 是嵌入的對話框替宿主頁宣告的工具（#2374），放進 `run.start`，規矩同 `context`。
    */
   send(
     text: string,
@@ -317,6 +349,8 @@ export interface Conversation {
     mention?: SubagentMention,
     requestId?: string,
     route?: 'command' | 'sentence',
+    context?: PageContext,
+    hostTools?: readonly HostToolDeclaration[],
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -366,6 +400,15 @@ export interface Conversation {
    * 那條路」。認不得那顆 id、或那顆不是問答時，什麼都不做。
    */
   answer(interruptId: string, answers: AnswerEntry['answers']): Promise<void>;
+  /**
+   * 交回一支宿主頁工具的結果（#2374）：`input.respond`，送出的那一刻就從 `hostCalls` 收掉。拿的是轉交出去時的那一支，不是當下的
+   * `hostCalls`：一顆 `running` 會先清空、再由再度中斷接回來，宿主頁剛好在那個空檔回的話照樣要送到。
+   *
+   * 不寫狀態列：這一輪被停止之後宿主頁才回的，server 回 `no_such_interrupt`，那不是人要處理的錯。
+   *
+   * @returns server 收下了沒有。
+   */
+  respondHostCall(call: PendingHostCall, response: HostToolResponse): Promise<boolean>;
   /**
    * **關掉**指名的那一顆問答請求（送 `cancelled`，dsh 的 `ASK_CANCELLED`）：不回答，這一輪不停。計劃審核的「要求
    * 修改」走這一條（#654）——模型收到「停在這裡等使用者的訊息」，人接著在輸入框打意見。
@@ -417,6 +460,10 @@ export interface Conversation {
 export function useConversation(options: UseConversationOptions = {}): Conversation {
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
   const threadId = useMemo(() => options.threadId ?? randomUuid(), [options.threadId]);
+  const livezBaseUrl = options.agentBaseUrl;
+  const signIns = options.signIns;
+  const signInsRef = useRef(signIns);
+  signInsRef.current = signIns;
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
   // 右側欄的面板讀對話走這一條（#1033）：跟交給 React 的同一刻、同一份，所以放在發布回呼裡，不另外排。
@@ -461,22 +508,25 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [slowConnect, setSlowConnect] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
   const [generation, setGeneration] = useState(0);
   /**
    * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
    * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」；
-   * `halted` 是最後一次失敗是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`）：「立刻重連」、接上、一般的斷線都清掉它。
+   * `halted` 是最後一次失敗停了自動重連（看不懂的資料 #1601 `N0758`，或 `StreamHaltedError` #2343）：`reconnectNow`、接上、一般的斷線都清掉它。
+   * `unauthorized` 是最後一次失敗是嵌入版的 401（#2490），等 `signIns` 變了才重開；每次開線都清掉。
    */
   const retry = useRef<{
     attempt: number;
     lost: boolean;
     everConnected: boolean;
     halted: boolean;
+    unauthorized: boolean;
     timer?: ReturnType<typeof setTimeout>;
     recoveredTimer?: ReturnType<typeof setTimeout>;
-  }>({ attempt: 0, lost: false, everConnected: false, halted: false });
+  }>({ attempt: 0, lost: false, everConnected: false, halted: false, unauthorized: false });
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
   const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
@@ -584,6 +634,14 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
   }, [scheduleRetry]);
 
+  useEffect(() => {
+    const book = retry.current;
+    if (!book.unauthorized) return;
+    book.unauthorized = false;
+    book.attempt = 0;
+    setGeneration((current) => current + 1);
+  }, [signIns]);
+
   // 卸載（換 thread 時整個 view 重掛）就把兩個計時器收掉：不能對已經離開的 thread 重接。
   useEffect(() => {
     const book = retry.current;
@@ -598,15 +656,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     let cancelled = false;
     const probe = new AbortController();
     const slowTimer = setTimeout(() => {
-      void probeLivez(probe.signal).then((outcome) => {
+      void probeLivez(probe.signal, livezBaseUrl).then((outcome) => {
         // 逾時中止後請求可能晚一點才拒絕，連線在這段時間有了結果的話，這個 `timed-out` 不算數。
         if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
       });
     }, SLOW_CONNECT_MS);
+    const openingTimer = setTimeout(() => setOpening(true), OPENING_NOTICE_MS);
     const settled = () => {
       clearTimeout(slowTimer);
+      clearTimeout(openingTimer);
       probe.abort();
       setSlowConnect(false);
+      setOpening(false);
     };
     /**
      * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
@@ -615,7 +676,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
-      // 這次是一般的斷線：`halted` 只講「最後一次失敗是看不懂的資料」，在路上那次停住過也不算數（#1601）。
+      // 這次是一般的斷線：`halted` 只講「最後一次失敗停了自動重連」，在路上那次停住過也不算數（#1601）。
       book.halted = false;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
@@ -626,7 +687,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
     /**
      * 伺服器說這條**永遠**開不了（子代理的會話，#1708）：講原因、不排重試。`lost` 留在 false，所以「立刻重連」與
-     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。
+     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。嵌入版的 401（#2490）也走這裡，等 `signIns` 變了才重開。
      */
     const refuse = (refused: string) => {
       const book = retry.current;
@@ -641,11 +702,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setReconnecting(undefined);
     };
     /**
-     * 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。**不排重試**：
-     * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`packages/api/session-controller/README.md:54`）協定錯誤終止串流。
-     * `lost` 照設，「立刻重連」按得到；`halted` 擋掉 `online`／`offline` 的自動重排。原文只進 `console.warn`，不進畫面。
+     * 停止自動重連：`lost` 照設，所以 `reconnectNow`（狀態列那顆按鈕）按得到；`halted` 擋掉 `online`／`offline` 的自動重排。
+     * 狀態列講 `text`、按鈕寫 `actionLabel`（不給就是預設字）；錯誤物件只進 `console.warn`。兩種來源：
+     * - 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。歷史裡的壞資料
+     *   每次重連都抓到同一份，所以不排重試；文案固定 `THREAD_PROTOCOL_ERROR_TEXT`，伺服器原文不進畫面。
+     * - 開線、讀歷史或抽下行時拋 `StreamHaltedError`（#2343）：文案與按鈕字由它給。
      */
-    const halt = (error: WireProtocolError) => {
+    const halt = (
+      error: WireProtocolError | StreamHaltedError,
+      text: string,
+      actionLabel?: string,
+    ) => {
       console.warn(error);
       const book = retry.current;
       book.lost = true;
@@ -656,9 +723,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setRecovered(false);
       setConnected(false);
       setConnectionError(undefined);
-      setRefusal(THREAD_PROTOCOL_ERROR_TEXT);
-      setReconnecting({ wasConnected: book.everConnected, offline: false });
+      setRefusal(text);
+      setReconnecting({
+        wasConnected: book.everConnected,
+        offline: false,
+        ...(actionLabel === undefined ? {} : { actionLabel }),
+      });
     };
+
+    retry.current.unauthorized = false;
+    const signInsAtOpen = signInsRef.current;
 
     void (async () => {
       try {
@@ -755,17 +829,33 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) {
           settled();
           if (error instanceof WireProtocolError) {
-            halt(error);
+            halt(error, THREAD_PROTOCOL_ERROR_TEXT);
+            return;
+          }
+          if (error instanceof StreamHaltedError) {
+            halt(error, error.text, error.actionLabel);
+            return;
+          }
+          if (error instanceof StreamUnauthorizedError) {
+            if (signInsRef.current !== signInsAtOpen) {
+              setGeneration((current) => current + 1);
+              return;
+            }
+            refuse(EMBED_UNAUTHORIZED_TEXT);
+            retry.current.unauthorized = true;
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）、
+          // 嵌入的對話框碰到獨立頁面開的（#2382）、別人開的（#2370）。
           const permanent =
             error instanceof WireRejectedError
               ? (threadSubagentText(error.code) ??
                 threadHistoryTooDeepText(error.code) ??
                 threadLogTooLargeText(error.code) ??
-                threadRootMismatchText(error.code))
+                threadRootMismatchText(error.code) ??
+                threadNotEmbeddedText(error.code) ??
+                threadNotOwnedText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
@@ -797,7 +887,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       settled();
       setConnected(false);
     };
-  }, [client, threadId, advance, generation, scheduleRetry, ratingsController, commandDirectory]);
+  }, [
+    client,
+    threadId,
+    livezBaseUrl,
+    advance,
+    generation,
+    scheduleRetry,
+    ratingsController,
+    commandDirectory,
+  ]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -928,6 +1027,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       mention?: SubagentMention,
       requestId?: string,
       route?: 'command' | 'sentence',
+      context?: PageContext,
+      hostTools?: readonly HostToolDeclaration[],
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -971,6 +1072,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(mention === undefined ? {} : { mention }),
+          ...(context === undefined ? {} : { context }),
+          ...(hostTools === undefined ? {} : { hostTools }),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1070,6 +1173,23 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       );
     },
     [threadId, note, advance],
+  );
+
+  const respondHostCall = useCallback(
+    async (call: PendingHostCall, response: HostToolResponse) => {
+      advance((previous) => settleHostCall(previous, call.interruptId));
+      try {
+        const result = await clientRef.current.inputRespond(threadId, {
+          namespace: [...call.namespace],
+          interrupt_id: call.interruptId,
+          response,
+        });
+        return result.type !== 'error';
+      } catch {
+        return false;
+      }
+    },
+    [threadId, advance],
   );
 
   const dismissQuestion = useCallback(
@@ -1371,6 +1491,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     connected,
     attempted,
     slowConnect,
+    opening,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),
@@ -1399,6 +1520,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     updateQueue,
     respond,
     answer,
+    respondHostCall,
     dismissQuestion,
     declineQuestion,
     cancel,

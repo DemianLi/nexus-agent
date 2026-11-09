@@ -14,6 +14,7 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
 import { checkConformance } from '@nexus/sdk';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,7 +70,7 @@ async function toolOf(
   const { tools } = await mount({ kind: channelKind });
   const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return entry.tool;
+  return langChainToolOf(entry.tool);
 }
 
 /**
@@ -191,7 +192,7 @@ describe('四條出口', () => {
     const { tools } = await mount(undefined);
     const entry = tools.entries().find((item) => item.tool.name === ASK_USER_QUESTION_TOOL_NAME);
     if (entry === undefined) throw new Error('工具沒有註冊上去');
-    expect(await errorTextOf(await entry.tool.invoke(ONE_QUESTION))).toBe(
+    expect(await errorTextOf(await langChainToolOf(entry.tool).invoke(ONE_QUESTION))).toBe(
       `Error: ${NO_CHANNEL_MESSAGE}`,
     );
     expect(interrupted).toEqual([]);
@@ -228,14 +229,14 @@ describe('樹上這一列（#1458）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.1.0，要帶選項）與 approvalChannel（^1.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^2.1.0，要帶選項）與 approvalChannel（^1.0.0）；沒有 default 匯出', () => {
     expect(askUser.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.1.0' },
+      { token: 'tools', range: '^2.1.0' },
       { token: 'approvalChannel', range: '^1.0.0' },
     ]);
     expect(askUser.manifest.provides).toEqual([]);
     expect(askUser.inject).toEqual({
-      tools: { range: '^1.1.0' },
+      tools: { range: '^2.1.0' },
       approvalChannel: { range: '^1.0.0' },
     });
     expect('default' in askUser).toBe(false);
@@ -248,7 +249,7 @@ describe('樹上這一列（#1458）', () => {
     // 把答題管道那一列拿掉：root 上的服務撤了，但工具在 `apply` 當下抓住的那一份還在。
     await root.loader.resolve('approval-channel').fiber?.ctx.fiber.dispose();
     expect(root.get('approvalChannel', false)).toBeUndefined();
-    await entry.tool.invoke(ONE_QUESTION);
+    await langChainToolOf(entry.tool).invoke(ONE_QUESTION);
     expect(interrupted).toHaveLength(1);
   });
 });

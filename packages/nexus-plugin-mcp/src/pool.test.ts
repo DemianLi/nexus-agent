@@ -11,12 +11,12 @@ import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHANNEL_SERVICE, createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { CHANNEL_SERVICE, createHostServicesPlugin } from '@nexus/core';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PluginRegistry, PreToolDecision, PreToolListener } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RELEASE_NOTE } from './fixture-tools.js';
 import {
-  createMcpPlugin,
   FIRST_CONNECT_WAIT_MS,
   MCP_POOL_SERVICE,
   McpConnectionPool,
@@ -144,7 +144,7 @@ function hangRow() {
 async function assemble(shared: McpConnectionPool, options: McpPluginOptions) {
   const loaded = await loadPlugins([
     createHostServicesPlugin({ [MCP_POOL_SERVICE]: shared }),
-    createMcpPlugin(options),
+    mcpEntry(options),
   ]);
   cleanup.push(() => loaded.dispose());
   return loaded;
@@ -271,7 +271,7 @@ describe('池的鍵', () => {
         [CHANNEL_SERVICE]: { kind: 'human' },
         [MCP_POOL_SERVICE]: shared,
       }),
-      createMcpPlugin(r.options),
+      mcpEntry(r.options),
     ]);
     cleanup.push(() => human.dispose());
     const none = await assemble(shared, r.options);

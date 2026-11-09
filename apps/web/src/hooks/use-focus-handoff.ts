@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 
+import { activeElementOf } from '@/lib/active-element';
+
 /**
  * 讀取用的鈕收掉之後焦點的交接（[#2009](https://github.com/DemianLi/nexus-agent/issues/2009)）。往前翻與觀測分頁的
  * 「載入這一輪的細節」共用這一份，判斷寫在這裡（`.docs/web-ui-spec.md` §8「焦點搬動的判斷寫在換手那一層」）；觀測分頁另有一步：
@@ -29,11 +31,11 @@ export function useFocusHandoff<K>() {
         const button = armed.current?.button;
         if (button === undefined) return;
         if (button.isConnected) {
-          if (document.activeElement !== button) armed.current = undefined;
+          if (activeElementOf(button) !== button) armed.current = undefined;
           return;
         }
         armed.current = undefined;
-        if (!focusLost() || target === null || target === undefined) return;
+        if (target === null || target === undefined || !focusLost(target)) return;
         if (scroll) target.scrollIntoView({ block: 'nearest' });
         target.focus({ preventScroll: true });
       },
@@ -42,9 +44,9 @@ export function useFocusHandoff<K>() {
   );
 }
 
-/** 焦點掉了：不在任何元素上（鈕卸載之後是 body）。 */
-export function focusLost(): boolean {
-  const active = document.activeElement;
+/** 焦點掉了：不在任何元素上（鈕卸載之後是 body）。`node` 在 Shadow DOM 裡時從它那棵樹看（`lib/active-element.ts`）。 */
+export function focusLost(node?: Node): boolean {
+  const active = activeElementOf(node);
   return active === null || active === document.body;
 }
 

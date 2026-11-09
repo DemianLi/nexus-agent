@@ -46,9 +46,9 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`@langchain/langgraph`](https://github.com/langchain-ai/langgraphjs) | MIT |
 | [`@langchain/langgraph-checkpoint`](https://github.com/langchain-ai/langgraphjs) | MIT |
 | [`@langchain/langgraph-sdk`](https://github.com/langchain-ai/langgraphjs) | MIT |
-| [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchainjs) | MIT |
 | [`@langchain/openai`](https://github.com/langchain-ai/langchainjs) | MIT |
 | [`@langchain/protocol`](https://www.npmjs.com/package/@langchain/protocol) | MIT |
+| [`@modelcontextprotocol/client`](https://github.com/modelcontextprotocol/typescript-sdk) | Apache-2.0 |
 | [`@opentelemetry/api-logs`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
 | [`@opentelemetry/exporter-logs-otlp-http`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
 | [`@opentelemetry/otlp-exporter-base`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
@@ -135,6 +135,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 | [`@types/spdx-expression-parse`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/ws`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@vitejs/plugin-react`](https://github.com/vitejs/vite-plugin-react) | MIT |
+| [`@vitejs/plugin-vue`](https://github.com/vitejs/vite-plugin-vue) | MIT |
 | [`ajv`](https://github.com/ajv-validator/ajv) | MIT |
 | [`axe-core`](https://github.com/dequelabs/axe-core) | MPL-2.0 |
 | [`colorjs.io`](https://github.com/color-js/color.js) | MIT |
@@ -154,6 +155,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 | [`vite`](https://github.com/vitejs/vite) | MIT |
 | [`vite-tsconfig-paths`](https://github.com/aleclarson/vite-tsconfig-paths) | MIT |
 | [`vitest`](https://github.com/vitest-dev/vitest) | MIT |
+| [`vue`](https://github.com/vuejs/core) | MIT |
 
 `axe-core`（MPL-2.0） 只在開發時當工具跑，程式碼不會連結進、也不會隨 nexus 的任何產物發出去。
 

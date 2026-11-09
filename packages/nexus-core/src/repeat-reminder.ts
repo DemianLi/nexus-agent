@@ -19,8 +19,8 @@
  * dsh 把每個 agent 的鏈存在 `WeakMap<Agent, Chain>`（`src/index.ts:173`），以活著的
  * `Agent` 物件為鍵。我們這側**沒有那個鍵**：`wrapToolCall` 與 `beforeModel` 拿到的是
  * `state` 與 `runtime`，沒有任何 agent 身分。而共用一份 middleware 實例是會出事的
- * ——同一份 subagent 定義被並行呼叫兩次時共用同一個 closure（同型的實測見
- * {@link https://github.com/DemianLi/nexus-agent/pull/156} 裡摘要器的 `sessionId`）。
+ * ——同一份 subagent 定義被並行呼叫兩次時共用同一個 closure（同類的實測見
+ * {@link https://github.com/DemianLi/nexus-agent/pull/156}，量的是摘要器共用實例時的歷史檔）。
  *
  * 所以退到「每次都從 `state.messages` 現算」。`state` 本來就是逐 thread、逐 agent 各
  * 一份，隔離是結構上的而不是靠紀律。順帶兩個行為差，方向相反、兩個都講明白：
@@ -28,10 +28,9 @@
  * - **恢復會話之後鏈還在**。dsh 明列「仅驻留内存，从持久化恢复的会话以全新链开始」；
  *   我們的鏈長在訊息裡，checkpointer 存什麼就恢復什麼。這一格我們比較好。
  * - **摘要之後鏈也還在**，跟 dsh 的「压缩不会重置链」同一個結果，但成因不同而且是查過的：
- *   基座的摘要器**不改寫 `state.messages`**，它只記一顆 `_summarizationEvent`，每次模型
- *   呼叫時由 `getEffectiveMessages` 現組出 `[summary, ...messages.slice(cutoffIndex)]`
- *   （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2697`，原文註解就寫著
- *   “This avoids full state rewrites”）。我們讀的是完整的 `state.messages`，所以剪裁
+ *   摘要器**不改寫 `state.messages`**，切點記在組裝的切點表（`summary-cutoffs.ts`），每次模型
+ *   呼叫時現組出 `[summary, ...messages.slice(cutoffIndex)]`——照基座的做法（`deepagents@1.13.1`，
+ *   `dist/langsmith-zm0ILQsV.js:2697`，原文註解就寫著 “This avoids full state rewrites”）。我們讀的是完整的 `state.messages`，所以剪裁
  *   看不到。**代價在另一邊**：落在 cutoff 之前的提醒模型那一輪就看不到了，它跟其他被
  *   摘掉的訊息一起進了摘要。
  *
@@ -68,11 +67,12 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
+import { createHookStepMiddleware } from './hook-step.js';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
+import { isHistoryFromLog } from './history-shadow.js';
 import { toLoggedMessage } from './logged-message.js';
-import { isMachineMessage } from './message-source.js';
+import { isMachineMessage } from './langchain-message-adapter.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import type { SessionLog } from './session-log.js';
@@ -389,7 +389,7 @@ function pendingReminders(
  * ## 它是無狀態的，所以可以共用同一份實例
  *
  * closure 裡只有設定與編好的樣式，鏈每次從 `state.messages` 現算。這跟摘要器**相反**
- * ——那個把 `sessionId` 放在 closure 裡，所以 fold 必須逐個 agent 各建一份
+ * ——那個的 closure 裡有認不出身分的呼叫用的會話名，所以 fold 逐個 agent 各建一份
  * （[#156](https://github.com/DemianLi/nexus-agent/pull/156)）。這裡不必，而且不是
  * 「反正共用也還好」：`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
  *
@@ -429,14 +429,13 @@ export function createRepeatReminder(
 ): AgentMiddleware {
   const tracked = repeatReminderTracks(settings);
 
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: REPEAT_REMINDER_MIDDLEWARE_NAME,
-    beforeModel: (
-      state: { messages: readonly BaseMessage[] },
-      runtime?: { readonly configurable?: unknown },
-    ) => {
-      const hits = pendingReminders(state.messages ?? [], settings, tracked);
-      const extra = stepNoticesFor(notices, sessions, runtime?.configurable);
+    beforeModel: (state, runtime) => {
+      const { messages } = state as { messages?: readonly BaseMessage[] };
+      const { configurable } = (runtime ?? {}) as { readonly configurable?: unknown };
+      const hits = pendingReminders(messages ?? [], settings, tracked);
+      const extra = stepNoticesFor(notices, sessions, configurable);
       if (hits.length === 0 && extra.length === 0) return undefined;
       const reminders = hits.map(({ tool, count, canonical }) => {
         const text =
@@ -452,13 +451,16 @@ export function createRepeatReminder(
           additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
         });
       });
-      recordReminders(sessions, runtime?.configurable, reminders);
+      recordReminders(sessions, configurable, reminders);
       return { messages: [...extra, ...reminders] };
     },
-  }) as unknown as AgentMiddleware;
+  });
 }
 
-/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份，都不記；寫不進去原錯往外拋（#1665）。 */
+/**
+ * 把提醒記成 `user/message`。沒接會話不記；認不出屬於哪一份，`log` 時拋（記不進去的提醒模型看不到，#2355），其餘不記、照送；
+ * 寫不進去原錯往外拋（#1665）。
+ */
 function recordReminders(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
   configurable: unknown,
@@ -466,7 +468,12 @@ function recordReminders(
 ): void {
   if (sessions === undefined) return;
   const found = sessions.forCall({ configurable });
-  if (found.kind !== 'ok') return;
+  if (found.kind !== 'ok') {
+    if (isHistoryFromLog(sessions)) {
+      throw new Error(`重複提醒找不到這次呼叫的日誌（${found.kind}）：history-source=log 不能照送`);
+    }
+    return;
+  }
   for (const message of messages) {
     // 寫不進去原錯往外拋，見上面。
     found.log.append('user/message', {
@@ -587,11 +594,12 @@ export function createStepNoticeMiddleware(
   notices: StepNoticeSource,
   sessions: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: STEP_NOTICE_MIDDLEWARE_NAME,
-    beforeModel: (_state: unknown, runtime?: { readonly configurable?: unknown }) => {
-      const messages = stepNoticesFor(notices, sessions, runtime?.configurable);
+    beforeModel: (_state, runtime) => {
+      const { configurable } = (runtime ?? {}) as { readonly configurable?: unknown };
+      const messages = stepNoticesFor(notices, sessions, configurable);
       return messages.length === 0 ? undefined : { messages: [...messages] };
     },
-  }) as unknown as AgentMiddleware;
+  });
 }

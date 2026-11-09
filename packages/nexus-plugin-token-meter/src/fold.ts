@@ -41,8 +41,8 @@
  *
  * ## 模型 id
  *
- * `request/header` 落在配對的 `model/start` **之後**、而且變了才記，所以 id 要在 `model/end`／`model/usage` 的當下才讀（那時
- * 這次呼叫的快照已經在）；日誌上還沒有快照就是 `null`，不猜。
+ * `request/header` 變了才記；格式 54 以前落在配對的 `model/start` **之後**，55 起落在**之前**。兩種在 `model/end`／`model/usage`
+ * 的當下這次呼叫的快照都已經在，所以 id 在那時才讀；日誌上還沒有快照就是 `null`，不猜。
  *
  * @module
  */
@@ -185,9 +185,13 @@ const ZERO_NUMBERS = Object.freeze(
 );
 const EMPTY: Sp = Object.freeze({ n: ZERO_NUMBERS, tools: [], models: [] });
 
+/** 段的數字各加上 `delta`。只走 `delta` 帶的鍵，成本跟著 `delta` 的格數、不跟著 {@link NUMBERS} 的長度；不在 {@link NUMBERS} 裡的鍵略過。 */
 function bump(sp: Sp, delta: Partial<Record<NumberKey, number>>): Sp {
   const n: Record<NumberKey, number> = { ...sp.n };
-  for (const key of NUMBERS) n[key] += delta[key] ?? 0;
+  for (const key in delta) {
+    if (!Object.hasOwn(ZERO_NUMBERS, key)) continue;
+    n[key as NumberKey] += delta[key as NumberKey] ?? 0;
+  }
   return { ...sp, n };
 }
 

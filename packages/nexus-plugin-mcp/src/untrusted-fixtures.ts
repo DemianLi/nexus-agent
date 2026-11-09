@@ -8,7 +8,7 @@
  * 不進 `index.ts` 的匯出——它是測試素材。
  */
 
-import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/tool-result';
 
 /** 拿掉開頭的前綴（含後面空的一行）；開頭不是前綴就拋。 */
 export function withoutNotice(text: string): string {

@@ -19,9 +19,8 @@
  * 0. **問人在工具本體裡，fail-closed**（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。
  *    dsh 的 `resolvePolicy` 先驗欄位（`packages/fs/tool-fs/src/sandbox.ts:88`），再
  *    `await approveEscalation(...)`：不加寬就拋、沒有核准服務就拋、最後才問人（`escalation.ts:171-208`）。
- *    核准在工具自己的路徑上，所以 pre-execute 的 listener 怎麼排都跳不過它。以前這裡是另一個註冊點上
- *    一顆只認這個名字的核准閘門，排在它前面、回 `allow` 又不呼叫 `next()` 的閘門會把它
- *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `interrupt()`，
+ *    核准在工具自己的路徑上，所以 pre-execute 的 listener 怎麼排都跳不過它；放在核准閘門上的話，
+ *    排在前面、回 `allow` 又不呼叫 `next()` 的閘門會把它短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `exec.interrupt()`，
  *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
  * 1. **升不升得到是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
  *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「升得到」在本體裡對這一刻的模式判（{@link canEscalate}）。
@@ -59,8 +58,8 @@
  * 技能來源不論模式、不認領 grant 都寫不進去（#1960，`apps/harness/src/shared-reserved-writes.ts`），核准了也不會成功，所以同樣判在加寬之前。
  * 判斷問 fence 本身（{@link EscalationTargets.reservedReason}），跟擋變更的是同一份規則。
  *
- * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，不像
- * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
+ * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，同
+ * `ask_user_question` 與 `exit_plan_mode`（#669）。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
  * 的 `ApprovalChannel` 那段記過）；dsh 的「沒有 agent 可以路由」也沒有——我們每一次工具呼叫都在某個 agent 裡。
  *
  * **子代理怎麼拒**：照 #324，子代理不問人升級（dsh 把核准政策 `'never'` 帶進子代理，那條在 `ask` 裡回 `rejected`）；
@@ -89,23 +88,20 @@
  * @module
  */
 
-import { tool } from '@langchain/core/tools';
-import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, ApprovalPolicySource, NexusPlugin } from '@nexus/core';
+import { APPROVAL_INTERRUPT_KIND, CHANNEL_SERVICE } from '@nexus/approval-channel';
+import type { ApprovalChannel } from '@nexus/approval-channel';
+import { virtualPathOf } from '@nexus/fs';
+import { APPROVAL_POLICY_SERVICE } from '@nexus/permission-presets';
+import type { ApprovalPolicySource, SandboxMode } from '@nexus/permission-presets';
 import {
-  APPROVAL_INTERRUPT_KIND,
   APPROVAL_INVALID_REPLY,
-  APPROVAL_POLICY_SERVICE,
   APPROVAL_REJECTED_BY_USER,
   approvalDenied,
-  CHANNEL_SERVICE,
-  toolCallIdOf,
-  toolRefusal,
-  virtualPathOf,
-} from '@nexus/core';
+} from '@nexus/tool-result';
+import type { ToolErrorInfo } from '@nexus/tool-result';
+import type { JsonValue, NexusTool, NexusToolResult, ToolThread } from '@nexus/tools';
 import { z } from 'zod';
 
-import type { SandboxMode, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 模型看到的工具名。核准卡（中斷酬載的 `actionRequests[].name`）帶的就是這個字串，所以它是導出的。 */
@@ -313,10 +309,10 @@ const escalationSchema = z.object({
   justification: z.string().describe('一句話，給按核准的人看：為什麼這一次操作需要更寬的權限。'),
 });
 
-/** 這次執行拿到的 runtime。只用得到一格，所以不整包相依基座的型別。 */
-interface ToolRuntimeLike {
-  readonly toolCall?: { readonly id?: string };
-}
+/** 升級工具的參數，`input` 模式（同 `NexusTool.parameters`）。 */
+const escalationParameters = z.toJSONSchema(escalationSchema, {
+  io: 'input',
+}) as NexusTool['parameters'];
 
 /** 人回來的東西。形狀與核准閘門收的相同（`approval.ts`）。 */
 interface EscalationVerdict {
@@ -332,6 +328,8 @@ export interface EscalationTargets {
 }
 
 /**
+ * 造升級工具（`@nexus/tools` 的 `NexusTool`，#2353）。
+ *
  * @param controller - 這次組裝那一格。
  * @param channel - 這次組裝有沒有人可以按核准；組裝點沒提供時是 `undefined`，當作沒有人可問。
  * @param approvalPolicy - 核准政策的來源（#437），**每次問人之前讀一次**；`never` 就不問。沒有提供時當作 `ask`。
@@ -342,18 +340,21 @@ function createEscalationTool(
   channel: ApprovalChannel | undefined,
   approvalPolicy: ApprovalPolicySource | undefined,
   targets: EscalationTargets,
-) {
+): NexusTool {
   const { sharedPrefix, reservedReason } = targets;
-  return tool(
-    async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
-      // 回拒絕，不拋：中斷之後才落定的那幾條出口，拋出去會在 resume 那一輪逸出成整場 run 死掉
-      // （`@nexus/plugin-ask-user` 量過）。核准閘門的 `denial()` 也是這個形狀。
-      const refuse = (message: string, error?: ToolErrorInfo) =>
-        toolRefusal(message, {
-          callId: toolCallIdOf(runtime) ?? '',
-          name: SANDBOX_ESCALATION_TOOL_NAME,
-          ...(error === undefined ? {} : { error }),
-        });
+  // 回 `ok: false`，不 reject：中斷之後才落定的那幾條出口，拋出去會在 resume 那一輪逸出成整場 run 死掉
+  // （`@nexus/plugin-ask-user` 量過）。核准閘門的 `denial()` 也是這個形狀。
+  const refuse = (content: string, error?: ToolErrorInfo): NexusToolResult => ({
+    ok: false,
+    content,
+    ...(error === undefined ? {} : { error }),
+  });
+  return {
+    name: SANDBOX_ESCALATION_TOOL_NAME,
+    description: SANDBOX_ESCALATION_DESCRIPTION,
+    parameters: escalationParameters,
+    async execute(raw, exec) {
+      const args = raw as z.infer<typeof escalationSchema>;
       const { file_path: target, sandbox_permissions: requested, justification } = args;
       // **順序照 dsh**：先驗欄位（`validateEscalationArgs`），再判加寬，最後才看有沒有人可問。
       if (target.trim() === '') return refuse(MISSING_TARGET_REFUSAL);
@@ -385,23 +386,22 @@ function createEscalationTool(
                 : undefined;
       if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
 
-      // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
-      // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-      const answer = (await interrupt({
+      // `exec.interrupt` 用拋例外傳播，**不能包在 try/catch 裡**。
+      const answer = (await exec.interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [
           {
             name: SANDBOX_ESCALATION_TOOL_NAME,
             args,
             description: escalationReason(target, requested, justification),
-            // pump 記 `approval/asked` 要配得上 `tool/call`（#1029），同核准閘門的酬載。
-            ...(toolCallIdOf(runtime) === undefined ? {} : { callId: toolCallIdOf(runtime) }),
+            // pump 記 `approval/asked` 要配得上 `tool/call`（#1029），同核准閘門的酬載。取不到 id（`''`）就不帶。
+            ...(exec.callId === '' ? {} : { callId: exec.callId }),
           },
         ],
         reviewConfigs: [
           { actionName: SANDBOX_ESCALATION_TOOL_NAME, allowedDecisions: ['approve', 'reject'] },
         ],
-      })) as EscalationVerdict | undefined;
+      } as unknown as JsonValue)) as EscalationVerdict | undefined;
 
       const verdict = answer?.decisions?.[0];
       if (verdict?.type === 'reject') {
@@ -422,17 +422,14 @@ function createEscalationTool(
       // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的
       // 可能是它——那時候對不上的一邊認領不到，是 fail-closed 的方向（見控制器的 `#denial`）。
       controller.grant({ mode: requested, target, denied: controller.lastDenial });
-      return (
-        `核准了：${JSON.stringify(target)} 剛才被擋下的那一次操作可以在 ` +
-        `${requested} 之下跑一次。現在把它原樣重試——操作或內容改了就不算。`
-      );
+      return {
+        ok: true,
+        content:
+          `核准了：${JSON.stringify(target)} 剛才被擋下的那一次操作可以在 ` +
+          `${requested} 之下跑一次。現在把它原樣重試——操作或內容改了就不算。`,
+      };
     },
-    {
-      name: SANDBOX_ESCALATION_TOOL_NAME,
-      description: SANDBOX_ESCALATION_DESCRIPTION,
-      schema: escalationSchema,
-    },
-  );
+  };
 }
 
 /**
@@ -444,22 +441,21 @@ function createEscalationTool(
  *
  * **問人沒有開關**：這顆工具存在的意義就是讓人看過。
  *
- * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
+ * 升級工具是 `NexusTool`：宿主在 `thread.register` 那一步轉成基座的工具。
+ *
+ * @param thread - 這條 thread 的組裝。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）；它與
+ *   {@link APPROVAL_POLICY_SERVICE} 都要在 `threadSource` 宣告過。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
  * @param targets - 不問人的目標：唯讀共用區前綴（#1800）、寫不進去的目標（#2078）。
  */
 export function registerSandboxEscalation(
-  registry: Parameters<NexusPlugin['apply']>[0],
+  thread: ToolThread,
   controller: SandboxModeController,
   targets: EscalationTargets = {},
 ): void {
-  registry.tools.register(
-    createEscalationTool(
-      controller,
-      registry.services.get(CHANNEL_SERVICE),
-      registry.services.get(APPROVAL_POLICY_SERVICE)?.source,
-      targets,
-    ),
-  );
+  const channel = thread.services.get(CHANNEL_SERVICE) as ApprovalChannel | undefined;
+  const approvalPolicy = thread.services.get(APPROVAL_POLICY_SERVICE) as
+    { readonly source: ApprovalPolicySource } | undefined;
+  thread.register(createEscalationTool(controller, channel, approvalPolicy?.source, targets));
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);
 }

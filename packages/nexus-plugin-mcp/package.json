@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -20,9 +20,17 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/cordis": "workspace:*",
     "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@modelcontextprotocol/server": "^2.3.1",
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-adapter": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "tsx": "^4.22.4",
@@ -31,9 +39,18 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "@langchain/mcp-adapters": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@nexus/core": "workspace:*",
     "langchain": "^1.5.10",
     "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/approval-channel": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/subprocess": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*"
   }
 }

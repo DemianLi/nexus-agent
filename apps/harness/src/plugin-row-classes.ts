@@ -47,12 +47,15 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
+import { embedLoginPlugin } from './settings/embed-login.js';
 import { goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
+import { hostToolsPlugin } from './settings/host-tools.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
+import { processModelPlugin } from './settings/process-model.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { sessionReferencePlugin } from './settings/session-reference.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
@@ -92,11 +95,14 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   threadCapacityPlugin,
   memoryGaugePlugin,
   opsEndpointsPlugin,
+  embedLoginPlugin,
   downlinkPlugin,
   loggerConsolePlugin,
   attachmentImagesPlugin,
+  hostToolsPlugin,
   goalRoundCapPlugin,
   turnTimeoutPlugin,
+  processModelPlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */
@@ -124,6 +130,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   ['time-context', next],
   ['skills', next],
   ['plan-mode', next],
+  ['plan-mode-model-call', next],
   ['goal', next],
   ['todo', next],
   ['feedback', next],
@@ -154,6 +161,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   // ── `#settings/*` 與模型提供者（分類文件 C 表）：組裝期讀的那幾列。
   ['agent-loop', next],
   ['recursion-limit', next],
+  ['history-source', next],
   ['tool-fs-search', next],
   ['tool-fs', next],
   [

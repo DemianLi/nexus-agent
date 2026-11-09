@@ -3,7 +3,7 @@
  *
  * echo 本身已經是樹上的函式插件（`packages/nexus-plugin-echo`，沒有一行 `@nexus/core`）。大量測試手搭 `PluginEntry`
  * 清單、直接呼叫 `createCliAgent` 或 `loadPlugins`，不經過 Cordis 樹；它們要一顆「註冊 `echo` 工具」的 `NexusPlugin`，
- * 就走這個外殼——**包的是同一個 `createEchoTool`**，所以工具的定義只有一個出處。
+ * 就走這個外殼——**包的是同一個 `createEchoTool`**（經宿主的轉接器轉成 LangChain 工具），所以工具的定義只有一個出處。
  *
  * **不能出現在任何產品路徑上**：`resolveEntryModule`、出貨清單（`cordis.yml`）、`fixtures.ts` 的 `shippedPlugins` 都不引用它。
  * 它在產品路徑上出現的話，「相容層折進樹上的工具」那一半就被它蓋掉了，驗收 D 的突變（折疊忽略樹）會被它救活。
@@ -23,6 +23,8 @@ import {
 } from '@nexus/plugin-echo';
 import type { EchoConfig, EchoPluginOptions } from '@nexus/plugin-echo';
 
+import { toLangChainTool } from '@nexus/tool-adapter';
+
 export { DEFAULT_ECHO_PREFIX, ECHO_TOOL_NAME, echoConfigSchema };
 export type { EchoConfig, EchoPluginOptions };
 
@@ -31,7 +33,7 @@ export const echoPlugin: NexusPlugin<EchoConfig> = {
   name: 'echo',
   Config: echoConfigSchema,
   apply(registry: PluginRegistry, config: EchoConfig): void {
-    registry.tools.register(createEchoTool(config.prefix));
+    registry.tools.register(toLangChainTool(createEchoTool(config.prefix)));
   },
 };
 

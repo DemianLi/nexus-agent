@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { MIDDLE_SECTION_ORDERS } from './prompt-sections.js';
 import { createRegistry } from './registry.js';
 import {
   fakeBackend,
@@ -171,6 +172,61 @@ describe('tools 註冊點', () => {
     registry.tools.register(fakeTool('goal'));
     leave();
     expect(registry.tools.isRootOnly('goal')).toBe(false);
+  });
+
+  /** 相容層的插件也能登記 `@nexus/tools` 的 `NexusTool`（#2353）：註冊當下經組裝點交的轉接器轉，表裡放轉出來的那一顆。 */
+  describe('NexusTool', () => {
+    const nexusTool = {
+      name: 'probe',
+      description: 'd',
+      parameters: { type: 'object', properties: {} },
+      execute: () => Promise.resolve({ ok: true as const, content: '' }),
+    };
+
+    it('經 adaptTool 轉：表裡是轉出來的實例，選項與撤銷都認它', () => {
+      const converted = fakeTool('probe');
+      const seen: unknown[] = [];
+      const registry = createRegistry({
+        adaptTool: (tool) => {
+          seen.push(tool);
+          return converted;
+        },
+      });
+      const leave = registry.enter(first);
+      const schema = z.object({ total: z.number() });
+      const undo = registry.tools.register(nexusTool, { rootOnly: true, outputSchema: schema });
+      leave();
+      expect(seen).toEqual([nexusTool]);
+      expect(registry.tools.resolve('probe')?.value).toBe(converted);
+      expect(registry.tools.isRootOnly('probe')).toBe(true);
+      expect(registry.tools.outputSchemaOf(converted)).toBe(schema);
+      undo();
+      expect(registry.tools.resolve('probe')).toBeUndefined();
+      expect(registry.tools.outputSchemaOf(converted)).toBeUndefined();
+    });
+
+    it('LangChain 的工具不經 adaptTool', () => {
+      const registry = createRegistry({
+        adaptTool: () => {
+          throw new Error('不該被叫到');
+        },
+      });
+      const leave = registry.enter(first);
+      const plain = fakeTool('search');
+      registry.tools.register(plain);
+      leave();
+      expect(registry.tools.resolve('search')?.value).toBe(plain);
+    });
+
+    it('組裝點沒交 adaptTool：當場拋，指名插件與工具', () => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      expect(() => registry.tools.register(nexusTool)).toThrow(
+        /alpha[\s\S]*"probe"[\s\S]*adaptTool/,
+      );
+      leave();
+      expect(registry.tools.resolve('probe')).toBeUndefined();
+    });
   });
 });
 
@@ -526,6 +582,49 @@ describe('其餘六個註冊點', () => {
     expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
     expect(() => registry.memory.addSource('/AGENTS.md')).toThrow('apply');
     expect(() => registry.lifecycle.onDispose(() => {})).toThrow('apply');
+  });
+});
+
+describe('prompt 註冊點（#2414）', () => {
+  const section = { name: 'x:policy', order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY, text: '字' };
+
+  it('收插件接得上的兩格的值；撤銷就拿掉', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.prompt.section(section);
+    registry.prompt.section({
+      ...section,
+      name: 'x:plan',
+      order: MIDDLE_SECTION_ORDERS.PLAN_POLICY,
+    });
+    leave();
+    expect(registry.prompt.sections().map((each) => each.name)).toEqual(['x:policy', 'x:plan']);
+    undo();
+    expect(registry.prompt.sections().map((each) => each.name)).toEqual(['x:plan']);
+  });
+
+  it.each([
+    ['頭', 0],
+    ['組裝點自己的先讀後改', MIDDLE_SECTION_ORDERS.FS_OBSERVATION],
+    ['組裝點自己的委派聲明', MIDDLE_SECTION_ORDERS.SUBAGENT_DELEGATION],
+    ['組裝點自己的核准政策句', MIDDLE_SECTION_ORDERS.APPROVAL_POLICY],
+  ])('%s那一格的值不收：沒有東西會渲染它，收了就是靜靜丟掉', (_label, order) => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    expect(() => registry.prompt.section({ ...section, order })).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*不是插件接得上的值/u,
+    );
+    leave();
+  });
+
+  it('同名的段報錯，訊息指名登記者', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.prompt.section(section);
+    leaveFirst();
+    const leave = registry.enter(second);
+    expect(() => registry.prompt.section(section)).toThrow(/mcp#0 \(mcp\)[\s\S]*已經登記過/u);
+    leave();
   });
 });
 

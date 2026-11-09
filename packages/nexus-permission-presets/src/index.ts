@@ -16,9 +16,11 @@
  *    （`packages/interaction/permission-presets/src/index.ts:293-299`，`86a40220`）；我們今天的預設組是**這條 thread 的起始值推出來的**
  *    （續接的 thread 沒設 `defaultPreset` 時，是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。照 dsh 做會讓新會話的日誌多一顆
  *    `sandbox/mode`、續接的目錄預設組變動，都是行為改變，遷移卡不做。**撤除條件**：之後的權限卡定。
- * 2. **子代理的組名由會話參與者寫，dsh 由委派那一側（`subagent/subagent/src/child-agent.ts:248-279`）寫**（Q2-1；類別：基座表達不出來）。
- *    委派那一刻拍下沙箱那一格靠包住 `task` 的 `wrapToolCall` 與 ALS（`sandbox-policy`），樹上沒有包工具呼叫的接縫。**撤除條件**：
- *    `sandbox-policy` 遷上樹時一起做。
+ * 2. **子代理的組名由會話參與者寫，dsh 由委派那一側（`subagent/subagent/src/child-agent.ts:248-279`）寫**（Q2-1；類別：遷移卡不改行為（暫時））。
+ *    沙箱那一格的委派快照由 `sandbox-policy` 的 `tools/execute` 監聽者在委派工具那一次拍（ALS）；組名由參與者在子代理接上會話時讀，
+ *    讀到的跟委派那一刻相同，因為一輪跑著時沒有入口能切權限組合——`/permission` 沒有宣告 `runWhileBusy`（`@nexus/plugin-permission-presets`
+ *    的 `index.test.ts` 有一格守著），控制器的 `switchTo` 唯一的非測試呼叫點是 `assembly-root.ts` 組 thread 那一步。
+ *    **撤除條件**：任何能在一輪跑著時切核准的入口落地，就改由委派那一側寫。
  * 3. **參與者安裝失敗只記 warn、已寫的收不回**（R3；類別：基座表達不出來）。dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上
  *    （`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`@nexus/session` 的 `join` 沿用。
  *    **撤除條件**：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換）；在那之前單獨改這一位沒有意義。
@@ -29,9 +31,11 @@
  *
  * ## 相依
  *
- * 型別與常數（`SandboxMode`、`SANDBOX_MODES`、`ApprovalPolicyValue`、`APPROVAL_POLICIES`）留在 `@nexus/core`，由這個套件**單向轉出**
+ * 型別與常數（`SandboxMode`、`SANDBOX_MODES`、`ApprovalPolicyValue`、`APPROVAL_POLICIES`，以及 `sandbox-policy` 用的 `SandboxGrant`、
+ * `SandboxDenial`、`SandboxGrantLedger`、`SandboxModeSource`、`ApprovalPolicySource`、`APPROVAL_POLICY_SERVICE`，#2557）留在 `@nexus/core`，由這個套件**單向轉出**
  * （照 `@nexus/projections` 的 #1421 Q2 (a)）；`PermissionCatalog` 取自 `@nexus/wire`（web 的協定也讀它）。**`@nexus/core`、`@nexus/wire`
  * 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**。撤除條件併入 #1421 Q2 (b)。
+ * 沙箱與核准政策的詞彙只有這個定義套件在轉出，所以 grant 那幾個型別跟著 `SandboxMode` 放這裡。
  *
  * `permission/preset` 的事件宣告（`SessionEventMap`）住在 `@nexus/core` 的 `session-log.ts`（前例 `feedback/*`、`todo/write`），遷出的插件因此
  * 不必對 core 寫 `declare module`。
@@ -45,8 +49,16 @@ import type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 import type { PermissionCatalog } from '@nexus/wire';
 
-export { APPROVAL_POLICIES, SANDBOX_MODES } from '@nexus/core';
-export type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
+export { APPROVAL_POLICIES, APPROVAL_POLICY_SERVICE, SANDBOX_MODES } from '@nexus/core';
+export type {
+  ApprovalPolicySource,
+  ApprovalPolicyValue,
+  SandboxDenial,
+  SandboxGrant,
+  SandboxGrantLedger,
+  SandboxMode,
+  SandboxModeSource,
+} from '@nexus/core';
 export type { PermissionCatalog } from '@nexus/wire';
 
 /**

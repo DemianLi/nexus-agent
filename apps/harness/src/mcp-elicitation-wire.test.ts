@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { createHostServicesPlugin } from '@nexus/core';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
+import { MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
 import {
   answerResponse,
   appendAnswers,
@@ -25,6 +25,7 @@ import {
 import type { ConversationState, Event } from '@nexus/wire';
 import { afterEach, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import {
   emptyCommandPoint,
   loopbackRequest,
@@ -72,7 +73,7 @@ async function open(
         'wire-elicit-channel',
       ),
       ...shipped,
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -81,7 +82,7 @@ async function open(
           command: process.execPath,
           args: ['--import', 'tsx', SERVER, ...(shared === undefined ? [] : [shared.marker])],
         },
-      }),
+      })),
     ],
   });
   const handler = createWireHandler({
@@ -188,7 +189,7 @@ it('拒絕（declineResponse）→ server 收到 decline', async () => {
 
 /**
  * #1677 驗收 E：兩條 thread 共用池裡同一條連線（同一個子行程），A 叫會反問的工具停在問答卡上的時候，B 叫別支工具照常完成、
- * 下行沒有問答卡；A 回答之後那支呼叫完成。adapter 的反問走 LangGraph `interrupt()`，停在**呼叫者**那張圖上，所以不用另外路由
+ * 下行沒有問答卡；A 回答之後那支呼叫完成。plugin 的反問走 LangGraph `interrupt()`，停在**呼叫者**那張圖上，所以不用另外路由
  * （Q3 (a)）。每條 thread 各自一份組裝（各自的註冊表與工具物件），跟 serve 一樣。
  */
 it('共用一條連線：A 的問答卡只出在 A；B 同時叫別支工具不受影響；A 回答後完成', async () => {

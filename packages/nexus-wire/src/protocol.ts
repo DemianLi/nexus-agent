@@ -32,6 +32,9 @@ import type {
   MessageFeedbackItem,
   MessageFeedbackRating,
 } from '@nexus/core/src/feedback.ts';
+import type { PageContextRef } from '@nexus/core/src/page-context.ts';
+
+import type { HostToolDeclaration } from './host-tools.js';
 
 import type {
   ATTACHMENT_NOT_FOUND,
@@ -125,6 +128,9 @@ export const RUN_START_MODES = ['queue', 'steer'] as const;
 
 export type RunStartMode = (typeof RUN_START_MODES)[number];
 
+/** `run.start` 的 `context`：**就是 `@nexus/core` 的 `PageContextRef`**，別名。 */
+export type PageContext = PageContextRef;
+
 /**
  * `run.start` 的封包。**`params` 比協定的 `RunStartParams` 多一格我們自己的 {@link RunStartMode}**：協定的 `Command`
  * 沒有送出模式那一格，而 dsh 的送出模式就掛在送出請求本身（`prompt` 的 `mode`）。另立一支命令的話，同一句話會有
@@ -147,6 +153,18 @@ export interface RunStartCommand {
      * 名字不在 `subagent.list` 上回 `invalid_argument`。
      */
     readonly mention?: SubagentMention;
+    /**
+     * 嵌入的對話框附在這句話上的畫面情境（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：宿主頁目前選取的東西。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；`context` 只能有 `label` 一格，
+     * `label` 是空字串、只有空白、超過 `@nexus/core` 的 `PAGE_CONTEXT_LABEL_MAX` 個字，或多了別的鍵，都回 `invalid_argument`，不截。交給模型時寫成「畫面上目前選取 …」，見 `page-context.ts`。
+     */
+    readonly context?: PageContext;
+    /**
+     * 嵌入的對話框替宿主頁宣告的工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，形狀與上限見 `host-tools.ts`）。
+     * 協定的 `RunStartParams` 沒有這一格。**只有嵌入版開的 thread 收**，其餘回 `not_supported`；不合 `hostToolsProblem`、或參數 schema 轉不成工具（轉接器不認的關鍵字），回 `invalid_argument`，不截。
+     * 這一輪模型看到的就是這一份；插話（`mode: 'steer'`）帶的不換這一輪的工具。
+     */
+    readonly host_tools?: readonly HostToolDeclaration[];
     /**
      * 客戶端給這一次送出的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)），**選填**。
      * 照 dsh `session.prompt` 的 `requestId`（`packages/api/session-controller/src/types.ts:340`，`d7432673886`）：
@@ -423,6 +441,24 @@ export const THREAD_AT_CAPACITY = 'thread_at_capacity';
 export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 
 /**
+ * 嵌入的對話框（{@link EMBED_PATH_PREFIX}）碰到一條不是從嵌入版開的 thread（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）。
+ * 嵌入版設定檔綁在 thread 上：從獨立頁面開的 thread 掛著完整的工具，嵌入連線不准接手它。**不是暫時失敗，重試沒用**：要開一條新對話。
+ */
+export const THREAD_NOT_EMBEDDED = 'thread_not_embedded';
+
+/**
+ * 嵌入的對話框碰到一條不是這位使用者開的嵌入版 thread（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)）：別人的，或沒有擁有者的。
+ * **不是暫時失敗，重試沒用**：要開一條新對話。訊息不帶擁有者是誰。
+ */
+export const THREAD_NOT_OWNED = 'thread_not_owned';
+
+/**
+ * 這個行程只放另一條 thread，或還沒綁上任何一條（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，每條對話一個行程）。
+ * 只有對話行程會回，回給前台；前台照 thread 轉送，回了就是轉錯行程。**不是暫時失敗，重試沒用。**
+ */
+export const THREAD_NOT_BOUND = 'thread_not_bound';
+
+/**
  * 這條 thread 的歷史（磁碟上的會話日誌）裡有一則巢狀太深，灌不回 serve 的狀態，這條 thread 建不起來
  * （[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）。多半是上限出現之前寫下的舊日誌。message 寫了是日誌第幾顆事件、
  * 幾層、上限多少。**不是暫時失敗，重試沒用**：同一份日誌每次都一樣深。任何會經 `threadFor` 續接舊 thread 的路都可能回。
@@ -485,6 +521,9 @@ export type WireErrorCode =
   | typeof SUBAGENT_CLOSED
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
+  | typeof THREAD_NOT_BOUND
+  | typeof THREAD_NOT_EMBEDDED
+  | typeof THREAD_NOT_OWNED
   | typeof THREAD_HISTORY_TOO_DEEP
   | typeof THREAD_WRITER_HELD
   | typeof THREAD_ROOT_MISMATCH
@@ -687,6 +726,8 @@ export const RPC_PARAM_KEYS = {
     'mode',
     'attachments',
     'mention',
+    'context',
+    'host_tools',
     'request_id',
     'client_time_zone',
   ],
@@ -900,6 +941,14 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
  * 標題是從第一句話來的。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
  */
 export const THREADS_PATH = '/threads';
+
+/**
+ * 嵌入的對話框（`<nexus-chat>`）走的路徑前綴（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)）：疊在 thread 那一族的路徑前面，
+ * 例如 `/embed/threads/:id/stream`、`/embed/threads/mux`；只認 `/embed/` 開頭，`/embed.js` 不算。server 照它認出連線來自嵌入元件，
+ * 套嵌入版的設定檔。它不是轉發的範圍：元件的 `embed.js`、字型（`assets/…`）與登入（`/?token=`）在 serve 的其他路徑，
+ * 反向代理要把整個掛載路徑轉給 serve（見 `docs/operations.md`〈放在反向代理後面〉）。
+ */
+export const EMBED_PATH_PREFIX = '/embed';
 
 /**
  * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`origin`（subagent 不列）、

@@ -30,7 +30,7 @@
  */
 
 import { AIMessage } from '@langchain/core/messages';
-import { fromLoggedMessage } from './logged-message.js';
+import { readLoggedMessage } from './logged-message.js';
 import type { SessionEvent } from './session-log.js';
 
 /** 一次模型呼叫與歸給它的事件，都照日誌順序。 */
@@ -81,7 +81,7 @@ interface MutableRecord {
  */
 export function toolCallIds(event: SessionEvent<'assistant/message'>): readonly string[] {
   try {
-    const message = fromLoggedMessage(event.data.message);
+    const message = readLoggedMessage(event.data.message);
     if (!AIMessage.isInstance(message)) return [];
     return (message.tool_calls ?? []).flatMap((each) =>
       typeof each.id === 'string' && each.id !== '' ? [each.id] : [],

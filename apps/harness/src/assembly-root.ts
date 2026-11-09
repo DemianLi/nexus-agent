@@ -18,11 +18,14 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import type {
+  AgentLoopKind,
   ApprovalPolicy,
   CommandRegistrationPoint,
   ProjectionRegistrationPoint,
   FeedbackService,
   InvariantError,
+  HistoryShadowSink,
+  HistorySource,
   InvariantTap,
   ModelRoute,
   PluginEntry,
@@ -36,6 +39,8 @@ import type { BackgroundParentPort, ModelChoice } from './background-subagents.j
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
+import type { ThreadProfile } from './embed-profile.js';
+import type { HostToolsSlot } from './host-tools.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -54,6 +59,7 @@ import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
 import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
 import {
+  AGENT_LOOP_KINDS,
   ApprovalPolicyController,
   type ApprovalPolicyValue,
   createHostServicesPlugin,
@@ -84,7 +90,10 @@ import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  name as SANDBOX_POLICY_PLUGIN_NAME,
+} from '@nexus/plugin-sandbox-policy';
 import {
   PERMISSION_PRESETS_PLUGIN_NAME,
   PERMISSION_PRESETS_SERVICE,
@@ -229,6 +238,16 @@ export interface CliInvocation {
    */
   readonly recursionLimit?: number;
   /**
+   * `--history-source`（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：模型歷史從哪裡來。在場時贏過 `#settings/history-source`
+   * 那一列，三態見 `agent-factory.ts` 的 `historyFor`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
+   */
+  readonly historySource?: HistorySource;
+  /**
+   * `--agent-loop`（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：驅動 middleware 的是 LangGraph 的圖還是 `@nexus/core` 的 native loop。
+   * 省略即 `langgraph`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
+   */
+  readonly agentLoop?: AgentLoopKind;
+  /**
    * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
    *
    * **換掉整份清單這件事沒有旗標可以做**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -298,6 +317,25 @@ export function parseSandboxMode(
     );
   }
   return mode;
+}
+
+/**
+ * `--agent-loop` 的值（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。兩個入口共用，理由同 {@link parseSandboxMode}。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param usage - 接在錯誤訊息後面的用法那段話。
+ * @returns 那個值，或沒給時的 `undefined`（＝`langgraph`）。
+ * @throws 不是認得的值——訊息接上用法。
+ */
+export function parseAgentLoop(raw: string | undefined, usage: string): AgentLoopKind | undefined {
+  if (raw === undefined) return undefined;
+  const value = AGENT_LOOP_KINDS.find((kind) => kind === raw.trim());
+  if (value === undefined) {
+    throw new Error(
+      `--agent-loop 只收 ${AGENT_LOOP_KINDS.join('、')}（拿到 ${JSON.stringify(raw)}）。\n\n${usage}`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -807,6 +845,8 @@ export interface CreateCliAgentSession {
    * 省略就是不記，測試與 eval 不會寫到任何人的家目錄。
    */
   readonly invariantTap?: InvariantTap;
+  /** `shadow` 時比對結果的去處，原樣轉給 `createNexusAgent`。serve 一台一份；CLI 一次行程一份。 */
+  readonly historyShadow?: HistoryShadowSink;
   /**
    * 核准政策的 session 開關。[`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
    * CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
@@ -867,7 +907,13 @@ export interface CreateCliAgentSession {
 export async function createCliAgent(
   invocation: Pick<
     CliInvocation,
-    'live' | 'workspace' | 'sandbox' | 'approvalPolicy' | 'recursionLimit'
+    | 'live'
+    | 'workspace'
+    | 'sandbox'
+    | 'approvalPolicy'
+    | 'recursionLimit'
+    | 'historySource'
+    | 'agentLoop'
   > & {
     /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
@@ -950,6 +996,10 @@ export async function createCliAgent(
      * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
      */
     readonly spillPolicy?: { readonly maxInlineTokens: number };
+    /** 照哪一份設定檔組（#2367），原樣交給 `createNexusAgent`。省略即 `full`。 */
+    readonly profile?: ThreadProfile;
+    /** 嵌入版的宿主頁工具（#2374），原樣交給 `createNexusAgent`。只有 serve 傳。 */
+    readonly hostTools?: { readonly exempt?: readonly string[]; readonly timeoutMs?: number };
     /**
      * 背景續行子代理的上限（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：**給了就是背景續行，省略就是一次性**。
      * 從 `background-subagents` 那一列解。**只有 serve 傳**：REPL 一行一輪、一次性模式答完就退出，背景子代理做完沒有
@@ -971,6 +1021,7 @@ export async function createCliAgent(
   {
     onInvariantViolation,
     invariantTap,
+    historyShadow,
     approvals,
     rootSeed,
     tokenAnchorBook,
@@ -1023,8 +1074,11 @@ export async function createCliAgent(
    * （沒有圍堵）的組裝永遠不會觸發。回傳取消訂閱。
    */
   onDelegationNarrowed: (listener: (event: DelegationNarrowedEvent) => void) => () => void;
-  /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
-  subagentKinds: readonly { readonly name: string; readonly description: string }[];
+  /**
+   * 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。
+   * 嵌入版設定檔（#2367）不掛子代理，缺席。
+   */
+  subagentKinds: readonly { readonly name: string; readonly description: string }[] | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -1062,6 +1116,8 @@ export async function createCliAgent(
   stepInbox: boolean;
   /** 這一次組裝的外溢存檔服務（#1553 N0948）；**沒給工具結果暫存是 `undefined`**。見 `createNexusAgent` 回的那一格。 */
   spillStore: SpillStore | undefined;
+  /** 這條 thread 的宿主頁工具插槽（#2374）；**不是嵌入版就是 `undefined`**。見 `createNexusAgent` 回的那一格。 */
+  hostTools: HostToolsSlot | undefined;
   /** 每會話模型選擇的組裝端（#723）；**沒帶 `--live` 是 `undefined`**（假模型沒有型錄）。 */
   modelSelection: ModelSelectionHost | undefined;
 }> {
@@ -1088,20 +1144,22 @@ export async function createCliAgent(
           { followMainRoute: true, requestGate: invocation.requestGate },
         )
       : undefined;
-  // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
-  // （同一個 `deriveApprovalChannel`），`ask_user_question` 與 `exit_plan_mode`（#652）拿的是這一份
-  // ——分岔的樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
+  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同三格算出：
+  // `approvals.enabled`、有沒有 checkpointer、哪一種 loop（native 算沒有 checkpointer）。輸入對不上時分岔的樣子是
+  // 「核准擋得下來、問答還掛在那裡」。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
   // 呼叫的 checkpointer 與 `approvals`。
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
+  // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined,
+    hasCheckpointer: checkpointer !== undefined && invocation.agentLoop !== 'native',
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
@@ -1125,7 +1183,10 @@ export async function createCliAgent(
   const sharedWorkspaceRoot = invocation.sharedWorkspaceRoot;
   // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
   // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
-  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
+  if (
+    workspaceRoot !== undefined &&
+    !startupEntryMounted(plugins, { name: SANDBOX_POLICY_PLUGIN_NAME })
+  ) {
     throw new Error(
       '有 --workspace（檔案系統有圍堵），但清單上的 sandbox-policy 那一列沒有掛（不存在或被停用）。' +
         '它負責把檔案政策講給模型、記進日誌與提供升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +
@@ -1199,6 +1260,7 @@ export async function createCliAgent(
     onWarning,
     stepInbox,
     spillStore,
+    hostTools,
     subagentKinds,
     memorySources,
   } = await createNexusAgent({
@@ -1263,7 +1325,12 @@ export async function createCliAgent(
     ...(backend !== undefined && { backend }),
     ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
+    ...(invocation.historySource !== undefined && { historySource: invocation.historySource }),
+    ...(invocation.agentLoop !== undefined && { agentLoop: invocation.agentLoop }),
+    ...(historyShadow !== undefined && { historyShadow }),
     systemPrompt: SYSTEM_PROMPT,
+    ...(invocation.profile !== undefined && { profile: invocation.profile }),
+    ...(invocation.hostTools !== undefined && { hostTools: invocation.hostTools }),
     // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；
     // 假模型沒有型號，用 {@link SCRIPTED_MODEL_NAME}。
     systemPromptVariables: {
@@ -1417,6 +1484,7 @@ export async function createCliAgent(
     onWarning,
     stepInbox,
     spillStore,
+    hostTools,
     modelSelection,
   };
 }

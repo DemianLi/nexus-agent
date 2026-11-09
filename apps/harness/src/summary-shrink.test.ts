@@ -100,8 +100,6 @@ afterEach(async () => {
 interface Snapshot {
   /** 這一輪日誌上新增的 `compaction/summary` 切點。 */
   readonly logCutoffs: number[];
-  /** graph state 上 `_summarizationEvent.cutoffIndex`。 */
-  readonly stateCutoff: number | undefined;
   /** 歷史檔的各區段（去掉標題行、換行換成 ` | `）；空區段就是空字串，這裡**不**濾掉。 */
   readonly sections: string[];
   /** 這一輪結束時的 `turn/end`／`turn/failed`。 */
@@ -144,7 +142,6 @@ async function converse(options: {
       ).getState({ configurable: { thread_id: 'summary-shrink' } });
       const values = state.values as {
         files?: Record<string, { content?: string }>;
-        _summarizationEvent?: { cutoffIndex: number };
       };
       const slice = pump.sessionLog.events.slice(before);
       const end = [...slice]
@@ -152,7 +149,6 @@ async function converse(options: {
         .find((event) => event.type === 'turn/end' || event.type === 'turn/failed');
       snapshots.push({
         end: end?.type,
-        stateCutoff: values._summarizationEvent?.cutoffIndex,
         logCutoffs: slice
           .filter((event) => event.type === 'compaction/summary')
           .map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
@@ -204,14 +200,12 @@ describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
 
     // 前提：第 2 輪的兩次超窗真的升級到底（三筆事件，最後切點 3）。第 3 輪只有一次呼叫，而且是主呼叫。
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2, 3]);
-    expect(run.snapshots[1]!.stateCutoff).toBe(3);
     expect(run.model.calls).toBe(8);
     expect(run.model.seen[7]![0]).toMatch(/^system:/);
     expect(run.snapshots[2]!.end).toBe('turn/end');
 
-    // 第 3 輪：沒有新事件、state 切點不動、歷史檔還是第 2 輪那一段（沒有空區段）。
+    // 第 3 輪：沒有新事件、歷史檔還是第 2 輪那一段（沒有空區段）。
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
-    expect(run.snapshots[2]!.stateCutoff).toBe(3);
     expect(run.snapshots[2]!.sections).toEqual(run.snapshots[1]!.sections);
     expect(run.snapshots[2]!.sections.every((section) => section !== '')).toBe(true);
 
@@ -231,7 +225,6 @@ describe('正常摘要不受影響', () => {
     const run = await converse({ overflowOn: [], turns: 2 });
 
     expect(run.snapshots.map((s) => s.logCutoffs.length)).toEqual([0, 1]);
-    expect(run.snapshots[1]!.stateCutoff).toBe(run.snapshots[1]!.logCutoffs[0]);
     expect(run.snapshots[1]!.sections).toHaveLength(1);
     expect(
       warn.mock.calls.map((call) => String(call[0])).filter((l) => l.includes('不比被取代')),

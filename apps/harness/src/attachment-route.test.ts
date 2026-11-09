@@ -14,6 +14,7 @@
  * 5. `referencedFilePaths` 不比檔名（只用雜湊找同目錄的所有別名）→ 「檔名別名各自一條」紅。
  * 6. `agent-factory.ts` 的 `attachmentScope.bind(sessions.root)` 拿掉 → 產品路徑「A 的子代理讀得到」紅（綁不上就什麼都不露出）。
  * 7. `readRaw`、`downloadFiles` 的可見判斷各自拿掉 → 對應的「跟不存在逐字一樣」紅。
+ * 8. `ThreadScopedAttachmentBackend[COPY_SOURCE]` 的可見判斷拿掉（#2289）→ 「複製的來源」那兩條紅。
  *
  * **零憑證、零外部連線**：模型是腳本，儲存放 `/var/tmp`。
  */
@@ -23,7 +24,7 @@ import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { SEARCH_ABORTED } from '@nexus/core';
+import { COPY_SOURCE, SEARCH_ABORTED } from '@nexus/core';
 import type { AttachmentRef, SessionEvent } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -735,4 +736,40 @@ describe('產品路徑：兩條 thread 共用一個儲存，前景子代理跟�
     expect(readByB).not.toContain(SECRET);
     expect(readByB).toMatch(/ENOENT|not found|Error/iu);
   }, 30000);
+});
+
+describe('複製的來源（copy_file，#2289）', () => {
+  /** 開來源：成功時讀出全部內容再關掉，失敗時回錯誤句。 */
+  async function openAndRead(route: ThreadScopedAttachmentBackend, path: string) {
+    const opened = await route[COPY_SOURCE](path, {
+      from: `/attachments${path}`,
+      to: '/out.txt',
+    });
+    if ('error' in opened) return opened.error;
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of opened.stream as AsyncIterable<Buffer>) chunks.push(chunk);
+      return Buffer.concat(chunks).toString('utf8');
+    } finally {
+      await opened.close();
+    }
+  }
+
+  it('引用過的檔開得到，別條 thread 的開不到', async () => {
+    const a = await put('alpha-secret\n', 'a.txt');
+    expect(await openAndRead((await routeOver([turnStart(a.ref)])).route, a.path)).toBe(
+      'alpha-secret\n',
+    );
+    const other = await openAndRead((await routeOver([])).route, a.path);
+    expect(other).not.toContain('alpha-secret');
+    expect(other).toMatch(/^Error copying /u);
+  });
+
+  it('沒引用過的路徑，回覆與「檔不存在」逐字相同', async () => {
+    const a = await put('alpha-secret\n', 'a.txt');
+    const hidden = await openAndRead((await routeOver([])).route, a.path);
+    await rm(store.pathOf(a.ref), { force: true });
+    const gone = await openAndRead((await routeOver([turnStart(a.ref)])).route, a.path);
+    expect(hidden).toBe(gone);
+  });
 });

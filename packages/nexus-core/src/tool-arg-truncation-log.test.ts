@@ -16,8 +16,8 @@ import {
   applyRecordedArgTruncation,
   applyRecordedArgTruncations,
   newlyTruncatedArgs,
-  recordedArgTruncationsOf,
-} from './tool-arg-truncation-log.js';
+} from './langchain-message-adapter.js';
+import { recordedArgTruncationsOf } from './tool-arg-truncation-log.js';
 import { TokenAnchorBook } from './token-estimate.js';
 
 const MARKER = '...(argument truncated)';

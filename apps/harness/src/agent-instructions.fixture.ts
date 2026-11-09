@@ -35,12 +35,14 @@ const NO_SESSIONS = { forCall: () => ({ kind: 'not-attached' as const }) };
  * @param backend - 讀候選檔的 backend。
  * @param maxBytes - 一則基線的位元組上限。單檔上限用出廠的 `DEFAULT_MAX_SOURCE_BYTES`。
  * @param sessions - 這條 thread 的會話註冊表的 `forCall`；**省略就不記日誌**。
+ * @param cutoffOf - 摘要切點的查找；省略就是沒摘要過。
  * @returns 可以直接呼叫 `beforeAgent` 的 middleware。
  */
 export function createAgentInstructionsMiddleware(
   backend: AnyBackendProtocol,
   maxBytes: number,
   sessions?: Parameters<typeof createPreStepMiddleware>[2],
+  cutoffOf: Parameters<typeof createPreStepMiddleware>[3] = () => undefined,
 ): AgentMiddleware {
   const handle = {
     backend: () => backend,
@@ -60,5 +62,6 @@ export function createAgentInstructionsMiddleware(
       },
     ),
     sessions ?? NO_SESSIONS,
+    cutoffOf,
   );
 }

@@ -58,40 +58,43 @@ function codeLinesMatching(pattern: RegExp): string[] {
 
 describe('Error: 前綴只有一個主人', () => {
   /**
-   * 手寫 `status: 'error'` 的只剩兩處：`toolRefusal`／`toolFeedback` 共用的那一個建構點，與
-   * `fs-tool-errors.ts` 包基座文字的那一則（文字不是我們寫的，可能是文字塊陣列）。
-   *
-   * 2026-09-14 在改之前的 develop（`473d12a`）上數到 10 處、10 個檔：圍堵、核准、先讀後改、輸出 schema、
-   * fs-tool-errors、ask-user、submit_record、sandbox-escalation、pump 的 `#withdraw`，與 `tool-events.ts`
-   * 自己。其中 8 處是 #318 補前綴的出口，全部改走 `toolRefusal`。
+   * 手寫 `status: 'error'` 的只有兩處：錯誤結果唯一的建構點（`tool-error-codes.ts` 的 `errorResultFields`，`toolRefusal`／`toolFeedback`
+   * 與推導端補的那兩句共用），與 native loop 找不到工具時那一則
+   * （`native-loop/invalid-tool.ts`）：逐字照 langchain `ToolNode` 的 `getInvalidToolError`，兩個 loop 才回同一句。
+   * `tools/execute` 的 core 監聽者（fs-tool-errors、先讀後改、耐久檢查點）交回的是 `isError`，狀態由 `tool-pipeline.ts` 從那一格推，
+   * 也不手寫。
    */
-  it('手寫 error 狀態的只有 tool-events 與 fs-tool-errors', () => {
+  it('手寫 error 狀態的只有錯誤結果的建構點與 native 照抄 langchain 的那一則', () => {
     expect(codeLinesMatching(/status:\s*['"]error['"]/u)).toEqual([
-      "packages/nexus-core/src/fs-tool-errors.ts: status: 'error',",
-      "packages/nexus-core/src/tool-events.ts: status: 'error',",
+      "packages/nexus-core/src/native-loop/invalid-tool.ts: status: 'error',",
+      "packages/nexus-core/src/tool-error-codes.ts: return { content, tool_call_id: options.callId, name: options.name, status: 'error' as const };",
     ]);
   });
 
   /**
-   * 自己拼 `'Error: '` 的只剩前綴的定義本身。**改之前是 5 處**：todo、goal 各一個前綴常數，中止的
-   * 兩句與壞參數那一句各自帶著——`toolRefusal` 加上前綴之後，它們留著就是 `Error: Error: `。
+   * 自己拼 `'Error: '` 的只剩前綴的定義本身，與 native loop 照抄 langchain 的那一句（見上一條）。todo、goal 的前綴常數，中止的兩句與
+   * 壞參數那一句都不能自己帶前綴：`toolRefusal` 已經加了，再帶就是 `Error: Error: `。
    *
    * 期望值裡那一行是原始碼逐字，所以**前綴的值也被這條釘住**：改成別的字，這裡當場紅。
    */
-  it('字串裡寫 Error: 的只有前綴的定義', () => {
+  it('字串裡寫 Error: 的只有前綴的定義與 native 照抄 langchain 的那一句', () => {
     expect(codeLinesMatching(/['"`]Error: /u)).toEqual([
+      "packages/nexus-core/src/native-loop/invalid-tool.ts: content: `Error: ${call.name} is not a valid tool, try one of [${available.join(', ')}].`,",
       "packages/nexus-core/src/tool-events.ts: export const TOOL_ERROR_PREFIX = 'Error: ';",
     ]);
   });
 
   /**
-   * 不帶前綴的那條路（`toolFeedback`，dsh 的第二條政策）只有一個呼叫者：推模型歷史時補的那兩句，
-   * 逐字抄 dsh `repair.ts`。**多一個呼叫者是一個決定，不是預設**——拒絕走它，前綴就悄悄不見了，
-   * 而上面兩條都數不到。另一行是它的定義。改之前這個函式不存在（0 處）。
+   * 不帶前綴的那條路（dsh 的第二條政策）只有一個生產者：推模型歷史時補的那兩句（`conversation-replay.ts` 的 `closer`），
+   * 逐字抄 dsh `repair.ts`，直接拿建構點的欄位；請求端的 `toolFeedback` 留給作者自己寫好的回饋，今天沒有呼叫者。
+   * **多一個呼叫者是一個決定，不是預設**——拒絕走這條，前綴就悄悄不見了，而上面兩條都數不到。
+   * 其餘幾行是定義與 `errorResult`（`toolRefusal`／`toolFeedback` 共用）那一處。
    */
   it('不帶前綴的那條路只有推模型歷史在走', () => {
-    expect(codeLinesMatching(/\btoolFeedback\(/u)).toEqual([
-      'packages/nexus-core/src/conversation-replay.ts: return toolFeedback(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
+    expect(codeLinesMatching(/\b(?:toolFeedback|errorResultFields)\(/u)).toEqual([
+      'packages/nexus-core/src/conversation-replay.ts: ...errorResultFields(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {',
+      'packages/nexus-core/src/tool-error-codes.ts: export function errorResultFields(',
+      'packages/nexus-core/src/tool-events.ts: const message = new ToolMessage(errorResultFields(content, options));',
       'packages/nexus-core/src/tool-events.ts: export function toolFeedback(content: string, options: ErrorResultOptions): ToolMessage {',
     ]);
   });

@@ -11,6 +11,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -235,6 +236,31 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
           { name: 'edit_file', args: { file_path: '/dir', old_string: 'a', new_string: 'b' } },
         ],
         { observationPolicy: false },
+      );
+      expect(results).toEqual([failure('FS_NOT_REGULAR_FILE'), failure('FS_NOT_REGULAR_FILE')]);
+    }, 20000);
+
+    // 路徑判完一般檔之後、開檔之前換成 FIFO（#2312）：開好的把手判出不是一般檔，碼跟路徑判斷那一支一樣。
+    it('讀、改的檔在開檔之前被換成 FIFO → FS_NOT_REGULAR_FILE', async () => {
+      await writeFile(join(root, 'a.txt'), 'x\n');
+      await writeFile(join(root, 'b.txt'), 'x\n');
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: 'workspace-write',
+        atomicInternals: {
+          beforeReadOpen: async (path) => {
+            await rm(path);
+            execFileSync('mkfifo', [path]);
+          },
+        },
+      });
+      const { results } = await run(
+        'workspace-write',
+        [
+          { name: 'read_file', args: { file_path: '/a.txt' } },
+          { name: 'edit_file', args: { file_path: '/b.txt', old_string: 'x', new_string: 'y' } },
+        ],
+        { observationPolicy: false, backend },
       );
       expect(results).toEqual([failure('FS_NOT_REGULAR_FILE'), failure('FS_NOT_REGULAR_FILE')]);
     }, 20000);

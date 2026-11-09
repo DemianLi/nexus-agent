@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { ChatOpenAI, wrapOpenAIClientError } from '@langchain/openai';
+import { isEmptyAssistant } from '@nexus/core';
 import {
   LIVE_API_KEY_ENV,
   DEFAULT_LIVE_BASE_URL,
@@ -1258,6 +1259,20 @@ describe('空的助手內容照 dsh 送（#592）', () => {
     expect(normalizeEmptyAssistantContent(messages)).toEqual([
       { role: 'assistant', content: null, tool_calls: [call] },
     ]);
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['只有空白的字串', ' \n'],
+    ['有字的字串', '好'],
+    ['空陣列', []],
+    ['空字串的文字段', [{ type: 'text', text: '' }]],
+    ['只有空白的文字段', [{ type: 'text', text: ' \n' }]],
+    ['有字的文字段', [{ type: 'text', text: ' 好 ' }]],
+    ['不是文字的一段', [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }]],
+  ])('沒有工具呼叫、內容是%s：整則不送的判法與從日誌推歷史時丟掉的是同一支', (_label, content) => {
+    const dropped = normalizeEmptyAssistantContent([{ role: 'assistant', content }]).length === 0;
+    expect(dropped).toBe(isEmptyAssistant({ type: 'ai', data: { content: content as string } }));
   });
 
   /**

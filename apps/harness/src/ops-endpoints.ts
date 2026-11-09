@@ -10,7 +10,7 @@
  *   寫資料的地方滿了回 `503 storage-full`（#2195），先判 `closing`；釋放後下一次查就回 200，不用重啟。
  * - **`/metrics`**：Prometheus 文字格式 0.0.4，手寫。**名單固定、標籤不含 thread id 或路徑**，基數不隨使用者長。
  *
- * 三個路徑**都先過 `isTrustedWireRequest`**（Host 不是 loopback 一律 403，跟 wire 同一道圍欄，不開捷徑），只收 `GET`／`HEAD`，其餘 405。
+ * 三個路徑**都先過 `isTrustedWireRequest`**（Host 不是 loopback 也不是 `--trusted-host` 指名的一律 403，跟 wire 同一道圍欄，不開捷徑），只收 `GET`／`HEAD`，其餘 405。
  * 探針免登入、本文只有狀態字（同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽）；指標透露別人的活動，要 `Authorization: Bearer <token>`
  * （`tokenMatches` 比），缺或錯一律 401、不說是哪一種。**會話 cookie 換不到指標，反過來也一樣**：兩件事分開，避免把瀏覽器的 cookie 交給監控系統。
  *
@@ -111,13 +111,13 @@ export class OpsMetrics {
     this.#requests.set(key, (this.#requests.get(key) ?? 0) + 1);
   }
 
-  /** 一輪失敗了（`onTurnFailed`，含背景子代理）。 */
-  recordTurnFailure(code: string): void {
+  /** 一輪失敗了（`onTurnFailed`，含背景子代理）；per-thread 的前台一次收到幾筆（`front-turn-failures.ts`）。 */
+  recordTurnFailure(code: string, count = 1): void {
     const key =
       this.#turnFailures.has(code) || this.#turnFailures.size < MAX_TURN_FAILURE_CODES
         ? code
         : 'OTHER';
-    this.#turnFailures.set(key, (this.#turnFailures.get(key) ?? 0) + 1);
+    this.#turnFailures.set(key, (this.#turnFailures.get(key) ?? 0) + count);
   }
 
   /** 停掉事件圈取樣。可重複呼叫。 */
@@ -212,6 +212,8 @@ function seconds(nanoseconds: number): string {
 export interface OpsEndpointsOptions {
   /** 收尾開始了沒（`handler.close()` 已經叫了，或 serve 的 `close()` 已經開始）。 */
   isClosing(): boolean;
+  /** 指名的非 loopback authority（`--trusted-host`，#2369），同 wire 的圍欄。省略就只認 loopback。 */
+  readonly trustedHosts?: readonly string[];
   /** `false`：`/livez`、`/readyz` 回 404。預設 `true`。 */
   readonly probes?: boolean;
   /** 寫資料的地方滿了回 `503 storage-full`（#2195）。沒給就不看。 */
@@ -264,7 +266,8 @@ export function createOpsEndpoints(options: OpsEndpointsOptions): OpsEndpoints {
     readyzProbed: () => readyzProbed,
     async handle(request) {
       // **先過信任圍欄**，在看方法、路徑、token 之前（同 wire，不開捷徑）。
-      if (!isTrustedWireRequest(request.headers)) return text(403, 'forbidden');
+      if (!isTrustedWireRequest(request.headers, options.trustedHosts))
+        return text(403, 'forbidden');
       const head = request.method === 'HEAD';
       if (request.method !== 'GET' && !head) {
         return text(405, 'method not allowed', { allow: 'GET, HEAD' });

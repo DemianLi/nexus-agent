@@ -20,7 +20,8 @@
  *
  * ## 但基座還有**第二個**大結果處置，而那個是活的——它決定了這把剪刀的射程上界
  *
- * `createFilesystemMiddleware` 的 `wrapToolCall` 有自己的一條：`toolTokenLimitBeforeEvict`
+ * 基座 `createFilesystemMiddleware` 的 `wrapToolCall`（組裝點換成 core 逐字移植的 `toolResultEvictionWrap`，
+ * `tool-result-eviction.ts`）有自己的一條：`toolTokenLimitBeforeEvict`
  * 預設 `2e4`，工具結果的文字超過 `4 * 2e4 = 80,000` 字元就**寫進檔案系統**、換成一段頭尾
  * 預覽加一句「用 `read_file` 自己去讀」（`TOO_LARGE_TOOL_MSG`，`dist/langsmith-zm0ILQsV.js:1574`、
  * `:2426`、`:2507-2510`；`read_file`／`write_file`／`edit_file`／`glob`／`grep` 這幾個檔案
@@ -94,8 +95,8 @@ dsh 先 append 一顆 `compaction/prune` 影子價格事件，緊接著 append �
  *
  * ## 一條不准破的性質：長度與順序不變
  *
- * 基座的 `getEffectiveMessages` 是 `[summaryMessage, ...messages.slice(cutoffIndex)]`，
- * 而那個 `cutoffIndex` 是**前幾輪**算出來存在 state 裡的。少一則訊息，那個 slice 就切在
+ * 摘要過的有效串是 `[summaryMessage, ...messages.slice(cutoffIndex)]`（`summary-cutoffs.ts`），
+ * 而那個 `cutoffIndex` 是**前幾輪**算出來記在切點表上的。少一則訊息，那個 slice 就切在
  * 錯的地方，AI／Tool 配對當場斷掉——而且不會拋。所以 {@link pruneToolResults} **只換內容、
  * 永遠不刪訊息**；連內容剪成空字串的區塊都只在訊息**內部**丟掉（dsh 同款）。
  *
@@ -108,12 +109,8 @@ import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
-import {
-  applyRecordedPrunes,
-  codePointLength,
-  isTextBlock,
-  measureToolResultContent,
-} from './tool-result-prune-log.js';
+import { applyRecordedPrunes } from './langchain-message-adapter.js';
+import { codePointLength, isTextBlock, measureToolResultContent } from './tool-result-prune-log.js';
 import type { ContentPart, RecordedPrunes } from './tool-result-prune-log.js';
 
 export { codePointLength, measureToolResultContent };

@@ -1,0 +1,105 @@
+{
+  "writer": {
+    "rev": "771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3",
+    "commit": "771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3",
+    "formatVersion": 53,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "9f6080f91dd34cf32f98bf45f8acc1a21dedbf84",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 53,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "embed-profile": {
+      "headerVersion": 53,
+      "eventCount": 18,
+      "types": [
+        "turn/start",
+        "model/start",
+        "inbox/spliced",
+        "inbox/spliced",
+        "assistant/message",
+        "model/end",
+        "inbox/spliced",
+        "user/message",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end",
+        "inbox/spliced",
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "771a58bf1f5116c36a2d5b5b8fb99cdf8ef2b6a3",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "human",
+          "ai",
+          "human",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 53,
+      "session": "embed-profile",
+      "computedBy": "today",
+      "profile": "embed",
+      "pageContexts": [
+        "PUMP-07",
+        "PUMP-09",
+        "PUMP-08"
+      ]
+    }
+  ]
+}

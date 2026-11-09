@@ -42,8 +42,9 @@
  * 整串序列化的話，大日誌送第一句就把行程撐死，而這顆 saver 不耐久，序列化換不到什麼。
  * 所以存檔點的 `messages` 不進 `MemorySaver`，換成記號，活物件留在側表（pending writes 裡的訊息照舊序列化）：
  *
- * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，全串只多一次 `isFrozen` 掃描。層數上限與寫進存檔點時
- *   相同（{@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH}），日誌收得下的照樣收得下。
+ * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，全串只多一次 `isFrozen` 掃描。層數照寫進存檔點的形狀算
+ *   （加回 {@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH} 層），上限是同一個 {@link CHECKPOINT_MAX_DEPTH}；哪些訊息保證收得下、哪些是例外，
+ *   見 `checkpoint-serde.ts`〈存檔點裡的 `messages` 不走這顆〉。
  * - **工具派工也帶整份 state**：`ReactAgent` 用 `Send` 派工具，`args` 是整份 state，進 `__pregel_tasks`，
  *   中斷或出錯時跟著存檔點落下來。不換的話工具步驟照樣序列化整串，大到超過 V8 字串上限。所以帶 `messages` 的
  *   `args` 也整份進側表。
@@ -109,13 +110,29 @@ function deepFreeze(root: unknown): void {
   }
 }
 
-/** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過。 */
+/** 層數已經由別處保證在上限內的訊息，見 {@link vouchCheckpointDepth}。 */
+const depthVouched = new WeakSet<object>();
+
+/**
+ * 登記一則訊息寫進存檔點一定不超過上限，`seal` 就不量它。只給推得出上限的呼叫端（續接時從日誌記下的層數推，
+ * `conversation-restore.ts`）；登記之後到 `seal` 之前，呼叫端不能讓它變深。登記的是這個物件本身，換成副本
+ * （例如 {@link withWritableLastAi}）就照常量。
+ *
+ * @param message - 要交進 graph state 的那一則。
+ */
+export function vouchCheckpointDepth(message: object): void {
+  depthVouched.add(message);
+}
+
+/** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過，登記過的（{@link vouchCheckpointDepth}）不量、照凍。 */
 function seal(messages: readonly unknown[]): void {
   for (const message of messages) {
     if (Object.isFrozen(message)) continue;
-    const depth =
-      checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
-    if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
+    if (!depthVouched.has(message as object)) {
+      const depth =
+        checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
+      if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
+    }
     deepFreeze(message);
   }
   Object.freeze(messages);

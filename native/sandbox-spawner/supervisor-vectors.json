@@ -1,0 +1,323 @@
+{
+  "protocolVersion": 1,
+  "conversationCommands": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1,
+        "token": "00112233445566778899aabbccddeeff"
+      },
+      "hex": "7701000000200000003030313132323333343435353636373738383939616162626363646465656666"
+    },
+    {
+      "value": {
+        "type": "bind",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "620f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
+        "type": "bind",
+        "threadId": "é\n\t"
+      },
+      "hex": "6204000000c3a90a09"
+    },
+    {
+      "value": {
+        "type": "drain"
+      },
+      "hex": "64"
+    }
+  ],
+  "conversationReports": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1
+      },
+      "hex": "5601000000"
+    },
+    {
+      "value": {
+        "type": "ready"
+      },
+      "hex": "52"
+    },
+    {
+      "value": {
+        "type": "bound",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "420f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
+        "type": "turn",
+        "phase": "begin"
+      },
+      "hex": "5400"
+    },
+    {
+      "value": {
+        "type": "turn",
+        "phase": "end"
+      },
+      "hex": "5401"
+    },
+    {
+      "value": {
+        "type": "idle",
+        "idleMs": 0
+      },
+      "hex": "4900000000"
+    },
+    {
+      "value": {
+        "type": "idle",
+        "idleMs": 4294967295
+      },
+      "hex": "49ffffffff"
+    },
+    {
+      "value": {
+        "type": "busy"
+      },
+      "hex": "59"
+    },
+    {
+      "value": {
+        "type": "heartbeat"
+      },
+      "hex": "48"
+    },
+    {
+      "value": {
+        "type": "drained"
+      },
+      "hex": "44"
+    }
+  ],
+  "frontRequests": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1
+      },
+      "hex": "4601000000"
+    },
+    {
+      "value": {
+        "type": "admission-stopped"
+      },
+      "hex": "53"
+    },
+    {
+      "value": {
+        "type": "ensure",
+        "threadId": "0c4f1c8e-thread",
+        "open": "run"
+      },
+      "hex": "450f00000030633466316338652d74687265616400"
+    },
+    {
+      "value": {
+        "type": "ensure",
+        "threadId": "",
+        "open": "read-only"
+      },
+      "hex": "450000000001"
+    },
+    {
+      "value": {
+        "type": "release",
+        "threadId": "0c4f1c8e-thread"
+      },
+      "hex": "4c0f00000030633466316338652d746872656164"
+    }
+  ],
+  "frontEvents": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1,
+        "token": "00112233445566778899aabbccddeeff"
+      },
+      "hex": "6601000000200000003030313132323333343435353636373738383939616162626363646465656666"
+    },
+    {
+      "value": {
+        "type": "stop-admission"
+      },
+      "hex": "73"
+    },
+    {
+      "value": {
+        "type": "up",
+        "threadId": "0c4f1c8e-thread",
+        "socket": "/run/nexus/s-0700/thread a.sock"
+      },
+      "hex": "750f00000030633466316338652d7468726561641f0000002f72756e2f6e657875732f732d303730302f74687265616420612e736f636b"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "heap"
+      },
+      "hex": "780f00000030633466316338652d74687265616401"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "memory"
+      },
+      "hex": "780f00000030633466316338652d74687265616402"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "host-oom"
+      },
+      "hex": "780f00000030633466316338652d74687265616403"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "stalled"
+      },
+      "hex": "780f00000030633466316338652d74687265616404"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "crash"
+      },
+      "hex": "780f00000030633466316338652d74687265616405"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "evicted"
+      },
+      "hex": "780f00000030633466316338652d74687265616406"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "shutdown"
+      },
+      "hex": "780f00000030633466316338652d74687265616407"
+    },
+    {
+      "value": {
+        "type": "down",
+        "threadId": "0c4f1c8e-thread",
+        "cause": "protocol"
+      },
+      "hex": "780f00000030633466316338652d74687265616408"
+    },
+    {
+      "value": {
+        "type": "capacity",
+        "threadId": "0c4f1c8e-thread",
+        "current": 156,
+        "limit": 155
+      },
+      "hex": "630f00000030633466316338652d7468726561649c0000009b000000"
+    },
+    {
+      "value": {
+        "type": "stats",
+        "live": 3,
+        "warm": 1,
+        "rssKib": 4294967295,
+        "deaths": {
+          "heap": 1,
+          "memory": 2,
+          "host-oom": 3,
+          "stalled": 4,
+          "crash": 5,
+          "evicted": 6,
+          "shutdown": 7,
+          "protocol": 8
+        }
+      },
+      "hex": "6d0300000001000000ffffffff0100000002000000030000000400000005000000060000000700000008000000"
+    }
+  ],
+  "hostCommands": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1
+      },
+      "hex": "6b01000000"
+    },
+    {
+      "value": {
+        "type": "grant",
+        "pid": 4242,
+        "token": "00112233445566778899aabbccddeeff",
+        "role": "front",
+        "thread": ""
+      },
+      "hex": "61921000002000000030303131323233333434353536363737383839396161626263636464656566660000000000"
+    },
+    {
+      "value": {
+        "type": "grant",
+        "pid": 4294967295,
+        "token": "00112233445566778899aabbccddeeff",
+        "role": "conversation",
+        "thread": "0c4f1c8e-thread"
+      },
+      "hex": "61ffffffff200000003030313132323333343435353636373738383939616162626363646465656666010f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
+        "type": "revoke",
+        "pid": 4242
+      },
+      "hex": "7292100000"
+    }
+  ],
+  "hostReports": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1
+      },
+      "hex": "4b01000000"
+    },
+    {
+      "value": {
+        "type": "ready"
+      },
+      "hex": "51"
+    },
+    {
+      "value": {
+        "type": "violation",
+        "pid": 4242,
+        "reason": "框太大"
+      },
+      "hex": "509210000009000000e6a186e5a4aae5a4a7"
+    },
+    {
+      "value": {
+        "type": "unregistered",
+        "pid": 4242,
+        "conn": 7,
+        "reason": "沒有登記"
+      },
+      "hex": "4e92100000070000000c000000e6b292e69c89e799bbe8a898"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createEchoPlugin } from './echo.fixture.js';
+import { replayConversation } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 import {
@@ -42,6 +43,7 @@ import {
   runAssembly,
   runServePhases,
   runShippedCli,
+  HISTORY_SOURCE_UNDER_TEST,
   systemText,
   TRUNCATE_MARKER,
 } from './log-derived-history.fixture.js';
@@ -112,7 +114,28 @@ async function expectDerivedHistory(
   expect(observedOf(verdicts), `${name}：已知差異清單與觀察不一致${explain(verdicts)}`).toEqual(
     known,
   );
+  expectShadowAgrees(name, run);
   return verdicts;
+}
+
+/**
+ * 影子比對（#2355）在產品路徑上：每一次主呼叫各比一次，沒有一次落在 `other`。補結的句子與 `model/start` 之後才省略的圖分開數，
+ * 不算差異。CLI 數不到次數，只看它印出來的那幾行裡沒有 `other`。
+ */
+function expectShadowAgrees(name: string, run: Run): void {
+  if (run.shadow !== undefined) {
+    expect(run.shadow.other, `${name}：影子比對落在 other 的次數`).toBe(0);
+    expect(
+      Object.values(run.shadow).reduce((sum, n) => sum + n, 0),
+      `${name}：影子比對的次數（每一次主呼叫一次）`,
+    ).toBe(run.mainBodies.length);
+  }
+  if (run.shadowLines !== undefined) {
+    expect(
+      run.shadowLines.filter((line) => line.startsWith('[歷史比對] other')),
+      `${name}：CLI 印出的影子比對差異`,
+    ).toEqual([]);
+  }
 }
 
 const big = (char: string, n: number) => char.repeat(n);
@@ -259,6 +282,108 @@ describe('對照場景：預期逐位元組相同', () => {
     await expectDerivedHistory('SV5', run, [], 2);
   }, 90_000);
 });
+
+/**
+ * 判準出自 `.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` §三 G2：第一份之後的每一份主請求帶出去的助手歷史，每一則日誌上都有一則 `assistant/message` 對得上（文字與工具呼叫的 id）。
+ */
+function expectAssistantHistoryOnLog(run: Run): void {
+  const textOf = (content: unknown): string =>
+    typeof content === 'string' ? content : systemText(content);
+  const logged = run.events
+    .filter((event) => event.type === 'assistant/message')
+    .map((event) => {
+      const data = (event.data as unknown as { message: { data: Record<string, unknown> } }).message
+        .data;
+      const calls = (data['tool_calls'] as { id?: string }[] | undefined) ?? [];
+      return `${textOf(data['content'])}|${calls.map((call) => call.id).join(',')}`;
+    });
+  const later = run.mainBodies.slice(1);
+  expect(later.length).toBeGreaterThan(0);
+  for (const body of later) {
+    for (const message of body.messages.filter((m) => m.role === 'assistant')) {
+      const calls = (message['tool_calls'] as { id?: string }[] | undefined) ?? [];
+      const key = `${textOf(message.content ?? '')}|${calls.map((call) => call.id).join(',')}`;
+      expect(logged, `線上的助手訊息日誌上沒有：${key.slice(0, 200)}`).toContain(key);
+    }
+  }
+}
+
+/**
+ * `state` 對 `log` 的位元組對照（#2355）：同一個場景各跑一次，假端點收到的每一份請求本文逐位元組比。`log` 那份比的是線上對推導，
+ * 線上送的就是推導，那一組天生相同；這裡直接拿兩種來源送出去的比，投影漏掉了哪個會上線的欄位，這裡就會不同。只在 `log` 那份入口跑一次。
+ */
+describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
+  'state 對 log：送出去的請求逐位元組相同',
+  () => {
+    const scenarios: readonly [
+      string,
+      string,
+      Script,
+      Parameters<typeof runAssembly>[2],
+      Parameters<typeof runAssembly>[3],
+    ][] = [
+      [
+        'C1 一顆工具',
+        '叫工具\n再說\n/exit\n',
+        (i) => (i === 0 ? echoCall('call_a', '嗨') : {}),
+        [createEchoPlugin()],
+        undefined,
+      ],
+      [
+        'S6 壓縮摘要',
+        '一\n二\n三\n四\n五\n六\n七\n/exit\n',
+        (i, body) => {
+          if ((body.tools?.length ?? 0) === 0) return { content: '【摘要】之前聊了很多。' };
+          return i === 1 ? echoCall('call_mid', big('中', 20_000)) : {};
+        },
+        [createEchoPlugin()],
+        { trigger: [{ type: 'messages', value: 8 }], retainTokens: 12 },
+      ],
+      [
+        'S8 工具結果剪刀',
+        `大一點的結果${PAD}\n再說一輪${PAD}\n再一輪${PAD}\n/exit\n`,
+        (i, body) => {
+          if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
+          return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
+        },
+        [createEchoPlugin()],
+        { trigger: [{ type: 'tokens', value: 12_000 }], retainTokens: 12 },
+      ],
+      [
+        'S9 舊工具參數截斷',
+        '寫檔\n二\n三\n四\n/exit\n',
+        (i) => (i === 0 ? writeCall('call_w') : {}),
+        [],
+        {
+          trigger: [{ type: 'messages', value: 1000 }],
+          retainTokens: 12,
+          truncateArgs: {
+            trigger: { type: 'messages', value: 4 },
+            keep: { type: 'messages', value: 2 },
+            maxLength: 100,
+          },
+        },
+      ],
+    ];
+
+    it.each(scenarios)(
+      '%s',
+      async (_name, lines, script, plugins, summarization) => {
+        const state = await runAssembly(lines, script, plugins, summarization, 'state');
+        const log = await runAssembly(lines, script, plugins, summarization, 'log');
+        expect(log.mainBodies.length).toBeGreaterThanOrEqual(2);
+        // 摘要那則帶著會話歷史檔的路徑，每跑一次就是一個新會話、id 不同；其餘逐位元組比。
+        const bytes = (run: Run) =>
+          run.bodies.map((body) =>
+            JSON.stringify(body).replaceAll(/session_[0-9a-f]+\.md/gu, 'session_<id>.md'),
+          );
+        expect(bytes(log)).toEqual(bytes(state));
+        expectAssistantHistoryOnLog(log);
+      },
+      120_000,
+    );
+  },
+);
 
 describe('已知差異：每一類對應一張卡', () => {
   it('S6 壓縮摘要（#1301）', async () => {
@@ -450,6 +575,29 @@ describe('手挑組裝的邊界（#1300）', () => {
       expect(JSON.stringify(body.messages)).not.toContain('"role":"assistant","content":""');
       expect(assistantNameLeaks(body.messages)).toEqual([]);
     }
+  }, 60_000);
+
+  /**
+   * 只有空白的回覆：`fetch` 層整則不送，推導端用同一支判準（`@nexus/core` 的 `isBlankContent`）也丟。
+   * 比 wire 量不到推導端：推導結果轉 wire 也走同一層 `fetch`，空白那則在那裡被拿掉。所以另外比推出來的則數。
+   */
+  it('S13 只有空白的回覆：推導丟掉的與線上不送的是同一則，逐位元組相同', async () => {
+    const script: Script = (i) => (i === 0 ? { content: ' \n' } : { content: '好' });
+    const run = await runAssembly('一\n二\n/exit\n', script, []);
+    // 前提：日誌上真的有一則只有空白的助手訊息、後面還有請求。
+    expect(
+      run.events.some(
+        (e) => e.type === 'assistant/message' && JSON.stringify(e.data.message).includes('" \\n"'),
+      ),
+    ).toBe(true);
+    expect(run.mainBodies.length).toBeGreaterThan(1);
+    const verdicts = await compareToLog(run.events, run.mainBodies);
+    expect(observedOf(verdicts), explain(verdicts)).toEqual([]);
+    const last = run.events.filter((e) => e.type === 'model/start').at(-1)!;
+    const replay = replayConversation(run.events.filter((e) => e.seq < last.seq));
+    expect(replay.kind === 'replayed' ? replay.messages.length : -1).toBe(
+      run.mainBodies.at(-1)!.messages.length - 1, // 線上那份第一則是系統訊息，推導結果不含它
+    );
   }, 60_000);
 });
 

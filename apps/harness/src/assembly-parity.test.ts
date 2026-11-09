@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { basename, join, relative } from 'node:path';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { MemorySaver } from '@langchain/langgraph';
-import { GLOB_HEAD, GREP_REGEXP_HEAD } from '@nexus/core';
+import { GLOB_HEAD, GREP_REGEXP_HEAD, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createDeepAgent } from 'deepagents';
 import { describe, expect, it, vi } from 'vitest';
@@ -367,5 +370,124 @@ describe('自有組裝點不套 harness profile', () => {
       JSON.stringify(base.bindings) !== JSON.stringify(plainObserved.bindings) ||
       JSON.stringify(base.nodes) !== JSON.stringify(plainObserved.nodes);
     expect(changed).toBe(true);
+  });
+});
+
+/** 每行都不一樣的文字，`lines` 行；總長超過基座搬檔的 80,000 字元。 */
+function bulkText(mark: string, lines: number): string {
+  return Array.from({ length: lines }, (_, index) => `${mark} line ${index} ${index * 7919}`).join(
+    '\n',
+  );
+}
+
+const BULK = bulkText('BULK', 4_000);
+const DELEGATED = bulkText('DELEGATED', 4_000);
+
+const BULK_HOST: PluginEntry = {
+  plugin: {
+    name: 'bulk-host',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => BULK, { name: 'bulk', description: '拿一坨東西。', schema: z.object({}) }),
+      );
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
+  },
+};
+
+/** 一個目錄底下所有檔：相對路徑對內容，照路徑排序。 */
+async function filesUnder(root: string): Promise<Record<string, string>> {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  return Object.fromEntries(
+    await Promise.all(
+      files.map(async (path) => [relative(root, path), await readFile(path, 'utf8')] as const),
+    ),
+  );
+}
+
+/** {@link sha256} 的基準：模型看到的工具結果、存的檔、日誌的 `tool/result`。 */
+const EVICTION_BASELINE = {
+  seen: 'a447fe6231ced8754dac217d9401718524742d439bdfab02fec6710dcea88ca2',
+  stored: 'ef801531f2a6af2725d81d7b9f97a3a01bafc483d930c62d5590b44794892038',
+  logged: '15ab1ccb3f051e3ff441acffaebcf310999b541918486aa4e3443990c77e57b9',
+} as const;
+
+function sha256(value: unknown): string {
+  return createHash('sha256')
+    .update(typeof value === 'string' ? value : JSON.stringify(value))
+    .digest('hex');
+}
+
+/**
+ * **基座的工具結果搬檔，兩個 loop 逐位元組相同。** 一般工具（`bulk`）與 `task`（子代理回的 `Command`）各回一則超過 80,000
+ * 字元的結果，比三樣：模型下一次請求裡看到的工具結果、`/large_tool_results` 存的檔、日誌的 `tool/result`。三樣的雜湊寫死，
+ * 兩個 loop（這支檔在 langgraph 與 `vitest.native.config.ts` 各跑一次）都要對上同一份。
+ */
+describe('基座的工具結果搬檔', () => {
+  it('超過 80,000 字元：模型看到的那則、存的檔、日誌都跟基準逐位元組相同', async () => {
+    expect(BULK.length).toBeGreaterThan(80_000);
+    expect(DELEGATED.length).toBeGreaterThan(80_000);
+    const root = await mkdtemp(join(tmpdir(), 'parity-evict-'));
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'bulk', args: {} },
+            { name: 'task', args: { description: '回一大段', subagent_type: 'worker' } },
+          ],
+        },
+        { content: DELEGATED },
+        { content: '看完了。' },
+      ],
+    });
+    const { agent, attachSession, dispose } = await createNexusAgent({
+      model,
+      plugins: [BULK_HOST],
+      checkpointer: new MemorySaver(),
+      toolResultStash: { rootDir: root, session: 'parity-evict' },
+    });
+    const sessions = new SessionRegistry('parity-evict');
+    const detach = attachSession(sessions);
+    try {
+      await agent.invoke(toAgentInvocation('拿兩坨。'), {
+        configurable: { thread_id: 'parity-evict' },
+      });
+    } finally {
+      detach();
+      await dispose();
+    }
+
+    expect(model.prompts).toHaveLength(3);
+    const seen = (model.prompts[2] ?? [])
+      .filter((message) => message.getType() === 'tool')
+      .map((message) => ({ name: message.name, content: message.content }));
+    const stored = await filesUnder(root);
+    await rm(root, { recursive: true, force: true });
+    const logged = sessions.root.events.flatMap((event) =>
+      event.type === 'tool/result' ? [event.data] : [],
+    );
+
+    expect(seen).toHaveLength(2);
+    // 一般工具換成預覽；`task` 回的是 `Command`，backend 不回 `filesUpdate` 時檔照寫、模型看到的是全文。
+    expect(seen.map((each) => each.name)).toEqual(['bulk', 'task']);
+    expect(String(seen[0]?.content)).toContain('Tool result too large');
+    expect(String(seen[1]?.content)).toBe(DELEGATED);
+    expect(Object.keys(stored)).toHaveLength(2);
+    expect(Object.values(stored).sort()).toEqual([BULK, DELEGATED].sort());
+    expect(logged).toHaveLength(2);
+
+    expect(Object.keys(stored).map((path) => basename(path))).toEqual([
+      'call_1_0.txt',
+      'call_1_1.txt',
+    ]);
+    // 基準在 7392e602 上錄：兩個 loop 各錄兩次，四次相同。
+    expect(sha256(seen)).toBe(EVICTION_BASELINE.seen);
+    expect(sha256(stored)).toBe(EVICTION_BASELINE.stored);
+    expect(sha256(logged)).toBe(EVICTION_BASELINE.logged);
   });
 });

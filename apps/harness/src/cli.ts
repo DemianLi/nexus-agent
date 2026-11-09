@@ -24,8 +24,19 @@ import { clearLine, cursorTo } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
-import { approvalPolicyOnResume } from '@nexus/core';
+import type {
+  AgentLoopKind,
+  CommandDescriptor,
+  CommandRegistrationPoint,
+  SessionEventMap,
+} from '@nexus/core';
+import {
+  approvalPolicyOnResume,
+  createHistoryShadowTally,
+  HISTORY_SOURCES,
+  humanMessageRejection,
+} from '@nexus/core';
+import type { HistorySource } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -94,6 +105,7 @@ import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import {
   type CliInvocation,
+  parseAgentLoop,
   parseSandboxMode,
   resolveInvariantLogPath,
   resolveSessionLogDir,
@@ -143,6 +155,12 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
+  --history-source <state|shadow|log>
+                       模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 state）
+                       shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
+                       log：送日誌推出來的；推不出來這一輪就失敗
+  --agent-loop <langgraph|native>
+                       驅動 middleware 的迴圈（預設 langgraph）；native 還不能接回中斷，要核准、要問人的工具一律拒絕
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）
@@ -183,6 +201,8 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
+        'history-source': { type: 'string' },
+        'agent-loop': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
@@ -234,6 +254,8 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const goalDriver = values['goal-driver'] === true;
   const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
   const recursionLimit = parsePositiveInteger('--recursion-limit', values['recursion-limit']);
+  const historySource = parseHistorySource(values['history-source']);
+  const agentLoop = parseAgentLoop(values['agent-loop'], USAGE);
 
   const dumpConfig = values['dump-config'] === true;
   if (dumpConfig) {
@@ -299,6 +321,8 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
+    ...(historySource !== undefined && { historySource }),
+    ...(agentLoop !== undefined && { agentLoop }),
     dumpConfig,
     dumpConfigSchema,
     dumpDefaultConfig,
@@ -345,6 +369,24 @@ function parsePositiveInteger(flag: string, raw: string | undefined): number | u
   const value = Number(trimmed);
   if (trimmed === '' || !Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${flag} 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`);
+  }
+  return value;
+}
+
+/**
+ * `--history-source` 的值（#2355）。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @returns 那個值，或沒給時的 `undefined`。
+ * @throws 不是認得的值——訊息接上用法。
+ */
+function parseHistorySource(raw: string | undefined): HistorySource | undefined {
+  if (raw === undefined) return undefined;
+  const value = HISTORY_SOURCES.find((source) => source === raw.trim());
+  if (value === undefined) {
+    throw new Error(
+      `--history-source 只收 ${HISTORY_SOURCES.join('、')}（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`,
+    );
   }
   return value;
 }
@@ -516,6 +558,8 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param sessionLog - 這條 REPL 的事件日誌。
  * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），由 `main`
  *   在起動期從清單解出來。**省略即 schema 的預設**，理由同 `ThreadPump` 的 `toolText`：測試呼叫點量的不是它。
+ * @param loop - 這個入口的 `--agent-loop`，省略即 `langgraph`。`native` 時人打的字太大就在寫 `turn/start` 之前拋錯
+ *   （[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)），日誌不動。
  */
 export async function runTurn(
   agent: NexusAgent,
@@ -523,8 +567,14 @@ export async function runTurn(
   printer: Printer,
   sessionLog: SessionLog,
   titleLimits: ThreadTitleLimits = threadTitleConfigSchema.parse({}),
+  loop?: AgentLoopKind,
 ): Promise<void> {
   let files: Record<string, unknown> = {};
+
+  if (typeof input === 'string' && loop === 'native') {
+    const rejection = humanMessageRejection(input);
+    if (rejection !== undefined) throw new Error(rejection);
+  }
 
   // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
   // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
@@ -731,6 +781,7 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
  * @param titleLimits - 見 {@link runTurn}。
  * @param line - 非同步輸出與輸入行的協調點，見 {@link ReplLine}；REPL 活著的期間它的 `redraw` 才有值。
+ * @param loop - 見 {@link runTurn}。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -742,9 +793,21 @@ export async function runRepl(
   roundCap?: GoalRoundCap,
   titleLimits?: ThreadTitleLimits,
   line?: ReplLine,
+  loop?: AgentLoopKind,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
-  const executor = createCommandExecutor({ commands, sessionLog });
+  // 命令接著送的話（`/plan <message>`）跟人打的那一句同一道驗：native 下太大的在命令動任何東西之前就拒收，
+  // 命令落定成 `error`、不開那一輪（同 serve 的 `acceptSteer`）。
+  const executor = createCommandExecutor({
+    commands,
+    sessionLog,
+    ...(loop === 'native' && {
+      acceptSteer: (text: string) => {
+        const rejection = humanMessageRejection(text);
+        if (rejection !== undefined) throw new Error(rejection);
+      },
+    }),
+  });
   const rl = createInterface({ input: io.input, output: io.output, prompt: '> ' });
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
   let closed = false;
@@ -786,8 +849,8 @@ export async function runRepl(
         // 從來不會 abort 的。有那條路的時候換掉這一行就行，執行器那側已經接得住。
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
-          // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
-          await runTurn(agent, text, printer, sessionLog, titleLimits);
+          // 語法不符或名字不認得——**照原樣當一輪人話跑**（native 下太大的照 {@link runTurn} 拒收）。
+          await runTurn(agent, text, printer, sessionLog, titleLimits, loop);
         } else {
           if (execution.result.text !== undefined) {
             const write = execution.result.kind === 'error' ? printer.error : printer.log;
@@ -932,7 +995,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const contained =
     resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd()) !== undefined;
   const root = createCordisRoot({
-    channel: entryApprovalChannel(HEADLESS_APPROVALS),
+    channel: entryApprovalChannel(HEADLESS_APPROVALS, invocation.agentLoop),
     ...(contained && { contained }),
   });
   try {
@@ -1174,6 +1237,10 @@ async function runLaunched(
             // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
             // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
             ...(invariantTap !== undefined && { invariantTap }),
+            // 影子比對（#2355）不是 `match` 的那幾次印在標準錯誤，前綴的理由同上面 `[不變量]` 那行；沒開 `shadow` 時組裝點不叫它。
+            historyShadow: createHistoryShadowTally((outcome) =>
+              printer.error(`[歷史比對] ${outcome.kind}：${outcome.detail ?? ''}`),
+            ),
             // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
             // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
             // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
@@ -1350,7 +1417,14 @@ async function runLaunched(
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
+      await runTurn(
+        agent,
+        invocation.prompt,
+        printer,
+        sessionLog,
+        threadTitle,
+        invocation.agentLoop,
+      );
       if (driver !== undefined)
         await driveGoalRounds(agent, printer, sessionLog, driver, goalRoundCap);
     } else {
@@ -1365,6 +1439,7 @@ async function runLaunched(
         goalRoundCap,
         threadTitle,
         replLine,
+        invocation.agentLoop,
       );
     }
   } catch (error) {

@@ -78,8 +78,11 @@
     "components/ui/dialog.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/dialog.tsx",
-      "sha256": "3ec9bb1a9016d9d0c91294c30217bd672d90d7025b48df2768c3ee330576e9ce",
-      "patches": ["patches/0002-dialog-close-label.patch"],
+      "sha256": "a769b1554c346a8c711637f1c91433c7a6e85a20a2279c649398d3d8f280d377",
+      "patches": [
+        "patches/0002-dialog-close-label.patch",
+        "patches/0025-dialog-portal-container.patch"
+      ],
       "upstreamSha256": "bbc16e198416a5351dc62ad5d20781d32dac72dbe7ad871b2a4842852bbf1120"
     },
     "components/ui/dropdown-menu.tsx": {
@@ -112,8 +115,11 @@
     "components/ui/popover.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/popover.tsx",
-      "sha256": "e348fdc2d2d975a9a4b2222c532949517ec0857b6df68d5d7006ffd72c749c19",
-      "patches": ["patches/0001-popover-anchor.patch"],
+      "sha256": "e43b24585dcdf44aa91458ca6c39981c822ca2876ff5448458ff6792898e7533",
+      "patches": [
+        "patches/0001-popover-anchor.patch",
+        "patches/0026-popover-portal-container.patch"
+      ],
       "upstreamSha256": "5fecff622f4eecc06e8be32bface11c59d529be5c0a1484c78c9e40530b2b7d0"
     },
     "components/ui/separator.tsx": {
@@ -141,7 +147,9 @@
     "components/ui/tooltip.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/tooltip.tsx",
-      "sha256": "f83d5f511812573f4ac98b866d397a46fda0f27eeb0af0ea89af01969eefbc5a"
+      "sha256": "cbd6205e8f720618d25282fd7672eca62b63a3ff985be1a3a47c5ad96b201c4d",
+      "patches": ["patches/0027-tooltip-portal-container.patch"],
+      "upstreamSha256": "f83d5f511812573f4ac98b866d397a46fda0f27eeb0af0ea89af01969eefbc5a"
     },
     "shadcn/tailwind.css": {
       "source": "shadcn",
@@ -173,11 +181,11 @@
     "components/ui/sidebar.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/sidebar.tsx",
-      "sha256": "231a812d637317874675f08d12b507fcf93659893b23066022fdc32079e61cbf",
+      "sha256": "5d229a36ba58d99f2074f395b350f6e59ec62f6f88fd93bf8123761dd16b3266",
       "patches": [
         "patches/0011-sidebar-chinese-strings.patch",
         "patches/0012-sidebar-lg-breakpoint.patch",
-        "patches/0013-sidebar-cookie-try-catch.patch",
+        "patches/0013-sidebar-no-cookie.patch",
         "patches/0014-sidebar-final-focus.patch",
         "patches/0015-sidebar-mobile-width.patch"
       ],

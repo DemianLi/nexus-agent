@@ -13,11 +13,11 @@
 import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -53,7 +53,7 @@ describe('子代理也拿得到 MCP 的資源工具與指引', () => {
       checkpointer: new MemorySaver(),
       plugins: [
         ...shipped,
-        createMcpPlugin({
+        ...(await mcpRows({
           serverName: 'srv',
           connection: {
             transport: 'stdio',
@@ -61,7 +61,7 @@ describe('子代理也拿得到 MCP 的資源工具與指引', () => {
             args: ['--import', 'tsx', FIXTURE_SERVER],
             env: { FIXTURE_INSTRUCTIONS: INSTRUCTIONS, FIXTURE_RESOURCES: '1' },
           },
-        }),
+        })),
       ],
     });
     try {

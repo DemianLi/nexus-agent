@@ -96,7 +96,9 @@ afterEach(async () => {
 });
 
 /** 一台 handler＋client。`upstream()` 是假 agent 被叫的次數；`created()` 是 `createAgent` 被叫的次數。 */
-function rig(rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean } = {}) {
+function rig(
+  rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean; frontClosing?: boolean } = {},
+) {
   let ran = 0;
   let created = 0;
   const sends: string[] = [];
@@ -144,6 +146,9 @@ function rig(rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean } = 
     auth: TEST_BROWSER_AUTH,
     attachments: store,
     ...(rigOptions.storedKnown === true && { storedThreadKnown: async () => true }),
+    ...(rigOptions.frontClosing === true && {
+      frontClosing: (headers: Headers) => headers.get(FRONT_CLOSING_TEST_HEADER) === '1',
+    }),
     createAgent: async () => {
       created += 1;
       if (rigOptions.buildHold !== undefined) await rigOptions.buildHold;
@@ -167,12 +172,17 @@ function rig(rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean } = 
     },
   });
   opened.push(handler);
-  const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-    handler.handle(loopbackRequest(input as string, init));
+  const via = { frontClosing: false };
+  const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (via.frontClosing) headers.set(FRONT_CLOSING_TEST_HEADER, '1');
+    return handler.handle(loopbackRequest(input as string, { ...init, headers }));
+  };
   const client = createWireClient({ baseUrl: 'http://closing.test', fetch });
   return {
     handler,
     client,
+    via,
     upstream: () => ran,
     created: () => created,
     sends: () => sends,
@@ -183,6 +193,47 @@ function rig(rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean } = 
 }
 
 const CLOSING = { type: 'error', error: SERVER_CLOSING };
+
+/** 測試用的「前台停准入了」標頭；真的那一個由 `serve.ts` 接（`forwarded-principal.ts`）。 */
+const FRONT_CLOSING_TEST_HEADER = 'x-test-front-closing';
+
+describe('per-thread：前台停准入之後轉來的請求（frontClosing）', () => {
+  it('熱 thread：新的 request_id 回 server_closing，窗前收過的重送拿回原本的 run_id；沒帶標頭的照常', async () => {
+    const r = rig({ frontClosing: true });
+    const thread = 'front-closing-hot';
+    const first = await r.client.runStart(thread, '窗前', { requestId: 'req-1' });
+    expect(first).toMatchObject({ type: 'success' });
+    await until(() => r.upstream() === 1);
+
+    r.via.frontClosing = true;
+    const again = await r.client.runStart(thread, '窗前', { requestId: 'req-1' });
+    expect((again as { result: { run_id: string } }).result.run_id).toBe(
+      (first as { result: { run_id: string } }).result.run_id,
+    );
+    expect(await r.client.runStart(thread, '窗內', { requestId: 'req-2' })).toMatchObject(CLOSING);
+    expect(await r.client.slashRun(thread, '/steer')).toMatchObject({
+      kind: 'rejected',
+      code: SERVER_CLOSING,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(r.upstream()).toBe(1);
+
+    // 只管帶標頭的那一個請求：前台換了一個（沒在收尾）之後照常收。
+    r.via.frontClosing = false;
+    expect(await r.client.runStart(thread, '新前台', { requestId: 'req-3' })).toMatchObject({
+      type: 'success',
+    });
+    expect(r.handler.isClosing()).toBe(false);
+  });
+
+  it('沒接 frontClosing 的 handler（前台自己、single）：同名標頭不理', async () => {
+    const r = rig();
+    r.via.frontClosing = true;
+    expect(await r.client.runStart('front-closing-ignored', '照收')).toMatchObject({
+      type: 'success',
+    });
+  });
+});
 
 describe('窗內：run.start 回 server_closing', () => {
   it('已開的 thread：回 server_closing、HTTP 200，上游 0 次，日誌沒有那個 request_id', async () => {

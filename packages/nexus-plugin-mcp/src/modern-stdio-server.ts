@@ -8,7 +8,7 @@
  *
  * 另有一個開關給收尾期限（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：`FIXTURE_HANG_IF_FILE` 指的檔案存在時，
  * 啟動後**讀著 stdin 卻永遠不回 initialize**——握手卡住的 server。掛上之後才建檔，讓重連卡住（同 `fixture-server.ts` 的
- * `FIXTURE_EXIT_IF_FILE`；不用啟動次數，因為初次組裝起幾次子行程是 adapter 的版本協商決定的）。
+ * `FIXTURE_EXIT_IF_FILE`；不用啟動次數，因為初次組裝起幾次子行程是 SDK client 的版本協商（`auto`）決定的）。
  *
  * 重連前的關閉屏障（#1543）另用兩個開關，重現「`close()` 回來了，子行程卻還沒關掉」：
  *

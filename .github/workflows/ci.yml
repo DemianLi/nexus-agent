@@ -32,31 +32,35 @@ permissions:
 #   - 輕的：功能分支 → develop 的 PR。擋合併所需的檢查都在 plan 這一個 job 裡跑完：
 #       異動與格式檢查（PR 標題、升級指南、Markdown 連結、大檔）、CI 腳本的測試、lockfile 新版本的發布年齡、
 #       受影響套件的型別檢查（改到的與下游，讀合併後那一輪存的快取）、異動檔的 format 與 lint、
-#       這次改到的測試檔加上改到的原始檔同名的測試檔。
+#       這次改到的測試檔加上改到的原始檔同名的測試檔；改到重放快照的輸入時加跑快照測試（#1556）。
 #   - 全跑：develop → main 的 PR、main 的 push、合進 develop 之後，以及動到 `.github/workflows|scripts|actions` 的功能 PR
 #     （改壞了 CI 自己，合併前只有全跑驗得出來）。合進 develop 之後那一輪由 post-merge.yml 帶 `full: true` 呼叫這支，
 #     每個 develop commit 一輪、不被下一個 commit 取消、不擋合併；check 名稱帶呼叫端前綴 `完整一輪 / gate`，
 #     跟 required 的 `gate` 不同名。這一輪的 typecheck 把 buildinfo 與宣告檔存成快取，給輕的模式讀。
 #
 # 全跑的結構：plan 算出模式與要不要掃，各項檢查平行跑，最後由 gate 收斂成單一 required check。
-# 輕的模式，中間那一段整排 skipped，gate 照 plan 輸出的模式接受它們 skipped。
+# 輕的模式，中間那一段整排 skipped；plan 成功、rust 為 false、其餘全是 skipped 時 gate 不起 job（skipped 的 gate 算通過），其餘情況 gate 照跑、照判。
 #
 #   plan ─┬─ static ───────────┐   CI 腳本的測試、format、lint、web build、web 的瀏覽器護欄
 #         ├─ typecheck ────────┤
 #         ├─ test-packages ────┤
 #         ├─ test-web ─────────┼─► gate
-#         ├─ test-harness ─────┤   兩片
+#         ├─ test-harness ─────┤   四片
 #         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
 #         ├─ sandbox-spawner ──┤   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
 #         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
-#         └─ sandbox-spawner-arm64 ┘ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
+#         ├─ spawner-arm64 ────┤   sandbox-spawner-arm64，只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
+#         ├─ e2e-single ───────┤   只在合併後完整一輪：真瀏覽器 e2e（#1602）
+#         └─ e2e-per-thread ───┘   只在合併後完整一輪：真瀏覽器 e2e 換成 per-thread 行程模型再跑一輪（#2341）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
-# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
-# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
-# 輕的一輪是 plan 接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
-# 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
-# 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
+# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 4 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＋ e2e-single 1 ＋ e2e-per-thread 1 ＝ 13。plan 在它之前、gate 在它之後，不同時。
+# 合併後那一輪的 post-merge.yml 另有 native agent loop 4 片，跟這一段同時跑。
+# 輕的一輪是 plan，plan 沒成功或 rust 為 true 時才接 gate（rust 為 true 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
+# 所以合併後的一輪加上兩張功能 PR 同時跑是 13 ＋ 4 ＋ 1 ＋ 1 ＝ 19，在 20 之內。
+# 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住：ci.yml 加 job、加矩陣格或 native agent loop 加片時它會紅；post-merge.yml
+# 另加平行的 job 時要自己改算式。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
 # 擋合併的檢查要另外加進 plan 的輕的那一段，否則功能 PR 上不會跑。
@@ -76,6 +80,8 @@ jobs:
       affected: ${{ steps.light.outputs.affected }}
       durations_key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
       durations_key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
+      durations_key_3: ${{ steps.durations-3.outputs.cache-matched-key }}
+      durations_key_4: ${{ steps.durations-4.outputs.cache-matched-key }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -100,9 +106,9 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
 
-      # 全跑時 test-harness 兩片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。PR 先找分歧點那一份，
-      # 沒有（或不是 PR）就退回最近的一份；都沒有時（GitHub 會清掉 7 天沒人取的快取）兩片退回 vitest 的雜湊切法。
-      # 兩片拿這裡查到的同一個鍵去取，讀到的是同一份資料，切法才一致。
+      # 全跑時 test-harness 四片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。PR 先找分歧點那一份，
+      # 沒有（或不是 PR）就退回最近的一份；都沒有時（GitHub 會清掉 7 天沒人取的快取）四片退回 vitest 的雜湊切法。
+      # 四片拿這裡查到的同一組鍵去取，讀到的是同一份資料，切法才一致。
       - uses: actions/cache/restore@v6
         id: durations-1
         if: steps.plan.outputs.mode == 'full'
@@ -119,6 +125,24 @@ jobs:
           path: .harness-durations/results-2.json
           key: harness-durations-2-${{ steps.base.outputs.sha || github.sha }}
           restore-keys: harness-durations-2-
+          lookup-only: true
+
+      - uses: actions/cache/restore@v6
+        id: durations-3
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-3.json
+          key: harness-durations-3-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-3-
+          lookup-only: true
+
+      - uses: actions/cache/restore@v6
+        id: durations-4
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-4.json
+          key: harness-durations-4-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-4-
           lookup-only: true
 
       # 以下是輕的模式：擋合併所需的檢查都在這個 job 跑完，中間那一段整排 skipped。
@@ -180,8 +204,7 @@ jobs:
           typecheck() {
             [ -s "$L/typecheck.txt" ] || { echo "沒有受影響的套件"; return 0; }
             mapfile -t filters < "$L/typecheck.txt"
-            pnpm "${filters[@]}" --silent exec pwd | wc -l | tr -d ' ' > "$RUNNER_TEMP/affected.txt"
-            .github/scripts/typecheck.sh "${filters[@]}"
+            TYPECHECK_COUNT_FILE="$RUNNER_TEMP/affected.txt" .github/scripts/typecheck.sh "${filters[@]}"
           }
           format() {
             [ -s "$L/format.txt" ] || { echo "沒有要檢查的檔"; return 0; }
@@ -211,6 +234,20 @@ jobs:
             [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
           done
           exit $rc
+
+      # gate 不起 job 時沒有 gate 的摘要（條件見 gate 的 if），異動檔案數與受影響套件數也寫在這裡。
+      - name: 輕的模式的摘要
+        if: steps.plan.outputs.mode == 'light'
+        env:
+          CHANGED_COUNT: ${{ steps.checks.outputs.count }}
+          AFFECTED: ${{ steps.light.outputs.affected }}
+        run: |
+          {
+            echo "### 輕的模式"
+            echo ""
+            echo "- 異動檔案數：$CHANGED_COUNT"
+            echo "- 受影響套件數（含下游）：${AFFECTED:-0}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r；markdown 由 .prettierignore 排除。
   # lint 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
@@ -365,7 +402,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # 完整一輪（`inputs.full`）由這個 job 存 node_modules 的快取；develop 上存的給 PR 的 setup 讀（#2334）。
       - uses: ./.github/actions/setup
+        with:
+          save-cache: ${{ inputs.full }}
       - name: Typecheck
         run: .github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'
       - name: 存型別檢查快取
@@ -402,11 +442,11 @@ jobs:
       - name: Test
         run: pnpm --filter @nexus/web run test
 
-  # harness 是關鍵路徑，切兩片平行跑；web 一片就比 harness 的一片短，不分。
-  # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到鍵就取那兩份，跑完由合併後那一輪各片存回自己這一份。
-  # plan 沒查到鍵時兩片都退回 vitest 的雜湊切法；plan 查到了、這一片卻取不到就紅，不會一片看耗時、一片看雜湊而漏跑檔。
+  # harness 是關鍵路徑，切四片平行跑（#2498）；web 一片就比 harness 的一片短，不分。
+  # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到幾份就取幾份，跑完由合併後那一輪各片存回自己這一份。
+  # 四份都沒查到時四片退回 vitest 的雜湊切法；plan 查到了、這一片卻取不到就紅，不會一片看耗時、一片看雜湊而漏跑檔。
   test-harness:
-    name: test-harness (${{ matrix.shard }}/2)
+    name: test-harness (${{ matrix.shard }}/4)
     needs: plan
     if: needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
@@ -414,7 +454,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -430,10 +470,22 @@ jobs:
           path: .harness-durations/results-2.json
           key: ${{ needs.plan.outputs.durations_key_2 }}
           fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_3 != ''
+        with:
+          path: .harness-durations/results-3.json
+          key: ${{ needs.plan.outputs.durations_key_3 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_4 != ''
+        with:
+          path: .harness-durations/results-4.json
+          key: ${{ needs.plan.outputs.durations_key_4 }}
+          fail-on-cache-miss: true
       - name: Test
         env:
           NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.harness-durations
-        run: pnpm --filter @nexus/harness exec vitest run --shard="${{ matrix.shard }}/2"
+        run: pnpm --filter @nexus/harness exec vitest run --shard="${{ matrix.shard }}/4"
       # vitest 跑完把這一片每個檔的耗時寫進自己的結果快取；CI 的 node_modules 是新裝的，裡面只有這一片的檔。測試紅了也存。
       - name: 收這一片的耗時
         if: inputs.full && !cancelled()
@@ -449,7 +501,7 @@ jobs:
 
   # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試，再用編好的執行檔跑 TS 那一側。plan 的 `rust` 決定跑不跑，跟模式無關：
   # 動到它、TS 那一側的接縫與 client 或 CI 自己的功能 PR（輕的模式也跑，#1827 D55：接受超過 60 秒）、packed-install 要跑的一輪（並打 bundle 給它）與合併後完整一輪。
-  # 核心沒有 Landlock 時測試紅，不准自我跳過。
+  # 核心沒有 Landlock 時測試紅，不准自我跳過。同一個 crate 也編出監督行程（`src/bin/nexus-supervisor.rs`），per-thread 的整合測試（#2341）在這裡跑。
   sandbox-spawner:
     name: sandbox-spawner
     needs: plan
@@ -463,9 +515,10 @@ jobs:
           bundle: ${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
@@ -480,17 +533,67 @@ jobs:
       - uses: ./.github/actions/sandbox-spawner
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑整合測試
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+
+  # 真瀏覽器的對話 e2e（#1602）：子行程起真的 serve（模型是腳本，不帶 key、不打模型端點），供應這裡 build 出來的 dist，Chrome 開它。
+  # 只在合併後完整一輪跑（#1602；#2088 決議第 5 條：瀏覽器檢查不擋功能 PR 的 gate）：PR 與 main 的 push 上 skipped，gate 照 inputs.full 判。
+  # 自己 build、不從 static 拿產物：needs 是 job 層級，等 static 就不平行了（#2517）。前置條件是 build:lib 與 web build：
+  # 只有這個組合驗證過；e2e 用不用得到 lib 沒查。
+  e2e-single:
+    name: e2e (single)
+    needs: plan
+    if: inputs.full
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: 建置 lib 與 web
+        run: |
+          pnpm run build:lib
+          pnpm --filter @nexus/web run build
+      - name: 真瀏覽器 e2e
+        run: pnpm --filter @nexus/web run test:e2e
+
+  # 真瀏覽器 e2e 換成 per-thread 行程模型（#2341）：serve 由監督行程起前台與每條 thread 的對話行程，瀏覽器從前台的 port 打。
+  # 跟 e2e-single 同一套測試、同樣的前置建置、同樣只在合併後完整一輪跑；另開 job、不接在 e2e-single 後面，兩輪才同時跑。
+  # 監督行程在這台機器上用 spawner 那個 action 編（同一個 crate）。
+  e2e-per-thread:
+    name: e2e (per-thread)
+    needs: plan
+    if: inputs.full
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/sandbox-spawner
+      - uses: ./.github/actions/setup
+      - name: 建置 lib 與 web
+        run: |
+          pnpm run build:lib
+          pnpm --filter @nexus/web run build
+      - name: 真瀏覽器 e2e（per-thread）
+        run: pnpm --filter @nexus/web run test:e2e
+        env:
+          NEXUS_E2E_PROCESS_MODEL: per-thread
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
-  # 所以這裡 `if: always()` 並逐個檢查結果：
+  # 所以這裡的 if 以 `always()` 起頭，並逐個檢查結果：
   #   - plan 必須是 success（它掛了，其餘全 skip，不能因此綠燈；輕的模式的檢查也在它裡面）；
   #   - 該跑的 job 必須是 success，failure / cancelled 一律紅；
   #   - 只有 plan 明說「輕的模式」或「不用掃」時，其餘才允許是 skipped。
+  #     四個例外不看模式：sandbox-spawner 看 plan 的 rust（true 要 success、false 要 skipped）；sandbox-spawner-arm64、
+  #     e2e-single 與 e2e-per-thread 看是不是合併後完整一輪（`inputs.full`，是要 success、不是要 skipped）。
+  #
+  # 輕的模式下擋合併的檢查都在 plan 裡，plan 成功、rust 為 false（沒動到 spawner 與它的接縫）、其餘全是 skipped 時，下面的判斷不會有別的結論，
+  # gate 就不起 job：skipped 的 `gate` 照樣算通過，省掉一個 job 的排隊與啟動。四個條件少一個就照跑、照判。
+  # if 列的 job 要跟 needs 一致，test_ci_workflow.py 會核。
   gate:
     name: gate
     needs:
@@ -505,8 +608,19 @@ jobs:
         node-compat,
         sandbox-spawner,
         sandbox-spawner-arm64,
+        e2e-single,
+        e2e-per-thread,
       ]
-    if: always()
+    if: >-
+      always() && !(
+        needs.plan.result == 'success' && needs.plan.outputs.mode == 'light' && needs.plan.outputs.rust == 'false'
+        && needs.static.result == 'skipped' && needs.typecheck.result == 'skipped'
+        && needs.test-packages.result == 'skipped' && needs.test-web.result == 'skipped'
+        && needs.test-harness.result == 'skipped' && needs.packed-install.result == 'skipped'
+        && needs.node-compat.result == 'skipped' && needs.sandbox-spawner.result == 'skipped'
+        && needs.sandbox-spawner-arm64.result == 'skipped' && needs.e2e-single.result == 'skipped'
+        && needs.e2e-per-thread.result == 'skipped'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -527,6 +641,8 @@ jobs:
           SANDBOX_SPAWNER: ${{ needs.sandbox-spawner.result }}
           FULL: ${{ inputs.full }}
           SANDBOX_SPAWNER_ARM64: ${{ needs.sandbox-spawner-arm64.result }}
+          E2E_SINGLE: ${{ needs.e2e-single.result }}
+          E2E_PER_THREAD: ${{ needs.e2e-per-thread.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
           {
@@ -549,6 +665,8 @@ jobs:
             echo "| node-compat | $NODE_COMPAT |"
             echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
             echo "| sandbox-spawner-arm64 | $SANDBOX_SPAWNER_ARM64 |"
+            echo "| e2e (single) | $E2E_SINGLE |"
+            echo "| e2e (per-thread) | $E2E_PER_THREAD |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -579,6 +697,10 @@ jobs:
 
           if [ "$FULL" = "true" ]; then
             [ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail "sandbox-spawner-arm64 的結果是 '$SANDBOX_SPAWNER_ARM64'，需要 success。"
+            [ "$E2E_SINGLE" = "success" ] || fail "e2e (single) 的結果是 '$E2E_SINGLE'，需要 success。"
+            [ "$E2E_PER_THREAD" = "success" ] || fail "e2e (per-thread) 的結果是 '$E2E_PER_THREAD'，需要 success。"
           else
             [ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail "不是合併後完整一輪，sandbox-spawner-arm64 卻是 '$SANDBOX_SPAWNER_ARM64'。"
+            [ "$E2E_SINGLE" = "skipped" ] || fail "不是合併後完整一輪，e2e (single) 卻是 '$E2E_SINGLE'。"
+            [ "$E2E_PER_THREAD" = "skipped" ] || fail "不是合併後完整一輪，e2e (per-thread) 卻是 '$E2E_PER_THREAD'。"
           fi

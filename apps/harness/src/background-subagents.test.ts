@@ -1786,6 +1786,18 @@ describe('結算通知（#840）', () => {
     await Promise.all([none.host.close(), blank.host.close()]);
   });
 
+  /** 只有空白的那則算最後的輸出（跟「哪則不送給模型」的判準不同）：換成 `isEmptyAssistant` 的話，這裡會拿到更早那段。 */
+  it('最後一則只有空白、更早有真文字：照樣是 It left no closing message.，不回頭拿更早那段', async () => {
+    const { host, settlements } = setup((_text, _signal, log) => {
+      reply(log, '我先查一下');
+      reply(log, ' \n');
+    });
+    await host.start({ subagent: 'worker', text: '查' }).outcome;
+    expect(settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
+    expect(settlements[0]?.text).not.toContain('我先查一下');
+    await host.close();
+  });
+
   it('前一段的回覆不算這一段的：這一輪沒有回覆就是沒有收尾訊息', async () => {
     let round = 0;
     const { host, settlements } = setup((_text, _signal, log) => {

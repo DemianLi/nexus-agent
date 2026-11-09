@@ -48,6 +48,7 @@ const MODELS: ModelSeatData = {
     ],
   },
   selection: { modelId: 'model-b' },
+  recorded: { modelId: 'model-b' },
   select: async () => undefined,
 };
 

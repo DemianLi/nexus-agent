@@ -1,6 +1,6 @@
 /**
  * MCP stdio server 怎麼起：沒宣告 `sandbox` 的見 {@link createMcpGuardWrapper}；宣告了的（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：command 換成
- * spawner 的 `--exec`，它上好沙箱再 exec。不走常駐那一支：stdio 由 adapter 自己接，它沒有注入 transport 的位子。
+ * spawner 的 `--exec`，它上好沙箱再 exec。不走常駐那一支：`connection.ts` 開的是 SDK 的 `StdioClientTransport`，只收 command 與 args。
  *
  * 讀根是系統執行期的目錄與檔、`command`、`cwd` 與宣告的 `readable`，寫根是宣告的 `writable`。宣告的路徑、`command`、`cwd` 都不能包住
  * `$HOME` 或 serve 的 home，也不能落在 serve 的 home 底下；判斷前先 realpath，違反就不連線。系統那幾項若包住這兩個 home，那一項不給，不算拒絕。

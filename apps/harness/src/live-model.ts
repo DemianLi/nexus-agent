@@ -3,10 +3,11 @@ import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
 import {
-  assertImageBudget,
   beginAttemptReport,
   DEFAULT_STREAM_RETRYABLE_CODES,
   errorChain,
+  isBlankContent,
+  isBlankContentArray,
   isModelCallFailure,
   llmFailure,
   markModelCallFailure,
@@ -16,7 +17,7 @@ import {
   tagModelRoute,
   thrownMessage,
 } from '@nexus/core';
-import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
+import type { AttemptUsage, ImageBudget, LlmFailure, StreamFailure } from '@nexus/core';
 import { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE } from '@nexus/wire';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 import {
@@ -34,7 +35,6 @@ import { GuardedChatOpenAI } from './guarded-chat-openai.js';
 import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
 import type { RequestGate } from './request-gate.js';
-import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { resolveHarnessHome } from './harness-home.js';
@@ -1208,32 +1208,6 @@ interface WireAssistant {
 }
 
 /**
- * 這則助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。
- *
- * 有工具呼叫時只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）
- * 配工具呼叫兩個模型都收，不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
- */
-function isEmptyContentArray(content: unknown): boolean {
-  if (!Array.isArray(content)) return false;
-  return !content.some((part: unknown) => {
-    if (typeof part !== 'object' || part === null) return true;
-    const { type, text } = part as { type?: unknown; text?: unknown };
-    if (type !== 'text') return true;
-    return typeof text === 'string' && text.trim().length > 0;
-  });
-}
-
-/**
- * 這則助手訊息的 content 是不是一個字都沒有，**不分形狀**：`null`、缺席、空白字串、{@link isEmptyContentArray}。
- * 沒有工具呼叫的那一種用它判：什麼都沒有的一則，照 dsh 整則不送。
- */
-function isEmptyContent(content: unknown): boolean {
-  if (content === null || content === undefined) return true;
-  if (typeof content === 'string') return content.trim() === '';
-  return isEmptyContentArray(content);
-}
-
-/**
  * 把請求裡**沒有內容**的助手訊息換成 dsh 的送法
  * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫、內容是空陣列的送
  * `content: null`；沒有工具呼叫、內容是空的（任何形狀）整則不送。
@@ -1241,6 +1215,9 @@ function isEmptyContent(content: unknown): boolean {
  * 後者的第二個來源是撞到輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：那一則的工具
  * 呼叫被清掉，只剩推理或什麼都沒有。CLI 那條送的是 `""`、web 那條是空陣列或 `null`，所以這一種不分形狀——
  * 同 dsh 的 `surface.ts:142-147`（`477b4f4`）與 pi-ai 的「沒有 content 也沒有工具呼叫的整則略過」。
+ *
+ * 兩種各用 `@nexus/core` 的一支判準：有工具呼叫的只認陣列（{@link isBlankContentArray}；字串 `""` 與 `null` 配工具呼叫 #592 量過的模型都收，
+ * 不動），沒有的不分形狀（{@link isBlankContent}，從日誌推歷史時丟掉空助手訊息也用這一支）。空白都算空。
  *
  * @param messages - 請求 body 的 `messages`。
  * @returns 換過的訊息串；一則都沒換時是**原本那個陣列**。
@@ -1256,7 +1233,7 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
     }
     const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
     if (
-      hasToolCalls ? !isEmptyContentArray(assistant.content) : !isEmptyContent(assistant.content)
+      hasToolCalls ? !isBlankContentArray(assistant.content) : !isBlankContent(assistant.content)
     ) {
       next.push(message);
       continue;
@@ -1353,8 +1330,8 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * 空的意思同 dsh（{@link isEmptyToolContent}）：`null`／缺席、`''`，或陣列全是文字區塊而串起來是 `''`。**只換「沒有內容」的那種**：
  * 有字的結果、**只有空白的**（`'  '`、`[{ type: 'text', text: ' ' }]`；dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送）、
- * 陣列裡有任何一段不是文字（帶圖等）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。**不沿用 {@link isEmptyContent}**：
- * 那是助手訊息 #592 量過的判準（空白算空），維持原樣，工具訊息另寫一支。
+ * 陣列裡有任何一段不是文字（帶圖等）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。**不沿用 {@link isBlankContent}**：
+ * 那是助手訊息 #592 量過的判準（空白算空），工具訊息另寫一支。
  *
  * ## 誰會送出空的工具結果
  *
@@ -1654,14 +1631,13 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
 export type LiveModelPurpose = 'session-title';
 
 /**
- * 這一列型錄條目的圖片額度檢查（#1270）：宣告了 `imageBudget` 且收圖才有；純文字模型的圖在投影裡就是文字佔位，不佔額度，不量。
- * 超額由 {@link assertImageBudget} 拋 `IMAGE_OFFLOAD_REQUIRED`，上層接住。額度跟著 adapter 走（照 dsh：額度住在 adapter 的部署設定），
+ * 這一列型錄條目要量的圖片額度（#1270）：宣告了 `imageBudget`、而且不是宣告純文字（收圖或沒宣告輸入）才有；純文字模型的圖在投影裡就是文字佔位，不佔額度，不量。
+ * 超額時上層先省略（`createImageOffloadMiddleware`），上層挑不到可省略的才由 adapter 拋 `IMAGE_OFFLOAD_REQUIRED`、上層接住。額度跟著 adapter 走，
  * 換模型就是換一顆 adapter、換一份額度。
  */
-export function imageBudgetGuard(entry: ModelEntry): RequestGuard | undefined {
+export function requestImageBudget(entry: ModelEntry): ImageBudget | undefined {
   const budget = entry.imageBudget;
-  if (budget === undefined || acceptsImages(entry) === 'rejects') return undefined;
-  return (messages) => assertImageBudget(messages, budget);
+  return budget === undefined || acceptsImages(entry) === 'rejects' ? undefined : budget;
 }
 
 /**
@@ -1796,7 +1772,7 @@ export function createLiveModel(
       ? new AttachmentChatOpenAI(
           fields,
           (messages) => projectAttachments(messages, attachments, acceptsImages(entry)),
-          imageBudgetGuard(entry),
+          requestImageBudget(entry),
           requestGate,
         )
       : requestGate !== undefined

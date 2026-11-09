@@ -18,10 +18,10 @@
  * `markToolError` 與 `toolErrorOf` 共用 core 模組層的同一張 `WeakMap`（日誌讀的就是它），實作搬出來會出現兩張表、
  * 兩份「工具錯誤」的判準（#1458 Q4 (b) 不選的理由）。所以（抽出實作是橫跨核心的一刀，表達不出來，退到最接近的實作，同 `@nexus/session`、`@nexus/projections`）：
  *
- * - 三個值**留在 `@nexus/core`，由這個套件單向轉出**。相依是單向的：這個套件相依 `@nexus/core`，core 不 import 它。
+ * - 轉出的值**留在 `@nexus/core`，由這個套件單向轉出**。相依是單向的：這個套件相依 `@nexus/core`，core 不 import 它。
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）：不能讓安裝結果出現第二份
  *   core——兩份 core 就是兩張 `WeakMap`，標上去的碼日誌讀不到。
- * - **撤除條件**：SDK 與定義套件要發布到私有 registry 之前，把這三個值的實作連同 `toolErrorOf` 一起搬進這個套件
+ * - **撤除條件**：SDK 與定義套件要發布到私有 registry 之前，把轉出的值的實作連同 `toolErrorOf` 一起搬進這個套件
  *   （屆時 core 改從這裡 import）。
  *
  * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`toolRefusal`、`toolCallIdOf`、`markToolError`
@@ -30,16 +30,31 @@
  * `exec.thread`、`exec.agent` 與這兩個函式算出來的是同一個值，`thread-id-reaches-handlers.test.ts` 實測）。`ask-user` 在 #1458
  * Q1 (c) 之後不再依 thread 查答題管道，所以 #1458 時沒放；這裡是檔頭預留的「等逐條 thread 的消費者出現」。
  *
+ * **`EXTERNAL_MCP_CONTENT_NOTICE`、`REFERENCE_RULE`**（#2537）的消費者是 `@nexus/plugin-mcp`：前者是它接在工具結果與資源結果本文
+ * 前面的一行，後者是它系統提示詞那一句的規則子句；`@nexus/plugin-sandbox-policy` 的政策句也接 `REFERENCE_RULE`（#2557）。實作留在 core 的 `untrusted-content.ts`、只轉出不複製：`REFERENCE_RULE` 是從
+ * core 的 `REFERENCE_WARNING`（harness 引用會話時用）切出來的，複製一份就有兩個出處；撤除時 `REFERENCE_WARNING` 要跟著一起搬。
+ * `REFERENCE_RULE` 是提示詞的字句、不是工具結果的寫法；字句更貼切的 `@nexus/system-prompt` 只相依 `@nexus/sdk`、不 import core，
+ * 轉不出它。
+ *
+ * **`approvalDenied`、`APPROVAL_REJECTED_BY_USER`、`APPROVAL_INVALID_REPLY`**（#2557）的消費者是 `@nexus/plugin-sandbox-policy` 的升級工具：
+ * 問人被拒或回覆認不得時，它放在拒絕結果 `error` 上的 `ToolErrorInfo`，碼與核准閘門（core 的 `approval.ts`）同一組。實作留在 core 的
+ * `tool-error-codes.ts`。
+ *
  * @module
  */
 
 export {
+  APPROVAL_INVALID_REPLY,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
   callThreadId,
+  EXTERNAL_MCP_CONTENT_NOTICE,
   markToolError,
+  REFERENCE_RULE,
   toolCallIdOf,
   toolCallSessionAddress,
   toolRefusal,
 } from '@nexus/core';
 
-// 錯誤碼的型別：`markToolError` 的第二個參數、`rootOnly` 拒絕樁的 `error`。
+// 錯誤碼的型別：`markToolError` 的第二個參數、`rootOnly` 拒絕樁與升級工具拒絕結果的 `error`。
 export type { ToolErrorInfo } from '@nexus/core';

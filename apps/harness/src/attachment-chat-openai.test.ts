@@ -16,15 +16,15 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { IMAGE_OFFLOAD_REQUIRED_CODE } from '@nexus/core';
+import { IMAGE_OFFLOAD_REQUIRED_CODE, imageBudgetOf } from '@nexus/core';
+import type { ImageBudget } from '@nexus/core';
 
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
-import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { PNG_7X5 } from './image-fixtures.js';
-import { imageBudgetGuard } from './live-model.js';
+import { requestImageBudget } from './live-model.js';
 import { modelEntrySchema } from './model-catalog.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -114,7 +114,7 @@ afterEach(async () => {
 function model(
   imageSupport: 'accepts' | 'rejects' | 'undeclared',
   src = source(),
-  guard?: RequestGuard,
+  imageBudget?: ImageBudget,
 ) {
   const { port } = server.address() as AddressInfo;
   return new AttachmentChatOpenAI(
@@ -125,7 +125,7 @@ function model(
       configuration: { baseURL: `http://127.0.0.1:${port}/v1` },
     },
     (messages) => projectAttachments(messages, src, imageSupport),
-    guard,
+    imageBudget,
   );
 }
 
@@ -272,7 +272,7 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
         { type: 'text', text: '請看' },
       ] as never,
     });
-  const guard = imageBudgetGuard(
+  const budget = requestImageBudget(
     catalogEntry({ input: ['text', 'image'], imageBudget: { maxImages: 1 } }),
   )!;
 
@@ -284,7 +284,7 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
         return VERSION;
       },
     });
-    const llm = model('accepts', src, guard);
+    const llm = model('accepts', src, budget);
     const expected = { code: IMAGE_OFFLOAD_REQUIRED_CODE, offloadImages: 1 };
     await expect(llm.invoke([twoImages()])).rejects.toMatchObject(expected);
     await expect(
@@ -300,16 +300,17 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
         for await (const event of events._streamChatModelEvents([twoImages()], {})) void event;
       })(),
     ).rejects.toMatchObject(expected);
-    // withConfig 建出來的新實例帶著同一份檢查。
-    await expect(llm.withConfig({ stop: ['END'] }).invoke([twoImages()])).rejects.toMatchObject(
-      expected,
-    );
+    // withConfig 建出來的新實例帶著同一份檢查，也掛著同一份額度給上層先量。
+    const configured = llm.withConfig({ stop: ['END'] });
+    await expect(configured.invoke([twoImages()])).rejects.toMatchObject(expected);
+    expect(imageBudgetOf(llm)).toEqual({ maxImages: 1 });
+    expect(imageBudgetOf(configured)).toEqual({ maxImages: 1 });
     expect(bodies).toHaveLength(0);
     expect(reads).toBe(0);
   });
 
   it('額度內：照常投影送出', async () => {
-    await model('accepts', source(), guard).invoke([message()]);
+    await model('accepts', source(), budget).invoke([message()]);
     expect(bodies).toHaveLength(1);
     expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
   });
@@ -319,7 +320,7 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
       { type: 'nexus-image', attachment: IMAGE, offloaded: true },
       { type: 'nexus-image', attachment: { ...IMAGE, attachmentId: `sha256:${'f'.repeat(64)}` } },
     ];
-    await model('accepts', source(), guard).invoke([
+    await model('accepts', source(), budget).invoke([
       new HumanMessage({ content: [first, second, { type: 'text', text: '請看' }] as never }),
     ]);
     expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
@@ -331,21 +332,22 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
   });
 });
 
-describe('imageBudgetGuard（型錄條目 → adapter 的檢查）', () => {
+describe('requestImageBudget（型錄條目 → adapter 要量的額度）', () => {
   it('沒宣告額度：沒有檢查', () => {
-    expect(imageBudgetGuard(catalogEntry({ input: ['text', 'image'] }))).toBeUndefined();
+    expect(requestImageBudget(catalogEntry({ input: ['text', 'image'] }))).toBeUndefined();
   });
 
   it('宣告純文字的模型：圖在投影裡就是文字佔位、不佔額度，不量', () => {
     expect(
-      imageBudgetGuard(catalogEntry({ input: ['text'], imageBudget: { maxImages: 1 } })),
+      requestImageBudget(catalogEntry({ input: ['text'], imageBudget: { maxImages: 1 } })),
     ).toBeUndefined();
   });
 
-  it('收圖或沒宣告輸入的模型：有檢查，超額拋', () => {
+  it('收圖或沒宣告輸入的模型：量型錄宣告的那一份', () => {
     for (const input of [['text', 'image'], undefined]) {
-      const guard = imageBudgetGuard(catalogEntry({ input, imageBudget: { maxImages: 1 } }));
-      expect(guard).toBeDefined();
+      expect(requestImageBudget(catalogEntry({ input, imageBudget: { maxImages: 1 } }))).toEqual({
+        maxImages: 1,
+      });
     }
   });
 

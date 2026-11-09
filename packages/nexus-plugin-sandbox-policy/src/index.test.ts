@@ -12,18 +12,47 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createHostServicesPlugin, loadPlugins, REFERENCE_RULE } from '@nexus/core';
+import { createHostServicesPlugin, createRegistry, loadPlugins, REFERENCE_RULE } from '@nexus/core';
+import type { PipelineExecution, PipelineResult, PluginEntry } from '@nexus/core';
+import { runThreadSources, toLangChainTool } from '@nexus/tool-adapter';
 
+import * as sandboxPolicy from './index.js';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   isUnderSharedPrefix,
+  mountSandboxPolicy,
+  SANDBOX_POLICY_HOST_SERVICES,
+  SANDBOX_POLICY_SECTION_NAME,
   sandboxPolicySentence,
   sharedContentSentence,
   sharedReadOnlyRefusal,
 } from './index.js';
 import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
+
+/**
+ * 模擬宿主橋接列的 threadSource 那一段：同 `apps/harness` 的 `plugin-config.ts`，在那一列的 `apply` 裡經 `runThreadSources` 跑
+ * {@link mountSandboxPolicy}，登記落在這一列的位置；不走 Loader 與授權表。
+ */
+function sandboxPolicyRow(): PluginEntry {
+  return {
+    id: 'sandbox-policy',
+    plugin: {
+      name: 'sandbox-policy',
+      apply: (registry) =>
+        runThreadSources(
+          registry,
+          [{ threadSource: mountSandboxPolicy, services: SANDBOX_POLICY_HOST_SERVICES }],
+          { id: 'sandbox-policy', module: sandboxPolicy },
+        ),
+    },
+  };
+}
+
+/** 載入一份清單。轉接器交給 registry，同產品路徑（`apps/harness` 的 `agent-factory.ts`）。 */
+function load(entries: readonly PluginEntry[]): ReturnType<typeof loadPlugins> {
+  return loadPlugins(entries, createRegistry({ adaptTool: toLangChainTool }));
+}
 
 describe('升級可達表（#1827 D23）', () => {
   // 第 2 條「不加寬的請求不問人」的另一面：升得到、會去問人的每一格，都嚴格更寬。
@@ -67,9 +96,9 @@ describe('唯讀共用參考區那一句（#1775）', () => {
     },
   );
 
-  it('掛上之後 middleware 講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
+  it('掛上之後那一段講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
     for (const withFence of [true, false]) {
-      const { registry } = await loadPlugins([
+      const { registry } = await load([
         createHostServicesPlugin({
           sharedWorkspace: '/shared',
           ...(withFence && {
@@ -80,20 +109,13 @@ describe('唯讀共用參考區那一句（#1775）', () => {
             },
           }),
         }),
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow(),
       ]);
-      const [entry] = registry.middleware.list();
-      let seen = '';
-      const middleware = (entry!.value as unknown as { middleware: unknown }).middleware as {
-        wrapModelCall: (
-          request: unknown,
-          handler: (request: { systemPrompt?: string }) => unknown,
-        ) => unknown;
-      };
-      await middleware.wrapModelCall({}, (request) => {
-        seen = request.systemPrompt ?? '';
-        return undefined;
-      });
+      const [section] = registry.prompt.sections();
+      expect(section?.name).toBe(SANDBOX_POLICY_SECTION_NAME);
+      const text = section!.text;
+      const seen =
+        typeof text === 'function' ? text({ agent: undefined, call: {}, tools: [] }) : text;
       expect(seen).toContain('共用參考區在 `/shared`，唯讀');
     }
   });
@@ -150,22 +172,20 @@ describe('政策那句話本身', () => {
 describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
   it('有圍堵卻沒有 sandboxPolicy → 載入失敗，訊息指名服務與要它的 plugin', async () => {
     const withFence = createHostServicesPlugin({ fsContainment: CONTAINED_FILESYSTEM });
-    await expect(loadPlugins([withFence, createSandboxPolicyPlugin()])).rejects.toThrow(
+    await expect(load([withFence, sandboxPolicyRow()])).rejects.toThrow(
       '卻沒有 sandboxPolicy 服務',
     );
-    await expect(loadPlugins([withFence, createSandboxPolicyPlugin()])).rejects.toThrow(
-      'sandbox-policy',
-    );
+    await expect(load([withFence, sandboxPolicyRow()])).rejects.toThrow('sandbox-policy');
   });
 
   it('有圍堵、組裝點提供了就掛得上去，而且拿到的是同一顆控制器', async () => {
     const controller = new SandboxModeController('read-only');
-    const { registry } = await loadPlugins([
+    const { registry } = await load([
       createHostServicesPlugin({
         fsContainment: CONTAINED_FILESYSTEM,
         sandboxPolicy: { controller, rootDir: '/workspace' },
       }),
-      createSandboxPolicyPlugin(),
+      sandboxPolicyRow(),
     ]);
     // `/sandbox` 拿掉了（#437）：唯一的切換入口是 `@nexus/plugin-permission-presets` 的 `/permission`。有圍堵也不註冊，
     // 否則部署的人刪掉「全開」那一組也關不掉全開。
@@ -176,19 +196,87 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
     expect(registry.services.use('sandboxPolicy').controller.source()).toBe('danger-full-access');
   });
 
-  it('沒有圍堵：載得起來、只貢獻那一句（一顆 middleware），不要控制器', async () => {
-    const { registry } = await loadPlugins([createSandboxPolicyPlugin()]);
+  it('沒有圍堵：載得起來、只貢獻那一句（一段，沒有 middleware、沒有 `tools/execute` 監聽者），不要控制器', async () => {
+    const { registry } = await load([sandboxPolicyRow()]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
-    expect(registry.middleware.list().map((entry) => entry.value)).toHaveLength(1);
+    expect(registry.prompt.sections().map((section) => section.name)).toEqual([
+      SANDBOX_POLICY_SECTION_NAME,
+    ]);
+    expect(registry.middleware.list()).toHaveLength(0);
+    expect(registry.events.listeners().filter((each) => each.name === 'tools/execute')).toEqual([]);
   });
 
   it('沒有圍堵時就算交了 sandboxPolicy 也不掛控制器那半（訊號是 fsContainment，不是控制器在不在）', async () => {
     const controller = new SandboxModeController('read-only');
-    const { registry } = await loadPlugins([
+    const { registry } = await load([
       createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: '/workspace' } }),
-      createSandboxPolicyPlugin(),
+      sandboxPolicyRow(),
     ]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
+  });
+});
+
+/** 一次 `tools/execute` 派發的那一筆；這組測試只看 `name`。 */
+function execution(name: string): PipelineExecution {
+  return { callId: 'c1', name, args: {}, agent: undefined, thread: undefined, signal: undefined };
+}
+
+/** 有圍堵、交了控制器的那一份註冊表。 */
+async function loadContained(controller: SandboxModeController): ReturnType<typeof load> {
+  return load([
+    createHostServicesPlugin({
+      fsContainment: CONTAINED_FILESYSTEM,
+      sandboxPolicy: { controller, rootDir: '/workspace' },
+    }),
+    sandboxPolicyRow(),
+  ]);
+}
+
+/** 本體回的那一則；這組測試不看它。 */
+const RESULT: PipelineResult = { kind: 'message', blocks: [], content: '', isError: false };
+
+describe('委派那一刻拍下這一格（#326）', () => {
+  it('有圍堵時掛一位 `tools/execute` 監聽者，不掛 middleware', async () => {
+    const { registry } = await loadContained(new SandboxModeController('workspace-write'));
+    expect(registry.middleware.list()).toHaveLength(0);
+    expect(
+      registry.events.listeners().filter((each) => each.name === 'tools/execute'),
+    ).toHaveLength(1);
+  });
+
+  it('`task`：派發的那一刻同步拍，往內交之後 root 再切，本體（含 await 之後）讀到的仍是委派那一格', async () => {
+    const controller = new SandboxModeController('workspace-write');
+    const { registry } = await loadContained(controller);
+    const seen: (string | undefined)[] = [];
+    const pending = registry.dispatch.waterfall('tools/execute', execution('task'), async () => {
+      seen.push(controller.current, controller.delegatedMode);
+      await Promise.resolve();
+      seen.push(controller.current, controller.delegatedMode);
+      return RESULT;
+    });
+    controller.switchTo('read-only');
+    await pending;
+    expect(seen).toEqual([
+      'workspace-write',
+      'workspace-write',
+      'workspace-write',
+      'workspace-write',
+    ]);
+    expect(controller.current).toBe('read-only');
+  });
+
+  it('不是 `task` 的工具不進委派：本體讀到的是 root 當下那一格', async () => {
+    const controller = new SandboxModeController('workspace-write');
+    const { registry } = await loadContained(controller);
+    const seen: (string | undefined)[] = [];
+    const pending = registry.dispatch.waterfall('tools/execute', execution('ls'), async () => {
+      await Promise.resolve();
+      seen.push(controller.current, controller.delegatedMode);
+      return RESULT;
+    });
+    controller.switchTo('read-only');
+    await pending;
+    expect(seen).toEqual(['read-only', undefined]);
   });
 });
 

@@ -16,6 +16,7 @@ import Loader from '@nexus/cordis-plugin-loader';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -57,7 +58,7 @@ async function mountFor(threads: readonly string[], allowParallel = true): Promi
   await root.loader.await();
   const entry = tools.entries().find((item) => item.tool.name === todo.TODO_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return { tool: entry.tool, sessions };
+  return { tool: langChainToolOf(entry.tool), sessions };
 }
 
 /** 以某條 thread 的身分寫一次：回模型看到的字，與那條 thread 的日誌上現在有的 `todo/write`。 */

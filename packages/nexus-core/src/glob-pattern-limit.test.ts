@@ -1,9 +1,14 @@
 /**
- * glob pattern 大括號上限的單元測試：量法（深度、組合、範圍、略過的字元、沒關的組，各附上限 ±1；長度上限；深度超過就停）
- * 與包 backend 的那一層（超過就不叫 backend）。經 `createNexusAgent` 的接線在 `apps/harness/src/glob-pattern-limit.test.ts`。
+ * glob pattern 大括號上限的單元測試：量法（深度、組合、範圍、略過的字元、沒關的組，各附上限 ±1；長度上限；深度超過就停）、
+ * 包 backend 的那一層（超過就不叫 backend），與子行程裡對真的 `fast-glob` 送 `{1..900}{1..900}`（拿掉上限就 OOM）。經 `createNexusAgent` 的
+ * 接線在 `apps/harness/src/glob-pattern-limit.test.ts`。
  */
 
-import { describe, expect, it } from 'vitest';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   GLOB_PATTERN_MAX_DEPTH,
   GLOB_PATTERN_MAX_EXPANSIONS,
@@ -177,4 +182,91 @@ describe('包 backend 的那一層', () => {
     ]);
     expect(limited.marker).toBe('backend');
   });
+});
+
+/**
+ * 子行程的本體：基座的 `CompositeBackend` 在 `/plugin/` 掛一個 `FilesystemBackend`（插件用 `backend.mount()` 掛上的形狀），
+ * 外面包 {@link limitGlobPatterns}（同 `foldRegistry`），印出 `glob` 的結果。
+ */
+const CHILD = `
+import { CompositeBackend, FilesystemBackend, StateBackend } from 'deepagents';
+const [moduleUrl, rootDir, pattern] = process.argv.slice(1);
+const { limitGlobPatterns } = await import(moduleUrl);
+const mounted = new CompositeBackend(new StateBackend(), {
+  '/plugin/': new FilesystemBackend({ rootDir, virtualMode: true }),
+});
+process.stdout.write(JSON.stringify(await limitGlobPatterns(mounted).glob(pattern, '/plugin/')));
+`;
+
+/** 子行程的 V8 heap 上限（MB）。拿掉上限時 `{1..900}{1..900}` 在這裡一定撐不住。 */
+const CHILD_HEAP_MB = 128;
+
+interface ChildRun {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * 小 heap 的子行程跑一次 `glob`。
+ *
+ * @param rootDir - `FilesystemBackend` 的根。
+ * @param pattern - 送進 `glob` 的 pattern。
+ * @returns 結束碼、訊號與輸出。
+ */
+function runChild(rootDir: string, pattern: string): Promise<ChildRun> {
+  const moduleUrl = new URL('./glob-pattern-limit.ts', import.meta.url).href;
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        `--max-old-space-size=${CHILD_HEAP_MB}`,
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '-e',
+        CHILD,
+        moduleUrl,
+        rootDir,
+        pattern,
+      ],
+      // `-e` 腳本裡的 `deepagents` 與 `--import tsx` 從 cwd 解析，所以 cwd 要在本套件。
+      { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
+    child.on('error', reject);
+    child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+  });
+}
+
+describe('子行程：插件掛上的 FilesystemBackend', () => {
+  let rootDir = '';
+
+  beforeAll(async () => {
+    rootDir = await mkdtemp(join(tmpdir(), 'nexus-glob-limit-'));
+    await writeFile(join(rootDir, 'a.txt'), 'hi');
+  });
+
+  afterAll(async () => {
+    await rm(rootDir, { recursive: true, force: true });
+  });
+
+  it('對照：上限之內，真的 fast-glob 找得到檔', async () => {
+    const run = await runChild(rootDir, '*.txt');
+    expect(run.stderr).toBe('');
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({ files: [{ path: '/plugin/a.txt' }] });
+  }, 60_000);
+
+  // 拿掉上限時，fast-glob 的大括號展開在這個 heap 裡 OOM，子行程不是 0 結束，這條就紅。
+  it(`\`{1..900}{1..900}\`：${CHILD_HEAP_MB} MB 的 heap 照常結束，拿到固定的工具錯誤`, async () => {
+    const run = await runChild(rootDir, '{1..900}{1..900}');
+    expect({ code: run.code, signal: run.signal }).toEqual({ code: 0, signal: null });
+    expect(JSON.parse(run.stdout)).toEqual({ error: GLOB_PATTERN_TOO_COMPLEX });
+    expect(run.stderr).toBe('');
+  }, 60_000);
 });

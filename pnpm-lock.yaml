@@ -7,6 +7,8 @@ settings:
 overrides:
   mout@<1.2.4: ^1.2.4
 
+pnpmfileChecksum: sha256-UepMIjKj0TE/vnllUFBGsgNk5OxrYMsOOLna05f6H3o=
+
 importers:
 
   .:
@@ -179,12 +181,18 @@ importers:
       '@nexus/skills':
         specifier: workspace:*
         version: link:../../packages/nexus-skills
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../../packages/nexus-subprocess
       '@nexus/system-prompt':
         specifier: workspace:*
         version: link:../../packages/nexus-system-prompt
       '@nexus/timeout':
         specifier: workspace:*
         version: link:../../packages/nexus-timeout
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../../packages/nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../../packages/nexus-tool-result
@@ -321,6 +329,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^5.0.4
         version: 5.2.0(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      '@vitejs/plugin-vue':
+        specifier: 6.0.10
+        version: 6.0.10(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))(vue@3.5.44(typescript@5.9.3))
       axe-core:
         specifier: ^4.13.0
         version: 4.13.0
@@ -420,6 +431,9 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+      vue:
+        specifier: 3.5.44
+        version: 3.5.44(typescript@5.9.3)
 
   packages/nexus-agent-loop:
     dependencies:
@@ -563,6 +577,12 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -757,6 +777,9 @@ importers:
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -797,9 +820,6 @@ importers:
 
   packages/nexus-plugin-echo:
     dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -902,6 +922,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -926,9 +949,9 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/mcp-adapters':
-        specifier: ^2.0.0
-        version: 2.0.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))
+      '@modelcontextprotocol/client':
+        specifier: ^2.3.1
+        version: 2.3.1
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -948,6 +971,30 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.3.1
         version: 2.3.1
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../nexus-subprocess
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1046,9 +1093,6 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -1062,6 +1106,33 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1105,6 +1176,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1126,12 +1200,6 @@ importers:
 
   packages/nexus-plugin-quickjs:
     dependencies:
-      '@langchain/core':
-        specifier: ^1.2.9
-        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
       quickjs-emscripten:
         specifier: ^0.32.0
         version: 0.32.0
@@ -1139,6 +1207,18 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1157,9 +1237,6 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph':
-        specifier: ^1.4.13
-        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
@@ -1170,6 +1247,39 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/approval-channel':
+        specifier: workspace:*
+        version: link:../nexus-approval-channel
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../nexus-permission-presets
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
+      '@nexus/system-prompt':
+        specifier: workspace:*
+        version: link:../nexus-system-prompt
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
+      '@nexus/tool-result':
+        specifier: workspace:*
+        version: link:../nexus-tool-result
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1253,6 +1363,9 @@ importers:
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1407,6 +1520,9 @@ importers:
       '@nexus/session':
         specifier: workspace:*
         version: link:../nexus-session
+      '@nexus/tool-adapter':
+        specifier: workspace:*
+        version: link:../nexus-tool-adapter
       '@nexus/tool-result':
         specifier: workspace:*
         version: link:../nexus-tool-result
@@ -1514,15 +1630,15 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      '@nexus/subprocess':
+        specifier: workspace:*
+        version: link:../nexus-subprocess
       '@nexus/timeout':
         specifier: workspace:*
         version: link:../nexus-timeout
       diff:
         specifier: ^9.0.0
         version: 9.0.0
-      langchain:
-        specifier: ^1.5.10
-        version: 1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -1664,6 +1780,24 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
+  packages/nexus-subprocess:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
   packages/nexus-system-prompt:
     devDependencies:
       '@nexus/sdk':
@@ -1684,6 +1818,46 @@ importers:
 
   packages/nexus-timeout:
     devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))
+
+  packages/nexus-tool-adapter:
+    dependencies:
+      '@langchain/core':
+        specifier: ^1.2.9
+        version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
+      '@langchain/langgraph':
+        specifier: ^1.4.13
+        version: 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/plugin-echo':
+        specifier: workspace:*
+        version: link:../nexus-plugin-echo
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/tools':
+        specifier: workspace:*
+        version: link:../nexus-tools
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1902,6 +2076,10 @@ packages:
     resolution: {integrity: sha512-G7sHYigPY17oO5SYWnfD/0MTBwVR781S/JI643e/JhUYgVgWE/61SoW3NH9KWUKyKq5LVh3npif99Wkt6j86Jw==}
     engines: {node: '>=6.9.0'}
 
+  '@babel/helper-string-parser@7.29.11':
+    resolution: {integrity: sha512-snZbO7MEDOof+hvNa97EjEY7qD7h2kwvQr5AJC3ZhQudKW5dnej6k3kP9NQV88hJwaS8vDqRLFo9rivLEhle2g==}
+    engines: {node: '>=6.9.0'}
+
   '@babel/helper-string-parser@7.29.7':
     resolution: {integrity: sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw==}
     engines: {node: '>=6.9.0'}
@@ -1917,6 +2095,11 @@ packages:
   '@babel/helpers@7.29.7':
     resolution: {integrity: sha512-1k2lAGRMfHTcwuNYcCNUmaUffmQv8KWMfh2iJUUeRlwlwH4FdNG7mfPI10NPfLHJFThE4Tyr4mv7kTNZOiPuBg==}
     engines: {node: '>=6.9.0'}
+
+  '@babel/parser@7.29.12':
+    resolution: {integrity: sha512-WJ7JBp/Q4+z/ImydtI7jS6NVco5++632ExBemSX+Ysb+G1lCwQ5BVo3SY+jGGOcZXI4ZccbZSUSJLNBW6eEpJg==}
+    engines: {node: '>=6.0.0'}
+    hasBin: true
 
   '@babel/parser@7.29.8':
     resolution: {integrity: sha512-E8lTAYNB1KW+FH+VGJuZM1ioAx2E6oVlvQFRrf5P8ZZmsiJXYAD9vTFV7yyEURNzgh1dFqMZuO6tUwcARbqFCA==}
@@ -1949,6 +2132,10 @@ packages:
 
   '@babel/traverse@7.29.8':
     resolution: {integrity: sha512-I5z7H3bf/41ktsNVLtpN0wAa336HkqIHQ5BuPLEhTkt1jVSyZpeNKIzTgEWmlxjdg81R0IgUCcaE+Ok3NvrfZg==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/types@7.29.11':
+    resolution: {integrity: sha512-WCsemW40Cpc6gouC1SrY6PBaZ+oLRlEVY9XBvZBI7il/HyUrb2nJ505wE1MHEFyDZNnrWDEuy4jL50WVHfTTSQ==}
     engines: {node: '>=6.9.0'}
 
   '@babel/types@7.29.8':
@@ -2505,15 +2692,12 @@ packages:
       react: ^18 || ^19
       react-dom: ^18 || ^19
       svelte: ^4.0.0 || ^5.0.0
-      vue: ^3.0.0
     peerDependenciesMeta:
       react:
         optional: true
       react-dom:
         optional: true
       svelte:
-        optional: true
-      vue:
         optional: true
 
   '@langchain/langgraph@1.4.19':
@@ -2522,13 +2706,6 @@ packages:
     peerDependencies:
       '@langchain/core': ^1.1.48
       zod: ^3.25.32 || ^4.2.0
-
-  '@langchain/mcp-adapters@2.0.0':
-    resolution: {integrity: sha512-0h5KzZVqSORz7JAQ0XlA8L+jvN+6mealM+60AdNs62i7vQBCkCTXG/PL7gLuiiPz72mIEzlAb662NL8serAQ+g==}
-    engines: {node: '>=20.10.0'}
-    peerDependencies:
-      '@langchain/core': ^1.2.6
-      '@langchain/langgraph': ^1.4.13
 
   '@langchain/openai@1.5.10':
     resolution: {integrity: sha512-4cxdgolkkXwnAiGEkNrue+ba7jUKjfBwleLCX5DrRVcRGrCc4w5EceblYZOIaHMY6+nhwMqIOtSzBWgcBCLfmw==}
@@ -3384,6 +3561,13 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
 
+  '@vitejs/plugin-vue@6.0.10':
+    resolution: {integrity: sha512-b80aUQh3n+qEzzZm5oQp3rT2QImeCx58K6eFl/RkJ3d65KW0kTuv5lNsLRVAjbW9YRUpo/wzmvzMgV34bTAItA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    peerDependencies:
+      vite: ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
+      vue: ^3.2.25 || ^3.6.0-rc.10
+
   '@vitest/expect@4.1.11':
     resolution: {integrity: sha512-VX2x5vNJXET47KAFzwERI+KRMtTTCSWTfSMKsW7JsUsXV4psq++e3DvZpuTDOpHcxytiDs6p2nhVb2tVDiiUYw==}
 
@@ -3475,6 +3659,33 @@ packages:
 
   '@vscode/ripgrep@1.18.0':
     resolution: {integrity: sha512-ns5lWe44tSfbTMbVUsyB+I1819PVSw4AdpgK0RNkzfWfwy6+3IUNSxwSrfTno1/oWaS/hERNz+XLWVyga2aJBQ==}
+
+  '@vue/compiler-core@3.5.44':
+    resolution: {integrity: sha512-k34nCytbK8PQ1gR2mGROYOw6Pnv/mumqIdrZ3x2tbyXZDWm7ViKGLTfdB+DRrWqEQsLgGJvn0WN9jBif5zCTLQ==}
+
+  '@vue/compiler-dom@3.5.44':
+    resolution: {integrity: sha512-W5AoBFWdw1lQAKiHowkfgFKFab82oSRT6sGsPfw/q1GRjsy/ZJFLHGhJyBRIFN9APLTUduDH9U2JAiPOIyKuYg==}
+
+  '@vue/compiler-sfc@3.5.44':
+    resolution: {integrity: sha512-dzHmQ4jXTpdr5FjIQUeykVakN/uzqFbUo9/C5ikBFg3a3PeM6uRxeczx1ZbXBML0/zJstEh3ygYipzR5Z7b2Pw==}
+
+  '@vue/compiler-ssr@3.5.44':
+    resolution: {integrity: sha512-xr5gb1JVHlfXJwSlRz1FeP6uxoazdzHuMTVLE7up+4Vrqxk219CvxLPxD9NXBt47yvZW7+p4DXfyp4O1fkByIA==}
+
+  '@vue/reactivity@3.5.44':
+    resolution: {integrity: sha512-u+QJdKeBBEADkPdevsL+6E12QlYVfBD8Zcw5qjDQKtamI6l14KyqazJMobhCKelhWN5zpyKUiEDoTyHE93cqWw==}
+
+  '@vue/runtime-core@3.5.44':
+    resolution: {integrity: sha512-uEa/ndwjhrrhnOfb2p+sZy6zeoamJOISqaLSJGk/8R6nABT1ZldpzcJoPzKj+zHVomVBPcmQYyC2r4LtvDV6CQ==}
+
+  '@vue/runtime-dom@3.5.44':
+    resolution: {integrity: sha512-3fc4ARcXVhVBaJ3ujWiNZJARD6pkyRcwG+ZYhMzjKtKUp7MAY0HLwr7r3Smep3Li6ZaWT6ewdmx8XqdaD5oNZg==}
+
+  '@vue/server-renderer@3.5.44':
+    resolution: {integrity: sha512-R4S1UoH4h5Frrauv8Z5XE5TxV9oBiUSgWIC4TyVK1FK+RocRnOLwFA5Xcmo2011RlgJp+AbZCnw6afrhlgRuUQ==}
+
+  '@vue/shared@3.5.44':
+    resolution: {integrity: sha512-H82XLH0DjmSOdbEwO15x3QTo1f5PWEtv237eLpYKc0mqLu+B8hnq16lFWmuBmNurkeiG3wr+oM1FhOll/YVFRg==}
 
   '@yuku-codegen/binding-android-arm64@0.8.7':
     resolution: {integrity: sha512-C/0zV5IhgVdYhGJTwrY0v8dknxlhiKwtVJkMUaexu9/QvRmzlV4vfU3hZlUSgqc2BxQHntL1mCVbDq8j0FRFDw==}
@@ -3976,6 +4187,10 @@ packages:
     resolution: {integrity: sha512-L1l8TNvomm6UVW5B253AGxQagSQr+vGwhMlrrfRS2qmhx46AMpMVJKQYLvWYbysTMY8VoicOvzHzoHMbyzB+4A==}
     engines: {node: '>=10.13.0'}
 
+  entities@7.0.1:
+    resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
+    engines: {node: '>=0.12'}
+
   entities@8.0.0:
     resolution: {integrity: sha512-zwfzJecQ/Uej6tusMqwAqU/6KL2XaB2VZ2Jg54Je6ahNBGNH6Ek6g3jjNCF0fG9EWQKGZNddNjU5F1ZQn/sBnA==}
     engines: {node: '>=20.19.0'}
@@ -4063,6 +4278,9 @@ packages:
   estraverse@5.3.0:
     resolution: {integrity: sha512-MMdARuVEQziNTeJD8DgMqmhwR11BRQ/cBP+pLtYdSTnf3MIO8fFeiINEbX36ZdNlfU/7A9f3gUw49B3oQsvwBA==}
     engines: {node: '>=4.0'}
+
+  estree-walker@2.0.2:
+    resolution: {integrity: sha512-Rfkk/Mp/DL7JVje3u18FxFujQlTNR2q6QfMSMB7AvCBx91NGj/ba3kCfza0f6dVDbw7YlRf/nDrn7pQrCCyQ/w==}
 
   estree-walker@3.0.3:
     resolution: {integrity: sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g==}
@@ -5439,6 +5657,14 @@ packages:
       jsdom:
         optional: true
 
+  vue@3.5.44:
+    resolution: {integrity: sha512-dvvmaOCG7lAMkJTPqPwWeGMsPS6DIsFsfZDUgBp9V6mHf9b3+/wyVwYR4Es+WV6uJC0FKRxp81Obcq0ZwUcGFQ==}
+    peerDependencies:
+      typescript: '*'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
@@ -5613,6 +5839,8 @@ snapshots:
 
   '@babel/helper-plugin-utils@7.29.7': {}
 
+  '@babel/helper-string-parser@7.29.11': {}
+
   '@babel/helper-string-parser@7.29.7': {}
 
   '@babel/helper-validator-identifier@7.29.7': {}
@@ -5623,6 +5851,10 @@ snapshots:
     dependencies:
       '@babel/template': 7.29.7
       '@babel/types': 7.29.8
+
+  '@babel/parser@7.29.12':
+    dependencies:
+      '@babel/types': 7.29.11
 
   '@babel/parser@7.29.8':
     dependencies:
@@ -5659,6 +5891,11 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+
+  '@babel/types@7.29.11':
+    dependencies:
+      '@babel/helper-string-parser': 7.29.11
+      '@babel/helper-validator-identifier': 7.29.7
 
   '@babel/types@7.29.8':
     dependencies:
@@ -6088,14 +6325,6 @@ snapshots:
     transitivePeerDependencies:
       - react
       - react-dom
-
-  '@langchain/mcp-adapters@2.0.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(@langchain/langgraph@1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7))':
-    dependencies:
-      '@langchain/core': 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3)
-      '@langchain/langgraph': 1.4.19(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.6.7)
-      '@modelcontextprotocol/client': 2.3.1
-      '@modelcontextprotocol/core': 2.3.1
-      zod: 4.6.7
 
   '@langchain/openai@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.6.7))(ws@8.21.3))(ws@8.21.3)':
     dependencies:
@@ -6866,6 +7095,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@vitejs/plugin-vue@6.0.10(vite@7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1))(vue@3.5.44(typescript@5.9.3))':
+    dependencies:
+      '@rolldown/pluginutils': 1.0.1
+      vite: 7.3.7(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.1)
+      vue: 3.5.44(typescript@5.9.3)
+
   '@vitest/expect@4.1.11':
     dependencies:
       '@standard-schema/spec': 1.1.0
@@ -6957,6 +7192,60 @@ snapshots:
       '@vscode/ripgrep-win32-arm64': 1.18.0
       '@vscode/ripgrep-win32-ia32': 1.18.0
       '@vscode/ripgrep-win32-x64': 1.18.0
+
+  '@vue/compiler-core@3.5.44':
+    dependencies:
+      '@babel/parser': 7.29.12
+      '@vue/shared': 3.5.44
+      entities: 7.0.1
+      estree-walker: 2.0.2
+      source-map-js: 1.2.2
+
+  '@vue/compiler-dom@3.5.44':
+    dependencies:
+      '@vue/compiler-core': 3.5.44
+      '@vue/shared': 3.5.44
+
+  '@vue/compiler-sfc@3.5.44':
+    dependencies:
+      '@babel/parser': 7.29.12
+      '@vue/compiler-core': 3.5.44
+      '@vue/compiler-dom': 3.5.44
+      '@vue/compiler-ssr': 3.5.44
+      '@vue/shared': 3.5.44
+      estree-walker: 2.0.2
+      magic-string: 0.30.21
+      postcss: 8.5.32
+      source-map-js: 1.2.2
+
+  '@vue/compiler-ssr@3.5.44':
+    dependencies:
+      '@vue/compiler-dom': 3.5.44
+      '@vue/shared': 3.5.44
+
+  '@vue/reactivity@3.5.44':
+    dependencies:
+      '@vue/shared': 3.5.44
+
+  '@vue/runtime-core@3.5.44':
+    dependencies:
+      '@vue/reactivity': 3.5.44
+      '@vue/shared': 3.5.44
+
+  '@vue/runtime-dom@3.5.44':
+    dependencies:
+      '@vue/reactivity': 3.5.44
+      '@vue/runtime-core': 3.5.44
+      '@vue/shared': 3.5.44
+      csstype: 3.2.3
+
+  '@vue/server-renderer@3.5.44':
+    dependencies:
+      '@vue/compiler-ssr': 3.5.44
+      '@vue/runtime-dom': 3.5.44
+      '@vue/shared': 3.5.44
+
+  '@vue/shared@3.5.44': {}
 
   '@yuku-codegen/binding-android-arm64@0.8.7':
     optional: true
@@ -7345,6 +7634,8 @@ snapshots:
       graceful-fs: 4.2.11
       tapable: 2.3.3
 
+  entities@7.0.1: {}
+
   entities@8.0.0: {}
 
   es-define-property@1.0.1: {}
@@ -7465,6 +7756,8 @@ snapshots:
       estraverse: 5.3.0
 
   estraverse@5.3.0: {}
+
+  estree-walker@2.0.2: {}
 
   estree-walker@3.0.3:
     dependencies:
@@ -8978,6 +9271,16 @@ snapshots:
       jsdom: 27.4.0
     transitivePeerDependencies:
       - msw
+
+  vue@3.5.44(typescript@5.9.3):
+    dependencies:
+      '@vue/compiler-dom': 3.5.44
+      '@vue/compiler-sfc': 3.5.44
+      '@vue/runtime-dom': 3.5.44
+      '@vue/server-renderer': 3.5.44
+      '@vue/shared': 3.5.44
+    optionalDependencies:
+      typescript: 5.9.3
 
   w3c-xmlserializer@5.0.0:
     dependencies:

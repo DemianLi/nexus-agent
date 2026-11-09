@@ -1,8 +1,18 @@
 # 開發環境的已知坑
 
-在 Claude Code on the web 的遠端容器裡開發這個 repo 時會撞到的東西，以及繞法。
+開發這個 repo 時會撞到的東西，以及繞法；clone 之後要設的 git 選項也在這裡。
 
 **這份文件裡的腳本不會被任何東西自動執行。** 它改的是 Claude Code 自己的 hook，不是 nexus-agent 的程式碼，所以刻意不放成可執行檔——要用的人自己貼進 environment 設定。
+
+## clone 之後設 `fetch.prune`
+
+PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。clone 之後各自設定一次，讓 `git fetch`／`git pull` 自動清掉：
+
+```bash
+git config fetch.prune true
+```
+
+這條寫在 `.git/config`，不進版控。
 
 ## Stop hook 把合併後的分支誤報成「未推送」
 

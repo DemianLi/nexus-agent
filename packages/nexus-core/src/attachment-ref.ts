@@ -91,12 +91,55 @@ export interface ImageBlock {
   readonly offloaded?: true;
 }
 
-/** 一個參照放進訊息內容時的區塊。 */
+/**
+ * 一個參照放進訊息內容時的區塊。**只挑型別裡的欄位**（[#2323](https://github.com/DemianLi/nexus-agent/issues/2323)）：
+ * 參照帶了型別以外的鍵也不進訊息（`isAttachmentRef` 不擋多出來的鍵，例如命令 handler 經 `steer` 傳進來的），
+ * 所以訊息的層數不隨參照多帶的鍵變深（`apps/harness/src/checkpoint-serde.ts` 靠這一點）。選填欄位沒有就不出現；
+ * 鍵的順序同附件儲存建參照的順序。
+ */
 export function attachmentBlock(ref: AttachmentRef): FileBlock | ImageBlock {
-  const { type: kind, ...attachment } = ref;
-  return kind === 'file'
-    ? { type: 'nexus-file', attachment: attachment as FileAttachmentRef }
-    : { type: 'nexus-image', attachment: attachment as ImageAttachmentRef };
+  return ref.type === 'file'
+    ? { type: 'nexus-file', attachment: fileRefFields(ref) }
+    : { type: 'nexus-image', attachment: imageRefFields(ref) };
+}
+
+/**
+ * 每一格都要列，沒有的填 `undefined`：參照的型別多一格、這裡沒挑，就編不過。
+ */
+type AllFields<T> = { readonly [K in keyof Required<T>]: T[K] | undefined };
+
+/** 拿掉值是 `undefined` 的格，其餘照列的順序。 */
+function definedFields<T>(fields: AllFields<T>): T {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as T;
+}
+
+/** 檔案參照只留型別裡的欄位，順序同附件儲存建參照的順序（`apps/harness/src/attachment-store.ts`）。 */
+function fileRefFields(ref: FileAttachmentRef): FileAttachmentRef {
+  return definedFields<FileAttachmentRef>({
+    attachmentId: ref.attachmentId,
+    name: ref.name,
+    bytes: ref.bytes,
+  });
+}
+
+/** 圖片參照只留型別裡的欄位（`originalDimensions` 底下也是），順序同附件儲存建圖片參照的順序（`apps/harness/src/attachment-store.ts`）。 */
+function imageRefFields(ref: ImageAttachmentRef): ImageAttachmentRef {
+  const original = ref.originalDimensions;
+  return definedFields<ImageAttachmentRef>({
+    attachmentId: ref.attachmentId,
+    mediaType: ref.mediaType,
+    bytes: ref.bytes,
+    width: ref.width,
+    height: ref.height,
+    name: ref.name,
+    originalDimensions:
+      original === undefined
+        ? undefined
+        : definedFields<NonNullable<ImageAttachmentRef['originalDimensions']>>({
+            width: original.width,
+            height: original.height,
+          }),
+  });
 }
 
 /** 區塊還原成參照（{@link attachmentBlock} 的反向）；不是附件區塊回 `undefined`。 */

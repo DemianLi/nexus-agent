@@ -2,7 +2,7 @@
  * **基座形狀**：`returnDirect` 的路由只看「最後一則 ToolMessage 的 `name`」（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）。
  *
  * `@nexus/core` 的 `turn-conclusion.ts` 靠這個形狀做到「工具標了才收這一輪」，`@nexus/plugin-plan-mode` 的 `exit_plan_mode` 用它
- * （`EXIT_PLAN_MODE_RETURN_DIRECT` 的 JSDoc）：
+ * （`EXIT_PLAN_MODE_CONCLUDES_TURN` 的 JSDoc）：
  * 工具設 `returnDirect: true`，**其餘結局的結果不帶 `name`**，路由就不收。這個行為是 langchain 內部的條件邊
  * （`ReactAgent.js:359-365`，`langchain@1.5.10` 的 `#createToolsRouter`），沒有公開契約。
  * **這一檔用沒有 plan-mode 的最小 agent 把它釘住**——升版後形狀變了，紅在這裡，而不是紅在 plan-mode 的一堆情境測試裡讓人猜原因。

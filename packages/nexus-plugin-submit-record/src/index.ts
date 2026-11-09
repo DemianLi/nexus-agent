@@ -60,7 +60,13 @@
  * 「檔案沒建出來，而且線上什麼都沒說」。所以 `readRaw` 一定包在 try/catch 裡。
  * 絆索見 `apps/harness/src/submit-record-wire.test.ts` 最後那一段。
  *
- * ## 錯誤一律回 `status: 'error'` 的 ToolMessage，不 `throw`
+ * ## 寫進 backend 就算數，不送 LangGraph 的 state（#2352；`.docs/agent-loop-off-langchain-design-2026-11-03.md` 的 Q11）
+ *
+ * backend 的 `write` 回 `filesUpdate`，意思是「我沒寫，要你把這份 state update 送出去才算數」。這個工具**不送 state**，
+ * 所以那一支一律拒絕，不說「已經寫進」。宿主交的 backend 都不走這一支：零參數的 `StateBackend` 在 `write` 裡自己送，
+ * `FilesystemBackend` 直接落盤，兩者都不回 `filesUpdate`。
+ *
+ * ## 錯誤一律回 `ok: false`，不 `throw`
  *
  * 與 `@nexus/plugin-ask-user` 同一條實測教訓：**resume 那一輪從工具裡拋出去**會從
  * LangGraph 的 stream mux 逃成 unhandled rejection，整場 run 當場死。而這個工具的每一次
@@ -69,17 +75,18 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
-import type { StructuredToolInterface } from '@langchain/core/tools';
-import { Command } from '@langchain/langgraph';
 import type { Context } from '@nexus/cordis';
 import { fsToken } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import { toolCallIdOf, toolRefusal } from '@nexus/tool-result';
 import { toolsToken } from '@nexus/tools';
-import type { ToolGateListener } from '@nexus/tools';
+import type {
+  JsonSchema,
+  NexusTool,
+  NexusToolResult,
+  ToolExec,
+  ToolGateListener,
+} from '@nexus/tools';
 import { resolveBackend } from 'deepagents';
 import type { BackendProtocolV2 } from 'deepagents';
 import { z } from 'zod';
@@ -171,7 +178,17 @@ function appendRow(
 }
 
 /**
- * 拿不到 backend 時模型看到的那一句（前面由 `toolRefusal` 加 `Error: `）。帶 plugin 名與 `backend`，
+ * backend 的 `write` 回了 `filesUpdate`（寫入要靠 state update 才算數）時模型看到的那一句，見模組註解。
+ *
+ * @param filePath - 要寫的檔。
+ * @returns 那一句。
+ */
+export function submitRecordStateUpdateMessage(filePath: string): string {
+  return `寫不進 "${filePath}"：這個 backend 要另外送一份 state update 才算寫進去，submit-record 不送，所以沒有寫。`;
+}
+
+/**
+ * 拿不到 backend 時模型看到的那一句（前面由宿主加 `Error: `）。帶 plugin 名與 `backend`，
  * 同 dsh `tool-bash: the mounted bash executor confines but ctx.sandboxPolicy is missing` 的寫法：
  * 讀的人一眼看得出是誰、缺什麼。
  */
@@ -184,26 +201,27 @@ export const SUBMIT_RECORD_NO_BACKEND_MESSAGE =
  * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/submit-record.fixture.ts`）都從這裡
  * 取，它們之間唯一不同的是「這次呼叫的 fs 把手怎麼來」，所以那一格是參數。
  *
- * @param fsFor - 這次呼叫的 fs 查找。**在呼叫當下才呼叫它**，不在建工具的時候；參數是工具 handler 的第二個參數（整份原樣，
- *   thread 身分在裡面）。把手的 `backend()` 也在這次呼叫才讀。
+ * @param fsFor - 這次呼叫的 fs 查找。**在呼叫當下才呼叫它**，不在建工具的時候；參數是這次呼叫的 `ToolExec`。
+ *   把手的 `backend()` 也在這次呼叫才讀。
  * @returns 可以登記的工具。
  */
-export function createSubmitRecordTool(
-  fsFor: (invocation: unknown) => FsLookup,
-): StructuredToolInterface {
-  return tool(
-    async (args: { file_path: string; record: Record<string, string> }, runtime?: unknown) => {
-      const callId = toolCallIdOf(runtime) ?? '';
-      // 前綴由 `toolRefusal` 加（#318）：dsh 的寫入失敗是拋 `FsError`，由 `toolErrorResult` 渲染。
-      const failed = (message: string): ToolMessage =>
-        toolRefusal(message, { callId, name: SUBMIT_RECORD_TOOL_NAME });
+export function createSubmitRecordTool(fsFor: (exec: ToolExec) => FsLookup): NexusTool {
+  return {
+    name: SUBMIT_RECORD_TOOL_NAME,
+    description: SUBMIT_RECORD_DESCRIPTION,
+    parameters: z.toJSONSchema(submitSchema, { io: 'input' }) as JsonSchema,
+    execute: async (raw, exec): Promise<NexusToolResult> => {
+      const args = submitSchema.parse(raw);
+      // 前綴由宿主加（#318）。
+      const failed = (message: string): NexusToolResult => ({ ok: false, content: message });
 
       // **拿不到就拒絕，不退回預設**，見模組註解。
-      const found = fsFor(runtime);
+      const found = fsFor(exec);
       if (found.kind !== 'ok') return failed(SUBMIT_RECORD_NO_BACKEND_MESSAGE);
       const backend = found.fs.backend();
       if (backend === undefined) return failed(SUBMIT_RECORD_NO_BACKEND_MESSAGE);
-      const fs = await resolveBackend(backend, runtime as never);
+      // 把手的 backend 是實例，不是工廠，所以 `resolveBackend` 不讀第二個參數。
+      const fs = await resolveBackend(backend, undefined as never);
       const current = await readWhole(fs, args.file_path);
       if (current.binary === true) {
         return failed(`"${args.file_path}" 讀出來不是文字——這個工具只寫得了 CSV，所以沒有寫。`);
@@ -215,25 +233,13 @@ export function createSubmitRecordTool(
       if (written.error !== undefined)
         return failed(`寫不進 "${args.file_path}"：${written.error}`);
 
-      const message = new ToolMessage({
+      if (written.filesUpdate) return failed(submitRecordStateUpdateMessage(args.file_path));
+      return {
+        ok: true,
         content: `已經寫進 "${args.file_path}"：${formatCsvRow(Object.values(args.record))}`,
-        tool_call_id: callId,
-        name: SUBMIT_RECORD_TOOL_NAME,
-      });
-      // **`filesUpdate` 那一支不能省。** `StateBackend` 是 checkpoint backend，它的寫入靠這
-      // 份 state update 才算數；只回 ToolMessage 的話沒有 `--workspace` 的組裝**每一次送出
-      // 都會靜靜地什麼都沒寫**。形狀照 `write_file`（`deepagents@1.13.1`）。
-      if (written.filesUpdate) {
-        return new Command({ update: { files: written.filesUpdate, messages: [message] } });
-      }
-      return message;
+      };
     },
-    {
-      name: SUBMIT_RECORD_TOOL_NAME,
-      description: SUBMIT_RECORD_DESCRIPTION,
-      schema: submitSchema,
-    },
-  );
+  };
 }
 
 /**
@@ -278,10 +284,10 @@ export const submitRecordGate: ToolGateListener = (exec, next) =>
 export const name = 'submit-record';
 
 /**
- * 要的服務：`tools`（**`^1.2.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，
+ * 要的服務：`tools`（**`^2.0.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，
  * 提供者的 `check` 讀得到；`tools` 提供者比 1.2.0 舊時，這一列在 `requires` 階段就掉，不會在「閘門沒掛」的狀態下起來。
  */
-export const inject = injectOf(need(toolsToken, '^1.2.0'), need(fsToken, '^2.0.0'));
+export const inject = injectOf(need(toolsToken, '^2.0.0'), need(fsToken, '^2.0.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：沒有資料設定。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = z.strictObject({});
@@ -292,7 +298,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^1.2.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: fsToken.name, range: '^2.0.0' },
   ],
   config: Config,
@@ -317,7 +323,7 @@ export function apply(ctx: Context): void {
   const tools = service(ctx, toolsToken);
   if (tools.gate === undefined) {
     throw new Error(
-      'submit-record: tools 服務沒有 gate()（要 @nexus/tools ^1.2.0），不讓沒有核准閘門的 submit_record 起來。',
+      'submit-record: tools 服務沒有 gate()（要 @nexus/tools ^2.0.0），不讓沒有核准閘門的 submit_record 起來。',
     );
   }
   tools.register(createSubmitRecordTool((invocation) => fs.forCall(invocation)));

@@ -92,7 +92,7 @@
 - **工作區裡往外指的連結讀不出去。** 包括 `read_file`、`ls`、`grep`、`glob`，以及 `submit_record` 讀表頭、技能目錄的掃描。
   目錄連結與檔案連結都拒，連結底下還不存在的路徑也拒。指向 harness home 或 `.env` 的連結因此讀不到 key。
 - **指向根內的連結 `read_file` 讀得到，`grep`、`glob` 搜不到**（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。搜尋掃目錄時直接略過連結，`glob` 的起點指到連結回空，`grep` 明確指到連結才會搜那份內容；
-  所以連結本身不會出現在目錄搜尋的結果裡，要找內容請看本尊，要讀就給連結的路徑。對連結用 `edit_file` 會被拒，訊息是檔案「不見了」，重讀也一樣，要改就改本尊。
+  所以連結本身不會出現在目錄搜尋的結果裡，要找內容請看本尊，要讀就給連結的路徑。讀過連結之後，對連結用 `edit_file`、`write_file` 改的是本尊，連結本身留著；沒讀過就改，兩支都回 `FS_NOT_OBSERVED`（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
 - **技能目錄裡有一條往外指的連結，全部技能都會消失。** 技能掃描讀不到任何一份就算不完整，不完整時一份都不列：
   模型清單、`/名字`、web 的技能清單都是空的，serve 記含 `掃描不完整` 的 warn。技能要放在工作區裡，不要用連結指到外面
   （遷移見 `docs/upgrade-guide/v0.5.19/read-outward-symlinks-refused/guide.md`）。
@@ -104,7 +104,7 @@
 - 這幾條由 `apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
   `apps/harness/src/read-containment-tools.test.ts`。
 - 這是 policy fence，不是 kernel boundary：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
-- 想再擋根內的特定路徑，在 `permissions` 自己加 deny 規則。
+- 出貨的設定沒有能寫 deny 規則的列，營運者擋不了根內的單一路徑：不要模型讀寫的檔，就不要放進工作區。deny 規則只有插件能在 `apply` 裡呼叫 `registry.permissions.deny()` 加，出貨沒有這樣的插件。插件加的規則也比經符號連結解開之後的位置：連結指到被擋的路徑，經連結讀、寫、改、刪，以及經目錄連結列目錄與搜尋，同樣被拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)；遷移見 `docs/upgrade-guide/v0.6.0/deny-rules-follow-symlinks/guide.md`）。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
 backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
@@ -478,14 +478,14 @@ connection:
 
 **今天的形狀**
 
-- serve 只綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
-- 唯一支援的連法是 SSH 轉 port（同一節）。信任圍欄只認 loopback 的 `Host`（[#387](https://github.com/DemianLi/nexus-agent/issues/387)），所以經反向代理連進來今天沒有支援，等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（`--host` 與 TLS）。
+- serve 預設綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
+- 連法有兩種：SSH 轉 port（下面這幾條），或 serve 改聽 Unix socket、經同一台主機上的反向代理連進來（〈[放在反向代理後面](#放在反向代理後面)〉）。後者不開 port，同主機的其他帳號連不進 serve。
 
 - 網頁的兩條下行共用一條 WebSocket（`/threads/mux`，[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)），解掉 HTTP/1.1 每個來源 6 條連線的上限，分頁開多也不會卡住。升級請求一定要帶同源的 `Origin` 與有效 cookie。一台 serve 最多 1024 條 socket，握手失敗或超過上限時，那一頁改走 SSE，30 秒後再試；走 SSE 時第三分頁起會排隊。
 
 **做什麼**
 
-- 不改綁位址、不架反向代理。
+- 下面這幾條是 SSH 轉 port 的部署：不改綁位址。經反向代理的部署照〈[放在反向代理後面](#放在反向代理後面)〉。
 - 只為了連 serve 而開的主機帳號，在 `sshd_config` 裡用 `Match User <帳號>` 收窄成「只能把本機 port 轉到 serve 那一個 port、不能執行指令」：
   - `AllowTcpForwarding local`、`PermitOpen 127.0.0.1:8787`：只准本機轉發、只准轉到 serve。`PermitOpen` 逐字比對主機字串，寫成 `localhost:8787` 的轉發會被拒；
   - `AllowStreamLocalForwarding no`：Unix socket 轉發由它管，預設是開的。不要靠 `PermitOpen` 順便擋：OpenSSH 9.2 實測 `PermitOpen` 會一起擋，其他版本沒有量；
@@ -613,7 +613,7 @@ header（世代檔的第一行；舊兩檔是 `.header.json`）自格式 30 起�
 **停 `serve` 按一次 Ctrl-C 就好**（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。第一次
 訊號會把每一條 thread 的日誌排空、關檔之後才結束（退出碼 130；`SIGTERM` 是 0）；**收尾失敗**（磁碟滿寫不完這類，
 原因印在標準錯誤）**退出碼是 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)），沒寫進去的那幾筆重啟後不在。收尾最多等 5 秒，
-到了就強制結束，退出碼是訊號的碼，不代表都收好了，這條路也不印訊息（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
+到了就強制結束，退出碼仍是訊號的碼，不代表都收好了：這時標準錯誤印一行 `serve 收尾逾時（5000 毫秒）：還有沒排空的…`，伺服器日誌也記同一行（`warn`，logger 名 `serve`；門檻調到 `error` 就只剩標準錯誤那一行）。沒有第二次訊號時，要分出這次有沒有收完就看這一行（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
 檢查點把使用者那句話與之前每一步先寫下去（`session-checkpoint-policy`，見下面 core 那幾顆），所以
 最多丟最後一步的尾巴。用腳本或監管程式停它時，送一次訊號、等它自己結束，不要連送。
 
@@ -667,6 +667,14 @@ Windows 上 `rename` 遇到暫時性的 `EACCES`／`EBUSY`／`EPERM` 會有界�
 thread id、截到第幾個位元組、丟了幾個位元組。**截掉的位元組不另存**，warn 是唯一的紀錄。唯讀的讀取（列表、搜尋、冷讀）
 只是不算那一段，不截、不講。位元組偏移算在原始位元組上，所以磁碟損壞造成的非法 UTF-8 不會讓截斷多留幾個位元組。
 離線掃描（`eval/session-scan.ts`）仍是 strict：任何壞行都報成讀不了。
+
+**事件之間的關係錯掉的日誌，讀盤時拒開**（[#1597](https://github.com/DemianLi/nexus-agent/issues/1597)）。續接與唯讀打開讀完之後，
+逐顆檢查輪的開關、工具結果配呼叫、模型呼叫的起訖與 `modelCall`、重試連號與開跑、送出佇列，規則跟執行期的不變量
+檢查同一支（`@nexus/core` 的 `createSessionRelationshipChecker`）；標題的來源另由 harness 驗。第一筆違規就回「存檔壞了：第 N 行不合
+事件之間的關係（規則）：…」（標題來源不對時是「第 N 行的 session/title …」）；
+serve 上那條對話建不起來，回應與伺服器日誌照上面「對話建不起來、又沒有專用碼時」那一段。出貨過的寫入器寫得出的形狀都照常讀回，會被拒的是手改、拼接或寫壞的日誌。
+列表、搜尋走撿回，不跑這一道；離線掃描也不跑。升級時要做什麼見
+[`upgrade-guide/v0.6.0/session-log-relationships-on-read`](upgrade-guide/v0.6.0/session-log-relationships-on-read/guide.md)。
 
 **日誌寫不下去時，下一個模型或工具呼叫就不做了**（同上，#599）。以前是背景寫入被拒就 warn 一行、
 暫停自動寫入、這一輪照跑，等到收尾才響亮地失敗；現在檢查點排空被拒時：模型不被叫，這一輪以失敗
@@ -730,6 +738,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 **模型讀附件的範圍**（#1773，#1675 Q3 (a)）：儲存仍是整台 serve 一份，但模型經 `/attachments/…` 讀檔的路由**只露出這條 thread 的日誌引用過的檔案**，跟上面讀圖同一個判準。`read_file`、`ls`、`glob`、`grep` 都只看得到（也只搜得到）引用過的檔；沒引用過的路徑，`read_file` 回的錯誤跟「檔不存在」逐字一樣，不細分「存在但你不能看」。**呼叫當下才判**：路由讀這條 thread 的 root 日誌現在的樣子，第二輪才附上的檔，第二輪就讀得到；日誌還沒接上或已卸下時什麼都不露出。判準是檔案參照的 `attachmentId` 與檔名**都**要對上：同樣的位元組被不同的人用不同的檔名上傳，各有一條檔名別名，只露出自己引用的那一條。前景與背景子代理用 root 的這一個路由，讀得到 root 引用過的，讀不到別條 thread 的。**不算外漏**：B 自己上傳了位元組完全相同的檔，B 讀得到它自己的那一條（內容定址的結果）。**升級影響**：舊 thread 也套這條——它們的日誌本來就記著自己附過什麼，所以自己附過的檔照常讀得到；以前靠「別條 thread 的檔案路徑」讀到東西的做法（例如使用者把另一條 thread 的 `/attachments/…` 路徑貼進來）升級後讀不到，要在這條 thread 重新附上。偏離 dsh 的理由 2（一台主機多人共用、0700 分不開人），登記在 `attachment-store.ts` 檔頭偏離 2。
 
 **附件物件損毀（`ATTACHMENT_CORRUPT`）**（#1338）：附件是內容定址的，物件的路徑就是它內容的 sha256。**這個碼的意思是物件的內容重算出來對不上路徑上的雜湊**（磁碟損毀、寫到一半被中斷、有人動過儲存目錄；大小對不上參照也算），harness 不把來路不明的位元組交出去（送模型那一份的快取例外：它不驗雜湊，見上一段）。**三個地方會撞到**：讀圖（網頁取圖回 `unknown_error`、harness 記一行 `[讀圖] thread … 的圖 sha256:… 讀不回來`，原因是「圖片的內容對不上它的雜湊」或「圖片的大小對不上參照」；組給模型的請求把那張圖換成 `is no longer available in attachment storage` 的佔位字，這一條不記警告，所以只看佔位字會漏掉）；上傳檔案與送出內嵌圖時，碰到已經存在的同雜湊物件也會重算，對不上就整個上傳失敗（`unknown_error`，serve 的日誌有「既有物件的內容對不上它的雜湊（sha256:…），不拿來去重」），不會回一張指向壞物件的收據。
+
+**做不出送模型的那一份不算損毀**（#2071）：落盤那一份讀得回來、雜湊與檔頭都對，只是轉不出送模型的那一份（例如規範化以前存下、檔頭之後壞掉的舊圖解不開）。組請求時那張圖換成**另一句**佔位字（說圖還在、只是轉不出能送模型的格式，請使用者用 PNG 或 JPEG 重新附上），跟上面「已不在儲存裡」那一句分得開；serve 的日誌記一行 `送模型的圖做不出來（sha256:…），這張圖換成佔位字：<原因>`，同一張圖在同一個 serve 行程裡只記第一次，重啟之後第一次用到再記一次。沒有記住失敗：之後每一輪照樣重新轉碼、照樣換佔位字。不用照下面的步驟修物件：物件跟當初存的位元組一樣（雜湊對得上），刪掉重傳也還是同一份；解不開的那種，同一個檔重傳在收圖那一關（整張解碼，見〈送出時帶附件〉）就會被拒。要讓模型看到，請使用者把圖另存成 PNG 或 JPEG 再附上。
 
 **壞物件在** `<harness home>/attachments/v1/file-objects/<雜湊前兩碼>/<sha256>`（物件是 `0400`、目錄是 `0700`）；雜湊在警告的 `sha256:…` 或上傳失敗的訊息裡；只有佔位字時只看得到前八碼，去 `file-objects/<前兩碼>/` 底下找前綴相同的那個。**怎麼修（2026-10-11 在 macOS、本機檔案系統實測）**：
 
@@ -812,7 +822,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 - **serve 沒在跑的時候別開那個網址。** cookie 是持有即用的憑證：別人趁 serve 沒跑先佔住同一個 port，
   你的瀏覽器（經 SSH 轉 port 也一樣）就會把 cookie 送給他，等你在同一個 port 重開 serve，那顆 cookie
   仍然有效。懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
-- **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
+- **在多人共用的主機上**，從自己的電腦用 SSH 轉 port 連進去，或經反向代理（〈[放在反向代理後面](#放在反向代理後面)〉）。SSH 轉 port 是這樣：
 
   ```bash
   ssh -L 8787:127.0.0.1:8787 <主機>
@@ -844,6 +854,358 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 來源（同一個主機加 port，經 SSH 轉 port 也一樣）最多同時開 6 條連線，所以開到第 3 個分頁就用滿了。用滿之後，
 任何一個分頁再送出的請求（送訊息、列清單）都要排隊等一條連線空出來，看起來就是按了沒反應；再開一個分頁的話，
 連載入網頁本身都要排隊，會卡在載入畫面。關掉多的分頁就好。
+
+## 嵌入方換票登入
+
+[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)，地圖 [#2365](https://github.com/DemianLi/nexus-agent/issues/2365) 第 4 點。
+嵌入 `<nexus-chat>` 的系統（嵌入方）用自己後端手上的服務憑證，替一位已經登入它的使用者，向 serve 換一張只能用一次的短效登入票；
+瀏覽器裡的元件再拿這張票兌換一顆**只能打嵌入路由**的 cookie。
+
+**現況**：表上有的人換得到票、兌換得到嵌入 cookie，只打得開自己開的對話（下面〈對話歸誰〉）。元件用 `el.signIn(ticket)` 兌換，快到期或被 `401` 擋下時發 `nexus-ticket-needed` 通知宿主頁換新票，見 [`embed-chat.md`](embed-chat.md) 的〈換票登入〉。
+
+### 設定
+
+`embed-login` 那一列，起動期讀一次，改了要重啟。出廠值：
+
+```yaml
+- id: embed-login
+  name: '#settings/embed-login'
+  config:
+    embedders: []          # 出廠沒有嵌入方：沒有換票的路由
+    ticketTtlSeconds: 60   # 票多久沒兌換就作廢，10 到 300
+    cookieMaxAgeSeconds: 900   # 兌換出來的嵌入 cookie 多久失效，60 到 86400
+```
+
+加一個嵌入方，在自己的 `cordis.patch.yml` 整份寫出 `config`（patch 是整份替換）：
+
+```yaml
+- id: embed-login
+  config:
+    embedders:
+      - id: crm                                   # 小寫英數與 -，最長 32 字；寫進稽核與預設的憑證檔名
+        # credentialFile: /var/lib/nexus-agent/embed-credential-crm   # 絕對路徑；不寫就是 <home>/embed-credential-<id>
+    ticketTtlSeconds: 60
+    cookieMaxAgeSeconds: 900
+```
+
+- **服務憑證檔**：serve 啟動時讀，沒有就建（目錄 `0700`、檔 `0600`，內容是 43 字元的 base64url 加換行）；權限過寬或內容認不得就**起不來**。把檔的內容交給嵌入方的後端，只放在後端，不能進瀏覽器。要換憑證就刪掉檔再重啟。
+- `id` 不能重複；每個嵌入方的憑證檔（含預設路徑）各自一個，也不能跟指標的 token 檔同一個：撞到就**起不來**，訊息指名兩邊。比的是絕對路徑，經 symlink 換了名字的同一個檔看不出來。
+- **有嵌入方就要有身分對應表**（下一節），沒有就**起不來**。
+- 啟動日誌印一行 `嵌入換票：開 POST /embed/exchange（嵌入方 crm，憑證在 …；稽核記在 …）；兌換 POST /embed/session，嵌入 cookie 900 秒；身分對應表 <路徑>（N 筆）`，**不印憑證本身**。沒有嵌入方時印 `嵌入換票：關（embed-login 沒有嵌入方）`。
+
+### 身分對應表
+
+#1827 D231：嵌入方說「這是我的使用者 alice」，要照管理者寫的表對到 nexus 的使用者代號，不在表上就拒；服務憑證外洩時，只能冒充表上的人。
+換票、兌換、每一個帶嵌入 cookie 的請求都查這張表。
+
+`<home>/embed-identities.json`，權限 `0600`，**由管理者寫**，serve 不會替你建。位置固定，不能在設定裡改：表是憑證層級的東西，不跟插件設定放在一起。
+
+```json
+{
+  "version": 1,
+  "mappings": [
+    { "embedder": "crm", "subject": "alice", "userId": "alice" },
+    { "embedder": "erp", "subject": "A12345", "userId": "alice" }
+  ]
+}
+```
+
+- `embedder`：`embed-login` 設定裡有的嵌入方 id。
+- `subject`：嵌入方換票時送的對方帳號，1 到 256 字，**照原樣比**（大小寫不同就是不同的人）。
+- `userId`：nexus 這邊的使用者代號，小寫英數開頭、只含小寫英數與 `. _ -`，最長 64 字。帳號系統（#1428）上線時，這一欄要遷成帳號 id。
+- 同一組 (`embedder`, `subject`) 只能出現一次；不同系統的帳號可以對到同一個 `userId`（同一個人從兩個系統進來）。
+  **從兩個系統進來看到的對話是分開的**：對話歸「使用者代號＋嵌入方」，同一個人從另一個系統進來看不到這邊的對話，見〈對話歸誰〉。
+- 不認得的欄位、多的欄位都算不合規，不默默忽略。檔不能超過 1 MiB。
+- **啟動時**：檔不在、權限過寬、不合規就**起不來**。訊息指名檔與第幾筆，**不印 `subject`、`userId` 的值**。
+- **跑著時改表不用重啟**：查表前先看檔的修改時間、大小、inode 與權限（最多每秒一次），變了才重讀。
+  - 從表上拿掉一個人：之後他換不到票，手上還沒到期的嵌入 cookie 最多晚一秒，下一個請求就是 `401`，已經開著的多工連線下一條串流也是。
+    **已經開著的下行最多晚兩秒切掉**（看檔最多晚一秒、重驗每秒一輪，見〈兌換成嵌入 cookie〉），還沒送出的事件不送。
+  - 改壞了（不合規、權限變寬、被刪）：**一律拒**，換票與兌換回 `403 identity_rejected`（稽核的 `reason` 是 `identity_table_invalid`），嵌入 cookie 一律 `401`，已經開著的嵌入版下行同樣切掉；伺服器日誌記一行（原因變了再記），不印 `subject`、`userId` 的值。修好之後下一次查表自動恢復，日誌記一行恢復。
+
+### 換票
+
+```
+POST /embed/exchange                 # 代理後面是 /nexus/embed/exchange
+Authorization: Bearer <服務憑證>
+Content-Type: application/json
+
+{ "subject": "<對方帳號>", "sessionId": "<對方的登入 session id>" }
+```
+
+| 回應 | 什麼時候 |
+| --- | --- |
+| `200 { "ticket", "expiresAt" }` | 發票。`expiresAt` 是毫秒時間戳 |
+| `401 unauthorized` | 缺憑證、憑證錯、不是 `Bearer <值>` 的形狀：**一律同一個回應**，看不出是哪一種、也看不出有哪些嵌入方 |
+| `403 { "error": "identity_rejected" }` | 這個嵌入方的這個對方帳號不在對應表上（稽核的 `reason` 是 `not_mapped`），或對應表跑著時壞了（`identity_table_invalid`） |
+| `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好這兩個欄位、欄位空或超過 256 字、本文超過 4096 位元組 |
+| `503 { "error": "capacity" }` | 還沒兌換、還沒過期的票已有 1024 張 |
+| `500` | 稽核紀錄寫不進去：不發票 |
+| `403`（純文字） | Host 不是 loopback 也不是 `--trusted-host` 指名的，或 `Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源；同 wire |
+| `405` | 不是 `POST` |
+
+- 憑證決定是哪一個嵌入方，本文裡沒有嵌入方 id。serve 拿請求帶的值跟每一個嵌入方的憑證各比一次（比雜湊，長度固定、不提早結束）。
+- **票只放在記憶體**：只能兌換一次，到期或用過就刪，serve 重啟就全部作廢。續期就是用同一個 `sessionId` 再換一張。
+- 瀏覽器的會話 cookie 換不到票；服務憑證也打不了 wire 與指標。
+
+### 兌換成嵌入 cookie
+
+元件在瀏覽器裡拿票打（同源，經代理）：
+
+```
+POST /embed/session                  # 代理後面是 /nexus/embed/session
+Content-Type: application/json
+
+{ "ticket": "<票>" }
+```
+
+| 回應 | 什麼時候 |
+| --- | --- |
+| `200 { "expiresAt", "identityFingerprint", "threadId"? }` 加 `Set-Cookie` | 兌換成功。`expiresAt` 是 cookie 失效的毫秒時間戳；`identityFingerprint` 見下面「身分指紋」；`threadId` 見下面「回到上一條」 |
+| `401 { "error": "ticket_invalid" }` | 沒有這張票、用過了、serve 重啟過：**一律同一個回應** |
+| `401 { "error": "ticket_expired" }` | 票過了 `ticketTtlSeconds` 才來兌換 |
+| `403 { "error": "identity_rejected" }` | 換票之後對應被撤掉、或對到了別的使用者：兌換時會再對一次 |
+| `400 { "error": "bad_request", "reason" }` | Content-Type 不是 `application/json`、本文不是 UTF-8 或 JSON、不是剛好一個 `ticket` 欄位、票不是 1 到 256 字的字串、本文超過 1024 位元組 |
+| `500` | 稽核紀錄寫不進去：不設 cookie |
+| `403`（純文字）、`405` | 同換票 |
+
+- **嵌入 cookie 跟獨立頁面那顆是兩顆**：名字是 `nexus-embed-…`（獨立頁面是 `nexus-auth-…`），簽章用從同一把密鑰導出的另一把，值搬到對方的名字底下也驗不過。屬性同獨立頁面那顆（`HttpOnly`、`SameSite=Strict`、`Path=/`、不設 `Domain`），經代理照樣由 `proxy_cookie_path` 改成 `/nexus/`。
+- **只打得到 `/embed/…`**：帶嵌入 cookie 打獨立頁面（`/`、`/index.html`）、`/threads`、`/threads/mux` 都是 `401`，跟沒帶 cookie 一樣。獨立頁面那顆 cookie 照舊打得到嵌入路由。
+- cookie 裡帶著身分（嵌入方、對方帳號、nexus 使用者、session id 的 sha256），伺服器不留狀態：到期前、對應還在表上就一直有效，重啟 serve 也不會作廢。把某個嵌入方從設定拿掉再重啟，它簽出去的嵌入 cookie 就驗不過；要讓所有 cookie（含獨立頁面那顆）一起失效，換掉 home 裡的瀏覽器會話密鑰。
+- **續期**：快到期時嵌入方的後端用同一個 `sessionId` 再換一張票，元件再兌換一次；新的 cookie 同名，蓋掉舊的。身分指紋跟上一次一樣時元件不重接，已經開著的下行留在原本的 WebSocket 上不斷，之後新開的下行才走帶新 cookie 的連線（[`embed-chat.md`](embed-chat.md)〈續期〉）；不一樣才改接 serve 回的那一條。
+- **身分指紋**（`identityFingerprint`）：讓元件分得出續期的是同一個人還是換了人。同一個嵌入方＋使用者代號就相同，跟「對話歸誰」的範圍一樣（換 `sessionId`、表上另一個對方帳號對到同一個使用者代號，都算同一個人）。它是用瀏覽器會話密鑰導出的另一把子鑰算的 HMAC：反查不回使用者代號，不同的 serve 算出來不同，換掉密鑰之後全部改變（那時所有 cookie 也一起失效）。
+- 多工連線（`/embed/threads/mux`）建立時看 cookie；連線上每開一條串流，都用那顆 cookie 再查一次對應表與對話歸誰。兌換或續期之後，新開的串流要走新的連線，新的 cookie 才帶得上：舊連線上新開的串流，舊 cookie 過期之後就是 `401`。
+- **已經開著的下行每秒重驗一次**（[#2489](https://github.com/DemianLi/nexus-agent/issues/2489)，#1827 D239）：拿開線時那顆 cookie（多工連線上是連線建立時那顆）照上面的規則再驗一次，SSE 與多工連線上的都算。
+  - 從表上拿掉、對到別的使用者、表改壞了：切掉，還沒送出的事件不送，稽核記一筆 `cut`（〈稽核紀錄〉）。
+  - 只是過期：同一條登入（同一個嵌入方、對方帳號、使用者代號、`sessionId`）已經兌換到一顆還沒到期的 cookie，就不切；沒有就切。
+  - 「續上了沒」只記在 serve 的記憶體裡，兌換的稽核寫好之後才記；serve 重開就清空：**只認重開之後的兌換**，重開之後還沒再兌換過的登入，開線那顆 cookie 一到期，下行就被切。
+  - 切掉之後元件照下行結束處理：重開下行時 cookie 已經失效就是 `401`，元件發 `nexus-ticket-needed`（[`embed-chat.md`](embed-chat.md)〈續期〉）。
+  - 獨立頁面那顆 cookie（主機擁有者）開的下行不重驗。
+- **回到上一條**：這一次登入（同一個人、同一個嵌入方、同一個 `sessionId`）開過、已經落盤的對話，`threadId` 是最新開的那一條，元件接著開它；沒開過、還沒落盤、會話不落盤、或查不到（伺服器日誌記一行）就不帶。換人登入、或同一個人換了 `sessionId`，都不帶。
+- **`sessionId` 要是猜不到的隨機值**：它記進稽核檔與對話（只記 sha256，不加鹽，兩邊同一個值），「回到上一條」也照它找。用使用者帳號、遞增的號碼這類猜得到的值，讀得到這兩份檔的人就反查得回來。
+
+### 對話歸誰
+
+#1827 D231 Q3。嵌入 cookie 開的新對話，記下開它的人（使用者代號、嵌入方、哪一次登入），寫在會話日誌的 header（格式 54 起），之後不改。
+
+- **嵌入 cookie 只打得開自己開的對話**：使用者代號與嵌入方都要對上；同一個人另一次登入（`sessionId` 不同）也打得開。不是自己的回 `thread_not_owned`，訊息不說是誰的。
+- **獨立頁面的 cookie（主機擁有者）打得開任何一條**；嵌入路由照舊只打得開嵌入版開的。主機擁有者從嵌入路由開的對話不記開它的人。
+- **沒記開它的人的嵌入版對話，嵌入 cookie 一律打不開**：主機擁有者從嵌入路由開的，和格式 53 以前開的都是。
+- 續接不補開它的人；分叉出來的不抄（只有主機擁有者分叉得了）。
+- 同一個新 id 兩個人同時開：先建起來的那位擁有它，晚到的回 `thread_not_owned`。
+- 元件收到 `thread_not_owned` 不重試，跟使用者說這不是他的對話、請按「新對話」。換過票的元件只接 `threadId`，不接瀏覽器上記著的那一條，所以換人登入不會碰到上一位的對話。
+
+### 稽核紀錄
+
+`<home>/embed-audit.jsonl`，一行一筆、只追加、`0600`。過了服務憑證的每筆寫好（`datasync`）才回應；憑證錯的不等落盤。
+
+```json
+{"v":1,"at":"2026-11-06T08:00:00.000Z","event":"exchange","outcome":"issued","embedder":"crm","subject":"alice","sessionIdSha256":"…","userId":"alice"}
+```
+
+- 換票（`event: "exchange"`）的 `outcome`：`issued` 與 `capacity`（帶 `userId`）、`identity_rejected`、`bad_request`（帶 `reason`）、`capacity`、`unauthenticated`。
+- 兌換（`event: "redeem"`）的 `outcome`：`redeemed`（帶 `userId` 與 `cookieExpiresAt`）、`ticket_expired`、`identity_rejected`（帶 `reason`，對應被撤或對到別人是 `user_changed`），都帶票上的嵌入方、對方帳號與 session id 的 sha256；票不存在、用過、本文不對的兌換認不出是誰，記成 `unauthenticated`。
+- 嵌入版下行（`event: "stream"`，#2489）：都帶嵌入方、對方帳號、使用者代號、session id 的 sha256、`threadId` 與 `streamId`（每條下行一個隨機值）。
+  - `opened`：**寫好才開線**；寫不進去回 `500`、不開線，伺服器日誌記一行。主機擁有者開的下行不記。
+  - `closed`（帶 `by`）：`client` 是請求被中止（瀏覽器關掉、斷線、多工連線上收掉這一條）；`server` 是 serve 這一側收掉（對話收掉、積壓太多被斷開）。serve 收尾時還開著的：多工連線上的先被關掉連線，記 `client`；SSE 上的實測記 `server`（看時序，不保證）。
+  - `cut`（帶 `reason`）：重驗沒過被切掉。`reason` 是 `not_mapped`（從表上拿掉或對到別人）、`table_invalid`、`expired`（過期而且沒續上）。系統時鐘往回撥到簽發時間之前時是 `bad_cookie`。
+  - 每一筆 `opened` 最多配一筆同 `streamId` 的 `closed` 或 `cut`（同一人可以對同一條對話開好幾條，要靠 `streamId` 配）；serve 被強制結束、或那一筆寫不進去時就缺。`opened` 寫好時請求已經中止、或 serve 正在收尾的，不開線、回 `503`，緊接著記同 `streamId` 的 `closed`（`client`／`server`）。`closed`、`cut` 寫不進去只記伺服器日誌，不影響下行。`opened` 的 `at` 是開始寫那一筆的時間，線在它寫好之後才開。
+- 嵌入身分碰到不是自己的對話（`event: "access"`，`outcome: "refused"`）：帶身分、`threadId`、`route`（`stream`、`history`、`attachment`、`command`）與 `reason`（`thread_not_owned`：別人開的；`not_embedded`：不是嵌入版開的，見〈對話歸誰〉）。寫不進去照樣回拒絕，只記伺服器日誌。主機擁有者從嵌入路由被拒的不記。
+- **不記秘密**：服務憑證與票都不記，對方的 session id 只記 sha256。
+- **認不出是誰的請求會合併**（換票時憑證錯、兌換時票不存在或用過或本文不對，兩種 `event` 各自一個時間窗）：它們不知道是誰打的，也最容易被大量打。每 60 秒的時間窗裡，第一次照記一行（`count: 1`），之後只計數；時間窗過了之後**再有**一次同一類的請求、或 serve 收尾時，把計到的寫成一行（`count` 是第一行之後的次數，`from` 是這個時間窗第一次的時間，`to` 是最後一次）。serve 被強制結束時這段計數遺失。所以每一類每個時間窗最多兩行，檔案不會因為有人一直打錯憑證或亂丟票而無上限地長。
+- 過了服務憑證的換票、找得到票的兌換一筆一行：打的人是設定裡指名的嵌入方。
+
+## 放在反向代理後面
+
+[#2369](https://github.com/DemianLi/nexus-agent/issues/2369)。多人共用的主機上，serve 綁的 port 誰都連得到（〈多人共用主機的部署清單〉第 6 條）。要讓瀏覽器經反向代理連進來，serve 改聽 Unix socket，只讓代理連得進去；對外的名字、TLS 與子路徑都歸代理。代理要跟 serve 在同一台主機上。
+
+嵌入版 `<nexus-chat>` 放在宿主頁上時，代理放在宿主頁的伺服器前面：`/nexus/` 轉給 serve，其餘路徑轉給宿主頁的伺服器，瀏覽器看來兩邊同源。元件那一端怎麼放見 [`embed-chat.md`](embed-chat.md)。
+
+**serve 這一端**
+
+```bash
+serve --unix-socket /run/nexus-agent/serve.sock --socket-group <代理群組的 gid> \
+      --trusted-host app.example --public-url https://app.example/nexus/ \
+      --live --workspace /srv/nexus-agent/workspace
+```
+
+- `--unix-socket`：改聽這個 socket，不綁任何 port。不能配 `--port`。
+- `--socket-group`：代理所在群組的**數字 gid**（`getent group nginx` 的第三欄）。不收群組名：Node 查不到 LDAP、SSSD 這類目錄服務的群組。
+- `--trusted-host`：瀏覽器網址列上的 authority，可以給多次。帶 port 的只認那個 port，不帶的認任何 port。沒指名的 `Host` 一律 403。
+- `--public-url`：瀏覽器開的網址，啟動時印的登入網址用它。聽 socket 時一定要給：serve 自己沒有瀏覽器開得到的網址。它只是公告，放行要靠 `--trusted-host`。
+
+**socket 目錄決定誰連得進來。** serve 起動時驗這個目錄，任何一條不合就起不來，home 底下一個檔都不寫：
+
+- 是真的目錄，符號連結不算；
+- 擁有者是 serve 的帳號；
+- 群組是 `--socket-group`；
+- 權限恰好 `0750` 或 `0710`，other 一律沒有。
+
+這個群組只放代理的帳號：群組裡的每一個帳號都連得進 serve。socket 檔本身由 serve 在 listen 之後設成 `0666`，閘門是目錄，不是這個檔。
+`/run` 每次開機都會清空，所以用 systemd-tmpfiles 建這個目錄：
+
+```bash
+echo 'd /run/nexus-agent 0750 nexus-agent nginx -' | sudo tee /etc/tmpfiles.d/nexus-agent.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/nexus-agent.conf
+```
+
+上一次 serve 被 `kill -9` 或當機留下的 socket 檔，下一次起動時會清掉。路徑上是別種檔，或還有行程在聽（例如另一個 serve），serve 就起不來，也不碰那個檔。正常停 serve 時 socket 檔會一起刪掉。
+
+用〈[用 systemd 常駐](#用-systemd-常駐)〉的單元時，`ExecStart` 的 `--port 8787` 換成上面那四個旗標。
+
+**代理這一端（nginx）**
+
+```nginx
+# serve 這樣起：
+#   serve --unix-socket /run/nexus-agent/serve.sock --socket-group <nginx 群組的 gid> \
+#         --trusted-host app.example --public-url https://app.example/nexus/
+upstream nexus_agent {
+    server unix:/run/nexus-agent/serve.sock;
+}
+
+# 宿主頁的伺服器，位址換成它實際的。沒有嵌入元件、只開獨立頁面的話，拿掉這段與下面的 location /。
+upstream host_app {
+    server 192.0.2.10:80;
+}
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+
+server {
+    listen 443 ssl;
+    server_name app.example;
+    ssl_certificate     /etc/nginx/tls/app.example.crt;
+    ssl_certificate_key /etc/nginx/tls/app.example.key;
+
+    # 裸的掛載路徑轉成帶 / 的：serve 看不到 /nexus，補不回來。
+    location = /nexus {
+        absolute_redirect off;
+        return 308 /nexus/$is_args$args;
+    }
+
+    location /nexus/ {
+        # 結尾的 / 剝掉 /nexus 前綴：serve 只認根路徑。
+        proxy_pass http://nexus_agent/;
+        # WebSocket 要 HTTP/1.1；舊版 nginx 預設 1.0。
+        proxy_http_version 1.1;
+
+        # Host 原樣轉：serve 拿它比 --trusted-host。$host 會丟掉 port，用 $http_host。
+        proxy_set_header Host $http_host;
+
+        # WebSocket（獨立頁面的 /threads/mux、元件的 /embed/threads/mux）。
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # 會話 cookie 改成只送給掛載路徑，並只走 HTTPS。
+        proxy_cookie_path / /nexus/;
+        proxy_cookie_flags ~ secure;
+
+        # 附件上傳：nginx 預設只收 1m，serve 收到 300m。
+        client_max_body_size 300m;
+    }
+
+    location / {
+        proxy_pass http://host_app;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        # 宿主頁的伺服器在代理後面看不到 https 與使用者的位址。
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # 上傳的本文邊收邊轉。
+        proxy_request_buffering off;
+        # 長連線閒置到 1 小時才切斷（nginx 預設 60 秒）。
+        proxy_read_timeout 1h;
+
+        # 照宿主頁的伺服器自己的上限。
+        client_max_body_size 100m;
+    }
+}
+```
+
+範本在 nginx 1.30.6 與 Debian 12 的 nginx 1.22.1 上實測過（後者見下面〈驗過什麼〉）。每一行對到一件代理非做不可的事：
+
+- **剝掉前綴**：serve 只認根路徑。`proxy_pass` 結尾的 `/` 把 `/nexus/threads` 變成 `/threads`。
+- **Host 原樣轉**：serve 拿它比 `--trusted-host`。要用 `$http_host`：`$host` 會丟掉 port，跟瀏覽器送的 `Origin` 對不上，每個 API 請求都會被 403。
+- **轉 WebSocket**：獨立頁面的下行走 `/threads/mux`，元件的走 `/embed/threads/mux`。nginx 1.30.6 的 `proxy_http_version` 預設已經是 1.1，舊版是 1.0，所以範本明寫。
+- **改 cookie**：serve 發的會話 cookie 是 `Path=/`、沒有 `Secure`，因為 serve 自己沒有 TLS。代理把 `Path` 改成掛載路徑，再加上 `Secure`。
+- **裸的掛載路徑轉成帶 `/`**：serve 看不到 `/nexus` 這段，補不回來。
+- **本文上限**：nginx 預設只收 1m，serve 收到 300m。不調的話，附件上傳會先被 nginx 回 413。
+
+代理不用管的：
+
+- **SSE 的緩衝**：serve 的 SSE 下行自帶 `X-Accel-Buffering: no`。WebSocket 與 SSE 每 2 秒有心跳，`proxy_read_timeout` 用預設就好。
+- **`X-Forwarded-*`**：serve 不讀。cookie 加不加 `Secure` 只看 serve 自己的 listener。
+- **WebSocket 裡的路徑**：mux 每條串流的路徑寫在 socket 訊息裡，代理剝不到。網頁與元件送進 socket 之前會自己剝掉前綴，serve 收到的路徑照舊從根算。
+
+**轉給宿主頁的伺服器**（`location /`）。這一半是通用寫法，不知道對方系統用了什麼，所以每一件都明寫：
+
+- **Host 原樣轉、帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`**：TLS 在代理就結束了，對方看到的是 `http` 與代理的位址；靠這兩個標頭才知道使用者走的是 `https`、從哪裡來。這台代理在最外層，`X-Forwarded-For` 用 `$remote_addr` 覆寫，不接瀏覽器自己送來的值，對方記到的位址偽造不了。
+- **轉 WebSocket**：跟 `/nexus/` 共用同一個 `map`，沒有升級的請求 `Connection` 是空的。`proxy_http_version 1.1` 的理由同上。
+- **上傳不緩衝**：`proxy_request_buffering off` 讓上傳的本文邊收邊轉。不關的話，nginx 先收完整個本文才開始轉，對方在使用者送完之前收不到任何東西。
+- **下行的串流不用關緩衝**：在 nginx 1.30.6 上，上游每秒送一顆 SSE 事件、不帶 `X-Accel-Buffering`，經這個範本到瀏覽器的時間是 1、1002、2003、3004 ms，逐顆到；上游走 HTTP/1.0 也一樣。所以範本不放 `proxy_buffering off`：它管的是這一段的全部回應，大檔下載也在內，慢的瀏覽器會一直佔住宿主頁伺服器的上游連線。
+
+  串流真的被延遲時：
+  1. 首選：請宿主頁的伺服器在串流的回應上帶 `X-Accel-Buffering: no`。只對那幾條回應生效，serve 自己的 SSE 也是這樣做。
+  2. 對方改不了時：只替串流那條路徑另開一個 `location`，在裡面加 `proxy_buffering off`，其餘照 `location /` 抄一份。代價同上，只落在那條路徑。不要對整個 `location /` 關緩衝。
+- **長連線不被切斷**：nginx 預設 60 秒收不到上游的資料就切斷連線；對方的 WebSocket 或串流沒有心跳的話，會在閒置 60 秒時斷掉。
+- **本文上限**：照對方系統自己的上限填。
+
+**部署前要跟對方核對的**：對方系統在代理後面產生的絕對網址與轉址。對方如果照自己看到的 `Host` 與協定組網址，會組出 `http://`；`Location` 是相對路徑或用 `X-Forwarded-Proto` 組的就沒事。對方的 cookie 若是 `Path=/`，也會送到 `/nexus/`；serve 不讀宿主頁的 cookie。反方向（serve 的頁面看得到宿主頁的哪些東西）見 [`embed-chat.md`](embed-chat.md) 的〈載入〉。
+
+**探針**：在主機上直接打 socket，`Host` 是 `localhost`，過得了信任圍欄。執行的帳號要連得進 socket：serve 的帳號、代理群組的成員或 root。
+
+```bash
+curl --unix-socket /run/nexus-agent/serve.sock http://localhost/livez    # ok
+curl --unix-socket /run/nexus-agent/serve.sock http://localhost/readyz   # ok、closing 或 storage-full
+```
+
+經代理的 `https://app.example/nexus/livez` 也回得到。不想讓外面看到，就在代理把 `/nexus/livez`、`/nexus/readyz` 擋掉。
+
+**SSH 轉 port 這條路沒有了。** 聽 socket 時 serve 不綁 port，`ssh -L 8787:127.0.0.1:8787` 轉不到東西，使用者一律經代理連進來。
+
+**怎麼確認**
+
+```bash
+sudo ss -ltnp | grep node                       # 沒有 serve：它不聽任何 port
+ls -ld /run/nexus-agent                          # drwxr-x--- nexus-agent nginx
+sudo -u nobody curl --unix-socket /run/nexus-agent/serve.sock http://localhost/livez   # 連不進去：nobody 不在代理群組
+curl -sI https://app.example/nexus               # 308，Location: /nexus/
+journalctl -u nexus-agent -n 20                  # 找「nexus-agent 在 https://app.example/nexus/?token=…」，在瀏覽器開它
+```
+
+登入 token 仍然是一個 serve 行程一顆、所有人共用，跟 SSH 轉 port 一樣；換成個人帳號登入是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+
+**驗過什麼**
+
+在 Linux arm64 容器（Debian bookworm、nginx 1.22.1、systemd-standalone-tmpfiles 252）裡，serve 用假模型，照這一節跑過一輪。serve 的帳號、代理的帳號（nginx 的 worker 以它跑）與一個不在代理群組的帳號，是同一個容器裡的三個帳號：
+
+- tmpfiles 那兩行原樣跑，建出 `drwxr-x--- nexus-agent nginx` 的目錄；serve 帶 `--unix-socket`、`--socket-group`、`--trusted-host`、`--public-url` 起得來（`--public-url` 是瀏覽器開的 HTTP 網址，`--trusted-host` 多給一個它的 authority；沒帶 `--live` 與 `--workspace`，模型用假的），socket 檔是 `0666`，`ss -ltnp` 看不到 serve。
+- 直接連 socket：serve 的帳號、代理的帳號與 root 都拿到 `livez` 的 `ok`；不在代理群組的帳號與 `nobody` 被 kernel 擋下（`EACCES`）。把目錄的群組換成別的，nginx 回 502，錯誤紀錄是 `connect() to unix:/run/nexus-agent/serve.sock failed (13: Permission denied)`；換回來就是 200。
+- nginx 範本只換宿主頁的上游位址與憑證（自簽），`server unix:` 原樣：
+  - `/nexus/livez` 與 `/nexus/readyz` 回 `ok`，`/nexus` 回 308；
+  - 沒指名的 `Host` 被 serve 擋下（403）；
+  - 登入回 303，cookie 改成 `Path=/nexus/` 並帶 `Secure`；
+  - 元件的 `/embed/threads/mux` 升級成功（101）；
+  - 轉給宿主頁伺服器的那一半，`listen 443 ssl` 換成 `listen 80`、拿掉憑證那兩行之後跑：
+    - `Host` 原樣轉，帶 `X-Forwarded-Proto` 與 `X-Forwarded-For`，瀏覽器自己送的 `X-Forwarded-For` 被覆寫；
+    - 不帶 `X-Accel-Buffering` 的串流逐顆到；
+    - 上傳的本文邊收邊轉，5 MiB 的本文轉得過去；
+    - WebSocket 升級並來回；
+    - 對方的相對轉址原樣回到瀏覽器；
+    - 閒置 70 秒的串流沒有被切斷。
+- 宿主頁工具：經上面 `listen 80` 那份設定，用瀏覽器開宿主頁，假模型呼叫宿主頁宣告的工具。核准之後，宿主頁收到 `nexus-host-tool` 事件並交回結果，這一輪接著跑完。
+
+這次的環境限制：
+
+- 沒有 systemd，所以上面「`ExecStart` 換成四個旗標」的 systemd 單元沒有在這個環境跑過；serve 以 `sudo -u` 直接起。
+- 容器裡只裝了 `systemd-standalone-tmpfiles`，它不建 `/etc/tmpfiles.d`，所以先建好這個目錄才跑那兩行。裝了 systemd 的主機本來就有這個目錄。
+- 〈怎麼確認〉那幾行裡，`curl` 與 `journalctl` 沒有照原樣跑：連 socket 改用 `socat`，打代理改用 Node，登入網址直接從 serve 的輸出取。
 
 ## 金鑰放哪裡
 
@@ -1054,7 +1416,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | 等級 | 放什麼 |
 | --- | --- |
 | `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
-| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]`、`serve 收尾逾時`（收尾到了 5 秒上限，見〈會話日誌〉停 `serve` 那一段） |
 | `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
 
 **命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
@@ -1153,7 +1515,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
   - **配額滿（`EDQUOT`）看不到**：`statfs` 不知道配額，這時 `/readyz` 回 200，工具與輪次仍會回報空間用完。
   - 使用者看到的字不講是哪一區（多人共用主機不帶路徑）。管理者看 `nexus_storage_full{area="home|thread-roots"}` 與日誌的 `[儲存]`、`[輪次]` 行。指標不受 `probes.enabled` 影響。
 - **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
-- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。經反向代理連進來今天不支援，要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉）。
+- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。serve 聽 Unix socket 時探針怎麼打，見〈[放在反向代理後面](#放在反向代理後面)〉。
 
 ### 打開指標
 
@@ -1248,8 +1610,98 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則：因為門檻不生效，抓取端帶 `Accept-Encoding: gzip` 時連只有 `ok` 兩個字的探針本文也會被壓（實測壓成 22 位元組），抓取端不需要這個的話不要帶。
 - **三個旗標逐欄獨立驗**（同 dsh）：等級超出 0 到 9、門檻不是非負整數、`--compression` 不是 `none`／`gzip` 都是 usage error，在任何檔案寫入之前失敗；沒打開 gzip 時給等級或門檻照收但不生效。
 - **設定走旗標，不走 `cordis.yml` 的列**：listener 的設定（`--port`）本來就是旗標，將來的 `--host` 與 TLS（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）也一樣。起動時決定，改了要重啟。
-- **今天只支援 SSH 轉 port**：經反向代理連進來要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉），所以 gzip 只有 `serve` 這一層會壓。
+- **放在反向代理後面時**（〈[放在反向代理後面](#放在反向代理後面)〉），代理也可以自己壓（nginx 的 `gzip`），跟 `serve` 這一層擇一開就好。
 - **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。
+
+## 行程模型：`single` 與 `per-thread`
+
+serve 預設是 `single`：一個行程放所有 thread。`per-thread`（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md`）
+改由監督行程 `nexus-supervisor` 起一個前台、每條 thread 一個對話行程：一條 thread 的 heap 用完或卡死（心跳斷 15 秒），只死那一條。RSS 上限預設不設。
+
+```bash
+nexus-agent serve --process-model per-thread
+```
+
+或寫在自己的 `~/.nexus-agent/cordis.patch.yml`：
+
+```yaml
+- id: process-model
+  config:
+    mode: per-thread
+    # supervisorBinary: /opt/nexus/native/nexus-supervisor
+```
+
+- 旗標蓋過設定列；起動期讀一次，改了要重啟。關掉這一列就是 `single`。
+- **只在 Linux 起得來**，其他平台起動就停下來講原因。
+- 監督行程找不到就停：省略 `supervisorBinary` 時從 harness 的位置往上找 `native/nexus-supervisor`。離線包**不帶**這個執行檔，要自己放、用 `supervisorBinary` 指過去；宿主 `nexus-host` 也要放在它旁邊（見〈宿主 `nexus-host`〉）。
+- **執行檔不能帶 setuid／setgid，node 行程不能帶 capability**（例如對 node 做過 `setcap cap_net_bind_service`）。監督行程替子行程設了「父行程死了就跟著死」（`PR_SET_PDEATHSIG`），這兩種情形下核心在 exec 時會把它清掉，監督行程被 `SIGKILL` 時就留下孤兒，所以起動時查到就拒起。capability 是看 serve 自己行程的 `CapPrm`，以 root 跑時不查（root 本來就有全部的 capability）；監督行程執行檔上的 file capability 查不到、**不擋**，不要對它做 `setcap`。要綁 1024 以下的 port，放在反向代理後面（見〈放在反向代理後面〉）。
+- 前台與對話行程之間走 home 底下 `run/` 的 Unix socket，目錄權限 0700；監督行程的稽核紀錄寫在 home 的 `supervisor-audit.jsonl`。
+- `thread-capacity` 的 `idleEvictAfterMs` 交給監督行程：對話行程閒置這麼久就收掉（`0` 不收）。
+  只讀打開（開了 thread 沒講話、看歷史、附件）的行程閒置 5 分鐘就收，不吃這一格，名額滿時閒置的只讀行程也先收；開著的下行不算閒置，最後一條下行關掉時前台請監督行程先收，行程一回報閒置（約 1 秒內）就收，不等 5 分鐘。落盤那一列關掉時，一般的不照時間收（收掉的行程不留日誌）；只讀打開的照上面的時間收。`maxThreads` 在 `per-thread` 下不管用：
+  同時活著的對話行程數由監督行程照記憶體上限算（含一個預熱的空行程）。
+- 前台掛了監督行程會重起它，對話行程不斷；網頁重連即可，不用重新登入。
+- **內容搜尋與 `@` 會話候選由前台讀磁碟**，不讀對話行程的記憶體：剛送出的那一句要等幾十毫秒才搜得到（實測 80–90 ms，`single` 是 20–80 ms）；
+  回覆兩種模式都一樣，一輪講完才搜得到。前台冷讀的是對話行程正在寫的日誌，對帳偶爾連兩次都對不上，那一次搜尋回失敗（serve 日誌記「對帳途中日誌或活著的 thread 一直在變」），再搜一次就好；
+  規則同 `single`，只是前台要冷讀那個檔，對帳的窗口比較長，碰到的機會比較多（實測：2 顆 CPU 的容器把 per-thread 整合測試「搜尋與 @ 會話候選只讀磁碟」連跑 12 次，每次搜完隔 10 ms 再搜，約 5,400 次裡 2 次）。
+- `plugin-snapshot.json` 由前台寫，`live` 列的是對話行程回報的 thread（只看過歷史、沒講話的也算），行程收掉就不再列。
+  掉列紀錄與不變量記錄檔由各對話行程直接寫同一個檔，路徑與格式同 `single`。
+- **插件模組每個對話行程各求值一次、各試組一次**（`single` 整台一次），所以求值的總次數跟著起過的行程數走；清單本身在起動與組裝綁著的那條 thread 時各讀一次。
+  起動試組實測約 19 ms（主機負載約 12 時量的）；預熱的行程在綁 thread 之前就做完，不在請求路徑上，只有預熱池空了的冷開才算進第一句的延遲。
+- **試組掉了的列每個行程各記各的**：前台起動時試組掉了的列，每個新起的對話行程會再試一次；同一個行程裡設定沒變就不再試，改了才重試。
+  `single` 整台記一份，只試一次。多試的那一次代價是那一列自己的 `apply`，實測跟沒有掉列的試組分不出差別（量測雜訊之內）。
+- **「啟動時讀一次」的列**（例如 `thread-title`）改了：寫入口回 `restart`，落盤開著時，前台在下一次綁上或放掉一條 thread 時記一次「已儲存，待重啟」（落盤關掉時 `per-thread` 不記這一句，見 [#2529](https://github.com/DemianLi/nexus-agent/issues/2529)）。在 `per-thread` 下：
+  改了之後才起來的對話行程用新值；已經起著的（含預熱池裡還沒綁 thread 的）照舊用舊值；要全部生效就重啟 serve。
+- **分叉（從某一輪開一條新 thread）**：前台向來源 thread 的對話行程要分出去的那一段（來源沒有行程就照只讀打開起一個），
+  分得出去才替新 thread 起一個對話行程、由它寫檔；來源開得起來時，回給客戶端的碼同 `single`。只讀打開的行程也佔一格名額，名額滿時閒置的先被收；
+  名額滿又沒有閒置的行程可收時，來源或新 thread 那一個開不起來，分叉回 `thread_at_capacity`（出廠的名額與這個碼在 [#2342](https://github.com/DemianLi/nexus-agent/issues/2342) 定）。
+  分出去的那一段經行程之間的 socket 傳兩次：交給新行程那一次是請求本文，受 serve 收請求本文的上限（300 MiB）管，超過回 `unknown_error`，
+  已經起好的新行程照閒置時間收；來源交回前台那一次是回應，不設上限。
+- 帶 `--inspect` 這類旗標起 serve，inspector 開在前台；對話行程不帶。
+- **嵌入對話框（`<nexus-chat>`）照常可用**。登入、嵌入 cookie 與身分對應表只在前台；前台驗過人之後把身分放進內部標頭轉給對話行程，
+  轉送前一律刪掉客戶端帶來的同名標頭。對話行程只在 `run/` 的 socket 上讀這個標頭，TCP 入口從不讀它。擁有者檢查前台先擋一次、對話行程再核一次；
+  轉送中的嵌入版下行由前台每秒對一次身分對應表，從表上拿掉的人 2 秒內斷線，稽核同 `single`。
+
+### 宿主 `nexus-host`
+
+`per-thread` 下，監督行程除了前台與對話行程，還會起一個宿主 `nexus-host`（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)），整台只有一個。
+它聽 home 底下的 `run/host.sock`，連線時驗明對方是誰。
+
+- **執行檔要跟監督行程放在同一個目錄**：`supervisorBinary` 指到哪，`nexus-host` 就要在它旁邊。兩支由同一個 crate 編出來，找不到宿主就拒起。
+  setuid／setgid 的限制同監督行程。
+- **連線身分**：監督行程起前台或對話行程時，替它發一個 token。token 只經控制通道交給那個行程，同時把 pid、token、角色與 thread 送給宿主；
+  不放環境變數，也不放命令列。宿主用 `SO_PEERCRED` 取得連線的 pid，與身分表對照：pid 不在表上，或 token 不對，就拒絕連線。
+  客戶端自己報的 thread 宿主不看。行程結束時，監督行程收屍之前先撤掉它的身分，所以 pid 被重用時，新行程拿不到舊身分。
+  - 違反協定的連線（token 或版本不對、重複的 hello、壞框、超過 256 KiB 的框）被斷線，稽核記一行 `"event":"protocol"`。
+    那個 pid 的身分接著被隔離，到它結束為止：它其他已經送過 hello 的連線一起斷；已經連上、還沒送 hello 的，之後送什麼都被拒，稽核再記一行（送 hello 的理由是「沒有登記」，送壞框的是那個框的錯）。連上之後 5 秒內沒送 hello 的只斷線，不記稽核。
+  - 不在身分表上的 pid（例如沒宣告 sandbox 的 MCP stdio 伺服器拿到別人的 token 來連）同樣被拒、同樣記一行，`role` 是 `unknown`。
+  - 例外：被拒的 pid 是正在跑、沒被隔離的前台或對話行程時，那是它的身分還在送往宿主的路上（宿主剛起來或剛重起，或監督行程寫給宿主的 pipe 一時滿了），
+    不記稽核、不隔離，重連就好。pid 被重用時，同一個號碼上一個行程留下、還沒送 hello 的連線也歸這一類：它被拒，新行程不會被隔離；pid 重用得比宿主讀 pipe 還快時，新行程先連上的連線也可能這樣被拒，重連就好。
+    這個例外裡的情形，宿主每拒一條連線，監督行程的 stderr 就記一行警告，帶 pid 與宿主的連線編號（`警告：宿主拒了 pid … 的連線 #…`）；宿主的 stderr 用同一個編號記它拒的那條連線，兩邊對得起來。
+- **重起**：宿主結束之後照退避重起：第一次等 1 秒，之後每次加倍，最長 30 秒；活過 60 秒才結束的，下一次回到 1 秒。
+  新的宿主一 `ready`，監督行程就把整張身分表重送一次，已經在跑的前台與對話行程拿原本的 token 重連就好。
+  目前前台與對話行程只收下 token，還不會去連宿主。
+  - 宿主在 `ready` 之前連續失敗 5 次，整台停機，結束碼 4。起了 30 秒還沒 `ready` 的，殺掉，也算一次失敗。
+  - `ready` 之後才死的不算進這個次數，一律照退避重起，不會讓整台停機。
+- **剩下的風險：每 30 秒重起一次**。宿主自己的 bug 若被某個合法的框反覆觸發，宿主每次 `ready` 之後都會死、活不過 60 秒，
+  於是退避停在最長的 30 秒，一直重起下去，整台不會停。從稽核紀錄認得出來：
+
+  ```bash
+  jq -c 'select(.role == "host") | {ts_ms, pid, ready, exit_code, signal, error}' "$NEXUS_AGENT_HOME/supervisor-audit.jsonl" | tail -n 20
+  ```
+
+  一直有新的 `ready: true` 行、兩行的 `ts_ms` 間隔約 30 秒多、`exit_code` 或 `signal` 每次都一樣，就是這種情況。
+  監督行程的標準錯誤同時會一再出現「宿主 30000 ms 後重起」。這時要做的是把宿主的結束碼或訊號回報給維護者，重起 serve 救不了。
+- **停機順序**：收到 `SIGTERM` 時，監督行程先請前台停收新的請求，等它回「已停」，最多等 5 秒。
+  接著依序收對話行程、宿主、前台。停機中再收到一次停止訊號，所有對話行程與宿主當場 `SIGKILL`。
+- **版本對不上**：前台、對話行程與宿主起來時，第一框都要是同一個協定版本的 hello。
+  - 對話行程對不上：當場殺掉，死因是 `protocol`。
+  - 前台或宿主送來的第一框解得開、卻不是同一版的 hello：重起它也還是同一支執行檔，所以整台停機，結束碼 3。
+    看到 3，多半是升級時只換了其中一支執行檔，或 `supervisorBinary` 指到舊版。
+  - 第一框根本解不開的，照壞框處理：前台殺掉重起；宿主殺掉，算一次 `ready` 之前的失敗。
+- **`supervisor-audit.jsonl` 只追加**，0600，不能是連結。
+  - 每個行程結束寫一行，用 `role`（`conversation`、`front`、`host`）分辨；事件寫一行，用 `event`（目前只有 `protocol`）分辨。
+  - 欄位與值只加不改：讀它的工具遇到不認得的欄位或死因要略過，不要報錯。對話行程的死因（`cause`）多了 `protocol`。
+  - 這份檔是稽核用的，serve 不讀、不輪替、不截斷。要清，先停 serve 再處理。
 
 ## 用 systemd 常駐
 
@@ -1319,7 +1771,7 @@ WantedBy=multi-user.target
 
 - **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
-  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**，這條路今天也不印訊息，看不出日誌有沒有排空（[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
+  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**：退出碼分不出來，要看 journald 裡有沒有 `serve 收尾逾時` 那一行（標準錯誤一行；伺服器日誌的門檻沒調到 `error` 時再一行；[#2231](https://github.com/DemianLi/nexus-agent/issues/2231)）。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
   這兩個數字改其中一個，另一個要跟著改。
 - **收尾失敗之後**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：serve 以 1 結束，原因印在標準錯誤。照 systemd 的語意（**沒有實跑過**），上面這份 `Restart=on-failure` 的單元：`systemctl stop` 不重啟，單元進 `failed`，
   排除原因後 `systemctl reset-failed nexus-agent` 再啟動；不是 `systemctl stop` 送的 `SIGTERM` 會重啟，連續失敗滿 `StartLimitBurst` 後單元進 `failed`。
@@ -1360,8 +1812,8 @@ WantedBy=multi-user.target
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
   照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
   裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
-- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。今天唯一支援的連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉），經反向代理連進來要等
-  [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條。
+- **預設只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條），
+  或改聽 Unix socket、經反向代理連進來（〈[放在反向代理後面](#放在反向代理後面)〉）。
 - **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
   `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
 - **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
@@ -1402,6 +1854,9 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 | `browser-session.json` | 瀏覽器登入的簽章密鑰 | **秘密** |
 | `config-hash-key.json` | 會話日誌 header 設定雜湊的鍵 | **秘密** |
 | `metrics-token` | 指標的 bearer token | **秘密**；打開指標才有，`tokenFile` 有設就在那個位置、不在 home |
+| `embed-credential-<id>` | 嵌入方 `<id>` 換票用的服務憑證 | **秘密**；`embed-login` 列了嵌入方才有，`credentialFile` 有設就在那個位置、不在 home |
+| `embed-audit.jsonl` | 嵌入換票與兌換的稽核紀錄 | `embed-login` 列了嵌入方才有；只追加 |
+| `embed-identities.json` | 嵌入方的身分對應表（對方帳號 → nexus 使用者） | **管理者寫**；`embed-login` 列了嵌入方就要有，serve 不建 |
 | `invariant-log.jsonl` | 不變量量測記錄 | |
 | `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
 | `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
@@ -1425,6 +1880,9 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 | `browser-session.json`（秘密） | 啟動 | **起不來**：版本不對、JSON 壞、密鑰不是 32 bytes 的 base64url、權限過寬 | 要重設：刪掉它再重啟，**所有瀏覽器會話一起失效** |
 | `thread-organization.json` | 會話落盤開著才開它（沒落盤就不開）；開的時候沒有這個檔，就是兩個空集合 | **起不來**：版本不對、JSON 壞、欄位型別不對、集合裡有重複、釘選與封存重疊、權限過寬 | 要重設：刪掉它再重啟，**釘選與封存全部清空** |
 | `metrics-token`（秘密） | 打開指標時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`tokenFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url | 要重設：刪掉它再重啟，**監控那一側要換新的 token**（見〈探針與指標〉） |
+| `embed-credential-<id>`（秘密） | `embed-login` 列了嵌入方時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`credentialFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url；訊息指名檔案 | 要重設：刪掉它再重啟，**嵌入方的後端要換新的憑證**（見〈嵌入方換票登入〉） |
+| `embed-identities.json` | `embed-login` 列了嵌入方時，在綁 port 之前讀；**不建** | **起不來，不覆寫**：檔不在、權限讓別人讀得到、不是合規的表；訊息指名檔與第幾筆、不印值。跑著的時候才改壞不會停：換票、兌換與嵌入 cookie 一律拒，已開的嵌入版下行切掉，修好自動恢復（〈身分對應表〉） | 照〈身分對應表〉寫好、`chmod 600`；權限過寬跑 `chmod 600` |
+| `embed-audit.jsonl` | `embed-login` 列了嵌入方時，在綁 port 之前打開（只追加，不讀內容）；沒有就建（`0600`） | **起不來**：權限讓別人讀得到；訊息指名檔案。跑著的時候寫不進去：那一次換票回 500、不發票，那一次兌換回 500、不設 cookie，那一次嵌入版下行開線回 500、不開線（認不出是誰的那一類、下行的收尾與對話被拒只記伺服器日誌，照原本的回應） | 權限過寬跑 `chmod 600`；內容不讀，壞行不影響啟動 |
 | `config-hash-key.json`（秘密） | 會話落盤開著才讀（落盤關掉就不取）；啟動時讀兩處：會話日誌 header 的設定雜湊、對照快照的活著版本 | **警告，少一格**：兩處各講一次，新寫的會話日誌 header 不記設定雜湊、對照快照不列活著的設定版本；檔不動，之後每次啟動都一樣，直到它修好 | 要重設：刪掉它，之後寫的設定雜湊換一套，**跟之前的比不起來** |
 
 表裡「起不來」的，serve 不碰檔：不會備份、不會用空內容重建、不會跳過壞的部分。`plugin-snapshot.json` 每次啟動重寫、`invariant-log.jsonl` 只追加，serve 啟動時都不讀它們，壞了不影響啟動；`serve.lock` 是空的鎖檔，不用管。
@@ -1807,10 +2265,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
 - **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
   照同一組 env 與 `--patch` 重讀一次清單，所以用 `plugin` 寫入口改了變更紀錄，之後開的對話看得到：哪幾列掛、組裝時讀的設定
-  （`agent-loop`、`recursion-limit`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
+  （`agent-loop`、`recursion-limit`、`history-source`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`embed-login`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -2022,7 +2480,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
 | `attachment-images`         | 圖片轉碼（落盤前規範化）同時最多幾張；**只有 `serve` 載**；**出廠 2**（1 到 8），見〈送出時帶附件〉                                | 有（一格）                       | **關不掉**               |
+| `host-tools`                | 嵌入的對話框替宿主頁宣告的工具（`page__<名字>`）：哪幾支不先問人（`approval.exempt`，宿主頁宣告時的名字），與宿主頁幾毫秒沒回就交回逾時（`timeoutMs`）；**只有 `serve` 載**；**出廠空名單、30 秒**，見 `.docs/host-page-tools-2374-design-2026-11-03.md` | 有（兩格）                       | 關得掉（＝空名單、30 秒） |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
+| `embed-login`               | 嵌入方用服務憑證換一次性登入票、元件拿票兌換嵌入 cookie：有哪些嵌入方、憑證檔在哪、票多久作廢、cookie 多久失效；**只有 `serve` 用**（CLI 也載這一列，不讀）；**出廠沒有嵌入方（沒有這兩條路由）、票 60 秒、cookie 900 秒**，見〈嵌入方換票登入〉 | 有（兩格）                       | 關得掉（＝沒有嵌入方）   |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
 | `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理），以及全機的模型請求並行上限（選配，出廠不限） | 有                       | **關不掉**               |
@@ -2030,6 +2490,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `turn-timeout`              | `serve` 上一輪的時鐘上限，到點照停止鈕中止；**出廠 30 分鐘**，見〈執行上限〉                                                    | 有（一格）                       | 關得掉（關掉就是不限）   |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
+| `history-source`            | 模型歷史從哪裡來：`state`（出廠）照舊；`shadow` 照舊送 state，另拿從會話日誌推出來的歷史比一次；`log` 改送從會話日誌推出來的，見下面那一段 | 有（一格）                       | 關得掉（＝`state`）      |
 
 **從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
 它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
@@ -2056,6 +2517,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
+- **`history-source` 也在組裝期讀**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），同形；CLI 的 `--history-source <state|shadow|log>` 贏過這一列。
+  寫 `shadow` 時送給模型的內容不變，只在 root 每次呼叫模型之前，拿從會話日誌推出來的歷史跟這次的請求比一次：
+  `serve` 上差異寫到伺服器日誌的 `history-shadow` logger（debug 等級），CLI 上印成 `[歷史比對] <類別>：<細節>` 到 stderr；
+  兩邊都不寫進會話日誌。類別有 `match`、`image-offload-after-start`（相同，但圖片卸載落在這次呼叫開始之後）、`patch-closer`（只差補結的句子）、`other`。
+  寫 `log` 時改送從會話日誌推出來的那一串：日誌上沒有的不會送出去；找不到日誌或推不出來時，那一輪以錯誤結束，不退回 state。
+  跟 `state` 唯一預期的差別是補結的句子：沒有回應的工具呼叫，模型看到的是會話日誌上的那一句，不是基座的 "was cancelled"。
+  關掉這一列跟寫 `state` 同一個結果，所以它不在下面「關不掉」的那幾列裡。
 
 **這十列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
 代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、

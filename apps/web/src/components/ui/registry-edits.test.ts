@@ -124,6 +124,26 @@ describe('registry 檔的改動還在', () => {
     );
   });
 
+  test('第 83 條：對話區頂端也淡出，覆寫檔照 `scroll-fade-y` 換成雙向漸層與兩條捲動動畫；vendor 的 viewport 仍只有底部淡出（#2407）', () => {
+    const overrides = read('../../styles/solid-glass.overrides.css');
+    expect(overrides).toContain(
+      '  --scroll-fade-mask: linear-gradient(to bottom, transparent 0, #000 var(--scroll-fade-t, 0px), #000 calc(100% - var(--scroll-fade-b, 0px)), transparent 100%);',
+    );
+    expect(overrides).toContain(
+      '    animation: scroll-fade-reveal-t 1ms ease-in-out, scroll-fade-reveal-b 1ms ease-in-out;',
+    );
+    // 第 43 條的退路還在：不支援時 `-t`、`-b` 一起歸 0，雙向淡出也不遮字。
+    expect(overrides.indexOf('scroll-fade-reveal-t 1ms')).toBeLessThan(
+      overrides.indexOf(
+        '@supports not (animation-timeline: scroll()) {\n  [data-slot="message-scroller-viewport"]',
+      ),
+    );
+    // 上游哪天把 viewport 換成雙向淡出，這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/message-scroller.tsx'));
+    expect(vendor).toMatch(/data-slot="message-scroller-viewport"[\s\S]{0,300}\bscroll-fade-b\b/);
+    expect(vendor).not.toMatch(/\bscroll-fade-(y|t)\b/);
+  });
+
   test('問答選項的焦點外框畫在選項上：寫在覆寫檔、layer 外（#1638 PR C，README 本地修改第 46 條）', () => {
     expect(read('../../styles/solid-glass.overrides.css')).toContain(
       '[data-slot="questionnaire-choice"]:has(> input:focus-visible) {\n  outline: 2px solid var(--ring);\n}',

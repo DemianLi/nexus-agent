@@ -12,13 +12,11 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
   effectiveTrigger,
-  readSummarizationEvent,
   RETAIN_FALLBACK_MESSAGES,
   retainedMessageCount,
   retainedTailCount,
@@ -26,6 +24,7 @@ import {
   SUMMARIZATION_MIDDLEWARE_NAME,
 } from './summarization.js';
 import type { ModelContextLimits, SummarizationSettings } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
 import { estimateMessageTokens, TokenAnchorBook } from './token-estimate.js';
 
 /** 出廠型錄三顆（`apps/harness/cordis.yml`）：窗口與輸出上限。 */
@@ -245,6 +244,9 @@ const LIMITS_BY_NAME: Record<string, ModelContextLimits> = {
   small: SMALL_MODEL,
   mid: MID_MODEL,
 };
+/** 根 agent 的一次模型呼叫：切點表認得出它。 */
+const ROOT_CALL = { configurable: { thread_id: 't', checkpoint_ns: 'model_request:x' } };
+
 const limitsOf = (model: unknown) =>
   LIMITS_BY_NAME[(model as { name?: string } | undefined)?.name ?? ''];
 
@@ -257,6 +259,7 @@ describe('接對：N 決定了送出去的串', () => {
     backend?: ReturnType<typeof memoryBackend>;
   }) {
     const { model } = namedModel(options.modelName);
+    const cutoffs = new SummaryCutoffTable();
     const middleware = createSummarizer(
       (options.backend ?? memoryBackend()) as never,
       { ...DEFAULT_SUMMARIZATION, ...options.settings },
@@ -264,22 +267,27 @@ describe('接對：N 決定了送出去的串', () => {
       undefined,
       false,
       limitsOf,
+      undefined,
+      undefined,
+      undefined,
+      cutoffs,
     );
     const sent: { messages: readonly BaseMessage[] }[] = [];
     const result = await middleware.wrapModelCall?.(
       {
         messages: options.messages,
-        state: options.state ?? {},
+        state: { ...options.state, messages: options.messages },
         model,
         systemMessage: new SystemMessage('系統。'),
         tools: [],
+        runtime: ROOT_CALL,
       } as never,
       ((request: { messages: readonly BaseMessage[] }) => {
         sent.push(request);
         return new AIMessage('好。');
       }) as never,
     );
-    return { sent, result, middleware };
+    return { sent, result, middleware, cutoff: cutoffs.lookup(ROOT_CALL, options.messages) };
   }
 
   const unit = estimateMessageTokens(sized('human', '0'));
@@ -293,7 +301,7 @@ describe('接對：N 決定了送出去的串', () => {
     const count = Math.ceil(26_214 / unit) + 8;
     const messages = conversation(count);
     const small = await run({ modelName: 'small', messages });
-    expect(readSummarizationEvent(small.result)).toBeDefined();
+    expect(small.cutoff).toBeDefined();
     const smallKept = small.sent[0]!.messages.length - 1;
     expect(smallKept).toBe(Math.ceil(4_587 / unit));
     expect(String(small.sent[0]!.messages[0]!.content)).toContain('這是摘要。');
@@ -302,7 +310,7 @@ describe('接對：N 決定了送出去的串', () => {
   it('中窗口模型（11b）：dsh 的 20,316 被封在 20,000，與沒型錄的同量', async () => {
     const count = Math.ceil(100_000 / unit) + 8;
     const out = await run({ modelName: 'mid', messages: conversation(count) });
-    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.cutoff).toBeDefined();
     expect(out.sent[0]!.messages.length - 1).toBe(Math.ceil(20_000 / unit));
   });
 
@@ -310,17 +318,15 @@ describe('接對：N 決定了送出去的串', () => {
     // 預設門檻 100,000 → 保留 20,000；串要超過 100,000。
     const count = Math.ceil(100_000 / unit) + 8;
     const out = await run({ modelName: 'unknown', messages: conversation(count) });
-    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.cutoff).toBeDefined();
     expect(out.sent[0]!.messages.length - 1).toBe(Math.ceil(20_000 / unit));
   });
 
-  it('疊上只有一顆：回傳的 middleware 名字是基座那個，stateSchema 在', async () => {
+  it('疊上只有一顆：回傳的 middleware 名字是基座那個，沒有 stateSchema', async () => {
     const out = await run({ modelName: 'small', messages: conversation(4) });
     expect(out.middleware.name).toBe(SUMMARIZATION_MIDDLEWARE_NAME);
-    // 與基座那顆是同一份 `stateSchema`：多實例只換最底下那一格，不是在疊上多放幾顆。
-    expect(out.middleware.stateSchema).toBe(
-      createSummarizationMiddleware({ backend: memoryBackend() as never }).stateSchema,
-    );
+    // 切點在組裝的切點表上（#2416），圖上沒有摘要的私有欄位。
+    expect(out.middleware.stateSchema).toBeUndefined();
   });
 });
 
@@ -328,13 +334,13 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
   const unit = estimateMessageTokens(sized('human', '0'));
 
   /**
-   * 兩顆不同 N 的基座實例各有一份 closure 的 `sessionId`（state 上沒有 `_summarizationSessionId` 時用）。不處理的話，
-   * state 一旦掉了那個 key，第二次摘要就換了檔名。分派器補的是**這顆摘要器自己的**那一個。
+   * 分派器依 N 各建一顆引擎；歷史檔的會話名由同一個 `sessionIdOf` 交給每一顆、照呼叫身分取，所以同一個呼叫身分換了 N 仍是同一個檔。
    */
-  async function twoSummaries(options: { keepSessionId: boolean }) {
+  async function twoSummaries() {
     const backend = memoryBackend();
     const { model: modelA } = namedModel('small');
     const { model: modelB } = namedModel('mid');
+    const cutoffs = new SummaryCutoffTable();
     const middleware = createSummarizer(
       backend as never,
       DEFAULT_SUMMARIZATION,
@@ -342,48 +348,39 @@ describe('不寫兩份：不同 N 的實例共用同一個歷史檔', () => {
       undefined,
       false,
       limitsOf,
+      undefined,
+      undefined,
+      undefined,
+      cutoffs,
     );
-    const call = async (model: unknown, messages: readonly BaseMessage[], state: object) => {
-      const result = await middleware.wrapModelCall?.(
+    const call = async (model: unknown, messages: readonly BaseMessage[]) => {
+      await middleware.wrapModelCall?.(
         {
           messages,
-          state,
+          state: { messages },
           model,
           systemMessage: new SystemMessage('系統。'),
           tools: [],
+          runtime: ROOT_CALL,
         } as never,
         (() => new AIMessage('好。')) as never,
       );
-      return readSummarizationEvent(result) as { cutoffIndex: number; filePath: string | null };
+      return cutoffs.lookup(ROOT_CALL, messages)!;
     };
 
     // 第一次：小窗口，N 小。
-    const first = await call(modelA, conversation(Math.ceil(26_214 / unit) + 8), {});
-    // 第二次：同一條 thread 接著長，換中窗口（N 不同）。state 只帶摘要事件，是否帶 session id 由案例決定。
-    const second = await call(
-      modelB,
-      conversation(Math.ceil(100_000 / unit) + 8),
-      options.keepSessionId
-        ? { _summarizationSessionId: pathToId(first.filePath) }
-        : {/* 掉了：state 上沒有 `_summarizationSessionId` */},
-    );
+    const first = await call(modelA, conversation(Math.ceil(26_214 / unit) + 8));
+    // 第二次：同一條 thread 接著長，換中窗口（N 不同）。
+    const second = await call(modelB, conversation(Math.ceil(100_000 / unit) + 8));
     return { backend, first, second };
   }
 
-  const pathToId = (path: string | null) => String(path).replace(/^.*\//, '').replace(/\.md$/, '');
-
-  it('state 上沒有 `_summarizationSessionId`（掉了）：兩次摘要仍寫進同一個檔，內容是兩段', async () => {
-    const { backend, first, second } = await twoSummaries({ keepSessionId: false });
+  it('換了 N：兩次摘要仍寫進同一個檔，內容是兩段', async () => {
+    const { backend, first, second } = await twoSummaries();
     expect(first.filePath).toBeTruthy();
     expect(second.filePath).toBe(first.filePath);
     expect([...backend.files.keys()]).toEqual([first.filePath]);
     const content = backend.files.get(first.filePath!)!;
     expect(content.match(/## Summarized at/g)).toHaveLength(2);
-  });
-
-  it('state 上有 `_summarizationSessionId`：同樣是同一個檔', async () => {
-    const { backend, first, second } = await twoSummaries({ keepSessionId: true });
-    expect(second.filePath).toBe(first.filePath);
-    expect([...backend.files.keys()]).toEqual([first.filePath]);
   });
 });

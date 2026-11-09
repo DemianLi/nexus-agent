@@ -41,6 +41,7 @@ import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { IMAGE_MEDIA_TYPES } from './attachments.js';
 import type { WireAttachmentRef } from './attachments.js';
+import { HOST_TOOL_INTERRUPT_KIND } from './host-tools.js';
 import { mentionField } from './subagent-list.js';
 import type { SubagentMention } from './subagent-list.js';
 import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason, isTurnStopCause } from './inbox.js';
@@ -625,6 +626,16 @@ export interface PendingQuestion extends PendingCommon {
 }
 
 /**
+ * 等宿主頁執行的一支宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）。**不是給人回答的卡**，所以不在 {@link ConversationState.pendings}：
+ * 給嵌入的元件轉交宿主頁執行，結果用 `input.respond` 交回（形狀見 `host-tools.ts` 的 `HostToolResponse`）。
+ */
+export interface PendingHostCall extends PendingCommon {
+  /** 宣告時的名字，不帶 `page__`。 */
+  readonly name: string;
+  readonly args: Readonly<Record<string, unknown>>;
+}
+
+/**
  * 掛著等人回答的一顆中斷。
  *
  * **判別聯集，不是一個型別加可選欄位。** 兩種的送出形狀完全不同
@@ -649,6 +660,17 @@ export interface ConversationState {
    * 那些會**帶著原本那顆 id 再度中斷**（實測），所以同一顆會在線上出現不只一次。
    */
   readonly pendings: readonly PendingInput[];
+  /**
+   * 等宿主頁執行的宿主頁工具（#2374），發出的順序，同 id 覆寫。答掉（{@link settleHostCall}）、這一輪接著跑、失敗或被停止時收掉。
+   * 收進來不改 `status`：這一輪在等宿主頁執行工具，不是在等人。它非空時 root 的 `completed` 不翻 `idle`、不把未結束的工具列收成失敗。
+   */
+  readonly hostCalls: readonly PendingHostCall[];
+  /**
+   * 宿主頁工具的結果已交回（{@link settleHostCall}），還沒看到這一輪接著跑的 `running`。這段時間 root 的 `completed` 同樣不收尾：
+   * 宿主頁同步回時，交回可能早於停下時的那顆 `completed` 到達。`running`、`failed` 與停止時清掉。
+   * `input.respond` 被拒時不會撤掉：標記留著，root 的 `completed` 都不收尾，直到下一次 `running`、`failed` 或停止。
+   */
+  readonly hostResumePending?: true;
   /** 收過的最大 seq。線上是單調的（server 端跨 run 重編過號），拿它擋重複與亂序。 */
   readonly lastSeq: number;
   /** `namespace[0]` → 那個 `task` 呼叫派出去的 subagent。 */
@@ -751,6 +773,7 @@ export function emptyConversation(): ConversationState {
     entries: [],
     status: 'idle',
     pendings: [],
+    hostCalls: [],
     lastSeq: -1,
     subagents: {},
     turnStart: 0,
@@ -883,6 +906,17 @@ export function appendAnswers(
     pendings: rest,
     status: rest.length > 0 ? 'awaiting-input' : 'running',
   };
+}
+
+/**
+ * 交回宿主頁工具的結果時（送 `input.respond` 之前）呼叫：把那一支收掉、記下在等這一輪接著跑（{@link ConversationState.hostResumePending}，
+ * #2374）。先記下標記，停下時的那顆 `completed` 才不會在送出期間把這一輪收尾。認不得的 `interruptId` 原樣回傳。
+ */
+export function settleHostCall(state: ConversationState, interruptId: string): ConversationState {
+  const rest = state.hostCalls.filter((candidate) => candidate.interruptId !== interruptId);
+  return rest.length === state.hostCalls.length
+    ? state
+    : { ...state, hostCalls: rest, hostResumePending: true };
 }
 
 /** 一組答案攤成 `ask_user_question` 要的那份回覆。 */
@@ -2373,6 +2407,8 @@ function reduceLifecycle(
       error: undefined,
       errorCode: undefined,
       pendings: [],
+      hostCalls: [],
+      hostResumePending: undefined,
       stopCause: data.cause,
       entries: settleUnfinishedTools(state.entries, time).map((entry) =>
         entry.kind === 'ai' && entry.streaming
@@ -2396,6 +2432,8 @@ function reduceLifecycle(
     return {
       ...state,
       pendings: [],
+      hostCalls: [],
+      hostResumePending: undefined,
       status: 'running',
       error: undefined,
       errorCode: undefined,
@@ -2405,6 +2443,8 @@ function reduceLifecycle(
   if (data.event === 'failed') {
     return {
       ...state,
+      hostCalls: [],
+      hostResumePending: undefined,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
       errorCode: data.code,
@@ -2413,8 +2453,14 @@ function reduceLifecycle(
   }
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
-    // 那一輪還沒關，卡還在等人。
-    if (state.status === 'awaiting-input') return state;
+    // 那一輪還沒關，卡還在等人。停在宿主頁工具的同理：這一輪還沒關，不翻 idle，那顆工具列也不收成失敗；結果已交回、還沒接著跑的也一樣。
+    if (
+      state.status === 'awaiting-input' ||
+      state.hostCalls.length > 0 ||
+      state.hostResumePending === true
+    ) {
+      return state;
+    }
     const settled = settleUnfinishedTools(state.entries, time);
     return {
       ...state,
@@ -2440,6 +2486,9 @@ interface InputRequestedData {
     readonly questions?: readonly QuestionItem[];
     /** 問答卡的來源（#1098）；省略是模型自己問的。 */
     readonly origin?: QuestionOrigin;
+    /** 宿主頁工具（#2374）的名字與參數。 */
+    readonly name?: unknown;
+    readonly args?: Readonly<Record<string, unknown>>;
   };
 }
 
@@ -2472,6 +2521,15 @@ function reduceInputRequested(
   const data = raw as InputRequestedData;
   const kind = data.payload?.kind;
   const common = { interruptId: data.interrupt_id, namespace };
+  if (kind === HOST_TOOL_INTERRUPT_KIND) {
+    const call: PendingHostCall = {
+      ...common,
+      name: typeof data.payload?.name === 'string' ? data.payload.name : '',
+      args: data.payload?.args ?? {},
+    };
+    const kept = state.hostCalls.filter((candidate) => candidate.interruptId !== call.interruptId);
+    return { ...state, hostCalls: [...kept, call] };
+  }
   let incoming: PendingInput;
   // **缺席即核准只收基座 HITL 的形狀**（有 `actionRequests` 陣列）。沒有 `kind` 也沒有 `actionRequests` 的酬載（例如 adapter 的
   // `type: 'mcp_elicitation'`，#1098）不是核准，畫成核准卡會讓按鈕送出對面不等的形狀；落到下面「認不得」那一支明著壞掉。

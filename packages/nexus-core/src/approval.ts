@@ -20,7 +20,6 @@
 import { randomUUID } from 'node:crypto';
 import { ToolMessage } from '@langchain/core/messages';
 import { interrupt, isGraphBubbleUp } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
 import {
   APPROVAL_POLICY_SERVICE,
   DEFAULT_APPROVAL_POLICY,
@@ -30,9 +29,12 @@ import type { AgentMiddleware } from './base-types.js';
 import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
+import { ownerRequestOf } from './tool-call-owner.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
+import { createToolCallStepMiddleware } from './tool-call-step.js';
+import type { ToolCallSite, ToolCallStep } from './tool-call-step.js';
 import {
   APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
@@ -310,13 +312,13 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  */
 function auditDecision(
   sessions: ToolEventSessions | undefined,
-  request: { readonly runtime?: { readonly configurable?: unknown } },
+  call: Pick<ToolCallSite, 'configurable'>,
   exec: ToolExecution,
   reason: string,
   outcome: ApprovalOutcome,
 ): void {
   if (sessions === undefined) return;
-  const found = sessions.forCall({ configurable: request.runtime?.configurable });
+  const found = sessions.forCall({ configurable: call.configurable });
   if (found.kind !== 'ok') return;
   const id = randomUUID();
   found.log.append(
@@ -384,91 +386,110 @@ export function createApprovalGateMiddleware(
   sessions?: ToolEventSessions,
   policy: ApprovalPolicySource = () => DEFAULT_APPROVAL_POLICY,
 ): AgentMiddleware {
-  return createMiddleware({
-    name: APPROVAL_GATE_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const exec: ToolExecution = {
-        name: request.toolCall.name,
-        args: (request.toolCall.args ?? {}) as Record<string, unknown>,
-        callId: request.toolCall.id,
-      };
-      const decision = await runApprovalGate(listeners, exec);
-      if (decision.kind === 'allow') return handler(request);
-      if (decision.kind === 'deny') {
-        return denial(exec, decision.reason, {
-          name: PRE_EXECUTE_DENIED,
-          code: TOOL_DENIED_BY_LISTENER,
-        });
-      }
+  return createToolCallStepMiddleware(
+    APPROVAL_GATE_MIDDLEWARE_NAME,
+    approvalGateToolStep(listeners, channel, sessions, policy),
+  );
+}
 
-      const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
-      if (channel.kind === 'policy-never') {
-        auditDecision(sessions, request, exec, because, 'rejected');
-        return denial(
-          exec,
-          `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
-            `這不是有人拒絕了它——是沒有人被問到。`,
-          approvalDenied(APPROVAL_POLICY_NEVER),
-        );
-      }
-      if (channel.kind === 'no-channel') {
-        auditDecision(sessions, request, exec, because, 'unavailable');
-        return denial(
-          exec,
-          `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
-            `這不是有人拒絕了它——是沒有可用的核准管道。`,
-          approvalDenied(APPROVAL_NO_CHANNEL),
-        );
-      }
+/**
+ * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
+ * 要問人時經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡。
+ *
+ * @param listeners - 依註冊順序的 listener。
+ * @param channel - 這次組裝有沒有人可以按核准。
+ * @param sessions - 記審計事件用的通道。
+ * @param policy - 核准政策的來源。
+ * @returns 這一步。
+ */
+export function approvalGateToolStep(
+  listeners: readonly NamedEntry<PreToolListener>[],
+  channel: ApprovalChannel,
+  sessions?: ToolEventSessions,
+  policy: ApprovalPolicySource = () => DEFAULT_APPROVAL_POLICY,
+): ToolCallStep {
+  return async (call, next) => {
+    const exec: ToolExecution = {
+      name: call.name,
+      args: (call.args ?? {}) as Record<string, unknown>,
+      callId: call.callId,
+    };
+    const decision = await runApprovalGate(listeners, exec);
+    if (decision.kind === 'allow') return next();
+    if (decision.kind === 'deny') {
+      return denial(exec, decision.reason, {
+        name: PRE_EXECUTE_DENIED,
+        code: TOOL_DENIED_BY_LISTENER,
+      });
+    }
 
-      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
-      // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
-      // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
-      if (policy() === 'never') {
-        auditDecision(sessions, request, exec, because, 'rejected');
-        return denial(
-          exec,
-          `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
-            `這不是有人拒絕了它——是沒有人被問到。`,
-          approvalDenied(APPROVAL_POLICY_NEVER),
-        );
-      }
-
-      // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
-      // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-      const raw = rawArgumentsOf(request);
-      const answer = (await interrupt({
-        kind: APPROVAL_INTERRUPT_KIND,
-        actionRequests: [
-          {
-            name: exec.name,
-            args: raw ?? exec.args,
-            description: because,
-            // pump 記 `approval/asked` 要配得上 `tool/call`（#1029）；選填，基座那一側不讀它。
-            ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
-          },
-        ],
-        reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
-      })) as { decisions?: { type?: string; message?: string }[] } | undefined;
-
-      const verdict = answer?.decisions?.[0];
-      if (verdict?.type === 'approve') return handler(request);
-      if (verdict?.type === 'reject') {
-        return denial(
-          exec,
-          verdict.message ?? `有人看過並拒絕了 "${exec.name}"。`,
-          approvalDenied(APPROVAL_REJECTED_BY_USER),
-        );
-      }
-      // 看不懂的回覆收成拒絕（fail closed）；pump 把這一對稽核的結局記成 `unavailable`（#2027）。
+    const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
+    if (channel.kind === 'policy-never') {
+      auditDecision(sessions, call, exec, because, 'rejected');
       return denial(
         exec,
-        `${because}，但收到的核准回覆看不懂（${JSON.stringify(answer)}；只收 approve 或 reject），所以沒有執行。` +
-          `這不是有人拒絕了它——是沒有拿到有效的決定。`,
-        approvalDenied(APPROVAL_INVALID_REPLY),
+        `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
+          `這不是有人拒絕了它——是沒有人被問到。`,
+        approvalDenied(APPROVAL_POLICY_NEVER),
       );
-    },
-  });
+    }
+    if (channel.kind === 'no-channel') {
+      auditDecision(sessions, call, exec, because, 'unavailable');
+      return denial(
+        exec,
+        `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
+          `這不是有人拒絕了它——是沒有可用的核准管道。`,
+        approvalDenied(APPROVAL_NO_CHANNEL),
+      );
+    }
+
+    // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
+    // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
+    // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
+    if (policy() === 'never') {
+      auditDecision(sessions, call, exec, because, 'rejected');
+      return denial(
+        exec,
+        `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
+          `這不是有人拒絕了它——是沒有人被問到。`,
+        approvalDenied(APPROVAL_POLICY_NEVER),
+      );
+    }
+
+    // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
+    // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+    const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
+    const answer = (await interrupt({
+      kind: APPROVAL_INTERRUPT_KIND,
+      actionRequests: [
+        {
+          name: exec.name,
+          args: raw ?? exec.args,
+          description: because,
+          // pump 記 `approval/asked` 要配得上 `tool/call`（#1029）；選填，基座那一側不讀它。
+          ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
+        },
+      ],
+      reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
+    })) as { decisions?: { type?: string; message?: string }[] } | undefined;
+
+    const verdict = answer?.decisions?.[0];
+    if (verdict?.type === 'approve') return next();
+    if (verdict?.type === 'reject') {
+      return denial(
+        exec,
+        verdict.message ?? `有人看過並拒絕了 "${exec.name}"。`,
+        approvalDenied(APPROVAL_REJECTED_BY_USER),
+      );
+    }
+    // 看不懂的回覆收成拒絕（fail closed）；pump 把這一對稽核的結局記成 `unavailable`（#2027）。
+    return denial(
+      exec,
+      `${because}，但收到的核准回覆看不懂（${JSON.stringify(answer)}；只收 approve 或 reject），所以沒有執行。` +
+        `這不是有人拒絕了它——是沒有拿到有效的決定。`,
+      approvalDenied(APPROVAL_INVALID_REPLY),
+    );
+  };
 }
 
 /**

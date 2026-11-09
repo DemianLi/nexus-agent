@@ -181,6 +181,17 @@ describe('瀏覽器端的 client', () => {
     expect(calls[1]?.body).toMatchObject({ id: 2, method: 'input.respond' });
   });
 
+  it('宿主頁工具（#2374）：hostTools 送成 params.host_tools，沒給就不帶', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { run_id: 'r1' })));
+    const hostTools = [
+      { name: 'focus_device', description: '轉到設備', parameters: { type: 'object' as const } },
+    ];
+    await client.runStart('t 1', '轉', { hostTools });
+    await client.runStart('t 1', '再轉');
+    expect((calls[0]?.body as { params: unknown }).params).toMatchObject({ host_tools: hostTools });
+    expect((calls[1]?.body as { params: object }).params).not.toHaveProperty('host_tools');
+  });
+
   it('中止這一輪走同一條 RPC family：路徑與封包各講一次 run.cancel，不帶 params', async () => {
     const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
     const result = await client.runCancel('t 1');

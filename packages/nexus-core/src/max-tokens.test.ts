@@ -10,6 +10,7 @@ import { toLoggedMessage } from './logged-message.js';
 import { BACKGROUND_SESSION_CONFIG_KEY } from './session-address.js';
 import {
   createMaxTokensCarrier,
+  createMaxTokensListener,
   createMaxTokensMiddleware,
   dropToolCalls,
   isMaxTokensFinish,
@@ -18,6 +19,8 @@ import {
   turnReachedMaxTokens,
 } from './max-tokens.js';
 import { SessionLog } from './session-log.js';
+import { toolErrorOf } from './tool-events.js';
+import { createToolExecuteMiddleware } from './tool-pipeline.js';
 
 describe('哪些 finish_reason 算撞到上限', () => {
   it.each([
@@ -128,27 +131,66 @@ describe('這一輪有沒有撞到上限（root 日誌）', () => {
 describe('子代理撞到上限時 task 的結果', () => {
   const HEADLINE = `Error: ${SUBAGENT_MAX_TOKENS_REASON}`;
 
-  it('逐字照 dsh：錯誤一句，後面接已經寫出的那段；status 是 error、不帶碼', () => {
-    const result = subagentMaxTokensResult(
-      new ToolMessage({ content: '寫到一半', tool_call_id: 'call_task', name: 'task' }),
-      'call_task',
-      '寫到一半',
-    ) as ToolMessage;
+  type Wrap = (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+
+  /** 經 `tools/execute` 生產者跑一次呼叫，最內一位是撞限的監聽者；子代理的命名空間是 `tools:9`。 */
+  function run(
+    body: () => Promise<unknown>,
+    options: {
+      partial?: string;
+      name?: string;
+      carrier?: ReturnType<typeof createMaxTokensCarrier>;
+    } = {},
+  ): Promise<unknown> {
+    const carrier = options.carrier ?? createMaxTokensCarrier();
+    if (options.partial !== undefined) carrier.record('tools:9', options.partial);
+    const middleware = createToolExecuteMiddleware(undefined, {
+      inner: [createMaxTokensListener(carrier)],
+    }) as unknown as { wrapToolCall: Wrap };
+    const name = options.name ?? 'task';
+    return middleware.wrapToolCall(
+      {
+        toolCall: { name, args: {}, id: 'call_task' },
+        tool: { name },
+        state: {},
+        runtime: { configurable: { checkpoint_ns: 'tools:9' } },
+      },
+      body,
+    );
+  }
+
+  it('逐字：錯誤一句，後面接已經寫出的那段；status 是 error、不帶碼、新造的一則', async () => {
+    const result = (await run(
+      async () =>
+        new ToolMessage({
+          content: '寫到一半',
+          tool_call_id: 'call_task',
+          name: 'task',
+          artifact: { kept: true },
+        }),
+      { partial: '寫到一半' },
+    )) as ToolMessage;
     expect(result.content).toBe(`${HEADLINE}\nPartial output before the run ended:\n寫到一半`);
     expect(result.status).toBe('error');
     expect(result.tool_call_id).toBe('call_task');
+    expect(result.name).toBe('task');
+    expect(result.artifact).toBeUndefined();
+    expect(toolErrorOf(result)).toBeUndefined();
   });
 
-  it('一個字都沒寫：只有那一句', () => {
-    const result = subagentMaxTokensResult(undefined, 'call_task', '  ') as ToolMessage;
+  it('一個字都沒寫：只有那一句', async () => {
+    const result = (await run(
+      async () => new ToolMessage({ content: '', tool_call_id: 'call_task', name: 'task' }),
+      { partial: '  ' },
+    )) as ToolMessage;
     expect(result.content).toBe(HEADLINE);
   });
 
   /**
    * 基座的 `task` 回 `Command`，裡面還有子代理寫進 state 的檔案——那是真的做了的事。
-   * 只換這次呼叫的那則 ToolMessage，其餘原樣；跟著一起塞進對話的別則訊息也留著。
+   * 只換這次呼叫的那則 ToolMessage（原位），其餘原樣；跟著一起塞進對話的別則訊息也留著。
    */
-  it('Command 只換這次呼叫的那則，state 的其餘欄位原樣', () => {
+  it('Command 只換這次呼叫的那則，state 的其餘欄位原樣', async () => {
     const injected = new HumanMessage('外掛塞的');
     const original = new Command({
       update: {
@@ -159,7 +201,7 @@ describe('子代理撞到上限時 task 的結果', () => {
         ],
       },
     });
-    const result = subagentMaxTokensResult(original, 'call_task', '半份');
+    const result = await run(async () => original, { partial: '半份' });
     expect(result).toBeInstanceOf(Command);
     const update = (result as Command).update as {
       files: unknown;
@@ -167,11 +209,67 @@ describe('子代理撞到上限時 task 的結果', () => {
     };
     expect(update.files).toEqual({ '/notes.md': { content: ['半份'] } });
     expect(update.messages).toHaveLength(2);
-    expect(update.messages[0]).toBe(injected);
-    const replaced = update.messages[1] as ToolMessage;
+    const replaced = update.messages[0] as ToolMessage;
+    expect(update.messages[1]).toBe(injected);
     expect(replaced.tool_call_id).toBe('call_task');
     expect(replaced.status).toBe('error');
     expect(String(replaced.content).startsWith(HEADLINE)).toBe(true);
+  });
+
+  it('Command 的 update 不是物件：整個換成那則錯誤', async () => {
+    const result = (await run(async () => new Command({ update: [['messages', []]] }), {
+      partial: '半份',
+    })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.tool_call_id).toBe('call_task');
+    expect(result.status).toBe('error');
+    expect(result.content).toBe(`${HEADLINE}\nPartial output before the run ended:\n半份`);
+  });
+
+  it('本體回的既不是 ToolMessage 也不是 Command：換成那則錯誤', async () => {
+    const result = (await run(async () => '純文字', { partial: '' })) as ToolMessage;
+    expect(ToolMessage.isInstance(result)).toBe(true);
+    expect(result.tool_call_id).toBe('call_task');
+    expect(result.status).toBe('error');
+    expect(result.content).toBe(HEADLINE);
+  });
+
+  it('交回的結果帶 `blocks` 與 `shape`：外側的 `next()` 照型別讀得到', () => {
+    const result = subagentMaxTokensResult(
+      { kind: 'message', content: '', blocks: [], shape: 'text', isError: false },
+      'call_task',
+      '寫到一半',
+    );
+    expect(result).toMatchObject({ kind: 'message', shape: 'text', isError: true, fresh: true });
+    expect(result.blocks).toEqual([{ type: 'text', text: result.content }]);
+  });
+
+  it('載體裡沒有這次的子代理：本體回的原物件', async () => {
+    const message = new ToolMessage({ content: '好了', tool_call_id: 'call_task', name: 'task' });
+    expect(await run(async () => message)).toBe(message);
+  });
+
+  it('不是 `task`：不看載體，原物件', async () => {
+    const carrier = createMaxTokensCarrier();
+    const message = new ToolMessage({ content: '好了', tool_call_id: 'call_task', name: 'ls' });
+    expect(await run(async () => message, { partial: '寫到一半', name: 'ls', carrier })).toBe(
+      message,
+    );
+    expect(carrier.take('tools:9')).toBe('寫到一半');
+  });
+
+  it('本體拋錯也把載體取走，錯原樣往外拋', async () => {
+    const carrier = createMaxTokensCarrier();
+    const boom = new Error('壞了');
+    await expect(
+      run(
+        async () => {
+          throw boom;
+        },
+        { partial: '寫到一半', carrier },
+      ),
+    ).rejects.toBe(boom);
+    expect(carrier.take('tools:9')).toBeUndefined();
   });
 });
 

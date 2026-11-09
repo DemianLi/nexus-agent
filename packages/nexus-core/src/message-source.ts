@@ -29,13 +29,13 @@
  * @module
  */
 
-import { HumanMessage } from '@langchain/core/messages';
-import type { BaseMessage } from '@langchain/core/messages';
-
 import { attachmentBlock } from './attachment-ref.js';
 import type { AttachmentRef, FileBlock, ImageBlock } from './attachment-ref.js';
 import { mentionHintBlock } from './subagent-mention.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
+import { pageContextBlock } from './page-context.js';
+import type { PageContextRef } from './page-context.js';
+import type { MessageContent, NexusMessage } from './nexus-message.js';
 import type { SessionEventMap } from './session-log.js';
 
 /** 來源在 `additional_kwargs` 上的鍵。 */
@@ -54,20 +54,17 @@ export interface MessageSource {
 }
 
 /** 讀一則訊息的來源。沒有、或形狀不對（不是帶字串 `kind` 的物件）就是 `undefined`。 */
-export function messageSourceOf(message: BaseMessage | undefined): MessageSource | undefined {
+export function messageSourceOf(
+  message: { readonly additional_kwargs?: Record<string, unknown> } | undefined,
+): MessageSource | undefined {
   if (message === undefined) return undefined;
   const raw: unknown = message.additional_kwargs?.[MESSAGE_SOURCE_KWARG];
   if (typeof raw !== 'object' || raw === null) return undefined;
   return typeof (raw as { kind?: unknown }).kind === 'string' ? (raw as MessageSource) : undefined;
 }
 
-/**
- * 這則 `HumanMessage` 是機器造的嗎——**有來源、而且不是 `user`**。
- * 不是 `HumanMessage` 也回 `false`：這個述詞問的是「人講話以外的 user-role 訊息」。
- */
-export function isMachineMessage(message: BaseMessage | undefined): boolean {
-  if (!HumanMessage.isInstance(message)) return false;
-  const source = messageSourceOf(message);
+/** 這則人話的來源是不是機器造的：**有來源、而且不是 `user`**。`BaseMessage` 那一支（`isMachineMessage`）在 `langchain-message-adapter.ts`。 */
+export function isMachineSource(source: MessageSource | undefined): boolean {
   return source !== undefined && source.kind !== 'user';
 }
 
@@ -106,36 +103,45 @@ export function turnStartSource(data: SessionEventMap['turn/start']): MessageSou
  *
  * **點名**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）不是參照，是一個固定的文字區塊，接在文字之後（`subagent-mention.ts`）；
  * 沒有點名的訊息跟以前逐位元組相同。
+ *
+ * **畫面情境**（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)，嵌入的對話框附的）同點名，是接在點名之後的固定文字區塊（`page-context.ts`）。
  */
 export function userContent(
   text: string,
   attachments?: readonly AttachmentRef[],
   mention?: SubagentMentionRef,
+  context?: PageContextRef,
 ): string | (FileBlock | ImageBlock | { readonly type: 'text'; readonly text: string })[] {
   const hasAttachments = attachments !== undefined && attachments.length > 0;
-  if (!hasAttachments && mention === undefined) return text;
+  if (!hasAttachments && mention === undefined && context === undefined) return text;
   return [
     ...(hasAttachments ? attachments.map(attachmentBlock) : []),
     ...(text === '' ? [] : [{ type: 'text' as const, text }]),
     // 點名（#328 第 2 項）：接在使用者那句話**之後**，見 `subagent-mention.ts`。
     ...(mention === undefined ? [] : [mentionHintBlock(mention)]),
+    ...(context === undefined ? [] : [pageContextBlock(context)]),
   ];
 }
 
 /**
- * 一顆 `turn/start` 送進圖的那則 `HumanMessage`：文字加上它的來源。
- * **live 路徑（pump、CLI）與重放共用這一個函式**，不然續接之後同一個位置的訊息會和即時的分岔。
+ * 一顆 `turn/start` 送進圖的那則人話：文字加上它的來源。
+ * **live 路徑（pump、CLI）與重放共用這一個函式**（live 路徑經 `langchain-message-adapter.ts` 的 `humanMessageForTurnStart` 轉成 `HumanMessage`），
+ * 不然續接之後同一個位置的訊息會和即時的分岔。
  */
-export function humanMessageForTurnStart(data: SessionEventMap['turn/start']): HumanMessage {
+export function turnStartMessage(data: SessionEventMap['turn/start']): NexusMessage {
   // `resume` 送進圖的是 `Command`，不是訊息：呼叫端已經分開走，走到這裡是接線錯了，大聲拋。
   if (data.kind === 'resume') throw new Error('`resume` 沒有訊息可造：它送進圖的是 Command');
   const source = turnStartSource(data);
-  return new HumanMessage({
-    content: userContent(
-      data.text,
-      data.kind === 'message' ? data.attachments : undefined,
-      data.kind === 'message' ? data.mention : undefined,
-    ) as never,
-    ...(source === undefined ? {} : { additional_kwargs: sourceKwargs(source) }),
-  });
+  return {
+    type: 'human',
+    data: {
+      content: userContent(
+        data.text,
+        data.kind === 'message' ? data.attachments : undefined,
+        data.kind === 'message' ? data.mention : undefined,
+        data.kind === 'message' ? data.context : undefined,
+      ) as MessageContent,
+      ...(source === undefined ? {} : { additional_kwargs: sourceKwargs(source) }),
+    },
+  };
 }

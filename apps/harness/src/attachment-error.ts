@@ -19,4 +19,9 @@ export type AttachmentErrorCode =
   | 'ATTACHMENT_TOO_LARGE'
   | 'ATTACHMENT_STORE_FAILED'
   /** 物件的內容對不上它的雜湊（被換過、損毀、截斷）；讀與去重都會驗。 */
-  | 'ATTACHMENT_CORRUPT';
+  | 'ATTACHMENT_CORRUPT'
+  /**
+   * 落盤那一份讀得到也驗過，只是做不出送模型的那一份（解不開、轉不出合格的輸出；[#2071](https://github.com/DemianLi/nexus-agent/issues/2071)）。
+   * 只在組請求時拋，投影層據此換佔位字，不上 wire。
+   */
+  | 'ATTACHMENT_REQUEST_IMAGE_FAILED';

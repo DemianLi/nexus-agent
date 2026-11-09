@@ -7,19 +7,20 @@
  * wire 的每一條路由都能以 serve 擁有者的身分操作 agent。部署主機是多人共用的（demian 2026-09-19），
  * 所以 #387 登記的重開條件已經觸發。
  *
- * **逐項照 dsh** `packages/client/connection/src/browser-auth.ts`（`ddefc45`），只把 node:http 的
- * req／res 換成 fetch 的 `Request`／`Response`：
+ * 判準：
  *
  * - **啟動 token**：每個行程一個，32 bytes 隨機值、base64url，不落盤。只有 `GET /?token=…` 而且
  *   query 裡剛好一個 token 才收；API 路徑與 `Authorization` 標頭都不收。
  * - **換到的 cookie**：值是 `v1.<body>.<HMAC-SHA256>`，body 是 `{ version, authority, issuedAt, expiresAt }`；
  *   名字是前綴加上 `sha256(authority)`——cookie 不分 port，所以同一台機器不同 port 上的 serve 各有
  *   各的名字、不會互相蓋掉；屬性 `Max-Age`、`Path=/`、`Expires`、`HttpOnly`、`SameSite=Strict`，
- *   loopback 的 HTTP 所以刻意不設 `Secure`，也不設 `Domain`（host-only）。
+ *   不設 `Domain`（host-only）。只有 serve 自己的 listener 走 TLS 才設 `Secure`：serve 只走 HTTP，所以不設；前面的代理
+ *   終止 TLS 時也一樣，`--public-url` 與轉送標頭都不算。
  * - **驗證**：authority 取 `Host` 正規化；只讀名字剛好相符的那一顆；簽章用 `timingSafeEqual` 比；
  *   authority 要相同；`issuedAt <= now < expiresAt`，而且期間不超過這一版的上限。
- * - **換完 303 到乾淨的 `/`**，帶 `cache-control: no-store` 與 `referrer-policy: no-referrer`；
- *   舊的 token 配上有效的 cookie 也只轉回乾淨的 `/`；其他一律同一種最小的 401。
+ * - **換完 303 到乾淨的 `./`**，帶 `cache-control: no-store` 與 `referrer-policy: no-referrer`；
+ *   舊的 token 配上有效的 cookie 也只轉回乾淨的 `./`；其他一律同一種最小的 401。轉址寫相對的：放在反向代理的子路徑
+ *   底下（#2369）時 serve 看不到前綴，瀏覽器對著 `/nexus/?token=…` 解析才回得到 `/nexus/`。
  *
  * ## 偏離（照 AGENTS.md 的偏離規則登記）
  *
@@ -38,6 +39,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
+import { OWNER_PRINCIPAL } from './wire-principal.js';
+import type { OwnerPrincipal } from './wire-principal.js';
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
@@ -55,12 +58,13 @@ interface BrowserCookiePayload {
   readonly expiresAt: number;
 }
 
-function encodeBase64Url(value: Uint8Array): string {
+/** base64url 編碼（`embed-session.ts` 的嵌入 cookie 共用）。 */
+export function encodeBase64Url(value: Uint8Array): string {
   return Buffer.from(value).toString('base64url');
 }
 
 /** 只收 canonical 的 base64url，同 dsh 的 `decodeBase64Url`。 */
-function decodeBase64Url(value: string): Buffer | undefined {
+export function decodeBase64Url(value: string): Buffer | undefined {
   if (!BASE64URL_PATTERN.test(value)) return undefined;
   const decoded = Buffer.from(value, 'base64url');
   return encodeBase64Url(decoded) === value ? decoded : undefined;
@@ -70,8 +74,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 正規化過的請求 authority：cookie 名字與簽章裡的 audience 都用它。 */
-function requestAuthority(headers: Headers): string | undefined {
+/** 正規化過的請求 authority：cookie 名字與簽章裡的 audience 都用它。Host 缺或解析不了回 `undefined`。 */
+export function requestAuthority(headers: Headers): string | undefined {
   const host = headers.get('host') ?? undefined;
   if (host === undefined) return undefined;
   try {
@@ -100,7 +104,7 @@ function cookieName(authority: string): string {
 }
 
 /** 只找自己產生的那一顆，不實作一般的 Cookie 解碼。 */
-function cookieValue(headerValue: string, name: string): string | undefined {
+export function cookieValue(headerValue: string, name: string): string | undefined {
   for (const segment of headerValue.split(';')) {
     const at = segment.indexOf('=');
     if (at === -1 || segment.slice(0, at).trim() !== name) continue;
@@ -171,7 +175,7 @@ function decodeCookie(value: string, secret: Buffer): BrowserCookiePayload | und
 function redirectToCleanRoot(setCookie?: string): Response {
   const headers = new Headers({
     'cache-control': 'no-store',
-    location: '/',
+    location: './',
     'referrer-policy': 'no-referrer',
   });
   if (setCookie !== undefined) headers.set('set-cookie', setCookie);
@@ -209,14 +213,14 @@ export class BrowserAuth {
   }
 
   /**
-   * 在一般的根網址上帶這個行程的 token。
+   * 在瀏覽器要開的網址上帶這個行程的 token。
    *
-   * @param baseUrl - 瀏覽器要開的來源（不帶憑證）。
-   * @returns 路徑是 `/`、query 只有 token 的網址。**這個值是敏感輸出**：印一次，別處不重複。
+   * @param baseUrl - 瀏覽器要開的網址（不帶憑證）：直連時是 serve 的來源，放在反向代理後面時是 `--public-url`。
+   * @returns 保留 `baseUrl` 的路徑（補成 `/` 結尾）、query 只有 token 的網址。**這個值是敏感輸出**：印一次，別處不重複。
    */
   authenticatedUrl(baseUrl: string): string {
     const url = new URL(baseUrl);
-    url.pathname = '/';
+    if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
     url.search = '';
     url.hash = '';
     url.searchParams.set(TOKEN_QUERY, this.launchToken);
@@ -291,6 +295,15 @@ export class BrowserAuth {
       payload.expiresAt > payload.issuedAt &&
       payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
     );
+  }
+
+  /**
+   * {@link isAuthenticated} 過了就是 serve 的擁有者（`wire-handler.ts` 的 `WireAuth`）。
+   *
+   * @returns 有效的會話 cookie 回擁有者；沒有回 `undefined`。
+   */
+  authenticate(headers: Headers): OwnerPrincipal | undefined {
+    return this.isAuthenticated(headers) ? OWNER_PRINCIPAL : undefined;
   }
 
   private unauthorized(request: Request): Response {

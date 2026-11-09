@@ -19,7 +19,12 @@
 import { tool } from '@langchain/core/tools';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { replayConversation, STEP_INBOX_CONFIG_KEY, SessionLog } from '@nexus/core';
+import {
+  replayConversation,
+  STEP_INBOX_CONFIG_KEY,
+  SessionLog,
+  withModelCallStep,
+} from '@nexus/core';
 import type { InboxSplice, PluginEntry, SessionEvent, StepInbox } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
 import { createWireClient, emptyConversation, INBOX, reduceAll } from '@nexus/wire';
@@ -140,15 +145,16 @@ function triggerPlugin(
           ),
         );
         registry.middleware.use(
-          createMiddleware({
-            name: 'steerTrigger',
-            wrapModelCall: async (request, handler) => {
-              const result = await handler(request);
+          withModelCallStep(
+            async (request, next) => {
+              const result = await next(request);
               calls += 1;
               hooks.afterModelCall?.(calls);
               return result;
             },
-          }),
+            (wrapModelCall) =>
+              createMiddleware({ name: 'steerTrigger', wrapModelCall: wrapModelCall as never }),
+          ),
         );
         extra?.(registry);
       },

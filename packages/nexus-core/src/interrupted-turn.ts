@@ -37,12 +37,9 @@
  * @module
  */
 
-import type { ToolMessage } from '@langchain/core/messages';
-
-import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
-import { closer, requestedCalls } from './conversation-replay.js';
-import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
-import { SessionSeq } from './session-log.js';
+import { closer, closerError, requestedCalls } from './conversation-replay.js';
+import type { NexusMessage } from './nexus-message.js';
+import { appendSharedEvents, SessionSeq } from './session-log.js';
 import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
   ResumedStoredSession,
@@ -106,7 +103,7 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
       }
       case 'assistant/message':
         if (open) {
-          for (const call of requestedCalls(fromLoggedMessage(event.data.message))) {
+          for (const call of requestedCalls(event.data.message)) {
             unanswered.set(call.id, call.name);
           }
         }
@@ -130,10 +127,10 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
   return { open, unanswered, started, openModelStarts };
 }
 
-/** 一顆沒配到結果的呼叫補的錯誤結果：寫進日誌的 `data`，與寫進對話的那一則（同一個實例）。 */
+/** 一顆沒配到結果的呼叫補的錯誤結果：寫進日誌的 `data`（`data.message` 就是 `message`，同一個實例），與寫進對話的那一則。寫進對話時由呼叫端轉成 `BaseMessage`（`toBaseMessage`），錯誤碼靠這個實例認回。 */
 export interface UnansweredCallResult {
   readonly data: SessionEventMap['tool/result'];
-  readonly message: ToolMessage;
+  readonly message: NexusMessage;
 }
 
 /**
@@ -152,14 +149,7 @@ export function unansweredCallResults(events: readonly SessionEvent[]): Unanswer
     const message = closer({ id: callId, name }, wasStarted);
     return {
       message,
-      data: {
-        callId,
-        isError: true,
-        error: wasStarted
-          ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
-          : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
-        message: toLoggedMessage(message),
-      },
+      data: { callId, isError: true, error: closerError(wasStarted), message },
     };
   });
 }
@@ -250,7 +240,8 @@ export async function readColdSession(
  *
  * @param store - 存放處。
  * @param id - 要續接的會話 id。
- * @returns 同 {@link SessionStore.resume}，`events` 多了補結。
+ * @returns 同 {@link SessionStore.resume}，`events` 多了補結。`resume` 交的是可共用的陣列（{@link shareStoredEvents}）時，
+ *   交回的也是，補結原地凍住。
  * @throws `store.resume` 拋的，或補結寫不進去。
  */
 export async function resumeClosingInterruptedTurn(
@@ -266,5 +257,5 @@ export async function resumeClosingInterruptedTurn(
     await resumed.stored.close().catch(() => undefined);
     throw error;
   }
-  return { ...resumed, events: [...resumed.events, ...closers] };
+  return { ...resumed, events: appendSharedEvents(resumed.events, closers) };
 }

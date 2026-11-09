@@ -27,16 +27,20 @@
  *
  * ## 上限怎麼定
  *
- * 從 {@link SESSION_EVENT_MAX_DEPTH} 推：日誌收得下的事件，帶的訊息灌回 state 之後要過得了 `seal`（訊息不寫進存檔點，層數照寫進去的形狀算）。層數的算法跟日誌同一套
+ * 從 {@link SESSION_EVENT_MAX_DEPTH} 推：日誌收得下的事件，`data` 底下帶的那則日誌訊息灌回 state 之後要過得了 `seal`（訊息不寫進存檔點，層數照寫進去的形狀算）。層數的算法跟日誌同一套
  * （根是容器的話算第 1 層，純量不算），量的是交給 `JSON.stringify` 之後的樣子（先 `toJSON`、再過 `_default`）。
- * 加上的 {@link CHECKPOINT_WRAPPER_DEPTH} 層是實測出來的，見那一格的註解。
+ * 上限是事件的上限加兩項：訊息在存檔點裡多包的 {@link CHECKPOINT_WRAPPER_DEPTH} 層，與 `toJSON` 跳脫最多多出的
+ * {@link CHECKPOINT_LC_ESCAPE_DEPTH} 層，見各自的註解。
  *
  * ## 存檔點裡的 `messages` 不走這顆（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
  *
  * `channel_values.messages` 與工具派工的 `args` 留在記憶體不序列化，寫入吞錯與讀回層數上限這兩件事碰不到它們。
  * `pruned-memory-saver.ts` 的 `seal` 用同一個
- * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同：日誌收得下的事件進得了 state，太深的拋
- * {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
+ * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同。日誌收得下的事件進得了 state：日誌訊息（`assistant/message`、
+ * `tool/result`、`user/message`、`compaction/summary` 帶的那一則）照上面的算法；`turn/start` 推出的訊息只由型別裡的欄位組成
+ * （附件參照經 `@nexus/core` 的 `attachmentBlock` 只挑型別欄位，點名換成一個文字區塊，來源只挑固定幾格），欄位值是型別宣告的
+ * 純量時層數固定，不隨事件多帶的鍵變深。例外是舊格式只有 `additional_kwargs.tool_calls` 字串的：解析出來的參數
+ * 不受日誌那一關限制。太深的拋 {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
  * 中斷或出錯那一輪已完成任務的 `messages` 寫入屬於 pending writes，照樣走這顆。
  *
  * ## 與 dsh 的偏離（理由 1）
@@ -70,8 +74,19 @@ export const CHECKPOINT_UNSERIALIZABLE = 'checkpoint_unserializable';
  */
 export const CHECKPOINT_WRAPPER_DEPTH = 2;
 
+/**
+ * 訊息的 `toJSON` 跳脫最多多出幾層（[#2315](https://github.com/DemianLi/nexus-agent/issues/2315)）。
+ *
+ * 帶 `lc` 鍵、或只有一個 `__lc_escaped__` 鍵的普通物件，會被包進 `{"__lc_escaped__": …}`，多 1 層；包住的那顆原樣放進去，
+ * 裡面不再跳脫（`@langchain/core` 1.2.9 `dist/load/validation.js:80-83` 的 `escapeIfNeeded`），所以值是純資料時，一條路徑上
+ * 最多多 1 層。日誌裡的
+ * `lc` 鍵不跳脫，日誌那一關量不到這一層。
+ */
+export const CHECKPOINT_LC_ESCAPE_DEPTH = 1;
+
 /** 一次寫入（存檔點、metadata、每一筆 write）最多巢狀幾層，`seal` 量訊息用同一個數字。讀回時同一個數字傳給 `load`。 */
-export const CHECKPOINT_MAX_DEPTH = SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH;
+export const CHECKPOINT_MAX_DEPTH =
+  SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH + CHECKPOINT_LC_ESCAPE_DEPTH;
 
 /**
  * {@link checkpointDepth} 在呼叫任何 `toJSON` 之前先量的門檻：上限的兩倍（理由見那裡，與 `@nexus/core` `logged-message.ts` 的

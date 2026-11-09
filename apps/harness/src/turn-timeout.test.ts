@@ -14,7 +14,12 @@ import type { AddressInfo } from 'node:net';
 import { HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry, TOOL_ABORTED, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
+import {
+  SessionRegistry,
+  TOOL_ABORTED,
+  TURN_CANCEL_CONFIG_KEY,
+  withModelCallStep,
+} from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 import { GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
@@ -456,14 +461,18 @@ describe('root 那一輪到點（真 pump）', () => {
         name: 'fire-after-model',
         apply(registry) {
           registry.middleware.use(
-            createMiddleware({
-              name: 'fire-after-model',
-              wrapModelCall: async (request, handler) => {
-                const response = await handler(request);
+            withModelCallStep(
+              async (request, next) => {
+                const response = await next(request);
                 timers.fire(TIMEOUT_MS);
                 return response;
               },
-            }),
+              (wrapModelCall) =>
+                createMiddleware({
+                  name: 'fire-after-model',
+                  wrapModelCall: wrapModelCall as never,
+                }),
+            ),
           );
         },
       },

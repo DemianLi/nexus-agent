@@ -8,6 +8,8 @@
  * - N0785：讀回來的每一筆跑 core 的單筆資料規則（dsh `validateStoredEvents`）。
  * - N0603：同一個子代理的 `subagent/catalog` 只能登記一次、`childId` 要是字串（dsh `assertReleasedV4Relationships`、
  *   `catalogFact`）。
+ * - [#1597](https://github.com/DemianLi/nexus-agent/issues/1597)：事件之間的關係錯掉就拒開（core 的 `createSessionRelationshipChecker`），
+ *   標題的來源由 harness 驗；為舊形狀留的分支照常讀回。
  *
  * 出貨夾具照常讀回由 `session-format-fixtures.test.ts` 管（新規則跑在同一條讀取路徑上）。
  */
@@ -19,6 +21,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  TOOL_NOT_STARTED,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
@@ -157,10 +160,7 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
   });
 
   it('seq 的形狀讀盤不驗，交給連續性（同 dsh 讀檔器）：-0 等於 0 讀得出，要到建 seed 才拒', async () => {
-    const directory = await written([
-      '{"type":"model/usage","seq":-0,"time":1,"data":{}}',
-      turnEnd,
-    ]);
+    const directory = await written(['{"type":"model/usage","seq":-0,"time":1,"data":{}}', usage]);
     expect(await lengths(directory)).toEqual([2, 2]);
     const { events, stored } = await openJsonlSessionStore({ directory }).resume('a');
     await stored.close();
@@ -198,11 +198,34 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
   });
 });
 
+/** 嵌入身分開的 thread 的 header 兩格（#2370）。 */
+const ORIGIN = { embedder: 'crm', loginSessionSha256: 'a'.repeat(64) };
+const OWNED = { profile: 'embed', owner: { userId: 'u' }, embedOrigin: ORIGIN };
+
 describe('header', () => {
+  it('嵌入身分開的：owner、embedOrigin、profile 三格一起，讀得出', async () => {
+    const directory = await written([usage], OWNED);
+    expect(await lengths(directory)).toEqual([1, 1]);
+  });
+
   it.each([
     ['createdAt 是 -1', { createdAt: -1 }, 'createdAt'],
     ['cwd 是相對路徑', { cwd: 'relative/dir' }, 'cwd'],
     ['多一個沒人寫過的鍵 foo', { foo: 1 }, 'foo'],
+    ['profile 不是 embed（#2367 只寫 embed）', { profile: 'full' }, 'profile'],
+    [
+      'owner 沒有 embedOrigin（#2370）',
+      { profile: 'embed', owner: { userId: 'u' } },
+      'embedOrigin',
+    ],
+    ['owner 沒有 profile: embed', { owner: { userId: 'u' }, embedOrigin: ORIGIN }, 'profile'],
+    ['owner 的 userId 是空字串', { ...OWNED, owner: { userId: '' } }, 'owner'],
+    ['owner 多一個鍵', { ...OWNED, owner: { userId: 'u', name: 'x' } }, 'owner'],
+    [
+      'embedOrigin 的 loginSessionSha256 不是 64 個小寫十六進位',
+      { ...OWNED, embedOrigin: { ...ORIGIN, loginSessionSha256: 'A'.repeat(64) } },
+      'embedOrigin',
+    ],
   ])('D：%s，唯讀打開與續接都拒成 SessionCorruptionError', async (_name, header, cell) => {
     const directory = await written([usage], header);
     for (const error of await failures(directory)) {
@@ -323,6 +346,188 @@ describe('N0603 子代理目錄唯一', () => {
     const duplicated = await written([catalog('kid'), catalog('kid')]);
     const salvaged = await (
       await openJsonlSessionStore({ directory: duplicated }).open('a', 'read')
+    ).read({
+      salvage: true,
+    });
+    expect(salvaged).toHaveLength(2);
+  });
+});
+
+describe('#1597 事件之間的關係', () => {
+  const turnStart = { type: 'turn/start', data: { kind: 'message', text: '嗨' } };
+  const call = (callId: string) => ({
+    type: 'tool/call',
+    data: { callId, name: 'echo', arguments: '{}' },
+  });
+  const result = (callId: string, extra: Record<string, unknown> = {}) => ({
+    type: 'tool/result',
+    data: { callId, isError: false, ...extra },
+  });
+  const endSeed = { type: 'session/end-seed', data: {} };
+  const retry = (retryId: string, n: number) => ({
+    type: 'llm/retry',
+    data: { retryId, retry: n, maxRetries: 3, failure: { message: 'x', code: 'RATE_LIMIT' } },
+  });
+  const retryStarted = (retryId: string, n: number) => ({
+    type: 'llm/retry-started',
+    data: { retryId, retry: n, waitedMs: 10 },
+  });
+  const title = (messageSeqs: unknown, kind = 'fallback') => ({
+    type: 'session/title',
+    data: { title: 't', messageSeqs, source: { kind } },
+  });
+
+  /** 兩條讀路徑都拒成 `SessionCorruptionError`，訊息帶第幾行與（core 那幾條的）規則名。 */
+  async function expectRejected(
+    events: readonly Record<string, unknown>[],
+    line: number,
+    rule: string,
+  ): Promise<void> {
+    const errors = await failures(await written(events));
+    expect(errors).toHaveLength(2);
+    for (const error of errors) {
+      expect(error).toBeInstanceOf(SessionCorruptionError);
+      expect((error as Error).message).toContain(`第 ${line} 行`);
+      expect((error as Error).message).toContain(rule);
+    }
+  }
+
+  it.each([
+    ['turn/end 前面沒有 turn/start', [usage, turnEnd], 2, 'turn-not-open'],
+    ['turn/start 疊在開著的輪上', [turnStart, turnStart], 2, 'turn-overlap'],
+    [
+      'interrupt/raised 落在輪外',
+      [{ type: 'interrupt/raised', data: { interrupts: [] } }],
+      1,
+      'interrupt-outside-turn',
+    ],
+    [
+      'model/end 沒有 model/start',
+      [turnStart, { type: 'model/end', data: {} }],
+      2,
+      'model-end-without-start',
+    ],
+    [
+      'modelCall 指不到 model/start',
+      [turnStart, { type: 'model/usage', data: { modelCall: 7 } }],
+      2,
+      'model-call-unknown',
+    ],
+    [
+      'tool/result 的 callId 沒有 tool/call',
+      [turnStart, call('a'), result('b')],
+      3,
+      'tool-result-without-call',
+    ],
+    [
+      'llm/retry-started 沒有排定過',
+      [turnStart, { type: 'model/start', data: {} }, retryStarted('r', 1)],
+      3,
+      'retry-started-unscheduled',
+    ],
+    [
+      'llm/retry-started 同一對開跑兩次',
+      [
+        turnStart,
+        { type: 'model/start', data: {} },
+        retry('r', 1),
+        retryStarted('r', 1),
+        retryStarted('r', 1),
+      ],
+      5,
+      'retry-started-unscheduled',
+    ],
+    [
+      'llm/retry 跳號',
+      [turnStart, { type: 'model/start', data: {} }, retry('r', 1), retry('r', 3)],
+      4,
+      'retry-chain',
+    ],
+    [
+      'llm/retry 不從 1 起',
+      [turnStart, { type: 'model/start', data: {} }, retry('r', 2)],
+      3,
+      'retry-chain',
+    ],
+  ] as const)('C：%s，拒開', async (_name, events, line, rule) => {
+    await expectRejected(events, line, rule);
+  });
+
+  it.each([
+    ['自動標題沒有來源', [turnStart, title([])], 2, 'messageSeqs 要恰好在使用者改名時是空的'],
+    [
+      '使用者改名卻帶來源',
+      [turnStart, title([0], 'user')],
+      2,
+      'messageSeqs 要恰好在使用者改名時是空的',
+    ],
+    ['來源指到不是人話的那一顆', [turnStart, usage, title([1])], 3, '不是更早、不重複的人話'],
+    ['來源指到後面', [title([1]), turnStart], 1, '不是更早、不重複的人話'],
+    ['來源重複', [turnStart, title([0, 0])], 2, '不是更早、不重複的人話'],
+  ] as const)('C：標題的來源（harness 驗）%s，拒開', async (_name, events, line, problem) => {
+    await expectRejected(events, line, problem);
+  });
+
+  it('合規的序列照常讀回：重試配對、使用者改名、回答過的工具', async () => {
+    const directory = await written([
+      turnStart,
+      title([0]),
+      { type: 'model/start', data: {} },
+      { type: 'model/end', data: { modelCall: 2 } },
+      retry('r', 1),
+      retryStarted('r', 1),
+      { type: 'model/start', data: {} },
+      { type: 'model/end', data: { modelCall: 6 } },
+      call('a'),
+      result('a'),
+      turnEnd,
+      title([], 'user'),
+    ]);
+    expect(await failures(directory)).toEqual([undefined, undefined]);
+  });
+
+  it('B：#934 之前續接過的「開著的輪＋end-seed」，補結接在 end-seed 後面（#721 carried），照常讀回', async () => {
+    const directory = await written([turnStart, call('a'), endSeed, result('a'), turnEnd]);
+    expect(await failures(directory)).toEqual([undefined, undefined]);
+    expect(await lengths(directory)).toEqual([5, 5]);
+  });
+
+  it('B 的反面：輪已收的 end-seed 清掉沒配到的 call，之後的結果配不到就拒', async () => {
+    await expectRejected(
+      [turnStart, call('a'), turnEnd, endSeed, result('a')],
+      5,
+      'tool-result-without-call',
+    );
+  });
+
+  it('end-seed 之後的新一輪不算疊在上一個行程沒收的輪上', async () => {
+    const directory = await written([turnStart, endSeed, turnStart, turnEnd]);
+    expect(await failures(directory)).toEqual([undefined, undefined]);
+  });
+
+  it('D：沒有 tool/call 的 TOOL_NOT_STARTED 合成結果照常讀回', async () => {
+    const directory = await written([
+      turnStart,
+      result('ghost', {
+        isError: true,
+        error: { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED, message: 'x' },
+      }),
+      turnEnd,
+    ]);
+    expect(await failures(directory)).toEqual([undefined, undefined]);
+  });
+
+  it('data 的形狀不對（null、callId 不是字串）拒成 SessionCorruptionError，不漏出 TypeError', async () => {
+    for (const data of [null, { callId: 3, isError: false }]) {
+      const errors = await failures(await written([turnStart, { type: 'tool/result', data }]));
+      for (const error of errors) expect(error).toBeInstanceOf(SessionCorruptionError);
+    }
+  });
+
+  it('撿回（salvage）不跑關係驗證：照常交出讀得懂的', async () => {
+    const directory = await written([usage, turnEnd]);
+    const salvaged = await (
+      await openJsonlSessionStore({ directory }).open('a', 'read')
     ).read({
       salvage: true,
     });

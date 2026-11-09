@@ -71,6 +71,14 @@ index_status(project: "nexus-agent")
 
 ## 引用 deepseek-harness 之前
 
+原始碼不進版控（`.gitignore` 與 `.prettierignore` 都排除 `references/`），要自己拉一份，唯讀，不要改它：
+
+```bash
+git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git references/deepseek-harness
+```
+
+`docs/` 每份都有 `.zh.md` 中文版，入口是 `docs/architecture.zh.md`、`docs/cordis-primer.zh.md`、`docs/subsystems/*.zh.md`；房規在根目錄的 `AGENTS.md` 與 `packages/AGENTS.md`。
+
 那份 clone 是 `--depth 1`，會停在 clone 當下那個 commit，索引也跟著停在那裡。拿它當標準引用之前：
 
 1. `git -C references/deepseek-harness pull`，對一下 `git rev-parse HEAD` 與 `git ls-remote origin HEAD`

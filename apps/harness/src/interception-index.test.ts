@@ -7,7 +7,7 @@
  *
  * ## 為什麼是這裡，而不是 `registry.ts` 的檔頭
  *
- * 最直覺的家是 `PluginRegistry` 的十九個欄位。**那是錯的軸**：第 2、6、7 格全擠在
+ * 最直覺的家是 `PluginRegistry` 的二十個欄位。**那是錯的軸**：第 2、6、7 格全擠在
  * `middleware` 一個欄位，第 3 格落在 `apps/harness` 根本沒有欄位，而第 6／7 格的**位置**
  * 是 `fold.ts` 決定的、不由註冊順序決定——欄位這一軸連「排在第幾個」都表達不出來。
  * #190 記著同型的坑：grep `lifecycle` 找生命週期鉤子會落到關機 disposer 上。
@@ -194,12 +194,12 @@ const INDEX: readonly InterceptionRow[] = [
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
       'apps/harness/src/pre-step-middleware.ts',
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
-      // 載體是 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
-      'packages/nexus-plugin-plan-mode/src/index.ts',
+      // 載體是相容層那一格 `plan-mode-model-call` 的 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
+      'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
     ],
     permissionDelta:
       '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一次模型呼叫' +
-      '前由它的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
+      '前由相容層那一格 `plan-mode-model-call` 的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
       '`wrapModelCall` 每次模型呼叫都跑、不是圖節點，所以那一半的節奏與 dsh 同（每一步），也不多一格。' +
       '**注入那半只佔了一部分**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
       '我們的 `beforeAgent` 只能**追加**——刪不掉、也指定不了位置，位置由基座決定' +
@@ -282,11 +282,11 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/invalid-tool-args.ts',
       'packages/nexus-core/src/turn-cancel.ts',
       'packages/nexus-core/src/output-schema.ts',
-      // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們貼著本體換狀態。
+      // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們在 `tools/execute` 內層換狀態。
       'packages/nexus-core/src/fs-tool-errors.ts',
       // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，呼叫動手之前排空（root 與子代理）。
       'packages/nexus-core/src/session-checkpoint-policy.ts',
-      // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們貼著本體補。
+      // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們在 `tools/execute` 外側補。
       'packages/nexus-core/src/read-continuation.ts',
       // 子代理撞到輸出上限（#433）：dsh 在前景 `task` 本體裡拋，我們貼著本體換掉結果。
       'packages/nexus-core/src/max-tokens.ts',
@@ -302,12 +302,11 @@ const INDEX: readonly InterceptionRow[] = [
     eventOccupant: 'tools/post-execute',
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
-    occupants: ['packages/nexus-core/src/output-schema.ts'],
+    occupants: ['packages/nexus-core/src/shared-read-mark.ts'],
     permissionDelta:
-      '佔用者是 dsh 在這一格**之前**的那一步（`createSuccessResult` 驗 `output.schema`），' +
-      '不是 post-execute 的 listener——我們這側兩者共用一個 `wrapToolCall` 載體。' +
-      '位置 2026-09-13 起由 fold 決定（[#252](https://github.com/DemianLi/nexus-agent/issues/252)，' +
-      '檔頭缺口帳第 1 筆收掉）。另外 `additionalContexts` 的射程只到' +
+      '佔用者是共用區讀出內容的前綴（#1676），`tools/post-execute` 內層的 core 監聽者，在每一位插件監聽者內側；' +
+      '位置由 fold 決定。輸出校驗（dsh 在這一格**之前**的 `createSuccessResult`）在第 6 格的內層。' +
+      '另外 `additionalContexts` 的射程只到' +
       '「單一生產者、一則脈絡、成功路徑」——交錯順序、失敗路徑收集、被外層阻止時丟棄' +
       '三條契約今天零生產者也就零驗證，**第二個生產者出現就要重判這一格**。',
     recordDelta: undefined,
@@ -318,7 +317,7 @@ const INDEX: readonly InterceptionRow[] = [
 /** 索引的列數。**釘死是刻意的**：只 grep 不數，刪掉一列這份測試照樣綠。 */
 const EXPECTED_ROWS = 5;
 
-/** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
+/** 佔用位址的總數（列可以共用檔案，數的是位址，不是檔案）。 */
 const EXPECTED_SITES = 16;
 
 /**
@@ -340,15 +339,15 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
  *
- * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是它本來就有的
- * `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
+ * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是相容層那一格
+ * `plan-mode-model-call` 的 `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
  * 是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
  *
  * agent-instructions（#1474）是**消費者**：它經 `@nexus/agent-loop` 登記 listener、自己不碰 `beforeAgent`，載體是宿主的
  * `apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
  */
 const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
-  'packages/nexus-plugin-plan-mode/src/index.ts',
+  'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
   // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
   'packages/nexus-plugin-agent-instructions/src/index.ts',
   // time-context（#1625）同上：第二位 `preStep` 消費者。
@@ -369,10 +368,14 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
  * `skills-middleware.ts`（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：包基座的 skills middleware，
  * `beforeAgent` 只是把基座那顆的「掃一次 skill 目錄」轉過去、並在掃到空的之後不再轉。它**不注入、不提交待辦**
  * （注入發生在 `wrapModelCall`，而且空的時候連那個也放行），所以不佔 pre-step。同樣是基座時代就有、搬進樹才現形。
+ *
+ * `memory-middleware.ts`（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：包基座的記憶 middleware，`beforeAgent` 只是把基座
+ * 那顆的「讀一次記憶檔」轉過去、記下讀到的。注入發生在 `wrapModelCall`，所以同樣不佔 pre-step。
  */
 const PRE_STEP_NOT_OCCUPANTS: readonly string[] = [
   'packages/nexus-core/src/patch-tool-calls.ts',
   'packages/nexus-core/src/skills-middleware.ts',
+  'packages/nexus-core/src/memory-middleware.ts',
 ];
 
 /** 遞迴列出產品原始碼的 `.ts`。 */

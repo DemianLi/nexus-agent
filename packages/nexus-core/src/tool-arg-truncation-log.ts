@@ -4,10 +4,11 @@
  *
  * 縮短是基座（`deepagents@1.13.1`）摘要器的 `truncateArgs` 做的：每次請求前，在 `keep` 之前的助手訊息裡，`write_file`／`edit_file` 的字串參數
  * 超過 `maxLength` 的換成「開頭 20 個字＋標記」。它只改請求，不寫日誌，所以從日誌推不回模型實際看到的那一份。我們不擁有那段程式碼，
- * 所以**不重寫它的規則，改成觀察結果**：基座把請求交下去的那一刻拿交下去的串跟進來的串比（{@link newlyTruncatedArgs}），縮短了的記一筆
+ * 所以**不重寫它的規則，改成觀察結果**：基座把請求交下去的那一刻拿交下去的串跟進來的串比（`langchain-message-adapter.ts` 的 `newlyTruncatedArgs`），縮短了的記一筆
  * `compaction/truncate-args`（`session-log.ts`），**每個參數只記一次，之後每次請求都沿用**——形狀與 `compaction/prune`（{@link ./tool-result-prune-log.ts}）同。
- * 兩個讀者共用這個檔：請求端（`summarization.ts` 的 `withArgTruncationLog`，每次呼叫前把記過的換上去再交給基座）與推導端
- * （`replayConversation` 的 `applyArgTruncations` 選項），所以**兩邊換出來的東西逐位元組相同**不是巧合，是同一個函式。
+ * 兩個讀者共用「換成什麼」（{@link truncatedCalls}）：請求端（`summarization.ts` 的 `withArgTruncationLog`，每次呼叫前把記過的換上去再交給基座，
+ * 在 `BaseMessage` 上換，`langchain-message-adapter.ts`）與推導端（`applyArgTruncations` 選項，在 {@link NexusMessage} 上換，{@link truncateLoggedMessages}），
+ * 所以**兩邊換出來的參數逐位元組相同**不是巧合，是同一個函式。
  *
  * ## 換出來的訊息只改參數，不學基座整則重建
  *
@@ -27,8 +28,8 @@
  * @module
  */
 
-import { AIMessage } from '@langchain/core/messages';
-import type { BaseMessage } from '@langchain/core/messages';
+import { nexusContent, nexusToolCalls } from './nexus-message.js';
+import type { MessageContent, NexusMessage, NexusToolCall } from './nexus-message.js';
 import type { SessionEvent } from './session-log.js';
 
 /** 日誌上記的一個被縮短的參數。 */
@@ -61,45 +62,46 @@ export interface NewlyTruncatedCall {
  */
 export function recordedArgTruncationsOf(events: readonly SessionEvent[]): RecordedArgTruncations {
   const recorded = new Map<string, Map<string, RecordedArgTruncation>>();
-  for (const event of events) {
-    if (event.type !== 'compaction/truncate-args') continue;
-    for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
-      let args = recorded.get(call.callId);
-      if (args === undefined) recorded.set(call.callId, (args = new Map()));
-      for (const [key, truncation] of Object.entries(call.args)) {
-        args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
-      }
-    }
-  }
+  for (const event of events) recordArgTruncationsInto(recorded, event);
   return recorded;
 }
 
-/** 一則訊息的工具呼叫；不是助手訊息、或沒有工具呼叫就是 `undefined`。 */
-function toolCallsOf(message: BaseMessage): AIMessage['tool_calls'] {
-  if (!AIMessage.isInstance(message)) return undefined;
-  return message.tool_calls !== undefined && message.tool_calls.length > 0
-    ? message.tool_calls
-    : undefined;
+/**
+ * 把一顆事件記的縮短收進 `recorded`，規則同 {@link recordedArgTruncationsOf}（同一個參數後記的蓋前記的）。不是
+ * `compaction/truncate-args` 就不動。給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ */
+export function recordArgTruncationsInto(
+  recorded: Map<string, Map<string, RecordedArgTruncation>>,
+  event: SessionEvent,
+): void {
+  if (event.type !== 'compaction/truncate-args') return;
+  for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
+    let args = recorded.get(call.callId);
+    if (args === undefined) recorded.set(call.callId, (args = new Map()));
+    for (const [key, truncation] of Object.entries(call.args)) {
+      args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
+    }
+  }
 }
 
 /**
- * 把一則訊息裡每個記過的參數換上縮短後的字串。
+ * 一則助手訊息的工具呼叫與內容換上記過的縮短之後的樣子。
  *
- * @param message - 任何一則訊息；不是助手訊息、或沒有一個參數對得上的原樣回。
+ * @param calls - 那則訊息的工具呼叫（建構子補過的那一份）。
+ * @param content - 那則訊息的內容（同上）。
  * @param recorded - {@link recordedArgTruncationsOf} 的結果。
- * @returns 有換的時候是只換了 `tool_calls[i].args` 的新 `AIMessage`（其餘欄位原樣）；否則是傳進來的那一則。
+ * @returns 有換的時候是新的 `tool_calls` 與 `content`（只換 `tool_calls[i].args` 與同 id 的 `tool_call` 區塊）；一個參數都沒對上就是 `undefined`。
  */
-export function applyRecordedArgTruncation(
-  message: BaseMessage,
+export function truncatedCalls(
+  calls: readonly NexusToolCall[],
+  content: MessageContent,
   recorded: RecordedArgTruncations,
-): BaseMessage {
-  const calls = toolCallsOf(message);
-  if (calls === undefined) return message;
+): { readonly tool_calls: NexusToolCall[]; readonly content: MessageContent } | undefined {
   let changed = false;
   const next = calls.map((call) => {
     const truncations = call.id === undefined ? undefined : recorded.get(call.id);
     if (truncations === undefined) return call;
-    const args: Record<string, unknown> = { ...(call.args as Record<string, unknown>) };
+    const args: Record<string, unknown> = { ...call.args };
     let callChanged = false;
     for (const [key, truncation] of truncations) {
       const current = args[key];
@@ -111,19 +113,43 @@ export function applyRecordedArgTruncation(
     changed = true;
     return { ...call, args };
   });
-  if (!changed) return message;
-  const source = message as AIMessage;
+  if (!changed) return undefined;
   // 帶 `output_version: 'v1'` 的訊息（串流那條）建構子會替 `tool_calls` 補 `tool_call` content block，block 裡也有一份參數；
   // 只換 `tool_calls` 會留下兩份對不上的參數，所以同 id 的 block 一併換。沒有 block 的訊息（字串內容、舊路）不動 `content`。
   const argsById = new Map(next.map((call) => [call.id, call.args]));
-  const content = Array.isArray(source.content)
-    ? source.content.map((block) => {
-        const candidate = block as { type?: unknown; id?: unknown };
-        const args = typeof candidate.id === 'string' ? argsById.get(candidate.id) : undefined;
-        return candidate.type === 'tool_call' && args !== undefined ? { ...block, args } : block;
+  const replaced = Array.isArray(content)
+    ? content.map((block) => {
+        const args = typeof block.id === 'string' ? argsById.get(block.id) : undefined;
+        return block.type === 'tool_call' && args !== undefined ? { ...block, args } : block;
       })
-    : source.content;
-  return new AIMessage({ ...source, content, tool_calls: next });
+    : content;
+  return { tool_calls: next, content: replaced };
+}
+
+/**
+ * 把一則訊息裡每個記過的參數換上縮短後的字串。
+ *
+ * @param message - 任何一則訊息；不是助手訊息、或沒有一個參數對得上的原樣回。
+ * @param recorded - {@link recordedArgTruncationsOf} 的結果。
+ * @returns 有換的時候是只換了 `tool_calls[i].args`（與同 id 的 `tool_call` 區塊）的新一則，其餘欄位原樣；否則是傳進來的那一則。
+ */
+export function truncateLoggedMessage(
+  message: NexusMessage,
+  recorded: RecordedArgTruncations,
+): NexusMessage {
+  const calls = nexusToolCalls(message);
+  if (calls.length === 0) return message;
+  const content = nexusContent(message);
+  const next = truncatedCalls(calls, content, recorded);
+  if (next === undefined) return message;
+  return {
+    type: 'ai',
+    data: {
+      ...message.data,
+      content: Array.isArray(content) ? next.content : message.data.content,
+      tool_calls: next.tool_calls,
+    } as NexusMessage['data'],
+  };
 }
 
 /**
@@ -133,98 +159,16 @@ export function applyRecordedArgTruncation(
  * @param recorded - {@link recordedArgTruncationsOf} 的結果。
  * @returns 一則都沒換時是**原本那個陣列**；否則長度與順序與輸入相同的新陣列。
  */
-export function applyRecordedArgTruncations(
-  messages: readonly BaseMessage[],
+export function truncateLoggedMessages(
+  messages: readonly NexusMessage[],
   recorded: RecordedArgTruncations,
-): readonly BaseMessage[] {
+): readonly NexusMessage[] {
   if (recorded.size === 0) return messages;
   let changed = false;
   const next = messages.map((message) => {
-    const replaced = applyRecordedArgTruncation(message, recorded);
+    const replaced = truncateLoggedMessage(message, recorded);
     if (replaced !== message) changed = true;
     return replaced;
   });
   return changed ? next : messages;
-}
-
-/**
- * 拿基座交下去的串跟進來的串比，找出哪些工具呼叫的哪些參數被縮短了。
- *
- * 用工具呼叫 `id` 對，不用位置：交下去的串開頭可能多一則摘要、少一截舊訊息。**進來的串裡同一個 `id` 出現不只一次的不比**
- * （供應商重用 id，分不出是哪一個，同 {@link applyRecordedArgTruncation} 的理由）。字串參數的值不同就算，不管變長變短——
- * 日誌要證明的是「模型看到的那一份」，不是基座的規則。
- *
- * @param before - 交給基座之前的串（已套過記過的縮短）。
- * @param sent - 基座交下去的串。
- * @returns 新縮短的呼叫，照 `sent` 的順序；沒有就是空陣列。
- */
-export function newlyTruncatedArgs(
-  before: readonly BaseMessage[],
-  sent: readonly BaseMessage[],
-): NewlyTruncatedCall[] {
-  const baseline = new Map<string, Readonly<Record<string, unknown>> | null>();
-  for (const message of before) {
-    for (const call of toolCallsOf(message) ?? []) {
-      if (call.id === undefined) continue;
-      baseline.set(call.id, baseline.has(call.id) ? null : (call.args as Record<string, unknown>));
-    }
-  }
-  const found: NewlyTruncatedCall[] = [];
-  for (const message of sent) {
-    for (const call of toolCallsOf(message) ?? []) {
-      if (call.id === undefined) continue;
-      const original = baseline.get(call.id);
-      if (original === undefined || original === null) continue;
-      const args: Record<string, RecordedArgTruncation> = {};
-      for (const [key, value] of Object.entries(call.args as Record<string, unknown>)) {
-        const was = original[key];
-        if (typeof value === 'string' && typeof was === 'string' && value !== was) {
-          args[key] = { originalChars: was.length, value };
-        }
-      }
-      if (Object.keys(args).length > 0) found.push({ callId: call.id, args });
-    }
-  }
-  return found;
-}
-
-/**
- * 把基座這次新縮短的那幾則換回交給基座之前的原訊息（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：
- * `compaction/truncate-args` 記不進去時，這次的縮短不生效，模型看到的要跟日誌一致。
- *
- * **整則換回，不逐個參數改回**：基座縮短時整則重建訊息（見檔頭），換回 `before` 裡那一則，`id` 與其餘欄位也一起回來。
- * 一則裡只要有一個呼叫在 `calls` 裡就換；`before` 裡同一個 `id` 出現不只一次的不換（分不出是哪一則，同 {@link newlyTruncatedArgs}）。
- * 日誌上記過、交給基座之前就換上去的那些縮短在 `before` 裡本來就是短的，所以照樣生效。
- *
- * @param before - 交給基座之前的串（已套過記過的縮短）。
- * @param sent - 基座交下去的串。
- * @param calls - {@link newlyTruncatedArgs} 的結果。
- * @returns 沒有要換的時候是 `sent` 本身；否則長度與順序與 `sent` 相同的新陣列。
- */
-export function restoreNewlyTruncatedArgs(
-  before: readonly BaseMessage[],
-  sent: readonly BaseMessage[],
-  calls: readonly NewlyTruncatedCall[],
-): readonly BaseMessage[] {
-  if (calls.length === 0) return sent;
-  const owner = new Map<string, BaseMessage | null>();
-  for (const message of before) {
-    for (const call of toolCallsOf(message) ?? []) {
-      if (call.id === undefined) continue;
-      owner.set(call.id, owner.has(call.id) ? null : message);
-    }
-  }
-  const truncated = new Set(calls.map((call) => call.callId));
-  let changed = false;
-  const next = sent.map((message) => {
-    for (const call of toolCallsOf(message) ?? []) {
-      if (call.id === undefined || !truncated.has(call.id)) continue;
-      const original = owner.get(call.id);
-      if (original === undefined || original === null) continue;
-      changed = true;
-      return original;
-    }
-    return message;
-  });
-  return changed ? next : sent;
 }

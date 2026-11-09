@@ -32,12 +32,28 @@
  * @module
  */
 
-import { AIMessage, createMiddleware, ToolMessage } from 'langchain';
+import { AIMessage, ToolMessage } from 'langchain';
 import { RemoveMessage, type BaseMessage } from '@langchain/core/messages';
 import { REMOVE_ALL_MESSAGES } from '@langchain/langgraph';
+import type { AgentMiddleware } from './base-types.js';
+import { createHookStepMiddleware } from './hook-step.js';
+import { withModelCallStep } from './model-call-step.js';
 
 /** middleware 的名字。**不要改**：合併疊按名字去重，測試按名字斷言。 */
 export const PATCH_TOOL_CALLS_MIDDLEWARE_NAME = 'patchToolCallsMiddleware';
+
+/**
+ * 補上去的那則 `ToolMessage` 的內容。
+ *
+ * @param name - 工具名。
+ * @param id - 呼叫 id。
+ * @returns 那一句。
+ */
+export function patchedToolCallText(name: string, id: string): string {
+  // 這句話的措辭**逐字**照基座：成因其實是「那一輪被中斷」，不一定是「有新訊息進來」，
+  // 但改字會讓 `thread-pump.ts` 與續行測試對不上它，改的話要連同它們一起想。
+  return `Tool call ${name} with id ${id} was cancelled - another message came in before it could be completed.`;
+}
 
 /**
  * 補懸空的呼叫並丟孤兒結果。
@@ -86,9 +102,7 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
         needsPatch = true;
         patchedMessages.push(
           new ToolMessage({
-            // 這句話的措辭**逐字**照基座：成因其實是「那一輪被中斷」，不一定是「有新訊息進來」，
-            // 但改字會讓 `thread-pump.ts` 與續行測試對不上它，改的話要連同它們一起想。
-            content: `Tool call ${toolCall.name} with id ${toolCall.id} was cancelled - another message came in before it could be completed.`,
+            content: patchedToolCallText(toolCall.name, String(toolCall.id)),
             name: toolCall.name,
             tool_call_id: toolCall.id as string,
           }),
@@ -105,23 +119,28 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
  *
  * @returns 名字是 {@link PATCH_TOOL_CALLS_MIDDLEWARE_NAME} 的 middleware。
  */
-export function createPatchToolCallsMiddleware() {
-  return createMiddleware({
-    name: PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
-    beforeAgent: async (state) => {
-      const messages = state.messages;
-      if (!messages || messages.length === 0) return;
-      const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
-      if (!needsPatch) return;
-      // 先清空再放回處理過的整串：`add_messages` reducer 只認這個寫法。
-      return { messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...patchedMessages] };
-    },
-    wrapModelCall: async (request, handler) => {
+export function createPatchToolCallsMiddleware(): AgentMiddleware {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly messages?: BaseMessage[] };
       const messages = request.messages;
       if (!messages || messages.length === 0) return handler(request);
       const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
       if (!needsPatch) return handler(request);
       return handler({ ...request, messages: patchedMessages });
     },
-  });
+    (wrapModelCall) =>
+      createHookStepMiddleware({
+        name: PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
+        beforeAgent: async (state) => {
+          const { messages } = state as { readonly messages?: BaseMessage[] };
+          if (!messages || messages.length === 0) return;
+          const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
+          if (!needsPatch) return;
+          // 先清空再放回處理過的整串：`add_messages` reducer 只認這個寫法。
+          return { messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...patchedMessages] };
+        },
+        wrapModelCall,
+      }),
+  );
 }

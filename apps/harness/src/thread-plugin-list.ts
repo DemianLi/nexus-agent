@@ -66,7 +66,11 @@ import { failedRowsOf } from './plugin-failure-recorder.js';
 import type { FailedRow, FailureRecorder } from './plugin-failure-recorder.js';
 import { legacyPatchIgnoredMessage } from './plugin-config.js';
 import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
-import { createLiveVersionTable, liveBindingsOf } from './plugin-live-versions.js';
+import {
+  createLiveVersionTable,
+  liveBindingsOf,
+  type LiveRowBinding,
+} from './plugin-live-versions.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
 import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
@@ -103,6 +107,11 @@ export interface ThreadPluginListOptions {
   readonly audit: StartupAuditOptions;
   /** 起動期讀一次的設定列：值以啟動那一份為準，重讀時不同就記「已儲存，待重啟」。 */
   readonly startupRead: readonly NexusPlugin<unknown>[];
+  /**
+   * 「已儲存，待重啟」那句冒號後面講的生效時機。省略是 `single` 的：新對話照舊用啟動時的值。
+   * per-thread 的前台另給：值在每個對話行程起動時讀，之後起來的就用新值。
+   */
+  readonly startupReadEffect?: string;
   /** 伺服器日誌（info）。 */
   readonly log: (line: string) => void;
   /** 要人處理的那幾句（讀清單的警告、未稽核的覆蓋層、掛不上的列）的出口（warn，#1534）；省略就走 `log`。 */
@@ -204,7 +213,25 @@ export interface ThreadPluginReader {
    * （`plugin-snapshot.ts` 的 `PluginSnapshotWriter.publish`），所以不會擋住逐出。
    */
   republishSnapshot(): Promise<void>;
+  /**
+   * 這條 thread 在這個行程裡綁著的那幾列（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：per-thread 的對話行程答前台用。
+   * 沒給 `liveVersions` 或還沒綁是 `undefined`。
+   */
+  liveBindings(threadId: string): readonly LiveRowBinding[] | undefined;
+  /**
+   * 綁上**別的行程**組裝的 thread（#2341）：per-thread 的前台拿對話行程回報的 {@link liveBindings}，快照照樣列它。
+   * 沒給 `liveVersions` 就什麼也不做。
+   *
+   * @returns 放掉並重寫快照；呼叫第二次是空操作。
+   */
+  bindElsewhere(
+    threadId: string,
+    bindings: readonly LiveRowBinding[],
+  ): Promise<() => Promise<void>>;
 }
+
+/** `single` 下「已儲存，待重啟」講的生效時機。 */
+const SINGLE_STARTUP_READ_EFFECT = '這一列在啟動時讀一次，新對話照舊用啟動時的值';
 
 /**
  * 建一支每條 thread 重讀清單的讀取器。
@@ -354,6 +381,30 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const liveTable = options.liveVersions === undefined ? undefined : createLiveVersionTable();
   // 最近一次 `read()` 回的那一份：綁定之後重寫快照時當「已儲存」（見 {@link ThreadPluginReader.bindThread}）。
   let latestRead: ThreadPluginList | undefined;
+  /**
+   * per-thread 的前台不組 thread、從不 `read()`：「已儲存」照這一刻磁碟上的那一份另讀。**讀清單的日誌由這裡講**（#2341）：
+   * 對話行程不講（serve 給它的 `log`／`warn` 是空的，每個行程各講一次就是同一句 N 次），落盤開著時前台每次綁上、放掉時讀一次（落盤關掉就沒有 `liveVersions`，{@link ThreadPluginReader.bindElsewhere} 不做事，這幾句沒人講），
+   * 用的是同一套去重（讀的警告、未稽核的覆蓋層、掛不上的列、待重啟），同 `single` 每建一條 thread 讀一次。
+   * 讀不起來就退回最近一次讀到的（前台是啟動那一份）。
+   */
+  async function savedOnDisk(): Promise<ThreadPluginList | undefined> {
+    try {
+      const loaded = await options.load(warn);
+      for (const drop of loaded.dropped) {
+        const key = rowKey(loaded, drop.id);
+        if (known.has(key)) continue;
+        known.add(key);
+        logWarn(
+          `[清單] 這一列沒掛上，之後的 thread 也不掛，直到它的設定改了：${describeDrop(drop)}`,
+        );
+      }
+      reportStartupDrift(loaded.plugins);
+      reportLayers(loaded.layers);
+      return { loaded, plugins: loaded.plugins, optionalEntries: optionalEntriesOf(loaded, audit) };
+    } catch {
+      return latestRead;
+    }
+  }
   function snapshotFor(saved?: ThreadPluginList): PluginSnapshot {
     return buildPluginSnapshot({
       running: runningSource,
@@ -436,6 +487,21 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       await options.publishSnapshot?.(snapshotFor(latestRead ?? list));
       return release;
     },
+    liveBindings(threadId) {
+      return liveTable?.bindingsOf(threadId);
+    },
+    async bindElsewhere(threadId, bindings) {
+      if (liveTable === undefined) return async () => {};
+      const release = liveTable.bind(threadId, bindings);
+      await options.publishSnapshot?.(snapshotFor(await savedOnDisk()));
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        release();
+        await options.publishSnapshot?.(snapshotFor(await savedOnDisk()));
+      };
+    },
     async republishSnapshot() {
       if (liveTable === undefined || latestRead === undefined) return;
       await options.publishSnapshot?.(snapshotFor(latestRead));
@@ -486,7 +552,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       if (reported.has(plugin.name) && !snapshotsDiffer(reported.get(plugin.name), next)) continue;
       reported.set(plugin.name, next);
       log(
-        `[清單] 「${plugin.name}」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值`,
+        `[清單] 「${plugin.name}」改了，已儲存，待重啟：${options.startupReadEffect ?? SINGLE_STARTUP_READ_EFFECT}`,
       );
     }
   }

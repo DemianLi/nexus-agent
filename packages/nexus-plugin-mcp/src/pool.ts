@@ -35,8 +35,7 @@
  * @module
  */
 
-import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { attemptsOn, clientOptions } from './connection.js';
+import { attemptsOn, closeGeneration } from './connection.js';
 import { credentialFingerprint } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, Listed } from './connection.js';
@@ -183,22 +182,21 @@ export class McpConnectionPool {
   ): SharedConnection {
     const { serverName } = config;
     const label = `mcp-client(${serverName})`;
-    const client = new MultiServerMCPClient(clientOptions(config, elicitation, credentials));
     const { log } = this.options;
     const error = this.options.error ?? log;
     let last: Listed | undefined;
-    const attempts = attemptsOn(client, config);
+    const attempts = attemptsOn(config, elicitation, credentials);
     const supervisor = new Supervisor<Generation>(
       {
         label,
         policy: config.reconnect,
-        // 同 plugin 自己連的那條：把整個 adapter client 收掉再重新列工具，新子行程、新的 SDK client。
+        // 同 plugin 自己連的那條：收掉上一代的 SDK client 再開一個新的，新子行程、新的 HTTP session。
         connect: () => attempts.connect(),
         abandon: () => attempts.abandon(),
-        close: () => client.close(),
+        close: closeGeneration,
         closed: (generation) => generation.closed,
-        // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
-        release: () => client.close(),
+        // dispose 最後收掉最近開的 client：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
+        release: () => attempts.close(),
         watch(generation, onDown) {
           // 每採用一代都會走到這裡：記下它的工具清單，斷線空窗裡組的 thread 照它登記（檔頭）。
           last = generation.listed;

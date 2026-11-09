@@ -26,7 +26,7 @@
  * ## `goal-round-driver` 拆成兩處，而拆點是一筆登記過的載體偏離
  *
  * dsh 把它做成一個獨立套件；[#180](https://github.com/DemianLi/nexus-agent/issues/180)
- * 落地時發現**排程器不可能是一個 plugin**——`PluginRegistry` 十九條通道沒有一條排得出
+ * 落地時發現**排程器不可能是一個 plugin**——`PluginRegistry` 二十條通道沒有一條排得出
  * 一輪，輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`）。
  * 所以：
  *
@@ -71,7 +71,7 @@
  *   root 那條的 `GOAL_TOOL_NO_SERVICE_MESSAGE`）拿掉了——lazy 之後服務一定建得出來，產品上一次組裝也只有一份 root。**工具層非 root 的那一句還在**
  *   （`GOAL_TOOL_NOT_ROOT_MESSAGE`，文字沿用原句）：直接帶子代理的 `checkpoint_ns` 呼叫真工具今天就走得到。
  *
- * 要的三個服務都由宿主在樹上提供：`tools`（`^1.1.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.1.0`）、
+ * 要的三個服務都由宿主在樹上提供：`tools`（`^2.0.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.1.0`）、
  * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/goal.fixture.ts` 給 harness 的測試，這個套件自己的測試用 `goal-shell.test.helper.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
  * 同一份 lazy 核心（{@link createGoalCore}），只有「這次呼叫的會話怎麼來」那一格不同。
  *
@@ -91,6 +91,7 @@ import { ContractService, defineManifest, injectOf, need, service } from '@nexus
 import { sessionLookupToken } from '@nexus/session';
 import type { SessionLog } from '@nexus/session';
 import { toolsToken } from '@nexus/tools';
+import type { ToolExec } from '@nexus/tools';
 import { z } from 'zod';
 
 import {
@@ -287,11 +288,11 @@ export function createGoalCore(config: GoalConfig, seams: GoalSeams = {}): GoalC
 export const name = 'goal';
 
 /**
- * 要的服務：`tools`（`^1.1.0`，`rootOnly` 與 `outputSchema` 從 `1.1.0` 起）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
+ * 要的服務：`tools`（`^2.1.0`，要 `exec.deferContext()`）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
  * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^1.1.0'),
+  need(toolsToken, '^2.1.0'),
   need(commandsToken, '^1.1.0'),
   need(sessionLookupToken, '^1.0.0'),
 );
@@ -305,7 +306,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [{ token: goalsToken.name, version: goalsToken.version }],
   consumes: [
-    { token: toolsToken.name, range: '^1.1.0' },
+    { token: toolsToken.name, range: '^2.1.0' },
     { token: commandsToken.name, range: '^1.1.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
   ],
@@ -344,8 +345,8 @@ export interface GoalMountHost {
   ): void;
   /** 登記 `/goal`。 */
   registerCommand(definition: CommandDefinition): void;
-  /** 這次工具呼叫屬於哪一份日誌；呼叫當下才問，整份呼叫設定原樣傳。 */
-  forCall(config: unknown): GoalToolLookup;
+  /** 這次工具呼叫屬於哪一份日誌；呼叫當下才問，傳的是這次呼叫的 `ToolExec`。 */
+  forCall(exec: ToolExec): GoalToolLookup;
 }
 
 /**
@@ -361,7 +362,7 @@ export function mountGoal(host: GoalMountHost, core: GoalCore, config: GoalConfi
   // （`authority.ts` 的 `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代的，subagent 沒有人可以交代。
   for (const goalTool of createGoalTools(
     {
-      forCall: (callConfig) => host.forCall(callConfig),
+      forCall: (exec) => host.forCall(exec),
       serviceFor: (log) => core.serviceFor(log),
     },
     config,
@@ -402,7 +403,7 @@ export function createGoalApply(seams: GoalSeams = {}): (ctx: Context, config: G
       {
         registerTool: (goalTool, options) => void tools.register(goalTool, options),
         registerCommand: (definition) => void commands.register(definition),
-        forCall: (callConfig) => sessions.forCall(callConfig),
+        forCall: (exec) => sessions.forCall(exec),
       },
       core,
       config,

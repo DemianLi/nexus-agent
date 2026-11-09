@@ -2,7 +2,11 @@ import type { ModelCatalog, ModelSelection, WireClient, WireProjection } from '@
 import { useCallback, useRef, useState } from 'react';
 
 import { useOpenRead } from '@/hooks/use-open-read';
-import { effectiveSelection, parseSelectionProjection } from '@/lib/model-selection';
+import {
+  effectiveSelection,
+  parseSelectionProjection,
+  recordedSelection,
+} from '@/lib/model-selection';
 
 /** 模型選擇投影的 key（伺服器推的那份，多分頁同步用）。 */
 export const MODEL_SELECTION_PROJECTION = 'model-selection';
@@ -11,6 +15,8 @@ export interface ModelSeat {
   readonly catalog: ModelCatalog;
   /** 現在生效（下一步會用）的選擇。 */
   readonly selection: ModelSelection;
+  /** 伺服器記著的選擇，型錄上可能已經沒有那顆；判斷選了有沒有換用這一份（`recordedSelection`）。 */
+  readonly recorded: ModelSelection;
   /** 選一個；成功回 `undefined`，失敗回一句講得出來的原因，選擇不變。 */
   readonly select: (next: ModelSelection) => Promise<string | undefined>;
 }
@@ -71,14 +77,11 @@ export function useModelSeat(
   if (read === null) return null;
   const pushed = parseSelectionProjection(projection);
   const fromLocal = local !== null && local.seen === projection ? local.selection : undefined;
+  const candidates = [fromLocal, pushed?.next ?? pushed?.lastUsed, read.next, read.lastUsed];
   return {
     catalog: read.catalog,
-    selection: effectiveSelection(read.catalog, [
-      fromLocal,
-      pushed?.next ?? pushed?.lastUsed,
-      read.next,
-      read.lastUsed,
-    ]),
+    selection: effectiveSelection(read.catalog, candidates),
+    recorded: recordedSelection(read.catalog, candidates),
     select,
   };
 }

@@ -43,6 +43,7 @@ import {
   assertInvariantSelection,
   createFsService,
   createHostServicesPlugin,
+  createHistoryShadowTally,
   createInvariantRunner,
   createSessionRunner,
   compileSubagentGraph,
@@ -60,12 +61,16 @@ import {
   SESSION_TELEMETRY_SERVICE,
   SessionTelemetryCoordinator,
   type AgentCheckpointer,
+  type AgentLoopKind,
   type AgentModel,
   type AgentStore,
   type ToolFilter,
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
+  type FoldOptions,
+  type HistoryShadowSink,
+  type HistorySource,
   type InvariantTap,
   type DroppedEntry,
   type FileToolsOptions,
@@ -85,8 +90,10 @@ import {
   type SummarizationSettings,
   type TokenAnchorBook,
   type ToolResultPruneConfig,
+  TOOL_RESULT_EVICTION_PREFIX,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/system-prompt';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
@@ -103,6 +110,11 @@ import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
+import { copyFileEntry } from './copy-file-tool.js';
+import { embedApprovalEntry } from './embed-profile.js';
+import { createHostToolsSlot, hostToolsEntry } from './host-tools.js';
+import type { HostToolsSlot } from './host-tools.js';
+import type { ThreadProfile } from './embed-profile.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxModeSource } from './contained-backend.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
@@ -112,6 +124,8 @@ import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
+import { DEFAULT_HISTORY_SOURCE, HISTORY_SOURCE_SERVICE } from './settings/history-source.js';
+import { toolResultAsSeen } from './conversation-restore.js';
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   MAX_PARALLEL_TOOL_CALLS_SERVICE,
@@ -320,6 +334,16 @@ export interface CreateNexusAgentOptions {
    */
   readonly backgroundSubagents?: BackgroundSubagentsOptions;
   /**
+   * 照哪一份設定檔組（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），省略即 `full`。`embed`：不掛子代理（`task` 與
+   * {@link backgroundSubagents} 都不掛，給了後者就拋），工具照 `embedApprovalGate` 要核准，`subagentKinds` 缺席。
+   */
+  readonly profile?: ThreadProfile;
+  /**
+   * 嵌入版的宿主頁工具（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)）：免核准名單與宿主頁幾毫秒沒回算逾時。只在 {@link profile} 是
+   * `embed` 時有作用，那時一律掛上 `host-tools.ts` 的 middleware、回傳的 `hostTools` 是這條 thread 的插槽；省略就是空名單、30 秒。
+   */
+  readonly hostTools?: { readonly exempt?: readonly string[]; readonly timeoutMs?: number };
+  /**
    * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
    * **省略＝關**。給了：`attachSession` 在 root 日誌還沒有 `subagent/model-selection-policy` 時把它寫進去（有了就不再寫，
    * 所以續接不會第二次寫）。取樣在呼叫端（serve 的 `createAgent`）——這裡只負責「日誌上有一顆」。
@@ -445,6 +469,22 @@ export interface CreateNexusAgentOptions {
    * tap 拋了一律吞掉。為第二刀的決策量測用，第二刀若選全部拿掉，這個選項跟著拿掉。
    */
   readonly invariantTap?: InvariantTap;
+  /**
+   * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），CLI 的 `--history-source`。由 {@link historyFor}
+   * 的三態決定：明著傳的 > `#settings/history-source` 那一列 > {@link DEFAULT_HISTORY_SOURCE}。
+   */
+  readonly historySource?: HistorySource;
+  /**
+   * `shadow` 時比對結果的去處。serve 一台一份、每條 thread 傳同一份；省略時這次組裝自己建一份不往外講的計數。
+   */
+  readonly historyShadow?: HistoryShadowSink;
+  /**
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
+   * `native` 下核准閘門當成沒有存檔點（`no-channel`），要核准的操作確定性回絕（接回中斷 TODO(#2358)）。ask_user 與沙箱升級讀
+   * 呼叫端給的管道，要它們不問人得由入口照同一個條件算（`entryApprovalChannel`、`createCliAgent`）。子代理（前景、背景）的圖仍是
+   * LangGraph，TODO(#2359)。
+   */
+  readonly agentLoop?: AgentLoopKind;
 }
 
 /**
@@ -508,18 +548,13 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
 /**
- * 基座把過大的工具結果搬去的那個路徑前綴。**抄自基座，不是我們選的。**
+ * 暫存路由接的那個前綴：組裝點那一格（core 的 `toolResultEvictionWrap`）在工具結果超過 80,000 字元時寫
+ * `<前綴>/<sanitized tool_call_id>.txt`，路由要蓋住同一個前綴。字串照基座寫死的那一個（`deepagents@1.13.1`），由 core 的
+ * `tool-result-eviction.test.ts` 對著真的基座比。
  *
- * `createFilesystemMiddleware` 的 `wrapToolCall` 在文字超過
- * `4 * toolTokenLimitBeforeEvict`（預設 `2e4` → 80,000 字元）時寫
- * `/large_tool_results/<sanitized tool_call_id>.txt`，然後把訊息換成頭尾預覽加一句
- * 「用 `read_file` 自己去讀」（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2416`
- * 的 `processToolMessage`）。那個路徑是**寫死在基座裡的**，這裡只是把同一個字串說出來。
- *
- * **匯出是刻意的**：`tool-result-stash.test.ts` 那條絆索拿它跟基座實際指路的路徑對，
- * 基座改了字串就當場紅。把它藏起來、測試裡再抄一次字面值，那條絆索就會兩邊一起錯。
+ * **匯出是刻意的**：`tool-result-stash.test.ts` 的絆索斷言組裝好的 agent 指去的路徑落在這個前綴底下。
  */
-export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
+export const TOOL_RESULT_STASH_PREFIX = TOOL_RESULT_EVICTION_PREFIX;
 
 /**
  * 把工具結果暫存那一格路由到獨立的去處，不讓它落在 agent 的工作區上。
@@ -693,6 +728,31 @@ function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOp
 }
 
 /**
+ * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：三態同 {@link recursionLimitFor}（明著傳的 > 那一列 > {@link DEFAULT_HISTORY_SOURCE}）。
+ * 這一列關得掉，但不需要第四態：關掉與沒有那一列都落回 `state`。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 交給 fold 的 `history`。
+ */
+function historyFor(
+  registry: PluginRegistry,
+  options: CreateNexusAgentOptions,
+): NonNullable<FoldOptions['history']> {
+  const source =
+    options.historySource ??
+    registry.services.get(HISTORY_SOURCE_SERVICE) ??
+    DEFAULT_HISTORY_SOURCE;
+  if (source === 'state') return { source };
+  if (source === 'log') return { source, toolResultAsSeen };
+  return {
+    source,
+    sink: options.historyShadow ?? createHistoryShadowTally(),
+    toolResultAsSeen,
+  };
+}
+
+/**
  * 每步同時在跑的工具呼叫上限（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）：`#settings/agent-loop` 那一列
  * 提供的值，沒有那一列就是 {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}。兩態，理由同 {@link recursionLimitFor} 少一態那段：
  * 這一列關不掉，就算關得掉答案也一樣是內建值。沒有旗標，所以也沒有第一態。帶進 LangGraph 的 `maxConcurrency`，見
@@ -763,6 +823,13 @@ function modelLabelOf(model: AgentModel): string {
 }
 
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
+  const embedded = options.profile === 'embed';
+  if (embedded && options.backgroundSubagents !== undefined) {
+    throw new Error('嵌入版設定檔不掛子代理：不能同時給 backgroundSubagents');
+  }
+  const hostTools: HostToolsSlot | undefined = embedded
+    ? createHostToolsSlot(options.hostTools?.timeoutMs)
+    : undefined;
   if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
     throw new Error(
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
@@ -824,13 +891,19 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
     createHostServicesPlugin({ fs: fsService }, 'fs'),
     ...options.plugins,
+    // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
+    ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
     ...(delegation === undefined ? [] : [delegation.entry()]),
+    ...(hostTools === undefined
+      ? []
+      : [embedApprovalEntry(new Set(options.hostTools?.exempt)), hostToolsEntry(hostTools)]),
   ];
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
     plugins,
     createRegistry({
       validateSubagent: options.validateSubagent ?? subagentDefinitionValidator(undefined),
+      adaptTool: toLangChainTool,
     }),
     optional === undefined
       ? {}
@@ -869,6 +942,22 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             ...options.toolResultStash,
             ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
           });
+    // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+    const sharedBackend =
+      options.sharedWorkspace === undefined
+        ? undefined
+        : new ContainedFilesystemBackend({
+            rootDir: options.sharedWorkspace.rootDir,
+            mode: 'read-only',
+            // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
+            tolerateUnreadable: true,
+            routePrefix: SHARED_WORKSPACE_PREFIX,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
+    const attachmentsBackend =
+      options.attachments === undefined
+        ? undefined
+        : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode);
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -887,19 +976,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         withToolResultStash(
           options.backend ?? new TextOnlyStateBackend(),
           stashRoute,
-          options.attachments === undefined
-            ? undefined
-            : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
-          options.sharedWorkspace === undefined
-            ? undefined
-            : // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
-              new ContainedFilesystemBackend({
-                rootDir: options.sharedWorkspace.rootDir,
-                mode: 'read-only',
-                // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
-                tolerateUnreadable: true,
-                ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
-              }),
+          attachmentsBackend,
+          sharedBackend,
         ),
       ),
       ...(options.spillPolicy !== undefined &&
@@ -923,6 +1001,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }),
       model: options.model,
       checkpointer: options.checkpointer,
+      ...(options.agentLoop !== undefined && { loop: options.agentLoop }),
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
@@ -940,7 +1019,15 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
       ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
+      history: historyFor(registry, options),
     });
+    // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
+    // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。
+    for (const contained of [options.backend, sharedBackend, attachmentsBackend]) {
+      if (contained instanceof ContainedFilesystemBackend) {
+        contained.usePermissions(params.permissions ?? []);
+      }
+    }
 
     // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是
     // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立——這件事驗過，
@@ -951,6 +1038,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const agent = assembleAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
+      ...(embedded && { withoutSubagents: true }),
+      ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
     }).withConfig({
       recursionLimit: recursionLimitFor(registry, options),
       // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
@@ -1272,10 +1361,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
        * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
        */
-      subagentKinds: (params.subagents ?? []).map(({ name, description }) => ({
-        name,
-        description,
-      })),
+      /**
+       * 這條 thread 的宿主頁工具插槽（#2374）：pump 開一輪時寫進這一輪的宣告。**只有嵌入版有**，其餘是 `undefined`。
+       */
+      hostTools,
+      subagentKinds: embedded
+        ? undefined
+        : (params.subagents ?? []).map(({ name, description }) => ({
+            name,
+            description,
+          })),
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。

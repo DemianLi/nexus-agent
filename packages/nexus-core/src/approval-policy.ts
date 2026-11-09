@@ -35,7 +35,7 @@
  *
  * - **日誌與格子兩個來源，用訂閱收成一個（理由 1：基座表達不出來）。** dsh 沒有這顆控制器，核准閘門每次從日誌最後一顆 `approval/policy` 讀
  *   （`user-approval/src/index.ts:237-245`），日誌天生是唯一來源。我們的閘門與升級工具讀的是控制器（見上面第 1 點），所以讓格子跟著日誌走。
- *   **移除條件：sandbox-policy 遷上樹時定**——那時閘門可以直接讀投影，訂閱連同控制器的格子一起拿掉。
+ *   **移除條件**：控制器改成以日誌投影為準的行程級服務（[#2554](https://github.com/DemianLi/nexus-agent/issues/2554)），閘門可以直接讀投影，訂閱連同控制器的格子一起拿掉。
  * - **控制器實體歸組裝點，不歸 plugin。** dsh 的 `user-approval` 服務自己擁有政策與它的 setter；`.docs/development-plan.md` 把
  *   「核准政策的 session 開關」留給組裝點，所以組裝點建控制器、經 {@link APPROVAL_POLICY_SERVICE} 交出去，plugin 只能讀與切。
  * - **子代理不讀這一顆。** 照 dsh 委派時把子代理的核准政策釘成 `never`（`child-agent.ts:254`），我們早已為子代理另建一顆管道固定

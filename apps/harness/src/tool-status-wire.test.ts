@@ -22,11 +22,10 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
+import { createToolCallStepMiddleware, TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
 import type { PluginEntry, SandboxMode } from '@nexus/core';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
-import { createMiddleware } from 'langchain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -329,13 +328,10 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
             }),
           );
           registry.middleware.use(
-            createMiddleware({
-              name: 'blowsUpAfter',
-              wrapToolCall: async (request, handler) => {
-                const result = await handler(request);
-                if (request.toolCall.name === 'fragile') throw new Error('之後炸了');
-                return result;
-              },
+            createToolCallStepMiddleware('blowsUpAfter', async (call, next) => {
+              const result = await next();
+              if (call.name === 'fragile') throw new Error('之後炸了');
+              return result;
             }) as never,
           );
         },

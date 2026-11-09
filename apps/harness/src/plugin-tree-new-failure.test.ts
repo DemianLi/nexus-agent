@@ -65,11 +65,11 @@ function probe(): Probe {
     module,
     `import { z } from 'zod';
 export const name = 'probe';
-export const inject = { tools: { range: '^1.0.0' } };
+export const inject = { tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({ ok: z.boolean(), n: z.number().optional() });
 export const manifest = {
   id: 'probe', version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx, config) {

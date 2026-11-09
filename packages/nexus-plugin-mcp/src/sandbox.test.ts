@@ -3,16 +3,11 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadPlugins } from '@nexus/core';
+import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  createMcpPlugin,
-  MCP_GUARD_SERVICE,
-  MCP_SANDBOX_SERVICE,
-  mcpConfigSchema,
-} from './index.js';
+import { MCP_GUARD_SERVICE, MCP_SANDBOX_SERVICE, mcpConfigSchema } from './index.js';
 import type {
   McpGuardRequest,
   McpGuardWrapper,
@@ -45,7 +40,7 @@ describe('MCP 的 sandbox 宣告', () => {
   });
 
   const load = async (connection: object, wrap?: McpSandboxWrapper): Promise<PluginRegistry> => {
-    const entry = createMcpPlugin({ serverName: 'srv', connection } as never);
+    const entry = mcpEntry({ serverName: 'srv', connection } as never);
     const loaded = await loadPlugins([...(wrap === undefined ? [] : [host(wrap)]), entry]);
     dispose = loaded.dispose;
     return loaded.registry;
@@ -59,7 +54,7 @@ describe('MCP 的 sandbox 宣告', () => {
           apply: (registry) => void registry.services.provide(MCP_GUARD_SERVICE, guard),
         },
       },
-      createMcpPlugin({ serverName: 'srv', connection } as never),
+      mcpEntry({ serverName: 'srv', connection } as never),
     ]);
     dispose = loaded.dispose;
     return loaded.registry;

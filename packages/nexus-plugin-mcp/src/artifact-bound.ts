@@ -1,16 +1,16 @@
 /**
  * 工具結果的 `artifact` 進會話日誌之前先設上限——[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)。
  *
- * ## 實測（2026-10-10，`@langchain/mcp-adapters` 2.0.0，舊協議與新協議兩台夾具結果相同）
+ * ## 實測（2026-10-10，舊協議與新協議兩台夾具結果相同；當時經 `@langchain/mcp-adapters` 2.0.0，`convertCallToolResult` 與它同形，#2353）
  *
- * adapter 把 MCP 結果拆成給模型的 `content` 與不給模型的 `artifact`（`dist/content.js` 的 `convertCallToolResult`）。
+ * MCP 結果拆成給模型的 `content` 與不給模型的 `artifact`（`tool-call.ts` 的 `convertCallToolResult`）。
  * 量到的是：
  *
  * | 內容 | 進 `content` | 進 `artifact` | 會話日誌 `tool/result` |
  * | --- | --- | --- | --- |
  * | 內嵌二進位／文字資源，要求 3072 KB | 空（資源預設只放 artifact） | 整份原樣（`type: 'resource'`） | **3,146,139 位元組** |
  * | `structuredContent`，要求 1024 KB | 只有 server 附的文字摘要 | 整份原樣（`mcp_structured_content`） | **663,043 位元組** |
- * | 圖片，要求 3072 KB | 換成一句文字說明（#642） | 無（adapter 不把它放 artifact） | 411 位元組 |
+ * | 圖片，要求 3072 KB | 換成一句文字說明（#642） | 無（不放 artifact） | 411 位元組 |
  * | `resource_link`（兩條） | `Resource link: …` 文字 | 每條一份小的 `mcp_content` | 860 位元組 |
  *
  * 也就是 `project-content.ts` 先前的說法（「留 artifact，一張圖就是幾 MB，所以不留」）對圖片成立——圖片根本不在 artifact 裡——
@@ -24,18 +24,18 @@
  * ## 處理：單條 artifact 超過上限就換成占位
  *
  * dsh 的立場（`.agents/notes/archived/feature/2026-07-30-web-result-card.md:18`）：結構值不上線，上線的只有 render 文字與
- * `presentationMeta`。我們對應的是：**原始資料不進日誌**，要留的出處／來源資訊該在 `afterToolCall` 投影成 meta，
+ * `presentationMeta`。我們對應的是：**原始資料不進日誌**，要留的出處／來源資訊該在工具本體（`tool-call.ts`）投影成 meta，
  * 不靠日誌裡的 artifact。階段 B（結構化來源卡，[#1318](https://github.com/DemianLi/nexus-agent/issues/1318)）要從
- * `resource_link`／`structuredContent` 取來源，也是在同一個 `afterToolCall` 讀進來的原始 artifact，這一步發生在它之後，
+ * `resource_link`／`structuredContent` 取來源，也是在同一個工具本體裡讀到的原始 artifact，{@link boundArtifacts} 在它之後，
  * 所以不擋 B；小的 `mcp_content`（resource link）本來就遠低於上限，原樣保留。
  *
  * 規則只有一條：**單條序列化後超過 {@link ARTIFACT_ENTRY_MAX_BYTES} 位元組的 artifact，換成
  * `{ type: 'mcp_omitted', originalType, bytes, uri?, mimeType? }`**——留下原型別、原始大小與（有的話）URI 和 MIME，資料拿掉。
- * 占位的 `type` 不能沿用原型別：adapter 在 hook 回傳後會用 `toolArtifactSchema` 驗一次，`type: 'resource'` 必須是完整的
- * 內嵌資源（`resource.uri` 等），占位過不了（實測會拋 `Expected a valid MCP embedded resource`）；其他型別則任意。
+ * 占位的 `type` 不沿用原型別：`type: 'resource'` 說的是一份完整的內嵌資源（`resource.uri` 等），占位冒用它，讀日誌的一方
+ * 會照完整資源解讀；換成自己的型別才分得出這是占位。
  * 以大小而不是型別判斷，因為我們沒辦法預先列舉 server 會塞什麼（`_meta` 也是 server 自訂的）；未超過的原樣保留。
- * 不是 dsh 的做法（dsh 的 `tool/result` 本來就不帶原始值），是退到最接近的實作：adapter 的 `artifact` 欄位表達不出
- * 「只放 meta」，所以在它進日誌前把大的那幾條換掉。
+ * 不是 dsh 的做法（dsh 的 `tool/result` 本來就不帶原始值），是退到最接近的實作：`artifact` 照 `convertCallToolResult` 原樣組，
+ * 會話日誌跟著它的形狀，所以在進日誌前把大的那幾條換掉；改成只放 meta 是日誌格式的變更，另開卡。
  *
  * @module
  */
@@ -57,7 +57,7 @@ export interface OmittedArtifact {
 /**
  * 把超過上限的 artifact 換成占位。
  *
- * @param artifacts - adapter 回的 artifact 陣列。
+ * @param artifacts - `convertCallToolResult` 回的 artifact 陣列。
  * @returns 有任何一條被換掉就回新陣列，沒有就回 `undefined`（照原樣）。
  */
 export function boundArtifacts<T>(artifacts: readonly T[] | undefined): T[] | undefined {
@@ -94,11 +94,10 @@ function omitted(entry: unknown, bytes: number): OmittedArtifact {
 }
 
 /**
- * 從 artifact 條目找出 URI 與 MIME。adapter 2.0.0 會產出三種形狀：
- * - `{ type: 'resource', resource: { uri, mimeType, … } }`（預設只放 artifact 的內嵌資源）；
- * - `{ type: 'mcp_content', data: { type: 'resource_link', uri, … } }`（`data` 是 MCP 原始區塊，連結的 URI 在頂層）；
- * - `{ type: 'mcp_content', data: { type: 'resource', resource: { uri, mimeType, … } } }`（內嵌資源被 `enhancedArtifacts` 再包一層，
- *   URI 在 `data.resource` 底下，`content.js` 的 `convertCallToolResult`）。
+ * 從 artifact 條目找出 URI 與 MIME。`convertCallToolResult` 產出兩種帶 URI 的形狀：
+ * - `{ type: 'resource', resource: { uri, mimeType, … } }`（只放 artifact 的內嵌資源）；
+ * - `{ type: 'mcp_content', data: { type: 'resource_link', uri, … } }`（`data` 是 MCP 原始區塊，連結的 URI 在頂層）。
+ * 第三種 `{ type: 'mcp_content', data: { type: 'resource', resource: { uri, mimeType, … } } }`（URI 在 `data.resource` 底下）今天沒有生產者，是防禦。
  * 依序往下找第一個帶字串 `uri` 的物件。
  */
 function locate(record: Record<string, unknown>): { uri?: string; mimeType?: string } {

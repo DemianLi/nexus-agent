@@ -80,12 +80,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
+import { adaptBackendProtocol, applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
   EditResult,
@@ -100,6 +101,8 @@ import type {
 } from 'deepagents';
 
 import {
+  COPY_INTO,
+  COPY_SOURCE,
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
@@ -121,10 +124,17 @@ import {
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
 } from '@nexus/core';
-import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
+import type { CopyIntoResult, CopyRequest, CopySource } from '@nexus/core';
+import {
+  DestinationExistsError,
+  writeFileAtomic,
+  withTargetLock,
+} from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
-import { BINARY_SAMPLE_BYTES } from './binary-read.js';
+import { BINARY_SAMPLE_BYTES, NON_TEXT_EXTENSIONS } from './binary-read.js';
 import { canonicalize, isWithin } from './canonical-path.js';
+import { deleteDenial, permissionDenial } from './path-permissions.js';
+import type { PermissionOperation, PermissionRules } from './path-permissions.js';
 import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
@@ -489,6 +499,11 @@ export interface ContainedFilesystemBackendOptions {
    * 呼叫端可以在建構之後才知道清單。省略就沒有。
    */
   readonly reservedWrites?: () => readonly ReservedWrite[];
+  /**
+   * 這個 backend 掛在 composite 的哪條路由底下（例如 `/shared`），`permissions` 規則比的是接回這個前綴的路徑
+   * （{@link ContainedFilesystemBackend.usePermissions}）。省略就是預設那一格，沒有前綴。
+   */
+  readonly routePrefix?: string;
 }
 
 /** {@link ContainedFilesystemBackendOptions.reservedWrites} 的一格。 */
@@ -518,12 +533,43 @@ const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** 讀取面的圍堵擋的入口，出現在拒絕訊息裡。 */
-type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool;
+type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | 'copy' | RipgrepTool;
+
+/** 寫入面的 fence 擋的入口，出現在拒絕訊息裡，也是升級摘要（{@link digestOf}）的一部分。 */
+type WriteOperation = 'write' | 'edit' | 'delete' | 'uploadFiles' | 'copy';
+
+/** 暫存檔跟讀到的來源對不上。 */
+class CopyMismatchError extends Error {}
+
+/** 檔案內容的 sha256 與位元組數，串流讀。 */
+async function digestFile(path: string): Promise<{ bytes: number; sha256: string }> {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>) {
+    hash.update(chunk);
+    bytes += chunk.length;
+  }
+  return { bytes, sha256: hash.digest('hex') };
+}
 
 /** 讀取面的圍堵判完的結果：拒絕訊息，或比過根的實際位置。 */
 interface ReadScope {
   readonly denial?: string;
   readonly realTarget?: string;
+}
+
+/**
+ * 基座 `getMimeType` 對這個路徑給的值。`deepagents@1.13.1` 沒有匯出它；`adaptBackendProtocol` 的 `readRaw` 遇到缺 `mimeType` 的結果會用它補上，
+ * 這裡借那一條路。升版時對照：`contained-backend-fifo.test.ts` 的「一般檔的結果同基座」逐個副檔名比基座的 `readRaw`。
+ *
+ * @param filePath - 虛擬路徑（只看副檔名）。
+ */
+async function baseMimeType(filePath: string): Promise<string> {
+  const adapted = adaptBackendProtocol({
+    readRaw: async () => ({ content: '', created_at: '', modified_at: '' }),
+  } as never);
+  const { data } = await adapted.readRaw(filePath);
+  return (data as { mimeType: string }).mimeType;
 }
 
 /** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
@@ -569,6 +615,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly streamMinSize: number;
   /** 不論模式都拒絕變更的地方；`undefined` 就是沒有。 */
   private readonly reservedWrites: (() => readonly ReservedWrite[]) | undefined;
+  /** 掛在 composite 上的路由前綴；預設那一格是空字串。 */
+  private readonly routePrefix: string;
+  /** fold 出來的 `permissions` 規則；沒給就是空的，不比。 */
+  private permissionRules: PermissionRules = [];
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -595,6 +645,19 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
     this.reservedWrites = options.reservedWrites;
+    this.routePrefix = options.routePrefix ?? '';
+  }
+
+  /**
+   * 交給這個 backend 一份 `permissions` 規則（fold 出來的那份）。經符號連結解開之後的位置跟給的路徑不同時，讀取面
+   * （{@link readScope}）與變更（{@link checkedPath}）拿它再比一次，命中就拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 複製的兩半另外拿它比模型給的原路徑（{@link [COPY_SOURCE]}、{@link [COPY_INTO]}）：`copy_file` 不是基座的工具，沒有人替它先比。
+   * 規則要 fold 完才有，所以不在建構期給。不分模式：`danger-full-access` 也擋，同基座的 deny。
+   *
+   * @param rules - 規則表，形狀同基座的 `permissions`。
+   */
+  usePermissions(rules: PermissionRules): void {
+    this.permissionRules = rules;
   }
 
   /**
@@ -606,7 +669,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。
    *
    * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
-   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔，其餘例外回 `Error reading file '…': …`。
+   * `File '…' not found`，其餘例外回 `Error reading file '…': …`。開檔用 `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，開好之後再用同一個把手判一次一般檔：
+   * 路徑判完之後、開檔之前被換成 FIFO，開檔不會卡住，回的也是 `not found`（[#2312](https://github.com/DemianLi/nexus-agent/issues/2312)）。
    * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
    *
@@ -639,7 +703,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         noteFsError(FS_NOT_REGULAR_FILE);
         return { error: `File '${filePath}' not found` };
       }
-      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      await this.atomicInternals?.beforeReadOpen?.(target);
+      const handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       try {
         return await this.readOpened(handle, filePath, offset, limit, signal);
       } finally {
@@ -653,7 +721,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
   }
 
-  /** {@link read} 開好檔之後的那一半：判文字、掃描、組結果。 */
+  /** {@link read} 開好檔之後的那一半：用把手判一般檔、判文字、掃描、組結果。 */
   private async readOpened(
     handle: FileHandle,
     filePath: string,
@@ -662,6 +730,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     signal: AbortSignal | undefined,
   ): Promise<ReadResult> {
     const info = await handle.stat({ bigint: true });
+    if (!info.isFile()) {
+      noteFsError(FS_NOT_REGULAR_FILE);
+      return { error: `File '${filePath}' not found` };
+    }
     const window = currentReadWindow();
     // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
@@ -711,14 +783,61 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readScope}），
+   * 比過根的實際位置換回虛擬路徑再讀，所以根內的連結讀到本尊，跟 {@link read} 一致（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 沒有實際位置（解析交給下游）或換不回來（`danger-full-access` 下落在根外）時，照原路徑讀。
+   *
+   * 結果與錯誤照基座（`FilesystemBackend.readRaw`）：路徑 `stat` 不是一般檔回 `File '…' not found`，`stat` 的錯原樣拋；
+   * 副檔名在 {@link NON_TEXT_EXTENSIONS} 的回位元組，其餘回 UTF-8 字串；`mimeType` 用基座的 `getMimeType`（經 {@link baseMimeType}）。
+   * 不同在開檔：`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，開好再用把手判一次一般檔，路徑判完之後被換成 FIFO 不會卡住
+   * （[#2322](https://github.com/DemianLi/nexus-agent/issues/2322)）。
    *
    * @param filePath - 虛擬路徑。
-   * @returns 基座的結果，或落在根外時的錯誤結果。
+   * @returns 原始內容，或錯誤結果。
    */
   override async readRaw(filePath: string): Promise<ReadRawResult> {
-    const refused = await this.readDenial(filePath, 'readRaw');
-    return refused === undefined ? super.readRaw(filePath) : denied({ error: refused });
+    const scope = await this.readScope(filePath, 'readRaw');
+    if (scope.denial !== undefined) return denied({ error: scope.denial });
+    const inside =
+      scope.realTarget === undefined ? undefined : await this.virtualOf(scope.realTarget);
+    const path = inside ?? filePath;
+    const resolved = this.resolveVirtual(path);
+    if (!(await stat(resolved)).isFile()) return { error: `File '${path}' not found` };
+    await this.atomicInternals?.beforeReadOpen?.(resolved);
+    const handle = await open(
+      resolved,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) return { error: `File '${path}' not found` };
+      const content = NON_TEXT_EXTENSIONS.has(extname(path).toLocaleLowerCase())
+        ? new Uint8Array(await handle.readFile())
+        : await handle.readFile({ encoding: 'utf-8' });
+      return {
+        data: {
+          content,
+          mimeType: await baseMimeType(path),
+          created_at: info.ctime.toISOString(),
+          modified_at: info.mtime.toISOString(),
+        },
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * 實際位置換回這個 backend 的虛擬路徑。
+   *
+   * @param realTarget - canonicalize 過的主機路徑。
+   * @returns 虛擬路徑；不在根內時是 `undefined`。
+   */
+  private async virtualOf(realTarget: string): Promise<string | undefined> {
+    const realRoot = await realpath(this.cwd);
+    if (!isWithin(realRoot, realTarget)) return undefined;
+    const inside = relative(realRoot, realTarget);
+    return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
   }
 
   /**
@@ -733,8 +852,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readDenial}）。錯誤型別是四個碼的 union，
+   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readScope}）。錯誤型別是四個碼的 union，
    * 跟 {@link uploadFiles} 一樣，落在根外的回 `permission_denied`。
+   *
+   * 開 {@link readScope} 解出的實際位置（解不開、交給下游時退回字面路徑），`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判：
+   * 目錄回 `is_directory`，FIFO 這類不是一般檔的回 `file_not_found`，開檔不卡住（[#2322](https://github.com/DemianLi/nexus-agent/issues/2322)）。
+   * errno 照基座：`ENOENT` 回 `file_not_found`、`EACCES` 回 `permission_denied`、`EISDIR` 回 `is_directory`，其餘回 `invalid_path`。
    *
    * @param paths - 虛擬路徑。
    * @returns 逐檔對應的結果，順序與輸入相同。
@@ -742,8 +865,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   override async downloadFiles(paths: string[]): Promise<FileDownloadResponse[]> {
     const results: FileDownloadResponse[] = [];
     for (const filePath of paths) {
-      if ((await this.readDenial(filePath, 'downloadFiles')) === undefined) {
-        results.push(...(await super.downloadFiles([filePath])));
+      const scope = await this.readScope(filePath, 'downloadFiles');
+      if (scope.denial === undefined) {
+        results.push(await this.downloadOne(filePath, scope.realTarget));
       } else {
         noteSandboxDenial();
         results.push({ path: filePath, content: null, error: 'permission_denied' });
@@ -752,14 +876,50 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     return results;
   }
 
+  /** {@link downloadFiles} 裡過了圍堵的一個檔。 */
+  private async downloadOne(
+    filePath: string,
+    realTarget: string | undefined,
+  ): Promise<FileDownloadResponse> {
+    const failed = (error: FileDownloadResponse['error']): FileDownloadResponse => ({
+      path: filePath,
+      content: null,
+      error,
+    });
+    try {
+      const handle = await open(
+        realTarget ?? this.resolveVirtual(filePath),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const info = await handle.stat();
+        if (info.isDirectory()) return failed('is_directory');
+        if (!info.isFile()) return failed('file_not_found');
+        return { path: filePath, content: await handle.readFile(), error: null };
+      } finally {
+        await handle.close();
+      }
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return failed('file_not_found');
+      if (code === 'EACCES') return failed('permission_denied');
+      if (code === 'EISDIR') return failed('is_directory');
+      return failed('invalid_path');
+    }
+  }
+
   /**
    * 寫與改前比對用的版本，只做 `lstat`、不讀內容（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。token 跟 {@link read}
-   * 回報的同一種（{@link statVersion}）。路徑是基座的 `resolvePath`，不解連結；不是一般檔（含最後一節是符號連結）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
+   * 回報的同一種（{@link statVersion}）。位置跟 {@link read} 看的同一個：過讀取面的圍堵（{@link readScope}），根內的連結看本尊，所以經連結讀過的檔
+   * 改得到（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）；被圍堵拒的回不存在：`read` 也讀不到它。
+   * 不是一般檔回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
    *
    * @param filePath - 虛擬路徑。
    */
   async [FILE_VERSION](filePath: string): Promise<FileVersionLookup> {
-    const info = await lstat(this.resolveVirtual(filePath), { bigint: true });
+    const scope = await this.readScope(filePath, 'readRaw');
+    if (scope.denial !== undefined) return { kind: 'absent' };
+    const info = await lstat(scope.realTarget ?? this.resolveVirtual(filePath), { bigint: true });
     return info.isFile() ? { kind: 'present', version: statVersion(info) } : { kind: 'absent' };
   }
 
@@ -820,9 +980,125 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
+   * 複製的來源那一半（`copy_file`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照 {@link read} 先過讀取面的圍堵（{@link readScope}），
+   * 開 {@link readScope} 解出的實際位置（解不開、交給下游時退回字面路徑），`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判一般檔，不是就關掉、拒絕：過圍堵之後被換成 FIFO 的路徑
+   * 開檔不會卡住，判的也是實際讀的那一個。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
+   *
+   * @param sourcePath - 這個 backend 座標系裡的來源路徑。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `from`（讀），錯誤句也用它。
+   * @returns 開好的來源，或錯誤結果。
+   */
+  async [COPY_SOURCE](
+    sourcePath: string,
+    request: CopyRequest,
+  ): Promise<CopySource | { error: string }> {
+    const ruled = permissionDenial(this.permissionRules, 'read', request.from);
+    if (ruled !== undefined) return { error: ruled };
+    try {
+      const scope = await this.readScope(sourcePath, 'copy');
+      if (scope.denial !== undefined) return denied({ error: scope.denial });
+      const target = scope.realTarget ?? this.resolveVirtual(sourcePath);
+      await this.atomicInternals?.beforeCopyOpen?.(target);
+      const handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      let size: number;
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) {
+          await handle.close();
+          noteFsError(FS_NOT_REGULAR_FILE);
+          return { error: `Error copying '${request.from}': not a regular file` };
+        }
+        size = info.size;
+      } catch (error: unknown) {
+        await handle.close().catch(() => undefined);
+        throw error;
+      }
+      return {
+        stream: handle.createReadStream({ start: 0, autoClose: false }),
+        size,
+        close: () => handle.close(),
+      };
+    } catch (error: unknown) {
+      noteErrno(error, true);
+      return { error: `Error copying '${request.from}': ${await this.reasonFor(error)}` };
+    }
+  }
+
+  /**
+   * 複製的目的地那一半：照 {@link write} 先過 fence（核准與升級跟 `write_file` 同一條路，摘要帶來源路徑），在逐目標鎖裡 `lstat`，
+   * 已經存在就拒，再把來源串流進暫存檔。發佈之前核對：讀到的位元組數要等於來源開檔時的大小，暫存檔重讀的 sha256 要等於讀進來的
+   * 那一份；對不上就不發佈、回錯誤，目的地從頭到尾沒出現過。通過才用 hard link 發佈（{@link writeFileAtomic} 的
+   * `createIfAbsent`），鎖外同時建出來的那一份也不會被蓋掉。
+   *
+   * @param destinationPath - 這個 backend 座標系裡的目的地路徑。
+   * @param source - {@link [COPY_SOURCE]} 開好的來源；這裡不關它。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `to`（寫），`from` 進核准摘要，錯誤句用它們。
+   * @returns 成功時是目的地的虛擬路徑、位元組數與 sha256；失敗時是錯誤結果，`exists` 表示目的地已經存在。
+   */
+  async [COPY_INTO](
+    destinationPath: string,
+    source: CopySource,
+    request: CopyRequest,
+  ): Promise<CopyIntoResult> {
+    const ruled = permissionDenial(this.permissionRules, 'write', request.to);
+    if (ruled !== undefined) return { error: ruled };
+    const checked = await this.checkedPath(destinationPath, 'copy', [request.from]);
+    if (typeof checked !== 'string') return denied(checked);
+    const exists = {
+      error: `Cannot copy to ${request.to} because it already exists`,
+      exists: true as const,
+    };
+    const hash = createHash('sha256');
+    let read = 0;
+    async function* counted(): AsyncIterable<Uint8Array> {
+      for await (const chunk of source.stream as AsyncIterable<Buffer>) {
+        hash.update(chunk);
+        read += chunk.length;
+        yield chunk;
+      }
+    }
+    let sha256 = '';
+    const verify = async (tempPath: string): Promise<void> => {
+      sha256 = hash.digest('hex');
+      const written = await digestFile(tempPath);
+      if (read !== source.size) {
+        throw new CopyMismatchError(
+          `source changed while copying (${source.size} bytes at open, ${read} read)`,
+        );
+      }
+      if (written.sha256 !== sha256) {
+        throw new CopyMismatchError(
+          `copy does not match the source (${read} bytes read, ${written.bytes} written)`,
+        );
+      }
+    };
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        if ((await lstat(resolved).catch(() => undefined)) !== undefined) return exists;
+        await writeFileAtomic(resolved, counted(), undefined, this.atomicInternals, {
+          createIfAbsent: true,
+          verify,
+        });
+        return { path: checked, bytes: read, sha256 };
+      });
+    } catch (error: unknown) {
+      if (error instanceof DestinationExistsError) return exists;
+      if (error instanceof CopyMismatchError) {
+        return { error: `Error copying to '${request.to}': ${error.message}` };
+      }
+      noteErrno(error, false);
+      return { error: `Error copying to '${request.to}': ${await this.reasonFor(error)}` };
+    }
+  }
+
+  /**
    * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
    *
-   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開），再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
+   * 讀：用路徑 `stat` 判一般檔，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` 開檔，開好再用把手判一次（#2312）；再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
    * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）。替換用 {@link applyLiteralEdit}（錯誤字句逐字照基座，`old_string`／
    * `new_string` 的 `\r\n` 也收成 `\n`），寫回前還原原檔的行尾；保留既有 mode。失敗的原因碼見 `fs-tool-errors.ts` 的 {@link noteFsError}。
    * **已知的界線（照 dsh）：** 混合行尾的檔以前 4096 個字元的多數為準，整份被統一成那一種。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
@@ -854,10 +1130,19 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         }
         let bytes: Uint8Array;
         let mode: number;
-        const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+        await this.atomicInternals?.beforeReadOpen?.(resolved);
+        const handle = await open(
+          resolved,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        );
         try {
+          const info = await handle.stat();
+          if (!info.isFile()) {
+            noteFsError(FS_NOT_REGULAR_FILE);
+            return { error: `${BASE_ERROR_WORD}: File '${checked}' not found` };
+          }
+          mode = info.mode & 0o777;
           bytes = await handle.readFile();
-          mode = (await handle.stat()).mode & 0o777;
         } finally {
           await handle.close();
         }
@@ -1348,7 +1633,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async checkedPath(
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
     payload: readonly unknown[],
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
@@ -1357,6 +1642,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
     const reserved = await this.reservedDenial(standing, filePath, operation);
     if (reserved !== undefined) return { error: reserved };
+    // `permissions` 規則同樣不看模式、不認領 grant：它是部署的規則，不是這條 thread 的沙箱。
+    const ruled = await this.mutationRuleDenial(filePath, operation);
+    if (ruled !== undefined) return { error: ruled };
     const first = await this.verdict(standing, filePath, operation);
     if (typeof first === 'string') return first;
 
@@ -1402,7 +1690,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async verdict(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | { error: string }> {
     if (mode === 'danger-full-access') return filePath;
     if (mode === 'read-only') {
@@ -1454,6 +1742,29 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
+   * 變更經符號連結解開之後落在 `permissions` 規則擋下的地方就拒（{@link ruleDenial}）。`~`、`..` 與解析失敗不在這裡判，
+   * 交給後面的 fence。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 變更的操作名。
+   * @returns 拒絕句；沒被擋時 `undefined`。
+   */
+  private async mutationRuleDenial(
+    filePath: string,
+    operation: WriteOperation,
+  ): Promise<string | undefined> {
+    if (this.permissionRules.length === 0) return undefined;
+    const realTarget = await this.canonicalTarget(filePath);
+    if (realTarget === undefined) return undefined;
+    const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    return this.ruleDenial(
+      resolve(this.cwd, virtualPath.slice(1)),
+      realTarget,
+      operation === 'delete' ? 'delete' : 'write',
+    );
+  }
+
+  /**
    * 變更落在保留的地方（{@link reservedReason} 有理由）就拒，不看模式。
    *
    * @param mode - 這一次呼叫用的模式，只用在拒絕訊息。
@@ -1464,7 +1775,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async reservedDenial(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | undefined> {
     const reason = await this.reservedReason(filePath);
     return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);
@@ -1560,8 +1871,46 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         denial: this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`),
       };
     }
-    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) return { realTarget };
+    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) {
+      const ruled = await this.ruleDenial(resolved, realTarget, 'read');
+      return ruled === undefined ? { realTarget } : { denial: ruled };
+    }
     return { denial: this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外') };
+  }
+
+  /**
+   * 解開連結之後的位置被 `permissions` 規則擋下時的拒絕句（{@link usePermissions}）。位置跟給的路徑相同時不比：
+   * 那條路徑基座的工具已經比過，harness 自己經 backend 讀的（技能掃描、記憶來源）也不受規則管。
+   * 規則比的是接回路由前綴的虛擬路徑；換不回虛擬路徑的（`danger-full-access` 下落在根外）沒有規則可比。
+   *
+   * @param lexical - 給的路徑字面解析出來的主機路徑。
+   * @param realTarget - canonicalize 過的主機路徑。
+   * @param operation - `read`，或變更的 `write`、`delete`。
+   * @returns 拒絕句；沒被擋時 `undefined`。
+   */
+  private async ruleDenial(
+    lexical: string,
+    realTarget: string,
+    operation: PermissionOperation | 'delete',
+  ): Promise<string | undefined> {
+    if (this.permissionRules.length === 0) return undefined;
+    const real = await this.virtualOf(realTarget);
+    if (real === undefined) return undefined;
+    const given = relative(this.cwd, lexical);
+    if (`/${given.split(sep).join('/')}` === real) return undefined;
+    const path =
+      this.routePrefix === ''
+        ? real
+        : real === '/'
+          ? this.routePrefix
+          : `${this.routePrefix}${real}`;
+    if (operation !== 'delete') return permissionDenial(this.permissionRules, operation, path);
+    // 同基座 `deleteTargetMayHaveDescendants` 的保守方向：確定是一般檔才照先命中者決定，其餘當成整棵子樹。
+    const leaf = await lstat(realTarget).then(
+      (info) => info.isFile(),
+      () => false,
+    );
+    return deleteDenial(this.permissionRules, path, !leaf);
   }
 
   /**

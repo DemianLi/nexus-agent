@@ -1,0 +1,4 @@
+# echo 要人核准（`approval.fixture.ts`）。錄與重放都疊這一份；`{{src}}` 由 harness 換成 apps/harness/src 的絕對路徑。
+- insert:
+    - id: approval-demo
+      name: '{{src}}/approval.fixture.ts'

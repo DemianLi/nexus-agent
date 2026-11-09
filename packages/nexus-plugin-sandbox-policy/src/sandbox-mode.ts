@@ -46,6 +46,7 @@
  * 折」。所以本套件的 `index.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
  * 在裡面讀這顆控制器的一律拿到快照。子代理的摘要器 offload 也在 `task` 那一次呼叫裡跑，所以同樣照快照判
  * ——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
+ * **撤除條件**：子代理的檔案工具拿得到呼叫者（逐 session 的 backend），fence 就改從子代理的日誌折出模式，ALS 那一層拿掉。
  *
  * **背景續行的子代理（[#827](https://github.com/DemianLi/nexus-agent/issues/827)）把偏離縮到只剩 fence 那一格載體**：
  * 快照的**來源**與 dsh 一致——委派那刻寫進子代理自己的日誌（`sandbox/mode { source: 'delegation' }`），被叫醒的每一輪
@@ -61,7 +62,7 @@
  *
  * **偏離 dsh（登記，理由 1：基座表達不出來）。** dsh 沒有這顆控制器：它的 fence 每次從 session 日誌折出模式（`sandbox-policy/src/index.ts`），
  * 所以「日誌就是唯一來源」天生成立。我們的格子住在控制器（fence 讀的是 ALS 快照，見上面「偏離」那段），不能整個改成逐次折疊，所以先讓格子**跟著**日誌，
- * 把兩個來源收成一個。**移除條件：sandbox-policy 遷上樹時定**——那時 fence 可以直接讀投影，這個訂閱連同控制器的格子一起拿掉。
+ * 把兩個來源收成一個。**移除條件**：控制器改成以日誌投影為準的行程級服務（[#2554](https://github.com/DemianLi/nexus-agent/issues/2554)），fence 直接讀投影，這個訂閱連同控制器的格子一起拿掉。
  *
  * ## 跨重啟
  *
@@ -85,10 +86,8 @@ import type {
   SandboxGrantLedger,
   SandboxMode,
   SandboxModeSource,
-  SessionEvent,
-  SessionLog,
-  SessionSubject,
-} from '@nexus/core';
+} from '@nexus/permission-presets';
+import type { SessionEvent, SessionLog, SessionSubject } from '@nexus/session';
 
 import { canEscalateFrom } from './sandbox-escalation.js';
 
@@ -355,7 +354,7 @@ export class SandboxModeController implements SandboxGrantLedger {
    * 釘起始值是照 dsh 的挂载固定：不釘的話，一份沒有人切過的日誌答不出政策是哪一格。
    * **先釘再訂閱**：訂閱會重播既有事件，釘在前，重播最後落在的就是剛釘的這一格，也就是接線前後的格子不變。
    *
-   * @param subject - 要記帳的日誌與它的觀察面（`registry.sessions.join` 給的那一份）。
+   * @param subject - 要記帳的日誌與它的觀察面（`thread.join` 給的那一份）。
    * @returns 收掉這次接線的函式；收掉之後那份日誌的事件不再影響這一格。
    */
   attach(subject: Pick<SessionSubject, 'log' | 'observe'>): () => void {

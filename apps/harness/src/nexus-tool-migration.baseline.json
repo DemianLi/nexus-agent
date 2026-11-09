@@ -1,0 +1,991 @@
+{
+  "echo": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"把收到的訊息原樣回聲，用來確認工具接線是通的。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"要回聲的訊息\"}},\"required\":[\"message\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "message": "嗨"
+        },
+        "toolCall": {
+          "content": "回聲：嗨",
+          "status": "success",
+          "id": "c1",
+          "name": "echo"
+        },
+        "bare": "回聲：嗨"
+      },
+      {
+        "args": {
+          "message": 3
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at message"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at message"
+        }
+      },
+      {
+        "args": {
+          "message": "嗨",
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "回聲：嗨",
+          "status": "success",
+          "id": "c1",
+          "name": "echo"
+        },
+        "bare": "回聲：嗨"
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at message"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at message"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at message"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at message"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "todo_write": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"todo_write\",\"description\":\"Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Keep AT MOST ONE todo `in_progress` at a time; while work remains, exactly one active task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished).\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"description\":\"What the task is — a short imperative line.\"},\"status\":{\"type\":\"string\",\"enum\":[\"pending\",\"in_progress\",\"completed\"],\"description\":\"pending (not started) | in_progress (now) | completed (done).\"}},\"required\":[\"content\",\"status\"],\"additionalProperties\":false},\"description\":\"The COMPLETE task list, replacing any previous list.\"}},\"required\":[\"todos\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending"
+            }
+          ]
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "todo_write"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "todo_write"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "bad"
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"pending\"|\"in_progress\"|\"completed\"\n  → at todos[0].status"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"pending\"|\"in_progress\"|\"completed\"\n  → at todos[0].status"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending",
+              "x": 1
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at todos[0]"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at todos[0]"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending"
+            }
+          ],
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "todo_write"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "todo_write"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "todo_write#2": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"todo_write\",\"description\":\"Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished).\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"description\":\"What the task is — a short imperative line.\"},\"status\":{\"type\":\"string\",\"enum\":[\"pending\",\"in_progress\",\"completed\"],\"description\":\"pending (not started) | in_progress (now) | completed (done).\"}},\"required\":[\"content\",\"status\"],\"additionalProperties\":false},\"description\":\"The COMPLETE task list, replacing any previous list.\"}},\"required\":[\"todos\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending"
+            }
+          ]
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "todo_write"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "todo_write"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "bad"
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"pending\"|\"in_progress\"|\"completed\"\n  → at todos[0].status"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"pending\"|\"in_progress\"|\"completed\"\n  → at todos[0].status"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending",
+              "x": 1
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at todos[0]"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at todos[0]"
+        }
+      },
+      {
+        "args": {
+          "todos": [
+            {
+              "content": "a",
+              "status": "pending"
+            }
+          ],
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "todo_write"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，清單沒有地方放，所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "todo_write"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at todos"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "present": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"present\",\"description\":\"Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"files\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path of an existing regular file. Relative paths use the Session working directory.\"},\"description\":{\"description\":\"Brief description for the user.\",\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false},\"description\":\"Usually the 1-2 most important deliverables; at most 4 per call.\"}},\"required\":[\"files\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "files": [
+            {
+              "path": "a"
+            }
+          ]
+        },
+        "toolCall": {
+          "content": "Error: present requires an agent Session",
+          "status": "error",
+          "id": "c1",
+          "name": "present"
+        },
+        "bare": {
+          "content": "Error: present requires an agent Session",
+          "status": "error",
+          "id": "",
+          "name": "present"
+        }
+      },
+      {
+        "args": {
+          "files": [
+            {
+              "path": 1
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at files[0].path"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at files[0].path"
+        }
+      },
+      {
+        "args": {
+          "files": [
+            {
+              "path": "a",
+              "x": 1
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at files[0]"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Unrecognized key: \"x\"\n  → at files[0]"
+        }
+      },
+      {
+        "args": {
+          "files": [
+            {
+              "path": "a",
+              "description": "d"
+            }
+          ],
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: present requires an agent Session",
+          "status": "error",
+          "id": "c1",
+          "name": "present"
+        },
+        "bare": {
+          "content": "Error: present requires an agent Session",
+          "status": "error",
+          "id": "",
+          "name": "present"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at files"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at files"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at files"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at files"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "ask_user_question": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"ask_user_question\",\"description\":\"需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"這一題的穩定 id，答案會照它回來。\"},\"question\":{\"type\":\"string\",\"description\":\"要問的那句話，具體一點。\"},\"header\":{\"description\":\"可選的短標題，例如「確認」或「選模式」。\",\"type\":\"string\"},\"options\":{\"description\":\"可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。\",\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"選項的短標籤，直接顯示給人看。\"},\"description\":{\"description\":\"一句話說明這個選項的取捨或後果。\",\"type\":\"string\"}},\"required\":[\"label\"],\"additionalProperties\":false}},\"multi_select\":{\"description\":\"人可不可以複選。預設單選。\",\"type\":\"boolean\"}},\"required\":[\"id\",\"question\"],\"additionalProperties\":false},\"description\":\"繼續之前要問人的那幾題。\"}},\"required\":[\"questions\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "questions": [
+            {
+              "id": "q",
+              "question": "?"
+            }
+          ]
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "c1",
+          "name": "ask_user_question"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "",
+          "name": "ask_user_question"
+        }
+      },
+      {
+        "args": {
+          "questions": [
+            {
+              "id": 1
+            }
+          ]
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at questions[0].id\n✖ Invalid input: expected string, received undefined\n  → at questions[0].question"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at questions[0].id\n✖ Invalid input: expected string, received undefined\n  → at questions[0].question"
+        }
+      },
+      {
+        "args": {
+          "questions": [
+            {
+              "id": "q",
+              "question": "?",
+              "x": 1,
+              "options": [
+                {
+                  "label": "a",
+                  "y": 2
+                }
+              ]
+            }
+          ]
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "c1",
+          "name": "ask_user_question"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "",
+          "name": "ask_user_question"
+        }
+      },
+      {
+        "args": {
+          "questions": [],
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "c1",
+          "name": "ask_user_question"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有指定問答管道，ask_user_question 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。",
+          "status": "error",
+          "id": "",
+          "name": "ask_user_question"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at questions"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at questions"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at questions"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected array, received undefined\n  → at questions"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "get_goal": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"get_goal\",\"description\":\"Read the current session goal: its exact id and revision, objective, phase, round cap, rounds started so far, and blocker reason when present. Returns {\\\"goal\\\":null} when there is none. Call this before update_goal and copy its exact goal_id and revision. After session resume, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. When automatic continuation is enabled, an active goal is given further rounds in this same session until it is completed, blocked, or reaches maxGoalRounds.\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {},
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "c1",
+          "name": "get_goal"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "",
+          "name": "get_goal"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "c1",
+          "name": "get_goal"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "",
+          "name": "get_goal"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "create_goal": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"create_goal\",\"description\":\"Create the one long-running completion objective for this session, when the current direct human request is such an objective. You may infer that intent from the request in any language; the user does not have to say \\\"create a goal\\\". Do not create a goal for routine single-turn work. Requires a direct human turn on the top-level agent.\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"objective\":{\"type\":\"string\",\"description\":\"The concrete completion objective inferred from the human request.\"},\"max_goal_rounds\":{\"description\":\"Optional positive safe-integer limit on automatic continuation rounds.\",\"type\":\"number\"}},\"required\":[\"objective\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "objective": "x"
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "c1",
+          "name": "create_goal"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "",
+          "name": "create_goal"
+        }
+      },
+      {
+        "args": {
+          "objective": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at objective"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at objective"
+        }
+      },
+      {
+        "args": {
+          "objective": "x",
+          "max_goal_rounds": "3"
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected number, received string\n  → at max_goal_rounds"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected number, received string\n  → at max_goal_rounds"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at objective"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at objective"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at objective"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at objective"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "update_goal": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"update_goal\",\"description\":\"Update the exact current goal revision. Call get_goal first and copy its goal_id and revision. Mark complete only when the objective is actually achieved. Mark blocked only for a concrete blocking condition you report in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked. Inside a continuation round, mark blocked only after the same blocking condition has persisted for at least 3 consecutive rounds. Actions complete and blocked accept either a direct human turn or the current continuation round; edit, pause, and resume always require a direct human turn on the top-level agent.\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"goal_id\":{\"type\":\"string\",\"description\":\"Exact id returned by get_goal.\"},\"revision\":{\"type\":\"number\",\"description\":\"Exact positive revision returned by get_goal.\"},\"action\":{\"type\":\"string\",\"enum\":[\"edit\",\"pause\",\"resume\",\"complete\",\"blocked\"],\"description\":\"edit | pause | resume | complete | blocked\"},\"objective\":{\"description\":\"Replacement objective; valid only with action edit.\",\"type\":\"string\"},\"max_goal_rounds\":{\"description\":\"Replacement round cap; valid only with action edit. Raise it to give a goal that ran out of rounds more; see get_goal for roundsStarted.\",\"type\":\"number\"},\"blocked_reason\":{\"description\":\"Concrete blocking condition; required only with action blocked.\",\"type\":\"string\"}},\"required\":[\"goal_id\",\"revision\",\"action\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "goal_id": "g",
+          "revision": 1,
+          "action": "edit",
+          "objective": "y"
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "c1",
+          "name": "update_goal"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "",
+          "name": "update_goal"
+        }
+      },
+      {
+        "args": {
+          "goal_id": "g",
+          "revision": 1,
+          "action": "bad"
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        }
+      },
+      {
+        "args": {
+          "goal_id": "g",
+          "revision": 1,
+          "action": "blocked",
+          "blocked_reason": "r",
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "c1",
+          "name": "update_goal"
+        },
+        "bare": {
+          "content": "Error: 這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。",
+          "status": "error",
+          "id": "",
+          "name": "update_goal"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at goal_id\n✖ Invalid input: expected number, received undefined\n  → at revision\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at goal_id\n✖ Invalid input: expected number, received undefined\n  → at revision\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at goal_id\n✖ Invalid input: expected number, received undefined\n  → at revision\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at goal_id\n✖ Invalid input: expected number, received undefined\n  → at revision\n✖ Invalid option: expected one of \"edit\"|\"pause\"|\"resume\"|\"complete\"|\"blocked\"\n  → at action"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  },
+  "submit_record": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"submit_record\",\"description\":\"把湊齊的欄位寫成目標檔案的一列。**欄位缺了就先用 ask_user_question 問人，不要自己編、不要留空送出。**送出一定要經過人核准，所以你會停一下；被拒絕時不要換個路徑再送一次，去問人為什麼。欄名要跟檔案表頭一致；檔案不存在時會用你這次給的鍵當表頭建起來。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"file_path\":{\"type\":\"string\",\"description\":\"目標檔案的絕對路徑，例如 \\\"/visitors.csv\\\"。不存在就會被建出來。\"},\"record\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"type\":\"string\"},\"description\":\"這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。\"}},\"required\":[\"file_path\",\"record\"],\"additionalProperties\":false}}}",
+    "results": [
+      {
+        "args": {
+          "file_path": "/a.csv",
+          "record": {
+            "a": "1"
+          }
+        },
+        "toolCall": {
+          "content": "Error: submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "submit_record"
+        },
+        "bare": {
+          "content": "Error: submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "submit_record"
+        }
+      },
+      {
+        "args": {
+          "file_path": "/a.csv",
+          "record": {
+            "a": 1
+          }
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at record.a"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received number\n  → at record.a"
+        }
+      },
+      {
+        "args": {
+          "file_path": "/a.csv",
+          "record": {},
+          "extra": 1
+        },
+        "toolCall": {
+          "content": "Error: submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。",
+          "status": "error",
+          "id": "c1",
+          "name": "submit_record"
+        },
+        "bare": {
+          "content": "Error: submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。",
+          "status": "error",
+          "id": "",
+          "name": "submit_record"
+        }
+      },
+      {
+        "args": {},
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at file_path\n✖ Invalid input: expected record, received undefined\n  → at record"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at file_path\n✖ Invalid input: expected record, received undefined\n  → at record"
+        }
+      },
+      {
+        "args": {
+          "extra": 1
+        },
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at file_path\n✖ Invalid input: expected record, received undefined\n  → at record"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected string, received undefined\n  → at file_path\n✖ Invalid input: expected record, received undefined\n  → at record"
+        }
+      },
+      {
+        "args": "嗨",
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received string"
+        }
+      },
+      {
+        "args": null,
+        "toolCall": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        },
+        "bare": {
+          "threw": "ToolInputParsingException",
+          "message": "Received tool input did not match expected schema\n\n✖ Invalid input: expected object, received null"
+        }
+      }
+    ]
+  }
+}

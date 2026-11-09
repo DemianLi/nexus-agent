@@ -63,6 +63,7 @@ describe('classifyTool', () => {
     ['execute', 'bash'],
     ['run_javascript', 'code'],
     ['delete', 'others'],
+    ['copy_file', 'others'],
     ['task', 'others'],
     ['subagent', 'others'],
     ['list_agents', 'others'],
@@ -72,6 +73,10 @@ describe('classifyTool', () => {
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
     expect(classifyTool(name)).toBe(variant);
+  });
+
+  it('宿主頁工具（#2374）的標題是「頁面工具：」加上宣告時的名字，不是一句「工具」', () => {
+    expect(toolTitle('page__focus_device')).toBe('頁面工具：focus_device');
   });
 
   it('`subagent` 跟 `task` 同標題（都是委派子代理）', () => {
@@ -123,6 +128,15 @@ describe('摘要與展開內容', () => {
   it('刪檔有自己的標題，摘要是那個路徑（#672）', () => {
     expect(toolTitle('delete')).toBe('刪除檔案');
     expect(toolSummary('delete', '{"file_path":"/a.md"}')).toBe('/a.md');
+  });
+
+  it('複製檔案的摘要寫出從哪裡到哪裡（#2289）', () => {
+    expect(toolTitle('copy_file')).toBe('複製檔案');
+    expect(
+      toolSummary('copy_file', '{"source_path":"/a.md","destination_path":"/shared/b.md"}'),
+    ).toBe('/a.md → /shared/b.md');
+    // 缺目的路徑時退回通用挑法，摘要仍是來源路徑。
+    expect(toolSummary('copy_file', '{"source_path":"/a.md"}')).toBe('/a.md');
   });
 
   it('壞 JSON 退回原字串', () => {

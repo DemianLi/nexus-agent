@@ -16,6 +16,8 @@ import type { FsLookup, FsService } from '@nexus/fs';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
+import { langChainToolOf } from '@nexus/tool-adapter';
+import type { ToolExec } from '@nexus/tools';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { AnyBackendProtocol } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -67,9 +69,8 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
       ];
     }),
   );
-  const lookup = (config: unknown): FsLookup => {
-    const thread = (config as { configurable?: { thread_id?: string } } | undefined)?.configurable
-      ?.thread_id;
+  const lookup = (exec: unknown): FsLookup => {
+    const thread = (exec as ToolExec).threadId;
     const fs = thread === undefined ? undefined : handles.get(thread);
     return fs === undefined
       ? { kind: 'ambiguous', count: handles.size }
@@ -94,7 +95,7 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
     .entries()
     .find((item) => item.tool.name === submitRecord.SUBMIT_RECORD_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return { tool: entry.tool, files };
+  return { tool: langChainToolOf(entry.tool), files };
 }
 
 /** 以某條 thread 的身分送一列：回模型看到的字，與那條 thread 的檔案現在的全文。 */

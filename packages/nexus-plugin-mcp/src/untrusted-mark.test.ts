@@ -1,6 +1,6 @@
 /**
  * MCP 工具結果本文前面的「外部內容」前綴（[#1768](https://github.com/DemianLi/nexus-agent/issues/1768)）：純函式的形狀。
- * 接進 adapter 的 `afterToolCall`、`isError` 不標、進會話日誌是另外兩處：`index.test.ts` 與 `apps/harness/src/mcp-untrusted-prefix.test.ts`。
+ * 接進工具呼叫（`tool-call.ts`）、`isError` 不標、進會話日誌是另外兩處：`index.test.ts` 與 `apps/harness/src/mcp-untrusted-prefix.test.ts`。
  */
 
 import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';

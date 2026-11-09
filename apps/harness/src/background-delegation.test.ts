@@ -21,17 +21,19 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionLog } from '@nexus/core';
 import {
   createHostServicesPlugin,
+  createToolCallStepMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SessionRegistry,
   SUBAGENT_DELEGATION_CONTEXT,
   TOOL_ERROR_PREFIX,
+  toolDescriptionOf,
+  withModelCallStep,
 } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
   unaskedRefusal,
@@ -50,6 +52,14 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 const OVERLOADED = 'Service temporarily overloaded';
 
@@ -220,18 +230,18 @@ describe('不給選項：完全不變', () => {
   });
 });
 
-/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求。 */
+/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求（`task` 在那裡是 core 逐字造的定義）。 */
 async function describedTool(background: boolean, name: 'task' | 'subagent'): Promise<string> {
   let seen = '';
-  const spy = createMiddleware({
-    name: 'zzDescriptionSpy',
-    wrapModelCall: (request, handler) => {
-      seen =
-        (request.tools.find((each) => each.name === name) as { description?: string })
-          ?.description ?? '';
-      return handler(request);
+  const spy = withModelCallStep(
+    (request, next) => {
+      const tools = (request as { tools: { name: string }[] }).tools;
+      seen = toolDescriptionOf(tools.find((each) => each.name === name)) ?? '';
+      return next(request);
     },
-  });
+    (wrapModelCall) =>
+      createMiddleware({ name: 'zzDescriptionSpy', wrapModelCall: wrapModelCall as never }),
+  );
   const run = await assemble({
     rootTurns: [{ content: '好' }],
     workerTurns: [],
@@ -271,23 +281,27 @@ describe('模型面的描述', () => {
 });
 
 /**
- * 上游絆索：我們偏離的理由是 langchain 禁止在 `wrapModelCall` 改已註冊的工具。哪天這一條放行了，這個測試會紅，
- * 那時可以直接給 `task` 加 `run_in_background`，`subagent` 這一整套偏離就能拆。
+ * 上游絆索：釘住 `background-delegation.ts` 檔頭引的 langchain 第一條規則——`wrapModelCall` 裡把已註冊的工具換成
+ * 同名的另一個實例一律拒絕（`dist/agents/nodes/AgentNode.js:246-257`）。這裡用 `tool()` 造的實例去換，正好落在檢查內。
+ * 預設的 langgraph loop 下轉紅，代表 langchain 改了這條規則，檔頭那段說明要照新版重讀；`vitest.native.config.ts`
+ * 下丟錯的是 `native-loop/model-node.ts` 照同一套寫的那份檢查，轉紅是我們自己改了它。委派工具的命名與前景委派不因此改，
+ * 在 [#2363](https://github.com/DemianLi/nexus-agent/issues/2363#issuecomment-6653783737) 處理。
  */
 describe('上游絆索：wrapModelCall 不能改已註冊的工具', () => {
   it('換掉 task 會拋 “You have modified a tool”', async () => {
-    const swap = createMiddleware({
-      name: 'zzSwapTask',
-      wrapModelCall: (request, handler) =>
-        handler({
+    const swap = withModelCallStep(
+      (request, next) =>
+        next({
           ...request,
-          tools: request.tools.map((each) =>
+          tools: (request as { tools: { name: string }[] }).tools.map((each) =>
             each.name === 'task'
               ? tool(() => '', { name: 'task', description: '換掉的', schema: z.object({}) })
               : each,
           ),
         }),
-    });
+      (wrapModelCall) =>
+        createMiddleware({ name: 'zzSwapTask', wrapModelCall: wrapModelCall as never }),
+    );
     const run = await assemble({
       rootTurns: [{ content: '好' }],
       workerTurns: [],
@@ -324,6 +338,28 @@ describe('給了選項：模型面', () => {
   });
 });
 
+describe('並行派那一句只給 root（#2414）', () => {
+  it('子代理的疊沒有 `subagent`，它的系統提示詞沒有那一句', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [{ content: '子答' }],
+      background: {},
+    });
+    try {
+      await run.say();
+      const systemOf = (prompt: (typeof run.workerModel.prompts)[number]): string =>
+        prompt.find((message) => message.getType() === 'system')!.text;
+      expect(systemOf(run.rootModel.prompts[0]!)).toContain('同一則訊息裡一起呼叫 `subagent`');
+      expect(run.workerModel.prompts.length).toBeGreaterThan(0);
+      for (const prompt of run.workerModel.prompts) {
+        expect(systemOf(prompt)).not.toContain('同一則訊息裡一起呼叫 `subagent`');
+      }
+    } finally {
+      await run.close();
+    }
+  });
+});
+
 describe('前景（run_in_background: false）：改派給基座的 task', () => {
   it('子代理照今天的路徑跑完，結果回給模型，名字是 subagent', async () => {
     const run = await assemble({
@@ -339,6 +375,31 @@ describe('前景（run_in_background: false）：改派給基座的 task', () =>
       // 走的是基座的 task：子代理的日誌是 `checkpoint_ns` 那一條，不是背景編號。
       expect(run.backgroundLogs().some((log) => /\/bg-/.test(log.sessionId))).toBe(false);
       expect(run.backgroundLogs()).toHaveLength(1);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('內層看到的是 task：名字改回 task、工具是基座那顆（不是模型看到的定義）', async () => {
+    const seen: { name: string; tool: unknown }[] = [];
+    // spy 用預設的 `use`，排在 prepend 的背景委派裡面，看到的是改派之後交給內層的那一份。
+    const spy = createToolCallStepMiddleware('zzToolCallSpy', (call, next) => {
+      seen.push({ name: call.name, tool: call.tool });
+      return next();
+    });
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [{ content: '子答' }],
+      background: {},
+      plugins: [
+        { plugin: { name: 'spy', apply: (registry) => void registry.middleware.use(spy) } },
+      ],
+    });
+    try {
+      await run.say();
+      const root = seen.find((each) => each.name === 'task' || each.name === 'subagent');
+      expect(root?.name).toBe('task');
+      expect(typeof (root?.tool as { invoke?: unknown } | undefined)?.invoke).toBe('function');
     } finally {
       await run.close();
     }
@@ -1012,7 +1073,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
                 fsContainment: CONTAINED_FILESYSTEM,
                 sandboxPolicy: { controller, rootDir: dir },
               }),
-              createSandboxPolicyPlugin(),
+              sandboxPolicyRow,
             ]
           : [],
       }),
@@ -1071,7 +1132,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
           fsContainment: CONTAINED_FILESYSTEM,
           sandboxPolicy: { controller, rootDir: dir },
         }),
-        createSandboxPolicyPlugin(),
+        sandboxPolicyRow,
       ],
     });
     return { controller, run };

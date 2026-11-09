@@ -146,9 +146,9 @@ describe('事件', () => {
 });
 
 describe('header 的兩個版號', () => {
-  it('磁碟上是上一版：storedFormatVersion 是上一版，header.version 已經蓋成這一版', async () => {
-    // 上一版是舊兩檔的最後一版：手寫一份（讀方認得、續接時遷移的那種）。
-    expect(LEGACY_TWO_FILE_FORMAT_VERSION).toBe(SESSION_LOG_FORMAT_VERSION - 1);
+  it('磁碟上是舊版：storedFormatVersion 是舊版，header.version 已經蓋成這一版', async () => {
+    // 舊兩檔的最後一版：手寫一份（讀方認得、續接時遷移的那種）。
+    expect(LEGACY_TWO_FILE_FORMAT_VERSION).toBeLessThan(SESSION_LOG_FORMAT_VERSION);
     const paths = legacyTwoFilePathsIn(root, 'cli');
     await writeFile(
       paths.header,
@@ -157,7 +157,7 @@ describe('header 的兩個版號', () => {
     await writeFile(paths.log, '');
 
     const { header: read, storedFormatVersion } = await sessionHeaderOf(root, 'cli');
-    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION - 1);
+    expect(storedFormatVersion).toBe(LEGACY_TWO_FILE_FORMAT_VERSION);
     // 陷阱寫明：比 header.version 的「升版」斷言永遠綠。
     expect(read.version).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(read['cwd']).toBe('/tmp');

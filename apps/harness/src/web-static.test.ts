@@ -62,7 +62,7 @@ describe('createWebStaticHandler', () => {
     const launch = new URL(auth.authenticatedUrl(`http://${AUTHORITY}`));
     const response = await handle(get(`/${launch.search}`));
     expect(response.status).toBe(303);
-    expect(response.headers.get('location')).toBe('/');
+    expect(response.headers.get('location')).toBe('./');
     expect(response.headers.get('set-cookie')).toMatch(/HttpOnly; SameSite=Strict$/);
     expect((await handle(get('/?token=wrong'))).status).toBe(401);
   });

@@ -22,11 +22,12 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
-import { createQuickJsPlugin, RUN_JAVASCRIPT_TOOL_NAME } from '@nexus/plugin-quickjs';
+import { RUN_JAVASCRIPT_TOOL_NAME } from '@nexus/plugin-quickjs';
 import type { QuickJsPluginOptions } from '@nexus/plugin-quickjs';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { createQuickJsPlugin } from './quickjs.fixture.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -84,8 +85,8 @@ describe('run_javascript 在 agent 迴圈裡', () => {
 
 /**
  * **程式失敗是工具失敗**（[#615](https://github.com/DemianLi/nexus-agent/issues/615)，照 dsh
- * `run_code` 的 `CodeRunFailedError`）：工具拋、圍堵接。以前回一句 `錯誤：…` 的字串，模型、
- * 會話日誌、web 的工具卡三處都記成成功。
+ * `run_code` 的 `CodeRunFailedError`）：工具回 `ok: false`、帶碼。回字串的話，模型、
+ * 會話日誌、web 的工具卡三處都會記成成功。
  *
  * 走真的組裝、接上會話日誌（`attachSession`，沒接的話圍堵不記日誌），看三處：模型收到的
  * ToolMessage 是 `status: 'error'`、文字帶得出失敗種類與原因；日誌那顆 `tool/result` 是
@@ -121,11 +122,11 @@ describe('run_javascript 失敗時回報成工具錯誤', () => {
     const { tool, logged, errors, last } = await runOne({ code }, options);
 
     expect(tool?.status).toBe('error');
-    // 圍堵的前綴只有一層：工具自己不再帶 `錯誤：`。
+    // 前綴只有 `failed()` 那一層；求值那一層不帶 `錯誤：`。
     expect(tool?.text).toContain(`工具 ${RUN_JAVASCRIPT_TOOL_NAME} 執行失敗：${expected}`);
     expect(tool?.text).not.toContain('錯誤：');
     expect(logged).toEqual([true]);
-    // 碼照 dsh 跟著進日誌：`CodeRunFailedError` 是 `HarnessError`，圍堵記它的 `{ name, code }`。
+    // 碼跟著進日誌：工具回 `ok: false` 帶 `{ name, code }`，轉接器掛在那則訊息上，圍堵照記。
     expect(errors).toEqual([{ name: 'CodeRunFailedError', code: 'CODE_RUN_FAILED' }]);
     expect(last).toBe('收工。');
   });

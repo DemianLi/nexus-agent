@@ -64,7 +64,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  * 少一個或多一個都在 `typecheck` 當場紅。值是什麼不重要，重要的是鍵。
  */
 const CHANNELS = {
-  // 九個折進 `createDeepAgent` 參數的註冊點。
+  // 十個折進 `createDeepAgent` 參數的註冊點。
   tools: true,
   subagents: true,
   capabilities: true,
@@ -74,6 +74,8 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
+  // 系統提示詞的中段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：fold 折成 `middleware` 裡的轉接格。
+  prompt: true,
   // 十條不折進任何參數的正交通道（其中最後一條 `disabledEntries` 是唯讀視圖）。
   lifecycle: true,
   telemetry: true,
@@ -93,8 +95,8 @@ const CHANNELS = {
   disabledEntries: true,
 } satisfies Record<keyof PluginRegistry, true>;
 
-/** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
-const FOLDED_CHANNELS = 9;
+/** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「十個註冊點」。 */
+const FOLDED_CHANNELS = 10;
 /** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加八條」。 */
 const ORTHOGONAL_CHANNELS = 10;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
@@ -177,7 +179,7 @@ const ALSO_SWEEP = [
   '.docs/development-plan.md 與 development-plan-phase-5.md（「九個註冊點」、以及 development-plan.md 的「九個註冊點之外有 N 條不折疊的通道」＋那一串名字；#364 切檔後散在兩份）',
   "**掃的時候按形狀不按值**：`grep '個欄位（9\\|條通道\\|個註冊點'`。照上一版字面去掃會掃空——那幾處自己就漂過（#456 動工時量到 §2 與 development-plan 都還列著 #477 已經收掉的 `feedback`）",
   'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
-  'registry.ts 的「九個註冊點」在五行上（:4 / :15 / :309 / :346 / :443），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
+  'registry.ts 的「十個註冊點」在六行上（檔頭兩處、lifecycle／logger／telemetry／commands 四處），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
 ].join('\n  - ');
 
 describe('PluginRegistry 的通道數', () => {

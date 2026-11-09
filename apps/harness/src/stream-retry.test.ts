@@ -178,6 +178,8 @@ interface RunOptions {
   readonly during?: (pump: ThreadPump) => Promise<void>;
   /** 這幾種事件寫進 root 日誌時拋這個錯（造日誌那一關拒收）。 */
   readonly reject?: { readonly types: readonly string[]; readonly error: Error };
+  /** pump 讀完第一則 `message-start` 之後停住，等 root 日誌出現 `assistant/message`（日誌由圖寫，不等 pump 讀）才往下讀。 */
+  readonly holdAfterFirstStart?: boolean;
 }
 
 /**
@@ -188,8 +190,11 @@ function slowed(
   agent: object,
   slowMs: number | undefined,
   inject: readonly object[] = [],
+  hold?: () => Promise<void>,
 ): PumpAgent {
-  if (slowMs === undefined && inject.length === 0) return agent as PumpAgent;
+  if (slowMs === undefined && inject.length === 0 && hold === undefined) {
+    return agent as PumpAgent;
+  }
   return new Proxy(agent, {
     get(target, key, receiver) {
       const value: unknown = Reflect.get(target, key, receiver);
@@ -208,12 +213,25 @@ function slowed(
             return () => {
               const iterator = inner[Symbol.asyncIterator]();
               const queued = [...inject];
+              let held = false;
+              let sawStart = false;
               return {
                 async next() {
                   // 先吐注入的假事件（圖外來的 `custom`），再交給真的。
                   const fake = queued.shift();
                   if (fake !== undefined) return { done: false, value: fake };
+                  if (hold !== undefined && sawStart && !held) {
+                    held = true;
+                    await hold();
+                  }
                   const result = await iterator.next();
+                  const raw = result.value as {
+                    method?: string;
+                    params?: { data?: { event?: string } };
+                  };
+                  if (raw?.method === 'messages' && raw.params?.data?.event === 'message-start') {
+                    sawStart = true;
+                  }
                   if (slowMs !== undefined)
                     await new Promise((resolve) => setTimeout(resolve, slowMs));
                   return result;
@@ -245,8 +263,20 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
     ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
   });
   const warnings: string[] = [];
-  const pump = new ThreadPump(
-    slowed(built.agent, options.slowMs, options.inject) as PumpAgent,
+  const replyLogged = async (): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (!pump.sessions.root.events.some((event) => event.type === 'assistant/message')) {
+      if (Date.now() > deadline) throw new Error('等不到回覆記進日誌');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const pump: ThreadPump = new ThreadPump(
+    slowed(
+      built.agent,
+      options.slowMs,
+      options.inject,
+      options.holdAfterFirstStart === true ? replyLogged : undefined,
+    ) as PumpAgent,
     'stream-retry',
     undefined,
     undefined,
@@ -378,7 +408,8 @@ describe('串流第一則事件之後才出錯（#520）', () => {
       // 作廢的是第一次呼叫：指回第一顆 model/start。
       const firstStart = run.events.find((event) => event.type === 'model/start')!;
       expect((attempt.data as SessionEventMap['assistant/attempt']).modelCall).toBe(firstStart.seq);
-      expect(attempt.ignorable).toBe(true);
+      // 格式 55 起不可略過（#2416）：讀不懂它的讀方要拒讀，不能當作沒這一顆。
+      expect(attempt.ignorable).toBeUndefined();
       const messages = run.events.filter((event) => event.type === 'assistant/message');
       expect(messages).toHaveLength(1);
       expect(JSON.stringify(messages[0]!.data)).toContain('丙丁');
@@ -504,6 +535,21 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     },
     60_000,
   );
+
+  /**
+   * 圖寫日誌、pump 讀片段，兩邊不同步：pump 還在讀失敗那一次的片段時，重打那一次的回覆已經記進日誌。那一筆 `assistant/message`
+   * 不能把 pump 手上失敗那一則的追蹤清掉，不然讀到重打記號時沒東西可作廢，斷尾的字留在畫面上。
+   */
+  it('讀得慢：重打那次先記進日誌，失敗那則照樣作廢', async () => {
+    const run = await runTurn(['dense503', 'ok'], {
+      streamRetry: { maxRetries: 1, initialDelayMs: 5, jitterRatio: 0 },
+      holdAfterFirstStart: true,
+    });
+    expect(run.thrown).toBeUndefined();
+    expect(customNamed(run.frames, MESSAGE_DISCARD)).toHaveLength(1);
+    expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(1);
+    expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
+  }, 30_000);
 
   it('不是 root 的通知、記號不對的 custom：pump 不聽（不作廢、不送 llm-retry、不寫日誌）', async () => {
     const real = {

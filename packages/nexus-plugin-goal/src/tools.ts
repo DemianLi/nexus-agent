@@ -25,12 +25,9 @@
  * `complete`／`blocked` 之後，那一輪還在圖的迴圈裡、手上還有全套工具，而它不知道自己
  * 剛剛把目標收掉了。#180 之前沒有自排輪次，這件事不存在。
  *
- * 載體是一顆 `Command`：工具結果與 {@link ./wrapup.ts | 收尾指示}各一則。**這條路讓
- * `update_goal` 的回傳型別多了 `Command`**——只有「自主收尾成功」那一格走 `Command`，
- * 其餘成功照舊回一句話，拒絕回一則錯誤訊息（見下面「拒絕」那一節）。dsh 那側走的是
- * `ToolRunContext.deferContext()`，語意是「掛在這一顆工具自己的 result 上、那顆
- * `tool/result` 之後 append」（`packages/core/tools/src/index.ts` 的介面註解），
- * `Command({ update: { messages } })` 對得上同一個時刻，**所以這一格沒有偏離要登記**。
+ * 載體是 `exec.deferContext()`（`@nexus/tools` 契約 `2.1.0`）：
+ * 工具結果之後補一則 {@link ./wrapup.ts | 收尾指示}。只有「自主收尾成功」那一格補，
+ * 其餘成功照舊回一句話，拒絕回一則錯誤訊息（見下面「拒絕」那一節）。
  *
  * `blockedAfterConsecutiveRounds` 為什麼跟著 `completionAuthority` 一起回來、不能等：
  * 它的門檻**只在 `goal-round` 授權下生效**（dsh 的 `index.ts:299`），所以在這張卡之前
@@ -134,17 +131,12 @@
  * @module
  */
 
-import { HumanMessage, ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
-import { Command } from '@langchain/langgraph';
 import { z } from 'zod';
 
 import { goalId } from '@nexus/goal';
 import type { GoalRef, GoalView } from '@nexus/goal';
-import { sourceKwargs } from '@nexus/session';
 import type { SessionAddress, SessionLog } from '@nexus/session';
-import { toolCallIdOf, toolRefusal } from '@nexus/tool-result';
-import type { ToolErrorInfo } from '@nexus/tool-result';
+import type { JsonSchema, NexusTool, NexusToolResult, ToolErrorInfo, ToolExec } from '@nexus/tools';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
 import type { GoalToolAuthority } from './authority.js';
@@ -192,7 +184,7 @@ export const GOAL_TOOL_NOT_ROOT_MESSAGE = '這一份會話上沒有接 goal 域�
  * 自主收尾要注入指示、卻取不到 `tool_call_id` 時拋的話。
  *
  * **這一條不是給模型看的**（它走 `containment.ts` 那條路，不是 {@link refuse}），見
- * {@link wrapupCommand} 檔內那段「取不到 id 是壞掉，不是降級」。
+ * {@link wrapup} 檔內那段「取不到 id 是壞掉，不是降級」。
  */
 export const GOAL_TOOL_MISSING_CALL_ID_MESSAGE =
   'update_goal 要注入收尾指示，但這一次呼叫沒有帶 tool_call_id——工具被以一個接不上的方式叫了。';
@@ -296,7 +288,7 @@ export type GoalToolValue =
  * {@link GoalToolValue} 的輸出 schema，三顆工具註冊時一起帶（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）。
  * 對 dsh `tool-goal` 的 `output.schema`；**型別註記只擋一個方向**：`GoalToolValue` 多了必填欄位而
  * 這裡沒跟上，編譯會紅；欄位改成可選、列舉放寬（例如 `phase` 變 `string`），編譯照過——那兩種
- * 要靠 `tools.test.ts` 的 `parse()` 對每一次真的輸出驗 schema。拒絕是 `status: 'error'`，校驗器不驗；自主收尾那條包成 `Command`，裡面那則照驗。
+ * 要靠 `tools.test.ts` 的 `parse()` 對每一次真的輸出驗 schema。拒絕是 `status: 'error'`，校驗器不驗；自主收尾那條由宿主包成 `Command`，裡面那則照驗。
  */
 export const GOAL_TOOL_OUTPUT_SCHEMA: z.ZodType<GoalToolValue> = z.union([
   z.object({ goal: z.null() }),
@@ -350,8 +342,8 @@ type Resolution =
 
 /** 工具要問的兩件事：這次呼叫屬於哪份日誌，那份（root）日誌上的 goal 域。 */
 export interface GoalToolWiring {
-  /** 照 `sessionLookup.forCall`（`@nexus/session`）：整份呼叫設定原樣傳進來，thread 身分在裡面。 */
-  forCall(config: unknown): GoalToolLookup;
+  /** 照 `sessionLookup.forCall`（`@nexus/session`）：傳進來的是這次呼叫的 `ToolExec`，thread 身分在上面。 */
+  forCall(exec: ToolExec): GoalToolLookup;
   /** 這份 root 日誌上的域，沒有就建（lazy，見 `index.ts`）。**只在 `address.kind === 'root'` 之後才問**。 */
   serviceFor(log: SessionLog): GoalService;
 }
@@ -364,8 +356,8 @@ export type GoalToolLookup =
   | { readonly kind: 'ambiguous'; readonly count: number };
 
 /** 解出這次呼叫要動的服務。 */
-function resolve(wiring: GoalToolWiring, config: unknown): Resolution {
-  const found = wiring.forCall(config);
+function resolve(wiring: GoalToolWiring, exec: ToolExec): Resolution {
+  const found = wiring.forCall(exec);
   if (found.kind === 'not-attached') {
     return { kind: 'refused', message: GOAL_TOOL_NOT_ATTACHED_MESSAGE };
   }
@@ -428,24 +420,18 @@ function runDomain(work: () => GoalToolValue): GoalToolValue | Refusal {
 }
 
 /**
- * 輸出是一行緊湊 JSON；拒絕是一則 `status: 'error'` 的工具結果，文字同那一句。
+ * 輸出是一行緊湊 JSON；拒絕是 `ok: false`，文字同那一句。
  *
  * @param outcome - 這次呼叫算出來的東西。
- * @param name - 哪一顆工具。
- * @param config - 這次呼叫的 config，`tool_call_id` 從裡面來。
- * @returns 交回 tool node 的那一份。
+ * @returns 這次呼叫的結果。
  */
-function answer(
-  outcome: GoalToolValue | Refusal,
-  name: string,
-  config: unknown,
-): string | ToolMessage {
-  if (!isRefusal(outcome)) return JSON.stringify(outcome);
-  return toolRefusal(outcome.refused, {
-    callId: toolCallIdOf(config) ?? '',
-    name,
+function answer(outcome: GoalToolValue | Refusal): NexusToolResult {
+  if (!isRefusal(outcome)) return { ok: true, content: JSON.stringify(outcome) };
+  return {
+    ok: false,
+    content: outcome.refused,
     ...(outcome.error === undefined ? {} : { error: outcome.error }),
-  });
+  };
 }
 
 /** 嚴格 schema 下的空字串等同沒給，同 dsh 的 `hasText`。 */
@@ -572,54 +558,35 @@ function authorityFor(
 }
 
 /**
- * 把一次成功的自主收尾包成「工具結果 ＋ 一則收尾指示」。
- *
- * ## 為什麼要自己造那顆 `ToolMessage`
- *
- * 回傳值是 `Command` 時基座**整段跳過自動包裝**（`isDirectToolOutput` 那一格，
- * `@langchain/core` 的 `tools/index.js:335`），tool node 也只是把 `Command` 當成狀態
- * 更新收下。所以工具結果本身要放進 `update.messages` 裡，**而且要帶對 `tool_call_id`**
- * ——漏掉的話模型會看到一顆沒有結果的工具呼叫，有些 provider 直接拒。
+ * 一次成功的自主收尾：工具結果之後補一則收尾指示（`exec.deferContext()`）。
  *
  * ## 取不到 id 是壞掉，不是降級
  *
- * 產品路徑上的 tool node 一律以 `ToolCall` 形式呼叫，所以取不到 id 代表這顆工具被以
- * 一個接不上的方式叫了。**安靜地退回回一句話**會讓模型在自主輪次收尾時默默收不到指示
- * ——那正是這條路存在的理由。所以拋，讓 `containment.ts` 分類。
+ * `exec.callId` 是 `''` 時補不了指示（見 `ToolExec.deferContext` 的契約）。產品路徑上每次呼叫都帶 id，
+ * 所以取不到 id 代表這顆工具被以一個接不上的方式叫了。**安靜地退回回一句話**會讓模型在自主輪次收尾時默默收不到指示
+ * ——那正是這條路存在的理由。所以在補之前就拋 {@link GOAL_TOOL_MISSING_CALL_ID_MESSAGE}，讓 `containment.ts` 分類。
  *
  * @param text - 這一次工具結果的原文（一行緊湊 JSON）。
  * @param objective - 被收掉那個目標的內容。
  * @param args - 這一次的參數，決定注入哪一段。
- * @param config - 這一次呼叫的 config，`tool_call_id` 從裡面來。
- * @returns 帶著兩則訊息的 `Command`。
+ * @param exec - 這一次呼叫的 `ToolExec`。
+ * @returns 這次呼叫的結果。
  */
-function wrapupCommand(
+function wrapup(
   text: string,
   objective: string,
   args: UpdateArgs,
-  config: unknown,
-): Command {
-  const id = toolCallIdOf(config);
-  if (id === undefined) throw new Error(GOAL_TOOL_MISSING_CALL_ID_MESSAGE);
-  return new Command({
-    update: {
-      messages: [
-        new ToolMessage({ content: text, tool_call_id: id, name: GOAL_UPDATE_TOOL_NAME }),
-        new HumanMessage({
-          content:
-            args.action === 'complete'
-              ? renderWrapupContext(objective)
-              : renderWrapupContext(objective, args.blocked_reason as string),
-          // 來源是 `plugin`，名字同日誌上這顆 `user/message` 的 `plugin`（回它的那顆工具）。重複提醒據此知道它不是人
-          // 插了話（#662）；`GOAL_WRAPUP_MARKER` 只剩收尾指示的身分，不再有 core 的人讀它。
-          additional_kwargs: {
-            [GOAL_WRAPUP_MARKER]: { action: args.action },
-            ...sourceKwargs({ kind: 'plugin', plugin: GOAL_UPDATE_TOOL_NAME }),
-          },
-        }),
-      ],
-    },
-  });
+  exec: ToolExec,
+): NexusToolResult {
+  if (exec.callId === '') throw new Error(GOAL_TOOL_MISSING_CALL_ID_MESSAGE);
+  // 來源由宿主掛（`plugin` 是這顆工具），重複提醒據此知道它不是人插了話（#662）；`GOAL_WRAPUP_MARKER` 只標出收尾指示，core 不讀它。
+  exec.deferContext(
+    args.action === 'complete'
+      ? renderWrapupContext(objective)
+      : renderWrapupContext(objective, args.blocked_reason as string),
+    { [GOAL_WRAPUP_MARKER]: { action: args.action } },
+  );
+  return { ok: true, content: text };
 }
 
 /** 一次 `update_goal` 的參數配得對不對；不對就回那一句話。 */
@@ -635,37 +602,65 @@ function misplaced(args: UpdateArgs): string | undefined {
   return undefined;
 }
 
+const getSchema = z.object({});
+
+const createSchema = z.object({
+  objective: z
+    .string()
+    .describe('The concrete completion objective inferred from the human request.'),
+  max_goal_rounds: z.number().optional().describe(GOAL_CREATE_MAX_ROUNDS_DESCRIPTION),
+});
+
+const updateSchema = z.object({
+  goal_id: z.string().describe('Exact id returned by get_goal.'),
+  revision: z.number().describe('Exact positive revision returned by get_goal.'),
+  action: z.enum(UPDATE_ACTIONS).describe('edit | pause | resume | complete | blocked'),
+  objective: z.string().optional().describe('Replacement objective; valid only with action edit.'),
+  max_goal_rounds: z
+    .number()
+    .optional()
+    .describe(
+      'Replacement round cap; valid only with action edit. Raise it to give a goal that ' +
+        'ran out of rounds more; see get_goal for roundsStarted.',
+    ),
+  blocked_reason: z
+    .string()
+    .optional()
+    .describe('Concrete blocking condition; required only with action blocked.'),
+});
+
 /**
  * 造這三顆工具。
  *
  * @param wiring - 找日誌與找服務的兩條路，由組裝點的 `apply` 綁上去。
+ * @param policy - 工具的政策，見 {@link GoalToolPolicy}；省略照預設。
  * @returns 依 `get`／`create`／`update` 順序的三顆工具。
+ * @throws `TypeError`：`blockedAfterConsecutiveRounds` 不是正的安全整數（{@link resolveGoalToolPolicy}）。
  */
 export function createGoalTools(
   wiring: GoalToolWiring,
   policy: GoalToolPolicy = {},
-): readonly ReturnType<typeof tool>[] {
+): readonly NexusTool[] {
   const { blockedAfterConsecutiveRounds } = resolveGoalToolPolicy(policy);
-  const get = tool(
-    (_args: Record<string, never>, config?: unknown) => {
-      const found = resolve(wiring, config);
-      if (found.kind === 'refused') {
-        return answer(refuse(found.message), GOAL_GET_TOOL_NAME, config);
-      }
-      return answer(
-        runDomain(() => goalToolValue(found.service.get())),
-        GOAL_GET_TOOL_NAME,
-        config,
-      );
+  const get: NexusTool = {
+    name: GOAL_GET_TOOL_NAME,
+    description: GET_DESCRIPTION,
+    parameters: z.toJSONSchema(getSchema, { io: 'input' }) as JsonSchema,
+    execute: async (_args, exec) => {
+      const found = resolve(wiring, exec);
+      if (found.kind === 'refused') return answer(refuse(found.message));
+      return answer(runDomain(() => goalToolValue(found.service.get())));
     },
-    { name: GOAL_GET_TOOL_NAME, description: GET_DESCRIPTION, schema: z.object({}) },
-  );
+  };
 
-  const create = tool(
-    (args: { objective: string; max_goal_rounds?: number }, config?: unknown) => {
-      const reply = (outcome: GoalToolValue | Refusal) =>
-        answer(outcome, GOAL_CREATE_TOOL_NAME, config);
-      const found = resolve(wiring, config);
+  const create: NexusTool = {
+    name: GOAL_CREATE_TOOL_NAME,
+    description: CREATE_DESCRIPTION,
+    parameters: z.toJSONSchema(createSchema, { io: 'input' }) as JsonSchema,
+    execute: async (raw, exec) => {
+      const args = createSchema.parse(raw);
+      const reply = answer;
+      const found = resolve(wiring, exec);
       if (found.kind === 'refused') return reply(refuse(found.message));
       if (!hasDirectHumanTurn(found.log.events)) {
         return reply(refuse(GOAL_TOOL_AUTHORITY_MESSAGE, GOAL_TOOL_AUTHORITY_REQUIRED));
@@ -681,23 +676,16 @@ export function createGoalTools(
         ),
       );
     },
-    {
-      name: GOAL_CREATE_TOOL_NAME,
-      description: CREATE_DESCRIPTION,
-      schema: z.object({
-        objective: z
-          .string()
-          .describe('The concrete completion objective inferred from the human request.'),
-        max_goal_rounds: z.number().optional().describe(GOAL_CREATE_MAX_ROUNDS_DESCRIPTION),
-      }),
-    },
-  );
+  };
 
-  const update = tool(
-    (args: UpdateArgs, config?: unknown) => {
-      const reply = (outcome: GoalToolValue | Refusal) =>
-        answer(outcome, GOAL_UPDATE_TOOL_NAME, config);
-      const found = resolve(wiring, config);
+  const update: NexusTool = {
+    name: GOAL_UPDATE_TOOL_NAME,
+    description: updateDescription(blockedAfterConsecutiveRounds),
+    parameters: z.toJSONSchema(updateSchema, { io: 'input' }) as JsonSchema,
+    execute: async (raw, exec) => {
+      const args: UpdateArgs = updateSchema.parse(raw);
+      const reply = answer;
+      const found = resolve(wiring, exec);
       if (found.kind === 'refused') return reply(refuse(found.message));
       const service = found.service;
       // **授權按 action 分兩條**（見 `authority.ts` 的 `completionAuthority`）：只有
@@ -771,34 +759,11 @@ export function createGoalTools(
       // **收尾指示只跟著自主收尾走。** 人打的 `complete` 不注入：人自己知道自己剛做了
       // 什麼，而且那一輪本來就該由人決定下一步（dsh 的 `index.ts:312` 同此）。
       // 拒絕與「沒有目標」都不是一次收尾。
-      if (authority.kind !== 'goal-round' || outcome.goal === null) return text;
-      return wrapupCommand(text, outcome.goal.objective, args, config);
+      if (authority.kind !== 'goal-round' || outcome.goal === null) {
+        return { ok: true, content: text };
+      }
+      return wrapup(text, outcome.goal.objective, args, exec);
     },
-    {
-      name: GOAL_UPDATE_TOOL_NAME,
-      description: updateDescription(blockedAfterConsecutiveRounds),
-      schema: z.object({
-        goal_id: z.string().describe('Exact id returned by get_goal.'),
-        revision: z.number().describe('Exact positive revision returned by get_goal.'),
-        action: z.enum(UPDATE_ACTIONS).describe('edit | pause | resume | complete | blocked'),
-        objective: z
-          .string()
-          .optional()
-          .describe('Replacement objective; valid only with action edit.'),
-        max_goal_rounds: z
-          .number()
-          .optional()
-          .describe(
-            'Replacement round cap; valid only with action edit. Raise it to give a goal that ' +
-              'ran out of rounds more; see get_goal for roundsStarted.',
-          ),
-        blocked_reason: z
-          .string()
-          .optional()
-          .describe('Concrete blocking condition; required only with action blocked.'),
-      }),
-    },
-  );
-
-  return [get, create, update] as readonly ReturnType<typeof tool>[];
+  };
+  return [get, create, update];
 }

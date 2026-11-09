@@ -66,11 +66,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
-import { formatOrigin, loadPlugins } from '@nexus/core';
+import { createRegistry, formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { createSubmitRecordPlugin } from './submit-record.fixture.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -153,7 +154,10 @@ describe('預設組裝裡的核准 gate', () => {
    * 這個形狀早就存在。
    */
   it('出貨清單裡剛好一位：submit-record 的 `submit_record` 閘門', async () => {
-    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
+    const { registry, dispose } = await loadPlugins(
+      withSystemPromptVariables(shipped),
+      createRegistry({ adaptTool: toLangChainTool }),
+    );
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));
       expect(gates, NEW_GATE_GUIDANCE).toEqual(EXPECTED_APPROVAL_GATES);
@@ -223,7 +227,10 @@ afterEach(async () => {
  * **backend 給 `createNexusAgent`**，同 `cli.ts`：submit-record 從 `fs` 服務拿 fold 折出來的那一個
  * （#694），「寫出去沒」才量得到磁碟上。
  */
-async function measure(plugins: () => readonly PluginEntry[], threadId: string): Promise<string> {
+async function measure(
+  plugins: () => readonly PluginEntry[] | Promise<readonly PluginEntry[]>,
+  threadId: string,
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-gate-order-'));
   roots.push(root);
   const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
@@ -231,7 +238,7 @@ async function measure(plugins: () => readonly PluginEntry[], threadId: string):
     model: submitScript(),
     backend,
     checkpointer: new MemorySaver(),
-    plugins: [...plugins()],
+    plugins: [...(await plugins())],
   });
   try {
     const result = await agent.invoke(toAgentInvocation('登記一位訪客。'), {
@@ -277,15 +284,17 @@ async function measure(plugins: () => readonly PluginEntry[], threadId: string):
 const MCP_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
 
 /** 一列沒寫 `approval` 的 MCP：整台都問（#1622 Q2 (a)），所以它一定掛了閘門。 */
-function mcpRowPlugin(): PluginEntry {
-  return createMcpPlugin({
-    serverName: 'crm',
-    connection: {
-      transport: 'stdio',
-      command: process.execPath,
-      args: ['--import', 'tsx', MCP_SERVER],
-    },
-  });
+async function mcpRowPlugin(): Promise<PluginEntry> {
+  return (
+    await mcpRows({
+      serverName: 'crm',
+      connection: {
+        transport: 'stdio',
+        command: process.execPath,
+        args: ['--import', 'tsx', MCP_SERVER],
+      },
+    })
+  )[0]!;
 }
 
 const ROWS = [
@@ -311,7 +320,7 @@ const ROWS = [
   {
     label: 'mcp-first：一列 MCP 的閘門排在 submit-record 之前',
     threadId: 'gate-order-mcp-first',
-    plugins: () => [mcpRowPlugin(), createSubmitRecordPlugin()],
+    plugins: async () => [await mcpRowPlugin(), createSubmitRecordPlugin()],
     outcome: 'interrupt=true written=false',
   },
 ] as const;

@@ -9,7 +9,7 @@
  * 格式 8 沒有 `assistant/message`（那一版的日誌不記回覆），接不出帶 id 的回覆，所以 v8 只跑 `trigger-turn-feedback.ts`。
  *
  * 由 `scripts/session-format-fixtures/generate.ts` 複製進那個 tag 的 `apps/harness/src/` 再跑，**不在今天的樹裡編**。
- * 用法：tsx __session-format-trigger.ts <run 目錄>
+ * 用法：tsx __session-format-trigger-turn-feedback-tail.ts <run 目錄>
  */
 
 import { AIMessage } from '@langchain/core/messages';

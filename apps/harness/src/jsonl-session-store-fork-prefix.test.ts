@@ -153,7 +153,7 @@ describe('分叉前綴與 header 對得上（驗收 3）', () => {
 describe('子代理目錄的唯一性只看切點之後（撤掉 #1549 N0603 的過渡）', () => {
   it('前綴與自己的區段各有一筆同 childId：照常讀回', async () => {
     const directory = await written(
-      [catalog('kid'), turnEnd, marker, catalog('kid'), turnEnd],
+      [turnStart, catalog('kid'), turnEnd, marker, turnStart, catalog('kid'), turnEnd],
       seeded,
     );
     expect(await failures(directory)).toEqual([undefined, undefined]);
@@ -161,12 +161,12 @@ describe('子代理目錄的唯一性只看切點之後（撤掉 #1549 N0603 的
 
   it('自己的區段裡重複：照舊拒，訊息帶第幾行', async () => {
     const directory = await written(
-      [catalog('kid'), turnEnd, marker, catalog('kid'), catalog('kid')],
+      [turnStart, catalog('kid'), turnEnd, marker, catalog('kid'), catalog('kid')],
       seeded,
     );
     for (const error of await failures(directory)) {
       expect(error).toBeInstanceOf(SessionCorruptionError);
-      expect((error as Error).message).toContain('第 5 行');
+      expect((error as Error).message).toContain('第 6 行');
     }
   });
 });
@@ -180,9 +180,8 @@ describe('相容（驗收 6）', () => {
       { type: 'session/end-seed', seq: SessionSeq(resumed.events.length), time: 2, data: {} },
     ]);
     await resumed.stored.close();
-    expect(SESSION_LOG_FORMAT_VERSION).toBe(52);
     const { header, storedFormatVersion } = await sessionHeaderOf(directory, 'a');
-    expect(storedFormatVersion).toBe(52);
+    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(header).not.toHaveProperty('isSeeded');
     expect(header).not.toHaveProperty('origin');
   });

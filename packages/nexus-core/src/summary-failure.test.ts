@@ -19,13 +19,18 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/
 import type { BaseMessage } from '@langchain/core/messages';
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
-import {
-  createSummarizer,
-  DEFAULT_SUMMARIZATION,
-  readSummarizationEvent,
-} from './summarization.js';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+
+// 歷史檔的會話名是 `session_` 加 `randomUUID()` 的前 8 碼（認不出身分的呼叫在摘要器建構時生，其餘在第一次寫時生）；
+// 要固定它的那一條換掉前 8 碼，其餘照真的生。
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
+import { createSummarizer, DEFAULT_SUMMARIZATION } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { SummaryCutoffTable } from './summary-cutoffs.js';
+import type { SummaryCutoff } from './summary-cutoffs.js';
 import { estimateMessageTokens, TokenAnchorBook } from './token-estimate.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -60,7 +65,8 @@ function summaryModel(fail?: () => Error) {
 
 async function run(options: {
   messages?: readonly BaseMessage[];
-  state?: Record<string, unknown>;
+  /** 這一步開始時表上的上一次切點。 */
+  previous?: SummaryCutoff;
   settings?: Partial<SummarizationSettings>;
   /** 給了就是有型錄的模型：保留量走出廠的 `retainRatio`，不是測試預設的 1 token。 */
   limits?: { contextWindow: number; maxOutputTokens: number };
@@ -72,16 +78,28 @@ async function run(options: {
   signal?: AbortSignal;
   /** 給了就是子代理的模型呼叫。 */
   checkpointNs?: string;
+  /** 歷史檔寫不進去（backend 的 `write` 回 `error`）。 */
+  writeFails?: boolean;
 }) {
   const reports: string[] = [];
   const writes: string[] = [];
   const model = summaryModel(options.summaryFails);
   const limits = options.limits;
+  const cutoffs = new SummaryCutoffTable();
+  const messages = options.messages ?? conversation();
+  const config = {
+    configurable: {
+      thread_id: 't',
+      checkpoint_ns: options.checkpointNs ?? 'model_request:x',
+      ...(options.signal === undefined ? {} : { [TURN_CANCEL_CONFIG_KEY]: options.signal }),
+    },
+  };
+  if (options.previous !== undefined) cutoffs.record(config, messages, options.previous);
   const middleware = createSummarizer(
     {
       write: async (path: string) => {
         writes.push(path);
-        return { path };
+        return options.writeFails === true ? { error: 'permission denied' } : { path };
       },
     } as never,
     {
@@ -95,6 +113,8 @@ async function run(options: {
     limits === undefined ? undefined : () => limits,
     undefined,
     (message) => reports.push(message),
+    undefined,
+    cutoffs,
   );
   const handled: BaseMessage[][] = [];
   const outcome = await (async () => {
@@ -102,21 +122,12 @@ async function run(options: {
       return {
         result: await middleware.wrapModelCall?.(
           {
-            messages: options.messages ?? conversation(),
-            state: options.state ?? {},
+            messages,
+            state: { messages },
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: [],
-            ...(options.signal === undefined
-              ? {}
-              : {
-                  runtime: {
-                    configurable: {
-                      [TURN_CANCEL_CONFIG_KEY]: options.signal,
-                      checkpoint_ns: options.checkpointNs,
-                    },
-                  },
-                }),
+            runtime: config,
           } as never,
           ((request: { messages: BaseMessage[] }) => {
             handled.push(request.messages);
@@ -130,7 +141,10 @@ async function run(options: {
       return { error };
     }
   })();
-  return { ...outcome, reports, handled, model, writes };
+  const after = cutoffs.lookup(config, messages);
+  /** 這一步落表的新切點；沒摘要（或沒生效）是 `undefined`。 */
+  const committed = after === options.previous ? undefined : after;
+  return { ...outcome, reports, handled, model, writes, committed };
 }
 
 const TOKEN_TRIGGER: Partial<SummarizationSettings> = {
@@ -170,12 +184,10 @@ describe('摘要失敗：我們自己的門檻觸發（dsh 的 pressure 路徑�
     ];
     const out = await run({
       messages,
-      state: {
-        _summarizationEvent: {
-          cutoffIndex: 6,
-          summaryMessage: new HumanMessage('舊摘要。'),
-          filePath: '/conversation_history/session_x.md',
-        },
+      previous: {
+        cutoffIndex: 6,
+        summaryMessage: new HumanMessage('舊摘要。'),
+        filePath: '/conversation_history/session_x.md',
       },
       settings: TOKEN_TRIGGER,
       summaryFails: () => new Error('摘要模型當場炸了'),
@@ -234,7 +246,7 @@ describe('門檻到了，但尾巴蓋住全部：什麼都不做', () => {
     expect(out.model.invokes).toBe(0);
     expect(out.writes).toEqual([]);
     expect(out.reports).toEqual([]);
-    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    expect(out.committed).toBeUndefined();
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]).toHaveLength(7);
     expect(String(out.handled[0]![0]!.content)).toBe(BIG);
@@ -266,12 +278,10 @@ describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
     ];
     return {
       messages: [...old, ...tail],
-      state: {
-        _summarizationEvent: {
-          cutoffIndex: old.length,
-          summaryMessage: previousSummary(),
-          filePath: '/conversation_history/session_x.md',
-        },
+      previous: {
+        cutoffIndex: old.length,
+        summaryMessage: previousSummary(),
+        filePath: '/conversation_history/session_x.md',
       },
     };
   };
@@ -285,12 +295,12 @@ describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
 
   it('連跑三步、每步多兩則：都不打摘要模型、不 warn、不提交，送的是「舊摘要＋切點之後」', async () => {
     for (const small of [60, 62, 64]) {
-      const { messages, state } = stuck(small);
-      const out = await run({ messages, state, limits: FACTORY_LIMITS });
+      const { messages, previous } = stuck(small);
+      const out = await run({ messages, previous, limits: FACTORY_LIMITS });
       expect(out.error).toBeUndefined();
       expect(out.model.invokes).toBe(0);
       expect(out.reports).toEqual([]);
-      expect(readSummarizationEvent(out.result)).toBeUndefined();
+      expect(out.committed).toBeUndefined();
       expect(out.handled).toHaveLength(1);
       expect(out.handled[0]).toHaveLength(small + 3);
       expect(String(out.handled[0]![0]!.content)).toBe('舊摘要。');
@@ -298,19 +308,19 @@ describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
   });
 
   it('切點前除了舊摘要還有別的：照常摘要', async () => {
-    const { messages, state } = stuck(62);
+    const { messages, previous } = stuck(62);
     // 工具呼叫前面多一則：切點前是 `[舊摘要, 這一則]`。
     messages.splice(4, 0, new HumanMessage('切點前多一則'));
-    const out = await run({ messages, state, limits: FACTORY_LIMITS });
+    const out = await run({ messages, previous, limits: FACTORY_LIMITS });
     expect(out.model.invokes).toBe(1);
   });
 
   it('後面再來一則撐得過保留量的訊息：切點往前，摘要照常提交', async () => {
-    const { messages, state } = stuck(60);
+    const { messages, previous } = stuck(60);
     messages.push(new HumanMessage('y'.repeat(200_000)));
-    const out = await run({ messages, state, limits: FACTORY_LIMITS });
+    const out = await run({ messages, previous, limits: FACTORY_LIMITS });
     expect(out.model.invokes).toBe(1);
-    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.committed).toBeDefined();
     expect(out.reports).toEqual([]);
   });
 });
@@ -423,8 +433,8 @@ describe('摘要不比被取代的小', () => {
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]).toHaveLength(7);
     expect(String(out.handled[0]![0]!.content)).toBe('問');
-    // 沒有提交：回的是模型的回應，不是帶 `_summarizationEvent` 的 Command。
-    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    // 沒有提交：表上沒有新的切點。
+    expect(out.committed).toBeUndefined();
     expect((out.result as AIMessage).content).toBe('好。');
     // 正好一條 warn，說的是這件事，走的是 #1383 那條「照原請求送出」。
     expect(out.reports).toHaveLength(1);
@@ -483,7 +493,7 @@ describe('摘要不比被取代的小', () => {
         settings: { trigger: [{ type: 'messages', value: 3 }] },
         pruning: DEFAULT_TOOL_RESULT_PRUNE,
       });
-      expect(readSummarizationEvent(out.result)).toBeDefined();
+      expect(out.committed).toBeDefined();
       const pruned = encode.mock.calls
         .map(([text]) => text)
         .filter((text) => text.includes(TOOL_RESULT_PRUNE_MARKER.trim()));
@@ -497,7 +507,7 @@ describe('摘要不比被取代的小', () => {
   it('被取代的遠比摘要大：照常提交，沒有 warn', async () => {
     const out = await run({ settings: { trigger: [{ type: 'messages', value: 3 }] } });
     expect(out.error).toBeUndefined();
-    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.committed).toBeDefined();
     expect(String(out.handled[0]![0]!.content)).toContain('這是摘要。');
     expect(out.reports).toEqual([]);
   });
@@ -509,8 +519,12 @@ describe('摘要不比被取代的小', () => {
    */
   it('一樣大：不提交；只大一個 token：提交', async () => {
     // 歷史檔路徑固定：框好的摘要裡帶著它，隨機的 session id 會讓估計值在兩次執行之間差幾個 token。
-    const state = { _summarizationSessionId: 'session_fixed01' };
-    const committed = await run({ state, settings: { trigger: [{ type: 'messages', value: 3 }] } });
+    const real = vi.mocked(randomUUID).getMockImplementation()!;
+    vi.mocked(randomUUID).mockImplementation(() => `fixed001-${real().slice(9)}` as never);
+    onTestFinished(() => {
+      vi.mocked(randomUUID).mockImplementation(real);
+    });
+    const committed = await run({ settings: { trigger: [{ type: 'messages', value: 3 }] } });
     const framed = estimateMessageTokens(committed.handled[0]![0]!);
 
     const textOf = (chars: number) => new HumanMessage('字'.repeat(chars));
@@ -528,18 +542,17 @@ describe('摘要不比被取代的小', () => {
     const attempt = (chars: number) =>
       run({
         messages: [textOf(chars), new HumanMessage('短問題')],
-        state,
         settings: { trigger: [{ type: 'messages', value: 2 }] },
       });
 
     const same = await attempt(equal);
-    expect(readSummarizationEvent(same.result)).toBeUndefined();
+    expect(same.committed).toBeUndefined();
     expect(same.reports).toHaveLength(1);
     expect(same.reports[0]).toContain('不比被取代');
     expect(same.handled[0]).toHaveLength(2);
 
     const bigger = await attempt(plusOne);
-    expect(readSummarizationEvent(bigger.result)).toBeDefined();
+    expect(bigger.committed).toBeDefined();
     expect(bigger.reports).toEqual([]);
   });
 });
@@ -603,5 +616,21 @@ describe('摘要器進同步估算之前先預熱', () => {
     } finally {
       encode.mockRestore();
     }
+  });
+});
+
+describe('歷史檔寫不進去（#66）', () => {
+  it('照樣摘要、照樣落表，切點的 filePath 是 null', async () => {
+    const out = await run({ settings: TOKEN_TRIGGER, writeFails: true });
+    expect(out.error).toBeUndefined();
+    expect(out.writes.length).toBeGreaterThan(0);
+    expect(out.committed).toBeDefined();
+    expect(out.committed?.filePath).toBeNull();
+    expect(out.handled[0]![0]!.text).toContain('這是摘要。');
+  });
+
+  it('對照：寫得進去，filePath 是寫進去的那個路徑', async () => {
+    const out = await run({ settings: TOKEN_TRIGGER });
+    expect(out.committed?.filePath).toBe(out.writes.at(-1));
   });
 });

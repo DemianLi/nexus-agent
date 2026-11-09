@@ -22,11 +22,12 @@ import { fileURLToPath } from 'node:url';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PluginEntry } from '@nexus/core';
-import { createMcpPlugin, McpConnectionPool } from '@nexus/plugin-mcp';
+import { McpConnectionPool } from '@nexus/plugin-mcp';
 import type { McpPluginOptions } from '@nexus/plugin-mcp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { runCli } from './cli.js';
 import { CREDENTIALS_FILE, createCredentialService } from './credentials.js';
 import { bodyLog, foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
@@ -111,7 +112,7 @@ async function assembleAndRun(
   });
   const plugins: PluginEntry[] = [
     ...withScriptedModel(await shippedPlugins(), TURNS),
-    createMcpPlugin(ROW),
+    ...(await mcpRows(ROW)),
   ];
   const built = await createCliAgent(
     { live: false, credentials },

@@ -68,16 +68,15 @@
  *
  * ## 摘要之後：看的是模型看得到的那一串
  *
- * 基座的摘要器不改寫 `state.messages`，只記一顆 `_summarizationEvent`，模型呼叫時才組
+ * 摘要器不改寫 `state.messages`，切點記在宿主那次組裝的切點表（`@nexus/core` 的 `summary-cutoffs.ts`），模型呼叫時才組
  * `[summary, ...messages.slice(cutoffIndex)]`。所以舊基線還在 state 裡、落在切點之前，模型卻看不到；
- * v0.4.30 只看 `state.messages`，說「有」，整條 thread 再也補不回來。現在判準走 `@nexus/core` 的
- * `effectiveMessages`（摘要器那個函式的抄本，已有單元測試），**跟摘要器用同一個述詞**，兩者不會再分岔。
- * 讀那顆私有鍵要宣告 `stateSchema`，見 {@link SUMMARIZATION_EVENT_VIEW}。
+ * 只看 `state.messages` 的話會說「有」，整條 thread 再也補不回來。所以判準看宿主交來的那一串：宿主用 core 的
+ * `applySummaryCutoff` 套上摘要器同一張表的切點，**跟摘要器用同一個切點**，兩者不會再分岔。插件不碰切點表。
  *
  * 射程的邊界，兩處講明：
  *
- * - **子代理**：基座把 `_summarizationEvent` 擋在傳進傳出子代理兩個方向之外（`EXCLUDED_STATE_KEYS`，
- *   原文理由是切點只對算它的那一串有效）。子代理每次被委派都從一串新的訊息起跑，第一步本來就拿得到
+ * - **子代理**：切點表的鍵帶著呼叫的身分（root、前景子代理的 runId、背景 id），root 的切點套不到子代理那一串上
+ *   （切點只對算它的那一串有效）。子代理每次被委派都從一串新的訊息起跑，第一步本來就拿得到
  *   基線，所以這條修法在子代理身上沒有東西要修；子代理自己那一趟裡被摘掉，是上面同一次 invoke 的缺口。
  * - **續接**（`--resume`、serve 碰到舊 thread）：`conversation-restore.ts` 刻意只灌 `messages`、不帶切點，
  *   而灌回去的是「摘要＋之後的」，被切掉的舊基線本來就不在裡面，判準退回「有沒有」也照樣補一則。

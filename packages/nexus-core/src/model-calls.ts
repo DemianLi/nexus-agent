@@ -1,6 +1,6 @@
 /**
- * 每一次模型呼叫的**起訖**，記進這次呼叫所屬的那一份會話日誌：`model/start` 在呼叫之前、
- * `model/end` 在 `finally` 裡。會話統計（{@link ./session-stats.ts}）拿它數步數、量模型耗時。
+ * 每一次模型呼叫的**起訖**，記進這次呼叫所屬的那一份會話日誌：`model/start` 在請求快照之後、請求送出之前（見
+ * {@link ./model-call-scope.ts}）、`model/end` 在 `finally` 裡。會話統計（{@link ./session-stats.ts}）拿它數步數、量模型耗時。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  *
  * ## dsh 的 `step/*`，以及為什麼不叫那個名字
@@ -73,12 +73,14 @@
  * dsh 沒有 `model/start`／`model/end`，最接近的是請求前的 `request/header`（`agent.ts:637-650`）與結算那次呼叫的
  * `assistant/message`／`assistant/attempt`（`:484-510`、`:537-558`）：全部直接 `append`、不吞，寫不進去這一輪失敗。照它：
  *
- * - **`model/start` 記不進去**：不叫 `handler`，錯直接往外拋。這次請求沒送出去，所以沒有 `model/end` 要配。
+ * - **`model/start` 記不進去**：在寫的那一刻拋，這次請求沒送出去。寫在快照的 callback 裡、或範圍裡第一個要識別的寫入點時，
+ *   失敗路徑上補寫一次，配成一對；補寫也記不進去，兩個錯一起拋，原錯在前、也是 `cause`。動態模型（`request.model` 不是
+ *   Runnable）在進 `try` 之前就寫，拋了直接往外拋，不叫 `handler`、也沒有 `model/end`。
  * - **`model/end` 記不進去**：正常回來的那次，寫入錯往外拋，回覆不進 graph state；**已經在失敗路徑上**（`handler` 拋了、
  *   回覆記不進去）的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `:495-499` 的 `AggregateError`），不蓋掉原錯。
  * - `forCall` 不是 `ok`（這次呼叫不屬於任何一份日誌）照舊不記、照常呼叫：那不是寫入失敗。
  * - **請求快照**（`request/header`／`request/system`，{@link ./request-snapshot.ts}）記不進去也一樣：在模型被叫的那一刻拋，
- *   這次請求沒送出，這裡記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
+ *   這次請求沒送出，這裡補寫 `model/start`、記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
  *
  * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
  * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
@@ -90,10 +92,12 @@
  */
 
 import { AIMessage } from '@langchain/core/messages';
+import { RunnableBinding } from '@langchain/core/runnables';
 import { createMiddleware } from 'langchain';
+import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
-import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
+import { noteModelCallReplied, openModelCall, withModelCall } from './model-call-scope.js';
 import { routeOfModel } from './model-route.js';
 import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
@@ -141,40 +145,57 @@ function recordReply(log: SessionLog, response: unknown, modelCall: number): voi
 export function createModelCallRecorder(sessions: {
   forCall(config: unknown): SessionLookup;
 }): AgentMiddleware {
-  return createMiddleware({
-    name: MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+  return withModelCallStep(
+    async (rawRequest, handler) => {
+      const request = rawRequest as { readonly model?: unknown };
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
       if (found.kind !== 'ok') return handler(request);
       const { log } = found;
-      // 記不進去從這裡拋，請求不送出（#1702，見檔頭）。
       const route = routeOfModel(request.model);
-      const modelCall = log.append('model/start', route === undefined ? {} : { route }).seq;
+      // `model/start` 先不寫：等請求快照寫完、送出之前才寫（見 `model-call-scope.ts` 的檔頭）。
+      // 記不進去從寫的那一刻拋，請求不送出（#1702，見檔頭）。
+      const call = openModelCall(
+        log,
+        () => log.append('model/start', route === undefined ? {} : { route }).seq,
+      );
+      // 動態模型（函式）掛不了快照的 callback，一進來就寫。
+      if (!RunnableBinding.isRunnable(request.model)) call.ensureStarted();
       let response;
+      let modelCall: number;
       // 沒有正常回來的方式（#1022）：被中止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;
       try {
-        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測
-        // （{@link ./model-call-scope.ts}）。重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
-        response = await runInModelCall(log, modelCall, () => handler(request));
+        // 這次呼叫的識別往內傳給用量的寫入點，往外填給摘要器的量測（{@link ./model-call-scope.ts}）。
+        // 重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
+        response = await call.run(() => handler(request));
+        modelCall = call.ensureStarted();
         // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
         if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
         // 記不進去就從這裡拋，下面的 `catch` 把這次呼叫記成 `error`（#1665）。
         recordReply(log, response, modelCall);
       } catch (error) {
-        appendEndAfterFailure(
-          log,
-          modelCall,
-          modelCallAborted(request) ? 'aborted' : 'error',
-          error,
-        );
+        // 送出之前就失敗、`model/start` 還沒寫的，在這裡補寫，配成一對；補寫也記不進去就兩個錯一起拋。
+        let failed: number;
+        try {
+          failed = call.ensureStarted();
+        } catch (startError) {
+          throw new AggregateError([error, startError], '模型呼叫失敗，model/start 也記不進去', {
+            cause: error,
+          });
+        }
+        appendEndAfterFailure(log, failed, modelCallAborted(request) ? 'aborted' : 'error', error);
         throw error;
       }
       // 記不進去從這裡拋：回覆不進 graph state（#1702）。
       log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
       return response;
     },
-  }) as unknown as AgentMiddleware;
+    (wrapModelCall) =>
+      createMiddleware({
+        name: MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+        wrapModelCall: wrapModelCall as never,
+      }) as unknown as AgentMiddleware,
+  );
 }

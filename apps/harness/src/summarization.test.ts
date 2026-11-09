@@ -190,7 +190,7 @@ describe('同名取代是唯一的縫', () => {
         // `tools/pre-execute` 的生產者（#1248）：緊貼核准閘門外側，被拒的呼叫不會先跳核准卡。
         'nexusToolPreExecute',
         'nexusApprovalGate',
-        'nexusFileObservationPolicy',
+        'nexusPromptSections:observation',
         'nexusRepeatToolReminder',
         // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
@@ -202,22 +202,18 @@ describe('同名取代是唯一的縫', () => {
         'nexusSessionCheckpoint',
         // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
         'nexusApprovalPolicyPrompt',
-        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
+        // `tools/post-execute` 的生產者（#1248）：在讀到哪等靠工具本體那幾顆的外側、plugin middleware 內側。
         'nexusToolPostExecute',
-        // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
-        'nexusToolOutputSchema',
-        // 檔案工具的失敗標成錯誤（#293）：有 backend 就有，貼著工具本體。
-        'nexusFsToolErrors',
-        // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，同一個理由貼著工具本體。
+        // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，在 `tools/execute` 外側。
         'nexusReadContinuation',
-        // `grep` 參數說明的換法（#1605）：同一個時刻、同一個理由，緊接讀檔續讀。
+        // `grep` 參數說明的換法（#1605）。
         'nexusSearchDescriptions',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',
-        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側、撞到輸出上限那顆（只對 `task`）外側。
+        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側；輸出 schema 校驗（#252）與 `task` 撞到輸出上限的替換是它內層的 core 監聽者。
         'nexusToolExecute',
-        // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
+        // 撞到輸出上限的模型那一半（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
         'nexusMaxTokens',
         // 請求快照（#1020）：模型呼叫上的 callback，緊貼綁訊號那顆外面（兩顆併成同一層綁定，見 `model-binding.ts`）。
         'nexusRequestSnapshot',
@@ -243,7 +239,7 @@ describe('同名取代是唯一的縫', () => {
    *
    * **[#327](https://github.com/DemianLi/nexus-agent/issues/327) 之後這條是選的，不再是基座給的。** fold 把 plugin 的
    * middleware 攤進每個子代理，**唯獨名字撞上摘要器的那一顆不攤**（`fold.ts` 的 `subagentPluginMiddleware`）：它是一份
-   * 實例、`sessionId` 在閉包裡，攤過去會讓 root 與子代理的歷史混進同一個檔。這條紅了，就是那個例外被拿掉了。
+   * 實例，認不出身分的呼叫用實例自己的會話名，攤過去會讓 root 與子代理的那種呼叫混進同一個檔。這條紅了，就是那個例外被拿掉了。
    *
    * **這條的意思在 [#142](https://github.com/DemianLi/nexus-agent/issues/142) 之後變了一半。**
    * 註冊點的射程沒變（仍然只到 root），但 subagent 那一輪拿的**不再是基座那個**：
@@ -388,6 +384,8 @@ describe('offload 失敗是 fail-open', () => {
 describe('/conversation_history 的另一個寫入者', () => {
   /** 剛好越過 `4 * 5e4` 那條線。 */
   const HUGE = '長'.repeat(200001);
+  /** native 的 root 把基座搬人話的那一格換成空函式（`native-noop-cells.ts`，#1827 D234），超大的人話改在宿主的入口拒收。 */
+  const native = process.env.NEXUS_TEST_AGENT_LOOP === 'native';
 
   async function evict(mode: 'workspace-write' | 'read-only'): Promise<{
     readonly files: string[];
@@ -422,19 +420,29 @@ describe('/conversation_history 的另一個寫入者', () => {
     return { files, sentToModel };
   }
 
-  it('可寫的時候原話搬走，但不落在工作區，模型只收到一句佔位', async () => {
+  it('可寫的時候：langgraph 原話搬走、不落在工作區，模型只收到一句佔位；native 不搬，原話進 context', async () => {
     const { files, sentToModel } = await evict('workspace-write');
 
     // #348 之前是 1：原話落在 `<workspace>/conversation_history/`。
     expect(files).toEqual([]);
+    if (native) {
+      expect(sentToModel).toBe(HUGE);
+      expect(sentToModel).not.toContain('Message content too large');
+      return;
+    }
     expect(sentToModel).toContain('Message content too large');
     expect(sentToModel.length).toBeLessThan(HUGE.length);
   });
 
-  it('fence 擋住的根上照樣搬得走，20 萬字元不再原封不動進 context', async () => {
+  it('fence 擋住的根上：langgraph 照樣搬得走，20 萬字元不原封不動進 context；native 不搬', async () => {
     const { files, sentToModel } = await evict('read-only');
 
     expect(files).toEqual([]);
+    if (native) {
+      expect(sentToModel).toBe(HUGE);
+      expect(sentToModel).not.toContain('Message content too large');
+      return;
+    }
     // #348 之前這裡是 `toContain(HUGE)`：寫入被 fence 擋掉，該搬走的沒搬走。
     expect(sentToModel).toContain('Message content too large');
     expect(sentToModel).not.toContain(HUGE);
@@ -745,18 +753,14 @@ describe('subagent 自帶的 middleware 到得了那個 subagent', () => {
 });
 
 /**
- * **摘要發生過這件事讀得到，但不在 `invoke()` 的回傳值裡。**
+ * **摘要發生過這件事不在 `invoke()` 的回傳值裡，也不在 graph state 裡。**
  *
- * 基座把 `_summarizationEvent`（`cutoffIndex` / `summaryMessage` / `filePath`）寫進 graph
- * state，而 **`filePath === null` 正是 [#66](https://github.com/DemianLi/nexus-agent/issues/66)
- * 那個 fail-open 的訊號** —— 基座只印一行 `console.warn`，但同一件事在 state 裡有值。
- *
- * 這一條釘的是**取得它的路徑**，因為 [#143](https://github.com/DemianLi/nexus-agent/issues/143)
- * 的成本估算掛在上面：`invoke()` 拿不到，`getState()` 拿得到，所以要 checkpointer 而且是
- * 主動讀、不是推播。基座哪天把它放進回傳值，這條會紅——那時 #143 會變便宜。
+ * 切點（`cutoffIndex` / `summaryMessage` / `filePath`）記在組裝的切點表與日誌的 `compaction/summary`（#2416），
+ * `filePath === null`（[#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open 的訊號）從日誌讀。
+ * 這一條釘住兩個輸出通道上都沒有摘要的私有欄位。
  */
-describe('_summarizationEvent 的取得路徑', () => {
-  it('invoke 的回傳值裡沒有，checkpointer 的快照裡有', async () => {
+describe('摘要的私有欄位不上 graph', () => {
+  it('invoke 的回傳值與 checkpointer 的快照裡都沒有', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-evt-'));
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     const model = new ScriptedChatModel({
@@ -767,13 +771,15 @@ describe('_summarizationEvent 的取得路徑', () => {
       model,
       backend,
       checkpointer: new MemorySaver(),
-      plugins: [tunedSummarization(backend)],
+      plugins: [],
+      summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: 1 },
     });
 
     let returned: Record<string, unknown> = {};
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）。
       for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-        returned = (await agent.invoke(toAgentInvocation(line), {
+        returned = (await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(100)}`), {
           configurable: { thread_id: 'event' },
         })) as unknown as Record<string, unknown>;
       }
@@ -782,9 +788,9 @@ describe('_summarizationEvent 的取得路徑', () => {
     }
 
     // 前提：這一輪真的觸發過。少了它，下面兩條斷言在一個沒摘要過的組裝上也會通過。
-    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+    expect(summarizedWithHistory(model)).toBe(true);
 
-    // 回傳值只有這兩格——摘要那組是 middleware 的私有 state，不在輸出通道上。
+    // 回傳值只有這兩格。
     expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
 
     const snapshot = await (
@@ -792,13 +798,9 @@ describe('_summarizationEvent 的取得路徑', () => {
         getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
       }
     ).getState({ configurable: { thread_id: 'event' } });
-    const event = snapshot.values._summarizationEvent as
-      { cutoffIndex: number; filePath: string | null } | undefined;
-
-    expect(event).toBeDefined();
-    expect(event?.cutoffIndex).toBeGreaterThan(0);
-    // 落點讀得到——`null` 的那一天就是 #66 那個 fail-open 真的發生的那一天。
-    expect(event?.filePath).toContain('/conversation_history/');
+    expect(Object.keys(snapshot.values).filter((key) => key.startsWith('_summarization'))).toEqual(
+      [],
+    );
   });
 });
 
@@ -956,8 +958,8 @@ describe('正式路徑上的門檻是我們選的', () => {
  * 走的是同一套同名取代（`buildSubagentMiddleware` 呼叫的是**同一個** `mergeMiddlewareStack`）。
  *
  * 判準是 `historyPathPrefix`：基座那份寫死用 `/conversation_history`，我們配的用別的。
- * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——`EXCLUDED_STATE_KEYS` 雙向
- * 排除 `_summarizationSessionId`，所以 subagent 自己生一個新的 session id），而
+ * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——摘要器逐個 agent 各建一份，
+ * 每次委派各有自己的 session id），而
  * `/conversation_history` 底下一份都沒有。少了打底的話，subagent 那份會落在後者。
  */
 describe('我們配的那份打底到每個 subagent', () => {
@@ -1792,11 +1794,10 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   /**
    * **摘要已經發生過之後再剪，配對不能斷。**
    *
-   * 基座的 `getEffectiveMessages` 是 `[summary, ...messages.slice(cutoffIndex)]`，而那個
-   * `cutoffIndex` 是**前幾輪**存進 state 的。剪刀要是少回傳一則訊息，這個 slice 就切在錯
+   * 模型看到的是 `[summary, ...messages.slice(cutoffIndex)]`，而那個 `cutoffIndex` 是**前幾輪**記進切點表的。剪刀要是少回傳一則訊息，這個 slice 就切在錯
    * 的位置，AI／Tool 配對當場斷掉——**而且不會拋**，只會讓模型收到一段對不起來的歷史。
    */
-  it('state 裡已經有 _summarizationEvent 時，剪過的那輪照樣走得完', async () => {
+  it('已經有切點時，剪過的那輪照樣走得完', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-prune-'));
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     const model = new ScriptedChatModel({

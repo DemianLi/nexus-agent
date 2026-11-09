@@ -10,8 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AssemblyDropError } from './agent-factory.js';
@@ -239,11 +240,11 @@ describe('已知缺口：必掛的列自我停用不進 dropped，啟動稽核�
       module,
       `import { z } from 'zod';
 export const name = 'system-prompt';
-export const inject = { tools: { range: '^1.0.0' } };
+export const inject = { tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({});
 export const manifest = {
   id: 'system-prompt', version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx) { ctx.fiber.dispose(); }
@@ -303,7 +304,10 @@ describe('掉了的列算沒掛', () => {
   it('summarization 設定寫壞：跟寫 disabled: true 的那份一樣記成沒掛', async () => {
     const mountedOff = async (patch: string): Promise<readonly string[]> => {
       const { plugins } = await loadDefaultPlugins({ env: homeWith(patch) });
-      const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
+      const { registry, dispose } = await loadPlugins(
+        withSystemPromptVariables(plugins),
+        createRegistry({ adaptTool: toLangChainTool }),
+      );
       await dispose();
       return registry.disabledEntries.names();
     };
@@ -331,7 +335,10 @@ describe('沒有設定格式卻寫了 config：照樣掛，警告講那份設定
     expect(logged).toContain(LINE);
 
     const { plugins } = await loadDefaultPlugins({ env });
-    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
+    const { registry, dispose } = await loadPlugins(
+      withSystemPromptVariables(plugins),
+      createRegistry({ adaptTool: toLangChainTool }),
+    );
     await dispose();
     expect(registry.disabledEntries.has('observation-policy')).toBe(false);
   });

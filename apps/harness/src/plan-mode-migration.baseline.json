@@ -1,0 +1,266 @@
+{
+  "同意": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"計劃已獲准，離開計劃模式；從你的下一步起照計劃執行。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": false
+      },
+      {
+        "planMode": false
+      }
+    ]
+  },
+  "繼續規劃": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 使用者選擇繼續規劃；修改計劃後再提交一次。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "自由作答": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 使用者選擇繼續規劃；使用者的意見：先補測試\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "同意又帶自由作答": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 使用者選擇繼續規劃；使用者的意見：順便\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "關掉審核": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 1,
+    "sent": [],
+    "state": [
+      {
+        "name": "exit_plan_mode"
+      }
+    ],
+    "logged": [
+      {
+        "isError": false
+      }
+    ]
+  },
+  "看不懂的回覆": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 使用者選擇繼續規劃；修改計劃後再提交一次。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "不在計劃模式": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 現在不在計劃模式，exit_plan_mode 沒有東西可以離開，所以沒有執行。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "沒有 # 標題": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: exit_plan_mode 要一份非空的 Markdown 計劃，以一個 # 標題開頭。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "沒有人可以回答": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 沒有提問通道可以審這份計劃（這個 session 沒有人在回答問題）。請使用者自己切換模式：/plan off。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true
+      }
+    ]
+  },
+  "沒接會話日誌": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 計劃模式沒有接上會話日誌，就算獲准也關不掉模式，所以沒有送審。這是組裝的問題，不是計劃的問題。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": []
+  },
+  "核准閘門擋下": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 不准\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "PreExecuteDenied",
+          "code": "TOOL_DENIED_BY_LISTENER"
+        }
+      }
+    ]
+  },
+  "少參數": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 工具 exit_plan_mode 執行失敗：Received tool input did not match expected schema\\n\\n✖ Invalid input: expected string, received undefined\\n  → at plan\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "ToolArgsError",
+          "code": "INVALID_ARGS"
+        }
+      }
+    ]
+  },
+  "參數型別不對": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "null",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"Error: 工具 exit_plan_mode 執行失敗：Received tool input did not match expected schema\\n\\n✖ Invalid input: expected string, received number\\n  → at plan\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": true,
+        "error": {
+          "name": "ToolArgsError",
+          "code": "INVALID_ARGS"
+        }
+      }
+    ]
+  },
+  "多一個鍵": {
+    "wire": "{\"type\":\"function\",\"function\":{\"name\":\"exit_plan_mode\",\"description\":\"只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。\",\"parameters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"string\",\"description\":\"完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。\"}},\"required\":[\"plan\"],\"additionalProperties\":false}}}",
+    "raised": "[{\"kind\":\"question\",\"questions\":[{\"id\":\"plan-review\",\"header\":\"計劃審核\",\"question\":\"同意這份計劃並離開計劃模式？\",\"detail\":\"# 計劃\\n\\n先看再改。\",\"options\":[{\"label\":\"同意\",\"description\":\"離開計劃模式；從下一步起照計劃執行。\"},{\"label\":\"繼續規劃\",\"description\":\"留在計劃模式；意見會回給模型。\"}],\"intent\":{\"kind\":\"plan-review\",\"approve\":\"同意\",\"callId\":\"c1\"}}]}]",
+    "calls": 2,
+    "sent": [
+      "[{\"role\":\"tool\",\"content\":\"計劃已獲准，離開計劃模式；從你的下一步起照計劃執行。\",\"name\":\"exit_plan_mode\",\"tool_call_id\":\"c1\"}]"
+    ],
+    "state": [
+      {
+        "name": null
+      }
+    ],
+    "logged": [
+      {
+        "isError": false
+      },
+      {
+        "planMode": false
+      }
+    ]
+  }
+}

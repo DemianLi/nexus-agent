@@ -86,11 +86,11 @@ const ECHO_SHIPPED = `- id: echo\n  name: '${ECHO_MODULE}'\n`;
 describe('C：echo 對 tools 契約不相容', () => {
   it('那一列掉在 requires，訊息帶契約錯誤；其餘列照樣起來；啟動稽核把它列進去', async () => {
     const dir = scratch();
-    // 同一個 id `echo`、`inject` 要的範圍是 tools 給不起的 `^2.0.0`：跟「出貨的 echo 對上了不相容的 tools」同一個形狀。
+    // 同一個 id `echo`、`inject` 要的範圍是 tools 給不起的 `^3.0.0`：跟「出貨的 echo 對上了不相容的 tools」同一個形狀。
     const module = write(
       dir,
-      'echo-v2.mjs',
-      functionPlugin({ id: 'echo', range: '^2.0.0', apply: '' }),
+      'echo-v3.mjs',
+      functionPlugin({ id: 'echo', range: '^3.0.0', apply: '' }),
     );
     const shipped = write(
       dir,
@@ -103,7 +103,7 @@ describe('C：echo 對 tools 契約不相容', () => {
     const echo = loaded.dropped.find((drop) => drop.id === 'echo');
     expect(echo?.stage).toBe('requires');
     expect(echo?.message).toMatch(/tools/u);
-    expect(echo?.message).toMatch(/\^2\.0\.0/u);
+    expect(echo?.message).toMatch(/\^3\.0\.0/u);
     // 另一列（echo 的出貨模組，對 tools 範圍是相容的）不受牽連。
     expect(loaded.dropped.find((drop) => drop.id === 'other')).toBeUndefined();
 
@@ -112,17 +112,17 @@ describe('C：echo 對 tools 契約不相容', () => {
     const lines = startupWarning(loaded, []).join('\n');
     expect(lines).toContain('echo');
     expect(lines).toContain('要用的服務沒人提供');
-    expect(lines).toMatch(/\^2\.0\.0/u);
+    expect(lines).toMatch(/\^3\.0\.0/u);
   }, 60000);
 
   it('契約不相容的列在樹上是等待中的，沒有登記任何工具', async () => {
     const dir = scratch();
     const module = write(
       dir,
-      'echo-v2.mjs',
+      'echo-v3.mjs',
       functionPlugin({
         id: 'echo',
-        range: '^2.0.0',
+        range: '^3.0.0',
         apply: "ctx.tools.register({ name: 'ghost' })",
       }),
     );
@@ -265,7 +265,7 @@ describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上�
 });
 
 describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
-  it('樹上 include 底下只有函式插件那幾列（echo、agent-instructions、skill-invocation、time-context、skills、goal、todo、feedback、present、ask-user、submit-record、trajectory、token-meter、system-prompt）；工具只登記一次', async () => {
+  it('樹上 include 底下只有函式插件那幾列（echo、agent-instructions、skill-invocation、time-context、skills、plan-mode、goal、todo、feedback、present、ask-user、submit-record、trajectory、token-meter、system-prompt、sandbox-policy、permission-presets；相容層那一格 plan-mode-model-call 不在）；工具只登記一次', async () => {
     const dir = scratch();
     const root = newRoot();
     const loaded = await loadDefaultPlugins(
@@ -281,6 +281,7 @@ describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
       'skill-invocation',
       'time-context',
       'skills',
+      'plan-mode',
       'goal',
       'todo',
       'feedback',
@@ -290,6 +291,7 @@ describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
       'trajectory',
       'token-meter',
       'system-prompt',
+      'sandbox-policy',
       'permission-presets',
     ]);
   }, 60000);
@@ -301,7 +303,7 @@ describe('已知限制：cordis.serve.yml 那一層不經 Include', () => {
     const module = write(
       dir,
       'serve-only.mjs',
-      functionPlugin({ id: 'serve-only', range: '^1.0.0', apply: '' }),
+      functionPlugin({ id: 'serve-only', range: '^2.0.0', apply: '' }),
     );
     const shipped = write(dir, 'cordis.yml', ECHO_SHIPPED);
     const serveLayer = write(
@@ -558,7 +560,7 @@ describe('推清單被拒之後，推回上一份不會被當成沒變而跳過�
         'counted.mjs',
         functionPlugin({
           id: 'counted',
-          range: '^1.0.0',
+          range: '^2.0.0',
           apply: `const c = globalThis[${JSON.stringify(counter)}]; c.apply += 1; ctx.effect(() => () => { c.dispose += 1 })`,
         }),
       );
@@ -649,7 +651,7 @@ describe('插件自我停用只在記憶體，但同一份宣告不再被重新�
       'self-disable.mjs',
       functionPlugin({
         id: 'quitter',
-        range: '^1.0.0',
+        range: '^2.0.0',
         apply: `globalThis[${JSON.stringify(counter)}] = (globalThis[${JSON.stringify(counter)}] ?? 0) + 1; ctx.fiber.dispose()`,
       }),
     );

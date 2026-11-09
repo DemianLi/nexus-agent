@@ -62,6 +62,7 @@ import {
   NEXUS_CORE_VERSION,
   resolveEntriesPerEntry,
   SESSION_PERSISTENCE_PLUGIN_NAME,
+  summaryCutoffsOf,
 } from '@nexus/core';
 import type {
   CommandDefinition,
@@ -73,6 +74,8 @@ import type {
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
 import type { SystemPromptAssembly } from '@nexus/system-prompt';
+import { runThreadSources } from '@nexus/tool-adapter';
+import type { FoldedThreadSource } from '@nexus/tool-adapter';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -317,6 +320,34 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
  * 關不掉的那幾列。見 {@link PROTECTED_ENTRY_REASONS}——**這份名單從那張表導出**，所以兩者不會漂移。
  */
 export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(PROTECTED_ENTRY_REASONS.keys());
+
+/** 一對主從列，以 `name` 為鍵（理由同 {@link PROTECTED_ENTRY_REASONS}）。 */
+export interface DependentEntryPair {
+  /** 主：決定這一對開不開。 */
+  readonly primary: string;
+  /** 從：跟著主開關，自己不能單獨開或單獨關。 */
+  readonly dependent: string;
+}
+
+/**
+ * 跟著另一列開關的列。檢查只讀這張表，由 {@link validateEntries} 做，所以 `--dump-config` 與真的啟動兩條路都一樣：
+ *
+ * - 主掛著（寫了、沒有 `disabled: true`），從不在或 `disabled: true`：拋。
+ * - 主沒寫，從掛著：拋。
+ * - 主寫了 `disabled: true`：從一併改寫成 `disabled: true`，不管從那一列自己寫什麼。`--dump-config` 印的是改寫後的列，
+ *   來源註解寫明是被主連帶關掉的；`plugin` 對照快照照停用的列顯示。
+ * - 其餘（兩列都沒寫、主沒寫而從 `disabled: true`）：通過。
+ *
+ * 表上的對：
+ *
+ * - 主 `@nexus/plugin-plan-mode`，從 `@nexus/plugin-plan-mode/model-call`（#2551）：從是主留在相容層的那一格，交出 `exit_plan_mode`
+ *   同意之後的待關、送模型之前補回 `name`，讀的是主登記的模式。只關從，同意之後模式關不掉、送給模型的請求跟著變；沒有主，
+ *   從什麼都不做，靜靜放著會藏起設定錯誤。關主是今天就能用的 `plugin disable plan-mode`，從跟著關。
+ *   #2358 拿掉相容層那一格時，這一筆與它的測試一起拿掉。
+ */
+export const DEPENDENT_ENTRY_PAIRS: readonly DependentEntryPair[] = [
+  { primary: '@nexus/plugin-plan-mode', dependent: '@nexus/plugin-plan-mode/model-call' },
+];
 
 /**
  * 一列 patch。
@@ -580,7 +611,62 @@ export function validateEntries(
     }
     seen.set(entry.id, position);
   }
-  return entries;
+  return applyDependentPairs(entries, label).entries;
+}
+
+/**
+ * 一份驗過的清單上，哪幾列是被主連帶關掉的從：位置 → 原因（同 `--dump-config` 來源註解那一句）。給列出插件的地方（plugin 對照快照）用，
+ * 寫明這一列為什麼沒有跑。
+ *
+ * @param entries - {@link validateEntries} 交出的條目。
+ */
+export function dependentDisabledReasons(
+  entries: readonly ConfigEntry[],
+): ReadonlyMap<number, string> {
+  return applyDependentPairs(entries, '這份清單').cascaded;
+}
+
+/**
+ * 照 {@link DEPENDENT_ENTRY_PAIRS} 檢查主從列、把被主連帶關掉的從改寫成 `disabled: true`。
+ *
+ * @param entries - 驗過形狀的條目。
+ * @param label - 錯誤訊息裡怎麼稱呼這份清單。
+ * @returns 改寫後的條目（沒有要改的就是同一批物件），與被連帶關掉的列：位置 → 原因。
+ * @throws {PluginConfigError} 主掛著而從不在或關掉，或從掛著而主沒寫。
+ */
+function applyDependentPairs(
+  entries: readonly ConfigEntry[],
+  label: string,
+): { readonly entries: ConfigEntry[]; readonly cascaded: ReadonlyMap<number, string> } {
+  const written = new Set(entries.map((entry) => entry.name));
+  const mounted = new Set(
+    entries.filter((entry) => entry.disabled !== true).map((entry) => entry.name),
+  );
+  const cascaded = new Map<number, string>();
+  for (const { primary, dependent } of DEPENDENT_ENTRY_PAIRS) {
+    const [p, d] = [JSON.stringify(primary), JSON.stringify(dependent)];
+    if (mounted.has(primary) && !mounted.has(dependent)) {
+      throw new PluginConfigError(
+        `${label} 掛了 ${p}，卻沒有掛 ${d}（沒寫，或 disabled: true）。${d} 跟著 ${p} 開關：` +
+          `要關就關 ${p}，${d} 會一併當成關掉；${p} 開著時 ${d} 不能單獨關。`,
+      );
+    }
+    if (!written.has(primary) && mounted.has(dependent)) {
+      throw new PluginConfigError(
+        `${label} 掛了 ${d}，卻沒有寫 ${p}。${d} 跟著 ${p} 開關：沒有 ${p} 那一列，${d} 也不能掛。`,
+      );
+    }
+    if (!written.has(primary) || mounted.has(primary)) continue;
+    for (const [position, entry] of entries.entries()) {
+      if (entry.name === dependent) cascaded.set(position, `連帶關閉：主 ${p} 是 disabled: true`);
+    }
+  }
+  return {
+    entries: entries.map((entry, position) =>
+      cascaded.has(position) && entry.disabled !== true ? { ...entry, disabled: true } : entry,
+    ),
+    cascaded,
+  };
 }
 
 /**
@@ -866,6 +952,8 @@ interface BridgeMeta {
   readonly module: FunctionPluginModule;
   /** manifest 宣告提供的服務名（`provides[].token`）：宿主據此知道哪一列應該提供 `systemPrompt`（#1477）。 */
   readonly provides: readonly string[];
+  /** 模組 specifier（`cordis.yml` 的 `name`）：單獨掛上時據它查 `tools.threadSource` 的授權表（#2533）。 */
+  readonly specifier: string;
 }
 
 type BridgePlugin = NexusPlugin<unknown> & { readonly [BRIDGE]: BridgeMeta };
@@ -908,7 +996,11 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
         `橋接列 ${row} 還沒綁定到樹：只有 loadPluginConfig 交出來的清單上的條目能組裝`,
       );
     },
-    [BRIDGE]: { module, provides: manifest.provides.map((provide) => provide.token) },
+    [BRIDGE]: {
+      module,
+      provides: manifest.provides.map((provide) => provide.token),
+      specifier: entry.name,
+    },
   };
   return {
     plugin,
@@ -920,7 +1012,7 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
 
 /**
  * 一列在樹上登記的東西，**每一種接縫一格**（#1421）。加一個新接縫要在這裡多一格，然後在 {@link registerFolded} 折進
- * 這條 thread 的 registry；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
+ * 這條 thread 的 registry（要 await 的 `threadSources` 在 `registerFolded` 之後由 {@link runThreadSources} 跑）；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
  */
 interface FoldedContributions {
   readonly tools: readonly StructuredToolInterface[];
@@ -950,6 +1042,8 @@ interface FoldedContributions {
    * `nexusSystemPrompt` middleware（`{ last: true }`），用快照渲染。`undefined` 代表這一列不是 `systemPrompt` 的提供者。
    */
   readonly systemPrompt: SystemPromptAssembly | undefined;
+  /** 逐條 thread 的工具來源（#2533），照那一列登記的順序；折完其餘各格之後，由 {@link runThreadSources} 依序 await。 */
+  readonly threadSources: readonly FoldedThreadSource[];
 }
 
 /**
@@ -980,7 +1074,7 @@ function registerFolded(
   for (const listener of contributions.gates) registry.approvals.gate(listener);
   // `tools/result` 觀察者（#1469）：走 `registry.events.on`，**和工具一起折進同一條 thread**——工具與觀察者共用同一個閉包（present 的
   // 交付表），兩者必須在同一條 thread 上成對存在，之後列被卸載也不拆開。事件的簽名由核心的事件表定（`Readonly<PipelineExecution>`、
-  // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（只讀 `isError`），結構上相容。
+  // `Readonly<PipelineResultView>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（`isError`、`blocks`、`content` 與 `signal`），結構上相容。
   for (const listener of contributions.resultListeners) {
     registry.events.on('tools/result', listener as (...args: never[]) => void);
   }
@@ -988,11 +1082,16 @@ function registerFolded(
   // 且**不帶 `prepend`／`last`**——它在鏈上的位置就是這一列在出貨清單上的位置，與遷移之前 `useWithBackend` 的落點相同；一份實例走遍
   // root 與每個子代理（`fold.ts` 的 `pluginMiddleware`）。日誌用**這條 thread 自己的** `registry.sessions`（不走行程級的
   // `session-lookup`：那條多 thread 時可能 `ambiguous`）。細節見 `pre-step-middleware.ts`。
+  const cutoffs = summaryCutoffsOf(registry);
   for (const { name, listener } of contributions.preSteps) {
-    registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
+    registry.middleware.use(
+      createPreStepMiddleware(name, listener, registry.sessions, (config, messages) =>
+        cutoffs.lookup(config, messages),
+      ),
+    );
   }
-  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才是
-  // 最後一段（前綴是前置，位置不影響）。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
+  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才在
+  // 段的最後（前綴是前置，位置不影響）；記憶在基座最內層，接在後綴之後。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
   // 預設的 model／cwd 走宿主內部的路（`system-prompt-middleware.ts` 的 `WeakMap`），不是 `NexusServices`；組裝點沒交就是這一列起不來
   // （同今天的 `requires: ['systemPromptVariables']`：不退到猜的值）。代入之後頭尾都是空的就不掛——條件不是「有沒有服務」。
   if (contributions.systemPrompt !== undefined) {
@@ -1021,11 +1120,21 @@ function registerFolded(
 }
 
 /** 樹上這一列起來了：折進它登記的工具與投影單元。 */
-function bindToTree(entry: PluginEntry, contributions: FoldedContributions): PluginEntry {
+function bindToTree(
+  entry: PluginEntry,
+  id: string,
+  contributions: FoldedContributions,
+): PluginEntry {
+  const bridge = entry.plugin as BridgePlugin;
   const plugin: BridgePlugin = {
-    ...(entry.plugin as BridgePlugin),
+    ...bridge,
     apply(registry) {
       registerFolded(registry, contributions);
+      if (contributions.threadSources.length === 0) return;
+      return runThreadSources(registry, contributions.threadSources, {
+        id,
+        module: bridge[BRIDGE].module,
+      });
     },
   };
   return { ...entry, plugin };
@@ -1044,24 +1153,26 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
       // 有沒有圍堵（#1491 Q4 (a)、#1774）：同樣從這一次組裝的 host 服務 `workspaceRoot` 有沒有值推（組裝點只在有 `--workspace` 時提供）。
       // 根本身是逐條 thread 的，不在這裡取：函式插件在呼叫當下經 `fs` 把手讀 `workspaceRoot()`。
       const contained = registry.services.get('workspaceRoot') !== undefined;
-      registerFolded(
-        registry,
-        await mountDetached({
-          id,
-          module: meta.module,
-          provides: meta.provides,
-          config: entry.config,
-          ...(channel === undefined ? {} : { channel }),
-          ...(contained && { contained }),
-          // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
-          // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
-          sessionLookup: (config) => registry.sessions.forCall(config),
-          // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
-          // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
-          fsLookup: registryFsLookup(registry),
-          fsForThread: registryFsForThread(registry),
-        }),
-      );
+      const contributions = await mountDetached({
+        id,
+        module: meta.module,
+        provides: meta.provides,
+        config: entry.config,
+        ...(channel === undefined ? {} : { channel }),
+        ...(contained && { contained }),
+        // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
+        // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
+        sessionLookup: (config) => registry.sessions.forCall(config),
+        // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
+        // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
+        fsLookup: registryFsLookup(registry),
+        fsForThread: registryFsForThread(registry),
+        specifier: meta.specifier,
+      });
+      registerFolded(registry, contributions);
+      if (contributions.threadSources.length > 0) {
+        await runThreadSources(registry, contributions.threadSources, { id, module: meta.module });
+      }
     },
   };
   return { ...entry, plugin };
@@ -1493,7 +1604,13 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
 
   // 疊完先驗過才印：印一棵啟動不起來的樹，讀的人會以為問題在別的地方。
   validateEntries(composed, shipped, { disabledByJournal: journalDisabledIds(layers) });
-  return groupedDump(composed, origins);
+  // 印的是啟動真的會用的那一份：被主連帶關掉的從，印成 `disabled: true`，來源註解寫明原因（見 {@link DEPENDENT_ENTRY_PAIRS}）。
+  const { cascaded } = applyDependentPairs(composed as ConfigEntry[], shipped);
+  const printed = composed.map((row, position) =>
+    cascaded.has(position) && row.disabled !== true ? { ...row, disabled: true } : row,
+  );
+  for (const [position, reason] of cascaded) origins[position]?.patchedBy.push(reason);
+  return groupedDump(printed, origins);
 }
 
 /** 每一段來源相同的連續列，前面加一行 `# ==`。 */
@@ -1767,7 +1884,7 @@ async function loadPluginConfigOnce(
       rows.set(off, { id: origin.id, module: row.name });
       return off;
     }
-    const bound = bindToTree(entry, {
+    const bound = bindToTree(entry, origin.id, {
       tools: verdict.tools,
       toolOptions: verdict.toolOptions,
       gates: verdict.gates,
@@ -1779,6 +1896,7 @@ async function loadPluginConfigOnce(
       commands: verdict.commands,
       services: verdict.services,
       systemPrompt: verdict.systemPrompt,
+      threadSources: verdict.threadSources,
     });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;

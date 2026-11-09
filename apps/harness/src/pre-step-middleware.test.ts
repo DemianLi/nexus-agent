@@ -2,23 +2,23 @@
  * `agent/pre-step` 接縫的宿主端（[#1474](https://github.com/DemianLi/nexus-agent/issues/1474)）：listener 登記進來之後，宿主建的那顆
  * middleware 做了什麼。分兩半：
  *
- * 1. **通用的宿主行為**（假 listener）：名字、`stateSchema`、listener 收到什麼、訊息怎麼建、日誌怎麼記、失敗怎麼辦。
- * 2. **摘要之後（#397）**——用真的 agent-instructions listener（經 `agent-instructions.fixture.ts` 的舊外殼建構式）：基座的摘要器不改寫
- *    `state.messages`，只記一顆 `_summarizationEvent`；宿主算 `effectiveMessages` 再交給 listener。這一組是從插件套件的測試搬來的
- *    （插件不再碰摘要器的私有鍵）。切點的形狀真的是基座寫的那個形狀，由組裝點那側的上游絆索負責
- *    （`agent-instructions.test.ts` 的「上游絆索」）。
+ * 1. **通用的宿主行為**（假 listener）：名字、沒有 `stateSchema`、listener 收到什麼、訊息怎麼建、日誌怎麼記、失敗怎麼辦。
+ * 2. **摘要之後（#397）**——用真的 agent-instructions listener（經 `agent-instructions.fixture.ts` 的舊外殼建構式）：摘要器不改寫
+ *    `state.messages`，切點記在組裝的切點表（#2416）；宿主拿這次呼叫的切點算出模型看得到的那一串，再交給 listener。這一組是從
+ *    插件套件的測試搬來的。宿主與摘要器拿的是同一張表，由 `agent-instructions.test.ts` 經真的組裝負責。
  */
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
 import {
+  markHistoryFromLog,
   MESSAGE_SOURCE_KWARG,
   SESSION_EVENT_MAX_DEPTH,
   SessionLog,
   TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
-import type { SessionLookup } from '@nexus/core';
+import type { SessionLookup, SummaryCutoff } from '@nexus/core';
 import {
   AGENT_INSTRUCTIONS_MARKER,
   DEFAULT_MAX_BYTES,
@@ -62,11 +62,19 @@ function fakeSessions(options: { kind?: SessionLookup['kind'] } = {}): {
 }
 
 type Hook = (
-  state: { messages?: readonly BaseMessage[]; _summarizationEvent?: unknown },
+  state: { messages?: readonly BaseMessage[] },
   runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal },
 ) => Promise<{ messages: BaseMessage[] } | undefined>;
 
 const hookOf = (middleware: unknown): Hook => (middleware as { beforeAgent: Hook }).beforeAgent;
+
+/** 沒摘要過的組裝：切點查找一律沒有。要切點的那幾條自己交。 */
+const preStep = (
+  name: string,
+  listener: PreStepListener,
+  sessions: Parameters<typeof createPreStepMiddleware>[2],
+  cutoffOf: Parameters<typeof createPreStepMiddleware>[3] = () => undefined,
+) => createPreStepMiddleware(name, listener, sessions, cutoffOf);
 
 const NAME = 'FakePreStep';
 const injecting =
@@ -75,25 +83,21 @@ const injecting =
     injections;
 
 describe('宿主建的 middleware', () => {
-  it('名字是登記時給的名字，掛在 beforeAgent，宣告讀摘要切點的 stateSchema', () => {
-    const middleware = createPreStepMiddleware(
-      NAME,
-      () => undefined,
-      fakeSessions(),
-    ) as unknown as {
+  it('名字是登記時給的名字，掛在 beforeAgent，沒有 stateSchema（切點不在 graph state）', () => {
+    const middleware = preStep(NAME, () => undefined, fakeSessions()) as unknown as {
       name: string;
       beforeAgent: unknown;
-      stateSchema: { shape: Record<string, unknown> };
+      stateSchema?: unknown;
     };
     expect(middleware.name).toBe(NAME);
     expect(typeof middleware.beforeAgent).toBe('function');
-    expect(Object.keys(middleware.stateSchema.shape)).toEqual(['_summarizationEvent']);
+    expect(middleware.stateSchema).toBeUndefined();
   });
 
   it('listener 回 undefined 或空陣列：什麼都不加、也不記日誌', async () => {
     for (const result of [undefined, []]) {
       const sessions = fakeSessions();
-      const middleware = createPreStepMiddleware(NAME, () => result, sessions);
+      const middleware = preStep(NAME, () => result, sessions);
       expect(await hookOf(middleware)({ messages: [] }, { configurable: {} })).toBeUndefined();
       expect(sessions.appended).toEqual([]);
     }
@@ -101,7 +105,7 @@ describe('宿主建的 middleware', () => {
 
   it('listener 收到的呼叫設定是 { configurable: runtime.configurable }（不是裸的 configurable）', async () => {
     const seen: PreStepInvocation[] = [];
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       (_visible, invocation) => {
         seen.push(invocation);
@@ -120,7 +124,7 @@ describe('宿主建的 middleware', () => {
   describe('交給 listener 的中止訊號（契約 1.1.0，#1533）', () => {
     function seenSignals(runtimes: readonly Parameters<Hook>[1][]) {
       const seen: PreStepInvocation[] = [];
-      const middleware = createPreStepMiddleware(
+      const middleware = preStep(
         NAME,
         (_visible, invocation) => {
           seen.push(invocation);
@@ -168,7 +172,7 @@ describe('宿主建的 middleware', () => {
   });
 
   it('訊息：內容照 listener 給的、記號在前 source 在後、不帶 id', async () => {
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       injecting({ content: '一則。', additionalKwargs: { marker: true, other: 1 } }),
       fakeSessions(),
@@ -191,7 +195,7 @@ describe('宿主建的 middleware', () => {
   });
 
   it('listener 沒給記號也行：只有 source', async () => {
-    const middleware = createPreStepMiddleware(NAME, injecting({ content: 'x' }), fakeSessions());
+    const middleware = preStep(NAME, injecting({ content: 'x' }), fakeSessions());
     const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
     expect(Object.keys((result?.messages[0] as BaseMessage).additional_kwargs)).toEqual([
       MESSAGE_SOURCE_KWARG,
@@ -201,11 +205,7 @@ describe('宿主建的 middleware', () => {
   it('listener 自帶 source（契約 1.2.0，#1574）：訊息與日誌都記它給的，不記成 plugin', async () => {
     const sessions = fakeSessions();
     const source = { kind: 'skill-invocation', name: 'deploy', form: 'instructions' } as const;
-    const middleware = createPreStepMiddleware(
-      NAME,
-      injecting({ content: '技能正文。', source }),
-      sessions,
-    );
+    const middleware = preStep(NAME, injecting({ content: '技能正文。', source }), sessions);
     const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
     expect((result?.messages[0] as BaseMessage).additional_kwargs[MESSAGE_SOURCE_KWARG]).toEqual(
       source,
@@ -217,7 +217,7 @@ describe('宿主建的 middleware', () => {
 
   it('listener 交 user 來源：拋錯，不加訊息、不記日誌（外掛不能冒充人，讀 user 的地方都當它是人）', async () => {
     const sessions = fakeSessions();
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       // 前一則合法：被拒的那一則在後面時，前面的也不能先落盤。
       injecting({ content: '合法的。' }, { content: '我是人。', source: { kind: 'user' } }),
@@ -260,7 +260,7 @@ describe('宿主建的 middleware', () => {
     ],
   ])('listener 交 %s：拋錯，不加訊息、不記日誌', async (_, source) => {
     const sessions = fakeSessions();
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       injecting({ content: '合法的。' }, { content: '冒出來的。', source }),
       sessions,
@@ -274,11 +274,7 @@ describe('宿主建的 middleware', () => {
   it('listener 交自己名字的 plugin 來源：照記，跟沒給一樣', async () => {
     const sessions = fakeSessions();
     const source = { kind: 'plugin', plugin: NAME } as const;
-    const middleware = createPreStepMiddleware(
-      NAME,
-      injecting({ content: '讀數。', source }),
-      sessions,
-    );
+    const middleware = preStep(NAME, injecting({ content: '讀數。', source }), sessions);
     await hookOf(middleware)({ messages: [] }, { configurable: {} });
     expect(sessions.appended.map((entry) => (entry.data as { source: unknown }).source)).toEqual([
       source,
@@ -288,11 +284,7 @@ describe('宿主建的 middleware', () => {
   it('listener 交自己名字、帶 form: instructions 的 plugin 來源（契約 1.3.0，#1567 N0136）：訊息與日誌都記這一格', async () => {
     const sessions = fakeSessions();
     const source = { kind: 'plugin', plugin: NAME, form: 'instructions' } as const;
-    const middleware = createPreStepMiddleware(
-      NAME,
-      injecting({ content: '指示。', source }),
-      sessions,
-    );
+    const middleware = preStep(NAME, injecting({ content: '指示。', source }), sessions);
     const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
     expect(result?.messages?.[0]?.additional_kwargs[MESSAGE_SOURCE_KWARG]).toEqual(source);
     expect(sessions.appended.map((entry) => (entry.data as { source: unknown }).source)).toEqual([
@@ -302,11 +294,7 @@ describe('宿主建的 middleware', () => {
 
   it('listener 回多則：依序都加、依序都記', async () => {
     const sessions = fakeSessions();
-    const middleware = createPreStepMiddleware(
-      NAME,
-      injecting({ content: '甲' }, { content: '乙' }),
-      sessions,
-    );
+    const middleware = preStep(NAME, injecting({ content: '甲' }, { content: '乙' }), sessions);
     const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
     expect(result?.messages.map((m) => m.text)).toEqual(['甲', '乙']);
     expect(sessions.appended.map((entry) => entry.type)).toEqual(['user/message', 'user/message']);
@@ -320,7 +308,7 @@ describe('宿主建的 middleware', () => {
   describe('日誌', () => {
     it('注入的訊息記成 user/message，來源是 { kind: plugin, plugin: 名字 }', async () => {
       const sessions = fakeSessions();
-      const middleware = createPreStepMiddleware(NAME, injecting({ content: '一則。' }), sessions);
+      const middleware = preStep(NAME, injecting({ content: '一則。' }), sessions);
       const configurable = { thread_id: 't', checkpoint_ns: 'x:1' };
       await hookOf(middleware)({ messages: [] }, { configurable });
       expect(sessions.asked).toEqual([{ configurable }]);
@@ -336,12 +324,8 @@ describe('宿主建的 middleware', () => {
     it('兩顆 middleware 各綁各的 sessions：跑哪一顆就只問、只記那一顆綁的，不串到另一顆（#1479）', async () => {
       const mineSessions = fakeSessions();
       const otherSessions = fakeSessions();
-      const mine = createPreStepMiddleware(NAME, injecting({ content: '我的。' }), mineSessions);
-      const other = createPreStepMiddleware(
-        NAME,
-        injecting({ content: '別人的。' }),
-        otherSessions,
-      );
+      const mine = preStep(NAME, injecting({ content: '我的。' }), mineSessions);
+      const other = preStep(NAME, injecting({ content: '別人的。' }), otherSessions);
 
       await hookOf(mine)({ messages: [] }, { configurable: {} });
       expect(mineSessions.asked).toHaveLength(1);
@@ -362,9 +346,49 @@ describe('宿主建的 middleware', () => {
       '查找是 %s：不記，訊息照送',
       async (kind) => {
         const sessions = fakeSessions({ kind });
-        const middleware = createPreStepMiddleware(NAME, injecting({ content: 'x' }), sessions);
+        const middleware = preStep(NAME, injecting({ content: 'x' }), sessions);
         const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
         expect(result?.messages).toHaveLength(1);
+        expect(sessions.appended).toEqual([]);
+      },
+    );
+
+    it('history-source=log、root：listener 看到的是日誌推出來的那一串，不是 state（#2355）', async () => {
+      const log = new SessionLog('pre-step');
+      log.append('turn/start', { kind: 'message', text: '日誌上的那句' });
+      const sessions = {
+        forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
+      };
+      const seen: string[][] = [];
+      const listener: PreStepListener = (messages) => {
+        seen.push(messages.map((message) => message.text));
+        return undefined;
+      };
+      const state = { messages: [new HumanMessage('state 裡的另一句')] };
+      await hookOf(preStep(NAME, listener, sessions))(state, { configurable: {} });
+      markHistoryFromLog(sessions);
+      await hookOf(preStep(NAME, listener, sessions))(state, { configurable: {} });
+      expect(seen).toEqual([['state 裡的另一句'], ['日誌上的那句']]);
+    });
+
+    it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(
+      '查找是 %s、history-source=log：listener 還沒叫就拋，這一輪失敗（#2355）',
+      async (kind) => {
+        const sessions = fakeSessions({ kind });
+        markHistoryFromLog(sessions);
+        let called = false;
+        const middleware = preStep(
+          NAME,
+          () => {
+            called = true;
+            return [{ content: 'x' }];
+          },
+          sessions,
+        );
+        await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
+          `pre-step listener 找不到這次呼叫的日誌（${kind}）`,
+        );
+        expect(called).toBe(false);
         expect(sessions.appended).toEqual([]);
       },
     );
@@ -377,11 +401,9 @@ describe('宿主建的 middleware', () => {
       const log = new SessionLog('pre-step');
       let deep: unknown = 'leaf';
       for (let level = 0; level < SESSION_EVENT_MAX_DEPTH; level++) deep = [deep];
-      const middleware = createPreStepMiddleware(
-        NAME,
-        injecting({ content: 'x', additionalKwargs: { deep } }),
-        { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
-      );
+      const middleware = preStep(NAME, injecting({ content: 'x', additionalKwargs: { deep } }), {
+        forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+      });
       await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
         /^會話事件的 user\/message 的 data\.message\..* 是第 \d+ 層巢狀，超過上限 600 層$/,
       );
@@ -390,7 +412,7 @@ describe('宿主建的 middleware', () => {
 
     it('反例：收得下的記號照常記、照常送', async () => {
       const log = new SessionLog('pre-step');
-      const middleware = createPreStepMiddleware(
+      const middleware = preStep(
         NAME,
         injecting({ content: 'x', additionalKwargs: { shallow: [1] } }),
         { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
@@ -402,7 +424,7 @@ describe('宿主建的 middleware', () => {
   });
 
   it('listener 自己拋錯不被吞：注入靜靜消失比一個明確的錯誤更難發現', async () => {
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       () => {
         throw new Error('listener 壞了');
@@ -415,7 +437,7 @@ describe('宿主建的 middleware', () => {
   });
 
   it('listener 是非同步的也行', async () => {
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       async () => {
         await Promise.resolve();
@@ -428,7 +450,7 @@ describe('宿主建的 middleware', () => {
   });
 });
 
-describe('listener 看到的是「模型看得到的那一串」（effectiveMessages）', () => {
+describe('listener 看到的是「模型看得到的那一串」（摘要切點套上去之後）', () => {
   const summary = new HumanMessage({
     content: '前情提要。',
     additional_kwargs: { lc_source: 'summarization' },
@@ -441,7 +463,7 @@ describe('listener 看到的是「模型看得到的那一串」（effectiveMess
 
   it('沒有切點：整個 state.messages', async () => {
     let seen: readonly BaseMessage[] = [];
-    const middleware = createPreStepMiddleware(
+    const middleware = preStep(
       NAME,
       (visible) => {
         seen = visible;
@@ -454,22 +476,29 @@ describe('listener 看到的是「模型看得到的那一串」（effectiveMess
     expect(seen.map((m) => m.text)).toEqual(['第一句', '第二句', '第三句']);
   });
 
-  it('有切點：[摘要, ...切點之後]，切點之前的 listener 看不到', async () => {
+  it('有切點：[摘要, ...切點之後]，切點之前的 listener 看不到；查找拿到的是這次呼叫的設定與 state 的訊息', async () => {
     let seen: readonly BaseMessage[] = [];
-    const middleware = createPreStepMiddleware(
+    const asked: { configurable: unknown; messages: readonly BaseMessage[] }[] = [];
+    const cutoff = { cutoffIndex: 2, summaryMessage: summary, filePath: null };
+    const middleware = preStep(
       NAME,
       (visible) => {
         seen = visible;
         return undefined;
       },
       fakeSessions(),
+      (config, current) => {
+        asked.push({ configurable: config.configurable, messages: current });
+        return cutoff;
+      },
     );
-    const event = { cutoffIndex: 2, summaryMessage: summary, filePath: null };
-    await hookOf(middleware)(
-      { messages: messages(), _summarizationEvent: event },
-      { configurable: {} },
-    );
+    const all = messages();
+    const configurable = { thread_id: 't', checkpoint_ns: 'model_request:x' };
+    await hookOf(middleware)({ messages: all }, { configurable });
     expect(seen.map((m) => m.text)).toEqual(['前情提要。', '第三句']);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.configurable).toBe(configurable);
+    expect(asked[0]!.messages).toBe(all);
   });
 });
 
@@ -486,16 +515,15 @@ function fakeBackend(files: Record<string, string>) {
 async function inject(
   files: Record<string, string>,
   messages: readonly BaseMessage[] = [],
-  summarizationEvent?: unknown,
+  cutoff?: SummaryCutoff,
 ): Promise<BaseMessage[] | undefined> {
   const middleware = createAgentInstructionsMiddleware(
     fakeBackend(files) as never,
     DEFAULT_MAX_BYTES,
+    undefined,
+    () => cutoff,
   );
-  const result = await hookOf(middleware)({
-    messages,
-    ...(summarizationEvent !== undefined && { _summarizationEvent: summarizationEvent }),
-  });
+  const result = await hookOf(middleware)({ messages });
   return result?.messages;
 }
 
@@ -507,9 +535,9 @@ function baselineMessage(): HumanMessage {
 }
 
 /**
- * 摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。基座的摘要器不改寫
- * `state.messages`，只記一顆 `_summarizationEvent`，模型看到的是 `[summary, ...messages.slice(cutoffIndex)]`。
- * 這裡餵的是那顆事件的形狀；它真的是基座寫的那個形狀，由組裝點那側的上游絆索負責。
+ * 摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。摘要器不改寫 `state.messages`，切點記在組裝的
+ * 切點表，模型看到的是 `[summary, ...messages.slice(cutoffIndex)]`。這裡直接交切點；宿主與摘要器拿同一張表，由
+ * `agent-instructions.test.ts` 經真的組裝負責。
  */
 describe('摘要之後：模型看得到一則才算有（agent-instructions listener 經宿主 middleware）', () => {
   const summary = new HumanMessage({
@@ -524,21 +552,19 @@ describe('摘要之後：模型看得到一則才算有（agent-instructions lis
   ];
 
   it('舊基線落在切點之前：補一則新的', async () => {
-    const event = { cutoffIndex: 2, summaryMessage: summary, filePath: null };
-    const messages = await inject({ '/AGENTS.md': '規矩。' }, history(), event);
+    const cutoff = { cutoffIndex: 2, summaryMessage: summary, filePath: null };
+    const messages = await inject({ '/AGENTS.md': '規矩。' }, history(), cutoff);
     expect(messages).toHaveLength(1);
     expect(isAgentInstructionsMessage(messages?.[0] as BaseMessage)).toBe(true);
   });
 
   it('舊基線就在切點上（模型看得到）：不補', async () => {
-    const event = { cutoffIndex: 1, summaryMessage: summary, filePath: null };
-    expect(await inject({ '/AGENTS.md': '規矩。' }, history(), event)).toBeUndefined();
+    const cutoff = { cutoffIndex: 1, summaryMessage: summary, filePath: null };
+    expect(await inject({ '/AGENTS.md': '規矩。' }, history(), cutoff)).toBeUndefined();
   });
 
-  it('認不出形狀的事件當成沒摘要過：退回「state 裡有一則就不補」', async () => {
-    for (const event of [null, { cutoffIndex: '2', summaryMessage: summary }, { cutoffIndex: 2 }]) {
-      expect(await inject({ '/AGENTS.md': '規矩。' }, history(), event)).toBeUndefined();
-    }
+  it('沒有切點：退回「state 裡有一則就不補」', async () => {
+    expect(await inject({ '/AGENTS.md': '規矩。' }, history())).toBeUndefined();
   });
 
   it('沒有基線的 state：補一則，帶記號與標成指示的 plugin 來源', async () => {

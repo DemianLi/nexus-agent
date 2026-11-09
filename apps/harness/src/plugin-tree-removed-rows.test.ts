@@ -39,11 +39,11 @@ const ECHO_MODULE = import.meta.resolve('@nexus/plugin-echo');
 function functionPlugin(id: string, apply: string): string {
   return `import { z } from 'zod';
 export const name = ${JSON.stringify(id)};
-export const inject = { tools: { range: '^1.0.0' } };
+export const inject = { tools: { range: '^2.0.0' } };
 export const Config = z.strictObject({});
 export const manifest = {
   id: ${JSON.stringify(id)}, version: '1.0.0', owner: 't',
-  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  provides: [], consumes: [{ token: 'tools', range: '^2.0.0' }],
   config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
 };
 export function apply(ctx, config) { ${apply} }

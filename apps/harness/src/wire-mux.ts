@@ -21,11 +21,12 @@
 import { STATUS_CODES } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { WIRE_MUX_PATH, isMuxRoute, parseMuxClientMessage } from '@nexus/wire';
+import { EMBED_PATH_PREFIX, WIRE_MUX_PATH, isMuxRoute, parseMuxClientMessage } from '@nexus/wire';
 import type { MuxClientMessage, MuxServerMessage } from '@nexus/wire';
 import type { RawData } from 'ws';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { StreamCutError } from './sse-response.js';
 import type { WireHandler } from './wire-handler.js';
 
 /** 連續漏幾拍算死，SSE 與 WebSocket 共用。協定常數，不開成設定。 */
@@ -49,8 +50,8 @@ const ROUTE_NOT_ALLOWED = 'route not allowed';
 
 /** 上層要給的 handler：`wire-handler.ts` 的實作。 */
 export type WireMuxHandler = Pick<WireHandler, 'handle'> & {
-  /** 升級前的圍欄與身分：過了回 `undefined`，沒過回要回的 `Response`。 */
-  admit(headers: Headers): Response | undefined;
+  /** 升級前的圍欄與身分（`pathname` 是升級請求的路徑）：過了回 `undefined`，沒過回要回的 `Response`。 */
+  admit(headers: Headers, pathname: string): Response | undefined;
 };
 
 export interface WireMuxOptions {
@@ -123,6 +124,8 @@ class MuxConnection {
   constructor(
     readonly socket: WebSocket,
     upgrade: Headers,
+    /** 從嵌入版的升級路徑進來的：這條線上只開嵌入版的路由，免得繞過前綴拿到完整的設定檔。 */
+    private readonly embed: boolean,
     private readonly options: WireMuxOptions,
     private readonly onClosed: () => void,
   ) {
@@ -212,11 +215,12 @@ class MuxConnection {
       this.socket.close(PROTOCOL_ERROR_CLOSE, 'duplicate stream id');
       return;
     }
-    const refused = !isMuxRoute(method, path)
-      ? ROUTE_NOT_ALLOWED
-      : this.#streams.size >= (this.options.maxStreams ?? DEFAULT_MUX_MAX_STREAMS)
-        ? 'too many streams'
-        : undefined;
+    const refused =
+      !isMuxRoute(method, path) || (this.embed && !path.startsWith(`${EMBED_PATH_PREFIX}/`))
+        ? ROUTE_NOT_ALLOWED
+        : this.#streams.size >= (this.options.maxStreams ?? DEFAULT_MUX_MAX_STREAMS)
+          ? 'too many streams'
+          : undefined;
     if (refused !== undefined) {
       this.options.count(pathOf(path), refused === ROUTE_NOT_ALLOWED ? 404 : 429);
       // socket 已關：'close' 會收掉每一條。
@@ -234,10 +238,14 @@ class MuxConnection {
     stream.done = this.#serve(id, stream, message)
       .catch((error: unknown) => {
         if (stream.abort.signal.aborted) return;
-        this.options.warn(error instanceof Error ? error : new Error(String(error)), {
-          method,
-          path,
-        });
+        if (error instanceof StreamCutError) {
+          this.options.warnDisconnect(`[下行] ${pathOf(path)}：${error.message}`);
+        } else {
+          this.options.warn(error instanceof Error ? error : new Error(String(error)), {
+            method,
+            path,
+          });
+        }
         // socket 已關：'close' 會收掉每一條。
         void this.#send({ t: 'error', id, message: 'stream failed' }).catch(() => undefined);
       })
@@ -352,12 +360,13 @@ export class WireMux {
       reject(403);
       return;
     }
-    const rejection = this.options.handler.admit(headers);
+    const rejection = this.options.handler.admit(headers, path);
     if (rejection !== undefined) {
       reject(rejection.status);
       return;
     }
-    if (path !== WIRE_MUX_PATH) {
+    const embed = path === `${EMBED_PATH_PREFIX}${WIRE_MUX_PATH}`;
+    if (path !== WIRE_MUX_PATH && !embed) {
       reject(404);
       return;
     }
@@ -367,9 +376,15 @@ export class WireMux {
     }
     this.#server.handleUpgrade(incoming, socket, head, (websocket) => {
       this.options.count(path, 101);
-      const connection: MuxConnection = new MuxConnection(websocket, headers, this.options, () => {
-        this.#connections.delete(connection);
-      });
+      const connection: MuxConnection = new MuxConnection(
+        websocket,
+        headers,
+        embed,
+        this.options,
+        () => {
+          this.#connections.delete(connection);
+        },
+      );
       this.#connections.add(connection);
       this.#startHeartbeat();
     });

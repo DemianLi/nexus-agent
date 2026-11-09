@@ -1,40 +1,36 @@
 import type { ConversationEntry, SlashDescriptor, WireClient } from '@nexus/wire';
-import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AppSidebar } from '@/components/sidebar/app-sidebar';
-import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { ModelSeat, MODEL_SELECT_FAILED } from '@/components/model-seat';
 import { PermissionSeat } from '@/components/permission-seat';
-import { EmptyHero } from '@/components/empty-hero';
-import { FeedbackDialog } from '@/components/feedback-dialog';
+import { ConversationBody } from '@/components/conversation/conversation-body';
+import { ConversationFeedbackDialog } from '@/components/conversation/conversation-feedback-dialog';
+import { ConversationNotices } from '@/components/conversation/conversation-notices';
+import { inputPlaceholder } from '@/components/conversation/input-placeholder';
+import { renderPendingActions, renderPendingPanel } from '@/components/conversation/pending-panels';
 import { PendingSwap } from '@/components/pending-swap';
 import { ArchivedBanner } from '@/components/archived-banner';
 import { GoalBar } from '@/components/goal-bar';
 import { PlanChip } from '@/components/plan/chip';
-import { PlanReviewPanel, usePlanLibrary } from '@/components/plan/review';
+import { usePlanLibrary } from '@/components/plan/review';
 import { QueueDock } from '@/components/queue-dock';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
-import { QuestionPanel } from '@/components/question-panel';
 import {
   RightSidebarPanel,
   RightSidebarProvider,
   RightSidebarToggle,
 } from '@/components/sidebar/right-sidebar';
-import { SessionReferenceContext } from '@/components/session-reference';
-import { SubagentControlContext, useSubagentControl } from '@/components/tool/subagent-control';
+import { useSubagentControl } from '@/components/tool/subagent-control';
 import { SessionUsage } from '@/components/cost/session-usage';
-import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { TodoPanel } from '@/components/todo/panel';
-import { Entry as TranscriptEntry, Transcript, useFreshItems } from '@/components/transcript';
-import { Button } from '@/components/ui/button';
+import { Entry as TranscriptEntry, useFreshItems } from '@/components/transcript';
 import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { useAgentMention } from '@/hooks/use-agent-mention';
@@ -59,8 +55,7 @@ import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { createSubagentUsageLoader } from '@/lib/subagent-usage';
 import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
-import { isPlanReview, planReviewOf } from '@/lib/plan-review';
-import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
+import { stoppedOnQuestion } from '@/lib/question-view';
 import {
   canRunSlash,
   canSendText,
@@ -81,7 +76,6 @@ import {
   canSteerQueue,
   steerAll,
   STEER_FAILED_TEXT,
-  STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
 import { pendingAsker } from '@/lib/approval-asker';
@@ -92,13 +86,7 @@ import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
-import { connectionStall, disconnectedPlaceholder } from '@/lib/connection-stall';
-import type { ConnectionStall } from '@/lib/connection-stall';
-import { threadCapacityText } from '@/lib/thread-capacity';
-import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
-import { threadLogBudgetText } from '@/lib/thread-log-budget';
-import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
-import { threadWriterHeldText } from '@/lib/thread-writer-held';
+import { connectionStall } from '@/lib/connection-stall';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { randomUuid } from '@/lib/uuid';
@@ -107,7 +95,10 @@ import type { PendingRequest, Sentence } from '@/lib/request-id';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
 import { useUploads } from '@/lib/use-uploads';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
-import { AttachmentImageContext } from '@/components/sent-attachments';
+
+export { LEGACY_THREAD_NOTICE } from '@/components/conversation/conversation-notices';
+export { STOP_QUESTIONS_LABEL } from '@/components/conversation/pending-panels';
+export { inputPlaceholder } from '@/components/conversation/input-placeholder';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -139,13 +130,6 @@ export const RESUMED_THREAD_NOTICE =
 export const SWITCHED_THREAD_NOTICE =
   '切到以前的一條 thread。之前的對話重播在底下，模型也記得，目標、沙箱模式與計劃模式跟著回來。';
 
-/**
- * 舊格式的會話（格式 9 以前寫的，#306 拍板 2）：日誌不記模型的回覆，畫面重播得出來的只有人打的字與工具卡，模型也
- * 從空的開始——推不出完整的歷史就不灌半截。伺服器照整份日誌判一次（`ThreadHistoryResult.legacy`）。
- */
-export const LEGACY_THREAD_NOTICE =
-  '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
-
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,
   recalled: RESUMED_THREAD_NOTICE,
@@ -164,36 +148,6 @@ const MODEL_SLASH: SlashDescriptor = {
   name: MODEL_COMMAND,
   description: '切換模型與推理強度（從下一步生效）。',
 };
-
-/**
- * 送出框裡那句灰字。
- *
- * **等人回答時它看不見**：核准與提問面板換掉輸入框（#408、#409，規格 §4.3），面板名稱與狀態列講現在該做什麼，所以這裡
- * 不再分「先回答上面那個核准請求」與「那組問題」——那幾格是 [#239](https://github.com/DemianLi/nexus-agent/issues/239)
- * 在卡片疊在輸入框上方時的補丁。
- *
- * **停在提問時按了停止**（❌，§4.3）：跟那張展開的提問工具卡講同一句，請人直接打字回覆（#376 第 9 條）。
- */
-export function inputPlaceholder({
-  connected,
-  stall,
-  stoppedOnQuestion,
-  steerQueue = false,
-}: {
-  readonly connected: boolean;
-  /** 沒連上、也不會自己接回的那兩種（{@link connectionStall}）；沒有就是在重接，講「連線中…」。 */
-  readonly stall?: ConnectionStall | undefined;
-  readonly stoppedOnQuestion: boolean;
-  /** 草稿空白、這一輪跑著、佇列裡有排著的：提示那個手勢（#710，dsh 的 `placeholder.steerQueue`）。 */
-  readonly steerQueue?: boolean;
-}): string {
-  if (!connected) return disconnectedPlaceholder(stall);
-  if (stoppedOnQuestion) return STOPPED_QUESTION_TEXT;
-  return steerQueue ? STEER_QUEUE_PLACEHOLDER : '說點什麼…';
-}
-
-/** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（§4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
-export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
 
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
@@ -504,16 +458,6 @@ function ConversationView({
   const machineBusy = adjudicating || submitting;
   // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
   const pendingRequest = useRef<PendingRequest | undefined>(undefined);
-  // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
-  const lastDialog = useRef(conversation.feedbackDialog);
-  // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
-  const dialogWasOpen = useRef(false);
-  const dialogOpens = useRef(0);
-  const dialogOpen = conversation.feedbackDialog !== undefined;
-  if (dialogOpen && !dialogWasOpen.current) dialogOpens.current += 1;
-  dialogWasOpen.current = dialogOpen;
-  if (dialogOpen) lastDialog.current = conversation.feedbackDialog;
-  const feedbackDialog = lastDialog.current;
 
   // **一顆中斷一個面板**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
   // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
@@ -692,96 +636,27 @@ function ConversationView({
         </header>
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
-          <div className="space-y-1">
-            <StatusLine
-              state={conversation.state}
-              connected={conversation.connected}
-              slowConnect={conversation.slowConnect}
-              {...(conversation.connectionError === undefined
-                ? {}
-                : { connectionError: conversation.connectionError })}
-              {...(conversation.refusal === undefined ? {} : { refusal: conversation.refusal })}
-              {...(conversation.commandError === undefined
-                ? {}
-                : { commandError: conversation.commandError })}
-              {...(conversation.slashError === undefined
-                ? {}
-                : { slashError: conversation.slashError })}
-              {...(conversation.slashNotice === undefined
-                ? {}
-                : { slashNotice: conversation.slashNotice })}
-              {...(conversation.reconnecting === undefined
-                ? {}
-                : { reconnecting: conversation.reconnecting })}
-              recovered={conversation.recovered}
-              onReconnect={conversation.reconnectNow}
-            />
-            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。
-                伺服器不收這條下行時（thread 數滿了）不講「接著上一次／之前的對話回來了」：跟狀態列的「打不開」矛盾（#1483）。 */}
-            {notice !== undefined && conversation.refusal === undefined && (
-              <p className="text-muted-foreground text-tip">{notice}</p>
-            )}
-            {conversation.history?.legacy === true && (
-              <p className="text-muted-foreground text-tip">{LEGACY_THREAD_NOTICE}</p>
-            )}
-            {conversation.historyError !== undefined && (
-              <p className="text-destructive text-tip">
-                {/* thread 數滿了、歷史太深、日誌超過額度、被別處握著、開在別的 home 或工作區都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203、#2214、#2222）。 */}
-                {threadCapacityText(conversation.historyError.code) ??
-                  threadHistoryTooDeepText(conversation.historyError.code) ??
-                  threadLogBudgetText(conversation.historyError.code) ??
-                  threadWriterHeldText(conversation.historyError.code) ??
-                  threadRootMismatchText(conversation.historyError.code) ??
-                  `之前說過的話拿不回來：${conversation.historyError.message}`}
-              </p>
-            )}
-          </div>
+          <ConversationNotices conversation={conversation} notice={notice} />
         </div>
 
-        {/* 排著插話就有東西可畫（#710），就算這一輪是從還沒有任何一則的地方跑起來的。 */}
-        {conversation.state.entries.length === 0 && steers.length === 0 ? (
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
-            <EmptyHero />
-          </div>
-        ) : (
-          <SessionReferenceContext.Provider value={sessionLinks}>
-            <AttachmentImageContext.Provider value={imageSource}>
-              <SubagentControlContext.Provider value={subagentControl}>
-                <Transcript
-                  state={conversation.state}
-                  isFresh={isFresh}
-                  changes={changes}
-                  deliverableDownload={deliverableDownload}
-                  {...(onFork === undefined
-                    ? {}
-                    : {
-                        fork: {
-                          forking,
-                          onFork: (messageId: string) =>
-                            onFork(messageId, conversation.state.title),
-                        },
-                      })}
-                  feedback={{
-                    ratings: conversation.ratings,
-                    busy: !conversation.connected,
-                    loadFailed: conversation.ratingsLoadFailed,
-                    unsupported: conversation.ratingsUnsupported,
-                    onSeed: conversation.seedRatings,
-                    onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-                  }}
-                  {...(conversation.history === undefined
-                    ? {}
-                    : {
-                        earlier: {
-                          ...conversation.history,
-                          onLoad: () => void conversation.loadEarlier(),
-                        },
-                      })}
-                />
-              </SubagentControlContext.Provider>
-            </AttachmentImageContext.Provider>
-          </SessionReferenceContext.Provider>
-        )}
+        <ConversationBody
+          conversation={conversation}
+          isFresh={isFresh}
+          hasSteers={steers.length > 0}
+          sessionLinks={sessionLinks}
+          imageSource={imageSource}
+          subagentControl={subagentControl}
+          changes={changes}
+          deliverableDownload={deliverableDownload}
+          {...(onFork === undefined
+            ? {}
+            : {
+                fork: {
+                  forking,
+                  onFork: (messageId: string) => onFork(messageId, conversation.state.title),
+                },
+              })}
+        />
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
           {/* 也在換手區外面，而且排最上面：計劃模式開著這件事，停在計劃審核點時更要看得到（#900）。 */}
@@ -815,82 +690,8 @@ function ConversationView({
             pendings={pendings}
             askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}
             composerRef={composerRef}
-            // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
-            // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
-            // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
-            // 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
-            renderPanel={(pending) => {
-              const asker = pendingAsker(conversation.state, pending);
-              const review =
-                pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
-              if (pending.kind === 'question' && review !== undefined) {
-                return (
-                  <PlanReviewPanel
-                    pending={pending}
-                    review={review}
-                    busy={!conversation.connected}
-                    onApprove={() =>
-                      void conversation.answer(pending.interruptId, [
-                        { id: review.questionId, selected: [review.approve] },
-                      ])
-                    }
-                    // 關掉這一題，這一輪不停；面板一收，焦點由換手層交回輸入框。
-                    onRevise={() => void conversation.dismissQuestion(pending.interruptId)}
-                  />
-                );
-              }
-              return pending.kind === 'question' ? (
-                <QuestionPanel
-                  pending={pending}
-                  busy={!conversation.connected}
-                  onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
-                  onDecline={() => void conversation.declineQuestion(pending.interruptId)}
-                  onDismiss={() => void conversation.dismissQuestion(pending.interruptId)}
-                />
-              ) : (
-                <ApprovalCard
-                  pending={pending}
-                  {...(asker === undefined ? {} : { asker })}
-                  busy={!conversation.connected}
-                  onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
-                  onStop={() => {
-                    void conversation.cancel();
-                    toast('已停止這一輪');
-                  }}
-                />
-              );
-            }}
-            // 提問的 ❌＝停止這一輪（§4.3 寫明的例外：dsh 是放棄後這一輪繼續，demian 選擇不讓模型接著猜）。
-            // 停下來之後那張提問工具卡展開、列出題目，輸入框提示字同一句。
-            // 計劃審核面板沒有 ❌：「要求修改」才是它的出口（#654 二-Q1）。
-            renderActions={(pending) =>
-              pending.kind === 'question' &&
-              !isPlanReview(pending.questions) && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 shrink-0 lg:size-8"
-                          aria-label={STOP_QUESTIONS_LABEL}
-                          disabled={!conversation.connected}
-                          onClick={() => {
-                            void conversation.cancel();
-                            toast('已停止這一輪', { description: STOPPED_QUESTION_TEXT });
-                          }}
-                        />
-                      }
-                    >
-                      <X />
-                    </TooltipTrigger>
-                    <TooltipContent>{STOP_QUESTIONS_LABEL}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )
-            }
+            renderPanel={(pending) => renderPendingPanel(conversation, pending)}
+            renderActions={(pending) => renderPendingActions(conversation, pending)}
             composer={
               <Composer
                 textareaRef={composerRef}
@@ -1156,17 +957,7 @@ function ConversationView({
       </SidebarInset>
       <RightSidebarPanel />
 
-      {feedbackDialog !== undefined && (
-        <FeedbackDialog
-          // 每打開一次、或換了目標，就是一張新的表單：草稿不帶過去。
-          key={`${dialogOpens.current}:${JSON.stringify(feedbackDialog.target)}`}
-          open={dialogOpen}
-          submitting={feedbackDialog.submitting}
-          {...(feedbackDialog.failure === undefined ? {} : { failure: feedbackDialog.failure })}
-          onSubmit={(draft) => void conversation.submitFeedback(draft)}
-          onDismiss={conversation.dismissFeedback}
-        />
-      )}
+      <ConversationFeedbackDialog conversation={conversation} />
     </RightSidebarProvider>
   );
 }

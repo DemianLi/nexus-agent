@@ -45,40 +45,17 @@
  */
 
 import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
-import type {
-  BaseMessage,
-  ContentBlock,
-  MessageContent,
-  StoredMessage,
-  StoredMessageData,
-} from '@langchain/core/messages';
+import type { BaseMessage, ContentBlock, StoredMessage } from '@langchain/core/messages';
 
+import type { NexusMessage } from './nexus-message.js';
 import {
   SESSION_EVENT_MAX_DEPTH,
   SessionEventDepthError,
   snapshotJsonValue,
 } from './session-log.js';
 
-/**
- * 日誌裡的一則訊息。`type` 是 `ai`／`human`／`tool` 這些，`data` 是那一則的欄位。
- *
- * LangChain 的 `StoredMessageData.content` 宣告是 `string`，但實際落盤時會是區塊陣列。
- * 改正型別為實際形狀：`MessageContent`（`string | ContentBlock[]`），讀方透過 {@link loggedContentBlocks}
- * 拿到型別化的區塊陣列（字串也轉成單塊 text）。
- *
- * `role`、`name`、`tool_call_id` 同理：LangChain 宣告成必填的 `string | undefined`，但 {@link toLoggedMessage}
- * 落盤前做一次 JSON 往返，值是 `undefined` 的鍵在那一步就消失，日誌上它們是**選填的字串**。型別照實際形狀寫，
- * 持久化型別圖（`apps/harness/src/persistence-schema.ts`，#1856）才表示得出來——必填卻可以是 `undefined` 的欄位不是 JSON。
- */
-export interface LoggedMessage {
-  readonly type: string;
-  readonly data: Omit<StoredMessageData, 'content' | 'role' | 'name' | 'tool_call_id'> & {
-    readonly content: MessageContent;
-    readonly role?: string;
-    readonly name?: string;
-    readonly tool_call_id?: string;
-  };
-}
+/** 日誌裡的一則訊息：nexus 自己的訊息型別（{@link NexusMessage}），欄位見那裡。 */
+export type LoggedMessage = NexusMessage;
 
 /** {@link toLoggedMessage} 在取欄位、序列化之前先量的門檻：日誌上限的兩倍（理由見那裡）。 */
 const PRECHECK_DEPTH = SESSION_EVENT_MAX_DEPTH * 2;
@@ -212,6 +189,42 @@ export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
   const copy = snapshotJsonValue(logged, '日誌訊息') as StoredMessage;
   const [message] = mapStoredMessagesToChatMessages([copy]);
   return message!;
+}
+
+/**
+ * 把日誌裡的一則訊息推回 `BaseMessage`，**只拷建構子會改的那幾層**：`data` 本身（建構子在上面補 `tool_calls`、
+ * `invalid_tool_calls`、`additional_kwargs` 這類欄位），與 `content`、`contentBlocks` 兩個陣列（`AIMessage` 的建構子在
+ * `contentBlocks` 上補缺的 `tool_call` 區塊，v1 的 `content` 陣列原樣當成 `contentBlocks`）。其餘巢狀的值（區塊、`tool_calls`
+ * 與參數、`additional_kwargs`／`response_metadata` 本身、`artifact`）跟日誌共用，日誌凍過就是凍的；也不檢查能不能無損表達成 JSON。
+ *
+ * **給讀完就丟的讀方**（拿 `tool_calls`、判斷推不推得回來），以及**確定 `logged` 整顆深凍過**的讀方：下游就地改巢狀欄位時，
+ * 凍過的值當場拋錯；沒凍過的會靜靜改到日誌那一份。其餘結果會留下來、交給 graph state 或模型的，一律用 {@link fromLoggedMessage}；呼叫端已經持有私有拷貝的例外（`langchain-message-adapter.ts` 的 `toBaseMessage`：推導端交出的已經深拷過，或整張深凍過）。
+ *
+ * @param logged - 日誌裡記的那一則。
+ * @returns 同一則訊息，巢狀的值與 `logged` 共用。
+ */
+export function readLoggedMessage(logged: LoggedMessage): BaseMessage {
+  const fields: Record<string, unknown> = { ...logged.data };
+  if (Array.isArray(fields.content)) fields.content = [...(fields.content as unknown[])];
+  if (Array.isArray(fields.contentBlocks))
+    fields.contentBlocks = [...(fields.contentBlocks as unknown[])];
+  const [message] = mapStoredMessagesToChatMessages([
+    { type: logged.type, data: fields } as unknown as StoredMessage,
+  ]);
+  return message!;
+}
+
+/**
+ * 推回這一則時，建構子會不會從字串解析出日誌裡沒有的新值：`AIMessage` 在沒有 `tool_calls` 時解析
+ * `additional_kwargs.tool_calls` 的參數字串（舊格式）。解析出來的值可能比整顆事件還深，從事件的層數推不出它的上限。
+ * 推回時建的一律是 `AIMessage`（`mapStoredMessagesToChatMessages`），`tool_call_chunks` 不會被解析。
+ *
+ * @param logged - 日誌裡記的那一則。
+ */
+export function parsesLoggedToolCalls(logged: LoggedMessage): boolean {
+  const data = logged.data as unknown as Record<string, unknown>;
+  const kwargs = data.additional_kwargs as Record<string, unknown> | undefined;
+  return data.tool_calls === undefined && kwargs?.tool_calls != null;
 }
 
 /**

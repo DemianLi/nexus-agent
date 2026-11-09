@@ -18,12 +18,13 @@ import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { APPROVAL_POLICY_NEVER, createHostServicesPlugin } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
-import { createMcpPlugin, publicToolName } from '@nexus/plugin-mcp';
+import { publicToolName } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -55,19 +56,21 @@ async function until(predicate: () => boolean, ms = 20_000): Promise<void> {
   }
 }
 
-/** 一列沒寫 `approval` 的 MCP（Q2 (a)：整台都問），server 收到的呼叫記進回傳的檔。 */
-function crmRow(): { readonly row: PluginEntry; calls(): string[] } {
+/** 一列沒寫 `approval` 的 MCP（#1622 Q2 (a)：整台都問），server 收到的呼叫記進回傳的檔。 */
+async function crmRow(): Promise<{ readonly row: PluginEntry; calls(): string[] }> {
   const callLog = join(temp('nexus-mcp-calls-'), 'calls.log');
   return {
-    row: createMcpPlugin({
-      serverName: 'crm',
-      connection: {
-        transport: 'stdio',
-        command: process.execPath,
-        args: ['--import', 'tsx', SERVER],
-        env: { FIXTURE_CALL_LOG: callLog },
-      },
-    }),
+    row: (
+      await mcpRows({
+        serverName: 'crm',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', SERVER],
+          env: { FIXTURE_CALL_LOG: callLog },
+        },
+      })
+    )[0]!,
     calls: () =>
       existsSync(callLog) ? readFileSync(callLog, 'utf8').split('\n').filter(Boolean) : [],
   };
@@ -100,7 +103,7 @@ function workerHost(): PluginEntry {
 
 describe('子代理叫宣告要問的 MCP 工具', () => {
   it('G：背景子代理一律回絕，碼 APPROVAL_POLICY_NEVER；server 一次都沒收到', async () => {
-    const crm = crmRow();
+    const crm = await crmRow();
     const built = await createNexusAgent({
       model: new ScriptedChatModel({
         turns: [
@@ -180,7 +183,7 @@ describe('子代理叫宣告要問的 MCP 工具', () => {
   }, 60_000);
 
   it('H：前景子代理問 root 的人；核准前 server 沒收到，按允許之後收到一次', async () => {
-    const crm = crmRow();
+    const crm = await crmRow();
     const built = await createNexusAgent({
       model: new ScriptedChatModel({
         turns: [

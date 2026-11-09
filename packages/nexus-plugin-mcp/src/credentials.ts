@@ -2,9 +2,9 @@
  * 設定裡的憑證引用（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：`connection.env` 與 `connection.headers` 的值
  * 可以寫 `{ credential: <名字> }`，建連線那一刻向宿主的 {@link MCP_CREDENTIALS_SERVICE} 要值、代入。
  *
- * - **值只存在交給 adapter 的連線選項裡**：`McpConfig`、池鍵字串、`label`、錯誤訊息都只帶名字。
+ * - **值只存在交給 SDK transport 的連線選項裡**：`McpConfig`、池鍵字串、`label`、錯誤訊息都只帶名字。
  * - **解析是同步的**（{@link McpCredentials.resolve}）：`apply` 在取用池之前就解析完，池只拿到解析好的名字 → 值。
- * - **一份連線建立時抓住值**：重連用同一個 adapter client，不重新解析；值換了，池鍵裡的指紋跟著換，下一次取用連新的一份。
+ * - **一份連線建立時抓住值**：重連用同一份解析好的值，不重新解析；值換了，池鍵裡的指紋跟著換，下一次取用連新的一份。
  * - 宿主沒有提供服務、名字沒有值、服務拋錯，都是這一列連不上（走 `failOnStartupError` 那條），訊息寫列、欄位與憑證名。
  *
  * @module
@@ -48,6 +48,7 @@ export const headerValueSchema = z.union([
 /** 這一列引用到的憑證：名字 → 值。 */
 export type ResolvedCredentials = ReadonlyMap<string, string>;
 
+// eslint-disable-next-line no-restricted-syntax -- 唯讀的空表，沒有人寫進去
 const NONE: ResolvedCredentials = new Map();
 
 /** 這一列每一處引用：欄位路徑與憑證名。 */

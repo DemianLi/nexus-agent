@@ -1,0 +1,20 @@
+===================================================================
+--- a/components/ui/popover.tsx
++++ b/components/ui/popover.tsx
+@@ -1,6 +1,7 @@
+ import * as React from "react"
+ import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
+ import { cn } from "cn"
++import { usePortalContainer } from "@/lib/portal-container"
+ 
+ function Popover({ ...props }: PopoverPrimitive.Root.Props) {
+   return <PopoverPrimitive.Root data-slot="popover" {...props} />
+@@ -24,7 +25,7 @@
+     "align" | "alignOffset" | "side" | "sideOffset" | "anchor"
+   >) {
+   return (
+-    <PopoverPrimitive.Portal>
++    <PopoverPrimitive.Portal container={usePortalContainer()}>
+       <PopoverPrimitive.Positioner
+         anchor={anchor}
+         align={align}

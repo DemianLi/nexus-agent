@@ -83,14 +83,14 @@ export function registerFixtureTools(server: McpServer): void {
     () => ({ content: [{ type: 'text', text: 'pong' }] }),
   );
 
-  // server 自己說「失敗了」（`isError`），不是協定層的錯。adapter 2.0.0 對這種結果回 `status: 'error'` 的訊息、不拋，
-  // 文字是原文沒有前綴（#1074）；這一支讓外掛層的測試釘住「我們把它變回拋錯」。
+  // server 自己說「失敗了」（`isError`），不是協定層的錯。工具拿 server 的原文拋錯（有 tool_call_id 時沒有前綴，#1074）；
+  // 這一支讓外掛層的測試釘住「它會拋」。
   server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
     isError: true,
     content: [{ type: 'text', text: FAILURE_TEXT }],
   }));
 
-  // 欄位可為 null、又有可省略的聯集：adapter 2.x 不簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 欄位可為 null、又有可省略的聯集：工具宣告 `rawParameters`、不簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
   // 字串帶 `min(1)` 是為了讓 schema 保有 `anyOf`：zod 4.6 起，成員都是沒有其他約束的原始型別的 nullable／聯集會收成 `type` 陣列。
   server.registerTool(
     'nullable_args',

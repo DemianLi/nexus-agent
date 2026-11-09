@@ -375,22 +375,58 @@ describe('型錄與驗證（model.select 用）', () => {
   }, 60_000);
 });
 
-describe('選的那顆不在型錄上', () => {
-  it('收不收圖看部署預設那顆', () => {
-    const entry = (id: string, input: ('text' | 'image')[]) => ({
-      ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY),
-      id,
-      input,
-    });
+describe('收圖檢查看下一步走的那顆（#2288）', () => {
+  const entry = (id: string, input: ('text' | 'image')[]) => ({
+    ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY),
+    id,
+    input,
+  });
+
+  function hostWith(modelId: 'text-only' | 'vision') {
     const host = createModelSelectionHost({
       liveModel: liveModelConfigSchema.parse({
-        modelId: 'text-only',
-        models: [entry('text-only', ['text'])],
+        modelId,
+        models: [entry('text-only', ['text']), entry('vision', ['text', 'image'])],
       }),
       credentials: undefined,
     });
-    host.controller.attach(new SessionLog('image-support'));
+    const log = new SessionLog('image-support');
+    host.controller.attach(log);
+    return { host, log };
+  }
+
+  it('選的那顆不在型錄上、也沒請求過：看部署預設那顆', () => {
+    const { host } = hostWith('text-only');
     host.controller.select({ model: 'gone' });
+    expect(host.imageSupport()).toBe('rejects');
+  });
+
+  it('沒選過、最近一次請求走的收圖、部署預設不收：收', () => {
+    const { host, log } = hostWith('text-only');
+    log.append('model/start', { route: { model: 'vision' } });
+    expect(host.controller.next().model).toBe('vision');
+    expect(host.imageSupport()).toBe('accepts');
+  });
+
+  it('沒選過、最近一次請求走的不收、部署預設收：不收', () => {
+    const { host, log } = hostWith('vision');
+    log.append('model/start', { route: { model: 'text-only' } });
+    expect(host.controller.next().model).toBe('text-only');
+    expect(host.imageSupport()).toBe('rejects');
+  });
+
+  it('選的那顆已下架：跳過它，看最近一次請求走的那顆，不是部署預設', () => {
+    const { host, log } = hostWith('text-only');
+    log.append('model/start', { route: { model: 'vision' } });
+    host.controller.select({ model: 'gone' });
+    expect(host.controller.next().model).toBe('vision');
+    expect(host.imageSupport()).toBe('accepts');
+  });
+
+  it('選的那顆還在型錄上：以選的為準', () => {
+    const { host, log } = hostWith('vision');
+    log.append('model/start', { route: { model: 'vision' } });
+    host.controller.select({ model: 'text-only' });
     expect(host.imageSupport()).toBe('rejects');
   });
 });

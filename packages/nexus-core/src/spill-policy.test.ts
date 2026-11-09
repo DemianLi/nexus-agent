@@ -6,11 +6,19 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import {
-  createSpillPolicyMiddleware,
+  createSpillPolicyListener,
   formatSpillNotice,
   SPILL_RETRIEVAL_HINT,
 } from './spill-policy.js';
-import type { SpillSaveRequest, SpillStore } from './spill-policy.js';
+import type { SpillPolicyOptions, SpillSaveRequest, SpillStore } from './spill-policy.js';
+import { createToolPostExecuteMiddleware } from './tool-pipeline.js';
+
+/** 正式組裝裡外溢住的位置：`tools/post-execute` 的外層。 */
+function createSpillPolicyMiddleware(options: SpillPolicyOptions): unknown {
+  return createToolPostExecuteMiddleware(undefined, {
+    outer: [createSpillPolicyListener(options)],
+  });
+}
 import { estimateTextTokens } from './token-estimate.js';
 
 const HEAD = 'HEAD-9931';
@@ -199,5 +207,25 @@ describe('通知措辭', () => {
     ).toBe(
       '(Omitted 1234 bytes. Full formatted result stored at: /large_tool_results/x.txt. HINT)',
     );
+  });
+});
+
+describe('沒有 tool_call.id 的呼叫', () => {
+  it('存檔的來源用這次呼叫的 callId，不看結果上的 tool_call_id', async () => {
+    const store = fakeStore();
+    const middleware = createSpillPolicyMiddleware({ maxInlineTokens: 100, store });
+    const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
+    const result = new ToolMessage({
+      content: 'x'.repeat(10_000),
+      tool_call_id: 'from_result',
+      name: 'bulk',
+    });
+    await wrap({ toolCall: { name: 'bulk', args: {} } } as never, () => Promise.resolve(result));
+    expect(store.requests[0]?.source).toEqual({
+      kind: 'tool',
+      toolName: 'bulk',
+      callId: '',
+      label: 'result',
+    });
   });
 });

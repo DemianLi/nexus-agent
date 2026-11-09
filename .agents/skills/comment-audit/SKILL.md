@@ -1,6 +1,6 @@
 ---
 name: comment-audit
-description: 審查一份 diff 或指定檔案裡的程式註解，逐條判 keep／add／restore／trim／delete／defer，並為該由程式碼取代的註解標 MUST KILL。用在開 PR 或推 PR 更新之前、使用者說「審查註解」「哪些註解該刪／該留」「/comment-audit」時。
+description: 審查一份 diff 或指定檔案裡的程式註解（以及 diff 碰到的 docs/、.docs/ 正文的事實宣稱），逐條判 keep／add／restore／trim／delete／defer，並為該由程式碼取代的註解標 MUST KILL。用在開 PR 或推 PR 更新之前、使用者說「審查註解」「哪些註解該刪／該留」「/comment-audit」時。
 ---
 
 # 註解審查
@@ -19,6 +19,8 @@ description: 審查一份 diff 或指定檔案裡的程式註解，逐條判 kee
 ## 範圍
 
 呼叫方給的檔案或 diff；沒給就是 `origin/develop...HEAD` 加上工作樹的改動。只審 diff 碰到的註解與它們緊鄰的程式碼，判決都要指到範圍內的行。
+
+diff 碰到的 `docs/`、`.docs/` 正文句子也在範圍內，但只審一件事：每個事實宣稱的命題、條件與時機在 HEAD 成不成立。寫錯或漏了條件判 trim，照程式碼修正，並指出依據的檔:行。「該走的」「必須有的」不套到正文：dsh 對照紀錄的家本來就是這兩個目錄的 md（[`docs/standards.md`](../../../docs/standards.md)〈註解〉）。
 
 一律排除：`vendor/`、`apps/web/src/vendor/solid-glass/`、`references/`、夾具（`fixtures/`）與快照、產生出來的檔。範圍外看到的問題寫進「待辦」，不動。
 

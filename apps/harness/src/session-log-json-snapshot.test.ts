@@ -108,6 +108,7 @@ describe('A：自有的 "__proto__" 鍵照樣是自有鍵（#1526）', () => {
     expect(Object.hasOwn(meta, '__proto__')).toBe(true);
 
     const { live, stored, adopted } = await roundTrip((sessions) => {
+      sessions.root.append('tool/call', { callId: 'c1', name: 'echo', arguments: '{}' });
       sessions.root.append('tool/result', { callId: 'c1', isError: false, meta });
     });
 
@@ -198,14 +199,17 @@ describe('C：深巢狀（#1526、#1661）', () => {
       openJsonlSessionStore({ directory: dir }),
       { warn: () => {} },
     );
+    sessions.root.append('tool/call', { callId: 'before', name: 'echo', arguments: '{}' });
     sessions.root.append('tool/result', { callId: 'before', isError: false });
     for (const [callId] of deep) {
+      sessions.root.append('tool/call', { callId, name: 'echo', arguments: '{}' });
       sessions.root.append('tool/result', {
         callId,
         isError: false,
         meta: `placeholder:${callId}`,
       });
     }
+    sessions.root.append('tool/call', { callId: 'after', name: 'echo', arguments: '{}' });
     sessions.root.append('tool/result', { callId: 'after', isError: false });
     await persistence.flush();
     await persistence.dispose();
@@ -242,11 +246,13 @@ describe('C：深巢狀（#1526、#1661）', () => {
     }
   });
 
-  it('C2：前後各一則普通事件，中間一則 5000 層：那一則在 append 就拒，前後照常落盤、續接讀得回來', async () => {
+  it('C2：前後各一對普通的呼叫與結果，中間一則 5000 層：那一則在 append 就拒，前後照常落盤、續接讀得回來', async () => {
     let rejected: unknown;
     const { live, stored, adopted } = await roundTrip((sessions) => {
+      sessions.root.append('tool/call', { callId: 'before', name: 'echo', arguments: '{}' });
       sessions.root.append('tool/result', { callId: 'before', isError: false });
       try {
+        sessions.root.append('tool/call', { callId: 'deep', name: 'echo', arguments: '{}' });
         sessions.root.append('tool/result', {
           callId: 'deep',
           isError: false,
@@ -255,6 +261,7 @@ describe('C：深巢狀（#1526、#1661）', () => {
       } catch (error: unknown) {
         rejected = error;
       }
+      sessions.root.append('tool/call', { callId: 'after', name: 'echo', arguments: '{}' });
       sessions.root.append('tool/result', { callId: 'after', isError: false });
     });
     // 先看落盤：沒有上限時，Node 22 上這一批寫不出去，`flush` 就拋了，走不到這裡。
@@ -280,6 +287,7 @@ describe('C：深巢狀（#1526、#1661）', () => {
     ] as const;
     const { live, stored, adopted } = await roundTrip((sessions) => {
       for (const [callId, meta] of deep) {
+        sessions.root.append('tool/call', { callId, name: 'echo', arguments: '{}' });
         sessions.root.append('tool/result', { callId, isError: false, meta });
       }
     });

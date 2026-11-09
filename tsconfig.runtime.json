@@ -48,6 +48,9 @@
       ],
       "@nexus/plugin-plan-mode": ["./packages/nexus-plugin-plan-mode/src/index.ts"],
       "@nexus/plugin-plan-mode/invariant": ["./packages/nexus-plugin-plan-mode/src/invariant.ts"],
+      "@nexus/plugin-plan-mode/model-call": [
+        "./packages/nexus-plugin-plan-mode/src/model-call-cell.ts"
+      ],
       "@nexus/plugin-present": ["./packages/nexus-plugin-present/src/index.ts"],
       "@nexus/plugin-present/invariant": ["./packages/nexus-plugin-present/src/invariant.ts"],
       "@nexus/plugin-quickjs": ["./packages/nexus-plugin-quickjs/src/index.ts"],
@@ -80,8 +83,10 @@
       "@nexus/session/provider": ["./packages/nexus-session/src/provider.ts"],
       "@nexus/skills": ["./packages/nexus-skills/src/index.ts"],
       "@nexus/skills/provider": ["./packages/nexus-skills/src/provider.ts"],
+      "@nexus/subprocess": ["./packages/nexus-subprocess/src/index.ts"],
       "@nexus/system-prompt": ["./packages/nexus-system-prompt/src/index.ts"],
       "@nexus/timeout": ["./packages/nexus-timeout/src/index.ts"],
+      "@nexus/tool-adapter": ["./packages/nexus-tool-adapter/src/index.ts"],
       "@nexus/tool-result": ["./packages/nexus-tool-result/src/index.ts"],
       "@nexus/tools": ["./packages/nexus-tools/src/index.ts"],
       "@nexus/tools/provider": ["./packages/nexus-tools/src/provider.ts"],

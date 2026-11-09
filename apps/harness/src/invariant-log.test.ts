@@ -7,6 +7,7 @@
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -109,6 +110,43 @@ describe('記錄器', () => {
       },
     ]);
   });
+
+  it('兩個行程同時往同一個檔寫（per-thread 每個對話行程各自寫，#2341）：每行都完整、一行都不少', async () => {
+    const home = tempHome();
+    const path = join(home, 'invariant-log.jsonl');
+    const script = join(home, 'writer.ts');
+    const PER_WRITER = 2_000;
+    writeFileSync(
+      script,
+      `import { createInvariantLog } from ${JSON.stringify(fileURLToPath(new URL('./invariant-log.ts', import.meta.url)))};\n` +
+        `const tap = createInvariantLog(${JSON.stringify(path)});\n` +
+        `for (let i = 0; i < ${String(PER_WRITER)}; i += 1) tap.violation?.({ sessionId: process.argv[2], packageName: '@nexus/a', message: '\\u0001'.repeat(${String(MAX_MESSAGE_CHARS)}) });\n`,
+    );
+    const env = {
+      ...process.env,
+      ...(process.env.TSX_TSCONFIG_PATH !== undefined && {
+        TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH,
+      }),
+    };
+    const writer = (id: string) =>
+      new Promise<number | null>((resolve) => {
+        spawn(process.execPath, ['--import', import.meta.resolve('tsx'), script, id], {
+          env,
+          stdio: 'inherit',
+        }).once('exit', resolve);
+      });
+    expect(await Promise.all([writer('a'), writer('b')])).toEqual([0, 0]);
+
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(PER_WRITER * 2);
+    // 最長的一行：訊息剛好 `MAX_MESSAGE_CHARS` 個字元（不截），每個都跳脫成六個位元組（`\u0001`，`JSON.stringify` 最長的跳脫），訊息就有 3000 位元組。
+    expect(Buffer.byteLength(lines[0]!)).toBeGreaterThan(MAX_MESSAGE_CHARS * 6);
+    const parsed = lines.map(
+      (line) => JSON.parse(line) as InvariantLogLine & { sessionId: string },
+    );
+    expect(parsed.filter(({ sessionId }) => sessionId === 'a')).toHaveLength(PER_WRITER);
+    expect(parsed.filter(({ sessionId }) => sessionId === 'b')).toHaveLength(PER_WRITER);
+  }, 60_000);
 
   it('目錄第一次寫入才建，檔案 0600、目錄 0700', () => {
     const home = tempHome();

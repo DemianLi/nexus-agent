@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { filesystemMiddlewareOptions } from './agent-assembly.js';
-import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
+import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 
 const backend = {} as never;
 const limits = {
@@ -28,7 +28,10 @@ describe('filesystemMiddlewareOptions', () => {
   ])('%s：選項物件沒有 tools 這個鍵', (_name, fileTools) => {
     const options = filesystemMiddlewareOptions({
       backend,
-      middleware: [{ name: READ_CONTINUATION_MIDDLEWARE_NAME }],
+      descriptions: filesystemToolDescriptions({
+        readContinuation: true,
+        searchDescriptions: false,
+      }),
       ...(fileTools !== undefined && { fileTools }),
     });
 
@@ -39,7 +42,6 @@ describe('filesystemMiddlewareOptions', () => {
   it('write 關：tools 白名單沒有 write_file／delete，有 edit_file 與讀取面', () => {
     const options = filesystemMiddlewareOptions({
       backend,
-      middleware: [],
       fileTools: { write: false, edit: true, ...limits },
     });
 
@@ -53,7 +55,6 @@ describe('filesystemMiddlewareOptions', () => {
   it('edit 關：tools 白名單沒有 edit_file', () => {
     const options = filesystemMiddlewareOptions({
       backend,
-      middleware: [],
       fileTools: { write: true, edit: false, ...limits },
     });
 
@@ -61,27 +62,35 @@ describe('filesystemMiddlewareOptions', () => {
     expect(options.tools).toEqual(expect.arrayContaining(['write_file', 'delete']));
   });
 
-  it('permissions 有給才帶；描述只在對應的 middleware 在場時換', () => {
-    const plain = filesystemMiddlewareOptions({ backend, middleware: [] });
+  it('permissions、描述有給才帶', () => {
+    const plain = filesystemMiddlewareOptions({ backend });
     expect(Object.keys(plain)).toEqual(['backend']);
 
     const full = filesystemMiddlewareOptions({
       backend,
       permissions: [],
-      middleware: [{ name: READ_CONTINUATION_MIDDLEWARE_NAME }],
+      descriptions: filesystemToolDescriptions({
+        readContinuation: true,
+        searchDescriptions: false,
+      }),
     });
     expect(Object.keys(full).sort()).toEqual(['backend', 'customToolDescriptions', 'permissions']);
   });
 });
 
 describe('組裝點的 createFilesystemMiddleware 呼叫', () => {
-  it('每一處都經過 filesystemMiddlewareOptions（root 一處、子代理預設疊一處）', () => {
+  it('只在 filesystemMiddleware 裡建；root 一處、子代理預設疊一處都經過 filesystemMiddlewareOptions', () => {
     const source = readFileSync(new URL('./agent-assembly.ts', import.meta.url), 'utf8');
-    const calls = [...source.matchAll(/(?<![\w.])createFilesystemMiddleware\(\s*(\S+)/gu)].map(
+    const direct = [...source.matchAll(/(?<![\w.])createFilesystemMiddleware\(\s*(\S+)/gu)].map(
       (match) => match[1],
     );
+    const wrapped = [
+      ...source.matchAll(/(?<![\w.]|function )filesystemMiddleware\(\s*(\S+)/gu),
+    ].map((match) => match[1]);
 
-    expect(calls).toHaveLength(2);
-    for (const argument of calls) expect(argument).toMatch(/^filesystemMiddlewareOptions\(/u);
+    // 基座那一顆的 `wrapToolCall` 換成 core 的、`wrapModelCall` 由 core 包住（#2415 W3），所以直接建的只有包裝裡那一處。
+    expect(direct).toEqual(['options);']);
+    expect(wrapped).toHaveLength(2);
+    for (const argument of wrapped) expect(argument).toMatch(/^filesystemMiddlewareOptions\(/u);
   });
 });

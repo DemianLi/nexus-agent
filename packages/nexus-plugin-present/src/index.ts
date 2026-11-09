@@ -72,9 +72,9 @@
  *    的 `report.md`，工作區外本來就指不到。相對路徑補成以根為起點，同 dsh「相對路徑以工作目錄為準」。
  *    **但那句「指不到」對路由不成立**，見偏離 6。
  * 4. **拒絕是回錯誤訊息，不是拋。** 同 `@nexus/plugin-todo` 的第 3 條（[#271](https://github.com/DemianLi/nexus-agent/issues/271)）：
- *    模型手上的字與 dsh 一致，`Error: ` 前綴由 `toolRefusal` 加。
+ *    模型手上的字與 dsh 一致，`Error: ` 前綴由宿主加。
  * 5. **沒有 `turn` 與輸出 schema。** 事件不帶 `turn`，理由見 `@nexus/core` 的 `SessionEventMap`；工具
- *    回一句字串（LangChain 的 `tool()` 形狀），就是 dsh `render` 出來給模型看的那幾行。
+ *    回一句字串，就是 dsh `render` 出來給模型看的那幾行。
  * 6. **不在工作區磁碟上的路由一律拒**（[#951](https://github.com/DemianLi/nexus-agent/issues/951)）。
  *    **哪一條**：dsh 只要 Session 檔案系統讀得到就收。它的讀端（`packages/client/ui-deliverables/src/present-open.ts`，
  *    SHA `5badb15`）拿工作區根加交付記的路徑，經 `workspaceFiles.stat` 與 `fs.resolve` 在同一個 `ctx.fs` 上
@@ -98,8 +98,8 @@
  *
  * ## 這個檔不 import `@nexus/core`（#1469）
  *
- * 遷上樹之後套 SDK lint：會話日誌與位址的型別取自 `@nexus/session`、工具結果的寫法與呼叫設定的讀法取自 `@nexus/tool-result`、
- * 路徑換算取自 `@nexus/fs`，三個都是 core 的單向轉出。`deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`
+ * 這個檔套 SDK lint：會話日誌與位址的型別取自 `@nexus/session`、路徑換算取自 `@nexus/fs`，兩個都是 core 的單向轉出。
+ * 呼叫的身分在 `execute` 的第二個參數 `ToolExec` 上（`@nexus/tools` 契約 `2.0.0`）。`deliverables/presented` 的事件擴充放在 core 的 `session-log.ts`
  * （前例 `todo/write`），**偏離 dsh**：dsh 把型別和事件擴充都放在插件自己的 `src/types.ts`，我們的宿主（wire、web 的事件讀端、
  * `conversation-history`）要不經插件就讀到這份型別。`present-invariant` 那一列（`src/invariant.ts`）仍在相容層，eslint 只排除那一個檔（#1463 Q3 (a)）。
  *
@@ -109,22 +109,20 @@
 
 import { posix } from 'node:path';
 
-import { tool } from '@langchain/core/tools';
-import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { Context } from '@nexus/cordis';
 import { fsToken, isUnderAnyPrefix, virtualPathOf } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
 import type { PresentedFile, SessionAddress, SessionLog, SessionLookup } from '@nexus/session';
-import {
-  callThreadId,
-  toolCallIdOf,
-  toolCallSessionAddress,
-  toolRefusal,
-} from '@nexus/tool-result';
 import { toolsToken } from '@nexus/tools';
-import type { ToolResultListener } from '@nexus/tools';
+import type {
+  JsonSchema,
+  NexusTool,
+  NexusToolResult,
+  ToolExec,
+  ToolResultListener,
+} from '@nexus/tools';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -288,18 +286,37 @@ function pendingKey(
  */
 export interface PresentLookups {
   /** 這次呼叫寫進哪一份日誌（會話查找，#1463）。 */
-  readonly sessions: (invocation: unknown) => SessionLookup;
+  readonly sessions: (exec: ToolExec) => SessionLookup;
   /** 這次呼叫該讀哪一條 thread 的 fs 把手（fs 查找，#1466）。 */
-  readonly fs: (invocation: unknown) => FsLookup;
+  readonly fs: (exec: ToolExec) => FsLookup;
 }
 
 /** {@link createPresentDelivery} 的回傳：工具，與等 `tools/result` 的那一位觀察者。 */
 export interface PresentDelivery {
   /** `present` 工具。 */
-  readonly tool: StructuredToolInterface;
+  readonly tool: NexusTool;
   /** `tools/result` 觀察者：取出等著的那一筆，結果不是錯誤才往呼叫者那一份日誌寫 `deliverables/presented`。 */
   readonly onResult: ToolResultListener;
 }
+
+const presentToolSchema = z.object({
+  files: z
+    .array(
+      z
+        .object({
+          path: z
+            .string()
+            .describe(
+              'Path of an existing regular file. Relative paths use the Session working directory.',
+            ),
+          description: z.string().optional().describe('Brief description for the user.'),
+        })
+        // `.strict()`：落庫的要等於模型以為它寫的。
+        .strict(),
+    )
+    // 4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
+    .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
+});
 
 /**
  * 造 `present` 的工具與它的 `tools/result` 觀察者。**兩者共用同一張等結果的表**（閉包裡，每次呼叫一張，不在模組層級）。
@@ -323,22 +340,24 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
     string,
     { readonly log: WeakRef<SessionLog>; readonly files: PresentedFile[] }
   >();
-  const presentTool = tool(
-    async (
-      { files: requested }: { files: { path: string; description?: string }[] },
-      config?: unknown,
-    ) => {
-      const callId = toolCallIdOf(config);
-      const refuse = (message: string, error?: { name: string; code: string }) =>
-        toolRefusal(message, {
-          callId: callId ?? '',
-          name: PRESENT_TOOL_NAME,
-          ...(error !== undefined && { error }),
-        });
+  const presentTool: NexusTool = {
+    name: PRESENT_TOOL_NAME,
+    description: PRESENT_TOOL_DESCRIPTION,
+    parameters: z.toJSONSchema(presentToolSchema, { io: 'input' }) as JsonSchema,
+    execute: async (args, exec): Promise<NexusToolResult> => {
+      const { files: requested } = presentToolSchema.parse(args);
+      const refuse = (
+        message: string,
+        error?: { name: string; code: string },
+      ): NexusToolResult => ({
+        ok: false,
+        content: message,
+        ...(error !== undefined && { error }),
+      });
       // 檢查的順序照 dsh 的 `execute`：先要有會話，再看檔數、工作區，最後逐個看路徑。
       // 會話查找回 `ambiguous`／`unknown-caller` 也一律是這一句（Q6，逐字不變）。
-      const found = lookups.sessions(config);
-      if (callId === undefined || found.kind !== 'ok') {
+      const found = lookups.sessions(exec);
+      if (exec.callId === '' || found.kind !== 'ok') {
         return refuse(PRESENT_NO_SESSION_MESSAGE);
       }
       if (requested.length === 0 || requested.length > maxFiles) {
@@ -346,7 +365,7 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
       }
       // **被叫時才讀**：fs 把手的值要等 fold 折完才有。有沒有工作區與不在磁碟上的前綴（組裝點交的加上 plugin 掛的路由）
       // 都從這一格把手讀（#1469 Q2 (a)），不在別處再算。查找失敗與「沒有工作區」同一句。
-      const located = lookups.fs(config);
+      const located = lookups.fs(exec);
       const handle = located.kind === 'ok' ? located.fs : undefined;
       const backend = handle?.backend();
       if (handle === undefined || !handle.hasWorkspace() || backend === undefined) {
@@ -371,35 +390,13 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
       for (const [key, entry] of pending) {
         if (entry.log.deref() === undefined) pending.delete(key);
       }
-      pending.set(pendingKey(callThreadId(config), toolCallSessionAddress(config), callId), {
+      pending.set(pendingKey(exec.threadId, exec.agent, exec.callId), {
         log: new WeakRef(found.log),
         files,
       });
-      return presentedText(files);
+      return { ok: true, content: presentedText(files) };
     },
-    {
-      name: PRESENT_TOOL_NAME,
-      description: PRESENT_TOOL_DESCRIPTION,
-      schema: z.object({
-        files: z
-          .array(
-            z
-              .object({
-                path: z
-                  .string()
-                  .describe(
-                    'Path of an existing regular file. Relative paths use the Session working directory.',
-                  ),
-                description: z.string().optional().describe('Brief description for the user.'),
-              })
-              // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-              .strict(),
-          )
-          // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
-          .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
-      }),
-    },
-  );
+  };
   const onResult: ToolResultListener = (exec, result) => {
     const key = pendingKey(exec.thread, exec.agent, exec.callId);
     const entry = pending.get(key);
@@ -418,11 +415,11 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
 export const name = 'present';
 
 /**
- * 要的服務：`tools`（`^1.3.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
+ * 要的服務：`tools`（`^2.0.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
  * `offWorkspacePrefixes()`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
-  need(toolsToken, '^1.3.0'),
+  need(toolsToken, '^2.0.0'),
   need(sessionLookupToken, '^1.0.0'),
   need(fsToken, '^2.0.0'),
 );
@@ -436,7 +433,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: toolsToken.name, range: '^1.3.0' },
+    { token: toolsToken.name, range: '^2.0.0' },
     { token: sessionLookupToken.name, range: '^1.0.0' },
     { token: fsToken.name, range: '^2.0.0' },
   ],
@@ -465,8 +462,8 @@ export function apply(ctx: Context, config: PresentConfig): void {
   const sessions = service(ctx, sessionLookupToken);
   const fs = service(ctx, fsToken);
   const delivery = createPresentDelivery(config.maxFiles, {
-    sessions: (invocation) => sessions.forCall(invocation),
-    fs: (invocation) => fs.forCall(invocation),
+    sessions: (exec) => sessions.forCall(exec),
+    fs: (exec) => fs.forCall(exec),
   });
   tools.register(delivery.tool);
   tools.onResult(delivery.onResult);

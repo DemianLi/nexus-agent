@@ -15,9 +15,13 @@
 
 import { ContextOverflowError } from '@langchain/core/errors';
 import { MemorySaver } from '@langchain/langgraph';
-import { createMiddleware, MiddlewareError } from 'langchain';
+import { MiddlewareError } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-import { LLM_FAILURE_FALLBACK_MESSAGE, markModelCallFailure } from '@nexus/core';
+import {
+  createHookStepMiddleware,
+  LLM_FAILURE_FALLBACK_MESSAGE,
+  markModelCallFailure,
+} from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { tool } from 'langchain';
 import { describe, expect, it } from 'vitest';
@@ -294,12 +298,12 @@ describe('N0479：UNKNOWN 的失敗，turn/failed 帶整條原因鏈', () => {
  * 不用 `wrapToolCall`：工具那一層的錯會被圍堵收成工具訊息，到不了 `turn/failed`。
  */
 function failingMiddlewarePlugin(failure: () => unknown): PluginEntry {
-  const middleware = createMiddleware({
+  const middleware = createHookStepMiddleware({
     name: 'FailingMiddleware',
     beforeModel: () => {
       throw failure();
     },
-  }) as AgentMiddleware;
+  }) as unknown as AgentMiddleware;
   return {
     plugin: {
       name: 'turn-failure-record-probe',

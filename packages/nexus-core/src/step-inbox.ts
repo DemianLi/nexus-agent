@@ -52,7 +52,7 @@
  */
 
 import type { HumanMessage } from '@langchain/core/messages';
-import { createMiddleware } from 'langchain';
+import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
 import { BACKGROUND_SESSION_CONFIG_KEY, toolCallSessionAddress } from './session-address.js';
@@ -129,15 +129,15 @@ function inboxOf(scope: StepInboxScope, runtime: unknown): StepInbox | undefined
  * @returns 可以放進 middleware 陣列的實例。
  */
 export function createStepInboxMiddleware(scope: StepInboxScope = 'root'): AgentMiddleware {
-  return createMiddleware({
+  return createHookStepMiddleware({
     name: STEP_INBOX_MIDDLEWARE_NAME,
-    beforeModel: async (_state: unknown, runtime: unknown) => {
+    beforeModel: async (_state, runtime) => {
       const messages = (await inboxOf(scope, runtime)?.claim()) ?? [];
       return messages.length > 0 ? { messages: [...messages] } : undefined;
     },
     afterAgent: {
       canJumpTo: ['model'],
-      hook: async (_state: unknown, runtime: unknown) => {
+      step: async (_state, runtime) => {
         const inbox = inboxOf(scope, runtime);
         if (inbox === undefined) return undefined;
         // 不領：留在 `next-step` 的由下一輪開頭領走，同 dsh 按停止帶 `keepInbox`。窗不必在這裡關：pump 看到
@@ -149,5 +149,5 @@ export function createStepInboxMiddleware(scope: StepInboxScope = 'root'): Agent
           : undefined;
       },
     },
-  }) as unknown as AgentMiddleware;
+  });
 }

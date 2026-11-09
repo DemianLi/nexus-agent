@@ -15,7 +15,7 @@
  * ## 三件照抄的事
  *
  * 1. **逐次算，不是組裝期算一次。** `text` 在 dsh 那邊是個函式，每次組 prompt 都跑一次。
- *    我們用 `wrapModelCall`，每一次模型呼叫重算——執行期切換那一刀落地時這裡不必動。
+ *    我們的段也是函式型 `text`（`thread.section`），每一次模型呼叫重算，執行期切了模式，下一次呼叫就是新的那一句。
  * 2. **`read-only` 那一句明著叫模型「不要先拒絕」。** dsh 的原文是
  *    「Do not refuse a required modification from this policy alone: try an available tool
  *    normally and follow any denial and escalation guidance it returns.」少了這句，模型會
@@ -71,30 +71,27 @@
  * scope 的 profile 層。所以退到「不註冊」：淨效果與 dsh 出廠組合相同（沒有圍堵就沒有 `/permission`），但**這不是 dsh 的機制**。`/permission` 由 `@nexus/plugin-permission-presets`
  * （[#437](https://github.com/DemianLi/nexus-agent/issues/437)）註冊，它自己也在沒有圍堵時整顆不掛。
  *
- * ## 為什麼是 `wrapModelCall` 而不是 `beforeModel`
- *
- * 照 `@nexus/plugin-plan-mode` 的先例：`beforeModel` 是圖裡的一個節點，每輪多一格；
- * 而這裡要做的只是把一段話接到 system prompt 後面。**用 `concat` 不用取代**——記憶 plugin
- * 與基座的摘要器都在同一份 prompt 上加東西，取代會把它們吃掉。
- *
  * @module
  */
 
-import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import {
-  REFERENCE_RULE,
-  resolveToolName,
-  SHARED_WORKSPACE_SERVICE,
-  WORKSPACE_CAPABILITY,
-} from '@nexus/core';
-import type { SandboxMode } from '@nexus/core';
-import { createMiddleware } from 'langchain';
+import { CHANNEL_SERVICE } from '@nexus/approval-channel';
+import type { Context } from '@nexus/cordis';
+import { SHARED_WORKSPACE_SERVICE } from '@nexus/fs';
+import { APPROVAL_POLICY_SERVICE } from '@nexus/permission-presets';
+import type { SandboxMode } from '@nexus/permission-presets';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import type { SessionSubject } from '@nexus/session';
+import { SECTION_ORDERS } from '@nexus/system-prompt';
+import { REFERENCE_RULE } from '@nexus/tool-result';
+import { toolsToken } from '@nexus/tools';
+import type { ToolThread, ToolThreadSection } from '@nexus/tools';
+import { z } from 'zod';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
 import type { SandboxModeController } from './sandbox-mode.js';
 
-/** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
-export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
+/** 政策句那一段的名字。 */
+export const SANDBOX_POLICY_SECTION_NAME = 'sandbox:policy';
 
 /**
  * 基座的委派工具。**今天唯一的委派入口**：async 那組掛不上（見 `base-tools.ts`），`thread-pump.ts` 認的也是這個字。
@@ -180,8 +177,8 @@ function policyBody(mode: SandboxMode, contained: boolean): string {
 export const UNCONTAINED_POLICY_MODE: SandboxMode = 'workspace-write';
 
 /**
- * 圍堵政策這個服務的名字。**有圍堵時是硬相依**：{@link FS_CONTAINMENT_SERVICE} 在而它不在，{@link sandboxPolicyPlugin}
- * 載入當場拋。沒有圍堵時不需要它。
+ * 圍堵政策這個服務的名字。**有圍堵時是硬相依**：{@link FS_CONTAINMENT_SERVICE} 在而它不在，{@link mountSandboxPolicy}
+ * 組 thread 時當場拋。沒有圍堵時不需要它。
  */
 export const SANDBOX_POLICY_SERVICE = 'sandboxPolicy';
 
@@ -236,124 +233,158 @@ declare module '@nexus/core' {
 }
 
 /**
- * 把一格模式講成一段話、接到 system prompt 後面的 middleware。
+ * 把一格模式講成一段話：系統提示詞的一段，fold 接在 `plugins.rest` 的區頭（#2414）。每次模型呼叫現算。
  *
- * **用 `concat` 不用取代**，兩條入口（`systemMessage` 在、不在）見 plan-mode 那段註解。
+ * 子代理也接這一段（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `tools/execute` 監聽者包的 ALS 之內，
+ * `controller.source` 先讀快照。
  *
  * @param resolveMode - 每次模型呼叫問一次。
  */
-function policyPromptMiddleware(
+function policySection(
   resolveMode: () => SandboxMode,
   options: { readonly contained: boolean; readonly sharedPrefix?: string },
-) {
+): ToolThreadSection {
   return {
-    name: SANDBOX_POLICY_MIDDLEWARE_NAME,
-    wrapModelCall: (
-      request: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[0],
-      handler: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[1],
-    ) => {
-      // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
-      // `controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆 `sandbox/mode { source: 'delegation' }`。
-      const sentence = sandboxPolicySentence(resolveMode(), options);
-      // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的時候接在它後面，不在的時候由
-      // `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
-      const { systemMessage } = request;
-      return handler(
-        systemMessage === undefined
-          ? { ...request, systemPrompt: sentence }
-          : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
-      );
-    },
+    name: SANDBOX_POLICY_SECTION_NAME,
+    order: SECTION_ORDERS.PLUGIN_POLICY,
+    separator: '\n',
+    text: () => sandboxPolicySentence(resolveMode(), options),
   };
 }
 
+/** 樹上那一列的插件名：橋接列的 `origin.name` 取它。 */
+export const name = 'sandbox-policy';
+
+/** 要宿主的工具接縫 `^2.7.0`：`ToolThread.on`、`join`、`provide` 從 2.7.0 起。 */
+export const inject = injectOf(need(toolsToken, '^2.7.0'));
+
 /**
- * 掌管圍堵模式的 plugin：**把政策講給模型聽；有圍堵時，再把它記進日誌、讓人切得動它、讓模型請得到一次升級**。
+ * 這個插件的設定：沒有，模式由 `--sandbox` 決定。manifest 的 `config` 必須是 `strictObject`（見 `@nexus/core` 的 `plugin.ts` 檔頭）。
+ */
+export const Config = z.strictObject({});
+
+/** 樹上的宣告：不提供服務，只用工具接縫；每條 thread 組的時候才掛（{@link mountSandboxPolicy}）。 */
+export const manifest = defineManifest({
+  id: 'sandbox-policy',
+  version: '0.6.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [{ token: toolsToken.name, range: '^2.7.0' }],
+  config: Config,
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/** {@link mountSandboxPolicy} 讀的宿主服務：`threadSource` 要先宣告，`thread.services.get` 才給。 */
+export const SANDBOX_POLICY_HOST_SERVICES = [
+  SHARED_WORKSPACE_SERVICE,
+  FS_CONTAINMENT_SERVICE,
+  SANDBOX_POLICY_SERVICE,
+  CHANNEL_SERVICE,
+  APPROVAL_POLICY_SERVICE,
+] as const;
+
+/** 有圍堵時要用的三個 `ToolThread` 方法（契約 2.7.0 起才有，型別上是選填）。 */
+function threadMethods(thread: ToolThread): {
+  readonly on: NonNullable<ToolThread['on']>;
+  readonly join: NonNullable<ToolThread['join']>;
+  readonly provide: NonNullable<ToolThread['provide']>;
+} {
+  const { on, join, provide } = thread;
+  if (on === undefined || join === undefined || provide === undefined) {
+    throw new Error(
+      'sandbox-policy 要宿主的 ToolThread 有 on、join、provide（@nexus/tools 2.7.0 起），這個宿主沒有提供',
+    );
+  }
+  return { on: on.bind(thread), join: join.bind(thread), provide: provide.bind(thread) };
+}
+
+/**
+ * 掛在一條 thread 上：**把政策講給模型聽；有圍堵時，再把它記進日誌、讓人切得動它、讓模型請得到一次升級**。
  *
  * **出貨清單上的一列**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)），有沒有圍堵由組裝點交的
- * {@link FS_CONTAINMENT_SERVICE} 決定，分岔的理由與 dsh 的對照見模組註解。**切換入口（`/permission`）不能在沒有 fence 的組裝上出現**：
+ * {@link FS_CONTAINMENT_SERVICE} 決定，分岔的理由見模組註解。**切換入口（`/permission`）不能在沒有 fence 的組裝上出現**：
  * 一個報告「目前的檔案政策」的命令，在整道 fence 不在路徑上的時候讓人以為自己切了什麼東西。
  *
- * **模組層級的一顆常數**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）：
- * 控制器與可寫根走 {@link SANDBOX_POLICY_SERVICE} 注入，所以同一顆可以被好幾次組裝各
- * `apply` 一次——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ * 控制器與可寫根走 {@link SANDBOX_POLICY_SERVICE} 注入、逐條 thread 一份，所以每次掛載才有的狀態一律活在這個函式裡。
+ * {@link SANDBOX_POLICY_SERVICE} 只在有圍堵時是硬相依，所以不寫進宣告，由下面當場擋。
+ *
+ * @param thread - 這條 thread 的組裝。
+ * @throws 有圍堵卻沒有 {@link SANDBOX_POLICY_SERVICE}；有圍堵而宿主的 `ToolThread` 沒有 `on`、`join`、`provide`。
  */
-export const sandboxPolicyPlugin: NexusPlugin = {
-  name: 'sandbox-policy',
-  // **沒有 `requires`**：相依只在有圍堵時成立，由下面的 `use()` 當場擋（`assertRequires` 是無條件的，沒有圍堵的組裝會被它誤殺）。
-  apply(registry) {
-    // 這條 thread 有唯讀共用區時，組裝點交一格共用區前綴（#1775）；沒有就是舊 thread 或 CLI，政策句不多講。
-    // **與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵（可寫根是記憶體），共用區照樣在。
-    const sharedService = registry.services.get(SHARED_WORKSPACE_SERVICE);
-    const sharedPrefix = typeof sharedService === 'string' ? sharedService : undefined;
-    if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
-      // **沒有圍堵：只講那一句**（有共用區就再多一句）。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
-      registry.middleware.use(
-        createMiddleware(
-          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, {
-            contained: false,
-            ...(sharedPrefix !== undefined && { sharedPrefix }),
-          }),
-        ),
-      );
-      return;
-    }
-    // 有圍堵卻沒有控制器：當場拋，訊息指名缺什麼。
-    if (registry.services.get(SANDBOX_POLICY_SERVICE) === undefined) {
-      throw new Error(
-        `sandbox-policy：檔案系統有圍堵（${FS_CONTAINMENT_SERVICE} 服務在），卻沒有 ${SANDBOX_POLICY_SERVICE} 服務` +
-          '——沒有控制器就沒有東西可以回報政策、切換或升級。組裝點要把這兩個服務一起提供。',
-      );
-    }
-    const { controller, reservedReason } = registry.services.use(SANDBOX_POLICY_SERVICE);
-    const resolveMode = controller.source;
-    // **這顆在，工作區就在**：`present` 據它回答「有沒有工作區」（#441），見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
-    registry.capabilities.provide(WORKSPACE_CAPABILITY);
-    // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
-    // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
-    // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
-    // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
-    registry.sessions.join((subject) => {
-      if (subject.address.kind === 'root') return controller.attach(subject);
-      const mode = controller.delegatedMode;
-      if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
-      return undefined;
-    });
-    // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
-    registerSandboxEscalation(registry, controller, {
-      ...(sharedPrefix !== undefined && { sharedPrefix }),
-      ...(reservedReason !== undefined && { reservedReason }),
-    });
-    registry.middleware.use(
-      createMiddleware({
-        ...policyPromptMiddleware(resolveMode, {
-          contained: true,
-          ...(sharedPrefix !== undefined && { sharedPrefix }),
-        }),
-        // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
-        // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
-        // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
-        // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
-        // 父代理那側的事。
-        wrapToolCall: (request, handler) =>
-          resolveToolName(request) === DELEGATION_TOOL_NAME
-            ? controller.delegate(() => handler(request))
-            : handler(request),
+export function mountSandboxPolicy(thread: ToolThread): void {
+  // 這條 thread 有唯讀共用區時，組裝點交一格共用區前綴（#1775）；沒有就是舊 thread 或 CLI，政策句不多講。
+  // **與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵（可寫根是記憶體），共用區照樣在。
+  const sharedService = thread.services.get(SHARED_WORKSPACE_SERVICE);
+  const sharedPrefix = typeof sharedService === 'string' ? sharedService : undefined;
+  if (thread.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
+    // **沒有圍堵：只講那一句**（有共用區就再多一句）。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
+    thread.section(
+      policySection(() => UNCONTAINED_POLICY_MODE, {
+        contained: false,
+        ...(sharedPrefix !== undefined && { sharedPrefix }),
       }),
     );
-  },
-};
-
-export default sandboxPolicyPlugin;
+    return;
+  }
+  // 有圍堵卻沒有控制器：當場拋，訊息指名缺什麼。
+  const policy = thread.services.get(SANDBOX_POLICY_SERVICE) as SandboxPolicyService | undefined;
+  if (policy === undefined) {
+    throw new Error(
+      `sandbox-policy：檔案系統有圍堵（${FS_CONTAINMENT_SERVICE} 服務在），卻沒有 ${SANDBOX_POLICY_SERVICE} 服務` +
+        '——沒有控制器就沒有東西可以回報政策、切換或升級。組裝點要把這兩個服務一起提供。',
+    );
+  }
+  const { on, join, provide } = threadMethods(thread);
+  const { controller, reservedReason } = policy;
+  const resolveMode = controller.source;
+  // **這顆在，工作區就在**：`present` 據它回答「有沒有工作區」（#441），見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
+  provide('workspace');
+  // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
+  // （#326）：root 之後再切，子代理照舊，所以 root 的日誌
+  // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
+  // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
+  join((value) => {
+    const subject = value as SessionSubject;
+    if (subject.address.kind === 'root') return controller.attach(subject);
+    const mode = controller.delegatedMode;
+    if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
+    return undefined;
+  });
+  // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
+  registerSandboxEscalation(thread, controller, {
+    ...(sharedPrefix !== undefined && { sharedPrefix }),
+    ...(reservedReason !== undefined && { reservedReason }),
+  });
+  thread.section(
+    policySection(resolveMode, {
+      contained: true,
+      ...(sharedPrefix !== undefined && { sharedPrefix }),
+    }),
+  );
+  // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫往內交的那一層裡跑，所以包住
+  // `next()`，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**：派發到這位監聽者的那一刻就拍（外層 core 的
+  // 耐久檢查點先排空才往內交到這裡），拍完同步往內交，不先 await；內側再等多久，子代理讀到的都是這一格。
+  // 子代理的工具呼叫也派發 `tools/execute`、經過這裡（#327），
+  // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
+  // 父代理那側的事。
+  on('tools/execute', (exec, next) =>
+    exec.name === DELEGATION_TOOL_NAME ? controller.delegate(() => next()) : next(),
+  );
+}
 
 /**
- * 建一個條目。**薄薄一層**：控制器與可寫根不從這裡進去，由組裝點當服務提供
- * （見 {@link SANDBOX_POLICY_SERVICE}）。
+ * 行程級的那一次：只登記一個逐條 thread 的來源，每條 thread 組的時候才 {@link mountSandboxPolicy}。
  *
- * @returns 可以放進組裝點清單的條目。
+ * @param ctx - 這一列的 context。
+ * @throws 宿主的工具接縫沒有 `threadSource`。
  */
-export function createSandboxPolicyPlugin(): PluginEntry {
-  return { plugin: sandboxPolicyPlugin };
+export function apply(ctx: Context): void {
+  const tools = service(ctx, toolsToken);
+  if (tools.threadSource === undefined) {
+    throw new Error('sandbox-policy 要宿主的 tools.threadSource()，這個宿主沒有提供');
+  }
+  tools.threadSource(mountSandboxPolicy, { services: SANDBOX_POLICY_HOST_SERVICES });
 }
 
 /**

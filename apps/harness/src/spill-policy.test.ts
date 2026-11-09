@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { estimateTextTokens, SessionRegistry } from '@nexus/core';
+import { estimateTextTokens, SessionRegistry, toBaseMessage, toLoggedMessage } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { tool } from 'langchain';
 import { describe, expect, it } from 'vitest';
@@ -224,9 +224,8 @@ describe('超過預算的結果換成預覽，全文照定位讀得回', () => {
     expect(bulk).toBeDefined();
     // 日誌記的與模型收到的逐字相同：續接時從日誌推回模型的就是同一則，路徑一定對得上。
     expect(bulk).toBe(lastToolResult(prompts[1]));
-    expect(toolResultAsSeen(new ToolMessage({ content: bulk!, tool_call_id: 'c' })).text).toBe(
-      bulk,
-    );
+    const asLogged = toLoggedMessage(new ToolMessage({ content: bulk!, tool_call_id: 'c' }));
+    expect(toBaseMessage(toolResultAsSeen(asLogged)).text).toBe(bulk);
     expect(bulk).toContain('Full formatted result stored at');
     expect(bulk).not.toContain(MIDDLE_MARK);
   });

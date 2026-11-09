@@ -16,10 +16,10 @@ import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { createHostServicesPlugin, hasUnansweredInterrupt } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { shippedPlugins } from './fixtures.js';
 import {
   answerElicitation,
@@ -67,7 +67,7 @@ const payload = (requests: Record<string, unknown>) => ({
 });
 
 describe('翻譯：酬載 ⇄ 問答卡', () => {
-  it('認得 adapter 的形狀；缺欄位、模式不認得、空的 requests 都當作不是', () => {
+  it('認得 plugin 的形狀；缺欄位、模式不認得、空的 requests 都當作不是', () => {
     expect(parseMcpElicitation(payload({ profile: FORM }))).toBeDefined();
     expect(parseMcpElicitation(payload({}))).toBeUndefined();
     expect(parseMcpElicitation(payload({ a: { mode: 'weird', message: 'x' } }))).toBeUndefined();
@@ -127,7 +127,7 @@ describe('翻譯：酬載 ⇄ 問答卡', () => {
     expect(sparse.responses['profile']).toEqual({ action: 'accept', content: { name: 'x' } });
   });
 
-  it('不是數字的數字欄位原字串送過去，由 adapter 驗，不在這裡改寫', () => {
+  it('不是數字的數字欄位原字串送過去，由 plugin 驗，不在這裡改寫', () => {
     const elicitation = parseMcpElicitation(payload({ profile: FORM }))!;
     const result = answerElicitation(elicitation, {
       answers: [{ id: 'profile/age', selected: [], custom: 'abc' }],
@@ -207,7 +207,7 @@ async function rig(turns: ScriptedTurn[], channel: 'human' | 'none' = 'human'): 
         ? [createHostServicesPlugin({ channel: { kind: 'human' } }, 'elicit-test-channel')]
         : []),
       ...shipped,
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -216,7 +216,7 @@ async function rig(turns: ScriptedTurn[], channel: 'human' | 'none' = 'human'): 
           command: process.execPath,
           args: ['--import', 'tsx', SERVER],
         },
-      }),
+      })),
     ],
   });
   const warnings: string[] = [];

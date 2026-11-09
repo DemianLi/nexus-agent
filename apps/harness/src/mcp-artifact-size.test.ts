@@ -9,10 +9,11 @@
 import { fileURLToPath } from 'node:url';
 import { createHostServicesPlugin, SessionRegistry } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
+import { MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { mcpRows } from './mcp-rows.fixture.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -52,7 +53,7 @@ async function measure(tool: string, kb: number, pool?: McpConnectionPool): Prom
     checkpointer: new PrunedMemorySaver(),
     plugins: [
       ...(pool === undefined ? [] : [createHostServicesPlugin({ [MCP_POOL_SERVICE]: pool })]),
-      createMcpPlugin({
+      ...(await mcpRows({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
         approval: { default: 'allow' },
@@ -61,7 +62,7 @@ async function measure(tool: string, kb: number, pool?: McpConnectionPool): Prom
           command: process.execPath,
           args: ['--import', 'tsx', SERVER],
         },
-      }),
+      })),
     ],
   });
   let sessions: SessionRegistry | undefined;
@@ -149,7 +150,7 @@ describe('MCP 的 artifact 到會話日誌與瀏覽器各多大（#1320）', () 
     expect(m.history).toBeLessThan(64 * 1024);
   }, 60_000);
 
-  it('圖片 3 MB：adapter 不把它放 artifact，日誌只有說明文字', async () => {
+  it('圖片 3 MB：不放 artifact，日誌只有說明文字', async () => {
     const m = await measure('big_image', 3072);
     expect(m.logResult).toBeLessThan(16 * 1024);
     expect(m.leaked).toBe(false);
@@ -158,7 +159,7 @@ describe('MCP 的 artifact 到會話日誌與瀏覽器各多大（#1320）', () 
 
 describe('走宿主的連線池（#1677 驗收 K）', () => {
   /**
-   * 池建 client 時沿用 plugin 自己連的那一份 adapter 選項（`connection.ts` 的 `clientOptions`），所以非文字塊換說明（#642）與
+   * 池與 plugin 自己連共用 `connection.ts` 的 `attemptsOn` 與 `tool-call.ts` 的 `toolCallOf`，所以非文字塊換說明（#642）與
    * artifact 上限（#1320）兩邊一樣：同一支工具走池與不走池，日誌裡的工具訊息逐位元組相同。
    */
   it.each([

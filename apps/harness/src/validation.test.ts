@@ -23,7 +23,7 @@
 import { tool } from '@langchain/core/tools';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver, interrupt } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
+import { createToolCallStepMiddleware } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -91,12 +91,9 @@ function brokenMiddlewarePlugin(): PluginEntry {
       name: 'broken',
       apply(registry) {
         registry.middleware.use(
-          createMiddleware({
-            name: 'brokenMiddleware',
-            wrapToolCall: async (request, handler) => {
-              await handler(request);
-              throw new TypeError('這個 middleware 自己有 bug');
-            },
+          createToolCallStepMiddleware('brokenMiddleware', async (_call, next) => {
+            await next();
+            throw new TypeError('這個 middleware 自己有 bug');
           }) as never,
         );
       },

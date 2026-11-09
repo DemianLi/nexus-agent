@@ -45,7 +45,6 @@ import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
@@ -66,6 +65,13 @@ import {
   toolErrorOf,
 } from '@nexus/core';
 import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 const shipped = await shippedPlugins();
 
@@ -206,7 +212,7 @@ describe('升級', () => {
               }),
         }),
         ...(options.permissive === true ? [permissiveGate()] : []),
-        ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
+        ...(options.plugin === false ? [] : [sandboxPolicyRow]),
       ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {
@@ -550,6 +556,42 @@ describe('升級', () => {
         expect(retried).not.toContain('[containment]');
         expect(await exists(join(root, 'b.txt'))).toBe(false);
         expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('copy_file（#2289）：唯讀下被擋、接升級指引；核准後換來源對不上，原樣重試才過得去', async () => {
+      await writeFile(join(root, 'a.txt'), '一');
+      await writeFile(join(root, 'c.txt'), '別的');
+      const copy = (from: string): ScriptedTurn => ({
+        content: '',
+        toolCalls: [{ name: 'copy_file', args: { source_path: from, destination_path: '/b.txt' } }],
+      });
+      const { agent, dispose } = await assembleProduct('read-only', [
+        copy('/a.txt'),
+        escalate({
+          file_path: '/b.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這份副本',
+        }),
+        copy('/c.txt'),
+        copy('/a.txt'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'copy-file' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('複製 a.txt。'), config);
+        const [denied] = toolTexts(paused);
+        expect(denied).toContain('[containment] 拒絕 copy');
+        expect(denied).toContain(SANDBOX_ESCALATION_HINT);
+        expect(pendingCard(paused)?.name).toBe(SANDBOX_ESCALATION_TOOL_NAME);
+
+        const [, granted, changed, exact] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(granted).toContain('核准了');
+        expect(changed).toContain(GRANT_MISMATCH_NOTE);
+        expect(exact).toMatch(/^Copied \/a\.txt to \/b\.txt /u);
+        expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('一');
       } finally {
         await dispose();
       }

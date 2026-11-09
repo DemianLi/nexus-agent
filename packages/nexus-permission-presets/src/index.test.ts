@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 
+import * as core from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import {
   APPROVAL_POLICIES,
+  APPROVAL_POLICY_SERVICE,
   PERMISSION_COMMAND_NAME,
   PERMISSION_PRESETS_CONTRACT_VERSION,
   PERMISSION_PRESETS_PLUGIN_NAME,
@@ -30,6 +32,7 @@ describe('@nexus/permission-presets 的定義', () => {
   it('轉出的詞彙就是 core 的那一份', () => {
     expect([...SANDBOX_MODES]).toEqual(['read-only', 'workspace-write', 'danger-full-access']);
     expect([...APPROVAL_POLICIES]).toEqual(['ask', 'never']);
+    expect(APPROVAL_POLICY_SERVICE).toBe(core.APPROVAL_POLICY_SERVICE);
   });
 });
 

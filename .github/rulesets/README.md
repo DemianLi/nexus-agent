@@ -23,4 +23,4 @@ GitHub 會自行為 ruleset 增加新的參數欄位。實測（2026-08）線上
 | 允許的合併方式 | 僅 squash | 僅 merge commit |
 | strict（分支需與 base 同步） | 是 | 否 |
 
-`main` 刻意不開 strict 的原因見 [AGENTS.md](../../AGENTS.md) 的分支策略段。
+`main` 刻意不開 strict：`develop → main` 的 merge commit 只存在於 `main`，開了 strict 會讓第二次發版的 PR 永遠處於 out-of-date 而無法合併。`main` 也不啟用 linear history：`develop → main` 用 merge commit 保留可追溯性。

@@ -41,8 +41,8 @@ import { lstat, readdir } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
+import { MIDDLE_SECTION_ORDERS } from '@nexus/core';
 import type { FileReferenceCandidate } from '@nexus/wire';
-import { createMiddleware } from 'langchain';
 
 /** 一次查詢最多回幾筆。同 dsh 的 `DEFAULT_FILE_SEARCH_MAX_RESULTS`。 */
 export const FILE_SEARCH_MAX_RESULTS = 20;
@@ -471,31 +471,23 @@ export const FILE_REFERENCE_PROMPT =
   '結尾是 `/` 的是資料夾，內容要緊時先用 ls 列出它；其他的是檔案，需要內容時用 read_file 讀，讀之前不要說你看過了。' +
   '`@"…"` 是含空白的路徑。';
 
-/** 這個 middleware 的名字。 */
-export const FILE_REFERENCE_MIDDLEWARE_NAME = 'nexusFileReference';
+/** 這一段的名字。 */
+export const FILE_REFERENCE_SECTION_NAME = 'file-reference';
 
 /**
- * 把 {@link FILE_REFERENCE_PROMPT} 接到每一次模型呼叫的 system prompt 後面。
+ * 把 {@link FILE_REFERENCE_PROMPT} 登記成系統提示詞的一段，fold 接在 `plugins.rest` 區頭那一格（#2414）。
  *
- * **只在有工作區的組裝上掛**，條件跟 `createSandboxPolicyPlugin()` 同一個，理由見模組註解的偏離 2。接法照抄
- * sandbox-policy：`wrapModelCall`、`concat` 不取代，`systemMessage` 在就接在它後面，不在就由 `systemPrompt` 承接。
+ * **只在有工作區的組裝上掛**，條件跟組裝點交 `fsContainment` 服務的那一格同一個（有工作區根），理由見模組註解的偏離 2。
  */
 export const fileReferencePlugin: NexusPlugin = {
   name: 'file-reference',
   apply(registry) {
-    registry.middleware.use(
-      createMiddleware({
-        name: FILE_REFERENCE_MIDDLEWARE_NAME,
-        wrapModelCall: (request, handler) => {
-          const { systemMessage } = request;
-          return handler(
-            systemMessage === undefined
-              ? { ...request, systemPrompt: FILE_REFERENCE_PROMPT }
-              : { ...request, systemMessage: systemMessage.concat(`\n${FILE_REFERENCE_PROMPT}`) },
-          );
-        },
-      }),
-    );
+    registry.prompt.section({
+      name: FILE_REFERENCE_SECTION_NAME,
+      order: MIDDLE_SECTION_ORDERS.PLUGIN_POLICY,
+      separator: '\n',
+      text: FILE_REFERENCE_PROMPT,
+    });
   },
 };
 

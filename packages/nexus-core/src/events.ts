@@ -10,7 +10,7 @@
  * - **`emit`**：同步呼叫每位監聽者，不等它們回傳的 promise；回傳值丟掉。同步拋錯會中斷後面的監聽者並往外拋。
  * - **`serial`**：依序 `await`，遇到「bail 值」（不是 `null`、`false`、`undefined`）就停並回傳它。
  * - **`waterfall`**：派發的**最後一個參數是最內層的 `next`**（內建行為）；監聽者由外而內執行，每位拿到的 `next()`
- *   會呼叫下一位，最後才是最內層。**沒呼叫 `next()` 就是否決**——連內建行為一起略過。這個語意與 `approvals`
+ *   **同步**呼叫下一位（中間不 `await`），最後才是最內層。**沒呼叫 `next()` 就是否決**——連內建行為一起略過。這個語意與 `approvals`
  *   註冊點（`approval.ts` 的 pre-execute 鏈）同形。
  *
  * 其餘兩種（`bail`、`parallel`）與 `internal/*` 框架事件**不做**：dsh 的 81 個宣告事件裡 `bail` 只有框架內部用，
@@ -30,8 +30,8 @@
  *
  * - **沒有 `Scoped<Agent>` 過濾**。dsh 靠它讓註冊在某個 agent 底下的監聽者只收到那個 agent 的事件；我們是一個 thread 一個
  *   registry、一個 agent，thread 之間天然隔離。子代理的事件怎麼帶身分（草稿 D4）留給有生產者的 S1。
- * - **`waterfall` 的 `next()` 只能呼叫一次**，同 dsh：`next` 是共用的一支，呼叫兩次會再往下推進一位。這是 dsh 的行為，
- *   S0 照抄；需要「重試」語意的事件（草稿的 `agent/request-error`）在宣告時回 `{ kind: 'retry' }` 而不是重呼叫 `next()`。
+ * - **`waterfall` 的 `next()` 只能呼叫一次**：每位監聽者拿到自己的一支，呼叫第二次就拋，不會往下多推一位。需要「重試」語意的
+ *   事件（`agent/request-error`）在宣告時回 `{ kind: 'retry' }`，而不是重呼叫 `next()`。
  *
  * ## 事件表
  *
@@ -138,10 +138,11 @@ export interface EventDispatcher {
    */
   serial<K extends EventName>(name: K, ...args: Args<K>): Awaitable<Result<K>>;
   /**
-   * waterfall 派發：**最後一個參數是最內層的 `next`**。
+   * waterfall 派發：**最後一個參數是最內層的 `next`**。每位監聽者拿到自己的一支 `next`，只能呼叫一次。
    * @param name - 事件名。
    * @param args - 給每位監聽者的參數，最後一個是最內層的 `next`。
    * @returns 最外層監聽者的回傳值。
+   * @throws 某位監聽者呼叫第二次 `next()` 時，在那一次呼叫裡拋；async 監聽者因此回 rejected promise。
    */
   waterfall<K extends EventName>(name: K, ...args: Args<K>): Result<K>;
   /**
@@ -274,12 +275,18 @@ export class EventBus implements EventSubscriber, EventDispatcher {
     const callbacks = this.#snapshot(name);
     const rest = [...(args as unknown[])];
     const inner = rest.pop() as (...inner: never[]) => unknown;
-    const next = (): unknown => {
-      const callback = callbacks.shift() ?? inner;
-      return callback(...(rest as never[]));
+    const dispatch = (at: number): unknown => {
+      const callback = callbacks[at];
+      if (callback === undefined) return inner(...(rest as never[]));
+      let called = false;
+      const next = (): unknown => {
+        if (called) throw new Error(`${String(name)} 的監聽者呼叫了第二次 next()`);
+        called = true;
+        return dispatch(at + 1);
+      };
+      return callback(...([...rest, next] as never[]));
     };
-    rest.push(next);
-    return next() as Result<K>;
+    return dispatch(0) as Result<K>;
   }
 
   count(name: string): number {

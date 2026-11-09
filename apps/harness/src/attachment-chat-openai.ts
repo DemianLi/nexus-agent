@@ -18,9 +18,11 @@
  *
  * ## 圖片額度的檢查也在這裡（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）
  *
- * 照 dsh：**adapter 只量、不決定**。請求轉換之前先問 `guard`，留著的圖超過這顆模型的額度時它拋 `IMAGE_OFFLOAD_REQUIRED`（帶還要省略幾張），
+ * **adapter 只量、不決定**。請求轉換之前先量 `imageBudget`，留著的圖超過這顆模型的額度時拋 `IMAGE_OFFLOAD_REQUIRED`（帶還要省略幾張），
  * 這時**還沒讀附件位元組、沒有任何東西送出去**。接住、下決定、再送一次是上層的事（`@nexus/core` 的 `createImageOffloadRecoveryMiddleware`）。
  * 檢查放在投影前面：量的是參照上的 `bytes`，不必為了一個注定要被丟掉的請求讀檔。
+ *
+ * 額度也掛在 `IMAGE_BUDGET_PROPERTY` 上：上層（`createImageOffloadMiddleware`）在記 `model/start` 之前讀它先量、先下決定；只有上層量不到的（adapter 沒掛額度、或上層挑不到可省略的）才會在這裡超額。
  *
  * @module
  */
@@ -28,6 +30,9 @@
 import type { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
+
+import { assertImageBudget, IMAGE_BUDGET_PROPERTY } from '@nexus/core';
+import type { ImageBudget } from '@nexus/core';
 
 import { GatedChatOpenAI } from './gated-chat-openai.js';
 import type { RequestGate } from './request-gate.js';
@@ -37,27 +42,29 @@ export type MessageProjector = (
   messages: readonly BaseMessage[],
 ) => Promise<readonly BaseMessage[]>;
 
-/** 請求轉換之前的額度檢查：超額就拋，不超額什麼都不做。 */
-export type RequestGuard = (messages: readonly BaseMessage[]) => void;
-
 export class AttachmentChatOpenAI extends GatedChatOpenAI {
   readonly #project: MessageProjector;
-  readonly #guard: RequestGuard | undefined;
+  readonly #imageBudget: ImageBudget | undefined;
 
   constructor(
     fields: ChatOpenAIFields,
     project: MessageProjector,
-    guard?: RequestGuard,
+    imageBudget?: ImageBudget,
     gate?: RequestGate,
   ) {
     super(fields, gate);
     this.#project = project;
-    this.#guard = guard;
+    this.#imageBudget = imageBudget;
+  }
+
+  /** 這顆模型的圖片額度，給上層先量（`@nexus/core` 的 `imageBudgetOf`）。 */
+  get [IMAGE_BUDGET_PROPERTY](): ImageBudget | undefined {
+    return this.#imageBudget;
   }
 
   /** 先量額度（超額就拋，不碰附件）；排在取全機名額之前，見 `gated-chat-openai.ts`。 */
   protected override precheck(messages: readonly BaseMessage[]): void {
-    this.#guard?.(messages);
+    if (this.#imageBudget !== undefined) assertImageBudget(messages, this.#imageBudget);
   }
 
   /** 取到名額之後才投影，排隊的那段時間不抱著剛讀進來的位元組。 */
@@ -71,7 +78,7 @@ export class AttachmentChatOpenAI extends GatedChatOpenAI {
     const next = new AttachmentChatOpenAI(
       this.fields ?? {},
       this.#project,
-      this.#guard,
+      this.#imageBudget,
       this.requestGate,
     );
     next.defaultOptions = { ...this.defaultOptions, ...config };

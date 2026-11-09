@@ -1,0 +1,65 @@
+---
+kind: upgrade-guide
+description: 工具事件契約 `2.9.0`：視圖多 `shape`、`command` 視圖帶內容、`tools/execute` 能只換 `Command` 裡那一則；插件監聽者看到的時刻有兩處改變。
+---
+
+# 工具事件契約 `2.9.0`：`shape`、`command` 的內容與兩處時刻改變
+
+## 變更
+
+`@nexus/tools` 的契約版本（`TOOLS_CONTRACT_VERSION`）從 `2.8.0` 跳到 `2.9.0`（#2575）。`@nexus/tools` 自己的型別不變；改的是 `@nexus/core` 的工具事件契約（`tools/execute`、`tools/post-execute`、`tools/result`），經 `registry.events.on` 登記的監聽者看得到。
+
+**新增的欄位**（向後相容）：
+
+- **`shape: 'text' | 'blocks'`**：生產者交給監聽者的結果視圖（`PipelineResultView`）多這一格，標出工具本體那則的 `content` 原本是字串還是陣列。`tools/post-execute` 的 `replace` 給 `content` 落成字串、給 `blocks` 落成陣列，要照原本的形狀交回就看它。
+  監聽者自己造來交回的結果（`PipelineResult`、`PipelineMessageInput`）不必帶，只帶舊欄位的照樣編得過。
+- **`command` 視圖帶內容**：工具回 `Command` 時，`Command` 裡有這次呼叫的那則訊息（`tool_call_id` 等於 `callId`），視圖就帶它的 `blocks`、`content`、`shape`；沒有就三格都不帶。
+- **`tools/execute` 能交回改過內容的 `command` 結果**（`PipelineCommandInput`）：只換 `Command` 裡這次呼叫的那則，`update` 的其餘鍵與 `graph`、`goto` 原樣。那則在原位換，同一個 `callId` 的其餘幾則丟掉，`update.messages` 裡沒有就加在最後。
+  - 內容給 `content` 或 `blocks` 其中一個，同 `PipelineMessageInput`。
+  - 本體回的 `Command` 的 `update` 不是物件（例如 tuple 陣列），或本體回的不是 `Command`：放不進那則，整個換成用交回內容新造的一則 `ToolMessage`。
+  - 照舊拋 `TypeError`：本體沒跑（自己沒叫 `next()`，或叫了而被內側短路）；或不帶內容、又不是工具本體回的那一個。
+  - 舊行為：交回的 `command` 結果不是 `next()` 回的那一個，一律拋 `TypeError`。
+- **`fresh: true`**：`tools/execute` 交回的結果（`message`，或帶內容的 `command`）帶它，換上的那則就是新造的，只帶 `tool_call_id`、`name`、`status` 與錯誤碼，不沿用本體那則的 `artifact`、`id`、`additional_kwargs`。不帶的照舊沿用。
+
+**插件監聽者看到的兩處時刻改變**（行為改變）：
+
+輸出校驗、子代理撞到輸出上限的 `task` 替換、共用區的讀檔前綴，原本是三顆各自的 middleware，現在是工具事件上的 core 監聽者。出廠組裝（沒有插件監聽者改 `tools/execute` 或 `tools/post-execute` 的結果）下，模型收到的內容、會話日誌、工具清單都跟以前一樣。
+
+- **`tools/execute`**：輸出校驗改排在插件監聽者內側；撞限替換原本就在內側，時刻不變。
+  - 舊行為：插件監聽者的 `next()` 交回的是還沒驗輸出的那一份，校驗在插件監聽者外面才發生，插件監聽者交回的結果也會被驗。
+  - 新行為：`next()` 交回的就是驗過的那一份；插件監聽者自己交回的結果不再經輸出校驗。輸出不合 schema 時，`next()` 交回的已是那則錯誤（`isError: true`，碼是 `INVALID_TOOL_OUTPUT`）。
+  - 換過的那一份是完整的結果：`blocks` 是 `content` 那一格 `text`，`shape` 是 `text`。這個 `blocks` 由 `content` 導出，生產者認的是參照：
+    - 原樣交回，或只換 `content`（`{ ...result, content }`）：模型收到字串。
+    - 給新的 `blocks`，連複製一份（`[...result.blocks]`）也算：模型收到陣列。要保持字串就別複製，改 `content`。
+  - 先讀後改的拒絕（在工具本體跑之前短路交回的那則）同樣是這種完整的結果，認參照的規則相同；以前它只帶 `content`。
+  - 例外：檔案工具失敗時補上 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的提示，這兩處只改 `content`，`blocks` 仍是工具本體原本那一份，兩者的文字對不上。原樣交回或只換 `content` 時，模型收到 `content`；給新的 `blocks`（連複製一份也算），模型收到那份；從 `result.blocks` 改出來的不含前綴與提示。要讀這兩種結果的文字，讀 `content`。
+  - `ToolThread.on('tools/execute', …)` 登記的監聽者拿到的是不透明的 `ToolExecuteOutcome`，讀不到內容，只有時刻變了。
+- **`tools/post-execute`**：共用區的讀檔前綴排在匯流排上的插件監聽者內側。
+  - 舊行為：插件監聽者收到的 `result` 已經加過前綴。
+  - 新行為：`result` 是加前綴之前的那份。監聽者原樣交回 `next()` 的決定時，模型收到的仍是加過前綴的；要加前綴的 `read_file`、`grep`（`content` 模式）成功結果（共用區路由上、非空、不在技能來源底下），這時 `next()` 交回的是 `replace`，不是 `accept`。
+  - 監聽者自己回 `accept` 或 `replace` 時，前綴不會再加：以前自己回 `accept` 時模型收到帶前綴的，從 `result` 改出來的 `replace` 也帶；現在都不帶。
+  - 例外：`content` 模式的 `grep` 超過搜尋上限、完整清單有共用區命中時，外側的搜尋上限層照樣在監聽者的決定上加前綴。
+- **`tools/result`、`onResult` 看到的仍是模型最後收到的那一則**。結果是 `Command` 時多了內容：
+  - 舊行為：`blocks`、`content` 一律沒有。
+  - 新行為：`Command` 裡有這次呼叫的那則，就帶它的 `blocks`、`content`（`tools/result` 的視圖另帶 `shape`）；沒有就照舊沒有。
+
+**受影響的是：**
+
+- 經 `registry.events.on('tools/post-execute', …)` 登記、讀 `read_file` 或 `grep` 結果內容的插件。出廠的插件都沒有掛 `tools/post-execute`。
+- 經 `registry.events.on('tools/execute', …)` 登記、讀 `next()` 交回內容、或改寫交回內容的插件，在宣告了輸出 schema 的工具上。出廠的兩位（`@nexus/plugin-sandbox-policy`、`@nexus/plugin-workspace-changes`）都只原樣交回 `next()` 的結果。
+- 讀 `onResult` 的 `blocks`、`content`，而且靠「沒有內容」判斷結果是 `Command` 的插件。出廠的 `@nexus/plugin-present` 只讀 `isError`。
+- 想用新欄位的插件。
+
+`@nexus/core` 拿掉四個匯出：`createOutputSchemaMiddleware`、`createSharedReadMarkMiddleware`，以及它們的名字常數 `OUTPUT_SCHEMA_MIDDLEWARE_NAME`、`SHARED_READ_MARK_MIDDLEWARE_NAME`；換成 `createOutputSchemaListener`、`createSharedReadMarkListener`。`createMaxTokensMiddleware` 還在，只剩模型那一半，工具那一半是 `createMaxTokensListener`。這幾個由 `fold.ts` 組裝，插件不經它們。
+
+## 遷移
+
+1. 掛 `tools/post-execute`、讀 `read_file` 或 `grep` 的 `result.content`、`result.blocks` 的監聽者：前綴已不在 `result` 裡。
+   - 要看模型最後收到的內容，改掛 `tools/result`（或 `onResult`）。
+   - 自己回 `accept` 或 `replace`、又要模型看到前綴的：原樣交回 `next()` 的決定，或自己把前綴接回去。
+2. 掛 `tools/execute`、讀 `next()` 交回內容的監聽者：在宣告了輸出 schema 的工具上，不合的輸出已經換成錯誤。
+   要看本體原本回的輸出，這個時刻已經看不到。自己改寫交回內容的，改出來的不再經輸出校驗，要合 schema 得自己保證。
+3. 要讀 `shape`、`command` 視圖的內容，或交回 `PipelineCommandInput`、`fresh` 的插件：把 `inject` 裡 `tools` 的範圍改成 `'^2.9.0'`，`manifest.consumes` 裡 `token: 'tools'` 那一格的 `range` 改成同一個值。
+   不用的插件不必動。
+4. 確認改好了：跑一次在共用區對一個非技能來源、非空的檔叫 `read_file` 的對話，日誌上那顆 `tool/result` 的內容應符合你的監聽者的決定（原樣交回 `next()` 的決定，就以共用區前綴開頭；自己回 `accept`，或回 `replace` 而沒有自己接回前綴，則不帶）：
+   `jq -c 'select(.type == "tool/result") | .data.message.data.content' <會話日誌>`。

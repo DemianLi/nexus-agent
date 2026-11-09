@@ -104,7 +104,7 @@ describe('窗口取自 `next()`：使用者最後選的 → 最近一次請求�
     expect(host.nextContextWindow()).toBe(WINDOW);
   });
 
-  it('沒選過、只有最近一次請求走過別顆（續接的會話）：走的那顆，不是部署預設——不能照 `imageSupport()` 寫成 `selected ?? defaultRoute`', () => {
+  it('沒選過、只有最近一次請求走過別顆（續接的會話）：走的那顆，不是部署預設——不能寫成 `selected ?? defaultRoute`', () => {
     const { host, log } = hostWith('small');
     log.append('model/start', { route: { model: 'big' } });
     expect(host.nextContextWindow()).toBe(WINDOW);

@@ -25,11 +25,15 @@ import {
   SESSION_FORMAT_CATALOG,
   SESSION_FORMAT_EDGES,
   SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
   SessionFormatUnsupportedError,
   createSessionFormatCatalog,
+  generationLogFilename,
+  parseGenerationLogFilename,
   currentMessageFeedback,
   interruptedTurnClosers,
   isSubagentSessionHeader,
+  pageContextOfBlock,
   recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
@@ -39,6 +43,10 @@ import {
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
+import { imageOffloadCalls } from './image-offload-calls.fixture.js';
+import type { ImageOffloadCall } from './image-offload-calls.fixture.js';
+import { attemptCalls, requestSnapshotCalls } from './request-snapshot-calls.fixture.js';
+import type { AttemptCall, RequestSnapshotCall } from './request-snapshot-calls.fixture.js';
 import { ratingsByTurn } from './eval/session-scan.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import {
@@ -84,6 +92,7 @@ interface Expected {
     readonly replay?: Omit<Replay, 'computedBy'>;
     readonly closers?: readonly unknown[];
     readonly lifecyclesAfterResume?: readonly unknown[];
+    readonly typesAfterResume?: readonly string[];
     readonly workspaceRootRecorded?: boolean;
     readonly resumeWithWorkspace?: string;
     readonly summaries?: readonly { readonly beforeCall: boolean }[];
@@ -91,9 +100,14 @@ interface Expected {
     readonly approvalPolicyRecorded?: boolean;
     readonly approvalPolicyOnResume?: string;
     readonly browserTimeZone?: unknown;
+    readonly imageOffloadCalls?: readonly ImageOffloadCall[];
     readonly parentSession?: string;
     readonly originRecorded?: boolean;
     readonly subagent?: boolean;
+    readonly profile?: string;
+    readonly pageContexts?: readonly (string | null)[];
+    readonly snapshotCalls?: readonly RequestSnapshotCall[];
+    readonly attemptCalls?: readonly AttemptCall[];
   }[];
 }
 
@@ -126,6 +140,20 @@ function replaySummary(events: readonly SessionEvent[]): Omit<Replay, 'computedB
   return replay.kind === 'replayed'
     ? { kind: 'replayed', roles: replay.messages.map((message) => message.getType()) }
     : { kind: 'unreplayable', reason: replay.reason };
+}
+
+/** 推回的對話歷史裡，每一則人話附的畫面情境（`label`）；沒附的是 `null`。 */
+function humanPageContexts(events: readonly SessionEvent[]): (string | null)[] {
+  const replay = replayConversation(events);
+  if (replay.kind !== 'replayed') throw new Error(`推不回對話歷史：${replay.reason}`);
+  return replay.messages
+    .filter((message) => message.getType() === 'human')
+    .map((message) =>
+      Array.isArray(message.content)
+        ? (message.content.map(pageContextOfBlock).find((context) => context !== undefined)
+            ?.label ?? null)
+        : null,
+    );
 }
 
 function closerSummary(events: readonly SessionEvent[]): unknown[] {
@@ -190,10 +218,22 @@ describe('格式 52 的日誌沒有停止原因（#1847）', () => {
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
   const ids = Object.keys(expected.sessions).sort();
-  const twoFileIds = ids.filter((id) =>
-    existsSync(legacyTwoFilePathsIn(join(FIXTURES, name), id).log),
-  );
-  const generationIds = ids.filter((id) => !twoFileIds.includes(id));
+  /** 夾具裡這條會話最新的世代檔版號；只有舊兩檔是 `undefined`。 */
+  const generationOf = (id: string): number | undefined => {
+    const { sessionDirectory } = sessionPathsIn(join(FIXTURES, name), id);
+    const versions = existsSync(sessionDirectory)
+      ? readdirSync(sessionDirectory)
+          .map(parseGenerationLogFilename)
+          .filter((version) => version !== undefined)
+      : [];
+    return versions.length === 0 ? undefined : Math.max(...versions);
+  };
+  const twoFileIds = ids.filter((id) => generationOf(id) === undefined);
+  const generationIds = ids.filter((id) => generationOf(id) === SESSION_LOG_FORMAT_VERSION);
+  const olderGenerationIds = ids.filter((id) => {
+    const version = generationOf(id);
+    return version !== undefined && version < SESSION_LOG_FORMAT_VERSION;
+  });
 
   it('list 列得出每一條，沒有讀不懂的', async () => {
     const listing = await openJsonlSessionStore({ directory: await copied(name) }).list();
@@ -300,6 +340,54 @@ describe.each(names)('夾具 %s', (name) => {
     },
   );
 
+  it.each(olderGenerationIds)(
+    '續接 %s 之後再寫一筆、收掉：舊世代遷成這一版的世代檔，本文原樣開頭；舊世代、舊路徑一個位元組都沒動',
+    async (id) => {
+      const directory = await copied(name);
+      const { sessionDirectory } = sessionPathsIn(directory, id);
+      const older = join(sessionDirectory, generationLogFilename(generationOf(id)!));
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(older);
+      const legacyHeader = existsSync(legacy.header) ? await readFile(legacy.header) : undefined;
+      const legacyLog = existsSync(legacy.log) ? await readFile(legacy.log) : undefined;
+      const store = openJsonlSessionStore({ directory });
+      const resumed = await resumeClosingInterruptedTurn(store, id);
+      expect(resumed.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+      expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
+      const next: SessionEvent = {
+        type: 'turn/start',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { kind: 'message', text: '夾具續寫' },
+      };
+      await resumed.stored.append([next]);
+      await resumed.stored.close();
+
+      expect(await readFile(older)).toEqual(source);
+      if (legacyHeader !== undefined) expect(await readFile(legacy.header)).toEqual(legacyHeader);
+      if (legacyLog !== undefined) expect(await readFile(legacy.log)).toEqual(legacyLog);
+      const generation = await readFile(sessionPathsIn(directory, id).log);
+      const newline = generation.indexOf(0x0a);
+      const header = JSON.parse(generation.toString('utf8', 0, newline)) as Record<string, unknown>;
+      // 世代對世代不記遷移來源（只有從舊兩檔遷的才記），其餘各格照舊、只換版號。
+      const sourceNewline = source.indexOf(0x0a);
+      const { migratedFrom: _, ...sourceHeader } = JSON.parse(
+        source.toString('utf8', 0, sourceNewline),
+      ) as Record<string, unknown>;
+      expect(header).toEqual({ ...sourceHeader, version: SESSION_LOG_FORMAT_VERSION });
+      const body = source.subarray(sourceNewline + 1);
+      expect(generation.subarray(newline + 1, newline + 1 + body.byteLength).equals(body)).toBe(
+        true,
+      );
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
+        recovery: 'strict',
+      });
+      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+      expect(events).toHaveLength(resumed.events.length + 1);
+    },
+  );
+
   for (const trigger of expected.triggers) {
     it(`格式 ${String(trigger.edge)} 的讀方分支（${trigger.session}）照 expected.json`, async () => {
       const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(
@@ -354,6 +442,14 @@ describe.each(names)('夾具 %s', (name) => {
         await resumed.stored.close();
         expect(lifecycles(resumed.events)).toEqual(trigger.lifecyclesAfterResume);
       }
+      if (trigger.typesAfterResume !== undefined) {
+        // 今天的續接在舊寫入器留下的 end-seed 後面補結（輪已由新一輪收掉的不補），再唯讀打開一次：讀盤的關係驗證要讀得過（#1597）。
+        const store = openJsonlSessionStore({ directory: await copied(name, `${name}-reread`) });
+        const resumed = await resumeClosingInterruptedTurn(store, trigger.session);
+        await resumed.stored.close();
+        const reread = await (await store.open(trigger.session, 'read')).read();
+        expect(reread.map((event) => event.type)).toEqual(trigger.typesAfterResume);
+      }
       if (trigger.summaries !== undefined) {
         expect(
           events.flatMap((event) =>
@@ -377,11 +473,60 @@ describe.each(names)('夾具 %s', (name) => {
         expect(opened.header.origin !== undefined).toBe(trigger.originRecorded);
         expect(isSubagentSessionHeader(opened.header)).toBe(trigger.subagent);
       }
+      if (trigger.pageContexts !== undefined) {
+        expect(opened.header.profile).toBe(trigger.profile);
+        expect(humanPageContexts(events)).toEqual(trigger.pageContexts);
+      }
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
       }
+      // 打得開就是讀盤的關係驗證（55 起的快照與嘗試位置規則）讀得過；歸屬再逐筆比。
+      if (trigger.snapshotCalls !== undefined) {
+        expect(requestSnapshotCalls(events)).toEqual(trigger.snapshotCalls);
+      }
+      if (trigger.attemptCalls !== undefined) {
+        expect(attemptCalls(events)).toEqual(trigger.attemptCalls);
+      }
+      if (trigger.imageOffloadCalls !== undefined) {
+        const calls = imageOffloadCalls(events);
+        expect(calls).toEqual(trigger.imageOffloadCalls);
+        // 決定記在 `model/start` 之後的那次（#2354；帶這一欄的觸發只產出這一種位置）：只有那一次推導與送出不同，下一次起每次都一樣。
+        const starts = events.filter((event) => event.type === 'model/start');
+        const offload = events.find((event) => event.type === 'image/offload')!;
+        const late = starts.filter((start) => start.seq < offload.seq).length - 1;
+        expect(late).toBeGreaterThanOrEqual(0);
+        expect(
+          calls.map((call) => JSON.stringify(call.derived) !== JSON.stringify(call.sent)),
+        ).toEqual(calls.map((_, index) => index === late));
+      }
     });
   }
+});
+
+describe('輪已收的 end-seed 之後，配舊呼叫的 tool/result 拒開（#1597）', () => {
+  // 停在核准點的那一輪收了、呼叫沒配到；跨重啟再也配不到（`session-relationships.ts` 的 end-seed）。這條只讓檢查更嚴，
+  // 拿掉它任何合法日誌都不會紅，所以用 v0.5.19 寫的前段接一顆不該有的結果守。
+  it('paused-resumed 接一顆 callId 對到 end-seed 前那顆呼叫的 tool/result：唯讀打開拒成 SessionCorruptionError', async () => {
+    const store = openJsonlSessionStore({ directory: await copied('v14-carried-turn') });
+    const resumed = await store.resume('paused-resumed');
+    await resumed.stored.append([
+      {
+        type: 'tool/result',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { callId: 'paused-resumed-call', isError: false },
+      },
+    ]);
+    await resumed.stored.close();
+
+    const opened = await store.open('paused-resumed', 'read');
+    const caught: unknown = await opened.read().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(SessionCorruptionError);
+    expect((caught as Error).message).toContain('tool-result-without-call');
+  });
 });
 
 describe('對不到回覆的舊評分（#1850）：評分清單不回，離線掃描照算', () => {
@@ -457,11 +602,13 @@ describe('規則（驗收 D）', () => {
       [9, 'if (logged === undefined) {'],
       [10, "if ('messageId' in stored) {"],
       [13, 'if (header.workspaceRoot === undefined) return;'],
+      [29, 'if (open) {'],
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
       [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
       [52, "if (site.layout === 'two-file') {"],
+      [55, "if (field(event, 'modelCall') !== undefined) {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);

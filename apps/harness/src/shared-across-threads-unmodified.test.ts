@@ -9,7 +9,7 @@
  *
  * ## 為什麼選 sandbox-policy
  *
- * 它是 C 類（在 `apply` 當下就把逐條 thread 的值抓死）：`apply` 讀 `sandboxPolicy` 服務的控制器，把它的 `source` 閉包進 middleware，
+ * 它是 C 類（在 `apply` 當下就把逐條 thread 的值抓死）：`apply` 讀 `sandboxPolicy` 服務的控制器，把它的 `source` 閉包進政策句那一段的 `text`，
  * 之後每次模型呼叫都問那一顆控制器。今天每條 thread 各組裝一次，沒事；一份服務兩條 thread 時，宿主只能交一顆控制器，**第二條 thread
  * 的提示詞會講著第一條的檔案政策**。這是結構上必然會紅的一顆，不靠哪個測試造的時序。
  *
@@ -21,13 +21,14 @@
  * （`permission-presets` 同屬 C 類）接著釘。翻掉的那天看到這條紅，是遷移成功的訊號，不是壞了。
  */
 
-import { loadPlugins } from '@nexus/core';
+import { createRegistry, loadPlugins } from '@nexus/core';
 import * as systemPromptModule from '@nexus/plugin-system-prompt';
 import {
   CONTAINED_FILESYSTEM,
-  createSandboxPolicyPlugin,
+  SANDBOX_POLICY_SECTION_NAME,
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
+import { toLangChainTool } from '@nexus/tool-adapter';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import type { SystemPromptAssembly } from '@nexus/system-prompt';
@@ -35,6 +36,14 @@ import { describe, expect, it } from 'vitest';
 
 import { mountDetached } from './plugin-tree.js';
 import { createSystemPromptMiddleware } from './system-prompt-middleware.js';
+import { shippedPlugins } from './fixtures.js';
+
+/** 出貨清單上的 sandbox-policy 那一列：橋接列要經 `loadPluginConfig` 綁定才組得起來（沒綁的外殼一組裝就拋）。 */
+const shippedSandboxPolicy = (await shippedPlugins()).find(
+  (entry) => entry.id === 'sandbox-policy',
+);
+if (shippedSandboxPolicy === undefined) throw new Error('出貨清單上沒有 sandbox-policy 那一列');
+const sandboxPolicyRow = shippedSandboxPolicy;
 
 /** 兩條 thread 各自的工作目錄：提示詞裡 `{{cwd}}` 該代入的值。 */
 const CWD_OF: Readonly<Record<string, string>> = { a: '/work/alpha', b: '/work/beta' };
@@ -65,38 +74,46 @@ async function systemPromptOf(wrap: Wrap): Promise<{ systemPrompt: unknown }> {
   return { systemPrompt: seen?.['systemPrompt'] };
 }
 
+/** 政策句那一段：每次模型呼叫現算的文字（#2414）。 */
+type PolicyText = () => string;
+
 /** 掛一份 sandbox-policy，控制器由宿主交進來——**一份掛載只能交一顆**，這正是共用時的處境。 */
-async function mountSandboxPolicy(mode: 'read-only' | 'workspace-write'): Promise<Wrap> {
-  const { registry } = await loadPlugins([
-    {
-      plugin: {
-        name: 'sandbox-host',
-        apply(host) {
-          host.services.provide('fsContainment', CONTAINED_FILESYSTEM);
-          host.services.provide('sandboxPolicy', {
-            controller: new SandboxModeController(mode),
-            rootDir: '/tmp/unused',
-          });
+async function mountSandboxPolicy(mode: 'read-only' | 'workspace-write'): Promise<PolicyText> {
+  const { registry } = await loadPlugins(
+    [
+      {
+        plugin: {
+          name: 'sandbox-host',
+          apply(host) {
+            host.services.provide('fsContainment', CONTAINED_FILESYSTEM);
+            host.services.provide('sandboxPolicy', {
+              controller: new SandboxModeController(mode),
+              rootDir: '/tmp/unused',
+            });
+          },
         },
       },
-    },
-    createSandboxPolicyPlugin(),
-  ]);
-  const entry = registry.middleware
-    .list()
-    .find((item) => (item.value.middleware as { name?: string }).name === 'nexusSandboxPolicy');
-  if (entry === undefined) throw new Error('sandbox-policy 沒有掛上 middleware');
-  return (entry.value.middleware as unknown as { wrapModelCall: Wrap }).wrapModelCall;
+      sandboxPolicyRow,
+    ],
+    createRegistry({ adaptTool: toLangChainTool }),
+  );
+  const section = registry.prompt
+    .sections()
+    .find((each) => each.name === SANDBOX_POLICY_SECTION_NAME);
+  if (section === undefined) throw new Error('sandbox-policy 沒有登記政策句那一段');
+  const { text } = section;
+  return () =>
+    typeof text === 'function' ? text({ agent: undefined, call: {}, tools: [] }) : text;
 }
 
 describe('沒改過的 C 類插件在這一格會紅（#1418 驗收 E）', () => {
   it('sandbox-policy：共用一份時第二條 thread 的提示詞講著第一條的檔案政策，訊息指名第幾步與哪條 thread', async () => {
-    const failures = await checkSharedAcrossThreads<Wrap, string>({
+    const failures = await checkSharedAcrossThreads<PolicyText, string>({
       name: 'sandbox-policy',
       steps: STEPS,
       // 各自一份：綁一條就拿那一條的政策。共用一份：宿主只能交一顆控制器，只好是第一條的。
       mount: (threads) => mountSandboxPolicy(MODE_OF[(threads[0] ?? 'a') as 'a' | 'b']),
-      call: (wrap) => systemPromptOf(wrap),
+      call: (policy) => Promise.resolve({ systemPrompt: policy() }),
     });
 
     // 紅，而且紅的是 b（a 剛好跟共用的那顆控制器同值）；兩次 b 的步驟（第 2、4 步）都要指名。

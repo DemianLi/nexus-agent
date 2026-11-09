@@ -243,8 +243,10 @@ describe('仍在用舊版插件的 thread', () => {
     await a.close();
 
     const tail = await types('old-busy');
-    // 沒有 `turn/end`：這一輪是被關機切斷的。前面完整的那一輪不受影響。
-    expect(tail.at(-1)).toBe('model/start');
+    // 沒有 `turn/end`：這一輪是被關機切斷的。前面完整的那一輪不受影響。插件在交給模型之前就卡住，格式 55 起
+    // `model/start` 要等到真的送出才寫，所以最後一輪只有開頭，沒有起點。
+    expect(tail.lastIndexOf('turn/start')).toBeGreaterThan(tail.lastIndexOf('turn/end'));
+    expect(tail.slice(tail.lastIndexOf('turn/start'))).not.toContain('model/start');
     expect(tail.filter((type) => type === 'turn/end')).toHaveLength(1);
     // 另一條已經跑完的沒被牽連。
     expect((await types('old-idle')).at(-1)).toBe('turn/end');

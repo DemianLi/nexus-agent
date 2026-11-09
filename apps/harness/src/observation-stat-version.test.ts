@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import {
-  createObservationPolicy,
+  createObservationListener,
+  createToolExecuteMiddleware,
   ModifiedOrderCompositeBackend,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
@@ -22,6 +23,11 @@ import { FilesystemBackend } from 'deepagents';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
+
+/** 正式組裝裡策略住的位置：`tools/execute` 的內層。 */
+function createObservationPolicy(backend: AnyBackendProtocol): unknown {
+  return createToolExecuteMiddleware(undefined, { inner: [createObservationListener(backend)] });
+}
 
 type Wrapper = (
   request: unknown,

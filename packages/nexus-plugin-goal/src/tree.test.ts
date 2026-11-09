@@ -17,6 +17,7 @@ import type { GoalServices } from '@nexus/goal';
 import { checkConformance, checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import { langChainToolOf } from '@nexus/tool-adapter';
 import { createToolsProvider } from '@nexus/tools/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -70,7 +71,7 @@ async function mountFor(threads: readonly string[], config: unknown = {}): Promi
     tool: (name) => {
       const entry = tools.entries().find((item) => item.tool.name === name);
       if (entry === undefined) throw new Error(`工具 ${name} 沒有註冊上去`);
-      return entry.tool;
+      return langChainToolOf(entry.tool);
     },
     command: (thread, input) => {
       const entry = commands.entries().find((item) => item.definition.name === GOAL_COMMAND_NAME);
@@ -116,7 +117,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
   it('manifest：提供 goals（1.1.0），消費 tools／commands／sessionLookup；沒有 default 匯出', () => {
     expect(goal.manifest.provides).toEqual([{ token: 'goals', version: '1.1.0' }]);
     expect(goal.manifest.consumes).toEqual([
-      { token: 'tools', range: '^1.1.0' },
+      { token: 'tools', range: '^2.1.0' },
       { token: 'commands', range: '^1.1.0' },
       { token: 'sessionLookup', range: '^1.0.0' },
     ]);
