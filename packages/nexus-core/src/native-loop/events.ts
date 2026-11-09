@@ -60,7 +60,7 @@ declare module '../events.js' {
      */
     'agent/turn-stopping'(payload: AgentStepPayload): Promise<void> | void;
     /**
-     * 環繞每一次 root 的模型呼叫（`wrapModelCall` 那一串的最內層，綁好工具之後）。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
+     * 環繞每一次模型呼叫（`wrapModelCall` 那一串的最內層，綁好工具之後），root 與子代理（前景、背景）的都派。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
      * 而回自己的訊息即短路。
      * @param payload - thread、步數、中止訊號。
      * @param next - 打模型。
