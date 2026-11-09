@@ -474,8 +474,11 @@ export function approvalGateToolStep(
         return {
           done: denial(
             exec,
-            `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
-              `這不是有人拒絕了它——是沒有人被問到。`,
+            // 答覆之後再判（帶著 `asked`）時人其實問過了，話照實際發生的講。
+            asked === undefined
+              ? `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
+                  `這不是有人拒絕了它——是沒有人被問到。`
+              : `${because}，人答了之後，這個 session 的核准政策已切到不問（never），所以沒有執行。`,
             approvalDenied(APPROVAL_POLICY_NEVER),
           ),
         };

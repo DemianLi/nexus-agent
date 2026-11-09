@@ -255,7 +255,11 @@ describe.each(LOOPS)('%s：答了核准之後再判一次', (loop) => {
       ),
     );
     expect(ran).toEqual([]);
-    expect(results['r1']).toContain('核准政策是不問（never）');
+    expect(results['r1']).toContain(
+      loop === 'native'
+        ? '人答了之後，這個 session 的核准政策已切到不問（never），所以沒有執行。'
+        : '核准政策是不問（never）',
+    );
     expect(JSON.stringify(done)).toContain('root 收完');
   });
 });
