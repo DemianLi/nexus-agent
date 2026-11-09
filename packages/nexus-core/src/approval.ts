@@ -230,7 +230,7 @@ export type ApprovalChannel =
   | { readonly kind: 'human' }
   /** 政策：這個 session 關掉了核准（`approvals.enabled === false`），每次 ask 確定性地拒絕。 */
   | { readonly kind: 'policy-never' }
-  /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問。 */
+  /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問；或這一層沒人可問（native 的 `NO_HUMAN_INPUT`）。 */
   | { readonly kind: 'no-channel' };
 
 /**
@@ -308,7 +308,7 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
  * 圍堵（`containment.ts` 的 `createContainmentMiddleware`）：它接住這裡拋的錯、翻成錯誤 ToolMessage 並記 `tool/result`。
  * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *
- * **人那條路不在這裡寫**：閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
+ * **人那條路不在這裡寫**：`langgraph` 下閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
  * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。
  */
 function auditDecision(
@@ -354,11 +354,11 @@ function auditDecision(
  * `5badb15`，log-only 審計）：
  *
  * - **人那條路由 pump 寫**（`apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
- *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：閘門在圖內，
+ *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：`langgraph` 下閘門在圖內，
  *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
  *   asked 才配得上 `tool/call`。
  * - **不必問人就確定的由這裡寫**（{@link auditDecision}）：政策關掉 → `rejected`，沒有管道 → `unavailable`，
- *   子代理的閘門管道固定 `policy-never`（#324）所以走前者，寫進子代理自己的日誌。
+ *   背景子代理的閘門管道固定 `policy-never`（#324）走前者、native 前景子代理那一層走後者，寫進子代理自己的日誌。
  * - **listener 直接回 `deny` 不寫**：沒有問任何人，dsh 也不寫（只有 `ask` 才進核准服務）。
  *
  * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
@@ -378,7 +378,7 @@ function auditDecision(
  * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
  * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前問一次**。
  *   `never` 時確定性回絕、不發中斷；省略即 `ask`（手搭的測試組裝）。只在管道是 `human` 時才讀：管道非人
- *   （入口沒有人在、沒有 checkpointer）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
+ *   （入口沒有人在、沒有 checkpointer，或這顆呼叫上是 `NO_HUMAN_INPUT`）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
@@ -395,7 +395,8 @@ export function createApprovalGateMiddleware(
 
 /**
  * 核准閘門的一步：跑 listener，要人核准就問，放行才往內交。參數與行為見 {@link createApprovalGateMiddleware}。
- * 要問人時經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡。
+ * 要問人時讀得到等人服務就 await 它；讀不到經 `interrupt()` **拋例外**往外傳，呼叫方不能把這一步包在 try/catch 裡；
+ * 呼叫上是 `NO_HUMAN_INPUT` 時不問、走沒有管道那一格。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
@@ -435,7 +436,10 @@ export function approvalGateToolStep(
       );
     }
     // native 在讀不到等人服務的呼叫上放「這裡沒人可問」（`human-input.ts`）：組裝的管道是 human，這一顆照樣是沒有管道那一格。
-    if (channel.kind === 'no-channel' || humanInputUnavailable({ configurable: call.configurable })) {
+    if (
+      channel.kind === 'no-channel' ||
+      humanInputUnavailable({ configurable: call.configurable })
+    ) {
       auditDecision(sessions, call, exec, because, 'unavailable');
       return denial(
         exec,
@@ -459,7 +463,7 @@ export function approvalGateToolStep(
     }
 
     // 讀得到等人服務（native）就 await 它；讀不到用 `interrupt()`，它用拋例外傳播，**不能包在 try/catch 裡**
-    // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+    // （`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
     const raw = rawArgumentsOf(ownerRequestOf(call), sessions);
     const human = humanInputOf({ configurable: call.configurable });
     const ask = (value: unknown): Promise<unknown> =>

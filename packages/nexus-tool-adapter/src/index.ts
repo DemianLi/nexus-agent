@@ -108,7 +108,7 @@ export function toolExecOf(
         }),
       );
     },
-    // LangGraph 的 `interrupt` 用拋例外傳播，呼叫端不能包在 try/catch 裡（`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
+    // LangGraph 的 `interrupt` 用拋例外傳播，呼叫端不能吞掉，要 catch 就原樣重拋（`@langchain/langgraph@1.4.19`，`dist/pregel/runnable_types.d.ts:56-58`）。
     interrupt: (payload: JsonValue) => {
       if (humanInputUnavailable(config)) return Promise.reject(new HumanInputUnavailable());
       const service = humanInputOf(config);

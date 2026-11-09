@@ -281,7 +281,7 @@ async function answerFor(
   try {
     resumed = await exec.interrupt(question as unknown as JsonValue);
   } catch (error) {
-    // 這裡沒有人可以回答（native 的子代理那一層）：每一題都回絕，server 收到的跟有人在、由系統代答回絕的那條一樣（#1098）。
+    // 這裡沒有人可以回答（native 下帶 thread 的 `streamEvents` 之外，或前景子代理那一層）：每一題都回絕，server 收到的跟有人在、由系統代答回絕的那條一樣（#1098）。
     if (isHumanInputUnavailable(error)) {
       return Object.fromEntries(
         Object.keys(question.requests).map((key) => [key, { action: 'decline' }]),

@@ -3,8 +3,8 @@
  * {@link HumanInput.ask}，答覆就是它的回傳值。
  *
  * 由 agent loop 放在節點 config 的 `configurable` 上（{@link HUMAN_INPUT_CONFIG_KEY}），用 {@link humanInputOf} 讀。native loop 在每顆呼叫上都放：
- * `streamEvents`、帶 thread 的 run 放服務（`native-loop/agent.ts` 的 `#toolStep`，服務本身在 `native-loop/suspension.ts`），其餘放
- * {@link NO_HUMAN_INPUT}；`langgraph` 一律不放，用 LangGraph 的 `interrupt()`。
+ * 帶 thread 的 `streamEvents` 那一次 run 的 root 層放服務（`native-loop/agent.ts` 的 `#toolStep`，服務本身在 `native-loop/suspension.ts`）；
+ * root 其餘的 run 由 `#toolStep` 放、前景子代理由 `agent-assembly.ts` 的 `withoutHumanInput` 換上 {@link NO_HUMAN_INPUT}；`langgraph` 一律不放，用 LangGraph 的 `interrupt()`。
  *
  * **停在等待點**的定義：同一批起跑了的呼叫裡，沒有一顆在自己往前跑（都在 {@link HumanInput.ask}，或在 {@link HumanInput.idle} 等），
  * 而且至少一顆在問人。那一刻這一段串流交出 `updates` 的 `__interrupt__` 就收尾，run 留在記憶體裡等答覆，對外的樣子同
@@ -56,7 +56,7 @@ export interface HumanInput {
 /**
  * 讀節點 config 上的等人服務。
  * @param config - 節點或工具拿到的 config。
- * @returns 服務；這個 loop 沒放就是 `undefined`。
+ * @returns 服務；沒放、或放的是 {@link NO_HUMAN_INPUT}，都是 `undefined`，要分辨兩者用 {@link humanInputUnavailable}。
  */
 export function humanInputOf(config: unknown): HumanInput | undefined {
   const configurable = (config as { configurable?: Record<string, unknown> } | null | undefined)
@@ -66,7 +66,8 @@ export function humanInputOf(config: unknown): HumanInput | undefined {
 }
 
 /**
- * 「這裡沒人可問」：native loop 讀不到等人服務的呼叫在 {@link HUMAN_INPUT_CONFIG_KEY} 上放這個（沒帶 thread 的 run、子代理那一層），
+ * 「這裡沒人可問」：native loop 讀不到等人服務的呼叫在 {@link HUMAN_INPUT_CONFIG_KEY} 上放這個（帶 thread 的 `streamEvents` 之外的 run、
+ * 前景子代理那一層，後者由 `agent-assembly.ts` 的 `withoutHumanInput` 換上），
  * `langgraph` 一律不放。讀到它的生產者不退回 LangGraph 的 `interrupt()`：閘門走沒有核准管道那一格，工具的 `exec.interrupt` 以
  * `@nexus/tools` 的 `HumanInputUnavailable` 拒絕。
  */

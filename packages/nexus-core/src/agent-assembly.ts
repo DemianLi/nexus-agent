@@ -234,8 +234,8 @@ function filesystemMiddleware(
 
 /**
  * 基座的子代理那一顆：`wrapModelCall` 先套 core 的 {@link taskToolOverride}（模型看到的 `task` 換成 core 逐字造的那一份）再交給
- * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`，經 {@link withoutHumanInput} 拿掉
- * 交給子代理的等人服務）與洋蔥裡的位置照基座。
+ * 基座原本的那一支，並登記這一步（{@link withToolListStep}）；名字、工具（執行仍是基座的 `task`，經 {@link withoutHumanInput} 把
+ * 交給子代理的等人服務換成 `NO_HUMAN_INPUT`）與洋蔥裡的位置照基座。
  *
  * 不收 `taskDescription`、`generalPurposeAgent` 固定 `false`：覆寫的定義只照子代理清單造，這兩格會讓基座的 `task` 跟它不一樣。
  *

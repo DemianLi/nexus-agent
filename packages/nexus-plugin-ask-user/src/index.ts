@@ -231,7 +231,8 @@ export function createAskUserTool(
       if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
       if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
 
-      // `exec.interrupt` 用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋；恢復時本體重跑，上面幾格只讀不寫。
+      // `exec.interrupt` 在 `langgraph` 下用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋；`langgraph` 恢復時
+      // 本體重跑，上面幾格只讀不寫。
       const payload: QuestionInterruptPayload = {
         kind: QUESTION_INTERRUPT_KIND,
         questions: questions.map((question) => ({
@@ -246,9 +247,11 @@ export function createAskUserTool(
       };
       let answer: AskUserAnswer | undefined;
       try {
-        answer = (await exec.interrupt(payload as unknown as JsonValue)) as AskUserAnswer | undefined;
+        answer = (await exec.interrupt(payload as unknown as JsonValue)) as
+          AskUserAnswer | undefined;
       } catch (error) {
-        if (isHumanInputUnavailable(error)) return failed(noAnswererMessage({ kind: 'no-channel' }));
+        if (isHumanInputUnavailable(error))
+          return failed(noAnswererMessage({ kind: 'no-channel' }));
         throw error;
       }
 

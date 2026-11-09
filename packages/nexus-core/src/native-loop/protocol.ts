@@ -1,7 +1,7 @@
 /**
  * native loop 吐給 pump 的 v3 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：形狀同 `@langchain/langgraph`
  * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（`lifecycle`、`messages`、`tools`、root 的 `custom`）；
- * 停下來問人時的 `updates` 的 `__interrupt__` 不經這裡，由 `agent.ts` 在等待點直接交出。
+ * 停下來問人時的 `updates` 的 `__interrupt__` 不由 callback 產，由 `agent.ts` 在等待點經 {@link ProtocolEmitter.emit} 交出。
  * TODO(#2363)：拿掉 LangChain 時換成自己的線上協定。
  *
  * 模型的逐片事件由 `@langchain/core` 產：callback handler 宣告 `lc_prefer_chat_model_stream_events`，`BaseChatModel` 就算是 `invoke`

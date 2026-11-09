@@ -33,7 +33,7 @@ export const KNOWN_DIFFERENCE_KINDS = {
     reason:
       'native 的子代理那一層沒人可問：子代理的呼叫上放的是 `NO_HUMAN_INPUT`，閘門、ask-user、MCP 照沒有管道回絕，' +
       '前景子代理的委派聲明照沒有管道選句（`packages/nexus-core/src/fold.ts`）。照跑要失敗的（fails）斷言了子代理冒出來的中斷，' +
-      '或有人在時的那一句；照跑會過的（passes）沒斷言到，差在子代理系統訊息裡的那一句委派聲明。',
+      '或有人在時的那一句，或政策 never 的碼（子代理那一層先撞上沒有管道那一格）；照跑會過的（passes）沒斷言到，差在子代理系統訊息裡的那一句委派聲明。',
   },
   rawInterrupt: {
     card: 2608,
@@ -80,8 +80,8 @@ export interface KnownDifference {
   readonly test: string;
   readonly kind: KnownDifferenceKind;
   /**
-   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，兩個 loop 送給模型的系統訊息不同，
-   * 斷言沒碰到。
+   * `fails`：照跑、要失敗才算過；`skip`：不跑（會懸到逾時的那幾條）；`passes`：照跑、要過，兩個 loop 送給模型的系統訊息或跨 agent 的
+   * 工具呼叫先後不同，斷言沒碰到。
    */
   readonly run: 'fails' | 'skip' | 'passes';
 }

@@ -1,7 +1,7 @@
 /**
  * CLI headless（`HEADLESS_APPROVALS`、`runTurn`）那條路上，每顆工具呼叫的 config 放的是什麼（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：
- * native 放「這裡沒人可問」（`NO_HUMAN_INPUT`），不放等人服務；`langgraph` 兩樣都不放。入口的答題管道不看 loop
- * （`entryApprovalChannel`），沒人可問是靠這顆標記判的，所以這裡釘住它真的在。
+ * native 放「這裡沒人可問」（`NO_HUMAN_INPUT`），不放等人服務；`langgraph` 兩樣都不放。管道是 `policy-never`，閘門與讀管道的
+ * 生產者在那一格就回絕；不看管道、直接 `exec.interrupt` 的生產者（MCP 反問）靠這顆標記，所以這裡釘住它真的在。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */

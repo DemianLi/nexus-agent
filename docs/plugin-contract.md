@@ -262,8 +262,8 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     - 代價：外側監聽者複製一份 `blocks` 就會把字串變成陣列；要保持字串就別複製，改 `content`。
     - 例外：檔案工具失敗時補 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的提示，這兩處只改 `content`，`blocks` 仍是工具本體那一份，兩者的文字對不上（#2584 追蹤）；要讀這兩種結果的文字，讀 `content`。
 - **工具接縫 2.10.0：`exec.interrupt` 多一種寫明的拒絕**（`@nexus/tools`，#2358）。
-  - **新增的匯出**（向後相容）：`HumanInputUnavailable`（錯誤類別，`name` 是 `'HumanInputUnavailable'`）與 `isHumanInputUnavailable(error)`（看 `name` 認，不靠 `instanceof`，跨套件副本也認得）。
-  - **什麼時候丟**：`--agent-loop native` 下這裡沒有人可以回答時——沒帶 thread 的 run（`invoke`、`stream`），或前景子代理那一層——`exec.interrupt` 以 `HumanInputUnavailable` 拒絕，不問人。
+  - **新增的匯出**（向後相容）：`HumanInputUnavailable`（錯誤類別，`name` 是 `'HumanInputUnavailable'`）與 `isHumanInputUnavailable(error)`（看 `name` 認，不靠 `instanceof HumanInputUnavailable`，跨套件副本也認得）。
+  - **什麼時候丟**：`--agent-loop native` 下這裡沒有人可以回答時——`invoke`／`stream`（帶不帶 thread 都是）、沒帶 thread 的 `streamEvents`，或前景子代理那一層——`exec.interrupt` 以 `HumanInputUnavailable` 拒絕，不問人。
     預設的 `langgraph` 不會這樣拒絕，照舊停下來問、接回時從頭重跑本體；`native` 下帶 thread 的 `streamEvents` 在行程內等答覆，本體不重跑。
   - **怎麼接**：可以接住、改走這顆工具自己「沒人可問」的那條路（樹上的 ask-user、plan-mode、沙箱升級與 MCP 的反問都這樣做），其餘的錯原樣往外拋；不接住就跟本體拋錯一樣，這顆呼叫以錯誤結果收尾。
   - 次版號：既有消費者的範圍不用改；舊宿主不會丟它，所以只為了接住它也不必把範圍升到 `^2.10.0`。

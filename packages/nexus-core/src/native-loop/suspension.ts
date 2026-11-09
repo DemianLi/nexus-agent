@@ -18,7 +18,12 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { HumanInputWithdrawn, WAIT_CLOCK, type HumanInput, type WaitClock } from '../human-input.js';
+import {
+  HumanInputWithdrawn,
+  WAIT_CLOCK,
+  type HumanInput,
+  type WaitClock,
+} from '../human-input.js';
 
 /** 一顆還沒答的提問。 */
 export interface PendingAsk {
@@ -107,7 +112,7 @@ export class RunSuspension {
     const resumed = (): void => {
       for (const listener of [...listeners]) listener();
     };
-    // 同一顆呼叫問好幾次（例：MCP 一輪一輪反問）沿用第一次的 id，同 LangGraph 一顆 task 裡的每一個 `interrupt()` 都是同一個 id。
+    // 同一顆呼叫問好幾次（例：MCP 一輪一輪反問），前一次答完才沿用第一次的 id，同 LangGraph 一顆 task 裡的每一個 `interrupt()` 都是同一個 id。
     let askId: string | undefined;
     // 等人的時間（含等完排隊取回名額），給 {@link WaitClock}。
     let waits = 0;

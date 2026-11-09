@@ -367,7 +367,7 @@ function createEscalationTool(
       // 舊 thread 的保留清單（#2078）：也判在加寬之前，fence 不論模式都不讓寫，見模組註解。
       const reserved = await reservedReason?.(target);
       if (reserved !== undefined) return refuse(reservedTargetRefusal(reserved));
-      // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
+      // `langgraph` resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次（native 在行程內等、不再判）：人看卡片的那段時間裡，
       // `/permission` 可能已經換過格子。
       const current = controller.current;
       if (!canEscalate(current, requested)) {
@@ -387,7 +387,7 @@ function createEscalationTool(
                 : undefined;
       if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
 
-      // `exec.interrupt` 用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋。
+      // `exec.interrupt` 在 `langgraph` 下用拋例外傳播，只接住「這裡沒有人可以回答」（#2358），其餘原樣往外拋。
       const asked = exec.interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [

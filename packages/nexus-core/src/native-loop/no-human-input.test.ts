@@ -68,7 +68,7 @@ async function assemble(
       void tools(r);
       r.approvals.gate(askForDanger);
       void r.events.on('tools/result', (exec, result) => {
-        results[exec.callId] = result.content;
+        results[exec.callId] = result.content ?? '';
       });
     }),
   ]);
@@ -108,7 +108,7 @@ describe.each(LOOPS)('%s：每顆呼叫的 config 上放什麼', (loop) => {
     const seen: Seen[] = [];
     const agent = await assemble(
       loop,
-      (r) => r.tools.register(reader(seen)),
+      (r) => void r.tools.register(reader(seen)),
       fakeModel()
         .respondWithTools([
           { name: 'reader', args: { at: 'root' }, id: 'r1' },
@@ -137,16 +137,14 @@ describe.each(LOOPS)('%s：每顆呼叫的 config 上放什麼', (loop) => {
     const seen: Seen[] = [];
     const agent = await assemble(
       loop,
-      (r) => r.tools.register(reader(seen)),
+      (r) => void r.tools.register(reader(seen)),
       fakeModel()
         .respondWithTools([{ name: 'reader', args: { at: 'root' }, id: 'r1' }])
         .respond(new AIMessage('root 收完')),
     );
     await agent.invoke(input, options);
 
-    expect(seen).toEqual([
-      { at: 'root', service: false, unavailable: loop === 'native' },
-    ]);
+    expect(seen).toEqual([{ at: 'root', service: false, unavailable: loop === 'native' }]);
   });
 });
 

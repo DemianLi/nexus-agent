@@ -1145,8 +1145,8 @@ export async function createCliAgent(
         )
       : undefined;
   // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
-  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同三格算出：
-  // `approvals.enabled`、有沒有 checkpointer、哪一種 loop（native 算沒有 checkpointer）。輸入對不上時分岔的樣子是
+  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同兩格算出：
+  // `approvals.enabled`、有沒有 checkpointer。輸入對不上時分岔的樣子是
   // 「核准擋得下來、問答還掛在那裡」。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
