@@ -40,7 +40,7 @@
 `duplicate-key` 與 `yaml` 在 TS 是 YAML 函式庫的錯誤碼（`DUPLICATE_KEY`、`BLOCK_AS_IMPLICIT_KEY`、`MULTIPLE_DOCS`…）；換成同一個名字的兩個鍵由
 `uniqueEntries` 自己講成 `DUPLICATE_KEY`；指令、明示 tag、錨點與別名是 nexus 自己的 `DIRECTIVE_NOT_ALLOWED`、`TAG_NOT_ALLOWED`、`ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`，
 字元、巢狀與集合鍵是 `CHARACTER_NOT_ALLOWED`、`NESTING_TOO_DEEP`、`COLLECTION_KEY_NOT_ALLOWED`（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。
-別的實作不必產生同樣的錯誤碼，只要分得出這兩類；Rust 宿主沿用同樣的錯誤碼，`yaml` 函式庫自己的錯誤碼換成 `YAML_SYNTAX`、`MULTIPLE_DOCS`。
+別的實作不必產生同樣的錯誤碼，只要分得出這兩類；Rust 宿主沿用 nexus 自己的錯誤碼，語法錯一律 `YAML_SYNTAX`，多份文件沿用 `MULTIPLE_DOCS`。
 
 ## 形狀
 
@@ -81,11 +81,11 @@ refs:
   值裡要放 tab，用雙引號寫成 `"\t"`。樣本：`reject` 裡名字以「字元」開頭的那幾條。
 - **mapping 與序列最多 64 層**（`CREDENTIALS_MAX_DEPTH`）：根的 mapping（或序列）是第 1 層，每往裡一個 mapping 或序列多一層，純量不算層；
   mapping 的鍵與值都算在它裡面一層。超過整份拒絕，訊息是 `YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）`，不附行欄。
-  `version: 1` 是 1 層，`refs:` 底下的 `名字: 值` 是 2 層，正常的檔遠用不到。深到 `yaml` 自己用光資源的檔講成它的錯誤碼，不會讓行程掛掉。
+  `version: 1` 是 1 層，`refs:` 底下的 `名字: 值` 是 2 層，正常的檔遠用不到。深到 `yaml` 自己用光資源的檔（一千多層起）也講成 `NESTING_TOO_DEEP`，不會讓行程掛掉。
   樣本：`accept`「巢狀 64 層：照收」兩條、`reject`「巢狀 65 層」「巢狀 2000 層」等三條。
 - **鍵是 mapping 或序列（`? [a, b]`、`[a]: 1`、`{a: 1}: x`）整份拒絕**，不論在頂層、`refs` 裡還是外來鍵的值底下，訊息是
   `YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 L 行第 C 欄）`，指到最前面那一個，不含鍵。`yaml` 把集合鍵字串化成名字的寫法別的實作照不出來，
-  受管檔也用不到。樣本：`reject` 裡名字以「集合當鍵」開頭的九條（三個位置乘三種寫法）。
+  受管檔也用不到。樣本：`reject` 裡名字以「集合當鍵」開頭的十一條（三個位置乘三種寫法，再加兩條 `refs` 裡不是第一個鍵的）。
 - 檔頭的 BOM、CRLF 換行、開頭的 `---` 都收下；第二份文件（`---` 之後再一份）拒絕。只有 BOM、或 BOM 加空白的檔是空的倉庫（JS 的 `trim` 修得掉 U+FEFF）。
 - **鍵轉成名字照 JS 的 `String()`**：`true` 是 `"true"`，`null`、`~` 是空字串，`.inf` 是 `"Infinity"`，`0x1F` 是 `"31"`，`1e21` 是 `"1e+21"`。
   樣本：`accept`「TRUE 當鍵」「.inf 當鍵」「NULL 當鍵」「數字鍵照 JS 的 String() 轉成名字」。
@@ -97,7 +97,7 @@ refs:
 拒絕一律整份拒絕，不跳過其中一條：被靜靜忽略的條目，讀起來就是「我存的憑證沒作用」。條件見上面的 reason 表。
 
 一份檔同時有好幾種錯時，照下面的順序檢查，回第一個檢查到的；同一步裡有好幾個，回檔案裡最前面那一個。TS 與 Rust 宿主照同一個順序，
-樣本裡名字以「先後」開頭的那幾條用 `code` 釘住：
+樣本裡名字以「先後」開頭的那幾條用 `code` 或 `reason` 釘住：
 
 1. 解析前就拒的字元（`CHARACTER_NOT_ALLOWED`）。
 2. YAML 本身的錯：語法、多份文件，以及同一個純量鍵寫兩次（`DUPLICATE_KEY`）。這一類跟集合鍵同時出現時，不論誰在前，都回這一類。
@@ -106,8 +106,9 @@ refs:
 3. 巢狀超過 64 層（`NESTING_TOO_DEEP`），包括集合鍵本身就超過的。
 4. 指令、明示 tag、錨點、別名。
 5. 集合鍵（`COLLECTION_KEY_NOT_ALLOWED`）。兩個一樣的集合鍵也是這一個，不算重複鍵。
-6. 換成同一個名字的兩個鍵（`true` 與 `"true"`），講成 `DUPLICATE_KEY`。
-7. 根不是 mapping、`version`、`records`、`refs` 的形狀，以及 `refs` 裡一條一條的 `bad-name`、`not-string`、`empty-string`。
+6. 根不是 mapping；頂層換成同一個名字的兩個鍵（`true` 與 `"true"`），講成 `DUPLICATE_KEY`。
+7. `version`、`records`、`refs` 的形狀；接著 `refs` 裡換成同一個名字的兩個鍵（`DUPLICATE_KEY`）；最後是 `refs` 裡一條一條的
+   `bad-name`、`not-string`、`empty-string`。
 
 第 5 步排在第 6、7 步之前，所以 `refs` 裡的集合鍵即使排在名字形狀不對的鍵之後，回的也是集合鍵。
 
