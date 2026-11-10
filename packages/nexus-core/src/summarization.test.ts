@@ -851,7 +851,8 @@ describe('摘要輸入裡的附件', () => {
       { write: async (path: string) => ({ path }) } as never,
       {
         ...DEFAULT_SUMMARIZATION,
-        trigger: [{ type: 'messages', value: 3 }],
+        // 門檻 10：尾巴的則數封在門檻的兩成（#2659），要留兩則就不能低於 10。
+        trigger: [{ type: 'messages', value: 10 }],
         retainTokens: retainLast(messages, 2),
       },
       new TokenAnchorBook(),
@@ -894,6 +895,10 @@ describe('摘要輸入裡的附件', () => {
       new AIMessage('一'),
       new HumanMessage('二'),
       new AIMessage('三'),
+      new HumanMessage('四'),
+      new AIMessage('六'),
+      new HumanMessage('七'),
+      new AIMessage('八'),
       kept,
       new AIMessage('五'),
     ]);
@@ -912,7 +917,7 @@ describe('摘要輸入裡的附件', () => {
 
   it('沒有附件時，訊息串原樣進基座', async () => {
     // 訊息要夠長（#1396）：見 `fatHistory`。
-    const { prompts, sent } = await summarize(fatHistory(6));
+    const { prompts, sent } = await summarize(fatHistory(10));
     expect(prompts).toHaveLength(1);
     expect(sent.slice(1)).toHaveLength(2);
   });

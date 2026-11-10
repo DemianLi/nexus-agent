@@ -100,10 +100,29 @@ async function run(loop: AgentLoopKind, replyChars: number) {
   return { summaries: model.summaries, afterSummary: model.afterSummary, lengths };
 }
 
+/** 相鄰兩次摘要隔幾輪。 */
+const gaps = (turns: readonly number[]): number[] => turns.slice(1).map((turn, index) => turn - turns[index]!);
+
 describe.each(['langgraph', 'native'] as const)('則數門檻觸發後的節奏（%s）', (loop) => {
-  it.each([3_000, 3_800])('觀察：回覆 %i 字，摘要在第幾輪', async (chars) => {
-    const result = await run(loop, chars);
-    console.log(loop, chars, JSON.stringify(result));
-    expect(result.summaries.length).toBeGreaterThan(0);
+  /**
+   * 尾巴封在則數門檻的兩成（12 則）：摘完是系統提示、摘要與 12 則，回到 60 則要再五輪多，所以相鄰兩次至少隔 6 輪。
+   * 回覆 3,800 字的那組是卡上量到的情形（修前尾巴 52 則，第 8 輪起每輪都摘）；3,000 字那組修前尾巴 66 則，比門檻還長，
+   * 同一輪裡每一步都再摘一次。
+   */
+  it.each([
+    [3_800, [8, 14, 20]],
+    [3_000, [10, 17, 24]],
+  ])('回覆 %i 字：觸發之後至少隔 6 輪才再觸發', async (chars, expected) => {
+    const { summaries, afterSummary } = await run(loop, chars);
+    expect(summaries).toEqual(expected);
+    expect(Math.min(...gaps(summaries))).toBeGreaterThanOrEqual(6);
+    expect(afterSummary).toEqual(summaries.map(() => 14));
+  });
+
+  /** 照 token 選出的尾巴蓋住整串時照舊不摘（#1374 驗收時刻意留下的行為）：訊息短，過了 60 則也一次都不摘。 */
+  it('訊息短的對話：過了 60 則，尾巴蓋住整串，一次都不摘', async () => {
+    const { summaries, lengths } = await run(loop, 30);
+    expect(lengths.at(-1)).toBeGreaterThan(60);
+    expect(summaries).toEqual([]);
   });
 });
