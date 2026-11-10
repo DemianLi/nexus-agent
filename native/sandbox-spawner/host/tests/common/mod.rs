@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod fake_mcp;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
