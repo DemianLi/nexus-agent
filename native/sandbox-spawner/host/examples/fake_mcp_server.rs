@@ -1,4 +1,4 @@
-//! 整合測試用的本機 HTTPS MCP server（`tests/common/fake_mcp.rs`，憑證是 `tests/fixtures/tls/` 的夾具）：
+//! 可單獨跑的本機 HTTPS MCP server，行為同 `tests/common/fake_mcp.rs`（憑證是 `tests/fixtures/tls/` 的夾具）：
 //! 起來之後把埠印成一行，stdin 關了就結束。
 //!
 //! ```text

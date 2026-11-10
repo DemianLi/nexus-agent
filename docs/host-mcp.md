@@ -33,10 +33,10 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 
 `connection.rs` 照 TS `connection.ts` 的 HTTP 那一半，三步都過才算連上一代：握手、`tools/list` 分頁走完、查指引上限。
 
-- transport 是 rmcp 的 Streamable HTTP，客戶端由 `tls::http_client` 建，TLS 與代理照下面〈TLS 與代理〉。設定的 header 每個請求都帶。
+- transport 是 rmcp 的 Streamable HTTP，客戶端由呼叫方傳入，要用 `tls::http_client` 建，TLS 與代理才會照下面〈TLS 與代理〉。設定的 header 每個請求都帶。
 - rmcp 自己的重試全關（SSE 重連、session 過期重建），重連只交給監督者，同 TS 的 `maxRetries: 0`。
 - 協定版本自動協商：先試新協定（`server/discover`），對方是舊協定就退回 `initialize`。握手報的身分同 TS（`@nexus/plugin-mcp`），
-  不宣告任何 client 能力；新協定、而且開了 `elicitation` 時，每次 `tools/call` 自己在 `_meta` 帶反問能力。
+  不宣告任何 client 能力；新協定、而且開了 `elicitation` 時，`tools/call` 要在 `_meta` 帶反問能力，值由 `call_meta` 給（同 TS `tool-call.ts` 的 `inBand`）。
 - `tools/list` 同一個 cursor 再出現就停，沒有名字的工具略過。指引去掉結尾空白、全空白當沒有，加上 `### MCP server: <name>` 標頭之後超過 `maxInstructionBytes` 就連不上。
 - server 一則回應最多 16 MiB（`MAX_RESPONSE_BYTES`），JSON 回應與 SSE 的一個事件一樣；巢狀層數照 serde_json 的預設上限 128。
 - 錯誤訊息的英文同 TS（`Failed to connect to streamable HTTP server …`、`Failed to load tools from server …`），網址不帶 query，這一列的秘密換成 `[redacted]`。
@@ -91,6 +91,6 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 - 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。
-- 呼叫結果只帶 `content` 與 `structuredContent`：rmcp 把回應解成自己的型別再序列化，規格外的欄位會丟掉，TS 的 SDK 原樣留著。這是 D290 接受的失真。
+- 呼叫結果只帶 `content` 與 `structuredContent`：rmcp 把回應解成自己的型別再序列化，規格外的欄位會丟掉，TS 的 SDK 原樣留著。這是 #1827 的 D290 接受的失真。
 - 新協定的 `server/discover` 10 秒沒回就退回 `initialize`，這 10 秒關不掉（rmcp 的私有常數）。TS 用 `startupTimeoutMs` 當握手期限，逾時就是錯、不退回。
 - 監督者的訊息有兩處不逐字：小於 1e-6 或不小於 1e21 的毫秒數，宿主不寫成指數；超過 2^31−1 ms 的延遲，TS 的 `setTimeout` 改成 1 ms，宿主照設定的時間等。

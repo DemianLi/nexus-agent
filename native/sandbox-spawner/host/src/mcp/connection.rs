@@ -1,10 +1,10 @@
 //! 一台 HTTP MCP server 的「一代」連線：建 transport、握手、`tools/list` 分頁走完、查指引上限，三步都過才算連上。
 //! 照 `packages/nexus-plugin-mcp/src/connection.ts` 的 HTTP 那一半；訊息的英文照它。池經 [`Http`] 拿一代。
 //!
-//! - transport 只用 rmcp 的 `StreamableHttpClientTransport::with_client`，客戶端由 [`crate::tls::http_client`] 建，TLS 與代理都照設定。
+//! - transport 只用 rmcp 的 `StreamableHttpClientTransport::with_client`，客戶端由呼叫方傳入，要用 [`crate::tls::http_client`] 建，TLS 與代理才會照設定。
 //! - rmcp 自己的重試全關（SSE 重連、session 過期重建），重連只交給監督者，同 TS 的 `maxRetries: 0`。
 //! - 協定版本自動協商：先試新協定（`server/discover`），對方是舊協定就退回 `initialize`。握手時不宣告任何 client 能力；
-//!   新協定的反問能力由每次 `tools/call` 自己帶（[`call_meta`]）。
+//!   新協定的反問能力由呼叫端在每次 `tools/call` 的 `_meta` 帶（[`call_meta`]）。
 //! - server 一則回應的大小上限是 [`MAX_RESPONSE_BYTES`]（JSON 與 SSE 一樣）；巢狀層數照 serde_json 的預設上限 128。
 //! - 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 
@@ -26,7 +26,7 @@ use tokio::sync::{watch, Notify};
 use super::config::{scrub, Server};
 use super::pool;
 
-/// 握手時報給 server 的身分，同 TS 的 `CLIENT_IDENTITY`：server 看到的連線形狀不因搬家而變。
+/// 握手時報給 server 的身分，同 TS 的 `CLIENT_IDENTITY`：同一台 server 從 TS 或宿主連進來，看到的身分相同。
 const CLIENT_NAME: &str = "@nexus/plugin-mcp";
 const CLIENT_VERSION: &str = "0.6.0";
 /// 新協定每次請求帶 client 能力的 `_meta` 鍵。
@@ -34,7 +34,7 @@ const CLIENT_CAPABILITIES_META_KEY: &str = "io.modelcontextprotocol/clientCapabi
 /// server 一則回應最多幾個位元組：JSON 回應是 rmcp 固定的 16 MiB，SSE 的一個事件在 [`connect`] 明寫成同一個值。
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-/// 一個錯誤連同 source 鏈攤成一行。
+/// 一個錯誤連同 source 鏈攤成一行，以 `: ` 串接；文字已出現在前文的 source 略過。
 pub fn describe(err: &dyn std::error::Error) -> String {
     let mut text = err.to_string();
     let mut source = err.source();
@@ -129,7 +129,7 @@ impl pool::Connector for Http {
 }
 
 /// 新協定、而且開了反問時，每次 `tools/call` 要帶的 `_meta`（同 `tool-call.ts` 的 `inBand`）。rmcp 從握手設定帶的 client 能力是空的，
-/// 這一格明寫的值蓋過它。
+/// 呼叫端在 `_meta` 明寫的值蓋過它。
 pub fn call_meta(modern: bool, elicitation: bool) -> Option<RequestMetaObject> {
     if !(modern && elicitation) {
         return None;
@@ -140,7 +140,7 @@ pub fn call_meta(modern: bool, elicitation: bool) -> Option<RequestMetaObject> {
     .ok()
 }
 
-/// 連一代。錯誤訊息照 TS，網址不帶 query，`secrets` 一律換掉。
+/// 連一代。錯誤訊息照 TS，網址不帶 query，`secrets` 一律換掉。握手之後的步驟失敗時，回錯前先收掉這一代。
 pub async fn connect(
     server: &Server,
     http: &reqwest::Client,
@@ -246,7 +246,7 @@ async fn list_all_tools(peer: &Peer<RoleClient>) -> Result<Vec<Tool>, String> {
     Ok(tools)
 }
 
-/// 帶出處標頭的指引（`instructionsOf`）：結尾空白去掉，全空白當沒有；加了標頭超過上限就拋。
+/// 帶出處標頭的指引（`instructionsOf`）：結尾空白去掉，全空白當沒有；加了標頭超過上限就回 `Err`（訊息同 TS）。
 pub fn instructions_of(raw: Option<&str>, server: &Server) -> Result<String, String> {
     let text = raw.unwrap_or("").trim_end();
     if text.trim().is_empty() {
