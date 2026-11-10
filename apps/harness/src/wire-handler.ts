@@ -1248,7 +1248,7 @@ interface ThreadState {
   readonly storedCount: number;
   /** root 那一份檔的 header，見 {@link ThreadAgent.attachPersistence}；沒開落盤是 `undefined`。 */
   readonly storedHeader: () => StoredSessionHeader | undefined;
-  /** 把還在批次窗口裡的事件寫出去（{@link ThreadAgent.attachPersistence} 的 `flushPending`，#2689）；沒開落盤時什麼都不做。 */
+  /** 把還在批次窗口裡的事件寫出去（{@link ThreadAgent.attachPersistence} 的 `flushPending`，#2689）；沒開落盤、或接線沒給 `flushPending` 時什麼都不做。 */
   readonly flushPending: () => Promise<void>;
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
   readonly workspaceRoot: string | undefined;
@@ -4911,7 +4911,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
 
   /**
    * 前台搜尋之前請這條 thread 排空（#2689）。只動落盤，**不經 `holdThread`、不推最後活動時間**：搜尋不是這條 thread 的活動，
-   * 不能讓監督行程因為有人在搜而晚收它。還沒建好或正在撤（不在 `ready`）的回 204：撤的那一條自己會做最後一次排空。
+   * 不能讓監督行程因為有人在搜而晚收它。還沒建好、或已離開 `ready`（行程收尾：`close()` 先清 `ready`，最後一次排空在之後的 `dispose`）的回 204。
    * 寫不出去回 500，前台照舊冷讀。
    */
   async function flushRoute(threadId: string): Promise<Response> {

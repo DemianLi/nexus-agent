@@ -735,7 +735,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
     );
     expect(tally.unstable).toBeLessThan(tally.searches / 20);
 
-    // 搜之前排空（#2689）每次搜尋多花多少：活著的對話行程 0、1、4 條各搜 20 次。開著的下行讓行程不被收，關掉之後等它收完。
+    // 搜之前排空（#2689）每次搜尋多花多少：活著的對話行程 0、1、4 條各搜 20 次。開著的下行讓行程不被收；量 0 條之前先等上面幾輪關掉下行的那幾條收完。
     const supervisor = running.child.pid!;
     const timed = async (): Promise<string> => {
       const took: number[] = [];

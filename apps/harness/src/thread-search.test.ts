@@ -1253,7 +1253,7 @@ describe('列之前的排空鉤子（#2689）', () => {
     await engine.close();
   });
 
-  it('openAt: never 不叫（回 not_supported 的搜尋不為它叫醒對話行程）；沒接落盤也不叫', async () => {
+  it('openAt: never 不叫（回 not_supported 的搜尋不為它請對話行程排空）；沒接落盤也不叫', async () => {
     const directory = await dir();
     await writeThread(directory, 'a', said('有東西').events);
     const beforeList = vi.fn(() => Promise.resolve());
@@ -1264,6 +1264,14 @@ describe('列之前的排空鉤子（#2689）', () => {
     expect(beforeList).not.toHaveBeenCalled();
     await never.close();
     await detached.close();
+  });
+
+  it('鉤子拋了：當沒排空，照舊冷讀回結果', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('盤上的暗號').events);
+    const engine = search(directory, { beforeList: () => Promise.reject(new Error('排空壞了')) });
+    expect(await ids(engine, '盤上的暗號')).toEqual(['a']);
+    await engine.close();
   });
 
   it('鉤子收到搜尋的 signal；排空途中中止，搜尋回 aborted、不列', async () => {

@@ -643,8 +643,9 @@ export const SEARCH_FLUSH_TIMEOUT_MS = 1_000;
  *
  * - **只問行程表上已經有的**（`liveThreads`、`socketOf`），不 `ensure`：不為了搜尋起行程，也不讓監督行程重新計時閒置。
  *   不經 `onForwarded`：搜尋不是這條 thread 的請求。
- * - 各條並行；整段等到 {@link SEARCH_FLUSH_TIMEOUT_MS} 或 `signal` 中止為止。
+ * - 各條並行，整段最多等 {@link SEARCH_FLUSH_TIMEOUT_MS}；`signal` 中止就不等。
  * - **失敗不擴大**：拒絕、逾時、非 2xx、行程剛好走了，都只記一行，搜尋照舊冷讀（等於沒有排空）。`signal` 中止不記，由搜尋自己回中止。
+ *   回的函式永不 reject。
  */
 export function flushLiveThreadsOverSocket(
   supervisor: Pick<SupervisorClient, 'liveThreads' | 'socketOf'>,

@@ -356,7 +356,7 @@ describe('活的 thread 讀記憶體（#1599）；per-thread 下搜之前先排�
     await driveTurn(first.client, childId, '子一');
     await driveTurn(first.client, childId, '子二');
     await driveTurn(first.client, 'src', '二');
-    // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
+    // 前提：兩條第二輪的回覆都還沒寫出去——不讀記憶體、也不先排空的話搜不到。
     expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
     expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
     expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());

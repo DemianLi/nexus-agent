@@ -372,7 +372,7 @@ export interface ThreadSearchOptions {
    */
   readonly liveThreads?: () => readonly LiveThread[];
   /**
-   * 列持久層之前叫一次（#2689）：per-thread 的前台拿它請每條活著的對話行程先排空，之後照舊冷讀。**不能拋**：失敗由它自己記、
+   * 列持久層之前叫一次（#2689）：per-thread 的前台拿它請每條活著的對話行程先排空，之後照舊冷讀。失敗由它自己記；拋了當沒排空，
    * 搜尋照舊往下走。`openAt: never` 與沒接落盤時不叫。放在列之前而不是對帳之前：排空寫了檔，先列好的那一份 revision 就舊了，
    * 第一次對帳一定對不上、白用掉一次穩定觀察。
    */
@@ -445,7 +445,7 @@ export class ThreadSearch {
     const { store } = this.#options;
     if (store === undefined) return EMPTY;
     if (this.#options.openAt !== 'never') {
-      await this.#options.beforeList?.(signal);
+      await this.#options.beforeList?.(signal).catch(() => undefined);
       throwIfAborted(signal);
     }
     const visible = await this.#list(store, signal);

@@ -531,7 +531,7 @@ jobs:
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
-      # 內容搜尋的產品路徑改用 per-thread 再跑一輪（#2689）：前台搜之前請對話行程排空，只有這裡量得到。沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘。
+      # 內容搜尋的產品路徑用 per-thread 再跑一輪（#2689）：「批次窗口裡那一句搜得到」靠前台搜之前請對話行程排空，這條斷言只在這一步用 per-thread 跑。沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘。
       - name: per-thread 跑內容搜尋
         run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-search
         env:

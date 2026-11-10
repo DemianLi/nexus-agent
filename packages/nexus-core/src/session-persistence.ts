@@ -291,7 +291,7 @@ export class SessionPersistenceCoordinator {
  *   **接上的同時在註冊表登記一位排空者**（{@link SessionRegistry.onFlush}，#599）：
  *   `sessions.flush(log)` 只排空那一份，給一輪之中的耐久檢查點用
  *   （{@link ./session-checkpoint-policy.ts | sessionCheckpointPlugin}）。
- * @returns `flush()` 把每一份都排空（響亮）；`flushPending()` 同 `flush()`，但只排還有待寫事件的那幾份（#2689）；`dispose()` 退訂、退掉排空者並收掉每一份（響亮）；`abandon()` 同 `dispose()`
+ * @returns `flush()` 把每一份都排空（響亮）；`flushPending()` 只對還有待寫事件的那幾份做 `flush()`（響亮，#2689），沒有待寫的連後端的 flush 都不叫，對它們不是耐久屏障；`dispose()` 退訂、退掉排空者並收掉每一份（響亮）；`abandon()` 同 `dispose()`
  *   但不做最後一次排空，只關把手（還沒發佈的分叉子 thread 組裝失敗時用，#1580）；`rootHeader()` 是 root 那一份檔的 header：
  *   新建的是這裡交給 `store.create` 的那一份，續接的是 `resumedRoot.header`；root 還沒接上、或續接沒給 header 時是 `undefined`
  *   （[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）。
@@ -472,7 +472,7 @@ export function attachSessionPersistence(
       }
       throwAggregate(failures, '會話日誌 flush 失敗');
     },
-    // **只排有待寫事件的那幾份**（#2689）：沒有待寫的不叫 `flush()`，因為後端對還沒寫過的會話會在 flush 時建出一個空檔，
+    // **只排有待寫事件的那幾份**（#2689）：沒有待寫的不叫 `flush()`，因為 JSONL 後端（`jsonl-session-store.ts` 的 `flush`）對還沒寫過的會話會在 flush 時建出一個空檔，
     // 給別的行程看的排空不該讓一條沒講過話的會話落盤。報錯同 `flush`。
     async flushPending() {
       const failures: Error[] = [];
