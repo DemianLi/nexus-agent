@@ -14,7 +14,7 @@
  *
  * | 狀態 | 住在哪 | 哪扇門帶得回來 |
  * | --- | --- | --- |
- * | 虛擬檔案系統 | graph state ／ checkpointer | **門 B** |
+ * | 虛擬檔案系統 | `langgraph`：graph state ／ checkpointer；native：agent 行程內的 thread 快取（`files`，沒有 checkpointer） | **門 B**（只有 `langgraph` 有這扇門）；兩個 loop 續接都從空的開始 |
  * | 工具結果暫存（#734） | 主機的私有目錄，按會話分目錄 | 不靠門；續接用同一把會話鑰匙找回 |
  * | 對話訊息 | graph state，**從會話日誌推回來** | **門 A** |
  * | goal 的相位與輪次、`turn/*`、沙箱模式、計劃模式 | 會話日誌 | **門 A** |
