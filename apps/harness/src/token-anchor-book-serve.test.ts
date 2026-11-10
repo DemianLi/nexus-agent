@@ -9,7 +9,7 @@
  * 對手方是本機的假端點（串流，最後一顆 chunk 帶 usage）。**`prompt_tokens` 固定報一個遠大於純估算的數**，借到了就
  * 一眼分得出來；回應裡的 `model` 與請求同名，否則帳不記（`token-estimate.ts`）。
  *
- * 突變（量過）：`serve.ts` 對每條 thread 傳 `new TokenAnchorBook()`（或不傳），第二條那一格掉回純估算，這裡紅。
+ * 突變（量過）：`serve-run.ts` 對每條 thread 傳 `new TokenAnchorBook()`（或不傳），第二條那一格掉回純估算，這裡紅。
  *
  * **零憑證、零外部連線**：假 key、本機端點。
  */
@@ -26,8 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 /** 假端點報的 prompt token 數：遠大於這段對話的純估算（幾百），借到了才會是這個量級。 */
 const REPORTED_PROMPT_TOKENS = 40_000;

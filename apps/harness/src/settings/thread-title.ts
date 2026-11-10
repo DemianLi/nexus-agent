@@ -4,7 +4,7 @@
  *
  * **這一顆不裝功能，只講設定**——同 `@nexus/core/tool-result-pruner` 那一列（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
  * 差別在消費者跑的時刻：剪刀的消費者是 `foldRegistry`，拿得到註冊表；**這兩個數字的第一個消費者是
- * `serve.ts` 的冷讀清單**（`listStoredThreads`），它一條 thread 都不啟動，所以那一刻沒有 agent、
+ * `serve-run.ts` 的冷讀清單**（`listStoredThreads`），它一條 thread 都不啟動，所以那一刻沒有 agent、
  * 沒有註冊表、也沒有 `ThreadAgent`。值因此由 {@link ../settings/startup.ts | startupSetting} 在起動期
  * 從已解析的條目讀出來，`apply` 是空的。
  *

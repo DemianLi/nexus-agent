@@ -36,8 +36,8 @@ import {
   LIVE_API_KEY_ENV,
   loadLiveLaunchEnv,
 } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 
 /**

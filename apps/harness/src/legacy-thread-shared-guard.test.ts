@@ -19,8 +19,8 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe, RunServeOptions } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe, RunServeOptions } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];

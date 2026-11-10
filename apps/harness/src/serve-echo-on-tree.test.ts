@@ -20,8 +20,8 @@ import { changePlugin } from './plugin-change.js';
 import { shippedConfigPath } from './plugin-config.js';
 import { installTreeListing } from './install-tree.fixture.js';
 import { appendRaw, readJournalText, seedHomePatch } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;

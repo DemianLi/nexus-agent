@@ -19,8 +19,8 @@ import { serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const temporary: string[] = [];
 const servers: RunningServe[] = [];

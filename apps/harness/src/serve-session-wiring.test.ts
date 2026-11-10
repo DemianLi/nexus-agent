@@ -16,8 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { probeSink, resetProbeSink, WIRING_PROBE_PACKAGE } from './serve-session-wiring.fixture.js';
 
 const PATCH = new URL('./serve-session-wiring.patch.yml', import.meta.url).pathname;

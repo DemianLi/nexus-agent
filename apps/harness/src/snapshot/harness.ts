@@ -38,8 +38,8 @@ import {
   sessionPathsIn,
 } from '../jsonl-session-store.js';
 import { replayScriptFromEvents } from '../llm-replay.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 
 /** 每個場景都在這條 thread 上跑；夾具的檔名基底也是它。 */
 export const SNAPSHOT_THREAD_ID = 'snapshot';

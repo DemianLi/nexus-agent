@@ -278,7 +278,8 @@ function goodTree(root: string): void {
   put(SBOM_FILE, '{}');
   put('cordis.yml', '');
   put('cordis.serve.yml', '');
-  for (const entry of ['serve', 'cli', 'plugin-cli']) put(`lib/${entry}.js`, '');
+  for (const entry of ['serve', 'cli', 'plugin-cli', 'front-process', 'conversation-process'])
+    put(`lib/${entry}.js`, '');
   put('node_modules/@nexus/web/dist/index.html', '<div id="root"></div>');
   for (const file of FONT_LICENSES) put(`node_modules/@nexus/web/dist/assets/fonts/${file}`, 'OFL');
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');

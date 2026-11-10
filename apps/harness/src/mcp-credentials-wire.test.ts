@@ -9,7 +9,7 @@
  * | 同上，帶池、受管值換了 | 下一條 thread 拿到新值（開著的照舊在 plugin 那一側量） | `pool.ts` 鍵裡的指紋 |
  * | `runCli`（沒帶 `--live`） | 啟動環境的值到得了子行程；受管檔的值到不了（不讀它） | `cli.ts` 交憑證服務那一格 |
  * | `runCli --dump-config` | 只有憑證名 | — |
- * | `runServe`（沒帶 `--live`） | 受管檔的值到得了子行程，server 日誌沒有值；受管檔 0644 時 serve 照樣起來、那一列連不上 | `serve.ts` 交憑證服務那一格 |
+ * | `runServe`（沒帶 `--live`） | 受管檔的值到得了子行程，server 日誌沒有值；受管檔 0644 時 serve 照樣起來、那一列連不上 | `serve-run.ts` 交憑證服務那一格 |
  *
  * **零憑證、零外部連線**：值是假的，server 是 stdio 子行程。
  */
@@ -37,8 +37,8 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const FIXTURE_SERVER = fileURLToPath(
   new URL('../../../packages/nexus-plugin-mcp/src/fixture-server.ts', import.meta.url),

@@ -283,7 +283,7 @@ export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'li
  * 測試用的瀏覽器會話密鑰與認證（#424）。
  *
  * **換的是密鑰，不是那道檢查**：`createWireHandler` 的 `auth` 是必填的，測試把這一個交進去，
- * 請求再帶一顆用同一把密鑰換來的 cookie。產品路徑上的密鑰來自 harness home 的檔（`serve.ts`）。
+ * 請求再帶一顆用同一把密鑰換來的 cookie。產品路徑上的密鑰來自 harness home 的檔（`serve-run.ts`）。
  */
 export const TEST_BROWSER_SESSION_SECRET = Buffer.alloc(32, 7);
 export const TEST_BROWSER_AUTH = new BrowserAuth(TEST_BROWSER_SESSION_SECRET);

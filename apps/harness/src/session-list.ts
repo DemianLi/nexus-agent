@@ -98,7 +98,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 這份是子代理的會話嗎（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：core 的 `isSubagentSessionHeader`，
  * 判準與偏離寫在那裡（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
- * **列表（{@link isListedThread}）和 serve 的續接閘（`serve.ts` 的 `createAgent`）共用這一支**，判準只有一份。
+ * **列表（{@link isListedThread}）和 serve 的續接閘（`serve-run.ts` 的 `createAgent`）共用這一支**，判準只有一份。
  * #1544 時對到 dsh 的 headless 與 ACP（`origin === 'subagent' || parentSession !== undefined`），那兩支連分叉也擋，因為它們本來
  * 就不驅動分叉；web 這條路照 dsh session-controller（`api/session-controller/src/agent.ts:115`）只認 `origin`，分叉是一條可以驅動的主對話。
  */

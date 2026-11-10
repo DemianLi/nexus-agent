@@ -1,7 +1,7 @@
 /**
  * `@` 引用在產品路徑上（#651）：**真的 serve、真的 HTTP、出貨的組裝**，不手搭 `createAgent`。
  *
- * 手搭的組裝自己交 `workspaceRoot`，`createCliAgent` 回傳它、`serve.ts` 轉交它那兩行就沒有觀察點（同
+ * 手搭的組裝自己交 `workspaceRoot`，`createCliAgent` 回傳它、`serve-run.ts` 轉交它那兩行就沒有觀察點（同
  * `deliverable-files.test.ts` 那組「錨」量過的事）。所以列檔的每一條都從 `runServe` 起。
  *
  * 失效那一條用的是出貨的假模型腳本：它第二輪用 `write_file` 寫 {@link CLI_PROBE_FILE}，那就是「模型寫了新檔」。
@@ -20,8 +20,8 @@ import { runTurn } from './cli.js';
 import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { FILE_REFERENCE_PROMPT } from './file-references.js';
 import { exchangeServeToken, fetchWithCookie, serveClient, shippedPlugins } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const shipped = await shippedPlugins();
 

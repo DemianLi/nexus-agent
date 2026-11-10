@@ -23,7 +23,7 @@ import { parseCliArgs, runTurn } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
-import { parseServeArgs } from './serve.js';
+import { parseServeArgs } from './serve-run.js';
 import { shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();

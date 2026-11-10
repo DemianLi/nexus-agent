@@ -23,8 +23,8 @@ import { loadDefaultPlugins } from './plugin-config.js';
 import { declarationSignature } from './plugin-row-state.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot, PluginSnapshotRow } from './plugin-snapshot.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { hmacHashOf, loadConfigHashKey } from './session-header-metadata.js';
 
 const temporary: string[] = [];

@@ -38,8 +38,8 @@ import { restoreConversation, toolResultAsSeen } from './conversation-restore.js
 import { toAgentInvocation } from './messages.js';
 import { sessionPathsIn } from './jsonl-session-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 

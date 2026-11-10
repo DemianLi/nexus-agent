@@ -29,8 +29,8 @@ import { HOME_LOCK_FILE_NAME, HomeInUseError } from './home-lock.js';
 import { changePlugin } from './plugin-change.js';
 import { PLUGIN_JOURNAL_FILE_NAME } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { findSession, sessionEvents } from './session-files.fixture.js';
 import { THREAD_ORGANIZATION_FILE } from './thread-organization.js';
 

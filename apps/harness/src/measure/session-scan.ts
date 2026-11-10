@@ -43,8 +43,8 @@ import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { LIVE_API_KEY_ENV } from '../live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from '../log-derived-history.fixture.js';
 import type { Reply } from '../log-derived-history.fixture.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 
 /** 堆疊上出現就算進「全掃」的函式名。`get events` 是那顆複製。 */
 export const SCAN_FUNCTIONS = [

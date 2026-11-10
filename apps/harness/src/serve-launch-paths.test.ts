@@ -18,8 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe, RunServeOptions } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe, RunServeOptions } from './serve-run.js';
 
 const PERSISTENCE_OFF_PATCH = fileURLToPath(
   new URL('./settings/persistence-off.patch.yml', import.meta.url),

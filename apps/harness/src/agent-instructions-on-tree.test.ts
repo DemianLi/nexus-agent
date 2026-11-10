@@ -49,8 +49,8 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { auditStartupEntries, REQUIRED_TREE_ENTRY_IDS } from './startup-audit.js';
 
 const temporary: string[] = [];

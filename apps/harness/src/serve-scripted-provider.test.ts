@@ -7,11 +7,11 @@
  * 真的——`runServe` 讀 patch、每條 thread 的 `createCliAgent` 解析選擇列、真的 `present` 工具、真的 wire handler——
  * 唯一換掉的是模型。
  *
- * 這一條同時補上一個以前沒有觀察點的接線：`serve.ts` 把 `deliverableLimits` 交給 handler。`CLI_SCRIPT` 一次都不呼叫
+ * 這一條同時補上一個以前沒有觀察點的接線：`serve-run.ts` 把 `deliverableLimits` 交給 handler。`CLI_SCRIPT` 一次都不呼叫
  * `present`，所以拔掉那一行全樹照樣綠（`deliverable-files.test.ts` 的 #536 註解量過）；現在腳本模型叫一次 `present`，
  * 上限調小的那一組讀不動，對照組（預設上限）讀得到。
  *
- * 突變（量過）：`serve.ts` 刪掉 `deliverableLimits,` → 「上限調小」那一條紅（讀到了，沒被拒）。
+ * 突變（量過）：`serve-run.ts` 刪掉 `deliverableLimits,` → 「上限調小」那一條紅（讀到了，沒被拒）。
  *
  * **零憑證、零外部連線**：模型是腳本，工作區是暫存目錄。
  */
@@ -26,8 +26,8 @@ import type { DeliverableReadResult, DeliverablesEntry } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const THREAD = 'scripted-provider';
 

@@ -75,8 +75,8 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import {
   closedSessionEvents,
   sessionEventsOf,

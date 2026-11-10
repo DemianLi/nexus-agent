@@ -1,7 +1,7 @@
 /**
  * 會話日誌 header 的建置中繼資料：建置版本、插件清單、設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
  *
- * 寫的一側由 `cli.ts` 在起動期叫一次 {@link resolveSessionHeaderMetadata}，`serve.ts` 在起動期建一支
+ * 寫的一側由 `cli.ts` 在起動期叫一次 {@link resolveSessionHeaderMetadata}，`serve-run.ts` 在起動期建一支
  * {@link createSessionHeaderMetadataResolver}、每條 thread 拿自己那份清單叫一次（#1405），結果交給 `@nexus/core` 的
  * `attachSessionPersistence`；讀的一側（{@link readSessionHeaderMetadata}、{@link formatSessionHeaderMetadata}）給離線掃描。
  *

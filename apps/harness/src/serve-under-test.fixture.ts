@@ -14,8 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runServe } from './serve.js';
-import type { RunningServe, RunServeOptions } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe, RunServeOptions } from './serve-run.js';
 
 /** 這一輪跑哪一種：`per-thread` 要同時設 `NEXUS_SUPERVISOR_BIN`。 */
 export const PROCESS_MODEL_UNDER_TEST: 'single' | 'per-thread' =
@@ -26,7 +26,7 @@ export const FIXTURE_PATCH_DIR_PREFIX = 'nexus-serve-under-test-';
 
 const SERVE = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const AUTHENTICATED_URL = /http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/u;
-/** 起動披露裡「探針：」那一行（`serve.ts` 的起動披露；它之後到 `runServe` 回傳之間沒有 await）。 */
+/** 起動披露裡「探針：」那一行（`serve-run.ts` 的起動披露；它之後到 `runServe` 回傳之間沒有 await）。 */
 const STARTUP_DISCLOSED = /(^| serve )探針：/u;
 /** 跨得了行程的選項；其餘的是行程內的接縫。 */
 const PORTABLE = new Set(['argv', 'cwd', 'log', 'env']);

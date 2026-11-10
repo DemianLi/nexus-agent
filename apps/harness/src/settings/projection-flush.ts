@@ -14,7 +14,7 @@
  *
  * ## 起動期，不是組裝期
  *
- * 消費者是 `ThreadPump`（每條 thread 一顆），由 `createWireHandler` 建；值在 `serve.ts` 起動時用 `startupSetting` 解一次、
+ * 消費者是 `ThreadPump`（每條 thread 一顆），由 `createWireHandler` 建；值在 `serve-run.ts` 起動時用 `startupSetting` 解一次、
  * 往下傳一份。`apply` 是空的，同 `tool-text`。改值要重啟（dsh 是 volatile，熱重載不接，#46）。
  *
  * ## 這一列關不掉

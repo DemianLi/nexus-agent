@@ -42,8 +42,8 @@ import {
 } from '../model-catalog.js';
 import type { ModelEntry } from '../model-catalog.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 import {
   DEFAULT_MAX_REQUEST_WAIT_MS,
   liveModelConfigForModel,

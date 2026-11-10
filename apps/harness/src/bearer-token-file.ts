@@ -1,6 +1,6 @@
 /**
  * 放一把 bearer token 的秘密檔：沒有就建，有就驗過再讀。指標 token（`metrics-token.ts`，#1535）與嵌入方的服務憑證
- * （`serve.ts` 起動時讀，#2370）共用這一份，兩邊只有檔案的稱呼與「要重設時另一側要做什麼」不同。
+ * （`serve-run.ts` 起動時讀，#2370）共用這一份，兩邊只有檔案的稱呼與「要重設時另一側要做什麼」不同。
  *
  * - 目錄 `0700`、檔 `0600`；已存在的檔 group 或 other 有任何權限位元就拋（`owner-only.ts` 的 `assertOwnerOnlyMode`）；
  * - 先寫暫存檔再 `link` 到正式路徑（`atomic-file.ts` 的 `publishNewFile`），兩個行程同時第一次建立時先寫的贏、後到的讀它；

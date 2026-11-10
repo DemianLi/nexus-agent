@@ -456,7 +456,7 @@ export interface CreateNexusAgentOptions {
    * `console.error`），以及**歸得了因**（違規跟 agent 的輸出落在同一個終端機上，沒有前綴
    * 就分不出誰是誰）。
    *
-   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve.ts` 那條
+   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve-run.ts` 那條
    * 路徑傳的是伺服器日誌的 `invariant` logger**（[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)：改走伺服器日誌的 error 等級，
    * 才分得出等級、也跟著 `format: json`；以前維持預設，預設的 `console.error` 進的是 stderr，撞不到任何人的終端機，也進不了伺服器日誌的門檻）。
    * 兩條進入點答案不同是選的，不是漏的。
@@ -504,7 +504,7 @@ export interface CreateNexusAgentOptions {
  * `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
  * 名冊，所以「有 resume 管道但沒有介面」在我們這裡沒有表示法，退到 `never`。
  *
- * **不是每個入口都該用它。** `serve.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
+ * **不是每個入口都該用它。** `serve-run.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
  * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
  */
 export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };

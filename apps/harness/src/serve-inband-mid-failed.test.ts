@@ -19,8 +19,8 @@ import type { SessionEvent } from '@nexus/core';
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];
