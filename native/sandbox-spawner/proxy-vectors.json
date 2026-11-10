@@ -209,6 +209,26 @@
       "proxy": null
     },
     {
+      "name": "放行清單的分隔：U+FEFF 算空白（同 JS 的 \\s）",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "other.test\ufeffmcp.example.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行清單的分隔：U+0085 不算空白（同 JS 的 \\s）",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com\u0085"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
       "name": "放行：埠相同",
       "policy": {
         "httpProxy": "http://proxy.corp.test:3128",

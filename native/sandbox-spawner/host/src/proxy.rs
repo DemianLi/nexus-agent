@@ -196,6 +196,11 @@ fn split_host_port(entry: &str) -> (&str, Option<&str>) {
     (entry, None)
 }
 
+/// JS 正規式的 `\s`（也是 `String.prototype.trim` 去掉的）：Unicode 的 White_Space 少了 U+0085、多了 U+FEFF。
+fn js_space(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+}
+
 /// 放行清單放不放行這個網址（`policy.ts` 的 `bypassesProxy`）：項目指名的主機連同子網域都放行，開頭的 `.` 或 `*.` 視為同一件事，
 /// 可帶 `:埠`，`*` 放行全部。不比 CIDR。
 pub fn bypasses_proxy(no_proxy: &str, url: &Url) -> bool {
@@ -204,8 +209,8 @@ pub fn bypasses_proxy(no_proxy: &str, url: &Url) -> bool {
         || if url.scheme() == "https" { "443" } else { "80" }.to_string(),
         |p| p.to_string(),
     );
-    for raw in no_proxy.split(|c: char| c == ',' || c.is_whitespace()) {
-        let entry = raw.trim().to_lowercase();
+    for raw in no_proxy.split(|c: char| c == ',' || js_space(c)) {
+        let entry = raw.trim_matches(js_space).to_lowercase();
         if entry.is_empty() {
             continue;
         }

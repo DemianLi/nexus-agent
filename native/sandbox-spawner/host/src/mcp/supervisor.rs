@@ -1,8 +1,9 @@
-//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收一代的期限與記的訊息照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
+//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收連上過的一代的期限與記的訊息照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
+//! 失敗的連線嘗試監督者不收（TS 的 `abandon` 沒有對應），由 [`Hooks::connect`] 回錯之前自己收。
 //!
 //! - 退避：第一次 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
 //! - 連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。
-//! - 收一代最多等 [`GENERATION_CLOSE_TIMEOUT`]；等不到就停止重連，寧可停下也不讓兩代同時活著。
+//! - 收連上過的一代最多等 [`GENERATION_CLOSE_TIMEOUT`]；等不到就停止重連，寧可停下也不讓兩代同時活著。
 //! - 第一次連線的結果經 `first` 交給建立者；`retry_first` 是 `false`（對應設定的 `failOnStartupError: true`）時第一次失敗就結束，不重試。
 //!
 //! [`Backoff`] 是不碰時鐘與 I/O 的部分，[`run`] 把它接到 tokio 的計時器與 [`Hooks`]。
@@ -220,7 +221,11 @@ pub async fn run<H: Hooks>(
         let lost_established = match attempt {
             Ok(gen) => {
                 if *stop.borrow() {
-                    let _ = tokio::time::timeout(GENERATION_CLOSE_TIMEOUT, hooks.close(gen)).await;
+                    let closed =
+                        tokio::time::timeout(GENERATION_CLOSE_TIMEOUT, hooks.close(gen)).await;
+                    if closed.is_err() {
+                        hooks.error(&format!("{label}: transport closure could not be confirmed during disposal — server shutdown may be incomplete"));
+                    }
                     settle_first(&mut first, Err(format!("{label}: disposed")));
                     return;
                 }
