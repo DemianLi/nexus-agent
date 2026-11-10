@@ -1,7 +1,7 @@
 //! 宿主用的 JSON：解析、編碼與值的型別都是 `serde_json`。這裡加的是巢狀層數的上限、固定的錯誤原因，與手排鍵順序的 [`encode_fields`]。
 //!
-//! [`encode`] 的物件鍵照碼位（位元組）順序，重複的鍵取後者（跟 `JSON.parse` 一致）。鍵的順序由 [`encode`] 自己排，
-//! 不靠 [`Map`] 的順序：`serde_json` 開了 `preserve_order`（整個 crate 生效），[`Map`] 留著插入順序，MCP 的工具定義才照 server 送的順序過橋。
+//! [`encode`] 的物件鍵照碼位（位元組）順序；[`parse`] 遇到重複的鍵取後者（跟 `JSON.parse` 一致）。鍵的順序由 [`encode`] 自己排，
+//! 不靠 [`Map`] 的順序：`serde_json` 開了 `preserve_order`（feature 在整個建置統一，相依裡的 serde_json 一樣生效），[`Map`] 留著插入順序，MCP 的工具定義才照 server 送的順序過橋。
 //! 輸入要是合法的 UTF-8，`\u` 跳脫的代理對落單的不收。
 
 use std::fmt;

@@ -4,7 +4,7 @@
 //!
 //! | 方法 | 種類 | payload | 做什麼 |
 //! | --- | --- | --- | --- |
-//! | `open` | 串流 | `{ "server": <一台 server 的設定>, "elicitation": bool }` | 向池取這份設定的連線，送清單，之後一直掛著當綁定 |
+//! | `open` | 串流 | `{ "server": <一台 server 的設定>, "elicitation"?: bool }` | 向池取這份設定的連線，送清單，之後一直掛著當綁定 |
 //! | `call` | 串流 | `{ "open": <同一條連線上 open 的呼叫編號>, "method": <方法>, "params": <JSON 文字> }` | 送一次請求到那份連線，送回結果 |
 //!
 //! **MCP 的酬載一律是 JSON 文字**，切成字串塊送：宿主的框有巢狀與大小上限，MCP 的酬載不受它們限。
@@ -17,7 +17,7 @@
 //! - 切塊在 UTF-8 字元的邊界上，一塊最多 [`PIECE_BYTES`] 位元組，一步最多送 [`PIECES_PER_STEP`] 塊：一塊編成框最壞是 6 倍
 //!   （控制字元寫成 `\u00XX`）加上框頭，仍小於一框；一步四塊仍小於宿主一步的上限（`crate::host::calls::OUTBOX_PAUSE`）。
 //! - 一份 JSON 文字最多 [`MAX_TEXT_BYTES`]，跟 server 一則回應的上限相同；超過的以服務的錯收尾，不送任何塊。
-//! - 橋的日誌（監督者的進度與放棄）寫 stderr，前綴 `nexus-host:`。
+//! - 橋的日誌（監督者的進度與放棄）寫 stderr，前綴 `nexus-host: mcp`。
 //! - 卸載時丟掉橋：送收橋、不等它收完（宿主結束時不卸載插件，連線隨行程結束）。
 
 use std::collections::{HashMap, VecDeque};
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn 切在字元邊界上_接回來不變() {
-        // 「中」是三個位元組：每塊四個位元組時，切點都落在字元中間。
+        // 「中」是三個位元組：每塊四個位元組時，切點會落在字元中間。
         let text = "a中中中\"\\é\u{1F600}x".repeat(50);
         let parts = pieces(&text, 4);
         assert!(parts.iter().all(|p| !p.is_empty() && p.len() <= 4));

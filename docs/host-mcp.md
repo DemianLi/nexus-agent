@@ -47,7 +47,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   rmcp 對這兩種都回 `TransportClosed`，超限的原因只寫進它自己的 tracing 日誌；transport 本身還開著（`Peer::is_transport_closed` 是假），所以不判掉線。
 - 已知缺口：rmcp 3.9.0 的 HTTP transport 握手之後，server 怎麼回都不會關（只有宿主自己收掉才關），所以 HTTP 的一代實際上不會因為 server 而判掉線。
   舊協定的 server 重啟、忘掉 session 之後，每次呼叫都回 `Session expired (HTTP 404)`，不會重連（[#2690](https://github.com/DemianLi/nexus-agent/issues/2690)）。
-- 錯誤訊息換掉這一列的秘密（`Shared::scrub`）。成功結果的遮蔽在 D2b：結果序列化成文字的那一步（`outgoing`）就是位置，遮蔽要在序列化之前做。
+- 錯誤訊息換掉這一列的秘密（`Shared::scrub`）。成功結果還沒遮蔽（TODO #2570）；位置是結果序列化成文字的那一步（`outgoing`），遮蔽要在序列化之前做。
 
 ## 設定
 

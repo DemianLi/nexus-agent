@@ -1533,7 +1533,7 @@ mod calls {
             assert_eq!(names, ["a", "big"]);
             assert_eq!(listed["warning"], Value::Null);
 
-            // 每塊 32 KiB、一步四塊：600 KiB 要分好幾步；內容的引號、反斜線、三位元組字元會落在切點上。
+            // 每塊 32 KiB、一步四塊：600 KiB 要分好幾步，而且有切點落在三位元組字元中間。
             let bytes = 600 * 1024;
             call_tool(
                 &mut stream,

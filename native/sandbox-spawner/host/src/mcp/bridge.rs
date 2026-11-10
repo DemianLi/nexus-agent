@@ -3,9 +3,9 @@
 //! - 宿主那一側送 [`Command`]（無界通道，送了就回，不會卡住宿主迴圈）；橋把結果 [`Outcome`] 排進收件匣、寫一個位元組叫醒宿主
 //!   （[`crate::wake`]），宿主醒來 [`Bridge::take`] 取走。
 //! - 一次綁定（[`Command::Open`]）向池取一份連線，記成 `open` 編號；放掉（[`Command::Release`]）只是忘掉編號，池裡的連線照留（池的規則）。
-//! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `index.ts`）；
-//!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
-//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。**秘密的遮蔽要在序列化成文字之前做**（D2b），位置是 `outgoing`。
+//! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
+//!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連（rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，見 #2690）。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
+//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。成功結果還沒遮蔽秘密（TODO(#2570)）；**遮蔽要在 `outgoing` 序列化成文字之前做**。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
 
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ use super::pool::{Log, Pool, Shared};
 use crate::json::Value;
 use crate::wake::{Wake, Waker};
 
-/// rmcp 3.9 回應太大的兩種錯（整份 body、單則 SSE 事件）共用的字樣；SSE 那一種的型別不公開，只能認字。
+/// rmcp 3.9 整份回應 body 超過上限時錯誤裡的字樣（靠認字分辨）。單則 SSE 事件超限 rmcp 回 `TransportClosed`，不經這裡。
 const TOO_LARGE: &str = "exceeded the maximum size of";
 
 /// 宿主那一側送進橋的事。
@@ -117,8 +117,8 @@ impl Bridge {
         })
     }
 
+    /// 送一個命令，不會卡。橋的執行緒已經結束時靜靜丟掉：那時 `Closed` 已經交過或即將交出。
     pub fn send(&self, command: Command) {
-        // 橋的執行緒已經結束時送不進去：那時 `Closed` 已經交過或即將交出。
         let _ = self.commands.send(command);
     }
 
@@ -131,6 +131,7 @@ impl Bridge {
             .unwrap_or_default()
     }
 
+    /// 喚醒 fd，借出不交出：[`Bridge`] 活著時有效，呼叫方不得 close。
     pub fn wake_fd(&self) -> RawFd {
         self.wake.fd()
     }
@@ -275,7 +276,7 @@ fn opened(listed: Option<Arc<Listed>>, warning: Option<String>) -> Result<Opened
     })
 }
 
-/// 交回宿主那一側之前序列化成 JSON 文字。D2b 的遮蔽在這一步之前做。
+/// 交回宿主那一側之前序列化成 JSON 文字。TODO(#2570)：成功結果的秘密遮蔽要放在這一步之前。
 fn outgoing(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
@@ -318,7 +319,7 @@ async fn request(
             tokio::select! {
                 response = handle.await_response() => response,
                 _ = cancel => {
-                    // 同 TS 按了停止：告訴 server 不用做了，不等它回。
+                    // 取消：告訴 server 不用做了，不等它回。不分協定一律送（TS 的 SDK 只在舊協定送，見 docs/host-mcp.md〈跟 TS 的差距〉）。
                     let notice = CancelledNotification::new(CancelledNotificationParam::new(
                         Some(request_id),
                         Some("cancelled".into()),

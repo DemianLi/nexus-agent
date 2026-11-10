@@ -861,7 +861,7 @@ mod http {
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                // SAFETY: 一個 pollfd。
+                // SAFETY: 指向這個 frame 上一個活著的 pollfd，nfds 是 1。
                 unsafe { libc::poll(&mut fd, 1, left.as_millis() as libc::c_int) };
             }
         }
