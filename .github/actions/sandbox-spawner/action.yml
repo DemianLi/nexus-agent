@@ -18,7 +18,7 @@ inputs:
   per-thread-binaries:
     description: >-
       release 版的 nexus-supervisor 與 nexus-host 包成 tar 上傳成的 artifact 名（#2657：packed-install 照產物起 per-thread 用）；
-      空的就不上傳。只給 CI 驗證用，不進出貨的 bundle（宿主今天不出貨）
+      空的就不上傳。只給 CI 驗證用，不進出貨的 bundle（產物不帶監督行程與宿主，見 operations.md〈行程模型〉）
     required: false
     default: ''
 

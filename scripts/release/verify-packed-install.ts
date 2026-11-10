@@ -18,14 +18,14 @@
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
  *    首頁 200 且是網頁 index、Linux 上第二台 serve 被 home 鎖拒絕、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0；
  * 7. **給了 `--supervisor` 才跑**（[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：同一個 `lib/serve.js` 以 `per-thread` 起，
- *    監督行程用 `--supervisor` 指的那一支（旁邊要有 `nexus-host`，產物不帶這兩支）。跟步驟 6 同一套檢查，另外要等到監督行程底下有
+ *    監督行程用 `--supervisor` 指的那一支（旁邊要有 `nexus-host`，產物不帶這兩支）。跟步驟 6 同一套檢查（第二台 serve 被 home 鎖拒絕那一條不查），另外要等到監督行程底下有
  *    安裝樹裡的 `lib/front-process.js` 與 `lib/conversation-process.js` 各自跑著（監督行程預熱的那一條，不必開 thread）。
  *    發版的 workflow 不給這個旗標，只有 CI 的 packed-install 給。
  *
  * 子行程環境清掉 `NODE_OPTIONS`、`NODE_PATH`、`TSX_TSCONFIG_PATH`，`NEXUS_AGENT_HOME`／`HOME` 指進暫存目錄，`cwd` 在 repo 外。
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
  *
- * 步驟 3 到 6 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
+ * 步驟 3 到 7 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
  * `apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
  *
  * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty] [--supervisor <nexus-supervisor>]`。
@@ -464,7 +464,8 @@ export function strayProcesses(dir: string): { lines: string[]; problem?: string
  * @param tarball - tarball 路徑，旁邊要有 `.sha256`。
  * @param options - `expectCommit`：打包的 commit（CI 給 `GITHUB_SHA`）。給了，header 的 `build.commit` 就要等於它，
  *   而不只是等於產物自己的戳記——戳記被拿掉時兩邊同時不見，只比戳記會漏。`allowDirty`：戳記的 `dirty` 是 `true` 也放行，
- *   只給本機驗沒 commit 的改動用，CI 不給。
+ *   只給本機驗沒 commit 的改動用，CI 不給。`supervisor`：`nexus-supervisor` 的路徑（旁邊要有 `nexus-host`），給了才跑步驟 7，
+ *   只在 Linux 給得了。
  * @returns 失敗訊息；空陣列代表通過。
  */
 export async function verifyPackedInstall(
@@ -686,6 +687,9 @@ export interface ServeSmokeTimeouts {
  *
  * 離開行程群組也讓終端機的 Ctrl-C 與 CI 取消的訊號到不了 serve，所以執行期間掛著 `SIGINT`／`SIGTERM` 的處理：
  * 收到就 `SIGKILL` 整個群組、收掉暫存目錄、再用同一個訊號結束自己（不留孤兒，退出狀態也還是被訊號中斷）。
+ *
+ * @param whileServing - serve 印出網址、首頁打過之後叫一次，收 serve 的 pid（per-thread 時就是監督行程），可以回 Promise。
+ * @param args - 接在 `--port 0` 後面的旗標。
  */
 export async function smokeInstalledServe(
   root: string,
@@ -782,7 +786,7 @@ export async function smokeInstalledServe(
 }
 
 /**
- * 步驟 7b：監督行程底下要有安裝樹裡的前台與對話行程各一支以上。
+ * 步驟 7：監督行程底下要有安裝樹裡的前台與對話行程各一支以上。
  *
  * @param commandLines - 監督行程每個子行程的命令列（引數以空白相接）。
  * @param lib - 安裝樹的 `lib/`，取真實路徑（子行程的入口是 `sibling()` 從真實路徑算出來的）。

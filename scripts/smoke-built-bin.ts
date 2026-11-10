@@ -6,9 +6,10 @@
  *
  * 1. `node apps/harness/lib/<入口>.js --version` 印出 manifest 的版本，**stderr 是空的**（照 dsh `apps/cli/tests/built-bin.e2e.ts:650`）；
  * 2. 經 `node_modules/.bin` 那種符號連結啟動，同樣印得出來（比路徑的入口檢查在這裡會靜靜以 0 結束、什麼都不印）；
- * 3. 每支帶 main guard 的入口（`bin` 與 `exports` 指的檔，加上啟動器 per-thread 時起的那兩支）在 `lib/` 裡要有，而且留著自己的 `if (import.meta.main)`
- *    （[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：入口被另一個入口 import 時，打包把它的本體搬進共用 chunk，
- *    入口檔只剩一行 re-export，guard 在 chunk 裡永遠是 false，起起來什麼都不印、以 0 結束。per-thread 的前台與對話行程只有這裡在原始碼平台上量得到；
+ * 3. 每支入口（`bin` 與 `exports` 指的檔，加上啟動器 per-thread 時起的那兩支）在 `lib/` 裡都要編出來；原始碼帶 `if (import.meta.main)` 的，
+ *    產物裡也要留著自己的那一個（[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：入口被另一個入口 import 時，打包把它的本體搬進
+ *    共用 chunk，入口檔只剩一行 re-export，guard 在 chunk 裡永遠是 false，起起來什麼都不印、以 0 結束。這一條只查檔與 guard，不起行程；
+ *    照產物真的起 per-thread 是 `verify-packed-install` 的步驟 7，只在 Linux 跑；
  * 4. **真的把 `nexus-serve --port 0` 起起來**（卡上驗收 1「起得來，印出網址」）：`--version` 在載入設定與插件之前就返回了，
  *    `#settings/*`、插件裸名解析到 `lib`、`cordis.yml` 與 web dist 的相對路徑都量不到。這一條經符號連結、用假 key 與放在 `/var/tmp` 的暫存 home
  *    （不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾），等印出網址與插件清單，送 `SIGTERM`，要 exit 0；有逾時上限，暫存目錄一律收掉。
@@ -149,7 +150,7 @@ async function smokeServe(): Promise<string[]> {
 }
 
 /**
- * 帶 main guard 的入口在 `lib/` 裡有沒有留著自己的 guard（見檔頭第 3 條）。
+ * 每支入口在 `lib/` 裡有沒有編出來；原始碼帶 main guard 的，產物裡有沒有留著自己的 guard（見檔頭第 3 條）。
  *
  * @returns 失敗訊息；空陣列代表通過。
  */

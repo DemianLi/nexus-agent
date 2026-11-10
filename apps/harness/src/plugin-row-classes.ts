@@ -22,8 +22,8 @@
  * 分類文件曾把 goal、sandbox-policy、workspace-changes 歸這一類（R2／R3）。逐顆對宿主核過，今天都不成立：
  *
  * - **goal**：`assembly-root.ts:1000` 每次組裝各從 services 拿一份 `goals`；`:1083-1095` 沒掛就是 `undefined`，排程器
- *   全用 `goals?.` 接；`serve-run.ts:937-940` 的 `goalDriver` 是那一條 thread 自己那次組裝的。
- * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve-run.ts:882`、`:904` 在 thread 組裝區塊裡，沒掛就
+ *   全用 `goals?.` 接；`serve-run.ts` 的 `runServe` 裡的 `goalDriver` 是那一條 thread 自己那次組裝的。
+ * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve-run.ts` 的 `runServe` 在 thread 組裝區塊裡取兩次，沒掛就
  *   缺席；`wire-handler.ts:1139`、`:2563`、`:2582` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份。它是
  *   `cordis.serve.yml:17` 的一列，不是組裝點自己建的。
  * - **sandbox-policy**：控制器每條 thread 組裝時各建一個（`assembly-root.ts:820`）。**關掉它的後果不是「照舊」而是

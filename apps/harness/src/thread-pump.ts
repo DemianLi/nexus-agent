@@ -268,7 +268,7 @@ const ignore = (): void => undefined;
  * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
  *
  * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise。行程層我們現在和 dsh 一樣大聲死
- * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve-run.ts` 的 `main()`），
+ * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 由 `serve-run.ts` 的 `serveMain` 裝上），
  * 所以這裡標掉的是**已知會產生的孤兒**，不是替行程層的 handler 讓路：沒標到的 rejection 會被那個 handler
  * 當成致命失敗收尾、以 1 結束。代價是這裡**依賴投影的形狀**：哪天 langchain 加一種帶 promise 的原生
  * 投影，這裡會漏，而漏的後果現在是行程以 1 結束（帶標籤診斷），不再是 Node 預設的無診斷崩潰。

@@ -739,7 +739,7 @@ describe('goals 服務綁的是這一次組裝', () => {
 
   /**
    * **serve 交給 wire handler 的 `goalDriver` 工廠**（#1575 W4）：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進
-   * `goalDriverPort`。以前它是 `serve-run.ts` 裡的行內閉包，拿掉那一格所有測試照樣綠；現在是具名的 `serveGoalDriver`，`serve-run.ts` 只用它。
+   * `goalDriverPort`。以前它是 `serve.ts` 裡的行內閉包，拿掉那一格所有測試照樣綠；現在是具名的 `serveGoalDriver`，`serve-run.ts` 只用它。
    */
   it('serveGoalDriver：waitForChildren 原樣轉進 port，flush／warn／roundCap 也各到各的位置', async () => {
     const built = await createCliAgent({ live: false }, shipped);

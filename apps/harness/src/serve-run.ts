@@ -1,5 +1,6 @@
 /**
- * 把 agent 掛上 HTTP，給 `apps/web` 連。
+ * 把 agent 掛上 HTTP，給 `apps/web` 連。這支是 serve 的本體，沒有 main guard：入口是 `serve.ts`，
+ * `front-process.ts`、`conversation-process.ts` 與測試都 import 這一支。
  *
  *   pnpm --filter @nexus/harness run serve             # 假模型
  *   pnpm --filter @nexus/harness run serve:live        # 換成真實供應商
@@ -2420,7 +2421,7 @@ async function startServer(
         await new Promise<void>((resolve) => setTimeout(resolve, opsConfig.probes.drainMs));
       }
       // **每一步各自接住，全部跑完才拋**（#1511）：`servedHandler.close()` 會拒絕（thread 收尾失敗），
-      // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
+      // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `serveMain` 印。
       const failures: unknown[] = [];
       const attempt = async (run: () => void | Promise<void>): Promise<void> => {
         try {
@@ -2488,7 +2489,7 @@ export interface ServeProcessLifecycle {
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
  *   （誰先開始收尾，誰的 `.then` 先掛在那顆 promise 上、先叫 `exit`；兩個 handler 的註冊順序不影響，同 dsh）。
  *
- * **在 `main()` 裡、`runServe` 之前裝，不在 `runServe` 裡裝**：`runServe` 被許多測試在 vitest 行程裡直接叫，它們自己掛
+ * **在 `serveMain` 裡、`runServe` 之前裝，不在 `runServe` 裡裝**：`runServe` 被許多測試在 vitest 行程裡直接叫，它們自己掛
  * `unhandledRejection` 計數，裝在裡面會搶走那些測試的判準、還會叫真的 `process.exit`。
  *
  * @param proc - 要註冊的行程；測試注入假的。
@@ -2554,7 +2555,11 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
   };
 }
 
-/** `nexus-serve` 的整個啟動：先選行程模型，`single` 才起 serve 並裝上收尾。由 `serve.ts` 呼叫。 */
+/**
+ * `nexus-serve` 的整個啟動，由 `serve.ts` 呼叫，一個行程只叫一次。`per-thread` 在這裡 `execve` 成監督行程、不會回來；
+ * `single` 起 serve，並在 `process` 上裝收尾（{@link installServeProcessLifecycle}）。不 reject：失敗印到 stderr、
+ * `process.exitCode` 設成 1 後回傳。
+ */
 export async function serveMain(): Promise<void> {
   const argv = process.argv.slice(2);
   // `per-thread` 在這裡換成監督行程（#2341），不會回來；排在裝收尾之前，換掉之前這個行程什麼都還沒起。
