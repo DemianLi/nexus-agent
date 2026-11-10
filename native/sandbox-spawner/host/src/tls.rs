@@ -11,7 +11,8 @@ use std::sync::Arc;
 pub fn client_config(roots: &Path) -> Result<ClientConfig, String> {
     let shown = roots.display();
     let mut store = RootCertStore::empty();
-    let certs = CertificateDer::pem_file_iter(roots).map_err(|err| format!("讀不了根憑證檔 {shown}：{err}"))?;
+    let certs = CertificateDer::pem_file_iter(roots)
+        .map_err(|err| format!("讀不了根憑證檔 {shown}：{err}"))?;
     for (i, cert) in certs.enumerate() {
         let cert = cert.map_err(|err| format!("根憑證檔 {shown} 第 {} 張認不得：{err}", i + 1))?;
         store

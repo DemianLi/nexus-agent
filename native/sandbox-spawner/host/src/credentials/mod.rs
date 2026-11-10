@@ -206,7 +206,11 @@ fn forbidden_character(text: &str) -> Option<Pos> {
 fn directive_in(before: &str) -> Option<Pos> {
     let mut index = 0;
     for (n, line) in before.split_inclusive('\n').enumerate() {
-        let body = if n == 0 { line.trim_start_matches('\u{FEFF}') } else { line };
+        let body = if n == 0 {
+            line.trim_start_matches('\u{FEFF}')
+        } else {
+            line
+        };
         if body.starts_with('%') {
             let skipped = line.chars().count() - body.chars().count();
             return Some(Pos {
@@ -261,7 +265,9 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                     // flow 的層數在 saphyr 是 u8，超過 255 層就是這個錯；TS 那邊 `yaml` 用光呼叫堆疊也講成太深。
                     "recursion limit exceeded" => findings.error = Some((at, "NESTING_TOO_DEEP")),
                     // 沒有對應錨點的別名：TS 的 `yaml` 不當語法錯，由別名的檢查擋下。
-                    "while parsing node, found unknown anchor" => findings.forbid(at, "ALIAS_NOT_ALLOWED"),
+                    "while parsing node, found unknown anchor" => {
+                        findings.forbid(at, "ALIAS_NOT_ALLOWED")
+                    }
                     _ => findings.error = Some((at, "YAML_SYNTAX")),
                 }
                 break;
@@ -372,7 +378,10 @@ fn named(entries: &[(Node, Node)]) -> Result<Vec<(String, Pos, &Node)>, ParseErr
         };
         let name = k.key_name();
         if !seen.insert(name.clone()) {
-            return fail(Reason::DuplicateKey, format!("YAML 錯誤 DUPLICATE_KEY（{at}）"));
+            return fail(
+                Reason::DuplicateKey,
+                format!("YAML 錯誤 DUPLICATE_KEY（{at}）"),
+            );
         }
         out.push((name, *at, value));
     }
@@ -407,12 +416,18 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
     // 順序照 TS：YAML 函式庫自己的錯（語法與重複鍵，照位置先後）在前，解析後的 nexus 檢查在後。
     match (findings.error, findings.duplicate) {
         (Some((at, _)), Some(dup)) if dup < at => {
-            return fail(Reason::DuplicateKey, format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"));
+            return fail(
+                Reason::DuplicateKey,
+                format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"),
+            );
         }
         (Some((_, "NESTING_TOO_DEEP")), _) => return too_deep(),
         (Some((at, code)), _) => return yaml_error(code, at),
         (None, Some(dup)) => {
-            return fail(Reason::DuplicateKey, format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"));
+            return fail(
+                Reason::DuplicateKey,
+                format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"),
+            );
         }
         (None, None) => {}
     }
@@ -426,9 +441,18 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
         return yaml_error("COLLECTION_KEY_NOT_ALLOWED", at);
     }
     let entries = match root {
-        None | Some(Node::Scalar { value: Scalar::Null, .. }) => return Ok(Parsed::default()),
+        None
+        | Some(Node::Scalar {
+            value: Scalar::Null,
+            ..
+        }) => return Ok(Parsed::default()),
         Some(Node::Map { entries }) => entries,
-        Some(_) => return fail(Reason::NotMapping, "根要是一個 mapping（version 與 refs）".into()),
+        Some(_) => {
+            return fail(
+                Reason::NotMapping,
+                "根要是一個 mapping（version 與 refs）".into(),
+            )
+        }
     };
     if entries.is_empty() {
         return Ok(Parsed::default());
@@ -440,7 +464,10 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
         Some(Node::Scalar { value: Scalar::Number(n), .. }) if *n == DOCUMENT_VERSION
     );
     if !version_ok {
-        return fail(Reason::Version, format!("version 要是 {}", js_number_to_string(DOCUMENT_VERSION)));
+        return fail(
+            Reason::Version,
+            format!("version 要是 {}", js_number_to_string(DOCUMENT_VERSION)),
+        );
     }
     if field("records").is_some() {
         return fail(
@@ -449,9 +476,18 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
         );
     }
     let refs: &[(Node, Node)] = match field("refs") {
-        None | Some(Node::Scalar { value: Scalar::Null, .. }) => &[],
+        None
+        | Some(Node::Scalar {
+            value: Scalar::Null,
+            ..
+        }) => &[],
         Some(Node::Map { entries }) => entries,
-        Some(_) => return fail(Reason::RefsNotMapping, "refs 要是 mapping（名字: 值）".into()),
+        Some(_) => {
+            return fail(
+                Reason::RefsNotMapping,
+                "refs 要是 mapping（名字: 值）".into(),
+            )
+        }
     };
     let mut out = Vec::new();
     for (name, at, value) in named(refs)? {
@@ -464,7 +500,11 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
                 ),
             );
         }
-        let Node::Scalar { value: Scalar::Str(value), .. } = value else {
+        let Node::Scalar {
+            value: Scalar::Str(value),
+            ..
+        } = value
+        else {
             return fail(Reason::NotString, format!("refs {at}那一把要是字串"));
         };
         if value.is_empty() {
@@ -578,7 +618,9 @@ impl Store {
             return Err(why);
         }
         if self.warned.as_deref() != Some(key.as_str()) {
-            (self.warn)(&format!("credentials: 重載失敗，繼續用上一份可用的內容：{why}"));
+            (self.warn)(&format!(
+                "credentials: 重載失敗，繼續用上一份可用的內容：{why}"
+            ));
             self.warned = Some(key);
         }
         Ok(self.good.as_ref().map_or(&[], |(_, refs)| refs.as_slice()))

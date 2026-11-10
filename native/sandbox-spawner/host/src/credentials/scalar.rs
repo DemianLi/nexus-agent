@@ -37,7 +37,9 @@ impl Scalar {
             }
         }
         match text {
-            ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => return Scalar::Number(f64::INFINITY),
+            ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => {
+                return Scalar::Number(f64::INFINITY)
+            }
             "-.inf" | "-.Inf" | "-.INF" => return Scalar::Number(f64::NEG_INFINITY),
             ".nan" | ".NaN" | ".NAN" => return Scalar::Number(f64::NAN),
             _ => {}
@@ -57,7 +59,6 @@ impl Scalar {
             Scalar::Str(s) => s.clone(),
         }
     }
-
 }
 
 /// `^[-+]?[0-9]+$`
@@ -76,7 +77,9 @@ fn is_exp_float(text: &str) -> bool {
     let exponent = exponent.strip_prefix(['-', '+']).unwrap_or(exponent);
     let mantissa_ok = match mantissa.split_once('.') {
         Some(("", fraction)) => all_digits(fraction),
-        Some((whole, fraction)) => all_digits(whole) && fraction.bytes().all(|b| b.is_ascii_digit()),
+        Some((whole, fraction)) => {
+            all_digits(whole) && fraction.bytes().all(|b| b.is_ascii_digit())
+        }
         None => all_digits(mantissa),
     };
     mantissa_ok && all_digits(exponent)
@@ -87,7 +90,9 @@ fn is_float(text: &str) -> bool {
     let body = text.strip_prefix(['-', '+']).unwrap_or(text);
     match body.split_once('.') {
         Some(("", fraction)) => all_digits(fraction),
-        Some((whole, fraction)) => all_digits(whole) && fraction.bytes().all(|b| b.is_ascii_digit()),
+        Some((whole, fraction)) => {
+            all_digits(whole) && fraction.bytes().all(|b| b.is_ascii_digit())
+        }
         None => false,
     }
 }
@@ -116,7 +121,9 @@ fn power_of_two_radix(digits: &str, bits_per_digit: u32) -> f64 {
     };
     let bits = &bits[first..];
     if bits.len() <= 53 {
-        return bits.iter().fold(0.0, |acc, b| acc * 2.0 + f64::from(u8::from(*b)));
+        return bits
+            .iter()
+            .fold(0.0, |acc, b| acc * 2.0 + f64::from(u8::from(*b)));
     }
     let mut mantissa: u64 = bits[..53].iter().fold(0, |acc, b| acc << 1 | u64::from(*b));
     let half = bits[53];
@@ -222,8 +229,17 @@ mod tests {
 
     #[test]
     fn 二的次方基數照位元捨入() {
-        assert_eq!(Scalar::plain("0x20000000000001").key_name(), "9007199254740992");
-        assert_eq!(Scalar::plain("0x20000000000003").key_name(), "9007199254740996");
-        assert_eq!(Scalar::plain(&format!("0x{}", "f".repeat(300))).key_name(), "Infinity");
+        assert_eq!(
+            Scalar::plain("0x20000000000001").key_name(),
+            "9007199254740992"
+        );
+        assert_eq!(
+            Scalar::plain("0x20000000000003").key_name(),
+            "9007199254740996"
+        );
+        assert_eq!(
+            Scalar::plain(&format!("0x{}", "f".repeat(300))).key_name(),
+            "Infinity"
+        );
     }
 }

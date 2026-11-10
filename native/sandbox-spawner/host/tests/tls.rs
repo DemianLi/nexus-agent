@@ -36,7 +36,10 @@ fn 沒有憑證或認不得就回錯() {
     for (tag, text) in [
         ("empty", ""),
         ("no-cert", "not a pem\n"),
-        ("broken", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"),
+        (
+            "broken",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        ),
     ] {
         let path = temp_file(tag, text);
         assert!(client_config(&path).is_err(), "{tag}");

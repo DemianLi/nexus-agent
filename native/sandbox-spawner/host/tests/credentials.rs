@@ -42,12 +42,21 @@ type Warnings = Rc<RefCell<Vec<String>>>;
 fn store(path: PathBuf) -> (Store, Warnings) {
     let warnings: Warnings = Rc::default();
     let sink = Rc::clone(&warnings);
-    (Store::new(path, Box::new(move |line| sink.borrow_mut().push(line.to_string()))), warnings)
+    (
+        Store::new(
+            path,
+            Box::new(move |line| sink.borrow_mut().push(line.to_string())),
+        ),
+        warnings,
+    )
 }
 
 #[test]
 fn 文件版本跟樣本檔一致() {
-    assert_eq!(vectors()["documentVersion"].as_f64(), Some(DOCUMENT_VERSION));
+    assert_eq!(
+        vectors()["documentVersion"].as_f64(),
+        Some(DOCUMENT_VERSION)
+    );
 }
 
 #[test]
@@ -69,7 +78,11 @@ fn 合法樣本() {
             })
             .collect();
         assert_eq!(parsed.refs, refs, "{name}");
-        assert_eq!(parsed.ignored_keys, strings(&vector["ignoredKeys"]), "{name}");
+        assert_eq!(
+            parsed.ignored_keys,
+            strings(&vector["ignoredKeys"]),
+            "{name}"
+        );
     }
 }
 
@@ -83,9 +96,16 @@ fn 不合法樣本() {
         let Err(err) = parse(vector["text"].as_str().expect("text")) else {
             panic!("{name}：該拒絕卻收了");
         };
-        assert_eq!(err.reason.code(), vector["reason"].as_str().expect("reason"), "{name}：{err}");
+        assert_eq!(
+            err.reason.code(),
+            vector["reason"].as_str().expect("reason"),
+            "{name}：{err}"
+        );
         if let Some(code) = vector["code"].as_str() {
-            assert!(err.why.starts_with(&format!("YAML 錯誤 {code}")), "{name}：{err}");
+            assert!(
+                err.why.starts_with(&format!("YAML 錯誤 {code}")),
+                "{name}：{err}"
+            );
         }
         if let Some(secret) = vector["secret"].as_str() {
             assert!(!err.why.contains(secret), "{name}：訊息含值");
@@ -103,10 +123,17 @@ fn 權限位元() {
         let (mut credentials, _) = store(file.clone());
         let result = credentials.refs().map(<[_]>::to_vec);
         if vector["accept"].as_bool().expect("accept") {
-            assert_eq!(result, Ok(vec![("A".to_string(), "FAKE-mode".to_string())]), "{mode:o}");
+            assert_eq!(
+                result,
+                Ok(vec![("A".to_string(), "FAKE-mode".to_string())]),
+                "{mode:o}"
+            );
         } else {
             let why = result.expect_err("該拒絕");
-            assert!(why.contains(&format!("chmod 600 {}", file.display())), "{mode:o}：{why}");
+            assert!(
+                why.contains(&format!("chmod 600 {}", file.display())),
+                "{mode:o}：{why}"
+            );
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -125,7 +152,11 @@ fn 檔案不存在是沒有憑證() {
 fn 第一次就壞是錯誤且不含值() {
     let dir = temp_dir("first-bad");
     let file = dir.join(".credentials.yaml");
-    write(&file, "version: 1\nrefs:\n  A: !!str nvapi-FAKE-first\n", 0o600);
+    write(
+        &file,
+        "version: 1\nrefs:\n  A: !!str nvapi-FAKE-first\n",
+        0o600,
+    );
     let (mut credentials, _) = store(file);
     let why = credentials.refs().expect_err("該拒絕");
     assert!(why.contains("TAG_NOT_ALLOWED"), "{why}");
@@ -147,7 +178,11 @@ fn 變了才重讀_壞了續用上一份且同一個原因只講一次() {
     let two = vec![("A".to_string(), "FAKE-second".to_string())];
     assert_eq!(credentials.refs().map(<[_]>::to_vec), Ok(two.clone()));
 
-    write(&file, "version: 1\nrefs:\n  A: [nvapi-FAKE-broken]\n", 0o600);
+    write(
+        &file,
+        "version: 1\nrefs:\n  A: [nvapi-FAKE-broken]\n",
+        0o600,
+    );
     assert_eq!(credentials.refs().map(<[_]>::to_vec), Ok(two.clone()));
     assert_eq!(credentials.refs().map(<[_]>::to_vec), Ok(two.clone()));
     {
@@ -172,12 +207,20 @@ fn 變了才重讀_壞了續用上一份且同一個原因只講一次() {
 fn 不認得的頂層鍵只講個數與行號() {
     let dir = temp_dir("ignored");
     let file = dir.join(".credentials.yaml");
-    write(&file, "version: 1\nnvapi-FAKE-keyname: x\nrefs:\n  A: v\n", 0o600);
+    write(
+        &file,
+        "version: 1\nnvapi-FAKE-keyname: x\nrefs:\n  A: v\n",
+        0o600,
+    );
     let (mut credentials, warnings) = store(file);
     assert_eq!(credentials.refs().map(<[_]>::len), Ok(1));
     let seen = warnings.borrow();
     assert_eq!(seen.len(), 1);
-    assert!(seen[0].contains("1 個不認得的頂層鍵（第 2 行）"), "{}", seen[0]);
+    assert!(
+        seen[0].contains("1 個不認得的頂層鍵（第 2 行）"),
+        "{}",
+        seen[0]
+    );
     assert!(!seen[0].contains("nvapi-FAKE-keyname"), "{}", seen[0]);
     drop(seen);
     let _ = std::fs::remove_dir_all(&dir);
@@ -187,15 +230,42 @@ fn 不認得的頂層鍵只講個數與行號() {
 #[test]
 fn 位置跟_ts_一字不差() {
     for (text, why) in [
-        ("version: 1\n?\n  nvapi-FAKE-pos: 1\n: x\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 3 行第 3 欄）"),
-        ("version: 1\nrefs:\n  A: x\n  [nvapi-FAKE-pos]: 1\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 4 行第 3 欄）"),
-        ("\u{FEFF}[nvapi-FAKE-pos]: 1\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 2 欄）"),
-        ("\u{FEFF}%YAML 1.2\n---\nversion: 1\n", "YAML 錯誤 DIRECTIVE_NOT_ALLOWED（第 1 行第 2 欄）"),
-        ("\u{FEFF}!!map\nversion: 1\n", "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 2 欄）"),
-        ("version: 1\nnote: 😀\0\n", "YAML 錯誤 CHARACTER_NOT_ALLOWED（第 2 行第 8 欄）"),
-        ("x: [😀, !!str a]\n", "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 8 欄）"),
-        ("x: {😀: 1, [a]: 2}\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 11 欄）"),
-        ("{😀: 1, a: 1, a: 2}\n", "YAML 錯誤 DUPLICATE_KEY（第 1 行第 14 欄）"),
+        (
+            "version: 1\n?\n  nvapi-FAKE-pos: 1\n: x\n",
+            "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 3 行第 3 欄）",
+        ),
+        (
+            "version: 1\nrefs:\n  A: x\n  [nvapi-FAKE-pos]: 1\n",
+            "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 4 行第 3 欄）",
+        ),
+        (
+            "\u{FEFF}[nvapi-FAKE-pos]: 1\n",
+            "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 2 欄）",
+        ),
+        (
+            "\u{FEFF}%YAML 1.2\n---\nversion: 1\n",
+            "YAML 錯誤 DIRECTIVE_NOT_ALLOWED（第 1 行第 2 欄）",
+        ),
+        (
+            "\u{FEFF}!!map\nversion: 1\n",
+            "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 2 欄）",
+        ),
+        (
+            "version: 1\nnote: 😀\0\n",
+            "YAML 錯誤 CHARACTER_NOT_ALLOWED（第 2 行第 8 欄）",
+        ),
+        (
+            "x: [😀, !!str a]\n",
+            "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 8 欄）",
+        ),
+        (
+            "x: {😀: 1, [a]: 2}\n",
+            "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 11 欄）",
+        ),
+        (
+            "{😀: 1, a: 1, a: 2}\n",
+            "YAML 錯誤 DUPLICATE_KEY（第 1 行第 14 欄）",
+        ),
         (
             &format!("version: 1\nnote: {}{}\n", "[".repeat(300), "]".repeat(300)),
             "YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）",
