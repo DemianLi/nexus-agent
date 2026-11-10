@@ -44,7 +44,7 @@ use nexus_sandbox_spawner::supervisor_protocol::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -446,6 +446,10 @@ impl Host {
                 }
                 fds.push(pollfd(read.or(write).unwrap_or(-1), events));
             }
+            let polled_conns = self.conns.len();
+            for fd in self.wake_fds() {
+                fds.push(pollfd(fd, libc::POLLIN));
+            }
             poll(&mut fds, deadline.map(|d| d.saturating_duration_since(now)));
 
             self.control.flush();
@@ -456,7 +460,7 @@ impl Host {
                 self.accept(MAX_CONNECTIONS);
             }
             // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
-            for (i, fd) in fds.iter().skip(3).enumerate() {
+            for (i, fd) in fds.iter().skip(3).take(polled_conns).enumerate() {
                 let Some(conn) = self.conns.get(i) else {
                     continue;
                 };
@@ -470,6 +474,12 @@ impl Host {
                 }
             }
             self.step_kernel();
+            let woken: Vec<RawFd> = fds[3 + polled_conns..]
+                .iter()
+                .filter(|fd| fd.revents != 0)
+                .map(|fd| fd.fd)
+                .collect();
+            self.wake_remotes(&woken);
             self.pump_calls();
             let now = Instant::now();
             let keep = |conn: &Conn| {

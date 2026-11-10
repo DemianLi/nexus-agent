@@ -2,7 +2,8 @@
 //!
 //! 一次呼叫由宿主開始（[`Remote::start`]），沒當場結束的回 [`Progress::Pending`]，之後宿主醒來就 [`Remote::poll`] 它（那條連線排著沒寫出去的太多時先跳過），
 //! 直到回 `Ok` 或 `Err`；呼叫端取消、斷線，或宿主提早收尾（塊太大、一步推的塊加起來超過上限、單次的方法推了塊）時宿主叫 [`Remote::cancel`]，之後不再 poll 那一次。服務自己決定什麼時候要被叫醒
-//! （[`Remote::next_deadline`]）：宿主不忙等，沒寫時限的 `Pending` 只在宿主因別的事醒來時被 poll 到。
+//! （[`Remote::next_deadline`]），或給一個喚醒 fd（[`Remote::wake_fd`]）讓別的執行緒叫醒宿主：宿主不忙等，兩者都沒有的 `Pending`
+//! 只在宿主因別的事醒來時被 poll 到。
 //!
 //! 串流的方法在 `start`／`poll` 裡把一塊一塊推進 `chunks`，最後照樣以 `Ok`／`Err` 收尾。單次的方法推了塊，宿主當成服務的錯。
 //! 一步推的塊加起來有上限（`crate::host::calls::OUTBOX_PAUSE`），超過的那一塊起不送，那一次以服務的錯收尾。
@@ -14,6 +15,7 @@
 //! 值都是 [`Value`]，不帶回呼或活物件：過界的只有資料。
 
 use std::any::Any;
+use std::os::fd::RawFd;
 use std::time::Instant;
 
 use crate::json::Value;
@@ -89,6 +91,15 @@ pub trait Remote {
     fn take_events(&mut self) -> Vec<Push> {
         Vec::new()
     }
+
+    /// 服務自己的喚醒 fd：別的執行緒有結果時它變成可讀，宿主把它放進 poll，可讀時叫 [`Remote::woken`]。
+    /// fd 由服務擁有，要是非阻塞的；服務在 `woken` 裡把它讀乾淨，不然宿主會一直醒。
+    fn wake_fd(&self) -> Option<RawFd> {
+        None
+    }
+
+    /// [`Remote::wake_fd`] 可讀了：讀乾淨、收進結果。之後宿主照常 poll 還在跑的呼叫、取事件。
+    fn woken(&mut self) {}
 }
 
 /// 從型別抹掉的值取回 `dyn Remote`。expose 時照實際型別產生一個，跟值一起存。

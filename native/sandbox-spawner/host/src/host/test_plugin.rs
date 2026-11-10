@@ -20,8 +20,11 @@
 //! | `emit` | 單次 | 推一個事件 `ping`（payload 原樣）給發出這次呼叫的連線，回 null |
 //! | `burst` | 單次 | payload `{"count": n, "bytes": b}`（n 在 0 到 1000、b 在 0 到 200000）：一次推 n 個事件 `burst` 給發出這次呼叫的連線，payload 是 b 個 x，回 null |
 //! | `flood` | 串流 | 一步推 5 塊、每塊 250000 個 x（加起來超過一步的上限），之後掛著 |
+//! | `later` | 單次 | payload `{"ms": n}`：另一個執行緒睡 n 毫秒後經喚醒 fd 叫醒宿主，回 `"later"`；不寫時限，宿主沒被叫醒就一直掛著 |
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::os::fd::RawFd;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::host_protocol::MAX_FRAME;
@@ -30,6 +33,7 @@ use crate::kernel::{
     Applied, CallKey, ConfigError, Cx, Fault, Fields, MethodKind, Plugin, PluginError, Progress,
     Push, Remote, Service, Spec,
 };
+use crate::wake::Wake;
 
 pub static SPEC: Spec = Spec {
     name: "test-echo",
@@ -50,6 +54,11 @@ pub struct Echo {
     pending: HashMap<CallKey, Option<Instant>>,
     cancels: i64,
     events: Vec<Push>,
+    /// `later` 的呼叫（各帶一個序號，取消後重用同一個 id 時不會被舊的執行緒收尾），與別的執行緒做完的那些。
+    later: HashMap<CallKey, u64>,
+    finished: Arc<Mutex<HashSet<(CallKey, u64)>>>,
+    later_seq: u64,
+    wake: Option<Wake>,
 }
 
 impl Service for Echo {
@@ -64,7 +73,7 @@ impl Remote for Echo {
     fn method(&self, name: &str) -> Option<MethodKind> {
         match name {
             "echo" | "fail" | "reject" | "wait" | "hang" | "cancels" | "big" | "unary-chunk"
-            | "emit" | "burst" => Some(MethodKind::Unary),
+            | "emit" | "burst" | "later" => Some(MethodKind::Unary),
             "stream" | "big-chunk" | "flood" => Some(MethodKind::Stream),
             _ => None,
         }
@@ -140,11 +149,42 @@ impl Remote for Echo {
                 self.pending.insert(key, None);
                 Progress::Pending
             }
+            "later" => {
+                let Some(ms) = int(&payload, "ms").and_then(|n| u64::try_from(n).ok()) else {
+                    return Progress::Err(Fault::BadPayload, "ms 要是非負整數".into());
+                };
+                if self.wake.is_none() {
+                    match Wake::new() {
+                        Ok(wake) => self.wake = Some(wake),
+                        Err(err) => return Progress::Err(Fault::Failed, err.to_string()),
+                    }
+                }
+                let waker = self.wake.as_ref().map(Wake::waker);
+                let finished = Arc::clone(&self.finished);
+                self.later_seq += 1;
+                let seq = self.later_seq;
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(ms));
+                    finished.lock().expect("鎖").insert((key, seq));
+                    if let Some(waker) = waker {
+                        waker.wake();
+                    }
+                });
+                self.later.insert(key, seq);
+                Progress::Pending
+            }
             _ => Progress::Err(Fault::Failed, "沒有這個方法".into()),
         }
     }
 
     fn poll(&mut self, key: CallKey, now: Instant, _chunks: &mut Vec<Value>) -> Progress {
+        if let Some(&seq) = self.later.get(&key) {
+            if !self.finished.lock().expect("鎖").remove(&(key, seq)) {
+                return Progress::Pending;
+            }
+            self.later.remove(&key);
+            return Progress::Ok(Value::from("later"));
+        }
         match self.pending.get(&key) {
             Some(Some(at)) if *at <= now => {
                 self.pending.remove(&key);
@@ -157,6 +197,7 @@ impl Remote for Echo {
 
     fn cancel(&mut self, key: CallKey) {
         self.pending.remove(&key);
+        self.later.remove(&key);
         self.cancels += 1;
     }
 
@@ -166,6 +207,16 @@ impl Remote for Echo {
 
     fn take_events(&mut self) -> Vec<Push> {
         std::mem::take(&mut self.events)
+    }
+
+    fn wake_fd(&self) -> Option<RawFd> {
+        self.wake.as_ref().map(Wake::fd)
+    }
+
+    fn woken(&mut self) {
+        if let Some(wake) = &self.wake {
+            wake.drain();
+        }
     }
 }
 

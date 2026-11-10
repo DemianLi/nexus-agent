@@ -1098,6 +1098,20 @@ mod calls {
     }
 
     #[test]
+    fn a_call_finished_on_another_thread_wakes_the_host_through_its_fd() {
+        let (_host, socket) = host("call-later");
+        let mut stream = connect(&socket);
+        let started = std::time::Instant::now();
+        // 服務不寫時限：宿主沒被喚醒 fd 叫醒的話，這一次會一直掛著，讀到逾時。
+        call(&mut stream, 1, "later", r#"{"ms":200}"#);
+        call(&mut stream, 2, "later", r#"{"ms":50}"#);
+        assert_eq!(read_message(&mut stream), ok(2, r#""later""#));
+        assert_eq!(read_message(&mut stream), ok(1, r#""later""#));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
     fn a_cancel_ends_the_call_once_and_a_late_cancel_gets_nothing() {
         let (_host, socket) = host("call-cancel");
         let mut stream = connect(&socket);

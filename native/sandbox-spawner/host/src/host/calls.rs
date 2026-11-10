@@ -13,6 +13,7 @@
 //! - 綁定跟著連線走：連線一斷，它還在跑的呼叫全部取消。宿主不記任何跨連線的東西。
 //! - 提供服務的插件卸載了，或換了一個實體，還在跑的呼叫以 `service_error` 收尾。
 
+use std::os::fd::RawFd;
 use std::time::Instant;
 
 use super::Host;
@@ -284,6 +285,26 @@ impl Host {
             }
             conn.chan.send(&bytes);
         }
+    }
+
+    /// 各服務的喚醒 fd，放進宿主的 poll。
+    pub(super) fn wake_fds(&mut self) -> Vec<RawFd> {
+        let mut fds = Vec::new();
+        self.kernel
+            .for_each_remote(|_, remote| fds.extend(remote.wake_fd()));
+        fds
+    }
+
+    /// 喚醒 fd 在 `ready` 裡的服務叫一次 `woken`。這一輪才換了實體的服務，fd 對不上就不叫，下一輪再 poll 到。
+    pub(super) fn wake_remotes(&mut self, ready: &[RawFd]) {
+        if ready.is_empty() {
+            return;
+        }
+        self.kernel.for_each_remote(|_, remote| {
+            if remote.wake_fd().is_some_and(|fd| ready.contains(&fd)) {
+                remote.woken();
+            }
+        });
     }
 
     /// 服務要求最晚什麼時候被 poll。
