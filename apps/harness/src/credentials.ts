@@ -32,7 +32,6 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type Document,
-  isAlias,
   isMap,
   LineCounter,
   Pair,
@@ -110,13 +109,23 @@ function describeYamlError(error: YAMLError, lines: LineCounter): string {
   return `${error.code}（第 ${String(at.line)} 行第 ${String(at.col)} 欄）`;
 }
 
+/** 受管檔不收的 CST token → 拒絕時的錯誤碼。 */
+const FORBIDDEN_TOKENS: ReadonlyMap<string, string> = new Map([
+  ['directive', 'DIRECTIVE_NOT_ALLOWED'],
+  ['tag', 'TAG_NOT_ALLOWED'],
+  ['anchor', 'ANCHOR_NOT_ALLOWED'],
+  ['alias', 'ALIAS_NOT_ALLOWED'],
+]);
+
 /**
- * 第一個指令（`%YAML`、`%TAG`、不認得的 `%…`）或明示 tag（`!!str`、`!!binary`、`!foo`、`!`、`!<…>`）的位置與錯誤碼。
+ * 第一個指令（`%YAML`、`%TAG`、不認得的 `%…`）、明示 tag（`!!str`、`!!binary`、`!foo`、`!`、`!<…>`）、
+ * 錨點（`&x`）或別名（`*x`）的位置與錯誤碼。
  *
  * 一律拒絕，不看 `yaml` 有沒有發 warning：`!!str`、`!!binary` 是認得的 tag，不發任何 warning 就把值換掉（`!!binary` 變成位元組），
- * `%YAML 1.1` 換了 schema（`yes` 變成 `true`）。受管檔只放 `名字: 值`，用不到這兩樣；Rust 端照同一份樣本，也就不必實作它們。
+ * `%YAML 1.1` 換了 schema（`yes` 變成 `true`）；錨點名字收哪些字元各家實作不同，別名展開還要防別名炸彈。
+ * 受管檔只放 `名字: 值`，用不到這幾樣；Rust 端照同一份樣本，也就不必實作它們。
  *
- * 從 CST 找，不從文字找：值、引號、區塊值、註解裡的 `!` 與 `%` 不是 token，不會誤判。
+ * 從 CST 找，不從文字找：值、引號、區塊值、註解裡的 `!`、`%`、`&`、`*` 不是 token，不會誤判。
  */
 function forbiddenToken(
   text: string,
@@ -129,14 +138,10 @@ function forbiddenToken(
       return;
     }
     const { type, offset } = node as { type?: unknown; offset?: unknown };
-    if (typeof offset === 'number' && (type === 'directive' || type === 'tag')) {
+    const code = typeof type === 'string' ? FORBIDDEN_TOKENS.get(type) : undefined;
+    if (typeof offset === 'number' && code !== undefined) {
       // 走訪順序不保證照檔案順序：取最前面那一個。
-      if (found === undefined || offset < found.offset) {
-        found = {
-          code: type === 'directive' ? 'DIRECTIVE_NOT_ALLOWED' : 'TAG_NOT_ALLOWED',
-          offset,
-        };
-      }
+      if (found === undefined || offset < found.offset) found = { code, offset };
       return;
     }
     for (const value of Object.values(node)) walk(value);
@@ -175,8 +180,7 @@ function at(entry: MappingEntry): string {
 /**
  * 一個 mapping 節點的條目，照檔案順序；不是 mapping 就是 `undefined`。
  *
- * 鍵名用 `yaml` 自己 `toJS()` 的換算（只放這一個鍵的 mapping 轉一次），所以 `true` 與 `"true"`、`1` 與 `1.0` 換出同一個名字，
- * 別名展開成它指到的值。
+ * 鍵名用 `yaml` 自己 `toJS()` 的換算（只放這一個鍵的 mapping 轉一次），所以 `true` 與 `"true"`、`1` 與 `"1"` 換出同一個名字。
  */
 function mappingEntries(
   document: Document,
@@ -247,9 +251,8 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   }
   const values = refs as Record<string, unknown>;
   const refsNode = top.find((entry) => entry.name === 'refs')?.value;
-  const resolvedRefs = isAlias(refsNode) ? refsNode.resolve(document) : refsNode;
   const out = new Map<string, string>();
-  for (const entry of uniqueEntries(mappingEntries(document, lines, resolvedRefs) ?? [], fail)) {
+  for (const entry of uniqueEntries(mappingEntries(document, lines, refsNode) ?? [], fail)) {
     const { name } = entry;
     if (!CREDENTIAL_NAME_PATTERN.test(name)) {
       return fail(
@@ -273,8 +276,8 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
 }
 
 /**
- * 換成同一個名字的兩個鍵，後一個會在 `toJS()` 裡靜靜蓋掉前一個（`true` 與 `"true"`、`1` 與 `"1"`、別名與它指到的字）。
- * `yaml` 的 `uniqueKeys` 比的是同一個節點或純量的值，型別不同或是別名就算不同；這裡照名字再比一次，同樣講成 `DUPLICATE_KEY`（#2667）。
+ * 換成同一個名字的兩個鍵，後一個會在 `toJS()` 裡靜靜蓋掉前一個（`true` 與 `"true"`、`1` 與 `"1"`）。
+ * `yaml` 的 `uniqueKeys` 比的是同一個節點或純量的值，型別不同就算不同；這裡照名字再比一次，同樣講成 `DUPLICATE_KEY`（#2667）。
  */
 function uniqueEntries(entries: MappingEntry[], fail: (why: string) => never): MappingEntry[] {
   const seen = new Set<string>();

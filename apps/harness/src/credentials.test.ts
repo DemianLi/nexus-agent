@@ -221,7 +221,7 @@ describe('鍵名不進訊息與日誌（#2667）', () => {
   });
 });
 
-describe('指令與明示 tag 整份拒絕（#2667）', () => {
+describe('指令、明示 tag、錨點與別名整份拒絕（#2667）', () => {
   it.each([
     ['%YAML', `%YAML 1.2\n---\nversion: 1\nrefs:\n  A: ${SECRET}\n`, 'DIRECTIVE_NOT_ALLOWED', 1, 1],
     [
@@ -261,6 +261,26 @@ describe('指令與明示 tag 整份拒絕（#2667）', () => {
       2,
       7,
     ],
+    [
+      '值上的錨點與別名',
+      `version: 1\nshared: &t ${SECRET}\nrefs:\n  A: *t\n`,
+      'ANCHOR_NOT_ALLOWED',
+      2,
+      9,
+    ],
+    ['refs 本身的錨點', `version: 1\nrefs: &r\n  A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 2, 7],
+    ['鍵上的錨點', `version: 1\nrefs:\n  &k A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 3, 3],
+    ['文件開頭的錨點', `&top\nversion: 1\nrefs:\n  A: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 1, 1],
+    ['以 : 結尾的錨點', `version: 1\nrefs:\n  A: &a: ${SECRET}\n`, 'ANCHOR_NOT_ALLOWED', 3, 6],
+    [
+      '沒有錨點的別名',
+      `version: 1\nrefs:\n  A: *${SECRET.replaceAll('-', '_')}\n`,
+      'ALIAS_NOT_ALLOWED',
+      3,
+      6,
+    ],
+    ['flow 裡的別名', `version: 1\nrefs: {A: *a}\n`, 'ALIAS_NOT_ALLOWED', 2, 11],
+    ['別名當鍵', `version: 1\n*a : x\n`, 'ALIAS_NOT_ALLOWED', 2, 1],
   ])('%s：講成 YAML 錯誤與位置，不含值', (_, text, code, line, col) => {
     let message = '';
     try {
@@ -282,6 +302,9 @@ describe('指令與明示 tag 整份拒絕（#2667）', () => {
       '!!str x\n%YAML 1.2\n',
     ],
     ['% 開頭的值', 'version: 1\nrefs:\n  A: "%YAML"\n', '%YAML'],
+    ['值裡的 & 與 *', 'version: 1\nrefs:\n  A: a&b*c\n', 'a&b*c'],
+    ['引號裡的 & 與 *', 'version: 1\nrefs:\n  A: "&a *b"\n', '&a *b'],
+    ['區塊值裡的 & 與 *', 'version: 1\nrefs:\n  A: |\n    &a\n    *b\n', '&a\n*b\n'],
   ])('%s：不是 tag 也不是指令，照收', (_, text, value) => {
     expect(parseCredentialsDocument(file, text).refs.get('A')).toBe(value);
   });
@@ -291,8 +314,8 @@ describe('指令與明示 tag 整份拒絕（#2667）', () => {
     expect(() => parseCredentialsDocument(file, text)).toThrow('TAG_NOT_ALLOWED（第 3 行第 6 欄）');
   });
 
-  it('註解裡的 ! 與 %：照收', () => {
-    const text = '# %YAML 1.2\nversion: 1 # !!str\nrefs:\n  A: v # !foo\n';
+  it('註解裡的 !、%、& 與 *：照收', () => {
+    const text = '# %YAML 1.2 &a\nversion: 1 # !!str *a\nrefs:\n  A: v # !foo &b *b\n';
     expect(parseCredentialsDocument(file, text).refs.get('A')).toBe('v');
   });
 });
@@ -301,7 +324,6 @@ describe('換成同一個名字的兩個鍵算重複鍵（#2667）', () => {
   it.each([
     ['布林與字串', 'version: 1\ntrue: 1\n"true": 2\n'],
     ['整數與字串', 'version: 1\nrefs:\n  A: v\n1: a\n"1": b\n'],
-    ['別名與它指到的字', 'version: 1\nnote: &n refs\n*n : x\nrefs:\n  A: v\n'],
     ['refs 裡的布林與字串', `version: 1\nrefs:\n  true: ${SECRET}\n  "true": other\n`],
   ])('%s：整份拒絕，講成 DUPLICATE_KEY 與第二個鍵的位置', (_, text) => {
     expect(() => parseCredentialsDocument(file, text)).toThrow(
