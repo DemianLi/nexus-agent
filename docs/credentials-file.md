@@ -5,7 +5,7 @@
 四層找值的順序、從舊版遷移、MCP 那一列怎麼引用）在 [`operations.md`](operations.md)〈金鑰放哪裡〉與〈MCP server 要的憑證〉，這裡不重寫。
 
 格式在 [#1961](https://github.com/DemianLi/nexus-agent/issues/1961) 對齊 dsh，釘在 v1。本文件只記錄現況，不重新設計；
-標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的是已知的缺陷，修好之後連同樣本一起改。
+標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的是那一張改過的行為。
 
 - 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
 - 樣本：[`native/sandbox-spawner/credentials-vectors.json`](../native/sandbox-spawner/credentials-vectors.json)。
@@ -57,7 +57,7 @@ refs:
 - **鍵的名字是轉成 JS 之後的字串**，所以 YAML 層不同、名字相同的兩個鍵是重複鍵，整份拒絕（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）：
   `true` 與 `"true"`、`1` 與 `1.0`、別名與它指到的字（`*n` 指到 `refs`）。YAML 函式庫的 `uniqueKeys` 比的是節點，擋不到前一種與最後一種，
   後一個會靜靜蓋掉前一個；`uniqueEntries`（`:256-263`）照名字再比一次，頂層與 `refs` 裡都比。樣本：`reject` 裡「換成同一個名字」那四條。
-- **值**是非空字串，原樣收下，不修剪：`|` 區塊值帶著尾端換行、只有空白的值也收（修剪與字元檢查在模型 key 那一側，見下面〈之後的檢查〉）。
+- **值**是非空字串，原樣收下，不修剪：`|` 區塊值帶著尾端換行、只有空白的值也收（修剪與字元檢查在用值的那一側，見下面〈之後的檢查〉）。
   照 YAML 1.2，`yes`、`on`、`no`、`2026-01-01`、加引號或 `!!str` 的數字都是字串；`012`、`0o12`、`.inf`、`~`、`true` 不是。
 - 錨點與別名照常展開。檔頭的 BOM、CRLF 換行、開頭的 `---` 都收下；第二份文件（`---` 之後再一份）拒絕。
 
@@ -151,6 +151,15 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
 
 ## 之後的檢查
 
-解析器只管這份檔的格式。模型 key 用之前還要過 [#1541](https://github.com/DemianLi/nexus-agent/issues/1541) 的修剪與字元檢查
-（`api-key.ts` 的 `assertUsableApiKey`，由 `live-model.ts` 的 `resolveUsableKey` 呼叫），四層一視同仁。**MCP 那一列引用的值沒有過這道檢查**，原樣交給子行程的環境變數或 HTTP header
-（`assembly-root.ts` 的 `mcpCredentialsOf`，[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。
+解析器只管這份檔的格式，值原樣交出去。用值之前各自再檢查一次，四層一視同仁：
+
+- **模型 key**：[#1541](https://github.com/DemianLi/nexus-agent/issues/1541) 的修剪與字元檢查（`api-key.ts` 的 `assertUsableApiKey`，由 `live-model.ts` 的
+  `resolveUsableKey` 呼叫）。修掉頭尾空白，只收可列印 ASCII、不含空白。
+- **MCP 那一列引用的值**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）：`mcp-credential.ts` 的 `assertUsableMcpCredential`，由
+  `assembly-root.ts` 的 `mcpCredentialsOf` 呼叫。plugin 那一側把這把憑證代入到哪裡（`env` 或 `header`，看這一列的 transport）傳過來
+  （`packages/nexus-plugin-mcp/src/credentials.ts` 的 `McpCredentials.resolve`）。
+  - 兩條路都修掉頭尾空白（JS 的 `String.prototype.trim`），修完是空的就拒絕。
+  - `env`：只擋 NUL。
+  - `header`：照 Node http 驗 header 值的規則，只收 `[\t\x20-\x7E\x80-\xFF]`。這裡先擋，是因為 HTTP transport 走 `fetch`，
+    undici 的 `Headers` 遇到 CR、LF、NUL 拋的錯會把整個值帶進訊息。
+  - 拒絕訊息只講名字與來源層，不含值的任何片段。
