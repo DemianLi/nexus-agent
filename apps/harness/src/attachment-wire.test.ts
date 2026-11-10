@@ -8,7 +8,7 @@
  * 釘的幾件事：
  *
  * - 檔案收據→日誌只有參照；送上線的是一行 handle 字，路徑讀得到。
- * - 圖→`image_url` data URL 位元組一致；**base64 不進日誌、不進存檔點**（這是這個設計成立的前提）。
+ * - 圖→`image_url` data URL 位元組一致；**base64 不進日誌**（兩個 loop 都跑），**不進存檔點**（只有 `langgraph` 有存檔點，明給 loop）。這是這個設計成立的前提。
  * - 收圖檢查：目前的模型宣告了純文字→`model_does_not_support_images`，日誌一個字不動、收據留著。
  * - 全有全無：一張不行整句拒收，收據放回去。
  * - 只有附件、沒有字也收。
@@ -107,11 +107,10 @@ function config(modelId: 'vision' | 'texty' | 'silent') {
   });
 }
 
-function connect(modelId: 'vision' | 'texty' | 'silent') {
+function connect(modelId: 'vision' | 'texty' | 'silent', agentLoop?: 'langgraph') {
   const live = config(modelId);
   const credentials = ambientCredentials({ [LIVE_API_KEY_ENV]: 'sk-loopback' });
   let registry: SessionRegistry | undefined;
-  let threadAgent: { getState(config: unknown): Promise<{ values: unknown }> } | undefined;
   const checkpointer = new MemorySaver();
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -120,12 +119,12 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
       const built = await createNexusAgent({
         model: createLiveModel(live, undefined, credentials, { attachments: store }) as never,
         checkpointer,
+        ...(agentLoop !== undefined && { agentLoop }),
         plugins: [],
         summarization: false,
         observationPolicy: false,
         attachments: store,
       });
-      threadAgent = built.agent as unknown as typeof threadAgent;
       return {
         agent: built.agent as unknown as PumpAgent,
         attachSessions: (sessions, port) => {
@@ -148,9 +147,7 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
   return {
     handler,
     client: createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl }),
-    /** 這條 thread 送進圖的 state：`langgraph` 是存檔點，native 是 agent 的快取。 */
-    state: async () =>
-      (await threadAgent!.getState({ configurable: { thread_id: THREAD } })).values,
+    checkpointer,
     events: () => registry?.root.events ?? [],
   };
 }
@@ -315,8 +312,8 @@ describe('檔案收據', () => {
 });
 
 describe('內嵌的圖', () => {
-  it('送上線的是 image_url（位元組與原圖一致）；base64 不進日誌、不進存檔點', async () => {
-    const { client, handler, events, state: stateOf } = connect('vision');
+  it('送上線的是 image_url（位元組與原圖一致）；base64 不進日誌', async () => {
+    const { client, handler, events } = connect('vision');
     try {
       const result = await client.runStart(THREAD, '這張圖是什麼', { attachments: [IMAGE] });
       expect(result).toMatchObject({ type: 'success' });
@@ -337,7 +334,21 @@ describe('內嵌的圖', () => {
       expect(JSON.stringify(events())).not.toContain(PNG_7X5);
       // 日誌上是參照：id、媒體類型、寬高，沒有位元組。
       expect(JSON.stringify(events())).toContain('"mediaType":"image/png"');
-      const state = JSON.stringify((await stateOf()) ?? {});
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('langgraph：base64 不進存檔點，存檔點裡是參照', async () => {
+    const { client, handler, events, checkpointer } = connect('vision', 'langgraph');
+    try {
+      const result = await client.runStart(THREAD, '這張圖是什麼', { attachments: [IMAGE] });
+      expect(result).toMatchObject({ type: 'success' });
+      await settled(events, 1);
+      // 前提：base64 真的在這次請求裡，下面的「不在」才有意義。
+      expect(requests[0]!.raw).toContain(PNG_7X5);
+      const tuple = await checkpointer.getTuple({ configurable: { thread_id: THREAD } });
+      const state = JSON.stringify(tuple?.checkpoint.channel_values ?? {});
       expect(state).toContain('nexus-image');
       expect(state).not.toContain(PNG_7X5);
     } finally {

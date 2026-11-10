@@ -181,7 +181,7 @@ describe('B：出貨清單上的 ask-user 經樹進來，位置與名字不變',
   });
 
   it('入口算的預設答題管道與組裝根算的是同一個決定（兩個入口各一格）', () => {
-    // 組裝根（`assembly-root.ts`）用 `deriveApprovalChannel`、`awaitsAnswer` 綁在 `PrunedMemorySaver` 上，兩個入口都有。
+    // 組裝根（`assembly-root.ts`）用 `deriveApprovalChannel`、`awaitsAnswer` 是組裝明著給的 `true`（兩個 loop、兩個入口都一樣）。
     expect(entryApprovalChannel(HEADLESS_APPROVALS)).toEqual(
       deriveApprovalChannel({ approvalsEnabled: false, awaitsAnswer: true }),
     );

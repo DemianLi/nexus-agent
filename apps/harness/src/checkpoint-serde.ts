@@ -103,14 +103,16 @@ export class CheckpointDepthError extends Error {
    * @param depth - 量到的層數。
    * @param limit - 上限。
    * @param seq - 續接時是日誌哪一顆事件帶進來的；同台那條路沒有。
+   * @param into - 寫進哪裡：`langgraph` 是存檔點；native 沒有存檔點，是灌回 thread 之前量的。
    */
   constructor(
     readonly depth: number,
     readonly limit: number,
     readonly seq?: number,
+    into: '存檔點' | 'thread' = '存檔點',
   ) {
     super(
-      `${seq === undefined ? '' : `日誌第 ${seq} 顆事件的訊息`}寫進存檔點有 ${depth} 層，超過上限 ${limit} 層（${CHECKPOINT_DEPTH_EXCEEDED}）`,
+      `${seq === undefined ? '' : `日誌第 ${seq} 顆事件的訊息`}寫進${into === 'thread' ? ' thread ' : '存檔點'}有 ${depth} 層，超過上限 ${limit} 層（${CHECKPOINT_DEPTH_EXCEEDED}）`,
     );
     this.name = 'CheckpointDepthError';
   }

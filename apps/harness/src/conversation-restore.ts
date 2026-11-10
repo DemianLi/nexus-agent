@@ -210,7 +210,7 @@ export async function restoreConversation(
         if (bounded.has(message)) continue;
         const depth = checkpointDepth(message);
         if (depth > CHECKPOINT_MAX_DEPTH) {
-          throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message));
+          throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message), 'thread');
         }
       }
       agent.seedThread(config, replay.messages as readonly BaseMessage[]);

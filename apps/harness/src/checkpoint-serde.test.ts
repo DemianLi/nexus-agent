@@ -582,27 +582,57 @@ describe.each(['langgraph', 'native'] as const)(
       60_000,
     );
 
-    it.each([
+    const tooDeep = [
       ['參數 3000 層（原本的無聲區）', 'p3000'],
       ['參數 5000 層（原本 decirc 先爆）', 'p5000'],
-    ])(
-      '%s：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
-      async (_label, name) => {
-        const client = await serveClient(resumed.server);
-        const error = await client.openEvents(`resume-${name}`).then(
-          () => undefined,
-          (caught: unknown) => caught,
-        );
-        // #1668：日誌太深不是暫時壞了，專用碼（不是 unknown_error）。
-        expect(error).toBeInstanceOf(WireRejectedError);
-        expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
-        const rejected = String(error);
-        expect(rejected).toContain(CHECKPOINT_DEPTH_EXCEEDED);
-        expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
-        expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
-        expect(rejected).not.toContain('Maximum call stack size exceeded');
-      },
-      60_000,
-    );
+    ] as const;
+
+    async function rejectionOf(name: string): Promise<unknown> {
+      const client = await serveClient(resumed.server);
+      return client.openEvents(`resume-${name}`).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+    }
+
+    if (loop === 'langgraph') {
+      it.each(tooDeep)(
+        '%s：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
+        async (_label, name) => {
+          const error = await rejectionOf(name);
+          // #1668：日誌太深不是暫時壞了，專用碼（不是 unknown_error）。
+          expect(error).toBeInstanceOf(WireRejectedError);
+          expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
+          const rejected = String(error);
+          expect(rejected).toContain(CHECKPOINT_DEPTH_EXCEEDED);
+          expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
+          expect(rejected).toContain(`寫進存檔點`);
+          expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
+          expect(rejected).not.toContain('Maximum call stack size exceeded');
+        },
+        60_000,
+      );
+    } else {
+      // native 沒有存檔點，挑「拒」：照收的話下一輪在呼叫堆疊上爆（實測 5000 層是 Maximum call stack size exceeded、碼 unknown_error），
+      // 而且同一份日誌在 langgraph 下本來就拒，換 loop 不該讓一條 thread 從打不開變成打開了才壞。
+      it.each(tooDeep)(
+        '%s：灌回 thread 之前就拒，wire 碼是 thread_history_too_deep，不遞迴爆掉，錯誤裡只有 seq 與層數、沒有事件內容',
+        async (_label, name) => {
+          const error = await rejectionOf(name);
+          expect(error).toBeInstanceOf(WireRejectedError);
+          expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
+          const rejected = String(error);
+          expect(rejected).not.toContain('Maximum call stack size exceeded');
+          expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
+          expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
+          expect(rejected).not.toContain('存檔點');
+          // 事件內容：那一輪的人話、工具呼叫 id 與參數（交錯巢狀的 `next`／`leaf`）。
+          for (const content of [`深:${name}`, `call-${name}`, '"next"', 'leaf']) {
+            expect(rejected).not.toContain(content);
+          }
+        },
+        60_000,
+      );
+    }
   },
 );
