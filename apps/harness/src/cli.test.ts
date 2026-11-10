@@ -26,7 +26,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { shippedModelRow, shippedPlugins } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
-import { liveModelPatch } from './log-derived-history.fixture.js';
+import { liveModelPatch, shippedLiveModelConfig } from './log-derived-history.fixture.js';
 
 const shipped = await shippedPlugins();
 
@@ -1251,3 +1251,146 @@ function normalizedLog(text: string, paths: readonly string[]): string {
     .replace(/"(time|ts|startedAt|endedAt|createdAt|elapsedMs|durationMs)":\s?\d+/gu, '"$1":0')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gu, '<uuid>');
 }
+
+/**
+ * CLI 單機 native 改打串流之後的計時與用量（#2361）：到標頭的 `timeoutMs` 加上閒置的 `streamIdleTimeoutMs`，沒有總上限；
+ * 吐過用量才失敗的那一次多記一筆帶 `outcome` 的 `model/usage`。
+ */
+describe('CLI 單機 native 的串流計時與用量', () => {
+  type Respond = (res: import('node:http').ServerResponse, attempt: number) => void;
+
+  const head = { id: 'chatcmpl-timing', created: 0, model: DEFAULT_LIVE_MODEL_ID };
+  const frame = (payload: Record<string, unknown>) =>
+    `data: ${JSON.stringify({ ...head, object: 'chat.completion.chunk', ...payload })}\n\n`;
+  const delta = (value: Record<string, unknown>, finish: string | null = null) =>
+    frame({ choices: [{ index: 0, delta: value, finish_reason: finish }] });
+  const USAGE = frame({
+    choices: [],
+    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+  });
+
+  function finishWith(res: import('node:http').ServerResponse, text: string): void {
+    res.write(delta({ content: text }));
+    res.write(delta({}, 'stop'));
+    res.write(USAGE);
+    res.end('data: [DONE]\n\n');
+  }
+
+  async function runNative(
+    respond: Respond,
+    config: Record<string, unknown>,
+  ): Promise<{ attempts: number; log: string; thrown: unknown }> {
+    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-cli-native-timing');
+    let attempts = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        attempts += 1;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(delta({ role: 'assistant', content: '' }));
+        respond(res, attempts);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const home = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-home-'));
+    const logs = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-logs-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-cwd-'));
+    const patch = join(home, 'patch.yml');
+    const row = {
+      ...shippedLiveModelConfig(),
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      ...config,
+    };
+    // JSON 也是合法的 YAML。
+    await writeFile(
+      patch,
+      `- id: live-model\n  config: ${JSON.stringify(row)}\n- id: thread-title-llm\n  disabled: true\n`,
+      { mode: 0o600 },
+    );
+    let thrown: unknown;
+    try {
+      await runCli({
+        argv: ['--live', '--agent-loop', 'native', '--session-log', logs, '--patch', patch, '嗨'],
+        cwd,
+        env: { [HARNESS_HOME_ENV]: home },
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+      }).catch((error: unknown) => {
+        thrown = error;
+      });
+      return { attempts, log: await readJsonlTree(logs), thrown };
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      vi.unstubAllEnvs();
+      for (const dir of [home, logs, cwd]) await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const retries = (maxRetries: number) => ({
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries,
+      retryableCodes: ['TIMEOUT', 'TRANSPORT', 'UNKNOWN'],
+      backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    },
+  });
+
+  const events = (log: string, type: string) =>
+    log
+      .split('\n')
+      .filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> })
+      .filter((event) => event.type === type);
+
+  it('吐一段就停住：閒置逾時觸發，進同一份重試預算（maxRetries + 1 次）', async () => {
+    const { attempts, log, thrown } = await runNative(() => undefined, {
+      streamIdleTimeoutMs: 200,
+      ...retries(2),
+    });
+    expect(String(thrown)).toContain('閒置逾時');
+    expect(attempts).toBe(3);
+    expect(log).toContain('TIMEOUT');
+    expect(events(log, 'assistant/message')).toHaveLength(0);
+  });
+
+  it('一直有吐、總長超過 timeoutMs：不逾時，一次就收', async () => {
+    const { attempts, log } = await runNative(
+      (res) => {
+        let sent = 0;
+        const tick = setInterval(() => {
+          sent += 1;
+          if (sent < 8) res.write(delta({ content: '字' }));
+          else {
+            clearInterval(tick);
+            finishWith(res, '完');
+          }
+        }, 100);
+      },
+      { timeoutMs: 300, streamIdleTimeoutMs: 1000, ...retries(0) },
+    );
+    expect(attempts).toBe(1);
+    const [reply] = events(log, 'assistant/message');
+    expect(JSON.stringify(reply)).toContain('字字字字字字字完');
+  });
+
+  it('吐了用量之後斷線、重打成功：model/usage 兩筆，失敗那筆帶 outcome', async () => {
+    const { attempts, log } = await runNative((res, attempt) => {
+      if (attempt === 1) {
+        res.write(delta({ content: '半' }));
+        res.write(USAGE);
+        setTimeout(() => res.socket?.destroy(), 50); // 等兩段寫出去再斷，當下 destroy 會丟掉緩衝裡的。
+        return;
+      }
+      finishWith(res, '好');
+    }, retries(1));
+    expect(attempts).toBe(2);
+    const usages = events(log, 'model/usage').map((event) => event.data);
+    expect(usages).toHaveLength(2);
+    expect(usages.filter((usage) => usage['outcome'] !== undefined)).toHaveLength(1);
+    expect(usages[0]?.['outcome']).toBe('error');
+    expect(usages[1]?.['outcome']).toBeUndefined();
+  });
+});
