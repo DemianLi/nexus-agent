@@ -117,7 +117,7 @@ describe('tsconfig 的 @nexus paths（#1633）', () => {
     expect(packages.length).toBeGreaterThan(0);
     for (const [key, targets] of packages) {
       expect(targets, key).toEqual([
-        expect.stringMatching(/^\.\.\/\.\.\/packages\/[^/]+\/src\/.+\.ts$/),
+        expect.stringMatching(/^\.\.\/(\.\.\/packages\/[^/]+|harness)\/src\/.+\.ts$/),
       ]);
     }
   });
