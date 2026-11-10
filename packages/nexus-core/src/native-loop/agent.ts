@@ -1103,7 +1103,7 @@ export class NativeAgent {
             middleware: this.#modelCells,
             executesAddedTools: this.#executesAddedTools,
             ...(events !== undefined && {
-              around: (call) => events.waterfall('llm/stream', payload, call) as Promise<AIMessage>,
+              around: (next) => events.waterfall('llm/stream', payload, next),
             }),
           },
           task,

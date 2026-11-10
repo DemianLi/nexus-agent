@@ -11,7 +11,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { StateBackend } from 'deepagents';
-import { createMiddleware, fakeModel } from 'langchain';
+import { createMiddleware } from 'langchain';
+import { fakeModel } from '../fixtures.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { assembleAgent } from '../agent-assembly.js';
