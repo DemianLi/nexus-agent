@@ -7,7 +7,7 @@
 格式在 [#1961](https://github.com/DemianLi/nexus-agent/issues/1961) 對齊 dsh，釘在 v1。本文件只記錄現況，不重新設計；
 標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的是已知的缺陷，修好之後連同樣本一起改。
 
-- 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。下文的行號都指這兩個檔。
+- 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
 - 樣本：[`native/sandbox-spawner/credentials-vectors.json`](../native/sandbox-spawner/credentials-vectors.json)。
   TS 用 `apps/harness/src/credentials-vectors.test.ts` 跑；Rust 端若自己解析，要跑同一份、得到同樣的結果。
 
@@ -16,11 +16,11 @@
 | 欄位 | 內容 |
 | --- | --- |
 | `documentVersion` | 這份樣本對應的文件版本（1）。 |
-| `accept[]` | `text` 是檔案的完整內容，解析出 `refs`（`[名字, 值]`，照檔案順序）與 `ignoredKeys`（照檔案順序）。比對要完全相等。 |
+| `accept[]` | `text` 是檔案的完整內容，解析出 `refs`（`[名字, 值]`，照檔案順序）與 `ignoredKeys`（順序見〈只警告、不擋〉）。比對要完全相等。 |
 | `reject[]` | `text` 要被拒絕，原因是 `reason`。有 `secret` 的，拒絕訊息裡不能出現那個字串。 |
 | `modes[]` | 八進位的權限（字串），`accept` 表示一份內容合法的檔在這個權限下能不能讀。 |
 
-樣本裡的值都是假的（帶 `FAKE`）。
+樣本裡的值都是假的；長得像 key 的都帶 `FAKE`。
 
 `reason` 只分到今天的訊息分得出的程度：
 
@@ -58,7 +58,7 @@ refs:
   照 YAML 1.2，`yes`、`on`、`no`、`2026-01-01`、加引號或 `!!str` 的數字都是字串；`012`、`0o12`、`.inf`、`~`、`true` 不是。
 - 錨點與別名照常展開。檔頭的 BOM、CRLF 換行、開頭的 `---` 都收下；第二份文件（`---` 之後再一份）拒絕。
 
-這幾類在 YAML 1.1 與 1.2 的實作之間結果不同，自己解析的實作最容易在這裡各自解讀，所以樣本都收了。
+這幾類在不同的 YAML 實作（1.1／1.2、各家函式庫）之間容易解讀不同，自己解析的實作最容易在這裡各自解讀，所以樣本都收了。
 
 ## 拒絕
 
@@ -69,7 +69,8 @@ refs:
 
 ## 只警告、不擋
 
-`version`、`refs`、`records` 以外的頂層鍵不擋啟動，`refs` 照常解析（`:185`）。鍵名照檔案順序交回呼叫端，服務經 `warn` 講一次：
+`version`、`refs`、`records` 以外的頂層鍵不擋啟動，`refs` 照常解析（`:185`）。鍵名交回呼叫端，順序是 JS 物件的屬性順序（`:160`）：
+像整數的鍵（例如 `2024`）排在最前面，其餘照檔案順序；樣本「外來的頂層鍵：像整數的鍵排最前面」釘住這一點。服務經 `warn` 講一次：
 只印鍵名（JSON 跳脫），不印值；同一份檔（同一個 stat 簽章）只講一次（`:248-252`）。這些鍵留在檔案裡，不解析出任何東西。
 
 測試：`credentials.test.ts`「version、refs 之外的頂層鍵不擋……（#1507）」、「多一個頂層鍵：解得出 key，warn 恰好一次……」、
@@ -86,7 +87,7 @@ refs:
 
 - 拒絕訊息是 `受管憑證檔 <路徑> 認不得：<原因>`，**不引值**。YAML 錯誤只寫錯誤碼與行列（`describeYamlError`，`:118`），不帶出錯那一行，
   因為那一行可能就是秘密。值不是字串時也只說「要是字串」，不說是什麼型別。
-- **鍵名會原樣印出**：`bad-name` 的訊息與外來頂層鍵的警告都帶鍵名。把 key 誤貼在鍵名的位置，它就會進訊息與日誌（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。
+- **鍵名會原樣印出**：`bad-name`、`not-string`、`empty-string` 的訊息與外來頂層鍵的警告都帶鍵名。把 key 誤貼在鍵名的位置，它就會進訊息與日誌（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。
 
 測試：`credentials.test.ts`「%s：拒絕，訊息指名檔案、不含秘密」；樣本 `reject[].secret`。
 
@@ -100,14 +101,14 @@ refs:
 ## 重讀
 
 不監看檔案。每次解析先 `stat`，簽章是 **mtime、size、ino、mode 四項**（`:222-224`），跟上一次一樣就用快取，不一樣才重讀。
-所以改了檔，下一次請求就是新的；沒有請求就不重讀。
+所以改了檔，下一次解析就是新的：模型 key 是下一個請求，MCP 是下一次建連線（下一條新對話；已建好的連線抓住舊值）。沒有解析就不重讀。
 
 | 情況 | 結果 | 程式 |
 | --- | --- | --- |
 | 檔不存在 | 這一層是空的，往下一層找；清掉上一份可用的內容 | `:226-228` |
-| 第一次讀就壞（權限、格式） | 拋 | `:238` |
+| 第一次讀就壞（權限、格式、讀檔失敗） | 拋 | `:238` |
 | 讀好過之後改壞（權限、格式、讀檔失敗） | 續用上一份可用的內容，警告一次（同一個簽章不重複講） | `:238-243` |
-| 讀好過之後刪掉、再建成壞檔 | 上一份已經清掉，等於第一次讀：拋 | `:226-228`、`:238` |
+| 讀好過之後刪掉，有一次解析看到檔不存在，再建成壞檔 | 上一份已經清掉，等於第一次讀：拋。刪掉與重建都在兩次解析之間的，只看得到簽章變了，照上一列續用 | `:226-228`、`:238` |
 | `stat` 本身失敗（`ENOENT` 以外，例如 `EACCES`） | 拋，不續用上一份（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)） | `:230` |
 
 測試：`credentials.test.ts` 的「重載：每次解析先 stat，變了才重讀」那組，以及「執行期被改成只剩註解……」、
@@ -139,5 +140,5 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
 ## 之後的檢查
 
 解析器只管這份檔的格式。模型 key 用之前還要過 [#1541](https://github.com/DemianLi/nexus-agent/issues/1541) 的修剪與字元檢查
-（`live-model.ts`），四層一視同仁。**MCP 那一列引用的值沒有過這道檢查**，原樣交給子行程的環境變數或 HTTP header
+（`api-key.ts` 的 `assertUsableApiKey`，由 `live-model.ts` 的 `resolveUsableKey` 呼叫），四層一視同仁。**MCP 那一列引用的值沒有過這道檢查**，原樣交給子行程的環境變數或 HTTP header
 （`assembly-root.ts` 的 `mcpCredentialsOf`，[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。

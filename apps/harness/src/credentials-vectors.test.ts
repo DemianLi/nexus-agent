@@ -1,5 +1,5 @@
 /**
- * 受管憑證檔的共用樣本（#2666）：TS 用現有的解析器跑 `native/sandbox-spawner/credentials-vectors.json`，
+ * 受管憑證檔的共用樣本（#2666）：TS 用 `parseCredentialsDocument` 跑 `native/sandbox-spawner/credentials-vectors.json`，
  * Rust 端若自己解析，跑同一份。契約見 `docs/credentials-file.md`。
  */
 
@@ -51,8 +51,8 @@ const VECTORS = JSON.parse(
 };
 
 /**
- * 拒絕訊息 `受管憑證檔 <檔> 認不得：` 之後那一段 → reason code。粒度只到今天的訊息分得出的程度，
- * 每個 code 一條、整段錨定，一則訊息對到兩條以上就是這張表寫錯了。
+ * 拒絕訊息 `受管憑證檔 <檔> 認不得：` 之後那一段 → reason code。粒度只到訊息分得出的程度。
+ * 每個 code 一條、從開頭錨定；一則訊息對到兩條以上就是這張表寫錯了。
  */
 const REASONS = {
   'not-mapping': /^根要是一個 mapping/u,
