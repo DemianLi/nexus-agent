@@ -4,10 +4,9 @@
  *
  * - **serve 掛受管檔，而且它最優先**：受管檔 > 啟動環境 > 目前資料夾 `.env` > harness home `.env`。
  *   使用者（管理者）明確存進受管檔的 key 必須一致生效，環境變數（CI、`EnvironmentFile=`、shell profile 替別的工具 export 的那一把）
- *   只在檔裡沒有值時才用。決策紀錄 `.agents/notes/implemented/architecture/2026-10-09-stored-credential-precedence.md`，
- *   其中**否決**了「受管值蓋掉環境值時警告」，所以這裡也沒有執行期警告、沒有退回舊序的開關；起動時印一行來源（{@link describeKeySource}）。
+ *   只在檔裡沒有值時才用。受管值蓋掉環境值時不警告、也沒有退回舊序的開關；起動時印一行來源（{@link describeKeySource}）。
  * - **一次性入口（CLI、eval、spike）不掛受管檔**：啟動環境 > 目前資料夾 `.env` > harness home `.env`，
- *   不 `stat`、不讀、不檢查受管檔，壞掉的受管檔也不擋。理由同 `2026-10-12-headless-environment-auth.md`：一次性任務自己帶進來的 key
+ *   不 `stat`、不讀、不檢查受管檔，壞掉的受管檔也不擋：一次性任務自己帶進來的 key
  *   （`NVIDIA_API_KEY=… pnpm cli:live`）不該被共用 home 上的受管檔靜靜換掉。
  *
  * 兩邊都以 `store` 旗標區分，沒有預設值（{@link CredentialServiceOptions.store}）。
@@ -24,8 +23,8 @@
  * - **內容從不寫進行程的環境變數**：跟兩層 `.env`（`launch-env.ts`，會寫）不同，這是受管檔存在的意義。
  *   它擋得住子行程「順手繼承」，擋不住以同一個使用者身分跑的 agent。
  * - **值只在請求當下解析**：模型的 `configuration.apiKey` 是函式，每次請求前呼叫（`live-model.ts`）。
- *   重讀靠「每次解析先 `stat`，簽章變了才重讀」，不監看檔案；啟動那一次（{@link CredentialService.check}）完整檢查、壞了就起不來，
- *   執行期重讀失敗保留最後一份可用內容並警告。
+ *   重讀靠「每次解析先 `stat`，簽章變了才重讀」，不監看檔案；呼叫了 {@link CredentialService.check} 的入口（serve 帶 `--live`）啟動時完整檢查、
+ *   壞了就起不來，執行期重讀失敗保留最後一份可用內容並警告。
  * - 服務是一個函式庫物件，由入口建、往下傳，不放進 `registry.services`：消費者只有模型那兩顆，不需要 plugin 也能取得它。
  */
 
