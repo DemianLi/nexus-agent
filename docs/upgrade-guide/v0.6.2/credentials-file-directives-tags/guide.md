@@ -1,6 +1,6 @@
 ---
 kind: upgrade-guide
-description: "受管憑證檔 `.credentials.yaml` 裡的 YAML 指令（`%YAML`、`%TAG`）、明示 tag（`!!str`、`!!binary`、`!foo`、`!`）、錨點（`&x`）與別名（`*x`）整份拒絕；執行期同一個錯誤恢復後再出，會再警告一次。"
+description: "受管憑證檔 `.credentials.yaml` 裡的 YAML 指令（`%YAML`、`%TAG`）、明示 tag（`!!str`、`!!binary`、`!foo`、`!`）、錨點（`&x`）與別名（`*x`）整份拒絕。"
 ---
 
 # 受管憑證檔拒絕 YAML 指令、明示 tag、錨點與別名
@@ -20,9 +20,6 @@ description: "受管憑證檔 `.credentials.yaml` 裡的 YAML 指令（`%YAML`�
   - 舊行為：`shared: &t …` 加 `A: *t` 照常展開；沒有對應錨點的別名讓解析拋出一則不帶檔名的錯誤。
   - 新行為：鍵、值、mapping、文件開頭上的任何錨點或別名都拒絕，訊息是 `YAML 錯誤 ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`（附行欄），不含值。
   - 值裡、引號裡、區塊值裡、註解裡的 `&` 與 `*` 不受影響。
-- **同一個重載錯誤恢復後再出，會再警告一次。**
-  - 舊行為：例如 `stat` 遇到 `EACCES` 警告一次，恢復之後又出 `EACCES`，第二次不再警告。
-  - 新行為：讀成功一次之後就重新算，第二次也會警告。
 - 受影響的：受管檔裡用了 `%YAML` 指令、`!!str` 這類 tag、或錨點與別名的主機，升上來之後 `serve --live` 起不來；沒帶 `--live` 的 serve 照樣起來，但引用受管檔憑證的 MCP 那幾列連線時連不上。
 
 ## 遷移

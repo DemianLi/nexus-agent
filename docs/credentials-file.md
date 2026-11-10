@@ -5,7 +5,7 @@
 四層找值的順序、從舊版遷移、MCP 那一列怎麼引用）在 [`operations.md`](operations.md)〈金鑰放哪裡〉與〈MCP server 要的憑證〉，這裡不重寫。
 
 格式在 [#1961](https://github.com/DemianLi/nexus-agent/issues/1961) 對齊 dsh，釘在 v1。本文件只記錄現況，不重新設計；
-標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的是那一張改過的行為。
+標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的條目是該 issue 改過的行為。
 
 - 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
 - 樣本：[`native/sandbox-spawner/credentials-vectors.json`](../native/sandbox-spawner/credentials-vectors.json)。
@@ -66,7 +66,7 @@ refs:
     `!!binary` 會把值換成位元組，`!!str` 會把 `678` 這類數字換成字串（沒寫 tag 是數字）；兩者一律拒絕，規則才簡單。
   - 錨點（`&x`）與別名（`*x`）：不論在鍵、值、mapping 還是文件開頭，訊息是 `YAML 錯誤 ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`（附行欄）。
     錨點名字收哪些字元各家實作不同（`&a:` 在 `yaml` 裡是名字 `a:`），別名展開還要防別名炸彈；拒絕之後，自己解析的實作不必做這兩件事。
-    沒有對應錨點的別名以前會讓 `toJS()` 拋出不帶檔名的 `ReferenceError`，現在一樣講成 `ALIAS_NOT_ALLOWED`。
+    沒有對應錨點的別名會讓 `toJS()` 拋出不帶檔名的 `ReferenceError`；這裡在那之前就講成 `ALIAS_NOT_ALLOWED`。
   - 有好幾個時指到最前面那一個。值、引號、區塊值與註解裡的 `!`、`%`、`&`、`*` 都不是 token，照收。
   - 不看 YAML 函式庫有沒有發 warning：認得的 tag 不發 warning，結果照樣被換掉。
   - 樣本：`reject` 裡 `reason` 是 `yaml`、名字以「指令」「tag」「錨點」「別名」開頭的那幾條；`accept` 裡「不是 tag 也不是指令」「不是錨點也不是別名」那幾條。
@@ -180,7 +180,7 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
 
 ## 對照 dsh
 
-從 `credentials.ts` 的註解搬來（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)），引用在 dsh `8bd073392eef` 核對過。
+引用在 dsh `8bd073392eef` 核對過。
 不帶路徑的 `:行號` 指 `packages/credentials/credentials-local/src/index.ts`。
 
 - **兩邊的找值順序照 dsh。** serve 對應 dsh 的 Web profile，受管檔最優先，理由同 `:1-20`：使用者明確存進受管檔的 key 要一致生效。
