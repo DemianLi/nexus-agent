@@ -7,7 +7,7 @@
  *
  * LangChain 的 `handleChatModelStart` 在 `_generate`／`_streamChatModelEvents`／`_streamResponseChunks` 之前跑，所以 callback
  * 與我們自己的日誌、軌跡看到的是**參照**；請求轉換（`toCompletionsMessages`）在它們裡面，這時換掉區塊，base64 就只存在於
- * 這次請求的記憶體裡。三條路是基座依呼叫方式挑的（`@langchain/core` 1.2.9 的 `chat_models.js:118-154,229-271`）：`invoke` 平常走 `_generate`，
+ * 這次請求的記憶體裡。三條路是基座依呼叫方式挑的（`@langchain/core` 1.2.9 的 `chat_models.js:118-154,229-272,309`）：`invoke` 平常走 `_generate`，
  * 有偏好 stream-event 的 handler 時走 `_streamChatModelEvents`、有偏好串流的 handler 時走 `_streamResponseChunks`；`stream()` 走
  * `_streamResponseChunks`，v3 的 `streamEvents()` 走 `_streamChatModelEvents`——漏一條，那一條路上附件就會以原樣的區塊進請求轉換。
  *

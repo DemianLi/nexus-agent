@@ -19,7 +19,7 @@
  * `failureCodeOfStatus` 回到同一個碼。`AUTH`（401／403）、`INVALID_REQUEST`（400／413）、`SERVER`（≥ 500）、`HTTP_<狀態>` 沿用信封自己的數字碼，沒有就補該階的代表狀態（401／400／500；`permission_error` 是 403）；`QUOTA` 一律 402（信封說 429 也是——否則合成的 429 回應會被讀成 `RATE_LIMIT`），`RATE_LIMIT` 一律 429。
  * `CONTEXT_WINDOW_EXCEEDED` 沒有對應的狀態（400 與 413 在表裡是 `INVALID_REQUEST`），只能靠 {@link InbandFailure.overflow} 旗標，
  * 旗標只有串流中段（`classifyTurnFailure` 的 `isInbandApiError` 那一格）要用；第一則事件之後的監看（`createInbandWatcher`）直接取
- * {@link InbandFailure.code}。第一則事件就是信封的那一條不靠旗標：合成的 400 回應交給 `@langchain/openai` 的轉接器，它自己認得超窗的 400，
+ * {@link InbandFailure.code}。第一則事件就是信封的那一條不靠旗標：合成的 400 回應交給轉接器（`BaseChatOpenAI`），它自己認得超窗的 400，
  * 實測（`model-failure-classification.test.ts` 的 `typedRows`）也是 `CONTEXT_WINDOW_EXCEEDED`。
  *
  * **字樣偵測**：下面兩支照搬 dsh `isContextWindowExceededError`／`isQuotaExceededError`。#1805 只套在信封上；#1557 起

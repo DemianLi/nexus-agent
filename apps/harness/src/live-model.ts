@@ -298,7 +298,7 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * dsh 寫得很清楚：「溢出分类由适配器维护——提供方措辞可能改变」
  * （`compaction-basic/README.zh.md:241`），消費端只認規範碼；LangChain 與 LiteLLM 同形。
- * **adapter 照搬 `@langchain/openai` 1.5.10、逐位元組相同**（#2361 的驗收，`base-chat-openai.test.ts` 釘著），所以退到手上最靠近 adapter 的一格：建 client
+ * **錯誤包裝（`base-chat-openai.ts` 的 `wrapOpenAIClientError`）維持照搬**（見 `base-chat-openai.ts` 模組說明），所以放在建 client
  * 的這個工廠。**不碰恢復那一層**——那一層基座已經有而且是對的（`context-overflow.test.ts`
  * 量過：branded 的錯誤到得了 `isContextOverflow`，埋在 `cause` 底下也認得）。
  *
@@ -638,9 +638,9 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *    one classifier」。這裡同向：in-band 的錯誤被翻成跟 HTTP 錯誤同一個形狀。
  * 2. **adapter 負責翻譯投遞方式。** `llm-pi-ai/src/stream.ts:129-133`：「pi-ai never throws
  *    mid-stream —— failures arrive as `error` events, which become error/aborted `finish`
- *    chunks (the harness protocol's other error-delivery style)」。adapter 照搬
- *    `@langchain/openai` 1.5.10、逐位元組相同（#2361 的驗收；跟 {@link isDerivedContextOverflow} 的偏離登記一同因），
- *    所以退到手上最靠近 adapter 的一格：建 client 的這個工廠。
+ *    chunks (the harness protocol's other error-delivery style)」。nexus 的轉接器不做這件事：
+ *    `base-chat-openai.ts` 維持照搬（見 `base-chat-openai.ts` 模組說明），事件那一路的轉換又在 `@langchain/core` 的 `convertOpenAICompletionsStream`；
+ *    所以放在建 client 的這個工廠（同 {@link isDerivedContextOverflow}）。
  * 3. **重試掛在迴圈的步級掛點**（`llm/src/retry-policy.ts:5`、`llm-retry/src/index.ts` 聽
  *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
  *    （`core/agent-loop/src/agent.ts:489-493`，`5badb15009a`）—— **中段才出錯的串流 dsh 照樣重試**。
@@ -867,8 +867,8 @@ export class StreamIdleTimeoutError extends Error {
  *    與第一則事件之前的失敗**共用同一份 `retryPolicy`**（#1427，出廠 6 次，比 dsh 的預設 5 次多，見 `settings/live-model.ts`
  *    的偏離二）。**第一則事件之前的逾時由 SDK 的 `timeout` 計時器產生**，同樣經 `onFailedAttempt` 回報、進同一份預算。
  * 2. **事件級，不是 chunk 級**（#1538 起；之前是位元組級）。dsh 等的是轉接器解好的一個 chunk，SSE 解析器已經把 keep-alive 註解行吞掉，
- *    所以只送 keep-alive 的供應商會被擋下；我們在 `fetch` 這一層沒有解好的 chunk 可等；adapter 照搬 `@langchain/openai` 1.5.10、這一步不改它（#2361），
- *    所以退到這裡（同 {@link withInbandStreamErrors}）。這一層疊在 {@link withStreamCompletionCheck} **外面**，只看得到它放行的位元組，而它只交**完整的 SSE 事件**：
+ *    所以只送 keep-alive 的供應商會被擋下；這一層在 `fetch`（理由同 {@link withInbandStreamErrors}），
+ *    沒有解好的 chunk 可等。這一層疊在 {@link withStreamCompletionCheck} **外面**，只看得到它放行的位元組，而它只交**完整的 SSE 事件**：
  *    - 寫到一半、一個位元組一個位元組滴的事件**不算進度**，閒置逾時照走（位元組級時這種滴灌會一直把計時器撥回去）；
  *    - 只有註解行的 keep-alive（`: ping`）是完整事件，照樣放行、照樣重新計時——供應商只送 keep-alive 不送內容時，這一層**還是擋不到**，
  *      這是與 dsh 剩下的那一格差距；
@@ -1015,8 +1015,9 @@ const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
  *
  * ## 做法：看，不改
  *
- * 在 `fetch` 這一層（同 {@link withInbandStreamErrors}、{@link withStreamIdleTimeout} 退到這裡的理由：事件轉換（`@langchain/core` 的 `convertOpenAICompletionsStream`）
- * 沒有 finish 也照送 `message-finish`，原始 `finish_reason` 只在有 finish 時放進它的 `responseMetadata`；adapter 這一步不改，#2361）逐則解 SSE 事件，記下有沒有出現過非空的 `choices[0].finish_reason`。
+ * 在 `fetch` 這一層逐則解 SSE 事件，記下有沒有出現過非空的 `choices[0].finish_reason`。轉接器那一層看不到：事件那一路是 `@langchain/core` 的
+ * `convertOpenAICompletionsStream`，沒有 finish 也照送 `message-finish`，原始 `finish_reason` 只在有 finish 時放進它的 `responseMetadata`；
+ * `_streamResponseChunks` 那一路（`base-chat-openai.ts`，維持照搬）EOF 時也正常結束。
  * 位元組原樣往下交，只在三種情形把串流弄成錯誤：
  *
  * 1. 看到 `[DONE]`、之前沒有 finish → {@link StreamEndedWithoutFinishError}（`via: 'done'`）。**只在 EOF 判斷抓不到這一種**：openai 的迭代器
@@ -1031,7 +1032,7 @@ const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
  * ## 偏離登記
  *
  * 1. **在位元組層解 SSE，不是在轉接器解好的事件上**（理由 1，基座表達不出來）。dsh 在 pi-ai 轉接器那一層，串流在 `finish_reason` 之前
- *    結束就發 `Stream ended without finish_reason`，並歸 `TRANSPORT`（`llm-pi-ai/src/stream.ts:52-58`）；nexus 的 adapter 照搬 `@langchain/openai`，這一步不改它（#2361）。
+ *    結束就發 `Stream ended without finish_reason`，並歸 `TRANSPORT`（`llm-pi-ai/src/stream.ts:52-58`）。
  * 2. **不新增 `STREAM_CLOSED` 碼**：那是 dsh 轉接器對「pi-ai 事件流沒有 done／error 就結束」的不變量，nexus 沒有那一層。
  *
  * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。
@@ -1292,8 +1293,8 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  *
  * ## 偏離登記
  *
- * 1. **改在 `fetch` 這一層，不在組請求那一步。** 轉換函式照搬
- *    `@langchain/openai` 1.5.10、逐位元組相同（#2361 的驗收，`base-chat-openai.test.ts` 釘著），所以退到手上最靠近它的一格：送出前的 body（同
+ * 1. **改在 `fetch` 這一層，不在組請求那一步**：`toCompletionsMessages` 維持照搬
+ *    （見 `base-chat-openai.ts` 模組說明），所以放在送出前的 body（同
  *    {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
  * 2. **只換空的那種**（有工具呼叫的只換空陣列，沒有的不分形狀）。pi-ai 還把非空的文字接成一條字串送（它的註解說陣列會讓 NVIDIA NIM 上的
  *    DeepSeek V3.2 照抄區塊結構）。那會改掉每一則有字的助手訊息的送法，兩個模型都要重量，不在這張。
@@ -1345,9 +1346,8 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * ## 偏離登記
  *
- * **改在 `fetch` 這一層，不在序列化那一步**。轉換函式（`toCompletionsMessages`）
- * 照搬 `@langchain/openai` 1.5.10、逐位元組相同（#2361 的驗收，`base-chat-openai.test.ts` 釘著），所以退到手上最靠近它的一格：送出前的 body，
- * 跟 {@link normalizeEmptyAssistantContent}（#592）退到同一處、同一個理由。撤除條件：轉換函式不再要求跟 `@langchain/openai` 一致。
+ * **改在 `fetch` 這一層，不在序列化那一步**：`toCompletionsMessages` 維持照搬
+ * （見 `base-chat-openai.ts` 模組說明），所以放在送出前的 body，跟 {@link normalizeEmptyAssistantContent}（#592）同一處。
  *
  * @param messages - 請求 body 的 `messages`。
  * @returns 換過的訊息串；沒有任何空的工具訊息時是**原本那個陣列**。
@@ -1424,7 +1424,7 @@ function rewriteChatMessages(
  * ## 偏離登記
  *
  * **改在 `fetch` 這一層。** dsh 在序列化裡就不送；`AgentNode` 的 `name` 是 `??` 後面接預設值，傳什麼都拿不掉，
- * 轉換函式又照搬 `@langchain/openai` 1.5.10、逐位元組相同（#2361 的驗收），所以退到手上最靠近它的一格：送出前的 body（同
+ * `toCompletionsMessages` 又維持照搬（見 `base-chat-openai.ts` 模組說明），所以放在送出前的 body（同
  * {@link withEmptyAssistantContent} 與 {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
  *
  * @param messages - 請求 body 的 `messages`。
@@ -1482,9 +1482,9 @@ export function withShippedRequestBody(baseFetch: typeof fetch = fetch): typeof 
  *
  * ## 偏離登記
  *
- * **改在 `fetch` 這一層，不在組請求標頭時合進去**。dsh 在 adapter 組請求標頭時就把歸屬標頭合進去
- * （`llm-pi-ai/src/adapter.ts:216-224`）。`configuration.defaultHeaders` 帶的也會勝過 SDK 的預設（`openai@7.5.0` `client.js:801-813`），
- * 留在這一層是因為它跟空助手內容（#592）、助手 `name`（#1392）與空工具結果（#1562）在同一處，也蓋得掉部署標頭裡同名的 UA。
+ * **在 `fetch` 這一層設，不放 `configuration.defaultHeaders`**：SDK 依序疊預設的 `User-Agent`（`openai@7.5.0` `client.js:801`）、
+ * `defaultHeaders`（`:812`）、每次請求的 `options.headers`（`:814`），`defaultHeaders` 會被後者蓋過；在 fetch 層設，三者帶的 UA 都換掉。
+ * 跟空助手內容（#592）、助手 `name`（#1392）與空工具結果（#1562）在同一處。
  *
  * 放在 fetch 疊的**最外層**：每一個交給底層的請求都帶，不管內層怎麼改 body 或包回應。
  *
