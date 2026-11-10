@@ -1,50 +1,32 @@
 /**
- * 憑證服務：按名字解析 key，順序**照 dsh，分兩邊**（[#730](https://github.com/DemianLi/nexus-agent/issues/730) 的 B 段、
+ * 憑證服務：按名字解析 key，分兩邊（[#730](https://github.com/DemianLi/nexus-agent/issues/730) 的 B 段、
  * [#1540](https://github.com/DemianLi/nexus-agent/issues/1540)）：
  *
- * - **serve（對應 dsh 的 Web profile）掛受管檔，而且它最優先**：受管檔 > 啟動環境 > 目前資料夾 `.env` > harness home `.env`。
- *   理由同 dsh `packages/credentials/credentials-local/src/index.ts:1-20`：使用者（管理者）明確存進受管檔的 key 必須一致生效，
- *   環境變數（CI、`EnvironmentFile=`、shell profile 替別的工具 export 的那一把）只在檔裡沒有值時才用。決策紀錄
- *   `.agents/notes/implemented/architecture/2026-10-09-stored-credential-precedence.md`，其中**否決**了「受管值蓋掉環境值時警告」，所以這裡
- *   也沒有執行期警告、沒有退回舊序的開關；起動時印一行來源（{@link describeKeySource}），對應 dsh `describe` 回報的 `source`。
- * - **一次性入口（CLI、eval、spike）對應 dsh 的 headless profile，不掛受管檔**：啟動環境 > 目前資料夾 `.env` > harness home `.env`，
+ * - **serve 掛受管檔，而且它最優先**：受管檔 > 啟動環境 > 目前資料夾 `.env` > harness home `.env`。
+ *   使用者（管理者）明確存進受管檔的 key 必須一致生效，環境變數（CI、`EnvironmentFile=`、shell profile 替別的工具 export 的那一把）
+ *   只在檔裡沒有值時才用。決策紀錄 `.agents/notes/implemented/architecture/2026-10-09-stored-credential-precedence.md`，
+ *   其中**否決**了「受管值蓋掉環境值時警告」，所以這裡也沒有執行期警告、沒有退回舊序的開關；起動時印一行來源（{@link describeKeySource}）。
+ * - **一次性入口（CLI、eval、spike）不掛受管檔**：啟動環境 > 目前資料夾 `.env` > harness home `.env`，
  *   不 `stat`、不讀、不檢查受管檔，壞掉的受管檔也不擋。理由同 `2026-10-12-headless-environment-auth.md`：一次性任務自己帶進來的 key
  *   （`NVIDIA_API_KEY=… pnpm cli:live`）不該被共用 home 上的受管檔靜靜換掉。
  *
  * 兩邊都以 `store` 旗標區分，沒有預設值（{@link CredentialServiceOptions.store}）。
  *
- * 對照 dsh `packages/credentials/credentials-local` 與 `packages/llm/llm-deepseek-api-key`（`1517a4db`，條文引自 `687f282e` 的 clone）：
+ * 受管檔的格式、拒絕與警告的規則、重讀、權限都寫在 `docs/credentials-file.md`（Rust 端照同一份），與 dsh 的對照也在那裡。
+ * 這裡只記程式要守的幾件事：
  *
- * - **受管檔**放在 harness home 底下（{@link CREDENTIALS_FILE}），帶版本的 YAML，只放憑證：
- *   ```yaml
- *   version: 1
- *   refs:
- *     NVIDIA_API_KEY: nvapi-…
- *   ```
- *   空檔或只有註解的檔是空的倉庫，不要求 `version`（dsh `credentials-local/src/index.ts:203`、`:209-211`）。
- *   **`refs` 裡面**一律拒絕、不跳過——鍵不是環境變數形狀、值不是非空字串、重複鍵——因為被靜靜忽略的條目讀起來就是「我存的憑證沒作用」
- *   （dsh `:179-183`）；根不是 mapping、`version` 不是 1、壞掉的 YAML 同樣拒絕。
- *   **`version`、`refs` 之外的頂層鍵不擋啟動**：別的工具寫進來的外來條目不該讓 `serve --live` 起不來，也不該連累檔裡存好的 key
- *   （dsh `:184-185`、`:228`、`:883-890`）。解析器把它們的鍵名與行號交回呼叫端，{@link createCredentialService} 經 `warn` 講一聲，**只講個數與行號，不印鍵名也不印值**；
- *   這些鍵留在檔案裡、不解析出任何東西。
- *   **錯誤訊息不引原文**——YAML 解析器自己的訊息會把出錯那一行帶出來，而那一行是秘密。
- * - **讀之前先查權限**：group 或 other 有任何權限位元就拒絕，訊息帶 `chmod 600`（`owner-only.ts`，與瀏覽器會話
- *   密鑰檔共用）。寫入時檔 0600、目錄 0700——**這一段還沒有寫入路徑**（沒有設定頁，手動編輯，dsh 也允許）。
+ * - **`refs` 裡面**一律拒絕、不跳過：被靜靜忽略的條目讀起來就是「我存的憑證沒作用」。
+ *   **`version`、`refs` 之外的頂層鍵不擋啟動**，解析器把鍵名與行號交回呼叫端，{@link createCredentialService} 經 `warn` 講一聲，
+ *   **只講個數與行號，不印鍵名也不印值**。`records` 照舊拒絕：nexus 沒有這種憑證，放過它會讓人以為存進去的東西有作用。
+ * - **錯誤訊息不引原文**：YAML 解析器自己的訊息會把出錯那一行帶出來，而那一行是秘密。
+ * - **讀之前先查權限**：group 或 other 有任何權限位元就拒絕，訊息帶 `chmod 600`（`owner-only.ts`，與瀏覽器會話密鑰檔共用）。
+ *   還沒有寫入路徑（沒有設定頁，手動編輯）。
  * - **內容從不寫進行程的環境變數**：跟兩層 `.env`（`launch-env.ts`，會寫）不同，這是受管檔存在的意義。
- *   它擋得住子行程「順手繼承」，擋不住以同一個使用者身分跑的 agent——dsh 的 README 也明說了這一點。
+ *   它擋得住子行程「順手繼承」，擋不住以同一個使用者身分跑的 agent。
  * - **值只在請求當下解析**：模型的 `configuration.apiKey` 是函式，每次請求前呼叫（`live-model.ts`）。
- *
- * ## 偏離 dsh
- *
- * - **重載是「每次解析先 `stat`，時間或大小變了才重讀」**，不是檔案監看（dsh 用 chokidar 加 100ms 去抖）。
- *   模型每次請求都會取 key，所以「改了檔、下一次請求就用新的」成立，少一個相依、沒有計時器要在測試裡處理。
- *   代價：沒有請求就沒有重載，也就不會在請求之外提早發現檔案壞了——**啟動那一次**（{@link CredentialService.check}）
- *   仍然完整檢查、壞了就起不來。
- * - **執行期重載失敗保留最後一份可用內容並警告一次**，同 dsh 的熱重載；啟動那一次則拋。
- * - 沒有 `records`（`grant`／`api-key` 記錄）：我們沒有第二種憑證。**`records` 這個鍵照舊拒絕，不跟其他未知頂層鍵一起放過**：
- *   理由用 dsh 自己的規則（`:179-183`）——我們不會用 `records` 裡的東西，放過它，使用者就會以為存進去的 grant 有作用。
- * - 服務是一個函式庫物件，由入口建、往下傳，不放進 `registry.services`：消費者只有模型那兩顆，
- *   不需要 plugin 也能取得它。
+ *   重讀靠「每次解析先 `stat`，簽章變了才重讀」，不監看檔案；啟動那一次（{@link CredentialService.check}）完整檢查、壞了就起不來，
+ *   執行期重讀失敗保留最後一份可用內容並警告。
+ * - 服務是一個函式庫物件，由入口建、往下傳，不放進 `registry.services`：消費者只有模型那兩顆，不需要 plugin 也能取得它。
  */
 
 import { readFileSync, statSync } from 'node:fs';
@@ -55,6 +37,7 @@ import {
   isMap,
   LineCounter,
   Pair,
+  Parser,
   parseDocument,
   YAMLMap,
   type YAMLError,
@@ -118,8 +101,7 @@ function rejectionChannel(): Pick<CredentialService, 'reportRejected' | 'onRejec
 }
 
 /**
- * 一把憑證的名字長什麼樣：環境變數形狀。受管檔 `refs` 的鍵與 `live-model` 的 `apiKeyEnv`（#1604）共用這一條，
- * 同 dsh `packages/credentials/credentials/src/index.ts:19` 的 `REF_PATTERN`。
+ * 一把憑證的名字長什麼樣：環境變數形狀。受管檔 `refs` 的鍵與 `live-model` 的 `apiKeyEnv`（#1604）共用這一條。
  */
 export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
@@ -127,6 +109,41 @@ export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 function describeYamlError(error: YAMLError, lines: LineCounter): string {
   const at = lines.linePos(error.pos[0]);
   return `${error.code}（第 ${String(at.line)} 行第 ${String(at.col)} 欄）`;
+}
+
+/**
+ * 第一個指令（`%YAML`、`%TAG`、不認得的 `%…`）或明示 tag（`!!str`、`!!binary`、`!foo`、`!`、`!<…>`）的位置與錯誤碼。
+ *
+ * 一律拒絕，不看 `yaml` 有沒有發 warning：`!!str`、`!!binary` 是認得的 tag，不發任何 warning 就把值換掉（`!!binary` 變成位元組），
+ * `%YAML 1.1` 換了 schema（`yes` 變成 `true`）。受管檔只放 `名字: 值`，用不到這兩樣；Rust 端照同一份樣本，也就不必實作它們。
+ *
+ * 從 CST 找，不從文字找：值、引號、區塊值、註解裡的 `!` 與 `%` 不是 token，不會誤判。
+ */
+function forbiddenToken(
+  text: string,
+): { readonly code: string; readonly offset: number } | undefined {
+  let found: { readonly code: string; readonly offset: number } | undefined;
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    const { type, offset } = node as { type?: unknown; offset?: unknown };
+    if (typeof offset === 'number' && (type === 'directive' || type === 'tag')) {
+      // 走訪順序不保證照檔案順序：取最前面那一個。
+      if (found === undefined || offset < found.offset) {
+        found = {
+          code: type === 'directive' ? 'DIRECTIVE_NOT_ALLOWED' : 'TAG_NOT_ALLOWED',
+          offset,
+        };
+      }
+      return;
+    }
+    for (const value of Object.values(node)) walk(value);
+  };
+  for (const token of new Parser().parse(text)) walk(token);
+  return found;
 }
 
 function isMissing(error: unknown): boolean {
@@ -181,7 +198,7 @@ function mappingEntries(
 /**
  * 解析一份受管檔的文字。
  *
- * 空檔、只有註解的檔、空的 mapping（`{}`）都是空的倉庫，不要求 `version`（同 dsh）。
+ * 空檔、只有註解的檔、空的 mapping（`{}`）都是空的倉庫，不要求 `version`。
  *
  * @param file - 只用在訊息裡。
  * @param text - 檔案內容。
@@ -204,7 +221,12 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   });
   const [problem] = document.errors;
   if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, lines)}`);
-  // 只有註解的文件 `toJS()` 是 `null`：同 dsh `?? {}`，當空的倉庫。
+  const forbidden = forbiddenToken(text);
+  if (forbidden !== undefined) {
+    const { line, col } = lines.linePos(forbidden.offset);
+    fail(`YAML 錯誤 ${forbidden.code}（第 ${String(line)} 行第 ${String(col)} 欄）`);
+  }
+  // 只有註解的文件 `toJS()` 是 `null`：當空的倉庫。
   const root: unknown = document.toJS() ?? {};
   if (typeof root !== 'object' || Array.isArray(root)) {
     return fail('根要是一個 mapping（version 與 refs）');
@@ -290,7 +312,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   const { store } = options;
   /** 最後一份好的內容，與它是憑哪個 stat 讀來的。 */
   let good: { readonly signature: string; readonly refs: ReadonlyMap<string, string> } | undefined;
-  /** 最後一次警告過的原因（stat 簽章，或 `stat:<錯誤碼>`）：同一個原因只講一次。 */
+  /** 最後一次警告過的原因（stat 簽章，或 `stat:<錯誤碼>`）：同一個原因連續只講一次，讀成功就清掉。 */
   let warned: string | undefined;
 
   /**
@@ -322,7 +344,10 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       }
       return keepLastGood(error, `stat:${String((error as NodeJS.ErrnoException | null)?.code)}`);
     }
-    if (good?.signature === signature) return good.refs;
+    if (good?.signature === signature) {
+      warned = undefined;
+      return good.refs;
+    }
     let parsed: ParsedCredentialsDocument;
     try {
       assertOwnerOnlyMode('受管憑證檔', file, mode);
@@ -331,6 +356,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       return keepLastGood(error, signature);
     }
     good = { signature, refs: parsed.refs };
+    warned = undefined;
     // 這是一份好檔：多出來的頂層鍵不擋、不算重載失敗。同一份 stat 簽章在上面就回快取了，所以每份檔只講一次。
     // 只講個數與行號，不印鍵名也不印值（#2667）：鍵名的位置可能被誤貼了 key。
     if (parsed.ignoredKeys.length > 0) {
@@ -395,7 +421,7 @@ export function describeKeySource(
 /**
  * 沒有啟動快照時的退路：只看給定環境（預設 `process.env`），**每次解析都重讀**。
  *
- * dsh 在沒掛憑證服務時同樣退回啟動環境（`llm-deepseek-api-key`）。eval／spike 之外的測試與嵌入方走這條。
+ * eval／spike 之外的測試與嵌入方走這條。
  *
  * @param env - 環境，省略即 `process.env`。
  */

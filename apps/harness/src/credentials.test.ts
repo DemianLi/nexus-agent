@@ -221,6 +221,82 @@ describe('鍵名不進訊息與日誌（#2667）', () => {
   });
 });
 
+describe('指令與明示 tag 整份拒絕（#2667）', () => {
+  it.each([
+    ['%YAML', `%YAML 1.2\n---\nversion: 1\nrefs:\n  A: ${SECRET}\n`, 'DIRECTIVE_NOT_ALLOWED', 1, 1],
+    [
+      '%YAML 1.1（會把 yes 換成 true）',
+      `%YAML 1.1\n---\nversion: 1\nrefs:\n  A: yes\n`,
+      'DIRECTIVE_NOT_ALLOWED',
+      1,
+      1,
+    ],
+    [
+      '%TAG',
+      `%TAG !e! tag:example.com,2000:\n---\nversion: 1\nrefs:\n  A: ${SECRET}\n`,
+      'DIRECTIVE_NOT_ALLOWED',
+      1,
+      1,
+    ],
+    ['不認得的指令', `%FOO bar\n---\nversion: 1\n`, 'DIRECTIVE_NOT_ALLOWED', 1, 1],
+    ['!!str', `version: 1\nrefs:\n  A: !!str ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['!!binary', `version: 1\nrefs:\n  A: !!binary aGVsbG8=\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['自訂 tag', `version: 1\nrefs:\n  A: !foo ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    ['非特定 tag `!`', `version: 1\nrefs:\n  A: ! ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 6],
+    [
+      '逐字 tag',
+      `version: 1\nrefs:\n  A: !<tag:yaml.org,2002:str> ${SECRET}\n`,
+      'TAG_NOT_ALLOWED',
+      3,
+      6,
+    ],
+    ['鍵上的 tag', `version: 1\nrefs:\n  !!str A: ${SECRET}\n`, 'TAG_NOT_ALLOWED', 3, 3],
+    ['mapping 上的 tag', `version: 1\nrefs: !!map\n  A: ${SECRET}\n`, 'TAG_NOT_ALLOWED', 2, 7],
+    ['flow 裡的 tag', `version: 1\nrefs: {A: !!str ${SECRET}}\n`, 'TAG_NOT_ALLOWED', 2, 11],
+    ['文件開頭的 tag', `--- !!map\nversion: 1\n`, 'TAG_NOT_ALLOWED', 1, 5],
+    [
+      '外來頂層鍵的值',
+      `version: 1\nnote: !!binary aGVsbG8=\nrefs:\n  A: ${SECRET}\n`,
+      'TAG_NOT_ALLOWED',
+      2,
+      7,
+    ],
+  ])('%s：講成 YAML 錯誤與位置，不含值', (_, text, code, line, col) => {
+    let message = '';
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+
+  it.each([
+    ['值裡的 !', 'version: 1\nrefs:\n  A: abc!!def\n', 'abc!!def'],
+    ['引號裡的 !!str', 'version: 1\nrefs:\n  A: "!!str x"\n', '!!str x'],
+    [
+      '區塊值裡的 ! 與 %',
+      'version: 1\nrefs:\n  A: |\n    !!str x\n    %YAML 1.2\n',
+      '!!str x\n%YAML 1.2\n',
+    ],
+    ['% 開頭的值', 'version: 1\nrefs:\n  A: "%YAML"\n', '%YAML'],
+  ])('%s：不是 tag 也不是指令，照收', (_, text, value) => {
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe(value);
+  });
+
+  it('有好幾個時指到最前面那一個', () => {
+    const text = `version: 1\nrefs:\n  A: !foo x\n  !!str B: !!binary aGVsbG8=\n`;
+    expect(() => parseCredentialsDocument(file, text)).toThrow('TAG_NOT_ALLOWED（第 3 行第 6 欄）');
+  });
+
+  it('註解裡的 ! 與 %：照收', () => {
+    const text = '# %YAML 1.2\nversion: 1 # !!str\nrefs:\n  A: v # !foo\n';
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe('v');
+  });
+});
+
 describe('換成同一個名字的兩個鍵算重複鍵（#2667）', () => {
   it.each([
     ['布林與字串', 'version: 1\ntrue: 1\n"true": 2\n'],
