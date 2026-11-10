@@ -329,7 +329,8 @@ export interface CreateNexusAgentOptions {
    * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
    * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。**省略就完全不變**：沒有這顆 middleware，
    * 模型看到的還是基座的 `task`。給了：`task` 從模型視野拿掉、換成 `subagent`（`run_in_background` 預設 true），
-   * 背景那一輪由 `attachSession` 建的 host 拉起。**需要 {@link checkpointer}**（沒有存檔點就沒有第二輪）。
+   * 背景那一輪由 `attachSession` 建的 host 拉起。`langgraph` 下**需要 {@link checkpointer}**（沒有存檔點就沒有第二輪）；
+   * `native` 下不用，第二輪看得到第一輪靠同一個 native agent 實例。
    * 偏離登記與細節見 `background-delegation.ts`。
    */
   readonly backgroundSubagents?: BackgroundSubagentsOptions;
@@ -363,6 +364,8 @@ export interface CreateNexusAgentOptions {
   readonly validateSubagent?: (subagent: NexusSubAgent) => void;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
+  /** 這次組裝等不等得到答覆，原樣轉給 `FoldOptions.awaitsAnswer`；省略照 {@link checkpointer} 在不在算。 */
+  readonly awaitsAnswer?: boolean;
   /** 長期記憶用的 store。 */
   readonly store?: AgentStore;
   /** 核准政策的 session 開關。省略即「這個 session 有人在」。 */
@@ -830,7 +833,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   const hostTools: HostToolsSlot | undefined = embedded
     ? createHostToolsSlot(options.hostTools?.timeoutMs)
     : undefined;
-  if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
+  if (
+    options.backgroundSubagents !== undefined &&
+    options.agentLoop !== 'native' &&
+    options.checkpointer == null
+  ) {
     throw new Error(
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
     );
@@ -1001,6 +1008,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }),
       model: options.model,
       checkpointer: options.checkpointer,
+      ...(options.awaitsAnswer !== undefined && { awaitsAnswer: options.awaitsAnswer }),
       ...(options.agentLoop !== undefined && { loop: options.agentLoop }),
       store: options.store,
       approvals: options.approvals,
@@ -1058,7 +1066,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
      *
      * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
-     * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。
+     * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。`native` 下是 `undefined`。
      * @returns 編好的圖。
      * @throws 沒有這個子代理、規格不合。
      */
@@ -1066,7 +1074,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const backgroundApprovalPolicyPrompt = createBackgroundApprovalPolicyPrompt();
     const compileSubagent = (
       name: string,
-      checkpointer: NonNullable<AgentCheckpointer>,
+      checkpointer: NonNullable<AgentCheckpointer> | undefined,
       model?: BaseChatModel,
     ) => {
       // **背景圖要自己帶上限**（#858 的量測）：它是 `createAgent` 直接編的，沒有 root 那層
@@ -1074,7 +1082,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       // 連續 8 次工具呼叫就 `GraphRecursionError`。給它跟 root 同一個值（旗標 > 設定列 > 預設），背景子代理每一輪才跟
       // 一次性的、跟 root 一樣長。
       return compileSubagentGraph(params, name, {
-        checkpointer,
+        ...(checkpointer !== undefined && { checkpointer }),
         ...(model !== undefined && { model }),
         // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328，照 dsh）。
         follow: false,
@@ -1302,7 +1310,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             }
             return compileSubagent(
               subagent,
-              options.checkpointer!,
+              options.agentLoop === 'native' ? undefined : options.checkpointer!,
               model,
             ) as unknown as BackgroundAgent;
           },

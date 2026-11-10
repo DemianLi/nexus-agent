@@ -76,8 +76,8 @@ export type SubagentGraph = ReturnType<typeof createAgent>;
 
 /** 編圖的選項。 */
 export interface SubagentGraphOptions {
-  /** 存檔點。`langgraph` 下**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。`native` 下不用（見 {@link loop}）。 */
-  readonly checkpointer: NonNullable<AgentCheckpointer>;
+  /** 存檔點。`langgraph` 下**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由，缺了編圖時拋。`native` 下不用（見 {@link loop}）。 */
+  readonly checkpointer?: NonNullable<AgentCheckpointer>;
   /**
    * 這張圖改用的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)），**勝過規格自己帶的與組裝點的**。
    * 省略＝同今天（規格的，沒有就用組裝點的）。呼叫端每張圖各給各的實例：重試與逾時的包裝是每個實例一份，共用會讓兩張圖悄悄混在一起。
@@ -214,6 +214,9 @@ export function compileSubagentGraph(
       ...nativeMaxTurns(declarative),
       background: true,
     }) as unknown as SubagentGraph;
+  }
+  if (options.checkpointer === undefined) {
+    throw new Error(`背景子代理 "${declarative.name}" 走 langgraph 要有 checkpointer：沒有存檔點，第二輪就看不到第一輪`);
   }
   return createAgent({
     model: model as never,
