@@ -136,7 +136,8 @@ export interface FakeEndpoint {
 }
 
 /**
- * 假 OpenAI 端點。`stream` 為真時走 SSE（出貨的 `--live` 與 serve 走的就是串流），否則回一整包 JSON。
+ * 假 OpenAI 端點。`stream` 為真時一律走 SSE（serve 走的就是串流）；否則照請求本文的 `stream`：CLI 的 native 打串流請求、`langgraph` 打非串流，
+ * 回 SSE 或一整包 JSON。
  * 每次回應的 id 都不同（同 id 會被上層當成重複）。
  */
 export async function fakeEndpoint(script: Script, stream: boolean): Promise<FakeEndpoint> {
@@ -159,7 +160,7 @@ export async function fakeEndpoint(script: Script, stream: boolean): Promise<Fak
         type: 'function',
         function: { name: call.name, arguments: call.argsJson ?? JSON.stringify(call.args) },
       }));
-      if (!stream) {
+      if (!stream && body.stream !== true) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({

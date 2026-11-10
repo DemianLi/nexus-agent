@@ -107,7 +107,8 @@ declare module '../events.js' {
      * 自己 yield chunk 即短路，請求不送；但這一步的 `request/*` 與 `model/start` 在派發之前已經寫進日誌，用量照 yield 的 `usage` 記。
      *
      * 模型要從這次呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 取出環繞函式、包住自己的串流（打端點的 `BaseChatOpenAI` 因此一律打
-     * 串流請求）；沒取的模型在帶了 `events` 的 native 下這次呼叫拋錯（`model-node.ts`），`langgraph` 下不派、不檢查。
+     * 串流請求）。沒取的模型，在帶了 `events` 的 native 下、這次呼叫當下 `llm/stream` 有監聽者時拋錯（`model-node.ts`）；沒有監聽者時不檢查，
+     * 照模型自己的方式打。`langgraph` 下不派、不檢查。
      * @param payload - thread、步數、中止訊號。
      * @param next - 回 chunk 串流，迭代時送出請求。
      * @mode waterfall

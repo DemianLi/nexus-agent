@@ -1104,6 +1104,7 @@ export class NativeAgent {
             executesAddedTools: this.#executesAddedTools,
             ...(events !== undefined && {
               around: (next) => events.waterfall('llm/stream', payload, next),
+              listening: () => events.count('llm/stream') > 0,
             }),
           },
           task,

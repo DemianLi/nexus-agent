@@ -1104,7 +1104,8 @@ describe('CLI 單機的會話日誌（夾具）', () => {
         await runCli({
           argv: [
             '--live',
-            ...(loop === 'native' ? ['--agent-loop', 'native'] : []),
+            '--agent-loop',
+            loop,
             '--session-log',
             logs,
             '--patch',

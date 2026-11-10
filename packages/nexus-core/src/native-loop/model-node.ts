@@ -63,10 +63,12 @@ function bindTools(
   throw new Error(`llm ${String(model)} must define bindTools method.`);
 }
 
-/** 模型沒有取用 `llm/stream` 的環繞函式時拋的訊息：指名模型類別，並說它要做什麼。 */
+/** 模型沒有取用 `llm/stream` 的環繞函式時拋的訊息：指名模型類別（`RunnableBinding` 往內找到真正的模型），並說它要做什麼。 */
 function aroundNotTakenMessage(model: unknown): string {
+  let inner = model;
+  while (RunnableBinding.isRunnableBinding(inner)) inner = inner.bound;
   const name =
-    (model as { constructor?: { name?: string } } | null)?.constructor?.name ?? String(model);
+    (inner as { constructor?: { name?: string } } | null)?.constructor?.name ?? String(inner);
   return (
     `native agent loop：模型 ${name} 沒有接上 llm/stream。native 下模型要從這次呼叫 config 的 ` +
     `configurable["${LLM_STREAM_CONFIG_KEY}"] 取出環繞函式，用它包住打端點的串流（next 回 chunk 串流，模型改讀它回的那一條）`
@@ -91,9 +93,11 @@ export interface ModelChain {
   readonly executesAddedTools: boolean;
   /**
    * 環繞最內層那次模型請求的串流（`llm/stream`），經這次呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 交給模型。
-   * 給了而模型沒有取用，模型回來之後這次呼叫拋錯；不給就直接打（原樣帶 `task.config`）。
+   * 給了而模型沒有取用、且 {@link ModelChain.listening} 說有人在聽，模型回來之後這次呼叫拋錯；不給就直接打（原樣帶 `task.config`）。
    */
   readonly around?: ModelStreamAround;
+  /** `llm/stream` 現在有沒有監聽者，每次模型呼叫當下問一次。不給當成有。 */
+  readonly listening?: () => boolean;
 }
 
 /**
@@ -101,7 +105,7 @@ export interface ModelChain {
  * @param chain - 模型、系統訊息、工具、middleware。
  * @param task - 這次呼叫的環境（`model_request:<id>`）。
  * @returns AI 訊息（蓋上 `chain.name`）與收集到的 `Command`。
- * @throws 給了 `chain.around` 而模型這次沒有取用時拋（訊息見 `aroundNotTakenMessage`）。檢查在模型回來之後，那一次請求已送出，回覆丟掉。
+ * @throws 給了 `chain.around`、`llm/stream` 有監聽者，而模型這次沒有取用時拋（訊息見 `aroundNotTakenMessage`）。檢查在模型回來之後，那一次請求已送出，回覆丟掉。
  */
 export async function callModel(chain: ModelChain, task: NodeTask): Promise<ModelStepResult> {
   const state = task.state;
@@ -124,6 +128,7 @@ export async function callModel(chain: ModelChain, task: NodeTask): Promise<Mode
       lastAiMessage = await bound.invoke(messages, task.config);
       return lastAiMessage;
     }
+    const listening = chain.listening?.() ?? true;
     let taken = false;
     const config = task.config as { readonly configurable?: Record<string, unknown> };
     const response = await bound.invoke(messages, {
@@ -136,7 +141,7 @@ export async function callModel(chain: ModelChain, task: NodeTask): Promise<Mode
         }) satisfies ModelStreamAround,
       },
     });
-    if (!taken) throw new Error(aroundNotTakenMessage(request.model));
+    if (listening && !taken) throw new Error(aroundNotTakenMessage(request.model));
     lastAiMessage = response;
     return response;
   };

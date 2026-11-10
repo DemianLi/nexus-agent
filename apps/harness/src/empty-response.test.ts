@@ -185,7 +185,17 @@ describe.each([
       'utf8',
     );
     await runCli({
-      argv: ['--live', '--session-log', root, '--patch', patch, '說點什麼'],
+      // 非串流這條路只有 `langgraph` 有（native 一律打串流），明給才不會被 native 設定換掉。
+      argv: [
+        '--live',
+        '--agent-loop',
+        'langgraph',
+        '--session-log',
+        root,
+        '--patch',
+        patch,
+        '說點什麼',
+      ],
       input: new PassThrough(),
       output: new PassThrough(),
       printer: { log: () => undefined, error: () => undefined },
