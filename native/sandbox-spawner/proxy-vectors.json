@@ -1,0 +1,434 @@
+{
+  "description": "代理政策的共用樣本：TS 的 proxyForUrl／isLoopbackHost（packages/nexus-core/src/http-proxy/policy.ts）與宿主的 nexus_host::proxy 跑同一份。proxy 是 null 表示直連。",
+  "proxyForUrl": [
+    {
+      "name": "直連：沒有代理",
+      "policy": {
+        "noProxy": ""
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "https 走 httpsProxy",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "http 走 httpProxy",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "http://mcp.example.com/mcp",
+      "proxy": "http://proxy.corp.test:3128"
+    },
+    {
+      "name": "只有 httpProxy：https 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "noProxy": ""
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "localhost 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://localhost:8443/mcp",
+      "proxy": null
+    },
+    {
+      "name": "localhost 子網域直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://api.localhost/mcp",
+      "proxy": null
+    },
+    {
+      "name": "127.0.0.1 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://127.0.0.1/mcp",
+      "proxy": null
+    },
+    {
+      "name": "127 整段直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://127.200.3.4/mcp",
+      "proxy": null
+    },
+    {
+      "name": "127 開頭的主機名：走代理",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://127.0.0.1.nip.test/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "::1 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://[::1]:9000/mcp",
+      "proxy": null
+    },
+    {
+      "name": ":: 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://[::]/mcp",
+      "proxy": null
+    },
+    {
+      "name": "0.0.0.0 直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://0.0.0.0/mcp",
+      "proxy": null
+    },
+    {
+      "name": "IPv4-mapped 點分直連",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://[::ffff:127.0.0.1]/mcp",
+      "proxy": null
+    },
+    {
+      "name": "IPv4-mapped 十六進位 10.x 走代理",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://[::ffff:a00:1]/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "主機名結尾的點",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "https://localhost./mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：同名",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：子網域",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "example.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：開頭的點",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ".example.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：*.",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "*.example.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：不是後綴的一部分",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "ample.com"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "放行：*",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "*"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：埠相同",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com:443"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：埠不同",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com:8443"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "放行：明寫的埠",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com:8443"
+      },
+      "url": "https://mcp.example.com:8443/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：http 預設 80",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "mcp.example.com:80"
+      },
+      "url": "http://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：大小寫",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "MCP.Example.COM"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：空白與逗號分隔",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": " a.test ,\tmcp.example.com  b.test"
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：CIDR 不比",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "10.0.0.0/8"
+      },
+      "url": "https://10.1.2.3/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "放行：IP 字面",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "10.1.2.3"
+      },
+      "url": "https://10.1.2.3/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：IPv6 帶中括號與埠",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "[fd00::1]:443"
+      },
+      "url": "https://[fd00::1]/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：裸 IPv6",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "fd00::1"
+      },
+      "url": "https://[fd00::1]/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：只有點",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "."
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": "https://secure-proxy.corp.test:8443"
+    },
+    {
+      "name": "放行：項目結尾的點",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "example.com."
+      },
+      "url": "https://mcp.example.com/mcp",
+      "proxy": null
+    },
+    {
+      "name": "放行：網址主機大寫",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": "example.com"
+      },
+      "url": "https://MCP.EXAMPLE.COM/mcp",
+      "proxy": null
+    },
+    {
+      "name": "不認得的協定不走代理",
+      "policy": {
+        "httpProxy": "http://proxy.corp.test:3128",
+        "httpsProxy": "https://secure-proxy.corp.test:8443",
+        "noProxy": ""
+      },
+      "url": "ftp://mcp.example.com/x",
+      "proxy": null
+    }
+  ],
+  "isLoopbackHost": [
+    {
+      "host": "localhost",
+      "loopback": true
+    },
+    {
+      "host": "LOCALHOST",
+      "loopback": true
+    },
+    {
+      "host": "a.localhost",
+      "loopback": true
+    },
+    {
+      "host": "localhostx",
+      "loopback": false
+    },
+    {
+      "host": "::1",
+      "loopback": true
+    },
+    {
+      "host": "[::1]",
+      "loopback": true
+    },
+    {
+      "host": "::",
+      "loopback": true
+    },
+    {
+      "host": "0.0.0.0",
+      "loopback": true
+    },
+    {
+      "host": "127.0.0.1",
+      "loopback": true
+    },
+    {
+      "host": "127.255.255.255",
+      "loopback": true
+    },
+    {
+      "host": "127.0.0.01",
+      "loopback": false
+    },
+    {
+      "host": "127.0.0",
+      "loopback": false
+    },
+    {
+      "host": "128.0.0.1",
+      "loopback": false
+    },
+    {
+      "host": "::ffff:127.0.0.1",
+      "loopback": true
+    },
+    {
+      "host": "::ffff:7f00:1",
+      "loopback": true
+    },
+    {
+      "host": "::ffff:7f00:1:2",
+      "loopback": false
+    },
+    {
+      "host": "::ffff:a00:1",
+      "loopback": false
+    },
+    {
+      "host": "[::ffff:7fff:ffff]",
+      "loopback": true
+    },
+    {
+      "host": "example.com",
+      "loopback": false
+    },
+    {
+      "host": "127.0.0.1.",
+      "loopback": true
+    }
+  ]
+}
