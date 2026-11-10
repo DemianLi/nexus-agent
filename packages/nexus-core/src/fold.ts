@@ -304,13 +304,8 @@ export interface FoldOptions {
   /** checkpointer。`false` 與缺席同義。 */
   checkpointer?: AgentCheckpointer;
   /**
-   * 這次組裝等不等得到答覆，核准管道的輸入（{@link deriveApprovalChannel}）。缺席時照 {@link checkpointer} 在不在算。
-   * `langgraph` 下給 `true` 卻沒有 checkpointer 時組裝期拋：中斷接不回來。
-   */
-  awaitsAnswer?: boolean;
-  /**
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 在行程內等人回答（`human-input.ts`），
-   * 不需要 checkpointer；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
+   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
    */
   loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */
@@ -1285,7 +1280,7 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * - **多方標記 OR**：waterfall 本來就是這個語義的一般化——第一個回非 allow 的人決定，
  *   而且它回的是**自己的理由**，不是把幾個人的理由用「；」黏起來。
  *
- * `enabled` 與 `awaitsAnswer` 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
+ * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
 function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
   return createApprovalGateMiddleware(
@@ -1296,20 +1291,13 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
   );
 }
 
-/**
- * 這個組裝的核准管道，閘門與政策句共用：`enabled` 與 {@link FoldOptions.awaitsAnswer} 兩格的映射見 {@link ApprovalChannel}。
- * @throws `langgraph` 下 `awaitsAnswer` 給 `true` 卻沒有 checkpointer。
- */
+/** 這個組裝的核准管道，閘門與政策句共用：`enabled` 與 checkpointer 兩格的映射見 {@link ApprovalChannel}。 */
 function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
-  const hasCheckpointer = options.checkpointer !== undefined && options.checkpointer !== false;
-  if (options.awaitsAnswer === true && options.loop !== 'native' && !hasCheckpointer) {
-    throw new Error('awaitsAnswer 給了 true，但 langgraph 沒有 checkpointer 就接不回中斷');
-  }
   return deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
-    awaitsAnswer: options.awaitsAnswer ?? hasCheckpointer,
+    hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
 }
 

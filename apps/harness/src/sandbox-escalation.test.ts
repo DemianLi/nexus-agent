@@ -201,7 +201,7 @@ describe('升級', () => {
               ...(options.approvalsEnabled !== undefined && {
                 approvalsEnabled: options.approvalsEnabled,
               }),
-              awaitsAnswer: options.checkpointer !== false,
+              hasCheckpointer: options.checkpointer !== false,
             }),
           }),
           ...(options.plugin === false
