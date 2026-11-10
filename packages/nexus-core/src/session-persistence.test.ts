@@ -1107,3 +1107,58 @@ describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
     await bare.dispose();
   });
 });
+
+describe('flushPending()（#2689：搜尋前請活著的對話排空）', () => {
+  function recordingStore(handles: Map<string, ReturnType<typeof fakeStored>>): SessionStore {
+    return {
+      ...NO_READS,
+      create(header) {
+        const stored = fakeStored();
+        handles.set(header.id, stored);
+        return stored;
+      },
+      resume() {
+        return Promise.reject(new Error('這一條不續接'));
+      },
+    };
+  }
+
+  it('有待寫事件的寫出去；沒有的連後端的 flush 都不叫（後端會替沒寫過的會話建空檔）', async () => {
+    const handles = new Map<string, ReturnType<typeof fakeStored>>();
+    const sessions = new SessionRegistry('root-p');
+    const persistence = attachSessionPersistence(sessions, recordingStore(handles), {
+      windowMs: MAX_PERSISTENCE_WINDOW_MS,
+    });
+    sessions.open({ kind: 'subagent', runId: 'quiet' });
+    turn(sessions.root);
+    await persistence.flushPending();
+
+    expect(handles.get('root-p')?.written).toHaveLength(1);
+    expect(handles.get('root-p')?.flushes).toBe(1);
+    expect(handles.get('root-p/quiet')?.written).toHaveLength(0);
+    expect(handles.get('root-p/quiet')?.flushes).toBe(0);
+
+    // 寫完之後再叫一次：都沒有待寫的，後端一次都不再碰。
+    await persistence.flushPending();
+    expect(handles.get('root-p')?.flushes).toBe(1);
+    await persistence.dispose();
+  });
+
+  it('一份寫不進去：其餘照寫，最後響亮地拒絕並指名是哪一份', async () => {
+    const handles = new Map<string, ReturnType<typeof fakeStored>>();
+    const sessions = new SessionRegistry('root-f');
+    const persistence = attachSessionPersistence(sessions, recordingStore(handles), {
+      windowMs: MAX_PERSISTENCE_WINDOW_MS,
+      warn: () => {},
+    });
+    const child = sessions.open({ kind: 'subagent', runId: 'ok' });
+    turn(sessions.root);
+    child.append('model/start', {});
+    handles.get('root-f')!.fail = new Error('磁碟滿了');
+
+    await expect(persistence.flushPending()).rejects.toThrow(/會話 "root-f" flush 失敗/u);
+    expect(handles.get('root-f/ok')?.written).toHaveLength(1);
+    handles.get('root-f')!.fail = undefined;
+    await persistence.dispose();
+  });
+});

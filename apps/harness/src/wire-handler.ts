@@ -381,6 +381,8 @@ export interface ThreadAgent {
   attachPersistence?(sessions: SessionRegistry):
     | {
         flush(): Promise<void>;
+        /** 只排還有待寫事件的那幾份（core `attachSessionPersistence` 的 `flushPending`，#2689）：前台搜尋前請活著的對話排空用。 */
+        flushPending?(): Promise<void>;
         dispose(): Promise<void>;
         abandon?(): Promise<void>;
         /** root 那一份檔的 header（core `attachSessionPersistence` 的 `rootHeader`，#1599）：搜尋拿它跟盤上那份比。 */
@@ -990,11 +992,12 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
  * 對話行程給前台的內部路由（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`activity` 用 GET 問還有什麼在跑，`stop` 用 POST 請它停，
  * `plugins` 用 GET 問這條 thread 綁著哪幾列（{@link WireHandlerOptions.liveBindings}），
  * `turn-failures` 用 GET 接這個行程的回合失敗（{@link WireHandlerOptions.turnFailures}），
- * `fork-seed` 用 POST 交出分叉子 thread 的 seed，`fork-adopt` 用 POST 照 seed 建子 thread（`forkSeedRoute`／`forkAdoptRoute`）。
+ * `fork-seed` 用 POST 交出分叉子 thread 的 seed，`fork-adopt` 用 POST 照 seed 建子 thread（`forkSeedRoute`／`forkAdoptRoute`），
+ * `flush` 用 POST 請它把批次窗口裡的事件寫出去（#2689，前台搜尋前叫；見 `flushRoute`）。
  */
 export function internalThreadPath(
   threadId: string,
-  action: 'activity' | 'stop' | 'plugins' | 'turn-failures' | 'fork-seed' | 'fork-adopt',
+  action: 'activity' | 'stop' | 'plugins' | 'turn-failures' | 'fork-seed' | 'fork-adopt' | 'flush',
 ): string {
   return `/internal/threads/${encodeURIComponent(threadId)}/${action}`;
 }
@@ -1245,6 +1248,8 @@ interface ThreadState {
   readonly storedCount: number;
   /** root 那一份檔的 header，見 {@link ThreadAgent.attachPersistence}；沒開落盤是 `undefined`。 */
   readonly storedHeader: () => StoredSessionHeader | undefined;
+  /** 把還在批次窗口裡的事件寫出去（{@link ThreadAgent.attachPersistence} 的 `flushPending`，#2689）；沒開落盤時什麼都不做。 */
+  readonly flushPending: () => Promise<void>;
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
   readonly workspaceRoot: string | undefined;
   /**
@@ -2326,6 +2331,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
           storedHeader: () => persistence?.rootHeader?.(),
+          flushPending: async () => {
+            await persistence?.flushPending?.();
+          },
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           fileSearch,
@@ -4873,7 +4881,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   ): Response | Promise<Response> | undefined {
     if (options.boundThread === undefined || principal.kind === 'embed') return undefined;
     const match =
-      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt)$/u.exec(
+      /^\/internal\/threads\/([^/]+)\/(activity|stop|plugins|turn-failures|fork-seed|fork-adopt|flush)$/u.exec(
         pathname,
       );
     if (match === null) return undefined;
@@ -4897,7 +4905,25 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (match[2] === 'fork-adopt' && request.method === 'POST') {
       return forkAdoptRoute(threadId, request);
     }
+    if (match[2] === 'flush' && request.method === 'POST') return flushRoute(threadId);
     return new Response('method not allowed', { status: 405 });
+  }
+
+  /**
+   * 前台搜尋之前請這條 thread 排空（#2689）。只動落盤，**不經 `holdThread`、不推最後活動時間**：搜尋不是這條 thread 的活動，
+   * 不能讓監督行程因為有人在搜而晚收它。還沒建好或正在撤（不在 `ready`）的回 204：撤的那一條自己會做最後一次排空。
+   * 寫不出去回 500，前台照舊冷讀。
+   */
+  async function flushRoute(threadId: string): Promise<Response> {
+    const state = ready.get(threadId);
+    if (state === undefined) return new Response(null, { status: 204 });
+    try {
+      await state.flushPending();
+    } catch (error: unknown) {
+      options.warn?.(`[搜尋] thread "${threadId}" 排空失敗：${errorChain(error)}`);
+      return new Response('flush failed', { status: 500 });
+    }
+    return new Response(null, { status: 204 });
   }
 
   /** 圍欄與身分：過了回這個請求的身分，沒過回要回的回應。 */

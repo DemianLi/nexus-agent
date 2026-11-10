@@ -531,6 +531,12 @@ jobs:
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+      # 內容搜尋的產品路徑改用 per-thread 再跑一輪（#2689）：前台搜之前請對話行程排空，只有這裡量得到。沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘。
+      - name: per-thread 跑內容搜尋
+        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-search
+        env:
+          NEXUS_E2E_PROCESS_MODEL: per-thread
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。

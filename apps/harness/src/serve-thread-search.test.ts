@@ -328,46 +328,55 @@ async function hits(client: WireClient, query: string): Promise<string[]> {
   return outcome.result.items.map((item) => item.threadId);
 }
 
-describe('活的 thread 讀記憶體（#1599）', () => {
-  // per-thread 下搜尋由前台冷讀磁碟，看不到批次窗口裡還沒落盤的那一句（docs/operations.md〈行程模型〉）。
-  // TODO(#2531): per-thread 補上活的讀記憶體之後，拿掉這個 skip。
-  it.skipIf(PROCESS_MODEL_UNDER_TEST === 'per-thread')(
-    '新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判',
-    async () => {
-      const root = await tmp();
-      const first = await startLive(root);
-      await driveTurn(first.client, 'src', '一');
-      // 分叉回傳時子 thread 的檔就在（seed 在回應之前排空）。
-      const childId = await forkOk(first.client, 'src', await firstTailId(first.client, 'src'));
-      await driveTurn(first.client, childId, '子一');
-      await driveTurn(first.client, childId, '子二');
-      await driveTurn(first.client, 'src', '二');
-      // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
-      expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
-      expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
-      expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual(
-        [childId, 'src'].sort(),
-      );
-      for (const threadId of [childId, 'src']) {
-        await conflictsWhenDiskHeaderChanges(first.client, root, threadId, '第二輪的回覆暗號');
-      }
-      await stopLive(first.serve);
+/**
+ * 搜到之後的第二道。single：活的那一條讀記憶體，盤上的 header 一改就要被拒（記憶體那份 header 真的拿去比了）。
+ * per-thread：前台手上沒有活的 thread，搜之前請對話行程排空、再冷讀（#2689），沒有記憶體那份 header 可比；改驗排空真的發生了：
+ * 搜之前盤上沒有的那一句，搜過之後在盤上。
+ */
+async function liveSourceProven(
+  client: WireClient,
+  root: string,
+  threadId: string,
+  query: string,
+): Promise<void> {
+  if (PROCESS_MODEL_UNDER_TEST === 'per-thread') {
+    expect(await repliedOnDisk(root, threadId, query)).toBe(true);
+    return;
+  }
+  await conflictsWhenDiskHeaderChanges(client, root, threadId, query);
+}
 
-      // 續接：root 的 header 是讀回來的那一份。重啟後腳本從第一輪重來，第三輪的回覆兩條都沒回過。
-      const second = await startLive(root);
-      for (const threadId of [childId, 'src']) {
-        for (const text of ['再一', '再二', '再三']) await driveTurn(second.client, threadId, text);
-      }
-      expect(await repliedOnDisk(root, 'src', '第三輪的回覆暗號')).toBe(false);
-      expect(await repliedOnDisk(root, childId, '第三輪的回覆暗號')).toBe(false);
-      expect((await hits(second.client, '第三輪的回覆暗號')).sort()).toEqual(
-        [childId, 'src'].sort(),
-      );
-      for (const threadId of [childId, 'src']) {
-        await conflictsWhenDiskHeaderChanges(second.client, root, threadId, '第三輪的回覆暗號');
-      }
-    },
-  );
+describe('活的 thread 讀記憶體（#1599）；per-thread 下搜之前先排空（#2689）', () => {
+  it('新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判', async () => {
+    const root = await tmp();
+    const first = await startLive(root);
+    await driveTurn(first.client, 'src', '一');
+    // 分叉回傳時子 thread 的檔就在（seed 在回應之前排空）。
+    const childId = await forkOk(first.client, 'src', await firstTailId(first.client, 'src'));
+    await driveTurn(first.client, childId, '子一');
+    await driveTurn(first.client, childId, '子二');
+    await driveTurn(first.client, 'src', '二');
+    // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
+    expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
+    expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
+    expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
+    for (const threadId of [childId, 'src']) {
+      await liveSourceProven(first.client, root, threadId, '第二輪的回覆暗號');
+    }
+    await stopLive(first.serve);
+
+    // 續接：root 的 header 是讀回來的那一份。重啟後腳本從第一輪重來，第三輪的回覆兩條都沒回過。
+    const second = await startLive(root);
+    for (const threadId of [childId, 'src']) {
+      for (const text of ['再一', '再二', '再三']) await driveTurn(second.client, threadId, text);
+    }
+    expect(await repliedOnDisk(root, 'src', '第三輪的回覆暗號')).toBe(false);
+    expect(await repliedOnDisk(root, childId, '第三輪的回覆暗號')).toBe(false);
+    expect((await hits(second.client, '第三輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
+    for (const threadId of [childId, 'src']) {
+      await liveSourceProven(second.client, root, threadId, '第三輪的回覆暗號');
+    }
+  });
 
   it('還沒實體化的 thread：搜不到（不進索引），搜過之後磁碟上也沒有多出它的檔', async () => {
     const root = await tmp();
