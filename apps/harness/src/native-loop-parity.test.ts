@@ -5,12 +5,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import {
-  AIMessage,
-  BaseMessage,
-  HumanMessage,
-  ToolMessage,
-} from '@langchain/core/messages';
+import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';

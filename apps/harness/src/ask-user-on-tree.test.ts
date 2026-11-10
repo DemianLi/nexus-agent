@@ -185,9 +185,7 @@ describe('B：出貨清單上的 ask-user 經樹進來，位置與名字不變',
     expect(entryApprovalChannel(HEADLESS_APPROVALS)).toEqual(
       deriveApprovalChannel({ approvalsEnabled: false, awaitsAnswer: true }),
     );
-    expect(entryApprovalChannel(undefined)).toEqual(
-      deriveApprovalChannel({ awaitsAnswer: true }),
-    );
+    expect(entryApprovalChannel(undefined)).toEqual(deriveApprovalChannel({ awaitsAnswer: true }));
     expect(entryApprovalChannel(HEADLESS_APPROVALS).kind).toBe('policy-never');
     expect(entryApprovalChannel(undefined).kind).toBe('human');
   });
