@@ -1,5 +1,8 @@
 //! `nexus_host::mcp::config`：一台 HTTP server 的設定解析，與錯誤訊息裡的秘密遮蔽；
-//! `nexus_host::mcp::pool`：一份設定共用一份連線，一代怎麼連換成記憶體裡的假 [`Connector`](nexus_host::mcp::pool::Connector)。
+//! `nexus_host::mcp::pool`：一份設定共用一份連線，一代怎麼連換成記憶體裡的假 [`Connector`](nexus_host::mcp::pool::Connector)；
+//! `nexus_host::mcp::connection`：對本機 HTTPS 假 server（新、舊兩種協定）連一代，與經池的冒煙測試。
+
+mod common;
 
 use std::time::Duration;
 
@@ -142,18 +145,41 @@ fn 遮蔽先換長的() {
 }
 
 #[test]
+fn 帶帳密的網址拒絕_訊息不帶帳密() {
+    for (url, secrets) in [
+        ("https://alice:pw-9f2@h/x", &["alice", "pw-9f2"][..]),
+        ("https://bob-31@h/x", &["bob-31"][..]),
+        ("https://:pw-42@h/x", &["pw-42"][..]),
+        (
+            "https://al%69ce:p%77-9f2@h/x",
+            &["al%69ce", "alice", "p%77-9f2", "pw-9f2"][..],
+        ),
+    ] {
+        let err = Server::parse(&json!({
+            "serverName": "a",
+            "connection": { "transport": "http", "url": url },
+        }))
+        .expect_err(url);
+        assert_eq!(err, "connection.url 不能帶帳號或密碼");
+        for secret in secrets {
+            assert!(!err.contains(secret), "{err}");
+        }
+    }
+}
+
+#[test]
 fn debug_不印秘密() {
     let s = Server::parse(&json!({
         "serverName": "a",
         "connection": {
             "transport": "http",
-            "url": "https://u-55:p-66@h/x?k=q-77",
+            "url": "https://h/x?k=q-77",
             "headers": { "Authorization": "Bearer hdr-88" },
         },
     }))
     .expect("設定");
     let shown = format!("{s:?}");
-    for secret in ["u-55", "p-66", "q-77", "hdr-88"] {
+    for secret in ["q-77", "hdr-88"] {
         assert!(!shown.contains(secret), "{shown}");
     }
     assert!(shown.contains("authorization"), "{shown}");
@@ -418,5 +444,366 @@ mod pool {
         tokio::time::timeout(Duration::from_secs(6), pool.close())
             .await
             .expect("關池不等卡住的握手");
+    }
+}
+
+mod http {
+    use std::sync::{Arc, Mutex};
+
+    use super::common::fake_mcp::{handler, FakeMcp};
+    use super::common::{fixture, Request, Response, TlsServer};
+    use super::*;
+    use nexus_host::mcp::connection::{call_meta, connect, instructions_of, Http};
+    use nexus_host::mcp::pool::{Generation as _, Log, Pool};
+    use nexus_host::proxy::ProxyPolicy;
+    use nexus_host::tls::{client_config, http_client};
+    use rmcp::model::CallToolRequestParams;
+
+    fn client() -> reqwest::Client {
+        let config = client_config(&fixture("ca-a.pem")).expect("根");
+        http_client(config, &ProxyPolicy::direct()).expect("客戶端")
+    }
+
+    fn start(fake: FakeMcp) -> (u16, Arc<Mutex<Vec<Request>>>) {
+        let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+        let server = TlsServer::start(handler(fake, Arc::clone(&log)));
+        (server.port, log)
+    }
+
+    fn server(port: u16, extra: serde_json::Value) -> Server {
+        let mut config = json!({
+            "serverName": "fake",
+            "connection": {
+                "transport": "http",
+                "url": format!("https://localhost:{port}/mcp"),
+                "headers": { "Authorization": "Bearer s3cret-token" },
+            },
+        });
+        for (k, v) in extra.as_object().expect("物件") {
+            config[k] = v.clone();
+        }
+        Server::parse(&config).expect("設定")
+    }
+
+    fn names(tools: &[rmcp::model::Tool]) -> Vec<String> {
+        tools.iter().map(|t| t.name.to_string()).collect()
+    }
+
+    /// 收到的 POST 裡，`method` 是 `name` 的有幾則。
+    fn count(log: &Mutex<Vec<Request>>, name: &str) -> usize {
+        log.lock()
+            .expect("鎖")
+            .iter()
+            .filter(|r| r.method == "POST")
+            .filter_map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+            .filter(|m| m["method"] == name)
+            .count()
+    }
+
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("綁埠");
+        listener.local_addr().expect("位址").port()
+    }
+
+    /// 每個請求都回 403，主體照抄請求的路徑（含 query）與 `x-key` 標頭：server 把秘密反射回錯誤裡。
+    fn echoing_forbidden() -> u16 {
+        let server = TlsServer::start(Arc::new(|request: &Request| {
+            let body = format!(
+                "denied {} {}",
+                request.path,
+                request.header("x-key").unwrap_or("")
+            );
+            Response::new(403, "text/plain", body)
+        }));
+        server.port
+    }
+
+    fn quiet() -> Log {
+        Log {
+            info: Arc::new(|_: &str| {}),
+            error: Arc::new(|_: &str| {}),
+        }
+    }
+
+    #[tokio::test]
+    async fn 舊協定_分頁走完並帶上設定的標頭() {
+        let mut fake = FakeMcp::with_tools(false, &["a"]);
+        fake.pages.insert(
+            String::new(),
+            (vec!["a".into(), String::new()], Some("p2".into())),
+        );
+        fake.pages
+            .insert("p2".into(), (vec!["b".into()], Some("p2".into())));
+        fake.instructions = Some("use me  \n\n".into());
+        let (port, log) = start(fake);
+        let s = server(port, json!({}));
+        let generation = connect(&s, &client(), &s.secrets()).await.expect("連得上");
+        assert!(!generation.caller.modern);
+        assert_eq!(
+            names(&generation.listed.tools),
+            ["a", "b"],
+            "空名略過、重複的 cursor 就停"
+        );
+        assert_eq!(
+            generation.listed.instructions,
+            "### MCP server: fake\n\nuse me"
+        );
+        assert!(
+            call_meta(generation.caller.modern, true).is_none(),
+            "舊協定不在每次呼叫帶能力"
+        );
+        let seen = log.lock().expect("鎖").clone();
+        let posts: Vec<&Request> = seen.iter().filter(|r| r.method == "POST").collect();
+        assert!(posts
+            .iter()
+            .all(|r| r.header("authorization") == Some("Bearer s3cret-token")));
+        let messages: Vec<serde_json::Value> = posts
+            .iter()
+            .map(|r| serde_json::from_slice(&r.body).expect("JSON"))
+            .collect();
+        assert_eq!(messages[0]["method"], "server/discover", "先試新協定");
+        let init = messages
+            .iter()
+            .find(|m| m["method"] == "initialize")
+            .expect("再退回 initialize");
+        assert_eq!(init["params"]["clientInfo"]["name"], "@nexus/plugin-mcp");
+        assert_eq!(init["params"]["protocolVersion"], "2025-11-25");
+        generation.close().await;
+    }
+
+    #[tokio::test]
+    async fn 新協定_每次呼叫自己帶反問能力() {
+        let (port, _log) = start(FakeMcp::with_tools(true, &["x", "y"]));
+        let s = server(port, json!({}));
+        let generation = connect(&s, &client(), &s.secrets()).await.expect("連得上");
+        assert!(generation.caller.modern);
+        assert_eq!(names(&generation.listed.tools), ["x", "y"]);
+        assert_eq!(generation.listed.instructions, "");
+        let meta = call_meta(generation.caller.modern, true).expect("新協定要帶");
+        assert_eq!(
+            serde_json::to_value(&meta).expect("編")["io.modelcontextprotocol/clientCapabilities"],
+            json!({ "elicitation": { "form": {}, "url": {} } })
+        );
+        assert!(
+            call_meta(generation.caller.modern, false).is_none(),
+            "關了反問就不帶"
+        );
+        generation.close().await;
+    }
+
+    #[tokio::test]
+    async fn 指引超過上限就連不上() {
+        let mut fake = FakeMcp::with_tools(false, &["a"]);
+        fake.instructions = Some("x".repeat(100));
+        let (port, _log) = start(fake);
+        let s = server(port, json!({ "maxInstructionBytes": 64 }));
+        let err = connect(&s, &client(), &s.secrets())
+            .await
+            .err()
+            .expect("要失敗");
+        assert_eq!(err, "server instructions exceed maxInstructionBytes (64)");
+    }
+
+    #[test]
+    fn 指引_空白當沒有_剛好到上限照收() {
+        let s = |max: u64| {
+            Server::parse(&json!({
+                "serverName": "ab",
+                "connection": { "transport": "http", "url": "https://h/" },
+                "maxInstructionBytes": max,
+            }))
+            .expect("設定")
+        };
+        assert_eq!(instructions_of(None, &s(64)), Ok(String::new()));
+        assert_eq!(instructions_of(Some(" \n\t "), &s(64)), Ok(String::new()));
+        // 標頭 `### MCP server: ab\n\n` 20 個位元組，加「中」3 個。
+        assert_eq!(
+            instructions_of(Some("中 \n"), &s(23)),
+            Ok("### MCP server: ab\n\n中".to_string())
+        );
+        assert!(instructions_of(Some("中"), &s(22)).is_err());
+    }
+
+    #[tokio::test]
+    async fn 列工具失敗的訊息照_ts() {
+        let mut fake = FakeMcp::with_tools(true, &[]);
+        fake.list_fails = true;
+        let (port, _log) = start(fake);
+        let s = server(port, json!({}));
+        let err = connect(&s, &client(), &s.secrets())
+            .await
+            .err()
+            .expect("要失敗");
+        assert!(
+            err.starts_with("Failed to load tools from server \"fake\": "),
+            "{err}"
+        );
+        assert!(err.contains("list exploded"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn 連不上的訊息照_ts_而且不帶秘密() {
+        let port = closed_port();
+        let config = json!({
+            "serverName": "gone",
+            "connection": {
+                "transport": "http",
+                "url": format!("https://127.0.0.1:{port}/mcp?token=q-77"),
+                "headers": { "X-Key": "hdr-41a" },
+            },
+        });
+        let s = Server::parse(&config).expect("設定");
+        let err = connect(&s, &client(), &s.secrets())
+            .await
+            .err()
+            .expect("要失敗");
+        let prefix = format!(
+            "Failed to connect to streamable HTTP server \"gone, url: https://127.0.0.1:{port}/mcp\" in auto mode: "
+        );
+        assert!(err.starts_with(&prefix), "{err}");
+        for secret in ["q-77", "hdr-41a"] {
+            assert!(!err.contains(secret), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn server_回非_2xx_錯誤不帶秘密() {
+        let port = echoing_forbidden();
+        let s = Server::parse(&json!({
+            "serverName": "deny",
+            "connection": {
+                "transport": "http",
+                "url": format!("https://localhost:{port}/mcp?token=q-77"),
+                "headers": { "X-Key": "hdr-41a" },
+            },
+        }))
+        .expect("設定");
+        let err = connect(&s, &client(), &s.secrets())
+            .await
+            .err()
+            .expect("要失敗");
+        assert!(
+            err.starts_with("Failed to connect to streamable HTTP server \"deny, url: "),
+            "{err}"
+        );
+        assert!(err.contains("[redacted]"), "反射回來的秘密要換掉：{err}");
+        for secret in ["q-77", "hdr-41a"] {
+            assert!(!err.contains(secret), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn 只信設定的根() {
+        let (port, _log) = start(FakeMcp::with_tools(false, &["a"]));
+        let s = server(port, json!({}));
+        let config = client_config(&fixture("ca-b.pem")).expect("根");
+        let http = http_client(config, &ProxyPolicy::direct()).expect("客戶端");
+        let err = connect(&s, &http, &s.secrets())
+            .await
+            .err()
+            .expect("要失敗");
+        assert!(
+            err.starts_with("Failed to connect to streamable HTTP server"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn 呼叫端判斷線就算掉線() {
+        let (port, _log) = start(FakeMcp::with_tools(false, &["a"]));
+        let s = server(port, json!({}));
+        let generation = connect(&s, &client(), &s.secrets()).await.expect("連得上");
+        let pending = tokio::time::timeout(Duration::from_millis(100), generation.down()).await;
+        assert!(pending.is_err(), "還連著");
+        generation.lost_signal().notify_one();
+        tokio::time::timeout(Duration::from_secs(5), generation.down())
+            .await
+            .expect("判斷線之後 down 要完成");
+        tokio::time::timeout(Duration::from_secs(5), generation.close())
+            .await
+            .expect("收得掉");
+    }
+
+    #[tokio::test]
+    async fn 池經真連線_取用呼叫重連與關池() {
+        let (port, log) = start(FakeMcp::with_tools(false, &["a"]));
+        let pool = Pool::new(Http::new(client()), Vec::new(), quiet(), None);
+        let s = server(
+            port,
+            json!({ "reconnect": { "initialDelayMs": 20, "maxDelayMs": 40 } }),
+        );
+        let (one, two) = tokio::join!(pool.acquire(&s, true), pool.acquire(&s, true));
+        let (one, two) = (one.expect("取得到"), two.expect("取得到"));
+        assert!(Arc::ptr_eq(&one.shared, &two.shared));
+        assert!(one.error.is_none() && two.error.is_none());
+        assert_eq!(count(&log, "initialize"), 1, "同一份設定只握手一次");
+        assert_eq!(names(&one.shared.listed().expect("有清單").tools), ["a"]);
+
+        let live = one.shared.current().expect("連著");
+        assert!(!live.peer.modern);
+        let result = live
+            .peer
+            .peer
+            .call_tool_once(CallToolRequestParams::new("a"))
+            .await
+            .expect("呼叫得到");
+        let text = format!("{result:?}");
+        assert!(text.contains(r#"\"a\":null"#), "{text}");
+
+        live.lost();
+        for _ in 0..400 {
+            if one.shared.current().is_some_and(|l| l.generation == 2) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            one.shared.current().expect("重連上").generation,
+            2,
+            "lost() 之後重連"
+        );
+        assert_eq!(count(&log, "initialize"), 2);
+
+        let (modern_port, _modern_log) = start(FakeMcp::with_tools(true, &["m"]));
+        let modern = pool
+            .acquire(&server(modern_port, json!({})), true)
+            .await
+            .expect("取得到");
+        assert!(modern.shared.current().expect("連著").peer.modern);
+
+        let deletes = || {
+            log.lock()
+                .expect("鎖")
+                .iter()
+                .filter(|r| r.method == "DELETE")
+                .count()
+        };
+        assert_eq!(deletes(), 1, "換代時收掉的那一代刪了它的 session");
+        tokio::time::timeout(Duration::from_secs(5), pool.close())
+            .await
+            .expect("關池在期限內返回");
+        assert_eq!(deletes(), 2, "關池刪掉活著那一代的 session");
+    }
+
+    #[tokio::test]
+    async fn 池經真連線_錯誤照樣遮蔽() {
+        let port = echoing_forbidden();
+        let pool = Pool::new(Http::new(client()), Vec::new(), quiet(), None);
+        let s = Server::parse(&json!({
+            "serverName": "deny",
+            "connection": {
+                "transport": "http",
+                "url": format!("https://localhost:{port}/mcp?token=q-77"),
+                "headers": { "X-Key": "hdr-41a" },
+            },
+            "failOnStartupError": true,
+        }))
+        .expect("設定");
+        let err = pool.acquire(&s, true).await.err().expect("要失敗");
+        assert!(err.starts_with("Failed to connect"), "{err}");
+        for secret in ["q-77", "hdr-41a"] {
+            assert!(!err.contains(secret), "{err}");
+        }
+        pool.close().await;
     }
 }
