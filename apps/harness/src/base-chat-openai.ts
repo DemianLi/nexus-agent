@@ -8,8 +8,10 @@
  * 沒搬的，nexus 一處都沒用到：Responses API（含內建工具、custom 工具與偏好 Responses 的模型名）、Azure、LangSmith gateway、
  * `OPENAI_*` 環境變數後備、結構化輸出、moderation、token 估算與它唯一的用處（`streaming: true` 欄位走的那支 `_generate`）、
  * MCP 工具的追蹤遮蔽、logprobs 等沒有呼叫端傳的建構欄位。真的傳了沒搬的工具形狀會拋，不會靜靜換成別的請求。
- * 改了的只有一處：不再往 SDK 的預設標頭塞 `langchainjs-openai` 的 `User-Agent`（送出前的 fetch 一律換成我們的，見 `live-model.ts` 的
- * `withAttribution`）。
+ * 也沒搬 OpenAI 自家型號的 `profile` 表：`profile` 是基底的 `{}`。讀它的只有摘要器的 `fraction` 門檻，而設定不收 `fraction`
+ * （`@nexus/core` 的 `summarization.ts`）。
+ * 不往 SDK 的預設標頭塞 `langchainjs-openai` 的 `User-Agent`：送出前的 fetch 一律換成我們的（`live-model.ts` 的 `withAttribution`）。
+ * 不經 `@langchain/openai`，所以 callback 的 `metadata.versions` 沒有它那一格。
  */
 
 /**

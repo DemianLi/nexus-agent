@@ -16,6 +16,8 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import { SessionLog } from '@nexus/core';
+import { openModelCall, reportedAttemptUsage } from '@nexus/core/src/model-call-scope.js';
 import { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,6 +26,7 @@ import { z } from 'zod';
 import { BaseChatOpenAI } from './base-chat-openai.js';
 import type { BaseChatOpenAIFields } from './base-chat-openai.js';
 import { classifyTurnFailure, createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { MEASURED_MODELS } from './eval/tiers.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 
 type Script = (response: ServerResponse) => void;
@@ -244,6 +247,8 @@ interface Outcome {
     readonly body: string;
   }[];
   readonly calls: unknown;
+  /** fetch 層回報給這次呼叫範圍的用量（`withStreamUsageReport`）。 */
+  readonly usage: unknown;
   readonly result: unknown;
   readonly thrown: unknown;
 }
@@ -260,17 +265,24 @@ async function outcomeOf(
   const recorder = new Recorder(mode);
   let result: unknown;
   let thrown: unknown;
-  try {
-    result = await call(model, { callbacks: [recorder], runId });
-  } catch (error: unknown) {
-    thrown = errorShape(error);
-  }
+  let usage: unknown;
+  // 包在一次模型呼叫的範圍裡，fetch 層的用量回報才有地方交（範圍外 `beginAttemptReport` 回 `undefined`、整條不走）。
+  const log = new SessionLog('differential');
+  await openModelCall(log, () => 1).run(async () => {
+    try {
+      result = await call(model, { callbacks: [recorder], runId });
+    } catch (error: unknown) {
+      thrown = errorShape(error);
+    }
+    usage = reportedAttemptUsage(log);
+  });
   return {
     requests: received.map(({ headers, body }) => ({
       headers: { ...headers, host: undefined },
       body,
     })),
     calls: plain(recorder.calls),
+    usage: plain(usage),
     result: plain(result),
     thrown,
   };
@@ -367,6 +379,7 @@ function defineStreamCases(mode: 'events' | 'tokens'): void {
     const { next, old } = await both(invoke([new HumanMessage('嗨')]), mode);
     expect(next.requests).toHaveLength(1);
     expect(next.thrown).toBeUndefined();
+    expect(next.usage).toMatchObject({ inputTokens: 11, cacheReadTokens: 4 });
     expect(next).toEqual(old);
   });
 
@@ -497,7 +510,7 @@ describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', (
   it('withConfig 帶的預設與 tool_choice 指名', async () => {
     script = TOOL_STREAM;
     const call: Call = (model, config) =>
-      model.bindTools!([readFile], { tool_choice: 'read_file', strict: true })
+      model.bindTools!([readFile], { tool_choice: 'read_file', strict: true } as never)
         .withConfig({ stop: ['停'] })
         .invoke([new HumanMessage('讀')], config);
     const { next, old } = await both(call, 'events');
@@ -528,5 +541,25 @@ describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', (
     const { next, old } = await both(call, 'events');
     expect(next.thrown).toBeDefined();
     expect(next).toEqual(old);
+  });
+
+  it('模型物件上被讀的那幾格：出貨型錄與量過的每一顆都相同', () => {
+    const shipped = liveModelConfigSchema.parse({ baseUrl }).models.map((entry) => entry.id);
+    for (const id of new Set([...shipped, ...MEASURED_MODELS.map((tier) => tier.modelId)])) {
+      const fields = {
+        ...createLiveModel(liveModelConfigSchema.parse({ baseUrl })).fields,
+        model: id,
+      };
+      const surface = (model: BaseChatModel) => ({
+        profile: model.profile,
+        llmType: model._llmType(),
+        name: model.getName(),
+        id: model.toJSON().id,
+        model: (model as unknown as { model: unknown }).model,
+      });
+      expect(surface(new BaseChatOpenAI(fields))).toEqual(
+        surface(new ChatOpenAI(fields as ChatOpenAIFields) as never),
+      );
+    }
   });
 });
