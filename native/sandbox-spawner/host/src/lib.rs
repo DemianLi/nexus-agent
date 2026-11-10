@@ -8,5 +8,6 @@ pub mod host;
 pub mod host_protocol;
 pub mod json;
 pub mod kernel;
+pub mod mcp;
 pub mod proxy;
 pub mod tls;
