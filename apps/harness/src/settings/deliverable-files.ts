@@ -11,7 +11,7 @@
  *
  * [#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 triage 把這三個值放在「請求期，
  * `ThreadAgent` 才構得到」那一格。**量到的不是那樣**：那兩支方法住在 `createWireHandler(options)`
- * 的閉包裡，而 `createWireHandler` 在 `serve.ts` 被呼叫**一個 server 一次、早於任何 agent 組裝**
+ * 的閉包裡，而 `createWireHandler` 在 `serve-run.ts` 被呼叫**一個 server 一次、早於任何 agent 組裝**
  * ——`threadId` 是它們的參數，不是閉包捕獲的東西。所以這一層**沒有註冊表**，跟
  * [`thread-title`](./thread-title.ts) 完全同層（那一列的消費點就在隔壁幾行）。
  *

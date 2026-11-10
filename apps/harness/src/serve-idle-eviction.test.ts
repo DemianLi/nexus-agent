@@ -1,7 +1,7 @@
 /**
  * 閒置逐出走完**serve 的組裝**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，驗收 B、E、G 的接線那一半）。
  *
- * `idle-eviction.test.ts` 直接把 `idleEvictMs` 傳給 wire handler，量的是逐出的語意；那種測法拿掉 `serve.ts` 把設定交給
+ * `idle-eviction.test.ts` 直接把 `idleEvictMs` 傳給 wire handler，量的是逐出的語意；那種測法拿掉 `serve-run.ts` 把設定交給
  * handler 的那幾行也照樣綠。這一檔從 `runServe` 起——home 層放一份把 `thread-capacity` 的 `idleEvictAfterMs` 設小的 patch——
  * 量「設定列 → `startupSetting` → `createWireHandler` → 掃描 → 撤 → 重寫快照」整條線：
  *
@@ -26,8 +26,8 @@ import { HARNESS_HOME_ENV, HARNESS_SESSIONS_DIR_NAME } from './harness-home.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];

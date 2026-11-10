@@ -2,7 +2,7 @@
  * **每條新 thread 一個私有可寫根，`--workspace` 退成唯讀共用區**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）。
  *
  * 從 `runServe` 起量（#1427）：真的 serve、真的 HTTP、出貨的組裝、真的 JSONL 日誌；唯一換掉的是模型（腳本）。手搭 `createAgent` 的測試自己把根傳進組裝，
- * 拿掉 `serve.ts` 的接線也不會紅。
+ * 拿掉 `serve-run.ts` 的接線也不會紅。
  *
  * 每一組驗收的突變（各自單獨做，結果記在 PR 內文）：
  *
@@ -42,8 +42,8 @@ import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } f
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe, RunServeOptions } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe, RunServeOptions } from './serve-run.js';
 import {
   rewriteSessionHeader,
   sessionEvents,

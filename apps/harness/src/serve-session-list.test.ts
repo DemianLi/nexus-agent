@@ -28,8 +28,8 @@ import {
 } from './fixtures.js';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionEventsOf } from './session-files.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';

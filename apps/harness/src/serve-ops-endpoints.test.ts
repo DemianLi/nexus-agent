@@ -2,7 +2,7 @@
  * 探針與指標，**從 `runServe` 起量**（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535) 驗收 1、2、5、6、8）。
  *
  * `ops-endpoints.test.ts` 量端點自己；這一檔量**接線**：設定列 → `startupSetting` → token 檔 → 路由的第三個面 → 請求計數 →
- * `onTurnFailed` → 啟動披露。拿掉 `serve.ts` 的任何一條線，這一檔紅。
+ * `onTurnFailed` → 啟動披露。拿掉 `serve-run.ts` 的任何一條線，這一檔紅。
  *
  * **零憑證、零外部連線**：模型是腳本，或指到 loopback 上的假端點（回 429）。
  */
@@ -24,9 +24,9 @@ import { bodyLog, exchangeServeToken, foldTurn, serveClient } from './fixtures.j
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { METRICS_TOKEN_FILE } from './metrics-token.js';
-import { installServeProcessLifecycle } from './serve.js';
-import type { RunningServe } from './serve.js';
-import type { ServeProcess } from './serve.js';
+import { installServeProcessLifecycle } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
+import type { ServeProcess } from './serve-run.js';
 import { PROCESS_MODEL_UNDER_TEST, startServeUnderTest } from './serve-under-test.fixture.js';
 import type { ServeUnderTest } from './serve-under-test.fixture.js';
 

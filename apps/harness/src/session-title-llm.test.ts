@@ -35,8 +35,8 @@ import { bodyLog, serveClient, shippedPlugins } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import { projectKey } from './jsonl-session-store.js';
 import { loadDefaultPlugins } from './plugin-config.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 import { ensureFallbackTitle, renameThreadTitle } from './session-title.js';
 import {

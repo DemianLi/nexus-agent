@@ -1,7 +1,7 @@
 /**
  * thread 數上限走完**serve 的組裝**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，驗收 F）。
  *
- * `thread-capacity.test.ts` 直接把 `maxThreads` 傳給 wire handler，量的是計數語意；那種測法拿掉 `serve.ts` 把設定交給
+ * `thread-capacity.test.ts` 直接把 `maxThreads` 傳給 wire handler，量的是計數語意；那種測法拿掉 `serve-run.ts` 把設定交給
  * handler 的那一行也照樣綠。這一檔從 `runServe` 起——出貨清單加一份把 `thread-capacity` 設成 1 的 patch——
  * 量「設定列 → `startupSetting` → `createWireHandler` → `threadFor`」整條線，並看起動日誌印出上限。
  *
@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { scriptedPatchText, startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
-import { runServe } from './serve.js';
+import { runServe } from './serve-run.js';
 
 let serve: ScriptedServe | undefined;
 const temporary: string[] = [];
@@ -149,7 +149,7 @@ describe('出廠打開（#1619）', () => {
 
   /**
    * **0 不能原樣傳給 handler**：handler 收到 `idleEvictMs: 0` 會以 1 秒輪詢、把每條閒著的 thread 在下一次掃描就撤掉。
-   * 所以這條真的放掉一條 thread 再等兩次以上的輪詢：拿掉 `serve.ts` 對 0 的處理，它就被撤、這條紅。
+   * 所以這條真的放掉一條 thread 再等兩次以上的輪詢：拿掉 `serve-run.ts` 對 0 的處理，它就被撤、這條紅。
    * `setInterval` 只當輔助證據（`wire-server.ts` 的心跳也用它，間隔 2000）：出廠那台建了 30000 的那一顆，設 0 的這台沒有。
    */
   it('C idleEvictAfterMs: 0：起動日誌說不逐出、沒建掃描計時器，閒著的 thread 真的留著', async () => {

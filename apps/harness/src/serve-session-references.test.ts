@@ -300,8 +300,8 @@ describe('GET /threads/:id/session-references', () => {
 
 /**
  * 候選上限走設定（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 E）：`session-reference` 那一列的 `candidateLimit` 經
- * `startupSetting` 讀出來，`serve.ts` 建 `SessionReferenceCandidates` 時給 `limit`。`session-reference-candidates.test.ts` 直接傳 `limit`，
- * 那種測法拿掉 `serve.ts` 傳 `limit` 的那一行也照樣綠；這一條走 `runServe`。
+ * `startupSetting` 讀出來，`serve-run.ts` 建 `SessionReferenceCandidates` 時給 `limit`。`session-reference-candidates.test.ts` 直接傳 `limit`，
+ * 那種測法拿掉 `serve-run.ts` 傳 `limit` 的那一行也照樣綠；這一條走 `runServe`。
  */
 describe('候選上限，從 serve 組裝起', () => {
   async function sevenSessions(): Promise<string> {

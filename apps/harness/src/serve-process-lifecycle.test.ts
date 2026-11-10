@@ -10,8 +10,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { FailLoudEvent } from './fail-loud.js';
 import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
-import { installServeProcessLifecycle } from './serve.js';
-import type { RunningServe, ServeProcess } from './serve.js';
+import { installServeProcessLifecycle } from './serve-run.js';
+import type { RunningServe, ServeProcess } from './serve-run.js';
 
 type Handler = (arg?: unknown) => void;
 

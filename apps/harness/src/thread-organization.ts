@@ -26,7 +26,7 @@
  * - 寫是**先寫暫存檔、`fsync`、再 `rename` 蓋過去，然後 fsync 目錄**（`atomic-file.ts` 的 `writeAtomic`，照 dsh
  *   `storage-json/src/atomic.ts:24-40`，#1527）：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔，
  *   斷電後也不會退回上一版。
- * - **開檔在啟動時**（`serve.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
+ * - **開檔在啟動時**（`serve-run.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
  *
  * **不建通用 storage domain**：這是 demian 在 [#1576](https://github.com/DemianLi/nexus-agent/issues/1576) 的拍板（2026-10-17），
  * 不是 AGENTS.md 偏離規則的理由 1 或 2。dsh 的 `storage-domain` 替 `WorkspaceRegistry` 做的事（單一寫入鏈、先落盤再換記憶體、

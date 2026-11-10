@@ -5,6 +5,8 @@
   "compilerOptions": {
     "verbatimModuleSyntax": false,
     "paths": {
+      "@nexus/harness/front-process": ["./apps/harness/src/front-process.ts"],
+      "@nexus/harness/conversation-process": ["./apps/harness/src/conversation-process.ts"],
       "#settings/*": ["./apps/harness/src/settings/*.ts"],
       "@nexus/agent-loop": ["./packages/nexus-agent-loop/src/index.ts"],
       "@nexus/agent-loop/provider": ["./packages/nexus-agent-loop/src/provider.ts"],

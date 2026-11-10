@@ -19,7 +19,7 @@ import type { HostClient } from '@nexus/host-bridge';
 import { ConversationControl } from './conversation-control.js';
 import { connectHost, createConversationHostBridge, parseHostSocketArg } from './host-client.js';
 import { openPeerSocketAuth } from './peer-socket-auth.js';
-import { installServeProcessLifecycle, runServe } from './serve.js';
+import { installServeProcessLifecycle, runServe } from './serve-run.js';
 
 /** 控制面多久問一次閒不閒。 */
 const POLL_MS = 1_000;

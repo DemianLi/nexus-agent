@@ -1,8 +1,8 @@
 /**
  * **收尾時間窗內，會開新一輪的命令回 `server_closing`**——[#1787](https://github.com/DemianLi/nexus-agent/issues/1787) 第 3 點。
  *
- * 真的 `createWireHandler`＋wire client＋假 agent（數「上游被打幾次」＝假 agent 的 `streamEvents` 被叫幾次）。時間窗在 `serve.ts` 的
- * `close()` 開始時由 `handler.stopAdmission()` 打開，這一檔直接叫它；`serve.ts` 那條線在 `serve-ops-endpoints.test.ts`。
+ * 真的 `createWireHandler`＋wire client＋假 agent（數「上游被打幾次」＝假 agent 的 `streamEvents` 被叫幾次）。時間窗在 `serve-run.ts` 的
+ * `close()` 開始時由 `handler.stopAdmission()` 打開，這一檔直接叫它；`serve-run.ts` 那條線在 `serve-ops-endpoints.test.ts`。
  *
  * 突變（各自單獨做，做完還原，結果記在 PR）：
  *
@@ -194,7 +194,7 @@ function rig(
 
 const CLOSING = { type: 'error', error: SERVER_CLOSING };
 
-/** 測試用的「前台停准入了」標頭；真的那一個由 `serve.ts` 接（`forwarded-principal.ts`）。 */
+/** 測試用的「前台停准入了」標頭；真的那一個由 `serve-run.ts` 接（`forwarded-principal.ts`）。 */
 const FRONT_CLOSING_TEST_HEADER = 'x-test-front-closing';
 
 describe('per-thread：前台停准入之後轉來的請求（frontClosing）', () => {

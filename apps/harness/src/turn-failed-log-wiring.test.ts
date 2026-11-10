@@ -3,7 +3,7 @@
  *
  * `provider-request-id.test.ts` 量的是請求編號進得了失敗紀錄；這一檔量的是**接線**：真的 serve、真的 wire、假端點回 502＋
  * `x-request-id`，伺服器日誌要剛好多一行 `[回合]`，帶 thread、run、失敗碼、請求編號，而且 `日誌第 N 筆` 回頭去讀會話日誌，
- * 第 N 筆就是 `turn/failed`。拿掉 `serve.ts` 的 `onTurnFailed`，或把 seq 算錯，這一檔紅。
+ * 第 N 筆就是 `turn/failed`。拿掉 `serve-run.ts` 的 `onTurnFailed`，或把 seq 算錯，這一檔紅。
  *
  * **失敗訊息本文不進伺服器日誌**：端點回的訊息帶 `SECRET-PROBE`，它只該出現在會話日誌。
  */
@@ -22,8 +22,8 @@ import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { sessionPathsIn } from './jsonl-session-store.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];

@@ -2,7 +2,7 @@
  * serve 啟動時講出 grep 用哪一支 ripgrep（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4，驗收 6）。
  *
  * `rg-path.test.ts` 釘狀態判斷與那一行字；這一檔從 `runServe` 起，釘「那一行真的印在啟動日誌裡」——
- * 拿掉 `serve.ts` 的那一行，`rg-path.test.ts` 照樣綠，這一檔會紅。
+ * 拿掉 `serve-run.ts` 的那一行，`rg-path.test.ts` 照樣綠，這一檔會紅。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */

@@ -74,7 +74,7 @@ async function wire(plugins: readonly PluginEntry[] = shipped): Promise<Wired> {
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      // **三件事都接，跟 `serve.ts` 一樣。** 計劃模式住在會話日誌上（#251 的第二刀），
+      // **三件事都接，跟 `serve-run.ts` 一樣。** 計劃模式住在會話日誌上（#251 的第二刀），
       // 少了參與者 `/plan` 回的是「還沒接上」——那是替身的缺，不是產品的。
       attachSessions: (sessions, backgroundPort) => {
         // 觀測 root 那一份就夠：這條線問的是「命令有沒有進日誌」，而命令是進入點寫的。

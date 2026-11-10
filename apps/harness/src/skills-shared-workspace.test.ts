@@ -20,8 +20,8 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { THREAD_ROOTS_DIR_NAME } from './thread-roots.js';
 
 const temporary: string[] = [];

@@ -36,8 +36,8 @@ import type { PluginChange } from './plugin-change.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { signalPid } from './test-pids.fixture.js';
 
 const LEGACY_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));

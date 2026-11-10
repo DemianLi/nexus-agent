@@ -293,7 +293,7 @@ describe.each(CASES)('$label：用量投影', (entry) => {
     const reopened = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       warn: (message) => reported.push(message),
-      // 產品路徑的冷讀（serve.ts 接的就是這一個），不是替身：前景的 runId 真的讀得到嗎，在這裡才量得到。
+      // 產品路徑的冷讀（serve-run.ts 接的就是這一個），不是替身：前景的 runId 真的讀得到嗎，在這裡才量得到。
       readSubagentSession: (thread, each) => readStoredSubagentSession(store, thread, each),
       createAgent: async () => ({
         agent: rebuilt.agent as unknown as PumpAgent,

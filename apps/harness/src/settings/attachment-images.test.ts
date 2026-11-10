@@ -1,6 +1,6 @@
 /**
  * `#settings/attachment-images` 那一列走到 serve 的附件儲存（#2033）：出貨清單 → patch → `startupSetting` →
- * `AttachmentStore` 的限流器。起動日誌那一行讀的是限流器，拿掉 `serve.ts` 交值的那一格，這一檔會紅。
+ * `AttachmentStore` 的限流器。起動日誌那一行讀的是限流器，拿掉 `serve-run.ts` 交值的那一格，這一檔會紅。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */

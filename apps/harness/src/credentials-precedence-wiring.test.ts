@@ -7,7 +7,7 @@
  *
  * | 入口 | 對應 dsh | 受管檔（`fake-from-file`）與啟動環境（`fake-from-env`）同時有 | 拿掉哪一處會紅 |
  * | --- | --- | --- | --- |
- * | `runServe --live` | Web profile | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
+ * | `runServe --live` | Web profile | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve-run.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
  * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | Web profile | 起得來；stderr 講鍵名、不帶值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
  * | `runCli --live` | headless profile | 端點收到 `Bearer fake-from-env`；受管檔 0644 也照樣起得來（不讀它），serve 則起不來 | `cli.ts` 的 `store: false` |
  *
@@ -29,8 +29,8 @@ import { CREDENTIALS_FILE } from './credentials.js';
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 /** 兩把假 key：前 6 個字元各自獨特，拿來斷言「來源那一行不帶值的任何片段」。 */
 const FROM_FILE = 'zq9file-managed-0123456789';

@@ -22,8 +22,8 @@
  * 分類文件曾把 goal、sandbox-policy、workspace-changes 歸這一類（R2／R3）。逐顆對宿主核過，今天都不成立：
  *
  * - **goal**：`assembly-root.ts:1000` 每次組裝各從 services 拿一份 `goals`；`:1083-1095` 沒掛就是 `undefined`，排程器
- *   全用 `goals?.` 接；`serve.ts:938-941` 的 `goalDriver` 是那一條 thread 自己那次組裝的。
- * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve.ts:883`、`:905` 在 thread 組裝區塊裡，沒掛就
+ *   全用 `goals?.` 接；`serve-run.ts` 的 `runServe` 裡的 `goalDriver` 是那一條 thread 自己那次組裝的。
+ * - **workspace-changes**：`assembly-root.ts:997` 每次組裝各取一份；`serve-run.ts` 的 `runServe` 在 thread 組裝區塊裡取兩次，沒掛就
  *   缺席；`wire-handler.ts:1139`、`:2563`、`:2582` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份。它是
  *   `cordis.serve.yml:17` 的一列，不是組裝點自己建的。
  * - **sandbox-policy**：控制器每條 thread 組裝時各建一個（`assembly-root.ts:820`）。**關掉它的後果不是「照舊」而是
@@ -72,7 +72,7 @@ import { turnTimeoutPlugin } from './settings/turn-timeout.js';
 export type RowClass = 'startup-read' | 'mount-restart' | 'next-thread';
 
 /**
- * 起動期讀一次的那幾顆（`startupSetting`／`startupEntryMounted` 的呼叫者在 `serve.ts` 起動那一段）。
+ * 起動期讀一次的那幾顆（`startupSetting`／`startupEntryMounted` 的呼叫者在 `serve-run.ts` 起動那一段）。
  *
  * **`startup-read` 這一類只從這份名單來**，分類表不再抄一次：兩邊各寫一次就是兩份真相。`default-model` 不在這裡：
  * 非 `--live` 時它在每條 thread 組裝時讀（`assembly-root.ts:527`），`--live` 時不經過它（`:750`）。

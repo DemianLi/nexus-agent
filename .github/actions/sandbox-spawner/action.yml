@@ -15,6 +15,12 @@ inputs:
     description: bundle 上傳成的 artifact 名；空的就不打 bundle
     required: false
     default: ''
+  per-thread-binaries:
+    description: >-
+      release 版的 nexus-supervisor 與 nexus-host 包成 tar 上傳成的 artifact 名（#2657：packed-install 照產物起 per-thread 用）；
+      空的就不上傳。只給 CI 驗證用，不進出貨的 bundle（產物不帶監督行程與宿主，見 operations.md〈行程模型〉）
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -79,5 +85,17 @@ runs:
       with:
         name: ${{ inputs.bundle }}
         path: ${{ runner.temp }}/spawner-bundle.tar
+        if-no-files-found: error
+        retention-days: 7
+    - name: 包監督行程與宿主
+      if: inputs.per-thread-binaries != ''
+      shell: bash
+      working-directory: native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release
+      run: tar -cf "$RUNNER_TEMP/per-thread-binaries.tar" nexus-supervisor nexus-host
+    - if: inputs.per-thread-binaries != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.per-thread-binaries }}
+        path: ${{ runner.temp }}/per-thread-binaries.tar
         if-no-files-found: error
         retention-days: 7

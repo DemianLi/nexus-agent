@@ -1,7 +1,7 @@
 /**
  * 嵌入方換票登入的**設定條目**（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)，地圖 #2365 第 4 點）。換票本體見 `../embed-login.ts`。
  *
- * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `ops-endpoints`：值由 `startupSetting` 在起動期讀出來，交給 `serve.ts`。
+ * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `ops-endpoints`：值由 `startupSetting` 在起動期讀出來，交給 `serve-run.ts`。
  * **改了要重啟 serve**（分類 `startup-read`，`plugin-row-classes.ts`）。
  *
  * - **`embedders`**：能換票的嵌入方。一個嵌入方一把服務憑證，放在 `credentialFile`（預設 `<home>/embed-credential-<id>`，`0600`，沒有就建）。

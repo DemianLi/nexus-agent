@@ -31,7 +31,7 @@ import { toAgentInvocation } from './messages.js';
 import { composeEntries, loadDefaultPlugins } from './plugin-config.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
+import { runServe } from './serve-run.js';
 import { StartupError } from './startup-audit.js';
 
 const shipped = await shippedPlugins();

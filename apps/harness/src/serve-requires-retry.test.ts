@@ -23,8 +23,8 @@ import { changePlugin } from './plugin-change.js';
 import type { PluginChange } from './plugin-change.js';
 import { journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;

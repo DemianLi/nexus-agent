@@ -34,8 +34,8 @@ import {
   withAttribution,
 } from './live-model.js';
 import { EMPTY_RESULT } from './mcp-fixture-server.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 
 const SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));

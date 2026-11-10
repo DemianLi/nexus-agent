@@ -88,6 +88,8 @@ const REQUIRED_FILES = [
   'lib/serve.js',
   'lib/cli.js',
   'lib/plugin-cli.js',
+  'lib/front-process.js',
+  'lib/conversation-process.js',
 ] as const;
 
 /**

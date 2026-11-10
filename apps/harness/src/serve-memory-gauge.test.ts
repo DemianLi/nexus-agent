@@ -1,7 +1,7 @@
 /**
  * 記憶體量具走完**serve 的組裝**（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490) 驗收 B、C）。
  *
- * `memory-gauge.test.ts` 直接呼叫 `startMemoryGauge`，量的是量具本身；那種測法拿掉 `serve.ts` 把設定交給量具的那一行也照樣綠。
+ * `memory-gauge.test.ts` 直接呼叫 `startMemoryGauge`，量的是量具本身；那種測法拿掉 `serve-run.ts` 把設定交給量具的那一行也照樣綠。
  * 這一檔從 `runServe` 起——出貨清單加一份把 `memory-gauge` 打開的 patch——量「設定列 → `startupSetting` → `startMemoryGauge` → serve 日誌」
  * 整條線，並看 `close()` 真的把計時器收掉。
  *
@@ -53,7 +53,7 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     for (const line of gauge) {
       expect(line).toMatch(/heap .*MiB.*cgroup .*主機/u);
     }
-    // 起動那一行排在**所有**起動披露之後、不夾在中間：緊接在最後一條披露（已儲存 vs 執行中的對照，`serve.ts` 披露段的最後一行）後面。
+    // 起動那一行排在**所有**起動披露之後、不夾在中間：緊接在最後一條披露（已儲存 vs 執行中的對照，`serve-run.ts` 披露段的最後一行）後面。
     const index = lines.findIndex((line) => GAUGE_LINE.test(line));
     const lastDisclosure = lines.findIndex((line) => line.startsWith('[對照快照]'));
     expect(lastDisclosure).toBeGreaterThanOrEqual(0);

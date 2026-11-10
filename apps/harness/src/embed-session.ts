@@ -347,7 +347,7 @@ export interface EmbedSessionOptions {
 
 /** 兌換的處理器。 */
 export interface EmbedSession {
-  /** 只會收到 {@link EMBED_SESSION_PATH} 的請求（`serve.ts` 的 `routeBySurface` 分）。 */
+  /** 只會收到 {@link EMBED_SESSION_PATH} 的請求（`serve-run.ts` 的 `routeBySurface` 分）。 */
   handle(request: Request): Promise<Response>;
 }
 

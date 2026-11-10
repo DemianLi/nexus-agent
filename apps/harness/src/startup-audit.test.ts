@@ -25,8 +25,8 @@ import { createCordisRoot } from './cordis-root.js';
 import type { CordisRoot } from './cordis-root.js';
 import { loadDefaultPlugins, loadPluginConfig } from './plugin-config.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import {
   auditStartupEntries,
   formatActivationError,

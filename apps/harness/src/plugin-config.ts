@@ -1,7 +1,7 @@
 /**
  * 從 YAML 組裝 plugin 清單：出貨的預設 ＋ 使用者的 patch 層。
  *
- * **`cli.ts` 與 `serve.ts` 的清單只有這一個來源**
+ * **`cli.ts` 與 `serve-run.ts` 的清單只有這一個來源**
  * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。兩個入口共用
  * {@link loadDefaultPlugins}，接線的實測在
  * [`plugin-config-wire.test.ts`](./plugin-config-wire.test.ts)。
@@ -1890,7 +1890,7 @@ function treeInputOf(
 /**
  * 產品路徑上那一次組裝：出貨預設 ＋ harness home 那一層 ＋ `--patch`。
  *
- * **`cli.ts` 與 `serve.ts` 共用這一個**，理由同 `parseSandboxMode`：兩份各寫一次的下場是
+ * **`cli.ts` 與 `serve-run.ts` 共用這一個**，理由同 `parseSandboxMode`：兩份各寫一次的下場是
  * 有一天只有一邊讀得到 home 那一層，而那種缺陷在畫面上看不出來——少疊一層只是「我的設定
  * 沒有生效」，不會有任何東西變紅。
  *

@@ -13,8 +13,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const harnessDir = fileURLToPath(new URL('../', import.meta.url));

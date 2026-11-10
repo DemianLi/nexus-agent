@@ -244,7 +244,7 @@ describe('一次性模式', () => {
       'session-checkpoint-policy',
       'approval-gate',
       // **`session-persistence` 跟上面七顆同段不同層**（#529）：擁有者一樣是 `@nexus/core`，
-      // 但它的消費點是 `cli.ts` 與 `serve.ts` 裡呼叫 `attachSessionPersistence` 的那兩行，
+      // 但它的消費點是 `cli.ts` 與 `serve-run.ts` 裡呼叫 `attachSessionPersistence` 的那兩行，
       // 跑在組裝回來之後——那裡一格註冊表都沒有，所以它的 `apply` 是空的、值走
       // `startupSetting`。它跟 `approval-gate` 一樣關不掉，理由卻是相反的那一種：關掉它
       // 不會有任何行為改變，只會讓讀設定的人以為自己改了落盤的節奏。
@@ -567,7 +567,7 @@ describe('CLI 收人話的入口照 loop 拒收', () => {
  * [`interrupt.test.ts`](./interrupt.test.ts) 與 `@nexus/core` 的 `approval.test.ts` 驗過，
  * 這裡問的是 `runCli` 這條路真的把政策傳了下去。
  *
- * **`serve.ts` 那條刻意不一樣**，而那半邊的證據在 [`serve.test.ts`](./serve.test.ts) 的
+ * **`serve-run.ts` 那條刻意不一樣**，而那半邊的證據在 [`serve.test.ts`](./serve.test.ts) 的
  * 「核准那份清單」：同一份 fixture、同一個閘門，走 web 那條會停下來、按得下去、接得回來。
  * 兩邊一起看才看得出「入口不同答案不同」是選的不是漏的——只看一邊的話，另一邊悄悄
  * 跟著改了也沒有東西會紅。

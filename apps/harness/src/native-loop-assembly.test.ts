@@ -26,7 +26,7 @@ import { parseCliArgs } from './cli.js';
 import { foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { startScriptedServe } from './scripted-serve.js';
-import { parseServeArgs } from './serve.js';
+import { parseServeArgs } from './serve-run.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { sessionEventsOf } from './session-files.fixture.js';

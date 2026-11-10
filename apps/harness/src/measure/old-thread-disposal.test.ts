@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from '../fixtures.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 
 /** 版本 `version` 的插件原始碼：每次模型請求記一行；人話含「卡住」就記 `blocked` 然後等中止訊號。 */
 function pluginSource(version: string): string {

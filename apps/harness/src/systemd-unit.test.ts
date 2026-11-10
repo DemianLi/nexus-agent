@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
-import { parseServeArgs } from './serve.js';
+import { parseServeArgs } from './serve-run.js';
 
 const operationsDoc = join(dirname(fileURLToPath(import.meta.url)), '../../../docs/operations.md');
 

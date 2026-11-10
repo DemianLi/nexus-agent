@@ -1,6 +1,6 @@
 /**
  * 寫入口在寫入前試掛一份清單（[#2073](https://github.com/DemianLi/nexus-agent/issues/2073)）：照 serve 啟動試組那一次
- * （`serve.ts` 的 `trial`）組一份、組完就收，交出哪幾列掉了。
+ * （`serve-run.ts` 的 `trial`）組一份、組完就收，交出哪幾列掉了。
  *
  * 寫入口是另一個行程，serve 那棵長壽的樹碰不到，所以在這個行程裡另建一棵用完即丟的樹：樹上的列在讀清單時掛上，
  * 相容層的列在組裝時跑 `apply`。不送模型請求；serve 裡跑著的 thread 不受影響。

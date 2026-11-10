@@ -271,7 +271,7 @@ export interface ThreadAgent {
   /**
    * 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948，`createNexusAgent` 回的那一格），選配。
    * 引用別的會話被截斷時，pump 把全文存進這裡、模型拿到讀得回的位址。**省略即沒有地方存**（沒開會話日誌、手搭的組裝），
-   * 說明裡寫 `storage-not-configured`；產品路徑（`serve.ts`）有會話日誌時一律交。
+   * 說明裡寫 `storage-not-configured`；產品路徑（`serve-run.ts`）有會話日誌時一律交。
    */
   readonly spillStore?: SpillStore;
   /**
@@ -286,7 +286,7 @@ export interface ThreadAgent {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   /**
    * 這個 thread 掛了哪些會話投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），選配。**省略即沒有投影**——
-   * 手搭的測試組裝不必管；產品路徑（`serve.ts`）一律交，由 `projection-wire.test.ts` 的端到端驗收看著。
+   * 手搭的測試組裝不必管；產品路徑（`serve-run.ts`）一律交，由 `projection-wire.test.ts` 的端到端驗收看著。
    * **只讀 `list`**：這條線不註冊任何東西。
    */
   readonly projections?: Pick<ProjectionRegistrationPoint, 'list'>;
@@ -332,7 +332,7 @@ export interface ThreadAgent {
   readonly hostTools?: HostToolsSlot;
   /**
    * 這條 thread 用 `/名字` 叫得出的技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929，`skill-catalog-wire.ts`），選配。
-   * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve.ts`）一律交，沒掛 `skills` 那一列時
+   * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve-run.ts`）一律交，沒掛 `skills` 那一列時
    * 由它自己回 `undefined`，同樣是 `not_supported`。
    */
   readonly skillCatalog?: SkillCatalog;
@@ -362,7 +362,7 @@ export interface ThreadAgent {
    * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
    * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤是**一台 server 一份**的答案
    * ——開不開由清單上 `session-persistence` 那一列講（#612，`runServe` 起動期解一次），寫去哪裡
-   * 由**呼叫方式**講（`serve.ts` 的日誌根：`--session-log`，沒給就是 harness home 底下的
+   * 由**呼叫方式**講（`serve-run.ts` 的日誌根：`--session-log`，沒給就是 harness home 底下的
    * `sessions`，#444）。所以組裝點是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
    *
    * **選配**：`serve` 只在清單把那一列關掉時不給；另外就是這個 handler 的其他組裝（wire 測試那些手搭的）。
@@ -524,14 +524,14 @@ export interface WireHandlerOptions {
    */
   readonly threadOrganization?: ThreadOrganization;
   /**
-   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve.ts` 用
+   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve-run.ts` 用
    * `SessionStore.open(id, 'read')` 讀 header，並用列表的可見規則（`isListedThread`）過濾——**能釘的一定列得出來**。
    * **儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
   storedThreadKnown?(threadId: string): Promise<boolean>;
   /**
    * 這個 id 是不是落盤的**子代理會話**（core 的 `isSubagentSessionHeader`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)、#1579）。
-   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
+   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve-run.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
    * 沒有日誌回 `false`。省略＝沒有落盤，沒有子代理會話可言。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
   isSubagentSession?(threadId: string): Promise<boolean>;
@@ -578,7 +578,7 @@ export interface WireHandlerOptions {
   /**
    * `session-reference` 那一列的值（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862），選配：每則訊息最多引用幾條，
    * 與每條來源的位元組預算（`maxReferenceBytes` 或窗口的 `referenceContextFraction`）。`candidateLimit` 不在這裡，候選上限在
-   * `serve.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
+   * `serve-run.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
    *
    * **預算跟著這條 thread 下一步會走的模型**：每條 thread 的 pump 在這裡組出 `SessionReferencePolicy`，窗口問該 thread 的
    * `modelSelection.nextContextWindow`，所以使用者在兩次引用之間換了模型，下一次就用新那顆的窗口。
@@ -608,7 +608,7 @@ export interface WireHandlerOptions {
    * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    *
    * **選配，省略即那一列 schema 的預設值**——同 `BrowserAuth` 的有效期那一格，省略是給手搭的
-   * 測試用的，拿到的跟出貨清單一模一樣。產品路徑由 `serve.ts` 在起動期 `startupSetting` 解出來
+   * 測試用的，拿到的跟出貨清單一模一樣。產品路徑由 `serve-run.ts` 在起動期 `startupSetting` 解出來
    * 傳進來。
    *
    * **它是 server 的性質，所以在這裡而不是在 `ThreadAgent` 上**：這兩支方法住在這個閉包裡、
@@ -678,13 +678,13 @@ export interface WireHandlerOptions {
    * 撤掉＝不重啟 serve 的前提下做「等價於重啟」那一半：磁碟上的日誌是真相，之後有人再開這條 thread 就照今天重啟後的路徑重組。
    * **偏離登記：dsh 頂層沒有閒置逐出（遺留 TODO）**；閒置條件借子代理結算（`manager.ts` 的 settlement），計時借終端保留期（`retention.ts`）。
    *
-   * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve.ts` 只在 `sessionStore` 存在時傳。
+   * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve-run.ts` 只在 `sessionStore` 存在時傳。
    */
   readonly idleEvictMs?: number;
   /** 逐出掃描的間隔（毫秒）。省略即 `idleEvictMs` 的十分之一，夾在 1 秒到 30 秒之間。 */
   readonly idleEvictPollMs?: number;
   /**
-   * 一條 thread 撤完之後叫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：`serve.ts` 用它重寫 `plugin-snapshot.json`，
+   * 一條 thread 撤完之後叫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：`serve-run.ts` 用它重寫 `plugin-snapshot.json`，
    * 讓檔裡不再列這條 thread 握著的設定版本。**錯誤被吞掉、只記一行 {@link warn}**：它擋不住逐出，也不會讓 thread 留在撤到一半的狀態。
    */
   readonly onThreadEvicted?: (threadId: string) => void | Promise<void>;
@@ -771,7 +771,7 @@ export interface WireHandlerOptions {
    * 重驗一次，驗不過就切掉那一條，已經排著還沒送出的事件也不送。開線先在稽核記 `opened`、寫好才開；收掉記 `closed`、切掉記 `cut`。
    * 嵌入身分碰到不是自己的 thread 被拒也記一筆 `access`。主機擁有者從嵌入路由開的不登記、不記。
    *
-   * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve.ts` 有嵌入方時一定給。
+   * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve-run.ts` 有嵌入方時一定給。
    */
   readonly embedStreams?: EmbedStreamGuard;
   /**
@@ -866,7 +866,7 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   isClosing(): boolean;
   /**
-   * 停止收會開新一輪的命令（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：`serve.ts` 的 `close()` 在立 `/readyz` 旗之後、
+   * 停止收會開新一輪的命令（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：`serve-run.ts` 的 `close()` 在立 `/readyz` 旗之後、
    * 時間窗開始之前叫一次。之後 `run.start`、`subagent.send`、以及 `slash.run` 裡會 steer 起一輪的命令回 {@link SERVER_CLOSING}
    * （HTTP 照舊 200）；`run.cancel`、`input.respond`、`queue.update`、讀取與下行照常。**不可逆、冪等**。
    * **不處理**：前一輪落定後 pump 領排隊的下一件、目標排程器續一輪——這兩條不經過上行命令，這道門擋不到（要不要擋另開卡）。
@@ -4521,7 +4521,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       };
     }
     // **兩個拒絕分開講。** 壓成同一句的話，`workspaceRoot` 從組裝點一路傳到這裡的那條線就
-    // **沒有任何觀察點**——拔掉 `cli.ts` 的回傳或 `serve.ts` 的轉交，全樹測試照樣綠，而真的
+    // **沒有任何觀察點**——拔掉 `cli.ts` 的回傳或 `serve-run.ts` 的轉交，全樹測試照樣綠，而真的
     // serve 上每一顆交付都 404。量過：兩條都拔，1169 條一條都不紅。
     const root = state.workspaceRoot;
     if (root === undefined) {

@@ -193,7 +193,7 @@ export class BrowserAuth {
 
   /**
    * @param secret - 32 bytes 的簽章密鑰。
-   * @param maxAgeDays - cookie 的絕對有效期（天）。**產品路徑上由 `serve.ts` 明著傳**，值來自
+   * @param maxAgeDays - cookie 的絕對有效期（天）。**產品路徑上由 `serve-run.ts` 明著傳**，值來自
    *   `#settings/browser-session` 那一列；省略是給手搭的測試用的，拿到的是同一個 schema 的預設值
    *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    * @throws 有效期換算成毫秒後超出安全整數範圍。

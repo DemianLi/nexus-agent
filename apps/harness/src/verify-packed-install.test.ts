@@ -30,6 +30,7 @@ import {
   headerProblems,
   homepageProblems,
   installedGrepProblems,
+  perThreadChildrenProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
   SHARP_PROBE,
@@ -51,6 +52,31 @@ import { generationLogFilename, SESSION_LOCK_FILENAME, sessionDirectoryName } fr
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
+
+describe('步驟 7：per-thread 的子行程', () => {
+  const lib = '/opt/nexus/lib';
+  const front = `/usr/bin/node ${lib}/front-process.js --port 0`;
+  const conversation = `/usr/bin/node ${lib}/conversation-process.js --socket /run/a.sock`;
+
+  it('前台與對話行程都跑著，而且是安裝樹裡的那兩支：不報', () => {
+    expect(perThreadChildrenProblems([front, conversation, '/opt/native/nexus-host'], lib)).toEqual(
+      [],
+    );
+  });
+
+  it('少一支就報那一支；別處的同名入口不算', () => {
+    expect(perThreadChildrenProblems([front], lib)).toEqual([
+      expect.stringContaining(`${lib}/conversation-process.js`),
+    ]);
+    expect(
+      perThreadChildrenProblems(
+        [front, `/usr/bin/node /elsewhere/lib/conversation-process.js`],
+        lib,
+      ),
+    ).toHaveLength(1);
+    expect(perThreadChildrenProblems([], lib)).toHaveLength(2);
+  });
+});
 
 describe('步驟 3：--version', () => {
   it('印出產物版本、stderr 空：不報', () => {
