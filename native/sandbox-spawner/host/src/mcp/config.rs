@@ -20,12 +20,12 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// `livenessTimeoutMs` 的上限，同 `MAX_LIVENESS_TIMEOUT_MS`。
 const MAX_LIVENESS_TIMEOUT_MS: u64 = 2_147_483_647;
 
-/// 一台 HTTP server 的設定：`mcpConfigSchema` 的 HTTP 那一支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的帳密、query。
+/// 一台 HTTP server 的設定：`mcpConfigSchema` 的 HTTP 那一支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的 query。
 #[derive(Clone)]
 pub struct Server {
     pub name: String,
     pub url: Url,
-    headers: Vec<(HeaderName, HeaderValue)>,
+    pub(super) headers: Vec<(HeaderName, HeaderValue)>,
     pub tool_call_timeout: Duration,
     pub max_instruction_bytes: usize,
     pub reconnect: Policy,
@@ -120,6 +120,9 @@ impl Server {
             .and_then(|u| Url::parse(u).ok())
             .filter(|u| matches!(u.scheme(), "http" | "https"))
             .ok_or("connection.url 要是 http 或 https 的網址")?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err("connection.url 不能帶帳號或密碼".into());
+        }
         let mut headers = Vec::new();
         match connection.get("headers") {
             None => {}
@@ -215,7 +218,7 @@ impl Server {
         format!("mcp-client({})", self.name)
     }
 
-    /// 錯誤訊息裡要換掉的字串：header 的值、網址的帳號與密碼（原樣）、query（整串、每個值的原樣與解碼後）。
+    /// 錯誤訊息裡要換掉的字串：header 的值、網址的 query（整串、每個值的原樣與解碼後）。
     /// reqwest 的錯誤會印出帶 query 的網址。
     pub fn secrets(&self) -> Vec<String> {
         let mut out: Vec<String> = self
@@ -224,8 +227,6 @@ impl Server {
             .filter_map(|(_, v)| v.to_str().ok())
             .map(str::to_string)
             .collect();
-        out.push(self.url.username().to_string());
-        out.push(self.url.password().unwrap_or("").to_string());
         if let Some(query) = self.url.query() {
             out.push(query.to_string());
             for pair in query.split('&') {
@@ -237,11 +238,9 @@ impl Server {
         out
     }
 
-    /// 錯誤與日誌裡顯示的網址：拿掉帳密、query 與 fragment。
+    /// 錯誤與日誌裡顯示的網址：拿掉 query 與 fragment。
     pub fn shown_url(&self) -> String {
         let mut url = self.url.clone();
-        let _ = url.set_username("");
-        let _ = url.set_password(None);
         url.set_query(None);
         url.set_fragment(None);
         url.to_string()
