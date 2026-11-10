@@ -718,9 +718,21 @@ describe('巢狀層數、解析前就拒的字元與集合鍵（#2570）', () =>
     ['? 寫的序列鍵', `version: 1\nrefs:\n  A: v\n? [${SECRET}]\n: x\n`, 4, 3],
     ['flow mapping 當鍵', `version: 1\n{${SECRET}: 1}: x\n`, 2, 1],
     ['refs 裡的集合鍵', `version: 1\nrefs:\n  ? [${SECRET}]\n  : x\n`, 3, 5],
+    ['區塊 mapping 當鍵：指到它的第一個鍵', `version: 1\n?\n  ${SECRET}: 1\n: x\n`, 3, 3],
+    ['refs 裡不是第一個鍵的 flow 序列', `version: 1\nrefs:\n  A: x\n  [${SECRET}]: 1\n`, 4, 3],
+    ['檔頭有 BOM：第 1 行的欄把 BOM 算進去', `\uFEFF[${SECRET}]: 1\n`, 1, 2],
   ])('%s：講成 COLLECTION_KEY_NOT_ALLOWED 與位置，不含鍵', (_, text, line, col) => {
     expect(rejection(text)).toBe(
       `受管憑證檔 ${file} 認不得：YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
     );
+  });
+
+  it.each([
+    ['字元', 'version: 1\nnote: 😀\0\n', 'CHARACTER_NOT_ALLOWED（第 2 行第 8 欄）'],
+    ['tag', 'x: [😀, !!str a]\n', 'TAG_NOT_ALLOWED（第 1 行第 8 欄）'],
+    ['集合鍵', 'x: {😀: 1, [a]: 2}\n', 'COLLECTION_KEY_NOT_ALLOWED（第 1 行第 11 欄）'],
+    ['重複鍵', '{😀: 1, a: 1, a: 2}\n', 'DUPLICATE_KEY（第 1 行第 14 欄）'],
+  ])('BMP 以外的字元算一欄（%s）：跟 Rust 宿主一樣照字元數', (_, text, why) => {
+    expect(rejection(text)).toBe(`受管憑證檔 ${file} 認不得：YAML 錯誤 ${why}`);
   });
 });

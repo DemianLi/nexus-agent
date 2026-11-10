@@ -84,6 +84,9 @@ fn 不合法樣本() {
             panic!("{name}：該拒絕卻收了");
         };
         assert_eq!(err.reason.code(), vector["reason"].as_str().expect("reason"), "{name}：{err}");
+        if let Some(code) = vector["code"].as_str() {
+            assert!(err.why.starts_with(&format!("YAML 錯誤 {code}")), "{name}：{err}");
+        }
         if let Some(secret) = vector["secret"].as_str() {
             assert!(!err.why.contains(secret), "{name}：訊息含值");
         }
@@ -178,4 +181,27 @@ fn 不認得的頂層鍵只講個數與行號() {
     assert!(!seen[0].contains("nvapi-FAKE-keyname"), "{}", seen[0]);
     drop(seen);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 位置跟 TS 一字不差：集合鍵指到它的開頭，檔頭的 BOM 算在第 1 行的欄裡，BMP 以外的字元算一欄。
+#[test]
+fn 位置跟_ts_一字不差() {
+    for (text, why) in [
+        ("version: 1\n?\n  nvapi-FAKE-pos: 1\n: x\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 3 行第 3 欄）"),
+        ("version: 1\nrefs:\n  A: x\n  [nvapi-FAKE-pos]: 1\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 4 行第 3 欄）"),
+        ("\u{FEFF}[nvapi-FAKE-pos]: 1\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 2 欄）"),
+        ("\u{FEFF}%YAML 1.2\n---\nversion: 1\n", "YAML 錯誤 DIRECTIVE_NOT_ALLOWED（第 1 行第 2 欄）"),
+        ("\u{FEFF}!!map\nversion: 1\n", "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 2 欄）"),
+        ("version: 1\nnote: 😀\0\n", "YAML 錯誤 CHARACTER_NOT_ALLOWED（第 2 行第 8 欄）"),
+        ("x: [😀, !!str a]\n", "YAML 錯誤 TAG_NOT_ALLOWED（第 1 行第 8 欄）"),
+        ("x: {😀: 1, [a]: 2}\n", "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 1 行第 11 欄）"),
+        ("{😀: 1, a: 1, a: 2}\n", "YAML 錯誤 DUPLICATE_KEY（第 1 行第 14 欄）"),
+        (
+            &format!("version: 1\nnote: {}{}\n", "[".repeat(300), "]".repeat(300)),
+            "YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）",
+        ),
+    ] {
+        let err = parse(text).expect_err(text);
+        assert_eq!(err.why, why, "{text:?}");
+    }
 }

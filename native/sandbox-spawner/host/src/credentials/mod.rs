@@ -1,7 +1,7 @@
-//! 受管憑證檔（`<home>/.credentials.yaml`）：宿主自己讀（#2570 D282）。契約在 `docs/credentials-file.md`，兩邊跑同一份樣本
-//! `credentials-vectors.json`；TS 的解析器是 `apps/harness/src/credentials.ts`，這裡照它在 develop 上實際跑出的結果做。
+//! 受管憑證檔（`<home>/.credentials.yaml`）：宿主自己讀（#2570）。契約在 `docs/credentials-file.md`，兩邊跑同一份樣本
+//! `credentials-vectors.json`；TS 的解析器是 `apps/harness/src/credentials.ts`，這裡照它實際跑出的結果做。
 //!
-//! - [`parse`]：一份文字 → `refs` 與不認得的頂層鍵。YAML 用 `saphyr-parser` 的事件，純量讀成什麼照 [`scalar`]。
+//! - [`parse`]：一份文字 → `refs` 與不認得的頂層鍵。YAML 用 `saphyr-parser` 的事件，純量讀成什麼照 `scalar` 子模組。
 //! - [`Store`]：讀檔、查權限位元、`stat` 簽章沒變就用快取；讀好過之後壞了續用上一份並警告。
 //!
 //! **錯誤只帶錯誤碼與位置**：不引原文、不印鍵名與值，因為那一行可能就是秘密。`saphyr-parser` 自己的訊息也不轉出去。
@@ -20,7 +20,7 @@ pub use scalar::{js_number_to_string, Scalar};
 /// 這個版本讀得懂的文件版本。
 pub const DOCUMENT_VERSION: f64 = 1.0;
 
-/// mapping 與序列加起來最多幾層：根的 mapping 是第 1 層。超過的整份拒絕（`NESTING_TOO_DEEP`）。
+/// mapping 與序列加起來最多幾層：根的那一個（mapping 或序列）是第 1 層。超過的整份拒絕（`NESTING_TOO_DEEP`）。
 pub const MAX_DEPTH: usize = 64;
 
 /// group 或 other 的任何權限位元。
@@ -140,7 +140,7 @@ enum Frame {
     Seq,
 }
 
-/// 事件串收成樹時記下的第一個問題。
+/// 事件串收成樹時記下的問題：每類記位置最前的那一個，深度記最深的層數。
 #[derive(Default)]
 struct Findings {
     /// 語法錯（含第二份文件），只會有一個：事件串在那裡停。
@@ -212,7 +212,7 @@ fn directive_in(before: &str) -> Option<Pos> {
             return Some(Pos {
                 index: index + skipped,
                 line: n + 1,
-                col: 1,
+                col: 1 + skipped,
             });
         }
         index += line.chars().count();
@@ -232,6 +232,19 @@ fn yaml_error<T>(code: &str, at: Pos) -> Result<T, ParseError> {
 fn build(text: &str, findings: &mut Findings) -> Option<Node> {
     let mut parser = Parser::new_from_str(text);
     let mut stack: Vec<Frame> = Vec::new();
+    // 每個還沒關上的集合從哪裡開始：集合鍵的位置指到它的開頭，跟 TS 一樣。
+    let mut starts: Vec<Pos> = Vec::new();
+    // saphyr 的位置不算檔頭的 BOM，TS 算（第 1 行的欄多 1）：照 TS 補回來。
+    let bom = text.starts_with('\u{FEFF}');
+    let raw = |mut at: Pos| {
+        if bom {
+            at.index += 1;
+            if at.line == 1 {
+                at.col += 1;
+            }
+        }
+        at
+    };
     let mut root: Option<Node> = None;
     let mut documents = 0;
     loop {
@@ -239,19 +252,23 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
             None => break,
             Some(Err(err)) => {
                 let m = err.marker();
-                findings.error = Some((
-                    Pos {
-                        index: m.index(),
-                        line: m.line(),
-                        col: m.col() + 1,
-                    },
-                    "YAML_SYNTAX",
-                ));
+                let at = raw(Pos {
+                    index: m.index(),
+                    line: m.line(),
+                    col: m.col() + 1,
+                });
+                match err.info() {
+                    // flow 的層數在 saphyr 是 u8，超過 255 層就是這個錯；TS 那邊 `yaml` 用光呼叫堆疊也講成太深。
+                    "recursion limit exceeded" => findings.error = Some((at, "NESTING_TOO_DEEP")),
+                    // 沒有對應錨點的別名：TS 的 `yaml` 不當語法錯，由別名的檢查擋下。
+                    "while parsing node, found unknown anchor" => findings.forbid(at, "ALIAS_NOT_ALLOWED"),
+                    _ => findings.error = Some((at, "YAML_SYNTAX")),
+                }
                 break;
             }
             Some(Ok(pair)) => pair,
         };
-        let at = Pos::of(span);
+        let mut at = raw(Pos::of(span));
         let node = match event {
             Event::StreamStart | Event::DocumentEnd | Event::Nothing => continue,
             Event::StreamEnd => break,
@@ -303,13 +320,17 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                 } else {
                     Frame::Seq
                 });
+                starts.push(at);
                 findings.depth = findings.depth.max(stack.len());
                 continue;
             }
-            Event::MappingEnd | Event::SequenceEnd => match stack.pop() {
-                Some(Frame::Map { entries, .. }) => Node::Map { entries },
-                Some(Frame::Seq) | None => Node::Seq,
-            },
+            Event::MappingEnd | Event::SequenceEnd => {
+                at = starts.pop().unwrap_or(at);
+                match stack.pop() {
+                    Some(Frame::Map { entries, .. }) => Node::Map { entries },
+                    Some(Frame::Seq) | None => Node::Seq,
+                }
+            }
         };
         match stack.last_mut() {
             None => root = Some(node),
@@ -326,7 +347,7 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                             }
                         }
                         Node::Map { .. } | Node::Seq => {
-                            if findings.collection_key.is_none() {
+                            if findings.collection_key.is_none_or(|first| at < first) {
                                 findings.collection_key = Some(at);
                             }
                         }
@@ -366,6 +387,13 @@ fn is_credential_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn too_deep() -> Result<Parsed, ParseError> {
+    fail(
+        Reason::Yaml,
+        format!("YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 {MAX_DEPTH} 層）"),
+    )
+}
+
 /// 解析一份受管檔的文字。空檔、只有空白或註解、根是 null、空的 mapping，都是沒有憑證，不要求 `version`。
 pub fn parse(text: &str) -> Result<Parsed, ParseError> {
     if text.chars().all(is_js_trim_space) {
@@ -376,11 +404,12 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
     }
     let mut findings = Findings::default();
     let root = build(text, &mut findings);
-    // 順序照 TS：YAML 函式庫自己的錯（語法與重複鍵，照位置先後）在前，nexus 加的檢查在後。
+    // 順序照 TS：YAML 函式庫自己的錯（語法與重複鍵，照位置先後）在前，解析後的 nexus 檢查在後。
     match (findings.error, findings.duplicate) {
         (Some((at, _)), Some(dup)) if dup < at => {
             return fail(Reason::DuplicateKey, format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"));
         }
+        (Some((_, "NESTING_TOO_DEEP")), _) => return too_deep(),
         (Some((at, code)), _) => return yaml_error(code, at),
         (None, Some(dup)) => {
             return fail(Reason::DuplicateKey, format!("YAML 錯誤 DUPLICATE_KEY（{dup}）"));
@@ -388,10 +417,7 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
         (None, None) => {}
     }
     if findings.depth > MAX_DEPTH {
-        return fail(
-            Reason::Yaml,
-            format!("YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 {MAX_DEPTH} 層）"),
-        );
+        return too_deep();
     }
     if let Some((at, code)) = findings.forbidden {
         return yaml_error(code, at);
@@ -483,6 +509,7 @@ pub struct Store {
 }
 
 impl Store {
+    /// 建構時不碰檔案，第一次 [`Store::refs`] 才 `stat`。`warn` 收到的一行不帶換行。
     pub fn new(path: PathBuf, warn: Box<dyn FnMut(&str)>) -> Store {
         Store {
             path,

@@ -1,5 +1,5 @@
 //! 宿主對外的 HTTPS（#2570）：密碼學實作固定用 ring，信任的根只來自設定指定的 PEM 檔，不讀系統的信任庫。
-//! 宿主裡要 HTTP 客戶端的地方都經 [`http_client`]；`tests/tls.rs` 掃原始碼，擋掉繞過這裡的寫法。
+//! 宿主裡要 HTTP 客戶端的地方都經 [`http_client`]；`tests/tls.rs` 掃原始碼，擋掉幾種已知的繞過寫法（清單在那個測試）。
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::CertificateDer;

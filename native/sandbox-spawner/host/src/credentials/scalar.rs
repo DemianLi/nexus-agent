@@ -58,16 +58,6 @@ impl Scalar {
         }
     }
 
-    /// `yaml` 判重複鍵用的相等：兩個純量的值 `===`。數字照 IEEE（`NaN` 不等於自己、`0` 等於 `-0`），型別不同就不等。
-    pub fn same_value(&self, other: &Scalar) -> bool {
-        match (self, other) {
-            (Scalar::Null, Scalar::Null) => true,
-            (Scalar::Bool(a), Scalar::Bool(b)) => a == b,
-            (Scalar::Number(a), Scalar::Number(b)) => a == b,
-            (Scalar::Str(a), Scalar::Str(b)) => a == b,
-            _ => false,
-        }
-    }
 }
 
 /// `^[-+]?[0-9]+$`
@@ -138,9 +128,7 @@ fn power_of_two_radix(digits: &str, bits_per_digit: u32) -> f64 {
     if exponent > 1100 {
         return f64::INFINITY;
     }
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    let value = mantissa as f64 * 2f64.powi(exponent as i32);
-    value
+    mantissa as f64 * 2f64.powi(exponent as i32)
 }
 
 /// `Number.prototype.toString()`（ECMA-262 的 Number::toString，基數 10）。
@@ -160,7 +148,7 @@ pub fn js_number_to_string(n: f64) -> String {
     let (mantissa, exponent) = formatted.split_once('e').unwrap_or((&formatted, "0"));
     let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
     let k = digits.len() as i64;
-    // n 是小數點的位置：值 = 0.digits × 10^n。
+    // `n_exp` 是小數點的位置（ECMA-262 Number::toString 的 n）：值 = 0.digits × 10^n。
     let n_exp = exponent.parse::<i64>().unwrap_or(0) + 1;
     let body = if k <= n_exp && n_exp <= 21 {
         format!("{digits}{}", "0".repeat((n_exp - k) as usize))
