@@ -7,6 +7,8 @@
  */
 
 import type { FeedbackService } from './feedback.js';
+import { AIMessage } from '@langchain/core/messages';
+import { fakeModel as langchainFakeModel } from 'langchain';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
@@ -22,6 +24,8 @@ import type {
   SessionTelemetryService,
   SessionTelemetrySharingStatus,
 } from './index.js';
+import { LLM_STREAM_CONFIG_KEY } from './native-loop/events.js';
+import type { ModelStreamAround, ModelStreamChunk } from './native-loop/events.js';
 
 /**
  * 一個什麼都不做、只有名字有意義的工具。
@@ -176,4 +180,82 @@ export function pastLogDepthCap(): unknown {
     value = level % 2 ? { next: value } : [value];
   }
   return value;
+}
+
+/**
+ * `langchain` 的 `fakeModel()`，加上 native 的 `llm/stream` 接法：呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 有環繞函式時，
+ * 經它打這顆假模型：`next()` 打假模型、交出一顆內容同回覆的 chunk。監聽者迭代過 `next()` 就回假模型那則訊息（不看它改了什麼），否則把它
+ * yield 的 `delta.content` 接成一則純文字訊息。`bindTools`、`withConfig` 綁出來的（連同它們的 `bound`）也照這樣接。沒有環繞函式時跟 `fakeModel()` 完全相同。
+ * @returns 跟 `fakeModel()` 同一套建構方法的假模型。
+ */
+export function fakeModel(): ReturnType<typeof langchainFakeModel> {
+  return takesLlmStream(langchainFakeModel());
+}
+
+/**
+ * 把一顆不讀 `configurable` 的測試模型接上 native 的 `llm/stream`，接法同 {@link fakeModel}。
+ * @param model - 測試自己的模型。
+ * @returns 同一顆模型的 Proxy；設欄位照樣設到原物件上。
+ */
+export function takesLlmStream<M extends object>(model: M): M {
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (property === 'bound' && typeof value === 'object' && value !== null)
+        return takesLlmStream(value);
+      if ((property === 'bindTools' || property === 'withConfig') && typeof value === 'function')
+        return (...args: unknown[]) =>
+          takesLlmStream((value as (...a: unknown[]) => object).apply(receiver, args));
+      if (property === 'invoke' && typeof value === 'function')
+        return (input: unknown, config?: { configurable?: Record<string, unknown> }) => {
+          const invoke = (value as (i: unknown, c: unknown) => Promise<AIMessage>).bind(receiver);
+          const around = config?.configurable?.[LLM_STREAM_CONFIG_KEY] as
+            ModelStreamAround | undefined;
+          if (around === undefined) return invoke(input, config);
+          // 往內交時拿掉這把鍵：綁定與它的 `bound` 都包了一層，只能由最外層這一層取用。
+          const { [LLM_STREAM_CONFIG_KEY]: _taken, ...configurable } = config!.configurable!;
+          return viaAround(around, () => invoke(input, { ...config, configurable }));
+        };
+      return value;
+    },
+  });
+}
+
+async function viaAround(
+  around: ModelStreamAround,
+  invoke: () => Promise<AIMessage>,
+): Promise<AIMessage> {
+  let answered: AIMessage | undefined;
+  const chunks: ModelStreamChunk[] = [];
+  for await (const chunk of around(async function* () {
+    answered = await invoke();
+    yield chunkOf(answered);
+  }))
+    chunks.push(chunk);
+  if (answered !== undefined) return answered;
+  return new AIMessage({
+    content: chunks.map((chunk) => chunk.choices[0]?.delta?.content ?? '').join(''),
+  });
+}
+
+function chunkOf(message: AIMessage): ModelStreamChunk {
+  return {
+    ...(message.id !== undefined && { id: message.id }),
+    choices: [
+      {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          content: typeof message.content === 'string' ? message.content : message.text,
+          tool_calls: (message.tool_calls ?? []).map((call, index) => ({
+            index,
+            ...(call.id !== undefined && { id: call.id }),
+            type: 'function',
+            function: { name: call.name, arguments: JSON.stringify(call.args) },
+          })),
+        },
+        finish_reason: (message.tool_calls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      },
+    ],
+  };
 }

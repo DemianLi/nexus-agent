@@ -16,14 +16,20 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { SessionLog } from '@nexus/core';
+import { EventBus, LLM_STREAM_CONFIG_KEY, SessionLog, toLoggedMessage } from '@nexus/core';
+import type { ModelStreamAround, ModelStreamChunk } from '@nexus/core';
 import { openModelCall, reportedAttemptUsage } from '@nexus/core/src/model-call-scope.js';
 import { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ChatCompletionChunk } from 'openai/resources/chat/completions';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 
 import { BaseChatOpenAI } from './base-chat-openai.js';
+import { GatedChatOpenAI } from './gated-chat-openai.js';
+import { ReplayChatModel } from './llm-replay.js';
+import { ScriptedChatModel } from './scripted-model.js';
+import { RequestGate } from './request-gate.js';
 import type { BaseChatOpenAIFields } from './base-chat-openai.js';
 import { classifyTurnFailure, createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
@@ -656,4 +662,486 @@ describe('已知的差異', () => {
     ).toBeTypeOf('number');
     expect(new BaseChatOpenAI(fields).profile).toEqual({});
   });
+});
+
+/** 帶 `llm/stream` 環繞函式的 config，同 `model-node.ts` 放的位置。 */
+const aroundConfig = (around: ModelStreamAround, config: Record<string, unknown> = {}) => ({
+  ...config,
+  configurable: {
+    ...(config['configurable'] as object | undefined),
+    [LLM_STREAM_CONFIG_KEY]: around,
+  },
+});
+
+/** 轉交的環繞函式：記下每一顆 chunk 與被叫了幾次。 */
+function passThrough(): { around: ModelStreamAround; chunks: ModelStreamChunk[]; calls: number } {
+  const seen = { chunks: [] as ModelStreamChunk[], calls: 0 };
+  const around: ModelStreamAround = (next) => {
+    seen.calls += 1;
+    return (async function* () {
+      for await (const part of next()) {
+        seen.chunks.push(part);
+        yield part;
+      }
+    })();
+  };
+  return Object.assign(seen, { around });
+}
+
+/** 深度走訪：找得到那顆函式或內部鍵就回真。 */
+function holdsAround(value: unknown, around: unknown, seen = new Set<object>()): boolean {
+  if (value === around) return true;
+  if (typeof value === 'string') return value === LLM_STREAM_CONFIG_KEY;
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  return Reflect.ownKeys(value).some(
+    (key) =>
+      key === LLM_STREAM_CONFIG_KEY ||
+      holdsAround((value as Record<PropertyKey, unknown>)[key], around, seen),
+  );
+}
+
+const liveFields = (config: Record<string, unknown> = {}) =>
+  createLiveModel(liveModelConfigSchema.parse({ baseUrl, ...config })).fields;
+
+/** 跑一次、收 callback 原物件（不經 JSON），回 recorder 與結果。 */
+async function runRaw(
+  model: BaseChatModel,
+  call: Call,
+  mode: 'events' | 'tokens' | 'none',
+): Promise<{ recorder: Recorder; result: unknown; thrown: unknown }> {
+  const recorder = new Recorder(mode);
+  let result: unknown;
+  let thrown: unknown;
+  const log = new SessionLog('around');
+  await openModelCall(log, () => 1).run(async () => {
+    try {
+      result = await call(model, { callbacks: [recorder] });
+    } catch (error: unknown) {
+      thrown = error;
+    }
+  });
+  return { recorder, result, thrown };
+}
+
+const framesOf = (...frames: string[]): unknown[] =>
+  frames
+    .filter((frame) => frame !== DONE)
+    .map((frame) => JSON.parse(frame.slice('data: '.length)) as unknown);
+
+const TEXT_FRAMES = [
+  chunk({ role: 'assistant', content: '', reasoning_content: '先想' }),
+  chunk({ reasoning_content: '一下' }),
+  chunk({ content: '報表要' }),
+  chunk({ content: '按部門' }, 'stop'),
+  usage,
+];
+
+describe('llm/stream 的環繞函式（native 經 configurable 交進來）', () => {
+  for (const mode of MODES) {
+    for (const [label, respond] of [
+      ['成功', TEXT_STREAM],
+      ['失敗', jsonOf(500, { error: { message: 'boom' } })],
+    ] as const) {
+      it(`callback 收到的參數裡找不到環繞函式與內部鍵（${mode}，${label}）`, async () => {
+        script = respond;
+        const { around } = passThrough();
+        const { recorder, thrown } = await runRaw(
+          new BaseChatOpenAI(liveFields()),
+          (model, config) => model.invoke([new HumanMessage('嗨')], aroundConfig(around, config)),
+          mode,
+        );
+        expect(thrown === undefined).toBe(label === '成功');
+        const kinds = recorder.calls.map((call) => (call as unknown[])[0]);
+        expect(kinds).toContain('start');
+        expect(kinds).toContain(label === '成功' ? 'end' : 'error');
+        if (label === '成功' && mode === 'tokens') expect(kinds).toContain('token');
+        expect(holdsAround(recorder.calls, around)).toBe(false);
+      });
+    }
+  }
+
+  it('三條路各打一次，環繞函式各被叫一次', async () => {
+    script = TEXT_STREAM;
+    const paths: [string, 'events' | 'tokens' | 'none', Call][] = [
+      ['invoke → _generate', 'none', invoke([new HumanMessage('嗨')])],
+      ['invoke → _streamChatModelEvents', 'events', invoke([new HumanMessage('嗨')])],
+      [
+        'stream() → _streamResponseChunks',
+        'none',
+        async (model, config) => {
+          for await (const _ of await model.stream([new HumanMessage('嗨')], config)) continue;
+        },
+      ],
+    ];
+    for (const [label, mode, call] of paths) {
+      received = [];
+      const seen = passThrough();
+      const { thrown } = await runRaw(
+        new BaseChatOpenAI(liveFields()),
+        (model, config) => call(model, aroundConfig(seen.around, config)),
+        mode,
+      );
+      expect(thrown, label).toBeUndefined();
+      expect(seen.calls, label).toBe(1);
+      expect(received, label).toHaveLength(1);
+    }
+  });
+
+  it('環繞函式拿到的就是 SDK 的原始 chunk，跟端點送的逐顆相等', async () => {
+    script = TEXT_STREAM;
+    const seen = passThrough();
+    await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke([new HumanMessage('嗨')], aroundConfig(seen.around)),
+      'events',
+    );
+    expect(plain(seen.chunks)).toEqual(framesOf(...TEXT_FRAMES));
+  });
+
+  it('監聽者短路（不叫 next、自己 yield）：端點收到 0 個請求，回覆來自監聽者', async () => {
+    script = TEXT_STREAM;
+    const around: ModelStreamAround = () =>
+      (async function* () {
+        yield { choices: [{ index: 0, delta: { role: 'assistant', content: '快取的' } }] };
+        yield { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
+      })();
+    for (const mode of MODES) {
+      received = [];
+      // 數 fetch 的呼叫，再等一個 macrotask 才看端點：沒等到的請求（例如沒人等它的那一次）也算得到。
+      const fields = liveFields();
+      const inner = fields.configuration?.fetch ?? fetch;
+      let fetched = 0;
+      const counted: typeof fetch = (...args) => {
+        fetched += 1;
+        return inner(...args);
+      };
+      const { result, thrown } = await runRaw(
+        new BaseChatOpenAI({
+          ...fields,
+          configuration: { ...fields.configuration, fetch: counted },
+        }),
+        invoke([new HumanMessage('嗨')], aroundConfig(around)),
+        mode,
+      );
+      await new Promise((settled) => setTimeout(settled, 50));
+      expect(thrown, mode).toBeUndefined();
+      expect(fetched, mode).toBe(0);
+      expect(received, mode).toHaveLength(0);
+      expect((result as AIMessage).text, mode).toBe('快取的');
+    }
+  });
+
+  it('逐顆轉交的監聽者：callback 收到的與結果跟沒有監聽者時相同', async () => {
+    // `none` 沒有監聽者時打非串流，跟帶監聽者的比法見「native 一律打串流請求」那幾條。
+    for (const mode of ['events', 'tokens'] as const) {
+      for (const respond of [TEXT_STREAM, TOOL_STREAM]) {
+        script = respond;
+        const runId = randomUUID();
+        const fields = liveFields();
+        const without = await outcomeOf(
+          new BaseChatOpenAI(fields),
+          invokeWithTools(HISTORY),
+          mode,
+          runId,
+        );
+        const { around } = passThrough();
+        const withAround = await outcomeOf(
+          new BaseChatOpenAI(fields),
+          (model, config) => invokeWithTools(HISTORY)(model, aroundConfig(around, config)),
+          mode,
+          runId,
+        );
+        expect(withAround, mode).toEqual(without);
+      }
+    }
+  });
+
+  it('內部鍵不出現在 toJSON() 與 invocationParams()', () => {
+    const { around } = passThrough();
+    const model = new BaseChatOpenAI(liveFields());
+    const options = { [LLM_STREAM_CONFIG_KEY]: around } as never;
+    expect(holdsAround(model.toJSON(), around)).toBe(false);
+    expect(holdsAround(model.invocationParams(options), around)).toBe(false);
+    expect(holdsAround(model._getCallOptionsForTracing(options, {} as never), around)).toBe(false);
+  });
+
+  type StreamListener = (
+    payload: unknown,
+    next: () => AsyncIterable<ModelStreamChunk>,
+  ) => AsyncIterable<ModelStreamChunk>;
+
+  /** 回 Promise 的 `async` 監聽者：型別不允許，JS 寫的插件照樣寫得出來。 */
+  const promiseListener = (async (
+    _payload: unknown,
+    next: () => AsyncIterable<ModelStreamChunk>,
+  ) => {
+    await Promise.resolve();
+    return next();
+  }) as unknown as StreamListener;
+
+  /**
+   * 用真的 `EventBus` 派 `llm/stream`，跟 native agent 的接法相同。
+   * @param listeners - 由外到內的監聽者。
+   */
+  const viaBus = (...listeners: StreamListener[]): ModelStreamAround => {
+    const bus = new EventBus();
+    for (const listener of listeners) bus.on('llm/stream', listener);
+    return (next) => bus.waterfall('llm/stream', {} as never, next);
+  };
+
+  it('監聽者是回 Promise 的 async 函式：拋 TypeError、講明要怎麼寫', async () => {
+    script = TEXT_STREAM;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke([new HumanMessage('嗨')], aroundConfig(viaBus(promiseListener))),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toContain('回 Promise 的 async 函式不行');
+  });
+
+  it('回 Promise 的監聽者之後拋錯：只有這次呼叫拋 TypeError，不留下未處理的 rejection', async () => {
+    script = TEXT_STREAM;
+    const rejecting = (async () => {
+      await Promise.resolve();
+      throw new Error('監聽者自己的錯');
+    }) as unknown as StreamListener;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke([new HumanMessage('嗨')], aroundConfig(viaBus(rejecting))),
+      'none',
+    );
+    // 未處理的 rejection 由 vitest 報成這個檔失敗，這裡只看拋出的是哪一個。
+    await new Promise((settled) => setTimeout(settled, 0));
+    expect(thrown).toBeInstanceOf(TypeError);
+  });
+
+  it('兩位監聽者、內層回 Promise：外層原樣轉交時同一個 TypeError', async () => {
+    script = TEXT_STREAM;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke(
+        [new HumanMessage('嗨')],
+        aroundConfig(viaBus((_payload, next) => next(), promiseListener)),
+      ),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toContain('回 Promise 的 async 函式不行');
+  });
+
+  it('兩位監聽者、內層回 Promise：外層迭代 next() 時拋 JS 自己的 TypeError，模型那一層等 Promise 也救不回', async () => {
+    script = TEXT_STREAM;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke(
+        [new HumanMessage('嗨')],
+        aroundConfig(
+          viaBus(async function* (_payload, next) {
+            yield* next();
+          }, promiseListener),
+        ),
+      ),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).not.toContain('llm/stream');
+  });
+
+  it('監聽者回的不是串流：拋 TypeError、講明要回什麼', async () => {
+    script = TEXT_STREAM;
+    const around = (() => ({ content: '整則' })) as unknown as ModelStreamAround;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke([new HumanMessage('嗨')], aroundConfig(around)),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toContain('AsyncIterable');
+  });
+
+  it('呼叫前就中止：拋中止、不送請求、不叫環繞函式', async () => {
+    script = TEXT_STREAM;
+    const seen = passThrough();
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      (model, config) =>
+        model.invoke([new HumanMessage('嗨')], {
+          ...aroundConfig(seen.around, config),
+          signal: AbortSignal.abort(),
+        }),
+      'none',
+    );
+    expect(thrown).toBeDefined();
+    expect(received).toHaveLength(0);
+    expect(seen.calls).toBe(0);
+  });
+
+  it('帶閘的子類：_generate 改走串流也只取一次名額（上限 1 不會自己等自己）', async () => {
+    script = TEXT_STREAM;
+    const seen = passThrough();
+    const gate = new RequestGate({ maxConcurrent: 1, maxWaitMs: 200 });
+    const { result, thrown } = await runRaw(
+      new GatedChatOpenAI(liveFields(), gate),
+      invoke([new HumanMessage('嗨')], aroundConfig(seen.around)),
+      'none',
+    );
+    expect(thrown).toBeUndefined();
+    expect((result as AIMessage).text).toBe('報表要按部門');
+    expect(seen.calls).toBe(1);
+  });
+
+  describe('native 一律打串流請求', () => {
+    for (const [label, call] of [
+      ['純文字', invoke([new HumanMessage('嗨')])],
+      ['工具', invokeWithTools(HISTORY)],
+    ] as const) {
+      it(`請求本文只多 stream 與 stream_options（${label}）`, async () => {
+        script = jsonOf(500, { error: { message: 'boom' } });
+        const plainRun = await runRaw(new BaseChatOpenAI(liveFields()), call, 'none');
+        expect(plainRun.thrown).toBeDefined();
+        const before = JSON.parse(received[0]!.body) as Record<string, unknown>;
+        received = [];
+        const { around } = passThrough();
+        await runRaw(
+          new BaseChatOpenAI(liveFields()),
+          (model, config) => call(model, aroundConfig(around, config)),
+          'none',
+        );
+        const after = JSON.parse(received[0]!.body) as Record<string, unknown>;
+        expect(before['stream']).toBe(false);
+        expect(after).toEqual({ ...before, stream: true, stream_options: { include_usage: true } });
+        const { stream: _s, stream_options: _o, ...restAfter } = after;
+        const { stream: _b, ...restBefore } = before;
+        expect(JSON.stringify(restAfter)).toBe(JSON.stringify(restBefore));
+      });
+    }
+
+    it('聚合出來的訊息跟 serve（stream-event handler 走事件）逐格相同', async () => {
+      for (const respond of [TEXT_STREAM, TOOL_STREAM]) {
+        script = respond;
+        const runId = randomUUID();
+        const serve = await outcomeOf(
+          new BaseChatOpenAI(liveFields()),
+          invokeWithTools(HISTORY),
+          'events',
+          runId,
+        );
+        const { around } = passThrough();
+        const cli = await outcomeOf(
+          new BaseChatOpenAI(liveFields()),
+          (model, config) => invokeWithTools(HISTORY)(model, aroundConfig(around, config)),
+          'none',
+          runId,
+        );
+        expect(cli.result).toEqual(serve.result);
+        expect(cli.usage).toEqual(serve.usage);
+      }
+    });
+
+    it('usage_metadata 三條路相同，取自最後一顆 chunk', async () => {
+      const usages: unknown[] = [];
+      for (const mode of ['none', 'events'] as const) {
+        script = TEXT_STREAM;
+        const { around } = passThrough();
+        const { result } = await runRaw(
+          new BaseChatOpenAI(liveFields()),
+          invoke([new HumanMessage('嗨')], aroundConfig(around)),
+          mode,
+        );
+        usages.push(plain((result as AIMessage).usage_metadata));
+      }
+      script = TEXT_STREAM;
+      const { around } = passThrough();
+      const { result } = await runRaw(
+        new BaseChatOpenAI(liveFields()),
+        async (model, config) => {
+          let total: AIMessage | undefined;
+          for await (const part of await model.stream(
+            [new HumanMessage('嗨')],
+            aroundConfig(around, config),
+          ))
+            total =
+              total === undefined
+                ? (part as never)
+                : (total as never as { concat(p: unknown): AIMessage }).concat(part);
+          return total;
+        },
+        'none',
+      );
+      usages.push(plain((result as AIMessage).usage_metadata));
+      expect(usages[0]).toMatchObject({ input_tokens: 11, output_tokens: 7, total_tokens: 18 });
+      expect(usages[1]).toEqual(usages[0]);
+      expect(usages[2]).toEqual(usages[0]);
+    });
+  });
+});
+
+describe('ModelStreamChunk 跟 SDK 的 ChatCompletionChunk', () => {
+  it('SDK 的 chunk 指派得給 core 的型別（core 不加 openai 相依）', () => {
+    expectTypeOf<ChatCompletionChunk>().toExtend<ModelStreamChunk>();
+  });
+
+  it('reasoning_content 不在 SDK 型別裡：core 寫成選填，SDK 的 chunk 才指派得過去', () => {
+    type Delta = NonNullable<ModelStreamChunk['choices'][number]['delta']>;
+    expectTypeOf<Delta>().toHaveProperty('reasoning_content');
+    expectTypeOf<undefined>().toExtend<Delta['reasoning_content']>();
+  });
+
+  it('反例：把一格改成 SDK 沒有的型別，指派就失敗', () => {
+    type Choice = ModelStreamChunk['choices'][number];
+    type Broken = Omit<ModelStreamChunk, 'choices'> & {
+      readonly choices: readonly (Omit<Choice, 'finish_reason'> & {
+        readonly finish_reason?: number;
+      })[];
+    };
+    expectTypeOf<ChatCompletionChunk>().not.toExtend<Broken>();
+    const sdk = {} as ChatCompletionChunk;
+    // @ts-expect-error finish_reason 是字串，不是 number
+    const broken: Broken = sdk;
+    void broken;
+  });
+});
+
+describe('不打端點的模型（腳本、重放）接上 llm/stream', () => {
+  const SCRIPTED = '腳本這一輪';
+  const models: [string, () => BaseChatModel][] = [
+    ['ScriptedChatModel', () => new ScriptedChatModel({ turns: [{ content: SCRIPTED }] })],
+    [
+      'ReplayChatModel',
+      () =>
+        new ReplayChatModel({
+          script: [toLoggedMessage(new AIMessage({ content: SCRIPTED, id: 'r1' }))],
+        }),
+    ],
+  ];
+  for (const [name, build] of models) {
+    for (const mode of MODES) {
+      it(`${name}（${mode}）：環繞函式拿到這一輪的 chunk，監聽者短路也照樣吐腳本那一輪`, async () => {
+        const seen: ModelStreamChunk[] = [];
+        let calls = 0;
+        const around: ModelStreamAround = (next) => {
+          calls += 1;
+          return (async function* () {
+            for await (const part of next()) seen.push(part);
+            yield {
+              choices: [{ index: 0, delta: { content: '監聽者的' }, finish_reason: 'stop' }],
+            };
+          })();
+        };
+        const { result, thrown, recorder } = await runRaw(
+          build(),
+          invoke([new HumanMessage('嗨')], aroundConfig(around)),
+          mode,
+        );
+        expect(thrown).toBeUndefined();
+        expect(calls).toBe(1);
+        expect(seen.map((part) => part.choices[0]?.delta?.content)).toEqual([SCRIPTED]);
+        expect((result as AIMessage).text).toBe(SCRIPTED);
+        expect(holdsAround(recorder.calls, around)).toBe(false);
+      });
+    }
+  }
 });

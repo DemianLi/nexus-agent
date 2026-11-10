@@ -7,11 +7,11 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { StateBackend } from 'deepagents';
-import { fakeModel } from 'langchain';
+import { fakeModel as langchainFakeModel } from 'langchain';
 import { describe, expect, it } from 'vitest';
 
 import { assembleAgent } from '../agent-assembly.js';
-import { fakePlugin } from '../fixtures.js';
+import { fakeModel, fakePlugin } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
 
@@ -83,5 +83,78 @@ describe('native 前景子代理的步驟往共用派發面派的事件', () => 
       // 只有子代理那一次失敗。
       'agent/request-error': 1,
     });
+  });
+});
+
+/**
+ * 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數與最後那則回覆；native 下模型沒接上而有監聽者時 reject。
+ * @param loop - 跑哪個迴圈。
+ * @param options - `listen` 掛不掛 `llm/stream` 的監聽者（預設掛）；`bound` 模型要不要先包一層 `RunnableBinding`。
+ */
+async function runUncooperative(
+  loop: 'native' | 'langgraph',
+  options: { readonly listen?: boolean; readonly bound?: boolean } = {},
+): Promise<{ streams: number; reply: string }> {
+  let streams = 0;
+  const { registry } = await loadPlugins([
+    fakePlugin('listeners', (r) => {
+      if (options.listen === false) return;
+      r.events.on('llm/stream', (_payload, next) => {
+        streams += 1;
+        return next();
+      });
+    }),
+  ]);
+  const backend = new StateBackend();
+  const params = foldRegistry(registry, {
+    summarization: false,
+    defaultBackend: backend,
+    events: registry.dispatch,
+    loop,
+  });
+  const model = langchainFakeModel().respond(new AIMessage('收完'));
+  const agent = assembleAgent({
+    ...params,
+    model: options.bound === true ? (model.withConfig({}) as unknown as typeof model) : model,
+    backend: params.backend ?? backend,
+    loop,
+    events: registry.dispatch,
+  }) as unknown as { invoke(input: unknown, config: object): Promise<{ messages: AIMessage[] }> };
+  const result = await agent.invoke(
+    { messages: [new HumanMessage('動手')] },
+    { configurable: { thread_id: 't' } },
+  );
+  return { streams, reply: result.messages.at(-1)?.text ?? '' };
+}
+
+describe('模型沒有接上 llm/stream', () => {
+  it('native、有監聽者：拋錯，訊息指名模型類別與要做的事', async () => {
+    const thrown = await runUncooperative('native').then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+    expect(thrown?.message).toContain('FakeBuiltModel');
+    expect(thrown?.message).toContain('configurable["__nexus_llm_stream"]');
+    expect(thrown?.message).toContain('包住');
+  });
+
+  it('native、有監聽者、模型包在 RunnableBinding 裡：訊息報內層的類別', async () => {
+    const thrown = await runUncooperative('native', { bound: true }).then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+    expect(thrown?.message).toContain('模型 FakeBuiltModel 沒有接上');
+    expect(thrown?.message).not.toContain('RunnableBinding');
+  });
+
+  it('native、沒有監聽者：模型沒取用也不拋，回覆照常', async () => {
+    expect(await runUncooperative('native', { listen: false })).toEqual({
+      streams: 0,
+      reply: '收完',
+    });
+  });
+
+  it('langgraph：不帶環繞函式、不檢查，llm/stream 一次都不派', async () => {
+    expect((await runUncooperative('langgraph')).streams).toBe(0);
   });
 });

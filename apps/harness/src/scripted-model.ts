@@ -1,11 +1,14 @@
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 import { assertImageBudget, IMAGE_BUDGET_PROPERTY } from '@nexus/core';
 import type { ImageBudget } from '@nexus/core';
+
+import { passAroundOnce, takeAround, withoutAround } from './base-chat-openai.js';
 
 /**
  * bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。
@@ -200,6 +203,21 @@ export class ScriptedChatModel extends BaseChatModel {
     });
   }
 
+  /** native 的 `llm/stream`：環繞函式從 `configurable` 搬成呼叫選項，同 `BaseChatOpenAI.invoke`。 */
+  override async invoke(
+    input: BaseLanguageModelInput,
+    options?: Parameters<BaseChatModel['invoke']>[1],
+  ): ReturnType<BaseChatModel['invoke']> {
+    return super.invoke(input, takeAround(options as never) as never);
+  }
+
+  override _getCallOptionsForTracing(
+    options: this['ParsedCallOptions'],
+    invocationParams: ReturnType<this['invocationParams']>,
+  ): this['ParsedCallOptions'] {
+    return withoutAround(super._getCallOptionsForTracing(options, invocationParams));
+  }
+
   /** 腳本用完就代表 agent 迴圈跑得比預期多，直接失敗比靜默重播容易查。 */
   private nextTurn(): ScriptedTurn {
     const turn = this.turns[this.shared.turn];
@@ -244,10 +262,14 @@ export class ScriptedChatModel extends BaseChatModel {
     });
   }
 
-  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+  async _generate(
+    messages: BaseMessage[],
+    options?: this['ParsedCallOptions'],
+  ): Promise<ChatResult> {
     this.record(messages);
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
+    await passAroundOnce(options ?? {}, message);
     return { generations: [{ text: turn.content, message }], llmOutput: {} };
   }
 
@@ -262,12 +284,13 @@ export class ScriptedChatModel extends BaseChatModel {
    */
   override async *_streamResponseChunks(
     messages: BaseMessage[],
-    _options: this['ParsedCallOptions'],
+    options?: this['ParsedCallOptions'],
     runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
     this.record(messages);
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
+    await passAroundOnce(options ?? {}, message);
 
     for (const token of [...turn.content]) {
       // handleLLMNewToken 要自己呼叫，基座才收得到 token 事件；

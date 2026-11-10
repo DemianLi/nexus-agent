@@ -14,7 +14,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { StateBackend } from 'deepagents';
-import { fakeModel } from 'langchain';
+import { fakeModel } from '../fixtures.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentLoopKind } from '../agent-assembly.js';
