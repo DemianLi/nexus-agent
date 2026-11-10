@@ -1459,7 +1459,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 
 - **帶 token 的網址那一行（`nexus-agent 在 …`）在 JSON 模式照樣印**（`info` 等級，在 `msg` 裡）：它今天就進標準輸出、systemd 底下就進 journald，換格式不改變暴露面。
   **日誌平台要當成含秘密的資料處理**；根本解是 #1428 的身分，不是藏這一行。
-- 致命的啟動失敗與收尾失敗（`serve.ts` 的 `main()`）仍以純文字寫標準錯誤，不看格式與門檻：根可能已經收掉，沒有 logger 可用。
+- 致命的啟動失敗與收尾失敗（`serve-run.ts` 的 `serveMain`）仍以純文字寫標準錯誤，不看格式與門檻：根可能已經收掉，沒有 logger 可用。
 - 不做轉送（syslog、OTLP、HTTP 推送）、不寫檔、不輪替：交給 systemd／journald 或 logrotate。
 
 ### 從回報追到請求
@@ -2554,7 +2554,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `session-reference`、`browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、引用的候選清單與每則訊息的引用政策、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
   **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
-  `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
+  `cli.ts` 與 `serve-run.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
   寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
   解一次、交給組裝去建 model（只有 `--live` 用得到）；`thread-title-llm` 跟它一起在建 model 的那一刻讀，
   另建一顆標題用的（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。

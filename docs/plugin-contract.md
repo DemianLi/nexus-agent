@@ -688,7 +688,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
   交給 Loader 之前，掃那份真正會被 eval 的樹，有就整份拒絕（`PluginTree.sync` 報成 `PluginTreeError`）。rc.11 起 Loader
   連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
-  投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
+  投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve-run.ts`）不走這條。
   會話查找那一列在這條路上看的是**那一次組裝自己的** `registry.sessions`（#1463），所以工具在 `attachSession` 之後才綁上來的註冊表也問得到。
   `fs` 那一列同理（#1466）：看的是**那一次組裝自己的** `fs` 服務（`registry-fs-lookup.ts`，**每次呼叫都讀**，所以提供它的那一列排前排後一樣），
   不依 `thread_id` 挑——一份無樹組裝只有一個 backend，沒有別的 thread 的 fs 可以挑錯；仍要算得出位址，與樹上同一個 `unknown-caller` 判準。
