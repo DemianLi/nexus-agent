@@ -25,12 +25,12 @@ pub const MAX_FILE: u64 = 1 << 20;
 /// 還沒做的列欄位：寫了就拒絕，指到它的卡。
 const INTERCEPT_KEY: &str = "intercept";
 
-/// 編進這支執行檔、`--plugins` 可以用名字指到的插件。出貨的建置沒有任何一支。
+/// 編進這支執行檔、`--plugins` 可以用名字指到的插件。出貨的建置只有 `mcp`。
 pub fn specs() -> &'static [&'static Spec] {
     #[cfg(feature = "test-hooks")]
-    static SPECS: &[&Spec] = &[&super::test_plugin::SPEC];
+    static SPECS: &[&Spec] = &[&crate::mcp::service::SPEC, &super::test_plugin::SPEC];
     #[cfg(not(feature = "test-hooks"))]
-    static SPECS: &[&Spec] = &[];
+    static SPECS: &[&Spec] = &[&crate::mcp::service::SPEC];
     SPECS
 }
 

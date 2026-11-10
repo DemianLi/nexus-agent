@@ -8,7 +8,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { StateBackend } from 'deepagents';
-import { fakeModel } from 'langchain';
+import { fakeModel } from '../fixtures.js';
 import { describe, expect, it } from 'vitest';
 
 import { assembleAgent } from '../agent-assembly.js';
