@@ -39,7 +39,7 @@ pub(super) struct Call {
     kind: MethodKind,
     /// 下一塊的序號。
     seq: u64,
-    /// 上一次 poll 推了塊又回 `Pending`：下一輪要再 poll。
+    /// 上一步（`start` 或 `poll`）推了塊又回 `Pending`：下一輪要再 poll。
     more: bool,
 }
 

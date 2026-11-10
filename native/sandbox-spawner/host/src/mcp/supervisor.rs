@@ -1,9 +1,9 @@
-//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。語意照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同。
+//! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收一代的期限與記的訊息照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
 //!
 //! - 退避：第一次 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
 //! - 連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。
 //! - 收一代最多等 [`GENERATION_CLOSE_TIMEOUT`]；等不到就停止重連，寧可停下也不讓兩代同時活著。
-//! - 第一次連線的結果經 `first` 交給建立者；`retry_first` 是 `false`（`failOnStartupError`）時第一次失敗就結束，不重試。
+//! - 第一次連線的結果經 `first` 交給建立者；`retry_first` 是 `false`（對應設定的 `failOnStartupError: true`）時第一次失敗就結束，不重試。
 //!
 //! [`Backoff`] 是不碰時鐘與 I/O 的部分，[`run`] 把它接到 tokio 的計時器與 [`Hooks`]。
 
@@ -14,7 +14,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::json::Value;
 
-/// 收一代最多等多久，照 dsh 的 `GENERATION_CLOSE_TIMEOUT_MS`。
+/// 收一代最多等多久，跟 `supervisor.ts` 的 `GENERATION_CLOSE_TIMEOUT_MS` 同值。
 pub const GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 重連政策，欄位與預設照 `reconnectSchema`。
@@ -163,14 +163,14 @@ impl Backoff {
     }
 }
 
-/// 監督者這一刻的狀態，給池與呼叫端看。
+/// 監督者這一刻的狀態，給呼叫端看。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     /// 還沒有一代連上過，正在連或等著重試。
     Connecting,
     /// 第 `generation` 代連著。
     Up { generation: u64 },
-    /// 掉線了，等著重連；最近一代的清單照留（池的空窗語意）。
+    /// 掉線了，等著重連；監督者不收回上一次 [`Hooks::adopted`] 發布的清單。
     Reconnecting,
     /// 不再重連：放棄、沒開重連、收不乾淨、或第一次就失敗而 `retry_first` 是 `false`。
     Stopped,
@@ -180,7 +180,7 @@ pub enum State {
 pub trait Hooks {
     type Generation;
 
-    /// 連一代。錯誤字串不得帶任何秘密。
+    /// 連一代。錯誤字串不得帶任何秘密。失敗的嘗試監督者不叫 [`Hooks::close`]，要收的自己收；`stop` 時這個 future 可能在任何 await 點被丟掉。
     fn connect(&mut self) -> impl Future<Output = Result<Self::Generation, String>>;
     /// 新的一代連上了（第 `generation` 代）：發布它的清單。
     fn adopted(&mut self, generation: u64, gen: &Self::Generation);

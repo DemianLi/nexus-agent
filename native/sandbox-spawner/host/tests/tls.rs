@@ -2,7 +2,7 @@
 //! 再掃宿主的原始碼，擋掉繞過它建 HTTP 客戶端的寫法。
 //!
 //! **這裡證明不了的退化**：設定的根之外，另外又信了系統的信任庫。測試的 CA b 在哪裡都不受信任，系統信任庫加不加都一樣驗不過；
-//! 要測出來得有一張公開受信任的憑證，完全內網做不到。這種退化只靠下面的原始碼掃描擋。
+//! 要測出來得有一張公開受信任的憑證，測試環境沒有。這種退化只靠下面的原始碼掃描擋。
 
 mod common;
 
@@ -110,7 +110,7 @@ fn 經_connect_隧道照樣只信設定的根() {
         r#"{{"httpsProxy":"http://nexus-user:FAKE-proxy-pass@127.0.0.1:{}","noProxy":"localhost,127.0.0.1"}}"#,
         proxy.port
     ));
-    // 目標不能是迴圈位址：迴圈位址一律直連。`mcp.nexus.test` 只有代理知道要接到哪裡；`--network=none` 裡也通，表示客戶端沒有自己解析它。
+    // 目標不能是迴圈位址：迴圈位址一律直連。`mcp.nexus.test` 是保留網域、一般解析不到，只有代理知道要接到哪裡：通了就表示客戶端把主機名交給了代理，沒有自己解析。
     let url = format!("https://mcp.nexus.test:{}/", server.port);
     assert_eq!(get("ca-a.pem", &policy, &url), Ok("ok".into()));
     let seen = proxy.seen();
@@ -189,7 +189,7 @@ fn 宿主原始碼不繞過_tls_模組() {
         "webpki_roots",
         "webpki_root_certs",
     ];
-    // 建 reqwest 客戶端與裝代理只准在 `src/tls.rs` 的 `http_client` 裡。
+    // 建 reqwest 客戶端與裝代理只准出現在 `src/tls.rs`（`http_client`）。
     let only_in_tls = ["Client::builder(", ".proxy("];
     let tls = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")

@@ -2,13 +2,13 @@
 //!
 //! - 兩端都是 `O_CLOEXEC`、非阻塞。
 //! - [`Waker::wake`] 不會卡：管道滿了（`EAGAIN`）表示讀端本來就可讀，少寫一個位元組不影響；讀端已經關了（`EPIPE`，Rust 執行檔忽略 SIGPIPE）也照樣回。
-//! - 讀端由 [`Wake`] 擁有、寫端由 [`Waker`] 共用，兩邊誰先關都可以。
+//! - 讀端由 [`Wake`] 擁有；寫端由 [`Wake`] 與它發出的每個 [`Waker`] 共用，最後一個放掉才關，所以 `Wake` 活著時讀端讀不到 EOF。讀端先關，`wake` 照樣回。
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 
-/// 讀端：給宿主 poll、由服務讀乾淨。
+/// 讀端（連同發 [`Waker`] 用的一份寫端）：給宿主 poll、由服務讀乾淨。
 pub struct Wake {
     read: OwnedFd,
     write: Arc<OwnedFd>,
@@ -37,6 +37,7 @@ impl Wake {
         Waker(Arc::clone(&self.write))
     }
 
+    /// 讀端的 fd，借出不交出：`Wake` 活著時有效，呼叫方不得 close。
     pub fn fd(&self) -> RawFd {
         self.read.as_raw_fd()
     }
@@ -139,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn 寫端先關_讀端照樣讀得乾淨() {
+    fn waker_先放掉_讀端照樣讀得乾淨() {
         let wake = Wake::new().expect("開管道");
         let waker = wake.waker();
         waker.wake();

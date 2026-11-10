@@ -460,7 +460,7 @@ impl Host {
             if accepting && fds[2].revents != 0 {
                 self.accept(MAX_CONNECTIONS);
             }
-            // 新 accept 的排在 fds 之後，下一輪才 poll 到它們。
+            // fds 是三個固定的、這一輪的 `polled_conns` 條連線，再接各服務的喚醒 fd；這裡只取連線那段。新 accept 的下一輪才 poll 到。
             for (i, fd) in fds.iter().skip(3).take(polled_conns).enumerate() {
                 let Some(conn) = self.conns.get(i) else {
                     continue;

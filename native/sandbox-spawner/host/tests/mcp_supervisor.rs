@@ -126,7 +126,7 @@ fn 政策解析() {
     }
 }
 
-/// 假的一代：`down` 等 `drop` 被叫醒；`close` 可以設成永遠不回。
+/// 假的一代：`down` 等 `drop_now` 被通知；`close` 可以設成永遠不回。
 #[derive(Clone, Default)]
 struct Script {
     /// 每次 connect 的結果，照順序取；取完之後一律失敗。

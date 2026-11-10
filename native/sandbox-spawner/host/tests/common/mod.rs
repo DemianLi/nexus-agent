@@ -1,4 +1,4 @@
-//! 整合測試共用的本機 HTTPS 伺服器與 CONNECT 代理。只用 std 與 rustls（ring），不需要別的相依；憑證是 `tests/fixtures/tls/` 的夾具。
+//! 整合測試共用的本機 HTTPS 伺服器與 CONNECT 代理。只用 std 與 rustls（ring），不需要別的相依；憑證是 `tests/fixtures/tls/` 的夾具。每支測試只用到其中一部分。
 
 #![allow(dead_code)]
 

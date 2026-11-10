@@ -30,7 +30,7 @@ pub fn client_config(roots: &Path) -> Result<ClientConfig, String> {
 }
 
 /// 用 [`client_config`] 的設定建 HTTP 客戶端，照 `proxy` 走代理（[`crate::proxy`]）。
-/// 只認 `proxy` 這份政策，不讀環境變數：直連時用 `.no_proxy()`；有代理時裝 `Proxy::custom`，reqwest 裝了代理就不再自己讀環境。
+/// 只認 `proxy` 這份政策，不讀環境變數：一律先 `.no_proxy()` 關掉 reqwest 自己讀的環境代理，有代理時再裝 `Proxy::custom`。
 /// 經 CONNECT 隧道的 HTTPS 一樣用這份 TLS 設定驗伺服器。
 pub fn http_client(config: ClientConfig, proxy: &ProxyPolicy) -> Result<reqwest::Client, String> {
     let builder = reqwest::Client::builder()
