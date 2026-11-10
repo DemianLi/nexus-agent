@@ -128,15 +128,11 @@ function saverConstructions(): string[] {
  *
  * `MemorySaver` 是 process 內的，重啟就沒——**門 B 關著**。
  *
- * **2026-09-09 這一行的字面改過一次，門沒有動。** 原本是 `checkpointer: new MemorySaver(),`
- * 寫在 `createNexusAgent` 的參數上；[#231](https://github.com/DemianLi/nexus-agent/issues/231)
- * 把它提成一個區域變數，因為 `ask_user_question` 的 fail-closed 要問「這次組裝有沒有
- * checkpointer」，而寫死 `true` 就會在門真的開的那天靜靜地說謊。**建的仍是同一顆、
- * 仍然只有這一處、仍然是不耐久的那一種**——所以這裡改的是 characterization 的字面，
- * 不是失敗訊息裡那兩個目的地的任何一個。
+ * 這一行只在 `langgraph` 下建（native 不建存檔點，[#2360](https://github.com/DemianLi/nexus-agent/issues/2360)）。字面跟著組裝點走；
+ * **建的是同一顆、只有這一處、不耐久**，這三件事變了才是門動了，要照失敗訊息裡那兩個目的地走。
  */
 const THE_ONLY_SAVER = [
-  'apps/harness/src/assembly-root.ts: const checkpointer = new PrunedMemorySaver();',
+  "apps/harness/src/assembly-root.ts: const checkpointer = invocation.agentLoop === 'native' ? undefined : new PrunedMemorySaver();",
 ];
 
 /**

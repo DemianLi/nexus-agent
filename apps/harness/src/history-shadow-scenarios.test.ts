@@ -59,6 +59,7 @@ async function assemble(
     readonly recursionLimit?: number;
     readonly wrapAgent?: (agent: PumpAgent) => PumpAgent;
     readonly source?: HistorySource;
+    readonly agentLoop?: 'langgraph';
   } = {},
 ) {
   const outcomes: HistoryShadowOutcome[] = [];
@@ -74,6 +75,7 @@ async function assemble(
     modelLimits: () => ({ contextWindow: 32_768, maxOutputTokens: 4096 }),
     historySource: options.source ?? 'shadow',
     historyShadow: tally,
+    ...(options.agentLoop !== undefined && { agentLoop: options.agentLoop }),
   });
   const agent = built.agent as unknown as PumpAgent;
   const pump = new ThreadPump(options.wrapAgent?.(agent) ?? agent, 'history-shadow-scenarios');
@@ -120,12 +122,14 @@ describe('patch-closer', () => {
       },
     });
 
+  // 存檔點寫不進去是 `langgraph` 才有的情境：native 沒有存檔點，補結經 `appendLoggedMessages` 接進快取。
   it('補結只寫進日誌、存檔點沒有：下一輪請求是基座那句、推導是「還沒開始」，記成 patch-closer', async () => {
     const model = new ScriptedChatModel({ turns: [TWO_CALLS, { content: '好。' }] });
     const { pump, tally, outcomes } = await assemble(model, {
       plugins: [PINGS],
       recursionLimit: FAILS_BEFORE_TOOLS,
       wrapAgent: noUpdateState,
+      agentLoop: 'langgraph',
     });
     await pump.submit({ kind: 'message', text: '跑' }).catch(() => undefined);
     await pump.whenIdle();
