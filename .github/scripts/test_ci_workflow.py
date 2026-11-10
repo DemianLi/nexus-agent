@@ -549,6 +549,28 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
 
+    def test_runs_thread_search_under_per_thread(self) -> None:
+        """內容搜尋在 per-thread 下搜之前先排空（#2689）：`NEXUS_E2E_PROCESS_MODEL` 沒設時那一檔照 single 跑、照樣綠，所以 env 要釘。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
+        self.assertEqual(
+            step['run'],
+            "pnpm --filter @nexus/harness exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'",
+        )
+        self.assertEqual(step['env']['NEXUS_E2E_PROCESS_MODEL'], 'per-thread')
+        self.assertEqual(
+            step['env']['NEXUS_SUPERVISOR_BIN'],
+            '${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor',
+        )
+
+    def test_per_thread_thread_search_filter_matches_one_test(self) -> None:
+        """`-t` 篩不到任何一支時 vitest 4 回 exit 0（全部 skipped），測試改名後這一步會靜靜變綠：名字要恰好對到一支 it。"""
+        step = next(s for s in self.job['steps'] if s.get('name') == 'per-thread 跑內容搜尋')
+        name = re.search(r"-t '([^']+)'", step['run']).group(1)
+        source = (ROOT / 'apps/harness/src/serve-thread-search.test.ts').read_text(encoding='utf-8')
+        titles = re.findall(r"^\s*it\('([^']*)'", source, re.MULTILINE)
+        matched = [title for title in titles if name in title]
+        self.assertEqual(len(matched), 1, matched)
+
     def test_builds_whenever_packed_install_runs(self) -> None:
         """包裡的 spawner 是這個 job 編的：develop → main 的 PR 只改 TypeScript 也要編。"""
         result = plan_ci.plan(['apps/harness/src/a.ts'], 'pull_request', 'main')

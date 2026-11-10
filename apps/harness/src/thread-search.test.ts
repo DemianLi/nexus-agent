@@ -1215,3 +1215,85 @@ describe('活的 thread 讀記憶體（#1599）', () => {
     await engine.close();
   });
 });
+
+describe('列之前的排空鉤子（#2689）', () => {
+  /** 數 `list` 叫了幾次的 store：一次就穩的搜尋是兩次（列一次、提交前再列一次）。 */
+  function countingStore(directory: string): { store: SessionStore; lists: () => number } {
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    return {
+      store: {
+        list: (options) => {
+          lists += 1;
+          return inner.list(options);
+        },
+        open: (id, mode) => inner.open(id, mode),
+        create: (header) => inner.create(header),
+        resume: (id) => inner.resume(id),
+      },
+      lists: () => lists,
+    };
+  }
+
+  it('鉤子在列之前：它寫下的新 thread 這一次就搜得到，而且一次就穩、不重來', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('先有的').events);
+    const { store, lists } = countingStore(directory);
+    const order: string[] = [];
+    const engine = search(undefined, {
+      store,
+      beforeList: async () => {
+        order.push(`鉤子（此時列過 ${String(lists())} 次）`);
+        await writeThread(directory, 'b', said('排空才寫下的暗號').events);
+      },
+    });
+    expect(await ids(engine, '排空才寫下的暗號')).toEqual(['b']);
+    expect(order).toEqual(['鉤子（此時列過 0 次）']);
+    expect(lists()).toBe(2);
+    await engine.close();
+  });
+
+  it('openAt: never 不叫（回 not_supported 的搜尋不為它請對話行程排空）；沒接落盤也不叫', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('有東西').events);
+    const beforeList = vi.fn(() => Promise.resolve());
+    const never = search(directory, { openAt: 'never', beforeList });
+    await expect(never.search('有東西')).rejects.toMatchObject({ kind: 'disabled' });
+    const detached = search(undefined, { beforeList });
+    expect((await detached.search('有東西')).items).toEqual([]);
+    expect(beforeList).not.toHaveBeenCalled();
+    await never.close();
+    await detached.close();
+  });
+
+  it('鉤子拋了：當沒排空，照舊冷讀回結果', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('盤上的暗號').events);
+    const engine = search(directory, { beforeList: () => Promise.reject(new Error('排空壞了')) });
+    expect(await ids(engine, '盤上的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('鉤子收到搜尋的 signal；排空途中中止，搜尋回 aborted、不列', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('有東西').events);
+    const { store, lists } = countingStore(directory);
+    const controller = new AbortController();
+    const reason = new Error('客戶端斷線');
+    const engine = search(undefined, {
+      store,
+      beforeList: (signal) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort(reason);
+        return Promise.resolve();
+      },
+    });
+    const outcome = await engine
+      .search('有東西', controller.signal)
+      .catch((error: unknown) => error);
+    expect(outcome).toBeInstanceOf(ThreadSearchError);
+    expect(outcome).toMatchObject({ kind: 'aborted', cause: reason });
+    expect(lists()).toBe(0);
+    await engine.close();
+  });
+});

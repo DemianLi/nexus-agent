@@ -139,7 +139,11 @@ import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
 import { forwardedFromClosingFront } from './forwarded-principal.js';
-import { createFrontWireHandler, threadActivityOverSocket } from './front-wire.js';
+import {
+  createFrontWireHandler,
+  flushLiveThreadsOverSocket,
+  threadActivityOverSocket,
+} from './front-wire.js';
 import type { FrontForwarder } from './front-forward.js';
 import type { FrontFeed } from './front-feed.js';
 import { TurnFailureOutbox, type FrontTurnFailures } from './front-turn-failures.js';
@@ -1475,6 +1479,14 @@ async function startServer(
           ...(sessionStore !== undefined && { store: sessionStore }),
           // 活的 thread 讀記憶體（#1599）：表在下面建的 handler 手上，搜尋只經 handler 進來，叫到時它一定在了（同 `OpsMetrics` 那一支）。
           liveThreads: () => handler.liveThreads(),
+          // per-thread 的前台手上沒有活的 thread（上一行恆為空），日誌在對話行程的批次窗口裡：搜之前請它們先排空（#2689）。
+          ...(options.front !== undefined && {
+            beforeList: flushLiveThreadsOverSocket(
+              options.front.supervisor,
+              options.front.forwarder,
+              warn,
+            ),
+          }),
         })
       : undefined;
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。

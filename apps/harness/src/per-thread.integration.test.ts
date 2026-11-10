@@ -505,6 +505,7 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
       ['turn-failures', 'GET'],
       ['fork-seed', 'POST'],
       ['fork-adopt', 'POST'],
+      ['flush', 'POST'],
     ] as const) {
       const response = await fetchAsOwner(`${origin}/internal/threads/thread-i/${action}`, {
         method,
@@ -733,6 +734,45 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
         `搜尋 ${String(tally.searches)} 次，對帳不穩 ${String(tally.unstable)} 次`,
     );
     expect(tally.unstable).toBeLessThan(tally.searches / 20);
+  }, 180_000);
+
+  it('搜之前排空的來回：活著的對話行程 0、1、4 條各搜 20 次，印出多花多少', async () => {
+    // 量測用新起的一台：講過話的 thread 下行關掉後監督行程不收它，前面幾支留下的行程會混進「活著幾條」。
+    // 只讀開的下行開著時行程不被收，關掉才收，所以用它控制活著的條數。
+    const running = await start(
+      [{ content: '回覆。' }],
+      `- id: thread-search\n  config:\n    openAt: startup\n`,
+    );
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    const timed = async (): Promise<string> => {
+      const took: number[] = [];
+      for (let i = 0; i < 20; i += 1) {
+        const began = performance.now();
+        const outcome = await client.searchThreads('replymarker');
+        took.push(performance.now() - began);
+        if (outcome.kind !== 'ok') throw new Error(outcome.message);
+      }
+      took.sort((a, b) => a - b);
+      return `中位數 ${String(Math.round(took[10]!))} ms、p95 ${String(Math.round(took[18]!))} ms`;
+    };
+    const flushCost: string[] = [];
+    expect(await settled(supervisor, 'conversation-process', WARM)).toHaveLength(WARM);
+    flushCost.push(`活著 0 條：${await timed()}`);
+    const held: AbortController[] = [];
+    for (const live of [1, 4]) {
+      while (held.length < live) {
+        const line = new AbortController();
+        await client.openEvents(`thread-flush-${String(held.length)}`, { signal: line.signal });
+        held.push(line);
+      }
+      expect(await settled(supervisor, 'conversation-process', live + WARM)).toHaveLength(
+        live + WARM,
+      );
+      flushCost.push(`活著 ${String(live)} 條：${await timed()}`);
+    }
+    for (const line of held) line.abort();
+    console.log(`[#2689 排空來回] ${flushCost.join('；')}`);
   }, 180_000);
 
   it('沒有行程的 thread：run.cancel 照 single 回受理、不起行程；評分要寫日誌，起一個', async () => {

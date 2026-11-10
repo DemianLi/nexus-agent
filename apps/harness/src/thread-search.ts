@@ -24,6 +24,9 @@
  *   與提交之前各看一次活的 id 集合（`:555`）。任一不同就整段退回、重新列一次再來，最多 2 次，仍不穩是 `persistence-failed`。不活的那幾條
  *   也受這一道管：讀到一半檔被寫了（例如閒置撤出先離開 `ready`、最後的排空在後面），同一次搜尋裡就重讀，不等下一次。
  *
+ * **per-thread 的前台手上沒有活的 thread**（`liveThreads()` 恆為空，日誌在各對話行程裡）：列之前先叫 `beforeList`，請每條活著的對話行程
+ * 把批次窗口寫出去，之後全部冷讀（#2689）。沒有記憶體那份 header 可比，對不上的 header 只剩冷讀那一道。
+ *
  * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：dsh 的 live 那一組不看持久層有沒有它。我們的可見集合是列表，列表本身也不列
  * 它（web 把不在清單上的內容命中丟掉，`apps/web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
  *
@@ -368,6 +371,12 @@ export interface ThreadSearchOptions {
    * serve 在 wire handler 建好之後才拿得到，所以給的是一支延遲讀 handler 的函式。
    */
   readonly liveThreads?: () => readonly LiveThread[];
+  /**
+   * 列持久層之前叫一次（#2689）：per-thread 的前台拿它請每條活著的對話行程先排空，之後照舊冷讀。失敗由它自己記；拋了當沒排空，
+   * 搜尋照舊往下走。`openAt: never` 與沒接落盤時不叫。放在列之前而不是對帳之前：排空寫了檔，先列好的那一份 revision 就舊了，
+   * 第一次對帳一定對不上、白用掉一次穩定觀察。
+   */
+  readonly beforeList?: (signal?: AbortSignal) => Promise<void>;
   /** 載入 `node:sqlite`。測試換掉它來驗「`never` 一次都不載入」與「載不起來」。 */
   readonly loadSqlite?: () => Promise<Sqlite>;
 }
@@ -435,6 +444,10 @@ export class ThreadSearch {
     throwIfAborted(signal);
     const { store } = this.#options;
     if (store === undefined) return EMPTY;
+    if (this.#options.openAt !== 'never') {
+      await this.#options.beforeList?.(signal).catch(() => undefined);
+      throwIfAborted(signal);
+    }
     const visible = await this.#list(store, signal);
     if (visible.length === 0) return EMPTY;
     if (this.#options.openAt === 'never') {

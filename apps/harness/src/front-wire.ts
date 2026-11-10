@@ -8,7 +8,7 @@
  *   對話行程收到之後照樣再核一次；那一道拒絕時帶回原因，`access` 稽核由前台記（對話行程沒有稽核檔）。
  * - **嵌入版的 thread 下行由前台登記**（#2489）：開線先記 `opened`，每 {@link EmbedStreamGuard.intervalMs} 拿開線時的標頭重驗一次，
  *   驗不過就切掉往對話行程的那條、記 `cut`；收掉記 `closed`。對話行程收不到 cookie，重驗只能在這裡做。
- * - **前台自己答的**：列表、搜尋、全域下行（不指名 thread）、`@` 的會話候選（冷讀磁碟，看不到還沒落盤的事件）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
+ * - **前台自己答的**：列表、搜尋（搜之前請活著的對話行程排空，見 {@link flushLiveThreadsOverSocket}）、全域下行（不指名 thread）、`@` 的會話候選（冷讀磁碟，看不到還沒落盤的事件）；釘選與封存（整理檔只有前台一個寫的人）；`run.cancel` 在那條
  *   thread 沒有行程時（嵌入路由也一樣，本地答受理，同 single 取消一條沒在跑的）。評分一律轉送：它要寫那條 thread 的日誌，
  *   前台不載 thread，本地答只會是「還沒開過」。
  * - **打開方式**：開下行、讀歷史、附件、引用、變更的是 `read-only`，其餘（送指令、上傳）是 `run`。開著的下行讓對話行程不回報閒置；
@@ -632,6 +632,57 @@ export function threadActivityOverSocket(
       const response = await call(threadId, 'stop');
       await response?.body?.cancel();
     },
+  };
+}
+
+/** 搜尋前排空整段最多等多久（#2689）：到了就不等，照舊冷讀。 */
+export const SEARCH_FLUSH_TIMEOUT_MS = 1_000;
+
+/**
+ * 前台搜尋之前，請每條活著的對話行程把批次窗口裡的事件寫出去（#2689，`ThreadSearch` 的 `beforeList`）。
+ *
+ * - **只問行程表上已經有的**（`liveThreads`、`socketOf`），不 `ensure`：不為了搜尋起行程，也不讓監督行程重新計時閒置。
+ *   不經 `onForwarded`：搜尋不是這條 thread 的請求。
+ * - 各條並行，整段最多等 {@link SEARCH_FLUSH_TIMEOUT_MS}；`signal` 中止就不等。
+ * - **失敗不擴大**：拒絕、逾時、非 2xx、行程剛好走了，都只記一行，搜尋照舊冷讀（等於沒有排空）。`signal` 中止不記，由搜尋自己回中止。
+ *   回的函式永不 reject。
+ */
+export function flushLiveThreadsOverSocket(
+  supervisor: Pick<SupervisorClient, 'liveThreads' | 'socketOf'>,
+  forwarder: Pick<FrontForwarder, 'forward'>,
+  warn: (message: string) => void,
+  timeoutMs = SEARCH_FLUSH_TIMEOUT_MS,
+): (signal?: AbortSignal) => Promise<void> {
+  return async (signal) => {
+    const targets = supervisor.liveThreads().flatMap((threadId) => {
+      const socket = supervisor.socketOf(threadId);
+      return socket === undefined ? [] : [{ threadId, socket }];
+    });
+    if (targets.length === 0) return;
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const stop = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+    const results = await Promise.allSettled(
+      targets.map(async ({ threadId, socket }) => {
+        const request = new Request(`http://localhost${internalThreadPath(threadId, 'flush')}`, {
+          method: 'POST',
+          signal: stop,
+        });
+        const response = await forwarder.forward(request, socket);
+        await response.body?.cancel();
+        if (!response.ok) throw new Error(`回 ${String(response.status)}`);
+      }),
+    );
+    if (signal?.aborted) return;
+    const failed = results.flatMap((result, index) =>
+      result.status === 'rejected'
+        ? [
+            `${targets[index]!.threadId}（${result.reason instanceof Error ? result.reason.message : String(result.reason)}）`,
+          ]
+        : [],
+    );
+    if (failed.length > 0) {
+      warn(`[搜尋] ${String(failed.length)} 條對話行程排空失敗，照舊冷讀：${failed.join('；')}`);
+    }
   };
 }
 

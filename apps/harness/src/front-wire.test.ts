@@ -20,7 +20,7 @@ import {
   PRINCIPAL_HEADER,
 } from './forwarded-principal.js';
 import { FrontForwarder } from './front-forward.js';
-import { createFrontWireHandler } from './front-wire.js';
+import { createFrontWireHandler, flushLiveThreadsOverSocket } from './front-wire.js';
 import { SupervisorClient } from './supervisor-client.js';
 import {
   decodeFrontRequest,
@@ -299,6 +299,7 @@ describe('createFrontWireHandler 的內部路由', () => {
       ['stop', 'POST'],
       ['fork-seed', 'POST'],
       ['fork-adopt', 'POST'],
+      ['flush', 'POST'],
     ] as const) {
       const response = await handler.handle(
         new Request(`http://nexus.test/internal/threads/t1/${action}`, {
@@ -676,5 +677,134 @@ describe('createFrontWireHandler 的嵌入下行收尾', () => {
     expect(streams.map(({ outcome }) => outcome)).toEqual(['opened', 'closed']);
     expect(streams[1]).toMatchObject({ by: 'server' });
     await expect.poll(() => upstream.closed).toEqual(['/embed/threads/t1/stream']);
+  });
+});
+
+describe('搜尋前請活著的對話行程排空（#2689）', () => {
+  /** 監督行程那一端：先講 `hello`，再對每一條送一顆 `up`（同前台重起時補講）。前台送出的框除了 `hello` 都記在 `requests`。 */
+  function supervisorWithLive(live: readonly (readonly [string, string])[]) {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const requests: string[] = [];
+    let pending = Buffer.alloc(0);
+    output.on('data', (chunk: Buffer) => {
+      const taken = takeFrames(Buffer.concat([pending, chunk]));
+      pending = Buffer.from(taken.rest);
+      for (const payload of taken.frames) {
+        const request = decodeFrontRequest(payload);
+        if (request.type !== 'hello') requests.push(request.type);
+      }
+    });
+    const client = new SupervisorClient({ input, output });
+    input.write(HELLO);
+    for (const [threadId, socket] of live) {
+      input.write(frame(encodeFrontEvent({ type: 'up', threadId, socket })));
+    }
+    cleanups.push(() => {
+      input.end();
+    });
+    return { client, requests };
+  }
+
+  async function liveTable(client: SupervisorClient, count: number): Promise<void> {
+    await vi.waitFor(() => expect(client.liveThreads()).toHaveLength(count));
+  }
+
+  function forwarderClosedAfter(): FrontForwarder {
+    const forwarder = new FrontForwarder();
+    cleanups.push(() => forwarder.close());
+    return forwarder;
+  }
+
+  it('每條活著的各送一次 POST flush；不 ensure、不 release，監督行程那邊一框都沒多', async () => {
+    const a = await conversation((_request, response) => response.writeHead(204).end());
+    const b = await conversation((_request, response) => response.writeHead(204).end());
+    const { client, requests } = supervisorWithLive([
+      ['t-a', a.socket],
+      ['t-b', b.socket],
+    ]);
+    await liveTable(client, 2);
+    const warnings: string[] = [];
+    await flushLiveThreadsOverSocket(client, forwarderClosedAfter(), (message) =>
+      warnings.push(message),
+    )();
+
+    expect(a.seen.map((request) => [request.method, request.url])).toEqual([
+      ['POST', '/internal/threads/t-a/flush'],
+    ]);
+    expect(b.seen.map((request) => [request.method, request.url])).toEqual([
+      ['POST', '/internal/threads/t-b/flush'],
+    ]);
+    // 不帶身分標頭：對話行程那一側的內部路由只給擁有者。
+    expect(a.seen[0]?.headers[PRINCIPAL_HEADER]).toBeUndefined();
+    expect(requests).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it('沒有活著的：一個請求都不送', async () => {
+    const { client } = supervisorWithLive([]);
+    const forward = vi.fn();
+    await flushLiveThreadsOverSocket(client, { forward }, () => undefined)();
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it('回 500 與行程剛好走了（socket 不在）：照樣回來，記一行點名兩條', async () => {
+    const failing = await conversation((_request, response) => response.writeHead(500).end());
+    const ok = await conversation((_request, response) => response.writeHead(204).end());
+    const { client } = supervisorWithLive([
+      ['t-500', failing.socket],
+      ['t-gone', join(tmpdir(), 'nexus-front-wire-no-such.sock')],
+      ['t-ok', ok.socket],
+    ]);
+    await liveTable(client, 3);
+    const warnings: string[] = [];
+    await flushLiveThreadsOverSocket(client, forwarderClosedAfter(), (message) =>
+      warnings.push(message),
+    )();
+
+    expect(ok.seen).toHaveLength(1);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('2 條對話行程排空失敗，照舊冷讀');
+    expect(warnings[0]).toContain('t-500（回 500）');
+    expect(warnings[0]).toContain('t-gone（');
+    expect(warnings[0]).not.toContain('t-ok');
+  });
+
+  it('對話行程一直不回：到逾時就不等，記一行', async () => {
+    const stuck = await conversation(() => undefined);
+    const { client } = supervisorWithLive([['t-stuck', stuck.socket]]);
+    await liveTable(client, 1);
+    const warnings: string[] = [];
+    const began = performance.now();
+    await flushLiveThreadsOverSocket(
+      client,
+      forwarderClosedAfter(),
+      (message) => warnings.push(message),
+      50,
+    )();
+
+    expect(performance.now() - began).toBeLessThan(5_000);
+    expect(stuck.seen).toHaveLength(1);
+    expect(warnings).toEqual([
+      expect.stringContaining('1 條對話行程排空失敗，照舊冷讀：t-stuck（'),
+    ]);
+  });
+
+  it('搜尋自己中止：馬上回來，不記（中止由搜尋回）', async () => {
+    const stuck = await conversation(() => undefined);
+    const { client } = supervisorWithLive([['t-stuck', stuck.socket]]);
+    await liveTable(client, 1);
+    const warnings: string[] = [];
+    const controller = new AbortController();
+    const flushing = flushLiveThreadsOverSocket(
+      client,
+      forwarderClosedAfter(),
+      (message) => warnings.push(message),
+      60_000,
+    )(controller.signal);
+    await vi.waitFor(() => expect(stuck.seen).toHaveLength(1));
+    controller.abort(new Error('客戶端斷線'));
+    await flushing;
+    expect(warnings).toEqual([]);
   });
 });

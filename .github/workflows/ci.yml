@@ -531,6 +531,13 @@ jobs:
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+      # 「批次窗口裡那一句搜得到」用 per-thread 再跑一次（#2689）：靠前台搜之前請對話行程排空。只跑這一支，同檔其餘測的是前台搜尋本身，與行程模型無關。
+      # 沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘；`-t` 篩不到任何一支時 vitest 照樣 exit 0，test_ci_workflow.py 釘住這個名字還在。
+      - name: per-thread 跑內容搜尋
+        run: pnpm --filter @nexus/harness exec vitest run src/serve-thread-search -t '批次窗口裡的那一句都搜得到'
+        env:
+          NEXUS_E2E_PROCESS_MODEL: per-thread
+          NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
 
   # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
