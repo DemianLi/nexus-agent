@@ -24,8 +24,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import {
   closedSessionEvents,
   rewriteSessionHeader,
@@ -676,9 +676,9 @@ describe('重開 server 之後接得回同一條 thread', () => {
   });
 
   /**
-   * **`serve.ts` 把 header 記的工作區根轉交給路由那一行，唯一的觀察點**
+   * **`serve-run.ts` 把 header 記的工作區根轉交給路由那一行，唯一的觀察點**
    * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。`deliverable-files.test.ts`
-   * 那一組全部自己手搭 `createAgent`、直接交那一格，所以拔掉 `serve.ts` 那三行它一條都不紅，
+   * 那一組全部自己手搭 `createAgent`、直接交那一格，所以拔掉 `serve-run.ts` 那三行它一條都不紅，
    * 而真的 serve 上每一顆重播的交付都會 404——跟 `workspaceRoot` 當初量到的是同一個病。
    *
    * **兩條臂只差 header 有沒有那一格**，其餘一個位元組都不動；兩條都是 404，分得開它們的只有

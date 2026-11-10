@@ -25,8 +25,8 @@ import { readJournal } from './plugin-journal.js';
 import type { JournalRecord } from './plugin-journal.js';
 import { pluginSnapshotPath } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const temporary: string[] = [];
 const roots: CordisRoot[] = [];

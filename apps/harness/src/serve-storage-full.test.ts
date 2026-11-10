@@ -1,7 +1,7 @@
 /**
  * 磁碟滿的探針，**從 `runServe` 起量**（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）。
  *
- * `storage-probe.test.ts` 與 `ops-endpoints.test.ts` 量零件；這一檔量接線：`serve.ts` 列了哪些路徑、
+ * `storage-probe.test.ts` 與 `ops-endpoints.test.ts` 量零件；這一檔量接線：`serve-run.ts` 列了哪些路徑、
  * 探針有沒有接上 `/readyz` 與 `/metrics`。測試機的磁碟滿不了，所以只換 `statfs`。
  */
 
@@ -16,8 +16,8 @@ import { bodyLog } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { METRICS_TOKEN_FILE } from './metrics-token.js';
 import { resolveThreadRootsBase } from './thread-roots.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const fullPath = vi.hoisted(() => ({ value: undefined as string | undefined }));
 

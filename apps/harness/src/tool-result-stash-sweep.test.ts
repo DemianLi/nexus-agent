@@ -21,8 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { runCli } from './cli.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const sweep = vi.hoisted(() => ({ cleanup: vi.fn<() => Promise<number>>() }));
 

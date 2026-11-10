@@ -16,7 +16,11 @@
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
- *    首頁 200 且是網頁 index、Linux 上第二台 serve 被 home 鎖拒絕、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
+ *    首頁 200 且是網頁 index、Linux 上第二台 serve 被 home 鎖拒絕、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0；
+ * 7. **給了 `--supervisor` 才跑**（[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：同一個 `lib/serve.js` 以 `per-thread` 起，
+ *    監督行程用 `--supervisor` 指的那一支（旁邊要有 `nexus-host`，產物不帶這兩支）。跟步驟 6 同一套檢查，另外要等到監督行程底下有
+ *    安裝樹裡的 `lib/front-process.js` 與 `lib/conversation-process.js` 各自跑著（監督行程預熱的那一條，不必開 thread）。
+ *    發版的 workflow 不給這個旗標，只有 CI 的 packed-install 給。
  *
  * 子行程環境清掉 `NODE_OPTIONS`、`NODE_PATH`、`TSX_TSCONFIG_PATH`，`NEXUS_AGENT_HOME`／`HOME` 指進暫存目錄，`cwd` 在 repo 外。
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
@@ -24,7 +28,7 @@
  * 步驟 3 到 6 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
  * `apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
  *
- * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty]`。
+ * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty] [--supervisor <nexus-supervisor>]`。
  *
  * @module
  */
@@ -464,7 +468,7 @@ export function strayProcesses(dir: string): { lines: string[]; problem?: string
  */
 export async function verifyPackedInstall(
   tarball: string,
-  options: { expectCommit?: string; allowDirty?: boolean } = {},
+  options: { expectCommit?: string; allowDirty?: boolean; supervisor?: string } = {},
 ): Promise<string[]> {
   const problems: string[] = [];
   problems.push(...checksumProblems(tarball));
@@ -649,6 +653,15 @@ export async function verifyPackedInstall(
           )
         : [];
     problems.push(...(await smokeInstalledServe(root, work, env, scratch, {}, whileServing)));
+
+    // 7. per-thread
+    if (options.supervisor !== undefined) {
+      problems.push(
+        ...(await smokeInstalledPerThread(root, work, scratch, options.supervisor)).map(
+          (problem) => `per-thread：${problem}`,
+        ),
+      );
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -679,10 +692,11 @@ export async function smokeInstalledServe(
   env: NodeJS.ProcessEnv,
   scratch: string,
   timeouts: ServeSmokeTimeouts = {},
-  whileServing: () => string[] = () => [],
+  whileServing: (pid: number) => string[] | Promise<string[]> = () => [],
+  args: readonly string[] = [],
 ): Promise<string[]> {
   const problems: string[] = [];
-  const child = spawn(process.execPath, [join(root, 'lib/serve.js'), '--port', '0'], {
+  const child = spawn(process.execPath, [join(root, 'lib/serve.js'), '--port', '0', ...args], {
     cwd: work,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -740,7 +754,7 @@ export async function smokeInstalledServe(
       } catch (error) {
         problems.push(`打首頁失敗：${(error as Error).message}`);
       }
-      problems.push(...whileServing());
+      problems.push(...(await whileServing(child.pid!)));
     }
     const stray = strayProcesses(scratch);
     if (stray.problem !== undefined) problems.push(stray.problem);
@@ -766,18 +780,90 @@ export async function smokeInstalledServe(
   return problems;
 }
 
+/**
+ * 步驟 7b：監督行程底下要有安裝樹裡的前台與對話行程各一支以上。
+ *
+ * @param commandLines - 監督行程每個子行程的命令列（引數以空白相接）。
+ * @param lib - 安裝樹的 `lib/`，取真實路徑（子行程的入口是 `sibling()` 從真實路徑算出來的）。
+ */
+export function perThreadChildrenProblems(commandLines: readonly string[], lib: string): string[] {
+  const problems: string[] = [];
+  for (const entry of ['front-process.js', 'conversation-process.js']) {
+    const path = join(lib, entry);
+    if (!commandLines.some((line) => line.split(' ').includes(path))) {
+      problems.push(`監督行程底下沒有跑著 ${path}：${JSON.stringify(commandLines.slice(0, 4))}`);
+    }
+  }
+  return problems;
+}
+
+/** `pid` 的每個子行程的命令列（`/proc`，只在 Linux）。 */
+function childCommandLines(pid: number): string[] {
+  const lines: string[] = [];
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/u.test(name)) continue;
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+      if (ppid !== pid) continue;
+      lines.push(readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0').join(' ').trim());
+    } catch {
+      // 行程剛走。
+    }
+  }
+  return lines;
+}
+
+/**
+ * 步驟 7：以 `per-thread` 起已安裝的 `lib/serve.js`，home 另開一份（不跟步驟 6 共用）。
+ *
+ * @param supervisor - `nexus-supervisor` 的路徑；啟動器在它旁邊找 `nexus-host`。
+ */
+async function smokeInstalledPerThread(
+  root: string,
+  work: string,
+  scratch: string,
+  supervisor: string,
+): Promise<string[]> {
+  if (process.platform !== 'linux')
+    return ['--supervisor 只在 Linux 上給得了（per-thread 只在 Linux 起得來）'];
+  const home = join(scratch, 'home-per-thread');
+  mkdirSync(home, { recursive: true });
+  const patch = join(scratch, 'per-thread.patch.yml');
+  writeFileSync(
+    patch,
+    `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${JSON.stringify(supervisor)}\n`,
+  );
+  const lib = join(realpathSync(root), 'lib');
+  const whileServing = async (pid: number): Promise<string[]> => {
+    // 預熱的對話行程是監督行程在前台起來之後才背景補的：等一下，不是一看沒有就算壞。
+    const deadline = Date.now() + 30_000;
+    let problems = perThreadChildrenProblems(childCommandLines(pid), lib);
+    while (problems.length > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      problems = perThreadChildrenProblems(childCommandLines(pid), lib);
+    }
+    return problems;
+  };
+  return smokeInstalledServe(root, work, cleanEnv(home), scratch, {}, whileServing, [
+    '--patch',
+    patch,
+  ]);
+}
+
 if (import.meta.main) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       'expect-commit': { type: 'string' },
       'allow-dirty': { type: 'boolean', default: false },
+      supervisor: { type: 'string' },
     },
   });
   const [tarball] = positionals;
   if (tarball === undefined) {
     console.error(
-      '用法：pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty]',
+      '用法：pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty] [--supervisor <nexus-supervisor>]',
     );
     process.exit(2);
   }
@@ -785,13 +871,14 @@ if (import.meta.main) {
   const problems = await verifyPackedInstall(tarball, {
     ...(expectCommit === undefined ? {} : { expectCommit }),
     ...(values['allow-dirty'] ? { allowDirty: true } : {}),
+    ...(values.supervisor === undefined ? {} : { supervisor: values.supervisor }),
   });
   if (problems.length > 0) {
     for (const problem of problems) console.error(`verify-packed-install：${problem}`);
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、spawner 的鎖、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、spawner 的鎖、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0${values.supervisor === undefined ? '' : '；per-thread 的前台與對話行程照產物起得來'}。`,
     );
   }
 }

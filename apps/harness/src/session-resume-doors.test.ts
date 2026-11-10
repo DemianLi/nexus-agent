@@ -37,7 +37,7 @@
  * ## 這條絆索釘得到什麼、釘不到什麼
  *
  * 下面第一層掃的是**整棵樹上「誰 `new` 了一顆 checkpointer」**，不是「`assembly-root.ts` 那一行還在
- * 不在」。今天的答案是恰好一處，而那一處在 `createCliAgent` 裡——**`serve.ts` 走的是同一個
+ * 不在」。今天的答案是恰好一處，而那一處在 `createCliAgent` 裡——**`serve-run.ts` 走的是同一個
  * 組裝點**（它呼叫 `createCliAgent`，不自己 `createNexusAgent`），所以釘一處就把 CLI 與 web
  * 兩條產品路徑都蓋住了。
  *

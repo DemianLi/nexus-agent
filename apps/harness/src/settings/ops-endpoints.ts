@@ -2,12 +2,12 @@
  * serve 的**探針與指標端點的設定條目**（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)）。端點本體見 `../ops-endpoints.ts`。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-capacity`、`memory-gauge`：值由 `startupSetting` 在起動期讀出來，
- * 交給 `serve.ts` 組路由。**改了要重啟 serve**（分類 `startup-read`，`plugin-row-classes.ts`）。
+ * 交給 `serve-run.ts` 組路由。**改了要重啟 serve**（分類 `startup-read`，`plugin-row-classes.ts`）。
  *
  * - **探針**（`/livez`、`/readyz`）預設開、免登入，本文只有狀態字（Q1 (a)）。
  * - **指標**（`/metrics`）預設關；打開後要 `Authorization: Bearer <token>`，token 在 `tokenFile`（預設 `<home>/metrics-token`，`0600`，沒有就建）。
  * - **收尾時間窗**（`probes.drainMs`，#1777）：`close()` 立旗後先讓 listener 照常在聽一小段時間，`/readyz` 才有機會回 `503 closing`；
- *   見 `serve.ts` 的 `close`。
+ *   見 `serve-run.ts` 的 `close`。
  *
  * 關掉這一列（`disabled: true`）等於沒有這一列、值回到預設：探針開、指標關。要連探針也關，把 `probes.enabled` 設成 `false`。
  *

@@ -19,8 +19,8 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { SessionEvent } from '@nexus/core';
 import { toLoggedMessage } from '@nexus/core';
 
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import {
   exchangeServeToken,
   fetchWithCookie,

@@ -69,8 +69,8 @@ describe('splitServeArgv', () => {
 });
 
 describe('SERVE_FLAG_TAKES_VALUE', () => {
-  it('跟 serve.ts 的 parseServeArgs 同一張表：旗標一樣多、收不收值一樣', () => {
-    const source = readFileSync(join(import.meta.dirname, 'serve.ts'), 'utf8');
+  it('跟 serve-run.ts 的 parseServeArgs 同一張表：旗標一樣多、收不收值一樣', () => {
+    const source = readFileSync(join(import.meta.dirname, 'serve-run.ts'), 'utf8');
     const block = /export function parseServeArgs[\s\S]*?options: \{([\s\S]*?)\n {6}\},/u.exec(
       source,
     )?.[1];

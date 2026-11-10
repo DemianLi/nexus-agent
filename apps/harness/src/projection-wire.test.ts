@@ -35,8 +35,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { historyPage } from './conversation-history.js';
 import { serveClient } from './fixtures.js';
 import { TOY_PROJECTION_KEY, TOY_PROJECTION_VERSION, toyUnit } from './projection-toy.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 

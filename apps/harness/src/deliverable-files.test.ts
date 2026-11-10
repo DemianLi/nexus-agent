@@ -18,7 +18,7 @@
  *
  * **走產品組裝**（#670）：agent 是 `createCliAgent`（出貨清單、組裝點建的 backend 與沙箱控制器）組的，模型換成清單上的腳本
  * 提供者；handler 這一層（上限、續接的 seed、header 記的根、錨）由測試明著給，因為那幾格正是各條測試要變動的東西。
- * `workspaceRoot` 取自 `createCliAgent` 回傳的那一個，就是 `serve.ts` 轉交的那一個。
+ * `workspaceRoot` 取自 `createCliAgent` 回傳的那一個，就是 `serve-run.ts` 轉交的那一個。
  *
  * **零憑證、零外部連線**：模型是腳本，工作區是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
@@ -60,8 +60,8 @@ import {
   TEST_BROWSER_AUTH,
   withScriptedModel,
 } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -365,17 +365,17 @@ describe('預覽', () => {
     /**
      * **serve 那條線的結構性檢查，行為那一半在 `serve-scripted-provider.test.ts`。**
      *
-     * 上面四條證的是「`createWireHandler` 收到什麼就用什麼」。缺的那一步是「`serve.ts` 起動期
+     * 上面四條證的是「`createWireHandler` 收到什麼就用什麼」。缺的那一步是「`serve-run.ts` 起動期
      * 解出來的那一份，真的傳給了 handler」。以前那一步**在 serve 上觀察不到**：要看見它就得有一個
      * 宣告過的交付檔，而不帶 `--live` 的假模型腳本（`CLI_SCRIPT`）一次都不呼叫 `present`——#536 量過，
-     * 把 `serve.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套 1234 條全綠。
+     * 把 `serve-run.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套 1234 條全綠。
      *
      * [#670](https://github.com/DemianLi/nexus-agent/issues/670) 之後有了行為測試：`serve-scripted-provider.test.ts` 在
      * 真的 `runServe` 上用 patch 換掉模型提供者、叫一次 `present`，上限調小的那一組讀不動。**這一條留著當第二道**：
      * 它便宜，而且擋的是同一次突變——那一行被刪掉、或那一列不再被解出來，這裡當場紅。
      */
     it('serve 起動期解出那一列，而且真的傳給 handler', async () => {
-      const source = await readFile(new URL('./serve.ts', import.meta.url), 'utf8');
+      const source = await readFile(new URL('./serve-run.ts', import.meta.url), 'utf8');
       expect(source).toContain('startupSetting(plugins, deliverableFilesPlugin)');
       // `createWireHandler({` 那一段裡要有它——不是檔案裡任何地方有這個字就算。
       const call = source.slice(source.indexOf('createWireHandler({'));
@@ -656,7 +656,7 @@ describe('錨', () => {
   /**
    * **這一道今天永遠不會響**：`assertSameWorkspaceRoot` 在續接那一刻就擋下了不等的情形，所以
    * 產品路徑上 `resumedWorkspaceRoot` 與 `workspaceRoot` 只要都有值就相等。留著它是為了讓那個
-   * 保證**有觀察點**——守衛哪天鬆掉、或 `serve.ts` 的轉交被換成別的值，這裡當場拒，而不是
+   * 保證**有觀察點**——守衛哪天鬆掉、或 `serve-run.ts` 的轉交被換成別的值，這裡當場拒，而不是
    * 靜靜去另一個工作區讀同名檔。拿掉這三行，這條測試是唯一會紅的東西。
    */
   it('線以下的事件，header 記的是別的根：拒，而且訊息指名兩個根', async () => {
@@ -812,7 +812,7 @@ describe('真的 serve 上，錨從組裝點傳到方法', () => {
    * **這一組不驗讀得到什麼，只驗錨有沒有到。**
    *
    * 上面每一條測試都自己手搭 `createAgent`、直接交 `workspaceRoot`，所以
-   * `createCliAgent` 回傳它、`serve.ts` 轉交它那兩行**完全沒有觀察點**——量過：兩行都拔掉，
+   * `createCliAgent` 回傳它、`serve-run.ts` 轉交它那兩行**完全沒有觀察點**——量過：兩行都拔掉，
    * 全樹 1169 條一條都不紅，而真的 serve 上每一顆交付都會被拒。
    *
    * 判別靠的是兩句不同的拒絕：錨到了，才問得到「那個 seq 上沒有交付宣告」；錨沒到，講的是

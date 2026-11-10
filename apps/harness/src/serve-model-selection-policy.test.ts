@@ -15,8 +15,8 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const ON = 'src/settings/model-selection-on.patch.yml';

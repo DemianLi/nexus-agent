@@ -268,7 +268,7 @@ const ignore = (): void => undefined;
  * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
  *
  * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise。行程層我們現在和 dsh 一樣大聲死
- * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve.ts` 的 `main()`），
+ * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve-run.ts` 的 `main()`），
  * 所以這裡標掉的是**已知會產生的孤兒**，不是替行程層的 handler 讓路：沒標到的 rejection 會被那個 handler
  * 當成致命失敗收尾、以 1 結束。代價是這裡**依賴投影的形狀**：哪天 langchain 加一種帶 promise 的原生
  * 投影，這裡會漏，而漏的後果現在是行程以 1 結束（帶標籤診斷），不再是 Node 預設的無診斷崩潰。
@@ -1507,7 +1507,7 @@ export class ThreadPump {
    *   `--resume`）。省略即一份新日誌。
    * @param toolText - `tool-text` 那一列（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）：工具結果 meta 與壓縮摘要
    *   放上線的上限；結果文字本身自 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不截。
-   *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
+   *   值由 `serve-run.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
    *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
    * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。來路與
    *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋只剩一行 warn，標題永遠寫不出來。
@@ -1518,7 +1518,7 @@ export class ThreadPump {
    * @param sessionReferences - 讀被引用的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**省略即這條
    *   thread 不收引用**：帶引用的話會被 {@link ThreadPump.referencedText} 擋下。
    * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
-   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
+   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve-run.ts` 在起動期解出來、
    *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
    * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
    *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，

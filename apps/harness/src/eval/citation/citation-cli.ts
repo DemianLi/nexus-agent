@@ -21,7 +21,7 @@ import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promise
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveClient, foldTurn } from '../../fixtures.js';
-import { runServe } from '../../serve.js';
+import { runServe } from '../../serve-run.js';
 import { packBlind, unpackLabels } from './blind.js';
 import type { BlindKey } from './blind.js';
 import { GROUPS, MODE_ENV, QUESTIONS, SERVER_NAME } from './fixture.js';

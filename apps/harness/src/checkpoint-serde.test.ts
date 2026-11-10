@@ -40,8 +40,8 @@ import { NESTING_TOO_DEEP_CODE } from './live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, FakeEndpoint, Reply, WireMessage } from './log-derived-history.fixture.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-checkpoint-serde');
 

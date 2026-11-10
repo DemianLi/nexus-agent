@@ -242,7 +242,7 @@ export async function locateDeliverableFile(
  * @param located - 已經通過閘門的檔。
  * @param limits - 這台 server 的三個上限，起動期從 `#settings/deliverable-files` 那一列解出來
  *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。**這裡只讀不挑**：挑在
- *   `serve.ts`，因為上限是 server 的性質而這個模組一條 thread 都不認得。
+ *   `serve-run.ts`，因為上限是 server 的性質而這個模組一條 thread 都不認得。
  * @returns 原始位元組，或拒絕。
  */
 export async function readDeliverableBytes(

@@ -7,7 +7,7 @@
  * （`.agents/notes/archived/architecture/2026-08-13-session-content-search-opt-in.zh.md:10`）。demian 2026-09-26 拍板照做。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title-llm` 那一列：值由 `startupSetting` 在起動期讀出來，
- * 交給 `serve.ts` 建的那一份搜尋。理由與偏離見 `thread-title.ts` 的檔頭。
+ * 交給 `serve-run.ts` 建的那一份搜尋。理由與偏離見 `thread-title.ts` 的檔頭。
  *
  * ## 三個值，同 dsh
  *

@@ -24,8 +24,8 @@ import { loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 import { signalPid } from './test-pids.fixture.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
 /** 假伺服器的工具在模型面的名字（`serverName` 是 `late`）。 */

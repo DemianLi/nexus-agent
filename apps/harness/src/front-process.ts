@@ -16,7 +16,7 @@ import { FrontFeed } from './front-feed.js';
 import { FrontPluginBindings } from './front-plugins.js';
 import { FrontForwarder } from './front-forward.js';
 import { FrontTurnFailures } from './front-turn-failures.js';
-import { installServeProcessLifecycle, runServe } from './serve.js';
+import { installServeProcessLifecycle, runServe } from './serve-run.js';
 import { SupervisorClient } from './supervisor-client.js';
 
 async function main(): Promise<void> {

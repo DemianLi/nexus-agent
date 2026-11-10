@@ -21,7 +21,7 @@ import {
 } from './config-schema-dump.js';
 import type { ConfigSchemaDump } from './config-schema-dump.js';
 import { composeEntries } from './plugin-config.js';
-import { parseServeArgs, runServe } from './serve.js';
+import { parseServeArgs, runServe } from './serve-run.js';
 
 const temporary: string[] = [];
 afterEach(() => {

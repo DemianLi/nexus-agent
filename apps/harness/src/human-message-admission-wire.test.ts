@@ -14,8 +14,8 @@ import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';

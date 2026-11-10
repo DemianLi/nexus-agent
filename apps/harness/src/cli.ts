@@ -685,7 +685,7 @@ export async function driveGoalRounds(
  * 這條 REPL 的答案必須含 `/exit`（不然清單漏掉一個真的打得出去的東西）；dsh 那種 composer
  * 選單的答案則**不該含 `/help`**（選單自己就是 help）。同一個註冊上去的 handler 生不出
  * 這兩份。而出貨的那份清單（`apps/harness/cordis.yml`）正是 `cli.ts` 與
- * [`serve.ts`](./serve.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
+ * [`serve-run.ts`](./serve-run.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
  * 的切法（見 {@link formatCommandHelp}）。
  *
  * 描述的口氣跟 plugin 註冊的那些對齊：一句話，說它做什麼。
@@ -1241,7 +1241,7 @@ async function runLaunched(
             historyShadow: createHistoryShadowTally((outcome) =>
               printer.error(`[歷史比對] ${outcome.kind}：${outcome.detail ?? ''}`),
             ),
-            // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+            // **這個入口沒有人在。** 收核准決定的介面在 web（`serve-run.ts` 那條刻意不傳這個），
             // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
             // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
             approvals: HEADLESS_APPROVALS,

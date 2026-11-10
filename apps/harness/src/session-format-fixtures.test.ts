@@ -637,7 +637,7 @@ describe('規則（驗收 D）', () => {
 
 describe('33→34 的讀方分支只有一份（#1797）', () => {
   // 入口改回自己寫一份 `recordedApprovalPolicy(...) ?? 'ask'` 時行為不變，入口層的續接測試抓不到，只能看原始碼。
-  it.each(['apps/harness/src/cli.ts', 'apps/harness/src/serve.ts'])(
+  it.each(['apps/harness/src/cli.ts', 'apps/harness/src/serve-run.ts'])(
     '%s 續接的核准政策呼叫 approvalPolicyOnResume，不自己讀日誌',
     (path) => {
       const source = readFileSync(join(REPO, path), 'utf8');

@@ -22,8 +22,8 @@ vi.mock('./agent-factory.js', async (importOriginal) => {
 });
 
 import { runCli } from './cli.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 let running: RunningServe | undefined;
 afterEach(async () => {

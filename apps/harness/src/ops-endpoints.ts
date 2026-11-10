@@ -5,7 +5,7 @@
  *
  * - **`/livez`**：handler 跑得到就回 `200 ok`。不查任何狀態——回得了，就代表事件圈在轉。
  * - **`/readyz`**：`200 ok` 是「在聽、收尾還沒開始、空間沒滿」；`503 closing` 是收尾已經開始（#1777：`close()` 立旗後 listener 還會照常在聽一段時間窗，
- *   見 `serve.ts`；沒有這段，`server.close()` 一開頭就斷掉所有連線，監控只會看到連不上，看不到 503）。**thread 數到上限不算沒就緒**：已經開著的 thread 照樣服務，
+ *   見 `serve-run.ts`；沒有這段，`server.close()` 一開頭就斷掉所有連線，監控只會看到連不上，看不到 503）。**thread 數到上限不算沒就緒**：已經開著的 thread 照樣服務，
  *   而且同一個 home 只有一台 serve（#1503），沒有別台可以分流。到上限要看指標。
  *   寫資料的地方滿了回 `503 storage-full`（#2195），先判 `closing`；釋放後下一次查就回 200，不用重啟。
  * - **`/metrics`**：Prometheus 文字格式 0.0.4，手寫。**名單固定、標籤不含 thread id 或路徑**，基數不隨使用者長。
@@ -255,7 +255,7 @@ function bearerOf(headers: Headers): string | undefined {
 }
 
 /**
- * 組探針與指標的處理器。呼叫端（`serve.ts` 的 `routeBySurface`）只把 {@link isOpsPath} 為真的請求交進來。
+ * 組探針與指標的處理器。呼叫端（`serve-run.ts` 的 `routeBySurface`）只把 {@link isOpsPath} 為真的請求交進來。
  *
  * @param options - 見 {@link OpsEndpointsOptions}。
  */

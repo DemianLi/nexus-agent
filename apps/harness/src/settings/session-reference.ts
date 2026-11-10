@@ -7,7 +7,7 @@
  * 三版這一段逐字相同）：四個值、同名、同範圍。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-search` 那一列：值由 `startupSetting` 在起動期讀出來，交給
- * `serve.ts`（候選上限）與 `createWireHandler`（引用上限與預算）。理由與偏離見 `thread-title.ts` 的檔頭。
+ * `serve-run.ts`（候選上限）與 `createWireHandler`（引用上限與預算）。理由與偏離見 `thread-title.ts` 的檔頭。
  *
  * ## 四個值，同 dsh
  *

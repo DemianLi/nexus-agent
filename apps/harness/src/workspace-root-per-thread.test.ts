@@ -2,7 +2,7 @@
  * **可寫根是逐條 thread 取得的**（[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)）：真的 `runServe`、真的 HTTP、出貨的組裝，
  * 「thread → 可寫根」那一支換成 A 回 X、B 回 Y（兩個都跟 `--workspace` 的根 D 不同）。
  *
- * **為什麼從 `runServe` 起量**（#1427）：手搭 `createAgent` 的測試自己把根傳進組裝，拿掉 `serve.ts` 那一行接線也不會紅。這一檔每一格都從產品入口讀出來：
+ * **為什麼從 `runServe` 起量**（#1427）：手搭 `createAgent` 的測試自己把根傳進組裝，拿掉 `serve-run.ts` 那一行接線也不會紅。這一檔每一格都從產品入口讀出來：
  *
  * | 格 | 怎麼讀 |
  * | --- | --- |
@@ -15,7 +15,7 @@
  * 突變（各自單獨做，結果記在 PR）：
  *
  * 1. `assembly-root.ts` 讀根那一行改回 `resolveWorkspaceRoot(invocation.workspace, cwd)`（不用入口交來的）→ 上面每一格 B 都變成 D，紅。
- * 2. `serve.ts` 的 `createAgent` 不把 `workspaceRoot` 傳進 `assembly.create` → 同上。
+ * 2. `serve-run.ts` 的 `createAgent` 不把 `workspaceRoot` 傳進 `assembly.create` → 同上。
  * 3. 續接守衛改回比 `--workspace` 的根 → 「續接守衛跟這條 thread 的根比」紅。
  *
  * **零憑證、零外部連線**：模型是腳本，目錄都在 `/var/tmp`。
@@ -31,8 +31,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionHeaderOf } from './session-files.fixture.js';
 
 const roots: string[] = [];

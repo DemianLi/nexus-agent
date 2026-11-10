@@ -15,8 +15,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';
 import { approvalAt, exchangeServeToken, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { DEFAULT_PORT, parseServeArgs, runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 /**
  * 進入點。
@@ -279,12 +279,12 @@ describe('serve 上的工具拋錯', () => {
 });
 
 /**
- * **這一條守的是 `serve.ts` 那一行組裝**，不是發派面本身——那一整套在
+ * **這一條守的是 `serve-run.ts` 那一行組裝**，不是發派面本身——那一整套在
  * [`slash-wire.test.ts`](./slash-wire.test.ts) 裡對著自己建的 handler 走完。
  * 這裡只問一件事：`createCliAgent` 回的那個註冊點有沒有真的一路傳到線上
  * （[#123](https://github.com/DemianLi/nexus-agent/issues/123) 之前它在這一行被丟掉）。
  *
- * 紅了而 `slash-wire.test.ts` 還綠著，代表發派面是好的、`serve.ts` 沒接上。
+ * 紅了而 `slash-wire.test.ts` 還綠著，代表發派面是好的、`serve-run.ts` 沒接上。
  */
 describe('serve 的命令面', () => {
   it('預設清單起的 server 上，瀏覽器打得到 /plan', async () => {
@@ -308,7 +308,7 @@ describe('serve 的命令面', () => {
 
   it('**每條 thread 各有各的目標**——`/goal` 在真的 serve 上找得到自己那一份', async () => {
     // 這一條同時是 `/goal` 那個「一份 registry 只接一份日誌」假設的實地驗收：
-    // `serve.ts` 每個 thread 呼叫一次 `createCliAgent`，所以各自一份 registry 一份日誌。
+    // `serve-run.ts` 每個 thread 呼叫一次 `createCliAgent`，所以各自一份 registry 一份日誌。
     // 假設破掉的話這裡不會靜靜串台，會直接收到 `goalAmbiguousMessage` 那句錯誤。
     //
     // **續行關掉**：開著的話 `/goal 把測試修綠` 之後 alpha 自己會開一輪（#661），第三次問 alpha 撞上就回「正在跑」。

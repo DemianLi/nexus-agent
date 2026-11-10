@@ -22,8 +22,8 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEventsOf } from './session-files.fixture.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));

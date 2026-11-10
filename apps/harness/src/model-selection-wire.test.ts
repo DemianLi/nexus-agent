@@ -26,8 +26,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const A = 'model-a';
 const B = 'model-b';

@@ -32,7 +32,7 @@ import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { createWireClient, THREADS_PATH } from '@nexus/wire';
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from '../jsonl-session-store.js';
-import { runServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
 import { listStoredThreads } from '../session-list.js';
 
 const LIMITS = { maxWords: 5, maxBytes: 40 };

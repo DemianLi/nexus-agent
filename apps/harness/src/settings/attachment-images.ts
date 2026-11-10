@@ -5,7 +5,7 @@
  *
  * 1. **只有一個鍵**：`imageCompressionConcurrency`，1 到 8 的整數，預設 2。一台主機多人共用，部署方照 CPU 調。
  *    規範化的總像素、長邊與位元組目標不開成設定，是出廠常數（`image-normalization.ts`）。
- * 2. **消費者在 server 起動期**：`serve.ts` 用 `startupSetting` 讀，交給 `AttachmentStore` 的建構子，一個行程一份，比任何一條 thread 都早。
+ * 2. **消費者在 server 起動期**：`serve-run.ts` 用 `startupSetting` 讀，交給 `AttachmentStore` 的建構子，一個行程一份，比任何一條 thread 都早。
  *
  * @module
  */

@@ -10,6 +10,10 @@
     "nexus-cli": "lib/cli.js",
     "nexus-plugin": "lib/plugin-cli.js"
   },
+  "exports": {
+    "./front-process": "./lib/front-process.js",
+    "./conversation-process": "./lib/conversation-process.js"
+  },
   "imports": {
     "#settings/*": "./lib/settings/*.js"
   },

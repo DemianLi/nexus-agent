@@ -1,11 +1,11 @@
 /**
  * **在真的 serve 上：上傳一份檔案，模型用 `read_file` 讀得到它**——[#732](https://github.com/DemianLi/nexus-agent/issues/732)
- * 第一張的產品路徑驗收（`attachment-upload.test.ts` 量的是 handler＋agent 的組合，這一檔量 `serve.ts` 的接線）。
+ * 第一張的產品路徑驗收（`attachment-upload.test.ts` 量的是 handler＋agent 的組合，這一檔量 `serve-run.ts` 的接線）。
  *
  * 做法同 `serve-scripted-provider.test.ts`：patch 換掉模型提供者，其餘全是真的——`runServe` 讀 `NEXUS_AGENT_HOME`、
  * 把附件儲存交給 wire handler 與每條 thread 的 agent、真的 wire client 上傳、真的 `read_file`。
  *
- * 突變：`serve.ts` 刪掉 `attachments: attachmentStore,`（agent 那一格）→ 「模型讀得到」紅；刪掉 handler 那一格 → 上傳回 `not_supported`。
+ * 突變：`serve-run.ts` 刪掉 `attachments: attachmentStore,`（agent 那一格）→ 「模型讀得到」紅；刪掉 handler 那一格 → 上傳回 `not_supported`。
  *
  * **零憑證、零外部連線**：模型是腳本，home 與工作區都是暫存目錄（放 `/var/tmp`）。
  */

@@ -2,7 +2,7 @@
  * **serve 的每條 thread 真的接上了不變量與遙測**——[#668](https://github.com/DemianLi/nexus-agent/issues/668)
  * 的突變驗收。
  *
- * 以前 `ThreadAgent` 上的接線口全是選配，`serve.ts` 少轉交 `attachInvariants` 或 `attachTelemetry`
+ * 以前 `ThreadAgent` 上的接線口全是選配，`serve-run.ts` 少轉交 `attachInvariants` 或 `attachTelemetry`
  * 既不報型別錯誤、`wire-handler.ts` 用 `?.()` 也不報執行期錯誤，而且沒有任何測試會紅：這個檔以前不存在，
  * web 路徑上的測試全是手搭 `ThreadAgent`。現在口只有一個而且必填（`AttachSessions`），這個檔補上**行為**那一半：
  * 走 `runServe`，插一顆探針，跑一輪，看探針的回音真的出來。
@@ -16,8 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { probeSink, resetProbeSink, WIRING_PROBE_PACKAGE } from './serve-session-wiring.fixture.js';
 
 const PATCH = new URL('./serve-session-wiring.patch.yml', import.meta.url).pathname;

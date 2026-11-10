@@ -1,5 +1,5 @@
 /**
- * per-thread 整支跑起來（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`serve.ts --process-model per-thread` 換成真的監督行程，
+ * per-thread 整支跑起來（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)）：`serve-run.ts --process-model per-thread` 換成真的監督行程，
  * 它起前台與每條 thread 的對話行程，wire 從前台的 port 打。模型換成腳本（`scripted-serve.ts` 那份 patch），讀不到 `.env`。
  *
  * 只在 Linux 跑，`NEXUS_SUPERVISOR_BIN` 指到 `nexus-supervisor`；沒設就跳過。

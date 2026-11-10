@@ -1,7 +1,7 @@
 /**
  * serve 的啟動器（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§八）：
  * `per-thread` 時把這個行程 `process.execve` 換成監督行程 `nexus-supervisor`，由它起前台（`front-process.ts`）與每條 thread 的
- * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve.ts` 照單行程起 server。
+ * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve-run.ts` 照單行程起 server。
  *
  * - **模式**：`--process-model` 旗標優先，再來是 `#settings/process-model` 那一列，都沒有就是 `single`。那一列只疊層、不載模組
  *   （`composeDefaultEntries`）：疊層失敗或那一列寫壞了，旗標沒給或明講 `single` 都當成 `single`，交給 `runServe` 報；旗標明講
@@ -71,7 +71,7 @@ const PRINT_ONLY_FLAGS = [
   'dump-default-config',
 ] as const;
 
-/** 一個 serve 旗標收不收值，跟 `serve.ts` 的 `parseServeArgs` 同一張表（`process-launcher.test.ts` 掃原始碼比對）。 */
+/** 一個 serve 旗標收不收值，跟 `serve-run.ts` 的 `parseServeArgs` 同一張表（`process-launcher.test.ts` 掃原始碼比對）。 */
 export const SERVE_FLAG_TAKES_VALUE: Readonly<Record<string, boolean>> = {
   live: false,
   patch: true,

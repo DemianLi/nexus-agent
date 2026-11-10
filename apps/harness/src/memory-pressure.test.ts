@@ -358,7 +358,7 @@ describe('讀不到就不判斷、不警告，也不當成 0%（驗收 D）', ()
   });
 });
 
-/** serve 實際掛的兩個來源（`serve.ts`）。 */
+/** serve 實際掛的兩個來源（`serve-run.ts`）。 */
 const BOTH: readonly PressureSource[] = [memoryUsageSource, heapUsageSource];
 
 describe('來源：V8 heap 已用 ÷ heap_size_limit（#1718 Q5）', () => {
