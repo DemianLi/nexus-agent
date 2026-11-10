@@ -711,7 +711,8 @@ const SYSTEM_PROMPT = '需要動用工具時就真的呼叫，不要只在文字
 
 /**
  * 這個組裝等不等得到答覆（`deriveApprovalChannel` 與 `FoldOptions.awaitsAnswer`）：CLI 與 serve 都有人在另一頭，兩個 loop 一樣。
- * 明著給，不從有沒有 checkpointer 推：native 不建 checkpointer，照推的話核准與問答會一起變成沒有管道。
+ * 明著給，不從有沒有 checkpointer 推：native 不建 checkpointer，照推的話核准與問答會一起變成沒有管道。`langgraph` 下給 `true`
+ * 卻沒有 checkpointer 時 fold 在組裝期拋，所以 checkpointer 哪天變成有條件，會當場紅，不會靜靜分岔。
  */
 const AWAITS_ANSWER = true;
 

@@ -3,7 +3,7 @@
  * 一條 thread 的 state 是那個 agent 行程內的快取。快取不在的時候——重啟之後、閒置逐出之後——下一輪只能從落盤的日誌灌回。
  * 冷復活（背景子代理）那一格在 `background-cold-e2e.test.ts`，per-thread 的在 `per-thread.integration.test.ts`。
  *
- * 每一條同時看兩件事：
+ * 前兩條同時看兩件事（第三條是對照：快取在時不灌，`seedThread` 零次，模型照樣收到上一輪）：
  *
  * - **走的是「快取是空的、只靠日誌」那條路**：`NativeAgent.seedThread` 只收快取是空的 thread（不是空的就拋），所以它在新開的那一刻被呼叫、
  *   沒拋，就是快取是空的、對話從日誌來。

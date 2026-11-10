@@ -1271,19 +1271,10 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * `wrapToolCall`**——兩個時刻在這裡是同一種機制的兩個
  * 陣列位置，而位置由這個檔案決定、不由註冊順序決定。索引見 `apps/harness/src/interception-index.test.ts`。
  *
- * **這一格取代了整個 `foldInterrupts`。** 舊版在這裡做四件事：工具名存在檢查、
- * 核准政策開關、缺 checkpointer 即拋、以及同工具多方標記逐欄位 OR。四件全部消失，
- * 而消失的原因各不相同，值得逐條說清楚（決議見
- * [#111](https://github.com/DemianLi/nexus-agent/issues/111)）：
- *
- * - **工具名存在檢查**：沒有主體了。閘門不再以工具名為 key，名字是執行當下拿到的。
- *   那條檢查當初的定位就寫著「止血不是根治」，根治的方式正是讓名字不再是宣告出來的。
- * - **核准政策開關**：從「建構期拋」變成「執行期確定性拒絕」——(c) 的拍板。
- * - **缺 checkpointer 即拋**：同上，變成另一個理由的確定性拒絕。**這一條不能只是刪掉**：
- *   實測沒有 checkpointer 時 `interrupt()` 是執行期拋 `No checkpointer set`，所以要在
- *   問人之前就攔下來，不是讓它炸。
- * - **多方標記 OR**：waterfall 本來就是這個語義的一般化——第一個回非 allow 的人決定，
- *   而且它回的是**自己的理由**，不是把幾個人的理由用「；」黏起來。
+ * 閘門不在建構期拋，在執行期確定性拒絕（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）：工具名不是宣告出來的，
+ * 閘門用執行當下拿到的名字；核准關掉與沒有管道各是一種確定性拒絕，在問人之前攔下（實測沒有 checkpointer 時 `interrupt()` 是執行期拋
+ * `No checkpointer set`）；同一工具被多方標記時，waterfall 第一個回非 allow 的人決定，回它自己的理由。唯一的組裝期檢查在
+ * {@link foldApprovalChannel}。
  *
  * `enabled` 與 `awaitsAnswer` 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */

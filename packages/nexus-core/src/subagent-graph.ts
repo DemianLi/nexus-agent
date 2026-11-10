@@ -1,5 +1,5 @@
 /**
- * 把 fold 交出的子代理規格編成一張**帶存檔點的圖**（`native` 下是 native agent，見〈native〉；[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
+ * 把 fold 交出的子代理規格編成一張**圖**（`langgraph` 帶存檔點，`native` 下是 native agent，見〈native〉；[#825](https://github.com/DemianLi/nexus-agent/issues/825)）。
  *
  * ## 為什麼要有這個出口
  *
@@ -37,7 +37,7 @@
  *
  * `loop: 'native'` 時同一疊 middleware 編成 native agent（`native-loop/agent.ts` 的 `background` 模式）：state 按 `thread_id` 留在
  * 那個實例的記憶體裡，不寫存檔點，所以「第二輪看得到第一輪」靠呼叫端快取同一個實例（`background-subagents.ts` 的 `#agentFor`）；
- * 行程重啟或換了實例，由冷復活從日誌灌回（`updateState`）。
+ * 行程重啟或換了實例，由冷復活從日誌灌回（`seedThread`，`background-cold.ts`）。
  *
  * @module
  */
@@ -128,13 +128,13 @@ export function mergeMiddlewareByName(
 }
 
 /**
- * 把一個子代理規格編成帶存檔點的圖。
+ * 把一個子代理規格編成一張圖：`langgraph` 帶存檔點，`native` 是 native agent。
  *
  * @param params - fold 交出的參數（用到規格清單、模型、backend、全域 deny 規則）。
  * @param name - 子代理名。
- * @param options - 存檔點，以及選填的模型覆寫。
+ * @param options - `langgraph` 的存檔點、loop，以及選填的模型覆寫。
  * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪（`native` 下要同一個實例）。
- * @throws 沒有這個子代理；規格是編好的 `runnable`、帶 `interruptOn`／`responseFormat`；缺工具、模型或 backend。
+ * @throws 沒有這個子代理；規格是編好的 `runnable`、帶 `interruptOn`／`responseFormat`；缺工具、模型或 backend；`langgraph` 下沒給 checkpointer。
  */
 export function compileSubagentGraph(
   params: SubagentGraphParams,
@@ -216,7 +216,9 @@ export function compileSubagentGraph(
     }) as unknown as SubagentGraph;
   }
   if (options.checkpointer === undefined) {
-    throw new Error(`背景子代理 "${declarative.name}" 走 langgraph 要有 checkpointer：沒有存檔點，第二輪就看不到第一輪`);
+    throw new Error(
+      `背景子代理 "${declarative.name}" 走 langgraph 要有 checkpointer：沒有存檔點，第二輪就看不到第一輪`,
+    );
   }
   return createAgent({
     model: model as never,

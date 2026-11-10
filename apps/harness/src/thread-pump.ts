@@ -299,7 +299,7 @@ function markSubagents(subagents: AsyncIterable<SubagentProjection>): void {
   })().catch(ignore);
 }
 
-/** 這條 thread 的 checkpoint 位址。 */
+/** 這條 thread 的位址。 */
 interface ThreadConfig {
   readonly configurable: { readonly thread_id: string };
 }
@@ -309,7 +309,10 @@ interface ThreadConfig {
  * 停在核准點時收回要知道哪幾顆呼叫還懸著、要把收回的結果寫進去；模型講到一半被切斷時要把使用者看到的那半段寫回對話。
  * `langgraph` 的圖經 checkpoint 讀寫（`getState`／`updateState`），native agent 經 `appendLoggedMessages`。
  */
-export interface PumpAgent {
+export type PumpAgent = PumpAgentBase & (CheckpointPumpAgent | LoggedPumpAgent);
+
+/** 兩個 loop 共有的那一面。 */
+interface PumpAgentBase {
   streamEvents(
     input: never,
     config: {
@@ -328,18 +331,27 @@ export interface PumpAgent {
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
   /** 這條 thread 的 state：`langgraph` 讀 checkpoint；native 是行程內快取的唯讀視圖，pump 在 native 下不讀它。 */
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
-  /** `langgraph` 的圖寫這條 thread 的 checkpoint。沒有 {@link appendLoggedMessages} 時一定有。 */
-  updateState?(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
-  /**
-   * 把剛寫進日誌的幾則接到這條 thread 的對話後面（`@nexus/core` 的 `NativeAgent.appendLoggedMessages`）。有這一支的是 native agent：
-   * 它的 state 是日誌的投影，pump 不讀也不寫它的 state，懸著的呼叫從日誌找，見 {@link danglingLoggedCalls}。
-   */
-  appendLoggedMessages?(config: ThreadConfig, messages: readonly BaseMessage[]): void;
   /**
    * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件；停住那一步已經收完的呼叫寫入同步套進 state，等核准那幾顆的不寫。
    * 只有停在中斷時 JS 呼叫沒結束的 loop 有這一支；LangGraph 的中斷當場收掉那次 run，沒有東西可收。
    */
   discardSuspended?(config: ThreadConfig): void;
+}
+
+/** `langgraph` 的圖：中止補的東西經 checkpoint 寫回。 */
+interface CheckpointPumpAgent {
+  updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
+  readonly appendLoggedMessages?: never;
+}
+
+/**
+ * native agent：pump 不經 `getState`／`updateState` 碰它的 state，只經這一支接上剛寫進日誌的幾則；懸著的呼叫從日誌找，
+ * 見 {@link danglingLoggedCalls}。
+ */
+interface LoggedPumpAgent {
+  /** 把剛寫進日誌的幾則接到這條 thread 的對話後面（`@nexus/core` 的 `NativeAgent.appendLoggedMessages`）。 */
+  appendLoggedMessages(config: ThreadConfig, messages: readonly BaseMessage[]): void;
+  readonly updateState?: never;
 }
 
 /**
@@ -1248,11 +1260,6 @@ function danglingToolCalls(
 }
 
 /**
- * 最後一則 `assistant/message` 之後記過 `tool/call` 的那幾顆。停在核准點時，同一批排在後面、還沒起跑的呼叫不在裡面。
- *
- * @param events - 這份日誌的事件，照 `seq` 排。
- */
-/**
  * 日誌上最後一則帶工具呼叫的 `assistant/message` 裡還沒有 `tool/result` 的那幾顆，規則同 {@link danglingToolCalls}，讀的是日誌。
  *
  * @param events - 這份日誌的事件，照 `seq` 排。
@@ -1277,6 +1284,11 @@ function danglingLoggedCalls(
   return [];
 }
 
+/**
+ * 最後一則 `assistant/message` 之後記過 `tool/call` 的那幾顆。停在核准點時，同一批排在後面、還沒起跑的呼叫不在裡面。
+ *
+ * @param events - 這份日誌的事件，照 `seq` 排。
+ */
 function loggedCallIds(events: readonly SessionEvent[]): ReadonlySet<string> {
   const ids = new Set<string>();
   for (let at = events.length - 1; at >= 0; at -= 1) {
@@ -2407,10 +2419,11 @@ export class ThreadPump {
     let started: (call: { readonly id: string; readonly name: string }) => boolean;
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
+      const agent = this.#agent;
       dangling =
-        this.#agent.appendLoggedMessages !== undefined
+        agent.appendLoggedMessages !== undefined
           ? danglingLoggedCalls(log.events)
-          : danglingToolCalls((await this.#checkpointAgent.getState(config)).values);
+          : danglingToolCalls((await agent.getState(config)).values);
       const logged = loggedCallIds(log.events);
       // 委派的那顆停在核准點時本體已經開始；沒記過 `tool/call` 的就是還沒起跑。
       started = (call) => logged.has(call.id) && DELEGATION_TOOLS.includes(call.name);
@@ -2440,10 +2453,10 @@ export class ThreadPump {
         });
       }
       if (withdrawn.length > 0) {
-        if (this.#agent.appendLoggedMessages !== undefined) {
-          this.#agent.appendLoggedMessages(config, withdrawn);
+        if (agent.appendLoggedMessages !== undefined) {
+          agent.appendLoggedMessages(config, withdrawn);
         } else {
-          await this.#checkpointAgent.updateState(config, { messages: withdrawn });
+          await agent.updateState(config, { messages: withdrawn });
         }
       }
       log.append('turn/end', { reason: { kind: 'aborted', cause } });
@@ -3056,11 +3069,6 @@ export class ThreadPump {
     return 'updated';
   }
 
-  /** `langgraph` 那條路的 agent：沒有 `appendLoggedMessages` 的一定有 `getState` 與 `updateState`（{@link PumpAgent}）。 */
-  get #checkpointAgent(): Pick<PumpAgent, 'getState'> & Required<Pick<PumpAgent, 'updateState'>> {
-    return this.#agent as Required<Pick<PumpAgent, 'getState' | 'updateState'>>;
-  }
-
   /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
   #discardSuspended(): void {
     this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
@@ -3104,8 +3112,9 @@ export class ThreadPump {
    * 不補的話日誌上那幾顆一直沒有配對：續接的補結看到 `turn/failed` 就當這一輪收了，不會替它補。
    *
    * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
-   * 存檔點上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
-   * 只推存檔點上真的懸著的：模型那一步還沒進存檔點就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
+   * 對話上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
+   * 只推對話上真的懸著的：模型那一步還沒進對話就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
+   * `langgraph` 寫存檔點、只推存檔點上懸著的；native 經 `appendLoggedMessages`，懸著與否由它照快取篩。
    * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
    *
    * @param failure - 這一輪的原錯。
@@ -3118,22 +3127,21 @@ export class ThreadPump {
       if (results.length === 0) return failure;
       for (const { data } of results) log.append('tool/result', data);
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
-      if (this.#agent.appendLoggedMessages !== undefined) {
-        this.#agent.appendLoggedMessages(
+      const agent = this.#agent;
+      if (agent.appendLoggedMessages !== undefined) {
+        agent.appendLoggedMessages(
           config,
           results.map(({ message }) => toBaseMessage(message)),
         );
         return failure;
       }
       const pending = new Set(
-        danglingToolCalls((await this.#checkpointAgent.getState(config)).values).map(
-          (call) => call.id,
-        ),
+        danglingToolCalls((await agent.getState(config)).values).map((call) => call.id),
       );
       const messages = results
         .filter(({ data }) => pending.has(data.callId))
         .map(({ message }) => toBaseMessage(message));
-      if (messages.length > 0) await this.#checkpointAgent.updateState(config, { messages });
+      if (messages.length > 0) await agent.updateState(config, { messages });
       return failure;
     } catch (recoveryError) {
       return new AggregateError(
@@ -3640,12 +3648,13 @@ export class ThreadPump {
       return;
     }
     const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
-    if (this.#agent.appendLoggedMessages !== undefined) {
-      this.#agent.appendLoggedMessages(config, [reply]);
+    const agent = this.#agent;
+    if (agent.appendLoggedMessages !== undefined) {
+      agent.appendLoggedMessages(config, [reply]);
       return;
     }
     try {
-      await this.#checkpointAgent.updateState(config, { messages: [reply] });
+      await agent.updateState(config, { messages: [reply] });
     } catch {
       // 見上面：這一輪照樣收成中止。
     }

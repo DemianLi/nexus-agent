@@ -220,9 +220,8 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   /**
    * `filePath` 要指到 backend 裡真的存在的那個檔，不是一個看起來像路徑的字串。
    *
-   * **langgraph 從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。#348 之前
-   * 這裡直接讀工作區裡的檔；現在那一格在 graph state 裡，而「模型照摘要那句話讀得到」本來就是
-   * 這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
+   * **langgraph 從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。那一格在 graph state 裡（#348），
+   * 而「模型照摘要那句話讀得到」本來就是這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
    * 讀檔那一回合。
    *
    * **native 讀同一個 agent 那條 thread 的 `files`**：沒有 checkpointer，state 只在那個 agent 的快取裡，另一個 agent 看不到。

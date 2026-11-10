@@ -250,8 +250,8 @@ export type ApprovalChannel =
  * CLI）。沒有人在的時候問人，是掛著等一個不會來的答案。**這一格與 dsh 不同**：dsh 的
  * 核准與問答是兩條各自獨立的通道，各有各的政策；我們只有一個旗標，而它問的是人在不在。
  *
- * **`awaitsAnswer` 由組裝的人明著給**，不從 loop 種類或 checkpointer 推：等不等得到答覆是組裝點的事實
- * （langgraph 要有 checkpointer 才接得回中斷；native 在行程內 await，但入口背後有沒有人仍是入口的事）。
+ * **`awaitsAnswer` 是組裝點的事實**：langgraph 要有 checkpointer 才接得回中斷；native 在行程內 await，入口背後有沒有人
+ * 仍是入口的事。fold 沒收到時照有沒有 checkpointer 算（`FoldOptions.awaitsAnswer`）。
  *
  * @param assembly - `approvals.enabled` 與「這次組裝等不等得到答覆」。
  * @returns 這次組裝的核准管道。

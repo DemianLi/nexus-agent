@@ -8,7 +8,7 @@
  * 釘的幾件事：
  *
  * - 檔案收據→日誌只有參照；送上線的是一行 handle 字，路徑讀得到。
- * - 圖→`image_url` data URL 位元組一致；**base64 不進日誌**（兩個 loop 都跑），**不進存檔點**（只有 `langgraph` 有存檔點，明給 loop）。這是這個設計成立的前提。
+ * - 圖→`image_url` data URL 位元組一致；**base64 不進日誌**（兩個 loop 都跑），**不進存檔點**（存檔點只有 `langgraph` 有，那一條明寫 `agentLoop: 'langgraph'`）。這是這個設計成立的前提。
  * - 收圖檢查：目前的模型宣告了純文字→`model_does_not_support_images`，日誌一個字不動、收據留著。
  * - 全有全無：一張不行整句拒收，收據放回去。
  * - 只有附件、沒有字也收。

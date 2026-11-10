@@ -362,7 +362,10 @@ export interface CreateNexusAgentOptions {
    * **省略＝沒有型錄**：字串 `model` 與 `reasoningEffort` 一律拒絕，只收 `maxTurns` 與給實例的 `model`。
    */
   readonly validateSubagent?: (subagent: NexusSubAgent) => void;
-  /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
+  /**
+   * checkpointer。`langgraph` 停下來問人要靠它接回：{@link awaitsAnswer} 給 `true` 卻沒給時 fold 在組裝期拋，兩者都沒給時核准管道是
+   * `no-channel`。`native` 下不用。
+   */
   readonly checkpointer?: AgentCheckpointer;
   /** 這次組裝等不等得到答覆，原樣轉給 `FoldOptions.awaitsAnswer`；省略照 {@link checkpointer} 在不在算。 */
   readonly awaitsAnswer?: boolean;
@@ -839,7 +842,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     options.checkpointer == null
   ) {
     throw new Error(
-      'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
+      'langgraph 下 backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
     );
   }
   // 背景委派的基線（#328 第 3 項）：定義釘的 ?? 父代理**此刻**的選擇。定義要等 registry 載完才讀得到，所以閉包讀這個參照。
