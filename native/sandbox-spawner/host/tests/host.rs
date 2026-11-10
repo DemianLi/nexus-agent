@@ -1088,6 +1088,28 @@ mod calls {
     }
 
     #[test]
+    fn a_stream_that_pushed_chunks_and_is_still_pending_is_polled_again_next_round() {
+        let (_host, socket) = host("call-drip");
+        let mut stream = connect(&socket);
+        let started = std::time::Instant::now();
+        // 服務每步只推一塊、不寫時限也不用喚醒 fd：宿主不在下一輪再 poll 的話，推完第一塊就一直掛著，讀到逾時。
+        call(&mut stream, 4, "drip", r#"{"count":5}"#);
+        for seq in 0..5 {
+            assert_eq!(
+                read_message(&mut stream),
+                Some(HostMessage::Chunk {
+                    side: Side::Client,
+                    id: 4,
+                    seq,
+                    payload: Value::from(seq),
+                })
+            );
+        }
+        assert_eq!(read_message(&mut stream), ok(4, "5"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
     fn a_pending_call_finishes_on_the_deadline_the_service_asks_for() {
         let (_host, socket) = host("call-wait");
         let mut stream = connect(&socket);

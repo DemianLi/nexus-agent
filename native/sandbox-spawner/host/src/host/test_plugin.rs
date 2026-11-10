@@ -21,6 +21,7 @@
 //! | `burst` | 單次 | payload `{"count": n, "bytes": b}`（n 在 0 到 1000、b 在 0 到 200000）：一次推 n 個事件 `burst` 給發出這次呼叫的連線，payload 是 b 個 x，回 null |
 //! | `flood` | 串流 | 一步推 5 塊、每塊 250000 個 x（加起來超過一步的上限），之後掛著 |
 //! | `later` | 單次 | payload `{"ms": n}`：另一個執行緒睡 n 毫秒後經喚醒 fd 叫醒宿主，回 `"later"`；不寫時限，宿主沒被叫醒就一直掛著 |
+//! | `drip` | 串流 | payload `{"count": n}`（n 在 1 到 1000）：每步只推一塊（`start` 推 0，之後每次 `poll` 推下一塊），推完 n 塊的下一次 `poll` 回 n；不寫時限、不用喚醒 fd |
 
 use std::collections::{HashMap, HashSet};
 use std::os::fd::RawFd;
@@ -59,6 +60,8 @@ pub struct Echo {
     finished: Arc<Mutex<HashSet<(CallKey, u64)>>>,
     later_seq: u64,
     wake: Option<Wake>,
+    /// `drip` 的呼叫：（推過幾塊, 總共幾塊）。
+    drips: HashMap<CallKey, (i64, i64)>,
 }
 
 impl Service for Echo {
@@ -74,7 +77,7 @@ impl Remote for Echo {
         match name {
             "echo" | "fail" | "reject" | "wait" | "hang" | "cancels" | "big" | "unary-chunk"
             | "emit" | "burst" | "later" => Some(MethodKind::Unary),
-            "stream" | "big-chunk" | "flood" => Some(MethodKind::Stream),
+            "stream" | "big-chunk" | "flood" | "drip" => Some(MethodKind::Stream),
             _ => None,
         }
     }
@@ -149,6 +152,14 @@ impl Remote for Echo {
                 self.pending.insert(key, None);
                 Progress::Pending
             }
+            "drip" => {
+                let Some(count) = int(&payload, "count").filter(|n| (1..=1000).contains(n)) else {
+                    return Progress::Err(Fault::BadPayload, "count 要是 1 到 1000".into());
+                };
+                chunks.push(Value::from(0));
+                self.drips.insert(key, (1, count));
+                Progress::Pending
+            }
             "later" => {
                 let Some(ms) = int(&payload, "ms").and_then(|n| u64::try_from(n).ok()) else {
                     return Progress::Err(Fault::BadPayload, "ms 要是非負整數".into());
@@ -177,7 +188,17 @@ impl Remote for Echo {
         }
     }
 
-    fn poll(&mut self, key: CallKey, now: Instant, _chunks: &mut Vec<Value>) -> Progress {
+    fn poll(&mut self, key: CallKey, now: Instant, chunks: &mut Vec<Value>) -> Progress {
+        if let Some((sent, total)) = self.drips.get_mut(&key) {
+            if *sent < *total {
+                chunks.push(Value::from(*sent));
+                *sent += 1;
+                return Progress::Pending;
+            }
+            let total = *total;
+            self.drips.remove(&key);
+            return Progress::Ok(Value::from(total));
+        }
         if let Some(&seq) = self.later.get(&key) {
             if !self.finished.lock().expect("鎖").remove(&(key, seq)) {
                 return Progress::Pending;
@@ -198,6 +219,7 @@ impl Remote for Echo {
     fn cancel(&mut self, key: CallKey) {
         self.pending.remove(&key);
         self.later.remove(&key);
+        self.drips.remove(&key);
         self.cancels += 1;
     }
 
