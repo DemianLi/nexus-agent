@@ -8,7 +8,7 @@
  *
  * `side` 是 `id` 由哪一邊發的：現在只有客戶端發呼叫（`'c'`），`'h'` 留給宿主反過來發請求。
  *
- * 宿主的 JSON 收得比標準少（`native/sandbox-spawner/host/src/json.rs`）：數字只收整數，`\u` 跳脫的代理對要成對，巢狀最多 {@link MAX_DEPTH} 層。
+ * 宿主的 JSON 是 `serde_json`（`native/sandbox-spawner/host/src/json.rs`）：數字要是有限值，`\u` 跳脫的代理對要成對，巢狀最多 {@link MAX_DEPTH} 層。
  * 送出去的框宿主解不開就判違反協定、隔離這個行程，所以 {@link encodeClientMessage} 先把 `payload` 核過，不合就丟、不送。
  *
  * @module
@@ -90,11 +90,11 @@ export class HostProtocolError extends Error {
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-/** 核 `payload` 合不合宿主的 JSON：只收安全整數、成對的代理對、純物件與陣列，`depth` 是它外面已經有幾層。 */
+/** 核 `payload` 合不合宿主的 JSON：只收有限的數字、成對的代理對、純物件與陣列，`depth` 是它外面已經有幾層。 */
 function checkJson(value: unknown, depth: number): void {
   if (value === null || typeof value === 'boolean') return;
   if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) throw new HostProtocolError('數字只收安全整數');
+    if (!Number.isFinite(value)) throw new HostProtocolError('數字只收有限值');
     return;
   }
   if (typeof value === 'string') {

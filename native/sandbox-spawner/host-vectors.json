@@ -29,14 +29,14 @@
         "service": "test-echo/echo",
         "method": "echo",
         "payload": {
-          "text": "引號\"",
-          "list": [1, -2, null, true, false],
+          "list": [1, -2, -0.25, 1e21, null, true, false],
           "nested": {
             "a": {}
-          }
+          },
+          "text": "引號\""
         }
       },
-      "json": "{\"type\":\"call\",\"side\":\"c\",\"id\":1,\"service\":\"test-echo/echo\",\"method\":\"echo\",\"payload\":{\"text\":\"引號\\\"\",\"list\":[1,-2,null,true,false],\"nested\":{\"a\":{}}}}"
+      "json": "{\"type\":\"call\",\"side\":\"c\",\"id\":1,\"service\":\"test-echo/echo\",\"method\":\"echo\",\"payload\":{\"list\":[1,-2,-0.25,1e+21,null,true,false],\"nested\":{\"a\":{}},\"text\":\"引號\\\"\"}}"
     },
     {
       "value": {
@@ -107,10 +107,11 @@
         "side": "c",
         "id": 3,
         "ok": {
-          "count": 2
+          "count": 2,
+          "ratio": 0.25
         }
       },
-      "json": "{\"type\":\"result\",\"side\":\"c\",\"id\":3,\"ok\":{\"count\":2}}"
+      "json": "{\"type\":\"result\",\"side\":\"c\",\"id\":3,\"ok\":{\"count\":2,\"ratio\":0.25}}"
     },
     {
       "value": {
@@ -143,6 +144,16 @@
         }
       },
       "json": "{\"type\":\"event\",\"service\":\"test-echo/echo\",\"topic\":\"changed\",\"payload\":{\"n\":1}}"
+    }
+  ],
+  "duplicateKeys": [
+    {
+      "json": "{\"type\":\"hello\",\"version\":1,\"version\":4,\"token\":\"a\",\"token\":\"b\"}",
+      "value": {
+        "type": "hello",
+        "version": 4,
+        "token": "b"
+      }
     }
   ],
   "invalidFrames": [
@@ -189,24 +200,29 @@
       "error": "巢狀太深"
     },
     {
+      "name": "巢狀 128 層（serde_json 自己的上限）",
+      "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c22746f6b656e223a22222c2278223a5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d7d",
+      "error": "不是合法的 JSON"
+    },
+    {
       "name": "不合法的 UTF-8",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c22746f6b656e223a22ff227d",
-      "error": "不是合法的 UTF-8"
+      "error": "不是合法的 JSON"
     },
     {
       "name": "\\u 跳脫只寫了一半",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c22746f6b656e223a225c753030227d",
-      "error": "\\u 之後要四個十六進位數字"
+      "error": "不是合法的 JSON"
     },
     {
       "name": "代理對落單",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c22746f6b656e223a225c7564383030227d",
-      "error": "代理對落單"
+      "error": "不是合法的 JSON"
     },
     {
-      "name": "數字溢位",
+      "name": "版本是 u64 放不下的整數",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a39393939393939393939393939393939393939392c22746f6b656e223a22227d",
-      "error": "數字溢位"
+      "error": "版本不是 u32"
     },
     {
       "name": "版本超過 u32",
@@ -221,12 +237,7 @@
     {
       "name": "版本是小數",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312e302c22746f6b656e223a22227d",
-      "error": "只收整數"
-    },
-    {
-      "name": "重複的鍵",
-      "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c2276657273696f6e223a312c22746f6b656e223a22227d",
-      "error": "重複的鍵"
+      "error": "版本不是 u32"
     },
     {
       "name": "不認得的種類",
@@ -266,7 +277,7 @@
     {
       "name": "文件之後還有東西",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a312c22746f6b656e223a22227d207b7d",
-      "error": "文件之後還有東西"
+      "error": "不是合法的 JSON"
     },
     {
       "name": "id 是負的",
@@ -297,6 +308,16 @@
       "name": "cancel 多出欄位",
       "hex": "7b2274797065223a2263616e63656c222c2273696465223a2263222c226964223a312c22736571223a307d",
       "error": "欄位不對"
+    },
+    {
+      "name": "id 是小數",
+      "hex": "7b2274797065223a2263616e63656c222c2273696465223a2263222c226964223a312e357d",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "數字超過 f64",
+      "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a31653430302c22746f6b656e223a22227d",
+      "error": "不是合法的 JSON"
     }
   ],
   "invalidHostMessages": [

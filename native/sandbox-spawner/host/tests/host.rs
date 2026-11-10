@@ -1040,9 +1040,9 @@ mod calls {
         call(stream, id, "cancels", "null");
         match read_message(stream) {
             Some(HostMessage::Result {
-                outcome: Ok(Value::Int(n)),
+                outcome: Ok(value),
                 ..
-            }) => n,
+            }) if value.is_i64() => value.as_i64().unwrap(),
             other => panic!("{other:?}"),
         }
     }
@@ -1081,7 +1081,7 @@ mod calls {
                     side: Side::Client,
                     id: 9,
                     seq,
-                    payload: Value::Int(seq as i64),
+                    payload: Value::from(seq),
                 })
             );
         }

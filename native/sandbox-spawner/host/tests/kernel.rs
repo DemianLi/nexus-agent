@@ -1732,8 +1732,8 @@ mod remote {
         assert_eq!(remote.method("nope"), None);
         let mut chunks = Vec::new();
         assert_eq!(
-            remote.start(key, "say", Value::Int(3), t0, &mut chunks),
-            Progress::Ok(Value::Int(3))
+            remote.start(key, "say", Value::from(3), t0, &mut chunks),
+            Progress::Ok(Value::from(3))
         );
         assert!(k.remote("counter").is_none(), "provide 的叫不到");
         assert!(k.service::<Shout>().is_ok(), "照樣是一般的服務");

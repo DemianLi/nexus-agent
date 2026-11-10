@@ -30,6 +30,7 @@ interface Vectors {
   }[];
   readonly clientMessages: readonly { readonly value: ClientMessage; readonly json: string }[];
   readonly hostMessages: readonly { readonly value: HostMessage; readonly json: string }[];
+  readonly duplicateKeys: readonly { readonly value: ClientMessage; readonly json: string }[];
   readonly invalidFrames: readonly {
     readonly name: string;
     readonly hex: string;
@@ -72,6 +73,10 @@ describe('宿主協定，跟 host_protocol.rs 對同一份向量檔', () => {
     expect(decodeHostMessage(Buffer.from(json, 'utf8'))).toEqual(value);
   });
 
+  it.each(vectors.duplicateKeys)('重複的鍵跟宿主一樣取後者：$json', ({ value, json }) => {
+    expect(JSON.parse(json)).toEqual(value);
+  });
+
   it.each(vectors.invalidFrames)('切框：$name', ({ hex, expect: outcome }) => {
     const reader = new FrameReader();
     const push = () => reader.push(Buffer.from(hex, 'hex'));
@@ -100,9 +105,8 @@ describe('encodeClientMessage 只送宿主解得開的', () => {
     ({ type: 'call', side: 'c', id, service: 's', method: 'm', payload }) as ClientMessage;
 
   it.each([
-    ['小數', 1.5],
-    ['超過安全整數', 2 ** 53],
     ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
     ['落單的代理對', '\ud800'],
     ['鍵有落單的代理對', { '\udc00': 1 }],
     ['undefined', { a: undefined }],
@@ -112,6 +116,13 @@ describe('encodeClientMessage 只送宿主解得開的', () => {
     ['Map', new Map()],
   ])('payload 是 %s 丟 HostProtocolError', (_name, payload) => {
     expect(() => encodeClientMessage(call(payload))).toThrow(HostProtocolError);
+  });
+
+  it('小數與超過安全整數的數字照 JSON.stringify 送出', () => {
+    const payload = { big: 2 ** 60, half: -0.5, huge: 1e21 };
+    expect(encodeClientMessage(call(payload)).toString('utf8')).toBe(
+      '{"type":"call","side":"c","id":1,"service":"s","method":"m","payload":{"big":1152921504606847000,"half":-0.5,"huge":1e+21}}',
+    );
   });
 
   it('巢狀的上限連框本身算：payload 最多 MAX_DEPTH - 1 層', () => {
