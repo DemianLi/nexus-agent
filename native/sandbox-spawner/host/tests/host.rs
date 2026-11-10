@@ -1040,8 +1040,7 @@ mod calls {
         call(stream, id, "cancels", "null");
         match read_message(stream) {
             Some(HostMessage::Result {
-                outcome: Ok(value),
-                ..
+                outcome: Ok(value), ..
             }) if value.is_i64() => value.as_i64().unwrap(),
             other => panic!("{other:?}"),
         }
