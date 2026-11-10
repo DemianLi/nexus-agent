@@ -223,8 +223,13 @@ describe('留幾則（retainedMessageCount）：切得到東西時，則數封�
     expect(retainedMessageCount(messages, settings, undefined)).toBe(13);
   });
 
-  it('門檻小到兩成不滿一則：至少留一則', () => {
+  it('門檻小到兩成不滿兩則：至少留兩則（最近一來一回）', () => {
     const tiny = { trigger: [{ type: 'messages', value: 3 }] as const, retainTokens: unit * 52 };
+    expect(retainedMessageCount(conversation(61), tiny, undefined)).toBe(2);
+  });
+
+  it('下限只拉高封頂：照 token 只選出 1 則時仍是 1 則', () => {
+    const tiny = { trigger: [{ type: 'messages', value: 3 }] as const, retainTokens: 1 };
     expect(retainedMessageCount(conversation(61), tiny, undefined)).toBe(1);
   });
 });

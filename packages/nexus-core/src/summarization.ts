@@ -401,22 +401,25 @@ function pairedCut(messages: readonly BaseMessage[], from: number): number {
 }
 
 /**
- * 尾巴則數的封頂：最小的 `messages` 門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），至少 1；沒有 `messages` 門檻就是 `undefined`。
+ * 尾巴則數的封頂：最小的 `messages` 門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），至少 2；沒有 `messages` 門檻就是 `undefined`。
  *
- * 保留量照 token 算、觸發卻可以照則數算，所以照 token 選出的尾巴可能只比則數門檻少一輪、甚至比門檻還長，摘完下一輪又觸發
- * （[#2659](https://github.com/DemianLi/nexus-agent/issues/2659)：出廠 60 則門檻、尾巴 52 則，之後每一輪都摘）。封在兩成，
- * 摘完離門檻至少還有八成。**登記的偏離**：dsh 沒有則數門檻；這一項讓 `tokens` 門檻觸發的那一步，尾巴也可能少於 token 保留量。
+ * 保留量照 token 算、觸發卻可以照則數算。沒有這一道，照 token 選出的尾巴可能只比則數門檻少一輪、甚至比門檻還長，摘完下一輪
+ * 又觸發，之後每一輪都摘（[#2659](https://github.com/DemianLi/nexus-agent/issues/2659)）。封在兩成，摘完離門檻至少還有八成。
+ * `tokens` 門檻觸發的那一步一樣封，所以那一步的尾巴可能少於 token 保留量。
+ *
+ * **至少 2 則**：留住最近一來一回（上一則回覆加這一句）。下限只在門檻小於 10 則時生效；那麼小的門檻本來就隔不出一輪
+ * （門檻 3、留 2 則，摘完就是 3 則）。它只拉高封頂，尾巴不會因此比照 token 選出來的長：比封頂短的尾巴照原樣留。
  */
 function retainMessagesCap(trigger: readonly SummarizationThreshold[]): number | undefined {
   const counts = trigger.filter((each) => each.type === 'messages').map((each) => each.value);
   if (counts.length === 0) return undefined;
-  return Math.max(1, Math.floor(Math.min(...counts) * RETAIN_THRESHOLD_CAP_RATIO));
+  return Math.max(2, Math.floor(Math.min(...counts) * RETAIN_THRESHOLD_CAP_RATIO));
 }
 
 /**
  * 這一步摘要之後要留幾則：{@link retainTokensFor} 算得出 token 保留量就照 {@link retainedTailCount} 選尾巴，算不出就是
  * {@link RETAIN_FALLBACK_MESSAGES} 則；切得到東西時，再封在 `messages` 門檻的兩成（切點照樣不拆開工具呼叫與結果，
- * 所以可能多一則）。尾巴蓋住整串時不封頂、照舊不摘。{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
+ * 所以可能多留幾則，但不會比照 token 選出的長）。尾巴蓋住整串時不封頂、照舊不摘。{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
  * （剪刀的閘門）用的是這同一個數，兩邊才會對「這一步摘不摘得到東西」有同一個答案。
  *
  * **切點前只剩上一顆摘要，也算摘不到東西**（[#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）：回整串的長度。
