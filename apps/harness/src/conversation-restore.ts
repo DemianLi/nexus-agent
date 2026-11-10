@@ -52,7 +52,7 @@ import type {
 } from '@nexus/core';
 
 import { CHECKPOINT_MAX_DEPTH, CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
-import { vouchCheckpointDepth } from './pruned-memory-saver.js';
+import { messageCheckpointDepth, vouchCheckpointDepth } from './pruned-memory-saver.js';
 
 /** 這條 thread 的位址。 */
 interface ThreadConfig {
@@ -208,7 +208,7 @@ export async function restoreConversation(
     if ('seedThread' in agent) {
       for (const message of replay.messages as readonly BaseMessage[]) {
         if (bounded.has(message)) continue;
-        const depth = checkpointDepth(message);
+        const depth = messageCheckpointDepth(message);
         if (depth > CHECKPOINT_MAX_DEPTH) {
           throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message), 'thread');
         }

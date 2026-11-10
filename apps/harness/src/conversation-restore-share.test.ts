@@ -96,13 +96,16 @@ afterEach(async () => {
   for (const dispose of disposers.splice(0).reverse()) await dispose();
 });
 
-/** 真的 agent，存檔點是產品那顆。這一支量的是寫進存檔點的層數，只有 `langgraph` 有存檔點。 */
-async function realAgent() {
+/**
+ * 真的 agent。`langgraph` 的存檔點是產品那顆，量的是寫進存檔點的層數；native 照產品組裝不建存檔點，灌回 thread 之前用同一把尺量
+ * （`pruned-memory-saver.ts` 的 `messageCheckpointDepth`）。
+ */
+async function realAgent(loop: 'langgraph' | 'native' = 'langgraph') {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns: [] }),
-    checkpointer: new PrunedMemorySaver(),
+    ...(loop === 'langgraph' && { checkpointer: new PrunedMemorySaver() }),
     plugins: [],
-    agentLoop: 'langgraph',
+    agentLoop: loop,
   });
   disposers.push(() => built.dispose());
   return built.agent;
@@ -293,24 +296,27 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     expect(readBackReply?.tool_calls?.[0]?.args).toEqual(args);
   });
 
-  it('舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq', async () => {
-    const agent = await realAgent();
-    // 日誌那一關收不下 601 層；這是上限之前寫下的舊日誌，讀方不設限，讀得進來。
-    const events = readBack(
-      lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH + 1 - 7) } })),
-    );
-    const reply = events.find((event) => event.type === 'assistant/message')!;
-    expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH + 1);
+  it.each(['langgraph', 'native'] as const)(
+    '舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq（%s）',
+    async (loop) => {
+      const agent = await realAgent(loop);
+      // 日誌那一關收不下 601 層；這是上限之前寫下的舊日誌，讀方不設限，讀得進來。
+      const events = readBack(
+        lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH + 1 - 7) } })),
+      );
+      const reply = events.find((event) => event.type === 'assistant/message')!;
+      expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH + 1);
 
-    const error = await restoreConversation(agent, THREAD, events).then(
-      () => undefined,
-      (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
-    );
+      const error = await restoreConversation(agent, THREAD, events).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
+      );
 
-    expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(error?.seq).toBe(reply.seq);
-    expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
-  });
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(reply.seq);
+      expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
+    },
+  );
 
   it.each([
     ['不帶 `lc` 鍵', (room: number) => nested(room)],
@@ -348,36 +354,39 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     },
   );
 
-  it('舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒', async () => {
-    const agent = await realAgent();
-    const argsJson = JSON.stringify({ v: nested(CHECKPOINT_MAX_DEPTH) });
-    const raw = oneTurn({});
-    raw[1] = {
-      type: 'assistant/message',
-      data: {
-        message: {
-          type: 'ai',
-          data: {
-            content: '',
-            additional_kwargs: {
-              tool_calls: [
-                { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
-              ],
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒（%s）',
+    async (loop) => {
+      const agent = await realAgent(loop);
+      const argsJson = JSON.stringify({ v: nested(CHECKPOINT_MAX_DEPTH) });
+      const raw = oneTurn({});
+      raw[1] = {
+        type: 'assistant/message',
+        data: {
+          message: {
+            type: 'ai',
+            data: {
+              content: '',
+              additional_kwargs: {
+                tool_calls: [
+                  { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
+                ],
+              },
             },
           },
         },
-      },
-    } as Pick<SessionEvent, 'type' | 'data'>;
-    const events = readBack(lines(raw));
-    // 前提：事件本身很淺，參數只是一個字串。
-    expect(storedEventDepth(events[1]!)).toBeLessThan(10);
+      } as Pick<SessionEvent, 'type' | 'data'>;
+      const events = readBack(lines(raw));
+      // 前提：事件本身很淺，參數只是一個字串。
+      expect(storedEventDepth(events[1]!)).toBeLessThan(10);
 
-    const error = await restoreConversation(agent, THREAD, events).then(
-      () => undefined,
-      (caught: unknown) => caught as Error & { code?: string; seq?: number },
-    );
+      const error = await restoreConversation(agent, THREAD, events).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number },
+      );
 
-    expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(error?.seq).toBe(1);
-  });
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(1);
+    },
+  );
 });
