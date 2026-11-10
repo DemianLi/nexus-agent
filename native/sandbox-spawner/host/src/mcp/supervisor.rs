@@ -1,5 +1,6 @@
 //! 一台 MCP server 的連線監督者：連上、等它掉、照有上限的指數退避重連。退避、預算歸零、收連上過的一代的期限與記的訊息照 `packages/nexus-plugin-mcp/src/supervisor.ts`，訊息的英文逐字相同；`stop` 時直接丟下進行中的 [`Hooks::connect`]，不等它落定。
-//! 失敗的連線嘗試監督者不收（TS 的 `abandon` 沒有對應），由 [`Hooks::connect`] 回錯之前自己收。
+//! 失敗的連線嘗試監督者不收也不設期限（TS 的 `abandon` 沒有對應，失敗的嘗試也就不會因收不乾淨而停止重連）：
+//! [`Hooks::connect`] 回錯之前要自己把開出來的東西真的關掉；`stop` 時被丟下的嘗試靠 drop 收。
 //!
 //! - 退避：第一次 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
 //! - 連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。
@@ -15,7 +16,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::json::Value;
 
-/// 收一代最多等多久，跟 `supervisor.ts` 的 `GENERATION_CLOSE_TIMEOUT_MS` 同值。
+/// 收連上過的一代最多等多久，跟 `supervisor.ts` 的 `GENERATION_CLOSE_TIMEOUT_MS` 同值。
 pub const GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 重連政策，欄位與預設照 `reconnectSchema`。
@@ -181,7 +182,8 @@ pub enum State {
 pub trait Hooks {
     type Generation;
 
-    /// 連一代。錯誤字串不得帶任何秘密。失敗的嘗試監督者不叫 [`Hooks::close`]，要收的自己收；`stop` 時這個 future 可能在任何 await 點被丟掉。
+    /// 連一代。錯誤字串不得帶任何秘密。失敗的嘗試監督者不叫 [`Hooks::close`]，回錯之前要自己把開出來的東西真的關掉（沒有期限，也不會因此停止重連）；
+    /// `stop` 時這個 future 可能在任何 await 點被丟掉，被丟下的要靠 drop 收。
     fn connect(&mut self) -> impl Future<Output = Result<Self::Generation, String>>;
     /// 新的一代連上了（第 `generation` 代）：發布它的清單。
     fn adopted(&mut self, generation: u64, gen: &Self::Generation);
