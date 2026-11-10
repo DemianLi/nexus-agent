@@ -18,7 +18,7 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 | `serverName` | 必填，1 到 32 個 `[A-Za-z0-9_-]`。 |
 | `connection` | 必填，`{ transport: "http", url, headers? }`。`url` 只收 `http:`／`https:`。`headers` 的值只收字串；憑證引用（`{ credential, prefix? }`）還不支援，整列拒絕。`transport: "stdio"` 拒絕。 |
 | `toolCallTimeoutMs` | 正整數（不大於 2^53−1，`60000.0` 也收，同 zod 的 `int`），預設 60000。 |
-| `livenessTimeoutMs` | 正整數，不大於 2^31−1，預設 15000。照收、不用（只給 stdio），只進池的鍵。 |
+| `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（只給 stdio），只進池的鍵。 |
 | `failOnStartupError` | 預設 `false`。 |
 | `maxInstructionBytes` | 正整數（同 `toolCallTimeoutMs`），預設 32768。 |
 | `reconnect` | `{ enabled?, initialDelayMs?, maxDelayMs?, maxAttempts? }`，預設 `true`／500／30000／10；`initialDelayMs` 不能大於 `maxDelayMs`。 |
@@ -48,8 +48,8 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
   `connection.headers` 寫了空物件跟沒寫是兩份，同 zod 的 `optional`。憑證值的指紋還沒做。
 - 舊的一份留到池關：不數使用者、不回收。
 - 建立那一份的取用等第一次連線落定（建池時給了上限、又沒寫 `failOnStartupError` 的列最多等那麼久）；寫了 `failOnStartupError` 就回錯、
-  那一份從表裡拿掉並收掉，但照 TS 留在關池時要收的清單裡（`pool.ts` 也不從 `opened` 拿掉），
-  反覆取用連不上的 server 會一直累積到池關。其餘的取用最多等 5 秒，到期是 `still connecting after <ms>ms` 那一句，連線照樣在背景繼續。到期或第一次失敗時，
+  那一份從表裡拿掉並收掉，但留在關池時要收的清單裡（同 TS 的 `opened`），
+  反覆取用連不上的 server，已收掉的那幾份會一直留在清單裡到池關。其餘的取用最多等 5 秒，到期是 `still connecting after <ms>ms` 那一句，連線照樣在背景繼續。到期或第一次失敗時，
   寫了 `failOnStartupError` 就回錯，否則錯誤跟著取用的結果照樣回。
 - 斷線空窗裡沒有活著的一代（`Shared::current` 是 `None`），清單照最近一代的（`Shared::listed`）。
 - 放棄重連之後，下一次取用替這一份重開一個監督者、重新起算預算。
