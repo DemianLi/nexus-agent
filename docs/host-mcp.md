@@ -43,8 +43,9 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 
 `pool.rs` 照 TS `pool.ts`：
 
-- **一份設定一份連線**，整個連線池共用。鍵是整份設定加實際的 elicitation 旗標；設定編成鍵時物件的鍵照碼位排（`json::encode`），同一份設定鍵的順序不同還是同一份。
-  鍵用原始輸入、不填預設值（跟 TS 的差距，見最後一節）。憑證值的指紋還沒做。
+- **一份設定一份連線**，整個連線池共用。鍵是整份設定加實際的 elicitation 旗標，同 TS 的 `poolKey`：設定先照 zod 填好預設值，
+  數字一律當浮點數，物件的鍵照碼位排（`json::encode`）。省略一個欄位跟寫出它的預設值、`500` 跟 `500.0`、鍵的順序不同，都是同一份。
+  `connection.headers` 寫了空物件跟沒寫是兩份，同 zod 的 `optional`。憑證值的指紋還沒做。
 - 舊的一份留到池關：不數使用者、不回收。
 - 建立那一份的取用等第一次連線落定（建池時給了上限、又沒寫 `failOnStartupError` 的列最多等那麼久）；寫了 `failOnStartupError` 就回錯、
   池裡不留。其餘的取用最多等 5 秒，到期是 `still connecting after <ms>ms` 那一句，連線照樣在背景繼續。到期或第一次失敗時，
@@ -71,6 +72,6 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 - stdio 不支援；只給 stdio 的存活探測也沒有。
 - header 的憑證引用還不支援；遮蔽只做逐字替換。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）；
-  `livenessTimeoutMs` 只核正整數（TS 另有上限 2^31−1）。
-- 池的鍵：TS 用 zod 填好預設值之後的設定，宿主用原始輸入。省略一個欄位跟寫出它的預設值，TS 是同一份連線，宿主是兩份。
+  `livenessTimeoutMs` 只核正整數（TS 另有上限 2^31−1）；`toolCallTimeoutMs`、`livenessTimeoutMs`、`maxInstructionBytes` 寫成 `60000.0` 這種
+  帶小數點的整數，宿主拒絕，TS 收（JS 分不出兩種寫法）。
 - 監督者的訊息有兩處不逐字：小於 1e-6 或不小於 1e21 的毫秒數，宿主不寫成指數；超過 2^31−1 ms 的延遲，TS 的 `setTimeout` 改成 1 ms，宿主照設定的時間等。

@@ -13,6 +13,8 @@ use crate::json::{Map, Value};
 pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 帶出處標頭的指引預設上限（UTF-8 位元組），同 `DEFAULT_MAX_INSTRUCTION_BYTES`。
 pub const DEFAULT_MAX_INSTRUCTION_BYTES: usize = 32_768;
+/// `livenessTimeoutMs` 的預設值，同 `DEFAULT_LIVENESS_TIMEOUT_MS`。宿主不用它，只進池的鍵。
+const DEFAULT_LIVENESS_TIMEOUT_MS: u64 = 15_000;
 
 /// 一台 HTTP server 的設定：`mcpConfigSchema` 的 HTTP 那一支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的帳密、query。
 #[derive(Clone)]
@@ -25,7 +27,7 @@ pub struct Server {
     pub reconnect: Policy,
     pub fail_on_startup_error: bool,
     pub elicitation: bool,
-    /// 整份設定排好鍵的編碼，池的鍵用（含 header 的值，不進日誌）。
+    /// [`Server::pool_key`] 用的編碼（含 header 的值，不進日誌）。
     canonical: String,
 }
 
@@ -138,30 +140,66 @@ impl Server {
             }
             Some(_) => return Err("connection.headers 要是物件".into()),
         }
+        let tool_call_timeout_ms = positive_int(fields, "toolCallTimeoutMs")?
+            .unwrap_or(DEFAULT_TOOL_CALL_TIMEOUT.as_millis() as u64);
+        let max_instruction_bytes = positive_int(fields, "maxInstructionBytes")?
+            .map_or(Ok(DEFAULT_MAX_INSTRUCTION_BYTES), usize::try_from)
+            .map_err(|_| "maxInstructionBytes 太大".to_string())?;
+        let reconnect = Policy::parse(fields.get("reconnect"))?;
+        let fail_on_startup_error = boolean(fields, "failOnStartupError", false)?;
+        let elicitation = boolean(fields, "elicitation", true)?;
+        // `livenessTimeoutMs` 只給 stdio；HTTP 照收、不用，型別照樣核。
+        let liveness_timeout_ms =
+            positive_int(fields, "livenessTimeoutMs")?.unwrap_or(DEFAULT_LIVENESS_TIMEOUT_MS);
+
+        // 照 zod 解出來的樣子編：預設值填好，數字一律當浮點數寫，`500` 與 `500.0` 編成同一個。
+        let mut key_connection = Map::new();
+        key_connection.insert("transport".into(), "http".into());
+        key_connection.insert("url".into(), connection["url"].clone());
+        if let Some(headers) = connection.get("headers") {
+            key_connection.insert("headers".into(), headers.clone());
+        }
+        let mut key_reconnect = Map::new();
+        key_reconnect.insert("enabled".into(), reconnect.enabled.into());
+        key_reconnect.insert("initialDelayMs".into(), reconnect.initial_delay_ms.into());
+        key_reconnect.insert("maxDelayMs".into(), reconnect.max_delay_ms.into());
+        key_reconnect.insert("maxAttempts".into(), (reconnect.max_attempts as f64).into());
+        let mut key = Map::new();
+        key.insert("serverName".into(), name.clone().into());
+        key.insert("connection".into(), Value::Object(key_connection));
+        key.insert(
+            "toolCallTimeoutMs".into(),
+            (tool_call_timeout_ms as f64).into(),
+        );
+        key.insert(
+            "livenessTimeoutMs".into(),
+            (liveness_timeout_ms as f64).into(),
+        );
+        key.insert("failOnStartupError".into(), fail_on_startup_error.into());
+        key.insert(
+            "maxInstructionBytes".into(),
+            (max_instruction_bytes as f64).into(),
+        );
+        key.insert("reconnect".into(), Value::Object(key_reconnect));
+        key.insert("elicitation".into(), elicitation.into());
+        let canonical = String::from_utf8(crate::json::encode(&Value::Object(key)))
+            .map_err(|_| "設定編不成 JSON".to_string())?;
+
         Ok(Server {
             name,
             url,
             headers,
-            tool_call_timeout: positive_int(fields, "toolCallTimeoutMs")?
-                .map_or(DEFAULT_TOOL_CALL_TIMEOUT, Duration::from_millis),
-            max_instruction_bytes: positive_int(fields, "maxInstructionBytes")?
-                .map_or(Ok(DEFAULT_MAX_INSTRUCTION_BYTES), usize::try_from)
-                .map_err(|_| "maxInstructionBytes 太大".to_string())?,
-            reconnect: Policy::parse(fields.get("reconnect"))?,
-            fail_on_startup_error: boolean(fields, "failOnStartupError", false)?,
-            elicitation: boolean(fields, "elicitation", true)?,
-            canonical: String::from_utf8(crate::json::encode(value))
-                .map_err(|_| "設定編不成 JSON".to_string())?,
-        })
-        .and_then(|server| {
-            // `livenessTimeoutMs` 只給 stdio；HTTP 照收、不用，型別照樣核。
-            positive_int(fields, "livenessTimeoutMs")?;
-            Ok(server)
+            tool_call_timeout: Duration::from_millis(tool_call_timeout_ms),
+            max_instruction_bytes,
+            reconnect,
+            fail_on_startup_error,
+            elicitation,
+            canonical,
         })
     }
 
-    /// 池的鍵：整份設定（`serde_json` 的物件是 BTreeMap，編出來的鍵已經排好）加實際的 elicitation 旗標，照 `poolKey`。
-    /// 鍵用原始輸入、不填預設值：省略一個欄位跟寫出它的預設值算兩份，TS 算同一份。
+    /// 池的鍵：整份設定加實際的 elicitation 旗標，同 `poolKey`。TS 的鍵是 zod 填好預設值之後的設定，這裡也先填好再編，
+    /// 鍵照碼位排（[`crate::json::encode`]）：省略一個欄位跟寫出它的預設值、鍵的順序不同，都是同一份。
     pub fn pool_key(&self, elicitation: bool) -> String {
         format!("{}\0elicitation={elicitation}", self.canonical)
     }

@@ -63,6 +63,62 @@ fn 設定_預設與拒絕() {
 }
 
 #[test]
+fn 池的鍵_預設值與數字寫法不分() {
+    let key = |config: serde_json::Value| Server::parse(&config).expect("設定").pool_key(true);
+    let minimal = key(json!({
+        "serverName": "a",
+        "connection": { "transport": "http", "url": "https://h/" },
+    }));
+    let explicit = key(json!({
+        "elicitation": true,
+        "reconnect": { "maxAttempts": 10.0, "initialDelayMs": 500.0, "enabled": true, "maxDelayMs": 30000 },
+        "maxInstructionBytes": 32768,
+        "failOnStartupError": false,
+        "livenessTimeoutMs": 15000,
+        "toolCallTimeoutMs": 60000,
+        "connection": { "url": "https://h/", "transport": "http" },
+        "serverName": "a",
+    }));
+    assert_eq!(
+        minimal, explicit,
+        "省略跟寫出預設值、500 跟 500.0、鍵的順序，都是同一份"
+    );
+    let partial = key(json!({
+        "serverName": "a",
+        "connection": { "transport": "http", "url": "https://h/" },
+        "reconnect": { "initialDelayMs": 500 },
+    }));
+    assert_eq!(minimal, partial, "reconnect 只寫一部分，其餘照預設");
+
+    let base =
+        json!({ "serverName": "a", "connection": { "transport": "http", "url": "https://h/" } });
+    for (field, value) in [
+        ("toolCallTimeoutMs", json!(60001)),
+        ("livenessTimeoutMs", json!(15001)),
+        ("maxInstructionBytes", json!(1)),
+        ("failOnStartupError", json!(true)),
+        ("elicitation", json!(false)),
+        ("reconnect", json!({ "maxAttempts": 3 })),
+    ] {
+        let mut config = base.clone();
+        config[field] = value;
+        assert_ne!(minimal, key(config), "{field} 不同就是另一份");
+    }
+    let mut with_headers = base.clone();
+    with_headers["connection"]["headers"] = json!({});
+    assert_ne!(
+        minimal,
+        key(with_headers),
+        "headers 寫了空物件跟沒寫不同，同 zod 的 optional"
+    );
+    assert_ne!(
+        Server::parse(&base).expect("設定").pool_key(false),
+        minimal,
+        "elicitation 旗標不同就是另一份"
+    );
+}
+
+#[test]
 fn 遮蔽先換長的() {
     let secrets = vec!["ab".to_string(), "abcd".to_string(), String::new()];
     assert_eq!(scrub("x abcd y ab", &secrets), "x [redacted] y [redacted]");
