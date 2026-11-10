@@ -809,12 +809,25 @@ describe('llm/stream 的環繞函式（native 經 configurable 交進來）', ()
       })();
     for (const mode of MODES) {
       received = [];
+      // 數 fetch 的呼叫，再等一個 macrotask 才看端點：沒等到的請求（例如沒人等它的那一次）也算得到。
+      const fields = liveFields();
+      const inner = fields.configuration?.fetch ?? fetch;
+      let fetched = 0;
+      const counted: typeof fetch = (...args) => {
+        fetched += 1;
+        return inner(...args);
+      };
       const { result, thrown } = await runRaw(
-        new BaseChatOpenAI(liveFields()),
+        new BaseChatOpenAI({
+          ...fields,
+          configuration: { ...fields.configuration, fetch: counted },
+        }),
         invoke([new HumanMessage('嗨')], aroundConfig(around)),
         mode,
       );
+      await new Promise((settled) => setTimeout(settled, 50));
       expect(thrown, mode).toBeUndefined();
+      expect(fetched, mode).toBe(0);
       expect(received, mode).toHaveLength(0);
       expect((result as AIMessage).text, mode).toBe('快取的');
     }
