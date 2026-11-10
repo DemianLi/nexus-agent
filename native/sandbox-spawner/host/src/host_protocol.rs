@@ -13,7 +13,7 @@
 //! 上限都是常數：一框最長 [`MAX_FRAME`]，JSON 巢狀最多 [`crate::json::MAX_DEPTH`] 層，每條連線未處理的位元組最多
 //! [`nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES`] 個框長，`id` 最大 [`MAX_ID`]。超過、解不開、種類不認得，都算違反協定。
 
-use crate::json::{self, Value};
+use crate::json::{self, Map, Value};
 use nexus_sandbox_spawner::protocol::DecodeError;
 
 /// 宿主連線的協定版本。跟監督行程控制通道的版本（[`nexus_sandbox_spawner::supervisor_protocol::PROTOCOL_VERSION`]）各自獨立。
@@ -133,14 +133,13 @@ pub enum HostMessage {
     },
 }
 
-fn object(payload: &[u8]) -> Result<(String, Vec<(String, Value)>), DecodeError> {
+fn object(payload: &[u8]) -> Result<(String, Map<String, Value>), DecodeError> {
     let Value::Object(fields) = json::parse(payload).map_err(|err| DecodeError(err.0))? else {
         return Err(DecodeError("不是物件"));
     };
     let kind = fields
-        .iter()
-        .find(|(key, _)| key == "type")
-        .and_then(|(_, value)| value.as_str())
+        .get("type")
+        .and_then(Value::as_str)
         .ok_or(DecodeError("少了 type"))?
         .to_string();
     Ok((kind, fields))
@@ -148,7 +147,7 @@ fn object(payload: &[u8]) -> Result<(String, Vec<(String, Value)>), DecodeError>
 
 /// 照 `keys` 的順序取欄位：每一個都要有，也不能多出別的。
 fn fields<'a, const N: usize>(
-    fields: &'a [(String, Value)],
+    fields: &'a Map<String, Value>,
     keys: [&str; N],
 ) -> Result<[&'a Value; N], DecodeError> {
     if fields.len() != N + 1 {
@@ -156,18 +155,14 @@ fn fields<'a, const N: usize>(
     }
     let mut out = [&Value::Null; N];
     for (slot, key) in out.iter_mut().zip(keys) {
-        *slot = fields
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
-            .ok_or(DecodeError("欄位不對"))?;
+        *slot = fields.get(key).ok_or(DecodeError("欄位不對"))?;
     }
     Ok(out)
 }
 
 fn version(value: &Value) -> Result<u32, DecodeError> {
     value
-        .as_int()
+        .as_u64()
         .and_then(|n| u32::try_from(n).ok())
         .ok_or(DecodeError("版本不是 u32"))
 }
@@ -181,17 +176,13 @@ fn string(value: &Value) -> Result<String, DecodeError> {
 
 fn id(value: &Value) -> Result<u64, DecodeError> {
     value
-        .as_int()
-        .and_then(|n| u64::try_from(n).ok())
+        .as_u64()
         .filter(|&n| n <= MAX_ID)
         .ok_or(DecodeError("id 不在範圍內"))
 }
 
 fn seq(value: &Value) -> Result<u64, DecodeError> {
-    value
-        .as_int()
-        .and_then(|n| u64::try_from(n).ok())
-        .ok_or(DecodeError("seq 不在範圍內"))
+    value.as_u64().ok_or(DecodeError("seq 不在範圍內"))
 }
 
 fn side(value: &Value) -> Result<Side, DecodeError> {
@@ -203,19 +194,20 @@ fn side(value: &Value) -> Result<Side, DecodeError> {
 }
 
 fn side_str(side: Side) -> Value {
-    Value::Str(match side {
-        Side::Client => "c".into(),
-        Side::Host => "h".into(),
+    Value::from(match side {
+        Side::Client => "c",
+        Side::Host => "h",
     })
 }
 
-fn int(n: u64) -> Value {
-    // id 與 seq 都在 i64 放得下的範圍內：解碼時核過，宿主自己編的 seq 數不到那麼大。
-    Value::Int(i64::try_from(n).unwrap_or(i64::MAX))
+fn entry(key: &'static str, value: Value) -> (&'static str, Value) {
+    (key, value)
 }
 
-fn entry(key: &str, value: Value) -> (String, Value) {
-    (key.to_string(), value)
+/// 框的外層：鍵照列出的順序，`type` 在前。
+fn encode(fields: &[(&'static str, Value)]) -> Vec<u8> {
+    let refs: Vec<(&str, &Value)> = fields.iter().map(|(key, value)| (*key, value)).collect();
+    json::encode_fields(&refs)
 }
 
 /// 解一份 JSON 物件：`type` 不認得、欄位少了或多了、型別不對都回 [`DecodeError`]，不 panic。
@@ -251,13 +243,13 @@ pub fn decode_client_message(payload: &[u8]) -> Result<ClientMessage, DecodeErro
     }
 }
 
-/// 編成緊湊 JSON，鍵照 `type` 在前的固定順序；不會失敗。
+/// 編成緊湊 JSON：框的外層鍵照 `type` 在前的固定順序，`payload` 裡的物件照 [`json::encode`]；不會失敗。
 pub fn encode_client_message(message: &ClientMessage) -> Vec<u8> {
     let fields = match message {
         ClientMessage::Hello { version, token } => vec![
-            entry("type", Value::Str("hello".into())),
-            entry("version", Value::Int(i64::from(*version))),
-            entry("token", Value::Str(token.clone())),
+            entry("type", Value::from("hello")),
+            entry("version", Value::from(*version)),
+            entry("token", Value::from(token.as_str())),
         ],
         ClientMessage::Call {
             side,
@@ -266,20 +258,20 @@ pub fn encode_client_message(message: &ClientMessage) -> Vec<u8> {
             method,
             payload,
         } => vec![
-            entry("type", Value::Str("call".into())),
+            entry("type", Value::from("call")),
             entry("side", side_str(*side)),
-            entry("id", int(*id)),
-            entry("service", Value::Str(service.clone())),
-            entry("method", Value::Str(method.clone())),
+            entry("id", Value::from(*id)),
+            entry("service", Value::from(service.as_str())),
+            entry("method", Value::from(method.as_str())),
             entry("payload", payload.clone()),
         ],
         ClientMessage::Cancel { side, id } => vec![
-            entry("type", Value::Str("cancel".into())),
+            entry("type", Value::from("cancel")),
             entry("side", side_str(*side)),
-            entry("id", int(*id)),
+            entry("id", Value::from(*id)),
         ],
     };
-    json::encode(&Value::Object(fields))
+    encode(&fields)
 }
 
 /// 同 [`decode_client_message`]，解宿主送給客戶端的。`result` 的 `ok` 與 `error` 剛好一個。
@@ -354,12 +346,12 @@ fn call_error(value: &Value) -> Result<CallError, DecodeError> {
 pub fn encode_host_message(message: &HostMessage) -> Vec<u8> {
     let fields = match message {
         HostMessage::Hello { version } => vec![
-            entry("type", Value::Str("hello".into())),
-            entry("version", Value::Int(i64::from(*version))),
+            entry("type", Value::from("hello")),
+            entry("version", Value::from(*version)),
         ],
         HostMessage::Rejected { reason } => vec![
-            entry("type", Value::Str("rejected".into())),
-            entry("reason", Value::Str(reason.clone())),
+            entry("type", Value::from("rejected")),
+            entry("reason", Value::from(reason.as_str())),
         ],
         HostMessage::Chunk {
             side,
@@ -367,26 +359,23 @@ pub fn encode_host_message(message: &HostMessage) -> Vec<u8> {
             seq,
             payload,
         } => vec![
-            entry("type", Value::Str("chunk".into())),
+            entry("type", Value::from("chunk")),
             entry("side", side_str(*side)),
-            entry("id", int(*id)),
-            entry("seq", int(*seq)),
+            entry("id", Value::from(*id)),
+            entry("seq", Value::from(*seq)),
             entry("payload", payload.clone()),
         ],
         HostMessage::Result { side, id, outcome } => {
             let mut out = vec![
-                entry("type", Value::Str("result".into())),
+                entry("type", Value::from("result")),
                 entry("side", side_str(*side)),
-                entry("id", int(*id)),
+                entry("id", Value::from(*id)),
             ];
             out.push(match outcome {
                 Ok(value) => entry("ok", value.clone()),
                 Err(err) => entry(
                     "error",
-                    Value::Object(vec![
-                        entry("code", Value::Str(err.code.as_str().into())),
-                        entry("message", Value::Str(err.message.clone())),
-                    ]),
+                    serde_json::json!({"code": err.code.as_str(), "message": err.message}),
                 ),
             });
             out
@@ -396,13 +385,13 @@ pub fn encode_host_message(message: &HostMessage) -> Vec<u8> {
             topic,
             payload,
         } => vec![
-            entry("type", Value::Str("event".into())),
-            entry("service", Value::Str(service.clone())),
-            entry("topic", Value::Str(topic.clone())),
+            entry("type", Value::from("event")),
+            entry("service", Value::from(service.as_str())),
+            entry("topic", Value::from(topic.as_str())),
             entry("payload", payload.clone()),
         ],
     };
-    json::encode(&Value::Object(fields))
+    encode(&fields)
 }
 
 /// 帶 [`HOST_PROTOCOL_VERSION`] 的 `hello`。
@@ -453,23 +442,23 @@ mod tests {
     fn limits_and_version_match_the_vector_file() {
         let all = vectors();
         assert_eq!(
-            all.get("protocolVersion").and_then(Value::as_int),
+            all.get("protocolVersion").and_then(Value::as_i64),
             Some(i64::from(HOST_PROTOCOL_VERSION))
         );
         assert_eq!(
-            all.get("maxFrame").and_then(Value::as_int),
+            all.get("maxFrame").and_then(Value::as_i64),
             Some(MAX_FRAME as i64)
         );
         assert_eq!(
-            all.get("maxId").and_then(Value::as_int),
+            all.get("maxId").and_then(Value::as_i64),
             Some(MAX_ID as i64)
         );
         assert_eq!(
-            all.get("maxDepth").and_then(Value::as_int),
+            all.get("maxDepth").and_then(Value::as_i64),
             Some(json::MAX_DEPTH as i64)
         );
         assert_eq!(
-            all.get("bufferedFrames").and_then(Value::as_int),
+            all.get("bufferedFrames").and_then(Value::as_i64),
             Some(INBOX_FRAMES as i64)
         );
     }
@@ -488,6 +477,17 @@ mod tests {
             let message = decode_host_message(bytes).unwrap();
             assert_eq!(encode_host_message(&message), bytes);
             assert_eq!(&json::parse(bytes).unwrap(), entry.get("value").unwrap());
+        }
+    }
+
+    #[test]
+    fn duplicate_keys_decode_to_the_last_one() {
+        let all = vectors();
+        let entries = group(&all, "duplicateKeys");
+        assert!(!entries.is_empty());
+        for entry in entries {
+            let message = decode_client_message(text(entry, "json").as_bytes()).unwrap();
+            assert_eq!(&client_value(&message), entry.get("value").unwrap());
         }
     }
 

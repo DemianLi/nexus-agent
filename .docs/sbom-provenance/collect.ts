@@ -13,8 +13,8 @@ import { parseArgs } from 'node:util';
 import {
   SPAWNER_CRATES,
   SPAWNER_NATIVE_LIBS,
-  lockedCrates,
   rustChannel,
+  spawnerLockedCrates,
 } from '../../scripts/release/spawner.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -377,7 +377,7 @@ async function main(): Promise<void> {
   const lockText = readFileSync(join(ROOT, 'native/sandbox-spawner/Cargo.lock'), 'utf8');
   const runtime = new Map(SPAWNER_CRATES.map((item) => [item.name, item.runtime]));
   const crateRows: Row[] = [];
-  for (const item of lockedCrates(lockText)) {
+  for (const item of spawnerLockedCrates(lockText)) {
     if (item.checksum === undefined) continue;
     crateRows.push(
       await crateRow(

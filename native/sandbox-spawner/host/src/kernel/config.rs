@@ -61,10 +61,12 @@ pub fn merge(base: &Value, patch: &Value) -> Value {
         (Value::Object(old), Value::Object(new)) => {
             let mut out = old.clone();
             for (key, value) in new {
-                match out.iter_mut().find(|(k, _)| k == key) {
-                    Some((_, slot)) => *slot = merge(slot, value),
-                    None if *value == Value::Null => {}
-                    None => out.push((key.clone(), value.clone())),
+                match out.get_mut(key) {
+                    Some(slot) => *slot = merge(slot, value),
+                    None if value.is_null() => {}
+                    None => {
+                        out.insert(key.clone(), value.clone());
+                    }
                 }
             }
             Value::Object(out)
@@ -75,38 +77,37 @@ pub fn merge(base: &Value, patch: &Value) -> Value {
 
 /// 逐欄取設定值。每取一個鍵就記下來，[`Fields::finish`] 檢查有沒有剩下沒人認的鍵。
 pub struct Fields<'a> {
-    fields: &'a [(String, Value)],
+    fields: Vec<(&'a str, &'a Value)>,
     used: Vec<bool>,
 }
 
 impl<'a> Fields<'a> {
     /// 設定必須是物件；`null` 當成空物件。
     pub fn new(value: &'a Value) -> Result<Fields<'a>, ConfigError> {
-        let fields: &'a [(String, Value)] = match value {
-            Value::Object(fields) => fields,
-            Value::Null => &[],
+        let fields: Vec<(&'a str, &'a Value)> = match value {
+            Value::Object(fields) => fields.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+            Value::Null => Vec::new(),
             _ => return Err(ConfigError("設定必須是物件".to_string())),
         };
-        Ok(Fields {
-            fields,
-            used: vec![false; fields.len()],
-        })
+        let used = vec![false; fields.len()];
+        Ok(Fields { fields, used })
     }
 
     /// 這個鍵的值；鍵不存在或值是 `null` 都回 `None`。
     pub fn value(&mut self, key: &str) -> Option<&'a Value> {
-        let index = self.fields.iter().position(|(k, _)| k == key)?;
+        let index = self.fields.iter().position(|(k, _)| *k == key)?;
         self.used[index] = true;
-        match &self.fields[index].1 {
+        match self.fields[index].1 {
             Value::Null => None,
             value => Some(value),
         }
     }
 
+    /// `1.0` 這類小數寫法，與 `i64` 放不下的整數，都不算整數。
     pub fn opt_int(&mut self, key: &str) -> Result<Option<i64>, ConfigError> {
         match self.value(key) {
             None => Ok(None),
-            Some(Value::Int(n)) => Ok(Some(*n)),
+            Some(value) if value.is_i64() => Ok(value.as_i64()),
             Some(_) => Err(ConfigError(format!("{key} 必須是整數"))),
         }
     }
@@ -119,7 +120,7 @@ impl<'a> Fields<'a> {
     pub fn opt_str(&mut self, key: &str) -> Result<Option<&'a str>, ConfigError> {
         match self.value(key) {
             None => Ok(None),
-            Some(Value::Str(s)) => Ok(Some(s)),
+            Some(Value::String(s)) => Ok(Some(s)),
             Some(_) => Err(ConfigError(format!("{key} 必須是字串"))),
         }
     }
@@ -144,7 +145,7 @@ impl<'a> Fields<'a> {
             .iter()
             .zip(&self.used)
             .filter(|(_, used)| !**used)
-            .map(|((k, _), _)| k.as_str())
+            .map(|((k, _), _)| *k)
             .collect();
         if unknown.is_empty() {
             Ok(())

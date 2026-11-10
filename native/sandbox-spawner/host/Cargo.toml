@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 nexus-sandbox-spawner = { path = ".." }
 libc = "=0.2.191"
+serde_json = "=1.0.154"
 
 [features]
 # 只給整合測試：把 `test-echo` 插件編進 `--plugins` 認得的清單，並打開 spawner 那邊的 test-hooks。出貨的建置不帶它。

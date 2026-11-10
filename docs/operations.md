@@ -1713,7 +1713,7 @@ nexus-agent serve --process-model per-thread
     | `host_unavailable` | 有宿主，但等到上限還沒連上；呼叫**沒有送出去** | 可以重試，重試前宜退避 |
     | `host_lost` | 呼叫送出去之後連線斷了，**宿主做了沒有不知道** | 不會自動重送；冪等的才自己重送，不冪等的先查狀態再決定 |
 
-  - 呼叫編成一框（含服務名與方法名）超過 256 KiB，或參數裡有宿主收不下的值（非安全整數、落單的代理對、巢狀超過 32 層（框本身算一層）、不是純物件），呼叫以 `HostProtocolError` 結算，不送出去。
+  - 呼叫編成一框（含服務名與方法名）超過 256 KiB，或參數裡有宿主收不下的值（NaN 或無限大（`JSON.stringify` 會寫成 `null`）、落單的代理對、巢狀超過 32 層（框本身算一層）、不是純物件），呼叫以 `HostProtocolError` 結算，不送出去。
     這要連上之後才檢查，所以沒有宿主或還沒連上時，先拿到的是 `host_absent` 或 `host_unavailable`。
   - 宿主推來的事件用 `onEvent(listener)` 收，只會送到服務指名的那條連線。宿主那邊的登記跟著連線走，斷線重連之後要重新登記的，放在 `bridge.onReady(listener)` 裡：每次連上（包括重連）叫一次，登記時已經連上的話當下也叫一次。listener 丟的錯記一行 log，不影響其他 listener。
 - **插件清單**：宿主照 `--plugins <檔>` 掛主機級的插件。harness 起監督行程時一律帶 `--plugins <home>/host-plugins.json`。出貨的宿主還沒有任何插件，所以清單裡目前寫不了任何一列。

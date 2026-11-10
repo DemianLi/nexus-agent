@@ -57,7 +57,7 @@ impl Service for Echo {
 }
 
 fn int(value: &Value, key: &str) -> Option<i64> {
-    value.get(key).and_then(Value::as_int)
+    value.get(key).and_then(Value::as_i64)
 }
 
 impl Remote for Echo {
@@ -86,8 +86,8 @@ impl Remote for Echo {
                 let Some(count) = int(&payload, "count").filter(|n| (0..=1000).contains(n)) else {
                     return Progress::Err(Fault::BadPayload, "count 要是 0 到 1000".into());
                 };
-                chunks.extend((0..count).map(Value::Int));
-                Progress::Ok(Value::Int(count))
+                chunks.extend((0..count).map(Value::from));
+                Progress::Ok(Value::from(count))
             }
             "wait" => {
                 let Some(ms) = int(&payload, "ms").and_then(|n| u64::try_from(n).ok()) else {
@@ -101,10 +101,10 @@ impl Remote for Echo {
                 self.pending.insert(key, None);
                 Progress::Pending
             }
-            "cancels" => Progress::Ok(Value::Int(self.cancels)),
-            "big" => Progress::Ok(Value::Str("x".repeat(MAX_FRAME))),
+            "cancels" => Progress::Ok(Value::from(self.cancels)),
+            "big" => Progress::Ok(Value::String("x".repeat(MAX_FRAME))),
             "big-chunk" => {
-                chunks.push(Value::Str("x".repeat(MAX_FRAME)));
+                chunks.push(Value::String("x".repeat(MAX_FRAME)));
                 self.pending.insert(key, None);
                 Progress::Pending
             }
@@ -130,13 +130,13 @@ impl Remote for Echo {
                 let event = Push {
                     conn: key.conn,
                     topic: "burst".into(),
-                    payload: Value::Str("x".repeat(bytes)),
+                    payload: Value::String("x".repeat(bytes)),
                 };
                 self.events.extend((0..count).map(|_| event.clone()));
                 Progress::Ok(Value::Null)
             }
             "flood" => {
-                chunks.extend((0..5).map(|_| Value::Str("x".repeat(250_000))));
+                chunks.extend((0..5).map(|_| Value::String("x".repeat(250_000))));
                 self.pending.insert(key, None);
                 Progress::Pending
             }
@@ -148,7 +148,7 @@ impl Remote for Echo {
         match self.pending.get(&key) {
             Some(Some(at)) if *at <= now => {
                 self.pending.remove(&key);
-                Progress::Ok(Value::Str("done".into()))
+                Progress::Ok(Value::from("done"))
             }
             Some(_) => Progress::Pending,
             None => Progress::Err(Fault::Failed, "不認得這一次呼叫".into()),
