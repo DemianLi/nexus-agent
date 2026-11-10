@@ -528,7 +528,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
 
   /**
    * 開一條串流請求。有 `llm/stream` 的環繞函式時交給它：迭代 `next()` 回的串流才送請求，監聽者不迭代就一個請求都不送。
-   * 監聽者可能是 `async` 函式、回的是 Promise，先等再驗它是不是可迭代的串流。
+   * 監聽者回的不是 `AsyncIterable`（包括回 Promise）時拋 `TypeError`，見 {@link streamFromListener}。
    */
   async #openStream(
     messages: BaseMessage[],
@@ -544,18 +544,11 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
       (await this.completionWithRetry(params, requestOptions)) as AsyncIterable<ModelStreamChunk>;
     const around = options[LLM_STREAM_CONFIG_KEY];
     if (around === undefined) return request();
-    const wrapped: unknown = await around(async function* () {
-      yield* await request();
-    });
-    if (
-      typeof wrapped !== 'object' ||
-      wrapped === null ||
-      typeof (wrapped as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== 'function'
-    )
-      throw new TypeError(
-        'llm/stream 的監聽者要回 chunk 的 AsyncIterable（next() 回的那一條，或自己 yield 的），收到的不是',
-      );
-    return wrapped as AsyncIterable<unknown>;
+    return streamFromListener(
+      around(async function* () {
+        yield* await request();
+      }),
+    );
   }
 
   override async *_streamResponseChunks(
@@ -794,6 +787,7 @@ export function withoutAround<T extends object>(options: T): T {
 /**
  * 不打端點的模型（重放、腳本）接上 `llm/stream`：有環繞函式就交給它一顆從這一則推出來的 chunk，它交回的串流排乾就丟。
  * 吐出去的仍是那一則，監聽者短路也一樣。
+ * @throws {TypeError} 環繞函式回的不是 `AsyncIterable`（包括回 Promise）時，見 {@link streamFromListener}。
  */
 export async function passAroundOnce(options: object, message: AIMessage): Promise<void> {
   const around = (options as { readonly [LLM_STREAM_CONFIG_KEY]?: ModelStreamAround })[
@@ -801,10 +795,34 @@ export async function passAroundOnce(options: object, message: AIMessage): Promi
   ];
   if (around === undefined) return;
   const chunk = chunkOf(message);
-  for await (const _ of await around(async function* () {
-    yield chunk;
-  }))
+  for await (const _ of streamFromListener(
+    around(async function* () {
+      yield chunk;
+    }),
+  ))
     continue;
+}
+
+/**
+ * 驗監聽者回的是 `AsyncIterable`（只看 `Symbol.asyncIterator`，不驗 chunk 形狀），不是就拋 `TypeError`。回 Promise 也拋、不先 `await`：
+ * `waterfall` 同步派發，內層監聽者回的值原樣成為外層 `next()` 的回傳，外層迭代它（`for await`／`yield*`）時當場拋 JS 自己的 `TypeError`。
+ * 在這裡 `await` 只救得了原樣傳到最外層的那個 Promise，同一位監聽者能不能用就要看外層怎麼寫。
+ * 拋之前替收到的 Promise 接住 reject：沒人等它，監聽者之後拋的錯會成為未處理的 rejection，serve 因此退出。
+ * @param wrapped - 環繞函式回的值。
+ * @returns 同一個值，型別收窄成串流。
+ */
+function streamFromListener(wrapped: unknown): AsyncIterable<ModelStreamChunk> {
+  if (wrapped instanceof Promise) wrapped.catch(() => undefined);
+  if (
+    typeof wrapped !== 'object' ||
+    wrapped === null ||
+    typeof (wrapped as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== 'function'
+  )
+    throw new TypeError(
+      'llm/stream 的監聽者要回 chunk 的 AsyncIterable（next() 回的那一條，或自己 yield 的），收到的不是。' +
+        '監聽者要寫成 async function*，或不帶 async 直接回 next()；回 Promise 的 async 函式不行',
+    );
+  return wrapped as AsyncIterable<ModelStreamChunk>;
 }
 
 /** 一則整理好的回覆推回一顆 chunk：文字、推理、工具呼叫、結束原因、用量。 */

@@ -18,6 +18,7 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
     - `usage`。
 
     端點送什麼，監聽者就看到什麼，中間不翻譯。
+- **監聽者不能是回 Promise 的 `async` 函式。** 要寫成 `async function*`，或不帶 `async`、直接回 `next()`。舊寫法 `async (payload, next) => …` 回的是 Promise，這次模型呼叫會拋 `TypeError`，訊息寫明「回 Promise 的 async 函式不行」。有兩位以上的監聽者時，內層回 Promise 也可能讓外層在迭代 `next()` 時拋 JS 自己的 `TypeError`（外層用 `for await` 時是 `… is not async iterable`，用 `yield*` 時是 `undefined is not a function`），一樣是這個原因。
 - **派發的時機與次數不變**：每一次模型呼叫派一次，root 與子代理都派；`agent/request-error` 回 `retry` 再打的那一次另外再派一次。payload 不變：`threadId`、`step`、`signal`。
 - **`next()` 改成在 native 下一律打串流請求。** 以前 CLI 單機模式沒有串流 handler 時打的是非串流請求，現在也一樣經過 `next()` 交出 chunk。
 - **短路**：不呼叫或不迭代 `next()`、自己 yield chunk，請求就不會送出。但這一步的 `request/*` 快照與 `model/start` 在派 `llm/stream` 之前就寫進會話日誌了。所以日誌裡會有一次「開了頭、但端點沒收到」的模型呼叫；你 yield 的 chunk 帶了 `usage`，用量就照它記。
@@ -52,7 +53,7 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
    });
    ```
 
-   `next()` 只能呼叫一次。要在串流結束時做事，放在 `for await` 之後；要在失敗時做事，用 `try`／`finally` 包住迴圈。
+   函式要寫成 `async function*`，不要寫成 `async (payload, next) => …`：後者回 Promise，會拋 `TypeError`。`next()` 只能呼叫一次。要在串流結束時做事，放在 `for await` 之後；要在失敗時做事，用 `try`／`finally` 包住迴圈。
 4. 短路的監聽者（重放、快取），改成 yield chunk，不要回 AI 訊息。至少要有：
    - 帶內容的 chunk：`choices: [{ index: 0, delta: { role: 'assistant', content: '…' }, finish_reason: null }]`；
    - 最後一顆帶 `finish_reason`（`stop`，或有工具呼叫時的 `tool_calls`）；
@@ -60,5 +61,5 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
 
    工具呼叫放 `delta.tool_calls`，格式同 Chat Completions 的串流：每一顆帶 `index`，第一顆帶 `id` 與 `function.name`，`function.arguments` 可以分段。
 5. 短路時日誌會留下沒送出的那一次呼叫（`request/*` 與 `model/start`）。依日誌計算請求數或成本的工具，不要用 `model/start` 的筆數；改數不帶 `outcome` 的 `model/usage`，並記得短路監聽者 yield 了 `usage` 的那幾筆不是端點收到的請求。
-6. 自己帶 `BaseChatModel` 進 native 的：環繞函式在 `invoke` 收到的 config 的 `configurable[LLM_STREAM_CONFIG_KEY]`，型別是 `ModelStreamAround`。在 `invoke` 取出它，打端點時把「送請求、回 chunk 串流」包成 `next` 交給它，改讀它回的那一條串流。它可能回 Promise，先 `await` 再迭代。不這樣做，這個模型在 native 下每次呼叫都會拋錯。
+6. 自己帶 `BaseChatModel` 進 native 的：環繞函式在 `invoke` 收到的 config 的 `configurable[LLM_STREAM_CONFIG_KEY]`，型別是 `ModelStreamAround`。在 `invoke` 取出它，打端點時把「送請求、回 chunk 串流」包成 `next` 交給它，改讀它回的那一條串流。它回的就是串流，不要 `await`；回的不是 `AsyncIterable` 時拋 `TypeError`，當成監聽者寫錯。不這樣做，這個模型在 native 下每次呼叫都會拋錯。
 7. 確認改好了：用 `--agent-loop native` 開一條新會話送一句，回覆照常出現；監聽者被叫到，次數等於這一輪的模型呼叫數，包括子代理的。

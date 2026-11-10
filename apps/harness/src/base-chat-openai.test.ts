@@ -16,7 +16,7 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { LLM_STREAM_CONFIG_KEY, SessionLog, toLoggedMessage } from '@nexus/core';
+import { EventBus, LLM_STREAM_CONFIG_KEY, SessionLog, toLoggedMessage } from '@nexus/core';
 import type { ModelStreamAround, ModelStreamChunk } from '@nexus/core';
 import { openModelCall, reportedAttemptUsage } from '@nexus/core/src/model-call-scope.js';
 import { ChatOpenAI } from '@langchain/openai';
@@ -867,19 +867,87 @@ describe('llm/stream 的環繞函式（native 經 configurable 交進來）', ()
     expect(holdsAround(model._getCallOptionsForTracing(options, {} as never), around)).toBe(false);
   });
 
-  it('監聽者是 async 函式（回 Promise）也收', async () => {
+  type StreamListener = (
+    payload: unknown,
+    next: () => AsyncIterable<ModelStreamChunk>,
+  ) => AsyncIterable<ModelStreamChunk>;
+
+  /** 回 Promise 的 `async` 監聽者：型別不允許，JS 寫的插件照樣寫得出來。 */
+  const promiseListener = (async (
+    _payload: unknown,
+    next: () => AsyncIterable<ModelStreamChunk>,
+  ) => {
+    await Promise.resolve();
+    return next();
+  }) as unknown as StreamListener;
+
+  /**
+   * 用真的 `EventBus` 派 `llm/stream`，跟 native agent 的接法相同。
+   * @param listeners - 由外到內的監聽者。
+   */
+  const viaBus = (...listeners: StreamListener[]): ModelStreamAround => {
+    const bus = new EventBus();
+    for (const listener of listeners) bus.on('llm/stream', listener);
+    return (next) => bus.waterfall('llm/stream', {} as never, next);
+  };
+
+  it('監聽者是回 Promise 的 async 函式：拋 TypeError、講明要怎麼寫', async () => {
     script = TEXT_STREAM;
-    const around = (async (next: () => AsyncIterable<ModelStreamChunk>) => {
-      await Promise.resolve();
-      return next();
-    }) as unknown as ModelStreamAround;
-    const { result, thrown } = await runRaw(
+    const { thrown } = await runRaw(
       new BaseChatOpenAI(liveFields()),
-      invoke([new HumanMessage('嗨')], aroundConfig(around)),
+      invoke([new HumanMessage('嗨')], aroundConfig(viaBus(promiseListener))),
       'none',
     );
-    expect(thrown).toBeUndefined();
-    expect((result as AIMessage).text).toBe('報表要按部門');
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toContain('回 Promise 的 async 函式不行');
+  });
+
+  it('回 Promise 的監聽者之後拋錯：只有這次呼叫拋 TypeError，不留下未處理的 rejection', async () => {
+    script = TEXT_STREAM;
+    const rejecting = (async () => {
+      await Promise.resolve();
+      throw new Error('監聽者自己的錯');
+    }) as unknown as StreamListener;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke([new HumanMessage('嗨')], aroundConfig(viaBus(rejecting))),
+      'none',
+    );
+    // 未處理的 rejection 由 vitest 報成這個檔失敗，這裡只看拋出的是哪一個。
+    await new Promise((settled) => setTimeout(settled, 0));
+    expect(thrown).toBeInstanceOf(TypeError);
+  });
+
+  it('兩位監聽者、內層回 Promise：外層原樣轉交時同一個 TypeError', async () => {
+    script = TEXT_STREAM;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke(
+        [new HumanMessage('嗨')],
+        aroundConfig(viaBus((_payload, next) => next(), promiseListener)),
+      ),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toContain('回 Promise 的 async 函式不行');
+  });
+
+  it('兩位監聽者、內層回 Promise：外層迭代 next() 時拋 JS 自己的 TypeError，模型那一層等 Promise 也救不回', async () => {
+    script = TEXT_STREAM;
+    const { thrown } = await runRaw(
+      new BaseChatOpenAI(liveFields()),
+      invoke(
+        [new HumanMessage('嗨')],
+        aroundConfig(
+          viaBus(async function* (_payload, next) {
+            yield* next();
+          }, promiseListener),
+        ),
+      ),
+      'none',
+    );
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).not.toContain('llm/stream');
   });
 
   it('監聽者回的不是串流：拋 TypeError、講明要回什麼', async () => {
