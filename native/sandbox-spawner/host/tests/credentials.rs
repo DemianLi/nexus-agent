@@ -228,6 +228,22 @@ fn 不認得的頂層鍵只講個數與行號() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `? ` 每層只多兩個字元，不像區塊縮排那樣越深越長，幾百 KB 就能套到幾十萬層。堆疊釘在 2 MiB，是 Rust 目前在 Tier-1 平台開新 thread 的預設值；`stack_size` 蓋過 `RUST_MIN_STACK`，結果不受環境變數影響。
+#[test]
+fn 極深的顯式鍵回錯而不是爆堆疊() {
+    let text = format!("{}x\n", "? ".repeat(200_000));
+    let why = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || parse(&text).expect_err("該拒絕").why)
+        .expect("開 thread")
+        .join()
+        .expect("thread 正常結束");
+    assert_eq!(
+        why,
+        "YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）"
+    );
+}
+
 /// 位置跟 TS 一字不差：集合鍵指到它的開頭，檔頭的 BOM 算在第 1 行的欄裡，BMP 以外的字元算一欄。
 #[test]
 fn 位置跟_ts_一字不差() {
