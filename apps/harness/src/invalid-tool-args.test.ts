@@ -555,6 +555,8 @@ describe('落定之後', () => {
  *
  * 工具的 schema 收得下 `{}`（參數全選填）：記號丟了的話，歷史裡的 `{}` 是一個合法呼叫，本體會真的執行，
  * 只比碼的話也看不出來——所以斷言本體零次、文字逐字是 `INVALID_ARGUMENTS_REFUSAL`。
+ *
+ * 只有 langgraph：native 不寫存檔點，重啟後懸著的那一輪由 `resumeClosingInterruptedTurn` 收掉，不接回核准卡。
  */
 describe('核准卡跨組裝續接', () => {
   const optionalPlugin = (bodies: string[]): PluginEntry => ({
@@ -593,6 +595,7 @@ describe('核准卡跨組裝續接', () => {
       createNexusAgent({
         model: openAi(upstream.baseURL),
         checkpointer: saver,
+        agentLoop: 'langgraph',
         plugins: [optionalPlugin(bodies)],
       });
     const first = await assemble();

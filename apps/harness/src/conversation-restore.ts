@@ -51,7 +51,7 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 
-import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
+import { CHECKPOINT_MAX_DEPTH, CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 import { vouchCheckpointDepth } from './pruned-memory-saver.js';
 
 /** 這條 thread 的位址。 */
@@ -182,6 +182,7 @@ function depthBounded(event: SessionEvent): boolean {
  * @returns 推的結果，給入口披露用。
  * @throws `updateState`／`seedThread` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
+ *   native 沒有存檔點，灌回之前用同一個上限量一次：太深的訊息灌進去，下一輪在呼叫堆疊上爆，回的是認不得的錯。
  *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、或舊格式 `additional_kwargs.tool_calls`
  *   解析出來太深的，都會走到這裡。
  */
@@ -191,17 +192,27 @@ export async function restoreConversation(
   events: readonly SessionEvent[],
 ): Promise<ConversationReplay> {
   const seqOf = new Map<BaseMessage, number>();
+  const bounded = new Set<BaseMessage>();
   const replay = replayConversation(events, {
     toolResultAsSeen,
     shareStored: true,
     origin: (message, event) => {
       seqOf.set(message, event.seq);
-      if (depthBounded(event)) vouchCheckpointDepth(message);
+      if (!depthBounded(event)) return;
+      bounded.add(message);
+      vouchCheckpointDepth(message);
     },
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
     const config = { configurable: { thread_id: threadId } };
     if ('seedThread' in agent) {
+      for (const message of replay.messages as readonly BaseMessage[]) {
+        if (bounded.has(message)) continue;
+        const depth = checkpointDepth(message);
+        if (depth > CHECKPOINT_MAX_DEPTH) {
+          throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message));
+        }
+      }
       agent.seedThread(config, replay.messages as readonly BaseMessage[]);
       return replay;
     }

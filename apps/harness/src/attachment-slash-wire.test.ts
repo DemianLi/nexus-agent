@@ -143,6 +143,7 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
   const live = config(modelId);
   const credentials = ambientCredentials({ [LIVE_API_KEY_ENV]: 'sk-loopback' });
   let registry: SessionRegistry | undefined;
+  let threadAgent: { getState(config: unknown): Promise<{ values: unknown }> } | undefined;
   const checkpointer = new MemorySaver();
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -156,6 +157,7 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
         observationPolicy: false,
         attachments: store,
       });
+      threadAgent = built.agent as unknown as typeof threadAgent;
       return {
         agent: built.agent as unknown as PumpAgent,
         attachSessions: (sessions, port) => {
@@ -178,7 +180,9 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
   return {
     handler,
     client: createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl }),
-    checkpointer,
+    /** 這條 thread 送進圖的 state：`langgraph` 是存檔點，native 是 agent 的快取。 */
+    state: async () =>
+      (await threadAgent!.getState({ configurable: { thread_id: THREAD } })).values,
     events: () => registry?.root.events ?? [],
   };
 }
@@ -264,7 +268,7 @@ describe('slash.run 帶附件', () => {
   });
 
   it('handler 經 steer 傳帶型別以外鍵的參照（#2323）：日誌照記，送進圖的那則訊息只留型別裡的欄位', async () => {
-    const { client, handler, events, checkpointer } = connect('vision');
+    const { client, handler, events, state } = connect('vision');
     try {
       const receipt = await upload(client, '暗號', '說明.txt');
       const result = await client.slashRun(THREAD, '/attach steer-extra', [
@@ -279,9 +283,7 @@ describe('slash.run 帶附件', () => {
         { ...admitted, extra: { next: [{ next: 'leaf' }] } },
       ]);
       const { type: _, ...fields } = admitted!;
-      const tuple = await checkpointer.getTuple({ configurable: { thread_id: THREAD } });
-      const messages = (tuple?.checkpoint.channel_values as { messages: { content: unknown }[] })
-        .messages;
+      const messages = ((await state()) as { messages: { content: unknown }[] }).messages;
       expect(messages[0]!.content).toEqual([
         { type: 'nexus-file', attachment: fields },
         { type: 'text', text: '請看附件' },

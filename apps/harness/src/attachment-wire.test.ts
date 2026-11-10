@@ -111,6 +111,7 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
   const live = config(modelId);
   const credentials = ambientCredentials({ [LIVE_API_KEY_ENV]: 'sk-loopback' });
   let registry: SessionRegistry | undefined;
+  let threadAgent: { getState(config: unknown): Promise<{ values: unknown }> } | undefined;
   const checkpointer = new MemorySaver();
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -124,6 +125,7 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
         observationPolicy: false,
         attachments: store,
       });
+      threadAgent = built.agent as unknown as typeof threadAgent;
       return {
         agent: built.agent as unknown as PumpAgent,
         attachSessions: (sessions, port) => {
@@ -146,7 +148,9 @@ function connect(modelId: 'vision' | 'texty' | 'silent') {
   return {
     handler,
     client: createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl }),
-    checkpointer,
+    /** 這條 thread 送進圖的 state：`langgraph` 是存檔點，native 是 agent 的快取。 */
+    state: async () =>
+      (await threadAgent!.getState({ configurable: { thread_id: THREAD } })).values,
     events: () => registry?.root.events ?? [],
   };
 }
@@ -312,7 +316,7 @@ describe('檔案收據', () => {
 
 describe('內嵌的圖', () => {
   it('送上線的是 image_url（位元組與原圖一致）；base64 不進日誌、不進存檔點', async () => {
-    const { client, handler, events, checkpointer } = connect('vision');
+    const { client, handler, events, state: stateOf } = connect('vision');
     try {
       const result = await client.runStart(THREAD, '這張圖是什麼', { attachments: [IMAGE] });
       expect(result).toMatchObject({ type: 'success' });
@@ -333,8 +337,7 @@ describe('內嵌的圖', () => {
       expect(JSON.stringify(events())).not.toContain(PNG_7X5);
       // 日誌上是參照：id、媒體類型、寬高，沒有位元組。
       expect(JSON.stringify(events())).toContain('"mediaType":"image/png"');
-      const tuple = await checkpointer.getTuple({ configurable: { thread_id: THREAD } });
-      const state = JSON.stringify(tuple?.checkpoint.channel_values ?? {});
+      const state = JSON.stringify((await stateOf()) ?? {});
       expect(state).toContain('nexus-image');
       expect(state).not.toContain(PNG_7X5);
     } finally {

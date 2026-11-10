@@ -33,12 +33,6 @@ export const KNOWN_DIFFERENCE_KINDS = {
     reason:
       '這一條的工具本體直接呼叫 LangGraph 的 `interrupt()`，不經 `exec.interrupt`，也不經等人服務。native 沒有圖可以接住它再接回。',
   },
-  checkpoint: {
-    card: 2360,
-    reason:
-      '這一條斷言 LangGraph 的存檔點：直接讀 `checkpointer.getTuple`、另一個 agent 實例經同一個 saver 接同一條 thread，' +
-      '或存檔點寫入時的 seal 與層數守衛（#1658）。native 的 state 在實例的記憶體裡，不寫存檔點。',
-  },
   langgraphInternals: {
     card: 2363,
     reason:
@@ -127,69 +121,15 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
-    file: 'src/attachment-slash-wire.test.ts',
-    test: 'slash.run 帶附件 > handler 經 steer 傳帶型別以外鍵的參照（#2323）：日誌照記，送進圖的那則訊息只留型別裡的欄位',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/attachment-wire.test.ts',
-    test: '內嵌的圖 > 送上線的是 image_url（位元組與原圖一致）；base64 不進日誌、不進存檔點',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
     file: 'src/background-delegation.test.ts',
     test: '背景路徑上的 #326：沙箱快照 > 子代理要核准的操作：前景改派問人，背景 start 回絕 > 前景改派：root 停在子代理冒出來的核准上，沒有自動拒絕',
     kind: 'noHumanInput',
     run: 'fails',
   },
   {
-    file: 'src/checkpoint-serde.test.ts',
-    test: '續接：日誌裡的舊事件比上限深（#1658） > 參數 3000 層（原本的無聲區）：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/checkpoint-serde.test.ts',
-    test: '續接：日誌裡的舊事件比上限深（#1658） > 參數 5000 層（原本 decirc 先爆）：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
     file: 'src/cli.test.ts',
     test: '停在核准點的那一輪 > 印出停在哪、還沒跑的是什麼、以及這個入口按不了核准',
     kind: 'noHumanInput',
-    run: 'fails',
-  },
-  {
-    file: 'src/compaction-log.test.ts',
-    test: '壓縮發生時，日誌裡留得下來 > `filePath` 指到的檔真的寫出來了',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-history-route.test.ts',
-    test: '摘要器的歷史（read-only） > 不落進工作區，下一輪讀得回來',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-history-route.test.ts',
-    test: '摘要器的歷史（workspace-write） > 不落進工作區，下一輪讀得回來',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-history-route.test.ts',
-    test: '超大 human message（read-only） > 搬去的地方不在工作區，模型只收到佔位，原話下一輪讀得回來',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-history-route.test.ts',
-    test: '超大 human message（workspace-write） > 搬去的地方不在工作區，模型只收到佔位，原話下一輪讀得回來',
-    kind: 'checkpoint',
     run: 'fails',
   },
   {
@@ -268,12 +208,6 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     file: 'src/interrupt.test.ts',
     test: 'subagent 裡的閘門 > general-purpose：拒絕 → 只拒那一次，工具沒跑，子代理收到拒絕、照常收尾，root 的 task 完成',
     kind: 'noHumanInput',
-    run: 'fails',
-  },
-  {
-    file: 'src/invalid-tool-args.test.ts',
-    test: '核准卡跨組裝續接 > 第一場停在壞參數工具的核准卡上，第二場核准：本體零次、拿到 INVALID_ARGS',
-    kind: 'checkpoint',
     run: 'fails',
   },
   {

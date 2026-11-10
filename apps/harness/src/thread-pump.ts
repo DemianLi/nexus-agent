@@ -326,8 +326,8 @@ export interface PumpAgent {
       };
     },
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
-  /** `langgraph` 的圖讀這條 thread 的 checkpoint。沒有 {@link appendLoggedMessages} 時一定有。 */
-  getState?(config: ThreadConfig): Promise<{ readonly values: unknown }>;
+  /** 這條 thread 的 state：`langgraph` 讀 checkpoint；native 是行程內快取的唯讀視圖，pump 在 native 下不讀它。 */
+  getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   /** `langgraph` 的圖寫這條 thread 的 checkpoint。沒有 {@link appendLoggedMessages} 時一定有。 */
   updateState?(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
   /**
@@ -3057,7 +3057,7 @@ export class ThreadPump {
   }
 
   /** `langgraph` 那條路的 agent：沒有 `appendLoggedMessages` 的一定有 `getState` 與 `updateState`（{@link PumpAgent}）。 */
-  get #checkpointAgent(): Required<Pick<PumpAgent, 'getState' | 'updateState'>> {
+  get #checkpointAgent(): Pick<PumpAgent, 'getState'> & Required<Pick<PumpAgent, 'updateState'>> {
     return this.#agent as Required<Pick<PumpAgent, 'getState' | 'updateState'>>;
   }
 
@@ -3126,7 +3126,9 @@ export class ThreadPump {
         return failure;
       }
       const pending = new Set(
-        danglingToolCalls((await this.#checkpointAgent.getState(config)).values).map((call) => call.id),
+        danglingToolCalls((await this.#checkpointAgent.getState(config)).values).map(
+          (call) => call.id,
+        ),
       );
       const messages = results
         .filter(({ data }) => pending.has(data.callId))

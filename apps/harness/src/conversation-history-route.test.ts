@@ -8,15 +8,19 @@
  * 路由到獨立的 `StateBackend`。
  *
  * **判準一律是兩件事一起：工作區裡沒有那個目錄，而且下一輪讀得回來。** 只看前一件會把
- * 「搬走了而且留得住」與「整個丟了」讀成同一件事——後者也會讓工作區是空的。讀回用的是
- * **同一個 checkpointer、同一個 thread、另一個 agent**：腳本模型的回合是寫死的，而摘要會吃掉
- * 其中一回合，同一個 agent 對不準哪一回合在摘要之後。
+ * 「搬走了而且留得住」與「整個丟了」讀成同一件事——後者也會讓工作區是空的。
+ *
+ * 讀回的路兩種 loop 不一樣。langgraph 用**同一個 checkpointer、同一個 thread、另一個 agent**，讓模型
+ * 呼叫 `grep`：腳本模型的回合是寫死的，而摘要會吃掉其中一回合，同一個 agent 對不準哪一回合在摘要之後。
+ * native 沒有 checkpointer，thread 的 state 只在那個 agent 的行程內快取裡，另一個 agent 看不到；
+ * 所以讀同一個 agent 那條 thread 的 `files`，那正是下一輪 `grep` 讀的地方。
  */
 
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
+import type { AgentLoopKind } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
 import type { SessionEventMap } from '@nexus/core';
@@ -55,15 +59,34 @@ interface Assembly {
   readonly root: string;
   readonly backend: ContainedFilesystemBackend;
   readonly saver: MemorySaver;
+  readonly loop: AgentLoopKind;
 }
 
-async function assembly(mode: SandboxMode): Promise<Assembly> {
+async function assembly(mode: SandboxMode, loop: AgentLoopKind): Promise<Assembly> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-history-'));
   return {
     root,
     backend: new ContainedFilesystemBackend({ rootDir: root, mode }),
     saver: new MemorySaver(),
+    loop,
   };
+}
+
+/** native 那條 thread 的 `files` 裡每一份的路徑與內容，一份一行接起來。 */
+async function threadFiles(agent: object): Promise<string> {
+  const snapshot = await (
+    agent as { getState(config: unknown): Promise<{ readonly values: unknown }> }
+  ).getState({ configurable: { thread_id: THREAD } });
+  const files = ((snapshot.values as { files?: unknown }).files ?? {}) as Record<
+    string,
+    { readonly content?: unknown }
+  >;
+  return Object.entries(files)
+    .map(([path, file]) => {
+      const content = Array.isArray(file.content) ? file.content.join('\n') : String(file.content);
+      return `${path}\n${content}`;
+    })
+    .join('\n');
 }
 
 /**
@@ -73,7 +96,7 @@ async function assembly(mode: SandboxMode): Promise<Assembly> {
 async function summarize(
   target: Assembly,
   historyPathPrefix?: string,
-): Promise<CompactionSummary[]> {
+): Promise<{ readonly summaries: CompactionSummary[]; readonly files: string }> {
   const model = new ScriptedChatModel({
     turns: Array.from({ length: 12 }, (_, index) => ({
       content: `第 ${index + 1} 次回話。${PAD}`,
@@ -83,6 +106,7 @@ async function summarize(
     model,
     backend: target.backend,
     checkpointer: target.saver,
+    agentLoop: target.loop,
     plugins: [],
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],
@@ -92,19 +116,22 @@ async function summarize(
   });
   const sessions = new SessionRegistry(THREAD);
   const detach = attachSession(sessions);
+  let files = '';
   try {
     for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
       await agent.invoke(toAgentInvocation(`${line}${PAD}`), {
         configurable: { thread_id: THREAD },
       });
     }
+    if (target.loop === 'native') files = await threadFiles(agent);
   } finally {
     detach();
     await dispose();
   }
-  return sessions.root.events
+  const summaries = sessions.root.events
     .filter((event) => event.type === 'compaction/summary')
     .map((event) => event.data as CompactionSummary);
+  return { summaries, files };
 }
 
 /**
@@ -123,6 +150,7 @@ async function grepFromNextTurn(target: Assembly, pattern: string, path: string)
     model,
     backend: target.backend,
     checkpointer: target.saver,
+    agentLoop: 'langgraph',
     plugins: [],
     summarization: false,
   });
@@ -136,10 +164,14 @@ async function grepFromNextTurn(target: Assembly, pattern: string, path: string)
   return lastToolText(model.lastPrompt);
 }
 
-describe.each(['workspace-write', 'read-only'] as const)('摘要器的歷史（%s）', (mode) => {
+const MODES = ['workspace-write', 'read-only'] as const;
+const LOOPS = ['langgraph', 'native'] as const;
+const CELLS = MODES.flatMap((mode) => LOOPS.map((loop) => [mode, loop] as const));
+
+describe.each(CELLS)('摘要器的歷史（%s，%s）', (mode, loop) => {
   it('不落進工作區，下一輪讀得回來', async () => {
-    const target = await assembly(mode);
-    const summaries = await summarize(target);
+    const target = await assembly(mode, loop);
+    const { summaries, files } = await summarize(target);
 
     // 先證明壓縮真的發生了，而且記下的路徑就是那個前綴——少了這一句，沒觸發摘要也會讓
     // 下面兩條通過。
@@ -149,24 +181,33 @@ describe.each(['workspace-write', 'read-only'] as const)('摘要器的歷史（%
     expect(await entries(target.root)).not.toContain('conversation_history');
     // **斷言的是命中的那一行，不是字串本身**：找不到時 `grep` 回的是
     // `No matches found for pattern 'Summarized at'`，那句話也含著模式，`toContain` 會假綠。
+    if (loop === 'native') {
+      expect(files).toContain('## Summarized at');
+      return;
+    }
     expect(await grepFromNextTurn(target, 'Summarized at', '/conversation_history')).toMatch(
       /\d+: ## Summarized at/,
     );
   });
 });
 
-describe.each(['workspace-write', 'read-only'] as const)('超大 human message（%s）', (mode) => {
+/**
+ * 只有 langgraph：native 不在圖裡搬人話，太大的在收下之前就拒（#2415，`@nexus/core` 的 `human-message-admission.ts`），
+ * 那一邊在 `human-message-admission-wire.test.ts`。
+ */
+describe.each(MODES)('超大 human message（%s，langgraph）', (mode) => {
   /** 暗號放最前面；剛好越過 `4 * 5e4` 那條線。 */
   const MARK = 'AOI-SAMA-5820';
   const HUGE = `${MARK}${'長'.repeat(200001)}`;
 
   it('搬去的地方不在工作區，模型只收到佔位，原話下一輪讀得回來', async () => {
-    const target = await assembly(mode);
+    const target = await assembly(mode, 'langgraph');
     const model = new ScriptedChatModel({ turns: [{ content: '收到。' }] });
     const { agent, dispose } = await createNexusAgent({
       model,
       backend: target.backend,
       checkpointer: target.saver,
+      agentLoop: 'langgraph',
       plugins: [],
     });
     try {
@@ -193,8 +234,8 @@ describe.each(['workspace-write', 'read-only'] as const)('超大 human message�
  * 共用、而且 eviction 寫死的那一個。明著換掉前綴等於明著選了去向，這條逃生口留著。
  */
 it('自訂的 historyPathPrefix 照舊落在工作區', async () => {
-  const target = await assembly('workspace-write');
-  const summaries = await summarize(target, '/ours');
+  const target = await assembly('workspace-write', 'langgraph');
+  const { summaries } = await summarize(target, '/ours');
 
   expect(summaries.length).toBeGreaterThan(0);
   expect((await entries(target.root, 'ours')).length).toBeGreaterThan(0);
