@@ -136,8 +136,17 @@ enum Frame {
         entries: Vec<(Node, Node)>,
         key: Option<Node>,
         seen: HashSet<KeyId>,
+        /// 目前這個鍵是沒寫鍵、也沒有 `?` 的 `:` 時，那個 `:` 在第幾行。
+        bare_key_line: Option<usize>,
     },
     Seq,
+}
+
+/// `?` 的空鍵與沒寫鍵的 `:`，saphyr 給的事件一樣（空字串、位置在 `:`），只能看前一個事件之後到這個 `:` 之間有沒有 `?`。
+/// 這段沒有任何節點，`#` 一定是註解的開頭。
+fn explicit_key_between(gap: &str) -> bool {
+    gap.lines()
+        .any(|line| line.split('#').next().unwrap_or("").contains('?'))
 }
 
 /// 事件串收成樹時記下的問題：每類記位置最前的那一個，深度記最深的層數。
@@ -249,6 +258,17 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
         }
         at
     };
+    // saphyr 的 index 以字元計，切原文要換成位元組。
+    let offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let slice = |from: usize, to: usize| {
+        let at = |i: usize| offsets[i.min(offsets.len() - 1)];
+        &text[at(from)..at(to.max(from))]
+    };
+    let mut previous_end = 0;
     let mut root: Option<Node> = None;
     let mut documents = 0;
     loop {
@@ -275,6 +295,12 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
             Some(Ok(pair)) => pair,
         };
         let mut at = raw(Pos::of(span));
+        let block = span.start.index() == span.end.index();
+        let gap_from = std::mem::replace(
+            &mut previous_end,
+            at.index + span.end.index() - span.start.index(),
+        );
+        let mut bare_key = None;
         let node = match event {
             Event::StreamStart | Event::DocumentEnd | Event::Nothing => continue,
             Event::StreamEnd => break,
@@ -303,6 +329,14 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                 if anchor != 0 {
                     findings.forbid(at, "ANCHOR_NOT_ALLOWED");
                 }
+                if style == ScalarStyle::Plain
+                    && value.is_empty()
+                    && block
+                    && slice(at.index, at.index + 1) == ":"
+                    && !explicit_key_between(slice(gap_from, at.index))
+                {
+                    bare_key = Some(at.line);
+                }
                 let value = if style == ScalarStyle::Plain {
                     Scalar::plain(&value)
                 } else {
@@ -317,11 +351,30 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                 if anchor != 0 {
                     findings.forbid(at, "ANCHOR_NOT_ALLOWED");
                 }
-                stack.push(if matches!(event, Event::MappingStart(..)) {
+                let is_map = matches!(event, Event::MappingStart(..));
+                // 沒寫鍵的 `:` 是隱式鍵，值不能是同一行開始的區塊集合；saphyr 當成 `?` 之後的值照收，TS 拒絕。
+                if let Some(Frame::Map {
+                    key: Some(_),
+                    bare_key_line: Some(line),
+                    ..
+                }) = stack.last()
+                {
+                    if block && *line == at.line {
+                        let code = if is_map {
+                            "BLOCK_AS_IMPLICIT_KEY"
+                        } else {
+                            "UNEXPECTED_TOKEN"
+                        };
+                        findings.error = Some((at, code));
+                        break;
+                    }
+                }
+                stack.push(if is_map {
                     Frame::Map {
                         entries: Vec::new(),
                         key: None,
                         seen: HashSet::new(),
+                        bare_key_line: None,
                     }
                 } else {
                     Frame::Seq
@@ -344,7 +397,12 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
         match stack.last_mut() {
             None => root = Some(node),
             Some(Frame::Seq) => {}
-            Some(Frame::Map { entries, key, seen }) => match key.take() {
+            Some(Frame::Map {
+                entries,
+                key,
+                seen,
+                bare_key_line,
+            }) => match key.take() {
                 Some(k) => entries.push((k, node)),
                 None => {
                     match &node {
@@ -363,6 +421,7 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
                         Node::Alias => {}
                     }
                     *key = Some(node);
+                    *bare_key_line = bare_key;
                 }
             },
         }

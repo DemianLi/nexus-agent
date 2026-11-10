@@ -40,7 +40,8 @@
 `duplicate-key` 與 `yaml` 在 TS 是 YAML 函式庫的錯誤碼（`DUPLICATE_KEY`、`BLOCK_AS_IMPLICIT_KEY`、`MULTIPLE_DOCS`…）；換成同一個名字的兩個鍵由
 `uniqueEntries` 自己講成 `DUPLICATE_KEY`；指令、明示 tag、錨點與別名是 nexus 自己的 `DIRECTIVE_NOT_ALLOWED`、`TAG_NOT_ALLOWED`、`ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`，
 字元、巢狀與集合鍵是 `CHARACTER_NOT_ALLOWED`、`NESTING_TOO_DEEP`、`COLLECTION_KEY_NOT_ALLOWED`（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。
-別的實作不必產生同樣的錯誤碼，只要分得出這兩類；Rust 宿主沿用 nexus 自己的錯誤碼，語法錯一律 `YAML_SYNTAX`，多份文件沿用 `MULTIPLE_DOCS`。
+別的實作不必產生同樣的錯誤碼，只要分得出這兩類；Rust 宿主沿用 nexus 自己的錯誤碼，語法錯大多是 `YAML_SYNTAX`，多份文件沿用 `MULTIPLE_DOCS`；
+沒寫鍵的 `:` 同一行接區塊集合照 TS 講成 `BLOCK_AS_IMPLICIT_KEY`（mapping）或 `UNEXPECTED_TOKEN`（序列）。
 
 ## 形狀
 
@@ -112,9 +113,15 @@ refs:
 
 第 5 步排在第 6、7 步之前，所以 `refs` 裡的集合鍵即使排在名字形狀不對的鍵之後，回的也是集合鍵。
 
-兩個 YAML 函式庫的語法錯誤碼不同（`yaml` 分成 `BAD_INDENT`、`UNEXPECTED_TOKEN`…，Rust 宿主一律 `YAML_SYNTAX`），行欄也可能差一點，
-`reason` 一樣是 `yaml`。已知唯一一個 nexus 自己的錯誤碼會不同的情形：沒有對應錨點的別名後面又有語法錯，`saphyr-parser` 停在別名，
-回 `ALIAS_NOT_ALLOWED`，TS 回後面那個語法錯。
+兩個 YAML 函式庫的語法錯誤碼不同（`yaml` 分成 `BAD_INDENT`、`UNEXPECTED_TOKEN`…，Rust 宿主大多是 `YAML_SYNTAX`），行欄也可能差一點，
+`reason` 一樣是 `yaml`。差分語料裡 nexus 自己的錯誤碼會不同的情形，已知有這兩種：
+
+- 沒有對應錨點的別名後面又有語法錯：`saphyr-parser` 停在別名，回 `ALIAS_NOT_ALLOWED`，TS 回後面那個語法錯。
+- 顯式鍵的內容是序列，底下又縮排一個 `?`（`? - a` 下一行 `  ?`）：TS 回 `COLLECTION_KEY_NOT_ALLOWED`，Rust 回 `YAML_SYNTAX`。
+
+兩邊結果不只是錯誤碼不同的，還有一族沒處理，追在 #2570：顯式鍵（`?`）、空鍵與縮排混用。差分語料 6516 筆裡有 47 筆，
+Rust 都回 `reason` `yaml`，TS 不是：18 筆整份收下，其餘 29 筆回 `version`、`duplicate-key` 或 `not-mapping`。
+例如 `? a` 下一行 `  : x`、`a: x` 下一行 `  :`、`: x` 下一行 `  : x`。
 
 - `records` 拒絕而不是當外來鍵放過：nexus 沒有這種憑證，放過它會讓人以為存進去的東西有作用（`:331-335`）。
 - 測試：`credentials.test.ts` 的 `parseCredentialsDocument` 那組，「records 仍然拒絕……」與「%s：拒絕，訊息指名檔案、不含秘密」。
