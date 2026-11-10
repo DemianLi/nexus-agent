@@ -25,7 +25,7 @@
  *   **`refs` 裡面**一律拒絕、不跳過——鍵不是環境變數形狀、值不是非空字串、重複鍵——因為被靜靜忽略的條目讀起來就是「我存的憑證沒作用」
  *   （dsh `:179-183`）；根不是 mapping、`version` 不是 1、壞掉的 YAML 同樣拒絕。
  *   **`version`、`refs` 之外的頂層鍵不擋啟動**：別的工具寫進來的外來條目不該讓 `serve --live` 起不來，也不該連累檔裡存好的 key
- *   （dsh `:184-185`、`:228`、`:883-890`）。解析器把它們的鍵名交回呼叫端，{@link createCredentialService} 經 `warn` 講一聲，**只印鍵名、不印值**；
+ *   （dsh `:184-185`、`:228`、`:883-890`）。解析器把它們的鍵名與行號交回呼叫端，{@link createCredentialService} 經 `warn` 講一聲，**只講個數與行號，不印鍵名也不印值**；
  *   這些鍵留在檔案裡、不解析出任何東西。
  *   **錯誤訊息不引原文**——YAML 解析器自己的訊息會把出錯那一行帶出來，而那一行是秘密。
  * - **讀之前先查權限**：group 或 other 有任何權限位元就拒絕，訊息帶 `chmod 600`（`owner-only.ts`，與瀏覽器會話
@@ -185,8 +185,8 @@ function mappingEntries(
  *
  * @param file - 只用在訊息裡。
  * @param text - 檔案內容。
- * @returns `refs`：名字 → 值；`ignoredKeys`：不認得、但不擋的頂層鍵名。
- * @throws 不合格的內容；**訊息不含任何值，也不含鍵名**，只講位置（#2667）：鍵名的位置可能被誤貼了 key。
+ * @returns `refs`：名字 → 值；`ignoredKeys`／`ignoredLines`：不認得、但不擋的頂層鍵名與各自的行號，照檔案順序。
+ * @throws 不合格的內容；**訊息不含任何值，也不含鍵名**（#2667）：要指到某個鍵或 YAML 錯誤時只講行欄，因為鍵名的位置可能被誤貼了 key。
  */
 export function parseCredentialsDocument(file: string, text: string): ParsedCredentialsDocument {
   const fail = (why: string): never => {
@@ -199,6 +199,8 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
     uniqueKeys: true,
     prettyErrors: false,
     lineCounter: lines,
+    // 集合鍵在 `toJS()` 裡被字串化時，`yaml` 預設經 `process.emitWarning` 把整個鍵印出來；鍵名可能是誤貼的 key。
+    logLevel: 'error',
   });
   const [problem] = document.errors;
   if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, lines)}`);
@@ -250,8 +252,8 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
 }
 
 /**
- * 換成同一個名字的兩個鍵，後一個會在 `toJS()` 裡靜靜蓋掉前一個（`true` 與 `"true"`、`1` 與 `1.0`、別名與它指到的字）。
- * `yaml` 的 `uniqueKeys` 比的是節點，擋不到這些；這裡照名字再比一次，同樣講成 `DUPLICATE_KEY`（#2667）。
+ * 換成同一個名字的兩個鍵，後一個會在 `toJS()` 裡靜靜蓋掉前一個（`true` 與 `"true"`、`1` 與 `"1"`、別名與它指到的字）。
+ * `yaml` 的 `uniqueKeys` 比的是同一個節點或純量的值，型別不同或是別名就算不同；這裡照名字再比一次，同樣講成 `DUPLICATE_KEY`（#2667）。
  */
 function uniqueEntries(entries: MappingEntry[], fail: (why: string) => never): MappingEntry[] {
   const seen = new Set<string>();
@@ -294,7 +296,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   /**
    * 這一次讀不成：還沒讀好過就拋；讀好過就保留最後一份並警告，同一個原因只講一次。
    *
-   * @param key - 去重用的鍵：讀檔、解析失敗是 stat 簽章，`stat` 本身失敗是 `stat:<code>`（那時沒有簽章）。
+   * @param key - 去重用的鍵：權限、讀檔、解析失敗是 stat 簽章；`stat` 本身失敗是 `stat:<code>`（那時沒有簽章）。
    */
   function keepLastGood(error: unknown, key: string): ReadonlyMap<string, string> {
     if (good === undefined) throw error;
@@ -305,7 +307,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     return good.refs;
   }
 
-  /** 讀（必要時重讀）受管檔。壞了（含 `stat` 本身失敗，同 dsh 的熱重載）：第一次拋，讀好過就保留最後一份並警告。 */
+  /** 讀（必要時重讀）受管檔。壞了（含 `stat` 本身失敗）：還沒讀好過就拋，讀好過就保留最後一份並警告。 */
   function stored(): ReadonlyMap<string, string> {
     let signature: string;
     let mode: number;

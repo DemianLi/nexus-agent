@@ -1,7 +1,7 @@
 /**
  * 受管憑證檔的 `stat` 本身失敗（`ENOENT` 以外，例如 `EACCES`）時，跟讀檔、解析失敗一樣處理（#2667）。
  *
- * 用 mock 造錯，不 chmod 父目錄：CI 以 root 跑時 chmod 造不出 `EACCES`。
+ * 用 mock 造錯，不 chmod 父目錄：以 root 跑時 chmod 造不出 `EACCES`。
  */
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -69,7 +69,7 @@ describe('stat 本身失敗（#2667）', () => {
     expect(warned[0]).toContain('EACCES');
   });
 
-  it('還沒讀好過：照舊拋', () => {
+  it('還沒讀好過：拋', () => {
     failStatWith('EACCES');
     expect(() => service(() => undefined).check()).toThrow('EACCES');
   });

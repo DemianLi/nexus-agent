@@ -1,6 +1,6 @@
 ---
 kind: upgrade-guide
-description: "MCP 那一列用 `{ credential: <名字> }` 引用的值，現在先修掉頭尾空白再代入；修完是空的、env 裡有 NUL、header 裡有放不下的字元，那一列改成連不上。"
+description: "MCP 那一列用 `{ credential: <名字> }` 引用的值，現在先修掉頭尾空白再代入；修完是空的那一列改成連不上；env 裡有 NUL、header 裡有放不下的字元，改成送出前拒收、訊息不帶值。"
 ---
 
 # MCP 引用的憑證先修頭尾、再照 env 與 header 的規則檢查
@@ -16,6 +16,8 @@ description: "MCP 那一列用 `{ credential: <名字> }` 引用的值，現在�
   - 舊行為：只有空白的值照樣代入。
   - 新行為：那一列連不上，警告寫 `<名字>（來自<哪一層>）是空白的`。
 - **`connection.env` 的值裡有 NUL，拒收。** 中間的空白與非 ASCII 字元照收，跟以前一樣。
+  - 舊行為：stdio 子行程起不來，Node 拋的 `ERR_INVALID_ARG_VALUE` 會把整個值寫進訊息。
+  - 新行為：起子行程之前就拒收，警告寫 `<名字>（來自<哪一層>）含有 NUL 字元`，不含值的任何片段。
 - **`connection.headers` 的值裡有 header 放不下的字元，拒收。**
   - 收的字元：tab、可列印 ASCII（含空白）、0x80–0xFF。換行、NUL 這類控制字元，以及中文這種 U+00FF 之後的字元，都拒收。
   - 舊行為：在 Node 送請求那一層才失敗，而且值裡有換行或 NUL 時，那則錯誤會把整個值寫進日誌。
@@ -23,7 +25,8 @@ description: "MCP 那一列用 `{ credential: <名字> }` 引用的值，現在�
 - 拒收時跟找不到值一樣處理：預設是那一列沒有工具、伺服器日誌一則警告；寫了 `failOnStartupError: true` 的整列不掛。
 - 受影響的：
   - 受管檔裡用 `|` 或 `>` 寫 MCP 憑證、而那台 server 剛好靠尾端換行運作的主機（很少見）；
-  - 憑證值只有空白、或值裡帶 NUL、或 header 的值帶控制字元或中文的主機，升上來之後那一列連不上。
+  - 憑證值修完是空的主機，升上來之後那一列連不上；
+  - 值裡帶 NUL、或 header 的值帶控制字元或 U+00FF 之後字元的主機，本來就連不上，現在改成送出前拒收、訊息不帶值。
 - 不受影響的：模型 key（照舊走 [#1541](https://github.com/DemianLi/nexus-agent/issues/1541) 的檢查）；MCP 那一列直接寫成字串、沒有引用憑證的值。
 
 ## 遷移

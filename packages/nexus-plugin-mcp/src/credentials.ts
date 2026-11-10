@@ -22,7 +22,7 @@ export type McpCredentialUse = 'env' | 'header';
 
 /**
  * 宿主的憑證服務：按名字給值，沒有就是 `undefined`；讀不到（例如受管檔權限不對）或值放不進 `use` 指的地方，就拋，訊息不帶值。
- * 給出來的值就是要代入的值，這一側不再修剪或檢查。
+ * 給出來的值就是要代入的值，這一側不另外修剪或檢查。
  */
 export interface McpCredentials {
   resolve(name: string, use: McpCredentialUse): string | undefined;
@@ -73,7 +73,7 @@ function referencesOf(
 /**
  * 解析這一列引用到的每一把憑證。沒有引用就不呼叫服務。
  *
- * @throws 服務缺席、名字沒有值、服務拋錯；訊息只有列、欄位與憑證名。
+ * @throws 服務缺席、名字沒有值、服務拋錯；訊息有列、欄位與憑證名，加上服務自己拋的錯（例如來源層），不含值。
  */
 export function resolveCredentials(
   config: McpConfig,

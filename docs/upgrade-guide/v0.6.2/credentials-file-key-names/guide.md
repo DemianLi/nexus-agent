@@ -17,6 +17,9 @@ description: "受管憑證檔 `.credentials.yaml` 的拒絕訊息與警告不再
 - **不認得的頂層鍵的警告不再印鍵名。**
   - 舊行為：`credentials: 受管憑證檔 <路徑> 有不認得的頂層鍵 "note"、"other"，已略過；…`。
   - 新行為：`credentials: 受管憑證檔 <路徑> 有 2 個不認得的頂層鍵（第 2、5 行），已略過；…`。
+- **YAML 函式庫自己的警告不再印到 stderr。**
+  - 舊行為：鍵是集合（例如 `? [nvapi-…]`）時，YAML 函式庫經 Node 的 `process.emitWarning` 把整個鍵印到 stderr（`Keys with collection values will be stringified …`）。
+  - 新行為：這類警告關掉。檔案照舊依內容收下或拒絕。
 - **換成同一個名字的兩個鍵整份拒絕。**
   - 舊行為：YAML 層不同、轉成名字之後相同的兩個鍵（`true` 與 `"true"`、別名與它指到的字），後一個靜靜蓋掉前一個，檔案照收。
   - 新行為：整份拒絕，訊息是 `YAML 錯誤 DUPLICATE_KEY（第 L 行第 C 欄）`，指到後一個鍵。執行期改出這種檔，照舊續用上一份可用的內容並警告一次。

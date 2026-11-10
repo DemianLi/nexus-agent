@@ -5,7 +5,7 @@
  * 只擋放進去會出事的：
  *
  * - 兩條路都修掉頭尾空白與換行（YAML `|` 區塊值帶出的尾端換行），修完是空的就拒絕。
- * - `env`：NUL。環境變數是 C 字串，NUL 之後的部分會被截掉。
+ * - `env`：NUL。`child_process.spawn` 遇到含 NUL 的 env 值會拋 `ERR_INVALID_ARG_VALUE`，訊息帶出整個值。
  * - `header`：Node http 驗 header 值的規則（`validateHeaderValue`），允許 tab、0x20–0x7E、0x80–0xFF。
  *   要在這裡先擋，是因為 MCP 的 HTTP transport 走 `fetch`，undici 的 `Headers` 遇到 CR、LF、NUL 拋的錯會原樣帶出整個值。
  *

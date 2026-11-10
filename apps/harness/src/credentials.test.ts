@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ambientCredentials,
@@ -173,6 +173,23 @@ describe('鍵名不進訊息與日誌（#2667）', () => {
   }
 
   it.each([
+    ['頂層', `version: 1\n? [${PASTED}]\n: v\nrefs:\n  A: v\n`],
+    ['refs 裡', `version: 1\nrefs:\n  ? [${PASTED}]\n  : v\n`],
+  ])('%s的集合鍵：yaml 自己的 process 警告不把鍵印出來', (_, text) => {
+    const emitted = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      try {
+        parseCredentialsDocument(file, text);
+      } catch {
+        // refs 裡那條會因 bad-name 拒絕；這裡只看 process 警告。
+      }
+      expect(emitted).not.toHaveBeenCalled();
+    } finally {
+      emitted.mockRestore();
+    }
+  });
+
+  it.each([
     [
       '沒寫值（not-string）',
       `version: 1\nrefs:\n  ${PASTED}:\n`,
@@ -207,7 +224,7 @@ describe('鍵名不進訊息與日誌（#2667）', () => {
 describe('換成同一個名字的兩個鍵算重複鍵（#2667）', () => {
   it.each([
     ['布林與字串', 'version: 1\ntrue: 1\n"true": 2\n'],
-    ['整數與小數', 'version: 1\nrefs:\n  A: v\n1: a\n1.0: b\n'],
+    ['整數與字串', 'version: 1\nrefs:\n  A: v\n1: a\n"1": b\n'],
     ['別名與它指到的字', 'version: 1\nnote: &n refs\n*n : x\nrefs:\n  A: v\n'],
     ['refs 裡的布林與字串', `version: 1\nrefs:\n  true: ${SECRET}\n  "true": other\n`],
   ])('%s：整份拒絕，講成 DUPLICATE_KEY 與第二個鍵的位置', (_, text) => {
