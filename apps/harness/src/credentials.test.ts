@@ -660,3 +660,67 @@ describe('ambientCredentials（沒掛憑證服務時的退路）', () => {
     expect(ambient.resolve(KEY)).toBeUndefined();
   });
 });
+
+describe('巢狀層數、解析前就拒的字元與集合鍵（#2570）', () => {
+  const nested = (levels: number): string =>
+    `version: 1\nrefs:\n  A: ${SECRET}\nnote: ${'['.repeat(levels - 1)}${']'.repeat(levels - 1)}\n`;
+
+  function rejection(text: string): string {
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return '';
+  }
+
+  it('根算第 1 層：64 層照收，65 層拒絕', () => {
+    expect(parseCredentialsDocument(file, nested(64)).refs.get('A')).toBe(SECRET);
+    expect(rejection(nested(65))).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）`,
+    );
+  });
+
+  it('深到 yaml 自己會用光資源的檔：講成 YAML 錯誤，不丟 RangeError、不含值', () => {
+    for (const levels of [2000, 20_000]) {
+      const message = rejection(`${'['.repeat(levels)}${SECRET}${']'.repeat(levels)}\n`);
+      expect(message).toMatch(/^受管憑證檔 .* 認不得：YAML 錯誤 [A-Z_]+/u);
+      expect(message).not.toContain(SECRET);
+    }
+  });
+
+  it.each([
+    ['值裡的 NUL', `version: 1\nrefs:\n  A: ${SECRET}\0\n`, 3, 6 + SECRET.length],
+    ['冒號後的 tab', `version: 1\nrefs:\n  A:\t${SECRET}\n`, 3, 5],
+    ['值裡的 tab', `version: 1\nrefs:\n  A: a\t${SECRET}\n`, 3, 7],
+    ['只用 CR 換行', `version: 1\rrefs:\r  A: ${SECRET}\r`, 1, 11],
+    ['不在開頭的 BOM', `version: 1\nrefs:\n  A: \uFEFF${SECRET}\n`, 3, 6],
+  ])('%s：講成 CHARACTER_NOT_ALLOWED 與位置，不含值', (_, text, line, col) => {
+    expect(rejection(text)).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 CHARACTER_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+
+  it.each([
+    ['開頭的 BOM', `\uFEFFversion: 1\nrefs:\n  A: ${SECRET}\n`],
+    ['CRLF 換行', `version: 1\r\nrefs:\r\n  A: ${SECRET}\r\n`],
+  ])('%s：照收', (_, text) => {
+    expect(parseCredentialsDocument(file, text).refs.get('A')).toBe(SECRET);
+  });
+
+  it('要放 tab 的值用雙引號寫成 \\t', () => {
+    expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n  A: "a\\tb"\n').refs.get('A')).toBe(
+      'a\tb',
+    );
+  });
+
+  it.each([
+    ['? 寫的序列鍵', `version: 1\nrefs:\n  A: v\n? [${SECRET}]\n: x\n`, 4, 3],
+    ['flow mapping 當鍵', `version: 1\n{${SECRET}: 1}: x\n`, 2, 1],
+    ['refs 裡的集合鍵', `version: 1\nrefs:\n  ? [${SECRET}]\n  : x\n`, 3, 5],
+  ])('%s：講成 COLLECTION_KEY_NOT_ALLOWED 與位置，不含鍵', (_, text, line, col) => {
+    expect(rejection(text)).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+  });
+});

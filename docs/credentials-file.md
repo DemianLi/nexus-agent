@@ -1,15 +1,16 @@
 # 受管憑證檔的契約
 
 `<home>/.credentials.yaml` 的現有行為（[#2666](https://github.com/DemianLi/nexus-agent/issues/2666)），寫給要讀這份檔的實作者：今天的 TS 解析器，
-以及 [#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D 之後可能自己解析的 Rust 宿主。管理者要知道的事（放哪裡、`chmod 600`、
+以及 [#2570](https://github.com/DemianLi/nexus-agent/issues/2570) 起自己解析的 Rust 宿主。管理者要知道的事（放哪裡、`chmod 600`、
 四層找值的順序、從舊版遷移、MCP 那一列怎麼引用）在 [`operations.md`](operations.md)〈金鑰放哪裡〉與〈MCP server 要的憑證〉，這裡不重寫。
 
 格式在 [#1961](https://github.com/DemianLi/nexus-agent/issues/1961) 對齊 dsh，釘在 v1。本文件只記錄現況，不重新設計；
 標了 [#2667](https://github.com/DemianLi/nexus-agent/issues/2667) 的條目是該 issue 改過的行為。
 
 - 程式：`apps/harness/src/credentials.ts`（解析器與服務）、`apps/harness/src/owner-only.ts`（權限位元）。不帶檔名的 `:行號` 指 `credentials.ts`。
+  Rust 宿主的是 `native/sandbox-spawner/host/src/credentials/`（`mod.rs` 解析器與 `Store`，`scalar.rs` 照 core schema 解純量）。
 - 樣本：[`native/sandbox-spawner/credentials-vectors.json`](../native/sandbox-spawner/credentials-vectors.json)。
-  TS 用 `apps/harness/src/credentials-vectors.test.ts` 跑；Rust 端若自己解析，要跑同一份、得到同樣的結果。
+  TS 用 `apps/harness/src/credentials-vectors.test.ts` 跑，Rust 用 `native/sandbox-spawner/host/tests/credentials.rs` 跑同一份，兩邊結果要一樣。
 
 ## 樣本檔
 
@@ -26,18 +27,20 @@
 
 | `reason` | 意思 | 程式 |
 | --- | --- | --- |
-| `not-mapping` | 根不是 mapping | `credentials.ts:234-236` |
-| `version` | `version` 缺、或不等於 1（含只有外來的頂層鍵、沒有 `version` 的檔） | `:240` |
-| `records` | 有 `records` 這個頂層鍵 | `:243` |
-| `refs-not-mapping` | `refs` 不是 mapping | `:248-251` |
-| `bad-name` | `refs` 的鍵不是環境變數形狀 | `:257-261` |
-| `not-string` | `refs` 的值不是字串（數字、布林、null、沒寫、mapping、序列） | `:264` |
-| `empty-string` | `refs` 的值是空字串 | `:265-267` |
-| `duplicate-key` | 同一層有重複的鍵（頂層或 `refs` 裡），包括換成同一個名字的兩個鍵（見〈形狀〉） | `:218-224` 的 `uniqueKeys`、`:282-289` 的 `uniqueEntries` |
-| `yaml` | 其他 YAML 錯誤（沒關上的括號、tab 縮排、多份文件），以及指令、明示 tag、錨點與別名（見〈形狀〉） | `:218-224`；指令、tag、錨點與別名是 `:227-231` |
+| `not-mapping` | 根不是 mapping | `credentials.ts:299-301` |
+| `version` | `version` 缺、或不等於 1（含只有外來的頂層鍵、沒有 `version` 的檔） | `:305` |
+| `records` | 有 `records` 這個頂層鍵 | `:308` |
+| `refs-not-mapping` | `refs` 不是 mapping | `:313-316` |
+| `bad-name` | `refs` 的鍵不是環境變數形狀 | `:322-326` |
+| `not-string` | `refs` 的值不是字串（數字、布林、null、沒寫、mapping、序列） | `:329` |
+| `empty-string` | `refs` 的值是空字串 | `:330-332` |
+| `duplicate-key` | 同一層有重複的鍵（頂層或 `refs` 裡），包括換成同一個名字的兩個鍵（見〈形狀〉） | `:278-285` 的 `uniqueKeys`、`:347-354` 的 `uniqueEntries` |
+| `yaml` | 其他 YAML 錯誤（沒關上的括號、多份文件），以及解析前就拒的字元、太深的巢狀、指令、明示 tag、錨點、別名與集合鍵（見〈形狀〉） | `:278-291`；字元是 `:270-276`，巢狀是 `:293`，指令、tag、錨點與別名是 `:294-295`，集合鍵是 `:296` |
 
 `duplicate-key` 與 `yaml` 在 TS 是 YAML 函式庫的錯誤碼（`DUPLICATE_KEY`、`TAB_AS_INDENT`、`MULTIPLE_DOCS`…）；換成同一個名字的兩個鍵由
-`uniqueEntries` 自己講成 `DUPLICATE_KEY`；指令、明示 tag、錨點與別名是 nexus 自己的 `DIRECTIVE_NOT_ALLOWED`、`TAG_NOT_ALLOWED`、`ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`。別的實作不必產生同樣的錯誤碼，只要分得出這兩類。
+`uniqueEntries` 自己講成 `DUPLICATE_KEY`；指令、明示 tag、錨點與別名是 nexus 自己的 `DIRECTIVE_NOT_ALLOWED`、`TAG_NOT_ALLOWED`、`ANCHOR_NOT_ALLOWED`、`ALIAS_NOT_ALLOWED`，
+字元、巢狀與集合鍵是 `CHARACTER_NOT_ALLOWED`、`NESTING_TOO_DEEP`、`COLLECTION_KEY_NOT_ALLOWED`（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。
+別的實作不必產生同樣的錯誤碼，只要分得出這兩類；Rust 宿主沿用同樣的錯誤碼，`yaml` 函式庫自己的錯誤碼換成 `YAML_SYNTAX`、`MULTIPLE_DOCS`。
 
 ## 形狀
 
@@ -47,20 +50,20 @@ refs:
   NVIDIA_API_KEY: nvapi-...
 ```
 
-- **空的倉庫**：空檔、只有空白、只有註解、根是 `~` 或 `null`、空的 mapping（`{}`），都是沒有憑證，不要求 `version`（`:216`、`:233`、`:238`）。
+- **空的倉庫**：空檔、只有空白、只有註解、根是 `~` 或 `null`、空的 mapping（`{}`），都是沒有憑證，不要求 `version`（`:262`、`:298`、`:303`）。
   測試：`credentials.test.ts`「空檔與只有 version 都是『沒有憑證』」、「整份只有註解：check 不拋、沒有憑證，往下掉到 .env」。
-- **只要根有任何一個鍵，`version` 就必須等於 1**（`:240`）。比的是數值：YAML 1.2 core schema 解成整數或浮點數 1 的寫法都算，
+- **只要根有任何一個鍵，`version` 就必須等於 1**（`:305`）。比的是數值：YAML 1.2 core schema 解成整數或浮點數 1 的寫法都算，
   `1.0`、`0x1`、`1e0`、`+1` 都收下；字串 `"1"` 不收。樣本：`accept`「version 寫成 1.0」等四條、`reject`「version 是字串 "1"」。
-- **`refs` 可以缺、可以沒有值、可以是 `{}`**，都是沒有憑證（`:248`）。
-- **名字**是 `^[A-Za-z_][A-Za-z0-9_]*$`（`CREDENTIAL_NAME_PATTERN`，`:104`）。照 YAML 1.2，`yes`、`on`、`true` 當鍵時是名字（布林鍵轉成字串
+- **`refs` 可以缺、可以沒有值、可以是 `{}`**，都是沒有憑證（`:313`）。
+- **名字**是 `^[A-Za-z_][A-Za-z0-9_]*$`（`CREDENTIAL_NAME_PATTERN`，`:106`）。照 YAML 1.2，`yes`、`on`、`true` 當鍵時是名字（布林鍵轉成字串
   `"true"`），`__proto__` 也是名字；`123`、`<<` 不是（`<<` 不當合併鍵）。
 - **鍵的名字是轉成 JS 之後的字串**，所以 YAML 層不同、名字相同的兩個鍵是重複鍵，整份拒絕（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）：
   `true` 與 `"true"`、`1` 與 `"1"`。YAML 函式庫的 `uniqueKeys` 比的是同一個節點或純量的值，型別不同就算不同，擋不到這兩種，
-  後一個會靜靜蓋掉前一個；`uniqueEntries`（`:282-289`）照名字再比一次，頂層與 `refs` 裡都比。樣本：`reject` 裡「換成同一個名字」那三條。
+  後一個會靜靜蓋掉前一個；`uniqueEntries`（`:347-354`）照名字再比一次，頂層與 `refs` 裡都比。樣本：`reject` 裡「換成同一個名字」那三條。
   別名鍵展開後跟別的鍵同名的情形，在更早的地方就因為錨點被拒絕（見下一條）。
 - **值**是非空字串，原樣收下，不修剪：`|` 區塊值帶著尾端換行、只有空白的值也收（修剪與字元檢查在用值的那一側，見下面〈之後的檢查〉）。
   照 YAML 1.2，`yes`、`on`、`no`、`2026-01-01`、加引號的數字都是字串；`012`、`0o12`、`.inf`、`~`、`true` 不是。
-- **指令、明示 tag、錨點與別名整份拒絕**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)，`forbiddenToken`，`:130-151`）：
+- **指令、明示 tag、錨點與別名整份拒絕**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)，`forbiddenToken`，`:132-153`）：
   - 指令：`%YAML`、`%TAG`，以及任何 `%` 開頭的指令行，訊息是 `YAML 錯誤 DIRECTIVE_NOT_ALLOWED（第 L 行第 C 欄）`。`%YAML 1.1` 會換掉 schema（`yes` 變成 `true`）。
   - 明示 tag：`!!str`、`!!binary`、`!foo`、非特定的 `!`、逐字的 `!<…>`，不論在鍵、值、mapping 還是文件開頭，訊息是 `YAML 錯誤 TAG_NOT_ALLOWED（第 L 行第 C 欄）`。
     `!!binary` 會把值換成位元組，`!!str` 會把 `678` 這類數字換成字串（沒寫 tag 是數字）；兩者一律拒絕，規則才簡單。
@@ -70,7 +73,19 @@ refs:
   - 有好幾個時指到最前面那一個。值、引號、區塊值與註解裡的 `!`、`%`、`&`、`*` 都不是 token，照收。
   - 不看 YAML 函式庫有沒有發 warning：認得的 tag 不發 warning，結果照樣被換掉。
   - 樣本：`reject` 裡 `reason` 是 `yaml`、名字以「指令」「tag」「錨點」「別名」開頭的那幾條；`accept` 裡「不是 tag 也不是指令」「不是錨點也不是別名」那幾條。
-- 檔頭的 BOM、CRLF 換行、開頭的 `---` 都收下；第二份文件（`---` 之後再一份）拒絕。
+- **解析之前就拒絕的字元**（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)，`forbiddenCharacter`）：NUL、tab、不接 LF 的 CR、不在檔頭的 U+FEFF，
+  不論在值、引號、註解還是縮排裡，訊息是 `YAML 錯誤 CHARACTER_NOT_ALLOWED（第 L 行第 C 欄）`，指到第一個。這幾種 `yaml` 與 Rust 宿主用的
+  `saphyr-parser` 各自解讀（冒號後的 tab 一邊照收一邊報錯，單獨的 CR 一邊當換行一邊當內容），同一份檔兩條路會讀出不同的結果。
+  值裡要放 tab，用雙引號寫成 `"\t"`。樣本：`reject` 裡名字以「字元」開頭的那幾條。
+- **mapping 與序列最多 64 層**（`CREDENTIALS_MAX_DEPTH`）：根的 mapping（或序列）是第 1 層，每往裡一個 mapping 或序列多一層，純量不算層；
+  mapping 的鍵與值都算在它裡面一層。超過整份拒絕，訊息是 `YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 64 層）`，不附行欄。
+  `version: 1` 是 1 層，`refs:` 底下的 `名字: 值` 是 2 層，正常的檔遠用不到。深到 `yaml` 自己用光資源的檔講成它的錯誤碼，不會讓行程掛掉。
+  樣本：`accept`「巢狀 64 層：照收」兩條、`reject`「巢狀 65 層」「巢狀 2000 層」等三條。
+- **鍵是 mapping 或序列（`? [a]`、`{a: 1}: x`）整份拒絕**，訊息是 `YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 L 行第 C 欄）`，指到最前面那一個。
+  `yaml` 把集合鍵字串化成名字的寫法別的實作照不出來，受管檔也用不到。樣本：`reject` 裡名字以「集合當鍵」開頭的那幾條。
+- 檔頭的 BOM、CRLF 換行、開頭的 `---` 都收下；第二份文件（`---` 之後再一份）拒絕。只有 BOM、或 BOM 加空白的檔是空的倉庫（JS 的 `trim` 修得掉 U+FEFF）。
+- **鍵轉成名字照 JS 的 `String()`**：`true` 是 `"true"`，`null`、`~` 是空字串，`.inf` 是 `"Infinity"`，`0x1F` 是 `"31"`，`1e21` 是 `"1e+21"`。
+  樣本：`accept`「TRUE 當鍵」「.inf 當鍵」「NULL 當鍵」「數字鍵照 JS 的 String() 轉成名字」。
 
 這幾類在不同的 YAML 實作（1.1／1.2、各家函式庫）之間容易解讀不同，自己解析的實作最容易在這裡各自解讀，所以樣本都收了。
 
@@ -84,8 +99,8 @@ refs:
 ## 只警告、不擋
 
 `version`、`refs`、`records` 以外的頂層鍵不擋啟動，`refs` 照常解析。鍵名（`ignoredKeys`）與各自的行號（`ignoredLines`）交回呼叫端，
-**照檔案順序**（`:270-275`）：像整數的鍵（例如 `2024`）也不往前排，樣本「外來的頂層鍵：像整數的鍵也照檔案順序」釘住這一點。
-服務經 `warn` 講一次，**只講個數與行號，不印鍵名也不印值**（`:364-368`）：鍵名的位置可能被誤貼了 key（見〈錯誤訊息〉）。
+**照檔案順序**（`:335-340`）：像整數的鍵（例如 `2024`）也不往前排，樣本「外來的頂層鍵：像整數的鍵也照檔案順序」釘住這一點。
+服務經 `warn` 講一次，**只講個數與行號，不印鍵名也不印值**（`:429-433`）：鍵名的位置可能被誤貼了 key（見〈錯誤訊息〉）。
 同一份檔（同一個 stat 簽章）只講一次。這些鍵留在檔案裡，不解析出任何東西。
 
 測試：`credentials.test.ts`「version、refs 之外的頂層鍵不擋……（#1507）」、「多一個頂層鍵：解得出 key，warn 恰好一次……」、
@@ -104,14 +119,14 @@ refs:
 
 ## 錯誤訊息
 
-- 拒絕訊息是 `受管憑證檔 <路徑> 認不得：<原因>`，**不引值，也不引鍵名**。YAML 錯誤只寫錯誤碼與行欄（`describeYamlError`，`:107`），
+- 拒絕訊息是 `受管憑證檔 <路徑> 認不得：<原因>`，**不引值，也不引鍵名**。YAML 錯誤只寫錯誤碼與行欄（`describeYamlError`，`:109`），
   不帶出錯那一行，因為那一行可能就是秘密。值不是字串時也只說「要是字串」，不說是什麼型別。
 - **鍵名不印，只講位置**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）：把 key 誤貼在鍵名的位置時，鍵名就是秘密，而且
   `not-string`、`empty-string` 的鍵名形狀合法，分不出來。三種訊息都寫 `refs 第 L 行第 C 欄`：`bad-name` 再加鍵名的長度（字元數），
   `not-string` 是「那一把要是字串」，`empty-string` 是「那一把是空字串」。行、欄從 1 起算，指的是鍵的開頭。
   外來頂層鍵的警告同理（〈只警告、不擋〉）。
-- **YAML 函式庫自己的警告關掉**（`logLevel: 'error'`，`:222-223`）：鍵是集合（例如 `? [nvapi-…]`）時，`toJS()` 會把它字串化，
-  預設經 `process.emitWarning` 把整個鍵印到 stderr。
+- **YAML 函式庫自己的警告關掉**（`logLevel: 'error'`，`:283-284`）：鍵是集合（例如 `? [nvapi-…]`）時，`toJS()` 會把它字串化，
+  預設經 `process.emitWarning` 把整個鍵印到 stderr。集合鍵現在在 `toJS()` 之前就拒絕，這個設定留著當第二道。
 
 測試：`credentials.test.ts`「%s：拒絕，訊息指名檔案、不含秘密」、「鍵名不進訊息與日誌」那組（含「%s的集合鍵：yaml 自己的 process 警告不把鍵印出來」）；樣本 `reject[].secret`，
 其中「鍵的位置貼了……」三條的 `secret` 是鍵名。
@@ -125,16 +140,16 @@ refs:
 
 ## 重讀
 
-不監看檔案。每次解析先 `stat`，簽章是 **mtime、size、ino、mode 四項**（`:341`），跟上一次一樣就用快取，不一樣才重讀。
+不監看檔案。每次解析先 `stat`，簽章是 **mtime、size、ino、mode 四項**（`:406`），跟上一次一樣就用快取，不一樣才重讀。
 所以改了檔，下一次解析就是新的：模型 key 是下一個請求，MCP 是下一次建連線（下一條新對話；已建好的連線抓住舊值）。沒有解析就不重讀。
 
 | 情況 | 結果 | 程式 |
 | --- | --- | --- |
-| 檔不存在 | 這一層是空的，往下一層找；清掉上一份可用的內容 | `:343-346` |
-| 第一次讀就壞（`stat` 失敗、權限、格式、讀檔失敗） | 拋 | `:326` |
-| 讀好過之後改壞（權限、格式、讀檔失敗） | 續用上一份可用的內容，警告一次（同一個簽章不重複講；讀成功一次就重新算，`:350`、`:361`） | `:358`、`:325-332` |
-| 讀好過之後 `stat` 本身失敗（`ENOENT` 以外，例如 `EACCES`） | 同上一列，續用上一份並警告一次；這時沒有簽章，以 `stat:<錯誤碼>` 去重（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)，同 dsh 的熱重載） | `:347` |
-| 讀好過之後刪掉，有一次解析看到檔不存在，再建成壞檔 | 上一份已經清掉，等於第一次讀：拋。刪掉與重建都在兩次解析之間的，只看得到簽章變了，照「讀好過之後改壞」那一列續用 | `:343-346`、`:326` |
+| 檔不存在 | 這一層是空的，往下一層找；清掉上一份可用的內容 | `:408-411` |
+| 第一次讀就壞（`stat` 失敗、權限、格式、讀檔失敗） | 拋 | `:391` |
+| 讀好過之後改壞（權限、格式、讀檔失敗） | 續用上一份可用的內容，警告一次（同一個簽章不重複講；讀成功一次就重新算，`:415`、`:426`） | `:423`、`:390-397` |
+| 讀好過之後 `stat` 本身失敗（`ENOENT` 以外，例如 `EACCES`） | 同上一列，續用上一份並警告一次；這時沒有簽章，以 `stat:<錯誤碼>` 去重（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)，同 dsh 的熱重載） | `:412` |
+| 讀好過之後刪掉，有一次解析看到檔不存在，再建成壞檔 | 上一份已經清掉，等於第一次讀：拋。刪掉與重建都在兩次解析之間的，只看得到簽章變了，照「讀好過之後改壞」那一列續用 | `:408-411`、`:391` |
 
 測試：`credentials.test.ts` 的「重載：每次解析先 stat，變了才重讀」那組，以及「執行期被改成只剩註解……」、
 「外來的鍵之後又改壞 refs……」；`credentials-stat.test.ts`（`stat` 本身失敗，用 mock 造錯）。重讀的時序不做成樣本。
@@ -157,7 +172,7 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
 | eval | `false` | `eval/compare-cli.ts:156`、`eval/survey-cli.ts:171` |
 | spike | `false` | `spike/cli.ts:24` |
 
-- `store: false` 時完全不碰這份檔：不 `stat`、不讀、不檢查，壞掉的檔也不擋（`:377`、`:394`）。
+- `store: false` 時完全不碰這份檔：不 `stat`、不讀、不檢查，壞掉的檔也不擋（`:442`、`:459`）。
 - serve 帶 `--live` 時起動就完整檢查一次（`live-model.ts:2385-2386`，`loadLiveLaunchEnv` 建好服務就 `check()`），壞了起不來。沒帶 `--live` 時起動不檢查，
   MCP 那一列引用憑證、連線時才讀；從沒讀成功過就壞了，只讓引用它的那幾列連不上（`serve-run.ts:970-979`）。
 
@@ -198,3 +213,5 @@ nexus 不寫這份檔：沒有設定頁，由管理者手動編輯。`apps/harne
 - **偏離：沒有 `records`。** nexus 沒有第二種憑證（`grant`／`api-key` 記錄），`records` 這個鍵照舊拒絕，不跟其他外來鍵一起放過。
   理由用 dsh 自己的規則（`:179-183`）：nexus 不會用 `records` 裡的東西，放過它，使用者會以為存進去的 grant 有作用。
 - **偏離：拒絕指令、明示 tag、錨點與別名**（[#2667](https://github.com/DemianLi/nexus-agent/issues/2667)）。dsh 只看 `document.errors`（`:198-202`），這幾樣都收，別名照常展開。見〈形狀〉。
+- **偏離：拒絕解析前的四種字元、超過 64 層的巢狀與集合鍵**（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。dsh 只有一個 TS 解析器，沒有第二個實作要對齊；
+  nexus 的宿主用 Rust 自己解析，這三類是兩個 YAML 函式庫實測讀出不同結果的地方，整份拒絕才能讓兩邊跑同一份樣本得到同樣的結果。見〈形狀〉。

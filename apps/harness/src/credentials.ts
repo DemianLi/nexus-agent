@@ -32,7 +32,9 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type Document,
+  isCollection,
   isMap,
+  isPair,
   LineCounter,
   Pair,
   Parser,
@@ -150,6 +152,50 @@ function forbiddenToken(
   return found;
 }
 
+/** mapping 與序列加起來最多幾層，根的那一個是第 1 層（`docs/credentials-file.md`〈形狀〉）。 */
+export const CREDENTIALS_MAX_DEPTH = 64;
+
+/**
+ * 解析之前就拒絕的字元：NUL、tab、不接 LF 的 CR、不在開頭的 U+FEFF。這幾種 `yaml` 與 Rust 宿主的 `saphyr-parser` 各自解讀
+ * （照收、當換行或當錯），同一份檔兩條路會讀出不同的結果；要放 tab 的值用雙引號寫成 `\t`。
+ */
+function forbiddenCharacter(text: string): number | undefined {
+  const at = /\0|\t|\r(?!\n)|(?<!^)\uFEFF/u.exec(text);
+  return at?.index;
+}
+
+/**
+ * 最深的巢狀層數，與第一個集合鍵（`? [a]`、`{a: 1}: …`）的位置。用自己的堆疊走，不遞迴：檔案再深也不會撐爆呼叫堆疊。
+ * 集合鍵一律拒絕：`yaml` 把它字串化成名字的寫法，別的實作照不出來。
+ */
+function shapeOf(document: Document): { readonly depth: number; readonly collectionKey?: number } {
+  let depth = 0;
+  let collectionKey: number | undefined;
+  const stack: (readonly [unknown, number])[] = [[document.contents, 0]];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const [node, level] = next;
+    if (!isCollection(node)) continue;
+    depth = Math.max(depth, level + 1);
+    for (const item of node.items) {
+      if (isPair(item)) {
+        if (isCollection(item.key)) {
+          const offset = item.key.range?.[0] ?? 0;
+          if (collectionKey === undefined || offset < collectionKey) collectionKey = offset;
+        }
+        stack.push([item.key, level + 1], [item.value, level + 1]);
+      } else {
+        stack.push([item, level + 1]);
+      }
+    }
+  }
+  return collectionKey === undefined ? { depth } : { depth, collectionKey };
+}
+
+/** `yaml` 解得太深時，組文件或 `toJS()` 會用光呼叫堆疊。 */
+function isStackOverflow(error: unknown): boolean {
+  return error instanceof RangeError;
+}
+
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 }
@@ -215,20 +261,39 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   const empty: ParsedCredentialsDocument = { refs: new Map(), ignoredKeys: [], ignoredLines: [] };
   if (text.trim() === '') return empty;
   const lines = new LineCounter();
-  const document = parseDocument(text, {
-    uniqueKeys: true,
-    prettyErrors: false,
-    lineCounter: lines,
-    // 集合鍵在 `toJS()` 裡被字串化時，`yaml` 預設經 `process.emitWarning` 把整個鍵印出來；鍵名可能是誤貼的 key。
-    logLevel: 'error',
-  });
+  const yamlAt = (code: string, offset: number): never => {
+    const { line, col } = lines.linePos(offset);
+    return fail(`YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`);
+  };
+  const tooDeep = (): never =>
+    fail(`YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 ${String(CREDENTIALS_MAX_DEPTH)} 層）`);
+  const character = forbiddenCharacter(text);
+  if (character !== undefined) {
+    // 還沒解析，LineCounter 是空的：自己數行。
+    const line = text.slice(0, character).split('\n').length;
+    const col = character - text.lastIndexOf('\n', character - 1);
+    fail(`YAML 錯誤 CHARACTER_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`);
+  }
+  let document: Document;
+  try {
+    document = parseDocument(text, {
+      uniqueKeys: true,
+      prettyErrors: false,
+      lineCounter: lines,
+      // 集合鍵在 `toJS()` 裡被字串化時，`yaml` 預設經 `process.emitWarning` 把整個鍵印出來；鍵名可能是誤貼的 key。
+      logLevel: 'error',
+    });
+  } catch (error) {
+    if (isStackOverflow(error)) return tooDeep();
+    throw error;
+  }
   const [problem] = document.errors;
   if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, lines)}`);
+  const shape = shapeOf(document);
+  if (shape.depth > CREDENTIALS_MAX_DEPTH) tooDeep();
   const forbidden = forbiddenToken(text);
-  if (forbidden !== undefined) {
-    const { line, col } = lines.linePos(forbidden.offset);
-    fail(`YAML 錯誤 ${forbidden.code}（第 ${String(line)} 行第 ${String(col)} 欄）`);
-  }
+  if (forbidden !== undefined) yamlAt(forbidden.code, forbidden.offset);
+  if (shape.collectionKey !== undefined) yamlAt('COLLECTION_KEY_NOT_ALLOWED', shape.collectionKey);
   // 只有註解的文件 `toJS()` 是 `null`：當空的倉庫。
   const root: unknown = document.toJS() ?? {};
   if (typeof root !== 'object' || Array.isArray(root)) {
