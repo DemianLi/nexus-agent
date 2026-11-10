@@ -185,7 +185,17 @@ describe.each([
       'utf8',
     );
     await runCli({
-      argv: ['--live', '--session-log', root, '--patch', patch, '說點什麼'],
+      // 非串流只有 langgraph 會打（native 下出廠模型一律打串流）；明給 loop，vitest.native.config.ts 的 setup 才不會把它換成 native。
+      argv: [
+        '--live',
+        '--agent-loop',
+        'langgraph',
+        '--session-log',
+        root,
+        '--patch',
+        patch,
+        '說點什麼',
+      ],
       input: new PassThrough(),
       output: new PassThrough(),
       printer: { log: () => undefined, error: () => undefined },
