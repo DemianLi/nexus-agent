@@ -82,6 +82,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`micromark-util-sanitize-uri`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-sanitize-uri) | MIT |
 | [`micromark-util-symbol`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-symbol) | MIT |
 | [`negotiator`](https://github.com/jshttp/negotiator) | MIT |
+| [`openai`](https://github.com/openai/openai-node) | Apache-2.0 |
 | [`quickjs-emscripten`](https://github.com/justjake/quickjs-emscripten) | MIT |
 | [`react`](https://github.com/react/react) | MIT |
 | [`react-dom`](https://github.com/react/react) | MIT |
