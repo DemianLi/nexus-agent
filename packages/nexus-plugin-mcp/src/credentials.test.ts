@@ -18,7 +18,7 @@ import {
   McpConnectionPool,
   mcpConfigSchema,
 } from './index.js';
-import type { McpCredentials, McpPluginOptions } from './index.js';
+import type { McpCredentialUse, McpCredentials, McpPluginOptions } from './index.js';
 import { withoutNotice } from './untrusted-fixtures.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -45,16 +45,18 @@ function stdioRow(overrides: Partial<McpPluginOptions> = {}): McpPluginOptions {
   };
 }
 
-/** 一份記錄被問了哪些名字的憑證服務。 */
+/** 一份記錄被問了哪些名字、代入到哪裡的憑證服務。 */
 function credentials(values: Record<string, string>) {
   const asked: string[] = [];
+  const uses: [string, McpCredentialUse][] = [];
   const service: McpCredentials = {
-    resolve(name) {
+    resolve(name, use) {
       asked.push(name);
+      uses.push([name, use]);
       return values[name];
     },
   };
-  return { service, asked };
+  return { service, asked, uses };
 }
 
 async function load(entries: PluginEntry[]) {
@@ -74,8 +76,8 @@ const warned = (registry: PluginRegistry): string[] =>
   registry.logger.warnings().map(({ message }) => message);
 
 describe('stdio 的 env 引用憑證', () => {
-  it('子行程拿到代入的值；設定裡只有名字；憑證名本身不進子行程', async () => {
-    const { service } = credentials({ GITHUB_PAT: SECRET });
+  it('子行程拿到代入的值；設定裡只有名字；憑證名本身不進子行程；向宿主講明是 env', async () => {
+    const { service, uses } = credentials({ GITHUB_PAT: SECRET });
     const { registry } = await load([
       createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service }),
       mcpEntry(stdioRow()),
@@ -85,6 +87,7 @@ describe('stdio 的 env 引用憑證', () => {
       PLAIN: 'plain',
       GITHUB_PAT: null,
     });
+    expect(uses).toEqual([['GITHUB_PAT', 'env']]);
     expect(JSON.stringify(mcpConfigSchema.parse(stdioRow()))).not.toContain(SECRET);
   }, 30_000);
 
@@ -144,11 +147,11 @@ describe('stdio 的 env 引用憑證', () => {
 });
 
 describe('HTTP 的 headers 引用憑證', () => {
-  it('prefix 接在代入的值前面', async () => {
+  it('prefix 接在代入的值前面；向宿主講明是 header', async () => {
     vi.stubEnv('NO_PROXY', '127.0.0.1');
     const http = await startModernHttp();
     cleanup.push(() => http.close());
-    const { service } = credentials({ MCP_BEARER: SECRET });
+    const { service, uses } = credentials({ MCP_BEARER: SECRET });
     const { registry } = await load([
       createHostServicesPlugin({ [MCP_CREDENTIALS_SERVICE]: service }),
       mcpEntry({
@@ -163,6 +166,7 @@ describe('HTTP 的 headers 引用憑證', () => {
     expect(warned(registry)).toEqual([]);
     expect(http.requests.length).toBeGreaterThan(0);
     for (const request of http.requests) expect(request.authorization).toBe(`Bearer ${SECRET}`);
+    expect(uses).toEqual([['MCP_BEARER', 'header']]);
   }, 30_000);
 });
 

@@ -59,9 +59,9 @@ const REASONS = {
   version: /^version 要是 \d+$/u,
   records: /^nexus 沒有 records 這種憑證/u,
   'refs-not-mapping': /^refs 要是 mapping/u,
-  'bad-name': /^refs 的鍵 ".*" 不是環境變數形狀的名字$/su,
-  'not-string': /^refs\.[A-Za-z_][A-Za-z0-9_]* 要是字串$/u,
-  'empty-string': /^refs\.[A-Za-z_][A-Za-z0-9_]* 是空字串/u,
+  'bad-name': /^refs 第 \d+ 行第 \d+ 欄的鍵不是環境變數形狀的名字/u,
+  'not-string': /^refs 第 \d+ 行第 \d+ 欄那一把要是字串$/u,
+  'empty-string': /^refs 第 \d+ 行第 \d+ 欄那一把是空字串/u,
   'duplicate-key': /^YAML 錯誤 DUPLICATE_KEY/u,
   yaml: /^YAML 錯誤 (?!DUPLICATE_KEY)[A-Z_]+/u,
 } as const;

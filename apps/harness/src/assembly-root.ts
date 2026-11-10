@@ -109,6 +109,7 @@ import type {
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
+import { assertUsableMcpCredential } from './mcp-credential.js';
 import type { RequestGate } from './request-gate.js';
 import { createLiveModel } from './live-model.js';
 import { subagentDefinitionValidator } from './subagent-definition.js';
@@ -1505,11 +1506,17 @@ export async function createCliAgent(
 
 /**
  * 交給 MCP 那幾列的憑證服務（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：只要值，來源層不往外交。
+ * 值先過 {@link assertUsableMcpCredential}（#2667）：交出去的是修過頭尾的值，放不進 env 或 header 的就拋。
  *
  * @param credentials - 這次啟動的憑證服務。
  */
 export function mcpCredentialsOf(credentials: CredentialService): McpCredentials {
-  return { resolve: (name) => credentials.resolve(name)?.value };
+  return {
+    resolve: (name, use) => {
+      const hit = credentials.resolve(name);
+      return hit === undefined ? undefined : assertUsableMcpCredential(name, hit, use);
+    },
+  };
 }
 
 /**

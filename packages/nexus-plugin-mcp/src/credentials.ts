@@ -17,9 +17,15 @@ import type { McpConfig } from './index.js';
 /** 宿主交憑證服務的服務名。 */
 export const MCP_CREDENTIALS_SERVICE = 'mcp:credentials';
 
-/** 宿主的憑證服務：按名字給值，沒有就是 `undefined`；讀不到（例如受管檔權限不對）就拋，訊息不帶值。 */
+/** 一把憑證代入到哪裡：stdio 子行程的環境變數，或 HTTP 的 header。宿主照它決定這個值收不收（#2667）。 */
+export type McpCredentialUse = 'env' | 'header';
+
+/**
+ * 宿主的憑證服務：按名字給值，沒有就是 `undefined`；讀不到（例如受管檔權限不對）或值放不進 `use` 指的地方，就拋，訊息不帶值。
+ * 給出來的值就是要代入的值，這一側不另外修剪或檢查。
+ */
 export interface McpCredentials {
-  resolve(name: string): string | undefined;
+  resolve(name: string, use: McpCredentialUse): string | undefined;
 }
 
 declare module '@nexus/core' {
@@ -51,20 +57,23 @@ export type ResolvedCredentials = ReadonlyMap<string, string>;
 // eslint-disable-next-line no-restricted-syntax -- 唯讀的空表，沒有人寫進去
 const NONE: ResolvedCredentials = new Map();
 
-/** 這一列每一處引用：欄位路徑與憑證名。 */
-function referencesOf(config: McpConfig): { readonly field: string; readonly name: string }[] {
+/** 這一列每一處引用：欄位路徑、憑證名與代入到哪裡。 */
+function referencesOf(
+  config: McpConfig,
+): { readonly field: string; readonly name: string; readonly use: McpCredentialUse }[] {
   const connection = config.connection;
   const values = connection.transport === 'stdio' ? connection.env : connection.headers;
   const field = connection.transport === 'stdio' ? 'connection.env' : 'connection.headers';
+  const use: McpCredentialUse = connection.transport === 'stdio' ? 'env' : 'header';
   return Object.entries(values ?? {}).flatMap(([key, value]) =>
-    typeof value === 'string' ? [] : [{ field: `${field}.${key}`, name: value.credential }],
+    typeof value === 'string' ? [] : [{ field: `${field}.${key}`, name: value.credential, use }],
   );
 }
 
 /**
  * 解析這一列引用到的每一把憑證。沒有引用就不呼叫服務。
  *
- * @throws 服務缺席、名字沒有值、服務拋錯；訊息只有列、欄位與憑證名。
+ * @throws 服務缺席、名字沒有值、服務拋錯；訊息有列、欄位與憑證名，加上服務自己拋的錯（例如來源層），不含值。
  */
 export function resolveCredentials(
   config: McpConfig,
@@ -73,13 +82,14 @@ export function resolveCredentials(
   const references = referencesOf(config);
   if (references.length === 0) return NONE;
   const values = new Map<string, string>();
-  for (const { field, name } of references) {
+  // 同一列的引用都是同一種 `use`（看 transport），所以照名字去重不會漏掉另一種檢查。
+  for (const { field, name, use } of references) {
     if (values.has(name)) continue;
     const where = `MCP 伺服器 "${config.serverName}" 的 ${field} 引用的憑證 "${name}"`;
     if (service === undefined) throw new Error(`${where} 解析不了：這個入口沒有提供憑證服務`);
     let value: string | undefined;
     try {
-      value = service.resolve(name);
+      value = service.resolve(name, use);
     } catch (error) {
       throw new Error(`${where} 讀不到：${error instanceof Error ? error.message : String(error)}`);
     }

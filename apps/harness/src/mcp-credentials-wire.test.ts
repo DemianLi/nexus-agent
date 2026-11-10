@@ -103,6 +103,7 @@ async function assembleAndRun(
   home: string,
   session: { readonly mcpPool?: McpConnectionPool } = {},
   launch: NodeJS.ProcessEnv = {},
+  row: McpPluginOptions = ROW,
 ): Promise<{ result: string | undefined; warnings: string[] }> {
   const credentials = createCredentialService({
     home,
@@ -112,7 +113,7 @@ async function assembleAndRun(
   });
   const plugins: PluginEntry[] = [
     ...withScriptedModel(await shippedPlugins(), TURNS),
-    ...(await mcpRows(ROW)),
+    ...(await mcpRows(row)),
   ];
   const built = await createCliAgent(
     { live: false, credentials },
@@ -172,6 +173,68 @@ describe('組裝根交憑證服務（serve 的規則：受管檔最優先）', (
       );
     } finally {
       await pool.close();
+    }
+  }, 60_000);
+});
+
+describe('交給 MCP 之前先過值的檢查（#2667）', () => {
+  /** 受管檔原文：值照 `text` 原樣寫進 YAML（可以是 `|` 區塊或雙引號跳脫）。 */
+  function managedText(home: string, text: string): void {
+    const file = join(home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrefs:\n  ${NAME}: ${text}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  }
+
+  it('env：`|` 區塊值的尾端換行修掉，中間的空白與非 ASCII 字元照收', async () => {
+    const home = scratch();
+    managedText(home, `|\n    ${FROM_FILE} 密碼`);
+    const { result } = await assembleAndRun(home);
+    expect(result).toContain(`"MCP_TOKEN":"${FROM_FILE} 密碼"`);
+  }, 60_000);
+
+  it('env：只有空白的值拒絕，那一列沒有工具，警告指名憑證與來源層、不帶值', async () => {
+    const home = scratch();
+    managedText(home, '"   "');
+    const { result, warnings } = await assembleAndRun(home);
+    expect(result).not.toContain('"MCP_TOKEN"');
+    const warning = warnings.find((line) => line.includes('MCP 伺服器 "srv"'));
+    expect(warning).toContain(`connection.env.MCP_TOKEN 引用的憑證 "${NAME}"`);
+    expect(warning).toContain('是空白的');
+    expect(warning).toContain('受管憑證檔');
+  }, 60_000);
+
+  it('header：值裡有 CR LF，拒絕訊息不含值，請求根本沒送到 fetch', async () => {
+    const home = scratch();
+    managedText(home, `"${FROM_FILE}\\r\\nX-Injected: ${FROM_ENV}"`);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      const { warnings } = await assembleAndRun(
+        home,
+        {},
+        {},
+        {
+          serverName: 'srv',
+          connection: {
+            transport: 'http',
+            url: 'http://127.0.0.1:9/mcp',
+            headers: { Authorization: { credential: NAME, prefix: 'Bearer ' } },
+          },
+          approval: { default: 'allow' },
+        },
+      );
+      const warning = warnings.find((line) => line.includes('MCP 伺服器 "srv"'));
+      expect(warning).toContain(`connection.headers.Authorization 引用的憑證 "${NAME}"`);
+      expect(warning).toContain('HTTP header 放不下的字元');
+      for (const line of warnings) {
+        expect(line).not.toContain(FROM_FILE.slice(0, 6));
+        expect(line).not.toContain(FROM_ENV.slice(0, 6));
+      }
+      const toServer = fetchSpy.mock.calls.filter(([input]) =>
+        String(input instanceof Request ? input.url : input).startsWith('http://127.0.0.1:9'),
+      );
+      expect(toServer).toEqual([]);
+    } finally {
+      fetchSpy.mockRestore();
     }
   }, 60_000);
 });
