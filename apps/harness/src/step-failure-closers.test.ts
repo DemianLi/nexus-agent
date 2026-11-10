@@ -184,13 +184,21 @@ describe('一輪失敗時補上沒配到結果的呼叫（#2029）', () => {
     ]);
   });
 
+  const WRITE_FAILED = '對話寫不進去';
+
   it('補寫也失敗：拋出的錯帶著兩個錯、cause 是原錯，turn/failed 的分類同原錯', async () => {
     const { pump } = await assemble([TWO_CALLS, { content: '收尾。' }], {
       wrapAgent: (agent) =>
         new Proxy(agent, {
           get(target, key, receiver) {
-            if (key === 'updateState') {
-              return () => Promise.reject(new Error('存檔點寫不進去'));
+            // 寫回對話那一步：`langgraph` 是 `updateState`，native 是 `appendLoggedMessages`。只換 agent 本來就有的那一支。
+            if (key === 'updateState' && 'updateState' in target) {
+              return () => Promise.reject(new Error(WRITE_FAILED));
+            }
+            if (key === 'appendLoggedMessages' && 'appendLoggedMessages' in target) {
+              return () => {
+                throw new Error(WRITE_FAILED);
+              };
             }
             const value: unknown = Reflect.get(target, key, receiver);
             return typeof value === 'function'
@@ -207,13 +215,13 @@ describe('一輪失敗時補上沒配到結果的呼叫（#2029）', () => {
     expect(failure).toBeInstanceOf(AggregateError);
     const [original, recovery] = (failure as AggregateError).errors as Error[];
     expect(original?.name).toBe('GraphRecursionError');
-    expect(recovery?.message).toBe('存檔點寫不進去');
+    expect(recovery?.message).toBe(WRITE_FAILED);
     expect((failure as AggregateError).cause).toBe(original);
 
     const [failed] = pump.sessions.root.events.filter((event) => event.type === 'turn/failed');
     const data = failed?.data as { message: string; error?: { code: string } };
     expect(data.error?.code).toBe(turnFailureOf(original).error.code);
-    expect(data.message).toContain('存檔點寫不進去');
+    expect(data.message).toContain(WRITE_FAILED);
   });
 
   it('補寫失敗包成的 AggregateError 沿 cause 認得出原錯：原錯是 429，分類照舊是 429 那一類', () => {
