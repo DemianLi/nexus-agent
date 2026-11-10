@@ -5,22 +5,24 @@
  * `dist/chat_models/completions.js`（`ChatOpenAICompletions`）、`dist/converters/completions.js`，以及
  * `dist/utils/{client,errors,misc,tools,output}.js` 裡用得到的函式。兩層類別併成一層，請求與回應的處理照原樣。
  *
- * 沒搬的，nexus 一處都沒用到：Responses API（含內建工具、custom 工具與偏好 Responses 的模型名）、Azure、LangSmith gateway、
- * `OPENAI_*` 環境變數後備（`openai` SDK 自己仍會讀它那幾個，例如 `OPENAI_BASE_URL`）、結構化輸出、moderation、token 估算與它唯一的用處（`streaming: true` 欄位走的那支 `_generate`）、
- * MCP 工具的追蹤遮蔽、logprobs 等沒有呼叫端傳的建構欄位。真的傳了沒搬的工具形狀會拋，不會靜靜換成別的請求。
- * 也沒搬 OpenAI 自家型號的 `profile` 表：`profile` 是基底的 `{}`。讀它的只有摘要器的 `fraction` 門檻，而設定不收 `fraction`
- * （`@nexus/core` 的 `summarization.ts`）。
- * 跟原版不同的三處：
- * - 不往 SDK 的預設標頭塞 `langchainjs-openai` 的 `User-Agent`；送出前的 fetch 一律換成我們的（`live-model.ts` 的 `withAttribution`）。
- * - 不經 `@langchain/openai`，所以 callback 的 `metadata.versions` 沒有它那一格。
- * - 兩層併成一層，建好之後才改實例欄位（例如 `modelKwargs`），同一個實例之後的請求就會帶上；原版改的是外層，請求不受影響。
+ * 只有 Chat Completions 一條路：Responses API、Azure、LangSmith gateway、結構化輸出、moderation、token 估算都沒有。會讓
+ * `@langchain/openai` 改走別條路的工具形狀與呼叫選項在這裡拋（{@link assertCompletionsOnly}、{@link toCompletionsTool}），不會靜靜送出
+ * 另一個請求；型號名不會讓它改路。環境變數只讀 `OPENAI_ORGANIZATION`，其餘的由 `openai` SDK 自己讀（例如 `OPENAI_BASE_URL`）。
+ * `profile` 是基底的 `{}`。SDK 自己帶 `User-Agent: OpenAI/JS <版號>`（`openai@7.5.0` `client.js:801`），這個類別不另外加；送出前的 fetch
+ * 一律換成我們的（`live-model.ts` 的 `withAttribution`）。
+ * 建好之後才改的實例欄位（例如 `modelKwargs`）會進同一個實例之後的請求；`withConfig`／`bindTools` 建的新實例只沿用建構欄位。
  */
 
 /**
- * 直接呼叫 `openai` SDK 的 chat model（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）：請求本文、串流事件、錯誤包裝
- * 跟 `@langchain/openai@1.5.10` 的 `ChatOpenAI` 走 Chat Completions 時逐位元組相同（`base-chat-openai.test.ts` 對同一個假端點比對）。
+ * 直接呼叫 `openai` SDK 的 chat model（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）。走 Chat Completions 時，送出的請求本文
+ * 跟 `@langchain/openai@1.5.10` 的 `ChatOpenAI` 逐位元組相同，交出來的串流事件、callback 與錯誤也相同；已知的差異列在
+ * `base-chat-openai.test.ts` 的「已知的差異」，同一個檔的差分測試對同一個假端點比對。
  *
- * 仍是 `BaseChatModel`：`langgraph` 的 AgentNode 要 `bindTools`／`invoke`；線上的 token、請求快照、`model/start` 都靠它發的 callback。
+ * **這個檔維持照搬**：nexus 自己對請求與回應的修正（空內容、助手 `name`、串流內錯誤、閒置逾時、完成檢查、`User-Agent`）一律疊在
+ * `live-model.ts` 的 fetch 層，不寫進這裡，差分測試才比得了。撤除條件：差分測試不再拿 `@langchain/openai` 當基準。
+ *
+ * 繼承 `BaseChatModel`：`langchain` 的 `AgentNode` 與 native loop 的模型節點（`packages/nexus-core/src/native-loop/model-node.ts`）要
+ * `bindTools`／`invoke`；線上的 token、請求快照、`model/start` 都靠它發的 callback。
  *
  * @module
  */
@@ -63,11 +65,12 @@ import {
 import { ChatGenerationChunk } from '@langchain/core/outputs';
 import type { ChatGeneration, ChatResult } from '@langchain/core/outputs';
 import type { Runnable } from '@langchain/core/runnables';
+import { getEnvironmentVariable } from '@langchain/core/utils/env';
 import { convertToOpenAITool, isLangChainTool } from '@langchain/core/utils/function_calling';
 import { APIConnectionTimeoutError, APIUserAbortError, OpenAI } from 'openai';
 import type { ClientOptions } from 'openai';
 
-/** {@link BaseChatOpenAI} 的建構欄位：nexus 實際傳的那幾格。 */
+/** {@link BaseChatOpenAI} 的建構欄位。沒列在這裡的 `ChatOpenAI` 欄位不讀（例如 `streaming`）。 */
 export interface BaseChatOpenAIFields extends BaseChatModelParams {
   readonly model?: string;
   /** 被 `configuration.apiKey` 蓋過（同 `@langchain/openai`）。 */
@@ -116,13 +119,15 @@ const DEFAULT_MODEL = 'gpt-3.5-turbo';
 
 /**
  * Chat Completions 的 chat model：三條呼叫路徑（`_generate`、`_streamResponseChunks`、`_streamChatModelEvents`）都經
- * {@link BaseChatOpenAI.completionWithRetry} 打 `openai` SDK，SDK 本身不重試。子類（`GuardedChatOpenAI` 等）要覆寫
+ * {@link BaseChatOpenAI.completionWithRetry} 打 `openai` SDK；SDK client 建成 `maxRetries: 0`（`configuration.maxRetries` 會跟著 client 設定進每次請求的選項、蓋過它）。子類（`GuardedChatOpenAI` 等）要覆寫
  * `withConfig`，否則 `bindTools`／`withConfig` 建出來的會是這個基底類別。
  */
 export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIMessageChunk> {
   model: string;
   /** 序列化時記成 `OPENAI_API_KEY` 的秘密佔位（同 `@langchain/openai`），值不會寫出去。 */
   apiKey: ClientOptions['apiKey'] | undefined;
+  /** 沒在 `configuration` 給就讀 `OPENAI_ORGANIZATION`（同 `@langchain/openai`），送成 `OpenAI-Organization` 標頭；序列化時同 `apiKey` 記成秘密佔位。 */
+  organization: string | null | undefined;
   temperature: number | undefined;
   topP: number | undefined;
   maxTokens: number | undefined;
@@ -226,6 +231,8 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
         ? fields.configuration.apiKey
         : undefined;
     this.apiKey = fields.apiKey ?? configApiKey;
+    this.organization =
+      fields.configuration?.organization ?? getEnvironmentVariable('OPENAI_ORGANIZATION');
     this.model = fields.model ?? DEFAULT_MODEL;
     this.modelKwargs = fields.modelKwargs ?? {};
     this.timeout = fields.timeout;
@@ -235,6 +242,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     this.streamUsage = fields.streamUsage ?? true;
     this.clientConfig = {
       apiKey: this.apiKey,
+      organization: this.organization,
       dangerouslyAllowBrowser: true,
       ...fields.configuration,
     };
@@ -276,15 +284,9 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     extra?: { readonly streaming?: boolean },
   ): Params {
     const combined = this._combineCallOptions(options);
+    assertCompletionsOnly(combined);
     let strict: boolean | undefined;
     if (combined.strict !== undefined) strict = combined.strict;
-    const responseFormat = combined.response_format as { type?: unknown } | undefined;
-    if (
-      !(this.streaming || extra?.streaming) &&
-      responseFormat?.type === 'json_schema' &&
-      strict !== false
-    )
-      strict = true;
     let streamOptionsConfig: Record<string, unknown> = {};
     if (combined.stream_options !== undefined)
       streamOptionsConfig = { stream_options: combined.stream_options };
@@ -332,6 +334,10 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     return params;
   }
 
+  /**
+   * 工具換成 Chat Completions 的 function 形狀，交給 {@link withConfig}：帶 `extras.providerToolDefinition` 的原樣送，
+   * `extras.defer_loading` 為真的補 `defer_loading: true`；Responses 才收的形狀拋錯（{@link toCompletionsTool}）。
+   */
   override bindTools(
     tools: BindToolsInput[],
     kwargs?: Partial<CallOptions>,
@@ -738,6 +744,24 @@ function hasProviderToolDefinition(
 }
 
 /**
+ * 只有 Responses API 收、或 `@langchain/openai` 會改走別的 SDK 方法的呼叫選項，碰到就拋：這裡只有 `chat.completions.create` 一條路，
+ * 照送會變成另一個請求。`json_schema` 的 `response_format` 在 `@langchain/openai` 會換 schema 並改走 `chat.completions.parse`（多一個
+ * SDK 標頭）。
+ */
+function assertCompletionsOnly(options: Partial<CallOptions>): void {
+  const loose = options as Record<string, unknown>;
+  const responsesOnly = ['previous_response_id', 'text', 'truncation', 'include'].filter(
+    (key) => loose[key] != null,
+  );
+  if ((options.reasoning as { summary?: unknown } | undefined)?.summary != null)
+    responsesOnly.push('reasoning.summary');
+  if (responsesOnly.length > 0)
+    throw new Error(`不支援只有 Responses API 收的呼叫選項：${responsesOnly.join('、')}`);
+  if ((options.response_format as { type?: unknown } | undefined)?.type === 'json_schema')
+    throw new Error('不支援 json_schema 的 response_format（結構化輸出）');
+}
+
+/**
  * 工具定義換成 Chat Completions 的 `function` 形狀。Responses 才收的形狀（內建工具、custom 工具）拋錯：`@langchain/openai` 碰到它們會改走
  * Responses API，這裡沒有那一支。
  */
@@ -935,7 +959,7 @@ function standardBlockToContentPart(block: Record<string, unknown>): unknown {
   return undefined;
 }
 
-/** v1 輸出格式的訊息。原版呼叫它時沒傳 `model`，所以這裡的 `system` 不會換成 `developer`，照原樣。 */
+/** v1 輸出格式的訊息。推理模型的 `system` 在這條路上不換成 `developer`：`@langchain/openai` 1.5.10 呼叫它時沒傳 `model`。 */
 function standardMessageToCompletionsMessage(message: BaseMessage): Record<string, unknown> {
   const role = messageToOpenAIRole(message);
   const blocks = message.contentBlocks as unknown as Record<string, unknown>[];
@@ -1165,7 +1189,7 @@ function isContextOverflow(error: object): boolean {
   );
 }
 
-/** 在錯誤上記 `lc_error_code`，訊息後面接 LangChain 的排錯網址（照 `addLangChainErrorFields`，下游的分類與日誌讀的是同一串字）。 */
+/** 在錯誤上記 `lc_error_code`，訊息後面接 LangChain 的排錯網址（照 `addLangChainErrorFields`）。網址接在 `message` 上，`classifyTurnFailure` 與日誌讀到的都是接過的這一串。 */
 function withLangChainErrorCode<T extends object>(error: T, code: string): T {
   const target = error as T & { lc_error_code?: string; message: string };
   target.lc_error_code = code;

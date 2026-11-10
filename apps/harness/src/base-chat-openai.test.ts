@@ -289,8 +289,8 @@ async function outcomeOf(
 }
 
 /**
- * 唯一刻意不同的一格：`ChatOpenAI` 在 callback 的 `metadata.versions` 記了 `@langchain/openai` 的版號，新殼不經那個套件、不記。
- * repo 裡沒有程式讀它；選用的 LangSmith tracer（`tracing.ts` 開的）會把 metadata 整包送出。拿掉之前先確定它真的在，免得這一格靜靜變成別的差異。
+ * 比對前一律剝掉的一格：`ChatOpenAI` 在 callback 的 `metadata.versions` 記了 `@langchain/openai` 的版號，`BaseChatOpenAI` 不經那個套件、不記。
+ * repo 裡沒有程式讀它；選用的 LangSmith tracer（`tracing.ts` 開的）會把 metadata 整包送出。剝掉之前先確定它真的在，免得這一格靜靜變成別的差異。
  */
 function withoutOpenAIVersion(outcome: Outcome): Outcome {
   const calls = outcome.calls as unknown[][];
@@ -543,6 +543,20 @@ describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', (
     expect(next).toEqual(old);
   });
 
+  it('設了 OPENAI_ORGANIZATION：兩邊都送 OpenAI-Organization，序列化也相同', async () => {
+    const saved = process.env['OPENAI_ORGANIZATION'];
+    process.env['OPENAI_ORGANIZATION'] = 'org-loopback';
+    try {
+      script = TEXT_STREAM;
+      const { next, old } = await both(invoke([new HumanMessage('嗨')]), 'events');
+      expect(next.requests[0]?.headers['openai-organization']).toBe('org-loopback');
+      expect(next).toEqual(old);
+    } finally {
+      if (saved === undefined) delete process.env['OPENAI_ORGANIZATION'];
+      else process.env['OPENAI_ORGANIZATION'] = saved;
+    }
+  });
+
   it('模型物件上被讀的那幾格：出貨型錄與量過的每一顆都相同', () => {
     const shipped = liveModelConfigSchema.parse({ baseUrl }).models.map((entry) => entry.id);
     for (const id of new Set([...shipped, ...MEASURED_MODELS.map((tier) => tier.modelId)])) {
@@ -561,5 +575,85 @@ describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', (
         surface(new ChatOpenAI(fields as ChatOpenAIFields) as never),
       );
     }
+  });
+});
+
+/** `BaseChatOpenAI` 刻意跟 `ChatOpenAI` 不同的地方：每一格先確認 `ChatOpenAI` 那邊真的是那樣，免得它靜靜變成別的差異。 */
+describe('已知的差異', () => {
+  const RESPONSES_ONLY: readonly [string, Record<string, unknown>][] = [
+    ['previous_response_id', { previous_response_id: 'resp_1' }],
+    ['text', { text: { format: { type: 'text' } } }],
+    ['truncation', { truncation: 'auto' }],
+    ['include', { include: ['reasoning.encrypted_content'] }],
+    ['reasoning.summary', { reasoning: { summary: 'auto' } }],
+  ];
+  for (const [name, options] of RESPONSES_ONLY) {
+    it(`只有 Responses 收的呼叫選項（${name}）：舊的改打 Responses，新殼拋、不送`, async () => {
+      script = jsonOf(400, { error: { message: 'loopback', type: 'invalid_request_error' } });
+      const { next, old } = await both(invoke([new HumanMessage('嗨')], options), 'none');
+      expect(Object.keys(JSON.parse(old.requests[0]!.body) as object)).toContain('input');
+      expect(next.requests).toHaveLength(0);
+      expect((next.thrown as { message: string }).message).toContain(name);
+    });
+  }
+
+  it('json_schema 的 response_format：舊的改走 chat.completions.parse，新殼拋、不送', async () => {
+    script = jsonOf(400, { error: { message: 'loopback', type: 'invalid_request_error' } });
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: { name: 'answer', schema: { type: 'object', properties: {} } },
+    };
+    const { next, old } = await both(
+      invoke([new HumanMessage('嗨')], { response_format: responseFormat }),
+      'none',
+    );
+    expect(old.requests[0]!.headers['x-stainless-helper-method']).toBe('chat.completions.parse');
+    expect(next.requests).toHaveLength(0);
+    expect((next.thrown as { message: string }).message).toContain('json_schema');
+  });
+
+  it('型號名偏好 Responses（含 codex、gpt-5.x-pro）：舊的改打 Responses，新殼照打 Chat Completions', async () => {
+    for (const model of ['gpt-5.5-pro', 'my-codex']) {
+      script = TEXT_STREAM;
+      const { next, old } = await both(invoke([new HumanMessage('嗨')]), 'events', (fields) => ({
+        ...fields,
+        model,
+      }));
+      expect(Object.keys(JSON.parse(old.requests[0]!.body) as object)).toContain('input');
+      expect(Object.keys(JSON.parse(next.requests[0]!.body) as object)).toContain('messages');
+    }
+  });
+
+  it('generate() 合併的 llmOutput：舊的有 tokenUsage，新殼沒有', async () => {
+    const fields = createLiveModel(liveModelConfigSchema.parse({ baseUrl })).fields;
+    const llmOutputOf = async (model: BaseChatModel) => {
+      script = jsonOf(200, {
+        id: 'c1',
+        object: 'chat.completion',
+        created: 0,
+        model: 'fake',
+        choices: [
+          { index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '好' } },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      });
+      return (await model.generate([[new HumanMessage('嗨')]])).llmOutput;
+    };
+    expect(await llmOutputOf(new ChatOpenAI(fields as ChatOpenAIFields) as never)).toEqual({
+      tokenUsage: { promptTokens: 3, completionTokens: 1, totalTokens: 4 },
+    });
+    expect(await llmOutputOf(new BaseChatOpenAI(fields))).toBeUndefined();
+  });
+
+  it('profile：OpenAI 自家型號舊的查得到 maxInputTokens，新殼是 {}', () => {
+    const fields = {
+      ...createLiveModel(liveModelConfigSchema.parse({ baseUrl })).fields,
+      model: 'gpt-4o',
+    };
+    expect(
+      (new ChatOpenAI(fields as ChatOpenAIFields) as unknown as BaseChatModel).profile
+        .maxInputTokens,
+    ).toBeTypeOf('number');
+    expect(new BaseChatOpenAI(fields).profile).toEqual({});
   });
 });
