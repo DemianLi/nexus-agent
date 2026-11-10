@@ -49,7 +49,16 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseDocument, type YAMLError } from 'yaml';
+import {
+  type Document,
+  isAlias,
+  isMap,
+  LineCounter,
+  Pair,
+  parseDocument,
+  YAMLMap,
+  type YAMLError,
+} from 'yaml';
 
 import { assertOwnerOnlyMode } from './owner-only.js';
 import type { LaunchEnvironment } from './launch-env.js';
@@ -115,9 +124,9 @@ function rejectionChannel(): Pick<CredentialService, 'reportRejected' | 'onRejec
 export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 /** 不引原文的 YAML 錯誤描述：只有錯誤碼與位置。 */
-function describeYamlError(error: YAMLError): string {
-  const at = error.linePos?.[0];
-  return `${error.code}${at === undefined ? '' : `（第 ${String(at.line)} 行第 ${String(at.col)} 欄）`}`;
+function describeYamlError(error: YAMLError, lines: LineCounter): string {
+  const at = lines.linePos(error.pos[0]);
+  return `${error.code}（第 ${String(at.line)} 行第 ${String(at.col)} 欄）`;
 }
 
 function isMissing(error: unknown): boolean {
@@ -130,6 +139,43 @@ export interface ParsedCredentialsDocument {
   readonly refs: ReadonlyMap<string, string>;
   /** `version`、`refs` 之外的頂層鍵名（照檔案裡的順序）。留在檔案裡、不解析出任何東西，由呼叫端決定怎麼講。 */
   readonly ignoredKeys: readonly string[];
+  /** {@link ignoredKeys} 各在第幾行，順序一一對應。給訊息用：訊息只講行，不印鍵名。 */
+  readonly ignoredLines: readonly number[];
+}
+
+/** mapping 裡的一個條目：轉成 JS 之後的鍵名、鍵在第幾行第幾欄、值的節點。 */
+interface MappingEntry {
+  readonly name: string;
+  readonly line: number;
+  readonly col: number;
+  readonly value: unknown;
+}
+
+/** 位置的說法，跟 {@link describeYamlError} 同一個格式。 */
+function at(entry: MappingEntry): string {
+  return `第 ${String(entry.line)} 行第 ${String(entry.col)} 欄`;
+}
+
+/**
+ * 一個 mapping 節點的條目，照檔案順序；不是 mapping 就是 `undefined`。
+ *
+ * 鍵名用 `yaml` 自己 `toJS()` 的換算（只放這一個鍵的 mapping 轉一次），所以 `true` 與 `"true"`、`1` 與 `1.0` 換出同一個名字，
+ * 別名展開成它指到的值。
+ */
+function mappingEntries(
+  document: Document,
+  lines: LineCounter,
+  node: unknown,
+): MappingEntry[] | undefined {
+  if (!isMap(node)) return undefined;
+  return node.items.map((pair) => {
+    const single = new YAMLMap(document.schema);
+    single.items.push(new Pair(pair.key, null));
+    const [name = ''] = Object.keys(single.toJS(document) as object);
+    const offset = (pair.key as { range?: [number, number, number] } | null)?.range?.[0] ?? 0;
+    const { line, col } = lines.linePos(offset);
+    return { name, line, col, value: pair.value };
+  });
 }
 
 /**
@@ -140,25 +186,30 @@ export interface ParsedCredentialsDocument {
  * @param file - 只用在訊息裡。
  * @param text - 檔案內容。
  * @returns `refs`：名字 → 值；`ignoredKeys`：不認得、但不擋的頂層鍵名。
- * @throws 不合格的內容；**訊息不含任何值**（鍵名可以，值不行）。
+ * @throws 不合格的內容；**訊息不含任何值，也不含鍵名**，只講位置（#2667）：鍵名的位置可能被誤貼了 key。
  */
 export function parseCredentialsDocument(file: string, text: string): ParsedCredentialsDocument {
   const fail = (why: string): never => {
     throw new Error(`受管憑證檔 ${file} 認不得：${why}`);
   };
-  const empty: ParsedCredentialsDocument = { refs: new Map(), ignoredKeys: [] };
+  const empty: ParsedCredentialsDocument = { refs: new Map(), ignoredKeys: [], ignoredLines: [] };
   if (text.trim() === '') return empty;
-  const document = parseDocument(text, { uniqueKeys: true, prettyErrors: false });
+  const lines = new LineCounter();
+  const document = parseDocument(text, {
+    uniqueKeys: true,
+    prettyErrors: false,
+    lineCounter: lines,
+  });
   const [problem] = document.errors;
-  if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem)}`);
+  if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, lines)}`);
   // 只有註解的文件 `toJS()` 是 `null`：同 dsh `?? {}`，當空的倉庫。
   const root: unknown = document.toJS() ?? {};
   if (typeof root !== 'object' || Array.isArray(root)) {
     return fail('根要是一個 mapping（version 與 refs）');
   }
   const record = root as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (keys.length === 0) return empty;
+  if (Object.keys(record).length === 0) return empty;
+  const top = uniqueEntries(mappingEntries(document, lines, document.contents) ?? [], fail);
   if (record.version !== CREDENTIALS_DOCUMENT_VERSION) {
     return fail(`version 要是 ${String(CREDENTIALS_DOCUMENT_VERSION)}`);
   }
@@ -171,18 +222,44 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) {
     return fail('refs 要是 mapping（名字: 值）');
   }
+  const values = refs as Record<string, unknown>;
+  const refsNode = top.find((entry) => entry.name === 'refs')?.value;
+  const resolvedRefs = isAlias(refsNode) ? refsNode.resolve(document) : refsNode;
   const out = new Map<string, string>();
-  for (const [name, value] of Object.entries(refs as Record<string, unknown>)) {
-    if (!CREDENTIAL_NAME_PATTERN.test(name))
-      return fail(`refs 的鍵 "${name}" 不是環境變數形狀的名字`);
+  for (const entry of uniqueEntries(mappingEntries(document, lines, resolvedRefs) ?? [], fail)) {
+    const { name } = entry;
+    if (!CREDENTIAL_NAME_PATTERN.test(name)) {
+      return fail(
+        `refs ${at(entry)}的鍵不是環境變數形狀的名字（長 ${String([...name].length)} 個字元；鍵名不印出，以免誤貼在這裡的 key 進日誌）`,
+      );
+    }
+    const value = values[name];
     // 不引值：連型別都只說「不是字串」。
-    if (typeof value !== 'string') return fail(`refs.${name} 要是字串`);
+    if (typeof value !== 'string') return fail(`refs ${at(entry)}那一把要是字串`);
     if (value.length === 0) {
-      return fail(`refs.${name} 是空字串（要移除一把憑證就刪掉那一行，不要留空）`);
+      return fail(`refs ${at(entry)}那一把是空字串（要移除一把憑證就刪掉那一行，不要留空）`);
     }
     out.set(name, value);
   }
-  return { refs: out, ignoredKeys: keys.filter((key) => key !== 'version' && key !== 'refs') };
+  const ignored = top.filter((entry) => entry.name !== 'version' && entry.name !== 'refs');
+  return {
+    refs: out,
+    ignoredKeys: ignored.map((entry) => entry.name),
+    ignoredLines: ignored.map((entry) => entry.line),
+  };
+}
+
+/**
+ * 換成同一個名字的兩個鍵，後一個會在 `toJS()` 裡靜靜蓋掉前一個（`true` 與 `"true"`、`1` 與 `1.0`、別名與它指到的字）。
+ * `yaml` 的 `uniqueKeys` 比的是節點，擋不到這些；這裡照名字再比一次，同樣講成 `DUPLICATE_KEY`（#2667）。
+ */
+function uniqueEntries(entries: MappingEntry[], fail: (why: string) => never): MappingEntry[] {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.name)) fail(`YAML 錯誤 DUPLICATE_KEY（${at(entry)}）`);
+    seen.add(entry.name);
+  }
+  return entries;
 }
 
 /** {@link createCredentialService} 的參數。 */
@@ -211,10 +288,24 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   const { store } = options;
   /** 最後一份好的內容，與它是憑哪個 stat 讀來的。 */
   let good: { readonly signature: string; readonly refs: ReadonlyMap<string, string> } | undefined;
-  /** 最後一次警告過的 stat 簽章：同一個壞檔只講一次。 */
+  /** 最後一次警告過的原因（stat 簽章，或 `stat:<錯誤碼>`）：同一個原因只講一次。 */
   let warned: string | undefined;
 
-  /** 讀（必要時重讀）受管檔。壞了：第一次拋，讀好過就保留最後一份並警告。 */
+  /**
+   * 這一次讀不成：還沒讀好過就拋；讀好過就保留最後一份並警告，同一個原因只講一次。
+   *
+   * @param key - 去重用的鍵：讀檔、解析失敗是 stat 簽章，`stat` 本身失敗是 `stat:<code>`（那時沒有簽章）。
+   */
+  function keepLastGood(error: unknown, key: string): ReadonlyMap<string, string> {
+    if (good === undefined) throw error;
+    if (warned !== key) {
+      warned = key;
+      warn(`credentials: 重載失敗，繼續用上一份可用的內容：${(error as Error).message}\n`);
+    }
+    return good.refs;
+  }
+
+  /** 讀（必要時重讀）受管檔。壞了（含 `stat` 本身失敗，同 dsh 的熱重載）：第一次拋，讀好過就保留最後一份並警告。 */
   function stored(): ReadonlyMap<string, string> {
     let signature: string;
     let mode: number;
@@ -227,7 +318,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         good = undefined;
         return new Map();
       }
-      throw error;
+      return keepLastGood(error, `stat:${String((error as NodeJS.ErrnoException | null)?.code)}`);
     }
     if (good?.signature === signature) return good.refs;
     let parsed: ParsedCredentialsDocument;
@@ -235,19 +326,14 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       assertOwnerOnlyMode('受管憑證檔', file, mode);
       parsed = parseCredentialsDocument(file, readFileSync(file, 'utf8'));
     } catch (error) {
-      if (good === undefined) throw error;
-      if (warned !== signature) {
-        warned = signature;
-        warn(`credentials: 重載失敗，繼續用上一份可用的內容：${(error as Error).message}\n`);
-      }
-      return good.refs;
+      return keepLastGood(error, signature);
     }
     good = { signature, refs: parsed.refs };
     // 這是一份好檔：多出來的頂層鍵不擋、不算重載失敗。同一份 stat 簽章在上面就回快取了，所以每份檔只講一次。
-    // 只印鍵名（JSON 跳脫，免得鍵名裡的換行偽造日誌行），不印值。
+    // 只講個數與行號，不印鍵名也不印值（#2667）：鍵名的位置可能被誤貼了 key。
     if (parsed.ignoredKeys.length > 0) {
       warn(
-        `credentials: 受管憑證檔 ${file} 有不認得的頂層鍵 ${parsed.ignoredKeys.map((key) => JSON.stringify(key)).join('、')}，已略過；只有 version 與 refs 底下的憑證會生效\n`,
+        `credentials: 受管憑證檔 ${file} 有 ${String(parsed.ignoredKeys.length)} 個不認得的頂層鍵（第 ${parsed.ignoredLines.map(String).join('、')} 行），已略過；只有 version 與 refs 底下的憑證會生效\n`,
       );
     }
     return parsed.refs;

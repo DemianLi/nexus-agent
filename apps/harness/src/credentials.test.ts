@@ -92,7 +92,11 @@ describe('parseCredentialsDocument', () => {
     ['文件標記加註解', '---\n# 只有註解\n'],
     ['空 mapping', '{}\n'],
   ])('%s：空的倉庫，不要求 version', (_label, text) => {
-    expect(parseCredentialsDocument(file, text)).toEqual({ refs: new Map(), ignoredKeys: [] });
+    expect(parseCredentialsDocument(file, text)).toEqual({
+      refs: new Map(),
+      ignoredKeys: [],
+      ignoredLines: [],
+    });
   });
 
   it('version、refs 之外的頂層鍵不擋：鍵名交回、refs 照解、值不在結果裡以外的任何地方（#1507）', () => {
@@ -110,6 +114,7 @@ describe('parseCredentialsDocument', () => {
     expect(parseCredentialsDocument(file, 'version: 1\ncomment: hi\n')).toEqual({
       refs: new Map(),
       ignoredKeys: ['comment'],
+      ignoredLines: [2],
     });
   });
 
@@ -151,6 +156,75 @@ describe('parseCredentialsDocument', () => {
     }
     expect(message).toContain(file);
     expect(message).not.toContain(SECRET);
+  });
+});
+
+describe('鍵名不進訊息與日誌（#2667）', () => {
+  /** 形狀合法（環境變數形狀）、看起來像 key 的鍵名：誤貼在鍵名位置的秘密。 */
+  const PASTED = 'nvapiPastedIntoTheKeyPosition0123456789';
+
+  function rejection(text: string): string {
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    throw new Error('沒有拒絕');
+  }
+
+  it.each([
+    [
+      '沒寫值（not-string）',
+      `version: 1\nrefs:\n  ${PASTED}:\n`,
+      'refs 第 3 行第 3 欄那一把要是字串',
+    ],
+    [
+      '空字串（empty-string）',
+      `version: 1\nrefs:\n  ${PASTED}: ""\n`,
+      'refs 第 3 行第 3 欄那一把是空字串',
+    ],
+    [
+      '形狀不合（bad-name）',
+      `version: 1\nrefs:\n  nvapi-${PASTED}: v\n`,
+      `refs 第 3 行第 3 欄的鍵不是環境變數形狀的名字（長 ${String(`nvapi-${PASTED}`.length)} 個字元`,
+    ],
+  ])('%s：訊息只講位置，不含鍵名', (_, text, expected) => {
+    const message = rejection(text);
+    expect(message).toContain(expected);
+    expect(message).not.toContain(PASTED);
+  });
+
+  it('不認得的頂層鍵：警告只講個數與行號，不含鍵名', () => {
+    managed(`version: 1\n${PASTED}:\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('1 個不認得的頂層鍵（第 2 行）');
+    expect(warned[0]).not.toContain(PASTED);
+  });
+});
+
+describe('換成同一個名字的兩個鍵算重複鍵（#2667）', () => {
+  it.each([
+    ['布林與字串', 'version: 1\ntrue: 1\n"true": 2\n'],
+    ['整數與小數', 'version: 1\nrefs:\n  A: v\n1: a\n1.0: b\n'],
+    ['別名與它指到的字', 'version: 1\nnote: &n refs\n*n : x\nrefs:\n  A: v\n'],
+    ['refs 裡的布林與字串', `version: 1\nrefs:\n  true: ${SECRET}\n  "true": other\n`],
+  ])('%s：整份拒絕，講成 DUPLICATE_KEY 與第二個鍵的位置', (_, text) => {
+    expect(() => parseCredentialsDocument(file, text)).toThrow(
+      /YAML 錯誤 DUPLICATE_KEY（第 \d+ 行第 \d+ 欄）/u,
+    );
+  });
+});
+
+describe('ignoredKeys 照檔案順序（#2667）', () => {
+  it('像整數的鍵不排到最前面', () => {
+    const parsed = parseCredentialsDocument(
+      file,
+      'version: 1\nnote: FAKE-note\n2024: FAKE-year\nrefs:\n  A: FAKE-a\n',
+    );
+    expect(parsed.ignoredKeys).toEqual(['note', '2024']);
+    expect(parsed.ignoredLines).toEqual([2, 3]);
   });
 });
 
@@ -368,7 +442,7 @@ describe('重載：每次解析先 stat，變了才重讀', () => {
 });
 
 describe('別的工具多放的頂層鍵、只剩註解的檔（#1507，對齊 dsh alpha.5）', () => {
-  it('多一個頂層鍵：解得出 key，warn 恰好一次，訊息含鍵名、不含值；同一份檔再解析不再警告', () => {
+  it('多一個頂層鍵：解得出 key，warn 恰好一次，訊息只有個數與行號、不含鍵名與值；同一份檔再解析不再警告', () => {
     managed(`version: 1\nnote: ${SECRET}-note\nrefs:\n  ${KEY}: ${SECRET}\n`);
     const warned: string[] = [];
     const { credentials } = service({}, (line) => warned.push(line));
@@ -379,20 +453,21 @@ describe('別的工具多放的頂層鍵、只剩註解的檔（#1507，對齊 d
     expect(credentials.resolve('OTHER')).toBeUndefined();
 
     expect(warned).toHaveLength(1);
-    expect(warned[0]).toContain('"note"');
+    expect(warned[0]).toContain('1 個不認得的頂層鍵（第 2 行）');
+    expect(warned[0]).not.toContain('note');
     expect(warned[0]).toContain(file);
     expect(warned.join('')).not.toContain(SECRET);
     // 不是「重載失敗」：那條路徑是壞檔才走的。
     expect(warned[0]).not.toContain('重載失敗');
   });
 
-  it('鍵名用 JSON 跳脫印出：鍵名裡的換行偽造不出第二行日誌', () => {
+  it('鍵名不進警告：鍵名裡的換行也就偽造不出第二行日誌', () => {
     managed(`version: 1\n"a\\nFAKE: line": 1\nrefs:\n  ${KEY}: v\n`);
     const warned: string[] = [];
     service({}, (line) => warned.push(line)).credentials.check();
     expect(warned).toHaveLength(1);
     expect(warned[0]?.match(/\n/gu)).toHaveLength(1);
-    expect(warned[0]).toContain('"a\\nFAKE: line"');
+    expect(warned[0]).not.toContain('FAKE');
   });
 
   it('沒有外來的鍵就不警告', () => {
@@ -424,7 +499,7 @@ describe('別的工具多放的頂層鍵、只剩註解的檔（#1507，對齊 d
     expect(credentials.resolve(KEY)?.value).toBe('second-longer');
     expect(credentials.resolve(KEY)?.value).toBe('second-longer');
     expect(warned).toHaveLength(1);
-    expect(warned[0]).toContain('"comment"');
+    expect(warned[0]).toContain('不認得的頂層鍵（第 2 行）');
     expect(warned.join('')).not.toContain('重載失敗');
   });
 
