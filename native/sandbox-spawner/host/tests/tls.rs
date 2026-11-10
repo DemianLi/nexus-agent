@@ -60,6 +60,7 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// rmcp 的 `from_uri`／`from_config` 與 reqwest 的預設建構會自己挑 TLS 實作與信任庫；`ClientConfig::builder()` 用行程的預設 provider。
+/// reqwest 帶進來的 `rustls-platform-verifier` 留在相依樹裡，只靠這個測試擋住繞過 [`http_client`] 的寫法。
 #[test]
 fn 宿主原始碼不繞過_tls_模組() {
     let forbidden = [
@@ -68,10 +69,18 @@ fn 宿主原始碼不繞過_tls_模組() {
         "reqwest::Client::new(",
         "Client::new()",
         "ClientConfig::builder()",
+        "ClientBuilder::new(",
+        "Client::default(",
         "rustls_native_certs",
         "rustls_platform_verifier",
         "webpki_roots",
+        "webpki_root_certs",
     ];
+    // 建 reqwest 客戶端只准在 `src/tls.rs` 的 `http_client` 裡。
+    let builder = "Client::builder(";
+    let tls = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("tls.rs");
     let mut files = Vec::new();
     for dir in ["src", "examples"] {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
@@ -88,6 +97,9 @@ fn 宿主原始碼不繞過_tls_模組() {
                 if line.contains(word) {
                     hits.push(format!("{}:{}：{word}", file.display(), n + 1));
                 }
+            }
+            if *file != tls && line.contains(builder) {
+                hits.push(format!("{}:{}：{builder}", file.display(), n + 1));
             }
         }
     }

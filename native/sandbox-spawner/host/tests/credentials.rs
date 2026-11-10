@@ -32,7 +32,9 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// 先刪再寫：上一筆可能把檔改成擁有者也不能寫。
 fn write(path: &PathBuf, text: &str, mode: u32) {
+    let _ = std::fs::remove_file(path);
     std::fs::write(path, text).expect("寫檔");
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
 }
