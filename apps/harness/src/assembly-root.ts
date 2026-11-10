@@ -710,6 +710,12 @@ export const CLI_PROBE_FILE = '/cli.md';
 const SYSTEM_PROMPT = '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。';
 
 /**
+ * 這個組裝等不等得到答覆（`deriveApprovalChannel` 與 `FoldOptions.awaitsAnswer`）：CLI 與 serve 都有人在另一頭，兩個 loop 一樣。
+ * 明著給，不從有沒有 checkpointer 推：native 不建 checkpointer，照推的話核准與問答會一起變成沒有管道。
+ */
+const AWAITS_ANSWER = true;
+
+/**
  * 假模型在系統提示詞裡叫什麼（`{{model}}` 的值）。`ScriptedChatModel` 沒有型號，而嚴格插值不允許沒有值，
  * 所以替它定一個名字：夠明白地告訴讀日誌的人這一輪沒有真的模型。
  */
@@ -1157,20 +1163,18 @@ export async function createCliAgent(
       : undefined;
   // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
   // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同兩格算出：
-  // `approvals.enabled`、有沒有 checkpointer。輸入對不上時分岔的樣子是
+  // `approvals.enabled`、`AWAITS_ANSWER`。輸入對不上時分岔的樣子是
   // 「核准擋得下來、問答還掛在那裡」。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
-  // 呼叫的 checkpointer 與 `approvals`。
-  // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
-  // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
-  // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 在行程內等人回答，同一個條件；沒人可問的呼叫
-  // 由那顆呼叫上的 `NO_HUMAN_INPUT` 判（`@nexus/core` 的 `human-input.ts`），同 `fold.ts` 的 `foldApprovalChannel`。
-  const checkpointer = new PrunedMemorySaver();
+  // 呼叫的 `approvals`。
+  //
+  // langgraph 停下來問人要靠存檔點接回，所以給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106）；native 在行程內
+  // 等答覆，對話只從日誌推（#2360），不建。沒人可問的呼叫由那顆呼叫上的 `NO_HUMAN_INPUT` 判（`@nexus/core` 的 `human-input.ts`）。
+  const checkpointer = invocation.agentLoop === 'native' ? undefined : new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined,
+    awaitsAnswer: AWAITS_ANSWER,
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
@@ -1351,7 +1355,8 @@ export async function createCliAgent(
       model: invocation.live ? liveModel.modelId : SCRIPTED_MODEL_NAME,
       cwd: PROMPT_WORKING_DIRECTORY,
     },
-    checkpointer,
+    ...(checkpointer !== undefined && { checkpointer }),
+    awaitsAnswer: AWAITS_ANSWER,
     ...(sessionLookup !== undefined && { sessionLookup }),
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(invariantTap !== undefined && { invariantTap }),

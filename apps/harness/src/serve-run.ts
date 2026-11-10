@@ -1697,7 +1697,7 @@ async function startServer(
         ...(owner !== undefined && { owner }),
       };
     },
-    // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
+    // 一個 thread 一個 agent——各自的 state（langgraph 存在 checkpointer，native 在 agent 的行程內快取）、各自的虛擬檔案系統。
     createAgent: async (
       threadId: string,
       fork?: ThreadForkSeed,
