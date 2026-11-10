@@ -53,6 +53,20 @@ fn 設定_預設與拒絕() {
     reject(json!({ "elicitation": "yes" }), "elicitation");
     reject(json!({ "reconnect": { "maxAttempts": 0 } }), "maxAttempts");
     reject(json!({ "livenessTimeoutMs": -1 }), "livenessTimeoutMs");
+    reject(json!({ "toolCallTimeoutMs": 1.5 }), "toolCallTimeoutMs");
+
+    // 整數欄位的上限同 zod：`int()` 只收安全整數，`livenessTimeoutMs` 另有 2^31−1。
+    let safe = (1_u64 << 53) - 1;
+    for field in ["toolCallTimeoutMs", "maxInstructionBytes"] {
+        reject(json!({ field: safe + 1 }), field);
+        let mut config = base.clone();
+        config[field] = json!(safe);
+        Server::parse(&config).unwrap_or_else(|e| panic!("{field} 收 2^53−1：{e}"));
+    }
+    reject(json!({ "livenessTimeoutMs": 2_147_483_648_u64 }), "livenessTimeoutMs");
+    let mut config = base.clone();
+    config["livenessTimeoutMs"] = json!(2_147_483_647);
+    Server::parse(&config).expect("livenessTimeoutMs 收 2^31−1");
 
     let err = Server::parse(&json!({
         "serverName": "a",
@@ -72,10 +86,10 @@ fn 池的鍵_預設值與數字寫法不分() {
     let explicit = key(json!({
         "elicitation": true,
         "reconnect": { "maxAttempts": 10.0, "initialDelayMs": 500.0, "enabled": true, "maxDelayMs": 30000 },
-        "maxInstructionBytes": 32768,
+        "maxInstructionBytes": 32768.0,
         "failOnStartupError": false,
-        "livenessTimeoutMs": 15000,
-        "toolCallTimeoutMs": 60000,
+        "livenessTimeoutMs": 15000.0,
+        "toolCallTimeoutMs": 60000.0,
         "connection": { "url": "https://h/", "transport": "http" },
         "serverName": "a",
     }));

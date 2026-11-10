@@ -15,6 +15,10 @@ pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 pub const DEFAULT_MAX_INSTRUCTION_BYTES: usize = 32_768;
 /// `livenessTimeoutMs` 的預設值，同 `DEFAULT_LIVENESS_TIMEOUT_MS`。宿主不用它，只進池的鍵。
 const DEFAULT_LIVENESS_TIMEOUT_MS: u64 = 15_000;
+/// JS 的 `Number.MAX_SAFE_INTEGER`，zod 的 `int()` 收的上限。
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+/// `livenessTimeoutMs` 的上限，同 `MAX_LIVENESS_TIMEOUT_MS`。
+const MAX_LIVENESS_TIMEOUT_MS: u64 = 2_147_483_647;
 
 /// 一台 HTTP server 的設定：`mcpConfigSchema` 的 HTTP 那一支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的帳密、query。
 #[derive(Clone)]
@@ -47,14 +51,15 @@ impl std::fmt::Debug for Server {
     }
 }
 
-fn positive_int(fields: &Map<String, Value>, name: &str) -> Result<Option<u64>, String> {
+/// 照 zod 的 `z.number().int().positive()` 收：`60000.0` 跟 `60000` 一樣收，超過 `max` 拒（`max` 不大於 [`MAX_SAFE_INTEGER`]）。
+fn positive_int(fields: &Map<String, Value>, name: &str, max: u64) -> Result<Option<u64>, String> {
     match fields.get(name) {
         None => Ok(None),
         Some(v) => v
-            .as_u64()
-            .filter(|n| *n > 0)
-            .map(Some)
-            .ok_or_else(|| format!("{name} 要是正整數")),
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && (1.0..=max as f64).contains(n))
+            .map(|n| Some(n as u64))
+            .ok_or_else(|| format!("{name} 要是不大於 {max} 的正整數")),
     }
 }
 
@@ -140,9 +145,9 @@ impl Server {
             }
             Some(_) => return Err("connection.headers 要是物件".into()),
         }
-        let tool_call_timeout_ms = positive_int(fields, "toolCallTimeoutMs")?
+        let tool_call_timeout_ms = positive_int(fields, "toolCallTimeoutMs", MAX_SAFE_INTEGER)?
             .unwrap_or(DEFAULT_TOOL_CALL_TIMEOUT.as_millis() as u64);
-        let max_instruction_bytes = positive_int(fields, "maxInstructionBytes")?
+        let max_instruction_bytes = positive_int(fields, "maxInstructionBytes", MAX_SAFE_INTEGER)?
             .map_or(Ok(DEFAULT_MAX_INSTRUCTION_BYTES), usize::try_from)
             .map_err(|_| "maxInstructionBytes 太大".to_string())?;
         let reconnect = Policy::parse(fields.get("reconnect"))?;
@@ -150,7 +155,8 @@ impl Server {
         let elicitation = boolean(fields, "elicitation", true)?;
         // `livenessTimeoutMs` 只給 stdio；HTTP 照收、不用，型別照樣核。
         let liveness_timeout_ms =
-            positive_int(fields, "livenessTimeoutMs")?.unwrap_or(DEFAULT_LIVENESS_TIMEOUT_MS);
+            positive_int(fields, "livenessTimeoutMs", MAX_LIVENESS_TIMEOUT_MS)?
+                .unwrap_or(DEFAULT_LIVENESS_TIMEOUT_MS);
 
         // 照 zod 解出來的樣子編：預設值填好，數字一律當浮點數寫，`500` 與 `500.0` 編成同一個。
         let mut key_connection = Map::new();
@@ -199,7 +205,7 @@ impl Server {
     }
 
     /// 池的鍵：整份設定加實際的 elicitation 旗標，同 `poolKey`。TS 的鍵是 zod 填好預設值之後的設定，這裡也先填好再編，
-    /// 鍵照碼位排（[`crate::json::encode`]）：省略一個欄位跟寫出它的預設值、鍵的順序不同，都是同一份。
+    /// 數字一律當浮點數、鍵照碼位排（[`crate::json::encode`]）：省略一個欄位跟寫出它的預設值、`500` 跟 `500.0`、鍵的順序不同，都是同一份。
     pub fn pool_key(&self, elicitation: bool) -> String {
         format!("{}\0elicitation={elicitation}", self.canonical)
     }
