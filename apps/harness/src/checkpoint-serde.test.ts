@@ -613,8 +613,7 @@ describe.each(['langgraph', 'native'] as const)(
         60_000,
       );
     } else {
-      // native 沒有存檔點，挑「拒」：照收的話下一輪在呼叫堆疊上爆（實測 5000 層是 Maximum call stack size exceeded、碼 unknown_error），
-      // 而且同一份日誌在 langgraph 下本來就拒，換 loop 不該讓一條 thread 從打不開變成打開了才壞。
+      // native 沒有存檔點：灌回之前用同一把尺量，同一份日誌跟 langgraph 一樣拒。
       it.each(tooDeep)(
         '%s：灌回 thread 之前就拒，wire 碼是 thread_history_too_deep，不遞迴爆掉，錯誤裡只有 seq 與層數、沒有事件內容',
         async (_label, name) => {
