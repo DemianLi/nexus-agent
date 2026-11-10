@@ -7,11 +7,11 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { StateBackend } from 'deepagents';
-import { fakeModel } from '../fixtures.js';
+import { fakeModel as langchainFakeModel } from 'langchain';
 import { describe, expect, it } from 'vitest';
 
 import { assembleAgent } from '../agent-assembly.js';
-import { fakePlugin } from '../fixtures.js';
+import { fakeModel, fakePlugin } from '../fixtures.js';
 import { foldRegistry } from '../fold.js';
 import { loadPlugins } from '../load.js';
 
@@ -83,5 +83,53 @@ describe('native 前景子代理的步驟往共用派發面派的事件', () => 
       // 只有子代理那一次失敗。
       'agent/request-error': 1,
     });
+  });
+});
+
+/** 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數或拋出來的錯。 */
+async function runUncooperative(loop: 'native' | 'langgraph'): Promise<number> {
+  let streams = 0;
+  const { registry } = await loadPlugins([
+    fakePlugin('listeners', (r) => {
+      r.events.on('llm/stream', (_payload, next) => {
+        streams += 1;
+        return next();
+      });
+    }),
+  ]);
+  const backend = new StateBackend();
+  const params = foldRegistry(registry, {
+    summarization: false,
+    defaultBackend: backend,
+    events: registry.dispatch,
+    loop,
+  });
+  const agent = assembleAgent({
+    ...params,
+    model: langchainFakeModel().respond(new AIMessage('收完')),
+    backend: params.backend ?? backend,
+    loop,
+    events: registry.dispatch,
+  }) as unknown as { invoke(input: unknown, config: object): Promise<unknown> };
+  await agent.invoke(
+    { messages: [new HumanMessage('動手')] },
+    { configurable: { thread_id: 't' } },
+  );
+  return streams;
+}
+
+describe('模型沒有接上 llm/stream', () => {
+  it('native：拋錯，訊息指名模型類別與要做的事', async () => {
+    const thrown = await runUncooperative('native').then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+    expect(thrown?.message).toContain('FakeBuiltModel');
+    expect(thrown?.message).toContain('configurable["__nexus_llm_stream"]');
+    expect(thrown?.message).toContain('包住');
+  });
+
+  it('langgraph：不帶環繞函式、不檢查，llm/stream 一次都不派', async () => {
+    expect(await runUncooperative('langgraph')).toBe(0);
   });
 });

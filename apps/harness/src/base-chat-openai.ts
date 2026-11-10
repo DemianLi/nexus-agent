@@ -40,6 +40,7 @@ import type {
 import type { ChatModelStreamEvent } from '@langchain/core/language_models/event';
 import { convertOpenAICompletionsStream } from '@langchain/core/language_models/openai_completions_stream';
 import type { OpenAICompletionsStreamChunk } from '@langchain/core/language_models/openai_completions_stream';
+import { ChatModelStream } from '@langchain/core/language_models/stream';
 import {
   AIMessage,
   AIMessageChunk,
@@ -69,6 +70,8 @@ import { getEnvironmentVariable } from '@langchain/core/utils/env';
 import { convertToOpenAITool, isLangChainTool } from '@langchain/core/utils/function_calling';
 import { APIConnectionTimeoutError, APIUserAbortError, OpenAI } from 'openai';
 import type { ClientOptions } from 'openai';
+import { LLM_STREAM_CONFIG_KEY } from '@nexus/core';
+import type { ModelStreamAround, ModelStreamChunk } from '@nexus/core';
 
 /** {@link BaseChatOpenAI} 的建構欄位。沒列在這裡的 `ChatOpenAI` 欄位不讀（例如 `streaming`）。 */
 export interface BaseChatOpenAIFields extends BaseChatModelParams {
@@ -109,6 +112,8 @@ export interface BaseChatOpenAICallOptions extends BaseChatModelCallOptions {
   readonly maxRetries?: number;
   /** 原樣交給 SDK 的請求選項（`headers` 之類）。 */
   readonly options?: Record<string, unknown>;
+  /** native 的 `llm/stream`：`invoke`／`stream` 從 `configurable` 搬過來，見 {@link takeAround}。 */
+  readonly [LLM_STREAM_CONFIG_KEY]?: ModelStreamAround;
 }
 
 type CallOptions = BaseChatOpenAICallOptions;
@@ -365,11 +370,19 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   }
 
   override async stream(input: BaseLanguageModelInput, options?: Partial<CallOptions>) {
-    return super.stream(input, this._combineCallOptions(options));
+    return super.stream(input, this._combineCallOptions(takeAround(options)));
   }
 
   override async invoke(input: BaseLanguageModelInput, options?: Partial<CallOptions>) {
-    return super.invoke(input, this._combineCallOptions(options));
+    return super.invoke(input, this._combineCallOptions(takeAround(options)));
+  }
+
+  /** callback 收到的呼叫選項不帶 `llm/stream` 的環繞函式。 */
+  override _getCallOptionsForTracing(
+    options: this['ParsedCallOptions'],
+    invocationParams: ReturnType<this['invocationParams']>,
+  ): this['ParsedCallOptions'] {
+    return withoutAround(super._getCallOptionsForTracing(options, invocationParams));
   }
 
   override async _generate(
@@ -379,6 +392,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   ): Promise<ChatResult> {
     const options = this._combineCallOptions(rawOptions);
     options.signal?.throwIfAborted();
+    if (options[LLM_STREAM_CONFIG_KEY] !== undefined) return this.#aggregate(messages, options);
     const usageMetadata: Record<string, unknown> = {};
     const params = this.invocationParams(options);
     const messagesMapped = toCompletionsMessages(messages, this.model);
@@ -473,14 +487,15 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     rawOptions: this['ParsedCallOptions'],
     _runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatModelStreamEvent> {
-    const options = this._combineCallOptions(rawOptions);
-    const params = {
-      ...this.invocationParams(options, { streaming: true }),
-      messages: toCompletionsMessages(messages, this.model),
-      stream: true,
-    };
-    const streamIterable = (await this.completionWithRetry(
-      params,
+    yield* this.#events(messages, this._combineCallOptions(rawOptions));
+  }
+
+  async *#events(
+    messages: BaseMessage[],
+    options: CallOptions,
+  ): AsyncGenerator<ChatModelStreamEvent> {
+    const streamIterable = (await this.#openStream(
+      messages,
       options,
     )) as AsyncIterable<OpenAICompletionsStreamChunk>;
     yield* convertOpenAICompletionsStream(abortable(streamIterable, options.signal), {
@@ -489,20 +504,68 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     });
   }
 
+  /**
+   * 有 `llm/stream` 時 `_generate` 改打串流、用 core 處理 stream-event handler 的同一套聚合收成一則訊息，
+   * 交出的形狀與 serve（有 stream-event handler、core 改走 `_streamChatModelEvents`）相同。
+   */
+  async #aggregate(messages: BaseMessage[], options: CallOptions): Promise<ChatResult> {
+    let sawEvent = false;
+    const events = this.#events(messages, options);
+    const message = await new ChatModelStream({
+      async *[Symbol.asyncIterator]() {
+        for await (const event of events) {
+          options.signal?.throwIfAborted();
+          sawEvent = true;
+          yield event;
+        }
+      },
+    });
+    options.signal?.throwIfAborted();
+    if (!sawEvent) throw new Error('Received empty response from chat model call.');
+    return { generations: [{ text: message.text, message }], llmOutput: undefined };
+  }
+
+  /**
+   * 開一條串流請求。有 `llm/stream` 的環繞函式時交給它：`next` 呼叫了才送請求，監聽者不呼叫就一個請求都不送。
+   * 監聽者可能是 `async` 函式、回的是 Promise，先等再驗它是不是可迭代的串流。
+   */
+  async #openStream(
+    messages: BaseMessage[],
+    options: CallOptions,
+  ): Promise<AsyncIterable<unknown>> {
+    const params = {
+      ...this.invocationParams(options, { streaming: true }),
+      messages: toCompletionsMessages(messages, this.model),
+      stream: true,
+    };
+    const requestOptions = withoutAround(options);
+    const request = async () =>
+      (await this.completionWithRetry(params, requestOptions)) as AsyncIterable<ModelStreamChunk>;
+    const around = options[LLM_STREAM_CONFIG_KEY];
+    if (around === undefined) return request();
+    const wrapped: unknown = await around(async function* () {
+      yield* await request();
+    });
+    if (
+      typeof wrapped !== 'object' ||
+      wrapped === null ||
+      typeof (wrapped as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== 'function'
+    )
+      throw new TypeError(
+        'llm/stream 的監聽者要回 chunk 的 AsyncIterable（next() 回的那一條，或自己 yield 的），收到的不是',
+      );
+    return wrapped as AsyncIterable<unknown>;
+  }
+
   override async *_streamResponseChunks(
     messages: BaseMessage[],
     rawOptions: this['ParsedCallOptions'],
     runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
     const options = this._combineCallOptions(rawOptions);
-    const params = {
-      ...this.invocationParams(options, { streaming: true }),
-      messages: toCompletionsMessages(messages, this.model),
-      stream: true,
-    };
     let defaultRole: string | undefined;
-    const streamIterable = (await this.completionWithRetry(
-      params,
+    const streamIterable = (await this.#openStream(
+      messages,
       options,
     )) as AsyncIterable<CompletionChunk>;
     let usage: CompletionUsage | undefined;
@@ -701,6 +764,25 @@ interface CompletionResponse {
     readonly finish_reason?: string | null;
     readonly logprobs?: unknown;
   }[];
+}
+
+/**
+ * `llm/stream` 的環繞函式在 `configurable` 裡進來（`model-node.ts` 放的），搬成呼叫選項：`configurable` 會跟著 config 往下傳，
+ * 留著的話下一層的模型呼叫也會取到它。
+ */
+export function takeAround(
+  options: Partial<CallOptions> | undefined,
+): Partial<CallOptions> | undefined {
+  const around = options?.configurable?.[LLM_STREAM_CONFIG_KEY] as ModelStreamAround | undefined;
+  if (around === undefined) return options;
+  const { [LLM_STREAM_CONFIG_KEY]: _taken, ...configurable } = options!.configurable!;
+  return { ...options, configurable, [LLM_STREAM_CONFIG_KEY]: around };
+}
+
+export function withoutAround<T extends object>(options: T): T {
+  if (!(LLM_STREAM_CONFIG_KEY in options)) return options;
+  const { [LLM_STREAM_CONFIG_KEY]: _around, ...rest } = options as Record<string, unknown>;
+  return rest as T;
 }
 
 /** 收到中止訊號就停止往下交 chunk（照 `ChatOpenAICompletions._streamChatModelEvents` 的 `abortableStream`）。 */
