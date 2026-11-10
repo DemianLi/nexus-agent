@@ -31,6 +31,8 @@ import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
+import { fakeEndpoint, hasTools, liveModelPatch, mainOnly } from './log-derived-history.fixture.js';
+import type { FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
 import { FrontForwarder } from './front-forward.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { composeEntries, defaultSources } from './plugin-config.js';
@@ -87,14 +89,25 @@ async function freePort(): Promise<number> {
   });
 }
 
+/** {@link start} 的其餘選項。 */
+interface StartOptions {
+  /** 沿用這個目錄（同一個 home、同一份落盤）：重啟整台用。省略是開新的。 */
+  readonly dir?: string;
+  /** 模型換成這個假 OpenAI 端點（`--live`），不用腳本；看得到每一次請求的 body。 */
+  readonly liveBaseUrl?: string;
+  /** 加在 serve 後面的旗標，對話行程也收（`CONVERSATION_FLAGS`）。 */
+  readonly serveArgs?: readonly string[];
+}
+
 async function start(
   turns: readonly ScriptedTurn[],
   extraRows = '',
   prepareHome?: (home: string) => Promise<void>,
   supervisorArgs: readonly string[] = [],
+  options: StartOptions = {},
 ): Promise<Running> {
-  const dir = await mkdtemp(join(tmpdir(), 'nexus-per-thread-'));
-  roots.push(dir);
+  const dir = options.dir ?? (await mkdtemp(join(tmpdir(), 'nexus-per-thread-')));
+  if (options.dir === undefined) roots.push(dir);
   const patch = join(dir, 'script.patch.yml');
   // 監督行程的旗標由啟動器組，測試要加的經一支 `exec` 包裝：pid 不變，`childrenRunning` 照樣找得到子行程。
   // 啟動器在 `supervisorBinary` 旁邊找宿主，所以包裝旁邊也要有一個。
@@ -105,12 +118,12 @@ async function start(
     await writeFile(supervisorBinary, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o755 });
     await symlink(join(dirname(SUPERVISOR!), 'nexus-host'), join(dir, 'nexus-host'));
   }
+  const rows = `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisorBinary}\n${extraRows}`;
   await writeFile(
     patch,
-    scriptedPatchText(
-      turns,
-      `- id: process-model\n  config:\n    mode: per-thread\n    supervisorBinary: ${supervisorBinary}\n${extraRows}`,
-    ),
+    options.liveBaseUrl === undefined
+      ? scriptedPatchText(turns, rows)
+      : liveModelPatch(options.liveBaseUrl, rows),
     'utf8',
   );
   const home = join(dir, 'home');
@@ -120,13 +133,24 @@ async function start(
   const port = await freePort();
   const child = spawn(
     process.execPath,
-    ['--import', TSX, SERVE, '--port', String(port), '--patch', patch],
+    [
+      '--import',
+      TSX,
+      SERVE,
+      '--port',
+      String(port),
+      '--patch',
+      patch,
+      ...(options.liveBaseUrl === undefined ? [] : ['--live']),
+      ...(options.serveArgs ?? []),
+    ],
     {
       cwd: dir,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: home,
         NEXUS_AGENT_HOME: harnessHome,
+        ...(options.liveBaseUrl !== undefined && { NVIDIA_API_KEY: 'nvapi-fake-for-per-thread' }),
         ...SOURCE_PATHS,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -922,3 +946,121 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', 
     expect(running.log()).toContain('宿主設定壞了');
   }, 180_000);
 });
+
+/**
+ * native 下對話只從日誌推（[#2360](https://github.com/DemianLi/nexus-agent/issues/2360)），per-thread 那一半：single 的在 `native-log-restore.test.ts`。
+ *
+ * 對話行程換了一個（pid 不同），行程內的快取就一定是空的；下一輪模型收到的請求帶著前一個行程那一輪的人話與回覆，就是從日誌灌回的。
+ * 模型是假 OpenAI 端點（`--live`），請求在這個測試行程裡看得到。
+ */
+describe.skipIf(SUPERVISOR === undefined)(
+  'per-thread --agent-loop native：換了對話行程，對話從日誌來',
+  () => {
+    const NATIVE = ['--agent-loop', 'native'];
+
+    function textOf(message: WireMessage): string {
+      if (typeof message.content === 'string') return message.content;
+      if (!Array.isArray(message.content)) return JSON.stringify(message.content ?? '');
+      return (message.content as { type?: unknown; text?: unknown }[])
+        .map((block) => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+        .join('');
+    }
+
+    /** 主呼叫裡最後一則人話含 `prompt` 的那一次，回它每一則（系統以外）的角色與文字。 */
+    function requestFor(upstream: FakeEndpoint, prompt: string): string[] {
+      const body = upstream.bodies.findLast(
+        (candidate) => hasTools(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
+      );
+      if (body === undefined) throw new Error(`模型沒收到「${prompt}」那一次`);
+      return body.messages
+        .filter((message) => message.role !== 'system')
+        .map((message) => `${message.role}:${textOf(message)}`);
+    }
+
+    async function upstream(): Promise<FakeEndpoint> {
+      const endpoint = await fakeEndpoint(
+        mainOnly((k) => ({ content: `第 ${k} 次回覆` })),
+        true,
+      );
+      cleanupEndpoints.push(endpoint);
+      return endpoint;
+    }
+    const cleanupEndpoints: FakeEndpoint[] = [];
+    afterEach(async () => {
+      for (const endpoint of cleanupEndpoints.splice(0)) await endpoint.close();
+    });
+
+    it('重啟續聊：整台收掉再用同一個 home 起來，新的對話行程從日誌灌回，模型收到重啟之前那一輪', async () => {
+      const model = await upstream();
+      const first = await start([], '', undefined, [], {
+        liveBaseUrl: model.baseURL,
+        serveArgs: NATIVE,
+      });
+      const firstClient = await clientOf(await first.loginUrl(1));
+      await turn(firstClient, 'thread-n', '暗號是藍鯨');
+      const before = childrenRunning(first.child.pid!, 'conversation-process');
+      expect(before.length).toBeGreaterThan(0);
+      first.child.kill('SIGTERM');
+      await new Promise((resolve) => first.child.once('exit', resolve));
+
+      const dir = dirname(dirname(first.home));
+      const second = await start([], '', undefined, [], {
+        dir,
+        liveBaseUrl: model.baseURL,
+        serveArgs: NATIVE,
+      });
+      const client = await clientOf(await second.loginUrl(1));
+      await turn(client, 'thread-n', '剛才的暗號是什麼');
+      // 新的一台、新的對話行程：前一台的行程都已經不在。
+      expect(
+        childrenRunning(second.child.pid!, 'conversation-process').some((pid) =>
+          before.includes(pid),
+        ),
+      ).toBe(false);
+      expect(requestFor(model, '剛才的暗號是什麼')).toEqual([
+        expect.stringContaining('暗號是藍鯨'),
+        'assistant:第 0 次回覆',
+        expect.stringContaining('剛才的暗號是什麼'),
+      ]);
+    }, 240_000);
+
+    it('閒置逐出後回來：監督行程照 idleEvictAfterMs 收掉對話行程，再開起新的一個，從日誌灌回', async () => {
+      const model = await upstream();
+      const running = await start(
+        [],
+        '- id: thread-capacity\n  config:\n    idleEvictAfterMs: 1500\n',
+        undefined,
+        [],
+        { liveBaseUrl: model.baseURL, serveArgs: NATIVE },
+      );
+      const supervisor = running.child.pid!;
+      const client = await clientOf(await running.loginUrl(1));
+      // 下行用 signal 收：沒讀完就 `return()` 的產生器不會取消本文，連線還開著，行程就不閒。
+      const downlink = new AbortController();
+      const events = await client.openEvents('thread-e', { signal: downlink.signal });
+      await client.runStart('thread-e', '暗號是虎鯨');
+      await foldTurn(events);
+      downlink.abort();
+      // 綁著它的那一個加上補上的預熱行程；收掉之後只剩預熱的，少掉的那一個就是綁著它的。
+      const spoken = await settled(supervisor, 'conversation-process', 1 + WARM);
+      expect(spoken).toHaveLength(1 + WARM);
+      await expect
+        .poll(() => childrenRunning(supervisor, 'conversation-process').length, {
+          timeout: 30_000,
+        })
+        .toBe(WARM);
+      const evicted = spoken.filter(
+        (pid) => !childrenRunning(supervisor, 'conversation-process').includes(pid),
+      );
+      expect(evicted).toHaveLength(1);
+
+      await turn(client, 'thread-e', '撤之前的暗號是什麼');
+      expect(childrenRunning(supervisor, 'conversation-process')).not.toContain(evicted[0]);
+      expect(requestFor(model, '撤之前的暗號是什麼')).toEqual([
+        expect.stringContaining('暗號是虎鯨'),
+        'assistant:第 0 次回覆',
+        expect.stringContaining('撤之前的暗號是什麼'),
+      ]);
+    }, 240_000);
+  },
+);

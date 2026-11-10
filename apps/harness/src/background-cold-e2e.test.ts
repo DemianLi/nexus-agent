@@ -23,12 +23,13 @@ import { MemorySaver } from '@langchain/langgraph';
 import {
   appendSubagentCatalog,
   attachSessionPersistence,
+  NativeAgent,
   resumeClosingInterruptedTurn,
   subagentLinks,
   SessionLogOffset,
 } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentLoopKind, PluginEntry } from '@nexus/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -136,6 +137,8 @@ async function boot(options: {
   readonly resume?: boolean;
   readonly maxActive?: number;
   readonly hold?: Promise<void>;
+  /** 省略照設定檔；`native` 不給 checkpointer。 */
+  readonly agentLoop?: AgentLoopKind;
 }): Promise<Booted> {
   const store = openStore();
   const models = {
@@ -144,7 +147,8 @@ async function boot(options: {
   };
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns: options.rootTurns }),
-    checkpointer: new MemorySaver(),
+    ...(options.agentLoop !== 'native' && { checkpointer: new MemorySaver() }),
+    ...(options.agentLoop !== undefined && { agentLoop: options.agentLoop }),
     plugins: [workers(models, options.hold)],
     backend: new ContainedFilesystemBackend({
       rootDir: join(dir, 'workspace'),
@@ -196,10 +200,11 @@ const delegateBoth: ScriptedTurn = {
  *
  * @returns 兩個子代理的編號與重啟之前它們最後一次收到的對話（模型視角）。
  */
-async function firstProcess() {
+async function firstProcess(agentLoop?: AgentLoopKind) {
   const first = await boot({
     rootTurns: [delegateBoth, { content: '根收尾' }],
     turnsFor: workerTurns,
+    ...(agentLoop !== undefined && { agentLoop }),
   });
   await first.pump.submit({ kind: 'message', text: '委派' });
   await first.pump.whenIdle();
@@ -238,59 +243,82 @@ const SEND_MESSAGE_TURN = (runId: string): ScriptedTurn => ({
 });
 
 describe('重啟之後送話叫醒背景子代理', () => {
-  it('wire 路徑：列出不復活、現況第一份就含叫得醒的、送話叫醒、看得到重啟之前的對話、日誌往原檔續寫', async () => {
-    const { a, b } = await firstProcess();
-    // 重啟之前那一份對話是真的有東西：任務、工具呼叫、工具結果、結語。
-    expect(a.before.map((message) => message.type)).toEqual(['human', 'ai', 'tool']);
+  /**
+   * native 明寫一遍（#2360）：沒有 checkpointer，叫醒的子代理只能從日誌灌回。`seedThread` 只收快取是空的 thread（不是空的就拋），
+   * 所以「叫醒時呼叫了它、沒拋」就是「快取是空的、對話只從日誌來」；prompt 以重啟之前那一份為前綴，證明灌回的就是那一份。
+   */
+  it.each(['langgraph', 'native'] as const)(
+    'wire 路徑（%s）：列出不復活、現況第一份就含叫得醒的、送話叫醒、看得到重啟之前的對話、日誌往原檔續寫',
+    async (agentLoop) => {
+      const { a, b } = await firstProcess(agentLoop);
+      // 重啟之前那一份對話是真的有東西：任務、工具呼叫、工具結果、結語。
+      expect(a.before.map((message) => message.type)).toEqual(['human', 'ai', 'tool']);
 
-    const second = await boot({
-      rootTurns: [{ content: '根' }],
-      turnsFor: (name) => [{ content: `${name} 醒來答覆` }],
-      resume: true,
-    });
-    try {
-      const background = second.detach.background!;
-      // 還沒送話：沒有任何子代理的模型被叫過、子日誌沒有在註冊表上。
-      expect(second.models['worker-a'].prompts).toEqual([]);
-      expect(second.pump.sessions.get({ kind: 'subagent', runId: a.runId })).toBeUndefined();
+      const seeded = vi.spyOn(NativeAgent.prototype, 'seedThread');
+      const second = await boot({
+        rootTurns: [{ content: '根' }],
+        turnsFor: (name) => [{ content: `${name} 醒來答覆` }],
+        resume: true,
+        agentLoop,
+      });
+      try {
+        const background = second.detach.background!;
+        // 還沒送話：沒有任何子代理的模型被叫過、子日誌沒有在註冊表上。
+        expect(second.models['worker-a'].prompts).toEqual([]);
+        expect(second.pump.sessions.get({ kind: 'subagent', runId: a.runId })).toBeUndefined();
 
-      await background.sendFromUser(a.runId, '重啟後的話');
-      await until(
-        () =>
-          second.pump.sessions
-            .get({ kind: 'subagent', runId: a.runId })
-            ?.events.filter((event) => event.type === 'turn/end').length === 2,
-      );
-      // 現況第一份就含兩個叫得醒的（掃完才送），舊版寫的那個不在裡面。
-      expect(second.statuses[0]).toEqual([
-        { runId: a.runId, status: 'idle' },
-        { runId: b.runId, status: 'idle' },
-      ]);
-      // 看得到重啟之前的對話：以重啟之前那一份為前綴，工具結果逐字相同；後面接上新的一句。
-      const prompt = conversation(second.models['worker-a'].lastPrompt);
-      expect(prompt.slice(0, a.before.length)).toEqual(a.before);
-      expect(prompt.slice(a.before.length).map((message) => message.type)).toEqual(['ai', 'human']);
-      expect(prompt.at(-1)).toEqual({ type: 'human', content: '重啟後的話' });
-      // 另一個還是冷的，沒被碰。
-      expect(second.models['worker-b'].prompts).toEqual([]);
+        await background.sendFromUser(a.runId, '重啟後的話');
+        await until(
+          () =>
+            second.pump.sessions
+              .get({ kind: 'subagent', runId: a.runId })
+              ?.events.filter((event) => event.type === 'turn/end').length === 2,
+        );
+        // 現況第一份就含兩個叫得醒的（掃完才送），舊版寫的那個不在裡面。
+        expect(second.statuses[0]).toEqual([
+          { runId: a.runId, status: 'idle' },
+          { runId: b.runId, status: 'idle' },
+        ]);
+        // 看得到重啟之前的對話：以重啟之前那一份為前綴，工具結果逐字相同；後面接上新的一句。
+        const prompt = conversation(second.models['worker-a'].lastPrompt);
+        expect(prompt.slice(0, a.before.length)).toEqual(a.before);
+        expect(prompt.slice(a.before.length).map((message) => message.type)).toEqual([
+          'ai',
+          'human',
+        ]);
+        expect(prompt.at(-1)).toEqual({ type: 'human', content: '重啟後的話' });
+        // 另一個還是冷的，沒被碰。
+        expect(second.models['worker-b'].prompts).toEqual([]);
+        if (agentLoop === 'native') {
+          const children = seeded.mock.calls.filter(([config]) =>
+            String(config.configurable?.['thread_id']).includes(a.runId),
+          );
+          expect(children).toHaveLength(1);
+          expect(seeded.mock.results.every((result) => result.type === 'return')).toBe(true);
+        } else {
+          expect(seeded).not.toHaveBeenCalled();
+        }
+        seeded.mockRestore();
 
-      // 日誌往原檔續寫，seq 連續；身分只有一顆；中間只有一顆 end-seed；新的一輪接在後面。
-      await second.shutdown();
-      const store = openStore();
-      const events = await (await store.open(`${ROOT}/${a.runId}`, 'read')).read();
-      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
-      const types = events.map((event) => event.type);
-      expect(types.filter((type) => type === 'subagent/descriptor')).toHaveLength(1);
-      expect(types.filter((type) => type === 'session/end-seed')).toHaveLength(1);
-      // 重啟之前的一輪在 end-seed 前面，重啟之後的一輪在後面。
-      const seedAt = types.indexOf('session/end-seed');
-      expect(types.slice(0, seedAt).filter((type) => type === 'turn/start')).toHaveLength(1);
-      expect(types.slice(seedAt + 1).filter((type) => type === 'turn/start')).toHaveLength(1);
-      expect(types.at(-1)).toBe('turn/end');
-    } finally {
-      await second.shutdown().catch(() => undefined);
-    }
-  }, 30000);
+        // 日誌往原檔續寫，seq 連續；身分只有一顆；中間只有一顆 end-seed；新的一輪接在後面。
+        await second.shutdown();
+        const store = openStore();
+        const events = await (await store.open(`${ROOT}/${a.runId}`, 'read')).read();
+        expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+        const types = events.map((event) => event.type);
+        expect(types.filter((type) => type === 'subagent/descriptor')).toHaveLength(1);
+        expect(types.filter((type) => type === 'session/end-seed')).toHaveLength(1);
+        // 重啟之前的一輪在 end-seed 前面，重啟之後的一輪在後面。
+        const seedAt = types.indexOf('session/end-seed');
+        expect(types.slice(0, seedAt).filter((type) => type === 'turn/start')).toHaveLength(1);
+        expect(types.slice(seedAt + 1).filter((type) => type === 'turn/start')).toHaveLength(1);
+        expect(types.at(-1)).toBe('turn/end');
+      } finally {
+        await second.shutdown().catch(() => undefined);
+      }
+    },
+    30000,
+  );
 
   it('名額在重建之前佔：滿了拒絕、騰出來就叫得醒', async () => {
     const { a, b } = await firstProcess();

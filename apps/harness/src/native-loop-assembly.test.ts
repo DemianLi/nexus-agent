@@ -134,6 +134,40 @@ describe('serve --agent-loop native', () => {
     expect(shapeOf(native.log)).toEqual(shapeOf(langgraph.log));
   }, 120000);
 
+  it('沙箱升級經 serve 停在核准卡上：組裝不建 checkpointer，核准管道照樣是有人可問（#2360）', async () => {
+    const workspace = await mkdtemp(join('/var/tmp', 'nexus-native-escalation-serve-'));
+    serve = await startScriptedServe(
+      [
+        {
+          content: '',
+          toolCalls: [
+            {
+              name: SANDBOX_ESCALATION_TOOL_NAME,
+              args: {
+                file_path: '/note.txt',
+                sandbox_permissions: 'workspace-write',
+                justification: '使用者要這個檔',
+              },
+            },
+          ],
+        },
+        { content: '停。' },
+      ],
+      { workspace, argv: ['--agent-loop', 'native', '--sandbox', 'read-only'] },
+    );
+    try {
+      const client = await serveClient(serve.running);
+      const events = await client.openEvents('native-escalation-serve');
+      await client.runStart('native-escalation-serve', '升級。');
+      const parked = await foldTurn(events);
+      await events.return?.(undefined);
+      expect(parked.pendings).toHaveLength(1);
+      expect(JSON.stringify(parked)).not.toContain(unaskedRefusal('no-channel', 'workspace-write'));
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, 60000);
+
   it('沙箱升級當下拒絕（no-channel），不掛核准卡', async () => {
     const workspace = await mkdtemp(join('/var/tmp', 'nexus-native-escalation-'));
     const built = await createCliAgent(
