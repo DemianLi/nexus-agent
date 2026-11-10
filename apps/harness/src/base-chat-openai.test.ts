@@ -290,7 +290,7 @@ async function outcomeOf(
 
 /**
  * 唯一刻意不同的一格：`ChatOpenAI` 在 callback 的 `metadata.versions` 記了 `@langchain/openai` 的版號，新殼不經那個套件、不記。
- * 讀它的只有選用的 LangSmith 追蹤（`tracing.ts`）。拿掉之前先確定它真的在，免得這一格靜靜變成別的差異。
+ * repo 裡沒有程式讀它；選用的 LangSmith tracer（`tracing.ts` 開的）會把 metadata 整包送出。拿掉之前先確定它真的在，免得這一格靜靜變成別的差異。
  */
 function withoutOpenAIVersion(outcome: Outcome): Outcome {
   const calls = outcome.calls as unknown[][];
@@ -438,7 +438,7 @@ function defineStreamCases(mode: 'events' | 'tokens'): void {
 describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', () => {
   for (const mode of MODES) {
     describe(`callback 模式：${mode}`, () => {
-      // 沒有 handler 時 core 走 `_generate`，送的是非串流請求；串流回應那幾條只在兩種串流模式跑，非串流另有一條。
+      // 沒有偏好串流的 handler 時 core 走 `_generate`，送的是非串流請求；串流回應那幾條只在兩種串流模式跑，非串流另有一條。
       if (mode !== 'none') defineStreamCases(mode);
 
       for (const [status, body] of HTTP_FAILURES) {
@@ -452,7 +452,7 @@ describe('BaseChatOpenAI 跟 ChatOpenAI 送出與交出的東西逐一相同', (
     });
   }
 
-  it('非串流的回應（沒有 handler：走 _generate）', async () => {
+  it('非串流的回應（沒有偏好串流的 handler：走 _generate）', async () => {
     script = jsonOf(200, {
       id: 'c1',
       object: 'chat.completion',

@@ -3,15 +3,17 @@
  * https://github.com/langchain-ai/langchainjs/blob/main/LICENSE）的 Chat Completions 那一支：
  * `dist/chat_models/index.js`（`ChatOpenAI` 外殼）、`dist/chat_models/base.js`（`BaseChatOpenAI`）、
  * `dist/chat_models/completions.js`（`ChatOpenAICompletions`）、`dist/converters/completions.js`，以及
- * `dist/utils/{client,errors,misc,tools,output}.js` 裡用得到的函式。兩層類別併成一層，行為照原樣。
+ * `dist/utils/{client,errors,misc,tools,output}.js` 裡用得到的函式。兩層類別併成一層，請求與回應的處理照原樣。
  *
  * 沒搬的，nexus 一處都沒用到：Responses API（含內建工具、custom 工具與偏好 Responses 的模型名）、Azure、LangSmith gateway、
- * `OPENAI_*` 環境變數後備、結構化輸出、moderation、token 估算與它唯一的用處（`streaming: true` 欄位走的那支 `_generate`）、
+ * `OPENAI_*` 環境變數後備（`openai` SDK 自己仍會讀它那幾個，例如 `OPENAI_BASE_URL`）、結構化輸出、moderation、token 估算與它唯一的用處（`streaming: true` 欄位走的那支 `_generate`）、
  * MCP 工具的追蹤遮蔽、logprobs 等沒有呼叫端傳的建構欄位。真的傳了沒搬的工具形狀會拋，不會靜靜換成別的請求。
  * 也沒搬 OpenAI 自家型號的 `profile` 表：`profile` 是基底的 `{}`。讀它的只有摘要器的 `fraction` 門檻，而設定不收 `fraction`
  * （`@nexus/core` 的 `summarization.ts`）。
- * 不往 SDK 的預設標頭塞 `langchainjs-openai` 的 `User-Agent`：送出前的 fetch 一律換成我們的（`live-model.ts` 的 `withAttribution`）。
- * 不經 `@langchain/openai`，所以 callback 的 `metadata.versions` 沒有它那一格。
+ * 跟原版不同的三處：
+ * - 不往 SDK 的預設標頭塞 `langchainjs-openai` 的 `User-Agent`；送出前的 fetch 一律換成我們的（`live-model.ts` 的 `withAttribution`）。
+ * - 不經 `@langchain/openai`，所以 callback 的 `metadata.versions` 沒有它那一格。
+ * - 兩層併成一層，建好之後才改實例欄位（例如 `modelKwargs`），同一個實例之後的請求就會帶上；原版改的是外層，請求不受影響。
  */
 
 /**
@@ -75,7 +77,7 @@ export interface BaseChatOpenAIFields extends BaseChatModelParams {
   readonly topP?: number;
   readonly maxTokens?: number;
   readonly timeout?: number;
-  /** 併進請求本文的其餘參數。要在建構時給，建好之後才設不會進請求。 */
+  /** 併進請求本文的其餘參數。 */
   readonly modelKwargs?: Record<string, unknown>;
   /** 串流請求帶 `stream_options.include_usage`。預設 `true`。 */
   readonly streamUsage?: boolean;
@@ -112,6 +114,11 @@ type RawToolCall = Parameters<typeof parseToolCall>[0];
 
 const DEFAULT_MODEL = 'gpt-3.5-turbo';
 
+/**
+ * Chat Completions 的 chat model：三條呼叫路徑（`_generate`、`_streamResponseChunks`、`_streamChatModelEvents`）都經
+ * {@link BaseChatOpenAI.completionWithRetry} 打 `openai` SDK，SDK 本身不重試。子類（`GuardedChatOpenAI` 等）要覆寫
+ * `withConfig`，否則 `bindTools`／`withConfig` 建出來的會是這個基底類別。
+ */
 export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIMessageChunk> {
   model: string;
   /** 序列化時記成 `OPENAI_API_KEY` 的秘密佔位（同 `@langchain/openai`），值不會寫出去。 */
@@ -261,7 +268,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   /**
    * 請求本文除了 `messages` 以外的那些格。
    * @param options - 呼叫選項（先併上 `withConfig` 帶的預設）。
-   * @param extra - `streaming` 為真時才帶 `stream_options`。
+   * @param extra - `streaming` 為真（或實例的 `streaming` 為真）時，沒指定 `stream_options` 且 `streamUsage` 開著才帶 `include_usage`。
    * @returns 請求參數；值是 `undefined` 的格送出時不會出現。
    */
   override invocationParams(
@@ -342,6 +349,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     } as Partial<CallOptions>);
   }
 
+  /** 用同一份建構欄位建新實例、併上呼叫預設；不沿用建好之後才改的實例欄位。子類覆寫成建自己。 */
   override withConfig(
     config: Partial<CallOptions>,
   ): Runnable<BaseLanguageModelInput, AIMessageChunk, CallOptions> {
@@ -453,7 +461,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
     };
   }
 
-  /** content-block 那一套串流事件（core 在有 stream-event handler 時把 `invoke` 轉到這裡）。 */
+  /** content-block 那一套串流事件（core 在有偏好 stream-event 的 handler 時把 `invoke` 轉到這裡；v3 的 `streamEvents()` 也走這裡）。 */
   override async *_streamChatModelEvents(
     messages: BaseMessage[],
     rawOptions: this['ParsedCallOptions'],

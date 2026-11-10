@@ -16,9 +16,8 @@
  *
  * ## 三個方法都要，順序是「便宜的檢查 → 取名額 → 投影 → 送」
  *
- * 基座依呼叫方式挑方法：`invoke` 走 `_generate`，有串流 handler 時走 `_streamResponseChunks`，v3 的 `stream()` 走 `_streamChatModelEvents`
- * （同 `attachment-chat-openai.ts` 的說明）。漏一條，那一條路上的請求就不受閘管。`BaseChatOpenAI._generate` 只打非串流請求、不轉呼叫
- * `_streamResponseChunks`，所以不會重入、不會自己等自己（上限 1 的測試釘著這一點）。
+ * 基座依呼叫方式挑方法（同 `attachment-chat-openai.ts` 的說明）。漏一條，那一條路上的請求就不受閘管。`BaseChatOpenAI._generate` 只打
+ * 非串流請求，它與 `_streamChatModelEvents` 都不轉呼叫 `_streamResponseChunks`，所以不會重入、不會自己等自己（上限 1 的測試釘著這一點）。
  *
  * 取名額排在附件的額度檢查之後（額度超過會直接拋、不必排隊）、投影之前：排隊的那段時間不抱著剛讀進來的 base64。
  *
