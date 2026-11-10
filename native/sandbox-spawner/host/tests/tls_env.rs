@@ -35,7 +35,6 @@ fn 環境裡的代理設定一律不讀() {
     }
     std::env::remove_var("NO_PROXY");
     std::env::remove_var("no_proxy");
-    // 政策是直連：環境的 `HTTPS_PROXY` 收不到連線。
     assert_eq!(
         get(
             &ProxyPolicy::direct(),
@@ -45,7 +44,6 @@ fn 環境裡的代理設定一律不讀() {
     );
     assert!(proxy.seen().is_empty());
 
-    // 政策有代理：環境的 `NO_PROXY` 放行目標也照樣走政策的代理，環境的 `HTTPS_PROXY` 收不到連線。
     // `mcp.nexus.test` 解析不到，直連必定失敗；通了就表示走的是政策的代理。
     for name in ["NO_PROXY", "no_proxy"] {
         std::env::set_var(name, "mcp.nexus.test");

@@ -167,7 +167,10 @@ fn 代理連不上時錯誤不帶帳密() {
     ));
     let err = get("ca-a.pem", &policy, "https://mcp.nexus.test/").expect_err("該失敗");
     // 確認是連代理失敗，不是改走直連、解析不到目標。
-    assert!(err.contains("tunnel error") && err.contains("Connection refused"), "{err}");
+    assert!(
+        err.contains("tunnel error") && err.contains("Connection refused"),
+        "{err}"
+    );
     assert_no_credentials(&err);
 }
 
@@ -180,7 +183,10 @@ fn https_代理的_tls_驗不過時錯誤不帶帳密() {
         server.port
     ));
     let err = get("ca-b.pem", &policy, "https://mcp.nexus.test/").expect_err("代理不該驗過");
-    assert!(err.contains("tunnel error") && err.contains("UnknownIssuer"), "{err}");
+    assert!(
+        err.contains("tunnel error") && err.contains("UnknownIssuer"),
+        "{err}"
+    );
     assert_no_credentials(&err);
 }
 

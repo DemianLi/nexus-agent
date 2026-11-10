@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nexus_host::json::Value;
-use nexus_host::mcp::supervisor::{run, Backoff, Hooks, Next, Policy, State};
+use nexus_host::mcp::supervisor::{
+    run, Backoff, Hooks, Next, Policy, State, GENERATION_CLOSE_TIMEOUT,
+};
 use tokio::sync::{oneshot, watch, Notify};
 
 fn ms(n: u64) -> Duration {
@@ -139,7 +141,7 @@ fn 政策解析() {
             max_attempts: 2
         })
     );
-    // zod 收的邊界：放不進 `Duration` 的毫秒、超過 u32 的次數、寫成 `2.0` 的整數。
+    // zod 收的邊界：放不進 `Duration` 的毫秒、大於 2^32 的次數、2^53−1 的上限、寫成 `2.0` 的整數。
     for (json, want) in [
         (
             r#"{"initialDelayMs":1e300,"maxDelayMs":1e300}"#,
@@ -436,9 +438,9 @@ fn 第一次還沒落定就_dispose() {
     });
 }
 
-/// 監督者在 10 秒內結束；收一代的期限是 5 秒，收不乾淨的情境也等得到。
+/// 監督者在收一代的期限的兩倍內結束，收不乾淨的情境也等得到。
 async fn within<T>(f: impl Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(10), f)
+    tokio::time::timeout(GENERATION_CLOSE_TIMEOUT * 2, f)
         .await
         .expect("監督者沒有結束")
 }
@@ -567,7 +569,7 @@ fn 連上之後_dispose_收不乾淨_記錯() {
         let started = Instant::now();
         stop_tx.send_replace(true);
         within(task).await.unwrap();
-        assert!(started.elapsed() >= Duration::from_secs(5));
+        assert!(started.elapsed() >= GENERATION_CLOSE_TIMEOUT);
         assert_eq!(
             *script.log.lock().unwrap(),
             [

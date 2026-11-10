@@ -4,6 +4,7 @@
 //!
 //! - 退避：第一次 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
 //!   訊息裡的毫秒數跟 TS 一樣用浮點數算、照最短的十進位寫；只有小於 1e-6 或不小於 1e21 時不逐字：JS 改寫成指數（`1e-7`、`1e+21`），這裡照寫全部的位數。
+//!   等待照實際時間睡；TS 的 `setTimeout` 遇到超過 2^31−1 ms 的延遲會改成 1 ms，這裡不跟。
 //! - 連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。
 //! - 收連上過的一代最多等 [`GENERATION_CLOSE_TIMEOUT`]；等不到就停止重連，寧可停下也不讓兩代同時活著。
 //! - 第一次連線的結果經 `first` 交給建立者；`retry_first` 是 `false`（對應設定的 `failOnStartupError: true`）時第一次失敗就結束，不重試。
@@ -43,7 +44,7 @@ impl Default for Policy {
 /// JS 的 `Number.MAX_SAFE_INTEGER`，zod 的 `int()` 收的上限。
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
-/// 毫秒數換成 [`Duration`]；放不進的夾到 [`Duration::MAX`]。
+/// 毫秒數換成 [`Duration`]；換不成的（太大、負數、NaN）一律夾到 [`Duration::MAX`]。
 fn millis(ms: f64) -> Duration {
     Duration::try_from_secs_f64(ms / 1000.0).unwrap_or(Duration::MAX)
 }
@@ -90,7 +91,7 @@ impl Policy {
 /// 一次失敗之後該怎麼辦。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Next {
-    /// 等 `delay` 再試；`message` 是要記的那一句。
+    /// 等 `delay` 再試；`message` 是要記的那一句。算出來放不進 `Duration` 時 `delay` 是 `Duration::MAX`。
     Retry { delay: Duration, message: String },
     /// 不再試了（放棄或沒開重連）。
     Stop { message: String },
