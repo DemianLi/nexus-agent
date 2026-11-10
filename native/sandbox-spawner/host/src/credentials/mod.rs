@@ -332,9 +332,12 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
             }
             Event::MappingEnd | Event::SequenceEnd => {
                 at = starts.pop().unwrap_or(at);
+                // 超過上限的那層不留子節點：樹的 drop 是遞迴的，留整條會讓極深的檔把堆疊用光。
                 match stack.pop() {
-                    Some(Frame::Map { entries, .. }) => Node::Map { entries },
-                    Some(Frame::Seq) | None => Node::Seq,
+                    Some(Frame::Map { entries, .. }) if stack.len() < MAX_DEPTH => {
+                        Node::Map { entries }
+                    }
+                    Some(_) | None => Node::Seq,
                 }
             }
         };
