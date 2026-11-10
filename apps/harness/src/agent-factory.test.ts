@@ -118,6 +118,20 @@ describe('createNexusAgent', () => {
     expect(files).toContain('/notes.md');
   });
 
+  it('awaitsAnswer 給 true（#2360）：langgraph 沒有 checkpointer 在組裝期就拋（中斷接不回來）；native 不要 checkpointer', async () => {
+    const model = () => new ScriptedChatModel({ turns: [{ content: '好。' }] });
+    await expect(
+      createNexusAgent({ model: model(), agentLoop: 'langgraph', awaitsAnswer: true, plugins: [] }),
+    ).rejects.toThrow('awaitsAnswer 給了 true，但 langgraph 沒有 checkpointer 就接不回中斷');
+    const native = await createNexusAgent({
+      model: model(),
+      agentLoop: 'native',
+      awaitsAnswer: true,
+      plugins: [],
+    });
+    await native.dispose();
+  });
+
   it('宣告了要核准的工具、也給了 checkpointer 時中斷得起來', async () => {
     const model = new ScriptedChatModel({
       turns: [

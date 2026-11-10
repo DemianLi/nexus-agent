@@ -124,13 +124,20 @@ export function vouchCheckpointDepth(message: object): void {
   depthVouched.add(message);
 }
 
+/**
+ * 一則訊息寫進存檔點的層數：量訊息自己（超過預檢門檻就不呼叫 `toJSON`），加回 {@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH}。
+ * native 沒有存檔點，灌回 thread 之前用同一把尺量（`conversation-restore.ts`），兩個 loop 拒的是同一份日誌。
+ */
+export function messageCheckpointDepth(message: unknown): number {
+  return checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
+}
+
 /** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過，登記過的（{@link vouchCheckpointDepth}）不量、照凍。 */
 function seal(messages: readonly unknown[]): void {
   for (const message of messages) {
     if (Object.isFrozen(message)) continue;
     if (!depthVouched.has(message as object)) {
-      const depth =
-        checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
+      const depth = messageCheckpointDepth(message);
       if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
     }
     deepFreeze(message);

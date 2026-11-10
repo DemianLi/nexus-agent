@@ -476,8 +476,10 @@ export interface NativeStateSnapshot {
 }
 
 /**
- * native loop 的 agent。成員是 harness 實際叫的那幾個（`streamEvents`、`stream`、`invoke`、`getState`、`updateState`、`withConfig`），
- * 形狀同 LangGraph 編出來的圖。
+ * native loop 的 agent。形狀同 LangGraph 編出來的圖的成員，只有 harness 實際叫的那幾個（`streamEvents`、`stream`、`invoke`、`withConfig`，
+ * 與只讀快取的 `getState`），沒有 `updateState`。thread 的 state 是這個實例的快取（`withConfig` 出來的共用同一份）：`messages` 由日誌推，
+ * 寫進去的路只有跑一輪（含 {@link NativeAgent.discardSuspended} 收回時套進已收完的寫入）、{@link NativeAgent.seedThread} 與
+ * {@link NativeAgent.appendLoggedMessages}；其餘鍵（例如 `files`）只在快取裡，快取不在就沒有。
  */
 export class NativeAgent {
   readonly #params: NativeAgentParams;
@@ -653,17 +655,34 @@ export class NativeAgent {
   }
 
   /**
-   * 寫一份更新進 thread 的 state，套各鍵的合併規則（`state.ts`：`messages` 同 id 取代、`ReducedValue` 用它自己的 reducer、
-   * 其餘後寫的贏）。沒有 `stateSchema` 宣告的鍵與 `jumpTo` 丟掉（{@link StateChannels.apply}）。
+   * 續接時把日誌推出來的對話放進一條**還沒有快取**的 thread（重啟、冷復活、閒置逐出之後新建的 agent），之後由
+   * {@link appendLoggedMessages} 跟著日誌往前推。
    * @param config - 帶 `configurable.thread_id`。
-   * @param values - 要寫的鍵。
+   * @param messages - 從日誌推出來的對話。
+   * @throws 這條 thread 已經有快取：日誌以外的東西不能覆蓋它。
    */
-  async updateState(
-    config: RunnableConfig,
-    values: Record<string, unknown>,
-  ): Promise<RunnableConfig> {
-    this.#channels.apply(this.#stateOf(threadIdOf(config)), values);
-    return config;
+  seedThread(config: RunnableConfig, messages: readonly BaseMessage[]): void {
+    const threadId = threadIdOf(config);
+    if (this.#threads.has(threadId)) {
+      throw new Error(`native agent loop：thread "${threadId}" 已經有快取，不能再從日誌灌一次`);
+    }
+    this.#channels.apply(this.#stateOf(threadId), { messages: [...messages] });
+  }
+
+  /**
+   * 把剛寫進日誌的幾則接到這條 thread 快取的對話後面，套 `messages` 的合併規則（同 id 取代，`state.ts`）：中止或失敗時 pump 替懸著的呼叫
+   * 補的結果、被停止那則回覆的半段。
+   * 工具結果只收快取裡最後一則帶呼叫的回覆**還懸著**的那幾顆；那一步還沒進快取就失敗的話，那幾則沒有對應的呼叫，接上去是孤兒。
+   * @param config - 帶 `configurable.thread_id`。
+   * @param messages - 已經寫進日誌的那幾則。
+   */
+  appendLoggedMessages(config: RunnableConfig, messages: readonly BaseMessage[]): void {
+    const state = this.#stateOf(threadIdOf(config));
+    const pending = pendingCallIds(state.messages);
+    const accepted = messages.filter(
+      (message) => !ToolMessage.isInstance(message) || pending.has(message.tool_call_id),
+    );
+    if (accepted.length > 0) this.#channels.apply(state, { messages: accepted });
   }
 
   /**
@@ -1338,6 +1357,23 @@ function parentNamespaceOf(config: RunnableConfig): string | undefined {
 function optionalThreadIdOf(config: RunnableConfig): string | undefined {
   const threadId = config.configurable?.['thread_id'];
   return typeof threadId === 'string' && threadId !== '' ? threadId : undefined;
+}
+
+/** 最後一則帶工具呼叫的回覆裡還沒有結果的那幾顆呼叫。 */
+function pendingCallIds(messages: readonly BaseMessage[]): Set<string> {
+  const last = messages.findLastIndex(
+    (message) => AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0,
+  );
+  if (last < 0) return new Set();
+  const answered = new Set(
+    messages.slice(last + 1).flatMap((m) => (ToolMessage.isInstance(m) ? [m.tool_call_id] : [])),
+  );
+  const ai = messages[last] as AIMessage;
+  return new Set(
+    (ai.tool_calls ?? []).flatMap((call) =>
+      call.id !== undefined && !answered.has(call.id) ? [call.id] : [],
+    ),
+  );
 }
 
 function threadIdOf(config: RunnableConfig): string {

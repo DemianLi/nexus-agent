@@ -26,7 +26,11 @@ import {
 } from './checkpoint-serde.js';
 import { restoreConversation, toolResultAsSeen } from './conversation-restore.js';
 import type { RestorableAgent } from './conversation-restore.js';
-import { CHECKPOINT_MESSAGE_WRAPPER_DEPTH, PrunedMemorySaver } from './pruned-memory-saver.js';
+import {
+  CHECKPOINT_MESSAGE_WRAPPER_DEPTH,
+  messageCheckpointDepth,
+  PrunedMemorySaver,
+} from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
 const THREAD = 'share';
@@ -96,12 +100,16 @@ afterEach(async () => {
   for (const dispose of disposers.splice(0).reverse()) await dispose();
 });
 
-/** 真的 agent，存檔點是產品那顆。 */
-async function realAgent() {
+/**
+ * 真的 agent。`langgraph` 的存檔點是產品那顆，量的是寫進存檔點的層數；native 照產品組裝不建存檔點，灌回 thread 之前用同一把尺量
+ * （`pruned-memory-saver.ts` 的 `messageCheckpointDepth`）。
+ */
+async function realAgent(loop: 'langgraph' | 'native' = 'langgraph') {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns: [] }),
-    checkpointer: new PrunedMemorySaver(),
+    ...(loop === 'langgraph' && { checkpointer: new PrunedMemorySaver() }),
     plugins: [],
+    agentLoop: loop,
   });
   disposers.push(() => built.dispose());
   return built.agent;
@@ -121,6 +129,36 @@ function firstReply(
   const event = events.find((candidate) => candidate.type === 'assistant/message');
   if (event?.type !== 'assistant/message') throw new Error('日誌裡沒有回覆');
   return { reply, logged: event.data.message as unknown as { data: Record<string, unknown> } };
+}
+
+/** 舊格式的一輪：回覆只有 `additional_kwargs.tool_calls` 的參數字串 `{v: nested(levels)}`，事件很淺，解析之後才深。 */
+function oldFormatTurn(levels: number): readonly SessionEvent[] {
+  const argsJson = JSON.stringify({ v: nested(levels) });
+  const raw = oneTurn({});
+  raw[1] = {
+    type: 'assistant/message',
+    data: {
+      message: {
+        type: 'ai',
+        data: {
+          content: '',
+          additional_kwargs: {
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
+            ],
+          },
+        },
+      },
+    },
+  } as Pick<SessionEvent, 'type' | 'data'>;
+  return readBack(lines(raw));
+}
+
+/** 舊格式那一則推出來的回覆，照存檔點的尺量有幾層。 */
+function oldFormatDepth(levels: number): number {
+  const replay = replayConversation(oldFormatTurn(levels), { toolResultAsSeen, shareStored: true });
+  if (replay.kind !== 'replayed') throw new Error('推不出來');
+  return messageCheckpointDepth(replay.messages.find((message) => AIMessage.isInstance(message)));
 }
 
 describe('巢狀的值與讀盤的日誌共用', () => {
@@ -292,24 +330,27 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     expect(readBackReply?.tool_calls?.[0]?.args).toEqual(args);
   });
 
-  it('舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq', async () => {
-    const agent = await realAgent();
-    // 日誌那一關收不下 601 層；這是上限之前寫下的舊日誌，讀方不設限，讀得進來。
-    const events = readBack(
-      lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH + 1 - 7) } })),
-    );
-    const reply = events.find((event) => event.type === 'assistant/message')!;
-    expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH + 1);
+  it.each(['langgraph', 'native'] as const)(
+    '舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq（%s）',
+    async (loop) => {
+      const agent = await realAgent(loop);
+      // 日誌那一關收不下 601 層；這是上限之前寫下的舊日誌，讀方不設限，讀得進來。
+      const events = readBack(
+        lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH + 1 - 7) } })),
+      );
+      const reply = events.find((event) => event.type === 'assistant/message')!;
+      expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH + 1);
 
-    const error = await restoreConversation(agent, THREAD, events).then(
-      () => undefined,
-      (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
-    );
+      const error = await restoreConversation(agent, THREAD, events).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
+      );
 
-    expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(error?.seq).toBe(reply.seq);
-    expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
-  });
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(reply.seq);
+      expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
+    },
+  );
 
   it.each([
     ['不帶 `lc` 鍵', (room: number) => nested(room)],
@@ -347,36 +388,53 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     },
   );
 
-  it('舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒', async () => {
-    const agent = await realAgent();
-    const argsJson = JSON.stringify({ v: nested(CHECKPOINT_MAX_DEPTH) });
-    const raw = oneTurn({});
-    raw[1] = {
-      type: 'assistant/message',
-      data: {
-        message: {
-          type: 'ai',
-          data: {
-            content: '',
-            additional_kwargs: {
-              tool_calls: [
-                { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
-              ],
-            },
-          },
-        },
-      },
-    } as Pick<SessionEvent, 'type' | 'data'>;
-    const events = readBack(lines(raw));
-    // 前提：事件本身很淺，參數只是一個字串。
-    expect(storedEventDepth(events[1]!)).toBeLessThan(10);
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒（%s）',
+    async (loop) => {
+      const agent = await realAgent(loop);
+      const events = oldFormatTurn(CHECKPOINT_MAX_DEPTH);
+      // 前提：事件本身很淺，參數只是一個字串。
+      expect(storedEventDepth(events[1]!)).toBeLessThan(10);
 
-    const error = await restoreConversation(agent, THREAD, events).then(
-      () => undefined,
-      (caught: unknown) => caught as Error & { code?: string; seq?: number },
-    );
+      const error = await restoreConversation(agent, THREAD, events).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number },
+      );
 
-    expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(error?.seq).toBe(1);
-  });
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(1);
+    },
+  );
+
+  // 量的那一條路的邊界：參數一層對一層加深，剛好在上限上的照收、多一層的拒，兩個 loop 是同一個數字。
+  const probe = 10;
+  const atLimit = CHECKPOINT_MAX_DEPTH - (oldFormatDepth(probe) - probe);
+
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式解析出來剛好在上限上（%s）：照收，灌回的參數一模一樣',
+    async (loop) => {
+      // 前提：這一則照存檔點的尺量剛好是上限。
+      expect(oldFormatDepth(atLimit)).toBe(CHECKPOINT_MAX_DEPTH);
+      const agent = await realAgent(loop);
+      const events = oldFormatTurn(atLimit);
+      await restoreConversation(agent, THREAD, events);
+      const { reply } = firstReply(await stateMessages(agent), events);
+      expect(reply.tool_calls?.[0]?.args).toEqual({ v: nested(atLimit) });
+    },
+  );
+
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式解析出來比上限多一層（%s）：拒，碼與層數一樣',
+    async (loop) => {
+      expect(oldFormatDepth(atLimit + 1)).toBe(CHECKPOINT_MAX_DEPTH + 1);
+      const agent = await realAgent(loop);
+      const error = await restoreConversation(agent, THREAD, oldFormatTurn(atLimit + 1)).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
+      );
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(1);
+      expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
+    },
+  );
 });

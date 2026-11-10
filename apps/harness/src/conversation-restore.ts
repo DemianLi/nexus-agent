@@ -8,10 +8,9 @@
  *
  * ## 時刻
  *
- * 建好 agent 之後、第一輪之前，用 `updateState` 寫進 `messages`——pump 已經這樣寫過兩次（`#withdraw` 的
- * ToolMessage、`#keepInterruptedReply` 的半段回覆）。一條沒有 checkpoint 的 thread 也寫得進去，之後的第一輪
- * 照常接在後面（實測）。兩個入口各叫一次：serve 碰到以前寫過的 thread（`serve-run.ts`），CLI 的 `--resume`
- * （`cli.ts`）。
+ * 建好 agent 之後、第一輪之前寫進 `messages`：`langgraph` 用 `updateState`（一條沒有 checkpoint 的 thread 也寫得進去，之後的第一輪
+ * 照常接在後面，實測）；native 用 `seedThread`，那條 thread 在這個行程裡還沒有快取，對話只從日誌來。入口各叫一次：serve 碰到以前寫過的
+ * thread（`serve-run.ts`）、CLI 的 `--resume`（`cli.ts`）、冷復活的背景子代理（`background-cold.ts`）。
  *
  * **只寫 `messages`，不帶切點。** 壓縮過的會話灌回去的是「摘要＋之後的」，那一串就是新 state 的原始訊息串。
  * 切點表（`@nexus/core` 的 `summary-cutoffs.ts`）上舊的條目對不上這一串（錨點那則已經被摘掉），等於沒有，下一次壓縮從這一串重新算起；
@@ -52,16 +51,21 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 
-import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
-import { vouchCheckpointDepth } from './pruned-memory-saver.js';
+import { CHECKPOINT_MAX_DEPTH, CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
+import { messageCheckpointDepth, vouchCheckpointDepth } from './pruned-memory-saver.js';
 
-/** 灌得進去的 agent 那一面。 */
-export interface RestorableAgent {
-  updateState(
-    config: { readonly configurable: { readonly thread_id: string } },
-    values: Record<string, unknown>,
-  ): Promise<unknown>;
+/** 這條 thread 的位址。 */
+interface ThreadConfig {
+  readonly configurable: { readonly thread_id: string };
 }
+
+/**
+ * 灌得進去的 agent 那一面：`langgraph` 的圖寫 state（`updateState`），native agent 把推出來的對話放進還沒有快取的 thread
+ * （`@nexus/core` 的 `NativeAgent.seedThread`）。
+ */
+export type RestorableAgent =
+  | { updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown> }
+  | { seedThread(config: ThreadConfig, messages: readonly BaseMessage[]): void };
 
 /* -------------------------------------------------------------------------- */
 /* 過大的工具結果：模型看到的是組裝點換過的預覽                               */
@@ -173,11 +177,13 @@ function depthBounded(event: SessionEvent): boolean {
  * 從日誌推出對話、灌回這條 thread 的 graph state。推不出來就不灌（#306 拍板 2），模型從空的開始。
  *
  * @param agent - 剛建好、還沒跑過任何一輪的 agent。
- * @param threadId - checkpointer 認的那個 id。
+ * @param threadId - 這條 thread 的 id。
  * @param events - 續接讀回來的 root 日誌。
  * @returns 推的結果，給入口披露用。
- * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
+ * @throws `updateState`／`seedThread` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
+ *   native 沒有存檔點，灌回之前用同一把尺量一次（`messageCheckpointDepth`），兩個 loop 拒同一份日誌：太深的訊息灌進去，下一輪會在呼叫堆疊上爆，
+ *   回的是認不得的錯。
  *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、或舊格式 `additional_kwargs.tool_calls`
  *   解析出來太深的，都會走到這裡。
  */
@@ -187,20 +193,32 @@ export async function restoreConversation(
   events: readonly SessionEvent[],
 ): Promise<ConversationReplay> {
   const seqOf = new Map<BaseMessage, number>();
+  const bounded = new Set<BaseMessage>();
   const replay = replayConversation(events, {
     toolResultAsSeen,
     shareStored: true,
     origin: (message, event) => {
       seqOf.set(message, event.seq);
-      if (depthBounded(event)) vouchCheckpointDepth(message);
+      if (!depthBounded(event)) return;
+      bounded.add(message);
+      vouchCheckpointDepth(message);
     },
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
+    const config = { configurable: { thread_id: threadId } };
+    if ('seedThread' in agent) {
+      for (const message of replay.messages as readonly BaseMessage[]) {
+        if (bounded.has(message)) continue;
+        const depth = messageCheckpointDepth(message);
+        if (depth > CHECKPOINT_MAX_DEPTH) {
+          throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH, seqOf.get(message), 'thread');
+        }
+      }
+      agent.seedThread(config, replay.messages as readonly BaseMessage[]);
+      return replay;
+    }
     try {
-      await agent.updateState(
-        { configurable: { thread_id: threadId } },
-        { messages: [...replay.messages] as BaseMessage[] },
-      );
+      await agent.updateState(config, { messages: [...replay.messages] as BaseMessage[] });
     } catch (error) {
       if (!(error instanceof CheckpointDepthError) || error.seq !== undefined) throw error;
       let deepest: BaseMessage | undefined;

@@ -234,7 +234,7 @@ export type ApprovalChannel =
    * 兩者只差給模型的話。
    */
   | { readonly kind: 'policy-never'; readonly reason?: 'background-subagent' }
-  /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問；或這一層沒人可問（native 的 `NO_HUMAN_INPUT`）。 */
+  /** 能力：這次組裝等不到答覆（langgraph 沒有 checkpointer 時中斷接不回來），所以連問都不能問；或這一層沒人可問（native 的 `NO_HUMAN_INPUT`）。 */
   | { readonly kind: 'no-channel' };
 
 /**
@@ -250,15 +250,18 @@ export type ApprovalChannel =
  * CLI）。沒有人在的時候問人，是掛著等一個不會來的答案。**這一格與 dsh 不同**：dsh 的
  * 核准與問答是兩條各自獨立的通道，各有各的政策；我們只有一個旗標，而它問的是人在不在。
  *
- * @param assembly - `approvals.enabled` 與「有沒有 checkpointer」。
+ * **`awaitsAnswer` 是組裝點的事實**：langgraph 要有 checkpointer 才接得回中斷；native 在行程內 await，入口背後有沒有人
+ * 仍是入口的事。fold 沒收到時照有沒有 checkpointer 算（`FoldOptions.awaitsAnswer`）。
+ *
+ * @param assembly - `approvals.enabled` 與「這次組裝等不等得到答覆」。
  * @returns 這次組裝的核准管道。
  */
 export function deriveApprovalChannel(assembly: {
   readonly approvalsEnabled?: boolean;
-  readonly hasCheckpointer: boolean;
+  readonly awaitsAnswer: boolean;
 }): ApprovalChannel {
   if (assembly.approvalsEnabled === false) return { kind: 'policy-never' };
-  if (!assembly.hasCheckpointer) return { kind: 'no-channel' };
+  if (!assembly.awaitsAnswer) return { kind: 'no-channel' };
   return { kind: 'human' };
 }
 

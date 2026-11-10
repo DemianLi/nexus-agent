@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { fromLoggedMessage, SessionLog, SessionRegistry } from '@nexus/core';
-import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { AgentLoopKind, PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -64,6 +64,8 @@ interface RunResult {
   readonly saver: MemorySaver;
   /** 最後一次 `invoke` 之後 root thread 的 `state.messages`（`getState`，兩個 loop 都有）。 */
   readonly messages: readonly BaseMessage[];
+  /** 同一刻 root thread 的 `state.files`：路徑對到內容。 */
+  readonly files: Readonly<Record<string, { readonly content?: unknown }>>;
 }
 
 /**
@@ -81,6 +83,8 @@ async function run(
     invocations?: number;
     /** 為真時 `invoke` 拋錯不中斷，記進 {@link RunResult.failures} 繼續下一句。 */
     tolerateFailures?: boolean;
+    /** 省略就照設定檔（`vitest.native.config.ts` 換成 native）。 */
+    agentLoop?: AgentLoopKind;
   } = {},
 ): Promise<RunResult> {
   const backendRoot = await mkdtemp(join(tmpdir(), 'nexus-compaction-'));
@@ -91,6 +95,7 @@ async function run(
     model,
     backend,
     checkpointer: saver,
+    ...(options.agentLoop !== undefined && { agentLoop: options.agentLoop }),
     plugins: [...(options.plugins ?? [])],
     ...(options.summarization !== undefined && { summarization: options.summarization }),
   });
@@ -98,6 +103,7 @@ async function run(
   const detach = attachSession(sessions);
   const failures: string[] = [];
   let messages: readonly BaseMessage[] = [];
+  let files: RunResult['files'] = {};
   try {
     for (let index = 0; index < (options.invocations ?? 1); index += 1) {
       try {
@@ -111,10 +117,13 @@ async function run(
     }
     const snapshot = await (
       agent as unknown as {
-        getState(config: unknown): Promise<{ values: { messages?: BaseMessage[] } }>;
+        getState(
+          config: unknown,
+        ): Promise<{ values: { messages?: BaseMessage[]; files?: RunResult['files'] } }>;
       }
     ).getState({ configurable: { thread_id: ROOT_ID } });
     messages = snapshot.values.messages ?? [];
+    files = snapshot.values.files ?? {};
   } finally {
     detach();
     await dispose();
@@ -129,6 +138,7 @@ async function run(
     backend,
     saver,
     messages,
+    files,
     root: compactionsOf(rootEvents),
     subagents: entries
       .filter((entry) => entry.address.kind === 'subagent')
@@ -210,43 +220,58 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   /**
    * `filePath` 要指到 backend 裡真的存在的那個檔，不是一個看起來像路徑的字串。
    *
-   * **從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。#348 之前
-   * 這裡直接讀工作區裡的檔；現在那一格在 graph state 裡，而「模型照摘要那句話讀得到」本來就是
-   * 這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
+   * **langgraph 從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。那一格在 graph state 裡（#348），
+   * 而「模型照摘要那句話讀得到」本來就是這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
    * 讀檔那一回合。
+   *
+   * **native 讀同一個 agent 那條 thread 的 `files`**：沒有 checkpointer，state 只在那個 agent 的快取裡，另一個 agent 看不到。
+   * 歷史那一格路由時剝掉了前綴，所以對的是檔名。
    */
-  it('`filePath` 指到的檔真的寫出來了', async () => {
-    const { root, backend, saver } = await run(chatter(), {
-      summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
-      invocations: 12,
-    });
-
-    const path = root[0]?.filePath;
-    expect(path).toMatch(/^\/conversation_history\//);
-
-    const reader = new ScriptedChatModel({
-      turns: [
-        { content: '', toolCalls: [{ name: 'read_file', args: { file_path: path, limit: 5 } }] },
-        { content: '讀完了。' },
-      ],
-    });
-    const { agent, dispose } = await createNexusAgent({
-      model: reader,
-      backend,
-      checkpointer: saver,
-      plugins: [],
-      summarization: false,
-    });
-    try {
-      await agent.invoke(toAgentInvocation('讀一下之前的歷史。'), {
-        configurable: { thread_id: ROOT_ID },
+  it.each(['langgraph', 'native'] as const)(
+    '`filePath` 指到的檔真的寫出來了（%s）',
+    async (agentLoop) => {
+      const { root, backend, saver, files } = await run(chatter(), {
+        summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
+        invocations: 12,
+        agentLoop,
       });
-    } finally {
-      await dispose();
-    }
-    const read = reader.lastPrompt.filter((message) => message.getType() === 'tool').at(-1);
-    expect(read?.text).toContain('Summarized at');
-  });
+
+      const path = root[0]?.filePath;
+      expect(path).toMatch(/^\/conversation_history\//);
+      if (agentLoop === 'native') {
+        const name = path!.slice(path!.lastIndexOf('/'));
+        const stored = Object.entries(files).find(([key]) => key.endsWith(name))?.[1]?.content;
+        expect(Array.isArray(stored) ? stored.join('\n') : String(stored)).toContain(
+          'Summarized at',
+        );
+        return;
+      }
+
+      const reader = new ScriptedChatModel({
+        turns: [
+          { content: '', toolCalls: [{ name: 'read_file', args: { file_path: path, limit: 5 } }] },
+          { content: '讀完了。' },
+        ],
+      });
+      const { agent, dispose } = await createNexusAgent({
+        model: reader,
+        backend,
+        checkpointer: saver,
+        agentLoop: 'langgraph',
+        plugins: [],
+        summarization: false,
+      });
+      try {
+        await agent.invoke(toAgentInvocation('讀一下之前的歷史。'), {
+          configurable: { thread_id: ROOT_ID },
+        });
+      } finally {
+        await dispose();
+      }
+      const read = reader.lastPrompt.filter((message) => message.getType() === 'tool').at(-1);
+      expect(read?.text).toContain('Summarized at');
+    },
+  );
 
   /**
    * **對照組：沒摘要就一筆都沒有。**
