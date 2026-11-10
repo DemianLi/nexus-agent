@@ -26,7 +26,11 @@ import {
 } from './checkpoint-serde.js';
 import { restoreConversation, toolResultAsSeen } from './conversation-restore.js';
 import type { RestorableAgent } from './conversation-restore.js';
-import { CHECKPOINT_MESSAGE_WRAPPER_DEPTH, PrunedMemorySaver } from './pruned-memory-saver.js';
+import {
+  CHECKPOINT_MESSAGE_WRAPPER_DEPTH,
+  messageCheckpointDepth,
+  PrunedMemorySaver,
+} from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
 const THREAD = 'share';
@@ -125,6 +129,36 @@ function firstReply(
   const event = events.find((candidate) => candidate.type === 'assistant/message');
   if (event?.type !== 'assistant/message') throw new Error('日誌裡沒有回覆');
   return { reply, logged: event.data.message as unknown as { data: Record<string, unknown> } };
+}
+
+/** 舊格式的一輪：回覆只有 `additional_kwargs.tool_calls` 的參數字串 `{v: nested(levels)}`，事件很淺，解析之後才深。 */
+function oldFormatTurn(levels: number): readonly SessionEvent[] {
+  const argsJson = JSON.stringify({ v: nested(levels) });
+  const raw = oneTurn({});
+  raw[1] = {
+    type: 'assistant/message',
+    data: {
+      message: {
+        type: 'ai',
+        data: {
+          content: '',
+          additional_kwargs: {
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
+            ],
+          },
+        },
+      },
+    },
+  } as Pick<SessionEvent, 'type' | 'data'>;
+  return readBack(lines(raw));
+}
+
+/** 舊格式那一則推出來的回覆，照存檔點的尺量有幾層。 */
+function oldFormatDepth(levels: number): number {
+  const replay = replayConversation(oldFormatTurn(levels), { toolResultAsSeen, shareStored: true });
+  if (replay.kind !== 'replayed') throw new Error('推不出來');
+  return messageCheckpointDepth(replay.messages.find((message) => AIMessage.isInstance(message)));
 }
 
 describe('巢狀的值與讀盤的日誌共用', () => {
@@ -358,25 +392,7 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     '舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒（%s）',
     async (loop) => {
       const agent = await realAgent(loop);
-      const argsJson = JSON.stringify({ v: nested(CHECKPOINT_MAX_DEPTH) });
-      const raw = oneTurn({});
-      raw[1] = {
-        type: 'assistant/message',
-        data: {
-          message: {
-            type: 'ai',
-            data: {
-              content: '',
-              additional_kwargs: {
-                tool_calls: [
-                  { id: 'c1', type: 'function', function: { name: 'look', arguments: argsJson } },
-                ],
-              },
-            },
-          },
-        },
-      } as Pick<SessionEvent, 'type' | 'data'>;
-      const events = readBack(lines(raw));
+      const events = oldFormatTurn(CHECKPOINT_MAX_DEPTH);
       // 前提：事件本身很淺，參數只是一個字串。
       expect(storedEventDepth(events[1]!)).toBeLessThan(10);
 
@@ -387,6 +403,38 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
 
       expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
       expect(error?.seq).toBe(1);
+    },
+  );
+
+  // 量的那一條路的邊界：參數一層對一層加深，剛好在上限上的照收、多一層的拒，兩個 loop 是同一個數字。
+  const probe = 10;
+  const atLimit = CHECKPOINT_MAX_DEPTH - (oldFormatDepth(probe) - probe);
+
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式解析出來剛好在上限上（%s）：照收，灌回的參數一模一樣',
+    async (loop) => {
+      // 前提：這一則照存檔點的尺量剛好是上限。
+      expect(oldFormatDepth(atLimit)).toBe(CHECKPOINT_MAX_DEPTH);
+      const agent = await realAgent(loop);
+      const events = oldFormatTurn(atLimit);
+      await restoreConversation(agent, THREAD, events);
+      const { reply } = firstReply(await stateMessages(agent), events);
+      expect(reply.tool_calls?.[0]?.args).toEqual({ v: nested(atLimit) });
+    },
+  );
+
+  it.each(['langgraph', 'native'] as const)(
+    '舊格式解析出來比上限多一層（%s）：拒，碼與層數一樣',
+    async (loop) => {
+      expect(oldFormatDepth(atLimit + 1)).toBe(CHECKPOINT_MAX_DEPTH + 1);
+      const agent = await realAgent(loop);
+      const error = await restoreConversation(agent, THREAD, oldFormatTurn(atLimit + 1)).then(
+        () => undefined,
+        (caught: unknown) => caught as Error & { code?: string; seq?: number; depth?: number },
+      );
+      expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(error?.seq).toBe(1);
+      expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
     },
   );
 });
