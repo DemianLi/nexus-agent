@@ -1063,8 +1063,8 @@ describe('--patch 與工作區（#2162）', () => {
 
 /**
  * CLI 單機跑一輪（推理、文字、一顆好的與一顆參數壞掉的工具呼叫，接著收尾的文字）的會話日誌與請求本文，native 與 `langgraph`
- * 各一份，釘成夾具逐位元組比（#2361 PR-B）。請求本文比之前先拿掉 `stream` 與 `stream_options`。假端點照請求的 `stream` 回一整包 JSON 或 SSE，兩種回的是同一份內容，
- * 所以 CLI 打哪一種請求都比得到同一份日誌。只正規化每次跑都會變的格（時間、亂數 id、暫存路徑）。
+ * 各一份，釘成夾具逐位元組比（#2361）。請求本文比對前先拿掉 `stream` 與 `stream_options`。假端點照請求的 `stream` 回一整包 JSON 或 SSE，兩種回的是
+ * 同一份內容，所以夾具之間的差異只來自 CLI 送的是哪一種請求。只正規化每次跑都會變的格（見 `normalizedLog`）。
  */
 describe('CLI 單機的會話日誌（夾具）', () => {
   const FIXTURE = fileURLToPath(new URL('./fixtures/cli-turn-log/', import.meta.url));
@@ -1142,9 +1142,9 @@ describe('CLI 單機的會話日誌（夾具）', () => {
 });
 
 /**
- * 改打串流之前寫下的 native 日誌（`session.native.before-stream.jsonl`，`assistant/message` 是字串 content、推理在
- * `additional_kwargs`、`response_metadata` 帶 `tokenUsage` 與原始 `usage`）由現在的程式續接：送出的對話跟續接一份新形狀的
- * 日誌逐位元組相同（#2361）。
+ * 字串 content、推理在 `additional_kwargs`、`response_metadata` 帶 `tokenUsage` 與原始 `usage` 的 native 日誌
+ * （`session.native.before-stream.jsonl`）續接得回來：送出的請求跟續接一份 v1 形狀的日誌相比，只差在 assistant 的文字是字串還是
+ * text 區塊（#2361）。
  */
 describe('CLI 單機 native 續接改動前形狀的日誌', () => {
   const BEFORE = fileURLToPath(
@@ -1344,7 +1344,7 @@ async function cliEndpoint(script: (body: CliEndpointBody) => CliEndpointReply) 
   };
 }
 
-/** 目錄底下每個 `.jsonl`，照相對路徑排序後接起來；每行前面標出它在哪個檔。 */
+/** 目錄底下每個 `.jsonl`，照相對路徑排序後接起來；每個檔前面一行 `# <相對路徑>`。 */
 async function readJsonlTree(root: string): Promise<string> {
   const files = (await readdir(root, { recursive: true }))
     .filter((name) => name.endsWith('.jsonl'))
@@ -1369,7 +1369,7 @@ function normalizedLog(text: string, paths: readonly string[]): string {
 }
 
 /**
- * CLI 單機 native 改打串流之後的計時與用量（#2361）：到標頭的 `timeoutMs` 加上閒置的 `streamIdleTimeoutMs`，沒有總上限；
+ * CLI 單機 native（打串流請求）的計時與用量（#2361）：到第一則事件的 `timeoutMs` 加上閒置的 `streamIdleTimeoutMs`，沒有總上限；
  * 吐過用量才失敗的那一次多記一筆帶 `outcome` 的 `model/usage`。
  */
 describe('CLI 單機 native 的串流計時與用量', () => {

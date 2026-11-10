@@ -20,7 +20,7 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
     端點送什麼，監聽者就看到什麼，中間不翻譯。
 - **派發的時機與次數不變**：每一次模型呼叫派一次，root 與子代理都派；`agent/request-error` 回 `retry` 再打的那一次另外再派一次。payload 不變：`threadId`、`step`、`signal`。
 - **`next()` 改成在 native 下一律打串流請求。** 以前 CLI 單機模式沒有串流 handler 時打的是非串流請求，現在也一樣經過 `next()` 交出 chunk。
-- **短路**：不呼叫 `next()`、自己 yield chunk，請求就不會送出。但這一步的 `request/*` 快照與 `model/start` 在派 `llm/stream` 之前就寫進會話日誌了。所以日誌裡會有一次「開了頭、但端點沒收到」的模型呼叫；你 yield 的 chunk 帶了 `usage`，用量就照它記。
+- **短路**：不呼叫或不迭代 `next()`、自己 yield chunk，請求就不會送出。但這一步的 `request/*` 快照與 `model/start` 在派 `llm/stream` 之前就寫進會話日誌了。所以日誌裡會有一次「開了頭、但端點沒收到」的模型呼叫；你 yield 的 chunk 帶了 `usage`，用量就照它記。
 - **沒有接上 `llm/stream` 的模型會拋錯。** native 下，模型要從這次呼叫 config 的 `configurable["__nexus_llm_stream"]`（`@nexus/core` 匯出成 `LLM_STREAM_CONFIG_KEY`）取出環繞函式，用它包住自己打端點的串流。沒有這樣做的模型，這次呼叫會失敗，訊息開頭是「native agent loop：模型 <類別名> 沒有接上 llm/stream」，後面寫明要怎麼接。出廠的模型都已經這樣做；只有自己帶模型進 native 的插件才會碰到。
 - 受影響的：經 `registry.events.on('llm/stream', …)` 登記監聽者的插件；在 native 下用自己的 `BaseChatModel` 的插件或嵌入方。
 - 不受影響的：跑 `langgraph` 的主機；出廠的插件（都沒有 `llm/stream` 的監聽者）。
@@ -59,6 +59,6 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
    - 要記用量，就在最後一顆帶 `usage`。
 
    工具呼叫放 `delta.tool_calls`，格式同 Chat Completions 的串流：每一顆帶 `index`，第一顆帶 `id` 與 `function.name`，`function.arguments` 可以分段。
-5. 短路時日誌會留下沒送出的那一次呼叫（`request/*` 與 `model/start`）。依日誌計算請求數或成本的工具，要用 `model/usage` 的筆數為準，不要用 `model/start` 的筆數。
+5. 短路時日誌會留下沒送出的那一次呼叫（`request/*` 與 `model/start`）。依日誌計算請求數或成本的工具，不要用 `model/start` 的筆數；改數不帶 `outcome` 的 `model/usage`，並記得短路監聽者 yield 了 `usage` 的那幾筆不是端點收到的請求。
 6. 自己帶 `BaseChatModel` 進 native 的：環繞函式在 `invoke` 收到的 config 的 `configurable[LLM_STREAM_CONFIG_KEY]`，型別是 `ModelStreamAround`。在 `invoke` 取出它，打端點時把「送請求、回 chunk 串流」包成 `next` 交給它，改讀它回的那一條串流。它可能回 Promise，先 `await` 再迭代。不這樣做，這個模型在 native 下每次呼叫都會拋錯。
 7. 確認改好了：用 `--agent-loop native` 開一條新會話送一句，回覆照常出現；監聽者被叫到，次數等於這一輪的模型呼叫數，包括子代理的。

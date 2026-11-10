@@ -184,8 +184,8 @@ export function pastLogDepthCap(): unknown {
 
 /**
  * `langchain` 的 `fakeModel()`，加上 native 的 `llm/stream` 接法：呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 有環繞函式時，
- * 經它打這顆假模型——`next()` 打假模型，交出一顆內容同回覆的 chunk；監聽者轉交了就回假模型原本的那則訊息，短路了就用監聽者給的
- * chunk 拼一則。`bindTools`、`withConfig` 綁出來的（連同它們的 `bound`）也照這樣接。沒有環繞函式時跟 `fakeModel()` 完全相同。
+ * 經它打這顆假模型：`next()` 打假模型、交出一顆內容同回覆的 chunk。監聽者迭代過 `next()` 就回假模型那則訊息（不看它改了什麼），否則把它
+ * yield 的 `delta.content` 接成一則純文字訊息。`bindTools`、`withConfig` 綁出來的（連同它們的 `bound`）也照這樣接。沒有環繞函式時跟 `fakeModel()` 完全相同。
  * @returns 跟 `fakeModel()` 同一套建構方法的假模型。
  */
 export function fakeModel(): ReturnType<typeof langchainFakeModel> {

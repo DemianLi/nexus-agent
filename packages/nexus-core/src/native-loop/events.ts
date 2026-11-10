@@ -3,7 +3,7 @@
  * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，在 `--agent-loop=native` 下派發；`agent/turn-stopping` 與 `agent/pre-step` 在
  * `langgraph` 下另由 `turn-stopping.ts`、`pre-step-adapter.ts` 的轉接格派。監聽者有 `agent/turn-stopping`（`@nexus/plugin-workspace-changes`）
  * 與 `agent/pre-step`（`@nexus/plugin-plan-mode`，經 `ToolThread.on`）；`@nexus/agent-loop` 同名的 pre-step listener 經宿主建成
- * `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
+ * `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通；`llm/stream` 例外：環繞函式照樣交給模型，模型照樣要取用（見該事件）。
  *
  * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 登記的那幾步改，所以 `agent/pre-step` 不帶 `messages`。TODO(#2363)：訊息搬出
  * LangGraph 形狀的 state、那幾步搬成這些事件的監聽者時補上，契約可能跟著改。
@@ -19,7 +19,7 @@ export type PreStepDecision =
 export type RequestErrorAction = { readonly kind: 'retry' } | undefined;
 
 /**
- * `llm/stream` 交給監聽者的一顆 chunk：OpenAI Chat Completions 串流 chunk 的形狀，端點送什麼就是什麼，不翻譯。
+ * `llm/stream` 交給監聽者的一顆 chunk：OpenAI Chat Completions 串流 chunk 的形狀。打端點的模型交 SDK 收到的原始 chunk、不翻譯；不打端點的模型（腳本、重放）交從回覆推出來的一顆。
  * 只寫監聽者會讀的格；`apps/harness` 的型別測試釘住 `openai` SDK 的 `ChatCompletionChunk` 能指派過來。
  * `reasoning_content` 不在 SDK 的型別裡，所以是選填；`id`、`model` 選填，短路的監聽者可以不給。
  */
@@ -102,14 +102,14 @@ declare module '../events.js' {
      */
     'agent/turn-stopping'(payload: AgentStepPayload): Promise<void> | void;
     /**
-     * 環繞每一次模型請求的串流（`wrapModelCall` 那一串的最內層，綁好工具之後），root 與子代理（前景、背景）的都派，native 下一律打串流請求。
-     * `next()` 送出請求並回端點的 chunk 串流，只能呼叫一次；監聽者回的串流就是模型收到的。不呼叫 `next()`、自己 yield chunk 即短路，
-     * 請求不送；但這一步的 `request/*` 與 `model/start` 在派發之前已經寫進日誌，用量照 yield 的 `usage` 記。
+     * native agent 帶了 `events` 時，環繞每一次模型請求的串流（`wrapModelCall` 那一串的最內層，綁好工具之後），root 與子代理（前景、背景）
+     * 的都派。`next()` 回端點的 chunk 串流，迭代它才送出請求，只能呼叫一次；監聽者回的串流就是模型收到的。不呼叫或不迭代 `next()`、
+     * 自己 yield chunk 即短路，請求不送；但這一步的 `request/*` 與 `model/start` 在派發之前已經寫進日誌，用量照 yield 的 `usage` 記。
      *
-     * 模型要從這次呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 取出環繞函式、包住自己的串流；沒取的模型在 native 下這次呼叫拋錯
-     * （`model-node.ts`），`langgraph` 下不派、不檢查。
+     * 模型要從這次呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 取出環繞函式、包住自己的串流（打端點的 `BaseChatOpenAI` 因此一律打
+     * 串流請求）；沒取的模型在帶了 `events` 的 native 下這次呼叫拋錯（`model-node.ts`），`langgraph` 下不派、不檢查。
      * @param payload - thread、步數、中止訊號。
-     * @param next - 送出請求，回 chunk 串流。
+     * @param next - 回 chunk 串流，迭代時送出請求。
      * @mode waterfall
      */
     'llm/stream'(

@@ -86,7 +86,7 @@ describe('native 前景子代理的步驟往共用派發面派的事件', () => 
   });
 });
 
-/** 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數或拋出來的錯。 */
+/** 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數；模型沒接上時 reject。 */
 async function runUncooperative(loop: 'native' | 'langgraph'): Promise<number> {
   let streams = 0;
   const { registry } = await loadPlugins([

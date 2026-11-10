@@ -91,7 +91,7 @@ export interface ModelChain {
   readonly executesAddedTools: boolean;
   /**
    * 環繞最內層那次模型請求的串流（`llm/stream`），經這次呼叫 config 的 `configurable[LLM_STREAM_CONFIG_KEY]` 交給模型。
-   * 給了而模型沒有取用，這次呼叫拋錯；不給就照舊打。
+   * 給了而模型沒有取用，模型回來之後這次呼叫拋錯；不給就直接打（原樣帶 `task.config`）。
    */
   readonly around?: ModelStreamAround;
 }
@@ -101,6 +101,7 @@ export interface ModelChain {
  * @param chain - 模型、系統訊息、工具、middleware。
  * @param task - 這次呼叫的環境（`model_request:<id>`）。
  * @returns AI 訊息（蓋上 `chain.name`）與收集到的 `Command`。
+ * @throws 給了 `chain.around` 而模型這次沒有取用時拋（訊息見 `aroundNotTakenMessage`）。檢查在模型回來之後，那一次請求已送出，回覆丟掉。
  */
 export async function callModel(chain: ModelChain, task: NodeTask): Promise<ModelStepResult> {
   const state = task.state;

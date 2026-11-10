@@ -19,7 +19,8 @@
  * `base-chat-openai.test.ts` 的「已知的差異」，同一個檔的差分測試對同一個假端點比對。
  *
  * **這個檔維持照搬**：nexus 自己對請求與回應的修正（空內容、助手 `name`、串流內錯誤、閒置逾時、完成檢查、`User-Agent`）一律疊在
- * `live-model.ts` 的 fetch 層，不寫進這裡，差分測試才比得了。撤除條件：差分測試不再拿 `@langchain/openai` 當基準。
+ * `live-model.ts` 的 fetch 層，不寫進這裡，差分測試才比得了。例外：native 的 `llm/stream` 環繞寫在這裡，因為它要包住 SDK 回的串流；
+ * 沒有環繞函式時這條路照搬，差分測試比的就是它。撤除條件：差分測試不再拿 `@langchain/openai` 當基準。
  *
  * 繼承 `BaseChatModel`：`langchain` 的 `AgentNode` 與 native loop 的模型節點（`packages/nexus-core/src/native-loop/model-node.ts`）要
  * `bindTools`／`invoke`；線上的 token、請求快照、`model/start` 都靠它發的 callback。
@@ -526,7 +527,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   }
 
   /**
-   * 開一條串流請求。有 `llm/stream` 的環繞函式時交給它：`next` 呼叫了才送請求，監聽者不呼叫就一個請求都不送。
+   * 開一條串流請求。有 `llm/stream` 的環繞函式時交給它：迭代 `next()` 回的串流才送請求，監聽者不迭代就一個請求都不送。
    * 監聽者可能是 `async` 函式、回的是 Promise，先等再驗它是不是可迭代的串流。
    */
   async #openStream(
@@ -779,6 +780,11 @@ export function takeAround(
   return { ...options, configurable, [LLM_STREAM_CONFIG_KEY]: around };
 }
 
+/**
+ * 拿掉呼叫選項上的 `llm/stream` 環繞函式：沒有這把鍵就回同一個物件，有就回不含它的淺拷貝，不改原物件。用在交給 callback 與 SDK 的選項上。
+ * @param options - 呼叫選項。
+ * @returns 不帶環繞函式的選項。
+ */
 export function withoutAround<T extends object>(options: T): T {
   if (!(LLM_STREAM_CONFIG_KEY in options)) return options;
   const { [LLM_STREAM_CONFIG_KEY]: _around, ...rest } = options as Record<string, unknown>;

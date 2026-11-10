@@ -203,7 +203,7 @@ export class ScriptedChatModel extends BaseChatModel {
     });
   }
 
-  /** native 的 `llm/stream`：環繞函式從 `configurable` 搬成呼叫選項，同 `BaseChatOpenAI`。 */
+  /** native 的 `llm/stream`：環繞函式從 `configurable` 搬成呼叫選項，同 `BaseChatOpenAI.invoke`。 */
   override async invoke(
     input: BaseLanguageModelInput,
     options?: Parameters<BaseChatModel['invoke']>[1],
@@ -269,7 +269,6 @@ export class ScriptedChatModel extends BaseChatModel {
     this.record(messages);
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
-    // 環繞函式拿到這一輪推出來的 chunk；吐出去的仍是腳本這一輪。
     await passAroundOnce(options ?? {}, message);
     return { generations: [{ text: turn.content, message }], llmOutput: {} };
   }
