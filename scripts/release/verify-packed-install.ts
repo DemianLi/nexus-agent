@@ -52,6 +52,7 @@ import {
   parseGenerationLogFilename,
   sessionDirectoryName,
 } from '../../packages/nexus-core/src/session-filename.js';
+import { PER_THREAD_ENTRIES } from '../../apps/harness/src/process-launcher.js';
 import { serverLogBody } from '../../apps/harness/src/server-log-line.js';
 import { fileSha256 } from './pack.js';
 import {
@@ -788,8 +789,8 @@ export async function smokeInstalledServe(
  */
 export function perThreadChildrenProblems(commandLines: readonly string[], lib: string): string[] {
   const problems: string[] = [];
-  for (const entry of ['front-process.js', 'conversation-process.js']) {
-    const path = join(lib, entry);
+  for (const entry of Object.values(PER_THREAD_ENTRIES)) {
+    const path = join(lib, `${entry}.js`);
     if (!commandLines.some((line) => line.split(' ').includes(path))) {
       problems.push(`監督行程底下沒有跑著 ${path}：${JSON.stringify(commandLines.slice(0, 4))}`);
     }
