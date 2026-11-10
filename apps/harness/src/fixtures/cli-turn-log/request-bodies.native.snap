@@ -1,0 +1,1256 @@
+[
+  {
+    "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "temperature": 1,
+    "top_p": 0.95,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "ask_user_question",
+          "description": "需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "這一題的穩定 id，答案會照它回來。"
+                    },
+                    "question": {
+                      "type": "string",
+                      "description": "要問的那句話，具體一點。"
+                    },
+                    "header": {
+                      "description": "可選的短標題，例如「確認」或「選模式」。",
+                      "type": "string"
+                    },
+                    "options": {
+                      "description": "可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "description": "選項的短標籤，直接顯示給人看。"
+                          },
+                          "description": {
+                            "description": "一句話說明這個選項的取捨或後果。",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "multi_select": {
+                      "description": "人可不可以複選。預設單選。",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "question"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "繼續之前要問人的那幾題。"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "create_goal",
+          "description": "Create the one long-running completion objective for this session, when the current direct human request is such an objective. You may infer that intent from the request in any language; the user does not have to say \"create a goal\". Do not create a goal for routine single-turn work. Requires a direct human turn on the top-level agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "objective": {
+                "type": "string",
+                "description": "The concrete completion objective inferred from the human request."
+              },
+              "max_goal_rounds": {
+                "description": "Optional positive safe-integer limit on automatic continuation rounds.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "objective"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "echo",
+          "description": "把收到的訊息原樣回聲，用來確認工具接線是通的。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "要回聲的訊息"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "exit_plan_mode",
+          "description": "只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "plan": {
+                "type": "string",
+                "description": "完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。"
+              }
+            },
+            "required": [
+              "plan"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "get_goal",
+          "description": "Read the current session goal: its exact id and revision, objective, phase, round cap, rounds started so far, and blocker reason when present. Returns {\"goal\":null} when there is none. Call this before update_goal and copy its exact goal_id and revision. After session resume, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. When automatic continuation is enabled, an active goal is given further rounds in this same session until it is completed, blocked, or reaches maxGoalRounds.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "present",
+          "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Path of an existing regular file. Relative paths use the Session working directory."
+                    },
+                    "description": {
+                      "description": "Brief description for the user.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Usually the 1-2 most important deliverables; at most 4 per call."
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "submit_record",
+          "description": "把湊齊的欄位寫成目標檔案的一列。**欄位缺了就先用 ask_user_question 問人，不要自己編、不要留空送出。**送出一定要經過人核准，所以你會停一下；被拒絕時不要換個路徑再送一次，去問人為什麼。欄名要跟檔案表頭一致；檔案不存在時會用你這次給的鍵當表頭建起來。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "目標檔案的絕對路徑，例如 \"/visitors.csv\"。不存在就會被建出來。"
+              },
+              "record": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。"
+              }
+            },
+            "required": [
+              "file_path",
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "todo_write",
+          "description": "Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished).",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "todos": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                      "description": "What the task is — a short imperative line."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed"
+                      ],
+                      "description": "pending (not started) | in_progress (now) | completed (done)."
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "The COMPLETE task list, replacing any previous list."
+              }
+            },
+            "required": [
+              "todos"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "update_goal",
+          "description": "Update the exact current goal revision. Call get_goal first and copy its goal_id and revision. Mark complete only when the objective is actually achieved. Mark blocked only for a concrete blocking condition you report in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked. Inside a continuation round, mark blocked only after the same blocking condition has persisted for at least 3 consecutive rounds. Actions complete and blocked accept either a direct human turn or the current continuation round; edit, pause, and resume always require a direct human turn on the top-level agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "goal_id": {
+                "type": "string",
+                "description": "Exact id returned by get_goal."
+              },
+              "revision": {
+                "type": "number",
+                "description": "Exact positive revision returned by get_goal."
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "edit",
+                  "pause",
+                  "resume",
+                  "complete",
+                  "blocked"
+                ],
+                "description": "edit | pause | resume | complete | blocked"
+              },
+              "objective": {
+                "description": "Replacement objective; valid only with action edit.",
+                "type": "string"
+              },
+              "max_goal_rounds": {
+                "description": "Replacement round cap; valid only with action edit. Raise it to give a goal that ran out of rounds more; see get_goal for roundsStarted.",
+                "type": "number"
+              },
+              "blocked_reason": {
+                "description": "Concrete blocking condition; required only with action blocked.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "goal_id",
+              "revision",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ls",
+          "description": "Lists all files in a directory.\n\nThis is useful for exploring the filesystem and finding the right file to read or edit.\nYou should almost ALWAYS use this tool before using the read_file or edit_file tools.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "path": {
+                "default": "/",
+                "description": "Directory path to list (default: /)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\n\nUsage:\n- By default, it reads up to 2000 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n- Results are returned with line numbers starting at `offset` + 1 (1 by default), then a tab, then the source line. The number and the tab are not file content: never include them in `write_file` content or in `edit_file` old_string or new_string.\n- Lines over 5,000 characters are split with continuation markers (e.g. 5.1, 5.2); `limit` counts source lines, so continuation rows do not consume the budget.\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\n- An empty file returns a system-reminder warning in place of contents.\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/javascript/langchain/messages#multimodal).\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only.\n- Always read a file before editing it.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to read"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Line offset to start reading from (0-indexed)",
+                "type": "number"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of lines to return. Defaults to 2000."
+              }
+            },
+            "required": [
+              "file_path",
+              "offset"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "description": "Writes content to a file. Creates the file if it does not exist; replaces it entirely if it does.\n\nUsage:\n- Use this tool when you intend to create a new file or replace the whole file. You do not need to read the file first.\n- Prefer to edit existing files (with the edit_file tool) over creating new ones when possible.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path where the file should be written. Must be absolute, not relative."
+              },
+              "content": {
+                "type": "string",
+                "description": "The text content to write to the file. This parameter is required."
+              }
+            },
+            "required": [
+              "file_path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "edit_file",
+          "description": "Performs exact string replacements in files.\n\nUsage:\n- You must read the file before editing; this tool errors otherwise.\n- Preserve the exact indentation from the read output, and never include line-number prefixes in old_string or new_string.\n- Prefer editing an existing file over creating a new one.\n- Only use emojis if the user explicitly requests it.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to edit"
+              },
+              "old_string": {
+                "type": "string",
+                "description": "String to be replaced (must match exactly)"
+              },
+              "new_string": {
+                "type": "string",
+                "description": "String to replace with"
+              },
+              "replace_all": {
+                "default": false,
+                "description": "Whether to replace all occurrences",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file_path",
+              "old_string",
+              "new_string",
+              "replace_all"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delete",
+          "description": "Deletes a file or directory from the filesystem.\n\nUsage:\n- Permanently removes the file or directory at the given absolute path.\n- Deleting a directory removes it and everything inside it, recursively. Prefer\n  deleting a directory in one call over deleting each file individually.\n- This cannot be undone, so only delete paths you are sure are no longer needed.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to delete. Must be absolute, not relative."
+              }
+            },
+            "required": [
+              "file_path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "glob",
+          "description": "Find files matching a glob pattern, returning absolute paths.\n\nSupports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match files (e.g., '**/*.py', '*.txt', '/subdir/**/*.md')"
+              },
+              "path": {
+                "description": "Base directory to search from. Defaults to the backend's default root.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "description": "Search for a LITERAL text pattern across files (NOT regex).\n\nThe pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern=\"foo|bar\")` searches for the literal text \"foo|bar\", and `.*` or `\\\\.` match those characters literally.\n\nReturns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Literal text pattern to search for (not regex)"
+              },
+              "path": {
+                "default": "/",
+                "description": "Base path to search from (default: /)",
+                "type": "string"
+              },
+              "glob": {
+                "default": null,
+                "description": "Optional glob pattern to filter files (e.g., '*.py')",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_count": {
+                "default": null,
+                "description": "Optional cap on the total number of matches returned across all files. Leave unset to use the configured default. When the cap is hit, results are truncated and a note says so; narrow the pattern or path to see the rest.",
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "output_mode": {
+                "default": "content",
+                "description": "Output format: 'files_with_matches' lists matching file paths, 'content' shows matching lines (default), 'count' shows match counts per file",
+                "type": "string",
+                "enum": [
+                  "files_with_matches",
+                  "content",
+                  "count"
+                ]
+              }
+            },
+            "required": [
+              "pattern",
+              "path",
+              "glob",
+              "max_count",
+              "output_mode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "task",
+          "description": "Launch an ephemeral subagent to handle a complex, multi-step task in an isolated context window.\n\nAvailable agent types and the tools they have access to:\n- general-purpose: General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent.\n\nSpecify subagent_type to select the agent. Usage notes:\n- Launch multiple agents concurrently when their tasks are independent, using a single message with multiple tool calls.\n- Each invocation is stateless: the agent sees only the prompt you give it and returns a single final report. Put full detail in the prompt and state exactly what it should return.\n- The agent's report is not shown to the user; relay a summary yourself.\n- Tell the agent whether to create content, analyze, or only research, since it cannot see the user's intent.\n- If an agent's description says to use it proactively, do so without waiting to be asked.\n- When only general-purpose is available, use it for any complex, context-heavy task; it has the same capabilities as the main agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "description": "The task to execute with the selected agent"
+              },
+              "subagent_type": {
+                "type": "string",
+                "description": "Name of the agent to use. Available: general-purpose"
+              }
+            },
+            "required": [
+              "description",
+              "subagent_type"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "max_tokens": 16384,
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are an AI agent powered by nexus-agent.\n\nYou are a helpful assistant powered by the nvidia/nemotron-3.5-lightning-30b-a3b model.\n\n"
+          },
+          {
+            "type": "text",
+            "text": "需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。"
+          },
+          {
+            "type": "text",
+            "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+          },
+          {
+            "type": "text",
+            "text": "\n目前的檔案政策：workspace-write。受檔案沙箱管的可用操作可以變更工作區之下的檔案。"
+          },
+          {
+            "type": "text",
+            "text": "\n這個 session 關掉了核准提示：需要核准的動作一律自動回絕——不要請求沙箱升級（不要設 `sandbox_permissions`）。"
+          },
+          {
+            "type": "text",
+            "text": "\n\nYour working directory is /."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "讀 /a.txt"
+      }
+    ]
+  },
+  {
+    "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "temperature": 1,
+    "top_p": 0.95,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "ask_user_question",
+          "description": "需要確認、需要人在幾個選項裡挑一個，或者缺了你補不出來的資料時，用這個工具問人，不要自己猜。一次可以送多題，每一題給一個穩定的 id，答案會照那個 id 回來。有明確選項的時候把選項列出來；沒有選項時人可以自由作答。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "這一題的穩定 id，答案會照它回來。"
+                    },
+                    "question": {
+                      "type": "string",
+                      "description": "要問的那句話，具體一點。"
+                    },
+                    "header": {
+                      "description": "可選的短標題，例如「確認」或「選模式」。",
+                      "type": "string"
+                    },
+                    "options": {
+                      "description": "可選的選項清單。你有推薦的就放第一個，並在標籤後面加上「（推薦）」。",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "description": "選項的短標籤，直接顯示給人看。"
+                          },
+                          "description": {
+                            "description": "一句話說明這個選項的取捨或後果。",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "multi_select": {
+                      "description": "人可不可以複選。預設單選。",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "question"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "繼續之前要問人的那幾題。"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "create_goal",
+          "description": "Create the one long-running completion objective for this session, when the current direct human request is such an objective. You may infer that intent from the request in any language; the user does not have to say \"create a goal\". Do not create a goal for routine single-turn work. Requires a direct human turn on the top-level agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "objective": {
+                "type": "string",
+                "description": "The concrete completion objective inferred from the human request."
+              },
+              "max_goal_rounds": {
+                "description": "Optional positive safe-integer limit on automatic continuation rounds.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "objective"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "echo",
+          "description": "把收到的訊息原樣回聲，用來確認工具接線是通的。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "要回聲的訊息"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "exit_plan_mode",
+          "description": "只在計劃模式下使用。提交計劃供人評審，獲准後離開計劃模式。送完整的 Markdown 計劃，以一個為計劃命名的 # 標題開頭。對方可以批准（從你的下一步起執行），也可以要求你繼續規劃——那時反饋會從這個工具的結果回來，改完再提交一次。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "plan": {
+                "type": "string",
+                "description": "完整的計劃，Markdown，以一個為計劃命名的 # 標題開頭。"
+              }
+            },
+            "required": [
+              "plan"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "get_goal",
+          "description": "Read the current session goal: its exact id and revision, objective, phase, round cap, rounds started so far, and blocker reason when present. Returns {\"goal\":null} when there is none. Call this before update_goal and copy its exact goal_id and revision. After session resume, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. When automatic continuation is enabled, an active goal is given further rounds in this same session until it is completed, blocked, or reaches maxGoalRounds.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "present",
+          "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Path of an existing regular file. Relative paths use the Session working directory."
+                    },
+                    "description": {
+                      "description": "Brief description for the user.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Usually the 1-2 most important deliverables; at most 4 per call."
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "submit_record",
+          "description": "把湊齊的欄位寫成目標檔案的一列。**欄位缺了就先用 ask_user_question 問人，不要自己編、不要留空送出。**送出一定要經過人核准，所以你會停一下；被拒絕時不要換個路徑再送一次，去問人為什麼。欄名要跟檔案表頭一致；檔案不存在時會用你這次給的鍵當表頭建起來。",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "目標檔案的絕對路徑，例如 \"/visitors.csv\"。不存在就會被建出來。"
+              },
+              "record": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。"
+              }
+            },
+            "required": [
+              "file_path",
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "todo_write",
+          "description": "Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished).",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "todos": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                      "description": "What the task is — a short imperative line."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed"
+                      ],
+                      "description": "pending (not started) | in_progress (now) | completed (done)."
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "The COMPLETE task list, replacing any previous list."
+              }
+            },
+            "required": [
+              "todos"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "update_goal",
+          "description": "Update the exact current goal revision. Call get_goal first and copy its goal_id and revision. Mark complete only when the objective is actually achieved. Mark blocked only for a concrete blocking condition you report in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked. Inside a continuation round, mark blocked only after the same blocking condition has persisted for at least 3 consecutive rounds. Actions complete and blocked accept either a direct human turn or the current continuation round; edit, pause, and resume always require a direct human turn on the top-level agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "goal_id": {
+                "type": "string",
+                "description": "Exact id returned by get_goal."
+              },
+              "revision": {
+                "type": "number",
+                "description": "Exact positive revision returned by get_goal."
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "edit",
+                  "pause",
+                  "resume",
+                  "complete",
+                  "blocked"
+                ],
+                "description": "edit | pause | resume | complete | blocked"
+              },
+              "objective": {
+                "description": "Replacement objective; valid only with action edit.",
+                "type": "string"
+              },
+              "max_goal_rounds": {
+                "description": "Replacement round cap; valid only with action edit. Raise it to give a goal that ran out of rounds more; see get_goal for roundsStarted.",
+                "type": "number"
+              },
+              "blocked_reason": {
+                "description": "Concrete blocking condition; required only with action blocked.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "goal_id",
+              "revision",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ls",
+          "description": "Lists all files in a directory.\n\nThis is useful for exploring the filesystem and finding the right file to read or edit.\nYou should almost ALWAYS use this tool before using the read_file or edit_file tools.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "path": {
+                "default": "/",
+                "description": "Directory path to list (default: /)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\n\nUsage:\n- By default, it reads up to 2000 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n- Results are returned with line numbers starting at `offset` + 1 (1 by default), then a tab, then the source line. The number and the tab are not file content: never include them in `write_file` content or in `edit_file` old_string or new_string.\n- Lines over 5,000 characters are split with continuation markers (e.g. 5.1, 5.2); `limit` counts source lines, so continuation rows do not consume the budget.\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\n- An empty file returns a system-reminder warning in place of contents.\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/javascript/langchain/messages#multimodal).\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only.\n- Always read a file before editing it.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to read"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Line offset to start reading from (0-indexed)",
+                "type": "number"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of lines to return. Defaults to 2000."
+              }
+            },
+            "required": [
+              "file_path",
+              "offset"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "description": "Writes content to a file. Creates the file if it does not exist; replaces it entirely if it does.\n\nUsage:\n- Use this tool when you intend to create a new file or replace the whole file. You do not need to read the file first.\n- Prefer to edit existing files (with the edit_file tool) over creating new ones when possible.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path where the file should be written. Must be absolute, not relative."
+              },
+              "content": {
+                "type": "string",
+                "description": "The text content to write to the file. This parameter is required."
+              }
+            },
+            "required": [
+              "file_path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "edit_file",
+          "description": "Performs exact string replacements in files.\n\nUsage:\n- You must read the file before editing; this tool errors otherwise.\n- Preserve the exact indentation from the read output, and never include line-number prefixes in old_string or new_string.\n- Prefer editing an existing file over creating a new one.\n- Only use emojis if the user explicitly requests it.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to edit"
+              },
+              "old_string": {
+                "type": "string",
+                "description": "String to be replaced (must match exactly)"
+              },
+              "new_string": {
+                "type": "string",
+                "description": "String to replace with"
+              },
+              "replace_all": {
+                "default": false,
+                "description": "Whether to replace all occurrences",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file_path",
+              "old_string",
+              "new_string",
+              "replace_all"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delete",
+          "description": "Deletes a file or directory from the filesystem.\n\nUsage:\n- Permanently removes the file or directory at the given absolute path.\n- Deleting a directory removes it and everything inside it, recursively. Prefer\n  deleting a directory in one call over deleting each file individually.\n- This cannot be undone, so only delete paths you are sure are no longer needed.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file to delete. Must be absolute, not relative."
+              }
+            },
+            "required": [
+              "file_path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "glob",
+          "description": "Find files matching a glob pattern, returning absolute paths.\n\nSupports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match files (e.g., '**/*.py', '*.txt', '/subdir/**/*.md')"
+              },
+              "path": {
+                "description": "Base directory to search from. Defaults to the backend's default root.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "description": "Search for a LITERAL text pattern across files (NOT regex).\n\nThe pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern=\"foo|bar\")` searches for the literal text \"foo|bar\", and `.*` or `\\\\.` match those characters literally.\n\nReturns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Literal text pattern to search for (not regex)"
+              },
+              "path": {
+                "default": "/",
+                "description": "Base path to search from (default: /)",
+                "type": "string"
+              },
+              "glob": {
+                "default": null,
+                "description": "Optional glob pattern to filter files (e.g., '*.py')",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_count": {
+                "default": null,
+                "description": "Optional cap on the total number of matches returned across all files. Leave unset to use the configured default. When the cap is hit, results are truncated and a note says so; narrow the pattern or path to see the rest.",
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "output_mode": {
+                "default": "content",
+                "description": "Output format: 'files_with_matches' lists matching file paths, 'content' shows matching lines (default), 'count' shows match counts per file",
+                "type": "string",
+                "enum": [
+                  "files_with_matches",
+                  "content",
+                  "count"
+                ]
+              }
+            },
+            "required": [
+              "pattern",
+              "path",
+              "glob",
+              "max_count",
+              "output_mode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "task",
+          "description": "Launch an ephemeral subagent to handle a complex, multi-step task in an isolated context window.\n\nAvailable agent types and the tools they have access to:\n- general-purpose: General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent.\n\nSpecify subagent_type to select the agent. Usage notes:\n- Launch multiple agents concurrently when their tasks are independent, using a single message with multiple tool calls.\n- Each invocation is stateless: the agent sees only the prompt you give it and returns a single final report. Put full detail in the prompt and state exactly what it should return.\n- The agent's report is not shown to the user; relay a summary yourself.\n- Tell the agent whether to create content, analyze, or only research, since it cannot see the user's intent.\n- If an agent's description says to use it proactively, do so without waiting to be asked.\n- When only general-purpose is available, use it for any complex, context-heavy task; it has the same capabilities as the main agent.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "description": "The task to execute with the selected agent"
+              },
+              "subagent_type": {
+                "type": "string",
+                "description": "Name of the agent to use. Available: general-purpose"
+              }
+            },
+            "required": [
+              "description",
+              "subagent_type"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "max_tokens": 16384,
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are an AI agent powered by nexus-agent.\n\nYou are a helpful assistant powered by the nvidia/nemotron-3.5-lightning-30b-a3b model.\n\n"
+          },
+          {
+            "type": "text",
+            "text": "需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。"
+          },
+          {
+            "type": "text",
+            "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+          },
+          {
+            "type": "text",
+            "text": "\n目前的檔案政策：workspace-write。受檔案沙箱管的可用操作可以變更工作區之下的檔案。"
+          },
+          {
+            "type": "text",
+            "text": "\n這個 session 關掉了核准提示：需要核准的動作一律自動回絕——不要請求沙箱升級（不要設 `sandbox_permissions`）。"
+          },
+          {
+            "type": "text",
+            "text": "\n\nYour working directory is /."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "讀 /a.txt"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "我來讀"
+          }
+        ],
+        "tool_calls": [
+          {
+            "id": "call_read",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"file_path\":\"/a.txt\"}"
+            }
+          },
+          {
+            "id": "call_bad",
+            "type": "function",
+            "function": {
+              "name": "ls",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": [
+          {
+            "type": "text",
+            "text": "Error: File '/a.txt' not found"
+          }
+        ],
+        "name": "read_file",
+        "tool_call_id": "call_read"
+      },
+      {
+        "role": "tool",
+        "content": "Error: invalid arguments: \"arguments\" must be an object",
+        "name": "ls",
+        "tool_call_id": "call_bad"
+      }
+    ]
+  }
+]

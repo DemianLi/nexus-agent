@@ -568,7 +568,9 @@ mod http {
             .expect("再退回 initialize");
         assert_eq!(init["params"]["clientInfo"]["name"], "@nexus/plugin-mcp");
         assert_eq!(init["params"]["protocolVersion"], "2025-11-25");
-        generation.close().await;
+        tokio::time::timeout(Duration::from_secs(5), generation.close())
+            .await
+            .expect("收得掉");
     }
 
     #[tokio::test]
@@ -588,7 +590,9 @@ mod http {
             call_meta(generation.caller.modern, false).is_none(),
             "關了反問就不帶"
         );
-        generation.close().await;
+        tokio::time::timeout(Duration::from_secs(5), generation.close())
+            .await
+            .expect("收得掉");
     }
 
     #[tokio::test]
@@ -639,6 +643,34 @@ mod http {
             "{err}"
         );
         assert!(err.contains("list exploded"), "{err}");
+    }
+
+    /// 舊協定的假 server 會發 session：連線回錯的當下，那一代已經收掉、送過 session DELETE，不留給背景。
+    #[tokio::test]
+    async fn 握手之後失敗_回錯前先收掉那一代() {
+        for case in ["列工具失敗", "指引超過上限"] {
+            let mut fake = FakeMcp::with_tools(false, &["a"]);
+            let mut extra = json!({});
+            if case == "列工具失敗" {
+                fake.list_fails = true;
+            } else {
+                fake.instructions = Some("x".repeat(100));
+                extra = json!({ "maxInstructionBytes": 64 });
+            }
+            let (port, log) = start(fake);
+            let s = server(port, extra);
+            connect(&s, &client(), &s.secrets())
+                .await
+                .err()
+                .expect("要失敗");
+            let deletes = log
+                .lock()
+                .expect("鎖")
+                .iter()
+                .filter(|r| r.method == "DELETE")
+                .count();
+            assert_eq!(deletes, 1, "{case}");
+        }
     }
 
     #[tokio::test]
@@ -804,6 +836,314 @@ mod http {
         for secret in ["q-77", "hdr-41a"] {
             assert!(!err.contains(secret), "{err}");
         }
-        pool.close().await;
+        tokio::time::timeout(Duration::from_secs(5), pool.close())
+            .await
+            .expect("關池在期限內返回");
+    }
+
+    mod bridge {
+        use super::*;
+        use nexus_host::mcp::bridge::{Bridge, Command, Outcome};
+
+        /// 等喚醒 fd 可讀、取走結果，直到 `want` 挑中一則；其餘的（日誌等）丟掉。
+        fn wait_for(bridge: &Bridge, want: impl Fn(&Outcome) -> bool) -> Outcome {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                for outcome in bridge.take() {
+                    if want(&outcome) {
+                        return outcome;
+                    }
+                }
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(!left.is_zero(), "等不到結果");
+                let mut fd = libc::pollfd {
+                    fd: bridge.wake_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: 指向這個 frame 上一個活著的 pollfd，nfds 是 1。
+                unsafe { libc::poll(&mut fd, 1, left.as_millis() as libc::c_int) };
+            }
+        }
+
+        fn opened(bridge: &Bridge, open: u64) -> Result<nexus_host::mcp::bridge::Opened, String> {
+            match wait_for(
+                bridge,
+                |o| matches!(o, Outcome::Opened { open: n, .. } if *n == open),
+            ) {
+                Outcome::Opened { result, .. } => result,
+                _ => unreachable!(),
+            }
+        }
+
+        fn done(bridge: &Bridge, id: u64) -> Result<String, String> {
+            match wait_for(
+                bridge,
+                |o| matches!(o, Outcome::Done { id: n, .. } if *n == id),
+            ) {
+                Outcome::Done { result, .. } => result,
+                _ => unreachable!(),
+            }
+        }
+
+        fn call(bridge: &Bridge, id: u64, open: u64, tool: &str) {
+            bridge.send(Command::Request {
+                id,
+                open,
+                method: "tools/call".into(),
+                params: json!({ "name": tool, "arguments": { "x": 1 } }),
+            });
+        }
+
+        /// rmcp 把結果解成自己的型別再序列化：認得的形狀丟掉規格外的欄位；有不認得的內容區塊型別時整個結果認不得，原樣交回。
+        #[test]
+        fn 規格外的欄位_認得的形狀丟掉_認不得的原樣() {
+            let (port, _log) = start(FakeMcp::with_tools(false, &["odd"]));
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({}))),
+                elicitation: false,
+            });
+            opened(&bridge, 1).expect("連得上");
+            for (id, unknown) in [(10, false), (11, true)] {
+                bridge.send(Command::Request {
+                    id,
+                    open: 1,
+                    method: "tools/call".into(),
+                    params: json!({ "name": "odd", "arguments": { "unknown": unknown } }),
+                });
+                let result: serde_json::Value =
+                    serde_json::from_str(&done(&bridge, id).expect("呼叫成功")).expect("JSON 文字");
+                if unknown {
+                    assert_eq!(result, common::fake_mcp::odd_result(true));
+                } else {
+                    assert_eq!(result.get("x-top"), None);
+                    assert_eq!(result["content"][0].get("extra"), None);
+                }
+            }
+        }
+
+        #[test]
+        fn 綁定_呼叫_收橋() {
+            let (port, log) = start(FakeMcp::with_tools(true, &["echo", "slow"]));
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({}))),
+                elicitation: true,
+            });
+            let listed = opened(&bridge, 1).expect("連得上");
+            assert!(listed.warning.is_none());
+            let tools: serde_json::Value = serde_json::from_str(&listed.tools).expect("JSON 文字");
+            let names: Vec<&str> = tools
+                .as_array()
+                .expect("陣列")
+                .iter()
+                .map(|t| t["name"].as_str().expect("名字"))
+                .collect();
+            assert_eq!(names, ["echo", "slow"]);
+            // 工具定義的鍵照 server 送的順序，不排序。
+            assert!(
+                listed
+                    .tools
+                    .contains(r#""properties":{"zeta":{},"alpha":{}}"#),
+                "{}",
+                listed.tools
+            );
+
+            call(&bridge, 10, 1, "echo");
+            let result: serde_json::Value =
+                serde_json::from_str(&done(&bridge, 10).expect("呼叫成功")).expect("JSON 文字");
+            assert_eq!(result["content"][0]["text"], r#""echo":{"x":1}"#);
+            let sent = log
+                .lock()
+                .expect("鎖")
+                .iter()
+                .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default())
+                .find(|m| m["method"] == "tools/call")
+                .expect("送了 tools/call");
+            assert_eq!(
+                sent["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"],
+                json!({ "elicitation": { "form": {}, "url": {} } }),
+                "新協定每次呼叫帶反問能力"
+            );
+
+            call(&bridge, 11, 99, "echo");
+            assert!(done(&bridge, 11).is_err_and(|e| e.contains("99")));
+            bridge.send(Command::Request {
+                id: 12,
+                open: 1,
+                method: "prompts/list".into(),
+                params: json!({}),
+            });
+            assert!(done(&bridge, 12).is_err_and(|e| e.contains("prompts/list")));
+
+            bridge.send(Command::Shutdown);
+            wait_for(&bridge, |o| *o == Outcome::Closed);
+        }
+
+        #[test]
+        fn 取消當場回_逾時回錯() {
+            let (port, log) = start(FakeMcp::with_tools(false, &["slow"]));
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({ "toolCallTimeoutMs": 300 }))),
+                elicitation: false,
+            });
+            opened(&bridge, 1).expect("連得上");
+            let started = std::time::Instant::now();
+            call(&bridge, 1, 1, "slow");
+            let err = done(&bridge, 1).expect_err("逾時");
+            assert!(err.contains("timeout"), "{err}");
+            assert!(started.elapsed() < Duration::from_secs(2));
+
+            bridge.send(Command::Open {
+                open: 2,
+                server: Box::new(server(port, json!({}))),
+                elicitation: false,
+            });
+            opened(&bridge, 2).expect("連得上");
+            let started = std::time::Instant::now();
+            call(&bridge, 2, 2, "slow");
+            bridge.send(Command::Cancel { id: 2 });
+            assert_eq!(done(&bridge, 2), Err("cancelled".into()));
+            assert!(started.elapsed() < Duration::from_secs(2));
+            let notified = (0..100).any(|_| {
+                std::thread::sleep(Duration::from_millis(10));
+                log.lock().expect("鎖").iter().any(|r| {
+                    let m =
+                        serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default();
+                    m["method"] == "notifications/cancelled" && m["params"]["reason"] == "cancelled"
+                })
+            });
+            assert!(notified, "取消要通知 server");
+            drop(bridge);
+        }
+
+        #[test]
+        fn 連不上照樣綁定_呼叫回斷線() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("綁埠");
+            let port = listener.local_addr().expect("位址").port();
+            drop(listener);
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({ "reconnect": { "enabled": false } }))),
+                elicitation: true,
+            });
+            let listed = opened(&bridge, 1).expect("沒要求失敗就照樣綁定");
+            assert_eq!(listed.tools, "[]");
+            let warning = listed.warning.expect("帶原因");
+            assert!(warning.starts_with("Failed to connect"), "{warning}");
+            assert!(!warning.contains("s3cret-token"));
+            call(&bridge, 1, 1, "echo");
+            let err = done(&bridge, 1).expect_err("斷線");
+            assert!(
+                err.starts_with("mcp-client(fake): server is disconnected"),
+                "{err}"
+            );
+
+            bridge.send(Command::Open {
+                open: 2,
+                server: Box::new(server(port, json!({ "failOnStartupError": true }))),
+                elicitation: true,
+            });
+            let err = opened(&bridge, 2).expect_err("要求失敗就回錯");
+            assert!(err.starts_with("Failed to connect"), "{err}");
+        }
+
+        #[test]
+        fn sse_一則事件超過上限只讓這一則失敗_剛好不超過照收_同一代照用() {
+            let mut fake = FakeMcp::with_tools(true, &["big", "echo"]);
+            fake.sse = true;
+            let (port, log) = start(fake);
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(port, json!({}))),
+                elicitation: false,
+            });
+            opened(&bridge, 1).expect("連得上");
+            let big = |id: u64, bytes: usize| {
+                bridge.send(Command::Request {
+                    id,
+                    open: 1,
+                    method: "tools/call".into(),
+                    params: json!({ "name": "big", "arguments": { "bytes": bytes } }),
+                });
+                done(&bridge, id)
+            };
+            // BIG_PATTERN 6 個位元組，編進 JSON 字串是 8 個：事件大小約是 bytes 的 4/3，±6 KiB 落在 16 MiB 兩側 8 KiB。
+            let limit = 12 * 1024 * 1024;
+            let err = big(1, limit + 6 * 1024).expect_err("超過上限");
+            assert_eq!(
+                err,
+                "mcp-client(fake): response stream closed before its final response"
+            );
+            call(&bridge, 2, 1, "echo");
+            done(&bridge, 2).expect("超限之後同一代照用，沒有斷線空窗");
+            let bytes = limit - 6 * 1024;
+            let result: serde_json::Value =
+                serde_json::from_str(&big(3, bytes).expect("剛好不超過照收")).expect("JSON 文字");
+            assert_eq!(
+                result["content"][0]["text"],
+                common::fake_mcp::big_text(bytes).as_str()
+            );
+            let handshakes = log
+                .lock()
+                .expect("鎖")
+                .iter()
+                .filter(|r| {
+                    serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default()
+                        ["method"]
+                        == "server/discover"
+                })
+                .count();
+            assert_eq!(handshakes, 1, "超限不判掉線，不重連");
+        }
+
+        /// server 對 `tools/call` 的 `reflect` 回 403，主體照抄 query 與 `x-key` 標頭：橋回的錯要換掉這一列的秘密。
+        #[test]
+        fn 呼叫的錯誤不帶秘密() {
+            let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+            let inner = handler(FakeMcp::with_tools(true, &["reflect"]), log);
+            let tls = TlsServer::start(Arc::new(move |request: &Request| {
+                let message =
+                    serde_json::from_slice::<serde_json::Value>(&request.body).unwrap_or_default();
+                if message["params"]["name"] == "reflect" {
+                    let body = format!(
+                        "denied {} {}",
+                        request.path,
+                        request.header("x-key").unwrap_or("")
+                    );
+                    return Response::new(403, "text/plain", body);
+                }
+                inner(request)
+            }));
+            let s = Server::parse(&json!({
+                "serverName": "deny",
+                "connection": {
+                    "transport": "http",
+                    "url": format!("https://localhost:{}/mcp?token=q-77", tls.port),
+                    "headers": { "X-Key": "hdr-41a" },
+                },
+            }))
+            .expect("設定");
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(s),
+                elicitation: false,
+            });
+            opened(&bridge, 1).expect("連得上");
+            call(&bridge, 1, 1, "reflect");
+            let err = done(&bridge, 1).expect_err("403");
+            assert!(err.contains("[redacted]"), "反射回來的秘密要換掉：{err}");
+            for secret in ["q-77", "hdr-41a"] {
+                assert!(!err.contains(secret), "{err}");
+            }
+        }
     }
 }

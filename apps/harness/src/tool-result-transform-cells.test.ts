@@ -144,8 +144,11 @@ class CutOffModel extends ScriptedChatModel {
     return new CutOffModel(this.#turns, this.#state);
   }
 
-  override async _generate(messages: BaseMessage[]): Promise<ChatResult> {
-    const result = await super._generate(messages);
+  override async _generate(
+    messages: BaseMessage[],
+    options?: this['ParsedCallOptions'],
+  ): Promise<ChatResult> {
+    const result = await super._generate(messages, options);
     for (const generation of result.generations) {
       generation.message.response_metadata = {
         ...generation.message.response_metadata,
