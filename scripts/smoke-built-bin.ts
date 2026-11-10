@@ -6,7 +6,7 @@
  *
  * 1. `node apps/harness/lib/<入口>.js --version` 印出 manifest 的版本，**stderr 是空的**（照 dsh `apps/cli/tests/built-bin.e2e.ts:650`）；
  * 2. 經 `node_modules/.bin` 那種符號連結啟動，同樣印得出來（比路徑的入口檢查在這裡會靜靜以 0 結束、什麼都不印）；
- * 3. 每支帶 main guard 的入口（`bin` 與 `exports` 指的檔）在 `lib/` 裡要有，而且留著自己的 `if (import.meta.main)`
+ * 3. 每支帶 main guard 的入口（`bin` 與 `exports` 指的檔，加上啟動器 per-thread 時起的那兩支）在 `lib/` 裡要有，而且留著自己的 `if (import.meta.main)`
  *    （[#2657](https://github.com/DemianLi/nexus-agent/issues/2657)）：入口被另一個入口 import 時，打包把它的本體搬進共用 chunk，
  *    入口檔只剩一行 re-export，guard 在 chunk 裡永遠是 false，起起來什麼都不印、以 0 結束。per-thread 的前台與對話行程只有這裡在原始碼平台上量得到；
  * 4. **真的把 `nexus-serve --port 0` 起起來**（卡上驗收 1「起得來，印出網址」）：`--version` 在載入設定與插件之前就返回了，
@@ -153,10 +153,19 @@ async function smokeServe(): Promise<string[]> {
  *
  * @returns 失敗訊息；空陣列代表通過。
  */
-function entryGuardProblems(): string[] {
+async function entryGuardProblems(): Promise<string[]> {
   const problems: string[] = [];
   const guard = /\bif \(import\.meta\.main\)/u;
-  for (const target of [...Object.values(manifest.bin), ...Object.values(manifest.exports ?? {})]) {
+  // 前台與對話行程的名字取自啟動器，不取自 manifest：manifest 漏列時這裡要紅，不能跟著少查。
+  const { PER_THREAD_ENTRIES } = (await import('../apps/harness/src/process-launcher.ts')) as {
+    PER_THREAD_ENTRIES: Record<string, string>;
+  };
+  const targets = new Set([
+    ...Object.values(manifest.bin),
+    ...Object.values(manifest.exports ?? {}),
+    ...Object.values(PER_THREAD_ENTRIES).map((name) => `./lib/${name}.js`),
+  ]);
+  for (const target of targets) {
     const built = join(HARNESS, target);
     if (!existsSync(built)) {
       problems.push(`${target} 沒有編出來：入口沒進 manifest 推得出的入口清單`);
@@ -173,7 +182,7 @@ function entryGuardProblems(): string[] {
   return problems;
 }
 
-failures.push(...entryGuardProblems());
+failures.push(...(await entryGuardProblems()));
 failures.push(...(await smokeServe()));
 
 // 建置戳記只能出現在打包出來的產物（#1502 PM 判 A 的條件）：原始碼樹 build:lib 之後找不到戳記，

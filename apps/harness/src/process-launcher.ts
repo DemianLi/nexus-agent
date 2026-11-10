@@ -34,6 +34,15 @@ import type { ProcessModel, ProcessModelConfig } from './settings/process-model.
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
 export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 
+/**
+ * per-thread 時監督行程起的兩支入口，跟這個模組在同一個目錄（{@link sibling}）。產物裡要有 `lib/<名字>.js`：
+ * manifest 的 `exports` 列著它們，`build:lib` 才編得出來（`smoke-built-bin` 與 `verify-packed-install` 照這兩個名字查）。
+ */
+export const PER_THREAD_ENTRIES = {
+  front: 'front-process',
+  conversation: 'conversation-process',
+} as const;
+
 /** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 Cargo workspace 編出來）。 */
 export const HOST_BINARY_NAME = 'nexus-host';
 
@@ -438,8 +447,8 @@ export function launchProcessModel(context: LaunchContext): false {
     home,
     execPath: process.execPath,
     execArgv: process.execArgv,
-    frontEntry: sibling('front-process'),
-    conversationEntry: sibling('conversation-process'),
+    frontEntry: sibling(PER_THREAD_ENTRIES.front),
+    conversationEntry: sibling(PER_THREAD_ENTRIES.conversation),
     serveArgv: context.argv,
     ...(model.idleMs !== undefined && { idleMs: model.idleMs }),
   });
