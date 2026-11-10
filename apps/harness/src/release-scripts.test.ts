@@ -619,6 +619,9 @@ describe('沙箱 spawner 的 crate 清單', () => {
   it('只算 spawner 走得到的：repo 的 Cargo.lock 有宿主，名單裡沒有它', () => {
     expect(lockedCrates(lock).map((entry) => entry.name)).toContain('nexus-host');
     expect(names(lock).map((entry) => entry.split(' ')[0])).not.toContain('nexus-host');
+    // 宿主自己的相依（serde_json 與它帶進來的）在 lock 裡，也不進 spawner 的名單。
+    expect(lockedCrates(lock).map((entry) => entry.name)).toContain('serde_json');
+    expect(names(lock).map((entry) => entry.split(' ')[0])).not.toContain('serde_json');
     expect(new Set(names(lock).map((entry) => entry.split(' ')[0]))).toEqual(
       new Set(SPAWNER_CRATES.map((entry) => entry.name)),
     );
