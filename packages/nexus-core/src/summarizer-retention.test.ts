@@ -196,7 +196,7 @@ describe('留幾則（retainedMessageCount）：切點前只剩上一顆摘要�
 
 describe('留幾則（retainedMessageCount）：切得到東西時，則數封在 `messages` 門檻的兩成（#2659）', () => {
   const unit = estimateMessageTokens(sized('human', '0'));
-  /** 保留量剛好是 52 則：沒封頂的話，61 則的串摘完留 52 則，下一輪多 8 則又回到 60。 */
+  /** 保留量剛好是 52 則：沒封頂的話，61 則的串摘完留 52 則，下一輪多 8 則又過 60。 */
   const settings = { trigger: SHIPPED_TRIGGER, retainTokens: unit * 52 };
 
   it('照 token 選出 52 則：封成 12 則', () => {
@@ -205,25 +205,31 @@ describe('留幾則（retainedMessageCount）：切得到東西時，則數封�
     expect(retainedMessageCount(messages, settings, undefined)).toBe(12);
   });
 
-  it('尾巴蓋住整串：不封頂、照舊不摘', () => {
+  it('尾巴蓋住整串：不封頂、不摘', () => {
     const messages = conversation(61);
     const covering = { trigger: SHIPPED_TRIGGER, retainTokens: unit * 1_000 };
     expect(retainedMessageCount(messages, covering, undefined)).toBe(messages.length);
   });
 
   it('沒有 `messages` 門檻就不封', () => {
-    const onlyTokens = { trigger: [{ type: 'tokens', value: 100_000 }] as const, retainTokens: unit * 52 };
+    const onlyTokens = {
+      trigger: [{ type: 'tokens', value: 100_000 }] as const,
+      retainTokens: unit * 52,
+    };
     expect(retainedMessageCount(conversation(61), onlyTokens, undefined)).toBe(52);
   });
 
   it('封頂的切點落在工具結果上：退到發出那次呼叫，多留一則', () => {
-    const call = new AIMessage({ content: '呼叫。', tool_calls: [{ id: 'c1', name: 'echo', args: {} }] });
+    const call = new AIMessage({
+      content: '呼叫。',
+      tool_calls: [{ id: 'c1', name: 'echo', args: {} }],
+    });
     const result = new ToolMessage({ content: '結果。', tool_call_id: 'c1' });
     const messages = [...conversation(49), call, result, ...conversation(11)];
     expect(retainedMessageCount(messages, settings, undefined)).toBe(13);
   });
 
-  it('門檻小到兩成不滿兩則：至少留兩則（最近一來一回）', () => {
+  it('門檻小到兩成不滿兩則：封頂至少兩則', () => {
     const tiny = { trigger: [{ type: 'messages', value: 3 }] as const, retainTokens: unit * 52 };
     expect(retainedMessageCount(conversation(61), tiny, undefined)).toBe(2);
   });
