@@ -1,7 +1,8 @@
-//! 宿主用的 JSON：解析與值的型別都是 `serde_json`（不開 feature），這裡只加兩件事——巢狀層數的上限，和錯誤原因收成固定幾句。
+//! 宿主用的 JSON：解析、編碼與值的型別都是 `serde_json`（只開預設的 `std`；沒開 `preserve_order`，[`Map`] 是 BTreeMap）。
+//! 這裡加的是巢狀層數的上限、固定的錯誤原因，與手排鍵順序的 [`encode_fields`]。
 //!
-//! 跟 `serde_json` 本身一樣：物件的鍵照字母排序，重複的鍵取後者（跟 `JSON.parse` 一致），數字收小數與指數。
-//! 要固定鍵順序的地方（框的外層）用 [`encode_fields`] 手排。
+//! 跟 `serde_json` 本身一樣：物件的鍵照碼位（位元組）順序，重複的鍵取後者（跟 `JSON.parse` 一致）。
+//! 輸入要是合法的 UTF-8，`\u` 跳脫的代理對落單的不收。
 
 use std::fmt;
 
@@ -20,7 +21,8 @@ impl fmt::Display for JsonError {
     }
 }
 
-/// 解一整份文件：前後可以有空白，之後不能再有別的。
+/// 解一整份文件：前後可以有空白，之後不能再有別的。解外來輸入不 panic，錯誤只有三種：`截斷`（值還沒結束輸入就沒了）、
+/// `巢狀太深`（超過 [`MAX_DEPTH`]），其餘一律是 `不是合法的 JSON`（含不合法的 UTF-8、落單的代理對、超出 f64 的數字、到 128 層）。
 pub fn parse(input: &[u8]) -> Result<Value, JsonError> {
     let value = serde_json::from_slice(input).map_err(|err| match err.classify() {
         Category::Eof => JsonError("截斷"),
@@ -40,14 +42,15 @@ fn depth(value: &Value) -> usize {
     }
 }
 
-/// 編成緊湊的 JSON（沒有空白）；物件的鍵照字母順序。
+/// 編成緊湊的 JSON（沒有空白）；物件的鍵照碼位順序。字串的跳脫跟 `JSON.stringify` 一樣；浮點數的寫法不一定一樣
+/// （例如 `1.0` 編成 `1.0`，`JSON.stringify` 寫 `1`）。
 pub fn encode(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();
     write(&mut out, value);
     out
 }
 
-/// 編一個鍵照 `fields` 順序排的物件，值照 [`encode`]。
+/// 編一個鍵照 `fields` 順序排的物件，值照 [`encode`]。不查重複的鍵。
 pub fn encode_fields(fields: &[(&str, &Value)]) -> Vec<u8> {
     let mut out = vec![b'{'];
     for (i, (key, value)) in fields.iter().enumerate() {
@@ -118,7 +121,7 @@ mod tests {
         assert_eq!(nest(MAX_DEPTH + 1), too_deep);
         let objects = "{\"a\":".repeat(MAX_DEPTH) + "{}" + &"}".repeat(MAX_DEPTH);
         assert_eq!(parse(objects.as_bytes()), too_deep);
-        // 超過 serde_json 自己的 128 層，它先停下來，原因是「不是合法的 JSON」；很深的輸入不會把堆疊用完。
+        // 到 serde_json 自己的 128 層，它先停下來，原因是「不是合法的 JSON」；很深的輸入不會把堆疊用完。
         let invalid = Err(JsonError("不是合法的 JSON"));
         assert_eq!(nest(128), invalid);
         assert_eq!(parse("[".repeat(1 << 20).as_bytes()), invalid);

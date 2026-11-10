@@ -243,7 +243,7 @@ pub fn decode_client_message(payload: &[u8]) -> Result<ClientMessage, DecodeErro
     }
 }
 
-/// 編成緊湊 JSON，鍵照 `type` 在前的固定順序；不會失敗。
+/// 編成緊湊 JSON：框的外層鍵照 `type` 在前的固定順序，`payload` 裡的物件照 [`json::encode`]；不會失敗。
 pub fn encode_client_message(message: &ClientMessage) -> Vec<u8> {
     let fields = match message {
         ClientMessage::Hello { version, token } => vec![

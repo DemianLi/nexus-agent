@@ -103,6 +103,7 @@ impl<'a> Fields<'a> {
         }
     }
 
+    /// `1.0` 這類小數寫法，與 `i64` 放不下的整數，都不算整數。
     pub fn opt_int(&mut self, key: &str) -> Result<Option<i64>, ConfigError> {
         match self.value(key) {
             None => Ok(None),
