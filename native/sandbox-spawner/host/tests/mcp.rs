@@ -63,7 +63,10 @@ fn 設定_預設與拒絕() {
         config[field] = json!(safe);
         Server::parse(&config).unwrap_or_else(|e| panic!("{field} 收 2^53−1：{e}"));
     }
-    reject(json!({ "livenessTimeoutMs": 2_147_483_648_u64 }), "livenessTimeoutMs");
+    reject(
+        json!({ "livenessTimeoutMs": 2_147_483_648_u64 }),
+        "livenessTimeoutMs",
+    );
     let mut config = base.clone();
     config["livenessTimeoutMs"] = json!(2_147_483_647);
     Server::parse(&config).expect("livenessTimeoutMs 收 2^31−1");
