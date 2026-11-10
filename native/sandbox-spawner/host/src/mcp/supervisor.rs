@@ -3,6 +3,8 @@
 //! [`Hooks::connect`] 回錯之前要自己把開出來的東西真的關掉；`stop` 時被丟下的嘗試靠 drop 收。
 //!
 //! - 退避：第一次 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
+//!   訊息裡的毫秒數跟 TS 一樣用浮點數算、照最短的十進位寫；只有小於 1e-6 或不小於 1e21 時不逐字：JS 改寫成指數（`1e-7`、`1e+21`），這裡照寫全部的位數。
+//!   等待照實際時間睡；TS 的 `setTimeout` 遇到超過 2^31−1 ms 的延遲會改成 1 ms，這裡不跟。
 //! - 連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。
 //! - 收連上過的一代最多等 [`GENERATION_CLOSE_TIMEOUT`]；等不到就停止重連，寧可停下也不讓兩代同時活著。
 //! - 第一次連線的結果經 `first` 交給建立者；`retry_first` 是 `false`（對應設定的 `failOnStartupError: true`）時第一次失敗就結束，不重試。
@@ -19,24 +21,32 @@ use crate::json::Value;
 /// 收連上過的一代最多等多久，跟 `supervisor.ts` 的 `GENERATION_CLOSE_TIMEOUT_MS` 同值。
 pub const GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 重連政策，欄位與預設照 `reconnectSchema`。
+/// 重連政策，欄位、預設與收哪些值照 `reconnectSchema`：毫秒是正的有限數，`maxAttempts` 是 1 到 2^53−1 的整數。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Policy {
     pub enabled: bool,
-    pub initial_delay: Duration,
-    pub max_delay: Duration,
-    pub max_attempts: u32,
+    pub initial_delay_ms: f64,
+    pub max_delay_ms: f64,
+    pub max_attempts: u64,
 }
 
 impl Default for Policy {
     fn default() -> Policy {
         Policy {
             enabled: true,
-            initial_delay: Duration::from_millis(500),
-            max_delay: Duration::from_millis(30_000),
+            initial_delay_ms: 500.0,
+            max_delay_ms: 30_000.0,
             max_attempts: 10,
         }
     }
+}
+
+/// JS 的 `Number.MAX_SAFE_INTEGER`，zod 的 `int()` 收的上限。
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// 毫秒數換成 [`Duration`]；換不成的（太大、負數、NaN）一律夾到 [`Duration::MAX`]。
+fn millis(ms: f64) -> Duration {
+    Duration::try_from_secs_f64(ms / 1000.0).unwrap_or(Duration::MAX)
 }
 
 impl Policy {
@@ -49,10 +59,9 @@ impl Policy {
         let Value::Object(fields) = value else {
             return Err("reconnect 要是物件".into());
         };
-        let millis = |name: &str, v: &Value| -> Result<Duration, String> {
+        let positive = |name: &str, v: &Value| -> Result<f64, String> {
             v.as_f64()
                 .filter(|ms| ms.is_finite() && *ms > 0.0)
-                .and_then(|ms| Duration::try_from_secs_f64(ms / 1000.0).ok())
                 .ok_or_else(|| format!("reconnect.{name} 要是正數（毫秒）"))
         };
         for (key, v) in fields {
@@ -60,19 +69,19 @@ impl Policy {
                 "enabled" => {
                     policy.enabled = v.as_bool().ok_or("reconnect.enabled 要是布林")?;
                 }
-                "initialDelayMs" => policy.initial_delay = millis(key, v)?,
-                "maxDelayMs" => policy.max_delay = millis(key, v)?,
+                "initialDelayMs" => policy.initial_delay_ms = positive(key, v)?,
+                "maxDelayMs" => policy.max_delay_ms = positive(key, v)?,
                 "maxAttempts" => {
                     policy.max_attempts = v
-                        .as_u64()
-                        .filter(|n| (1..=u64::from(u32::MAX)).contains(n))
+                        .as_f64()
+                        .filter(|n| n.fract() == 0.0 && (1.0..=MAX_SAFE_INTEGER).contains(n))
                         .ok_or("reconnect.maxAttempts 要是正整數")?
-                        as u32;
+                        as u64;
                 }
                 _ => return Err(format!("reconnect 不認得的欄位 {key}")),
             }
         }
-        if policy.initial_delay > policy.max_delay {
+        if policy.initial_delay_ms > policy.max_delay_ms {
             return Err("initialDelayMs 不能大於 maxDelayMs".into());
         }
         Ok(policy)
@@ -82,7 +91,7 @@ impl Policy {
 /// 一次失敗之後該怎麼辦。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Next {
-    /// 等 `delay` 再試；`message` 是要記的那一句。
+    /// 等 `delay` 再試；`message` 是要記的那一句。算出來放不進 `Duration` 時 `delay` 是 `Duration::MAX`。
     Retry { delay: Duration, message: String },
     /// 不再試了（放棄或沒開重連）。
     Stop { message: String },
@@ -93,7 +102,7 @@ pub enum Next {
 pub struct Backoff {
     policy: Policy,
     label: String,
-    failed: u32,
+    failed: u64,
     connected_at: Option<Instant>,
 }
 
@@ -131,7 +140,7 @@ impl Backoff {
         }
         if self
             .connected_at
-            .is_some_and(|at| now.saturating_duration_since(at) >= self.policy.max_delay)
+            .is_some_and(|at| now.saturating_duration_since(at) >= millis(self.policy.max_delay_ms))
         {
             self.failed = 0;
         }
@@ -146,8 +155,10 @@ impl Backoff {
             };
         }
         let factor = 2f64.powi(i32::try_from(self.failed - 1).unwrap_or(i32::MAX));
-        let delay = Duration::try_from_secs_f64(self.policy.initial_delay.as_secs_f64() * factor)
-            .map_or(self.policy.max_delay, |d| d.min(self.policy.max_delay));
+        let delay_ms = self
+            .policy
+            .max_delay_ms
+            .min(self.policy.initial_delay_ms * factor);
         let action = if lost_established {
             "connection lost; reconnecting"
         } else {
@@ -155,12 +166,10 @@ impl Backoff {
         };
         Next::Retry {
             message: format!(
-                "{label}: {action} in {}ms (attempt {}/{})",
-                delay.as_millis(),
-                self.failed,
-                self.policy.max_attempts
+                "{label}: {action} in {delay_ms}ms (attempt {}/{})",
+                self.failed, self.policy.max_attempts
             ),
-            delay,
+            delay: millis(delay_ms),
         }
     }
 }

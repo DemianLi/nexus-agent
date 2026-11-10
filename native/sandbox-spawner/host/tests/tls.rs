@@ -152,6 +152,46 @@ fn 代理拒絕時錯誤不帶帳密() {
     ));
     let err = get("ca-a.pem", &policy, "https://mcp.nexus.test/").expect_err("該失敗");
     assert_eq!(proxy.seen().len(), 1);
+    assert_no_credentials(&err);
+}
+
+#[test]
+fn 代理連不上時錯誤不帶帳密() {
+    // 綁一個埠再放掉：之後連它會被拒絕。
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("埠")
+        .port();
+    let policy = policy(&format!(
+        r#"{{"httpsProxy":"http://nexus-user:FAKE-proxy-pass@127.0.0.1:{port}","noProxy":""}}"#
+    ));
+    let err = get("ca-a.pem", &policy, "https://mcp.nexus.test/").expect_err("該失敗");
+    // 確認是連代理失敗，不是改走直連、解析不到目標。
+    assert!(
+        err.contains("tunnel error") && err.contains("Connection refused"),
+        "{err}"
+    );
+    assert_no_credentials(&err);
+}
+
+#[test]
+fn https_代理的_tls_驗不過時錯誤不帶帳密() {
+    // 拿 HTTPS 伺服器當代理：它的憑證是 CA a 簽的，用 CA b 當根，跟代理的 TLS 握手就驗不過。
+    let server = ok_server();
+    let policy = policy(&format!(
+        r#"{{"httpsProxy":"https://nexus-user:FAKE-proxy-pass@localhost:{}","noProxy":""}}"#,
+        server.port
+    ));
+    let err = get("ca-b.pem", &policy, "https://mcp.nexus.test/").expect_err("代理不該驗過");
+    assert!(
+        err.contains("tunnel error") && err.contains("UnknownIssuer"),
+        "{err}"
+    );
+    assert_no_credentials(&err);
+}
+
+/// 錯誤的完整說明裡沒有代理的帳號、密碼，也沒有它們的 Basic 編碼。
+fn assert_no_credentials(err: &str) {
     for secret in [
         "FAKE-proxy-pass",
         "nexus-user",

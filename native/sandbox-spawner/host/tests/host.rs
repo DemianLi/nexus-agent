@@ -1127,8 +1127,11 @@ mod calls {
         // 服務不寫時限：宿主沒被喚醒 fd 叫醒的話，這一次會一直掛著，讀到逾時。
         call(&mut stream, 1, "later", r#"{"ms":200}"#);
         call(&mut stream, 2, "later", r#"{"ms":50}"#);
-        assert_eq!(read_message(&mut stream), ok(2, r#""later""#));
-        assert_eq!(read_message(&mut stream), ok(1, r#""later""#));
+        // 宿主卡住超過兩者的差時，兩個會在同一輪做完，先後不定：只比收齊了沒有。
+        let got = [read_message(&mut stream), read_message(&mut stream)];
+        for id in [1, 2] {
+            assert!(got.contains(&ok(id, r#""later""#)), "{got:?}");
+        }
         assert!(started.elapsed() >= Duration::from_millis(200));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
