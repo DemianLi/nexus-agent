@@ -32,7 +32,10 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type Document,
+  isCollection,
   isMap,
+  isNode,
+  isPair,
   LineCounter,
   Pair,
   Parser,
@@ -103,9 +106,21 @@ function rejectionChannel(): Pick<CredentialService, 'reportRejected' | 'onRejec
  */
 export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
+/** 文字裡某個位置的行與欄（都從 1 起算）。 */
+type Locate = (offset: number) => { line: number; col: number };
+
+/** 欄照字元（code point）數，跟 Rust 宿主一致；`LineCounter` 自己的 `linePos` 照 UTF-16 code unit 數。 */
+function locator(text: string, lines: LineCounter): Locate {
+  return (offset) => {
+    const { line } = lines.linePos(offset);
+    const start = lines.lineStarts[line - 1] ?? 0;
+    return { line, col: [...text.slice(start, offset)].length + 1 };
+  };
+}
+
 /** 不引原文的 YAML 錯誤描述：只有錯誤碼與位置。 */
-function describeYamlError(error: YAMLError, lines: LineCounter): string {
-  const at = lines.linePos(error.pos[0]);
+function describeYamlError(error: YAMLError, locate: Locate): string {
+  const at = locate(error.pos[0]);
   return `${error.code}（第 ${String(at.line)} 行第 ${String(at.col)} 欄）`;
 }
 
@@ -150,6 +165,57 @@ function forbiddenToken(
   return found;
 }
 
+/** mapping 與序列加起來最多幾層，根的那一個是第 1 層（`docs/credentials-file.md`〈形狀〉）。 */
+export const CREDENTIALS_MAX_DEPTH = 64;
+
+/**
+ * 解析之前就拒絕的字元：NUL、tab、不接 LF 的 CR、不在開頭的 U+FEFF。這幾種 `yaml` 與 Rust 宿主的 `saphyr-parser` 各自解讀
+ * （照收、當換行或當錯），同一份檔兩條路會讀出不同的結果；要放 tab 的值用雙引號寫成 `\t`。
+ */
+function forbiddenCharacter(text: string): number | undefined {
+  const at = /\0|\t|\r(?!\n)|(?<!^)\uFEFF/u.exec(text);
+  return at?.index;
+}
+
+/**
+ * 最深的巢狀層數、第一個集合鍵（`? [a]`、`{a: 1}: …`）的位置，與每個集合鍵節點的 `range` 起點。用自己的堆疊走，不遞迴：
+ * 檔案再深也不會撐爆呼叫堆疊。集合鍵一律拒絕：`yaml` 把它字串化成名字的寫法，別的實作照不出來。
+ */
+function shapeOf(document: Document): {
+  readonly depth: number;
+  readonly collectionKey?: number;
+  readonly collectionKeyNodes: ReadonlySet<number>;
+} {
+  let depth = 0;
+  let collectionKey: number | undefined;
+  const collectionKeyNodes = new Set<number>();
+  const stack: (readonly [unknown, number])[] = [[document.contents, 0]];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const [node, level] = next;
+    if (!isCollection(node)) continue;
+    depth = Math.max(depth, level + 1);
+    for (const item of node.items) {
+      if (isPair(item)) {
+        if (isCollection(item.key)) {
+          // block mapping 的 `range` 從第一個鍵之後算起，指到開頭要用第一個鍵的位置。
+          const first =
+            isMap(item.key) && item.key.flow !== true ? item.key.items[0]?.key : undefined;
+          const offset = (isNode(first) ? first.range?.[0] : undefined) ?? item.key.range?.[0] ?? 0;
+          if (collectionKey === undefined || offset < collectionKey) collectionKey = offset;
+          if (item.key.range !== undefined && item.key.range !== null)
+            collectionKeyNodes.add(item.key.range[0]);
+        }
+        stack.push([item.key, level + 1], [item.value, level + 1]);
+      } else {
+        stack.push([item, level + 1]);
+      }
+    }
+  }
+  return collectionKey === undefined
+    ? { depth, collectionKeyNodes }
+    : { depth, collectionKey, collectionKeyNodes };
+}
+
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 }
@@ -184,7 +250,7 @@ function at(entry: MappingEntry): string {
  */
 function mappingEntries(
   document: Document,
-  lines: LineCounter,
+  locate: Locate,
   node: unknown,
 ): MappingEntry[] | undefined {
   if (!isMap(node)) return undefined;
@@ -193,7 +259,7 @@ function mappingEntries(
     single.items.push(new Pair(pair.key, null));
     const [name = ''] = Object.keys(single.toJS(document) as object);
     const offset = (pair.key as { range?: [number, number, number] } | null)?.range?.[0] ?? 0;
-    const { line, col } = lines.linePos(offset);
+    const { line, col } = locate(offset);
     return { name, line, col, value: pair.value };
   });
 }
@@ -215,20 +281,42 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   const empty: ParsedCredentialsDocument = { refs: new Map(), ignoredKeys: [], ignoredLines: [] };
   if (text.trim() === '') return empty;
   const lines = new LineCounter();
+  const locate = locator(text, lines);
+  const yamlAt = (code: string, offset: number): never => {
+    const { line, col } = locate(offset);
+    return fail(`YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`);
+  };
+  const tooDeep = (): never =>
+    fail(`YAML 錯誤 NESTING_TOO_DEEP（mapping 與序列最多 ${String(CREDENTIALS_MAX_DEPTH)} 層）`);
+  const character = forbiddenCharacter(text);
+  if (character !== undefined) {
+    // 還沒解析，LineCounter 是空的：自己數行。
+    const start = text.lastIndexOf('\n', character - 1) + 1;
+    const line = text.slice(0, start).split('\n').length;
+    const col = [...text.slice(start, character)].length + 1;
+    fail(`YAML 錯誤 CHARACTER_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`);
+  }
   const document = parseDocument(text, {
     uniqueKeys: true,
     prettyErrors: false,
     lineCounter: lines,
     // 集合鍵在 `toJS()` 裡被字串化時，`yaml` 預設經 `process.emitWarning` 把整個鍵印出來；鍵名可能是誤貼的 key。
+    // 集合鍵在呼叫 `toJS()` 之前已經拒絕，這裡仍關掉，當第二道。
     logLevel: 'error',
   });
-  const [problem] = document.errors;
-  if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, lines)}`);
+  const shape = shapeOf(document);
+  // 區塊 mapping 裡、不是第一個鍵的 flow 集合鍵，`yaml` 2.9.1 誤報 IMPOSSIBLE（「Map comment with trailing content」），
+  // 文件照樣組得出來；這種錯不算，讓它照集合鍵拒絕。
+  const [problem] = document.errors.filter(
+    (error) => !(error.code === 'IMPOSSIBLE' && shape.collectionKeyNodes.has(error.pos[0])),
+  );
+  // `yaml` 組集合時用光呼叫堆疊，記成 RESOURCE_EXHAUSTION；位置跟著堆疊大小變，講成太深才兩邊一致。
+  if (problem?.code === 'RESOURCE_EXHAUSTION') tooDeep();
+  if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, locate)}`);
+  if (shape.depth > CREDENTIALS_MAX_DEPTH) tooDeep();
   const forbidden = forbiddenToken(text);
-  if (forbidden !== undefined) {
-    const { line, col } = lines.linePos(forbidden.offset);
-    fail(`YAML 錯誤 ${forbidden.code}（第 ${String(line)} 行第 ${String(col)} 欄）`);
-  }
+  if (forbidden !== undefined) yamlAt(forbidden.code, forbidden.offset);
+  if (shape.collectionKey !== undefined) yamlAt('COLLECTION_KEY_NOT_ALLOWED', shape.collectionKey);
   // 只有註解的文件 `toJS()` 是 `null`：當空的倉庫。
   const root: unknown = document.toJS() ?? {};
   if (typeof root !== 'object' || Array.isArray(root)) {
@@ -236,7 +324,7 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   }
   const record = root as Record<string, unknown>;
   if (Object.keys(record).length === 0) return empty;
-  const top = uniqueEntries(mappingEntries(document, lines, document.contents) ?? [], fail);
+  const top = uniqueEntries(mappingEntries(document, locate, document.contents) ?? [], fail);
   if (record.version !== CREDENTIALS_DOCUMENT_VERSION) {
     return fail(`version 要是 ${String(CREDENTIALS_DOCUMENT_VERSION)}`);
   }
@@ -252,7 +340,7 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   const values = refs as Record<string, unknown>;
   const refsNode = top.find((entry) => entry.name === 'refs')?.value;
   const out = new Map<string, string>();
-  for (const entry of uniqueEntries(mappingEntries(document, lines, refsNode) ?? [], fail)) {
+  for (const entry of uniqueEntries(mappingEntries(document, locate, refsNode) ?? [], fail)) {
     const { name } = entry;
     if (!CREDENTIAL_NAME_PATTERN.test(name)) {
       return fail(

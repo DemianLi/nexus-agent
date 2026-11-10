@@ -28,6 +28,7 @@ interface RejectVector {
   readonly name: string;
   readonly text: string;
   readonly reason: Reason;
+  readonly code?: string;
   readonly secret?: string;
 }
 
@@ -114,6 +115,7 @@ describe('不合法樣本', () => {
   it.each(VECTORS.reject.map((v) => [v.name, v] as const))('%s', (_name, vector) => {
     const message = rejection(vector.text);
     expect(reasonOf(message)).toEqual([vector.reason]);
+    if (vector.code !== undefined) expect(message).toContain(`${PREFIX}YAML 錯誤 ${vector.code}`);
     if (vector.secret !== undefined) expect(message).not.toContain(vector.secret);
   });
 });

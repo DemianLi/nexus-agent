@@ -668,6 +668,15 @@ class SandboxSpawner(unittest.TestCase):
         bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
 
+    def test_musl_gcc_is_installed_before_anything_compiles(self) -> None:
+        """宿主的 TLS 用 ring（#2570），ring 有 C 要編：musl target 的 C 編譯器指到 musl-gcc，裝在第一個 cargo 步驟之前。"""
+        install = self.steps['安裝 musl-gcc']['run']
+        self.assertIn('apt-get install -y --no-install-recommends musl-tools', install)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=musl-gcc', install)
+        names = list(self.steps)
+        self.assertLess(names.index('安裝 musl-gcc'), names.index('clippy'))
+        self.assertLess(names.index('安裝 musl-gcc'), names.index('編譯'))
+
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
         native = ROOT / 'native' / 'sandbox-spawner'

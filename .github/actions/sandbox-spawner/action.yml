@@ -32,6 +32,12 @@ runs:
         rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal \
           --component clippy --component rustfmt --target "$(uname -m)-unknown-linux-musl"
         echo "SPAWNER_TARGET=$(uname -m)-unknown-linux-musl" >> "$GITHUB_ENV"
+    # 宿主的 TLS 用 ring（#2570），ring 有 C 與組語要編；musl target 的 C 編譯器用 musl-gcc。
+    - name: 安裝 musl-gcc
+      shell: bash
+      run: |
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+        echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
       with:
