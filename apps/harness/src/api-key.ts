@@ -62,7 +62,7 @@ export class InvalidCredentialError extends Error {
 }
 
 /** 來源層的說法，給訊息用：受管檔與 `.env` 寫出路徑，啟動環境就叫啟動環境。 */
-function describeOrigin(source: CredentialOrigin, path: string | undefined): string {
+export function describeOrigin(source: CredentialOrigin, path: string | undefined): string {
   switch (source) {
     case 'file':
       return `受管憑證檔${path === undefined ? '' : ` ${path}`}`;
