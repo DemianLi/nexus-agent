@@ -193,24 +193,6 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     run: 'fails',
   },
   {
-    file: 'src/conversation-restore-share.test.ts',
-    test: '層數：讀盤記下的夠淺就不再量，其餘照舊量 > 舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-restore-share.test.ts',
-    test: '層數：讀盤記下的夠淺就不再量，其餘照舊量 > 舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
-    file: 'src/conversation-restore-share.test.ts',
-    test: '巢狀的值與讀盤的日誌共用 > 經真的 updateState 寫進去：巢狀的值就是日誌那一份（同一個物件），沒有 id 的那則補上了 id，整則凍過',
-    kind: 'checkpoint',
-    run: 'fails',
-  },
-  {
     file: 'src/interrupt.test.ts',
     test: '一批裡混著核准與拒絕 > **一個被拒不再拖累另一個**——被核准的那個真的跑了',
     kind: 'noHumanInput',

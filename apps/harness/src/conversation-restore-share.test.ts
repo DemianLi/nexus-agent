@@ -96,12 +96,13 @@ afterEach(async () => {
   for (const dispose of disposers.splice(0).reverse()) await dispose();
 });
 
-/** 真的 agent，存檔點是產品那顆。 */
+/** 真的 agent，存檔點是產品那顆。這一支量的是寫進存檔點的層數，只有 `langgraph` 有存檔點。 */
 async function realAgent() {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns: [] }),
     checkpointer: new PrunedMemorySaver(),
     plugins: [],
+    agentLoop: 'langgraph',
   });
   disposers.push(() => built.dispose());
   return built.agent;

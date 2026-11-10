@@ -9,7 +9,6 @@ import {
   AIMessage,
   BaseMessage,
   HumanMessage,
-  RemoveMessage,
   ToolMessage,
 } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
@@ -1108,8 +1107,8 @@ describe('native 的輸入與預設值，對照 LangGraph', () => {
   });
 });
 
-describe('native 的多輪、updateState 與上限，對照 LangGraph', () => {
-  it('同一條 thread：第一輪之後 updateState 補一則、RemoveMessage 拿掉一則，第二輪接著跑', async () => {
+describe('native 的多輪、接回日誌上的幾則與上限，對照 LangGraph', () => {
+  it('同一條 thread：第一輪之後補一則（native 經 appendLoggedMessages、LangGraph 經 updateState），同 id 再補是取代，第二輪接著跑', async () => {
     const run = async (loop: AgentLoopKind) => {
       const built = await createNexusAgent({
         model: new ScriptedChatModel({
@@ -1124,18 +1123,18 @@ describe('native 的多輪、updateState 與上限，對照 LangGraph', () => {
         agentLoop: loop,
       });
       const config = { configurable: { thread_id: THREAD } };
+      const agent = built.agent as unknown as {
+        appendLoggedMessages?(c: typeof config, messages: readonly BaseMessage[]): void;
+        updateState?(c: typeof config, values: Record<string, unknown>): Promise<unknown>;
+      };
+      const append = async (message: BaseMessage): Promise<void> => {
+        if (agent.appendLoggedMessages !== undefined) agent.appendLoggedMessages(config, [message]);
+        else await agent.updateState!(config, { messages: [message] });
+      };
       try {
         await built.agent.invoke(toAgentInvocation('第一句。'), config);
-        await built.agent.updateState(config, {
-          messages: [new AIMessage({ content: '補的', id: 'patched' })],
-        });
-        await built.agent.updateState(config, {
-          messages: [new AIMessage({ content: '補的又改', id: 'patched' })],
-        });
-        await built.agent.updateState(config, {
-          messages: [new HumanMessage({ content: '要拿掉的', id: 'doomed' })],
-        });
-        await built.agent.updateState(config, { messages: [new RemoveMessage({ id: 'doomed' })] });
+        await append(new AIMessage({ content: '補的', id: 'patched' }));
+        await append(new AIMessage({ content: '補的又改', id: 'patched' }));
         const output = await built.agent.invoke(toAgentInvocation('第二句。'), config);
         const state = (await built.agent.getState(config)) as { values: Record<string, unknown> };
         return { output: shapeOf(output.messages), state: shapeOf(state.values['messages']) };
@@ -1146,7 +1145,7 @@ describe('native 的多輪、updateState 與上限，對照 LangGraph', () => {
     const graph = await run('langgraph');
     const native = await run('native');
     expect(graph.state).toContain('ai:補的又改');
-    expect(graph.state).not.toContain('human:要拿掉的');
+    expect(graph.state).not.toContain('ai:補的');
     expect(native).toEqual(graph);
   });
 

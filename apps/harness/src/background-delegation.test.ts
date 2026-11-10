@@ -221,14 +221,25 @@ describe('不給選項：完全不變', () => {
     }
   });
 
-  it('沒有 checkpointer 就不給背景選項——沒有存檔點就沒有第二輪', async () => {
+  it('langgraph：沒有 checkpointer 就不給背景選項——沒有存檔點就沒有第二輪', async () => {
     await expect(
       createNexusAgent({
         model: new ScriptedChatModel({ turns: [] }),
         plugins: [],
         backgroundSubagents: {},
+        agentLoop: 'langgraph',
       }),
     ).rejects.toThrow(/checkpointer/);
+  });
+
+  it('native：沒有 checkpointer 也給得了背景選項，第二輪看得到第一輪靠同一個 native agent 實例', async () => {
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      plugins: [],
+      backgroundSubagents: {},
+      agentLoop: 'native',
+    });
+    await built.dispose();
   });
 });
 
