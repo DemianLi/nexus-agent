@@ -1209,7 +1209,12 @@
       },
       {
         "role": "assistant",
-        "content": "我來讀",
+        "content": [
+          {
+            "type": "text",
+            "text": "我來讀"
+          }
+        ],
         "tool_calls": [
           {
             "id": "call_read",

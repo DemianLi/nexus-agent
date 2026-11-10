@@ -1141,6 +1141,122 @@ describe('CLI 單機的會話日誌（夾具）', () => {
   );
 });
 
+/**
+ * 改打串流之前寫下的 native 日誌（`session.native.before-stream.jsonl`，`assistant/message` 是字串 content、推理在
+ * `additional_kwargs`、`response_metadata` 帶 `tokenUsage` 與原始 `usage`）由現在的程式續接：送出的對話跟續接一份新形狀的
+ * 日誌逐位元組相同（#2361）。
+ */
+describe('CLI 單機 native 續接改動前形狀的日誌', () => {
+  const BEFORE = fileURLToPath(
+    new URL('./fixtures/cli-turn-log/session.native.before-stream.jsonl', import.meta.url),
+  );
+
+  function reply(body: CliEndpointBody): CliEndpointReply {
+    if (body.tools === undefined) return { content: '讀檔' };
+    const humans = body.messages.filter((message) => message.role === 'user').length;
+    const toolResults = body.messages.filter((message) => message.role === 'tool').length;
+    if (humans > 1) return { content: '還記得。' };
+    if (toolResults === 0)
+      return {
+        reasoning: '要讀檔',
+        content: '我來讀',
+        calls: [
+          { id: 'call_read', name: 'read_file', arguments: '{"file_path":"/a.txt"}' },
+          { id: 'call_bad', name: 'ls', arguments: '{"path":' },
+        ],
+      };
+    return { reasoning: '讀完', content: '讀完了。' };
+  }
+
+  async function resumedRequest(swapInOldShape: boolean): Promise<unknown> {
+    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-cli-native-resume');
+    const upstream = await cliEndpoint(reply);
+    const home = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-home-'));
+    const logs = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-logs-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-cwd-'));
+    const patch = join(home, 'patch.yml');
+    await writeFile(
+      patch,
+      liveModelPatch(upstream.baseURL, '- id: thread-title-llm\n  disabled: true\n'),
+      { mode: 0o600 },
+    );
+    const cli = (argv: readonly string[], input: PassThrough) =>
+      runCli({
+        argv: ['--live', '--agent-loop', 'native', '--patch', patch, ...argv],
+        cwd,
+        env: { [HARNESS_HOME_ENV]: home },
+        input,
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+      });
+    try {
+      await cli(['--session-log', logs, '讀 /a.txt'], new PassThrough());
+      const [run] = await readdir(logs);
+      const runDir = join(logs, run!);
+      const [file] = (await readdir(runDir, { recursive: true })).filter((name) =>
+        name.endsWith('.jsonl'),
+      );
+      const path = join(runDir, file!);
+      if (swapInOldShape) {
+        const old = (await readFile(BEFORE, 'utf8'))
+          .split('\n')
+          .filter((line) => line.includes('"type":"assistant/message"'));
+        const lines = (await readFile(path, 'utf8')).split('\n');
+        const swapped = lines.map((line) =>
+          line.includes('"type":"assistant/message"') ? old.shift()! : line,
+        );
+        expect(old).toEqual([]);
+        await writeFile(path, swapped.join('\n'));
+      }
+      upstream.bodies.length = 0;
+      const input = new PassThrough();
+      input.end('還記得剛剛讀了什麼嗎\n/exit\n');
+      await cli(['--resume', runDir], input);
+      return upstream.bodies.find((body) => (body as CliEndpointBody).tools !== undefined);
+    } finally {
+      await upstream.close();
+      vi.unstubAllEnvs();
+      await rm(home, { recursive: true, force: true });
+      await rm(logs, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }
+
+  it('舊形狀的兩則 assistant/message 續接得回來：送出的請求只差在 assistant 的文字是字串還是 text 區塊', async () => {
+    type Body = { messages: { role: string; content?: unknown }[] };
+    const before = (await resumedRequest(true)) as Body;
+    const after = (await resumedRequest(false)) as Body;
+    const assistants = (body: Body) =>
+      body.messages.filter((message) => message.role === 'assistant').map((m) => m.content);
+    expect(assistants(before)).toEqual(['我來讀', '讀完了。']);
+    expect(assistants(after)).toEqual([
+      [{ type: 'text', text: '我來讀' }],
+      [{ type: 'text', text: '讀完了。' }],
+    ]);
+    const asText = (body: Body) => ({
+      ...body,
+      messages: body.messages.map((message) =>
+        message.role === 'assistant' && Array.isArray(message.content)
+          ? {
+              ...message,
+              content: (message.content as { text: string }[]).map((b) => b.text).join(''),
+            }
+          : message,
+      ),
+    });
+    expect(JSON.stringify(asText(after))).toBe(JSON.stringify(before));
+    expect(before.messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'tool',
+      'tool',
+      'assistant',
+      'user',
+    ]);
+  });
+});
+
 interface CliEndpointBody {
   readonly messages: readonly { readonly role: string }[];
   readonly tools?: readonly unknown[];
