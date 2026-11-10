@@ -6,6 +6,9 @@
 
 #[path = "../../tests/common/mod.rs"]
 mod common;
+/// 本機 HTTPS 與假 MCP server（`host/tests/common/`）。
+#[path = "common/mod.rs"]
+mod tls_common;
 
 use common::host::{example, unregistered, violation, HostProc, GRANTED};
 use nexus_host::host_protocol::{
@@ -1385,5 +1388,293 @@ mod calls {
             },
             "重複的呼叫編號",
         );
+    }
+
+    /// 插件 `mcp`（`src/mcp/service.rs`）：對本機 HTTPS 的假 MCP server，經宿主連線 open、call。
+    mod mcp {
+        use super::*;
+        use crate::tls_common::fake_mcp::{big_text, handler, FakeMcp};
+        use crate::tls_common::{fixture, Request, TlsServer};
+        use nexus_host::mcp::service::{PIECES_PER_STEP, PIECE_BYTES, SERVICE};
+        use std::sync::{Arc, Mutex};
+
+        struct Fake {
+            port: u16,
+            log: Arc<Mutex<Vec<Request>>>,
+        }
+
+        fn fake(tools: &[&str]) -> Fake {
+            let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+            let server =
+                TlsServer::start(handler(FakeMcp::with_tools(false, tools), Arc::clone(&log)));
+            Fake {
+                port: server.port,
+                log,
+            }
+        }
+
+        /// 掛著 `mcp` 的宿主，根憑證是夾具的 CA。
+        fn host(tag: &str) -> (HostProc, PathBuf) {
+            let dir = temp_dir(tag);
+            let plugins = dir.join("host-plugins.json");
+            let list = serde_json::json!([{
+                "name": "mcp",
+                "config": { "roots": fixture("ca-a.pem") },
+            }]);
+            std::fs::write(&plugins, list.to_string()).unwrap();
+            let socket = dir.join("host.sock");
+            let mut host = HostProc::start_with_plugins(&socket, &plugins);
+            host.grant(me(), TOKEN, Role::Conversation, "a");
+            (host, socket)
+        }
+
+        fn server(port: u16) -> String {
+            serde_json::json!({
+                "server": {
+                    "serverName": "fake",
+                    "connection": { "transport": "http", "url": format!("https://localhost:{port}/mcp") },
+                },
+            })
+            .to_string()
+        }
+
+        /// 收到的一塊：序號與內容。
+        type Piece = (u64, Value);
+
+        /// 讀 `id` 的塊，直到 `stop` 說停（open 的 `ready`）或收到 `id` 的結果。別的 id 的框不該出現。
+        fn read_pieces(
+            stream: &mut UnixStream,
+            id: u64,
+            stop: impl Fn(&Value) -> bool,
+        ) -> (Vec<Piece>, Option<Result<Value, CallError>>) {
+            let mut pieces = Vec::new();
+            loop {
+                match read_message(stream) {
+                    Some(HostMessage::Chunk {
+                        id: got,
+                        seq,
+                        payload,
+                        ..
+                    }) if got == id => {
+                        let done = stop(&payload);
+                        pieces.push((seq, payload));
+                        if done {
+                            return (pieces, None);
+                        }
+                    }
+                    Some(HostMessage::Result {
+                        id: got, outcome, ..
+                    }) if got == id => return (pieces, Some(outcome)),
+                    other => panic!("要 {id} 的框，收到 {other:?}"),
+                }
+            }
+        }
+
+        /// 對話行程那一側該做的拼回：序號要從 0 連續，字串塊接起來，塊數與位元組數要對上 `summary`。
+        fn reassemble(pieces: &[Piece], summary: &Value) -> Result<String, String> {
+            let mut text = String::new();
+            for (i, (seq, payload)) in pieces.iter().enumerate() {
+                if *seq != i as u64 {
+                    return Err(format!("第 {i} 塊的序號是 {seq}"));
+                }
+                text.push_str(payload.as_str().ok_or("不是字串塊")?);
+            }
+            if summary["chunks"].as_u64() != Some(pieces.len() as u64)
+                || summary["bytes"].as_u64() != Some(text.len() as u64)
+            {
+                return Err(format!(
+                    "{} 塊 {} 位元組，對不上 {summary}",
+                    pieces.len(),
+                    text.len()
+                ));
+            }
+            Ok(text)
+        }
+
+        /// open 到 `ready`，回拼好的清單文件。
+        fn open(stream: &mut UnixStream, id: u64, port: u16) -> Value {
+            call_to(stream, id, SERVICE, "open", &server(port));
+            let (mut pieces, outcome) = read_pieces(stream, id, |p| p.get("ready").is_some());
+            assert_eq!(outcome, None, "open 不該收尾");
+            let (_, ready) = pieces.pop().unwrap();
+            let text = reassemble(&pieces, &ready["ready"]).expect("清單拼得回來");
+            serde_json::from_str(&text).expect("清單是 JSON")
+        }
+
+        fn call_tool(stream: &mut UnixStream, id: u64, open: u64, name: &str, arguments: Value) {
+            let payload = serde_json::json!({
+                "open": open,
+                "method": "tools/call",
+                "params": serde_json::json!({ "name": name, "arguments": arguments }).to_string(),
+            });
+            call_to(stream, id, SERVICE, "call", &payload.to_string());
+        }
+
+        fn cancelled_notices(log: &Mutex<Vec<Request>>) -> usize {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|r| String::from_utf8_lossy(&r.body).contains("notifications/cancelled"))
+                .count()
+        }
+
+        #[test]
+        fn open_送清單_call_的大結果分多步送_拼得回來() {
+            let fake = fake(&["a", "big"]);
+            let (_host, socket) = host("mcp-open-call");
+            let mut stream = connect(&socket);
+            let listed = open(&mut stream, 1, fake.port);
+            let names: Vec<&str> = listed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, ["a", "big"]);
+            assert_eq!(listed["warning"], Value::Null);
+
+            // 每塊 32 KiB、一步四塊：600 KiB 要分好幾步，而且有切點落在三位元組字元中間。
+            let bytes = 600 * 1024;
+            call_tool(
+                &mut stream,
+                2,
+                1,
+                "big",
+                serde_json::json!({ "bytes": bytes }),
+            );
+            let (pieces, outcome) = read_pieces(&mut stream, 2, |_| false);
+            let summary = outcome.expect("要收尾").expect("成功");
+            assert!(pieces.len() > PIECES_PER_STEP, "{} 塊", pieces.len());
+            assert!(pieces
+                .iter()
+                .all(|(_, p)| p.as_str().is_some_and(|s| s.len() <= PIECE_BYTES)));
+            let text = reassemble(&pieces, &summary).expect("拼得回來");
+            let result: Value = serde_json::from_str(&text).expect("結果是 JSON");
+            assert_eq!(result["content"][0]["text"], big_text(bytes).as_str());
+
+            // 掉一塊、換兩塊的順序，拼回時都要抓得到。
+            let mut missing = pieces.clone();
+            missing.remove(3);
+            assert!(reassemble(&missing, &summary).is_err());
+            let mut swapped = pieces.clone();
+            swapped.swap(1, 2);
+            assert!(reassemble(&swapped, &summary).is_err());
+
+            // 綁定還掛著：同一條連線可以再 call。
+            call_tool(&mut stream, 3, 1, "a", serde_json::json!({}));
+            let (pieces, outcome) = read_pieces(&mut stream, 3, |_| false);
+            let text = reassemble(&pieces, &outcome.unwrap().unwrap()).unwrap();
+            assert!(text.contains(r#"\"a\":{}"#), "{text}");
+        }
+
+        #[test]
+        fn 參數不合與沒有綁定_回參數錯() {
+            let fake = fake(&["a"]);
+            let (_host, socket) = host("mcp-bad");
+            let mut stream = connect(&socket);
+            call_to(
+                &mut stream,
+                1,
+                SERVICE,
+                "open",
+                r#"{"server":{"serverName":"x"}}"#,
+            );
+            assert_eq!(error_code(&mut stream, 1), ErrorCode::BadPayload);
+            // 綁定還沒開：
+            call_tool(&mut stream, 2, 9, "a", serde_json::json!({}));
+            assert_eq!(error_code(&mut stream, 2), ErrorCode::BadPayload);
+            open(&mut stream, 3, fake.port);
+            let bad = [
+                r#"{"open":3,"method":"tools/list","params":"{}"}"#,
+                r#"{"open":3,"method":"tools/call","params":"{"}"#,
+                r#"{"open":3,"method":"tools/call","params":{}}"#,
+                r#"{"open":3,"method":"tools/call","params":"{}","x":1}"#,
+            ];
+            for (i, payload) in bad.iter().enumerate() {
+                let id = 10 + i as u64;
+                call_to(&mut stream, id, SERVICE, "call", payload);
+                assert_eq!(
+                    error_code(&mut stream, id),
+                    ErrorCode::BadPayload,
+                    "{payload}"
+                );
+            }
+            // 綁定只在開它的那一條連線上：
+            let mut other = connect(&socket);
+            call_tool(&mut other, 1, 3, "a", serde_json::json!({}));
+            assert_eq!(error_code(&mut other, 1), ErrorCode::BadPayload);
+        }
+
+        #[test]
+        fn 取消與斷線_都告訴_server_不用做了() {
+            let fake = fake(&["slow"]);
+            let (_host, socket) = host("mcp-cancel");
+            let mut stream = connect(&socket);
+            open(&mut stream, 1, fake.port);
+            call_tool(&mut stream, 2, 1, "slow", serde_json::json!({}));
+            std::thread::sleep(Duration::from_millis(300));
+            cancel(&mut stream, 2);
+            assert_eq!(error_code(&mut stream, 2), ErrorCode::Cancelled);
+
+            // 中途斷線：宿主取消還在跑的 call，橋送 `notifications/cancelled`；綁定跟著放掉。
+            call_tool(&mut stream, 3, 1, "slow", serde_json::json!({}));
+            std::thread::sleep(Duration::from_millis(300));
+            drop(stream);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while cancelled_notices(&fake.log) < 2 {
+                assert!(Instant::now() < deadline, "取消與斷線各要送一則");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // 連線池照留那一份：新連線再 open 不用重新握手。
+            let handshakes = |log: &Mutex<Vec<Request>>| {
+                log.lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| String::from_utf8_lossy(&r.body).contains(r#""initialize""#))
+                    .count()
+            };
+            let before = handshakes(&fake.log);
+            let mut again = connect(&socket);
+            open(&mut again, 1, fake.port);
+            assert_eq!(handshakes(&fake.log), before);
+        }
+
+        #[test]
+        fn 超過一則回應上限的結果_以服務的錯收尾_連線照用() {
+            let fake = fake(&["big", "a"]);
+            let (_host, socket) = host("mcp-huge");
+            let mut stream = connect(&socket);
+            open(&mut stream, 1, fake.port);
+            call_tool(
+                &mut stream,
+                2,
+                1,
+                "big",
+                serde_json::json!({ "bytes": 17 * 1024 * 1024 }),
+            );
+            let (pieces, outcome) = read_pieces(&mut stream, 2, |_| false);
+            assert!(pieces.is_empty());
+            let error = outcome.unwrap().unwrap_err();
+            assert_eq!(error.code, ErrorCode::ServiceError);
+            assert!(
+                error
+                    .message
+                    .ends_with("response exceeded the size limit of 16 MiB — this call failed; the connection stays up"),
+                "{}",
+                error.message
+            );
+            // 單次失敗不判掉線：同一代照用，不重新握手。
+            call_tool(&mut stream, 3, 1, "a", serde_json::json!({}));
+            let (pieces, outcome) = read_pieces(&mut stream, 3, |_| false);
+            reassemble(&pieces, &outcome.unwrap().unwrap()).unwrap();
+            let handshakes = fake
+                .log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| String::from_utf8_lossy(&r.body).contains(r#""initialize""#))
+                .count();
+            assert_eq!(handshakes, 1);
+        }
     }
 }

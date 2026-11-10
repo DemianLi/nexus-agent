@@ -1085,8 +1085,11 @@ export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js
 export { subagentTurnLimitNote } from './subagent-turn-limit.js';
 export { createNativeAgent, NativeAgent, RUN_STOP_CONFIG_KEY } from './native-loop/agent.js';
 export type { NativeAgentParams, NativeStateSnapshot, RunStopReason } from './native-loop/agent.js';
+export { LLM_STREAM_CONFIG_KEY } from './native-loop/events.js';
 export type {
   AgentStepPayload,
+  ModelStreamAround,
+  ModelStreamChunk,
   PreStepDecision,
   RequestErrorAction,
 } from './native-loop/events.js';

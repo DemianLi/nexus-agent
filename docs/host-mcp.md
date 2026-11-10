@@ -3,11 +3,51 @@
 Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
 寫給要改這一層、或要對照 TS 的人。管理者怎麼設一列 MCP，看 [`operations.md`](operations.md)，這裡不重寫。
 
-**現況：還沒有呼叫方。** 設定、一代連線、監督者、連線池、TLS 與代理都在，只接到測試；跑它們的執行緒與插件 `mcp` 還沒進來。
+**現況：對話行程那一側還沒接上。** 插件 `mcp` 與它 expose 的服務 `mcp/client` 都在，但對話行程還不會叫它。
 今天的 MCP 一律由 TS 的 `packages/nexus-plugin-mcp` 連。語意照那邊，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
 
-- 程式：`host/src/mcp/`（`config.rs` 設定、`connection.rs` 一代連線、`supervisor.rs` 退避重連、`pool.rs` 連線池）、`host/src/tls.rs`、`host/src/proxy.rs`。
-- 測試：`host/tests/mcp.rs`、`mcp_supervisor.rs`、`tls.rs`、`tls_env.rs`、`proxy.rs`。
+- 程式：`host/src/mcp/`（`config.rs` 設定、`connection.rs` 一代連線、`supervisor.rs` 退避重連、`pool.rs` 連線池、`bridge.rs` 跑它們的執行緒、
+  `service.rs` 插件與服務）、`host/src/wake.rs`、`host/src/tls.rs`、`host/src/proxy.rs`。
+- 測試：`host/tests/mcp.rs`、`mcp_supervisor.rs`、`tls.rs`、`tls_env.rs`、`proxy.rs`，與 `host.rs` 的 `calls::mcp`（真的宿主行程）；
+  本機的 HTTPS 假 server 在 `host/tests/common/fake_mcp.rs`，`host/examples/fake_mcp_server.rs` 把它包成獨立的執行檔。
+
+## 插件與服務
+
+`--plugins` 的一列 `{ "name": "mcp", "config": { "roots": <PEM 檔路徑>, "proxy"?: <代理政策> } }`。apply 時讀根憑證、建 HTTP 客戶端、
+起橋；expose 服務 `mcp/client`，兩個方法都是串流：
+
+| 方法 | payload | 塊 | 收尾 |
+| --- | --- | --- | --- |
+| `open` | `{ server: <下面〈設定〉的一列>, elicitation?: bool }` | 清單文件 `{"tools":[...],"instructions":"...","warning":...}` 切成的字串塊，再一塊 `{"ready":{"chunks":n,"bytes":b}}` | 不收尾：一直掛著當綁定，取消或斷線時放掉 |
+| `call` | `{ open: <同一條連線上 open 的呼叫編號>, method, params: <JSON 文字> }` | server 回的結果切成的字串塊 | `{"chunks":n,"bytes":b}` |
+
+**這一格是 JSON 文字**：`params`、清單文件、結果都是 JSON 序列化成的字串，不是宿主框裡的巢狀值。宿主的框有巢狀層數與大小上限，
+MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由對話行程自己解。
+
+- `method` 只收 `tools/call`、`resources/list`、`resources/templates/list`、`resources/read`。`open` 要指到同一條連線上已經送出
+  `ready` 的綁定；綁定跟著連線走，別的連線指不到。
+- 切塊在 UTF-8 字元的邊界上，一塊最多 32 KiB，一步最多四塊：一塊編成框最壞是 6 倍（控制字元寫成 `\u00XX`），仍小於一框；
+  一步四塊仍小於宿主一步的上限。推了塊又回 `Pending` 的呼叫，宿主下一輪就再 poll（連線暫停時等它恢復）。
+- 拼回時核對：塊的序號從 0 連續（宿主框的 `seq`），塊數與 UTF-8 位元組數對上 `ready`／收尾的值。缺一塊或順序錯了都拼不回。
+- 一份文字最多 16 MiB，跟 server 一則回應的上限相同（〈一代連線〉）；超過的以服務的錯收尾，不送任何塊。
+- 工具定義與結果裡物件的鍵照 server 送的順序過橋：`serde_json` 開了 `preserve_order`。池的鍵不受影響，`json::encode` 自己照碼位排。
+- 呼叫端取消或斷線時，還在跑的 `call` 送 `notifications/cancelled` 給 server（理由 `cancelled`），不等它回。
+- 連線池一個插件實體一座：宿主不在執行中改插件設定，所以等於整個宿主一座。宿主結束時不卸載插件，連線不送 `DELETE`，隨行程結束。
+- 橋的日誌（監督者的進度與放棄）寫 stderr，前綴 `nexus-host: mcp`。
+
+## 橋
+
+`bridge.rs`：連線池、監督者與每一次請求跑在自己的執行緒（tokio current_thread）。宿主那一側送命令不會卡；結果排進收件匣、
+寫一個位元組到自管道（`wake.rs`，兩端 `O_CLOEXEC`、非阻塞，管道滿了不卡）叫醒宿主，宿主把這個 fd 放進 poll。
+
+- 請求送到那一份當下活著的一代；斷線空窗裡回 `server is disconnected`。逾時照 `toolCallTimeoutMs`，逾時不算掉線。
+- 單次請求失敗（server 回非 2xx、回應太大、連不上）只是這一次失敗，連線不斷，同 TS 只認 transport 關了才算掉線。
+- 一則 JSON 回應超過 16 MiB 時回 `<label>: response exceeded the size limit of 16 MiB — this call failed; the connection stays up`。
+- 一則 SSE 事件超過 16 MiB，跟 server 中途斷掉這一則的串流，宿主分不出來，都只讓這一則失敗，回 `<label>: response stream closed before its final response`。
+  rmcp 對這兩種都回 `TransportClosed`，超限的原因只寫進它自己的 tracing 日誌；transport 本身還開著（`Peer::is_transport_closed` 是假），所以不判掉線。
+- 已知缺口：rmcp 3.9.0 的 HTTP transport 握手之後，server 怎麼回都不會關（只有宿主自己收掉才關），所以 HTTP 的一代實際上不會因為 server 而判掉線。
+  舊協定的 server 重啟、忘掉 session 之後，每次呼叫都回 `Session expired (HTTP 404)`，不會重連（[#2690](https://github.com/DemianLi/nexus-agent/issues/2690)）。
+- 錯誤訊息換掉這一列的秘密（`Shared::scrub`）。成功結果還沒遮蔽（TODO #2570）；位置是結果序列化成文字的那一步（`outgoing`），遮蔽要在序列化之前做。
 
 ## 設定
 
@@ -91,6 +131,13 @@ Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行�
 - 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。
-- 呼叫結果只帶 `content` 與 `structuredContent`：rmcp 把回應解成自己的型別再序列化，規格外的欄位會丟掉，TS 的 SDK 原樣留著。這是 #1827 的 D290 接受的失真。
+- rmcp 把回應解成自己的型別再序列化，認得的形狀會丟掉規格外的欄位：`tools/call` 的結果丟掉內容區塊多出的欄位與不認得的頂層欄位。
+  結果裡有不認得的內容區塊型別時，整個結果認不得、原樣交回（`host/tests/mcp.rs` 的 `bridge::規格外的欄位_認得的形狀丟掉_認不得的原樣`）。
+  TS 的 SDK 原樣留著。這是 #1827 的 D290 接受的失真。
+- 取消：橋不分協定一律送 `notifications/cancelled`。TS 的 SDK 在新協定上只中止那一則的 POST 串流、不送通知（`@modelcontextprotocol/client` 2.3.1
+  `dist/index.mjs:5363-5366`），舊協定才送。
+- 一則回應的上限 16 MiB：TS 的 HTTP 兩條路都不設上限。
+- SSE 事件超過上限時，錯誤訊息只說這一則的串流斷了，不說是太大（見〈橋〉）。只讓這一則失敗這一點跟 dsh 相同：dsh 的 `lost` 只在 SDK 的 `onclose`
+  與工具同步失敗時呼叫（`packages/mcp/mcp-client/src/connection.ts:292-294`、`:304`，`8bd0733`），請求失敗只往外丟（`:380-383`）。
 - 新協定的 `server/discover` 10 秒沒回就退回 `initialize`，這 10 秒關不掉（rmcp 的私有常數）。TS 用 `startupTimeoutMs` 當握手期限，逾時就是錯、不退回。
 - 監督者的訊息有兩處不逐字：小於 1e-6 或不小於 1e21 的毫秒數，宿主不寫成指數；超過 2^31−1 ms 的延遲，TS 的 `setTimeout` 改成 1 ms，宿主照設定的時間等。

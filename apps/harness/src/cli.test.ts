@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -7,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { HUMAN_MESSAGE_LIMIT_CHARS, SessionLog, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
@@ -22,6 +24,9 @@ import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { shippedModelRow, shippedPlugins } from './fixtures.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
+import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { liveModelPatch, shippedLiveModelConfig } from './log-derived-history.fixture.js';
 
 const shipped = await shippedPlugins();
 
@@ -1053,5 +1058,457 @@ describe('--patch 與工作區（#2162）', () => {
       }),
     ).rejects.toThrow('不能在 --workspace 底下');
     await rm(workspace, { recursive: true, force: true });
+  });
+});
+
+/**
+ * CLI 單機跑一輪（推理、文字、一顆好的與一顆參數壞掉的工具呼叫，接著收尾的文字）的會話日誌與請求本文，native 與 `langgraph`
+ * 各一份，釘成夾具逐位元組比（#2361）。請求本文比對前先拿掉 `stream` 與 `stream_options`。假端點照請求的 `stream` 回一整包 JSON 或 SSE，兩種回的是
+ * 同一份內容，所以夾具之間的差異只來自 CLI 送的是哪一種請求。只正規化每次跑都會變的格（見 `normalizedLog`）。
+ */
+describe('CLI 單機的會話日誌（夾具）', () => {
+  const FIXTURE = fileURLToPath(new URL('./fixtures/cli-turn-log/', import.meta.url));
+
+  function reply(body: CliEndpointBody): CliEndpointReply {
+    const toolResults = body.messages.filter((message) => message.role === 'tool').length;
+    if (body.tools === undefined) return { content: '讀檔' };
+    if (toolResults === 0)
+      return {
+        reasoning: '要讀檔',
+        content: '我來讀',
+        calls: [
+          { id: 'call_read', name: 'read_file', arguments: '{"file_path":"/a.txt"}' },
+          { id: 'call_bad', name: 'ls', arguments: '{"path":' },
+        ],
+      };
+    return { reasoning: '讀完', content: '讀完了。' };
+  }
+
+  it.each(['native', 'langgraph'] as const)(
+    '%s：一輪的日誌與送出的請求本文跟夾具相同',
+    async (loop) => {
+      vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-cli-native-stream');
+      const upstream = await cliEndpoint(reply);
+      const home = await mkdtemp(join(tmpdir(), 'nexus-cli-ns-home-'));
+      const logs = await mkdtemp(join(tmpdir(), 'nexus-cli-ns-logs-'));
+      const cwd = await mkdtemp(join(tmpdir(), 'nexus-cli-ns-cwd-'));
+      const patch = join(home, 'patch.yml');
+      await writeFile(
+        patch,
+        liveModelPatch(upstream.baseURL, '- id: thread-title-llm\n  disabled: true\n'),
+        {
+          mode: 0o600,
+        },
+      );
+      try {
+        await runCli({
+          argv: [
+            '--live',
+            '--agent-loop',
+            loop,
+            '--session-log',
+            logs,
+            '--patch',
+            patch,
+            '讀 /a.txt',
+          ],
+          cwd,
+          env: { [HARNESS_HOME_ENV]: home },
+          input: new PassThrough(),
+          output: new PassThrough(),
+          printer: { log: () => undefined, error: () => undefined },
+        });
+      } finally {
+        await upstream.close();
+        vi.unstubAllEnvs();
+      }
+      const log = normalizedLog(await readJsonlTree(logs), [home, logs, cwd]);
+      const bodies = upstream.bodies.map((body) => {
+        const {
+          stream: _stream,
+          stream_options: _options,
+          ...rest
+        } = body as Record<string, unknown>;
+        return rest;
+      });
+      await rm(home, { recursive: true, force: true });
+      await rm(logs, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true });
+      await expect(log).toMatchFileSnapshot(join(FIXTURE, `session.${loop}.jsonl`));
+      // 副檔名用 `.snap` 不用 `.json`：Prettier 會把 `JSON.stringify(…, 2)` 的短陣列併成一行，格式化過的夾具就跟這裡寫出的對不上。
+      await expect(`${JSON.stringify(bodies, null, 2)}\n`).toMatchFileSnapshot(
+        join(FIXTURE, `request-bodies.${loop}.snap`),
+      );
+    },
+  );
+});
+
+/**
+ * 字串 content、推理在 `additional_kwargs`、`response_metadata` 帶 `tokenUsage` 與原始 `usage` 的 native 日誌
+ * （`session.native.before-stream.jsonl`）續接得回來：送出的請求跟續接一份 v1 形狀的日誌相比，只差在 assistant 的文字是字串還是
+ * text 區塊（#2361）。
+ */
+describe('CLI 單機 native 續接改動前形狀的日誌', () => {
+  const BEFORE = fileURLToPath(
+    new URL('./fixtures/cli-turn-log/session.native.before-stream.jsonl', import.meta.url),
+  );
+
+  function reply(body: CliEndpointBody): CliEndpointReply {
+    if (body.tools === undefined) return { content: '讀檔' };
+    const humans = body.messages.filter((message) => message.role === 'user').length;
+    const toolResults = body.messages.filter((message) => message.role === 'tool').length;
+    if (humans > 1) return { content: '還記得。' };
+    if (toolResults === 0)
+      return {
+        reasoning: '要讀檔',
+        content: '我來讀',
+        calls: [
+          { id: 'call_read', name: 'read_file', arguments: '{"file_path":"/a.txt"}' },
+          { id: 'call_bad', name: 'ls', arguments: '{"path":' },
+        ],
+      };
+    return { reasoning: '讀完', content: '讀完了。' };
+  }
+
+  async function resumedRequest(swapInOldShape: boolean): Promise<unknown> {
+    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-cli-native-resume');
+    const upstream = await cliEndpoint(reply);
+    const home = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-home-'));
+    const logs = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-logs-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'nexus-cli-nr-cwd-'));
+    const patch = join(home, 'patch.yml');
+    await writeFile(
+      patch,
+      liveModelPatch(upstream.baseURL, '- id: thread-title-llm\n  disabled: true\n'),
+      { mode: 0o600 },
+    );
+    const cli = (argv: readonly string[], input: PassThrough) =>
+      runCli({
+        argv: ['--live', '--agent-loop', 'native', '--patch', patch, ...argv],
+        cwd,
+        env: { [HARNESS_HOME_ENV]: home },
+        input,
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+      });
+    try {
+      await cli(['--session-log', logs, '讀 /a.txt'], new PassThrough());
+      const [run] = await readdir(logs);
+      const runDir = join(logs, run!);
+      const [file] = (await readdir(runDir, { recursive: true })).filter((name) =>
+        name.endsWith('.jsonl'),
+      );
+      const path = join(runDir, file!);
+      if (swapInOldShape) {
+        const old = (await readFile(BEFORE, 'utf8'))
+          .split('\n')
+          .filter((line) => line.includes('"type":"assistant/message"'));
+        const lines = (await readFile(path, 'utf8')).split('\n');
+        const swapped = lines.map((line) =>
+          line.includes('"type":"assistant/message"') ? old.shift()! : line,
+        );
+        expect(old).toEqual([]);
+        await writeFile(path, swapped.join('\n'));
+      }
+      upstream.bodies.length = 0;
+      const input = new PassThrough();
+      input.end('還記得剛剛讀了什麼嗎\n/exit\n');
+      await cli(['--resume', runDir], input);
+      return upstream.bodies.find((body) => (body as CliEndpointBody).tools !== undefined);
+    } finally {
+      await upstream.close();
+      vi.unstubAllEnvs();
+      await rm(home, { recursive: true, force: true });
+      await rm(logs, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }
+
+  it('舊形狀的兩則 assistant/message 續接得回來：送出的請求只差在 assistant 的文字是字串還是 text 區塊', async () => {
+    type Body = { messages: { role: string; content?: unknown }[] };
+    const before = (await resumedRequest(true)) as Body;
+    const after = (await resumedRequest(false)) as Body;
+    const assistants = (body: Body) =>
+      body.messages.filter((message) => message.role === 'assistant').map((m) => m.content);
+    expect(assistants(before)).toEqual(['我來讀', '讀完了。']);
+    expect(assistants(after)).toEqual([
+      [{ type: 'text', text: '我來讀' }],
+      [{ type: 'text', text: '讀完了。' }],
+    ]);
+    const asText = (body: Body) => ({
+      ...body,
+      messages: body.messages.map((message) =>
+        message.role === 'assistant' && Array.isArray(message.content)
+          ? {
+              ...message,
+              content: (message.content as { text: string }[]).map((b) => b.text).join(''),
+            }
+          : message,
+      ),
+    });
+    expect(JSON.stringify(asText(after))).toBe(JSON.stringify(before));
+    expect(before.messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'tool',
+      'tool',
+      'assistant',
+      'user',
+    ]);
+  });
+});
+
+interface CliEndpointBody {
+  readonly messages: readonly { readonly role: string }[];
+  readonly tools?: readonly unknown[];
+  readonly stream?: boolean;
+}
+
+interface CliEndpointReply {
+  readonly reasoning?: string;
+  readonly content: string;
+  readonly calls?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly arguments: string;
+  }[];
+}
+
+/** 照請求的 `stream` 回一整包 JSON 或 SSE；兩種的 id、模型、內容、結束原因與用量都相同。 */
+async function cliEndpoint(script: (body: CliEndpointBody) => CliEndpointReply) {
+  const bodies: unknown[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as CliEndpointBody;
+      const id = `chatcmpl-cli-${bodies.length}`;
+      bodies.push(body);
+      const { reasoning, content, calls = [] } = script(body);
+      const finish = calls.length > 0 ? 'tool_calls' : 'stop';
+      const usage = {
+        prompt_tokens: 11,
+        completion_tokens: 7,
+        total_tokens: 18,
+        completion_tokens_details: { reasoning_tokens: 3 },
+      };
+      const head = { id, created: 0, model: DEFAULT_LIVE_MODEL_ID };
+      const toolCalls = calls.map((call) => ({
+        id: call.id,
+        type: 'function',
+        function: { name: call.name, arguments: call.arguments },
+      }));
+      if (body.stream !== true) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ...head,
+            object: 'chat.completion',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content,
+                  ...(reasoning !== undefined && { reasoning_content: reasoning }),
+                  ...(toolCalls.length > 0 && { tool_calls: toolCalls }),
+                },
+                finish_reason: finish,
+              },
+            ],
+            usage,
+          }),
+        );
+        return;
+      }
+      const frame = (payload: Record<string, unknown>) =>
+        `data: ${JSON.stringify({ ...head, object: 'chat.completion.chunk', ...payload })}\n\n`;
+      const delta = (value: Record<string, unknown>, finishReason: string | null = null) =>
+        frame({ choices: [{ index: 0, delta: value, finish_reason: finishReason }] });
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(delta({ role: 'assistant', content: '' }));
+      if (reasoning !== undefined) res.write(delta({ reasoning_content: reasoning }));
+      res.write(delta({ content }));
+      for (const [index, call] of toolCalls.entries())
+        res.write(delta({ tool_calls: [{ index, ...call }] }));
+      res.write(delta({}, finish));
+      res.write(frame({ choices: [], usage }));
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    baseURL: `http://127.0.0.1:${port}/v1`,
+    bodies,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+/** 目錄底下每個 `.jsonl`，照相對路徑排序後接起來；每個檔前面一行 `# <相對路徑>`。 */
+async function readJsonlTree(root: string): Promise<string> {
+  const files = (await readdir(root, { recursive: true }))
+    .filter((name) => name.endsWith('.jsonl'))
+    .sort();
+  const parts: string[] = [];
+  for (const name of files) parts.push(`# ${name}\n${await readFile(join(root, name), 'utf8')}`);
+  return parts.join('');
+}
+
+/** 每次跑都會變的格：時間、暫存路徑、亂數 id、建置資訊、設定雜湊（帶 home 的金鑰與 port）。 */
+function normalizedLog(text: string, paths: readonly string[]): string {
+  let out = text;
+  for (const [index, path] of paths.entries()) out = out.split(path).join(`<tmp${index}>`);
+  return out
+    .replace(/"build":\{[^}]*\}/gu, '"build":"<build>"')
+    .replace(/"configHash":"[^"]*"/gu, '"configHash":"<hash>"')
+    .replace(/127\.0\.0\.1:\d+/gu, '127.0.0.1:<port>')
+    .replace(/^# [^/\n]+\//gmu, '# <run>/')
+    .replace(/"(time|ts|startedAt|endedAt|createdAt)":\s?"[^"]*"/gu, '"$1":"<time>"')
+    .replace(/"(time|ts|startedAt|endedAt|createdAt|elapsedMs|durationMs)":\s?\d+/gu, '"$1":0')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gu, '<uuid>');
+}
+
+/**
+ * CLI 單機 native（打串流請求）的計時與用量（#2361）：到第一則事件的 `timeoutMs` 加上閒置的 `streamIdleTimeoutMs`，沒有總上限；
+ * 吐過用量才失敗的那一次多記一筆帶 `outcome` 的 `model/usage`。
+ */
+describe('CLI 單機 native 的串流計時與用量', () => {
+  type Respond = (res: import('node:http').ServerResponse, attempt: number) => void;
+
+  const head = { id: 'chatcmpl-timing', created: 0, model: DEFAULT_LIVE_MODEL_ID };
+  const frame = (payload: Record<string, unknown>) =>
+    `data: ${JSON.stringify({ ...head, object: 'chat.completion.chunk', ...payload })}\n\n`;
+  const delta = (value: Record<string, unknown>, finish: string | null = null) =>
+    frame({ choices: [{ index: 0, delta: value, finish_reason: finish }] });
+  const USAGE = frame({
+    choices: [],
+    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+  });
+
+  function finishWith(res: import('node:http').ServerResponse, text: string): void {
+    res.write(delta({ content: text }));
+    res.write(delta({}, 'stop'));
+    res.write(USAGE);
+    res.end('data: [DONE]\n\n');
+  }
+
+  async function runNative(
+    respond: Respond,
+    config: Record<string, unknown>,
+  ): Promise<{ attempts: number; log: string; thrown: unknown }> {
+    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-cli-native-timing');
+    let attempts = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        attempts += 1;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(delta({ role: 'assistant', content: '' }));
+        respond(res, attempts);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const home = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-home-'));
+    const logs = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-logs-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'nexus-cli-timing-cwd-'));
+    const patch = join(home, 'patch.yml');
+    const row = {
+      ...shippedLiveModelConfig(),
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      ...config,
+    };
+    // JSON 也是合法的 YAML。
+    await writeFile(
+      patch,
+      `- id: live-model\n  config: ${JSON.stringify(row)}\n- id: thread-title-llm\n  disabled: true\n`,
+      { mode: 0o600 },
+    );
+    let thrown: unknown;
+    try {
+      await runCli({
+        argv: ['--live', '--agent-loop', 'native', '--session-log', logs, '--patch', patch, '嗨'],
+        cwd,
+        env: { [HARNESS_HOME_ENV]: home },
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+      }).catch((error: unknown) => {
+        thrown = error;
+      });
+      return { attempts, log: await readJsonlTree(logs), thrown };
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      vi.unstubAllEnvs();
+      for (const dir of [home, logs, cwd]) await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const retries = (maxRetries: number) => ({
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries,
+      retryableCodes: ['TIMEOUT', 'TRANSPORT', 'UNKNOWN'],
+      backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    },
+  });
+
+  const events = (log: string, type: string) =>
+    log
+      .split('\n')
+      .filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> })
+      .filter((event) => event.type === type);
+
+  it('吐一段就停住：閒置逾時觸發，進同一份重試預算（maxRetries + 1 次）', async () => {
+    const { attempts, log, thrown } = await runNative(() => undefined, {
+      streamIdleTimeoutMs: 200,
+      ...retries(2),
+    });
+    expect(String(thrown)).toContain('閒置逾時');
+    expect(attempts).toBe(3);
+    expect(log).toContain('TIMEOUT');
+    expect(events(log, 'assistant/message')).toHaveLength(0);
+  });
+
+  it('一直有吐、總長超過 timeoutMs：不逾時，一次就收', async () => {
+    const { attempts, log } = await runNative(
+      (res) => {
+        let sent = 0;
+        const tick = setInterval(() => {
+          sent += 1;
+          if (sent < 8) res.write(delta({ content: '字' }));
+          else {
+            clearInterval(tick);
+            finishWith(res, '完');
+          }
+        }, 100);
+      },
+      { timeoutMs: 300, streamIdleTimeoutMs: 1000, ...retries(0) },
+    );
+    expect(attempts).toBe(1);
+    const [reply] = events(log, 'assistant/message');
+    expect(JSON.stringify(reply)).toContain('字字字字字字字完');
+  });
+
+  it('吐了用量之後斷線、重打成功：model/usage 兩筆，失敗那筆帶 outcome', async () => {
+    const { attempts, log } = await runNative((res, attempt) => {
+      if (attempt === 1) {
+        res.write(delta({ content: '半' }));
+        res.write(USAGE);
+        setTimeout(() => res.socket?.destroy(), 50); // 等兩段寫出去再斷，當下 destroy 會丟掉緩衝裡的。
+        return;
+      }
+      finishWith(res, '好');
+    }, retries(1));
+    expect(attempts).toBe(2);
+    const usages = events(log, 'model/usage').map((event) => event.data);
+    expect(usages).toHaveLength(2);
+    expect(usages.filter((usage) => usage['outcome'] !== undefined)).toHaveLength(1);
+    expect(usages[0]?.['outcome']).toBe('error');
+    expect(usages[1]?.['outcome']).toBeUndefined();
   });
 });

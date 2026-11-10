@@ -6,7 +6,7 @@
 import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { tool } from '@langchain/core/tools';
-import { fakeModel } from 'langchain';
+import { fakeModel } from '../fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
