@@ -69,6 +69,24 @@ describe('stat 本身失敗（#2667）', () => {
     expect(warned[0]).toContain('EACCES');
   });
 
+  it('失敗、恢復、又失敗：同一個錯誤碼再警告一次', () => {
+    const warned: string[] = [];
+    const credentials = service((line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+
+    vi.mocked(fs.statSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    vi.mocked(fs.statSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+
+    expect(warned).toHaveLength(2);
+  });
+
   it('還沒讀好過：拋', () => {
     failStatWith('EACCES');
     expect(() => service(() => undefined).check()).toThrow('EACCES');
