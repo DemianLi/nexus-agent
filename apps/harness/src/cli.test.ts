@@ -1134,8 +1134,9 @@ describe('CLI 單機的會話日誌（夾具）', () => {
       await rm(logs, { recursive: true, force: true });
       await rm(cwd, { recursive: true, force: true });
       await expect(log).toMatchFileSnapshot(join(FIXTURE, `session.${loop}.jsonl`));
+      // 副檔名用 `.snap` 不用 `.json`：Prettier 會把 `JSON.stringify(…, 2)` 的短陣列併成一行，格式化過的夾具就跟這裡寫出的對不上。
       await expect(`${JSON.stringify(bodies, null, 2)}\n`).toMatchFileSnapshot(
-        join(FIXTURE, `request-bodies.${loop}.json`),
+        join(FIXTURE, `request-bodies.${loop}.snap`),
       );
     },
   );
