@@ -202,8 +202,9 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
 - `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下。出貨的建置不帶它。
+- 受管憑證檔（`host/src/credentials/`）：照 [`docs/credentials-file.md`](../../docs/credentials-file.md) 的契約解析 `.credentials.yaml`，跟 TS 跑同一份 `credentials-vectors.json`；對外 HTTPS 的 TLS 設定在 `host/src/tls.rs`（固定 ring，根憑證只來自設定指定的 PEM 檔）。兩者都還沒有插件在用（#2570）。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock，或 ABI 不到 6 而驗不到訊號 scope 時，整合測試直接紅，不跳過。CI 會設。
-- 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"`，再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。
+- 出貨的是 musl 版：要對著它測，先 `rustup target add "$(uname -m)-unknown-linux-musl"` 並裝 `musl-tools`（ring 的 C 要用 `musl-gcc` 編，設 `CC_<arch>_unknown_linux_musl=musl-gcc`），再加 `--target "$(uname -m)-unknown-linux-musl"`。CI 兩種都跑：musl 那輪驗出貨的 libc；不帶 target 的那輪，測試用的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試 `clone3`）拿到 ENOSYS 會退回 `clone`。
 
 CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`，步驟在 `.github/actions/sandbox-spawner`）在動到這個目錄、動到 TS 那一側的接縫與 client、動到 CI、要打包的一輪（`packed-install` 跑的時候），以及合併後完整一輪時跑。`sandbox-spawner-arm64` 只在合併後完整一輪與發版時跑，在 arm64 的 runner 上原生編與測，不出貨。
 
