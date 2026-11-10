@@ -79,7 +79,10 @@ refs:
 ## 權限位元
 
 讀之前先看 `stat` 的 mode：group 或 other 有任何一個權限位元（`mode & 0o077`）就拒絕，訊息帶 `chmod 600 <路徑>`（`owner-only.ts:25`）。
-擁有者自己的位元不看：0400、0700 都過。Windows 跳過這項檢查。
+擁有者自己的位元不看：0400、0700 都過。setuid、setgid、sticky 位也不看，所以 4600 這種權限同樣會過；別的實作要照這個判法，
+只看 `mode & 0o077`，不要寫成 `mode == 0o600`。Windows 跳過這項檢查。
+
+特殊位元不做成 `modes` 樣本：非 root 對一般檔案設 sticky 位，macOS 會拒絕，樣本的結果會因平台而不同。
 
 測試：`credentials.test.ts` 的「權限」那組；樣本的 `modes`。
 
