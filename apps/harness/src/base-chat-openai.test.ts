@@ -16,7 +16,7 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { LLM_STREAM_CONFIG_KEY, SessionLog } from '@nexus/core';
+import { LLM_STREAM_CONFIG_KEY, SessionLog, toLoggedMessage } from '@nexus/core';
 import type { ModelStreamAround, ModelStreamChunk } from '@nexus/core';
 import { openModelCall, reportedAttemptUsage } from '@nexus/core/src/model-call-scope.js';
 import { ChatOpenAI } from '@langchain/openai';
@@ -27,6 +27,8 @@ import { z } from 'zod';
 
 import { BaseChatOpenAI } from './base-chat-openai.js';
 import { GatedChatOpenAI } from './gated-chat-openai.js';
+import { ReplayChatModel } from './llm-replay.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import { RequestGate } from './request-gate.js';
 import type { BaseChatOpenAIFields } from './base-chat-openai.js';
 import { classifyTurnFailure, createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
@@ -1020,4 +1022,45 @@ describe('ModelStreamChunk 跟 SDK 的 ChatCompletionChunk', () => {
     const broken: Broken = sdk;
     void broken;
   });
+});
+
+describe('不打端點的模型（腳本、重放）接上 llm/stream', () => {
+  const SCRIPTED = '腳本這一輪';
+  const models: [string, () => BaseChatModel][] = [
+    ['ScriptedChatModel', () => new ScriptedChatModel({ turns: [{ content: SCRIPTED }] })],
+    [
+      'ReplayChatModel',
+      () =>
+        new ReplayChatModel({
+          script: [toLoggedMessage(new AIMessage({ content: SCRIPTED, id: 'r1' }))],
+        }),
+    ],
+  ];
+  for (const [name, build] of models) {
+    for (const mode of MODES) {
+      it(`${name}（${mode}）：環繞函式拿到這一輪的 chunk，監聽者短路也照樣吐腳本那一輪`, async () => {
+        const seen: ModelStreamChunk[] = [];
+        let calls = 0;
+        const around: ModelStreamAround = (next) => {
+          calls += 1;
+          return (async function* () {
+            for await (const part of next()) seen.push(part);
+            yield {
+              choices: [{ index: 0, delta: { content: '監聽者的' }, finish_reason: 'stop' }],
+            };
+          })();
+        };
+        const { result, thrown, recorder } = await runRaw(
+          build(),
+          invoke([new HumanMessage('嗨')], aroundConfig(around)),
+          mode,
+        );
+        expect(thrown).toBeUndefined();
+        expect(calls).toBe(1);
+        expect(seen.map((part) => part.choices[0]?.delta?.content)).toEqual([SCRIPTED]);
+        expect((result as AIMessage).text).toBe(SCRIPTED);
+        expect(holdsAround(recorder.calls, around)).toBe(false);
+      });
+    }
+  }
 });

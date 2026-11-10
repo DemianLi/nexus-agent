@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 import { assembleAgent } from './agent-assembly.js';
 import type { AgentLoopKind } from './agent-assembly.js';
-import { fakePlugin, fakeTool } from './fixtures.js';
+import { fakePlugin, fakeTool, takesLlmStream } from './fixtures.js';
 import { foldRegistry } from './fold.js';
 import { loadPlugins } from './load.js';
 
@@ -78,7 +78,7 @@ async function run(loop: AgentLoopKind, replyChars: number) {
     defaultBackend: backend,
     events: registry.dispatch,
   });
-  const model = new ScriptedModel({});
+  const model = takesLlmStream(new ScriptedModel({}));
   model.reply = '這是一段回覆的內容。'.repeat(replyChars / 10);
   const agent = assembleAgent({
     ...params,

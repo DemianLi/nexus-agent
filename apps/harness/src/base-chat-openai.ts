@@ -785,6 +785,62 @@ export function withoutAround<T extends object>(options: T): T {
   return rest as T;
 }
 
+/**
+ * 不打端點的模型（重放、腳本）接上 `llm/stream`：有環繞函式就交給它一顆從這一則推出來的 chunk，它交回的串流排乾就丟。
+ * 吐出去的仍是那一則，監聽者短路也一樣。
+ */
+export async function passAroundOnce(options: object, message: AIMessage): Promise<void> {
+  const around = (options as { readonly [LLM_STREAM_CONFIG_KEY]?: ModelStreamAround })[
+    LLM_STREAM_CONFIG_KEY
+  ];
+  if (around === undefined) return;
+  const chunk = chunkOf(message);
+  for await (const _ of await around(async function* () {
+    yield chunk;
+  }))
+    continue;
+}
+
+/** 一則整理好的回覆推回一顆 chunk：文字、推理、工具呼叫、結束原因、用量。 */
+function chunkOf(message: AIMessage): ModelStreamChunk {
+  const reasoning = message.additional_kwargs['reasoning_content'];
+  const usage = message.usage_metadata;
+  const finishReason = message.response_metadata['finish_reason'];
+  return {
+    ...(message.id === undefined ? {} : { id: message.id }),
+    choices: [
+      {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          content: message.text,
+          ...(typeof reasoning === 'string' ? { reasoning_content: reasoning } : {}),
+          ...(message.tool_calls === undefined || message.tool_calls.length === 0
+            ? {}
+            : {
+                tool_calls: message.tool_calls.map((call, index) => ({
+                  index,
+                  ...(call.id === undefined ? {} : { id: call.id }),
+                  type: 'function' as const,
+                  function: { name: call.name, arguments: JSON.stringify(call.args) },
+                })),
+              }),
+        },
+        finish_reason: typeof finishReason === 'string' ? finishReason : null,
+      },
+    ],
+    ...(usage === undefined
+      ? {}
+      : {
+          usage: {
+            prompt_tokens: usage.input_tokens,
+            completion_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+          },
+        }),
+  };
+}
+
 /** 收到中止訊號就停止往下交 chunk（照 `ChatOpenAICompletions._streamChatModelEvents` 的 `abortableStream`）。 */
 async function* abortable<T>(source: AsyncIterable<T>, signal: AbortSignal | undefined) {
   for await (const data of source) {

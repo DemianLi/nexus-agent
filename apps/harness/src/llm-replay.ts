@@ -22,10 +22,10 @@ import type { ChatModelStreamEvent, FinishReason } from '@langchain/core/languag
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage, ContentBlock, UsageMetadata } from '@langchain/core/messages';
 import type { ChatResult } from '@langchain/core/outputs';
-import { LLM_STREAM_CONFIG_KEY, fromLoggedMessage } from '@nexus/core';
-import type { LoggedMessage, ModelStreamAround, ModelStreamChunk, SessionEvent } from '@nexus/core';
+import { fromLoggedMessage } from '@nexus/core';
+import type { LoggedMessage, SessionEvent } from '@nexus/core';
 
-import { takeAround, withoutAround } from './base-chat-openai.js';
+import { passAroundOnce, takeAround, withoutAround } from './base-chat-openai.js';
 
 /** 腳本游標。`bindTools` 產生的副本與本體共用同一份，同 `ScriptedChatModel`。 */
 export interface ReplayModelState {
@@ -114,19 +114,6 @@ export class ReplayChatModel extends BaseChatModel {
     return withoutAround(super._getCallOptionsForTracing(options, invocationParams));
   }
 
-  /** 有 `llm/stream` 的環繞函式就交給它一顆 chunk、把它交回的排乾（見模組說明）。 */
-  private async passAround(options: object, message: AIMessage): Promise<void> {
-    const around = (options as { readonly [LLM_STREAM_CONFIG_KEY]?: ModelStreamAround })[
-      LLM_STREAM_CONFIG_KEY
-    ];
-    if (around === undefined) return;
-    const chunk = chunkOf(message);
-    for await (const _ of await around(async function* () {
-      yield chunk;
-    }))
-      continue;
-  }
-
   private nextLogged(): LoggedMessage {
     const logged = this.script[this.shared.next];
     if (logged === undefined) {
@@ -156,7 +143,7 @@ export class ReplayChatModel extends BaseChatModel {
     options: this['ParsedCallOptions'],
   ): Promise<ChatResult> {
     const message = this.nextMessage();
-    await this.passAround(options, message);
+    await passAroundOnce(options, message);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
 
@@ -177,7 +164,7 @@ export class ReplayChatModel extends BaseChatModel {
   ): AsyncGenerator<ChatModelStreamEvent> {
     const logged = this.nextLogged();
     const message = fromLoggedMessage(logged);
-    if (message instanceof AIMessage) await this.passAround(options, message);
+    if (message instanceof AIMessage) await passAroundOnce(options, message);
     const data = logged.data as LoggedReplyData;
     yield { event: 'message-start', ...(typeof data.id === 'string' ? { id: data.id } : {}) };
     const blocks: readonly ContentBlock[] = Array.isArray(data.content)
@@ -219,44 +206,4 @@ export class ReplayChatModel extends BaseChatModel {
       responseMetadata,
     };
   }
-}
-
-/** 錄好那則回覆推回一顆 chunk：文字、推理、工具呼叫、結束原因、用量。 */
-function chunkOf(message: AIMessage): ModelStreamChunk {
-  const reasoning = message.additional_kwargs['reasoning_content'];
-  const usage = message.usage_metadata;
-  const finishReason = message.response_metadata['finish_reason'];
-  return {
-    ...(message.id === undefined ? {} : { id: message.id }),
-    choices: [
-      {
-        index: 0,
-        delta: {
-          role: 'assistant',
-          content: message.text,
-          ...(typeof reasoning === 'string' ? { reasoning_content: reasoning } : {}),
-          ...(message.tool_calls === undefined || message.tool_calls.length === 0
-            ? {}
-            : {
-                tool_calls: message.tool_calls.map((call, index) => ({
-                  index,
-                  ...(call.id === undefined ? {} : { id: call.id }),
-                  type: 'function' as const,
-                  function: { name: call.name, arguments: JSON.stringify(call.args) },
-                })),
-              }),
-        },
-        finish_reason: typeof finishReason === 'string' ? finishReason : null,
-      },
-    ],
-    ...(usage === undefined
-      ? {}
-      : {
-          usage: {
-            prompt_tokens: usage.input_tokens,
-            completion_tokens: usage.output_tokens,
-            total_tokens: usage.total_tokens,
-          },
-        }),
-  };
 }

@@ -192,7 +192,12 @@ export function fakeModel(): ReturnType<typeof langchainFakeModel> {
   return takesLlmStream(langchainFakeModel());
 }
 
-function takesLlmStream<M extends object>(model: M): M {
+/**
+ * 把一顆不讀 `configurable` 的測試模型接上 native 的 `llm/stream`，接法同 {@link fakeModel}。
+ * @param model - 測試自己的模型。
+ * @returns 同一顆模型的 Proxy；設欄位照樣設到原物件上。
+ */
+export function takesLlmStream<M extends object>(model: M): M {
   return new Proxy(model, {
     get(target, property, receiver) {
       const value: unknown = Reflect.get(target, property, receiver);
