@@ -121,6 +121,8 @@ export interface AgentExtras {
   readonly disposeError?: Error;
   /** 多掛的插件（例如真的 MCP）。 */
   readonly plugins?: readonly PluginEntry[];
+  /** 這條 thread 的落盤接線；不給就是沒開落盤。 */
+  readonly attachPersistence?: ThreadAgent['attachPersistence'];
 }
 
 export interface Rig {
@@ -182,6 +184,9 @@ export function rig(options: Partial<WireHandlerOptions> = {}): Rig {
         },
         ...(extra.goalDriver !== undefined && { goalDriver: () => extra.goalDriver! }),
         ...(extra.attachTitle !== undefined && { attachTitle: () => extra.attachTitle!() }),
+        ...(extra.attachPersistence !== undefined && {
+          attachPersistence: extra.attachPersistence,
+        }),
         dispose: async () => {
           if (extra.disposeGate !== undefined) await extra.disposeGate.promise;
           disposed.push(threadId);

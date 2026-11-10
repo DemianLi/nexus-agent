@@ -522,3 +522,58 @@ describe('綁一條磁碟上還沒有的 thread（#2341）', () => {
     expect(r.created).toHaveLength(1);
   });
 });
+
+describe('前台搜尋前的排空（#2689）', () => {
+  /** 只記 `flushPending` 被叫幾次的落盤接線；`fail` 給了就讓它拒絕。 */
+  function persistence(fail?: Error) {
+    const calls = { flushPending: 0 };
+    return {
+      calls,
+      attach: () => ({
+        flush: () => Promise.resolve(),
+        flushPending: () => {
+          calls.flushPending += 1;
+          return fail === undefined ? Promise.resolve() : Promise.reject(fail);
+        },
+        dispose: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  const flush = (p: Process, threadId = 't1') =>
+    p.r.handler.handle(
+      loopbackRequest(`${BASE}/internal/threads/${threadId}/flush`, { method: 'POST' }),
+    );
+
+  it('POST flush 叫到 flushPending、回 204；最後活動時間不動，控制面不重送 idle', async () => {
+    const fake = persistence();
+    const p = await conversation({}, (r) => r.extras.set('t1', { attachPersistence: fake.attach }));
+    const before = p.r.handler.idleState('t1');
+    p.r.advance(T);
+    const response = await flush(p);
+    expect(response.status).toBe(204);
+    expect(fake.calls.flushPending).toBe(1);
+    expect(p.r.handler.idleState('t1')).toEqual(before);
+    p.control.checkIdle();
+    expect(p.idleReports()).toEqual([]);
+  });
+
+  it('寫不出去：回 500、記一行，最後活動時間照樣不動', async () => {
+    const fake = persistence(new Error('磁碟滿了'));
+    const p = await conversation({}, (r) => r.extras.set('t1', { attachPersistence: fake.attach }));
+    const before = p.r.handler.idleState('t1');
+    const response = await flush(p);
+    expect(response.status).toBe(500);
+    expect(p.r.warnings).toEqual([
+      expect.stringContaining('[搜尋] thread "t1" 排空失敗：磁碟滿了'),
+    ]);
+    expect(p.r.handler.idleState('t1')).toEqual(before);
+  });
+
+  it('沒開落盤：照樣 204；別的 thread 回 404，不建 agent', async () => {
+    const p = await conversation();
+    expect((await flush(p)).status).toBe(204);
+    expect((await flush(p, 'other')).status).toBe(404);
+    expect(p.r.created).toEqual(['t1']);
+  });
+});
