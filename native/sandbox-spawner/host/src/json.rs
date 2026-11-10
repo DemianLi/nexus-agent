@@ -1,7 +1,7 @@
-//! 宿主用的 JSON：解析、編碼與值的型別都是 `serde_json`（只開預設的 `std`；沒開 `preserve_order`，[`Map`] 是 BTreeMap）。
-//! 這裡加的是巢狀層數的上限、固定的錯誤原因，與手排鍵順序的 [`encode_fields`]。
+//! 宿主用的 JSON：解析、編碼與值的型別都是 `serde_json`。這裡加的是巢狀層數的上限、固定的錯誤原因，與手排鍵順序的 [`encode_fields`]。
 //!
-//! 跟 `serde_json` 本身一樣：物件的鍵照碼位（位元組）順序，重複的鍵取後者（跟 `JSON.parse` 一致）。
+//! [`encode`] 的物件鍵照碼位（位元組）順序；[`parse`] 遇到重複的鍵取後者（跟 `JSON.parse` 一致）。鍵的順序由 [`encode`] 自己排，
+//! 不靠 [`Map`] 的順序：`serde_json` 開了 `preserve_order`（feature 在整個建置統一，相依裡的 serde_json 一樣生效），[`Map`] 留著插入順序，MCP 的工具定義才照 server 送的順序過橋。
 //! 輸入要是合法的 UTF-8，`\u` 跳脫的代理對落單的不收。
 
 use std::fmt;
@@ -66,7 +66,37 @@ pub fn encode_fields(fields: &[(&str, &Value)]) -> Vec<u8> {
 }
 
 fn write(out: &mut Vec<u8>, value: &Value) {
-    // 寫進 Vec 不會有 IO 錯誤，Value 的鍵都是字串，這一步不會失敗。
+    match value {
+        Value::Array(items) => {
+            out.push(b'[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write(out, item);
+            }
+            out.push(b']');
+        }
+        Value::Object(fields) => {
+            let mut sorted: Vec<(&String, &Value)> = fields.iter().collect();
+            sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            out.push(b'{');
+            for (i, (key, item)) in sorted.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                scalar(out, &Value::String(key.clone()));
+                out.push(b':');
+                write(out, item);
+            }
+            out.push(b'}');
+        }
+        _ => scalar(out, value),
+    }
+}
+
+fn scalar(out: &mut Vec<u8>, value: &Value) {
+    // 寫進 Vec 不會有 IO 錯誤，純量編碼不會失敗。
     serde_json::to_writer(out, value).expect("Value 編進 Vec 不會失敗");
 }
 
@@ -103,6 +133,21 @@ mod tests {
             br#"{"type":"x","a":{"a":{"c":3,"d":2},"b":1}}"#
         );
         assert_eq!(encode_fields(&[]), b"{}");
+    }
+
+    #[test]
+    fn keys_sort_by_code_point_whatever_the_insertion_order() {
+        let mut inner = Map::new();
+        for key in ["é", "z", "A", "a", "😀", "b"] {
+            inner.insert(key.to_string(), Value::from(key.len()));
+        }
+        let mut outer = Map::new();
+        outer.insert("y".into(), Value::Array(vec![Value::Object(inner)]));
+        outer.insert("x".into(), Value::Null);
+        assert_eq!(
+            String::from_utf8(encode(&Value::Object(outer))).unwrap(),
+            r#"{"x":null,"y":[{"A":1,"a":1,"b":1,"z":1,"é":2,"😀":4}]}"#
+        );
     }
 
     #[test]
