@@ -2,7 +2,7 @@
  * 「從日誌推回的歷史」對「端點實際收到的請求」的比對夾具（#1299，承 #1159 的探針）。
  *
  * S2 要把請求的訊息串變成日誌的導出物。這份夾具回答一個問題：**今天，拿一份會話日誌的某個位置以前的事件
- * 重放出歷史、再經同一個 `ChatOpenAI` 送出去，得到的 wire `messages` 跟產品當時真的送給模型的那份，逐位元組
+ * 重放出歷史、再經同一個 `BaseChatOpenAI` 送出去，得到的 wire `messages` 跟產品當時真的送給模型的那份，逐位元組
  * 一樣嗎？** 不一樣的地方就是 S2 以前要補的缺口（地圖 #1298 的 #1300–#1303）。
  *
  * ## 量法
@@ -43,7 +43,6 @@ import { PassThrough } from 'node:stream';
 import { SystemMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { ChatOpenAI } from '@langchain/openai';
 import { stringify } from 'yaml';
 import {
   createHistoryShadowTally,
@@ -67,6 +66,7 @@ import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
+import { BaseChatOpenAI } from './base-chat-openai.js';
 import { runCli, runRepl } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toolResultAsSeen } from './conversation-restore.js';
@@ -310,7 +310,7 @@ export async function fakeEndpoint(script: Script, stream: boolean): Promise<Fak
 }
 
 const model = (baseURL: string) =>
-  new ChatOpenAI({
+  new BaseChatOpenAI({
     model: 'fake',
     apiKey: 'sk-loopback',
     maxRetries: 0,
@@ -320,7 +320,7 @@ const model = (baseURL: string) =>
     configuration: { baseURL, fetch: withShippedRequestBody() },
   });
 
-/** 把一串訊息經 `ChatOpenAI` 送一次（打 sink），回它的 wire `messages`。 */
+/** 把一串訊息經 `BaseChatOpenAI` 送一次（打 sink），回它的 wire `messages`。 */
 async function wireOf(messages: BaseMessage[]): Promise<WireMessage[]> {
   const sink = await fakeEndpoint(() => ({}), false);
   try {

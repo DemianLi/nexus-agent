@@ -1,8 +1,8 @@
-import { ChatOpenAI } from '@langchain/openai';
-import type { ChatOpenAIFields } from '@langchain/openai';
+import { BaseChatOpenAI } from './base-chat-openai.js';
+import type { BaseChatOpenAIFields } from './base-chat-openai.js';
 
 /** {@link GuardedChatOpenAI} 的欄位。放在 `fields` 裡，`withConfig` 建新實例時才帶得到。 */
-export interface GuardedChatOpenAIFields extends ChatOpenAIFields {
+export interface GuardedChatOpenAIFields extends BaseChatOpenAIFields {
   /** 模型呼叫拋出來的錯，換成要往外拋的那顆。不用換就回原錯誤。 */
   readonly translateFailure?: (error: unknown) => unknown;
 }
@@ -13,7 +13,7 @@ export interface GuardedChatOpenAIFields extends ChatOpenAIFields {
  * 放在模型物件上，不放在 `wrapModelCall`：標題那顆不在模型呼叫圖裡，而重試那一顆在 `maxRetries` 為 0 時不掛。錯誤從這裡出去之後，
  * 基座發的 `tool-error`、圍堵翻的工具結果、`turn/failed` 拿到的都是換過的。
  */
-export class GuardedChatOpenAI extends ChatOpenAI {
+export class GuardedChatOpenAI extends BaseChatOpenAI {
   readonly #translate: (error: unknown) => unknown;
 
   constructor(fields: GuardedChatOpenAIFields) {
@@ -22,8 +22,8 @@ export class GuardedChatOpenAI extends ChatOpenAI {
   }
 
   override async _generate(
-    ...args: Parameters<ChatOpenAI['_generate']>
-  ): ReturnType<ChatOpenAI['_generate']> {
+    ...args: Parameters<BaseChatOpenAI['_generate']>
+  ): ReturnType<BaseChatOpenAI['_generate']> {
     try {
       return await super._generate(...args);
     } catch (error: unknown) {
@@ -32,8 +32,8 @@ export class GuardedChatOpenAI extends ChatOpenAI {
   }
 
   override async *_streamChatModelEvents(
-    ...args: Parameters<ChatOpenAI['_streamChatModelEvents']>
-  ): ReturnType<ChatOpenAI['_streamChatModelEvents']> {
+    ...args: Parameters<BaseChatOpenAI['_streamChatModelEvents']>
+  ): ReturnType<BaseChatOpenAI['_streamChatModelEvents']> {
     try {
       yield* super._streamChatModelEvents(...args);
     } catch (error: unknown) {
@@ -42,8 +42,8 @@ export class GuardedChatOpenAI extends ChatOpenAI {
   }
 
   override async *_streamResponseChunks(
-    ...args: Parameters<ChatOpenAI['_streamResponseChunks']>
-  ): ReturnType<ChatOpenAI['_streamResponseChunks']> {
+    ...args: Parameters<BaseChatOpenAI['_streamResponseChunks']>
+  ): ReturnType<BaseChatOpenAI['_streamResponseChunks']> {
     try {
       yield* super._streamResponseChunks(...args);
     } catch (error: unknown) {
@@ -51,11 +51,11 @@ export class GuardedChatOpenAI extends ChatOpenAI {
     }
   }
 
-  /** `ChatOpenAI.withConfig` 寫死 `new ChatOpenAI`，不覆寫的話 `bindTools` 之後就沒有這一層。 */
+  /** `BaseChatOpenAI.withConfig` 寫死 `new BaseChatOpenAI`，不覆寫的話 `bindTools` 之後就沒有這一層。 */
   override withConfig(
-    config: Parameters<ChatOpenAI['withConfig']>[0],
-  ): ReturnType<ChatOpenAI['withConfig']> {
-    const next = new GuardedChatOpenAI(this.fields ?? {});
+    config: Parameters<BaseChatOpenAI['withConfig']>[0],
+  ): ReturnType<BaseChatOpenAI['withConfig']> {
+    const next = new GuardedChatOpenAI(this.fields);
     next.defaultOptions = { ...this.defaultOptions, ...config };
     return next as never;
   }

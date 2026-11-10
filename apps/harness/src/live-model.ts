@@ -1,7 +1,7 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
-import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
+import { OpenAIError } from 'openai';
 import {
   beginAttemptReport,
   DEFAULT_STREAM_RETRYABLE_CODES,
@@ -50,8 +50,8 @@ import type { LiveModelConfig } from './settings/live-model.js';
  * Phase 0 的真實供應商接線（issue #31）。
  *
  * 走 NVIDIA 的 OpenAI 相容端點：JS 這邊沒有 NVIDIA 專用的 LangChain 整合
- * （`@langchain/nvidia-ai-endpoints` 只有 Python 版），所以用 `@langchain/openai`
- * 指過去。這裡驗的是接線 —— tool call 的參數回得來、streaming 的事件形狀對得上 ——
+ * （`@langchain/nvidia-ai-endpoints` 只有 Python 版），所以走 Chat Completions，由 `BaseChatOpenAI`（`base-chat-openai.ts`）
+ * 直接呼叫 `openai` SDK 指過去。這裡驗的是接線 —— tool call 的參數回得來、streaming 的事件形狀對得上 ——
  * 不是模型品質；供應商比較在 Phase 2 與 Phase 5（見開發計劃第 7 節決策點 2）。
  *
  * ## 這個檔裡的 `DEFAULT_LIVE_*` 都只是**預設值**
@@ -264,7 +264,7 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  * ## 為什麼需要它：那條鏈在我們身上是斷的
  *
  * 基座的緊急摘要恢復認的是型別化的 `ContextOverflowError`，而那顆是
- * `@langchain/openai` 的 `wrapOpenAIClientError` 在 adapter 層建出來的——條件是訊息命中
+ * `wrapOpenAIClientError`（`base-chat-openai.ts`，照搬 `@langchain/openai` 1.5.10）在 adapter 層建出來的——條件是訊息命中
  * 四個字串之一（`context_length_exceeded`／`Input tokens exceed the configured limit`／
  * `exceeds the context window`／`maximum context length`）。
  *
@@ -290,7 +290,7 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  * **現況（#1437 M2，2026-10-14）：`nvidia/nemotron-3-super-120b-a12b` 超過窗口時，端點回的是另一種 body，不是這一種。** 對它送約 157 萬 token 的請求，端點回 `400`，信封是
  * `This model's maximum context length is 1000000 tokens. However, your messages resulted in 1579695 tokens…`，
  * 沒有 `param`、也沒有導出的負 `max_tokens`——所以**這個判別式對它一個都不中**；它命中的是
- * `@langchain/openai` 自己的四個溢出字串之一（`maximum context length`），被包成 `ContextOverflowError`，
+ * adapter 自己的四個溢出字串之一（`maximum context length`），被包成 `ContextOverflowError`，
  * 分類成 `CONTEXT_WINDOW_EXCEEDED`（`turn-failed` 的碼，狀態 `400`）。上面「逼不出來」的 700,045 token 是更早的
  * 量測，端點的上限實際是 100 萬。只補這一段現況，判別式不動。
  *
@@ -298,7 +298,7 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * dsh 寫得很清楚：「溢出分类由适配器维护——提供方措辞可能改变」
  * （`compaction-basic/README.zh.md:241`），消費端只認規範碼；LangChain 與 LiteLLM 同形。
- * **我們動不了 `@langchain/openai` 那支**，所以退到手上最靠近 adapter 的一格：建 client
+ * **adapter 刻意跟 `@langchain/openai` 1.5.10 保持一致**（`base-chat-openai.ts` 是照搬的），所以退到手上最靠近 adapter 的一格：建 client
  * 的這個工廠。**不碰恢復那一層**——那一層基座已經有而且是對的（`context-overflow.test.ts`
  * 量過：branded 的錯誤到得了 `isContextOverflow`，埋在 `cause` 底下也認得）。
  *
@@ -638,8 +638,8 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *    one classifier」。這裡同向：in-band 的錯誤被翻成跟 HTTP 錯誤同一個形狀。
  * 2. **adapter 負責翻譯投遞方式。** `llm-pi-ai/src/stream.ts:129-133`：「pi-ai never throws
  *    mid-stream —— failures arrive as `error` events, which become error/aborted `finish`
- *    chunks (the harness protocol's other error-delivery style)」。我們動不了
- *    `@langchain/openai` 那支 adapter（跟 {@link isDerivedContextOverflow} 的偏離登記一同因），
+ *    chunks (the harness protocol's other error-delivery style)」。adapter 刻意
+ *    跟 `@langchain/openai` 1.5.10 保持一致（跟 {@link isDerivedContextOverflow} 的偏離登記一同因），
  *    所以退到手上最靠近 adapter 的一格：建 client 的這個工廠。
  * 3. **重試掛在迴圈的步級掛點**（`llm/src/retry-policy.ts:5`、`llm-retry/src/index.ts` 聽
  *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
@@ -664,7 +664,7 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * - 吐了內容之後中段才出錯（第 2 則以後的事件是 error）。
  * - 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING`）。
  *
- * 這兩類在這一層的行為不變：錯誤照原樣往下交、`ChatOpenAI` 只打一次（`live-model.test.ts` 的 `mid503`／`truncated`）。
+ * 這兩類在這一層的行為不變：錯誤照原樣往下交、`BaseChatOpenAI` 只打一次（`live-model.test.ts` 的 `mid503`／`truncated`）。
  * 它們的整次重打在**更上面一層**（#520，見上），端到端的測試在 `stream-retry.test.ts`。吐了內容之後**停住**
  * （不是斷掉）由外層的 {@link withStreamIdleTimeout} 接成逾時，同樣歸那一層重打。
  *
@@ -1015,7 +1015,7 @@ const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
  *
  * ## 做法：看，不改
  *
- * 在 `fetch` 這一層（同 {@link withInbandStreamErrors}、{@link withStreamIdleTimeout} 退到這裡的理由：`@langchain/openai` 的事件轉換
+ * 在 `fetch` 這一層（同 {@link withInbandStreamErrors}、{@link withStreamIdleTimeout} 退到這裡的理由：事件轉換（`@langchain/core` 的 `convertOpenAICompletionsStream`）
  * 不暴露原始 `finish_reason`，`message-finish` 又會把它蓋掉）逐則解 SSE 事件，記下有沒有出現過非空的 `choices[0].finish_reason`。
  * 位元組原樣往下交，只在三種情形把串流弄成錯誤：
  *
@@ -1251,8 +1251,7 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  *
  * ## 誰會送出 `[]`
  *
- * `@langchain/openai` 1.5.10 的 `convertMessagesToCompletionsMessageParams` 有兩條路
- * （`dist/converters/completions.js:571`）：帶 `response_metadata.output_version === 'v1'` 的走標準
+ * `toCompletionsMessages`（`base-chat-openai.ts`，照搬 `@langchain/openai` 1.5.10 的 `convertMessagesToCompletionsMessageParams`）有兩條路：帶 `response_metadata.output_version === 'v1'` 的走標準
  * 轉換，沒有文字、有工具呼叫時送 `null`；其餘走舊路，把推理與工具呼叫區塊濾掉、剩下的陣列原樣送，
  * 沒有文字就是 `[]`。產品路徑上掉進 `[]` 的有兩個（本機假端點實測，正常串流、日誌還原、CLI 都不會）：
  *
@@ -1293,8 +1292,8 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  *
  * ## 偏離登記
  *
- * 1. **改在 `fetch` 這一層，不在組請求那一步。** dsh 在序列化裡就送對；`@langchain/openai` 的轉換
- *    函式沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body（同
+ * 1. **改在 `fetch` 這一層，不在組請求那一步。** dsh 在序列化裡就送對；轉換函式刻意跟
+ *    `@langchain/openai` 1.5.10 保持一致，所以退到手上最靠近它的一格：送出前的 body（同
  *    {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
  * 2. **只換空的那種**（有工具呼叫的只換空陣列，沒有的不分形狀）。pi-ai 還把非空的文字接成一條字串送（它的註解說陣列會讓 NVIDIA NIM 上的
  *    DeepSeek V3.2 照抄區塊結構）。那會改掉每一則有字的助手訊息的送法，兩個模型都要重量，不在這張。
@@ -1346,9 +1345,9 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * ## 偏離登記
  *
- * **改在 `fetch` 這一層，不在序列化那一步**（理由 1：基座表達不出來）。dsh 在序列化時就補；`@langchain/openai` 的轉換函式
- * （`dist/converters/completions.js:575-583` 舊路、`:475-479` 標準路）沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body，
- * 跟 {@link normalizeEmptyAssistantContent}（#592）退到同一處、同一個理由。撤除條件：基座的轉換函式可以設定空工具結果的送法。
+ * **改在 `fetch` 這一層，不在序列化那一步**。dsh 在序列化時就補；轉換函式（`toCompletionsMessages`）
+ * 刻意跟 `@langchain/openai` 1.5.10 保持一致，所以退到手上最靠近它的一格：送出前的 body，
+ * 跟 {@link normalizeEmptyAssistantContent}（#592）退到同一處、同一個理由。撤除條件：轉換函式不再要求跟 `@langchain/openai` 一致。
  *
  * @param messages - 請求 body 的 `messages`。
  * @returns 換過的訊息串；沒有任何空的工具訊息時是**原本那個陣列**。
@@ -1425,7 +1424,7 @@ function rewriteChatMessages(
  * ## 偏離登記
  *
  * **改在 `fetch` 這一層。** dsh 在序列化裡就不送；`AgentNode` 的 `name` 是 `??` 後面接預設值，傳什麼都拿不掉，
- * `@langchain/openai` 的轉換函式也沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body（同
+ * 轉換函式又刻意跟 `@langchain/openai` 1.5.10 保持一致，所以退到手上最靠近它的一格：送出前的 body（同
  * {@link withEmptyAssistantContent} 與 {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
  *
  * @param messages - 請求 body 的 `messages`。
@@ -1483,13 +1482,9 @@ export function withShippedRequestBody(baseFetch: typeof fetch = fetch): typeof 
  *
  * ## 偏離登記
  *
- * **改在 `fetch` 這一層，不在組請求標頭時合進去**（理由 1：基座表達不出來）。dsh 在 adapter 組請求標頭時就把歸屬標頭合進去
- * （`llm-pi-ai/src/adapter.ts:216-224`）。`@langchain/openai` 1.5.10 一定會把自己的 `User-Agent` 排在 `configuration.defaultHeaders`
- * 之後蓋掉它：`normalizeHeaders` 把鍵轉成小寫，接著查的是 `normalizedHeaders["User-Agent"]`、永遠查不到，基座的 `User-Agent` 鍵就排在我們的
- * `user-agent` 後面（`dist/utils/azure.js:89-96`）。**實測**（2026-10-17，主 checkout 的 `@langchain/openai` 1.5.10，假 fetch 記下標頭）：
- * 不帶、帶小寫 `user-agent`、帶大寫 `User-Agent` 三種，收到的 UA 都是基座的。所以退到手上最靠近它的一格：送出前的 fetch，
- * 跟空助手內容（#592）、助手 `name`（#1392）與空工具結果（#1562）退到同一處、同一個理由。
- * 撤除條件：基座讓部署帶的 `User-Agent` 勝出（`defaultHeaders` 的 `User-Agent` 蓋得過基座的），就改回在 `configuration` 裡帶。
+ * **改在 `fetch` 這一層，不在組請求標頭時合進去**。dsh 在 adapter 組請求標頭時就把歸屬標頭合進去
+ * （`llm-pi-ai/src/adapter.ts:216-224`）。`BaseChatOpenAI` 不塞自己的 `User-Agent`，在 `configuration.defaultHeaders` 帶也送得出去；
+ * 留在這一層，跟空助手內容（#592）、助手 `name`（#1392）與空工具結果（#1562）在同一處，送出的標頭也跟換轉接器之前（#2361）相同。
  *
  * 放在 fetch 疊的**最外層**：每一個交給底層的請求都帶，不管內層怎麼改 body 或包回應。
  *
@@ -1707,7 +1702,7 @@ export function createLiveModel(
      */
     readonly requestGate?: RequestGate;
   } = {},
-): ChatOpenAI {
+): GuardedChatOpenAI {
   // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
   const entry = requireModelEntry(config.models, config.modelId);
   // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
@@ -1847,7 +1842,7 @@ export function modelGoneMessage(error: unknown): string | undefined {
  * **重試只看碼**（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）：中止之外，這裡把錯誤交給
  * {@link classifyTurnFailure}，碼不在預設可重試集（`DEFAULT_STREAM_RETRYABLE_CODES`）裡就拋出去讓 SDK 別再打。
  * 產品路徑上 SDK 層的 `maxRetries` 是 0，真正決定重打的是 `@nexus/core` 的 `retryModelCall`，它讀的也是
- * 同一個碼（見 {@link classifyAndReportFailedAttempt}）；這裡的閘門只讓**直接把它掛在 `ChatOpenAI` 上**的呼叫
+ * 同一個碼（見 {@link classifyAndReportFailedAttempt}）；這裡的閘門只讓**直接把它掛在 `BaseChatOpenAI` 上**的呼叫
  * （單元測試、eval 的尺寸比較）維持「401／400／422 這類打一次就放棄」。
  *
  * **下架排在最前面**：它換掉的是錯誤的**說法**——供應商那句帶日期的話、與去哪裡換模型。
@@ -2303,13 +2298,13 @@ function resolveUsableKey(credentials: CredentialService, name: string): string 
  * 送到線上的紅字是我們那句中文，`classifyTurnFailure` 沿 `cause` 鏈認出的碼也不變。
  *
  * **偏離 dsh（理由 1：基座表達不出來）。** dsh 在轉接器自己先取金鑰、拿到值才發請求（`llm-pi-ai/src/adapter.ts:384`），取金鑰的錯不經 SDK。
- * LangChain 的 `ChatOpenAI` 只收靜態字串或函式：先取再給字串，就失去 #1541 要的「每次請求前才解析」（`model` 建好就固定了）；
+ * `openai` SDK 的 `apiKey` 只收靜態字串或函式：先取再給字串，就失去 #1541 要的「每次請求前才解析」（`model` 建好就固定了）；
  * 在每個請求前另外預取一次再讓函式取第二次，兩次之間檔案又被改，錯還是會被包上前綴。所以取金鑰仍在函式裡，但錯的形狀由我們定。
- * `OpenAIError` 從 `@langchain/openai` 重新匯出的 `OpenAIClient` 取（harness 沒有直接依賴 `openai`，也避免兩份 `openai` 時 `instanceof` 對不上）。
+ * `OpenAIError` 跟 `BaseChatOpenAI` 用的是同一份 `openai`（鎖檔只有一份 `openai@7.5.0`），`instanceof` 對得上。
  */
 function keyFailureForSdk(error: unknown): unknown {
   return error instanceof Error
-    ? new OpenAIClient.OpenAIError(error.message, { cause: error })
+    ? new OpenAIError(error.message, { cause: error })
     : error;
 }
 

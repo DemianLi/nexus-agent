@@ -1,5 +1,5 @@
 /**
- * 把全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)，`request-gate.ts`）掛在 `ChatOpenAI` 的
+ * 把全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)，`request-gate.ts`）掛在 `BaseChatOpenAI` 的
  * 三個呼叫方法上的子類，也是 {@link AttachmentChatOpenAI}（附件投影）的基底。
  *
  * ## 為什麼閘在這三個方法上，而不是重試層或 fetch
@@ -17,9 +17,8 @@
  * ## 三個方法都要，順序是「便宜的檢查 → 取名額 → 投影 → 送」
  *
  * 基座依呼叫方式挑方法：`invoke` 走 `_generate`，有串流 handler 時走 `_streamResponseChunks`，v3 的 `stream()` 走 `_streamChatModelEvents`
- * （同 `attachment-chat-openai.ts` 的說明）。漏一條，那一條路上的請求就不受閘管。基座的 `ChatOpenAI` 把這三個方法轉給**另一個**
- * `completions` 實例，所以 `_generate` 在串流模式下內部呼叫的 `_streamResponseChunks` 是 completions 的、不是這個子類的——不會重入、
- * 不會自己等自己（上限 1 的測試釘著這一點）。
+ * （同 `attachment-chat-openai.ts` 的說明）。漏一條，那一條路上的請求就不受閘管。`BaseChatOpenAI._generate` 只打非串流請求、不轉呼叫
+ * `_streamResponseChunks`，所以不會重入、不會自己等自己（上限 1 的測試釘著這一點）。
  *
  * 取名額排在附件的額度檢查之後（額度超過會直接拋、不必排隊）、投影之前：排隊的那段時間不抱著剛讀進來的 base64。
  *
@@ -29,15 +28,15 @@
  *
  * ## `withConfig` 也要覆寫
  *
- * 基座的 `ChatOpenAI.withConfig` 是 `new ChatOpenAI(this.fields)`（`bindTools` 也走它），會把子類連同閘一起丟掉、換回沒有閘的本尊。
+ * `BaseChatOpenAI.withConfig` 是 `new BaseChatOpenAI(this.fields)`（`bindTools` 也走它），會把子類連同閘一起丟掉、換回沒有閘的本尊。
  * 覆寫成重建同一個子類，帶上同一份閘。
  *
  * @module
  */
 
-import type { ChatOpenAI } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
 
+import type { BaseChatOpenAI } from './base-chat-openai.js';
 import { GuardedChatOpenAI } from './guarded-chat-openai.js';
 import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import type { RequestGate } from './request-gate.js';
@@ -89,8 +88,8 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
   }
 
   override async _generate(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_generate']>
-  ): ReturnType<ChatOpenAI['_generate']> {
+    ...[messages, options, runManager]: Parameters<BaseChatOpenAI['_generate']>
+  ): ReturnType<BaseChatOpenAI['_generate']> {
     this.precheck(messages);
     const release = await this.#enter(options.signal);
     try {
@@ -102,8 +101,8 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
   }
 
   override async *_streamChatModelEvents(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_streamChatModelEvents']>
-  ): ReturnType<ChatOpenAI['_streamChatModelEvents']> {
+    ...[messages, options, runManager]: Parameters<BaseChatOpenAI['_streamChatModelEvents']>
+  ): ReturnType<BaseChatOpenAI['_streamChatModelEvents']> {
     this.precheck(messages);
     const release = await this.#enter(options.signal);
     try {
@@ -115,8 +114,8 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
   }
 
   override async *_streamResponseChunks(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_streamResponseChunks']>
-  ): ReturnType<ChatOpenAI['_streamResponseChunks']> {
+    ...[messages, options, runManager]: Parameters<BaseChatOpenAI['_streamResponseChunks']>
+  ): ReturnType<BaseChatOpenAI['_streamResponseChunks']> {
     this.precheck(messages);
     const release = await this.#enter(options.signal);
     try {
@@ -149,8 +148,8 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
    * 讀取鎖，走不到這裡。
    */
   override async stream(
-    ...[input, options]: Parameters<ChatOpenAI['stream']>
-  ): ReturnType<ChatOpenAI['stream']> {
+    ...[input, options]: Parameters<BaseChatOpenAI['stream']>
+  ): ReturnType<BaseChatOpenAI['stream']> {
     const consumer = new AbortController();
     const signal =
       options?.signal === undefined
@@ -175,9 +174,9 @@ export class GatedChatOpenAI extends GuardedChatOpenAI {
   }
 
   override withConfig(
-    config: Parameters<ChatOpenAI['withConfig']>[0],
-  ): ReturnType<ChatOpenAI['withConfig']> {
-    const next = new GatedChatOpenAI(this.fields ?? {}, this.#gate);
+    config: Parameters<BaseChatOpenAI['withConfig']>[0],
+  ): ReturnType<BaseChatOpenAI['withConfig']> {
+    const next = new GatedChatOpenAI(this.fields, this.#gate);
     next.defaultOptions = { ...this.defaultOptions, ...config };
     return next as never;
   }
