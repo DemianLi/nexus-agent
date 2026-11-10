@@ -264,6 +264,7 @@ async function rig(
   deep: Record<string, unknown>,
   cleanups: (() => Promise<void>)[] = perTest,
   deepJson: Record<string, string> = {},
+  loop?: 'langgraph' | 'native',
 ): Promise<Rig> {
   const upstream = await fakeEndpoint(scriptFor(deep, deepJson), true);
   cleanups.push(() => upstream.close());
@@ -278,7 +279,16 @@ async function rig(
     logs,
     async start() {
       const running = (await runServe({
-        argv: ['--port', '0', '--live', '--session-log', logs, '--patch', patch],
+        argv: [
+          '--port',
+          '0',
+          '--live',
+          '--session-log',
+          logs,
+          '--patch',
+          patch,
+          ...(loop === undefined ? [] : ['--agent-loop', loop]),
+        ],
         log: () => undefined,
         env: { [HARNESS_HOME_ENV]: home },
       })) as RunningServe;
@@ -490,101 +500,138 @@ function mainCalls(upstream: FakeEndpoint, prompt: string): number {
   ).length;
 }
 
-describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
-  const shallow = { v: mixed(10) };
-  const levels: Record<string, number> = {
-    p44: 44,
-    p46: 46,
-    e600: AT_LOG_CAP,
-    p3000: 3_000,
-    p5000: 5_000,
-  };
-  const deep = Object.fromEntries(
-    Object.entries(levels).map(([name, count]) => [name, { v: mixed(count) }]),
-  );
-  const shared: (() => Promise<void>)[] = [];
-  let resumed: {
-    readonly rig: Rig;
-    readonly server: RunningServe;
-    readonly seqOf: Record<string, number>;
-  };
-
-  // 每條 thread 第一台各真跑一輪（參數淺），收掉；把那一行換成深的；開第二台。下面每一格各開一條 thread。
-  beforeAll(async () => {
-    const sharedRig = await rig(
-      Object.fromEntries(Object.keys(deep).map((name) => [name, shallow])),
-      shared,
+describe.each(['langgraph', 'native'] as const)(
+  '續接：日誌裡的舊事件比上限深（#1658，%s）',
+  (loop) => {
+    const shallow = { v: mixed(10) };
+    const levels: Record<string, number> = {
+      p44: 44,
+      p46: 46,
+      e600: AT_LOG_CAP,
+      p3000: 3_000,
+      p5000: 5_000,
+    };
+    const deep = Object.fromEntries(
+      Object.entries(levels).map(([name, count]) => [name, { v: mixed(count) }]),
     );
-    const first = await sharedRig.start();
-    for (const name of Object.keys(deep)) await say(first, `resume-${name}`, `深:${name}`);
-    await first.close();
+    const shared: (() => Promise<void>)[] = [];
+    let resumed: {
+      readonly rig: Rig;
+      readonly server: RunningServe;
+      readonly seqOf: Record<string, number>;
+    };
 
-    const seqOf: Record<string, number> = {};
-    for (const [name, count] of Object.entries(levels)) {
-      const file = sharedRig.logFile(`resume-${name}`);
-      const lines = await logLines(file);
-      const at = lines.findIndex(
-        (line) => line.includes('"assistant/message"') && line.includes(`call-${name}`),
+    // 每條 thread 第一台各真跑一輪（參數淺），收掉；把那一行換成深的；開第二台。下面每一格各開一條 thread。
+    beforeAll(async () => {
+      const sharedRig = await rig(
+        Object.fromEntries(Object.keys(deep).map((name) => [name, shallow])),
+        shared,
+        {},
+        loop,
       );
-      if (at < 0) throw new Error(`${name}：日誌裡沒有那一則`);
-      const event = JSON.parse(lines[at]!) as { seq: number; data: { message: { data: unknown } } };
-      if (swapArgs(event.data.message.data, `call-${name}`) === 0) {
-        throw new Error(`${name}：那一則裡沒有參數可換`);
-      }
-      const argsJson = mixedJson(count);
-      const line = JSON.stringify(event)
-        .replaceAll(JSON.stringify(ARGS_MARKER), () => argsJson)
-        .replaceAll(JSON.stringify(TEXT_MARKER), () => JSON.stringify(argsJson));
-      // 前提：剛好 600 那一行換完之後就在日誌的上限上。（`JSON.parse` 不是遞迴的，讀得動。）
-      const depth = jsonDepth((JSON.parse(line) as { data: unknown }).data);
-      if (name === 'e600' && depth !== SESSION_EVENT_MAX_DEPTH) {
-        throw new Error(`e600：換完是 ${depth} 層`);
-      }
-      lines[at] = line;
-      await writeFile(file, `${lines.join('\n')}\n`);
-      seqOf[name] = event.seq;
-    }
-    resumed = { rig: sharedRig, server: await sharedRig.start(), seqOf };
-  }, 120_000);
-  afterAll(async () => {
-    for (const cleanup of shared.splice(0).reverse()) await cleanup();
-  });
+      const first = await sharedRig.start();
+      for (const name of Object.keys(deep)) await say(first, `resume-${name}`, `深:${name}`);
+      await first.close();
 
-  it.each([
-    ['參數 44 層', 'p44'],
-    ['參數 46 層', 'p46'],
-    ['事件剛好 600 層', 'e600'],
-  ])(
-    '%s：灌回 state 寫得進、讀得回，下一輪模型收到的參數一模一樣',
-    async (_label, name) => {
-      await say(resumed.server, `resume-${name}`, `然後-${name}`);
-      expect(argsIn(requestFor(resumed.rig.upstream, `然後-${name}`), `call-${name}`)).toEqual(
-        deep[name],
-      );
-    },
-    60_000,
-  );
+      const seqOf: Record<string, number> = {};
+      for (const [name, count] of Object.entries(levels)) {
+        const file = sharedRig.logFile(`resume-${name}`);
+        const lines = await logLines(file);
+        const at = lines.findIndex(
+          (line) => line.includes('"assistant/message"') && line.includes(`call-${name}`),
+        );
+        if (at < 0) throw new Error(`${name}：日誌裡沒有那一則`);
+        const event = JSON.parse(lines[at]!) as {
+          seq: number;
+          data: { message: { data: unknown } };
+        };
+        if (swapArgs(event.data.message.data, `call-${name}`) === 0) {
+          throw new Error(`${name}：那一則裡沒有參數可換`);
+        }
+        const argsJson = mixedJson(count);
+        const line = JSON.stringify(event)
+          .replaceAll(JSON.stringify(ARGS_MARKER), () => argsJson)
+          .replaceAll(JSON.stringify(TEXT_MARKER), () => JSON.stringify(argsJson));
+        // 前提：剛好 600 那一行換完之後就在日誌的上限上。（`JSON.parse` 不是遞迴的，讀得動。）
+        const depth = jsonDepth((JSON.parse(line) as { data: unknown }).data);
+        if (name === 'e600' && depth !== SESSION_EVENT_MAX_DEPTH) {
+          throw new Error(`e600：換完是 ${depth} 層`);
+        }
+        lines[at] = line;
+        await writeFile(file, `${lines.join('\n')}\n`);
+        seqOf[name] = event.seq;
+      }
+      resumed = { rig: sharedRig, server: await sharedRig.start(), seqOf };
+    }, 120_000);
+    afterAll(async () => {
+      for (const cleanup of shared.splice(0).reverse()) await cleanup();
+    });
 
-  it.each([
-    ['參數 3000 層（原本的無聲區）', 'p3000'],
-    ['參數 5000 層（原本 decirc 先爆）', 'p5000'],
-  ])(
-    '%s：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
-    async (_label, name) => {
+    it.each([
+      ['參數 44 層', 'p44'],
+      ['參數 46 層', 'p46'],
+      ['事件剛好 600 層', 'e600'],
+    ])(
+      '%s：灌回 state 寫得進、讀得回，下一輪模型收到的參數一模一樣',
+      async (_label, name) => {
+        await say(resumed.server, `resume-${name}`, `然後-${name}`);
+        expect(argsIn(requestFor(resumed.rig.upstream, `然後-${name}`), `call-${name}`)).toEqual(
+          deep[name],
+        );
+      },
+      60_000,
+    );
+
+    const tooDeep = [
+      ['參數 3000 層（原本的無聲區）', 'p3000'],
+      ['參數 5000 層（原本 decirc 先爆）', 'p5000'],
+    ] as const;
+
+    async function rejectionOf(name: string): Promise<unknown> {
       const client = await serveClient(resumed.server);
-      const error = await client.openEvents(`resume-${name}`).then(
+      return client.openEvents(`resume-${name}`).then(
         () => undefined,
         (caught: unknown) => caught,
       );
-      // #1668：日誌太深不是暫時壞了，專用碼（不是 unknown_error）。
-      expect(error).toBeInstanceOf(WireRejectedError);
-      expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
-      const rejected = String(error);
-      expect(rejected).toContain(CHECKPOINT_DEPTH_EXCEEDED);
-      expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
-      expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
-      expect(rejected).not.toContain('Maximum call stack size exceeded');
-    },
-    60_000,
-  );
-});
+    }
+
+    if (loop === 'langgraph') {
+      it.each(tooDeep)(
+        '%s：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
+        async (_label, name) => {
+          const error = await rejectionOf(name);
+          // #1668：日誌太深不是暫時壞了，專用碼（不是 unknown_error）。
+          expect(error).toBeInstanceOf(WireRejectedError);
+          expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
+          const rejected = String(error);
+          expect(rejected).toContain(CHECKPOINT_DEPTH_EXCEEDED);
+          expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
+          expect(rejected).toContain(`寫進存檔點`);
+          expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
+          expect(rejected).not.toContain('Maximum call stack size exceeded');
+        },
+        60_000,
+      );
+    } else {
+      // native 沒有存檔點：灌回之前用同一把尺量，同一份日誌跟 langgraph 一樣拒。
+      it.each(tooDeep)(
+        '%s：灌回 thread 之前就拒，wire 碼是 thread_history_too_deep，不遞迴爆掉，錯誤裡只有 seq 與層數、沒有事件內容',
+        async (_label, name) => {
+          const error = await rejectionOf(name);
+          expect(error).toBeInstanceOf(WireRejectedError);
+          expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
+          const rejected = String(error);
+          expect(rejected).not.toContain('Maximum call stack size exceeded');
+          expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
+          expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
+          expect(rejected).not.toContain('存檔點');
+          // 事件內容：那一輪的人話、工具呼叫 id 與參數（交錯巢狀的 `next`／`leaf`）。
+          for (const content of [`深:${name}`, `call-${name}`, '"next"', 'leaf']) {
+            expect(rejected).not.toContain(content);
+          }
+        },
+        60_000,
+      );
+    }
+  },
+);

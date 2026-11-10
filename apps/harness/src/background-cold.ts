@@ -16,8 +16,8 @@
  *
  * ## 偏離登記
  *
- * 圖的 state 靠**日誌重播**灌回，不是還原存檔點（我們的存檔點不落盤，#1106 起 `PrunedMemorySaver` 只活在記憶體）。這跟 root 的續接
- * 是同一個既有偏離（#306），不是這一張新增的；基礎建設上落盤存檔點是表達得出來的，這裡沿用 root 已登記的退路，不另開一條。
+ * 圖的 state 靠**日誌重播**灌回，不是還原存檔點（`langgraph` 的存檔點 `PrunedMemorySaver` 只活在記憶體，#1106；native 沒有存檔點）。這跟 root 的續接
+ * 是同一個偏離（#306）；基礎建設上落盤存檔點是表達得出來的，這裡沿用 root 已登記的退路，不另開一條。
  *
  * @module
  */
@@ -154,8 +154,13 @@ export function createColdChildStore(store: SessionStore): ColdChildStore {
       return { ...resumed, inspection: inspectionOf(resumed.events) };
     },
     restore: (agent, threadId, events) => {
+      if (agent.seedThread !== undefined) {
+        return restoreConversation({ seedThread: agent.seedThread.bind(agent) }, threadId, events);
+      }
       if (agent.updateState === undefined) {
-        return Promise.reject(new Error('這張圖不能把對話灌回去（沒有 updateState）'));
+        return Promise.reject(
+          new Error('這張圖不能把對話灌回去（沒有 updateState，也沒有 seedThread）'),
+        );
       }
       return restoreConversation({ updateState: agent.updateState.bind(agent) }, threadId, events);
     },

@@ -370,7 +370,7 @@ describe('整條產品路徑（createNexusAgent＋ThreadPump）', () => {
     const { failed, thrown } = await failedEvents([], (agent) => ({
       streamEvents: () => Promise.reject(value),
       getState: (config) => agent.getState(config),
-      updateState: (config, values) => agent.updateState(config, values),
+      updateState: (config, values) => agent.updateState!(config, values),
     }));
     expect(failed).toHaveLength(1);
     expect(failed[0]!.error.code).toBe('UNKNOWN');
@@ -409,7 +409,7 @@ describe('收回那一步（#withdraw）失敗：同一支記法', () => {
     const agent: PumpAgent = {
       streamEvents: (input, config) => real.streamEvents(input, config),
       getState: (config) => (broken ? Promise.reject(hostile()) : real.getState(config)),
-      updateState: (config, values) => real.updateState(config, values),
+      updateState: (config, values) => real.updateState!(config, values),
     };
     const pump = new ThreadPump(agent, 'turn-failure-withdraw');
     const detach = built.attachSession(pump.sessions);

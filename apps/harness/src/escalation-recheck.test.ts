@@ -107,7 +107,7 @@ async function assemble(loop: (typeof LOOPS)[number]): Promise<Built> {
       createHostServicesPlugin({
         backend,
         approvalPolicy,
-        channel: deriveApprovalChannel({ hasCheckpointer: true }),
+        channel: deriveApprovalChannel({ awaitsAnswer: true }),
         fsContainment: CONTAINED_FILESYSTEM,
         sandboxPolicy: { controller, rootDir: root },
       }),

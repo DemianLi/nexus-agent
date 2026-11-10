@@ -105,13 +105,18 @@ export interface BackgroundAgent {
     },
   ): Promise<AsyncIterable<unknown> & RunProjections>;
   /**
-   * 把對話灌回這條 thread 的 graph state（冷復活，#1271）。**選填**：只有冷復活用得到，沒有它的圖（測試替身）叫不醒冷的子代理，
-   * 叫醒時回 `resume-failed`。產品的圖（`ReactAgent`、native agent）都有。
+   * 把對話灌回這條 thread 的 graph state（冷復活，#1271）。**選填**：只有冷復活用得到；這一支與 {@link seedThread} 都沒有的圖（測試替身）
+   * 叫不醒冷的子代理，叫醒時回 `resume-failed`。`ReactAgent` 有這一支。
    */
   updateState?(
     config: { readonly configurable: { readonly thread_id: string } },
     values: Record<string, unknown>,
   ): Promise<unknown>;
+  /** 冷復活時把日誌推出來的對話放進還沒有快取的 thread（native agent 的 `seedThread`）。**選填**，同 {@link updateState}。 */
+  seedThread?(
+    config: { readonly configurable: { readonly thread_id: string } },
+    messages: readonly BaseMessage[],
+  ): void;
   /**
    * 收回這條 thread 停在等待點的那次 run（native agent 的 `discardSuspended`）。**選填**：native 的 run 停在等待點時留在記憶體裡，
    * 同一條 thread 不收回就開不了下一次；`ReactAgent` 的中斷留在存檔點，下一次照樣開，沒有這個成員。
