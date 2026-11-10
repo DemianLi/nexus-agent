@@ -82,7 +82,8 @@ refs:
 擁有者自己的位元不看：0400、0700 都過。setuid、setgid、sticky 位也不看，所以 4600 這種權限同樣會過；別的實作要照這個判法，
 只看 `mode & 0o077`，不要寫成 `mode == 0o600`。Windows 跳過這項檢查。
 
-特殊位元不做成 `modes` 樣本：非 root 對一般檔案設 sticky 位，macOS 會拒絕，樣本的結果會因平台而不同。
+特殊位元不做成 `modes` 樣本：setgid 位只有在檔案的群組是擁有者所屬的群組時才設得上；不是的時候，macOS 的 `chmod(1)` 回
+`Operation not permitted`，Node 的 `chmodSync` 不報錯、但把那一位清掉，測試建出來的權限會隨環境不同。
 
 測試：`credentials.test.ts` 的「權限」那組；樣本的 `modes`。
 
