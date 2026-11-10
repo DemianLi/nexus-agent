@@ -8,7 +8,7 @@
  * | 入口 | 對應 dsh | 受管檔（`fake-from-file`）與啟動環境（`fake-from-env`）同時有 | 拿掉哪一處會紅 |
  * | --- | --- | --- | --- |
  * | `runServe --live` | Web profile | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve-run.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
- * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | Web profile | 起得來；stderr 講鍵名、不帶值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
+ * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | Web profile | 起得來；stderr 講個數與行號、不帶鍵名與值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
  * | `runCli --live` | headless profile | 端點收到 `Bearer fake-from-env`；受管檔 0644 也照樣起得來（不讀它），serve 則起不來 | `cli.ts` 的 `store: false` |
  *
  * **零憑證、零外部連線**：key 是假值，端點在 loopback。
@@ -218,7 +218,7 @@ describe('serve：受管檔多一個別的工具寫的頂層鍵、或只剩註�
     return { text: () => chunks.join(''), restore: () => spy.mockRestore() };
   }
 
-  it('多一個頂層鍵：serve 起得來、端點收到受管檔那把；stderr 講那個鍵名，不帶值', async () => {
+  it('多一個頂層鍵：serve 起得來、端點收到受管檔那把；stderr 講個數與行號，不帶鍵名與值', async () => {
     const where = layout();
     const file = join(where.home, CREDENTIALS_FILE);
     writeFileSync(
@@ -241,7 +241,8 @@ describe('serve：受管檔多一個別的工具寫的頂層鍵、或只剩註�
     }
 
     expect(new Set(upstream!.auth)).toEqual(new Set([`Bearer ${FROM_FILE}`]));
-    expect(stderr.text()).toContain('"comment"');
+    expect(stderr.text()).toContain('有 1 個不認得的頂層鍵（第 2 行）');
+    expect(stderr.text()).not.toContain('comment');
     expect(stderr.text()).toContain(file);
     expect(stderr.text()).not.toContain(FROM_ENV);
     expect(stderr.text()).not.toContain(FROM_FILE);
