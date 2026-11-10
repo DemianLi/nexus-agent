@@ -96,7 +96,7 @@ export interface ModelChain {
    * 給了而模型沒有取用、且 {@link ModelChain.listening} 說有人在聽，模型回來之後這次呼叫拋錯；不給就直接打（原樣帶 `task.config`）。
    */
   readonly around?: ModelStreamAround;
-  /** `llm/stream` 現在有沒有監聽者，每次模型呼叫當下問一次。不給當成有。 */
+  /** `llm/stream` 現在有沒有監聽者。給了 {@link ModelChain.around} 時，每次模型呼叫送出前問一次；不給當成有。 */
   readonly listening?: () => boolean;
 }
 
@@ -105,7 +105,7 @@ export interface ModelChain {
  * @param chain - 模型、系統訊息、工具、middleware。
  * @param task - 這次呼叫的環境（`model_request:<id>`）。
  * @returns AI 訊息（蓋上 `chain.name`）與收集到的 `Command`。
- * @throws 給了 `chain.around`、`llm/stream` 有監聽者，而模型這次沒有取用時拋（訊息見 `aroundNotTakenMessage`）。檢查在模型回來之後，那一次請求已送出，回覆丟掉。
+ * @throws 給了 `chain.around`、`chain.listening` 沒給或回真，而模型這次沒有取用時拋（訊息見 `aroundNotTakenMessage`）。檢查在模型回來之後，那一次請求已送出，回覆丟掉。
  */
 export async function callModel(chain: ModelChain, task: NodeTask): Promise<ModelStepResult> {
   const state = task.state;

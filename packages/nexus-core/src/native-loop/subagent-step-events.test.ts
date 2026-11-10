@@ -87,7 +87,7 @@ describe('native 前景子代理的步驟往共用派發面派的事件', () => 
 });
 
 /**
- * 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數與最後那則回覆；模型沒接上而有監聽者時 reject。
+ * 不讀 `configurable` 的模型（`langchain` 原本的 `fakeModel`）跑一輪：回 `llm/stream` 的派發次數與最後那則回覆；native 下模型沒接上而有監聽者時 reject。
  * @param loop - 跑哪個迴圈。
  * @param options - `listen` 掛不掛 `llm/stream` 的監聽者（預設掛）；`bound` 模型要不要先包一層 `RunnableBinding`。
  */

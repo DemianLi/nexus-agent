@@ -20,11 +20,11 @@ description: "`llm/stream` 的 `next()` 改回 chunk 串流、不再回整則 AI
     端點送什麼，監聽者就看到什麼，中間不翻譯。
 - **監聽者不能是回 Promise 的 `async` 函式。** 要寫成 `async function*`，或不帶 `async`、直接回 `next()`。舊寫法 `async (payload, next) => …` 回的是 Promise，這次模型呼叫會拋 `TypeError`，訊息寫明「回 Promise 的 async 函式不行」。有兩位以上的監聽者時，內層回 Promise 也可能讓外層在迭代 `next()` 時拋 JS 自己的 `TypeError`（外層用 `for await` 時是 `… is not async iterable`，用 `yield*` 時是 `undefined is not a function`），一樣是這個原因。
 - **派發的時機與次數不變**：每一次模型呼叫派一次，root 與子代理都派；`agent/request-error` 回 `retry` 再打的那一次另外再派一次。payload 不變：`threadId`、`step`、`signal`。
-- **`next()` 改成在 native 下一律打串流請求。** 以前 CLI 單機模式沒有串流 handler 時打的是非串流請求，現在也一樣經過 `next()` 交出 chunk。
+- **接上 `llm/stream` 的模型（出廠的都是），`next()` 在 native 下一律打串流請求。** 以前 CLI 單機模式沒有串流 handler 時打的是非串流請求，現在也一樣經過 `next()` 交出 chunk。
 - **短路**：不呼叫或不迭代 `next()`、自己 yield chunk，請求就不會送出。但這一步的 `request/*` 快照與 `model/start` 在派 `llm/stream` 之前就寫進會話日誌了。所以日誌裡會有一次「開了頭、但端點沒收到」的模型呼叫；你 yield 的 chunk 帶了 `usage`，用量就照它記。
 - **有監聽者時，沒有接上 `llm/stream` 的模型會拋錯。** native 下，模型要從這次呼叫 config 的 `configurable["__nexus_llm_stream"]`（`@nexus/core` 匯出成 `LLM_STREAM_CONFIG_KEY`）取出環繞函式，用它包住自己打端點的串流。
   - 這次模型呼叫當下 `llm/stream` 有監聽者、模型卻沒有這樣做：這次呼叫會失敗，訊息開頭是「native agent loop：模型 <類別名> 沒有接上 llm/stream」，後面寫明要怎麼接。模型包在 `RunnableBinding` 裡時，類別名是裡面那一顆。
-  - 沒有監聽者：不檢查，模型照自己的方式打（例如 `@langchain/openai` 的 `ChatOpenAI` 照舊打非串流請求）。監聽者晚掛上也算，看的是每次呼叫當下。
+  - 沒有監聽者：不檢查，模型照自己的方式打（例如 `@langchain/openai` 的 `ChatOpenAI`：走 `streamEvents` 的 serve 照舊打串流，CLI 單機照舊打非串流）。監聽者晚掛上也算，看的是每次呼叫當下。
   - 出廠的模型都已經這樣做，出廠的插件也沒有 `llm/stream` 的監聽者；只有自己帶模型進 native、又有插件聽 `llm/stream` 的主機才會碰到。
 - 受影響的：經 `registry.events.on('llm/stream', …)` 登記監聽者的插件；在 native 下用自己的 `BaseChatModel` 的插件或嵌入方。
 - 不受影響的：跑 `langgraph` 的主機；出廠的插件（都沒有 `llm/stream` 的監聽者）。

@@ -185,7 +185,7 @@ describe.each([
       'utf8',
     );
     await runCli({
-      // 非串流這條路只有 `langgraph` 有（native 一律打串流），明給才不會被 native 設定換掉。
+      // 非串流只有 langgraph 會打（native 下出廠模型一律打串流）；明給 loop，vitest.native.config.ts 的 setup 才不會把它換成 native。
       argv: [
         '--live',
         '--agent-loop',
