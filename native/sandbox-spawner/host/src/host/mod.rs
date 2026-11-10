@@ -429,6 +429,7 @@ impl Host {
                 .chain(self.accept_paused_until)
                 .chain(self.kernel.next_deadline())
                 .chain(calls_deadline)
+                .chain(self.calls_have_more().then_some(now))
                 .chain(self.conns.iter().any(Conn::backlog_ready).then_some(now))
                 .min();
             let (read, write) = self.control.poll_fds();

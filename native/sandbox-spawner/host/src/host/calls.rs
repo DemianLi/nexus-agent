@@ -6,6 +6,7 @@
 //! - 一條連線同時最多 [`MAX_CALLS`] 個呼叫，再來的回 `busy`。
 //! - 一塊或結果編出來超過一框：塊不送、那一次以 `too_large` 收尾；結果換成 `too_large`。單次的方法推了塊，以 `service_error` 收尾。這兩種提早收尾時服務還當它在跑的話，叫服務取消。大的結果要服務自己切成塊串流。
 //! - 一步推的塊加起來超過 [`OUTBOX_PAUSE`]：超過的那一塊起不送（前面的照送），那一次以 `service_error` 收尾（服務還當它在跑的話叫它取消）。
+//! - 串流的呼叫這一步推了塊、又回 `Pending`：宿主下一輪不等任何 fd 就再 poll 它（連線暫停時等它恢復），服務不用為了分步送塊自己設時限。
 //! - 連線排著沒寫出去的到了 [`OUTBOX_PAUSE`]，宿主先不讀它、不處理已經讀進來的框、不 poll 它的呼叫，排著的降回 [`OUTBOX_PAUSE`] 以下再恢復。
 //!   服務推給它的事件照樣排；排著的已經到了 [`OUTBOX_LIMIT`]、又有事件要推，就斷掉這條連線，不丟掉那個事件。
 //!   客戶端重連後要再發呼叫，服務才知道新的連線。單一事件編出來超過一框的不送，只記一行 log，連線不斷。
@@ -38,6 +39,8 @@ pub(super) struct Call {
     kind: MethodKind,
     /// 下一塊的序號。
     seq: u64,
+    /// 上一次 poll 推了塊又回 `Pending`：下一輪要再 poll。
+    more: bool,
 }
 
 fn failure(code: ErrorCode, message: &str) -> Result<Value, CallError> {
@@ -118,6 +121,7 @@ impl Host {
                     uid,
                     kind,
                     seq: 0,
+                    more: false,
                 },
             );
         }
@@ -159,6 +163,7 @@ impl Host {
             return;
         };
         let pending = progress == Progress::Pending;
+        call.more = pending && !chunks.is_empty();
         let mut end = None;
         if call.kind == MethodKind::Unary && !chunks.is_empty() {
             end = Some(failure(ErrorCode::ServiceError, "單次的方法送了串流的塊"));
@@ -305,6 +310,13 @@ impl Host {
                 remote.woken();
             }
         });
+    }
+
+    /// 有沒有呼叫推了塊還沒推完、它的連線又沒暫停：有就不等，下一輪直接 poll。
+    pub(super) fn calls_have_more(&self) -> bool {
+        self.conns
+            .iter()
+            .any(|conn| !conn.dead && !conn.paused() && conn.calls.values().any(|c| c.more))
     }
 
     /// 服務要求最晚什麼時候被 poll。
