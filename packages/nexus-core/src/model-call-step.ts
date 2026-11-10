@@ -5,8 +5,8 @@
  * 請求與結果都是不透明的，一步的簽名不帶 LangChain 型別；摘要器那一步內部仍用 `BaseMessage` 與 `model.invoke`，TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))。
  *
  * **wrapModelCall 由登記的那一份造出來**（{@link withModelCallStep}）：同一步既造那顆的 `wrapModelCall`，也登記給 native，所以兩者
- * 分不開。native 的 root 在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link wrapModelCallFromStep} 造的那一支，
- * 不經那顆的 `wrapModelCall`；`langgraph` 與子代理照舊經 `wrapModelCall`。轉接是同步的，中間沒有 `await`。
+ * 分不開。native 的 root 與前景子代理在模型那一串（`native-loop/agent.ts` 的 `#modelCells`）直接呼叫 {@link wrapModelCallFromStep} 造的
+ * 那一支，不經那顆的 `wrapModelCall`；`langgraph` 與背景子代理照舊經 `wrapModelCall`。轉接是同步的，中間沒有 `await`。
  *
  * @module
  */

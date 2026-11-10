@@ -1,7 +1,6 @@
 /**
  * native 模型那一串只記錄、不改請求的七格（#2416）：中止閘門與檢查點的模型那一半、起訖、空回覆、用量、請求快照、綁中止訊號。
- * 每一格登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 由 native 在模型那一串原位直接呼叫，子代理在 native 下
- * 仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapModelCall`。
+ * 每一格登記成一步（`model-call-step.ts` 的 `withModelCallStep`），root 與前景子代理都由 native 在模型那一串原位直接呼叫。
  *
  * 計數做法同 `summarizer-cell.test.ts`：登記的那一步包一個計數；native 直接呼叫的那一支（`wrapModelCallFromStep`）包一層
  * `AsyncLocalStorage`，沒有那一層就是經 `wrapModelCall`。哪一邊照 state 的第一則訊息分。
@@ -143,14 +142,14 @@ function snapshotOwners(root: Awaited<ReturnType<typeof run>>['root']) {
   });
 }
 
-describe('native 模型那一串只記錄的七格：root 由 native 原位呼叫、子代理經 wrapModelCall', () => {
-  it('每一格 root 三次都由 native 直接呼叫，子代理兩次都經 wrapModelCall', async () => {
+describe('native 模型那一串只記錄的七格：root 與前景子代理都由 native 原位呼叫', () => {
+  it('每一格 root 三次、子代理兩次都由 native 直接呼叫', async () => {
     const { messages } = await run('native');
     expect(messages.at(-1)?.text).toBe('好了');
     const expected = Object.fromEntries(
       CELLS.flatMap((cell) => [
         [`${cell} › 動手`, { native: 3, hook: 0 }],
-        [`${cell} › 叫一下 alpha`, { native: 0, hook: 2 }],
+        [`${cell} › 叫一下 alpha`, { native: 2, hook: 0 }],
       ]).sort(),
     );
     expect(cellCounts()).toEqual(expected);

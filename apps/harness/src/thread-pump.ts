@@ -268,7 +268,7 @@ const ignore = (): void => undefined;
  * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
  *
  * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise。行程層我們現在和 dsh 一樣大聲死
- * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve.ts` 的 `main()`），
+ * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 由 `serve-run.ts` 的 `serveMain` 裝上），
  * 所以這裡標掉的是**已知會產生的孤兒**，不是替行程層的 handler 讓路：沒標到的 rejection 會被那個 handler
  * 當成致命失敗收尾、以 1 結束。代價是這裡**依賴投影的形狀**：哪天 langchain 加一種帶 promise 的原生
  * 投影，這裡會漏，而漏的後果現在是行程以 1 結束（帶標籤診斷），不再是 Node 預設的無診斷崩潰。
@@ -329,6 +329,11 @@ export interface PumpAgent {
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
+  /**
+   * 收回停在等待點、還在記憶體裡等答覆的那次 run（`@nexus/core` 的 `NativeAgent.discardSuspended`）：不發事件；停住那一步已經收完的呼叫寫入同步套進 state，等核准那幾顆的不寫。
+   * 只有停在中斷時 JS 呼叫沒結束的 loop 有這一支；LangGraph 的中斷當場收掉那次 run，沒有東西可收。
+   */
+  discardSuspended?(config: ThreadConfig): void;
 }
 
 /**
@@ -917,9 +922,6 @@ const USER_CAUSE: TurnAbortCause = { kind: 'user' };
 /** 一輪的時鐘到點（#1624）。見 `settings/turn-timeout.ts`。 */
 const TURN_TIMEOUT_CAUSE: TurnAbortCause = { kind: 'hook', reason: TURN_TIMEOUT_REASON };
 
-/** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
-const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: USER_CAUSE };
-
 /** 這一輪被中止時 `turn/end` 帶的那一格：原因記在 {@link CurrentRun.cause}，沒記就是人按了停止。 */
 function abortedBy(current: CurrentRun): TurnEndReason {
   return { kind: 'aborted', cause: current.cause ?? USER_CAUSE };
@@ -1212,10 +1214,12 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 停在核准點時是那幾顆等核准的，加上同一批排在後面、還沒起跑的呼叫（見 {@link loggedCallIds}）。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
  * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
-function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
+function danglingToolCalls(
+  values: unknown,
+): { readonly id: string; readonly name: string; readonly args: unknown }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;
   if (!Array.isArray(messages)) return [];
   let last = -1;
@@ -1234,7 +1238,22 @@ function danglingToolCalls(values: unknown): { readonly id: string; readonly nam
   const ai = messages[last] as AIMessage;
   return (ai.tool_calls ?? [])
     .filter((call) => call.id !== undefined && !answered.has(call.id))
-    .map((call) => ({ id: call.id as string, name: call.name }));
+    .map((call) => ({ id: call.id as string, name: call.name, args: call.args }));
+}
+
+/**
+ * 最後一則 `assistant/message` 之後記過 `tool/call` 的那幾顆。停在核准點時，同一批排在後面、還沒起跑的呼叫不在裡面。
+ *
+ * @param events - 這份日誌的事件，照 `seq` 排。
+ */
+function loggedCallIds(events: readonly SessionEvent[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at]!;
+    if (event.type === 'assistant/message') break;
+    if (event.type === 'tool/call') ids.add((event as SessionEvent<'tool/call'>).data.callId);
+  }
+  return ids;
 }
 
 export class ThreadPump {
@@ -1429,8 +1448,8 @@ export class ThreadPump {
    */
   #stopParked = false;
   /**
-   * 按了停止，還沒看到那一輪怎麼收。**停住以那一輪真的收成中止為準**（{@link ThreadPump.#parkIfStopped}），不以
-   * 按下去的那一刻為準：停止撞上核准點時那一輪照常停在核准點、不落 aborted，那時排著的是在等核准，不是停住。
+   * 按了停止，還沒看到那一輪怎麼收。**停住以那一輪真的收成中止、或收回為準**（{@link ThreadPump.#parkIfStopped}），不以
+   * 按下去的那一刻為準：停止撞上核准點時那一輪照常停在核准點、不落 aborted，收尾之後才收回（#2592），排著的在收回那一輪停住。
    * 那之間又送了一句的話，那一句就是「下一次送出」，把這一格清掉。
    */
   #stopRequested = false;
@@ -1488,7 +1507,7 @@ export class ThreadPump {
    *   `--resume`）。省略即一份新日誌。
    * @param toolText - `tool-text` 那一列（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）：工具結果 meta 與壓縮摘要
    *   放上線的上限；結果文字本身自 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不截。
-   *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
+   *   值由 `serve-run.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
    *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
    * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。來路與
    *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋只剩一行 warn，標題永遠寫不出來。
@@ -1499,7 +1518,7 @@ export class ThreadPump {
    * @param sessionReferences - 讀被引用的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**省略即這條
    *   thread 不收引用**：帶引用的話會被 {@link ThreadPump.referencedText} 擋下。
    * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
-   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
+   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve-run.ts` 在起動期解出來、
    *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
    * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
    *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
@@ -2139,7 +2158,7 @@ export class ThreadPump {
   }
 
   /**
-   * 排一件事到這條 thread 的序列上：一輪 run，或一次收回（{@link ThreadPump.cancel}）。
+   * 排一件事到這條 thread 的序列上：一輪 run，或一次收回（{@link ThreadPump.#withdrawPending}）。
    *
    * 收回走同一條序列，是因為它也要讀寫 checkpoint、也要寫一輪日誌——跟一輪 run 並行的話，
    * 兩邊的 `turn/start`／`turn/end` 會交錯，不變量會把它讀成寫錯了。
@@ -2242,20 +2261,21 @@ export class ThreadPump {
    * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只受理、不等停穩**，
    * 照 dsh 的 `session.cancel` → `{ accepted: true }`：停下來的事實走下行與日誌。
    *
-   * 三種情況，各落一種：
+   * 四種情況，各落一種：
    *
    * - **有一輪在跑**：觸發它的中止訊號。正在跑的工具等它落定、還沒開始的不開始、模型請求中途
-   *   切斷，這一步之後圖停下（`@nexus/core` 的 `turn-cancel.ts`）；這一輪收成 `turn/end` 帶 aborted。
+   *   切斷，這一步之後圖停下（`@nexus/core` 的 `turn-cancel.ts`）；這一輪收成 `turn/end` 帶 aborted。那一輪若停在核准點，
+   *   收完之後收回（#2592），帶 aborted 的是收回那一輪。
    * - **停在核准點**：收回——排一次 {@link ThreadPump.#withdraw}（#265 的 Q7／Q15）。
    * - **續行排程器正在飛**（沒有輪在跑，但預約馬上要排進去）：收回續行授權、這一次不排（#1518）。
    * - **閒著**：什麼都不做，同 dsh「閒著時中止不影響之後的事」。
    *
    * **排在後面的輸入保留但停住**（#637 的 Q2，翻過 #265 的 Q6）：照 dsh 的 `cancel({keepInbox: true})`，不接著跑，
-   * 等下一次送出才照 FIFO 跑。當時 Q6 引的 `keepInbox` 只管保留、不管接著跑。停不停住以那一輪真的收成中止為準，
+   * 等下一次送出才照 FIFO 跑。當時 Q6 引的 `keepInbox` 只管保留、不管接著跑。停不停住以那一輪真的收成中止、或收回為準，
    * 見 {@link ThreadPump.#stopRequested}。
    *
    * @param cause - 為什麼停（#1624），照 dsh 的 `agent.cancel(cause)`。省略即人按了停止。只有「有一輪在跑」那一格用得到它：
-   *   收回與停續行只有人會觸發。
+   *   `cancel` 的收回與停續行兩格只由人觸發；時鐘撞上核准點的收回走 {@link ThreadPump.#runOnce} 的收尾，帶這一輪的原因。
    * @returns 這一次落在哪一種。線上只回受理，這個給測試看。
    */
   cancel(cause?: TurnAbortCause): 'run' | 'withdrawn' | 'drive' | 'idle' {
@@ -2268,16 +2288,8 @@ export class ThreadPump {
       return 'run';
     }
     if (this.#pending.size > 0 && !this.#closed) {
-      // **同步就清**，同 `submit`：收下的那一刻就不再掛著，緊接著到的 `run.start` 排在這次收回後面、
-      // 喚醒停住的那幾件（#637）。
-      const withdrawn = [...this.#pending.keys()];
-      this.#pending.clear();
-      for (const interruptId of withdrawn) this.#clearHostToolTimer(interruptId);
-      for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
       this.#stopRequested = true;
-      void this.#schedule(() => this.#withdraw(), true).catch(() => {
-        // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
-      });
+      this.#withdrawPending(USER_CAUSE);
       return 'withdrawn';
     }
     if (this.#goalDrives > 0 && !this.#closed) {
@@ -2322,40 +2334,73 @@ export class ThreadPump {
   }
 
   /**
-   * 停在核准點時按了停止：把那幾顆等核准的呼叫收回（#265 的 Q7，日誌形狀是 Q15）。
+   * 收回掛著的每一顆中斷：同步清掉、講給下行，再排一次 {@link ThreadPump.#withdraw}。兩條路叫它：停在核准點時按停止
+   * （{@link ThreadPump.cancel}），與這一輪被中止過、收尾時卻停在核准點（#2592，{@link ThreadPump.#runOnce} 的收尾）。
    *
-   * 那時沒有 run 在跑，圍堵看不到它們，所以日誌由這裡寫：**一輪 `resume`**（人回覆了那張核准卡，
-   * 回覆的內容是「停」）→ 每一顆懸著的呼叫一個 `tool/result` → `turn/end` 帶 aborted。不變量的配對
+   * @param cause - 收回那一輪的 `turn/end` 與收尾 frame 帶的原因。
+   */
+  #withdrawPending(cause: TurnAbortCause): void {
+    // **同步就清**，同 `submit`：決定收回的那一刻就不再掛著，緊接著到的 `run.start` 排在這次收回後面、
+    // 喚醒停住的那幾件（#637）。
+    const withdrawn = [...this.#pending.keys()];
+    this.#pending.clear();
+    for (const interruptId of withdrawn) this.#clearHostToolTimer(interruptId);
+    for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
+    void this.#schedule(() => this.#withdraw(cause), true).catch(() => {
+      // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
+    });
+  }
+
+  /**
+   * 把停在核准點的那幾顆等核准的呼叫、連同同一批排在後面還沒起跑的呼叫收回（#265 的 Q7，日誌形狀是 Q15），由 {@link ThreadPump.#withdrawPending} 排進來。
+   *
+   * 那時沒有 run 在跑，圍堵看不到它們，所以日誌由這裡寫：**一輪 `resume`**（那張核准卡被回覆了，
+   * 回覆的內容是「停」）→ 每一顆懸著的呼叫一個 `tool/result` → `turn/end` 帶 aborted。同一批排在核准那顆後面、
+   * 還沒起跑的呼叫沒有 `tool/call`，先補一顆再寫結果。不變量的配對
    * 成立，那顆中斷也就算答了（日誌上「答了」的樣子本來就是下一顆 `resume`）。
    *
    * 對話那一側也由這裡寫：每一顆一則 dsh 原字串的錯誤 ToolMessage。**不讓基座補**——
    * `patchToolCallsMiddleware` 補的那句說「another message came in」，成因是錯的（#265 的 Q12）。
    * **日誌的 `tool/result` 帶的就是寫進對話的那一則**（#305）：同一個實例，兩邊不會各算各的。
+   *
+   * @param cause - 為什麼收回，見 {@link ThreadPump.#withdrawPending}。
    */
-  async #withdraw(): Promise<void> {
+  async #withdraw(cause: TurnAbortCause): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
+    // 停在中斷時呼叫還沒結束的 loop：先收掉那次 run，下面讀到的 state 才是它不會再寫的那一份。
+    this.#discardSuspended();
     // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
     for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
-    const started = (name: string) => DELEGATION_TOOLS.includes(name);
-    let dangling: { readonly id: string; readonly name: string }[];
+    let dangling: { readonly id: string; readonly name: string; readonly args: unknown }[];
+    let started: (call: { readonly id: string; readonly name: string }) => boolean;
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
       dangling = danglingToolCalls((await this.#agent.getState(config)).values);
+      const logged = loggedCallIds(log.events);
+      // 委派的那顆停在核准點時本體已經開始；沒記過 `tool/call` 的就是還沒起跑。
+      started = (call) => logged.has(call.id) && DELEGATION_TOOLS.includes(call.name);
       // 碼不在訊息上標：這裡直接寫日誌，下面那顆 `tool/result` 自己帶。
       const withdrawn = dangling.map((call) =>
-        toolRefusal(
-          started(call.name) ? TOOL_ABORTED_REASON : TOOL_ABORTED_BEFORE_DISPATCH_REASON,
-          { callId: call.id, name: call.name },
-        ),
+        toolRefusal(started(call) ? TOOL_ABORTED_REASON : TOOL_ABORTED_BEFORE_DISPATCH_REASON, {
+          callId: call.id,
+          name: call.name,
+        }),
       );
       for (const [index, call] of dangling.entries()) {
+        if (!logged.has(call.id)) {
+          log.append('tool/call', {
+            callId: call.id,
+            name: call.name,
+            arguments: JSON.stringify(call.args ?? {}),
+          });
+        }
         log.append('tool/result', {
           callId: call.id,
           isError: true,
           error: {
             name: 'AbortError',
-            code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
+            code: started(call) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
           },
           message: toLoggedMessage(withdrawn[index]!),
         });
@@ -2363,7 +2408,7 @@ export class ThreadPump {
       if (withdrawn.length > 0) {
         await this.#agent.updateState(config, { messages: withdrawn });
       }
-      log.append('turn/end', { reason: ABORTED_BY_USER });
+      log.append('turn/end', { reason: { kind: 'aborted', cause } });
       this.#parkIfStopped();
     } catch (error) {
       const failure =
@@ -2377,8 +2422,8 @@ export class ThreadPump {
     for (const call of dangling) {
       this.#closeCard(call.id, {
         failed: true,
-        text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
-        code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
+        text: started(call) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+        code: started(call) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
       });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
@@ -2389,7 +2434,7 @@ export class ThreadPump {
         params: {
           namespace: [],
           timestamp: Date.now(),
-          data: { event: 'completed', graph_name: 'root', aborted: true, cause: USER_CAUSE },
+          data: { event: 'completed', graph_name: 'root', aborted: true, cause },
         },
         // `aborted` 不在協定的 `LifecycleData` 裡——那正是它存在的理由，見 `#translate` 那一格。
       } as unknown as Event),
@@ -2410,6 +2455,8 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#closing.abort();
+    // 收線時還停在中斷上（沒人答，或按了停止、收回還沒輪到）：那次 run 一起收掉，不留在記憶體裡等一個不會來的答覆。
+    this.#discardSuspended();
     for (const interruptId of [...this.#hostToolTimers.keys()])
       this.#clearHostToolTimer(interruptId);
     this.#hostToolsByItem.clear();
@@ -2971,6 +3018,11 @@ export class ThreadPump {
     return 'updated';
   }
 
+  /** 收掉這條 thread 停在等待點的那次 run（{@link PumpAgent.discardSuspended}）；沒有就什麼都不做。 */
+  #discardSuspended(): void {
+    this.#agent.discardSuspended?.({ configurable: { thread_id: this.#threadId } });
+  }
+
   /**
    * 那一輪收成了中止：按停止時的請求這時才算數，排著的開新一輪的停住（#637 的 Q2）。
    *
@@ -3325,10 +3377,18 @@ export class ThreadPump {
             ? { reason: MAX_TOKENS_TURN_END }
             : {},
       );
-      // 按了停止但這一輪沒有收成中止（停止撞上核准點、或早就跑完了）：請求作廢，排著的照常。
+      // 這一輪被中止過卻停在核准點（停止或一輪的時鐘到點撞上核准點，#2592）：收回掛著的那幾顆，同停在核准點時按停止——停止贏過提問。
+      // 收回那一輪把懸著的呼叫全收掉，要由系統代答的那幾顆也在裡面，所以不代答。
+      const withdrawing =
+        !current.stopped &&
+        current.controller.signal.aborted &&
+        this.#pending.size > 0 &&
+        !this.#closed;
       if (current.stopped) this.#parkIfStopped();
+      else if (withdrawing) this.#withdrawPending(current.cause ?? USER_CAUSE);
+      // 按了停止但這一輪早就跑完了：請求作廢，排著的照常。
       else this.#stopRequested = false;
-      this.#answerForSystem(current.stopped);
+      this.#answerForSystem(current.stopped || withdrawing);
     } catch (error) {
       // **被準入閘門擋下**（#633，封存的會話）：一個模型請求都沒發，這一輪以 `blocked` 收。**認的是類別**（沿 `MiddlewareError` 拆到底），
       // 理由同下面的中止。在中止之前判不會搶：中止的訊號一舉起來，閘門那一側先讓路給中止（`turn-cancel.ts`），兩者不會同時成立。
@@ -3574,7 +3634,7 @@ export class ThreadPump {
    * 記 `approval/decided`（#1029），只對 {@link ThreadPump.#noteApprovalAsked} 記過的 id。
    *
    * @param id - 中斷的 id。
-   * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
+   * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止，或一輪的時鐘到點撞上核准點）。
    *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理，碼是 `APPROVAL_INVALID_REPLY`（#2027）。
    */
   #noteApprovalDecided(id: string, response: unknown): void {
@@ -3644,7 +3704,7 @@ export class ThreadPump {
 
   /**
    * 這一輪收尾了：把要由系統代答的反問逐顆回絕（{@link ThreadPump.#translateElicitation}）。**走 {@link ThreadPump.submit}**，
-   * 所以排隊、日誌（`turn/start` resume 加 `interrupt/system-answered`）與人答的路是同一條。被停止的那一輪不接著跑——人說了停。
+   * 所以排隊、日誌（`turn/start` resume 加 `interrupt/system-answered`）與人答的路是同一條。被停止的那一輪不接著跑——停止說了算。
    */
   #answerForSystem(stopped: boolean): void {
     const answers = this.#systemAnswers;
@@ -3710,9 +3770,10 @@ export class ThreadPump {
       current !== undefined &&
       current.controller.signal.aborted &&
       isRootTerminal(raw) &&
-      // **停在核准點的那一次不標**：停止剛好撞上這一輪要停下來等核准時，讓它照常停在核准點
-      // ——畫面上看得到卡片，再按一次停止就是收回。標了的話畫面會把卡片清掉，伺服器這一側卻
-      // 還掛著那顆中斷，兩邊對不上。
+      // **停在核准點的那一次不標**：停止剛好撞上這一輪要停下來等核准時，讓它照常停在核准點，
+      // 收尾之後由 `#runOnce` 收回（#2592），同停在核准點時按停止：側欄「等人回答」由 `input-withdrawn` 收，
+      // 對話裡的卡由收回那一輪的中止收尾 frame 收。
+      // 這裡就標的話，畫面會把卡片清掉，伺服器這一側卻還掛著那顆中斷，兩邊對不上。
       this.#pending.size === 0
     ) {
       // **只加分類，不改基座的欄位**，同 `classifyToolData`：協定的 `AgentStatus` 沒有「被中止」

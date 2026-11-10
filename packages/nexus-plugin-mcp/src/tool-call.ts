@@ -10,8 +10,9 @@
  * - **其他失敗包成 `Error calling tool <name>: <原錯>`**，按了停止的也是（`index.ts` 的 `nexusToolOf` 再換成 `AbortError`）；
  *   這個檔自己的錯誤句與 `exec.interrupt` 的掛起例外不包。逾時由 LangChain 的 `tool()`
  *   搶先收掉，這裡拋什麼都沒有人看。
- * - **反問走 `exec.interrupt`**：掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的 server
- *   每問一輪就重做一次，所以副作用要冪等。
+ * - **反問走 `exec.interrupt`**：預設的 `langgraph` 掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的
+ *   server 每問一輪就重做一次，所以副作用要冪等。native 在行程內等，拿到答覆接著送下一輪，帶的是答之前那一輪的 `requestState`；
+ *   這裡沒有人可以回答時（`HumanInputUnavailable`）每一題都回絕。
  * - **結果的 `artifact`**：內嵌資源、resource link、帶多餘欄位的內容塊、`structuredContent`、`_meta` 照原樣留在 `artifact`，跟著日誌落盤、不送模型。
  *   成功的結果一律帶 `artifact`（常是 `[]`）。
  *
@@ -25,15 +26,20 @@ import {
 } from '@modelcontextprotocol/client';
 import type { CallToolResult, Client, ContentBlock, Tool } from '@modelcontextprotocol/client';
 import { DefaultJsonSchemaValidator } from '@modelcontextprotocol/client/_shims';
+import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusToolResult, ToolExec } from '@nexus/tools';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { markUntrusted } from './untrusted-mark.js';
 
-/** 一次呼叫：模型給的參數與這次呼叫的身分。 */
+/**
+ * 一次呼叫：模型給的參數與這次呼叫的身分。`client` 是每一輪送出前取的 SDK client，省略就是建這顆呼叫的那一代：在行程內等人回答的
+ * loop 不從頭重跑，等的期間重連過的話，下一輪要送到當下那一代（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+ */
 export type ToolCall = (
   args: { readonly [key: string]: JsonValue },
   exec: ToolExec,
+  client?: () => Pick<Client, 'callTool'>,
 ) => Promise<NexusToolResult>;
 
 /** 這個檔自己拋的失敗：已經是給模型看的句子，不再包 `Error calling tool`。 */
@@ -75,7 +81,7 @@ export function toolCallOf(
   const validateInput = lazyValidator(descriptor.inputSchema);
   const validateOutput =
     inBand && outputSchema !== undefined ? lazyValidator(outputSchema) : undefined;
-  return async (args, exec) => {
+  return async (args, exec, current = () => client) => {
     const { signal } = exec;
     const passthrough = new WeakSet<object>();
     let result: CallToolResult;
@@ -88,7 +94,7 @@ export function toolCallOf(
       }
       const request = { name: toolName, arguments: parsed.value as Record<string, unknown> };
       const round = (params: RoundParams): Promise<CallToolResult> =>
-        client.callTool(
+        current().callTool(
           { ...params, _meta } as never,
           {
             timeout: options.timeoutMs,
@@ -275,6 +281,12 @@ async function answerFor(
   try {
     resumed = await exec.interrupt(question as unknown as JsonValue);
   } catch (error) {
+    // 這裡沒有人可以回答（native 下帶 thread 的 `streamEvents` 之外，或前景子代理那一層）：每一題都回絕，server 收到的跟有人在、由系統代答回絕的那條一樣（#1098）。
+    if (isHumanInputUnavailable(error)) {
+      return Object.fromEntries(
+        Object.keys(question.requests).map((key) => [key, { action: 'decline' }]),
+      );
+    }
     if (typeof error === 'object' && error !== null) passthrough.add(error);
     throw error;
   }

@@ -456,7 +456,7 @@ export interface CreateNexusAgentOptions {
    * `console.error`），以及**歸得了因**（違規跟 agent 的輸出落在同一個終端機上，沒有前綴
    * 就分不出誰是誰）。
    *
-   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve.ts` 那條
+   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve-run.ts` 那條
    * 路徑傳的是伺服器日誌的 `invariant` logger**（[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)：改走伺服器日誌的 error 等級，
    * 才分得出等級、也跟著 `format: json`；以前維持預設，預設的 `console.error` 進的是 stderr，撞不到任何人的終端機，也進不了伺服器日誌的門檻）。
    * 兩條進入點答案不同是選的，不是漏的。
@@ -480,9 +480,9 @@ export interface CreateNexusAgentOptions {
   readonly historyShadow?: HistoryShadowSink;
   /**
    * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)），CLI 與 serve 的 `--agent-loop`。省略時是 `langgraph`。
-   * `native` 下核准閘門當成沒有存檔點（`no-channel`），要核准的操作確定性回絕（接回中斷 TODO(#2358)）。ask_user 與沙箱升級讀
-   * 呼叫端給的管道，要它們不問人得由入口照同一個條件算（`entryApprovalChannel`、`createCliAgent`）。子代理（前景、背景）的圖仍是
-   * LangGraph，TODO(#2359)。
+   * 入口給的管道兩個 loop 一樣（`entryApprovalChannel`）。`native` 下帶 thread 的 `streamEvents` 停下來問人（前景子代理那一層也是，問的是 root
+   * 的使用者），`invoke`／`stream` 沒人可問，閘門與 `exec.interrupt` 照沒有管道回絕（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）。
+   * 前景與背景子代理跟 root 一樣跑 native。
    */
   readonly agentLoop?: AgentLoopKind;
 }
@@ -504,7 +504,7 @@ export interface CreateNexusAgentOptions {
  * `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
  * 名冊，所以「有 resume 管道但沒有介面」在我們這裡沒有表示法，退到 `never`。
  *
- * **不是每個入口都該用它。** `serve.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
+ * **不是每個入口都該用它。** `serve-run.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
  * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
  */
 export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
@@ -1084,6 +1084,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
         // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
         delegation: createSubagentDelegationMiddleware(),
+        ...(options.agentLoop === 'native' && { loop: 'native', events: registry.dispatch }),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。
@@ -1358,19 +1359,28 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       },
       compileSubagent,
       /**
-       * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
-       * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
-       */
-      /**
        * 這條 thread 的宿主頁工具插槽（#2374）：pump 開一輪時寫進這一輪的宣告。**只有嵌入版有**，其餘是 `undefined`。
        */
       hostTools,
+      /**
+       * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
+       * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
+       */
       subagentKinds: embedded
         ? undefined
         : (params.subagents ?? []).map(({ name, description }) => ({
             name,
             description,
           })),
+      /**
+       * root 的模型手上的委派工具（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)），點名提示照它組字：掛了背景續行
+       * （{@link BackgroundDelegation}）時 `task` 被藏起來、只剩 `subagent`，否則是 `task`。嵌入版沒有子代理，缺席。
+       */
+      delegationTool: embedded
+        ? undefined
+        : delegation === undefined
+          ? ('task' as const)
+          : ('subagent' as const),
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。

@@ -7,8 +7,8 @@
  *   三種組裝：CLI 出貨清單（`createCliAgent` ＋ `shippedPlugins()`，沒有樹）、CLI 的樹與 serve 的樹（`root.boot` ＋ `assembly.create`）；
  *   各自有工作區與沒有工作區，兩個 loop 各跑一次。
  * - **六個情境**（進出、同意、繼續規劃、關掉這一題、委派、沒有答題管道）：每份會話日誌的落盤位元組、送給模型的每一則請求、`/plan` 的
- *   結果、停下的中斷數與綁進模型的工具（名字與定義），出貨清單與樹各一次、兩個 loop 各一次。native 接不回中斷，答題管道判成沒人在（`entryApprovalChannel`），
- *   所以 native 的三個審核情境錄到的是「沒有人可以回答」那條結局，照錄。
+ *   結果、停下的中斷數與綁進模型的工具（名字與定義），出貨清單與樹各一次、兩個 loop 各一次。情境走 `invoke`，native 在這條路上沒人可問（呼叫上放的是
+ *   `NO_HUMAN_INPUT`），所以 native 的三個審核情境錄到的是「沒有人可以回答」那條結局，照錄。
  * - **多條 thread**：serve 的樹上一次 boot 組兩條 thread，各接一張會話註冊表；在「只接了一條」「兩條都接」「一條進了計劃模式」
  *   「收掉一條」四個時點，拿六種呼叫身分各問一次兩條 thread 的段，記指引夾不夾。認不出呼叫者的那幾種走的是 `fallback()`。
  *
@@ -200,7 +200,6 @@ type Registration = ReturnType<typeof registrations> & {
 async function bootTree(
   surface: 'cli' | 'serve',
   approvals: ApprovalPolicy | undefined,
-  loop: AgentLoopKind,
   contained: boolean,
 ): Promise<{
   readonly plugins: readonly PluginEntry[];
@@ -211,7 +210,7 @@ async function bootTree(
 }> {
   const home = scratch('nexus-plan-tree-home-');
   const root: CordisRoot = createCordisRoot({
-    channel: entryApprovalChannel(approvals, loop),
+    channel: entryApprovalChannel(approvals),
     contained,
   });
   cleanups.push(() => root.dispose());
@@ -258,7 +257,6 @@ async function registrationCase(
     const tree = await bootTree(
       assembly,
       assembly === 'cli' ? HEADLESS_APPROVALS : undefined,
-      loop,
       true,
     );
     built = await tree.create(invocation, withScriptedModel([...tree.plugins, spy.entry], turns));
@@ -414,7 +412,7 @@ async function scenarioCase(
       approvals === undefined ? {} : { approvals },
     );
   } else {
-    const tree = await bootTree('cli', approvals, loop, true);
+    const tree = await bootTree('cli', approvals, true);
     built = await tree.create(invocation, withScriptedModel(tree.plugins, spec.turns));
   }
   const detach = built.attachSession(built.sessions);
@@ -477,7 +475,7 @@ function callShapes(own: string, other: string): readonly (readonly [string, unk
  * {@link callShapes} 問兩條 thread 各自那一段，記指引夾不夾。
  */
 async function threadsCase(loop: AgentLoopKind): Promise<unknown> {
-  const tree = await bootTree('serve', undefined, loop, true);
+  const tree = await bootTree('serve', undefined, true);
   const threads: {
     readonly id: string;
     readonly built: CliAgent;
@@ -646,6 +644,32 @@ function withRenames(baseline: Registration): Registration {
   };
 }
 
+/**
+ * 對照組錄的是計劃模式還佔 `nexusPlanMode` 那一格的鏈；計劃模式聽 `agent/pre-step`（#2358），四樣順序跟對照組只差這兩處：
+ *
+ * - listeners 多一位 `plan-mode` 的 `agent/pre-step`（交出排著的待關）；
+ * - middleware 上 `nexusPlanMode` 那一格不在了，換成 core 的 `nexusPreStep`（langgraph 下有 `agent/pre-step` 監聽者才掛）與
+ *   `nexusToolNameRestore`（補回 `concludesTurn` 工具結果的 `name`）。
+ */
+function withPreStepHandoff(baseline: Registration, loop: string): Registration {
+  const at = baseline.middleware.indexOf('nexusPlanMode');
+  expect(at, '對照組上 nexusPlanMode 那一格').toBeGreaterThanOrEqual(0);
+  const replacement =
+    loop === 'langgraph' ? ['nexusPreStep', 'nexusToolNameRestore'] : ['nexusToolNameRestore'];
+  return {
+    ...baseline,
+    listeners: [
+      { event: 'agent/pre-step', origin: 'plan-mode｜plan-mode', prepend: false },
+      ...baseline.listeners,
+    ],
+    middleware: [
+      ...baseline.middleware.slice(0, at),
+      ...replacement,
+      ...baseline.middleware.slice(at + 1),
+    ],
+  };
+}
+
 const isPlanMode = (origin: string): boolean => origin.startsWith('plan-mode｜');
 
 /**
@@ -745,7 +769,7 @@ it(
     if (only === undefined) expect(Object.keys(now)).toEqual(Object.keys(baseline));
     for (const key of Object.keys(now)) {
       const expected = key.startsWith('順序｜')
-        ? withRenames(baseline[key] as Registration)
+        ? withPreStepHandoff(withRenames(baseline[key] as Registration), key.split('｜').at(-1)!)
         : withKnownDifferences(key, baseline[key]);
       expect(now[key], key).toEqual(expected);
     }
@@ -762,11 +786,11 @@ it(
 );
 
 /**
- * 兩列共用同一份模組狀態（#2551）：樹上那一列排的待關，相容層那一格交得出去。兩列各拿一份 `plan-mode-state.js` 的話，同意之後
+ * 退出工具排的待關，在下一步開頭由同一列的 `agent/pre-step` 監聽者交出（#2358）：兩邊拿到的不是同一份狀態表的話，同意之後
  * root 日誌上不會有 `plan/mode { active: false }`，模式關不掉。出貨清單與 CLI 的樹各量一次。
  */
 it.each(['shipped', 'tree'] as const)(
-  '同意之後模式真的關了：樹上那一半排的待關，相容層那一格看得到（%s）',
+  '同意之後模式真的關了：退出工具排的待關，下一步開頭交得出去（%s）',
   { timeout: 120_000 },
   async (source) => {
     const spec = SCENARIOS.find(([name]) => name === '同意')?.[1];

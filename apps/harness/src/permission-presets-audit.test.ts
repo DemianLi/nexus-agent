@@ -21,8 +21,8 @@ import { appendRaw, journalPathOf } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
 import type { JournalBody, JournalRecord } from './plugin-journal.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { StartupError } from './startup-audit.js';
 

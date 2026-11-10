@@ -1,14 +1,14 @@
 /**
  * 兩個入口（CLI 與 serve）共用的**組裝根**（[#697](https://github.com/DemianLi/nexus-agent/issues/697)）。
  *
- * `createCliAgent` 把一份 plugin 清單、模型、圍堵、落盤與標題接成一個可以跑的 agent；`cli.ts` 與 `serve.ts` 各自擁有
+ * `createCliAgent` 把一份 plugin 清單、模型、圍堵、落盤與標題接成一個可以跑的 agent；`cli.ts` 與 `serve-run.ts` 各自擁有
  * 輪迴圈與會話接線，但組裝只有這一份。以前它住在 `cli.ts`，serve 為了它反向相依 CLI 入口檔（`cli.ts` 有 `main()`，
  * 只靠檔尾守衛才不會在被 import 時跑起來），而 patch 載進來的 plugin 若靜態 import `cli.js` 會卡在 unsettled top-level
  * await、以 13 退出（見 `cli-invariant-violation.fixture.ts`）。
  *
  * 照 dsh 的顆粒度：入口檔很薄，共用的開機邏輯住在沒有 main 的獨立模組（`apps/cli/src/profile-boot.ts`，自述
  * “Shared profile boot for every `dsh` surface”，`477b4f4`）。**方向只能是入口檔指向這裡**：這個模組不 import
- * `cli.ts` 也不 import `serve.ts`（`import type` 也不行）。
+ * `cli.ts` 也不 import `serve-run.ts`（`import type` 也不行）。
  *
  * 純搬家，不改行為。`SYSTEM_PROMPT` 的措辭是「命令列助手」，組裝點無條件傳它，所以 serve 也用這份——照原字搬，
  * 改措辭是模型看得到的行為變更，不在這一張。
@@ -58,6 +58,7 @@ import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
 import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
+import { ABSENT_HOST_BRIDGE, HOST_BRIDGE_SERVICE, type HostBridge } from '@nexus/host-bridge';
 import {
   AGENT_LOOP_KINDS,
   ApprovalPolicyController,
@@ -89,6 +90,7 @@ import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
+import type { DelegationToolName } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import {
   CONTAINED_FILESYSTEM,
@@ -518,10 +520,10 @@ export function resolveInvariantLogPath(
  *
  * | 檢查 | 呼叫點 | 比什麼 | 判斷 |
  * | --- | --- | --- | --- |
- * | `assertLaunchPathsOutsideWorkspace` | `serve.ts:486` | 目前資料夾的 `.env`、home、home 的 `.env`、舊 `.env` ⇄ `--workspace` | 不改。讀得到就洩漏 key 與金鑰；檔頭補了私有根的 Q3 例外 |
- * | `resolveSessionLogDir`（本體 `:316`，走本函式） | `serve.ts:688`、`cli.ts:1016` | `--session-log`／預設日誌根 ⇄ `--workspace` | 不改。日誌在共用區 ＝ 所有人讀得到整份對話史 |
- * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve.ts:757`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
- * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve.ts:814`、`:947`（經 `createSessionHeaderMetadataResolver`）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
+ * | `assertLaunchPathsOutsideWorkspace` | `serve-run.ts` 的 `runServe` | 目前資料夾的 `.env`、home、home 的 `.env`、舊 `.env` ⇄ `--workspace` | 不改。讀得到就洩漏 key 與金鑰；檔頭補了私有根的 Q3 例外 |
+ * | `resolveSessionLogDir`（本體 `:316`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:1016` | `--session-log`／預設日誌根 ⇄ `--workspace` | 不改。日誌在共用區 ＝ 所有人讀得到整份對話史 |
+ * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve-run.ts` 的 `runServe`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
+ * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve-run.ts` 的 `runServe`（直接一次、經 `createSessionHeaderMetadataResolver` 一次）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
  * | `--resume` 的日誌路徑 | `cli.ts:354` | 續接的日誌 ⇄ `--workspace` | 不改，CLI 的可寫根仍是 `--workspace` |
  * | `assertPatchesOutsideWorkspace` | `runServe`、`runCli`、`plugin` | 每份 `--patch` ⇄ `--workspace` | 例外：判準是寫得到，不是讀得到；覆寫檔能換 MCP 的 `command`。不比新 thread 的私有根 |
  */
@@ -834,7 +836,7 @@ export type NexusAgent = NexusAgentHandle['agent'];
 /** {@link createCliAgent} 的入口身分選項。**省略都是有意義的**：兩個入口各自只傳自己的那幾格。 */
 export interface CreateCliAgentSession {
   /**
-   * 不變量違規往哪裡講。[`serve.ts`](./serve.ts) 傳伺服器日誌的 `invariant` logger（error 等級，
+   * 不變量違規往哪裡講。[`serve-run.ts`](./serve-run.ts) 傳伺服器日誌的 `invariant` logger（error 等級，
    * [#1534](https://github.com/DemianLi/nexus-agent/issues/1534)；原先維持 runner 預設，[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
    */
   readonly onInvariantViolation?: (error: InvariantError) => void;
@@ -848,7 +850,7 @@ export interface CreateCliAgentSession {
   /** `shadow` 時比對結果的去處，原樣轉給 `createNexusAgent`。serve 一台一份；CLI 一次行程一份。 */
   readonly historyShadow?: HistoryShadowSink;
   /**
-   * 核准政策的 session 開關。[`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
+   * 核准政策的 session 開關。[`serve-run.ts`](./serve-run.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
    * CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
    */
   readonly approvals?: ApprovalPolicy;
@@ -875,6 +877,11 @@ export interface CreateCliAgentSession {
    * 一份連線。**serve 傳**（起動期建一份、試組與每條 thread 傳同一份）；CLI 一個行程一個組裝，省略就是每列自己連，行為不變。
    */
   readonly mcpPool?: McpConnectionPool;
+  /**
+   * 宿主服務的門面（`@nexus/host-bridge`）：**只有對話行程傳**，監督行程有起宿主時建一個，每條 thread 的組裝交同一個。
+   * 省略＝沒有宿主（單行程 serve、CLI），或是 serve 起動時的試組；組裝點照樣以 `hostBridge` 交一個呼叫一律回 `host_absent` 的，插件不必分兩種情況讀。
+   */
+  readonly hostBridge?: HostBridge;
 }
 
 /**
@@ -1027,6 +1034,7 @@ export async function createCliAgent(
     tokenAnchorBook,
     sessionLookup,
     mcpPool,
+    hostBridge,
   }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
@@ -1079,6 +1087,8 @@ export async function createCliAgent(
    * 嵌入版設定檔（#2367）不掛子代理，缺席。
    */
   subagentKinds: readonly { readonly name: string; readonly description: string }[] | undefined;
+  /** root 的模型手上的委派工具，點名提示照它組字（#2649）。跟 {@link subagentKinds} 同時有、同時缺席。 */
+  delegationTool: DelegationToolName | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -1145,8 +1155,8 @@ export async function createCliAgent(
         )
       : undefined;
   // **channel 算兩次，輸入要同一組。** `ask_user_question` 與 `exit_plan_mode`（#652）拿這裡算的這一份；核准閘門那一份
-  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同三格算出：
-  // `approvals.enabled`、有沒有 checkpointer、哪一種 loop（native 算沒有 checkpointer）。輸入對不上時分岔的樣子是
+  // 由 `foldRegistry` 自己算（`fold.ts` 的 `foldApprovalChannel`）。兩邊都呼叫 `deriveApprovalChannel`，參數由同兩格算出：
+  // `approvals.enabled`、有沒有 checkpointer。輸入對不上時分岔的樣子是
   // 「核准擋得下來、問答還掛在那裡」。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
@@ -1154,12 +1164,12 @@ export async function createCliAgent(
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `PrunedMemorySaver`（只留最新存檔點的 `MemorySaver`，#1106），但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
   // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 不讀存檔點、接不回中斷（TODO(#2358)），
-  // 所以也算沒有，同 `fold.ts` 的 `foldApprovalChannel`。
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。native loop 在行程內等人回答，同一個條件；沒人可問的呼叫
+  // 由那顆呼叫上的 `NO_HUMAN_INPUT` 判（`@nexus/core` 的 `human-input.ts`），同 `fold.ts` 的 `foldApprovalChannel`。
   const checkpointer = new PrunedMemorySaver();
   const channel = deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined && invocation.agentLoop !== 'native',
+    hasCheckpointer: checkpointer !== undefined,
   });
   // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
   // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
@@ -1170,7 +1180,7 @@ export async function createCliAgent(
   // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/permission` 換掉
   // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
   //
-  // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve.ts` 一條 thread 呼叫一次
+  // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve-run.ts` 一條 thread 呼叫一次
   // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
   // 同一格——一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
@@ -1212,7 +1222,7 @@ export async function createCliAgent(
   //
   // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `packages/nexus-plugin-permission-presets/src/index.ts` 檔頭第 1 條）：
   // 全開就是 `never`、其他是 `ask`，同 dsh 的 `DSH_PERMISSION_MODE`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
-  // （`cli.ts`、`serve.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
+  // （`cli.ts`、`serve-run.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
   const approvalPolicy = new ApprovalPolicyController(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
   );
@@ -1262,6 +1272,7 @@ export async function createCliAgent(
     spillStore,
     hostTools,
     subagentKinds,
+    delegationTool,
     memorySources,
   } = await createNexusAgent({
     model,
@@ -1277,6 +1288,8 @@ export async function createCliAgent(
         approvalPolicy,
         // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
         [MCP_POOL_SERVICE]: mcpPool,
+        // 宿主服務的門面（#2569）：一定有這一格，沒有宿主時呼叫回 host_absent。
+        [HOST_BRIDGE_SERVICE]: hostBridge ?? ABSENT_HOST_BRIDGE,
         // MCP 設定裡的憑證引用（#1989）：跟模型 key 同一份憑證服務、同一條規則；缺席＝寫了引用的列連不上。
         ...(invocation.credentials !== undefined && {
           [MCP_CREDENTIALS_SERVICE]: mcpCredentialsOf(invocation.credentials),
@@ -1475,6 +1488,7 @@ export async function createCliAgent(
       return () => void delegationNarrowedListeners.delete(listener);
     },
     subagentKinds,
+    delegationTool,
     goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,
@@ -1671,7 +1685,7 @@ export function goalDriverPort(
  * serve 每條 thread 交給 wire handler 的 `goalDriver` 工廠（具名抽出來，#1575 W4 的紅燈）。
  *
  * 以前這一段是 `serve.ts` 裡的行內閉包：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進 {@link goalDriverPort}，
- * 而拿掉那一格所有測試照樣綠（實測）。抽成具名函式之後 `serve.ts` 只剩「用它」，轉呼這一層有單元測試釘住。
+ * 而拿掉那一格所有測試照樣綠（實測）。抽成具名函式之後 `serve-run.ts` 只剩「用它」，轉呼這一層有單元測試釘住。
  *
  * @param goals - 這一條 thread 自己那一次組裝的 goal 域（#459）。
  * @param warn - 排程器出事時說話的去處。

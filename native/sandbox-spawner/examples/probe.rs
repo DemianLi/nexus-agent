@@ -53,7 +53,11 @@ fn main() {
                     addr.sin_family = libc::AF_INET as libc::sa_family_t;
                     addr.sin_port = 9u16.to_be();
                     addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
-                    let r = libc::connect(fd, (&addr as *const libc::sockaddr_in).cast(), std::mem::size_of::<libc::sockaddr_in>() as u32);
+                    let r = libc::connect(
+                        fd,
+                        (&addr as *const libc::sockaddr_in).cast(),
+                        std::mem::size_of::<libc::sockaddr_in>() as u32,
+                    );
                     report(i64::from(r));
                 }
             }
@@ -68,21 +72,41 @@ fn main() {
             "vsock" => report(socket(libc::AF_VSOCK, libc::SOCK_STREAM)),
             "socketpair" => {
                 let mut fds = [0; 2];
-                report(i64::from(libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr())));
+                report(i64::from(libc::socketpair(
+                    libc::AF_UNIX,
+                    libc::SOCK_STREAM,
+                    0,
+                    fds.as_mut_ptr(),
+                )));
             }
-            "uring" => report(libc::syscall(libc::SYS_io_uring_setup, 1, std::ptr::null_mut::<libc::c_void>())),
+            "uring" => report(libc::syscall(
+                libc::SYS_io_uring_setup,
+                1,
+                std::ptr::null_mut::<libc::c_void>(),
+            )),
             "uring-enter" => report(libc::syscall(libc::SYS_io_uring_enter, -1, 0, 0, 0, 0, 0)),
             "uring-register" => report(libc::syscall(libc::SYS_io_uring_register, -1, 0, 0, 0)),
             "unshare" => report(i64::from(libc::unshare(libc::CLONE_NEWUSER))),
             "setns" => report(i64::from(libc::setns(-1, 0))),
             "clone-newuser" => {
-                let r = libc::syscall(libc::SYS_clone, (libc::CLONE_NEWUSER | libc::SIGCHLD) as libc::c_ulong, 0, 0, 0, 0);
+                let r = libc::syscall(
+                    libc::SYS_clone,
+                    (libc::CLONE_NEWUSER | libc::SIGCHLD) as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
                 if r == 0 {
                     libc::_exit(0);
                 }
                 report(r);
             }
-            "clone3" => report(libc::syscall(libc::SYS_clone3, std::ptr::null_mut::<libc::c_void>(), 0usize)),
+            "clone3" => report(libc::syscall(
+                libc::SYS_clone3,
+                std::ptr::null_mut::<libc::c_void>(),
+                0usize,
+            )),
             // glibc 起執行緒先試 clone3，拿到 ENOSYS 退回 clone（S1 第 6 條）。
             "thread" => report(std::thread::spawn(|| 7).join().map(|v| v - 7).unwrap_or(-1) as i64),
             // 任意一條 syscall，參數全給 -1：過濾器擋下來是 EPERM；放過去由核心回 EBADF、EINVAL、EFAULT 之類。
@@ -106,7 +130,8 @@ fn main() {
                 let mut s = UnixStream::connect(arg(2)).unwrap();
                 let id: u32 = arg(3).parse().unwrap();
                 let fd: u32 = arg(4).parse().unwrap();
-                s.write_all(&[id.to_le_bytes(), fd.to_le_bytes()].concat()).unwrap();
+                s.write_all(&[id.to_le_bytes(), fd.to_le_bytes()].concat())
+                    .unwrap();
                 std::thread::sleep(std::time::Duration::from_secs(10));
             }
             other => {

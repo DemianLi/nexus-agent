@@ -275,7 +275,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
     });
   }, 60000);
 
-  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.2.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）；tools 服務 2.9.0（沿革見 present-on-tree.test.ts）', async () => {
+  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.2.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix、#1919 加 skillSources）；tools 服務 2.11.0（沿革見 present-on-tree.test.ts）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
@@ -289,7 +289,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
       kind: 'not-attached',
     });
     const tools = tree.get('tools') as { contractVersion?: string } | undefined;
-    expect(tools?.contractVersion).toBe('2.9.0');
+    expect(tools?.contractVersion).toBe('2.11.0');
   }, 60000);
 
   it('fs 那一列是必掛的：它起不來，submit_record 沒有地方問 fs，整個起不來', () => {

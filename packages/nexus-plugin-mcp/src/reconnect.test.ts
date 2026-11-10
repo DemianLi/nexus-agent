@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CHANNEL_SERVICE, createHostServicesPlugin, HUMAN_INPUT_CONFIG_KEY } from '@nexus/core';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 import { describe, expect, it } from 'vitest';
@@ -408,6 +409,61 @@ describe('重連前的關閉屏障', () => {
       }
       killAll(pids());
       rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+/**
+ * 在行程內等人回答的 loop（native，[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）不從頭重跑工具：反問的下一輪接著送。
+ * 等的期間連線掉了、重連上了，下一輪要送到當下那一代，不是問人之前那一代。
+ */
+describe('等人回答的期間重連', () => {
+  it('server 問人、等的時候殺掉子行程：重連之後作答，下一輪送到新的那一代，照常收完', async () => {
+    const marker = `--marker-${randomUUID()}`;
+    const pids = () => pidsOf(marker);
+    const { registry, dispose } = await loadPlugins([
+      createHostServicesPlugin({ [CHANNEL_SERVICE]: { kind: 'human' } }),
+      mcpEntry({
+        serverName: 'srv',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', MODERN_SERVER, marker],
+        },
+        reconnect: FAST,
+      }),
+    ]);
+    try {
+      const first = pids();
+      expect(first).toHaveLength(1);
+      const asked: unknown[] = [];
+      const service = {
+        async ask(value: unknown) {
+          asked.push(value);
+          killAll(first);
+          await waitFor(() => pids().some((pid) => !first.includes(pid)));
+          await waitFor(() =>
+            invoke(registry, 'mcp__srv__protocol_info', {}).then(
+              () => true,
+              () => false,
+            ),
+          );
+          return { responses: { confirm: { action: 'accept', content: { confirm: true } } } };
+        },
+        idle: <T>(waiting: Promise<T>) => waiting,
+        onResumed: () => () => {},
+      };
+      const ask = registry.tools.resolve('mcp__srv__ask')?.value;
+      if (ask === undefined) throw new Error('沒有註冊 mcp__srv__ask');
+      const result = await ask.invoke({} as never, {
+        configurable: { [HUMAN_INPUT_CONFIG_KEY]: service },
+      });
+
+      expect(asked).toHaveLength(1);
+      expect(String(result)).toContain('使用者答了 true');
+    } finally {
+      await dispose();
+      killAll(pids());
     }
   }, 30_000);
 });

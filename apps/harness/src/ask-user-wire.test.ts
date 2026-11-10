@@ -83,7 +83,7 @@ async function open(threadId: string): Promise<Session> {
   });
   // **日誌要接在 pump 自己那一份註冊表上**：handler 建完 pump 才把它交過來（`wire-handler.ts`），
   // 另外建一份的話圍堵寫的是別人，pump 一顆 `tool/result` 都收不到——工具卡的終態就退回只看基座的
-  // frame，#439 的結果文字也不會出現。產品路徑（`serve.ts`）走的就是這一條。
+  // frame，#439 的結果文字也不會出現。產品路徑（`serve-run.ts`）走的就是這一條。
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   childExecArgv,
+  HOST_PLUGINS_FILE,
   isPrintOnly,
   launchProcessModel,
   pdeathsigHazards,
@@ -68,8 +69,8 @@ describe('splitServeArgv', () => {
 });
 
 describe('SERVE_FLAG_TAKES_VALUE', () => {
-  it('跟 serve.ts 的 parseServeArgs 同一張表：旗標一樣多、收不收值一樣', () => {
-    const source = readFileSync(join(import.meta.dirname, 'serve.ts'), 'utf8');
+  it('跟 serve-run.ts 的 parseServeArgs 同一張表：旗標一樣多、收不收值一樣', () => {
+    const source = readFileSync(join(import.meta.dirname, 'serve-run.ts'), 'utf8');
     const block = /export function parseServeArgs[\s\S]*?options: \{([\s\S]*?)\n {6}\},/u.exec(
       source,
     )?.[1];
@@ -309,8 +310,30 @@ describe('宿主', () => {
       serveArgv: [],
     });
     const at = args.indexOf('--host');
-    expect(args.slice(at, at + 2)).toEqual(['--host', '/opt/nexus/native/nexus-host']);
+    expect(args.slice(at, at + 6)).toEqual([
+      '--host',
+      '/opt/nexus/native/nexus-host',
+      '--host-arg',
+      '--plugins',
+      '--host-arg',
+      `/h/${HOST_PLUGINS_FILE}`,
+    ]);
     expect(at).toBeLessThan(args.indexOf('--front'));
+  });
+
+  it('supervisorLaunch：沒給 host 就不帶 --host，也不帶任何 --host-arg', () => {
+    const { args } = supervisorLaunch({
+      supervisor: '/opt/nexus/native/nexus-supervisor',
+      home: '/h',
+      execPath: '/usr/bin/node',
+      execArgv: [],
+      frontEntry: '/front.js',
+      conversationEntry: '/conversation.js',
+      serveArgv: [],
+    });
+    expect(args).not.toContain('--host');
+    expect(args).not.toContain('--host-arg');
+    expect(args.join(' ')).not.toContain(HOST_PLUGINS_FILE);
   });
 
   it('launchProcessModel：監督行程旁邊沒有 nexus-host 就拒起，不換成監督行程', async () => {

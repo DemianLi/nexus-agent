@@ -37,6 +37,7 @@ import { composeEntries, defaultSources } from './plugin-config.js';
 import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
+import { HOST_PLUGINS_FILE } from './process-launcher.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { signalPid } from './test-pids.fixture.js';
@@ -883,4 +884,41 @@ describe.skipIf(SUPERVISOR === undefined)('per-thread：監督行程、前台與
       );
     }, 180_000);
   });
+});
+
+describe.skipIf(SUPERVISOR === undefined)('per-thread：對話行程連宿主', () => {
+  const count = (log: string, text: string) => log.split(text).length - 1;
+
+  it('對話行程用監督行程給的 socket 與 token 連上宿主；宿主被殺，重起之後對話行程自己重連，對話不斷', async () => {
+    const running = await start([{ content: '第一輪。' }, { content: '第二輪。' }]);
+    const supervisor = running.child.pid!;
+    const client = await clientOf(await running.loginUrl(1));
+    expect(replies(await turn(client, 'thread-h', '你好'))).toEqual(['第一輪。']);
+    const conversations = await settled(supervisor, 'conversation-process', 1 + WARM);
+    await expect
+      .poll(() => count(running.log(), '[宿主] 連上了'), { timeout: 20_000 })
+      .toBe(1 + WARM);
+
+    const [host] = childrenRunning(supervisor, 'nexus-host');
+    expect(host).toBeDefined();
+    signalPid(host!, 'SIGKILL');
+    await expect
+      .poll(() => count(running.log(), '[宿主] 斷線'), { timeout: 20_000 })
+      .toBe(1 + WARM);
+    await expect
+      .poll(() => count(running.log(), '[宿主] 連上了'), { timeout: 30_000 })
+      .toBe(2 * (1 + WARM));
+    expect(childrenRunning(supervisor, 'nexus-host')).not.toContain(host);
+    expect(childrenRunning(supervisor, 'conversation-process')).toEqual(conversations);
+    expect(replies(await turn(client, 'thread-h', '再一輪'))).toEqual(['第二輪。']);
+  }, 180_000);
+
+  it('home 底下的 host-plugins.json 壞了：宿主起不來，整台以 5 結束、stderr 寫明宿主設定壞了', async () => {
+    const running = await start([], '', async (home) => {
+      await writeFile(join(home, HOST_PLUGINS_FILE), '{ 不是 JSON', 'utf8');
+    });
+    const code = await new Promise<number | null>((resolve) => running.child.once('exit', resolve));
+    expect(code).toBe(5);
+    expect(running.log()).toContain('宿主設定壞了');
+  }, 180_000);
 });

@@ -5,9 +5,6 @@
  * 腳本走過先讀後改的拒絕與放行、一般工具、`task` 委派，所以 root 與子代理的請求都在裡面。外溢不在這裡：預覽切在哪跟著存檔名的
  * 隨機段變，每次跑都不同。外溢跨 loop 的位元組在 `spill-search-overflow-bytes.test.ts`（存檔釘雜湊、模型看到的那則逐位元組拼回來）
  * 與 `assembly-parity.test.ts` 的基座搬檔那一條。
- *
- * **唯一的明文例外：子代理的委派聲明**（`native-loop-known-differences.ts` 的 `approvalChannel`，#2358）。native 沒有中斷，
- * fold 把核准管道算成 no-channel（`foldApprovalChannel`），前景子代理的聲明跟著管道選句。把 native 那句換回 langgraph 那句之後，其餘要逐位元組相同。
  */
 
 import { mkdtemp, writeFile } from 'node:fs/promises';
@@ -18,7 +15,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { MemorySaver } from '@langchain/langgraph';
-import { FOREGROUND_SUBAGENT_DELEGATION_CONTEXT, SUBAGENT_DELEGATION_CONTEXT } from '@nexus/core';
+import { FOREGROUND_SUBAGENT_DELEGATION_CONTEXT } from '@nexus/core';
 import type { AgentLoopKind, PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -138,14 +135,9 @@ describe('兩個 loop 送給模型的請求', () => {
     expect(langgraph.requests).toContain('你是 worker');
 
     const inJson = (text: string) => JSON.stringify(text).slice(1, -1);
-    expect(native.requests).toContain(inJson(SUBAGENT_DELEGATION_CONTEXT));
+    // 子代理的委派聲明兩個 loop 都跟著同一個核准管道選句。
     expect(langgraph.requests).toContain(inJson(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT));
-    expect(
-      native.requests.replaceAll(
-        inJson(SUBAGENT_DELEGATION_CONTEXT),
-        inJson(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT),
-      ),
-    ).toBe(langgraph.requests);
+    expect(native.requests).toBe(langgraph.requests);
     expect(native.bindings).toEqual(langgraph.bindings);
   });
 });

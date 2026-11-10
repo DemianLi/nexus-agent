@@ -129,7 +129,7 @@ export class ResumeWorkspaceConflictError extends Error {
  * | 有記 | 跟這次不同 | **拒**，訊息指名兩個根 |
  * | 有記 | 跟這次相同 | 放行 |
  *
- * **第二列放行的理由不是「別的守衛管了」。** `serve.ts` 那條沙箱模式檢查看的是日誌裡有沒有
+ * **第二列放行的理由不是「別的守衛管了」。** `serve-run.ts` 那條沙箱模式檢查看的是日誌裡有沒有
  * `sandbox/mode`，而 sandbox-policy 那顆 plugin 被一份 patch 關掉時，上一次確實跑在
  * `--workspace` 底下卻一顆都沒寫——那條不會響。真正的理由是**沒給 `--workspace` 就沒有根**，
  * 而交付那兩支讀檔方法在沒有根的時候**每一次讀都拒**：`wire-handler.ts` 的

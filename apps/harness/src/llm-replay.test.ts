@@ -18,8 +18,8 @@ import { uniformDecisions } from '@nexus/wire';
 import { TIME_CONTEXT_OFF_PATCH_ROWS, approvalAt, foldTurn, serveClient } from './fixtures.js';
 import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { ReplayChatModel } from './llm-replay.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 let running: RunningServe | undefined;
 

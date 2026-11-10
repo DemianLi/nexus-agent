@@ -2,7 +2,7 @@
  * 「組裝成功、續接失敗」的 thread 不進活著的設定版本那張表（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442)，
  * PM 審查第 1 項）。
  *
- * `serve.ts` 在 `assembly.create` 與 `restoreConversation` 都成功之後才叫 `bindThread`。`read()` 在組裝之前就寫了快照、
+ * `serve-run.ts` 在 `assembly.create` 與 `restoreConversation` 都成功之後才叫 `bindThread`。`read()` 在組裝之前就寫了快照、
  * 組裝成功但續接失敗時 agent 與租約都收掉、這條 thread 沒有起來，所以它不該出現在任何一版的 `threads` 裡。
  * 這一檔只問這一件事：把 `restoreConversation` 換成「要它拋就拋」，其餘走真的 `runServe` 與 wire client。
  *
@@ -20,8 +20,8 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const gate = vi.hoisted(() => ({ fail: false, calls: 0 }));
 

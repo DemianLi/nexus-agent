@@ -90,7 +90,7 @@ function tail(text: string, max: number): string {
  * [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不再經過這裡，見檔頭。
  *
  * **上限是傳進來的，不是這個模組的常數**（#538）：值住在清單上 `tool-text` 那一列，由
- * `serve.ts` 在起動期解出來、穿過 `createWireHandler` 傳到這裡。刻意**沒有預設參數**——
+ * `serve-run.ts` 在起動期解出來、穿過 `createWireHandler` 傳到這裡。刻意**沒有預設參數**——
  * 一個預設值會讓「呼叫端忘了傳」跟「設定就是這個數」長得一模一樣，而這條路上有兩個呼叫端。
  *
  * @param text - 原文。

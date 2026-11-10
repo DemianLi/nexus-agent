@@ -10,7 +10,7 @@
  * 只驗**那條線通不通**：出貨清單 → `--patch` → `startupSetting` → 真的 serve 上的行為。
  *
  * **為什麼要有它**：起動期那兩格沒有服務可讀，值是解出來之後**用參數往下傳**的
- * （`settings/startup.ts` 的檔頭）。一條用參數傳的線天生沒有觀察點——把 `serve.ts` 那兩個
+ * （`settings/startup.ts` 的檔頭）。一條用參數傳的線天生沒有觀察點——把 `serve-run.ts` 那兩個
  * `startupSetting(...)` 換回寫死的常數，除了這一組以外全樹不會有任何東西紅，而部署寫在 patch
  * 裡的值會安靜地沒有作用。所以這裡的每一條都是**兩臂**：同一台 serve，只差有沒有那份 patch。
  *
@@ -25,8 +25,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 import { closedSessionEvents, sessionsUnder } from '../session-files.fixture.js';
 import { sessionPersistencePlugin } from '@nexus/core';
 
@@ -329,7 +329,7 @@ describe('startupSetting', () => {
   it('CLI 那條也解出那一列，而且真的傳給落盤——結構性的，因為沒有行為觀察點', async () => {
     // **這一條是退路，不是首選。** CLI 那一跳量不到行為：`runCli` 回來之前一定會
     // `persistence.dispose()`（`cli.ts:1455`、`:1468`），而 dispose 排空——跑完再看檔案，
-    // 不管窗口是 10 還是 3000，兩臂都是滿的。同 #536 `serve.ts → handler` 那一跳的處境。
+    // 不管窗口是 10 還是 3000，兩臂都是滿的。同 #536 `serve-run.ts → handler` 那一跳的處境。
     //
     // 所以這裡釘的是原始碼：那兩行在不在。突變驗過——任一行拿掉這條就紅。
     const source = await readFile(new URL('../cli.ts', import.meta.url), 'utf8');
@@ -347,23 +347,23 @@ describe('startupSetting', () => {
   });
 
   it('serve 起動期解出工具文字那一列，而且真的傳給 handler——結構性的', async () => {
-    // **同 `deliverable-files` 那一條的處境**（#536）：`serve.ts → createWireHandler` 這一跳
+    // **同 `deliverable-files` 那一條的處境**（#536）：`serve-run.ts → createWireHandler` 這一跳
     // 沒有行為觀察點——產品路徑上的假模型只會 echo 一句十幾個位元組的話，造不出一份會被
-    // 300 位元組上限截到的 meta 或摘要（結果文字自 #736 起不截）。實測過：把 `serve.ts` 那一行拿掉，全套 1243 條全綠。
+    // 300 位元組上限截到的 meta 或摘要（結果文字自 #736 起不截）。實測過：把 `serve-run.ts` 那一行拿掉，全套 1243 條全綠。
     //
     // 所以這裡釘原始碼。**handler 往下那兩跳有真的行為測試**（`serve-history.test.ts` 走 route、
     // `tool-card-from-log.test.ts` 走即時），紅的分工因此是：那兩條管轉發，這一條管接線。
-    const source = await readFile(new URL('../serve.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../serve-run.ts', import.meta.url), 'utf8');
     expect(source).toContain('toolTextLimits = startupSetting(plugins, toolTextPlugin)');
     const call = source.slice(source.indexOf('createWireHandler({'));
     expect(call.slice(0, call.indexOf('createAgent'))).toContain('toolTextLimits,');
   });
 
   it('serve 起動期解出投影合併視窗，而且真的傳給 handler——結構性的', async () => {
-    // 同 `tool-text` 那一條的處境：`serve.ts → createWireHandler` 這一跳沒有行為觀察點（產品路徑上沒有 patch 能在這個測試
+    // 同 `tool-text` 那一條的處境：`serve-run.ts → createWireHandler` 這一跳沒有行為觀察點（產品路徑上沒有 patch 能在這個測試
     // 裡換掉出貨的 cordis.yml 再起一台 serve）。handler 往下那一跳有行為測試（`projection-coalesce-wire.test.ts` 的「視窗是設定」），
     // 紅的分工因此是：那條管轉發，這一條管接線。
-    const source = await readFile(new URL('../serve.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../serve-run.ts', import.meta.url), 'utf8');
     expect(source).toContain('projectionFlush = startupSetting(plugins, projectionFlushPlugin)');
     const call = source.slice(source.indexOf('createWireHandler({'));
     expect(call.slice(0, call.indexOf('createAgent'))).toContain(

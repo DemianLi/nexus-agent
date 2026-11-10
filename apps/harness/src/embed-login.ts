@@ -2,7 +2,7 @@
  * 嵌入方換票（[#2370](https://github.com/DemianLi/nexus-agent/issues/2370)，地圖 #2365 第 4 點）：對方的後端用服務憑證打
  * `POST /embed/exchange`，替一位使用者換一張短效、只能用一次的登入票；元件拿票打 `POST /embed/session` 換嵌入專用的會話（`embed-session.ts`）。
  *
- * - **只在前台行程**：登入只在前台（`serve.ts` 的 `ServeListening`），對話行程不掛這條路由。
+ * - **只在前台行程**：登入只在前台（`serve-run.ts` 的 `ServeListening`），對話行程不掛這條路由。
  * - **圍欄**：先過 `isTrustedWireRequest`（Host 不是 loopback 也不是 `--trusted-host` 指名的、`Sec-Fetch-Site: cross-site`、Origin 跟 Host 不同源，一律 403），同 wire 與指標。
  * - **服務憑證**：`Authorization: Bearer <憑證>`。拿請求帶的值與**每一個**嵌入方的憑證各比一次，比的是兩邊的 sha256（定長），
  *   不提早結束。缺標頭時拿一個空字串照樣比完。所以 401 的本文與耗時看不出缺憑證、憑證錯，或是哪一個嵌入方；請求本文裡也沒有嵌入方 id。
@@ -228,7 +228,7 @@ export interface EmbedLoginOptions {
 
 /** 換票的處理器。 */
 export interface EmbedLogin {
-  /** 只會收到 {@link EMBED_EXCHANGE_PATH} 的請求（`serve.ts` 的 `routeBySurface` 分）。 */
+  /** 只會收到 {@link EMBED_EXCHANGE_PATH} 的請求（`serve-run.ts` 的 `routeBySurface` 分）。 */
   handle(request: Request): Promise<Response>;
 }
 

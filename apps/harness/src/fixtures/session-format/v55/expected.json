@@ -1,0 +1,94 @@
+{
+  "writer": {
+    "rev": "v0.6.1",
+    "commit": "4545d50c04ba308a937a5b37bfad652d2f52fed7",
+    "formatVersion": 55,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "7491ee975e6202359ef5a94504e95feb13b32aca",
+    "dirty": true
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 55,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "request/system",
+        "request/header",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.6.1",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "mention": {
+      "headerVersion": 55,
+      "eventCount": 11,
+      "types": [
+        "turn/start",
+        "model/start",
+        "inbox/spliced",
+        "assistant/message",
+        "model/end",
+        "inbox/spliced",
+        "user/message",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.6.1",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "human",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 56,
+      "session": "mention",
+      "computedBy": "today",
+      "ownHumanContents": [
+        "[{\"type\":\"text\",\"text\":\"幫我登記阿明\"},{\"type\":\"text\",\"text\":\"<system-reminder>使用者點名要你把這句話交給子代理 \\\"general-purpose\\\" 處理：請用委派工具（task 的 subagent_type 填這個名字）把這句話派給它，並把它需要的背景一併交代。</system-reminder>\"}]",
+        "[{\"type\":\"text\",\"text\":\"順便看一下\"},{\"type\":\"text\",\"text\":\"<system-reminder>使用者點名要你把這句話交給子代理 \\\"reviewer\\\" 處理：請用委派工具（task 的 subagent_type 填這個名字）把這句話派給它，並把它需要的背景一併交代。</system-reminder>\"}]"
+      ]
+    }
+  ]
+}

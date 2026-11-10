@@ -35,8 +35,8 @@ import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { parseServeArgs, runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { parseServeArgs, runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;

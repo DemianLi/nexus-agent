@@ -10,8 +10,8 @@
  *
  * **轉接是同步的**：{@link wrapToolCallWith} 造好 {@link ToolCallSite} 就在同一個 tick 呼叫那一步，中間沒有 `await`。
  *
- * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 的工具鏈
- * 直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格，native 建構時就拋。
+ * **登記了這一步的格**（{@link withToolCallStep}；{@link createToolCallStepMiddleware} 造的自動登記）由 native 的 root 與前景子代理的
+ * 工具鏈直接呼叫（`native-loop/agent.ts` 的 `#toolCells`）；沒登記的格，native 建構時就拋。
  *
  * @module
  */
@@ -214,8 +214,8 @@ export function wrappedRequestOf(call: ToolCallSite): WrappedToolRequest {
 const registeredSteps = new WeakMap<object, ToolCallStep>();
 
 /**
- * 登記這顆 middleware 的工具那一格就是 `step`：native 的 root 在這一格直接呼叫它，不經這顆的 `wrapToolCall`
- * （{@link toolCallStepOf}）；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 `wrapToolCall`。
+ * 登記這顆 middleware 的工具那一格就是 `step`：native 的 root 與子代理（前景、背景）在這一格直接呼叫它，不經這顆的 `wrapToolCall`
+ * （{@link toolCallStepOf}）；`langgraph` 照舊經 `wrapToolCall`。
  * 所以 `wrapToolCall` 必須就是 `wrapToolCallWith(step)`，兩個 loop 才跑同一份實作；不是就拋。要在 `createNativeAgent` 之前登記：
  * 工具鏈在建構時就算好。
  * TODO([#2363](https://github.com/DemianLi/nexus-agent/issues/2363))：最後一顆工具步驟改成監聽者或併進 native loop 時收掉。

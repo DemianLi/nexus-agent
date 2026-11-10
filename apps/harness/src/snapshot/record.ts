@@ -27,8 +27,8 @@ import { parseArgs } from 'node:util';
 import { serveClient } from '../fixtures.js';
 import { projectKey, sessionPathsIn } from '../jsonl-session-store.js';
 import { DEFAULT_LIVE_BASE_URL } from '../live-model.js';
-import { runServe } from '../serve.js';
-import type { RunningServe } from '../serve.js';
+import { runServe } from '../serve-run.js';
+import type { RunningServe } from '../serve-run.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 import { startCountingProxy } from '../smoke/counting-proxy.js';
 import {

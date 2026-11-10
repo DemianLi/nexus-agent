@@ -1,21 +1,24 @@
 /**
  * `--agent-loop native` 在產品組裝上（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：組裝根、pump、wire。
  *
- * native loop 接不回中斷（TODO(#2358)），所以兩處算答題管道時「有存檔點」是 `false`：要問人的工具當下拒絕，不發中斷。
- * 入口那一份（`cordis-root.ts` 的 `entryApprovalChannel`）給樹上的 ask-user，組裝根那一份（`assembly-root.ts`）給沙箱升級，各一條。
- * 對照組是 `ask-user-assembly.test.ts` 的 serve 那條與 `legacy-thread-escalation.test.ts`（LangGraph 下停在中斷）。
+ * 兩個 loop 算出來的答題管道一樣（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：native 沒人可問的是那顆呼叫上放了
+ * `NO_HUMAN_INPUT` 的（帶 thread 的 `streamEvents` 之外的 run），由生產者自己判。serve 走帶 thread 的 `streamEvents`，樹上的 ask-user
+ * 停在問題上、答了收完，日誌跟 `langgraph` 寫的一樣；直接 `invoke` 組裝根時沙箱升級當下拒絕（no-channel），不掛核准卡。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
 
+import { readdirSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 
-import { ASK_USER_QUESTION_TOOL_NAME, noAnswererMessage } from '@nexus/plugin-ask-user';
+import type { SessionEvent } from '@nexus/core';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
 import { SANDBOX_ESCALATION_TOOL_NAME, unaskedRefusal } from '@nexus/plugin-sandbox-policy';
-import type { ConversationState } from '@nexus/wire';
+import type { ConversationState, Event } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -23,9 +26,10 @@ import { parseCliArgs } from './cli.js';
 import { foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { startScriptedServe } from './scripted-serve.js';
-import { parseServeArgs } from './serve.js';
+import { parseServeArgs } from './serve-run.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const ASK: readonly ScriptedTurn[] = [
   {
@@ -47,13 +51,56 @@ afterEach(async () => {
   serve = undefined;
 });
 
-async function finishedTurn(server: ScriptedServe, threadId: string): Promise<ConversationState> {
-  const client = await serveClient(server.running);
-  const events = await client.openEvents(threadId);
-  await client.runStart(threadId, '動手。');
-  const state = await foldTurn(events);
-  await events.return?.(undefined);
-  return state;
+/** 每次跑都不同的欄位。 */
+const VOLATILE = new Set(['time', 'interruptId', 'id', 'durationMs', 'sampledAt']);
+/** 時間脈絡那一則裡取樣的時刻。 */
+const SAMPLED = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d/gu;
+
+/** 日誌去掉每次跑都不同的欄位，留種類、順序與內容。 */
+function shapeOf(events: readonly SessionEvent[]): unknown[] {
+  const strip = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(strip)
+      : typeof value === 'object' && value !== null
+        ? Object.fromEntries(
+            Object.entries(value)
+              .filter(([key]) => !VOLATILE.has(key))
+              .map(([key, inner]) => [key, strip(inner)]),
+          )
+        : typeof value === 'string'
+          ? value.replace(SAMPLED, '<time>')
+          : value;
+  return events.map(({ type, data }) => ({ type, data: strip(data) }));
+}
+
+/** 起一台 serve、問一題、答了跑完，回兩段的線上狀態與落盤的日誌。 */
+async function askAndAnswer(
+  loop: 'langgraph' | 'native',
+): Promise<{ parked: ConversationState; done: ConversationState; log: SessionEvent[] }> {
+  const logs = await mkdtemp(join(tmpdir(), 'nexus-native-ask-logs-'));
+  const thread = `ask-${loop}`;
+  serve = await startScriptedServe(ASK, { argv: ['--agent-loop', loop, '--session-log', logs] });
+  try {
+    const client = await serveClient(serve.running);
+    const events: AsyncIterator<Event> = await client.openEvents(thread);
+    await client.runStart(thread, '動手。');
+    const parked = await foldTurn(events);
+    const question = parked.pendings[0];
+    if (question === undefined) throw new Error(`${loop}：沒有停在問題上`);
+    await client.inputRespond(thread, {
+      namespace: [...question.namespace],
+      interrupt_id: question.interruptId,
+      response: { answers: [{ id: 'day', selected: ['週一'] }] },
+    });
+    const done = await foldTurn(events, parked);
+    await events.return?.(undefined);
+    await serve.close();
+    serve = undefined;
+    const [project] = readdirSync(logs);
+    return { parked, done, log: await sessionEventsOf(join(logs, project!), thread) };
+  } finally {
+    await rm(logs, { recursive: true, force: true });
+  }
 }
 
 describe('--agent-loop', () => {
@@ -73,15 +120,19 @@ describe('--agent-loop', () => {
 });
 
 describe('serve --agent-loop native', () => {
-  it('ask_user_question 當下拒絕（no-channel），這一輪照常收完', async () => {
-    serve = await startScriptedServe(ASK, { argv: ['--agent-loop', 'native'] });
-    const state = await finishedTurn(serve, 'native-ask');
+  it('ask_user_question 停在問題上，答了收完；日誌（含 interrupt/raised 與接回那一對）跟 langgraph 的一樣', async () => {
+    const native = await askAndAnswer('native');
+    expect(native.parked.pendings).toHaveLength(1);
+    expect(native.done.pendings).toEqual([]);
+    expect(JSON.stringify(native.done)).toContain('收工。');
 
-    expect(state.pendings).toEqual([]);
-    const text = JSON.stringify(state);
-    expect(text).toContain(noAnswererMessage({ kind: 'no-channel' }).slice(0, 20));
-    expect(text).toContain('收工。');
-  }, 60000);
+    const raised = native.log.filter((event) => event.type === 'interrupt/raised');
+    expect(raised).toHaveLength(1);
+    expect(native.log.filter((event) => event.type === 'tool/call')).toHaveLength(2);
+
+    const langgraph = await askAndAnswer('langgraph');
+    expect(shapeOf(native.log)).toEqual(shapeOf(langgraph.log));
+  }, 120000);
 
   it('沙箱升級當下拒絕（no-channel），不掛核准卡', async () => {
     const workspace = await mkdtemp(join('/var/tmp', 'nexus-native-escalation-'));

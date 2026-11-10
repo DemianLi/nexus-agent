@@ -49,8 +49,8 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { auditStartupEntries, REQUIRED_TREE_ENTRY_IDS } from './startup-audit.js';
 
 const temporary: string[] = [];
@@ -781,6 +781,18 @@ const withPromptSections = (chain: readonly string[]): string[] =>
   });
 
 /**
+ * 對照組錄的鏈上有 `nexusPlanMode`；計劃模式聽 `agent/pre-step`（#2358），樹上不佔 stack 的格子，那一格在 HEAD 是 core 的兩格——`plugins.prepended`
+ * 裡、langgraph 下有 `agent/pre-step` 監聽者才派的 `nexusPreStep`（native 由迴圈自己派，不掛），與補回 `concludesTurn` 工具結果
+ * `name` 的 `nexusToolNameRestore`。同上，只在這裡換這一格。
+ */
+const PLAN_MODE_CELLS =
+  process.env['NEXUS_TEST_AGENT_LOOP'] === 'native'
+    ? ['nexusToolNameRestore']
+    : ['nexusPreStep', 'nexusToolNameRestore'];
+const withPlanModeOnPreStep = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) => (name === 'nexusPlanMode' ? PLAN_MODE_CELLS : [name]));
+
+/**
  * 先讀後改、檔案工具的失敗標成錯誤、搜尋上限的開槽與輸出校驗是 `tools/execute` 的 core 監聽者，搜尋上限的後半是 `tools/post-execute` 的
  * （#2416、#2575），沙箱政策委派時拍快照是插件掛在匯流排上的 `tools/execute` 監聽者（#2416；出貨清單沒有 `fsContainment`，連它都不掛）：
  * 都不佔 stack 的格子，鏈上**恰好少這五格**，
@@ -810,8 +822,10 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
     });
     try {
       expect(middlewareNames(agent)).toEqual(
-        withToolListeners(
-          withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
+        withPlanModeOnPreStep(
+          withToolListeners(
+            withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
+          ),
         ),
       );
     } finally {
@@ -831,9 +845,11 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       });
       try {
         expect(middlewareNames(thread.built.agent)).toEqual(
-          withToolListeners(
-            withPromptSections(
-              withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+          withPlanModeOnPreStep(
+            withToolListeners(
+              withPromptSections(
+                withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+              ),
             ),
           ),
         );

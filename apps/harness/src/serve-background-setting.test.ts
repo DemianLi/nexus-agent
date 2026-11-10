@@ -21,8 +21,8 @@ vi.mock('./assembly-root.js', async (importOriginal) => {
 });
 
 import { serveClient } from './fixtures.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 let running: RunningServe | undefined;
 afterEach(async () => {
@@ -45,7 +45,7 @@ async function assembleOneThread(patches: readonly string[]): Promise<unknown> {
     if (next.done === true) break;
     if (next.value.method === 'lifecycle') break;
   }
-  // 啟動時的試裝配（`serve.ts` 的 `trial`）先跑一次，不帶背景續行；**最後一次才是這條 thread 的**。
+  // 啟動時的試裝配（`serve-run.ts` 的 `trial`）先跑一次，不帶背景續行；**最後一次才是這條 thread 的**。
   expect(seen.calls.length).toBeGreaterThanOrEqual(2);
   return seen.calls.at(-1);
 }

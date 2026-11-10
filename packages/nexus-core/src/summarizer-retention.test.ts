@@ -189,7 +189,54 @@ describe('留幾則（retainedMessageCount）：切點前只剩上一顆摘要�
     const messages = [summary(), ...conversation(RETAIN_FALLBACK_MESSAGES)];
     expect(retainedMessageCount(messages, onlyMessages, undefined)).toBe(messages.length);
     const plain = [new HumanMessage('第一句。'), ...conversation(RETAIN_FALLBACK_MESSAGES)];
-    expect(retainedMessageCount(plain, onlyMessages, undefined)).toBe(RETAIN_FALLBACK_MESSAGES);
+    // 切得到東西，再封在則數門檻的兩成：20 則封成 12 則。
+    expect(retainedMessageCount(plain, onlyMessages, undefined)).toBe(12);
+  });
+});
+
+describe('留幾則（retainedMessageCount）：切得到東西時，則數封在 `messages` 門檻的兩成（#2659）', () => {
+  const unit = estimateMessageTokens(sized('human', '0'));
+  /** 保留量剛好是 52 則：沒封頂的話，61 則的串摘完留 52 則，下一輪多 8 則又過 60。 */
+  const settings = { trigger: SHIPPED_TRIGGER, retainTokens: unit * 52 };
+
+  it('照 token 選出 52 則：封成 12 則', () => {
+    const messages = conversation(61);
+    expect(retainedTailCount(messages, unit * 52)).toBe(52);
+    expect(retainedMessageCount(messages, settings, undefined)).toBe(12);
+  });
+
+  it('尾巴蓋住整串：不封頂、不摘', () => {
+    const messages = conversation(61);
+    const covering = { trigger: SHIPPED_TRIGGER, retainTokens: unit * 1_000 };
+    expect(retainedMessageCount(messages, covering, undefined)).toBe(messages.length);
+  });
+
+  it('沒有 `messages` 門檻就不封', () => {
+    const onlyTokens = {
+      trigger: [{ type: 'tokens', value: 100_000 }] as const,
+      retainTokens: unit * 52,
+    };
+    expect(retainedMessageCount(conversation(61), onlyTokens, undefined)).toBe(52);
+  });
+
+  it('封頂的切點落在工具結果上：退到發出那次呼叫，多留一則', () => {
+    const call = new AIMessage({
+      content: '呼叫。',
+      tool_calls: [{ id: 'c1', name: 'echo', args: {} }],
+    });
+    const result = new ToolMessage({ content: '結果。', tool_call_id: 'c1' });
+    const messages = [...conversation(49), call, result, ...conversation(11)];
+    expect(retainedMessageCount(messages, settings, undefined)).toBe(13);
+  });
+
+  it('門檻小到兩成不滿兩則：封頂至少兩則', () => {
+    const tiny = { trigger: [{ type: 'messages', value: 3 }] as const, retainTokens: unit * 52 };
+    expect(retainedMessageCount(conversation(61), tiny, undefined)).toBe(2);
+  });
+
+  it('下限只拉高封頂：照 token 只選出 1 則時仍是 1 則', () => {
+    const tiny = { trigger: [{ type: 'messages', value: 3 }] as const, retainTokens: 1 };
+    expect(retainedMessageCount(conversation(61), tiny, undefined)).toBe(1);
   });
 });
 
@@ -250,6 +297,9 @@ const ROOT_CALL = { configurable: { thread_id: 't', checkpoint_ns: 'model_reques
 const limitsOf = (model: unknown) =>
   LIMITS_BY_NAME[(model as { name?: string } | undefined)?.name ?? ''];
 
+/** 只留 `tokens` 那道門檻：這一節量的是 token 保留量，則數封頂（#2659）會把這裡的上百則小訊息封成 12 則，另有一節。 */
+const TOKENS_ONLY = [{ type: 'tokens', value: 100_000 }] as const;
+
 describe('接對：N 決定了送出去的串', () => {
   async function run(options: {
     modelName: string;
@@ -262,7 +312,7 @@ describe('接對：N 決定了送出去的串', () => {
     const cutoffs = new SummaryCutoffTable();
     const middleware = createSummarizer(
       (options.backend ?? memoryBackend()) as never,
-      { ...DEFAULT_SUMMARIZATION, ...options.settings },
+      { ...DEFAULT_SUMMARIZATION, trigger: TOKENS_ONLY, ...options.settings },
       new TokenAnchorBook(),
       undefined,
       false,

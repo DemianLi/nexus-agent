@@ -1,11 +1,11 @@
 /**
  * 這個套件 lint 設定的排除範圍（#2551）。
  *
- * 排除**只蓋到 `src/invariant.ts` 與 `src/model-call-cell.ts`**。要證的兩半：
+ * 排除**只蓋到 `src/invariant.ts`**。要證的兩半：
  *
  * 1. SDK 規則**完整**落在不在名單上的檔：解析後的 `no-restricted-*` 規則與 `pluginLintConfig` 逐條相同（不是「至少紅一條」），
  *    產品檔現在零違規，而且同一份違規碼放到它們的路徑真的紅；
- * 2. 另一個**不在排除名單**的檔（一個不存在的違規檔路徑）同樣紅，而同一份違規碼放在名單上的兩個路徑不紅——排除的範圍就是那兩個檔，
+ * 2. 另一個**不在排除名單**的檔（一個不存在的違規檔路徑）同樣紅，而同一份違規碼放在名單上的路徑不紅——排除的範圍就是那個檔，
  *    不多不少。
  *
  * 量的是這個套件**真的那份** `eslint.config.js`（`overrideConfigFile`），不是手搭一份相似的設定。違規碼放在記憶體裡、不落成檔：
@@ -23,7 +23,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 
 /** 排除名單，與 `eslint.config.js` 的 `EXCLUDED` 逐項相同。 */
-const EXCLUDED = ['src/invariant.ts', 'src/model-call-cell.ts'] as const;
+const EXCLUDED = ['src/invariant.ts'] as const;
 
 /** 受管的產品檔：每一個現在都零違規。 */
 const GOVERNED = ['src/index.ts', 'src/command.ts', 'src/plan-mode-state.ts'] as const;
@@ -74,7 +74,7 @@ describe('SDK lint 在 @nexus/plugin-plan-mode 的範圍', () => {
     expect(await restricted(VIOLATING, file)).toEqual([]);
   });
 
-  it('受管的檔解析後的規則與 SDK 的設定逐條相同，排除的兩個檔沒有', async () => {
+  it('受管的檔解析後的規則與 SDK 的設定逐條相同，排除的那個檔沒有', async () => {
     const expected = pluginLintConfig[0]!.rules as Record<string, unknown>;
     expect(Object.keys(expected).length).toBeGreaterThan(0);
     // ESLint 解析後把嚴重度 `'error'` 正規化成 `2`，其餘（選項）逐字相同。

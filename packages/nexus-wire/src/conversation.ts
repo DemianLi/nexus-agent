@@ -2367,13 +2367,24 @@ export const UNFINISHED_TOOL_CODE = 'interrupted';
  * 的那一支今天沒有生產者：圍堵記了 `tool/call` 之後，`tool/result` 只有日誌寫不進去時才會缺。
  *
  * 收掉的那幾張的 {@link ToolEntry.settledAt} 是收尾那顆 `lifecycle` 的時刻，同 dsh 合成的那則用收尾邊界的 `time`。
+ *
+ * 背景子代理的卡不收：它不在 root 這一輪裡。
  */
 function settleUnfinishedTools(
   entries: readonly ConversationEntry[],
   time: number | undefined,
 ): readonly ConversationEntry[] {
+  // 背景子代理的卡不屬於 root 這一輪：它照自己的輪次跑，root 收尾不代表它停了。認法是卡的歸屬指回一張帶背景 meta 的委派卡；
+  // 委派卡的 `tool-finished` 在 root 這一輪裡、早於 root 收尾，那時 {@link attributeBackground} 已把先到的卡補上歸屬。
+  const background = new Set(
+    entries.flatMap((entry) =>
+      entry.kind === 'tool' && isBackgroundSubagentMeta(entry.meta) ? [entry.callId] : [],
+    ),
+  );
   return entries.map((entry) =>
-    entry.kind === 'tool' && (entry.status === 'running' || entry.status === 'suspended')
+    entry.kind === 'tool' &&
+    (entry.status === 'running' || entry.status === 'suspended') &&
+    !(entry.attribution.kind === 'subagent' && background.has(entry.attribution.callId))
       ? {
           ...entry,
           status: 'failed',

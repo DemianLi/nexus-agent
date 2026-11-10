@@ -385,6 +385,16 @@ describe('排不出來的每一種，理由各自有名字', () => {
     expect(decideGoalRound(cut, view())).toEqual({ kind: 'idle', reason: 'turn-max-tokens' });
   });
 
+  it('`turn/end` 帶 max-turns 不收回續行：跟正常收工一樣照排', () => {
+    // 寫 max-turns 的只有背景子代理自己的日誌（撞到規格的 `maxTurns`），續行讀的是 root 那一份；這一條釘住
+    // 這個收尾理由不會被當成 aborted 或 max-tokens，子代理撞上限不拖住 root 的目標。
+    const capped = logOf([HUMAN, ['turn/end', { reason: { kind: 'max-turns' } }]]).events;
+    expect(decideGoalRound(capped, view())).toEqual(
+      decideGoalRound(logOf([...SETTLED]).events, view()),
+    );
+    expect(decideGoalRound(capped, view()).kind).toBe('run');
+  });
+
   /**
    * **收尾在授權之前才算數**（#1516）：人下的暫停一定中止在跑的那一輪，所以「暫停 → 恢復」每次都是
    * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。dsh 在 `turn/end` 抵達的當下收回，事後的 resume 不受影響；

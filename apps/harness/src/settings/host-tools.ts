@@ -5,7 +5,7 @@
  *
  * 1. **兩個鍵**：`approval.exempt` 是宿主頁宣告時的工具名（不帶 `page__`），列了的不先問人、其餘都問，出廠是空的；名單由營運者給，
  *    宿主頁自己在宣告裡怎麼寫都不算（宿主頁是另一個系統的程式碼，serve 驗不了它）。`timeoutMs` 是宿主頁幾毫秒沒回就交回逾時，出廠 30 秒。
- * 2. **消費者在 server 起動期**：`serve.ts` 用 `startupSetting` 讀，嵌入版的 thread 組裝時交給 `createNexusAgent`：名單進 `embedApprovalGate`，逾時進宿主頁工具的插槽。改了要重啟。
+ * 2. **消費者在 server 起動期**：`serve-run.ts` 用 `startupSetting` 讀，嵌入版的 thread 組裝時交給 `createNexusAgent`：名單進 `embedApprovalGate`，逾時進宿主頁工具的插槽。改了要重啟。
  * 3. **關得掉、不在保護名單上、不是必掛**：關掉或寫壞掉了，都是讀成 schema 預設（空名單、30 秒），每支都問，是收緊不是放寬。
  *
  * @module

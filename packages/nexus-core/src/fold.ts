@@ -112,6 +112,8 @@ import type { SessionLog } from './session-log.js';
 import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 import { createTurnStoppingMiddleware } from './turn-stopping.js';
+import { createPreStepAdapterMiddleware } from './pre-step-adapter.js';
+import { createToolNameRestoreMiddleware } from './tool-name-restore.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
@@ -302,8 +304,8 @@ export interface FoldOptions {
   /** checkpointer。`false` 與缺席同義。 */
   checkpointer?: AgentCheckpointer;
   /**
-   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 沒有中斷可接回（TODO(#2358)），
-   * 核准管道當成沒有存檔點：要核准的操作確定性回絕，不發 `interrupt()`。
+   * 誰跑 agent loop（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）。`native` 在行程內等人回答（`human-input.ts`），
+   * 核准管道照 checkpointer 算；沒人可問的呼叫（帶 thread 的 `streamEvents` 之外的 run）由那顆呼叫上的 `NO_HUMAN_INPUT` 判成沒有管道。
    */
   loop?: AgentLoopKind;
   /** 長期記憶用的 store。 */
@@ -618,7 +620,7 @@ export function foldRegistry(
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options);
   // **前景子代理共用 root 這一顆閘門**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324）：前景時主對話本來就停著等，
-  // 子代理要核准的操作把中斷冒到使用者面前（基座的 `task` 在同一次呼叫裡跑子圖，中斷會往上傳；#1098 的 MCP 反問已經走這條），
+  // 子代理要核准的操作把中斷冒到使用者面前（基座的 `task` 在同一次呼叫裡跑子代理：`langgraph` 下中斷往上傳，native 下提問經那顆 `task` 呼叫的委派進 root 的 run；#1098 的 MCP 反問已經走這條），
   // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
   // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
   // 那一顆（管道固定 `policy-never`，#324／#737）在編圖時換掉。
@@ -839,10 +841,11 @@ export function foldRegistry(
       ),
     ),
     // 子代理一次執行最多叫幾次模型（#328 第 3 項）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
+    // native 不掛：native agent 自己數（`NativeAgentParams.maxTurns`，由 {@link nativeMaxTurns} 交過去）。
     subagentOnly(
       'subagentMaxTurns',
       make((spec) =>
-        spec.maxTurns === undefined
+        spec.maxTurns === undefined || options.loop === 'native'
           ? undefined
           : (modelCallLimitMiddleware({
               runLimit: spec.maxTurns,
@@ -860,6 +863,25 @@ export function foldRegistry(
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。
     // root 按了停止，訊號經 `configurable` 傳到子代理（#265 的 Q10）。見 {@link ./turn-cancel.ts}。
     shared('turnCancel', turnCancel),
+    // `langgraph` 下派 `agent/pre-step` 的轉接格：排在插件那一批外面，監聽者交完狀態，插件的 `wrapModelCall` 與提示詞段
+    // 照交完的判。只在 `langgraph` 下、有監聽者時掛（native 由迴圈自己派），只折進 root。見 {@link ./pre-step-adapter.ts}。
+    rootOnly(
+      'preStep',
+      same(
+        options.loop === 'native' ||
+          options.events === undefined ||
+          options.events.count('agent/pre-step') === 0
+          ? undefined
+          : createPreStepAdapterMiddleware(options.events),
+      ),
+    ),
+    // 補回圍堵拿掉的 `name`，模型看的那一份跟沒拿掉時相同。只在那一份工具清單裡有 `returnDirect` 工具時掛，
+    // root 與每個子代理各看自己的清單。見 {@link ./tool-name-restore.ts}。
+    {
+      name: 'toolNameRestore',
+      root: same(toolNameRestoreFor(orderTools(globalTools, toolOrder))),
+      subagent: make((_spec, tools) => toolNameRestoreFor(tools)),
+    },
     // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
     {
       name: 'plugins.prepended',
@@ -988,6 +1010,7 @@ export function foldRegistry(
       skills,
       permissions,
       slots,
+      loop: options.loop,
     }),
     middleware: foldMiddleware(slots),
   };
@@ -1274,10 +1297,7 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
-    hasCheckpointer:
-      options.checkpointer !== undefined &&
-      options.checkpointer !== false &&
-      options.loop !== 'native',
+    hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
 }
 
@@ -1294,19 +1314,20 @@ function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
 export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMiddleware {
   return createApprovalGateMiddleware(
     registry.approvals.listeners(),
-    { kind: 'policy-never' },
+    { kind: 'policy-never', reason: 'background-subagent' },
     registry.sessions,
   );
 }
 
 /**
  * 背景子代理的核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）：管道固定 `policy-never`，跟
- * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是「一律自動回絕」那句。同樣由
+ * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是
+ * {@link ./approval-policy-prompt.ts | APPROVAL_POLICY_BACKGROUND_SENTENCE}。同樣由
  * {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去，換掉規格裡跟 root 同一顆的那個。
  */
 export function createBackgroundApprovalPolicyPrompt(): AgentMiddleware {
   return createApprovalPolicyPromptMiddleware(
-    { kind: 'policy-never' },
+    { kind: 'policy-never', reason: 'background-subagent' },
     () => DEFAULT_APPROVAL_POLICY,
   );
 }
@@ -1369,13 +1390,29 @@ function foldMiddleware(slots: readonly MiddlewareSlot[]): AgentMiddleware[] {
  *
  * @param slots - 槽位表。
  * @param spec - 這個子代理的規格；「子代理自帶」那一列從它取。
+ * @param tools - 這個子代理折好的工具清單；看工具決定掛不掛的那幾列從它取。
  * @returns 依表的順序展開的 middleware。
  */
 function foldSubagentMiddleware(
   slots: readonly MiddlewareSlot[],
   spec: NexusSubAgent,
+  tools: readonly StructuredTool[],
 ): AgentMiddleware[] {
-  return slots.flatMap((slot) => takeFrom(slot.subagent, spec));
+  return slots.flatMap((slot) => takeFrom(slot.subagent, spec, tools));
+}
+
+/**
+ * 補回 `name` 那一顆：這一份工具清單裡有 `returnDirect` 工具才建，沒有就不掛。
+ *
+ * @param tools - 這個 agent 的工具清單。
+ */
+function toolNameRestoreFor(tools: readonly StructuredTool[]): AgentMiddleware | undefined {
+  const names = new Set(
+    tools
+      .filter((tool) => (tool as { returnDirect?: unknown }).returnDirect === true)
+      .map((tool) => tool.name),
+  );
+  return names.size === 0 ? undefined : createToolNameRestoreMiddleware(names);
 }
 
 /**
@@ -1401,7 +1438,7 @@ interface MiddlewareSlot {
   /** root 取什麼。 */
   readonly root: SlotTake<[]>;
   /** 每個子代理取什麼；`spec` 是那個子代理的規格。 */
-  readonly subagent: SlotTake<[spec: NexusSubAgent]>;
+  readonly subagent: SlotTake<[spec: NexusSubAgent, tools: readonly StructuredTool[]]>;
 }
 
 /** 濾掉 `undefined` 的型別守衛。 */
@@ -1456,7 +1493,10 @@ function rootOnly(name: string, root: SlotTake<[]>): MiddlewareSlot {
 }
 
 /** 只給子代理。 */
-function subagentOnly(name: string, subagent: SlotTake<[spec: NexusSubAgent]>): MiddlewareSlot {
+function subagentOnly(
+  name: string,
+  subagent: SlotTake<[spec: NexusSubAgent, tools: readonly StructuredTool[]]>,
+): MiddlewareSlot {
   return { name, root: NONE, subagent };
 }
 
@@ -1492,7 +1532,7 @@ function pluginMiddleware(
   const isMiddleware = (value: AgentMiddleware | undefined): value is AgentMiddleware =>
     value !== undefined;
   const entries = registry.middleware.list();
-  // 插件登記的系統提示詞中段（#2414）。`prepended` 接在區尾：計劃模式那一顆先交出排著的待關，指引才照交完的模式判。
+  // 插件登記的系統提示詞中段（#2414）。`prepended` 接在區尾：段照插件 middleware 改過之後的狀態判。
   // `rest` 接在區頭，區裡沒有別的會讀系統訊息。
   const sections = registry.prompt.sections();
   const slot = (name: string, orders: readonly number[]): AgentMiddleware[] => {
@@ -1905,6 +1945,15 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
 }
 
 /**
+ * native 下 fold 交出的子代理規格帶著的 `maxTurns`，做成 `NativeAgentParams` 的那一格；沒有就是空物件。`langgraph` 下 fold 拿掉它、改掛
+ * `modelCallLimitMiddleware`，這裡讀到的也是空物件。native 的兩個建構點（前景 `agent-assembly.ts`、背景 `subagent-graph.ts`）攤進參數。
+ */
+export function nativeMaxTurns(spec: SubAgent): { readonly maxTurns?: number } {
+  const value: unknown = (spec as { maxTurns?: unknown }).maxTurns;
+  return typeof value === 'number' ? { maxTurns: value } : {};
+}
+
+/**
  * 每個 subagent 的有效集合。
  *
  * 三件事在這裡合起來，共同的軸線是**全域的東西主動併進每個 subagent**：基座對
@@ -1971,6 +2020,7 @@ function foldSubAgents(
     permissions: readonly FilesystemPermission[];
     /** middleware 槽位表：每個子代理的疊從它導出，見 {@link MiddlewareSlot}。 */
     slots: readonly MiddlewareSlot[];
+    loop: AgentLoopKind | undefined;
   },
 ): SubAgent[] {
   // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
@@ -2026,17 +2076,20 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
-    // 我們自己的三格不交給基座：`maxTurns`、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
+    // 我們自己的三格不照原樣交給基座：`maxTurns` langgraph 下拿掉、改掛中介層，native 下留給 {@link nativeMaxTurns}（基座只拿到
+    // 編好的 runnable）；`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
     // `provider:model` 去 `initChatModel`，所以拿掉，由跟隨的 middleware 每次叫模型前換成那條路由的實例（沒有控制器時，
     // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
     const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;
     if (typeof declared.model === 'string') delete declared.model;
+    const tools = orderTools(merged, context.toolOrder);
     const next: SubAgent = {
       ...declared,
-      tools: orderTools(merged, context.toolOrder),
+      ...(context.loop === 'native' && spec.maxTurns !== undefined && { maxTurns: spec.maxTurns }),
+      tools,
       // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
       // 哪些共用一份、哪些逐個建、哪些只給子代理。
-      middleware: foldSubagentMiddleware(context.slots, spec),
+      middleware: foldSubagentMiddleware(context.slots, spec, tools),
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成
     // 沒有規則」）。

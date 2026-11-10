@@ -71,6 +71,7 @@ import {
   nativeLicenseDirs,
   runtimeLicenseDirs,
   spawnerCrateProblems,
+  spawnerLockedCrates,
 } from '../../../scripts/release/spawner.js';
 import { assertInputMatches } from '../../../scripts/release/version.js';
 import {
@@ -277,7 +278,8 @@ function goodTree(root: string): void {
   put(SBOM_FILE, '{}');
   put('cordis.yml', '');
   put('cordis.serve.yml', '');
-  for (const entry of ['serve', 'cli', 'plugin-cli']) put(`lib/${entry}.js`, '');
+  for (const entry of ['serve', 'cli', 'plugin-cli', 'front-process', 'conversation-process'])
+    put(`lib/${entry}.js`, '');
   put('node_modules/@nexus/web/dist/index.html', '<div id="root"></div>');
   for (const file of FONT_LICENSES) put(`node_modules/@nexus/web/dist/assets/fonts/${file}`, 'OFL');
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');
@@ -576,16 +578,27 @@ describe('沙箱 spawner 的執行檔', () => {
 
 describe('沙箱 spawner 的 crate 清單', () => {
   const lock = readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8');
-  const block = (name: string, version: string): string =>
-    `[[package]]\nname = "${name}"\nversion = "${version}"\n`;
+  const block = (name: string, version: string, deps: string[] = []): string =>
+    `[[package]]\nname = "${name}"\nversion = "${version}"\n${
+      deps.length === 0 ? '' : `dependencies = [\n${deps.map((dep) => ` "${dep}",\n`).join('')}]\n`
+    }`;
+  const names = (text: string): string[] =>
+    spawnerLockedCrates(text).map((entry) => `${entry.name} ${entry.version}`);
+  /** 把 `dep` 加進 lock 裡 `owner` 那個 `[[package]]` 的 `dependencies`。 */
+  const depend = (text: string, owner: string, dep: string): string =>
+    text.replace(
+      new RegExp(`(\\nname = "${owner}"\\n[^[]*dependencies = \\[\\n)`, 'u'),
+      `$1 "${dep}",\n`,
+    );
 
   it('跟 repo 的 Cargo.lock 對得上', () => {
     expect(spawnerCrateProblems(lock)).toEqual([]);
   });
 
   it('同名多版本各一列，連進執行檔的目錄名帶版本', () => {
-    const text = `version = 4\n\n${block('syn', '2.0.1')}\n${block('syn', '3.0.1')}\n${block('libc', '0.2.1')}`;
+    const text = `version = 4\n\n${block('nexus-sandbox-spawner', '0.0.0', ['libc'])}\n${block('syn', '2.0.1')}\n${block('syn', '3.0.1')}\n${block('libc', '0.2.1')}`;
     expect(lockedCrates(text)).toEqual([
+      { name: 'nexus-sandbox-spawner', version: '0.0.0' },
       { name: 'syn', version: '2.0.1' },
       { name: 'syn', version: '3.0.1' },
       { name: 'libc', version: '0.2.1' },
@@ -594,12 +607,63 @@ describe('沙箱 spawner 的 crate 清單', () => {
   });
 
   it('Cargo.lock 多一個、或表上多一個，兩個方向都報', () => {
-    expect(spawnerCrateProblems(`${lock}\n${block('rand', '0.9.0')}`).join('\n')).toMatch(
-      /有 rand，SPAWNER_CRATES 沒有/u,
-    );
-    const without = lock.replace(/\[\[package\]\]\nname = "quote"\n[^[]*/u, '');
+    const added = depend(`${lock}\n${block('rand', '0.9.0')}`, 'nexus-sandbox-spawner', 'rand');
+    expect(spawnerCrateProblems(added).join('\n')).toMatch(/有 rand，SPAWNER_CRATES 沒有/u);
+    const without = lock
+      .replace(/\[\[package\]\]\nname = "quote"\n[^[]*/u, '')
+      .replace(/^ "quote",\n/gmu, '');
     expect(spawnerCrateProblems(without).join('\n')).toMatch(
       /SPAWNER_CRATES 有 quote，[^ ]+ 沒有/u,
+    );
+  });
+
+  it('只算 spawner 走得到的：repo 的 Cargo.lock 有宿主，名單裡沒有它', () => {
+    expect(lockedCrates(lock).map((entry) => entry.name)).toContain('nexus-host');
+    expect(names(lock).map((entry) => entry.split(' ')[0])).not.toContain('nexus-host');
+    expect(new Set(names(lock).map((entry) => entry.split(' ')[0]))).toEqual(
+      new Set(SPAWNER_CRATES.map((entry) => entry.name)),
+    );
+  });
+
+  it('突變：只有宿主用到的 crate 加進 lock，spawner 的名單、授權目錄與核對都不變', () => {
+    const before = names(lock);
+    const mutated = depend(`${lock}\n${block('rand', '0.9.0')}`, 'nexus-host', 'rand');
+    expect(lockedCrates(mutated).map((entry) => entry.name)).toContain('rand');
+    expect(names(mutated)).toEqual(before);
+    expect(runtimeLicenseDirs(mutated)).toEqual(runtimeLicenseDirs(lock));
+    expect(spawnerCrateProblems(mutated)).toEqual([]);
+  });
+
+  it('突變：宿主帶進連進執行檔的 crate 的另一版，spawner 的授權目錄與核對都不變', () => {
+    const version = lockedCrates(lock).find((entry) => entry.name === 'thiserror')?.version;
+    const mutated = depend(
+      `${lock.replace(/^ "thiserror",$/gmu, ` "thiserror ${version}",`)}\n${block('thiserror', '9.9.9')}`,
+      'nexus-host',
+      'thiserror 9.9.9',
+    );
+    expect(lockedCrates(mutated).filter((entry) => entry.name === 'thiserror')).toHaveLength(2);
+    expect(runtimeLicenseDirs(mutated)).toEqual(runtimeLicenseDirs(lock));
+    expect(names(mutated)).toEqual(names(lock));
+    expect(spawnerCrateProblems(mutated)).toEqual([]);
+  });
+
+  it('dependencies 帶版本的照版本走：宿主用的另一版不算進來', () => {
+    const text = [
+      block('nexus-host', '0.0.0', ['nexus-sandbox-spawner', 'syn 3.0.1']),
+      block('nexus-sandbox-spawner', '0.0.0', ['syn 2.0.1']),
+      block('syn', '2.0.1', ['unicode-ident']),
+      block('syn', '3.0.1'),
+      block('unicode-ident', '1.0.0'),
+    ].join('\n');
+    expect(names(text)).toEqual(['syn 2.0.1', 'unicode-ident 1.0.0']);
+  });
+
+  it('dependencies 指到不存在的 crate、或 lock 裡沒有 spawner，就停', () => {
+    expect(() => spawnerLockedCrates(block('nexus-sandbox-spawner', '0.0.0', ['ghost']))).toThrow(
+      /dependencies 有 ghost，找不到/u,
+    );
+    expect(() => spawnerLockedCrates(block('libc', '0.2.1'))).toThrow(
+      /沒有 nexus-sandbox-spawner/u,
     );
   });
 
@@ -1105,6 +1169,10 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       '[[package]]',
       'name = "nexus-sandbox-spawner"',
       'version = "0.0.0"',
+      'dependencies = [',
+      ' "libc",',
+      ' "syn",',
+      ']',
       '',
       '[[package]]',
       'name = "syn"',

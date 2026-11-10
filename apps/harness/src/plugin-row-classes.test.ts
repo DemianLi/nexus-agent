@@ -70,13 +70,13 @@ describe('列的分類表', () => {
     expect(names.filter((name) => !shipped.has(name))).toEqual([]);
   });
 
-  it('serve.ts 起動期讀的設定列就是 `STARTUP_READ_PLUGINS` 那幾顆：多讀一顆而名單沒加，這裡是紅的', () => {
-    const source = readFileSync(join(import.meta.dirname, 'serve.ts'), 'utf8');
+  it('serve-run.ts 起動期讀的設定列就是 `STARTUP_READ_PLUGINS` 那幾顆：多讀一顆而名單沒加，這裡是紅的', () => {
+    const source = readFileSync(join(import.meta.dirname, 'serve-run.ts'), 'utf8');
     const read = new Set<string>();
     for (const match of source.matchAll(/startup(?:Setting|EntryMounted)\(plugins, (\w+)\)/gu)) {
       if (match[1] !== undefined) read.add(match[1]);
     }
-    // `process-model` 在任何組裝之前由啟動器讀（`process-launcher.ts` 的 `processModelSetting`），不經 serve.ts。
+    // `process-model` 在任何組裝之前由啟動器讀（`process-launcher.ts` 的 `processModelSetting`），不經 serve-run.ts。
     const launcher = readFileSync(join(import.meta.dirname, 'process-launcher.ts'), 'utf8');
     expect(launcher).toMatch(/processModelSetting\(entries\)/u);
     // 只比數量：識別字與插件名不是同一個字串。一顆不多一顆不少。

@@ -261,6 +261,20 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     - 這份 `blocks` 由 `content` 導出，生產者認的是參照：原樣交回或只換 `content`（`{ ...result, content }`），模型收到字串；給新的 `blocks`，連複製一份（`[...result.blocks]`）也算，模型收到陣列。
     - 代價：外側監聽者複製一份 `blocks` 就會把字串變成陣列；要保持字串就別複製，改 `content`。
     - 例外：檔案工具失敗時補 `Error: ` 前綴、`grep`／`glob` 接上略過路徑的提示，這兩處只改 `content`，`blocks` 仍是工具本體那一份，兩者的文字對不上（#2584 追蹤）；要讀這兩種結果的文字，讀 `content`。
+- **工具接縫 2.10.0：`exec.interrupt` 多一種寫明的拒絕**（`@nexus/tools`，#2358）。
+  - **新增的匯出**（向後相容）：`HumanInputUnavailable`（錯誤類別，`name` 是 `'HumanInputUnavailable'`）與 `isHumanInputUnavailable(error)`（看 `name` 認，不靠 `instanceof HumanInputUnavailable`，跨套件副本也認得）。
+  - **什麼時候丟**：`--agent-loop native` 下這裡沒有人可以回答時——`invoke`／`stream`（帶不帶 thread 都是）、沒帶 thread 的 `streamEvents`，或前景子代理那一層——`exec.interrupt` 以 `HumanInputUnavailable` 拒絕，不問人。
+    預設的 `langgraph` 不會這樣拒絕，照舊停下來問、接回時從頭重跑本體；`native` 下帶 thread 的 `streamEvents` 在行程內等答覆，本體不重跑。
+  - **怎麼接**：可以接住、改走這顆工具自己「沒人可問」的那條路（樹上的 ask-user、plan-mode、沙箱升級與 MCP 的反問都這樣做），其餘的錯原樣往外拋；不接住就跟本體拋錯一樣，這顆呼叫以錯誤結果收尾。
+  - 次版號：既有消費者的範圍不用改；舊宿主不會丟它，所以只為了接住它也不必把範圍升到 `^2.10.0`。
+- **工具接縫 2.11.0：`ToolThread.on` 多收 `'agent/pre-step'`**（`@nexus/tools`，#2358）。用的宣告 `^2.11.0`；宣告 `^2.10.0` 以前的不受影響。
+  - **listener 拿到什麼**：`{ threadId, step, signal }`（`ToolPreStep`）。`threadId` 是這次呼叫的 thread id，認不出是 `undefined`；`step` 在 `native` 下從 `1` 數，
+    `langgraph` 下一律是 `0`，不要拿它數步數或判是不是同一步；`signal` 是這一輪的中止訊號。
+  - **內側定了才叫**：插件的 listener 等排在它內側的監聽者先定這一步，回 `reject`、或 `signal` 已經中止，就不叫；排在外側的監聽者仍可能在它之後擋下這一步。叫了的話，listener 做完才叫模型。
+  - **改不了這一步**：回傳值不看；`reject` 不開放給插件。
+  - **拋錯**：同 `tools/execute`，原樣往外拋，這一步拋錯，這一輪以那個錯收尾。
+  - **只有 root 會派**：子代理的步驟不派。要只管自己那份狀態的，仍照 `threadId` 自己認（計劃模式認 root 日誌的 `sessionId`）；同一步可能被叫不只一次（`langgraph` 下重試與 `afterAgent` 跳回模型的那一次也派），listener 要冪等。
+  - 消費者是計劃模式：`exit_plan_mode` 同意之後排的待關，在下一步開頭交出。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
   `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，
@@ -285,7 +299,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **`section`**（2.6.0）：在這條 thread 的系統提示詞中段登記一段，轉給這條 thread 的 `registry.prompt.section`，名字、`order`、`separator` 與重名、`order` 的檢查都跟相容層那一格相同。`text` 給函式時（2.8.0 起，用的宣告 `^2.8.0`），每次模型呼叫收 `{ call }`：這一次呼叫的身分，交給 `sessionLookup.forCall` 認出 root 還是哪一個子代理（同一段會接到 root 與每個子代理的呼叫上）。相容層那一格的段 context 另帶 `agent` 與 `tools`，橋接不轉出。形狀照 dsh：`PromptSection.text` 每次組裝收一份 `AssembleContext`（`packages/core/system-prompt/src/index.ts:66`@`8bd0733`），那裡是不透明的 `scope` 加 `signal`；這裡只交身分 `call`，不帶 `signal`。
     `text` 給函式就是每次模型呼叫現算：段的內容要等這條 thread 上所有列都掛完才定得下來的（mcp 的 server 指引與可用的資源 server，後掛的列也要算進去）用它。
   - **`on`、`join`、`provide`**（2.7.0，用的宣告 `^2.7.0`）：轉給這條 thread 的 `registry.events.on`、`registry.sessions.join`、`registry.capabilities.provide`，落在那一列在清單上的位置，跟相容層那一列直接登記的一樣。
-    範圍刻意收窄：`on` 只收 `'tools/execute'`、不開 `prepend`，所以監聽者落在那一列的位置，不會跳到前面各列之前；它跟任何插件監聽者一樣在兩段 core 監聽者之間（`packages/nexus-core/src/tool-pipeline.ts` 的 `outer`／`inner`）；`provide` 只收 `'workspace'`；別的值拋 `TypeError`。
+    範圍刻意收窄：`on` 只收 `'tools/execute'` 與 `'agent/pre-step'`（2.11.0 起，見上面）、不開 `prepend`，所以監聽者落在那一列的位置，不會跳到前面各列之前；它跟任何插件監聽者一樣在兩段 core 監聽者之間（`packages/nexus-core/src/tool-pipeline.ts` 的 `outer`／`inner`）；`provide` 只收 `'workspace'`；別的值拋 `TypeError`。
     三個都回傳冪等的 undo；那一列掉了由 rollback 一併撤，thread 收掉時監聽者跟著清（`packages/nexus-tool-adapter/src/thread-source.test.ts`）。供 sandbox-policy 上樹用（#2533）。撤除條件見偏離表。
   - **失敗**：來源 reject 等於那一列的 `apply` 拋錯，走相容層同一條路——預設模式整次組裝失敗，`perEntry` 模式那一列掉（在可少掛清單上的成了警告），訊息帶那一列的 origin。宿主多做一件事：
     **先照反序跑完這一列每個來源已登記的 `onDispose`**（含先前已 resolve 的），再原樣拋出原本的錯誤（收資源失敗不蓋掉它）；全部 resolve 之後才交給這條 thread 的收尾。
@@ -608,7 +622,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | fs 把手帶 `hasWorkspace()` 與併了 mounts 的 `offWorkspacePrefixes()`（#1469，demian Q2 (a)） | 產品需求超出 dsh | dsh 的 `tool-present` 沒有「工作區」與「掛載前綴」的概念（`src` 裡 grep `workspace\|sandbox\|mount\|capabilit`：0 筆；對讀版本 86a40220）。我們的 backend 是一顆複合 backend，會話歷史、工具結果暫存、附件與 plugin 掛的路由都不在工作區磁碟上，交付的讀端只認磁碟（#951），所以「有沒有工作區」與「哪些前綴不在磁碟」是 present 的前提。**放在 fs 把手上**（不放在插件裡自己再算一次）：算法只有一處，`settleFsService` 在 fold 填 backend 的同一處算 |
 | `@nexus/plugin-present` 的 lint 排除 `src/invariant.ts`（#1469，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`present-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-present/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
 | `@nexus/plugin-sandbox-policy` 的 lint 排除 `src/invariant.ts`（#2533，PM Q1，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列。`invariant.ts` 是相容層的配套入口（`sandbox-policy-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別與 `SANDBOX_MODES`（`no-restricted-imports` 兩處），模組層沒有可變狀態；排除只蓋到這一個檔（`packages/nexus-plugin-sandbox-policy/src/eslint-exclusion.test.ts`）。**撤除條件**：`.docs/invariant-companions-decision-2026-10-03.md` 的配套入口重審 |
-| `@nexus/plugin-plan-mode` 的 lint 排除 `src/invariant.ts` 與 `src/model-call-cell.ts`（#2551，PM issuecomment-6719328351，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列，排除只蓋到這兩個檔（`packages/nexus-plugin-plan-mode/src/eslint-exclusion.test.ts`）。`invariant.ts` 是相容層的配套入口（`plan-mode-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別。`model-call-cell.ts` 是 plan-mode 留在相容層的那一格（`plan-mode-model-call` 那一列）：一顆只有 `wrapModelCall` 的 middleware，在下一次模型呼叫前交出 `exit_plan_mode` 同意之後排的待關，並補回結果的 `name`。樹上沒有模型呼叫這一步的接縫，D227 (b)（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827)）不准挪交出的位置，所以它 import `@nexus/core`、`@langchain/core` 與 `langchain`；`apps/harness/src/migrated-plugin-gate.test.ts` 把它列成封閉的單一例外。**撤除條件**：`invariant.ts` 照配套入口重審；`model-call-cell.ts` 在 [#2358](https://github.com/DemianLi/nexus-agent/issues/2358) 補上模型呼叫的接縫、這一格上樹時連檔一起刪 |
+| `@nexus/plugin-plan-mode` 的 lint 排除 `src/invariant.ts`（#2551，PM issuecomment-6719328351，照 #1463 Q3 (a)） | 產品需求超出 dsh | 量法同 `@nexus/plugin-todo` 那一列，排除只蓋到這一個檔（`packages/nexus-plugin-plan-mode/src/eslint-exclusion.test.ts`）。`invariant.ts` 是相容層的配套入口（`plan-mode-invariant` 那一列），寫的是 `NexusPlugin`，從 `@nexus/core` import 型別。原本留在相容層的 `model-call-cell.ts`（`plan-mode-model-call` 那一列）在 #2358 刪掉：交出待關改由 `plan-mode` 經 `ToolThread.on('agent/pre-step')` 做，補回結果的 `name` 歸 core。**撤除條件**：`.docs/invariant-companions-decision-2026-10-03.md` 的配套入口重審 |
 | `agent/pre-step` 只能追加訊息，沒有 `reject`，也沒有「留到下一步」（#1474，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：waterfall，listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`packages/core/agent-loop/src/agent.ts:267-288`、`runtime-types.ts:309-320`（`agent/pre-step` 的說明與簽名；`:321` 起是 `agent/request`））；`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`packages/context/agent-instructions/src/index.ts:345`）。**我們做不到的原因**：載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`），拿不到整個批次，也沒有收件匣。**退到哪裡**：`@nexus/agent-loop` 的 `preStep` 只追加，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）。**撤除條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點 |
 | `agent/pre-step` 每次 invoke 跑一次，不是每一步（#1474，沿用 #389 的拍板） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：每個 step 一次——`preStep()` 在迴圈裡每一步被叫（`packages/core/agent-loop/src/agent.ts:318` 呼叫、`:267-288` 實作；對讀版本 86a40220）。**我們做不到的原因**：每一步要 `beforeModel`，它是圖裡的節點，預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做。**退到哪裡**：`beforeAgent`，**每位 listener** 每次 invoke 一格、每輪零格（dsh 一個事件依序跑完，不按 listener 計；出貨清單三位，100 下 31 輪，有沒有 `--workspace` 都一樣；併成一格見 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)）。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改。**撤除條件**：同上一列 |
 | listener 收到的是「模型看得到的那一串」與 `{ configurable, signal? }`（`signal` 是 1.1.0 加的，#1533），不是 dsh 的「這一步領出來的批次」與 `agent`（#1474，demian Q1-1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是這一步從收件匣領出來的批次（`runtime-types.ts:313`）。**我們做不到的原因**：沒有收件匣，訊息批次在圖的 state 裡；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由呼叫設定認。**退到哪裡**：`effectiveMessages`（摘要之後是 `[summary, ...切點之後]`）加 `{ configurable, signal? }`。**撤除條件**：同第一列 |
@@ -674,7 +688,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
   交給 Loader 之前，掃那份真正會被 eval 的樹，有就整份拒絕（`PluginTree.sync` 報成 `PluginTreeError`）。rc.11 起 Loader
   連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
-  投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
+  投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve-run.ts`）不走這條。
   會話查找那一列在這條路上看的是**那一次組裝自己的** `registry.sessions`（#1463），所以工具在 `attachSession` 之後才綁上來的註冊表也問得到。
   `fs` 那一列同理（#1466）：看的是**那一次組裝自己的** `fs` 服務（`registry-fs-lookup.ts`，**每次呼叫都讀**，所以提供它的那一列排前排後一樣），
   不依 `thread_id` 挑——一份無樹組裝只有一個 backend，沒有別的 thread 的 fs 可以挑錯；仍要算得出位址，與樹上同一個 `unknown-caller` 判準。

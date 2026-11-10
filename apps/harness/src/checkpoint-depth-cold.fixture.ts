@@ -30,8 +30,8 @@ import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, Reply, WireMessage } from './log-derived-history.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 
 const ARGS_MARKER = '@@deep-args@@';
 const TEXT_MARKER = '@@deep-args-text@@';

@@ -1,6 +1,6 @@
 {
   "name": "@nexus/harness",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,10 @@
     "nexus-serve": "lib/serve.js",
     "nexus-cli": "lib/cli.js",
     "nexus-plugin": "lib/plugin-cli.js"
+  },
+  "exports": {
+    "./front-process": "./lib/front-process.js",
+    "./conversation-process": "./lib/conversation-process.js"
   },
   "imports": {
     "#settings/*": "./lib/settings/*.js"
@@ -73,6 +77,7 @@
     "@nexus/feedback": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/goal": "workspace:*",
+    "@nexus/host-bridge": "workspace:*",
     "@nexus/permission-presets": "workspace:*",
     "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",

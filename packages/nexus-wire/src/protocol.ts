@@ -361,6 +361,10 @@ export const STEER_UNAVAILABLE = 'steer_unavailable';
  *   也不連帶它）。被它中斷而排著的輪次不丟，等下一次 `subagent.send` 喚醒。不認得的編號、沒在跑的：**被接受的 no-op**
  *   （dsh 明寫，也不讓呼叫端靠回應試探編號）。
  *
+ * `subagent.send` 的話跟 `run.start` 同一道准入（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：serve 是 `--agent-loop native`
+ * 時太大的回 `invalid_argument`（`message-too-large: …`），排在找編號之前；`langgraph` 照收，閒著的子代理收到話開新的一輪，由那一輪開頭搬到
+ * `/conversation_history/`。
+ *
  * **兩個都回 `{ accepted: true }`，不等那一輪跑完**；子代理說了什麼、做了什麼走主串流（`agent-message` 與委派卡）。
  * 人說的那句話目前**不回播到主串流**：它寫在子代理自己的日誌裡，主對話日誌沒有對應的事件（今天不加）。
  *
@@ -1112,7 +1116,7 @@ export interface ThreadInputRequestedFrame {
   readonly event: Event;
 }
 
-/** 那一題不用再問了：答掉，或收回（按停止）。 */
+/** 那一題不用再問了：答掉，或收回（按停止，或一輪的時鐘到點撞上核准點）。 */
 export interface ThreadInputWithdrawnFrame {
   readonly type: 'input-withdrawn';
   readonly threadId: string;

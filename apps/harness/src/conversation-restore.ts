@@ -10,7 +10,7 @@
  *
  * 建好 agent 之後、第一輪之前，用 `updateState` 寫進 `messages`——pump 已經這樣寫過兩次（`#withdraw` 的
  * ToolMessage、`#keepInterruptedReply` 的半段回覆）。一條沒有 checkpoint 的 thread 也寫得進去，之後的第一輪
- * 照常接在後面（實測）。兩個入口各叫一次：serve 碰到以前寫過的 thread（`serve.ts`），CLI 的 `--resume`
+ * 照常接在後面（實測）。兩個入口各叫一次：serve 碰到以前寫過的 thread（`serve-run.ts`），CLI 的 `--resume`
  * （`cli.ts`）。
  *
  * **只寫 `messages`，不帶切點。** 壓縮過的會話灌回去的是「摘要＋之後的」，那一串就是新 state 的原始訊息串。

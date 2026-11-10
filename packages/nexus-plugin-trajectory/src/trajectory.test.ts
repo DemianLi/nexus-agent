@@ -247,8 +247,16 @@ describe('一輪的結構', () => {
     log.append('turn/end', { reason: { kind: 'max-tokens' } });
     log.append('turn/start', { kind: 'message', text: 'd' });
     log.append('turn/end', { reason: { kind: 'blocked' } });
+    log.append('turn/start', { kind: 'message', text: 'e' });
+    log.append('turn/end', { reason: { kind: 'max-turns' } });
     const view = foldAll(log.events);
-    expect(view.turns.map((t) => t.end)).toEqual(['failed', 'aborted', 'max-tokens', 'blocked']);
+    expect(view.turns.map((t) => t.end)).toEqual([
+      'failed',
+      'aborted',
+      'max-tokens',
+      'blocked',
+      'max-turns',
+    ]);
     expect(view.turns[0]?.failure).toHaveLength(TRAJECTORY_PREVIEW_CHARS);
     expect(view.turns[0]?.failure).not.toMatch(/\n/);
   });

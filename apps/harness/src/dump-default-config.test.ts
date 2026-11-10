@@ -19,7 +19,7 @@ import { USAGE, parseCliArgs, runCli } from './cli.js';
 import { ConfigSchemaIncompleteError } from './config-schema-dump.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { USER_PATCH_FILENAME, renderConfigDump, serveShippedConfigPath } from './plugin-config.js';
-import { parseServeArgs, runServe } from './serve.js';
+import { parseServeArgs, runServe } from './serve-run.js';
 
 const temporary: string[] = [];
 afterEach(() => {

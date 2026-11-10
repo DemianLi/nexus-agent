@@ -65,7 +65,6 @@ import type {
   FeedbackMethod,
   ModelMethod,
   SubagentKind,
-  SubagentMention,
   WireFeedbackRating,
   DeliverableBytes,
   DeliverableMethod,
@@ -148,6 +147,7 @@ import type {
   SessionRegistry,
   SpillStore,
   StoredSessionHeader,
+  DelegationToolName,
   SubagentMentionRef,
 } from '@nexus/core';
 import {
@@ -271,7 +271,7 @@ export interface ThreadAgent {
   /**
    * 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948，`createNexusAgent` 回的那一格），選配。
    * 引用別的會話被截斷時，pump 把全文存進這裡、模型拿到讀得回的位址。**省略即沒有地方存**（沒開會話日誌、手搭的組裝），
-   * 說明裡寫 `storage-not-configured`；產品路徑（`serve.ts`）有會話日誌時一律交。
+   * 說明裡寫 `storage-not-configured`；產品路徑（`serve-run.ts`）有會話日誌時一律交。
    */
   readonly spillStore?: SpillStore;
   /**
@@ -286,7 +286,7 @@ export interface ThreadAgent {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   /**
    * 這個 thread 掛了哪些會話投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），選配。**省略即沒有投影**——
-   * 手搭的測試組裝不必管；產品路徑（`serve.ts`）一律交，由 `projection-wire.test.ts` 的端到端驗收看著。
+   * 手搭的測試組裝不必管；產品路徑（`serve-run.ts`）一律交，由 `projection-wire.test.ts` 的端到端驗收看著。
    * **只讀 `list`**：這條線不註冊任何東西。
    */
   readonly projections?: Pick<ProjectionRegistrationPoint, 'list'>;
@@ -311,6 +311,11 @@ export interface ThreadAgent {
    */
   readonly subagentKinds?: readonly SubagentKind[];
   /**
+   * root 的模型手上的委派工具（[#2649](https://github.com/DemianLi/nexus-agent/issues/2649)），選配：`run.start` 收下點名時蓋進
+   * `mention.tool`，提示照它組字。有 {@link subagentKinds} 卻缺席（手搭的組裝）時不蓋，提示照 `task` 的字。
+   */
+  readonly delegationTool?: DelegationToolName;
+  /**
    * 這條 thread 照哪一份設定檔組的（[#2367](https://github.com/DemianLi/nexus-agent/issues/2367)），選配，省略即 `full`。
    * `embed` 的 thread 沒有斜線命令、不能點名子代理；嵌入連線只准碰 `embed` 的 thread。
    */
@@ -327,7 +332,7 @@ export interface ThreadAgent {
   readonly hostTools?: HostToolsSlot;
   /**
    * 這條 thread 用 `/名字` 叫得出的技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929，`skill-catalog-wire.ts`），選配。
-   * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve.ts`）一律交，沒掛 `skills` 那一列時
+   * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve-run.ts`）一律交，沒掛 `skills` 那一列時
    * 由它自己回 `undefined`，同樣是 `not_supported`。
    */
   readonly skillCatalog?: SkillCatalog;
@@ -357,7 +362,7 @@ export interface ThreadAgent {
    * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
    * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤是**一台 server 一份**的答案
    * ——開不開由清單上 `session-persistence` 那一列講（#612，`runServe` 起動期解一次），寫去哪裡
-   * 由**呼叫方式**講（`serve.ts` 的日誌根：`--session-log`，沒給就是 harness home 底下的
+   * 由**呼叫方式**講（`serve-run.ts` 的日誌根：`--session-log`，沒給就是 harness home 底下的
    * `sessions`，#444）。所以組裝點是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
    *
    * **選配**：`serve` 只在清單把那一列關掉時不給；另外就是這個 handler 的其他組裝（wire 測試那些手搭的）。
@@ -519,14 +524,14 @@ export interface WireHandlerOptions {
    */
   readonly threadOrganization?: ThreadOrganization;
   /**
-   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve.ts` 用
+   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve-run.ts` 用
    * `SessionStore.open(id, 'read')` 讀 header，並用列表的可見規則（`isListedThread`）過濾——**能釘的一定列得出來**。
    * **儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
   storedThreadKnown?(threadId: string): Promise<boolean>;
   /**
    * 這個 id 是不是落盤的**子代理會話**（core 的 `isSubagentSessionHeader`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)、#1579）。
-   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
+   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve-run.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
    * 沒有日誌回 `false`。省略＝沒有落盤，沒有子代理會話可言。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
   isSubagentSession?(threadId: string): Promise<boolean>;
@@ -573,7 +578,7 @@ export interface WireHandlerOptions {
   /**
    * `session-reference` 那一列的值（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862），選配：每則訊息最多引用幾條，
    * 與每條來源的位元組預算（`maxReferenceBytes` 或窗口的 `referenceContextFraction`）。`candidateLimit` 不在這裡，候選上限在
-   * `serve.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
+   * `serve-run.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
    *
    * **預算跟著這條 thread 下一步會走的模型**：每條 thread 的 pump 在這裡組出 `SessionReferencePolicy`，窗口問該 thread 的
    * `modelSelection.nextContextWindow`，所以使用者在兩次引用之間換了模型，下一次就用新那顆的窗口。
@@ -603,7 +608,7 @@ export interface WireHandlerOptions {
    * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    *
    * **選配，省略即那一列 schema 的預設值**——同 `BrowserAuth` 的有效期那一格，省略是給手搭的
-   * 測試用的，拿到的跟出貨清單一模一樣。產品路徑由 `serve.ts` 在起動期 `startupSetting` 解出來
+   * 測試用的，拿到的跟出貨清單一模一樣。產品路徑由 `serve-run.ts` 在起動期 `startupSetting` 解出來
    * 傳進來。
    *
    * **它是 server 的性質，所以在這裡而不是在 `ThreadAgent` 上**：這兩支方法住在這個閉包裡、
@@ -673,13 +678,13 @@ export interface WireHandlerOptions {
    * 撤掉＝不重啟 serve 的前提下做「等價於重啟」那一半：磁碟上的日誌是真相，之後有人再開這條 thread 就照今天重啟後的路徑重組。
    * **偏離登記：dsh 頂層沒有閒置逐出（遺留 TODO）**；閒置條件借子代理結算（`manager.ts` 的 settlement），計時借終端保留期（`retention.ts`）。
    *
-   * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve.ts` 只在 `sessionStore` 存在時傳。
+   * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve-run.ts` 只在 `sessionStore` 存在時傳。
    */
   readonly idleEvictMs?: number;
   /** 逐出掃描的間隔（毫秒）。省略即 `idleEvictMs` 的十分之一，夾在 1 秒到 30 秒之間。 */
   readonly idleEvictPollMs?: number;
   /**
-   * 一條 thread 撤完之後叫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：`serve.ts` 用它重寫 `plugin-snapshot.json`，
+   * 一條 thread 撤完之後叫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：`serve-run.ts` 用它重寫 `plugin-snapshot.json`，
    * 讓檔裡不再列這條 thread 握著的設定版本。**錯誤被吞掉、只記一行 {@link warn}**：它擋不住逐出，也不會讓 thread 留在撤到一半的狀態。
    */
   readonly onThreadEvicted?: (threadId: string) => void | Promise<void>;
@@ -766,7 +771,7 @@ export interface WireHandlerOptions {
    * 重驗一次，驗不過就切掉那一條，已經排著還沒送出的事件也不送。開線先在稽核記 `opened`、寫好才開；收掉記 `closed`、切掉記 `cut`。
    * 嵌入身分碰到不是自己的 thread 被拒也記一筆 `access`。主機擁有者從嵌入路由開的不登記、不記。
    *
-   * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve.ts` 有嵌入方時一定給。
+   * **缺席就是不掃、不記**（手搭的組裝、只量 wire 的測試）。`serve-run.ts` 有嵌入方時一定給。
    */
   readonly embedStreams?: EmbedStreamGuard;
   /**
@@ -861,7 +866,7 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   isClosing(): boolean;
   /**
-   * 停止收會開新一輪的命令（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：`serve.ts` 的 `close()` 在立 `/readyz` 旗之後、
+   * 停止收會開新一輪的命令（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：`serve-run.ts` 的 `close()` 在立 `/readyz` 旗之後、
    * 時間窗開始之前叫一次。之後 `run.start`、`subagent.send`、以及 `slash.run` 裡會 steer 起一輪的命令回 {@link SERVER_CLOSING}
    * （HTTP 照舊 200）；`run.cancel`、`input.respond`、`queue.update`、讀取與下行照常。**不可逆、冪等**。
    * **不處理**：前一輪落定後 pump 領排隊的下一件、目標排程器續一輪——這兩條不經過上行命令，這道門擋不到（要不要擋另開卡）。
@@ -1217,6 +1222,8 @@ interface ThreadState {
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
   readonly subagentKinds: readonly SubagentKind[] | undefined;
+  /** 見 {@link ThreadAgent.delegationTool}。 */
+  readonly delegationTool: DelegationToolName | undefined;
   /** 見 {@link ThreadAgent.profile}。 */
   readonly profile: ThreadProfile;
   /** 見 {@link ThreadAgent.owner}。 */
@@ -1444,13 +1451,15 @@ function hostToolsOf(
 
 /**
  * `run.start` 的 `mention`（#328 第 2 項）：省略＝沒點名；有值就要形狀合格、名字在這個組裝的子代理清單上。
- * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。
+ * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。組裝給了委派工具時，收下的點名蓋上它（#2649）；
+ * 日誌記這一格，live 與重放照它組同一段提示。
  */
 function mentionOf(
   id: number,
   kinds: readonly SubagentKind[] | undefined,
+  tool: DelegationToolName | undefined,
   raw: unknown,
-): SubagentMention | undefined | Response {
+): SubagentMentionRef | undefined | Response {
   if (raw === undefined) return undefined;
   if (kinds === undefined) {
     return json(errorResponse(id, 'not_supported', '這個組裝沒有可點名的子代理清單'));
@@ -1474,7 +1483,7 @@ function mentionOf(
       ),
     );
   }
-  return { kind: 'subagent', name: raw.name };
+  return { kind: 'subagent', name: raw.name, ...(tool !== undefined && { tool }) };
 }
 
 /**
@@ -2307,6 +2316,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
           subagentKinds: threadAgent.subagentKinds,
+          delegationTool: threadAgent.delegationTool,
           profile: threadAgent.profile ?? 'full',
           owner: threadAgent.owner,
           hostTools: threadAgent.hostTools,
@@ -3199,6 +3209,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         const mention = mentionOf(
           command.id,
           thread.subagentKinds,
+          thread.delegationTool,
           (params as { mention?: unknown }).mention,
         );
         if (mention instanceof Response) return mention;
@@ -3226,7 +3237,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         const referenceError = referenceRejection(pump, command.id, text);
         if (referenceError !== undefined) return json(referenceError);
         // 太大的人話（#2415）：同樣排在收下附件之前。
-        const sizeError = sizeRejection(pump, command.id, text, { mention, context });
+        const sizeError = sizeRejection(
+          command.id,
+          rootTurnContent(pump, text, { mention, context }),
+        );
         if (sizeError !== undefined) return json(sizeError);
         // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
         const mode = (params as { mode?: unknown }).mode;
@@ -3290,6 +3304,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // 基座只認「有沒有中斷掛著」、不比對 id，實測拿掉之後一個**完全不存在**的
     // interrupt_id 照樣把掛著的那顆核准掉，工具真的跑了。差別在同一輪多顆之後，
     // 「不是最後那顆」不再等於「不存在」——第一顆是認得的，回答它是對的。
+    //
+    // **`no_such_interrupt` 只看收到的這一刻**（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)）：id 不在 pump 掛著的那些
+    // 裡就退，兩個 agent loop 一樣。涵蓋從來沒有過的 id、答過或已經收回的（停止、宿主頁逾時、系統代答）、行程重啟過（掛著的只在
+    // 記憶體裡）、同一輪多顆而答的不是其中任何一顆。不當成答過了而靜靜回成功：答覆沒有被誰收下，畫面要知道。
     const pending = pump.pendingFor(params.interrupt_id);
     if (pending === undefined) {
       return json(
@@ -3503,30 +3521,38 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是進圖的那一則——
-   * 引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來的內容。附件在那裡是參照區塊、不算字，所以
-   * `run.start` 在收下附件之前量也一樣。不收就是一則 `invalid_argument`。引用要先經 {@link referenceRejection} 驗過，否則拋
+   * 這句話太不太大（[#2415](https://github.com/DemianLi/nexus-agent/issues/2415)）：只在 `native` 下量，量的是進圖的那一則。
+   * 不收就是一則 `invalid_argument`。
+   *
+   * @param content - root 的話（`run.start`、`queue.update` 的 edit）是 {@link rootTurnContent} 組出來的；`subagent.send` 不展開
+   *   引用、不帶附件，進背景子代理的那則就是原文。
+   */
+  function sizeRejection(id: number | null, content: ReturnType<typeof userContent>) {
+    if (options.agentLoop !== 'native') return undefined;
+    const rejection = humanMessageRejection(content as never);
+    return rejection === undefined ? undefined : errorResponse(id, 'invalid_argument', rejection);
+  }
+
+  /**
+   * root 收下的那句話進圖的內容：引用換成 `@標題` 之後的字，與附件、點名、情境一起經 `userContent` 組出來。附件在那裡是參照
+   * 區塊、不算字，所以 `run.start` 在收下附件之前量也一樣。引用要先經 {@link referenceRejection} 驗過，否則拋
    * `SessionReferenceError`。
    */
-  function sizeRejection(
+  function rootTurnContent(
     pump: ThreadPump,
-    id: number | null,
     text: string,
     extras: {
       readonly attachments?: readonly AttachmentRef[];
       readonly mention?: SubagentMentionRef | undefined;
       readonly context?: PageContextRef | undefined;
     },
-  ) {
-    if (options.agentLoop !== 'native') return undefined;
-    const content = userContent(
+  ): ReturnType<typeof userContent> {
+    return userContent(
       pump.referencedText(text).text,
       extras.attachments,
       extras.mention,
       extras.context,
     );
-    const rejection = humanMessageRejection(content as never);
-    return rejection === undefined ? undefined : errorResponse(id, 'invalid_argument', rejection);
   }
 
   /**
@@ -3574,6 +3600,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
     }
+    // 太大的人話（#2415）：跟 `run.start` 同一道，同樣只在 `native` 下擋；也排在找編號之前。
+    const sizeError = sizeRejection(id, params.text);
+    if (sizeError !== undefined) return json(sizeError);
     if (background === undefined) {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
@@ -3636,7 +3665,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (referenceError !== undefined) return json(referenceError);
       // 改過的字配上那一件原本的附件、點名與情境量；找不到那一件就交給下面回 `not-found`。
       const queued = [...pump.inbox, ...pump.nextStep].find((item) => item.id === params.item_id);
-      const sizeError = queued === undefined ? undefined : sizeRejection(pump, id, text, queued);
+      const sizeError =
+        queued === undefined ? undefined : sizeRejection(id, rootTurnContent(pump, text, queued));
       if (sizeError !== undefined) return json(sizeError);
       action = { kind: 'edit', text };
     } else {
@@ -4491,7 +4521,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       };
     }
     // **兩個拒絕分開講。** 壓成同一句的話，`workspaceRoot` 從組裝點一路傳到這裡的那條線就
-    // **沒有任何觀察點**——拔掉 `cli.ts` 的回傳或 `serve.ts` 的轉交，全樹測試照樣綠，而真的
+    // **沒有任何觀察點**——拔掉 `cli.ts` 的回傳或 `serve-run.ts` 的轉交，全樹測試照樣綠，而真的
     // serve 上每一顆交付都 404。量過：兩條都拔，1169 條一條都不紅。
     const root = state.workspaceRoot;
     if (root === undefined) {

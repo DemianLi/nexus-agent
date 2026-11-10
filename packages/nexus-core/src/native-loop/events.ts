@@ -1,8 +1,9 @@
 /**
  * native loop 的四個 agent 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：`agent/pre-step`、`agent/request-error`、
- * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，在 `--agent-loop=native` 下派發；`agent/turn-stopping` 在 `langgraph` 下
- * 另由 `turn-stopping.ts` 的轉接格派。監聽者只有 `agent/turn-stopping` 有（`@nexus/plugin-workspace-changes`）；`@nexus/agent-loop`
- * 同名的 pre-step listener 經宿主建成 `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
+ * `agent/turn-stopping`、`llm/stream`。生產者是 `agent.ts`，在 `--agent-loop=native` 下派發；`agent/turn-stopping` 與 `agent/pre-step` 在
+ * `langgraph` 下另由 `turn-stopping.ts`、`pre-step-adapter.ts` 的轉接格派。監聽者有 `agent/turn-stopping`（`@nexus/plugin-workspace-changes`）
+ * 與 `agent/pre-step`（`@nexus/plugin-plan-mode`，經 `ToolThread.on`）；`@nexus/agent-loop` 同名的 pre-step listener 經宿主建成
+ * `beforeAgent` middleware，不聽這個事件。沒有監聽者時每一個都直通。
  *
  * 訊息還住在 LangGraph 形狀的 state 裡、由 middleware 登記的那幾步改，所以 `agent/pre-step` 不帶 `messages`。TODO(#2363)：訊息搬出
  * LangGraph 形狀的 state、那幾步搬成這些事件的監聽者時補上，契約可能跟著改。模型層還是 LangChain 的 chat model（`model-node.ts`
@@ -59,7 +60,7 @@ declare module '../events.js' {
      */
     'agent/turn-stopping'(payload: AgentStepPayload): Promise<void> | void;
     /**
-     * 環繞每一次 root 的模型呼叫（`wrapModelCall` 那一串的最內層，綁好工具之後）。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
+     * 環繞每一次模型呼叫（`wrapModelCall` 那一串的最內層，綁好工具之後），root 與子代理（前景、背景）的都派。`next()` 打模型並回 AI 訊息，只能呼叫一次；不呼叫 `next()`
      * 而回自己的訊息即短路。
      * @param payload - thread、步數、中止訊號。
      * @param next - 打模型。

@@ -7,7 +7,7 @@
  *
  * | 地方 | 這裡的哪一條 |
  * | --- | --- |
- * | `serve.ts` 起動期建閘、交給 `assembly.create`（root 那一顆） | 對話請求 |
+ * | `serve-run.ts` 起動期建閘、交給 `assembly.create`（root 那一顆） | 對話請求 |
  * | `titleLlmFor` 預設的標題模型 | 標題請求 |
  * | `titleLlmFor` 跟隨主路由的標題模型 | 跟隨主路由的標題請求 |
  * | `createModelSelectionHost` 建的別顆實例 | 選了別顆的對話請求 |
@@ -33,8 +33,8 @@ import { liveSubagentModelFor } from './assembly-root.js';
 import { bodyLog, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
 import { RequestGate } from './request-gate.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 
 const FAKE_KEY = 'nvapi-fake-for-loopback-only';

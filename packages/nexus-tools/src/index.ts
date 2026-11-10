@@ -74,8 +74,32 @@ import { defineToken } from '@nexus/sdk';
  * 交回的結果可帶 `fresh` 造一則新訊息。輸出校驗、撞到輸出上限的替換、共用區前綴改成 core 監聽者，插件監聽者看得到兩處時刻變化：
  * {@link ToolExecuteListener} 的 `next()` 交回的是驗過輸出的那一份；匯流排上 `tools/post-execute` 監聽者拿到的 `result` 是加共用區前綴之前的那份。
  * {@link ToolResultOutcome} 在結果是 `Command` 時也帶 `Command` 裡這次呼叫那則的內容。這個檔的型別不變（升級指南 `docs/upgrade-guide/v0.6.0/tools-contract-2-9/guide.md`）。
+ *
+ * `2.10.0`（#2358）：{@link ToolExec.interrupt} 多一種寫明的拒絕 {@link HumanInputUnavailable}（這裡沒有人可以回答），與認它的
+ * {@link isHumanInputUnavailable}。只有 native loop 會這樣拒絕，預設的 `langgraph` 照舊。向後相容的新增：不認它的消費者照常把它當成
+ * 一般的錯；既有消費者的範圍不用改，舊宿主不會丟它。
+ *
+ * `2.11.0`（#2358）：{@link ToolThread.on} 多收 `'agent/pre-step'`（{@link ToolPreStepListener}），叫模型之前叫。向後相容的新增：
+ * 不呼叫它的來源照常；要用的消費者宣告 `^2.11.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '2.9.0';
+export const TOOLS_CONTRACT_VERSION = '2.11.0';
+
+/** {@link ToolExec.interrupt} 沒有人可以回答時的拒絕（契約 `2.10.0`）。 */
+export class HumanInputUnavailable extends Error {
+  override name = 'HumanInputUnavailable';
+  constructor() {
+    super('這裡沒有人可以回答，所以沒有問人');
+  }
+}
+
+/**
+ * 認 {@link HumanInputUnavailable}。看 `name` 不看原型：插件與宿主可能各帶一份這個套件。
+ * @param error - 任何值。
+ * @returns 是它就是 `true`。
+ */
+export function isHumanInputUnavailable(error: unknown): error is HumanInputUnavailable {
+  return error instanceof Error && error.name === 'HumanInputUnavailable';
+}
 
 /** 無損 JSON 值。 */
 export type JsonValue =
@@ -123,11 +147,14 @@ export interface ToolExec {
    */
   deferContext(text: string, marks?: { readonly [key: string]: JsonValue }): void;
   /**
-   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。**掛起靠拋例外傳播**：不要用 try/catch 攔下它丟出的例外，
-   * 真要 catch 就原樣重拋。**恢復時本體從頭重跑一次**，這次呼叫在掛起之前做的事要能重做而不出錯。
+   * 掛起這次呼叫等人回覆，回的是人給的值（契約 `2.1.0` 起）。**`langgraph` 下掛起靠拋例外傳播**，native 在行程內等、收回時以
+   * `HumanInputWithdrawn` 拒絕：兩種都不要用 try/catch 攔下，真要 catch 就原樣重拋。**恢復時本體可能從頭重跑一次**（預設的 `langgraph` 是這樣；native 在行程內等，答覆就是這次的回傳值），
+   * 這次呼叫在掛起之前做的事要能重做而不出錯。
    *
    * @param payload - 給答題端的酬載。
    * @returns 人回的值。
+   * @throws {HumanInputUnavailable} 這裡沒有人可以回答（契約 `2.10.0` 起；native 下帶 thread 的 `streamEvents` 之外的 run，與前景子代理那一層），沒有問人。
+   *   這一個可以接住、改走不問人的路；用 {@link isHumanInputUnavailable} 認。
    */
   interrupt(payload: JsonValue): Promise<unknown>;
 }
@@ -370,6 +397,24 @@ export type ToolExecuteListener = (
   next: () => Promise<ToolExecuteOutcome>,
 ) => Promise<ToolExecuteOutcome>;
 
+/** {@link ToolPreStepListener} 拿到的那一步（`2.11.0` 起）。 */
+export interface ToolPreStep {
+  /** 這一步所在的 thread；宿主讀不到時是 `undefined`。 */
+  readonly threadId: string | undefined;
+  /** 這一輪第幾步：`--agent-loop=native` 從 `1` 數，`langgraph` 數不出步數，一律是 `0`。不要拿它判斷是不是同一步。 */
+  readonly step: number;
+  /** 這一輪的中止訊號，唯讀。 */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * 一位 `agent/pre-step` 監聽者（`2.11.0` 起）：叫模型之前叫，等它做完才叫模型。排在它內側的監聽者回 `reject`、或這一輪已經中止，
+ * 就不叫；排在外側的監聽者仍可能在它之後擋下這一步。**回傳值改不了這一步**，也擋不下這一輪；拋錯同 {@link ToolExecuteListener}：等於這一步拋錯，這一輪以那個錯收尾。
+ *
+ * `--agent-loop=native` 每一步叫一次；`langgraph` 每次模型呼叫叫一次，含重試與 `afterAgent` 跳回模型那一次，所以要冪等。宿主今天只在 root 派，但不保證：要只管 root 的，自己用 `threadId` 判。
+ */
+export type ToolPreStepListener = (step: ToolPreStep) => void | Promise<void>;
+
 /**
  * 一位會話參與者（`2.7.0` 起）：這條 thread 每開一份會話日誌（root 與每個子代理各一份）就被叫一次。
  *
@@ -434,6 +479,14 @@ export interface ToolThread {
    * @returns 只撤這一位的冪等 disposer；這一列在組裝中掉了，宿主一併撤；這條 thread 收掉時也清掉。
    */
   on?(event: 'tools/execute', listener: ToolExecuteListener): () => void;
+  /**
+   * 在這條 thread 上登記一位 `agent/pre-step` 監聽者（`2.11.0` 起），語意見 {@link ToolPreStepListener}。
+   *
+   * **選填**：同上，`2.11.0` 之前的宿主收到這個事件名會拋 `TypeError`。消費者宣告 `^2.11.0` 就保證收。
+   *
+   * @returns 只撤這一位的冪等 disposer；這一列在組裝中掉了，宿主一併撤；這條 thread 收掉時也清掉。
+   */
+  on?(event: 'agent/pre-step', listener: ToolPreStepListener): () => void;
   /**
    * 在這條 thread 上掛一位會話參與者（`2.7.0` 起）。多位參與者依清單上的列序安裝，這一列的排在這一列的位置。
    *

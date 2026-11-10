@@ -17,6 +17,8 @@
     "noEmit": true,
     "paths": {
       // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
+      "@nexus/harness/front-process": ["./apps/harness/src/front-process.ts"],
+      "@nexus/harness/conversation-process": ["./apps/harness/src/conversation-process.ts"],
       "#settings/*": ["./apps/harness/src/settings/*.ts"],
       "@nexus/agent-loop": ["./packages/nexus-agent-loop/src/index.ts"],
       "@nexus/agent-loop/provider": ["./packages/nexus-agent-loop/src/provider.ts"],
@@ -42,6 +44,7 @@
       "@nexus/fs": ["./packages/nexus-fs/src/index.ts"],
       "@nexus/fs/provider": ["./packages/nexus-fs/src/provider.ts"],
       "@nexus/goal": ["./packages/nexus-goal/src/index.ts"],
+      "@nexus/host-bridge": ["./packages/nexus-host-bridge/src/index.ts"],
       "@nexus/permission-presets": ["./packages/nexus-permission-presets/src/index.ts"],
       "@nexus/plugin-agent-instructions": [
         "./packages/nexus-plugin-agent-instructions/src/index.ts"
@@ -60,9 +63,6 @@
       ],
       "@nexus/plugin-plan-mode": ["./packages/nexus-plugin-plan-mode/src/index.ts"],
       "@nexus/plugin-plan-mode/invariant": ["./packages/nexus-plugin-plan-mode/src/invariant.ts"],
-      "@nexus/plugin-plan-mode/model-call": [
-        "./packages/nexus-plugin-plan-mode/src/model-call-cell.ts"
-      ],
       "@nexus/plugin-present": ["./packages/nexus-plugin-present/src/index.ts"],
       "@nexus/plugin-present/invariant": ["./packages/nexus-plugin-present/src/invariant.ts"],
       "@nexus/plugin-quickjs": ["./packages/nexus-plugin-quickjs/src/index.ts"],

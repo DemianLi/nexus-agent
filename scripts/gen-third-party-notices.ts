@@ -45,9 +45,9 @@ import {
   SPAWNER_LOCK,
   SPAWNER_NATIVE_LIBS,
   SPAWNER_PATH,
-  lockedCrates,
   rustChannel,
   spawnerCrateProblems,
+  spawnerLockedCrates,
 } from './release/spawner.js';
 import { ROOT } from './workspace-packages.js';
 
@@ -597,7 +597,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [\`licenses/LGPL
 }
 
 /**
- * 沙箱 spawner 那一段：`Cargo.lock` 的每一個外部 crate，加上標準函式庫（版本取自 `rust-toolchain.toml`）。
+ * 沙箱 spawner 那一段：`Cargo.lock` 裡 spawner 用得到的每一個外部 crate（宿主的不算），加上標準函式庫（版本取自 `rust-toolchain.toml`）。
  *
  * @throws `SPAWNER_CRATES` 跟 `Cargo.lock` 對不上、連進執行檔的 crate 不是寬鬆授權、`Cargo.lock` 有讀不出 name 或 version 的
  *   `[[package]]`，或 `rust-toolchain.toml` 讀不出 channel。
@@ -609,7 +609,7 @@ function renderSpawnerCrates(): string {
   assertRuntimeLicenses(SPAWNER_CRATES.filter((entry) => entry.runtime));
   const channel = rustChannel();
   const versions = new Map<string, string[]>();
-  for (const entry of lockedCrates(lock)) {
+  for (const entry of spawnerLockedCrates(lock)) {
     versions.set(entry.name, [...(versions.get(entry.name) ?? []), entry.version]);
   }
   const rows = [...SPAWNER_CRATES]

@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { PluginEntry } from '@nexus/core';
 import type { NexusSubAgent } from '@nexus/core';
+import { subagentTurnLimitNote } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -39,9 +40,14 @@ interface Seen {
   readonly nth: number;
   /** 這次請求訊息串裡最後一則工具結果的文字（沒有是 `undefined`）。 */
   readonly toolResult?: string;
+  /** 整個請求本體。 */
+  readonly body: string;
 }
 
-type Reply = { text: string } | { call: { id: string; name: string; arguments: string } };
+type Reply =
+  | { text: string }
+  | { call: { id: string; name: string; arguments: string }; say?: string }
+  | { status: number };
 
 /** 依角色與次序回答的假端點（一律走 SSE）。`onRequest` 在請求到達、回答之前呼叫。 */
 async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Seen) => void) {
@@ -62,6 +68,7 @@ async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Se
         model: body.model,
         role,
         nth: ++counts[role],
+        body: raw,
         ...(lastTool !== undefined && { toolResult: JSON.stringify(lastTool.content) }),
       };
       requests.push(seen);
@@ -75,12 +82,17 @@ async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Se
           model: 'fake',
           choices: [{ index: 0, delta, finish_reason: finish }],
         })}\n\n`;
+      if ('status' in reply) {
+        res.writeHead(reply.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: '暫時不行', type: 'server_error' } }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if ('text' in reply) {
         res.write(chunk({ role: 'assistant', content: reply.text }));
         res.write(chunk({}, 'stop'));
       } else {
-        res.write(chunk({ role: 'assistant', content: '' }));
+        res.write(chunk({ role: 'assistant', content: reply.say ?? '' }));
         res.write(
           chunk({
             tool_calls: [
@@ -133,7 +145,7 @@ afterEach(() => {
 });
 
 /** 兩顆：A 預設、B 窗口小且沒有推理資訊。 */
-function configFor(baseUrl: string) {
+function configFor(baseUrl: string, retries = 0) {
   const entry = (id: string, extra: Record<string, unknown> = {}) => ({
     ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY),
     id,
@@ -141,7 +153,11 @@ function configFor(baseUrl: string) {
   });
   return liveModelConfigSchema.parse({
     baseUrl,
-    retryPolicy: { mode: 'normal', maxRetries: 0 },
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries: retries,
+      backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    },
     modelId: A,
     models: [
       entry(A),
@@ -167,12 +183,12 @@ const workerPlugin = (definition: Partial<NexusSubAgent>): PluginEntry => ({
 async function assemble(
   baseUrl: string,
   definition: Partial<NexusSubAgent>,
-  options: { background?: boolean; policy?: boolean } = {},
+  options: { background?: boolean; policy?: boolean; retries?: number } = {},
 ) {
   const built = await createCliAgent(
     {
       live: true,
-      liveModel: configFor(baseUrl),
+      liveModel: configFor(baseUrl, options.retries),
       ...(options.background === true && { backgroundSubagents: { maxActive: 2 } }),
       ...(options.policy === true && { modelSelectionPolicy: { allowedModels: [A, B] } }),
     },
@@ -185,6 +201,7 @@ async function assemble(
   const host = built.modelSelection!;
   return {
     host,
+    sessions: pump.sessions,
     say: (text: string) => pump.submit({ kind: 'message', text }),
     close: async () => {
       await detach.detach();
@@ -310,6 +327,43 @@ describe('定義釘的 model 與 maxTurns', () => {
       await run.say('委派');
       expect(endpoint.models('worker')).toHaveLength(2);
       expect(endpoint.models('root')).toHaveLength(2);
+      // 子代理兩次都只叫工具、沒有字：native 下 `task` 的結果只有上限說明。
+      expect(rootToolResults(endpoint)).toEqual([JSON.stringify(limitResult(2))]);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+});
+
+const NATIVE = process.env.NEXUS_TEST_AGENT_LOOP === 'native';
+
+/** 子代理撞上限、一則有字的回覆都沒有時，`task` 回給 root 的那句：langgraph 是中介層合成的那句，native 是上限說明。 */
+const limitResult = (n: number): string =>
+  NATIVE
+    ? subagentTurnLimitNote(n)
+    : `Model call limits exceeded: run level call limit reached with ${n} model calls`;
+
+/** root 每次請求看到的最後一則工具結果，跳過沒有的那幾次。 */
+const rootToolResults = (endpoint: { requests: readonly Seen[] }): readonly string[] =>
+  endpoint.requests.flatMap((seen) =>
+    seen.role === 'root' && seen.toolResult !== undefined ? [seen.toolResult] : [],
+  );
+
+describe('maxTurns 的計數只算成功回來的模型呼叫', () => {
+  it('子代理第一次請求 503、重打成功：重打只算一次，成功的仍叫滿上限', async () => {
+    const endpoint = await fakeEndpoint((seen) => {
+      if (seen.role === 'root') return seen.nth === 1 ? delegateForeground : { text: '根收尾。' };
+      if (seen.nth === 1) return { status: 503 };
+      return seen.nth >= 8 ? { text: '放棄。' } : listFiles;
+    });
+    const run = await assemble(endpoint.baseUrl, { maxTurns: 2 }, { retries: 1 });
+    try {
+      await run.say('委派');
+      // 503 那次、重打成功那次、第二次：端點收到三次，上限只算後兩次。
+      expect(endpoint.models('worker')).toHaveLength(3);
+      expect(endpoint.models('root')).toHaveLength(2);
+      expect(rootToolResults(endpoint)).toEqual([JSON.stringify(limitResult(2))]);
     } finally {
       await run.close();
       await endpoint.close();
@@ -318,8 +372,8 @@ describe('定義釘的 model 與 maxTurns', () => {
 });
 
 describe('maxTurns 的計數不外漏到下一次委派', () => {
-  // 前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），`modelCallLimitMiddleware` 的計數也在 state 裡：
-  // 外漏的話第二次委派一開始就已經到上限。
+  // langgraph 下前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），上限的計數也在 state 裡：
+  // 外漏的話第二次委派一開始就已經到上限。native 下前景子代理每次從空 state 跑，這一條釘的是同一個結果。
   it('同一輪派兩次、再開一輪派第三次：每次都叫滿 2 次', async () => {
     const endpoint = await fakeEndpoint((seen) => {
       if (seen.role === 'root') {
@@ -334,6 +388,47 @@ describe('maxTurns 的計數不外漏到下一次委派', () => {
       expect(endpoint.models('worker')).toHaveLength(4);
       await run.say('第二輪');
       expect(endpoint.models('worker')).toHaveLength(6);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+});
+
+describe.runIf(NATIVE)('native 下前景子代理撞上限：上限說明只在 `task` 的結果裡', () => {
+  it('結果是最後一則有字的回覆接說明；子日誌、子代理下一次委派、root 的訊息串都沒有另一份', async () => {
+    const endpoint = await fakeEndpoint((seen) => {
+      if (seen.role === 'root') {
+        return seen.nth <= 2 ? delegateForeground : { text: '根收尾。' };
+      }
+      // 每次委派兩次請求：第一次說話也叫工具，第二次只叫工具；撞上限時最後一則有字的是第一次那句。
+      return seen.nth % 2 === 1 ? { ...listFiles, say: `看一下（${seen.nth}）` } : listFiles;
+    });
+    const run = await assemble(endpoint.baseUrl, { maxTurns: 2 });
+    try {
+      await run.say('委派');
+      const note = subagentTurnLimitNote(2);
+      expect(endpoint.models('worker')).toHaveLength(4);
+      expect(rootToolResults(endpoint)).toEqual([
+        JSON.stringify(`看一下（1）\n\n${note}`),
+        JSON.stringify(`看一下（3）\n\n${note}`),
+      ]);
+      // 子代理的 state：第二次委派的請求裡沒有第一次的說明。
+      for (const seen of endpoint.requests.filter((r) => r.role === 'worker')) {
+        expect(seen.body).not.toContain(note);
+      }
+      // root 的訊息串：收尾那次請求裡，說明只出現在兩則工具結果，沒有另一則 AI 訊息帶著它。
+      const last = endpoint.requests.findLast((r) => r.role === 'root')!;
+      const messages = (JSON.parse(last.body) as { messages: { role: string; content: unknown }[] })
+        .messages;
+      const carrying = messages.filter((m) => JSON.stringify(m.content).includes(note));
+      expect(carrying.map((m) => m.role)).toEqual(['tool', 'tool']);
+      // 子日誌：兩份前景子日誌都沒有寫進說明。
+      const children = run.sessions.list().filter((entry) => entry.log !== run.sessions.root);
+      expect(children).toHaveLength(2);
+      for (const child of children) {
+        expect(JSON.stringify(child.log.events)).not.toContain(note);
+      }
     } finally {
       await run.close();
       await endpoint.close();

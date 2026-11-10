@@ -16,7 +16,8 @@
  * ## 還走基座的東西
  *
  * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
- * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**。
+ * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**；例外是 native 下宣告式的前景子代理：這個檔用
+ * `createNativeAgent` 把它編成 `runnable`，交給基座的 `task` 照樣 `invoke`。
  * skills 與 memory 各包了一層：掃描與讀檔仍是基座的 `beforeAgent`，接進系統訊息的文字由 nexus 渲染
  * （`./skills-middleware.ts`、`./memory-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)、
  * [#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）。
@@ -58,12 +59,13 @@ import {
   createSubAgentMiddleware,
   createSummarizationMiddleware,
 } from 'deepagents';
-import type { SubAgent } from 'deepagents';
+import type { CompiledSubAgent, SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { EventDispatcher } from './events.js';
-import type { FoldedAgentParams } from './fold.js';
+import { nativeMaxTurns, type FoldedAgentParams } from './fold.js';
+import { withSubagentTurnLimitReply } from './subagent-turn-limit.js';
 import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
@@ -245,7 +247,8 @@ function subAgentMiddleware(
     'taskDescription' | 'generalPurposeAgent'
   >,
 ): ReturnType<typeof createSubAgentMiddleware> {
-  const base = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const created = createSubAgentMiddleware({ ...options, generalPurposeAgent: false });
+  const base = created;
   const inner = base.wrapModelCall;
   if (inner === undefined)
     throw new Error('基座的 SubAgentMiddleware 沒有 wrapModelCall：deepagents 換了形狀');
@@ -309,6 +312,14 @@ export function subagentDefaultMiddleware(
   ] as unknown as AgentMiddleware[];
 }
 
+/** native 的系統提示詞只收字串；規格帶 `SystemMessage`（`SubAgent` 的型別允許）就當場拋，不靜靜丟掉。 */
+export function nativeSystemPrompt(name: string, prompt: string | object): string {
+  if (typeof prompt !== 'string') {
+    throw new Error(`子代理 "${name}" 的 systemPrompt 不是字串，native agent loop 不收`);
+  }
+  return prompt;
+}
+
 /** 規格帶了這個組裝點不支援的東西時拋。 */
 function assertSupportedSubagent(spec: SubAgent): void {
   const record = spec as unknown as Record<string, unknown>;
@@ -358,7 +369,7 @@ export function assembleAgent(params: AssembleAgentParams) {
     );
   }
 
-  const inlineSubagents = params.subagents.map((spec) =>
+  const resolvedSubagents = params.subagents.map((spec) =>
     'runnable' in spec
       ? spec
       : {
@@ -377,6 +388,34 @@ export function assembleAgent(params: AssembleAgentParams) {
           ),
         },
   );
+  // native：前景子代理也跑 native，以編好的 `runnable` 交給基座，基座的 `task` 照樣 `invoke` 它。
+  const inlineSubagents =
+    params.loop === 'native'
+      ? resolvedSubagents.map((spec) => {
+          if ('runnable' in spec) return spec;
+          const limit = nativeMaxTurns(spec);
+          const agent = createNativeAgent({
+            model: spec.model ?? model,
+            name: spec.name,
+            ...(spec.systemPrompt !== undefined && {
+              systemPrompt: nativeSystemPrompt(spec.name, spec.systemPrompt),
+            }),
+            tools: spec.tools,
+            middleware: spec.middleware,
+            ...(params.events !== undefined && { events: params.events }),
+            ...limit,
+            subagent: true,
+          });
+          return {
+            name: spec.name,
+            description: spec.description,
+            // 撞上限只經 `task` 的結果讓 root 知道（見 {@link withSubagentTurnLimitReply}）。
+            runnable: (limit.maxTurns === undefined
+              ? agent
+              : withSubagentTurnLimitReply(agent)) as unknown as CompiledSubAgent['runnable'],
+          };
+        })
+      : resolvedSubagents;
 
   const core = [
     // 選填的 root skills，排在檔案工具前面。

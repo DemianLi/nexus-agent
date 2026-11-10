@@ -1,7 +1,7 @@
 /**
  * harness 的兩格在 native 的工具鏈上（#2416）：host-tools、background-delegation
- * 都登記了工具步驟（`@nexus/core` 的 `withToolCallStep`），root 由 native 直接呼叫那一步、不經那顆的 `wrapToolCall`；
- * 子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 `wrapToolCall`。`langgraph` 兩邊都經 `wrapToolCall`。
+ * 都登記了工具步驟（`@nexus/core` 的 `withToolCallStep`），root 與前景子代理由 native 直接呼叫那一步、不經那顆的 `wrapToolCall`。
+ * `langgraph` 兩邊都經 `wrapToolCall`。
  *
  * 走 `createCliAgent` 的真組裝。清單最前面一列在 `registry.middleware.use` 上包一層：之後每一顆登記過步驟的 middleware，
  * 掛上去之前先把那一步與 `wrapToolCall` 各包一個計數。跑一輪「root 叫 `ls` → root 前景委派 `worker` → worker 叫 `ls` → 回答」，
@@ -224,7 +224,7 @@ describe.each(['native', 'langgraph'] as const)(
       for (const cell of CELLS) {
         expect([cell, count(seen, cell, 'root-ls')]).toEqual([cell, root]);
         expect([cell, count(seen, cell, 'root-sub')]).toEqual([cell, root]);
-        expect([cell, count(seen, cell, 'sub-ls')]).toEqual([cell, { native: 0, wrapToolCall: 1 }]);
+        expect([cell, count(seen, cell, 'sub-ls')]).toEqual([cell, root]);
       }
     });
 

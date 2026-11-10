@@ -28,7 +28,7 @@
  *    - **落盤關掉（#612）時，新 thread 的可寫根是記憶體**（PM 裁決 (f)，#1775 issuecomment-6314481471；子代理建議、PM 採納、demian 可推翻）。
  *      沒有會話日誌就沒有 header、沒有續接，也沒有會話鑰匙，私有根沒有身分可掛；部署方關掉落盤本來就是為了隱私，退回共用 `--workspace` 會讓盤點 `:64`
  *      在這種組合下重現（等於替 #1675 Q1 (a) 開了例外）。所以這種 thread 的可寫根是虛擬檔案系統（跟沒給 `--workspace` 時一樣，`root` 是 `undefined`），
- *      `--workspace` 照樣以唯讀共用區掛上。先例：落盤關掉時工具結果暫存退回記憶體（`serve.ts`）、這種 thread 不逐出（`serve.ts` 的閒置逐出）。
+ *      `--workspace` 照樣以唯讀共用區掛上。先例：落盤關掉時工具結果暫存退回記憶體（`serve-run.ts`）、這種 thread 不逐出（`serve-run.ts` 的閒置逐出）。
  *      代價：**重啟就沒了**；這種 thread 沒有磁碟上的可寫根，所以沒有圍堵（`--sandbox`、`/permission` 的檔案政策、`present`、`@` 列檔、改動摘要都跟沒給
  *      `--workspace` 一樣不適用）。啟動 warn、`docs/operations.md`、PR 內文三處都寫「偏離 2 的延伸」。
  *

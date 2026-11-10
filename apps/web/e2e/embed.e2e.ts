@@ -7,7 +7,7 @@
  * 接上 serve 的部署一樣同源（地圖 #2365 第 5 點）。經 `gotoDemo` 開的頁面，收尾時核對下行走了 mux、沒有退回 SSE。
  * 設 `NEXUS_E2E_SHOTS=<目錄>` 時，呼叫 `shot` 的情境存截圖。
  */
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,9 +19,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { EMBED_UNAUTHORIZED_TEXT } from '../src/lib/embed-unauthorized';
 
 import { startE2eServe, type E2eServe, type ScriptTurn } from './serve';
+import { shot as saveShot } from './shot';
 
 const DEMO_CONFIG = fileURLToPath(new URL('../embed-demo/vite.config.ts', import.meta.url));
-const SHOTS = process.env.NEXUS_E2E_SHOTS;
 const TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -195,24 +195,9 @@ function devicePoint(page: Page, id: string): Promise<{ x: number; y: number }> 
   return page.evaluate((device) => window.__model!.point(device), id);
 }
 
-async function shot(page: Page, name: string): Promise<void> {
-  if (SHOTS === undefined) return;
-  await mkdir(SHOTS, { recursive: true });
-  // 等亮暗切換、面板進場這些轉場跑完，不截到中間那一格。無限循環的（shimmer、轉圈）與跟著捲動走的（捲動區邊緣的淡出）永遠不會結束，不算。
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (document.querySelector('nexus-chat')?.shadowRoot?.getAnimations() ?? []).filter(
-            (animation) =>
-              animation.playState === 'running' &&
-              animation.timeline instanceof DocumentTimeline &&
-              animation.effect?.getTiming().iterations !== Infinity,
-          ).length,
-      ),
-    )
-    .toBe(0);
-  await page.screenshot({ path: join(SHOTS, `${name}.png`) });
+/** 這支的截圖一律等元件 shadow root 裡的動畫；開在獨立頁面時找不到元件，不等。 */
+function shot(page: Page, name: string): Promise<void> {
+  return saveShot(page, name, 'nexus-chat');
 }
 
 describe('Vue 頁面裡的 <nexus-chat>', () => {

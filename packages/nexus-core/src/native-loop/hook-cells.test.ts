@@ -1,6 +1,6 @@
 /**
  * native 的 `beforeAgent`／`beforeModel`／`afterAgent`（#2416）：登記了一步的 hook（`hook-step.ts` 的 `createHookStepMiddleware`），
- * root 由 native 在原位直接呼叫那一步、不經那顆的 hook；子代理在 native 下仍是 LangGraph 子圖（TODO(#2359)），照舊經 hook。
+ * root 與前景子代理都由 native 在原位直接呼叫那一步、不經那顆的 hook。
  *
  * 計數掛在登記上：每一顆經 `createHookStepMiddleware` 造的，登記的那一步包一個計數，那顆的 hook 再包一層 `AsyncLocalStorage`。
  * 經 hook 進來的叫用落在那一層裡面，native 直接呼叫登記的那一步則在外面，所以同一個計數分得出兩條路。跑一輪「root 叫工具 →
@@ -125,7 +125,7 @@ const countsOn = (side: string) =>
       .map(([cell, bySide]) => [cell, bySide.get(side)]),
   );
 
-describe('native 的 hook：登記了一步的格，root 由 native 原位呼叫、子代理經 hook', () => {
+describe('native 的 hook：登記了一步的格，root 與前景子代理都由 native 原位呼叫', () => {
   it('root：每一格都由 native 直接呼叫那一步，經 hook 一次都沒有', async () => {
     const { messages } = await run();
     expect(messages.at(-1)?.text).toBe('好了');
@@ -159,21 +159,21 @@ describe('native 的 hook：登記了一步的格，root 由 native 原位呼叫
     `);
   });
 
-  it('子代理：每一格都經 hook，native 一次都沒有', async () => {
+  it('子代理：每一格都由 native 直接呼叫那一步，經 hook 一次都沒有', async () => {
     await run();
     expect(countsOn(SUBAGENT)).toMatchInlineSnapshot(`
       {
         "SkillsMiddleware.beforeAgent": {
-          "hook": 1,
-          "native": 0,
+          "hook": 0,
+          "native": 1,
         },
         "nexusRepeatToolReminder.beforeModel": {
-          "hook": 2,
-          "native": 0,
+          "hook": 0,
+          "native": 2,
         },
         "patchToolCallsMiddleware.beforeAgent": {
-          "hook": 1,
-          "native": 0,
+          "hook": 0,
+          "native": 1,
         },
       }
     `);

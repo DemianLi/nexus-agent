@@ -21,8 +21,8 @@ import { resolveInvariantLogPath } from './assembly-root.js';
 import { harnessInvariantLogPath } from './harness-home.js';
 import { createInvariantLog, MAX_MESSAGE_CHARS } from './invariant-log.js';
 import type { InvariantLogLine } from './invariant-log.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { WIRING_PROBE_PACKAGE } from './serve-session-wiring.fixture.js';
 
 /** 出貨清單上有真檢查的八個，**寫死字串**：拿清單自己的結果比自己驗不出東西。 */

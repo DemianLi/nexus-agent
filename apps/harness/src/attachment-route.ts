@@ -271,7 +271,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
    * glob 的 `--files` 不開檔，帶不出別名，但 stderr 的內容不由這裡決定，一併換掉。結果過濾只擋得到命中與列出的條目，擋不到錯誤字串。
    * 模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id、工具名與錯誤碼）。
    * `SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）原句交給模型：字句固定、不帶路徑；
-   * 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
+   * 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve-run.ts` 的 warn 是給要人處理的事）。
    */
   #hideRawError(
     tool: 'grep' | 'glob',

@@ -268,7 +268,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   // 環繞工具呼叫的一步拿到的 `state`，自己不讀；只有解不開參數與核准閘門兩步轉給 `toolCallOwner`（#2355）。
   'packages/nexus-core/src/tool-call-step.ts › toolCallSiteOf request.state': 1,
   // 屏障、`returnDirect` 的收尾、解不開參數的原字串三處共用；`history-source=log` 的 root 讀日誌，native loop 讀它交下來的那則，
-  // 只有 `langgraph`（含子代理子圖，#2359）讀這裡（#2355）。TODO(#2363)：隨 `langgraph` 拿掉。
+  // 只有 `langgraph` 讀這裡（#2355）。TODO(#2363)：隨 `langgraph` 拿掉。
   'packages/nexus-core/src/tool-call-owner.ts › toolCallOwner request.state': 1,
   // 同 `filesystemToolListStep`：照基座交給 `resolveBackend`，結果是 `ToolMessage` 與 `Command` 的兩支各一處。
   'packages/nexus-core/src/tool-result-eviction.ts › toolResultEvictionWrap request.state': 2,

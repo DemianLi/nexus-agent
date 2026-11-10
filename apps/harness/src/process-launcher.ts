@@ -1,7 +1,7 @@
 /**
  * serve 的啟動器（[#2341](https://github.com/DemianLi/nexus-agent/issues/2341)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §3-2、§八）：
  * `per-thread` 時把這個行程 `process.execve` 換成監督行程 `nexus-supervisor`，由它起前台（`front-process.ts`）與每條 thread 的
- * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve.ts` 照單行程起 server。
+ * 對話行程（`conversation-process.ts`）。`single` 時什麼都不做，`serve-run.ts` 照單行程起 server。
  *
  * - **模式**：`--process-model` 旗標優先，再來是 `#settings/process-model` 那一列，都沒有就是 `single`。那一列只疊層、不載模組
  *   （`composeDefaultEntries`）：疊層失敗或那一列寫壞了，旗標沒給或明講 `single` 都當成 `single`，交給 `runServe` 報；旗標明講
@@ -34,8 +34,20 @@ import type { ProcessModel, ProcessModelConfig } from './settings/process-model.
 /** 產物裡監督行程的位置，相對於往上找到的那一層，同 spawner 的 `SPAWNER_PATH`。 */
 export const SUPERVISOR_PATH = 'native/nexus-supervisor';
 
-/** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 crate 編出來）。 */
+/**
+ * per-thread 時監督行程起的兩支入口，跟這個模組在同一個目錄（{@link sibling}）。產物裡要有 `lib/<名字>.js`：
+ * manifest 的 `exports` 列著它們，`build:lib` 才編得出來（`smoke-built-bin` 與 `verify-packed-install` 照這兩個名字查）。
+ */
+export const PER_THREAD_ENTRIES = {
+  front: 'front-process',
+  conversation: 'conversation-process',
+} as const;
+
+/** 宿主執行檔的檔名，跟監督行程放在同一個目錄（同一個 Cargo workspace 編出來）。 */
 export const HOST_BINARY_NAME = 'nexus-host';
+
+/** 宿主的插件清單在 home 底下的檔名。有宿主就一律傳給它：檔不在，宿主照常起、不掛插件，放了檔要等宿主重起才讀到。 */
+export const HOST_PLUGINS_FILE = 'host-plugins.json';
 
 /** 對話行程的 socket 放在 home 底下這個目錄（監督行程建成 0700）。 */
 export const SUPERVISOR_RUN_DIR = 'run';
@@ -68,7 +80,7 @@ const PRINT_ONLY_FLAGS = [
   'dump-default-config',
 ] as const;
 
-/** 一個 serve 旗標收不收值，跟 `serve.ts` 的 `parseServeArgs` 同一張表（`process-launcher.test.ts` 掃原始碼比對）。 */
+/** 一個 serve 旗標收不收值，跟 `serve-run.ts` 的 `parseServeArgs` 同一張表（`process-launcher.test.ts` 掃原始碼比對）。 */
 export const SERVE_FLAG_TAKES_VALUE: Readonly<Record<string, boolean>> = {
   live: false,
   patch: true,
@@ -303,7 +315,13 @@ export function supervisorLaunch(input: SupervisorLaunchInput): SupervisorLaunch
       '--audit',
       join(input.home, SUPERVISOR_AUDIT_FILE),
       ...(input.idleMs === undefined ? [] : ['--idle-ms', String(input.idleMs)]),
-      ...(input.host === undefined ? [] : ['--host', input.host]),
+      ...(input.host === undefined
+        ? []
+        : [
+            '--host',
+            input.host,
+            ...each('--host-arg', ['--plugins', join(input.home, HOST_PLUGINS_FILE)]),
+          ]),
       '--front',
       input.execPath,
       ...each('--front-arg', [...input.execArgv, input.frontEntry, ...front]),
@@ -429,8 +447,8 @@ export function launchProcessModel(context: LaunchContext): false {
     home,
     execPath: process.execPath,
     execArgv: process.execArgv,
-    frontEntry: sibling('front-process'),
-    conversationEntry: sibling('conversation-process'),
+    frontEntry: sibling(PER_THREAD_ENTRIES.front),
+    conversationEntry: sibling(PER_THREAD_ENTRIES.conversation),
     serveArgv: context.argv,
     ...(model.idleMs !== undefined && { idleMs: model.idleMs }),
   });

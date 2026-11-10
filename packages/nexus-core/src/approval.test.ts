@@ -153,6 +153,22 @@ describe('四個拒絕，四句不同的話', () => {
     expect(result.text).toContain('沒有人被問到');
   });
 
+  it('ask ✕ 背景子代理 → 說的是背景子代理沒有人可以問，不是 session 關掉了核准；碼不變（#2649）', async () => {
+    const { ran, request } = call();
+    const wrap = wrapperOf([entry(() => ({ kind: 'ask', reason: '會動到線上' }))], {
+      kind: 'policy-never',
+      reason: 'background-subagent',
+    });
+    const result = await wrap(request, ran);
+    expect(ran).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(result.text).toContain('會動到線上');
+    expect(result.text).toContain('背景子代理沒有人可以問');
+    expect(result.text).toContain('沒有人被問到');
+    expect(result.text).not.toContain('關掉了人工核准');
+    expect(toolErrorOf(result)).toEqual({ name: 'ApprovalDenied', code: APPROVAL_POLICY_NEVER });
+  });
+
   it('ask ✕ 沒有 checkpointer → 說的是「沒有可用的核准管道」', async () => {
     const { ran, request } = call();
     const wrap = wrapperOf([entry(() => ({ kind: 'ask' }))], { kind: 'no-channel' });

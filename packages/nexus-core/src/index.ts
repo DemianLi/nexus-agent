@@ -60,6 +60,7 @@ export {
 } from './approval-policy.js';
 export {
   APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_BACKGROUND_SENTENCE,
   APPROVAL_POLICY_NEVER_SENTENCE,
   APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
   approvalPolicySection,
@@ -682,6 +683,15 @@ export {
   isTurnBlocked,
   TurnBlockedError,
 } from './archive-gate.js';
+export type { HumanInput } from './human-input.js';
+export {
+  HUMAN_INPUT_CONFIG_KEY,
+  humanInputOf,
+  humanInputUnavailable,
+  HumanInputWithdrawn,
+  NO_HUMAN_INPUT,
+  isHumanInputWithdrawn,
+} from './human-input.js';
 export type { StepInbox } from './step-inbox.js';
 export {
   createStepInboxMiddleware,
@@ -690,6 +700,15 @@ export {
   stepInboxOf,
 } from './step-inbox.js';
 export { createTurnStoppingMiddleware, TURN_STOPPING_MIDDLEWARE_NAME } from './turn-stopping.js';
+export {
+  createPreStepAdapterMiddleware,
+  PRE_STEP_ADAPTER_MIDDLEWARE_NAME,
+} from './pre-step-adapter.js';
+export {
+  createToolNameRestoreMiddleware,
+  TOOL_NAME_RESTORE_MIDDLEWARE_NAME,
+  withToolNamesRestored,
+} from './tool-name-restore.js';
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,
@@ -771,7 +790,7 @@ export {
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
 export type { MessageSource } from './message-source.js';
-export type { SubagentMentionRef } from './subagent-mention.js';
+export type { DelegationToolName, SubagentMentionRef } from './subagent-mention.js';
 export type { PageContextRef } from './page-context.js';
 export {
   isPageContextBlock,
@@ -1063,8 +1082,9 @@ export { createSessionRelationshipChecker } from './session-relationships.js';
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
-export { createNativeAgent, NativeAgent } from './native-loop/agent.js';
-export type { NativeAgentParams, NativeStateSnapshot } from './native-loop/agent.js';
+export { subagentTurnLimitNote } from './subagent-turn-limit.js';
+export { createNativeAgent, NativeAgent, RUN_STOP_CONFIG_KEY } from './native-loop/agent.js';
+export type { NativeAgentParams, NativeStateSnapshot, RunStopReason } from './native-loop/agent.js';
 export type {
   AgentStepPayload,
   PreStepDecision,

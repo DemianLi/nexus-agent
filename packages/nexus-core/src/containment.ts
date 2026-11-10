@@ -83,6 +83,7 @@ import { isGraphBubbleUp } from '@langchain/langgraph';
 import { MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher } from './events.js';
+import { humanInputOf, waitedSince } from './human-input.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
 import { closer, closerError } from './conversation-replay.js';
@@ -291,7 +292,7 @@ type SettleToolCall = (
 /** {@link recordToolCall} 交回來的兩件事。 */
 interface RecordedToolCall {
   readonly settle: SettleToolCall;
-  /** 退掉「可能派出子代理」的登記（#1023）。呼叫落定之後一定要叫，拋錯與中斷也是。 */
+  /** 退掉「可能派出子代理」的登記（#1023）與接回時補記的登記。呼叫落定之後一定要叫，拋錯與中斷也是。 */
   readonly release: () => void;
 }
 
@@ -365,13 +366,17 @@ function recordToolCall(
   const found = sessions.forCall(where);
   if (found.kind !== 'ok') return undefined;
   const { log } = found;
-  // 寫不進去原錯當場拋，見上面。
-  log.append('tool/call', {
+  const call = {
     callId,
     name: request.toolCall.name,
     // 解不開的那顆記模型吐的原字串（歷史裡它已經是 `{}`），見 `invalid-tool-args.ts`。
     arguments: raw ?? JSON.stringify(request.toolCall.args ?? {}),
-  });
+  };
+  // 寫不進去原錯當場拋，見上面。
+  log.append('tool/call', call);
+  // 停在提問上的呼叫不從頭重進（等人服務，`human-input.ts`）：接回時同一顆再記一次，日誌同從頭重進的那條路，結果也才跟呼叫落在
+  // 同一輪（見 `session-log.ts` 的 `tool/call`：配對取最後那一顆）。從頭重進的那條（LangGraph 的 `interrupt()`）由上面那一行記。
+  const unlisten = humanInputOf(where)?.onResumed(() => log.append('tool/call', call));
   const runId = spawnedSubagentRunId(where);
   // 子代理的輸入：`task` 與前景的 `subagent`（會被改寫成 `task`）都以 `description` 當那一句話。
   const { args } = request.toolCall;
@@ -379,7 +384,7 @@ function recordToolCall(
     typeof args === 'object' && args !== null
       ? (args as Record<string, unknown>)['description']
       : undefined;
-  const release =
+  const unspawn =
     runId === undefined || sessions.expectSpawn === undefined
       ? () => {}
       : sessions.expectSpawn(runId, {
@@ -413,6 +418,10 @@ function recordToolCall(
         source: { kind: 'plugin', plugin: request.toolCall.name },
       });
     }
+  };
+  const release = (): void => {
+    unlisten?.();
+    unspawn();
   };
   return { settle, release };
 }
@@ -462,6 +471,8 @@ export function createContainmentMiddleware(
     // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
     // 的東西：模型等的就是這一段。
     const startedAt = Date.now();
+    // 停在提問上不從頭重進的那條（`human-input.ts`）不重設 `startedAt`：等人的時間扣掉，同從頭重進時只量到重跑的那一段。
+    const waited = waitedSince({ configurable: request.runtime?.configurable });
     // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
     const raw = rawArgumentsOf(request, sessions);
     // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
@@ -483,7 +494,11 @@ export function createContainmentMiddleware(
         // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
         const message = toolRefusal(
           isToolTimeout(error)
-            ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
+            ? formatToolTimeout(
+                toolName,
+                Date.now() - startedAt - waited(),
+                declaredToolTimeoutMs(request),
+              )
             : formatToolFailure(toolName, error),
           { callId: request.toolCall.id ?? '', name: toolName },
         );

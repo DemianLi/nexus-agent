@@ -17,9 +17,9 @@
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *
- * LangChain 的 `wrapToolCall` 是層層相包的，而 dsh 那四個時刻在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
- * 不由註冊順序決定）。native 的 root 在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createToolCallStepMiddleware`），
- * 不經它們的 `wrapToolCall`；`langgraph` 與子代理仍經 `wrapToolCall`（TODO(#2359)）：
+ * LangChain 的 `wrapToolCall` 是層層相包的，而下表的四個事件在我們樹上是**四個陣列位置**（由 `fold.ts` 的槽位表決定，
+ * 不由註冊順序決定）。native 的 root 與子代理（前景、背景）在同一個位置直接呼叫這四格（三顆生產者與圍堵）的那一步（`tool-call-step.ts` 的 `createToolCallStepMiddleware`），
+ * 不經它們的 `wrapToolCall`；`langgraph` 仍經 `wrapToolCall`：
  *
  * | 事件 | 生產者 | 位置 |
  * | --- | --- | --- |
@@ -84,6 +84,7 @@ import {
   isToolTimeout,
 } from './containment.js';
 import type { EventDispatcher, EventListenerInfo, Events } from './events.js';
+import { waitedSince } from './human-input.js';
 import { formatOrigin } from './plugin.js';
 import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
@@ -827,12 +828,14 @@ export function createToolPostExecuteMiddleware(
   const step: ToolCallStep = async (call, next) => {
     if (listenerCount(events, 'tools/post-execute', core) === 0) return next();
     const startedAt = Date.now();
+    // 等人的時間扣掉，同 `containment.ts`。
+    const waited = waitedSince({ configurable: call.configurable });
     let result: unknown;
     try {
       result = await next();
     } catch (error) {
       if (isGraphBubbleUp(error) || isTurnCancelled(error)) throw error;
-      return postExecuteThrown(post, call, error, Date.now() - startedAt);
+      return postExecuteThrown(post, call, error, Date.now() - startedAt - waited());
     }
     if (!ToolMessage.isInstance(result)) return result;
     return postExecuteMessage(post, call, result);

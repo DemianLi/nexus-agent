@@ -22,7 +22,7 @@ import { runCli } from './cli.js';
 import { compatLayer, createCordisRoot } from './cordis-root.js';
 import { foldTurn, serveClient, shippedPlugins } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { runServe } from './serve.js';
+import { runServe } from './serve-run.js';
 import { describeDrop, StartupError } from './startup-audit.js';
 
 const temporary: string[] = [];

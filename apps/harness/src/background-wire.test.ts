@@ -2,8 +2,8 @@
  * 背景子代理在線上的形狀（[#832](https://github.com/DemianLi/nexus-agent/issues/832)）：真的組裝、真的 pump，
  * 折進 `@nexus/wire` 的折疊器，看畫面拿到什麼。
  *
- * 要釘的三件事：背景那一輪的卡歸給派它的那個子代理；卡在 root 閒著的時候也會收；前景的 `subagent`
- * 照舊靠 `task` 那顆歸屬。假模型兩邊的 `tool_call_id` 給不撞的（折疊器照 id 認卡）。
+ * 要釘的四件事：背景那一輪的卡歸給派它的那個子代理；卡在 root 閒著的時候也會收；root 收尾不連帶收掉背景的卡；
+ * 前景的 `subagent` 照舊靠 `task` 那顆歸屬。假模型兩邊的 `tool_call_id` 給不撞的（折疊器照 id 認卡）。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
@@ -114,6 +114,7 @@ async function run(
   await pump.whenIdle();
   return {
     release,
+    frames: (): readonly Event[] => frames,
     state: (): ConversationState => reduceAll(emptyConversation(), frames),
     close: async () => {
       release();
@@ -163,6 +164,44 @@ describe('背景：卡歸給派它的子代理，root 閒著時也收', () => {
       expect(inner.text).toBe('放行了');
       expect(inner.attribution).toEqual({ kind: 'subagent', name: 'worker', callId: 'root-call' });
       expect(state.subagents[runId]).toEqual({ name: 'worker', callId: 'root-call' });
+    } finally {
+      await r.close();
+    }
+  });
+});
+
+describe('背景的卡不跟著 root 收尾', () => {
+  it('root 收尾得慢，背景的卡在 root 收尾前就開了：每一刻都不是 failed，收尾後沒有殘留的錯誤', async () => {
+    const r = await run(
+      // root 收尾那句一個字一個字慢慢吐，背景那一輪趁這段時間開到 gate。
+      [delegate(true), { content: '根收尾', tokenDelayMs: 100 }],
+      [
+        { content: '', toolCalls: [{ name: 'gate', id: 'bg-call', args: {} }] },
+        { content: '做完' },
+      ],
+      false,
+    );
+    try {
+      // 只等卡出現，不等 running：收錯了它會是 failed，要讓下面的斷言把它抓出來。
+      await until(() => statusOf(r.state(), 'bg-call') !== undefined);
+      r.release();
+      await until(() => statusOf(r.state(), 'bg-call') === 'done');
+
+      const frames = r.frames();
+      const rootDone = frames.findIndex(isRootDone);
+      // 前提：背景的卡比 root 收尾早到，這條才在測 root 收尾那一刻。
+      expect(statusOf(reduceAll(emptyConversation(), frames.slice(0, rootDone)), 'bg-call')).toBe(
+        'running',
+      );
+      const seen = new Set(
+        frames.map((_, index) =>
+          statusOf(reduceAll(emptyConversation(), frames.slice(0, index + 1)), 'bg-call'),
+        ),
+      );
+      expect([...seen]).toEqual([undefined, 'running', 'done']);
+      const inner = toolEntry(r.state(), 'bg-call');
+      expect(inner.error).toBeUndefined();
+      expect(inner.errorCode).toBeUndefined();
     } finally {
       await r.close();
     }

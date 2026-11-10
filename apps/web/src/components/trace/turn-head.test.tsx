@@ -33,6 +33,7 @@ describe('一輪標頭的狀態膠囊', () => {
     ['已停止', head({ end: 'aborted' }), 'neutral', '已停止'],
     ['意外中斷', head({ end: 'interrupted' }), 'neutral', '意外中斷'],
     ['輸出上限', head({ end: 'max-tokens' }), 'neutral', '輸出上限'],
+    ['步數上限', head({ end: 'max-turns' }), 'neutral', '超過步數上限，已停止'],
     ['已擋下', head({ end: 'blocked' }), 'neutral', '已擋下'],
   ] as const)('%s：色是 %s，膠囊上有字', (_name, value, tone, text) => {
     render(<TurnHeader head={value} />);

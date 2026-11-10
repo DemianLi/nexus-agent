@@ -311,9 +311,9 @@ export function effectiveTrigger(
 export const RETAIN_RATIO = 0.16;
 
 /**
- * 保留量的封頂：有效 `tokens` 門檻的幾成。**登記的偏離**：dsh 沒有這一項（它的門檻只由窗口導出，保留量一定小於門檻）；
- * 我們的絕對門檻 100,000 讓 dsh 的值在大窗口上超過門檻（預設那顆 109,385），所以用這一項封頂。90b（窗口 32,768）上
- * 這一項是 5,242，高於 dsh 的值 4,587，不生效——也就是只在大窗口上與 dsh 不同。
+ * 封頂比例：token 保留量封在有效 `tokens` 門檻的這一成（{@link retainTokensFor}），尾巴則數封在最小 `messages` 門檻的這一成
+ * （出廠 12 則；配對工具呼叫時可能多留，見 {@link retainedMessageCount}）。大窗口上照比例算出的保留量會超過 100,000 的絕對
+ * 門檻（預設那顆 109,385），靠這一項壓回門檻之下；90b（窗口 32,768）上這一項是 5,242，高於照比例的 4,587，不生效。
  */
 export const RETAIN_THRESHOLD_CAP_RATIO = 0.2;
 
@@ -325,7 +325,7 @@ export const RETAIN_FALLBACK_MESSAGES = 20;
  *
  * `min(wanted, cap)`：
  * - `wanted`：`retainTokens` 照給；`retainRatio` 是 `floor((窗口 − 輸出上限) × 比例)`，要型錄（dsh 的訊息預算）；
- * - `cap`：`floor(有效 tokens 門檻 × 0.2)`（{@link RETAIN_THRESHOLD_CAP_RATIO}），見該常數的偏離登記。
+ * - `cap`：`floor(有效 tokens 門檻 × 0.2)`（{@link RETAIN_THRESHOLD_CAP_RATIO}），見該常數的說明。
  *
  * @param retain - 設定上的 `retainRatio` 或 `retainTokens`（只有一個有值）。
  * @param limits - 這一步用的模型的上限；不知道就是 `undefined`。
@@ -374,28 +374,51 @@ export function retainedTailCount(messages: readonly BaseMessage[], retainTokens
     cut = index;
     if (accumulated >= retainTokens) break;
   }
+  return length - pairedCut(messages, cut);
+}
+
+/** 把切點往前退到工具呼叫與它的結果沒被拆開的位置：切點後面有任何一則工具結果的呼叫在切點前面，就退到那則呼叫。 */
+function pairedCut(messages: readonly BaseMessage[], from: number): number {
   const calls = new Map<string, number>();
   messages.forEach((message, index) => {
     for (const call of (message as { tool_calls?: readonly { id?: unknown }[] }).tool_calls ?? [])
       if (typeof call.id === 'string') calls.set(call.id, index);
   });
+  let cut = from;
   for (;;) {
     let earliest = cut;
-    for (let index = cut; index < length; index += 1) {
+    for (let index = cut; index < messages.length; index += 1) {
       const message = messages[index]!;
       if (!ToolMessage.isInstance(message)) continue;
       const at = calls.get(message.tool_call_id);
       if (at !== undefined && at < earliest) earliest = at;
     }
-    if (earliest === cut) break;
+    if (earliest === cut) return cut;
     cut = earliest;
   }
-  return length - cut;
+}
+
+/**
+ * 尾巴則數的封頂：最小的 `messages` 門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），至少 2；沒有 `messages` 門檻就是 `undefined`。
+ *
+ * 保留量照 token 算、觸發卻可以照則數算。沒有這一道，照 token 選出的尾巴可能只比則數門檻少一輪、甚至比門檻還長，摘完下一輪
+ * 又觸發，之後每一輪都摘（[#2659](https://github.com/DemianLi/nexus-agent/issues/2659)）。封在兩成，摘完是一則摘要加約兩成門檻的則數
+ * （出廠 13 則，配對時再多幾則）。觸發的是哪一道都一樣封，見 {@link DEFAULT_SUMMARIZATION}。
+ *
+ * **封頂至少 2 則**：門檻再小，封頂也不會把尾巴壓到 2 則以下。下限只在門檻小於 10 則時生效；這時摘完可能立刻又到門檻
+ * （門檻 3、留 2 則，摘完就是 3 則）。它只拉高封頂，尾巴不會因此比照 token 選出來的長：比封頂短的尾巴照原樣留。
+ */
+function retainMessagesCap(trigger: readonly SummarizationThreshold[]): number | undefined {
+  const counts = trigger.filter((each) => each.type === 'messages').map((each) => each.value);
+  if (counts.length === 0) return undefined;
+  return Math.max(2, Math.floor(Math.min(...counts) * RETAIN_THRESHOLD_CAP_RATIO));
 }
 
 /**
  * 這一步摘要之後要留幾則：{@link retainTokensFor} 算得出 token 保留量就照 {@link retainedTailCount} 選尾巴，算不出就是
- * {@link RETAIN_FALLBACK_MESSAGES} 則。{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
+ * {@link RETAIN_FALLBACK_MESSAGES} 則；切得到東西時，再封在 `messages` 門檻的兩成
+ * （切點照樣不拆開工具呼叫與結果，所以可能比封頂多留幾則；token 路徑上不會比封頂前的尾巴長）。尾巴蓋住整串時不封頂、不摘。
+ *{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
  * （剪刀的閘門）用的是這同一個數，兩邊才會對「這一步摘不摘得到東西」有同一個答案。
  *
  * **切點前只剩上一顆摘要，也算摘不到東西**（[#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）：回整串的長度。
@@ -412,12 +435,17 @@ export function retainedMessageCount(
   settings: Pick<SummarizationSettings, 'trigger' | 'retainRatio' | 'retainTokens'>,
   limits: ModelContextLimits | undefined,
 ): number {
-  const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
+  const trigger = effectiveTrigger(settings.trigger, limits);
+  const retain = retainTokensFor(settings, limits, trigger);
   const retained =
     retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(messages, retain);
   const onlyPreviousSummary =
     messages.length - retained === 1 && isSummarizationMessage(messages[0]!);
-  return onlyPreviousSummary ? messages.length : retained;
+  if (onlyPreviousSummary) return messages.length;
+  if (retained >= messages.length) return retained;
+  const cap = retainMessagesCap(trigger);
+  if (cap === undefined || retained <= cap) return retained;
+  return messages.length - pairedCut(messages, messages.length - cap);
 }
 
 /** 舊訊息裡過大的工具**參數**要不要剪。剪工具**結果**是另一件事，見 [#149](https://github.com/DemianLi/nexus-agent/issues/149)。 */
@@ -512,6 +540,11 @@ export interface SummarizationSettings {
  * （PM 在 #1374 驗收時列為已知、刻意的變化；2026-10-14 發版模擬實測到 70 則、整份請求約 33k token，一次都沒摘、
  * serve 也沒有任何「摘要失敗」——每一步都是尾巴蓋住全部）。
  * 剪刀的閘門跟著這個意思走，見 {@link isUnderCompactionPressure}。
+ *
+ * **切得到東西時，尾巴的則數封在這一道的兩成（12 則，配對工具呼叫時可能多幾則）**
+ * （[#2659](https://github.com/DemianLi/nexus-agent/issues/2659)）：照 token 選的尾巴可能只比 60 少一輪、甚至更長，摘完下一輪又觸發，
+ * 之後每輪都摘。封頂之後摘完約是摘要加 12 則，一輪 8 則的對話至少隔 6 輪才再觸發（照 token 選的尾巴蓋住整串時還會更晚）。
+ * `tokens` 那一道觸發時一樣封，所以那一步的尾巴可能少於 token 保留量。
  *
  * ## 保留量：`retainRatio` 0.16，依這一步的模型算 token（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）
  *

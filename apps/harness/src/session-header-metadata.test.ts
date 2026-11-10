@@ -48,8 +48,8 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { legacyTwoFilePathsIn, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import type { ConfigEntry } from './plugin-config.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionHeaderOf } from './session-files.fixture.js';
 import {
   CONFIG_HASH_KEY_FILE,

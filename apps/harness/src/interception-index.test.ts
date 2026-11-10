@@ -193,14 +193,16 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-plugin-time-context/src/index.ts',
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
       'apps/harness/src/pre-step-middleware.ts',
-      // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
-      // 載體是相容層那一格 `plan-mode-model-call` 的 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
-      'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
+      // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。plan-mode 經 `thread.on('agent/pre-step')`
+      // 自己聽那一步（#2358），不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
+      'packages/nexus-plugin-plan-mode/src/index.ts',
+      // 那一步在 `langgraph` 下的載體：core 在 `wrapModelCall` 頭上派 `agent/pre-step` 的轉接格（native 由迴圈自己派）。
+      'packages/nexus-core/src/pre-step-adapter.ts',
     ],
     permissionDelta:
-      '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一次模型呼叫' +
-      '前由相容層那一格 `plan-mode-model-call` 的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
-      '`wrapModelCall` 每次模型呼叫都跑、不是圖節點，所以那一半的節奏與 dsh 同（每一步），也不多一格。' +
+      '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一步' +
+      '由 plan-mode 自己的 `agent/pre-step` 監聽者寫進 `plan/mode`（#2358），同 dsh 在 pre-step 提交 `pendingIntents`。' +
+      'native 每一步派一次；`langgraph` 由 core 的轉接格在每次模型呼叫的 `wrapModelCall` 頭上派，不是圖節點，所以那一半的節奏與 dsh 同（每一步），也不多一格。' +
       '**注入那半只佔了一部分**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
       '我們的 `beforeAgent` 只能**追加**——刪不掉、也指定不了位置，位置由基座決定' +
       '（2026-09-18 實測落在使用者那一句之後，與 dsh 同位，但那是基座的行為不是我們的選擇）。' +
@@ -318,7 +320,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可以共用檔案，數的是位址，不是檔案）。 */
-const EXPECTED_SITES = 16;
+const EXPECTED_SITES = 17;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
@@ -339,15 +341,16 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const
 /**
  * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
  *
- * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是相容層那一格
- * `plan-mode-model-call` 的 `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
- * 是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
+ * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一步之前交出去，它經 `thread.on('agent/pre-step')` 聽那一步（#2358）；
+ * `langgraph` 下派那一步的是 core 的轉接格，載體是 `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是
+ * 讓掃描放寬，是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
  *
  * agent-instructions（#1474）是**消費者**：它經 `@nexus/agent-loop` 登記 listener、自己不碰 `beforeAgent`，載體是宿主的
  * `apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
  */
 const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
-  'packages/nexus-plugin-plan-mode/src/model-call-cell.ts',
+  'packages/nexus-plugin-plan-mode/src/index.ts',
+  'packages/nexus-core/src/pre-step-adapter.ts',
   // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
   'packages/nexus-plugin-agent-instructions/src/index.ts',
   // time-context（#1625）同上：第二位 `preStep` 消費者。

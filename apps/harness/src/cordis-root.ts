@@ -61,7 +61,7 @@
 import type { Context } from '@nexus/cordis';
 import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 import { deriveApprovalChannel } from '@nexus/core';
-import type { AgentLoopKind, ApprovalChannel, ApprovalPolicy, PluginEntry } from '@nexus/core';
+import type { ApprovalChannel, ApprovalPolicy, PluginEntry } from '@nexus/core';
 
 import { createCliAgent } from './assembly-root.js';
 import type { CreateCliAgentSession } from './assembly-root.js';
@@ -192,20 +192,16 @@ export interface CordisRoot {
  * 這個入口的預設答題管道：從入口的核准政策算（#1458 Q1 (c)）。
  *
  * CLI 傳 `HEADLESS_APPROVALS`（沒有人在）、serve 傳 `undefined`（有人在）：入口知道自己的情境，ask-user 只消費。
- * 兩個入口的組裝一律給 `PrunedMemorySaver`，所以「有存檔點」只看 `--agent-loop`：native loop 接不回中斷（TODO(#2358)），
- * 算沒有。與組裝根（`assembly-root.ts`）用同一支 `deriveApprovalChannel`、同一個條件；省略 loop 那一格由 `ask-user-on-tree.test.ts`
- * 對一次，native 那一格由 `native-loop-assembly.test.ts` 的 serve ask_user 那條釘住。
+ * 兩個入口的組裝一律給 `PrunedMemorySaver`，所以一律算有存檔點，與組裝根（`assembly-root.ts`）用同一支 `deriveApprovalChannel`、
+ * 同一個條件，由 `ask-user-on-tree.test.ts` 對一次。兩個 loop 一樣：native 在沒人可問的呼叫上放 `NO_HUMAN_INPUT`，那顆呼叫自己判成
+ * 沒有管道（[#2358](https://github.com/DemianLi/nexus-agent/issues/2358)），不靠這裡。
  *
  * @param approvals - 這個入口給組裝的核准政策（`createCliAgent` 的 `session.approvals`）。
- * @param loop - 這個入口的 `--agent-loop`，省略即 `langgraph`。
  */
-export function entryApprovalChannel(
-  approvals?: ApprovalPolicy,
-  loop?: AgentLoopKind,
-): ApprovalChannel {
+export function entryApprovalChannel(approvals?: ApprovalPolicy): ApprovalChannel {
   return deriveApprovalChannel({
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: loop !== 'native',
+    hasCheckpointer: true,
   });
 }
 

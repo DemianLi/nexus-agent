@@ -7,8 +7,8 @@
  * **hook 由一步造出來**：{@link createHookStepMiddleware} 收的是一步，那顆 middleware 上的 hook 是 {@link hookWith} 從這一步造的，
  * 同時把這一步登記在那顆上。登記的一步跟 hook 跑的是同一份，分不開。
  *
- * **登記了的 hook** 由 native 的 root 在原位直接呼叫那一步（`native-loop/agent.ts` 的 `#hookCells`），位置、次數與遞迴預算的扣法跟
- * LangGraph 的 hook 節點相同；`langgraph` 與子代理（native 下仍是 LangGraph 子圖，TODO(#2359)）照舊經 hook。
+ * **登記了的 hook** 由 native 的 root 與子代理（前景、背景）在原位直接呼叫那一步（`native-loop/agent.ts` 的 `#hookCells`），位置、次數與遞迴預算的扣法跟
+ * LangGraph 的 hook 節點相同；`langgraph` 照舊經 hook。
  *
  * **同步的一步就同步回**：{@link hookWith} 造的 hook 把一步的回傳原樣交出去，中間沒有 `await`。
  *

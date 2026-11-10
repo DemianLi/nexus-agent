@@ -1,7 +1,7 @@
 /**
  * 從 YAML 組裝 plugin 清單：出貨的預設 ＋ 使用者的 patch 層。
  *
- * **`cli.ts` 與 `serve.ts` 的清單只有這一個來源**
+ * **`cli.ts` 與 `serve-run.ts` 的清單只有這一個來源**
  * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。兩個入口共用
  * {@link loadDefaultPlugins}，接線的實測在
  * [`plugin-config-wire.test.ts`](./plugin-config-wire.test.ts)。
@@ -321,34 +321,6 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
  */
 export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(PROTECTED_ENTRY_REASONS.keys());
 
-/** 一對主從列，以 `name` 為鍵（理由同 {@link PROTECTED_ENTRY_REASONS}）。 */
-export interface DependentEntryPair {
-  /** 主：決定這一對開不開。 */
-  readonly primary: string;
-  /** 從：跟著主開關，自己不能單獨開或單獨關。 */
-  readonly dependent: string;
-}
-
-/**
- * 跟著另一列開關的列。檢查只讀這張表，由 {@link validateEntries} 做，所以 `--dump-config` 與真的啟動兩條路都一樣：
- *
- * - 主掛著（寫了、沒有 `disabled: true`），從不在或 `disabled: true`：拋。
- * - 主沒寫，從掛著：拋。
- * - 主寫了 `disabled: true`：從一併改寫成 `disabled: true`，不管從那一列自己寫什麼。`--dump-config` 印的是改寫後的列，
- *   來源註解寫明是被主連帶關掉的；`plugin` 對照快照照停用的列顯示。
- * - 其餘（兩列都沒寫、主沒寫而從 `disabled: true`）：通過。
- *
- * 表上的對：
- *
- * - 主 `@nexus/plugin-plan-mode`，從 `@nexus/plugin-plan-mode/model-call`（#2551）：從是主留在相容層的那一格，交出 `exit_plan_mode`
- *   同意之後的待關、送模型之前補回 `name`，讀的是主登記的模式。只關從，同意之後模式關不掉、送給模型的請求跟著變；沒有主，
- *   從什麼都不做，靜靜放著會藏起設定錯誤。關主是今天就能用的 `plugin disable plan-mode`，從跟著關。
- *   #2358 拿掉相容層那一格時，這一筆與它的測試一起拿掉。
- */
-export const DEPENDENT_ENTRY_PAIRS: readonly DependentEntryPair[] = [
-  { primary: '@nexus/plugin-plan-mode', dependent: '@nexus/plugin-plan-mode/model-call' },
-];
-
 /**
  * 一列 patch。
  *
@@ -477,6 +449,22 @@ function anchorInsertedNames(patch: ConfigPatch, file: string): ConfigPatch {
 }
 
 /**
+ * 出貨清單上拿掉的列：id → 講給操作的人聽的那一句（含升級指南的路徑）。兩個地方讀它，所以講法只有一份：
+ *
+ * - {@link applyEntryPatches}：patch 或變更紀錄指到這些 id 時，警告換成這一句，照樣跳過；
+ * - `plugin-change.ts`：`plugin disable／enable／config-*` 指到這些 id 時回這一句，不寫紀錄、不報錯。
+ *
+ * 只在疊完之後找不到這個 id 時才用：自己的 patch 用同一個 id 插了別的列，照一般的列處理。
+ */
+export const REMOVED_ENTRY_IDS: ReadonlyMap<string, string> = new Map([
+  [
+    'plan-mode-model-call',
+    '`plan-mode-model-call` 這一列已移除，它做的事併進了 `plan-mode` 與 core（#2358），' +
+      '見 docs/upgrade-guide/v0.6.1/plan-mode-model-call/guide.md。',
+  ],
+]);
+
+/**
  * 把 patch 疊到條目清單上。
  *
  * **逐條照 dsh 的 `applyEntryPatches`**（`vendor/include/src/index.ts:57`）：
@@ -532,7 +520,12 @@ export function applyEntryPatches(
 
     const target = index.get(id);
     if (target === undefined) {
-      warn(`patch：找不到 id 為 ${JSON.stringify(id)} 的條目，這一條跳過。`);
+      const removed = REMOVED_ENTRY_IDS.get(id);
+      warn(
+        removed === undefined
+          ? `patch：找不到 id 為 ${JSON.stringify(id)} 的條目，這一條跳過。`
+          : `patch：${removed}這一條跳過。`,
+      );
       continue;
     }
 
@@ -611,62 +604,7 @@ export function validateEntries(
     }
     seen.set(entry.id, position);
   }
-  return applyDependentPairs(entries, label).entries;
-}
-
-/**
- * 一份驗過的清單上，哪幾列是被主連帶關掉的從：位置 → 原因（同 `--dump-config` 來源註解那一句）。給列出插件的地方（plugin 對照快照）用，
- * 寫明這一列為什麼沒有跑。
- *
- * @param entries - {@link validateEntries} 交出的條目。
- */
-export function dependentDisabledReasons(
-  entries: readonly ConfigEntry[],
-): ReadonlyMap<number, string> {
-  return applyDependentPairs(entries, '這份清單').cascaded;
-}
-
-/**
- * 照 {@link DEPENDENT_ENTRY_PAIRS} 檢查主從列、把被主連帶關掉的從改寫成 `disabled: true`。
- *
- * @param entries - 驗過形狀的條目。
- * @param label - 錯誤訊息裡怎麼稱呼這份清單。
- * @returns 改寫後的條目（沒有要改的就是同一批物件），與被連帶關掉的列：位置 → 原因。
- * @throws {PluginConfigError} 主掛著而從不在或關掉，或從掛著而主沒寫。
- */
-function applyDependentPairs(
-  entries: readonly ConfigEntry[],
-  label: string,
-): { readonly entries: ConfigEntry[]; readonly cascaded: ReadonlyMap<number, string> } {
-  const written = new Set(entries.map((entry) => entry.name));
-  const mounted = new Set(
-    entries.filter((entry) => entry.disabled !== true).map((entry) => entry.name),
-  );
-  const cascaded = new Map<number, string>();
-  for (const { primary, dependent } of DEPENDENT_ENTRY_PAIRS) {
-    const [p, d] = [JSON.stringify(primary), JSON.stringify(dependent)];
-    if (mounted.has(primary) && !mounted.has(dependent)) {
-      throw new PluginConfigError(
-        `${label} 掛了 ${p}，卻沒有掛 ${d}（沒寫，或 disabled: true）。${d} 跟著 ${p} 開關：` +
-          `要關就關 ${p}，${d} 會一併當成關掉；${p} 開著時 ${d} 不能單獨關。`,
-      );
-    }
-    if (!written.has(primary) && mounted.has(dependent)) {
-      throw new PluginConfigError(
-        `${label} 掛了 ${d}，卻沒有寫 ${p}。${d} 跟著 ${p} 開關：沒有 ${p} 那一列，${d} 也不能掛。`,
-      );
-    }
-    if (!written.has(primary) || mounted.has(primary)) continue;
-    for (const [position, entry] of entries.entries()) {
-      if (entry.name === dependent) cascaded.set(position, `連帶關閉：主 ${p} 是 disabled: true`);
-    }
-  }
-  return {
-    entries: entries.map((entry, position) =>
-      cascaded.has(position) && entry.disabled !== true ? { ...entry, disabled: true } : entry,
-    ),
-    cascaded,
-  };
+  return entries;
 }
 
 /**
@@ -1604,13 +1542,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
 
   // 疊完先驗過才印：印一棵啟動不起來的樹，讀的人會以為問題在別的地方。
   validateEntries(composed, shipped, { disabledByJournal: journalDisabledIds(layers) });
-  // 印的是啟動真的會用的那一份：被主連帶關掉的從，印成 `disabled: true`，來源註解寫明原因（見 {@link DEPENDENT_ENTRY_PAIRS}）。
-  const { cascaded } = applyDependentPairs(composed as ConfigEntry[], shipped);
-  const printed = composed.map((row, position) =>
-    cascaded.has(position) && row.disabled !== true ? { ...row, disabled: true } : row,
-  );
-  for (const [position, reason] of cascaded) origins[position]?.patchedBy.push(reason);
-  return groupedDump(printed, origins);
+  return groupedDump(composed, origins);
 }
 
 /** 每一段來源相同的連續列，前面加一行 `# ==`。 */
@@ -1958,7 +1890,7 @@ function treeInputOf(
 /**
  * 產品路徑上那一次組裝：出貨預設 ＋ harness home 那一層 ＋ `--patch`。
  *
- * **`cli.ts` 與 `serve.ts` 共用這一個**，理由同 `parseSandboxMode`：兩份各寫一次的下場是
+ * **`cli.ts` 與 `serve-run.ts` 共用這一個**，理由同 `parseSandboxMode`：兩份各寫一次的下場是
  * 有一天只有一邊讀得到 home 那一層，而那種缺陷在畫面上看不出來——少疊一層只是「我的設定
  * 沒有生效」，不會有任何東西變紅。
  *

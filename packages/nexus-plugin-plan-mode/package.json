@@ -1,13 +1,12 @@
 {
   "name": "@nexus/plugin-plan-mode",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./invariant": "./lib/invariant.js",
-    "./model-call": "./lib/model-call-cell.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

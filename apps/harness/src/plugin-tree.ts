@@ -1222,7 +1222,7 @@ export interface DetachedContributions {
  *
  * 給**沒有樹的呼叫端**用：手搭 `PluginEntry` 清單、直接 `createCliAgent` 的測試與基準任務，以及 `shippedPlugins()`。
  * 走的是跟產品同一條路（真的 Loader、真的 `tools` 提供者、真的 `ctx.effect`），差別只在樹是用完即丟的。
- * **產品路徑不走這裡**：`cli.ts`／`serve.ts` 把 {@link PluginTree} 交給 `loadDefaultPlugins`，工具從那棵長壽的樹來。
+ * **產品路徑不走這裡**：`cli.ts`／`serve-run.ts` 把 {@link PluginTree} 交給 `loadDefaultPlugins`，工具從那棵長壽的樹來。
  *
  * 卸載之後拿出去的工具物件照樣能用——它們是閉包了設定值的純函式（決議 §3-2 第 6 條）。
  *

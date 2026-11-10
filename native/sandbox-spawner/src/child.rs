@@ -91,7 +91,12 @@ pub unsafe fn run(p: &Prepared) -> ! {
     }
     if let Some(abi) = p.landlock {
         if let Err(e) = landlock::restrict_self(abi, &p.readable, &p.writable) {
-            fail(STATUS_FD, FailKind::SandboxUnavailable, 0, &format!("landlock: {e}"));
+            fail(
+                STATUS_FD,
+                FailKind::SandboxUnavailable,
+                0,
+                &format!("landlock: {e}"),
+            );
         }
     }
     // 逐一試候選：EACCES 記下來繼續找，找完都沒有就回它；ENOENT、ENOTDIR、ESTALE、ENODEV、ETIMEDOUT 繼續找；
@@ -108,5 +113,10 @@ pub unsafe fn run(p: &Prepared) -> ! {
             _ => fail(STATUS_FD, FailKind::Exec, last, "exec"),
         }
     }
-    fail(STATUS_FD, FailKind::Exec, if saw_eacces { libc::EACCES } else { last }, "exec");
+    fail(
+        STATUS_FD,
+        FailKind::Exec,
+        if saw_eacces { libc::EACCES } else { last },
+        "exec",
+    );
 }

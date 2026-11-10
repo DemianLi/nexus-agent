@@ -21,8 +21,8 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { changePlugin, PluginChangeRejected } from './plugin-change.js';
 import type { PluginChange } from './plugin-change.js';
 import { appendRaw, readJournalText } from './plugin-journal.fixture.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { runServe } from './serve-run.js';
+import type { RunningServe } from './serve-run.js';
 import { bodyLog } from './fixtures.js';
 
 const temporary: string[] = [];

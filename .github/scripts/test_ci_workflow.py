@@ -137,9 +137,16 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 看是不是合併後完整一輪，都不看模式；
-        # 另有 SandboxSpawner、WebE2e、E2ePerThread 三組。
-        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread'}:
+        # sandbox-spawner 看 plan 的 rust，sandbox-spawner-arm64、e2e-single、e2e-native 與 e2e-per-thread 看是不是合併後完整一輪，
+        # 都不看模式；另有 SandboxSpawner、WebE2e、E2eNative、E2ePerThread 四組。
+        for job in set(self.gate['needs']) - {
+            'plan',
+            'sandbox-spawner',
+            'sandbox-spawner-arm64',
+            'e2e-single',
+            'e2e-native',
+            'e2e-per-thread',
+        }:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -177,7 +184,7 @@ class Gate(unittest.TestCase):
 
 
 # 接在中間那一段某個 job 後面跑的：跟它依序，不另外佔一格。
-CHAINED = {'packed-install': 'sandbox-spawner'}
+CHAINED = {'packed-install': 'sandbox-spawner', 'e2e-native': 'e2e-single'}
 
 
 def full_peak(jobs: dict) -> int:
@@ -213,12 +220,14 @@ class Budget(unittest.TestCase):
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
-        # sandbox-spawner-arm64、e2e-single 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
+        # sandbox-spawner-arm64、e2e-single、e2e-native 與 e2e-per-thread 只在合併後完整一輪跑，功能 PR 上不跑。
+        # e2e-native 的 if 另外帶 `!cancelled()`（理由見 E2eNative），也要 `inputs.full`。
         post_merge_only = ('sandbox-spawner-arm64', 'e2e-single', 'e2e-per-thread')
         for name in post_merge_only:
             self.assertEqual(jobs[name]['if'], 'inputs.full', name)
+        self.assertIn('&& inputs.full &&', jobs['e2e-native']['if'])
         for name, job in jobs.items():
-            if name not in ('plan', 'gate', 'sandbox-spawner', *post_merge_only):
+            if name not in ('plan', 'gate', 'sandbox-spawner', 'e2e-native', *post_merge_only):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         native = load(CI.with_name('post-merge.yml'))['jobs']['native-loop']['strategy']['matrix']['shard']
@@ -257,6 +266,54 @@ class E2ePerThread(unittest.TestCase):
         self.assertEqual(step['env']['E2E_PER_THREAD'], '${{ needs.e2e-per-thread.result }}')
         self.assertIn('[ "$E2E_PER_THREAD" = "success" ] || fail', step['run'])
         self.assertIn('[ "$E2E_PER_THREAD" = "skipped" ] || fail', step['run'])
+
+
+class E2eNative(unittest.TestCase):
+    """真瀏覽器 e2e 用 native agent loop 再跑一輪（#2358）：`NEXUS_E2E_AGENT_LOOP` 沒設時 e2e 照 langgraph 跑、照樣綠，所以 env 要釘。"""
+
+    STEP = '真瀏覽器 e2e（native）'
+
+    def setUp(self) -> None:
+        self.ci = load(CI)
+        self.job = self.ci['jobs']['e2e-native']
+        self.names = [s.get('name') for s in self.job['steps']]
+        self.steps = {s.get('name'): s for s in self.job['steps']}
+
+    def test_runs_e2e_on_the_native_loop(self) -> None:
+        step = self.steps[self.STEP]
+        self.assertEqual(step['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertEqual(step['env']['NEXUS_E2E_AGENT_LOOP'], 'native')
+        # 不跟 per-thread 交叉：帶了它，single 下的 native 就沒人測。
+        self.assertNotIn('NEXUS_E2E_PROCESS_MODEL', step['env'])
+
+    def test_builds_like_e2e_single(self) -> None:
+        single = next(s for s in self.ci['jobs']['e2e-single']['steps'] if s.get('name') == '建置 lib 與 web')
+        self.assertEqual(self.steps['建置 lib 與 web']['run'], single['run'])
+
+    def test_uploads_screenshots_even_when_red(self) -> None:
+        """截圖是交審的證據，紅的那一輪更要看得到：e2e 存到 `NEXUS_E2E_SHOTS`，之後那一步不管成敗都上傳。"""
+        shots = self.steps[self.STEP]['env']['NEXUS_E2E_SHOTS']
+        upload = next(s for s in self.job['steps'] if str(s.get('uses', '')).startswith('actions/upload-artifact@'))
+        self.assertLess(self.names.index(self.STEP), self.job['steps'].index(upload))
+        self.assertEqual(upload['if'], 'always()')
+        self.assertEqual(upload['with']['path'], shots)
+        self.assertEqual(upload['with']['retention-days'], 7)
+        # 大版號釘在跟 checkout 同一代（#2358 的派工）。
+        checkout = next(s['uses'] for s in self.job['steps'] if str(s.get('uses', '')).startswith('actions/checkout@'))
+        self.assertEqual(upload['uses'].split('@')[1], checkout.split('@')[1])
+
+    def test_chained_after_e2e_single_but_runs_when_it_is_red(self) -> None:
+        """接在 e2e-single 後面不另佔一格；needs 預設要前一個成功才跑，single 紅了 native 會被 skip，這一輪就看不到 native 本身過不過。
+        所以 if 用 `!cancelled()` 換掉預設，plan 沒成功仍不跑。"""
+        self.assertEqual(self.job['needs'], ['plan', 'e2e-single'])
+        cond = self.job['if'].removeprefix('${{').removesuffix('}}').strip()
+        self.assertEqual(cond, "!cancelled() && inputs.full && needs.plan.result == 'success'")
+
+    def test_judged_by_gate(self) -> None:
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['E2E_NATIVE'], '${{ needs.e2e-native.result }}')
+        self.assertIn('[ "$E2E_NATIVE" = "success" ] || fail', step['run'])
+        self.assertIn('[ "$E2E_NATIVE" = "skipped" ] || fail', step['run'])
 
 
 class UpgradeGuideGate(unittest.TestCase):
@@ -480,8 +537,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['packages/nexus-host-bridge/src/protocol.ts']), 'true')
+        self.assertEqual(self.rust(['packages/nexus-host-bridge/package.json']), 'true')
         for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
-                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'peer-socket-auth',
+                     'supervisor-protocol', 'conversation-process', 'conversation-control', 'host-client', 'peer-socket-auth',
                      'forwarded-principal', 'per-thread.integration.test'):
             self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
         # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
@@ -516,6 +575,15 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(action['inputs']['cache']['default'], 'true')
         cache = next(s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache@'))
         self.assertEqual(cache['if'], "inputs.cache == 'true'")
+
+    def test_lints_with_the_pinned_toolchain(self) -> None:
+        """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑，clippy 警告即錯（#2620）。"""
+        self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
+        self.assertEqual(self.steps['格式']['run'], 'cargo fmt --all --check')
+        self.assertEqual(self.steps['clippy']['if'], '${{ !cancelled() }}')
+        self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings')
+        names = list(self.steps)
+        self.assertLess(names.index('clippy'), names.index('編譯'))
 
     def test_bundle_keeps_the_exec_bit(self) -> None:
         """upload-artifact 不保留執行權限，所以先包成 tar。"""
@@ -599,6 +667,22 @@ class SandboxSpawner(unittest.TestCase):
         self.assertNotIn('--target', self.steps['測試（glibc 的子行程）']['run'])
         bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
         self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
+
+    def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
+        """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
+        native = ROOT / 'native' / 'sandbox-spawner'
+        root = (native / 'Cargo.toml').read_text(encoding='utf-8')
+        self.assertIn('[workspace]\nmembers = ["host"]\n', root)
+        deps = re.search(r'(?ms)^\[dependencies\]\n(.*?)(?:^\[|\Z)', root)
+        assert deps is not None
+        self.assertEqual(re.findall(r'(?m)^([a-z0-9_-]+) =', deps.group(1)), ['landlock', 'libc'])
+        host = (native / 'host' / 'Cargo.toml').read_text(encoding='utf-8')
+        self.assertIn('name = "nexus-host"', host)
+        self.assertNotIn('[profile', host, 'profile 只在 workspace 的根有效')
+        bundle = (native / 'bundle.sh').read_text(encoding='utf-8')
+        self.assertIn('cargo tree --locked -p nexus-sandbox-spawner ', bundle)
+        for name in ('clippy', '編譯', '測試（musl）', '測試（glibc 的子行程）'):
+            self.assertIn(' --workspace ', self.steps[name]['run'], name)
 
     def test_toolchain_is_pinned(self) -> None:
         toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')

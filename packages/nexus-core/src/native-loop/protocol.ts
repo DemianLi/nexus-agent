@@ -1,7 +1,7 @@
 /**
  * native loop 吐給 pump 的 v3 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：形狀同 `@langchain/langgraph`
  * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（`lifecycle`、`messages`、`tools`、root 的 `custom`）；
- * 中斷類（`updates` 的 `__interrupt__`、`input.requested`）不產，TODO(#2358)。
+ * 停下來問人時的 `updates` 的 `__interrupt__` 不由 callback 產，由 `agent.ts` 在等待點經 {@link ProtocolEmitter.emit} 交出。
  * TODO(#2363)：拿掉 LangChain 時換成自己的線上協定。
  *
  * 模型的逐片事件由 `@langchain/core` 產：callback handler 宣告 `lc_prefer_chat_model_stream_events`，`BaseChatModel` 就算是 `invoke`
@@ -190,7 +190,7 @@ const NS_KEY = 'langgraph_checkpoint_ns';
 
 /**
  * 把 metadata 帶 {@link NS_KEY} 的模型呼叫轉成 `messages` 頻道、工具呼叫轉成 `tools` 頻道（後者同 LangGraph 的
- * `StreamToolsHandler`）：root 的節點與工具裡跑的子圖都帶這一格，命名空間照它。模型帶 `nostream`、工具帶 `langsmith:hidden` 的不發。
+ * `StreamToolsHandler`）：root 的節點與工具裡跑的子代理（native 前景子代理的節點、LangGraph 子圖）都帶這一格，命名空間照它。模型帶 `nostream`、工具帶 `langsmith:hidden` 的不發。
  */
 export class NativeStreamHandler extends BaseCallbackHandler {
   name = 'NativeStreamHandler';
@@ -265,7 +265,7 @@ export class NativeStreamHandler extends BaseCallbackHandler {
   }
 
   /**
-   * 工具裡跑的子圖（前景子代理是 LangGraph 子圖，TODO(#2359)）：它的節點結束時補那一層的 `completed`。LangGraph 是看子圖的
+   * 工具裡跑的 LangGraph 子圖：它的節點結束時補那一層的 `completed`（前景子代理跑 native，由它自己的節點寫回時補）。LangGraph 是看子圖的
    * `updates` 補的，那份串流不經 callback，所以看節點那顆 chain run（名字等於 `langgraph_node`）的收尾。
    */
   override handleChainStart(
