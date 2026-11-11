@@ -894,6 +894,37 @@ async function readAllLogs(root: string): Promise<LogFile[]> {
 export const settle = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 等到每個擁有者的主呼叫（帶工具的請求）都至少有預期的次數，或到 `ms` 為止。
+ *
+ * 背景子代理的後續呼叫、root 被叫醒再跑的一輪，何時發生看機器快慢，所以等次數，不睡固定時間。影子比對掛在組裝點，在請求送出之前就數了，
+ * 所以主呼叫數到了，影子計數就到了；日誌要等回應寫完，仍靠 {@link runServeDriver} 收尾的那一小段睡眠。
+ * **到期不拋**：回 `false`，讓呼叫端接著往下，由斷言用「次數不對」講哪裡不對，不把測試整支的逾時吃掉。
+ *
+ * @param bodies - 假端點收到的全部請求（{@link DriverCtx.bodies}）。
+ * @param expected - 擁有者 → 預期的主呼叫次數，鍵與 `ownerOf` 的回傳值同一套。
+ * @param ownerOf - 一個請求屬於哪個擁有者。
+ * @param ms - 最久等多久。
+ * @returns 每個擁有者都到了就是 `true`。
+ */
+export async function waitForMainCalls(
+  bodies: readonly Body[],
+  expected: Readonly<Record<string, number>>,
+  ownerOf: (body: Body) => string,
+  ms: number,
+): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const seen: Record<string, number> = {};
+    for (const body of bodies) {
+      if (hasTools(body)) seen[ownerOf(body)] = (seen[ownerOf(body)] ?? 0) + 1;
+    }
+    if (Object.entries(expected).every(([owner, n]) => (seen[owner] ?? 0) >= n)) return true;
+    if (Date.now() >= deadline) return false;
+    await settle(50);
+  }
+}
+
 /** 收尾的 AI 訊息至少有 `n` 則。 */
 export const aiDone = (n: number) => (state: ConversationState) =>
   state.entries.filter((entry) => entry.kind === 'ai' && !entry.streaming).length >= n;
