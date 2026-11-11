@@ -82,8 +82,13 @@ runs:
           done
         fi
         # apt 以 root 在目錄裡留下 lock 與 partial/：快取的 post 步驟用 runner 身分打包，讀不到就存不起來。只留 .deb，擁有者換回來。
+        # 沒有 .deb（走了 gcc 退路）就整個目錄刪掉：空目錄也會被存成這把鍵的快取，之後命中空快取、鍵又不會再被覆寫，同一個 image 版本就永遠沒有保護。
         sudo rm -rf "$debs/lock" "$debs/partial"
-        sudo chown -R "$(id -u):$(id -g)" "$debs"
+        if compgen -G "$debs/*.deb" > /dev/null; then
+          sudo chown -R "$(id -u):$(id -g)" "$debs"
+        else
+          sudo rm -rf "$debs"
+        fi
         echo "CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
