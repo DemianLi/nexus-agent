@@ -254,8 +254,15 @@ fn assert_modern(node: &Node) {
         "{methods:?}"
     );
     assert!(!methods.iter().any(|m| m == "initialize"), "{methods:?}");
-    for want in ["resources/list", "resources/templates/list", "resources/read"] {
-        assert!(methods.iter().any(|m| m == want), "沒打到 {want}：{methods:?}");
+    for want in [
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+    ] {
+        assert!(
+            methods.iter().any(|m| m == want),
+            "沒打到 {want}：{methods:?}"
+        );
     }
     // 每個請求都要帶 clientCapabilities；缺的方法收齊一起報，不停在第一個。
     let mut without_capabilities = Vec::new();
