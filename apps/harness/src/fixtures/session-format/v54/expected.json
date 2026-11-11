@@ -101,7 +101,8 @@
       "attemptCalls": [
         {
           "modelCall": 1,
-          "afterFailedEnd": true
+          "afterFailedEnd": true,
+          "beforeFailedEnd": false
         }
       ]
     }
