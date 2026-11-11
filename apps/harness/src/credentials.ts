@@ -31,6 +31,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  CST,
   type Document,
   isCollection,
   isMap,
@@ -132,37 +133,95 @@ const FORBIDDEN_TOKENS: ReadonlyMap<string, string> = new Map([
   ['alias', 'ALIAS_NOT_ALLOWED'],
 ]);
 
+/** CST 掃描找到的一處：錯誤碼與位置。 */
+interface TokenFinding {
+  readonly code: string;
+  readonly offset: number;
+}
+
+/** {@link scanTokens} 的結果：各自是檔案裡最前面的那一個。 */
+interface TokenScan {
+  /** 指令、明示 tag、錨點或別名。 */
+  readonly forbidden?: TokenFinding;
+  /** 顯式鍵（`?`）或空鍵。 */
+  readonly key?: TokenFinding;
+}
+
+/** 解出來是空字串的引號純量：`""`、`''`，以及 `"\` 接換行 `"` 這類反斜線折行寫法。 */
+function isEmptyQuoted(node: unknown): boolean {
+  const { type } = (node ?? {}) as { type?: unknown };
+  if (type !== 'double-quoted-scalar' && type !== 'single-quoted-scalar') return false;
+  // 語法錯由 `parseDocument` 的錯誤先擋下，這裡不再報。
+  return CST.resolveAsScalar(node as CST.FlowScalar, false, () => undefined)?.value === '';
+}
+
+/** CST 裡一個 mapping 條目的顯式鍵或空鍵：沒有就是 `undefined`。 */
+function keyFinding(item: unknown): TokenFinding | undefined {
+  const { start, key, sep } = (item ?? {}) as {
+    start?: unknown;
+    key?: unknown;
+    sep?: unknown;
+  };
+  const tokens = (list: unknown): { type?: unknown; offset?: unknown }[] =>
+    Array.isArray(list) ? (list as { type?: unknown; offset?: unknown }[]) : [];
+  const explicit = tokens(start).find((token) => token.type === 'explicit-key-ind');
+  if (typeof explicit?.offset === 'number') {
+    return { code: 'EXPLICIT_KEY_NOT_ALLOWED', offset: explicit.offset };
+  }
+  // 沒寫鍵：只有 `:`（`: x`、`{ : x }`、`[ : x ]`）。
+  const colon =
+    key == null ? tokens(sep).find((token) => token.type === 'map-value-ind') : undefined;
+  if (typeof colon?.offset === 'number')
+    return { code: 'EMPTY_KEY_NOT_ALLOWED', offset: colon.offset };
+  const quoted = (key as { offset?: unknown } | null | undefined)?.offset;
+  if (isEmptyQuoted(key) && typeof quoted === 'number') {
+    return { code: 'EMPTY_KEY_NOT_ALLOWED', offset: quoted };
+  }
+  return undefined;
+}
+
 /**
- * 第一個指令（`%YAML`、`%TAG`、不認得的 `%…`）、明示 tag（`!!str`、`!!binary`、`!foo`、`!`、`!<…>`）、
- * 錨點（`&x`）或別名（`*x`）的位置與錯誤碼。
+ * 掃一遍 CST，找出兩類東西各自在檔案裡最前面的那一個：
  *
- * 一律拒絕，不看 `yaml` 有沒有發 warning：`!!str`、`!!binary` 是認得的 tag，不發任何 warning 就把值換掉（`!!binary` 變成位元組），
- * `%YAML 1.1` 換了 schema（`yes` 變成 `true`）；錨點名字收哪些字元各家實作不同，別名展開還要防別名炸彈。
- * 受管檔只放 `名字: 值`，用不到這幾樣；Rust 端照同一份樣本，也就不必實作它們。
+ * - `forbidden`：指令（`%YAML`、`%TAG`、不認得的 `%…`）、明示 tag（`!!str`、`!!binary`、`!foo`、`!`、`!<…>`）、
+ *   錨點（`&x`）或別名（`*x`）。一律拒絕，不看 `yaml` 有沒有發 warning：`!!str`、`!!binary` 是認得的 tag，不發任何 warning 就把值換掉
+ *   （`!!binary` 變成位元組），`%YAML 1.1` 換了 schema（`yes` 變成 `true`）；錨點名字收哪些字元各家實作不同，別名展開還要防別名炸彈。
+ *   受管檔只放 `名字: 值`，用不到這幾樣；Rust 端照同一份樣本，也就不必實作它們。
+ * - `key`：顯式鍵（`?`）與空鍵（沒寫鍵的 `:`、`""`、`''`）。`yaml` 把空鍵換成空字串或 `null` 的名字，把 `?` 的內容照一般鍵讀，
+ *   別的實作未必照得出來；受管檔的鍵一律寫在 `名字:` 同一行，用不到這兩樣。
  *
- * 從 CST 找，不從文字找：值、引號、區塊值、註解裡的 `!`、`%`、`&`、`*` 不是 token，不會誤判。
+ * 從 CST 找，不從文字找：值、引號、區塊值、註解裡的 `!`、`%`、`&`、`*`、`?` 不是 token，不會誤判。
+ * `?` 看條目的 `start` 有沒有 `explicit-key-ind`（`AST` 沒留這個資訊）。
  */
-function forbiddenToken(
-  text: string,
-): { readonly code: string; readonly offset: number } | undefined {
-  let found: { readonly code: string; readonly offset: number } | undefined;
+function scanTokens(text: string): TokenScan {
+  let forbidden: TokenFinding | undefined;
+  let key: TokenFinding | undefined;
   const walk = (node: unknown): void => {
     if (node === null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
       for (const item of node) walk(item);
       return;
     }
-    const { type, offset } = node as { type?: unknown; offset?: unknown };
+    const { type, offset, items } = node as { type?: unknown; offset?: unknown; items?: unknown };
     const code = typeof type === 'string' ? FORBIDDEN_TOKENS.get(type) : undefined;
     if (typeof offset === 'number' && code !== undefined) {
       // 走訪順序不保證照檔案順序：取最前面那一個。
-      if (found === undefined || offset < found.offset) found = { code, offset };
+      if (forbidden === undefined || offset < forbidden.offset) forbidden = { code, offset };
       return;
+    }
+    if ((type === 'block-map' || type === 'flow-collection') && Array.isArray(items)) {
+      for (const item of items) {
+        const found = keyFinding(item);
+        if (found !== undefined && (key === undefined || found.offset < key.offset)) key = found;
+      }
     }
     for (const value of Object.values(node)) walk(value);
   };
   for (const token of new Parser().parse(text)) walk(token);
-  return found;
+  return {
+    ...(forbidden === undefined ? {} : { forbidden }),
+    ...(key === undefined ? {} : { key }),
+  };
 }
 
 /** mapping 與序列加起來最多幾層，根的那一個是第 1 層（`docs/credentials-file.md`〈形狀〉）。 */
@@ -314,8 +373,9 @@ export function parseCredentialsDocument(file: string, text: string): ParsedCred
   if (problem?.code === 'RESOURCE_EXHAUSTION') tooDeep();
   if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem, locate)}`);
   if (shape.depth > CREDENTIALS_MAX_DEPTH) tooDeep();
-  const forbidden = forbiddenToken(text);
-  if (forbidden !== undefined) yamlAt(forbidden.code, forbidden.offset);
+  const scan = scanTokens(text);
+  if (scan.forbidden !== undefined) yamlAt(scan.forbidden.code, scan.forbidden.offset);
+  if (scan.key !== undefined) yamlAt(scan.key.code, scan.key.offset);
   if (shape.collectionKey !== undefined) yamlAt('COLLECTION_KEY_NOT_ALLOWED', shape.collectionKey);
   // 只有註解的文件 `toJS()` 是 `null`：當空的倉庫。
   const root: unknown = document.toJS() ?? {};

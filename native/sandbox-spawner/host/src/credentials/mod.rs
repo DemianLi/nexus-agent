@@ -147,6 +147,8 @@ struct Findings {
     error: Option<(Pos, &'static str)>,
     duplicate: Option<Pos>,
     forbidden: Option<(Pos, &'static str)>,
+    /// 顯式鍵（`?`）或空鍵，檔案裡最前面的那一個（事件照檔案順序來，記到第一個就停）。
+    key: Option<(Pos, &'static str)>,
     collection_key: Option<Pos>,
     depth: usize,
 }
@@ -157,6 +159,55 @@ impl Findings {
             self.forbidden = Some((at, code));
         }
     }
+}
+
+/// 兩個事件之間的原文裡，不在註解裡的 `?` 顯式鍵指示符是第幾個字元（從 `gap` 開頭算）。
+/// 這段沒有任何節點的內容，`#` 前面是空白或在開頭就是註解的開頭；`?` 前面要是空白或 `[`、`{`、`,`，後面要接空白。
+fn explicit_indicator(gap: &str) -> Option<usize> {
+    let chars: Vec<char> = gap.chars().collect();
+    let mut in_comment = false;
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '\n' {
+            in_comment = false;
+            continue;
+        }
+        if in_comment {
+            continue;
+        }
+        let before = i.checked_sub(1).map(|j| chars[j]);
+        let after = chars.get(i + 1).copied();
+        if c == '#' && before.is_none_or(char::is_whitespace) {
+            in_comment = true;
+        } else if c == '?'
+            && before.is_none_or(|b| b.is_whitespace() || matches!(b, '[' | '{' | ','))
+            && after.is_some_and(char::is_whitespace)
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// 這個事件是不是一個節點的開頭（純量、別名、集合的開頭）。
+fn starts_node(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Scalar(..) | Event::Alias(_) | Event::MappingStart(..) | Event::SequenceStart(..)
+    )
+}
+
+/// 原文第 `index` 個字元的位置（行欄從 1 起，欄以字元計，檔頭的 BOM 算一欄）。
+fn position_in(text: &str, index: usize) -> Pos {
+    let (mut line, mut col) = (1, 1);
+    for c in text.chars().take(index) {
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    Pos { index, line, col }
 }
 
 /// JS `String.prototype.trim` 去掉的字元：WhiteSpace 加 LineTerminator（含 U+FEFF，不含 U+0085）。
@@ -249,6 +300,18 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
         }
         at
     };
+    // saphyr 的 index 以字元計、算檔頭的 BOM；切原文要換成位元組。
+    let offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let slice = |from: usize, to: usize| {
+        let at = |i: usize| offsets[i.min(offsets.len() - 1)];
+        &text[at(from)..at(to.max(from))]
+    };
+    // 上一個事件結束的字元位置：顯式鍵的 `?` 在它與下一個節點之間。
+    let mut previous_end = 0;
     let mut root: Option<Node> = None;
     let mut documents = 0;
     loop {
@@ -275,6 +338,27 @@ fn build(text: &str, findings: &mut Findings) -> Option<Node> {
             Some(Ok(pair)) => pair,
         };
         let mut at = raw(Pos::of(span));
+        let first = span.start.index();
+        let gap_from = previous_end;
+        // 集合的開頭不算：flow 序列裡 `? a : 1` 的隱式 mapping 開頭落在 `?` 之後，算進去會把 `?` 切到範圍外。
+        if !matches!(event, Event::MappingStart(..) | Event::SequenceStart(..)) {
+            previous_end = span.end.index().max(first);
+        }
+        // 位置在 mapping 的鍵上的節點：`?` 顯式鍵（`?` 與空鍵在 saphyr 的事件裡一樣，只能看原文），
+        // 沒寫鍵的 `:`（空字串的純量，位置在 `:`），與 `""`、`''`。
+        let in_key = matches!(stack.last(), Some(Frame::Map { key: None, .. }));
+        if in_key && findings.key.is_none() && starts_node(&event) {
+            if let Some(i) = explicit_indicator(slice(gap_from, first)) {
+                let found = position_in(text, gap_from + i);
+                findings.key = Some((found, "EXPLICIT_KEY_NOT_ALLOWED"));
+            } else if let Event::Scalar(value, style, ..) = &event {
+                let bare = *style == ScalarStyle::Plain && slice(first, first + 1) == ":";
+                let quoted = [ScalarStyle::DoubleQuoted, ScalarStyle::SingleQuoted].contains(style);
+                if value.is_empty() && (bare || quoted) {
+                    findings.key = Some((at, "EMPTY_KEY_NOT_ALLOWED"));
+                }
+            }
+        }
         let node = match event {
             Event::StreamStart | Event::DocumentEnd | Event::Nothing => continue,
             Event::StreamEnd => break,
@@ -438,6 +522,9 @@ pub fn parse(text: &str) -> Result<Parsed, ParseError> {
         return too_deep();
     }
     if let Some((at, code)) = findings.forbidden {
+        return yaml_error(code, at);
+    }
+    if let Some((at, code)) = findings.key {
         return yaml_error(code, at);
     }
     if let Some(at) = findings.collection_key {

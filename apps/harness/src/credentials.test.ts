@@ -715,16 +715,80 @@ describe('巢狀層數、解析前就拒的字元與集合鍵（#2570）', () =>
   });
 
   it.each([
-    ['? 寫的序列鍵', `version: 1\nrefs:\n  A: v\n? [${SECRET}]\n: x\n`, 4, 3],
+    ['頂層、不是第一個鍵的序列鍵', `version: 1\nrefs:\n  A: v\n[${SECRET}]: x\n`, 4, 1],
     ['flow mapping 當鍵', `version: 1\n{${SECRET}: 1}: x\n`, 2, 1],
-    ['refs 裡的集合鍵', `version: 1\nrefs:\n  ? [${SECRET}]\n  : x\n`, 3, 5],
-    ['區塊 mapping 當鍵：指到它的第一個鍵', `version: 1\n?\n  ${SECRET}: 1\n: x\n`, 3, 3],
+    ['refs 裡的集合鍵', `version: 1\nrefs:\n  [${SECRET}]: x\n`, 3, 3],
     ['refs 裡不是第一個鍵的 flow 序列', `version: 1\nrefs:\n  A: x\n  [${SECRET}]: 1\n`, 4, 3],
     ['檔頭有 BOM：第 1 行的欄把 BOM 算進去', `\uFEFF[${SECRET}]: 1\n`, 1, 2],
   ])('%s：講成 COLLECTION_KEY_NOT_ALLOWED 與位置，不含鍵', (_, text, line, col) => {
     expect(rejection(text)).toBe(
       `受管憑證檔 ${file} 認不得：YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 ${String(line)} 行第 ${String(col)} 欄）`,
     );
+  });
+
+  it.each([
+    ['頂層的 ?', `version: 1\n? ${SECRET}\n: 1\n`, 'EXPLICIT_KEY_NOT_ALLOWED', 2, 1],
+    ['? 後面沒有東西', 'version: 1\n?\n: x\n', 'EXPLICIT_KEY_NOT_ALLOWED', 2, 1],
+    [
+      '? 的內容是集合：先講顯式鍵',
+      `version: 1\n? [${SECRET}]: 1\n`,
+      'EXPLICIT_KEY_NOT_ALLOWED',
+      2,
+      1,
+    ],
+    [
+      'refs 底下的 ?',
+      `version: 1\nrefs:\n  ? A\n  : ${SECRET}\n`,
+      'EXPLICIT_KEY_NOT_ALLOWED',
+      3,
+      3,
+    ],
+    ['flow mapping 裡的 ?', 'version: 1\nx: {a: 1, ? b : 2}\n', 'EXPLICIT_KEY_NOT_ALLOWED', 2, 11],
+    ['沒寫鍵的 :', `version: 1\nrefs:\n  A: ${SECRET}\n  : x\n`, 'EMPTY_KEY_NOT_ALLOWED', 4, 3],
+    ['雙引號的空字串', 'version: 1\n"": x\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['單引號的空字串', "version: 1\n'': x\n", 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['flow mapping 裡沒寫鍵', 'version: 1\nx: { : y }\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 6],
+    ['序列項目裡的空字串鍵', 'version: 1\nx:\n  - "": 1\n', 'EMPTY_KEY_NOT_ALLOWED', 3, 5],
+    ['兩個都有：最前面那一個', 'version: 1\n"": 1\n? a\n: 2\n', 'EMPTY_KEY_NOT_ALLOWED', 2, 1],
+    ['檔頭有 BOM：第 1 行的欄把 BOM 算進去', '\uFEFF: x\n', 'EMPTY_KEY_NOT_ALLOWED', 1, 2],
+  ])('%s：講成 %s 與位置，不含鍵', (_, text, code, line, col) => {
+    const message = rejection(text);
+    expect(message).toBe(
+      `受管憑證檔 ${file} 認不得：YAML 錯誤 ${code}（第 ${String(line)} 行第 ${String(col)} 欄）`,
+    );
+    expect(message).not.toContain(SECRET);
+  });
+
+  // 沒寫鍵的 `:` 後面同一行接區塊集合，`yaml` 自己就報語法錯（在顯式鍵與空鍵的檢查之前）；Rust 宿主讀不出語法錯，
+  // 走到空鍵那一步。共用樣本只釘 `reason`，兩邊的錯誤碼各自在這裡與 `host/tests/credentials.rs` 釘住。
+  it.each([
+    [
+      '接 mapping，放在結尾',
+      `version: 1\nrefs:\n  A: ${SECRET}\n: : x\n`,
+      'BLOCK_AS_IMPLICIT_KEY（第 4 行第 3 欄）',
+    ],
+    [
+      '接 mapping，放在開頭',
+      `: : x\nversion: 1\nrefs:\n  A: ${SECRET}\n`,
+      'BLOCK_AS_IMPLICIT_KEY（第 1 行第 3 欄）',
+    ],
+    ['接序列', 'version: 1\n: - x\n', 'UNEXPECTED_TOKEN（第 2 行第 3 欄）'],
+    [
+      'refs 底下接序列',
+      `version: 1\nrefs:\n  A: ${SECRET}\n  : - x\n`,
+      'UNEXPECTED_TOKEN（第 4 行第 5 欄）',
+    ],
+    [
+      '序列項目裡接 mapping',
+      'version: 1\nextra:\n  - : : x\n',
+      'BLOCK_AS_IMPLICIT_KEY（第 3 行第 7 欄）',
+    ],
+    ['顯式鍵的內容裡接序列', 'version: 1\n? : - x\n: 1\n', 'UNEXPECTED_TOKEN（第 2 行第 5 欄）'],
+    ['接顯式鍵', 'version: 1\n: ? x\n', 'BLOCK_AS_IMPLICIT_KEY（第 2 行第 3 欄）'],
+  ])('沒寫鍵的 : 後面同一行接區塊集合（%s）：TS 講 yaml 自己的語法錯', (_, text, why) => {
+    const message = rejection(text);
+    expect(message).toBe(`受管憑證檔 ${file} 認不得：YAML 錯誤 ${why}`);
+    expect(message).not.toContain(SECRET);
   });
 
   it.each([
