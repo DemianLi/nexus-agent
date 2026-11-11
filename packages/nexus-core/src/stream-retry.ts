@@ -47,7 +47,8 @@
  *
  * 決定重試的那一刻，middleware 做三件事：①日誌寫 `llm/retry`（帶 `delayMs`），②用 `config.writer` 送一顆
  * {@link StreamRetrySignal} 給 pump，③才開始退避；退避完、重打之前寫 `llm/retry-started` 並再送一顆。pump 收到第一顆就把
- * 還�沒收尾的 root 回覆作廢（`message-discard`；`langgraph` 下 `assistant/attempt` 也由 pump 在這一刻記，native 下起訖紀錄器已在失敗當下記好）並送 `llm-retry` frame，同 dsh 在失敗當下記
+ * 還沒收尾的 root 回覆作廢（`message-discard`；`langgraph` 下 `assistant/attempt` 也由 pump 在這一刻記，native 下起訖紀錄器已在失敗當下記好）並送
+ * `llm-retry` frame，同 dsh 在失敗當下記
  * `assistant/attempt`（`core/agent-loop/src/agent.ts:466-476`、`:489-493`，`5badb15009a`）。
  *
  * **載體是 `config.writer`，不是 `dispatchCustomEvent`**。後者走 callback 的 `handleCustomEvent`，langgraph 1.4.19 裡沒有任何
