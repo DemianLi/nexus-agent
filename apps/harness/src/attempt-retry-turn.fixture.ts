@@ -1,5 +1,5 @@
 /**
- * 「串流中段失敗、整次重打」跑一輪的夾具（K11 PR-C）：假的 SSE 端點 → `createLiveModel` → `createNexusAgent` → `ThreadPump`。
+ * 「串流中段失敗、整次重打」跑一輪的夾具：假的 SSE 端點 → `createLiveModel` → `createNexusAgent` → `ThreadPump`。
  * 兩個 loop 共用，所以 `assistant/attempt` 的位置與內容可以逐格對照。
  *
  * **零憑證**：對手方是本機的假端點；金鑰是假的，只為了過工廠的「缺 key 當場失敗」。
@@ -110,7 +110,7 @@ export interface RetryTurnOptions {
 /** 重試預算：兩次、退避 20ms。 */
 export const RETRY_BUDGET = { maxRetries: 2, initialDelayMs: 20 } as const;
 
-/** 跑一輪，交回 root 日誌、`submit` 拋出的東西與端點被打的次數。 */
+/** 跑一輪，交回日誌（root 與子代理）、線上 frame、`submit` 拋出的東西與端點被打的次數。 */
 export async function runRetryTurn(script: readonly RetryAct[], options: RetryTurnOptions) {
   const upstream = await scriptedOpenAi(script);
   const built = await createNexusAgent({

@@ -1,5 +1,5 @@
 /**
- * **失敗的呼叫把講到一半的回覆記成 `assistant/attempt`**（K11 PR-C，native）：什麼時候記、記什麼、記不進去會怎樣。
+ * **失敗的呼叫把講到一半的回覆記成 `assistant/attempt`**（native）：什麼時候記、記什麼、記不進去會怎樣。
  * 條件與形狀同 `langgraph` 下 pump 的 `#discardOpenReply`；整條路徑（真的假端點、兩個 loop 對照）在
  * `apps/harness/src/attempt-native-write.test.ts`。
  */

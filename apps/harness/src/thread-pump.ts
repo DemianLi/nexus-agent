@@ -3504,8 +3504,9 @@ export class ThreadPump {
    * 在**失敗當下**用 `config.writer` 送來一顆 {@link StreamRetrySignal}。它和字片段在同一條輸出佇列上，所以讀到它的時候失敗那次的
    * 片段一個都不會再來（順序的依據與常駐測試見該檔檔頭與 `stream-retry.test.ts`）。
    *
-   * - `scheduled`：①作廢 root 還沒收尾的回覆（`assistant/attempt` ＋ `message-discard`，{@link ThreadPump.#discardOpenReply}），
-   *   ②送 `llm-retry`（畫面據此畫「N 秒後重試」）。**兩者在同一刻**，同 dsh 在失敗當下記 `assistant/attempt`。
+   * - `scheduled`：①作廢 root 還沒收尾的回覆（`message-discard`；`assistant/attempt` 在 `langgraph` 下也在這一刻由 pump 記，通知帶 `attemptRecorded` 時
+   *   起訖紀錄器已記過，{@link ThreadPump.#discardOpenReply}），②送 `llm-retry`（畫面據此畫「N 秒後重試」）。`langgraph` 下兩者在同一刻，
+   *   同 dsh 在失敗當下記 `assistant/attempt`。
    * - `started`：退避等完、下一次嘗試要開始，送 `llm-retry-started`。取消沒有專屬 frame：退避中按停止，這一輪直接收尾。
    *
    * **只管 root。** 圖裡 `custom` 的 namespace 是空的才是 root；子代理在更深的 namespace，它們的重打（共用同一個 slot）不擦已經畫出去的字，
@@ -3537,11 +3538,11 @@ export class ThreadPump {
   }
 
   /**
-   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`），線上送
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`；起訖紀錄器已記的除外），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
    *
    * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
-   * @param attemptRecorded - 起訖紀錄器已經記了（native）：日誌這一顆不寫，其餘照舊。
+   * @param attemptRecorded - 通知帶 `attemptRecorded`：起訖紀錄器已經記了，日誌這一顆不寫；線上 `message-discard` 與追蹤照做。
    */
   #discardOpenReply(
     current: CurrentRun,
@@ -3550,7 +3551,7 @@ export class ThreadPump {
   ): void {
     const previous = current.reply;
     if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
-    // native：模型呼叫的起訖紀錄器已在失敗當下把這半段記成 `assistant/attempt`，這裡只管線上與追蹤。
+    // 通知帶 `attemptRecorded`：模型呼叫的起訖紀錄器已在失敗當下把這半段記成 `assistant/attempt`，這裡只管線上與追蹤。
     if (!attemptRecorded) {
       const reasoning = current.reasoning;
       const text = current.partial;

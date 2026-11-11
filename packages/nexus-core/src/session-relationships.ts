@@ -71,9 +71,11 @@ export interface SessionRelationshipChecker {
  *   行程死在快照落盤之後、`model/start` 落盤之前（兩顆同一批排空，批寫到一半就斷），續接補結的就是那一輪（`interrupted-turn.ts`）。輪內那條同核准稽核，只在出現過
  *   `turn/start` 的日誌上判：子代理的日誌沒有 `turn/*`，第二條在那裡也就沒有收工點可檢。
  * - **作廢的嘗試**（`assistant/attempt`）要落在開著的輪內；帶 `modelCall` 的，那次呼叫要以 `error` 或 `aborted` 收尾，**兩種位置都收**
- *   （K11 PR-C，格式不升版）：失敗收尾**之後**（`langgraph` 下 pump 在圖外收通知才寫），或那次呼叫的起訖**之內**、失敗收尾之前
+ *   （#2361，格式不升版）：失敗收尾**之後**（`langgraph` 下 pump 在圖外收通知才寫），或那次呼叫的起訖**之內**、失敗收尾之前
  *   （native 下由模型呼叫的起訖紀錄器寫）。落在起訖之內的，那次呼叫之後必須以 `error` 或 `aborted` 收尾；正常收尾是違規，已經正常收尾了
- *   才來的也是。檢查器分不出「寫方改回舊位置」，那個突變的紅燈在寫入端的測試。跟下一次嘗試的 `model/start` 誰先誰後不檢。
+ *   才來的也是；呼叫一直沒收尾（行程死在中途）不報，理由同 `openModelCalls`。檢查器分不出 native 寫在哪個位置，那由
+ *   `apps/harness/src/attempt-native-write.test.ts` 釘。跟下一次嘗試的 `model/start` 誰先誰後不檢：`langgraph` 下 pump 在圖外
+ *   收通知，下一次嘗試在圖裡照跑。
  *   **撤除條件**：下一次因別的事升版時，舊位置的分支一起收（#2336 後續清單）。
  *
  * 不認得的事件種類不解讀，歸它們自己的擁有者。

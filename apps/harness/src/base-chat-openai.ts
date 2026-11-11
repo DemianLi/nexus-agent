@@ -493,11 +493,11 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
 
   /**
    * 兩條路（`_generate` 的聚合、core 的 stream-event handler）共用的串流事件。**開串流這一刻就抓住這次呼叫的格子**，
-   * 之後的事件可能在別的脈絡被拉；餵進去的事件，失敗時起訖紀錄器靠它記作廢的半段（K11 PR-C）。所以這裡不是 generator 函式本身，
+   * 之後的事件可能在別的脈絡被拉；餵進去的事件，失敗時起訖紀錄器靠它記作廢的半段。所以這裡不是 generator 函式本身，
    * generator 函式是裡面那一層：呼叫這個方法的當下就跑 `beginPartialReply()`。
    *
-   * **只在 native 餵**：native 的 `model-node.ts` 放了 `llm/stream` 的環繞函式，`langgraph` 沒有。`langgraph` 下作廢的半段由 pump 記
-   * （`thread-pump.ts` 的 `#discardOpenReply`），這裡也餵的話兩邊都會寫。
+   * **只在 native 餵**：native 的 `model-node.ts` 放了 `llm/stream` 的環繞函式，`langgraph` 沒有。`langgraph` 下作廢的半段由 pump 在失敗收尾之後寫，
+   * 寫不進去吞錯（`thread-pump.ts` 的 `#discardOpenReply`）；這裡也餵的話，`langgraph` 的位置與失敗行為都會變。
    */
   #events(messages: BaseMessage[], options: CallOptions): AsyncGenerator<ChatModelStreamEvent> {
     const feed = isNativeStream(options) ? beginPartialReply() : undefined;

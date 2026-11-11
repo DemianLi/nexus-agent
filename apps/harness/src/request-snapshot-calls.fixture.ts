@@ -22,11 +22,11 @@ export interface RequestSnapshotCall {
 /** 一顆作廢的嘗試歸哪次呼叫。 */
 export interface AttemptCall {
   readonly modelCall: number | null;
-  /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前（舊位置，`langgraph` 下 pump 寫的）。 */
+  /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前（`langgraph`：pump 寫在失敗收尾之後）。 */
   readonly afterFailedEnd: boolean;
   /**
-   * 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之後（新位置，native 下起訖紀錄器寫的）。兩格都是 `false`：
-   * 那次呼叫根本沒失敗，不合法（檢查器報 `attempt-before-failed-end`）。
+   * 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之後（native：起訖紀錄器寫在起訖之內）。兩格都是 `false`：
+   * 那次呼叫沒有失敗的 `model/end`（正常收尾、沒收尾、或 attempt 不帶 `modelCall`），檢查器對前兩種報 `attempt-before-failed-end`。
    */
   readonly beforeFailedEnd: boolean;
 }

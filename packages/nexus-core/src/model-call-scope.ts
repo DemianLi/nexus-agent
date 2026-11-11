@@ -78,7 +78,7 @@ interface AttemptCell {
 }
 
 /**
- * 一次請求裡 root 回覆已經吐出的片段，殼邊流邊累積（K11 PR-C）。條件與 pump 的 `trackRootReply` 一樣：`message-start` 來過、
+ * 一次請求裡回覆已經吐出的片段，殼邊流邊累積。條件與 pump 的 `trackRootReply` 一樣：`message-start` 來過、
  * `message-finish` 還沒來才算「講到一半」。
  */
 interface PartialCell {
@@ -104,7 +104,7 @@ interface CallScope {
   modelCall: number | undefined;
   /** 最近那次請求的用量格（#1022）。`undefined` ＝ 還沒有請求開跑。 */
   attempt: AttemptCell | undefined;
-  /** 最近那次請求已吐出的回覆片段（K11 PR-C）。`undefined` ＝ 殼沒有開過。 */
+  /** 最近那次請求已吐出的回覆片段。`undefined` ＝ 殼沒有開過。 */
   partial: PartialCell | undefined;
   /** 開範圍那一刻外層放的格子（最近的一格），寫 `model/start` 時沿它往外填。 */
   readonly probe: CallProbe | undefined;
@@ -275,14 +275,14 @@ export function beginAttemptReport(): ((usage: AttemptUsage) => void) | undefine
 }
 
 /**
- * 殼在**開串流的那一刻**呼叫（`base-chat-openai.ts` 的 `#aggregate`），換來一個餵事件的函式：把串流事件（`message-start`、
- * `content-block-delta`、`message-finish`，同 pump 的 `trackRootReply` 讀的那幾種）餵進來，累積這次請求已經吐出的 root 回覆。
- * 起訖紀錄器在失敗分支用 {@link OpenedModelCall.partialReply} 讀，決定要不要寫 `assistant/attempt`（K11 PR-C）。
+ * 殼在**建串流事件那一刻**呼叫（`base-chat-openai.ts` 的 `#events`；`_generate` 的聚合與 stream-event handler 兩條路都經過它），換來一個餵事件的函式：把串流事件（`message-start`、
+ * `content-block-delta`、`message-finish`，同 pump 的 `trackRootReply` 讀的那幾種）餵進來，累積這次請求已經吐出的回覆。
+ * 起訖紀錄器在失敗分支用 {@link OpenedModelCall.partialReply} 讀，決定要不要寫 `assistant/attempt`。
  *
  * 範圍在這一刻抓住，之後每顆事件只碰閉包：串流是之後才被讀的，那時不一定還在這個範圍的 `AsyncLocalStorage` 裡
  * （{@link beginAttemptReport} 同理）。每次請求換一格新的。**不是 `llm/stream` 的監聽者**，不影響 `count('llm/stream')`。
  *
- * @returns 餵事件的函式；不在呼叫範圍裡（標題那一顆、測試直接叫）是 `undefined`。
+ * @returns 餵事件的函式；不在起訖紀錄器的範圍裡（例如測試直接叫）是 `undefined`。
  */
 export function beginPartialReply(): ((event: unknown) => void) | undefined {
   const scope = scopes.getStore();

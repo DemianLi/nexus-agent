@@ -47,7 +47,7 @@
  *
  * 決定重試的那一刻，middleware 做三件事：①日誌寫 `llm/retry`（帶 `delayMs`），②用 `config.writer` 送一顆
  * {@link StreamRetrySignal} 給 pump，③才開始退避；退避完、重打之前寫 `llm/retry-started` 並再送一顆。pump 收到第一顆就把
- * 還沒收尾的 root 回覆作廢（`assistant/attempt` ＋ `message-discard`）並送 `llm-retry` frame，同 dsh 在失敗當下記
+ * 還�沒收尾的 root 回覆作廢（`message-discard`；`langgraph` 下 `assistant/attempt` 也由 pump 在這一刻記，native 下起訖紀錄器已在失敗當下記好）並送 `llm-retry` frame，同 dsh 在失敗當下記
  * `assistant/attempt`（`core/agent-loop/src/agent.ts:466-476`、`:489-493`，`5badb15009a`）。
  *
  * **載體是 `config.writer`，不是 `dispatchCustomEvent`**。後者走 callback 的 `handleCustomEvent`，langgraph 1.4.19 裡沒有任何
@@ -134,8 +134,7 @@ export type StreamRetrySignal =
       /** 失敗的那次呼叫的 `model/start` 的 `seq`；日誌沒接上就沒有。 */
       readonly modelCall?: number;
       /**
-       * 作廢的那半段已經由模型呼叫的起訖紀錄器在失敗當下記成 `assistant/attempt`（native，K11 PR-C）：pump 不再記。
-       * 沒有這格（`langgraph`）就由 pump 記。
+       * 起訖紀錄器已在失敗當下把作廢的半段記成 `assistant/attempt`，pump 只作廢線上那則。沒有這格就由 pump 記（`langgraph` 一律沒有）。
        */
       readonly attemptRecorded?: true;
     }
@@ -297,8 +296,9 @@ export function noteStreamFailure(failure: StreamFailure): void {
 
 /**
  * 這次嘗試失敗之後會不會整次重打。**碼決定重不重打**（#1437）：adapter 只回報「是哪一種失敗」，不替政策下判斷；
- * 供應商要求的等待不超過上限才照它等，超過就放棄（照 dsh 的 normal 模式，原錯誤往外拋）。
- * 重試迴圈與起訖紀錄器（失敗分支要決定記不記 `assistant/attempt`）問的是同一個，所以不會一邊說重打、一邊說不重打。
+ * 供應商要求的等待不超過上限才照它等，超過就放棄、原錯誤往外拋。
+ * 重試迴圈與起訖紀錄器（失敗分支要決定記不記 `assistant/attempt`）用同一個判斷。判定會重打之後，退避中被中止或 `llm/retry`
+ * 寫不進去仍不重打，這時 `assistant/attempt` 已經在了。
  */
 function attemptWillRetry(scope: AttemptScope): boolean {
   const { failure, options, attempt } = scope;
@@ -312,15 +312,15 @@ function attemptWillRetry(scope: AttemptScope): boolean {
 }
 
 /**
- * 此刻這次嘗試失敗之後會不會被整次重打；不在重試範圍裡（摘要器、沒開重試的組裝）是 `false`。
- * 給模型呼叫的起訖紀錄器在失敗分支用，決定要不要把講到一半的回覆記成 `assistant/attempt`（K11 PR-C）。
+ * 此刻這次嘗試失敗之後會不會被整次重打；不在 {@link retryModelCall} 的範圍裡（沒開重試）是 `false`。
+ * 給模型呼叫的起訖紀錄器在失敗分支用，決定要不要把講到一半的回覆記成 `assistant/attempt`。
  */
 export function currentAttemptWillRetry(): boolean {
   const scope = scopes.getStore();
   return scope !== undefined && attemptWillRetry(scope);
 }
 
-/** 起訖紀錄器已經把作廢的半段記成 `assistant/attempt`：重試通知帶上這件事，pump 就不再記。 */
+/** 起訖紀錄器已經把作廢的半段記成 `assistant/attempt`：重試通知帶上這件事，pump 據此不記。 */
 export function noteAttemptRecorded(): void {
   const scope = scopes.getStore();
   if (scope !== undefined) scope.attemptRecorded = true;
@@ -422,7 +422,6 @@ export async function retryModelCall<T>(
     const { scope, outcome, captured } = await runInAttempt(options, attempt, call);
     if (outcome.status === 'fulfilled') return outcome.value;
     const reported = scope.failure;
-    // 重不重打只有 {@link attemptWillRetry} 一個判斷：起訖紀錄器在失敗分支問的是同一個（K11 PR-C）。
     if (reported === undefined || !attemptWillRetry(scope)) throw outcome.reason;
     const asked = reported.retryAfterMs;
     const hasAsked = asked !== undefined && Number.isFinite(asked) && asked > 0;

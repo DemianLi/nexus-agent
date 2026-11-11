@@ -1,6 +1,6 @@
 /**
- * **`langgraph` 下 `assistant/attempt` 的位元組不變**（K11 PR-C 定題 2-4、2-5）：重試那一輪的 root 日誌逐位元組對夾具，
- * 夾具是 PR-C 之前的基底錄的。只把 `time` 正規化。
+ * **`langgraph` 下 `assistant/attempt` 由 pump 寫在失敗收尾之後**：重試那一輪的 root 日誌逐位元組對夾具，只正規化 `time`、
+ * 退避毫秒與隨機 UUID（見 `normalizedJsonl`）。
  *
  * 重錄：`UPDATE_ATTEMPT_FIXTURES=1`，並在 PR 內文逐條說明 diff。
  */
@@ -15,7 +15,7 @@ import type { RetryAct } from './attempt-retry-turn.fixture.js';
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'attempt-langgraph-retry');
 
-describe('langgraph 下重試的日誌不變（K11 PR-C）', () => {
+describe('langgraph 下重試的日誌不變', () => {
   const original = process.env[LIVE_API_KEY_ENV];
   beforeEach(() => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';

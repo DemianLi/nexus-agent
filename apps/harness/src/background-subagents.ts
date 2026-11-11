@@ -328,7 +328,7 @@ function isClosingCandidate(message: BaseMessage): boolean {
  * 範圍是「上一次結算之後」（dsh `activation.ts:152` 的 `outputStart`）：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
  * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochs}），不是最近一顆。
  * 串流文字的退路（dsh `:55-59`）不做：`langgraph` 下子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）；native 下子代理
- * 自己的日誌也有 `assistant/attempt`（模型呼叫的起訖紀錄器寫的），但這裡還沒接上，不在 K11 PR-C 的範圍。
+ * 自己的日誌也有 `assistant/attempt`（模型呼叫的起訖紀錄器寫的），這裡不讀。
  */
 function closingTextOf(log: SessionLog, fromSeq: number): string {
   const events = log.events;

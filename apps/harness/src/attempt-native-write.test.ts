@@ -1,10 +1,10 @@
 /**
- * **native 下 `assistant/attempt` 由模型呼叫的起訖紀錄器寫，落在那次呼叫的起訖之內**（K11 PR-C 定題 1-1、1-2、2-1～2-3）。
+ * **native 下 `assistant/attempt` 由模型呼叫的起訖紀錄器寫，落在那次呼叫的起訖之內**（#2361）。
  *
- * 一條測試走完整條：假的 SSE 端點 → `createLiveModel` → native loop → 起訖紀錄器 → `ThreadPump`。`langgraph` 下 pump 照今天寫，
- * 位元組不變，見 `attempt-langgraph-retry.test.ts`。
+ * 每條測試走完整條路徑：假的 SSE 端點 → `createLiveModel` → native loop → 起訖紀錄器 → `ThreadPump`。`langgraph` 下 pump 寫在失敗收尾
+ * 之後，見 `attempt-langgraph-retry.test.ts`。
  *
- * **寫入端的突變紅燈**：檢查器兩種位置都收，分不出「寫方改回舊位置」，所以位置由這裡釘（第一條）。
+ * **寫入端的突變紅燈**：檢查器兩種位置都收，分不出 native 寫在失敗收尾之後，所以位置由這裡釘（第一條）。
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -38,7 +38,7 @@ function shape(events: readonly SessionEvent[]): string[] {
 const attemptsOf = (events: readonly SessionEvent[]): SessionEvent[] =>
   events.filter((event) => event.type === 'assistant/attempt');
 
-describe('native 下作廢的半段記在那次呼叫的起訖之內（K11 PR-C）', () => {
+describe('native 下作廢的半段記在那次呼叫的起訖之內', () => {
   const original = process.env[LIVE_API_KEY_ENV];
   beforeEach(() => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
