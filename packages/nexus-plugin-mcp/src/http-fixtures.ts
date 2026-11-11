@@ -133,10 +133,10 @@ export async function startHttpFixture(
 
   async function serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
     active += 1;
-    let recorded: RecordedRequest | undefined;
+    const seen: { request?: RecordedRequest } = {};
     response.on('close', () => {
       active -= 1;
-      if (recorded !== undefined) hooks.onClose?.(recorded, response.writableFinished);
+      if (seen.request !== undefined) hooks.onClose?.(seen.request, response.writableFinished);
     });
     const body = await readJson(request);
     const messages: unknown[] = body === undefined ? [] : Array.isArray(body) ? body : [body];
@@ -155,7 +155,7 @@ export async function startHttpFixture(
       mcpName: headerValue(request.headers['mcp-name']),
       accept: headerValue(request.headers.accept),
     };
-    recorded = current;
+    seen.request = current;
     requests.push(current);
     hooks.onRequest?.(current);
     if (failing !== undefined && rpcMethods.includes(failing)) {

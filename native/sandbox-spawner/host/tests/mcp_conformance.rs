@@ -192,7 +192,10 @@ fn send(bridge: &Bridge, id: u64, method: &str, params: Value) {
 }
 
 fn done(bridge: &Bridge, id: u64) -> Result<String, String> {
-    let outcome = wait_for(bridge, |o| matches!(o, Outcome::Done { id: n, .. } if *n == id));
+    let outcome = wait_for(
+        bridge,
+        |o| matches!(o, Outcome::Done { id: n, .. } if *n == id),
+    );
     let Outcome::Done { result, .. } = outcome else {
         unreachable!()
     };
@@ -216,18 +219,27 @@ fn exercise(node: &Node, bridge: &Bridge) -> Vec<String> {
     assert_eq!(listed["resources"][0]["uri"], "memo://readme", "{listed}");
     let templates = request(bridge, 12, "resources/templates/list", json!({}));
     assert_eq!(
-        templates["resourceTemplates"][0]["uriTemplate"],
-        "memo://note/{id}",
+        templates["resourceTemplates"][0]["uriTemplate"], "memo://note/{id}",
         "{templates}"
     );
-    let read = request(bridge, 13, "resources/read", json!({ "uri": "memo://readme" }));
+    let read = request(
+        bridge,
+        13,
+        "resources/read",
+        json!({ "uri": "memo://readme" }),
+    );
     assert!(read["contents"][0]["text"].as_str().is_some(), "{read}");
     names
 }
 
 /// 官方 server：`fail` 回 `isError`，不是協定層的錯。
 fn assert_tool_error(bridge: &Bridge) {
-    let failed = request(bridge, 14, "tools/call", json!({ "name": "fail", "arguments": {} }));
+    let failed = request(
+        bridge,
+        14,
+        "tools/call",
+        json!({ "name": "fail", "arguments": {} }),
+    );
     assert_eq!(failed["isError"], true, "{failed}");
 }
 
@@ -236,17 +248,27 @@ const OFFICIAL_TOOLS: [&str; 3] = ["echo", "fail", "hang"];
 /// 新協定：握手、封套鍵、標頭。
 fn assert_modern(node: &Node) {
     let methods = node.methods();
-    assert_eq!(methods.first().map(String::as_str), Some("server/discover"), "{methods:?}");
+    assert_eq!(
+        methods.first().map(String::as_str),
+        Some("server/discover"),
+        "{methods:?}"
+    );
     assert!(!methods.iter().any(|m| m == "initialize"), "{methods:?}");
     // 每個請求都要帶 clientCapabilities；缺的方法收齊一起報，不停在第一個。
     let mut without_capabilities = Vec::new();
     for (record, message) in node.messages() {
         let method = message["method"].as_str().unwrap_or_default();
         let ctx = format!("{method}\n{}", node.dump());
-        assert_eq!(record["protocolVersion"], "2026-07-28", "標頭 MCP-Protocol-Version：{ctx}");
+        assert_eq!(
+            record["protocolVersion"], "2026-07-28",
+            "標頭 MCP-Protocol-Version：{ctx}"
+        );
         assert_eq!(record["mcpMethod"], method, "標頭 Mcp-Method：{ctx}");
         let meta = &message["params"]["_meta"];
-        assert_eq!(meta[PROTOCOL_KEY], "2026-07-28", "_meta 的 protocolVersion：{ctx}");
+        assert_eq!(
+            meta[PROTOCOL_KEY], "2026-07-28",
+            "_meta 的 protocolVersion：{ctx}"
+        );
         if method == "server/discover" {
             continue;
         }
@@ -288,12 +310,21 @@ fn assert_legacy(node: &Node, version: &str) {
     let messages = node.messages();
     let init_message = &messages[init.expect("initialize")].1;
     assert_eq!(init_message["params"]["protocolVersion"], "2025-11-25");
-    assert_eq!(init_message["params"]["clientInfo"]["name"], "@nexus/plugin-mcp");
+    assert_eq!(
+        init_message["params"]["clientInfo"]["name"],
+        "@nexus/plugin-mcp"
+    );
     for (record, message) in &messages[init.expect("initialize") + 1..] {
         let ctx = format!("{}\n{}", message["method"], node.dump());
         assert_eq!(record["protocolVersion"], version, "握手之後的標頭：{ctx}");
-        assert!(record["mcpMethod"].is_null(), "舊協定不帶 Mcp-Method：{ctx}");
-        assert!(message["params"]["_meta"][PROTOCOL_KEY].is_null(), "舊協定沒有封套：{ctx}");
+        assert!(
+            record["mcpMethod"].is_null(),
+            "舊協定不帶 Mcp-Method：{ctx}"
+        );
+        assert!(
+            message["params"]["_meta"][PROTOCOL_KEY].is_null(),
+            "舊協定沒有封套：{ctx}"
+        );
     }
 }
 
@@ -339,14 +370,23 @@ fn 舊協定_server_回_2025_06_18_分頁走完() {
         .filter(|(_, m)| m["method"] == "tools/list")
         .map(|(_, m)| m["params"]["cursor"].clone())
         .collect();
-    assert_eq!(cursors, [Value::Null, json!("p2")], "第二頁帶上一頁給的 cursor");
+    assert_eq!(
+        cursors,
+        [Value::Null, json!("p2")],
+        "第二頁帶上一頁給的 cursor"
+    );
     assert_legacy(&node, "2025-06-18");
 }
 
 /// 對 `hang` 發一次呼叫，等 server 開始處理，再取消。
 fn cancel_hang(node: &Node, bridge: &Bridge) {
     open(bridge, &node.url);
-    send(bridge, 20, "tools/call", json!({ "name": "hang", "arguments": {} }));
+    send(
+        bridge,
+        20,
+        "tools/call",
+        json!({ "name": "hang", "arguments": {} }),
+    );
     node.wait_event(10, |e| e["event"] == "hang-started");
     bridge.send(Command::Cancel { id: 20 });
     assert_eq!(done(bridge, 20), Err("cancelled".into()));
@@ -370,7 +410,10 @@ fn 新協定_取消時_server_看到請求被中止() {
     node.wait_event(5, |e| e["event"] == "hang-aborted");
     node.wait_event(5, aborted_call);
     assert!(
-        !node.methods().iter().any(|m| m == "notifications/cancelled"),
+        !node
+            .methods()
+            .iter()
+            .any(|m| m == "notifications/cancelled"),
         "新協定的 HTTP 取消是中止那則請求，不送通知：\n{}",
         node.dump()
     );
@@ -405,7 +448,12 @@ fn 逾時後_server_看到什麼_只記錄() {
         let node = Node::start(kind);
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
         open_with(&bridge, &node.url, Some(500));
-        send(&bridge, 30, "tools/call", json!({ "name": "hang", "arguments": {} }));
+        send(
+            &bridge,
+            30,
+            "tools/call",
+            json!({ "name": "hang", "arguments": {} }),
+        );
         node.wait_event(10, |e| e["event"] == "hang-started");
         let outcome = done(&bridge, 30);
         std::thread::sleep(Duration::from_secs(2));
