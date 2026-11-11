@@ -33,10 +33,33 @@ runs:
           --component clippy --component rustfmt --target "$(uname -m)-unknown-linux-musl"
         echo "SPAWNER_TARGET=$(uname -m)-unknown-linux-musl" >> "$GITHUB_ENV"
     # 宿主的 TLS 用 ring（#2570），ring 有 C 與組語要編；musl target 的 C 編譯器用 musl-gcc。
+    # 套件站一時連不到不該讓整輪紅（#2702）：.deb 存快取，命中就離線裝；沒命中，或裝壞了，退回 apt，最多三次，
+    # 每次 120 秒封頂、次間睡 10 秒，整步最壞 3×120+2×10＝380 秒。鍵含架構與 runner image 版本：image 換了，依賴版本可能變，不拿舊的 .deb 裝。
+    - name: 還原 musl 的 .deb 快取
+      id: musl-debs
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/musl-debs
+        key: musl-debs-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}
     - name: 安裝 musl-gcc
       shell: bash
+      env:
+        CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
       run: |
-        sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+        debs="$HOME/.cache/musl-debs"
+        mkdir -p "$debs/partial"
+        if [ "$CACHE_HIT" = "true" ] && sudo dpkg -i "$debs"/*.deb && command -v musl-gcc > /dev/null; then
+          echo "從快取裝好 musl-gcc"
+        else
+          [ "$CACHE_HIT" = "true" ] && echo "::warning::快取的 .deb 裝不起來，退回 apt"
+          for attempt in 1 2 3; do
+            if sudo timeout 120 bash -c 'apt-get update && apt-get -o Dir::Cache::archives="$1" -o Acquire::Retries=2 install -y --no-install-recommends musl-tools' _ "$debs"; then
+              break
+            fi
+            [ "$attempt" = 3 ] && { echo "::error::apt 三次都沒裝成 musl-tools"; exit 1; }
+            sleep 10
+          done
+        fi
         echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
