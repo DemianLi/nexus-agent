@@ -254,8 +254,12 @@ fn assert_modern(node: &Node) {
         "{methods:?}"
     );
     assert!(!methods.iter().any(|m| m == "initialize"), "{methods:?}");
+    for want in ["resources/list", "resources/templates/list", "resources/read"] {
+        assert!(methods.iter().any(|m| m == want), "沒打到 {want}：{methods:?}");
+    }
     // 每個請求都要帶 clientCapabilities；缺的方法收齊一起報，不停在第一個。
     let mut without_capabilities = Vec::new();
+    let mut named_checked = 0;
     for (record, message) in node.messages() {
         let method = message["method"].as_str().unwrap_or_default();
         let ctx = format!("{method}\n{}", node.dump());
@@ -284,8 +288,10 @@ fn assert_modern(node: &Node) {
         };
         if let Some(name) = named {
             assert_eq!(&record["mcpName"], name, "Mcp-Name：{ctx}");
+            named_checked += 1;
         }
     }
+    assert!(named_checked >= 2, "Mcp-Name 只核了 {named_checked} 次");
     assert!(
         without_capabilities.is_empty(),
         "這些請求的 _meta 沒有 clientCapabilities：{without_capabilities:?}\n{}",
@@ -409,6 +415,8 @@ fn 新協定_取消時_server_看到請求被中止() {
     cancel_hang(&node, &bridge);
     node.wait_event(5, |e| e["event"] == "hang-aborted");
     node.wait_event(5, aborted_call);
+    // 否定斷言：通知若晚一點才到，馬上斷言會空過，多等一下再看。
+    std::thread::sleep(Duration::from_secs(1));
     assert!(
         !node
             .methods()
