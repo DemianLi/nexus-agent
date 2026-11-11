@@ -694,7 +694,7 @@ class SandboxSpawner(unittest.TestCase):
         """宿主的 TLS 用 ring（#2570），ring 有 C 要編：musl target 的 C 編譯器指到 musl-gcc，裝在第一個 cargo 步驟之前。"""
         install = self.steps['安裝 musl-gcc']['run']
         self.assertIn('install -y --no-install-recommends musl-tools', install)
-        self.assertIn('CC_$(uname -m)_unknown_linux_musl=musl-gcc', install)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', install)
         names = list(self.steps)
         self.assertLess(names.index('還原 musl 的 .deb 快取'), names.index('安裝 musl-gcc'))
         self.assertLess(names.index('安裝 musl-gcc'), names.index('clippy'))
@@ -722,6 +722,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('exit 1', run)
         self.assertIn('rm -rf "$debs/lock" "$debs/partial"', run, 'root 留下的 lock 與 partial 讓 post 步驟存不了快取')
         self.assertIn('chown -R', run)
+        self.assertEqual(install['env']['USE_FALLBACK'], '${{ inputs.cache }}', '發版（cache: false）不准退回 gcc')
+        self.assertIn('[ "$USE_FALLBACK" = "true" ] && command -v gcc', run)
+        self.assertIn('::warning::', run)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', run)
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""

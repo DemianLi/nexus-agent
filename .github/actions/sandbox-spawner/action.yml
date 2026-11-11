@@ -53,7 +53,9 @@ runs:
       shell: bash
       env:
         CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
+        USE_FALLBACK: ${{ inputs.cache }}
       run: |
+        fallback=
         debs="$HOME/.cache/musl-debs"
         mkdir -p "$debs/partial"
         if [ "$CACHE_HIT" = "true" ] && sudo dpkg -i "$debs"/*.deb && command -v musl-gcc > /dev/null; then
@@ -64,14 +66,25 @@ runs:
             if sudo timeout 120 bash -c 'apt-get update && apt-get -o Dir::Cache::archives="$1" -o Acquire::Retries=2 install -y --no-install-recommends musl-tools' _ "$debs"; then
               break
             fi
-            [ "$attempt" = 3 ] && { echo "::error::apt 三次都沒裝成 musl-tools"; exit 1; }
+            if [ "$attempt" = 3 ]; then
+              # 最後的退路（#2702）：不下載任何東西，用 image 內建的 gcc 編 ring 的 C 與組語。標頭是 glibc 的，不是 musl 的；
+              # ring 的 C 只用 memcpy 這類少數函式，連結由 rustup 附的 musl 與自帶的 crt 完成，產物仍是靜態連結的 musl。
+              # 發版（cache: 'false'）不准走這條：出貨的二進位只用 musl-gcc 編。
+              if [ "$USE_FALLBACK" = "true" ] && command -v gcc > /dev/null; then
+                echo "::warning::apt 三次都沒裝成 musl-tools，退回 image 內建的 gcc 編 ring 的 C（標頭是 glibc 的，不是 musl 的）；這輪不代表 musl-gcc 的編法"
+                fallback=gcc
+                break
+              fi
+              echo "::error::apt 三次都沒裝成 musl-tools"
+              exit 1
+            fi
             sleep 10
           done
         fi
         # apt 以 root 在目錄裡留下 lock 與 partial/：快取的 post 步驟用 runner 身分打包，讀不到就存不起來。只留 .deb，擁有者換回來。
         sudo rm -rf "$debs/lock" "$debs/partial"
         sudo chown -R "$(id -u):$(id -g)" "$debs"
-        echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+        echo "CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
       with:
