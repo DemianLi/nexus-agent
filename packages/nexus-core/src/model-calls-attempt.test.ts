@@ -85,7 +85,8 @@ describe('寫的條件', () => {
     await attemptThatFails(log, 'SERVER', {}, { n: 0 });
     const data = attemptData(log)!;
     expect(data.message.data.content).toBe('');
-    expect(data.message.data).not.toHaveProperty('id', expect.anything());
+    // 供應商沒給 id：native 省略（`langgraph` 下 pump 讀到的是 protocol 補的 `run-<runId>`）。
+    expect(Object.keys(data.message.data)).not.toContain('id');
   });
 
   it('推理去空白後非空：content 是 [推理區塊, 正文區塊?]；正文空就沒有正文區塊', async () => {
@@ -119,6 +120,34 @@ describe('寫的條件', () => {
       return Promise.reject(new Error('x'));
     }).catch(() => undefined);
     expect(typesOf(log)).toEqual(['model/start', 'model/end']);
+  });
+});
+
+describe('寫進呼叫所屬的那一份日誌', () => {
+  it('子代理的呼叫：attempt 寫進子代理自己的日誌，root 的日誌不動', async () => {
+    const root = new SessionLog('root');
+    const child = new SessionLog('child');
+    const lookup: SessionLookup = {
+      kind: 'ok',
+      address: { kind: 'subagent', runId: 'bg-aaaaaaaaaaaa' },
+      log: child,
+    };
+    const calls = { n: 0 };
+    await retryModelCall(
+      { maxRetries: 1, initialDelayMs: 1 },
+      { log: child },
+      () =>
+        hookOf(createModelCallRecorder({ forCall: () => lookup }))(REQUEST, () => {
+          calls.n += 1;
+          if (calls.n > 1) return Promise.resolve('ok');
+          stream(beginPartialReply()!, { id: 'chatcmpl-9', text: '半' });
+          noteStreamFailure({ code: 'SERVER' } as never);
+          return Promise.reject(new Error('上游出事了'));
+        }) as Promise<unknown>,
+    );
+    expect(typesOf(child).slice(0, 3)).toEqual(['model/start', 'assistant/attempt', 'model/end']);
+    expect(attemptData(child)).toMatchObject({ modelCall: 0 });
+    expect(root.events).toEqual([]);
   });
 });
 

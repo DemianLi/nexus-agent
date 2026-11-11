@@ -867,7 +867,7 @@ export interface SessionEventMap {
    *
    * - **沒有 `stream`**（逐字的時間紀錄）。dsh 重播用的是整則訊息；`stream` 只在串流中途斷線、要把
    *   還在跑的那次接回來時用，而我們沒有中途重接（wire 拒收 `since`）。寫入點也看不到逐字片段：v3 的
-   *   逐字片段不走模型層的回呼，只有 pump 看得到。
+   *   逐字片段不走模型層的回呼，只有 pump 看得到（native 下模型的殼把串流事件餵給起訖紀錄器，累積的是半段回覆，不是逐字時間紀錄）。
    * - **`assistant/attempt` 只在串流中途失敗又整次重打時才有**（#520，見下一格）。其餘失敗、沒產出看得見內容的那一次，
    *   dsh 記下它的串流；我們沒有 `stream` 可記，那一次在日誌上是一對中間沒有 `assistant/message` 的 `model/start`／`model/end`。
    * - **沒有 `turn`，也沒有 `usage`**。`turn` 同 `tool/call`（由 `seq` 推）；`step` 的對應物是 `modelCall`（#1021，
@@ -889,10 +889,14 @@ export interface SessionEventMap {
    * 整次重打（{@link ./stream-retry.ts}）之前，畫面上已經有字的那一半。照 dsh 的 `assistant/attempt`
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
-   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**由 pump 寫**——只有它握有那半段文字（同
-   * `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在同一輪裡、失敗那一對
-   * `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）之後。跟下一次嘗試的 `model/start` 誰先誰後不固定：pump
-   * 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。`modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
+   * **不進模型**，推模型歷史的一側不讀；**格式 55 起不標 `ignorable`**（#2416），54 以前標。**誰寫、寫在哪取決於 loop**。
+   * - `langgraph`：pump 寫——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts`
+   *   的通知時寫，只寫 root：落在同一輪裡、失敗那一對 `model/start`／`model/end`（`outcome` 是 `error` 或 `aborted`）**之後**。跟下一次嘗試的
+   *   `model/start` 誰先誰後不固定：pump 在圖外收通知，下一次嘗試在圖裡照跑（等退避時按停止也有這一顆）。
+   * - native：模型呼叫的起訖紀錄器（`model-calls.ts`）寫，root 與子代理各寫進自己的日誌：落在失敗那次呼叫的起訖**之內**，
+   *   `model/start` 之後、失敗收尾的 `model/end` 之前；只在重試政策判定會整次重打時寫。
+   *
+   * `modelCall` 指回失敗那一對；拿不到就沒有，只保證在一輪之內。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。
