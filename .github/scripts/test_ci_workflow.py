@@ -235,6 +235,25 @@ class Budget(unittest.TestCase):
         self.assertLessEqual(full_peak(jobs) + len(native) + 2 * light_peak, JOB_LIMIT)
 
 
+class HostMcpConformance(unittest.TestCase):
+    """宿主的 MCP 符合性測試（#2570）全標 `#[ignore]`：沒帶 `--ignored` 時 cargo 也綠、一支都沒跑，所以那一步要帶 `--ignored`
+    並核對實際跑到的數目不是 0；對手是 node 起的 server，所以要排在 setup 之後。"""
+
+    def test_runs_ignored_tests_and_checks_the_count(self) -> None:
+        for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            with self.subTest(job=name):
+                steps = load(CI)['jobs'][name]['steps']
+                names = [s.get('name') for s in steps]
+                step = steps[names.index('宿主的 MCP 符合性測試')]
+                self.assertEqual(step['shell'], 'bash')
+                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertIn('--test mcp_conformance -- --ignored --nocapture', step['run'])
+                self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
+                uses = [s.get('uses') for s in steps]
+                self.assertLess(uses.index('./.github/actions/setup'), names.index('宿主的 MCP 符合性測試'))
+                self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('宿主的 MCP 符合性測試'))
+
+
 class E2ePerThread(unittest.TestCase):
     """真瀏覽器 e2e 用 per-thread 再跑一輪（#2341）：`NEXUS_E2E_PROCESS_MODEL` 沒設時 e2e 照 single 跑、照樣綠，所以 env 要釘。"""
 
@@ -595,7 +614,7 @@ class SandboxSpawner(unittest.TestCase):
         """發版傳 cache: 'false'：快取那一步要真的看這個 input。"""
         action = load(SPAWNER_ACTION)
         self.assertEqual(action['inputs']['cache']['default'], 'true')
-        cache = next(s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache@'))
+        cache = next(s for s in action['runs']['steps'] if '~/.cargo/registry' in str(s.get('with', {}).get('path', '')))
         self.assertEqual(cache['if'], "inputs.cache == 'true'")
 
     def test_lints_with_the_pinned_toolchain(self) -> None:
@@ -693,11 +712,42 @@ class SandboxSpawner(unittest.TestCase):
     def test_musl_gcc_is_installed_before_anything_compiles(self) -> None:
         """宿主的 TLS 用 ring（#2570），ring 有 C 要編：musl target 的 C 編譯器指到 musl-gcc，裝在第一個 cargo 步驟之前。"""
         install = self.steps['安裝 musl-gcc']['run']
-        self.assertIn('apt-get install -y --no-install-recommends musl-tools', install)
-        self.assertIn('CC_$(uname -m)_unknown_linux_musl=musl-gcc', install)
+        self.assertIn('install -y --no-install-recommends musl-tools', install)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', install)
         names = list(self.steps)
+        self.assertLess(names.index('還原 musl 的 .deb 快取'), names.index('安裝 musl-gcc'))
         self.assertLess(names.index('安裝 musl-gcc'), names.index('clippy'))
         self.assertLess(names.index('安裝 musl-gcc'), names.index('編譯'))
+
+    def test_musl_gcc_install_survives_a_package_mirror_outage(self) -> None:
+        """套件站一時連不到不該整輪紅（#2702）：.deb 存快取、鍵含架構與 runner image 版本；命中就離線裝，裝不起來或沒命中退回 apt，三次、每次 120 秒封頂，三次都失敗才紅。"""
+        cache = self.steps['還原 musl 的 .deb 快取']
+        self.assertTrue(cache['uses'].startswith('actions/cache@'))
+        for part in ('runner.os', 'runner.arch', 'steps.image.outputs.version'):
+            self.assertIn(part, cache['with']['key'])
+        self.assertNotIn('env.ImageVersion', cache['with']['key'], 'env context 讀不到 runner 行程的環境變數')
+        image = self.steps['讀 runner image 版本']
+        self.assertIn('ImageVersion', image['run'])
+        self.assertIn('$GITHUB_OUTPUT', image['run'])
+        for step in (image, cache):
+            self.assertEqual(step['if'], "inputs.cache == 'true'", '發版傳 cache: false，.deb 快取不還原、不存')
+        install = self.steps['安裝 musl-gcc']
+        self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
+        run = install['run']
+        self.assertIn('dpkg -i', run)
+        self.assertIn('for attempt in 1 2 3', run)
+        self.assertIn('timeout 120', run)
+        self.assertIn('Dir::Cache::archives', run)
+        self.assertIn('exit 1', run)
+        self.assertIn('rm -rf "$debs/lock" "$debs/partial"', run, 'root 留下的 lock 與 partial 讓 post 步驟存不了快取')
+        self.assertIn('chown -R', run)
+        self.assertIn('compgen -G "$debs/*.deb"', run, '沒有 .deb 就刪目錄，不存空快取')
+        self.assertLess(run.index('compgen -G'), run.index('chown -R'))
+        self.assertIn('rm -rf "$debs"', run)
+        self.assertEqual(install['env']['USE_FALLBACK'], '${{ inputs.cache }}', '發版（cache: false）不准退回 gcc')
+        self.assertIn('[ "$USE_FALLBACK" = "true" ] && command -v gcc', run)
+        self.assertIn('::warning::', run)
+        self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', run)
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""

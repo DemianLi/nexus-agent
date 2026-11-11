@@ -30,6 +30,13 @@ export interface RecordedRequest {
   readonly authorization: string | undefined;
   /** `mcp-protocol-version` 標頭：握手之後協商到的版本（舊協議）或每個請求自帶的版本（新協議）。 */
   readonly protocolVersion: string | undefined;
+  /** body 裡的 JSON-RPC 訊息原樣（批次請求有好幾則，沒有 body 的是空陣列）：封套 `_meta` 看這裡。 */
+  readonly messages: readonly unknown[];
+  /** `mcp-method` 標頭（新協議的請求才有）。 */
+  readonly mcpMethod: string | undefined;
+  /** `mcp-name` 標頭（新協議的 `tools/call`、`resources/read` 等才有）。 */
+  readonly mcpName: string | undefined;
+  readonly accept: string | undefined;
 }
 
 /** 一台跑著的 HTTP MCP server。 */
@@ -61,7 +68,7 @@ export function startModernHttp(): Promise<HttpFixture> {
     return server;
   });
   const handle = toNodeHandler(handler);
-  return start(
+  return startHttpFixture(
     async (request, response, body) => {
       await handle(request as NodeIncomingMessageLike, response, body);
     },
@@ -71,7 +78,7 @@ export function startModernHttp(): Promise<HttpFixture> {
 
 /** 起一台舊協議（單包 SDK 1.x）的 server，無狀態。 */
 export function startLegacyHttp(): Promise<HttpFixture> {
-  return start(
+  return startHttpFixture(
     async (request, response, body) => {
       const server = new LegacyMcpServer({ name: 'nexus-legacy-http', version: '0.0.0' });
       registerFixtureTools(server);
@@ -87,13 +94,27 @@ export function startLegacyHttp(): Promise<HttpFixture> {
   );
 }
 
-type Dispatch = (
+/** 一個請求怎麼回：`body` 是已經讀完、解成 JSON 的請求內容。 */
+export type Dispatch = (
   request: IncomingMessage,
   response: ServerResponse,
   body: unknown,
 ) => Promise<void>;
 
-async function start(dispatch: Dispatch, closeHandler: () => Promise<void>): Promise<HttpFixture> {
+/** {@link startHttpFixture} 的觀察點（符合性測試的 server 靠它把記錄交出去）。 */
+export interface FixtureHooks {
+  /** 每個請求進 `dispatch` 之前。 */
+  readonly onRequest?: (request: RecordedRequest) => void;
+  /** 每個請求的回應連線關掉時；`finished` 為假表示回應還沒寫完就被關了（client 中止了那一則請求的串流）。 */
+  readonly onClose?: (request: RecordedRequest, finished: boolean) => void;
+}
+
+/** 起一台記錄請求的 HTTP server，怎麼回由 `dispatch` 決定。 */
+export async function startHttpFixture(
+  dispatch: Dispatch,
+  closeHandler: () => Promise<void>,
+  hooks: FixtureHooks = {},
+): Promise<HttpFixture> {
   const requests: RecordedRequest[] = [];
   const sockets = new Set<Socket>();
   let active = 0;
@@ -112,21 +133,31 @@ async function start(dispatch: Dispatch, closeHandler: () => Promise<void>): Pro
 
   async function serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
     active += 1;
+    const seen: { request?: RecordedRequest } = {};
     response.on('close', () => {
       active -= 1;
+      if (seen.request !== undefined) hooks.onClose?.(seen.request, response.writableFinished);
     });
     const body = await readJson(request);
-    const rpcMethods = (Array.isArray(body) ? body : [body]).flatMap((message: unknown) =>
+    const messages: unknown[] = body === undefined ? [] : Array.isArray(body) ? body : [body];
+    const rpcMethods = messages.flatMap((message) =>
       typeof message === 'object' && message !== null && 'method' in message
         ? [String((message as { method: unknown }).method)]
         : [],
     );
-    requests.push({
+    const current: RecordedRequest = {
       httpMethod: request.method ?? '',
       rpcMethods,
       authorization: request.headers.authorization,
       protocolVersion: headerValue(request.headers['mcp-protocol-version']),
-    });
+      messages,
+      mcpMethod: headerValue(request.headers['mcp-method']),
+      mcpName: headerValue(request.headers['mcp-name']),
+      accept: headerValue(request.headers.accept),
+    };
+    seen.request = current;
+    requests.push(current);
+    hooks.onRequest?.(current);
     if (failing !== undefined && rpcMethods.includes(failing)) {
       response.writeHead(500, { 'content-type': 'text/plain' });
       response.end('injected failure');
