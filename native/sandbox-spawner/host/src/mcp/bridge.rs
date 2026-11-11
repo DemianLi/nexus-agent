@@ -319,7 +319,7 @@ async fn request(
             tokio::select! {
                 response = handle.await_response() => response,
                 _ = cancel => {
-                    // 取消：告訴 server 不用做了，不等它回。不分協定一律送（TS 的 SDK 只在舊協定送，見 docs/host-mcp.md〈跟 TS 的差距〉）。
+                    // 取消：告訴 server 不用做了，不等它回。不分協定都呼叫 `send_notification`；新協定下線上沒出現這則通知（見 docs/host-mcp.md〈跟 TS 的差距〉）。
                     let notice = CancelledNotification::new(CancelledNotificationParam::new(
                         Some(request_id),
                         Some("cancelled".into()),

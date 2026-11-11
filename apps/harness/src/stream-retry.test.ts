@@ -178,6 +178,8 @@ interface RunOptions {
   readonly during?: (pump: ThreadPump) => Promise<void>;
   /** 這幾種事件寫進 root 日誌時拋這個錯（造日誌那一關拒收）。 */
   readonly reject?: { readonly types: readonly string[]; readonly error: Error };
+  /** 明給 loop（`vitest.native.config.ts` 下沒給的會被當成 native）；`assistant/attempt` 寫在 pump 的那幾格要 `langgraph`。 */
+  readonly loop?: 'langgraph';
   /** pump 讀完第一則 `message-start` 之後停住，等 root 日誌出現 `assistant/message`（日誌由圖寫，不等 pump 讀）才往下讀。 */
   readonly holdAfterFirstStart?: boolean;
 }
@@ -260,6 +262,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
     ),
     checkpointer: new MemorySaver(),
     plugins: [...(options.plugins ?? [])],
+    ...(options.loop !== undefined && { agentLoop: options.loop }),
     ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
   });
   const warnings: string[] = [];
@@ -365,6 +368,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
   it('作廢的那半段記不進去：這一輪照常重打、照常成功，日誌上沒有那顆 attempt，warn 帶事件種類與原錯', async () => {
     const boom = new Error('磁碟滿了');
     const run = await runTurn(['mid503'], {
+      loop: 'langgraph',
       streamRetry: BUDGET,
       reject: { types: ['assistant/attempt'], error: boom },
     });
@@ -448,6 +452,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
 
   it('失敗當下就擦：作廢記號與 llm-retry 排在失敗那次的最後一個片段之後、第二次的 message-start 之前；退避期間畫面是空的、有倒數', async () => {
     const run = await runTurn(['mid503', 'ok'], {
+      loop: 'langgraph',
       streamRetry: { maxRetries: 2, initialDelayMs: 200, jitterRatio: 0 },
     });
     expect(run.thrown).toBeUndefined();

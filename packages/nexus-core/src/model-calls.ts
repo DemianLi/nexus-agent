@@ -27,7 +27,7 @@
  *
  * 這一格是 dsh `step` 的對應物——**同一個詞、不同的邊界**：我們的「一次呼叫」只包模型那一段（見上），工具在它外面，
  * 所以工具歸它靠 `callId` 而不是時刻。上面登記的三處偏離逐項重核過：`model/start` 不是 `step/start`（載體是
- * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫在串流中途失敗、又整次重打時有 `assistant/attempt`（#520，由 pump 寫，見 `session-log.ts`）；其餘拋錯的仍然沒有（沒變）。
+ * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫在串流中途失敗、又整次重打時有 `assistant/attempt`（#520，`langgraph` 下由 pump 寫，native 下由本檔的起訖紀錄器寫，見 `session-log.ts`）；其餘拋錯的仍然沒有（沒變）。
  *
  * ## 鉤子與位置都是選的
  *
@@ -98,6 +98,12 @@ import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, openModelCall, withModelCall } from './model-call-scope.js';
+import type { PartialReply } from './model-call-scope.js';
+import {
+  abandonCurrentRetry,
+  currentAttemptWillRetry,
+  noteAttemptRecorded,
+} from './stream-retry.js';
 import { routeOfModel } from './model-route.js';
 import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
@@ -133,6 +139,46 @@ function recordReply(log: SessionLog, response: unknown, modelCall: number): voi
   log.append('assistant/message', withModelCall({ message: toLoggedMessage(response) }, modelCall));
   // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
   noteModelCallReplied(log, modelCall);
+}
+
+/**
+ * 這次失敗的呼叫講到一半的回覆，記成 `assistant/attempt`（native）：寫在這次呼叫的起訖**之內**，失敗收尾的 `model/end` 之前。
+ * 條件與形狀照 pump 在 `langgraph` 下的 `#discardOpenReply`：講到一半（`message-start` 來過、`message-finish` 還沒）就記，
+ * 正文是空字串也記；推理去空白後為空，content 是字串，否則 `[推理區塊, 正文區塊?]`。
+ *
+ * 只在重試政策判定會重打時記（`currentAttemptWillRetry`）。其餘失敗不記：被使用者停止的，root 的半段由 pump 在輪尾記成
+ * `assistant/message{interrupted}`；其餘不留。
+ *
+ * @returns 記不進去時交回 `{ error }`（包一層：拋出來的錯本身可能就是 `undefined`）；沒寫或寫成功是 `undefined`。
+ */
+function recordAbandonedReply(
+  log: SessionLog,
+  partial: PartialReply | undefined,
+  modelCall: number,
+): { readonly error: unknown } | undefined {
+  if (partial === undefined || !currentAttemptWillRetry()) return undefined;
+  const abandoned = new AIMessage({
+    ...(partial.id === undefined ? {} : { id: partial.id }),
+    content:
+      partial.reasoning.trim() === ''
+        ? partial.text
+        : [
+            { type: 'reasoning', reasoning: partial.reasoning },
+            ...(partial.text === '' ? [] : [{ type: 'text' as const, text: partial.text }]),
+          ],
+  });
+  try {
+    log.append(
+      'assistant/attempt',
+      withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
+    );
+    noteAttemptRecorded();
+    return undefined;
+  } catch (error) {
+    // 寫不進去：這次失敗不再重打（外層的重試迴圈看這個旗標），呼叫以 AggregateError 失敗。
+    abandonCurrentRetry();
+    return { error };
+  }
 }
 
 /**
@@ -185,7 +231,19 @@ export function createModelCallRecorder(sessions: {
             cause: error,
           });
         }
+        // 記不進去 `model/end` 照樣寫，最後兩個錯一起拋。
+        const attemptFailure = recordAbandonedReply(log, call.partialReply(), failed);
         appendEndAfterFailure(log, failed, modelCallAborted(request) ? 'aborted' : 'error', error);
+        if (attemptFailure !== undefined) {
+          const attemptError = attemptFailure.error;
+          throw new AggregateError(
+            [error, attemptError],
+            '模型呼叫失敗，assistant/attempt 也記不進去',
+            {
+              cause: error,
+            },
+          );
+        }
         throw error;
       }
       // 記不進去從這裡拋：回覆不進 graph state（#1702）。

@@ -71,7 +71,7 @@ import { getEnvironmentVariable } from '@langchain/core/utils/env';
 import { convertToOpenAITool, isLangChainTool } from '@langchain/core/utils/function_calling';
 import { APIConnectionTimeoutError, APIUserAbortError, OpenAI } from 'openai';
 import type { ClientOptions } from 'openai';
-import { LLM_STREAM_CONFIG_KEY } from '@nexus/core';
+import { beginPartialReply, LLM_STREAM_CONFIG_KEY } from '@nexus/core';
 import type { ModelStreamAround, ModelStreamChunk } from '@nexus/core';
 
 /** {@link BaseChatOpenAI} 的建構欄位。沒列在這裡的 `ChatOpenAI` 欄位不讀（例如 `streaming`）。 */
@@ -393,7 +393,7 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   ): Promise<ChatResult> {
     const options = this._combineCallOptions(rawOptions);
     options.signal?.throwIfAborted();
-    if (options[LLM_STREAM_CONFIG_KEY] !== undefined) return this.#aggregate(messages, options);
+    if (isNativeStream(options)) return this.#aggregate(messages, options);
     const usageMetadata: Record<string, unknown> = {};
     const params = this.invocationParams(options);
     const messagesMapped = toCompletionsMessages(messages, this.model);
@@ -483,15 +483,29 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
   }
 
   /** content-block 那一套串流事件（core 在有偏好 stream-event 的 handler 時把 `invoke` 轉到這裡；v3 的 `streamEvents()` 也走這裡）。 */
-  override async *_streamChatModelEvents(
+  override _streamChatModelEvents(
     messages: BaseMessage[],
     rawOptions: this['ParsedCallOptions'],
     _runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatModelStreamEvent> {
-    yield* this.#events(messages, this._combineCallOptions(rawOptions));
+    return this.#events(messages, this._combineCallOptions(rawOptions));
   }
 
-  async *#events(
+  /**
+   * 兩條路（`_generate` 的聚合、core 的 stream-event handler）共用的串流事件。**開串流這一刻就抓住這次呼叫的格子**，
+   * 之後的事件可能在別的脈絡被拉；餵進去的事件，失敗時起訖紀錄器靠它記作廢的半段。所以這裡不是 generator 函式本身，
+   * generator 函式是裡面那一層：呼叫這個方法的當下就跑 `beginPartialReply()`。
+   *
+   * **只在 native 餵**：native 的 `model-node.ts` 放了 `llm/stream` 的環繞函式，`langgraph` 沒有。`langgraph` 下作廢的半段由 pump 在失敗收尾之後寫，
+   * 寫不進去吞錯（`thread-pump.ts` 的 `#discardOpenReply`）；這裡也餵的話，`langgraph` 的位置與失敗行為都會變。
+   */
+  #events(messages: BaseMessage[], options: CallOptions): AsyncGenerator<ChatModelStreamEvent> {
+    const feed = isNativeStream(options) ? beginPartialReply() : undefined;
+    return this.#feeding(feed, messages, options);
+  }
+
+  async *#feeding(
+    feed: ((event: unknown) => void) | undefined,
     messages: BaseMessage[],
     options: CallOptions,
   ): AsyncGenerator<ChatModelStreamEvent> {
@@ -499,10 +513,13 @@ export class BaseChatOpenAI extends BaseChatModel<BaseChatOpenAICallOptions, AIM
       messages,
       options,
     )) as AsyncIterable<OpenAICompletionsStreamChunk>;
-    yield* convertOpenAICompletionsStream(abortable(streamIterable, options.signal), {
-      streamUsage: this.streamUsage,
-      provider: 'openai',
-    });
+    for await (const event of convertOpenAICompletionsStream(
+      abortable(streamIterable, options.signal),
+      { streamUsage: this.streamUsage, provider: 'openai' },
+    )) {
+      feed?.(event);
+      yield event;
+    }
   }
 
   /**
@@ -771,6 +788,14 @@ export function takeAround(
   if (around === undefined) return options;
   const { [LLM_STREAM_CONFIG_KEY]: _taken, ...configurable } = options!.configurable!;
   return { ...options, configurable, [LLM_STREAM_CONFIG_KEY]: around };
+}
+
+/**
+ * 這次呼叫是 native 的：`model-node.ts` 放了 `llm/stream` 的環繞函式（`langgraph` 沒有）。「`_generate` 改打串流」與「餵半段回覆給起訖紀錄器」
+ * 都看這一個條件，所以兩件事永遠一起發生。
+ */
+function isNativeStream(options: CallOptions): boolean {
+  return options[LLM_STREAM_CONFIG_KEY] !== undefined;
 }
 
 /**

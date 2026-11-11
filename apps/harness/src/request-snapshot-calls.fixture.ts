@@ -22,8 +22,13 @@ export interface RequestSnapshotCall {
 /** 一顆作廢的嘗試歸哪次呼叫。 */
 export interface AttemptCall {
   readonly modelCall: number | null;
-  /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前。 */
+  /** 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之前（`langgraph`：pump 寫在失敗收尾之後）。 */
   readonly afterFailedEnd: boolean;
+  /**
+   * 那次呼叫以 `error` 或 `aborted` 收尾的 `model/end` 在這顆之後（native：起訖紀錄器寫在起訖之內）。兩格都是 `false`：
+   * 那次呼叫沒有失敗的 `model/end`（正常收尾、沒收尾、或 attempt 不帶 `modelCall`），檢查器對前兩種報 `attempt-before-failed-end`。
+   */
+  readonly beforeFailedEnd: boolean;
 }
 
 function modelCallOf(event: SessionEvent): number | null {
@@ -53,16 +58,23 @@ export function requestSnapshotCalls(events: readonly SessionEvent[]): RequestSn
   });
 }
 
-/** 日誌上每顆 `assistant/attempt` 依序歸哪次呼叫、失敗收尾在不在它前面。 */
+/** 日誌上每顆 `assistant/attempt` 依序歸哪次呼叫、失敗收尾在它前面還是後面。 */
 export function attemptCalls(events: readonly SessionEvent[]): AttemptCall[] {
   return events.flatMap((event, index): AttemptCall[] => {
     if (event.type !== 'assistant/attempt') return [];
     const modelCall = modelCallOf(event);
-    const afterFailedEnd = events.slice(0, index).some((earlier) => {
-      if (earlier.type !== 'model/end' || modelCallOf(earlier) !== modelCall) return false;
-      const outcome = (earlier.data as { outcome?: unknown }).outcome;
-      return outcome === 'error' || outcome === 'aborted';
-    });
-    return [{ modelCall, afterFailedEnd }];
+    const failedEndIn = (range: readonly SessionEvent[]): boolean =>
+      range.some((other) => {
+        if (other.type !== 'model/end' || modelCallOf(other) !== modelCall) return false;
+        const outcome = (other.data as { outcome?: unknown }).outcome;
+        return outcome === 'error' || outcome === 'aborted';
+      });
+    return [
+      {
+        modelCall,
+        afterFailedEnd: failedEndIn(events.slice(0, index)),
+        beforeFailedEnd: failedEndIn(events.slice(index + 1)),
+      },
+    ];
   });
 }

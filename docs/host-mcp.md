@@ -31,7 +31,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - 拼回時核對：塊的序號從 0 連續（宿主框的 `seq`），塊數與 UTF-8 位元組數對上 `ready`／收尾的值。缺一塊或順序錯了都拼不回。
 - 一份文字最多 16 MiB，跟 server 一則回應的上限相同（〈一代連線〉）；超過的以服務的錯收尾，不送任何塊。
 - 工具定義與結果裡物件的鍵照 server 送的順序過橋：`serde_json` 開了 `preserve_order`。池的鍵不受影響，`json::encode` 自己照碼位排。
-- 呼叫端取消或斷線時，還在跑的 `call` 送 `notifications/cancelled` 給 server（理由 `cancelled`），不等它回。
+- 呼叫端取消或斷線時，還在跑的 `call` 對 server 送 `notifications/cancelled`（理由 `cancelled`），不等它回；新協定下通知沒上線，見〈跟 TS 的差距〉。
 - 連線池一個插件實體一座：宿主不在執行中改插件設定，所以等於整個宿主一座。宿主結束時不卸載插件，連線不送 `DELETE`，隨行程結束。
 - 橋的日誌（監督者的進度與放棄）寫 stderr，前綴 `nexus-host: mcp`。
 
@@ -134,7 +134,9 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - rmcp 把回應解成自己的型別再序列化，認得的形狀會丟掉規格外的欄位：`tools/call` 的結果丟掉內容區塊多出的欄位與不認得的頂層欄位。
   結果裡有不認得的內容區塊型別時，整個結果認不得、原樣交回（`host/tests/mcp.rs` 的 `bridge::規格外的欄位_認得的形狀丟掉_認不得的原樣`）。
   TS 的 SDK 原樣留著。這是 #1827 的 D290 接受的失真。
-- 取消：橋不分協定一律送 `notifications/cancelled`。TS 的 SDK 在新協定上只中止那一則的 POST 串流、不送通知（`@modelcontextprotocol/client` 2.3.1
+- 取消：橋不分協定都呼叫 `send_notification` 送 `notifications/cancelled`。實測（`host/tests/mcp_conformance.rs`，對官方 server 2.3.1）：舊協定下 server
+  收到通知、那則 POST 也被中止；新協定下 server 只看到那則 POST 被中止、沒收到通知。新協定下通知為什麼沒上線（rmcp 丟掉，還是轉成中止），rmcp
+  的原始碼本機沒有，看不到。TS 的 SDK 在新協定上只中止那一則的 POST 串流、不送通知（`@modelcontextprotocol/client` 2.3.1
   `dist/index.mjs:5363-5366`），舊協定才送。
 - 一則回應的上限 16 MiB：TS 的 HTTP 兩條路都不設上限。
 - SSE 事件超過上限時，錯誤訊息只說這一則的串流斷了，不說是太大（見〈橋〉）。只讓這一則失敗這一點跟 dsh 相同：dsh 的 `lost` 只在 SDK 的 `onclose`

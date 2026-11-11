@@ -33,11 +33,63 @@ runs:
           --component clippy --component rustfmt --target "$(uname -m)-unknown-linux-musl"
         echo "SPAWNER_TARGET=$(uname -m)-unknown-linux-musl" >> "$GITHUB_ENV"
     # 宿主的 TLS 用 ring（#2570），ring 有 C 與組語要編；musl target 的 C 編譯器用 musl-gcc。
-    - name: 安裝 musl-gcc
+    # 套件站一時連不到不該讓整輪紅（#2702）：.deb 存快取，命中就離線裝；沒命中，或裝壞了，退回 apt，最多三次，
+    # 每次 120 秒封頂、次間睡 10 秒，整步最壞 3×120+2×10＝380 秒。鍵含架構與 runner image 版本：image 換了，依賴版本可能變，不拿舊的 .deb 裝。
+    # image 版本是 runner 行程的環境變數，`env` context 讀不到，所以先用 shell 寫進 output。發版傳 `cache: 'false'`，.deb 快取同樣不還原、不存，只走 apt。
+    - name: 讀 runner image 版本
+      id: image
+      if: inputs.cache == 'true'
       shell: bash
       run: |
-        sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-        echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+        echo "version=${ImageVersion:-$(. /etc/os-release && echo "$VERSION_ID")}" >> "$GITHUB_OUTPUT"
+    - name: 還原 musl 的 .deb 快取
+      id: musl-debs
+      if: inputs.cache == 'true'
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/musl-debs
+        key: musl-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}
+    - name: 安裝 musl-gcc
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
+        USE_FALLBACK: ${{ inputs.cache }}
+      run: |
+        fallback=
+        debs="$HOME/.cache/musl-debs"
+        mkdir -p "$debs/partial"
+        if [ "$CACHE_HIT" = "true" ] && sudo dpkg -i "$debs"/*.deb && command -v musl-gcc > /dev/null; then
+          echo "從快取裝好 musl-gcc"
+        else
+          [ "$CACHE_HIT" = "true" ] && echo "::warning::快取的 .deb 裝不起來，退回 apt"
+          for attempt in 1 2 3; do
+            if sudo timeout 120 bash -c 'apt-get update && apt-get -o Dir::Cache::archives="$1" -o Acquire::Retries=2 install -y --no-install-recommends musl-tools' _ "$debs"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              # 最後的退路（#2702）：不下載任何東西，用 image 內建的 gcc 編 ring 的 C 與組語。標頭是 glibc 的，不是 musl 的；
+              # ring 的 C 只用 memcpy 這類少數函式，連結由 rustup 附的 musl 與自帶的 crt 完成，產物仍是靜態連結的 musl。
+              # 發版（cache: 'false'）不准走這條：出貨的二進位只用 musl-gcc 編。
+              if [ "$USE_FALLBACK" = "true" ] && command -v gcc > /dev/null; then
+                echo "::warning::apt 三次都沒裝成 musl-tools，退回 image 內建的 gcc 編 ring 的 C（標頭是 glibc 的，不是 musl 的）；這輪不代表 musl-gcc 的編法"
+                fallback=gcc
+                break
+              fi
+              echo "::error::apt 三次都沒裝成 musl-tools"
+              exit 1
+            fi
+            sleep 10
+          done
+        fi
+        # apt 以 root 在目錄裡留下 lock 與 partial/：快取的 post 步驟用 runner 身分打包，讀不到就存不起來。只留 .deb，擁有者換回來。
+        # 沒有 .deb（走了 gcc 退路）就整個目錄刪掉：空目錄也會被存成這把鍵的快取，之後命中空快取、鍵又不會再被覆寫，同一個 image 版本就永遠沒有保護。
+        sudo rm -rf "$debs/lock" "$debs/partial"
+        if compgen -G "$debs/*.deb" > /dev/null; then
+          sudo chown -R "$(id -u):$(id -g)" "$debs"
+        else
+          sudo rm -rf "$debs"
+        fi
+        echo "CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
       with:

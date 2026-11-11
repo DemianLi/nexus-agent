@@ -3504,8 +3504,9 @@ export class ThreadPump {
    * 在**失敗當下**用 `config.writer` 送來一顆 {@link StreamRetrySignal}。它和字片段在同一條輸出佇列上，所以讀到它的時候失敗那次的
    * 片段一個都不會再來（順序的依據與常駐測試見該檔檔頭與 `stream-retry.test.ts`）。
    *
-   * - `scheduled`：①作廢 root 還沒收尾的回覆（`assistant/attempt` ＋ `message-discard`，{@link ThreadPump.#discardOpenReply}），
-   *   ②送 `llm-retry`（畫面據此畫「N 秒後重試」）。**兩者在同一刻**，同 dsh 在失敗當下記 `assistant/attempt`。
+   * - `scheduled`：①作廢 root 還沒收尾的回覆（`message-discard`；`assistant/attempt` 在 `langgraph` 下也在這一刻由 pump 記，通知帶 `attemptRecorded` 時
+   *   起訖紀錄器已記過，{@link ThreadPump.#discardOpenReply}），②送 `llm-retry`（畫面據此畫「N 秒後重試」）。`langgraph` 下兩者在同一刻，
+   *   同 dsh 在失敗當下記 `assistant/attempt`。
    * - `started`：退避等完、下一次嘗試要開始，送 `llm-retry-started`。取消沒有專屬 frame：退避中按停止，這一輪直接收尾。
    *
    * **只管 root。** 圖裡 `custom` 的 namespace 是空的才是 root；子代理在更深的 namespace，它們的重打（共用同一個 slot）不擦已經畫出去的字，
@@ -3523,7 +3524,7 @@ export class ThreadPump {
       });
       return;
     }
-    this.#discardOpenReply(current, signal.modelCall);
+    this.#discardOpenReply(current, signal.modelCall, signal.attemptRecorded === true);
     this.#presentCustom({
       name: LLM_RETRY,
       payload: {
@@ -3537,47 +3538,55 @@ export class ThreadPump {
   }
 
   /**
-   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`），線上送
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型、不標 `ignorable`；起訖紀錄器已記的除外），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
    *
    * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
+   * @param attemptRecorded - 通知帶 `attemptRecorded`：起訖紀錄器已經記了，日誌這一顆不寫；線上 `message-discard` 與追蹤照做。
    */
-  #discardOpenReply(current: CurrentRun, modelCall: number | undefined): void {
+  #discardOpenReply(
+    current: CurrentRun,
+    modelCall: number | undefined,
+    attemptRecorded: boolean,
+  ): void {
     const previous = current.reply;
     if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
-    const reasoning = current.reasoning;
-    const text = current.partial;
-    const liveId = (previous.start as { id?: unknown }).id;
-    const abandoned = new AIMessage({
-      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
-      content:
-        reasoning.trim() === ''
-          ? text
-          : [
-              { type: 'reasoning', reasoning },
-              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
-            ],
-    });
-    try {
-      this.#sessions.root.append(
-        'assistant/attempt',
-        withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
-      );
-    } catch (error: unknown) {
-      // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
-      // `settle`，被拒就 abandon 再重拋（`packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
-      // `agent.ts:489-500`，重打前作廢那一支在 `:506-510`，`687f282e`）。
-      // 我們這一格在 pump、在圖外，從這裡拋停不住圖：`@langchain/langgraph@1.4.19` 的 `streamEvents` v3 由
-      // `createGraphRunStream` 在背景抽圖（`dist/stream/run-stream.js:428` 的 `pump(source, mux)`），上面那個 `for await` 只是
-      // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
-      // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
-      // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
-      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。它不進模型歷史，吞掉不會讓 state 與日誌
-      // 分岔，只是少了作廢那半段的紀錄。
-      // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
-      this.#warn?.(
-        `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,
-      );
+    // 通知帶 `attemptRecorded`：模型呼叫的起訖紀錄器已在失敗當下把這半段記成 `assistant/attempt`，這裡只管線上與追蹤。
+    if (!attemptRecorded) {
+      const reasoning = current.reasoning;
+      const text = current.partial;
+      const liveId = (previous.start as { id?: unknown }).id;
+      const abandoned = new AIMessage({
+        ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
+        content:
+          reasoning.trim() === ''
+            ? text
+            : [
+                { type: 'reasoning', reasoning },
+                ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ],
+      });
+      try {
+        this.#sessions.root.append(
+          'assistant/attempt',
+          withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
+        );
+      } catch (error: unknown) {
+        // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
+        // `settle`，被拒就 abandon 再重拋（`packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
+        // `agent.ts:489-500`，重打前作廢那一支在 `:506-510`，`687f282e`）。
+        // 我們這一格在 pump、在圖外，從這裡拋停不住圖：`@langchain/langgraph@1.4.19` 的 `streamEvents` v3 由
+        // `createGraphRunStream` 在背景抽圖（`dist/stream/run-stream.js:428` 的 `pump(source, mux)`），上面那個 `for await` 只是
+        // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
+        // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
+        // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
+        // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。它不進模型歷史，吞掉不會讓 state 與日誌
+        // 分岔，只是少了作廢那半段的紀錄。
+        // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
+        this.#warn?.(
+          `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,
+        );
+      }
     }
     this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
     current.reply = undefined;
