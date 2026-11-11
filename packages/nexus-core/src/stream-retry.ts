@@ -133,6 +133,11 @@ export type StreamRetrySignal =
       readonly code: string;
       /** 失敗的那次呼叫的 `model/start` 的 `seq`；日誌沒接上就沒有。 */
       readonly modelCall?: number;
+      /**
+       * 作廢的那半段已經由模型呼叫的起訖紀錄器在失敗當下記成 `assistant/attempt`（native，K11 PR-C）：pump 不再記。
+       * 沒有這格（`langgraph`）就由 pump 記。
+       */
+      readonly attemptRecorded?: true;
     }
   | {
       readonly kind: typeof STREAM_RETRY_SIGNAL;
@@ -168,6 +173,7 @@ export function streamRetrySignalOf(payload: unknown): StreamRetrySignal | undef
     delayMs,
     code,
     ...call,
+    ...(value['attemptRecorded'] === true && { attemptRecorded: true as const }),
   };
 }
 
@@ -228,6 +234,13 @@ export function streamRetryDelayMs(options: StreamRetryOptions, attempt: number)
 
 interface AttemptScope {
   failure: StreamFailure | undefined;
+  /** 第幾次嘗試，從 0 起算。 */
+  readonly attempt: number;
+  readonly options: StreamRetryOptions;
+  /** 起訖紀錄器在失敗分支把作廢的半段記成 `assistant/attempt` 了。 */
+  attemptRecorded: boolean;
+  /** 起訖紀錄器在失敗分支寫不進東西：這次失敗不再重打。 */
+  abandoned: boolean;
 }
 
 const scopes = new AsyncLocalStorage<AttemptScope>();
@@ -238,12 +251,22 @@ const scopes = new AsyncLocalStorage<AttemptScope>();
  * @param call - 這一次嘗試。
  * @returns 嘗試的結果，加上期間回報過的失敗（沒有就是 `undefined`）。
  */
-async function runInAttempt<T>(call: () => Promise<T>): Promise<{
+async function runInAttempt<T>(
+  options: StreamRetryOptions,
+  attempt: number,
+  call: () => Promise<T>,
+): Promise<{
   readonly scope: AttemptScope;
   readonly outcome: PromiseSettledResult<T>;
   readonly captured: CapturedModelCall;
 }> {
-  const scope: AttemptScope = { failure: undefined };
+  const scope: AttemptScope = {
+    failure: undefined,
+    attempt,
+    options,
+    attemptRecorded: false,
+    abandoned: false,
+  };
   const { outcome, call: captured } = await scopes.run(scope, () => captureModelCallSettled(call));
   return { scope, outcome, captured };
 }
@@ -270,6 +293,43 @@ export function streamFailureReporter(): (failure: StreamFailure) => void {
 /** 即時回報（等於 `streamFailureReporter()(failure)`）。 */
 export function noteStreamFailure(failure: StreamFailure): void {
   streamFailureReporter()(failure);
+}
+
+/**
+ * 這次嘗試失敗之後會不會整次重打。**碼決定重不重打**（#1437）：adapter 只回報「是哪一種失敗」，不替政策下判斷；
+ * 供應商要求的等待不超過上限才照它等，超過就放棄（照 dsh 的 normal 模式，原錯誤往外拋）。
+ * 重試迴圈與起訖紀錄器（失敗分支要決定記不記 `assistant/attempt`）問的是同一個，所以不會一邊說重打、一邊說不重打。
+ */
+function attemptWillRetry(scope: AttemptScope): boolean {
+  const { failure, options, attempt } = scope;
+  if (scope.abandoned || failure === undefined) return false;
+  const codes = options.retryableCodes ?? DEFAULT_STREAM_RETRYABLE_CODES;
+  if (!codes.includes(failure.code) || attempt >= options.maxRetries) return false;
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_STREAM_RETRY_MAX_DELAY_MS;
+  const asked = failure.retryAfterMs;
+  const hasAsked = asked !== undefined && Number.isFinite(asked) && asked > 0;
+  return !(hasAsked && asked > maxDelayMs);
+}
+
+/**
+ * 此刻這次嘗試失敗之後會不會被整次重打；不在重試範圍裡（摘要器、沒開重試的組裝）是 `false`。
+ * 給模型呼叫的起訖紀錄器在失敗分支用，決定要不要把講到一半的回覆記成 `assistant/attempt`（K11 PR-C）。
+ */
+export function currentAttemptWillRetry(): boolean {
+  const scope = scopes.getStore();
+  return scope !== undefined && attemptWillRetry(scope);
+}
+
+/** 起訖紀錄器已經把作廢的半段記成 `assistant/attempt`：重試通知帶上這件事，pump 就不再記。 */
+export function noteAttemptRecorded(): void {
+  const scope = scopes.getStore();
+  if (scope !== undefined) scope.attemptRecorded = true;
+}
+
+/** 起訖紀錄器在失敗分支寫不進東西：這次失敗不再重打，原錯與寫入的錯一起往外拋。 */
+export function abandonCurrentRetry(): void {
+  const scope = scopes.getStore();
+  if (scope !== undefined) scope.abandoned = true;
 }
 
 /** 等 `ms` 毫秒；中止訊號舉起來就立刻回 `false`（不再打）。 */
@@ -356,22 +416,16 @@ export async function retryModelCall<T>(
   call: () => Promise<T>,
 ): Promise<T> {
   const { signal: signalAbort, log, notify } = context;
-  const maxDelayMs = options.maxDelayMs ?? DEFAULT_STREAM_RETRY_MAX_DELAY_MS;
-  const codes = options.retryableCodes ?? DEFAULT_STREAM_RETRYABLE_CODES;
   // 一次呼叫的所有重試共用一個，同 dsh 的 `retryId`。
   const retryId = randomUUID();
   for (let attempt = 0; ; attempt += 1) {
-    const { scope, outcome, captured } = await runInAttempt(call);
+    const { scope, outcome, captured } = await runInAttempt(options, attempt, call);
     if (outcome.status === 'fulfilled') return outcome.value;
     const reported = scope.failure;
-    // 碼決定重不重打（#1437）：adapter 只回報「是哪一種失敗」，不替政策下判斷。
-    const retriable =
-      reported !== undefined && codes.includes(reported.code) && attempt < options.maxRetries;
-    if (reported === undefined || !retriable) throw outcome.reason;
-    // 供應商要求的等待：不超過上限就照它等，超過就放棄（照 dsh 的 normal 模式，原錯誤往外拋）。
+    // 重不重打只有 {@link attemptWillRetry} 一個判斷：起訖紀錄器在失敗分支問的是同一個（K11 PR-C）。
+    if (reported === undefined || !attemptWillRetry(scope)) throw outcome.reason;
     const asked = reported.retryAfterMs;
     const hasAsked = asked !== undefined && Number.isFinite(asked) && asked > 0;
-    if (hasAsked && asked > maxDelayMs) throw outcome.reason;
     const retry = attempt + 1;
     const delayMs = hasAsked ? asked : streamRetryDelayMs(options, attempt);
     // 失敗的是哪一次呼叫：起訖紀錄器在裡面，這裡只能從放的格子裡問（拋了也問得到）。
@@ -407,6 +461,7 @@ export async function retryModelCall<T>(
       delayMs,
       code,
       ...callField,
+      ...(scope.attemptRecorded && { attemptRecorded: true as const }),
     });
     // 退避：1 倍、2 倍、4 倍……；這一輪已經中止、或等待中按了停止，原本的錯誤照樣往外拋，不再打（`sleep` 兩種都認）。
     // 取消之後不寫 `llm/retry-started`。

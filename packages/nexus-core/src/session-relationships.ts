@@ -70,8 +70,11 @@ export interface SessionRelationshipChecker {
  *   呼叫之外的，這一輪收工之前要等到一顆 `model/start`，等不到就是寫丟了它那次呼叫。**被 `interrupted` 收掉的輪不檢第二條**：
  *   行程死在快照落盤之後、`model/start` 落盤之前（兩顆同一批排空，批寫到一半就斷），續接補結的就是那一輪（`interrupted-turn.ts`）。輪內那條同核准稽核，只在出現過
  *   `turn/start` 的日誌上判：子代理的日誌沒有 `turn/*`，第二條在那裡也就沒有收工點可檢。
- * - **作廢的嘗試**（`assistant/attempt`）要落在開著的輪內；帶 `modelCall` 的，那次呼叫要已經以 `error` 或 `aborted` 收尾。跟下一次嘗試的
- *   `model/start` 誰先誰後不檢：pump 在圖外收通知，下一次嘗試在圖裡照跑。
+ * - **作廢的嘗試**（`assistant/attempt`）要落在開著的輪內；帶 `modelCall` 的，那次呼叫要以 `error` 或 `aborted` 收尾，**兩種位置都收**
+ *   （K11 PR-C，格式不升版）：失敗收尾**之後**（`langgraph` 下 pump 在圖外收通知才寫），或那次呼叫的起訖**之內**、失敗收尾之前
+ *   （native 下由模型呼叫的起訖紀錄器寫）。落在起訖之內的，那次呼叫之後必須以 `error` 或 `aborted` 收尾；正常收尾是違規，已經正常收尾了
+ *   才來的也是。檢查器分不出「寫方改回舊位置」，那個突變的紅燈在寫入端的測試。跟下一次嘗試的 `model/start` 誰先誰後不檢。
+ *   **撤除條件**：下一次因別的事升版時，舊位置的分支一起收（#2336 後續清單）。
  *
  * 不認得的事件種類不解讀，歸它們自己的擁有者。
  *
@@ -123,6 +126,10 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
   let inbox: InboxState = EMPTY_INBOX;
   /** 以 `error` 或 `aborted` 收尾的呼叫（`model/end` 帶的 `modelCall`）。跨 `session/end-seed` 不清，理由同 `startSeqs`。 */
   const failedCalls = new Set<number>();
+  /** 正常收尾的呼叫。跨 `session/end-seed` 不清，理由同 `startSeqs`。 */
+  const completedCalls = new Set<number>();
+  /** 落在起訖之內、等著那次呼叫收尾的作廢嘗試：`modelCall` → 那顆 attempt 的 `seq`。 */
+  const attemptsInOpenCalls = new Map<number, number>();
   /**
    * 這一輪裡第一顆還沒等到 `model/start` 的 55 形狀快照的 `seq`。跟著輪走：帶過去的輪照帶，接手那一顆 `turn/start` 清。
    */
@@ -186,10 +193,15 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
           startSeqs.has(modelCall) &&
           !failedCalls.has(modelCall)
         ) {
-          report(
-            'attempt-before-failed-end',
-            `assistant/attempt（seq ${seq}）指的那次呼叫（model/start seq ${modelCall}）還沒以 error 或 aborted 收尾`,
-          );
+          if (completedCalls.has(modelCall)) {
+            report(
+              'attempt-before-failed-end',
+              `assistant/attempt（seq ${seq}）指的那次呼叫（model/start seq ${modelCall}）已經正常收尾`,
+            );
+          } else {
+            // 還開著：新位置。那次呼叫之後得以 error 或 aborted 收尾，在 `model/end` 判。
+            attemptsInOpenCalls.set(modelCall, seq);
+          }
         }
         break;
       }
@@ -228,8 +240,20 @@ export function createSessionRelationshipChecker(): SessionRelationshipChecker {
         checkModelCall();
         const ended = field(event, 'modelCall');
         const outcome = field(event, 'outcome');
-        if (typeof ended === 'number' && (outcome === 'error' || outcome === 'aborted')) {
-          failedCalls.add(ended);
+        if (typeof ended === 'number') {
+          const failed = outcome === 'error' || outcome === 'aborted';
+          if (failed) failedCalls.add(ended);
+          else completedCalls.add(ended);
+          const attemptSeq = attemptsInOpenCalls.get(ended);
+          if (attemptSeq !== undefined) {
+            attemptsInOpenCalls.delete(ended);
+            if (!failed) {
+              report(
+                'attempt-before-failed-end',
+                `assistant/attempt（seq ${attemptSeq}）落在 model/start seq ${ended} 的起訖之內，那次呼叫卻正常收尾了`,
+              );
+            }
+          }
         }
         if (openModelCalls === 0) {
           report('model-end-without-start', `model/end（seq ${seq}）前面沒有開著的 model/start`);

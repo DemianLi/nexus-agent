@@ -77,6 +77,26 @@ interface AttemptCell {
   usage: AttemptUsage | undefined;
 }
 
+/**
+ * 一次請求裡 root 回覆已經吐出的片段，殼邊流邊累積（K11 PR-C）。條件與 pump 的 `trackRootReply` 一樣：`message-start` 來過、
+ * `message-finish` 還沒來才算「講到一半」。
+ */
+interface PartialCell {
+  started: boolean;
+  finished: boolean;
+  /** `message-start` 帶的 id；沒帶就沒有。 */
+  id: string | undefined;
+  text: string;
+  reasoning: string;
+}
+
+/** {@link OpenedModelCall.partialReply} 交回的：這次呼叫講到一半的回覆。 */
+export interface PartialReply {
+  readonly id: string | undefined;
+  readonly text: string;
+  readonly reasoning: string;
+}
+
 /** 起訖紀錄器為一次呼叫開的範圍，給它內側的寫入點讀。 */
 interface CallScope {
   readonly log: SessionLog;
@@ -84,6 +104,8 @@ interface CallScope {
   modelCall: number | undefined;
   /** 最近那次請求的用量格（#1022）。`undefined` ＝ 還沒有請求開跑。 */
   attempt: AttemptCell | undefined;
+  /** 最近那次請求已吐出的回覆片段（K11 PR-C）。`undefined` ＝ 殼沒有開過。 */
+  partial: PartialCell | undefined;
   /** 開範圍那一刻外層放的格子（最近的一格），寫 `model/start` 時沿它往外填。 */
   readonly probe: CallProbe | undefined;
   /** 寫 `model/start`，交回它的 `seq`。 */
@@ -120,6 +142,11 @@ export interface ModelCallHandle {
 export interface OpenedModelCall extends ModelCallHandle {
   /** 在這次呼叫的範圍裡跑 `call`：內側的寫入點用 {@link currentModelCall} 讀得到識別。 */
   run<T>(call: () => T | Promise<T>): Promise<T>;
+  /**
+   * 這次呼叫講到一半的回覆（殼用 {@link beginPartialReply} 累積的）；沒有（殼沒餵、沒開始、已收尾）是 `undefined`。
+   * 給起訖紀錄器在失敗分支讀：那裡已經離開 {@link OpenedModelCall.run} 的範圍，所以讀控制柄，不問 `AsyncLocalStorage`。
+   */
+  partialReply(): PartialReply | undefined;
 }
 
 function ensureStarted(scope: CallScope): number {
@@ -149,12 +176,18 @@ export function openModelCall(log: SessionLog, writeStart: () => number): Opened
     log,
     modelCall: undefined,
     attempt: undefined,
+    partial: undefined,
     probe: probes.getStore(),
     writeStart,
   };
   return {
     ...handleOf(scope),
     run: async (call) => scopes.run(scope, call),
+    partialReply: () => {
+      const cell = scope.partial;
+      if (cell === undefined || !cell.started || cell.finished) return undefined;
+      return { id: cell.id, text: cell.text, reasoning: cell.reasoning };
+    },
   };
 }
 
@@ -238,6 +271,53 @@ export function beginAttemptReport(): ((usage: AttemptUsage) => void) | undefine
   scope.attempt = cell;
   return (usage) => {
     cell.usage = usage;
+  };
+}
+
+/**
+ * 殼在**開串流的那一刻**呼叫（`base-chat-openai.ts` 的 `#aggregate`），換來一個餵事件的函式：把串流事件（`message-start`、
+ * `content-block-delta`、`message-finish`，同 pump 的 `trackRootReply` 讀的那幾種）餵進來，累積這次請求已經吐出的 root 回覆。
+ * 起訖紀錄器在失敗分支用 {@link OpenedModelCall.partialReply} 讀，決定要不要寫 `assistant/attempt`（K11 PR-C）。
+ *
+ * 範圍在這一刻抓住，之後每顆事件只碰閉包：串流是之後才被讀的，那時不一定還在這個範圍的 `AsyncLocalStorage` 裡
+ * （{@link beginAttemptReport} 同理）。每次請求換一格新的。**不是 `llm/stream` 的監聽者**，不影響 `count('llm/stream')`。
+ *
+ * @returns 餵事件的函式；不在呼叫範圍裡（標題那一顆、測試直接叫）是 `undefined`。
+ */
+export function beginPartialReply(): ((event: unknown) => void) | undefined {
+  const scope = scopes.getStore();
+  if (scope === undefined) return undefined;
+  const cell: PartialCell = {
+    started: false,
+    finished: false,
+    id: undefined,
+    text: '',
+    reasoning: '',
+  };
+  scope.partial = cell;
+  return (event) => {
+    const data = event as {
+      event?: string;
+      id?: unknown;
+      delta?: { type?: string; text?: string; reasoning?: string };
+    } | null;
+    switch (data?.event) {
+      case 'message-start':
+        cell.started = true;
+        cell.finished = false;
+        cell.id = typeof data.id === 'string' && data.id !== '' ? data.id : undefined;
+        cell.text = '';
+        cell.reasoning = '';
+        return;
+      case 'content-block-delta':
+        if (data.delta?.type === 'text-delta') cell.text += data.delta.text ?? '';
+        if (data.delta?.type === 'reasoning-delta') cell.reasoning += data.delta.reasoning ?? '';
+        return;
+      case 'message-finish':
+        cell.finished = true;
+        return;
+      default:
+    }
   };
 }
 

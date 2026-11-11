@@ -10,6 +10,7 @@ import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEvent, StreamRetryOptions } from '@nexus/core';
+import type { Event } from '@nexus/wire';
 import { vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { createLiveModel } from './live-model.js';
@@ -17,8 +18,8 @@ import { liveModelConfigSchema } from './settings/live-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-/** 第 n 次請求端點演哪一齣：`ok` 吐完整回覆；其餘吐兩個字（甲乙）之後各自失敗。 */
-export type RetryAct = 'ok' | 'mid503' | 'cut' | 'stall';
+/** 第 n 次請求端點演哪一齣：`ok` 吐完整回覆；`task` 叫一次前景子代理；其餘吐兩個字（甲乙）之後各自失敗。 */
+export type RetryAct = 'ok' | 'mid503' | 'cut' | 'stall' | 'task';
 
 const chunk = (id: string, delta: Record<string, unknown>, finish: string | null = null): string =>
   `data: ${JSON.stringify({
@@ -41,6 +42,31 @@ async function scriptedOpenAi(script: readonly RetryAct[]) {
     const id = `chatcmpl-${hits}`;
     req.resume();
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (act === 'task') {
+      res.write(
+        chunk(id, {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_task',
+              type: 'function',
+              function: {
+                name: 'task',
+                arguments: JSON.stringify({
+                  description: '回報一句話',
+                  subagent_type: 'general-purpose',
+                }),
+              },
+            },
+          ],
+        }),
+      );
+      res.write(chunk(id, {}, 'tool_calls'));
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     res.write(chunk(id, { role: 'assistant', content: '' }));
     if (act === 'ok') {
       res.write(chunk(id, { content: '丙' }));
@@ -121,9 +147,10 @@ export async function runRetryTurn(script: readonly RetryAct[], options: RetryTu
   }
   const detach = built.attachSession(pump.sessions);
   const line = new AbortController();
+  const frames: Event[] = [];
   const draining = (async () => {
-    for await (const _frame of pump.subscribe(['messages', 'lifecycle', 'custom'], line.signal)) {
-      // 只為了讓 pump 有消費者；線上 frame 這裡不看。
+    for await (const frame of pump.subscribe(['messages', 'lifecycle', 'custom'], line.signal)) {
+      frames.push(frame);
     }
   })();
   try {
@@ -133,7 +160,13 @@ export async function runRetryTurn(script: readonly RetryAct[], options: RetryTu
     );
     return {
       thrown,
+      frames,
       events: pump.sessions.root.events as readonly SessionEvent[],
+      /** root 以外每一份日誌的事件（子代理）。 */
+      children: pump.sessions
+        .list()
+        .filter((entry) => entry.address.kind !== 'root')
+        .map((entry) => entry.log.events as readonly SessionEvent[]),
       hits: upstream.hits(),
       warnings,
     };

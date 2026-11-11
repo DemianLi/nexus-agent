@@ -189,13 +189,36 @@ describe('請求快照與作廢嘗試的位置（格式 55，#2416）', () => {
     expect(rules([turnStart, attempt(), turnEnd()])).toEqual([]);
   });
 
-  it('作廢的嘗試在它那次呼叫失敗收尾之前、或那次正常收尾：attempt-before-failed-end', () => {
-    expect(rules([turnStart, system, modelStart, attempt(2), end('error'), turnEnd()])).toEqual([
-      [3, 'attempt-before-failed-end'],
+  it('作廢的嘗試落在那次呼叫的起訖之內（新位置，K11 PR-C）：失敗收尾 error 與 aborted 都收', () => {
+    expect(rules([turnStart, system, modelStart, attempt(2), end('error'), turnEnd()])).toEqual([]);
+    expect(rules([turnStart, system, modelStart, attempt(2), end('aborted'), turnEnd()])).toEqual(
+      [],
+    );
+  });
+
+  it('新位置的反例：attempt 落在後來正常收尾的呼叫裡，在 model/end 報違規；已經正常收尾了才來的也報', () => {
+    expect(rules([turnStart, system, modelStart, attempt(2), end(), turnEnd()])).toEqual([
+      [4, 'attempt-before-failed-end'],
     ]);
     expect(rules([turnStart, system, modelStart, end(), attempt(2), turnEnd()])).toEqual([
       [4, 'attempt-before-failed-end'],
     ]);
+  });
+
+  it('指錯呼叫：attempt 指的呼叫後來正常收尾，真正失敗的是另一次，仍報違規', () => {
+    // 呼叫 A（seq 2）、attempt 指 A，接著 A 正常收尾；B（seq 5）失敗。
+    expect(
+      rules([
+        turnStart,
+        system,
+        modelStart,
+        attempt(2),
+        end(),
+        modelStart,
+        end('error', 5),
+        turnEnd(),
+      ]),
+    ).toEqual([[4, 'attempt-before-failed-end']]);
   });
 
   it('作廢的嘗試落在輪外：attempt-outside-turn；指不到 model/start：model-call-unknown', () => {
