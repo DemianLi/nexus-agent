@@ -31,6 +31,7 @@ import {
   runServeDriver,
   settle,
   TRUNCATE_MARKER,
+  waitForMainCalls,
 } from './log-derived-history.fixture.js';
 import type {
   Body,
@@ -193,6 +194,17 @@ async function answerApprovals(
   }
 }
 
+/**
+ * driver 最久等背景的後續呼叫多久（[#2695](https://github.com/DemianLi/nexus-agent/issues/2695)）。到期不拋：照現況往下，
+ * 讓斷言用次數講哪裡不對。取 20 秒，小於整支的 90 秒逾時，又給慢 runner 留足餘裕：正常負載下這些場景的後續呼叫在 5 秒內到齊，
+ * CI 上慢的那一輪整片約是平常的 1.8 倍。
+ */
+const BACKGROUND_WAIT_MS = 20_000;
+
+/** 每個擁有者預期的主呼叫次數。driver 等它、斷言也比它，兩邊同一份。 */
+const SS4B_CALLS = { ROOT: 4, 'CHILD-S': 2 } as const;
+const SS6_CALLS = { ROOT: 5, 'CHILD-C': 3 } as const;
+
 describe('背景與前景子代理', () => {
   it('SA0 背景子代理：根派工、子代理叫一次工具、完成後叫醒根再跑一輪', async () => {
     const run = await runServeDriver(
@@ -265,7 +277,7 @@ describe('背景與前景子代理', () => {
       async (ctx) => {
         await ctx.client.runStart('alpha', '派背景再插話');
         await ctx.fold(idleWithContent);
-        await settle(4000);
+        await waitForMainCalls(ctx.bodies, SS4B_CALLS, markerOf, BACKGROUND_WAIT_MS);
       },
       routed(
         (k, body) => {
@@ -291,7 +303,7 @@ describe('背景與前景子代理', () => {
         },
       ),
     );
-    await expectAllSame('SS4b', run, { ROOT: 4, 'CHILD-S': 2 });
+    await expectAllSame('SS4b', run, SS4B_CALLS);
   }, 90_000);
 
   it('SS5 兩個併發背景子代理，後派的先完成', async () => {
@@ -334,7 +346,7 @@ describe('背景與前景子代理', () => {
       async (ctx) => {
         await ctx.client.runStart('alpha', '派背景，完成後續談');
         await ctx.fold(idleWithContent);
-        await settle(5000);
+        await waitForMainCalls(ctx.bodies, SS6_CALLS, markerOf, BACKGROUND_WAIT_MS);
       },
       routed(
         (k, body) => {
@@ -363,7 +375,7 @@ describe('背景與前景子代理', () => {
         },
       ),
     );
-    await expectAllSame('SS6', run, { ROOT: 5, 'CHILD-C': 3 });
+    await expectAllSame('SS6', run, SS6_CALLS);
   }, 90_000);
 
   it('SS7 使用者按停背景子代理、再對它說話：第一次呼叫被中止、日誌沒有回覆（#1190）', async () => {
