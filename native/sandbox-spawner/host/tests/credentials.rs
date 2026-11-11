@@ -93,26 +93,38 @@ fn 不合法樣本() {
     let all = vectors();
     let reject = all["reject"].as_array().expect("reject");
     assert!(!reject.is_empty());
+    // 跑完整份再一起報：一條不符就停的話，看不出還有幾條。
+    let mut mismatches = Vec::new();
     for vector in reject {
         let name = vector["name"].as_str().expect("name");
         let Err(err) = parse(vector["text"].as_str().expect("text")) else {
-            panic!("{name}：該拒絕卻收了");
+            mismatches.push(format!("{name}：該拒絕卻收了"));
+            continue;
         };
-        assert_eq!(
-            err.reason.code(),
-            vector["reason"].as_str().expect("reason"),
-            "{name}：{err}"
-        );
+        let reason = vector["reason"].as_str().expect("reason");
+        if err.reason.code() != reason {
+            mismatches.push(format!(
+                "{name}：reason 該是 {reason}，實際 {}（{err}）",
+                err.reason.code()
+            ));
+        }
         if let Some(code) = vector["code"].as_str() {
-            assert!(
-                err.why.starts_with(&format!("YAML 錯誤 {code}")),
-                "{name}：{err}"
-            );
+            if !err.why.starts_with(&format!("YAML 錯誤 {code}")) {
+                mismatches.push(format!("{name}：code 該是 {code}，實際 {err}"));
+            }
         }
         if let Some(secret) = vector["secret"].as_str() {
-            assert!(!err.why.contains(secret), "{name}：訊息含值");
+            if err.why.contains(secret) {
+                mismatches.push(format!("{name}：訊息含值"));
+            }
         }
     }
+    assert!(
+        mismatches.is_empty(),
+        "{} 條不符：\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
 }
 
 #[test]
