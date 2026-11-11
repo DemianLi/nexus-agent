@@ -704,8 +704,14 @@ class SandboxSpawner(unittest.TestCase):
         """套件站一時連不到不該整輪紅（#2702）：.deb 存快取、鍵含架構與 runner image 版本；命中就離線裝，裝不起來或沒命中退回 apt，三次、每次 120 秒封頂，三次都失敗才紅。"""
         cache = self.steps['還原 musl 的 .deb 快取']
         self.assertTrue(cache['uses'].startswith('actions/cache@'))
-        for part in ('runner.os', 'runner.arch', 'env.ImageVersion'):
+        for part in ('runner.os', 'runner.arch', 'steps.image.outputs.version'):
             self.assertIn(part, cache['with']['key'])
+        self.assertNotIn('env.ImageVersion', cache['with']['key'], 'env context 讀不到 runner 行程的環境變數')
+        image = self.steps['讀 runner image 版本']
+        self.assertIn('ImageVersion', image['run'])
+        self.assertIn('$GITHUB_OUTPUT', image['run'])
+        for step in (image, cache):
+            self.assertEqual(step['if'], "inputs.cache == 'true'", '發版傳 cache: false，.deb 快取不還原、不存')
         install = self.steps['安裝 musl-gcc']
         self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
         run = install['run']
@@ -714,6 +720,8 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('timeout 120', run)
         self.assertIn('Dir::Cache::archives', run)
         self.assertIn('exit 1', run)
+        self.assertIn('rm -rf "$debs/lock" "$debs/partial"', run, 'root 留下的 lock 與 partial 讓 post 步驟存不了快取')
+        self.assertIn('chown -R', run)
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
