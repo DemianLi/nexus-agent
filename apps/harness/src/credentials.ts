@@ -31,6 +31,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  CST,
   type Document,
   isCollection,
   isMap,
@@ -146,13 +147,12 @@ interface TokenScan {
   readonly key?: TokenFinding;
 }
 
-/** 空字串的引號純量：`""`、`''`。 */
+/** 解出來是空字串的引號純量：`""`、`''`，以及 `"\` 接換行 `"` 這類反斜線折行寫法。 */
 function isEmptyQuoted(node: unknown): boolean {
-  const { type, source } = (node ?? {}) as { type?: unknown; source?: unknown };
-  return (
-    (type === 'double-quoted-scalar' || type === 'single-quoted-scalar') &&
-    (source === '""' || source === "''")
-  );
+  const { type } = (node ?? {}) as { type?: unknown };
+  if (type !== 'double-quoted-scalar' && type !== 'single-quoted-scalar') return false;
+  // 語法錯由 `parseDocument` 的錯誤先擋下，這裡不再報。
+  return CST.resolveAsScalar(node as CST.FlowScalar, false, () => undefined)?.value === '';
 }
 
 /** CST 裡一個 mapping 條目的顯式鍵或空鍵：沒有就是 `undefined`。 */
