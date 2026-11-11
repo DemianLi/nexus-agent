@@ -93,26 +93,38 @@ fn 不合法樣本() {
     let all = vectors();
     let reject = all["reject"].as_array().expect("reject");
     assert!(!reject.is_empty());
+    // 跑完整份再一起報：一條不符就停的話，看不出還有幾條。
+    let mut mismatches = Vec::new();
     for vector in reject {
         let name = vector["name"].as_str().expect("name");
         let Err(err) = parse(vector["text"].as_str().expect("text")) else {
-            panic!("{name}：該拒絕卻收了");
+            mismatches.push(format!("{name}：該拒絕卻收了"));
+            continue;
         };
-        assert_eq!(
-            err.reason.code(),
-            vector["reason"].as_str().expect("reason"),
-            "{name}：{err}"
-        );
+        let reason = vector["reason"].as_str().expect("reason");
+        if err.reason.code() != reason {
+            mismatches.push(format!(
+                "{name}：reason 該是 {reason}，實際 {}（{err}）",
+                err.reason.code()
+            ));
+        }
         if let Some(code) = vector["code"].as_str() {
-            assert!(
-                err.why.starts_with(&format!("YAML 錯誤 {code}")),
-                "{name}：{err}"
-            );
+            if !err.why.starts_with(&format!("YAML 錯誤 {code}")) {
+                mismatches.push(format!("{name}：code 該是 {code}，實際 {err}"));
+            }
         }
         if let Some(secret) = vector["secret"].as_str() {
-            assert!(!err.why.contains(secret), "{name}：訊息含值");
+            if err.why.contains(secret) {
+                mismatches.push(format!("{name}：訊息含值"));
+            }
         }
     }
+    assert!(
+        mismatches.is_empty(),
+        "{} 條不符：\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
 }
 
 #[test]
@@ -250,7 +262,35 @@ fn 位置跟_ts_一字不差() {
     for (text, why) in [
         (
             "version: 1\n?\n  nvapi-FAKE-pos: 1\n: x\n",
-            "YAML 錯誤 COLLECTION_KEY_NOT_ALLOWED（第 3 行第 3 欄）",
+            "YAML 錯誤 EXPLICIT_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
+        ),
+        (
+            "version: 1\nrefs:\n  A: x\n  ? nvapi-FAKE-pos\n  : 1\n",
+            "YAML 錯誤 EXPLICIT_KEY_NOT_ALLOWED（第 4 行第 3 欄）",
+        ),
+        (
+            "version: 1\nx: {a: 1, ? b : 2}\n",
+            "YAML 錯誤 EXPLICIT_KEY_NOT_ALLOWED（第 2 行第 11 欄）",
+        ),
+        (
+            "version: 1\nrefs:\n  A: nvapi-FAKE-pos\n  : x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 4 行第 3 欄）",
+        ),
+        (
+            "version: 1\n\"\": x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
+        ),
+        (
+            "version: 1\nx: { : y }\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 2 行第 6 欄）",
+        ),
+        (
+            "\u{FEFF}: x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 1 行第 2 欄）",
+        ),
+        (
+            "version: 1\n\"\": 1\n? a\n: 2\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
         ),
         (
             "version: 1\nrefs:\n  A: x\n  [nvapi-FAKE-pos]: 1\n",
@@ -291,5 +331,46 @@ fn 位置跟_ts_一字不差() {
     ] {
         let err = parse(text).expect_err(text);
         assert_eq!(err.why, why, "{text:?}");
+    }
+}
+
+/// 沒寫鍵的 `:` 後面同一行接區塊集合：TS 的 `yaml` 自己報語法錯（`BLOCK_AS_IMPLICIT_KEY`、`UNEXPECTED_TOKEN`），
+/// `saphyr-parser` 照收成「空鍵加值」，這裡走到空鍵（或顯式鍵）那一步。共用樣本只釘 `reason`，錯誤碼各自釘在這裡與
+/// `apps/harness/src/credentials.test.ts`；已知差異，見 `docs/credentials-file.md`〈拒絕〉。
+#[test]
+fn 沒寫鍵的冒號後面接區塊集合_錯誤碼跟_ts_不同() {
+    for (text, why) in [
+        (
+            "version: 1\nrefs:\n  A: nvapi-FAKE-0110\n: : x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 4 行第 1 欄）",
+        ),
+        (
+            ": : x\nversion: 1\nrefs:\n  A: nvapi-FAKE-0111\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 1 行第 1 欄）",
+        ),
+        (
+            "version: 1\n: - x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
+        ),
+        (
+            "version: 1\nrefs:\n  A: nvapi-FAKE-0112\n  : - x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 4 行第 3 欄）",
+        ),
+        (
+            "version: 1\nextra:\n  - : : x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 3 行第 5 欄）",
+        ),
+        (
+            "version: 1\n? : - x\n: 1\n",
+            "YAML 錯誤 EXPLICIT_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
+        ),
+        (
+            "version: 1\n: ? x\n",
+            "YAML 錯誤 EMPTY_KEY_NOT_ALLOWED（第 2 行第 1 欄）",
+        ),
+    ] {
+        let err = parse(text).expect_err(text);
+        assert_eq!(err.why, why, "{text:?}");
+        assert!(!err.why.contains("nvapi-FAKE"), "{text:?}：訊息含值");
     }
 }
