@@ -247,7 +247,7 @@ class HostMcpConformance(unittest.TestCase):
                 step = steps[names.index('宿主的 MCP 符合性測試')]
                 self.assertEqual(step['shell'], 'bash')
                 self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
-                self.assertIn('--test mcp_conformance -- --ignored', step['run'])
+                self.assertIn('--test mcp_conformance -- --ignored --nocapture', step['run'])
                 self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
                 uses = [s.get('uses') for s in steps]
                 self.assertLess(uses.index('./.github/actions/setup'), names.index('宿主的 MCP 符合性測試'))

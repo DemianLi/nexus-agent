@@ -101,14 +101,19 @@ export type Dispatch = (
   body: unknown,
 ) => Promise<void>;
 
-/**
- * 起一台記錄請求的 HTTP server，怎麼回由 `dispatch` 決定。`onRequest` 在每個請求進 `dispatch` 之前收到記錄
- * （符合性測試的 server 靠它把記錄交出去）。
- */
+/** {@link startHttpFixture} 的觀察點（符合性測試的 server 靠它把記錄交出去）。 */
+export interface FixtureHooks {
+  /** 每個請求進 `dispatch` 之前。 */
+  readonly onRequest?: (request: RecordedRequest) => void;
+  /** 每個請求的回應連線關掉時；`finished` 為假表示回應還沒寫完就被關了（client 中止了那一則請求的串流）。 */
+  readonly onClose?: (request: RecordedRequest, finished: boolean) => void;
+}
+
+/** 起一台記錄請求的 HTTP server，怎麼回由 `dispatch` 決定。 */
 export async function startHttpFixture(
   dispatch: Dispatch,
   closeHandler: () => Promise<void>,
-  onRequest?: (request: RecordedRequest) => void,
+  hooks: FixtureHooks = {},
 ): Promise<HttpFixture> {
   const requests: RecordedRequest[] = [];
   const sockets = new Set<Socket>();
@@ -128,8 +133,10 @@ export async function startHttpFixture(
 
   async function serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
     active += 1;
+    let recorded: RecordedRequest | undefined;
     response.on('close', () => {
       active -= 1;
+      if (recorded !== undefined) hooks.onClose?.(recorded, response.writableFinished);
     });
     const body = await readJson(request);
     const messages: unknown[] = body === undefined ? [] : Array.isArray(body) ? body : [body];
@@ -138,7 +145,7 @@ export async function startHttpFixture(
         ? [String((message as { method: unknown }).method)]
         : [],
     );
-    const recorded: RecordedRequest = {
+    const current: RecordedRequest = {
       httpMethod: request.method ?? '',
       rpcMethods,
       authorization: request.headers.authorization,
@@ -148,8 +155,9 @@ export async function startHttpFixture(
       mcpName: headerValue(request.headers['mcp-name']),
       accept: headerValue(request.headers.accept),
     };
-    requests.push(recorded);
-    onRequest?.(recorded);
+    recorded = current;
+    requests.push(current);
+    hooks.onRequest?.(current);
     if (failing !== undefined && rpcMethods.includes(failing)) {
       response.writeHead(500, { 'content-type': 'text/plain' });
       response.end('injected failure');

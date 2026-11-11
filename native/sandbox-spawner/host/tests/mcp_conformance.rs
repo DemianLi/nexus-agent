@@ -150,11 +150,19 @@ fn wait_for(bridge: &Bridge, want: impl Fn(&Outcome) -> bool) -> Outcome {
 
 /// 連上 `url` 並列工具，回工具名。
 fn open(bridge: &Bridge, url: &str) -> Vec<String> {
-    let server = Server::parse(&json!({
+    open_with(bridge, url, None)
+}
+
+/// 同 [`open`]，可指定一次 `tools/call` 的逾時毫秒。
+fn open_with(bridge: &Bridge, url: &str, timeout_ms: Option<u64>) -> Vec<String> {
+    let mut config = json!({
         "serverName": "conf",
         "connection": { "transport": "http", "url": url },
-    }))
-    .expect("設定");
+    });
+    if let Some(ms) = timeout_ms {
+        config["toolCallTimeoutMs"] = json!(ms);
+    }
+    let server = Server::parse(&config).expect("設定");
     bridge.send(Command::Open {
         open: 1,
         server: Box::new(server),
@@ -230,6 +238,8 @@ fn assert_modern(node: &Node) {
     let methods = node.methods();
     assert_eq!(methods.first().map(String::as_str), Some("server/discover"), "{methods:?}");
     assert!(!methods.iter().any(|m| m == "initialize"), "{methods:?}");
+    // 每個請求都要帶 clientCapabilities；缺的方法收齊一起報，不停在第一個。
+    let mut without_capabilities = Vec::new();
     for (record, message) in node.messages() {
         let method = message["method"].as_str().unwrap_or_default();
         let ctx = format!("{method}\n{}", node.dump());
@@ -240,7 +250,9 @@ fn assert_modern(node: &Node) {
         if method == "server/discover" {
             continue;
         }
-        assert!(meta[CAPABILITIES_KEY].is_object(), "_meta 的 clientCapabilities：{ctx}");
+        if !meta[CAPABILITIES_KEY].is_object() {
+            without_capabilities.push(method.to_string());
+        }
         let info = &meta[CLIENT_INFO_KEY]["name"];
         assert_eq!(info, "@nexus/plugin-mcp", "_meta 的 clientInfo：{ctx}");
         let named = match method {
@@ -252,6 +264,11 @@ fn assert_modern(node: &Node) {
             assert_eq!(&record["mcpName"], name, "Mcp-Name：{ctx}");
         }
     }
+    assert!(
+        without_capabilities.is_empty(),
+        "這些請求的 _meta 沒有 clientCapabilities：{without_capabilities:?}\n{}",
+        node.dump()
+    );
 }
 
 /// 舊協定：先試新協定被拒，再 `initialize`；之後的請求帶協商到的版本，沒有新協定的封套與標頭。
@@ -335,6 +352,15 @@ fn cancel_hang(node: &Node, bridge: &Bridge) {
     assert_eq!(done(bridge, 20), Err("cancelled".into()));
 }
 
+/// `tools/call` 那則 POST 的回應連線在寫完之前就關了：client 中止了串流，不是 server 自己收尾。
+fn aborted_call(event: &Value) -> bool {
+    event["event"] == "response-closed"
+        && event["finished"] == false
+        && event["rpcMethods"]
+            .as_array()
+            .is_some_and(|ms| ms.iter().any(|m| m == "tools/call"))
+}
+
 #[test]
 #[ignore = "要 node 與裝好的相依，CI 另一步帶 --ignored 跑"]
 fn 新協定_取消時_server_看到請求被中止() {
@@ -342,6 +368,7 @@ fn 新協定_取消時_server_看到請求被中止() {
     let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
     cancel_hang(&node, &bridge);
     node.wait_event(5, |e| e["event"] == "hang-aborted");
+    node.wait_event(5, aborted_call);
     assert!(
         !node.methods().iter().any(|m| m == "notifications/cancelled"),
         "新協定的 HTTP 取消是中止那則請求，不送通知：\n{}",
@@ -366,5 +393,33 @@ fn 舊協定_取消時_server_收到取消通知() {
             .and_then(|ms| ms.iter().find(|m| m["method"] == "notifications/cancelled"))
             .expect("取消通知");
         assert!(!notice["params"]["requestId"].is_null(), "{kind}：{notice}");
+    }
+}
+
+/// 逾時後 server 看到什麼：**只記錄、不斷言**（`--nocapture` 下印出）。印出的有取消通知、`tools/call` 那則 POST
+/// 是不是被中止、`hang` 的訊號有沒有觸發。
+#[test]
+#[ignore = "要 node 與裝好的相依，CI 另一步帶 --ignored 跑"]
+fn 逾時後_server_看到什麼_只記錄() {
+    for kind in ["modern", "legacy-2x", "legacy-1x"] {
+        let node = Node::start(kind);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        open_with(&bridge, &node.url, Some(500));
+        send(&bridge, 30, "tools/call", json!({ "name": "hang", "arguments": {} }));
+        node.wait_event(10, |e| e["event"] == "hang-started");
+        let outcome = done(&bridge, 30);
+        std::thread::sleep(Duration::from_secs(2));
+        let events = node.events.lock().expect("鎖").clone();
+        let cancelled = events.iter().any(|e| {
+            e["messages"]
+                .as_array()
+                .is_some_and(|ms| ms.iter().any(|m| m["method"] == "notifications/cancelled"))
+        });
+        println!(
+            "[逾時記錄] {kind}：呼叫端結果={outcome:?} 收到取消通知={cancelled} POST 被中止={} hang 訊號觸發={}",
+            events.iter().any(aborted_call),
+            events.iter().any(|e| e["event"] == "hang-aborted"),
+        );
+        println!("[逾時記錄] {kind} 全部記錄：\n{}", node.dump());
     }
 }

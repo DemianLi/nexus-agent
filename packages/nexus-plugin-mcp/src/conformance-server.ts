@@ -13,7 +13,7 @@
  * 三台官方 server 掛同一組工具與資源：`echo`、`fail`（回 `isError`）、`hang`（等到請求被中止）；文字資源、二進位資源、一個模板。
  *
  * **stdout 是記錄通道**，一行一則 JSON：`{"event":"listening","url":…}`、每個請求 `{"event":"request",…}`（欄位同
- * {@link RecordedRequest}）、`hang` 被呼叫與被中止時 `{"event":"hang-started"}`／`{"event":"hang-aborted"}`。stdin 關閉就收線。
+ * {@link RecordedRequest}）、每個請求的回應連線關掉時 `{"event":"response-closed","rpcMethods":…,"finished":…}`（`finished` 為假＝client 在回應寫完之前中止了那一則請求的串流）、`hang` 被呼叫與被中止時 `{"event":"hang-started"}`／`{"event":"hang-aborted"}`。stdin 關閉就收線。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -234,9 +234,11 @@ if (kind !== 'modern' && kind !== 'legacy-2x' && kind !== 'legacy-1x' && kind !=
   process.exit(2);
 }
 const { dispatch, close } = dispatchFor(kind);
-const fixture = await startHttpFixture(dispatch, close, (request) =>
-  emit({ event: 'request', ...request }),
-);
+const fixture = await startHttpFixture(dispatch, close, {
+  onRequest: (request) => emit({ event: 'request', ...request }),
+  onClose: (request, finished) =>
+    emit({ event: 'response-closed', rpcMethods: request.rpcMethods, finished }),
+});
 emit({ event: 'listening', url: fixture.url });
 process.stdin.resume();
 process.stdin.on('end', () => {

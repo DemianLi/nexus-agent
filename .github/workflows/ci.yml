@@ -532,7 +532,7 @@ jobs:
         shell: bash
         working-directory: native/sandbox-spawner
         run: |
-          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored | tee "$RUNNER_TEMP/mcp-conformance.txt"
+          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
       - name: 真的 spawner 跑整合測試
         run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
@@ -565,7 +565,7 @@ jobs:
         shell: bash
         working-directory: native/sandbox-spawner
         run: |
-          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored | tee "$RUNNER_TEMP/mcp-conformance.txt"
+          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
       - name: 真的 spawner 跑整合測試
         run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
