@@ -2,13 +2,14 @@
  * 對話行程這一側的控制面（[#2338](https://github.com/DemianLi/nexus-agent/issues/2338)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §5-2、§7-2）：
  * 從 stdin 讀監督行程的命令，往 stdout 寫回報，框格式與編解碼在 `supervisor-protocol.ts`。**stdout 只寫框**，日誌一律走 stderr。
  *
- * - `hello`：建構時就送自己的。監督行程的第一框也要是版本相同的 `hello`，不是就當讀到解不開的框；它帶的 token 留在 {@link ConversationControl.hostToken}，
+ * - `hello`：建構時就送自己的，宣告 loop 在自己這裡（`runsLoop: true`）。監督行程的第一框也要是版本相同的 `hello`，不是就當讀到解不開的框；它帶的 token 留在 {@link ConversationControl.hostToken}，
  *   並交給 `onHostToken`，給連宿主用。
  * - `bind(threadId)`：記下綁哪一條，叫 `open` 把它建起來，回 `bound`。建不起來也回 `bound`、記一行：之後經這條 thread 的請求會再建一次，
  *   失敗的話回的是 wire 上那個原因的專用碼（例如日誌太大），前台照常轉給瀏覽器。
  * - 閒置：每 `pollMs` 問一次 `idleState`。變成閒置時送 `idle(idleMs)`，`idleMs` 從「handler 的最後活動時間」與「上一次問到不閒的時間」
  *   兩者較晚的那個算（後者同 `sweepIdle` 的「不閒的重新計時」：有些條件放掉時不推最後活動時間）。閒著的期間最後活動時間又往前推了
  *   （兩次輪詢之間有個短請求來去），就再送一次 `idle`，讓監督行程從新的時間點重新計時。不再閒置時送 `busy`。
+ * - `leaf`：給組合行程的，不理。
  * - `drain`：當場再問一次。仍閒置就停收會開新一輪的命令、回 `drained`；否則回 `busy`。
  * - 心跳：收到 `bind` 起每 `heartbeatMs` 送一次 `heartbeat`，在 `open` 之前就開始，不分在不在一輪裡。計時器 `unref`，跟著行程一起結束；
  *   `close` 才會提早停。
@@ -78,7 +79,7 @@ export class ConversationControl {
 
   constructor(options: ConversationControlOptions) {
     this.#options = options;
-    this.#send({ type: 'hello', version: PROTOCOL_VERSION });
+    this.#send({ type: 'hello', version: PROTOCOL_VERSION, runsLoop: true });
     options.input.on('data', (chunk: Buffer) => this.#receive(chunk));
     options.input.on('end', () => this.#end());
   }
@@ -182,7 +183,7 @@ export class ConversationControl {
       }
       if (command.type === 'hello') this.#options.warn('[控制面] 監督行程又送了一次 hello，不理');
       else if (command.type === 'bind') void this.#bind(command.threadId);
-      else this.#drain();
+      else if (command.type === 'drain') this.#drain();
     }
   }
 

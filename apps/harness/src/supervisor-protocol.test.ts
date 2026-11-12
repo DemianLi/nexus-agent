@@ -63,7 +63,7 @@ const CODECS: Record<string, AnyCodec> = {
     vectors: VECTORS.conversationCommands,
     encode: encodeConversationCommand,
     decode: decodeConversationCommand,
-    types: { hello: true, bind: true, drain: true },
+    types: { hello: true, bind: true, drain: true, leaf: true },
   }),
   conversationReports: codec<ConversationReport>({
     vectors: VECTORS.conversationReports,
@@ -163,6 +163,9 @@ describe('supervisor-protocol', () => {
     const turn = encodeConversationReport({ type: 'turn', phase: 'end' });
     turn[1] = 2;
     expect(() => decodeConversationReport(turn)).toThrow('不認得的一輪階段');
+    const hello = encodeConversationReport({ type: 'hello', version: 4, runsLoop: true });
+    hello[hello.length - 1] = 2;
+    expect(() => decodeConversationReport(hello)).toThrow('不認得的 loop 宣告');
     const ensure = encodeFrontRequest({ type: 'ensure', threadId: '', open: 'run' });
     ensure[ensure.length - 1] = 2;
     expect(() => decodeFrontRequest(ensure)).toThrow('不認得的打開方式');

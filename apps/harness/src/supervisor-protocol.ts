@@ -1,6 +1,6 @@
 /**
  * 監督行程控制面的編解碼（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，設計 `.docs/supervisor-1947-design-2026-11-03.md` §五）：
- * 監督行程與對話行程、與前台之間的訊息。**純函式、不依賴任何套件**。格式的定義在
+ * 監督行程與對話行程（或一對裡的組合行程）、與前台之間的訊息。**純函式、不依賴任何套件**。格式的定義在
  * `native/sandbox-spawner/src/supervisor_protocol.rs` 的檔頭；兩邊對同一份向量檔（`native/sandbox-spawner/supervisor-vectors.json`）測。
  *
  * 框（長度前綴）與 spawner 的控制通道同一個格式，用 {@link frame}、{@link takeFrames}。四個方向各一對編解碼，種類 byte 在四個方向之間不重複：
@@ -19,18 +19,19 @@
 export { MAX_FRAME, frame, takeFrames } from './sandbox-protocol.js';
 
 /** 控制面協定的版本，跟 `supervisor_protocol.rs` 的 `PROTOCOL_VERSION` 與向量檔的 `protocolVersion` 相同。 */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
-/** 監督行程 → 對話行程。`hello`：第一框，帶這個行程連宿主用的 token（只在這條通道上，不放環境變數與參數）。`bind`：綁定一條 thread，預熱池裡的與一開始就為某條 thread 起的行程都走這一則。`drain`：對話行程確認仍閒置才回 `drained`，否則回 `busy`；收掉是接著關 stdin。 */
+/** 監督行程 → 對話行程（或一對裡的組合行程）。`hello`：第一框，帶這個行程連宿主用的 token（只在這條通道上，不放環境變數與參數）。`bind`：綁定一條 thread，預熱池裡的與一開始就為某條 thread 起的行程都走這一則。`drain`：對話行程確認仍閒置才回 `drained`，否則回 `busy`；收掉是接著關 stdin。`leaf`：只給組合行程，同一對裡葉子現在的 pid，以最後一則為準；監督行程目前還不送（#2583）；對話行程收到不理。 */
 export type ConversationCommand =
   | { readonly type: 'hello'; readonly version: number; readonly token: string }
   | { readonly type: 'bind'; readonly threadId: string }
-  | { readonly type: 'drain' };
+  | { readonly type: 'drain' }
+  | { readonly type: 'leaf'; readonly pid: number };
 
-/** 對話行程 → 監督行程。 */
+/** 對話行程（或一對裡的組合行程）→ 監督行程。 */
 export type ConversationReport =
-  /** 第一框。版本不對或第一框不是它，監督行程以 `protocol` 收掉這個行程。 */
-  | { readonly type: 'hello'; readonly version: number }
+  /** 第一框。`runsLoop`：agent loop 在這個行程；`turn`、`idle`、`busy` 與 `drain` 的回答只由宣告的行程送。版本不對、第一框不是它，或 `runsLoop` 是 `false`（監督行程還不起一對），監督行程以 `protocol` 收掉這個行程。 */
+  | { readonly type: 'hello'; readonly version: number; readonly runsLoop: boolean }
   /** 根建好、插件載完，可以綁 thread。 */
   | { readonly type: 'ready' }
   /** 已綁定，帶回同一個 id。 */
@@ -57,7 +58,7 @@ export type FrontRequest =
   /** 回 `stop-admission`：不再收新的請求了。 */
   | { readonly type: 'admission-stopped' };
 
-/** 對話行程為什麼結束，依碼（1 起）的順序。前七類見設計 §6-2；`protocol`：控制通道的第一框不是版本相同的 `hello`。 */
+/** 對話行程為什麼結束，依碼（1 起）的順序。前七類見設計 §6-2；`protocol`：控制通道的第一框不是版本相同的 `hello`，或 `runsLoop` 是 `false`。 */
 export const DEATH_CAUSES = [
   'heap',
   'memory',
@@ -100,6 +101,7 @@ export type FrontEvent =
 const CMD_HELLO = 0x77; // w
 const CMD_BIND = 0x62; // b
 const CMD_DRAIN = 0x64; // d
+const CMD_LEAF = 0x6c; // l
 const REP_HELLO = 0x56; // V
 const REP_READY = 0x52; // R
 const REP_BOUND = 0x42; // B
@@ -120,6 +122,7 @@ const EV_CAPACITY = 0x63; // c
 const EV_STATS = 0x6d; // m
 
 const PHASES = ['begin', 'end'] as const;
+const LOOP_FLAGS = [false, true] as const;
 const OPEN_MODES: readonly OpenMode[] = ['run', 'read-only'];
 
 /** 內容解不開（截斷、框尾多餘、不認得的種類或列舉碼）丟這個；框太大是 `takeFrames` 丟的 `SpawnerProtocolError`，兩個都要接。 */
@@ -215,6 +218,8 @@ export function encodeConversationCommand(command: ConversationCommand): Buffer 
       return w.u8(CMD_BIND).text(command.threadId).done();
     case 'drain':
       return w.u8(CMD_DRAIN).done();
+    case 'leaf':
+      return w.u8(CMD_LEAF).u32(command.pid).done();
   }
 }
 
@@ -224,6 +229,7 @@ export function decodeConversationCommand(payload: Buffer): ConversationCommand 
     if (kind === CMD_HELLO) return { type: 'hello', version: r.u32(), token: r.text() };
     if (kind === CMD_BIND) return { type: 'bind', threadId: r.text() };
     if (kind === CMD_DRAIN) return { type: 'drain' };
+    if (kind === CMD_LEAF) return { type: 'leaf', pid: r.u32() };
     return undefined;
   });
 }
@@ -233,7 +239,11 @@ export function encodeConversationReport(report: ConversationReport): Buffer {
   const w = new Writer();
   switch (report.type) {
     case 'hello':
-      return w.u8(REP_HELLO).u32(report.version).done();
+      return w
+        .u8(REP_HELLO)
+        .u32(report.version)
+        .u8(report.runsLoop ? 1 : 0)
+        .done();
     case 'ready':
       return w.u8(REP_READY).done();
     case 'bound':
@@ -256,7 +266,7 @@ export function decodeConversationReport(payload: Buffer): ConversationReport {
   return decoded<ConversationReport>(payload, (r, kind) => {
     switch (kind) {
       case REP_HELLO:
-        return { type: 'hello', version: r.u32() };
+        return { type: 'hello', version: r.u32(), runsLoop: r.pick(LOOP_FLAGS, 0, ' loop 宣告') };
       case REP_READY:
         return { type: 'ready' };
       case REP_BOUND:
