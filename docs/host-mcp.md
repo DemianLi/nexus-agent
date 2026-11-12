@@ -45,8 +45,15 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - 一則 JSON 回應超過 16 MiB 時回 `<label>: response exceeded the size limit of 16 MiB — this call failed; the connection stays up`。
 - 一則 SSE 事件超過 16 MiB，跟 server 中途斷掉這一則的串流，宿主分不出來，都只讓這一則失敗，回 `<label>: response stream closed before its final response`。
   rmcp 對這兩種都回 `TransportClosed`，超限的原因只寫進它自己的 tracing 日誌；transport 本身還開著（`Peer::is_transport_closed` 是假），所以不判掉線。
-- 已知缺口：rmcp 3.9.0 的 HTTP transport 握手之後，server 怎麼回都不會關（只有宿主自己收掉才關），所以 HTTP 的一代實際上不會因為 server 而判掉線。
-  舊協定的 server 重啟、忘掉 session 之後，每次呼叫都回 `Session expired (HTTP 404)`，不會重連（[#2690](https://github.com/DemianLi/nexus-agent/issues/2690)）。
+- **session 過期算掉線**（[#2690](https://github.com/DemianLi/nexus-agent/issues/2690)）：rmcp 3.9.0 的 HTTP transport 握手之後，server 怎麼回都不會關，
+  所以舊協定的 server 重啟、忘掉 session 之後，每次呼叫都會回 404。請求帶著 session id、server 回 404 時 rmcp 回 `StreamableHttpError::SessionExpired`
+  （`Session expired (HTTP 404)`），包在 `ServiceError::TransportSend` 裡；橋對它下轉型認出來（`bridge::session_expired`，認型別、不認字），讓**這次呼叫送出時那一代**判掉線：
+  - 這一次呼叫明確失敗，回 `<label>: session expired (HTTP 404) — this call failed; the connection is being re-established, retry the call`，不帶 session id 與請求內容；
+    之後的呼叫在空窗裡回 `server is disconnected`，新一代連上後就成功。
+  - 重連走監督者的退避與放棄（一個 server 一直 404，新一代的握手後續步驟也 404，就一次次失敗到 `maxAttempts` 放棄）。rmcp 自己的重新初始化（`reinit_on_expired_session`）維持關著：它在 worker 裡重新握手並重試一次，繞過退避、放棄與日誌。
+  - 同一代撞到幾次都只換一次代：通知打的是那一代自己的訊號，不累積；換代之後才回來的舊錯誤打的是舊一代，打不到新一代。
+  - 沒帶 session id 的 404（握手、網址錯、server 不發 session id）rmcp 不回 `SessionExpired`，照一般的失敗走，連線不動。新協定沒有 session，不會遇到。
+  - 升 rmcp 時重看這條下轉型：`host/tests/mcp.rs` 的 `bridge::忘掉_session_這次失敗_下一次在新一代成功` 會紅。
 - 錯誤訊息換掉這一列的秘密（`Shared::scrub`）。成功結果還沒遮蔽（TODO #2570）；位置是結果序列化成文字的那一步（`outgoing`），遮蔽要在序列化之前做。
 
 ## 設定
@@ -125,6 +132,9 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 ## 跟 TS 的差距
 
 - stdio 不支援；只給 stdio 的存活探測也沒有。
+- **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
+  它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
+  dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。
 - header 的憑證引用還不支援；遮蔽只做逐字替換。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
