@@ -50,7 +50,7 @@
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
 //!
 //! 每條控制通道的第一框都是 `hello`（[`crate::supervisor_protocol`] 的檔頭）：子行程一起來監督行程就先送自己的（給對話行程與前台的帶身分 token），
-//! 子行程送來的第一框也要是 `hello`、版本相等。對話行程不是：死因 `protocol`，當場 SIGKILL。前台或宿主不是：重起也是同一支執行檔、一樣對不上，
+//! 子行程送來的第一框也要是 `hello`、版本相等；對話行程的還要宣告 loop 在自己這裡。對話行程不是：死因 `protocol`，當場 SIGKILL。前台或宿主不是：重起也是同一支執行檔、一樣對不上，
 //! 所以不重起，整台停機、回 3。第一框解不開的照解不開的框處置（對話行程 `crash`，前台殺掉重起，宿主殺掉、算一次 `ready` 之前的失敗）。
 //!
 //! 宿主（`--host`，[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)；沒給就不起）：跟前台一起起，不擋前台。它的 stdin／stdout 是控制通道，
@@ -122,7 +122,7 @@ struct Proc {
     chan: Chan,
     /// 拆除梯度：哪一步、下一步的期限。
     stop: Option<(Step, Option<Instant>)>,
-    /// 收到它版本相等的 `hello` 了。
+    /// 收到它對的 `hello` 了（版本相等；對話行程的還要宣告 loop 在自己這裡）。
     hello: bool,
 }
 
@@ -1419,16 +1419,21 @@ impl Supervisor {
                 if report
                     == (ConversationReport::Hello {
                         version: PROTOCOL_VERSION,
+                        runs_loop: true,
                     })
                 {
                     conversation.proc.hello = true;
                     continue;
                 }
                 say!(
-                    "對話行程 {} 的第一框不是版本 {PROTOCOL_VERSION} 的 hello（{}），殺掉",
+                    "對話行程 {} 的第一框不是版本 {PROTOCOL_VERSION}、宣告 loop 在自己這裡的 hello（{}），殺掉",
                     conversation.proc.pid,
                     match report {
-                        ConversationReport::Hello { version } => format!("版本 {version}"),
+                        ConversationReport::Hello {
+                            version: PROTOCOL_VERSION,
+                            ..
+                        } => "沒有宣告 loop".to_string(),
+                        ConversationReport::Hello { version, .. } => format!("版本 {version}"),
                         _ => "別的訊息".to_string(),
                     }
                 );

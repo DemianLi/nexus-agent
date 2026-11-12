@@ -325,7 +325,7 @@ describe('hello', () => {
   it('一建構就先送自己的 hello；監督行程的 hello 帶來 token，之後照常 bind', async () => {
     const h = harness(undefined, false);
     await settle();
-    expect(h.rawReports()).toEqual([{ type: 'hello', version: PROTOCOL_VERSION }]);
+    expect(h.rawReports()).toEqual([{ type: 'hello', version: PROTOCOL_VERSION, runsLoop: true }]);
     expect(h.control.hostToken).toBeUndefined();
     h.send({ type: 'hello', version: PROTOCOL_VERSION, token: TOKEN });
     await settle();
@@ -358,5 +358,13 @@ describe('hello', () => {
     expect(h.control.hostToken).toBe(TOKEN);
     expect(h.tokens).toEqual([TOKEN]);
     expect(h.warnings).toEqual([expect.stringContaining('又送了一次 hello')]);
+  });
+
+  it('收到給組合行程的 leaf 不理：不回報、不記警告', async () => {
+    const h = harness();
+    h.send({ type: 'leaf', pid: 4242 });
+    await settle();
+    expect(h.reports()).toEqual([]);
+    expect(h.warnings).toEqual([]);
   });
 });
