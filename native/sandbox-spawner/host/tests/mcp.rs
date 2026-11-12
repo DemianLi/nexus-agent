@@ -886,6 +886,43 @@ mod http {
             }
         }
 
+        /// 收齊 `ids` 各自的 `Done`，照 `ids` 的順序回。幾則 `Done` 排在同一批 `take()`、先後怎麼到都收得齊：
+        /// `wait_for` 挑中一則就回，同一批裡其餘的丟掉，並行呼叫的第二個結果會就這樣不見。
+        fn done_all(bridge: &Bridge, ids: &[u64]) -> Vec<Result<String, String>> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut got: std::collections::HashMap<u64, Result<String, String>> =
+                std::collections::HashMap::new();
+            loop {
+                for outcome in bridge.take() {
+                    if let Outcome::Done { id, result } = outcome {
+                        if ids.contains(&id) {
+                            got.insert(id, result);
+                        }
+                    }
+                }
+                if ids.iter().all(|id| got.contains_key(id)) {
+                    return ids
+                        .iter()
+                        .map(|id| got.remove(id).expect("收齊了"))
+                        .collect();
+                }
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let missing: Vec<u64> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !got.contains_key(id))
+                    .collect();
+                assert!(!left.is_zero(), "等不到結果：{missing:?}");
+                let mut fd = libc::pollfd {
+                    fd: bridge.wake_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: 指向這個 frame 上一個活著的 pollfd，nfds 是 1。
+                unsafe { libc::poll(&mut fd, 1, left.as_millis() as libc::c_int) };
+            }
+        }
+
         fn call(bridge: &Bridge, id: u64, open: u64, tool: &str) {
             bridge.send(Command::Request {
                 id,
@@ -1047,7 +1084,7 @@ mod http {
             sessions.forget();
             call(&bridge, 20, 1, "echo");
             call(&bridge, 21, 1, "echo");
-            let (a, b) = (done(&bridge, 20), done(&bridge, 21));
+            let [a, b] = <[_; 2]>::try_from(done_all(&bridge, &[20, 21])).expect("兩個結果");
             assert!(a.is_err() && b.is_err(), "{a:?} {b:?}");
             let expired = |r: &Result<String, String>| {
                 r.as_ref()
