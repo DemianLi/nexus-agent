@@ -13,8 +13,8 @@ it('measure first start', async () => {
   lap('processBuildVersion(git)');
   const a = await fx.startServeUnderTest({ argv: ['--port', '0'], log: () => undefined, env: {} });
   lap('first-start');
-  await a.close();
+  await a?.close();
   const b = await fx.startServeUnderTest({ argv: ['--port', '0'], log: () => undefined, env: {} });
   lap('second-start');
-  await b.close();
+  await b?.close();
 }, 60_000);
