@@ -7,11 +7,12 @@
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { AIMessage, SystemMessage } from '@langchain/core/messages';
-import { RunnableBinding } from '@langchain/core/runnables';
 import { isCommand } from '@langchain/langgraph';
 import type { Command } from '@langchain/langgraph';
 import { MiddlewareError } from 'langchain';
 
+import { RunnableBinding } from '@langchain/core/runnables';
+import { bindRequestModel } from '../model-bind.js';
 import { LLM_STREAM_CONFIG_KEY } from './events.js';
 import type { ModelStreamAround } from './events.js';
 import type { NodeTask } from './langgraph-compat.js';
@@ -26,41 +27,6 @@ import {
 export function systemMessageOf(systemPrompt: string | undefined): SystemMessage {
   if (systemPrompt === undefined || systemPrompt === '') return new SystemMessage('');
   return new SystemMessage({ content: [{ type: 'text', text: systemPrompt }] });
-}
-
-interface BindsTools {
-  bindTools(tools: readonly unknown[], options: Record<string, unknown>): unknown;
-}
-
-function canBindTools(model: unknown): model is BindsTools {
-  return typeof (model as Partial<BindsTools> | null)?.bindTools === 'function';
-}
-
-/** 同 langchain 的 `_simpleBindTools`：裸模型直接綁，`RunnableBinding` 綁裡面那顆再把外層的 config／kwargs 包回去。 */
-function bindTools(
-  model: unknown,
-  tools: readonly unknown[],
-  options: Record<string, unknown>,
-): unknown {
-  if (canBindTools(model)) return model.bindTools(tools, options);
-  if (RunnableBinding.isRunnableBinding(model) && canBindTools(model.bound)) {
-    const bound = model.bound.bindTools(tools, options);
-    if (RunnableBinding.isRunnableBinding(bound)) {
-      return new RunnableBinding({
-        bound: bound.bound,
-        config: { ...model.config, ...bound.config },
-        kwargs: { ...model.kwargs, ...bound.kwargs },
-        configFactories: bound.configFactories ?? model.configFactories,
-      });
-    }
-    return new RunnableBinding({
-      bound: bound as never,
-      config: model.config,
-      kwargs: model.kwargs,
-      configFactories: model.configFactories,
-    });
-  }
-  throw new Error(`llm ${String(model)} must define bindTools method.`);
 }
 
 /** 模型沒有取用 `llm/stream` 的環繞函式時拋的訊息：指名模型類別（`RunnableBinding` 往內找到真正的模型），並說它要做什麼。 */
@@ -115,10 +81,9 @@ export async function callModel(chain: ModelChain, task: NodeTask): Promise<Mode
   const collected: Command[] = [];
 
   const base: ModelHandler = async (request) => {
-    const bound = bindTools(request.model, request.tools, {
-      ...request.modelSettings,
-      tool_choice: request.toolChoice,
-    }) as { invoke(messages: BaseMessage[], config: unknown): Promise<AIMessage> };
+    const bound = bindRequestModel(request as never) as {
+      invoke(messages: BaseMessage[], config: unknown): Promise<AIMessage>;
+    };
     const messages = [
       ...(currentSystemMessage.text === '' ? [] : [currentSystemMessage]),
       ...request.messages,

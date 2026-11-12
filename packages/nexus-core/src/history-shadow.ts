@@ -31,6 +31,9 @@ import {
 } from './conversation-replay.js';
 import { toBaseMessage } from './langchain-message-adapter.js';
 import { ModelHistoryCache } from './model-history.js';
+import { preRecordRequestSnapshot } from './request-snapshot.js';
+import type { PreRecordRequest } from './request-snapshot.js';
+import type { CheckpointSessions } from './session-checkpoint-policy.js';
 import { withModelCallStep } from './model-call-step.js';
 import type { ModelHistoryOptions } from './model-history.js';
 import type { DeriveOptions, DerivedConversation } from './conversation-replay.js';
@@ -459,13 +462,23 @@ export interface HistoryFromLogOptions {
 /**
  * 建 `log` 那一顆：拿日誌推出來的歷史換掉 `request.messages`，其餘原樣交下去。摘要器、剪刀、參數截斷讀 state 決定要不要做，決定記進日誌；這裡只照日誌上記的套（摘要、剪法、截斷、圖片省略），不自己判斷。
  *
- * 找不到日誌、推不出來都拋，這次呼叫失敗。
+ * 給了 `preRecord` 時，推導之前先寫請求快照與 `model/start`。找不到日誌、推不出來、預先記失敗都拋，這次呼叫失敗。
  *
  * @param deps - 找日誌的通道與 {@link HistoryFromLogOptions}。
  * @returns middleware。
  */
 export function createHistoryFromLogMiddleware(
-  deps: HistoryFromLogOptions & { readonly sessions: { forCall(config: unknown): SessionLookup } },
+  deps: HistoryFromLogOptions & {
+    readonly sessions: { forCall(config: unknown): SessionLookup };
+    /**
+     * 給了就在推導之前先寫請求快照與 `model/start`（native 的 root，[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）；
+     * 不給時快照在模型被叫的那一刻寫。見 {@link preRecordRequestSnapshot}。
+     */
+    readonly preRecord?: {
+      readonly sessions: CheckpointSessions;
+      readonly flushBeforeDispatch: boolean;
+    };
+  },
 ): AgentMiddleware {
   const cacheOf = sentHistoryCaches(deps.toolResultAsSeen);
   return withModelCallStep(
@@ -478,7 +491,12 @@ export function createHistoryFromLogMiddleware(
           `找不到這次模型呼叫的日誌（${found.kind}）：history-source=log 不退回 state`,
         );
       }
-      return handler({ ...request, messages: sentHistoryFromLog(found.log, cacheOf(found.log)) });
+      const log = found.log;
+      const next = (): unknown =>
+        handler({ ...request, messages: sentHistoryFromLog(log, cacheOf(log)) });
+      return deps.preRecord === undefined
+        ? next()
+        : preRecordRequestSnapshot(deps.preRecord, request as PreRecordRequest, next);
     },
     (wrapModelCall) =>
       createMiddleware({

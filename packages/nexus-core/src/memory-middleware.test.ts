@@ -40,11 +40,12 @@ describe('記憶的內容每條 thread 一份', () => {
   it('a 讀完、b 讀完，a 的下一次模型呼叫仍是 a 讀到的', async () => {
     const files = { '/AGENTS.md': '甲的記憶。' };
     const contents = createMemoryContents();
-    const middleware = createMemoryMiddleware(
+    const parts = createMemoryMiddleware(
       { backend: backendOf(files), sources: ['/AGENTS.md'] },
       contents,
     );
-    const beforeAgent = (middleware as unknown as { beforeAgent: Hook }).beforeAgent;
+    const middleware = parts.prompt;
+    const beforeAgent = (parts.hook as unknown as { beforeAgent: Hook }).beforeAgent;
 
     await beforeAgent({}, runtimeOf('a'));
     files['/AGENTS.md'] = '乙的記憶。';
@@ -57,11 +58,12 @@ describe('記憶的內容每條 thread 一份', () => {
 
   it('state 裡已經有的就沿用，不再讀檔', async () => {
     const files = { '/AGENTS.md': '檔案裡的。' };
-    const middleware = createMemoryMiddleware({
+    const parts = createMemoryMiddleware({
       backend: backendOf(files),
       sources: ['/AGENTS.md'],
     });
-    const beforeAgent = (middleware as unknown as { beforeAgent: Hook }).beforeAgent;
+    const middleware = parts.prompt;
+    const beforeAgent = (parts.hook as unknown as { beforeAgent: Hook }).beforeAgent;
 
     await beforeAgent({ memoryContents: { '/AGENTS.md': 'state 裡的。' } }, runtimeOf('a'));
 

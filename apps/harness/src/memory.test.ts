@@ -210,7 +210,7 @@ describe('subagent 的記憶邊界', () => {
  * ——配上 checkpointer，同一個 thread 的第二輪之後永遠拿第一輪那份。thread 中途改
  * AGENTS.md 不生效，而這件事沒有任何提示。
  */
-describe('記憶的快取邊界', () => {
+describe.each(['langgraph', 'native'] as const)('記憶的快取邊界（%s）', (loop) => {
   it('同一個 thread 中途改檔不重載，換一個 thread 才看得到新的', async () => {
     const root = await workspace({ 'AGENTS.md': '第一版：代號胡桃。' });
     const model = new ScriptedChatModel({
@@ -221,6 +221,7 @@ describe('記憶的快取邊界', () => {
       model,
       backend: new ContainedFilesystemBackend({ rootDir: root }),
       checkpointer: new MemorySaver(),
+      agentLoop: loop,
       plugins: [createMemoryPlugin()],
     });
 
