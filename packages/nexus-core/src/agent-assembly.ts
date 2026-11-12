@@ -74,7 +74,10 @@ import {
 } from './model-selection.js';
 import { createNativeAgent } from './native-loop/agent.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
+import { HISTORY_FROM_LOG_MIDDLEWARE_NAME } from './history-shadow.js';
 import { createMemoryMiddleware } from './memory-middleware.js';
+import type { MemoryMiddlewareParts } from './memory-middleware.js';
+import { REQUEST_SNAPSHOT_MIDDLEWARE_NAME } from './request-snapshot.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 import { toolResultEvictionStep } from './tool-result-eviction.js';
 import { withToolCallStep, wrapToolCallWith } from './tool-call-step.js';
@@ -125,6 +128,32 @@ const OUTSIDE_DEFAULTS: ReadonlySet<string> = new Set([
   SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
   IMAGE_OFFLOAD_MIDDLEWARE_NAME,
 ]);
+
+/**
+ * 把記憶渲染那半排到 `historyFromLog` 正前方（沒掛它就排在請求快照前，都沒有就留在讀檔那半後面）。
+ *
+ * 渲染那半從前在洋蔥最內層，在推導與請求快照的內側。快照要在推導之前寫，那一刻系統提示要已經完整，所以搬到它們外面；
+ * 讀檔那半留在 tail，`beforeAgent` 的順序不動。`historyFromLog` 到 tail 之間沒有別的系統提示 cell，搬完記憶仍是最後一塊，
+ * 位元組不變（`memory-prompt-order.test.ts` 釘這一點）。讀檔那半被同名的 custom 蓋掉時（`mergeMiddlewareStack` 的規則）
+ * 渲染那半不加：整顆被換掉就是整顆，跟拆開之前一樣。
+ *
+ * @param merged - {@link mergeMiddlewareStack} 的結果。
+ * @param parts - 記憶的兩半。
+ * @returns 渲染那半插好的新陣列；讀檔那半不在 `merged` 裡就原樣回。
+ */
+function withMemoryPromptBeforeSnapshot(
+  merged: readonly AgentMiddleware[],
+  parts: MemoryMiddlewareParts,
+): AgentMiddleware[] {
+  const hookAt = merged.indexOf(parts.hook);
+  if (hookAt < 0) return [...merged];
+  const anchors = [HISTORY_FROM_LOG_MIDDLEWARE_NAME, REQUEST_SNAPSHOT_MIDDLEWARE_NAME];
+  for (const name of anchors) {
+    const at = merged.findIndex((entry) => entry.name === name);
+    if (at >= 0) return [...merged.slice(0, at), parts.prompt, ...merged.slice(at)];
+  }
+  return [...merged.slice(0, hookAt + 1), parts.prompt, ...merged.slice(hookAt + 1)];
+}
 
 /**
  * 把 fold 的 middleware 併進預設疊與尾段，**照基座的 `mergeMiddlewareStack`**，加一處偏離。
@@ -445,11 +474,13 @@ export function assembleAgent(params: AssembleAgentParams) {
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
   ] as unknown as AgentMiddleware[];
-  const tail = [
-    ...(memory.length > 0 ? [createMemoryMiddleware({ backend, sources: [...memory] })] : []),
-  ] as unknown as AgentMiddleware[];
+  const memoryParts =
+    memory.length > 0 ? createMemoryMiddleware({ backend, sources: [...memory] }) : undefined;
+  const tail = (memoryParts === undefined ? [] : [memoryParts.hook]) as unknown as AgentMiddleware[];
 
-  const middleware = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
+  const merged = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
+  const middleware =
+    memoryParts === undefined ? merged : withMemoryPromptBeforeSnapshot(merged, memoryParts);
   const agent = createAgent({
     model: model as never,
     ...(systemPrompt !== '' && { systemPrompt }),

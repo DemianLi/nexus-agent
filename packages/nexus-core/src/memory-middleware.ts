@@ -15,7 +15,7 @@ import { createHookStepMiddleware } from './hook-step.js';
 import type { AgentMiddleware } from 'langchain';
 
 import { renderMemorySection } from './base-prompt-text.js';
-import { withSystemPromptStep } from './system-prompt-step.js';
+import { createSystemPromptStepMiddleware } from './system-prompt-step.js';
 import type { SystemPromptCell } from './system-prompt-step.js';
 
 /** 一條 thread 讀到的記憶：來源路徑 → 內容。 */
@@ -67,19 +67,34 @@ interface BaseHooks {
   ) => Promise<{ memoryContents?: Contents } | undefined>;
 }
 
+/** 渲染記憶段那顆 middleware 的名字。不撞基座任何一個，所以它是 novel entry。 */
+export const MEMORY_PROMPT_MIDDLEWARE_NAME = 'nexusMemoryPrompt';
+
+/** 記憶的兩半：讀檔的 hook，與渲染那一段的系統提示 cell。 */
+export interface MemoryMiddlewareParts {
+  /** 讀檔那半：名字與 state 形狀同基座（`MemoryMiddleware`、`memoryContents`），只有 `beforeAgent`，不改系統提示。 */
+  readonly hook: AgentMiddleware;
+  /** 渲染那半：只改系統提示（`block`），不讀檔。 */
+  readonly prompt: AgentMiddleware;
+}
+
 /**
- * 建記憶 middleware。名字與 state 形狀同基座那顆（`MemoryMiddleware`、`memoryContents`）。
+ * 建記憶 middleware 的兩半（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361) PR-D）。
+ *
+ * 拆開是為了讓渲染那半能排到 `historyFromLog` 前面：請求快照要在推導之前寫，那一刻系統提示要已經完整，記憶那一段是最後一塊，
+ * 它一直排在洋蔥最內層，在推導的內側。讀檔那半留在原位，`beforeAgent` 的相對順序不變。兩半共用同一份 {@link MemoryContents}：
+ * `beforeAgent` 在第一次模型呼叫之前就填好，所以渲染移到哪裡都讀得到同一份。
  *
  * @param options - 後端與來源路徑。
  * @param options.backend - 讀記憶檔的後端。
  * @param options.sources - 來源路徑，照登記的先後。
  * @param contents - 讀到的內容記在這裡；省略就自己建一份。
- * @returns middleware。
+ * @returns 兩半。
  */
 export function createMemoryMiddleware(
   options: { readonly backend: AnyBackendProtocol; readonly sources: readonly string[] },
   contents: MemoryContents = createMemoryContents(),
-): AgentMiddleware {
+): MemoryMiddlewareParts {
   const base = createBaseMemoryMiddleware({
     backend: options.backend,
     sources: [...options.sources],
@@ -93,20 +108,21 @@ export function createMemoryMiddleware(
       },
     ],
   };
-  return withSystemPromptStep(cell, (wrapModelCall) =>
-    createHookStepMiddleware({
-      name: base.name,
-      ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
-      async beforeAgent(state: unknown, runtime: unknown) {
-        const result = await base.beforeAgent(state, runtime);
-        const loaded =
-          result?.memoryContents ??
-          (state as { readonly memoryContents?: Contents } | null)?.memoryContents ??
-          {};
-        contents.record(threadOf(runtime), loaded);
-        return result as never;
-      },
-      wrapModelCall,
-    } as never),
-  ) as unknown as AgentMiddleware;
+  const hook = createHookStepMiddleware({
+    name: base.name,
+    ...(base.stateSchema !== undefined && { stateSchema: base.stateSchema as never }),
+    async beforeAgent(state: unknown, runtime: unknown) {
+      const result = await base.beforeAgent(state, runtime);
+      const loaded =
+        result?.memoryContents ??
+        (state as { readonly memoryContents?: Contents } | null)?.memoryContents ??
+        {};
+      contents.record(threadOf(runtime), loaded);
+      return result as never;
+    },
+  } as never) as unknown as AgentMiddleware;
+  return {
+    hook,
+    prompt: createSystemPromptStepMiddleware(MEMORY_PROMPT_MIDDLEWARE_NAME, cell),
+  };
 }
