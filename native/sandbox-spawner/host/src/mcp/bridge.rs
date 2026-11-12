@@ -368,7 +368,7 @@ async fn request(
             // 通知的是它自己的訊號：換代之後才回來的舊錯誤打不到新一代，同一代撞到幾次都只換一次代（通知不累積）。
             // rmcp 的自動重新初始化是關的（`reinit_on_expired_session`），重連走監督者的退避與放棄。
             if session_expired(&err) {
-                live.lost();
+                // 突變：永不判掉線（只驗測試抓得到，不合併）。
                 return Err(format!(
                     "{}: session expired (HTTP 404) — this call failed; the connection is being re-established, retry the call",
                     shared.label
