@@ -33,6 +33,8 @@ CI = ROOT / '.github' / 'workflows' / 'ci.yml'
 SETUP = ROOT / '.github' / 'actions' / 'setup' / 'action.yml'
 PLAN_CHECKS = ROOT / '.github' / 'actions' / 'plan-checks' / 'action.yml'
 SPAWNER_ACTION = ROOT / '.github' / 'actions' / 'sandbox-spawner' / 'action.yml'
+MUSL_INSTALL = ROOT / '.github' / 'scripts' / 'install-musl-debs.sh'
+WARM_MUSL = ROOT / '.github' / 'workflows' / 'warm-musl-debs.yml'
 
 # ci.yml 檔頭：免費額度同時 20 個 job。合併後的一輪加上兩張功能 PR 的輕 gate 同時跑，要在這之內。
 JOB_LIMIT = 20
@@ -711,7 +713,7 @@ class SandboxSpawner(unittest.TestCase):
 
     def test_musl_gcc_is_installed_before_anything_compiles(self) -> None:
         """宿主的 TLS 用 ring（#2570），ring 有 C 要編：musl target 的 C 編譯器指到 musl-gcc，裝在第一個 cargo 步驟之前。"""
-        install = self.steps['安裝 musl-gcc']['run']
+        install = MUSL_INSTALL.read_text(encoding='utf-8')
         self.assertIn('install -y --no-install-recommends musl-tools', install)
         self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', install)
         names = list(self.steps)
@@ -733,7 +735,8 @@ class SandboxSpawner(unittest.TestCase):
             self.assertEqual(step['if'], "inputs.cache == 'true'", '發版傳 cache: false，.deb 快取不還原、不存')
         install = self.steps['安裝 musl-gcc']
         self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
-        run = install['run']
+        self.assertEqual(install['run'], '${{ github.workspace }}/.github/scripts/install-musl-debs.sh', '裝法只有一份，預熱排程共用')
+        run = MUSL_INSTALL.read_text(encoding='utf-8')
         self.assertIn('dpkg -i', run)
         self.assertIn('for attempt in 1 2 3', run)
         self.assertIn('timeout 120', run)
@@ -744,10 +747,32 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('compgen -G "$debs/*.deb"', run, '沒有 .deb 就刪目錄，不存空快取')
         self.assertLess(run.index('compgen -G'), run.index('chown -R'))
         self.assertIn('rm -rf "$debs"', run)
-        self.assertEqual(install['env']['USE_FALLBACK'], '${{ inputs.cache }}', '發版（cache: false）不准退回 gcc')
-        self.assertIn('[ "$USE_FALLBACK" = "true" ] && command -v gcc', run)
+        self.assertEqual(install['env']['ALLOW_GCC_FALLBACK'], '${{ inputs.cache }}', '發版（cache: false）不准退回 gcc')
+        self.assertIn('[ "$ALLOW_GCC_FALLBACK" = "true" ] && command -v gcc', run)
         self.assertIn('::warning::', run)
         self.assertIn('CC_$(uname -m)_unknown_linux_musl=${fallback:-musl-gcc}', run)
+
+    def test_warm_schedule_fills_the_same_cache_the_action_reads(self) -> None:
+        """預熱排程（#2702 方案 P）：鍵與 action 同一把、兩個架構各原生跑、共用同一支安裝 shell、不准退回 gcc，只在預設分支排程。"""
+        warm = load(WARM_MUSL)
+        triggers = warm.get('on', warm.get(True))
+        self.assertIn('schedule', triggers)
+        self.assertIn('workflow_dispatch', triggers)
+        self.assertEqual(
+            sorted(triggers['pull_request']['paths']),
+            ['.github/scripts/install-musl-debs.sh', '.github/workflows/warm-musl-debs.yml'],
+        )
+        job = warm['jobs']['warm']
+        runners = {m['arch']: m['runner'] for m in job['strategy']['matrix']['include']}
+        spawner = {'x64': self.ci['jobs']['sandbox-spawner']['runs-on'], 'arm64': self.ci['jobs']['sandbox-spawner-arm64']['runs-on']}
+        self.assertEqual(runners, spawner, '預熱跑在 CI 讀它的同一種 runner 上，鍵裡的 image 版本才對得上')
+        steps = {s.get('name'): s for s in job['steps']}
+        self.assertEqual(steps['還原 musl 的 .deb 快取']['with'], self.steps['還原 musl 的 .deb 快取']['with'], '鍵與路徑要跟 action 一致')
+        install = steps['安裝 musl-gcc']
+        self.assertEqual(install['run'], self.steps['安裝 musl-gcc']['run'])
+        self.assertEqual(install['env']['ALLOW_GCC_FALLBACK'], 'false', '預熱的工作是裝到真的 .deb，裝不到就紅')
+        self.assertEqual(install['env']['CACHE_HIT'], '${{ steps.musl-debs.outputs.cache-hit }}')
+        self.assertEqual(steps['讀 runner image 版本']['run'].strip(), self.steps['讀 runner image 版本']['run'].strip())
 
     def test_the_host_is_its_own_package_and_the_spawner_keeps_two_dependencies(self) -> None:
         """宿主在 workspace 的另一個 package（#2570）：它的相依不算進 spawner 的 bundle 與授權，編、測、查的每個 cargo 步驟都要涵蓋整個 workspace，bundle 只收 spawner。"""
