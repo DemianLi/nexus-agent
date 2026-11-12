@@ -18,7 +18,7 @@
 //!   撤銷之後宿主表上沒有它，還沒送 `hello` 的連線出事時報的就是 0。
 //! - `--deaf-on`：收到綁那條 thread 的對話行程身分時關掉 stdin、記一行 `deaf`，之後一直睡到被殺：監督行程再寫控制通道就是 EPIPE。
 //! - 上面幾種之外的 `violation` 都帶那一筆的序號（pid 0 的帶 0）。
-//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`、`deaf`。
+//! - 每件事記一行到 `<socket 路徑>.log`：`start <pid>`、`grant <pid> <front|conversation|composition> <thread>`、`revoke <pid>`、`hello again`（監督行程又送了一次 `hello`）、`eof`、`deaf`。
 
 use nexus_sandbox_spawner::protocol::{frame, take_frame};
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -103,6 +103,7 @@ fn main() {
                     let role = match role {
                         Role::Front => "front",
                         Role::Conversation => "conversation",
+                        Role::Composition => "composition",
                     };
                     log(&format!(
                         "grant {pid} {role} {}",

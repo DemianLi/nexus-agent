@@ -3,9 +3,11 @@
 //! [#2569](https://github.com/DemianLi/nexus-agent/issues/2569)）之間的訊息。
 //! 這裡只定每則訊息的格式與意思（含哪一則回答哪一則）；什麼時候送、收到後怎麼處置，屬於監督行程（#2340）與各個子行程
 //! （對話行程 #2338、前台 #2341、宿主 #2569）。
+//! 一對＝同一條 thread 的 Rust 組合行程加 Node 葉子行程（[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)，
+//! 監督行程還不起）；組合行程走對話行程的通道與編解碼。
 //!
 //! **每條通道兩個方向的第一框都是 `hello`**，帶 [`PROTOCOL_VERSION`]：監督行程起了子行程就先送自己的，子行程送出的第一框也要是它的。
-//! 版本不相等就是錯配（同一次建置出貨的兩邊才相容，不做跨版本協商），判法見監督行程。給對話行程與前台的 `hello` 另帶一個身分 token：
+//! 版本不相等就是錯配（同一次建置出貨的兩邊才相容，不做跨版本協商），判法見監督行程。給對話行程（含組合行程）與前台的 `hello` 另帶一個身分 token：
 //! 它們連宿主時拿它證明自己是誰（宿主照監督行程給的身分表核對，見 [`HostCommand::Grant`]）。token 只走這條通道，不放環境變數或命令列。
 //!
 //! 框與欄位同 spawner 的控制通道（[`crate::protocol`] 的檔頭）：`u32 LE 長度` 接著內容，內容第一個 byte 是種類；數字是 `u32 LE`，
@@ -23,12 +25,12 @@ use crate::protocol::{DecodeError, Reader, Writer};
 
 /// 控制面的協定版本。兩邊各自的常數要跟 `supervisor-vectors.json` 的 `protocolVersion` 相等（兩邊的測試各自核對）；改了任何一則訊息的格式就加一。
 /// 宿主 socket 的協定版本另算（`nexus-host` 的 `HOST_PROTOCOL_VERSION`，向量檔 `host-vectors.json`）。
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// 宿主的 `--plugins` 檔案讀不了或解析不過時的結束碼。監督行程看它判斷插件清單壞了，所以放在兩邊共用的協定這裡。
 pub const HOST_EXIT_CONFIG: i32 = 4;
 
-/// 監督行程 → 對話行程。
+/// 監督行程 → 對話行程，或一對裡的組合行程（[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationCommand {
     /// 第一框。`token` 是這個行程連宿主時用的身分（ASCII）。
@@ -37,6 +39,8 @@ pub enum ConversationCommand {
     Bind { thread_id: Vec<u8> },
     /// 準備收：對話行程確認自己仍閒置才回 [`ConversationReport::Drained`]，否則回 [`ConversationReport::Busy`]。收掉是接著關 stdin。
     Drain,
+    /// 只給組合行程：同一對裡葉子行程現在的 pid，以最後收到的一則為準；組合行程只認這個 pid 的連線。監督行程目前還不送（#2583）。
+    Leaf { pid: u32 },
 }
 
 /// 一輪的開始或結束。
@@ -46,12 +50,15 @@ pub enum TurnPhase {
     End = 1,
 }
 
-/// 對話行程 → 監督行程。
+/// 對話行程（或一對裡的組合行程）→ 監督行程。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationReport {
-    /// 第一框。
+    /// 第一框。`runs_loop` 是這個行程宣告 agent loop 在自己這裡：[`ConversationReport::Turn`]、[`ConversationReport::Idle`]、[`ConversationReport::Busy`] 與
+    /// [`ConversationCommand::Drain`] 的回答只由宣告的那個行程送。單獨一個對話行程一定要宣告；一對裡恰好一個宣告。
+    /// 監督行程目前只起單獨的對話行程，只檢查前半。
     Hello {
         version: u32,
+        runs_loop: bool,
     },
     /// 根建好、插件載完，可以綁 thread。
     Ready,
@@ -113,7 +120,7 @@ pub enum DeathCause {
     Evicted = 6,
     /// 整台停機。
     Shutdown = 7,
-    /// 控制通道的第一框不是 `hello`，或協定版本對不上。
+    /// 控制通道的第一框不是 `hello`、協定版本對不上，或對話行程的 `hello` 沒宣告 loop 在自己這裡。
     Protocol = 8,
 }
 
@@ -170,6 +177,8 @@ pub enum FrontEvent {
 pub enum Role {
     Front = 0,
     Conversation = 1,
+    /// 一對裡的組合行程。
+    Composition = 2,
 }
 
 /// 監督行程 → 宿主。
@@ -177,7 +186,7 @@ pub enum Role {
 pub enum HostCommand {
     /// 第一框。
     Hello { version: u32 },
-    /// 這個 pid 拿這個 token 連進來就是它：前台，或對話行程（`thread` 是它綁的那條；還沒綁是空的）。同一個 pid 再送一次就整筆換掉
+    /// 這個 pid 拿這個 token 連進來就是它：前台，或對話行程、組合行程（`thread` 是它綁的那條；還沒綁是空的）。同一個 pid 再送一次就整筆換掉
     /// （對話行程綁了 thread 時）。宿主每次（重）起送出 [`HostReport::Ready`] 之後，監督行程把當下整張表重送一遍。
     /// `generation` 是監督行程每 spawn 一個行程就發的序號（從 1 起，0 保留給「沒有」）：同一個行程的每一筆都一樣，pid 被重用之後的新行程不同。
     /// 宿主報 [`HostReport::Violation`] 時原樣帶回，監督行程才分得出那則回報是不是現在這個行程的。
@@ -228,6 +237,7 @@ pub enum HostReport {
 const CMD_HELLO: u8 = b'w';
 const CMD_BIND: u8 = b'b';
 const CMD_DRAIN: u8 = b'd';
+const CMD_LEAF: u8 = b'l';
 const REP_HELLO: u8 = b'V';
 const REP_READY: u8 = b'R';
 const REP_BOUND: u8 = b'B';
@@ -278,6 +288,10 @@ pub fn encode_conversation_command(command: &ConversationCommand) -> Vec<u8> {
             w.bytes(thread_id);
         }
         ConversationCommand::Drain => w.u8(CMD_DRAIN),
+        ConversationCommand::Leaf { pid } => {
+            w.u8(CMD_LEAF);
+            w.u32(*pid);
+        }
     }
     w.0
 }
@@ -293,6 +307,7 @@ pub fn decode_conversation_command(payload: &[u8]) -> Result<ConversationCommand
                 thread_id: r.bytes()?,
             },
             CMD_DRAIN => ConversationCommand::Drain,
+            CMD_LEAF => ConversationCommand::Leaf { pid: r.u32()? },
             _ => return Err(DecodeError("不認得的種類")),
         })
     })
@@ -301,9 +316,10 @@ pub fn decode_conversation_command(payload: &[u8]) -> Result<ConversationCommand
 pub fn encode_conversation_report(report: &ConversationReport) -> Vec<u8> {
     let mut w = Writer(Vec::new());
     match report {
-        ConversationReport::Hello { version } => {
+        ConversationReport::Hello { version, runs_loop } => {
             w.u8(REP_HELLO);
             w.u32(*version);
+            w.u8(u8::from(*runs_loop));
         }
         ConversationReport::Ready => w.u8(REP_READY),
         ConversationReport::Bound { thread_id } => {
@@ -328,7 +344,14 @@ pub fn encode_conversation_report(report: &ConversationReport) -> Vec<u8> {
 pub fn decode_conversation_report(payload: &[u8]) -> Result<ConversationReport, DecodeError> {
     decoded(Reader { buf: payload }, |r, kind| {
         Ok(match kind {
-            REP_HELLO => ConversationReport::Hello { version: r.u32()? },
+            REP_HELLO => ConversationReport::Hello {
+                version: r.u32()?,
+                runs_loop: match r.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(DecodeError("不認得的 loop 宣告")),
+                },
+            },
             REP_READY => ConversationReport::Ready,
             REP_BOUND => ConversationReport::Bound {
                 thread_id: r.bytes()?,
@@ -517,6 +540,7 @@ pub fn decode_host_command(payload: &[u8]) -> Result<HostCommand, DecodeError> {
                 role: match r.u8()? {
                     0 => Role::Front,
                     1 => Role::Conversation,
+                    2 => Role::Composition,
                     _ => return Err(DecodeError("不認得的角色")),
                 },
                 thread: r.bytes()?,
@@ -620,6 +644,7 @@ mod tests {
                 thread_id: "é\n\t".as_bytes().to_vec(),
             },
             ConversationCommand::Drain,
+            ConversationCommand::Leaf { pid: 4242 },
         ]
     }
 
@@ -627,6 +652,11 @@ mod tests {
         vec![
             ConversationReport::Hello {
                 version: PROTOCOL_VERSION,
+                runs_loop: true,
+            },
+            ConversationReport::Hello {
+                version: PROTOCOL_VERSION,
+                runs_loop: false,
             },
             ConversationReport::Ready,
             ConversationReport::Bound {
@@ -724,6 +754,13 @@ mod tests {
                 generation: u32::MAX,
                 token: TOKEN.to_vec(),
                 role: Role::Conversation,
+                thread: T.to_vec(),
+            },
+            HostCommand::Grant {
+                pid: 4243,
+                generation: 2,
+                token: TOKEN.to_vec(),
+                role: Role::Composition,
                 thread: T.to_vec(),
             },
             HostCommand::Revoke { pid: 4242 },
@@ -830,7 +867,10 @@ mod tests {
         let expect = |group: &str, all: &[u8]| {
             assert_eq!(kinds(group), all.iter().copied().collect(), "{group}")
         };
-        expect("conversationCommands", &[CMD_HELLO, CMD_BIND, CMD_DRAIN]);
+        expect(
+            "conversationCommands",
+            &[CMD_HELLO, CMD_BIND, CMD_DRAIN, CMD_LEAF],
+        );
         expect(
             "conversationReports",
             &[
@@ -905,6 +945,7 @@ mod tests {
             CMD_HELLO,
             CMD_BIND,
             CMD_DRAIN,
+            CMD_LEAF,
             REP_HELLO,
             REP_READY,
             REP_BOUND,
@@ -970,6 +1011,14 @@ mod tests {
             decode_conversation_report(&[turn[0], 2]),
             Err(DecodeError("不認得的一輪階段"))
         );
+        let hello = encode_conversation_report(&ConversationReport::Hello {
+            version: PROTOCOL_VERSION,
+            runs_loop: true,
+        });
+        assert_eq!(
+            decode_conversation_report(&[&hello[..5], &[2]].concat()),
+            Err(DecodeError("不認得的 loop 宣告"))
+        );
         let mut ensure = encode_front_request(&FrontRequest::Ensure {
             thread_id: Vec::new(),
             open: OpenMode::Run,
@@ -994,7 +1043,7 @@ mod tests {
             role: Role::Front,
             thread: Vec::new(),
         });
-        grant[13] = 2;
+        grant[13] = 3;
         assert_eq!(
             decode_host_command(&grant),
             Err(DecodeError("不認得的角色"))
