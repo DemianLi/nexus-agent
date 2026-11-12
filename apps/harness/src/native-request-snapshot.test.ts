@@ -28,6 +28,8 @@ import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { runRepl } from './cli.js';
+import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { liveModelConfigSchema, streamRetryOptionsOf } from './settings/live-model.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createEchoPlugin } from './echo.fixture.js';
 import { testPlanModePlugin } from './fixtures.js';
@@ -51,7 +53,7 @@ interface ToolCallReply {
 }
 
 /** 本機的 OpenAI 相容端點：預設每次都回「好。」；`respond` 可按第幾個請求回別的。請求 body 原樣留下，`stream: true` 的回 SSE。 */
-async function fakeEndpoint(respond?: (n: number) => Reply) {
+async function fakeEndpoint(respond?: (n: number) => Reply, failFirst = 0) {
   const bodies: Body[] = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -61,6 +63,11 @@ async function fakeEndpoint(respond?: (n: number) => Reply) {
         stream?: boolean;
       };
       bodies.push(body);
+      if (bodies.length <= failFirst) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Internal server error', code: 500 } }));
+        return;
+      }
       const reply: Reply = respond?.(bodies.length) ?? { content: '好。' };
       const calls = 'toolCalls' in reply ? reply.toolCalls : [];
       const message = {
@@ -150,8 +157,28 @@ interface Scenario {
   readonly respond?: (n: number) => Reply;
   /** 模型走串流。 */
   readonly streaming?: boolean;
+  /** 端點前幾個請求回 500，搭配真的 `createLiveModel` 與重試政策看重打。 */
+  readonly failFirst?: number;
   /** 端點應該收到的請求數（確認子代理真的被派工）。 */
   readonly bodyCount?: number;
+}
+
+/** 重打用的政策：退避縮成毫秒。 */
+function retryConfig(baseUrl: string) {
+  return liveModelConfigSchema.parse({
+    baseUrl,
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries: 2,
+      backoff: { initialDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 },
+    },
+  });
+}
+
+/** 真的 `createLiveModel`（重試分類住在它的 `retryPolicy`），打本機假端點。 */
+function liveModelOf(baseUrl: string): BaseChatModel {
+  process.env[LIVE_API_KEY_ENV] = 'fake-key-for-loopback';
+  return createLiveModel(retryConfig(baseUrl)) as unknown as BaseChatModel;
 }
 
 /** 本機假端點加產品組裝，餵幾行進 REPL。 */
@@ -160,12 +187,13 @@ async function runOn(
   scenario: Scenario,
   model?: (baseURL: string) => BaseChatModel,
 ): Promise<{ events: SessionEvent[]; bodies: Body[]; error?: unknown }> {
-  const upstream = await fakeEndpoint(scenario.respond);
+  const upstream = await fakeEndpoint(scenario.respond, scenario.failFirst ?? 0);
   const root = await mkdtemp(join(tmpdir(), 'nexus-native-snap-'));
   await writeFile(join(root, 'AGENTS.md'), MEMORY_TEXT);
   const { agent, commands, attachSession, dispose } = await createNexusAgent({
     model:
       model?.(upstream.baseURL) ??
+      (scenario.failFirst !== undefined ? liveModelOf(upstream.baseURL) : undefined) ??
       new ChatOpenAI({
         model: 'fake',
         apiKey: 'sk-loopback',
@@ -181,6 +209,9 @@ async function runOn(
     checkpointer: new MemorySaver(),
     agentLoop: loop,
     historySource: 'log',
+    ...(scenario.failFirst !== undefined && {
+      streamRetry: streamRetryOptionsOf(retryConfig(upstream.baseURL).retryPolicy),
+    }),
   });
   const sessions = new SessionRegistry('native-snapshot');
   const detach = attachSession(sessions);
@@ -303,7 +334,10 @@ describe('native 預先寫快照 = langgraph 在 callback 抄的（七個場景�
     const baseline = baselines()[scenario.name];
     if (process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'] !== undefined) {
       writeFileSync(
-        join(process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'], `${scenario.name}.json`),
+        join(
+          process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'],
+          `${scenario.name.replaceAll('/', '／')}.json`,
+        ),
         JSON.stringify(comparable(reference)),
       );
     } else {
@@ -319,7 +353,9 @@ describe('native 預先寫快照 = langgraph 在 callback 抄的（七個場景�
  *
  * @returns 還原。
  */
-function driftAfterFirstAsk(): () => void {
+function driftAfterFirstAsk(
+  drift: (params: Record<string, unknown>) => Record<string, unknown>,
+): () => void {
   let owner: object | null = ChatOpenAI.prototype;
   while (owner !== null && !Object.hasOwn(owner, '_getInvocationParamsForTracing')) {
     owner = Object.getPrototypeOf(owner) as object | null;
@@ -331,12 +367,55 @@ function driftAfterFirstAsk(): () => void {
   holder['_getInvocationParamsForTracing'] = function (this: unknown, options: unknown) {
     const params = original.call(this, options);
     asked += 1;
-    return asked >= 2 ? { ...params, top_p: 0.5 } : params;
+    return asked >= 2 ? drift(params) : params;
   };
   return () => {
     holder['_getInvocationParamsForTracing'] = original;
   };
 }
+
+describe('重打', () => {
+  it('第一個請求 500、重打一次成功：每次重進推導不多寫快照，筆數與順序同 langgraph', async () => {
+    const scenario: Scenario = {
+      name: 'retry',
+      lines: '一\n/exit\n',
+      plugins: () => [createEchoPlugin(), createMemoryPlugin()],
+      failFirst: 1,
+    };
+    const saved = process.env[LIVE_API_KEY_ENV];
+    try {
+      const reference = await runOn('langgraph', scenario);
+      const native = await runOn('native', scenario);
+      expect(reference.error).toBeUndefined();
+      expect(native.error).toBeUndefined();
+      expect(native.bodies).toHaveLength(2);
+      expect(reference.bodies).toHaveLength(2);
+      const types = comparable(native).types;
+      expect(types.filter((type) => type === 'llm/retry')).toHaveLength(1);
+      expect(types.filter((type) => type === 'request/system')).toHaveLength(1);
+      expect(types.filter((type) => type === 'request/header')).toHaveLength(1);
+      // native 一律打串流請求（#2684），`langgraph` 照模型設定：`stream`、`stream_options` 不在快照裡，其餘逐項相同。
+      const withoutStream = (result: typeof native) => ({
+        ...comparable(result),
+        bodies: result.bodies.map((body) => {
+          const {
+            stream: _stream,
+            stream_options: _options,
+            ...rest
+          } = body as Body & {
+            stream?: unknown;
+            stream_options?: unknown;
+          };
+          return rest;
+        }),
+      });
+      expect(withoutStream(native)).toEqual(withoutStream(reference));
+    } finally {
+      if (saved === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = saved;
+    }
+  });
+});
 
 describe('不報呼叫參數與工具的模型', () => {
   it('腳本模型：兩邊的快照都是空設定，仍深度相等', async () => {
@@ -359,7 +438,7 @@ describe('不報呼叫參數與工具的模型', () => {
 
 describe('預先算的與 callback 那一刻的對不上', () => {
   it('這次請求不送，端點收到 0 個請求，錯誤只帶欄位名與摘要', async () => {
-    const restore = driftAfterFirstAsk();
+    const restore = driftAfterFirstAsk((params) => ({ ...params, top_p: 0.5 }));
     const result = await runOn('native', {
       name: 'drift',
       lines: '一\n/exit\n',
@@ -374,5 +453,29 @@ describe('預先算的與 callback 那一刻的對不上', () => {
     expect(message).toContain('topP');
     expect(message).not.toContain(MEMORY_TEXT);
     expect(message).not.toContain('你是測試助手');
+  });
+
+  it('工具清單漂移（多一顆工具）：同樣不送，講 header.tools 與工具顆數，不印參數', async () => {
+    const restore = driftAfterFirstAsk((params) => ({
+      ...params,
+      tools: [
+        ...((params['tools'] as unknown[] | undefined) ?? []),
+        {
+          type: 'function',
+          function: { name: 'sneaky', parameters: { type: 'object', secret: 'x' } },
+        },
+      ],
+    }));
+    const result = await runOn('native', {
+      name: 'drift-tools',
+      lines: '一\n/exit\n',
+      plugins: () => [createEchoPlugin()],
+    }).finally(restore);
+    expect(result.bodies).toHaveLength(0);
+    const message = String(
+      result.error instanceof Error ? result.error.message : (result.error ?? ''),
+    );
+    expect(message).toContain('header.tools');
+    expect(message).not.toContain('secret');
   });
 });

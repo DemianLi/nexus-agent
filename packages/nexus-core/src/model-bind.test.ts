@@ -9,7 +9,9 @@ import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { bindRequestModel, bindTools, previewCallParams } from './model-bind.js';
-import { preRecordRequestSnapshot } from './request-snapshot.js';
+import { SessionLog } from './session-log.js';
+import { firstDifference, preRecordRequestSnapshot } from './request-snapshot.js';
+import type { ExtractedRequest } from './request-snapshot.js';
 
 describe('綁定只有一份', () => {
   it('callModel 送出前綁的就是 model-bind 的 bindRequestModel，自己沒有第二份 bindTools', () => {
@@ -67,12 +69,10 @@ describe('預覽問不出來的模型', () => {
 });
 
 describe('動態模型不預先記', () => {
-  it('request.model 不是 Runnable：原樣往內交，不碰日誌', async () => {
+  it('request.model 不是 Runnable：原樣往內交，不寫快照、不排空、不綁定', async () => {
+    const log = new SessionLog('dynamic');
     const next = vi.fn(() => 'inner');
-    const sessions = {
-      forCall: vi.fn(() => ({ kind: 'missing' })),
-      flush: vi.fn(),
-    };
+    const sessions = { forCall: vi.fn(() => ({ kind: 'ok', log })), flush: vi.fn() };
     const result = await preRecordRequestSnapshot(
       { sessions: sessions as never, flushBeforeDispatch: true },
       { model: () => undefined, tools: [], systemMessage: new SystemMessage('系統') },
@@ -80,6 +80,51 @@ describe('動態模型不預先記', () => {
     );
     expect(result).toBe('inner');
     expect(next).toHaveBeenCalledTimes(1);
+    expect(log.events).toHaveLength(0);
     expect(sessions.flush).not.toHaveBeenCalled();
+  });
+});
+
+describe('比對不一致時講哪一格', () => {
+  const base: ExtractedRequest = {
+    system: '系統提示詞全文',
+    header: {
+      config: { model: 'm', temperature: 0.3 },
+      tools: [{ name: 'echo', description: 'd', parameters: { type: 'object' } }],
+    },
+  };
+
+  it('一樣回 undefined', () => {
+    expect(firstDifference(base, structuredClone(base))).toBeUndefined();
+  });
+
+  it('system 不同：講長度與第幾個字元起不同，不印全文', () => {
+    const message = firstDifference(base, { ...base, system: '系統提示詞全文，多一段' });
+    expect(message).toContain('system');
+    expect(message).toContain('第 7 個字元起不同');
+    expect(message).not.toContain('系統提示詞全文');
+  });
+
+  it('config 不同：講鍵名，不印值', () => {
+    const message = firstDifference(base, {
+      ...base,
+      header: { ...base.header, config: { model: 'm', temperature: 0.3, topP: 0.5 } },
+    });
+    expect(message).toContain('header.config');
+    expect(message).toContain('topP');
+    expect(message).not.toContain('0.5');
+  });
+
+  it('tools 不同：講顆數與第一顆不同的名字，不印參數內容', () => {
+    const message = firstDifference(base, {
+      ...base,
+      header: {
+        ...base.header,
+        tools: [{ name: 'echo', description: 'd', parameters: { type: 'object', secret: 'x' } }],
+      },
+    });
+    expect(message).toContain('header.tools');
+    expect(message).toContain('"echo"');
+    expect(message).not.toContain('secret');
   });
 });
