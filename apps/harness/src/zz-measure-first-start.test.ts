@@ -4,7 +4,13 @@ import { it } from 'vitest';
 
 it('measure first start', async () => {
   const t0 = performance.now();
-  process.stderr.write(`ENV cpus=${cpus().length} load=${loadavg().map((n) => n.toFixed(1)).join(',')} pool=${process.env.VITEST_POOL_ID ?? '-'} worker=${process.env.VITEST_WORKER_ID ?? '-'}\n`);
+  process.stderr.write(
+    `ENV cpus=${cpus().length} load=${loadavg()
+      .map((n) => n.toFixed(1))
+      .join(
+        ',',
+      )} pool=${process.env.VITEST_POOL_ID ?? '-'} worker=${process.env.VITEST_WORKER_ID ?? '-'}\n`,
+  );
   const lap = (label: string): void => {
     process.stderr.write(`LAP ${label} ${Math.round(performance.now() - t0)}\n`);
   };
