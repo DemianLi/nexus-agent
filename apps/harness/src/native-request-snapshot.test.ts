@@ -12,6 +12,7 @@
  */
 
 import { createServer } from 'node:http';
+import { readFileSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -42,25 +43,76 @@ interface Body {
   }[];
 }
 
-/** 本機的 OpenAI 相容端點：每次都回「好。」，並把收到的 body 原樣留下。 */
-async function fakeEndpoint() {
+/** 假端點這一次要回的助手訊息。 */
+type Reply = { readonly content: string } | { readonly toolCalls: readonly ToolCallReply[] };
+interface ToolCallReply {
+  readonly name: string;
+  readonly args: Record<string, unknown>;
+}
+
+/** 本機的 OpenAI 相容端點：預設每次都回「好。」；`respond` 可按第幾個請求回別的。請求 body 原樣留下，`stream: true` 的回 SSE。 */
+async function fakeEndpoint(respond?: (n: number) => Reply) {
   const bodies: Body[] = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
-      bodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Body);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Body & {
+        stream?: boolean;
+      };
+      bodies.push(body);
+      const reply: Reply = respond?.(bodies.length) ?? { content: '好。' };
+      const calls = 'toolCalls' in reply ? reply.toolCalls : [];
+      const message = {
+        role: 'assistant',
+        content: 'content' in reply ? reply.content : null,
+        ...(calls.length > 0 && {
+          tool_calls: calls.map((call, index) => ({
+            id: `call_${bodies.length}_${index}`,
+            type: 'function',
+            function: { name: call.name, arguments: JSON.stringify(call.args) },
+          })),
+        }),
+      };
+      const finish = calls.length > 0 ? 'tool_calls' : 'stop';
+      const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+      const base = { id: `chatcmpl-${bodies.length}`, created: 0, model: 'fake' };
+      if (body.stream === true) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        const send = (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+        send({
+          ...base,
+          object: 'chat.completion.chunk',
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: 'assistant',
+                content: message.content,
+                ...(message.tool_calls !== undefined && {
+                  tool_calls: message.tool_calls.map((call, index) => ({ index, ...call })),
+                }),
+              },
+              finish_reason: null,
+            },
+          ],
+        });
+        send({
+          ...base,
+          object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: {}, finish_reason: finish }],
+        });
+        send({ ...base, object: 'chat.completion.chunk', choices: [], usage });
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
-          id: `chatcmpl-${bodies.length}`,
+          ...base,
           object: 'chat.completion',
-          created: 0,
-          model: 'fake',
-          choices: [
-            { index: 0, message: { role: 'assistant', content: '好。' }, finish_reason: 'stop' },
-          ],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          choices: [{ index: 0, message, finish_reason: finish }],
+          usage,
         }),
       );
     });
@@ -94,6 +146,12 @@ interface Scenario {
   readonly systemPrompt?: string;
   readonly temperature?: number;
   readonly modelKwargs?: Record<string, unknown>;
+  /** 端點按第幾個請求回什麼；省略就每次回「好。」。 */
+  readonly respond?: (n: number) => Reply;
+  /** 模型走串流。 */
+  readonly streaming?: boolean;
+  /** 端點應該收到的請求數（確認子代理真的被派工）。 */
+  readonly bodyCount?: number;
 }
 
 /** 本機假端點加產品組裝，餵幾行進 REPL。 */
@@ -102,7 +160,7 @@ async function runOn(
   scenario: Scenario,
   model?: (baseURL: string) => BaseChatModel,
 ): Promise<{ events: SessionEvent[]; bodies: Body[]; error?: unknown }> {
-  const upstream = await fakeEndpoint();
+  const upstream = await fakeEndpoint(scenario.respond);
   const root = await mkdtemp(join(tmpdir(), 'nexus-native-snap-'));
   await writeFile(join(root, 'AGENTS.md'), MEMORY_TEXT);
   const { agent, commands, attachSession, dispose } = await createNexusAgent({
@@ -113,6 +171,7 @@ async function runOn(
         apiKey: 'sk-loopback',
         maxRetries: 0,
         temperature: scenario.temperature ?? 0.3,
+        ...(scenario.streaming === true && { streaming: true }),
         ...(scenario.modelKwargs !== undefined && { modelKwargs: scenario.modelKwargs }),
         configuration: { baseURL: upstream.baseURL },
       }),
@@ -162,6 +221,19 @@ function comparable(result: { events: readonly SessionEvent[]; bodies: readonly 
   };
 }
 
+/**
+ * 固定的預期值：develop 的樹（`b9e67bd6`，這張改動之前）上，`langgraph` 跑這幾個場景的事件型別順序、兩顆快照、端點收到的 body。
+ * 產生方式：把樹切回 develop 的版本，`DUMP_NATIVE_SNAPSHOT_BASELINE=<目錄>` 跑本檔，再把每個場景一份的 JSON 併成
+ * `native-request-snapshot.baseline.json`（鍵是場景名）。有它，記憶拆兩半對 `langgraph`、子代理、串流送出的內容有沒有變就量得出來，
+ * 不是拿新碼的 `langgraph` 對新碼的 `native`。
+ */
+function baselines(): Record<string, unknown> {
+  if (process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'] !== undefined) return {};
+  return JSON.parse(
+    readFileSync(new URL('./native-request-snapshot.baseline.json', import.meta.url), 'utf8'),
+  ) as Record<string, unknown>;
+}
+
 const SCENARIOS: readonly Scenario[] = [
   { name: '沒有工具、沒有記憶', lines: '一\n/exit\n', plugins: () => [] },
   { name: '有工具', lines: '一\n/exit\n', plugins: () => [createEchoPlugin()] },
@@ -182,6 +254,27 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { name: '系統提示詞是空的', lines: '一\n/exit\n', plugins: () => [], systemPrompt: '' },
   {
+    name: '派子代理：根與子代理的 body 都對得上',
+    lines: '一\n/exit\n',
+    plugins: () => [createEchoPlugin(), createMemoryPlugin(), WORKER],
+    bodyCount: 3,
+    respond: (n) =>
+      n === 1
+        ? {
+            toolCalls: [
+              { name: 'task', args: { description: '做一件事', subagent_type: 'worker' } },
+            ],
+          }
+        : { content: '好。' },
+  },
+  {
+    name: '串流',
+    lines: '一\n二\n/exit\n',
+    plugins: () => [createEchoPlugin(), createMemoryPlugin()],
+    streaming: true,
+    bodyCount: 2,
+  },
+  {
     name: '多一輪、-0 的溫度與額外的 body 參數',
     lines: '一\n二\n三\n/exit\n',
     plugins: () => [createEchoPlugin(), createMemoryPlugin()],
@@ -197,7 +290,26 @@ describe('native 預先寫快照 = langgraph 在 callback 抄的（七個場景�
     expect(reference.error).toBeUndefined();
     expect(native.error).toBeUndefined();
     expect(native.bodies.length).toBeGreaterThan(0);
+    if (scenario.bodyCount !== undefined) {
+      expect(native.bodies).toHaveLength(scenario.bodyCount);
+      expect(reference.bodies).toHaveLength(scenario.bodyCount);
+    }
+    if (scenario.streaming === true) {
+      for (const body of [...native.bodies, ...reference.bodies]) {
+        expect((body as { stream?: boolean }).stream).toBe(true);
+      }
+    }
     expect(comparable(native)).toEqual(comparable(reference));
+    const baseline = baselines()[scenario.name];
+    if (process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'] !== undefined) {
+      writeFileSync(
+        join(process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'], `${scenario.name}.json`),
+        JSON.stringify(comparable(reference)),
+      );
+    } else {
+      expect(JSON.parse(JSON.stringify(comparable(reference)))).toEqual(baseline);
+      expect(JSON.parse(JSON.stringify(comparable(native)))).toEqual(baseline);
+    }
   });
 });
 
