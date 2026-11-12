@@ -484,7 +484,7 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
  */
 const preRecorded = new AsyncLocalStorage<ExtractedRequest>();
 
-/** 兩份 {@link ExtractedRequest} 的差別在哪一格；一樣是 `undefined`。只講欄位名與長度、名單，不印系統提示全文與工具參數內容。 */
+/** 兩份 {@link ExtractedRequest} 的差別在哪一格，依 system、header.config、header.tools 的順序只回第一處；一樣是 `undefined`。只講欄位名與長度、名單，不印系統提示全文與工具參數內容。 */
 export function firstDifference(
   expected: ExtractedRequest,
   actual: ExtractedRequest,

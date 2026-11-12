@@ -69,7 +69,7 @@ describe('預覽問不出來的模型', () => {
 });
 
 describe('動態模型不預先記', () => {
-  it('request.model 不是 Runnable：原樣往內交，不寫快照、不排空、不綁定', async () => {
+  it('request.model 不是 Runnable：原樣往內交，不寫快照、不排空', async () => {
     const log = new SessionLog('dynamic');
     const next = vi.fn(() => 'inner');
     const sessions = { forCall: vi.fn(() => ({ kind: 'ok', log })), flush: vi.fn() };
@@ -115,7 +115,7 @@ describe('比對不一致時講哪一格', () => {
     expect(message).not.toContain('0.5');
   });
 
-  it('tools 不同：講顆數與第一顆不同的名字，不印參數內容', () => {
+  it('tools 不同：講第一顆不同的名字，不印參數內容', () => {
     const message = firstDifference(base, {
       ...base,
       header: {

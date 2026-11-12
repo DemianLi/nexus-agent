@@ -3,9 +3,9 @@
  *
  * 做法是對照：同一組裝、同一段對話，`langgraph`（快照在模型被叫的那一刻抄）與 `native`（推導前預先算、callback 只比對）跑兩遍，
  * 日誌上的 `request/system`、`request/header`、事件型別順序與端點收到的 body（JSON 解析後）必須深度相等。`native` 的 callback 比對不一致會拋、
- * 這次請求不送，所以這一組全綠同時證明預先算的與 callback 那一刻的相同。七個場景各一筆。
+ * 這次請求不送，所以這一組全綠同時證明預先算的與 callback 那一刻的相同。每個場景各一筆，另與固定預期值（`native-request-snapshot.baseline.json`）比，兩條 loop 一起漂移也量得出來。
  *
- * 反向：預先算之後 callback 看到的參數變了（模型被問供應商層參數，第二次起多一格 `top_p`），這次請求不送，端點收到 0 個請求，
+ * 反向：預先算之後 callback 看到的參數變了（模型被問供應商層參數，第二次起多一格 `top_p`、或多一顆工具），這次請求不送，端點收到 0 個請求，
  * 錯誤只帶欄位名與摘要，不印系統提示全文。
  *
  * **零憑證、零外部連線**。
@@ -159,7 +159,7 @@ interface Scenario {
   readonly streaming?: boolean;
   /** 端點前幾個請求回 500，搭配真的 `createLiveModel` 與重試政策看重打。 */
   readonly failFirst?: number;
-  /** 端點應該收到的請求數（確認子代理真的被派工）。 */
+  /** 端點應該收到的請求數。 */
   readonly bodyCount?: number;
 }
 
@@ -253,10 +253,10 @@ function comparable(result: { events: readonly SessionEvent[]; bodies: readonly 
 }
 
 /**
- * 固定的預期值：develop 的樹（`b9e67bd6`，這張改動之前）上，`langgraph` 跑這幾個場景的事件型別順序、兩顆快照、端點收到的 body。
- * 產生方式：把樹切回 develop 的版本，`DUMP_NATIVE_SNAPSHOT_BASELINE=<目錄>` 跑本檔，再把每個場景一份的 JSON 併成
- * `native-request-snapshot.baseline.json`（鍵是場景名）。有它，記憶拆兩半對 `langgraph`、子代理、串流送出的內容有沒有變就量得出來，
- * 不是拿新碼的 `langgraph` 對新碼的 `native`。
+ * 固定的預期值：`langgraph` 在 `b9e67bd6` 跑這幾個場景的事件型別順序、兩顆快照與端點收到的 body，鍵是場景名。
+ * 有它，兩條 loop 一起漂移也量得出來。重產：把本檔放到要當基準的 commit 上，`DUMP_NATIVE_SNAPSHOT_BASELINE=<目錄>` 跑本檔，
+ * 每個場景寫一份 JSON；檔名裡的 `／` 換回 `/` 當鍵，併成本檔旁的 `native-request-snapshot.baseline.json`。
+ * 場景或對話改了、或這些送出的內容有意改變時，由改它的人重產。
  */
 function baselines(): Record<string, unknown> {
   if (process.env['DUMP_NATIVE_SNAPSHOT_BASELINE'] !== undefined) return {};
@@ -314,7 +314,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 
-describe('native 預先寫快照 = langgraph 在 callback 抄的（七個場景）', () => {
+describe('native 預先寫快照 = langgraph 在 callback 抄的', () => {
   it.each(SCENARIOS)('$name', async (scenario) => {
     const reference = await runOn('langgraph', scenario);
     const native = await runOn('native', scenario);
@@ -348,7 +348,7 @@ describe('native 預先寫快照 = langgraph 在 callback 抄的（七個場景�
 });
 
 /**
- * 讓「問供應商層參數」的第二次起多一格 `top_p`：預先算是第一次問，callback 那一刻是第二次問，等於快照寫好之後有東西改了請求。
+ * 讓「問供應商層參數」第二次起的回傳經 `drift` 改寫：預先算是第一次問，callback 那一刻是第二次問，等於快照寫好之後有東西改了請求。
  * `ChatOpenAI.withConfig` 會 `new ChatOpenAI(this.fields)` 重建，傳進去的子類會被丟掉，所以改在定義該方法的原型上換。
  *
  * @returns 還原。
@@ -394,7 +394,7 @@ describe('重打', () => {
       expect(types.filter((type) => type === 'llm/retry')).toHaveLength(1);
       expect(types.filter((type) => type === 'request/system')).toHaveLength(1);
       expect(types.filter((type) => type === 'request/header')).toHaveLength(1);
-      // native 一律打串流請求（#2684），`langgraph` 照模型設定：`stream`、`stream_options` 不在快照裡，其餘逐項相同。
+      // 這個場景 native 打串流請求、`langgraph` 照模型設定（#2684）：`stream`、`stream_options` 不在快照裡，其餘逐項相同。
       const withoutStream = (result: typeof native) => ({
         ...comparable(result),
         bodies: result.bodies.map((body) => {
@@ -455,7 +455,7 @@ describe('預先算的與 callback 那一刻的對不上', () => {
     expect(message).not.toContain('你是測試助手');
   });
 
-  it('工具清單漂移（多一顆工具）：同樣不送，講 header.tools 與工具顆數，不印參數', async () => {
+  it('工具清單漂移（多一顆工具）：同樣不送，講 header.tools，不印參數', async () => {
     const restore = driftAfterFirstAsk((params) => ({
       ...params,
       tools: [
