@@ -1,9 +1,9 @@
 /**
- * 記憶的渲染那半排在 `historyFromLog` 正前方，而且是最後一個改系統提示的（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361) PR-D）。
+ * 記憶的渲染那半排在 `historyFromLog` 正前方，而且是最後一個改系統提示的（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）。
  *
- * 請求快照要在推導之前寫，那一刻系統提示要已經完整；記憶那一段原本在洋蔥最內層、推導的內側，所以拆成讀檔與渲染兩半，
- * 渲染排到推導前面。搬過去仍是最後一塊的前提是：它後面（推導、請求快照、中止訊號、讀檔那半）沒有別的 cell 改系統提示或工具清單。
- * 之後有人在這幾格中間加 cell，這裡會紅。
+ * 請求快照在推導之前寫，那一刻系統提示要已經完整，所以記憶分成讀檔與渲染兩半，渲染那半排在推導前面。
+ * 記憶是最後一塊的前提是：它後面（推導、請求快照、中止訊號、讀檔那半）沒有別的 cell 改系統提示或工具清單。
+ * 在這幾格中間加系統提示或工具清單 cell 會讓這支紅。
  */
 
 import { mkdtemp, writeFile } from 'node:fs/promises';
@@ -36,7 +36,7 @@ describe('記憶渲染那半的位置', () => {
       const historyAt = names.indexOf('historyFromLog');
       expect(promptAt).toBeGreaterThanOrEqual(0);
       expect(historyAt).toBe(promptAt + 1);
-      // 讀檔那半留在 tail（最後一格），順序不動。
+      // 讀檔那半在 tail（最後一格）。
       expect(names.at(-1)).toBe('MemoryMiddleware');
       // 渲染那半之後，沒有別的 cell 改系統提示或工具清單。
       for (const entry of stack.slice(promptAt + 1)) {

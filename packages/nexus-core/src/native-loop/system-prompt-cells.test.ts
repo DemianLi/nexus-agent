@@ -133,15 +133,15 @@ describe('native 的系統提示那幾格：root 與前景子代理都由 native
     expect(messages.at(-1)?.text).toBe('好了');
     expect(countsOn('動手')).toMatchInlineSnapshot(`
       {
-        "MemoryMiddleware": {
-          "hook": 0,
-          "native": 3,
-        },
         "SkillsMiddleware": {
           "hook": 0,
           "native": 3,
         },
         "nexusApprovalPolicyPrompt": {
+          "hook": 0,
+          "native": 3,
+        },
+        "nexusMemoryPrompt": {
           "hook": 0,
           "native": 3,
         },

@@ -35,7 +35,10 @@
  * 寫哪一份日誌拿範圍控制柄上的，再跟 `sessions.forCall` 自己問到的比一次；兩邊不是同一份就讓這次請求不送：快照跟
  * `model/start` 寫進不同的日誌，位置就對不上了。不在任何範圍裡（直接叫這顆 middleware 的測試）才用自己問到的。
  *
- * ## 記錄點：模型本身，不是 middleware
+ * ## 記錄點：模型本身，不是 middleware（native 而且 history-source=log 時兩段式）
+ *
+ * native 而且 history-source=log 的 root，`historyFromLog` 在推導之前就用同一支綁定預覽參數、記快照、寫 `model/start`（{@link preRecordRequestSnapshot}）；
+ * 模型被叫的那一刻 callback 只把實際要送的再抽一次與預先記的比，對不上這次請求不送。其餘路徑照下面寫的在 callback 記。
  *
  * 「記到的就是送出的」是這張卡的承重句。請求在 middleware 洋蔥裡一路被改寫，而**我們的 `wrapModelCall` 不是洋蔥最內層**：
  * deepagents 把它自己的幾顆放在我們交出去那串的**後面**（`createDeepAgent` 的 `mergeMiddlewareStack`，
@@ -136,6 +139,8 @@ import type { Serialized } from '@langchain/core/load/serializable';
 import type { BaseMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
 import { createMiddleware } from 'langchain';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { bindRequestModel, previewCallParams } from './model-bind.js';
 import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
 import { currentModelCallHandle } from './model-call-scope.js';
@@ -474,6 +479,145 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
 }
 
 /**
+ * 推導之前已經寫好的那一份（{@link preRecordRequestSnapshot}）。內側的 {@link createRequestSnapshotRecorder} 看到它，就不再寫，
+ * 只在模型被叫的那一刻把實際要送的再抽一次與它比。
+ */
+const preRecorded = new AsyncLocalStorage<ExtractedRequest>();
+
+/** 兩份 {@link ExtractedRequest} 的差別在哪一格；一樣是 `undefined`。只講欄位名與長度、名單，不印系統提示全文與工具參數內容。 */
+function firstDifference(expected: ExtractedRequest, actual: ExtractedRequest): string | undefined {
+  if (expected.system !== actual.system) {
+    let at = 0;
+    while (at < expected.system.length && expected.system[at] === actual.system[at]) at += 1;
+    return `system（預先記的 ${String(expected.system.length)} 字元、實際要送的 ${String(actual.system.length)} 字元，第 ${String(at)} 個字元起不同）`;
+  }
+  const config = (header: RequestHeader): Record<string, unknown> =>
+    header.config as Record<string, unknown>;
+  const keys = new Set([
+    ...Object.keys(config(expected.header)),
+    ...Object.keys(config(actual.header)),
+  ]);
+  const configKeys = [...keys]
+    .sort()
+    .filter(
+      (key) =>
+        JSON.stringify(config(expected.header)[key]) !== JSON.stringify(config(actual.header)[key]),
+    );
+  if (configKeys.length > 0) return `header.config（不同的鍵：${configKeys.join('、')}）`;
+  const expectedTools = expected.header.tools ?? [];
+  const actualTools = actual.header.tools ?? [];
+  if (JSON.stringify(expectedTools) !== JSON.stringify(actualTools)) {
+    const names = (tools: readonly RequestToolSchema[]): string =>
+      tools.map((tool) => tool.name).join('、');
+    const changed = expectedTools.find(
+      (tool, index) => JSON.stringify(tool) !== JSON.stringify(actualTools[index]),
+    );
+    return `header.tools（預先記的 ${String(expectedTools.length)} 顆、實際要送的 ${String(actualTools.length)} 顆${
+      changed === undefined ? '' : `，第一顆不同的是 ${JSON.stringify(changed.name)}`
+    }；預先記的：${names(expectedTools)}；實際：${names(actualTools)}）`;
+  }
+  return undefined;
+}
+
+/**
+ * 推導之前已經記過快照時，模型被叫那一刻只比對、不寫：實際要送的跟預先記的對不上，這次請求不送（`raiseError`）。
+ * 兩邊經同一組 {@link extractRequest}，有損的格子（工具只留三格、`max_tokens` 別名、`-0`）壓平的方式相同。
+ */
+class RequestSnapshotCheckHandler extends BaseCallbackHandler {
+  readonly name = 'nexusRequestSnapshotCheck';
+  override awaitHandlers = true;
+  override raiseError = true;
+
+  constructor(private readonly expected: ExtractedRequest) {
+    super();
+  }
+
+  override handleChatModelStart(
+    llm: Serialized,
+    messages: BaseMessage[][],
+    _runId: string,
+    _parentRunId?: string,
+    extraParams?: Record<string, unknown>,
+  ): void {
+    const kwargs = (llm as { kwargs?: Record<string, unknown> }).kwargs ?? {};
+    const fallback = kwargs['model'] ?? kwargs['model_name'] ?? kwargs['modelName'];
+    const actual = extractRequest(
+      messages,
+      extraParams?.['invocation_params'],
+      extraParams?.['options'],
+      typeof fallback === 'string' ? fallback : undefined,
+    );
+    const difference = firstDifference(this.expected, actual);
+    if (difference !== undefined) {
+      throw new Error(
+        `請求快照與實際要送的對不上，這次請求不送：${difference}。快照寫好之後有東西改了請求`,
+      );
+    }
+  }
+}
+
+/** {@link preRecordRequestSnapshot} 讀的請求欄位。 */
+export interface PreRecordRequest {
+  readonly model?: unknown;
+  readonly tools?: readonly unknown[];
+  readonly modelSettings?: Record<string, unknown> | undefined;
+  readonly toolChoice?: unknown;
+  readonly systemMessage?: BaseMessage;
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+/**
+ * 在推導歷史之前寫請求快照與 `model/start`（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)，只給 native 而且 history-source=log 的 root）。
+ *
+ * 快照的 `config` 與 `tools` 是供應商層參數，LangChain 只在模型被叫的那一刻經 callback 報出來。這裡用跟 `callModel` 送出時同一支綁定（{@link bindRequestModel}），
+ * 預覽它會報的參數（{@link previewCallParams}），過同一組 {@link extractRequest}，記進日誌，接著寫 `model/start`、排空。
+ * `next` 在這之後才跑：往內的 {@link createRequestSnapshotRecorder} 看到已經記過，改成只比對。
+ *
+ * 送出的內容來自 middleware 洋蔥，日誌上記的是它的紀錄與檢查來源。動態模型（函式）包不了，原樣往內交，由內側 {@link createRequestSnapshotRecorder} 在送出前寫 `model/start`。
+ *
+ * @param deps - 找日誌的通道，與送出前排空與否（同 {@link createRequestSnapshotRecorder}）。
+ * @param request - 這次模型請求。
+ * @param next - 往內交。
+ * @returns `next` 的結果。
+ * @throws 日誌對不上、抽取或寫入失敗、排空失敗：都讓這次請求不送。
+ */
+export async function preRecordRequestSnapshot<T>(
+  deps: { readonly sessions: CheckpointSessions; readonly flushBeforeDispatch: boolean },
+  request: PreRecordRequest,
+  next: () => T | Promise<T>,
+): Promise<T> {
+  const found = deps.sessions.forCall({ configurable: request.runtime?.configurable });
+  const call = currentModelCallHandle();
+  if (call !== undefined && (found.kind !== 'ok' || found.log !== call.log)) {
+    throw new Error(
+      `請求快照要寫的日誌跟這次模型呼叫的不是同一份（${call.log.sessionId}），這次請求不送`,
+    );
+  }
+  const log = call?.log ?? (found.kind === 'ok' ? found.log : undefined);
+  if (log === undefined || !RunnableBinding.isRunnable(request.model)) return next();
+  const preview = previewCallParams(
+    bindRequestModel({
+      model: request.model,
+      tools: request.tools ?? [],
+      modelSettings: request.modelSettings,
+      toolChoice: request.toolChoice,
+    }),
+  );
+  const extracted = extractRequest(
+    request.systemMessage === undefined || request.systemMessage.text === ''
+      ? []
+      : [[request.systemMessage]],
+    preview?.invocation,
+    preview?.options,
+    preview?.fallbackModel,
+  );
+  recordRequestSnapshot(log, extracted);
+  call?.ensureStarted();
+  if (deps.flushBeforeDispatch) await deps.sessions.flush(log);
+  return preRecorded.run(extracted, next);
+}
+
+/**
  * 建那顆 middleware。**無狀態，一份走遍 root 與每個子代理**——日誌每次從執行期的 `configurable` 現算，基準住在日誌上
  * （`WeakMap`），不在 closure 裡。
  *
@@ -506,7 +650,11 @@ export function createRequestSnapshotRecorder(
         call?.ensureStarted();
         return handler(request);
       }
-      const watcher = new RequestSnapshotHandler(log, call, sessions, options.flushBeforeDispatch);
+      const expected = preRecorded.getStore();
+      const watcher =
+        expected === undefined
+          ? new RequestSnapshotHandler(log, call, sessions, options.flushBeforeDispatch)
+          : new RequestSnapshotCheckHandler(expected);
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({

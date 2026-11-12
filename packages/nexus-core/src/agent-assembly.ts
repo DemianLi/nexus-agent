@@ -132,10 +132,9 @@ const OUTSIDE_DEFAULTS: ReadonlySet<string> = new Set([
 /**
  * 把記憶渲染那半排到 `historyFromLog` 正前方（沒掛它就排在請求快照前，都沒有就留在讀檔那半後面）。
  *
- * 渲染那半從前在洋蔥最內層，在推導與請求快照的內側。快照要在推導之前寫，那一刻系統提示要已經完整，所以搬到它們外面；
- * 讀檔那半留在 tail，`beforeAgent` 的順序不動。`historyFromLog` 到 tail 之間沒有別的系統提示 cell，搬完記憶仍是最後一塊，
- * 位元組不變（`memory-prompt-order.test.ts` 釘這一點）。讀檔那半被同名的 custom 蓋掉時（`mergeMiddlewareStack` 的規則）
- * 渲染那半不加：整顆被換掉就是整顆，跟拆開之前一樣。
+ * 請求快照在推導之前寫，那一刻系統提示要已經完整，所以渲染那半排在推導與請求快照的外面；讀檔那半留在 tail，`beforeAgent` 的順序由它決定。
+ * 渲染那半之後沒有別的系統提示或工具清單 cell，記憶仍是最後一塊（`memory-prompt-order.test.ts` 釘位置）。
+ * 讀檔那半被同名的 custom 蓋掉時（`mergeMiddlewareStack` 的規則）渲染那半不加：整顆被換掉就是整顆。
  *
  * @param merged - {@link mergeMiddlewareStack} 的結果。
  * @param parts - 記憶的兩半。
@@ -476,7 +475,9 @@ export function assembleAgent(params: AssembleAgentParams) {
   ] as unknown as AgentMiddleware[];
   const memoryParts =
     memory.length > 0 ? createMemoryMiddleware({ backend, sources: [...memory] }) : undefined;
-  const tail = (memoryParts === undefined ? [] : [memoryParts.hook]) as unknown as AgentMiddleware[];
+  const tail = (memoryParts === undefined
+    ? []
+    : [memoryParts.hook]) as unknown as AgentMiddleware[];
 
   const merged = mergeMiddlewareStack(core, params.middleware as AgentMiddleware[], tail);
   const middleware =

@@ -982,7 +982,7 @@ export function foldRegistry(
       ),
     ),
     // 影子比對與歷史從日誌推（#2355）：只折進 root，排在請求快照外面，看到的是摘要、參數截斷、補懸空呼叫都套過之後的那一串。
-    // 兩格最多掛一顆。見 {@link ./history-shadow.ts}。
+    // 兩格最多掛一顆。native 的 `log` 同時在推導前寫請求快照與 `model/start`。見 {@link ./history-shadow.ts}。
     rootOnly(
       'historyShadow',
       same(
@@ -995,12 +995,21 @@ export function foldRegistry(
       'historyFromLog',
       same(
         options.history?.source === 'log'
-          ? createHistoryFromLogMiddleware({ ...options.history, sessions: registry.sessions })
+          ? createHistoryFromLogMiddleware({
+              ...options.history,
+              sessions: registry.sessions,
+              ...(options.loop === 'native' && {
+                preRecord: {
+                  sessions: registry.sessions,
+                  flushBeforeDispatch: sessionCheckpoint !== undefined,
+                },
+              }),
+            })
           : undefined,
       ),
     ),
     // 請求快照（#1020）緊貼最內層、在中止訊號外面：它也包 `request.model`，排在這裡外面每一顆看到的仍是原本的模型。
-    // 記錄點其實在模型被叫的那一刻（callback），不靠這個位置——deepagents 自己還有幾顆在我們這串後面，見 {@link ./request-snapshot.ts}。
+    // `langgraph` 的記錄點在模型被叫的那一刻（callback），不靠這個位置；native 而且 history-source=log 時，快照在 historyFromLog 推導前預先記，這顆只比對。見 {@link ./request-snapshot.ts}。
     shared('requestSnapshot', requestSnapshot),
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     shared('turnCancelModelSignal', turnCancelModelSignal),

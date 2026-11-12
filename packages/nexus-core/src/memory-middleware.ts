@@ -1,6 +1,6 @@
 /**
  * 記憶那一段（[#2414](https://github.com/DemianLi/nexus-agent/issues/2414)）：讀到的內容記在宿主這一側的 {@link MemoryContents}，
- * 每條 thread 一份；文字由這裡渲染（`base-prompt-text.ts`），接在洋蔥最內層、後綴之後，自己一塊。
+ * 每條 thread 一份；文字由這裡渲染（`base-prompt-text.ts`），自己一塊，是系統提示的最後一塊：讀檔那半在 tail，渲染那半排在 `historyFromLog` 前面。
  *
  * 讀檔仍委派基座的 `createMemoryMiddleware` 的 `beforeAgent`：同一條 thread 第一次 invoke 讀一次，結果寫進 state 的
  * `memoryContents`，之後 state 裡有就不再讀（中途改檔，這條 thread 看不到）。這裡跟著記下那一次的結果或 state 裡已有的那一份，
@@ -67,7 +67,7 @@ interface BaseHooks {
   ) => Promise<{ memoryContents?: Contents } | undefined>;
 }
 
-/** 渲染記憶段那顆 middleware 的名字。不撞基座任何一個，所以它是 novel entry。 */
+/** 渲染記憶段那顆 middleware 的名字。不撞基座與 fold 的任何一顆。 */
 export const MEMORY_PROMPT_MIDDLEWARE_NAME = 'nexusMemoryPrompt';
 
 /** 記憶的兩半：讀檔的 hook，與渲染那一段的系統提示 cell。 */
@@ -79,11 +79,11 @@ export interface MemoryMiddlewareParts {
 }
 
 /**
- * 建記憶 middleware 的兩半（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361) PR-D）。
+ * 建記憶 middleware 的兩半（[#2361](https://github.com/DemianLi/nexus-agent/issues/2361)）。
  *
- * 拆開是為了讓渲染那半能排到 `historyFromLog` 前面：請求快照要在推導之前寫，那一刻系統提示要已經完整，記憶那一段是最後一塊，
- * 它一直排在洋蔥最內層，在推導的內側。讀檔那半留在原位，`beforeAgent` 的相對順序不變。兩半共用同一份 {@link MemoryContents}：
- * `beforeAgent` 在第一次模型呼叫之前就填好，所以渲染移到哪裡都讀得到同一份。
+ * 兩半分開，渲染那半才能排在 `historyFromLog` 前面：請求快照在推導之前寫，那一刻系統提示要已經完整，而記憶是系統提示的最後一塊。
+ * 讀檔那半留在洋蔥最內層（tail），`beforeAgent` 的順序由它決定。兩半共用同一份 {@link MemoryContents}：
+ * `beforeAgent` 在第一次模型呼叫之前就填好，所以渲染排在哪裡都讀得到同一份。
  *
  * @param options - 後端與來源路徑。
  * @param options.backend - 讀記憶檔的後端。
