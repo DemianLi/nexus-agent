@@ -1,0 +1,57 @@
+name: 預熱 musl 的 .deb 快取
+
+# 每天讓 develop 上固定有一份 musl-tools 的 .deb 快取（#2702 方案 P）：CI 的 sandbox-spawner 讀它，套件站一時連不到時就從快取離線裝，
+# 不必退到 image 內建的 gcc。快取 7 天沒被讀到會被 GitHub 逐出；這支每天讀一次，命中就等於續命，沒命中（image 換了、被逐出）才走 apt 並存檔。
+# 排程只在預設分支（develop）跑，存出來的快取 feature → develop 的 PR 也讀得到（快取可讀自目前分支、base 分支與預設分支）。
+#
+# 鍵與 `.github/actions/sandbox-spawner/action.yml` 同一把：`musl-debs-<os>-<arch>-<image 版本>`，兩個架構各在自己的 runner 上原生跑。
+# 裝法與 action 共用 `.github/scripts/install-musl-debs.sh`，這裡不准退回 gcc：預熱的工作就是裝到真的 .deb，裝不到就紅，也不存空快取。
+#
+# 動到這支或那支 shell 的 PR 合併前也跑一次，改壞了在 PR 上就紅；存在 PR 自己的 ref，不污染 develop。不列進 gate。
+# 失敗通知：GitHub 預設通知最後改過這份 cron 的人，沒有另外接。repo 六十天沒有動靜，GitHub 會自動停掉排程，手動是備援。
+on:
+  workflow_dispatch:
+  schedule:
+    # 21:23 UTC = 05:23 Asia/Taipei，早於上班；避開整點的排程尖峰。
+    - cron: '23 21 * * *'
+  pull_request:
+    paths:
+      - .github/workflows/warm-musl-debs.yml
+      - .github/scripts/install-musl-debs.sh
+
+concurrency:
+  group: warm-musl-debs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: warm (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: 讀 runner image 版本
+        id: image
+        run: echo "version=${ImageVersion:-$(. /etc/os-release && echo "$VERSION_ID")}" >> "$GITHUB_OUTPUT"
+      - name: 還原 musl 的 .deb 快取
+        id: musl-debs
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/musl-debs
+          key: musl-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}
+      - name: 安裝 musl-gcc
+        env:
+          CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
+          ALLOW_GCC_FALLBACK: 'false'
+        run: ${{ github.workspace }}/.github/scripts/install-musl-debs.sh
