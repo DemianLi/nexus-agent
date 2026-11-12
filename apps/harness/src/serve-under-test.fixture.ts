@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { expect, onTestFailed, onTestFinished } from 'vitest';
+
 import { runServe } from './serve-run.js';
 import type { RunningServe, RunServeOptions } from './serve-run.js';
 
@@ -146,12 +148,104 @@ async function startPerThread(options: RunServeOptions): Promise<ServeUnderTest 
 }
 
 /**
+ * 一支 `it` 裡 fixture 看得到的幾步（起 serve、收 serve）各花了多久。
+ *
+ * CI 上 serve 測試偶爾貼著 5 秒逾時線紅（[#2695](https://github.com/DemianLi/nexus-agent/issues/2695)），vitest 只在測試結束時印
+ * 一行名稱與總耗時，看不出逾時當下停在哪一步。這裡只記時間，不改任何等待；`it` 失敗或逾時時才印（見
+ * {@link startServeUnderTest}），平常的日誌不多一行。
+ * 時間從這支 `it` 第一次呼叫 fixture 起算，所以 `it` 自己在 fixture 之外花的時間（`driveTurn`、改名、列表）不在其中。
+ */
+export class StepLaps {
+  readonly #now: () => number;
+  readonly #t0: number;
+  readonly #events: string[] = [];
+  readonly #open = new Map<number, { readonly step: string; readonly at: number }>();
+  #next = 0;
+
+  constructor(now: () => number = () => performance.now()) {
+    this.#now = now;
+    this.#t0 = now();
+  }
+
+  /** 開始一步；回傳的函式在這一步回來（含拋出）時叫。 */
+  begin(step: string): () => void {
+    const id = this.#next++;
+    const at = this.#now() - this.#t0;
+    this.#open.set(id, { step, at });
+    this.#events.push(`${step} 開始 +${String(Math.round(at))}`);
+    return () => {
+      this.#open.delete(id);
+      this.#events.push(`${step} 回來 +${String(Math.round(this.#now() - this.#t0))}`);
+    };
+  }
+
+  /** 步驟名與毫秒數；還沒回來的步驟另列，標出它已經等了多久。 */
+  render(): string {
+    const now = this.#now() - this.#t0;
+    const pending = [...this.#open.values()].map(
+      ({ step, at }) => `${step}（開始後已 ${String(Math.round(now - at))} ms 沒回來）`,
+    );
+    return [
+      `serve 步驟耗時（毫秒，自這支測試第一次呼叫 fixture 起算；現在 +${String(Math.round(now))}）：${this.#events.join('、')}`,
+      ...(pending.length > 0 ? [`還沒回來：${pending.join('、')}`] : []),
+    ].join('\n');
+  }
+}
+
+const lapsByTest = new Map<string, StepLaps>();
+
+/** 目前這支 `it` 的計時；不在 `it` 裡（`beforeAll` 之類）就不記。 */
+function lapsOfCurrentTest(): StepLaps | undefined {
+  const name = expect.getState().currentTestName;
+  if (name === undefined) return undefined;
+  const known = lapsByTest.get(name);
+  if (known !== undefined) return known;
+  const laps = new StepLaps();
+  try {
+    onTestFailed(() => {
+      console.error(laps.render());
+    });
+    onTestFinished(() => {
+      lapsByTest.delete(name);
+    });
+  } catch {
+    return undefined;
+  }
+  lapsByTest.set(name, laps);
+  return laps;
+}
+
+/**
  * 同 `runServe`，照 {@link PROCESS_MODEL_UNDER_TEST} 起在測試行程裡或經監督行程。
+ *
+ * 在 `it` 裡呼叫時順手記起、收兩步的耗時（{@link StepLaps}），那支 `it` 失敗或逾時才印；回傳的物件行為不變。
  *
  * @returns 跑著的 serve；只印東西就走的旗標回 `undefined`。
  */
 export async function startServeUnderTest(
   options: RunServeOptions,
 ): Promise<ServeUnderTest | undefined> {
-  return PROCESS_MODEL_UNDER_TEST === 'per-thread' ? startPerThread(options) : runServe(options);
+  const laps = lapsOfCurrentTest();
+  const done = laps?.begin('start');
+  let server: ServeUnderTest | undefined;
+  try {
+    server =
+      PROCESS_MODEL_UNDER_TEST === 'per-thread'
+        ? await startPerThread(options)
+        : await runServe(options);
+  } finally {
+    done?.();
+  }
+  if (laps === undefined || server === undefined) return server;
+  const timedClose = async (...args: Parameters<ServeUnderTest['close']>): Promise<void> => {
+    const closed = laps.begin('close');
+    try {
+      await server.close(...args);
+    } finally {
+      closed();
+    }
+  };
+  return new Proxy(server, {
+    get: (target, key) => (key === 'close' ? timedClose : Reflect.get(target, key, target)),
+  });
 }
