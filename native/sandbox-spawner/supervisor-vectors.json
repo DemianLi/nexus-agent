@@ -1,13 +1,13 @@
 {
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "conversationCommands": [
     {
       "value": {
         "type": "hello",
-        "version": 3,
+        "version": 4,
         "token": "00112233445566778899aabbccddeeff"
       },
-      "hex": "7703000000200000003030313132323333343435353636373738383939616162626363646465656666"
+      "hex": "7704000000200000003030313132323333343435353636373738383939616162626363646465656666"
     },
     {
       "value": {
@@ -28,15 +28,31 @@
         "type": "drain"
       },
       "hex": "64"
+    },
+    {
+      "value": {
+        "type": "leaf",
+        "pid": 4242
+      },
+      "hex": "6c92100000"
     }
   ],
   "conversationReports": [
     {
       "value": {
         "type": "hello",
-        "version": 3
+        "version": 4,
+        "runsLoop": true
       },
-      "hex": "5603000000"
+      "hex": "560400000001"
+    },
+    {
+      "value": {
+        "type": "hello",
+        "version": 4,
+        "runsLoop": false
+      },
+      "hex": "560400000000"
     },
     {
       "value": {
@@ -102,9 +118,9 @@
     {
       "value": {
         "type": "hello",
-        "version": 3
+        "version": 4
       },
-      "hex": "4603000000"
+      "hex": "4604000000"
     },
     {
       "value": {
@@ -140,10 +156,10 @@
     {
       "value": {
         "type": "hello",
-        "version": 3,
+        "version": 4,
         "token": "00112233445566778899aabbccddeeff"
       },
-      "hex": "6603000000200000003030313132323333343435353636373738383939616162626363646465656666"
+      "hex": "6604000000200000003030313132323333343435353636373738383939616162626363646465656666"
     },
     {
       "value": {
@@ -256,9 +272,9 @@
     {
       "value": {
         "type": "hello",
-        "version": 3
+        "version": 4
       },
-      "hex": "6b03000000"
+      "hex": "6b04000000"
     },
     {
       "value": {
@@ -284,6 +300,17 @@
     },
     {
       "value": {
+        "type": "grant",
+        "pid": 4243,
+        "generation": 2,
+        "token": "00112233445566778899aabbccddeeff",
+        "role": "composition",
+        "thread": "0c4f1c8e-thread"
+      },
+      "hex": "619310000002000000200000003030313132323333343435353636373738383939616162626363646465656666020f00000030633466316338652d746872656164"
+    },
+    {
+      "value": {
         "type": "revoke",
         "pid": 4242
       },
@@ -294,9 +321,9 @@
     {
       "value": {
         "type": "hello",
-        "version": 3
+        "version": 4
       },
-      "hex": "4b03000000"
+      "hex": "4b04000000"
     },
     {
       "value": {

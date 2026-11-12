@@ -2,10 +2,10 @@
 //! 編在 `nexus-host` 這個 package（要用 `nexus_host::host_protocol`），由 spawner 的 `tests/supervisor.rs` 從共用的 target 目錄起。
 //!
 //! ```text
-//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--skip-hello] --socket <路徑> [--host-socket <路徑>]
+//! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--no-loop] [--skip-hello] --socket <路徑> [--host-socket <路徑>]
 //! ```
 //!
-//! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]）；`--skip-hello` 不送，直接送 `ready`。
+//! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]；宣告 loop 在自己這裡，`--no-loop` 不宣告）；`--skip-hello` 不送，直接送 `ready`。
 //!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
 //! - `--die-before-ready`：一起來就以 7 結束。
 //! - `--ready-after-ms`：等這麼久才送 `ready`。
@@ -150,7 +150,10 @@ fn main() {
             .position(|a| a == "--hello-version")
             .and_then(|i| args.get(i + 1))
             .map_or(PROTOCOL_VERSION, |v| v.parse().unwrap());
-        report(&ConversationReport::Hello { version });
+        report(&ConversationReport::Hello {
+            version,
+            runs_loop: !args.iter().any(|a| a == "--no-loop"),
+        });
     }
     report(&ConversationReport::Ready);
     let mut token = Vec::new();
@@ -184,6 +187,7 @@ fn main() {
                     continue;
                 }
                 ConversationCommand::Bind { thread_id } => thread_id,
+                ConversationCommand::Leaf { .. } => continue,
                 ConversationCommand::Drain => {
                     log("drain");
                     std::thread::sleep(drain_delay);

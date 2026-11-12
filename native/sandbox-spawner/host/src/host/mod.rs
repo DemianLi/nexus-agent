@@ -303,6 +303,7 @@ fn role_name(role: Role) -> &'static str {
     match role {
         Role::Front => "前台",
         Role::Conversation => "對話行程",
+        Role::Composition => "組合行程",
     }
 }
 

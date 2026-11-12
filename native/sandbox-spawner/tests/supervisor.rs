@@ -1892,13 +1892,14 @@ fn running_host(h: &Harness) -> Option<u32> {
         .find(|&pid| String::from_utf8_lossy(&proc_file(pid, "cmdline")).contains("nexus-host"))
 }
 
-/// 版本不符含上一版（`PROTOCOL_VERSION - 1`）：上一版的子行程照樣被擋下。
+/// 版本不符含上一版（`PROTOCOL_VERSION - 1`）：上一版的子行程照樣被擋下。版本對、沒宣告 loop 在自己這裡的也擋。
 #[test]
 fn a_conversation_whose_first_frame_is_not_a_matching_hello_is_down_protocol() {
     let previous = (PROTOCOL_VERSION - 1).to_string();
     for args in [
         ["--hello-version", "99"].as_slice(),
         ["--hello-version", &previous].as_slice(),
+        ["--no-loop"].as_slice(),
         ["--skip-hello"].as_slice(),
     ] {
         let mut h = Harness::start(Options {
