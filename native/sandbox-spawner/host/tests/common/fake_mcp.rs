@@ -3,8 +3,10 @@
 //! `tools/call` 呼叫名叫 `slow` 的工具時先睡 3 秒（測逾時與取消）；叫 `big` 時回一段 `arguments.bytes` 位元組的文字，
 //! 由 [`BIG_PATTERN`] 重複而成（引號、反斜線與多位元組字元都有）；叫 `odd` 時回 [`odd_result`]（規格外的欄位與內容區塊型別）。
 //! 新協定答 `server/discover`；舊協定對 `server/discover` 回「方法不存在」，客戶端退回 `initialize`。
+//! 給了 [`FakeMcp::sessions`]，舊協定的 `initialize` 發 `fake-session-N`，之後帶著別的 session id 的 POST 回 404（模擬 server 重啟、忘掉 session）。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -23,6 +25,49 @@ pub struct FakeMcp {
     pub list_fails: bool,
     /// 回應改用 SSE：一則回應一個 `message` 事件。
     pub sse: bool,
+    /// 舊協定的 session 帳；`None` 就不發、不查 session id。
+    pub sessions: Option<Arc<Sessions>>,
+}
+
+/// 舊協定 server 的 session 帳：`initialize` 發 `fake-session-N`，只有最近發的、沒被 [`Sessions::forget`] 的那一個有效。
+#[derive(Default)]
+pub struct Sessions {
+    issued: AtomicU64,
+    valid: AtomicU64,
+    reject_all: AtomicBool,
+}
+
+impl Sessions {
+    /// server 重啟、忘掉所有 session：之後帶舊 session id 的 POST 回 404，新的 `initialize` 發新的。
+    pub fn forget(&self) {
+        self.valid.store(0, Ordering::SeqCst);
+    }
+
+    /// 之後發出去的 session 也一律無效：每個帶 session id 的 POST 都回 404。
+    pub fn reject_all(&self) {
+        self.reject_all.store(true, Ordering::SeqCst);
+    }
+
+    /// 已經發了幾個 session。
+    pub fn issued(&self) -> u64 {
+        self.issued.load(Ordering::SeqCst)
+    }
+
+    fn issue(&self) -> String {
+        let n = self.issued.fetch_add(1, Ordering::SeqCst) + 1;
+        if !self.reject_all.load(Ordering::SeqCst) {
+            self.valid.store(n, Ordering::SeqCst);
+        }
+        format!("fake-session-{n}")
+    }
+
+    fn accepts(&self, id: &str) -> bool {
+        let n = id
+            .strip_prefix("fake-session-")
+            .and_then(|n| n.parse::<u64>().ok());
+        !self.reject_all.load(Ordering::SeqCst)
+            && n.is_some_and(|n| n == self.valid.load(Ordering::SeqCst))
+    }
 }
 
 impl FakeMcp {
@@ -112,6 +157,11 @@ fn respond(fake: &FakeMcp, request: &Request) -> Response {
     let Ok(message) = serde_json::from_slice::<Value>(&request.body) else {
         return Response::empty(400);
     };
+    if let (Some(sessions), Some(id)) = (&fake.sessions, request.header("mcp-session-id")) {
+        if !sessions.accepts(id) {
+            return Response::empty(404);
+        }
+    }
     let Some(id) = message.get("id") else {
         return Response::empty(202);
     };
@@ -148,9 +198,11 @@ fn respond(fake: &FakeMcp, request: &Request) -> Response {
                 result["instructions"] = json!(text);
             }
             let mut response = reply(id, result);
-            response
-                .headers
-                .push(("Mcp-Session-Id".into(), "fake-session".into()));
+            let session = fake
+                .sessions
+                .as_ref()
+                .map_or("fake-session".into(), |s| s.issue());
+            response.headers.push(("Mcp-Session-Id".into(), session));
             response
         }
         "tools/list" if fake.list_fails => {

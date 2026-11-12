@@ -4,7 +4,8 @@
 //!   （[`crate::wake`]），宿主醒來 [`Bridge::take`] 取走。
 //! - 一次綁定（[`Command::Open`]）向池取一份連線，記成 `open` 編號；放掉（[`Command::Release`]）只是忘掉編號，池裡的連線照留（池的規則）。
 //! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
-//!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連（rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，見 #2690）。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
+//!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，所以另外認一種：帶著 session id 的請求收到 404（[`session_expired`]，
+//!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
 //! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。成功結果還沒遮蔽秘密（TODO(#2570)）；**遮蔽要在 `outgoing` 序列化成文字之前做**。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
 
@@ -15,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use rmcp::model::{CancelledNotification, CancelledNotificationParam, ClientRequest};
 use rmcp::service::{PeerRequestOptions, ServiceError};
+use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::Server;
@@ -281,6 +283,20 @@ fn outgoing(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
+/// rmcp 3.9.0 的 HTTP transport 在請求帶著 session id、server 回 404 時回的 `StreamableHttpError::SessionExpired`（`"Session expired (HTTP 404)"`），
+/// 包在 `ServiceError::TransportSend` 的 `error` 裡。認型別不認字：沒帶 session id 的 404（握手、網址錯）rmcp 不回這一種，照一般的失敗走。
+/// 升 rmcp 時要重看這條下轉型還對不對（測試「忘掉_session」會紅）。
+fn session_expired(err: &ServiceError) -> bool {
+    let ServiceError::TransportSend(sent) = err else {
+        return false;
+    };
+    matches!(
+        sent.error
+            .downcast_ref::<StreamableHttpError<reqwest::Error>>(),
+        Some(StreamableHttpError::SessionExpired)
+    )
+}
+
 /// 一次請求：送到當下那一代，結果編成 JSON 文字。
 async fn request(
     shared: &Shared<Generation>,
@@ -347,6 +363,16 @@ async fn request(
                         shared.label
                     ));
                 }
+            }
+            // session 過期：這一代的 session 已經死了，之後每次呼叫都會 404。`live` 是這次呼叫送出時那一代的，
+            // 通知的是它自己的訊號：換代之後才回來的舊錯誤打不到新一代，同一代撞到幾次都只換一次代（通知不累積）。
+            // rmcp 的自動重新初始化是關的（`reinit_on_expired_session`），重連走監督者的退避與放棄。
+            if session_expired(&err) {
+                live.lost();
+                return Err(format!(
+                    "{}: session expired (HTTP 404) — this call failed; the connection is being re-established, retry the call",
+                    shared.label
+                ));
             }
             let text = describe(&err);
             if text.contains(TOO_LARGE) {

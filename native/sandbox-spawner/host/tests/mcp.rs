@@ -450,7 +450,7 @@ mod pool {
 mod http {
     use std::sync::{Arc, Mutex};
 
-    use super::common::fake_mcp::{handler, FakeMcp};
+    use super::common::fake_mcp::{handler, FakeMcp, Sessions};
     use super::common::{fixture, Request, Response, TlsServer};
     use super::*;
     use nexus_host::mcp::connection::{call_meta, connect, instructions_of, Http};
@@ -886,6 +886,43 @@ mod http {
             }
         }
 
+        /// 收齊 `ids` 各自的 `Done`，照 `ids` 的順序回。幾則 `Done` 排在同一批 `take()`、先後怎麼到都收得齊：
+        /// `wait_for` 挑中一則就回，同一批裡其餘的丟掉，並行呼叫的第二個結果會就這樣不見。
+        fn done_all(bridge: &Bridge, ids: &[u64]) -> Vec<Result<String, String>> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut got: std::collections::HashMap<u64, Result<String, String>> =
+                std::collections::HashMap::new();
+            loop {
+                for outcome in bridge.take() {
+                    if let Outcome::Done { id, result } = outcome {
+                        if ids.contains(&id) {
+                            got.insert(id, result);
+                        }
+                    }
+                }
+                if ids.iter().all(|id| got.contains_key(id)) {
+                    return ids
+                        .iter()
+                        .map(|id| got.remove(id).expect("收齊了"))
+                        .collect();
+                }
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let missing: Vec<u64> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !got.contains_key(id))
+                    .collect();
+                assert!(!left.is_zero(), "等不到結果：{missing:?}");
+                let mut fd = libc::pollfd {
+                    fd: bridge.wake_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: 指向這個 frame 上一個活著的 pollfd，nfds 是 1。
+                unsafe { libc::poll(&mut fd, 1, left.as_millis() as libc::c_int) };
+            }
+        }
+
         fn call(bridge: &Bridge, id: u64, open: u64, tool: &str) {
             bridge.send(Command::Request {
                 id,
@@ -979,6 +1016,144 @@ mod http {
             });
             assert!(done(&bridge, 12).is_err_and(|e| e.contains("prompts/list")));
 
+            bridge.send(Command::Shutdown);
+            wait_for(&bridge, |o| *o == Outcome::Closed);
+        }
+
+        /// 帶 session 帳的舊協定假 server，與它的帳。
+        fn with_sessions() -> (u16, Arc<Mutex<Vec<Request>>>, Arc<Sessions>) {
+            let sessions: Arc<Sessions> = Arc::default();
+            let mut fake = FakeMcp::with_tools(false, &["echo"]);
+            fake.sessions = Some(Arc::clone(&sessions));
+            let (port, log) = start(fake);
+            (port, log, sessions)
+        }
+
+        fn open_fast(bridge: &Bridge, port: u16, max_attempts: u64) {
+            bridge.send(Command::Open {
+                open: 1,
+                server: Box::new(server(
+                    port,
+                    json!({ "reconnect": { "initialDelayMs": 20, "maxDelayMs": 40, "maxAttempts": max_attempts } }),
+                )),
+                elicitation: false,
+            });
+            opened(bridge, 1).expect("連得上");
+        }
+
+        /// 一直呼叫到成功為止（空窗裡會回 `server is disconnected`）；回第一次成功的編號。
+        fn call_until_ok(bridge: &Bridge, first_id: u64) -> u64 {
+            for id in first_id..first_id + 400 {
+                call(bridge, id, 1, "echo");
+                if done(bridge, id).is_ok() {
+                    return id;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("一直等不到呼叫成功");
+        }
+
+        #[test]
+        fn 忘掉_session_這次失敗_下一次在新一代成功() {
+            let (port, log, sessions) = with_sessions();
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            open_fast(&bridge, port, 10);
+            call(&bridge, 10, 1, "echo");
+            done(&bridge, 10).expect("忘掉之前呼叫成功");
+            assert_eq!(sessions.issued(), 1);
+
+            sessions.forget();
+            call(&bridge, 11, 1, "echo");
+            let err = done(&bridge, 11).expect_err("session 過期，這一次要明確失敗");
+            assert!(err.contains("session expired"), "{err}");
+            assert!(err.contains("retry"), "看得出是重建中、該重試：{err}");
+            assert!(!err.contains("fake-session"), "不印 session id：{err}");
+
+            call_until_ok(&bridge, 12);
+            assert_eq!(sessions.issued(), 2, "重連成下一代，握手一次");
+            assert_eq!(count(&log, "initialize"), 2);
+            bridge.send(Command::Shutdown);
+            wait_for(&bridge, |o| *o == Outcome::Closed);
+        }
+
+        #[test]
+        fn 兩個並行呼叫同時過期_只重連一次() {
+            let (port, log, sessions) = with_sessions();
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            open_fast(&bridge, port, 10);
+            sessions.forget();
+            call(&bridge, 20, 1, "echo");
+            call(&bridge, 21, 1, "echo");
+            let [a, b] = <[_; 2]>::try_from(done_all(&bridge, &[20, 21])).expect("兩個結果");
+            assert!(a.is_err() && b.is_err(), "{a:?} {b:?}");
+            let expired = |r: &Result<String, String>| {
+                r.as_ref()
+                    .err()
+                    .is_some_and(|e| e.contains("session expired"))
+            };
+            assert!(expired(&a) || expired(&b), "{a:?} {b:?}");
+
+            call_until_ok(&bridge, 30);
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(sessions.issued(), 2, "兩次過期只換一次代");
+            assert_eq!(count(&log, "initialize"), 2);
+            bridge.send(Command::Shutdown);
+            wait_for(&bridge, |o| *o == Outcome::Closed);
+        }
+
+        #[test]
+        fn server_持續_404_照退避走到放棄() {
+            let (port, log, sessions) = with_sessions();
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            open_fast(&bridge, port, 2);
+            sessions.reject_all();
+            sessions.forget();
+            call(&bridge, 40, 1, "echo");
+            let err = done(&bridge, 40).expect_err("過期");
+            assert!(err.contains("session expired"), "{err}");
+
+            let mut id = 41;
+            let given_up = loop {
+                call(&bridge, id, 1, "echo");
+                let err = done(&bridge, id).expect_err("server 一直 404，不會成功");
+                if err.contains("given up") {
+                    break err;
+                }
+                id += 1;
+                assert!(id < 400, "一直等不到放棄：{err}");
+                std::thread::sleep(Duration::from_millis(25));
+            };
+            assert!(given_up.contains("reconnection was given up"), "{given_up}");
+            let handshakes = count(&log, "initialize");
+            assert!(handshakes >= 2, "放棄之前至少重連過：{handshakes}");
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(count(&log, "initialize"), handshakes, "放棄之後不再重連");
+            bridge.send(Command::Shutdown);
+            wait_for(&bridge, |o| *o == Outcome::Closed);
+        }
+
+        /// 沒帶 session id 的 404（server 不發 session id）不是過期：這一次失敗，連線不動。
+        #[test]
+        fn 沒有_session_id_的_404_不算過期() {
+            let log: Arc<Mutex<Vec<Request>>> = Arc::default();
+            let inner = handler(FakeMcp::with_tools(false, &["echo"]), Arc::clone(&log));
+            let server_fake = TlsServer::start(Arc::new(move |request: &Request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request.body).unwrap_or_default();
+                if body["method"] == "tools/call" {
+                    return Response::empty(404);
+                }
+                let mut response = (*inner)(request);
+                response.headers.retain(|(k, _)| k != "Mcp-Session-Id");
+                response
+            }));
+            let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+            open_fast(&bridge, server_fake.port, 10);
+            call(&bridge, 50, 1, "echo");
+            let err = done(&bridge, 50).expect_err("404");
+            assert!(!err.contains("session expired"), "{err}");
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(count(&log, "initialize"), 1, "沒有重連");
             bridge.send(Command::Shutdown);
             wait_for(&bridge, |o| *o == Outcome::Closed);
         }
