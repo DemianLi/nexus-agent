@@ -10,6 +10,7 @@
   "helloTimeoutMs": 5000,
   "outboxPauseBytes": 524288,
   "outboxLimitBytes": 2097152,
+  "stallTimeoutMs": 30000,
   "pendingConnections": 4,
   "attachMethod": "attach",
   "messages": [
@@ -296,6 +297,11 @@
       "error": "版本不是 u32"
     },
     {
+      "name": "版本是 -0",
+      "json": "{\"type\":\"hello\",\"version\":-0}",
+      "error": "版本不是 u32"
+    },
+    {
       "name": "版本超過 u32",
       "json": "{\"type\":\"hello\",\"version\":4294967296}",
       "error": "版本不是 u32"
@@ -348,6 +354,11 @@
     {
       "name": "id 是小數",
       "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":1.5}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "id 是 -0",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":-0}",
       "error": "id 不在範圍內"
     },
     {
@@ -490,6 +501,11 @@
     {
       "name": "後面還有東西",
       "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a317d7b7d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "開頭帶 BOM",
+      "hex": "efbbbf7b2274797065223a2268656c6c6f222c2276657273696f6e223a317d",
       "error": "不是合法的 JSON"
     },
     {

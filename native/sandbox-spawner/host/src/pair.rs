@@ -10,12 +10,17 @@
 //! - 葉子發來的呼叫，還沒到 [`MAX_CALLS`]、`parent` 在跑、method 在 [`Pair::new`] 給的清單裡，才交給擁有的一方（[`PairEvent::Call`]），
 //!   由它用 [`Pair::chunk`]、[`Pair::finish`] 回；不合的這裡直接回錯。
 //!   葉子取消時這裡直接回 `cancelled`，之後再 `finish` 那一次不會送出任何東西。
-//! - `rejected` 排進去之後就關：對方沒在讀的話，那一框送不到。
+//! - 葉子發來的呼叫，事件裡的 `id` 是這一端給的本地代號，不是線上的 `id`：整個 [`Pair`] 單調遞增、換了連線也不重用，
+//!   所以擁有的一方手上晚到的舊工作再 [`Pair::chunk`]、[`Pair::finish`]，對不到任何東西，不會落進別的呼叫。
+//! - 背壓照協定：排著的到了 [`OUTBOX_PAUSE`]，[`Pair::call`]、[`Pair::chunk`]、[`Pair::finish`] 回 [`SendError::Paused`]，什麼都沒送，
+//!   擁有的一方留著，等 [`PairEvent::Resumed`] 再試；葉子送來的照讀照處理。這裡自動回的 `result`（`busy`、`unknown_method`、`bad_payload`、`cancelled`）與 [`Pair::cancel`] 照排。
+//! - 回了 `rejected` 的連線，排著的寫完才關，最多留 [`CLOSE_TIMEOUT`]；對方一直不讀的話那一框送不到。
+//! - 葉子登記的名稱（[`PairEvent::Registered`]）這裡不記：[`PairEvent::Disconnected`] 之後由擁有的一方自己清。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::host::peer_pid;
 use crate::host_protocol::{CallError, ErrorCode};
@@ -23,8 +28,19 @@ use crate::json::Value;
 use crate::pair_protocol::{
     decode, encode, CallRef, PairMessage, Side, HELLO_TIMEOUT, MAX_CALLS, MAX_CHUNK_BYTES,
     MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION,
+    STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::supervisor::process::Chan;
+
+/// 回了 `rejected` 的連線最多留多久等它寫完。
+pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// accept 出錯（開檔數用完之類）之後多久不看 listener：它會一直可讀，不停一下就空轉。排著的連線留在 backlog；
+/// 已經收下、卻複製不出 fd 的那一條直接關掉，報一筆 [`PairEvent::Refused`]。
+pub const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
+/// 等著寫完 `rejected` 的連線最多幾條；再來的把最舊的直接關掉。
+const MAX_CLOSING: usize = MAX_PENDING;
 
 /// 自己發的呼叫沒有成功的原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,17 +58,19 @@ pub enum Disconnect {
     Closed,
     /// 葉子違反協定。
     Violation(String),
-    /// 葉子不讀，再排一框就會超過 [`OUTBOX_LIMIT`]。
+    /// 葉子不讀：照排的框（[`Pair::cancel`]、這裡自動回的 `result`）再排一框就會超過 [`OUTBOX_LIMIT`]。
     Overflow,
+    /// 葉子不讀：有東西排著，連續 [`STALL_TIMEOUT`] 一個位元組都沒寫出去。
+    Stalled,
     /// 監督行程又給了一次葉子 pid（同一個號碼也算）。
     Replaced,
 }
 
-/// 這一端現在送不了的原因。除了 [`SendError::TooLarge`] 的塊（它要排一框 `result`，排不下時連線照 [`Disconnect::Overflow`] 斷），都不動連線。
+/// 這一端現在送不了的原因；都不動連線。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendError {
     NotConnected,
-    /// 排著的到了 [`OUTBOX_PAUSE`]，等 [`Pair::paused`] 回 `false` 再試。
+    /// 排著的到了 [`OUTBOX_PAUSE`]，什麼都沒送；等 [`PairEvent::Resumed`] 再試。
     Paused,
     /// 自己發的呼叫已經 [`MAX_CALLS`] 個。
     Busy,
@@ -73,14 +91,14 @@ pub enum PairEvent {
         tools: Vec<String>,
         hooks: Vec<String>,
     },
-    /// 葉子發來的呼叫。
+    /// 葉子發來的呼叫。`id` 是本地代號；`parent` 是葉子發的那一邊時也是本地代號。
     Call {
         id: u64,
         parent: Option<CallRef>,
         method: String,
         payload: Value,
     },
-    /// 葉子發來的那一次不用做了：它取消了，或連線斷了。
+    /// 葉子發來的那一次（本地代號）不用做了：它取消了，或連線斷了。
     Cancelled { id: u64 },
     /// 自己發的那一次，葉子串流來的一塊。
     Chunk { id: u64, seq: u64, payload: String },
@@ -89,6 +107,8 @@ pub enum PairEvent {
         id: u64,
         outcome: Result<Value, Failure>,
     },
+    /// 回過 [`SendError::Paused`] 之後，排著的降回 [`OUTBOX_PAUSE`] 以下了，可以再試。
+    Resumed,
     /// 沒收一條連線。`pid` 讀不到是 `None`。
     Refused { pid: Option<u32>, reason: String },
     /// 驗過的那條斷了；在這之前，還在跑的呼叫各有一筆 [`PairEvent::Finished`] 或 [`PairEvent::Cancelled`]。
@@ -106,12 +126,31 @@ struct Pending {
 
 struct Conn {
     chan: Chan,
-    /// 讀進來、還沒處理的框；排著的到了 [`OUTBOX_PAUSE`] 時停在這裡。
-    backlog: VecDeque<Vec<u8>>,
+    /// 回過 [`SendError::Paused`]，還沒報 [`PairEvent::Resumed`]。
+    refused: bool,
+    /// 上一次 `step` 之後寫出過位元組。
+    wrote: bool,
+    /// 上一次 `step` 時有東西排著：從哪一步起沒再寫出過位元組。上一次 `step` 時沒有東西排著（或還沒有 `step` 看過）是 `None`。
+    stalled_since: Option<Instant>,
     /// 自己發的、還沒收到 `result` 的：下一塊該是第幾塊。
     mine: HashMap<u64, u64>,
-    /// 葉子發的、還沒回 `result` 的：下一塊要送第幾塊。
-    theirs: HashMap<u64, u64>,
+    /// 葉子發的、還沒回 `result` 的，照本地代號查。
+    theirs: HashMap<u64, Their>,
+    /// 葉子發的、還沒回 `result` 的：線上的 `id` 對到本地代號。
+    wire: HashMap<u64, u64>,
+}
+
+struct Their {
+    /// 線上的 `id`。
+    wire: u64,
+    /// 下一塊要送第幾塊。
+    next: u64,
+}
+
+/// 回了 `rejected`、等排著的寫完再關的連線。
+struct Closing {
+    chan: Chan,
+    until: Instant,
 }
 
 impl Conn {
@@ -119,11 +158,43 @@ impl Conn {
         self.chan.queued() >= OUTBOX_PAUSE
     }
 
-    fn running(&self, call: CallRef) -> bool {
-        match call.side {
-            Side::Composition => self.mine.contains_key(&call.id),
-            Side::Leaf => self.theirs.contains_key(&call.id),
+    /// 擁有的一方要發的先過這裡：到了暫停線就不送，並記下要報 [`PairEvent::Resumed`]。
+    fn admit(&mut self) -> Result<(), SendError> {
+        if self.paused() {
+            self.refused = true;
+            return Err(SendError::Paused);
         }
+        Ok(())
+    }
+
+    fn flush(&mut self) {
+        let before = self.chan.queued();
+        self.chan.flush();
+        self.wrote |= self.chan.queued() < before;
+    }
+
+    fn send(&mut self, payload: &[u8]) {
+        let before = self.chan.queued() + payload.len() + 4;
+        self.chan.send(payload);
+        self.wrote |= self.chan.queued() < before;
+    }
+
+    /// 線上的呼叫換成這一端的說法；不在跑是 `None`。
+    fn local(&self, call: CallRef) -> Option<CallRef> {
+        let id = match call.side {
+            Side::Composition => self.mine.contains_key(&call.id).then_some(call.id)?,
+            Side::Leaf => *self.wire.get(&call.id)?,
+        };
+        Some(CallRef { id, ..call })
+    }
+
+    /// 這一端的說法換成線上的呼叫；不在跑是 `None`。
+    fn on_wire(&self, call: CallRef) -> Option<CallRef> {
+        let id = match call.side {
+            Side::Composition => self.mine.contains_key(&call.id).then_some(call.id)?,
+            Side::Leaf => self.theirs.get(&call.id)?.wire,
+        };
+        Some(CallRef { id, ..call })
     }
 }
 
@@ -133,7 +204,12 @@ pub struct Pair {
     leaf: Option<u32>,
     pending: Vec<Pending>,
     conn: Option<Conn>,
+    closing: Vec<Closing>,
+    /// 這個時刻之前不 accept。
+    accept_after: Option<Instant>,
     next_id: u64,
+    /// 下一個葉子發來的呼叫的本地代號。
+    next_handle: u64,
     events: Vec<PairEvent>,
 }
 
@@ -168,7 +244,10 @@ impl Pair {
             leaf: None,
             pending: Vec::new(),
             conn: None,
+            closing: Vec::new(),
+            accept_after: None,
             next_id: 0,
+            next_handle: 0,
             events: Vec::new(),
         })
     }
@@ -176,7 +255,7 @@ impl Pair {
     /// 監督行程說葉子是這個 pid。已經有驗過的連線就斷掉它（[`Disconnect::Replaced`]）。
     pub fn set_leaf(&mut self, pid: u32) {
         if self.conn.is_some() {
-            self.disconnect(Disconnect::Replaced);
+            drop(self.disconnect(Disconnect::Replaced));
         }
         self.leaf = Some(pid);
     }
@@ -195,9 +274,16 @@ impl Pair {
         self.conn.as_ref().map_or(0, |conn| conn.chan.queued())
     }
 
-    /// 要 poll 的 fd。暫停時，或還有讀進來沒處理的框時，不看那條連線的讀端。
+    /// 要 poll 的 fd。
     pub fn poll_fds(&self, fds: &mut Vec<libc::pollfd>) {
-        fds.push(pollfd(self.listener.as_raw_fd(), libc::POLLIN));
+        if self.accept_after.is_none() {
+            fds.push(pollfd(self.listener.as_raw_fd(), libc::POLLIN));
+        }
+        for closing in &self.closing {
+            if let (_, Some(write)) = closing.chan.poll_fds() {
+                fds.push(pollfd(write, libc::POLLOUT));
+            }
+        }
         for pending in &self.pending {
             if let (Some(read), _) = pending.chan.poll_fds() {
                 fds.push(pollfd(read, libc::POLLIN));
@@ -205,7 +291,7 @@ impl Pair {
         }
         if let Some(conn) = &self.conn {
             let (read, write) = conn.chan.poll_fds();
-            if let Some(read) = read.filter(|_| !conn.paused() && conn.backlog.is_empty()) {
+            if let Some(read) = read {
                 fds.push(pollfd(read, libc::POLLIN));
             }
             if let Some(write) = write {
@@ -214,50 +300,59 @@ impl Pair {
         }
     }
 
-    /// 沒有 fd 動也要叫 [`Pair::step`] 的時刻：最早到期的 `hello` 時限；有留著的框可以處理、有還沒交出去的事、
-    /// 或有等著的連線已經判得出來，就是現在。
+    /// 沒有 fd 動也要叫 [`Pair::step`] 的時刻：最早到期的 `hello` 時限、等著關的連線的時限、accept 退避完的時刻、送端停滯的時限；
+    /// 有還沒交出去的事、有等著的連線已經判得出來、該報 [`PairEvent::Resumed`]、送端剛有東西排著還沒開始計時、或驗過的那條有一端已經關了，就是現在。
     pub fn deadline(&self, now: Instant) -> Option<Instant> {
         let decided = self.pending.iter().any(|pending| match self.leaf {
             Some(leaf) => pending.hello.is_some() || pending.pid != leaf,
             None => false,
         });
-        let backlog = self
-            .conn
-            .as_ref()
-            .is_some_and(|conn| !conn.backlog.is_empty() && !conn.paused());
-        let ready = backlog || decided || !self.events.is_empty();
+        let conn = self.conn.as_ref();
+        let resumed = conn.is_some_and(|conn| conn.refused && !conn.paused());
+        let untimed =
+            conn.is_some_and(|conn| conn.chan.queued() > 0 && conn.stalled_since.is_none());
+        let stall = conn
+            .and_then(|conn| conn.stalled_since)
+            .map(|since| since + STALL_TIMEOUT);
+        let closed = conn.is_some_and(|conn| conn.chan.write_closed() || conn.chan.read_closed());
+        let ready = decided || resumed || untimed || closed || !self.events.is_empty();
         self.pending
             .iter()
             .map(|pending| pending.opened + HELLO_TIMEOUT)
+            .chain(self.closing.iter().map(|closing| closing.until))
+            .chain(self.accept_after)
+            .chain(stall)
             .chain(ready.then_some(now))
             .min()
     }
 
     /// 收連線、讀寫、處理讀到的框、收掉過了時限的，回上一次 `step` 之後累積的事。不會擋住。
+    /// 先判等著的、讓斷了的讓出位子再 accept；accept 之後再判一次，連線帶著 `hello` 一起到的同一步就收下。
     pub fn step(&mut self, now: Instant) -> Vec<PairEvent> {
+        self.step_closing(now);
+        self.step_pending(now);
         self.accept(now);
         self.step_pending(now);
-        self.step_conn();
+        self.step_conn(now);
         std::mem::take(&mut self.events)
     }
 
-    /// 叫葉子的一個 method，回這一次的 `id`。結果之後由 [`PairEvent::Chunk`] 與 [`PairEvent::Finished`] 交回來。
+    /// 叫葉子的一個 method，回這一次的 `id`。`parent` 是葉子發的那一邊時給本地代號。結果之後由 [`PairEvent::Chunk`] 與 [`PairEvent::Finished`] 交回來。
     pub fn call(
         &mut self,
         parent: Option<CallRef>,
         method: &str,
         payload: Value,
     ) -> Result<u64, SendError> {
-        let conn = self.conn.as_ref().ok_or(SendError::NotConnected)?;
-        if conn.paused() {
-            return Err(SendError::Paused);
-        }
+        let conn = self.conn.as_mut().ok_or(SendError::NotConnected)?;
+        conn.admit()?;
         if conn.mine.len() >= MAX_CALLS {
             return Err(SendError::Busy);
         }
-        if parent.is_some_and(|parent| !conn.running(parent)) {
-            return Err(SendError::BadParent);
-        }
+        let parent = match parent {
+            Some(parent) => Some(conn.on_wire(parent).ok_or(SendError::BadParent)?),
+            None => None,
+        };
         let id = self.next_id;
         let bytes = encode(&PairMessage::Call {
             call: CallRef {
@@ -288,7 +383,8 @@ impl Pair {
         )
     }
 
-    /// 自己發的那一次不要了。它的 [`PairEvent::Finished`] 照樣會來；已經結束的不送任何東西。
+    /// 自己發的那一次不要了。它的 [`PairEvent::Finished`] 照樣會來；已經結束的不送任何東西。暫停時也照排；再排就超過
+    /// [`OUTBOX_LIMIT`] 的，斷線（[`Disconnect::Overflow`]）。
     pub fn cancel(&mut self, id: u64) {
         if self
             .conn
@@ -304,46 +400,51 @@ impl Pair {
         }
     }
 
-    /// 替葉子發的那一次串流一塊。
+    /// 替葉子發的那一次（本地代號）串流一塊。
     pub fn chunk(&mut self, id: u64, payload: &str) -> Result<(), SendError> {
         let conn = self.conn.as_mut().ok_or(SendError::NotConnected)?;
         if !conn.theirs.contains_key(&id) {
             return Err(SendError::NotRunning);
         }
+        conn.admit()?;
         if payload.len() > MAX_CHUNK_BYTES {
-            self.finish(id, failure(ErrorCode::TooLarge, "一塊超過上限"));
+            self.finish(id, failure(ErrorCode::TooLarge, "一塊超過上限"))?;
             return Err(SendError::TooLarge);
         }
-        if conn.paused() {
-            return Err(SendError::Paused);
-        }
-        let Some(next) = conn.theirs.get_mut(&id) else {
+        let Some(their) = conn.theirs.get_mut(&id) else {
             return Err(SendError::NotRunning);
         };
-        let seq = *next;
-        *next += 1;
+        let seq = their.next;
+        their.next += 1;
+        let call = CallRef {
+            side: Side::Leaf,
+            id: their.wire,
+        };
         self.send(&encode(&PairMessage::Chunk {
-            call: CallRef {
-                side: Side::Leaf,
-                id,
-            },
+            call,
             seq,
             payload: payload.to_string(),
         }));
         Ok(())
     }
 
-    /// 葉子發的那一次做完了。編出來超過一框的換成 `too_large`；那一次已經不在跑（葉子取消了）就不送。
-    pub fn finish(&mut self, id: u64, outcome: Result<Value, CallError>) {
-        let Some(conn) = self.conn.as_mut() else {
-            return;
-        };
-        if conn.theirs.remove(&id).is_none() {
-            return;
+    /// 葉子發的那一次（本地代號）做完了。編出來超過一框的換成 `too_large`。那一次已經不在跑（葉子取消了、連線斷過）回
+    /// [`SendError::NotRunning`]，沒有連線回 [`SendError::NotConnected`]，這兩種結果丟掉就好；回 [`SendError::Paused`] 的那一次還在跑，結果要留著再試。
+    pub fn finish(&mut self, id: u64, outcome: Result<Value, CallError>) -> Result<(), SendError> {
+        let conn = self.conn.as_mut().ok_or(SendError::NotConnected)?;
+        if !conn.theirs.contains_key(&id) {
+            return Err(SendError::NotRunning);
         }
-        self.reply(id, outcome);
+        conn.admit()?;
+        let Some(their) = conn.theirs.remove(&id) else {
+            return Err(SendError::NotRunning);
+        };
+        conn.wire.remove(&their.wire);
+        self.reply(their.wire, outcome);
+        Ok(())
     }
 
+    /// 回線上那個 `id` 的 `result`。
     fn reply(&mut self, id: u64, outcome: Result<Value, CallError>) {
         let call = CallRef {
             side: Side::Leaf,
@@ -364,22 +465,17 @@ impl Pair {
         let Some(conn) = self.conn.as_mut() else {
             return;
         };
-        conn.chan.flush();
+        conn.flush();
         if conn.chan.queued() + payload.len() + 4 > OUTBOX_LIMIT {
-            self.disconnect(Disconnect::Overflow);
+            drop(self.disconnect(Disconnect::Overflow));
             return;
         }
-        conn.chan.send(payload);
+        conn.send(payload);
     }
 
-    /// 收掉驗過的那條連線：還在跑的呼叫各報一筆，pid 作廢。
-    fn disconnect(&mut self, reason: Disconnect) {
-        let Some(mut conn) = self.conn.take() else {
-            return;
-        };
-        if let Disconnect::Violation(why) = &reason {
-            conn.chan.send(&rejected(why));
-        }
+    /// 收掉驗過的那條連線：還在跑的呼叫各報一筆，pid 作廢。回那條連線，丟掉它就關了。
+    fn disconnect(&mut self, reason: Disconnect) -> Option<Chan> {
+        let conn = self.conn.take()?;
         let mut mine: Vec<u64> = conn.mine.into_keys().collect();
         mine.sort_unstable();
         for id in mine {
@@ -395,29 +491,73 @@ impl Pair {
         }
         self.leaf = None;
         self.events.push(PairEvent::Disconnected { reason });
+        Some(conn.chan)
     }
 
-    fn refuse(&mut self, mut pending: Pending, reason: &str) {
-        pending.chan.send(&rejected(reason));
+    /// 葉子違反協定：收線，回 `rejected`。
+    fn violate(&mut self, why: &str, now: Instant) {
+        if let Some(chan) = self.disconnect(Disconnect::Violation(why.to_string())) {
+            self.reject(chan, why, now);
+        }
+    }
+
+    fn refuse(&mut self, pending: Pending, reason: &str, now: Instant) {
         self.events.push(PairEvent::Refused {
             pid: Some(pending.pid),
             reason: reason.to_string(),
         });
+        self.reject(pending.chan, reason, now);
+    }
+
+    /// 排一框 `rejected`，排著的寫完就關；當下寫不完的留到 [`CLOSE_TIMEOUT`]。
+    fn reject(&mut self, mut chan: Chan, reason: &str, now: Instant) {
+        chan.send(&rejected(reason));
+        chan.finish();
+        if chan.write_closed() {
+            return;
+        }
+        if self.closing.len() >= MAX_CLOSING {
+            self.closing.remove(0);
+        }
+        self.closing.push(Closing {
+            chan,
+            until: now + CLOSE_TIMEOUT,
+        });
+    }
+
+    fn step_closing(&mut self, now: Instant) {
+        self.closing.retain_mut(|closing| {
+            closing.chan.flush();
+            !closing.chan.write_closed() && now < closing.until
+        });
     }
 
     fn accept(&mut self, now: Instant) {
+        if self.accept_after.is_some_and(|after| now < after) {
+            return;
+        }
+        self.accept_after = None;
         loop {
             let stream = match self.listener.accept() {
                 Ok((stream, _)) => stream,
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => return,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
+                Err(_) => {
+                    self.accept_after = Some(now + ACCEPT_BACKOFF);
+                    return;
+                }
             };
             let pid = peer_pid(stream.as_raw_fd());
             let read = OwnedFd::from(stream);
             let Ok(write) = read.try_clone() else {
-                continue;
+                self.events.push(PairEvent::Refused {
+                    pid,
+                    reason: "開不了 fd".to_string(),
+                });
+                self.accept_after = Some(now + ACCEPT_BACKOFF);
+                return;
             };
-            let mut chan = Chan::from_fds(read, write, MAX_FRAME);
+            let chan = Chan::from_fds(read, write, MAX_FRAME);
             let refusal = match pid {
                 None => Some("讀不到身分"),
                 Some(pid) if self.leaf.is_some_and(|leaf| leaf != pid) => Some("pid 不對"),
@@ -433,11 +573,11 @@ impl Pair {
                 }),
                 (_, reason) => {
                     let reason = reason.unwrap_or_default();
-                    chan.send(&rejected(reason));
                     self.events.push(PairEvent::Refused {
                         pid,
                         reason: reason.to_string(),
                     });
+                    self.reject(chan, reason, now);
                 }
             }
         }
@@ -450,7 +590,7 @@ impl Pair {
             match verdict {
                 Verdict::Wait => self.pending.push(pending),
                 Verdict::Gone => {}
-                Verdict::Refuse(reason) => self.refuse(pending, reason),
+                Verdict::Refuse(reason) => self.refuse(pending, reason, now),
                 Verdict::Accept => {
                     let pid = pending.pid;
                     let mut chan = pending.chan;
@@ -459,9 +599,12 @@ impl Pair {
                     }));
                     self.conn = Some(Conn {
                         chan,
-                        backlog: VecDeque::new(),
+                        refused: false,
+                        wrote: false,
+                        stalled_since: None,
                         mine: HashMap::new(),
                         theirs: HashMap::new(),
+                        wire: HashMap::new(),
                     });
                     self.events.push(PairEvent::Connected { pid });
                 }
@@ -499,41 +642,51 @@ impl Pair {
         }
     }
 
-    /// 驗過的那條：寫、沒暫停就讀與處理。
-    fn step_conn(&mut self) {
+    /// 驗過的那條：寫、判停滯、報 [`PairEvent::Resumed`]、讀與處理、判對方關了。
+    fn step_conn(&mut self, now: Instant) {
         let Some(conn) = self.conn.as_mut() else {
             return;
         };
-        conn.chan.flush();
-        if !conn.paused() && conn.backlog.is_empty() {
-            match conn.chan.receive() {
-                Ok(frames) => conn.backlog.extend(frames),
-                Err(err) => {
-                    self.disconnect(Disconnect::Violation(err.0.to_string()));
-                    return;
-                }
-            }
+        conn.flush();
+        if conn.chan.queued() == 0 {
+            conn.stalled_since = None;
+        } else if conn.wrote || conn.stalled_since.is_none() {
+            conn.stalled_since = Some(now);
         }
-        loop {
-            let Some(conn) = self.conn.as_mut() else {
+        conn.wrote = false;
+        let stalled = conn
+            .stalled_since
+            .is_some_and(|since| now >= since + STALL_TIMEOUT);
+        if stalled {
+            drop(self.disconnect(Disconnect::Stalled));
+            return;
+        }
+        if conn.refused && !conn.paused() {
+            conn.refused = false;
+            self.events.push(PairEvent::Resumed);
+        }
+        let frames = match conn.chan.receive() {
+            Ok(frames) => frames,
+            Err(err) => {
+                self.violate(err.0, now);
                 return;
-            };
-            if conn.paused() {
-                break;
             }
-            let Some(frame) = conn.backlog.pop_front() else {
-                break;
-            };
+        };
+        for frame in frames {
+            if self.conn.is_none() {
+                return;
+            }
             if let Err(why) = self.handle(&frame) {
-                self.disconnect(Disconnect::Violation(why.to_string()));
+                self.violate(why, now);
                 return;
             }
         }
-        let closed = self.conn.as_ref().is_some_and(|conn| {
-            conn.chan.write_closed() || (conn.chan.read_closed() && conn.backlog.is_empty())
-        });
+        let closed = self
+            .conn
+            .as_ref()
+            .is_some_and(|conn| conn.chan.write_closed() || conn.chan.read_closed());
         if closed {
-            self.disconnect(Disconnect::Closed);
+            drop(self.disconnect(Disconnect::Closed));
         }
     }
 
@@ -560,12 +713,13 @@ impl Pair {
                     return Err("方向不對");
                 }
                 let id = call.id;
-                if conn.theirs.contains_key(&id) {
+                if conn.wire.contains_key(&id) {
                     return Err("重複的呼叫編號");
                 }
+                let local = parent.map(|parent| conn.local(parent));
                 let refusal = if conn.theirs.len() >= MAX_CALLS {
                     Some((ErrorCode::Busy, "同時在跑的呼叫已經到上限".to_string()))
-                } else if parent.is_some_and(|parent| !conn.running(parent)) {
+                } else if local == Some(None) {
                     Some((ErrorCode::BadPayload, "parent 不在跑".to_string()))
                 } else if !self.methods.contains(&method) {
                     Some((ErrorCode::UnknownMethod, method.clone()))
@@ -575,10 +729,13 @@ impl Pair {
                 match refusal {
                     Some((code, message)) => self.reply(id, Err(CallError { code, message })),
                     None => {
-                        conn.theirs.insert(id, 0);
+                        let handle = self.next_handle;
+                        self.next_handle += 1;
+                        conn.theirs.insert(handle, Their { wire: id, next: 0 });
+                        conn.wire.insert(id, handle);
                         self.events.push(PairEvent::Call {
-                            id,
-                            parent,
+                            id: handle,
+                            parent: local.flatten(),
                             method,
                             payload,
                         });
@@ -617,8 +774,9 @@ impl Pair {
                 if call.side != Side::Leaf {
                     return Err("方向不對");
                 }
-                if conn.theirs.remove(&call.id).is_some() {
-                    self.events.push(PairEvent::Cancelled { id: call.id });
+                if let Some(handle) = conn.wire.remove(&call.id) {
+                    conn.theirs.remove(&handle);
+                    self.events.push(PairEvent::Cancelled { id: handle });
                     self.reply(call.id, failure(ErrorCode::Cancelled, ""));
                 }
                 Ok(())

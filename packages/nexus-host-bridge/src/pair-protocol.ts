@@ -9,7 +9,7 @@
  * 這裡只管一框的形狀：誰能送哪一種、哪些 `id` 還在跑，由連線那一層判。Rust 那一側的 JSON 是 `serde_json`：`\u` 跳脫的代理對要成對、
  * 數字要是有限值、巢狀最多 {@link MAX_DEPTH} 層，對方解不開就判違反協定；另有些值 `JSON.stringify` 會悄悄改掉或丟掉（非有限的數字、`undefined`、`Date`、`Map`…）。
  * 所以 {@link encodePairMessage} 送出前一律先核，
- * {@link decodePairMessage} 收的也照同一組規則。`JSON.parse` 分不出 `1` 與 `1.0`，寫成小數的整數 `id`、`seq`、`version` 這裡收、Rust 不收。
+ * {@link decodePairMessage} 收的也照同一組規則。`JSON.parse` 分不出 `1` 與 `1.0`，寫成小數或指數的整數（`1.0`、`1e2`）`id`、`seq`、`version` 這裡收、Rust 不收；`-0` 兩邊都不收。
  *
  * @module
  */
@@ -37,11 +37,14 @@ export const PAIR_MAX_CALLS = 64;
 /** 葉子送出 `hello` 後等組合行程回 `hello` 最多多久。 */
 export const PAIR_HELLO_TIMEOUT_MS = 5_000;
 
-/** 排著沒寫出去的位元組到了這麼多，先不讀對方、不發新的 `call` 與 `chunk`。 */
+/** 排著沒寫出去的位元組到了這麼多，先不發新的 `call`、`chunk`、`result`；對方送來的照讀。 */
 export const PAIR_OUTBOX_PAUSE_BYTES = 512 * 1024;
 
 /** 排著沒寫出去的位元組不超過這麼多；再排一框就超過的，關連線。 */
 export const PAIR_OUTBOX_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** 有東西排著、連續這麼久一個位元組都沒寫出去，當對方不在、關連線。 */
+export const PAIR_STALL_TIMEOUT_MS = 30_000;
 
 /** 組合行程叫葉子綁 thread 的 method；`payload` 是 `{ threadId }`。 */
 export const PAIR_ATTACH_METHOD = 'attach';
@@ -49,11 +52,13 @@ export const PAIR_ATTACH_METHOD = 'attach';
 /** 發起那一次呼叫的一方：`'l'` 葉子、`'m'` 組合行程。 */
 export type PairSide = 'l' | 'm';
 
+/** 一次呼叫的識別：發起的一方加上那一方自己編的 `id`。 */
 export interface PairCallRef {
   readonly id: number;
   readonly side: PairSide;
 }
 
+/** 橋上的一框。 */
 export type PairMessage =
   | { readonly type: 'hello'; readonly version: number }
   | { readonly type: 'rejected'; readonly reason: string }
@@ -86,6 +91,7 @@ export type PairMessage =
     }
   | { readonly type: 'cancel'; readonly side: PairSide; readonly id: number };
 
+/** 框長、形狀或值不合協定；編與解都丟它。 */
 export class PairProtocolError extends Error {
   override readonly name = 'PairProtocolError';
 }
@@ -135,14 +141,25 @@ function asSide(value: unknown): PairSide {
 }
 
 function asCount(value: unknown, field: 'id' | 'seq'): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    Object.is(value, -0)
+  ) {
     throw new PairProtocolError(`${field} 不在範圍內`);
   }
   return value;
 }
 
 function asVersion(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 0xffff_ffff ||
+    Object.is(value, -0)
+  ) {
     throw new PairProtocolError('版本不是 u32');
   }
   return value;
@@ -188,7 +205,7 @@ function asError(value: unknown): { readonly code: HostErrorCode; readonly messa
 
 /**
  * 編成緊湊 JSON：外層鍵照 `type` 在前的固定順序，`parent` 與 `error` 的鍵照碼位順序，跟 Rust 那一側一字不差；`payload` 與 `ok`
- * 照 `JSON.stringify`，Rust 重編時物件的鍵會照碼位排序。欄位的值不合 {@link decodePairMessage} 收的規則（欄位的型別由 TS 管，這裡不重核）、或整框超過
+ * 照 `JSON.stringify`，Rust 重編時物件的鍵會照碼位排序。欄位的值不合 {@link decodePairMessage} 收的規則（`reason`、`method`、錯誤碼與錯誤訊息的型別由 TS 管，這裡不重核）、或整框超過
  * {@link PAIR_MAX_FRAME}，丟 {@link PairProtocolError}。
  */
 export function encodePairMessage(message: PairMessage): Buffer {
@@ -248,7 +265,8 @@ export function encodePairMessage(message: PairMessage): Buffer {
   return bytes;
 }
 
-const UTF8 = new TextDecoder('utf-8', { fatal: true });
+// `ignoreBOM: true` 是「不把開頭的 BOM 吃掉」：留著它，`JSON.parse` 才會跟 Rust 一樣拒收。
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 /** 解對方送來的一框；不是合法的 UTF-8 或 JSON、種類不認得、欄位少了或多了、型別不對，都丟 {@link PairProtocolError}。 */
 export function decodePairMessage(payload: Buffer): PairMessage {

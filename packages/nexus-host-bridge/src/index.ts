@@ -31,6 +31,7 @@ export {
   PAIR_OUTBOX_LIMIT_BYTES,
   PAIR_OUTBOX_PAUSE_BYTES,
   PAIR_PROTOCOL_VERSION,
+  PAIR_STALL_TIMEOUT_MS,
   PairFrameReader,
   PairProtocolError,
   decodePairMessage,

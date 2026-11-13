@@ -6,6 +6,7 @@ import {
   PAIR_ATTACH_METHOD,
   PAIR_ENVELOPE_BYTES,
   PAIR_HELLO_TIMEOUT_MS,
+  PAIR_STALL_TIMEOUT_MS,
   PAIR_MAX_CALLS,
   PAIR_MAX_CHUNK_BYTES,
   PAIR_MAX_FRAME,
@@ -30,6 +31,7 @@ interface Vectors {
   readonly maxChunkBytes: number;
   readonly maxCalls: number;
   readonly helloTimeoutMs: number;
+  readonly stallTimeoutMs: number;
   readonly outboxPauseBytes: number;
   readonly outboxLimitBytes: number;
   readonly attachMethod: string;
@@ -70,6 +72,7 @@ describe('橋的協定，跟 pair_protocol.rs 對同一份向量檔', () => {
     expect(PAIR_HELLO_TIMEOUT_MS).toBe(vectors.helloTimeoutMs);
     expect(PAIR_OUTBOX_PAUSE_BYTES).toBe(vectors.outboxPauseBytes);
     expect(PAIR_OUTBOX_LIMIT_BYTES).toBe(vectors.outboxLimitBytes);
+    expect(PAIR_STALL_TIMEOUT_MS).toBe(vectors.stallTimeoutMs);
     expect(PAIR_ATTACH_METHOD).toBe(vectors.attachMethod);
   });
 

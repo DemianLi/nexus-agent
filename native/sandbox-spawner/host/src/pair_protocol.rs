@@ -17,7 +17,7 @@
 //! - `call{side, id, parent, method, payload}`：兩邊都能發。`side` 是發起的一方（[`Side`]），`id` 兩邊各自一個空間，所以一次呼叫的識別是
 //!   `(side, id)`（[`CallRef`]）。`parent` 是外層那一次呼叫，沒有就是 `null`；它要還在跑。waterfall 的前後段帶同一個 `parent`。沒有預設時限。
 //! - `chunk{side, id, seq, payload}`：串流的一塊，`payload` 是字串，UTF-8 最長 [`MAX_CHUNK_BYTES`]；`seq` 每次呼叫從 0 起、一次加一。
-//! - `result{side, id, ok | error}`：一次呼叫的終點，每個 `(side, id)` 剛好一框，取消的也有。錯誤碼是宿主那條的那一組
+//! - `result{side, id, ok | error}`：一次呼叫的終點，每一次呼叫剛好一框，取消的也有。錯誤碼是宿主那條的那一組
 //!   （[`crate::host_protocol::ErrorCode`]）；橋沒有服務這一層，不發 `unknown_service`。
 //! - `cancel{side, id}`：發起的一方不要這一次了。指到已經結束的不回任何東西（兩邊各自送出時會交錯）。
 //!
@@ -39,9 +39,16 @@
 //!
 //! # 背壓
 //!
-//! 送端排著沒寫出去的位元組到了 [`OUTBOX_PAUSE`]：先不讀對方、不處理已經讀進來的框，自己要發的新 `call` 與 `chunk` 在本地回「現在送不了」；
-//! 降回 [`OUTBOX_PAUSE`] 以下再恢復。再排一框就超過 [`OUTBOX_LIMIT`]：關連線。收端沒切成框的最多
-//! [`nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES`] 個框長。兩個送端的常數是位元組數，不隨 [`MAX_FRAME`] 變。
+//! 兩端同一條規則。送端排著沒寫出去的位元組到了 [`OUTBOX_PAUSE`]：自己要發的新 `call`、`chunk`、`result` 先不送（在本地回「現在送不了」，
+//! 由發的一方留著），降回 [`OUTBOX_PAUSE`] 以下再送；`cancel`、以及替對方的 `call` 自動回的 `result`（`busy`、`unknown_method`、
+//! `bad_payload`、`cancelled`）照排。**對方送來的任何時候都照讀照處理，不因為自己送不出去而停讀。**
+//!
+//! 為什麼不停讀：兩端若都「送不出去就先不讀」，各排一個大框（kernel 的 buffer 裝不下）就互等——兩邊都過了暫停線、都不讀，
+//! 誰的送端都排不出去，沒有新的寫入所以碰不到 [`OUTBOX_LIMIT`]，連線不斷、在跑的呼叫全懸著。一端只要活著就一直讀，對方的送端就一定排得出去。
+//!
+//! 對方真的不讀時有兩個出口：照排的那幾種再排一框就超過 [`OUTBOX_LIMIT`]，關連線；有東西排著、連續 [`STALL_TIMEOUT`]
+//! 一個位元組都沒寫出去，關連線。所以沒有「不前進也不報錯」的狀態。收端沒切成框的最多
+//! [`nexus_sandbox_spawner::supervisor::process::INBOX_FRAMES`] 個框長。送端的兩個常數是位元組數，不隨 [`MAX_FRAME`] 變。
 //!
 //! # 連線斷了
 //!
@@ -56,7 +63,7 @@ use nexus_sandbox_spawner::protocol::DecodeError;
 /// 橋的協定版本。跟監督行程控制通道、宿主連線的版本各自獨立。
 pub const PAIR_PROTOCOL_VERSION: u32 = 1;
 
-/// 橋上一框最長多少。
+/// 橋上一框最長多少。暫定，#2571／#2572 要用之前重定。
 pub const MAX_FRAME: usize = 1 << 20;
 
 /// `id` 與 `seq` 最大多少：JavaScript 的 number 精確表示得了的最大整數。
@@ -74,11 +81,14 @@ pub const MAX_CALLS: usize = 64;
 /// 從組合行程收下連線那一步起，這麼久內要送 `hello`、葉子的 pid 也要到，否則回 `rejected`；葉子送出 `hello` 後等組合行程回 `hello` 也是這麼久。
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 排著沒寫出去的位元組到了這麼多，先不讀對方、不發新的 `call` 與 `chunk`。
+/// 排著沒寫出去的位元組到了這麼多，先不發新的 `call`、`chunk`、`result`；對方送來的照讀。
 pub const OUTBOX_PAUSE: usize = 512 * 1024;
 
 /// 排著沒寫出去的位元組不超過這麼多；再排一框就超過的，關連線。
 pub const OUTBOX_LIMIT: usize = 2 * 1024 * 1024;
+
+/// 有東西排著、連續這麼久一個位元組都沒寫出去，當對方不在、關連線。暫定，#2571／#2572 定單框上限時一起重定。
+pub const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 組合行程同時留著幾條還沒驗過身分的連線；再來的回 `rejected` 再關。
 pub const MAX_PENDING: usize = 4;
@@ -452,6 +462,10 @@ mod tests {
         );
         assert_eq!(number("outboxPauseBytes"), Some(OUTBOX_PAUSE as u64));
         assert_eq!(number("outboxLimitBytes"), Some(OUTBOX_LIMIT as u64));
+        assert_eq!(
+            number("stallTimeoutMs"),
+            Some(STALL_TIMEOUT.as_millis() as u64)
+        );
         assert_eq!(number("pendingConnections"), Some(MAX_PENDING as u64));
         assert_eq!(
             all.get("attachMethod").and_then(Value::as_str),

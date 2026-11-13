@@ -1,15 +1,18 @@
+#![cfg(target_os = "linux")]
 //! 橋在組合行程那一端（[`nexus_host::pair`]，#2583）：測試行程自己連進來當葉子，所以 `SO_PEERCRED` 讀到的 pid 就是測試行程的。
 //!
-//! 單執行緒、不睡：葉子寫完就叫 [`Rig::step`]，寫進 socket 的當下就讀得到；時限用傳進去的時間推。
+//! 單執行緒、不睡：葉子寫完就叫 [`Rig::step`] 走到寫進去的都讀完（一步最多讀 `READ_BUDGET`）；時限用傳進去的時間推。
 
 use nexus_host::host_protocol::{CallError, ErrorCode};
 use nexus_host::json::{self, Value};
-use nexus_host::pair::{Disconnect, Failure, Pair, PairEvent, SendError};
+use nexus_host::pair::{Disconnect, Failure, Pair, PairEvent, SendError, CLOSE_TIMEOUT};
 use nexus_host::pair_protocol::{
     decode, encode, CallRef, PairMessage, Side, HELLO_TIMEOUT, MAX_CALLS, MAX_CHUNK_BYTES,
     MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION,
+    STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::protocol::{frame, take_frame_within};
+use nexus_sandbox_spawner::supervisor::process::READ_BUDGET;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -92,14 +95,26 @@ impl Leaf {
 
     /// 寫完這些位元組；socket 滿了就讓組合行程那一端讀。寫不進去（對方關了）就停。
     fn write(&mut self, rig: &mut Rig, mut bytes: &[u8]) {
+        let total = bytes.len();
+        let mut stuck = 0;
         while !bytes.is_empty() {
             match self.stream.write(bytes) {
-                Ok(n) => bytes = &bytes[n..],
-                Err(err) if err.kind() == ErrorKind::WouldBlock => rig.step(),
+                Ok(n) => {
+                    bytes = &bytes[n..];
+                    stuck = 0;
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    stuck += 1;
+                    assert!(stuck < 10_000, "組合行程那一端一直不讀，葉子寫不進去");
+                    rig.step();
+                }
                 Err(_) => break,
             }
         }
-        rig.step();
+        // 一次 `step` 最多讀 `READ_BUDGET`：走到這些位元組一定都讀進去了為止。
+        for _ in 0..total / READ_BUDGET + 2 {
+            rig.step();
+        }
     }
 
     fn send(&mut self, rig: &mut Rig, message: &PairMessage) {
@@ -312,7 +327,7 @@ fn a_second_connection_is_rejected_and_the_first_keeps_working() {
     assert_eq!(
         rig.events(),
         [PairEvent::Call {
-            id: 1,
+            id: 0,
             parent: None,
             method: "echo".into(),
             payload: Value::from("還在"),
@@ -332,6 +347,13 @@ fn connections_waiting_to_be_checked_are_capped() {
         assert_eq!(leaf.read(&mut rig), []);
         assert!(!leaf.closed);
     }
+
+    // 等著的自己斷了就讓出位子；跟新來的同一步到也先判舊的。
+    waiting.pop();
+    let mut next = Leaf::connect(&rig);
+    assert_eq!(rig.events(), []);
+    assert_eq!(next.read(&mut rig), []);
+    assert!(!next.closed);
 }
 
 #[test]
@@ -403,10 +425,17 @@ fn attach_goes_to_the_leaf_and_its_answer_comes_back() {
 fn calls_nest_across_both_directions_and_a_waterfall_shares_its_parent() {
     let (mut rig, mut leaf) = Rig::connected("nest");
     // 葉子叫組合行程，組合行程在那一次裡面回頭叫葉子兩次（waterfall 的前後段），葉子又在第二段裡面叫回來。
+    // 葉子在線上用的 id 是 5 與 6，這一端給的本地代號是 0 與 1。
     leaf.send(&mut rig, &call(leaf_call(5), None, "echo", Value::from(1)));
     let outer = Some(leaf_call(5));
-    let before = rig.pair.call(outer, "before", Value::from("a")).unwrap();
-    let after = rig.pair.call(outer, "after", Value::from("b")).unwrap();
+    let local = Some(leaf_call(0));
+    let before = rig.pair.call(local, "before", Value::from("a")).unwrap();
+    let after = rig.pair.call(local, "after", Value::from("b")).unwrap();
+    assert_eq!(
+        rig.pair.call(outer, "x", Value::Null),
+        Err(SendError::BadParent),
+        "線上的 id 不是本地代號"
+    );
     assert_ne!(before, after);
     assert_eq!(
         leaf.read(&mut rig),
@@ -418,23 +447,23 @@ fn calls_nest_across_both_directions_and_a_waterfall_shares_its_parent() {
     let inner = Some(my_call(after));
     leaf.send(&mut rig, &call(leaf_call(6), inner, "echo", Value::from(2)));
     leaf.send(&mut rig, &result(my_call(before), Ok(Value::from("A"))));
-    rig.pair.finish(6, Ok(Value::from(20)));
+    assert_eq!(rig.pair.finish(1, Ok(Value::from(20))), Ok(()));
     leaf.send(
         &mut rig,
         &result(my_call(after), error(ErrorCode::ServiceError, "壞了")),
     );
-    rig.pair.finish(5, Ok(Value::from(10)));
+    assert_eq!(rig.pair.finish(0, Ok(Value::from(10))), Ok(()));
     assert_eq!(
         rig.events(),
         [
             PairEvent::Call {
-                id: 5,
+                id: 0,
                 parent: None,
                 method: "echo".into(),
                 payload: Value::from(1),
             },
             PairEvent::Call {
-                id: 6,
+                id: 1,
                 parent: inner,
                 method: "echo".into(),
                 payload: Value::from(2),
@@ -504,10 +533,10 @@ fn an_unknown_method_fails_only_that_call() {
 fn chunks_stream_both_ways_in_order() {
     let (mut rig, mut leaf) = Rig::connected("chunks");
     leaf.send(&mut rig, &call(leaf_call(1), None, "stream", Value::Null));
-    assert_eq!(rig.pair.chunk(1, "甲"), Ok(()));
-    assert_eq!(rig.pair.chunk(1, "乙"), Ok(()));
-    rig.pair.finish(1, Ok(Value::Null));
-    assert_eq!(rig.pair.chunk(1, "丙"), Err(SendError::NotRunning));
+    assert_eq!(rig.pair.chunk(0, "甲"), Ok(()));
+    assert_eq!(rig.pair.chunk(0, "乙"), Ok(()));
+    assert_eq!(rig.pair.finish(0, Ok(Value::Null)), Ok(()));
+    assert_eq!(rig.pair.chunk(0, "丙"), Err(SendError::NotRunning));
     assert_eq!(
         leaf.read(&mut rig),
         [
@@ -550,10 +579,10 @@ fn a_chunk_over_the_limit_ends_that_call_as_too_large() {
     leaf.send(&mut rig, &call(leaf_call(1), None, "stream", Value::Null));
     // 上限剛好的一塊，全是編出來六倍長的控制字元：照送。
     let worst = "\u{1}".repeat(MAX_CHUNK_BYTES);
-    assert_eq!(rig.pair.chunk(1, &worst), Ok(()));
+    assert_eq!(rig.pair.chunk(0, &worst), Ok(()));
     assert_eq!(leaf.read(&mut rig), [chunk(leaf_call(1), 0, &worst)]);
     let over = "x".repeat(MAX_CHUNK_BYTES + 1);
-    assert_eq!(rig.pair.chunk(1, &over), Err(SendError::TooLarge));
+    assert_eq!(rig.pair.chunk(0, &over), Err(SendError::TooLarge));
     assert_eq!(
         leaf.read(&mut rig),
         [result(
@@ -561,7 +590,7 @@ fn a_chunk_over_the_limit_ends_that_call_as_too_large() {
             error(ErrorCode::TooLarge, "一塊超過上限")
         )]
     );
-    assert_eq!(rig.pair.chunk(1, "x"), Err(SendError::NotRunning));
+    assert_eq!(rig.pair.chunk(0, "x"), Err(SendError::NotRunning));
     assert!(rig.pair.connected());
 }
 
@@ -570,7 +599,7 @@ fn a_result_or_call_over_a_frame_never_reaches_the_wire() {
     let (mut rig, mut leaf) = Rig::connected("frame-size");
     let huge = Value::from("x".repeat(MAX_FRAME));
     leaf.send(&mut rig, &call(leaf_call(1), None, "echo", Value::Null));
-    rig.pair.finish(1, Ok(huge.clone()));
+    assert_eq!(rig.pair.finish(0, Ok(huge.clone())), Ok(()));
     assert_eq!(
         leaf.read(&mut rig),
         [result(
@@ -593,7 +622,10 @@ fn cancel_works_in_both_directions_and_every_call_still_gets_one_result() {
     // 已經結束的與從來沒有的，不回任何東西。
     leaf.send(&mut rig, &PairMessage::Cancel { call: leaf_call(1) });
     leaf.send(&mut rig, &PairMessage::Cancel { call: leaf_call(2) });
-    rig.pair.finish(1, Ok(Value::from("太晚")));
+    assert_eq!(
+        rig.pair.finish(0, Ok(Value::from("太晚"))),
+        Err(SendError::NotRunning)
+    );
     assert_eq!(
         leaf.read(&mut rig),
         [result(leaf_call(1), error(ErrorCode::Cancelled, ""))]
@@ -602,12 +634,12 @@ fn cancel_works_in_both_directions_and_every_call_still_gets_one_result() {
         rig.events(),
         [
             PairEvent::Call {
-                id: 1,
+                id: 0,
                 parent: None,
                 method: "echo".into(),
                 payload: Value::Null,
             },
-            PairEvent::Cancelled { id: 1 },
+            PairEvent::Cancelled { id: 0 },
         ]
     );
 
@@ -655,7 +687,7 @@ fn calls_past_the_limit_are_busy_in_each_direction() {
             error(ErrorCode::Busy, "同時在跑的呼叫已經到上限")
         )]
     );
-    rig.pair.finish(0, Ok(Value::Null));
+    assert_eq!(rig.pair.finish(0, Ok(Value::Null)), Ok(()));
     leaf.send(&mut rig, &call(leaf_call(64), None, "echo", Value::Null));
     assert_eq!(leaf.read(&mut rig), [result(leaf_call(0), Ok(Value::Null))]);
 
@@ -682,7 +714,7 @@ fn every_protocol_violation_is_rejected_then_closed() {
         ("重複的呼叫編號", vec![running.clone(), running]),
         ("不在跑的呼叫", vec![chunk(my_call(1), 0, "")]),
         ("不在跑的呼叫", vec![result(my_call(1), Ok(Value::Null))]),
-        // 組合行程發的第 0 號還在跑，葉子的塊從 1 起。
+        // 組合行程發的第 0 號還在跑，葉子的第一塊卻帶 seq 1。
         ("seq 沒接上", vec![chunk(my_call(0), 1, "")]),
     ];
     for (reason, frames) in cases {
@@ -747,7 +779,7 @@ fn a_frame_exactly_at_the_limit_is_taken() {
     assert_eq!(
         rig.events(),
         [PairEvent::Call {
-            id: 1,
+            id: 0,
             parent: None,
             method: "echo".into(),
             payload,
@@ -774,7 +806,7 @@ fn when_the_leaf_hangs_up_unanswered_calls_end_as_peer_gone_and_the_pid_is_void(
                 id: second,
                 outcome: Err(Failure::PeerGone),
             },
-            PairEvent::Cancelled { id: 3 },
+            PairEvent::Cancelled { id: 0 },
             PairEvent::Disconnected {
                 reason: Disconnect::Closed
             },
@@ -824,7 +856,7 @@ fn fill_until_paused(rig: &mut Rig) -> Vec<u64> {
 }
 
 #[test]
-fn at_the_pause_line_it_stops_reading_and_refuses_new_calls_until_drained() {
+fn at_the_pause_line_it_refuses_its_own_new_work_and_keeps_reading() {
     let (mut rig, mut leaf) = Rig::connected("pause");
     leaf.send(&mut rig, &call(leaf_call(1), None, "stream", Value::Null));
     rig.events();
@@ -834,21 +866,21 @@ fn at_the_pause_line_it_stops_reading_and_refuses_new_calls_until_drained() {
         rig.pair.call(None, "more", Value::Null),
         Err(SendError::Paused)
     );
-    assert_eq!(rig.pair.chunk(1, "x"), Err(SendError::Paused));
+    assert_eq!(rig.pair.chunk(0, "x"), Err(SendError::Paused));
+    let over = "x".repeat(MAX_CHUNK_BYTES + 1);
+    assert_eq!(rig.pair.chunk(0, &over), Err(SendError::Paused));
+    assert_eq!(
+        rig.pair.finish(0, Ok(Value::from("完"))),
+        Err(SendError::Paused)
+    );
+    let queued = rig.pair.queued();
 
+    // 葉子送來的照讀照處理。
     let register = PairMessage::Register {
         tools: vec!["t".into()],
         hooks: vec![],
     };
-    leaf.stream.write_all(&frame(&encode(&register))).unwrap();
-    for _ in 0..3 {
-        rig.step();
-    }
-    assert_eq!(rig.seen, [], "暫停時不讀葉子送來的");
-    assert!(rig.pair.paused());
-
-    assert_eq!(leaf.read(&mut rig).len(), ids.len());
-    assert!(!rig.pair.paused());
+    leaf.send(&mut rig, &register);
     assert_eq!(
         rig.events(),
         [PairEvent::Registered {
@@ -856,24 +888,51 @@ fn at_the_pause_line_it_stops_reading_and_refuses_new_calls_until_drained() {
             hooks: vec![],
         }]
     );
-    assert_eq!(rig.pair.chunk(1, "x"), Ok(()));
+    assert!(rig.pair.paused());
+
+    // 取消照排。
+    rig.pair.cancel(ids[0]);
+    assert!(rig.pair.queued() > queued);
+
+    let read = leaf.read(&mut rig);
+    assert_eq!(read.len(), ids.len() + 1);
+    assert_eq!(
+        read.last(),
+        Some(&PairMessage::Cancel {
+            call: my_call(ids[0])
+        })
+    );
+    assert!(!rig.pair.paused());
+    // 被擋過的那一次還在跑：等到 `Resumed` 再送就送得出去。
+    assert_eq!(rig.events(), [PairEvent::Resumed]);
+    assert_eq!(rig.pair.finish(0, Ok(Value::from("完"))), Ok(()));
+    assert_eq!(
+        leaf.read(&mut rig),
+        [result(leaf_call(1), Ok(Value::from("完")))]
+    );
+    assert_eq!(rig.events(), []);
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+#[test]
+fn resumed_is_not_reported_when_nothing_was_refused() {
+    let (mut rig, mut leaf) = Rig::connected("no-resume");
+    let ids = fill_until_paused(&mut rig);
+    assert_eq!(leaf.read(&mut rig).len(), ids.len());
+    assert!(!rig.pair.paused());
+    assert_eq!(rig.events(), []);
 }
 
 #[test]
 fn past_the_outbox_limit_the_connection_is_dropped() {
     let (mut rig, mut leaf) = Rig::connected("overflow");
-    let answers = 16;
-    for id in 0..answers {
-        leaf.send(&mut rig, &call(leaf_call(id), None, "echo", Value::Null));
-    }
-    rig.events();
     fill_until_paused(&mut rig);
-    // 暫停時回答照樣排得進去；葉子一直不讀，排到上限就斷。
-    let answer = Value::from("y".repeat(256 * 1024));
+    // 葉子不讀、一直發這裡沒有的 method：每一次的拒絕照排，排到上限就斷。
+    let method = "m".repeat(64 * 1024);
     let mut sent = 0;
     while rig.pair.connected() {
-        assert!(sent < answers, "排了 {sent} 個回答還沒斷");
-        rig.pair.finish(sent, Ok(answer.clone()));
+        assert!(sent < MAX_CALLS as u64, "排了 {sent} 個拒絕還沒斷");
+        leaf.send(&mut rig, &call(leaf_call(sent), None, &method, Value::Null));
         sent += 1;
         assert!(rig.pair.queued() <= OUTBOX_LIMIT);
     }
@@ -886,6 +945,77 @@ fn past_the_outbox_limit_the_connection_is_dropped() {
     );
     leaf.read(&mut rig);
     assert!(leaf.closed);
+}
+
+#[test]
+fn when_both_ends_are_past_the_pause_line_it_still_reads_and_drops_a_silent_leaf_at_the_stall_timeout(
+) {
+    let (mut rig, mut leaf) = Rig::connected("stall");
+    let ids = fill_until_paused(&mut rig);
+    // 葉子也送一個 kernel 的 buffer 裝不下的大框、而且不讀：這一端暫停著也把它讀完。
+    let big = Value::from("y".repeat(900 * 1024));
+    leaf.send(&mut rig, &result(my_call(ids[0]), Ok(big.clone())));
+    assert!(rig.pair.paused());
+    assert_eq!(
+        rig.events(),
+        [PairEvent::Finished {
+            id: ids[0],
+            outcome: Ok(big),
+        }]
+    );
+
+    // 葉子一直不讀：送端沒有寫出任何位元組，到時限就斷，還在跑的各有一個終點。
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + STALL_TIMEOUT)
+    );
+    rig.elapsed = STALL_TIMEOUT - Duration::from_millis(1);
+    assert_eq!(rig.events(), []);
+    assert!(rig.pair.connected());
+    rig.elapsed = STALL_TIMEOUT;
+    let mut expected: Vec<PairEvent> = ids[1..]
+        .iter()
+        .map(|&id| PairEvent::Finished {
+            id,
+            outcome: Err(Failure::PeerGone),
+        })
+        .collect();
+    expected.push(PairEvent::Disconnected {
+        reason: Disconnect::Stalled,
+    });
+    assert_eq!(rig.events(), expected);
+    assert_eq!(rig.pair.deadline(rig.start), None);
+    leaf.read(&mut rig);
+    assert!(leaf.closed);
+}
+
+#[test]
+fn any_byte_written_restarts_the_stall_clock() {
+    let (mut rig, mut leaf) = Rig::connected("stall-progress");
+    fill_until_paused(&mut rig);
+    let almost = STALL_TIMEOUT - Duration::from_millis(1);
+    rig.elapsed = almost;
+    rig.step();
+    // 葉子把 socket 裡的讀走（不走 `step`），這一端下一步就寫得出去一些。
+    let before = rig.pair.queued();
+    let mut sink = [0u8; 64 * 1024];
+    while leaf.stream.read(&mut sink).is_ok_and(|n| n > 0) {}
+    rig.step();
+    assert!(rig.pair.queued() < before);
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + almost + STALL_TIMEOUT)
+    );
+    rig.elapsed = almost + almost;
+    rig.step();
+    assert!(rig.pair.connected());
+    rig.elapsed = almost + STALL_TIMEOUT;
+    assert_eq!(
+        rig.events().last(),
+        Some(&PairEvent::Disconnected {
+            reason: Disconnect::Stalled
+        })
+    );
 }
 
 #[test]
@@ -920,4 +1050,140 @@ fn the_deadline_is_now_while_something_waits_for_the_next_step() {
     rig.pair.set_leaf(someone_else());
     assert_eq!(rig.pair.deadline(now), Some(now));
     drop(ahead);
+}
+
+fn leaf_calls(id: u64, local: u64) -> (PairMessage, PairEvent) {
+    let event = PairEvent::Call {
+        id: local,
+        parent: None,
+        method: "stream".into(),
+        payload: Value::Null,
+    };
+    (call(leaf_call(id), None, "stream", Value::Null), event)
+}
+
+#[test]
+fn late_work_for_an_old_call_never_lands_on_a_new_one() {
+    let (mut rig, mut leaf) = Rig::connected("stale");
+    // 葉子取消之後用同一個 id 再發：本地代號不一樣，舊工作晚到的塊與結果對不到新的那一次。
+    let (first, first_event) = leaf_calls(1, 0);
+    let (again, again_event) = leaf_calls(1, 1);
+    leaf.send(&mut rig, &first);
+    leaf.send(&mut rig, &PairMessage::Cancel { call: leaf_call(1) });
+    leaf.send(&mut rig, &again);
+    assert_eq!(
+        rig.events(),
+        [first_event, PairEvent::Cancelled { id: 0 }, again_event]
+    );
+    assert_eq!(rig.pair.chunk(0, "舊的"), Err(SendError::NotRunning));
+    assert_eq!(
+        rig.pair.finish(0, Ok(Value::from("舊的"))),
+        Err(SendError::NotRunning)
+    );
+    assert_eq!(rig.pair.finish(1, Ok(Value::from("新的"))), Ok(()));
+    assert_eq!(
+        leaf.read(&mut rig),
+        [
+            result(leaf_call(1), error(ErrorCode::Cancelled, "")),
+            result(leaf_call(1), Ok(Value::from("新的"))),
+        ]
+    );
+
+    // 換了連線，代號接著編，不從頭來。
+    let (old, old_event) = leaf_calls(7, 2);
+    leaf.send(&mut rig, &old);
+    assert_eq!(rig.events(), [old_event]);
+    drop(leaf);
+    assert_eq!(
+        rig.events(),
+        [
+            PairEvent::Cancelled { id: 2 },
+            PairEvent::Disconnected {
+                reason: Disconnect::Closed
+            },
+        ]
+    );
+    let mut leaf = Leaf::connect(&rig);
+    leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    rig.pair.set_leaf(me());
+    assert_eq!(rig.events(), [PairEvent::Connected { pid: me() }]);
+    let (new, new_event) = leaf_calls(7, 3);
+    leaf.send(&mut rig, &new);
+    assert_eq!(rig.events(), [new_event]);
+    assert_eq!(rig.pair.chunk(2, "舊連線的"), Err(SendError::NotRunning));
+    assert_eq!(
+        rig.pair.finish(2, Ok(Value::from("舊連線的"))),
+        Err(SendError::NotRunning)
+    );
+    assert_eq!(leaf.read(&mut rig), [hello(PAIR_PROTOCOL_VERSION)]);
+}
+
+/// 葉子不讀，排到送端有寫不出去的、但還沒到暫停線。回排了幾框。
+fn queue_some(rig: &mut Rig) -> usize {
+    let payload = Value::from("x".repeat(64 * 1024));
+    let mut frames = 0;
+    while rig.pair.queued() == 0 {
+        rig.pair.call(None, "fill", payload.clone()).unwrap();
+        frames += 1;
+    }
+    assert!(!rig.pair.paused());
+    frames
+}
+
+#[test]
+fn a_rejected_behind_queued_frames_arrives_once_the_leaf_reads() {
+    let (mut rig, mut leaf) = Rig::connected("linger");
+    let frames = queue_some(&mut rig);
+    leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    assert_eq!(rig.events().last(), Some(&violation("又送了一次 hello")));
+    assert!(!rig.pair.connected());
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    let read = leaf.read(&mut rig);
+    assert_eq!(read.len(), frames + 1);
+    assert_eq!(read.last(), Some(&rejected("又送了一次 hello")));
+    assert!(leaf.closed);
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+#[test]
+fn a_rejected_the_leaf_never_reads_is_dropped_at_the_close_timeout() {
+    let (mut rig, mut leaf) = Rig::connected("linger-timeout");
+    queue_some(&mut rig);
+    leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    rig.events();
+    rig.elapsed = CLOSE_TIMEOUT - Duration::from_millis(1);
+    rig.step();
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    rig.elapsed = CLOSE_TIMEOUT;
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+    // 關了之後葉子只讀得到已經進 socket 的那一段，沒有 `rejected`。
+    let mut rest = Vec::new();
+    leaf.stream.set_nonblocking(false).unwrap();
+    leaf.stream.read_to_end(&mut rest).unwrap();
+    let mut last = None;
+    while let Ok(Some(payload)) = take_frame_within(&mut rest, MAX_FRAME) {
+        last = Some(decode(&payload).unwrap());
+    }
+    assert_ne!(last, Some(rejected("又送了一次 hello")));
+}
+
+#[test]
+fn the_same_leaf_pid_given_again_also_drops_the_connection() {
+    let (mut rig, mut leaf) = Rig::connected("same-pid");
+    rig.pair.set_leaf(me());
+    assert_eq!(
+        rig.events(),
+        [PairEvent::Disconnected {
+            reason: Disconnect::Replaced
+        }]
+    );
+    leaf.read(&mut rig);
+    assert!(leaf.closed);
 }
