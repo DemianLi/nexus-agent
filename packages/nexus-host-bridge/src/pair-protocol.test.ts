@@ -11,9 +11,11 @@ import {
   PAIR_MAX_CHUNK_BYTES,
   PAIR_MAX_FRAME,
   PAIR_MAX_ID,
+  PAIR_METHOD_ECHO_BYTES,
   PAIR_OUTBOX_LIMIT_BYTES,
   PAIR_OUTBOX_PAUSE_BYTES,
   PAIR_PROTOCOL_VERSION,
+  PAIR_REJECT_CODES,
   PairFrameReader,
   PairProtocolError,
   decodePairMessage,
@@ -32,6 +34,8 @@ interface Vectors {
   readonly maxCalls: number;
   readonly helloTimeoutMs: number;
   readonly stallTimeoutMs: number;
+  readonly rejectCodes: readonly string[];
+  readonly methodEchoBytes: number;
   readonly outboxPauseBytes: number;
   readonly outboxLimitBytes: number;
   readonly attachMethod: string;
@@ -74,6 +78,8 @@ describe('橋的協定，跟 pair_protocol.rs 對同一份向量檔', () => {
     expect(PAIR_OUTBOX_LIMIT_BYTES).toBe(vectors.outboxLimitBytes);
     expect(PAIR_STALL_TIMEOUT_MS).toBe(vectors.stallTimeoutMs);
     expect(PAIR_ATTACH_METHOD).toBe(vectors.attachMethod);
+    expect([...PAIR_REJECT_CODES]).toEqual(vectors.rejectCodes);
+    expect(PAIR_METHOD_ECHO_BYTES).toBe(vectors.methodEchoBytes);
   });
 
   it.each(hostVectors.errorCodes)('錯誤碼是宿主那條的那一組：%s', (code) => {
@@ -146,6 +152,11 @@ describe('一塊的上限', () => {
 });
 
 describe('encodePairMessage 只送對方解得開的', () => {
+  it('拒絕碼不在那一組裡丟 PairProtocolError', () => {
+    const message = { type: 'rejected', code: 'busy', reason: '' } as unknown as PairMessage;
+    expect(() => encodePairMessage(message)).toThrow(PairProtocolError);
+  });
+
   const call = (payload: unknown, id = 1): PairMessage =>
     ({ type: 'call', side: 'l', id, parent: null, method: 'm', payload }) as PairMessage;
 
@@ -164,7 +175,7 @@ describe('encodePairMessage 只送對方解得開的', () => {
   });
 
   it.each<[string, PairMessage]>([
-    ['reason', { type: 'rejected', reason: 'a\ud800' }],
+    ['reason', { type: 'rejected', code: 'protocol', reason: 'a\ud800' }],
     ['method', { ...call(null), method: '\udc00' } as PairMessage],
     ['tools', { type: 'register', tools: ['\ud800'], hooks: [] }],
     ['chunk', { type: 'chunk', side: 'm', id: 1, seq: 0, payload: '\ud800' }],

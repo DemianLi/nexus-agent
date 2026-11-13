@@ -28,9 +28,11 @@ export {
   PAIR_MAX_CHUNK_BYTES,
   PAIR_MAX_FRAME,
   PAIR_MAX_ID,
+  PAIR_METHOD_ECHO_BYTES,
   PAIR_OUTBOX_LIMIT_BYTES,
   PAIR_OUTBOX_PAUSE_BYTES,
   PAIR_PROTOCOL_VERSION,
+  PAIR_REJECT_CODES,
   PAIR_STALL_TIMEOUT_MS,
   PairFrameReader,
   PairProtocolError,
@@ -38,6 +40,7 @@ export {
   encodePairMessage,
   type PairCallRef,
   type PairMessage,
+  type PairRejectCode,
   type PairSide,
 } from './pair-protocol.js';
 export {

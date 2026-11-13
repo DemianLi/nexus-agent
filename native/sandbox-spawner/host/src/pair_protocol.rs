@@ -4,12 +4,28 @@
 //!
 //! # 連線與 `hello`
 //!
-//! 組合行程 listen，葉子連進來，一對之間同時一條連線。葉子斷了不重連；組合行程要等監督行程再給一次 `leaf{pid}` 才再收。葉子的第一框是 `hello`，帶 [`PAIR_PROTOCOL_VERSION`]。不帶 token：身分是
+//! 組合行程 listen，葉子連進來，一對之間同時一條連線。驗過的連線斷了，葉子不重連；組合行程要等監督行程再給一次 `leaf{pid}` 才再收。葉子的第一框是 `hello`，帶 [`PAIR_PROTOCOL_VERSION`]。不帶 token：身分是
 //! `SO_PEERCRED` 的 pid（uid 要跟組合行程相同）等於監督行程用 `leaf{pid}` 告訴組合行程的那一個。pid 與版本都對，組合行程回 `hello`；
-//! 否則回 `rejected{reason}` 再關。從組合行程收下連線那一步起 [`HELLO_TIMEOUT`] 內沒送 `hello`、或送了但葉子的 pid 還沒到，也回 `rejected` 再關。
+//! 否則回 `rejected{code, reason}` 再關。從組合行程收下連線那一步起 [`HELLO_TIMEOUT`] 內沒送 `hello`、或送了但葉子的 pid 還沒到，也回 `rejected` 再關。
 //!
-//! 葉子那一端要把兩種結果分開回報：連不上、送出 `hello` 後 [`HELLO_TIMEOUT`] 內沒收到 `hello`、或沒收到任何框就斷，是「對方不在」；
-//! 收到 `rejected` 是「被拒」。
+//! 葉子那一端要把三種結局分開回報，三種要找的人不一樣：
+//!
+//! - 「對方不在」：連不上、送出 `hello` 後 [`HELLO_TIMEOUT`] 內沒收到 `hello`、或沒收到任何框就斷。組合行程沒起來或卡住了。
+//! - 「被拒」：收到 `retry_later` 以外的 `rejected`，含 `code` 解不開的。
+//! - 「一直被要求稍後再試」：每次都收到 `retry_later`，到啟動時限仍沒進去。組合行程在，但一直不收這條連線
+//!   （pid 不是它手上的、pid 沒到、等著驗的滿了）；回報時帶上試了幾次或經過多久，以及最後一次的 `reason`。
+//!
+//! `rejected` 的 `code`（[`RejectCode`]）是給程式看的，`reason` 是給人看的字串。葉子照 `code` 反應：
+//!
+//! - `retry_later`：這條連線現在收不下——等著驗身分的連線滿了、葉子的 pid 還沒到、或 pid 不是組合行程手上的那一個。退避後重連，
+//!   最晚到葉子自己的啟動時限為止，過了不再試，回報「一直被要求稍後再試」。pid 不符歸在這裡，是因為組合行程手上的可能還是上一個葉子的 pid：
+//!   上一個葉子沒連上就死了、或它的斷線組合行程還沒察覺，新的葉子比新的 `leaf{pid}` 先連進來，這時拒絕它是暫時的。
+//! - `identity`：讀不到對方的身分，或 uid 跟組合行程不同；線上不說是哪一種。不重試。
+//! - `version`：兩邊的協定版本不一樣。不重試。
+//! - `protocol`：葉子違反協定（含時限內沒送 `hello`、同一個 pid 在已經有一條驗過的連線時再連一條）。不重試。
+//!
+//! `code` 不在這四個裡的 `rejected` 解不開，葉子照違反協定處理：關連線、不重試，回報「被拒」。`hello` 與 `rejected` 的形狀跨版本不變（版本不同的對方要解得開 `rejected`）；
+//! 加拒絕碼要升 [`PAIR_PROTOCOL_VERSION`]。
 //!
 //! # 之後的框
 //!
@@ -41,7 +57,7 @@
 //!
 //! 兩端同一條規則。送端排著沒寫出去的位元組到了 [`OUTBOX_PAUSE`]：自己要發的新 `call`、`chunk`、`result` 先不送（在本地回「現在送不了」，
 //! 由發的一方留著），降回 [`OUTBOX_PAUSE`] 以下再送；`cancel`、以及替對方的 `call` 自動回的 `result`（`busy`、`unknown_method`、
-//! `bad_payload`、`cancelled`）照排。**對方送來的任何時候都照讀照處理，不因為自己送不出去而停讀。**
+//! `bad_payload`、`cancelled`）照排，這幾種都是小框：`unknown_method` 的訊息只帶回 method 名稱的前 [`METHOD_ECHO_BYTES`] 個位元組（切在字元邊界）。**對方送來的任何時候都照讀照處理，不因為自己送不出去而停讀。**
 //!
 //! 為什麼不停讀：兩端若都「送不出去就先不讀」，各排一個大框（kernel 的 buffer 裝不下）就互等——兩邊都過了暫停線、都不讀，
 //! 誰的送端都排不出去，沒有新的寫入所以碰不到 [`OUTBOX_LIMIT`]，連線不斷、在跑的呼叫全懸著。一端只要活著就一直讀，對方的送端就一定排得出去。
@@ -93,6 +109,9 @@ pub const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 組合行程同時留著幾條還沒驗過身分的連線；再來的回 `rejected` 再關。
 pub const MAX_PENDING: usize = 4;
 
+/// `unknown_method` 的訊息帶回 method 名稱的前幾個位元組（切在字元邊界）：自動回的框因此有小的上界。
+pub const METHOD_ECHO_BYTES: usize = 64;
+
 /// 組合行程叫葉子綁 thread 的 method。
 pub const METHOD_ATTACH: &str = "attach";
 
@@ -123,6 +142,38 @@ impl Side {
     }
 }
 
+/// `rejected` 的原因分類，葉子照它決定要不要重連。跟呼叫的錯誤碼（[`crate::host_protocol::ErrorCode`]）是兩組。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectCode {
+    /// 這條連線現在收不下（含 pid 不是手上的那一個），過一下再連，最晚到葉子自己的啟動時限。
+    RetryLater,
+    /// 讀不到對方的身分，或 uid 不同。
+    Identity,
+    /// 協定版本不一樣。
+    Version,
+    /// 葉子違反協定。
+    Protocol,
+}
+
+impl RejectCode {
+    /// 全部的拒絕碼；順序跟向量檔的 `rejectCodes` 相同（兩邊的測試逐項比）。
+    pub const ALL: [RejectCode; 4] = [
+        RejectCode::RetryLater,
+        RejectCode::Identity,
+        RejectCode::Version,
+        RejectCode::Protocol,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RejectCode::RetryLater => "retry_later",
+            RejectCode::Identity => "identity",
+            RejectCode::Version => "version",
+            RejectCode::Protocol => "protocol",
+        }
+    }
+}
+
 /// 一次呼叫的識別。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CallRef {
@@ -137,6 +188,7 @@ pub enum PairMessage {
     },
     /// 不收這條連線，送完就關。只有組合行程送。
     Rejected {
+        code: RejectCode,
         reason: String,
     },
     /// 只有葉子送。
@@ -268,8 +320,17 @@ pub fn decode(payload: &[u8]) -> Result<PairMessage, DecodeError> {
             Ok(PairMessage::Hello { version })
         }
         "rejected" => {
-            let [reason] = fields(&all, ["reason"], 1)?;
+            let [code, reason] = fields(&all, ["code", "reason"], 1)?;
+            let code = code
+                .as_str()
+                .and_then(|text| {
+                    RejectCode::ALL
+                        .into_iter()
+                        .find(|code| code.as_str() == text)
+                })
+                .ok_or(DecodeError("不認得的拒絕碼"))?;
             Ok(PairMessage::Rejected {
+                code,
                 reason: string(reason)?,
             })
         }
@@ -347,8 +408,9 @@ pub fn encode(message: &PairMessage) -> Vec<u8> {
             ("type", Value::from("hello")),
             ("version", Value::from(*version)),
         ],
-        PairMessage::Rejected { reason } => vec![
+        PairMessage::Rejected { code, reason } => vec![
             ("type", Value::from("rejected")),
+            ("code", Value::from(code.as_str())),
             ("reason", Value::from(reason.as_str())),
         ],
         PairMessage::Register { tools, hooks } => vec![
@@ -467,10 +529,25 @@ mod tests {
             Some(STALL_TIMEOUT.as_millis() as u64)
         );
         assert_eq!(number("pendingConnections"), Some(MAX_PENDING as u64));
+        assert_eq!(number("methodEchoBytes"), Some(METHOD_ECHO_BYTES as u64));
         assert_eq!(
             all.get("attachMethod").and_then(Value::as_str),
             Some(METHOD_ATTACH)
         );
+    }
+
+    #[test]
+    fn reject_codes_match_the_vector_file() {
+        let all = vectors();
+        let listed: Vec<&str> = group(&all, "rejectCodes")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let ours: Vec<&str> = RejectCode::ALL
+            .into_iter()
+            .map(RejectCode::as_str)
+            .collect();
+        assert_eq!(listed, ours);
     }
 
     #[test]

@@ -13,6 +13,8 @@
   "stallTimeoutMs": 30000,
   "pendingConnections": 4,
   "attachMethod": "attach",
+  "methodEchoBytes": 64,
+  "rejectCodes": ["retry_later", "identity", "version", "protocol"],
   "messages": [
     {
       "value": {
@@ -31,9 +33,34 @@
     {
       "value": {
         "type": "rejected",
+        "code": "version",
         "reason": "版本不對"
       },
-      "json": "{\"type\":\"rejected\",\"reason\":\"版本不對\"}"
+      "json": "{\"type\":\"rejected\",\"code\":\"version\",\"reason\":\"版本不對\"}"
+    },
+    {
+      "value": {
+        "type": "rejected",
+        "code": "retry_later",
+        "reason": "pid 不對"
+      },
+      "json": "{\"type\":\"rejected\",\"code\":\"retry_later\",\"reason\":\"pid 不對\"}"
+    },
+    {
+      "value": {
+        "type": "rejected",
+        "code": "identity",
+        "reason": "身分不對"
+      },
+      "json": "{\"type\":\"rejected\",\"code\":\"identity\",\"reason\":\"身分不對\"}"
+    },
+    {
+      "value": {
+        "type": "rejected",
+        "code": "protocol",
+        "reason": ""
+      },
+      "json": "{\"type\":\"rejected\",\"code\":\"protocol\",\"reason\":\"\"}"
     },
     {
       "value": {
@@ -308,8 +335,28 @@
     },
     {
       "name": "reason 不是字串",
-      "json": "{\"type\":\"rejected\",\"reason\":1}",
+      "json": "{\"type\":\"rejected\",\"code\":\"protocol\",\"reason\":1}",
       "error": "要是字串"
+    },
+    {
+      "name": "rejected 少了 code",
+      "json": "{\"type\":\"rejected\",\"reason\":\"x\"}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "拒絕碼不認得",
+      "json": "{\"type\":\"rejected\",\"code\":\"later\",\"reason\":\"x\"}",
+      "error": "不認得的拒絕碼"
+    },
+    {
+      "name": "拒絕碼是呼叫的錯誤碼",
+      "json": "{\"type\":\"rejected\",\"code\":\"busy\",\"reason\":\"x\"}",
+      "error": "不認得的拒絕碼"
+    },
+    {
+      "name": "拒絕碼不是字串",
+      "json": "{\"type\":\"rejected\",\"code\":1,\"reason\":\"x\"}",
+      "error": "不認得的拒絕碼"
     },
     {
       "name": "register 少了 hooks",
@@ -480,17 +527,17 @@
     },
     {
       "name": "不合法的 UTF-8",
-      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a22ff227d",
+      "hex": "7b2274797065223a2272656a6563746564222c22636f6465223a2270726f746f636f6c222c22726561736f6e223a22ff227d",
       "error": "不是合法的 JSON"
     },
     {
       "name": "\\u 跳脫只寫了一半",
-      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a225c753030227d",
+      "hex": "7b2274797065223a2272656a6563746564222c22636f6465223a2270726f746f636f6c222c22726561736f6e223a225c753030227d",
       "error": "不是合法的 JSON"
     },
     {
       "name": "落單的高代理對",
-      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a225c7564383030227d",
+      "hex": "7b2274797065223a2272656a6563746564222c22636f6465223a2270726f746f636f6c222c22726561736f6e223a225c7564383030227d",
       "error": "不是合法的 JSON"
     },
     {

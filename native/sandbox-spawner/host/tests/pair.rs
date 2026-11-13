@@ -7,9 +7,9 @@ use nexus_host::host_protocol::{CallError, ErrorCode};
 use nexus_host::json::{self, Value};
 use nexus_host::pair::{Disconnect, Failure, Pair, PairEvent, SendError, CLOSE_TIMEOUT};
 use nexus_host::pair_protocol::{
-    decode, encode, CallRef, PairMessage, Side, HELLO_TIMEOUT, MAX_CALLS, MAX_CHUNK_BYTES,
-    MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION,
-    STALL_TIMEOUT,
+    decode, encode, CallRef, PairMessage, RejectCode, Side, HELLO_TIMEOUT, MAX_CALLS,
+    MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT,
+    OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION, STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::protocol::{frame, take_frame_within};
 use nexus_sandbox_spawner::supervisor::process::READ_BUDGET;
@@ -154,9 +154,9 @@ impl Leaf {
         }
     }
 
-    /// 剩下的只有 `rejected{reason}`，之後連線關了。
-    fn assert_rejected(&mut self, rig: &mut Rig, reason: &str) {
-        assert_eq!(self.read(rig), [rejected(reason)]);
+    /// 剩下的只有 `rejected{code, reason}`，之後連線關了。
+    fn assert_rejected(&mut self, rig: &mut Rig, code: RejectCode, reason: &str) {
+        assert_eq!(self.read(rig), [rejected(code, reason)]);
         assert!(self.closed, "{reason}：送完 rejected 要關");
     }
 }
@@ -165,8 +165,9 @@ fn hello(version: u32) -> PairMessage {
     PairMessage::Hello { version }
 }
 
-fn rejected(reason: &str) -> PairMessage {
+fn rejected(code: RejectCode, reason: &str) -> PairMessage {
     PairMessage::Rejected {
+        code,
         reason: reason.into(),
     }
 }
@@ -242,7 +243,7 @@ fn another_version_is_rejected_then_closed() {
     let mut leaf = Leaf::connect(&rig);
     leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION + 1));
     assert_eq!(rig.events(), [refused("版本不對")]);
-    leaf.assert_rejected(&mut rig, "版本不對");
+    leaf.assert_rejected(&mut rig, RejectCode::Version, "版本不對");
     assert!(!rig.pair.connected());
 }
 
@@ -253,8 +254,25 @@ fn a_pid_other_than_the_leaf_is_rejected_then_closed() {
     let mut leaf = Leaf::connect(&rig);
     leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
     assert_eq!(rig.events(), [refused("pid 不對")]);
-    leaf.assert_rejected(&mut rig, "pid 不對");
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
     assert!(!rig.pair.connected());
+}
+
+#[test]
+fn a_leaf_ahead_of_its_own_pid_is_told_to_retry_and_gets_in_once_the_pid_is_updated() {
+    // 組合行程手上還是上一個葉子的 pid，新的葉子先連進來。
+    let mut rig = Rig::new("stale-pid");
+    rig.pair.set_leaf(someone_else());
+    let mut early = Leaf::connect(&rig);
+    early.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    assert_eq!(rig.events(), [refused("pid 不對")]);
+    early.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
+
+    rig.pair.set_leaf(me());
+    let mut again = Leaf::connect(&rig);
+    again.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    assert_eq!(rig.events(), [PairEvent::Connected { pid: me() }]);
+    assert_eq!(again.read(&mut rig), [hello(PAIR_PROTOCOL_VERSION)]);
 }
 
 #[test]
@@ -278,7 +296,7 @@ fn a_connection_ahead_of_the_leaf_pid_is_rejected_once_the_pid_is_someone_else()
     assert_eq!(rig.events(), []);
     rig.pair.set_leaf(someone_else());
     assert_eq!(rig.events(), [refused("pid 不對")]);
-    leaf.assert_rejected(&mut rig, "pid 不對");
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
 }
 
 #[test]
@@ -294,7 +312,7 @@ fn a_hello_is_rejected_at_the_deadline_when_no_leaf_pid_came() {
     assert_eq!(rig.events(), []);
     rig.elapsed = HELLO_TIMEOUT;
     assert_eq!(rig.events(), [refused("還沒有葉子的 pid")]);
-    leaf.assert_rejected(&mut rig, "還沒有葉子的 pid");
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "還沒有葉子的 pid");
     assert_eq!(rig.pair.deadline(rig.start), None);
 }
 
@@ -310,7 +328,7 @@ fn a_connection_that_never_says_hello_is_rejected_at_the_deadline() {
     assert_eq!(leaf.read(&mut rig), []);
     rig.elapsed = HELLO_TIMEOUT;
     assert_eq!(rig.events(), [refused("沒有在時限內送 hello")]);
-    leaf.assert_rejected(&mut rig, "沒有在時限內送 hello");
+    leaf.assert_rejected(&mut rig, RejectCode::Protocol, "沒有在時限內送 hello");
 }
 
 #[test]
@@ -319,7 +337,7 @@ fn a_second_connection_is_rejected_and_the_first_keeps_working() {
     let mut second = Leaf::connect(&rig);
     second.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
     assert_eq!(rig.events(), [refused("已經有連線")]);
-    second.assert_rejected(&mut rig, "已經有連線");
+    second.assert_rejected(&mut rig, RejectCode::Protocol, "已經有連線");
     first.send(
         &mut rig,
         &call(leaf_call(1), None, "echo", Value::from("還在")),
@@ -342,7 +360,7 @@ fn connections_waiting_to_be_checked_are_capped() {
     assert_eq!(rig.events(), []);
     let mut extra = Leaf::connect(&rig);
     assert_eq!(rig.events(), [refused("等著驗身分的連線太多")]);
-    extra.assert_rejected(&mut rig, "等著驗身分的連線太多");
+    extra.assert_rejected(&mut rig, RejectCode::RetryLater, "等著驗身分的連線太多");
     for leaf in &mut waiting {
         assert_eq!(leaf.read(&mut rig), []);
         assert!(!leaf.closed);
@@ -369,7 +387,7 @@ fn anything_before_hello_or_right_after_it_is_rejected() {
         },
     );
     assert_eq!(rig.events(), [refused("還沒 hello")]);
-    leaf.assert_rejected(&mut rig, "還沒 hello");
+    leaf.assert_rejected(&mut rig, RejectCode::Protocol, "還沒 hello");
 
     // `hello` 與下一框一起到：葉子沒等組合行程的 `hello`。
     let mut rig = Rig::new("with-hello");
@@ -378,7 +396,7 @@ fn anything_before_hello_or_right_after_it_is_rejected() {
     bytes.extend(frame(&encode(&PairMessage::Cancel { call: leaf_call(1) })));
     leaf.write(&mut rig, &bytes);
     assert_eq!(rig.events(), [refused("還沒收到 hello 就送別的")]);
-    leaf.assert_rejected(&mut rig, "還沒收到 hello 就送別的");
+    leaf.assert_rejected(&mut rig, RejectCode::Protocol, "還沒收到 hello 就送別的");
 }
 
 #[test]
@@ -524,6 +542,14 @@ fn an_unknown_method_fails_only_that_call() {
             leaf_call(1),
             error(ErrorCode::UnknownMethod, "nope")
         )]
+    );
+    // 名稱長的只帶回前 `METHOD_ECHO_BYTES` 個位元組，切在字元邊界（「長」三個位元組，64 不是 3 的倍數）。
+    let long = "長".repeat(MAX_FRAME / 4);
+    leaf.send(&mut rig, &call(leaf_call(2), None, &long, Value::Null));
+    let kept = "長".repeat(METHOD_ECHO_BYTES / 3);
+    assert_eq!(
+        leaf.read(&mut rig),
+        [result(leaf_call(2), error(ErrorCode::UnknownMethod, &kept))]
     );
     assert_eq!(rig.events(), []);
     assert!(rig.pair.connected());
@@ -703,7 +729,10 @@ fn every_protocol_violation_is_rejected_then_closed() {
     let running = call(leaf_call(1), None, "echo", Value::Null);
     let cases: Vec<(&str, Vec<PairMessage>)> = vec![
         ("又送了一次 hello", vec![hello(PAIR_PROTOCOL_VERSION)]),
-        ("葉子不送 rejected", vec![rejected("x")]),
+        (
+            "葉子不送 rejected",
+            vec![rejected(RejectCode::Protocol, "x")],
+        ),
         (
             "方向不對",
             vec![call(my_call(1), None, "echo", Value::Null)],
@@ -725,7 +754,7 @@ fn every_protocol_violation_is_rejected_then_closed() {
             leaf.send(&mut rig, message);
         }
         assert_eq!(rig.events().last(), Some(&violation(reason)), "{frames:?}");
-        leaf.assert_rejected(&mut rig, reason);
+        leaf.assert_rejected(&mut rig, RejectCode::Protocol, reason);
         assert!(!rig.pair.connected());
     }
 }
@@ -764,7 +793,7 @@ fn every_invalid_vector_is_rejected_then_closed() {
         let (mut rig, mut leaf) = Rig::connected("invalid");
         leaf.write(&mut rig, &bytes);
         assert_eq!(rig.events(), [violation(&reason)], "{name}");
-        leaf.assert_rejected(&mut rig, &reason);
+        leaf.assert_rejected(&mut rig, RejectCode::Protocol, &reason);
     }
 }
 
@@ -927,16 +956,17 @@ fn resumed_is_not_reported_when_nothing_was_refused() {
 fn past_the_outbox_limit_the_connection_is_dropped() {
     let (mut rig, mut leaf) = Rig::connected("overflow");
     fill_until_paused(&mut rig);
-    // 葉子不讀、一直發這裡沒有的 method：每一次的拒絕照排，排到上限就斷。
-    let method = "m".repeat(64 * 1024);
+    // 葉子不讀、一直發這裡沒有的 method：自動回的錯誤都是小框、照排，排到上限就斷。
+    // 一框 `unknown_method` 的 `result` 至少 64 個位元組，排滿之前送不到這麼多個。
+    let most = (OUTBOX_LIMIT / 64) as u64;
     let mut sent = 0;
     while rig.pair.connected() {
-        assert!(sent < MAX_CALLS as u64, "排了 {sent} 個拒絕還沒斷");
-        leaf.send(&mut rig, &call(leaf_call(sent), None, &method, Value::Null));
+        assert!(sent < most, "排了 {sent} 個拒絕還沒斷");
+        leaf.send(&mut rig, &call(leaf_call(sent), None, "沒有", Value::Null));
         sent += 1;
         assert!(rig.pair.queued() <= OUTBOX_LIMIT);
     }
-    assert!(sent > 1);
+    assert!(sent > MAX_CALLS as u64, "被拒的不佔同時在跑的名額");
     assert_eq!(
         rig.events().last(),
         Some(&PairEvent::Disconnected {
@@ -1143,7 +1173,10 @@ fn a_rejected_behind_queued_frames_arrives_once_the_leaf_reads() {
     );
     let read = leaf.read(&mut rig);
     assert_eq!(read.len(), frames + 1);
-    assert_eq!(read.last(), Some(&rejected("又送了一次 hello")));
+    assert_eq!(
+        read.last(),
+        Some(&rejected(RejectCode::Protocol, "又送了一次 hello"))
+    );
     assert!(leaf.closed);
     assert_eq!(rig.pair.deadline(rig.start), None);
 }
@@ -1171,7 +1204,10 @@ fn a_rejected_the_leaf_never_reads_is_dropped_at_the_close_timeout() {
     while let Ok(Some(payload)) = take_frame_within(&mut rest, MAX_FRAME) {
         last = Some(decode(&payload).unwrap());
     }
-    assert_ne!(last, Some(rejected("又送了一次 hello")));
+    assert_ne!(
+        last,
+        Some(rejected(RejectCode::Protocol, "又送了一次 hello"))
+    );
 }
 
 #[test]

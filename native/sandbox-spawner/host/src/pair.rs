@@ -13,7 +13,7 @@
 //! - 葉子發來的呼叫，事件裡的 `id` 是這一端給的本地代號，不是線上的 `id`：整個 [`Pair`] 單調遞增、換了連線也不重用，
 //!   所以擁有的一方手上晚到的舊工作再 [`Pair::chunk`]、[`Pair::finish`]，對不到任何東西，不會落進別的呼叫。
 //! - 背壓照協定：排著的到了 [`OUTBOX_PAUSE`]，[`Pair::call`]、[`Pair::chunk`]、[`Pair::finish`] 回 [`SendError::Paused`]，什麼都沒送，
-//!   擁有的一方留著，等 [`PairEvent::Resumed`] 再試；葉子送來的照讀照處理。這裡自動回的 `result`（`busy`、`unknown_method`、`bad_payload`、`cancelled`）與 [`Pair::cancel`] 照排。
+//!   擁有的一方留著，等 [`PairEvent::Resumed`] 再試；葉子送來的照讀照處理。這裡自動回的 `result`（`busy`、`unknown_method`、`bad_payload`、`cancelled`，都是小框）與 [`Pair::cancel`] 照排。
 //! - 回了 `rejected` 的連線，排著的寫完才關，最多留 [`CLOSE_TIMEOUT`]；對方一直不讀的話那一框送不到。
 //! - 葉子登記的名稱（[`PairEvent::Registered`]）這裡不記：[`PairEvent::Disconnected`] 之後由擁有的一方自己清。
 
@@ -22,13 +22,12 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::time::{Duration, Instant};
 
-use crate::host::peer_pid;
 use crate::host_protocol::{CallError, ErrorCode};
 use crate::json::Value;
 use crate::pair_protocol::{
-    decode, encode, CallRef, PairMessage, Side, HELLO_TIMEOUT, MAX_CALLS, MAX_CHUNK_BYTES,
-    MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION,
-    STALL_TIMEOUT,
+    decode, encode, CallRef, PairMessage, RejectCode, Side, HELLO_TIMEOUT, MAX_CALLS,
+    MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT,
+    OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION, STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::supervisor::process::Chan;
 
@@ -109,7 +108,8 @@ pub enum PairEvent {
     },
     /// 回過 [`SendError::Paused`] 之後，排著的降回 [`OUTBOX_PAUSE`] 以下了，可以再試。
     Resumed,
-    /// 沒收一條連線。`pid` 讀不到是 `None`。
+    /// 沒收一條連線。`pid` 讀不到是 `None`。`reason` 是給稽核看的。身分這一類：uid 跟這一端不同是「uid 不同（那個 uid）」，
+    /// `SO_PEERCRED` 讀不到、或讀到的 pid 不是正數，是「讀不到身分」；這兩種線上回的都是「身分不對」，不告訴對方是哪一種。
     Refused { pid: Option<u32>, reason: String },
     /// 驗過的那條斷了；在這之前，還在跑的呼叫各有一筆 [`PairEvent::Finished`] 或 [`PairEvent::Cancelled`]。
     Disconnected { reason: Disconnect },
@@ -221,6 +221,67 @@ fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
     }
 }
 
+/// `method` 的前 [`METHOD_ECHO_BYTES`] 個位元組，切在字元邊界。
+fn clip(method: &str) -> &str {
+    let mut end = method.len().min(METHOD_ECHO_BYTES);
+    while !method.is_char_boundary(end) {
+        end -= 1;
+    }
+    &method[..end]
+}
+
+/// 連線那一端是誰。
+#[derive(Debug, PartialEq, Eq)]
+enum Peer {
+    /// uid 跟這一端相同、pid 是正數；帶的是 pid。
+    Ours(u32),
+    /// 不收的：`reason` 是 [`PairEvent::Refused`] 要寫的理由。
+    Stranger { pid: Option<u32>, reason: String },
+}
+
+impl Peer {
+    /// `read` 是 `SO_PEERCRED` 讀到的 `(uid, pid)`；`uid` 是這一端的。
+    fn from_cred(read: Option<(u32, i32)>, uid: u32) -> Peer {
+        let unreadable = Peer::Stranger {
+            pid: None,
+            reason: "讀不到身分".to_string(),
+        };
+        let Some((theirs, pid)) = read else {
+            return unreadable;
+        };
+        let pid = u32::try_from(pid).ok().filter(|&pid| pid > 0);
+        match pid {
+            _ if theirs != uid => Peer::Stranger {
+                pid,
+                reason: format!("uid 不同（{theirs}）"),
+            },
+            Some(pid) => Peer::Ours(pid),
+            None => unreadable,
+        }
+    }
+}
+
+fn peer(fd: libc::c_int) -> Peer {
+    // SAFETY：ucred 是純資料，全零合法。
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let Ok(mut len) = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>()) else {
+        return Peer::from_cred(None, 0);
+    };
+    // SAFETY：照 SO_PEERCRED 的大小傳 cred。
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    // SAFETY：沒有參數。
+    let uid = unsafe { libc::getuid() };
+    Peer::from_cred((rc == 0).then_some((cred.uid, cred.pid)), uid)
+}
+
 fn failure(code: ErrorCode, message: &str) -> Result<Value, CallError> {
     Err(CallError {
         code,
@@ -228,8 +289,9 @@ fn failure(code: ErrorCode, message: &str) -> Result<Value, CallError> {
     })
 }
 
-fn rejected(reason: &str) -> Vec<u8> {
+fn rejected(code: RejectCode, reason: &str) -> Vec<u8> {
     encode(&PairMessage::Rejected {
+        code,
         reason: reason.to_string(),
     })
 }
@@ -497,21 +559,21 @@ impl Pair {
     /// 葉子違反協定：收線，回 `rejected`。
     fn violate(&mut self, why: &str, now: Instant) {
         if let Some(chan) = self.disconnect(Disconnect::Violation(why.to_string())) {
-            self.reject(chan, why, now);
+            self.reject(chan, RejectCode::Protocol, why, now);
         }
     }
 
-    fn refuse(&mut self, pending: Pending, reason: &str, now: Instant) {
+    fn refuse(&mut self, pending: Pending, code: RejectCode, reason: &str, now: Instant) {
         self.events.push(PairEvent::Refused {
             pid: Some(pending.pid),
             reason: reason.to_string(),
         });
-        self.reject(pending.chan, reason, now);
+        self.reject(pending.chan, code, reason, now);
     }
 
     /// 排一框 `rejected`，排著的寫完就關；當下寫不完的留到 [`CLOSE_TIMEOUT`]。
-    fn reject(&mut self, mut chan: Chan, reason: &str, now: Instant) {
-        chan.send(&rejected(reason));
+    fn reject(&mut self, mut chan: Chan, code: RejectCode, reason: &str, now: Instant) {
+        chan.send(&rejected(code, reason));
         chan.finish();
         if chan.write_closed() {
             return;
@@ -547,9 +609,13 @@ impl Pair {
                     return;
                 }
             };
-            let pid = peer_pid(stream.as_raw_fd());
+            let peer = peer(stream.as_raw_fd());
             let read = OwnedFd::from(stream);
             let Ok(write) = read.try_clone() else {
+                let pid = match peer {
+                    Peer::Ours(pid) => Some(pid),
+                    Peer::Stranger { pid, .. } => pid,
+                };
                 self.events.push(PairEvent::Refused {
                     pid,
                     reason: "開不了 fd".to_string(),
@@ -558,26 +624,34 @@ impl Pair {
                 return;
             };
             let chan = Chan::from_fds(read, write, MAX_FRAME);
-            let refusal = match pid {
-                None => Some("讀不到身分"),
-                Some(pid) if self.leaf.is_some_and(|leaf| leaf != pid) => Some("pid 不對"),
-                Some(_) if self.pending.len() >= MAX_PENDING => Some("等著驗身分的連線太多"),
-                Some(_) => None,
+            let pid = match peer {
+                Peer::Ours(pid) => pid,
+                Peer::Stranger { pid, reason } => {
+                    self.events.push(PairEvent::Refused { pid, reason });
+                    self.reject(chan, RejectCode::Identity, "身分不對", now);
+                    continue;
+                }
             };
-            match (pid, refusal) {
-                (Some(pid), None) => self.pending.push(Pending {
+            let refusal = if self.leaf.is_some_and(|leaf| leaf != pid) {
+                Some((RejectCode::RetryLater, "pid 不對"))
+            } else if self.pending.len() >= MAX_PENDING {
+                Some((RejectCode::RetryLater, "等著驗身分的連線太多"))
+            } else {
+                None
+            };
+            match refusal {
+                None => self.pending.push(Pending {
                     chan,
                     pid,
                     opened: now,
                     hello: None,
                 }),
-                (_, reason) => {
-                    let reason = reason.unwrap_or_default();
+                Some((code, reason)) => {
                     self.events.push(PairEvent::Refused {
-                        pid,
+                        pid: Some(pid),
                         reason: reason.to_string(),
                     });
-                    self.reject(chan, reason, now);
+                    self.reject(chan, code, reason, now);
                 }
             }
         }
@@ -590,7 +664,7 @@ impl Pair {
             match verdict {
                 Verdict::Wait => self.pending.push(pending),
                 Verdict::Gone => {}
-                Verdict::Refuse(reason) => self.refuse(pending, reason, now),
+                Verdict::Refuse(code, reason) => self.refuse(pending, code, reason, now),
                 Verdict::Accept => {
                     let pid = pending.pid;
                     let mut chan = pending.chan;
@@ -614,29 +688,35 @@ impl Pair {
 
     fn judge(&self, pending: &mut Pending, now: Instant) -> Verdict {
         if self.leaf.is_some_and(|leaf| leaf != pending.pid) {
-            return Verdict::Refuse("pid 不對");
+            return Verdict::Refuse(RejectCode::RetryLater, "pid 不對");
         }
         let frames = match pending.chan.receive() {
             Ok(frames) => frames,
-            Err(err) => return Verdict::Refuse(err.0),
+            Err(err) => return Verdict::Refuse(RejectCode::Protocol, err.0),
         };
         for frame in frames {
             if pending.hello.is_some() {
-                return Verdict::Refuse("還沒收到 hello 就送別的");
+                return Verdict::Refuse(RejectCode::Protocol, "還沒收到 hello 就送別的");
             }
             match decode(&frame) {
                 Ok(PairMessage::Hello { version }) => pending.hello = Some(version),
-                Ok(_) => return Verdict::Refuse("還沒 hello"),
-                Err(err) => return Verdict::Refuse(err.0),
+                Ok(_) => return Verdict::Refuse(RejectCode::Protocol, "還沒 hello"),
+                Err(err) => return Verdict::Refuse(RejectCode::Protocol, err.0),
             }
         }
         let expired = now >= pending.opened + HELLO_TIMEOUT;
         match (pending.hello, self.leaf) {
-            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => Verdict::Refuse("版本不對"),
-            (Some(_), Some(_)) if self.conn.is_some() => Verdict::Refuse("已經有連線"),
+            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => {
+                Verdict::Refuse(RejectCode::Version, "版本不對")
+            }
+            (Some(_), Some(_)) if self.conn.is_some() => {
+                Verdict::Refuse(RejectCode::Protocol, "已經有連線")
+            }
             (Some(_), Some(_)) => Verdict::Accept,
-            (Some(_), None) if expired => Verdict::Refuse("還沒有葉子的 pid"),
-            (None, _) if expired => Verdict::Refuse("沒有在時限內送 hello"),
+            (Some(_), None) if expired => {
+                Verdict::Refuse(RejectCode::RetryLater, "還沒有葉子的 pid")
+            }
+            (None, _) if expired => Verdict::Refuse(RejectCode::Protocol, "沒有在時限內送 hello"),
             _ if pending.chan.read_closed() || pending.chan.write_closed() => Verdict::Gone,
             _ => Verdict::Wait,
         }
@@ -722,7 +802,7 @@ impl Pair {
                 } else if local == Some(None) {
                     Some((ErrorCode::BadPayload, "parent 不在跑".to_string()))
                 } else if !self.methods.contains(&method) {
-                    Some((ErrorCode::UnknownMethod, method.clone()))
+                    Some((ErrorCode::UnknownMethod, clip(&method).to_string()))
                 } else {
                     None
                 };
@@ -789,6 +869,33 @@ enum Verdict {
     Wait,
     /// 對方自己斷了。
     Gone,
-    Refuse(&'static str),
+    Refuse(RejectCode, &'static str),
     Accept,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Peer;
+
+    fn stranger(pid: Option<u32>, reason: &str) -> Peer {
+        Peer::Stranger {
+            pid,
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn another_uid_and_an_unreadable_peer_are_refused_for_different_reasons() {
+        assert_eq!(Peer::from_cred(Some((1000, 42)), 1000), Peer::Ours(42));
+        assert_eq!(
+            Peer::from_cred(Some((1001, 42)), 1000),
+            stranger(Some(42), "uid 不同（1001）")
+        );
+        assert_eq!(Peer::from_cred(None, 1000), stranger(None, "讀不到身分"));
+        // 讀到了但沒有 pid。
+        assert_eq!(
+            Peer::from_cred(Some((1000, 0)), 1000),
+            stranger(None, "讀不到身分")
+        );
+    }
 }
