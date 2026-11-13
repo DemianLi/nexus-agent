@@ -20,6 +20,8 @@
 | `accept[]` | `text` 是檔案的完整內容，解析出 `refs`（`[名字, 值]`）與 `ignoredKeys`，兩者都照檔案順序。比對要完全相等。 |
 | `reject[]` | `text` 要被拒絕，原因是 `reason`。有 `code` 的，訊息要以 `YAML 錯誤 <code>` 開頭：`reason` 是 `yaml` 時用它分出是哪一種、釘住〈拒絕〉的先後。有 `secret` 的，拒絕訊息裡不能出現那個字串。 |
 | `modes[]` | 八進位的權限（字串），`accept` 表示一份內容合法的檔在這個權限下能不能讀。 |
+| `mcpValue[]` | MCP 憑證值的檢查（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。`use` 是 `env` 或 `header`，`value` 是原值；`accept` 為真時修剪後的值要等於 `trimmed`，為假時拒絕原因要是 `reason`（`empty`、`too-short`、`nul`、`header-chars`），有 `secret` 的，拒絕訊息裡不能出現它。TS 與 Rust 都跑。 |
+| `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主跑；TS 的遮蔽器在 [#2669](https://github.com/DemianLi/nexus-agent/issues/2669)，到時候跑同一組，現在只檢查欄位。 |
 
 樣本裡的值都是假的；長得像 key 的都帶 `FAKE`。
 
@@ -174,6 +176,35 @@ refs:
 唯一的例外是 MCP 那一列用 `{ credential: <名字> }` 明著引用的，只交給那一台 server（`packages/nexus-plugin-mcp/src/credentials.ts`）。
 
 測試：`credentials.test.ts`「受管檔的值不會被寫進 target」；`mcp-credentials-wire.test.ts`。
+
+## MCP 憑證值的遮蔽
+
+MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的環境變數或 header。server 把它回顯在錯誤、成功的工具結果、resources、instructions 或工具描述裡，
+都會原樣進模型的上下文與會話日誌，所以送回對話行程的文字要先遮掉（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)、[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。
+
+**值檢查（代入之前）**：修掉頭尾空白之後，
+
+- 空的拒絕（`empty`）；
+- `env` 含 NUL 拒絕（`nul`）；`header` 含 tab、0x20–0x7E、0x80–0xFF 以外的字元拒絕（`header-chars`）；
+- **少於 8 個 code point 拒絕**（`too-short`）。以 code point 算，不是 UTF-16 單位或位元組：一個中文字、一個補充平面的表情符號都算一個。
+
+「空白」跟 JS 的 `String.prototype.trim` 一樣：U+FEFF 修掉，U+0085 不修。拒絕訊息只講憑證名、來源層與規則。
+短值拒絕的理由是遮蔽不能靠「短的不遮」來避開誤判（那等於洩漏），而進了遮蔽器的值就一律遮，所以太短、偶然撞上正常內容的值在源頭擋掉。
+短的非秘密值（帳號、埠號）改寫成字面值，字面值不收集、不遮。8 是以偶然命中的機率估的，定在 #2570。
+
+**遮蔽（送出之前）**：
+
+- **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上所有已解析的值交進去。
+  今天灌進去的是 header 的值、網址的 query、代理的帳密；憑證引用解出來的值之後走同一個入口。網址的 `user:password@` 設定時就拒（見 `docs/host-mcp.md`），不進入口；遮蔽器本身不分來源，帶 userinfo 的字串照樣遮（樣本「網址 userinfo 的帳密」）。
+- **形式**：每個值收原值、`encodeURIComponent`、form 編碼（空白寫成 `+`，保留的字元也不同）、JSON 字串裡的跳脫（`"`、`\`、控制字元；非 ASCII 另收 `\uXXXX`，補充平面用代理對）。
+  百分號與 `\u` 的十六進位大小寫都收。
+- **替換**：在原文上找出所有值、所有形式的命中區間，合併重疊與相鄰的，一次換成 `[redacted]`。不是逐值各換一次，所以兩個重疊的值不會漏，占位字串也不會被後面的值打中。
+- **範圍**：成功與 `isError` 的工具結果、工具清單與 schema、instructions、resources、錯誤與診斷，都從宿主送回對話行程的單一出口走（`bridge.rs` 的 `outgoing` 與 `Shared::scrub`）。
+  遮的是 JSON 值裡的字串與鍵，在序列化之前做，所以換掉的區間不會跨過 JSON 的引號。
+- **短的字面值**：設定裡寫死的短字串（header 的 `ab`、網址 query 的 `limit=10` 裡的 `10`）不是憑證，不會通過值檢查。它們只在錯誤與診斷裡遮（reqwest 會把網址印進錯誤），不遮成功結果：遮了會把 server 正常的回答改壞。
+- **沒收的形式**：base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼。值被 server 轉過這些形式再回顯就遮不到。
+
+測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_redact.rs`（含經真的橋，成功結果、編碼形式與代理帳密都遮掉的三條）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
 
 ## 重讀
 

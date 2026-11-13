@@ -15,7 +15,9 @@ import {
   createCredentialService,
   parseCredentialsDocument,
 } from './credentials.js';
+import { InvalidCredentialError } from './api-key.js';
 import { loadLaunchEnv } from './launch-env.js';
+import { assertUsableMcpCredential } from './mcp-credential.js';
 
 interface AcceptVector {
   readonly name: string;
@@ -37,6 +39,36 @@ interface ModeVector {
   readonly accept: boolean;
 }
 
+/** MCP 憑證值的檢查（#2570）；Rust 的 `host/tests/mcp_redact.rs` 跑同一份。 */
+interface McpValueVector {
+  readonly name: string;
+  readonly use: 'env' | 'header';
+  readonly value: string;
+  readonly accept: boolean;
+  readonly trimmed?: string;
+  readonly reason?: McpValueReason;
+  readonly secret?: string;
+}
+
+/** MCP 憑證值的遮蔽。TS 的遮蔽器在 #2669，到那時才跑這一組；現在只釘格式，Rust 宿主已經跑它。 */
+interface RedactVector {
+  readonly name: string;
+  readonly values: readonly string[];
+  readonly text: string;
+  readonly expect: string;
+  readonly scope?: 'result' | 'error';
+  readonly absent?: readonly string[];
+}
+
+const MCP_VALUE_REASONS = {
+  empty: /是空白的/u,
+  'too-short': /不到 8 個字元/u,
+  nul: /含有 NUL 字元/u,
+  'header-chars': /HTTP header 放不下的字元/u,
+} as const;
+
+type McpValueReason = keyof typeof MCP_VALUE_REASONS;
+
 const VECTORS = JSON.parse(
   readFileSync(
     fileURLToPath(
@@ -49,6 +81,8 @@ const VECTORS = JSON.parse(
   accept: AcceptVector[];
   reject: RejectVector[];
   modes: ModeVector[];
+  mcpValue: McpValueVector[];
+  redact: RedactVector[];
 };
 
 /**
@@ -144,6 +178,48 @@ describe('權限位元', () => {
       } else {
         expect(() => credentials.check()).toThrow(`chmod 600 ${file}`);
       }
+    },
+  );
+});
+
+describe('MCP 憑證值的檢查樣本', () => {
+  it('每種拒絕原因至少一條，名字不重複', () => {
+    expect(
+      new Set(VECTORS.mcpValue.flatMap((v) => (v.reason === undefined ? [] : [v.reason]))),
+    ).toEqual(new Set(Object.keys(MCP_VALUE_REASONS)));
+    const names = [...VECTORS.mcpValue, ...VECTORS.redact].map((v) => v.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it.each(VECTORS.mcpValue.map((v) => [v.name, v] as const))('%s', (_name, vector) => {
+    const hit = { value: vector.value, source: 'file' as const, path: FILE };
+    if (vector.accept) {
+      expect(assertUsableMcpCredential('FAKE_NAME', hit, vector.use)).toBe(vector.trimmed);
+      return;
+    }
+    let message = '';
+    try {
+      assertUsableMcpCredential('FAKE_NAME', hit, vector.use);
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidCredentialError);
+      message = (error as Error).message;
+    }
+    const reasons = (Object.keys(MCP_VALUE_REASONS) as McpValueReason[]).filter((code) =>
+      MCP_VALUE_REASONS[code].test(message),
+    );
+    expect(reasons).toEqual([vector.reason]);
+    if (vector.secret !== undefined) expect(message).not.toContain(vector.secret);
+  });
+});
+
+describe('MCP 憑證值的遮蔽樣本（格式）', () => {
+  it.each(VECTORS.redact.map((v) => [v.name, v] as const))(
+    '%s：欄位齊全、expect 只多出占位字串',
+    (_name, vector) => {
+      expect(vector.values.length).toBeGreaterThan(0);
+      expect(typeof vector.text).toBe('string');
+      expect(typeof vector.expect).toBe('string');
+      for (const absent of vector.absent ?? []) expect(vector.expect).not.toContain(absent);
     },
   );
 });

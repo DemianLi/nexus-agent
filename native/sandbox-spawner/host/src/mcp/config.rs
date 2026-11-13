@@ -218,7 +218,7 @@ impl Server {
         format!("mcp-client({})", self.name)
     }
 
-    /// 錯誤訊息裡要換掉的字串：header 的值、網址的 query（整串、每個值的原樣與解碼後）。
+    /// 這一列要遮的字串，交給 [`super::redact::Redactor::new`]：header 的值、網址的 query（整串、每個值的原樣與解碼後）。
     /// reqwest 的錯誤會印出帶 query 的網址。
     pub fn secrets(&self) -> Vec<String> {
         let mut out: Vec<String> = self
@@ -247,13 +247,4 @@ impl Server {
     }
 }
 
-/// 把 `secrets` 在 `text` 裡出現的地方換成 `[redacted]`，長的先換。只做逐字替換，不處理其他編碼與重疊區間。
-pub fn scrub(text: &str, secrets: &[String]) -> String {
-    let mut sorted: Vec<&String> = secrets.iter().filter(|s| !s.is_empty()).collect();
-    sorted.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    let mut out = text.to_string();
-    for secret in sorted {
-        out = out.replace(secret.as_str(), "[redacted]");
-    }
-    out
-}
+pub use super::redact::scrub;

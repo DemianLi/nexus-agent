@@ -6,7 +6,7 @@
 //! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
 //!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，所以另外認一種：帶著 session id 的請求收到 404（[`session_expired`]，
 //!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
-//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。成功結果還沒遮蔽秘密（TODO(#2570)）；**遮蔽要在 `outgoing` 序列化成文字之前做**。
+//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。成功結果與工具清單在 `outgoing` 序列化成文字之前遮蔽已解析的憑證值（[`super::redact`]）；`outgoing` 是唯一出口。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::Server;
-use super::connection::{call_meta, describe, Generation, Http, Listed, MAX_RESPONSE_BYTES};
+use super::connection::{call_meta, describe, Generation, Http, MAX_RESPONSE_BYTES};
 use super::pool::{Log, Pool, Shared};
 use crate::json::Value;
 use crate::wake::{Wake, Waker};
@@ -200,7 +200,7 @@ async fn serve(
                 tokio::spawn(async move {
                     let result = match pool.acquire(&server, elicitation).await {
                         Ok(acquired) => {
-                            let opened = opened(acquired.shared.listed(), acquired.error);
+                            let opened = opened(&acquired.shared, acquired.error);
                             if let Ok(mut opens) = opens.lock() {
                                 opens.insert(open, (acquired.shared, elicitation));
                             }
@@ -263,24 +263,28 @@ async fn serve(
     deliver.send(Outcome::Closed);
 }
 
-fn opened(listed: Option<Arc<Listed>>, warning: Option<String>) -> Result<Opened, String> {
-    let (tools, instructions) = match &listed {
+fn opened(shared: &Shared<Generation>, warning: Option<String>) -> Result<Opened, String> {
+    let (tools, instructions) = match shared.listed() {
         Some(listed) => (
-            outgoing(&serde_json::to_value(&listed.tools).map_err(|e| e.to_string())?),
-            listed.instructions.clone(),
+            outgoing(
+                shared,
+                &serde_json::to_value(&listed.tools).map_err(|e| e.to_string())?,
+            ),
+            shared.redact_text(&listed.instructions),
         ),
         None => ("[]".to_string(), String::new()),
     };
     Ok(Opened {
         tools,
         instructions,
-        warning,
+        warning: warning.map(|w| shared.scrub(&w)),
     })
 }
 
-/// 交回宿主那一側之前序列化成 JSON 文字。TODO(#2570)：成功結果的秘密遮蔽要放在這一步之前。
-fn outgoing(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+/// 交回宿主那一側之前的唯一出口：先遮掉這一份已解析的憑證值，再序列化成 JSON 文字。
+/// 工具清單、成功結果、resources 都從這裡走；錯誤走 [`Shared::scrub`]。
+fn outgoing(shared: &Shared<Generation>, value: &Value) -> String {
+    serde_json::to_string(&shared.redact_json(value)).unwrap_or_else(|_| "null".to_string())
 }
 
 /// rmcp 3.9.0 的 HTTP transport 在請求帶著 session id、server 回 404 時回的 `StreamableHttpError::SessionExpired`（`"Session expired (HTTP 404)"`），
@@ -349,7 +353,7 @@ async fn request(
     };
     match response {
         Ok(result) => serde_json::to_value(&result)
-            .map(|v| outgoing(&v))
+            .map(|v| outgoing(shared, &v))
             .map_err(|e| e.to_string()),
         Err(err) => {
             // 同 TS 只認 transport 關了：單次 POST 失敗（server 回錯、回應太大、連不上）rmcp 的 worker 照跑，只是這一次失敗。
