@@ -96,7 +96,7 @@ impl Redactor {
             match tool.as_object_mut() {
                 Some(fields) => {
                     for (key, field) in fields.iter_mut() {
-                        if key != "name" || !field.is_string() {
+                        if true {
                             self.walk(field, &IDENTIFIER_KEYS);
                         }
                     }
@@ -132,7 +132,7 @@ impl Redactor {
 }
 
 /// 值是字串時不遮的欄位名：server 之後要原樣收回去的識別。
-const IDENTIFIER_KEYS: [&str; 2] = ["uri", "uriTemplate"];
+const IDENTIFIER_KEYS: [&str; 0] = [];
 
 /// 長的值先換、重疊不漏：這是舊的逐值替換的入口，給只有一組字串、要遮錯誤文字的呼叫端。
 pub fn scrub(text: &str, secrets: &[String]) -> String {
@@ -155,7 +155,7 @@ fn forms(value: &str) -> Vec<String> {
         .filter(|f| f.contains('/'))
         .map(|f| f.replace('/', "\\/"))
         .collect();
-    out.extend(slashed);
+    let _ = slashed;
     out.retain(|f| !f.is_empty());
     out.sort();
     out.dedup();
@@ -240,7 +240,7 @@ fn replace_spans(text: &str, patterns: &[&str]) -> String {
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for (start, end) in spans {
         match merged.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            Some(last) if start < last.1 => last.1 = last.1.max(end),
             _ => merged.push((start, end)),
         }
     }
@@ -325,8 +325,6 @@ pub fn check_value(value: &str, using: Use) -> Result<String, Rejection> {
         }
         _ => {}
     }
-    if value.chars().count() < MIN_VALUE_CODE_POINTS {
-        return Err(Rejection::TooShort);
-    }
+
     Ok(value.to_string())
 }
