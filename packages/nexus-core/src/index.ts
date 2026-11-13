@@ -1123,6 +1123,7 @@ export {
   createHistoryFromLogMiddleware,
   createHistoryShadowMiddleware,
   createHistoryShadowTally,
+  createUnsummarizedHistoryReader,
   createVisibleHistoryReader,
   eventsForModelCall,
   HISTORY_FROM_LOG_MIDDLEWARE_NAME,

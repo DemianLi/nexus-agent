@@ -81,6 +81,36 @@ export class ModelHistoryCache {
    * @returns 同 {@link deriveConversation}；`replayed` 的 `messages` 每次是新陣列，訊息物件可能跨次共用（檔頭）。
    */
   derive(events: readonly SessionEvent[]): DerivedConversation {
+    this.#catchUp(events);
+
+    const failure = this.#fold.finalFailure();
+    if (failure !== undefined) return { kind: 'unreplayable', ...failure };
+    const stable = this.#extend();
+    if (stable === undefined) {
+      // 切點落在還沒配齊的那一批裡，建不起來：這一次整串現算，不留。
+      return { kind: 'replayed', messages: this.#fold.settled().map((m) => this.#asSent(m)) };
+    }
+    const pending = settledMessages(this.#fold.pendingMessages(), undefined);
+    return { kind: 'replayed', messages: [...stable, ...pending.map((m) => this.#asSent(m))] };
+  }
+
+  /**
+   * 推到 `events` 最後一顆為止，**沒套摘要**的那一串：{@link ReplayFold.raw} 接上還在等結果的那一批（缺的補上，同 {@link derive}）。
+   * 不套切點、不濾空的助手訊息、不套剪法／縮短／圖片省略，所以摘要前後的訊息都在，座標跟 graph state 的 `messages` 同一組。
+   * 跟 {@link derive} 共用同一份增量推導，一個實例兩個都叫也只餵一次事件。
+   *
+   * @param events - 同 {@link derive}。
+   * @returns `replayed` 的 `messages` 每次是新陣列，訊息物件可能跨次共用；推不出來是 `unreplayable`，原因同 {@link derive}。
+   */
+  deriveUnsummarized(events: readonly SessionEvent[]): DerivedConversation {
+    this.#catchUp(events);
+    const failure = this.#fold.finalFailure();
+    if (failure !== undefined) return { kind: 'unreplayable', ...failure };
+    return { kind: 'replayed', messages: [...this.#fold.raw, ...this.#fold.pendingMessages()] };
+  }
+
+  /** 把還沒餵的事件接著餵進推導；不是上一次的延伸就先從頭來。 */
+  #catchUp(events: readonly SessionEvent[]): void {
     if (this.#fed > events.length || (this.#fed > 0 && events[this.#fed - 1] !== this.#last)) {
       this.#reset();
     }
@@ -96,16 +126,6 @@ export class ModelHistoryCache {
     }
     this.#fed = events.length;
     this.#last = events.at(-1);
-
-    const failure = this.#fold.finalFailure();
-    if (failure !== undefined) return { kind: 'unreplayable', ...failure };
-    const stable = this.#extend();
-    if (stable === undefined) {
-      // 切點落在還沒配齊的那一批裡，建不起來：這一次整串現算，不留。
-      return { kind: 'replayed', messages: this.#fold.settled().map((m) => this.#asSent(m)) };
-    }
-    const pending = settledMessages(this.#fold.pendingMessages(), undefined);
-    return { kind: 'replayed', messages: [...stable, ...pending.map((m) => this.#asSent(m))] };
   }
 
   #reset(): void {
