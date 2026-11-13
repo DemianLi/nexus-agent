@@ -135,6 +135,29 @@ describe('exitCodeFor', () => {
     expect((failure as Error).message).toMatch(/Recursion limit of 8 reached/);
     expect(exitCodeFor(failure)).toBe(2);
   });
+
+  it('native：步數上限的碼是 AGENT_STEP_LIMIT，退出碼也是 2，訊息沒有接 LangChain 的排錯網址', async () => {
+    const limited = Object.assign(new Error('Recursion limit of 8 reached'), {
+      lc_error_code: 'AGENT_STEP_LIMIT',
+    });
+    expect(exitCodeFor(limited)).toBe(2);
+
+    const { printer } = recorder();
+    const failure = await runCli({
+      argv: ['--agent-loop', 'native', '--recursion-limit', '8', '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: 'GraphRecursionError',
+      lc_error_code: 'AGENT_STEP_LIMIT',
+    });
+    expect((failure as Error).message).toMatch(/^Recursion limit of 8 reached/);
+    expect((failure as Error).message).not.toContain('docs.langchain.com');
+    expect(exitCodeFor(failure)).toBe(2);
+  });
 });
 
 describe('一次性模式', () => {
