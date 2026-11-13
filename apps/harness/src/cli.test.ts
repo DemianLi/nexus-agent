@@ -124,7 +124,8 @@ describe('exitCodeFor', () => {
   it('runCli 撞到 --recursion-limit 時拋出的錯誤帶著那個碼（沒有被中途換掉）', async () => {
     const { printer } = recorder();
     const failure = await runCli({
-      argv: ['--recursion-limit', '8', '說點什麼'],
+      // 明給 loop：`vitest.native.config.ts` 會把沒指定的組裝換成 native，那一條要看的是 langgraph 的碼。
+      argv: ['--agent-loop', 'langgraph', '--recursion-limit', '8', '說點什麼'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
@@ -133,6 +134,29 @@ describe('exitCodeFor', () => {
     expect(failure).toMatchObject({ lc_error_code: 'GRAPH_RECURSION_LIMIT' });
     // 是**這個旗標的值**撞到的，不是預設那條——旗標真的傳到了 agent。
     expect((failure as Error).message).toMatch(/Recursion limit of 8 reached/);
+    expect(exitCodeFor(failure)).toBe(2);
+  });
+
+  it('native：步數上限的碼是 AGENT_STEP_LIMIT，退出碼也是 2，訊息沒有接 LangChain 的排錯網址', async () => {
+    const limited = Object.assign(new Error('Recursion limit of 8 reached'), {
+      lc_error_code: 'AGENT_STEP_LIMIT',
+    });
+    expect(exitCodeFor(limited)).toBe(2);
+
+    const { printer } = recorder();
+    const failure = await runCli({
+      argv: ['--agent-loop', 'native', '--recursion-limit', '8', '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: 'GraphRecursionError',
+      lc_error_code: 'AGENT_STEP_LIMIT',
+    });
+    expect((failure as Error).message).toMatch(/^Recursion limit of 8 reached/);
+    expect((failure as Error).message).not.toContain('docs.langchain.com');
     expect(exitCodeFor(failure)).toBe(2);
   });
 });
