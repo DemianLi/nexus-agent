@@ -277,7 +277,7 @@ fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
 }
 
 /// 連線那一端的 pid：uid 要跟自己相同。
-fn peer_pid(fd: libc::c_int) -> Option<u32> {
+pub(crate) fn peer_pid(fd: libc::c_int) -> Option<u32> {
     // SAFETY：ucred 是純資料，全零合法。
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>()).ok()?;

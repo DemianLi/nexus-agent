@@ -1,0 +1,501 @@
+{
+  "protocolVersion": 1,
+  "maxFrame": 1048576,
+  "maxId": 9007199254740991,
+  "maxDepth": 32,
+  "bufferedFrames": 2,
+  "envelopeBytes": 256,
+  "maxChunkBytes": 131072,
+  "maxCalls": 64,
+  "helloTimeoutMs": 5000,
+  "outboxPauseBytes": 524288,
+  "outboxLimitBytes": 2097152,
+  "pendingConnections": 4,
+  "attachMethod": "attach",
+  "messages": [
+    {
+      "value": {
+        "type": "hello",
+        "version": 1
+      },
+      "json": "{\"type\":\"hello\",\"version\":1}"
+    },
+    {
+      "value": {
+        "type": "hello",
+        "version": 4294967295
+      },
+      "json": "{\"type\":\"hello\",\"version\":4294967295}"
+    },
+    {
+      "value": {
+        "type": "rejected",
+        "reason": "版本不對"
+      },
+      "json": "{\"type\":\"rejected\",\"reason\":\"版本不對\"}"
+    },
+    {
+      "value": {
+        "type": "register",
+        "tools": [],
+        "hooks": []
+      },
+      "json": "{\"type\":\"register\",\"tools\":[],\"hooks\":[]}"
+    },
+    {
+      "value": {
+        "type": "register",
+        "tools": ["read_file", "搜尋"],
+        "hooks": ["before_tool"]
+      },
+      "json": "{\"type\":\"register\",\"tools\":[\"read_file\",\"搜尋\"],\"hooks\":[\"before_tool\"]}"
+    },
+    {
+      "value": {
+        "type": "call",
+        "side": "l",
+        "id": 0,
+        "parent": null,
+        "method": "echo",
+        "payload": null
+      },
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":0,\"parent\":null,\"method\":\"echo\",\"payload\":null}"
+    },
+    {
+      "value": {
+        "type": "call",
+        "side": "l",
+        "id": 1,
+        "parent": null,
+        "method": "echo",
+        "payload": {
+          "list": [1, -2, -0.25, 1e21, null, true, false],
+          "nested": {
+            "a": {}
+          },
+          "text": "引號\""
+        }
+      },
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":null,\"method\":\"echo\",\"payload\":{\"list\":[1,-2,-0.25,1e+21,null,true,false],\"nested\":{\"a\":{}},\"text\":\"引號\\\"\"}}"
+    },
+    {
+      "value": {
+        "type": "call",
+        "side": "m",
+        "id": 7,
+        "parent": null,
+        "method": "attach",
+        "payload": {
+          "threadId": "thread-1"
+        }
+      },
+      "json": "{\"type\":\"call\",\"side\":\"m\",\"id\":7,\"parent\":null,\"method\":\"attach\",\"payload\":{\"threadId\":\"thread-1\"}}"
+    },
+    {
+      "value": {
+        "type": "call",
+        "side": "m",
+        "id": 8,
+        "parent": {
+          "id": 1,
+          "side": "l"
+        },
+        "method": "hook",
+        "payload": []
+      },
+      "json": "{\"type\":\"call\",\"side\":\"m\",\"id\":8,\"parent\":{\"id\":1,\"side\":\"l\"},\"method\":\"hook\",\"payload\":[]}"
+    },
+    {
+      "value": {
+        "type": "call",
+        "side": "l",
+        "id": 9007199254740991,
+        "parent": {
+          "id": 9007199254740991,
+          "side": "m"
+        },
+        "method": "",
+        "payload": "😀"
+      },
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":9007199254740991,\"parent\":{\"id\":9007199254740991,\"side\":\"m\"},\"method\":\"\",\"payload\":\"😀\"}"
+    },
+    {
+      "value": {
+        "type": "chunk",
+        "side": "l",
+        "id": 1,
+        "seq": 0,
+        "payload": ""
+      },
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":0,\"payload\":\"\"}"
+    },
+    {
+      "value": {
+        "type": "chunk",
+        "side": "l",
+        "id": 1,
+        "seq": 1,
+        "payload": "一塊\n\u0001"
+      },
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":1,\"payload\":\"一塊\\n\\u0001\"}"
+    },
+    {
+      "value": {
+        "type": "chunk",
+        "side": "m",
+        "id": 7,
+        "seq": 9007199254740991,
+        "payload": "x"
+      },
+      "json": "{\"type\":\"chunk\",\"side\":\"m\",\"id\":7,\"seq\":9007199254740991,\"payload\":\"x\"}"
+    },
+    {
+      "value": {
+        "type": "result",
+        "side": "l",
+        "id": 1,
+        "ok": null
+      },
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"ok\":null}"
+    },
+    {
+      "value": {
+        "type": "result",
+        "side": "m",
+        "id": 7,
+        "ok": {
+          "bound": true
+        }
+      },
+      "json": "{\"type\":\"result\",\"side\":\"m\",\"id\":7,\"ok\":{\"bound\":true}}"
+    },
+    {
+      "value": {
+        "type": "result",
+        "side": "l",
+        "id": 2,
+        "error": {
+          "code": "busy",
+          "message": "同時在跑的呼叫已經 64 個"
+        }
+      },
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":2,\"error\":{\"code\":\"busy\",\"message\":\"同時在跑的呼叫已經 64 個\"}}"
+    },
+    {
+      "value": {
+        "type": "result",
+        "side": "m",
+        "id": 8,
+        "error": {
+          "code": "unknown_method",
+          "message": "hook"
+        }
+      },
+      "json": "{\"type\":\"result\",\"side\":\"m\",\"id\":8,\"error\":{\"code\":\"unknown_method\",\"message\":\"hook\"}}"
+    },
+    {
+      "value": {
+        "type": "cancel",
+        "side": "l",
+        "id": 1
+      },
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":1}"
+    },
+    {
+      "value": {
+        "type": "cancel",
+        "side": "m",
+        "id": 7
+      },
+      "json": "{\"type\":\"cancel\",\"side\":\"m\",\"id\":7}"
+    }
+  ],
+  "duplicateKeys": [
+    {
+      "json": "{\"type\":\"hello\",\"version\":1,\"version\":2}",
+      "value": {
+        "type": "hello",
+        "version": 2
+      }
+    },
+    {
+      "json": "{\"type\":\"cancel\",\"side\":\"m\",\"side\":\"l\",\"id\":1,\"id\":3}",
+      "value": {
+        "type": "cancel",
+        "side": "l",
+        "id": 3
+      }
+    }
+  ],
+  "invalidFrames": [
+    {
+      "name": "長度欄位超過上限",
+      "hex": "01001000",
+      "expect": "error"
+    },
+    {
+      "name": "長度欄位是 0xffffffff",
+      "hex": "ffffffff",
+      "expect": "error"
+    },
+    {
+      "name": "長度欄位超過上限，後面還有內容",
+      "hex": "010010007b7d",
+      "expect": "error"
+    },
+    {
+      "name": "長度欄位剛好等於上限，內容還沒到",
+      "hex": "00001000",
+      "expect": "wait"
+    },
+    {
+      "name": "長度欄位只到一半",
+      "hex": "0100",
+      "expect": "wait"
+    }
+  ],
+  "invalidMessages": [
+    {
+      "name": "不是物件",
+      "json": "[1]",
+      "error": "不是物件"
+    },
+    {
+      "name": "少了 type",
+      "json": "{\"version\":1}",
+      "error": "少了 type"
+    },
+    {
+      "name": "type 不是字串",
+      "json": "{\"type\":1,\"version\":1}",
+      "error": "少了 type"
+    },
+    {
+      "name": "不認得的種類",
+      "json": "{\"type\":\"event\",\"service\":\"s\",\"topic\":\"t\",\"payload\":null}",
+      "error": "不認得的種類"
+    },
+    {
+      "name": "hello 帶了宿主那條才有的 token",
+      "json": "{\"type\":\"hello\",\"version\":1,\"token\":\"a\"}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "hello 少了 version",
+      "json": "{\"type\":\"hello\"}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "版本是負的",
+      "json": "{\"type\":\"hello\",\"version\":-1}",
+      "error": "版本不是 u32"
+    },
+    {
+      "name": "版本是小數",
+      "json": "{\"type\":\"hello\",\"version\":1.5}",
+      "error": "版本不是 u32"
+    },
+    {
+      "name": "版本超過 u32",
+      "json": "{\"type\":\"hello\",\"version\":4294967296}",
+      "error": "版本不是 u32"
+    },
+    {
+      "name": "reason 不是字串",
+      "json": "{\"type\":\"rejected\",\"reason\":1}",
+      "error": "要是字串"
+    },
+    {
+      "name": "register 少了 hooks",
+      "json": "{\"type\":\"register\",\"tools\":[]}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "tools 不是陣列",
+      "json": "{\"type\":\"register\",\"tools\":\"a\",\"hooks\":[]}",
+      "error": "要是字串的陣列"
+    },
+    {
+      "name": "hooks 裡有不是字串的",
+      "json": "{\"type\":\"register\",\"tools\":[],\"hooks\":[\"a\",1]}",
+      "error": "要是字串的陣列"
+    },
+    {
+      "name": "call 少了 parent",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"method\":\"m\",\"payload\":null}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "call 帶了宿主那條才有的 service",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":null,\"service\":\"s\",\"method\":\"m\",\"payload\":null}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "side 是宿主那條的 c",
+      "json": "{\"type\":\"call\",\"side\":\"c\",\"id\":1,\"parent\":null,\"method\":\"m\",\"payload\":null}",
+      "error": "side 要是 l 或 m"
+    },
+    {
+      "name": "side 不是字串",
+      "json": "{\"type\":\"cancel\",\"side\":1,\"id\":1}",
+      "error": "side 要是 l 或 m"
+    },
+    {
+      "name": "id 是負的",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":-1}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "id 是小數",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":1.5}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "id 超過 2^53-1",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":9007199254740992}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "id 是字串",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":\"1\"}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "method 不是字串",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":null,\"method\":1,\"payload\":null}",
+      "error": "要是字串"
+    },
+    {
+      "name": "parent 是數字",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":1,\"method\":\"m\",\"payload\":null}",
+      "error": "parent 要是 null 或物件"
+    },
+    {
+      "name": "parent 是陣列",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":[],\"method\":\"m\",\"payload\":null}",
+      "error": "parent 要是 null 或物件"
+    },
+    {
+      "name": "parent 少了 side",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":{\"id\":1},\"method\":\"m\",\"payload\":null}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "parent 多出欄位",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":{\"id\":1,\"side\":\"m\",\"x\":1},\"method\":\"m\",\"payload\":null}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "parent 的 id 不在範圍內",
+      "json": "{\"type\":\"call\",\"side\":\"l\",\"id\":1,\"parent\":{\"id\":-1,\"side\":\"m\"},\"method\":\"m\",\"payload\":null}",
+      "error": "id 不在範圍內"
+    },
+    {
+      "name": "chunk 的 payload 是物件",
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":0,\"payload\":{\"text\":\"a\"}}",
+      "error": "塊要是字串"
+    },
+    {
+      "name": "chunk 的 payload 是 null",
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":0,\"payload\":null}",
+      "error": "塊要是字串"
+    },
+    {
+      "name": "seq 是負的",
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":-1,\"payload\":\"\"}",
+      "error": "seq 不在範圍內"
+    },
+    {
+      "name": "seq 超過 2^53-1",
+      "json": "{\"type\":\"chunk\",\"side\":\"l\",\"id\":1,\"seq\":9007199254740992,\"payload\":\"\"}",
+      "error": "seq 不在範圍內"
+    },
+    {
+      "name": "result 同時有 ok 與 error",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"ok\":1,\"error\":{\"code\":\"busy\",\"message\":\"\"}}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "result 沒有 ok 也沒有 error",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "error 不是物件",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"error\":\"busy\"}",
+      "error": "error 要是物件"
+    },
+    {
+      "name": "不認得的錯誤碼",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"error\":{\"code\":\"peer_gone\",\"message\":\"\"}}",
+      "error": "不認得的錯誤碼"
+    },
+    {
+      "name": "error 多出欄位",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"error\":{\"code\":\"busy\",\"message\":\"\",\"x\":1}}",
+      "error": "欄位不對"
+    },
+    {
+      "name": "error 的 message 不是字串",
+      "json": "{\"type\":\"result\",\"side\":\"l\",\"id\":1,\"error\":{\"code\":\"busy\",\"message\":1}}",
+      "error": "要是字串"
+    },
+    {
+      "name": "cancel 多出欄位",
+      "json": "{\"type\":\"cancel\",\"side\":\"l\",\"id\":1,\"seq\":0}",
+      "error": "欄位不對"
+    }
+  ],
+  "invalidBytes": [
+    {
+      "name": "空框",
+      "hex": "",
+      "error": "截斷"
+    },
+    {
+      "name": "JSON 未閉合",
+      "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a31",
+      "error": "截斷"
+    },
+    {
+      "name": "payload 32 層，連框本身 33 層",
+      "hex": "7b2274797065223a2263616c6c222c2273696465223a226c222c226964223a312c22706172656e74223a6e756c6c2c226d6574686f64223a226d222c227061796c6f6164223a5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d7d",
+      "error": "巢狀太深"
+    },
+    {
+      "name": "巢狀 128 層（serde_json 自己的上限）",
+      "hex": "7b2274797065223a2263616c6c222c2273696465223a226c222c226964223a312c22706172656e74223a6e756c6c2c226d6574686f64223a226d222c227061796c6f6164223a5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d7d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "不合法的 UTF-8",
+      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a22ff227d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "\\u 跳脫只寫了一半",
+      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a225c753030227d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "落單的高代理對",
+      "hex": "7b2274797065223a2272656a6563746564222c22726561736f6e223a225c7564383030227d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "落單的低代理對",
+      "hex": "7b2274797065223a226368756e6b222c2273696465223a226c222c226964223a312c22736571223a302c227061796c6f6164223a225c7564633030227d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "後面還有東西",
+      "hex": "7b2274797065223a2268656c6c6f222c2276657273696f6e223a317d7b7d",
+      "error": "不是合法的 JSON"
+    },
+    {
+      "name": "數字超出 f64",
+      "hex": "7b2274797065223a22726573756c74222c2273696465223a226c222c226964223a312c226f6b223a31653430307d",
+      "error": "不是合法的 JSON"
+    }
+  ]
+}
