@@ -453,6 +453,22 @@ export function createVisibleHistoryReader(
   return (log) => messagesOf(cacheOf(log).derive(eventsForModelCall(log.events).events));
 }
 
+/**
+ * 讀「沒套摘要」的歷史的讀者：從日誌推到目前為止，摘要與切點、剪法、參數截斷、圖片省略都不套，摘要前後的訊息都在
+ * （{@link ModelHistoryCache.deriveUnsummarized}）。要看完整提醒鏈、不想被摘要截掉前半的呼叫端用；要「模型看得到的那一串」用
+ * {@link createVisibleHistoryReader}。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
+ *
+ * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}。
+ * @returns 從日誌推到目前為止、沒套摘要的那一串；推不出來就拋。
+ */
+export function createUnsummarizedHistoryReader(
+  toolResultAsSeen?: DeriveOptions['toolResultAsSeen'],
+): (log: SessionLog) => BaseMessage[] {
+  const cacheOf = historyCaches(toolResultAsSeen === undefined ? {} : { toolResultAsSeen });
+  return (log) =>
+    messagesOf(cacheOf(log).deriveUnsummarized(eventsForModelCall(log.events).events));
+}
+
 /** `log` 那一顆要的東西。 */
 export interface HistoryFromLogOptions {
   /** 見 {@link DeriveOptions.toolResultAsSeen}。 */

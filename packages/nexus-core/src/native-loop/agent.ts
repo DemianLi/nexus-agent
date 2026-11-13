@@ -157,15 +157,26 @@ function liveToolCalls(message: AIMessage): NonNullable<AIMessage['tool_calls']>
   return (message.tool_calls ?? []).filter((call) => !call.name.startsWith('extract-'));
 }
 
-/** 同 LangGraph 的 `GraphRecursionError` 訊息與錯誤碼，CLI 的退出碼與 eval 的分類認得它。 */
+/** native loop 撞到步數上限時錯誤上的 `lc_error_code`。langgraph 路徑拋的是 LangGraph 自己的 `GRAPH_RECURSION_LIMIT`。 */
+export const AGENT_STEP_LIMIT_CODE = 'AGENT_STEP_LIMIT';
+
+/**
+ * 步數上限的錯誤：類別與措辭沿用 LangGraph 的 `GraphRecursionError`（eval 認類別名、使用者讀慣了那句話），錯誤碼是我們自己的
+ * {@link AGENT_STEP_LIMIT_CODE}，CLI 的退出碼認它（`exitCodeFor`）。
+ *
+ * 碼在建好之後才掛上：LangGraph 的 `lc_error_code` 型別是封閉聯集，而且建構子帶碼時會在 `message` 後面接
+ * `docs.langchain.com/…/<碼>/` 的排錯網址，我們的碼在那邊沒有頁面。
+ */
 function recursionError(limit: number): GraphRecursionError {
-  return new GraphRecursionError(
-    [
-      `Recursion limit of ${limit} reached`,
-      'without hitting a stop condition. You can increase the',
-      `limit by setting the "recursionLimit" config key.`,
-    ].join(' '),
-    { lc_error_code: 'GRAPH_RECURSION_LIMIT' },
+  return Object.assign(
+    new GraphRecursionError(
+      [
+        `Recursion limit of ${limit} reached`,
+        'without hitting a stop condition. You can increase the',
+        `limit by setting the "recursionLimit" config key.`,
+      ].join(' '),
+    ),
+    { lc_error_code: AGENT_STEP_LIMIT_CODE },
   );
 }
 

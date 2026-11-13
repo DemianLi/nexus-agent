@@ -31,6 +31,7 @@ import type {
   SessionEventMap,
 } from '@nexus/core';
 import {
+  AGENT_STEP_LIMIT_CODE,
   approvalPolicyOnResume,
   createHistoryShadowTally,
   HISTORY_SOURCES,
@@ -1475,8 +1476,9 @@ export const RECURSION_LIMIT_EXIT_CODE = 2;
  * 當成兩種終態，而 stderr 裡只剩一行散文。照 dsh 的做法，上限用盡是一等的終態不是錯誤
  * （`tool-ralph` 的 `budget-limited`、`subagent-claude-code` 的 category `'limit'`）。
  *
- * **判準是 `lc_error_code`，不是比對 `message`。** `GraphRecursionError` 帶著
- * `GRAPH_RECURSION_LIMIT`——那是 LangGraph 封閉字串聯集裡的一員、有維護承諾的識別碼；
+ * **判準是 `lc_error_code`，不是比對 `message`。** langgraph 路徑的 `GraphRecursionError` 帶著
+ * `GRAPH_RECURSION_LIMIT`——那是 LangGraph 封閉字串聯集裡的一員、有維護承諾的識別碼；native 路徑帶我們自己的
+ * `AGENT_STEP_LIMIT`（{@link AGENT_STEP_LIMIT_CODE}），兩個碼都是 {@link RECURSION_LIMIT_EXIT_CODE}；
  * `Recursion limit of N reached` 那句話則是隨時會改的措辭。不用 `instanceof`：
  * 同一個類別有兩份安裝時它會靜靜地認不得。
  *
@@ -1494,7 +1496,9 @@ export function exitCodeFor(error: unknown): number {
     typeof error === 'object' && error !== null
       ? (error as { lc_error_code?: unknown }).lc_error_code
       : undefined;
-  return code === 'GRAPH_RECURSION_LIMIT' ? RECURSION_LIMIT_EXIT_CODE : 1;
+  return code === 'GRAPH_RECURSION_LIMIT' || code === AGENT_STEP_LIMIT_CODE
+    ? RECURSION_LIMIT_EXIT_CODE
+    : 1;
 }
 
 /**
