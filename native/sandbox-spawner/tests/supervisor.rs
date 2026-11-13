@@ -314,8 +314,8 @@ impl Harness {
         self.up_of(thread)
     }
 
-    /// 等到 `thread` 的 `up`，回 socket 路徑。別的 thread 的 `up` 收下略過：
-    /// 剛起的那條（逐出之後替等待的 thread 起行程）與已在跑的那條的 `up` 走不同的路進監督行程，沒有先後保證。
+    /// 等到 `thread` 的 `up`，回 socket 路徑。別的 thread 的 `up` 收下略過：逐出之後替等待的 thread 起的行程，`up` 在它綁好時才送，
+    /// 可能排在測試後來要的那條 thread 的 `up` 前面，先後取決於測試多快送出下一個請求。
     fn up_of(&mut self, thread: &str) -> PathBuf {
         loop {
             match self.event() {
@@ -1159,8 +1159,8 @@ fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
 #[test]
 fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
     // RSS 輪詢放到一分鐘：計時器只剩 stall 的期限與它的四分之一。
-    // stall 取 2 秒：監督行程醒來把沉默歸零之後，到 a 送出第一次心跳之前都算在這 2 秒裡，
-    // 忙的機器上測試執行緒、監督行程、a 各自晚幾百毫秒是常事，1 秒的餘裕不夠。
+    // stall 取 2 秒：監督行程醒來把沉默歸零之後，到 a 恢復並送出第一次心跳之前，這段延遲要短於 stall。
+    // 它含測試執行緒送出 SIGCONT 與 a 被排到的時間，忙的機器上可以到幾百毫秒。
     let mut h = Harness::start(Options {
         extra: vec!["--stall-ms", "2000", "--rss-poll-ms", "60000"],
         ..Options::default()
