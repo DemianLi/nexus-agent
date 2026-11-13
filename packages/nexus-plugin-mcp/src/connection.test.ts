@@ -191,3 +191,35 @@ describe('連線失敗不外洩網址裡的帳密與 query', () => {
     expect(everything(thrown)).not.toContain('SECRET-TOKEN');
   });
 });
+
+describe('錯誤訊息裡網址以別的形式出現時也遮掉', () => {
+  const config = {
+    serverName: 'srv',
+    connection: {
+      transport: 'http',
+      url: 'http://alice:pw@127.0.0.1:1/mcp?token=SECRET-TOKEN#SECRET-FRAG',
+    },
+  } as unknown as Parameters<typeof openClient>[0];
+
+  it('只帶 path 加 query、或 query 單獨出現的文字，連線失敗的訊息裡也找不到', async () => {
+    const real = globalThis.fetch;
+    // 假的 fetch 把網址拆成片段放進錯誤，模擬 SDK 或 fetch 不帶完整網址的寫法。
+    globalThis.fetch = (() =>
+      Promise.reject(
+        new TypeError('bad /mcp?token=SECRET-TOKEN and #SECRET-FRAG for alice:pw@host'),
+      )) as typeof fetch;
+    let thrown: unknown;
+    try {
+      thrown = await openClient(config, new Map()).catch((error: unknown) => error);
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const error = thrown as Error;
+    const text = `${error.message}\n${String((error.cause as Error | undefined)?.message)}`;
+    for (const secret of ['SECRET-TOKEN', 'SECRET-FRAG', 'alice:pw@']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(text).toContain('[redacted]');
+  });
+});

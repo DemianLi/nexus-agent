@@ -276,18 +276,39 @@ export function redactedUrl(url: string): string {
   }
 }
 
-/** 把文字裡出現的完整網址（原字串與正規化後的）換成 {@link redactedUrl}；SDK 與 fetch 的錯誤訊息會自己帶網址。 */
+/** 單獨換掉密碼時的最短長度：更短的字串在訊息裡太容易誤傷別的字。帶 `user:password@` 的整段不受此限。 */
+const MIN_STANDALONE_PASSWORD_LENGTH = 4;
+
+/**
+ * 把文字裡出現的網址換成 {@link redactedUrl}；SDK 與 fetch 的錯誤訊息會自己帶網址。
+ *
+ * 先換完整網址（原字串與正規化後的），再兜底：網址若以別的形式被帶出來（去掉 fragment、重新編碼、只剩 path 加 query），
+ * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
+ */
 function scrubbed(text: string, urls: readonly string[]): string {
   let result = text;
+  const pieces: string[] = [];
   for (const url of urls) {
     const shown = redactedUrl(url);
     const forms = new Set([url]);
     try {
-      forms.add(new URL(url).href);
+      const parsed = new URL(url);
+      forms.add(parsed.href);
+      if (parsed.password !== '') {
+        pieces.push(`${parsed.username}:${parsed.password}@`);
+        if (parsed.password.length >= MIN_STANDALONE_PASSWORD_LENGTH) pieces.push(parsed.password);
+      }
+      pieces.push(parsed.search, parsed.hash);
     } catch {
       // 解析不了的只換得了原字串。
     }
     for (const form of forms) result = result.split(form).join(shown);
+  }
+  // 長的先換，短的是長的的子字串時不會留下半截。
+  for (const piece of pieces
+    .filter((piece) => piece.length > 1)
+    .sort((a, b) => b.length - a.length)) {
+    result = result.split(piece).join('[redacted]');
   }
   return result;
 }
