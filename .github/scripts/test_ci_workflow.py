@@ -256,6 +256,25 @@ class HostMcpConformance(unittest.TestCase):
                 self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('宿主的 MCP 符合性測試'))
 
 
+class PairLeafInterop(unittest.TestCase):
+    """橋對 TS 葉子的對接測試（#2583）全標 `#[ignore]`：沒帶 `--ignored` 時 cargo 也綠、一支都沒跑，所以那一步要帶 `--ignored`
+    並核對實際跑到的數目不是 0；葉子是 node 起的，所以要排在 setup 之後。"""
+
+    def test_runs_ignored_tests_and_checks_the_count(self) -> None:
+        for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):
+            with self.subTest(job=name):
+                steps = load(CI)['jobs'][name]['steps']
+                names = [s.get('name') for s in steps]
+                step = steps[names.index('橋對 TS 葉子的對接測試')]
+                self.assertEqual(step['shell'], 'bash')
+                self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
+                self.assertIn('--test pair_leaf -- --ignored --nocapture', step['run'])
+                self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
+                uses = [s.get('uses') for s in steps]
+                self.assertLess(uses.index('./.github/actions/setup'), names.index('橋對 TS 葉子的對接測試'))
+                self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('橋對 TS 葉子的對接測試'))
+
+
 class E2ePerThread(unittest.TestCase):
     """真瀏覽器 e2e 用 per-thread 再跑一輪（#2341）：`NEXUS_E2E_PROCESS_MODEL` 沒設時 e2e 照 single 跑、照樣綠，所以 env 要釘。"""
 

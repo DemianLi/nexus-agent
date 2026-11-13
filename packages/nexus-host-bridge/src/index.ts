@@ -1,6 +1,6 @@
 /**
  * `@nexus/host-bridge`：對話行程連宿主的客戶端（[#2569](https://github.com/DemianLi/nexus-agent/issues/2569)），與一對裡組合行程跟葉子之間那條橋的編解碼
- * （[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）。
+ * 和葉子這一端的連線（[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）。
  *
  * @module
  */
@@ -21,6 +21,24 @@ export {
   type HostCallErrorCode,
 } from './errors.js';
 export {
+  PAIR_BACKOFF_MAX_MS,
+  PairCallError,
+  PairClient,
+  PairConnectError,
+  PairPeerGoneError,
+  PairSendError,
+  type PairCallContext,
+  type PairCallOptions,
+  type PairClock,
+  type PairConnectFailure,
+  type PairConnectOptions,
+  type PairConnectReport,
+  type PairDisconnect,
+  type PairMethod,
+  type PairRetry,
+  type PairSendErrorReason,
+} from './pair-client.js';
+export {
   PAIR_ATTACH_METHOD,
   PAIR_ENVELOPE_BYTES,
   PAIR_HELLO_TIMEOUT_MS,
@@ -37,6 +55,7 @@ export {
   PAIR_REJECT_CODES,
   PAIR_STALL_TIMEOUT_MS,
   PairFrameReader,
+  PairFrameTooLargeError,
   PairProtocolError,
   clipPairMethod,
   decodePairMessage,
