@@ -338,6 +338,47 @@ mod bridge {
         let _ = std::fs::remove_file(&mark);
     }
 
+    /// server 讀了 stdin 卻不回：超過啟動上限就殺掉子行程、回連線失敗，不等到橋關閉。上限改成 300 ms，免得測試要等 30 秒。
+    #[test]
+    fn 啟動逾時_殺掉子行程並收掉_回逾時的訊息() {
+        let pid_file = pid_file("startup-timeout");
+        let _ = std::fs::remove_file(&pid_file);
+        let config = json!({
+            "serverName": "fake",
+            "connection": {
+                "transport": "stdio",
+                "command": "/bin/sh",
+                "args": ["-c", "echo $$ > \"$PIDFILE\"; exec cat > /dev/null"],
+                "env": { "PIDFILE": pid_file },
+            },
+        });
+        let mut server = Server::parse(&config).expect("設定");
+        let Connection::Stdio(spec) = &mut server.connection else {
+            unreachable!();
+        };
+        spec.startup_timeout = Duration::from_millis(300);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        bridge.send(Command::Open {
+            open: 1,
+            server: Box::new(server),
+            elicitation: false,
+        });
+        let opened = match wait_for(&bridge, |o| matches!(o, Outcome::Opened { .. })) {
+            Outcome::Opened { result, .. } => result.expect("沒寫 failOnStartupError 照樣 Ok"),
+            _ => unreachable!(),
+        };
+        let warning = opened.warning.expect("帶原因");
+        assert!(
+            warning.contains("Failed to connect to stdio server \"fake\"")
+                && warning.contains("timed out after 300ms"),
+            "{warning}"
+        );
+        assert_reaped(read_pid(&pid_file));
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        let _ = std::fs::remove_file(&pid_file);
+    }
+
     #[test]
     fn 起不來的行程_回連線失敗的訊息_不帶憑證值() {
         let config = json!({

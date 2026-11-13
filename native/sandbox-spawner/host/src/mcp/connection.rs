@@ -12,7 +12,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::model::{
@@ -166,10 +165,6 @@ pub fn call_meta(modern: bool, elicitation: bool) -> Option<RequestMetaObject> {
     .ok()
 }
 
-/// stdio 這一代從起行程到列完工具最久等多久，逾時就收掉子行程、回連線失敗。server 讀了 stdin 卻不回時，沒有它 `Open` 永遠不回、子行程活到橋關閉。
-/// 30 秒：夠 `npx` 冷啟動下載與起動；dsh 的 `startupTimeoutMs` 沒有預設值（要使用者設，`mcp-client/src/index.ts:170`），TS 這邊沒有上限。HTTP 沒有這個上限。
-pub const STDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-
 fn client_info() -> InitializeRequestParams {
     InitializeRequestParams::new(
         ClientCapabilities::default(),
@@ -195,15 +190,14 @@ pub async fn connect(
             connect_http(server, url, headers, http, secrets).await
         }
         Connection::Stdio(spec) => {
-            match tokio::time::timeout(STDIO_STARTUP_TIMEOUT, connect_stdio(server, spec, secrets))
+            match tokio::time::timeout(spec.startup_timeout, connect_stdio(server, spec, secrets))
                 .await
             {
                 Ok(result) => result,
                 Err(_) => Err(scrub(
                     &format!(
-                        "Failed to connect to stdio server \"{}\" in auto mode: timed out after {} s",
-                        server.name,
-                        STDIO_STARTUP_TIMEOUT.as_secs()
+                        "Failed to connect to stdio server \"{}\" in auto mode: timed out after {:?}",
+                        server.name, spec.startup_timeout
                     ),
                     secrets,
                 )),
