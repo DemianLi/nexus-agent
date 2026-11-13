@@ -534,6 +534,14 @@ jobs:
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
+      # 橋的兩種語言對接（#2583）：真的 Pair 對 node 起的 TS 葉子，所以排在 setup 之後；測試全標 #[ignore]，
+      # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
+      - name: 橋對 TS 葉子的對接測試
+        shell: bash
+        working-directory: native/sandbox-spawner
+        run: |
+          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
       - name: 真的 spawner 跑整合測試
         run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
@@ -567,6 +575,14 @@ jobs:
         run: |
           cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test mcp_conformance -- --ignored --nocapture | tee "$RUNNER_TEMP/mcp-conformance.txt"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/mcp-conformance.txt"
+      # 橋的兩種語言對接（#2583）：真的 Pair 對 node 起的 TS 葉子，所以排在 setup 之後；測試全標 #[ignore]，
+      # 不帶 --ignored 就一支都不跑，所以要核對實際跑到的數目不是 0（test_ci_workflow.py 釘住這一步）。
+      - name: 橋對 TS 葉子的對接測試
+        shell: bash
+        working-directory: native/sandbox-spawner
+        run: |
+          cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET" --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/pair-leaf.txt"
       - name: 真的 spawner 跑整合測試
         run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration src/mcp-sandbox.integration src/kernel-file-lock.integration src/per-thread.integration
         env:
