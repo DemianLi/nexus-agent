@@ -189,7 +189,20 @@ pub async fn connect(
         Connection::Http { url, headers } => {
             connect_http(server, url, headers, http, secrets).await
         }
-        Connection::Stdio(spec) => connect_stdio(server, spec, secrets).await,
+        Connection::Stdio(spec) => {
+            match tokio::time::timeout(spec.startup_timeout, connect_stdio(server, spec, secrets))
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(scrub(
+                    &format!(
+                        "Failed to connect to stdio server \"{}\" in auto mode: timed out after {:?}",
+                        server.name, spec.startup_timeout
+                    ),
+                    secrets,
+                )),
+            }
+        }
     }
 }
 
