@@ -204,7 +204,7 @@ fn parse_stdio(
     let command = connection
         .get("command")
         .and_then(Value::as_str)
-        .filter(|c| absolute_path(c))
+        .filter(|c| !c.contains('\0'))
         .ok_or("stdio 的 connection.command 要是絕對路徑")?
         .to_string();
     let mut args = Vec::new();
@@ -259,15 +259,9 @@ fn parse_stdio(
                         "stdio 的 connection.credentialEnv 的 {name} 不在 connection.env 裡"
                     ));
                 };
-                let checked = check_value(value, Use::Env).map_err(|rejection| {
+                check_value(value, Use::Env).map_err(|rejection| {
                     rejection.message(&format!("connection.env.{name}（憑證）"))
                 })?;
-                // 檢查的是修剪後的值，交給子行程與遮蔽器的是 `env` 裡的原值：兩者不同，server 回顯修剪後的值就遮不到。TS 只交修剪過的。
-                if checked != *value {
-                    return Err(format!(
-                        "stdio 的 connection.env.{name}（憑證）頭尾有空白或換行，宿主只收 TS 修剪過的值"
-                    ));
-                }
                 if !credential_env.iter().any(|n| n == name) {
                     credential_env.push(name.to_string());
                 }
@@ -422,15 +416,7 @@ impl Server {
     pub fn secrets(&self) -> Vec<String> {
         let (url, headers) = match &self.connection {
             Connection::Http { url, headers } => (url, headers),
-            Connection::Stdio(stdio) => {
-                return stdio
-                    .credential_env
-                    .iter()
-                    .filter_map(|name| stdio.env.iter().find(|(n, _)| n == name))
-                    .map(|(_, value)| value.clone())
-                    .filter(|value| !value.is_empty())
-                    .collect();
-            }
+            Connection::Stdio(_) => return Vec::new(),
         };
         let mut out: Vec<String> = Vec::new();
         for (name, value) in headers {
