@@ -231,8 +231,10 @@ fn 非_ascii_的_header_值不丟() {
 #[test]
 fn 沒有值就原樣() {
     let redactor = Redactor::new(Vec::<String>::new());
-    let tree = json!({ "a": "b" });
-    assert_eq!(redactor.redact_json(&tree), tree);
+    let before = json!({ "a": "b" });
+    let mut tree = before.clone();
+    redactor.redact_json(&mut tree);
+    assert_eq!(tree, before);
     assert_eq!(redactor.scrub_text("abc"), "abc");
 }
 
