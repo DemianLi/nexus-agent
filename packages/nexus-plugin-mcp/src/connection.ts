@@ -202,6 +202,9 @@ export async function openClient(
     }
   }
   const url = connection.url;
+  const shown = redactedUrl(url);
+  const fail = (message: string, cause: unknown, ...urls: string[]): Error =>
+    new Error(scrubbed(message, [url, ...urls]), { cause: scrubbedError(cause, [url, ...urls]) });
   const headers =
     connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
   const requestInit = headers === undefined ? {} : { requestInit: { headers } };
@@ -222,17 +225,18 @@ export async function openClient(
   } catch (error) {
     const code = httpErrorCode(error);
     if (code !== 404 && code !== 405) {
-      throw new Error(
-        `Failed to connect to streamable HTTP server "${serverName}, url: ${url}" in auto mode: ${String(error)}`,
-        { cause: error },
+      throw fail(
+        `Failed to connect to streamable HTTP server "${serverName}, url: ${shown}" in auto mode: ${String(error)}`,
+        error,
       );
     }
     const sse = (target: string): Promise<Client> =>
       connected(new SSEClientTransport(new URL(target), requestInit), 'legacy', track).catch(
         (sseError: unknown) => {
-          throw new Error(
-            `Failed to create SSE transport for server "${serverName}, url: ${target}": ${String(sseError)}`,
-            { cause: sseError },
+          throw fail(
+            `Failed to create SSE transport for server "${serverName}, url: ${redactedUrl(target)}": ${String(sseError)}`,
+            sseError,
+            target,
           );
         },
       );
@@ -241,21 +245,64 @@ export async function openClient(
     } catch (firstSseError) {
       const sseUrl = sseUrlOf(url);
       if (sseUrl === url) {
-        throw new Error(
-          `Failed to connect to streamable HTTP server after trying to fall back to SSE: "${serverName}, url: ${url}": ${String(error)} (SSE fallback failed with error ${String(firstSseError)})`,
-          { cause: firstSseError },
+        throw fail(
+          `Failed to connect to streamable HTTP server after trying to fall back to SSE: "${serverName}, url: ${shown}": ${String(error)} (SSE fallback failed with error ${String(firstSseError)})`,
+          firstSseError,
         );
       }
       try {
         return await sse(sseUrl);
       } catch (secondSseError) {
-        throw new Error(
-          `Failed to connect to streamable HTTP server "${serverName}, url: ${url}": ${String(error)}. Additionally, tried falling back to SSE at ${url} and ${sseUrl}, but this also failed: ${String(secondSseError)}`,
-          { cause: secondSseError },
+        throw fail(
+          `Failed to connect to streamable HTTP server "${serverName}, url: ${shown}": ${String(error)}. Additionally, tried falling back to SSE at ${shown} and ${redactedUrl(sseUrl)}, but this also failed: ${String(secondSseError)}`,
+          secondSseError,
+          sseUrl,
         );
       }
     }
   }
+}
+
+/**
+ * 錯誤訊息與日誌裡的網址：只留 scheme、host、port、path。帳密、query、fragment 整段不印（它們常帶 token）；
+ * 解析不了就印固定字串，絕不回傳原文。
+ */
+export function redactedUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return '<invalid url>';
+  }
+}
+
+/** 把文字裡出現的完整網址（原字串與正規化後的）換成 {@link redactedUrl}；SDK 與 fetch 的錯誤訊息會自己帶網址。 */
+function scrubbed(text: string, urls: readonly string[]): string {
+  let result = text;
+  for (const url of urls) {
+    const shown = redactedUrl(url);
+    const forms = new Set([url]);
+    try {
+      forms.add(new URL(url).href);
+    } catch {
+      // 解析不了的只換得了原字串。
+    }
+    for (const form of forms) result = result.split(form).join(shown);
+  }
+  return result;
+}
+
+/** 換成只帶遮過訊息的 Error，保留 `name`、`status`／`code`（{@link httpErrorCode} 與 `isConnectionLost` 要讀）；原 error 上的其他屬性可能帶網址，不沿用。 */
+function scrubbedError(error: unknown, urls: readonly string[]): Error {
+  const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
+  const copy = new Error(scrubbed(error instanceof Error ? error.message : String(error), urls));
+  if (typeof source.name === 'string') copy.name = source.name;
+  Object.assign(
+    copy,
+    typeof source.status === 'number' && { status: source.status },
+    typeof source.code === 'number' && { code: source.code },
+  );
+  return copy;
 }
 
 type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;

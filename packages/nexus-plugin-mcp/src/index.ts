@@ -127,11 +127,22 @@ export const mcpStdioConnectionSchema = z.strictObject({
     .optional(),
 });
 
+/**
+ * HTTP 網址：`http(s)://` 加不含 `@` 的 host（帶帳密的拒收），之後是路徑、query、fragment 或結尾。用 pattern 而不用 refine，
+ * JSON Schema 才完整表達得出來。錯誤訊息是固定字串，不回填網址（帳密與 query 裡的 token 不能經設定錯誤外流）。
+ */
+const HTTP_URL_PATTERN = /^[Hh][Tt][Tt][Pp][Ss]?:\/\/[^/?#@\s]+(?:[/?#]\S*)?$/u;
+
 /** 走 Streamable HTTP 的 MCP server。 */
 export const mcpHttpConnectionSchema = z.strictObject({
   transport: z.literal('http'),
   /** server 的網址。 */
-  url: z.string().min(1),
+  url: z
+    .string()
+    .regex(
+      HTTP_URL_PATTERN,
+      'url 必須是不帶帳密（user:password@）的 http(s) 網址；授權請放 headers',
+    ),
   /**
    * 額外的標頭，例如授權用的。值可以是字串，或 `{ credential: <名字>, prefix?: <前綴> }`：建連線時代入成 `<前綴><值>`
    * （例如 `{ credential: MCP_TOKEN, prefix: 'Bearer ' }`），同 `env`。
