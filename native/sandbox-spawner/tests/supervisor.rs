@@ -1169,7 +1169,7 @@ fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
     std::thread::sleep(Duration::from_millis(1_300));
     // 監督行程先醒，a 晚 200 ms：監督行程醒來那一刻還沒有 a 的心跳。
     kill(h.pid(), libc::SIGCONT);
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(1_200));
     // SAFETY：同上。
     unsafe { libc::kill(-a, libc::SIGCONT) };
     std::thread::sleep(Duration::from_millis(1_500));
