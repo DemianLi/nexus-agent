@@ -3,7 +3,7 @@
  * `native/sandbox-spawner/host/src/pair_protocol.rs`，兩邊對同一份向量檔（`native/sandbox-spawner/pair-vectors.json`）測。
  *
  * 框是 `u32` LE 長度加內容，內容是一份 JSON 物件，`type` 分種類。葉子連上後先送 `hello`，收到組合行程的 `hello` 才送別的；
- * 收到 `rejected` 照它的 `code`（{@link PAIR_REJECT_CODES}）反應：`retry_later`、連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，都退避（至少 {@link PAIR_RETRY_BACKOFF_MIN_MS}）後重連；到啟動時限仍沒進去時看最後一次有結論的嘗試：是 `retry_later` 就是「一直被要求稍後再試」，否則是對方不在。其餘的 `rejected`（含 `code` 解不開的）是被拒，不重試（規則在 Rust 那一側的檔頭）。這三種結局要分開回報，以收到的 `rejected` 為準；葉子這一端的連線在 `./pair-client.ts`。之後兩邊都能發 `call` 與 `cancel`，
+ * 重連與結局：收到 `code`（{@link PAIR_REJECT_CODES}）是 `retry_later` 的 `rejected`、連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，都退避（至少 {@link PAIR_RETRY_BACKOFF_MIN_MS}）後重連；到啟動時限仍沒進去時看最後一次有結論的嘗試：是 `retry_later` 就是「一直被要求稍後再試」，否則是對方不在。其餘的 `rejected`（含 `code` 不認得的）是被拒，不重試（規則在 Rust 那一側的檔頭）。這三種結局要分開回報，以收到的 `rejected` 為準；組合行程在驗過之前違反協定另外回報。葉子這一端的連線在 `./pair-client.ts`。之後兩邊都能發 `call` 與 `cancel`，
  * 由對方回 `chunk` 與 `result`；`side` 是發起那一次的一方（`'l'` 葉子、`'m'` 組合行程），一次呼叫的識別是 `(side, id)`。
  *
  * 這裡只管一框的形狀：誰能送哪一種、哪些 `id` 還在跑，由連線那一層判。Rust 那一側的 JSON 是 `serde_json`：`\u` 跳脫的代理對要成對、
@@ -108,11 +108,13 @@ export type PairMessage =
 
 /** 框長、形狀或值不合協定；編與解都丟它。 */
 export class PairProtocolError extends Error {
-  override readonly name = 'PairProtocolError';
+  override readonly name: string = 'PairProtocolError';
 }
 
 /** 編出來的一框超過 {@link PAIR_MAX_FRAME}：值本身合規則，只是太大。 */
-export class PairFrameTooLargeError extends PairProtocolError {}
+export class PairFrameTooLargeError extends PairProtocolError {
+  override readonly name = 'PairFrameTooLargeError';
+}
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 

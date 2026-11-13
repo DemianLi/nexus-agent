@@ -258,7 +258,7 @@ class HostMcpConformance(unittest.TestCase):
 
 class PairLeafInterop(unittest.TestCase):
     """橋對 TS 葉子的對接測試（#2583）全標 `#[ignore]`：沒帶 `--ignored` 時 cargo 也綠、一支都沒跑，所以那一步要帶 `--ignored`
-    並核對實際跑到的數目不是 0；葉子是 node 起的，所以要排在 setup 之後。"""
+    並核對實際跑到的數目不是 0（`grep` 讀的要是這一步 `tee` 寫的那個檔，所以整段 `run` 逐行釘）；葉子是 node 起的，所以要排在 setup 之後。"""
 
     def test_runs_ignored_tests_and_checks_the_count(self) -> None:
         for name in ('sandbox-spawner', 'sandbox-spawner-arm64'):
@@ -268,8 +268,11 @@ class PairLeafInterop(unittest.TestCase):
                 step = steps[names.index('橋對 TS 葉子的對接測試')]
                 self.assertEqual(step['shell'], 'bash')
                 self.assertEqual(step['working-directory'], 'native/sandbox-spawner')
-                self.assertIn('--test pair_leaf -- --ignored --nocapture', step['run'])
-                self.assertIn("grep -Eq 'test result: ok\\. [1-9][0-9]* passed'", step['run'])
+                self.assertEqual(step['run'].splitlines(), [
+                    'cargo test --locked -p nexus-host --features test-hooks --target "$SPAWNER_TARGET"'
+                    ' --test pair_leaf -- --ignored --nocapture | tee "$RUNNER_TEMP/pair-leaf.txt"',
+                    "grep -Eq 'test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/pair-leaf.txt\"",
+                ])
                 uses = [s.get('uses') for s in steps]
                 self.assertLess(uses.index('./.github/actions/setup'), names.index('橋對 TS 葉子的對接測試'))
                 self.assertLess(uses.index('./.github/actions/sandbox-spawner'), names.index('橋對 TS 葉子的對接測試'))

@@ -6,22 +6,24 @@
  * {@link PairConnectError}，`failure.kind` 分四種：
  *
  * - `absent`（對方不在）：到啟動時限，最後一次有結論的嘗試是連不上、connect 成功後沒收到任何框就斷、或等滿時限沒有回覆；
- *   沒有任何一次有結論（每一次都被啟動時限截斷）也算這一種。
- * - `rejected`（被拒）：收到 `retry_later` 以外的 `rejected`，含解不開的 `rejected`。不重試。
+ *   第一次嘗試就被啟動時限截斷（沒有任何一次有結論）也算這一種。
+ * - `rejected`（被拒）：收到 `retry_later` 以外的 `rejected`，含 `code` 不認得的。不重試。
  * - `retry_later`（一直被要求稍後再試）：到啟動時限，最後一次有結論的嘗試收到的是 `retry_later`。
- * - `violation`：組合行程在驗過之前違反協定（壞框、不該送的種類、這邊還沒送 `hello` 它就送 `hello`、`hello` 的版本跟這邊不同）。不重試。
+ * - `violation`：組合行程在驗過之前違反協定（壞框、不該送的種類、沒有 `code` 或 `code` 不是字串的 `rejected`、這邊還沒送 `hello` 它就送 `hello`、`hello` 的版本跟這邊不同）。不重試。
  *
  * 連不上、connect 成功後沒收到任何框就斷、等滿時限沒有回覆、收到 `retry_later`，都退避後重連，到啟動時限為止：第一次等 `backoffMs`，之後每次加倍到 `backoffMaxMs`。再等一次就會過啟動時限時不等，直接回報。
  * 每一條連線等回覆等 `helloTimeoutMs`（從 connect 成功起算）；剩下的啟動時間比它短時只等到啟動時限，到了還沒有結論的那一次算被時限截斷，不拿來判結局。
- * 每一種沒進去的結局都帶 {@link PairConnectReport}：起了幾次、連上幾次、各是怎麼結束的、經過多久。
+ * 每一種沒進去的結局都帶 {@link PairConnectReport}：起了幾次、連上幾次、幾次 `retry_later`、幾次沒收到任何框就斷、幾次等滿沒回覆、有沒有被截斷、經過多久。
  *
  * 結局以收到的 `rejected` 為準。Node 的 socket 寫入出錯就整條毀掉、不再讀，所以 `hello` 不在 connect 成功的當下寫，先讀一輪：
- * 組合行程收下連線就拒絕並關的，這時 `rejected` 已經讀到。讀完那一輪到寫下去之間對方才關的仍會讀不到，那一次算沒收到任何框就斷，由重連再拿一次。
+ * 組合行程在那一輪之前就拒絕並關的，這時 `rejected` 已經讀到，不寫。在那一輪之後、寫下去之前才關的仍會讀不到，那一次算沒收到任何框就斷，由重連再拿一次。
  *
  * 驗過之後：
  *
  * - 兩個方向都能發呼叫。自己發的用 {@link PairClient.call}；組合行程發來的照 `methods` 找處理函式，找不到回 `unknown_method`。
  * - 組合行程違反協定就直接關連線，不回 `rejected`。
+ * - 收到解得開的 `rejected`（組合行程判這一端違反協定時送的）就關連線，{@link PairClient.closed} 的 `kind` 是 `rejected`，帶它給的 `code` 與 `reason`（在 `detail`）；
+ *   解不開的算它違反協定。這一端正好在寫、寫入出錯時讀不到它，那時 `kind` 是 `closed`。
  * - 背壓：排著沒寫出去的位元組自己數。到了 {@link PAIR_OUTBOX_PAUSE_BYTES}，{@link PairClient.call} 與 {@link PairClient.register}
  *   丟 {@link PairSendError}（`paused`，什麼都沒送），處理函式的塊與結果留著、降回去再送；`cancel` 與這裡自動回的 `result` 照排，
  *   再排一框就超過 {@link PAIR_OUTBOX_LIMIT_BYTES} 的關連線。組合行程送來的任何時候都照讀。
@@ -41,6 +43,7 @@ import {
   PAIR_OUTBOX_LIMIT_BYTES,
   PAIR_OUTBOX_PAUSE_BYTES,
   PAIR_PROTOCOL_VERSION,
+  PAIR_REJECT_CODES,
   PAIR_RETRY_BACKOFF_MIN_MS,
   PAIR_STALL_TIMEOUT_MS,
   PairFrameReader,
@@ -58,13 +61,29 @@ import { type HostErrorCode, type Json } from './protocol.js';
 /** 重連等待的上限，預設值。 */
 export const PAIR_BACKOFF_MAX_MS = 2_000;
 
+/**
+ * 啟動時限的上限：Node 的計時器最長到這裡，再長會被改成 1 ms。`backoffMs` 與 `backoffMaxMs` 也不得超過它，
+ * 只為擋不合理的設定：等待會到或過啟動時限時不等、直接回報，實際的等待不會超過剩下的啟動時間。
+ */
+export const PAIR_STARTUP_DEADLINE_MAX_MS = 2 ** 31 - 1;
+
 /** 一次交給 socket 最多多少位元組，上一段寫完才交下一段；送端的進度以段為單位看。 */
 const WRITE_SLICE = 64 * 1024;
 
-/** 自動回的錯誤訊息最長幾個 UTF-16 單位：處理函式丟的錯可以任意長，回的框要是小框。 */
+/** 自動回的錯誤訊息最長幾個 UTF-16 單位：處理函式丟的錯可以任意長，回的框要是小框。組合行程給的 `reason` 也截到這麼長。 */
 const ERROR_MESSAGE_UNITS = 1024;
 
 const LONE_SURROGATES = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu;
+
+/** 組合行程給的 `reason` 進錯誤訊息與回呼之前：最長 {@link ERROR_MESSAGE_UNITS} 個 UTF-16 單位，落單的代理對、C0／C1 控制字元（含換行、ESC）與 U+2028／U+2029 換成 U+FFFD。 */
+function clipReason(text: string): string {
+  return text
+    .slice(0, ERROR_MESSAGE_UNITS)
+    .replace(LONE_SURROGATES, '\uFFFD')
+    .replace(CONTROL_CHARACTERS, '\uFFFD');
+}
 
 /** 時間與計時器的來源；測試換成手動推進的。 */
 export interface PairClock {
@@ -89,9 +108,11 @@ export interface PairCallContext {
   /** 組合行程取消了、這一次已經以 `too_large` 收尾、或連線斷了，就中止。 */
   readonly signal: AbortSignal;
   /**
-   * 串流一塊；送端暫停時等到降回去才送。那一次已經不在跑丟 {@link PairSendError}（`not_running`）；
+   * 串流一塊；送端暫停時等到降回去才送。那一次已經不在跑（含連線斷了）丟 {@link PairSendError}（`not_running`）；
    * 一塊超過 {@link PAIR_MAX_CHUNK_BYTES} 不送，那一次以 `too_large` 收尾，丟 {@link PairSendError}（`too_large`）；
    * `payload` 有落單的代理對丟 {@link PairProtocolError}，不送，那一次照常繼續。
+   *
+   * 回的 promise 要接住（`await` 或 `catch`）：丟著不管時，取消或斷線之後的那一次拒絕沒有人接。
    */
   chunk(payload: string): Promise<void>;
 }
@@ -103,14 +124,15 @@ export interface PairCallContext {
 export type PairMethod = (payload: Json, context: PairCallContext) => Json | Promise<Json>;
 
 export interface PairConnectOptions {
+  /** 組合行程 listen 的 socket。要放在只有本 uid 能寫的目錄裡：這一端不核對 socket 是誰建的，連到誰就跟誰說話。 */
   readonly socketPath: string;
-  /** 從開始連起算，最晚到這時還沒進去就回報；不得短於 `helloTimeoutMs`。 */
+  /** 從開始連起算，最晚到這時還沒進去就回報；不得短於 `helloTimeoutMs`，不得超過 {@link PAIR_STARTUP_DEADLINE_MAX_MS}。 */
   readonly startupDeadlineMs: number;
   /** 一條連線 connect 成功後等回覆多久，預設也是下限 {@link PAIR_HELLO_TIMEOUT_MS}。 */
   readonly helloTimeoutMs?: number;
-  /** 第一次重連前等多久，預設也是下限 {@link PAIR_RETRY_BACKOFF_MIN_MS}。 */
+  /** 第一次重連前等多久，預設也是下限 {@link PAIR_RETRY_BACKOFF_MIN_MS}；不得超過 {@link PAIR_STARTUP_DEADLINE_MAX_MS}。 */
   readonly backoffMs?: number;
-  /** 重連等待的上限，預設 {@link PAIR_BACKOFF_MAX_MS}（`backoffMs` 比它長時是 `backoffMs`）；不得短於 `backoffMs`。 */
+  /** 重連等待的上限，預設 {@link PAIR_BACKOFF_MAX_MS}（`backoffMs` 比它長時是 `backoffMs`）；不得短於 `backoffMs`，不得超過 {@link PAIR_STARTUP_DEADLINE_MAX_MS}。 */
   readonly backoffMaxMs?: number;
   /** 替組合行程做的 method。 */
   readonly methods?: Readonly<Record<string, PairMethod>>;
@@ -127,7 +149,7 @@ export interface PairRetry {
   readonly attempt: number;
   /** `unreachable` 是連不上，`dropped` 是 connect 成功後沒收到任何框就斷，`unanswered` 是等滿時限沒有回覆。 */
   readonly outcome: 'unreachable' | 'dropped' | 'unanswered' | 'retry_later';
-  /** 連線的錯誤訊息、`retry_later` 的 `reason`，或 `unanswered` 時固定的一句說明。 */
+  /** 連線的錯誤訊息（沒有錯誤就斷的是固定的一句）、`retry_later` 的 `reason`（截短、換掉控制字元之後的），或 `unanswered` 時固定的一句說明。 */
   readonly detail: string;
   /** 接著等多久再連。 */
   readonly waitMs: number;
@@ -145,7 +167,7 @@ export interface PairConnectReport {
   readonly closedBeforeFrame: number;
   /** 幾次 connect 成功、等滿 `helloTimeoutMs` 沒收到任何框。 */
   readonly unanswered: number;
-  /** 幾次還沒有結論就到了啟動時限。 */
+  /** 最後一次是不是還沒有結論就到了啟動時限：0 或 1。 */
   readonly cutShort: number;
   /** 從開始連到回報經過多久。 */
   readonly elapsedMs: number;
@@ -160,13 +182,15 @@ export type PairConnectFailure = PairConnectReport &
       }
     | {
         readonly kind: 'rejected';
-        /** 解不開的 `rejected` 是 `undefined`。 */
+        /** `code` 不認得的 `rejected` 是 `undefined`。 */
         readonly code: PairRejectCode | undefined;
+        /** 組合行程給的 `reason`，截短、換掉控制字元之後的；不是字串時是空的。 */
         readonly reason: string;
       }
     | {
         readonly kind: 'retry_later';
-        /** 最後一次 `retry_later` 的 `reason`。 */ readonly lastReason: string;
+        /** 最後一次 `retry_later` 的 `reason`，截短、換掉控制字元之後的。 */
+        readonly lastReason: string;
       }
     | { readonly kind: 'violation'; readonly detail: string }
   );
@@ -177,11 +201,12 @@ function explain(failure: PairConnectFailure): string {
     case 'absent':
       return failure.connects === 0
         ? `對方不在：從頭到尾沒連上（${span}；最後一次：${failure.lastError}）`
-        : `對方不在：連上過 ${String(failure.connects)} 次，${String(failure.closedBeforeFrame)} 次在收到任何框之前被關、` +
-            `${String(failure.unanswered)} 次等滿時限沒有回覆、${String(failure.cutShort)} 次還在等就到了啟動時限` +
+        : `對方不在：連上過 ${String(failure.connects)} 次，${String(failure.retryLater)} 次被要求稍後再試、` +
+            `${String(failure.closedBeforeFrame)} 次在收到任何框之前被關、` +
+            `${String(failure.unanswered)} 次等滿時限沒有回覆、${String(failure.cutShort)} 次還沒有結論就到了啟動時限` +
             `（${span}；最後一次：${failure.lastError}）`;
     case 'rejected':
-      return `被拒（${failure.code ?? '解不開的拒絕碼'}）：${failure.reason}`;
+      return `被拒（${failure.code ?? '不認得的拒絕碼'}）：${failure.reason}`;
     case 'retry_later':
       return `一直被要求稍後再試：收到 ${String(failure.retryLater)} 次（${span}；最後一次的理由：${failure.lastReason}）`;
     case 'violation':
@@ -241,12 +266,16 @@ export class PairSendError extends Error {
 }
 
 /**
- * 驗過的連線為什麼斷：`closed` 是組合行程關了或讀寫出錯，`violation` 是它違反協定，`overflow` 是照排的框再排就超過
- * {@link PAIR_OUTBOX_LIMIT_BYTES}，`stalled` 是送端停滯，`local` 是這一端叫了 {@link PairClient.close}。
+ * 驗過的連線為什麼斷：`closed` 是組合行程關了或讀寫出錯，`violation` 是它違反協定，`rejected` 是它送了 `rejected`
+ * （它判這一端違反協定），`overflow` 是照排的框再排就超過 {@link PAIR_OUTBOX_LIMIT_BYTES}，`stalled` 是送端停滯，
+ * `local` 是這一端叫了 {@link PairClient.close}。
  */
 export interface PairDisconnect {
-  readonly kind: 'closed' | 'violation' | 'overflow' | 'stalled' | 'local';
+  readonly kind: 'closed' | 'violation' | 'rejected' | 'overflow' | 'stalled' | 'local';
+  /** `rejected` 時是組合行程給的 `reason`，截短、換掉控制字元之後的。 */
   readonly detail: string;
+  /** 只有 `rejected` 有：組合行程給的 `code`。 */
+  readonly code?: PairRejectCode;
 }
 
 export interface PairCallOptions {
@@ -290,8 +319,13 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 第一框解不開時，看它是不是一份 `type` 是 `rejected` 的物件：`code` 不認得或別的欄位不合都算。 */
-function undecodableRejection(payload: Buffer): { readonly reason: string } | undefined {
+/**
+ * 第一框解不開時，看它是不是一份 `type` 是 `rejected`、`code` 是字串的物件：是的話，`code` 認得時回的 `code` 是它，不認得時是 `undefined`；
+ * `reason` 不是字串當空的。不是物件、`type` 不是 `rejected`、`code` 不是字串（含沒有）的回 `undefined`。
+ */
+function undecodableRejection(
+  payload: Buffer,
+): { readonly code: PairRejectCode | undefined; readonly reason: string } | undefined {
   let value: unknown;
   try {
     value = JSON.parse(payload.toString('utf8'));
@@ -300,8 +334,17 @@ function undecodableRejection(payload: Buffer): { readonly reason: string } | un
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const fields = value as Record<string, unknown>;
-  if (fields.type !== 'rejected') return undefined;
-  return { reason: typeof fields.reason === 'string' ? fields.reason : '' };
+  if (fields.type !== 'rejected' || typeof fields.code !== 'string') return undefined;
+  return {
+    code: PAIR_REJECT_CODES.find((known) => known === fields.code),
+    reason: typeof fields.reason === 'string' ? fields.reason : '',
+  };
+}
+
+function refusal(connected: boolean, code: PairRejectCode | undefined, reason: string): Attempt {
+  return code === 'retry_later'
+    ? { connected, kind: 'retry_later', reason: clipReason(reason) }
+    : { connected, kind: 'rejected', code, reason: clipReason(reason) };
 }
 
 /** 葉子這一端一條驗過的連線；用 {@link PairClient.connect} 拿。 */
@@ -330,7 +373,8 @@ export class PairClient {
    *
    * @throws {@link PairConnectError}：沒進去，見檔頭的四種。
    * @throws `RangeError`：`helloTimeoutMs` 短於 {@link PAIR_HELLO_TIMEOUT_MS}、`startupDeadlineMs` 短於 `helloTimeoutMs`、
-   *   `backoffMs` 短於 {@link PAIR_RETRY_BACKOFF_MIN_MS}、`backoffMaxMs` 短於 `backoffMs`，或其中有不是數字的。沒有連。
+   *   `backoffMs` 短於 {@link PAIR_RETRY_BACKOFF_MIN_MS}、`backoffMaxMs` 短於 `backoffMs`、
+   *   `startupDeadlineMs`、`backoffMs` 或 `backoffMaxMs` 超過 {@link PAIR_STARTUP_DEADLINE_MAX_MS}，或其中有 NaN。沒有連。
    * @throws {@link PairProtocolError}：`register` 的名稱過不了橋或整框超過上限。沒有連。
    * @throws `onRetry` 丟的錯，原樣拋出。
    */
@@ -344,10 +388,18 @@ export class PairClient {
     if (!(options.startupDeadlineMs >= helloTimeoutMs)) {
       throw new RangeError('startupDeadlineMs 不得短於 helloTimeoutMs');
     }
+    if (options.startupDeadlineMs > PAIR_STARTUP_DEADLINE_MAX_MS) {
+      throw new RangeError(`startupDeadlineMs 不得超過 ${String(PAIR_STARTUP_DEADLINE_MAX_MS)}`);
+    }
     if (!(backoffMs >= PAIR_RETRY_BACKOFF_MIN_MS)) {
       throw new RangeError(`backoffMs 不得短於 ${String(PAIR_RETRY_BACKOFF_MIN_MS)}`);
     }
     if (!(backoffMaxMs >= backoffMs)) throw new RangeError('backoffMaxMs 不得短於 backoffMs');
+    if (backoffMaxMs > PAIR_STARTUP_DEADLINE_MAX_MS) {
+      throw new RangeError(
+        `backoffMs 與 backoffMaxMs 不得超過 ${String(PAIR_STARTUP_DEADLINE_MAX_MS)}`,
+      );
+    }
     const register =
       options.register &&
       encodePairMessage({
@@ -372,6 +424,12 @@ export class PairClient {
       retryLater: false,
       text: '還沒有任何一次嘗試有結論',
     };
+    const gaveUp = (): PairConnectError =>
+      new PairConnectError(
+        last.retryLater
+          ? { kind: 'retry_later', lastReason: last.text, ...report() }
+          : { kind: 'absent', lastError: last.text, ...report() },
+      );
     let delay = backoffMs;
     for (;;) {
       tally.attempts += 1;
@@ -412,15 +470,9 @@ export class PairClient {
           break;
         case 'cut':
           tally.cutShort += 1;
-          break;
+          throw gaveUp();
       }
-      if (attempt.kind === 'cut' || clock.now() + delay >= deadlineAt) {
-        throw new PairConnectError(
-          last.retryLater
-            ? { kind: 'retry_later', lastReason: last.text, ...report() }
-            : { kind: 'absent', lastError: last.text, ...report() },
-        );
-      }
+      if (clock.now() + delay >= deadlineAt) throw gaveUp();
       const wait = delay;
       options.onRetry?.({
         attempt: tally.attempts,
@@ -482,16 +534,12 @@ export class PairClient {
           finish(
             rejection === undefined
               ? { connected, kind: 'violation', detail: messageOf(error) }
-              : { connected, kind: 'rejected', code: undefined, reason: rejection.reason },
+              : refusal(connected, rejection.code, rejection.reason),
           );
           return;
         }
         if (message.type === 'rejected') {
-          finish(
-            message.code === 'retry_later'
-              ? { connected, kind: 'retry_later', reason: message.reason }
-              : { connected, kind: 'rejected', code: message.code, reason: message.reason },
-          );
+          finish(refusal(connected, message.code, message.reason));
         } else if (message.type !== 'hello') {
           finish({ connected, kind: 'violation', detail: `hello 之前收到 ${message.type}` });
         } else if (!greeted) {
@@ -716,15 +764,16 @@ export class PairClient {
     if (this.paused) throw new PairSendError('paused', '排著沒寫出去的太多，現在送不了');
   }
 
-  /** 等到送端沒有暫停；那一次呼叫已經不在跑就丟。 */
-  async #admitServed(id: number, their: Theirs): Promise<void> {
-    for (;;) {
-      if (this.#theirs.get(id) !== their) {
-        throw new PairSendError('not_running', '那一次呼叫已經不在跑');
-      }
-      if (!this.paused) return;
-      await this.writable();
+  /**
+   * 替組合行程做的那一次現在能不能排一框；已經不在跑就丟。回 `false` 時等 {@link PairClient.writable} 再問。
+   * 回 `true` 之後要在同一段同步的程式裡排進去：中間隔一個 await，同時被叫醒的幾個都會看到沒暫停而一起排進去，
+   * 可能超過 {@link PAIR_OUTBOX_LIMIT_BYTES} 而關連線。
+   */
+  #servable(id: number, their: Theirs): boolean {
+    if (this.#theirs.get(id) !== their) {
+      throw new PairSendError('not_running', '那一次呼叫已經不在跑');
     }
+    return !this.paused;
   }
 
   #enqueue(payload: Buffer): void {
@@ -834,8 +883,14 @@ export class PairClient {
 
   #onMessage(message: PairMessage): void {
     switch (message.type) {
-      case 'hello':
       case 'rejected':
+        this.#drop({
+          kind: 'rejected',
+          code: message.code,
+          detail: clipReason(message.reason),
+        });
+        return;
+      case 'hello':
       case 'register':
         throw new PairProtocolError(`驗過之後收到 ${message.type}`);
       case 'call': {
@@ -894,7 +949,7 @@ export class PairClient {
       parent,
       signal: their.controller.signal,
       chunk: async (text) => {
-        await this.#admitServed(id, their);
+        while (!this.#servable(id, their)) await this.writable();
         if (Buffer.byteLength(text, 'utf8') > PAIR_MAX_CHUNK_BYTES) {
           this.#theirs.delete(id);
           their.controller.abort();
@@ -924,7 +979,7 @@ export class PairClient {
             : { code: 'service_error', message: messageOf(error) };
       }
       try {
-        await this.#admitServed(id, their);
+        while (!this.#servable(id, their)) await this.writable();
       } catch {
         return;
       }

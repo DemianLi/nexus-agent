@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  PAIR_STARTUP_DEADLINE_MAX_MS,
   PairCallError,
   PairClient,
   PairConnectError,
@@ -29,6 +30,7 @@ import {
   PAIR_RETRY_BACKOFF_MIN_MS,
   PAIR_STALL_TIMEOUT_MS,
   PairFrameReader,
+  PairFrameTooLargeError,
   PairProtocolError,
   decodePairMessage,
   encodePairMessage,
@@ -114,7 +116,7 @@ class Conn {
     });
   }
 
-  /** 開始讀（或接著讀）；沒叫過就不把收到的交出來，Node 自己的緩衝滿了之後對方就寫不進來。 */
+  /** 開始讀（或接著讀）；沒叫過就不把收到的交出來：Node 自己的緩衝滿了就不再從 kernel 讀，kernel 的 buffer 也滿了之後對方就寫不進來。 */
   read(): void {
     this.socket.resume();
     if (this.#reading) return;
@@ -262,7 +264,7 @@ afterEach(() => {
 });
 
 describe('連線的選項', () => {
-  it('時限與退避短於下限就丟 RangeError，不連', async () => {
+  it('時限與退避短於下限、超過上限或是 NaN 就丟 RangeError', async () => {
     const base = { socketPath: '/nonexistent', startupDeadlineMs: 10_000 };
     await expect(
       PairClient.connect({ ...base, helloTimeoutMs: PAIR_HELLO_TIMEOUT_MS - 1 }),
@@ -282,16 +284,41 @@ describe('連線的選項', () => {
     await expect(
       PairClient.connect({ ...base, startupDeadlineMs: Number.NaN }),
     ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, startupDeadlineMs: PAIR_STARTUP_DEADLINE_MAX_MS + 1 }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, startupDeadlineMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, backoffMaxMs: PAIR_STARTUP_DEADLINE_MAX_MS + 1 }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, backoffMs: PAIR_STARTUP_DEADLINE_MAX_MS + 1 }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, backoffMaxMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({ ...base, helloTimeoutMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      PairClient.connect({
+        ...base,
+        helloTimeoutMs: PAIR_STARTUP_DEADLINE_MAX_MS + 1,
+        startupDeadlineMs: PAIR_STARTUP_DEADLINE_MAX_MS + 1,
+      }),
+    ).rejects.toBeInstanceOf(RangeError);
   });
 
   it('register 的名稱過不了橋就丟 PairProtocolError，不連', async () => {
+    const rig = composition();
+    await rig.listen();
     await expect(
-      PairClient.connect({
-        socketPath: '/nonexistent',
-        startupDeadlineMs: 10_000,
-        register: { tools: ['\uD800'], hooks: [] },
-      }),
+      PairClient.connect(rig.options({ register: { tools: ['\uD800'], hooks: [] } })),
     ).rejects.toBeInstanceOf(PairProtocolError);
+    await spin();
+    expect(rig.conns).toHaveLength(0);
   });
 });
 
@@ -407,7 +434,7 @@ describe('握手與四種結局', () => {
     expect(failure).toMatchObject({ kind: 'rejected', code, attempts: 1 });
   });
 
-  it('code 解不開的 rejected：照被拒回報，code 是 undefined，不重試', async () => {
+  it('code 不認得的 rejected：照被拒回報，code 是 undefined，不重試', async () => {
     const rig = composition();
     rig.onConn = (conn) => {
       conn.sendJson('{"type":"rejected","code":"come_back_tomorrow","reason":"新版的理由"}');
@@ -419,7 +446,77 @@ describe('握手與四種結局', () => {
     expect(failure?.kind === 'rejected' && failure.code).toBeUndefined();
   });
 
-  it('三種結局是三個不同的 kind', async () => {
+  it('code 認得、別的欄位不合的 rejected 照 code 判：retry_later 多了欄位照樣重連', async () => {
+    const rig = composition();
+    rig.onConn = (conn) => {
+      conn.sendJson('{"type":"rejected","code":"retry_later","reason":"等一下","until":5}');
+      conn.socket.end();
+    };
+    await rig.listen();
+    const { failure } = await rig.run();
+    expect(failure).toMatchObject({ kind: 'retry_later', lastReason: '等一下' });
+    expect(failure?.attempts).toBeGreaterThan(1);
+    expect(failure?.retryLater).toBe(failure?.attempts);
+  });
+
+  it('code 認得、reason 不是字串的 rejected 照 code 判：identity 不重試，reason 是空的', async () => {
+    const rig = composition();
+    rig.onConn = (conn) => {
+      conn.sendJson('{"type":"rejected","code":"identity","reason":7}');
+      conn.socket.end();
+    };
+    await rig.listen();
+    const { failure } = await rig.run();
+    expect(failure).toMatchObject({ kind: 'rejected', code: 'identity', reason: '', attempts: 1 });
+  });
+
+  it.each([
+    ['只有 type', '{"type":"rejected"}'],
+    ['只有 reason', '{"type":"rejected","reason":"token 不對"}'],
+    ['code 不是字串', '{"type":"rejected","code":3,"reason":"x"}'],
+  ])(
+    '沒有 code 或 code 不是字串的 rejected（%s）：不當成被拒，算違反協定，不重試',
+    async (_name, json) => {
+      const rig = composition();
+      rig.onConn = (conn) => {
+        conn.sendJson(json);
+        conn.socket.end();
+      };
+      await rig.listen();
+      const { failure } = await rig.run();
+      expect(failure).toMatchObject({ kind: 'violation', attempts: 1 });
+      expect(rig.retries).toEqual([]);
+    },
+  );
+
+  it('組合行程給的 reason 截到 1024 個單位、控制字元與落單的代理對換掉，才進回報、訊息與 onRetry', async () => {
+    // 第 1024 個單位落在一個代理對中間：截完剩下的那一半也換掉。
+    const long = `第一行\n第二行\u0000\u001B[31m\u2028${'長'.repeat(1_009)}😀${'尾'.repeat(100)}`;
+    const longClean = `第一行\uFFFD第二行\uFFFD\uFFFD[31m\uFFFD${'長'.repeat(1_009)}\uFFFD`;
+    const rig = composition();
+    rig.onConn = (conn, index) => {
+      if (index === 0) conn.send(rejected('retry_later', long));
+      else conn.sendJson('{"type":"rejected","code":"identity","reason":"壞\\ud800字","more":1}');
+      conn.socket.end();
+    };
+    await rig.listen();
+    const outcome = track(PairClient.connect(rig.options()));
+    await until(() => rig.retries.length === 1, '第一次被要求稍後再試');
+    expect(longClean).toHaveLength(1024);
+    expect(rig.retries[0]?.detail).toBe(longClean);
+    rig.clock.advance(rig.retries[0]?.waitMs ?? 0);
+    await until(() => outcome.settled, '被拒');
+    const error = outcome.error;
+    expect(error).toBeInstanceOf(PairConnectError);
+    expect(error instanceof PairConnectError && error.failure).toMatchObject({
+      kind: 'rejected',
+      code: 'identity',
+      reason: '壞\uFFFD字',
+    });
+    expect(error?.message).toBe('被拒（identity）：壞\uFFFD字');
+  });
+
+  it('對方不在、一直被要求稍後再試、被拒是三個不同的 kind', async () => {
     const absent = composition();
     const retrying = composition();
     retrying.onConn = (conn) => {
@@ -490,7 +587,7 @@ describe('握手與四種結局', () => {
     });
     expect(rig.retries.every((retry) => retry.outcome === 'dropped')).toBe(true);
     const message = new PairConnectError(failure as PairConnectFailure).message;
-    expect(message).toContain('連上過 8 次，8 次在收到任何框之前被關');
+    expect(message).toContain('連上過 8 次，0 次被要求稍後再試、8 次在收到任何框之前被關');
     expect(message).not.toContain('從頭到尾沒連上');
   });
 
@@ -1035,7 +1132,6 @@ describe('組合行程發來的呼叫', () => {
 describe('組合行程違反協定與斷線', () => {
   it.each<[string, (conn: Conn) => void]>([
     ['又送一次 hello', (conn) => conn.send(HELLO)],
-    ['送 rejected', (conn) => conn.send(rejected('protocol', '?'))],
     ['送 register', (conn) => conn.send({ type: 'register', tools: [], hooks: [] })],
     [
       'call 的 side 是葉子',
@@ -1091,6 +1187,22 @@ describe('組合行程違反協定與斷線', () => {
     expect(rig.clock.pending).toBe(0);
   });
 
+  it('驗過之後收到 rejected：關連線，斷線的原因是 rejected，帶組合行程給的 code 與 reason', async () => {
+    const rig = composition();
+    const { client, conn } = await rig.connected();
+    const mine = client.call('theirs', null);
+    await until(() => conn.of('call').length === 1, 'call');
+    conn.send(rejected('protocol', `seq 沒接上\n${'長'.repeat(2_000)}`));
+    await expect(client.closed).resolves.toEqual({
+      kind: 'rejected',
+      code: 'protocol',
+      detail: `seq 沒接上\uFFFD${'長'.repeat(2_000)}`.slice(0, 1024),
+    });
+    await expect(mine).rejects.toBeInstanceOf(PairPeerGoneError);
+    await until(() => conn.closed, '連線關了');
+    expect(rig.clock.pending).toBe(0);
+  });
+
   it('組合行程關連線：自己發的收成 PairPeerGoneError、在服務的中止，之後不重連、送不出去', async () => {
     const rig = composition();
     let seen: PairCallContext | undefined;
@@ -1124,12 +1236,24 @@ describe('組合行程違反協定與斷線', () => {
 });
 
 describe('背壓與停滯', () => {
-  /** 組合行程不讀；葉子排到過暫停線為止。回排進去的呼叫。 */
+  /**
+   * 組合行程不讀；葉子排到「過了暫停線」與「送端不再前進」同時成立為止。回排進去的呼叫。
+   *
+   * 排過暫停線之後對端 Node 的緩衝與 kernel 的 buffer 還會收走一些，收走多少看平台，排著的可能又降回線下；所以停下來之後還在線下就再排。
+   * 排滿 {@link PAIR_MAX_CALLS} 個還停不在線上就丟錯。
+   */
   async function fill(client: PairClient): Promise<Tracked<Json>[]> {
     const calls: Tracked<Json>[] = [];
-    while (!client.paused) calls.push(track(client.call('sink', 'x'.repeat(200_000))));
-    await stuck(client);
-    return calls;
+    for (;;) {
+      while (!client.paused && calls.length < PAIR_MAX_CALLS) {
+        calls.push(track(client.call('sink', 'x'.repeat(200_000))));
+      }
+      await stuck(client);
+      if (client.paused) return calls;
+      if (calls.length === PAIR_MAX_CALLS) {
+        throw new Error(`排滿了還是沒停在暫停線上：排著 ${String(client.queuedBytes)} 位元組`);
+      }
+    }
   }
 
   /** 等到送端不再前進：kernel 的 buffer 滿了，排著的位元組數不再變。 */
@@ -1201,6 +1325,44 @@ describe('背壓與停滯', () => {
     expect(rig.clock.pending).toBe(0);
   }, 120_000);
 
+  it('暫停時等著的幾個結果不會一起越過上限：降回去一次放一個，連線不斷', async () => {
+    const rig = composition();
+    rig.onConn = (conn) => {
+      conn.greet(true);
+    };
+    let entered = 0;
+    // 一個結果約 1 MB：降回線下時排著的至少還有 512 KiB − 64 KiB，兩個一起排進去就超過 2 MiB 而關連線，一次一個不會。
+    const big = 'x'.repeat(1_000_000);
+    const { client, conn } = await rig.connected({
+      methods: {
+        big: () => {
+          entered += 1;
+          return big;
+        },
+      },
+    });
+    await fill(client);
+    conn.send(
+      ...[0, 1, 2].map((id): PairMessage => ({
+        type: 'call',
+        side: 'm',
+        id,
+        parent: null,
+        method: 'big',
+        payload: null,
+      })),
+    );
+    await until(() => entered === 3, '三個處理函式都跑完，結果等著');
+    const closed = track(client.closed);
+    conn.read();
+    await until(() => conn.of('result').length === 3, '三個 result');
+    expect(conn.of('result')).toEqual(
+      [0, 1, 2].map((id) => ({ type: 'result', side: 'm', id, ok: big })),
+    );
+    expect(closed.settled).toBe(false);
+    client.close();
+  }, 120_000);
+
   it('組合行程一直不讀：照排的框再排就超過上限時關連線', async () => {
     const rig = composition();
     rig.onConn = (conn) => {
@@ -1266,6 +1428,28 @@ describe('背壓與停滯', () => {
     expect(closed.settled).toBe(false);
     expect(rig.clock.pending).toBe(0);
   }, 120_000);
+
+  it('寫出去一段、還有排著的：停滯從那一段寫完起算', async () => {
+    const rig = composition();
+    rig.onConn = (conn) => {
+      conn.greet(true);
+    };
+    const { client, conn } = await rig.connected();
+    await fill(client);
+    const before = client.queuedBytes;
+    rig.clock.advance(PAIR_STALL_TIMEOUT_MS - 1);
+    // `read()` 交出 Node 緩衝裡的那一份，Node 接著從 kernel 再讀滿一份就停：kernel 的 buffer 空出這麼多，葉子寫得出去一小段，然後又停住。
+    conn.socket.read();
+    await until(() => client.queuedBytes < before, '寫出去一段');
+    await stuck(client);
+    expect(client.queuedBytes).toBeGreaterThan(0);
+    rig.clock.advance(PAIR_STALL_TIMEOUT_MS - 1);
+    const closed = track(client.closed);
+    await Promise.resolve();
+    expect(closed.settled).toBe(false);
+    rig.clock.advance(1);
+    await expect(client.closed).resolves.toMatchObject({ kind: 'stalled' });
+  }, 120_000);
 });
 
 describe('探針', () => {
@@ -1279,5 +1463,21 @@ describe('探針', () => {
     for (const name of sources) {
       expect(readFileSync(join(dir, name), 'utf8'), name).not.toContain('pair-leaf-probe');
     }
+  });
+
+  it('package.json 的 exports 沒有逐字點名 pair-leaf-probe', () => {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { readonly exports: unknown };
+    expect(JSON.stringify(manifest.exports)).not.toContain('pair-leaf-probe');
+  });
+});
+
+describe('錯誤的名稱', () => {
+  it('PairFrameTooLargeError 有自己的 name，仍然是 PairProtocolError', () => {
+    const error = new PairFrameTooLargeError('太大');
+    expect(error.name).toBe('PairFrameTooLargeError');
+    expect(error).toBeInstanceOf(PairProtocolError);
+    expect(new PairProtocolError('x').name).toBe('PairProtocolError');
   });
 });

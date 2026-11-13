@@ -22,6 +22,7 @@ export {
 } from './errors.js';
 export {
   PAIR_BACKOFF_MAX_MS,
+  PAIR_STARTUP_DEADLINE_MAX_MS,
   PairCallError,
   PairClient,
   PairConnectError,

@@ -2,7 +2,7 @@
 //! 橋的兩種語言對接（#2583）：真的 [`nexus_host::pair::Pair`] listen，起 node 跑
 //! `packages/nexus-host-bridge/src/pair-leaf-probe.ts`（TS 的葉子連線，印的事件見該檔檔頭），斷言兩邊看到的一致。
 //!
-//! 只在 Linux 編：`Pair` 靠 `SO_PEERCRED` 驗身分。全部標 `#[ignore]`：要 node 與 `pnpm install` 過的相依，CI 在 `./.github/actions/setup` 之後另跑一步帶 `--ignored`
+//! 只在 Linux 編：`Pair` 讀 `SO_PEERCRED`（`libc::ucred`），nexus-host 在 Linux 以外編不過。全部標 `#[ignore]`：要 node 與 `pnpm install` 過的相依，CI 在 `./.github/actions/setup` 之後另跑一步帶 `--ignored`
 //! 並核對跑到的測試數（`.github/scripts/test_ci_workflow.py` 釘住那一步）。
 //!
 //! 時間是真的：每一次等待最多 [`LIMIT`]，等不到就把兩邊到目前為止的記錄印出來。起的 node 丟掉時殺掉並收屍；它自己在 stdin 關了時也會結束。
