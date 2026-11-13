@@ -124,7 +124,8 @@ describe('exitCodeFor', () => {
   it('runCli 撞到 --recursion-limit 時拋出的錯誤帶著那個碼（沒有被中途換掉）', async () => {
     const { printer } = recorder();
     const failure = await runCli({
-      argv: ['--recursion-limit', '8', '說點什麼'],
+      // 明給 loop：`vitest.native.config.ts` 會把沒指定的組裝換成 native，那一條要看的是 langgraph 的碼。
+      argv: ['--agent-loop', 'langgraph', '--recursion-limit', '8', '說點什麼'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,

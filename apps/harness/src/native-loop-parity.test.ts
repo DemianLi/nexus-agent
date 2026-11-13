@@ -1216,7 +1216,11 @@ describe('native 的多輪、接回日誌上的幾則與上限，對照 LangGrap
     const graph = await run('langgraph');
     const native = await run('native');
     expect(graph.failure).toContain(`Recursion limit of ${limit} reached`);
-    expect(native).toEqual(graph);
+    // 差別只有 LangGraph 的建構子在訊息後面接的排錯網址：native 的碼是自己的，那個網址沒有頁面，所以不接（升級指南 native-step-limit-code）。
+    const troubleshooting = /\n\nTroubleshooting URL: \S+\n$/;
+    expect(graph.failure).toMatch(troubleshooting);
+    expect(native.failure).not.toMatch(/Troubleshooting URL/);
+    expect(native).toEqual({ ...graph, failure: graph.failure?.replace(troubleshooting, '') });
   });
 
   it('returnDirect 的工具：結果就是這一輪的收尾，不再叫模型', async () => {
