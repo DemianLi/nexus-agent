@@ -30,6 +30,35 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+/** 5 秒內沒等到就丟錯，免得測試卡到逾時才報。 */
+function within<T>(promise: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`等不到${what}`)), 5000);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/** 訂下行的 `messages`：第一段字（`content-block-delta`）到時 `firstDelta` 解開；沒有字就一直不解開、也不 reject，要套 `within`。`draining` 在訂閱結束時落定，收尾先中止 `signal` 再等它。 */
+function watchFirstDelta(pump: ThreadPump, signal: AbortSignal) {
+  let reached!: () => void;
+  const firstDelta = new Promise<void>((resolve) => (reached = resolve));
+  const draining = (async () => {
+    for await (const frame of pump.subscribe(['messages'], signal)) {
+      if ((frame.params.data as { event?: unknown }).event === 'content-block-delta') reached();
+    }
+  })();
+  return { firstDelta, draining };
+}
+
 /** 日誌上的骨架：每次呼叫與它的回覆、領走的插話（開頭那句話記在 `turn/start`，不在這裡）。 */
 function skeleton(events: readonly SessionEvent[]): string[] {
   return events.flatMap((event) => {
@@ -85,13 +114,8 @@ async function steerDuringCall(agentLoop: 'langgraph' | 'native', source: 'state
     built.stepInbox,
   );
   const detach = built.attachSession(pump.sessions);
-  let deltas = 0;
   const line = new AbortController();
-  const draining = (async () => {
-    for await (const frame of pump.subscribe(['messages'], line.signal)) {
-      if ((frame.params.data as { event?: unknown }).event === 'content-block-delta') deltas += 1;
-    }
-  })();
+  const { firstDelta, draining } = watchFirstDelta(pump, line.signal);
   cleanups.push(async () => {
     pump.close();
     line.abort();
@@ -101,11 +125,7 @@ async function steerDuringCall(agentLoop: 'langgraph' | 'native', source: 'state
   });
 
   const running = pump.submit({ kind: 'message', text: '開始', id: 'm1' });
-  const started = Date.now();
-  while (deltas === 0) {
-    if (Date.now() - started > 5000) throw new Error('等不到第 1 次呼叫的第一段字');
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
+  await within(firstDelta, '第 1 次呼叫的第一段字');
   await pump.submit({ kind: 'message', text: '改用 X', id: 's1', steer: true });
   await running;
   await pump.whenIdle();
@@ -174,7 +194,8 @@ interface Assembled {
   readonly model: ScriptedChatModel;
   readonly built: Awaited<ReturnType<typeof createNexusAgent>>;
   readonly pump: ThreadPump;
-  readonly deltas: unknown[];
+  /** 第一段字到的時候解開。 */
+  readonly firstDelta: Promise<void>;
 }
 
 /** 一套組裝：真組裝加一條 pump，`seed` 是前一套留下的日誌，`restore` 為真時照續接把它推回 agent。 */
@@ -205,15 +226,8 @@ async function startAssembly(
     resume?.seed,
   );
   const detach = built.attachSession(pump.sessions);
-  const deltas: unknown[] = [];
   const line = new AbortController();
-  const draining = (async () => {
-    for await (const frame of pump.subscribe(['messages'], line.signal)) {
-      if ((frame.params.data as { event?: unknown }).event === 'content-block-delta') {
-        deltas.push(frame);
-      }
-    }
-  })();
+  const { firstDelta, draining } = watchFirstDelta(pump, line.signal);
   const close = async () => {
     pump.close();
     line.abort();
@@ -222,12 +236,13 @@ async function startAssembly(
     await built.dispose();
   };
   cleanups.push(close);
-  return { model, built, pump, deltas };
+  return { model, built, pump, firstDelta };
 }
 
 const THREAD_ID = 'stopped-call';
 
 const FULL_REPLY = '這一句回覆吐得很慢。'.repeat(20);
+/** 腳本模型每個字（含第一個）都先等 `tokenDelayMs` 才吐：還沒吐字就停靠這個延遲，停止才一定搶在第一個字之前。 */
 const SLOW: ScriptedTurn = { content: FULL_REPLY, tokenDelayMs: 20 };
 const SECOND: ScriptedTurn = { content: '第二輪回覆' };
 
@@ -261,17 +276,19 @@ async function stopMidCall(
   resume: Resume,
 ): Promise<StoppedRun> {
   const first = await startAssembly(agentLoop, source, [SLOW, SECOND]);
+  // 還沒吐字的形狀：日誌同步通知 `model/start` 時排一顆 microtask 去停。microtask 先於之後才到點的任何計時器回呼，
+  // 而腳本模型每個字（含第一個）都先等 `tokenDelayMs` 的計時器才吐，所以停止一定先生效，與事件迴圈多忙無關。
+  const unsubscribe = first.pump.sessionLog.subscribe((event) => {
+    if (delta || event.type !== 'model/start') return;
+    unsubscribe(); // 只停第 1 輪：`continue` 的第 2 輪用同一條 pump，它的 `model/start` 不能再觸發停止。
+    queueMicrotask(() => first.pump.cancel());
+  });
+  cleanups.push(async () => unsubscribe());
   const submitted = first.pump.submit({ kind: 'message', text: '講長一點', id: 'm1' });
-  const started = Date.now();
-  const reached = () =>
-    delta
-      ? first.deltas.length > 0
-      : first.pump.sessionLog.events.some((event) => event.type === 'model/start');
-  while (!reached()) {
-    if (Date.now() - started > 5000) throw new Error('等不到第 1 輪的 model/start 或第一段字');
-    await new Promise((resolve) => setTimeout(resolve, 2));
+  if (delta) {
+    await within(first.firstDelta, '第 1 輪的第一段字');
+    first.pump.cancel();
   }
-  first.pump.cancel();
   await submitted;
   await first.pump.whenIdle();
   const afterStop = [...first.pump.sessionLog.events];
