@@ -17,9 +17,11 @@ import {
 import type { Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { scrubbedParentEnv } from '@nexus/subprocess';
-import { substituted } from './credentials.js';
+import { redactorFor, substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { McpConfig } from './index.js';
+import { PLACEHOLDER, scrubbedCopy } from './redact.js';
+import type { Redactor } from './redact.js';
 import { toolCallOf } from './tool-call.js';
 import type { ToolCall } from './tool-call.js';
 
@@ -37,18 +39,21 @@ const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
  *
  * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
+ *
+ * @param redactor - 這一份連線的憑證值：`tools/list` 失敗的訊息與 `cause` 送出前遮掉，經 {@link toolCallOf} 的工具呼叫錯誤也靠它遮（`rejectTaskRequired` 的錯誤還沒遮）。沒有憑證就傳 `NO_REDACTION`。
  */
 export async function connectGeneration(
   connect: () => Promise<Client>,
   config: McpConfig,
   elicitation: boolean,
+  redactor: Redactor,
   onAttached?: (closed: Promise<void>) => void,
 ): Promise<ListedGeneration> {
   const client = await connect();
   const calls = new Map<string, ToolCall>();
   const generation = generationOf(calls, client);
   onAttached?.(generation.closed);
-  const tools = await listAllTools(client, config.serverName);
+  const tools = await listAllTools(client, config.serverName, redactor);
   for (const tool of tools) {
     calls.set(
       tool.name,
@@ -57,6 +62,7 @@ export async function connectGeneration(
         : toolCallOf(client, config.serverName, tool, {
             elicitation,
             timeoutMs: config.toolCallTimeoutMs,
+            redactor,
           }),
     );
   }
@@ -97,9 +103,11 @@ export function attemptsOn(
   config: McpConfig,
   elicitation: boolean,
   credentials: ResolvedCredentials,
-  open: (track: (client: Client) => void) => Promise<Client> = (track) =>
-    openClient(config, credentials, track),
+  open?: (track: (client: Client) => void) => Promise<Client>,
 ): Attempts {
+  const redactor = redactorFor(config, credentials);
+  const openOne =
+    open ?? ((track: (client: Client) => void) => openClient(config, credentials, track, redactor));
   let latest: Client | undefined;
   let closed: Promise<void> = Promise.resolve();
   const close = async (): Promise<void> => {
@@ -111,11 +119,12 @@ export function attemptsOn(
     closed = Promise.resolve();
     return connectGeneration(
       () =>
-        open((client) => {
+        openOne((client) => {
           latest = client;
         }),
       config,
       elicitation,
+      redactor,
       (signal) => {
         closed = signal;
       },
@@ -137,7 +146,11 @@ export function attemptsOn(
 }
 
 /** `tools/list` 分頁走完，沒有名字的略過。`cacheMode: 'refresh'`：不讀新協議 client 的列表快取。 */
-async function listAllTools(client: Client, serverName: string): Promise<Tool[]> {
+async function listAllTools(
+  client: Client,
+  serverName: string,
+  redactor: Redactor,
+): Promise<Tool[]> {
   const tools: Tool[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -152,9 +165,10 @@ async function listAllTools(client: Client, serverName: string): Promise<Tool[]>
       if (cursor !== undefined) seen.add(cursor);
     } while (cursor !== undefined);
   } catch (error) {
-    throw new Error(`Failed to load tools from server "${serverName}": ${String(error)}`, {
-      cause: error,
-    });
+    throw new Error(
+      redactor.scrubText(`Failed to load tools from server "${serverName}": ${String(error)}`),
+      { cause: redactor.empty ? error : scrubbedCopy(error, redactor.scrubText) },
+    );
   }
   return tools;
 }
@@ -170,12 +184,14 @@ function rejectTaskRequired(rawName: string): ToolCall {
 }
 
 /**
- * 開一個 SDK client 並連上這台 server。`track` 在連線之前就拿到 client：握手卡住時，呼叫端收得掉它。連不上就收掉 client 與 transport 再拋。
+ * 開一個 SDK client 並連上這台 server。`track` 在連線之前就拿到 client：握手卡住時，呼叫端收得掉它。連不上就收掉 client 與 transport 再拋，
+ * 拋的錯誤訊息與 `cause` 已遮掉網址的帳密、query、fragment 與這份連線的憑證值。`redactor` 省略就照 `credentials` 現建。
  */
 export async function openClient(
   config: McpConfig,
   credentials: ResolvedCredentials,
   track: (client: Client) => void = () => {},
+  redactor: Redactor = redactorFor(config, credentials),
 ): Promise<Client> {
   const { serverName, connection } = config;
   if (connection.transport === 'stdio') {
@@ -194,17 +210,19 @@ export async function openClient(
       );
     } catch (error) {
       throw new Error(
-        `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
-        {
-          cause: error,
-        },
+        redactor.scrubText(
+          `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
+        ),
+        { cause: redactor.empty ? error : scrubbedCopy(error, redactor.scrubText) },
       );
     }
   }
   const url = connection.url;
   const shown = redactedUrl(url);
   const fail = (message: string, cause: unknown, ...urls: string[]): Error =>
-    new Error(scrubbed(message, [url, ...urls]), { cause: scrubbedError(cause, [url, ...urls]) });
+    new Error(scrubbed(message, [url, ...urls], redactor), {
+      cause: scrubbedCopy(cause, (text) => scrubbed(text, [url, ...urls], redactor)),
+    });
   const headers =
     connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
   const requestInit = headers === undefined ? {} : { requestInit: { headers } };
@@ -285,7 +303,7 @@ const MIN_STANDALONE_PASSWORD_LENGTH = 4;
  * 先換完整網址（原字串與正規化後的），再兜底：網址若以別的形式被帶出來（去掉 fragment、重新編碼、只剩 path 加 query），
  * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
  */
-function scrubbed(text: string, urls: readonly string[]): string {
+function scrubbed(text: string, urls: readonly string[], redactor: Redactor): string {
   let result = text;
   const pieces: string[] = [];
   for (const url of urls) {
@@ -308,22 +326,10 @@ function scrubbed(text: string, urls: readonly string[]): string {
   for (const piece of pieces
     .filter((piece) => piece.length > 1)
     .sort((a, b) => b.length - a.length)) {
-    result = result.split(piece).join('[redacted]');
+    result = result.split(piece).join(PLACEHOLDER);
   }
-  return result;
-}
-
-/** 換成只帶遮過訊息的 Error，保留 `name`、`status`／`code`（{@link httpErrorCode} 與 `isConnectionLost` 要讀）；原 error 上的其他屬性可能帶網址，不沿用。 */
-function scrubbedError(error: unknown, urls: readonly string[]): Error {
-  const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
-  const copy = new Error(scrubbed(error instanceof Error ? error.message : String(error), urls));
-  if (typeof source.name === 'string') copy.name = source.name;
-  Object.assign(
-    copy,
-    typeof source.status === 'number' && { status: source.status },
-    typeof source.code === 'number' && { code: source.code },
-  );
-  return copy;
+  // 憑證值最後換：先換會切斷整段網址與 query 片段的比對。
+  return redactor.scrubText(result);
 }
 
 type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;

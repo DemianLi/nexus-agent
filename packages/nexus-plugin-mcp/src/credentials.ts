@@ -13,6 +13,8 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { McpConfig } from './index.js';
+import { createRedactor } from './redact.js';
+import type { Redactor } from './redact.js';
 
 /** 宿主交憑證服務的服務名。 */
 export const MCP_CREDENTIALS_SERVICE = 'mcp:credentials';
@@ -122,4 +124,31 @@ export function substituted(
       return [key, `${value.prefix ?? ''}${resolved}`];
     }),
   );
+}
+
+/**
+ * 這一份連線手上要遮的值（#2669）：每一把解析出來的憑證；header 代入後的整個值（`prefix` 接憑證，連 prefix 一起遮成一段，與 Rust 宿主收整個
+ * header 值一致）；`Authorization`、`Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token），切法同宿主：第一個空白之後、修掉頭尾空白。
+ *
+ * 只收**憑證引用**解出來的東西：設定裡直接寫的字串值不是憑證，不進來（宿主那邊分不出來才一律收，見 `docs/credentials-file.md`）。
+ * 一份連線的值在建立時就定了（值換了，池鍵的指紋換、開的是另一份連線，各帶自己的遮蔽器），所以同一份連線的重連沿用同一組值。
+ */
+export function redactorFor(config: McpConfig, credentials: ResolvedCredentials): Redactor {
+  if (credentials.size === 0) return createRedactor([]);
+  const values = new Set<string>(credentials.values());
+  const { connection } = config;
+  if (connection.transport !== 'stdio') {
+    for (const [name, value] of Object.entries(connection.headers ?? {})) {
+      if (typeof value === 'string') continue;
+      const resolved = credentials.get(value.credential);
+      if (resolved === undefined) continue;
+      const composed = `${value.prefix ?? ''}${resolved}`;
+      values.add(composed);
+      if (/^(?:proxy-)?authorization$/iu.test(name)) {
+        const afterScheme = /^\S*\s+([\s\S]*)$/u.exec(composed)?.[1]?.trim();
+        if (afterScheme !== undefined && afterScheme !== '') values.add(afterScheme);
+      }
+    }
+  }
+  return createRedactor(values);
 }

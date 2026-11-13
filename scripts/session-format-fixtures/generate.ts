@@ -123,6 +123,8 @@ interface Target {
   readonly ownReplay: boolean;
   /** 這一版有沒有出過貨。沒給就看 `rev`：tag 是出過貨的。 */
   readonly released?: boolean;
+  /** 給這一版 CLI 的 `--patch`：檔名，相對於這支腳本所在的目錄。 */
+  readonly patch?: string;
 }
 
 /**
@@ -231,6 +233,14 @@ const TARGETS: readonly Target[] = [
     version: 55,
     triggers: ['mention'],
     ownReplay: true,
+  },
+  // 出貨那一版的寫入器寫一份有工具呼叫與摘要的日誌：patch 把摘要門檻壓到 3 則，工具結果回來後第二次呼叫之前摘要一次。
+  {
+    name: 'v56',
+    rev: 'v0.6.2',
+    version: 56,
+    ownReplay: true,
+    patch: 'summarize-early.v56.patch.yml',
   },
 ];
 interface MixedHalf {
@@ -696,7 +706,11 @@ function generate(target: Target): void {
   let tree: string | undefined;
   try {
     tree = target.rev === undefined ? ROOT : checkout(scratch, target.rev);
-    const directory = cli(tree, scratch);
+    const directory = cli(
+      tree,
+      scratch,
+      target.patch === undefined ? [] : ['--patch', join(HERE, target.patch)],
+    );
     if (headerVersion(directory, 'cli') !== target.version) {
       throw new Error(`${target.name} 寫出來的版本是 ${String(headerVersion(directory, 'cli'))}。`);
     }
