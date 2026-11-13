@@ -231,7 +231,7 @@ fn replace_spans(text: &str, patterns: &[&str]) -> String {
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for (start, end) in spans {
         match merged.last_mut() {
-            Some(last) if start < last.1 => last.1 = last.1.max(end),
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
             _ => merged.push((start, end)),
         }
     }
