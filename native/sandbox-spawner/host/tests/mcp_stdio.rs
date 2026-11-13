@@ -281,9 +281,13 @@ mod bridge {
     }
 
     fn assert_reaped(pid: i32) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let started = Instant::now();
         while !gone(pid) {
-            assert!(Instant::now() < deadline, "子行程 {pid} 沒有被收掉");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "子行程 {pid} 等了 {:?} 還沒被收掉",
+                started.elapsed()
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -316,6 +320,8 @@ mod bridge {
     }
 
     /// 握手過了、`tools/list` 還在等 server 回的時候橋關閉：這一代被丟下，子行程要收掉。
+    /// 橋關閉時 `serve` 回來、執行環境跟著拆掉，背景 task 來不及跑完梯度，最後收尾的是 `ChildGuard` 的 drop；
+    /// 這條釘的是那個收尾（`CancelOnDrop` 由下一條釘，它要執行環境還活著才看得到）。
     #[test]
     fn 列工具中途被丟下_子行程收掉() {
         let pid_file = pid_file("list-drop");
@@ -334,6 +340,49 @@ mod bridge {
         bridge.send(Command::Shutdown);
         wait_for(&bridge, |o| matches!(o, Outcome::Closed));
         assert_reaped(pid);
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+    }
+
+    /// 握手過了、`tools/list` 還在等的時候撞到啟動上限，**橋還活著**：連線的 future 被丟下，這一代沒走 `close`。
+    /// 握手之後子行程的擁有者是背景 task，正常路徑是 `CancelOnDrop` 喊停、服務迴圈結束、背景 task 照梯度收；
+    /// 沒有喊停，那個 task 永遠等不到結束，子行程就活到橋關閉（執行環境被拆時才落到 `ChildGuard` 的 drop）。
+    /// 所以這條要在橋關閉之前就看到子行程被收掉。
+    #[test]
+    fn 列工具撞到啟動上限_橋還活著_子行程由喊停收掉() {
+        let pid_file = pid_file("list-timeout");
+        let mark = format!("{pid_file}.mark");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let config = fake_config_with(&pid_file, &[("STALL_LIST", "1"), ("MARK", &mark)]);
+        let mut server = Server::parse(&config).expect("設定");
+        let Connection::Stdio(spec) = &mut server.connection else {
+            unreachable!();
+        };
+        // 握手要在上限內完成才會走到列工具；假 server 回得很快，2 秒留給慢的 runner。
+        spec.startup_timeout = Duration::from_secs(2);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        bridge.send(Command::Open {
+            open: 1,
+            server: Box::new(server),
+            elicitation: false,
+        });
+        // 先拿 pid：連線失敗後監督者會重連，pid 檔之後會被新的子行程覆寫。
+        wait_exists(&mark);
+        let pid = read_pid(&pid_file);
+        let opened = match wait_for(&bridge, |o| matches!(o, Outcome::Opened { .. })) {
+            Outcome::Opened { result, .. } => result.expect("沒寫 failOnStartupError 照樣 Ok"),
+            _ => unreachable!(),
+        };
+        assert!(
+            opened
+                .warning
+                .is_some_and(|w| w.contains("timed out after 2s")),
+            "要是啟動上限逾時"
+        );
+        assert_reaped(pid);
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
         let _ = std::fs::remove_file(&pid_file);
         let _ = std::fs::remove_file(&mark);
     }

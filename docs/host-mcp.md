@@ -153,7 +153,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   留下來要先過遮蔽器，這一版沒做。代價：server 起不來時，維運只看得到「Failed to connect to stdio server …」，看不到它自己印的原因。
   這不是終點，下一步（#2570 (b)）：握手失敗或提早退出時，留 stderr 尾端有限位元組、過遮蔽器後帶進錯誤；遮不乾淨就寫明為什麼不做。
 - 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，最後 `wait`。`Generation::close` 回來時子行程已經收掉，不留殭屍。
-- 被丟下的連線：子行程由 `ChildGuard` 擁有，連線的 future 在握手或列工具中途被丟下時，guard 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`；已經連上、還沒走 `close` 就被丟下的一代，drop 時喊停服務迴圈，背景 task 照上面的梯度收。
+- 被丟下的連線：握手完成前，子行程由連線的 future 裡的 `ChildGuard` 擁有，future 被丟下時 guard 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。握手完成後，擁有者換成背景 task（等服務迴圈結束、再照上面的梯度收）；這一代沒走 `close` 就被丟下時，`CancelOnDrop` 對服務迴圈喊停，背景 task 照梯度收，這是正常路徑（例如啟動上限在列工具中途到了、橋還活著）。橋關閉時 `serve` 回來、執行環境跟著拆掉，沒有人等背景 task 跑完梯度，最後落到 `ChildGuard` 的 drop（SIGKILL，不走梯度）。三條路各有一條測試。
 - 單行超過 16 MiB：rmcp 的行傳輸丟掉那一行（記一筆、連線不斷），server 等不到回應的那一次呼叫會等到逾時。
 - **args 與 env 在主機上看得到**：同一台主機上的其他使用者看得到 `/proc/<pid>/cmdline`（args），同 uid 的看得到 `/proc/<pid>/environ`（整份 env，含憑證值）。憑證不要放進 `args`。宿主只遮 `credentialEnv` 的值；父環境裡本來就有的值照舊不遮。
 - **池不回收**：池的鍵含整份成品（env 含憑證值），每組「憑證 × server」各起一個常駐子行程，活到橋關閉；憑證輪替之後舊行程帶著舊值繼續活。這跟 TS 那條路（子行程跟著對話行程死）不同，宿主是整台主機共用的。處理列在 #2570 (b)：最後一個使用者放掉時收掉 stdio 那一份，或給上限。
