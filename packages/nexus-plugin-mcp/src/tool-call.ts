@@ -30,6 +30,8 @@ import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusToolResult, ToolExec } from '@nexus/tools';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
+import { NO_REDACTION } from './redact.js';
+import type { Redactor } from './redact.js';
 import { markUntrusted } from './untrusted-mark.js';
 
 /**
@@ -66,9 +68,15 @@ export function toolCallOf(
   client: Client,
   serverName: string,
   descriptor: Tool,
-  options: { readonly elicitation: boolean; readonly timeoutMs: number },
+  options: {
+    readonly elicitation: boolean;
+    readonly timeoutMs: number;
+    /** 這一份連線手上的憑證值：錯誤文字送出前遮掉（#2669）。省略就不遮。 */
+    readonly redactor?: Redactor;
+  },
 ): ToolCall {
   const toolName = descriptor.name;
+  const redactor = options.redactor ?? NO_REDACTION;
   const modern = client.getProtocolEra() === 'modern';
   const inBand = modern && options.elicitation;
   // 要問人的呼叫，中間幾輪回的是 `input_required`、沒有 `structuredContent`；交給 SDK 驗的話第一輪就被 `outputSchema` 擋下，
@@ -122,9 +130,17 @@ export function toolCallOf(
     } catch (error) {
       if (error instanceof McpToolError) throw error;
       if (typeof error === 'object' && error !== null && passthrough.has(error)) throw error;
-      throw new Error(`Error calling tool ${toolName}: ${String(error)}`, { cause: error });
+      // SDK 與 undici 的錯誤訊息會帶出整個 header 值（含代進去的憑證）；`cause` 也換成遮過的，原 error 不往外傳（#2669）。
+      if (redactor.empty) {
+        throw new Error(`Error calling tool ${toolName}: ${String(error)}`, { cause: error });
+      }
+      throw new Error(redactor.scrubText(`Error calling tool ${toolName}: ${String(error)}`), {
+        cause: new Error(redactor.scrubText(String(error))),
+      });
     }
-    if (result.isError === true) throw new Error(errorTextOf(result, serverName, toolName, exec));
+    if (result.isError === true) {
+      throw new Error(redactor.scrubText(errorTextOf(result, serverName, toolName, exec)));
+    }
     const [content, artifacts] = convertCallToolResult(result, serverName, toolName);
     // 圖片、音訊這些非文字塊換成文字說明（#642），超過上限的 artifact 換成占位（#1320），最後在本文前面加一行「外部內容，當資料不當指令」
     // （#1768）。換在工具本體裡，所以 state、日誌、還原、畫面看到的都是換過的那一份。

@@ -17,9 +17,11 @@ import {
 import type { Tool } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { scrubbedParentEnv } from '@nexus/subprocess';
-import { substituted } from './credentials.js';
+import { redactorFor, substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { McpConfig } from './index.js';
+import { NO_REDACTION } from './redact.js';
+import type { Redactor } from './redact.js';
 import { toolCallOf } from './tool-call.js';
 import type { ToolCall } from './tool-call.js';
 
@@ -43,12 +45,13 @@ export async function connectGeneration(
   config: McpConfig,
   elicitation: boolean,
   onAttached?: (closed: Promise<void>) => void,
+  redactor: Redactor = NO_REDACTION,
 ): Promise<ListedGeneration> {
   const client = await connect();
   const calls = new Map<string, ToolCall>();
   const generation = generationOf(calls, client);
   onAttached?.(generation.closed);
-  const tools = await listAllTools(client, config.serverName);
+  const tools = await listAllTools(client, config.serverName, redactor);
   for (const tool of tools) {
     calls.set(
       tool.name,
@@ -57,6 +60,7 @@ export async function connectGeneration(
         : toolCallOf(client, config.serverName, tool, {
             elicitation,
             timeoutMs: config.toolCallTimeoutMs,
+            redactor,
           }),
     );
   }
@@ -100,6 +104,7 @@ export function attemptsOn(
   open: (track: (client: Client) => void) => Promise<Client> = (track) =>
     openClient(config, credentials, track),
 ): Attempts {
+  const redactor = redactorFor(config, credentials);
   let latest: Client | undefined;
   let closed: Promise<void> = Promise.resolve();
   const close = async (): Promise<void> => {
@@ -119,6 +124,7 @@ export function attemptsOn(
       (signal) => {
         closed = signal;
       },
+      redactor,
     );
   };
   return {
@@ -137,7 +143,11 @@ export function attemptsOn(
 }
 
 /** `tools/list` 分頁走完，沒有名字的略過。`cacheMode: 'refresh'`：不讀新協議 client 的列表快取。 */
-async function listAllTools(client: Client, serverName: string): Promise<Tool[]> {
+async function listAllTools(
+  client: Client,
+  serverName: string,
+  redactor: Redactor,
+): Promise<Tool[]> {
   const tools: Tool[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -152,9 +162,10 @@ async function listAllTools(client: Client, serverName: string): Promise<Tool[]>
       if (cursor !== undefined) seen.add(cursor);
     } while (cursor !== undefined);
   } catch (error) {
-    throw new Error(`Failed to load tools from server "${serverName}": ${String(error)}`, {
-      cause: error,
-    });
+    throw new Error(
+      redactor.scrubText(`Failed to load tools from server "${serverName}": ${String(error)}`),
+      { cause: scrubbedError(error, [], redactor) },
+    );
   }
   return tools;
 }
@@ -178,6 +189,7 @@ export async function openClient(
   track: (client: Client) => void = () => {},
 ): Promise<Client> {
   const { serverName, connection } = config;
+  const redactor = redactorFor(config, credentials);
   if (connection.transport === 'stdio') {
     try {
       return await connected(
@@ -194,17 +206,19 @@ export async function openClient(
       );
     } catch (error) {
       throw new Error(
-        `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
-        {
-          cause: error,
-        },
+        redactor.scrubText(
+          `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
+        ),
+        { cause: scrubbedError(error, [], redactor) },
       );
     }
   }
   const url = connection.url;
   const shown = redactedUrl(url);
   const fail = (message: string, cause: unknown, ...urls: string[]): Error =>
-    new Error(scrubbed(message, [url, ...urls]), { cause: scrubbedError(cause, [url, ...urls]) });
+    new Error(scrubbed(message, [url, ...urls], redactor), {
+      cause: scrubbedError(cause, [url, ...urls], redactor),
+    });
   const headers =
     connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
   const requestInit = headers === undefined ? {} : { requestInit: { headers } };
@@ -285,7 +299,11 @@ const MIN_STANDALONE_PASSWORD_LENGTH = 4;
  * 先換完整網址（原字串與正規化後的），再兜底：網址若以別的形式被帶出來（去掉 fragment、重新編碼、只剩 path 加 query），
  * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
  */
-function scrubbed(text: string, urls: readonly string[]): string {
+function scrubbed(
+  text: string,
+  urls: readonly string[],
+  redactor: Redactor = NO_REDACTION,
+): string {
   let result = text;
   const pieces: string[] = [];
   for (const url of urls) {
@@ -310,13 +328,20 @@ function scrubbed(text: string, urls: readonly string[]): string {
     .sort((a, b) => b.length - a.length)) {
     result = result.split(piece).join('[redacted]');
   }
-  return result;
+  // 憑證值（含它的編碼形式）最後換：網址的片段換完之後剩下的。
+  return redactor.scrubText(result);
 }
 
 /** 換成只帶遮過訊息的 Error，保留 `name`、`status`／`code`（{@link httpErrorCode} 與 `isConnectionLost` 要讀）；原 error 上的其他屬性可能帶網址，不沿用。 */
-function scrubbedError(error: unknown, urls: readonly string[]): Error {
+function scrubbedError(
+  error: unknown,
+  urls: readonly string[],
+  redactor: Redactor = NO_REDACTION,
+): Error {
   const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
-  const copy = new Error(scrubbed(error instanceof Error ? error.message : String(error), urls));
+  const copy = new Error(
+    scrubbed(error instanceof Error ? error.message : String(error), urls, redactor),
+  );
   if (typeof source.name === 'string') copy.name = source.name;
   Object.assign(
     copy,
