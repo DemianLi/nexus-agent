@@ -746,6 +746,16 @@ describe('超時的分類與措辭', () => {
     );
   });
 
+  it('量到的時間比預算少 1ms（計時器早響、取整後 99）→ 仍講預算，數字不低於預算', () => {
+    expect(formatToolTimeout('t', 99, 100)).toBe(
+      '工具 t 超時：等了 100ms，超過它宣告的 100ms 預算。',
+    );
+    expect(formatToolTimeout('t', 98, 100)).toBe('工具 t 超時：等了 98ms。');
+    expect(formatToolTimeout('t', 100, 100)).toBe(
+      '工具 t 超時：等了 100ms，超過它宣告的 100ms 預算。',
+    );
+  });
+
   it('**等得比預算短 → 不講預算**：先響的是別人的計時器，兩個數字擺一起像自相矛盾', () => {
     expect(formatToolTimeout('t', 121, 5000)).toBe('工具 t 超時：等了 121ms。');
   });
