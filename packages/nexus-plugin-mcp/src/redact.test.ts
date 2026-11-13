@@ -71,14 +71,14 @@ describe('遮蔽器：樣本之外的邊界', () => {
 describe('scrubbedCopy：遮訊息、保留連線層要讀的欄位', () => {
   const redactor = createRedactor(['FAKE-token-0001']);
 
-  it('訊息被遮；name、status、字串與數字的 code 都留著，cause 與其他屬性不沿用', () => {
+  it('訊息被遮；不含憑證的 name、code 與 status 原樣，cause 與其他屬性不沿用', () => {
     const original = Object.assign(new Error('x FAKE-token-0001 y', { cause: 'FAKE-token-0001' }), {
       name: 'TimeoutError',
       status: 504,
       code: 'REQUEST_TIMEOUT',
       extra: 'FAKE-token-0001',
     });
-    const copy = scrubbedCopy(original, redactor);
+    const copy = scrubbedCopy(original, redactor.scrubText);
     expect(copy.message).toBe(`x ${PLACEHOLDER} y`);
     expect(copy).toMatchObject({ name: 'TimeoutError', status: 504, code: 'REQUEST_TIMEOUT' });
     expect(copy.cause).toBeUndefined();
@@ -89,13 +89,32 @@ describe('scrubbedCopy：遮訊息、保留連線層要讀的欄位', () => {
     const timeout = Object.assign(new Error('timed out FAKE-token-0001'), {
       code: 'REQUEST_TIMEOUT',
     });
-    const wrapped = new Error('Error calling tool t', { cause: scrubbedCopy(timeout, redactor) });
+    const wrapped = new Error('Error calling tool t', {
+      cause: scrubbedCopy(timeout, redactor.scrubText),
+    });
     expect(isRequestTimeout(wrapped)).toBe(true);
     const named = Object.assign(new Error('FAKE-token-0001'), { name: 'TimeoutError' });
-    expect(isRequestTimeout(new Error('x', { cause: scrubbedCopy(named, redactor) }))).toBe(true);
+    expect(
+      isRequestTimeout(new Error('x', { cause: scrubbedCopy(named, redactor.scrubText) })),
+    ).toBe(true);
+  });
+
+  it('字串的 name 與 code 也過遮蔽；數字的 code 與 status 不遮（已知限制）', () => {
+    const original = Object.assign(new Error('x'), {
+      name: 'FAKE-token-0001',
+      code: 'E_FAKE-token-0001',
+    });
+    const copy = scrubbedCopy(original, redactor.scrubText);
+    expect(copy.name).toBe(PLACEHOLDER);
+    expect((copy as { code?: unknown }).code).toBe(`E_${PLACEHOLDER}`);
+    const numeric = scrubbedCopy(
+      Object.assign(new Error('x'), { code: 12345678, status: 12345678 }),
+      createRedactor(['12345678']).scrubText,
+    );
+    expect(numeric).toMatchObject({ code: 12345678, status: 12345678 });
   });
 
   it('不是 Error 的丟出物也遮', () => {
-    expect(scrubbedCopy('FAKE-token-0001', redactor).message).toBe(PLACEHOLDER);
+    expect(scrubbedCopy('FAKE-token-0001', redactor.scrubText).message).toBe(PLACEHOLDER);
   });
 });

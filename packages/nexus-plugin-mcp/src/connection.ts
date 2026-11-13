@@ -40,7 +40,7 @@ const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
  * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
  *
- * @param redactor - 這一份連線的憑證值：`tools/list` 失敗與工具錯誤送出前遮掉；省略就不遮。
+ * @param redactor - 這一份連線的憑證值：`tools/list` 失敗的訊息與 `cause` 送出前遮掉，經 {@link toolCallOf} 的工具呼叫錯誤也靠它遮（`rejectTaskRequired` 的錯誤還沒遮）。沒有憑證就傳 `NO_REDACTION`。
  */
 export async function connectGeneration(
   connect: () => Promise<Client>,
@@ -167,7 +167,7 @@ async function listAllTools(
   } catch (error) {
     throw new Error(
       redactor.scrubText(`Failed to load tools from server "${serverName}": ${String(error)}`),
-      { cause: redactor.empty ? error : scrubbedCopy(error, redactor) },
+      { cause: redactor.empty ? error : scrubbedCopy(error, redactor.scrubText) },
     );
   }
   return tools;
@@ -213,7 +213,7 @@ export async function openClient(
         redactor.scrubText(
           `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
         ),
-        { cause: redactor.empty ? error : scrubbedCopy(error, redactor) },
+        { cause: redactor.empty ? error : scrubbedCopy(error, redactor.scrubText) },
       );
     }
   }
@@ -221,7 +221,7 @@ export async function openClient(
   const shown = redactedUrl(url);
   const fail = (message: string, cause: unknown, ...urls: string[]): Error =>
     new Error(scrubbed(message, [url, ...urls], redactor), {
-      cause: scrubbedError(cause, [url, ...urls], redactor),
+      cause: scrubbedCopy(cause, (text) => scrubbed(text, [url, ...urls], redactor)),
     });
   const headers =
     connection.headers === undefined ? undefined : substituted(connection.headers, credentials);
@@ -330,21 +330,6 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
   }
   // 憑證值最後換：先換會切斷整段網址與 query 片段的比對。
   return redactor.scrubText(result);
-}
-
-/** 換成只帶遮過訊息的 Error，保留 `name`、`status`／`code`（{@link httpErrorCode} 與 `isConnectionLost` 要讀）；原 error 上的其他屬性可能帶網址，不沿用。 */
-function scrubbedError(error: unknown, urls: readonly string[], redactor: Redactor): Error {
-  const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
-  const copy = new Error(
-    scrubbed(error instanceof Error ? error.message : String(error), urls, redactor),
-  );
-  if (typeof source.name === 'string') copy.name = source.name;
-  Object.assign(
-    copy,
-    typeof source.status === 'number' && { status: source.status },
-    (typeof source.code === 'number' || typeof source.code === 'string') && { code: source.code },
-  );
-  return copy;
 }
 
 type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;

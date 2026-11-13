@@ -1,6 +1,6 @@
 /**
- * 錯誤與診斷不帶出憑證值（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。每條斷言原文、`encodeURIComponent` 與
- * form 編碼三種形式都不在；拿掉遮蔽，三條都會轉紅。
+ * 錯誤與診斷不帶出憑證值（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。第一組每條斷言原文、`encodeURIComponent` 與
+ * form 編碼三種形式都不在，並看得到 `[redacted]`；拿掉遮蔽，這些條都會轉紅。
  */
 
 import { fileURLToPath } from 'node:url';

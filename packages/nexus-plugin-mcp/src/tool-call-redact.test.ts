@@ -13,8 +13,16 @@ import { mcpConfigSchema } from './index.js';
 import { createRedactor, NO_REDACTION } from './redact.js';
 import { toolCallOf } from './tool-call.js';
 
-const SECRET = 'FAKE-token-0123456789';
+/** 帶空白、`/`、`+`：原文、`encodeURIComponent`、form 編碼三種形式互不相同。 */
+const SECRET = 'FAKE tok/en+0123456789';
 const redactor = createRedactor([SECRET]);
+
+/** 原文與兩種編碼形式都不在。 */
+const expectNoSecret = (text: string): void => {
+  expect(text).not.toContain(SECRET);
+  expect(text).not.toContain(encodeURIComponent(SECRET));
+  expect(text).not.toContain(encodeURIComponent(SECRET).replaceAll('%20', '+'));
+};
 
 const descriptor = { name: 'probe', inputSchema: { type: 'object' } } as Tool;
 const exec = { callId: 'call_1', signal: undefined } as unknown as ToolExec;
@@ -36,9 +44,12 @@ const caught = (work: Promise<unknown>): Promise<unknown> =>
 
 describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
   it('SDK 拋的錯誤：訊息遮掉；cause 換成遮過的副本、保留 code，連線層仍認得逾時', async () => {
-    const timeout = Object.assign(new Error(`timed out talking to ${SECRET}`), {
-      code: 'REQUEST_TIMEOUT',
-    });
+    const timeout = Object.assign(
+      new Error(`timed out talking to ${SECRET} / ${encodeURIComponent(SECRET)}`),
+      {
+        code: 'REQUEST_TIMEOUT',
+      },
+    );
     const call = toolCallOf(
       clientThat(() => {
         throw timeout;
@@ -49,8 +60,8 @@ describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
     );
     const thrown = (await caught(call({}, exec))) as Error;
     expect(thrown.message).toContain('[redacted]');
-    expect(thrown.message).not.toContain(SECRET);
-    expect((thrown.cause as Error).message).not.toContain(SECRET);
+    expectNoSecret(thrown.message);
+    expectNoSecret((thrown.cause as Error).message);
     expect(thrown.cause).not.toBe(timeout);
     expect(isRequestTimeout(thrown)).toBe(true);
   });
@@ -91,7 +102,25 @@ describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
     expect(thrown.name).toBe('McpToolError');
     expect(thrown.message).toContain('unexpected content type');
     expect(thrown.message).toContain('[redacted]');
-    expect(thrown.message).not.toContain(SECRET);
+    expectNoSecret(thrown.message);
+  });
+
+  it('參數驗不過（catch 路徑的 McpToolError，訊息帶 server 給的工具名）：遮掉、保留 class', async () => {
+    const named = {
+      name: `tool_${SECRET}`,
+      inputSchema: { type: 'object', required: ['x'] },
+    } as Tool;
+    const call = toolCallOf(
+      clientThat(() => ({ content: [] })),
+      'srv',
+      named,
+      options(),
+    );
+    const thrown = (await caught(call({}, exec))) as Error;
+    expect(thrown.name).toBe('McpToolError');
+    expect(thrown.message).toContain('Invalid arguments for MCP tool');
+    expect(thrown.message).toContain('[redacted]');
+    expectNoSecret(thrown.message);
   });
 
   it('成功結果裡認不得的內容類型：同樣遮掉、保留 class', async () => {
@@ -103,7 +132,7 @@ describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
     );
     const thrown = (await caught(call({}, exec))) as Error;
     expect(thrown.name).toBe('McpToolError');
-    expect(thrown.message).not.toContain(SECRET);
+    expectNoSecret(thrown.message);
   });
 });
 
@@ -118,15 +147,16 @@ describe('connectGeneration／openClient：連線階段的錯誤遮掉憑證值'
       getProtocolEra: () => 'legacy',
       getInstructions: () => undefined,
       onclose: undefined,
-      listTools: () => Promise.reject(new Error(`list refused for ${SECRET}`)),
+      listTools: () =>
+        Promise.reject(new Error(`list refused for ${SECRET} / ${encodeURIComponent(SECRET)}`)),
     } as unknown as Client;
     const thrown = (await caught(
       connectGeneration(() => Promise.resolve(failing), httpConfig, false, redactor),
     )) as Error;
     expect(thrown.message).toContain('Failed to load tools');
     expect(thrown.message).toContain('[redacted]');
-    expect(thrown.message).not.toContain(SECRET);
-    expect((thrown.cause as Error).message).not.toContain(SECRET);
+    expectNoSecret(thrown.message);
+    expectNoSecret((thrown.cause as Error).message);
   });
 
   it('tools/list 失敗、沒有憑證：cause 是原來那個 error', async () => {
@@ -152,7 +182,20 @@ describe('connectGeneration／openClient：連線階段的錯誤遮掉憑證值'
     )) as Error;
     expect(thrown.message).toContain('Failed to connect to stdio server');
     expect(thrown.message).toContain('[redacted]');
-    expect(thrown.message).not.toContain(SECRET);
-    expect((thrown.cause as Error).message).not.toContain(SECRET);
+    expectNoSecret(thrown.message);
+    expectNoSecret((thrown.cause as Error).message);
+  }, 30_000);
+
+  it('stdio 連線失敗、沒有憑證：訊息不遮、cause 是原來那個 error（不是副本）', async () => {
+    const config = mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'stdio', command: `/no/such/${SECRET}` },
+    });
+    const thrown = (await caught(openClient(config, new Map(), () => {}, NO_REDACTION))) as Error;
+    expect(thrown.message).toContain('Failed to connect to stdio server');
+    expect(thrown.message).toContain(SECRET);
+    expect(thrown.cause).toBeInstanceOf(Error);
+    // 副本的 stack 從 `scrubbedCopy` 起；原來那個 error 不經過它。
+    expect((thrown.cause as Error).stack).not.toContain('scrubbedCopy');
   }, 30_000);
 });

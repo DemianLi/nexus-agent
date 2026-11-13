@@ -7,11 +7,11 @@
  *   兩套對 `format` 這類關鍵字看法不同。驗完的值才送上線。
  * - **server 回 `isError` 時拋**，訊息是 server 給的文字（沒有 tool_call_id、只給參數直接呼叫時帶 `MCP tool … returned an error:` 前綴）：
  *   走圍堵那條「拋錯 → `工具 … 執行失敗：`」的出口，失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用。
- * - **其他失敗包成 `Error calling tool <name>: <原錯>`**，按了停止的也是（`index.ts` 的 `nexusToolOf` 再換成 `AbortError`）；
+ * - **其他失敗包成 `Error calling tool <name>: <String(原錯誤)>`**（遮法見下），按了停止的也是（`index.ts` 的 `nexusToolOf` 再換成 `AbortError`）；
  *   這個檔自己的錯誤句與 `exec.interrupt` 的掛起例外不包。逾時由 LangChain 的 `tool()`
  *   搶先收掉，這裡拋什麼都沒有人看。
- * - **錯誤與診斷送出前遮掉這一份連線手上的憑證值**（`options.redactor`，#2669）：`isError` 的文字、SDK 拋的錯誤（連同它的 `cause`，保留 `name`、`code`
- *   給逾時判斷讀）、`McpToolError` 的訊息；沒有憑證的連線不遮、`cause` 原樣。成功結果、反問的酬載還沒遮。
+ * - **錯誤與診斷送出前遮掉這一份連線手上的憑證值**（`options.redactor`，#2669）：`isError` 的文字、SDK 拋的錯誤（訊息遮過，`cause` 換成遮過的副本：保留 `name`、`code`
+ *   給逾時判斷讀，斷線判斷讀訊息）、`McpToolError` 的訊息；沒有憑證的連線不遮、`cause` 原樣。成功結果、反問的酬載還沒遮。
  * - **反問走 `exec.interrupt`**：預設的 `langgraph` 掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的
  *   server 每問一輪就重做一次，所以副作用要冪等。native 在行程內等，拿到答覆接著送下一輪，帶的是答之前那一輪的 `requestState`；
  *   這裡沒有人可以回答時（`HumanInputUnavailable`）每一題都回絕。
@@ -152,7 +152,7 @@ export function toolCallOf(
         throw new Error(`Error calling tool ${toolName}: ${String(error)}`, { cause: error });
       }
       throw new Error(redactor.scrubText(`Error calling tool ${toolName}: ${String(error)}`), {
-        cause: scrubbedCopy(error, redactor),
+        cause: scrubbedCopy(error, redactor.scrubText),
       });
     }
     if (result.isError === true) {
