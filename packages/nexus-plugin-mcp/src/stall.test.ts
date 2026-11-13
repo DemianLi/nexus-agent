@@ -23,6 +23,7 @@ import {
   mcpConfigSchema,
 } from './index.js';
 import type { McpPluginOptions } from './index.js';
+import { NO_REDACTION } from './redact.js';
 
 const SERVERS = [
   ['舊協議', fileURLToPath(new URL('./fixture-server.ts', import.meta.url))],
@@ -227,11 +228,13 @@ describe('卡死之後', () => {
       client,
       mcpConfigSchema.parse({ ...base, connection: { transport: 'stdio', command: 'x' } }),
       false,
+      NO_REDACTION,
     );
     const http = await connectGeneration(
       client,
       mcpConfigSchema.parse({ ...base, connection: { transport: 'http', url: 'http://x.test' } }),
       false,
+      NO_REDACTION,
     );
     expect(stdio.livenessTimeoutMs).toBe(7);
     expect(http.livenessTimeoutMs).toBeUndefined();

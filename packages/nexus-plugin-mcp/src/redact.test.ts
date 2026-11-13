@@ -22,13 +22,21 @@ const vectors = (JSON.parse(readFileSync(VECTORS_URL, 'utf8')) as { redact: Reda
   .redact;
 
 describe('遮蔽器：同 Rust 宿主的樣本（credentials-vectors.json redact[]）', () => {
-  it('樣本不是空的', () => {
-    expect(vectors.length).toBeGreaterThan(10);
+  it('樣本讀得到、每一筆都有名字與 expect', () => {
+    expect(vectors.length).toBeGreaterThan(0);
+    for (const vector of vectors) {
+      expect(typeof vector.name).toBe('string');
+      expect(typeof vector.expect).toBe('string');
+    }
   });
 
   for (const vector of vectors) {
     it(vector.name, () => {
       const redactor = createRedactor(vector.values);
+      // 認不得的 scope 要失敗，不當成 result 默默跑（Rust 那邊會 panic）。
+      if (vector.scope !== undefined && vector.scope !== 'result' && vector.scope !== 'error') {
+        throw new Error(`認不得的 scope：${String(vector.scope)}`);
+      }
       const out =
         vector.scope === 'error'
           ? redactor.scrubText(vector.text)

@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { createHostServicesPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startHttpFixture } from './http-fixtures.js';
-import { MCP_CREDENTIALS_SERVICE } from './index.js';
+import { startHttpFixture, startModernHttpEchoingCallErrors } from './http-fixtures.js';
+import { redactorFor } from './credentials.js';
+import { MCP_CREDENTIALS_SERVICE, mcpConfigSchema } from './index.js';
 import type { McpCredentials } from './index.js';
 import { loadPlugins, mcpEntry } from './load-with-adapter.js';
 
@@ -117,6 +118,39 @@ describe('憑證值不外漏（#2669）', () => {
     expect(thrown, '連線失敗該拋').toBeInstanceOf(Error);
     const text = everythingIn(thrown);
     expect(text).toContain('rejected');
+    expect(text).toContain('[redacted]');
+    expectNoSecret(text);
+  }, 30_000);
+
+  it('工具呼叫拋錯：握手與 tools/list 成功，tools/call 的 JSON-RPC 錯誤回顯 Authorization', async () => {
+    vi.stubEnv('NO_PROXY', '127.0.0.1');
+    const http = await startModernHttpEchoingCallErrors(
+      (request) => `rejected ${String(request.headers.authorization)} / ${ENCODED}`,
+    );
+    cleanup.push(() => http.close());
+    const loaded = await loadPlugins([
+      host(),
+      mcpEntry({
+        serverName: 'srv',
+        approval: { default: 'allow' },
+        connection: {
+          transport: 'http',
+          url: http.url,
+          headers: { Authorization: { credential: 'MCP_SECRET', prefix: 'Bearer ' } },
+        },
+      }),
+    ]);
+    cleanup.push(() => loaded.dispose());
+    const tool = loaded.registry.tools.resolve('mcp__srv__fetch_release_note')?.value;
+    if (tool === undefined) throw new Error('沒有註冊 mcp__srv__fetch_release_note');
+    const thrown = await tool.invoke({ topic: 'x' }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown, '工具該以錯誤收尾').toBeInstanceOf(Error);
+    const text = everythingIn(thrown);
+    expect(text).toContain('rejected');
+    expect(text).toContain('[redacted]');
     expectNoSecret(text);
   }, 30_000);
 
@@ -154,4 +188,63 @@ describe('憑證值不外漏（#2669）', () => {
     expect(text).toContain('[redacted]');
     expectNoSecret(text);
   }, 30_000);
+});
+
+describe('收集：header 代入後的整個值與 Authorization 的 scheme 後面那一段（同 Rust 宿主）', () => {
+  const TOKEN = 'xyz-FAKE-token-0001';
+  const redactorOf = (
+    headers: Record<string, { credential: string; prefix?: string }>,
+    value: string,
+  ) =>
+    redactorFor(
+      mcpConfigSchema.parse({
+        serverName: 'srv',
+        connection: { transport: 'http', url: 'http://127.0.0.1:1/mcp', headers },
+      }),
+      new Map([['CRED', value]]),
+    );
+
+  it('憑證值自己寫成「Bearer xyz」、沒寫 prefix：server 只回顯 xyz 也遮得到', () => {
+    const redactor = redactorOf({ Authorization: { credential: 'CRED' } }, `Bearer ${TOKEN}`);
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe('echo [redacted]');
+    expect(redactor.scrubText(`echo Bearer ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('prefix 加憑證：整個值連 prefix 遮成一段，只回顯憑證也遮得到', () => {
+    const redactor = redactorOf(
+      { Authorization: { credential: 'CRED', prefix: 'Bearer ' } },
+      TOKEN,
+    );
+    expect(redactor.scrubText(`Authorization: Bearer ${TOKEN}`)).toBe('Authorization: [redacted]');
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('Proxy-Authorization 與大小寫不分', () => {
+    const redactor = redactorOf(
+      { 'proxy-AUTHORIZATION': { credential: 'CRED' } },
+      `Basic ${TOKEN}`,
+    );
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('別的 header 不另收 scheme 後面那一段', () => {
+    const redactor = redactorOf({ 'X-Api-Key': { credential: 'CRED' } }, `Bearer ${TOKEN}`);
+    expect(redactor.scrubText(`echo ${TOKEN}`)).toBe(`echo ${TOKEN}`);
+    expect(redactor.scrubText(`echo Bearer ${TOKEN}`)).toBe('echo [redacted]');
+  });
+
+  it('沒有憑證引用 → 沒有東西要遮', () => {
+    const redactor = redactorFor(
+      mcpConfigSchema.parse({
+        serverName: 'srv',
+        connection: {
+          transport: 'http',
+          url: 'http://127.0.0.1:1/mcp',
+          headers: { A: 'literal-value-1' },
+        },
+      }),
+      new Map(),
+    );
+    expect(redactor.empty).toBe(true);
+  });
 });

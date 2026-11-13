@@ -10,6 +10,8 @@
  * - **其他失敗包成 `Error calling tool <name>: <原錯>`**，按了停止的也是（`index.ts` 的 `nexusToolOf` 再換成 `AbortError`）；
  *   這個檔自己的錯誤句與 `exec.interrupt` 的掛起例外不包。逾時由 LangChain 的 `tool()`
  *   搶先收掉，這裡拋什麼都沒有人看。
+ * - **錯誤與診斷送出前遮掉這一份連線手上的憑證值**（`options.redactor`，#2669）：`isError` 的文字、SDK 拋的錯誤（連同它的 `cause`，保留 `name`、`code`
+ *   給逾時判斷讀）、`McpToolError` 的訊息；沒有憑證的連線不遮、`cause` 原樣。成功結果、反問的酬載還沒遮。
  * - **反問走 `exec.interrupt`**：預設的 `langgraph` 掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的
  *   server 每問一輪就重做一次，所以副作用要冪等。native 在行程內等，拿到答覆接著送下一輪，帶的是答之前那一輪的 `requestState`；
  *   這裡沒有人可以回答時（`HumanInputUnavailable`）每一題都回絕。
@@ -30,7 +32,7 @@ import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusToolResult, ToolExec } from '@nexus/tools';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
-import { NO_REDACTION, scrubbedCopy } from './redact.js';
+import { scrubbedCopy } from './redact.js';
 import type { Redactor } from './redact.js';
 import { markUntrusted } from './untrusted-mark.js';
 
@@ -49,6 +51,20 @@ class McpToolError extends Error {
   override name = 'McpToolError';
 }
 
+/** 我們自己拋的 `McpToolError` 訊息帶 server 給的字串（工具名、內容類型、輸出驗證的欄位）：遮過再拋，保留 class。沒有值要遮就原樣。 */
+function scrubbedToolError(error: McpToolError, redactor: Redactor): McpToolError {
+  return redactor.empty ? error : new McpToolError(redactor.scrubText(error.message));
+}
+
+/** 跑 `work`，它拋的 `McpToolError` 遮過再往外拋；其他錯誤原樣。 */
+function scrubbingToolError<T>(redactor: Redactor, work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    throw error instanceof McpToolError ? scrubbedToolError(error, redactor) : error;
+  }
+}
+
 type Block = { readonly type: string; readonly [key: string]: unknown };
 type Validate = (value: unknown) => Promise<{ value: unknown; issues?: readonly Issue[] }>;
 interface Issue {
@@ -62,7 +78,7 @@ interface Issue {
  * @param client - 這一代的 SDK client，已經連上。
  * @param serverName - 設定裡的 server 名字，進錯誤句與反問的酬載。
  * @param descriptor - `tools/list` 列出的那一筆，原樣。
- * @param options - `elicitation`：有人可以回答；`timeoutMs`：一次請求的逾時。
+ * @param options - `elicitation`：有人可以回答；`timeoutMs`：一次請求的逾時；`redactor`：錯誤文字要遮的憑證值。
  */
 export function toolCallOf(
   client: Client,
@@ -71,12 +87,12 @@ export function toolCallOf(
   options: {
     readonly elicitation: boolean;
     readonly timeoutMs: number;
-    /** SDK 拋的錯誤與 `isError` 結果的文字送出前遮掉這一份連線手上的憑證值（#2669）。省略就不遮。 */
-    readonly redactor?: Redactor;
+    /** 錯誤送出前遮掉這一份連線手上的憑證值（#2669）：SDK 拋的錯誤、`isError` 結果的文字、我們自己拋的 `McpToolError`（訊息帶 server 給的字串）。沒有憑證就傳 `NO_REDACTION`。 */
+    readonly redactor: Redactor;
   },
 ): ToolCall {
   const toolName = descriptor.name;
-  const redactor = options.redactor ?? NO_REDACTION;
+  const { redactor } = options;
   const modern = client.getProtocolEra() === 'modern';
   const inBand = modern && options.elicitation;
   // 要問人的呼叫，中間幾輪回的是 `input_required`、沒有 `structuredContent`；交給 SDK 驗的話第一輪就被 `outputSchema` 擋下，
@@ -128,9 +144,9 @@ export function toolCallOf(
         }
       }
     } catch (error) {
-      if (error instanceof McpToolError) throw error;
+      if (error instanceof McpToolError) throw scrubbedToolError(error, redactor);
       if (typeof error === 'object' && error !== null && passthrough.has(error)) throw error;
-      // SDK 拋的錯誤可能帶出憑證（server 回顯 token、undici 帶出 header 值）；有值要遮時 `cause` 也換成遮過的（保留 `name`、`code`，
+      // SDK 拋的錯誤可能帶出憑證（例如 server 回的 JSON-RPC 錯誤回顯 token）；有值要遮時 `cause` 也換成遮過的（保留 `name`、`code`，
       // 逾時判斷要讀），原 error 不往外傳（#2669）。
       if (redactor.empty) {
         throw new Error(`Error calling tool ${toolName}: ${String(error)}`, { cause: error });
@@ -140,9 +156,14 @@ export function toolCallOf(
       });
     }
     if (result.isError === true) {
-      throw new Error(redactor.scrubText(errorTextOf(result, serverName, toolName, exec)));
+      const text = scrubbingToolError(redactor, () =>
+        errorTextOf(result, serverName, toolName, exec),
+      );
+      throw new Error(redactor.scrubText(text));
     }
-    const [content, artifacts] = convertCallToolResult(result, serverName, toolName);
+    const [content, artifacts] = scrubbingToolError(redactor, () =>
+      convertCallToolResult(result, serverName, toolName),
+    );
     // 圖片、音訊這些非文字塊換成文字說明（#642），超過上限的 artifact 換成占位（#1320），最後在本文前面加一行「外部內容，當資料不當指令」
     // （#1768）。換在工具本體裡，所以 state、日誌、還原、畫面看到的都是換過的那一份。
     const marked = markUntrusted(projectNonText(content) ?? content);

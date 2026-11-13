@@ -20,7 +20,7 @@ import { scrubbedParentEnv } from '@nexus/subprocess';
 import { redactorFor, substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { McpConfig } from './index.js';
-import { NO_REDACTION, PLACEHOLDER } from './redact.js';
+import { PLACEHOLDER, scrubbedCopy } from './redact.js';
 import type { Redactor } from './redact.js';
 import { toolCallOf } from './tool-call.js';
 import type { ToolCall } from './tool-call.js';
@@ -46,8 +46,8 @@ export async function connectGeneration(
   connect: () => Promise<Client>,
   config: McpConfig,
   elicitation: boolean,
+  redactor: Redactor,
   onAttached?: (closed: Promise<void>) => void,
-  redactor: Redactor = NO_REDACTION,
 ): Promise<ListedGeneration> {
   const client = await connect();
   const calls = new Map<string, ToolCall>();
@@ -124,10 +124,10 @@ export function attemptsOn(
         }),
       config,
       elicitation,
+      redactor,
       (signal) => {
         closed = signal;
       },
-      redactor,
     );
   };
   return {
@@ -167,7 +167,7 @@ async function listAllTools(
   } catch (error) {
     throw new Error(
       redactor.scrubText(`Failed to load tools from server "${serverName}": ${String(error)}`),
-      { cause: scrubbedError(error, [], redactor) },
+      { cause: redactor.empty ? error : scrubbedCopy(error, redactor) },
     );
   }
   return tools;
@@ -213,7 +213,7 @@ export async function openClient(
         redactor.scrubText(
           `Failed to connect to stdio server "${serverName}" in auto mode: ${String(error)}`,
         ),
-        { cause: scrubbedError(error, [], redactor) },
+        { cause: redactor.empty ? error : scrubbedCopy(error, redactor) },
       );
     }
   }
@@ -303,11 +303,7 @@ const MIN_STANDALONE_PASSWORD_LENGTH = 4;
  * 先換完整網址（原字串與正規化後的），再兜底：網址若以別的形式被帶出來（去掉 fragment、重新編碼、只剩 path 加 query），
  * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
  */
-function scrubbed(
-  text: string,
-  urls: readonly string[],
-  redactor: Redactor = NO_REDACTION,
-): string {
+function scrubbed(text: string, urls: readonly string[], redactor: Redactor): string {
   let result = text;
   const pieces: string[] = [];
   for (const url of urls) {
@@ -337,11 +333,7 @@ function scrubbed(
 }
 
 /** 換成只帶遮過訊息的 Error，保留 `name`、`status`／`code`（{@link httpErrorCode} 與 `isConnectionLost` 要讀）；原 error 上的其他屬性可能帶網址，不沿用。 */
-function scrubbedError(
-  error: unknown,
-  urls: readonly string[],
-  redactor: Redactor = NO_REDACTION,
-): Error {
+function scrubbedError(error: unknown, urls: readonly string[], redactor: Redactor): Error {
   const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
   const copy = new Error(
     scrubbed(error instanceof Error ? error.message : String(error), urls, redactor),
