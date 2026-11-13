@@ -5,8 +5,8 @@
  */
 
 import type { Client } from '@modelcontextprotocol/client';
-import { describe, expect, it } from 'vitest';
-import { attemptsOn, connectGeneration } from './connection.js';
+import { describe, expect, it, vi } from 'vitest';
+import { attemptsOn, connectGeneration, openClient, redactedUrl } from './connection.js';
 import { mcpConfigSchema } from './index.js';
 
 const config = mcpConfigSchema.parse({
@@ -130,5 +130,96 @@ describe('attemptsOn 的 abandon', () => {
     handshake = false;
     await expect(attempts.connect()).rejects.toThrow('handshake failed');
     expect(await settled(attempts.abandon())).toBe(true);
+  });
+});
+
+describe('連線失敗不外洩網址裡的帳密與 query', () => {
+  /** 沿 message、stack、cause 鏈與可列舉屬性收集所有文字。 */
+  function everything(error: unknown, seen = new Set<unknown>()): string {
+    if (typeof error !== 'object' || error === null || seen.has(error)) return String(error);
+    seen.add(error);
+    const record = error as Record<string, unknown>;
+    const parts = [String(record['message']), String(record['stack'])];
+    for (const key of Object.getOwnPropertyNames(error)) parts.push(everything(record[key], seen));
+    return parts.join('\n');
+  }
+
+  it('redactedUrl 只留 scheme、host、port、path', () => {
+    expect(redactedUrl('https://u:p@example.test:8443/a/mcp?token=T#frag')).toBe(
+      'https://example.test:8443/a/mcp',
+    );
+    expect(redactedUrl('garbage SECRET')).toBe('<invalid url>');
+  });
+
+  it('帶帳密與 token 的網址（繞過 schema 直接組設定）連不上：訊息、cause、stack 都找不到', async () => {
+    const config = {
+      serverName: 'srv',
+      connection: {
+        transport: 'http',
+        url: 'http://alice:hunter2-pw@127.0.0.1:1/mcp?token=SECRET-TOKEN#SECRET-FRAG',
+      },
+    } as unknown as Parameters<typeof openClient>[0];
+    const logged: string[] = [];
+    const spies = (['log', 'warn', 'error', 'info', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(' '));
+      }),
+    );
+    let thrown: unknown;
+    try {
+      await openClient(config, new Map());
+    } catch (error) {
+      thrown = error;
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const text = everything(thrown) + logged.join('\n');
+    for (const secret of ['alice', 'hunter2-pw', 'SECRET-TOKEN', 'SECRET-FRAG']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(text).toContain('127.0.0.1:1/mcp');
+  });
+
+  it('不帶帳密但帶 query token 的網址連不上：query 也不印', async () => {
+    const config = mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'http', url: 'http://127.0.0.1:1/mcp?token=SECRET-TOKEN' },
+    });
+    const thrown = await openClient(config, new Map()).catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(everything(thrown)).not.toContain('SECRET-TOKEN');
+  });
+});
+
+describe('錯誤訊息裡網址以別的形式出現時也遮掉', () => {
+  const config = {
+    serverName: 'srv',
+    connection: {
+      transport: 'http',
+      url: 'http://alice:pw@127.0.0.1:1/mcp?token=SECRET-TOKEN#SECRET-FRAG',
+    },
+  } as unknown as Parameters<typeof openClient>[0];
+
+  it('只帶 path 加 query、或 query 單獨出現的文字，連線失敗的訊息裡也找不到', async () => {
+    const real = globalThis.fetch;
+    // 假的 fetch 把網址拆成片段放進錯誤，模擬 SDK 或 fetch 不帶完整網址的寫法。
+    globalThis.fetch = (() =>
+      Promise.reject(
+        new TypeError('bad /mcp?token=SECRET-TOKEN and #SECRET-FRAG for alice:pw@host'),
+      )) as typeof fetch;
+    let thrown: unknown;
+    try {
+      thrown = await openClient(config, new Map()).catch((error: unknown) => error);
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const error = thrown as Error;
+    const text = `${error.message}\n${String((error.cause as Error | undefined)?.message)}`;
+    for (const secret of ['SECRET-TOKEN', 'SECRET-FRAG', 'alice:pw@']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(text).toContain('[redacted]');
   });
 });
