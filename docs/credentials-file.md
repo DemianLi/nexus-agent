@@ -22,6 +22,8 @@
 | `modes[]` | 八進位的權限（字串），`accept` 表示一份內容合法的檔在這個權限下能不能讀。 |
 | `mcpValue[]` | MCP 憑證值的檢查（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。`use` 是 `env` 或 `header`，`value` 是原值；`accept` 為真時修剪後的值要等於 `trimmed`，為假時拒絕原因要是 `reason`（`empty`、`too-short`、`nul`、`header-chars`），有 `secret` 的，拒絕訊息裡不能出現它。TS 與 Rust 都跑。 |
 | `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主跑；TS 的遮蔽器在 [#2669](https://github.com/DemianLi/nexus-agent/issues/2669)，到時候跑同一組，現在只檢查欄位。 |
+| `stdioRow[]` | TS 的 `hostStdioConnection`（`apps/harness/src/mcp-host-stdio-row.ts`）輸出的 stdio 那一列（#2570 D2b-2）。`input` 是它的輸入（`credentialEnv` 的每個值是憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。 |
+| `stdioHost[]` | 只給 Rust：`connection` 直接交 `Server::parse`，`error` 是 `null`（要收）或訊息要含的字。釘宿主自己的拒絕（相對路徑、credentialEnv 不在 env、憑證值沒修剪或太短）。 |
 
 樣本裡的值都是假的；長得像 key 的都帶 `FAKE`。
 

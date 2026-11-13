@@ -259,9 +259,15 @@ fn parse_stdio(
                         "stdio 的 connection.credentialEnv 的 {name} 不在 connection.env 裡"
                     ));
                 };
-                check_value(value, Use::Env).map_err(|rejection| {
+                let checked = check_value(value, Use::Env).map_err(|rejection| {
                     rejection.message(&format!("connection.env.{name}（憑證）"))
                 })?;
+                // 檢查的是修剪後的值，交給子行程與遮蔽器的是 `env` 裡的原值：兩者不同，server 回顯修剪後的值就遮不到。TS 只交修剪過的。
+                if checked != *value {
+                    return Err(format!(
+                        "stdio 的 connection.env.{name}（憑證）頭尾有空白或換行，宿主只收 TS 修剪過的值"
+                    ));
+                }
                 if !credential_env.iter().any(|n| n == name) {
                     credential_env.push(name.to_string());
                 }

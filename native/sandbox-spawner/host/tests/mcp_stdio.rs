@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::fixture;
@@ -27,9 +28,10 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"0"}}}\n' "$id";;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id";;
+      if [ -n "$STALL_LIST" ]; then : > "$MARK"; else
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id"; fi;;
     *'"method":"tools/call"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s home=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${HOME-unset}";;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"secret=%s plain=%s probe=%s"}],"isError":false}}\n' "$id" "$FAKE_SECRET" "$PLAIN" "${NEXUS_STDIO_TEST_PROBE-unset}";;
   esac
 done
 "#;
@@ -42,9 +44,13 @@ fn pid_file(tag: &str) -> String {
     )
 }
 
-/// 假 server 的設定。`PATH` 給 `sed` 用；`HOME` 故意不給，驗證宿主沒有把自己的環境帶進去。
+/// 假 server 的設定。`PATH` 給 `sed` 用；`NEXUS_STDIO_TEST_PROBE` 故意不給（測試行程自己有設），驗證宿主沒有把自己的環境帶進去。
 fn fake_config(pid_file: &str) -> Value {
-    json!({
+    fake_config_with(pid_file, &[])
+}
+
+fn fake_config_with(pid_file: &str, extra_env: &[(&str, &str)]) -> Value {
+    let mut config = json!({
         "serverName": "fake",
         "connection": {
             "transport": "stdio",
@@ -58,7 +64,11 @@ fn fake_config(pid_file: &str) -> Value {
             },
             "credentialEnv": ["FAKE_SECRET"],
         },
-    })
+    });
+    for (name, value) in extra_env {
+        config["connection"]["env"][*name] = json!(value);
+    }
+    config
 }
 
 fn parse_err(connection: Value) -> String {
@@ -219,6 +229,7 @@ mod bridge {
     fn 連上_環境只有交來的那份_憑證值被遮_收線不留子行程() {
         let pid_file = pid_file("bridge");
         let _ = std::fs::remove_file(&pid_file);
+        std::env::set_var("NEXUS_STDIO_TEST_PROBE", "from-the-host-env");
         let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
         let opened = open(&bridge, &fake_config(&pid_file)).expect("連得上");
         assert!(opened.tools.contains("\"echo\""), "{}", opened.tools);
@@ -228,8 +239,8 @@ mod bridge {
         let shown = result["content"][0]["text"].as_str().expect("文字");
         assert_eq!(
             shown,
-            format!("secret=[redacted] plain={PLAIN} home=unset"),
-            "憑證值遮掉、字面值照舊、宿主自己的 HOME 沒有帶進去"
+            format!("secret=[redacted] plain={PLAIN} probe=unset"),
+            "憑證值遮掉、字面值照舊、宿主自己的環境變數沒有帶進去"
         );
 
         let pid: i32 = std::fs::read_to_string(&pid_file)
@@ -245,6 +256,86 @@ mod bridge {
             std::thread::sleep(Duration::from_millis(20));
         }
         let _ = std::fs::remove_file(&pid_file);
+    }
+
+    fn read_pid(pid_file: &str) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "子行程沒寫 pid");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn wait_exists(path: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !Path::new(path).exists() {
+            assert!(Instant::now() < deadline, "等不到 {path}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn assert_reaped(pid: i32) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !gone(pid) {
+            assert!(Instant::now() < deadline, "子行程 {pid} 沒有被收掉");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// 握手還在等 server 回的時候橋關閉：連線的 future 被丟下，子行程要被殺掉並 `wait` 掉。
+    #[test]
+    fn 握手中途被丟下_子行程被殺並收掉() {
+        let pid_file = pid_file("handshake-drop");
+        let _ = std::fs::remove_file(&pid_file);
+        let config = json!({
+            "serverName": "fake",
+            "connection": {
+                "transport": "stdio",
+                "command": "/bin/sh",
+                "args": ["-c", "echo $$ > \"$PIDFILE\"; exec sleep 300"],
+                "env": { "PIDFILE": pid_file },
+            },
+        });
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        bridge.send(Command::Open {
+            open: 1,
+            server: Box::new(Server::parse(&config).expect("設定")),
+            elicitation: false,
+        });
+        let pid = read_pid(&pid_file);
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        assert_reaped(pid);
+        let _ = std::fs::remove_file(&pid_file);
+    }
+
+    /// 握手過了、`tools/list` 還在等 server 回的時候橋關閉：這一代被丟下，子行程要收掉。
+    #[test]
+    fn 列工具中途被丟下_子行程收掉() {
+        let pid_file = pid_file("list-drop");
+        let mark = format!("{pid_file}.mark");
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
+        let config = fake_config_with(&pid_file, &[("STALL_LIST", "1"), ("MARK", &mark)]);
+        let bridge = Bridge::start(client(), Vec::new()).expect("起橋");
+        bridge.send(Command::Open {
+            open: 1,
+            server: Box::new(Server::parse(&config).expect("設定")),
+            elicitation: false,
+        });
+        wait_exists(&mark);
+        let pid = read_pid(&pid_file);
+        bridge.send(Command::Shutdown);
+        wait_for(&bridge, |o| matches!(o, Outcome::Closed));
+        assert_reaped(pid);
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&mark);
     }
 
     #[test]
@@ -292,7 +383,7 @@ fn reap_收掉不理_eof_的子行程() {
     };
     runtime.block_on(async {
         let stdio::Spawned { child, transport } = stdio::spawn(&spec).expect("起得來");
-        let pid = child.id() as i32;
+        let pid = child.id().expect("還沒收走") as i32;
         drop(transport);
         let started = Instant::now();
         stdio::reap(child).await;
@@ -302,4 +393,64 @@ fn reap_收掉不理_eof_的子行程() {
         // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時已經 `wait` 過，查不到才對。
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "子行程還在");
     });
+}
+
+fn vectors() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../credentials-vectors.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("讀樣本檔")).expect("樣本檔是 JSON")
+}
+
+fn parse_connection(connection: &Value) -> Result<Server, String> {
+    Server::parse(&json!({ "serverName": "a", "connection": connection }))
+}
+
+/// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
+#[test]
+fn 樣本_stdioRow_ts_交出的列宿主收得下() {
+    let doc = vectors();
+    let mut seen = 0;
+    for vector in doc["stdioRow"].as_array().expect("stdioRow") {
+        let name = vector["name"].as_str().expect("name");
+        let Some(row) = vector["ts"].get("row") else {
+            assert!(
+                vector["ts"]["error"].is_string(),
+                "{name}：要有 row 或 error"
+            );
+            continue;
+        };
+        let server = parse_connection(row).unwrap_or_else(|e| panic!("{name}：{e}"));
+        let Connection::Stdio(stdio) = &server.connection else {
+            panic!("{name}：要是 stdio");
+        };
+        assert_eq!(
+            stdio.credential_env,
+            row["credentialEnv"]
+                .as_array()
+                .expect("credentialEnv")
+                .iter()
+                .map(|v| v.as_str().expect("字串").to_string())
+                .collect::<Vec<_>>(),
+            "{name}"
+        );
+        seen += 1;
+    }
+    assert!(seen >= 5, "有 row 的樣本太少：{seen}");
+}
+
+#[test]
+fn 樣本_stdioHost_宿主自己的拒絕() {
+    let doc = vectors();
+    for vector in doc["stdioHost"].as_array().expect("stdioHost") {
+        let name = vector["name"].as_str().expect("name");
+        let result = parse_connection(&vector["connection"]);
+        match vector["error"].as_str() {
+            None => {
+                result.unwrap_or_else(|e| panic!("{name}：{e}"));
+            }
+            Some(want) => {
+                let err = result.err().unwrap_or_else(|| panic!("{name}：要拒絕"));
+                assert!(err.contains(want), "{name}：{err} 不含 {want}");
+            }
+        }
+    }
 }

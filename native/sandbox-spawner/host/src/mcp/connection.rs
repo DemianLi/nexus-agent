@@ -12,7 +12,9 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
+use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::model::{
     ClientCapabilities, Implementation, InitializeRequestParams, PaginatedRequestParams,
     ProtocolVersion, RequestMetaObject, Tool,
@@ -24,7 +26,7 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use tokio::sync::{watch, Notify};
 
-use super::config::{Connection, Server};
+use super::config::{Connection, Server, Stdio};
 use super::pool;
 use super::redact::scrub;
 use super::stdio;
@@ -67,11 +69,29 @@ pub struct Listed {
     pub instructions: String,
 }
 
+/// 這一代被丟下（沒走 [`pool::Generation::close`]，例如列工具中途連線的 future 被停掉）時也要收：服務迴圈與 stdio 子行程在背景 task 裡，
+/// 不喊停就沒人收。
+struct CancelOnDrop(Option<rmcp::service::RunningServiceCancellationToken>);
+
+impl CancelOnDrop {
+    fn cancel(&mut self) {
+        if let Some(token) = self.0.take() {
+            token.cancel();
+        }
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 /// 連上的一代。transport 關了（`closed` 變 `true`）或呼叫端判斷線（[`pool::Generation::lost_signal`]）就算掉線。
 pub struct Generation {
     pub caller: Caller,
     pub listed: Listed,
-    cancel: rmcp::service::RunningServiceCancellationToken,
+    cancel: CancelOnDrop,
     closed: watch::Receiver<bool>,
     /// 子行程收掉了（沒有子行程的一代一開始就是 `true`）。
     reaped: watch::Receiver<bool>,
@@ -104,7 +124,8 @@ impl pool::Generation for Generation {
 
     /// 回來時 rmcp 的服務迴圈已經結束，stdio 的子行程也已經收掉。
     async fn close(self) {
-        self.cancel.cancel();
+        let mut cancel = self.cancel;
+        cancel.cancel();
         let mut closed = self.closed;
         let _ = closed.wait_for(|c| *c).await;
         let mut reaped = self.reaped;
@@ -147,65 +168,117 @@ pub fn call_meta(modern: bool, elicitation: bool) -> Option<RequestMetaObject> {
     .ok()
 }
 
+/// stdio 這一代從起行程到列完工具最久等多久，逾時就收掉子行程、回連線失敗。server 讀了 stdin 卻不回時，沒有它 `Open` 永遠不回、子行程活到橋關閉。
+/// 30 秒：夠 `npx` 冷啟動下載與起動；dsh 的 `startupTimeoutMs` 沒有預設值（要使用者設，`mcp-client/src/index.ts:170`），TS 這邊沒有上限。HTTP 沒有這個上限。
+pub const STDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn client_info() -> InitializeRequestParams {
+    InitializeRequestParams::new(
+        ClientCapabilities::default(),
+        Implementation::new(CLIENT_NAME, CLIENT_VERSION),
+    )
+}
+
+fn lifecycle() -> ClientLifecycleMode {
+    ClientLifecycleMode::Auto {
+        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+    }
+}
+
 /// 連一代。錯誤訊息照 TS，網址不帶 query，`secrets` 一律換掉。握手之後的步驟失敗時，回錯前先收掉這一代（stdio 連子行程一起）。
 pub async fn connect(
     server: &Server,
     http: &reqwest::Client,
     secrets: &[String],
 ) -> Result<Generation, String> {
-    let fail = |what: String| scrub(&what, secrets);
-    let info = InitializeRequestParams::new(
-        ClientCapabilities::default(),
-        Implementation::new(CLIENT_NAME, CLIENT_VERSION),
-    );
-    let mode = ClientLifecycleMode::Auto {
-        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-        legacy_version: Some(ProtocolVersion::V_2025_11_25),
-    };
-    let (running, child) = match &server.connection {
+    match &server.connection {
         Connection::Http { url, headers } => {
-            let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-            config.retry_config = Arc::new(NeverRetry::default());
-            config.reinit_on_expired_session = false;
-            config.max_sse_event_size = MAX_RESPONSE_BYTES;
-            config.custom_headers = headers.iter().cloned().collect::<HashMap<_, _>>();
-            let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
-            let running = info
-                .serve_with_lifecycle(transport, mode)
-                .await
-                .map_err(|err| {
-                    fail(format!(
-                        "Failed to connect to streamable HTTP server \"{}, url: {}\" in auto mode: {}",
-                        server.name,
-                        server.shown_url(),
-                        describe(&err)
-                    ))
-                })?;
-            (running, None)
+            connect_http(server, url, headers, http, secrets).await
         }
         Connection::Stdio(spec) => {
-            let stdio::Spawned { child, transport } = stdio::spawn(spec).map_err(|err| {
-                fail(format!(
-                    "Failed to connect to stdio server \"{}\" in auto mode: {}",
-                    server.name,
-                    describe(&err)
-                ))
-            })?;
-            match info.serve_with_lifecycle(transport, mode).await {
-                Ok(running) => (running, Some(child)),
-                Err(err) => {
-                    stdio::reap(child).await;
-                    return Err(fail(format!(
-                        "Failed to connect to stdio server \"{}\" in auto mode: {}",
+            match tokio::time::timeout(STDIO_STARTUP_TIMEOUT, connect_stdio(server, spec, secrets))
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(scrub(
+                    &format!(
+                        "Failed to connect to stdio server \"{}\" in auto mode: timed out after {} s",
                         server.name,
-                        describe(&err)
-                    )));
-                }
+                        STDIO_STARTUP_TIMEOUT.as_secs()
+                    ),
+                    secrets,
+                )),
             }
         }
+    }
+}
+
+async fn connect_http(
+    server: &Server,
+    url: &reqwest::Url,
+    headers: &[(HeaderName, HeaderValue)],
+    http: &reqwest::Client,
+    secrets: &[String],
+) -> Result<Generation, String> {
+    let fail = |what: String| scrub(&what, secrets);
+    let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+    config.retry_config = Arc::new(NeverRetry::default());
+    config.reinit_on_expired_session = false;
+    config.max_sse_event_size = MAX_RESPONSE_BYTES;
+    config.custom_headers = headers.iter().cloned().collect::<HashMap<_, _>>();
+    let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
+    let running = client_info()
+        .serve_with_lifecycle(transport, lifecycle())
+        .await
+        .map_err(|err| {
+            fail(format!(
+                "Failed to connect to streamable HTTP server \"{}, url: {}\" in auto mode: {}",
+                server.name,
+                server.shown_url(),
+                describe(&err)
+            ))
+        })?;
+    fill(server, assemble(running, None)).await.map_err(fail)
+}
+
+async fn connect_stdio(
+    server: &Server,
+    spec: &Stdio,
+    secrets: &[String],
+) -> Result<Generation, String> {
+    let fail = |what: String| scrub(&what, secrets);
+    let failed = |err: &dyn std::error::Error| {
+        fail(format!(
+            "Failed to connect to stdio server \"{}\" in auto mode: {}",
+            server.name,
+            describe(err)
+        ))
     };
+    let stdio::Spawned { child, transport } = stdio::spawn(spec).map_err(|err| failed(&err))?;
+    // `child` 在 guard 裡：這個 future 在任何一個 await 被丟下，子行程都會被殺並收掉。
+    let running = match client_info()
+        .serve_with_lifecycle(transport, lifecycle())
+        .await
+    {
+        Ok(running) => running,
+        Err(err) => {
+            stdio::reap(child).await;
+            return Err(failed(&err));
+        }
+    };
+    fill(server, assemble(running, Some(child)))
+        .await
+        .map_err(fail)
+}
+
+/// 握手完的服務變成一代：背景 task 等服務迴圈結束，通報 `closed`，再收子行程（有的話），通報 `reaped`。
+fn assemble(
+    running: rmcp::service::RunningService<RoleClient, InitializeRequestParams>,
+    child: Option<stdio::ChildGuard>,
+) -> Generation {
     let peer = running.peer().clone();
-    let cancel = running.cancellation_token();
+    let cancel = CancelOnDrop(Some(running.cancellation_token()));
     let (closed_tx, closed) = watch::channel(false);
     let (reaped_tx, reaped) = watch::channel(child.is_none());
     tokio::spawn(async move {
@@ -216,7 +289,7 @@ pub async fn connect(
             reaped_tx.send_replace(true);
         }
     });
-    let generation = Generation {
+    Generation {
         caller: Caller {
             modern: peer
                 .peer_info()
@@ -231,8 +304,7 @@ pub async fn connect(
         closed,
         reaped,
         lost: Arc::default(),
-    };
-    fill(server, generation).await.map_err(fail)
+    }
 }
 
 /// 列工具、查指引，填進這一代；失敗就先把它收掉。
