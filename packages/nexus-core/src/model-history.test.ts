@@ -14,7 +14,12 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import { deriveConversation, ReplayFold } from './conversation-replay.js';
+import {
+  deriveConversation,
+  ReplayFold,
+  TOOL_NOT_STARTED_TEXT,
+  TOOL_OUTCOME_UNKNOWN_TEXT,
+} from './conversation-replay.js';
 import type { DerivedConversation } from './conversation-replay.js';
 import { toBaseMessage } from './langchain-message-adapter.js';
 import { toLoggedMessage } from './logged-message.js';
@@ -447,5 +452,40 @@ describe('deriveUnsummarized：沒套摘要的那一串', () => {
     const raw = cache.deriveUnsummarized(log.events);
     expect(raw.kind).toBe('unreplayable');
     expect(raw).toEqual(cache.derive(log.events));
+  });
+
+  it('還在等結果的那一批：缺的由 pendingMessages 補成 closer，開始過的與沒開始過的字句不同，結果到了就換掉', () => {
+    const log = new SessionLog('history');
+    log.append('turn/start', { kind: 'message', text: '跑' });
+    log.append('model/start', {});
+    log.append('assistant/message', {
+      message: asking('', [
+        ['a', 'echo'],
+        ['b', 'echo'],
+        ['c', 'echo'],
+      ]),
+    });
+    log.append('model/end', {});
+    log.append('tool/call', { callId: 'a', name: 'echo', arguments: '{}' });
+    log.append('tool/result', {
+      callId: 'a',
+      isError: false,
+      message: result('a', 'echo', '回聲'),
+    });
+    log.append('tool/call', { callId: 'b', name: 'echo', arguments: '{}' });
+    const cache = new ModelHistoryCache();
+    const tail = () => texts(cache.deriveUnsummarized(log.events)).slice(-3);
+
+    // a 有結果；b 開始了沒結果；c 沒開始。三則都在，順序照 tool_calls。
+    expect(tail()).toEqual(['回聲', TOOL_OUTCOME_UNKNOWN_TEXT, TOOL_NOT_STARTED_TEXT]);
+    // 同一份推導，`derive` 補的是同一批。
+    expect(texts(cache.derive(log.events)).slice(-3)).toEqual(tail());
+
+    log.append('tool/result', {
+      callId: 'b',
+      isError: false,
+      message: result('b', 'echo', '乙結果'),
+    });
+    expect(tail()).toEqual(['回聲', '乙結果', TOOL_NOT_STARTED_TEXT]);
   });
 });
