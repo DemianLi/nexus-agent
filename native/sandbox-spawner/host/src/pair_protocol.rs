@@ -6,11 +6,13 @@
 //!
 //! 組合行程 listen，葉子連進來，一對之間同時一條連線。驗過的連線斷了，葉子不重連；組合行程要等監督行程再給一次 `leaf{pid}` 才再收。葉子的第一框是 `hello`，帶 [`PAIR_PROTOCOL_VERSION`]。不帶 token：身分是
 //! `SO_PEERCRED` 的 pid（uid 要跟組合行程相同）等於監督行程用 `leaf{pid}` 告訴組合行程的那一個。pid 與版本都對，組合行程回 `hello`；
-//! 否則回 `rejected{code, reason}` 再關。從組合行程收下連線那一步起 [`HELLO_TIMEOUT`] 內沒送 `hello`、或送了但葉子的 pid 還沒到，也回 `rejected` 再關。
+//! 否則回 `rejected{code, reason}` 再關。從組合行程收下連線那一步起 [`PID_WAIT`] 內沒送 `hello`、或送了但葉子的 pid 還沒到，也回 `rejected` 再關：
+//! 收下的連線在 [`PID_WAIT`] 內有 `hello` 或 `rejected` 排出去（對方先關、或這一端開不了 fd 的除外）。葉子等回覆的時限從 connect 成功起算，不得短於 [`HELLO_TIMEOUT`]；
+//! [`PID_WAIT`] 比它短，差的那一段留給 `rejected` 寫過去，葉子才不會在收到之前自己先逾時。
 //!
 //! 葉子那一端要把三種結局分開回報，三種要找的人不一樣：
 //!
-//! - 「對方不在」：連不上、送出 `hello` 後 [`HELLO_TIMEOUT`] 內沒收到 `hello`、或沒收到任何框就斷。組合行程沒起來或卡住了。
+//! - 「對方不在」：連不上、connect 成功後等滿時限（至少 [`HELLO_TIMEOUT`]）沒收到任何框、或沒收到任何框就斷。組合行程沒起來或卡住了。
 //! - 「被拒」：收到 `retry_later` 以外的 `rejected`，含 `code` 解不開的。
 //! - 「一直被要求稍後再試」：每次都收到 `retry_later`，到啟動時限仍沒進去。組合行程在，但一直不收這條連線
 //!   （pid 不是它手上的、pid 沒到、等著驗的滿了）；回報時帶上試了幾次或經過多久，以及最後一次的 `reason`。
@@ -94,8 +96,13 @@ pub const MAX_CHUNK_BYTES: usize = 128 * 1024;
 /// 每個方向同時最多幾個呼叫。
 pub const MAX_CALLS: usize = 64;
 
-/// 從組合行程收下連線那一步起，這麼久內要送 `hello`、葉子的 pid 也要到，否則回 `rejected`；葉子送出 `hello` 後等組合行程回 `hello` 也是這麼久。
+/// 葉子 connect 成功後等組合行程回 `hello` 或 `rejected`，至少等這麼久。
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 從組合行程收下連線那一步起，這麼久內要送 `hello`、葉子的 pid 也要到，否則回 `rejected`。要比 [`HELLO_TIMEOUT`] 短。
+pub const PID_WAIT: Duration = Duration::from_secs(3);
+
+const _: () = assert!(PID_WAIT.as_millis() < HELLO_TIMEOUT.as_millis());
 
 /// 排著沒寫出去的位元組到了這麼多，先不發新的 `call`、`chunk`、`result`；對方送來的照讀。
 pub const OUTBOX_PAUSE: usize = 512 * 1024;
@@ -522,6 +529,7 @@ mod tests {
             number("helloTimeoutMs"),
             Some(HELLO_TIMEOUT.as_millis() as u64)
         );
+        assert_eq!(number("pidWaitMs"), Some(PID_WAIT.as_millis() as u64));
         assert_eq!(number("outboxPauseBytes"), Some(OUTBOX_PAUSE as u64));
         assert_eq!(number("outboxLimitBytes"), Some(OUTBOX_LIMIT as u64));
         assert_eq!(

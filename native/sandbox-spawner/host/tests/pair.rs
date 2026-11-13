@@ -7,9 +7,9 @@ use nexus_host::host_protocol::{CallError, ErrorCode};
 use nexus_host::json::{self, Value};
 use nexus_host::pair::{Disconnect, Failure, Pair, PairEvent, SendError, CLOSE_TIMEOUT};
 use nexus_host::pair_protocol::{
-    decode, encode, CallRef, PairMessage, RejectCode, Side, HELLO_TIMEOUT, MAX_CALLS,
-    MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT,
-    OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION, STALL_TIMEOUT,
+    decode, encode, CallRef, PairMessage, RejectCode, Side, MAX_CALLS, MAX_CHUNK_BYTES, MAX_FRAME,
+    MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT, OUTBOX_PAUSE,
+    PAIR_PROTOCOL_VERSION, PID_WAIT, STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::protocol::{frame, take_frame_within};
 use nexus_sandbox_spawner::supervisor::process::READ_BUDGET;
@@ -280,7 +280,7 @@ fn a_connection_ahead_of_the_leaf_pid_waits_for_it() {
     let mut rig = Rig::new("early");
     let mut leaf = Leaf::connect(&rig);
     leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
-    rig.elapsed = HELLO_TIMEOUT - Duration::from_millis(1);
+    rig.elapsed = PID_WAIT - Duration::from_millis(1);
     assert_eq!(rig.events(), []);
     assert_eq!(leaf.read(&mut rig), []);
     rig.pair.set_leaf(me());
@@ -304,13 +304,10 @@ fn a_hello_is_rejected_at_the_deadline_when_no_leaf_pid_came() {
     let mut rig = Rig::new("no-pid");
     let mut leaf = Leaf::connect(&rig);
     leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
-    assert_eq!(
-        rig.pair.deadline(rig.start),
-        Some(rig.start + HELLO_TIMEOUT)
-    );
-    rig.elapsed = HELLO_TIMEOUT - Duration::from_millis(1);
+    assert_eq!(rig.pair.deadline(rig.start), Some(rig.start + PID_WAIT));
+    rig.elapsed = PID_WAIT - Duration::from_millis(1);
     assert_eq!(rig.events(), []);
-    rig.elapsed = HELLO_TIMEOUT;
+    rig.elapsed = PID_WAIT;
     assert_eq!(rig.events(), [refused("還沒有葉子的 pid")]);
     leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "還沒有葉子的 pid");
     assert_eq!(rig.pair.deadline(rig.start), None);
@@ -323,10 +320,10 @@ fn a_connection_that_never_says_hello_is_rejected_at_the_deadline() {
     let mut leaf = Leaf::connect(&rig);
     // 時限從這一端收下連線的那一步起算。
     rig.step();
-    rig.elapsed = HELLO_TIMEOUT - Duration::from_millis(1);
+    rig.elapsed = PID_WAIT - Duration::from_millis(1);
     assert_eq!(rig.events(), []);
     assert_eq!(leaf.read(&mut rig), []);
-    rig.elapsed = HELLO_TIMEOUT;
+    rig.elapsed = PID_WAIT;
     assert_eq!(rig.events(), [refused("沒有在時限內送 hello")]);
     leaf.assert_rejected(&mut rig, RejectCode::Protocol, "沒有在時限內送 hello");
 }
@@ -1056,7 +1053,7 @@ fn the_deadline_is_now_while_something_waits_for_the_next_step() {
     // 等著的連線送過 hello，pid 一到就判得出來：不用等到它的時限。
     let mut ahead = Leaf::connect(&rig);
     ahead.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
-    assert_eq!(rig.pair.deadline(now), Some(rig.start + HELLO_TIMEOUT));
+    assert_eq!(rig.pair.deadline(now), Some(rig.start + PID_WAIT));
     rig.pair.set_leaf(me());
     assert_eq!(rig.pair.deadline(now), Some(now));
     assert_eq!(rig.events(), [PairEvent::Connected { pid: me() }]);

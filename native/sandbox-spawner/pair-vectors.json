@@ -8,6 +8,7 @@
   "maxChunkBytes": 131072,
   "maxCalls": 64,
   "helloTimeoutMs": 5000,
+  "pidWaitMs": 3000,
   "outboxPauseBytes": 524288,
   "outboxLimitBytes": 2097152,
   "stallTimeoutMs": 30000,

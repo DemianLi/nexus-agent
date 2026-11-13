@@ -5,7 +5,7 @@
 //! 這時 [`Pair::deadline`] 回現在。
 //!
 //! - 監督行程給的葉子 pid 用 [`Pair::set_leaf`] 交進來。pid 還沒到就連進來的連線先留著，從收下它的那一次 `step` 起最多留
-//!   [`HELLO_TIMEOUT`]：監督行程同時起一對，葉子可能比 `leaf{pid}` 先到。
+//!   [`PID_WAIT`]：監督行程同時起一對，葉子可能比 `leaf{pid}` 先到。
 //! - 同時只有一條驗過的連線。它斷了之後 pid 作廢，要等下一次 [`Pair::set_leaf`] 才再收。
 //! - 葉子發來的呼叫，還沒到 [`MAX_CALLS`]、`parent` 在跑、method 在 [`Pair::new`] 給的清單裡，才交給擁有的一方（[`PairEvent::Call`]），
 //!   由它用 [`Pair::chunk`]、[`Pair::finish`] 回；不合的這裡直接回錯。
@@ -25,9 +25,9 @@ use std::time::{Duration, Instant};
 use crate::host_protocol::{CallError, ErrorCode};
 use crate::json::Value;
 use crate::pair_protocol::{
-    decode, encode, CallRef, PairMessage, RejectCode, Side, HELLO_TIMEOUT, MAX_CALLS,
-    MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT,
-    OUTBOX_PAUSE, PAIR_PROTOCOL_VERSION, STALL_TIMEOUT,
+    decode, encode, CallRef, PairMessage, RejectCode, Side, MAX_CALLS, MAX_CHUNK_BYTES, MAX_FRAME,
+    MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT, OUTBOX_PAUSE,
+    PAIR_PROTOCOL_VERSION, PID_WAIT, STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::supervisor::process::Chan;
 
@@ -362,7 +362,7 @@ impl Pair {
         }
     }
 
-    /// 沒有 fd 動也要叫 [`Pair::step`] 的時刻：最早到期的 `hello` 時限、等著關的連線的時限、accept 退避完的時刻、送端停滯的時限；
+    /// 沒有 fd 動也要叫 [`Pair::step`] 的時刻：最早到期的等著驗身分的時限（[`PID_WAIT`]）、等著關的連線的時限、accept 退避完的時刻、送端停滯的時限；
     /// 有還沒交出去的事、有等著的連線已經判得出來、該報 [`PairEvent::Resumed`]、送端剛有東西排著還沒開始計時、或驗過的那條有一端已經關了，就是現在。
     pub fn deadline(&self, now: Instant) -> Option<Instant> {
         let decided = self.pending.iter().any(|pending| match self.leaf {
@@ -380,7 +380,7 @@ impl Pair {
         let ready = decided || resumed || untimed || closed || !self.events.is_empty();
         self.pending
             .iter()
-            .map(|pending| pending.opened + HELLO_TIMEOUT)
+            .map(|pending| pending.opened + PID_WAIT)
             .chain(self.closing.iter().map(|closing| closing.until))
             .chain(self.accept_after)
             .chain(stall)
@@ -704,7 +704,7 @@ impl Pair {
                 Err(err) => return Verdict::Refuse(RejectCode::Protocol, err.0),
             }
         }
-        let expired = now >= pending.opened + HELLO_TIMEOUT;
+        let expired = now >= pending.opened + PID_WAIT;
         match (pending.hello, self.leaf) {
             (Some(version), _) if version != PAIR_PROTOCOL_VERSION => {
                 Verdict::Refuse(RejectCode::Version, "版本不對")

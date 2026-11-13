@@ -3,7 +3,7 @@
  * `native/sandbox-spawner/host/src/pair_protocol.rs`，兩邊對同一份向量檔（`native/sandbox-spawner/pair-vectors.json`）測。
  *
  * 框是 `u32` LE 長度加內容，內容是一份 JSON 物件，`type` 分種類。葉子連上後先送 `hello`，收到組合行程的 `hello` 才送別的；
- * 收到 `rejected` 照它的 `code`（{@link PAIR_REJECT_CODES}）反應：`retry_later` 退避後重連，到啟動時限仍沒進去是「一直被要求稍後再試」；其餘（含 `code` 解不開的）是被拒，不重試（規則在 Rust 那一側的檔頭）；連不上、送出 `hello` 後 {@link PAIR_HELLO_TIMEOUT_MS} 內沒收到 `hello`、或沒收到任何框就斷，是對方不在。這三種結局要分開回報。之後兩邊都能發 `call` 與 `cancel`，
+ * 收到 `rejected` 照它的 `code`（{@link PAIR_REJECT_CODES}）反應：`retry_later` 退避後重連，到啟動時限仍沒進去是「一直被要求稍後再試」；其餘（含 `code` 解不開的）是被拒，不重試（規則在 Rust 那一側的檔頭）；連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，是對方不在。這三種結局要分開回報。之後兩邊都能發 `call` 與 `cancel`，
  * 由對方回 `chunk` 與 `result`；`side` 是發起那一次的一方（`'l'` 葉子、`'m'` 組合行程），一次呼叫的識別是 `(side, id)`。
  *
  * 這裡只管一框的形狀：誰能送哪一種、哪些 `id` 還在跑，由連線那一層判。Rust 那一側的 JSON 是 `serde_json`：`\u` 跳脫的代理對要成對、
@@ -34,8 +34,11 @@ export const PAIR_MAX_CHUNK_BYTES = 128 * 1024;
 /** 每個方向同時最多幾個呼叫。 */
 export const PAIR_MAX_CALLS = 64;
 
-/** 葉子送出 `hello` 後等組合行程回 `hello` 最多多久。 */
+/** 葉子 connect 成功後等組合行程回 `hello` 或 `rejected`，至少等這麼久。 */
 export const PAIR_HELLO_TIMEOUT_MS = 5_000;
+
+/** 組合行程收下連線後最多這麼久就排出 `hello` 或 `rejected`（葉子先關的除外）；比 {@link PAIR_HELLO_TIMEOUT_MS} 短。 */
+export const PAIR_PID_WAIT_MS = 3_000;
 
 /** 排著沒寫出去的位元組到了這麼多，先不發新的 `call`、`chunk`、`result`；對方送來的照讀。 */
 export const PAIR_OUTBOX_PAUSE_BYTES = 512 * 1024;
