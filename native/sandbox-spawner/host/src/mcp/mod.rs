@@ -8,4 +8,5 @@ pub mod connection;
 pub mod pool;
 pub mod redact;
 pub mod service;
+pub mod stdio;
 pub mod supervisor;
