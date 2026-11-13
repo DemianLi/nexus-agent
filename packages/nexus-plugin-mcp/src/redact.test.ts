@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { createRedactor, NO_REDACTION, PLACEHOLDER } from './redact.js';
+import { isRequestTimeout } from './connection.js';
+import { createRedactor, NO_REDACTION, PLACEHOLDER, scrubbedCopy } from './redact.js';
 
 /** 與 Rust 宿主共用的樣本（唯讀引用，樣本不一致就回報，不在這裡改）。 */
 const VECTORS_URL = new URL(
@@ -56,5 +57,37 @@ describe('遮蔽器：樣本之外的邊界', () => {
     const redactor = createRedactor(['😀FAKE-0001😀']);
     const escaped = '\\ud83d\\ude00FAKE-0001\\ud83d\\ude00';
     expect(redactor.redactText(`x ${escaped} y`)).toBe(`x ${PLACEHOLDER} y`);
+  });
+});
+
+describe('scrubbedCopy：遮訊息、保留連線層要讀的欄位', () => {
+  const redactor = createRedactor(['FAKE-token-0001']);
+
+  it('訊息被遮；name、status、字串與數字的 code 都留著，cause 與其他屬性不沿用', () => {
+    const original = Object.assign(new Error('x FAKE-token-0001 y', { cause: 'FAKE-token-0001' }), {
+      name: 'TimeoutError',
+      status: 504,
+      code: 'REQUEST_TIMEOUT',
+      extra: 'FAKE-token-0001',
+    });
+    const copy = scrubbedCopy(original, redactor);
+    expect(copy.message).toBe(`x ${PLACEHOLDER} y`);
+    expect(copy).toMatchObject({ name: 'TimeoutError', status: 504, code: 'REQUEST_TIMEOUT' });
+    expect(copy.cause).toBeUndefined();
+    expect(Object.keys(copy)).not.toContain('extra');
+  });
+
+  it('遮過的錯誤連線層仍認得是逾時（工具呼叫逾時要觸發探活）', () => {
+    const timeout = Object.assign(new Error('timed out FAKE-token-0001'), {
+      code: 'REQUEST_TIMEOUT',
+    });
+    const wrapped = new Error('Error calling tool t', { cause: scrubbedCopy(timeout, redactor) });
+    expect(isRequestTimeout(wrapped)).toBe(true);
+    const named = Object.assign(new Error('FAKE-token-0001'), { name: 'TimeoutError' });
+    expect(isRequestTimeout(new Error('x', { cause: scrubbedCopy(named, redactor) }))).toBe(true);
+  });
+
+  it('不是 Error 的丟出物也遮', () => {
+    expect(scrubbedCopy('FAKE-token-0001', redactor).message).toBe(PLACEHOLDER);
   });
 });

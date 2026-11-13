@@ -20,7 +20,7 @@ import { scrubbedParentEnv } from '@nexus/subprocess';
 import { redactorFor, substituted } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { McpConfig } from './index.js';
-import { NO_REDACTION } from './redact.js';
+import { NO_REDACTION, PLACEHOLDER } from './redact.js';
 import type { Redactor } from './redact.js';
 import { toolCallOf } from './tool-call.js';
 import type { ToolCall } from './tool-call.js';
@@ -39,6 +39,8 @@ const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
  *
  * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
+ *
+ * @param redactor - 這一份連線的憑證值：`tools/list` 失敗與工具錯誤送出前遮掉；省略就不遮。
  */
 export async function connectGeneration(
   connect: () => Promise<Client>,
@@ -101,10 +103,11 @@ export function attemptsOn(
   config: McpConfig,
   elicitation: boolean,
   credentials: ResolvedCredentials,
-  open: (track: (client: Client) => void) => Promise<Client> = (track) =>
-    openClient(config, credentials, track),
+  open?: (track: (client: Client) => void) => Promise<Client>,
 ): Attempts {
   const redactor = redactorFor(config, credentials);
+  const openOne =
+    open ?? ((track: (client: Client) => void) => openClient(config, credentials, track, redactor));
   let latest: Client | undefined;
   let closed: Promise<void> = Promise.resolve();
   const close = async (): Promise<void> => {
@@ -116,7 +119,7 @@ export function attemptsOn(
     closed = Promise.resolve();
     return connectGeneration(
       () =>
-        open((client) => {
+        openOne((client) => {
           latest = client;
         }),
       config,
@@ -181,15 +184,16 @@ function rejectTaskRequired(rawName: string): ToolCall {
 }
 
 /**
- * 開一個 SDK client 並連上這台 server。`track` 在連線之前就拿到 client：握手卡住時，呼叫端收得掉它。連不上就收掉 client 與 transport 再拋。
+ * 開一個 SDK client 並連上這台 server。`track` 在連線之前就拿到 client：握手卡住時，呼叫端收得掉它。連不上就收掉 client 與 transport 再拋，
+ * 拋的錯誤訊息與 `cause` 已遮掉網址的帳密、query、fragment 與這份連線的憑證值。`redactor` 省略就照 `credentials` 現建。
  */
 export async function openClient(
   config: McpConfig,
   credentials: ResolvedCredentials,
   track: (client: Client) => void = () => {},
+  redactor: Redactor = redactorFor(config, credentials),
 ): Promise<Client> {
   const { serverName, connection } = config;
-  const redactor = redactorFor(config, credentials);
   if (connection.transport === 'stdio') {
     try {
       return await connected(
@@ -326,9 +330,9 @@ function scrubbed(
   for (const piece of pieces
     .filter((piece) => piece.length > 1)
     .sort((a, b) => b.length - a.length)) {
-    result = result.split(piece).join('[redacted]');
+    result = result.split(piece).join(PLACEHOLDER);
   }
-  // 憑證值（含它的編碼形式）最後換：網址的片段換完之後剩下的。
+  // 憑證值最後換：先換會切斷整段網址與 query 片段的比對。
   return redactor.scrubText(result);
 }
 
@@ -346,7 +350,7 @@ function scrubbedError(
   Object.assign(
     copy,
     typeof source.status === 'number' && { status: source.status },
-    typeof source.code === 'number' && { code: source.code },
+    (typeof source.code === 'number' || typeof source.code === 'string') && { code: source.code },
   );
   return copy;
 }

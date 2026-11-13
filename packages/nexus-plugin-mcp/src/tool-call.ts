@@ -30,7 +30,7 @@ import { isHumanInputUnavailable } from '@nexus/tools';
 import type { JsonValue, NexusToolResult, ToolExec } from '@nexus/tools';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
-import { NO_REDACTION } from './redact.js';
+import { NO_REDACTION, scrubbedCopy } from './redact.js';
 import type { Redactor } from './redact.js';
 import { markUntrusted } from './untrusted-mark.js';
 
@@ -71,7 +71,7 @@ export function toolCallOf(
   options: {
     readonly elicitation: boolean;
     readonly timeoutMs: number;
-    /** 這一份連線手上的憑證值：錯誤文字送出前遮掉（#2669）。省略就不遮。 */
+    /** SDK 拋的錯誤與 `isError` 結果的文字送出前遮掉這一份連線手上的憑證值（#2669）。省略就不遮。 */
     readonly redactor?: Redactor;
   },
 ): ToolCall {
@@ -130,12 +130,13 @@ export function toolCallOf(
     } catch (error) {
       if (error instanceof McpToolError) throw error;
       if (typeof error === 'object' && error !== null && passthrough.has(error)) throw error;
-      // SDK 與 undici 的錯誤訊息會帶出整個 header 值（含代進去的憑證）；`cause` 也換成遮過的，原 error 不往外傳（#2669）。
+      // SDK 拋的錯誤可能帶出憑證（server 回顯 token、undici 帶出 header 值）；有值要遮時 `cause` 也換成遮過的（保留 `name`、`code`，
+      // 逾時判斷要讀），原 error 不往外傳（#2669）。
       if (redactor.empty) {
         throw new Error(`Error calling tool ${toolName}: ${String(error)}`, { cause: error });
       }
       throw new Error(redactor.scrubText(`Error calling tool ${toolName}: ${String(error)}`), {
-        cause: new Error(redactor.scrubText(String(error))),
+        cause: scrubbedCopy(error, redactor),
       });
     }
     if (result.isError === true) {

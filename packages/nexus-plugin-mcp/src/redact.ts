@@ -1,7 +1,8 @@
 /**
- * MCP 連線手上已解析的憑證值，從送回對話行程的文字裡遮掉（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)、
- * [#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。規則、形式與樣本同 Rust 宿主的 `host/src/mcp/redact.rs`，
+ * MCP 連線手上已解析的憑證值，從錯誤與診斷的文字裡遮掉（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)、
+ * [#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。規則、形式與樣本同 Rust 宿主的 `native/sandbox-spawner/host/src/mcp/redact.rs`，
  * 兩邊跑同一份 `native/sandbox-spawner/credentials-vectors.json` 的 `redact[]`（見 `redact.test.ts`）。
+ * 成功結果用的 {@link Redactor.redactText} 還沒有呼叫端，只有共用樣本在跑。
  *
  * 做法：每個值連同它的幾種編碼形式，在原文上找出所有命中的區間，合併重疊與相鄰的，一次換成 `[redacted]`。
  * 不是逐值各換一次，所以兩個重疊的值不會漏，占位字串也不會被後面的值打中。
@@ -15,7 +16,7 @@
 /** 占位字串。 */
 export const PLACEHOLDER = '[redacted]';
 
-/** 修剪後至少要有幾個 code point 才算「夠長」：同宿主的 `MIN_VALUE_CODE_POINTS`。 */
+/** 至少幾個 code point 的值才連成功結果一起遮；與 harness 的 `MIN_MCP_CREDENTIAL_CODE_POINTS`、Rust 宿主的 `MIN_VALUE_CODE_POINTS` 同值。 */
 const MIN_LONG_VALUE_CODE_POINTS = 8;
 
 /** 一組要遮的值。 */
@@ -38,7 +39,7 @@ export const NO_REDACTION: Redactor = {
 /**
  * 收一組值。空字串丟掉；重複的併成一個。
  *
- * 憑證值短於門檻會在值檢查被拒，所以不到門檻的只可能是呼叫端另外交進來的字面值：它們只遮錯誤與診斷（{@link Redactor.scrubText}）。
+ * harness 的憑證服務會拒收短值（`assertUsableMcpCredential`）；別的服務若交進短值，只遮錯誤與診斷（{@link Redactor.scrubText}），不遮成功結果。
  */
 export function createRedactor(values: Iterable<string>): Redactor {
   const everywhere = new Set<string>();
@@ -98,7 +99,7 @@ function percent(value: string, upper: boolean, form: boolean): string {
 
 /**
  * JSON 字串裡的樣子（不含兩側的引號）。`ascii` 為真時非 ASCII 字元也寫成 `\uXXXX`（補充平面用代理對）；
- * 為假時只跳脫 `"`、`\` 與控制字元，跟 `JSON.stringify` 一樣。
+ * 為假時只跳脫 `"`、`\` 與控制字元，跟 `JSON.stringify` 一樣（孤立的代理碼元除外，那由 `ascii` 的形式涵蓋）。
  */
 function jsonEscaped(value: string, upper: boolean, ascii: boolean): string {
   const unit = (code: number): string => {
@@ -152,4 +153,22 @@ function replaceSpans(text: string, patterns: readonly string[]): string {
     at = end;
   }
   return out + text.slice(at);
+}
+
+/**
+ * 換成只帶遮過訊息的 Error，保留 `name`、`status` 與 `code`（含字串碼）：連線層靠它們認逾時與斷線（`isRequestTimeout`、`httpErrorCode`）。
+ * 原 error 上的其他屬性與 `cause` 可能帶憑證，不沿用。
+ */
+export function scrubbedCopy(error: unknown, redactor: Redactor): Error {
+  const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
+  const copy = new Error(
+    redactor.scrubText(error instanceof Error ? error.message : String(error)),
+  );
+  if (typeof source.name === 'string') copy.name = source.name;
+  Object.assign(
+    copy,
+    typeof source.status === 'number' && { status: source.status },
+    (typeof source.code === 'number' || typeof source.code === 'string') && { code: source.code },
+  );
+  return copy;
 }

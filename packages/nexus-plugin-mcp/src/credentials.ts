@@ -131,7 +131,8 @@ export function substituted(
  *
  * 整個 header 值也要收：undici 拒收 header 時錯誤訊息帶的是整個值，`Authorization: Bearer <憑證>` 與只回顯 token 的 server 兩種都要遮。
  * 只收**憑證引用**解出來的東西：設定裡直接寫的字串值不是憑證，不進來（宿主那邊分不出來才一律收，見 `docs/credentials-file.md`）。
- * 一份連線的值在建立時就定了（值換了，池鍵的指紋換、開的是另一份連線，各帶自己的遮蔽器），所以遮蔽器隨連線建一次。
+ * 一份連線的值在建立時就定了（值換了，池鍵的指紋換、開的是另一份連線，各帶自己的遮蔽器），所以同一份連線的重連沿用同一組值。
+ * header 的整個值連 prefix 一起遮成一段，與 Rust 宿主收整個 header 值一致。
  */
 export function redactorFor(config: McpConfig, credentials: ResolvedCredentials): Redactor {
   if (credentials.size === 0) return createRedactor([]);

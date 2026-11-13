@@ -1,7 +1,6 @@
 /**
- * MCP 連線手上的憑證值不能從送回對話行程的文字裡漏出去（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。
- * 三種情況各一條：server 把 token 回顯在工具錯誤裡、連線失敗的錯誤帶出 token、header 的 prefix 帶換行時 undici 的錯誤。
- * 每條都斷言 token 原文與它的 URL 編碼形式都不在送出的文字裡；拿掉遮蔽三條都會轉紅。
+ * 錯誤與診斷不帶出憑證值（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。每條斷言原文、`encodeURIComponent` 與
+ * form 編碼三種形式都不在；拿掉遮蔽，三條都會轉紅。
  */
 
 import { fileURLToPath } from 'node:url';
@@ -82,7 +81,7 @@ describe('憑證值不外漏（#2669）', () => {
     vi.stubEnv('NO_PROXY', '127.0.0.1');
     const http = await startHttpFixture(
       (request, response, body) => {
-        // 握手的請求回 JSON-RPC 錯誤，訊息回顯收到的 Authorization（原值與 URL 編碼）。
+        // 每個請求都回 JSON-RPC 錯誤：訊息帶收到的 Authorization 原值，另加 SECRET 的 URL 編碼，模擬把 token 編碼後回顯的 server。
         const id = (body as { id?: unknown } | undefined)?.id ?? null;
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
@@ -121,7 +120,7 @@ describe('憑證值不外漏（#2669）', () => {
     expectNoSecret(text);
   }, 30_000);
 
-  it('header 的 prefix 帶換行：undici 拒收，錯誤沒有整個 header 值', async () => {
+  it('header 的 prefix 帶換行：undici 拒收，錯誤訊息裡的 header 值被遮掉', async () => {
     vi.stubEnv('NO_PROXY', '127.0.0.1');
     const http = await startHttpFixture(
       (_request, response) => {
@@ -150,6 +149,9 @@ describe('憑證值不外漏（#2669）', () => {
       (error: unknown) => error,
     );
     expect(thrown, '連線失敗該拋').toBeInstanceOf(Error);
-    expectNoSecret(everythingIn(thrown));
+    const text = everythingIn(thrown);
+    expect(text).toContain('invalid header value');
+    expect(text).toContain('[redacted]');
+    expectNoSecret(text);
   }, 30_000);
 });
