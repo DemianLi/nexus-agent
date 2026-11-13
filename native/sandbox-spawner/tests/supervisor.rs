@@ -1296,6 +1296,7 @@ fn the_one_idle_longest_goes_first_not_the_one_started_first() {
 #[test]
 fn read_only_is_evicted_before_a_longer_idle_run() {
     let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-after-ms".into(), "500".into()],
         extra: vec!["--capacity", "2"],
         ..Options::default()
     });
