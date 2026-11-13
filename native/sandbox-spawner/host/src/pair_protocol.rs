@@ -8,7 +8,8 @@
 //! `SO_PEERCRED` 的 pid（uid 要跟組合行程相同）等於監督行程用 `leaf{pid}` 告訴組合行程的那一個。pid 與版本都對，組合行程回 `hello`；
 //! 否則回 `rejected{code, reason}` 再關。從組合行程收下連線那一步起 [`PID_WAIT`] 內沒送 `hello`、或送了但葉子的 pid 還沒到，也回 `rejected` 再關：
 //! 收下的連線在 [`PID_WAIT`] 內有 `hello` 或 `rejected` 排出去（對方先關、或這一端開不了 fd 的除外）。葉子等回覆的時限從 connect 成功起算，不得短於 [`HELLO_TIMEOUT`]；
-//! [`PID_WAIT`] 比它短，差的那一段留給 `rejected` 寫過去，葉子才不會在收到之前自己先逾時。
+//! [`PID_WAIT`] 比它短：connect 成功到組合行程收下連線、加上組合行程過了時限才判的延遲，合計短於兩者的差時，`rejected` 會在葉子逾時之前到。
+//! 這兩段都沒有上限，所以不是保證：太晚時葉子仍會先逾時、回報「對方不在」。
 //!
 //! 葉子那一端要把三種結局分開回報，三種要找的人不一樣：
 //!
@@ -17,17 +18,21 @@
 //! - 「一直被要求稍後再試」：每次都收到 `retry_later`，到啟動時限仍沒進去。組合行程在，但一直不收這條連線
 //!   （pid 不是它手上的、pid 沒到、等著驗的滿了）；回報時帶上試了幾次或經過多久，以及最後一次的 `reason`。
 //!
+//! 判哪一種結局，以收到的 `rejected` 為準。組合行程可能在讀到 `hello` 之前就回 `rejected` 並關連線，葉子這時寫 `hello` 會出錯或連線被重設：
+//! 寫入出錯不能直接當「對方不在」，要先把讀得到的讀完，讀到 `rejected` 就照它判。
+//!
 //! `rejected` 的 `code`（[`RejectCode`]）是給程式看的，`reason` 是給人看的字串。葉子照 `code` 反應：
 //!
-//! - `retry_later`：這條連線現在收不下——等著驗身分的連線滿了、葉子的 pid 還沒到、或 pid 不是組合行程手上的那一個。退避後重連，
-//!   最晚到葉子自己的啟動時限為止，過了不再試，回報「一直被要求稍後再試」。pid 不符歸在這裡，是因為組合行程手上的可能還是上一個葉子的 pid：
+//! - `retry_later`：這條連線現在收不下——等著驗身分的連線滿了、葉子的 pid 還沒到、或 pid 不是組合行程手上的那一個。退避後重連（每次至少等 [`RETRY_BACKOFF_MIN`]：
+//!   被拒的每一條連線在組合行程那邊都是一筆稽核事件，不退避會把它刷滿），最晚到葉子自己的啟動時限為止，過了不再試，回報「一直被要求稍後再試」。pid 不符歸在這裡，是因為組合行程手上的可能還是上一個葉子的 pid：
 //!   上一個葉子沒連上就死了、或它的斷線組合行程還沒察覺，新的葉子比新的 `leaf{pid}` 先連進來，這時拒絕它是暫時的。
 //! - `identity`：讀不到對方的身分，或 uid 跟組合行程不同；線上不說是哪一種。不重試。
 //! - `version`：兩邊的協定版本不一樣。不重試。
 //! - `protocol`：葉子違反協定（含時限內沒送 `hello`、同一個 pid 在已經有一條驗過的連線時再連一條）。不重試。
 //!
 //! `code` 不在這四個裡的 `rejected` 解不開，葉子照違反協定處理：關連線、不重試，回報「被拒」。`hello` 與 `rejected` 的形狀跨版本不變（版本不同的對方要解得開 `rejected`）；
-//! 加拒絕碼要升 [`PAIR_PROTOCOL_VERSION`]。
+//! 加拒絕碼要升 [`PAIR_PROTOCOL_VERSION`]。升了版本也只管得到讀過 `hello` 之後的拒絕：還沒讀到對方 `hello` 時送出的 `rejected`
+//! （收下連線時的拒絕、`hello` 之前的違反協定與逾時）不知道對方的版本，所以永遠只能用版本 1 的這四個 `code`。
 //!
 //! # 之後的框
 //!
@@ -118,6 +123,18 @@ pub const MAX_PENDING: usize = 4;
 
 /// `unknown_method` 的訊息帶回 method 名稱的前幾個位元組（切在字元邊界）：自動回的框因此有小的上界。
 pub const METHOD_ECHO_BYTES: usize = 64;
+
+/// 葉子收到 `retry_later` 之後，至少等這麼久才重連。經驗值，沒有量過。
+pub const RETRY_BACKOFF_MIN: Duration = Duration::from_millis(250);
+
+/// `method` 的 UTF-8 前 [`METHOD_ECHO_BYTES`] 個位元組；落在一個字元中間時往前退到字元邊界。
+pub fn clip_method(method: &str) -> &str {
+    let mut end = method.len().min(METHOD_ECHO_BYTES);
+    while !method.is_char_boundary(end) {
+        end -= 1;
+    }
+    &method[..end]
+}
 
 /// 組合行程叫葉子綁 thread 的 method。
 pub const METHOD_ATTACH: &str = "attach";
@@ -539,9 +556,27 @@ mod tests {
         assert_eq!(number("pendingConnections"), Some(MAX_PENDING as u64));
         assert_eq!(number("methodEchoBytes"), Some(METHOD_ECHO_BYTES as u64));
         assert_eq!(
+            number("retryBackoffMinMs"),
+            Some(RETRY_BACKOFF_MIN.as_millis() as u64)
+        );
+        assert_eq!(
             all.get("attachMethod").and_then(Value::as_str),
             Some(METHOD_ATTACH)
         );
+    }
+
+    #[test]
+    fn method_echoes_are_clipped_like_the_vector_file() {
+        let all = vectors();
+        let echoes = group(&all, "methodEchoes");
+        assert!(!echoes.is_empty());
+        for entry in echoes {
+            assert_eq!(
+                clip_method(text(entry, "method")),
+                text(entry, "echo"),
+                "{entry:?}"
+            );
+        }
     }
 
     #[test]

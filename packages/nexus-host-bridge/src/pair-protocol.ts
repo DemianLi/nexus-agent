@@ -3,7 +3,7 @@
  * `native/sandbox-spawner/host/src/pair_protocol.rs`，兩邊對同一份向量檔（`native/sandbox-spawner/pair-vectors.json`）測。
  *
  * 框是 `u32` LE 長度加內容，內容是一份 JSON 物件，`type` 分種類。葉子連上後先送 `hello`，收到組合行程的 `hello` 才送別的；
- * 收到 `rejected` 照它的 `code`（{@link PAIR_REJECT_CODES}）反應：`retry_later` 退避後重連，到啟動時限仍沒進去是「一直被要求稍後再試」；其餘（含 `code` 解不開的）是被拒，不重試（規則在 Rust 那一側的檔頭）；連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，是對方不在。這三種結局要分開回報。之後兩邊都能發 `call` 與 `cancel`，
+ * 收到 `rejected` 照它的 `code`（{@link PAIR_REJECT_CODES}）反應：`retry_later` 退避（至少 {@link PAIR_RETRY_BACKOFF_MIN_MS}）後重連，到啟動時限仍沒進去是「一直被要求稍後再試」；其餘（含 `code` 解不開的）是被拒，不重試（規則在 Rust 那一側的檔頭）；連不上、connect 成功後等滿時限（至少 {@link PAIR_HELLO_TIMEOUT_MS}）沒收到任何框、或沒收到任何框就斷，是對方不在。這三種結局要分開回報，以收到的 `rejected` 為準：寫 `hello` 出錯時先把讀得到的讀完再下結論。之後兩邊都能發 `call` 與 `cancel`，
  * 由對方回 `chunk` 與 `result`；`side` 是發起那一次的一方（`'l'` 葉子、`'m'` 組合行程），一次呼叫的識別是 `(side, id)`。
  *
  * 這裡只管一框的形狀：誰能送哪一種、哪些 `id` 還在跑，由連線那一層判。Rust 那一側的 JSON 是 `serde_json`：`\u` 跳脫的代理對要成對、
@@ -54,6 +54,9 @@ export const PAIR_ATTACH_METHOD = 'attach';
 
 /** `unknown_method` 的訊息帶回 method 名稱的前幾個位元組（切在字元邊界）。 */
 export const PAIR_METHOD_ECHO_BYTES = 64;
+
+/** 葉子收到 `retry_later` 之後，至少等這麼久才重連。經驗值，沒有量過。 */
+export const PAIR_RETRY_BACKOFF_MIN_MS = 250;
 
 /** `rejected` 的 `code`：只有 `retry_later` 可以退避後重連；跟呼叫的錯誤碼是兩組。 */
 export const PAIR_REJECT_CODES = ['retry_later', 'identity', 'version', 'protocol'] as const;
@@ -219,6 +222,22 @@ function asError(value: unknown): { readonly code: HostErrorCode; readonly messa
   const code = HOST_ERROR_CODES.find((known) => known === value.code);
   if (code === undefined) throw new PairProtocolError('不認得的錯誤碼');
   return { code, message: asString(value.message) };
+}
+
+/**
+ * `method` 的 UTF-8 前 {@link PAIR_METHOD_ECHO_BYTES} 個位元組；落在一個字元中間時往前退到字元邊界。
+ * 跟 Rust 那一側的 `clip_method` 同一個結果（向量檔的 `methodEchoes`）；前提是 `method` 沒有落單的代理對，{@link decodePairMessage} 解出來的都是。
+ */
+export function clipPairMethod(method: string): string {
+  let bytes = 0;
+  let end = 0;
+  for (const char of method) {
+    const point = char.codePointAt(0) ?? 0;
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+    if (bytes > PAIR_METHOD_ECHO_BYTES) break;
+    end += char.length;
+  }
+  return method.slice(0, end);
 }
 
 /**

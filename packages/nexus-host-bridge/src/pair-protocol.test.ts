@@ -13,6 +13,8 @@ import {
   PAIR_MAX_FRAME,
   PAIR_MAX_ID,
   PAIR_METHOD_ECHO_BYTES,
+  PAIR_RETRY_BACKOFF_MIN_MS,
+  clipPairMethod,
   PAIR_OUTBOX_LIMIT_BYTES,
   PAIR_OUTBOX_PAUSE_BYTES,
   PAIR_PROTOCOL_VERSION,
@@ -38,6 +40,8 @@ interface Vectors {
   readonly stallTimeoutMs: number;
   readonly rejectCodes: readonly string[];
   readonly methodEchoBytes: number;
+  readonly retryBackoffMinMs: number;
+  readonly methodEchoes: readonly { readonly method: string; readonly echo: string }[];
   readonly outboxPauseBytes: number;
   readonly outboxLimitBytes: number;
   readonly attachMethod: string;
@@ -84,6 +88,11 @@ describe('橋的協定，跟 pair_protocol.rs 對同一份向量檔', () => {
     expect(PAIR_ATTACH_METHOD).toBe(vectors.attachMethod);
     expect([...PAIR_REJECT_CODES]).toEqual(vectors.rejectCodes);
     expect(PAIR_METHOD_ECHO_BYTES).toBe(vectors.methodEchoBytes);
+    expect(PAIR_RETRY_BACKOFF_MIN_MS).toBe(vectors.retryBackoffMinMs);
+  });
+
+  it.each(vectors.methodEchoes)('unknown_method 的回顯截法：$method', ({ method, echo }) => {
+    expect(clipPairMethod(method)).toBe(echo);
   });
 
   it.each(hostVectors.errorCodes)('錯誤碼是宿主那條的那一組：%s', (code) => {

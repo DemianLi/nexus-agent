@@ -15,6 +15,53 @@
   "pendingConnections": 4,
   "attachMethod": "attach",
   "methodEchoBytes": 64,
+  "retryBackoffMinMs": 250,
+  "methodEchoes": [
+    {
+      "method": "",
+      "echo": ""
+    },
+    {
+      "method": "echo",
+      "echo": "echo"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "method": "搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜",
+      "echo": "搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜"
+    },
+    {
+      "method": "搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜",
+      "echo": "搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜搜"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaé",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "method": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀b",
+      "echo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀"
+    },
+    {
+      "method": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "echo": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+  ],
   "rejectCodes": ["retry_later", "identity", "version", "protocol"],
   "messages": [
     {

@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use crate::host_protocol::{CallError, ErrorCode};
 use crate::json::Value;
 use crate::pair_protocol::{
-    decode, encode, CallRef, PairMessage, RejectCode, Side, MAX_CALLS, MAX_CHUNK_BYTES, MAX_FRAME,
-    MAX_PENDING, METHOD_ATTACH, METHOD_ECHO_BYTES, OUTBOX_LIMIT, OUTBOX_PAUSE,
+    clip_method, decode, encode, CallRef, PairMessage, RejectCode, Side, MAX_CALLS,
+    MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE,
     PAIR_PROTOCOL_VERSION, PID_WAIT, STALL_TIMEOUT,
 };
 use nexus_sandbox_spawner::supervisor::process::Chan;
@@ -108,8 +108,8 @@ pub enum PairEvent {
     },
     /// 回過 [`SendError::Paused`] 之後，排著的降回 [`OUTBOX_PAUSE`] 以下了，可以再試。
     Resumed,
-    /// 沒收一條連線。`pid` 讀不到是 `None`。`reason` 是給稽核看的。身分這一類：uid 跟這一端不同是「uid 不同（那個 uid）」，
-    /// `SO_PEERCRED` 讀不到、或讀到的 pid 不是正數，是「讀不到身分」；這兩種線上回的都是「身分不對」，不告訴對方是哪一種。
+    /// 沒收一條連線。`pid` 讀不到是 `None`。`reason` 是給稽核看的。身分這一類先看 uid：uid 跟這一端不同是「uid 不同（那個 uid）」，
+    /// 這時 pid 不是正數的話 `pid` 是 `None`；`SO_PEERCRED` 讀不到、或 uid 相同但 pid 不是正數，是「讀不到身分」。這兩種線上回的都是「身分不對」，不告訴對方是哪一種。
     Refused { pid: Option<u32>, reason: String },
     /// 驗過的那條斷了；在這之前，還在跑的呼叫各有一筆 [`PairEvent::Finished`] 或 [`PairEvent::Cancelled`]。
     Disconnected { reason: Disconnect },
@@ -219,15 +219,6 @@ fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
         events,
         revents: 0,
     }
-}
-
-/// `method` 的前 [`METHOD_ECHO_BYTES`] 個位元組，切在字元邊界。
-fn clip(method: &str) -> &str {
-    let mut end = method.len().min(METHOD_ECHO_BYTES);
-    while !method.is_char_boundary(end) {
-        end -= 1;
-    }
-    &method[..end]
 }
 
 /// 連線那一端是誰。
@@ -802,7 +793,7 @@ impl Pair {
                 } else if local == Some(None) {
                     Some((ErrorCode::BadPayload, "parent 不在跑".to_string()))
                 } else if !self.methods.contains(&method) {
-                    Some((ErrorCode::UnknownMethod, clip(&method).to_string()))
+                    Some((ErrorCode::UnknownMethod, clip_method(&method).to_string()))
                 } else {
                     None
                 };
@@ -890,6 +881,11 @@ mod tests {
         assert_eq!(
             Peer::from_cred(Some((1001, 42)), 1000),
             stranger(Some(42), "uid 不同（1001）")
+        );
+        // uid 先看：別的 uid 就算沒有 pid，理由也是 uid。
+        assert_eq!(
+            Peer::from_cred(Some((1001, 0)), 1000),
+            stranger(None, "uid 不同（1001）")
         );
         assert_eq!(Peer::from_cred(None, 1000), stranger(None, "讀不到身分"));
         // 讀到了但沒有 pid。
