@@ -1,7 +1,8 @@
-//! 一台 HTTP MCP server 的「一代」連線：建 transport、握手、`tools/list` 分頁走完、查指引上限，三步都過才算連上。
-//! 照 `packages/nexus-plugin-mcp/src/connection.ts` 的 HTTP 那一半；訊息的英文照它。池經 [`Http`] 拿一代。
+//! 一台 MCP server 的「一代」連線：建 transport、握手、`tools/list` 分頁走完、查指引上限，三步都過才算連上。
+//! 照 `packages/nexus-plugin-mcp/src/connection.ts`；訊息的英文照它。池經 [`Http`] 拿一代（這個連接器兩種連線都管，名字沿用）。
 //!
-//! - transport 只用 rmcp 的 `StreamableHttpClientTransport::with_client`，客戶端由呼叫方傳入，要用 [`crate::tls::http_client`] 建，TLS 與代理才會照設定。
+//! - HTTP 的 transport 只用 rmcp 的 `StreamableHttpClientTransport::with_client`，客戶端由呼叫方傳入，要用 [`crate::tls::http_client`] 建，TLS 與代理才會照設定。
+//! - stdio 的 transport 是 [`super::stdio::spawn`] 起的子行程的 stdin／stdout；一代結束時連子行程一起收（[`super::stdio::reap`]），[`pool::Generation::close`] 回來時子行程已經 `wait` 掉。
 //! - rmcp 自己的重試全關（SSE 重連、session 過期重建），重連只交給監督者，同 TS 的 `maxRetries: 0`。
 //! - 協定版本自動協商：先試新協定（`server/discover`），對方是舊協定就退回 `initialize`。握手時不宣告任何 client 能力；
 //!   新協定的反問能力由呼叫端在每次 `tools/call` 的 `_meta` 帶（[`call_meta`]）。
@@ -23,9 +24,10 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use tokio::sync::{watch, Notify};
 
-use super::config::Server;
+use super::config::{Connection, Server};
 use super::pool;
 use super::redact::scrub;
+use super::stdio;
 
 /// 握手時報給 server 的身分，同 TS 的 `CLIENT_IDENTITY`：同一台 server 從 TS 或宿主連進來，看到的身分相同。
 const CLIENT_NAME: &str = "@nexus/plugin-mcp";
@@ -71,6 +73,8 @@ pub struct Generation {
     pub listed: Listed,
     cancel: rmcp::service::RunningServiceCancellationToken,
     closed: watch::Receiver<bool>,
+    /// 子行程收掉了（沒有子行程的一代一開始就是 `true`）。
+    reaped: watch::Receiver<bool>,
     lost: Arc<Notify>,
 }
 
@@ -98,11 +102,13 @@ impl pool::Generation for Generation {
         }
     }
 
-    /// 回來時 rmcp 的服務迴圈已經結束。
+    /// 回來時 rmcp 的服務迴圈已經結束，stdio 的子行程也已經收掉。
     async fn close(self) {
         self.cancel.cancel();
         let mut closed = self.closed;
         let _ = closed.wait_for(|c| *c).await;
+        let mut reaped = self.reaped;
+        let _ = reaped.wait_for(|r| *r).await;
     }
 }
 
@@ -141,46 +147,74 @@ pub fn call_meta(modern: bool, elicitation: bool) -> Option<RequestMetaObject> {
     .ok()
 }
 
-/// 連一代。錯誤訊息照 TS，網址不帶 query，`secrets` 一律換掉。握手之後的步驟失敗時，回錯前先收掉這一代。
+/// 連一代。錯誤訊息照 TS，網址不帶 query，`secrets` 一律換掉。握手之後的步驟失敗時，回錯前先收掉這一代（stdio 連子行程一起）。
 pub async fn connect(
     server: &Server,
     http: &reqwest::Client,
     secrets: &[String],
 ) -> Result<Generation, String> {
     let fail = |what: String| scrub(&what, secrets);
-    let mut config = StreamableHttpClientTransportConfig::with_uri(server.url.as_str());
-    config.retry_config = Arc::new(NeverRetry::default());
-    config.reinit_on_expired_session = false;
-    config.max_sse_event_size = MAX_RESPONSE_BYTES;
-    config.custom_headers = server.headers.iter().cloned().collect::<HashMap<_, _>>();
-    let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
     let info = InitializeRequestParams::new(
         ClientCapabilities::default(),
         Implementation::new(CLIENT_NAME, CLIENT_VERSION),
     );
-    let running = info
-        .serve_with_lifecycle(
-            transport,
-            ClientLifecycleMode::Auto {
-                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-                legacy_version: Some(ProtocolVersion::V_2025_11_25),
-            },
-        )
-        .await
-        .map_err(|err| {
-            fail(format!(
-                "Failed to connect to streamable HTTP server \"{}, url: {}\" in auto mode: {}",
-                server.name,
-                server.shown_url(),
-                describe(&err)
-            ))
-        })?;
+    let mode = ClientLifecycleMode::Auto {
+        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+    };
+    let (running, child) = match &server.connection {
+        Connection::Http { url, headers } => {
+            let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+            config.retry_config = Arc::new(NeverRetry::default());
+            config.reinit_on_expired_session = false;
+            config.max_sse_event_size = MAX_RESPONSE_BYTES;
+            config.custom_headers = headers.iter().cloned().collect::<HashMap<_, _>>();
+            let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
+            let running = info
+                .serve_with_lifecycle(transport, mode)
+                .await
+                .map_err(|err| {
+                    fail(format!(
+                        "Failed to connect to streamable HTTP server \"{}, url: {}\" in auto mode: {}",
+                        server.name,
+                        server.shown_url(),
+                        describe(&err)
+                    ))
+                })?;
+            (running, None)
+        }
+        Connection::Stdio(spec) => {
+            let stdio::Spawned { child, transport } = stdio::spawn(spec).map_err(|err| {
+                fail(format!(
+                    "Failed to connect to stdio server \"{}\" in auto mode: {}",
+                    server.name,
+                    describe(&err)
+                ))
+            })?;
+            match info.serve_with_lifecycle(transport, mode).await {
+                Ok(running) => (running, Some(child)),
+                Err(err) => {
+                    stdio::reap(child).await;
+                    return Err(fail(format!(
+                        "Failed to connect to stdio server \"{}\" in auto mode: {}",
+                        server.name,
+                        describe(&err)
+                    )));
+                }
+            }
+        }
+    };
     let peer = running.peer().clone();
     let cancel = running.cancellation_token();
     let (closed_tx, closed) = watch::channel(false);
+    let (reaped_tx, reaped) = watch::channel(child.is_none());
     tokio::spawn(async move {
         let _ = running.waiting().await;
         closed_tx.send_replace(true);
+        if let Some(child) = child {
+            stdio::reap(child).await;
+            reaped_tx.send_replace(true);
+        }
     });
     let generation = Generation {
         caller: Caller {
@@ -195,6 +229,7 @@ pub async fn connect(
         },
         cancel,
         closed,
+        reaped,
         lost: Arc::default(),
     };
     fill(server, generation).await.map_err(fail)

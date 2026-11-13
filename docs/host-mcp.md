@@ -58,12 +58,12 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 ## 設定
 
-一台 server 一個物件，是 TS `mcpConfigSchema` 的 HTTP 那一支。不認得的欄位整列拒絕；錯誤訊息只講欄位名，不帶值。
+一台 server 一個物件，是 TS `mcpConfigSchema` 的 HTTP 與 stdio 兩支。不認得的欄位整列拒絕；錯誤訊息只講欄位名，不帶值。
 
 | 欄位 | 內容 |
 | --- | --- |
 | `serverName` | 必填，1 到 32 個 `[A-Za-z0-9_-]`。 |
-| `connection` | 必填，`{ transport: "http", url, headers? }`。`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）。`headers` 的值只收字串；憑證引用（`{ credential, prefix? }`）還不支援，整列拒絕。`transport: "stdio"` 拒絕。 |
+| `connection` | 必填。HTTP：`{ transport: "http", url, headers? }`，`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）；`headers` 的值只收字串，憑證引用（`{ credential, prefix? }`）還不支援，整列拒絕。stdio：`{ transport: "stdio", command, args?, cwd?, env, credentialEnv? }`，見下面〈stdio〉。 |
 | `toolCallTimeoutMs` | 正整數（不大於 2^53−1，`60000.0` 也收，同 zod 的 `int`），預設 60000。 |
 | `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（只給 stdio），只進池的鍵。 |
 | `failOnStartupError` | 預設 `false`。 |
@@ -135,9 +135,26 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   兩邊跑同一份 `native/sandbox-spawner/proxy-vectors.json`（TS 端是 `packages/nexus-core/src/http-proxy/policy-vectors.test.ts`）。
 - 代理帳密：網址帶了帳密時送 `Proxy-Authorization`（Basic）。代理拒絕時錯誤不帶帳密，有測試。
 
+## stdio
+
+宿主收的是 TS 算好的成品（`apps/harness/src/mcp-host-stdio-row.ts` 的 `hostStdioConnection`），不重算政策、不疊自己的環境：
+
+| 欄位 | 內容 |
+| --- | --- |
+| `command` | 必填，絕對路徑、不含 NUL。沙箱包過的話是包裝程式（`--exec`／`--guard`），包法與 `MCP_SYSTEM_READABLE` 留在 TS 一份。宿主只驗形狀。 |
+| `args` | 字串陣列，預設空，不含 NUL。 |
+| `cwd` | 絕對路徑；省略就繼承宿主的工作目錄。 |
+| `env` | 必填，子行程的**整份**環境：TS 清過的父環境在前、設定的在後。宿主 `env_clear` 之後只放這一份。 |
+| `credentialEnv` | `env` 裡值來自憑證的名字，每個都要在 `env` 裡。**只有這些值進遮蔽器**，並照〈MCP 憑證值的遮蔽〉的檢查（修頭尾空白、不到 8 個字元拒收）；`PATH`、`HOME` 這類字面值不進，成功結果才不會被遮壞。 |
+
+- 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。stderr 丟掉。
+- 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，最後 `wait`。`Generation::close` 回來時子行程已經收掉，不留殭屍。
+- 池的鍵：整份成品（含 `env` 的值）；換了憑證是另一份，`credentialEnv` 的順序與重複不影響。
+- 缺口：「哪幾個名字是憑證」由誰產生（匯出外掛的 `substituted`，或外掛回報）留給 PR-E，與 dev-h2 一起定；在那之前沒有生產端呼叫 `hostStdioConnection`。
+
 ## 跟 TS 的差距
 
-- stdio 不支援；只給 stdio 的存活探測也沒有。
+- stdio 的存活探測（`livenessTimeoutMs` 的用處）沒有：掉線只認 transport 關了（子行程結束或管線斷），子行程活著但卡死的探不出來。
 - **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。

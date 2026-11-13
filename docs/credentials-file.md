@@ -198,7 +198,8 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
   - header 的值，除了 `LITERAL_HEADERS`（`config.rs`）：`Accept`、`Content-Type`、`User-Agent`、`Accept-Language`、`MCP-Protocol-Version`（不分大小寫）。這幾個是協定層、一定不是秘密，值不進遮蔽器。
     值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
   - 網址的 query：整串、每個值的原樣與解碼後，全部收；
-  - 代理的帳密。
+  - 代理的帳密；
+  - stdio：`connection.credentialEnv` 標的那幾個環境變數的值，**只有這些**。TS 看得到每個值的來源（`apps/harness/src/mcp-host-stdio-row.ts`），所以 stdio 不用 header 那種「分不出來就全收」的近似：`PATH`、`HOME` 這類清洗後的父環境與字面值都不進，成功結果不會被遮壞。每個值照上面的值檢查。
 
   憑證引用解出來的值之後走同一個入口。**過渡：** 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是設定裡寫死的字面值，所以今天其餘的 header 與 query 值一律當秘密收，字面值也會被遮。憑證引用接到宿主（PR-E）之後，只收憑證解出來的值，字面值不再收集，`LITERAL_HEADERS` 也拿掉。
   網址的 `user:password@` 設定時就拒（見 `docs/host-mcp.md`），不進入口；遮蔽器本身不分來源，帶 userinfo 的字串照樣遮（樣本「網址 userinfo 的帳密」）。
@@ -219,7 +220,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **沒收的形式**：base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
   一個值被拆在兩個字串裡（例如分兩個 content 區塊）；JSON 的數字（`{"pin": 12345678}` 不遮，值檢查不限數字）。值被 server 轉成這些形式再回顯就遮不到。
 
-測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
+測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_stdio.rs`（stdio 只收 `credentialEnv`、字面值照舊、子行程的環境只有交來的那份）；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
 
 ## 重讀
 

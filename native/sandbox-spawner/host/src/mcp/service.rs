@@ -1,4 +1,4 @@
-//! 插件 `mcp`：apply 時起一座 [`Bridge`]，expose 過橋的服務 [`SERVICE`]，讓對話行程經宿主連線用 HTTP MCP server。
+//! 插件 `mcp`：apply 時起一座 [`Bridge`]，expose 過橋的服務 [`SERVICE`]，讓對話行程經宿主連線用 HTTP 與 stdio 的 MCP server。
 //!
 //! 設定：`{ "roots": <PEM 檔路徑>, "proxy"?: <ProxyPolicy> }`。根憑證只信這個檔（[`crate::tls`]），代理照 [`crate::proxy`]。
 //!

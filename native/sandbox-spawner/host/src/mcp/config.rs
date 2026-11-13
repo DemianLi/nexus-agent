@@ -1,11 +1,15 @@
-//! 一台 HTTP MCP server 的設定：`mcpConfigSchema` 的 HTTP 那一支怎麼解、池的鍵、日誌裡的名字，與錯誤訊息裡要換掉的秘密。
+//! 一台 MCP server 的設定：`mcpConfigSchema` 的 HTTP 與 stdio 兩支怎麼解、池的鍵、日誌裡的名字，與錯誤訊息裡要換掉的秘密。
 //! 照 `packages/nexus-plugin-mcp/src/index.ts` 的設定；錯誤訊息講欄位，不帶值。
+//!
+//! stdio 收的是 TS 算好的成品（`apps/harness/src/mcp-host-stdio-row.ts`）：`command`／`args` 已經照沙箱政策包好，`env` 是清洗過的父環境疊上
+//! 設定的整份，`credentialEnv` 標出其中哪幾個名字的值來自憑證。宿主只驗形狀，不重算政策、不疊自己的環境。
 
 use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::Url;
 
+use super::redact::{check_value, Use};
 use super::supervisor::Policy;
 use crate::json::{Map, Value};
 
@@ -32,12 +36,48 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// `livenessTimeoutMs` 的上限，同 `MAX_LIVENESS_TIMEOUT_MS`。
 const MAX_LIVENESS_TIMEOUT_MS: u64 = 2_147_483_647;
 
-/// 一台 HTTP server 的設定：`mcpConfigSchema` 的 HTTP 那一支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的 query。
+/// 一台 server 怎麼連。
+#[derive(Clone)]
+pub enum Connection {
+    Http {
+        url: Url,
+        headers: Vec<(HeaderName, HeaderValue)>,
+    },
+    Stdio(Stdio),
+}
+
+/// 一台 stdio server 的啟動方式，照 TS 算好的成品用。`Debug` 只印名字與個數，不印 `args`、`env` 的值。
+#[derive(Clone)]
+pub struct Stdio {
+    /// 絕對路徑；沙箱包過的話是 spawner 的路徑。
+    pub command: String,
+    pub args: Vec<String>,
+    /// 絕對路徑；省略就繼承宿主的工作目錄。
+    pub cwd: Option<String>,
+    /// 子行程的整份環境。宿主用 `env_clear` 再放這一份，不繼承自己的。
+    pub env: Vec<(String, String)>,
+    /// `env` 裡值來自憑證的名字（每個都在 `env` 裡）。只有這些值進遮蔽器。
+    pub credential_env: Vec<String>,
+}
+
+impl std::fmt::Debug for Stdio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.env.iter().map(|(n, _)| n.as_str()).collect();
+        f.debug_struct("Stdio")
+            .field("command", &self.command)
+            .field("args", &self.args.len())
+            .field("cwd", &self.cwd)
+            .field("env", &names)
+            .field("credential_env", &self.credential_env)
+            .finish()
+    }
+}
+
+/// 一台 server 的設定：`mcpConfigSchema` 的 HTTP 與 stdio 兩支，`approval` 不經宿主。`Debug` 不印 header 的值與網址的 query。
 #[derive(Clone)]
 pub struct Server {
     pub name: String,
-    pub url: Url,
-    pub(super) headers: Vec<(HeaderName, HeaderValue)>,
+    pub connection: Connection,
     pub tool_call_timeout: Duration,
     pub max_instruction_bytes: usize,
     pub reconnect: Policy,
@@ -49,11 +89,20 @@ pub struct Server {
 
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let header_names: Vec<&str> = self.headers.iter().map(|(n, _)| n.as_str()).collect();
-        f.debug_struct("Server")
-            .field("name", &self.name)
-            .field("url", &self.shown_url())
-            .field("headers", &header_names)
+        let mut shown = f.debug_struct("Server");
+        shown.field("name", &self.name);
+        match &self.connection {
+            Connection::Http { headers, .. } => {
+                let header_names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+                shown
+                    .field("url", &self.shown_url())
+                    .field("headers", &header_names);
+            }
+            Connection::Stdio(stdio) => {
+                shown.field("stdio", stdio);
+            }
+        }
+        shown
             .field("tool_call_timeout", &self.tool_call_timeout)
             .field("max_instruction_bytes", &self.max_instruction_bytes)
             .field("reconnect", &self.reconnect)
@@ -79,6 +128,180 @@ fn boolean(fields: &Map<String, Value>, name: &str, default: bool) -> Result<boo
     fields.get(name).map_or(Ok(default), |v| {
         v.as_bool().ok_or(format!("{name} 要是布林"))
     })
+}
+
+/// HTTP 那一支：`url` 與 `headers`。回解好的連線，與池的鍵裡 `connection` 那一段。
+fn parse_http(connection: &Map<String, Value>) -> Result<(Connection, Map<String, Value>), String> {
+    for key in connection.keys() {
+        if !["transport", "url", "headers"].contains(&key.as_str()) {
+            return Err(format!("connection 不認得的欄位 {key}"));
+        }
+    }
+    let url = connection
+        .get("url")
+        .and_then(Value::as_str)
+        .and_then(|u| Url::parse(u).ok())
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .ok_or("connection.url 要是 http 或 https 的網址")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("connection.url 不能帶帳號或密碼".into());
+    }
+    let mut headers = Vec::new();
+    match connection.get("headers") {
+        None => {}
+        Some(Value::Object(map)) => {
+            for (key, value) in map {
+                let header = HeaderName::from_bytes(key.as_bytes())
+                    .map_err(|_| format!("connection.headers 的鍵 {key} 不是合法的 header 名"))?;
+                let text = match value {
+                    Value::String(text) => text,
+                    Value::Object(_) => {
+                        return Err(format!("connection.headers.{key} 是憑證引用：宿主還不支援"))
+                    }
+                    _ => return Err(format!("connection.headers.{key} 要是字串")),
+                };
+                let value = HeaderValue::from_str(text)
+                    .map_err(|_| format!("connection.headers.{key} 的值不是合法的 header 值"))?;
+                headers.push((header, value));
+            }
+        }
+        Some(_) => return Err("connection.headers 要是物件".into()),
+    }
+    // 照 zod 解出來的樣子編。
+    let mut key = Map::new();
+    key.insert("transport".into(), "http".into());
+    key.insert("url".into(), connection["url"].clone());
+    if let Some(headers) = connection.get("headers") {
+        key.insert("headers".into(), headers.clone());
+    }
+    Ok((Connection::Http { url, headers }, key))
+}
+
+/// 絕對路徑、不含 NUL。
+fn absolute_path(text: &str) -> bool {
+    text.starts_with('/') && !text.contains('\0')
+}
+
+/// stdio 那一支：`command`、`args`、`cwd`、`env`、`credentialEnv`。形狀以外的（程式在不在、能不能跑）留給起行程那一刻。
+/// 錯誤訊息只講欄位與名字，不帶值；`credentialEnv` 的值照 [`check_value`] 檢查，訊息指名那個環境變數。
+fn parse_stdio(
+    connection: &Map<String, Value>,
+) -> Result<(Connection, Map<String, Value>), String> {
+    for key in connection.keys() {
+        if ![
+            "transport",
+            "command",
+            "args",
+            "cwd",
+            "env",
+            "credentialEnv",
+        ]
+        .contains(&key.as_str())
+        {
+            return Err(format!("connection 不認得的欄位 {key}"));
+        }
+    }
+    let command = connection
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|c| absolute_path(c))
+        .ok_or("stdio 的 connection.command 要是絕對路徑")?
+        .to_string();
+    let mut args = Vec::new();
+    match connection.get("args") {
+        None => {}
+        Some(Value::Array(items)) => {
+            for item in items {
+                match item.as_str().filter(|a| !a.contains('\0')) {
+                    Some(arg) => args.push(arg.to_string()),
+                    None => return Err("stdio 的 connection.args 要是不含 NUL 的字串陣列".into()),
+                }
+            }
+        }
+        Some(_) => return Err("stdio 的 connection.args 要是字串陣列".into()),
+    }
+    let cwd = match connection.get("cwd") {
+        None => None,
+        Some(Value::String(cwd)) if absolute_path(cwd) => Some(cwd.clone()),
+        Some(_) => return Err("stdio 的 connection.cwd 要是絕對路徑".into()),
+    };
+    let mut env = Vec::new();
+    match connection.get("env") {
+        Some(Value::Object(map)) => {
+            for (name, value) in map {
+                if name.is_empty() || name.contains(['=', '\0']) {
+                    return Err(
+                        "stdio 的 connection.env 有不合法的名字（空的，或含 = 或 NUL）".into(),
+                    );
+                }
+                match value.as_str().filter(|v| !v.contains('\0')) {
+                    Some(text) => env.push((name.clone(), text.to_string())),
+                    None => {
+                        return Err(format!(
+                            "stdio 的 connection.env.{name} 要是不含 NUL 的字串"
+                        ))
+                    }
+                }
+            }
+        }
+        _ => return Err("stdio 的 connection.env 要是物件（TS 算好的整份環境）".into()),
+    }
+    let mut credential_env: Vec<String> = Vec::new();
+    match connection.get("credentialEnv") {
+        None => {}
+        Some(Value::Array(items)) => {
+            for item in items {
+                let Some(name) = item.as_str() else {
+                    return Err("stdio 的 connection.credentialEnv 要是字串陣列".into());
+                };
+                let Some((_, value)) = env.iter().find(|(n, _)| n == name) else {
+                    return Err(format!(
+                        "stdio 的 connection.credentialEnv 的 {name} 不在 connection.env 裡"
+                    ));
+                };
+                check_value(value, Use::Env).map_err(|rejection| {
+                    rejection.message(&format!("connection.env.{name}（憑證）"))
+                })?;
+                if !credential_env.iter().any(|n| n == name) {
+                    credential_env.push(name.to_string());
+                }
+            }
+        }
+        Some(_) => return Err("stdio 的 connection.credentialEnv 要是字串陣列".into()),
+    }
+    // 池的鍵：宿主收到的成品。同一份成品是同一份（鍵的順序不計，`env` 與 `credentialEnv` 的順序也不計）；
+    // 值帶在鍵裡，換了憑證就是另一份。
+    let mut key = Map::new();
+    key.insert("transport".into(), "stdio".into());
+    key.insert("command".into(), command.clone().into());
+    key.insert(
+        "args".into(),
+        Value::Array(args.iter().cloned().map(Value::from).collect()),
+    );
+    if let Some(cwd) = &cwd {
+        key.insert("cwd".into(), cwd.clone().into());
+    }
+    let mut key_env = Map::new();
+    for (name, value) in &env {
+        key_env.insert(name.clone(), value.clone().into());
+    }
+    key.insert("env".into(), Value::Object(key_env));
+    let mut sorted = credential_env.clone();
+    sorted.sort();
+    key.insert(
+        "credentialEnv".into(),
+        Value::Array(sorted.into_iter().map(Value::from).collect()),
+    );
+    Ok((
+        Connection::Stdio(Stdio {
+            command,
+            args,
+            cwd,
+            env,
+            credential_env,
+        }),
+        key,
+    ))
 }
 
 impl Server {
@@ -116,50 +339,11 @@ impl Server {
         let Some(Value::Object(connection)) = fields.get("connection") else {
             return Err("connection 要是物件".into());
         };
-        match connection.get("transport").and_then(Value::as_str) {
-            Some("http") => {}
-            Some("stdio") => return Err("connection.transport 是 stdio：宿主還不支援".into()),
-            _ => return Err("connection.transport 要是 http".into()),
-        }
-        for key in connection.keys() {
-            if !["transport", "url", "headers"].contains(&key.as_str()) {
-                return Err(format!("connection 不認得的欄位 {key}"));
-            }
-        }
-        let url = connection
-            .get("url")
-            .and_then(Value::as_str)
-            .and_then(|u| Url::parse(u).ok())
-            .filter(|u| matches!(u.scheme(), "http" | "https"))
-            .ok_or("connection.url 要是 http 或 https 的網址")?;
-        if !url.username().is_empty() || url.password().is_some() {
-            return Err("connection.url 不能帶帳號或密碼".into());
-        }
-        let mut headers = Vec::new();
-        match connection.get("headers") {
-            None => {}
-            Some(Value::Object(map)) => {
-                for (key, value) in map {
-                    let header = HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
-                        format!("connection.headers 的鍵 {key} 不是合法的 header 名")
-                    })?;
-                    let text = match value {
-                        Value::String(text) => text,
-                        Value::Object(_) => {
-                            return Err(format!(
-                                "connection.headers.{key} 是憑證引用：宿主還不支援"
-                            ))
-                        }
-                        _ => return Err(format!("connection.headers.{key} 要是字串")),
-                    };
-                    let value = HeaderValue::from_str(text).map_err(|_| {
-                        format!("connection.headers.{key} 的值不是合法的 header 值")
-                    })?;
-                    headers.push((header, value));
-                }
-            }
-            Some(_) => return Err("connection.headers 要是物件".into()),
-        }
+        let (parsed, key_connection) = match connection.get("transport").and_then(Value::as_str) {
+            Some("http") => parse_http(connection)?,
+            Some("stdio") => parse_stdio(connection)?,
+            _ => return Err("connection.transport 要是 http 或 stdio".into()),
+        };
         let tool_call_timeout_ms = positive_int(fields, "toolCallTimeoutMs", MAX_SAFE_INTEGER)?
             .unwrap_or(DEFAULT_TOOL_CALL_TIMEOUT.as_millis() as u64);
         let max_instruction_bytes = positive_int(fields, "maxInstructionBytes", MAX_SAFE_INTEGER)?
@@ -174,12 +358,6 @@ impl Server {
                 .unwrap_or(DEFAULT_LIVENESS_TIMEOUT_MS);
 
         // 照 zod 解出來的樣子編：預設值填好，數字一律當浮點數寫，`500` 與 `500.0` 編成同一個。
-        let mut key_connection = Map::new();
-        key_connection.insert("transport".into(), "http".into());
-        key_connection.insert("url".into(), connection["url"].clone());
-        if let Some(headers) = connection.get("headers") {
-            key_connection.insert("headers".into(), headers.clone());
-        }
         let mut key_reconnect = Map::new();
         key_reconnect.insert("enabled".into(), reconnect.enabled.into());
         key_reconnect.insert("initialDelayMs".into(), reconnect.initial_delay_ms.into());
@@ -208,8 +386,7 @@ impl Server {
 
         Ok(Server {
             name,
-            url,
-            headers,
+            connection: parsed,
             tool_call_timeout: Duration::from_millis(tool_call_timeout_ms),
             max_instruction_bytes,
             reconnect,
@@ -232,12 +409,25 @@ impl Server {
 
     /// 這一列要遮的字串，交給 [`super::redact::Redactor::new`]。
     ///
-    /// - header 的值，除了 [`LITERAL_HEADERS`] 那幾個：值取原始位元組，能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串；
-    ///   `Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）。
-    /// - 網址的 query：整串、每個值的原樣與解碼後。reqwest 的錯誤會印出帶 query 的網址。
+    /// - HTTP：header 的值，除了 [`LITERAL_HEADERS`] 那幾個：值取原始位元組，能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串；
+    ///   `Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）。網址的 query：整串、每個值的原樣與解碼後。
+    ///   reqwest 的錯誤會印出帶 query 的網址。
+    /// - stdio：只收 `credentialEnv` 標的那幾個環境變數的值。TS 看得到每個值的來源，`PATH`、`HOME` 這類清洗後的父環境不進，否則成功結果會被遮得不能用。
     pub fn secrets(&self) -> Vec<String> {
+        let (url, headers) = match &self.connection {
+            Connection::Http { url, headers } => (url, headers),
+            Connection::Stdio(stdio) => {
+                return stdio
+                    .credential_env
+                    .iter()
+                    .filter_map(|name| stdio.env.iter().find(|(n, _)| n == name))
+                    .map(|(_, value)| value.clone())
+                    .filter(|value| !value.is_empty())
+                    .collect();
+            }
+        };
         let mut out: Vec<String> = Vec::new();
-        for (name, value) in &self.headers {
+        for (name, value) in headers {
             if LITERAL_HEADERS.contains(&name.as_str()) {
                 continue;
             }
@@ -259,20 +449,23 @@ impl Server {
             }
             out.extend(texts);
         }
-        if let Some(query) = self.url.query() {
+        if let Some(query) = url.query() {
             out.push(query.to_string());
             for pair in query.split('&') {
                 out.push(pair.split_once('=').map_or(pair, |(_, v)| v).to_string());
             }
-            out.extend(self.url.query_pairs().map(|(_, v)| v.into_owned()));
+            out.extend(url.query_pairs().map(|(_, v)| v.into_owned()));
         }
         out.retain(|s| !s.is_empty());
         out
     }
 
-    /// 錯誤與日誌裡顯示的網址：拿掉 query 與 fragment。
+    /// 錯誤與日誌裡顯示的網址：拿掉 query 與 fragment。stdio 沒有網址，回空字串。
     pub fn shown_url(&self) -> String {
-        let mut url = self.url.clone();
+        let Connection::Http { url, .. } = &self.connection else {
+            return String::new();
+        };
+        let mut url = url.clone();
         url.set_query(None);
         url.set_fragment(None);
         url.to_string()
