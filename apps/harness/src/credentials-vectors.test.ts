@@ -214,7 +214,7 @@ describe('MCP 憑證值的檢查樣本', () => {
 
 describe('MCP 憑證值的遮蔽樣本（格式）', () => {
   it.each(VECTORS.redact.map((v) => [v.name, v] as const))(
-    '%s：欄位齊全、expect 只多出占位字串',
+    '%s：欄位齊全、expect 不含 absent',
     (_name, vector) => {
       expect(vector.values.length).toBeGreaterThan(0);
       expect(typeof vector.text).toBe('string');

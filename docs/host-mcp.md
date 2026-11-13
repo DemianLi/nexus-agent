@@ -54,7 +54,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   - 同一代撞到幾次都只換一次代：通知打的是那一代自己的訊號，不累積；換代之後才回來的舊錯誤打的是舊一代，打不到新一代。
   - 沒帶 session id 的 404（握手、網址錯、server 不發 session id）rmcp 不回 `SessionExpired`，照一般的失敗走，連線不動。新協定沒有 session，不會遇到。
   - 升 rmcp 時重看這條下轉型：`host/tests/mcp.rs` 的 `bridge::忘掉_session_這次失敗_下一次在新一代成功` 會紅。
-- 送回對話行程的文字先遮掉這一列的秘密：錯誤與診斷走 `Shared::scrub`；工具清單、成功結果（含 `isError`）、resources、instructions 走 `outgoing`，遮 JSON 值裡的字串與鍵，再序列化。規則見 [`credentials-file.md`](credentials-file.md)〈MCP 憑證值的遮蔽〉。
+- 送回對話行程的文字先遮掉這一列的秘密，三條出口：結果與 resources（含 `isError`）走 `outgoing`、工具清單走 `outgoing_tools`，遮 JSON 值裡的字串再序列化；instructions 走 `Shared::redact_text`；錯誤走 `Shared::scrub`（連線診斷在 `connection::connect` 回錯前就 `scrub` 過）。物件的鍵、工具的 `name`、值是字串的 `uri`／`uriTemplate` 不遮。規則見 [`credentials-file.md`](credentials-file.md)〈MCP 憑證值的遮蔽〉。
 
 ## 設定
 
@@ -73,9 +73,14 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 `approval` 不經宿主，寫了拒絕。
 
-**秘密**：header 的值、網址的 query（整串、每個值的原樣與解碼後）是這一列的秘密（`Server::secrets`），
-出現在送回對話行程的文字裡，一律換成 `[redacted]`。收集的入口只有一個：`Redactor::new`（`host/src/mcp/redact.rs`），`Pool` 把池的秘密（代理帳密）與這一列的合起來交進去；之後憑證引用解出來的值走同一個入口。
+**秘密**（`Server::secrets`）：
+- header 的值，除了 `LITERAL_HEADERS`（`config.rs`）：`Accept`、`Content-Type`、`User-Agent`、`Accept-Language`、`MCP-Protocol-Version`，不分大小寫，這幾個的值不收。非 ASCII 的值照位元組收，不丟。`Authorization`、`Proxy-Authorization` 另收 scheme 後面那一段。
+- 網址的 query（整串、每個值的原樣與解碼後）。
+
+這些出現在送回對話行程的文字裡，一律換成 `[redacted]`。收集的入口只有一個：`Redactor::new`（`host/src/mcp/redact.rs`），`Pool` 把池的秘密（代理帳密）與這一列的合起來交進去；之後憑證引用解出來的值走同一個入口。
 每個值連同百分號、form 與 JSON 跳脫形式在原文上一次替換。夠長（至少 8 個 code point）的值遮所有輸出；更短的只可能是設定裡的字面值，只遮錯誤與診斷，不遮成功結果。`Server` 與 `Redactor` 的 `Debug` 不印這些。
+
+**過渡：** 宿主收到的是 TS 解好的成品，分不出憑證與字面值，所以排除清單以外的 header 值與全部的 query 值一律當秘密收，夠長的字面值也會在成功結果裡被遮。憑證引用接到宿主（PR-E）之後，只收憑證解出來的值，這份清單拿掉。
 
 ## 一代連線
 

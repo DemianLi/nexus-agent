@@ -6,7 +6,7 @@
 //! - 一次請求（[`Command::Request`]）送到那份連線**當下**活著的一代：空窗或放棄之後當場回 `server is disconnected`（同 TS `packages/nexus-plugin-mcp/src/index.ts`）；
 //!   transport 已經關了的錯誤讓那一代判掉線，交給監督者重連。rmcp 3.9 的 HTTP transport 握手之後不會因 server 而關，所以另外認一種：帶著 session id 的請求收到 404（[`session_expired`]，
 //!   #2690）也讓那一代判掉線。單次請求失敗（逾時、server 回錯、回應太大、這一則的 SSE 串流斷掉）不算掉線。
-//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。成功結果與工具清單在 `outgoing` 序列化成文字之前遮蔽已解析的憑證值（[`super::redact`]）；`outgoing` 是唯一出口。
+//! - 結果以 JSON 文字交回：宿主的框有巢狀上限，MCP 的酬載不受它限。送回對話行程的文字有三條出口，都先遮蔽這一份的秘密（[`super::redact`]）：結果與工具清單在序列化成文字之前走 `outgoing`／`outgoing_tools`，instructions 走 `Shared::redact_text`，錯誤走 `Shared::scrub`。連線診斷在 `connection::connect` 回錯之前就 `scrub` 過。
 //! - [`Command::Shutdown`] 或宿主那一側丟掉 [`Bridge`]：取消還在跑的請求、關池（每一份照監督者的收線期限），最後交一則 [`Outcome::Closed`]。
 
 use std::collections::HashMap;
@@ -266,9 +266,9 @@ async fn serve(
 fn opened(shared: &Shared<Generation>, warning: Option<String>) -> Result<Opened, String> {
     let (tools, instructions) = match shared.listed() {
         Some(listed) => (
-            outgoing(
+            outgoing_tools(
                 shared,
-                &serde_json::to_value(&listed.tools).map_err(|e| e.to_string())?,
+                serde_json::to_value(&listed.tools).map_err(|e| e.to_string())?,
             ),
             shared.redact_text(&listed.instructions),
         ),
@@ -277,14 +277,20 @@ fn opened(shared: &Shared<Generation>, warning: Option<String>) -> Result<Opened
     Ok(Opened {
         tools,
         instructions,
-        warning: warning.map(|w| shared.scrub(&w)),
+        warning,
     })
 }
 
-/// 交回宿主那一側之前的唯一出口：先遮掉這一份已解析的憑證值，再序列化成 JSON 文字。
-/// 工具清單、成功結果、resources 都從這裡走；錯誤走 [`Shared::scrub`]。
-fn outgoing(shared: &Shared<Generation>, value: &Value) -> String {
-    serde_json::to_string(&shared.redact_json(value)).unwrap_or_else(|_| "null".to_string())
+/// 成功結果（含 `isError`）與 resources 交回宿主那一側之前：先原地遮掉這一份的秘密，再序列化成 JSON 文字。
+fn outgoing(shared: &Shared<Generation>, mut value: Value) -> String {
+    shared.redact_json(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
+}
+
+/// 同 [`outgoing`]，對工具清單：每個工具的 `name` 不遮。
+fn outgoing_tools(shared: &Shared<Generation>, mut tools: Value) -> String {
+    shared.redact_tool_list(&mut tools);
+    serde_json::to_string(&tools).unwrap_or_else(|_| "null".to_string())
 }
 
 /// rmcp 3.9.0 的 HTTP transport 在請求帶著 session id、server 回 404 時回的 `StreamableHttpError::SessionExpired`（`"Session expired (HTTP 404)"`），
@@ -353,7 +359,7 @@ async fn request(
     };
     match response {
         Ok(result) => serde_json::to_value(&result)
-            .map(|v| outgoing(shared, &v))
+            .map(|v| outgoing(shared, v))
             .map_err(|e| e.to_string()),
         Err(err) => {
             // 同 TS 只認 transport 關了：單次 POST 失敗（server 回錯、回應太大、連不上）rmcp 的 worker 照跑，只是這一次失敗。

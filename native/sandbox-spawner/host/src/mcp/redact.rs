@@ -9,7 +9,7 @@
 /// 占位字串。
 pub const PLACEHOLDER: &str = "[redacted]";
 
-/// 憑證值修剪後至少要有幾個 code point（#2570）。更短的在值檢查拒絕，進得了遮蔽器的值就一律遮。
+/// 憑證值修剪後至少要有幾個 code point（#2570）。更短的憑證值在值檢查拒絕，所以不到這個長度的只可能是設定裡的字面值（見 [`Redactor`] 的 `errors_only`）。
 pub const MIN_VALUE_CODE_POINTS: usize = 8;
 
 /// 一組要遮的值，與它們所有編碼形式的比對字串。
@@ -78,33 +78,69 @@ impl Redactor {
         replace_spans(text, &all)
     }
 
-    /// 成功結果（或工具清單、resources）的 JSON 值：每個字串與每個物件的鍵都遮。
-    /// 遮的是字串的內容、不是序列化後的文字，所以換掉的區間不會跨過 JSON 的引號而把結果弄成不合法的 JSON。
-    pub fn redact_json(&self, value: &serde_json::Value) -> serde_json::Value {
+    /// 成功結果與 resources 的 JSON 值，原地遮：每個字串的內容都遮。
+    ///
+    /// 不動的有兩種，都是 server 之後要原樣收回去的識別，遮了就叫不動、讀不到：
+    /// 物件的鍵（工具 schema 的參數名、結果的欄位名），與值是字串的 `uri`、`uriTemplate`（resources 與 resource_link）。
+    /// 遮的是字串內容、不是序列化後的文字，所以換掉的區間不會跨過 JSON 的引號而把結果弄成不合法的 JSON。
+    pub fn redact_json(&self, value: &mut serde_json::Value) {
+        self.walk(value, &IDENTIFIER_KEYS);
+    }
+
+    /// 工具清單（`tools/list` 列出的陣列）：同 [`Redactor::redact_json`]，另外每個工具自己的 `name` 不動（`tools/call` 要用它）。
+    pub fn redact_tool_list(&self, tools: &mut serde_json::Value) {
+        let Some(list) = tools.as_array_mut() else {
+            return self.redact_json(tools);
+        };
+        for tool in list {
+            match tool.as_object_mut() {
+                Some(fields) => {
+                    for (key, field) in fields.iter_mut() {
+                        if key != "name" || !field.is_string() {
+                            self.walk(field, &IDENTIFIER_KEYS);
+                        }
+                    }
+                }
+                None => self.walk(tool, &IDENTIFIER_KEYS),
+            }
+        }
+    }
+
+    fn walk(&self, value: &mut serde_json::Value, keep: &[&str]) {
         use serde_json::Value as J;
         if self.everywhere.is_empty() {
-            return value.clone();
+            return;
         }
         match value {
-            J::String(s) => J::String(self.redact_text(s)),
-            J::Array(items) => J::Array(items.iter().map(|v| self.redact_json(v)).collect()),
-            J::Object(map) => J::Object(
-                map.iter()
-                    .map(|(k, v)| (self.redact_text(k), self.redact_json(v)))
-                    .collect(),
-            ),
-            other => other.clone(),
+            J::String(s) => {
+                let redacted = self.redact_text(s);
+                if redacted != *s {
+                    *s = redacted;
+                }
+            }
+            J::Array(items) => items.iter_mut().for_each(|v| self.walk(v, keep)),
+            J::Object(map) => {
+                for (key, field) in map.iter_mut() {
+                    if !(field.is_string() && keep.contains(&key.as_str())) {
+                        self.walk(field, keep);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
+
+/// 值是字串時不遮的欄位名：server 之後要原樣收回去的識別。
+const IDENTIFIER_KEYS: [&str; 2] = ["uri", "uriTemplate"];
 
 /// 長的值先換、重疊不漏：這是舊的逐值替換的入口，給只有一組字串、要遮錯誤文字的呼叫端。
 pub fn scrub(text: &str, secrets: &[String]) -> String {
     Redactor::new(secrets.iter().cloned()).scrub_text(text)
 }
 
-/// 一個值的比對形式：原值、`encodeURIComponent`、form 編碼（空白寫成 `+`）、JSON 字串裡的跳脫。
-/// 百分號編碼的十六進位大小寫都收（server 回顯時可能改成小寫）。
+/// 一個值的比對形式：原值、`encodeURIComponent`、form 編碼（空白寫成 `+`）、JSON 字串裡的跳脫（含把 `/` 寫成 `\\/` 的）。
+/// 百分號與 `\u` 的十六進位只收全大寫與全小寫，不收同一段裡大小寫混用的。
 fn forms(value: &str) -> Vec<String> {
     let mut out = vec![value.to_string()];
     for upper in [true, false] {
@@ -113,6 +149,13 @@ fn forms(value: &str) -> Vec<String> {
         out.push(json_escaped(value, upper, false));
         out.push(json_escaped(value, upper, true));
     }
+    // 別家的 JSON 編碼器（PHP 等）把 `/` 寫成 `\/`。
+    let slashed: Vec<String> = out
+        .iter()
+        .filter(|f| f.contains('/'))
+        .map(|f| f.replace('/', "\\/"))
+        .collect();
+    out.extend(slashed);
     out.retain(|f| !f.is_empty());
     out.sort();
     out.dedup();

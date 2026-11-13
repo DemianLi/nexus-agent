@@ -121,12 +121,17 @@ impl<G: Generation> Shared<G> {
         self.redactor.scrub_text(text)
     }
 
-    /// 成功結果、工具清單與指引：換掉這一份夠長的秘密，見 [`Redactor`]。
-    pub fn redact_json(&self, value: &serde_json::Value) -> serde_json::Value {
-        self.redactor.redact_json(value)
+    /// 成功結果與 resources：原地遮這一份夠長的秘密，見 [`Redactor::redact_json`]。
+    pub fn redact_json(&self, value: &mut serde_json::Value) {
+        self.redactor.redact_json(value);
     }
 
-    /// 同 [`Shared::redact_json`]，對一段文字。
+    /// 工具清單，見 [`Redactor::redact_tool_list`]。
+    pub fn redact_tool_list(&self, tools: &mut serde_json::Value) {
+        self.redactor.redact_tool_list(tools);
+    }
+
+    /// instructions 這類單獨的一段文字，規則同 [`Shared::redact_json`]。
     pub fn redact_text(&self, text: &str) -> String {
         self.redactor.redact_text(text)
     }

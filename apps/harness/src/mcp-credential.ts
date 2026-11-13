@@ -6,7 +6,7 @@
  *
  * - 兩條路都修掉頭尾空白與換行（YAML `|` 區塊值帶出的尾端換行），修完是空的就拒絕。
  * - 修完少於 8 個 code point 的拒絕（#2570）：宿主會在送回對話行程的文字裡遮掉憑證值（這裡的遮蔽在 #2669），太短的值偶然撞上正常內容的機率高，
- *   遮了會把成功的結果改壞。短的非秘密值（帳號、埠號）改寫成字面值，字面值不收集、不遮。
+ *   遮了會把成功的結果改壞。短的非秘密值（帳號、埠號）改寫成設定裡的字面值；宿主今天分不出憑證與字面值，字面值也會收、夠長的也遮（過渡，見 `docs/credentials-file.md`〈MCP 憑證值的遮蔽〉）。
  * - `env`：NUL。`child_process.spawn` 遇到含 NUL 的 env 值會拋 `ERR_INVALID_ARG_VALUE`，訊息帶出整個值。
  * - `header`：Node http 驗 header 值的規則（`validateHeaderValue`），允許 tab、0x20–0x7E、0x80–0xFF。
  *   要在這裡先擋，是因為 MCP 的 HTTP transport 走 `fetch`，undici 的 `Headers` 遇到 CR、LF、NUL 拋的錯會原樣帶出整個值。

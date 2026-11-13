@@ -189,22 +189,37 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **少於 8 個 code point 拒絕**（`too-short`）。以 code point 算，不是 UTF-16 單位或位元組：一個中文字、一個補充平面的表情符號都算一個。
 
 「空白」跟 JS 的 `String.prototype.trim` 一樣：U+FEFF 修掉，U+0085 不修。拒絕訊息只講憑證名、來源層與規則。
-短值拒絕的理由是遮蔽不能靠「短的不遮」來避開誤判（那等於洩漏），而進了遮蔽器的值就一律遮，所以太短、偶然撞上正常內容的值在源頭擋掉。
-短的非秘密值（帳號、埠號）改寫成字面值，字面值不收集、不遮。8 是以偶然命中的機率估的，定在 #2570。
+短值拒絕的理由是遮蔽不能靠「短的不遮」來避開誤判（那等於洩漏）：憑證值不到門檻就在源頭擋掉，太短、偶然撞上正常內容的值進不了遮蔽器。
+短的非秘密值（帳號、埠號）改寫成設定裡的字面值。8 是以偶然命中的機率估的，定在 #2570。
 
 **遮蔽（送出之前）**：
 
-- **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上所有已解析的值交進去。
-  今天灌進去的是 header 的值、網址的 query、代理的帳密；憑證引用解出來的值之後走同一個入口。網址的 `user:password@` 設定時就拒（見 `docs/host-mcp.md`），不進入口；遮蔽器本身不分來源，帶 userinfo 的字串照樣遮（樣本「網址 userinfo 的帳密」）。
-- **形式**：每個值收原值、`encodeURIComponent`、form 編碼（空白寫成 `+`，保留的字元也不同）、JSON 字串裡的跳脫（`"`、`\`、控制字元；非 ASCII 另收 `\uXXXX`，補充平面用代理對）。
-  百分號與 `\u` 的十六進位大小寫都收。
-- **替換**：在原文上找出所有值、所有形式的命中區間，合併重疊與相鄰的，一次換成 `[redacted]`。不是逐值各換一次，所以兩個重疊的值不會漏，占位字串也不會被後面的值打中。
-- **範圍**：成功與 `isError` 的工具結果、工具清單與 schema、instructions、resources、錯誤與診斷，都從宿主送回對話行程的單一出口走（`bridge.rs` 的 `outgoing` 與 `Shared::scrub`）。
-  遮的是 JSON 值裡的字串與鍵，在序列化之前做，所以換掉的區間不會跨過 JSON 的引號。
-- **短的字面值**：設定裡寫死的短字串（header 的 `ab`、網址 query 的 `limit=10` 裡的 `10`）不是憑證，不會通過值檢查。它們只在錯誤與診斷裡遮（reqwest 會把網址印進錯誤），不遮成功結果：遮了會把 server 正常的回答改壞。
-- **沒收的形式**：base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼。值被 server 轉過這些形式再回顯就遮不到。
+- **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上的值交進去。今天交進去的是：
+  - header 的值，除了 `LITERAL_HEADERS`（`config.rs`）：`Accept`、`Content-Type`、`User-Agent`、`Accept-Language`、`MCP-Protocol-Version`（不分大小寫）。這幾個是協定層、一定不是秘密，值不進遮蔽器。
+    值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
+  - 網址的 query：整串、每個值的原樣與解碼後，全部收；
+  - 代理的帳密。
 
-測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_redact.rs`（含經真的橋，成功結果、編碼形式與代理帳密都遮掉的三條）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
+  憑證引用解出來的值之後走同一個入口。**過渡：** 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是設定裡寫死的字面值，所以今天其餘的 header 與 query 值一律當秘密收，字面值也會被遮。憑證引用接到宿主（PR-E）之後，只收憑證解出來的值，字面值不再收集，`LITERAL_HEADERS` 也拿掉。
+  網址的 `user:password@` 設定時就拒（見 `docs/host-mcp.md`），不進入口；遮蔽器本身不分來源，帶 userinfo 的字串照樣遮（樣本「網址 userinfo 的帳密」）。
+- **形式**：每個值收原值、`encodeURIComponent`、form 編碼（空白寫成 `+`，保留的字元也不同）、JSON 字串裡的跳脫（`"`、`\`、控制字元；非 ASCII 另收 `\uXXXX`，補充平面用代理對；也收把 `/` 寫成 `\/` 的）。
+  百分號與 `\u` 的十六進位只收全大寫與全小寫，不收同一段裡大小寫混用的。
+- **替換**：在原文上找出所有值、所有形式的命中區間，合併重疊與相鄰的，一次換成 `[redacted]`。不是逐值各換一次，所以兩個重疊的值不會漏，占位字串也不會被後面的值打中。
+- **範圍與出口**：送回對話行程的文字有三條出口，都先遮：
+  - 結果與 resources（含 `isError`）走 `bridge.rs` 的 `outgoing`，工具清單走 `outgoing_tools`：遮 JSON 值裡的字串，在序列化之前做，所以換掉的區間不會跨過 JSON 的引號；
+  - instructions 走 `Shared::redact_text`；
+  - 錯誤走 `Shared::scrub`；連線診斷在 `connection::connect` 回錯之前就 `scrub` 過。
+- **不遮的欄位**：遮完的清單必須還能用，所以 server 之後要原樣收回去的識別不動：
+  - 物件的鍵（工具 schema 的參數名、結果的欄位名）；
+  - 工具清單裡每個工具自己的 `name`（`tools/call` 要用）；
+  - 值是字串的 `uri` 與 `uriTemplate`（resources、resource_link；`resources/read` 要用）。
+
+  其餘字串（描述、內容、resource 的 `name`）都遮。server 若把秘密放在這些識別欄位裡，會原樣送回，這是不遮它們的代價。
+- **短的字面值**：header 的短字面值（例如 `X-Mode: ab`）與網址 query 裡的片段（`limit=10` 的 `10`）不到 8 個字元，不會是憑證。它們只在錯誤與診斷裡遮（reqwest 會把網址印進錯誤），不遮成功結果：遮了會把 server 正常的回答改壞。
+- **沒收的形式**：base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
+  一個值被拆在兩個字串裡（例如分兩個 content 區塊）；JSON 的數字（`{"pin": 12345678}` 不遮，值檢查不限數字）。值被 server 轉成這些形式再回顯就遮不到。
+
+測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
 
 ## 重讀
 
