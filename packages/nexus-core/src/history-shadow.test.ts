@@ -14,6 +14,8 @@ import {
   createHistoryFromLogMiddleware,
   createHistoryShadowMiddleware,
   createHistoryShadowTally,
+  createUnsummarizedHistoryReader,
+  createVisibleHistoryReader,
   eventsForModelCall,
   wireProjection,
 } from './history-shadow.js';
@@ -381,5 +383,34 @@ describe('createHistoryFromLogMiddleware', () => {
       ),
     ).toThrow(/模型歷史從日誌推不出來/u);
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('createUnsummarizedHistoryReader：摘要前後的訊息都在', () => {
+  it('同一份日誌：visible 讀者套摘要，這顆不套；摘要之後新增的訊息兩邊都跟著長', () => {
+    const log = new SessionLog('reader');
+    chat(log, '一', '甲');
+    chat(log, '二', '乙');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('compaction/summary', {
+      cutoffIndex: 2,
+      messagesBefore: 5,
+      filePath: null,
+      summary: toLoggedMessage(
+        new HumanMessage({ content: '摘要', additional_kwargs: { lc_source: 'summarization' } }),
+      ),
+      beforeCall: true,
+    });
+    log.append('model/start', {});
+    const visible = createVisibleHistoryReader();
+    const unsummarized = createUnsummarizedHistoryReader();
+
+    const textsOf = (messages: readonly BaseMessage[]) => messages.map((message) => message.text);
+    expect(textsOf(visible(log))).toEqual(['摘要', '二', '乙', '三']);
+    expect(textsOf(unsummarized(log))).toEqual(['一', '甲', '二', '乙', '三']);
+
+    log.append('assistant/message', { message: reply('丙') });
+    log.append('model/end', {});
+    expect(textsOf(unsummarized(log))).toEqual(['一', '甲', '二', '乙', '三', '丙']);
   });
 });
