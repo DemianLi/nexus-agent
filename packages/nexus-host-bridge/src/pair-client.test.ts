@@ -1438,11 +1438,20 @@ describe('背壓與停滯', () => {
     await fill(client);
     const before = client.queuedBytes;
     rig.clock.advance(PAIR_STALL_TIMEOUT_MS - 1);
-    // `read()` 交出 Node 緩衝裡的那一份，Node 接著從 kernel 再讀滿一份就停：kernel 的 buffer 空出這麼多，葉子寫得出去一小段，然後又停住。
-    conn.socket.read();
-    await until(() => client.queuedBytes < before, '寫出去一段');
+    // 對端不恢復讀取，只一份一份拿走 Node 緩衝裡的（Node 隨後再從 kernel 讀到 highWaterMark 就停），拿到葉子寫得出去就不拿了：
+    // kernel 要空出多少葉子才寫得進去看平台，所以看的是葉子排著的有沒有變少，不是拿了幾份。
+    let taken = 0;
+    for (let round = 0; client.queuedBytes === before; round += 1) {
+      if (round === 10_000) {
+        throw new Error(`對端拿走 ${String(taken)} 位元組，葉子還是沒寫出去`);
+      }
+      const part = conn.socket.read() as Buffer | null;
+      taken += part?.length ?? 0;
+      await spin();
+    }
     await stuck(client);
     expect(client.queuedBytes).toBeGreaterThan(0);
+    expect(client.queuedBytes).toBeLessThan(before);
     rig.clock.advance(PAIR_STALL_TIMEOUT_MS - 1);
     const closed = track(client.closed);
     await Promise.resolve();
