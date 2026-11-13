@@ -13,7 +13,13 @@ use crate::json::{Map, Value};
 /// 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是字面值，所以其餘的 header 值一律當秘密收；
 /// 不排除這幾個，`Accept: application/json` 這種每個回應都可能出現的字串會把成功結果裡的同樣字串遮掉。
 /// 過渡：憑證引用接到宿主（PR-E）之後，宿主只收憑證解出來的值，這份清單就拿掉。
-pub const LITERAL_HEADERS: [&str; 0] = [];
+pub const LITERAL_HEADERS: [&str; 5] = [
+    "accept",
+    "content-type",
+    "user-agent",
+    "accept-language",
+    "mcp-protocol-version",
+];
 
 /// 一次 `tools/call` 的預設逾時，同 `DEFAULT_TOOL_CALL_TIMEOUT_MS`。
 pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -231,10 +237,7 @@ impl Server {
     /// - 網址的 query：整串、每個值的原樣與解碼後。reqwest 的錯誤會印出帶 query 的網址。
     pub fn secrets(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for (name, value) in &self.headers {
-            if LITERAL_HEADERS.contains(&name.as_str()) {
-                continue;
-            }
+        for (_, value) in &self.headers {
             let bytes = value.as_bytes();
             if !bytes.is_ascii() {
                 continue;
@@ -245,14 +248,6 @@ impl Server {
             }
             if !bytes.is_ascii() {
                 texts.push(bytes.iter().map(|&b| b as char).collect::<String>());
-            }
-            if false && matches!(name.as_str(), "authorization" | "proxy-authorization") {
-                let tokens: Vec<String> = texts
-                    .iter()
-                    .filter_map(|t| t.split_once(char::is_whitespace))
-                    .map(|(_, rest)| rest.trim().to_string())
-                    .collect();
-                texts.extend(tokens);
             }
             out.extend(texts);
         }

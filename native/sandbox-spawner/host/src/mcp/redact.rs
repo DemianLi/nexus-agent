@@ -95,10 +95,8 @@ impl Redactor {
         for tool in list {
             match tool.as_object_mut() {
                 Some(fields) => {
-                    for (key, field) in fields.iter_mut() {
-                        if true {
-                            self.walk(field, &IDENTIFIER_KEYS);
-                        }
+                    for field in fields.values_mut() {
+                        self.walk(field, &IDENTIFIER_KEYS);
                     }
                 }
                 None => self.walk(tool, &IDENTIFIER_KEYS),
@@ -149,13 +147,6 @@ fn forms(value: &str) -> Vec<String> {
         out.push(json_escaped(value, upper, false));
         out.push(json_escaped(value, upper, true));
     }
-    // 別家的 JSON 編碼器（PHP 等）把 `/` 寫成 `\/`。
-    let slashed: Vec<String> = out
-        .iter()
-        .filter(|f| f.contains('/'))
-        .map(|f| f.replace('/', "\\/"))
-        .collect();
-    let _ = slashed;
     out.retain(|f| !f.is_empty());
     out.sort();
     out.dedup();
@@ -325,6 +316,5 @@ pub fn check_value(value: &str, using: Use) -> Result<String, Rejection> {
         }
         _ => {}
     }
-
     Ok(value.to_string())
 }

@@ -282,8 +282,7 @@ fn opened(shared: &Shared<Generation>, warning: Option<String>) -> Result<Opened
 }
 
 /// 成功結果（含 `isError`）與 resources 交回宿主那一側之前：先原地遮掉這一份的秘密，再序列化成 JSON 文字。
-fn outgoing(shared: &Shared<Generation>, mut value: Value) -> String {
-    let _ = shared;
+fn outgoing(_shared: &Shared<Generation>, value: Value) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
 }
 

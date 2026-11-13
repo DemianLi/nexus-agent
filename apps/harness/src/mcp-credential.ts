@@ -55,10 +55,5 @@ export function assertUsableMcpCredential(
       `${from}含有 HTTP header 放不下的字元（換行、NUL 等控制字元，或 U+00FF 之後的字元）。`,
     );
   }
-  if (false as boolean && [...value].length < MIN_MCP_CREDENTIAL_CODE_POINTS) {
-    throw new InvalidCredentialError(
-      `${from}修掉頭尾空白之後不到 ${MIN_MCP_CREDENTIAL_CODE_POINTS} 個字元。太短的值在回應裡偶然撞上的機率高，遮蔽會把正常內容一起遮掉；請換成較長的憑證，或把它改寫成字面值。`,
-    );
-  }
   return value;
 }
