@@ -360,9 +360,7 @@ describe('快取的邊界', () => {
 
 describe('deriveUnsummarized：沒套摘要的那一串', () => {
   const texts = (replay: DerivedConversation): string[] =>
-    replay.kind === 'replayed'
-      ? replay.messages.map((message) => toBaseMessage(message).text)
-      : [];
+    replay.kind === 'replayed' ? replay.messages.map((message) => toBaseMessage(message).text) : [];
 
   /** 對照組：新的 `ReplayFold` 餵同一段事件，取 `raw` 接上等結果的那一批。 */
   const expected = (events: readonly SessionEvent[]): unknown => {
