@@ -274,12 +274,7 @@ impl Harness {
     /// 只讀開啟，等到 `up`。
     fn up_read_only(&mut self, thread: &str) -> PathBuf {
         self.ensure_open(thread, OpenMode::ReadOnly);
-        match self.event() {
-            FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => {
-                PathBuf::from(String::from_utf8(socket).unwrap())
-            }
-            other => panic!("要 {thread} 的 up，拿到 {other:?}"),
-        }
+        self.up_of(thread)
     }
 
     /// 下一則給前台的訊息；前台的連線斷了（監督行程收掉了前台）回 `None`。
@@ -316,12 +311,20 @@ impl Harness {
     /// 要一條 thread、等到 `up`，回 socket 路徑。
     fn up(&mut self, thread: &str) -> PathBuf {
         self.ensure(thread);
-        match self.event() {
-            FrontEvent::Up { thread_id, socket } => {
-                assert_eq!(thread_id, thread.as_bytes());
-                PathBuf::from(String::from_utf8(socket).unwrap())
+        self.up_of(thread)
+    }
+
+    /// 等到 `thread` 的 `up`，回 socket 路徑。別的 thread 的 `up` 收下略過：
+    /// 剛起的那條（逐出之後替等待的 thread 起行程）與已在跑的那條的 `up` 走不同的路進監督行程，沒有先後保證。
+    fn up_of(&mut self, thread: &str) -> PathBuf {
+        loop {
+            match self.event() {
+                FrontEvent::Up { thread_id, socket } if thread_id == thread.as_bytes() => {
+                    return PathBuf::from(String::from_utf8(socket).unwrap());
+                }
+                FrontEvent::Up { .. } => {}
+                other => panic!("要 {thread} 的 up，拿到 {other:?}"),
             }
-            other => panic!("要 up，拿到 {other:?}"),
         }
     }
 
@@ -1156,8 +1159,10 @@ fn supervisor_blocked_on_its_own_stderr_does_not_stall_the_healthy_ones() {
 #[test]
 fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
     // RSS 輪詢放到一分鐘：計時器只剩 stall 的期限與它的四分之一。
+    // stall 取 2 秒：監督行程醒來把沉默歸零之後，到 a 送出第一次心跳之前都算在這 2 秒裡，
+    // 忙的機器上測試執行緒、監督行程、a 各自晚幾百毫秒是常事，1 秒的餘裕不夠。
     let mut h = Harness::start(Options {
-        extra: vec!["--stall-ms", "1000", "--rss-poll-ms", "60000"],
+        extra: vec!["--stall-ms", "2000", "--rss-poll-ms", "60000"],
         ..Options::default()
     });
     let socket = h.up("a");
@@ -1166,19 +1171,20 @@ fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
     // SAFETY：只送訊號，對 a 的群組。
     unsafe { libc::kill(-a, libc::SIGSTOP) };
     // 只比 N 多一點：監督行程不是最晚 N 的四分之一就醒一次的話，醒來時比預定晚不到 N 的一半，認不出自己被停住過。
-    std::thread::sleep(Duration::from_millis(1_300));
-    // 監督行程先醒，a 晚 200 ms：監督行程醒來那一刻還沒有 a 的心跳。
+    std::thread::sleep(Duration::from_millis(2_300));
+    // 監督行程先醒；等到它判定自己被停住過才放 a，醒來那一刻一定還沒有 a 的心跳，不靠固定的睡眠湊先後。
+    // 這裡依賴監督行程 `check_resumed` 寫到 stderr 的那句「判定自己被停住過」（README 與 `src/supervisor/mod.rs` 的文件也用這個詞）；改了那句話，這裡的字串要一起改。
     kill(h.pid(), libc::SIGCONT);
-    std::thread::sleep(Duration::from_millis(200));
-    // SAFETY：同上。
-    unsafe { libc::kill(-a, libc::SIGCONT) };
-    std::thread::sleep(Duration::from_millis(1_500));
-    assert_eq!(h.up("a"), socket);
     assert!(
-        supervisor_stderr(&h).contains("判定自己被停住過"),
+        wait_until(|| supervisor_stderr(&h).contains("判定自己被停住過")),
         "{}",
         supervisor_stderr(&h)
     );
+    // SAFETY：同上。
+    unsafe { libc::kill(-a, libc::SIGCONT) };
+    // 超過 stall：歸零沒做、或 a 的沉默沒有重新起算的話，這段時間裡就會被判 stalled。
+    std::thread::sleep(Duration::from_millis(2_100));
+    assert_eq!(h.up("a"), socket);
 }
 
 #[test]
