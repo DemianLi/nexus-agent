@@ -59,7 +59,7 @@ async function assemble(
     readonly recursionLimit?: number;
     readonly wrapAgent?: (agent: PumpAgent) => PumpAgent;
     readonly source?: HistorySource;
-    readonly agentLoop?: 'langgraph';
+    readonly agentLoop?: 'langgraph' | 'native';
   } = {},
 ) {
   const outcomes: HistoryShadowOutcome[] = [];
@@ -250,6 +250,54 @@ describe('image-offload-after-start', () => {
     expect(log.prompts.map((prompt) => prompt.map(wireProjection))).toEqual(
       state.prompts.map((prompt) => prompt.map(wireProjection)),
     );
+  });
+
+  it('native＋log：重送重進推導前的預先記錄，不多寫 model/start、不重記快照、不被當成不一致，順序與 langgraph 相同', async () => {
+    const run = async (agentLoop: 'langgraph' | 'native') => {
+      const model = new UndeclaredBudgetModel({
+        turns: [{ content: '一' }, { content: '二' }],
+        imageBudget: { maxImages: 1 },
+      });
+      const { pump } = await assemble(model, { source: 'log', agentLoop });
+      await pump.submit({
+        kind: 'message',
+        text: '看這張',
+        id: 'm1',
+        attachments: [imageRef('a', 'one.png')],
+      });
+      await pump.whenIdle();
+      await pump.submit({
+        kind: 'message',
+        text: '再看這張',
+        id: 'm2',
+        attachments: [imageRef('b', 'two.png')],
+      });
+      await pump.whenIdle();
+      const types = pump.sessions.root.events
+        .map((event) => event.type)
+        .filter((type) =>
+          ['model/start', 'request/system', 'request/header', 'image/offload'].includes(type),
+        );
+      return { model, types };
+    };
+    const langgraph = await run('langgraph');
+    const native = await run('native');
+
+    // 被拒的那次沒進 prompts；第二輪有送出去，代表重進時預先記的與 callback 看到的沒被判成不一致。
+    expect(native.model.rejectedImageRequests).toBe(1);
+    expect(native.model.prompts).toHaveLength(2);
+    expect(native.model.prompts.map((prompt) => prompt.map(wireProjection))).toEqual(
+      langgraph.model.prompts.map((prompt) => prompt.map(wireProjection)),
+    );
+    // 兩輪各一顆 model/start：重進同一個範圍不再寫；快照只有第一輪那一份，第二輪與重進都沒變就不重記。
+    expect(native.types.filter((type) => type === 'model/start')).toHaveLength(2);
+    expect(native.types.filter((type) => type === 'request/system')).toHaveLength(1);
+    expect(native.types.filter((type) => type === 'request/header')).toHaveLength(1);
+    // offload 落在第二輪那顆 model/start 之後，同 langgraph。
+    expect(native.types.lastIndexOf('image/offload')).toBeGreaterThan(
+      native.types.lastIndexOf('model/start'),
+    );
+    expect(native.types).toEqual(langgraph.types);
   });
 
   it('凍結夾具 v52-image-offload-after-start：重送那一刻推出來的，跟下一輪推出來的同一段相同', async () => {
