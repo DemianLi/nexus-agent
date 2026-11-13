@@ -147,7 +147,10 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 | `env` | 必填，子行程的**整份**環境：TS 清過的父環境在前、設定的在後。宿主 `env_clear` 之後只放這一份。 |
 | `credentialEnv` | `env` 裡值來自憑證的名字，每個都要在 `env` 裡。**只有這些值進遮蔽器**，並照〈MCP 憑證值的遮蔽〉的檢查（修頭尾空白、不到 8 個字元拒收）；`PATH`、`HOME` 這類字面值不進，成功結果才不會被遮壞。 |
 
-- 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。stderr 丟掉。
+- 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。
+- **stderr 現在不留**（接 `/dev/null`）。原因：宿主分不出子行程印的字裡有沒有憑證值，繼承會把它原樣寫進宿主的 stderr（監督行程的日誌，多人共用主機上是共用的）；
+  留下來要先過遮蔽器，這一版沒做。代價：server 起不來時，維運只看得到「Failed to connect to stdio server …」，看不到它自己印的原因。
+  這不是終點，下一步（#2570 (b)）：握手失敗或提早退出時，留 stderr 尾端有限位元組、過遮蔽器後帶進錯誤；遮不乾淨就寫明為什麼不做。
 - 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，最後 `wait`。`Generation::close` 回來時子行程已經收掉，不留殭屍。
 - 池的鍵：整份成品（含 `env` 的值）；換了憑證是另一份，`credentialEnv` 的順序與重複不影響。
 - 缺口：「哪幾個名字是憑證」由誰產生（匯出外掛的 `substituted`，或外掛回報）留給 PR-E，與 dev-h2 一起定；在那之前沒有生產端呼叫 `hostStdioConnection`。
