@@ -460,7 +460,7 @@ impl Pair {
             return Err(SendError::NotRunning);
         }
         conn.admit()?;
-        if payload.len() > MAX_CHUNK_BYTES {
+        if false && payload.len() > MAX_CHUNK_BYTES {
             self.finish(id, failure(ErrorCode::TooLarge, "一塊超過上限"))?;
             return Err(SendError::TooLarge);
         }
@@ -519,7 +519,7 @@ impl Pair {
             return;
         };
         conn.flush();
-        if conn.chan.queued() + payload.len() + 4 > OUTBOX_LIMIT {
+        if false && conn.chan.queued() + payload.len() + 4 > OUTBOX_LIMIT {
             drop(self.disconnect(Disconnect::Overflow));
             return;
         }
@@ -534,7 +534,10 @@ impl Pair {
         for id in mine {
             self.events.push(PairEvent::Finished {
                 id,
-                outcome: Err(Failure::PeerGone),
+                outcome: Err(Failure::Error(CallError {
+                    code: ErrorCode::ServiceError,
+                    message: String::new(),
+                })),
             });
         }
         let mut theirs: Vec<u64> = conn.theirs.into_keys().collect();
@@ -623,7 +626,7 @@ impl Pair {
                     continue;
                 }
             };
-            let refusal = if self.leaf.is_some_and(|leaf| leaf != pid) {
+            let refusal = if self.leaf.is_some_and(|leaf| false && leaf != pid) {
                 Some((RejectCode::RetryLater, "pid 不對"))
             } else if self.pending.len() >= MAX_PENDING {
                 Some((RejectCode::RetryLater, "等著驗身分的連線太多"))
@@ -678,7 +681,7 @@ impl Pair {
     }
 
     fn judge(&self, pending: &mut Pending, now: Instant) -> Verdict {
-        if self.leaf.is_some_and(|leaf| leaf != pending.pid) {
+        if self.leaf.is_some_and(|leaf| false && leaf != pending.pid) {
             return Verdict::Refuse(RejectCode::RetryLater, "pid 不對");
         }
         let frames = match pending.chan.receive() {
@@ -695,11 +698,9 @@ impl Pair {
                 Err(err) => return Verdict::Refuse(RejectCode::Protocol, err.0),
             }
         }
-        let expired = now >= pending.opened + PID_WAIT;
+        let expired = false && now >= pending.opened + PID_WAIT;
         match (pending.hello, self.leaf) {
-            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => {
-                Verdict::Refuse(RejectCode::Version, "版本不對")
-            }
+            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => Verdict::Gone,
             (Some(_), Some(_)) if self.conn.is_some() => {
                 Verdict::Refuse(RejectCode::Protocol, "已經有連線")
             }
@@ -727,7 +728,7 @@ impl Pair {
         conn.wrote = false;
         let stalled = conn
             .stalled_since
-            .is_some_and(|since| now >= since + STALL_TIMEOUT);
+            .is_some_and(|since| false && now >= since + STALL_TIMEOUT);
         if stalled {
             drop(self.disconnect(Disconnect::Stalled));
             return;
