@@ -1,14 +1,14 @@
-# 宿主的 HTTP MCP 連線
+# 宿主的 MCP 連線（HTTP 與 stdio）
 
-Rust 宿主（`native/sandbox-spawner/host/`）連 HTTP MCP server 的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
+Rust 宿主（`native/sandbox-spawner/host/`）連 MCP server（HTTP 與 stdio）的現有行為（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570) PR-D）。
 寫給要改這一層、或要對照 TS 的人。管理者怎麼設一列 MCP，看 [`operations.md`](operations.md)，這裡不重寫。
 
 **現況：對話行程那一側還沒接上。** 插件 `mcp` 與它 expose 的服務 `mcp/client` 都在，但對話行程還不會叫它。
 今天的 MCP 一律由 TS 的 `packages/nexus-plugin-mcp` 連。語意照那邊，下面標了「同 TS」的，訊息的英文也逐字相同（例外見〈跟 TS 的差距〉）。
 
-- 程式：`host/src/mcp/`（`config.rs` 設定、`connection.rs` 一代連線、`supervisor.rs` 退避重連、`pool.rs` 連線池、`bridge.rs` 跑它們的執行緒、
+- 程式：`host/src/mcp/`（`config.rs` 設定、`connection.rs` 一代連線、`stdio.rs` stdio 的子行程、`supervisor.rs` 退避重連、`pool.rs` 連線池、`bridge.rs` 跑它們的執行緒、
   `service.rs` 插件與服務）、`host/src/wake.rs`、`host/src/tls.rs`、`host/src/proxy.rs`。
-- 測試：`host/tests/mcp.rs`、`mcp_supervisor.rs`、`tls.rs`、`tls_env.rs`、`proxy.rs`，與 `host.rs` 的 `calls::mcp`（真的宿主行程）；
+- 測試：`host/tests/mcp.rs`、`mcp_stdio.rs`、`mcp_supervisor.rs`、`tls.rs`、`tls_env.rs`、`proxy.rs`，與 `host.rs` 的 `calls::mcp`（真的宿主行程）；
   本機的 HTTPS 假 server 在 `host/tests/common/fake_mcp.rs`，`host/examples/fake_mcp_server.rs` 把它包成獨立的執行檔。
 
 ## 插件與服務
@@ -58,14 +58,14 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 ## 設定
 
-一台 server 一個物件，是 TS `mcpConfigSchema` 的 HTTP 那一支。不認得的欄位整列拒絕；錯誤訊息只講欄位名，不帶值。
+一台 server 一個物件，是 TS `mcpConfigSchema` 的 HTTP 與 stdio 兩支。不認得的欄位整列拒絕；錯誤訊息只講欄位名，不帶值。
 
 | 欄位 | 內容 |
 | --- | --- |
 | `serverName` | 必填，1 到 32 個 `[A-Za-z0-9_-]`。 |
-| `connection` | 必填，`{ transport: "http", url, headers? }`。`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）。`headers` 的值只收字串；憑證引用（`{ credential, prefix? }`）還不支援，整列拒絕。`transport: "stdio"` 拒絕。 |
+| `connection` | 必填。HTTP：`{ transport: "http", url, headers? }`，`url` 只收 `http:`／`https:`，帶帳號或密碼的拒絕（訊息不印網址）；`headers` 的值只收字串，憑證引用（`{ credential, prefix? }`）還不支援，整列拒絕。stdio：`{ transport: "stdio", command, args?, cwd?, env, credentialEnv? }`，見下面〈stdio〉。 |
 | `toolCallTimeoutMs` | 正整數（不大於 2^53−1，`60000.0` 也收，同 zod 的 `int`），預設 60000。 |
-| `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（只給 stdio），只進池的鍵。 |
+| `livenessTimeoutMs` | 正整數（同 `toolCallTimeoutMs`，但不大於 2^31−1），預設 15000。照收、不用（宿主沒有存活探測，見〈跟 TS 的差距〉），只進池的鍵。 |
 | `failOnStartupError` | 預設 `false`。 |
 | `maxInstructionBytes` | 正整數（同 `toolCallTimeoutMs`），預設 32768。 |
 | `reconnect` | `{ enabled?, initialDelayMs?, maxDelayMs?, maxAttempts? }`，預設 `true`／500／30000／10；`initialDelayMs` 不能大於 `maxDelayMs`。 |
@@ -84,9 +84,9 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 
 ## 一代連線
 
-`connection.rs` 照 TS `connection.ts` 的 HTTP 那一半，三步都過才算連上一代：握手、`tools/list` 分頁走完、查指引上限。
+`connection.rs` 照 TS `connection.ts`，三步都過才算連上一代：握手、`tools/list` 分頁走完、查指引上限。
 
-- transport 是 rmcp 的 Streamable HTTP，客戶端由呼叫方傳入，要用 `tls::http_client` 建，TLS 與代理才會照下面〈TLS 與代理〉。設定的 header 每個請求都帶。
+- HTTP 的 transport 是 rmcp 的 Streamable HTTP，客戶端由呼叫方傳入，要用 `tls::http_client` 建，TLS 與代理才會照下面〈TLS 與代理〉。設定的 header 每個請求都帶。
 - rmcp 自己的重試全關（SSE 重連、session 過期重建），重連只交給監督者，同 TS 的 `maxRetries: 0`。
 - 協定版本自動協商：先試新協定（`server/discover`），對方是舊協定就退回 `initialize`。握手報的身分同 TS（`@nexus/plugin-mcp`），
   不宣告任何 client 能力；新協定、而且開了 `elicitation` 時，`tools/call` 要在 `_meta` 帶反問能力，值由 `call_meta` 給（同 TS `tool-call.ts` 的 `inBand`）。
@@ -94,7 +94,8 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - server 一則回應最多 16 MiB（`MAX_RESPONSE_BYTES`），JSON 回應與 SSE 的一個事件一樣；巢狀層數照 serde_json 的預設上限 128。
 - 錯誤訊息的英文同 TS（`Failed to connect to streamable HTTP server …`、`Failed to load tools from server …`），網址不帶 query，這一列的秘密換成 `[redacted]`。
 - 掉線：transport 關了，或呼叫端判斷線（`Live::lost`）。收一代時 rmcp 對有 session 的 server 送 `DELETE` 刪掉 session。
-- 池經 `Http`（`pool::Connector`）拿一代，同一個池的每一代共用一個客戶端。
+- stdio：握手、列工具、指引檢查的訊息同 HTTP，只是開頭是 `Failed to connect to stdio server …`；起行程到列完工具最久 30 秒（`STDIO_STARTUP_TIMEOUT`），逾時殺掉子行程、回連線失敗。HTTP 沒有這個上限。
+- 池經 `Http`（`pool::Connector`，名字是歷史遺留，兩種連線都管）拿一代，同一個池的每一代共用一個客戶端（HTTP 用）。
 
 ## 監督者
 
@@ -135,9 +136,34 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
   兩邊跑同一份 `native/sandbox-spawner/proxy-vectors.json`（TS 端是 `packages/nexus-core/src/http-proxy/policy-vectors.test.ts`）。
 - 代理帳密：網址帶了帳密時送 `Proxy-Authorization`（Basic）。代理拒絕時錯誤不帶帳密，有測試。
 
+## stdio
+
+宿主收的是 TS 算好的成品（`apps/harness/src/mcp-host-stdio-row.ts` 的 `hostStdioConnection`），不重算政策、不疊自己的環境：
+
+| 欄位 | 內容 |
+| --- | --- |
+| `command` | 必填，絕對路徑、不含 NUL。沙箱包過的話是包裝程式（`--exec`／`--guard`），包法與 `MCP_SYSTEM_READABLE` 留在 TS 一份。宿主只驗形狀。 |
+| `args` | 字串陣列，預設空，不含 NUL。 |
+| `cwd` | 絕對路徑；省略就繼承宿主的工作目錄。 |
+| `env` | 必填，子行程的**整份**環境：TS 清過的父環境在前、設定的在後。宿主 `env_clear` 之後只放這一份。 |
+| `credentialEnv` | `env` 裡值來自憑證的名字，每個都要在 `env` 裡。**只有這些值進遮蔽器**，並照〈MCP 憑證值的遮蔽〉的檢查（修頭尾空白、不到 8 個字元拒收）；`PATH`、`HOME` 這類字面值不進，成功結果才不會被遮壞。 |
+
+- 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。
+- **stderr 現在不留**（接 `/dev/null`）。原因：宿主分不出子行程印的字裡有沒有憑證值，繼承會把它原樣寫進宿主的 stderr（監督行程的日誌，多人共用主機上是共用的）；
+  留下來要先過遮蔽器，這一版沒做。代價：server 起不來時，維運只看得到「Failed to connect to stdio server …」，看不到它自己印的原因。
+  這不是終點，下一步（#2570 (b)）：握手失敗或提早退出時，留 stderr 尾端有限位元組、過遮蔽器後帶進錯誤；遮不乾淨就寫明為什麼不做。
+- 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，最後 `wait`。`Generation::close` 回來時子行程已經收掉，不留殭屍。
+- 被丟下的連線：握手完成前，子行程由連線的 future 裡的 `ChildGuard` 擁有，future 被丟下時 guard 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。握手完成後，擁有者換成背景 task（等服務迴圈結束、再照上面的梯度收）；這一代沒走 `close` 就被丟下時，`CancelOnDrop` 對服務迴圈喊停，背景 task 照梯度收，這是正常路徑（例如啟動上限在列工具中途到了、橋還活著）。橋關閉時 `serve` 回來、執行環境跟著拆掉，沒有人等背景 task 跑完梯度，最後落到 `ChildGuard` 的 drop（SIGKILL，不走梯度）。三條路各有一條測試。
+- 單行超過 16 MiB：rmcp 的行傳輸丟掉那一行（記一筆、連線不斷），server 等不到回應的那一次呼叫會等到逾時。
+- **args 與 env 在主機上看得到**：同一台主機上的其他使用者看得到 `/proc/<pid>/cmdline`（args），同 uid 的看得到 `/proc/<pid>/environ`（整份 env，含憑證值）。憑證不要放進 `args`。宿主只遮 `credentialEnv` 的值；父環境裡本來就有的值照舊不遮。
+- **池不回收**：池的鍵含整份成品（env 含憑證值），每組「憑證 × server」各起一個常駐子行程，活到橋關閉；憑證輪替之後舊行程帶著舊值繼續活。這跟 TS 那條路（子行程跟著對話行程死）不同，宿主是整台主機共用的。處理列在 #2570 (b)：最後一個使用者放掉時收掉 stdio 那一份，或給上限。
+- 子孫行程沒收（`npx` 底下的 `node`）：收線只對子行程本身送訊號；怎麼處理列在 (b)。
+- 池的鍵：整份成品（含 `env` 的值）；換了憑證是另一份，`credentialEnv` 的順序與重複不影響。
+- 缺口：「哪幾個名字是憑證」由誰產生（匯出外掛的 `substituted`，或外掛回報）留給 PR-E，與 dev-h2 一起定；在那之前沒有生產端呼叫 `hostStdioConnection`。
+
 ## 跟 TS 的差距
 
-- stdio 不支援；只給 stdio 的存活探測也沒有。
+- stdio 的存活探測（`livenessTimeoutMs` 的用處）沒有：掉線只認 transport 關了（子行程結束或管線斷），子行程活著但卡死的探不出來。
 - **session 過期**：宿主比 TS 與 dsh 多做一步，見〈橋〉。TS 連上之後收到 404 只是該次呼叫失敗（連線當下的 404／405 才退回 SSE，`packages/nexus-plugin-mcp/src/connection.ts:224`），
   它的 SDK 不關 transport、不觸發 `onclose`（`@modelcontextprotocol/client` 2.3.1 `dist/index.mjs:5738-5790`），掉線只認 `onclose`（`:434`）；所以舊協定的 server 忘掉 session 之後，TS 每次呼叫都失敗、不重連。
   dsh 的 mcp-client 也只看 `onclose`（`packages/mcp/mcp-client/src/connection.ts:292-294`、`generation.ts:45-48`，`8bd0733`），沒有任何地方認 404 或 session 過期。

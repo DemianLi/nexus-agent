@@ -38,7 +38,7 @@ fn 設定_預設與拒絕() {
     reject(json!({ "approval": {} }), "不認得的欄位 approval");
     reject(
         json!({ "connection": { "transport": "stdio", "command": "x" } }),
-        "stdio",
+        "connection.command",
     );
     reject(
         json!({ "connection": { "transport": "http", "url": "ftp://h/" } }),
