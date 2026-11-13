@@ -76,6 +76,42 @@ export function startModernHttp(): Promise<HttpFixture> {
   );
 }
 
+/**
+ * 起一台新協議的 server，握手與 `tools/list` 照常，但每個 `tools/call` 回 JSON-RPC 錯誤，訊息由 `echo` 依該請求（可讀它帶的 `Authorization`）
+ * 組出來：模擬把收到的憑證回顯在錯誤裡的 server（#2669）。
+ */
+export function startModernHttpEchoingCallErrors(
+  echo: (request: IncomingMessage) => string,
+): Promise<HttpFixture> {
+  const handler = createMcpHandler(() => {
+    const server = new McpServer(
+      { name: 'nexus-modern-http', version: '0.0.0' },
+      { capabilities: { tools: {} } },
+    );
+    registerModernTools(server);
+    return server;
+  });
+  const handle = toNodeHandler(handler);
+  return startHttpFixture(
+    async (request, response, body) => {
+      const call = body as { method?: unknown; id?: unknown } | undefined;
+      if (call?.method !== 'tools/call') {
+        await handle(request as NodeIncomingMessageLike, response, body);
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: call.id ?? null,
+          error: { code: -32000, message: echo(request) },
+        }),
+      );
+    },
+    () => handler.close(),
+  );
+}
+
 /** 起一台舊協議（單包 SDK 1.x）的 server，無狀態。 */
 export function startLegacyHttp(): Promise<HttpFixture> {
   return startHttpFixture(

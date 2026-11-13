@@ -8,6 +8,7 @@ import type { Client } from '@modelcontextprotocol/client';
 import { describe, expect, it, vi } from 'vitest';
 import { attemptsOn, connectGeneration, openClient, redactedUrl } from './connection.js';
 import { mcpConfigSchema } from './index.js';
+import { NO_REDACTION } from './redact.js';
 
 const config = mcpConfigSchema.parse({
   serverName: 'srv',
@@ -46,6 +47,7 @@ describe('connectGeneration 交出 close 訊號', () => {
         () => Promise.resolve(sdk),
         config,
         false,
+        NO_REDACTION,
         (signal) => {
           closed = signal;
         },
@@ -64,6 +66,7 @@ describe('connectGeneration 交出 close 訊號', () => {
         () => Promise.reject(new Error('handshake failed')),
         config,
         false,
+        NO_REDACTION,
         () => {
           called = true;
         },
@@ -79,6 +82,7 @@ describe('connectGeneration 交出 close 訊號', () => {
         () => Promise.resolve(fakeClient(undefined, () => Promise.reject(new Error('boom')))),
         config,
         false,
+        NO_REDACTION,
         (signal) => {
           closed = signal;
         },
