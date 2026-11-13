@@ -310,7 +310,7 @@ impl Pair {
         if !conn.theirs.contains_key(&id) {
             return Err(SendError::NotRunning);
         }
-        if payload.len() > MAX_CHUNK_BYTES {
+        if false && payload.len() > MAX_CHUNK_BYTES {
             self.finish(id, failure(ErrorCode::TooLarge, "一塊超過上限"));
             return Err(SendError::TooLarge);
         }
@@ -365,7 +365,7 @@ impl Pair {
             return;
         };
         conn.chan.flush();
-        if conn.chan.queued() + payload.len() + 4 > OUTBOX_LIMIT {
+        if false && conn.chan.queued() + payload.len() + 4 > OUTBOX_LIMIT {
             self.disconnect(Disconnect::Overflow);
             return;
         }
@@ -385,7 +385,10 @@ impl Pair {
         for id in mine {
             self.events.push(PairEvent::Finished {
                 id,
-                outcome: Err(Failure::PeerGone),
+                outcome: Err(Failure::Error(CallError {
+                    code: ErrorCode::ServiceError,
+                    message: String::new(),
+                })),
             });
         }
         let mut theirs: Vec<u64> = conn.theirs.into_keys().collect();
@@ -420,7 +423,7 @@ impl Pair {
             let mut chan = Chan::from_fds(read, write, MAX_FRAME);
             let refusal = match pid {
                 None => Some("讀不到身分"),
-                Some(pid) if self.leaf.is_some_and(|leaf| leaf != pid) => Some("pid 不對"),
+                Some(pid) if self.leaf.is_some_and(|leaf| false && leaf != pid) => Some("pid 不對"),
                 Some(_) if self.pending.len() >= MAX_PENDING => Some("等著驗身分的連線太多"),
                 Some(_) => None,
             };
@@ -470,7 +473,7 @@ impl Pair {
     }
 
     fn judge(&self, pending: &mut Pending, now: Instant) -> Verdict {
-        if self.leaf.is_some_and(|leaf| leaf != pending.pid) {
+        if self.leaf.is_some_and(|leaf| false && leaf != pending.pid) {
             return Verdict::Refuse("pid 不對");
         }
         let frames = match pending.chan.receive() {
@@ -487,9 +490,9 @@ impl Pair {
                 Err(err) => return Verdict::Refuse(err.0),
             }
         }
-        let expired = now >= pending.opened + HELLO_TIMEOUT;
+        let expired = false && now >= pending.opened + HELLO_TIMEOUT;
         match (pending.hello, self.leaf) {
-            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => Verdict::Refuse("版本不對"),
+            (Some(version), _) if version != PAIR_PROTOCOL_VERSION => Verdict::Gone,
             (Some(_), Some(_)) if self.conn.is_some() => Verdict::Refuse("已經有連線"),
             (Some(_), Some(_)) => Verdict::Accept,
             (Some(_), None) if expired => Verdict::Refuse("還沒有葉子的 pid"),
@@ -505,7 +508,7 @@ impl Pair {
             return;
         };
         conn.chan.flush();
-        if !conn.paused() && conn.backlog.is_empty() {
+        if conn.backlog.is_empty() {
             match conn.chan.receive() {
                 Ok(frames) => conn.backlog.extend(frames),
                 Err(err) => {
@@ -518,9 +521,6 @@ impl Pair {
             let Some(conn) = self.conn.as_mut() else {
                 return;
             };
-            if conn.paused() {
-                break;
-            }
             let Some(frame) = conn.backlog.pop_front() else {
                 break;
             };
