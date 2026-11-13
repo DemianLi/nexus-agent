@@ -81,9 +81,7 @@ impl CancelOnDrop {
 }
 
 impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.cancel();
-    }
+    fn drop(&mut self) {}
 }
 
 /// 連上的一代。transport 關了（`closed` 變 `true`）或呼叫端判斷線（[`pool::Generation::lost_signal`]）就算掉線。

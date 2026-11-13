@@ -41,7 +41,19 @@ impl ChildGuard {
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let _ = self.0.take();
+        let Some(mut child) = self.0.take() else {
+            return;
+        };
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let _ = child.kill();
+        // drop 可能發生在非同步執行環境裡，不能在這裡 `wait`。起不了執行緒時 `child` 隨 drop 結束，行程已被殺、殭屍留到宿主結束。
+        let _ = std::thread::Builder::new()
+            .name("mcp-stdio-wait".into())
+            .spawn(move || {
+                let _ = child.wait();
+            });
     }
 }
 
