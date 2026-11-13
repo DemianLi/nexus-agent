@@ -1302,7 +1302,6 @@ fn the_one_idle_longest_goes_first_not_the_one_started_first() {
 #[test]
 fn read_only_is_evicted_before_a_longer_idle_run() {
     let mut h = Harness::start(Options {
-        conversation_args: vec!["--ready-after-ms".into(), "500".into()],
         extra: vec!["--capacity", "2"],
         ..Options::default()
     });
@@ -1310,6 +1309,8 @@ fn read_only_is_evicted_before_a_longer_idle_run() {
     h.up_read_only("ro,idle:10");
     h.ensure("c");
     assert_eq!(h.down_of("ro,idle:10"), DeathCause::Evicted);
+    // 測試執行緒在這裡晚了：c 的 up 先到、run 的 up 後到。
+    std::thread::sleep(Duration::from_millis(500));
     assert_eq!(h.up("run,idle:60000"), run);
 }
 
