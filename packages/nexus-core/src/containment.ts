@@ -187,6 +187,12 @@ export function declaredToolTimeoutMs(request: { readonly tool?: unknown }): num
 }
 
 /**
+ * 計時器比量到的時間早響、取整後差 1ms 的容差。只補這一件事：預算計時器到點時，量到的 `elapsedMs` 可能是預算減 1
+ * （量測的時鐘與計時器的時鐘不同，各自取整），不容差的話「等了 99ms」會讓句子漏掉「超過 100ms 預算」。不是用來猜誰的計時器響了。
+ */
+const TIMER_EARLY_FIRE_TOLERANCE_MS = 1;
+
+/**
  * 工具等太久時給模型的那句話。
  *
  * **主詞是「等了多久」，不是「預算是多少」，而那是量出來的選擇。** 卡片
@@ -211,9 +217,10 @@ export function declaredToolTimeoutMs(request: { readonly tool?: unknown }): num
  * @returns 給模型看的那一句。
  */
 export function formatToolTimeout(toolName: string, elapsedMs: number, budgetMs?: number): string {
-  const overBudget = budgetMs !== undefined && elapsedMs >= budgetMs;
+  const overBudget =
+    budgetMs !== undefined && elapsedMs >= budgetMs - TIMER_EARLY_FIRE_TOLERANCE_MS;
   return overBudget
-    ? `工具 ${toolName} 超時：等了 ${elapsedMs}ms，超過它宣告的 ${budgetMs}ms 預算。`
+    ? `工具 ${toolName} 超時：等了 ${Math.max(elapsedMs, budgetMs)}ms，超過它宣告的 ${budgetMs}ms 預算。`
     : `工具 ${toolName} 超時：等了 ${elapsedMs}ms。`;
 }
 
@@ -470,7 +477,7 @@ export function createContainmentMiddleware(
     // **計時從這一層開始，不是從工具本體開始**——工具本體我們碰不到。所以這個數字是
     // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
     // 的東西：模型等的就是這一段。
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     // 停在提問上不從頭重進的那條（`human-input.ts`）不重設 `startedAt`：等人的時間扣掉，同從頭重進時只量到重跑的那一段。
     const waited = waitedSince({ configurable: request.runtime?.configurable });
     // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
@@ -496,7 +503,7 @@ export function createContainmentMiddleware(
           isToolTimeout(error)
             ? formatToolTimeout(
                 toolName,
-                Date.now() - startedAt - waited(),
+                Math.round(performance.now() - startedAt - waited()),
                 declaredToolTimeoutMs(request),
               )
             : formatToolFailure(toolName, error),
