@@ -44,6 +44,7 @@ import type {
 } from './log-derived-history.fixture.js';
 import { approvalAt } from './fixtures.js';
 import { TOOL_OUTCOME_UNKNOWN_TEXT } from '@nexus/core';
+import type { SessionEvent } from '@nexus/core';
 import { uniformDecisions } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { join } from 'node:path';
@@ -102,6 +103,7 @@ async function expectAllSame(
   name: string,
   run: DriverRun,
   expected: Readonly<Record<string, number>>,
+  compareOptions: Parameters<typeof compareToLog>[2] = {},
 ): Promise<void> {
   // 影子比對（#2355）只掛在 root：root 的每一次主呼叫各比一次，沒有一次落在 `other`。`log` 時沒有比對。
   if (run.shadow !== undefined) {
@@ -119,7 +121,7 @@ async function expectAllSame(
   );
   for (const [owner, log] of owners) {
     const bodies = run.mainBodies.filter((body) => markerOf(body) === owner);
-    const verdicts = await compareToLog(log.events, bodies);
+    const verdicts = await compareToLog(log.events, bodies, compareOptions);
     expect(verdicts.length, `${name}／${owner}：主呼叫數`).toBe(expected[owner]);
     expect(
       verdicts.filter((v) => v.kinds.length > 0 || !v.systemMatches),
@@ -204,6 +206,50 @@ const BACKGROUND_WAIT_MS = 20_000;
 /** 每個擁有者預期的主呼叫次數。driver 等它、斷言也比它，兩邊同一份。 */
 const SS4B_CALLS = { ROOT: 4, 'CHILD-S': 2 } as const;
 const SS6_CALLS = { ROOT: 5, 'CHILD-C': 3 } as const;
+
+describe('compareToLog：放行被中止、沒到假端點的那一對，其餘照拋（#2673）', () => {
+  const at = (seq: number, type: string, data: object) =>
+    ({ seq, type, data }) as unknown as SessionEvent;
+  const start = (seq: number) => at(seq, 'model/start', {});
+  const end = (seq: number, modelCall: number, outcome: string) =>
+    at(seq, 'model/end', { modelCall, outcome });
+
+  it('一筆被中止、沒有回覆的 start，假端點沒收到 → 放行', async () => {
+    await expect(
+      compareToLog([start(1), end(2, 1, 'aborted')], [], { allowUnreachedAborted: true }),
+    ).resolves.toEqual([]);
+  });
+
+  it('沒開放行的選項 → 照拋', async () => {
+    await expect(compareToLog([start(1), end(2, 1, 'aborted')], [])).rejects.toThrow('對不上');
+  });
+
+  it('沒被中止的多一筆 start（沒有 model/end、或 outcome 不是 aborted）→ 仍拋', async () => {
+    const options = { allowUnreachedAborted: true };
+    await expect(compareToLog([start(1)], [], options)).rejects.toThrow('對不上');
+    await expect(compareToLog([start(1), end(2, 1, 'error')], [], options)).rejects.toThrow(
+      '對不上',
+    );
+  });
+
+  it('被中止但有回覆的 start → 仍拋', async () => {
+    const events = [
+      start(1),
+      at(2, 'assistant/message', { modelCall: 1, message: {} }),
+      end(3, 1, 'aborted'),
+    ];
+    await expect(compareToLog(events, [], { allowUnreachedAborted: true })).rejects.toThrow(
+      '對不上',
+    );
+  });
+
+  it('被中止的比多出來的還多（分不出是哪幾筆）→ 仍拋', async () => {
+    const events = [start(1), end(2, 1, 'aborted'), start(3), end(4, 3, 'aborted')];
+    await expect(
+      compareToLog(events, [{} as Body], { allowUnreachedAborted: true }),
+    ).rejects.toThrow('對不上');
+  });
+});
 
 describe('背景與前景子代理', () => {
   it('SA0 背景子代理：根派工、子代理叫一次工具、完成後叫醒根再跑一輪', async () => {
@@ -389,7 +435,11 @@ describe('背景與前景子代理', () => {
           for (const body of ctx.bodies) if (bgIdIn(body) !== 'bg-unknown') id = bgIdIn(body);
         }
         expect(id, '背景子代理的編號').not.toBe('bg-unknown');
-        await settle(300);
+        // 等子代理的第一次請求真的到了假端點再按停：固定睡 300ms 在慢的 runner 上賭不贏，按停會落在請求到達之前（#2673，那一種見 SS7b）。
+        expect(
+          await waitForMainCalls(ctx.bodies, { 'CHILD-I': 1 }, markerOf, 10_000),
+          '子代理第一次請求到了假端點',
+        ).toBe(true);
         await ctx.client.subagentInterrupt('alpha', id);
         await settle(800);
         await ctx.client.subagentSend('alpha', id, '改做別的：回一個字');
@@ -415,6 +465,70 @@ describe('背景與前景子代理', () => {
     const firstEnd = child.events.findIndex((e) => e.type === 'model/end');
     expect(
       child.events.slice(firstStart, firstEnd).some((e) => e.type === 'assistant/message'),
+    ).toBe(false);
+  }, 90_000);
+
+  it('SS7b 按停落在請求到達假端點之前：日誌有一對被中止的起訖、假端點少一筆，比對只放行這一種（#2673）', async () => {
+    // 窗口：`model/start` 已落盤（或在失敗路徑補寫，`model-calls.ts`、#1702），請求還沒被假端點記下就被中止。慢的 runner 上 SS7 偶發撞到；
+    // 這裡用 `hold` 扣住子代理第一次請求直到它斷線，每次都落在這個窗口。
+    let held = false;
+    const run = await runServeDriver(
+      async (ctx) => {
+        await ctx.client.runStart('alpha', '派一個慢的');
+        await ctx.fold(idleWithContent);
+        let id = 'bg-unknown';
+        for (let i = 0; i < 100 && id === 'bg-unknown'; i++) {
+          await settle(50);
+          for (const body of ctx.bodies) if (bgIdIn(body) !== 'bg-unknown') id = bgIdIn(body);
+        }
+        expect(id, '背景子代理的編號').not.toBe('bg-unknown');
+        await settle(500);
+        await ctx.client.subagentInterrupt('alpha', id);
+        await settle(800);
+        await ctx.client.subagentSend('alpha', id, '改做別的：回一個字');
+        await settle(4000);
+      },
+      routed(
+        (k) =>
+          k === 0
+            ? subagentCall('call_s', 'CHILD-I 很慢')
+            : k === 1
+              ? { content: '派出去了。' }
+              : {},
+        { 'CHILD-I': () => ({ content: '好，一個字。' }) },
+      ),
+      '',
+      {},
+      (body) => {
+        if (held || !hasTools(body) || markerOf(body) !== 'CHILD-I') return false;
+        held = true;
+        return true;
+      },
+    );
+    expect(held, '有扣住子代理的第一次請求').toBe(true);
+    // 不放行的話，日誌 2 次 start、假端點 1 次，量具判壞。
+    const child = childLogsOf(run)[0]!;
+    await expect(
+      compareToLog(
+        child.events,
+        run.mainBodies.filter((b) => markerOf(b) === 'CHILD-I'),
+      ),
+    ).rejects.toThrow('對不上');
+    await expectAllSame('SS7b', run, { ROOT: 4, 'CHILD-I': 1 }, { allowUnreachedAborted: true });
+    // 被扣住的那一次：有起、有被中止的訖、其間沒有回覆。
+    const starts = child.events.filter((e) => e.type === 'model/start');
+    expect(starts.length, '子代理日誌的 model/start').toBe(2);
+    const aborted = child.events.find(
+      (e) =>
+        e.type === 'model/end' && (e.data as { modelCall?: number }).modelCall === starts[0]!.seq,
+    );
+    expect((aborted?.data as { outcome?: string } | undefined)?.outcome).toBe('aborted');
+    expect(
+      child.events.some(
+        (e) =>
+          e.type === 'assistant/message' &&
+          (e.data as { modelCall?: number }).modelCall === starts[0]!.seq,
+      ),
     ).toBe(false);
   }, 90_000);
 

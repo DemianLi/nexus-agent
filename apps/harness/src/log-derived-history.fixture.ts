@@ -140,13 +140,23 @@ export interface FakeEndpoint {
  * 回 SSE 或一整包 JSON。
  * 每次回應的 id 都不同（同 id 會被上層當成重複）。
  */
-export async function fakeEndpoint(script: Script, stream: boolean): Promise<FakeEndpoint> {
+export async function fakeEndpoint(
+  script: Script,
+  stream: boolean,
+  hold?: (body: Body) => boolean,
+): Promise<FakeEndpoint> {
   const bodies: Body[] = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', async () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Body;
+      // `hold` 說要扣住的請求：不計入 `bodies`、不回，等呼叫端自己斷線。量具上等於「中止來在請求被假端點記下之前」，
+      // 日誌那頭 `model/start` 已經落了（或在失敗路徑補寫），這邊少一筆（#2673）。
+      if (hold?.(body) === true) {
+        await new Promise<void>((resolve) => res.once('close', resolve));
+        return;
+      }
       const index = bodies.length;
       bodies.push(body);
       const reply = script(index, body);
@@ -458,6 +468,37 @@ function serializedReplay(
 }
 
 /**
+ * 按停落在請求到達假端點之前時，日誌有一對 `model/start`→`model/end{outcome:'aborted'}`、其間沒有回覆（`assistant/message`、
+ * `assistant/attempt`），假端點卻沒有這一筆（`model-calls.ts` 的失敗路徑補寫起訖，#1702）。這種「被中止、沒有回覆」的起訖不對應任何請求。
+ *
+ * **放行得窄**：只在日誌的 start 比請求多、而且「被中止且沒有回覆」的 start 恰好等於多出來的數量時，才把它們拿掉（數量對不上就分不出
+ * 是哪幾筆，原樣交回、由呼叫端的數量檢查拋）。沒中止的多一筆 start、或有回覆的 start 都不在其中，仍然拋。
+ */
+function withoutUnreachedAborted<T extends SessionEvent>(
+  events: readonly SessionEvent[],
+  starts: T[],
+  extra: number,
+): T[] {
+  const modelCallOf = (event: SessionEvent): unknown =>
+    (event.data as { modelCall?: unknown }).modelCall;
+  const unreached = starts.filter((start) => {
+    const aborted = events.some(
+      (event) =>
+        event.type === 'model/end' &&
+        modelCallOf(event) === start.seq &&
+        (event.data as { outcome?: unknown }).outcome === 'aborted',
+    );
+    const replied = events.some(
+      (event) =>
+        (event.type === 'assistant/message' || event.type === 'assistant/attempt') &&
+        modelCallOf(event) === start.seq,
+    );
+    return aborted && !replied;
+  });
+  return unreached.length === extra ? starts.filter((start) => !unreached.includes(start)) : starts;
+}
+
+/**
  * 對每次主呼叫比一次。`events` 是整份日誌，`mainBodies` 是假端點收到的、帶工具的 body，照順序。
  *
  * 主呼叫的數量必須等於日誌裡 root 的 `model/start` 數——對不上就是量具壞了（少一邊的話逐個配對會默默漏比），
@@ -467,8 +508,12 @@ function serializedReplay(
 export async function compareToLog(
   events: readonly SessionEvent[],
   mainBodies: readonly Body[],
+  compareOptions: { readonly allowUnreachedAborted?: boolean } = {},
 ): Promise<Verdict[]> {
-  const starts = events.filter((event) => event.type === 'model/start');
+  let starts = events.filter((event) => event.type === 'model/start');
+  if (compareOptions.allowUnreachedAborted === true && starts.length > mainBodies.length) {
+    starts = withoutUnreachedAborted(events, starts, starts.length - mainBodies.length);
+  }
   if (starts.length !== mainBodies.length) {
     throw new Error(
       `日誌有 ${String(starts.length)} 次 model/start，假端點收到 ${String(mainBodies.length)} 次主呼叫——對不上，比對不成立。`,
@@ -944,9 +989,10 @@ export async function runServeDriver(
   script: Script,
   patchExtra = '',
   patchOptions: { readonly timeContext?: boolean } = {},
+  hold?: (body: Body) => boolean,
 ): Promise<DriverRun> {
   const list = typeof drivers === 'function' ? [drivers] : drivers;
-  const upstream = await fakeEndpoint(script, true);
+  const upstream = await fakeEndpoint(script, true, hold);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
   const patch = join(home, 'patch.yml');

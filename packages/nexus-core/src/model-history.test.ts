@@ -14,7 +14,12 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import { deriveConversation } from './conversation-replay.js';
+import {
+  deriveConversation,
+  ReplayFold,
+  TOOL_NOT_STARTED_TEXT,
+  TOOL_OUTCOME_UNKNOWN_TEXT,
+} from './conversation-replay.js';
 import type { DerivedConversation } from './conversation-replay.js';
 import { toBaseMessage } from './langchain-message-adapter.js';
 import { toLoggedMessage } from './logged-message.js';
@@ -355,5 +360,132 @@ describe('快取的邊界', () => {
       'image/offload',
       'session/end-seed',
     ]);
+  });
+});
+
+describe('deriveUnsummarized：沒套摘要的那一串', () => {
+  const texts = (replay: DerivedConversation): string[] =>
+    replay.kind === 'replayed' ? replay.messages.map((message) => toBaseMessage(message).text) : [];
+
+  /** 對照組：新的 `ReplayFold` 餵同一段事件，取 `raw` 接上等結果的那一批。 */
+  const expected = (events: readonly SessionEvent[]): unknown => {
+    const fold = new ReplayFold();
+    for (const event of events) fold.feed(event);
+    return [...fold.raw, ...fold.pendingMessages()].map((message) =>
+      JSON.stringify(toLoggedMessage(toBaseMessage(message))),
+    );
+  };
+
+  function summarized(): SessionLog {
+    const log = new SessionLog('history');
+    chat(log, '一', '甲');
+    chat(log, '二', '乙');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('compaction/summary', {
+      cutoffIndex: 2,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+      beforeCall: true,
+    });
+    log.append('model/start', {});
+    log.append('assistant/message', { message: reply('丙') });
+    log.append('model/end', {});
+    log.append('turn/end', {});
+    tool(log, 'c1', 'echo', '回聲');
+    chat(log, '四', '丁');
+    return log;
+  }
+
+  it('摘要之後切點之前的訊息還在、摘要訊息不在；`derive` 照樣套摘要', () => {
+    const log = summarized();
+    const cache = new ModelHistoryCache();
+    const visible = texts(cache.derive(log.events));
+    const raw = texts(cache.deriveUnsummarized(log.events));
+    expect(raw).toContain('一');
+    expect(raw).toContain('甲');
+    expect(raw).not.toContain('摘要');
+    expect(visible).toContain('摘要');
+    expect(visible).not.toContain('一');
+    expect(raw.length).toBeGreaterThan(visible.length);
+  });
+
+  it('逐個前綴與新 ReplayFold 推的相同；同一個實例穿插叫 derive 不影響結果', () => {
+    const { events } = summarized();
+    const cache = new ModelHistoryCache(SENT);
+    events.forEach((_, k) => {
+      const prefix = events.slice(0, k + 1);
+      const raw = cache.deriveUnsummarized(prefix);
+      if (k % 2 === 0) cache.derive(prefix);
+      if (raw.kind === 'replayed') {
+        expect(
+          raw.messages.map((message) => JSON.stringify(toLoggedMessage(toBaseMessage(message)))),
+          `前 ${String(k + 1)} 顆`,
+        ).toEqual(expected(prefix));
+      }
+    });
+  });
+
+  it('不套剪法、縮短與圖片省略，即使選項開著', () => {
+    const log = new SessionLog('history');
+    log.append('turn/start', { kind: 'message', text: '讀它' });
+    log.append('model/start', {});
+    log.append('assistant/message', { message: asking('', [['p1', 'read']]) });
+    log.append('model/end', {});
+    tool(log, 'p1', 'read', ORIGINAL);
+    log.append('compaction/prune', {
+      results: [{ callId: 'p1', originalChars: ORIGINAL.length, content: '頭…尾' }],
+    });
+    chat(log, '再說', '好');
+    const cache = new ModelHistoryCache(SENT);
+    const raw = serialized(cache.deriveUnsummarized(log.events));
+    expect(raw).toEqual(expected(log.events));
+    expect(JSON.stringify(raw)).toContain(ORIGINAL);
+    expect(JSON.stringify(serialized(cache.derive(log.events)))).not.toContain(ORIGINAL);
+  });
+
+  it('推不出來時回 unreplayable，原因同 derive', () => {
+    const log = new SessionLog('history');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('model/start', {});
+    const cache = new ModelHistoryCache();
+    const raw = cache.deriveUnsummarized(log.events);
+    expect(raw.kind).toBe('unreplayable');
+    expect(raw).toEqual(cache.derive(log.events));
+  });
+
+  it('還在等結果的那一批：缺的由 pendingMessages 補成 closer，開始過的與沒開始過的字句不同，結果到了就換掉', () => {
+    const log = new SessionLog('history');
+    log.append('turn/start', { kind: 'message', text: '跑' });
+    log.append('model/start', {});
+    log.append('assistant/message', {
+      message: asking('', [
+        ['a', 'echo'],
+        ['b', 'echo'],
+        ['c', 'echo'],
+      ]),
+    });
+    log.append('model/end', {});
+    log.append('tool/call', { callId: 'a', name: 'echo', arguments: '{}' });
+    log.append('tool/result', {
+      callId: 'a',
+      isError: false,
+      message: result('a', 'echo', '回聲'),
+    });
+    log.append('tool/call', { callId: 'b', name: 'echo', arguments: '{}' });
+    const cache = new ModelHistoryCache();
+    const tail = () => texts(cache.deriveUnsummarized(log.events)).slice(-3);
+
+    // a 有結果；b 開始了沒結果；c 沒開始。三則都在，順序照 tool_calls。
+    expect(tail()).toEqual(['回聲', TOOL_OUTCOME_UNKNOWN_TEXT, TOOL_NOT_STARTED_TEXT]);
+    // 同一份推導，`derive` 補的是同一批。
+    expect(texts(cache.derive(log.events)).slice(-3)).toEqual(tail());
+
+    log.append('tool/result', {
+      callId: 'b',
+      isError: false,
+      message: result('b', 'echo', '乙結果'),
+    });
+    expect(tail()).toEqual(['回聲', '乙結果', TOOL_NOT_STARTED_TEXT]);
   });
 });

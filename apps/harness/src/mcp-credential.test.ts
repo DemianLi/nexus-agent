@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { InvalidCredentialError } from './api-key.js';
 import type { ResolvedCredential } from './credentials.js';
-import { assertUsableMcpCredential } from './mcp-credential.js';
+import { assertUsableMcpCredential, MIN_MCP_CREDENTIAL_CODE_POINTS } from './mcp-credential.js';
 
 const NAME = 'DB_PASSWORD';
 
@@ -73,5 +73,33 @@ describe('header：照 Node http 的規則', () => {
     expect(error.message).toContain('HTTP header 放不下的字元');
     expect(error.message).not.toContain('FAKE-head');
     expect(error.message).not.toContain('FAKE-tail');
+  });
+});
+
+describe('長度下限：修剪後至少 8 個 code point（#2570）', () => {
+  it('門檻是 8', () => {
+    expect(MIN_MCP_CREDENTIAL_CODE_POINTS).toBe(8);
+  });
+
+  it.each(['env', 'header'] as const)('%s：7 個拒絕，8 個照收', (use) => {
+    expect(assertUsableMcpCredential(NAME, fromFile('FAKE1234'), use)).toBe('FAKE1234');
+    const error = rejection('FAKE123', use);
+    expect(error.message).toContain(`${NAME}（來自受管憑證檔 /home/FAKE/.credentials.yaml）`);
+    expect(error.message).toContain('不到 8 個字元');
+    expect(error.message).not.toContain('FAKE123');
+  });
+
+  it('長度在修剪之後才算', () => {
+    expect(assertUsableMcpCredential(NAME, fromFile('  FAKE1234\n'), 'env')).toBe('FAKE1234');
+    expect(rejection('  FAKE12\n', 'env').message).toContain('不到 8 個字元');
+  });
+
+  it('非 ASCII 與補充平面的字元，一個 code point 算一個', () => {
+    expect(assertUsableMcpCredential(NAME, fromFile('密碼密碼密碼密碼'), 'env')).toBe(
+      '密碼密碼密碼密碼',
+    );
+    expect(rejection('密碼密碼密碼密', 'env').message).toContain('不到 8 個字元');
+    expect(assertUsableMcpCredential(NAME, fromFile('😀'.repeat(8)), 'env')).toBe('😀'.repeat(8));
+    expect(rejection('😀'.repeat(7), 'env').message).toContain('不到 8 個字元');
   });
 });

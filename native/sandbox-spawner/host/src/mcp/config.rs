@@ -9,6 +9,18 @@ use reqwest::Url;
 use super::supervisor::Policy;
 use crate::json::{Map, Value};
 
+/// 協定層、一定不是秘密的 header（小寫）：值不進遮蔽器。
+/// 宿主收到的是 TS 解好的成品，分不出一個值是憑證還是字面值，所以其餘的 header 值一律當秘密收；
+/// 不排除這幾個，`Accept: application/json` 這種每個回應都可能出現的字串會把成功結果裡的同樣字串遮掉。
+/// 過渡：憑證引用接到宿主（PR-E）之後，宿主只收憑證解出來的值，這份清單就拿掉。
+pub const LITERAL_HEADERS: [&str; 5] = [
+    "accept",
+    "content-type",
+    "user-agent",
+    "accept-language",
+    "mcp-protocol-version",
+];
+
 /// 一次 `tools/call` 的預設逾時，同 `DEFAULT_TOOL_CALL_TIMEOUT_MS`。
 pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 帶出處標頭的指引預設上限（UTF-8 位元組），同 `DEFAULT_MAX_INSTRUCTION_BYTES`。
@@ -218,15 +230,35 @@ impl Server {
         format!("mcp-client({})", self.name)
     }
 
-    /// 錯誤訊息裡要換掉的字串：header 的值、網址的 query（整串、每個值的原樣與解碼後）。
-    /// reqwest 的錯誤會印出帶 query 的網址。
+    /// 這一列要遮的字串，交給 [`super::redact::Redactor::new`]。
+    ///
+    /// - header 的值，除了 [`LITERAL_HEADERS`] 那幾個：值取原始位元組，能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串；
+    ///   `Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）。
+    /// - 網址的 query：整串、每個值的原樣與解碼後。reqwest 的錯誤會印出帶 query 的網址。
     pub fn secrets(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .headers
-            .iter()
-            .filter_map(|(_, v)| v.to_str().ok())
-            .map(str::to_string)
-            .collect();
+        let mut out: Vec<String> = Vec::new();
+        for (name, value) in &self.headers {
+            if LITERAL_HEADERS.contains(&name.as_str()) {
+                continue;
+            }
+            let bytes = value.as_bytes();
+            let mut texts = Vec::new();
+            if let Ok(text) = std::str::from_utf8(bytes) {
+                texts.push(text.to_string());
+            }
+            if !bytes.is_ascii() {
+                texts.push(bytes.iter().map(|&b| b as char).collect::<String>());
+            }
+            if matches!(name.as_str(), "authorization" | "proxy-authorization") {
+                let tokens: Vec<String> = texts
+                    .iter()
+                    .filter_map(|t| t.split_once(char::is_whitespace))
+                    .map(|(_, rest)| rest.trim().to_string())
+                    .collect();
+                texts.extend(tokens);
+            }
+            out.extend(texts);
+        }
         if let Some(query) = self.url.query() {
             out.push(query.to_string());
             for pair in query.split('&') {
@@ -247,13 +279,4 @@ impl Server {
     }
 }
 
-/// 把 `secrets` 在 `text` 裡出現的地方換成 `[redacted]`，長的先換。只做逐字替換，不處理其他編碼與重疊區間。
-pub fn scrub(text: &str, secrets: &[String]) -> String {
-    let mut sorted: Vec<&String> = secrets.iter().filter(|s| !s.is_empty()).collect();
-    sorted.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    let mut out = text.to_string();
-    for secret in sorted {
-        out = out.replace(secret.as_str(), "[redacted]");
-    }
-    out
-}
+pub use super::redact::scrub;
