@@ -1,5 +1,5 @@
 //! 一台 MCP server 的「一代」連線：建 transport、握手、`tools/list` 分頁走完、查指引上限，三步都過才算連上。
-//! 照 `packages/nexus-plugin-mcp/src/connection.ts`；訊息的英文照它。池經 [`Http`] 拿一代（這個連接器兩種連線都管，名字沿用）。
+//! 照 `packages/nexus-plugin-mcp/src/connection.ts`；訊息的英文照它。池經 [`Http`] 拿一代（這個連接器 HTTP 與 stdio 都管）。
 //!
 //! - HTTP 的 transport 只用 rmcp 的 `StreamableHttpClientTransport::with_client`，客戶端由呼叫方傳入，要用 [`crate::tls::http_client`] 建，TLS 與代理才會照設定。
 //! - stdio 的 transport 是 [`super::stdio::spawn`] 起的子行程的 stdin／stdout；一代結束時連子行程一起收（[`super::stdio::reap`]），[`pool::Generation::close`] 回來時子行程已經 `wait` 掉。
