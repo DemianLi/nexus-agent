@@ -210,7 +210,7 @@ fn parse_stdio(
     let command = connection
         .get("command")
         .and_then(Value::as_str)
-        .filter(|c| !c.contains('\0'))
+        .filter(|c| absolute_path(c))
         .ok_or("stdio 的 connection.command 要是絕對路徑")?
         .to_string();
     let mut args = Vec::new();
