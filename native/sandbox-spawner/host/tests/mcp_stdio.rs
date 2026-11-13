@@ -447,7 +447,7 @@ fn parse_connection(connection: &Value) -> Result<Server, String> {
 
 /// TS 的 `hostStdioConnection` 輸出的那一列，宿主一律收（TS 的 `mcp-host-stdio-row.test.ts` 跑同一份 `stdioRow`）。
 #[test]
-fn 樣本_stdioRow_ts_交出的列宿主收得下() {
+fn 樣本_stdio_row_ts_交出的列宿主收得下() {
     let doc = vectors();
     let mut seen = 0;
     for vector in doc["stdioRow"].as_array().expect("stdioRow") {
@@ -479,7 +479,7 @@ fn 樣本_stdioRow_ts_交出的列宿主收得下() {
 }
 
 #[test]
-fn 樣本_stdioHost_宿主自己的拒絕() {
+fn 樣本_stdio_host_宿主自己的拒絕() {
     let doc = vectors();
     for vector in doc["stdioHost"].as_array().expect("stdioHost") {
         let name = vector["name"].as_str().expect("name");
