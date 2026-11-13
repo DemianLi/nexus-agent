@@ -338,7 +338,7 @@ mod bridge {
         let _ = std::fs::remove_file(&mark);
     }
 
-    /// server 讀了 stdin 卻不回（輸出導去 stderr：stdout 是宿主讀的管線，換掉它宿主會立刻讀到 EOF）：超過啟動上限就殺掉子行程、回連線失敗，不等到橋關閉。上限改成 300 ms，免得測試要等 30 秒。
+    /// server 讀了 stdin 卻不回（`3>&1` 先把宿主讀的 stdout 管線留在 fd 3：直接把 fd 1 導走，管線沒人寫，宿主會立刻讀到 EOF）：超過啟動上限就殺掉子行程、回連線失敗，不等到橋關閉。上限改成 300 ms，免得測試要等 30 秒。
     #[test]
     fn 啟動逾時_殺掉子行程並收掉_回逾時的訊息() {
         let pid_file = pid_file("startup-timeout");
@@ -348,7 +348,7 @@ mod bridge {
             "connection": {
                 "transport": "stdio",
                 "command": "/bin/sh",
-                "args": ["-c", "echo $$ > \"$PIDFILE\"; exec cat >&2"],
+                "args": ["-c", "echo $$ > \"$PIDFILE\"; exec cat 3>&1 > /dev/null"],
                 "env": { "PIDFILE": pid_file },
             },
         });
