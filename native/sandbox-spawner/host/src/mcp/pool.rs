@@ -20,7 +20,8 @@ use std::time::Duration;
 use tokio::sync::{oneshot, watch, Notify};
 use tokio::task::JoinHandle;
 
-use super::config::{scrub, Server};
+use super::config::Server;
+use super::redact::Redactor;
 use super::supervisor::{self, Hooks, State};
 
 /// 不是建立那一份的取用，最多等第一次連線多久，同 `FIRST_CONNECT_WAIT_MS`。
@@ -87,8 +88,8 @@ type Slot<T> = Arc<Mutex<Option<Arc<T>>>>;
 pub struct Shared<G: Generation> {
     pub label: String,
     pub server: Server,
-    /// 這一份的錯誤訊息要換掉的字串：池的（代理帳密等）與這份設定的。
-    secrets: Vec<String>,
+    /// 這一份要遮的值：池的（代理帳密等）與這份設定的。
+    redactor: Redactor,
     current: Slot<Live<G>>,
     last: Slot<G::Listed>,
     state: watch::Receiver<State>,
@@ -115,9 +116,24 @@ impl<G: Generation> Shared<G> {
         self.state.borrow().clone()
     }
 
-    /// 換掉這一份的秘密。
+    /// 錯誤與診斷的文字：換掉這一份所有的秘密。
     pub fn scrub(&self, text: &str) -> String {
-        scrub(text, &self.secrets)
+        self.redactor.scrub_text(text)
+    }
+
+    /// 成功結果與 resources：原地遮這一份夠長的秘密，見 [`Redactor::redact_json`]。
+    pub fn redact_json(&self, value: &mut serde_json::Value) {
+        self.redactor.redact_json(value);
+    }
+
+    /// 工具清單，見 [`Redactor::redact_tool_list`]。
+    pub fn redact_tool_list(&self, tools: &mut serde_json::Value) {
+        self.redactor.redact_tool_list(tools);
+    }
+
+    /// instructions 這類單獨的一段文字，規則同 [`Shared::redact_json`]。
+    pub fn redact_text(&self, text: &str) -> String {
+        self.redactor.redact_text(text)
     }
 
     /// 監督者停了，見 [`State::Stopped`]。
@@ -374,7 +390,7 @@ impl<C: Connector> Pool<C> {
         let shared = Arc::new(Shared {
             label,
             server: server.clone(),
-            secrets,
+            redactor: Redactor::new(secrets),
             current,
             last,
             state,

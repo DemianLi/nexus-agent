@@ -23,8 +23,9 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use tokio::sync::{watch, Notify};
 
-use super::config::{scrub, Server};
+use super::config::Server;
 use super::pool;
+use super::redact::scrub;
 
 /// 握手時報給 server 的身分，同 TS 的 `CLIENT_IDENTITY`：同一台 server 從 TS 或宿主連進來，看到的身分相同。
 const CLIENT_NAME: &str = "@nexus/plugin-mcp";
