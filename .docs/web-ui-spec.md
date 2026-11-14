@@ -406,7 +406,7 @@
 
 - **三樣齊**：成文的規範、對應的 token 或元件、會變紅的測試。規則與擋它的測試同一張 PR 進。
 - **在哪一刻擋**：
-  - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋。
+  - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
   - 真瀏覽器的 `apps/web/guard/`、axe、視覺回歸在合併後那一輪。
 - **無障礙**：WCAG 2.2 AA 是硬門檻（§8）。每個共用元件要有鍵盤與焦點的測試。
 - **定期複驗**：每完成一個 Phase，照檢驗報告的量尺抽 5 個元件重評，至少 2 個是上次沒過的。分數只當複驗的量尺，不當合併的條件。
@@ -461,7 +461,6 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 掃原始碼的測試在合併前擋（§13.3） | 輕的模式不跑，合併後那一輪才跑 | [#2757](https://github.com/DemianLi/nexus-agent/issues/2757) |
 | 間距的護欄（§13.4） | 沒有 | [#2763](https://github.com/DemianLi/nexus-agent/issues/2763) |
 | 字級涵蓋 vendor 實際用的值；disabled 的透明度（§13.4） | §5 寫四階與 `.6`，vendor 另有 7 種字級、disabled 是 50 | [#2761](https://github.com/DemianLi/nexus-agent/issues/2761) |
 | 陰影、層級的級距與護欄（§13.4） | 沒有 | 還沒開卡 |

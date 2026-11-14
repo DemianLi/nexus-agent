@@ -121,6 +121,17 @@ SNAPSHOT_TRIGGER_RE = re.compile(
     r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
 )
 
+# web 的設計護欄（#2757）：掃原始碼與樣式的測試，改到的檔的同名規則排不到它們。動到 `apps/web/src` 的 tsx、css（測試檔除外）
+# 或顏色 token 的產生器時，輕的模式也跑 `web_design_guards()` 那幾檔；真瀏覽器的 `guard/` 留在全跑那一層。
+WEB = 'apps/web'
+WEB_DESIGN_TRIGGER_RE = re.compile(r'^apps/web/src/(?!.*\.test\.tsx$).*\.(tsx|css)$|^apps/web/tokengen/')
+
+
+def web_design_guards(root: Path = ROOT) -> list[str]:
+    """`apps/web/src/styles/*.test.ts` 與 `ui/registry-edits.test.ts`，repo 相對路徑。"""
+    found = [*(root / WEB / 'src/styles').glob('*.test.ts'), root / WEB / 'src/components/ui/registry-edits.test.ts']
+    return sorted(f.relative_to(root).as_posix() for f in found if f.is_file())
+
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
     """`packages/*`、`apps/*` 的目錄 → 套件名。"""
@@ -128,8 +139,13 @@ def project_names(root: Path = ROOT) -> dict[str, str]:
     return {m.parent.relative_to(root).as_posix(): json.loads(m.read_text(encoding='utf-8'))['name'] for m in manifests}
 
 
-def light(changed: list[str], names: dict[str, str], exists: Callable[[str], bool]) -> dict:
-    """輕的模式的範圍（#2088 決議第 5、7 條）。`exists` 判斷檔案在這一版還在不在：刪掉的檔不 format、不 lint、不測。"""
+def light(
+    changed: list[str], names: dict[str, str], exists: Callable[[str], bool], design_guards: list[str] | None = None
+) -> dict:
+    """輕的模式的範圍（#2088 決議第 5、7 條）。`exists` 判斷檔案在這一版還在不在：刪掉的檔不 format、不 lint、不測。
+
+    `design_guards` 是 web 的設計護欄測試檔（`web_design_guards()`）。
+    """
 
     def project(path: str) -> str | None:
         match = PROJECT_RE.match(path)
@@ -165,6 +181,8 @@ def light(changed: list[str], names: dict[str, str], exists: Callable[[str], boo
     if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and exists(SNAPSHOT_TEST):
         d = 'apps/harness'
         tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
+    if design_guards and WEB in names and any(WEB_DESIGN_TRIGGER_RE.search(p) for p in changed):
+        tests.setdefault(WEB, set()).update(g[len(WEB) + 1:] for g in design_guards)
 
     return {
         'typecheck': typecheck,
@@ -210,7 +228,7 @@ def main(argv: list[str]) -> int:
                     fh.write(f'{key}={value}\n')
         return 0
     if cmd == 'light' and len(argv) > 2:
-        scope = light(read_changed(), project_names(), lambda p: (ROOT / p).is_file())
+        scope = light(read_changed(), project_names(), lambda p: (ROOT / p).is_file(), web_design_guards())
         print(json.dumps(scope, ensure_ascii=False, indent=2))
         write_light(scope, Path(argv[2]))
         target = os.environ.get('GITHUB_OUTPUT')

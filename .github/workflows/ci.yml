@@ -32,7 +32,8 @@ permissions:
 #   - 輕的：功能分支 → develop 的 PR。擋合併所需的檢查都在 plan 這一個 job 裡跑完：
 #       異動與格式檢查（PR 標題、升級指南、Markdown 連結、大檔）、CI 腳本的測試、lockfile 新版本的發布年齡、
 #       受影響套件的型別檢查（改到的與下游，讀合併後那一輪存的快取）、異動檔的 format 與 lint、
-#       這次改到的測試檔加上改到的原始檔同名的測試檔；改到重放快照的輸入時加跑快照測試（#1556）。
+#       這次改到的測試檔加上改到的原始檔同名的測試檔；改到重放快照的輸入時加跑快照測試（#1556）；
+#       動到 web 的 tsx、css 或顏色 token 的產生器時加跑 web 的設計護欄測試（#2757）。
 #   - 全跑：develop → main 的 PR、main 的 push、合進 develop 之後，以及動到 `.github/workflows|scripts|actions` 的功能 PR
 #     （改壞了 CI 自己，合併前只有全跑驗得出來）。合進 develop 之後那一輪由 post-merge.yml 帶 `full: true` 呼叫這支，
 #     每個 develop commit 一輪、不被下一個 commit 取消、不擋合併；check 名稱帶呼叫端前綴 `完整一輪 / gate`，
