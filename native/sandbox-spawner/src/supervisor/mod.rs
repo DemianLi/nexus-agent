@@ -654,6 +654,7 @@ impl Supervisor {
             });
             let allowed = u64::try_from(timeout).ok().map(Duration::from_millis);
             // SAFETY：fds 在這次呼叫期間有效。
+            self.pace.lap(Instant::now(), None);
             let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
             let woke = Instant::now();
             let late = self.pace.lap(woke, allowed);
