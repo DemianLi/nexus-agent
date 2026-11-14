@@ -40,8 +40,8 @@
 //! 監督行程自己的訊息）丟掉、記數，下次寫得出去時先講一句。前台的 stderr 照監督行程的。
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
-//! `max_silence_ms`，死前最後一段不算。監督行程比預定晚了超過 `--stall-ms` 的一半才醒時，判定自己被停住過，所有沉默從醒來起重新起算
-//! （[`Supervisor::check_resumed`]）。
+//! `max_silence_ms`，死前最後一段不算。監督行程每一輪取兩次時間（迴圈開頭與 poll 回來），相鄰兩次之間比准許的晚了超過 `--stall-ms` 的一半時，判定自己被停住過，
+//! 所有沉默從那一刻重新起算（[`Pace`]、[`Supervisor::check_resumed`]）。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
 //! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
@@ -309,6 +309,7 @@ struct Supervisor {
     shutting_down: bool,
     oom: OomCounter,
     rss_poll_at: Instant,
+    pace: Pace,
     /// 同時活著的對話行程最多幾個（含預熱池、起動中與正在收的）。
     capacity: u32,
     /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
@@ -411,6 +412,7 @@ impl Supervisor {
             shutting_down: false,
             oom: OomCounter::open(),
             rss_poll_at: Instant::now(),
+            pace: Pace::default(),
             capacity,
             pending: Vec::new(),
             warm_retry_at: None,
@@ -526,6 +528,29 @@ enum Slot {
     ConversationStderr { pid: libc::pid_t },
 }
 
+/// 量監督行程自己有沒有停住過：相鄰兩次取時間之間隔了多久，扣掉這一段准許花的時間。
+///
+/// 一輪取兩次：迴圈開頭（判 `stalled` 用的就是這一次的時間）與 poll 回來。開頭到 poll 回來准許花 poll 的 timeout，poll 回來到下一輪開頭
+/// 不准許花時間，所以扣掉准許的時間之後，停頓落在一輪的哪裡都算得到；判 `stalled` 的時間與量停頓的時間是同一次取的，中間沒有量不到的空檔。
+#[derive(Default)]
+struct Pace {
+    last: Option<Instant>,
+}
+
+impl Pace {
+    /// 取到 `now`；從上一次到這一次准許花 `allowed`（`None` 是 poll 沒有期限，等多久都不算晚）。回比准許的晚了多久；第一次回 0。
+    fn lap(&mut self, now: Instant, allowed: Option<Duration>) -> Duration {
+        let late = match (self.last, allowed) {
+            (Some(last), Some(allowed)) => {
+                now.saturating_duration_since(last).saturating_sub(allowed)
+            }
+            _ => Duration::ZERO,
+        };
+        self.last = Some(now);
+        late
+    }
+}
+
 /// 只給整合測試（`test-hooks`）：環境變數 `name` 指的檔案存在時刪掉它，對自己送 SIGSTOP。測試用它讓監督行程停在迴圈裡指定的位置，
 /// 不靠運氣。出貨的建置不讀這個環境變數。
 #[cfg(feature = "test-hooks")]
@@ -546,6 +571,8 @@ impl Supervisor {
     fn run(&mut self) -> i32 {
         loop {
             let now = Instant::now();
+            let late = self.pace.lap(now, Some(Duration::ZERO));
+            self.check_resumed(now, late);
             self.on_timers(now);
             if self.shutting_down {
                 if let Some(code) = self.advance_shutdown(now) {
@@ -625,11 +652,12 @@ impl Supervisor {
                 let millis = left.as_millis() + u128::from(left.subsec_nanos() % 1_000_000 != 0);
                 millis.min(i32::MAX as u128) as i32
             });
-            let planned = u64::try_from(timeout)
-                .ok()
-                .map(|millis| Instant::now() + Duration::from_millis(millis));
+            let allowed = u64::try_from(timeout).ok().map(Duration::from_millis);
             // SAFETY：fds 在這次呼叫期間有效。
             let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
+            let woke = Instant::now();
+            let late = self.pace.lap(woke, allowed);
+            self.check_resumed(woke, late);
             if n < 0 {
                 if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                     continue;
@@ -641,10 +669,6 @@ impl Supervisor {
                 self.kill_everything();
                 return 1;
             }
-            if let Some(planned) = planned {
-                self.check_resumed(planned);
-            }
-
             let mut signals = false;
             for (pollfd, slot) in fds.iter().zip(slots) {
                 if pollfd.revents == 0 {
@@ -747,7 +771,7 @@ impl Supervisor {
         }
     }
 
-    /// 有對話行程在判 `stalled` 時，最晚 `--stall-ms` 的四分之一醒一次，[`Self::check_resumed`] 才量得出自己停住過。
+    /// 有對話行程在判 `stalled` 時，poll 最多等 `--stall-ms` 的四分之一，停在 poll 裡的停頓才不會被 [`Pace`] 准許的時間蓋掉。
     fn next_deadline(&self) -> Option<Instant> {
         let restart = self.front_restart_at.filter(|_| !self.shutting_down);
         self.conversations
@@ -802,20 +826,19 @@ impl Supervisor {
         Some(host.started + self.args.host.as_ref()?.ready_timeout)
     }
 
-    /// 監督行程比預定的時間晚了超過 `--stall-ms` 的一半才醒，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、
-    /// cgroup freezer、VM 暫停或快照）。這時對話行程也一起停了，遲到的心跳還沒送出來，照樣判就會把每一條都殺掉；所以所有的沉默從現在重新起算。
+    /// 監督行程相鄰兩次取時間之間比准許的晚了 `late`（[`Pace`]）：超過 `--stall-ms` 的一半，判定自己被停住過（通常是整棵樹一起被凍住：docker pause、
+    /// cgroup freezer、VM 暫停或快照）。這時對話行程也一起停了，遲到的心跳還沒送出來，照樣判就會把每一條都殺掉；所以所有的沉默從 `now` 重新起算。
     ///
-    /// 門檻取一半：正常的排程延遲是毫秒級，遠低於它；而凍住前對話行程照常送心跳時，會造成誤判的停住醒來時一定晚了至少 `stall` 的四分之三減一個心跳間隔
-    /// （[`Self::next_deadline`] 保證最晚 `stall` 的四分之一就醒一次），所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
-    fn check_resumed(&mut self, planned: Instant) {
+    /// 門檻取一半：一輪的處理時間加排程延遲在預設的 `--stall-ms` 下遠低於它（`--stall-ms` 不到約 1 s 時，收屍等宿主收撤銷這類有上限的
+    /// 同步等待可能跨過門檻）。凍住前對話行程照常送心跳時，會造成誤判的停住，它所在那一段量到的 `late` 至少是 `stall` 的四分之三減一個心跳間隔：
+    /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
+    fn check_resumed(&mut self, now: Instant, late: Duration) {
         let Some(stall) = self.args.stall else { return };
-        let now = Instant::now();
-        let late = now.saturating_duration_since(planned);
         if late < stall / 2 {
             return;
         }
         say!(
-            "監督行程比預定晚了 {} ms 才醒，判定自己被停住過；所有對話行程的沉默從現在重新起算",
+            "監督行程比准許的晚了 {} ms，判定自己被停住過；所有對話行程的沉默從現在重新起算",
             late.as_millis()
         );
         for conversation in &mut self.conversations {
@@ -2117,6 +2140,62 @@ mod tests {
             quarantined,
             generation,
         }
+    }
+
+    /// 一輪的兩次取時間：迴圈開頭（上一段不准許花時間）與 poll 回來（准許花 poll 的 timeout）。
+    #[test]
+    fn pace_measures_a_stop_anywhere_in_the_round() {
+        let ms = Duration::from_millis;
+        let start = Instant::now();
+        let quarter = Some(ms(500));
+        let top = Some(Duration::ZERO);
+
+        // 第一次沒有上一次可以比。
+        let mut pace = Pace::default();
+        assert_eq!(pace.lap(start + ms(60_000), top), Duration::ZERO);
+
+        // 沒停住：poll 等滿或提早回來，處理事件花一點時間，都不算晚到要緊的程度。
+        let mut pace = Pace::default();
+        pace.lap(start, top);
+        assert_eq!(pace.lap(start + ms(500), quarter), Duration::ZERO);
+        assert_eq!(pace.lap(start + ms(503), top), ms(3));
+        assert_eq!(pace.lap(start + ms(540), quarter), Duration::ZERO);
+
+        // 停在 poll 裡。
+        let mut pace = Pace::default();
+        pace.lap(start, top);
+        assert_eq!(pace.lap(start + ms(2_300), quarter), ms(1_800));
+
+        // 停在 poll 回來之後、下一輪開頭之前（處理事件那一段）。
+        let mut pace = Pace::default();
+        pace.lap(start, top);
+        pace.lap(start + ms(40), quarter);
+        assert_eq!(pace.lap(start + ms(2_340), top), ms(2_300));
+
+        // 停在迴圈開頭之後、進 poll 之前：poll 回來時算得到，扣掉的是 poll 准許等的時間。
+        let mut pace = Pace::default();
+        pace.lap(start, top);
+        assert_eq!(pace.lap(start + ms(2_300 + 500), quarter), ms(2_300));
+    }
+
+    /// 扣的是那一次 poll 實際准許等的時間，不是固定的值：沒有對話行程在判 `stalled` 時 poll 可以等很久，甚至沒有期限。
+    #[test]
+    fn pace_allows_whatever_the_poll_was_given() {
+        let ms = Duration::from_millis;
+        let start = Instant::now();
+        let mut pace = Pace::default();
+        pace.lap(start, Some(Duration::ZERO));
+        assert_eq!(
+            pace.lap(start + ms(60_000), Some(ms(60_000))),
+            Duration::ZERO
+        );
+        assert_eq!(pace.lap(start + ms(60_001), Some(Duration::ZERO)), ms(1));
+        assert_eq!(pace.lap(start + ms(3_600_000), None), Duration::ZERO);
+        // 沒有期限的那一次之後，照樣從它回來的時間量起。
+        assert_eq!(
+            pace.lap(start + ms(3_602_000), Some(Duration::ZERO)),
+            ms(2_000)
+        );
     }
 
     /// 已隔離的 P1 收屍之後，P2 重用同一個 pid；這時才讀到的序號 0（宿主在 P1 收屍之前回報的）記 `unknown`，P2 不隔離：
