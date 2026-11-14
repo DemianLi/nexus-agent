@@ -193,7 +193,7 @@ nexus-host [--plugins <檔>] --socket <路徑>
 
 ## 一對之間的橋
 
-一個對話是一對行程：Rust 的組合行程與 Node 的葉子行程（#2583）。兩者之間那條連線叫橋。這裡有的是協定與兩端的連線邏輯，都是函式庫，只有測試起它；組合行程的執行檔、監督行程送 `leaf{pid}` 的那一段、把葉子那一端接進對話行程都還沒做。
+一個對話是一對行程：Rust 的組合行程與 Node 的葉子行程（#2583）。兩者之間那條連線叫橋。這裡有的是協定與兩端的連線邏輯，都是函式庫；組合行程那一端接進了執行檔 `nexus-composition`（見下一節），葉子那一端只有測試起它。監督行程送 `leaf{pid}` 的那一段、把葉子那一端接進對話行程都還沒做。
 
 - 協定：`host/src/pair_protocol.rs`，檔頭是完整的規則（框的種類、誰能送什麼、哪些算違反協定、背壓、斷線）。TS 那一側是 `packages/nexus-host-bridge/src/pair-protocol.ts`，只有編解碼與切框。兩邊跑同一份 `pair-vectors.json`。
 - 框格式同控制通道（u32 LE 長度＋JSON）。版本是 `PAIR_PROTOCOL_VERSION`（1），跟控制通道、宿主連線的版本各自獨立。`hello` 不帶 token：身分是 `SO_PEERCRED` 的 pid（uid 要跟組合行程相同）等於交給 `Pair::set_leaf` 的那一個。錯誤碼是宿主連線的那一組，測試對著 `host-vectors.json` 的 `errorCodes` 驗。
@@ -202,6 +202,27 @@ nexus-host [--plugins <檔>] --socket <路徑>
 - 葉子那一端：`packages/nexus-host-bridge/src/pair-client.ts` 的 `PairClient`。還沒有生產端的程式呼叫它。`PairClient.connect` 連線、送 `hello`，驗過才回連線，沒進去丟 `PairConnectError`：三種結局之外多一種 `violation`（組合行程在驗過之前違反協定，含葉子還沒送 `hello` 它就送 `hello`、`hello` 的版本不同、送了沒有 `code` 或 `code` 不是字串的 `rejected`），不重試。`code` 不認得的 `rejected` 算被拒；`code` 認得、別的欄位不合的照 `code` 處理。組合行程給的 `reason` 進錯誤、回報、`onRetry` 與斷線的原因之前截到 1024 個 UTF-16 單位，控制字元、行／段分隔符與落單的代理對換成 U+FFFD。`socketPath` 要放在只有本 uid 能寫的目錄：葉子不核對 socket 是誰建的。啟動時限由呼叫端給，必填、沒有預設值，不得短於每條連線等回覆的時間，上限是 Node 計時器的 2^31−1 ms。退避預設從 250 ms 起每次加倍到 2 s（上限可以改，同樣不得超過 2^31−1 ms），不加亂數；再等一次就會過啟動時限時不等、直接回報。每一條連線等回覆預設 5 s，剩下的啟動時間比它短時只等到啟動時限，到了還沒有結論的那一次算被截斷、不拿來判結局。回報帶起了幾次、連上幾次、幾次 `retry_later`、幾次沒收到任何框就斷、幾次等滿沒回覆、有沒有被截斷、經過多久。Node 的 socket 寫入出錯就整條毀掉、不再讀，所以 `hello` 不在 connect 成功的當下寫，先讓事件迴圈讀一輪：組合行程在那一輪之前就拒絕並關的（身分不對、pid 不對、等著驗的滿了），這時 `rejected` 已經讀到，不寫。在那一輪之後、寫下去之前才關的仍會讀不到，那一次算沒收到任何框就斷，由重連再拿一次。驗過之後的呼叫表、上限、背壓與組合行程那一端同一組規則；送端排著的位元組自己數，一次交給 socket 最多 64 KiB、上一段寫完才交下一段，所以停滯是以段為單位看（組合行程那一端是位元組）。驗過之後收到解得開的 `rejected`（組合行程判葉子違反協定）就關連線，斷線的原因是 `rejected`、帶 `code` 與 `reason`，跟組合行程自己違反協定（`violation`）分開。斷線不重連。時間與計時器可以傳進去（`clock`），單元測試 `pair-client.test.ts` 對 TS 寫的假組合行程、不睡。`host/tests/pair_leaf.rs` 由真的 `Pair` 起 node 跑 `pair-leaf-probe.ts`（只給這支測試用，不從 `index.ts` 匯出、不進 `lib/`）對接兩種語言，全標 `#[ignore]`，CI 的 `sandbox-spawner` 與 `sandbox-spawner-arm64` 另跑一步。
 - 上限：一框 1 MiB（暫定，#2571／#2572 要用之前重定）、一塊 128 KiB、每個方向同時 64 個呼叫；送端排到 512 KiB 就先不發自己的 `call`、`chunk`、`result`（`Pair` 回 `Paused`，擁有的一方留著，等 `Resumed` 事件再試），`cancel` 與自動回的錯誤照排（自動回的錯誤是小框：`unknown_method` 只帶回 method 名稱的 UTF-8 前 64 個位元組，落在字元中間就往前退到字元邊界；截法在向量檔的 `methodEchoes`），再排一框會超過 2 MiB 就關連線；對方送來的任何時候都照讀——兩端都「送不出去就不讀」會互等到永遠。有東西排著、連續 30 s（`STALL_TIMEOUT`）一個位元組都沒寫出去也關連線；30 s 是經驗值，#2571／#2572 定單框上限時一起重定。送端這兩個數字是寫死的位元組數，不跟著單框上限變；單框上限調到暫停線加一框排不進 2 MiB（約 1.5 MiB 以上）時，Rust 那一側的編譯期斷言會擋，TS 那一側沒有這條斷言。
 - 記憶體的最壞值（算的，沒量；只算緩衝的位元組數。不算的：已切好的框解成 JSON 值之後的大小（`Value` 比原文大，全是小元素的陣列可以到十倍以上）、解碼時多複製的那一份 payload、擁有的一方手上還沒回的最多 64 個呼叫、還沒驗過身分的 4 條連線各自的緩衝、回了 `rejected` 等著寫完的最多 4 條（違反協定的那一條帶著它排著的，最多 2 MiB）、容器本身）：組合行程那一端每條連線，收端沒切成框的最多 2 MiB＋8（`Chan` 的 2 框），送端最多 2 MiB，合計約 4 MiB。64 GiB 的主機容量是 155 對（`src/supervisor/memory.rs` 的 `capacity_for`），約 620 MiB；葉子那一端送端最多 2 MiB、收端沒切成框的最多一框多一點，一條約 3 MiB、155 對約 470 MiB。兩端合計約 1.1 GiB，條件是每一對的兩個方向同時塞滿。這個數字在多人共用的主機上偏大，重定單框上限時一起重算。
+
+## 組合行程 `nexus-composition`
+
+一對裡 Rust 的那一個（#2583），每條對話一個。現在是骨架：監督行程還不起它、harness 還沒接、不出貨（打包照檔名只收 `nexus-supervisor` 與 `nexus-host`），只有整合測試（`host/tests/composition.rs`）起它；也還不連宿主。邏輯在 `host/src/composition/`，檔頭是完整的行為。
+
+```text
+nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑>
+```
+
+`--socket` 是前台連的，`--pair-socket` 是橋（葉子連進來），這兩個由它 listen；`--leaf-socket` 是葉子自己 listen 的資料 socket。控制通道是 stdin／stdout，走對話行程那一組訊息（`src/supervisor_protocol.rs`）。單執行緒、一個 poll 迴圈。
+
+- 握手：兩個 socket 都在聽了才送 `hello`，不宣告 loop 在自己這裡（`runs_loop` 是否）；監督行程的第一框要是同一版的 `hello`。
+- `ready` 只送一次，三件事都到了才送：收到 `leaf{pid}`、那個 pid 的葉子在橋上驗過（交換了 `hello`）、葉子送了第一則 `register`。清單是空的也算，但**葉子一定要送 `register`**，不送就永遠不會 `ready`。換了葉子不再送 `ready`。`ready` 之前不收前台的連線（排在 backlog）。
+- `bind`：經橋對葉子發 `attach`（payload 是 `{"threadId": …}`），葉子回成功才送 `bound`。thread 記第一次的，之後每一則都要相同。葉子換過之後監督行程再送同一條 thread 的 `bind`，就對新葉子再 `attach` 一次、成功再送一次 `bound`；`bind` 比新葉子的 `register` 早到就留著，等 `register` 那一刻才 `attach`。`attach` 沒成功（葉子回錯、送不出去、回之前斷線）只記一行，不送 `bound`、不自己重試，行程照活。
+- 心跳：收到第一則 `bind` 起每 1 s 一則（跟對話行程的間隔相同），之後不停。
+- `drain`：loop 不在這裡，記一行、不理。
+- 葉子斷線：行程照活，等下一則 `leaf{pid}`。
+- 協定錯誤，以 3 結束：第一框不是同一版的 `hello`；解不開的框或訊息；`ready` 之前的 `bind`；thread 跟第一次不同、或不是 UTF-8 的 `bind`；現在的葉子已經綁了、`attach` 還沒回、或已經有一則 `bind` 留著時又來的 `bind`。
+- 結束：stdin 讀到 EOF 或收到 SIGTERM 就刪掉兩個 socket、回 0。綁不了 socket 回 1（這時還沒送 `hello`），參數不對回 2。
+- 前台連線的轉送（`host/src/composition/forward.rs`）：`--socket` 上每收一條就對 `--leaf-socket` 連一條，位元組原樣雙向對接，不解析內容。每個方向最多留 64 KiB 還沒寫出去的，留著的寫完之前不讀來源，所以對方不讀時來源那一端會被核心擋住。一邊讀到 EOF，留著的寫完之後只關另一邊寫的方向；兩個方向都結束、或有一邊整條關了而它剩下的都轉完，才整條關。同時最多 64 條，到了就不 accept，多的排在 backlog。連不上葉子（含葉子的 backlog 滿了）就把進來的那一條直接關。
+- 轉送緩衝的最壞值（算的，沒量）：64 條 × 2 個方向 × 64 KiB＝8 MiB，加上共用的一塊 64 KiB 讀取區。心跳間隔、緩衝大小與連線數上限都是暫定的，沒有對著實際負載量過。
 
 ## 建置與測試
 
