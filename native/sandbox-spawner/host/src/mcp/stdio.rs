@@ -118,7 +118,7 @@ pub async fn reap(mut guard: ChildGuard) {
                 // SAFETY：只送訊號給自己起的、還沒 `wait` 的子行程。
                 unsafe { libc::kill(pid, libc::SIGTERM) };
             }
-            if let Wait::Exited = exited_within(child, TERM_GRACE).await {
+            if let Wait::Exited = exited_within(child, Duration::ZERO).await {
                 return;
             }
         }
