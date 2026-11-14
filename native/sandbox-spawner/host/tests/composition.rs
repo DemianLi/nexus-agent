@@ -777,8 +777,10 @@ impl Drop for Stopped {
 }
 
 /// 葉子沒讀請求就回應、然後整條關（提早回的錯誤回應就是這樣）：回應還是要完整到前台。
-/// 組合行程停住的期間葉子寫完並關掉，所以它下一次 poll 一定同時看到回應與斷線，不會先醒來把回應轉走。
-/// 回應取 64 KiB：組合行程停著不讀，要整份放得進 socket 的緩衝。
+/// 組合行程停住的期間葉子寫完並關掉，所以它不會在「寫完」與「關」之間醒來把整份回應轉走。它停在哪裡有兩種：
+/// 停在 poll 裡，醒來那一次 poll 同時看到回應與斷線；停在轉請求的那一輪中間，醒來先照 poll 當時的結果讀葉子一次
+/// （最多 [`nexus_host::composition::forward::BUFFER`]），下一次 poll 才看到斷線。
+/// 回應取 128 KiB：比一次讀的量大，第二種停法也還有沒轉走的；組合行程停著不讀，又要整份放得進 socket 的緩衝。
 #[test]
 fn a_response_from_a_leaf_that_never_read_the_request_arrives_whole() {
     let (rig, _leaf) = Rig::ready("early-response");
@@ -795,7 +797,7 @@ fn a_response_from_a_leaf_that_never_read_the_request_arrives_whole() {
     let ready = unsafe { libc::poll(&mut pfd, 1, GUARD.as_millis() as libc::c_int) };
     assert_eq!(ready, 1, "請求一直沒轉到葉子");
 
-    let response = pattern(64 * 1024);
+    let response = pattern(128 * 1024);
     let stopped = Stopped::stop(&rig);
     behind.write_all(&response).unwrap();
     drop(behind);
