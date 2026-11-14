@@ -571,8 +571,6 @@ impl Supervisor {
     fn run(&mut self) -> i32 {
         loop {
             let now = Instant::now();
-            let late = self.pace.lap(now, Some(Duration::ZERO));
-            self.check_resumed(now, late);
             self.on_timers(now);
             if self.shutting_down {
                 if let Some(code) = self.advance_shutdown(now) {
