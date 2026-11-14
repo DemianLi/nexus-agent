@@ -4,7 +4,11 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { isVendorUpstream, VENDOR_UPSTREAM_FILES } from '@/test/vendor-upstream';
+import {
+  isVendorUpstream,
+  VENDOR_UPSTREAM_FILES,
+  vendorManifestName,
+} from '@/test/vendor-upstream';
 
 import { readCascade } from './css-cascade';
 
@@ -13,7 +17,7 @@ import { readCascade } from './css-cascade';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 十三條：
+ * 十七條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
@@ -34,9 +38,23 @@ import { readCascade } from './css-cascade';
  *     不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137` 與 `animation-duration-*`。這條連 `ui/` 一起管。
  * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
  *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
+ * 14. **間距只用 {@link SPACING_STEP} 列的級距**（#2763；`.docs/web-ui-spec.md` §13.4）：內距、外距、間隙、定位偏移不寫 `p-[9px]`
+ *     這種任意值，也不寫級距外的數字（`p-13`）。引用 token 的算式（`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
+ *     這條**連 vendor 上游原樣的檔一起掃**：vendor 現有的任意值逐條釘在 {@link VENDOR_PINNED}，多一條、少一條都報錯。
+ * 15. **停用的透明度只有 50**（#2761；規格 §5「互動狀態」）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下的
+ *     `opacity-*` 只能是 `opacity-50`，或 `opacity-100`（這顆不靠透明度變淡，例如改用字色）。這條也連 vendor 一起掃，
+ *     vendor 今天沒有別的值。
+ *
+ * 16. **陰影不寫任意值**（規格 §13.4）：`shadow-*`、`inset-shadow-*`、`drop-shadow-*` 用具名的階（`shadow-sm`…）或引用 token 的畫法
+ *     （`shadow-[inset_0_0_0_1px_var(--border)]`），不寫 `shadow-[0_2px_8px_#0003]` 這種自己調的值。連 vendor 一起掃。
+ * 17. **層級只用 {@link LAYER_STEP} 列的幾層**（規格 §13.4）：`z-10`、`z-20` 是區塊內的疊放，`z-50` 是浮層；不寫別的數字與任意值。
+ *     連 vendor 一起掃。
+ *
+ * 第 2 條的任意值字級（`text-[12.5px]`）、第 3 條的數字圓角（`rounded-[2px]`）也連 vendor 一起掃、釘在 {@link VENDOR_PINNED}
+ * （#2761）；vendor 的 `text-sm`／`text-xs` 是 SG 原樣，不在這裡管。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
- * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
+ * 沒量的：寬高的任意值（`max-h-[300px]` 是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
  */
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
@@ -120,13 +138,38 @@ type Rule =
   | '程式碼小框'
   | '輸入框'
   | '時長'
-  | '字重';
+  | '字重'
+  | '間距'
+  | '停用'
+  | '陰影'
+  | '層級';
 
 const ROTATE = /^-?rotate-\d+$/;
 const ROTATE_ON_OPEN = /(?:state=open\]?\]?(?:>[^:]*)?|panel-open):-?rotate-\d+$/;
 const DURATION = /^(?:animation-)?duration-/;
 const DURATION_STEP = /^duration-(?:0|75|100|150|200|300|500|700|1000)\b/;
 const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
+const SPACING_PROPS =
+  'p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y|inset|inset-x|inset-y|top|bottom|left|right|start|end';
+const SPACING = new RegExp(`^-?(?:${SPACING_PROPS})-(\\[.+\\]|\\d+(?:\\.\\d+)?)$`);
+const SPACING_STEP = new Set(
+  '0 0.5 1 1.5 2 2.5 3 3.5 4 5 6 7 8 9 10 11 12 14 16 20 24 28 32 36 40 44 48 52 56 60 64 72 80 96'.split(
+    ' ',
+  ),
+);
+
+const RAW_SHADOW = /^(?:shadow|inset-shadow|drop-shadow)-\[(?!.*var\()/;
+const LAYER = /^-?z-(.+)$/;
+const LAYER_STEP = new Set(['0', '10', '20', '50', 'auto']);
+const DISABLED_VARIANT = /disabled/;
+const OPACITY = /^opacity-(?!(?:50|100)$)/;
+
+/** 級距外的間距：任意值（引用 token 的算式除外）或不在 {@link SPACING_STEP} 上的數字。 */
+function offSpacingScale(u: string): boolean {
+  const value = SPACING.exec(u)?.[1];
+  if (value === undefined) return false;
+  return value.startsWith('[') ? !value.includes('var(') : !SPACING_STEP.has(value);
+}
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
@@ -170,6 +213,14 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
     const u = utility(token);
     if (DURATION.test(u) && !DURATION_STEP.test(u)) found.push({ rule: '時長', what: u });
     if (THIN_WEIGHT.test(u)) found.push({ rule: '字重', what: u });
+    if (offSpacingScale(u)) found.push({ rule: '間距', what: u });
+    if (RAW_SHADOW.test(u)) found.push({ rule: '陰影', what: u });
+    if (LAYER.test(u) && (u.startsWith('-') || !LAYER_STEP.has(LAYER.exec(u)?.[1] ?? ''))) {
+      found.push({ rule: '層級', what: u });
+    }
+    if (OPACITY.test(u) && DISABLED_VARIANT.test(token.slice(0, token.length - u.length))) {
+      found.push({ rule: '停用', what: token });
+    }
     if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
     if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
       found.push({ rule: '焦點', what: token });
@@ -233,6 +284,46 @@ const ALLOWED: readonly Allowed[] = [
     what: 'bg-card border rounded-3xl',
     why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
   },
+  {
+    file: 'components/goal-bar.tsx',
+    what: 'disabled:opacity-60',
+    why: '目標列的暫停鈕停用時是 60：對齊到 50 會動到畫面，要 demian 看過前後對照才改（#2761）',
+  },
+];
+
+/**
+ * vendor 上游原樣的檔裡現有的級距外的值（間距 #2763、字級 #2761、圓角、層級）：vendor 檔不動，現值逐條釘住。**只能變少**：
+ * 同步上游多出一條會紅，要嘛用覆寫蓋回級距，要嘛由 demian 核可後列進來；上游拿掉的也要從這裡刪。
+ * `file` 是 manifest 裡的名字。停用的透明度與陰影沒有條目：vendor 的停用只有 50 與 100，陰影沒有任意值。
+ */
+const VENDOR_PINNED: readonly { rule: Rule; file: string; what: string }[] = [
+  { rule: '間距', file: 'components/ui/composer.tsx', what: 'pr-[9px]' },
+  { rule: '間距', file: 'components/ui/dot-loader.tsx', what: 'gap-[2px]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'ml-[-0.15rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'ml-[-0.3rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'mr-[-0.15rem]' },
+  { rule: '間距', file: 'components/ui/input-group.tsx', what: 'mr-[-0.3rem]' },
+  { rule: '字級', file: 'components/ui/button.tsx', what: 'text-[0.8rem]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[11px]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/composer.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/context-ring.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/diff-view.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/diff-view.tsx', what: 'text-[12px]' },
+  { rule: '字級', file: 'components/ui/questionnaire.tsx', what: 'text-[0.625rem]' },
+  { rule: '字級', file: 'components/ui/reasoning.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/reasoning.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[11.5px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[11px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[12.5px]' },
+  { rule: '字級', file: 'components/ui/tool-steps.tsx', what: 'text-[13px]' },
+  { rule: '字級', file: 'components/ui/turn-status.tsx', what: 'text-[12.5px]' },
+  { rule: '圓角', file: 'components/ui/context-ring.tsx', what: 'rounded-[2px]' },
+  { rule: '圓角', file: 'components/ui/questionnaire.tsx', what: 'rounded-[4px]' },
+  { rule: '圓角', file: 'components/ui/tooltip.tsx', what: 'rounded-[2px]' },
+  { rule: '層級', file: 'components/ui/dropdown-menu.tsx', what: '-z-1' },
 ];
 
 interface Violation {
@@ -268,6 +359,13 @@ function scan(files: string[]): Violation[] {
 const files = sourceFiles(SRC);
 const all = scan(files);
 const isAllowed = (v: Violation) => ALLOWED.some((a) => a.file === v.file && a.what === v.what);
+const vendorFiles = [...VENDOR_UPSTREAM_FILES]
+  .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
+  .map((f) => join(SRC, f));
+const PINNED_RULES: ReadonlySet<Rule> = new Set(['間距', '停用', '圓角', '陰影', '層級']);
+const vendorOffScale = scan(vendorFiles).filter(
+  (v) => PINNED_RULES.has(v.rule) || (v.rule === '字級' && v.what.startsWith('text-[')),
+);
 
 describe('元件只能用系統裡的值', () => {
   test('沒有越過色板、字級、圓角階梯或硬寫顏色（例外見 ALLOWED）', () => {
@@ -287,6 +385,14 @@ describe('元件只能用系統裡的值', () => {
   test('量具有掃到東西（不是空過）', () => {
     expect(files.length).toBeGreaterThan(100);
     expect(files.some((f) => f.endsWith('components/ui/button.tsx'))).toBe(true);
+  });
+
+  test('vendor 裡級距外的值就是釘住的那幾條，沒有多也沒有少', () => {
+    const found = [
+      ...new Set(vendorOffScale.map((v) => `${v.rule} ${vendorManifestName(v.file)} ${v.what}`)),
+    ].sort();
+    expect(found).toEqual(VENDOR_PINNED.map((p) => `${p.rule} ${p.file} ${p.what}`).sort());
+    expect(vendorFiles.length).toBeGreaterThan(20);
   });
 });
 
@@ -445,6 +551,63 @@ describe('判準', () => {
       [],
     );
     expect(rules('font-lightish')).toEqual([]);
+  });
+
+  test('間距：任意值與級距外的數字擋，連同負值與 variant 前綴；級距、引用 token 的算式、不是間距的不擋', () => {
+    expect(rules('pr-[9px]')).toEqual(['間距:pr-[9px]']);
+    expect(rules('has-[>svg]:ml-[-0.3rem]')).toEqual(['間距:ml-[-0.3rem]']);
+    expect(rules('md:gap-[2px] top-[50%]')).toEqual(['間距:gap-[2px]', '間距:top-[50%]']);
+    expect(rules('p-13 -mt-4.5 space-y-15')).toEqual([
+      '間距:p-13',
+      '間距:-mt-4.5',
+      '間距:space-y-15',
+    ]);
+    expect(rules('p-0 px-2.5 -mt-1 gap-x-3.5 space-y-11 inset-0 top-14 pb-96')).toEqual([]);
+    expect(rules('px-px m-auto top-1/2 inset-x-full left-(--offset)')).toEqual([]);
+    expect(rules('left-[calc(var(--sidebar-width)*-1)] pt-[var(--gap)]')).toEqual([]);
+    expect(
+      rules('max-h-[300px] w-[18rem] inset-ring-2 inset-shadow-[0_1px_0_var(--border)]'),
+    ).toEqual([]);
+  });
+
+  test('停用：停用類 variant 下的透明度只放行 50 與 100；不是停用的半透明不擋', () => {
+    expect(rules('disabled:opacity-60')).toEqual(['停用:disabled:opacity-60']);
+    expect(rules('data-disabled:opacity-40 aria-disabled:opacity-70')).toEqual([
+      '停用:data-disabled:opacity-40',
+      '停用:aria-disabled:opacity-70',
+    ]);
+    expect(rules('data-[disabled=true]:opacity-60 group-has-disabled:opacity-30')).toEqual([
+      '停用:data-[disabled=true]:opacity-60',
+      '停用:group-has-disabled:opacity-30',
+    ]);
+    expect(rules('disabled:opacity-50 has-disabled:opacity-50 disabled:opacity-100')).toEqual([]);
+    expect(
+      rules('opacity-70 hover:opacity-100 disabled:cursor-default enabled:opacity-80'),
+    ).toEqual([]);
+  });
+
+  test('陰影：自己調的任意值擋；具名的階、引用 token 的畫法、顏色不擋', () => {
+    expect(rules('shadow-[0_2px_8px_#0003]')).toEqual(['陰影:shadow-[0_2px_8px_#0003]']);
+    expect(
+      rules('hover:inset-shadow-[0_1px_0_0_currentColor] drop-shadow-[0_1px_1px_gray]'),
+    ).toEqual(['陰影:inset-shadow-[0_1px_0_0_currentColor]', '陰影:drop-shadow-[0_1px_1px_gray]']);
+    expect(
+      rules('shadow-none shadow-sm shadow-md shadow-lg inset-shadow-xs drop-shadow-sm'),
+    ).toEqual([]);
+    expect(
+      rules('shadow-[0_0_0_1px_var(--sidebar-border)] shadow-(--my-shadow) shadow-primary/20'),
+    ).toEqual([]);
+  });
+
+  test('層級：只放行 0、10、20、50 與 auto；別的數字、負值、任意值擋，連同 variant 前綴', () => {
+    expect(rules('z-30 md:z-40 z-999')).toEqual(['層級:z-30', '層級:z-40', '層級:z-999']);
+    expect(rules('-z-1 z-[60] z-(--layer)')).toEqual([
+      '層級:-z-1',
+      '層級:z-[60]',
+      '層級:z-(--layer)',
+    ]);
+    expect(rules('z-0 z-10 hover:z-20 z-50 z-auto')).toEqual([]);
+    expect(rules('size-10 zoom-in-95')).toEqual([]);
   });
 
   test('輸入框：ui/ 以外的原生 textarea 擋；Textarea 本身是 vendor 原樣（#1523），不在掃描範圍', () => {
