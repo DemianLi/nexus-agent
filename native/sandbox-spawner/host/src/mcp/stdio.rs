@@ -24,7 +24,7 @@ pub const STDIN_GRACE: Duration = Duration::from_secs(2);
 pub const TERM_GRACE: Duration = Duration::from_secs(2);
 /// SIGKILL 之後等 `wait` 回來最多多久。SIGKILL 擋不住，正常是立刻回來；卡在不可中斷的睡眠（D 狀態）時才會用到上限。
 pub const KILL_WAIT: Duration = Duration::from_millis(500);
-/// 整段收線梯度的預算：三段之和。輪詢間隔讓前兩段各可能多出一個 [`POLL`]，所以這是下限不是精確值。
+/// 整段收線梯度的預算：三段之和。最壞約這個值再加兩個 [`POLL`]（前兩段各可能多出一個輪詢間隔）。
 pub const REAP_BUDGET: Duration = Duration::from_millis(
     (STDIN_GRACE.as_millis() + TERM_GRACE.as_millis() + KILL_WAIT.as_millis()) as u64,
 );

@@ -194,6 +194,9 @@ mod pool {
     use nexus_host::mcp::supervisor::State;
     use tokio::sync::Notify;
 
+    /// `'static` 的一個工具清單：`&["a"][..]` 是對暫存陣列取切片，不會被提升成 `'static`。
+    const ONE_TOOL: &[&str] = &["a"];
+
     /// 假連線每一次嘗試怎麼結束。
     enum Step {
         Up(&'static [&'static str]),
@@ -249,7 +252,7 @@ mod pool {
                 Step::Up(tools) => tools,
                 Step::HangOnClose => {
                     hang_close = true;
-                    &["a"][..]
+                    ONE_TOOL
                 }
                 Step::UpAfter(gate, tools) => {
                     gate.notified().await;
@@ -342,7 +345,7 @@ mod pool {
         let (pool, lines) = pool(&fake);
         let s = server(json!({}));
         pool.acquire(&s, false).await.expect("取得到");
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         pool.close_within(Duration::from_millis(100)).await;
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -355,6 +358,40 @@ mod pool {
             .find(|l| l.starts_with("ERROR MCP 連線池關閉時有 1 份沒在 100ms 內收完"))
             .unwrap_or_else(|| panic!("沒有記沒收完的那一份：{lines:?}"));
         assert!(error.contains(&s.label()), "{error}");
+    }
+
+    /// 兩份收不完、一份正常：並行收所以耗時約一個上限（依序收會是兩個）；訊息只數收不完的、只帶它們的 label。
+    #[tokio::test]
+    async fn 關池_三份連線_兩份收不完_並行收且只記收不完的() {
+        let fake = Fake::new([Step::HangOnClose, Step::HangOnClose, Step::Up(&["a"])]);
+        let (pool, lines) = pool(&fake);
+        let servers: Vec<Server> = ["stuck1", "stuck2", "fine"]
+            .iter()
+            .map(|name| server(json!({ "serverName": name })))
+            .collect();
+        for s in &servers {
+            pool.acquire(s, false).await.expect("取得到");
+        }
+        let limit = Duration::from_millis(500);
+        let started = std::time::Instant::now();
+        pool.close_within(limit).await;
+        let took = started.elapsed();
+        assert!(took >= limit, "沒收完的兩份應該等滿上限：{took:?}");
+        assert!(
+            took < limit * 3 / 2,
+            "收線不是並行的（依序會約兩個上限）：{took:?}"
+        );
+        let lines = lines.lock().expect("鎖");
+        let error = lines
+            .iter()
+            .find(|l| l.starts_with("ERROR MCP 連線池關閉時有 2 份沒在 500ms 內收完"))
+            .unwrap_or_else(|| panic!("沒有記「2 份」：{lines:?}"));
+        assert!(error.contains(&servers[0].label()), "{error}");
+        assert!(error.contains(&servers[1].label()), "{error}");
+        assert!(
+            !error.contains(&servers[2].label()),
+            "正常收完的也被記了：{error}"
+        );
     }
 
     #[tokio::test]

@@ -167,8 +167,10 @@ impl<G: Generation> Shared<G> {
     }
 
     /// 停掉監督者，等它收完（它自己對每一代套收線期限），最多等 [`POOL_CLOSE_TIMEOUT`]。
-    /// 回 `false` 是外層逾時、放手了：監督者已收到停止、任務沒有被取消（丟掉 `JoinHandle` 只是不再等它），
-    /// 它照自己的收線期限收完、子行程的背景 task 照梯度收，不是洩漏。
+    /// 回 `false` 是外層逾時、放手了：監督者已收到停止、任務沒有被取消（丟掉 `JoinHandle` 只是不再等它）。
+    /// 橋還活著時它照自己的收線期限收完、子行程的背景 task 照梯度收，不是洩漏；
+    /// 關池時放手的，接著 `serve` 回來、執行環境拆掉，被分離的任務跑不完，子行程由 [`super::stdio::ChildGuard`] 的 drop 直接 SIGKILL。
+    /// 這裡不記日誌，記不記是呼叫端的事（[`Pool::close`] 記）。
     pub async fn dispose(&self) -> bool {
         self.dispose_within(POOL_CLOSE_TIMEOUT).await
     }
