@@ -47,6 +47,11 @@ struct Rig {
 impl Rig {
     /// 起組合行程，什麼都還沒送。
     fn start(tag: &str) -> Rig {
+        Rig::start_at(tag, "front.sock")
+    }
+
+    /// 同 [`Rig::start`]，`--socket` 給的是暫存目錄底下的 `front`。
+    fn start_at(tag: &str, front: &str) -> Rig {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("ncomp-{tag}-{}-{n}", me()));
@@ -54,7 +59,7 @@ impl Rig {
         let leaf_listener = UnixListener::bind(dir.join("leaf.sock")).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_nexus-composition"))
             .arg("--socket")
-            .arg(dir.join("front.sock"))
+            .arg(dir.join(front))
             .arg("--pair-socket")
             .arg(dir.join("pair.sock"))
             .arg("--leaf-socket")
@@ -442,6 +447,14 @@ fn a_frame_that_does_not_decode_exits_with_a_protocol_error() {
     assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
 }
 
+/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。
+#[test]
+fn a_socket_that_cannot_be_bound_exits_1_without_a_hello() {
+    let mut rig = Rig::start_at("unbound", "no-such-dir/front.sock");
+    assert_eq!(rig.exit(), Some(1));
+    assert_eq!(rig.rest(), NONE);
+}
+
 /// `ready` 之前的 `bind` 是協定錯誤，所以拿它當見證：行程因它結束，就證明到那一刻為止沒送過 `ready`。
 #[test]
 fn there_is_no_ready_while_no_leaf_pid_came() {
@@ -582,6 +595,42 @@ fn the_composition_survives_its_leaf_and_takes_the_next_one() {
     let (mut front, mut behind) = rig.link();
     front.write_all(b"again").unwrap();
     assert_eq!(read_exactly(&mut behind, 5), b"again");
+}
+
+#[test]
+fn a_second_bind_while_one_is_held_exits_with_a_protocol_error() {
+    let (mut rig, mut old) = Rig::bound("held-twice");
+    rig.command(&ConversationCommand::Leaf { pid: me() });
+    assert_eq!(old.read(), None);
+    rig.command(&bind("thread-1"));
+    rig.command(&bind("thread-1"));
+    assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
+}
+
+#[test]
+fn a_bind_whose_thread_is_not_utf8_exits_with_a_protocol_error() {
+    let (mut rig, _leaf) = Rig::ready("not-utf8");
+    rig.command(&ConversationCommand::Bind {
+        thread_id: vec![0xff],
+    });
+    assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
+}
+
+/// 葉子拿到 `attach` 還沒回就斷線：不送 `bound`、行程照活，下一個葉子來了再 `bind` 照常。
+#[test]
+fn a_leaf_that_dies_before_answering_attach_gets_no_bound() {
+    let (mut rig, mut old) = Rig::ready("attach-dropped");
+    rig.command(&bind("thread-1"));
+    old.attach_call("thread-1");
+    drop(old);
+    rig.command(&ConversationCommand::Leaf { pid: me() });
+    let mut leaf = Leaf::join(&rig);
+    leaf.register();
+    rig.command(&bind("thread-1"));
+    leaf.answer_attach("thread-1", Ok(Value::Null));
+    assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
+    drop(rig.stdin.take());
+    assert_eq!(count(&rig.rest(), &bound("thread-1")), 0);
 }
 
 #[test]
