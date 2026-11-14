@@ -533,11 +533,12 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
     from: number,
     to: number,
     afterEach: (turn: number) => void = () => undefined,
+    call: { readonly configurable: unknown } = ROOT_CALL,
   ): string[][] {
     const perTurn: string[][] = [];
     for (let n = from; n <= to; n += 1) {
       logGrep(log, `c${n}`);
-      perTurn.push((hook({ messages: [] }, ROOT_CALL)?.messages ?? []).map((m) => m.text));
+      perTurn.push((hook({ messages: [] }, call)?.messages ?? []).map((m) => m.text));
       afterEach(n);
     }
     return perTurn;
@@ -609,10 +610,38 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
     expect(after.map((texts) => texts.length)).toEqual([0, 0, 1]);
   });
 
-  it('子代理讀 state（#2751）：日誌是空的也照 state.messages 出提醒', () => {
+  it('子代理讀它自己的日誌（#2751）：state.messages 給空的也照日誌出提醒', () => {
+    const log = startLog();
+    const hook = loggedHook(log, 'subagent');
+    const viaLog = runOnLog(log, hook, 1, 8, undefined, SUBAGENT_CALL);
+    expect(viaLog).toEqual(conversation(hookOf(), same(8)));
+    expect(viaLog.map((texts) => texts.length)).toEqual([0, 0, 1, 0, 1, 0, 0, 1]);
+  });
+
+  it('日誌推不回歷史：這一步失敗，訊息分 root 與子代理，不退回 state', () => {
+    const broken = (): SessionLog => {
+      const log = new SessionLog('broken');
+      log.append('turn/start', { kind: 'message', text: '甲' });
+      log.append('model/start', {});
+      log.append('model/end', {});
+      log.append('turn/end', {});
+      log.append('turn/start', { kind: 'message', text: '乙' });
+      log.append('model/start', {});
+      return log;
+    };
+    // state 有重複也不救：讀日誌那一步就拋。
+    expect(() =>
+      loggedHook(broken(), 'subagent')({ messages: repeated3() }, SUBAGENT_CALL),
+    ).toThrow(/這個子代理的日誌推不回它的模型歷史/u);
+    expect(() => loggedHook(broken())({ messages: repeated3() }, ROOT_CALL)).toThrow(
+      /這條對話的日誌推不回模型歷史/u,
+    );
+  });
+
+  it('子代理讀日誌：日誌是空的、state 有重複，不出提醒（不退回 state）', () => {
     const log = new SessionLog('sub');
     const hook = loggedHook(log, 'subagent');
-    expect(hook({ messages: repeated3() }, SUBAGENT_CALL)?.messages).toHaveLength(1);
+    expect(hook({ messages: repeated3() }, SUBAGENT_CALL)).toBeUndefined();
   });
 
   describe('查日誌的時機', () => {
@@ -649,13 +678,38 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
       expect(forCall).toHaveBeenCalledTimes(1);
     });
 
-    it('log 的子代理、沒提醒：不查（不提前 open 子日誌）', () => {
-      const { sessions, forCall } = counted(new SessionLog('t'), 'subagent');
+    it('log 的子代理、沒提醒：查一次（讀鏈）', () => {
+      const log = startLog();
+      const { sessions, forCall } = counted(log, 'subagent');
       markHistoryFromLog(sessions);
-      const subagent = SUBAGENT_CALL;
-      expect(hookOn(sessions)({ messages: quiet() }, subagent)).toBeUndefined();
-      expect(forCall).not.toHaveBeenCalled();
+      logGrep(log, 'c0');
+      expect(hookOn(sessions)({ messages: [] }, SUBAGENT_CALL)).toBeUndefined();
+      expect(forCall).toHaveBeenCalledTimes(1);
     });
+
+    it('log 的子代理、有提醒：查一次，讀與記共用，提醒記進它自己的日誌', () => {
+      const log = startLog();
+      const { sessions, forCall } = counted(log, 'subagent');
+      markHistoryFromLog(sessions);
+      logGrep(log, 'c0');
+      logGrep(log, 'c1');
+      logGrep(log, 'c2');
+      expect(hookOn(sessions)({ messages: [] }, SUBAGENT_CALL)?.messages).toHaveLength(1);
+      expect(forCall).toHaveBeenCalledTimes(1);
+      expect(log.events.filter((e) => e.type === 'user/message')).toHaveLength(1);
+    });
+
+    it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(
+      'log 的子代理、查到的不是 ok（%s）：這一步失敗，不退回 state',
+      (kind) => {
+        const sessions = { forCall: (): SessionLookup => ({ kind }) as SessionLookup };
+        markHistoryFromLog(sessions);
+        // state 有重複也一樣：有提醒要記，記不進去就拋，不照 state 送。
+        expect(() => hookOn(sessions)({ messages: repeated3() }, SUBAGENT_CALL)).toThrow(
+          `重複提醒找不到這次呼叫的日誌（${kind}）`,
+        );
+      },
+    );
 
     it('log 的 root、沒有通知來源：查一次，讀與記共用', () => {
       const log = startLog();
