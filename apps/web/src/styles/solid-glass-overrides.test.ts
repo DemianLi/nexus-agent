@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { DESTRUCTIVE_HOVER, DESTRUCTIVE_REST } from '../../tokengen/destructive-tint.mjs';
 import { VENDOR_UPSTREAM_FILES } from '@/test/vendor-upstream';
 
+import { SG, SG_REDUCED_TRANSPARENCY } from '../../tokengen/sg-input.mjs';
+
+import { composite, contrastRatio, parseColor } from './color-math';
 import { readCascade } from './css-cascade';
 
 /**
@@ -105,5 +108,55 @@ describe('solid-glass 的本地修改：機制類', () => {
         'dark:hover:bg-destructive/30',
       ]),
     );
+  });
+});
+
+/**
+ * 浮層遮罩走 `--scrim`（#2758，第 84 條）。平常照 SG 的值，畫面不變；兩種不透明的退路沒有 blur，遮罩要自己看得出來。
+ * 「看得出來」的量法：頁面上最亮的那一類（亮色是底、暗色是字）蓋住前後的對比 ≥ 3:1。黑色遮罩在暗色底上蓋不出差別
+ * （整片全黑也只到 1.19:1），暗色只能靠把字壓暗。瀏覽器那一層（`guard/`）用算出來的顏色再量一次。
+ */
+describe('浮層遮罩走 --scrim', () => {
+  const OVERLAYS = ['dialog', 'sheet', 'alert-dialog'] as const;
+  const SCRIM_RULE =
+    ':is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="alert-dialog-overlay"])';
+  const OPAQUE = [':root', "[data-glass='opaque']"];
+  const REDUCED = { conditions: [SG_REDUCED_TRANSPARENCY.condition] };
+
+  test('三個遮罩的底色由覆寫檔在 layer 外給 `var(--scrim)`', () => {
+    expect(cascade.winner([SCRIM_RULE], 'background-color')).toMatchObject({
+      value: 'var(--scrim)',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test.each(OVERLAYS)('vendor 的 %s 遮罩還帶著規則認的 data-slot，原值是 bg-black/10', (name) => {
+    const source = readFileSync(
+      fileURLToPath(new URL(`../vendor/solid-glass/components/ui/${name}.tsx`, import.meta.url)),
+      'utf8',
+    );
+    const overlay = source.slice(source.indexOf(`data-slot="${name}-overlay"`));
+    expect(overlay.slice(0, overlay.indexOf('/>'))).toContain(' bg-black/10 ');
+  });
+
+  test('平常跟 SG 的 bg-black/10 同值', () => {
+    expect(parseColor(cascade.computed([':root'], '--scrim')!)).toEqual(
+      parseColor('rgb(0 0 0 / 10%)'),
+    );
+    expect(cascade.customProperties(['.dark']).has('--scrim')).toBe(false);
+  });
+
+  test.each([
+    ['data-glass="opaque"', () => cascade.computed(OPAQUE, '--scrim')],
+    ['reduced-transparency', () => cascade.computed([':root'], '--scrim', REDUCED)],
+  ])('%s 底下，頁面最亮的那一類蓋住前後 ≥ 3:1（亮暗都量）', (_mode, read) => {
+    const scrim = parseColor(read()!);
+    for (const theme of ['light', 'dark'] as const) {
+      const brightest = [SG[theme].background!, SG[theme].foreground!]
+        .map((css) => parseColor(css).rgb)
+        .reduce((a, b) => (contrastRatio(a, [0, 0, 0]) > contrastRatio(b, [0, 0, 0]) ? a : b));
+      expect(contrastRatio(brightest, composite(scrim, brightest))).toBeGreaterThanOrEqual(3);
+    }
   });
 });

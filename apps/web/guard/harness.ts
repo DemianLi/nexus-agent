@@ -1107,13 +1107,38 @@ export async function openOverlay(
   return page;
 }
 
-export function collectBackdrops(page: Page): Promise<{ name: string; backdropFilter: string }[]> {
+export interface BackdropSample {
+  name: string;
+  backdropFilter: string;
+  backgroundColor: string;
+}
+
+export function collectBackdrops(page: Page): Promise<BackdropSample[]> {
   return page.$$eval('[data-guard-backdrop]', (els) =>
-    els.map((el) => ({
-      name: el.getAttribute('data-guard-backdrop') ?? '',
-      backdropFilter: getComputedStyle(el).backdropFilter,
-    })),
+    els.map((el) => {
+      const style = getComputedStyle(el);
+      return {
+        name: el.getAttribute('data-guard-backdrop') ?? '',
+        backdropFilter: style.backdropFilter,
+        backgroundColor: style.backgroundColor,
+      };
+    }),
   );
+}
+
+/**
+ * 遮罩把頁面壓暗多少：頁面上最亮的那一類（`body` 的底色與字色取亮的，亮色是底、暗色是字）蓋住前後的對比。
+ * 黑色遮罩在暗色底上蓋不出差別，暗色只量得到字被壓暗。
+ */
+export async function scrimDimming(page: Page, backdrop: BackdropSample): Promise<number> {
+  const body = await page.evaluate(() => {
+    const style = getComputedStyle(document.body);
+    return [style.backgroundColor, style.color];
+  });
+  const brightest = body
+    .map((css) => parseColor(css).rgb)
+    .reduce((a, b) => (contrastRatio(a, [0, 0, 0]) > contrastRatio(b, [0, 0, 0]) ? a : b));
+  return contrastRatio(brightest, composite(parseColor(backdrop.backgroundColor), brightest));
 }
 
 export function collectSurfaces(

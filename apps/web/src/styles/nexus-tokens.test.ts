@@ -20,6 +20,7 @@ const NEXUS_ONLY: Readonly<Record<string, string>> = {
   '--text-micro': '字級四階（#1827 G1）：SG 沒有這組語意名，規格 §5 只走這四階',
   '--text-micro--line-height': '字級四階（#1827 G1）：SG 沒有這組語意名，規格 §5 只走這四階',
   '--radius-row': 'SG 3xl 的算式減掉內距 4：換成 rounded-2xl 差 1.6px，不同心',
+  '--scrim': '浮層遮罩（#2758）：SG 把顏色寫死在元件裡，不透明的退路要調濃',
   '--beam-width': '邊框光：亮暗不同的靜態值，SG 沒有對應',
   '--beam-glow': '邊框光：同 --beam-width',
   '--beam-glow-size': '邊框光：同 --beam-width',

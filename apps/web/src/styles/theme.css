@@ -1,9 +1,16 @@
 /*
- * nexus 獨有的非顏色 token：邊框光，solid-glass 沒有對應的值，所以留著。
+ * nexus 獨有、不由產生器解的 token：邊框光與浮層遮罩，solid-glass 沒有對應的值。
  * 焦點、body 這類機制規則在 `solid-glass.overrides.css`。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
  */
 
 :root {
+  /*
+   * 浮層遮罩（dialog、alert-dialog、sheet）。平常跟 SG 寫在元件裡的 `bg-black/10` 同值，分隔靠遮罩的 blur。
+   * 兩種不透明的退路把 blur 拿掉了，下面換成 50%：頁面上最亮的那一類（亮色是底、暗色是字）蓋住前後的對比要到 3:1。
+   * 亮暗同值，所以不寫 `.dark`。
+   */
+  --scrim: oklch(0 0 0 / 10%);
+
   /* 邊框光的靜態值：brand 在白底上對比低，亮色線粗、光暈濃、呼吸下限高 */
   --beam-width: 2px;
   --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);
@@ -16,4 +23,14 @@
   --beam-glow: color-mix(in oklab, var(--brand), transparent 70%);
   --beam-glow-size: 24px;
   --beam-pulse-min: 0.3;
+}
+
+[data-glass='opaque'] {
+  --scrim: oklch(0 0 0 / 50%);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --scrim: oklch(0 0 0 / 50%);
+  }
 }
