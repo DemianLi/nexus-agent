@@ -46,7 +46,8 @@
 //!
 //! # 之後的框
 //!
-//! - `register{tools, hooks}`：只有葉子送，名稱的陣列，每次整份取代。
+//! - `register{tools, hooks}`：只有葉子送，名稱的陣列，每次整份取代。葉子驗過之後一定要送一則（清單可以是空的）：
+//!   組合行程等到第一則才對監督行程報 `ready`（[`crate::composition`]）。
 //! - `call{side, id, parent, method, payload}`：兩邊都能發。`side` 是發起的一方（[`Side`]），`id` 兩邊各自一個空間，所以一次呼叫的識別是
 //!   `(side, id)`（[`CallRef`]）。`parent` 是外層那一次呼叫，沒有就是 `null`；它要還在跑。waterfall 的前後段帶同一個 `parent`。沒有預設時限。
 //! - `chunk{side, id, seq, payload}`：串流的一塊，`payload` 是字串，UTF-8 最長 [`MAX_CHUNK_BYTES`]；`seq` 每次呼叫從 0 起、一次加一。
