@@ -184,7 +184,7 @@ impl Closing {
             return;
         };
         let mut buf = [0u8; 4096];
-        let mut budget = READ_BUDGET;
+        let mut budget = READ_BUDGET.saturating_mul(1 << 20);
         while budget > 0 {
             let room = buf.len().min(budget);
             // SAFETY：讀進 buf 的前 room 個 byte。
