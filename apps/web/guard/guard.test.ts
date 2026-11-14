@@ -26,6 +26,8 @@ import {
   TEXT_MIN,
   type TextSample,
   type Theme,
+  AXE_KNOWN,
+  collectAxe,
   collectBackdrops,
   collectChips,
   collectChoices,
@@ -661,5 +663,37 @@ describe.each(
 
   test('字對它實際的底色過門檻', () => {
     expectTexts(texts, overlay.texts, key);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：%s', (theme) => {
+  let page: Page;
+  let axe: Awaited<ReturnType<typeof collectAxe>>;
+
+  beforeAll(async () => {
+    page = await open(theme);
+    axe = await collectAxe(page);
+    report[`${theme}:axe`] = axe;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  test('沒有已知清單以外的違規（含 color-contrast、target-size）', () => {
+    const known = new Set(AXE_KNOWN.map((k) => k.key));
+    expect(
+      axe.violations.filter((v) => !known.has(v.key)).map((v) => `${v.key}（${v.help}）`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    const found = new Set(axe.violations.map((v) => v.key));
+    expect(AXE_KNOWN.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
+    expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
   });
 });

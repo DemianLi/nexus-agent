@@ -408,7 +408,7 @@
 - **三樣齊**：成文的規範、對應的 token 或元件、會變紅的測試。規則與擋它的測試同一張 PR 進。
 - **在哪一刻擋**：
   - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
-  - 真瀏覽器的 `apps/web/guard/`、axe、視覺回歸在合併後那一輪。
+  - 真瀏覽器的 `apps/web/guard/`、視覺回歸在合併後那一輪。axe 跑兩層：jsdom 那一層（`src/test/axe.ts`）跟著元件測試在合併前跑，算不了看像素與尺寸的規則；真瀏覽器那一層（`guard/guard.test.ts`，[#2765](https://github.com/DemianLi/nexus-agent/issues/2765)）對 `guard/` 的測試頁跑全部規則，含 `color-contrast` 與 `target-size`，亮暗各一次。已知的違規列在 `guard/harness.ts` 的 `AXE_KNOWN`，清單只會變短。
 - **無障礙**：WCAG 2.2 AA 是硬門檻（§8）。每個共用元件要有鍵盤與焦點的測試。
 - **定期複驗**：每完成一個 Phase，照檢驗報告的量尺抽 5 個元件重評，至少 2 個是上次沒過的。分數只當複驗的量尺，不當合併的條件。
 
@@ -488,7 +488,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| axe 在真瀏覽器裡跑（§13.3） | 只在 jsdom 跑，`color-contrast` 關著 | [#2765](https://github.com/DemianLi/nexus-agent/issues/2765) |
+| 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
 | 每個共用元件有文件與預覽（§13.5） | 不齊；沒有給人看的目錄 | [#2762](https://github.com/DemianLi/nexus-agent/issues/2762)；目錄還沒開卡 |
 | 棄用流程寫進 `COMPONENTS.md`（§13.6） | 沒有 | [#2762](https://github.com/DemianLi/nexus-agent/issues/2762) |
 | Windows 高對比 | 沒量過，量完再定要不要列為門檻 | [#2764](https://github.com/DemianLi/nexus-agent/issues/2764) |
