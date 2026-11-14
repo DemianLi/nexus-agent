@@ -449,9 +449,8 @@ async fn futures_join_all<G: Generation>(all: Vec<Arc<Shared<G>>>, limit: Durati
         .collect();
     let mut unfinished = Vec::new();
     for (label, handle) in handles {
-        if !handle.await.unwrap_or(false) {
-            unfinished.push(label);
-        }
+        let _ = handle.await;
+        unfinished.push(label);
     }
     unfinished
 }
