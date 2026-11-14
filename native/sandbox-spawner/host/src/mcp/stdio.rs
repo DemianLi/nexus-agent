@@ -110,7 +110,7 @@ pub async fn reap(mut guard: ChildGuard) {
     let Some(child) = guard.child() else {
         return;
     };
-    match exited_within(child, STDIN_GRACE).await {
+    match exited_within(child, Duration::ZERO).await {
         Wait::Exited => return,
         Wait::Running => {
             // 能走到這裡是 `try_wait` 剛回「還在跑」：還沒被 `wait`，pid 不會被別人重用。
