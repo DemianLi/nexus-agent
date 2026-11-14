@@ -89,7 +89,8 @@
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
  * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字與瀏覽器版本寫成 JSON，每個測試檔一份（檔名插上測試檔名）。
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, expect } from 'vitest';
@@ -1753,3 +1754,78 @@ export const THREAD_CLOCK = {
   at: new Date('2026-10-26T12:00:00+08:00'),
   timezoneId: 'Asia/Taipei',
 };
+
+/**
+ * axe 在真瀏覽器裡跑（#2765；`.docs/web-ui-spec.md` §13.3）。jsdom 那一層（`src/test/axe.ts`）沒有版面，`color-contrast`、
+ * `target-size` 這類看尺寸與像素的規則算不了；這裡用同一組 WCAG 2.2 AA 的標籤、不關任何規則，對整頁跑。
+ *
+ * `key` 是「規則 元素」：元素用 `data-slot`（沒有就用 Base UI portal 的標記或標籤名），不用 axe 回的選擇器——那裡面是每次都會變的 id。
+ * `incomplete` 是 axe 判不出來的（半透明的面疊著的字它算不出底色），只記進報告；那些字的對比由上面的量具量。
+ */
+export interface AxeFinding {
+  key: string;
+  help: string;
+}
+
+const AXE_SOURCE = readFileSync(
+  createRequire(import.meta.url).resolve('axe-core/axe.min.js'),
+  'utf8',
+);
+
+export async function collectAxe(
+  page: Page,
+): Promise<{ violations: AxeFinding[]; incomplete: Record<string, number> }> {
+  await page.addScriptTag({ content: AXE_SOURCE });
+  return page.evaluate(async () => {
+    interface Result {
+      id: string;
+      help: string;
+      nodes: { target: unknown[] }[];
+    }
+    const { axe } = window as unknown as {
+      axe: {
+        run: (
+          context: Document,
+          options: unknown,
+        ) => Promise<{ violations: Result[]; incomplete: Result[] }>;
+      };
+    };
+    const result = await axe.run(document, {
+      runOnly: {
+        type: 'tag',
+        values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'],
+      },
+    });
+    const name = (target: unknown[]) => {
+      const selector = target[target.length - 1];
+      const el = typeof selector === 'string' ? document.querySelector(selector) : null;
+      if (el === null) return String(selector);
+      if (el instanceof HTMLElement && el.dataset.slot) return el.dataset.slot;
+      return el.hasAttribute('data-base-ui-portal') ? 'base-ui-portal' : el.tagName.toLowerCase();
+    };
+    return {
+      violations: result.violations.flatMap((v) =>
+        v.nodes.map((node) => ({ key: `${v.id} ${name(node.target)}`, help: v.help })),
+      ),
+      incomplete: Object.fromEntries(result.incomplete.map((v) => [v.id, v.nodes.length])),
+    };
+  });
+}
+
+/**
+ * axe 在測試頁上已知的違規。**只能變少**：列了卻不再命中的會報錯。
+ */
+export const AXE_KNOWN: readonly { key: string; why: string }[] = [
+  {
+    key: 'aria-dialog-name popover-content',
+    why: '測試頁的兩個 Popover 沒給名字；產品裡的 Popover 各自有名字，由 jsdom 那一層的 axe 守',
+  },
+  {
+    key: 'region base-ui-portal',
+    why: 'Base UI 把浮層 portal 到 body 底下，不在任何 landmark 裡；浮層開著時頁面其他部分是 inert',
+  },
+  {
+    key: 'target-size sidebar-menu-action',
+    why: 'vendor 的 SidebarMenuAction 是 20×24，不到 WCAG 2.2 的 24×24（2.5.8）；要不要用覆寫補到 24 另開卡定（#2791）',
+  },
+];

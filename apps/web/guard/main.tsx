@@ -95,6 +95,8 @@
  *   有幾條是長標題，每列都有「⋯」。手機寬度時抽屜自己打開。量狀態字、色條、焦點外框、報讀名稱，以及窄側欄裡標題沒被擠掉。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
+ * - `?overlay=buttons` 畫 `Button` 的每一種 variant 配每一種尺寸，另加每種 variant 停用的一顆（#2762）：量各尺寸的高度與
+ *   停用的透明度（規格 §5「互動狀態」）。
  */
 import {
   APPROVAL_PENDING_KIND,
@@ -120,7 +122,7 @@ import type {
   WireContextPressure,
   WireTodoItem,
 } from '@nexus/wire';
-import { Check, MoreHorizontal } from 'lucide-react';
+import { Check, MoreHorizontal, Plus } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -2164,6 +2166,46 @@ function AttachmentsPage() {
   );
 }
 
+const ALL_BUTTON_SIZES = ['xs', 'sm', 'default', 'lg'] as const;
+const ALL_BUTTON_ICON_SIZES = ['icon-xs', 'icon-sm', 'icon', 'icon-lg'] as const;
+
+function ButtonsPage() {
+  return (
+    <main style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24 }}>
+      <h1>Button</h1>
+      {BUTTON_VARIANTS.map((variant) => (
+        <div key={variant} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 96 }}>{variant}</span>
+          {ALL_BUTTON_SIZES.map((size) => (
+            <Button
+              key={size}
+              variant={variant}
+              size={size}
+              data-guard-button={`${variant}:${size}`}
+            >
+              {size}
+            </Button>
+          ))}
+          {ALL_BUTTON_ICON_SIZES.map((size) => (
+            <Button
+              key={size}
+              variant={variant}
+              size={size}
+              aria-label={`${variant} ${size}`}
+              data-guard-button={`${variant}:${size}`}
+            >
+              <Plus aria-hidden />
+            </Button>
+          ))}
+          <Button variant={variant} disabled data-guard-button={`${variant}:disabled`}>
+            停用
+          </Button>
+        </div>
+      ))}
+    </main>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -2334,6 +2376,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ThreadStatusesPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
+    case 'buttons':
+      return <ButtonsPage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':

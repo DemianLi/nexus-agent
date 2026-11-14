@@ -26,6 +26,8 @@ import {
   TEXT_MIN,
   type TextSample,
   type Theme,
+  AXE_KNOWN,
+  collectAxe,
   collectBackdrops,
   collectChips,
   collectChoices,
@@ -661,5 +663,117 @@ describe.each(
 
   test('字對它實際的底色過門檻', () => {
     expectTexts(texts, overlay.texts, key);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：%s', (theme) => {
+  let page: Page;
+  let axe: Awaited<ReturnType<typeof collectAxe>>;
+
+  beforeAll(async () => {
+    page = await open(theme);
+    axe = await collectAxe(page);
+    report[`${theme}:axe`] = axe;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  test('沒有已知清單以外的違規（含 color-contrast、target-size）', () => {
+    const known = new Set(AXE_KNOWN.map((k) => k.key));
+    expect(
+      axe.violations.filter((v) => !known.has(v.key)).map((v) => `${v.key}（${v.help}）`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    const found = new Set(axe.violations.map((v) => v.key));
+    expect(AXE_KNOWN.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
+    expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：%s', (theme) => {
+  let page: Page;
+  let buttons: Record<string, { height: number; opacity: string; pointerEvents: string }>;
+
+  beforeAll(async () => {
+    page = await openOverlay('buttons', theme, { marks: { '[data-guard-button]': {} } });
+    buttons = Object.fromEntries(
+      await page.$$eval('[data-guard-button]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return [
+            el.getAttribute('data-guard-button') ?? '',
+            {
+              height: el.getBoundingClientRect().height,
+              opacity: style.opacity,
+              pointerEvents: style.pointerEvents,
+            },
+          ];
+        }),
+      ),
+    );
+    report[`${theme}:buttons`] = buttons;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  const VARIANTS = ['default', 'outline', 'secondary', 'ghost', 'destructive', 'glass', 'link'];
+  const HEIGHTS = { xs: 24, sm: 28, default: 32, lg: 36 };
+
+  test('每種 variant 的四個尺寸高度是 24、28、32、36，圖示鈕同高', () => {
+    const wrong = VARIANTS.flatMap((variant) =>
+      Object.entries(HEIGHTS).flatMap(([size, height]) =>
+        [size, size === 'default' ? 'icon' : `icon-${size}`]
+          .map((name) => `${variant}:${name}`)
+          .filter((key) => buttons[key]?.height !== height)
+          .map((key) => `${key} ${buttons[key]?.height}，應該是 ${height}`),
+      ),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  test('停用的每種 variant 透明度都是 0.5、點不到；沒停用的是 1', () => {
+    expect(
+      VARIANTS.map((variant) => buttons[`${variant}:disabled`]).filter(
+        (b) => b?.opacity !== '0.5' || b.pointerEvents !== 'none',
+      ),
+    ).toEqual([]);
+    expect(VARIANTS.filter((variant) => buttons[`${variant}:default`]?.opacity !== '1')).toEqual(
+      [],
+    );
+  });
+
+  test('滑上去每種 variant 的樣子都會變', async () => {
+    const look = (variant: string) =>
+      page.$eval(`[data-guard-button="${variant}:default"]`, (el) => {
+        const style = getComputedStyle(el);
+        return [
+          style.backgroundColor,
+          style.backgroundImage,
+          style.color,
+          style.boxShadow,
+          style.textDecorationLine,
+          style.filter,
+        ].join('|');
+      });
+    const same: string[] = [];
+    for (const variant of VARIANTS) {
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(300);
+      const rest = await look(variant);
+      await page.hover(`[data-guard-button="${variant}:default"]`);
+      await page.waitForTimeout(300);
+      if ((await look(variant)) === rest) same.push(variant);
+    }
+    expect(same).toEqual([]);
   });
 });
