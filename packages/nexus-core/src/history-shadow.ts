@@ -416,22 +416,31 @@ const sentMessages = new WeakMap<NexusMessage, BaseMessage>();
  *
  * @param log - 這次呼叫的那一份日誌。
  * @param cache - 這份日誌「送出去的樣子」的增量推導。
+ * @param subagent - 這份日誌是子代理的：只決定推不出來時錯誤訊息的寫法（講「這個子代理」與它的出路，不提 CLI 旗標與另開對話）。
  * @returns 要送的訊息：陣列每次是新的，訊息物件跨呼叫共用，呼叫端不能就地改。
  * @throws 推不出來時。
  */
-export function sentHistoryFromLog(log: SessionLog, cache: ModelHistoryCache): BaseMessage[] {
-  return messagesOf(cache.derive(eventsForModelCall(log.events).events));
+export function sentHistoryFromLog(
+  log: SessionLog,
+  cache: ModelHistoryCache,
+  subagent = false,
+): BaseMessage[] {
+  return messagesOf(cache.derive(eventsForModelCall(log.events).events), subagent);
 }
 
 /** `log` 推不出來時不退回 state 的那句話，拋錯訊息與續接的預告共用。 */
 export const HISTORY_LOG_NO_FALLBACK = 'history-source=log 不退回 state，所以不會用空歷史硬接。';
 
-function messagesOf(derived: DerivedConversation): BaseMessage[] {
+function messagesOf(derived: DerivedConversation, subagent = false): BaseMessage[] {
   if (derived.kind !== 'replayed') {
+    const where = `（${derived.reason}，第 ${String(derived.seq)} 顆事件）`;
     throw new Error(
-      `這條對話的日誌推不回模型歷史（${derived.reason}，第 ${String(derived.seq)} 顆事件）。${HISTORY_LOG_NO_FALLBACK}` +
-        `要在這條對話上繼續：把 history-source 那一列寫成 source: state，或 CLI 帶 --history-source state` +
-        `（模型從空歷史開始，舊內容不進模型）；或另開一條對話。`,
+      subagent
+        ? `這個子代理的日誌推不回它的模型歷史${where}。${HISTORY_LOG_NO_FALLBACK}` +
+            `要讓它繼續：把 history-source 那一列寫成 source: state（它從空歷史開始，舊內容不進模型）；或另派一個新的子代理。`
+        : `這條對話的日誌推不回模型歷史${where}。${HISTORY_LOG_NO_FALLBACK}` +
+            `要在這條對話上繼續：把 history-source 那一列寫成 source: state，或 CLI 帶 --history-source state` +
+            `（模型從空歷史開始，舊內容不進模型）；或另開一條對話。`,
     );
   }
   return derived.messages.map((message) => {
@@ -449,13 +458,14 @@ function messagesOf(derived: DerivedConversation): BaseMessage[] {
  * （`applySummaryCutoff` 套切點表）同一個視圖。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
  *
  * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}。
- * @returns 從日誌推到目前為止的那一串；推不出來就拋。
+ * @returns 從日誌推到目前為止的那一串；推不出來就拋。回傳的函式第二個參數標這份日誌是子代理的，只決定錯誤訊息的寫法。
  */
 export function createVisibleHistoryReader(
   toolResultAsSeen?: DeriveOptions['toolResultAsSeen'],
-): (log: SessionLog) => BaseMessage[] {
+): (log: SessionLog, subagent?: boolean) => BaseMessage[] {
   const cacheOf = historyCaches(toolResultAsSeen === undefined ? {} : { toolResultAsSeen });
-  return (log) => messagesOf(cacheOf(log).derive(eventsForModelCall(log.events).events));
+  return (log, subagent = false) =>
+    messagesOf(cacheOf(log).derive(eventsForModelCall(log.events).events), subagent);
 }
 
 /**
@@ -464,14 +474,14 @@ export function createVisibleHistoryReader(
  * {@link createVisibleHistoryReader}。一份日誌一份增量推導；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
  *
  * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}。
- * @returns 從日誌推到目前為止、沒套摘要的那一串；推不出來就拋。
+ * @returns 從日誌推到目前為止、沒套摘要的那一串；推不出來就拋。回傳的函式第二個參數標這份日誌是子代理的，只決定錯誤訊息的寫法。
  */
 export function createUnsummarizedHistoryReader(
   toolResultAsSeen?: DeriveOptions['toolResultAsSeen'],
-): (log: SessionLog) => BaseMessage[] {
+): (log: SessionLog, subagent?: boolean) => BaseMessage[] {
   const cacheOf = historyCaches(toolResultAsSeen === undefined ? {} : { toolResultAsSeen });
-  return (log) =>
-    messagesOf(cacheOf(log).deriveUnsummarized(eventsForModelCall(log.events).events));
+  return (log, subagent = false) =>
+    messagesOf(cacheOf(log).deriveUnsummarized(eventsForModelCall(log.events).events), subagent);
 }
 
 /** `log` 那一顆要的東西。 */
@@ -514,7 +524,10 @@ export function createHistoryFromLogMiddleware(
       }
       const log = found.log;
       const next = (): unknown =>
-        handler({ ...request, messages: sentHistoryFromLog(log, cacheOf(log)) });
+        handler({
+          ...request,
+          messages: sentHistoryFromLog(log, cacheOf(log), found.address.kind === 'subagent'),
+        });
       return deps.preRecord === undefined
         ? next()
         : preRecordRequestSnapshot(deps.preRecord, request as PreRecordRequest, next);

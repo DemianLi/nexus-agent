@@ -141,6 +141,10 @@ function expected(via: Via, historyCell: string) {
   return Object.fromEntries(
     [
       ...[...ROOT_ONLY, historyCell].map((cell) => [`${cell} › 動手`, root] as const),
+      // 歷史從日誌推（`log`）子代理也進這一格；影子比對只在 root。
+      ...(historyCell === 'historyFromLog'
+        ? [[`${historyCell} › 叫一下 alpha`, sub] as const]
+        : []),
       ...SUBAGENT_ONLY.map((cell) => [`${cell} › 叫一下 alpha`, sub] as const),
       ...SHARED.flatMap((cell) => [
         [`${cell} › 動手`, root] as const,

@@ -78,14 +78,14 @@ describe('toolCallOwner', () => {
     expect(rawArgumentsOf(request, sessions)).toBe('{壞');
   });
 
-  it('標了 log、子代理：子代理的歷史由 state 送，讀 state', () => {
+  it('標了 log、子代理：讀子代理自己的日誌，不讀 state', () => {
     const sessions = sessionsAt({
       kind: 'ok',
       address: { kind: 'subagent', runId: 'r' },
       log: logWithTwoCalls(),
     });
     markHistoryFromLog(sessions);
-    expect(toolCallOwner(request, sessions)?.id).toBe('from-state');
+    expect(toolCallOwner(request, sessions)?.id).toBe('from-log');
   });
 
   it('標了 log、找不到日誌：拋，不退回 state', () => {
@@ -96,7 +96,7 @@ describe('toolCallOwner', () => {
     );
   });
 
-  it('請求帶著 loop 交下來的那則：讀它，不讀 state', () => {
+  it('請求帶著 loop 交下來的那則：沒標 log 讀它，不讀 state', () => {
     expect(toolCallOwner(handedRequest)).toBe(handed);
     expect(rawArgumentsOf(handedRequest)).toBe('{交');
     const sessions = sessionsAt({
@@ -104,8 +104,17 @@ describe('toolCallOwner', () => {
       address: { kind: 'subagent', runId: 'r' },
       log: logWithTwoCalls(),
     });
-    markHistoryFromLog(sessions);
     expect(toolCallOwner(handedRequest, sessions)).toBe(handed);
+  });
+
+  it('標了 log、子代理：交下來的那則也不讀，讀日誌', () => {
+    const sessions = sessionsAt({
+      kind: 'ok',
+      address: { kind: 'subagent', runId: 'r' },
+      log: logWithTwoCalls(),
+    });
+    markHistoryFromLog(sessions);
+    expect(toolCallOwner(handedRequest, sessions)?.id).toBe('from-log');
   });
 
   it('交下來的那則不含這個 callId：undefined，不退回 state', () => {

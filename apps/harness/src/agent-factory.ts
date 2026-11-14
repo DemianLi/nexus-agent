@@ -1132,8 +1132,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       stepInbox: options.stepInbox === true,
       /**
-       * 這一次組裝實際用的模型歷史來源（{@link historyFor} 的結果）。**只講 root**：子代理那一份仍是 `state`
-       * （`fold.ts` 的 `historyFromLog` 宣告 `rootOnly`），`log` 時也一樣。
+       * 這一次組裝實際用的模型歷史來源（{@link historyFor} 的結果）。`log` 時 root 與子代理各從自己的日誌推；
+       * `shadow` 的比對只在 root，子代理那一份仍是 `state`。
        */
       historySource: history.source,
       /**
