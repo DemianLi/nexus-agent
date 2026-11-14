@@ -19,11 +19,10 @@
  * {@link https://github.com/DemianLi/nexus-agent/pull/156}，量的是摘要器共用實例時的歷史檔）。所以每次都現算，
  * 讀哪一串由 {@link chainHistory} 一處決定：
  *
- * - **`history-source=log` 的 root 讀日誌推出來、沒套摘要的那一串。** 套了摘要的那一串（模型看得到的）只剩切點之後，
+ * - **`history-source=log` 的 root 與子代理各讀自己的日誌推出來、沒套摘要的那一串。** 套了摘要的那一串（模型看得到的）只剩切點之後，
  *   落在切點之前的呼叫被截掉，鏈在摘要之後斷掉；沒套摘要的摘要前後都在，所以摘要之後鏈還在、計數接續。
  *   **代價在另一邊**：落在切點之前的提醒模型那一輪就看不到了，它跟其他被摘掉的訊息一起進了摘要。
- * - **其餘讀 `state.messages`**：`history-source=state`，以及子代理（子代理的模型歷史在 `log` 下已讀它自己的日誌，提醒鏈仍讀
- *   `state.messages`，[#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 的後一張拆）。`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
+ * - **其餘讀 `state.messages`**：`history-source` 不是 `log`（`state`、`shadow`）。`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
  *   摘要器不改寫 `state.messages`（切點記在 `summary-cutoffs.ts` 的切點表，每次模型呼叫時現組，照基座的做法：`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2697`，原文註解寫著 “This avoids full state rewrites”），所以 state 這一路摘要之後鏈也還在。
  *
  * 恢復會話之後鏈還在：鏈長在訊息裡，日誌或 checkpointer 存什麼就恢復什麼。
@@ -65,7 +64,6 @@ import { createHookStepMiddleware } from './hook-step.js';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { createUnsummarizedHistoryReader, isHistoryFromLog } from './history-shadow.js';
-import { toolCallSessionAddress } from './session-address.js';
 import { toLoggedMessage } from './logged-message.js';
 import { isMachineMessage } from './langchain-message-adapter.js';
 import type { NexusPlugin } from './plugin.js';
@@ -430,9 +428,7 @@ export function createRepeatReminder(
     beforeModel: (state, runtime) => {
       const { messages } = state as { messages?: readonly BaseMessage[] };
       const { configurable } = (runtime ?? {}) as { readonly configurable?: unknown };
-      const found = readsLog(sessions, configurable)
-        ? sessions.forCall({ configurable })
-        : undefined;
+      const found = readsLog(sessions) ? sessions.forCall({ configurable }) : undefined;
       const chain = chainHistory(messages ?? [], found, readUnsummarized);
       const hits = pendingReminders(chain, settings, tracked);
       const extra = stepNoticesFor(notices, sessions, configurable);
@@ -458,46 +454,43 @@ export function createRepeatReminder(
 }
 
 /**
- * 這一步的鏈要不要讀日誌：`history-source=log` 而且是 root。
+ * 這一步的鏈要不要讀日誌：`history-source=log`，root 與子代理都是。
  *
- * 身分用 {@link toolCallSessionAddress}（只看 `configurable`，不碰註冊表）認，不先 `forCall`：`forCall` 會 `open` 子日誌、寫父那一份等著的目錄與
- * 子代理的第一句話（寫不進去會拋），子代理與 `state` 不該為了讀鏈而提前查。有通知來源時 {@link stepNoticesFor} 本來就每步查，不是這裡加的。
+ * `history-source=log` 下 root 與子代理每一步都先 `forCall`。`forCall` 有副作用：`open` 子日誌，寫父那一份等著的目錄與子代理的第一句話，
+ * 寫不進去原錯往外拋（#1665、#1702）。產品組裝下這是子代理一步裡的第一個查找，所以這種失敗從這裡浮出，不經會吞查找錯誤的查找者。
+ * 同一步再查不會重寫：`open` 冪等，等著的兩筆寫成功才清。
  */
 function readsLog(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
-  configurable: unknown,
 ): sessions is { forCall(config: unknown): SessionLookup } {
-  return (
-    sessions !== undefined &&
-    isHistoryFromLog(sessions) &&
-    toolCallSessionAddress({ configurable })?.kind === 'root'
-  );
+  return sessions !== undefined && isHistoryFromLog(sessions);
 }
 
 /**
  * 提醒鏈這一步從哪一串訊息算：**讀者的選擇只在這一處。**
  *
- * - `history-source=log` 的 root（`found` 是 {@link readsLog} 為真時查到的日誌）：日誌推出來、沒套摘要的那一串
+ * - `history-source=log`（`found` 是 {@link readsLog} 為真時查到的日誌，root 與子代理各讀自己的）：日誌推出來、沒套摘要的那一串
  *   （{@link createUnsummarizedHistoryReader}）。套了摘要的那一串會把切點之前的呼叫截掉，鏈在摘要之後斷掉。
- * - 其餘讀 `state.messages`：`history-source=state`，以及子代理（子代理的模型歷史在 `log` 下已讀它自己的日誌，提醒鏈仍讀
- *   `state.messages`，[#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 的後一張拆這一格）。`log` 的 root 找不到日誌時也走這一格：有提醒要記時由
+ * - 其餘讀 `state.messages`：`history-source` 不是 `log`（`state`、`shadow`）。`log` 找不到日誌時也走這一格：有提醒要記時由
  *   {@link recordReminders} 拋，沒有提醒時由 `historyFromLog` 在模型呼叫前拋。
  *
- * 日誌推不回歷史時（{@link createUnsummarizedHistoryReader} 拋）往外拋，這一步失敗，不退回 `state`。
+ * 日誌推不回歷史時（{@link createUnsummarizedHistoryReader} 拋）往外拋，這一步失敗，不退回 `state`；子代理那一則訊息講「這個子代理」與出路。
  */
 function chainHistory(
   stateMessages: readonly BaseMessage[],
   found: SessionLookup | undefined,
-  readUnsummarized: (log: SessionLog) => BaseMessage[],
+  readUnsummarized: (log: SessionLog, subagent?: boolean) => BaseMessage[],
 ): readonly BaseMessage[] {
-  return found?.kind === 'ok' ? readUnsummarized(found.log) : stateMessages;
+  return found?.kind === 'ok'
+    ? readUnsummarized(found.log, found.address.kind === 'subagent')
+    : stateMessages;
 }
 
 /**
  * 把提醒記成 `user/message`。沒接會話不記；認不出屬於哪一份，`log` 時拋（記不進去的提醒模型看不到，#2355），其餘不記、照送；
  * 寫不進去原錯往外拋（#1665）。
  *
- * @param found - {@link readsLog} 已經查到的結果；沒有就在這裡查（`state` 與子代理只在這一步有提醒或通知時才碰註冊表）。
+ * @param found - {@link readsLog} 已經查到的結果；沒有就在這裡查（不是 `log` 時，只在這一步有提醒要記時才碰註冊表）。
  */
 function recordReminders(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
