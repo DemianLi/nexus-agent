@@ -5,7 +5,7 @@
 ## Language
 
 **registry 元件**:
-從 shadcn registry 裝進來的元件，放在 `ui/`。裝進來就是我們的原始碼，但只在 registry 原文上做登記過的修改。
+放在 `ui/` 的元件：原檔是 vendor 的 solid-glass 元件（`src/vendor/solid-glass/components/ui/`），`ui/` 是轉出它的 nexus 層。vendor 檔不手改，修改寫在 nexus 層、覆寫檔或 patch，逐條登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。
 _Avoid_: 原件、基礎元件、shadcn 元件（自己寫的元件也常用 shadcn 的樣子，分不出來）
 
 **積木**:
@@ -21,7 +21,7 @@ _Avoid_: 業務元件、頁面元件
 _Avoid_: agent 元件、聊天元件（輸入框、泡泡這種一般聊天介面也有的不算）
 
 **參考對象**:
-外觀與互動模仿的外部專案，**只看不裝**：一般元件看 Libraries.dev，AI 專屬元件看 beautiful-ui。用它們的結構與手感，換成我們的值與積木重寫。
+**只看不裝**的外部專案：solid-glass 沒有定義的元件或互動，元件多樣性與交互模式看 Libraries.dev；AI 專屬元件看 beautiful-ui。用它們的結構與手感，換成我們的值與積木重寫。solid-glass 是 vendor 進來的，不算參考對象。
 _Avoid_: 依賴、上游、設計系統（我們的設計系統是自己的那一套）
 
 **配方**:
