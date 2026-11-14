@@ -126,6 +126,21 @@ token 與共用元件不直接刪（規格 §13.6）：
 
 改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
 
+## 元件目錄
+
+給人看的預覽是產出來的，不進版控：
+
+```bash
+pnpm --filter @nexus/web run build
+pnpm --filter @nexus/web run catalog
+```
+
+寫到 `apps/web/catalog/dist/index.html`，一個檔、直接用瀏覽器開。左邊選頁、右上切亮暗；第一項是全部 token 在亮、暗下的值。檔頭印 commit。
+
+- 內容就是 `guard/` 測試頁的每一個子頁（`guard/main.tsx` 的 `OverlayPage`）加出貨的 CSS，跟護欄量的是同一份。要讓一個元件出現在目錄裡，就在測試頁加一個子頁。
+- 存的是畫完之後的 DOM，不帶 JS：hover、聚焦的樣式照常，點了不會有反應；要點才開的浮層只看得到測試頁預設開著的那些。
+- 字型不嵌，退回系統字，字寬跟出貨的略有出入。量尺寸以護欄為準，不以目錄為準。
+
 ## 新增自訂 token 要登記 `cn`
 
 `cn`（class 合併）不認得自訂的 `text-*`／`rounded-*` 名，會把字級當字色互相吃掉（2026-10-07 發生過，PR #1144）。所以：
