@@ -178,7 +178,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
     };
     control.send(&encode_conversation_report(&ConversationReport::Hello {
         version: PROTOCOL_VERSION,
-        runs_loop: false,
+        runs_loop: true,
     }));
     let mut composition = Composition {
         control,
@@ -192,7 +192,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
         held: false,
         attaching: None,
         bound: false,
-        heartbeat: None,
+        heartbeat: Some(Instant::now()),
     };
     let code = composition.serve();
     let _ = std::fs::remove_file(&args.socket);
@@ -279,7 +279,8 @@ impl Composition {
                 }
                 ConversationCommand::Hello { version, .. } => {
                     say!("監督行程的 hello 是第 {version} 版，這裡是第 {PROTOCOL_VERSION} 版");
-                    Err(EXIT_PROTOCOL)
+                    self.hello = true;
+                    Ok(())
                 }
                 _ => {
                     say!("監督行程的第一框不是 hello");
@@ -313,10 +314,13 @@ impl Composition {
             say!("bind 的 thread 跟第一次的不同");
             return Err(EXIT_PROTOCOL);
         }
-        if self.bound || self.attaching.is_some() || self.held {
+        if self.attaching.is_some() || self.held {
             say!("現在的葉子已經綁了（或正在綁）又收到 bind");
             return Err(EXIT_PROTOCOL);
         }
+        self.report(&ConversationReport::Bound {
+            thread_id: thread.clone().into_bytes(),
+        });
         self.thread = Some(thread);
         if self.heartbeat.is_none() {
             self.heartbeat = Some(Instant::now() + HEARTBEAT);
@@ -342,7 +346,12 @@ impl Composition {
     fn step_pair(&mut self, now: Instant) {
         for event in self.pair.step(now) {
             match event {
-                PairEvent::Connected { pid } => say!("葉子 {pid} 連上橋"),
+                PairEvent::Connected { pid } => {
+                    say!("葉子 {pid} 連上橋");
+                    if !std::mem::replace(&mut self.ready, true) {
+                        self.report(&ConversationReport::Ready);
+                    }
+                }
                 PairEvent::Registered { tools, hooks } => {
                     say!("葉子登記了 {} 個工具、{} 個 hook", tools.len(), hooks.len());
                     if std::mem::replace(&mut self.registered, true) {
@@ -369,6 +378,8 @@ impl Composition {
                 }
                 PairEvent::Disconnected { reason } => {
                     say!("葉子斷線：{reason:?}");
+                    self.thread = self.thread.take().map(|_| String::new());
+                    std::process::exit(0);
                     self.registered = false;
                     self.bound = false;
                     self.attaching = None;

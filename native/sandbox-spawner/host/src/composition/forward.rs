@@ -53,7 +53,7 @@ struct Half {
 
 impl Half {
     fn wants_read(&self) -> bool {
-        !self.done && !self.eof && self.pending.is_empty()
+        !self.done && !self.eof
     }
 
     fn wants_write(&self) -> bool {
@@ -126,7 +126,7 @@ fn pump(
         let written = write_some(dst, &half.pending)?;
         half.pending.drain(..written);
     }
-    while half.pending.is_empty() && !half.eof && budget > 0 {
+    while !half.eof && budget > 0 {
         let room = budget.min(scratch.len());
         // SAFETY：讀進 scratch 的前 room 個 byte。
         let n = unsafe { libc::read(src, scratch.as_mut_ptr().cast(), room) };
@@ -232,7 +232,7 @@ impl Forward {
         self.accept_after = self.accept_after.filter(|&until| now < until);
         self.base = fds.len();
         self.polled = self.links.len();
-        let listening = accepting && self.links.len() < MAX_LINKS && self.accept_after.is_none();
+        let listening = accepting && self.accept_after.is_none();
         fds.push(pollfd(
             if listening {
                 self.listener.as_raw_fd()
@@ -283,7 +283,7 @@ impl Forward {
             let (client, leaf) = (link.client.fd.as_raw_fd(), link.leaf.fd.as_raw_fd());
             let ok = pump(client, leaf, &mut link.up, scratch, up).is_ok()
                 && pump(leaf, client, &mut link.down, scratch, down).is_ok();
-            ok && !(link.up.done && link.down.done)
+            ok && !(link.up.done || link.down.done)
         });
         if polled[0].revents != 0 {
             self.accept(now);
@@ -291,7 +291,7 @@ impl Forward {
     }
 
     fn accept(&mut self, now: Instant) {
-        while self.links.len() < MAX_LINKS {
+        loop {
             let client = match self.listener.accept() {
                 Ok((stream, _)) => stream,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
