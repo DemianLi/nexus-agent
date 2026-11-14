@@ -3280,6 +3280,34 @@ fn a_leafless_composition_is_collected_after_the_idle_limit() {
     assert_eq!(shut_down(&mut h), []);
 }
 
+/// 停機時排著的那條 thread 只剩一個不會再回 `down` 的行程（這裡是被連帶收、還沒收完的組合行程）：當場回 `down(shutdown)`。
+/// 組合行程先停住，讀不到 EOF，被收時留在拆除梯度上；`b` 的 `capacity` 回來就表示前面那則 `ensure(a)` 已經排進去了。
+#[test]
+fn shutdown_answers_a_thread_queued_behind_a_composition_that_will_not_tell_down() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 3_000,
+        extra: vec!["--idle-ms", "300", "--capacity", "1"],
+        ..paired()
+    });
+    let socket = h.up("a");
+    kill(composition_pid(&h, &socket), libc::SIGSTOP);
+    kill(last_leaf_pid(&leaf_socket(&socket)), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert!(wait_until(
+        || supervisor_stderr(&h).contains("沒有葉子已經 300 ms")
+    ));
+    h.ensure("a");
+    h.ensure("b");
+    assert_eq!(h.next_event(), Some(capacity("b", 1, 1)));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
 /// 名額滿時先收沒有葉子的那一對，排著的才起得來。
 #[test]
 fn a_leafless_composition_is_the_first_to_make_room() {
