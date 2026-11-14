@@ -526,6 +526,22 @@ enum Slot {
     ConversationStderr { pid: libc::pid_t },
 }
 
+/// 只給整合測試（`test-hooks`）：環境變數 `name` 指的檔案存在時刪掉它，對自己送 SIGSTOP。測試用它讓監督行程停在迴圈裡指定的位置，
+/// 不靠運氣。出貨的建置不讀這個環境變數。
+#[cfg(feature = "test-hooks")]
+fn test_stop(name: &str) {
+    let Some(path) = std::env::var_os(name) else {
+        return;
+    };
+    if std::fs::remove_file(path).is_ok() {
+        // SAFETY：只對自己送訊號。
+        unsafe { libc::raise(libc::SIGSTOP) };
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn test_stop(_name: &str) {}
+
 impl Supervisor {
     fn run(&mut self) -> i32 {
         loop {
@@ -602,6 +618,7 @@ impl Supervisor {
                 }
             }
 
+            test_stop("NEXUS_SUPERVISOR_TEST_STOP_BEFORE_POLL");
             let timeout = self.next_deadline().map_or(-1, |at| {
                 let left = at.saturating_duration_since(Instant::now());
                 // 進位到毫秒，免得差不到 1 ms 時 poll 立刻回來、空轉到期限。
@@ -670,6 +687,7 @@ impl Supervisor {
             if signals {
                 self.on_signals();
             }
+            test_stop("NEXUS_SUPERVISOR_TEST_STOP_AFTER_EVENTS");
         }
     }
 

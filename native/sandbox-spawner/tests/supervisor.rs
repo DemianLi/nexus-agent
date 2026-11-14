@@ -90,6 +90,8 @@ struct Options {
     answer_stop_admission: bool,
     /// `--host` 與它的 `--host-arg`；`None` 是不起宿主。
     host: Option<(PathBuf, Vec<String>)>,
+    /// 多給監督行程的環境變數。
+    env: Vec<(&'static str, PathBuf)>,
 }
 
 impl Default for Options {
@@ -106,6 +108,7 @@ impl Default for Options {
             front_hello: Some(PROTOCOL_VERSION),
             answer_stop_admission: true,
             host: None,
+            env: Vec::new(),
         }
     }
 }
@@ -159,6 +162,7 @@ impl Harness {
             cmd.args(["--host-backoff-ms", "50", "--host-backoff-max-ms", "200"]);
         }
         cmd.args(&options.extra);
+        cmd.envs(options.env.iter().map(|(name, value)| (name, value)));
         let mut stderr_read = None;
         let stderr = if options.piped_stderr {
             let mut fds = [0; 2];
@@ -1185,6 +1189,49 @@ fn a_whole_tree_frozen_past_the_limit_is_not_stalled() {
     // 超過 stall：歸零沒做、或 a 的沉默沒有重新起算的話，這段時間裡就會被判 stalled。
     std::thread::sleep(Duration::from_millis(2_100));
     assert_eq!(h.up("a"), socket);
+}
+
+/// 整棵樹凍過上限，而監督行程停下來的那一刻不在 poll 裡：停在 `hook` 指的位置（`test-hooks`，見 `src/supervisor/mod.rs` 的 `test_stop`）。
+fn freeze_with_the_supervisor_stopped_at(hook: &'static str) {
+    let marker = temp_dir("stop").join("now");
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "2000", "--rss-poll-ms", "60000"],
+        env: vec![(hook, marker.clone())],
+        ..Options::default()
+    });
+    let socket = h.up("a");
+    let a = logged_pid(&socket, "pid");
+    // 先停 a：監督行程停下來時，管線裡沒有它還沒讀的心跳。a 不出聲之後監督行程最晚 stall 的四分之一醒一次，那一輪走到 hook 就停。
+    // SAFETY：只送訊號，對 a 的群組。
+    unsafe { libc::kill(-a, libc::SIGSTOP) };
+    std::fs::write(&marker, b"").unwrap();
+    assert!(
+        wait_until(|| state(h.pid() as i32) == Some('T')),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    std::thread::sleep(Duration::from_millis(2_300));
+    kill(h.pid(), libc::SIGCONT);
+    assert!(
+        wait_until(|| supervisor_stderr(&h).contains("判定自己被停住過")),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    // SAFETY：同上。
+    unsafe { libc::kill(-a, libc::SIGCONT) };
+    // 超過 stall：a 的沉默沒有重新起算的話，這段時間裡就會被判 stalled。
+    std::thread::sleep(Duration::from_millis(2_100));
+    assert_eq!(h.up("a"), socket);
+}
+
+#[test]
+fn a_freeze_that_starts_while_handling_events_is_not_stalled() {
+    freeze_with_the_supervisor_stopped_at("NEXUS_SUPERVISOR_TEST_STOP_AFTER_EVENTS");
+}
+
+#[test]
+fn a_freeze_that_starts_before_the_poll_is_not_stalled() {
+    freeze_with_the_supervisor_stopped_at("NEXUS_SUPERVISOR_TEST_STOP_BEFORE_POLL");
 }
 
 #[test]

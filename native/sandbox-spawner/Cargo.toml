@@ -19,5 +19,5 @@ strip = true
 panic = "abort"
 
 [features]
-# 只給整合測試：讀 NEXUS_SPAWNER_TEST_ABI_CAP 把 Landlock 的 ABI 壓低，造出 partial；讀 NEXUS_SPAWNER_TEST_CHILD_DELAY_US 讓子行程在 setsid 之前先睡。出貨的建置不帶它（CI 形狀測試釘住）。
+# 只給整合測試：讀 NEXUS_SPAWNER_TEST_ABI_CAP 把 Landlock 的 ABI 壓低，造出 partial；讀 NEXUS_SPAWNER_TEST_CHILD_DELAY_US 讓子行程在 setsid 之前先睡；監督行程讀 NEXUS_SUPERVISOR_TEST_STOP_AFTER_EVENTS、NEXUS_SUPERVISOR_TEST_STOP_BEFORE_POLL，指的檔案存在時在迴圈的那個位置對自己送 SIGSTOP。出貨的建置不帶它（CI 形狀測試釘住）。
 test-hooks = []
