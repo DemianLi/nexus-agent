@@ -647,7 +647,7 @@ impl Pair {
 
     fn step_closing(&mut self, now: Instant) {
         self.closing.retain_mut(|closing| {
-            if now.checked_add(CLOSE_TIMEOUT).is_none() {
+            if now >= closing.until {
                 return false;
             }
             closing.flush();
