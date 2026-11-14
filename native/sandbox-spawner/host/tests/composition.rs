@@ -350,6 +350,13 @@ impl Leaf {
         }
     }
 
+    /// 葉子自己斷線，等到組合行程處理完才回來：關掉寫的方向，組合行程讀到 EOF 就收掉這條連線，這一端讀到 EOF 就是見證。
+    /// 少了這一步，下一個葉子（測試裡是同一個 pid）可能在橋還認為這一條在的時候連上，被當成同一個葉子連了兩次而拒絕。
+    fn die(mut self) {
+        self.stream.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(self.read(), None);
+    }
+
     fn answer_attach(&mut self, thread: &str, outcome: Result<Value, CallError>) {
         let call = self.attach_call(thread);
         self.send(&PairMessage::Result { call, outcome });
@@ -585,7 +592,7 @@ fn a_bind_ahead_of_the_replacement_leaf_waits_for_it_to_register() {
 #[test]
 fn the_composition_survives_its_leaf_and_takes_the_next_one() {
     let (mut rig, old) = Rig::bound("swap-died");
-    drop(old);
+    old.die();
     rig.command(&ConversationCommand::Leaf { pid: me() });
     let mut leaf = Leaf::join(&rig);
     leaf.register();
@@ -622,7 +629,7 @@ fn a_leaf_that_dies_before_answering_attach_gets_no_bound() {
     let (mut rig, mut old) = Rig::ready("attach-dropped");
     rig.command(&bind("thread-1"));
     old.attach_call("thread-1");
-    drop(old);
+    old.die();
     rig.command(&ConversationCommand::Leaf { pid: me() });
     let mut leaf = Leaf::join(&rig);
     leaf.register();
