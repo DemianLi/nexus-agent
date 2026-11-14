@@ -14,6 +14,8 @@
  * - `FIXTURE_TASK_TOOLS=1`：多公告兩支工具，`tools/list` 上 `needs_task` 的 `execution.taskSupport` 是 `required`、`task_optional`
  *   是 `optional`。只改公告、不改實作（兩支都是一般工具），所以 `task_optional` 叫得動；`needs_task` 叫到的話 server 端會自己回錯，
  *   測試量的是**根本沒送到**。只在舊協議這一台有：新協議（`2026-07-28`）的編碼會把 `execution.taskSupport` 當已刪欄位剝掉。
+ * - `FIXTURE_EXTRA_TOOL`：多公告一支這個名字的工具；`FIXTURE_DROP_EXTRA_IF_FILE` 指的檔案存在時（重連之後）就不公告它，
+ *   模擬 server 重啟後少了一支工具（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。
  * - `FIXTURE_CALL_LOG`：每收到一個 `tools/call` 就附加一行工具名到這個檔，量在 transport 收訊息的那一刻——不管工具有沒有跑到。
  */
 
@@ -55,6 +57,13 @@ const server = new McpServer(
   },
 );
 registerFixtureTools(server);
+const extraTool = process.env['FIXTURE_EXTRA_TOOL'];
+const dropExtra = process.env['FIXTURE_DROP_EXTRA_IF_FILE'];
+if (extraTool !== undefined && !(dropExtra !== undefined && existsSync(dropExtra))) {
+  server.registerTool(extraTool, { description: '多公告的一支。', inputSchema: {} }, () => ({
+    content: [{ type: 'text', text: 'extra' }],
+  }));
+}
 if (pagedRequested()) {
   server.server.setRequestHandler(ListResourcesRequestSchema, (request) =>
     request.params?.cursor === PAGE_2_CURSOR

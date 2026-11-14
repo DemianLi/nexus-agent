@@ -16,6 +16,8 @@ import { toolCallOf } from './tool-call.js';
 /** 帶空白、`/`、`+`：原文、`encodeURIComponent`、form 編碼三種形式互不相同。 */
 const SECRET = 'FAKE tok/en+0123456789';
 const redactor = createRedactor([SECRET]);
+/** form 編碼（空白寫成 `+`）：server 把值當表單欄位回顯時出現的形式。下面幾處把它放進錯誤與 server 回應的文字裡。 */
+const FORM = encodeURIComponent(SECRET).replaceAll('%20', '+');
 
 /** 原文與兩種編碼形式都不在。 */
 const expectNoSecret = (text: string): void => {
@@ -45,7 +47,7 @@ const caught = (work: Promise<unknown>): Promise<unknown> =>
 describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
   it('SDK 拋的錯誤：訊息遮掉；cause 換成遮過的副本、保留 code，連線層仍認得逾時', async () => {
     const timeout = Object.assign(
-      new Error(`timed out talking to ${SECRET} / ${encodeURIComponent(SECRET)}`),
+      new Error(`timed out talking to ${SECRET} / ${encodeURIComponent(SECRET)} / ${FORM}`),
       {
         code: 'REQUEST_TIMEOUT',
       },
@@ -82,13 +84,16 @@ describe('toolCallOf：錯誤送出前遮掉憑證值', () => {
 
   it('isError 結果：文字遮掉', async () => {
     const call = toolCallOf(
-      clientThat(() => ({ isError: true, content: [{ type: 'text', text: `denied ${SECRET}` }] })),
+      clientThat(() => ({
+        isError: true,
+        content: [{ type: 'text', text: `denied ${SECRET} ${FORM}` }],
+      })),
       'srv',
       descriptor,
       options(),
     );
     const thrown = (await caught(call({}, exec))) as Error;
-    expect(thrown.message).toBe('denied [redacted]');
+    expect(thrown.message).toBe('denied [redacted] [redacted]');
   });
 
   it('McpToolError 訊息帶 server 給的字串：遮掉、保留 class（isError 結果裡有認不得的內容類型）', async () => {
@@ -148,7 +153,9 @@ describe('connectGeneration／openClient：連線階段的錯誤遮掉憑證值'
       getInstructions: () => undefined,
       onclose: undefined,
       listTools: () =>
-        Promise.reject(new Error(`list refused for ${SECRET} / ${encodeURIComponent(SECRET)}`)),
+        Promise.reject(
+          new Error(`list refused for ${SECRET} / ${encodeURIComponent(SECRET)} / ${FORM}`),
+        ),
     } as unknown as Client;
     const thrown = (await caught(
       connectGeneration(() => Promise.resolve(failing), httpConfig, false, redactor),
