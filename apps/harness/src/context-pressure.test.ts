@@ -356,12 +356,17 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
       'boolean',
       'boolean',
     ]);
-    // 前提：每一筆都帶 `breakdown`（#1571 N1193），三格是非負整數——「逐一相等」才問得到手抄的 `contextMeasureData` 有沒有把它帶上線。
+    // 前提：每一筆都帶 `breakdown`（#1571 N1193）與它的 `messageParts`（#2774），每一格是非負整數——「逐一相等」才問得到手抄的
+    // `contextMeasureData` 有沒有把它們帶上線。
     for (const each of rootMeasures) {
-      expect(each.breakdown).toBeDefined();
-      for (const value of Object.values(each.breakdown!)) {
+      expect(each.breakdown?.messageParts).toBeDefined();
+      const { messageParts, ...three } = each.breakdown!;
+      for (const value of [...Object.values(three), ...Object.values(messageParts!)]) {
         expect(Number.isInteger(value) && value >= 0).toBe(true);
       }
+      expect(Object.values(messageParts!).reduce((sum, value) => sum + value, 0)).toBe(
+        three.messageTokens,
+      );
     }
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');

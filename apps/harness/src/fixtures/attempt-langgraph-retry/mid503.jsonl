@@ -12,5 +12,5 @@
 {"type":"model/start","seq":11,"time":"<time>","data":{"route":{"model":"nvidia/nemotron-3.5-lightning-30b-a3b"}}}
 {"type":"assistant/message","seq":12,"time":"<time>","data":{"message":{"type":"ai","data":{"id":"chatcmpl-2","content":[{"type":"text","text":"丙丁"}],"response_metadata":{"output_version":"v1","model_provider":"openai","model_name":"fake","finish_reason":"stop"},"tool_calls":[],"invalid_tool_calls":[],"content_blocks":[{"type":"text","text":"丙丁"}],"additional_kwargs":{}}},"modelCall":11}}
 {"type":"model/end","seq":13,"time":"<time>","data":{"modelCall":11}}
-{"type":"context/measure","seq":14,"time":"<time>","data":{"approxTokens":2044,"messageCount":1,"thresholds":[{"type":"tokens","value":100000},{"type":"messages","value":60}],"messagesCompactable":false,"breakdown":{"systemTokens":0,"toolsTokens":2036,"messageTokens":8},"modelCall":11}}
+{"type":"context/measure","seq":14,"time":"<time>","data":{"approxTokens":2044,"messageCount":1,"thresholds":[{"type":"tokens","value":100000},{"type":"messages","value":60}],"messagesCompactable":false,"breakdown":{"systemTokens":0,"toolsTokens":2036,"messageTokens":8,"messageParts":{"summaryTokens":0,"injectedTokens":0,"toolResultTokens":0,"conversationTokens":8}},"modelCall":11}}
 {"type":"turn/end","seq":15,"time":"<time>","data":{}}

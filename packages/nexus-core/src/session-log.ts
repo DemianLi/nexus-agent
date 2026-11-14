@@ -1148,6 +1148,13 @@ export interface SessionEventMap {
       readonly cacheReadTokens?: number;
       readonly cacheWriteTokens?: number;
     };
+    /**
+     * 生這份摘要的那一次模型呼叫花了多久，毫秒、非負整數（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：從叫生摘要的模型起，
+     * 到它的回覆通過檢查為止，**含這次呼叫自己的重試與退避**。拋錯或被拒收的那一次不記 `compaction/summary`，它花的時間也就不在這裡。
+     * 沒有這一格 ＝ 沒量（這一格出現以前的日誌），**不是 0**。加它沒有升日誌格式版本，紀錄見
+     * `docs/persistence-changes/2026-11-14-compaction-summary-duration.md`。
+     */
+    readonly durationMs?: number;
   };
   /**
    * 摘要器量到的一次模型呼叫：**那份請求離自動摘要還有多遠**（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
@@ -1201,6 +1208,26 @@ export interface SessionEventMap {
       readonly systemTokens: number;
       readonly toolsTokens: number;
       readonly messageTokens: number;
+      /**
+       * `messageTokens` 再拆成四格（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)），都是非負整數，**四格相加等於 `messageTokens`**：
+       *
+       * - `summaryTokens`：摘要訊息（之前摘要換上去的那一則）。
+       * - `injectedTokens`：機器塞進來的 user-role 訊息，也就是帶來源而且來源不是人的（agent-instructions、time-context、續行輪的頭、
+       *   子代理結算通知等），加上重複工具提醒。
+       * - `toolResultTokens`：工具結果。
+       * - `conversationTokens`：其餘，也就是人講的話與助手的回覆（含工具呼叫的參數）。
+       *
+       * 每一格先照那一類訊息的純估算算出比例，再把 `messageTokens` 照比例分下去（最大餘數法），所以錨在供應商實數上的修正量是
+       * 四格照比例分攤，不是算給其中一格。訊息的純估算是 `0` 時整個 `messageTokens` 算給 `conversationTokens`。
+       * 沒有這一格 ＝ 沒拆（這一格出現以前的日誌），不是 `0`。加它沒有升日誌格式版本，紀錄見
+       * `docs/persistence-changes/2026-11-14-context-measure-message-parts.md`。
+       */
+      readonly messageParts?: {
+        readonly summaryTokens: number;
+        readonly injectedTokens: number;
+        readonly toolResultTokens: number;
+        readonly conversationTokens: number;
+      };
     };
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。

@@ -976,6 +976,18 @@ describe('舊格式', () => {
     expect(old !== undefined && 'breakdown' in old).toBe(false);
     const breakdown = { systemTokens: 1200, toolsTokens: 0, messageTokens: 31_800 };
     expect(measured({ breakdown })?.breakdown).toEqual(breakdown);
+    // `messageParts`（#2774）同理：有就四格原樣上線，沒有就沒有這個 key。
+    expect('messageParts' in measured({ breakdown })!.breakdown!).toBe(false);
+    const messageParts = {
+      summaryTokens: 800,
+      injectedTokens: 1_000,
+      toolResultTokens: 20_000,
+      conversationTokens: 10_000,
+    };
+    expect(measured({ breakdown: { ...breakdown, messageParts } })?.breakdown).toEqual({
+      ...breakdown,
+      messageParts,
+    });
   });
 });
 

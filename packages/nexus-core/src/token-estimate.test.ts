@@ -13,6 +13,7 @@ import { requestImageHandleText } from './attachment-projection.js';
 import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
+  estimateMessageGroups,
   estimateRequestParts,
   estimateRequestTokens,
   estimateTextTokens,
@@ -837,5 +838,34 @@ describe('warmMessageTokens', () => {
     expect(finished).toBe(false);
     expect(sent.some((text) => first.includes(text.trim()))).toBe(true);
     expect(sent.some((text) => last.includes(text.trim()))).toBe(false);
+  });
+});
+
+describe('訊息照類別分組估算（#2774）', () => {
+  const messages = [
+    new HumanMessage('第 1234567 號工單'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'read_file', args: {} }] }),
+    new ToolMessage({ content: '987654321 筆', tool_call_id: 'c1' }),
+    new HumanMessage('好'),
+  ];
+  const kindOf = (message: BaseMessage) => (ToolMessage.isInstance(message) ? 'tool' : 'chat');
+
+  it.each([false, true])(
+    '各組相加等於 estimateRequestParts 的訊息那一格（singleDigits=%s）',
+    (singleDigits) => {
+      const groups = estimateMessageGroups(messages, kindOf, { singleDigits });
+      expect(Object.keys(groups).sort()).toEqual(['chat', 'tool']);
+      expect(groups.chat! + groups.tool!).toBe(
+        estimateRequestParts({ messages }, { singleDigits }).messages,
+      );
+      expect(groups.tool).toBe(
+        estimateRequestParts({ messages: [messages[2]!] }, { singleDigits }).messages,
+      );
+    },
+  );
+
+  it('沒有訊息落進去的組不在結果裡', () => {
+    expect(estimateMessageGroups([messages[0]!], kindOf)).not.toHaveProperty('tool');
+    expect(estimateMessageGroups([], kindOf)).toEqual({});
   });
 });

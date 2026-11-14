@@ -117,17 +117,22 @@ import {
 } from './attachment-projection.js';
 import { isFileBlock } from './attachment-ref.js';
 import { toLoggedMessage } from './logged-message.js';
+import { isMachineMessage } from './langchain-message-adapter.js';
 import { isMaxTokensFinish } from './max-tokens.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { withModelCallStep } from './model-call-step.js';
 import type { ModelCallStep } from './model-call-step.js';
+import { modelNameOf } from './model-route.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
+import { isReminder } from './repeat-reminder.js';
+import type { SessionEventMap } from './session-log.js';
 import { retryModelCall } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
 import {
   estimateAnchoredTokens,
+  estimateMessageGroups,
   estimateMessageTokens,
   warmMessageTokens,
 } from './token-estimate.js';
@@ -1094,6 +1099,8 @@ function withAttachmentText(base: AgentMiddleware): AgentMiddleware {
  */
 interface SummaryUsageCell {
   usage: ModelUsage | undefined;
+  /** 最近完成的那一次生摘要花了多久（毫秒，含它自己的重試），見 `compaction/summary` 的 `durationMs`。 */
+  durationMs: number | undefined;
   /** 生摘要的模型呼叫完成過幾次。{@link withCompactionLog} 靠它認得「交下去的這一份剛摘要過」。 */
   summaries: number;
 }
@@ -1577,6 +1584,7 @@ function quietInvoke<T extends object>(
       const invoke = (caller as { invoke(input: unknown, config?: unknown): unknown }).invoke;
       return async (input: unknown, config?: { tags?: readonly string[] }) => {
         let result: unknown;
+        const startedAt = performance.now();
         const attempt = (): Promise<unknown> =>
           Promise.resolve(
             invoke.call(caller, input, {
@@ -1611,6 +1619,7 @@ function quietInvoke<T extends object>(
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
         if (cell !== undefined) {
           cell.usage = readModelUsage(result);
+          cell.durationMs = Math.round(performance.now() - startedAt);
           cell.summaries += 1;
         }
         onGenerated?.();
@@ -1702,7 +1711,7 @@ function withCompactionLog(
   return {
     ...base,
     wrapModelCall: (request, handler) => {
-      const cell: SummaryUsageCell = { usage: undefined, summaries: 0 };
+      const cell: SummaryUsageCell = { usage: undefined, durationMs: undefined, summaries: 0 };
       let logged = 0;
       const effective = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
@@ -1735,6 +1744,7 @@ function withCompactionLog(
                     // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
                     ...(cell.usage === undefined ? {} : { usage: cell.usage }),
                     beforeCall: true,
+                    ...(cell.durationMs === undefined ? {} : { durationMs: cell.durationMs }),
                   });
                 } catch (error) {
                   // 不叫 `handler`：這次摘要不生效。見上面「記不進去，這次摘要不生效」。
@@ -1820,6 +1830,56 @@ function withArgTruncationLog(
       });
     },
   } as AgentMiddleware;
+}
+
+/** `context/measure` 的 `breakdown.messageParts` 把訊息分成的四類，定義見 `session-log.ts` 那一格。 */
+type MessageKind = 'summary' | 'injected' | 'toolResult' | 'conversation';
+
+function messageKindOf(message: BaseMessage): MessageKind {
+  if (isSummarizationMessage(message)) return 'summary';
+  if (isReminder(message) || isMachineMessage(message)) return 'injected';
+  if (ToolMessage.isInstance(message)) return 'toolResult';
+  return 'conversation';
+}
+
+/**
+ * 把 `messageTokens` 照四類訊息的純估算比例分成四格（最大餘數法），四格相加恰好等於 `messageTokens`。
+ *
+ * @param messageTokens - 要分的總數（環上的數扣掉 system 與工具），非負整數。
+ * @param groups - 四類訊息各自的純估算（{@link estimateMessageGroups}）；沒出現的類別當 `0`。
+ * @returns 四格非負整數。純估算全是 `0` 時整個算給 `conversationTokens`。
+ */
+function splitMessageTokens(
+  messageTokens: number,
+  groups: Partial<Record<MessageKind, number>>,
+): NonNullable<NonNullable<SessionEventMap['context/measure']['breakdown']>['messageParts']> {
+  const weights = [
+    groups.summary ?? 0,
+    groups.injected ?? 0,
+    groups.toolResult ?? 0,
+    groups.conversation ?? 0,
+  ];
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const shares = [0, 0, 0, messageTokens];
+  if (total > 0) {
+    const exact = weights.map((weight) => (messageTokens * weight) / total);
+    exact.forEach((value, index) => (shares[index] = Math.floor(value)));
+    let left = messageTokens - shares.reduce((sum, share) => sum + share, 0);
+    const byRemainder = exact
+      .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+      .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+    for (const { index } of byRemainder) {
+      if (left <= 0) break;
+      shares[index]! += 1;
+      left -= 1;
+    }
+  }
+  return {
+    summaryTokens: shares[0]!,
+    injectedTokens: shares[1]!,
+    toolResultTokens: shares[2]!,
+    conversationTokens: shares[3]!,
+  };
 }
 
 /** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。`skill-catalog.ts` 的 {@link isHumanSpeech} 也用它。 */
@@ -2028,6 +2088,10 @@ function withTokenBudget(
           });
           if (found.kind === 'ok') {
             const { retained, length } = decision;
+            const messageTokens = Math.max(
+              0,
+              estimate.tokens - estimate.parts.system - estimate.parts.tools,
+            );
             found.log.append(
               'context/measure',
               withModelCall(
@@ -2043,9 +2107,13 @@ function withTokenBudget(
                   breakdown: {
                     systemTokens: estimate.parts.system,
                     toolsTokens: estimate.parts.tools,
-                    messageTokens: Math.max(
-                      0,
-                      estimate.tokens - estimate.parts.system - estimate.parts.tools,
+                    messageTokens,
+                    // 訊息那一格再照類別拆（#2774），四格相加等於 `messageTokens`。
+                    messageParts: splitMessageTokens(
+                      messageTokens,
+                      estimateMessageGroups(sent.messages ?? [], messageKindOf, {
+                        singleDigits: book.singleDigits(modelNameOf(sent.model)),
+                      }),
                     ),
                   },
                 },

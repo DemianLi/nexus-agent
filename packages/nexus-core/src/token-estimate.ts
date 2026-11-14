@@ -507,6 +507,31 @@ export function estimateRequestParts(
 }
 
 /**
+ * 一串訊息的 E（不錨）照類別分組加總（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）。每則訊息的數與
+ * {@link estimateRequestParts} 的 `messages` 那一格用的是同一份，所以各組相加就等於那一格。
+ *
+ * @param messages - 要估的訊息。
+ * @param groupOf - 一則訊息歸哪一組。
+ * @param options - `singleDigits`：同 {@link estimateRequestTokens}。
+ * @returns 出現過的組各自的 token 數；沒有訊息落進去的組不在裡面。
+ */
+export function estimateMessageGroups<K extends string>(
+  messages: readonly BaseMessage[],
+  groupOf: (message: BaseMessage) => K,
+  options: { readonly singleDigits?: boolean } = {},
+): Partial<Record<K, number>> {
+  const groups: Partial<Record<K, number>> = {};
+  for (const message of messages) {
+    const counted = messageTokens(message);
+    const group = groupOf(message);
+    groups[group] =
+      (groups[group] ?? 0) +
+      (options.singleDigits === true ? counted.tokens + counted.excess : counted.tokens);
+  }
+  return groups;
+}
+
+/**
  * 一份請求的 E（不錨）。
  *
  * @param request - 要估的請求；`messages` 可以只給一段前綴。
