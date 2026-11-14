@@ -133,6 +133,16 @@ describe('交接保真度評估（#2774）', () => {
     expect(database).toMatchObject({ score: 1, staleHit: true });
   });
 
+  it('比對不看空白：答案把「4 月 23 日」寫成「4月23日」也算提到', async () => {
+    const zh = FIDELITY_VARIANTS.find((variant) => variant.id === 'zh')!;
+    const result = await runFidelityVariant(zh, {
+      summaryModel: DROPS_EVERYTHING,
+      ask: async () => '4月23日',
+    });
+
+    expect(result.questions.find((question) => question.questionId === 'bid-date')?.score).toBe(1);
+  });
+
   it('摘要沒發生時拋，不當成零分', async () => {
     const single = FIDELITY_VARIANTS.find((variant) => variant.id === 'single')!;
     const rejects = {

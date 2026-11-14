@@ -47,7 +47,7 @@ export interface FidelityQuestionResult {
   readonly kind: FidelityQuestion['kind'];
   /** 這個事實經過幾次摘要。 */
   readonly summariesCrossed: number;
-  /** `scoreMentions` 的分數，0 到 1。 */
+  /** `scoreMentions` 的分數，0 到 1。比對不看空白。 */
   readonly score: number;
   /** 答案裡出現了被推翻的舊結論。題目沒列 `stale` 時恆為假。 */
   readonly staleHit: boolean;
@@ -85,6 +85,13 @@ export class SummaryDidNotHappenError extends Error {
 
 function textOf(message: BaseMessage): string {
   return typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+}
+
+/**
+ * 比對前拿掉所有空白。模型回答時空白的寫法不固定（「4月23日」與「4 月 23 日」），那不是摘要丟了東西。
+ */
+function squash(text: string): string {
+  return text.replace(/\s+/g, '');
 }
 
 function isSummary(message: BaseMessage): boolean {
@@ -166,7 +173,7 @@ export async function runFidelityVariant(
     state.push(new AIMessage(CANNED_REPLY));
   }
 
-  const summaryText = seen.filter(isSummary).map(textOf).join('\n');
+  const summaryText = squash(seen.filter(isSummary).map(textOf).join('\n'));
   const tail = seen.filter((message) => !isSummary(message));
   const tailText = tail
     .map((message) =>
@@ -175,6 +182,7 @@ export async function runFidelityVariant(
         : `${textOf(message)}\n${JSON.stringify(message.tool_calls ?? [])}`,
     )
     .join('\n');
+  const squashedTail = squash(tailText);
 
   const questions: FidelityQuestionResult[] = [];
   for (const question of variant.questions) {
@@ -189,18 +197,18 @@ export async function runFidelityVariant(
         {
           id: question.id,
           prompt: question.prompt,
-          expected: { toolCalls: [], mentions: question.mentions },
+          expected: { toolCalls: [], mentions: question.mentions.map(squash) },
         },
-        { caseId: question.id, toolCalls: [], finalText: answer },
+        { caseId: question.id, toolCalls: [], finalText: squash(answer) },
       ) ?? 0;
     questions.push({
       questionId: question.id,
       kind: question.kind,
       summariesCrossed: variant.segments.length - question.segment,
       score,
-      staleHit: (question.stale ?? []).some((needle) => answer.includes(needle)),
-      inSummary: question.mentions.every((needle) => summaryText.includes(needle)),
-      leaked: question.mentions.some((needle) => tailText.includes(needle)),
+      staleHit: (question.stale ?? []).some((needle) => squash(answer).includes(squash(needle))),
+      inSummary: question.mentions.every((needle) => summaryText.includes(squash(needle))),
+      leaked: question.mentions.some((needle) => squashedTail.includes(squash(needle))),
       answer,
     });
   }
