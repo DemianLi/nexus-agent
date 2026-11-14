@@ -10,7 +10,7 @@ import { vi } from 'vitest';
 export {};
 
 // 這一份要量 `log`：`history-source-state.setup.ts`／`native-loop.setup.ts` 會把清單上 `log` 的列一律補成 `state`，
-// 所以要跑 `log` 的測試檔自己 `vi.unmock`，這兩個模組不經過那兩份 mock。
+// 所以要跑 `log` 的測試檔自己 `vi.unmock`，這兩個模組不經過那兩份 mock；在 `vitest.native.config.ts` 底下這也讓它不換 loop，照跑 LangGraph。
 vi.unmock('./assembly-root.js');
 vi.unmock('./agent-factory.js');
 

@@ -26,7 +26,7 @@ afterEach(async () => {
 
 /**
  * 出貨清單疊一份 `--patch`（`history-source` 那一列寫 `source: log`），不帶 `--history-source`，經 cordis 根的相容層進
- * `createCliAgent`：跟 `log-derived-history.fixture.ts` 的 `runShippedCli` 同一條路，回組裝實際生效的來源。
+ * `createCliAgent`：`--patch` 變 overlay、再經 cordis 根的相容層進 `createCliAgent` 這一段，與 `log-derived-history.fixture.ts` 的 `runShippedCli` 相同，回組裝實際生效的來源。
  */
 async function effectiveSource(): Promise<string> {
   const patch = join(scratch, 'patch.yml');

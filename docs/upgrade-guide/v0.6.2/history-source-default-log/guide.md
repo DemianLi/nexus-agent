@@ -7,7 +7,7 @@ description: 模型歷史的來源預設從 `state` 改成 `log`：關掉 `histo
 
 ## 變更
 
-影響 CLI 與 `serve`（背景冷啟、樹上入口走同一條組裝）。直接呼叫 `createNexusAgent`（不經入口）的嵌入方：沒給 `defaultHistorySource`、插件清單裡也沒有 `history-source` 那一列時仍是 `state`；**清單裡掛了那一列（例如整份出廠清單），那一列贏過預設**，出廠寫 `log` 就是 `log`，沒有接著的會話日誌時第一次模型呼叫會拋。要留 `state`：明給 `historySource: 'state'`，或把那一列寫成 `source: state`。
+影響 CLI 與 `serve`（背景冷啟、樹上入口走同一條組裝）。直接呼叫 `createNexusAgent`（不經入口）的嵌入方：沒給 `defaultHistorySource`、插件清單裡也沒有 `history-source` 那一列時仍是 `state`；**清單裡掛上（沒關掉）那一列（例如整份出廠清單），那一列贏過預設**，出廠寫 `log` 就是 `log`，沒有接著的會話日誌時第一次模型呼叫會拋。要留 `state`：明給 `historySource: 'state'`，或把那一列寫成 `source: state`。
 
 - **出廠值。**
   - 舊行為：`cordis.yml` 的 `history-source` 那一列寫 `source: state`，模型看到的是 LangGraph state 裡的歷史。
@@ -25,10 +25,11 @@ description: 模型歷史的來源預設從 `state` 改成 `log`：關掉 `histo
 受影響的：
 - 靠關掉 `history-source` 那一列拿 `state` 的部署；
 - 手上有格式 9 以前的老日誌、還要續接的 CLI 使用者與 `serve` thread。
+- 直接呼叫 `createNexusAgent`、插件清單掛了整份出廠清單、又沒接會話日誌的嵌入方：`history-source` 那一列現在是 `log`，第一次模型呼叫會拋。
 
 ## 遷移
 
-1. 要維持 `state`：在 `cordis.yml`、`--patch` 檔或變更紀錄裡，把 `history-source` 那一列明寫成 `config: { source: state }`；只有 CLI 還可以帶 `--history-source state`（`serve` 沒有這個旗標）。不要靠關掉那一列。
+1. 要維持 `state`：在 `cordis.yml`、`--patch` 檔或變更紀錄裡，把 `history-source` 那一列明寫成 `config: { source: state }`；只有 CLI 還可以帶 `--history-source state`（`serve` 沒有這個旗標）。不要靠關掉那一列。直接呼叫 `createNexusAgent` 的嵌入方也一樣：明給 `historySource: 'state'`，或把那一列寫成 `source: state`。
 2. 有老日誌要續接：選一條。
    - 照 1. 用 `state` 續接，模型從空歷史開始，舊內容不進模型；
    - 另開一條對話，舊日誌留著當紀錄。

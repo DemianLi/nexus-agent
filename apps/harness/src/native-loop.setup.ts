@@ -9,7 +9,7 @@
  *
  * 產品上 `--agent-loop native` 另外還交給 CLI 的 `runTurn`／`runRepl`；那兩個沒換，要 native 的測試明給 loop（`cli.test.ts`）。
  *
- * 這一份也代 `history-source-state.setup.ts` 的班：同一個模組只留最後一個 mock，所以 `createNexusAgent` 與 `createCliAgent` 在這裡一併帶 `historySource: 'state'`；規則同它：清單上寫 `log` 的列一律被補成 `state`，要跑 `log` 的測試檔自己 `vi.unmock`（細節與撤除條件見該檔檔頭）。
+ * 這一份也代 `history-source-state.setup.ts` 的班：同一個模組只留最後一個 mock，所以 `createNexusAgent` 與 `createCliAgent` 在這裡一併帶 `historySource: 'state'`；規則同它：清單上寫 `log` 的列一律被補成 `state`，從清單拿 `log` 的測試檔自己 `vi.unmock`（細節與撤除條件見該檔檔頭）。**unmock 的檔在這一套也不換 loop，照跑 LangGraph**（`agentLoop: 'native'` 跟 `historySource` 在同兩個 mock 裡）。
  *
  * 明著給了 loop 的照給的跑，所以 `native-loop-parity.test.ts` 的 LangGraph 那一半照樣是 LangGraph。
  */

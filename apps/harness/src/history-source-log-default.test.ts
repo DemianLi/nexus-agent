@@ -89,7 +89,10 @@ describe('預設', () => {
 
   it('自己 copy 的 cordis.yml 寫 source: state（真的從檔載入）：仍是 state，不會被預設蓋成 log', async () => {
     const shipped = await readFile(join(repositoryRoot(), 'apps/harness/cordis.yml'), 'utf8');
-    const copy = shipped.replace(/(- id: history-source\n(?: {2}.*\n)*? {4}source: )log/u, '$1state');
+    const copy = shipped.replace(
+      /(- id: history-source\n(?: {2}.*\n)*? {4}source: )log/u,
+      '$1state',
+    );
     expect(copy).not.toBe(shipped);
     const file = join(scratch, 'cordis.copy.yml');
     await writeFile(file, copy);
@@ -307,9 +310,7 @@ describe('serve：老日誌 thread 在 log 下，客戶端實際收到什麼', (
     const second = await start(root, lines);
     const resumed = await say(second, 'alpha', '還在嗎');
     expect(resumed.status).toBe('idle');
-    expect(
-      resumed.entries.some((entry) => entry.kind === 'ai' && !entry.streaming),
-    ).toBe(true);
+    expect(resumed.entries.some((entry) => entry.kind === 'ai' && !entry.streaming)).toBe(true);
     expect(lines.join('\n')).toContain('[會話日誌] thread "alpha" 接回來了：對話照日誌推回模型');
   });
 
