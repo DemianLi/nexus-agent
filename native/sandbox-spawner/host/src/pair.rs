@@ -392,7 +392,7 @@ impl Pair {
         }
         for closing in &self.closing {
             let (read, write) = closing.chan.poll_fds();
-            if let Some(read) = read.filter(|_| !closing.gone) {
+            if let Some(read) = read.filter(|_| closing.gone) {
                 fds.push(pollfd(read, libc::POLLIN));
             }
             if let Some(write) = write {
