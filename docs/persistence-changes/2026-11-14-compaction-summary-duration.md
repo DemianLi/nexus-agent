@@ -7,7 +7,7 @@ kind: persistence-change
 
 ## 摘要
 
-`compaction/summary` 多一個選填的 `durationMs`（#2774）：生這份摘要的那一次模型呼叫的牆鐘，毫秒、非負整數，從叫生摘要的模型起到回覆通過檢查為止，含這次呼叫自己的重試與退避。拋錯或被拒收的那一次不記 `compaction/summary`，它花的時間不在這一格。寫方只有 `summarization.ts` 一處（`quietInvoke` 量、`withCompactionLog` 寫）；讀方只有 `nexus-plugin-token-meter` 的折疊，折成選填的 `summaryMs` 並從 `unaccountedMs` 扣掉。會話格式版本不變（56），`TOKEN_METER_VERSION` 不動（選填的 view 欄位，折疊狀態不落盤）。
+`compaction/summary` 多一個選填的 `durationMs`（#2774）：生這份摘要的那一次模型呼叫的牆鐘，毫秒、非負整數，從叫生摘要的模型起到回覆通過檢查為止，含這次呼叫自己的重試與退避。拋錯或被拒收的那一次不記 `compaction/summary`，它花的時間不在這一格。寫方只有 `summarization.ts` 一處（`quietInvoke` 量、`withCompactionLog` 寫）；讀方只有 `nexus-plugin-token-meter` 的折疊，折成選填的 `summaryMs` 並從 `unaccountedMs` 扣掉。會話格式版本不變（56），`TOKEN_METER_VERSION` 不動（折疊狀態不落盤；`summaryMs` 是選填的 view 欄位，`unaccountedMs` 少掉的正是 `summaryMs`，兩格相加仍等於沒有這一格時的殘差）。
 
 ## 目錄
 
@@ -33,7 +33,7 @@ changes:
 <a id="compatibility"></a>
 ## 相容性
 
-同版。新讀方讀舊紀錄：沒有 `durationMs` 的 `compaction/summary` 照舊折，那一段不出 `summaryMs`、生摘要的時間照舊留在 `unaccountedMs`；同一段裡只要有一顆沒帶就整格缺席、不扣，所以逐輪各段加總在兩種日誌上都等於牆鐘（`fold.test.ts`「生摘要的耗時」四條）。舊讀方（develop ebfca0d9）讀新紀錄：讀盤驗證只驗 `request/header` 與 `tool/result` 兩種的資料規則，不看 `compaction/summary` 的 data，所以不拒收、不判損壞；舊的 token-meter 折疊只讀 `usage`，重放端（`conversation-replay.ts`）只讀 `cutoffIndex`、`messagesBefore`、`summary`、`beforeCall`，多出來的 `durationMs` 被略過，生摘要的時間照舊算在殘差。所以不需要拒絕訊號，不升版。
+同版。新讀方讀舊紀錄：沒有 `durationMs` 的 `compaction/summary` 照舊折，那一段不出 `summaryMs`、生摘要的時間照舊留在 `unaccountedMs`；同一段裡只要有一顆沒帶就整格缺席、不扣，所以逐輪各段加總在兩種日誌上都等於牆鐘（`fold.test.ts`「生摘要的耗時」四條）。舊讀方（develop ebfca0d9）讀新紀錄：讀盤驗證的資料規則只有 `request/header`、`tool/result`、`turn/end` 三種（`validateSessionEventData`），不看 `compaction/summary` 的 data，所以不拒收、不判損壞；舊的 token-meter 折疊只讀 `usage`，重放端（`conversation-replay.ts`）只讀 `cutoffIndex`、`messagesBefore`、`summary`、`beforeCall`，多出來的 `durationMs` 被略過，生摘要的時間照舊算在殘差。所以不需要拒絕訊號，不升版。
 
 <a id="verification"></a>
 ## 驗證

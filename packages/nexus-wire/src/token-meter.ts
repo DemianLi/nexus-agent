@@ -149,7 +149,7 @@ export interface TokenMeterSpan {
   /**
    * 生摘要那幾次模型呼叫的牆鐘加總（`compaction/summary.durationMs`，[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)），含各自的重試。
    * **缺席＝沒記，不是 0**：這一段裡的摘要只要有一顆沒帶 `durationMs`（這一格出現以前的日誌）就整格缺席，沒有摘要也缺席。
-   * 加這一格沒有升 {@link TOKEN_METER_VERSION}（選填欄位，同快取三格的先例）。
+   * 沒升 {@link TOKEN_METER_VERSION}：這一格選填；{@link TokenMeterTurn.unaccountedMs} 少掉的正是這一格，兩格相加仍等於沒有這一格時的殘差。
    */
   readonly summaryMs?: number;
   /** 重試的次數（`llm/retry-started`）與實際等了多久的加總。 */
@@ -216,7 +216,7 @@ export interface TokenMeterTurn extends TokenMeterSpan {
   /**
    * `wallMs − modelMs − toolMs − retryWaitMs − waitMs − summaryMs`：幾段都沒覆蓋到的時間（圖的啟動、事件之間的空隙）。
    * {@link TokenMeterSpan.summaryMs} 缺席時不扣，生摘要那幾次的時間就留在這裡。
-   * **不夾 0**：負的代表「三段互不重疊」這個前提被破壞了，那是要追的 bug，不是要藏的。
+   * **不夾 0**：負的代表「這幾段互不重疊」這個前提被破壞了，那是要追的 bug，不是要藏的。
    */
   readonly unaccountedMs?: number;
 }
@@ -294,7 +294,7 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
     '生摘要那一次從快取讀到的輸入 token，另列，不在上面的快取讀裡；摘要會重播整段前綴，大半走快取，所以這一格才是摘要輸入的主體。報了用量的摘要只要有一次沒報就整格缺席（不是 0）。',
   summaryCacheWriteTokens: '生摘要那一次寫進快取的輸入 token，另列；缺席的規則同摘要的快取讀。',
   summaryMs:
-    '生摘要那幾次模型呼叫的牆鐘（含各自的重試）；失敗或被拒收的那幾次不在裡面。只要有一次摘要沒記耗時（舊日誌）就整格缺席（不是 0），那時生摘要的時間留在殘差裡。',
+    '生摘要那幾次模型呼叫的牆鐘（含各自的重試）；最後仍拋錯或被拒收的那幾次不在裡面。只要有一次摘要沒記耗時（舊日誌）就整格缺席（不是 0），那時生摘要的時間留在殘差裡。',
   retries: '模型呼叫的重試次數。',
   retryWaitMs:
     '重試實際等的退避時間。新日誌（#1427 之後）退避落在兩次嘗試之間，不在模型呼叫的起訖之內，不用從模型時間扣；更早的日誌退避包在該次呼叫的起訖之內，已從模型時間扣掉。畫面把它和核准等待合成「等待」時要相加。',
@@ -306,5 +306,5 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   toolMs: '至少有一個工具在跑的牆鐘（區間聯集）。前景子代理跑的時間已經在派它的那顆工具裡。',
   waitMs: '停在核准點的時間：一輪的收尾到接著它的 resume 開始；人離開、行程重啟的時間也在裡面。',
   unaccountedMs:
-    '一輪牆鐘扣掉模型、工具、重試退避、核准等待、生摘要（有記耗時才扣）之後剩的：圖的啟動、事件之間的空隙，以及沒記耗時的生摘要。',
+    '一輪牆鐘扣掉模型、工具、重試退避、核准等待、生摘要（這一輪每次摘要都記了耗時才扣）之後剩的：圖的啟動、事件之間的空隙，以及沒扣掉的生摘要。',
 };

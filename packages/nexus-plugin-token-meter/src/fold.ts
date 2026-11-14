@@ -105,7 +105,7 @@ const NUMBERS = [
   'summaryCacheWriteTokens',
   'summaryCacheReadReports',
   'summaryCacheWriteReports',
-  // 生摘要的耗時：`summaryMsReports` 數有幾顆 `compaction/summary` 帶 `durationMs`，每一顆都帶才把 `summaryMs` 放進 view。
+  // 生摘要的耗時：`summaryMsReports` 數有幾顆 `compaction/summary` 帶非負有限的 `durationMs`（壞值當沒帶），每一顆都帶才把 `summaryMs` 放進 view。
   'summaryMs',
   'summaryMsReports',
   'retries',
@@ -262,7 +262,7 @@ function merge(a: Sp, b: Sp): Sp {
   return out;
 }
 
-/** 一格快取桶：有用量、而且每一次用量都報了才放進 view，否則整格缺席（沒記，不是 0）。 */
+/** 一格選填的加總（快取桶、生摘要的耗時）：有東西可加、而且每一次都報了才放進 view，否則整格缺席（沒記，不是 0）。 */
 function allReported<K extends NumberKey>(
   usages: number,
   reports: number,
