@@ -13,7 +13,7 @@ import { readCascade } from './css-cascade';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 十三條：
+ * 十四條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
@@ -34,9 +34,12 @@ import { readCascade } from './css-cascade';
  *     不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137` 與 `animation-duration-*`。這條連 `ui/` 一起管。
  * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
  *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
+ * 14. **間距只用 {@link SPACING_STEP} 列的級距**（#2763；`.docs/web-ui-spec.md` §13.4）：內距、外距、間隙、定位偏移不寫 `p-[9px]`
+ *     這種任意值，也不寫級距外的數字（`p-13`）。引用 token 的算式（`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
+ *     這條**連 vendor 上游原樣的檔一起掃**：vendor 現有的任意值逐條釘在 {@link VENDOR_SPACING_PINNED}，多一條、少一條都報錯。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
- * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
+ * 沒量的：寬高的任意值（`max-h-[300px]` 是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
  */
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
@@ -120,13 +123,29 @@ type Rule =
   | '程式碼小框'
   | '輸入框'
   | '時長'
-  | '字重';
+  | '字重'
+  | '間距';
 
 const ROTATE = /^-?rotate-\d+$/;
 const ROTATE_ON_OPEN = /(?:state=open\]?\]?(?:>[^:]*)?|panel-open):-?rotate-\d+$/;
 const DURATION = /^(?:animation-)?duration-/;
 const DURATION_STEP = /^duration-(?:0|75|100|150|200|300|500|700|1000)\b/;
 const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
+const SPACING_PROPS =
+  'p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y|inset|inset-x|inset-y|top|bottom|left|right|start|end';
+const SPACING = new RegExp(`^-?(?:${SPACING_PROPS})-(\\[.+\\]|\\d+(?:\\.\\d+)?)$`);
+const SPACING_STEP = new Set(
+  '0 0.5 1 1.5 2 2.5 3 3.5 4 5 6 7 8 9 10 11 12 14 16 20 24 28 32 36 40 44 48 52 56 60 64 72 80 96'.split(
+    ' ',
+  ),
+);
+
+/** 級距外的間距：任意值（引用 token 的算式除外）或不在 {@link SPACING_STEP} 上的數字。 */
+function offSpacingScale(u: string): boolean {
+  const value = SPACING.exec(u)?.[1];
+  if (value === undefined) return false;
+  return value.startsWith('[') ? !value.includes('var(') : !SPACING_STEP.has(value);
+}
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
@@ -170,6 +189,7 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
     const u = utility(token);
     if (DURATION.test(u) && !DURATION_STEP.test(u)) found.push({ rule: '時長', what: u });
     if (THIN_WEIGHT.test(u)) found.push({ rule: '字重', what: u });
+    if (offSpacingScale(u)) found.push({ rule: '間距', what: u });
     if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
     if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
       found.push({ rule: '焦點', what: token });
@@ -235,6 +255,19 @@ const ALLOWED: readonly Allowed[] = [
   },
 ];
 
+/**
+ * vendor 上游原樣的檔裡現有的任意值間距（#2763）：vendor 檔不動，現值逐條釘住。**只能變少**：
+ * 同步上游多出一條會紅，要嘛用覆寫蓋回級距，要嘛由 demian 核可後列進來；上游拿掉的也要從這裡刪。
+ */
+const VENDOR_SPACING_PINNED: readonly { file: string; what: string }[] = [
+  { file: 'vendor/solid-glass/components/ui/composer.tsx', what: 'pr-[9px]' },
+  { file: 'vendor/solid-glass/components/ui/dot-loader.tsx', what: 'gap-[2px]' },
+  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'ml-[-0.15rem]' },
+  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'ml-[-0.3rem]' },
+  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'mr-[-0.15rem]' },
+  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'mr-[-0.3rem]' },
+];
+
 interface Violation {
   readonly file: string;
   readonly line: number;
@@ -268,6 +301,10 @@ function scan(files: string[]): Violation[] {
 const files = sourceFiles(SRC);
 const all = scan(files);
 const isAllowed = (v: Violation) => ALLOWED.some((a) => a.file === v.file && a.what === v.what);
+const vendorFiles = [...VENDOR_UPSTREAM_FILES]
+  .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
+  .map((f) => join(SRC, f));
+const vendorSpacing = scan(vendorFiles).filter((v) => v.rule === '間距');
 
 describe('元件只能用系統裡的值', () => {
   test('沒有越過色板、字級、圓角階梯或硬寫顏色（例外見 ALLOWED）', () => {
@@ -287,6 +324,12 @@ describe('元件只能用系統裡的值', () => {
   test('量具有掃到東西（不是空過）', () => {
     expect(files.length).toBeGreaterThan(100);
     expect(files.some((f) => f.endsWith('components/ui/button.tsx'))).toBe(true);
+  });
+
+  test('vendor 的任意值間距就是釘住的那幾條，沒有多也沒有少', () => {
+    const found = [...new Set(vendorSpacing.map((v) => `${v.file} ${v.what}`))].sort();
+    expect(found).toEqual(VENDOR_SPACING_PINNED.map((p) => `${p.file} ${p.what}`).sort());
+    expect(vendorFiles.length).toBeGreaterThan(20);
   });
 });
 
@@ -445,6 +488,23 @@ describe('判準', () => {
       [],
     );
     expect(rules('font-lightish')).toEqual([]);
+  });
+
+  test('間距：任意值與級距外的數字擋，連同負值與 variant 前綴；級距、引用 token 的算式、不是間距的不擋', () => {
+    expect(rules('pr-[9px]')).toEqual(['間距:pr-[9px]']);
+    expect(rules('has-[>svg]:ml-[-0.3rem]')).toEqual(['間距:ml-[-0.3rem]']);
+    expect(rules('md:gap-[2px] top-[50%]')).toEqual(['間距:gap-[2px]', '間距:top-[50%]']);
+    expect(rules('p-13 -mt-4.5 space-y-15')).toEqual([
+      '間距:p-13',
+      '間距:-mt-4.5',
+      '間距:space-y-15',
+    ]);
+    expect(rules('p-0 px-2.5 -mt-1 gap-x-3.5 space-y-11 inset-0 top-14 pb-96')).toEqual([]);
+    expect(rules('px-px m-auto top-1/2 inset-x-full left-(--offset)')).toEqual([]);
+    expect(rules('left-[calc(var(--sidebar-width)*-1)] pt-[var(--gap)]')).toEqual([]);
+    expect(
+      rules('max-h-[300px] w-[18rem] inset-ring-2 inset-shadow-[0_1px_0_var(--border)]'),
+    ).toEqual([]);
   });
 
   test('輸入框：ui/ 以外的原生 textarea 擋；Textarea 本身是 vendor 原樣（#1523），不在掃描範圍', () => {

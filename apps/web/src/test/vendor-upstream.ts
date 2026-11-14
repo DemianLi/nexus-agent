@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
  *
  * 放行的只有 `manifest.json` 登記過的檔——跟 `vendor.test.ts` 的 sha256 那條是同一份名單：沒登記的檔不算上游原樣，照樣檢查。
  * 放行：`lib/utils.test.ts` 的 cn 那條（Q19）、`design-system`、`border-shadow`、`type-hierarchy`（外觀照 SG，Q8；這幾條的責任交給
- * `solid-glass.overrides.css` 與 `guard/`）。**不放行**：tsc、`live-region` 與其他無障礙類的掃描（地圖目標：無障礙門檻全部保留）。
+ * `solid-glass.overrides.css` 與 `guard/`）。**不放行**：tsc、`live-region` 與其他無障礙類的掃描（地圖目標：無障礙門檻全部保留）、
+ * `design-system` 的間距那條（#2763：vendor 現有的任意值逐條釘住）。
  * 設定檔裡非寫字面不可的（ESLint、`.prettierignore`、`.gitattributes`、`index.css` 的 `@source`）不在這裡。
  */
 const SRC = fileURLToPath(new URL('..', import.meta.url));
