@@ -5,7 +5,14 @@
  * 環境變數要在夾具載入之前設好，所以用動態 import。
  */
 
+import { vi } from 'vitest';
+
 export {};
+
+// 這一份要量 `log`：`history-source-state.setup.ts`／`native-loop.setup.ts` 會把清單上 `log` 的列一律補成 `state`，
+// 所以要跑 `log` 的測試檔自己 `vi.unmock`，這兩個模組不經過那兩份 mock。
+vi.unmock('./assembly-root.js');
+vi.unmock('./agent-factory.js');
 
 process.env['NEXUS_LDH_HISTORY_SOURCE'] = 'log';
 try {
