@@ -310,6 +310,8 @@ fn a_hello_is_rejected_at_the_deadline_when_no_leaf_pid_came() {
     rig.elapsed = PID_WAIT;
     assert_eq!(rig.events(), [refused("還沒有葉子的 pid")]);
     leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "還沒有葉子的 pid");
+    drop(leaf);
+    rig.step();
     assert_eq!(rig.pair.deadline(rig.start), None);
 }
 
@@ -1175,6 +1177,8 @@ fn a_rejected_behind_queued_frames_arrives_once_the_leaf_reads() {
         Some(&rejected(RejectCode::Protocol, "又送了一次 hello"))
     );
     assert!(leaf.closed);
+    drop(leaf);
+    rig.step();
     assert_eq!(rig.pair.deadline(rig.start), None);
 }
 
@@ -1205,6 +1209,171 @@ fn a_rejected_the_leaf_never_reads_is_dropped_at_the_close_timeout() {
         last,
         Some(rejected(RejectCode::Protocol, "又送了一次 hello"))
     );
+}
+
+#[test]
+fn a_rejected_behind_queued_frames_still_arrives_after_the_leaf_sent_an_oversized_frame() {
+    let (mut rig, mut leaf) = Rig::connected("linger-garbage");
+    let frames = queue_some(&mut rig);
+    leaf.write(&mut rig, &u32::MAX.to_le_bytes());
+    assert!(!rig.pair.connected());
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    let read = leaf.read(&mut rig);
+    assert_eq!(read.len(), frames + 1);
+    assert!(matches!(
+        read.last(),
+        Some(PairMessage::Rejected {
+            code: RejectCode::Protocol,
+            ..
+        })
+    ));
+    assert!(leaf.closed);
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+/// 在收下的那一步就被拒的葉子（組合行程手上是別人的 pid）：`rejected` 已經送出，葉子還沒讀、也還沒寫。
+fn refused_at_accept(tag: &str) -> (Rig, Leaf) {
+    let mut rig = Rig::new(tag);
+    rig.pair.set_leaf(someone_else());
+    let leaf = Leaf::connect(&rig);
+    assert_eq!(rig.events(), [refused("pid 不對")]);
+    (rig, leaf)
+}
+
+/// [`Pair::poll_fds`] 裡等著 `events` 的 fd 有幾個。
+fn polled(rig: &Rig, events: libc::c_short) -> usize {
+    let mut fds = Vec::new();
+    rig.pair.poll_fds(&mut fds);
+    fds.iter().filter(|fd| fd.events == events).count()
+}
+
+#[test]
+fn a_refused_leaf_can_still_write_before_it_reads_the_rejection() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-write");
+    let bytes = frame(&encode(&hello(PAIR_PROTOCOL_VERSION)));
+    leaf.stream.write_all(&bytes).unwrap();
+    rig.step();
+    leaf.stream.write_all(&bytes).unwrap();
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
+}
+
+#[test]
+fn a_refused_connection_is_let_go_as_soon_as_the_leaf_closes() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-eof");
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    // listener 加上這一條的讀端。
+    assert_eq!(polled(&rig, libc::POLLIN), 2);
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    drop(leaf);
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+    assert_eq!(polled(&rig, libc::POLLIN), 1);
+}
+
+#[test]
+fn a_refused_connection_that_stays_open_is_closed_at_the_close_timeout() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-timeout");
+    let bytes = frame(&encode(&hello(PAIR_PROTOCOL_VERSION)));
+    rig.elapsed = CLOSE_TIMEOUT - Duration::from_millis(1);
+    rig.step();
+    leaf.stream.write_all(&bytes).unwrap();
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    rig.elapsed = CLOSE_TIMEOUT;
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+    assert!(leaf.stream.write_all(&bytes).is_err());
+}
+
+#[test]
+fn a_refused_leaf_that_keeps_writing_does_not_push_the_close_timeout_back() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-flood");
+    let filler = frame(&vec![b'x'; 4000]);
+    rig.elapsed = CLOSE_TIMEOUT - Duration::from_millis(1);
+    for _ in 0..256 {
+        leaf.write(&mut rig, &filler);
+    }
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    rig.elapsed = CLOSE_TIMEOUT;
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+#[test]
+fn a_refused_connection_is_read_at_most_one_budget_per_step() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-budget");
+    let filler = frame(&vec![b'x'; 4000]);
+    // 不走 `step`，寫到 socket 滿為止，回寫進去幾個位元組。`offset` 跨兩次接著寫，框才不會錯位。
+    let mut offset = 0;
+    let mut fill = |leaf: &mut Leaf| {
+        let mut written = 0;
+        loop {
+            match leaf.stream.write(&filler[offset..]) {
+                Ok(n) => {
+                    written += n;
+                    offset = (offset + n) % filler.len();
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return written,
+                Err(err) => panic!("寫不進去：{err}"),
+            }
+        }
+    };
+    let first = fill(&mut leaf);
+    assert!(first > READ_BUDGET, "socket 裝不下超過一步的量：{first}");
+    rig.step();
+    // 組合行程那一端讀走多少，葉子才多寫得進去多少；socket 以整塊寫入為單位放出空間，多留兩塊的餘裕。
+    let second = fill(&mut leaf);
+    assert!(
+        second <= READ_BUDGET + 2 * filler.len(),
+        "一步讀走了 {second}"
+    );
+}
+
+#[test]
+fn a_refused_leaf_that_sends_an_oversized_frame_is_closed_at_once() {
+    let (mut rig, mut leaf) = refused_at_accept("drain-garbage");
+    leaf.stream.write_all(&u32::MAX.to_le_bytes()).unwrap();
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+#[test]
+fn refused_connections_beyond_the_cap_push_out_the_oldest() {
+    let mut rig = Rig::new("drain-cap");
+    rig.pair.set_leaf(someone_else());
+    let mut leaves = Vec::new();
+    for _ in 0..=MAX_PENDING {
+        leaves.push(Leaf::connect(&rig));
+        assert_eq!(rig.events(), [refused("pid 不對")]);
+    }
+    // listener 加上留著的：最多 `MAX_PENDING` 條。
+    assert_eq!(polled(&rig, libc::POLLIN), 1 + MAX_PENDING);
+    let bytes = frame(&encode(&hello(PAIR_PROTOCOL_VERSION)));
+    assert!(leaves[0].stream.write_all(&bytes).is_err());
+    for leaf in &mut leaves[1..] {
+        leaf.stream.write_all(&bytes).unwrap();
+    }
+
+    rig.pair.set_leaf(me());
+    let mut leaf = Leaf::connect(&rig);
+    leaf.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+    assert_eq!(rig.events(), [PairEvent::Connected { pid: me() }]);
+    assert_eq!(leaf.read(&mut rig), [hello(PAIR_PROTOCOL_VERSION)]);
 }
 
 #[test]
