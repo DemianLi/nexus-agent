@@ -981,8 +981,8 @@ export function foldRegistry(
           : createImageOffloadRecoveryMiddleware({ sessions: registry.sessions }),
       ),
     ),
-    // 影子比對與歷史從日誌推（#2355）：只折進 root，排在請求快照外面，看到的是摘要、參數截斷、補懸空呼叫都套過之後的那一串。
-    // 兩格最多掛一顆。native 的 `log` 同時在推導前寫請求快照與 `model/start`。見 {@link ./history-shadow.ts}。
+    // 影子比對（#2355）只折進 root；歷史從日誌推（`log`）root 與子代理各從自己的日誌推，排在請求快照外面，看到的是摘要、參數截斷、
+    // 補懸空呼叫都套過之後的那一串。兩格最多掛一顆。native 的 `log` 只有 root 在推導前寫請求快照與 `model/start`。見 {@link ./history-shadow.ts}。
     rootOnly(
       'historyShadow',
       same(
@@ -991,9 +991,9 @@ export function foldRegistry(
           : undefined,
       ),
     ),
-    rootOnly(
-      'historyFromLog',
-      same(
+    {
+      name: 'historyFromLog',
+      root: same(
         options.history?.source === 'log'
           ? createHistoryFromLogMiddleware({
               ...options.history,
@@ -1007,9 +1007,15 @@ export function foldRegistry(
             })
           : undefined,
       ),
-    ),
+      // 子代理（前景與背景共用這一份規格）不給 preRecord：快照與 `model/start` 在模型被叫的那一刻寫（推導只讀 `model/start` 之前的事件，不需要預先記）。
+      subagent: same(
+        options.history?.source === 'log'
+          ? createHistoryFromLogMiddleware({ ...options.history, sessions: registry.sessions })
+          : undefined,
+      ),
+    },
     // 請求快照（#1020）緊貼最內層、在中止訊號外面：它也包 `request.model`，排在這裡外面每一顆看到的仍是原本的模型。
-    // `langgraph` 的記錄點在模型被叫的那一刻（callback），不靠這個位置；native 而且 history-source=log 時，快照在 historyFromLog 推導前預先記，這顆只比對。見 {@link ./request-snapshot.ts}。
+    // `langgraph` 的記錄點在模型被叫的那一刻（callback），不靠這個位置；native 而且 history-source=log 的 root，快照在 historyFromLog 推導前預先記，這顆只比對；子代理照模型被叫的那一刻記。見 {@link ./request-snapshot.ts}。
     shared('requestSnapshot', requestSnapshot),
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     shared('turnCancelModelSignal', turnCancelModelSignal),

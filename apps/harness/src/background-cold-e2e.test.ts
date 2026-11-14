@@ -14,7 +14,7 @@
  * - 日誌往原檔續寫：`seq` 連續、`subagent/descriptor` 只有一顆、中間只有一顆 `session/end-seed`。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -28,7 +28,7 @@ import {
   subagentLinks,
   SessionLogOffset,
 } from '@nexus/core';
-import type { AgentLoopKind, PluginEntry } from '@nexus/core';
+import type { AgentLoopKind, HistorySource, PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -139,6 +139,8 @@ async function boot(options: {
   readonly hold?: Promise<void>;
   /** 省略照設定檔；`native` 不給 checkpointer。 */
   readonly agentLoop?: AgentLoopKind;
+  /** 省略照測試 setup 補的值（`state`）；明給才是那一個。 */
+  readonly historySource?: HistorySource;
 }): Promise<Booted> {
   const store = openStore();
   const models = {
@@ -149,6 +151,7 @@ async function boot(options: {
     model: new ScriptedChatModel({ turns: options.rootTurns }),
     ...(options.agentLoop !== 'native' && { checkpointer: new MemorySaver() }),
     ...(options.agentLoop !== undefined && { agentLoop: options.agentLoop }),
+    ...(options.historySource !== undefined && { historySource: options.historySource }),
     plugins: [workers(models, options.hold)],
     backend: new ContainedFilesystemBackend({
       rootDir: join(dir, 'workspace'),
@@ -200,11 +203,12 @@ const delegateBoth: ScriptedTurn = {
  *
  * @returns 兩個子代理的編號與重啟之前它們最後一次收到的對話（模型視角）。
  */
-async function firstProcess(agentLoop?: AgentLoopKind) {
+async function firstProcess(agentLoop?: AgentLoopKind, historySource?: HistorySource) {
   const first = await boot({
     rootTurns: [delegateBoth, { content: '根收尾' }],
     turnsFor: workerTurns,
     ...(agentLoop !== undefined && { agentLoop }),
+    ...(historySource !== undefined && { historySource }),
   });
   await first.pump.submit({ kind: 'message', text: '委派' });
   await first.pump.whenIdle();
@@ -411,4 +415,107 @@ describe('重啟之後送話叫醒背景子代理', () => {
       await second.shutdown();
     }
   }, 30000);
+});
+
+/**
+ * 子代理的歷史從日誌推（`log`，[#2751](https://github.com/DemianLi/nexus-agent/issues/2751)）：背景子代理冷復活之後的那一輪。
+ *
+ * 推得回的日誌：跟 `state` 下一樣叫得醒、看得到重啟之前的對話。推不回的日誌：`state` 以空對話繼續（對照），
+ * `log` 下那一輪失敗、模型沒被叫、錯誤訊息講「這個子代理」與出路，與 root 一樣不退回 state。
+ */
+describe('背景子代理冷復活：history-source=log', () => {
+  /** 把子日誌上的 `assistant/message` 改成不進模型的型別：模型「跑過」卻沒有回覆，推不回（`reply-missing`）。 */
+  async function breakChildLog(runId: string): Promise<void> {
+    const directory = storeDirectory!;
+    const file = (await readdir(directory, { recursive: true })).find(
+      (name) => name.includes(runId) && name.endsWith('.jsonl'),
+    );
+    if (file === undefined) throw new Error(`找不到 ${runId} 的日誌檔`);
+    const path = join(directory, file);
+    const text = await readFile(path, 'utf8');
+    expect(text).toContain('"type":"assistant/message"');
+    await writeFile(
+      path,
+      text.replaceAll('"type":"assistant/message"', '"type":"context/measure"'),
+    );
+  }
+
+  it.each(['langgraph', 'native'] as const)(
+    '推得回（%s）：log 下送話叫醒，看得到重啟之前的對話',
+    async (agentLoop) => {
+      const { a } = await firstProcess(agentLoop, 'log');
+      const second = await boot({
+        rootTurns: [{ content: '根' }],
+        turnsFor: (name) => [{ content: `${name} 醒來答覆` }],
+        resume: true,
+        agentLoop,
+        historySource: 'log',
+      });
+      try {
+        await second.detach.background!.sendFromUser(a.runId, '重啟後的話');
+        await until(
+          () =>
+            second.pump.sessions
+              .get({ kind: 'subagent', runId: a.runId })
+              ?.events.filter((event) => event.type === 'turn/end').length === 2,
+        );
+        const prompt = conversation(second.models['worker-a'].lastPrompt);
+        expect(prompt.slice(0, a.before.length)).toEqual(a.before);
+        expect(prompt.at(-1)).toEqual({ type: 'human', content: '重啟後的話' });
+      } finally {
+        await second.shutdown().catch(() => undefined);
+      }
+    },
+    30000,
+  );
+
+  it.each(['langgraph', 'native'] as const)(
+    '推不回（%s）：state 以空對話繼續（對照）；log 下那一輪失敗、模型沒被叫、訊息講子代理與出路',
+    async (agentLoop) => {
+      for (const historySource of ['state', 'log'] as const) {
+        // 每一輪各自一份全新的日誌目錄：前一輪的續寫不能留在這一輪的日誌上。
+        storeDirectory = undefined;
+        const { a } = await firstProcess(agentLoop, 'log');
+        await breakChildLog(a.runId);
+        const second = await boot({
+          rootTurns: [{ content: '根' }],
+          turnsFor: (name) => [{ content: `${name} 醒來答覆` }],
+          resume: true,
+          agentLoop,
+          historySource,
+        });
+        try {
+          await second.detach
+            .background!.sendFromUser(a.runId, '重啟後的話')
+            .catch(() => undefined);
+          const child = () => second.pump.sessions.get({ kind: 'subagent', runId: a.runId });
+          // 重啟之前那一輪的 `turn/end` 已經在日誌上：等的是重啟之後這一輪的結局。
+          await until(() => {
+            const seen = child()?.events ?? [];
+            return (
+              seen.filter((event) => event.type === 'turn/end').length >= 2 ||
+              seen.some((event) => event.type === 'turn/failed')
+            );
+          });
+          const events = child()!.events;
+          if (historySource === 'state') {
+            // `state`：空對話繼續，模型只收到這一句。
+            expect(second.models['worker-a'].prompts).toHaveLength(1);
+            expect(conversation(second.models['worker-a'].lastPrompt)).toEqual([
+              { type: 'human', content: '重啟後的話' },
+            ]);
+            expect(events.some((event) => event.type === 'turn/failed')).toBe(false);
+          } else {
+            expect(second.models['worker-a'].prompts).toEqual([]);
+            const failed = events.find((event) => event.type === 'turn/failed');
+            expect(JSON.stringify(failed?.data)).toContain('這個子代理的日誌推不回它的模型歷史');
+            expect(JSON.stringify(failed?.data)).toContain('source: state');
+          }
+        } finally {
+          await second.shutdown().catch(() => undefined);
+        }
+      }
+    },
+    30000,
+  );
 });

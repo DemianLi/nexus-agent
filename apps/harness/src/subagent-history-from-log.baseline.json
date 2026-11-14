@@ -1,0 +1,470 @@
+{
+  "langgraph": {
+    "prompts": [
+      [
+        {
+          "type": "system",
+          "content": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+        },
+        {
+          "type": "human",
+          "content": "委派"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_2_0"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_2_0"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_3_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_3_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_3_0"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+        },
+        {
+          "type": "human",
+          "content": "委派"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "text",
+              "text": "委派。"
+            },
+            {
+              "type": "tool_call",
+              "id": "call_1_0",
+              "name": "task",
+              "args": {
+                "description": "幹活",
+                "subagent_type": "worker"
+              }
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_1_0",
+              "name": "task",
+              "args": {
+                "description": "幹活",
+                "subagent_type": "worker"
+              }
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "子代理收工。",
+          "toolCallId": "call_1_0"
+        }
+      ]
+    ],
+    "subagentEventTypes": [
+      [
+        "user/message",
+        "request/system",
+        "request/header",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure"
+      ]
+    ]
+  },
+  "native": {
+    "prompts": [
+      [
+        {
+          "type": "system",
+          "content": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+        },
+        {
+          "type": "human",
+          "content": "委派"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_2_0"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "你是 worker，只做交代給你的事。"
+            },
+            {
+              "type": "text",
+              "text": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."
+            },
+            {
+              "type": "text",
+              "text": "\n你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。"
+            },
+            {
+              "type": "text",
+              "text": "\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+            }
+          ]
+        },
+        {
+          "type": "human",
+          "content": "幹活"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_2_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_2_0"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "call_3_0",
+              "name": "noop",
+              "args": {}
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_3_0",
+              "name": "noop",
+              "args": {}
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "好",
+          "toolCallId": "call_3_0"
+        }
+      ],
+      [
+        {
+          "type": "system",
+          "content": "\n\nRead an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.\n\nRead a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.\n這個 session 開著核准提示：需要核准的操作可以經由設定好的核准管道發問；沒有可用的管道時，請求以拒絕收場。"
+        },
+        {
+          "type": "human",
+          "content": "委派"
+        },
+        {
+          "type": "ai",
+          "content": [
+            {
+              "type": "text",
+              "text": "委派。"
+            },
+            {
+              "type": "tool_call",
+              "id": "call_1_0",
+              "name": "task",
+              "args": {
+                "description": "幹活",
+                "subagent_type": "worker"
+              }
+            }
+          ],
+          "toolCalls": [
+            {
+              "type": "tool_call",
+              "id": "call_1_0",
+              "name": "task",
+              "args": {
+                "description": "幹活",
+                "subagent_type": "worker"
+              }
+            }
+          ]
+        },
+        {
+          "type": "tool",
+          "content": "子代理收工。",
+          "toolCallId": "call_1_0"
+        }
+      ]
+    ],
+    "subagentEventTypes": [
+      [
+        "user/message",
+        "request/system",
+        "request/header",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure"
+      ]
+    ]
+  }
+}
