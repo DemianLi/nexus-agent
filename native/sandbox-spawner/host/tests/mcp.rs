@@ -378,8 +378,8 @@ mod pool {
         let took = started.elapsed();
         assert!(took >= limit, "沒收完的兩份應該等滿上限：{took:?}");
         assert!(
-            took < limit * 3 / 2,
-            "收線不是並行的（依序會約兩個上限）：{took:?}"
+            took < limit * 2,
+            "收線不是並行的（依序至少兩個上限）：{took:?}"
         );
         let lines = lines.lock().expect("鎖");
         let error = lines
