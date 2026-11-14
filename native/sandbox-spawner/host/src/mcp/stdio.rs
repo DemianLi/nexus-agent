@@ -3,8 +3,8 @@
 //!
 //! - 環境：`env_clear` 之後只放 [`Stdio::env`]（TS 算好的整份），宿主自己的環境一個都不繼承。
 //! - stderr 丟掉（`/dev/null`）：宿主沒有辦法把子行程印的字裡的秘密換掉，也沒有地方好放。
-//! - 收線：transport 關了（stdin 跟著關）之後，子行程 [`STDIN_GRACE`] 內自己結束就收；沒有就 SIGTERM，再等 [`TERM_GRACE`]，還在就 SIGKILL，最後一定 `wait` 掉。
-//!   子行程不留殭屍。連線的 future 被丟下（握手或列工具中途停掉）時，[`ChildGuard`] 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。
+//! - 收線：transport 關了（stdin 跟著關）之後，子行程 [`STDIN_GRACE`] 內自己結束就收；沒有就 SIGTERM，再等 [`TERM_GRACE`]，還在就 SIGKILL，最後一定 `wait` 掉（SIGKILL 後最多等 [`KILL_WAIT`]，等不到就放手、由阻塞執行緒自己 `wait` 完）。
+//!   三段加起來是 [`REAP_BUDGET`]，編譯期斷言小於監督者的 `GENERATION_CLOSE_TIMEOUT`。子行程不留殭屍。連線的 future 被丟下（握手或列工具中途停掉）時，[`ChildGuard`] 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。
 
 use std::io;
 use std::process::{Child, Command, Stdio as Pipe};
@@ -16,13 +16,23 @@ use tokio::net::unix::pipe::{Receiver, Sender};
 use tokio::time::{sleep, Instant};
 
 use super::config::Stdio;
+use super::supervisor::GENERATION_CLOSE_TIMEOUT;
 
 /// stdin 關了之後等子行程自己結束多久。
 pub const STDIN_GRACE: Duration = Duration::from_secs(2);
 /// SIGTERM 之後等多久，之後 SIGKILL。
 pub const TERM_GRACE: Duration = Duration::from_secs(2);
+/// SIGKILL 之後等 `wait` 回來最多多久。SIGKILL 擋不住，正常是立刻回來；卡在不可中斷的睡眠（D 狀態）時才會用到上限。
+pub const KILL_WAIT: Duration = Duration::from_millis(500);
+/// 整段收線梯度的預算：三段之和。輪詢間隔讓前兩段各可能多出一個 [`POLL`]，所以這是下限不是精確值。
+pub const REAP_BUDGET: Duration = Duration::from_millis(
+    (STDIN_GRACE.as_millis() + TERM_GRACE.as_millis() + KILL_WAIT.as_millis()) as u64,
+);
 /// 等子行程結束時輪詢的間隔。
 const POLL: Duration = Duration::from_millis(20);
+
+// 梯度要跑得完才輪得到監督者的 [`GENERATION_CLOSE_TIMEOUT`]；超過它，監督者會把這一代判成「沒收乾淨」而停止重連。
+const _: () = assert!(REAP_BUDGET.as_millis() < GENERATION_CLOSE_TIMEOUT.as_millis());
 
 /// 子行程的擁有者：不論怎麼離開（正常收線、連線的 future 被丟下、執行環境收掉）都不留行程。
 /// 沒被 [`reap`] 收走就 drop：還在跑就 SIGKILL，並交給另一條執行緒 `wait`，不阻塞也不留殭屍。
@@ -95,7 +105,7 @@ fn missing() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "子行程的 stdio 管線不在")
 }
 
-/// 收掉子行程，回來時它一定已經 `wait` 過。transport 已經關了（stdin 已關）才呼叫。這個 future 中途被丟下，guard 照樣收。
+/// 收掉子行程，回來時它已經 `wait` 過；唯一例外是 SIGKILL 之後 [`KILL_WAIT`] 內沒結束（D 狀態），那時記一行錯誤、放手，`wait` 留給阻塞執行緒。transport 已經關了（stdin 已關）才呼叫。這個 future 中途被丟下，guard 照樣收。
 pub async fn reap(mut guard: ChildGuard) {
     let Some(child) = guard.child() else {
         return;
@@ -119,8 +129,15 @@ pub async fn reap(mut guard: ChildGuard) {
         return;
     };
     let _ = child.kill();
+    let pid = child.id();
     // SIGKILL 擋不住，`wait` 很快回來；放進阻塞執行緒，免得卡住執行環境。
-    let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+    // 等不到 [`KILL_WAIT`] 就放手：`child` 已經在那條執行緒裡，它自己 `wait` 完，不會留殭屍，只是這裡不再等。
+    let waiting = tokio::task::spawn_blocking(move || child.wait());
+    if tokio::time::timeout(KILL_WAIT, waiting).await.is_err() {
+        eprintln!(
+            "nexus-host: mcp 錯誤：子行程 {pid} 收到 SIGKILL 後 {KILL_WAIT:?} 內沒有結束，不再等它"
+        );
+    }
 }
 
 /// [`exited_within`] 的結果。
