@@ -176,7 +176,7 @@ impl Closing {
 
     /// 對方送來的讀出來丟掉，不解框，一次最多 [`READ_BUDGET`]。
     fn discard(&mut self) {
-        if self.gone {
+        if !self.gone {
             return;
         }
         let (Some(fd), _) = self.chan.poll_fds() else {
