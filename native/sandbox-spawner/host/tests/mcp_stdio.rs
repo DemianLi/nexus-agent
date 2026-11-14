@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::fixture;
 use nexus_host::mcp::bridge::{Bridge, Command, Outcome};
 use nexus_host::mcp::config::{Connection, Server};
-use nexus_host::mcp::stdio::{self, STDIN_GRACE};
+use nexus_host::mcp::stdio::{self, REAP_BUDGET, STDIN_GRACE};
 use nexus_host::proxy::ProxyPolicy;
 use nexus_host::tls::{client_config, http_client};
 use serde_json::{json, Value};
@@ -479,7 +479,12 @@ fn reap_收掉不理_eof_的子行程() {
         stdio::reap(child).await;
         let took = started.elapsed();
         assert!(took >= STDIN_GRACE, "還沒到寬限就動手了：{took:?}");
-        assert!(took < Duration::from_secs(10), "收太久：{took:?}");
+        // `sleep` 收到 SIGTERM 就結束：回來的時間是 STDIN_GRACE 加一點，不是再等滿 TERM_GRACE 走到 SIGKILL。
+        assert!(
+            took < STDIN_GRACE + Duration::from_secs(1),
+            "SIGTERM 沒有立刻生效：{took:?}"
+        );
+        assert!(took < REAP_BUDGET, "超過收線預算：{took:?}");
         // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時已經 `wait` 過，查不到才對。
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "子行程還在");
     });
