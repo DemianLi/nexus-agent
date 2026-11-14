@@ -57,6 +57,18 @@ index_status(project: "nexus-agent")
 - **找得到的東西走圖。** 「X 定義在哪」「誰呼叫 X」「X 呼叫什麼」用 `search_graph`、`trace_path`、`get_code_snippet`，比 grep 準也比 grep 省。
 - **「沒有」「只有 N 個」「全部都是」這類宣稱，出口前一律補兩件事**：`check_index_coverage` 查那個範圍有沒有記錄在案的缺口，再用 grep 掃一次。圖的覆蓋率是 best-effort，查不到不等於不存在，而且完全沒被索引的檔案根本不會出現在查詢結果裡。
 
+### 專案層 hook：圖裡有的符號先走圖
+
+[`.claude/settings.json`](../../.claude/settings.json) 掛了 [`.claude/hooks/cbm-graph-first.mjs`](../../.claude/hooks/cbm-graph-first.mjs)，主 session 與子代理都會套到：
+
+- **擋什麼**：Bash 的 `rg`、`git grep`、`grep -r`，以及 Grep 工具。指令裡長得像符號的詞（camelCase、PascalCase、`SCREAMING_SNAKE`，至少 6 個字元）會拿去圖裡做名稱完全比對，只認 `.ts`／`.tsx`／`.js`／`.mjs`／`.rs`／`.py` 裡的定義。有命中就擋，並在理由裡列出定義位置。搜尋路徑含 `references/<名>` 時，查同名的那張圖。
+- **不擋什麼**：圖裡沒有的字串（錯誤訊息、log、i18n、設定鍵、JSON 夾具的鍵）、搜尋落在 repo 外的指令（`cd` 到 scratchpad 或 `/tmp`），以及沒有 `codebase-memory-mcp`、圖查詢出錯或逾時的情況。
+- **出路**：同一個 session 裡，一個名字只擋一次。用任一個 `codebase-memory-mcp` 工具查過那個名字，或者被擋過一次之後再跑，同一個 grep 就放行。上面「否定配 grep」要補的那次 grep，以及手上沒有圖譜工具的 agent，都走這條。
+
+圖是主 checkout 的版本（見〈圖譜不會自己跟上〉）。被擋之後用圖找位置與呼叫關係，內容一律用 Read 讀自己 worktree 的檔。
+
+測試：`node --test .claude/hooks/cbm-graph-first.test.mjs`（用替身取代 `codebase-memory-mcp`，不需要索引）。
+
 子代理分三級，用法跟這條一致：`codebase-memory-scout` 只做正向、暫定的查找，不下否定結論；`codebase-memory` 是預設的驗證級；`codebase-memory-auditor` 做限定範圍的完整稽核。
 
 ## 已知的精度邊界
