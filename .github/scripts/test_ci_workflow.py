@@ -1127,6 +1127,49 @@ class LightScope(unittest.TestCase):
             snapshot,
         )
 
+    def test_web_design_guards_run_for_web_source_and_styles(self) -> None:
+        """web 的設計護欄（#2757）不是改到的檔的同名測試：動到 `apps/web/src` 的 tsx、css 或顏色 token 的產生器都要排到它們。"""
+        guards = ['apps/web/src/components/ui/registry-edits.test.ts', 'apps/web/src/styles/design-system.test.ts']
+        expected = ['src/components/ui/registry-edits.test.ts', 'src/styles/design-system.test.ts']
+
+        def tests(path: str) -> dict:
+            return plan_ci.light([path], self.NAMES, lambda p: p == path, guards)['tests']
+
+        for path in (
+            'apps/web/src/components/composer.tsx',
+            'apps/web/src/vendor/solid-glass/components/ui/button.tsx',
+            'apps/web/src/styles/theme.css',
+            'apps/web/src/index.css',
+            'apps/web/tokengen/generate.mjs',
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(tests(path), {'apps/web': expected})
+
+        # 測試檔、不畫畫面的 ts、web 以外的 tsx 與說明文件不排。
+        for path in (
+            'apps/web/src/components/composer.test.tsx',
+            'apps/web/src/lib/thread-title.ts',
+            'apps/web/COMPONENTS.md',
+            'apps/web/guard/main.tsx',
+            'packages/nexus-core/src/a.tsx',
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn('src/styles/design-system.test.ts', tests(path).get('apps/web', []))
+
+        # 跟同名規則排到的測試併在一起，不重複。
+        changed = ['apps/web/src/styles/design-system.test.ts', 'apps/web/src/c.tsx']
+        existing = {*changed, 'apps/web/src/c.test.tsx'}
+        self.assertEqual(
+            plan_ci.light(changed, self.NAMES, lambda p: p in existing, guards)['tests'],
+            {'apps/web': ['src/c.test.tsx', *expected]},
+        )
+
+    def test_web_design_guards_are_the_style_tests_on_disk(self) -> None:
+        guards = plan_ci.web_design_guards()
+        self.assertIn('apps/web/src/styles/design-system.test.ts', guards)
+        self.assertIn('apps/web/src/components/ui/registry-edits.test.ts', guards)
+        self.assertTrue(all(g.startswith('apps/web/src/') and g.endswith('.test.ts') for g in guards))
+
     def test_docs_only_needs_no_install(self) -> None:
         self.assertFalse(plan_ci.needs_node(self.scope(['docs/a.md', 'AGENTS.md'])))
         self.assertTrue(plan_ci.needs_node(self.scope(['.github/workflows/ci.yml'])))
