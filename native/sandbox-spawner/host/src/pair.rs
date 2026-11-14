@@ -170,7 +170,7 @@ impl Closing {
         // `Chan` 關寫端只丟掉它那個 fd，同一個 socket 的讀端還開著，對方讀不到 EOF。
         if let (Some(fd), _) = self.chan.poll_fds() {
             // SAFETY：fd 是這條通道還開著的讀端。
-            unsafe { libc::shutdown(fd, libc::SHUT_WR) };
+            let _ = fd;
         }
     }
 
