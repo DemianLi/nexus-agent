@@ -18,7 +18,7 @@
  *    模型呼叫時才組 `[summary, ...messages.slice(cutoffIndex)]`；listener 要看的是後者（#397）。切點由呼叫端交進來的查找函式問，
  *    跟摘要器問的是同一張表；這裡在一次 invoke 開始時（第一步之前）問一次，讀到的跟摘要器在這次 invoke 第一步開始時讀到的是同一個值；
  *    同一次 invoke 後面幾步不再問。`history-source=log` 時 root
- *    從日誌推同一個視圖（`createVisibleHistoryReader`，#2355），不讀 state；子代理的歷史由 state 送，讀 state。
+ *    與子代理各從自己的日誌推同一個視圖（`createVisibleHistoryReader`，#2355），不讀 state。
  * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
@@ -183,13 +183,13 @@ function stepSignal(
 }
 
 /**
- * `history-source=log` 時 root 的 listener 看到的那一串，從日誌推；不是 `log`、或是子代理的呼叫，回 `undefined`（讀 state）。
+ * `history-source=log` 時 listener 看到的那一串，從這次呼叫自己的日誌推（root 與子代理各一份）；不是 `log` 回 `undefined`（讀 state）。
  * `log` 時找不到日誌就拋：不退回 state。
  */
 function visibleFromLog(
   sessions: { forCall(config: unknown): SessionLookup },
   configurable: unknown,
-  read: (log: SessionLog) => BaseMessage[],
+  read: (log: SessionLog, subagent?: boolean) => BaseMessage[],
 ): BaseMessage[] | undefined {
   if (!isHistoryFromLog(sessions)) return undefined;
   const found = sessions.forCall({ configurable });
@@ -198,7 +198,7 @@ function visibleFromLog(
       `pre-step listener 找不到這次呼叫的日誌（${found.kind}）：history-source=log 不退回 state`,
     );
   }
-  return found.address.kind === 'root' ? read(found.log) : undefined;
+  return read(found.log, found.address.kind === 'subagent');
 }
 
 /**

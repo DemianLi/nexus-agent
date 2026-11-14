@@ -384,6 +384,63 @@ describe('createHistoryFromLogMiddleware', () => {
     ).toThrow(/日誌推不回模型歷史.*--history-source state.*另開一條對話/su);
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('子代理的位址：一樣換成它自己日誌推出來的那一串，不看 request.messages', async () => {
+    const log = secondCallOpen();
+    const hook = hookOf({
+      forCall: () => ({ kind: 'ok', address: { kind: 'subagent', runId: 'r' }, log }),
+    });
+    const handler = vi.fn((_request: unknown) => 'reply');
+    await hook({ messages: [new HumanMessage('子代理 state 裡的另一串')] }, handler);
+    const sent = handler.mock.calls[0]![0] as { messages: BaseMessage[] };
+    expect(sent.messages.map(wireProjection)).toEqual(stateOfSecondCall().map(wireProjection));
+  });
+
+  describe('推不回：訊息分 root 與子代理', () => {
+    const unreplayable = (): SessionLog => {
+      const broken = new SessionLog('broken-sub');
+      broken.append('turn/start', { kind: 'message', text: '甲' });
+      broken.append('model/start', {});
+      broken.append('model/end', {});
+      broken.append('turn/end', {});
+      broken.append('turn/start', { kind: 'message', text: '乙' });
+      broken.append('model/start', {});
+      return broken;
+    };
+
+    it('子代理：講「這個子代理」與出路，不講 CLI 旗標與另開對話；不呼叫模型', () => {
+      const handler = vi.fn((_request: unknown) => 'reply');
+      const hook = hookOf({
+        forCall: () => ({
+          kind: 'ok',
+          address: { kind: 'subagent', runId: 'r' },
+          log: unreplayable(),
+        }),
+      });
+      let message = '';
+      try {
+        void hook({ messages: [new HumanMessage('甲')] }, handler);
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message).toMatch(
+        /這個子代理的日誌推不回它的模型歷史（reply-missing，第 \d+ 顆事件）/u,
+      );
+      expect(message).toContain('source: state');
+      expect(message).toContain('另派一個新的子代理');
+      expect(message).not.toContain('--history-source');
+      expect(message).not.toContain('另開一條對話');
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('兩個讀者（visible、沒套摘要）也一樣：第二個參數標子代理', () => {
+      for (const make of [createVisibleHistoryReader, createUnsummarizedHistoryReader]) {
+        const read = make();
+        expect(() => read(unreplayable(), true)).toThrow(/這個子代理的日誌推不回它的模型歷史/u);
+        expect(() => read(unreplayable())).toThrow(/這條對話的日誌推不回模型歷史/u);
+      }
+    });
+  });
 });
 
 describe('createUnsummarizedHistoryReader：摘要前後的訊息都在', () => {
