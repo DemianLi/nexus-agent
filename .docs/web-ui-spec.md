@@ -223,7 +223,7 @@
 | 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單），動效就是 popover 那一列（輸入框底列的 Pick 是下拉選單，#1591 起）；cmdk 本身沒有動效（#1583 換成 SG 版） |
 | popover | 照 SG（#1583、#1687）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`），開關都是 100ms、`ease`（SG 寫的 `duration-100`） |
 | tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，開關都是 150ms、`ease`（SG 的 tooltip 沒寫 `duration-*`，是 tw-animate 的預設，#1687）；延遲 0（SG 的 `TooltipProvider` 預設） |
-| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，開關都是 100ms、`ease`（#1687）；遮罩同樣 100ms 淡入淡出、`backdrop-blur-xs` |
+| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，開關都是 100ms、`ease`（#1687）；遮罩同樣 100ms 淡入淡出、`backdrop-blur-xs`，顏色走 `--scrim`（平常 10% 的黑；不透明的兩種退路沒有 blur，換成 50%，vendor README 本地修改第 84 條） |
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
 | 面板高度差 | resize 300 |
