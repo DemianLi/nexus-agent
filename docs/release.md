@@ -33,6 +33,8 @@
   - home 底下的檔與格式：`sessions/`、`attachments/`、`tool-results/`、`plugin-journal.jsonl`、`thread-organization.json`、
     `browser-session.json`、`.credentials.yaml`、`config-hash-key.json`、`.env`、`serve.lock`；
   - `@nexus/sdk` 給外部插件的面；
+  - 嵌入版 `<nexus-chat>` 給宿主頁的面：屬性與 property、方法、事件與它的 `detail`、`--nexus-*` 自訂屬性
+    （清單在 [`embed-chat.md`](embed-chat.md)，型別在 `apps/web/src/embed/nexus-chat.d.ts`）；
   - wire 協定裡 web 以外的客戶端會用到的部分。
 
   web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增、而且不改既有預設行為的
