@@ -7,6 +7,7 @@ import { parseColor, shadowLayers } from '../src/styles/color-math';
 import {
   CHIP_STATES,
   CHIP_STATUS,
+  type BackdropSample,
   type ChipSample,
   type ChoiceSample,
   type FieldSample,
@@ -41,6 +42,7 @@ import {
   openOverlay,
   report,
   round,
+  scrimDimming,
   worstContrast,
   worstOn,
 } from './harness';
@@ -422,7 +424,7 @@ describe.each(
   let texts: TextSample[];
   let focus: FocusSample[];
   let shadows: ShadowSample[];
-  let backdrops: { name: string; backdropFilter: string }[];
+  let backdrops: BackdropSample[];
   let borders: { name: string; widths: string[] }[];
   let rows: { name: string; backgroundColor: string; highlighted: boolean; selected: boolean }[];
   let shown: Record<string, string>;
@@ -504,6 +506,48 @@ describe.each(
       expect(backdrops.filter((b) => b.backdropFilter === 'none').map((b) => b.name)).toEqual([]);
     });
 
+  if (overlay.backdrops.length > 0)
+    test('遮罩的顏色照 SG 是 10% 的黑（本地修改第 84 條：平常跟 SG 同值）', () => {
+      expect(backdrops.map((b) => parseColor(b.backgroundColor))).toEqual(
+        backdrops.map(() => parseColor('rgb(0 0 0 / 10%)')),
+      );
+    });
+
+  if (overlay.name === 'alert-dialog')
+    test('Tab 與 Shift+Tab 各繞兩圈，焦點都留在確認框裡', async () => {
+      const where = () =>
+        page.evaluate(() => {
+          const el = document.activeElement;
+          return el?.closest('[data-slot="alert-dialog-content"]')
+            ? (el.textContent ?? '')
+            : '框外';
+        });
+      const seen: string[] = [];
+      for (const press of [
+        'Tab',
+        'Tab',
+        'Tab',
+        'Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+        'Shift+Tab',
+      ]) {
+        await page.keyboard.press(press);
+        // 走出兩端時焦點先落在 Base UI 的隱形哨兵上，下一幀才被接回框裡；等它離開哨兵再記，不然量到的是中間那一幀。
+        await page.waitForFunction(
+          () => !document.activeElement?.hasAttribute('data-base-ui-focus-guard'),
+          undefined,
+          { timeout: 2_000 },
+        );
+        seen.push(await where());
+      }
+      report[`${key}:tab-trap`] = seen;
+      expect(seen).not.toContain('框外');
+      // 量具自檢：焦點真的在兩顆按鈕之間動，不是停在同一顆上。
+      expect(new Set(seen).size).toBe(2);
+    });
+
   if (overlay.name === 'dropdown') {
     test('滑鼠移上去的選項掛 data-highlighted、底色跟平常的不同（量具自檢：上面量的確實是兩種狀態）', () => {
       report[`${key}:rows`] = rows;
@@ -565,7 +609,7 @@ describe.each(
     });
 });
 
-/** modal 浮層在不透明的兩種退路下：面不透明、面與遮罩都沒有 blur（本地修改第 22 條）、字照樣過門檻。 */
+/** modal 浮層在不透明的兩種退路下：面不透明、面與遮罩都沒有 blur（本地修改第 22 條）、遮罩看得出來（第 84 條）、字照樣過門檻。 */
 describe.each(
   MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
     OVERLAYS.flatMap((overlay) =>
@@ -577,7 +621,7 @@ describe.each(
   let page: Page;
   let texts: TextSample[];
   let surfaces: { name: string; backgroundColor: string; backdropFilter: string }[];
-  let backdrops: { name: string; backdropFilter: string }[];
+  let backdrops: BackdropSample[];
 
   beforeAll(async () => {
     page = await openOverlay(overlay.name, theme, {
@@ -607,6 +651,13 @@ describe.each(
     ).toEqual([]);
     expect(backdrops.filter((b) => b.backdropFilter !== 'none').map((b) => b.name)).toEqual([]);
   });
+
+  if (overlay.backdrops.length > 0)
+    test('遮罩看得出來：頁面最亮的那一類蓋住前後 ≥ 3:1（本地修改第 84 條）', async () => {
+      const dimming = await Promise.all(backdrops.map((b) => scrimDimming(page, b)));
+      report[`${key}:scrim`] = dimming.map(round);
+      expect(dimming.filter((ratio) => !(ratio >= 3))).toEqual([]);
+    });
 
   test('字對它實際的底色過門檻', () => {
     expectTexts(texts, overlay.texts, key);
