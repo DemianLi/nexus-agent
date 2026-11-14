@@ -128,7 +128,6 @@ pub async fn reap(mut guard: ChildGuard) {
     let Some(mut child) = guard.0.take() else {
         return;
     };
-    let _ = child.kill();
     let pid = child.id();
     // SIGKILL 擋不住，`wait` 很快回來；放進阻塞執行緒，免得卡住執行環境。
     // 等不到 [`KILL_WAIT`] 就放手：`child` 已經在那條執行緒裡，它自己 `wait` 完，不會留殭屍，只是這裡不再等。
