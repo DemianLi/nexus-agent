@@ -843,7 +843,6 @@ impl Supervisor {
         );
         for conversation in &mut self.conversations {
             if conversation.heard_at.is_some() {
-                conversation.heard_at = Some(now);
                 conversation.cpu.restart(now);
             }
         }
