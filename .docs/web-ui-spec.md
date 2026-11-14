@@ -482,6 +482,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 ### 13.7 設計與程式同步
 
 - repo 為準。設計稿放在 claude.ai 的 artifact（私有，只有 demian 的帳號打得開），存 token、元件的預覽、還沒實作的設計稿；規範文字不放那裡。
+- token 與元件預覽那一份由 repo 產出：`pnpm --filter @nexus/web run catalog` 寫出一個帶 commit 戳記的 HTML（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「元件目錄」），上傳到 artifact 由 demian 做。
 - 還沒實作的新設計先在 artifact 出方案，demian 選過再實作（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q15）。
 
 ### 13.8 還沒做到的
@@ -489,7 +490,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
 | 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
-| 每個共用元件有文件與預覽（§13.5） | `Button` 補了（`COMPONENTS.md`、`guard/` 的 `?overlay=buttons`），其他共用元件不齊；沒有給人看的目錄 | 目錄還沒開卡 |
+| 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
 | Windows 高對比 | 沒量過，量完再定要不要列為門檻 | [#2764](https://github.com/DemianLi/nexus-agent/issues/2764) |
 | 視覺回歸 | 沒有 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
