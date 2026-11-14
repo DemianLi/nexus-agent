@@ -179,9 +179,29 @@ impl Closing {
         if self.gone {
             return;
         }
-        let _ = READ_BUDGET;
-        if self.chan.receive().is_err() || self.chan.read_closed() {
+        let (Some(fd), _) = self.chan.poll_fds() else {
             self.gone = true;
+            return;
+        };
+        let mut buf = [0u8; 4096];
+        let mut budget = READ_BUDGET;
+        while budget > 0 {
+            let room = buf.len().min(budget);
+            // SAFETY：讀進 buf 的前 room 個 byte。
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), room) };
+            if n > 0 {
+                budget -= n as usize;
+                continue;
+            }
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            if n < 0 && errno == Some(libc::EINTR) {
+                continue;
+            }
+            if n < 0 && errno == Some(libc::EAGAIN) {
+                return;
+            }
+            self.gone = true;
+            return;
         }
     }
 
