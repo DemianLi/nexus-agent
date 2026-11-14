@@ -16,7 +16,7 @@ import { toolCallOf } from './tool-call.js';
 /** 帶空白、`/`、`+`：原文、`encodeURIComponent`、form 編碼三種形式互不相同。 */
 const SECRET = 'FAKE tok/en+0123456789';
 const redactor = createRedactor([SECRET]);
-/** form 編碼（空白寫成 `+`）：server 把值當表單欄位回顯時出現的形式。下面幾處把它真的塞進輸入。 */
+/** form 編碼（空白寫成 `+`）：server 把值當表單欄位回顯時出現的形式。下面幾處把它放進錯誤與 server 回應的文字裡。 */
 const FORM = encodeURIComponent(SECRET).replaceAll('%20', '+');
 
 /** 原文與兩種編碼形式都不在。 */

@@ -85,7 +85,7 @@ export interface Attempts {
   first(): Promise<ListedGeneration>;
   /** 重連：先收掉上一次開的 client，再連一代。 */
   connect(): Promise<ListedGeneration>;
-  /** 這份連線的遮蔽器：憑證值，加上 HTTP 網址的帳密、query、fragment（{@link withUrlScrubbing}）。連線之後送出的錯誤與診斷用它遮。 */
+  /** 這份連線的遮蔽器：憑證值，加上 HTTP 網址的帳密、query、fragment（{@link withUrlScrubbing}）。連線之後送出的錯誤用它遮；重連日誌記的是 `connect()` 拋出、已遮過的錯誤文字。 */
   readonly redactor: Redactor;
   /**
    * 收掉剛失敗的那次嘗試：關掉它開的 client，再等那次開的子行程真的關掉
