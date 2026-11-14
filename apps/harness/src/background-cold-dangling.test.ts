@@ -1,12 +1,13 @@
 /**
  * 懸空的工具呼叫＋背景子代理冷復活（[#2751](https://github.com/DemianLi/nexus-agent/issues/2751)）。
  *
- * 子日誌上有一次工具呼叫（`tool/call`）、結果卻沒有落盤（`tool/result` 被換成無關事件，模擬「那一刻被殺掉」），其後模型還有回覆。
- * 冷復活之後再對它說一句話：這一輪送給模型的 prompt 在 `state` 與 `log` 下逐字相同，而且懸空的呼叫後面都跟著一則補結
- * （「The tool call was interrupted after it was recorded…」），不是配不到結果的呼叫。
+ * 子日誌上有一次工具呼叫（`tool/call`），一輪收掉了、`tool/result` 卻沒有落盤（檔案裡把它換成無關事件），其後模型還有回覆。
+ * 冷復活之後再對它說一句話：這一輪送給模型的 prompt 在 `state` 與 `log` 下型別與內容逐字相同，懸空呼叫的下一則就是補結
+ * （「The tool call was interrupted after it was recorded…」）。
  *
- * `state` 的補結來自冷復活灌回 state 的那一步，`log` 的補結來自推導端；`log` 下請求不讀灌回去的 state，所以拿掉 graph 端
- * `patchToolCallsMiddleware.beforeAgent` 不影響這一輪（那一顆的掛載在 `packages/nexus-core/src/patch-tool-calls-mount.test.ts`）。
+ * `state` 的補結來自冷復活灌回 state 的那一步，`log` 的補結來自推導端（`conversation-replay.ts` 的 `closer`），兩邊是同一句。
+ * `log` 下送出的歷史由推導端換掉（`historyFromLog` 的子代理槽），不讀灌回的 state，見 `background-cold-e2e.test.ts` 的「推不回」；
+ * TODO(#2362)：拿掉 graph 端 `patchToolCallsMiddleware.beforeAgent` 時這一輪仍應綠，那一顆的掛載見 `patch-tool-calls-mount.test.ts`。
  *
  * 全走產品組裝與真的 JSONL 存放處，夾具見 `background-cold.fixture.ts`。**零憑證、零外部連線**。
  */

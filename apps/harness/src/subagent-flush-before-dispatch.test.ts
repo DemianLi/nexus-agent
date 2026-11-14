@@ -1,16 +1,16 @@
 /**
- * 送出模型請求之前的排空時機（`flushBeforeDispatch`）：root 與子代理一致嗎？（[#2751](https://github.com/DemianLi/nexus-agent/issues/2751)）
+ * root 與前景子代理在模型被叫的前後，日誌被排空的次數一致（[#2751](https://github.com/DemianLi/nexus-agent/issues/2751)）。
  *
- * `fold.ts` 只給 native＋`history-source=log` 的 root 加 `preRecord`（推導之前先寫快照與 `model/start`），子代理沒有；但請求快照記錄器
- * 是 `shared` 的，root 與每個子代理走同一顆，`flushBeforeDispatch` 跟存檔點開關。這個檔**實際量**：在註冊表上掛一個排空者，
- * 記下每次被問到哪一份日誌、當時那份日誌已經有哪些事件；再看「送出」（模型被叫）時它是什麼時候。要回答：崩潰時子日誌上
- * 「送出去但沒落盤」的窗口是否與 root 一致。
+ * `fold.ts` 只給 native＋`history-source=log` 的 root 加 `preRecord`（推導之前先寫快照與 `model/start`），子代理槽不給；但請求快照記錄器
+ * 是 `shared` 的，root 與每個子代理走同一顆，`flushBeforeDispatch` 跟存檔點開關。這個檔在註冊表上掛一個排空者，記下每次被問到哪一份日誌、
+ * 當時那份日誌上有哪些事件，斷言：
  *
- * 量到的就是釘的：每一次模型被叫，那一份日誌在送出之前至少被排空過一次，而且排空那一刻 `request/header` 與 `model/start` 都已經在日誌上。
- * root 與前景子代理兩邊各斷言一遍。
+ * - 每份日誌在第一顆 `model/start` 之後被排空的次數不少於模型呼叫數，排空時日誌上已有 `request/header`；
+ * - root 與子代理各叫兩次模型時，呼叫數、被問排空的總次數、`model/start` 之後的排空次數都相同。
  *
- * 明給 `historySource` 與 `agentLoop`；沒接真的持久化（排空者是這裡掛的記錄用的），所以量的是**呼叫時序**，
- * 不是磁碟上的內容。**零憑證、零外部連線**：模型是 `ScriptedChatModel`。
+ * 排空與「送出」的先後這裡沒有量（探針沒記模型被叫的時刻，檢查點政策自己也會排空）；送出前的那一次排空由 `request-snapshot.ts` 做，
+ * 單元測試在 `packages/nexus-core/src/request-snapshot.test.ts`。沒接真的持久化（排空者是這裡掛的記錄用的），所以量的是呼叫次數，
+ * 不是磁碟上的內容。明給 `historySource` 與 `agentLoop`。**零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -62,7 +62,7 @@ const TURNS: readonly ScriptedTurn[] = [
 interface Probe {
   /** 每次被問排空：日誌 id、當時那份日誌上的事件型別。 */
   readonly flushes: { readonly id: string; readonly types: readonly string[] }[];
-  /** 每份日誌上 `model/start` 之後的第一次排空是不是在 `model/start` 已經寫了之後。 */
+  /** 每份日誌的 id 對到它是 root 還是子代理，以及那份日誌。 */
   readonly byLog: Map<string, { kind: 'root' | 'subagent'; log: SessionLog }>;
 }
 
@@ -106,7 +106,7 @@ async function run(
 
 describe.each(['langgraph', 'native'] as const)('送出之前的排空：%s', (loop) => {
   it.each(['state', 'log'] as const)(
-    '%s：root 與子代理每次模型被叫之前，那份日誌都被排空過，而且當時 request/header 與 model/start 已經在',
+    '%s：root 與子代理的排空次數不少於模型呼叫數，排空時日誌上已有 request/header，兩邊次數相同',
     async (historySource) => {
       const result = await run(loop, historySource);
       expect(result.built).toBe(historySource);
@@ -117,7 +117,7 @@ describe.each(['langgraph', 'native'] as const)('送出之前的排空：%s', (l
       for (const [id, { kind, log }] of result.byLog) {
         const modelCalls = log.events.filter((event) => event.type === 'model/start').length;
         expect(modelCalls, `${kind} 沒叫過模型`).toBeGreaterThan(0);
-        // 排空者被問到這份日誌、且當時 model/start 已寫：每次模型被叫至少一次。
+        // 排空者被問到這份日誌、且當時 model/start 已寫：次數不少於模型呼叫數。
         const afterStart = result.flushes.filter(
           (flush) => flush.id === id && flush.types.includes('model/start'),
         );
@@ -129,12 +129,12 @@ describe.each(['langgraph', 'native'] as const)('送出之前的排空：%s', (l
           flushes: result.flushes.filter((flush) => flush.id === id).length,
           afterStart: afterStart.length,
         });
-        // 排空那一刻，送出所需的請求記錄已經在日誌上。
+        // 排空那一刻，日誌上已有 request/header。
         for (const flush of afterStart) {
           expect(flush.types, `${kind}`).toContain('request/header');
         }
       }
-      // 兩邊各叫兩次模型：被問排空的次數一樣（子代理沒有 preRecord，也沒有少排或多排）。
+      // 兩邊各叫兩次模型：呼叫數、排空總數、model/start 之後的排空數都相同。
       expect(shape.get('subagent')).toEqual(shape.get('root'));
     },
   );

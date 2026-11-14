@@ -3,8 +3,8 @@
  * 與 `state` 逐字相同，**真的組裝、兩種 loop 各跑一次**。
  *
  * 情境：模型叫一顆要核准的工具，pump 停在核准點；再送第二句話，pump 自己停住它（不靠補懸空呼叫）；核准之後第一輪收尾，才跑第二句。
- * 對 `state` 與 `log` 各跑一次，比三次模型呼叫收到的 prompt（型別、內容、tool_calls）、日誌上一輪一輪的邊界序列，並斷言：
- * 危險工具只跑一次、第三次的 prompt 看得到真結果、補懸空呼叫的那句（`another message came in`）一次都沒送出。
+ * 對 `state` 與 `log` 各跑一次，比三次模型呼叫收到的 prompt（型別、內容、tool_calls）、日誌上的事件型別序列，並斷言：
+ * 危險工具只跑一次、第三次的 prompt 看得到真結果、補懸空呼叫的那句（`another message came in`）不在任何一次 prompt 裡。
  *
  * 明給 `historySource` 並斷言組裝回報的值（`send-queue.test.ts` 同一個情境走測試 setup 補的預設 `state`）。
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
@@ -47,7 +47,7 @@ function dangerPlugin(probe: { danger: number }): PluginEntry {
   };
 }
 
-/** id 與逐次不同的欄位不比，其餘逐欄比。 */
+/** 只比型別、內容與 tool_calls。 */
 const project = (message: BaseMessage): unknown => ({
   type: message.getType(),
   content: message.content,
@@ -109,9 +109,8 @@ describe.each(['langgraph', 'native'] as const)('停在核准點再送一句話�
     expect(viaLog.built).toBe('log');
     expect(viaLog.danger).toBe(1);
     expect(viaLog.prompts).toHaveLength(3);
-    const seen = JSON.stringify(viaLog.prompts[2]);
-    expect(seen).toContain('危險的事做完了');
-    expect(seen).not.toContain('another message came in');
+    expect(JSON.stringify(viaLog.prompts[2])).toContain('危險的事做完了');
+    expect(JSON.stringify(viaLog.prompts)).not.toContain('another message came in');
     expect(viaLog.prompts).toEqual(viaState.prompts);
     expect(viaLog.events).toEqual(viaState.events);
   }, 20000);

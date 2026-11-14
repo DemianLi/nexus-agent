@@ -71,7 +71,7 @@ export const shape = (message: BaseMessage) => ({ type: message.type, content: m
 export const conversation = (prompt: readonly BaseMessage[]) =>
   prompt.filter((message) => message.type !== 'system').map(shape);
 
-/** 兩種 worker 各有一顆工具 `note`（回一段可辨認的結果），`hold` 是第二個行程用來佔住名額的。 */
+/** 兩種 worker 各有一顆工具 `note`（回一段可辨認的結果），`hold` 等傳進來的 promise 放行才回，用來讓子代理佔住名額。 */
 export function workers(
   models: Record<'worker-a' | 'worker-b', ScriptedChatModel>,
   hold?: Promise<void>,
@@ -114,6 +114,8 @@ export const workerTurns = (name: string): ScriptedTurn[] => [
 ];
 
 export interface Booted {
+  /** 組裝回報的、實際生效的歷史來源。 */
+  readonly historySource: HistorySource;
   readonly pump: ThreadPump;
   readonly detach: ReturnType<Awaited<ReturnType<typeof createNexusAgent>>['attachSession']>;
   readonly statuses: (readonly BackgroundSubagentStatus[])[];
@@ -131,7 +133,7 @@ export async function boot(options: {
   readonly resume?: boolean;
   readonly maxActive?: number;
   readonly hold?: Promise<void>;
-  /** 省略照設定檔；`native` 不給 checkpointer。 */
+  /** 省略時是 `langgraph`（`native` 那份 vitest 設定補 `native`）；`native` 不給 checkpointer。 */
   readonly agentLoop?: AgentLoopKind;
   /** 省略照測試 setup 補的值（`state`）；明給才是那一個。 */
   readonly historySource?: HistorySource;
@@ -173,6 +175,7 @@ export async function boot(options: {
     }),
   });
   return {
+    historySource: built.historySource,
     pump,
     detach,
     statuses,

@@ -1,5 +1,5 @@
 /**
- * `patchToolCallsMiddleware` 掛在哪幾張圖上，各幾顆、各帶哪兩個掛點。
+ * 子代理預設疊與背景子代理圖上 `patchToolCallsMiddleware` 恰一顆；預設疊那顆帶 `beforeAgent` 與 `wrapModelCall`。
  *
  * 一張圖上只有一顆，而且 root、一次性（`task`）子代理、背景子代理三者都有：
  *
@@ -7,7 +7,7 @@
  * - 一次性子代理與背景子代理：同一個函式 `subagentDefaultMiddleware` 補的預設疊，背景那條經 `compileSubagentGraph`。
  *
  * 規格自己帶的同名 middleware 會換掉預設那顆（{@link mergeMiddlewareByName}），不會多出第二顆。
- * 這個檔釘的是「背景子代理的圖上有它、而且只有一顆」，拿掉 `beforeAgent` 時要一起核對的範圍就是這三張圖。
+ * 這個檔釘的是「背景子代理的圖上有它、而且只有一顆」。TODO(#2362)：拿掉 `beforeAgent` 時核對 root、一次性、背景三張圖。
  */
 
 import { FakeListChatModel } from '@langchain/core/utils/testing';

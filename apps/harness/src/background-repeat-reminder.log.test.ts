@@ -7,7 +7,7 @@
  * - 第二輪：人對它再說一句話，鏈清零，第二輪的提醒從頭數；`state` 與 `log` 逐字相同。
  * - 分得出退回 state：每步往 graph state 加一則真使用者訊息的 middleware 讓 `state` 讀法的鏈每步清零；`log` 讀日誌，提醒照出。
  *
- * 明給 `historySource` 與 `agentLoop`，並斷言組裝回報的 `historySource` 由 `boot` 的結果之外的提醒條數反映（`log` 那邊的提醒進了日誌）。
+ * 明給 `historySource` 與 `agentLoop`；每個場景斷言組裝回報的 `historySource`。
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
@@ -66,7 +66,7 @@ const turnsFor = (name: 'worker-a' | 'worker-b'): ScriptedTurn[] => [
 const isReminder = (message: BaseMessage): boolean =>
   HumanMessage.isInstance(message) && message.additional_kwargs[REPEAT_REMINDER_MARKER] != null;
 
-/** id 與逐次不同的欄位不比，其餘逐欄比。 */
+/** 只比型別、內容、tool_calls 與提醒標記。 */
 function project(message: BaseMessage): unknown {
   return {
     type: message.getType(),
@@ -77,6 +77,8 @@ function project(message: BaseMessage): unknown {
 }
 
 interface Run {
+  /** 組裝回報的、實際生效的歷史來源。 */
+  readonly built: HistorySource;
   readonly promptsA: readonly (readonly unknown[])[];
   readonly promptsB: readonly (readonly unknown[])[];
   readonly remindersPerPromptA: readonly number[];
@@ -119,6 +121,7 @@ async function run(
           (event.data as { source?: { kind?: string } }).source?.kind === 'plugin',
       ).length;
     return {
+      built: first.historySource,
       promptsA: first.models['worker-a'].prompts.map((prompt) => prompt.map(project)),
       promptsB: first.models['worker-b'].prompts.map((prompt) => prompt.map(project)),
       remindersPerPromptA: first.models['worker-a'].prompts.map(
@@ -138,6 +141,8 @@ describe.each(['langgraph', 'native'] as const)('背景子代理的提醒鏈讀�
     const viaLog = await run(loop, 'log');
 
     // 第一輪第三次之後一則提醒；第二輪鏈清零，第三次之後又一則。
+    expect(viaState.built).toBe('state');
+    expect(viaLog.built).toBe('log');
     expect(Math.max(...viaLog.remindersPerPromptA)).toBe(2);
     expect(viaLog.loggedA).toBe(2);
     expect(viaLog.loggedB).toBe(1);
@@ -151,6 +156,8 @@ describe.each(['langgraph', 'native'] as const)('背景子代理的提醒鏈讀�
     const viaState = await run(loop, 'state', [STATE_NOISE]);
     const viaLog = await run(loop, 'log', [STATE_NOISE]);
 
+    expect(viaState.built).toBe('state');
+    expect(viaLog.built).toBe('log');
     // 對照：state 讀法下每步多一則真使用者訊息，鏈每步清零，一則提醒也出不了。
     expect(viaState.remindersPerPromptA.every((count) => count === 0)).toBe(true);
     expect(viaState.loggedA).toBe(0);
