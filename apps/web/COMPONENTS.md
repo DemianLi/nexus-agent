@@ -29,6 +29,8 @@
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
+- **陰影**：用具名的階（`shadow-sm`、`shadow-md`…）或引用 token 的畫法，不寫自己調的 `shadow-[0_2px_8px_#0003]`。
+- **層級**：只用 `z-0`、`z-10`、`z-20`、`z-50`（各層的用途在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫別的數字、負值與 `z-[60]`。
 - **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
