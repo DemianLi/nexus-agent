@@ -369,6 +369,7 @@ impl Composition {
                 }
                 PairEvent::Disconnected { reason } => {
                     say!("葉子斷線：{reason:?}");
+                    self.thread = self.thread.take().map(|_| String::new());
                     self.registered = false;
                     self.bound = false;
                     self.attaching = None;
