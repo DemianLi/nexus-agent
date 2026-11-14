@@ -22,10 +22,18 @@ use tokio::task::JoinHandle;
 
 use super::config::Server;
 use super::redact::Redactor;
-use super::supervisor::{self, Hooks, State};
+use super::supervisor::{self, Hooks, State, GENERATION_CLOSE_TIMEOUT};
 
 /// 不是建立那一份的取用，最多等第一次連線多久，同 `FIRST_CONNECT_WAIT_MS`。
 pub const FIRST_CONNECT_WAIT: Duration = Duration::from_secs(5);
+
+/// 關池、停一份最多等多久。監督者自己對每一代套 [`GENERATION_CLOSE_TIMEOUT`]，這是它外面的一層，
+/// 防的是監督者在收線以外的地方卡住；各份同時收，最壞是最慢那一份，不是加總。
+pub const POOL_CLOSE_TIMEOUT: Duration =
+    Duration::from_millis(GENERATION_CLOSE_TIMEOUT.as_millis() as u64 + 1000);
+
+// 外層一定要比裡層長，否則裡層的逾時與它記的錯誤永遠輪不到。
+const _: () = assert!(POOL_CLOSE_TIMEOUT.as_millis() > GENERATION_CLOSE_TIMEOUT.as_millis());
 
 /// 替池連一代。
 pub trait Connector: Send + Sync + 'static {
@@ -158,12 +166,22 @@ impl<G: Generation> Shared<G> {
         }
     }
 
-    /// 停掉監督者，等它收完（它自己對每一代套收線期限）。
-    pub async fn dispose(&self) {
+    /// 停掉監督者，等它收完（它自己對每一代套收線期限），最多等 [`POOL_CLOSE_TIMEOUT`]。
+    /// 回 `false` 是外層逾時、放手了：監督者已收到停止、任務沒有被取消（丟掉 `JoinHandle` 只是不再等它）。
+    /// 橋還活著時它照自己的收線期限收完、子行程的背景 task 照梯度收，不是洩漏；
+    /// 關池時放手的，接著 `serve` 回來、執行環境拆掉，被分離的任務跑不完，子行程由 [`super::stdio::ChildGuard`] 的 drop 直接 SIGKILL。
+    /// 這裡不記日誌，記不記是呼叫端的事（[`Pool::close`] 記）。
+    pub async fn dispose(&self) -> bool {
+        self.dispose_within(POOL_CLOSE_TIMEOUT).await
+    }
+
+    /// [`Shared::dispose`]，等待上限由呼叫端給。
+    pub async fn dispose_within(&self, limit: Duration) -> bool {
         self.stop.send_replace(true);
         let task = self.task.lock().ok().and_then(|mut t| t.take());
-        if let Some(task) = task {
-            let _ = task.await;
+        match task {
+            None => true,
+            Some(task) => tokio::time::timeout(limit, task).await.is_ok(),
         }
     }
 
@@ -333,8 +351,13 @@ impl<C: Connector> Pool<C> {
         }
     }
 
-    /// 收掉池裡每一份（含被重開取代的、還在連第一次的），同時收。冪等。
+    /// 收掉池裡每一份（含被重開取代的、還在連第一次的），同時收，最多等 [`POOL_CLOSE_TIMEOUT`]。冪等。
     pub async fn close(&self) {
+        self.close_within(POOL_CLOSE_TIMEOUT).await;
+    }
+
+    /// [`Pool::close`]，每一份的等待上限由呼叫端給。沒收完的記一行錯誤帶出是哪幾份。
+    pub async fn close_within(&self, limit: Duration) {
         let opened: Vec<Arc<Shared<C::Generation>>> = {
             let mut closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
             *closed = true;
@@ -343,7 +366,15 @@ impl<C: Connector> Pool<C> {
                 .map(|mut o| std::mem::take(&mut *o))
                 .unwrap_or_default()
         };
-        futures_join_all(opened).await;
+        let unfinished = futures_join_all(opened, limit).await;
+        if !unfinished.is_empty() {
+            (self.log.error)(&format!(
+                "MCP 連線池關閉時有 {} 份沒在 {}ms 內收完，不再等：{}",
+                unfinished.len(),
+                limit.as_millis(),
+                unfinished.join("、")
+            ));
+        }
     }
 
     /// 建一份、起它的監督者；呼叫端同步放進表裡。
@@ -405,13 +436,22 @@ impl<C: Connector> Pool<C> {
     }
 }
 
-/// 同時收每一份。
-async fn futures_join_all<G: Generation>(all: Vec<Arc<Shared<G>>>) {
-    let handles: Vec<JoinHandle<()>> = all
+/// 同時收每一份，回沒在 `limit` 內收完的那幾份的標籤。
+async fn futures_join_all<G: Generation>(all: Vec<Arc<Shared<G>>>, limit: Duration) -> Vec<String> {
+    let handles: Vec<(String, JoinHandle<bool>)> = all
         .into_iter()
-        .map(|shared| tokio::spawn(async move { shared.dispose().await }))
+        .map(|shared| {
+            (
+                shared.label.clone(),
+                tokio::spawn(async move { shared.dispose_within(limit).await }),
+            )
+        })
         .collect();
-    for handle in handles {
-        let _ = handle.await;
+    let mut unfinished = Vec::new();
+    for (label, handle) in handles {
+        if !handle.await.unwrap_or(false) {
+            unfinished.push(label);
+        }
     }
+    unfinished
 }

@@ -11,7 +11,7 @@
  *   這個檔自己的錯誤句與 `exec.interrupt` 的掛起例外不包。逾時由 LangChain 的 `tool()`
  *   搶先收掉，這裡拋什麼都沒有人看。
  * - **錯誤與診斷送出前遮掉這一份連線手上的憑證值**（`options.redactor`，#2669）：`isError` 的文字、SDK 拋的錯誤（訊息遮過，`cause` 換成遮過的副本：保留 `name`、`code`
- *   給逾時判斷讀，斷線判斷讀訊息）、`McpToolError` 的訊息；沒有憑證的連線不遮、`cause` 原樣。成功結果、反問的酬載還沒遮。
+ *   給逾時判斷讀，斷線判斷讀訊息）、`McpToolError` 的訊息；沒有東西要遮的連線（沒有憑證、HTTP 網址沒有 query、帳密、fragment）不遮、`cause` 原樣。HTTP 連線另遮網址的 query、帳密、fragment（`withUrlScrubbing`）。成功結果、反問的酬載還沒遮。
  * - **反問走 `exec.interrupt`**：預設的 `langgraph` 掛起靠拋例外，恢復時本體從第一輪重送，server 交回新的 `requestState`。先做事再問的
  *   server 每問一輪就重做一次，所以副作用要冪等。native 在行程內等，拿到答覆接著送下一輪，帶的是答之前那一輪的 `requestState`；
  *   這裡沒有人可以回答時（`HumanInputUnavailable`）每一題都回絕。
@@ -87,7 +87,7 @@ export function toolCallOf(
   options: {
     readonly elicitation: boolean;
     readonly timeoutMs: number;
-    /** 錯誤送出前遮掉這一份連線手上的憑證值（#2669）：SDK 拋的錯誤、`isError` 結果的文字、我們自己拋的 `McpToolError`（訊息帶 server 給的字串）。沒有憑證就傳 `NO_REDACTION`。 */
+    /** 錯誤送出前遮掉這一份連線手上的憑證值（#2669）：SDK 拋的錯誤、`isError` 結果的文字、我們自己拋的 `McpToolError`（訊息帶 server 給的字串）。HTTP 連線的網址也在內（`Attempts.redactor`）；沒有東西要遮就傳 `NO_REDACTION`。 */
     readonly redactor: Redactor;
   },
 ): ToolCall {
