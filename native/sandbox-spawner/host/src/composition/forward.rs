@@ -338,8 +338,11 @@ impl Forward {
 mod tests {
     use super::Forward;
     use std::io::{Read, Write};
+    #[cfg(target_os = "linux")]
+    use std::net::Shutdown;
     use std::os::fd::AsRawFd;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     /// 等一件一定會發生的事最多等這麼久；到了就是壞了，測試紅。
@@ -361,24 +364,34 @@ mod tests {
         fds
     }
 
+    /// 一條轉送中的連線：`Forward`、前台那一端、葉子那一端，與要刪的暫存目錄。
+    fn linked(tag: &str) -> (Forward, UnixStream, UnixStream, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("nfwd-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let leaf_listener = UnixListener::bind(dir.join("leaf.sock")).unwrap();
+        let front = UnixListener::bind(dir.join("front.sock")).unwrap();
+        let mut forward = Forward::new(front, dir.join("leaf.sock")).unwrap();
+        let client = UnixStream::connect(dir.join("front.sock")).unwrap();
+        client.set_read_timeout(Some(GUARD)).unwrap();
+        let fds = polled(&mut forward);
+        forward.step(&fds, Instant::now());
+        assert_eq!(forward.links.len(), 1);
+        let (leaf, _) = leaf_listener.accept().unwrap();
+        (forward, client, leaf, dir)
+    }
+
+    /// poll 一次並交給 `step`。
+    fn round(forward: &mut Forward) {
+        let fds = polled(forward);
+        forward.step(&fds, Instant::now());
+    }
+
     /// 葉子在這一輪 poll 之後、寫之前才回應並整條關：往葉子寫會出錯，葉子關之前送出的回應還是要到前台。
     /// poll 與寫之間的空窗從行程外面排不出來，所以在行程內拿 poll 當下那一批 `pollfd` 叫 `step`。
     #[test]
     #[ignore = "#2754：修好之前是紅的，先讓出位置給 tests/composition.rs 跑"]
     fn a_response_from_a_leaf_that_closed_between_poll_and_write_still_arrives() {
-        let dir = std::env::temp_dir().join(format!("nfwd-stale-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let leaf_listener = UnixListener::bind(dir.join("leaf.sock")).unwrap();
-        let front = UnixListener::bind(dir.join("front.sock")).unwrap();
-        let mut forward = Forward::new(front, dir.join("leaf.sock")).unwrap();
-
-        let mut client = UnixStream::connect(dir.join("front.sock")).unwrap();
-        client.set_read_timeout(Some(GUARD)).unwrap();
-        let fds = polled(&mut forward);
-        forward.step(&fds, Instant::now());
-        assert_eq!(forward.links.len(), 1);
-        let (mut leaf, _) = leaf_listener.accept().unwrap();
-
+        let (mut forward, mut client, mut leaf, dir) = linked("stale");
         client.write_all(b"request").unwrap();
         let stale = polled(&mut forward);
         let leaf_fd = forward.links[0].leaf.fd.as_raw_fd();
@@ -395,8 +408,7 @@ mod tests {
         forward.step(&stale, Instant::now());
 
         while !forward.links.is_empty() {
-            let fds = polled(&mut forward);
-            forward.step(&fds, Instant::now());
+            round(&mut forward);
         }
         let mut arrived = Vec::new();
         client.read_to_end(&mut arrived).unwrap();
@@ -406,5 +418,36 @@ mod tests {
             "回應被截了：到了 {} 個位元組",
             arrived.len()
         );
+    }
+
+    /// 葉子只關了讀的方向、還在送：往它寫會出錯，但它沒有斷，之後送的照樣要到前台。
+    /// 把寫出錯當成那一端斷了的話，連線在第一輪就收掉，葉子下一次寫會失敗。
+    /// 只在 Linux 跑：對方關了讀的方向之後寫會回 `EPIPE` 是 Linux 的行為，macOS 上寫得進去，走不到要釘的那條路。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_leaf_that_only_stopped_reading_can_still_send() {
+        let (mut forward, mut client, mut leaf, dir) = linked("shut-rd");
+        leaf.shutdown(Shutdown::Read).unwrap();
+        client.write_all(b"request").unwrap();
+        round(&mut forward);
+        assert!(
+            forward.links[0].up.done,
+            "往葉子寫沒有出錯，沒走到要釘的那條路"
+        );
+        for part in [&b"first"[..], &b"second"[..]] {
+            leaf.write_all(part).unwrap();
+            round(&mut forward);
+            let mut arrived = vec![0; part.len()];
+            client.read_exact(&mut arrived).unwrap();
+            assert_eq!(arrived, part);
+        }
+        drop(leaf);
+        while !forward.links.is_empty() {
+            round(&mut forward);
+        }
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(rest, b"");
     }
 }

@@ -454,12 +454,13 @@ fn a_frame_that_does_not_decode_exits_with_a_protocol_error() {
     assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
 }
 
-/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。
+/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。已經綁好的那一個不留在磁碟上。
 #[test]
 fn a_socket_that_cannot_be_bound_exits_1_without_a_hello() {
     let mut rig = Rig::start_at("unbound", "no-such-dir/front.sock");
     assert_eq!(rig.exit(), Some(1));
     assert_eq!(rig.rest(), NONE);
+    assert!(!rig.dir.join("pair.sock").exists());
 }
 
 /// `ready` 之前的 `bind` 是協定錯誤，所以拿它當見證：行程因它結束，就證明到那一刻為止沒送過 `ready`。
