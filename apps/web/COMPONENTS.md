@@ -67,6 +67,65 @@
 
 機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級照 SG：#1281 的三條（下拉選單、cmdk、側欄）照 #1468 Q19 拿掉，下拉選單與 cmdk 隨 #1583、側欄（群組標題與 `sm` 選單鈕是 vendor 原文的 `text-xs`）隨 #1680 換成 vendor 版。「是不是標題」判不出來，靠 review。
 
+## `Button` 的 variant 與尺寸
+
+`Button` 是 vendor 的 SG 元件（`@/components/ui/button`）。全部的組合畫在 `guard/` 的測試頁（`?overlay=buttons`），高度與停用的透明度由 `guard/guard.test.ts` 量。
+
+| variant | 用在 |
+| --- | --- |
+| `default` | 這個面的主動作。一個面只有一顆（上面「一個面一顆實心按鈕」） |
+| `outline` | 次要動作；浮層的 Trigger |
+| `secondary` | 次要動作，要比 `outline` 再實一點的時候 |
+| `ghost` | 工具列、列上的圖示鈕這類不搶眼的動作 |
+| `destructive` | 刪除、停止這類不能輕易復原的動作 |
+| `glass` | 疊在內容上的玻璃鈕；`data-strong` 是同一塊玻璃再亮一階。產品原始碼目前沒有用到 |
+| `link` | 看起來是連結的按鈕 |
+
+| size | 高度 | 字級 | 用在 |
+| --- | --- | --- | --- |
+| `xs`／`icon-xs` | 24 | 12 | 卡片標頭、列裡面的小動作 |
+| `sm`／`icon-sm` | 28 | 0.8rem（vendor 原樣，釘在 `VENDOR_PINNED`） | 密一點的工具列 |
+| `default`／`icon` | 32 | 14 | 一般 |
+| `lg`／`icon-lg` | 36 | 14 | 需要大一點的點擊區 |
+
+- 只有圖示的鈕用 `icon*` 尺寸，並給 `aria-label`。
+- 停用用原生的 `disabled`，畫成 50% 透明、點不到。停用了還要讓人聚焦得到、聽得到原因的（鎖住的 Pick），用 `aria-disabled`，不用 `disabled`。
+- hover、按下去的樣子由 SG 的 css 畫，呼叫端不另外寫。
+
+## 命名
+
+把現有的慣例寫下來，新的照這樣取，舊的不為了對齊而改名。
+
+**token**
+
+- 顏色用 SG 與 shadcn 的語意名：`--background`、`--foreground`、`--card`、`--muted-foreground`、`--destructive`…，成對的前景加 `-foreground`。SG 自己的一組用它的前綴或用途名（`--glass-*`、`--status-*`、`--panel`、`--hover-faint`）。nexus 加的也取語意名，不取外觀名：`--brand`、`--success`、`--scrim`。
+- 字級是 `--text-<用途>`（`ui`、`body`、`tip`、`micro`），行高是 `--text-<用途>--line-height`。圓角是 `--radius-<階或用途>`（`--radius-row`）。
+- 名字說用途，不說值：不取 `--gray-200`、`--text-13`。
+- 新增、刪除、改值都要 demian 核可（規格 §13.6）；加了 `--text-*`、`--radius-*` 還要登記 `cn`（下一節）。
+
+**props**
+
+- 事件是 `on` 加動詞：`onPick`、`onSelect`、`onOpenChange`、`onDismiss`。成對的動作各自一個（`onPin`／`onUnpin`），不用一個帶布林的。
+- 布林用形容詞或狀態，不加 `is`：`open`、`busy`、`loading`、`connected`、`pinned`、`hidden`。講「能不能」「有沒有」的才加前綴：`canSend`、`hasMore`。
+- 外觀的變化用字串聯集，不用好幾個布林：`Surface` 的 `tone`、`RowTrigger` 的 `fit`、`Button` 的 `variant` 與 `size`。
+- 受控的開合照 Base UI：`open` 配 `onOpenChange`。
+- 給外層補樣式的口是 `className`，只有一個；元件內部的元素不另外開 `xxxClassName`。
+
+**檔案與元件**
+
+- 檔名 kebab-case，元件名 PascalCase，一個檔的主要元件跟檔名同名（`row-trigger.tsx` 的 `RowTrigger`）。
+- 資料夾按功能分，檔名不重複資料夾名（`tool/result.tsx`，不是 `tool/tool-result.tsx`）。
+
+## 棄用
+
+token 與共用元件不直接刪（規格 §13.6）：
+
+1. **標記**：元件在 JSDoc 加 `@deprecated`，寫改用什麼；token 在定義的那一行上面加註解，寫改用什麼。同一張 PR 把 repo 裡的用法全部換掉。
+2. **保留一個 Release**：標記之後至少隨一個 Release 出去，下一個 Release 才刪。
+3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../../docs/release.md#升級指南)寫一份。
+
+改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
+
 ## 新增自訂 token 要登記 `cn`
 
 `cn`（class 合併）不認得自訂的 `text-*`／`rounded-*` 名，會把字級當字色互相吃掉（2026-10-07 發生過，PR #1144）。所以：

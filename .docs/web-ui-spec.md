@@ -477,7 +477,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 - **要 demian 核可的**：token 的新增、刪除、改值；新增共用元件。
 - **dev session 自己決定的**：改既有元件的實作、畫面專屬元件。
-- **棄用**：token 或元件標記棄用後保留一個 Release 再刪。`<nexus-chat>` 給宿主頁的面照[升級指南](../docs/release.md#升級指南)。
+- **棄用**：token 或元件標記棄用後保留一個 Release 再刪，步驟在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「棄用」。`<nexus-chat>` 給宿主頁的面照[升級指南](../docs/release.md#升級指南)。
 
 ### 13.7 設計與程式同步
 
@@ -489,8 +489,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
 | 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
-| 每個共用元件有文件與預覽（§13.5） | 不齊；沒有給人看的目錄 | [#2762](https://github.com/DemianLi/nexus-agent/issues/2762)；目錄還沒開卡 |
-| 棄用流程寫進 `COMPONENTS.md`（§13.6） | 沒有 | [#2762](https://github.com/DemianLi/nexus-agent/issues/2762) |
+| 每個共用元件有文件與預覽（§13.5） | `Button` 補了（`COMPONENTS.md`、`guard/` 的 `?overlay=buttons`），其他共用元件不齊；沒有給人看的目錄 | 目錄還沒開卡 |
 | Windows 高對比 | 沒量過，量完再定要不要列為門檻 | [#2764](https://github.com/DemianLi/nexus-agent/issues/2764) |
 | 視覺回歸 | 沒有 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
