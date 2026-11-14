@@ -1283,7 +1283,7 @@ export class BackgroundSubagentHost {
       const replay = await cold.restore(agent, childId, resumed.events);
       if (replay.kind === 'unreplayable') {
         this.#warn?.(
-          `[背景子代理] ${runId} 的對話無法從日誌推回（${replay.reason}），它從空的對話開始，但日誌上的歷史都還在`,
+          `[背景子代理] ${runId} 的對話無法從日誌推回（${replay.reason}）。history-source=log 時它的下一輪會失敗，錯誤訊息講出路；其餘來源它從空的對話開始，日誌上的歷史都還在`,
         );
       }
       this.#sessions.open(

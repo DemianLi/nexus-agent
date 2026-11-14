@@ -1086,7 +1086,7 @@ export async function createCliAgent(
    */
   permissionNarrowed: PermissionNarrowing | undefined;
   /**
-   * 這一次組裝實際用的模型歷史來源（旗標 > 那一列 > 入口預設 `log`）。**只講 root**：子代理那一份仍走 `state`，`log` 時也一樣。
+   * 這一次組裝實際用的模型歷史來源（旗標 > 那一列 > 入口預設 `log`）。`log` 時 root 與子代理各從自己的日誌推；`shadow` 的比對只在 root，子代理那一份仍走 `state`。
    */
   historySource: HistorySource;
   /**
@@ -1481,7 +1481,7 @@ export async function createCliAgent(
   });
   return {
     agent,
-    /** 這一次組裝實際用的模型歷史來源。只講 root：子代理仍是 `state`。 */
+    /** 這一次組裝實際用的模型歷史來源。`log` 時 root 與子代理各從自己的日誌推；`shadow` 只比對 root。 */
     historySource,
     dispose,
     model,

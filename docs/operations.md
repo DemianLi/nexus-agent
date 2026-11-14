@@ -2579,7 +2579,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 - **`history-source` 也在組裝期讀**（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），同形；CLI 的 `--history-source <state|shadow|log>` 贏過這一列。
-  出廠是 `log`，只講 root，子代理仍走 state。**關掉這一列、或整列掉下來，是 `log`，不是 `state`**：要 `state` 就在這一列明寫
+  出廠是 `log`，root 與子代理各從自己的日誌推；`shadow` 只比對 root。**關掉這一列、或整列掉下來，是 `log`，不是 `state`**：要 `state` 就在這一列明寫
   `source: state`，或帶 `--history-source state`。老日誌（推不回模型歷史的）續接，第一次模型呼叫會失敗，訊息點名原因與兩條出路（`source: state`、
   `--history-source state`）外加另開一條對話。
   寫 `shadow` 時送給模型的內容不變，只在 root 每次呼叫模型之前，拿從會話日誌推出來的歷史跟這次的請求比一次：

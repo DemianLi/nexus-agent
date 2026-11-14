@@ -1,9 +1,9 @@
 /**
  * 一次工具呼叫屬於哪一則助手訊息：`wrapToolCall` 那幾個讀者（屏障、`returnDirect` 的收尾、解不開參數的原字串）都要找它。
  *
- * - `history-source=log` 而且是 root 的呼叫：從那一份會話日誌的 `assistant/message` 找（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)，
+ * - `history-source=log` 的呼叫（root 與子代理各讀自己的日誌）：從那一份會話日誌的 `assistant/message` 找（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)，
  *   `.docs/agent-loop-off-langchain-design-2026-11-03.md` §四 W6）。歷史從日誌推，讀者讀的也是日誌。
- * - 其餘（`state`／`shadow`、子代理）：native loop 把正在跑的那一批的助手訊息放進請求（{@link ToolCallOwnerRequest.owner}），
+ * - 其餘（`state`／`shadow`）：native loop 把正在跑的那一批的助手訊息放進請求（{@link ToolCallOwnerRequest.owner}），
  *   就用那一則。`langgraph` 的請求沒有這一格，從 `request.state.messages` 找：歷史由 state 送，讀者跟著讀 state。
  *
  * 讀日誌與讀 state 都是**倒著找、認 callId**：供應商重用 callId 時最近的那則才是這一次；`langgraph` 的 ToolNode 執行時，
@@ -80,7 +80,7 @@ export function toolCallOwner(
     if (found.kind !== 'ok') {
       throw new Error(`工具呼叫找不到這次的日誌（${found.kind}）：history-source=log 不退回 state`);
     }
-    if (found.address.kind === 'root') return ownerInLog(found.log.events, callId);
+    return ownerInLog(found.log.events, callId);
   }
   if ('owner' in request) {
     return callsOf(request.owner)?.some((call) => call.id === callId) === true

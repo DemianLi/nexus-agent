@@ -22,8 +22,8 @@
  * - **`history-source=log` 的 root 讀日誌推出來、沒套摘要的那一串。** 套了摘要的那一串（模型看得到的）只剩切點之後，
  *   落在切點之前的呼叫被截掉，鏈在摘要之後斷掉；沒套摘要的摘要前後都在，所以摘要之後鏈還在、計數接續。
  *   **代價在另一邊**：落在切點之前的提醒模型那一輪就看不到了，它跟其他被摘掉的訊息一起進了摘要。
- * - **其餘讀 `state.messages`**：`history-source=state`，以及子代理（子代理的模型歷史今天在 `log` 下也走 state，
- *   [#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 拆）。`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
+ * - **其餘讀 `state.messages`**：`history-source=state`，以及子代理（子代理的模型歷史在 `log` 下已讀它自己的日誌，提醒鏈仍讀
+ *   `state.messages`，[#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 的後一張拆）。`state` 本來就逐 thread、逐 agent 各一份，隔離是結構上的。
  *   摘要器不改寫 `state.messages`（切點記在 `summary-cutoffs.ts` 的切點表，每次模型呼叫時現組，照基座的做法：`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2697`，原文註解寫著 “This avoids full state rewrites”），所以 state 這一路摘要之後鏈也還在。
  *
  * 恢復會話之後鏈還在：鏈長在訊息裡，日誌或 checkpointer 存什麼就恢復什麼。
@@ -479,8 +479,8 @@ function readsLog(
  *
  * - `history-source=log` 的 root（`found` 是 {@link readsLog} 為真時查到的日誌）：日誌推出來、沒套摘要的那一串
  *   （{@link createUnsummarizedHistoryReader}）。套了摘要的那一串會把切點之前的呼叫截掉，鏈在摘要之後斷掉。
- * - 其餘讀 `state.messages`：`history-source=state`，以及子代理（子代理的模型歷史今天在 `log` 下也走 state，
- *   [#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 拆這一格）。`log` 的 root 找不到日誌時也走這一格：有提醒要記時由
+ * - 其餘讀 `state.messages`：`history-source=state`，以及子代理（子代理的模型歷史在 `log` 下已讀它自己的日誌，提醒鏈仍讀
+ *   `state.messages`，[#2751](https://github.com/DemianLi/nexus-agent/issues/2751) 的後一張拆這一格）。`log` 的 root 找不到日誌時也走這一格：有提醒要記時由
  *   {@link recordReminders} 拋，沒有提醒時由 `historyFromLog` 在模型呼叫前拋。
  *
  * 日誌推不回歷史時（{@link createUnsummarizedHistoryReader} 拋）往外拋，這一步失敗，不退回 `state`。

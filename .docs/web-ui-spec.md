@@ -47,7 +47,7 @@
 
 ## 3. 基底與依據
 
-- **shadcn＋Tailwind 是基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，修改寫在後載入、layer 外的覆寫檔，逐條登記在該目錄 README 的「本地修改」（[#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q1、Q4、Q9）。**外觀類照 SG，機制類保留**（Q8）；碰到本份 §5、§7、§8 的無障礙門檻時以門檻為準（Q5）。元件目前仍是 registry 的 Radix 版，換成 Base UI 在地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497) 第 ③ 步。
+- **shadcn＋Tailwind 是基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，修改寫在後載入、layer 外的覆寫檔，逐條登記在該目錄 README 的「本地修改」（[#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q1、Q4、Q9）。**外觀類照 SG，機制類保留**（Q8）；碰到本份 §5、§7、§8 的無障礙門檻時以門檻為準（Q5）。`ui/` 的元件也是 SG 的：primitive 以 Base UI 為主（command 用 cmdk、toast 用 sonner、對話捲動與提問用 `@shadcn/react`），`apps/web/src/components/ui/` 是它們的 nexus 層，轉出 vendor 的原檔。
 - **視覺、設計 token、動效的數值以 SG 為準**；**[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當元件多樣性與交互模式的參考**，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是「模仿對象：元件多樣性、交互體驗、動效呈現」）。最後長成我們自己的系統風格。
 - **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫對照 dsh 的紀錄（[AGENTS.md「技術實現標準」](../AGENTS.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
 - **動到執行語意的仍照 dsh**，唯一寫明的例外是提問面板的 ❌（§4.3）。
@@ -223,7 +223,7 @@
 | 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單），動效就是 popover 那一列（輸入框底列的 Pick 是下拉選單，#1591 起）；cmdk 本身沒有動效（#1583 換成 SG 版） |
 | popover | 照 SG（#1583、#1687）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`），開關都是 100ms、`ease`（SG 寫的 `duration-100`） |
 | tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，開關都是 150ms、`ease`（SG 的 tooltip 沒寫 `duration-*`，是 tw-animate 的預設，#1687）；延遲 0（SG 的 `TooltipProvider` 預設） |
-| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，開關都是 100ms、`ease`（#1687）；遮罩同樣 100ms 淡入淡出、`backdrop-blur-xs` |
+| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，開關都是 100ms、`ease`（#1687）；遮罩同樣 100ms 淡入淡出、`backdrop-blur-xs`，顏色走 `--scrim`（平常 10% 的黑；不透明的兩種退路沒有 blur，換成 50%，vendor README 本地修改第 84 條） |
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
 | 面板高度差 | resize 300 |

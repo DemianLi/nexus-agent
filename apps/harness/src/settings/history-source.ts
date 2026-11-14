@@ -8,7 +8,7 @@
  * - `shadow`：送的仍是 state，另在 root 緊貼請求快照外側拿從日誌推出來的歷史比一次；不是 `match` 的那幾次 serve 走伺服器日誌的
  *   `history-shadow` logger（debug 等級），CLI 印在標準錯誤；計數留在組裝點拿到的 tally。都不寫進會話日誌。
  * - `log`（出廠）：在同一格拿從日誌推出來的歷史換掉要送的那一串；找不到日誌、推不出來，這次呼叫就失敗，不退回 state。
- *   只講 root：子代理仍走 state（`fold.ts` 的 `historyFromLog` 宣告 `rootOnly`）。
+ *   root 與子代理各從自己的日誌推。
  *
  * **關得掉，關掉就是沒人講**：入口（CLI、serve、背景冷啟、樹上入口，都走 `createCliAgent`）給的預設是 `log`，所以關掉或整列掉下來
  * 落到 `log`，**不等於寫 `state`**；要 `state` 就在這一列明寫 `source: state`，或帶 `--history-source state`。

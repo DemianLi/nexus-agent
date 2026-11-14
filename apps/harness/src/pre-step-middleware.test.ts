@@ -16,6 +16,7 @@ import {
   MESSAGE_SOURCE_KWARG,
   SESSION_EVENT_MAX_DEPTH,
   SessionLog,
+  toLoggedMessage,
   TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import type { SessionLookup, SummaryCutoff } from '@nexus/core';
@@ -369,6 +370,60 @@ describe('宿主建的 middleware', () => {
       markHistoryFromLog(sessions);
       await hookOf(preStep(NAME, listener, sessions))(state, { configurable: {} });
       expect(seen).toEqual([['state 裡的另一句'], ['日誌上的那句']]);
+    });
+
+    it('history-source=log、子代理：listener 看到的是子代理自己日誌推出來的那一串，不是 state（#2751）', async () => {
+      const log = new SessionLog('pre-step-sub');
+      log.append('user/message', {
+        message: toLoggedMessage(new HumanMessage('子代理日誌上的那句')),
+        source: { kind: 'user' },
+      });
+      const sessions = {
+        forCall: (): SessionLookup => ({
+          kind: 'ok',
+          address: { kind: 'subagent', runId: 'r' },
+          log,
+        }),
+      };
+      const seen: string[][] = [];
+      const listener: PreStepListener = (messages) => {
+        seen.push(messages.map((message) => message.text));
+        return undefined;
+      };
+      const state = { messages: [new HumanMessage('子代理 state 裡的另一句')] };
+      await hookOf(preStep(NAME, listener, sessions))(state, { configurable: {} });
+      markHistoryFromLog(sessions);
+      await hookOf(preStep(NAME, listener, sessions))(state, { configurable: {} });
+      expect(seen).toEqual([['子代理 state 裡的另一句'], ['子代理日誌上的那句']]);
+    });
+
+    it('history-source=log、子代理的日誌推不回：listener 還沒叫就拋，訊息講子代理（#2751）', async () => {
+      const log = new SessionLog('pre-step-sub-broken');
+      log.append('turn/start', { kind: 'message', text: '甲' });
+      log.append('model/start', {});
+      log.append('model/end', {});
+      log.append('turn/end', {});
+      const sessions = {
+        forCall: (): SessionLookup => ({
+          kind: 'ok',
+          address: { kind: 'subagent', runId: 'r' },
+          log,
+        }),
+      };
+      markHistoryFromLog(sessions);
+      let called = false;
+      const middleware = preStep(
+        NAME,
+        () => {
+          called = true;
+          return undefined;
+        },
+        sessions,
+      );
+      await expect(
+        hookOf(middleware)({ messages: [new HumanMessage('甲')] }, { configurable: {} }),
+      ).rejects.toThrow(/這個子代理的日誌推不回它的模型歷史/u);
+      expect(called).toBe(false);
     });
 
     it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(

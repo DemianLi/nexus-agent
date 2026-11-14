@@ -12,7 +12,9 @@ description: 模型歷史的來源預設從 `state` 改成 `log`：關掉 `histo
 - **出廠值。**
   - 舊行為：`cordis.yml` 的 `history-source` 那一列寫 `source: state`，模型看到的是 LangGraph state 裡的歷史。
   - 新行為（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)）：出廠寫 `source: log`，root 每次呼叫模型之前，改送從會話日誌推出來的歷史。找不到日誌、推不回來，這次呼叫就失敗，不退回 `state`。
-- **只講 root。** 子代理的模型歷史仍走 `state`，`log` 時也一樣；`built.historySource` 與 `--history-source` 說的也只是 root。
+- **子代理也從自己的日誌推。** `log` 時前景與背景子代理每次呼叫模型之前，都改送從它自己那份子日誌推出來的歷史，不再走 `state`；`built.historySource` 與 `--history-source` 現在說的是整條 thread（root 與子代理）的來源。
+  - 舊行為：背景子代理冷復活（行程重啟後收到模型的 `send_message` 或 wire 的 `subagent.send`）時，日誌推不回它的對話，只在伺服器日誌印一句警告，子代理以空對話繼續。
+  - 新行為：`log` 時同一份推不回的子日誌，那個子代理的下一輪失敗，訊息說明是子代理、點名原因與出路；不是 `log`（`state`、`shadow`）時維持舊行為。推得回來的子日誌不受影響。
 - **關掉那一列的意思變了。**
   - 舊行為：`disabled: true`、或整列掉下來（模組載不進來、設定驗不過），都落回 `state`，跟寫 `source: state` 同一個結果。
   - 新行為：入口給的預設是 `log`，關掉或掉下來都是 `log`。**關掉那一列不會有警告**（`disabled: true` 是部署方明講）；掉下來照舊印「N 列沒有掛上」那一段。
@@ -23,6 +25,7 @@ description: 模型歷史的來源預設從 `state` 改成 `log`：關掉 `histo
 - **自己 copy 的清單不會被改。** 清單裡 `history-source` 寫了 `source: state` 的，仍是 `state`，不會被預設蓋成 `log`。
 
 受影響的：
+- 有格式 44 以後、但推不回模型歷史（缺回覆、缺工具結果、摘要切點對不上）的背景子代理日誌、又要冷復活的部署（出路：把 `history-source` 那一列寫成 `source: state`，該子代理從空對話開始；或另派一個新的）；
 - 靠關掉 `history-source` 那一列拿 `state` 的部署；
 - 手上有格式 9 以前的老日誌、還要續接的 CLI 使用者與 `serve` thread。
 - 直接呼叫 `createNexusAgent`、插件清單掛了整份出廠清單、又沒接會話日誌的嵌入方：`history-source` 那一列現在是 `log`，第一次模型呼叫會拋。
