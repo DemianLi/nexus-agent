@@ -1345,11 +1345,91 @@ fn a_refused_connection_is_read_at_most_one_budget_per_step() {
 }
 
 #[test]
-fn a_refused_leaf_that_sends_an_oversized_frame_is_closed_at_once() {
+fn a_refused_leaf_that_sends_bytes_no_frame_fits_still_reads_the_rejection() {
     let (mut rig, mut leaf) = refused_at_accept("drain-garbage");
+    let garbage = [&u32::MAX.to_le_bytes()[..], b"{\"type\":\"hello\"}"].concat();
+    leaf.stream.write_all(&garbage).unwrap();
+    rig.step();
+    assert_eq!(
+        rig.pair.deadline(rig.start),
+        Some(rig.start + CLOSE_TIMEOUT)
+    );
+    leaf.stream.write_all(&garbage).unwrap();
+    leaf.assert_rejected(&mut rig, RejectCode::RetryLater, "pid 不對");
+    drop(leaf);
+    rig.step();
+    assert_eq!(rig.pair.deadline(rig.start), None);
+}
+
+/// 葉子讀到一框 `rejected{protocol}` 與 EOF，接著寫的寫不進去。
+fn assert_rejected_then_cut(rig: &mut Rig, leaf: &mut Leaf) {
+    assert!(matches!(
+        leaf.read(rig)[..],
+        [PairMessage::Rejected {
+            code: RejectCode::Protocol,
+            ..
+        }]
+    ));
+    assert!(leaf.closed);
+    let err = leaf.stream.write_all(&[0; 4]).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::BrokenPipe);
+}
+
+#[test]
+fn a_connection_rejected_for_an_oversized_frame_is_closed_once_the_rejection_is_written() {
+    let (mut rig, mut leaf) = Rig::connected("oversized-conn");
+    leaf.stream.write_all(&u32::MAX.to_le_bytes()).unwrap();
+    rig.step();
+    assert!(!rig.pair.connected());
+    // 讀端在拒絕之前就關了：同一步就不留。
+    assert_eq!(rig.pair.deadline(rig.start), None);
+    assert_eq!(polled(&rig, libc::POLLIN), 1);
+    assert_rejected_then_cut(&mut rig, &mut leaf);
+}
+
+#[test]
+fn a_waiting_connection_rejected_for_an_oversized_frame_is_closed_once_the_rejection_is_written() {
+    let mut rig = Rig::new("oversized-pending");
+    rig.pair.set_leaf(me());
+    let mut leaf = Leaf::connect(&rig);
+    assert_eq!(rig.events(), []);
     leaf.stream.write_all(&u32::MAX.to_le_bytes()).unwrap();
     rig.step();
     assert_eq!(rig.pair.deadline(rig.start), None);
+    assert_eq!(polled(&rig, libc::POLLIN), 1);
+    assert_rejected_then_cut(&mut rig, &mut leaf);
+}
+
+#[test]
+fn refused_connections_at_the_cap_leave_the_checked_connection_working() {
+    let (mut rig, mut first) = Rig::connected("drain-cap-conn");
+    let mut others = Vec::new();
+    for _ in 0..=MAX_PENDING {
+        let mut other = Leaf::connect(&rig);
+        other.send(&mut rig, &hello(PAIR_PROTOCOL_VERSION));
+        assert_eq!(rig.events(), [refused("已經有連線")]);
+        others.push(other);
+    }
+    // listener、驗過的那一條，加上留著的。
+    assert_eq!(polled(&rig, libc::POLLIN), 2 + MAX_PENDING);
+    first.send(
+        &mut rig,
+        &call(leaf_call(1), None, "echo", Value::from("還在")),
+    );
+    assert_eq!(
+        rig.events(),
+        [PairEvent::Call {
+            id: 0,
+            parent: None,
+            method: "echo".into(),
+            payload: Value::from("還在"),
+        }]
+    );
+    let id = rig.pair.call(None, "attach", Value::Null).unwrap();
+    assert_eq!(
+        first.read(&mut rig),
+        [call(my_call(id), None, "attach", Value::Null)]
+    );
 }
 
 #[test]
