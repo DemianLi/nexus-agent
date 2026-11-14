@@ -373,8 +373,8 @@ export interface FoldOptions {
    * `false` 之後**真的沒有**——基座沒有這種 middleware，`recursionLimit` 是唯一會讓
    * 打轉停下來的東西，而它不分辨在進展還是在打轉。
    *
-   * 它建的 middleware 是無狀態的（鏈從 `state.messages` 現算），所以 root 與每個
-   * subagent 共用同一份實例，不像摘要器要逐個建。
+   * 它建的 middleware 的鏈不放在 closure 裡（每次從歷史現算，見 {@link createRepeatReminder}），
+   * 所以 root 與每個 subagent 共用同一份實例，不像摘要器要逐個建。
    *
    * **關掉它會拿回一點迴圈預算**：它掛在 `beforeModel` 上，那是圖裡的一個節點，
    * 每一輪多一個 super-step。見 {@link createRepeatReminder}。
@@ -1603,7 +1603,7 @@ function subagentPluginMiddleware({ prepended, rest, last }: PluginMiddleware): 
  *
  * **回一份實例而不是工廠，跟 {@link foldSummarizer} 相反，而且是量過的差別**：摘要器的
  * closure 裡有認不出身分時用的會話名，共用會讓兩個 agent 的那種呼叫寫進同一個檔；提醒器的 closure 裡
- * 只有設定，鏈每次從 `state.messages` 現算，而 `state` 本來就逐 thread、逐 agent 各一份。
+ * 只有設定與按日誌物件分的推導快取，鏈每次從歷史現算（`log` 的 root 讀日誌、其餘讀 `state`，後者本來就逐 thread、逐 agent 各一份）。
  *
  * @param options - 組裝點自有的那些。
  * @param sessions - 註冊表的 `sessions` 通道：提醒也記進日誌（#305）。它是查詢不是狀態，共用照舊成立。

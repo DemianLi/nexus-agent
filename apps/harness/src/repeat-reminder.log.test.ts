@@ -9,17 +9,16 @@
  * - 摘要之後：摘要在第一則提醒之前發生，鏈跨過切點。
  * - 摘要之後又提醒：第一則提醒貼完才摘要，之後鏈長到下一道門檻。
  *
- * 這一檔量的組裝點明給 `historySource` 與 `agentLoop`，所以不吃 `history-source-state.setup.ts` 與 `native-loop.setup.ts`
- * 那兩個 mock 的補值；每個場景還斷言 `log` 那一邊**實際生效**：提醒真的記進了日誌。
+ * 這一檔量的組裝點明給 `historySource` 與 `agentLoop`，那兩個 setup 的 mock 只在沒給時補值，所以不影響；
+ * 每個場景斷言組裝回報的 `historySource`（`state`／`log`）。這一檔分不出「`log` 的 root 退回讀 state」（基準本身就是 state 讀法），
+ * 讀哪一串由 `packages/nexus-core/src/repeat-reminder.test.ts` 擋。
  */
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { REPEAT_REMINDER_MARKER, SessionRegistry } from '@nexus/core';
 import type { HistorySource } from '@nexus/core';
-import { describe, expect, it, vi } from 'vitest';
-
-vi.unmock('./assembly-root.js');
+import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
@@ -51,6 +50,8 @@ interface Run {
   readonly prompts: readonly unknown[][];
   /** 每一輪 prompt 裡提醒的全文。 */
   readonly reminders: readonly (readonly string[])[];
+  /** 組裝回報的、實際生效的來源。 */
+  readonly built: HistorySource;
   readonly summarized: boolean;
   /** 日誌上 `user/message`（插件來源）的條數；`state` 下沒接日誌是 `undefined`。 */
   readonly loggedReminders: number | undefined;
@@ -63,7 +64,12 @@ async function run(
   recursionLimit: number,
 ): Promise<Run> {
   const model = new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
-  const { agent, attachSession, dispose } = await createNexusAgent({
+  const {
+    agent,
+    attachSession,
+    dispose,
+    historySource: built,
+  } = await createNexusAgent({
     model,
     plugins: [createEchoPlugin()],
     agentLoop: loop,
@@ -84,6 +90,7 @@ async function run(
   return {
     prompts: model.seen.map((prompt) => prompt.map(project)),
     reminders: model.seen.map((prompt) => prompt.filter(isReminder).map((m) => m.text)),
+    built,
     summarized: model.seen.some((prompt) =>
       prompt.some(
         (m) => HumanMessage.isInstance(m) && m.additional_kwargs['lc_source'] === 'summarization',
@@ -118,11 +125,14 @@ describe.each(['langgraph', 'native'] as const)('提醒鏈讀日誌：%s', (loop
     const viaState = await run(loop, 'state', scenario.summarization, scenario.limit);
     const viaLog = await run(loop, 'log', scenario.summarization, scenario.limit);
 
+    // setup 的 mock 沒蓋掉明給的值。
+    expect(viaState.built).toBe('state');
+    expect(viaLog.built).toBe('log');
     expect(viaLog.summarized).toBe(scenario.summary);
     expect(viaState.summarized).toBe(scenario.summary);
     // 門檻 3 之後一定有提醒，沒有的話這場根本沒量到鏈。
     expect(viaLog.reminders.flat().length).toBeGreaterThan(0);
-    // `log` 下提醒真的記進了日誌：生效的來源是 `log`，不是無聲退回 `state`。
+    // 提醒進了日誌：`log` 那一邊的日誌接上了、記得進去。這證明不了鏈讀的是日誌（記提醒只看查不查得到日誌）。
     expect(viaLog.loggedReminders).toBe(new Set(viaLog.reminders.flat()).size);
     expect(viaLog.prompts).toEqual(viaState.prompts);
   });

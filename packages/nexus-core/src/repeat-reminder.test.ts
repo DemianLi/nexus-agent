@@ -467,6 +467,10 @@ describe('記不進去：這一步失敗', () => {
  * state 那一邊用現成的 {@link conversation}（`state.messages` 讀法當基準），log 那一邊餵同一串呼叫，兩邊逐輪比提醒全文。
  */
 describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
+  /** 圖裡 root 的一次呼叫：`checkpoint_ns` 只有它自己那一段；子代理多一層。鏈讀哪一串只看這個，不看 `forCall`。 */
+  const ROOT_CALL = { configurable: { checkpoint_ns: 'model_request:abc' } };
+  const SUBAGENT_CALL = { configurable: { checkpoint_ns: 'tools:abc|model_request:def' } };
+
   type Hook = (
     state: { messages: readonly BaseMessage[] },
     runtime?: { readonly configurable?: unknown },
@@ -533,9 +537,7 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
     const perTurn: string[][] = [];
     for (let n = from; n <= to; n += 1) {
       logGrep(log, `c${n}`);
-      perTurn.push(
-        (hook({ messages: [] }, { configurable: {} })?.messages ?? []).map((m) => m.text),
-      );
+      perTurn.push((hook({ messages: [] }, ROOT_CALL)?.messages ?? []).map((m) => m.text));
       afterEach(n);
     }
     return perTurn;
@@ -574,7 +576,7 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
     const visible = createVisibleHistoryReader()(log);
     expect(visible[0]?.text).toBe('摘要');
     // 沒套摘要的那一串在這一步是第 5 次，套了摘要的那一串只看得到切點之後的 1 次。
-    expect(hook({ messages: [] }, { configurable: {} })?.messages).toHaveLength(1);
+    expect(hook({ messages: [] }, ROOT_CALL)?.messages).toHaveLength(1);
     expect(hookOf()({ messages: visible })).toBeUndefined();
   });
 
@@ -593,7 +595,7 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
     const log = startLog();
     const hook = loggedHook(log);
     runOnLog(log, hook, 1, 3);
-    expect(hook({ messages: [] }, { configurable: {} })).toBeUndefined();
+    expect(hook({ messages: [] }, ROOT_CALL)).toBeUndefined();
   });
 
   it('中間有真使用者訊息：鏈清零，跟 state 讀法一樣', () => {
@@ -610,7 +612,61 @@ describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
   it('子代理讀 state（#2751）：日誌是空的也照 state.messages 出提醒', () => {
     const log = new SessionLog('sub');
     const hook = loggedHook(log, 'subagent');
-    expect(hook({ messages: repeated3() }, { configurable: {} })?.messages).toHaveLength(1);
+    expect(hook({ messages: repeated3() }, SUBAGENT_CALL)?.messages).toHaveLength(1);
+  });
+
+  describe('查日誌的時機', () => {
+    const counted = (log: SessionLog, address: 'root' | 'subagent' = 'root') => {
+      const forCall = vi.fn((): SessionLookup => ({
+        kind: 'ok',
+        address: address === 'root' ? { kind: 'root' } : ({ kind: 'subagent' } as never),
+        log,
+      }));
+      return { sessions: { forCall }, forCall };
+    };
+    const hookOn = (sessions: { forCall(config: unknown): SessionLookup }): Hook =>
+      (
+        createRepeatReminder(resolveRepeatReminderSettings(), sessions) as unknown as {
+          beforeModel: Hook;
+        }
+      ).beforeModel;
+    /** 第 1 次呼叫之後：沒有提醒要出。 */
+    const quiet = (): BaseMessage[] => [
+      new HumanMessage('開始'),
+      ...turn('grep', { pattern: 'x' }, 'c0'),
+    ];
+    const configurable = ROOT_CALL;
+
+    it('state、沒提醒也沒通知：不查（只有要記提醒時才碰註冊表）', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'));
+      expect(hookOn(sessions)({ messages: quiet() }, configurable)).toBeUndefined();
+      expect(forCall).not.toHaveBeenCalled();
+    });
+
+    it('state、有提醒：只在記提醒時查一次', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'));
+      expect(hookOn(sessions)({ messages: repeated3() }, configurable)?.messages).toHaveLength(1);
+      expect(forCall).toHaveBeenCalledTimes(1);
+    });
+
+    it('log 的子代理、沒提醒：不查（不提前 open 子日誌）', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'), 'subagent');
+      markHistoryFromLog(sessions);
+      const subagent = SUBAGENT_CALL;
+      expect(hookOn(sessions)({ messages: quiet() }, subagent)).toBeUndefined();
+      expect(forCall).not.toHaveBeenCalled();
+    });
+
+    it('log 的 root、沒有通知來源：查一次，讀與記共用', () => {
+      const log = startLog();
+      const { sessions, forCall } = counted(log);
+      markHistoryFromLog(sessions);
+      logGrep(log, 'c0');
+      logGrep(log, 'c1');
+      logGrep(log, 'c2');
+      expect(hookOn(sessions)({ messages: [] }, configurable)?.messages).toHaveLength(1);
+      expect(forCall).toHaveBeenCalledTimes(1);
+    });
   });
 
   const repeated3 = (): BaseMessage[] => [
