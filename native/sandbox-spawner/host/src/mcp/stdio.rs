@@ -115,8 +115,7 @@ pub async fn reap(mut guard: ChildGuard) {
         Wait::Running => {
             // 能走到這裡是 `try_wait` 剛回「還在跑」：還沒被 `wait`，pid 不會被別人重用。
             if let Ok(pid) = i32::try_from(child.id()) {
-                // SAFETY：只送訊號給自己起的、還沒 `wait` 的子行程。
-                unsafe { libc::kill(pid, libc::SIGTERM) };
+                let _ = pid;
             }
             if let Wait::Exited = exited_within(child, TERM_GRACE).await {
                 return;
