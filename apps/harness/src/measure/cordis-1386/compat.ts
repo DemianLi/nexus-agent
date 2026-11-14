@@ -67,7 +67,9 @@ export const compatLayer = {
     const plugins = mutated(loaded.plugins, config?.mutate);
     ctx.provide('nexus.assembly', {
       plugins,
-      create: (options) => createNexusAgent({ ...options, plugins: [...plugins] }),
+      // 量測不接會話日誌，而出貨清單上 `history-source` 那一列寫 `log`、會贏過裸組裝的預設（#2362）：明寫 `state`，呼叫端要別的再自己給。
+      create: (options) =>
+        createNexusAgent({ historySource: 'state', ...options, plugins: [...plugins] }),
     } satisfies NexusAssembly);
   },
 };

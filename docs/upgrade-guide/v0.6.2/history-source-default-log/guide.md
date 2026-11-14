@@ -7,7 +7,7 @@ description: 模型歷史的來源預設從 `state` 改成 `log`：關掉 `histo
 
 ## 變更
 
-影響 CLI 與 `serve`（背景冷啟、樹上入口走同一條組裝）。裸呼叫 `createNexusAgent`、不掛會話日誌的嵌入方不受影響：沒有入口給的預設時仍是 `state`。
+影響 CLI 與 `serve`（背景冷啟、樹上入口走同一條組裝）。直接呼叫 `createNexusAgent`（不經入口）的嵌入方：沒給 `defaultHistorySource`、插件清單裡也沒有 `history-source` 那一列時仍是 `state`；**清單裡掛了那一列（例如整份出廠清單），那一列贏過預設**，出廠寫 `log` 就是 `log`，沒有接著的會話日誌時第一次模型呼叫會拋。要留 `state`：明給 `historySource: 'state'`，或把那一列寫成 `source: state`。
 
 - **出廠值。**
   - 舊行為：`cordis.yml` 的 `history-source` 那一列寫 `source: state`，模型看到的是 LangGraph state 裡的歷史。
