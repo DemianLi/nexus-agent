@@ -222,7 +222,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **TS 收的 query 值（#2669）的後果**，接 PR-2b 的人要知道：
   - 8 個 code point 以上的 query 字面值（`?workspace=production-eu`）進了「到處遮」那一組。`Redactor.redactText`（成功結果）今天沒有呼叫端，所以成功結果不受影響；PR-2b 接上之後這類值會在成功結果裡被遮。與宿主的過渡做法一致，但和 TS 對 header 字面值、stdio 只收憑證的原則不同；
   - 錯誤與診斷裡會過度遮蔽：query 值若也出現在 host 或別處（`?env=production` 對 `production.example.com`），那段文字也被換成 `[redacted]`；
-  - 8 個 code point 的門檻不是完整保證：`?state=connected` 的值夠長、會收，於是 `Not connected` 被遮，斷線判定（`isConnectionLost`）失效；`?x=TimeoutError` 同理。
+  - 8 個 code point 的門檻不是完整保證：`?state=connected` 的值夠長、會收，於是 `Not connected` 被遮，斷線判定（`isConnectionLost`）失效；`?x=TimeoutError` 讓以 `name` 判斷的 `TimeoutError` 認不出（SDK 的 `REQUEST_TIMEOUT` code 不受影響）。
 - **沒收的形式**：截斷（只回顯值的前半）、部分編碼（`encodeURI`、Python `quote` 的預設只編一部分字元）、值本身被轉大小寫（宿主與 TS 都漏）；base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
   一個值被拆在兩個字串裡（例如分兩個 content 區塊）；JSON 的數字（`{"pin": 12345678}` 不遮，值檢查不限數字）。值被 server 轉成這些形式再回顯就遮不到。
 
