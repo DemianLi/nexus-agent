@@ -834,7 +834,7 @@ impl Supervisor {
     /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
     fn check_resumed(&mut self, now: Instant, late: Duration) {
         let Some(stall) = self.args.stall else { return };
-        if late < stall * 0 {
+        if late < stall.min(Duration::ZERO) {
             return;
         }
         say!(
