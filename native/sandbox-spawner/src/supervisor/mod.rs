@@ -541,9 +541,7 @@ impl Pace {
     /// 取到 `now`；從上一次到這一次准許花 `allowed`（`None` 是 poll 沒有期限，等多久都不算晚）。回比准許的晚了多久；第一次回 0。
     fn lap(&mut self, now: Instant, allowed: Option<Duration>) -> Duration {
         let late = match (self.last, allowed) {
-            (Some(last), Some(allowed)) => {
-                now.saturating_duration_since(last).saturating_sub(allowed)
-            }
+            (Some(last), Some(_)) => now.saturating_duration_since(last),
             _ => Duration::ZERO,
         };
         self.last = Some(now);
