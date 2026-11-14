@@ -26,6 +26,7 @@
     "eval:host-tools": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/host-tools/host-tools-cli.ts",
     "eval:compare": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/compare-cli.ts",
     "eval:sessions": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/sessions-cli.ts",
+    "eval:summary-fidelity": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/summary-fidelity/summary-fidelity-cli.ts",
     "eval:survey": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/survey-cli.ts",
     "gen-known-event-types": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-known-event-types.ts",
     "gen-persistence-schema": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-persistence-schema.ts",
