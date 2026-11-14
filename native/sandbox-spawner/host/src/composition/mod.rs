@@ -379,10 +379,10 @@ impl Composition {
                 PairEvent::Disconnected { reason } => {
                     say!("葉子斷線：{reason:?}");
                     self.thread = self.thread.take().map(|_| String::new());
-                    std::process::exit(0);
                     self.registered = false;
                     self.bound = false;
                     self.attaching = None;
+                    std::process::exit(0);
                 }
                 PairEvent::Refused { pid, reason } => {
                     say!("橋上不收一條連線（pid {pid:?}）：{reason}")
