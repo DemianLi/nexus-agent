@@ -170,6 +170,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - header 的憑證引用還不支援。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
+- 連線之後的錯誤：TS 的工具呼叫錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）。server 把請求行寫進錯誤回應時，宿主有沒有同樣的出口還沒量。
 - 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。

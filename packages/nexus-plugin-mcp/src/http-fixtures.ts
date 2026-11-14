@@ -52,8 +52,11 @@ export interface HttpFixture {
    * ——舊協議的 `GET` 串流、新協議的 `subscriptions/listen`——只有 client 真的掛斷才會結束，所以「收線」量它。
    */
   activeRequests(): number;
-  /** 之後遇到這個 JSON-RPC 方法的請求一律回 500；`undefined` 取消。 */
-  failRpcMethod(method: string | undefined): void;
+  /**
+   * 之後遇到這個 JSON-RPC 方法的請求一律回 500；`undefined` 取消。`echoRequestLine` 為真，回應內文寫成 `Cannot POST <路徑與 query>`，
+   * 像把請求行寫進錯誤頁的 server（網址裡的 query token 會跟著出來）；預設是固定的 `injected failure`。
+   */
+  failRpcMethod(method: string | undefined, echoRequestLine?: boolean): void;
   close(): Promise<void>;
 }
 
@@ -155,6 +158,7 @@ export async function startHttpFixture(
   const sockets = new Set<Socket>();
   let active = 0;
   let failing: string | undefined;
+  let echoing = false;
 
   const server: Server = createServer((request, response) => {
     void serve(request, response).catch((error: unknown) => {
@@ -196,7 +200,9 @@ export async function startHttpFixture(
     hooks.onRequest?.(current);
     if (failing !== undefined && rpcMethods.includes(failing)) {
       response.writeHead(500, { 'content-type': 'text/plain' });
-      response.end('injected failure');
+      response.end(
+        echoing ? `Cannot ${request.method ?? ''} ${request.url ?? ''}` : 'injected failure',
+      );
       return;
     }
     await dispatch(request, response, body);
@@ -209,8 +215,9 @@ export async function startHttpFixture(
     requests,
     openConnections: () => sockets.size,
     activeRequests: () => active,
-    failRpcMethod: (method) => {
+    failRpcMethod: (method, echoRequestLine = false) => {
       failing = method;
+      echoing = echoRequestLine;
     },
     close: async () => {
       await closeHandler();
