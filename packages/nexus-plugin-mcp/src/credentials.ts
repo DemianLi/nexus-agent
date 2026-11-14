@@ -126,18 +126,48 @@ export function substituted(
   );
 }
 
+/** 網址的 query 值至少幾個 code point 才收（理由見 {@link queryValuesOf}）。 */
+const MIN_QUERY_VALUE_CODE_POINTS = 8;
+
+/**
+ * 網址 query 要遮的值：整串、每個參數值的原樣（沒解碼）與解碼後（`URLSearchParams`，`+` 當空白），跟宿主 `secrets()`（`config.rs`）收的一樣，
+ * 讓 server 只回顯值、換了參數順序、解碼或再編碼之後回顯都遮得掉。網址解析不了就沒有。
+ *
+ * **與宿主不同的一處：不到 {@link MIN_QUERY_VALUE_CODE_POINTS} 個 code point 的不收。** 宿主只在錯誤裡遮短值；這裡斷線判斷
+ * （`isConnectionLost`）讀的是遮過的訊息，`v=2` 的 `2` 會把 `MCP error -32000` 切斷。代價：短的 query 值（多半是 `v=2`、`limit=10` 這類設定）
+ * 回顯時不遮，整串的 `?…` 仍由 `withUrlScrubbing` 的整段比對遮。
+ */
+function queryValuesOf(url: string): string[] {
+  let query: string;
+  try {
+    query = new URL(url).search.slice(1);
+  } catch {
+    return [];
+  }
+  if (query === '') return [];
+  const raw = query.split('&').map((pair) => {
+    const at = pair.indexOf('=');
+    return at < 0 ? pair : pair.slice(at + 1);
+  });
+  const decoded = [...new URLSearchParams(query).values()];
+  return [query, ...raw, ...decoded].filter(
+    (value) => [...value].length >= MIN_QUERY_VALUE_CODE_POINTS,
+  );
+}
+
 /**
  * 這一份連線手上要遮的值（#2669）：每一把解析出來的憑證；header 代入後的整個值（`prefix` 接憑證，連 prefix 一起遮成一段，與 Rust 宿主收整個
  * header 值一致）；`Authorization`、`Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token），切法同宿主：第一個空白之後、修掉頭尾空白。
  *
- * 只收**憑證引用**解出來的東西：設定裡直接寫的字串值不是憑證，不進來（宿主那邊分不出來才一律收，見 `docs/credentials-file.md`）。
+ * header 與 env 只收**憑證引用**解出來的東西：設定裡直接寫的字串值不是憑證，不進來（宿主那邊分不出來才一律收，見 `docs/credentials-file.md`）。
+ * HTTP 網址的 query 值一律收（{@link queryValuesOf}）：token 就寫在網址裡，沒有引用。
  * 一份連線的值在建立時就定了（值換了，池鍵的指紋換、開的是另一份連線，各帶自己的遮蔽器），所以同一份連線的重連沿用同一組值。
  */
 export function redactorFor(config: McpConfig, credentials: ResolvedCredentials): Redactor {
-  if (credentials.size === 0) return createRedactor([]);
   const values = new Set<string>(credentials.values());
   const { connection } = config;
   if (connection.transport !== 'stdio') {
+    for (const value of queryValuesOf(connection.url)) values.add(value);
     for (const [name, value] of Object.entries(connection.headers ?? {})) {
       if (typeof value === 'string') continue;
       const resolved = credentials.get(value.credential);

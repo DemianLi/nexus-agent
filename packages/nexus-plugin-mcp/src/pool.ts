@@ -40,6 +40,7 @@ import { credentialFingerprint } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, Listed } from './connection.js';
 import type { McpConfig } from './index.js';
+import type { Redactor } from './redact.js';
 import { Supervisor } from './supervisor.js';
 
 /** 宿主交連線池的服務名。 */
@@ -52,6 +53,8 @@ export const FIRST_CONNECT_WAIT_MS = 5_000;
 export interface SharedConnection {
   /** 診斷訊息的前綴，例如 `mcp-client(github)`。 */
   readonly label: string;
+  /** 這份連線的遮蔽器（憑證值與網址）；連線之後組裝端拋的錯誤用它遮。 */
+  readonly redactor: Redactor;
   readonly supervisor: Supervisor<Generation>;
   /** 目前這一代的工具清單；斷線空窗裡是最近一代的；一代都還沒連上是 `undefined`。 */
   listed(): Listed | undefined;
@@ -211,6 +214,7 @@ export class McpConnectionPool {
     );
     const shared: SharedConnection = {
       label,
+      redactor: attempts.redactor,
       supervisor,
       listed: () => supervisor.current()?.listed ?? last,
     };
