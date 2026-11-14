@@ -1127,6 +1127,7 @@ export {
   createVisibleHistoryReader,
   eventsForModelCall,
   HISTORY_FROM_LOG_MIDDLEWARE_NAME,
+  HISTORY_LOG_NO_FALLBACK,
   isHistoryFromLog,
   markHistoryFromLog,
   sentHistoryFromLog,

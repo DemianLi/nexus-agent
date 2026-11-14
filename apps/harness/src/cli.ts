@@ -157,7 +157,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
   --history-source <state|shadow|log>
-                       模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 state）
+                       模型歷史從哪裡來（預設照清單上 history-source 那一列，出廠 log；那一列關掉也是 log）
                        shadow：送的仍是 state，另外拿日誌推出來的比一次，不是 match 的印在標準錯誤
                        log：送日誌推出來的；推不出來這一輪就失敗
   --agent-loop <langgraph|native>
@@ -1390,7 +1390,7 @@ async function runLaunched(
           : // **照實講回來的是什麼**（#251 的最後一段）：對話回不回得來看推的結果（#306），
             // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
             `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
-            `${formatConversationRestore(restored)}；` +
+            `${formatConversationRestore(restored, built.historySource)}；` +
             `${invocation.workspace === undefined ? '虛擬檔案系統與' : ''}會話歷史檔沒有回來）`,
     );
     // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`

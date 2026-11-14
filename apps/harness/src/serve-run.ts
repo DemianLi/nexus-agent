@@ -1978,8 +1978,8 @@ async function startServer(
           const replay = await restoreConversation(built.agent, threadId, history.events);
           log(
             fork !== undefined
-              ? `[會話日誌] thread "${threadId}" 從 "${fork.sourceHeader.id}" 分叉出來：${formatConversationRestore(replay)}`
-              : `[會話日誌] thread "${threadId}" 接回來了：${formatConversationRestore(replay)}`,
+              ? `[會話日誌] thread "${threadId}" 從 "${fork.sourceHeader.id}" 分叉出來：${formatConversationRestore(replay, built.historySource)}`
+              : `[會話日誌] thread "${threadId}" 接回來了：${formatConversationRestore(replay, built.historySource)}`,
           );
         } catch (error) {
           await built.dispose().catch(() => {});

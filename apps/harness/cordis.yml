@@ -911,12 +911,13 @@
 # 拿從日誌推出來的歷史比一次。不是 `match` 的那幾次：serve 走伺服器日誌的 `history-shadow` logger（debug 等級，要看就把
 # `cordis.serve.yml` 裡 `logger-console` 的 `levels.history-shadow` 調成 `debug`），CLI 以 `[歷史比對]` 前綴印在標準錯誤；都不寫進會話日誌。
 # 值的家在 schema（`src/settings/history-source.ts`），這裡照抄同一個值讓人看得到。組裝期讀、新對話生效；CLI 的 `--history-source` 贏過這一列。
-# `log` 在同一格拿從日誌推出來的歷史換掉要送的那一串；找不到日誌、推不出來，這次呼叫就失敗，不退回 state。
-# **這一列關得掉**：關掉落回 `state`，跟寫 `state` 同一個結果。
+# `log`（出廠）在同一格拿從日誌推出來的歷史換掉要送的那一串；找不到日誌、推不出來，這次呼叫就失敗，不退回 state。只講 root，子代理仍走 state。
+# 老日誌（推不回模型歷史的）續接會在第一次模型呼叫失敗：要在那條對話上繼續，這一列寫 `source: state`，或 CLI 帶 `--history-source state`；或另開一條對話。
+# **這一列關得掉，但關掉不等於 `state`**：入口給的預設是 `log`，關掉或整列掉下來都是 `log`。要 `state` 就在這裡明寫 `source: state`。
 - id: history-source
   name: '#settings/history-source'
   config:
-    source: state
+    source: log
 
 # ── 檔案政策（#669）──────────────────────────────────────────────────────────
 #
