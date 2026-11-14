@@ -20,6 +20,7 @@ vi.unmock('./agent-factory.js');
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { runCli } from './cli.js';
+import { createCordisRoot } from './cordis-root.js';
 import { foldTurn, serveClient, shippedPlugins, shippedPluginsWithConfig } from './fixtures.js';
 import { repositoryRoot } from './package-invariants.js';
 import { loadPluginConfig } from './plugin-config.js';
@@ -86,11 +87,31 @@ describe('預設', () => {
     }
   });
 
-  it('自己 copy 的清單寫 source: state：仍是 state（不會被預設蓋成 log）', async () => {
-    const copied = await shippedPluginsWithConfig('history-source', { source: 'state' });
-    const built = await createCliAgent({ live: false }, copied, scratch);
+  it('自己 copy 的 cordis.yml 寫 source: state（真的從檔載入）：仍是 state，不會被預設蓋成 log', async () => {
+    const shipped = await readFile(join(repositoryRoot(), 'apps/harness/cordis.yml'), 'utf8');
+    const copy = shipped.replace(/(- id: history-source\n(?: {2}.*\n)*? {4}source: )log/u, '$1state');
+    expect(copy).not.toBe(shipped);
+    const file = join(scratch, 'cordis.copy.yml');
+    await writeFile(file, copy);
+    const loaded = await loadPluginConfig({ shipped: file });
+    const built = await createCliAgent({ live: false }, loaded.plugins, scratch);
     await built.dispose();
     expect(built.historySource).toBe('state');
+  });
+
+  it('經 cordis 根（樹上入口與兩個產品入口走的那條）、不帶旗標：log', async () => {
+    const root = createCordisRoot();
+    try {
+      const assembly = await root.boot('cli', {
+        plugins: (await loadPluginConfig({})).plugins,
+        cwd: scratch,
+      });
+      const built = await assembly.create({ live: false });
+      await built.dispose();
+      expect(built.historySource).toBe('log');
+    } finally {
+      await root.dispose();
+    }
   });
 
   it('那一列沒寫 source（空的 config）：log', async () => {
@@ -156,6 +177,23 @@ const REPLAYABLE_CLI = [
   'v56',
 ] as const;
 
+/** 續接一份夾具，不帶 `--history-source`（產品預設）。 */
+async function resumeFixtureDefault(name: string): Promise<string> {
+  const dir = join(scratch, `${name}-default`);
+  await cp(join(FIXTURES, name), dir, { recursive: true });
+  const lines: string[] = [];
+  const input = new PassThrough();
+  input.end('還在嗎\n/exit\n');
+  await runCli({
+    argv: ['--resume', dir],
+    cwd: FIXTURE_CWD,
+    input,
+    output: new PassThrough(),
+    printer: { log: (line) => void lines.push(line), error: (line) => void lines.push(line) },
+  });
+  return lines.join('\n');
+}
+
 /** 以 `--history-source log` 續接一份夾具，回標準錯誤與標準輸出合起來的文字。 */
 async function resumeFixture(name: string, source: 'log' | 'state'): Promise<string> {
   const dir = join(scratch, name);
@@ -189,6 +227,12 @@ describe('老日誌續接：log 下「預告」與「第一次模型呼叫真的
       expect(out).not.toContain('對話從空的開始');
     },
   );
+
+  it('CLI 不帶 --history-source：預設就是 log（老日誌印預告、也真的拋）', async () => {
+    const out = await resumeFixtureDefault('v2');
+    expect(out).toContain(FORECAST);
+    expect(out).toContain(THROWN);
+  });
 
   it.each(REPLAYABLE_CLI)('%s：推得回來，沒有預告，也沒有拋', async (name) => {
     const out = await resumeFixture(name, 'log');
@@ -261,7 +305,11 @@ describe('serve：老日誌 thread 在 log 下，客戶端實際收到什麼', (
 
     const lines: string[] = [];
     const second = await start(root, lines);
-    expect((await say(second, 'alpha', '還在嗎')).status).not.toBe('failed');
+    const resumed = await say(second, 'alpha', '還在嗎');
+    expect(resumed.status).toBe('idle');
+    expect(
+      resumed.entries.some((entry) => entry.kind === 'ai' && !entry.streaming),
+    ).toBe(true);
     expect(lines.join('\n')).toContain('[會話日誌] thread "alpha" 接回來了：對話照日誌推回模型');
   });
 
