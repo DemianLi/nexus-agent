@@ -438,19 +438,10 @@ impl<C: Connector> Pool<C> {
 
 /// 同時收每一份，回沒在 `limit` 內收完的那幾份的標籤。
 async fn futures_join_all<G: Generation>(all: Vec<Arc<Shared<G>>>, limit: Duration) -> Vec<String> {
-    let handles: Vec<(String, JoinHandle<bool>)> = all
-        .into_iter()
-        .map(|shared| {
-            (
-                shared.label.clone(),
-                tokio::spawn(async move { shared.dispose_within(limit).await }),
-            )
-        })
-        .collect();
     let mut unfinished = Vec::new();
-    for (label, handle) in handles {
-        if !handle.await.unwrap_or(false) {
-            unfinished.push(label);
+    for shared in all {
+        if !shared.dispose_within(limit).await {
+            unfinished.push(shared.label.clone());
         }
     }
     unfinished
