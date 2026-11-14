@@ -259,7 +259,7 @@ struct Composition {
     bind: Bind,
     /// 葉子死了、這一個留著等下一個 `ensure`：從什麼時候起。
     leafless_since: Option<Instant>,
-    /// 這條 thread 的 `down` 已經由葉子那一側送過，這一對也進過死因累計。
+    /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。
     told: bool,
     /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
     peer: bool,
@@ -1719,6 +1719,17 @@ impl Supervisor {
                 .any(|p| p.thread.as_deref() == Some(thread))
     }
 
+    /// 這條 thread 還有一個結束時會回 `down` 的行程：被連帶收的（`peer`）與葉子那一側回過的組合行程（`told`）不會再回。
+    fn will_tell_down(&self, thread: &[u8]) -> bool {
+        self.conversations
+            .iter()
+            .any(|c| c.thread.as_deref() == Some(thread) && !c.peer)
+            || self
+                .compositions
+                .iter()
+                .any(|p| p.thread.as_deref() == Some(thread) && !p.peer && !p.told)
+    }
+
     fn warm_count(&self) -> usize {
         if self.args.composition.is_none() {
             return self.conversations.iter().filter(|c| c.warm()).count();
@@ -1869,7 +1880,7 @@ impl Supervisor {
     }
 
     /// 成對時 `bind` 送給組合行程，由它經橋轉給葉子。葉子的沉默每次從這裡重新起算；組合行程的只從第一次 `bind` 起算。
-    /// 補起的葉子（[`Self::refill`]）起完就送，所以它從起動到送出第一框都算在 `--stall-ms` 裡。
+    /// 補起的葉子（[`Self::refill`]）起完就送，所以它在起動、橋上登記與 `attach` 之間任何一段沉默超過 `--stall-ms` 都會被判 `stalled`。
     fn bind_pair(&mut self, index: usize) {
         let composition = &mut self.compositions[index];
         let Some(thread) = composition.thread.clone() else {
@@ -2061,11 +2072,11 @@ impl Supervisor {
     /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個
     /// `ensure` 補葉子。其餘的連帶收掉組合行程：`bind` 還沒回 `bound` 時，從外面分不出組合行程是把它留著等葉子登記（再送一次它會以協定錯誤結束）、
     /// 還是已經轉給葉子而作廢（不再送就永遠不會 `bound`），所以整對收掉，下一個 `ensure` 起新的一對。
-    fn on_leaf_gone(&mut self, serial: u64, cause: DeathCause, told: bool) {
+    fn on_leaf_gone(&mut self, serial: u64, cause: DeathCause) {
         let Some(composition) = self.compositions.iter_mut().find(|p| p.serial == serial) else {
             return;
         };
-        composition.told |= told;
+        composition.told = true;
         let keep = composition.bind == Bind::Bound
             && composition.proc.stop.is_none()
             && !self.shutting_down
@@ -2081,7 +2092,7 @@ impl Supervisor {
         let now = Instant::now();
         if keep {
             composition.leafless_since = Some(now);
-            // 有排著的就先讓出這個名額。
+            // 有排著的就讓出名額：沒有葉子的組合行程，最早留下的先收。
             self.make_room();
         } else {
             composition.collect(now, self.args.eof_grace);
@@ -2265,9 +2276,9 @@ impl Supervisor {
         }
         self.shutting_down = true;
         self.host_restart_at = None;
-        // 還有行程的那幾條，等那個行程結束時回 `down`。
+        // 還有行程會回 `down` 的那幾條，等那個行程結束。
         for (thread, _) in std::mem::take(&mut self.pending) {
-            if self.has_process(&thread) {
+            if self.will_tell_down(&thread) {
                 continue;
             }
             self.tell_front(&FrontEvent::Down {
@@ -2785,7 +2796,6 @@ impl Supervisor {
             return;
         }
         self.count_death(cause);
-        let told = conversation.thread.is_some();
         match conversation.thread {
             Some(thread) => self.tell_front(&FrontEvent::Down {
                 thread_id: thread,
@@ -2797,7 +2807,7 @@ impl Supervisor {
             None => {}
         }
         if let Some(serial) = conversation.pair {
-            self.on_leaf_gone(serial, cause, told);
+            self.on_leaf_gone(serial, cause);
         }
         self.serve_pending();
     }
@@ -2846,7 +2856,7 @@ impl Supervisor {
         if counted {
             self.count_death(cause);
             match composition.thread {
-                Some(thread) if !composition.told => self.tell_front(&FrontEvent::Down {
+                Some(thread) => self.tell_front(&FrontEvent::Down {
                     thread_id: thread,
                     cause,
                 }),
@@ -3189,6 +3199,53 @@ mod tests {
         );
         assert_eq!(supervisor.deaths[DeathCause::Crash as usize - 1], 1);
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 預熱池裡的一對兩個行程都已經在收（停機中再收到訊號）、葉子先收屍：組合行程沒被標成連帶收，這一對照樣只進一次死因累計。
+    #[test]
+    fn a_warm_pair_killed_together_is_counted_once() {
+        let (mut supervisor, audit, _) = with_a_pair("warm-once", Bind::Unsent);
+        supervisor.compositions[0].thread = None;
+        supervisor.conversations[0].thread = None;
+        supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
+        supervisor.conversations[0].cause = Some(DeathCause::Shutdown);
+        supervisor.compositions[0].proc.kill_now();
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(!supervisor.compositions[0].peer);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(audit_lines(&audit).len(), 2);
+        assert_eq!(supervisor.deaths[DeathCause::Shutdown as usize - 1], 1);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 停機時排著的那條 thread：它的行程還會回 `down` 的等那個行程；只剩不會再回的（連帶收的葉子、葉子那一側回過的組合行程）就當場回。
+    #[test]
+    fn a_queued_thread_waits_only_for_a_process_that_will_tell_down() {
+        let (mut supervisor, _, _) = with_a_pair("tell", Bind::Bound);
+        let thread = supervisor.compositions[0].thread.clone().unwrap();
+        supervisor.conversations[0].thread = Some(thread.clone());
+        assert!(supervisor.will_tell_down(&thread));
+        // 組合行程先死：`down` 回過了，葉子被連帶收。
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.has_process(&thread));
+        assert!(!supervisor.will_tell_down(&thread));
+
+        let (mut supervisor, _, _) = with_a_pair("told", Bind::Sent);
+        let thread = supervisor.compositions[0].thread.clone().unwrap();
+        supervisor.conversations[0].thread = Some(thread.clone());
+        // 葉子先死、整對收：`down` 回過了，組合行程還在收。
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.has_process(&thread));
+        assert!(!supervisor.will_tell_down(&thread));
+
+        let (mut supervisor, _, _) = with_a_pair("kept-told", Bind::Bound);
+        let thread = supervisor.compositions[0].thread.clone().unwrap();
+        supervisor.conversations[0].thread = Some(thread.clone());
+        // 葉子先死、組合行程留著：`down` 回過了，組合行程沒被標成連帶收。
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(!supervisor.compositions[0].peer);
+        assert!(!supervisor.will_tell_down(&thread));
     }
 
     /// 上一則 `bind` 回過 `bound`、葉子自己壞掉：組合行程留著；還沒回 `bound` 的整對收。
