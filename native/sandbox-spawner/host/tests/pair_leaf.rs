@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 //! 橋的兩種語言對接（#2583）：真的 [`nexus_host::pair::Pair`] listen，起 node 跑
 //! `packages/nexus-host-bridge/src/pair-leaf-probe.ts`（TS 的葉子連線，印的事件見該檔檔頭），斷言兩邊看到的一致。
+//! 最後一支是量測（#2737），起的是 `src/pair-reject-probe.ts`，有自己的時限。
 //!
 //! 只在 Linux 編：`Pair` 讀 `SO_PEERCRED`（`libc::ucred`），nexus-host 在 Linux 以外編不過。全部標 `#[ignore]`：要 node 與 `pnpm install` 過的相依，CI 在 `./.github/actions/setup` 之後另跑一步帶 `--ignored`
 //! 並核對跑到的測試數（`.github/scripts/test_ci_workflow.py` 釘住那一步）。
@@ -30,16 +31,22 @@ struct Probe {
 impl Probe {
     /// 起葉子連 `rig`，驗過之後叫組合行程的 `method`；`second` 時再連第二條。
     fn start(rig: &Rig, method: &str, second: bool) -> Probe {
+        let mut args = vec![method];
+        if second {
+            args.push("second");
+        }
+        Probe::launch(rig, "src/pair-leaf-probe.ts", &args)
+    }
+
+    /// 在 `packages/nexus-host-bridge` 底下起 node 跑 `script`，參數是 `rig` 的 socket 再接 `args`。
+    fn launch(rig: &Rig, script: &str, args: &[&str]) -> Probe {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/nexus-host-bridge");
         let mut command = Process::new("node");
         command
-            .args(["--import", "tsx", "src/pair-leaf-probe.ts"])
+            .args(["--import", "tsx", script])
             .arg(&rig.socket)
-            .arg(method);
-        if second {
-            command.arg("second");
-        }
+            .args(args);
         let mut child = command
             .current_dir(dir)
             .stdin(Stdio::piped())
@@ -360,4 +367,87 @@ fn 驗過之後組合行程關連線_葉子的呼叫收成對方不在_不重連
         .count();
     assert_eq!(connects, 1);
     assert_eq!(probe.events("connected").len(), 1);
+}
+
+/// 量測，不是回歸測試（#2737）：組合行程收下連線的那一步就拒絕（手上是別人的 pid），客戶端寫了 `hello` 之後還讀不讀得到
+/// `rejected`。每一格一千條、一條接一條，客戶端的寫入時機三種（見 `pair-reject-probe.ts` 檔頭），組合行程走 `step` 的
+/// 步調兩種：每 5 毫秒一次、不停地走。每一格印一行 `PAIR-REJECT-RACE`。
+/// 拿到結果的格斷言四類加起來等於 `total`，沒有 `aborted` 時 `total` 是一千；拿不到結果的格只印、不斷言。
+#[test]
+#[ignore = "要 node 與裝好的相依；CI 另跑一步帶 --ignored"]
+fn 量_收下就拒絕時客戶端讀不讀得到_rejected() {
+    const COUNT: u64 = 1000;
+    const CELL_LIMIT: Duration = Duration::from_secs(300);
+
+    for pace in ["sleep-5ms", "spin"] {
+        for timing in ["immediate", "read-first", "late"] {
+            let mut rig = Rig::new(&format!("race-{pace}-{timing}"));
+            rig.pair.set_leaf(std::process::id());
+            let count = COUNT.to_string();
+            let mut probe = Probe::launch(&rig, "src/pair-reject-probe.ts", &[timing, &count]);
+
+            let deadline = Instant::now() + CELL_LIMIT;
+            let mut refused = 0usize;
+            let mut exited = None;
+            let cell = loop {
+                rig.step();
+                refused += rig.refusals().len();
+                rig.seen.clear();
+                if let Some(cell) = probe.events("cell").into_iter().next() {
+                    break Some(cell);
+                }
+                if let Some(at) = exited {
+                    // 結束了還等一下：讀 stdout 的那條執行緒可能還沒把最後一行放進來。
+                    if Instant::now() > at + Duration::from_secs(2) {
+                        break None;
+                    }
+                } else if probe.child.try_wait().expect("問 node 結束了沒").is_some() {
+                    exited = Some(Instant::now());
+                }
+                if Instant::now() > deadline {
+                    break None;
+                }
+                if pace == "spin" {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            };
+
+            let env = probe.events("env").into_iter().next();
+            let Some(cell) = cell else {
+                println!(
+                    "PAIR-REJECT-RACE {}",
+                    json!({
+                        "pace": pace,
+                        "timing": timing,
+                        "env": env,
+                        "hostRefused": refused,
+                        "aborted": if exited.is_some() { "node 沒印結果就結束" } else { "超過一格的時限" },
+                    })
+                );
+                continue;
+            };
+            println!(
+                "PAIR-REJECT-RACE {}",
+                json!({ "pace": pace, "env": env, "hostRefused": refused, "cell": cell })
+            );
+
+            let errors: u64 = cell["error"]
+                .as_object()
+                .expect("error 是物件")
+                .values()
+                .map(|n| n.as_u64().expect("次數"))
+                .sum();
+            let classified = ["rejected", "empty", "timeout"]
+                .iter()
+                .map(|key| cell[*key].as_u64().expect("次數"))
+                .sum::<u64>()
+                + errors;
+            assert_eq!(Some(classified), cell["total"].as_u64(), "{cell}");
+            if cell.get("aborted").is_none() {
+                assert_eq!(cell["total"], COUNT, "{cell}");
+            }
+        }
+    }
 }
