@@ -15,7 +15,6 @@ import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.unmock('./assembly-root.js');
-vi.unmock('./agent-factory.js');
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';

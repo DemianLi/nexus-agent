@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.unmock('./assembly-root.js');
-vi.unmock('./agent-factory.js');
 
 import { createCordisRoot } from './cordis-root.js';
 import { loadPluginConfig } from './plugin-config.js';

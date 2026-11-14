@@ -10,7 +10,7 @@
  * - 裸 `createNexusAgent`（呼叫端沒給 `defaultHistorySource`，也就是不是 `createCliAgent` 轉來的）：同樣補 `state`。這一份補的是**明著傳**
  *   的那一層，所以掛了出廠清單（那一列是 `log`）的裸組裝也不會拋；要量那一列的效果，明給 `historySource: 'log'`，或不要掛這個 mock。
  *
- * **從清單那一列（含 `--patch`）或入口預設拿 `log` 的測試檔，必須自己 `vi.unmock('./assembly-root.js')` 與 `vi.unmock('./agent-factory.js')`**；明給 `historySource`（或 `--history-source`）的不受這份 mock 影響
+ * **從清單那一列（含 `--patch`）或入口預設拿 `log` 的測試檔，必須自己 `vi.unmock('./assembly-root.js')`**（只這一個：`agent-factory.js` 的 mock 對 `createCliAgent` 轉來的組裝不補 `state`，而 `native-loop.setup.ts` 靠它帶 `agentLoop: 'native'`，所以不要 unmock）；明給 `historySource`（或 `--history-source`）的不受這份 mock 影響
  * （`log-derived-history.log.test.ts`、`log-derived-history.agents.log.test.ts`、`history-source-log-default.test.ts` 這樣做）；
  * 忘了的話那一份會無聲地改跑 `state` 而且照綠。`history-source-state.guard.*.test.ts` 兩份釘住 mock 的這個改寫與 unmock 的出路，抓不出忘了 unmock 的檔。
  * 撤除條件（`TODO(#2362)`）：測試的組裝都接上會話日誌（或有不需日誌的替身）之後，撤掉這份 mock、`native-loop.setup.ts` 裡 `historySource` 的兩段、`history-source-state.listed.ts`、兩份守門，以及上面四個檔的 `vi.unmock` 行。
