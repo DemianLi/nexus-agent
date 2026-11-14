@@ -259,7 +259,7 @@ struct Composition {
     bind: Bind,
     /// 葉子死了、這一個留著等下一個 `ensure`：從什麼時候起。
     leafless_since: Option<Instant>,
-    /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。
+    /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Self::refill`]）時清掉。
     told: bool,
     /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
     peer: bool,
@@ -1862,7 +1862,7 @@ impl Supervisor {
             return true;
         }
         let composition = &mut self.compositions[index];
-        composition.told = thread.is_some();
+        composition.told = true;
         composition.collect(Instant::now(), self.args.eof_grace);
         false
     }
@@ -3219,9 +3219,9 @@ mod tests {
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
     }
 
-    /// 停機時排著的那條 thread：它的行程還會回 `down` 的等那個行程；只剩不會再回的（連帶收的葉子、葉子那一側回過的組合行程）就當場回。
+    /// [`Supervisor::will_tell_down`]：被連帶收的葉子、葉子那一側算過死因的組合行程不算；停機時排著的 thread 靠它決定要不要等。
     #[test]
-    fn a_queued_thread_waits_only_for_a_process_that_will_tell_down() {
+    fn will_tell_down_skips_peer_and_told() {
         let (mut supervisor, _, _) = with_a_pair("tell", Bind::Bound);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
