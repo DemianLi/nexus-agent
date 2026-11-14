@@ -92,6 +92,8 @@ struct Options {
     host: Option<(PathBuf, Vec<String>)>,
     /// 多給監督行程的環境變數。
     env: Vec<(&'static str, PathBuf)>,
+    /// `--composition`；`None` 是一條對話一個行程。
+    composition: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -109,6 +111,7 @@ impl Default for Options {
             answer_stop_admission: true,
             host: None,
             env: Vec::new(),
+            composition: None,
         }
     }
 }
@@ -160,6 +163,9 @@ impl Harness {
             }
             // 退避縮短，免得要測重起的測試等滿一秒。
             cmd.args(["--host-backoff-ms", "50", "--host-backoff-max-ms", "200"]);
+        }
+        if let Some(composition) = &options.composition {
+            cmd.arg("--composition").arg(composition);
         }
         cmd.args(&options.extra);
         cmd.envs(options.env.iter().map(|(name, value)| (name, value)));
@@ -2949,4 +2955,392 @@ fn after_a_host_restart_conversations_reconnect_with_the_same_token() {
         log(&a)
     );
     assert!(running_host(&h).is_some_and(|pid| pid != old));
+}
+
+/// 稽核裡帶 `pair` 的行（一對裡每個行程結束各一行），照寫入的順序。
+fn pair_audit(h: &Harness) -> Vec<String> {
+    h.audit()
+        .into_iter()
+        .filter(|line| line.contains("\"pair\":"))
+        .collect()
+}
+
+/// 一對（#2583）：真的 `nexus-composition`，葉子是 `fake_conversation --pair-socket`。
+fn paired() -> Options {
+    Options {
+        composition: Some(
+            Path::new(SUPERVISOR)
+                .parent()
+                .unwrap()
+                .join("nexus-composition"),
+        ),
+        ..Options::default()
+    }
+}
+
+/// 從 `up` 給的 socket（組合行程的）推出葉子自己的 socket；假葉子的紀錄在它旁邊。
+fn leaf_socket(up: &Path) -> PathBuf {
+    let name = up.to_str().unwrap().strip_suffix(".sock").unwrap();
+    PathBuf::from(format!("{name}.l.sock"))
+}
+
+/// 假葉子的紀錄裡最後一個 `pid`：補起的葉子接著同一個檔寫。
+fn last_leaf_pid(leaf: &Path) -> u32 {
+    log(leaf)
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("pid "))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// 收前台在這個 socket 上的組合行程。
+fn composition_pid(h: &Harness, up: &Path) -> u32 {
+    let wanted = up.to_str().unwrap().to_string();
+    children(h.pid())
+        .into_iter()
+        .find(|&pid| {
+            let cmdline = proc_file(pid, "cmdline");
+            let mut args = cmdline.split(|b| *b == 0).map(String::from_utf8_lossy);
+            args.next()
+                .is_some_and(|program| program.ends_with("nexus-composition"))
+                && args.any(|arg| arg == wanted)
+        })
+        .expect("找不到組合行程")
+}
+
+/// 經前台連的 socket 連進去，回葉子在那條連線上報的 pid；順便送一段，要原樣回來。
+fn leaf_behind(up: &Path) -> u32 {
+    let mut stream = UnixStream::connect(up).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    stream.write_all(b"ping").unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 256];
+    while !got.ends_with(b"ping") {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0, "連線先關了：{:?}", String::from_utf8_lossy(&got));
+        got.extend_from_slice(&buf[..n]);
+    }
+    let text = String::from_utf8(got).unwrap();
+    let (pid, echoed) = text
+        .strip_prefix("leaf ")
+        .unwrap()
+        .split_once('\n')
+        .unwrap();
+    assert_eq!(echoed, "ping");
+    pid.parse().unwrap()
+}
+
+/// 停機，回這之後前台收到的每一則。
+fn shut_down(h: &mut Harness) -> Vec<FrontEvent> {
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    assert!(h.wait_exit().success());
+    events
+}
+
+/// 起一對：`up` 的 socket 是組合行程的，經它連得到葉子、回得來；`bind` 是經橋到葉子的。
+#[test]
+fn a_pair_is_up_on_the_composition_socket_and_reaches_the_leaf() {
+    let mut h = Harness::start(paired());
+    let socket = h.up("a");
+    assert_eq!(socket, h.dir.join("run/c1.sock"));
+    let leaf = leaf_socket(&socket);
+    assert_eq!(log(&leaf)[1], "bind a");
+    assert_eq!(leaf_behind(&socket), last_leaf_pid(&leaf));
+    // 已經 up 的再要一次：同一對。
+    assert_eq!(h.up("a"), socket);
+    assert!(pair_audit(&h).is_empty());
+}
+
+/// 組合行程的 `hello` 宣告 loop 在自己這裡（拿假對話行程當組合行程）：`protocol`，葉子不起。
+#[test]
+fn a_composition_that_claims_the_loop_is_down_protocol() {
+    let mut h = Harness::start(Options {
+        composition: Some(example("fake_conversation")),
+        ..Options::default()
+    });
+    assert_eq!(h.down("a"), DeathCause::Protocol);
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(
+        line.contains("\"cause\":\"protocol\"") && line.contains("\"pair\":1"),
+        "{line}"
+    );
+    assert_eq!(shut_down(&mut h), []);
+    assert_eq!(pair_audit(&h).len(), 1, "{:?}", pair_audit(&h));
+}
+
+/// 葉子的 `hello` 沒宣告 loop：`protocol`，葉子先收、組合行程連帶收，`down` 只一次。
+#[test]
+fn a_leaf_that_does_not_claim_the_loop_takes_the_pair_down_protocol() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--no-loop".into()],
+        ..paired()
+    });
+    assert_eq!(h.down("a"), DeathCause::Protocol);
+    h.audit_line("\"role\":\"composition\"");
+    assert_eq!(shut_down(&mut h), []);
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert!(
+        audit[0].contains("\"role\":\"conversation\"")
+            && audit[0].contains("\"cause\":\"protocol\"")
+            && audit[0].contains("\"pair\":1"),
+        "{audit:?}"
+    );
+    assert!(
+        audit[1].contains("\"role\":\"composition\"")
+            && audit[1].contains("\"cause\":\"peer\"")
+            && audit[1].contains("\"pair\":1"),
+        "{audit:?}"
+    );
+}
+
+/// 成對時 `ready` 看組合行程的：葉子自己在控制通道送的 `ready` 不觸發 `bind`。葉子送完 `ready`、等測試放行才去橋上登記，
+/// 所以它的 `ready` 寫在組合行程的之前；`up` 之後葉子只收過一次 `bind`（經橋來的那一次）。
+#[test]
+fn a_leaf_ready_on_the_control_channel_does_not_bind() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        ..paired()
+    });
+    h.ensure("a");
+    let leaf = h.dir.join("run/c1.l.sock");
+    assert!(wait_until(|| log(&leaf).contains(&"ready".to_string())));
+    std::fs::write(format!("{}.go", leaf.display()), b"").unwrap();
+    assert_eq!(h.up_of("a"), h.dir.join("run/c1.sock"));
+    let binds = log(&leaf).iter().filter(|line| *line == "bind a").count();
+    assert_eq!(binds, 1, "{:?}", log(&leaf));
+}
+
+/// 葉子不在橋上登記：組合行程不會 `ready`，前台等不到 `up`；停機時回一次 `down(shutdown)`。
+#[test]
+fn a_leaf_that_never_registers_is_never_up() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--no-register".into()],
+        ..paired()
+    });
+    h.ensure("a");
+    logged_pid(&h.dir.join("run/c1.l.sock"), "pid");
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// `bind` 還沒回 `bound` 葉子就死了：整對收（分不出組合行程那邊的 `bind` 還留不留著），`down` 一次。
+#[test]
+fn a_leaf_that_dies_before_bound_takes_the_pair_with_it() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--die-on-attach".into()],
+        ..paired()
+    });
+    assert_eq!(h.down("a"), DeathCause::Crash);
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(line.contains("\"cause\":\"peer\""), "{line}");
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// 殺葉子：前台讀到 `down`，組合行程留著。留著的見證：停機時它那一行的死因是 `shutdown`，不是被葉子連帶收掉的 `peer`。
+#[test]
+fn killing_the_leaf_is_down_and_the_composition_stays() {
+    let mut h = Harness::start(paired());
+    let socket = h.up("a");
+    let composition = composition_pid(&h, &socket);
+    kill(last_leaf_pid(&leaf_socket(&socket)), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert!(!gone(composition as i32));
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert!(
+        audit[0].contains("\"role\":\"conversation\"")
+            && audit[0].contains("\"cause\":\"crash\"")
+            && audit[0].contains("\"pair\":1"),
+        "{audit:?}"
+    );
+    assert_eq!(shut_down(&mut h), []);
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert!(
+        audit[1].contains("\"role\":\"composition\"")
+            && audit[1].contains("\"cause\":\"shutdown\""),
+        "{audit:?}"
+    );
+}
+
+/// 殺葉子再 `ensure`：`down` 然後 `up`，socket 不變（同一個組合行程），連進去到的是新葉子。
+#[test]
+fn ensure_after_the_leaf_died_refills_the_leaf_behind_the_same_socket() {
+    let mut h = Harness::start(paired());
+    let socket = h.up("a");
+    let leaf = leaf_socket(&socket);
+    let composition = composition_pid(&h, &socket);
+    let old = last_leaf_pid(&leaf);
+    kill(old, libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert_eq!(h.up("a"), socket);
+    let new = last_leaf_pid(&leaf);
+    assert_ne!(new, old);
+    assert_eq!(leaf_behind(&socket), new);
+    assert_eq!(composition_pid(&h, &socket), composition);
+}
+
+/// 補起的葉子在舊葉子收屍之後才起：舊葉子留在同一個群組的子孫，新葉子 `up` 時已經不在了。
+#[test]
+fn the_leaf_is_refilled_after_the_old_one_is_reaped() {
+    let mut h = Harness::start(paired());
+    let thread = "a,grandchild";
+    let socket = h.up(thread);
+    let leaf = leaf_socket(&socket);
+    let grandchild = logged_pid(&leaf, "grandchild");
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of(thread), DeathCause::Crash);
+    assert_eq!(h.up(thread), socket);
+    assert!(gone(grandchild));
+}
+
+/// 殺組合行程：整對收，`down` 只一次、死因是組合行程的；稽核兩行同一個 `pair`，葉子那行是 `peer`。
+#[test]
+fn killing_the_composition_takes_the_pair_down_once() {
+    let mut h = Harness::start(paired());
+    let socket = h.up("a");
+    let leaf = last_leaf_pid(&leaf_socket(&socket));
+    kill(composition_pid(&h, &socket), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    h.audit_line("\"role\":\"conversation\"");
+    assert!(gone(leaf as i32));
+    assert_eq!(shut_down(&mut h), []);
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert!(
+        audit[0].contains("\"role\":\"composition\"")
+            && audit[0].contains("\"cause\":\"crash\"")
+            && audit[0].contains("\"signal\":9")
+            && audit[0].contains("\"pair\":1"),
+        "{audit:?}"
+    );
+    assert!(
+        audit[1].contains("\"role\":\"conversation\"")
+            && audit[1].contains("\"cause\":\"peer\"")
+            && audit[1].contains("\"pair\":1"),
+        "{audit:?}"
+    );
+}
+
+/// 兩個行程各看各的沉默：葉子停住只殺葉子（`stalled`），組合行程的心跳沒斷、留著（停機時它那一行是 `shutdown`）。
+/// `--stall-ms` 要比組合行程的心跳間隔（1 秒）長。
+#[test]
+fn a_stalled_leaf_is_killed_alone() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    h.up("a,hang");
+    let line = h.audit_line("\"cause\":\"stalled\"");
+    assert!(line.contains("\"role\":\"conversation\""), "{line}");
+    shut_down(&mut h);
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert!(
+        audit[1].contains("\"role\":\"composition\"")
+            && audit[1].contains("\"cause\":\"shutdown\""),
+        "{audit:?}"
+    );
+}
+
+/// 葉子死後沒人再要：留了 `--idle-ms` 就收掉組合行程，不再送一次 `down`。
+#[test]
+fn a_leafless_composition_is_collected_after_the_idle_limit() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--idle-ms", "300"],
+        ..paired()
+    });
+    let socket = h.up("a");
+    kill(last_leaf_pid(&leaf_socket(&socket)), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(line.contains("\"cause\":\"peer\""), "{line}");
+    assert!(
+        supervisor_stderr(&h).contains("沒有葉子已經 300 ms"),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// 名額滿時先收沒有葉子的那一對，排著的才起得來。
+#[test]
+fn a_leafless_composition_is_the_first_to_make_room() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--capacity", "1"],
+        ..paired()
+    });
+    let socket = h.up("a");
+    kill(last_leaf_pid(&leaf_socket(&socket)), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert_eq!(h.up("b"), h.dir.join("run/c2.sock"));
+    assert!(
+        supervisor_stderr(&h).contains("先收沒有葉子的組合行程"),
+        "{}",
+        supervisor_stderr(&h)
+    );
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(
+        line.contains("\"cause\":\"peer\"") && line.contains("\"pair\":1"),
+        "{line}"
+    );
+}
+
+/// 停機：先葉子後組合行程。葉子不理 EOF、要等到 SIGTERM 才走；組合行程那一行還是排在它後面。
+#[test]
+fn shutdown_collects_the_leaf_before_the_composition() {
+    let mut h = Harness::start(paired());
+    let thread = "a,ignore-eof";
+    h.up(thread);
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: thread.as_bytes().to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    let audit = pair_audit(&h);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert!(
+        audit[0].contains("\"role\":\"conversation\"")
+            && audit[0].contains("\"cause\":\"shutdown\""),
+        "{audit:?}"
+    );
+    assert!(
+        audit[1].contains("\"role\":\"composition\"") && audit[1].contains("\"cause\":\"peer\""),
+        "{audit:?}"
+    );
+}
+
+/// 預熱一對：`ensure` 用池裡那一對（第一個序號），不另起；用掉之後池子補回一對。
+#[test]
+fn ensure_takes_the_warm_pair() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--warm", "1"],
+        ..paired()
+    });
+    assert_eq!(h.up("a"), h.dir.join("run/c1.sock"));
+    logged_pid(&h.dir.join("run/c2.l.sock"), "pid");
+    assert_eq!(h.up("b"), h.dir.join("run/c2.sock"));
+}
+
+/// 不給 `--composition`：稽核那一行沒有 `pair`。
+#[test]
+fn an_unpaired_conversation_has_no_pair_in_the_audit() {
+    let mut h = Harness::start(Options::default());
+    assert_eq!(h.down("x,exit:3"), DeathCause::Crash);
+    let line = h.audit_line("\"thread\":\"x,exit:3\"");
+    assert!(!line.contains("pair"), "{line}");
 }

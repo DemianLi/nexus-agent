@@ -1,6 +1,6 @@
 //! 監督行程（[#1947](https://github.com/DemianLi/nexus-agent/issues/1947)，[#2340](https://github.com/DemianLi/nexus-agent/issues/2340)，
 //! 設計 `.docs/supervisor-1947-design-2026-11-03.md` §三-2、§五、§六）：起一個前台、按前台的要求每條 thread 起一個對話行程，
-//! 管它們的生死，寫稽核紀錄。資料不經這裡：前台直接連對話行程的 socket。訊息格式在 [`crate::supervisor_protocol`]。
+//! 管它們的生死，寫稽核紀錄。資料不經這裡：前台直接連對話行程的 socket（成對時是組合行程的）。訊息格式在 [`crate::supervisor_protocol`]。
 //!
 //! **嚴格單執行緒**：子行程的 `PR_SET_PDEATHSIG` 看的是起它的那條執行緒，那條執行緒結束子行程就會被殺。不要在這裡起 thread。
 //!
@@ -67,6 +67,15 @@
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
 //! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
 //! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
+//!
+//! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
+//! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
+//! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
+//! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
+//! （留到 `--idle-ms`，名額滿時最先收）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
+//! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
+//! （那條 thread 的 `down` 在葉子死時回過）。兩個行程的沉默各算各的；RSS 上限與壓 CPU 只管葉子。
+//! 停機與拆除都是先葉子後組合行程；停機中再收到訊號時不分先後，全部當場 SIGKILL。
 
 /// 監督行程自己的一行訊息，走跟轉送對話行程 stderr 同一條路（[`process::write_stderr`]）：寫不出去就丟掉、記數，不 panic。
 macro_rules! say {
@@ -100,6 +109,8 @@ const LOG: &str = "[nexus-supervisor]";
 
 /// 對話行程 socket 的檔名最長的樣子（序號是 u64）。`--run-dir` 加上它要放得進 `sun_path`。
 const LONGEST_SOCKET_NAME: &str = "/c18446744073709551615.sock";
+/// 成對時最長的是橋與葉子的那兩個（`.p.sock`、`.l.sock`）。
+const LONGEST_PAIR_SOCKET_NAME: &str = "/c18446744073709551615.p.sock";
 /// `sockaddr_un.sun_path` 的長度，含結尾的 NUL。
 const SUN_PATH: usize = 108;
 /// 收屍時 stderr 最多再讀多少：還握著寫端的後代一直寫，也不會卡住收屍。1 MiB 是 Linux `pipe-max-size` 的預設值，
@@ -214,6 +225,79 @@ struct Conversation {
     quarantined: bool,
     /// spawn 它時發的序號，見 [`HostCommand::Grant`]。
     generation: u32,
+    /// 成對時它是哪一對的葉子（[`Composition::serial`]）；這時 `socket` 是組合行程收前台的那個，`phase` 照組合行程的 `ready`／`bound` 走。
+    pair: Option<u64>,
+    /// 成對時它自己收連線的 socket（組合行程連它），收屍時刪的是這個。
+    leaf_socket: Option<PathBuf>,
+    /// 組合行程先死、被連帶收掉的：稽核記 `peer`，不回 `down`、不進死因累計。
+    peer: bool,
+}
+
+/// 送給組合行程的 `bind` 走到哪。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bind {
+    /// 沒有還沒回答的 `bind`：還沒送過，或上一個葉子死後清掉了。
+    Unsent,
+    Sent,
+    /// 現在這個葉子回過 `bound`。
+    Bound,
+}
+
+/// 一對裡的組合行程（#2583）。葉子是 [`Conversation`]，`pair` 指回這裡；一對佔一個名額，從這個行程起到兩個行程都收完
+/// （這個行程先收完時由葉子佔著，見 [`Supervisor::live`]）。
+struct Composition {
+    proc: Proc,
+    /// 這一對的序號：三個 socket 的檔名與稽核的 `pair`。
+    serial: u64,
+    thread: Option<Vec<u8>>,
+    /// 葉子還沒起時先記著開啟方式，起葉子時交給它。
+    read_only: bool,
+    /// 前台連的 socket。
+    socket: PathBuf,
+    /// 送過 `ready`：第一個葉子在橋上登記完了。只送一次，補起的葉子沒有。
+    ready: bool,
+    bind: Bind,
+    /// 葉子死了、這一個留著等下一個 `ensure`：從什麼時候起。
+    leafless_since: Option<Instant>,
+    /// 這條 thread 的 `down` 已經由葉子那一側送過，這一對也進過死因累計。
+    told: bool,
+    /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
+    peer: bool,
+    cause: Option<DeathCause>,
+    rss_now_kb: u64,
+    rss_kb: u64,
+    /// 同 [`Conversation::heard_at`]：第一次送 `bind` 起算，換葉子不重來（它的心跳從第一則 `bind` 起沒停過）。
+    heard_at: Option<Instant>,
+    max_silence: Duration,
+}
+
+impl Composition {
+    fn hear(&mut self, now: Instant) {
+        if let Some(at) = self.heard_at {
+            self.max_silence = self.max_silence.max(now.saturating_duration_since(at));
+            self.heard_at = Some(now);
+        }
+    }
+
+    fn stalled(&self, now: Instant, stall: Duration) -> bool {
+        self.proc.stop.is_none()
+            && self
+                .heard_at
+                .is_some_and(|at| now.saturating_duration_since(at) >= stall)
+    }
+
+    /// 預熱池裡的（還沒指派 thread、沒在收）。
+    fn warm(&self) -> bool {
+        self.thread.is_none() && self.proc.stop.is_none()
+    }
+
+    /// 連帶收掉：葉子已經不在了。
+    fn collect(&mut self, now: Instant, eof_grace: Duration) {
+        if self.proc.stop.is_none() {
+            self.peer = true;
+            self.proc.begin_stop(now, eof_grace);
+        }
+    }
 }
 
 impl Conversation {
@@ -305,12 +389,14 @@ struct Supervisor {
     front: Option<Proc>,
     front_restart_at: Option<Instant>,
     conversations: Vec<Conversation>,
+    /// 有給 `--composition` 才會有。
+    compositions: Vec<Composition>,
     next_socket: u64,
     shutting_down: bool,
     oom: OomCounter,
     rss_poll_at: Instant,
     pace: Pace,
-    /// 同時活著的對話行程最多幾個（含預熱池、起動中與正在收的）。
+    /// 同時活著的對話行程最多幾個（含預熱池、起動中與正在收的）；成對時一對算一個（[`Supervisor::live`]）。
     capacity: u32,
     /// 名額滿而排著的 thread 與開啟方式，先排的在前；有行程收完就從前面起。
     pending: Vec<(Vec<u8>, OpenMode)>,
@@ -369,7 +455,7 @@ fn start(args: args::Args) -> Result<Supervisor, String> {
             std::io::Error::last_os_error()
         ));
     }
-    prepare_run_dir(&args.run_dir)?;
+    prepare_run_dir(&args.run_dir, args.composition.is_some())?;
     let audit = Audit::open(&args.audit)
         .map_err(|err| format!("稽核紀錄 {}：{err}", args.audit.display()))?;
     let capacity = match args.capacity {
@@ -408,6 +494,7 @@ impl Supervisor {
             front: None,
             front_restart_at: None,
             conversations: Vec::new(),
+            compositions: Vec::new(),
             next_socket: 0,
             shutting_down: false,
             oom: OomCounter::open(),
@@ -455,8 +542,13 @@ fn signal_fd() -> Result<libc::c_int, String> {
 }
 
 /// `--run-dir` 不在就建（0700）；在就要是目錄（不是連結）、擁有者是自己、權限恰好 0700。主機多人共用時，邊界是這個目錄的權限。
-fn prepare_run_dir(dir: &Path) -> Result<(), String> {
-    if dir.as_os_str().len() + LONGEST_SOCKET_NAME.len() >= SUN_PATH {
+fn prepare_run_dir(dir: &Path, paired: bool) -> Result<(), String> {
+    let longest = if paired {
+        LONGEST_PAIR_SOCKET_NAME
+    } else {
+        LONGEST_SOCKET_NAME
+    };
+    if dir.as_os_str().len() + longest.len() >= SUN_PATH {
         return Err(format!(
             "--run-dir 太長，socket 路徑放不進 {SUN_PATH} bytes：{}",
             dir.display()
@@ -526,6 +618,7 @@ enum Slot {
     Host { write: bool },
     Conversation { pid: libc::pid_t, write: bool },
     ConversationStderr { pid: libc::pid_t },
+    Composition { pid: libc::pid_t, write: bool },
 }
 
 /// 量監督行程自己有沒有停住過：相鄰兩次取時間之間隔了多久，扣掉這一段准許花的時間。
@@ -632,6 +725,19 @@ impl Supervisor {
                     },
                 );
             }
+            for composition in &self.compositions {
+                watch(
+                    &composition.proc.chan,
+                    Slot::Composition {
+                        pid: composition.proc.pid,
+                        write: false,
+                    },
+                    Slot::Composition {
+                        pid: composition.proc.pid,
+                        write: true,
+                    },
+                );
+            }
             for conversation in &self.conversations {
                 if let Some(fd) = conversation.stderr.as_ref().and_then(StderrTap::poll_fd) {
                     fds.push(libc::pollfd {
@@ -706,6 +812,17 @@ impl Supervisor {
                             self.on_conversation_readable(index);
                         }
                     }
+                    Slot::Composition { pid, write } => {
+                        let Some(index) = self.compositions.iter().position(|p| p.proc.pid == pid)
+                        else {
+                            continue;
+                        };
+                        if write {
+                            self.compositions[index].proc.chan.flush();
+                        } else {
+                            self.on_composition_readable(index);
+                        }
+                    }
                 }
             }
             if signals {
@@ -719,6 +836,9 @@ impl Supervisor {
         let term_grace = self.args.term_grace;
         for conversation in &mut self.conversations {
             conversation.proc.advance_stop(now, term_grace);
+        }
+        for composition in &mut self.compositions {
+            composition.proc.advance_stop(now, term_grace);
         }
         if let Some(front) = self.front.as_mut() {
             front.advance_stop(now, term_grace);
@@ -759,6 +879,7 @@ impl Supervisor {
         }
         self.check_drains(now);
         self.check_idle(now);
+        self.check_leafless(now);
         if self.warm_retry_at.is_some_and(|at| at <= now) {
             self.warm_retry_at = None;
             self.fill_warm();
@@ -777,9 +898,25 @@ impl Supervisor {
         self.conversations
             .iter()
             .filter_map(|c| c.proc.deadline())
+            .chain(self.compositions.iter().filter_map(|p| p.proc.deadline()))
             .chain(self.front.as_ref().and_then(Proc::deadline))
             .chain(restart)
-            .chain((!self.conversations.is_empty()).then_some(self.rss_poll_at))
+            .chain(
+                (!self.conversations.is_empty() || !self.compositions.is_empty())
+                    .then_some(self.rss_poll_at),
+            )
+            .chain(self.args.stall.into_iter().flat_map(|stall| {
+                self.compositions
+                    .iter()
+                    .filter(|p| p.proc.stop.is_none())
+                    .filter_map(move |p| Some(p.heard_at? + stall))
+            }))
+            .chain(self.args.idle.into_iter().flat_map(|idle| {
+                self.compositions
+                    .iter()
+                    .filter(|p| p.proc.stop.is_none())
+                    .filter_map(move |p| Some(p.leafless_since? + idle))
+            }))
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations
                     .iter()
@@ -795,7 +932,10 @@ impl Supervisor {
             .chain(
                 self.args
                     .stall
-                    .filter(|_| self.conversations.iter().any(|c| c.heard_at.is_some()))
+                    .filter(|_| {
+                        self.conversations.iter().any(|c| c.heard_at.is_some())
+                            || self.compositions.iter().any(|p| p.heard_at.is_some())
+                    })
                     .map(|stall| Instant::now() + stall / 4),
             )
             .chain(
@@ -847,6 +987,11 @@ impl Supervisor {
                 conversation.cpu.restart(now);
             }
         }
+        for composition in &mut self.compositions {
+            if composition.heard_at.is_some() {
+                composition.heard_at = Some(now);
+            }
+        }
     }
 
     /// 送出 `bind` 之後 `stall` 沒聽到回報的，當場殺掉整個群組，死因 `stalled`。不走拆除梯度：事件迴圈卡住的行程讀不到 EOF，
@@ -867,6 +1012,23 @@ impl Supervisor {
                 );
                 conversation.cause.get_or_insert(DeathCause::Stalled);
                 conversation.proc.kill_now();
+            }
+        }
+        // 一對裡兩個行程各看各的：葉子停住只殺葉子（上面），組合行程停住殺組合行程，葉子等它收完屍才連帶收。
+        for index in 0..self.compositions.len() {
+            if !self.compositions[index].stalled(now, stall) {
+                continue;
+            }
+            self.on_composition_readable(index);
+            let composition = &mut self.compositions[index];
+            if composition.stalled(now, stall) {
+                say!(
+                    "組合行程 {} 已經 {} ms 沒有回報，殺掉",
+                    composition.proc.pid,
+                    stall.as_millis()
+                );
+                composition.cause.get_or_insert(DeathCause::Stalled);
+                composition.proc.kill_now();
             }
         }
     }
@@ -921,6 +1083,13 @@ impl Supervisor {
                 conversation.proc.kill_now();
             }
         }
+        // 組合行程只記不殺：`--rss-limit-mb` 只管葉子。
+        for composition in &mut self.compositions {
+            if let Some(kb) = memory::vm_rss_kb(composition.proc.pid) {
+                composition.rss_now_kb = kb;
+                composition.rss_kb = composition.rss_kb.max(kb);
+            }
+        }
     }
 
     fn start_front(&mut self) {
@@ -944,11 +1113,9 @@ impl Supervisor {
                     version: PROTOCOL_VERSION,
                     token,
                 }));
-                for conversation in self
-                    .conversations
-                    .iter()
-                    .filter(|c| c.phase == Phase::Up && c.proc.stop.is_none())
-                {
+                for conversation in self.conversations.iter().filter(|c| {
+                    c.phase == Phase::Up && c.proc.stop.is_none() && !self.composition_stopping(c)
+                }) {
                     let Some(thread) = &conversation.thread else {
                         continue;
                     };
@@ -1041,11 +1208,13 @@ impl Supervisor {
             return;
         }
         let now = Instant::now();
-        if let Some(conversation) = self
+        if let Some(index) = self
             .conversations
-            .iter_mut()
-            .find(|c| c.thread.as_ref() == Some(&thread))
+            .iter()
+            .position(|c| c.thread.as_ref() == Some(&thread))
         {
+            let composition_stopping = self.composition_stopping(&self.conversations[index]);
+            let conversation = &mut self.conversations[index];
             conversation.used_at = now;
             conversation.released = false;
             if open == OpenMode::Run {
@@ -1054,17 +1223,42 @@ impl Supervisor {
             if conversation.drain.is_some() {
                 // 等它回答：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
                 self.queue(thread, open);
-            } else if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
+            } else if conversation.phase == Phase::Up
+                && conversation.proc.stop.is_none()
+                && !composition_stopping
+            {
                 let socket = conversation.socket.as_os_str().as_bytes().to_vec();
                 self.tell_front(&FrontEvent::Up {
                     thread_id: thread,
                     socket,
                 });
-            } else if conversation.proc.stop.is_some()
-                && conversation.cause == Some(DeathCause::Evicted)
+            } else if conversation.peer
+                || (conversation.proc.stop.is_some()
+                    && conversation.cause == Some(DeathCause::Evicted))
             {
                 // 逐出、正在收：前台收到 `down(evicted)` 不算回答，所以排進隊伍（已經在排的只升開啟方式），跟其他排著的一起重算名額。
-                // 別的死因不理：收完回的 `down` 就是回答。
+                // 別的死因不理：收完回的 `down` 就是回答。被組合行程連帶收掉的，`down` 已經送過，也排隊。
+                self.queue(thread, open);
+                self.make_room();
+            }
+            return;
+        }
+        if let Some(index) = self
+            .compositions
+            .iter()
+            .position(|p| p.thread.as_ref() == Some(&thread))
+        {
+            // 這一對沒有葉子：還沒起（組合行程還沒 `hello`）、死了留著、或正在收。
+            let composition = &mut self.compositions[index];
+            if composition.proc.stop.is_none() {
+                if open == OpenMode::Run {
+                    composition.read_only = false;
+                }
+                if composition.leafless_since.is_some() {
+                    self.refill(index, open);
+                }
+            } else if composition.told || composition.peer {
+                // `down` 已經送過，它收完才有名額：照逐出中的那樣排隊。還沒送過的不理，收完回的 `down` 就是回答。
                 self.queue(thread, open);
                 self.make_room();
             }
@@ -1077,7 +1271,7 @@ impl Supervisor {
             self.fill_warm();
             return;
         }
-        if self.conversations.len() < self.capacity as usize {
+        if self.live() < self.capacity as usize {
             self.start_conversation(Some(thread), open);
             return;
         }
@@ -1105,6 +1299,9 @@ impl Supervisor {
 
     /// 把預熱池裡的一個指派給 `thread`，先挑已經 `ready` 的。還沒 `ready` 的等它 `ready` 再送 `bind`。
     fn take_warm(&mut self, thread: &[u8], open: OpenMode) -> bool {
+        if self.args.composition.is_some() {
+            return self.take_warm_pair(thread, open);
+        }
         let Some(index) = self
             .conversations
             .iter()
@@ -1155,19 +1352,21 @@ impl Supervisor {
             .iter()
             .filter(|(t, _)| !self.waiting_own_drain(t))
             .count();
-        let mut freeing = self
-            .conversations
-            .iter()
-            .filter(|c| {
-                c.proc.stop.is_some()
-                    || (c.drain.is_some()
-                        && !c
-                            .thread
-                            .as_ref()
-                            .is_some_and(|t| self.pending.iter().any(|(p, _)| p == t)))
-            })
-            .count();
+        let mut freeing = self.freeing();
         while freeing < needed {
+            // 成對時先收沒有葉子的：它佔著名額，卻沒有對話在用。
+            let leafless = self
+                .compositions
+                .iter_mut()
+                .filter(|p| p.proc.stop.is_none())
+                .filter(|p| p.leafless_since.is_some())
+                .min_by_key(|p| p.leafless_since);
+            if let Some(composition) = leafless {
+                say!("名額滿，先收沒有葉子的組合行程 {}", composition.proc.pid);
+                composition.collect(Instant::now(), self.args.eof_grace);
+                freeing += 1;
+                continue;
+            }
             let victim = self
                 .conversations
                 .iter()
@@ -1189,7 +1388,7 @@ impl Supervisor {
             };
             let (thread, _) = self.pending.remove(at);
             freeing += 1;
-            let (current, limit) = (self.conversations.len() as u32, self.capacity);
+            let (current, limit) = (self.live() as u32, self.capacity);
             say!("名額滿（{current}／{limit}），沒有可逐出的對話行程");
             self.tell_front(&FrontEvent::Capacity {
                 thread_id: thread,
@@ -1211,13 +1410,23 @@ impl Supervisor {
 
     /// 有名額就照排隊順序起排著的；這條 thread 還有行程（在等它回答 `drain`、或正在收）的留著，等那個行程的結果。排的都起完了再補預熱池。
     fn serve_pending(&mut self) {
-        while self.conversations.len() < self.capacity as usize && !self.shutting_down {
-            let Some(at) = self.pending.iter().position(|(t, _)| {
-                !self
-                    .conversations
-                    .iter()
-                    .any(|c| c.thread.as_ref() == Some(t))
+        // 排著的那條還留著沒有葉子的組合行程：補葉子就好，不用新名額。
+        while !self.shutting_down {
+            let Some((at, index)) = self.pending.iter().enumerate().find_map(|(at, (t, _))| {
+                let index = self.compositions.iter().position(|p| {
+                    p.thread.as_ref() == Some(t)
+                        && p.leafless_since.is_some()
+                        && p.proc.stop.is_none()
+                })?;
+                Some((at, index))
             }) else {
+                break;
+            };
+            let (_, open) = self.pending.remove(at);
+            self.refill(index, open);
+        }
+        while self.live() < self.capacity as usize && !self.shutting_down {
+            let Some(at) = self.pending.iter().position(|(t, _)| !self.has_process(t)) else {
                 break;
             };
             let (thread, open) = self.pending.remove(at);
@@ -1233,8 +1442,8 @@ impl Supervisor {
         while !self.shutting_down
             && self.warm_retry_at.is_none()
             && self.pending.is_empty()
-            && self.conversations.iter().filter(|c| c.warm()).count() < self.args.warm as usize
-            && self.conversations.len() < self.capacity as usize
+            && self.warm_count() < self.args.warm as usize
+            && self.live() < self.capacity as usize
         {
             self.start_conversation(None, OpenMode::Run);
         }
@@ -1317,12 +1526,13 @@ impl Supervisor {
     }
 
     fn send_stats(&mut self) {
-        let live = self.conversations.len() as u32;
-        let warm = self.conversations.iter().filter(|c| c.warm()).count() as u32;
+        let live = self.live() as u32;
+        let warm = self.warm_count() as u32;
         let rss_kib = self
             .conversations
             .iter()
             .map(|c| c.rss_now_kb)
+            .chain(self.compositions.iter().map(|p| p.rss_now_kb))
             .sum::<u64>()
             .min(u64::from(u32::MAX)) as u32;
         self.tell_front(&FrontEvent::Stats {
@@ -1345,15 +1555,40 @@ impl Supervisor {
     }
 
     fn start_conversation(&mut self, thread: Option<Vec<u8>>, open: OpenMode) {
+        if self.args.composition.is_some() {
+            self.start_pair(thread, open);
+            return;
+        }
         self.next_socket += 1;
         let socket = self
             .args
             .run_dir
             .join(format!("c{}.sock", self.next_socket));
+        self.spawn_conversation(thread, open, socket, None);
+    }
+
+    /// 起一個對話行程，回它的 pid；起不來就寫稽核、回 `down`（預熱的不回 `down`，隔 `--front-restart-ms` 再補）。`pair` 是成對時的（序號、橋的 socket、前台連的 socket），
+    /// 這時 `socket` 是葉子自己收連線的那個，而且先告訴組合行程葉子的 pid、才把 `hello` 交給葉子。
+    fn spawn_conversation(
+        &mut self,
+        thread: Option<Vec<u8>>,
+        open: OpenMode,
+        socket: PathBuf,
+        pair: Option<(u64, PathBuf, PathBuf)>,
+    ) -> Option<libc::pid_t> {
         let _ = std::fs::remove_file(&socket);
         let mut args = self.args.conversation_args.clone();
         args.push("--socket".into());
         args.push(socket.clone().into_os_string());
+        let serial = pair.as_ref().map(|(serial, _, _)| *serial);
+        let (socket, leaf_socket) = match pair {
+            Some((_, bridge, front)) => {
+                args.push("--pair-socket".into());
+                args.push(bridge.into_os_string());
+                (front, Some(socket))
+            }
+            None => (socket, None),
+        };
         if self.args.host.is_some() {
             args.push("--host-socket".into());
             args.push(self.host_socket().into_os_string());
@@ -1384,9 +1619,24 @@ impl Supervisor {
                     token: token.clone(),
                     quarantined: false,
                     generation,
+                    pair: serial,
+                    leaf_socket,
+                    peer: false,
                 });
                 // 先登記、再交 token：同 `start_front`。
                 self.regrant(pid);
+                if let (Some(composition), Ok(pid)) = (
+                    self.compositions
+                        .iter_mut()
+                        .find(|p| Some(p.serial) == serial),
+                    u32::try_from(pid),
+                ) {
+                    let leaf = ConversationCommand::Leaf { pid };
+                    composition
+                        .proc
+                        .chan
+                        .send(&encode_conversation_command(&leaf));
+                }
                 if let Some(conversation) = self.conversations.last_mut() {
                     let hello = ConversationCommand::Hello {
                         version: PROTOCOL_VERSION,
@@ -1397,11 +1647,171 @@ impl Supervisor {
                         .chan
                         .send(&encode_conversation_command(&hello));
                 }
+                Some(pid)
             }
             Err(err) => {
                 say!("對話行程起不來：{err}");
                 let error = err.to_string();
                 self.audit.record(&Record::Conversation {
+                    pair: serial.map(|serial| audit::Pair {
+                        serial,
+                        composition: false,
+                        peer: false,
+                    }),
+                    thread: thread.as_deref().unwrap_or_default(),
+                    pid: 0,
+                    cause: DeathCause::Crash,
+                    exit: Exit::NOT_STARTED,
+                    turns: 0,
+                    rss_kb: 0,
+                    max_silence_ms: 0,
+                    error: Some(&error),
+                });
+                self.count_death(DeathCause::Crash);
+                match thread {
+                    Some(thread) => self.tell_front(&FrontEvent::Down {
+                        thread_id: thread,
+                        cause: DeathCause::Crash,
+                    }),
+                    None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
+                }
+                None
+            }
+        }
+    }
+
+    /// 佔著名額的對話數。成對時一對算一個：數組合行程，加上組合行程已經收完、自己還沒收完的葉子。
+    fn live(&self) -> usize {
+        if self.args.composition.is_none() {
+            return self.conversations.len();
+        }
+        self.compositions.len() + self.conversations.iter().filter(|c| self.orphan(c)).count()
+    }
+
+    /// 成對的葉子，組合行程已經收完了。
+    fn orphan(&self, conversation: &Conversation) -> bool {
+        conversation
+            .pair
+            .is_some_and(|serial| !self.compositions.iter().any(|p| p.serial == serial))
+    }
+
+    /// 成對的葉子，組合行程正在收：它收完時整對一起收，不再回 `up`。
+    fn composition_stopping(&self, conversation: &Conversation) -> bool {
+        conversation.pair.is_some_and(|serial| {
+            self.compositions
+                .iter()
+                .any(|p| p.serial == serial && p.proc.stop.is_some())
+        })
+    }
+
+    fn has_leaf(&self, serial: u64) -> bool {
+        self.conversations.iter().any(|c| c.pair == Some(serial))
+    }
+
+    /// 這條 thread 還有行程（葉子或組合行程）。
+    fn has_process(&self, thread: &[u8]) -> bool {
+        self.conversations
+            .iter()
+            .any(|c| c.thread.as_deref() == Some(thread))
+            || self
+                .compositions
+                .iter()
+                .any(|p| p.thread.as_deref() == Some(thread))
+    }
+
+    fn warm_count(&self) -> usize {
+        if self.args.composition.is_none() {
+            return self.conversations.iter().filter(|c| c.warm()).count();
+        }
+        self.compositions.iter().filter(|p| p.warm()).count()
+    }
+
+    /// 正在讓出名額的有幾個：正在收的，加上在等 `drain` 回答、而那條 thread 自己沒在排的。成對時以一對為單位。
+    fn freeing(&self) -> usize {
+        let leaving = |c: &Conversation| {
+            c.proc.stop.is_some()
+                || (c.drain.is_some()
+                    && !c
+                        .thread
+                        .as_ref()
+                        .is_some_and(|t| self.pending.iter().any(|(p, _)| p == t)))
+        };
+        if self.args.composition.is_none() {
+            return self.conversations.iter().filter(|c| leaving(c)).count();
+        }
+        self.compositions
+            .iter()
+            .filter(|p| {
+                p.proc.stop.is_some()
+                    || self
+                        .conversations
+                        .iter()
+                        .any(|c| c.pair == Some(p.serial) && leaving(c))
+            })
+            .count()
+            + self.conversations.iter().filter(|c| self.orphan(c)).count()
+    }
+
+    /// 一對的三個 socket：前台連的、橋、葉子自己收連線的。
+    fn pair_sockets(&self, serial: u64) -> [PathBuf; 3] {
+        ["sock", "p.sock", "l.sock"]
+            .map(|suffix| self.args.run_dir.join(format!("c{serial}.{suffix}")))
+    }
+
+    /// 起一對（#2583）：先起組合行程，等它的 `hello` 才起葉子（[`Self::start_leaf`]）；它送 `ready`（葉子在橋上登記完）才算預熱好。
+    fn start_pair(&mut self, thread: Option<Vec<u8>>, open: OpenMode) {
+        let Some(program) = self.args.composition.clone() else {
+            return;
+        };
+        self.next_socket += 1;
+        let serial = self.next_socket;
+        let [front, bridge, leaf] = self.pair_sockets(serial);
+        for socket in [&front, &bridge, &leaf] {
+            let _ = std::fs::remove_file(socket);
+        }
+        let mut args = self.args.composition_args.clone();
+        args.push("--socket".into());
+        args.push(front.clone().into_os_string());
+        args.push("--pair-socket".into());
+        args.push(bridge.into_os_string());
+        args.push("--leaf-socket".into());
+        args.push(leaf.into_os_string());
+        match process::spawn(&program, &args, false) {
+            Ok((pid, chan, _)) => {
+                let mut proc = Proc::new(pid, chan);
+                // 組合行程還不連宿主，身分表上沒有它那一筆：token 是空的。
+                let hello = ConversationCommand::Hello {
+                    version: PROTOCOL_VERSION,
+                    token: Vec::new(),
+                };
+                proc.chan.send(&encode_conversation_command(&hello));
+                self.compositions.push(Composition {
+                    proc,
+                    serial,
+                    thread,
+                    read_only: open == OpenMode::ReadOnly,
+                    socket: front,
+                    ready: false,
+                    bind: Bind::Unsent,
+                    leafless_since: None,
+                    told: false,
+                    peer: false,
+                    cause: None,
+                    rss_now_kb: 0,
+                    rss_kb: 0,
+                    heard_at: None,
+                    max_silence: Duration::ZERO,
+                });
+            }
+            Err(err) => {
+                say!("組合行程起不來：{err}");
+                let error = err.to_string();
+                self.audit.record(&Record::Conversation {
+                    pair: Some(audit::Pair {
+                        serial,
+                        composition: true,
+                        peer: false,
+                    }),
                     thread: thread.as_deref().unwrap_or_default(),
                     pid: 0,
                     cause: DeathCause::Crash,
@@ -1420,6 +1830,261 @@ impl Supervisor {
                     None => self.warm_retry_at = Some(Instant::now() + self.args.front_restart),
                 }
             }
+        }
+    }
+
+    /// 替這一對起葉子：第一個（組合行程剛 `hello`）或補起的。起不來就連帶收掉組合行程。
+    fn start_leaf(&mut self, index: usize) -> bool {
+        let composition = &self.compositions[index];
+        let serial = composition.serial;
+        let thread = composition.thread.clone();
+        let open = if composition.read_only {
+            OpenMode::ReadOnly
+        } else {
+            OpenMode::Run
+        };
+        let [front, bridge, leaf] = self.pair_sockets(serial);
+        if self
+            .spawn_conversation(thread.clone(), open, leaf, Some((serial, bridge, front)))
+            .is_some()
+        {
+            return true;
+        }
+        let composition = &mut self.compositions[index];
+        composition.told = thread.is_some();
+        composition.collect(Instant::now(), self.args.eof_grace);
+        false
+    }
+
+    /// 這一對的組合行程還在、葉子死了：補一個葉子，接著重送 `bind`。上一則 `bind` 回過 `bound` 才會留著沒有葉子的組合行程
+    /// （[`Self::on_leaf_gone`]），所以它那邊沒有還留著的 `bind`，重送不會撞上。
+    fn refill(&mut self, index: usize, open: OpenMode) {
+        let composition = &mut self.compositions[index];
+        composition.leafless_since = None;
+        composition.told = false;
+        composition.read_only = open == OpenMode::ReadOnly;
+        if self.start_leaf(index) {
+            self.bind_pair(index);
+        }
+    }
+
+    /// 成對時 `bind` 送給組合行程，由它經橋轉給葉子。葉子的沉默每次從這裡重新起算；組合行程的只從第一次 `bind` 起算。
+    /// 補起的葉子（[`Self::refill`]）起完就送，所以它從起動到送出第一框都算在 `--stall-ms` 裡。
+    fn bind_pair(&mut self, index: usize) {
+        let composition = &mut self.compositions[index];
+        let Some(thread) = composition.thread.clone() else {
+            return;
+        };
+        let now = Instant::now();
+        composition.bind = Bind::Sent;
+        composition.heard_at.get_or_insert(now);
+        let bind = ConversationCommand::Bind { thread_id: thread };
+        composition
+            .proc
+            .chan
+            .send(&encode_conversation_command(&bind));
+        let serial = composition.serial;
+        if let Some(leaf) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.pair == Some(serial))
+        {
+            leaf.phase = Phase::Binding;
+            leaf.heard_at = Some(now);
+        }
+    }
+
+    /// 把預熱池裡的一對指派給 `thread`，先挑已經 `ready` 的；葉子正在收的不挑。還沒 `ready` 的等它 `ready` 再送 `bind`。
+    fn take_warm_pair(&mut self, thread: &[u8], open: OpenMode) -> bool {
+        let free = |p: &Composition| {
+            p.warm()
+                && !self
+                    .conversations
+                    .iter()
+                    .any(|c| c.pair == Some(p.serial) && c.proc.stop.is_some())
+        };
+        let Some(index) = self
+            .compositions
+            .iter()
+            .position(|p| free(p) && p.ready)
+            .or_else(|| self.compositions.iter().position(free))
+        else {
+            return false;
+        };
+        let composition = &mut self.compositions[index];
+        composition.thread = Some(thread.to_vec());
+        composition.read_only = open == OpenMode::ReadOnly;
+        let (serial, ready) = (composition.serial, composition.ready);
+        let leaf = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.pair == Some(serial));
+        let pid = leaf.map(|leaf| {
+            leaf.thread = Some(thread.to_vec());
+            leaf.read_only = open == OpenMode::ReadOnly;
+            leaf.used_at = Instant::now();
+            leaf.proc.pid
+        });
+        if ready {
+            self.bind_pair(index);
+        }
+        if let Some(pid) = pid {
+            self.regrant(pid);
+        }
+        true
+    }
+
+    fn on_composition_readable(&mut self, index: usize) {
+        let composition = &mut self.compositions[index];
+        let frames = match composition.proc.chan.receive() {
+            Ok(frames) => frames,
+            Err(err) => {
+                say!(
+                    "組合行程 {} 送來解不開的框（{}），殺掉",
+                    composition.proc.pid,
+                    err.0
+                );
+                composition.cause.get_or_insert(DeathCause::Crash);
+                composition.proc.kill_now();
+                return;
+            }
+        };
+        if !frames.is_empty() {
+            composition.hear(Instant::now());
+        }
+        for payload in frames {
+            let composition = &mut self.compositions[index];
+            let report = match decode_conversation_report(&payload) {
+                Ok(report) => report,
+                Err(err) => {
+                    say!(
+                        "組合行程 {} 送來解不開的訊息（{}），殺掉",
+                        composition.proc.pid,
+                        err.0
+                    );
+                    composition.cause.get_or_insert(DeathCause::Crash);
+                    composition.proc.kill_now();
+                    return;
+                }
+            };
+            if !composition.proc.hello {
+                // 一對裡只有 loop 所在的那個宣告：loop 在葉子，所以組合行程的 `hello` 不能宣告。
+                // TODO(#2573)：loop 搬進組合行程時對調。
+                if report
+                    == (ConversationReport::Hello {
+                        version: PROTOCOL_VERSION,
+                        runs_loop: false,
+                    })
+                {
+                    composition.proc.hello = true;
+                    if composition.proc.stop.is_none() && !self.shutting_down {
+                        self.start_leaf(index);
+                    }
+                    continue;
+                }
+                say!(
+                    "組合行程 {} 的第一框不是版本 {PROTOCOL_VERSION}、不宣告 loop 的 hello（{}），殺掉",
+                    composition.proc.pid,
+                    match report {
+                        ConversationReport::Hello {
+                            version: PROTOCOL_VERSION,
+                            ..
+                        } => "宣告了 loop".to_string(),
+                        ConversationReport::Hello { version, .. } => format!("版本 {version}"),
+                        _ => "別的訊息".to_string(),
+                    }
+                );
+                composition.cause.get_or_insert(DeathCause::Protocol);
+                composition.proc.kill_now();
+                return;
+            }
+            let serial = composition.serial;
+            match report {
+                ConversationReport::Ready if !composition.ready => {
+                    composition.ready = true;
+                    if composition.thread.is_some() {
+                        self.bind_pair(index);
+                    } else if let Some(leaf) = self
+                        .conversations
+                        .iter_mut()
+                        .find(|c| c.pair == Some(serial))
+                    {
+                        leaf.phase = Phase::Warm;
+                    }
+                }
+                ConversationReport::Bound { thread_id } if composition.bind == Bind::Sent => {
+                    if Some(&thread_id) != composition.thread.as_ref() {
+                        say!("組合行程 {} 綁錯 thread，殺掉", composition.proc.pid);
+                        composition.cause.get_or_insert(DeathCause::Crash);
+                        composition.proc.kill_now();
+                        return;
+                    }
+                    composition.bind = Bind::Bound;
+                    let serving = composition.proc.stop.is_none();
+                    let socket = composition.socket.as_os_str().as_bytes().to_vec();
+                    let Some(leaf) = self
+                        .conversations
+                        .iter_mut()
+                        .find(|c| c.pair == Some(serial))
+                    else {
+                        continue;
+                    };
+                    leaf.phase = Phase::Up;
+                    if serving && leaf.proc.stop.is_none() {
+                        self.tell_front(&FrontEvent::Up { thread_id, socket });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 沒有葉子的組合行程留了 `--idle-ms` 還沒人要：連帶收掉。
+    fn check_leafless(&mut self, now: Instant) {
+        let Some(idle) = self.args.idle else { return };
+        for composition in &mut self.compositions {
+            if composition
+                .leafless_since
+                .is_some_and(|at| at + idle <= now)
+                && composition.proc.stop.is_none()
+            {
+                say!(
+                    "組合行程 {} 沒有葉子已經 {} ms，收掉",
+                    composition.proc.pid,
+                    idle.as_millis()
+                );
+                composition.collect(now, self.args.eof_grace);
+            }
+        }
+    }
+
+    /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個
+    /// `ensure` 補葉子。其餘的連帶收掉組合行程：`bind` 還沒回 `bound` 時，從外面分不出組合行程是把它留著等葉子登記（再送一次它會以協定錯誤結束）、
+    /// 還是已經轉給葉子而作廢（不再送就永遠不會 `bound`），所以整對收掉，下一個 `ensure` 起新的一對。
+    fn on_leaf_gone(&mut self, serial: u64, cause: DeathCause, told: bool) {
+        let Some(composition) = self.compositions.iter_mut().find(|p| p.serial == serial) else {
+            return;
+        };
+        composition.told |= told;
+        let keep = composition.bind == Bind::Bound
+            && composition.proc.stop.is_none()
+            && !self.shutting_down
+            && matches!(
+                cause,
+                DeathCause::Crash
+                    | DeathCause::Heap
+                    | DeathCause::Memory
+                    | DeathCause::HostOom
+                    | DeathCause::Stalled
+            );
+        composition.bind = Bind::Unsent;
+        let now = Instant::now();
+        if keep {
+            composition.leafless_since = Some(now);
+            // 有排著的就先讓出這個名額。
+            self.make_room();
+        } else {
+            composition.collect(now, self.args.eof_grace);
         }
     }
 
@@ -1483,14 +2148,19 @@ impl Supervisor {
                 return;
             }
             match report {
-                ConversationReport::Ready if conversation.phase == Phase::Starting => {
+                // 成對時 `ready` 與 `bound` 看組合行程的（[`Self::on_composition_readable`]），葉子送的不理。
+                ConversationReport::Ready
+                    if conversation.phase == Phase::Starting && conversation.pair.is_none() =>
+                {
                     if conversation.thread.is_some() {
                         Self::bind(conversation);
                     } else {
                         conversation.phase = Phase::Warm;
                     }
                 }
-                ConversationReport::Bound { thread_id } if conversation.phase == Phase::Binding => {
+                ConversationReport::Bound { thread_id }
+                    if conversation.phase == Phase::Binding && conversation.pair.is_none() =>
+                {
                     if Some(&thread_id) != conversation.thread.as_ref() {
                         say!("對話行程 {} 綁錯 thread，殺掉", conversation.proc.pid);
                         conversation.cause.get_or_insert(DeathCause::Crash);
@@ -1572,6 +2242,10 @@ impl Supervisor {
                 for conversation in &mut self.conversations {
                     conversation.proc.kill_now();
                 }
+                for composition in &mut self.compositions {
+                    composition.cause.get_or_insert(DeathCause::Shutdown);
+                    composition.proc.kill_now();
+                }
                 if let Some(host) = self.host.as_mut() {
                     host.proc.kill_now();
                 }
@@ -1593,11 +2267,7 @@ impl Supervisor {
         self.host_restart_at = None;
         // 還有行程的那幾條，等那個行程結束時回 `down`。
         for (thread, _) in std::mem::take(&mut self.pending) {
-            if self
-                .conversations
-                .iter()
-                .any(|c| c.thread.as_ref() == Some(&thread))
-            {
+            if self.has_process(&thread) {
                 continue;
             }
             self.tell_front(&FrontEvent::Down {
@@ -1625,10 +2295,20 @@ impl Supervisor {
             return None;
         }
         self.admission_until = None;
-        if !self.conversations.is_empty() {
+        if !self.conversations.is_empty() || !self.compositions.is_empty() {
             for conversation in &mut self.conversations {
                 conversation.cause.get_or_insert(DeathCause::Shutdown);
                 conversation.begin_stop(now, self.args.eof_grace);
+            }
+            // 先葉子後組合行程：還有葉子的，等葉子收完才收（[`Self::on_leaf_gone`]）。
+            for index in 0..self.compositions.len() {
+                if !self.has_leaf(self.compositions[index].serial) {
+                    let composition = &mut self.compositions[index];
+                    if composition.proc.stop.is_none() {
+                        composition.cause.get_or_insert(DeathCause::Shutdown);
+                        composition.proc.begin_stop(now, self.args.eof_grace);
+                    }
+                }
             }
             return None;
         }
@@ -1649,6 +2329,10 @@ impl Supervisor {
         for conversation in &mut self.conversations {
             conversation.cause.get_or_insert(DeathCause::Shutdown);
             conversation.proc.kill_now();
+        }
+        for composition in &mut self.compositions {
+            composition.cause.get_or_insert(DeathCause::Shutdown);
+            composition.proc.kill_now();
         }
         if let Some(host) = self.host.as_mut() {
             host.proc.kill_now();
@@ -1939,6 +2623,7 @@ impl Supervisor {
             .conversations
             .iter()
             .map(|c| c.proc.pid)
+            .chain(self.compositions.iter().map(|p| p.proc.pid))
             .chain(self.front.as_ref().map(|f| f.pid))
             .chain(self.host.as_ref().map(|h| h.proc.pid))
             .collect();
@@ -2045,6 +2730,10 @@ impl Supervisor {
             }
             return;
         }
+        if let Some(index) = self.compositions.iter().position(|p| p.proc.pid == pid) {
+            self.on_composition_exit(index, exit);
+            return;
+        }
         let Some(index) = self.conversations.iter().position(|c| c.proc.pid == pid) else {
             return;
         };
@@ -2067,6 +2756,11 @@ impl Supervisor {
             oom.claim()
         });
         self.audit.record(&Record::Conversation {
+            pair: conversation.pair.map(|serial| audit::Pair {
+                serial,
+                composition: false,
+                peer: conversation.peer,
+            }),
             thread: conversation.thread.as_deref().unwrap_or_default(),
             pid,
             cause,
@@ -2079,8 +2773,19 @@ impl Supervisor {
                 .min(u128::from(u64::MAX)) as u64,
             error: None,
         });
-        let _ = std::fs::remove_file(&conversation.socket);
+        let _ = std::fs::remove_file(
+            conversation
+                .leaf_socket
+                .as_ref()
+                .unwrap_or(&conversation.socket),
+        );
+        if conversation.peer {
+            // 組合行程先死：`down` 與死因累計在它那邊算過了。
+            self.serve_pending();
+            return;
+        }
         self.count_death(cause);
+        let told = conversation.thread.is_some();
         match conversation.thread {
             Some(thread) => self.tell_front(&FrontEvent::Down {
                 thread_id: thread,
@@ -2090,6 +2795,66 @@ impl Supervisor {
                 self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
             }
             None => {}
+        }
+        if let Some(serial) = conversation.pair {
+            self.on_leaf_gone(serial, cause, told);
+        }
+        self.serve_pending();
+    }
+
+    /// 組合行程結束：整對收。先判完它的死因（以 SIGKILL 結束的在 [`memory::classify`] 裡領走它那一次 `oom_kill`），才對葉子送 SIGKILL：
+    /// 反過來的話葉子可能先被收屍，把那一次領走。`down` 一對只送一次：葉子那一側送過（`told`）、或葉子已經在收（它收完會送）的，這裡不送。
+    fn on_composition_exit(&mut self, index: usize, exit: Exit) {
+        let composition = self.compositions.remove(index);
+        let oom = &mut self.oom;
+        let cause = memory::classify(composition.cause, exit.signal, false, || oom.claim());
+        self.audit.record(&Record::Conversation {
+            pair: Some(audit::Pair {
+                serial: composition.serial,
+                composition: true,
+                peer: composition.peer,
+            }),
+            thread: composition.thread.as_deref().unwrap_or_default(),
+            pid: composition.proc.pid,
+            cause,
+            exit,
+            turns: 0,
+            rss_kb: composition.rss_kb,
+            max_silence_ms: composition
+                .max_silence
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            error: None,
+        });
+        for socket in self.pair_sockets(composition.serial) {
+            let _ = std::fs::remove_file(socket);
+        }
+        // 葉子那一側算過的（`told`）不再算。葉子已經在收：這一對的 `down` 與死因累計留給葉子收屍時做。
+        let mut counted = !composition.peer && !composition.told;
+        if let Some(leaf) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.pair == Some(composition.serial))
+        {
+            if leaf.proc.stop.is_none() {
+                leaf.peer = true;
+            } else {
+                counted = false;
+            }
+            leaf.proc.kill_now();
+        }
+        if counted {
+            self.count_death(cause);
+            match composition.thread {
+                Some(thread) if !composition.told => self.tell_front(&FrontEvent::Down {
+                    thread_id: thread,
+                    cause,
+                }),
+                None if cause != DeathCause::Shutdown => {
+                    self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
+                }
+                _ => {}
+            }
         }
         self.serve_pending();
     }
@@ -2139,6 +2904,9 @@ mod tests {
             token: Vec::new(),
             quarantined,
             generation,
+            pair: None,
+            leaf_socket: None,
+            peer: false,
         }
     }
 
@@ -2240,12 +3008,227 @@ mod tests {
             .contains("\"role\":\"conversation\""));
     }
 
+    /// 不存在的 pid：`kill_now` 對它的群組送訊號只會拿到 ESRCH。
+    const LEAF: libc::pid_t = libc::pid_t::MAX - 1;
+    const COMPOSITION: libc::pid_t = libc::pid_t::MAX - 2;
+    const KILLED: Exit = Exit {
+        code: None,
+        signal: Some(libc::SIGKILL),
+    };
+
+    /// 手上有一對（序號 1、thread `t`）的監督行程：兩個行程的 pid 都是假的，`oom_kill` 讀 `events` 這個檔。
+    fn with_a_pair(tag: &str, bind: Bind) -> (Supervisor, PathBuf, PathBuf) {
+        let dir = temp(tag);
+        let audit = dir.join("audit.jsonl");
+        let events = dir.join("memory.events");
+        std::fs::write(&events, "oom_kill 0\n").unwrap();
+        let argv: Vec<OsString> = [
+            "--run-dir",
+            dir.join("run").to_str().unwrap(),
+            "--audit",
+            "a",
+            "--front",
+            "/bin/true",
+            "--conversation",
+            "/bin/true",
+            "--composition",
+            "/bin/true",
+            "--warm",
+            "0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        let mut supervisor = Supervisor::assemble(
+            args::parse(&argv).unwrap(),
+            Audit::open(&audit).unwrap(),
+            -1,
+            4,
+        );
+        supervisor.oom = OomCounter::at(Some(events.clone()));
+        let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+        supervisor.compositions.push(Composition {
+            proc: Proc::new(
+                COMPOSITION,
+                process::Chan::from_fds(
+                    std::os::fd::OwnedFd::from(read),
+                    std::os::fd::OwnedFd::from(write),
+                    1024,
+                ),
+            ),
+            serial: 1,
+            thread: Some(b"t".to_vec()),
+            read_only: false,
+            socket: PathBuf::new(),
+            ready: true,
+            bind,
+            leafless_since: None,
+            told: false,
+            peer: false,
+            cause: None,
+            rss_now_kb: 0,
+            rss_kb: 0,
+            heard_at: None,
+            max_silence: Duration::ZERO,
+        });
+        let mut leaf = conversation(LEAF, 1, false);
+        leaf.pair = Some(1);
+        supervisor.conversations.push(leaf);
+        (supervisor, audit, events)
+    }
+
+    fn audit_lines(audit: &Path) -> Vec<String> {
+        std::fs::read_to_string(audit)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    /// 葉子被核心 OOM kill、組合行程接著被連帶收掉（最後也是 SIGKILL）：那一次 `oom_kill` 記在葉子，連帶收的那一行是 `peer`、不進死因累計。
+    #[test]
+    fn a_host_oom_of_the_leaf_stays_with_the_leaf_when_the_composition_follows() {
+        let (mut supervisor, audit, events) = with_a_pair("oom-leaf", Bind::Sent);
+        std::fs::write(&events, "oom_kill 1\n").unwrap();
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.compositions[0].peer);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        let lines = audit_lines(&audit);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("\"role\":\"conversation\"")
+                && lines[0].contains("\"cause\":\"host-oom\"")
+                && lines[0].contains("\"pair\":1"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("\"role\":\"composition\"")
+                && lines[1].contains("\"cause\":\"peer\"")
+                && lines[1].contains("\"pair\":1"),
+            "{lines:?}"
+        );
+        assert_eq!(supervisor.deaths[DeathCause::HostOom as usize - 1], 1);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 組合行程被核心 OOM kill、葉子被連帶 SIGKILL：那一次記在組合行程，葉子那一行是 `peer`、不進死因累計。
+    #[test]
+    fn a_host_oom_of_the_composition_is_not_claimed_by_the_leaf_it_takes_down() {
+        let (mut supervisor, audit, events) = with_a_pair("oom-composition", Bind::Bound);
+        std::fs::write(&events, "oom_kill 1\n").unwrap();
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert!(supervisor.conversations[0].peer);
+        assert_eq!(
+            supervisor.conversations[0].proc.stop,
+            Some((Step::Kill, None))
+        );
+        assert_eq!(supervisor.live(), 1, "葉子還沒收完，名額還佔著");
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.live(), 0);
+        let lines = audit_lines(&audit);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("\"role\":\"composition\"")
+                && lines[0].contains("\"cause\":\"host-oom\""),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("\"role\":\"conversation\"")
+                && lines[1].contains("\"cause\":\"peer\""),
+            "{lines:?}"
+        );
+        assert_eq!(supervisor.deaths[DeathCause::HostOom as usize - 1], 1);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 葉子已經在收（這裡是停住被殺）時組合行程先死：這一對只進一次死因累計，是葉子的；組合行程那一行照它自己的死因寫稽核。
+    #[test]
+    fn a_composition_that_dies_while_the_leaf_is_being_collected_is_not_counted_twice() {
+        let (mut supervisor, audit, _) = with_a_pair("once", Bind::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Stalled);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_exit(
+            COMPOSITION,
+            Exit {
+                code: Some(1),
+                signal: None,
+            },
+        );
+        assert!(!supervisor.conversations[0].peer);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 0);
+        supervisor.on_exit(LEAF, KILLED);
+        assert_eq!(supervisor.live(), 0);
+        let lines = audit_lines(&audit);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("\"role\":\"composition\"")
+                && lines[0].contains("\"cause\":\"crash\""),
+            "{lines:?}"
+        );
+        assert!(lines[1].contains("\"cause\":\"stalled\""), "{lines:?}");
+        assert_eq!(supervisor.deaths[DeathCause::Stalled as usize - 1], 1);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 葉子死了、組合行程留著，之後停機收掉它：這一對只進一次死因累計，是葉子的；組合行程那一行照它自己的死因寫稽核。
+    #[test]
+    fn a_composition_kept_after_its_leaf_died_is_not_counted_again() {
+        let (mut supervisor, audit, _) = with_a_pair("kept", Bind::Bound);
+        supervisor.on_exit(LEAF, KILLED);
+        assert!(supervisor.compositions[0].leafless_since.is_some());
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+        supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(supervisor.live(), 0);
+        let lines = audit_lines(&audit);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[1].contains("\"role\":\"composition\"")
+                && lines[1].contains("\"cause\":\"shutdown\""),
+            "{lines:?}"
+        );
+        assert_eq!(supervisor.deaths[DeathCause::Crash as usize - 1], 1);
+        assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 上一則 `bind` 回過 `bound`、葉子自己壞掉：組合行程留著；還沒回 `bound` 的整對收。
+    #[test]
+    fn the_composition_outlives_the_leaf_only_after_bound() {
+        let (mut supervisor, _, _) = with_a_pair("keep", Bind::Bound);
+        supervisor.on_exit(LEAF, KILLED);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.leafless_since.is_some() && composition.proc.stop.is_none());
+        assert_eq!(composition.bind, Bind::Unsent);
+        let (mut supervisor, _, _) = with_a_pair("collect", Bind::Sent);
+        supervisor.on_exit(LEAF, KILLED);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.leafless_since.is_none() && composition.proc.stop.is_some());
+    }
+
+    /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
+    #[test]
+    fn resuming_from_a_freeze_restarts_the_silence_of_both_processes() {
+        let (mut supervisor, _, _) = with_a_pair("resumed", Bind::Bound);
+        let stall = supervisor.args.stall.unwrap();
+        let before = Instant::now() - stall;
+        supervisor.compositions[0].heard_at = Some(before);
+        supervisor.conversations[0].heard_at = Some(before);
+        supervisor.check_resumed(Instant::now(), stall / 2 - Duration::from_millis(1));
+        assert_eq!(supervisor.compositions[0].heard_at, Some(before));
+        assert_eq!(supervisor.conversations[0].heard_at, Some(before));
+        supervisor.check_resumed(Instant::now(), stall / 2);
+        assert!(supervisor.compositions[0].heard_at.unwrap() > before);
+        assert!(supervisor.conversations[0].heard_at.unwrap() > before);
+        assert!(!supervisor.compositions[0].stalled(Instant::now(), stall));
+        assert!(!supervisor.conversations[0].stalled(Instant::now(), stall));
+    }
+
     #[test]
     fn run_dir_is_created_0700() {
         let dir = temp("create").join("run");
-        prepare_run_dir(&dir).unwrap();
+        prepare_run_dir(&dir, false).unwrap();
         assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
-        prepare_run_dir(&dir).unwrap();
+        prepare_run_dir(&dir, false).unwrap();
     }
 
     #[test]
@@ -2254,15 +3237,17 @@ mod tests {
         let open = base.join("open");
         std::fs::create_dir(&open).unwrap();
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(prepare_run_dir(&open).unwrap_err().contains("755"));
+        assert!(prepare_run_dir(&open, false).unwrap_err().contains("755"));
         let file = base.join("file");
         std::fs::write(&file, b"").unwrap();
-        assert!(prepare_run_dir(&file).is_err());
+        assert!(prepare_run_dir(&file, false).is_err());
         let target = base.join("target");
-        prepare_run_dir(&target).unwrap();
+        prepare_run_dir(&target, false).unwrap();
         let link = base.join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(prepare_run_dir(&link).unwrap_err().contains("不是目錄"));
+        assert!(prepare_run_dir(&link, false)
+            .unwrap_err()
+            .contains("不是目錄"));
     }
 
     #[test]
@@ -2271,6 +3256,6 @@ mod tests {
             "/{}",
             "d".repeat(SUN_PATH - LONGEST_SOCKET_NAME.len())
         ));
-        assert!(prepare_run_dir(&long).unwrap_err().contains("太長"));
+        assert!(prepare_run_dir(&long, false).unwrap_err().contains("太長"));
     }
 }
