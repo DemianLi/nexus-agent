@@ -1,7 +1,11 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
-import { markHistoryFromLog } from './history-shadow.js';
+import {
+  createUnsummarizedHistoryReader,
+  createVisibleHistoryReader,
+  markHistoryFromLog,
+} from './history-shadow.js';
 import type { SessionLookup } from './registry.js';
 import {
   createRepeatReminder,
@@ -14,6 +18,7 @@ import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { sourceKwargs } from './message-source.js';
 import type { MessageSource } from './message-source.js';
 import { SessionLog } from './session-log.js';
+import { toLoggedMessage } from './logged-message.js';
 
 /** `beforeModel` 拿出來直接呼叫用的形狀。 */
 type BeforeModel = (state: {
@@ -454,4 +459,220 @@ describe('記不進去：這一步失敗', () => {
     ).beforeModel;
     expect(() => hook({ messages: [] }, { configurable: {} })).toThrow(boom);
   });
+});
+
+/**
+ * `history-source=log` 的 root：鏈從日誌推出來、沒套摘要的那一串算（#2362）。
+ *
+ * state 那一邊用現成的 {@link conversation}（`state.messages` 讀法當基準），log 那一邊餵同一串呼叫，兩邊逐輪比提醒全文。
+ */
+describe('history-source=log：鏈讀日誌沒套摘要的那一串', () => {
+  /** 圖裡 root 的一次呼叫：`checkpoint_ns` 只有它自己那一段；子代理多一層。鏈讀哪一串只看這個，不看 `forCall`。 */
+  const ROOT_CALL = { configurable: { checkpoint_ns: 'model_request:abc' } };
+  const SUBAGENT_CALL = { configurable: { checkpoint_ns: 'tools:abc|model_request:def' } };
+
+  type Hook = (
+    state: { messages: readonly BaseMessage[] },
+    runtime?: { readonly configurable?: unknown },
+  ) => { messages: BaseMessage[] } | undefined;
+
+  const loggedHook = (log: SessionLog, address: 'root' | 'subagent' = 'root'): Hook => {
+    const sessions = {
+      forCall: (): SessionLookup => ({
+        kind: 'ok',
+        address: address === 'root' ? { kind: 'root' } : ({ kind: 'subagent' } as never),
+        log,
+      }),
+    };
+    markHistoryFromLog(sessions);
+    return (
+      createRepeatReminder(resolveRepeatReminderSettings(), sessions) as unknown as {
+        beforeModel: Hook;
+      }
+    ).beforeModel;
+  };
+
+  /** 日誌上多一次 `grep`：回覆、呼叫、結果。 */
+  function logGrep(log: SessionLog, id: string): void {
+    log.append('model/start', {});
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id, name: 'grep', args: { pattern: 'x' }, type: 'tool_call' as const }],
+        }),
+      ),
+    });
+    log.append('model/end', {});
+    log.append('tool/call', { callId: id, name: 'grep', arguments: '{"pattern":"x"}' });
+    log.append('tool/result', {
+      callId: id,
+      isError: false,
+      message: toLoggedMessage(new ToolMessage({ content: 'ok', tool_call_id: id, name: 'grep' })),
+    });
+  }
+
+  /** 把到目前為止的整串都摘掉：切點落在最後，摘要之後只剩新長的。 */
+  function summarizeAll(log: SessionLog): void {
+    const total = createUnsummarizedHistoryReader()(log).length;
+    log.append('compaction/summary', {
+      cutoffIndex: total,
+      messagesBefore: total,
+      filePath: null,
+      summary: toLoggedMessage(
+        new HumanMessage({ content: '摘要', additional_kwargs: { lc_source: 'summarization' } }),
+      ),
+      beforeCall: true,
+    });
+  }
+
+  /** 日誌上跑 n 次 `grep`，每次之後叫一次 `beforeModel`（`state` 給空的，證明沒讀它），收提醒全文。 */
+  function runOnLog(
+    log: SessionLog,
+    hook: Hook,
+    from: number,
+    to: number,
+    afterEach: (turn: number) => void = () => undefined,
+  ): string[][] {
+    const perTurn: string[][] = [];
+    for (let n = from; n <= to; n += 1) {
+      logGrep(log, `c${n}`);
+      perTurn.push((hook({ messages: [] }, ROOT_CALL)?.messages ?? []).map((m) => m.text));
+      afterEach(n);
+    }
+    return perTurn;
+  }
+
+  const startLog = (): SessionLog => {
+    const log = new SessionLog('chain');
+    log.append('turn/start', { kind: 'message', text: '開始' });
+    return log;
+  };
+
+  it('A 摘要之前：門檻 3／5／8 出的提醒跟 state 讀法逐字相同', () => {
+    const log = startLog();
+    const viaLog = runOnLog(log, loggedHook(log), 1, 8);
+    const viaState = conversation(hookOf(), same(8));
+    expect(viaLog).toEqual(viaState);
+    expect(viaLog.map((texts) => texts.length)).toEqual([0, 0, 1, 0, 1, 0, 0, 1]);
+  });
+
+  it('B 摘要之後：鏈在切點之間接續，門檻照原來的次數到', () => {
+    const log = startLog();
+    const hook = loggedHook(log);
+    const before = runOnLog(log, hook, 1, 4);
+    summarizeAll(log);
+    const after = runOnLog(log, hook, 5, 8);
+    expect([...before, ...after]).toEqual(conversation(hookOf(), same(8)));
+    expect(after.map((texts) => texts.length)).toEqual([1, 0, 0, 1]);
+  });
+
+  it('B 對照：套了摘要的那一串餵給 state 讀法，摘要之後鏈斷，第 5 次不出提醒', () => {
+    const log = startLog();
+    const hook = loggedHook(log);
+    runOnLog(log, hook, 1, 4);
+    summarizeAll(log);
+    logGrep(log, 'c5');
+    const visible = createVisibleHistoryReader()(log);
+    expect(visible[0]?.text).toBe('摘要');
+    // 沒套摘要的那一串在這一步是第 5 次，套了摘要的那一串只看得到切點之後的 1 次。
+    expect(hook({ messages: [] }, ROOT_CALL)?.messages).toHaveLength(1);
+    expect(hookOf()({ messages: visible })).toBeUndefined();
+  });
+
+  it('C 摘要之後又提醒：摘要前貼過的提醒不歸零鏈、也不重貼', () => {
+    const log = startLog();
+    const hook = loggedHook(log);
+    const before = runOnLog(log, hook, 1, 3);
+    expect(before[2]).toHaveLength(1);
+    summarizeAll(log);
+    const after = runOnLog(log, hook, 4, 8);
+    expect([...before, ...after]).toEqual(conversation(hookOf(), same(8)));
+    expect(after.map((texts) => texts.length)).toEqual([0, 1, 0, 0, 1]);
+  });
+
+  it('同一步再叫一次：這一步的提醒已經在日誌上，不重貼', () => {
+    const log = startLog();
+    const hook = loggedHook(log);
+    runOnLog(log, hook, 1, 3);
+    expect(hook({ messages: [] }, ROOT_CALL)).toBeUndefined();
+  });
+
+  it('中間有真使用者訊息：鏈清零，跟 state 讀法一樣', () => {
+    const log = startLog();
+    const hook = loggedHook(log);
+    runOnLog(log, hook, 1, 2);
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'message', text: '換個做法' });
+    const after = runOnLog(log, hook, 3, 5);
+    // 清零後重新從 1 數：全程第 5 次呼叫才是第 3 次。沒清零的話是 [1, 0, 1]，所以 [0, 0, 1] 證得出有清零。
+    expect(after.map((texts) => texts.length)).toEqual([0, 0, 1]);
+  });
+
+  it('子代理讀 state（#2751）：日誌是空的也照 state.messages 出提醒', () => {
+    const log = new SessionLog('sub');
+    const hook = loggedHook(log, 'subagent');
+    expect(hook({ messages: repeated3() }, SUBAGENT_CALL)?.messages).toHaveLength(1);
+  });
+
+  describe('查日誌的時機', () => {
+    const counted = (log: SessionLog, address: 'root' | 'subagent' = 'root') => {
+      const forCall = vi.fn((): SessionLookup => ({
+        kind: 'ok',
+        address: address === 'root' ? { kind: 'root' } : ({ kind: 'subagent' } as never),
+        log,
+      }));
+      return { sessions: { forCall }, forCall };
+    };
+    const hookOn = (sessions: { forCall(config: unknown): SessionLookup }): Hook =>
+      (
+        createRepeatReminder(resolveRepeatReminderSettings(), sessions) as unknown as {
+          beforeModel: Hook;
+        }
+      ).beforeModel;
+    /** 第 1 次呼叫之後：沒有提醒要出。 */
+    const quiet = (): BaseMessage[] => [
+      new HumanMessage('開始'),
+      ...turn('grep', { pattern: 'x' }, 'c0'),
+    ];
+    const configurable = ROOT_CALL;
+
+    it('state、沒提醒也沒通知：不查（只有要記提醒時才碰註冊表）', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'));
+      expect(hookOn(sessions)({ messages: quiet() }, configurable)).toBeUndefined();
+      expect(forCall).not.toHaveBeenCalled();
+    });
+
+    it('state、有提醒：只在記提醒時查一次', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'));
+      expect(hookOn(sessions)({ messages: repeated3() }, configurable)?.messages).toHaveLength(1);
+      expect(forCall).toHaveBeenCalledTimes(1);
+    });
+
+    it('log 的子代理、沒提醒：不查（不提前 open 子日誌）', () => {
+      const { sessions, forCall } = counted(new SessionLog('t'), 'subagent');
+      markHistoryFromLog(sessions);
+      const subagent = SUBAGENT_CALL;
+      expect(hookOn(sessions)({ messages: quiet() }, subagent)).toBeUndefined();
+      expect(forCall).not.toHaveBeenCalled();
+    });
+
+    it('log 的 root、沒有通知來源：查一次，讀與記共用', () => {
+      const log = startLog();
+      const { sessions, forCall } = counted(log);
+      markHistoryFromLog(sessions);
+      logGrep(log, 'c0');
+      logGrep(log, 'c1');
+      logGrep(log, 'c2');
+      expect(hookOn(sessions)({ messages: [] }, configurable)?.messages).toHaveLength(1);
+      expect(forCall).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  const repeated3 = (): BaseMessage[] => [
+    new HumanMessage('開始'),
+    ...turn('grep', { pattern: 'x' }, 'c0'),
+    ...turn('grep', { pattern: 'x' }, 'c1'),
+    ...turn('grep', { pattern: 'x' }, 'c2'),
+  ];
 });
