@@ -17,7 +17,8 @@
 `src/styles/design-system.test.ts` 會掃元件原始碼的字串字面值，下面這些寫了就紅：
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。浮層的遮罩走 `--scrim`（vendor 的 dialog、alert-dialog、sheet 已由覆寫檔接上，自己寫的遮罩用 `bg-(--scrim)`）。
-- **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
+- **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。`vendor/` 裡 SG 元件現有的任意值字級釘在測試的 `VENDOR_PINNED`。
+- **停用的透明度**：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50`；這顆不靠透明度變淡時寫 `opacity-100`。
 - **表面**：卡片與內層底用 `Surface`，不手寫 `bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-muted … w-full … text-left … min-h-11`。
@@ -28,7 +29,7 @@
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
-- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_SPACING_PINNED`。
+- **間距**：內距、外距、間隙、定位偏移只用 Tailwind 的預設級距（清單在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md) §13.4）。不寫 `p-[9px]`、`p-13`；`px`、`auto`、分數與引用 token 的算式可以。寬高不在這條裡。`vendor/` 裡 SG 元件現有的任意值釘在測試的 `VENDOR_PINNED`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
 真的要例外：列進該測試的 `ALLOWED`，附理由。**例外只會變少**：列了卻不再命中的條目會報錯。registry 原文的例外（`ui/`）等它們被改掉或確認要留再處理。

@@ -189,7 +189,8 @@
 
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；registry 的 `ring-[3px]` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
-- chip 階梯（rest／hover／pressed）、主按鈕 hover／active、disabled `.6`。
+- chip 階梯（rest／hover／pressed）、主按鈕 hover／active。
+- 停用（disabled）的透明度是 50（`disabled:opacity-50`，SG 元件的現值；[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）。不靠透明度變淡的寫 `opacity-100`（例如送出鈕停用時改用字色）。護欄與例外見 §13.4。
 
 **Tailwind layer 的坑**：body 的底色、字色、`color-scheme` **寫在 layer 外**（SG 寫在 base layer，所以在 `solid-glass.overrides.css` 重寫一次，Q8 保留的機制）。寫在 `@layer base` 時，頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字（原型在 Artifact 裡踩過）。
 
@@ -417,12 +418,12 @@
 
 | 類別 | 級距 | 護欄 |
 | --- | --- | --- |
-| 字級 | 四階（§5「字型」） | `design-system.test.ts`、`type-hierarchy.test.ts` |
+| 字級 | 四階（§5「字型」）；vendor 另有釘住的值（下面「字級」） | `design-system.test.ts`（任意值連 vendor 一起掃）、`type-hierarchy.test.ts` |
 | 圓角 | SG 的階梯加 `--radius-row`（§5「形狀」） | `design-system.test.ts` |
 | 間距 | Tailwind 的預設級距（下面「間距」） | `design-system.test.ts`，連 vendor 一起掃 |
 | 陰影 | 還沒有具名階梯；畫法照 §5「形狀」 | `border-shadow.test.ts`、`shadow-alpha.test.ts` 管畫法 |
 | 層級 | 還沒有 | 還沒有 |
-| 透明度 | 只定 disabled 與遮罩兩個值；遮罩是 `--scrim` | 還沒有 |
+| 透明度 | 只定停用與遮罩兩個值：停用是 50（§5「互動狀態」），遮罩是 `--scrim` | 停用：`design-system.test.ts`，連 vendor 一起掃；遮罩還沒有 |
 | 時長 | Tailwind 的 `duration-*` 級距；不設動效 token（§7） | `design-system.test.ts` |
 
 **現況**（2026-11-15，develop `ae52d15b`；掃 `apps/web/src` 的 ts、tsx 裡的 class 字串，不含測試檔，也不含 css 檔裡直接寫的值）：
@@ -434,16 +435,20 @@
 | 任意值的圓角 | 0 | 8 處、5 種 |
 | 任意值的陰影 | 2 處，都是 `Surface` 的內層底配方 | 2 處 |
 | 層級 | `z-50`、`z-10` 各 1 處 | `z-50` 14 處、`z-10` 4 處、`z-20` 2 處 |
-| 半透明（0 與 100 以外） | `opacity-50` 3 處、`opacity-70` 2 處、`opacity-60` 2 處、`opacity-40` 1 處 | `opacity-50` 17 處、`opacity-60` 2 處 |
+| 半透明（0 與 100 以外） | `opacity-60` 2 處、`opacity-50`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `f3581ca8`，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
 
-vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），間距除外。
+vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），間距、任意值字級、停用的透明度除外。
 
 **間距**（[#2763](https://github.com/DemianLi/nexus-agent/issues/2763)）：內距、外距、間隙、定位偏移（`p-*`、`m-*`、`gap-*`、`space-*`、`inset-*`、`top-*` 這一類）只用這些級距：0、0.5、1、1.5、2、2.5、3、3.5、4、5、6、7、8、9、10、11、12、14、16、20、24、28、32、36、40、44、48、52、56、60、64、72、80、96；數字 1 是 4px。
 
 - 不寫任意值（`pr-[9px]`），也不寫級距外的數字（`p-13`）。
 - `px`、`auto`、`full`、分數（`top-1/2`）與引用 token 的值（`left-(--offset)`、`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
 - 寬高（`w-*`、`h-*`、`max-h-[300px]`）是版面值，不在這條裡。
-- vendor 現有的 6 處任意值釘住現值：vendor 檔不動，逐條列在 `design-system.test.ts` 的 `VENDOR_SPACING_PINNED`，清單只會變短。同步上游多出一條會紅，處理方式照 §13.1（用覆寫蓋回級距，或由 demian 核可後列進清單）。
+- vendor 現有的 6 處任意值釘住現值：vendor 檔不動，逐條列在 `design-system.test.ts` 的 `VENDOR_PINNED`，清單只會變短。同步上游多出一條會紅，處理方式照 §13.1（用覆寫蓋回級距，或由 demian 核可後列進清單）。
+
+**字級**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：標準是 §5 的四階，產品原始碼只用這四階。vendor 的 SG 元件另用了 7 種任意值（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem，共 20 處），照現況凍結：vendor 檔不動，逐條列在 `VENDOR_PINNED`，規則同間距。vendor 的 `text-sm`、`text-xs` 是 SG 原樣（§5），不在清單裡。
+
+**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 現有的全部符合。產品原始碼有一處例外：`goal-bar.tsx` 的暫停鈕是 `disabled:opacity-60`，列在 `ALLOWED`，對齊到 50 要 demian 看過前後對照再改。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
 
 ### 13.5 元件的分層
 
@@ -468,7 +473,6 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 字級涵蓋 vendor 實際用的值；disabled 的透明度（§13.4） | §5 寫四階與 `.6`，vendor 另有 7 種字級、disabled 是 50 | [#2761](https://github.com/DemianLi/nexus-agent/issues/2761) |
 | 陰影、層級的級距與護欄（§13.4） | 沒有 | 還沒開卡 |
 | axe 在真瀏覽器裡跑（§13.3） | 只在 jsdom 跑，`color-contrast` 關著 | [#2765](https://github.com/DemianLi/nexus-agent/issues/2765) |
 | 每個共用元件有文件與預覽（§13.5） | 不齊；沒有給人看的目錄 | [#2762](https://github.com/DemianLi/nexus-agent/issues/2762)；目錄還沒開卡 |
