@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::fixture;
 use nexus_host::mcp::bridge::{Bridge, Command, Outcome};
 use nexus_host::mcp::config::{Connection, Server};
-use nexus_host::mcp::stdio::{self, STDIN_GRACE};
+use nexus_host::mcp::stdio::{self, REAP_BUDGET, STDIN_GRACE, TERM_GRACE};
 use nexus_host::proxy::ProxyPolicy;
 use nexus_host::tls::{client_config, http_client};
 use serde_json::{json, Value};
@@ -452,17 +452,12 @@ mod bridge {
     }
 }
 
-/// 子行程不理 stdin 的 EOF：等滿 [`STDIN_GRACE`] 之後 SIGTERM，收乾淨才回來。
-#[test]
-fn reap_收掉不理_eof_的子行程() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("執行環境");
+/// 起一個 stdio 子行程（沒有憑證、沒有環境），回起好的行程與它的 pid。
+fn spawn_for_reap(command: &str, args: &[&str]) -> (stdio::Spawned, i32) {
     let spec = match Server::parse(&json!({
         "serverName": "a",
         "connection": {
-            "transport": "stdio", "command": "/bin/sleep", "args": ["30"], "env": {},
+            "transport": "stdio", "command": command, "args": args, "env": {},
         },
     }))
     .expect("收")
@@ -471,15 +466,57 @@ fn reap_收掉不理_eof_的子行程() {
         Connection::Stdio(spec) => spec,
         Connection::Http { .. } => unreachable!(),
     };
-    runtime.block_on(async {
-        let stdio::Spawned { child, transport } = stdio::spawn(&spec).expect("起得來");
-        let pid = child.id().expect("還沒收走") as i32;
+    let spawned = stdio::spawn(&spec).expect("起得來");
+    let pid = spawned.child.id().expect("還沒收走") as i32;
+    (spawned, pid)
+}
+
+fn reap_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("執行環境")
+}
+
+/// 子行程不理 stdin 的 EOF：等滿 [`STDIN_GRACE`] 之後 SIGTERM，收乾淨才回來。
+#[test]
+fn reap_收掉不理_eof_的子行程() {
+    reap_runtime().block_on(async {
+        let (stdio::Spawned { child, transport }, pid) = spawn_for_reap("/bin/sleep", &["30"]);
         drop(transport);
         let started = Instant::now();
         stdio::reap(child).await;
         let took = started.elapsed();
         assert!(took >= STDIN_GRACE, "還沒到寬限就動手了：{took:?}");
-        assert!(took < Duration::from_secs(10), "收太久：{took:?}");
+        // `sleep` 收到 SIGTERM 就結束：回來的時間是 STDIN_GRACE 加一點，不是再等滿 TERM_GRACE 走到 SIGKILL。
+        assert!(
+            took < STDIN_GRACE + Duration::from_secs(1),
+            "SIGTERM 沒有立刻生效：{took:?}"
+        );
+        // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時已經 `wait` 過，查不到才對。
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "子行程還在");
+    });
+}
+
+/// 子行程忽略 SIGTERM（`exec` 之後忽略的處置照樣保留）：要等滿 STDIN_GRACE 與 TERM_GRACE 才 SIGKILL，
+/// 回來時行程已經不在，而且沒超過 [`REAP_BUDGET`] 加餘裕。
+#[test]
+fn reap_收掉忽略_sigterm_的子行程() {
+    reap_runtime().block_on(async {
+        let (stdio::Spawned { child, transport }, pid) =
+            spawn_for_reap("/bin/sh", &["-c", "trap '' TERM; exec sleep 30"]);
+        drop(transport);
+        let started = Instant::now();
+        stdio::reap(child).await;
+        let took = started.elapsed();
+        assert!(
+            took >= STDIN_GRACE + TERM_GRACE,
+            "SIGTERM 之後沒有等滿 TERM_GRACE 就 SIGKILL：{took:?}"
+        );
+        assert!(
+            took < REAP_BUDGET + Duration::from_millis(500),
+            "超過收線預算：{took:?}"
+        );
         // SAFETY: 訊號 0 只查行程在不在；`reap` 回來時已經 `wait` 過，查不到才對。
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "子行程還在");
     });
