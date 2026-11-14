@@ -135,6 +135,8 @@ export async function boot(options: {
   readonly agentLoop?: AgentLoopKind;
   /** 省略照測試 setup 補的值（`state`）；明給才是那一個。 */
   readonly historySource?: HistorySource;
+  /** 附加的插件（接在 worker 插件之後）。 */
+  readonly extraPlugins?: readonly PluginEntry[];
 }): Promise<Booted> {
   const store = openStore();
   const models = {
@@ -146,7 +148,7 @@ export async function boot(options: {
     ...(options.agentLoop !== 'native' && { checkpointer: new MemorySaver() }),
     ...(options.agentLoop !== undefined && { agentLoop: options.agentLoop }),
     ...(options.historySource !== undefined && { historySource: options.historySource }),
-    plugins: [workers(models, options.hold)],
+    plugins: [workers(models, options.hold), ...(options.extraPlugins ?? [])],
     backend: new ContainedFilesystemBackend({
       rootDir: join(world.dir, 'workspace'),
       mode: 'workspace-write',
