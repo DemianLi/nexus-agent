@@ -118,16 +118,19 @@ fn write_some(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
 /// 往目的端寫出錯時這個方向作廢；另一個方向不受影響，目的端真的斷了的話下一輪 poll 會回報。
 /// `src_gone` 是來源那一端斷了：它不會再被 poll，所以讀到它結束或目的端寫不進去為止，讀不到東西也算結束；
 /// 它不會再有新的進來，讀不會沒完。來源沒斷的話一次最多讀 [`BUFFER`]。
-fn pump(src: RawFd, dst: RawFd, half: &mut Half, scratch: &mut [u8], src_gone: bool) {
+fn pump(src: RawFd, dst: RawFd, half: &mut Half, scratch: &mut [u8], src_gone: bool) -> bool {
     if half.done {
-        return;
+        return false;
     }
     if !half.pending.is_empty() {
         match write_some(dst, &half.pending) {
             Ok(written) => {
                 half.pending.drain(..written);
             }
-            Err(_) => return half.abandon(),
+            Err(_) => {
+                half.abandon();
+                return true;
+            }
         }
     }
     let mut budget = if src_gone { usize::MAX } else { BUFFER };
@@ -142,7 +145,10 @@ fn pump(src: RawFd, dst: RawFd, half: &mut Half, scratch: &mut [u8], src_gone: b
             budget = budget.saturating_sub(n);
             match write_some(dst, &scratch[..n]) {
                 Ok(written) => half.pending.extend_from_slice(&scratch[written..n]),
-                Err(_) => return half.abandon(),
+                Err(_) => {
+                    half.abandon();
+                    return true;
+                }
             }
         } else {
             match errno() {
@@ -157,6 +163,7 @@ fn pump(src: RawFd, dst: RawFd, half: &mut Half, scratch: &mut [u8], src_gone: b
         unsafe { libc::shutdown(dst, libc::SHUT_WR) };
         half.done = true;
     }
+    false
 }
 
 /// 非阻塞地連一個 Unix socket。行程是單執行緒、不 fork，`socket()` 之後才設 `FD_CLOEXEC` 沒有空窗。
@@ -287,8 +294,8 @@ impl Forward {
                 link.up.abandon();
             }
             let (client, leaf) = (link.client.fd.as_raw_fd(), link.leaf.fd.as_raw_fd());
-            pump(client, leaf, &mut link.up, scratch, link.client.gone);
-            pump(leaf, client, &mut link.down, scratch, link.leaf.gone);
+            link.leaf.gone |= pump(client, leaf, &mut link.up, scratch, link.client.gone);
+            link.client.gone |= pump(leaf, client, &mut link.down, scratch, link.leaf.gone);
             !(link.up.done && link.down.done)
         });
         if polled[0].revents != 0 {
