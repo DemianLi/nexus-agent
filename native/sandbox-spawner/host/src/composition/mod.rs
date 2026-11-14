@@ -56,9 +56,27 @@ const USAGE: &str = "nexus-composition --socket <路徑> --pair-socket <路徑> 
 /// SIGTERM 的 handler 往這個 fd 寫一個 byte 叫醒迴圈。
 static TERM_FD: AtomicI32 = AtomicI32::new(-1);
 
+/// 這條執行緒的 `errno`。
+#[cfg(target_os = "linux")]
+unsafe fn errno_slot() -> *mut libc::c_int {
+    libc::__errno_location()
+}
+
+/// 這條執行緒的 `errno`。
+#[cfg(target_os = "macos")]
+unsafe fn errno_slot() -> *mut libc::c_int {
+    libc::__error()
+}
+
 extern "C" fn on_sigterm(_: libc::c_int) {
     // SAFETY：handler 裡只用 async-signal-safe 的 write；管線滿了或沒開，寫不進去都不理。
-    unsafe { libc::write(TERM_FD.load(Ordering::SeqCst), b"t".as_ptr().cast(), 1) };
+    // write 會改 `errno`，被打斷的那段程式可能正要讀它（判斷 `EAGAIN`），所以存起來、寫完還原。
+    unsafe {
+        let slot = errno_slot();
+        let saved = *slot;
+        libc::write(TERM_FD.load(Ordering::SeqCst), b"t".as_ptr().cast(), 1);
+        *slot = saved;
+    }
 }
 
 /// 開一條非阻塞的管線、裝上 SIGTERM 的 handler，回讀端。
@@ -68,20 +86,32 @@ fn watch_sigterm() -> std::io::Result<OwnedFd> {
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY：兩個 fd 是剛開的，只改它們的旗標；讀端交給 OwnedFd，寫端留到行程結束；handler 只做 write。
-    unsafe {
-        for fd in fds {
-            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    // SAFETY：兩個 fd 是剛開的，讀端交給 OwnedFd；寫端留到行程結束，起不來的話行程馬上結束，不另外關。
+    let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    for fd in fds {
+        // SAFETY：只改這個 fd 的旗標。
+        let flagged = unsafe {
             let flags = libc::fcntl(fd, libc::F_GETFL);
-            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) == 0
+                && flags >= 0
+                && libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == 0
+        };
+        if !flagged {
+            return Err(std::io::Error::last_os_error());
         }
-        TERM_FD.store(fds[1], Ordering::SeqCst);
+    }
+    TERM_FD.store(fds[1], Ordering::SeqCst);
+    // SAFETY：handler 只做 write 與存取 `errno`。
+    let installed = unsafe {
         libc::signal(
             libc::SIGTERM,
             on_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t,
-        );
-        Ok(OwnedFd::from_raw_fd(fds[0]))
+        )
+    };
+    if installed == libc::SIG_ERR {
+        return Err(std::io::Error::last_os_error());
     }
+    Ok(read)
 }
 
 struct Args {
@@ -166,7 +196,12 @@ pub fn run(args: Vec<OsString>) -> i32 {
     };
     let opened = watch_sigterm().and_then(|term| {
         let pair = Pair::new(bind(&args.pair_socket)?, &[])?;
-        let forward = Forward::new(bind(&args.socket)?, args.leaf_socket.clone())?;
+        // 橋的 socket 是這個行程剛建的檔：前台的那一個起不來就一起刪掉。
+        let forward = bind(&args.socket)
+            .and_then(|front| Forward::new(front, args.leaf_socket.clone()))
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&args.pair_socket);
+            })?;
         Ok((term, pair, forward))
     });
     let (term, pair, forward) = match opened {

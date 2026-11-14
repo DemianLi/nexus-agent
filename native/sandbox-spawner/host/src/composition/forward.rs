@@ -5,9 +5,11 @@
 //! - 每個方向讀一次最多 [`BUFFER`]、馬上寫給另一邊；寫不完的留著，留著的寫完之前不再讀來源，所以每個方向最多留 [`BUFFER`]，
 //!   對方不讀時來源那一端的寫入會被核心擋住。
 //! - 一邊讀到 EOF：留著的寫完之後只關另一邊寫的方向；兩個方向都結束才整條關。
-//! - 一邊整條關了（`POLLHUP`）：往它的那個方向當場作廢；它關之前送出、還沒讀的照樣轉給另一邊。
-//!   這靠 Linux 的語意：stream socket 兩個方向都關了才有 `POLLHUP`，對方只關寫的方向不算。
-//! - 讀寫出錯：兩邊一起關。
+//! - 一邊斷了（`POLLHUP` 或 `POLLERR`）：往它的那個方向當場作廢；它斷之前送出、還沒讀的照樣轉給另一邊，
+//!   讀到 EOF 或讀錯為止。兩個方向都結束才整條關。
+//!   `POLLHUP` 靠 Linux 的語意：stream socket 兩個方向都關了才有，對方只關寫的方向不算。
+//!   `POLLERR` 在 Linux 上是對方帶著沒讀的資料關（`ECONNRESET`），它關之前送出的一樣讀得到。
+//! - 讀來源出錯：當成來源結束，跟 EOF 一樣。往目的端寫出錯：只有那個方向作廢，另一個方向照推。
 //! - 同時最多 [`MAX_LINKS`] 條，到了就不 accept，多的排在 listen 的 backlog。
 //! - 連不上葉子：進來的那一條直接關。連是非阻塞的，葉子的 backlog 滿了也算連不上。
 
@@ -36,8 +38,8 @@ fn pollfd(fd: RawFd, events: libc::c_short) -> libc::pollfd {
 /// 一條連線的一端。
 struct End {
     fd: OwnedFd,
-    /// 對方整條關了：不再 poll 它（`POLLHUP` 不用登記也會一直回報），剩下的靠另一端的事件推進。
-    hup: bool,
+    /// 這一端斷了：不再 poll 它（`POLLHUP`、`POLLERR` 不用登記也會一直回報），剩下的靠另一端的事件推進。
+    gone: bool,
 }
 
 /// 一個方向。
@@ -60,7 +62,7 @@ impl Half {
         !self.done && !self.pending.is_empty()
     }
 
-    /// 目的端整條關了：留著的丟掉。
+    /// 目的端斷了：留著的丟掉。
     fn abandon(&mut self) {
         self.pending.clear();
         self.done = true;
@@ -84,7 +86,7 @@ fn events(end: &End, from: &Half, to: &Half) -> libc::pollfd {
     if to.wants_write() {
         events |= libc::POLLOUT;
     }
-    pollfd(if end.hup { -1 } else { end.fd.as_raw_fd() }, events)
+    pollfd(if end.gone { -1 } else { end.fd.as_raw_fd() }, events)
 }
 
 fn errno() -> i32 {
@@ -111,21 +113,23 @@ fn write_some(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
     Ok(written)
 }
 
-/// 推一個方向：先寫留著的，寫完了才讀來源、讀到就寫；來源 EOF 而且都寫完了，關目的端寫的方向。一次最多讀 `budget`。
-fn pump(
-    src: RawFd,
-    dst: RawFd,
-    half: &mut Half,
-    scratch: &mut [u8],
-    mut budget: usize,
-) -> io::Result<()> {
+/// 推一個方向：先寫留著的，寫完了才讀來源、讀到就寫；來源結束（EOF 或讀錯）而且都寫完了，關目的端寫的方向。
+/// 往目的端寫出錯時這個方向作廢；另一個方向不受影響，目的端真的斷了的話下一輪 poll 會回報。
+/// `src_gone` 是來源那一端斷了：它不會再被 poll，所以讀到它結束或目的端寫不進去為止，讀不到東西也算結束；
+/// 它不會再有新的進來，讀不會沒完。來源沒斷的話一次最多讀 [`BUFFER`]。
+fn pump(src: RawFd, dst: RawFd, half: &mut Half, scratch: &mut [u8], src_gone: bool) {
     if half.done {
-        return Ok(());
+        return;
     }
     if !half.pending.is_empty() {
-        let written = write_some(dst, &half.pending)?;
-        half.pending.drain(..written);
+        match write_some(dst, &half.pending) {
+            Ok(written) => {
+                half.pending.drain(..written);
+            }
+            Err(_) => return half.abandon(),
+        }
     }
+    let mut budget = if src_gone { usize::MAX } else { BUFFER };
     while half.pending.is_empty() && !half.eof && budget > 0 {
         let room = budget.min(scratch.len());
         // SAFETY：讀進 scratch 的前 room 個 byte。
@@ -135,13 +139,15 @@ fn pump(
         } else if n > 0 {
             let n = n as usize;
             budget = budget.saturating_sub(n);
-            let written = write_some(dst, &scratch[..n])?;
-            half.pending.extend_from_slice(&scratch[written..n]);
+            match write_some(dst, &scratch[..n]) {
+                Ok(written) => half.pending.extend_from_slice(&scratch[written..n]),
+                Err(_) => return half.abandon(),
+            }
         } else {
             match errno() {
                 libc::EINTR => continue,
-                libc::EAGAIN => break,
-                _ => return Err(io::Error::last_os_error()),
+                libc::EAGAIN if !src_gone => break,
+                _ => half.eof = true,
             }
         }
     }
@@ -150,7 +156,6 @@ fn pump(
         unsafe { libc::shutdown(dst, libc::SHUT_WR) };
         half.done = true;
     }
-    Ok(())
 }
 
 /// 非阻塞地連一個 Unix socket。行程是單執行緒、不 fork，`socket()` 之後才設 `FD_CLOEXEC` 沒有空窗。
@@ -175,11 +180,18 @@ fn connect(path: &Path) -> io::Result<OwnedFd> {
     }
     // SAFETY：raw 是剛開的 fd，只有這裡擁有。
     let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-    // SAFETY：只改這個 fd 的旗標；addr 是填好的 sockaddr_un，長度照它的大小。
-    let rc = unsafe {
-        libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC);
+    // SAFETY：只改這個 fd 的旗標。
+    let flagged = unsafe {
         let flags = libc::fcntl(raw, libc::F_GETFL);
-        libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC) == 0
+            && flags >= 0
+            && libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) == 0
+    };
+    if !flagged {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY：addr 是填好的 sockaddr_un，長度照它的大小。
+    let rc = unsafe {
         libc::connect(
             raw,
             (&addr as *const libc::sockaddr_un).cast(),
@@ -222,11 +234,6 @@ impl Forward {
         })
     }
 
-    /// 正在轉送幾條。
-    pub fn links(&self) -> usize {
-        self.links.len()
-    }
-
     /// 要 poll 的 fd，接在 `fds` 後面。`accepting` 是現在收不收新的連線。
     pub fn poll_fds(&mut self, fds: &mut Vec<libc::pollfd>, accepting: bool, now: Instant) {
         self.accept_after = self.accept_after.filter(|&until| now < until);
@@ -263,27 +270,25 @@ impl Forward {
                 _ => (0, 0),
             };
             index += 1;
-            if (client | leaf) & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            if (client | leaf) & libc::POLLNVAL != 0 {
                 return false;
             }
-            link.client.hup |= client & libc::POLLHUP != 0;
-            link.leaf.hup |= leaf & libc::POLLHUP != 0;
-            if client == 0 && leaf == 0 && !link.client.hup && !link.leaf.hup {
+            let gone = libc::POLLHUP | libc::POLLERR;
+            link.client.gone |= client & gone != 0;
+            link.leaf.gone |= leaf & gone != 0;
+            if client == 0 && leaf == 0 && !link.client.gone && !link.leaf.gone {
                 return true;
             }
-            if link.client.hup {
+            if link.client.gone {
                 link.down.abandon();
             }
-            if link.leaf.hup {
+            if link.leaf.gone {
                 link.up.abandon();
             }
-            // 整條關了的那一端不再 poll，所以它剩下的要在這裡讀到 EOF 或另一邊寫不進去為止；它不會再有新的進來，讀不會沒完。
-            let budget = |end: &End| if end.hup { usize::MAX } else { BUFFER };
-            let (up, down) = (budget(&link.client), budget(&link.leaf));
             let (client, leaf) = (link.client.fd.as_raw_fd(), link.leaf.fd.as_raw_fd());
-            let ok = pump(client, leaf, &mut link.up, scratch, up).is_ok()
-                && pump(leaf, client, &mut link.down, scratch, down).is_ok();
-            ok && !(link.up.done && link.down.done)
+            pump(client, leaf, &mut link.up, scratch, link.client.gone);
+            pump(leaf, client, &mut link.down, scratch, link.leaf.gone);
+            !(link.up.done && link.down.done)
         });
         if polled[0].revents != 0 {
             self.accept(now);
@@ -311,11 +316,11 @@ impl Forward {
                     self.links.push(Link {
                         client: End {
                             fd: OwnedFd::from(client),
-                            hup: false,
+                            gone: false,
                         },
                         leaf: End {
                             fd: leaf,
-                            hup: false,
+                            gone: false,
                         },
                         up: Half::default(),
                         down: Half::default(),
@@ -389,7 +394,6 @@ mod tests {
     /// 葉子在這一輪 poll 之後、寫之前才回應並整條關：往葉子寫會出錯，葉子關之前送出的回應還是要到前台。
     /// poll 與寫之間的空窗從行程外面排不出來，所以在行程內拿 poll 當下那一批 `pollfd` 叫 `step`。
     #[test]
-    #[ignore = "#2754：修好之前是紅的，先讓出位置給 tests/composition.rs 跑"]
     fn a_response_from_a_leaf_that_closed_between_poll_and_write_still_arrives() {
         let (mut forward, mut client, mut leaf, dir) = linked("stale");
         client.write_all(b"request").unwrap();
