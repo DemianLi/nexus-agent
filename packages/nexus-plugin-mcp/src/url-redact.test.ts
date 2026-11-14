@@ -5,11 +5,18 @@
 
 import type { Client, Tool } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { attemptsOn, connectGeneration } from './connection.js';
+import {
+  attemptsOn,
+  connectGeneration,
+  openClient,
+  redactedUrl,
+  withUrlScrubbing,
+} from './connection.js';
 import type { Attempts } from './connection.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
-import { mcpConfigSchema } from './index.js';
+import { isConnectionLost, mcpConfigSchema } from './index.js';
+import { redactorFor } from './credentials.js';
 import { createRedactor } from './redact.js';
 
 const TOKEN = 'QSECRET9f3a';
@@ -118,4 +125,147 @@ describe('rejectTaskRequired：工具名裡的憑證值', () => {
     expect((error as Error).message).toContain('requires task-based execution');
     expect((error as Error).message).not.toContain(secret);
   });
+});
+
+/** query 值：空白、`/`、`@`，原樣、百分號編碼、解碼後三種形式互不相同。 */
+const VALUE = 'tok/en pass@0123456789';
+
+/** 錯誤、cause 鏈、stack 都沒有值的任何形式。 */
+function expectNoValue(error: unknown): void {
+  const text = everything(error);
+  const forms = [
+    VALUE,
+    encodeURIComponent(VALUE),
+    encodeURIComponent(VALUE).toLowerCase(),
+    encodeURIComponent(VALUE).replaceAll('%20', '+'),
+  ];
+  for (const form of forms) expect(text).not.toContain(form);
+  expect(text).toContain('[redacted]');
+}
+
+async function failedCall(
+  start: () => Promise<HttpFixture>,
+  query: string,
+  body: (request: { method: string; url: string }) => string,
+): Promise<unknown> {
+  const fixture = await start();
+  const config = mcpConfigSchema.parse({
+    serverName: 'srv',
+    connection: { transport: 'http', url: `${fixture.url}?${query}` },
+  });
+  const attempts = attemptsOn(config, false, new Map());
+  open.push({ fixture, attempts });
+  const generation = await attempts.first();
+  const call = generation.calls.get(generation.listed.tools[0]?.name ?? '');
+  fixture.failRpcMethod('tools/call', body);
+  return caught(
+    call?.({ topic: 'x' }, { callId: 'call_1', signal: undefined } as never) ?? Promise.resolve(),
+  );
+}
+
+describe.each(eras)('%s：query 的值各種回顯都遮', (_name, start) => {
+  const encoded = encodeURIComponent(VALUE);
+  it('只回顯值，沒有 `?`、沒有參數名', async () => {
+    expectNoValue(await failedCall(start, `token=${encoded}`, () => `invalid token ${VALUE}`));
+  });
+  it('server 在前面多加參數、換了順序', async () => {
+    expectNoValue(
+      await failedCall(
+        start,
+        `a=1&token=${encoded}&b=2`,
+        () => `bad request: b=2&extra=zz&token=${encoded}&a=1`,
+      ),
+    );
+  });
+  it('百分號編碼的值解碼後回顯、大小寫不同的編碼、form 編碼', async () => {
+    const lower = encoded.toLowerCase();
+    expectNoValue(
+      await failedCall(
+        start,
+        `token=${encoded}`,
+        () => `${VALUE} | ${lower} | ${encoded.replaceAll('%20', '+')}`,
+      ),
+    );
+  });
+  it('JSON 裡把斜線寫成 `\\/` 的回顯', async () => {
+    expectNoValue(
+      await failedCall(
+        start,
+        `token=${encoded}`,
+        () => `{"error":"${VALUE.replaceAll('/', '\\/')}"}`,
+      ),
+    );
+  });
+  it('網址沒有 query：錯誤訊息逐字不變，cause 還是原來的錯誤', async () => {
+    const fixture = await start();
+    const config = mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'http', url: fixture.url },
+    });
+    const attempts = attemptsOn(config, false, new Map());
+    open.push({ fixture, attempts });
+    const generation = await attempts.first();
+    const call = generation.calls.get(generation.listed.tools[0]?.name ?? '');
+    fixture.failRpcMethod('tools/call', true);
+    const error = (await caught(
+      call?.({ topic: 'x' }, { callId: 'call_1', signal: undefined } as never) ?? Promise.resolve(),
+    )) as Error;
+    expect(error.message).toBe(
+      'Error calling tool fetch_release_note: SdkHttpError: Error POSTing to endpoint: Cannot POST /mcp',
+    );
+    expect(String(error.cause)).toContain('Cannot POST /mcp');
+    expect((error.cause as Error).stack).toBeDefined();
+  });
+});
+
+describe('短的 query 值不收（`v=2`）', () => {
+  const config = mcpConfigSchema.parse({
+    serverName: 'srv',
+    connection: { transport: 'http', url: 'http://127.0.0.1:9/mcp?v=2&token=abcdefghij' },
+  });
+  const redactor = withUrlScrubbing(config, redactorFor(config, new Map()));
+
+  it('`MCP error -32000` 還在，斷線判定不壞；長的值照遮', () => {
+    const text = redactor.scrubText('MCP error -32000: Connection closed (v=2? token abcdefghij)');
+    expect(text).toContain('MCP error -32000: Connection closed');
+    expect(text).not.toContain('abcdefghij');
+    expect(isConnectionLost(new Error(text))).toBe(true);
+  });
+});
+
+describe('整段 search 的比對兜底', () => {
+  it('query 值太短不收，逐字回顯的 `?k=ab` 仍遮', () => {
+    const config = mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'http', url: 'http://127.0.0.1:9/mcp?k=ab' },
+    });
+    const redactor = withUrlScrubbing(config, redactorFor(config, new Map()));
+    expect(redactor.scrubText('Cannot POST /mcp?k=ab')).toBe('Cannot POST /mcp[redacted]');
+  });
+});
+
+describe('遮蔽是冪等的', () => {
+  it('沒有 path 的網址：連線失敗的訊息裡 host 後面只有一條斜線', async () => {
+    const config = mcpConfigSchema.parse({
+      serverName: 'srv',
+      connection: { transport: 'http', url: 'http://127.0.0.1:1' },
+    });
+    const error = await caught(openClient(config, new Map()));
+    const text = everything(error);
+    expect(text).toContain('http://127.0.0.1:1/');
+    expect(text).not.toContain('http://127.0.0.1:1//');
+  });
+
+  it.each(['http://h', 'http://h/mcp', 'http://h?x=abcdefghij'])(
+    '%s：遮兩次與遮一次相同',
+    (url) => {
+      const config = mcpConfigSchema.parse({
+        serverName: 'srv',
+        connection: { transport: 'http', url },
+      });
+      const redactor = withUrlScrubbing(config, redactorFor(config, new Map()));
+      const once = redactor.scrubText(`GET ${url} failed at ${redactedUrl(url)}`);
+      expect(redactor.scrubText(once)).toBe(once);
+    },
+  );
 });

@@ -21,7 +21,7 @@
 | `reject[]` | `text` 要被拒絕，原因是 `reason`。有 `code` 的，訊息要以 `YAML 錯誤 <code>` 開頭：`reason` 是 `yaml` 時用它分出是哪一種、釘住〈拒絕〉的先後。有 `secret` 的，拒絕訊息裡不能出現那個字串。 |
 | `modes[]` | 八進位的權限（字串），`accept` 表示一份內容合法的檔在這個權限下能不能讀。 |
 | `mcpValue[]` | MCP 憑證值的檢查（[#2570](https://github.com/DemianLi/nexus-agent/issues/2570)）。`use` 是 `env` 或 `header`，`value` 是原值；`accept` 為真時修剪後的值要等於 `trimmed`，為假時拒絕原因要是 `reason`（`empty`、`too-short`、`nul`、`header-chars`），有 `secret` 的，拒絕訊息裡不能出現它。TS 與 Rust 都跑。 |
-| `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主跑；TS 的遮蔽器在 [#2669](https://github.com/DemianLi/nexus-agent/issues/2669)，到時候跑同一組，現在只檢查欄位。 |
+| `redact[]` | MCP 憑證值的遮蔽。用 `values` 建遮蔽器，對 `text` 遮，輸出要完全等於 `expect`；`scope` 是 `result`（預設，成功結果與工具清單）或 `error`（錯誤與診斷）；`absent` 列的字串不能出現在輸出裡。Rust 宿主與 TS 都跑同一組：TS 的遮蔽器是 `packages/nexus-plugin-mcp/src/redact.ts`，執行端在同目錄的 `redact.test.ts`（[#2669](https://github.com/DemianLi/nexus-agent/issues/2669)）。 |
 | `stdioRow[]` | TS 的 `hostStdioConnection`（`apps/harness/src/mcp-host-stdio-row.ts`）輸出的 stdio 那一列（#2570 D2b-2）。`input` 是它的輸入（`credentialEnv` 的每個值是憑證服務給的原值），`ts` 是 `{ row }`（輸出要完全相等）或 `{ error }`（拋出的訊息要含這段字）。有 `row` 的，Rust 的 `Server::parse` 一律要收。 |
 | `stdioHost[]` | 只給 Rust：`connection` 直接交 `Server::parse`，`error` 是 `null`（要收）或訊息要含的字。釘宿主自己的拒絕（相對路徑、credentialEnv 不在 env、憑證值沒修剪或太短）。 |
 
@@ -199,7 +199,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上的值交進去。今天交進去的是：
   - header 的值，除了 `LITERAL_HEADERS`（`config.rs`）：`Accept`、`Content-Type`、`User-Agent`、`Accept-Language`、`MCP-Protocol-Version`（不分大小寫）。這幾個是協定層、一定不是秘密，值不進遮蔽器。
     值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
-  - 網址的 query：整串、每個值的原樣與解碼後，全部收；
+  - 網址的 query：整串、每個值的原樣與解碼後，全部收；TS 的 `redactorFor` 同樣收，**唯一不同：不到 8 個 code point 的值不收**（TS 的斷線判斷讀遮過的訊息，`v=2` 的 `2` 會切斷 `MCP error -32000`；整段 `?…` 的比對仍遮逐字回顯）；
   - 代理的帳密；
   - stdio：`connection.credentialEnv` 標的那幾個環境變數的值，**只有這些**。TS 看得到每個值的來源（`apps/harness/src/mcp-host-stdio-row.ts`），所以 stdio 不用 header 那種「分不出來就全收」的近似：`PATH`、`HOME` 這類清洗後的父環境與字面值都不進，成功結果不會被遮壞。每個值照上面的值檢查。
 

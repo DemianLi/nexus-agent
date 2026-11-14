@@ -309,7 +309,7 @@ const MIN_STANDALONE_PASSWORD_LENGTH = 4;
  * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
  */
 function scrubbed(text: string, urls: readonly string[], redactor: Redactor): string {
-  let result = text;
+  const shownOf = new Map<string, string>();
   const pieces: string[] = [];
   for (const url of urls) {
     const shown = redactedUrl(url);
@@ -325,7 +325,17 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
     } catch {
       // 解析不了的只換得了原字串。
     }
-    for (const form of forms) result = result.split(form).join(shown);
+    for (const form of forms) if (form !== '') shownOf.set(form, shown);
+  }
+  // 一次掃完：逐個換的話，換出來的 `http://h/` 會被下一個形式（`href`）再換一次，變成 `http://h//`，遮兩次就不一樣。
+  // 長的形式排前面，短的是長的前綴時不會留下半截。
+  let result = text;
+  if (shownOf.size > 0) {
+    const alternation = [...shownOf.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map((form) => form.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+      .join('|');
+    result = result.replace(new RegExp(alternation, 'gu'), (form) => shownOf.get(form) ?? form);
   }
   // 長的先換，短的是長的的子字串時不會留下半截。
   for (const piece of pieces
@@ -339,13 +349,27 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
 
 /**
  * 連線之後送出的錯誤與診斷也要遮網址：server 會把請求行（含 query 的 token）寫進錯誤回應，SDK 原樣帶出（#2669）。
- * 遮法同連線建立時那一套（{@link scrubbed}，同一個函式）；HTTP 以外的連線沒有網址，原樣回傳。
- * 只換 {@link Redactor.scrubText}；成功結果的 {@link Redactor.redactText} 不動，網址不是憑證值。
+ * 整段網址、`?…` 與 `#…` 的整段比對由 {@link scrubbed}（連線建立時同一個函式）兜底；query 的各個值（原樣與解碼後）在 `base` 裡
+ * （`redactorFor`），所以只回顯值、換了參數順序、百分號大小寫不同的回顯也遮得掉。
+ *
+ * 只換 {@link Redactor.scrubText}；成功結果的 {@link Redactor.redactText} 不動。HTTP 以外的連線沒有網址，原樣回傳；
+ * 網址沒有 query、帳密、fragment 而且 `base` 也沒有東西要遮時也原樣回傳，錯誤的 `cause` 不必換成副本。
  */
 export function withUrlScrubbing(config: McpConfig, base: Redactor): Redactor {
   const { connection } = config;
   if (connection.transport === 'stdio') return base;
   const { url } = connection;
+  try {
+    const parsed = new URL(url);
+    const hidden =
+      parsed.search !== '' ||
+      parsed.hash !== '' ||
+      parsed.username !== '' ||
+      parsed.password !== '';
+    if (!hidden && base.empty) return base;
+  } catch {
+    // 解析不了的網址照遮，錯誤訊息裡不留原文。
+  }
   return {
     scrubText: (text) => scrubbed(text, [url], base),
     redactText: base.redactText,
