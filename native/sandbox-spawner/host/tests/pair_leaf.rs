@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 //! 橋的兩種語言對接（#2583）：真的 [`nexus_host::pair::Pair`] listen，起 node 跑
 //! `packages/nexus-host-bridge/src/pair-leaf-probe.ts`（TS 的葉子連線，印的事件見該檔檔頭），斷言兩邊看到的一致。
+//! `收下就拒絕_葉子不讀就寫_hello_每一條都讀得到_rejected` 起的是 `src/pair-reject-probe.ts`：不經葉子的連線函式庫，直接用 node 的 socket。
 //!
 //! 只在 Linux 編：`Pair` 讀 `SO_PEERCRED`（`libc::ucred`），nexus-host 在 Linux 以外編不過。全部標 `#[ignore]`：要 node 與 `pnpm install` 過的相依，CI 在 `./.github/actions/setup` 之後另跑一步帶 `--ignored`
 //! 並核對跑到的測試數（`.github/scripts/test_ci_workflow.py` 釘住那一步）。
@@ -30,16 +31,22 @@ struct Probe {
 impl Probe {
     /// 起葉子連 `rig`，驗過之後叫組合行程的 `method`；`second` 時再連第二條。
     fn start(rig: &Rig, method: &str, second: bool) -> Probe {
+        let mut args = vec![method];
+        if second {
+            args.push("second");
+        }
+        Probe::launch(rig, "src/pair-leaf-probe.ts", &args)
+    }
+
+    /// 在 `packages/nexus-host-bridge` 底下起 node 跑 `script`，參數是 `rig` 的 socket 再接 `args`。
+    fn launch(rig: &Rig, script: &str, args: &[&str]) -> Probe {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/nexus-host-bridge");
         let mut command = Process::new("node");
         command
-            .args(["--import", "tsx", "src/pair-leaf-probe.ts"])
+            .args(["--import", "tsx", script])
             .arg(&rig.socket)
-            .arg(method);
-        if second {
-            command.arg("second");
-        }
+            .args(args);
         let mut child = command
             .current_dir(dir)
             .stdin(Stdio::piped())
@@ -269,8 +276,7 @@ fn 組合行程沒讀_hello_就回_rejected_並關_葉子照_retry_later_判() {
     rig.pair.set_leaf(std::process::id());
     let probe = Probe::start(&rig, "echo", false);
 
-    // 寫 `hello` 與組合行程關連線撞在一起的那一次，葉子讀不到 `rejected`、算成沒收到任何框就斷（`dropped`），靠重連再拿一次；
-    // 所以看前五次：都連上了、多數讀到的是 `rejected`。
+    // 組合行程回了 `rejected` 之後留著連線等葉子關，葉子的 `hello` 寫得進去：前五次每一次讀到的都是 `rejected`。
     let retries = rig.until(&probe, "葉子的前五次重試", |_, probe| {
         let retries = probe.events("retry");
         (retries.len() >= 5 || !probe.events("failed").is_empty()).then_some(retries)
@@ -281,12 +287,7 @@ fn 組合行程沒讀_hello_就回_rejected_並關_葉子照_retry_later_判() {
         .iter()
         .filter(|retry| retry["outcome"] == "retry_later" && retry["detail"] == "pid 不對")
         .count();
-    let dropped = retries
-        .iter()
-        .filter(|retry| retry["outcome"] == "dropped")
-        .count();
-    assert_eq!(read + dropped, retries.len(), "{retries:?}");
-    assert!(read > dropped, "讀到 rejected 的要佔多數：{retries:?}");
+    assert_eq!(read, retries.len(), "{retries:?}");
     assert_eq!(rig.refusals().first().map(String::as_str), Some("pid 不對"));
 
     rig.pair.set_leaf(probe.pid());
@@ -360,4 +361,36 @@ fn 驗過之後組合行程關連線_葉子的呼叫收成對方不在_不重連
         .count();
     assert_eq!(connects, 1);
     assert_eq!(probe.events("connected").len(), 1);
+}
+
+/// 組合行程收下連線的那一步就拒絕（手上是別人的 pid），不停地走 `step`；node 這一端 `connect` 當下就寫 `hello`。
+/// 每一條都要寫得進去、讀得到 `rejected`（#2737）。
+#[test]
+#[ignore = "要 node 與裝好的相依；CI 另跑一步帶 --ignored"]
+fn 收下就拒絕_葉子不讀就寫_hello_每一條都讀得到_rejected() {
+    const COUNT: u64 = 200;
+
+    let mut rig = Rig::new("reject-race");
+    rig.pair.set_leaf(std::process::id());
+    let probe = Probe::launch(&rig, "src/pair-reject-probe.ts", &[&COUNT.to_string()]);
+
+    let deadline = Instant::now() + LIMIT;
+    let cell = loop {
+        rig.step();
+        rig.seen.clear();
+        if let Some(cell) = probe.events("cell").into_iter().next() {
+            break cell;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "等不到結果，葉子印的：\n{}",
+            probe.dump()
+        );
+        std::thread::yield_now();
+    };
+    println!("收下就拒絕、不讀就寫：{cell}");
+    assert_eq!(cell.get("aborted"), None, "{cell}");
+    assert_eq!(cell["total"], COUNT, "{cell}");
+    assert_eq!(cell["rejected"], COUNT, "{cell}");
+    assert_eq!(cell["writeFailed"], json!({}), "{cell}");
 }

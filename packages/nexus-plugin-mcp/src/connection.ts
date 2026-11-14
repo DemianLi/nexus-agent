@@ -40,7 +40,7 @@ const CLIENT_IDENTITY = { name: '@nexus/plugin-mcp', version: '0.6.0' };
  * **`execution.taskSupport: 'required'` 的工具一律當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。
  *
- * @param redactor - 這一份連線的憑證值：`tools/list` 失敗的訊息與 `cause` 送出前遮掉，經 {@link toolCallOf} 的工具呼叫錯誤也靠它遮（`rejectTaskRequired` 的錯誤還沒遮）。沒有憑證就傳 `NO_REDACTION`。
+ * @param redactor - 這一份連線的憑證值：`tools/list` 失敗的訊息與 `cause` 送出前遮掉，經 {@link toolCallOf} 的工具呼叫錯誤與 `rejectTaskRequired` 的錯誤也靠它遮。HTTP 連線要連網址的 query 一起遮（{@link withUrlScrubbing}）；沒有東西要遮就傳 `NO_REDACTION`。
  */
 export async function connectGeneration(
   connect: () => Promise<Client>,
@@ -58,7 +58,7 @@ export async function connectGeneration(
     calls.set(
       tool.name,
       tool.execution?.taskSupport === 'required'
-        ? rejectTaskRequired(tool.name)
+        ? rejectTaskRequired(tool.name, redactor)
         : toolCallOf(client, config.serverName, tool, {
             elicitation,
             timeoutMs: config.toolCallTimeoutMs,
@@ -85,6 +85,8 @@ export interface Attempts {
   first(): Promise<ListedGeneration>;
   /** 重連：先收掉上一次開的 client，再連一代。 */
   connect(): Promise<ListedGeneration>;
+  /** 這份連線的遮蔽器：憑證值，加上 HTTP 網址的帳密、query、fragment（{@link withUrlScrubbing}）。連線之後送出的錯誤用它遮；重連日誌記的是 `connect()` 拋出、已遮過的錯誤文字。 */
+  readonly redactor: Redactor;
   /**
    * 收掉剛失敗的那次嘗試：關掉它開的 client，再等那次開的子行程真的關掉
    * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試沒有東西可等，立刻落定。不拋。
@@ -105,7 +107,7 @@ export function attemptsOn(
   credentials: ResolvedCredentials,
   open?: (track: (client: Client) => void) => Promise<Client>,
 ): Attempts {
-  const redactor = redactorFor(config, credentials);
+  const redactor = withUrlScrubbing(config, redactorFor(config, credentials));
   const openOne =
     open ?? ((track: (client: Client) => void) => openClient(config, credentials, track, redactor));
   let latest: Client | undefined;
@@ -131,6 +133,7 @@ export function attemptsOn(
     );
   };
   return {
+    redactor,
     first,
     async connect() {
       await close();
@@ -174,11 +177,13 @@ async function listAllTools(
 }
 
 /** 這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:280`）。 */
-function rejectTaskRequired(rawName: string): ToolCall {
+function rejectTaskRequired(rawName: string, redactor: Redactor): ToolCall {
   return () =>
     Promise.reject(
       new Error(
-        `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
+        redactor.scrubText(
+          `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
+        ),
       ),
     );
 }
@@ -191,7 +196,7 @@ export async function openClient(
   config: McpConfig,
   credentials: ResolvedCredentials,
   track: (client: Client) => void = () => {},
-  redactor: Redactor = redactorFor(config, credentials),
+  redactor: Redactor = withUrlScrubbing(config, redactorFor(config, credentials)),
 ): Promise<Client> {
   const { serverName, connection } = config;
   if (connection.transport === 'stdio') {
@@ -304,7 +309,7 @@ const MIN_STANDALONE_PASSWORD_LENGTH = 4;
  * 整段 `user:password@`、query（含 `?`）、fragment（含 `#`）、長度夠的密碼也各自換成 `[redacted]`。使用者名稱不單獨換，太短、易誤傷。
  */
 function scrubbed(text: string, urls: readonly string[], redactor: Redactor): string {
-  let result = text;
+  const shownOf = new Map<string, string>();
   const pieces: string[] = [];
   for (const url of urls) {
     const shown = redactedUrl(url);
@@ -320,7 +325,17 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
     } catch {
       // 解析不了的只換得了原字串。
     }
-    for (const form of forms) result = result.split(form).join(shown);
+    for (const form of forms) if (form !== '') shownOf.set(form, shown);
+  }
+  // 一次掃完：逐個換的話，較短的形式（`http://h`）會在後面還接著路徑的文字裡多出一條 `/`（`http://h//x`），遮兩次就不一樣。
+  // 長的形式排前面，短的是長的前綴時不會留下半截。
+  let result = text;
+  if (shownOf.size > 0) {
+    const alternation = [...shownOf.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map((form) => form.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+      .join('|');
+    result = result.replace(new RegExp(alternation, 'gu'), (form) => shownOf.get(form) ?? form);
   }
   // 長的先換，短的是長的的子字串時不會留下半截。
   for (const piece of pieces
@@ -330,6 +345,36 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
   }
   // 憑證值最後換：先換會切斷整段網址與 query 片段的比對。
   return redactor.scrubText(result);
+}
+
+/**
+ * 連線之後送出的錯誤與診斷也要遮網址：server 會把請求行（含 query 的 token）寫進錯誤回應，SDK 原樣帶出（#2669）。
+ * 整段網址、`?…` 與 `#…` 的整段比對由 {@link scrubbed}（連線建立時同一個函式）兜底；query 的各個值（原樣與解碼後）在 `base` 裡
+ * （`redactorFor`），所以只回顯值、換了參數順序、百分號大小寫不同的回顯也遮得掉。
+ *
+ * 只換 {@link Redactor.scrubText}；成功結果的 {@link Redactor.redactText} 不動。HTTP 以外的連線沒有網址，原樣回傳；
+ * 網址沒有 query、帳密、fragment 而且 `base` 也沒有東西要遮時也原樣回傳，錯誤的 `cause` 不必換成副本。
+ */
+export function withUrlScrubbing(config: McpConfig, base: Redactor): Redactor {
+  const { connection } = config;
+  if (connection.transport === 'stdio') return base;
+  const { url } = connection;
+  try {
+    const parsed = new URL(url);
+    const hidden =
+      parsed.search !== '' ||
+      parsed.hash !== '' ||
+      parsed.username !== '' ||
+      parsed.password !== '';
+    if (!hidden && base.empty) return base;
+  } catch {
+    // 解析不了的網址照遮，錯誤訊息裡不留原文。
+  }
+  return {
+    scrubText: (text) => scrubbed(text, [url], base),
+    redactText: base.redactText,
+    empty: false,
+  };
 }
 
 type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;

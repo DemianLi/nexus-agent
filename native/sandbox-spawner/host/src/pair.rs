@@ -14,7 +14,9 @@
 //!   所以擁有的一方手上晚到的舊工作再 [`Pair::chunk`]、[`Pair::finish`]，對不到任何東西，不會落進別的呼叫。
 //! - 背壓照協定：排著的到了 [`OUTBOX_PAUSE`]，[`Pair::call`]、[`Pair::chunk`]、[`Pair::finish`] 回 [`SendError::Paused`]，什麼都沒送，
 //!   擁有的一方留著，等 [`PairEvent::Resumed`] 再試；葉子送來的照讀照處理。這裡自動回的 `result`（`busy`、`unknown_method`、`bad_payload`、`cancelled`，都是小框）與 [`Pair::cancel`] 照排。
-//! - 回了 `rejected` 的連線，排著的寫完才關，最多留 [`CLOSE_TIMEOUT`]；對方一直不讀的話那一框送不到。
+//! - 回了 `rejected` 的連線，那一框寫完只關寫的方向，對方送來的讀出來丟掉、不解框；要那一框寫完、而且對方關了或讀錯了才整條關，
+//!   最多留 [`CLOSE_TIMEOUT`]，對方一直不讀的話那一框送不到。拒絕之前讀端已經被 `Chan` 關掉的（框太大、讀到 EOF 或讀錯），之後對方再送的不讀，那一框寫完就整條關。
+//!   同時最多留 [`MAX_CLOSING`] 條，再來的把最舊的直接關掉。
 //! - 葉子登記的名稱（[`PairEvent::Registered`]）這裡不記：[`PairEvent::Disconnected`] 之後由擁有的一方自己清。
 
 use std::collections::HashMap;
@@ -29,16 +31,16 @@ use crate::pair_protocol::{
     MAX_CHUNK_BYTES, MAX_FRAME, MAX_PENDING, METHOD_ATTACH, OUTBOX_LIMIT, OUTBOX_PAUSE,
     PAIR_PROTOCOL_VERSION, PID_WAIT, STALL_TIMEOUT,
 };
-use nexus_sandbox_spawner::supervisor::process::Chan;
+use nexus_sandbox_spawner::supervisor::process::{Chan, READ_BUDGET};
 
-/// 回了 `rejected` 的連線最多留多久等它寫完。
+/// 回了 `rejected` 的連線最多留多久：等那一框寫完、等對方關。對方送什麼來都不延長。
 pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// accept 出錯（開檔數用完之類）之後多久不看 listener：它會一直可讀，不停一下就空轉。排著的連線留在 backlog；
 /// 已經收下、卻複製不出 fd 的那一條直接關掉，報一筆 [`PairEvent::Refused`]。
 pub const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
-/// 等著寫完 `rejected` 的連線最多幾條；再來的把最舊的直接關掉。
+/// 回了 `rejected`、還沒整條關掉的連線最多幾條；再來的把最舊的直接關掉。
 const MAX_CLOSING: usize = MAX_PENDING;
 
 /// 自己發的呼叫沒有成功的原因。
@@ -147,10 +149,66 @@ struct Their {
     next: u64,
 }
 
-/// 回了 `rejected`、等排著的寫完再關的連線。
+/// 回了 `rejected`、還沒整條關掉的連線。
 struct Closing {
     chan: Chan,
     until: Instant,
+    /// 寫端關了之後收尾過沒：讀端還開著的話，這時對 socket 關寫的方向。
+    shut: bool,
+    /// 不再讀：對方關了、讀錯了，或進來時讀端已經被 [`Chan`] 關掉。
+    gone: bool,
+}
+
+impl Closing {
+    /// 把排著的寫出去；寫完（或寫不進去）就關寫的方向。
+    fn flush(&mut self) {
+        self.chan.flush();
+        if self.shut || !self.chan.write_closed() {
+            return;
+        }
+        self.shut = true;
+        // `Chan` 關寫端只丟掉它那個 fd，同一個 socket 的讀端還開著，對方讀不到 EOF。
+        if let (Some(fd), _) = self.chan.poll_fds() {
+            // SAFETY：fd 是這條通道還開著的讀端。
+            unsafe { libc::shutdown(fd, libc::SHUT_WR) };
+        }
+    }
+
+    /// 對方送來的讀出來丟掉，不解框，一次最多 [`READ_BUDGET`]。
+    fn discard(&mut self) {
+        if self.gone {
+            return;
+        }
+        let (Some(fd), _) = self.chan.poll_fds() else {
+            self.gone = true;
+            return;
+        };
+        let mut buf = [0u8; 4096];
+        let mut budget = READ_BUDGET;
+        while budget > 0 {
+            let room = buf.len().min(budget);
+            // SAFETY：讀進 buf 的前 room 個 byte。
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), room) };
+            if n > 0 {
+                budget -= n as usize;
+                continue;
+            }
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            if n < 0 && errno == Some(libc::EINTR) {
+                continue;
+            }
+            if n < 0 && errno == Some(libc::EAGAIN) {
+                return;
+            }
+            self.gone = true;
+            return;
+        }
+    }
+
+    /// 還要不要留著：還沒寫完就留；寫完（或寫不進去）之後留到不再讀為止。
+    fn open(&self) -> bool {
+        !self.gone || !self.chan.write_closed()
+    }
 }
 
 impl Conn {
@@ -333,7 +391,11 @@ impl Pair {
             fds.push(pollfd(self.listener.as_raw_fd(), libc::POLLIN));
         }
         for closing in &self.closing {
-            if let (_, Some(write)) = closing.chan.poll_fds() {
+            let (read, write) = closing.chan.poll_fds();
+            if let Some(read) = read.filter(|_| !closing.gone) {
+                fds.push(pollfd(read, libc::POLLIN));
+            }
+            if let Some(write) = write {
                 fds.push(pollfd(write, libc::POLLOUT));
             }
         }
@@ -562,26 +624,35 @@ impl Pair {
         self.reject(pending.chan, code, reason, now);
     }
 
-    /// 排一框 `rejected`，排著的寫完就關；當下寫不完的留到 [`CLOSE_TIMEOUT`]。
+    /// 排一框 `rejected`，寫完關寫的方向；連線留到 [`Closing::open`] 說不留、[`CLOSE_TIMEOUT`] 或被 [`MAX_CLOSING`] 擠掉，這段時間對方寫得進來、讀得到那一框。
+    /// 這裡不讀：一步可能拒絕很多條，讀交給 `step_closing`，一步最多 `MAX_CLOSING` 條各 [`READ_BUDGET`]。
     fn reject(&mut self, mut chan: Chan, code: RejectCode, reason: &str, now: Instant) {
         chan.send(&rejected(code, reason));
         chan.finish();
-        if chan.write_closed() {
+        let mut closing = Closing {
+            gone: chan.read_closed(),
+            chan,
+            until: now + CLOSE_TIMEOUT,
+            shut: false,
+        };
+        closing.flush();
+        if !closing.open() {
             return;
         }
         if self.closing.len() >= MAX_CLOSING {
             self.closing.remove(0);
         }
-        self.closing.push(Closing {
-            chan,
-            until: now + CLOSE_TIMEOUT,
-        });
+        self.closing.push(closing);
     }
 
     fn step_closing(&mut self, now: Instant) {
         self.closing.retain_mut(|closing| {
-            closing.chan.flush();
-            !closing.chan.write_closed() && now < closing.until
+            if now >= closing.until {
+                return false;
+            }
+            closing.flush();
+            closing.discard();
+            closing.open()
         });
     }
 

@@ -157,12 +157,12 @@ function replaceSpans(text: string, patterns: readonly string[]): string {
 
 /**
  * 換成只帶遮過訊息的 Error：訊息、字串的 `name` 與字串的 `code` 都過 `scrub`；`status` 與數字的 `code` 原樣留著。`isRequestTimeout` 沿 `cause` 讀
- * `code`／`name` 認逾時；`isConnectionLost` 讀訊息認斷線（遮蔽只換命中的區段，關鍵字留得住）；`status` 原樣留著。原 error 上的其他屬性與 `cause`、`stack` 可能帶憑證或網址，不沿用。
+ * `code`／`name` 認逾時；`isConnectionLost` 讀訊息認斷線（遮蔽只換命中的區段，關鍵字一般留得住；值若恰好是關鍵字的一部分，例如 `?state=connected`，會被切斷）；`status` 原樣留著。原 error 上的其他屬性與 `cause`、`stack` 可能帶憑證或網址，不沿用。
  *
  * **已知限制：** 數字的 `code` 與 `status` 不遮。全數字的憑證被 server 回顯成整數錯誤碼時，會原樣留在副本上。harness 的憑證服務拒收不到 8 個
  * code point 的值（`assertUsableMcpCredential`），JSON-RPC 與 HTTP 的錯誤碼沒有這麼長。
  *
- * @param scrub - 文字怎麼遮：只有憑證用 `redactor.scrubText`；HTTP 連線階段另要遮網址，由呼叫端組合。
+ * @param scrub - 文字怎麼遮：`redactor.scrubText`；HTTP 連線的遮蔽器已含網址（`withUrlScrubbing`）；`openClient` 的 `fail()` 另把 SSE 退回的網址一併交給 `scrubbed`。
  */
 export function scrubbedCopy(error: unknown, scrub: (text: string) => string): Error {
   const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };

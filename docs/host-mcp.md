@@ -104,6 +104,10 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - 退避：第一次等 `initialDelayMs`，每次連續失敗加倍，上限 `maxDelayMs`；同一次中斷最多 `maxAttempts` 次，超過就放棄。
   連上之後撐過 `maxDelayMs` 才掉線，失敗次數歸零。`reconnect.enabled: false` 時第一次失敗或掉線就停。
 - 收連上過的一代最多等 5 秒（`GENERATION_CLOSE_TIMEOUT`，同 dsh）；等不到就停止重連，寧可停下也不讓兩代同時活著。
+  stdio 的收線梯度（見〈stdio〉）預算 4.5 秒，編譯期斷言小於這 5 秒。預算只算子行程那一段，不含「等 rmcp 服務迴圈結束」；那一段卡住時，5 秒到了錯誤訊息分不出卡在哪一段。
+- 關池（`Pool::close`）與停單份（`Shared::dispose`）外面再套 6 秒（`POOL_CLOSE_TIMEOUT`），各份同時收。逾時只是不再等，任務沒被取消、停止訊號已先送出。
+  橋還活著時（`acquire` 的 `failOnStartupError` 路徑停單份），監督者照自己的 5 秒收完；關池時逾時放手的，接著 `serve` 回來、執行環境拆掉，被分離的任務跑不完，子行程由 `ChildGuard` 的 drop 直接 SIGKILL（見〈stdio〉）。
+  只有 `Pool::close` 記日誌：沒收完的份記一行錯誤，帶出是哪幾份（同一台 server 有兩份連線時 label 會重複）；`Shared::dispose` 回傳有沒有收完，呼叫端自己決定記不記。
 - `failOnStartupError: true` 的那一列第一次就失敗時不在背景重試。
 - 進度與放棄寫進日誌（`reconnecting in <n>ms (attempt <i>/<max>)`、`giving up after <max> consecutive failed reconnect attempts` 等，同 TS）。
 
@@ -151,9 +155,9 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - 起行程：`std::process::Command`，stdin、stdout 轉成 tokio 的非阻塞管線（`tokio::net::unix::pipe`，底下是 `AsyncFd`）交給 rmcp 的 `AsyncRwTransport`；沒有新相依、沒有新 feature。
 - **stderr 現在不留**（接 `/dev/null`）。原因：宿主分不出子行程印的字裡有沒有憑證值，繼承會把它原樣寫進宿主的 stderr（監督行程的日誌，多人共用主機上是共用的）；
   留下來要先過遮蔽器，這一版沒做。代價：server 起不來時，維運只看得到「Failed to connect to stdio server …」，看不到它自己印的原因。
-  這不是終點，下一步（#2570 (b)）：握手失敗或提早退出時，留 stderr 尾端有限位元組、過遮蔽器後帶進錯誤；遮不乾淨就寫明為什麼不做。
-- 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，最後 `wait`。`Generation::close` 回來時子行程已經收掉，不留殭屍。
-- 被丟下的連線：握手完成前，子行程由連線的 future 裡的 `ChildGuard` 擁有，future 被丟下時 guard 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。握手完成後，擁有者換成背景 task（等服務迴圈結束、再照上面的梯度收）；這一代沒走 `close` 就被丟下時，`CancelOnDrop` 對服務迴圈喊停，背景 task 照梯度收，這是正常路徑（例如啟動上限在列工具中途到了、橋還活著）。橋關閉時 `serve` 回來、執行環境跟著拆掉，沒有人等背景 task 跑完梯度，最後落到 `ChildGuard` 的 drop（SIGKILL，不走梯度）。三條路各有一條測試。
+  這不是終點，下一步（#2570 (b) 的第四張）：握手失敗或提早退出時，留 stderr 尾端有限位元組、過遮蔽器後帶進錯誤；遮不乾淨就寫明為什麼不做。
+- 收線：transport 關了（stdin 跟著關）之後等子行程自己結束 2 秒，沒結束就 SIGTERM，再等 2 秒，還在就 SIGKILL，SIGKILL 之後等 `wait` 最多 0.5 秒（`KILL_WAIT`），合計 4.5 秒（`REAP_BUDGET`）。`Generation::close` 回來時子行程已經收掉，不留殭屍；唯一例外是 SIGKILL 之後 0.5 秒內還沒結束（行程卡在不可中斷的睡眠），那時記一行錯誤、不再等，`wait` 由阻塞執行緒自己做完。輪詢間隔 20 ms，最壞約 4.5 秒再加兩個輪詢間隔。
+- 被丟下的連線：握手完成前，子行程由連線的 future 裡的 `ChildGuard` 擁有，future 被丟下時 guard 的 drop 直接 SIGKILL 並在另一條執行緒 `wait`。握手完成後，擁有者換成背景 task（等服務迴圈結束、再照上面的梯度收）；這一代沒走 `close` 就被丟下時，`CancelOnDrop` 對服務迴圈喊停，背景 task 照梯度收，這是正常路徑（例如啟動上限在列工具中途到了、橋還活著）。橋關閉時，池裡還連著的那一代照常走 `close`，`Generation::close` 會等到子行程收掉（最多 5 秒）。沒被等的只有三類：監督者的 5 秒到了而被丟下的、沒走 `close` 就被丟下的（上一句的 `CancelOnDrop` 路徑）、`Pool::close` 自己逾時放手的；它們的背景 task 在 `serve` 回來、執行環境拆掉時被丟下，落到 `ChildGuard` 的 drop（SIGKILL，不走梯度），server 沒有機會清理自己的暫存。這是刻意的取捨：關橋不等例外路徑，最壞耗時有上限。三條路各有一條測試。
 - 單行超過 16 MiB：rmcp 的行傳輸丟掉那一行（記一筆、連線不斷），server 等不到回應的那一次呼叫會等到逾時。
 - **args 與 env 在主機上看得到**：同一台主機上的其他使用者看得到 `/proc/<pid>/cmdline`（args），同 uid 的看得到 `/proc/<pid>/environ`（整份 env，含憑證值）。憑證不要放進 `args`。宿主只遮 `credentialEnv` 的值；父環境裡本來就有的值照舊不遮。
 - **池不回收**：池的鍵含整份成品（env 含憑證值），每組「憑證 × server」各起一個常駐子行程，活到橋關閉；憑證輪替之後舊行程帶著舊值繼續活。這跟 TS 那條路（子行程跟著對話行程死）不同，宿主是整台主機共用的。處理列在 #2570 (b)：最後一個使用者放掉時收掉 stdio 那一份，或給上限。
@@ -170,6 +174,7 @@ MCP 的酬載不受它們限，所以過橋時一律是文字，拼回之後由�
 - header 的憑證引用還不支援。
 - 設定：`approval` 整列拒絕（TS 收下、不放進池的鍵）；`url` 只收 `http:`／`https:`（TS 只要求非空字串）。
 - 帶帳號或密碼的網址：宿主解設定時就拒；TS 收下設定，連線時才失敗（Node 的 `fetch` 不收帶帳密的網址）。
+- 連線之後的錯誤：TS 的工具呼叫錯誤、`tools/list` 錯誤與重連日誌也遮網址的 query（`withUrlScrubbing`）：query 的整串與每個值（原樣、解碼後）進遮蔽器，同宿主 `secrets()`，只差不到 8 個 code point 的值不收（整串、原樣、解碼後各自算，細節與後果見 `docs/credentials-file.md`〈收集〉）。宿主收 query 值讀碼可見（`config.rs` 的 `secrets()`）；沒量的是宿主每一條錯誤出口是否都過 `scrub`。TS 這邊 resources 的錯誤（`read_mcp_resource`、`list_mcp_resources`）還沒遮。
 - 舊式 HTTP+SSE 的退回沒有做（rmcp 沒有這個 transport）。
 - `tools/list` 拿不到工具的 `execution.taskSupport`：rmcp 的工具型別沒有這一欄，解析時丟掉。所以 TS 對 `taskSupport: 'required'` 的工具在呼叫前先擋，宿主做不到；
   新協定本來就沒有 `execution`，影響只在舊協定。

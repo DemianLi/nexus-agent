@@ -28,6 +28,7 @@ import {
 } from './credentials.js';
 import type { McpCredentials, ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient } from './connection.js';
+import type { Redactor } from './redact.js';
 import { asAbort, ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
@@ -330,7 +331,7 @@ export async function mountServer(thread: ToolThread, declared: McpConfig): Prom
     // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
     const rawNameOf = new Map<string, string>();
     for (const descriptor of first.listed.tools) {
-      const tool = nexusToolOf(descriptor, config, label, () => supervisor);
+      const tool = nexusToolOf(descriptor, config, label, attempts.redactor, () => supervisor);
       names.push(tool.name);
       rawNameOf.set(tool.name, descriptor.name);
       registered.push(thread.register(tool));
@@ -490,7 +491,7 @@ async function applyShared(
   { shared, error: connectError }: Acquired,
 ): Promise<void> {
   const { serverName } = config;
-  const { label, supervisor } = shared;
+  const { label, supervisor, redactor } = shared;
   const registered: (() => void)[] = [];
   let instructions = '';
   try {
@@ -502,7 +503,7 @@ async function applyShared(
     const rawNameOf = new Map<string, string>();
     for (const descriptor of listing.tools) {
       // 池裡共用的是工具描述；`NexusTool` 每份組裝建自己的，轉接器照物件身分快取轉出來的 LangChain 工具。
-      const tool = nexusToolOf(descriptor, config, label, () => supervisor);
+      const tool = nexusToolOf(descriptor, config, label, redactor, () => supervisor);
       names.push(tool.name);
       rawNameOf.set(tool.name, descriptor.name);
       registered.push(thread.register(tool));
@@ -630,6 +631,7 @@ function nexusToolOf(
   descriptor: Tool,
   config: McpConfig,
   label: string,
+  redactor: Redactor,
   supervisorOf: () => Supervisor<Generation> | undefined,
 ): NexusTool {
   const rawName = descriptor.name;
@@ -651,7 +653,9 @@ function nexusToolOf(
       }
       const call = generation.calls.get(rawName);
       if (call === undefined) {
-        throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
+        throw new Error(
+          redactor.scrubText(`${label}: tool "${rawName}" is no longer offered by the server`),
+        );
       }
       // 每一輪送出前取當下那一代：等人回答的期間重連過，下一輪送到新的那一代；斷線、探活記在最後送出的那一代上。
       let used = generation;
