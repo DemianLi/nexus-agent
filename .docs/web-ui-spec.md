@@ -419,7 +419,7 @@
 | --- | --- | --- |
 | 字級 | 四階（§5「字型」） | `design-system.test.ts`、`type-hierarchy.test.ts` |
 | 圓角 | SG 的階梯加 `--radius-row`（§5「形狀」） | `design-system.test.ts` |
-| 間距 | Tailwind 的預設級距 | 還沒有 |
+| 間距 | Tailwind 的預設級距（下面「間距」） | `design-system.test.ts`，連 vendor 一起掃 |
 | 陰影 | 還沒有具名階梯；畫法照 §5「形狀」 | `border-shadow.test.ts`、`shadow-alpha.test.ts` 管畫法 |
 | 層級 | 還沒有 | 還沒有 |
 | 透明度 | 只定 disabled 與遮罩兩個值；遮罩是 `--scrim` | 還沒有 |
@@ -430,13 +430,20 @@
 | 類別 | 產品原始碼 | vendor 的 SG 元件 |
 | --- | --- | --- |
 | 任意值的字級 | 0 | 20 處、7 種（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem） |
-| 任意值的間距 | 0 | 8 處 |
+| 任意值的間距 | 0 | 6 處（另有 2 處是引用 token 的算式，不算任意值） |
 | 任意值的圓角 | 0 | 8 處、5 種 |
 | 任意值的陰影 | 2 處，都是 `Surface` 的內層底配方 | 2 處 |
 | 層級 | `z-50`、`z-10` 各 1 處 | `z-50` 14 處、`z-10` 4 處、`z-20` 2 處 |
 | 半透明（0 與 100 以外） | `opacity-50` 3 處、`opacity-70` 2 處、`opacity-60` 2 處、`opacity-40` 1 處 | `opacity-50` 17 處、`opacity-60` 2 處 |
 
-vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」）。
+vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），間距除外。
+
+**間距**（[#2763](https://github.com/DemianLi/nexus-agent/issues/2763)）：內距、外距、間隙、定位偏移（`p-*`、`m-*`、`gap-*`、`space-*`、`inset-*`、`top-*` 這一類）只用這些級距：0、0.5、1、1.5、2、2.5、3、3.5、4、5、6、7、8、9、10、11、12、14、16、20、24、28、32、36、40、44、48、52、56、60、64、72、80、96；數字 1 是 4px。
+
+- 不寫任意值（`pr-[9px]`），也不寫級距外的數字（`p-13`）。
+- `px`、`auto`、`full`、分數（`top-1/2`）與引用 token 的值（`left-(--offset)`、`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
+- 寬高（`w-*`、`h-*`、`max-h-[300px]`）是版面值，不在這條裡。
+- vendor 現有的 6 處任意值釘住現值：vendor 檔不動，逐條列在 `design-system.test.ts` 的 `VENDOR_SPACING_PINNED`，清單只會變短。同步上游多出一條會紅，處理方式照 §13.1（用覆寫蓋回級距，或由 demian 核可後列進清單）。
 
 ### 13.5 元件的分層
 
@@ -461,7 +468,6 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 間距的護欄（§13.4） | 沒有 | [#2763](https://github.com/DemianLi/nexus-agent/issues/2763) |
 | 字級涵蓋 vendor 實際用的值；disabled 的透明度（§13.4） | §5 寫四階與 `.6`，vendor 另有 7 種字級、disabled 是 50 | [#2761](https://github.com/DemianLi/nexus-agent/issues/2761) |
 | 陰影、層級的級距與護欄（§13.4） | 沒有 | 還沒開卡 |
 | axe 在真瀏覽器裡跑（§13.3） | 只在 jsdom 跑，`color-contrast` 關著 | [#2765](https://github.com/DemianLi/nexus-agent/issues/2765) |
