@@ -21,7 +21,9 @@
  *   `sessionStats`）。核准後同一個 `callId` 會再記一顆 `tool/call`：配對看最後那顆，停在核准點的那一次沒有結果、不算。
  * - **等待**：重試退避（`retryWaitMs`；新日誌落在起訖之外、舊日誌包在起訖之內所以上面從模型時間扣掉）加上停在核准點的時間（`waitMs`，見上）。
  *   兩格分開放，畫面要合成一段「等待」就相加。
- * - **殘差** `unaccountedMs` ＝ 牆鐘 − 模型 − 工具 − 重試退避 − 核准等待，不夾 0（見型別）。前景子代理跑的時間已在派它的工具裡。
+ * - **生摘要**：`compaction/summary.durationMs` 的加總（`summaryMs`，[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）。這一段裡的摘要每一顆都帶 `durationMs` 才出這一格；
+ *   只要有一顆沒帶（這一格出現以前的日誌）就整格缺席，那些時間留在殘差裡。生摘要在用到它的那次 `model/start` 之前，與模型那一段不重疊。
+ * - **殘差** `unaccountedMs` ＝ 牆鐘 − 模型 − 工具 − 重試退避 − 核准等待 − 生摘要（有 `summaryMs` 才扣），不夾 0（見型別）。前景子代理跑的時間已在派它的工具裡。
  *
  * ## 開著的呼叫與 `tokensProven`（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201）
  *
@@ -103,6 +105,9 @@ const NUMBERS = [
   'summaryCacheWriteTokens',
   'summaryCacheReadReports',
   'summaryCacheWriteReports',
+  // 生摘要的耗時：`summaryMsReports` 數有幾顆 `compaction/summary` 帶 `durationMs`，每一顆都帶才把 `summaryMs` 放進 view。
+  'summaryMs',
+  'summaryMsReports',
   'retries',
   'retryWaitMs',
   'modelMs',
@@ -293,6 +298,7 @@ function toSpan(sp: Sp): TokenMeterSpan {
     summaryOutputTokens: n.summaryOutputTokens,
     ...allReported(n.summaryUsages, n.summaryCacheReadReports, 'summaryCacheReadTokens', n),
     ...allReported(n.summaryUsages, n.summaryCacheWriteReports, 'summaryCacheWriteTokens', n),
+    ...allReported(n.summaries, n.summaryMsReports, 'summaryMs', n),
     retries: n.retries,
     retryWaitMs: n.retryWaitMs,
     modelMs: n.modelMs,
@@ -662,6 +668,8 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
           : 0;
       const cacheRead = usage?.['cacheReadTokens'];
       const cacheWrite = usage?.['cacheWriteTokens'];
+      const duration = data['durationMs'];
+      const timed = typeof duration === 'number' && Number.isFinite(duration) && duration >= 0;
       return update(state, (sp) =>
         bump(sp, {
           summaries: 1,
@@ -673,6 +681,8 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
           summaryCacheWriteTokens: typeof cacheWrite === 'number' ? cacheWrite : 0,
           summaryCacheReadReports: typeof cacheRead === 'number' ? 1 : 0,
           summaryCacheWriteReports: typeof cacheWrite === 'number' ? 1 : 0,
+          summaryMs: timed ? duration : 0,
+          summaryMsReports: timed ? 1 : 0,
         }),
       );
     }
@@ -794,7 +804,13 @@ function rowToTurn(row: Row): TokenMeterTurn {
       ? {}
       : {
           wallMs,
-          unaccountedMs: wallMs - span.modelMs - span.toolMs - span.retryWaitMs - span.waitMs,
+          unaccountedMs:
+            wallMs -
+            span.modelMs -
+            span.toolMs -
+            span.retryWaitMs -
+            span.waitMs -
+            (span.summaryMs ?? 0),
         }),
   };
 }

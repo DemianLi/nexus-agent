@@ -268,6 +268,7 @@ export {
 export type {
   ModelUsagePayload,
   WireContextBreakdown,
+  WireContextMessageParts,
   WireContextMeasure,
   WireContextPressure,
   WireSummaryThreshold,

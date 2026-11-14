@@ -83,11 +83,28 @@ export interface WireContextMeasure {
   readonly breakdown?: WireContextBreakdown;
 }
 
-/** {@link WireContextMeasure.breakdown} 的三格。 */
+/** {@link WireContextMeasure.breakdown} 的三格，加上訊息那一格的細項。 */
 export interface WireContextBreakdown {
   readonly systemTokens: number;
   readonly toolsTokens: number;
   readonly messageTokens: number;
+  /**
+   * {@link messageTokens} 再拆成四格（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)），都是非負整數，四格相加等於 `messageTokens`。
+   * **缺席＝沒拆**：這一格出現以前的會話日誌沒有它，不當成 `0`。
+   */
+  readonly messageParts?: WireContextMessageParts;
+}
+
+/** {@link WireContextBreakdown.messageParts} 的四格。每一格是把 `messageTokens` 照那一類訊息的估算比例分下來的數。 */
+export interface WireContextMessageParts {
+  /** 摘要訊息：之前摘要換上去的那一則。 */
+  readonly summaryTokens: number;
+  /** 機器塞進來的 user-role 訊息（使用說明、時間脈絡、續行輪的頭、子代理結算通知等）與重複工具提醒。 */
+  readonly injectedTokens: number;
+  /** 工具結果。 */
+  readonly toolResultTokens: number;
+  /** 其餘：人講的話與助手的回覆（含工具呼叫的參數）。 */
+  readonly conversationTokens: number;
 }
 
 /**

@@ -34,6 +34,7 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type {
   WireContextBreakdown,
+  WireContextMessageParts,
   WireContextMeasure,
   WireContextPressure,
 } from './context-pressure.js';
@@ -1236,13 +1237,38 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   // 選填（#1571）：沒有就不出這一格（舊日誌、還沒量過），有就得是三個非負整數。壞的整顆不收，不收一半。
   let parsedBreakdown: WireContextBreakdown | undefined;
   if (breakdown !== undefined) {
-    const { systemTokens, toolsTokens, messageTokens } = (breakdown ?? {}) as {
+    const { systemTokens, toolsTokens, messageTokens, messageParts } = (breakdown ?? {}) as {
       systemTokens?: unknown;
       toolsTokens?: unknown;
       messageTokens?: unknown;
+      messageParts?: unknown;
     };
     if (!isCount(systemTokens) || !isCount(toolsTokens) || !isCount(messageTokens)) return state;
-    parsedBreakdown = { systemTokens, toolsTokens, messageTokens };
+    // 選填（#2774）：沒有就不出這一格（舊日誌），有就得是四個非負整數。壞的整顆不收，同上。
+    let parsedParts: WireContextMessageParts | undefined;
+    if (messageParts !== undefined) {
+      const { summaryTokens, injectedTokens, toolResultTokens, conversationTokens } =
+        (messageParts ?? {}) as {
+          summaryTokens?: unknown;
+          injectedTokens?: unknown;
+          toolResultTokens?: unknown;
+          conversationTokens?: unknown;
+        };
+      if (
+        !isCount(summaryTokens) ||
+        !isCount(injectedTokens) ||
+        !isCount(toolResultTokens) ||
+        !isCount(conversationTokens)
+      )
+        return state;
+      parsedParts = { summaryTokens, injectedTokens, toolResultTokens, conversationTokens };
+    }
+    parsedBreakdown = {
+      systemTokens,
+      toolsTokens,
+      messageTokens,
+      ...(parsedParts !== undefined && { messageParts: parsedParts }),
+    };
   }
   const measure: WireContextMeasure = {
     approxTokens,

@@ -866,6 +866,7 @@ export {
 export type { EstimatedRequest, RequestParts, TokenEstimate } from './token-estimate.js';
 export {
   estimateAnchoredTokens,
+  estimateMessageGroups,
   estimateMessageTokens,
   estimateRequestParts,
   estimateRequestTokens,

@@ -303,10 +303,13 @@ describe('壓縮發生時，日誌裡留得下來', () => {
       expect(Object.keys(record).sort()).toEqual([
         'beforeCall',
         'cutoffIndex',
+        'durationMs',
         'filePath',
         'messagesBefore',
         'summary',
       ]);
+      // 生摘要那次呼叫的牆鐘（#2774）：非負整數。
+      expect(Number.isInteger(record.durationMs) && record.durationMs! >= 0).toBe(true);
       const summary = fromLoggedMessage(record.summary!);
       expect(summary.getType()).toBe('human');
       expect(summary.additional_kwargs.lc_source).toBe('summarization');
