@@ -293,7 +293,12 @@ async function assembledTools(
   shipped: readonly PluginEntry[],
   tempRoot: string,
 ): Promise<Map<string, CatalogTool>> {
-  const assembled = await createCliAgent(invocation, shipped, tempRoot);
+  // 這裡不接會話日誌，出廠的 `log` 在第一次 invoke 就拋；目錄只量綁定的工具，所以明寫 `state`。
+  const assembled = await createCliAgent(
+    { ...invocation, historySource: 'state' },
+    shipped,
+    tempRoot,
+  );
   try {
     await assembled.agent.invoke(toAgentInvocation('看一下。'), {
       configurable: { thread_id: 'tool-catalog-assembled' },
@@ -323,7 +328,7 @@ async function shippedTools(tempRoot: string): Promise<{
   const bound = new Map<string, CatalogTool>();
   for (const workspace of [undefined, tempRoot]) {
     const assembled = await createCliAgent(
-      { live: false, ...(workspace !== undefined && { workspace }) },
+      { live: false, historySource: 'state', ...(workspace !== undefined && { workspace }) },
       shipped,
       tempRoot,
     );

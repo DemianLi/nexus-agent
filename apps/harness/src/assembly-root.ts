@@ -42,6 +42,7 @@ import type { SessionLookupRegistrar } from './thread-sessions.js';
 import type { ThreadProfile } from './embed-profile.js';
 import type { HostToolsSlot } from './host-tools.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
+import { HISTORY_SOURCE_ROW_DEFAULT } from './settings/history-source.js';
 import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -242,7 +243,7 @@ export interface CliInvocation {
   readonly recursionLimit?: number;
   /**
    * `--history-source`（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：模型歷史從哪裡來。在場時贏過 `#settings/history-source`
-   * 那一列，三態見 `agent-factory.ts` 的 `historyFor`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
+   * 那一列，四層見 `agent-factory.ts` 的 `historyFor`。同 {@link recursionLimit}，只作用在這一次行程，`--resume` 要重給。
    */
   readonly historySource?: HistorySource;
   /**
@@ -1085,6 +1086,10 @@ export async function createCliAgent(
    */
   permissionNarrowed: PermissionNarrowing | undefined;
   /**
+   * 這一次組裝實際用的模型歷史來源（旗標 > 那一列 > 入口預設 `log`）。**只講 root**：子代理那一份仍走 `state`，`log` 時也一樣。
+   */
+  historySource: HistorySource;
+  /**
    * 訂閱「冷復活的背景子代理在讀回委派快照時被收回沙箱」（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。發生在組裝**之後**
    * （子代理被叫醒的那一輪），所以是訂閱而不是一格值；serve／CLI 各留一行 warn。同一個子代理在同一個行程裡只通知一次。沒有權限組合
    * （沒有圍堵）的組裝永遠不會觸發。回傳取消訂閱。
@@ -1280,6 +1285,7 @@ export async function createCliAgent(
     subagentKinds,
     delegationTool,
     memorySources,
+    historySource,
   } = await createNexusAgent({
     model,
     // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
@@ -1345,6 +1351,8 @@ export async function createCliAgent(
     ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     ...(invocation.historySource !== undefined && { historySource: invocation.historySource }),
+    // 入口的預設：那一列關掉、掉下來時是 `log`，不是裸組裝的 `state`（#2362）。
+    defaultHistorySource: HISTORY_SOURCE_ROW_DEFAULT,
     ...(invocation.agentLoop !== undefined && { agentLoop: invocation.agentLoop }),
     ...(historyShadow !== undefined && { historyShadow }),
     systemPrompt: SYSTEM_PROMPT,
@@ -1473,6 +1481,8 @@ export async function createCliAgent(
   });
   return {
     agent,
+    /** 這一次組裝實際用的模型歷史來源。只講 root：子代理仍是 `state`。 */
+    historySource,
     dispose,
     model,
     sessions,

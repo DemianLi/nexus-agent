@@ -381,7 +381,7 @@ describe('createHistoryFromLogMiddleware', () => {
         { messages: [new HumanMessage('甲')] },
         handler,
       ),
-    ).toThrow(/模型歷史從日誌推不出來/u);
+    ).toThrow(/日誌推不回模型歷史.*--history-source state.*另開一條對話/su);
     expect(handler).not.toHaveBeenCalled();
   });
 });

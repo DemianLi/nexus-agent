@@ -34,6 +34,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import {
   evictedToolResultText,
+  HISTORY_LOG_NO_FALLBACK,
   nexusContent,
   parsesLoggedToolCalls,
   replayConversation,
@@ -44,6 +45,7 @@ import {
 } from '@nexus/core';
 import type {
   ConversationReplay,
+  HistorySource,
   LoggedMessage,
   MessageContent,
   NexusMessage,
@@ -244,11 +246,18 @@ const UNREPLAYABLE_TEXT: Readonly<Record<UnreplayableReason, string>> = {
  * 續接時「對話回來了沒有」那半句。
  *
  * @param replay - {@link restoreConversation} 的結果。
+ * @param historySource - 這次組裝實際用的來源。`log` 時推不回來就不是「從空的開始」：第一次模型呼叫會拋（`@nexus/core` 的
+ *   `history-shadow.ts`，不退回 state），所以講的是預告。省略當 `state`。
  * @returns 接在入口的續接披露裡。
  */
-export function formatConversationRestore(replay: ConversationReplay): string {
+export function formatConversationRestore(
+  replay: ConversationReplay,
+  historySource: HistorySource = 'state',
+): string {
   if (replay.kind === 'unreplayable') {
-    return `對話從空的開始：${UNREPLAYABLE_TEXT[replay.reason]}`;
+    return historySource === 'log'
+      ? `這條對話推不回模型歷史，第一輪會失敗：${UNREPLAYABLE_TEXT[replay.reason]}。${HISTORY_LOG_NO_FALLBACK}`
+      : `對話從空的開始：${UNREPLAYABLE_TEXT[replay.reason]}`;
   }
   return replay.messages.length === 0
     ? '日誌裡還沒有對話'

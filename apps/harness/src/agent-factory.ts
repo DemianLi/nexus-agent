@@ -477,9 +477,14 @@ export interface CreateNexusAgentOptions {
   readonly invariantTap?: InvariantTap;
   /**
    * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)），CLI 的 `--history-source`。由 {@link historyFor}
-   * 的三態決定：明著傳的 > `#settings/history-source` 那一列 > {@link DEFAULT_HISTORY_SOURCE}。
+   * 的四層決定：明著傳的 > `#settings/history-source` 那一列 > {@link defaultHistorySource} > {@link DEFAULT_HISTORY_SOURCE}。
    */
   readonly historySource?: HistorySource;
+  /**
+   * 呼叫端給的預設：那一列關掉、掉下來時用它。`createCliAgent`（四個入口都走它）給 `log`；裸 `createNexusAgent` 不給，落到
+   * {@link DEFAULT_HISTORY_SOURCE}（`state`，裸組裝不掛日誌）。
+   */
+  readonly defaultHistorySource?: HistorySource;
   /**
    * `shadow` 時比對結果的去處。serve 一台一份、每條 thread 傳同一份；省略時這次組裝自己建一份不往外講的計數。
    */
@@ -734,8 +739,8 @@ function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOp
 }
 
 /**
- * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：三態同 {@link recursionLimitFor}（明著傳的 > 那一列 > {@link DEFAULT_HISTORY_SOURCE}）。
- * 這一列關得掉，但不需要第四態：關掉與沒有那一列都落回 `state`。
+ * 模型歷史從哪裡來（[#2355](https://github.com/DemianLi/nexus-agent/issues/2355)）：明著傳的 > 那一列 > 呼叫端給的預設 > {@link DEFAULT_HISTORY_SOURCE}。
+ * 這一列關得掉：關掉與沒有那一列落到呼叫端的預設（入口給 `log`），沒給才是 `state`。
  *
  * @param registry - 已經跑完 `loadPlugins()` 的 registry。
  * @param options - 組裝點自有的那些。
@@ -748,6 +753,7 @@ function historyFor(
   const source =
     options.historySource ??
     registry.services.get(HISTORY_SOURCE_SERVICE) ??
+    options.defaultHistorySource ??
     DEFAULT_HISTORY_SOURCE;
   if (source === 'state') return { source };
   if (source === 'log') return { source, toolResultAsSeen };
@@ -968,6 +974,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       options.attachments === undefined
         ? undefined
         : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode);
+    const history = historyFor(registry, options);
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -1030,7 +1037,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
       ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
-      history: historyFor(registry, options),
+      history,
     });
     // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
     // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。
@@ -1124,6 +1131,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 這一次組裝收不收插話（#710），見 {@link CreateNexusAgentOptions.stepInbox}。
        */
       stepInbox: options.stepInbox === true,
+      /**
+       * 這一次組裝實際用的模型歷史來源（{@link historyFor} 的結果）。**只講 root**：子代理那一份仍是 `state`
+       * （`fold.ts` 的 `historyFromLog` 宣告 `rootOnly`），`log` 時也一樣。
+       */
+      historySource: history.source,
       /**
        * 這一次組裝的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948），**沒給
        * {@link CreateNexusAgentOptions.toolResultStash} 時是 `undefined`**。跟外溢層、搜尋上限是同一個暫存實例：同一個會話目錄、

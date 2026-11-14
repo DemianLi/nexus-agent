@@ -354,9 +354,9 @@ describe('出貨的 cordis.yml', () => {
     // `recursion-limit` 是這八列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
     expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
-    // **模型歷史的來源**（#2355）：出貨那一行就是 schema 的預設 `state`，影子比對要明著開。
+    // **模型歷史的來源**（#2355、#2362）：出貨那一行就是 schema 的預設 `log`；要 `state` 或影子比對得明著寫。
     expect(byId.get('history-source')).toEqual(historySourceConfigSchema.parse({}));
-    expect(historySourceConfigSchema.parse({})).toEqual({ source: 'state' });
+    expect(historySourceConfigSchema.parse({})).toEqual({ source: 'log' });
     // **續行輪數的操作者上限**（#1623）。出貨那一行的值必須就是 schema 的預設，同上面幾列；預設 20 的來歷在 `settings/goal-round-cap.ts` 檔頭。
     expect(byId.get('goal-round-cap')).toEqual(goalRoundCapConfigSchema.parse({}));
     expect(goalRoundCapConfigSchema.parse({})).toEqual({ limit: DEFAULT_GOAL_ROUND_CAP });

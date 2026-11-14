@@ -9,17 +9,25 @@
  *
  * 產品上 `--agent-loop native` 另外還交給 CLI 的 `runTurn`／`runRepl`；那兩個沒換，要 native 的測試明給 loop（`cli.test.ts`）。
  *
+ * 這一份也代 `history-source-state.setup.ts` 的班：同一個模組只留最後一個 mock，所以 `createNexusAgent` 與 `createCliAgent` 在這裡一併帶 `historySource: 'state'`。
+ *
  * 明著給了 loop 的照給的跑，所以 `native-loop-parity.test.ts` 的 LangGraph 那一半照樣是 LangGraph。
  */
 
 import { vi } from 'vitest';
+
+import { listedHistorySource } from './history-source-state.listed.js';
 
 vi.mock('./agent-factory.js', async (importActual) => {
   const actual = await importActual<typeof import('./agent-factory.js')>();
   return {
     ...actual,
     createNexusAgent: (options: Parameters<typeof actual.createNexusAgent>[0]) =>
-      actual.createNexusAgent({ agentLoop: 'native', ...options }),
+      actual.createNexusAgent({
+        agentLoop: 'native',
+        ...(options.defaultHistorySource === undefined && { historySource: 'state' as const }),
+        ...options,
+      }),
   };
 });
 
@@ -29,8 +37,23 @@ vi.mock('./assembly-root.js', async (importActual) => {
     ...actual,
     createCliAgent: (
       invocation: Parameters<typeof actual.createCliAgent>[0],
-      ...rest: Parameters<typeof actual.createCliAgent> extends [unknown, ...infer R] ? R : never
-    ) => actual.createCliAgent({ agentLoop: 'native', ...invocation }, ...rest),
+      plugins: Parameters<typeof actual.createCliAgent>[1],
+      ...rest: Parameters<typeof actual.createCliAgent> extends [unknown, unknown, ...infer R]
+        ? R
+        : never
+    ) => {
+      const listed = listedHistorySource(plugins);
+      const keepRow = listed !== undefined && listed !== 'log';
+      return actual.createCliAgent(
+        {
+          agentLoop: 'native',
+          ...(!keepRow && { historySource: 'state' as const }),
+          ...invocation,
+        },
+        plugins,
+        ...rest,
+      );
+    },
   };
 });
 

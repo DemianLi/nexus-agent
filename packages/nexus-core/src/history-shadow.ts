@@ -423,10 +423,15 @@ export function sentHistoryFromLog(log: SessionLog, cache: ModelHistoryCache): B
   return messagesOf(cache.derive(eventsForModelCall(log.events).events));
 }
 
+/** `log` 推不出來時不退回 state 的那句話，拋錯訊息與續接的預告共用。 */
+export const HISTORY_LOG_NO_FALLBACK = 'history-source=log 不退回 state，所以不會用空歷史硬接。';
+
 function messagesOf(derived: DerivedConversation): BaseMessage[] {
   if (derived.kind !== 'replayed') {
     throw new Error(
-      `模型歷史從日誌推不出來（${derived.reason}@${String(derived.seq)}）：history-source=log 不退回 state`,
+      `這條對話的日誌推不回模型歷史（${derived.reason}，第 ${String(derived.seq)} 顆事件）。${HISTORY_LOG_NO_FALLBACK}` +
+        `要在這條對話上繼續：把 history-source 那一列寫成 source: state，或 CLI 帶 --history-source state` +
+        `（模型從空歷史開始，舊內容不進模型）；或另開一條對話。`,
     );
   }
   return derived.messages.map((message) => {
