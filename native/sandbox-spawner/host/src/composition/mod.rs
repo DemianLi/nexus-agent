@@ -69,7 +69,7 @@ unsafe fn errno_slot() -> *mut libc::c_int {
 }
 
 extern "C" fn on_sigterm(_: libc::c_int) {
-    // SAFETY：handler 裡只用 async-signal-safe 的 write；管線滿了或沒開，寫不進去都不理。
+    // SAFETY：handler 裡只呼叫 write（async-signal-safe）與讀寫這條執行緒的 `errno`；管線滿了或沒開，寫不進去都不理。
     // write 會改 `errno`，被打斷的那段程式可能正要讀它（判斷 `EAGAIN`），所以存起來、寫完還原。
     unsafe {
         let slot = errno_slot();
@@ -86,8 +86,9 @@ fn watch_sigterm() -> std::io::Result<OwnedFd> {
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY：兩個 fd 是剛開的，讀端交給 OwnedFd；寫端留到行程結束，起不來的話行程馬上結束，不另外關。
+    // SAFETY：fds[0] 是 pipe 剛開的，只有這裡擁有。
     let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // 寫端留到行程結束；下面失敗的話行程馬上結束，不另外關。
     for fd in fds {
         // SAFETY：只改這個 fd 的旗標。
         let flagged = unsafe {

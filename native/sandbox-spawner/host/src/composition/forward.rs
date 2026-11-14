@@ -6,10 +6,11 @@
 //!   對方不讀時來源那一端的寫入會被核心擋住。
 //! - 一邊讀到 EOF：留著的寫完之後只關另一邊寫的方向；兩個方向都結束才整條關。
 //! - 一邊斷了（`POLLHUP` 或 `POLLERR`）：往它的那個方向當場作廢；它斷之前送出、還沒讀的照樣轉給另一邊，
-//!   讀到 EOF 或讀錯為止。兩個方向都結束才整條關。
+//!   讀到 EOF、讀錯或讀不到東西為止。
 //!   `POLLHUP` 靠 Linux 的語意：stream socket 兩個方向都關了才有，對方只關寫的方向不算。
 //!   `POLLERR` 在 Linux 上是對方帶著沒讀的資料關（`ECONNRESET`），它關之前送出的一樣讀得到。
 //! - 讀來源出錯：當成來源結束，跟 EOF 一樣。往目的端寫出錯：只有那個方向作廢，另一個方向照推。
+//! - 任一端 `POLLNVAL`：整條直接關，留著的不轉。
 //! - 同時最多 [`MAX_LINKS`] 條，到了就不 accept，多的排在 listen 的 backlog。
 //! - 連不上葉子：進來的那一條直接關。連是非阻塞的，葉子的 backlog 滿了也算連不上。
 
@@ -47,9 +48,9 @@ struct End {
 struct Half {
     /// 讀進來、還沒寫出去的。
     pending: Vec<u8>,
-    /// 來源讀到 EOF 了。
+    /// 來源結束了：讀到 EOF、讀錯，或來源斷了之後讀不到東西。
     eof: bool,
-    /// 這個方向結束了：目的端寫的方向已經關，或目的端整條關了。
+    /// 這個方向結束了：目的端寫的方向已經關，或往目的端送不出去（斷了、寫出錯）。
     done: bool,
 }
 
@@ -62,7 +63,7 @@ impl Half {
         !self.done && !self.pending.is_empty()
     }
 
-    /// 目的端斷了：留著的丟掉。
+    /// 往目的端送不出去了（斷了或寫出錯）：留著的丟掉，這個方向結束。
     fn abandon(&mut self) {
         self.pending.clear();
         self.done = true;
@@ -385,7 +386,6 @@ mod tests {
         (forward, client, leaf, dir)
     }
 
-    /// poll 一次並交給 `step`。
     fn round(forward: &mut Forward) {
         let fds = polled(forward);
         forward.step(&fds, Instant::now());

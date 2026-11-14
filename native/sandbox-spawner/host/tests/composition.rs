@@ -454,7 +454,7 @@ fn a_frame_that_does_not_decode_exits_with_a_protocol_error() {
     assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
 }
 
-/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。已經綁好的那一個不留在磁碟上。
+/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。前台的綁不了時，已經綁好的橋不留在磁碟上。
 #[test]
 fn a_socket_that_cannot_be_bound_exits_1_without_a_hello() {
     let mut rig = Rig::start_at("unbound", "no-such-dir/front.sock");
@@ -762,7 +762,7 @@ impl Stopped {
         assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
         let stopped = Stopped(pid);
         let mut status = 0;
-        // SAFETY：等自己的子行程；`WUNTRACED` 只回報它停住，不收掉它。
+        // SAFETY：等自己的子行程；`WUNTRACED` 讓它停住時也回來，停住的不會被收掉。
         let waited = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) };
         assert_eq!(waited, pid);
         assert!(libc::WIFSTOPPED(status), "組合行程沒有停住：{status:#x}");
