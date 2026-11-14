@@ -233,7 +233,7 @@ describe('收集：header 代入後的整個值與 Authorization 的 scheme 後�
     expect(redactor.scrubText(`echo Bearer ${TOKEN}`)).toBe('echo [redacted]');
   });
 
-  it('沒有憑證引用 → 沒有東西要遮', () => {
+  it('沒有憑證引用、網址沒有 query → 沒有東西要遮', () => {
     const redactor = redactorFor(
       mcpConfigSchema.parse({
         serverName: 'srv',

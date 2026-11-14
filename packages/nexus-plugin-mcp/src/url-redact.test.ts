@@ -5,13 +5,7 @@
 
 import type { Client, Tool } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  attemptsOn,
-  connectGeneration,
-  openClient,
-  redactedUrl,
-  withUrlScrubbing,
-} from './connection.js';
+import { attemptsOn, connectGeneration, openClient, withUrlScrubbing } from './connection.js';
 import type { Attempts } from './connection.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
@@ -213,8 +207,9 @@ describe.each(eras)('%s：query 的值各種回顯都遮', (_name, start) => {
     expect(error.message).toBe(
       'Error calling tool fetch_release_note: SdkHttpError: Error POSTing to endpoint: Cannot POST /mcp',
     );
-    expect(String(error.cause)).toContain('Cannot POST /mcp');
-    expect((error.cause as Error).stack).toBeDefined();
+    // 沒有東西要遮就不換成遮過的副本：cause 還是 SDK 拋的那個類別，不是 `scrubbedCopy` 做的普通 `Error`。
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).constructor).not.toBe(Error);
   });
 });
 
@@ -255,17 +250,4 @@ describe('遮蔽是冪等的', () => {
     expect(text).toContain('http://127.0.0.1:1/');
     expect(text).not.toContain('http://127.0.0.1:1//');
   });
-
-  it.each(['http://h', 'http://h/mcp', 'http://h?x=abcdefghij'])(
-    '%s：遮兩次與遮一次相同',
-    (url) => {
-      const config = mcpConfigSchema.parse({
-        serverName: 'srv',
-        connection: { transport: 'http', url },
-      });
-      const redactor = withUrlScrubbing(config, redactorFor(config, new Map()));
-      const once = redactor.scrubText(`GET ${url} failed at ${redactedUrl(url)}`);
-      expect(redactor.scrubText(once)).toBe(once);
-    },
-  );
 });

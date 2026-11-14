@@ -199,7 +199,7 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 - **收集**：入口只有一個，宿主的 `Redactor::new(values)`（`host/src/mcp/redact.rs`）：呼叫端把這一份連線手上的值交進去。今天交進去的是：
   - header 的值，除了 `LITERAL_HEADERS`（`config.rs`）：`Accept`、`Content-Type`、`User-Agent`、`Accept-Language`、`MCP-Protocol-Version`（不分大小寫）。這幾個是協定層、一定不是秘密，值不進遮蔽器。
     值取原始位元組：能解成 UTF-8 就收那個字串，含非 ASCII 時另收逐位元組當 Latin-1 的字串。`Authorization` 與 `Proxy-Authorization` 另收 scheme 後面那一段（server 常只回顯 token）；
-  - 網址的 query：整串、每個值的原樣與解碼後，全部收；TS 的 `redactorFor` 同樣收，**唯一不同：不到 8 個 code point 的值不收**（TS 的斷線判斷讀遮過的訊息，`v=2` 的 `2` 會切斷 `MCP error -32000`；整段 `?…` 的比對仍遮逐字回顯）；
+  - 網址的 query：整串、每個值的原樣與解碼後，全部收；TS 的 `redactorFor` 同樣收，**唯一不同：不到 8 個 code point 的值不收**，整串、原樣、解碼後各個形式各自算（所以非 ASCII 的短值，百分號編碼後的原樣若有 8 個以上字元就收）。理由是 TS 的斷線判斷讀遮過的訊息，`v=2` 的 `2` 會切斷 `MCP error -32000`；整段 `?…` 的比對仍遮逐字回顯；
   - 代理的帳密；
   - stdio：`connection.credentialEnv` 標的那幾個環境變數的值，**只有這些**。TS 看得到每個值的來源（`apps/harness/src/mcp-host-stdio-row.ts`），所以 stdio 不用 header 那種「分不出來就全收」的近似：`PATH`、`HOME` 這類清洗後的父環境與字面值都不進，成功結果不會被遮壞。每個值照上面的值檢查。
 
@@ -219,7 +219,11 @@ MCP 那一列用 `{ credential: <名字> }` 引用的值，會代進 server 的�
 
   其餘字串（描述、內容、resource 的 `name`）都遮。server 若把秘密放在這些識別欄位裡，會原樣送回，這是不遮它們的代價。
 - **短的字面值**：header 的短字面值（例如 `X-Mode: ab`）與網址 query 裡的片段（`limit=10` 的 `10`）不到 8 個字元，不會是憑證。它們只在錯誤與診斷裡遮（reqwest 會把網址印進錯誤），不遮成功結果：遮了會把 server 正常的回答改壞。
-- **沒收的形式**：base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
+- **TS 收的 query 值（#2669）的後果**，接 PR-2b 的人要知道：
+  - 8 個 code point 以上的 query 字面值（`?workspace=production-eu`）進了「到處遮」那一組。`Redactor.redactText`（成功結果）今天沒有呼叫端，所以成功結果不受影響；PR-2b 接上之後這類值會在成功結果裡被遮。與宿主的過渡做法一致，但和 TS 對 header 字面值、stdio 只收憑證的原則不同；
+  - 錯誤與診斷裡會過度遮蔽：query 值若也出現在 host 或別處（`?env=production` 對 `production.example.com`），那段文字也被換成 `[redacted]`；
+  - 8 個 code point 的門檻不是完整保證：`?state=connected` 的值夠長、會收，於是 `Not connected` 被遮，斷線判定（`isConnectionLost`）失效；`?x=TimeoutError` 同理。
+- **沒收的形式**：截斷（只回顯值的前半）、部分編碼（`encodeURI`、Python `quote` 的預設只編一部分字元）、值本身被轉大小寫（宿主與 TS 都漏）；base64（例如 `Authorization: Basic` 把帳密編成 base64）、HTML 實體、雙重百分號編碼；`<` 這類別家編碼器多跳脫的寫法（`\u003c`）；百分號或 `\u` 後的十六進位大小寫混用；
   一個值被拆在兩個字串裡（例如分兩個 content 區塊）；JSON 的數字（`{"pin": 12345678}` 不遮，值檢查不限數字）。值被 server 轉成這些形式再回顯就遮不到。
 
 測試：樣本 `mcpValue[]`、`redact[]`；`host/tests/mcp_stdio.rs`（stdio 只收 `credentialEnv`、字面值照舊、子行程的環境只有交來的那份）；`host/tests/mcp_redact.rs`（含經真的橋的：成功結果、編碼形式、代理帳密、只回顯 token、協定層 header 不遮、名稱含字面值的工具仍叫得動、instructions、`isError`、resources）；TS 的 `mcp-credential.test.ts`「長度下限」那組。
