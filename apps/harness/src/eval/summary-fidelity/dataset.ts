@@ -3,10 +3,11 @@
  * 摘要之後問同一組題目，看事實有沒有活過摘要。
  *
  * 每個變體是一到兩段對話。每一段都長過評估用的摘要門檻，而且**事實全在前半、結尾是一長串不含事實的雜訊**：摘要器逐字留下的
- * 只有尾巴，事實只能靠摘要帶過去。跑者會檢查這一點（{@link ./runner.ts} 的 `leaked`）。
+ * 只有尾巴，事實只能靠摘要帶過去。跑者把落在尾巴裡的題目標成 `leaked`、不計分
+ * （{@link ./runner.ts}），`summary-fidelity.test.ts` 釘住沒有題目落在尾巴、雜訊裡也沒有題目的字串。
  *
- * 題目的 `mentions` 是答案裡必須原樣出現的字串，交給 `../scorers.ts` 的 `scoreMentions` 計分；所以事實都挑寫法只有一種的
- * （編號、路徑、不帶千分位的數字），題目也要求原樣寫出。`stale` 是被推翻的舊結論，答案裡出現就記一筆過時命中，不進分數。
+ * 題目的 `mentions` 是答案裡必須出現的字串（比對不看空白），交給 `../scorers.ts` 的 `scoreMentions` 計分；所以事實盡量挑寫法固定的
+ * （編號、路徑、不帶千分位的數字），題目也要求照寫。`stale` 是被推翻的舊結論，答案裡出現就記一筆過時命中，不進分數。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -17,13 +18,13 @@ export interface FidelityQuestion {
   readonly id: string;
   /** 問模型的那句話。 */
   readonly prompt: string;
-  /** 答案裡必須原樣出現的字串。 */
+  /** 答案裡必須出現的字串（比對不看空白）。 */
   readonly mentions: readonly string[];
   /** 被推翻的舊結論；答案裡出現任何一個就是過時命中。 */
   readonly stale?: readonly string[];
   /** 這題的事實在第幾段（從 0 起算）。段數減去它，就是這個事實經過幾次摘要。 */
   readonly segment: number;
-  /** 事實的種類，報表照它分組。 */
+  /** 事實的種類，逐題報表印成一欄。 */
   readonly kind: 'path' | 'value' | 'correction' | 'todo' | 'overturned';
 }
 
@@ -52,7 +53,7 @@ function accessLog(seed: number, lines: number): string {
   const paths = ['/healthz', '/api/v2/items', '/static/app.css', '/api/v2/session', '/favicon.ico'];
   return Array.from({ length: lines }, (_, index) => {
     const n = seed * 1000 + index;
-    return `10.0.${n % 250}.${(n * 7) % 250} - - [worker-${n % 9}] "GET ${paths[n % paths.length]} HTTP/1.1" ${n % 11 === 0 ? 304 : 200} ${1200 + ((n * 37) % 900)}`;
+    return `10.0.${n % 250}.${(n * 7) % 250} - - [worker-${n % 9}] "GET ${paths[n % paths.length]} HTTP/1.1" ${n % 11 === 0 ? 304 : 200} ${10_000 + ((n * 37) % 9_000)}`;
   }).join('\n');
 }
 

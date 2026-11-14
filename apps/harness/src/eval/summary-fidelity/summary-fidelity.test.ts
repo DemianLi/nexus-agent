@@ -122,6 +122,43 @@ describe('交接保真度評估（#2774）', () => {
     expect(crossed.get('runbook')).toBe(1);
   });
 
+  it('連續摘要兩次：第二次摘的是第一次的摘要，不是第一段的原文', async () => {
+    const double = FIDELITY_VARIANTS.find((variant) => variant.id === 'double')!;
+    const inputs: string[] = [];
+    await runFidelityVariant(double, {
+      summaryModel: {
+        profile: {},
+        invoke: async (input: readonly BaseMessage[]) => {
+          inputs.push(input.map(contentOf).join('\n'));
+          return { text: `SUMMARY-${inputs.length}` };
+        },
+      },
+      ask: async () => '',
+    });
+
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]).toContain('SUMMARY-1');
+    expect(inputs[1]).not.toContain('I am preparing the vendor review');
+  });
+
+  it('該提到的字串與過時的字串只出現在事實裡，雜訊裡沒有', () => {
+    for (const variant of FIDELITY_VARIANTS) {
+      const noise = variant.segments
+        .flat()
+        .map(contentOf)
+        .join('\n')
+        .split('\n')
+        .filter((line) => NOISE.test(line) || /^(Summary table|第 \S+ 個時段)/.test(line))
+        .join('\n');
+      expect(noise.length, variant.id).toBeGreaterThan(10_000);
+      for (const question of variant.questions) {
+        for (const needle of [...question.mentions, ...(question.stale ?? [])]) {
+          expect(noise, `${variant.id}/${question.id}`).not.toContain(needle);
+        }
+      }
+    }
+  });
+
   it('答案帶著被推翻的舊結論時記過時命中，不影響分數', async () => {
     const overturned = FIDELITY_VARIANTS.find((variant) => variant.id === 'overturned')!;
     const result = await runFidelityVariant(overturned, {

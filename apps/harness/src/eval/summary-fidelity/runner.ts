@@ -4,11 +4,13 @@
  * 一個變體跑兩步：
  *
  * 1. **強制摘要**。每一段對話接到訊息串後面，叫一次出貨的摘要器（`createSummarizer`，prompt、切點、重試都是它自己的），
- *    門檻調小到這一段一定越過。主模型那一格用罐頭回覆頂替，不打模型；打模型的只有摘要器自己那一次。
+ *    門檻調小到這一段一定越過。主模型那一格用罐頭回覆頂替，不打模型；打模型的只有摘要器：通常一次，
+ *    摘要後這份請求仍到門檻時，摘要器照出貨設定（`compactionRetries` 1）換成不留尾巴再摘一次。
  * 2. **問題目**。摘要器交下去的那一串（摘要加逐字留下的尾巴）後面接一題，一題一次模型呼叫，答案交給 `../scorers.ts` 的
  *    `scoreMentions`。
  *
- * 門檻與保留量的比例照出貨設定（保留量是門檻的兩成），絕對值縮小：題庫要的是「事實被摘掉」，不是把窗口塞滿。
+ * 門檻與保留量照出貨在預設模型上的實際比例（保留量封在 token 門檻的兩成），絕對值縮小：題庫要的是「事實被摘掉」，不是把窗口塞滿。
+ * 只留 token 門檻，出貨的 60 則訊息數門檻不設。
  */
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
@@ -20,7 +22,7 @@ import type { FidelityQuestion, FidelityVariant } from './dataset.js';
 
 /** 評估用的摘要門檻（token）。每一段對話都要比它長，由 `summary-fidelity.test.ts` 釘住。 */
 export const FIDELITY_TRIGGER_TOKENS = 8_000;
-/** 摘要之後逐字留下的量（token）：門檻的兩成，同出貨設定的比例。 */
+/** 摘要之後逐字留下的量（token）：門檻的兩成，等於出貨在預設模型上的封頂比例。 */
 export const FIDELITY_RETAIN_TOKENS = 1_600;
 
 /** 問題目時的系統提示。 */
@@ -51,7 +53,7 @@ export interface FidelityQuestionResult {
   readonly score: number;
   /** 答案裡出現了被推翻的舊結論。題目沒列 `stale` 時恆為假。 */
   readonly staleHit: boolean;
-  /** 該提到的字串是否全都原樣在最後那則摘要裡。答錯時用它分辨是摘要丟了，還是摘要有、模型沒答出來。 */
+  /** 該提到的字串是否全都在最後那則摘要裡（比對不看空白）。答錯時用它分辨是摘要丟了，還是摘要有、模型沒答出來。 */
   readonly inSummary: boolean;
   /** 該提到的字串有任何一個出現在逐字留下的尾巴裡：這題量不到摘要，不進平均。 */
   readonly leaked: boolean;
@@ -62,7 +64,7 @@ export interface FidelityQuestionResult {
 export interface FidelityVariantResult {
   readonly variantId: FidelityVariant['id'];
   readonly title: string;
-  /** 每一段摘要前估了幾個 token、摘要器那一步花了幾毫秒（含它自己的重試）、摘要幾個字元。 */
+  /** 每一段：摘要器那一步花了幾毫秒（含它自己的重試與重摘）、摘要幾個字元、摘要之後逐字留下幾則訊息。 */
   readonly summaries: readonly {
     readonly summarizeMs: number;
     readonly summaryChars: number;
@@ -78,7 +80,7 @@ export interface FidelityVariantResult {
 /** 摘要沒有照預期發生：這一輪量不到東西，不是零分。 */
 export class SummaryDidNotHappenError extends Error {
   constructor(variantId: string, segment: number, detail: string) {
-    super(`變體 ${variantId} 第 ${segment + 1} 段沒有生出摘要：${detail}`);
+    super(`變體 ${variantId} 第 ${segment + 1} 段沒有剛好生出一則摘要：${detail}`);
     this.name = 'SummaryDidNotHappenError';
   }
 }
@@ -107,7 +109,8 @@ function isSummary(message: BaseMessage): boolean {
  * @param variant - 變體。
  * @param models - 摘要模型與答題模型。
  * @returns 每一題的結果與這個變體的平均分。
- * @throws {SummaryDidNotHappenError} 任何一段沒有生出摘要（門檻沒到、摘要被拒收）。模型呼叫的錯誤原樣拋。
+ * @throws {SummaryDidNotHappenError} 任何一段沒有剛好生出一則摘要（門檻沒到、摘要模型失敗或摘要被拒收）。答題模型
+ *   （`models.ask`）的錯誤原樣拋。
  */
 export async function runFidelityVariant(
   variant: FidelityVariant,
@@ -115,6 +118,7 @@ export async function runFidelityVariant(
 ): Promise<FidelityVariantResult> {
   const log = new SessionLog(`summary-fidelity-${variant.id}`);
   const middleware = createSummarizer(
+    // 歷史檔寫進空的替身，不落盤。
     { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
     {
       ...DEFAULT_SUMMARIZATION,
@@ -131,7 +135,13 @@ export async function runFidelityVariant(
     undefined,
     models.retry,
   );
-  const runtime = { configurable: { thread_id: `summary-fidelity-${variant.id}` } };
+  // 兩格都要給：摘要器靠它們認出是同一條對話的呼叫，下一段才會接著上一次的切點摘，而不是從原文重摘。
+  const runtime = {
+    configurable: {
+      thread_id: `summary-fidelity-${variant.id}`,
+      checkpoint_ns: 'model_request:summary-fidelity',
+    },
+  };
   const summaryCount = () =>
     log.events.filter((event) => event.type === 'compaction/summary').length;
 

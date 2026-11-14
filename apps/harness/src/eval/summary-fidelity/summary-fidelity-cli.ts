@@ -5,10 +5,11 @@
  * 問的是「事實活不活得過摘要」：路徑、數值、被更正的決定、未完成的待辦埋在一段長對話裡，強制摘要之後逐題問，
  * 每個變體印一個得分。題庫與做法見 [`dataset.ts`](./dataset.ts) 與 [`runner.ts`](./runner.ts)。
  *
- * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。請求數是定的：每個變體是「段數 + 題數」，`--count` 只印不跑。
+ * **不進 CI。** 需要 `NVIDIA_API_KEY`，會打真模型。每個變體是「段數 + 題數」個請求，`--count` 只印不跑；
+ * 不含傳輸重試，也不含摘要後仍到門檻時摘要器的那一次重摘。
  * 摘要與答題用同一顆模型（出貨預設那顆）；摘要器是出貨的那一顆，prompt、切點、重試都沒有另外寫。
  *
- * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。**
+ * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 題庫的對話、摘要與答案會跟著 trace 出境。
  */
 
 import type { BaseMessage } from '@langchain/core/messages';
@@ -58,7 +59,7 @@ function parseVariants(argv: readonly string[]): readonly FidelityVariant[] {
   return FIDELITY_VARIANTS.filter((variant) => wanted.includes(variant.id));
 }
 
-/** 一個變體跑一次送幾個模型請求（不含重試）：每段一次摘要，每題一次。 */
+/** 一個變體跑一次送幾個模型請求：每段一次摘要，每題一次。不含重試與摘要器的重摘。 */
 function requestsOf(variant: FidelityVariant): number {
   return variant.segments.length + variant.questions.length;
 }

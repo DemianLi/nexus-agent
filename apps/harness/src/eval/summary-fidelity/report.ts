@@ -1,7 +1,7 @@
 /**
  * 交接保真度評估的報表（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：每個變體一列得分，下面逐題列出。
  *
- * 樣本數跟著每個數字印：摘要是取樣出來的，一次與五次的 `1.00` 不是同一件事。
+ * 得分跟著印樣本數：摘要是取樣出來的，一次與五次的 `1.00` 不是同一件事。
  */
 
 import type { FidelityQuestionResult, FidelityVariantResult } from './runner.js';
@@ -45,7 +45,10 @@ export function formatFidelityReport(
     );
   }
 
-  lines.push('', '逐題（得分是各輪平均；「摘要裡有」是該提到的字串原樣在最後那則摘要裡的輪數）');
+  lines.push(
+    '',
+    '逐題（得分是各輪平均；「摘要裡有」是該提到的字串都在最後那則摘要裡的輪數，比對不看空白）',
+  );
   for (const [variantId, results] of byVariant) {
     const first = results[0];
     if (first === undefined) continue;
