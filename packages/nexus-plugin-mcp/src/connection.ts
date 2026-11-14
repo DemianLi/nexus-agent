@@ -327,7 +327,7 @@ function scrubbed(text: string, urls: readonly string[], redactor: Redactor): st
     }
     for (const form of forms) if (form !== '') shownOf.set(form, shown);
   }
-  // 一次掃完：逐個換的話，換出來的 `http://h/` 會被下一個形式（`href`）再換一次，變成 `http://h//`，遮兩次就不一樣。
+  // 一次掃完：逐個換的話，較短的形式（`http://h`）會在後面還接著路徑的文字裡多出一條 `/`（`http://h//x`），遮兩次就不一樣。
   // 長的形式排前面，短的是長的前綴時不會留下半截。
   let result = text;
   if (shownOf.size > 0) {

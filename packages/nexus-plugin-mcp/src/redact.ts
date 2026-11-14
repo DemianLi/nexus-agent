@@ -162,7 +162,7 @@ function replaceSpans(text: string, patterns: readonly string[]): string {
  * **已知限制：** 數字的 `code` 與 `status` 不遮。全數字的憑證被 server 回顯成整數錯誤碼時，會原樣留在副本上。harness 的憑證服務拒收不到 8 個
  * code point 的值（`assertUsableMcpCredential`），JSON-RPC 與 HTTP 的錯誤碼沒有這麼長。
  *
- * @param scrub - 文字怎麼遮：`redactor.scrubText`；HTTP 連線的遮蔽器已含網址（`withUrlScrubbing`）。
+ * @param scrub - 文字怎麼遮：`redactor.scrubText`；HTTP 連線的遮蔽器已含網址（`withUrlScrubbing`）；`openClient` 的 `fail()` 另把 SSE 退回的網址一併交給 `scrubbed`。
  */
 export function scrubbedCopy(error: unknown, scrub: (text: string) => string): Error {
   const source = (error ?? {}) as { name?: unknown; status?: unknown; code?: unknown };
