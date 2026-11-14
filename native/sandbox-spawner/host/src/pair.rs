@@ -191,7 +191,6 @@ impl Closing {
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), room) };
             if n > 0 {
                 budget -= n as usize;
-                self.until += CLOSE_TIMEOUT;
                 continue;
             }
             let errno = std::io::Error::last_os_error().raw_os_error();
