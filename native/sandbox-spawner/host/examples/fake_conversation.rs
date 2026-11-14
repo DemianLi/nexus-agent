@@ -1,9 +1,18 @@
-//! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`，收到 `bind` 回 `bound`，之後照 thread id 做事。
+//! 監督行程整合測試用的假對話行程：照控制面協定送 `ready`（當一對裡的葉子時不送，見 `--pair-socket`），收到 `bind` 回 `bound`，
+//! 之後照 thread id 做事。
 //! 編在 `nexus-host` 這個 package（要用 `nexus_host::host_protocol`），由 spawner 的 `tests/supervisor.rs` 從共用的 target 目錄起。
 //!
 //! ```text
 //! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--no-loop] [--skip-hello] --socket <路徑> [--host-socket <路徑>]
+//!                   [--pair-socket <路徑> [--no-register] [--ready-before-register] [--die-on-attach]]
 //! ```
+//!
+//! `--pair-socket`：當一對裡的葉子（#2583）。控制通道上不送 `ready`（`--ready-before-register` 例外），其餘照下面；連橋、交換 `hello`、`register` 一個工具，
+//! 組合行程叫 `attach` 時當成收到那條 thread 的 `bind`（下面的動作照做，控制通道上那一則 `bound` 監督行程不看）：
+//! 把 `bind` 排給主迴圈就回 `attach` 成功，不等主迴圈做完。
+//! 另外在 `--socket` 上收資料連線：每條先寫一行 `leaf <pid>`，之後收到什麼回什麼。
+//! `--no-register`：不連橋。`--ready-before-register`：先在控制通道送 `ready`、記一行 `ready`，等 `<socket 路徑>.go` 出現才連橋。
+//! `--die-on-attach`：收到 `attach` 不回，當場以 9 結束。
 //!
 //! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]；宣告 loop 在自己這裡，`--no-loop` 不宣告）；`--skip-hello` 不送，直接送 `ready`。
 //!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
@@ -29,13 +38,18 @@
 #[path = "common/host_client.rs"]
 mod host_client;
 
-use nexus_sandbox_spawner::protocol::{frame, take_frame};
+use nexus_host::pair_protocol::{
+    self, PairMessage, RejectCode, METHOD_ATTACH, PAIR_PROTOCOL_VERSION, RETRY_BACKOFF_MIN,
+};
+use nexus_sandbox_spawner::protocol::{frame, take_frame, take_frame_within};
 use nexus_sandbox_spawner::supervisor_protocol::{
-    decode_conversation_command, encode_conversation_report, ConversationCommand,
-    ConversationReport, TurnPhase, PROTOCOL_VERSION,
+    decode_conversation_command, encode_conversation_command, encode_conversation_report,
+    ConversationCommand, ConversationReport, TurnPhase, PROTOCOL_VERSION,
 };
 use std::io::{Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
@@ -97,6 +111,161 @@ fn start_heartbeat() {
     });
 }
 
+/// 成對時主迴圈讀的那條管線的寫端：監督行程送來的框與橋上 `attach` 換成的 `bind` 都從這裡進去，一次一整框。
+/// 監督行程那邊 EOF 就拿掉，主迴圈跟著讀到 EOF。
+static CONTROL: Mutex<Option<std::fs::File>> = Mutex::new(None);
+/// [`CONTROL`] 的 fd：`grandchild` fork 出去的子行程要關掉自己那一份，不然主迴圈讀不到 EOF。沒有是 -1。
+static CONTROL_FD: AtomicI32 = AtomicI32::new(-1);
+
+fn feed_control(framed: &[u8]) {
+    if let Some(pipe) = CONTROL.lock().unwrap().as_mut() {
+        let _ = pipe.write_all(framed);
+    }
+}
+
+/// 把 fd 0 換成一條自己的管線，原本的 stdin 由一條執行緒逐框轉進去。
+fn splice_control() {
+    let mut fds = [0; 2];
+    // SAFETY：開一條管線、複製 fd 0、把讀端換到 fd 0；拿到的 fd 各交給一個擁有者。
+    let mut supervisor = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        let original = libc::dup(0);
+        assert!(original >= 0 && libc::dup2(fds[0], 0) == 0);
+        libc::close(fds[0]);
+        CONTROL_FD.store(fds[1], Ordering::SeqCst);
+        *CONTROL.lock().unwrap() = Some(<std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(
+            fds[1],
+        ));
+        <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(original)
+    };
+    std::thread::spawn(move || {
+        let mut input = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = supervisor.read(&mut buf).unwrap_or(0);
+            if n == 0 {
+                CONTROL_FD.store(-1, Ordering::SeqCst);
+                *CONTROL.lock().unwrap() = None;
+                return;
+            }
+            input.extend_from_slice(&buf[..n]);
+            while let Some(payload) = take_frame(&mut input).unwrap() {
+                feed_control(&frame(&payload));
+            }
+        }
+    });
+}
+
+/// 資料 socket：每條連線先報自己是誰，之後原樣回。
+fn serve_data(socket: &str) {
+    let listener = UnixListener::bind(socket).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            std::thread::spawn(move || {
+                let _ = stream.write_all(format!("leaf {}\n", std::process::id()).as_bytes());
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 || stream.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+}
+
+fn pair_send(stream: &mut UnixStream, message: &PairMessage) {
+    let _ = stream.write_all(&frame(&pair_protocol::encode(message)));
+}
+
+/// 橋上的下一框；連線關了是 `None`。
+fn pair_read(stream: &mut UnixStream, input: &mut Vec<u8>) -> Option<PairMessage> {
+    let mut buf = [0u8; 4096];
+    loop {
+        if let Some(payload) = take_frame_within(input, pair_protocol::MAX_FRAME).unwrap() {
+            return Some(pair_protocol::decode(&payload).unwrap());
+        }
+        match stream.read(&mut buf) {
+            Ok(n) if n > 0 => input.extend_from_slice(&buf[..n]),
+            _ => return None,
+        }
+    }
+}
+
+/// 連橋到交換完 `hello`：還連不上、或被要求稍後再試，就照協定的下限等了再連。
+fn join_bridge(path: &str) -> (UnixStream, Vec<u8>) {
+    loop {
+        if let Ok(mut stream) = UnixStream::connect(path) {
+            let mut input = Vec::new();
+            pair_send(
+                &mut stream,
+                &PairMessage::Hello {
+                    version: PAIR_PROTOCOL_VERSION,
+                },
+            );
+            match pair_read(&mut stream, &mut input) {
+                Some(PairMessage::Hello { .. }) => return (stream, input),
+                Some(PairMessage::Rejected {
+                    code: RejectCode::RetryLater,
+                    ..
+                })
+                | None => {}
+                Some(other) => panic!("橋沒收葉子：{other:?}"),
+            }
+        }
+        std::thread::sleep(RETRY_BACKOFF_MIN);
+    }
+}
+
+fn run_bridge(path: String, go: Option<String>, die_on_attach: bool) {
+    std::thread::spawn(move || {
+        if let Some(go) = go {
+            while !std::path::Path::new(&go).exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let (mut stream, mut input) = join_bridge(&path);
+        pair_send(
+            &mut stream,
+            &PairMessage::Register {
+                tools: vec!["tool".into()],
+                hooks: Vec::new(),
+            },
+        );
+        while let Some(message) = pair_read(&mut stream, &mut input) {
+            let PairMessage::Call {
+                call,
+                method,
+                payload,
+                ..
+            } = message
+            else {
+                continue;
+            };
+            if method != METHOD_ATTACH {
+                continue;
+            }
+            if die_on_attach {
+                std::process::exit(9);
+            }
+            let thread = payload["threadId"].as_str().unwrap_or_default();
+            feed_control(&frame(&encode_conversation_command(
+                &ConversationCommand::Bind {
+                    thread_id: thread.as_bytes().to_vec(),
+                },
+            )));
+            pair_send(
+                &mut stream,
+                &PairMessage::Result {
+                    call,
+                    outcome: Ok(nexus_host::json::Value::Null),
+                },
+            );
+        }
+    });
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--die-before-ready") {
@@ -155,7 +324,30 @@ fn main() {
             runs_loop: !args.iter().any(|a| a == "--no-loop"),
         });
     }
-    report(&ConversationReport::Ready);
+    let pair_socket = args
+        .iter()
+        .position(|a| a == "--pair-socket")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    match pair_socket {
+        None => report(&ConversationReport::Ready),
+        Some(pair_socket) => {
+            splice_control();
+            serve_data(&socket);
+            let early = args.iter().any(|a| a == "--ready-before-register");
+            if early {
+                report(&ConversationReport::Ready);
+                log("ready");
+            }
+            if !args.iter().any(|a| a == "--no-register") {
+                run_bridge(
+                    pair_socket,
+                    early.then(|| format!("{socket}.go")),
+                    args.iter().any(|a| a == "--die-on-attach"),
+                );
+            }
+        }
+    }
     let mut token = Vec::new();
 
     let mut ignore_eof = false;
@@ -240,10 +432,14 @@ fn main() {
                             phase: TurnPhase::End,
                         });
                     }
-                    // SAFETY：fork 之後子行程只睡。
+                    // SAFETY：fork 之後子行程只關一個 fd、然後睡。
                     ("grandchild", _) => unsafe {
                         let pid = libc::fork();
                         if pid == 0 {
+                            let control = CONTROL_FD.load(Ordering::SeqCst);
+                            if control >= 0 {
+                                libc::close(control);
+                            }
                             loop {
                                 libc::pause();
                             }

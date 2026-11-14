@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
---conversation <程式> [--conversation-arg <參數>]... [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
+--conversation <程式> [--conversation-arg <參數>]... [--composition <程式> [--composition-arg <參數>]...] [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
 [--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--capacity <條>] [--warm <個>] [--idle-ms <毫秒>] \
 [--read-only-idle-ms <毫秒>] [--drain-timeout-ms <毫秒>] [--stats-ms <毫秒>] [--throttle-ms <毫秒>] [--throttle-run-ms <毫秒>] \
 [--throttle-stop-ms <毫秒>] [--admission-timeout-ms <毫秒>] [--host <程式> [--host-arg <參數>]... [--host-backoff-ms <毫秒>] \
@@ -74,6 +74,10 @@ pub struct Args {
     /// 對話行程的 argv 是 `<程式> <--conversation-arg>... --socket <路徑>`；有給 `--host` 時再加 `--host-socket <--run-dir>/host.sock`。
     pub conversation: OsString,
     pub conversation_args: Vec<OsString>,
+    /// 有給就每條對話起一對：組合行程的 argv 是 `<程式> <--composition-arg>... --socket <前台連的> --pair-socket <橋> --leaf-socket <葉子的>`，
+    /// 葉子（`--conversation`）的 `--socket` 換成 `--leaf-socket` 那個路徑，再加 `--pair-socket <橋>`。沒給就一條對話一個行程。
+    pub composition: Option<OsString>,
+    pub composition_args: Vec<OsString>,
     pub eof_grace: Duration,
     pub term_grace: Duration,
     pub front_restart: Duration,
@@ -109,6 +113,8 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut front_args = Vec::new();
     let mut conversation = None;
     let mut conversation_args = Vec::new();
+    let mut composition = None;
+    let mut composition_args = Vec::new();
     let mut eof_grace = DEFAULT_EOF_GRACE;
     let mut term_grace = DEFAULT_TERM_GRACE;
     let mut front_restart = DEFAULT_FRONT_RESTART;
@@ -145,6 +151,8 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--front-arg" => front_args.push(value()?),
             "--conversation" => conversation = Some(value()?),
             "--conversation-arg" => conversation_args.push(value()?),
+            "--composition" => composition = Some(value()?),
+            "--composition-arg" => composition_args.push(value()?),
             "--eof-grace-ms" => eof_grace = millis(flag, value()?)?,
             "--term-grace-ms" => term_grace = millis(flag, value()?)?,
             "--front-restart-ms" => front_restart = millis(flag, value()?)?,
@@ -191,6 +199,9 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
+    if composition.is_none() && !composition_args.is_empty() {
+        return Err("--composition-arg 要配 --composition".into());
+    }
     Ok(Args {
         run_dir: run_dir.ok_or("缺 --run-dir")?,
         audit: audit.ok_or("缺 --audit")?,
@@ -198,6 +209,8 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         front_args,
         conversation: conversation.ok_or("缺 --conversation")?,
         conversation_args,
+        composition,
+        composition_args,
         eof_grace,
         term_grace,
         front_restart,
@@ -464,6 +477,30 @@ mod tests {
             items.extend(bad);
             assert!(parse(&os(&items)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn composition_flags() {
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
+        let args = parse(&os(&base)).unwrap();
+        assert_eq!(args.composition, None);
+        let mut items = base.to_vec();
+        items.extend(["--composition", "p", "--composition-arg", "x"]);
+        let args = parse(&os(&items)).unwrap();
+        assert_eq!(args.composition, Some("p".into()));
+        assert_eq!(args.composition_args, os(&["x"]));
+        let mut items = base.to_vec();
+        items.extend(["--composition-arg", "x"]);
+        assert!(parse(&os(&items)).is_err());
     }
 
     #[test]
