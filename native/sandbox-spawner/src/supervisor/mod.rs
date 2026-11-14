@@ -1727,7 +1727,7 @@ impl Supervisor {
             || self
                 .compositions
                 .iter()
-                .any(|p| p.thread.as_deref() == Some(thread) && !p.peer && !p.told)
+                .any(|p| p.thread.as_deref() == Some(thread) && !p.peer)
     }
 
     fn warm_count(&self) -> usize {
@@ -1962,6 +1962,14 @@ impl Supervisor {
         };
         if !frames.is_empty() {
             composition.hear(Instant::now());
+            let serial = composition.serial;
+            if let Some(leaf) = self
+                .conversations
+                .iter_mut()
+                .find(|c| c.pair == Some(serial))
+            {
+                leaf.hear(Instant::now());
+            }
         }
         for payload in frames {
             let composition = &mut self.compositions[index];
@@ -2076,7 +2084,7 @@ impl Supervisor {
         let Some(composition) = self.compositions.iter_mut().find(|p| p.serial == serial) else {
             return;
         };
-        composition.told = true;
+        composition.told = composition.thread.is_some();
         let keep = composition.bind == Bind::Bound
             && composition.proc.stop.is_none()
             && !self.shutting_down
@@ -2797,10 +2805,11 @@ impl Supervisor {
         }
         self.count_death(cause);
         match conversation.thread {
-            Some(thread) => self.tell_front(&FrontEvent::Down {
+            Some(thread) if conversation.pair.is_none() => self.tell_front(&FrontEvent::Down {
                 thread_id: thread,
                 cause,
             }),
+            Some(_) => {}
             None if cause != DeathCause::Shutdown => {
                 self.warm_retry_at = Some(Instant::now() + self.args.front_restart)
             }
