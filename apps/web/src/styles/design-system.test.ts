@@ -4,7 +4,11 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { isVendorUpstream, VENDOR_UPSTREAM_FILES } from '@/test/vendor-upstream';
+import {
+  isVendorUpstream,
+  VENDOR_UPSTREAM_FILES,
+  vendorManifestName,
+} from '@/test/vendor-upstream';
 
 import { readCascade } from './css-cascade';
 
@@ -258,14 +262,15 @@ const ALLOWED: readonly Allowed[] = [
 /**
  * vendor 上游原樣的檔裡現有的任意值間距（#2763）：vendor 檔不動，現值逐條釘住。**只能變少**：
  * 同步上游多出一條會紅，要嘛用覆寫蓋回級距，要嘛由 demian 核可後列進來；上游拿掉的也要從這裡刪。
+ * `file` 是 manifest 裡的名字。
  */
 const VENDOR_SPACING_PINNED: readonly { file: string; what: string }[] = [
-  { file: 'vendor/solid-glass/components/ui/composer.tsx', what: 'pr-[9px]' },
-  { file: 'vendor/solid-glass/components/ui/dot-loader.tsx', what: 'gap-[2px]' },
-  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'ml-[-0.15rem]' },
-  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'ml-[-0.3rem]' },
-  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'mr-[-0.15rem]' },
-  { file: 'vendor/solid-glass/components/ui/input-group.tsx', what: 'mr-[-0.3rem]' },
+  { file: 'components/ui/composer.tsx', what: 'pr-[9px]' },
+  { file: 'components/ui/dot-loader.tsx', what: 'gap-[2px]' },
+  { file: 'components/ui/input-group.tsx', what: 'ml-[-0.15rem]' },
+  { file: 'components/ui/input-group.tsx', what: 'ml-[-0.3rem]' },
+  { file: 'components/ui/input-group.tsx', what: 'mr-[-0.15rem]' },
+  { file: 'components/ui/input-group.tsx', what: 'mr-[-0.3rem]' },
 ];
 
 interface Violation {
@@ -327,7 +332,9 @@ describe('元件只能用系統裡的值', () => {
   });
 
   test('vendor 的任意值間距就是釘住的那幾條，沒有多也沒有少', () => {
-    const found = [...new Set(vendorSpacing.map((v) => `${v.file} ${v.what}`))].sort();
+    const found = [
+      ...new Set(vendorSpacing.map((v) => `${vendorManifestName(v.file)} ${v.what}`)),
+    ].sort();
     expect(found).toEqual(VENDOR_SPACING_PINNED.map((p) => `${p.file} ${p.what}`).sort());
     expect(vendorFiles.length).toBeGreaterThan(20);
   });

@@ -23,6 +23,11 @@ export const VENDOR_UPSTREAM_FILES: ReadonlySet<string> = new Set(
   Object.keys(manifest.files).map((name) => `${VENDOR}/${name}`),
 );
 
+/** 上游檔在 manifest 裡的名字（相對 vendor 目錄）；`file` 是相對 `src` 的路徑。 */
+export function vendorManifestName(file: string): string {
+  return file.slice(VENDOR.length + 1);
+}
+
 /** `file`（絕對路徑）是不是 vendor 上游原樣、要放行的檔。 */
 export function isVendorUpstream(file: string): boolean {
   return VENDOR_UPSTREAM_FILES.has(relative(SRC, file).split(sep).join('/'));
