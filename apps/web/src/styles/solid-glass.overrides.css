@@ -231,6 +231,16 @@ body {
 }
 
 /*
+ * 遮罩的顏色走 `--scrim`（#2758；README 本地修改第 84 條）：vendor 的 dialog、alert-dialog、sheet 把遮罩寫成 `bg-black/10`，
+ * 沒有 token 可以調。手機側欄的遮罩也是 `sheet-overlay`。寫在 layer 外，蓋得過 utilities 層的 `bg-black/10`；值在 `theme.css`。
+ * 不讓 Prettier 排版：`solid-glass-overrides.test.ts` 逐字比對這個選擇器。
+ */
+/* prettier-ignore */
+:is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="alert-dialog-overlay"]) {
+  background-color: var(--scrim);
+}
+
+/*
  * tooltip 與遮罩也走不透明退路（#1583；README 本地修改第 22 條）：SG 的不透明退路（`solid-glass.css:1168-1184`）只列 `.bg-card`、
  * `.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`，沒有 tooltip（`:817-827` 自己給 blur）與 dialog／sheet 的遮罩
  * （vendor 的 `supports-backdrop-filter:backdrop-blur-xs`）。照 SG 那段的兩種條件補上：`data-glass="opaque"` 與 `prefers-reduced-transparency`。
