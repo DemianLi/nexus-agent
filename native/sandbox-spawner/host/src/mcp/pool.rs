@@ -181,7 +181,11 @@ impl<G: Generation> Shared<G> {
         let task = self.task.lock().ok().and_then(|mut t| t.take());
         match task {
             None => true,
-            Some(task) => tokio::time::timeout(limit, task).await.is_ok(),
+            Some(task) => {
+                let _ = limit;
+                let _ = task.await;
+                true
+            }
         }
     }
 
