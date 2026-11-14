@@ -207,7 +207,7 @@ impl Closing {
 
     /// 還要不要留著：還沒寫完就留；寫完（或寫不進去）之後留到不再讀為止。
     fn open(&self) -> bool {
-        !self.chan.write_closed()
+        !self.gone || !self.chan.write_closed()
     }
 }
 
