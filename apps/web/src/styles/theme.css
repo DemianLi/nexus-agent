@@ -1,6 +1,6 @@
 /*
- * nexus 獨有、不由產生器解的 token：邊框光與浮層遮罩，solid-glass 沒有對應的值。
- * 焦點、body 這類機制規則在 `solid-glass.overrides.css`。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
+ * nexus 獨有、不由產生器解的 token：邊框光與浮層遮罩，solid-glass 沒有對應的 token。
+ * 焦點、body 這類機制規則在 `solid-glass.overrides.css`。其餘顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
  */
 
 :root {

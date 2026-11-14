@@ -52,6 +52,7 @@ test('焦點困在框內：框外標成讀不到，Tab 走出兩端會被接回�
   expect(before!.compareDocumentPosition(dialog) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(after!.compareDocumentPosition(dialog) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
 
+  // jsdom 不照 Tab 移焦點：直接聚焦 Base UI 的前後哨兵，模擬 Tab 走出兩端；真的按 Tab 在 `guard/guard.test.ts` 量。
   act(() => after!.focus());
   await waitFor(() => expect(document.activeElement?.textContent).toBe('取消'));
   act(() => before!.focus());

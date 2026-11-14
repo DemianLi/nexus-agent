@@ -507,7 +507,7 @@ describe.each(
     });
 
   if (overlay.backdrops.length > 0)
-    test('遮罩的顏色照 SG 是 10% 的黑（本地修改第 84 條：平常不變）', () => {
+    test('遮罩的顏色照 SG 是 10% 的黑（本地修改第 84 條：平常跟 SG 同值）', () => {
       expect(backdrops.map((b) => parseColor(b.backgroundColor))).toEqual(
         backdrops.map(() => parseColor('rgb(0 0 0 / 10%)')),
       );
@@ -609,7 +609,7 @@ describe.each(
     });
 });
 
-/** modal 浮層在不透明的兩種退路下：面不透明、面與遮罩都沒有 blur（本地修改第 22 條）、字照樣過門檻。 */
+/** modal 浮層在不透明的兩種退路下：面不透明、面與遮罩都沒有 blur（本地修改第 22 條）、遮罩看得出來（第 84 條）、字照樣過門檻。 */
 describe.each(
   MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
     OVERLAYS.flatMap((overlay) =>

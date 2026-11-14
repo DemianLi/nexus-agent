@@ -233,6 +233,7 @@ body {
 /*
  * 遮罩的顏色走 `--scrim`（#2758；README 本地修改第 84 條）：vendor 的 dialog、alert-dialog、sheet 把遮罩寫成 `bg-black/10`，
  * 沒有 token 可以調。手機側欄的遮罩也是 `sheet-overlay`。寫在 layer 外，蓋得過 utilities 層的 `bg-black/10`；值在 `theme.css`。
+ * 不讓 Prettier 排版：`solid-glass-overrides.test.ts` 逐字比對這個選擇器。
  */
 /* prettier-ignore */
 :is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="alert-dialog-overlay"]) {
