@@ -3050,7 +3050,10 @@ fn a_pair_is_up_on_the_composition_socket_and_reaches_the_leaf() {
     let socket = h.up("a");
     assert_eq!(socket, h.dir.join("run/c1.sock"));
     let leaf = leaf_socket(&socket);
-    assert_eq!(log(&leaf)[1], "bind a");
+    // 葉子把 `bind` 排給主迴圈就回 `attach`，記那一行可能晚於 `up`。
+    assert!(wait_until(|| log(&leaf)
+        .get(1)
+        .is_some_and(|line| line == "bind a")));
     assert_eq!(leaf_behind(&socket), last_leaf_pid(&leaf));
     // 已經 up 的再要一次：同一對。
     assert_eq!(h.up("a"), socket);
@@ -3101,7 +3104,7 @@ fn a_leaf_that_does_not_claim_the_loop_takes_the_pair_down_protocol() {
 }
 
 /// 成對時 `ready` 看組合行程的：葉子自己在控制通道送的 `ready` 不觸發 `bind`。葉子送完 `ready`、等測試放行才去橋上登記，
-/// 所以它的 `ready` 寫在組合行程的之前；`up` 之後葉子只收過一次 `bind`（經橋來的那一次）。
+/// 所以它的 `ready` 寫在組合行程的之前；到收完為止葉子只收過一次 `bind`（經橋來的那一次）。
 #[test]
 fn a_leaf_ready_on_the_control_channel_does_not_bind() {
     let mut h = Harness::start(Options {
@@ -3113,6 +3116,8 @@ fn a_leaf_ready_on_the_control_channel_does_not_bind() {
     assert!(wait_until(|| log(&leaf).contains(&"ready".to_string())));
     std::fs::write(format!("{}.go", leaf.display()), b"").unwrap();
     assert_eq!(h.up_of("a"), h.dir.join("run/c1.sock"));
+    // 葉子把 `bind` 排給主迴圈就回 `attach`，記那一行可能晚於 `up`：等它收完再數。
+    shut_down(&mut h);
     let binds = log(&leaf).iter().filter(|line| *line == "bind a").count();
     assert_eq!(binds, 1, "{:?}", log(&leaf));
 }
