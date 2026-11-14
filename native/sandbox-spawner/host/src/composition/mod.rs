@@ -197,12 +197,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
     };
     let opened = watch_sigterm().and_then(|term| {
         let pair = Pair::new(bind(&args.pair_socket)?, &[])?;
-        // 橋的 socket 是這個行程剛建的檔：前台的那一個起不來就一起刪掉。
-        let forward = bind(&args.socket)
-            .and_then(|front| Forward::new(front, args.leaf_socket.clone()))
-            .inspect_err(|_| {
-                let _ = std::fs::remove_file(&args.pair_socket);
-            })?;
+        let forward = Forward::new(bind(&args.socket)?, args.leaf_socket.clone())?;
         Ok((term, pair, forward))
     });
     let (term, pair, forward) = match opened {
