@@ -750,6 +750,59 @@ fn a_half_closed_request_still_gets_its_whole_response() {
     writer.join().unwrap();
 }
 
+/// 停住的組合行程；放掉時（測試失敗的路上也一樣）讓它繼續跑，不留一個停住的行程。
+struct Stopped(libc::pid_t);
+
+impl Stopped {
+    /// 送 `SIGSTOP`，等到它真的停住才回來。
+    fn stop(rig: &Rig) -> Stopped {
+        let pid = rig.child.id() as libc::pid_t;
+        // SAFETY：對自己起的子行程送訊號。
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        let stopped = Stopped(pid);
+        let mut status = 0;
+        // SAFETY：等自己的子行程；`WUNTRACED` 只回報它停住，不收掉它。
+        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) };
+        assert_eq!(waited, pid);
+        assert!(libc::WIFSTOPPED(status), "組合行程沒有停住：{status:#x}");
+        stopped
+    }
+}
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        // SAFETY：對自己起的子行程送訊號。
+        unsafe { libc::kill(self.0, libc::SIGCONT) };
+    }
+}
+
+/// 葉子沒讀請求就回應、然後整條關（提早回的錯誤回應就是這樣）：回應還是要完整到前台。
+/// 組合行程停住的期間葉子寫完並關掉，所以它下一次 poll 一定同時看到回應與斷線，不會先醒來把回應轉走。
+/// 回應取 64 KiB：組合行程停著不讀，要整份放得進 socket 的緩衝。
+#[test]
+fn a_response_from_a_leaf_that_never_read_the_request_arrives_whole() {
+    let (rig, _leaf) = Rig::ready("early-response");
+    let (mut front, mut behind) = rig.link();
+    front.write_all(b"request").unwrap();
+    // 葉子這一端可讀就表示請求已經轉到。故意不讀：帶著沒讀的資料關，Linux 讓對端收到 `ECONNRESET`（`POLLERR`），
+    // 不只是 `POLLHUP`。
+    let mut pfd = libc::pollfd {
+        fd: std::os::fd::AsRawFd::as_raw_fd(&behind),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY：一個 pollfd。
+    let ready = unsafe { libc::poll(&mut pfd, 1, GUARD.as_millis() as libc::c_int) };
+    assert_eq!(ready, 1, "請求一直沒轉到葉子");
+
+    let response = pattern(64 * 1024);
+    let stopped = Stopped::stop(&rig);
+    behind.write_all(&response).unwrap();
+    drop(behind);
+    drop(stopped);
+    assert!(read_to_end(&mut front) == response, "回應被截了");
+}
+
 #[test]
 fn a_connection_is_closed_when_the_leaf_socket_is_gone_and_the_next_one_works() {
     let (mut rig, _leaf) = Rig::ready("no-leaf");

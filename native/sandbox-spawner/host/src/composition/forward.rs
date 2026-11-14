@@ -333,3 +333,77 @@ impl Forward {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Forward;
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::time::{Duration, Instant};
+
+    /// 等一件一定會發生的事最多等這麼久；到了就是壞了，測試紅。
+    const GUARD: Duration = Duration::from_secs(30);
+
+    /// poll 一次，回 poll 完的那一批；還沒交給 [`Forward::step`]。
+    fn polled(forward: &mut Forward) -> Vec<libc::pollfd> {
+        let mut fds = Vec::new();
+        forward.poll_fds(&mut fds, true, Instant::now());
+        // SAFETY：fds 是剛填好的 pollfd，長度照它的。
+        let ready = unsafe {
+            libc::poll(
+                fds.as_mut_ptr(),
+                fds.len() as libc::nfds_t,
+                GUARD.as_millis() as libc::c_int,
+            )
+        };
+        assert!(ready > 0, "等不到任何一個 fd 動");
+        fds
+    }
+
+    /// 葉子在這一輪 poll 之後、寫之前才回應並整條關：往葉子寫會出錯，葉子關之前送出的回應還是要到前台。
+    /// poll 與寫之間的空窗從行程外面排不出來，所以在行程內拿 poll 當下那一批 `pollfd` 叫 `step`。
+    #[test]
+    fn a_response_from_a_leaf_that_closed_between_poll_and_write_still_arrives() {
+        let dir = std::env::temp_dir().join(format!("nfwd-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let leaf_listener = UnixListener::bind(dir.join("leaf.sock")).unwrap();
+        let front = UnixListener::bind(dir.join("front.sock")).unwrap();
+        let mut forward = Forward::new(front, dir.join("leaf.sock")).unwrap();
+
+        let mut client = UnixStream::connect(dir.join("front.sock")).unwrap();
+        client.set_read_timeout(Some(GUARD)).unwrap();
+        let fds = polled(&mut forward);
+        forward.step(&fds, Instant::now());
+        assert_eq!(forward.links.len(), 1);
+        let (mut leaf, _) = leaf_listener.accept().unwrap();
+
+        client.write_all(b"request").unwrap();
+        let stale = polled(&mut forward);
+        let leaf_fd = forward.links[0].leaf.fd.as_raw_fd();
+        assert!(
+            stale
+                .iter()
+                .all(|pfd| pfd.fd != leaf_fd || pfd.revents == 0),
+            "葉子那一端在它回應之前就有事件"
+        );
+        // 這時還沒有人讀葉子送出的，整份要放得進 socket 的緩衝。
+        let response: Vec<u8> = (0..4 * 1024).map(|i| (i % 251) as u8).collect();
+        leaf.write_all(&response).unwrap();
+        drop(leaf);
+        forward.step(&stale, Instant::now());
+
+        while !forward.links.is_empty() {
+            let fds = polled(&mut forward);
+            forward.step(&fds, Instant::now());
+        }
+        let mut arrived = Vec::new();
+        client.read_to_end(&mut arrived).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            arrived == response,
+            "回應被截了：到了 {} 個位元組",
+            arrived.len()
+        );
+    }
+}
