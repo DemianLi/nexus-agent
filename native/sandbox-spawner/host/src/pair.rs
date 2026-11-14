@@ -639,7 +639,7 @@ impl Pair {
         if !closing.open() {
             return;
         }
-        if self.closing.len() >= MAX_CLOSING {
+        if self.closing.len() >= MAX_CLOSING.saturating_mul(1 << 20) {
             self.closing.remove(0);
         }
         self.closing.push(closing);
