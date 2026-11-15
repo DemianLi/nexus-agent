@@ -66,7 +66,7 @@
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
 //! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
-//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL（還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
+//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL（對話行程與組合行程還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），① 等完之後再走拆除梯度。
 //!
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
@@ -2791,12 +2791,13 @@ mod tests {
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
     }
 
-    /// 還沒有死因的一對被 [`Supervisor::kill_children`] 當場殺掉（停機還在等前台回答時再收到訊號）：兩邊都記 `shutdown`，
+    /// 停機中，還沒有死因的一對被 [`Supervisor::kill_children`] 當場殺掉：兩邊都記 `shutdown`，不管誰先收屍，
     /// 這一對只進一次死因累計，進 `shutdown` 那一格；已經有死因的不蓋。
     #[test]
     fn killing_every_child_records_shutdown_without_overwriting_a_cause() {
         for leaf_first in [true, false] {
             let (mut supervisor, audit, _) = with_a_pair("kill-children", PairState::Bound);
+            supervisor.shutting_down = true;
             supervisor.kill_children();
             assert_eq!(
                 supervisor.conversations[0].cause,

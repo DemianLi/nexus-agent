@@ -649,7 +649,8 @@ fn a_second_stop_signal_before_the_front_answers_is_down_shutdown() {
     );
 }
 
-/// 等前台回答的那一段自己結束的對話行程不是停機收的：照樣是 `crash`。死因在決定殺的那一刻才記，不是停機一開始就全部記成 `shutdown`。
+/// 等前台回答的那一段自己結束的對話行程不是停機收的：照樣是 `crash`。死因在決定收的那一刻才記，不是停機一開始就全部記成 `shutdown`。
+/// `--admission-timeout-ms` 拉長：等前台的那一段要蓋住它結束的時刻，不然停機已經開始收它、先記了 `shutdown`。
 #[test]
 fn a_conversation_that_dies_by_itself_before_the_front_answers_is_a_crash() {
     let mut h = Harness::start(Options {
@@ -680,6 +681,7 @@ fn a_second_stop_signal_keeps_the_cause_of_a_conversation_already_being_collecte
     let thread = "a,idle:1000,ignore-term";
     let a = h.up(thread);
     h.ensure("b");
+    // 先等到 `eof` 才送停止訊號：`drained` 在停機開始之後才讀到的不記 `evicted`。
     assert!(wait_until(|| log(&a).contains(&"eof".to_string())));
     kill(h.pid(), libc::SIGTERM);
     let mut events = Vec::new();
