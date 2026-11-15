@@ -1,6 +1,6 @@
 /**
  * native loop 吐給 pump 的 v3 事件（[#2356](https://github.com/DemianLi/nexus-agent/issues/2356)）：形狀同 `@langchain/langgraph`
- * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（`lifecycle`、`messages`、`tools`、root 的 `custom`）；
+ * `streamEvents({ version: 'v3' })` 的 `ProtocolEvent`，只產 pump 與 wire 讀的那幾種（`lifecycle`、`messages`、`tools`、`custom`：root 的，以及前景子代理經 `writer` 寫、帶子層命名空間的）；
  * 停下來問人時的 `updates` 的 `__interrupt__` 不由 callback 產，由 `agent.ts` 在等待點經 {@link ProtocolEmitter.emit} 交出。
  * TODO(#2363)：拿掉 LangChain 時換成自己的線上協定。
  *
@@ -108,10 +108,12 @@ export class ProtocolEmitter {
   }
 
   /**
-   * root 的 `custom`：`getConfig().writer` 寫的東西，包法同 LangGraph（沒有 `name` 鍵就包成 `{ payload }`）。
+   * `getConfig().writer` 寫的東西，包法同 LangGraph（沒有 `name` 鍵就包成 `{ payload }`）。
    * @param payload - 寫進來的值。
+   * @param namespace - 寫的人所在的圖；root 是 `[]`，前景子代理是叫起它的那顆 `task` 呼叫的命名空間，
+   *   消費端（pump）靠它分得出是不是 root 寫的。
    */
-  custom(payload: unknown): void {
+  custom(payload: unknown, namespace: string[] = []): void {
     const data =
       typeof payload === 'object' &&
       payload !== null &&
@@ -119,7 +121,7 @@ export class ProtocolEmitter {
       'name' in payload
         ? payload
         : { payload };
-    this.emit('custom', [], data);
+    this.emit('custom', namespace, data);
   }
 }
 
