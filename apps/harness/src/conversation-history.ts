@@ -439,6 +439,15 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
           systemTokens: measure.breakdown.systemTokens,
           toolsTokens: measure.breakdown.toolsTokens,
           messageTokens: measure.breakdown.messageTokens,
+          // 沒有就不出這一格（#2774 以前的日誌）：缺席＝沒拆。
+          ...(measure.breakdown.messageParts !== undefined && {
+            messageParts: {
+              summaryTokens: measure.breakdown.messageParts.summaryTokens,
+              injectedTokens: measure.breakdown.messageParts.injectedTokens,
+              toolResultTokens: measure.breakdown.messageParts.toolResultTokens,
+              conversationTokens: measure.breakdown.messageParts.conversationTokens,
+            },
+          }),
         },
       }),
     },

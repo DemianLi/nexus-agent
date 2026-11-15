@@ -307,6 +307,92 @@ describe('邊角', () => {
     expect([view.session.summaryInputTokens, view.session.summaryOutputTokens]).toEqual([0, 0]);
   });
 
+  describe('生摘要的耗時（#2774）', () => {
+    const summary = (durationMs?: number) => ({
+      cutoffIndex: 1,
+      messagesBefore: 2,
+      filePath: null,
+      ...(durationMs === undefined ? {} : { durationMs }),
+    });
+
+    it('每一顆都帶 durationMs：逐輪與會話各有 summaryMs，從殘差分出來，各段加總仍等於牆鐘', () => {
+      const view = fold(
+        log(
+          [0, 'turn/start', { kind: 'message', text: '問' }],
+          [40, 'compaction/summary', summary(30)],
+          [40, 'model/start', {}],
+          [90, 'model/end', {}],
+          [100, 'turn/end', {}],
+          [200, 'turn/start', { kind: 'message', text: '再問' }],
+          [215, 'compaction/summary', summary(12)],
+          [225, 'compaction/summary', summary(8)],
+          [225, 'model/start', {}],
+          [245, 'model/end', {}],
+          [250, 'turn/end', {}],
+        ),
+      );
+      const [turn0, turn1] = view.turns;
+      expect([turn0!.summaryMs, turn1!.summaryMs, view.session.summaryMs]).toEqual([30, 20, 50]);
+      // 第 0 輪：牆鐘 100 − 模型 50 − 生摘要 30 = 20；第 1 輪：50 − 20 − 20 = 10。
+      expect([turn0!.unaccountedMs, turn1!.unaccountedMs]).toEqual([20, 10]);
+      for (const turn of view.turns)
+        expect(
+          turn.modelMs +
+            turn.toolMs +
+            turn.retryWaitMs +
+            turn.waitMs +
+            turn.summaryMs! +
+            turn.unaccountedMs!,
+        ).toBe(turn.wallMs);
+    });
+
+    it('沒帶 durationMs 的舊紀錄：不出 summaryMs，生摘要的時間留在殘差', () => {
+      const view = fold(
+        log(
+          [0, 'turn/start', { kind: 'message', text: '問' }],
+          [40, 'compaction/summary', summary()],
+          [40, 'model/start', {}],
+          [90, 'model/end', {}],
+          [100, 'turn/end', {}],
+        ),
+      );
+      expect(view.turns[0]).not.toHaveProperty('summaryMs');
+      expect(view.session).not.toHaveProperty('summaryMs');
+      expect(view.turns[0]!.unaccountedMs).toBe(50);
+    });
+
+    it('同一輪裡有一顆沒帶：整格缺席、不扣殘差；別的輪照出，會話總計也缺席', () => {
+      const view = fold(
+        log(
+          [0, 'turn/start', { kind: 'message', text: '問' }],
+          [10, 'compaction/summary', summary(10)],
+          [30, 'compaction/summary', summary()],
+          [30, 'model/start', {}],
+          [50, 'model/end', {}],
+          [60, 'turn/end', {}],
+          [100, 'turn/start', { kind: 'message', text: '再問' }],
+          [107, 'compaction/summary', summary(7)],
+          [110, 'turn/end', {}],
+        ),
+      );
+      expect(view.turns[0]).not.toHaveProperty('summaryMs');
+      expect(view.turns[0]!.unaccountedMs).toBe(40); // 60 − 模型 20
+      expect([view.turns[1]!.summaryMs, view.turns[1]!.unaccountedMs]).toEqual([7, 3]);
+      expect(view.session).not.toHaveProperty('summaryMs');
+    });
+
+    it('沒有摘要的輪不出 summaryMs；durationMs 不是非負的有限數就當沒帶', () => {
+      const none = fold(
+        log([0, 'turn/start', { kind: 'message', text: '問' }], [10, 'turn/end', {}]),
+      );
+      expect(none.turns[0]).not.toHaveProperty('summaryMs');
+      for (const bad of [-1, Number.NaN, '5'])
+        expect(
+          fold(log([0, 'compaction/summary', { ...summary(), durationMs: bad }])).session,
+        ).not.toHaveProperty('summaryMs');
+    });
+  });
+
   it('resume 之前沒有收尾過（行程中途死了）：沒有可量的等待', () => {
     const view = fold(
       log(
