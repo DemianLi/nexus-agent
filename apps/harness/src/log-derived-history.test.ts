@@ -44,6 +44,7 @@ import {
   runServePhases,
   runShippedCli,
   HISTORY_SOURCE_UNDER_TEST,
+  isMainCall,
   systemText,
   TRUNCATE_MARKER,
 } from './log-derived-history.fixture.js';
@@ -333,7 +334,7 @@ describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
         'S6 壓縮摘要',
         '一\n二\n三\n四\n五\n六\n七\n/exit\n',
         (i, body) => {
-          if ((body.tools?.length ?? 0) === 0) return { content: '【摘要】之前聊了很多。' };
+          if (!isMainCall(body)) return { content: '【摘要】之前聊了很多。' };
           return i === 1 ? echoCall('call_mid', big('中', 20_000)) : {};
         },
         [createEchoPlugin()],
@@ -343,7 +344,7 @@ describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
         'S8 工具結果剪刀',
         `大一點的結果${PAD}\n再說一輪${PAD}\n再一輪${PAD}\n/exit\n`,
         (i, body) => {
-          if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
+          if (!isMainCall(body)) return { content: '【不該有摘要】' };
           return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
         },
         [createEchoPlugin()],
@@ -373,11 +374,15 @@ describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
         const log = await runAssembly(lines, script, plugins, summarization, 'log');
         expect(log.mainBodies.length).toBeGreaterThanOrEqual(2);
         // 摘要那則帶著會話歷史檔的路徑，每跑一次就是一個新會話、id 不同；其餘逐位元組比。
+        // 生摘要的那一次請求形狀不同（#2775：`log` 重播上一次主請求，`state` 是模板），比的是主呼叫；摘要的次數要一樣。
         const bytes = (run: Run) =>
-          run.bodies.map((body) =>
+          run.mainBodies.map((body) =>
             JSON.stringify(body).replaceAll(/session_[0-9a-f]+\.md/gu, 'session_<id>.md'),
           );
         expect(bytes(log)).toEqual(bytes(state));
+        expect(log.bodies.length - log.mainBodies.length).toBe(
+          state.bodies.length - state.mainBodies.length,
+        );
         expectAssistantHistoryOnLog(log);
       },
       120_000,
@@ -388,7 +393,7 @@ describe.runIf(HISTORY_SOURCE_UNDER_TEST === 'log')(
 describe('已知差異：每一類對應一張卡', () => {
   it('S6 壓縮摘要（#1301）', async () => {
     const script: Script = (i, body) => {
-      if ((body.tools?.length ?? 0) === 0) return { content: '【摘要】之前聊了很多。' };
+      if (!isMainCall(body)) return { content: '【摘要】之前聊了很多。' };
       return i === 1 ? echoCall('call_mid', big('中', 20_000)) : {};
     };
     const run = await runAssembly(
@@ -406,7 +411,7 @@ describe('已知差異：每一類對應一張卡', () => {
 
   it('S8 工具結果剪刀（#1302 已修：剪法進日誌，推導與線上逐位元組相同）', async () => {
     const script: Script = (i, body) => {
-      if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
+      if (!isMainCall(body)) return { content: '【不該有摘要】' };
       return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
     };
     const run = await runAssembly(

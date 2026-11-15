@@ -428,6 +428,20 @@ export function sentHistoryFromLog(
   return messagesOf(cache.derive(eventsForModelCall(log.events).events), subagent);
 }
 
+/**
+ * 「這次模型呼叫要送的歷史」的讀者，給主請求以外、要拿到同一串的呼叫端（生摘要的重播）。一份日誌一份增量推導，
+ * 與 {@link createHistoryFromLogMiddleware} 各有一份、推法相同；交出的訊息物件跨呼叫共用，呼叫端不能就地改。
+ *
+ * @param toolResultAsSeen - 見 {@link DeriveOptions.toolResultAsSeen}，要與 `historyFromLog` 那一顆給同一個。
+ * @returns 同 {@link sentHistoryFromLog}；推不出來就拋。
+ */
+export function createSentHistoryReader(
+  toolResultAsSeen?: DeriveOptions['toolResultAsSeen'],
+): (log: SessionLog, subagent?: boolean) => BaseMessage[] {
+  const cacheOf = sentHistoryCaches(toolResultAsSeen);
+  return (log, subagent = false) => sentHistoryFromLog(log, cacheOf(log), subagent);
+}
+
 /** `log` 推不出來時不退回 state 的那句話，拋錯訊息與續接的預告共用。 */
 export const HISTORY_LOG_NO_FALLBACK = 'history-source=log 不退回 state，所以不會用空歷史硬接。';
 

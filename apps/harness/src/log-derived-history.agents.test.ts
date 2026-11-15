@@ -22,7 +22,7 @@ import {
   aiDone,
   childLogsOf,
   compareToLog,
-  hasTools,
+  isMainCall,
   idleWithContent,
   LOW_SUMMARIZATION,
   mainOnly,
@@ -79,7 +79,7 @@ const markerOf = (body: Body): string => {
   );
 };
 
-/** 不帶工具的呼叫（標題、摘要）：回固定文字，摘要那種（請求裡有子代理記號）把記號抄進去，讓摘要後的請求認得出是誰的。 */
+/** 主呼叫以外的呼叫（標題、生摘要）：回固定文字，摘要那種（請求裡有子代理記號）把記號抄進去，讓摘要後的請求認得出是誰的。 */
 const summaryReply = (body: Body): Reply => {
   const mark = /CHILD-[A-Z0-9]+/.exec(JSON.stringify(body.messages))?.[0];
   return { content: mark === undefined ? '標題' : `摘要 ${mark}` };
@@ -134,14 +134,14 @@ async function expectAllSame(
 const expectRootSame = (name: string, run: DriverRun, calls: number) =>
   expectAllSame(name, run, { ROOT: calls });
 
-/** 腳本：依請求的記號分流給 root 與各子代理，各自有自己的計數。標題這類不帶工具的呼叫回固定字串，不佔號。 */
+/** 腳本：依請求的記號分流給 root 與各子代理，各自有自己的計數。標題、生摘要這類非主呼叫回固定字串，不佔號。 */
 const routed = (
   root: (k: number, body: Body) => Reply,
   children: Record<string, (k: number, body: Body) => Reply>,
 ): Script => {
   const counters = new Map<string, number>();
   return (_index, body) => {
-    if ((body.tools?.length ?? 0) === 0) return summaryReply(body);
+    if (!isMainCall(body)) return summaryReply(body);
     const mark = markerOf(body);
     const k = counters.get(mark) ?? 0;
     counters.set(mark, k + 1);
@@ -500,7 +500,7 @@ describe('背景與前景子代理', () => {
       '',
       {},
       (body) => {
-        if (held || !hasTools(body) || markerOf(body) !== 'CHILD-I') return false;
+        if (held || !isMainCall(body) || markerOf(body) !== 'CHILD-I') return false;
         held = true;
         return true;
       },
@@ -752,9 +752,9 @@ describe('中止與插話', () => {
   const firstCallStopped = () =>
     mainOnly((k) => (k === 0 ? { delay: 2500, content: '被停掉的長回覆。' } : {}));
   const stopFirst = async (ctx: DriverCtx) => {
-    const sent = ctx.bodies.filter(hasTools).length;
+    const sent = ctx.bodies.filter(isMainCall).length;
     await ctx.client.runStart('alpha', '第一句，會被停掉');
-    await vi.waitFor(() => expect(ctx.bodies.filter(hasTools).length).toBeGreaterThan(sent), {
+    await vi.waitFor(() => expect(ctx.bodies.filter(isMainCall).length).toBeGreaterThan(sent), {
       timeout: 10_000,
       interval: 20,
     });

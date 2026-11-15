@@ -19,6 +19,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { REPEAT_REMINDER_MARKER, SessionRegistry } from '@nexus/core';
 import type { HistorySource } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
+import { isSummaryCallPrompt } from './summary-call.fixture.js';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
@@ -46,8 +47,10 @@ function project(message: BaseMessage): unknown {
 }
 
 interface Run {
-  /** 每一輪模型收到的 prompt，逐則投影過（{@link project}）。 */
+  /** 每一輪模型收到的 prompt，逐則投影過（{@link project}）；生摘要的那幾次不算，形狀本來就不同（#2775）。 */
   readonly prompts: readonly unknown[][];
+  /** 生摘要的呼叫次數。 */
+  readonly summaryCalls: number;
   /** 每一輪 prompt 裡提醒的全文。 */
   readonly reminders: readonly (readonly string[])[];
   /** 組裝回報的、實際生效的來源。 */
@@ -87,9 +90,11 @@ async function run(
     detach?.();
     await dispose();
   }
+  const turns = model.seen.filter((prompt) => !isSummaryCallPrompt(prompt));
   return {
-    prompts: model.seen.map((prompt) => prompt.map(project)),
-    reminders: model.seen.map((prompt) => prompt.filter(isReminder).map((m) => m.text)),
+    prompts: turns.map((prompt) => prompt.map(project)),
+    summaryCalls: model.seen.length - turns.length,
+    reminders: turns.map((prompt) => prompt.filter(isReminder).map((m) => m.text)),
     built,
     summarized: model.seen.some((prompt) =>
       prompt.some(
@@ -136,5 +141,6 @@ describe.each(['langgraph', 'native'] as const)('提醒鏈讀日誌：%s', (loop
     // 提醒進了日誌：`log` 那一邊的日誌接上了、記得進去。這證明不了鏈讀的是日誌（記提醒只看查不查得到日誌）。
     expect(viaLog.loggedReminders).toBe(new Set(viaLog.reminders.flat()).size);
     expect(viaLog.prompts).toEqual(viaState.prompts);
+    expect(viaLog.summaryCalls).toBe(viaState.summaryCalls);
   });
 });

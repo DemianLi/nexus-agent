@@ -21,7 +21,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { fakeEndpoint, hasTools, liveModelPatch, mainOnly } from './log-derived-history.fixture.js';
+import {
+  fakeEndpoint,
+  isMainCall,
+  liveModelPatch,
+  mainOnly,
+} from './log-derived-history.fixture.js';
 import type { FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
 import { runServe } from './serve-run.js';
 import type { RunningServe } from './serve-run.js';
@@ -104,7 +109,7 @@ function textOf(message: WireMessage): string {
 /** 主呼叫裡最後一則人話是 `prompt` 的那一次，回它每一則的角色與文字。 */
 function requestFor(upstream: FakeEndpoint, prompt: string): string[] {
   const body = upstream.bodies.findLast(
-    (candidate) => hasTools(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
+    (candidate) => isMainCall(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
   );
   if (body === undefined) throw new Error(`模型沒收到「${prompt}」那一次`);
   return body.messages
