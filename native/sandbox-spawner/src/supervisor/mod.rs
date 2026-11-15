@@ -66,7 +66,7 @@
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
 //! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
-//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
+//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL（對話行程與組合行程還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），① 等完之後再走拆除梯度。
 //!
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
@@ -1891,16 +1891,7 @@ impl Supervisor {
         if stop {
             if self.shutting_down {
                 say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
-                for conversation in &mut self.conversations {
-                    conversation.proc.kill_now();
-                }
-                for composition in &mut self.compositions {
-                    composition.cause.get_or_insert(DeathCause::Shutdown);
-                    composition.proc.kill_now();
-                }
-                if let Some(host) = self.host.as_mut() {
-                    host.proc.kill_now();
-                }
+                self.kill_children();
             } else {
                 self.begin_shutdown(0);
             }
@@ -1978,6 +1969,15 @@ impl Supervisor {
     }
 
     fn kill_everything(&mut self) {
+        self.kill_children();
+        if let Some(front) = self.front.as_mut() {
+            front.kill_now();
+        }
+    }
+
+    /// 所有對話行程、組合行程與宿主當場 SIGKILL。對話行程與組合行程還沒有死因的記 `shutdown`，已經有的不蓋：
+    /// 停機還在等前台回 `admission-stopped` 時，[`Self::advance_shutdown`] 還沒走到記死因的地方。
+    fn kill_children(&mut self) {
         for conversation in &mut self.conversations {
             conversation.cause.get_or_insert(DeathCause::Shutdown);
             conversation.proc.kill_now();
@@ -1988,9 +1988,6 @@ impl Supervisor {
         }
         if let Some(host) = self.host.as_mut() {
             host.proc.kill_now();
-        }
-        if let Some(front) = self.front.as_mut() {
-            front.kill_now();
         }
     }
 
@@ -2792,6 +2789,39 @@ mod tests {
         );
         assert_eq!(supervisor.deaths[DeathCause::Crash as usize - 1], 1);
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
+    }
+
+    /// 停機中，還沒有死因的一對被 [`Supervisor::kill_children`] 當場殺掉：兩邊都記 `shutdown`，不管誰先收屍，
+    /// 這一對只進一次死因累計，進 `shutdown` 那一格；已經有死因的不蓋。
+    #[test]
+    fn killing_every_child_records_shutdown_without_overwriting_a_cause() {
+        for leaf_first in [true, false] {
+            let (mut supervisor, audit, _) = with_a_pair("kill-children", PairState::Bound);
+            supervisor.shutting_down = true;
+            supervisor.kill_children();
+            assert_eq!(
+                supervisor.conversations[0].cause,
+                Some(DeathCause::Shutdown)
+            );
+            assert_eq!(supervisor.compositions[0].cause, Some(DeathCause::Shutdown));
+            if leaf_first {
+                supervisor.on_exit(LEAF, KILLED);
+                supervisor.on_exit(COMPOSITION, KILLED);
+            } else {
+                supervisor.on_exit(COMPOSITION, KILLED);
+                supervisor.on_exit(LEAF, KILLED);
+            }
+            assert_eq!(audit_lines(&audit).len(), 2);
+            assert_eq!(supervisor.deaths[DeathCause::Shutdown as usize - 1], 1);
+            assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1, "{leaf_first}");
+        }
+
+        let (mut supervisor, _, _) = with_a_pair("kill-children-decided", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Evicted);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.kill_children();
+        assert_eq!(supervisor.conversations[0].cause, Some(DeathCause::Evicted));
+        assert_eq!(supervisor.compositions[0].cause, Some(DeathCause::Stalled));
     }
 
     /// 預熱池裡的一對兩個行程都已經在收（停機中再收到訊號）、葉子先收屍：組合行程沒被標成連帶收，這一對照樣只進一次死因累計。
