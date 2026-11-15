@@ -2,7 +2,7 @@
  * 提醒鏈在 `history-source=log` 下讀日誌沒套摘要的那一串（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)），
  * **在正式路徑上、兩種 loop 各跑一次**。
  *
- * 比的是同一支腳本在 `state` 與 `log` 下，模型每一輪收到的 prompt 逐字相同（LangChain 的 `id`、時間戳、摘要的歷史檔名，以及只有接了日誌的 `log` 那一邊才有、指向讀回工具的那一句除外）：`state` 那一邊讀 `state.messages`、
+ * 比的是同一支腳本在 `state` 與 `log` 下，模型每一輪收到的 prompt 逐字相同（LangChain 的 `id`、時間戳，以及摘要前言指向原文的那一句除外：`state` 那一邊指向歷史檔，接了日誌的 `log` 那一邊指向讀回工具）：`state` 那一邊讀 `state.messages`、
  * 不碰日誌，是對照基準。三個場景：
  *
  * - 摘要之前：不開摘要，鏈走到門檻。
@@ -32,15 +32,23 @@ type Loop = NonNullable<CreateNexusAgentOptions['agentLoop']>;
 const isReminder = (message: BaseMessage): boolean =>
   HumanMessage.isInstance(message) && message.additional_kwargs[REPEAT_REMINDER_MARKER] != null;
 
+const ORIGINALS_POINTER = '<originals pointer>';
+
 /** 送上線的樣子：不比 LangChain 自己產的 `id` 與時間戳，其餘（類別、字、呼叫、記號）逐字比。 */
 function project(message: BaseMessage): unknown {
   return {
     type: message.getType(),
-    // 摘要附的歷史檔名帶每次隨機的會話代號；指向讀回工具的那一句只有接了日誌的那一邊有。其餘逐字。
+    // 摘要前言指向原文的那一句兩邊不同：`state` 那邊指向歷史檔，接了日誌的 `log` 那邊指向讀回工具。兩句換成同一個佔位，其餘逐字。
     content: JSON.parse(
       JSON.stringify(message.content)
-        .replace(/session_[0-9a-f]+\.md/g, 'session_X.md')
-        .replace(/ Originals also stay in the session log: [^\\]*?literal string\./g, ''),
+        .replace(
+          /The full conversation history has been saved to [^\\"]*? should you need to refer back to it for details\./g,
+          ORIGINALS_POINTER,
+        )
+        .replace(
+          /Originals also stay in the session log: [^\\"]*?literal string\./g,
+          ORIGINALS_POINTER,
+        ),
     ) as unknown,
     toolCalls: 'tool_calls' in message ? message.tool_calls : undefined,
     toolCallId: 'tool_call_id' in message ? message.tool_call_id : undefined,

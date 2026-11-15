@@ -3,15 +3,15 @@
  * [#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）。
  *
  * 尾巴剛好蓋住全部新內容時，照保留量切，切點前只剩上一顆摘要。摘要器把它當成摘不到東西（`retainedMessageCount` 回整串長度），
- * 不打摘要模型、不提交。提交的話，歷史檔會多一個空的 `## Summarized at` 區段，日誌多一筆沒有新內容的 `compaction/summary`；
- * #1395 的暫存層只能擋「沒生出摘要」，擋不住「生出來但沒有東西可卸」。
+ * 不打摘要模型、不提交。提交的話，日誌多一筆沒有新內容的 `compaction/summary`，從日誌讀回的段落多一段只有
+ * `[prior summary]` 的。
  *
  * 這一檔走產品路徑（`ThreadPump` 管日誌），量兩件事：
  *
  * | 情境 | 結果 |
  * | --- | --- |
- * | S6 第 3 輪：要取代的只剩舊摘要 | 不打摘要模型、不提交：日誌沒有那一筆、歷史檔不變、沒有摘要失敗的 warn、原請求照送 |
- * | 前兩輪的正常摘要 | 提交 |
+ * | S6 第 3 輪：要取代的只剩舊摘要 | 不打摘要模型、不提交：日誌沒有那一筆、讀回的段落不變、沒有摘要失敗的 warn、原請求照送 |
+ * | 前兩輪的正常摘要 | 提交：原文從日誌讀回，不寫歷史檔 |
  *
  * shrink 檢查（#1396）自己的案例（被取代的不是只有舊摘要、新摘要卻不比它小；剛好等於不提交、多一個 token 提交）與端點超窗那條路
  * 在 `packages/nexus-core/src/summary-failure.test.ts`。
@@ -28,7 +28,8 @@ import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { replayConversation } from '@nexus/core';
+import { recallHistory, replayConversation } from '@nexus/core';
+import type { RecalledHistory } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -43,9 +44,6 @@ const USER_PAD = '內容'.repeat(200);
 const REPLY_PAD = '內容'.repeat(120);
 /** 保留量：兩輪都留下尾巴的最後兩則；第 3 輪那兩則是「上一輪回話＋這一句」，再加舊摘要就裝不下，所以要取代的只剩舊摘要。 */
 const RETAIN_TOKENS = 250;
-
-const SECTION = /## Summarized at [^\n]+\n\n/;
-const HISTORY_FILE = /^\/session_[^/]+\.md$/;
 
 /** 第幾次呼叫（累計，含摘要那幾次）回超窗；其餘照常。 */
 class ShrinkModel extends BaseChatModel {
@@ -100,8 +98,13 @@ afterEach(async () => {
 interface Snapshot {
   /** 這一輪日誌上新增的 `compaction/summary` 切點。 */
   readonly logCutoffs: number[];
-  /** 歷史檔的各區段（去掉標題行、換行換成 ` | `）；空區段就是空字串，這裡**不**濾掉。 */
-  readonly sections: string[];
+  /** 同上那幾筆的 `filePath`。 */
+  readonly filePaths: (string | null)[];
+  /** 這一輪結束後 checkpoint `files` 的鍵。 */
+  readonly files: string[];
+  /** 這一輪結束時從日誌讀回的段落（逐字稿原樣）；只遮掉舊摘要的那段是 `[prior summary]`，這裡**不**濾掉。 */
+  readonly segments: string[];
+  readonly failure: RecalledHistory['failure'];
   /** 這一輪結束時的 `turn/end`／`turn/failed`。 */
   readonly end: string | undefined;
 }
@@ -140,23 +143,20 @@ async function converse(options: {
       const state = await (
         built.agent as unknown as { getState(config: unknown): Promise<{ values: unknown }> }
       ).getState({ configurable: { thread_id: 'summary-shrink' } });
-      const values = state.values as {
-        files?: Record<string, { content?: string }>;
-      };
+      const values = state.values as { files?: Record<string, unknown> };
       const slice = pump.sessionLog.events.slice(before);
       const end = [...slice]
         .reverse()
         .find((event) => event.type === 'turn/end' || event.type === 'turn/failed');
+      const summaries = slice.filter((event) => event.type === 'compaction/summary');
+      const recalled = recallHistory(pump.sessionLog.events);
       snapshots.push({
         end: end?.type,
-        logCutoffs: slice
-          .filter((event) => event.type === 'compaction/summary')
-          .map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
-        sections: Object.entries(values.files ?? {})
-          .filter(([path]) => HISTORY_FILE.test(path))
-          .flatMap(([, file]) => (file.content ?? '').split(/(?=## Summarized at )/))
-          .filter((chunk) => chunk.startsWith('## Summarized at'))
-          .map((chunk) => chunk.replace(SECTION, '').trim().replace(/\n/g, ' | ')),
+        logCutoffs: summaries.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
+        filePaths: summaries.map((event) => (event.data as { filePath: string | null }).filePath),
+        files: Object.keys(values.files ?? {}),
+        segments: recalled.segments.map((segment) => segment.text),
+        failure: recalled.failure,
       });
     }
     return { model, snapshots, events: [...pump.sessionLog.events] };
@@ -194,7 +194,7 @@ describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
    * 呼叫：1 ＝ 第 1 輪；2、3 ＝ 摘要（條目、現況）、4 ＝ 摘要之後的請求（超窗）、5、6 ＝ retain 0 的摘要、7 ＝ 重送（超窗）、
    * 8、9 ＝ 再摘要、10 ＝ 重送；第 3 輪：11 ＝ 原請求照送，沒有摘要那一次。
    */
-  it('不打摘要模型、不提交：日誌沒有那一筆、歷史檔不多空區段、沒有摘要失敗的 warn、推導等於實送', async () => {
+  it('不打摘要模型、不提交：日誌沒有那一筆、讀回的段落不多一段、沒有摘要失敗的 warn、推導等於實送', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const run = await converse({ overflowOn: [4, 7], turns: 3 });
 
@@ -204,10 +204,13 @@ describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
     expect(run.model.seen[10]![0]).toMatch(/^system:/);
     expect(run.snapshots[2]!.end).toBe('turn/end');
 
-    // 第 3 輪：沒有新事件、歷史檔還是第 2 輪那一段（沒有空區段）。
+    // 第 3 輪：沒有新事件、讀回的還是第 2 輪那一段（沒有只遮掉舊摘要的那種）。
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
-    expect(run.snapshots[2]!.sections).toEqual(run.snapshots[1]!.sections);
-    expect(run.snapshots[2]!.sections.every((section) => section !== '')).toBe(true);
+    expect(run.snapshots.map((s) => s.failure)).toEqual([undefined, undefined, undefined]);
+    expect(run.snapshots[1]!.segments).toHaveLength(1);
+    expect(run.snapshots[2]!.segments).toEqual(run.snapshots[1]!.segments);
+    expect(run.snapshots[2]!.segments[0]).toMatch(/^User: 第 1 句。/);
+    expect(run.snapshots[2]!.segments[0]).not.toContain('[prior summary]');
 
     // 沒有走「摘要壞了、照原請求送出」那條路。
     const lines = warn.mock.calls.map((call) => String(call[0]));
@@ -220,12 +223,15 @@ describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
 });
 
 describe('正常摘要不受影響', () => {
-  it('前兩輪的摘要照常提交：被取代的比框好的摘要大', async () => {
+  it('前兩輪的摘要照常提交：被取代的比框好的摘要大，原文從日誌讀回一段、不寫歷史檔', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const run = await converse({ overflowOn: [], turns: 2 });
 
     expect(run.snapshots.map((s) => s.logCutoffs.length)).toEqual([0, 1]);
-    expect(run.snapshots[1]!.sections).toHaveLength(1);
+    expect(run.snapshots[1]!.filePaths).toEqual([null]);
+    expect(run.snapshots.map((s) => s.files)).toEqual([[], []]);
+    expect(run.snapshots[1]!.failure).toBeUndefined();
+    expect(run.snapshots[1]!.segments).toEqual([`User: 第 1 句。${USER_PAD}`]);
     expect(
       warn.mock.calls.map((call) => String(call[0])).filter((l) => l.includes('不比被取代')),
     ).toEqual([]);

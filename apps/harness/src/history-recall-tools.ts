@@ -4,8 +4,8 @@
  * - 讀的是**這次呼叫自己的那份日誌**（`registry.sessions.forCall`）：子代理讀到的是它自己被摘掉的那幾段。
  * - 唯讀，不掛核准；嵌入版靠 `embed-profile.ts` 的 `EMBED_READ_ONLY_TOOLS` 免核准。結果是一般的工具結果，落在訊息串尾端。
  * - 沒接上日誌、但開著摘要的組裝照樣有這兩個工具，呼叫時回 `ok: false` 加一句原因，不拋；摘要關掉的組裝不掛（`agent-factory.ts`）。
- * - 註冊了這兩個工具、而且這次呼叫解得到會話日誌時，摘要的前言指向它們（`@nexus/core` 的 `fold.ts` 與 `summarization.ts`）。
- *   `/conversation_history` 的歷史檔照寫。
+ * - 註冊了這兩個工具、而且這次呼叫解得到會話日誌時，摘要器不寫 `/conversation_history` 的歷史檔，摘要的前言指向它們
+ *   （`@nexus/core` 的 `fold.ts` 與 `summarization.ts`）。
  *
  * 怎麼從日誌推回那幾段、輸出長什麼樣，在 `@nexus/core` 的 `history-recall.ts`。
  *

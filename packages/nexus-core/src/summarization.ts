@@ -75,9 +75,9 @@
  *   （{@link ./last-sent-request.ts}）。`state`、`shadow` 送出去的是 graph state 的訊息，日誌推出來的那一串不保證與它
  *   相同（shadow 量的正是這個差），照模板：對話用 `getBufferString` 攤成一個字串放在前、指令在後。模板那一次的輸入
  *   按全價算。
- * - **前一次摘要的標籤。** 前一次摘要是基座 `buildSummaryMessage` 包的：有
- *   `filePath` 時是一段前言加 `<summary>…</summary>`，**沒有**（offload 失敗）時只有
- *   「Here is a summary of the conversation to date:」一句，不包標籤。所以那條規則兩種都要認。
+ * - **前一次摘要的標籤。** 前一次摘要是 `buildSummaryMessage` 包的：原文讀得回來，或歷史檔寫成了，是一段前言加
+ *   `<summary>…</summary>`；讀不回來、歷史檔也沒寫成時只有「Here is a summary of the conversation to date:」一句，
+ *   不包標籤。所以那條規則兩種都要認。
  *
  * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 19、20 節。
  *
@@ -777,7 +777,7 @@ export function createSummarizer(
       ? undefined
       : replayedSummaryCall(sessions, sentHistoryOf);
   // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
-  // 沒有會話註冊表就查不了日誌，維持直接寫。
+  // 沒有會話註冊表就查不了日誌，維持直接寫。原文讀得回來的呼叫不寫歷史檔，這一層沒有東西可暫存。
   const staging =
     sessions === undefined
       ? undefined
@@ -1728,7 +1728,8 @@ function quietInvoke<T extends object>(
  * - **`cutoffIndex`**：`上一次的切點 + 這次在有效串裡的切點 − 1`（沒有上一次就是切點本身，{@link summaryCutoffIndex}，同基座的
  *   `stateCutoffIndex`）；有效串是這一步開始時的切點（{@link previousSummaryCutoff}）套上去的那一串，這次在有效串裡的切點＝
  *   有效串長度 −（交下去的長度 − 1）。
- * - **`filePath`**：從摘要文字讀（{@link summaryFilePathOf}）。基座寫歷史檔失敗時摘要文字沒有那句，就是 `null`（#66）。
+ * - **`filePath`**：從摘要文字讀（{@link summaryFilePathOf}）。原文讀得回來時不寫歷史檔、寫歷史檔失敗時（#66），
+ *   摘要文字都沒有那句，就是 `null`。
  * - **`messagesBefore`**：`request.messages.length`，同以前；只是那時的 graph state 還沒有這次呼叫的回覆，所以推導端的
  *   則數檢查是 `messagesBefore`，不是舊順序的 `messagesBefore + 1`（`conversation-replay.ts`），事件帶 `beforeCall: true` 標明。
  *
@@ -2008,9 +2009,9 @@ export function isSummarizationMessage(message: BaseMessage): boolean {
 }
 
 /**
- * 摘要文字裡寫的歷史檔路徑。基座的 `buildSummaryMessage`：寫成功時有一句
+ * 摘要文字裡寫的歷史檔路徑。`buildSummaryMessage`：寫了歷史檔時有一句
  * 「The full conversation history has been saved to <路徑> should you need to refer back to it for details.」，
- * 寫失敗（`filePath` 是 `null`）時整句沒有。**錨在開頭**，免得摘要本文裡剛好有同樣的句子。
+ * 沒寫（原文讀得回來）或寫失敗時整句沒有。**錨在開頭**，免得摘要本文裡剛好有同樣的句子。
  *
  * @param message - 基座的摘要訊息。
  * @returns 路徑；沒有那一句就是 `null`。
