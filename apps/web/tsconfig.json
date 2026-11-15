@@ -106,6 +106,7 @@
     "src",
     "guard",
     "catalog",
+    "visual",
     "e2e",
     "embed-demo",
     "vite.config.ts",

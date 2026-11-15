@@ -498,7 +498,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
 | 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
 | Windows 高對比列為門檻 | 量過了（[#2764](https://github.com/DemianLi/nexus-agent/issues/2764)），量到的缺口補了（§8「Windows 高對比」）；新元件還沒有通用的測試擋，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
-| 視覺回歸 | 沒有 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
+| 視覺回歸會擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」），只報告、不紅；沒有基準圖、沒有門檻 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。
 
