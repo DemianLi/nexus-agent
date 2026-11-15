@@ -180,8 +180,8 @@ describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () =>
     // 歷史檔：#1389 的暫存層沒看到事件也沒看到 Command，丟掉，後端一次都沒寫。
     expect(r.writes).toEqual([]);
     expect(summaries(r.log)).toEqual([]);
-    // 摘要只生一次、只試記一次。
-    expect(r.invokes).toBe(1);
+    // 摘要只生一次（索引條目一次、現況一次）、只試記一次。
+    expect(r.invokes).toBe(2);
     expect(r.summaryAppends).toBe(1);
     expect(r.reports).toHaveLength(1);
     expect(r.reports[0]).toContain('compaction/summary 記不進去');
@@ -205,8 +205,8 @@ describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () =>
     const out = await r.call(conversation(), (call) => (call === 1 ? endpointError : undefined));
     expect(out.error).toBe(endpointError);
     expect(out.result).toBeUndefined();
-    // 門檻那一次＋端點超窗那一次的緊急摘要：各一次，沒有第三次。
-    expect(r.invokes).toBe(2);
+    // 兩次摘要，各兩次呼叫（索引條目、現況）：沒有第三次摘要。
+    expect(r.invokes).toBe(4);
     expect(r.summaryAppends).toBe(2);
     expect(r.handled).toHaveLength(1);
     expect(String(r.handled[0]![0]!.content)).toBe(BIG);
@@ -225,7 +225,8 @@ describe('摘要記不進去：端點真的回超窗（dsh 的 overflow 路徑�
     const out = await r.call(conversation(), (call) => (call === 1 ? endpointError : undefined));
     expect(out.error).toBe(endpointError);
     expect(r.handled).toHaveLength(1);
-    expect(r.invokes).toBe(1);
+    // 摘要只試一次：索引條目一次、現況一次。
+    expect(r.invokes).toBe(2);
     expect(r.summaryAppends).toBe(1);
     expect(r.writes).toEqual([]);
     expect(summaries(r.log)).toEqual([]);

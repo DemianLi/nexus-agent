@@ -13,7 +13,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { SUMMARY_PROMPT } from '@nexus/core';
+import { SUMMARY_ENTRY_INSTRUCTION, SUMMARY_PROMPT } from '@nexus/core';
 import type { ModelContextLimits, SessionEvent } from '@nexus/core';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -87,8 +87,9 @@ describe('前景子代理：每次委派各一段生命', () => {
       const task = (id: string, description: string): Reply => ({
         tools: [{ id, name: 'task', args: { description, subagent_type: 'general-purpose' } }],
       });
-      if (k === 0) return task('call_ta', 'CHILD-A 做事');
-      if (k === 1) return task('call_tb', 'CHILD-B 做事');
+      // 委派的描述要夠長：摘要加上框架之後必須比它取代的那一段小（#1396），root 被取代的只有這兩次委派。
+      if (k === 0) return task('call_ta', `CHILD-A 做事${PAD}${PAD}`);
+      if (k === 1) return task('call_tb', `CHILD-B 做事${PAD}${PAD}`);
       // root 自己也摘要一次，才有它的歷史檔可比。
       if (k === 2) return { tools: [echo('call_root_big', '根'.repeat(10_000))] };
       if (k === 3) return { tools: [echo('call_root_after', '根之後')] };
@@ -376,8 +377,9 @@ describe('沒有 checkpointer 的組裝', () => {
           : new AIMessage(`一答${String(i)}`),
       );
       await agent.invoke({ messages: first }, config);
+      // 一次摘要＝兩次非主呼叫（索引條目、現況）。
       expect(upstream.bodies.filter((body) => !isMainCall(body)).length, '第一次應該摘要過').toBe(
-        1,
+        2,
       );
 
       // 灌回的樣子：比第一次的切點短。
@@ -404,8 +406,11 @@ describe('沒有 checkpointer 的組裝', () => {
 
 describe('沒有日誌的組裝', () => {
   const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
+  const ENTRY_MARK = SUMMARY_ENTRY_INSTRUCTION.split('\n')[0]!;
   const isSummaryCall = (prompt: readonly BaseMessage[]) =>
-    prompt.some((message) => message.text.includes(SUMMARY_MARK));
+    prompt.some(
+      (message) => message.text.includes(SUMMARY_MARK) || message.text.includes(ENTRY_MARK),
+    );
   const SMALL: ModelContextLimits = { contextWindow: 4_200, maxOutputTokens: 200 };
   const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
   const H1 = `第 1 句。${PAD}`;
@@ -414,6 +419,8 @@ describe('沒有日誌的組裝', () => {
     const model = new ScriptedChatModel({
       turns: [
         { content: `好 1${PAD}` },
+        // 摘要兩次：索引條目（標題加一行）、現況。
+        { content: '本段對話\n- 第 1 句' },
         { content: '摘要一' },
         { content: '', error: 'upstream 503' },
         { content: '好 3' },
@@ -437,8 +444,8 @@ describe('沒有日誌的組裝', () => {
       await agent.invoke(toAgentInvocation('第 3 句。'), config);
 
       // 前提：第 2 輪摘要過一次、那次請求失敗了。
-      expect(model.prompts.filter(isSummaryCall)).toHaveLength(1);
-      expect(model.prompts).toHaveLength(4);
+      expect(model.prompts.filter(isSummaryCall)).toHaveLength(2);
+      expect(model.prompts).toHaveLength(5);
       // 第 3 輪的請求：摘要開頭，第 1 句不在裡面。
       const last = model.prompts
         .at(-1)!

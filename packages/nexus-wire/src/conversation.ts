@@ -1247,21 +1247,36 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
     // 選填（#2774）：沒有就不出這一格（舊日誌），有就得是四個非負整數。壞的整顆不收，同上。
     let parsedParts: WireContextMessageParts | undefined;
     if (messageParts !== undefined) {
-      const { summaryTokens, injectedTokens, toolResultTokens, conversationTokens } =
-        (messageParts ?? {}) as {
-          summaryTokens?: unknown;
-          injectedTokens?: unknown;
-          toolResultTokens?: unknown;
-          conversationTokens?: unknown;
-        };
+      const {
+        summaryTokens,
+        injectedTokens,
+        toolResultTokens,
+        conversationTokens,
+        summaryIndexTokens,
+      } = (messageParts ?? {}) as {
+        summaryIndexTokens?: unknown;
+        summaryTokens?: unknown;
+        injectedTokens?: unknown;
+        toolResultTokens?: unknown;
+        conversationTokens?: unknown;
+      };
       if (
         !isCount(summaryTokens) ||
         !isCount(injectedTokens) ||
         !isCount(toolResultTokens) ||
-        !isCount(conversationTokens)
+        !isCount(conversationTokens) ||
+        // 選填（#2776）：有就得是不大於 `summaryTokens` 的非負整數。
+        (summaryIndexTokens !== undefined &&
+          (!isCount(summaryIndexTokens) || summaryIndexTokens > summaryTokens))
       )
         return state;
-      parsedParts = { summaryTokens, injectedTokens, toolResultTokens, conversationTokens };
+      parsedParts = {
+        summaryTokens,
+        injectedTokens,
+        toolResultTokens,
+        conversationTokens,
+        ...(summaryIndexTokens !== undefined && { summaryIndexTokens }),
+      };
     }
     parsedBreakdown = {
       systemTokens,

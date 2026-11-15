@@ -447,6 +447,9 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
               injectedTokens: measure.breakdown.messageParts.injectedTokens,
               toolResultTokens: measure.breakdown.messageParts.toolResultTokens,
               conversationTokens: measure.breakdown.messageParts.conversationTokens,
+              ...(measure.breakdown.messageParts.summaryIndexTokens !== undefined && {
+                summaryIndexTokens: measure.breakdown.messageParts.summaryIndexTokens,
+              }),
             },
           }),
         },

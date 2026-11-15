@@ -67,6 +67,9 @@ function memoryBackend(seed: Record<string, string> = {}, failWrite = false) {
 
 const stamp = (text: string) => text.replace(/## Summarized at \S+/g, '## Summarized at <t>');
 
+/** 第一步的索引條目（假模型的條目回覆）；第一步的範圍是 0-5。 */
+const ENTRY_1 = '<index>\n[#1 messages 0-5] 條目 1\n- 一行\n</index>';
+
 const PROMPT = '摘要這段：\n{conversation}\n完。';
 const PATH = '/conversation_history/session_fixed.md';
 const turns = (count: number, pad = '') =>
@@ -93,14 +96,23 @@ const echo = tool(async () => 'ok', {
   schema: z.object({ message: z.string() }),
 });
 
-/** 摘要模型：記下每次收到的提示，回「摘要 N」。 */
+/**
+ * 摘要模型：索引條目那次回一則合格的條目，現況那次回「摘要 N」（N 是現況呼叫的次數）。
+ * `prompts` 只記現況那次的提示，`entries` 只記條目那次的輸入。
+ */
 function summaryModel(profile: object = {}) {
   const prompts: string[] = [];
+  const entries: BaseMessage[][] = [];
   return {
     prompts,
+    entries,
     model: {
       profile,
       invoke: async (input: BaseMessage[]) => {
+        if (input.some((m) => String(m.content).includes('ONE index entry'))) {
+          entries.push(input);
+          return { text: `Title: 條目 ${String(entries.length)}\n- 一行` };
+        }
         prompts.push(String(input[0]!.content));
         return { text: `摘要 ${String(prompts.length)}` };
       },
@@ -207,7 +219,11 @@ describe('摘要器引擎', () => {
     const step = await engineStep(engine, turns(8), { model });
     expect(step.cutoff).toBe(6);
     expect((step.result as AIMessage).content).toBe('好。');
-    expect(step.contents).toEqual([summaryWithFile('摘要 1'), '人 6', '答 7']);
+    expect(step.contents).toEqual([
+      summaryWithFile(`${ENTRY_1}\n<state>\n摘要 1\n</state>`),
+      '人 6',
+      '答 7',
+    ]);
     expect(summaryFilePathOf(step.sent[0]!)).toBe(PATH);
     expect(prompts).toEqual([
       '摘要這段：\nHuman: 人 0\nAI: 答 1\nHuman: 人 2\nAI: 答 3\nHuman: 人 4\nAI: 答 5\n完。',
@@ -286,6 +302,38 @@ describe('摘要器引擎', () => {
         '## Summarized at <t>\n\nHuman: 人 6\nAI: 答 7\nHuman: 人 8\nAI: 答 9\n\n' +
         '## Summarized at <t>\n\nAI: 答 9\nHuman: 人 10\nAI: 答 11\nHuman: 人 12\nAI: 答 13\n\n',
     );
+  });
+
+  it('連續摘要三次：前兩筆條目逐位元組不變，條目範圍相接、與每次的切點一致', async () => {
+    const { engine } = engineWith();
+    const { model, entries } = summaryModel();
+    const steps: Awaited<ReturnType<typeof engineStep>>[] = [];
+    let previous: SummaryCutoff | undefined;
+    for (const count of [8, 12, 16]) {
+      const step = await engineStep(engine, turns(count), { previous, model });
+      steps.push(step);
+      previous = { cutoffIndex: step.cutoff!, summaryMessage: step.sent[0]!, filePath: PATH };
+    }
+    // 索引條目一次、現況一次：三次摘要的條目那一步各叫一次。
+    expect(entries).toHaveLength(3);
+    const indexes = steps.map((step) => {
+      const text = String(step.sent[0]!.content);
+      return text.slice(text.indexOf('<index>\n') + 8, text.indexOf('\n</index>'));
+    });
+    expect(indexes[1]!.startsWith(indexes[0]!)).toBe(true);
+    expect(indexes[2]!.startsWith(indexes[1]!)).toBe(true);
+    // 三筆條目的範圍：每筆從上一次的切點起，到這一次的切點前一則為止。
+    const ranges = [...indexes[2]!.matchAll(/^\[#(\d+) messages (\d+)-(\d+)\]/gm)].map((match) => [
+      Number(match[1]),
+      Number(match[2]),
+      Number(match[3]),
+    ]);
+    expect(ranges).toEqual([
+      [1, 0, 5],
+      [2, 6, 9],
+      [3, 10, 13],
+    ]);
+    expect(ranges.map(([, , to]) => to! + 1)).toEqual(steps.map((step) => step.cutoff));
   });
 
   it('session id 是建構參數：同一顆實例兩次摘要寫同一個檔', async () => {
@@ -464,7 +512,9 @@ describe('摘要器引擎', () => {
     try {
       const step = await engineStep(engine, turns(8));
       expect(step.cutoff).toBe(6);
-      expect(step.contents[0]).toBe('Here is a summary of the conversation to date:\n\n摘要 1');
+      expect(step.contents[0]).toBe(
+        `Here is a summary of the conversation to date:\n\n${ENTRY_1}\n<state>\n摘要 1\n</state>`,
+      );
     } finally {
       spy.mockRestore();
     }

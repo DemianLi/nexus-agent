@@ -52,6 +52,7 @@ import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
   ModelSelectionController,
   SessionRegistry,
+  SUMMARY_ENTRY_INSTRUCTION,
   SUMMARY_PROMPT,
   TokenAnchorBook,
   tagModelRoute,
@@ -75,8 +76,12 @@ const SMALL_LIMITS: ModelContextLimits = { contextWindow: 32_768, maxOutputToken
 /** 摘要那次呼叫的提示詞開頭；用它從 `prompts` 裡把摘要請求挑出來。 */
 const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
 
+const ENTRY_MARK = SUMMARY_ENTRY_INSTRUCTION.split('\n')[0]!;
+/** 摘要的兩次呼叫：索引條目、現況。 */
 const isSummaryCall = (prompt: readonly BaseMessage[]) =>
-  prompt.some((message) => message.text.includes(SUMMARY_MARK));
+  prompt.some(
+    (message) => message.text.includes(SUMMARY_MARK) || message.text.includes(ENTRY_MARK),
+  );
 
 const script = (): ScriptedTurn[] =>
   Array.from({ length: 80 }, (_, index) => ({ content: `好 ${index + 1}` }));
@@ -345,8 +350,10 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
           ],
         },
         { content: '', toolCalls: [{ name: 'poke', args: {} }] },
-        // 後面兩輪是兩次生摘要（子代理一次、root 一次）：腳本模型每次 `invoke` 都吃一輪。
+        // 後面是兩次生摘要（子代理一次、root 一次），每次兩輪（索引條目、現況）：腳本模型每次 `invoke` 都吃一輪。
+        { content: '本段對話\n- 子代理的委派' },
         { content: '子代理那段的摘要。' },
+        { content: '本段對話\n- root 的委派' },
         { content: 'root 那段的摘要。' },
       ],
     });
@@ -356,8 +363,8 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
       model.prompts.filter((prompt) => !isSummaryCall(prompt)).length;
     expect(requests(run.smallModel)).toBe(2);
     expect(requests(run.defaultModel)).toBe(2);
-    // 生摘要：兩次（子代理一次、root 一次）都由最近一次已送出的請求那顆（小的）生，預設那顆一次都沒有。
-    expect(summaryCallsOf(run.smallModel)).toBe(2);
+    // 生摘要：兩次（子代理一次、root 一次），每次兩呼叫（條目、現況），都由最近一次已送出的請求那顆（小的）生，預設那顆一次都沒有。
+    expect(summaryCallsOf(run.smallModel)).toBe(4);
     expect(summaryCallsOf(run.defaultModel)).toBe(0);
   });
 
@@ -393,10 +400,10 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
 
     // 前面十二輪在預設那顆上，沒有一次摘要。
     expect(sizes(run.defaultModel, false)).toHaveLength(12);
-    // 換過去那一步：摘要請求送進**預設那顆**（它裝得下），而且那份請求比小的窗口還大——所以小的收下會超窗。
+    // 換過去那一步：摘要請求（條目、現況各一次）送進**預設那顆**（它裝得下），而且兩份請求都比小的窗口還大——所以小的收下會超窗。
     const summaryRequests = sizes(run.defaultModel, true);
-    expect(summaryRequests).toHaveLength(1);
-    expect(summaryRequests[0]!).toBeGreaterThan(SMALL_LIMITS.contextWindow);
+    expect(summaryRequests).toHaveLength(2);
+    for (const size of summaryRequests) expect(size).toBeGreaterThan(SMALL_LIMITS.contextWindow);
     // 小的那顆一次摘要請求都沒收到；它收到的每一份請求都在夾窗之下，而且確實有收到（對話在它身上接著走）。
     expect(summaryCallsOf(run.smallModel)).toBe(0);
     const requests = sizes(run.smallModel, false);

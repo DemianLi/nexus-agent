@@ -723,11 +723,25 @@ describe('重啟後續接', () => {
       verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('empty-assistant')),
       `日誌推不出來、或空的助手訊息又出現${explain(verdicts)}`,
     ).toEqual([]);
+    // 索引條目的座標是各自那份歷史裡的序號：重啟後那則空的助手訊息已不在灌回的串裡，同一段被摘掉的範圍差一號，
+    // 摘要的內容與之後的每一則都相同，所以只抹掉範圍的序號再比。
     const norm = (body: Body) =>
-      body.messages
-        .slice(1)
-        .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
+      body.messages.slice(1).map((m) =>
+        JSON.stringify(m)
+          .replace(/session_[0-9a-f]{8}/g, 'session_X')
+          .replace(/\[#(\d+) messages \d+-\d+\]/g, '[#$1 messages _]'),
+      );
     expect(norm(restart.mainBodies.at(-1)!)).toEqual(norm(control.mainBodies.at(-1)!));
+    // 抹掉的那個序號各自對得上自己那份日誌：最後一筆條目的範圍結束在最後一筆 `compaction/summary` 的切點前一則。
+    for (const run of [control, restart]) {
+      const cutoff = run.events
+        .filter((e): e is SessionEvent<'compaction/summary'> => e.type === 'compaction/summary')
+        .at(-1)!.data.cutoffIndex;
+      const pointers = [
+        ...JSON.stringify(run.mainBodies.at(-1)!.messages).matchAll(/\[#\d+ messages \d+-(\d+)\]/g),
+      ];
+      expect(Number(pointers.at(-1)![1]) + 1).toBe(cutoff);
+    }
   }, 180_000);
 });
 

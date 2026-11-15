@@ -22,7 +22,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { deriveSessionStats, SessionRegistry } from '@nexus/core';
+import { deriveSessionStats, SessionRegistry, SUMMARY_ENTRY_INSTRUCTION } from '@nexus/core';
 import type { SessionEvent, SummarizationSettings } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -89,7 +89,12 @@ class ThrowingChatModel extends BaseChatModel {
     this.state.calls += 1;
     if (this.state.calls === this.throwOnCall) throw this.error;
     if (this.also !== undefined && this.state.calls === this.also.call) throw this.also.error;
-    const message = new AIMessage(`第 ${this.state.calls} 次回話。${PAD}`);
+    // 索引條目那次只回標題（合格的條目，不重叫）；其餘照常回一大段。
+    const isEntry = String(_messages.at(-1)?.content).includes(SUMMARY_ENTRY_INSTRUCTION);
+    const text = isEntry
+      ? `第 ${this.state.calls} 次回話。`
+      : `第 ${this.state.calls} 次回話。${PAD}`;
+    const message = new AIMessage(text);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
 }
@@ -138,7 +143,8 @@ async function runUntilThrow(
   let rejected: unknown = null;
   try {
     for (let index = 0; index < invocations; index += 1) {
-      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${PAD}`), {
+      // 使用者句墊兩份：框好的摘要（含索引）要比被取代的那一段小（#1396），第一次摘要取代的只有這一問一答。
+      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${PAD}${PAD}`), {
         configurable: { thread_id: 'overflow' },
       });
     }
@@ -195,8 +201,8 @@ describe('供應商回上下文溢出', () => {
     expect(rejected).toBeNull();
     const { steps } = deriveSessionStats(events);
     expect(steps).toBe(5);
-    // 模型本身被叫了六次：三次正常、溢出一次、摘要一次、重試一次。差的那一次就是摘要。
-    expect(calls - steps).toBe(1);
+    // 模型本身被叫了七次：三次正常、溢出一次、摘要兩次（索引條目、現況）、重試一次。差的那兩次就是摘要。
+    expect(calls - steps).toBe(2);
   });
 
   /**
@@ -217,7 +223,8 @@ describe('供應商回上下文溢出', () => {
     expect(summaries).toBe(3);
     const { steps } = deriveSessionStats(events);
     expect(steps).toBe(4);
-    expect(calls - steps).toBe(summaries);
+    // 每次摘要兩次呼叫（索引條目、現況），差的就是這些。
+    expect(calls - steps).toBe(summaries * 2);
   });
 
   /**
@@ -271,8 +278,8 @@ describe('端點超窗：retain 0', () => {
     );
 
     expect(rejected).toBeNull();
-    // 三次正常、溢出一次、摘要一次、摘要之後重送一次。
-    expect(calls).toBe(6);
+    // 三次正常、溢出一次、摘要兩次（索引條目、現況）、摘要之後重送一次。
+    expect(calls).toBe(7);
     expect(historyFiles.length).toBeGreaterThan(0);
     expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(1);
   });
@@ -347,7 +354,7 @@ describe('摘要那次呼叫失敗', () => {
 
   it('我們自己的預算門檻觸發、摘要壞了：warn 一條，照原請求往下走，整場不倒', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // 門檻壓到 1：第 2 次起每次都要摘要。第 2 次的摘要（整體第 2 次呼叫）壞掉，第 3、4 次的摘要正常。
+    // 門檻壓到 1：第 2 次起每次都要摘要。第 2 次的摘要（它的條目那次呼叫）壞掉，第 3、4 次的摘要正常。
     const { rejected, calls, events } = await runUntilThrow(
       null,
       0,
@@ -360,9 +367,9 @@ describe('摘要那次呼叫失敗', () => {
     const lines = warn.mock.calls.map((call) => String(call[0]));
     expect(lines.filter((line) => line.includes('照原請求送出'))).toHaveLength(1);
     expect(lines.join('\n')).toContain('摘要模型當場炸了');
-    // 第 2 次摘要壞了沒有留下 compaction/summary；第 3、4 次各一筆。
+    // 第 2 次的摘要壞了沒有留下 compaction/summary；第 3、4 次各一筆。
     expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(2);
-    // 4 次模型節點 ＋ 3 次摘要呼叫（含壞掉的那次）。
-    expect(calls).toBe(7);
+    // 4 次模型節點 ＋ 壞掉的那次摘要（只叫了條目一次）＋ 兩次正常摘要（各兩次）。
+    expect(calls).toBe(9);
   });
 });

@@ -988,6 +988,12 @@ describe('舊格式', () => {
       ...breakdown,
       messageParts,
     });
+    // `summaryIndexTokens`（#2776）同理：有就原樣上線，沒有就沒有這個 key（上面那一條的 `toEqual`）。
+    const indexed = { ...messageParts, summaryIndexTokens: 300 };
+    expect(measured({ breakdown: { ...breakdown, messageParts: indexed } })?.breakdown).toEqual({
+      ...breakdown,
+      messageParts: indexed,
+    });
   });
 });
 

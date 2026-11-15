@@ -4,7 +4,7 @@
  * 出貨的 `BaseChatOpenAI` 打本機假端點，比的是線上的請求 body：`history-source: log` 時，摘要請求的工具與上一次主請求相同、
  * 訊息逐則相同到兩者較短的那一邊為止，最後一則是摘要指令；`state` 時是模板（一則 user 訊息、不帶工具）。
  */
-import { SUMMARY_INSTRUCTION } from '@nexus/core';
+import { SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { runAssembly } from './log-derived-history.fixture.js';
@@ -16,11 +16,15 @@ const SUMMARIZATION = { trigger: [{ type: 'tokens' as const, value: 3_000 }], re
 const SUMMARY_TEXT = '## Primary Request and Intent\n- 使用者說了幾輪填充文字。';
 
 const lastContent = (body: Body): unknown => body.messages.at(-1)?.content;
-const isReplay = (body: Body): boolean => lastContent(body) === SUMMARY_INSTRUCTION;
+const isEntryReplay = (body: Body): boolean => lastContent(body) === SUMMARY_ENTRY_INSTRUCTION;
+const isStateReplay = (body: Body): boolean => lastContent(body) === SUMMARY_INSTRUCTION;
+const isReplay = (body: Body): boolean => isEntryReplay(body) || isStateReplay(body);
 const isTemplate = (body: Body): boolean => {
   const content = lastContent(body);
   return typeof content === 'string' && content.startsWith('Conversation to condense:');
 };
+// 假回覆是合格的條目（標題加一行），索引條目一次、現況一次，每筆摘要共兩次重播或模板。
+const CALLS_PER_SUMMARY = 2;
 const script: Script = (_index, body) =>
   isReplay(body) || isTemplate(body) ? { content: SUMMARY_TEXT } : {};
 
@@ -31,7 +35,9 @@ describe('生摘要的請求形狀', () => {
     expect(summaries.length).toBeGreaterThan(0);
     expect(run.bodies.filter(isTemplate)).toEqual([]);
     const replays = run.bodies.flatMap((body, index) => (isReplay(body) ? [index] : []));
-    expect(replays.length).toBe(summaries.length);
+    expect(replays.length).toBe(summaries.length * CALLS_PER_SUMMARY);
+    expect(run.bodies.filter(isEntryReplay).length).toBe(summaries.length);
+    expect(run.bodies.filter(isStateReplay).length).toBe(summaries.length);
 
     for (const at of replays) {
       const replay = run.bodies[at]!;
@@ -60,7 +66,8 @@ describe('生摘要的請求形狀', () => {
     expect(summaries.length).toBeGreaterThan(0);
     expect(run.bodies.filter(isReplay)).toEqual([]);
     const templates = run.bodies.filter(isTemplate);
-    expect(templates.length).toBe(summaries.length);
+    // 每筆摘要：索引條目一次模板、現況一次模板。
+    expect(templates.length).toBe(summaries.length * CALLS_PER_SUMMARY);
     for (const body of templates) {
       expect(body.messages.length).toBe(1);
       expect(body.tools ?? []).toEqual([]);
