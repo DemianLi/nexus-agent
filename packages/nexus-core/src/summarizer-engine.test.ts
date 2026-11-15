@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { summaryFilePathOf } from './summarization.js';
-import { createSummarizerEngine, summaryPointsToRecall } from './summarizer-engine.js';
+import { createSummarizerEngine } from './summarizer-engine.js';
 import type { SummarizerEngineOptions } from './summarizer-engine.js';
 import {
   applySummaryCutoff,
@@ -522,50 +522,6 @@ describe('摘要器引擎', () => {
       `Failed to offload conversation history to ${PATH}: 寫不進去`,
       '[SummarizationMiddleware] Backend offload failed during summarization. Proceeding with summary generation.',
     ]);
-  });
-
-  it('原文讀得回來：前言在歷史檔那一句後面多一句指向讀回工具，歷史檔照寫', async () => {
-    const { engine, store } = engineWith({ originalsRecallable: () => true });
-    const step = await engineStep(engine, turns(8));
-    const head = step.contents[0]!;
-    expect(head).toBe(
-      'You are in the middle of a conversation that has been summarized.\n\n' +
-        `The full conversation history has been saved to ${PATH} should you need to refer back to it for details. ` +
-        'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
-        `A condensed summary follows:\n\n<summary>\n${ENTRY_1}\n<state>\n摘要 1\n</state>\n</summary>`,
-    );
-    expect(summaryPointsToRecall(head)).toBe(true);
-    expect(summaryFilePathOf(step.sent[0]!)).toBe(PATH);
-    expect(store.calls).toEqual([`download ${PATH}`, `write ${PATH}`]);
-  });
-
-  it('原文讀得回來、歷史檔寫不進去：前言只指向讀回工具，本文照樣包在 <summary> 裡', async () => {
-    const { engine } = engineWith({ failWrite: true, originalsRecallable: () => true });
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const step = await engineStep(engine, turns(8));
-      const head = step.contents[0]!;
-      expect(head).toBe(
-        'You are in the middle of a conversation that has been summarized.\n\n' +
-          'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
-          `A condensed summary follows:\n\n<summary>\n${ENTRY_1}\n<state>\n摘要 1\n</state>\n</summary>`,
-      );
-      expect(summaryPointsToRecall(head)).toBe(true);
-      expect(summaryFilePathOf(step.sent[0]!)).toBeNull();
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it('前言沒指向讀回工具的摘要：summaryPointsToRecall 是 false，本文裡出現同一句也不算', () => {
-    expect(summaryPointsToRecall(summaryWithFile('摘要'))).toBe(false);
-    expect(
-      summaryPointsToRecall(
-        summaryWithFile(
-          'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.',
-        ),
-      ),
-    ).toBe(false);
   });
 
   it('沒有訊息：原樣交下去；沒有模型：拋錯', async () => {

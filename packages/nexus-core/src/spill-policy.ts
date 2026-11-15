@@ -27,7 +27,6 @@
  * @module
  */
 
-import { HISTORY_READ_TOOL_NAME, HISTORY_SEARCH_TOOL_NAME } from './summary-head.js';
 import { toolNameOfCall } from './tool-call-step.js';
 import type { CoreToolListener } from './tool-pipeline.js';
 import { estimateTextTokens } from './token-estimate.js';
@@ -35,14 +34,8 @@ import { estimateTextTokens } from './token-estimate.js';
 /** 外溢的名字常數：不對應 stack 裡任何一格，監聽者也不帶名字；`@nexus/core` 主入口轉出它。 */
 export const SPILL_POLICY_MIDDLEWARE_NAME = 'nexusSpillPolicy';
 
-/**
- * 不外溢的工具：讀出來的東西再外溢，模型永遠讀不完。`read_file`，以及讀回被摘掉的原文的兩個工具（#2777），它們自己分頁、限筆數。
- */
-const EXEMPT_TOOLS: ReadonlySet<string> = new Set([
-  'read_file',
-  HISTORY_READ_TOOL_NAME,
-  HISTORY_SEARCH_TOOL_NAME,
-]);
+/** 不外溢的工具：讀出來的東西再外溢，模型永遠讀不完。dsh 只放過 `read`。 */
+const EXEMPT_TOOLS: ReadonlySet<string> = new Set(['read_file']);
 
 /** 存下去的東西要回給模型的定位，照 dsh `spill/src/types.ts:76-80` 的 `SpillRef`。 */
 export interface SpillRef {

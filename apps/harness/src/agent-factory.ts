@@ -111,7 +111,6 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { copyFileEntry } from './copy-file-tool.js';
-import { historyRecallEntry } from './history-recall-tools.js';
 import { embedApprovalEntry } from './embed-profile.js';
 import { createHostToolsSlot, hostToolsEntry } from './host-tools.js';
 import type { HostToolsSlot } from './host-tools.js';
@@ -692,8 +691,6 @@ export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
  *
  * - 它進 checkpoint，跑完就不在磁碟上，**續接（`--resume`、serve 重開）帶不回來**。灌回去的
  *   摘要仍寫著「完整歷史存在某某路徑」，那時讀不到——跟暫存預覽裡的路徑一樣，另外披露。
- *   接上會話日誌的呼叫另有一條續接後仍讀得到的路（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：`history_read`／`history_search`
- *   從日誌讀回原文（`history-recall-tools.ts`），摘要的前言也指向它們。
  * - `CompositeBackend` 把路由前綴剝掉再交給 `StateBackend`，而 `StateBackend` 讀寫的是 graph
  *   state 的 `files`。沒給 `--workspace` 時 default backend 也是一個 `StateBackend`，所以 agent
  *   在自己的根目錄 `grep` 得到歷史檔（實測）。暫存那一格是同一個機制。
@@ -912,8 +909,6 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     ...options.plugins,
     // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
     ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
-    // 讀回被摘掉的原文（#2777）：不摘要的組裝沒有東西可讀，不掛。
-    ...(options.summarization === false ? [] : [historyRecallEntry()]),
     ...(delegation === undefined ? [] : [delegation.entry()]),
     ...(hostTools === undefined
       ? []
