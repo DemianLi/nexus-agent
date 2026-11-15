@@ -33,7 +33,7 @@ pub(super) struct Composition {
 /// 一對走到哪。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PairState {
-    /// 還沒讀到組合行程的 `ready`：葉子還沒起，或起了還沒在橋上登記完；葉子在這之前死了或起不來、整對正在收的也在這裡（之後讀到的 `ready` 照常處理）。
+    /// 還沒讀到組合行程的 `ready`：葉子還沒起，或起了還沒在橋上登記完；葉子在這之前死了或起不來、整對正在收的也在這裡（之後讀到的 `ready` 不理）。
     /// `since` 是起組合行程的時間（監督行程被停住過就是判定的那一刻），`--start-timeout-ms` 從它起算。
     Starting { since: Instant },
     /// 讀到過 `ready`，沒有在等回答的 `bind`：預熱好的；送過 `bind` 或補了葉子之後葉子死了、或補葉子起不來，整對正在收的也在這裡。
@@ -483,13 +483,16 @@ impl Supervisor {
             }
             let serial = composition.serial;
             match report {
+                // 在收的一對不會再綁：晚到的 `ready` 不理，狀態與沉默的起算都不動（下面兩支都是）。
                 ConversationReport::Ready
-                    if matches!(composition.state, PairState::Refilling { .. }) =>
+                    if matches!(composition.state, PairState::Refilling { .. })
+                        && composition.proc.stop.is_none() =>
                 {
                     self.bind_pair(index);
                 }
                 ConversationReport::Ready
-                    if matches!(composition.state, PairState::Starting { .. }) =>
+                    if matches!(composition.state, PairState::Starting { .. })
+                        && composition.proc.stop.is_none() =>
                 {
                     self.enter(index, PairState::Ready);
                     if self.compositions[index].thread.is_some() {
@@ -599,7 +602,7 @@ impl Supervisor {
             // 有排著的就讓出名額：沒有葉子的組合行程，最早留下的先收。
             self.make_room();
         } else {
-            // 沒有還沒回答的 `bind` 了：晚到的 `bound` 與補起的葉子的 `ready` 不再理。`Starting` 不動：還沒收過 `ready`，沒有 `bind` 要作廢。
+            // 沒有還沒回答的 `bind` 了：晚到的 `bound` 與補起的葉子的 `ready` 不再理。`Starting` 不動：還沒收過 `ready`，沒有 `bind` 要作廢；之後才到的 `ready` 因為已經在收，也不理。
             if matches!(
                 composition.state,
                 PairState::Binding | PairState::Bound | PairState::Refilling { .. }
