@@ -1765,6 +1765,25 @@ nexus-agent serve --process-model per-thread
   - 欄位與值只加不改：讀它的工具遇到不認得的欄位或死因要略過，不要報錯。對話行程的死因（`cause`）多了 `protocol`。
   - 這份檔是稽核用的，serve 不讀、不輪替、不截斷。要清，先停 serve 再處理。
 
+### 成對執行：對話行程連組合行程的橋
+
+**只在成對執行時適用**：監督行程起一對（組合行程 `nexus-composition` 加對話行程，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）時，對話行程的命令列多一個 `--pair-socket <路徑>`。沒有這個旗標的對話行程，這一節的東西一行都不會執行（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）。
+
+- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。已綁別條 thread 或 payload 不對時回錯，組合行程不送 `bound`、不重試。
+- **前台的連線不走橋**：組合行程聽前台的 `--socket`，原樣轉到對話行程自己聽的 `--socket`。橋斷了，前台流量照通。
+- **橋斷了，對話行程自己結束**：組合行程在葉子斷線後不收同一個葉子重連，留著沒有路能恢復。
+  - 還沒 `attach` 成功（沒綁，或 `handler.open` 還在跑）：立刻結束。
+  - 已綁：先停收會開新一輪的命令（`stopAdmission`，已在跑的一輪與串流照舊），閒了就結束；等滿 **120 秒**還不閒就強制結束。**120 秒是暫定值，沒量過一輪的長度分布。**
+  - stderr 記原因（已綁且忙時多記一行等待的說明）；結束前最多等 serve 收尾 5 秒。
+- **結束碼**（監督行程不對這兩個碼賦予意義，`supervisor-audit.jsonl` 只原樣記 `exit_code`；死因記成 `crash`，只能靠結束碼與 stderr 跟真的壞掉分開）：
+
+  | 結束碼 | 意思                                                                           |
+  | ------ | ------------------------------------------------------------------------------ |
+  | 70     | 橋斷了，對話行程自己結束                                                       |
+  | 71     | 20 秒內連不上橋（暫定值），對話行程自己結束；沒有橋就沒有 `attach`，這一對廢了 |
+
+- **已知限制**：橋斷到結束之間，這個對話行程在監督行程眼中仍是活的、仍佔名額；`stopAdmission` 之後進來的新一輪被拒，前台回 `server_closing`（web 照既有的 `SERVER_CLOSING_TEXT` 顯示「伺服器正在重新啟動，這次沒有送出。請稍後再送一次。」），使用者的那個請求失敗，不會被分到別的對話行程。分流在監督行程與組合行程那一側（[#2858](https://github.com/DemianLi/nexus-agent/issues/2858)）。被拒時前台拿到什麼是讀碼的結論，沒有實跑。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），

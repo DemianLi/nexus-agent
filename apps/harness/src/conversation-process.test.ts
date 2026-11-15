@@ -19,6 +19,7 @@ import { appendDecision, createWireClient, uniformDecisions } from '@nexus/wire'
 import type { AiEntry, ConversationState, WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { parseConversationArgs } from './conversation-process.js';
 import { approvalAt, foldTurn } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
@@ -288,4 +289,39 @@ describe('對話行程經 Unix socket 跑一整段對話', () => {
     expect(stderr).toContain('要恰好 700');
     expect(stdout).toBe('');
   }, 60_000);
+});
+
+describe('parseConversationArgs', () => {
+  it('沒有 --pair-socket：不帶 pairSocketPath，其餘原樣交給 serve', () => {
+    expect(parseConversationArgs(['--socket', '/s/a.sock', '--live'])).toEqual({
+      socketPath: '/s/a.sock',
+      serveArgv: ['--live'],
+    });
+  });
+
+  it('有 --pair-socket：抽出路徑，不留在交給 serve 的旗標裡', () => {
+    expect(
+      parseConversationArgs([
+        '--live',
+        '--socket',
+        '/s/l.sock',
+        '--pair-socket',
+        '/s/p.sock',
+        '--x',
+      ]),
+    ).toEqual({
+      socketPath: '/s/l.sock',
+      pairSocketPath: '/s/p.sock',
+      serveArgv: ['--live', '--x'],
+    });
+  });
+
+  it('--pair-socket 沒給路徑就拋', () => {
+    expect(() => parseConversationArgs(['--socket', '/s/l.sock', '--pair-socket'])).toThrow(
+      '--pair-socket 要給路徑',
+    );
+    expect(() =>
+      parseConversationArgs(['--socket', '/s/l.sock', '--pair-socket', '--live']),
+    ).toThrow('--pair-socket 要給路徑');
+  });
 });

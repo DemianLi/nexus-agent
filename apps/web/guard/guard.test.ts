@@ -29,6 +29,8 @@ import {
   type TextSample,
   type Theme,
   AXE_KNOWN,
+  AXE_KNOWN_OVERLAYS,
+  AXE_PAGE_RULES,
   collectAxe,
   collectBackdrops,
   collectChips,
@@ -705,6 +707,77 @@ describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：
   });
 });
 
+/** `?overlay=` 的每個子頁名，從測試頁的原始碼讀：加了子頁就會被下面逐頁掃的測試掃到。 */
+const OVERLAY_SOURCE = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+const OVERLAY_NAMES = [
+  ...new Set(
+    [
+      ...OVERLAY_SOURCE.slice(OVERLAY_SOURCE.indexOf('function OverlayPage')).matchAll(
+        /case '([\w-]+)':/g,
+      ),
+    ].map((m) => m[1] ?? ''),
+  ),
+];
+
+/**
+ * axe 掃每個子頁（#2765）：上面那一組只掃總覽，浮層開著、選單展開的樣子都在子頁上。
+ * 每頁亮暗各掃一次；違規照「規則 元素」合起來比，不分是哪一頁的。問整份文件結構的規則不跑（`AXE_PAGE_RULES`）。
+ */
+describe.each<Theme>(['light', 'dark'])('axe 掃每個子頁（#2765）：%s', (theme) => {
+  /** 一次開幾頁。 */
+  const BATCH = 4;
+  const found = new Map<string, { help: string; pages: string[] }>();
+  let scanned = 0;
+  /** axe 判不出來的 color-contrast 筆數：有記到表示看像素的規則真的跑了。 */
+  let judged = 0;
+
+  beforeAll(async () => {
+    for (let i = 0; i < OVERLAY_NAMES.length; i += BATCH) {
+      const batch = OVERLAY_NAMES.slice(i, i + BATCH);
+      const results = await Promise.all(
+        batch.map(async (name) => {
+          const page = await openOverlay(name, theme, { marks: {} });
+          try {
+            return await collectAxe(page, AXE_PAGE_RULES);
+          } finally {
+            await page.close();
+          }
+        }),
+      );
+      results.forEach((result, offset) => {
+        scanned += 1;
+        judged += result.incomplete['color-contrast'] ?? 0;
+        for (const v of result.violations) {
+          const entry = found.get(v.key) ?? { help: v.help, pages: [] };
+          entry.pages.push(batch[offset] ?? '');
+          found.set(v.key, entry);
+        }
+      });
+    }
+    report[`${theme}:axe-overlays`] = Object.fromEntries(found);
+  }, 240_000);
+
+  test('沒有已知清單以外的違規', () => {
+    const known = new Set(AXE_KNOWN_OVERLAYS.map((k) => k.key));
+    expect(
+      [...found]
+        .filter(([key]) => !known.has(key))
+        .map(([key, v]) => `${key}（${v.help}）：${[...new Set(v.pages)].join('、')}`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：每個子頁都掃到了，看像素的規則真的跑了', () => {
+    expect(scanned).toBe(OVERLAY_NAMES.length);
+    expect(scanned).toBeGreaterThan(40);
+    expect(judged).toBeGreaterThan(0);
+  });
+});
+
 describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：%s', (theme) => {
   let page: Page;
   let buttons: Record<string, { height: number; opacity: string; pointerEvents: string }>;
@@ -804,15 +877,6 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
   /** 一次開幾頁。 */
   const BATCH = 4;
 
-  const source = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
-  const names = [
-    ...new Set(
-      [...source.slice(source.indexOf('function OverlayPage')).matchAll(/case '([\w-]+)':/g)].map(
-        (m) => m[1] ?? '',
-      ),
-    ),
-  ];
-
   async function scan(name: string): Promise<{ missing: string[]; kinds: string[] }> {
     const page =
       name === ''
@@ -858,7 +922,7 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
   test('選取與面都有邊框或外框', async () => {
     const missing = new Set<string>();
     const kinds = new Set<string>();
-    const pages = ['', ...names];
+    const pages = ['', ...OVERLAY_NAMES];
     for (let i = 0; i < pages.length; i += BATCH) {
       const batch = pages.slice(i, i + BATCH);
       const results = await Promise.all(batch.map(scan));
