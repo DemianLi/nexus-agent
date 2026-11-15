@@ -2,16 +2,14 @@
  * 從會話日誌推回模型的對話歷史——續接時灌回 graph state 的那一串
  * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）。
  *
- * ## 照 dsh 的哪一段
+ * ## 哪幾種事件產訊息
  *
- * dsh 的模型歷史由日誌推出來：`Session.deriveMessages()` 逐顆走 surface 上的節點，交給
- * `deriveEventMessage` 投影（`packages/core/session/src/index.ts:832`、`surface.ts:92`，`c291e79`）。
- * **我們沒有 surface 那一軸**（每顆事件上的 `surfaceOp`），所以「哪幾種事件產訊息」是型別
+ * 日誌上沒有 surface 那一軸（每顆事件上的 `surfaceOp`），所以「哪幾種事件產訊息」是型別
  * {@link ./session-log.ts | ModelVisibleEventType}（人打的字在 `turn/start`，模型回覆在
  * `assistant/message`，工具結果在 `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在
  * `compaction/summary`），迴圈先用守衛 `isModelVisibleEvent` 分兩支：子聯集那一支逐種窮舉
- * （`default` 是 `satisfies never`，同 dsh session-reference 的投影），其餘那一支只做記帳、
- * `default` 照舊不管（同 dsh 的 `deriveEventMessage`，因為詞彙可以被別的套件擴充）。
+ * （`default` 是 `satisfies never`，漏一種編不過），其餘那一支只做記帳、`default` 不管
+ * （詞彙可以被別的套件擴充，不認得的事件不算錯）。跟 dsh 的對照見 docs/conversation-replay-vs-dsh.md。
  *
  * ## 推出來的串要跟 graph state 一則對一則
  *
@@ -52,35 +50,32 @@
  * 東西。它在這裡是**座標的重設點**：續接時灌回去的那一串就是新 state 的原始訊息串，之後的切點以它為
  * 座標。所以穿過它時，推出來的換成那時灌回去的那一串（壓縮過就是摘要加之後的，連同補上的結果）。
  *
- * ## 沒配到結果的呼叫：照 dsh 的 `repair.ts` 補
+ * ## 沒配到結果的呼叫：補一則錯誤結果
  *
  * 行程在工具跑到一半、或停在核准點時結束，會留下一則帶 `tool_calls` 卻沒有對應 ToolMessage 的回覆，
  * 供應商會拒收整串。基座的 `patchToolCallsMiddleware` 會補（實測續接之後走得到它），但它那句話說
- * 「another message came in」，成因是錯的（#265 的 Q12）。所以照 dsh 的 `interruptedTurnClosers`
- * （`packages/core/session/src/repair.ts`，`c291e79`）補：記過 `tool/call` 的說結果不明、先確認外部狀態，
- * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
- * 那個位置也會有一則（基座補的），一則對一則照樣成立。
+ * 「another message came in」，成因是錯的（#265 的 Q12）。所以這裡補：記過 `tool/call` 的說結果不明、
+ * 先確認外部狀態，沒記過的說還沒開始、要就重試。句子與 dsh 逐字相同（見 {@link TOOL_OUTCOME_UNKNOWN_TEXT}）。
+ * 一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
  * **配不到任何呼叫的結果（孤兒）照送**：推導只把日誌上有的推出來，不替它判對錯；今天送出前丟掉孤兒的是請求端的 `patchToolCallsMiddleware`。補結與孤兒的規則在推導端只有這一份：
  * 補的是 {@link ReplayFold.pendingMessages}（句子在 {@link closer}），孤兒在 `tool/result` 那一支。請求端的 `patchToolCallsMiddleware`
  * 是另一套（句子不同、孤兒丟掉）。TODO(#2355)：推導成為唯一來源時拿掉它，孤兒由哪一層擋要一起定。
  *
  * **續接時當掉那一輪的補結寫回日誌**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
-dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
-（`packages/session-query/session-query/src/cold-read.ts`）。我們的寫回在 {@link ./interrupted-turn.ts}：當掉那一輪
-沒配到結果的呼叫各補一顆錯誤 `tool/result`（記過 `tool/call` 的說結果不明，沒記過的說還沒開始），開著的 `model/start`
-補 `model/end`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是日誌上那些，句子同一句。
-**沒記過 `tool/call` 的那種也寫回了**（卡上原本留的一條偏離，理由是我們的配對不變量；dsh 對合成的「還沒開始」結果明文放行，
-`packages/core/session/src/invariant.ts:142-145`，不變量現在也放行，見 `invariant.ts`）。**記憶體裡補的 {@link closer} 還在**，
-管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上是收掉的——`interrupt/raised` 之後有
-`turn/end`；一輪失敗、當場補寫也失敗的；以及舊檔），那種不在「開著的最後一輪」，不在寫回的射程。
+ * 寫回在 {@link ./interrupted-turn.ts}：當掉那一輪沒配到結果的呼叫各補一顆錯誤 `tool/result`（記過 `tool/call` 的說結果
+ * 不明，沒記過的說還沒開始），開著的 `model/start` 補 `model/end`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是
+ * 日誌上那些，句子同一句。**沒記過 `tool/call` 的那種也寫回**，理由是我們的配對不變量（`invariant.ts`）放行這種合成結果。
+ * **記憶體裡補的 {@link closer} 還在**，管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上
+ * 是收掉的——`interrupt/raised` 之後有 `turn/end`；一輪失敗、當場補寫也失敗的；以及舊檔），那種不在「開著的最後一輪」，
+ * 不在寫回的射程。跟 dsh 的對照見 docs/conversation-replay-vs-dsh.md。
  *
- * **補結可能落在 `session/end-seed` 之後**（舊檔「開著的輪＋end-seed、之後沒有新輪」，照 dsh 的掃描在 end-seed 不重設，
+ * **補結可能落在 `session/end-seed` 之後**（舊檔「開著的輪＋end-seed、之後沒有新輪」，補結掃描在 end-seed 不重設，
  * 補結接在 end-seed 後面，見 `interrupted-turn.ts`）。所以 end-seed 不能立刻把還沒配齊的那一批補完——補寫的結果可能緊跟在後面，
  * 補了兩次模型就會讀到兩顆同一個 callId 的結果。那一批留到下一則訊息進來（或整份推完）才補，這個時候後面有沒有補寫的結果就已經
  * 清楚了；對沒有補寫的舊檔，補出來的是同一組句子，只是晚一步。
  *
-推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
+ * 推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
  *
  * ## 推不出來就整串不灌
  *
@@ -136,11 +131,17 @@ export function isEmptyAssistant(message: NexusMessage): boolean {
   );
 }
 
-/** 記過 `tool/call`、結果沒記下來的那次。逐字照抄 dsh `repair.ts:106`。 */
+/**
+ * 記過 `tool/call`、結果沒記下來的那次。與 dsh 的 `CLOSER_TEXT.interrupted.started` 逐字相同，
+ * 這是模型讀得到的文字，措辭就是行為，不要改字；出處與核對見 docs/conversation-replay-vs-dsh.md。
+ */
 export const TOOL_OUTCOME_UNKNOWN_TEXT =
   'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.';
 
-/** 回覆裡要了、還沒記到 `tool/call` 的那次。逐字照抄 dsh `repair.ts:107`。 */
+/**
+ * 回覆裡要了、還沒記到 `tool/call` 的那次。與 dsh 的 `CLOSER_TEXT.interrupted.notStarted` 逐字相同，
+ * 不要改字；出處見 docs/conversation-replay-vs-dsh.md。
+ */
 export const TOOL_NOT_STARTED_TEXT =
   'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.';
 
@@ -209,7 +210,7 @@ export interface DeriveOptions {
    *
    * 給要知道「推出來的串裡哪一則出自日誌哪一顆」的讀者：會話內容搜尋（`apps/harness` 的 `thread-search.ts`，
    * [#631](https://github.com/DemianLi/nexus-agent/issues/631)）拿它判哪幾顆還在模型看得到的那一串上，
-   * 同 dsh 的 `foldSurface` 分 `current` 與 `shadowed`。拿到的是推出來的那一則本身（工具結果是換過預覽之後的），
+   * 拿到的是推出來的那一則本身（工具結果是換過預覽之後的），
    * 所以跟回傳的 `messages` 可以用物件身分對。
    */
   readonly origin?: (message: NexusMessage, event: SessionEvent) => void;
@@ -232,7 +233,7 @@ interface PendingBatch {
   readonly calls: readonly { readonly id: string; readonly name: string }[];
   /** callId → 那顆結果，加上跟著它注入的訊息。 */
   readonly results: Map<string, NexusMessage[]>;
-  /** 記過 `tool/call` 的。補結果時據此挑 dsh 的哪一句。 */
+  /** 記過 `tool/call` 的。補結果時據此挑 {@link TOOL_OUTCOME_UNKNOWN_TEXT} 或 {@link TOOL_NOT_STARTED_TEXT}。 */
   readonly started: Set<string>;
 }
 
@@ -364,7 +365,7 @@ export class ReplayFold {
     const fail = (reason: UnreplayableReason): void => {
       this.#failure = { reason, seq: event.seq };
     };
-    // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
+    // 先照型別分兩支（#681）：會進模型的那五種窮舉，其餘只做記帳。
     // 讀事件內容拋的錯，訊息帶事件種類與 seq（#2836）。讀 `data` 的每一種都在這一層裡，不分進不進模型。
     readingEvent(event, () => {
       if (isModelVisibleEvent(event)) {
