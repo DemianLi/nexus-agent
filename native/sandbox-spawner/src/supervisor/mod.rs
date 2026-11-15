@@ -2912,7 +2912,7 @@ mod tests {
         supervisor.check_pairs();
     }
 
-    /// 組合行程的一則 `ready` 進了管線、監督行程還沒讀。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
+    /// 組合行程的一則 `ready` 進了管線、監督行程還沒讀（當成它已經送過 `hello`）。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
     fn composition_ready_in_the_pipe(supervisor: &mut Supervisor) {
         let composition = &mut supervisor.compositions[0];
         composition.proc.hello = true;
@@ -2990,8 +2990,8 @@ mod tests {
         );
     }
 
-    /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不變、不送 `bind`、不起算沉默。測試裡開始收之後通道的寫端就關了，
-    /// 所以 `ready` 先放進管線再開始收；之後讀端讀到 EOF，表示那則 `ready` 已經讀過。
+    /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
+    /// 所以 `ready` 先放進管線再開始收；之後讀端讀到 EOF、死因還是空的，表示那則 `ready` 讀到了、也解開了（解不開的會記 `crash`）。
     #[test]
     fn a_ready_from_a_composition_being_collected_does_not_advance_the_pair() {
         let since = Instant::now();
@@ -3002,10 +3002,11 @@ mod tests {
         supervisor.on_composition_readable(0);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.stop.is_some() && composition.proc.chan.read_closed());
+        assert!(composition.cause.is_none());
         assert_eq!(composition.state(), PairState::Starting { since });
         assert!(composition.heard_at.is_none());
 
-        // 起動期限到了被殺，收屍之前才讀到 `ready`。葉子還在：它等組合行程收完屍才連帶收。
+        // 被當場殺掉（起動期限到了；補葉子時也可能是停住太久），判之前讀過的那一次之後才進管線的 `ready`。葉子還在：它等組合行程收完屍才連帶收。
         for (tag, state) in [
             ("late-starting", PairState::Starting { since }),
             ("late-refilling", PairState::Refilling { since }),
@@ -3016,6 +3017,7 @@ mod tests {
             supervisor.on_composition_readable(0);
             let composition = &supervisor.compositions[0];
             assert!(composition.proc.chan.read_closed(), "{tag}");
+            assert!(composition.cause.is_none(), "{tag}");
             assert_eq!(composition.state(), state, "{tag}");
             assert!(composition.heard_at.is_none(), "{tag}");
             let leaf = &supervisor.conversations[0];
