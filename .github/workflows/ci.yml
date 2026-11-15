@@ -548,6 +548,7 @@ jobs:
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
       # 「批次窗口裡那一句搜得到」用 per-thread 再跑一次（#2689）：靠前台搜之前請對話行程排空。只跑這一支，同檔其餘測的是前台搜尋本身，與行程模型無關。
       # 沒設 NEXUS_E2E_PROCESS_MODEL 時照 single 跑、照樣綠，所以 env 要釘；`-t` 篩不到任何一支時 vitest 照樣 exit 0，test_ci_workflow.py 釘住這個名字還在。
       - name: per-thread 跑內容搜尋
@@ -589,6 +590,7 @@ jobs:
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
           NEXUS_SUPERVISOR_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-supervisor
+          NEXUS_COMPOSITION_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-composition
 
   # 真瀏覽器的對話 e2e（#1602）：子行程起真的 serve（模型是腳本，不帶 key、不打模型端點），供應這裡 build 出來的 dist，Chrome 開它。
   # 只在合併後完整一輪跑（#1602；#2088 決議第 5 條：瀏覽器檢查不擋功能 PR 的 gate）：PR 與 main 的 push 上 skipped，gate 照 inputs.full 判。

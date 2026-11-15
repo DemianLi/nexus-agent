@@ -613,7 +613,7 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['packages/nexus-host-bridge/package.json']), 'true')
         for seam in ('process-launcher', 'front-process', 'front-wire', 'front-forward', 'supervisor-client',
                      'supervisor-protocol', 'conversation-process', 'conversation-control', 'host-client', 'peer-socket-auth',
-                     'forwarded-principal', 'per-thread.integration.test'):
+                     'forwarded-principal', 'per-thread.integration.test', 'pair-leaf', 'pair-leaf.test', 'pair-leaf.process.test'):
             self.assertEqual(self.rust([f'apps/harness/src/{seam}.ts']), 'true', seam)
         # 這兩支常被碰到，刻意不編 Rust，理由見 plan_ci.py 的 RUST_RE 上方（#2341）。
         self.assertEqual(self.rust(['apps/harness/src/serve.ts']), 'false')
@@ -755,6 +755,7 @@ class SandboxSpawner(unittest.TestCase):
                 self.assertIn(f' src/{suite}.integration', step['run'], (job, suite))
             self.assertEqual(step['env']['NEXUS_SPAWNER_BIN'], release + 'nexus-sandbox-spawner', job)
             self.assertEqual(step['env']['NEXUS_SUPERVISOR_BIN'], release + 'nexus-supervisor', job)
+            self.assertEqual(step['env']['NEXUS_COMPOSITION_BIN'], release + 'nexus-composition', job)
 
     def test_light_mode_still_builds(self) -> None:
         result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
