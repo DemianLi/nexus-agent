@@ -2246,6 +2246,29 @@ function PrimitivesPage() {
   );
 }
 
+/** 輸入欄位的各種狀態：空的（看得到 placeholder）、有字、停用、驗證沒過。 */
+function FieldsPage() {
+  const column = { display: 'flex', flexDirection: 'column', gap: 8 } as const;
+  return (
+    <main style={{ ...column, gap: 16, padding: 24, width: 360 }}>
+      <h1>Input</h1>
+      <div data-guard-fields="input" style={column}>
+        <Input aria-label="空的單行欄位" placeholder="還沒填" />
+        <Input aria-label="有字的單行欄位" defaultValue="已經填了字" />
+        <Input aria-label="停用的單行欄位" defaultValue="停用" disabled />
+        <Input aria-label="沒過驗證的單行欄位" defaultValue="格式不對" aria-invalid />
+      </div>
+      <h1>Textarea</h1>
+      <div data-guard-fields="textarea" style={column}>
+        <Textarea aria-label="空的多行欄位" placeholder="還沒填" />
+        <Textarea aria-label="有字的多行欄位" defaultValue={'第一行\n第二行'} />
+        <Textarea aria-label="停用的多行欄位" defaultValue="停用" disabled />
+        <Textarea aria-label="沒過驗證的多行欄位" defaultValue="格式不對" aria-invalid />
+      </div>
+    </main>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -2420,6 +2443,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ButtonsPage />;
     case 'primitives':
       return <PrimitivesPage />;
+    case 'fields':
+      return <FieldsPage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':
