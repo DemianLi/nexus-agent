@@ -16,7 +16,7 @@
  * ```
  *
  * 條目寫進去之後不再改：下一次摘要把舊的 `<index>` 內文**原樣**抄過來、新條目接在後面，所以這一段跨多次摘要逐位元組
- * 相同，請求前綴的快取失效點落在 `<state>`。方括號那一行由程式組，模型寫的只有標題、內文與錨點。
+ * 相同，請求前綴的快取失效點落在舊索引之後（新條目起）。方括號的指標由程式組，模型寫的是標題、各行、錨點與取代。
  *
  * 沒有 `<index>` 的本文是這個形狀出現以前的摘要：整份當現況，條目從零開始。
  *
@@ -25,7 +25,7 @@
  * @module
  */
 
-/** 條目各格的上限（字元）。超過不截斷：那一筆不成立，見 {@link parseEntryDraft}。 */
+/** 條目各格的上限（字元；`lines` 是行數）。超過不截斷：那一筆不成立，見 {@link parseEntryDraft}。 */
 export const SUMMARY_ENTRY_LIMITS = {
   title: 160,
   lines: 3,
@@ -34,12 +34,11 @@ export const SUMMARY_ENTRY_LIMITS = {
   supersedes: 240,
 } as const;
 
-/** 現況的上限（字元）。超過不截斷：這次摘要不成立。 */
+/** 現況的上限（字元）。超過不截斷：重生一次，仍超過這次摘要就不成立。 */
 export const SUMMARY_STATE_MAX_CHARS = 24_000;
 
 /**
- * 索引條目那一次呼叫的指令：接在要描述的那一段後面，當最後一則 user 訊息。本文裡不能有 `{conversation}`
- * （模板形狀下基座只換第一個）。
+ * 索引條目那一次呼叫的指令：接在要描述的那一段後面，當最後一則 user 訊息。
  */
 export const SUMMARY_ENTRY_INSTRUCTION = [
   'You are now writing ONE index entry for a compaction log. Describe only the messages ABOVE that come after the most recent summary message (or the whole conversation if there is no summary message). Do not describe the summary message itself.',
@@ -149,7 +148,7 @@ const hasTag = (text: string): boolean => /<\/?[a-zA-Z][^>]*>/.test(text);
 
 /**
  * 把模型對 {@link SUMMARY_ENTRY_INSTRUCTION} 的回覆讀成條目。認不得的行、超過上限、帶角括號標籤都算不成立，
- * **不截斷**：截斷的錨點是錯的錨點。
+ * **不截斷**：截斷的錨點是錯的錨點。「- 」行要在 `Anchors`／`Supersedes` 之前，這兩種行各至多一行。
  *
  * @param text - 模型的回覆。
  * @param earlierEntries - 已經有幾筆條目；`Supersedes` 指到的序號超出範圍時丟掉那一行，其餘照留。
@@ -204,21 +203,4 @@ export function parseEntryDraft(
     ...(anchors === undefined ? {} : { anchors }),
     ...(supersedes === undefined ? {} : { supersedes }),
   };
-}
-
-/**
- * @param indexText - `<index>` 的內文。
- * @returns 最後一筆條目的序號與範圍；沒有條目回 `undefined`。
- */
-export function lastSummaryEntryPointer(
-  indexText: string,
-): { readonly index: number; readonly range: readonly [number, number] } | undefined {
-  const pointers = indexText
-    .split('\n')
-    .map((line) => POINTER.exec(line))
-    .filter((match) => match !== null);
-  const last = pointers.at(-1);
-  return last === undefined
-    ? undefined
-    : { index: Number(last[1]), range: [Number(last[2]), Number(last[3]) + 1] };
 }

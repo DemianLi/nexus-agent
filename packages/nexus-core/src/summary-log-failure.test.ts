@@ -180,8 +180,7 @@ describe('摘要記不進去：門檻觸發（dsh 的 pressure 路徑）', () =>
     // 歷史檔：#1389 的暫存層沒看到事件也沒看到 Command，丟掉，後端一次都沒寫。
     expect(r.writes).toEqual([]);
     expect(summaries(r.log)).toEqual([]);
-    // 摘要只生一次、只試記一次。
-    // 摘要只生一次：索引條目一次、現況一次。
+    // 摘要只生一次（索引條目一次、現況一次）、只試記一次。
     expect(r.invokes).toBe(2);
     expect(r.summaryAppends).toBe(1);
     expect(r.reports).toHaveLength(1);

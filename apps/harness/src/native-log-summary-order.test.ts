@@ -37,7 +37,7 @@ const SUMMARY_DELAY_MS = 40;
 
 /** 使用者每一句的墊料與模型每一輪的回話，大小同 `compaction-log.test.ts`：幾句就頂過 3,000 token 的門檻。 */
 const USER_PAD = '內容'.repeat(100);
-/** 第一行加「- 」的兩三行是合格的索引條目，所以摘要那次的假回覆只叫一次（條目一次、現況一次）。 */
+/** 第一行加「- 」的兩三行是合格的索引條目，所以條目那次不重叫，每次摘要恰好兩次呼叫（條目、現況）。 */
 const BODY_LINE = `- ${'這是一段普通長度的回話。'.repeat(10)}`;
 const BODY = ['本段對話', BODY_LINE, BODY_LINE, BODY_LINE].join('\n');
 

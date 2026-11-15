@@ -400,7 +400,7 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
 
     // 前面十二輪在預設那顆上，沒有一次摘要。
     expect(sizes(run.defaultModel, false)).toHaveLength(12);
-    // 換過去那一步：摘要請求（條目、現況各一次）送進**預設那顆**（它裝得下），而且那份請求比小的窗口還大——所以小的收下會超窗。
+    // 換過去那一步：摘要請求（條目、現況各一次）送進**預設那顆**（它裝得下），而且兩份請求都比小的窗口還大——所以小的收下會超窗。
     const summaryRequests = sizes(run.defaultModel, true);
     expect(summaryRequests).toHaveLength(2);
     for (const size of summaryRequests) expect(size).toBeGreaterThan(SMALL_LIMITS.contextWindow);

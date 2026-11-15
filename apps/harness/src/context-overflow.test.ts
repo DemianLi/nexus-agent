@@ -354,7 +354,7 @@ describe('摘要那次呼叫失敗', () => {
 
   it('我們自己的預算門檻觸發、摘要壞了：warn 一條，照原請求往下走，整場不倒', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // 門檻壓到 1：第 2 次起每次都要摘要。第一次摘要的條目那次呼叫（整體第 2 次）壞掉，第 3、4 次的摘要正常。
+    // 門檻壓到 1：第 2 次起每次都要摘要。第 2 次的摘要（它的條目那次呼叫）壞掉，第 3、4 次的摘要正常。
     const { rejected, calls, events } = await runUntilThrow(
       null,
       0,
@@ -367,7 +367,7 @@ describe('摘要那次呼叫失敗', () => {
     const lines = warn.mock.calls.map((call) => String(call[0]));
     expect(lines.filter((line) => line.includes('照原請求送出'))).toHaveLength(1);
     expect(lines.join('\n')).toContain('摘要模型當場炸了');
-    // 第一次摘要壞了沒有留下 compaction/summary；第 3、4 次各一筆。
+    // 第 2 次的摘要壞了沒有留下 compaction/summary；第 3、4 次各一筆。
     expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(2);
     // 4 次模型節點 ＋ 壞掉的那次摘要（只叫了條目一次）＋ 兩次正常摘要（各兩次）。
     expect(calls).toBe(9);

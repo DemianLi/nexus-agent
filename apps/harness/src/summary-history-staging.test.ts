@@ -239,7 +239,7 @@ describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ', 'EQ']);
   });
 
-  /** 呼叫：4、7 超窗（每次摘要兩呼叫，各次重送之前分別有兩次重摘）。 */
+  /** 呼叫：4、7 超窗（每次摘要兩呼叫，各次重送之前是一次重摘（兩次呼叫））。 */
   it('S6 超窗兩次：一段，不是三段巢狀', async () => {
     const run = await converse({ behavior: (n) => (n === 4 || n === 7 ? 'overflow' : 'ok') });
 

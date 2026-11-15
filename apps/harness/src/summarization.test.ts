@@ -1391,7 +1391,7 @@ describe('一般長對話不會退化成逐輪重摘', () => {
   it('prompt 的訊息數是鋸齒不是平線', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
     // 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。第一行是合格的索引條目標題，
-    // 摘要那次的假回覆才只叫一次（條目一次、現況一次）。
+    // 條目那次才不重叫，每次摘要恰好兩次呼叫（條目、現況）。
     const line = `- ${'這是一段普通長度的回話。'.repeat(12)}`;
     const body = ['本段對話', line, line, line].join('\n');
     const model = new ScriptedChatModel({
@@ -1502,7 +1502,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   /**
    * 叫 `count` 次 bulk 再收尾的腳本。
    *
-   * `spare` 是**留給摘要器自己那次模型呼叫**的。腳本用完會拋，所以「摘要器動手了」在
+   * `spare` 是**留給摘要器現況那次模型呼叫**的；`summarized` 為 true 時在工具輪後插一輪合格的索引條目，給條目那次。腳本用完會拋，所以「摘要器動手了」在
    * 沒有備料的腳本上會表現成一個看不出所以然的例外，而不是一個多出來的呼叫次數。
    */
   function bulkTurns(count = 1, spare = 0, summarized = false): ScriptedChatModel {
@@ -1745,7 +1745,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   it('toolResultPruning 的覆寫會生效', async () => {
     const medium = 'M'.repeat(5_000);
     const budget = { thresholdChars: 2_000, headChars: 500, tailChars: 100 };
-    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要；摘要那兩次呼叫（條目、現況）各吃一份備料。
+    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要；條目那次吃那一輪索引條目，現況那次吃備料。
     const model = bulkTurns(1, 1, true);
     const { agent, dispose } = await createNexusAgent({
       model,

@@ -1188,7 +1188,6 @@ export { noteSentRequest } from './last-sent-request.js';
 export type { SentHistoryReader } from './summarization.js';
 export {
   composeSummaryHead,
-  lastSummaryEntryPointer,
   parseEntryDraft,
   parseSummaryHead,
   renderSummaryEntry,

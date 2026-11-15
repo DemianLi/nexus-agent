@@ -468,7 +468,7 @@ describe('會話總帳不含生摘要的那一次（#574）', () => {
     expect(inputs).toHaveLength(2);
     expect(inputs).not.toContain(1000 + summaryAt);
     expect(inputs).not.toContain(1000 + summaryAt + 1);
-    // 摘要那兩次報的用量不進總帳，但加總存在 `compaction/summary.usage`（#1022，照 dsh）：假端點報的 prompt 是 `1000 + 第幾次`、
+    // 摘要那兩次報的用量不進總帳，但加總存在 `compaction/summary.usage`（#1022）：假端點報的 prompt 是 `1000 + 第幾次`、
     // completion 恆為 1，兩次加總後的數字能對上是哪幾次請求。
     expect(eventsOf(run.root, 'compaction/summary')[0]!.usage).toEqual({
       inputTokens: 1000 + summaryAt + (1000 + summaryAt + 1),

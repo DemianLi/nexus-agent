@@ -155,7 +155,7 @@ const USER_PAD = '內容'.repeat(100);
 
 /**
  * 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。第一行加上「- 」的兩三行是合格的索引條目，
- * 所以摘要那次的假回覆只叫一次（條目一次、現況一次）。
+ * 所以條目那次不重叫，每次摘要恰好兩次呼叫（條目、現況）。
  */
 const BODY_LINE = `- ${'這是一段普通長度的回話。'.repeat(10)}`;
 const BODY = ['本段對話', BODY_LINE, BODY_LINE, BODY_LINE].join('\n');

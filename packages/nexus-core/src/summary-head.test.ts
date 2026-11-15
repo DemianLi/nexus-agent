@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   composeSummaryHead,
-  lastSummaryEntryPointer,
   parseEntryDraft,
   parseSummaryHead,
   renderSummaryEntry,
@@ -184,18 +183,5 @@ describe('parseEntryDraft', () => {
     expect(parseEntryDraft('Title: 標題\n- 一行\nAnchors: E1\nSupersedes: #5 不存在的', 1)).toEqual(
       { title: '標題', lines: ['一行'], anchors: 'E1' },
     );
-  });
-});
-
-describe('lastSummaryEntryPointer', () => {
-  it('取最後一筆指標的序號與範圍（範圍是 [起, 迄)）', () => {
-    expect(
-      lastSummaryEntryPointer('[#1 messages 0-5] 標題一\n- 一行\n[#2 messages 6-9]\nAnchors: x'),
-    ).toEqual({ index: 2, range: [6, 10] });
-  });
-
-  it('沒有條目回 undefined', () => {
-    expect(lastSummaryEntryPointer('')).toBeUndefined();
-    expect(lastSummaryEntryPointer('- 只有一行，沒有指標')).toBeUndefined();
   });
 });

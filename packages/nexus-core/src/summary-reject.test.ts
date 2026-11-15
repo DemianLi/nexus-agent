@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { createSummarizer, DEFAULT_SUMMARIZATION, SummaryRejectedError } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { TokenAnchorBook } from './token-estimate.js';
+import { SUMMARY_STATE_MAX_CHARS } from './summary-head.js';
 
 const BIG = '這是一段很長的內容。'.repeat(300);
 const conversation = (): BaseMessage[] => [
@@ -226,5 +227,44 @@ describe('索引條目被拒收：只退成指標，現況照常', () => {
       /<index>\n\[#1 messages 0-\d+\]\n<\/index>\n<state>\n## 正常摘要\n<\/state>/,
     );
     expect(out.model.invokes).toBe(2);
+  });
+});
+
+describe('現況超過字數上限：不截斷，重生一次，仍超過就整次不摘', () => {
+  const tooLong = `## 現況\n${'很長。'.repeat(SUMMARY_STATE_MAX_CHARS / 3)}`;
+
+  it('兩次都超過：照原請求送出那 7 則，warn 一條', async () => {
+    let call = 0;
+    const out = await run({
+      settings: TOKEN_TRIGGER,
+      reply: () => {
+        call += 1;
+        return call === 1 ? reply('Title: 條目') : reply(tooLong);
+      },
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.handled).toHaveLength(1);
+    expect(out.handled[0]).toHaveLength(7);
+    expect(out.reports).toHaveLength(1);
+    expect(out.reports[0]).toContain('照原請求送出');
+    // 索引條目一次、現況兩次（第二次是重生）。
+    expect(out.model.invokes).toBe(3);
+  });
+
+  it('重生的那一次在上限內：照常摘要，用的是重生的那一份', async () => {
+    let call = 0;
+    const out = await run({
+      settings: TOKEN_TRIGGER,
+      reply: () => {
+        call += 1;
+        if (call === 1) return reply('Title: 條目');
+        return call === 2 ? reply(tooLong) : reply('## 正常摘要');
+      },
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.reports).toEqual([]);
+    expect(out.handled[0]!.length).toBeLessThan(7);
+    expect(String(out.handled[0]![0]!.content)).toContain('<state>\n## 正常摘要\n</state>');
+    expect(out.model.invokes).toBe(3);
   });
 });

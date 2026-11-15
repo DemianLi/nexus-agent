@@ -65,8 +65,8 @@ export interface SummarizerEngineOptions {
     readonly truncationText?: string;
   };
   /**
-   * 生摘要的那一次呼叫改送什麼（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。回 `undefined`，或沒給這一格，
-   * 就照 `summaryPrompt` 的模板送一則訊息。
+   * 生摘要的呼叫（索引條目那次與現況那次）改送什麼（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。回 `undefined`，
+   * 或沒給這一格，就送一則 user 訊息：現況那次照 `summaryPrompt` 的模板，條目那次是要摘的那一段接 `SUMMARY_ENTRY_INSTRUCTION`。
    *
    * @param request - 這次的 `wrapModelCall` 請求。
    * @param messagesToSummarize - 要摘的那一段，有效訊息串的開頭。
@@ -105,6 +105,7 @@ interface EngineRequest extends SessionRequest {
 
 type Handler = (request: EngineRequest) => Promise<unknown>;
 
+// `summaryBodyOf` 靠這幾個字面值拆出既有摘要的本文：改了它，既有摘要的索引會被當成現況。
 const SUMMARY_PREAMBLE_HEAD =
   'You are in the middle of a conversation that has been summarized.\n\nThe full conversation history has been saved to ';
 const SUMMARY_PREAMBLE_TAIL =
@@ -112,7 +113,7 @@ const SUMMARY_PREAMBLE_TAIL =
 const SUMMARY_CLOSE = '\n</summary>';
 const SUMMARY_PLAIN_PREFIX = 'Here is a summary of the conversation to date:\n\n';
 
-/** 現況兩次都超過上限：這次摘要不成立。 */
+/** 現況重生一次之後仍超過上限。`summarization.ts` 把它登記成「生摘要失敗」，走既有的退路（照原請求送出）。 */
 export class SummaryStateTooLongError extends Error {
   constructor(readonly length: number) {
     super(`摘要的現況有 ${length} 個字元，超過上限 ${SUMMARY_STATE_MAX_CHARS}；不截斷，這次不摘要`);
@@ -490,6 +491,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
       try {
         text = (await model.invoke(input, call?.options)).text;
       } catch (error) {
+        // 用名字認：`SummaryRejectedError` 定義在 `summarization.ts`，那個檔 import 這個檔。
         if ((error as { name?: unknown } | null)?.name === 'SummaryRejectedError') return undefined;
         throw error;
       }
@@ -500,7 +502,8 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   }
 
   /**
-   * 摘要本文：上一份的索引原樣抄、接這次的新條目，再接重寫過的現況。兩次呼叫都回來才有本文，任一次拋就整次不摘。
+   * 摘要本文：上一份的索引原樣抄、接這次的新條目，再接重寫過的現況。條目讀不成或被拒收時退成只有指標的條目；現況那次拋錯、
+   * 或重生一次仍超過上限，就整次不摘。
    *
    * @throws {SummaryStateTooLongError} 現況兩次都超過 {@link SUMMARY_STATE_MAX_CHARS}。
    */
@@ -517,6 +520,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
         ? parseSummaryHead(summaryBodyOf(first))
         : undefined;
     const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
+    // 迄點是這次摘要落表的切點：送出去的是摘要一則加 `total - messages.length` 則尾巴。
     const range = [
       previousCutoff ?? 0,
       summaryCutoffIndex(previousCutoff, total, 1 + (total - messages.length)),
