@@ -30,8 +30,11 @@ export const KNOWN_DIFFERENCE_KINDS = {
   },
   rawInterrupt: {
     card: 2608,
+    byDesign: true,
     reason:
-      '這一條的工具本體直接呼叫 LangGraph 的 `interrupt()`，不經 `exec.interrupt`，也不經等人服務。native 沒有圖可以接住它再接回。',
+      '這一條的工具本體直接呼叫 LangGraph 的 `interrupt()`，不經 `exec.interrupt`，也不經等人服務；那是 LangGraph 的 API，' +
+      'native 沒有圖可以接住它再接回，也不承諾這條路。native 下它是一則帶原因的 error ToolMessage（不是被吞掉）。停住再接回的正式路徑' +
+      '（等人服務）在兩個 loop 下的涵蓋：`native-loop-assembly.test.ts` 的 ask_user_question 那一條。',
   },
   langgraphInternals: {
     card: 2363,
