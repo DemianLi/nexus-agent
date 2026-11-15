@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 /**
  * SG 的 TurnStatus（#1684）。vendor 檔套了一個 patch（README「本地修改」第 72 條），包裝層擋掉三個 props（第 74 條）。
- * 接到狀態列之後的行為在 `components/status-line.test.tsx`，畫出來的樣子（glyph 在動、shimmer、對比、高度）在 `guard/` 量。
+ * 接到狀態列之後的行為在 `features/status/line.test.tsx`，畫出來的樣子（glyph 在動、shimmer、對比、高度）在 `guard/` 量。
  */
 
 describe('0023：vendor 檔不掛 role="status"', () => {

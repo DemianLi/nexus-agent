@@ -4,12 +4,14 @@
 
 ## 放哪一層
 
+切片、共用層、組裝層怎麼分、誰可以 import 誰，見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。這張表只講元件。
+
 | 層                                    | 放什麼                                                                 | 規則                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/components/ui/`                  | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip、alert-dialog、dropdown-menu、command；#1591 起：composer、context-ring；#1682 起：tool-steps、diff-view）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
-| `src/components/*.tsx`（含各資料夾）  | 我們自己的元件                                                         | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木                                                 | 見下面「什麼時候抽」                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `src/lib/`                            | 不畫畫面的邏輯與投影                                                   | 元件只讀它的結果                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `src/features/<切片>/`、`src/app/`    | 我們自己的元件                                                         | 切片按功能分（`tool/`、`threads/`、`queue/`…），組裝層放 `app/`，檔名不重複資料夾名                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `src/shared/blocks/`                  | 兩處以上共用的自製積木                                                 | 見下面「什麼時候抽」                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `src/shared/lib/`、各切片裡的 `*-view.ts` | 不畫畫面的邏輯與投影                                                   | 元件只讀它的結果                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `src/styles/`、`src/index.css`        | token 與全域樣式                                                       | token 只在這裡定義                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## 只能用系統的值
@@ -177,12 +179,12 @@ token 與共用元件不直接刪（規格 §13.6）：
 
 | 元件 | 檔 | 用在哪 | 預覽 |
 | --- | --- | --- | --- |
-| `RowTrigger` | `row-trigger.tsx` | 可展開的一列：底色、最小高度、圓角、過渡；`fit="card"` 嵌在卡片裡，`fit="bare"` 自己就是一列 | `collapsibles`、`cost` |
-| `Chevron` | `chevron.tsx` | 展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給 | `collapsibles` |
-| `ChatBubble` | `chat-bubble.tsx` | 對話裡的文字泡泡：人的話靠右、子代理寄來的話靠左 | `messages` |
-| `MonoBlock` | `mono-block.tsx` | 夾在說明文字裡的等寬字小框；有標題、有細線的內層底用 `Surface tone="stage"` | `stage-surfaces` |
-| `Surface` | `surface.tsx` | 卡片與內層底：`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的卡片 | `stage-surfaces`、`tool-cards` |
-| `CopyButton` | `copy-button.tsx` | 複製鈕：交付卡的路徑、回覆、程式碼區塊共用同一套行為與回饋 | `stage-surfaces`、`messages` |
+| `RowTrigger` | `shared/blocks/row-trigger.tsx` | 可展開的一列：底色、最小高度、圓角、過渡；`fit="card"` 嵌在卡片裡，`fit="bare"` 自己就是一列 | `collapsibles`、`cost` |
+| `Chevron` | `shared/blocks/chevron.tsx` | 展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給 | `collapsibles` |
+| `ChatBubble` | `shared/blocks/chat-bubble.tsx` | 對話裡的文字泡泡：人的話靠右、子代理寄來的話靠左 | `messages` |
+| `MonoBlock` | `shared/blocks/mono-block.tsx` | 夾在說明文字裡的等寬字小框；有標題、有細線的內層底用 `Surface tone="stage"` | `stage-surfaces` |
+| `Surface` | `shared/blocks/surface.tsx` | 卡片與內層底：`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的卡片 | `stage-surfaces`、`tool-cards` |
+| `CopyButton` | `shared/blocks/copy-button.tsx` | 複製鈕：交付卡的路徑、回覆、程式碼區塊共用同一套行為與回饋 | `stage-surfaces`、`messages` |
 
 - **新增基礎元件或共用元件要同時加一列**，並且在測試頁畫出來（沒有合適的子頁就加一個）。`src/components/ui/components-doc.test.ts` 會紅：`ui/` 有檔沒有列、有列沒有檔、共用元件那張表寫的檔不存在或沒有匯出那個名字、預覽寫的子頁不存在。
 - 測試擋不到的：新抽了一個共用元件卻沒加列（`ui/` 之外沒有固定的資料夾可以對），以及預覽那一頁是不是真的畫了這個元件。抽的那張 PR 自己加列、開目錄看一眼。
@@ -253,8 +255,8 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 
 #1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條；diff 是第 77–80 條）。寫呼叫端時：
 
-- **`ToolEntry` 只經 `lib/tool-step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
-- **寫檔／改檔給 `step.patch`**（#1685 B）：字串只從 `lib/tool-diff.ts` 的 `toolDiffView` 拿（全樹組 unified patch 的只有那裡的 `toolPatch`），卡與段才拿到同一份、nexus 層的 `patchStats` 快取才查得到。上限在 nexus 層的 `DiffView`，不要在轉接層截 patch：vendor 從 patch 算列與段的 `+N −M`，截過就少報。
+- **`ToolEntry` 只經 `features/tool/step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
+- **寫檔／改檔給 `step.patch`**（#1685 B）：字串只從 `shared/lib/tool-diff.ts` 的 `toolDiffView` 拿（全樹組 unified patch 的只有那裡的 `toolPatch`），卡與段才拿到同一份、nexus 層的 `patchStats` 快取才查得到。上限在 nexus 層的 `DiffView`，不要在轉接層截 patch：vendor 從 patch 算列與段的 `+N −M`，截過就少報。
 - **結果自己畫的種類不設 SG 的 `output`／`error`**（讀檔、搜尋、提問、交付、待辦、撞到輸出上限的子代理；diff 走 `step.patch`）：畫在 children，SG 的結果框只給通用卡，不畫兩次。展開後什麼都沒有的列 SG 會停用按鈕，所以空的時候放一句 `emptyNote`。
 - **`StepGroup` 只有一步、而且沒在跑時退化成單獨一列**，`children`、`trailing`、`open` 都不會轉過去：工具段至少兩顆（`tool-runs.ts` 的 `MIN_TOOLS`，有測試釘住）。
 - **段裡沒畫東西的 child 照樣占一格**（SG 逐個包一層有 padding 的 div）：`MessageScrollerItem` 是空的那格由覆寫檔第 66 條藏掉，別在 child 外面再包東西，不然藏不到。
@@ -264,7 +266,7 @@ node apps/web/visual/compare.ts <上一個的截圖> <這一個的截圖> <輸�
 #1684 起狀態列執行中那一列是 SG 的 `TurnStatus`（vendor README 的「本地修改」第 71–74 條）。寫呼叫端時：
 
 - **live region 由 `status-line.tsx` 包在外面**（`<div role="status">`）：vendor 的 `role="status"` 由 patch 拿掉，別的地方畫 `TurnStatus` 不會自己唸。
-- **字固定、glyph 換樣子**：`label` 是「執行中…」，`activity` 由 `lib/turn-activity.ts` 從本輪的 root entry 判；字在 live region 裡，不要跟著 activity 換。
+- **字固定、glyph 換樣子**：`label` 是「執行中…」，`activity` 由 `features/status/turn-activity.ts` 從本輪的 root entry 判；字在 live region 裡，不要跟著 activity 換。
 - **`since`、`tokens`、`children` 型別上傳不進去**（包裝層 `Omit`），經過時間由 `RunningElapsed` 畫在 live region 外；**`trailing` 也在 live region 裡**，不要拿來放會跳動的東西。
 - **jsdom 不畫 glyph**（沒有 `matchMedia`／`IntersectionObserver`，nexus 層回 `null`）：要量真 glyph 的測試用 `src/test/glyph-env.ts`。
 
@@ -278,4 +280,4 @@ Tailwind 會掃整個專案找 class，所以**測試檔與 `apps/web/*.md` 裡�
 
 ## 不假設自己在安全環境
 
-網頁可能從非安全環境打開（內網用 IP 開的 `http://` 頁面），瀏覽器在那裡不給只限安全環境的 API。用到這類 API 要有退路：產 UUID 走 `@/lib/uuid` 的 `randomUuid()`，`crypto.randomUUID` 由 lint 擋下（#1548）；複製走 `@/lib/clipboard` 的 `copyText`，`navigator.clipboard` 拿不到就退回 `execCommand`。
+網頁可能從非安全環境打開（內網用 IP 開的 `http://` 頁面），瀏覽器在那裡不給只限安全環境的 API。用到這類 API 要有退路：產 UUID 走 `@/shared/lib/uuid` 的 `randomUuid()`，`crypto.randomUUID` 由 lint 擋下（#1548）；複製走 `@/shared/lib/clipboard` 的 `copyText`，`navigator.clipboard` 拿不到就退回 `execCommand`。

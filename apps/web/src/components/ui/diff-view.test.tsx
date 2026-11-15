@@ -8,8 +8,8 @@ import {
   PATCH_STATS_CACHE_SIZE,
   patchStats,
 } from '@/components/ui/diff-view';
-import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
-import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
+import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/shared/lib/card-limit';
+import { MAX_RENDERED_LINES } from '@/shared/lib/diff-rows';
 import { patchStats as vendorPatchStats } from '@/vendor/solid-glass/components/ui/diff-view';
 
 // 包一層計次，行為照原樣。

@@ -9,7 +9,7 @@
  *   只加外層、不複製上游標記，走包裝層（#1583 判準）。
  * - **兩色換成 `--success`／`--destructive`**（第 75 條，覆寫檔 `styles/solid-glass.overrides.css`）：SG 的 emerald-600／rose-600 亮色過不了 4.5。
  * - **數字不分位**（#1685 PM 定題 6）：照 SG 畫 `+1234`。分位要改 vendor 標記，為了外觀寫 patch 違反分層規則。
- * - **`DiffView` 畫之前先截**（第 77 條，#1685 PR B 的 X4）：寫檔的 diff 沒有大小上限（`lib/card-limit.ts`），沿用以前 `ToolDiff` 的三道上限，
+ * - **`DiffView` 畫之前先截**（第 77 條，#1685 PR B 的 X4）：寫檔的 diff 沒有大小上限（`shared/lib/card-limit.ts`），沿用以前 `ToolDiff` 的三道上限，
  *   見 {@link capPatch}。截在這一層、不在轉接層：vendor 用 `patchStats(step.patch)` 算列與群組的 +N −M，截過的 patch 會少報。
  *   截好的字串以 `useMemo` 記住，vendor 那顆包 `memo`，工具段跟著串流重畫時不重切。
  * - **`DiffView` 停得上焦點、有名稱**（第 79 條，patch `0024`，X5）：vendor 加 `label` prop，這一層給預設「改動內容」（`StepRow` 不傳）。
@@ -24,9 +24,9 @@ import {
   DiffView as VendorDiffView,
   patchStats as vendorPatchStats,
 } from '@/vendor/solid-glass/components/ui/diff-view';
-import { CARD_LINE_MAX_CHARS, fitRowCount } from '@/lib/card-limit';
-import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
-import { clipMiddle } from '@/lib/tool-output';
+import { CARD_LINE_MAX_CHARS, fitRowCount } from '@/shared/lib/card-limit';
+import { MAX_RENDERED_LINES } from '@/shared/lib/diff-rows';
+import { clipMiddle } from '@/shared/lib/tool-output';
 import { cn } from '@/lib/utils';
 
 function DiffStats({
@@ -56,7 +56,7 @@ const statsCache = new Map<string, { added: number; removed: number }>();
 /**
  * vendor 的 `patchStats` 加一層以字串為鍵、最近最少用先丟的快取，結果照全量算。
  *
- * 同一則工具呼叫的 patch 由 `lib/tool-diff.ts` 的 `toolDiffView` 記住，卡與段拿到同一個字串實例，查快取時 V8 用字串上記著的雜湊，
+ * 同一則工具呼叫的 patch 由 `shared/lib/tool-diff.ts` 的 `toolDiffView` 記住，卡與段拿到同一個字串實例，查快取時 V8 用字串上記著的雜湊，
  * 不必重掃內容。記憶體：快取最多多留住 {@link PATCH_STATS_CACHE_SIZE} 份 patch 字串（那則呼叫已經不在畫面上之後），每份的大小同那張卡的 diff。
  */
 export function patchStats(patch: string): { added: number; removed: number } {

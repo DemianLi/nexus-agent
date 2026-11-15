@@ -69,7 +69,7 @@ describe('浮層的 Trigger 用 render 接 Button', () => {
     expect(trigger.hasAttribute('data-popup-open')).toBe(true);
   });
 
-  test('TooltipTrigger：鍵盤聚焦就出提示（App.tsx 的用法）；Base UI 的提示只是視覺，不帶 role="tooltip"，名稱要寫在 Trigger 上', () => {
+  test('TooltipTrigger：鍵盤聚焦就出提示（app/App.tsx 的用法）；Base UI 的提示只是視覺，不帶 role="tooltip"，名稱要寫在 Trigger 上', () => {
     render(
       <TooltipProvider delay={0}>
         <Tooltip>

@@ -1,6 +1,6 @@
 # apps/web 的 AGENTS.md
 
-碰 `apps/web` 時才需要的規則。怎麼加元件見 [`COMPONENTS.md`](COMPONENTS.md)。
+碰 `apps/web` 時才需要的規則。程式放哪個資料夾、誰可以 import 誰見 [`ARCHITECTURE.md`](ARCHITECTURE.md)；怎麼加元件見 [`COMPONENTS.md`](COMPONENTS.md)。
 
 ## UI/UX 的參照
 
