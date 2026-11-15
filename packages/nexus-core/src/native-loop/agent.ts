@@ -22,10 +22,10 @@
  *
  * 前景子代理也是這個類別（{@link NativeAgentParams.subagent}），由 root 的 `task` 呼叫叫起：它的提問經那顆呼叫的委派進 root 這次 run 的
  * 等人狀態（`suspension.ts`）；模型與工具的事件經繼承的 callbacks 進 root 那條串流，節點收完的 `completed` 經 `configurable` 上 root 的
- * 事件出口補。背景子代理（{@link NativeAgentParams.background}）是 host 叫起的最上層 agent，跟 root 一樣按 thread 留 state、自己交出中斷。
+ * 事件出口補；`getConfig().writer` 寫的 `custom` 也經那個出口送，帶那顆 `task` 呼叫的命名空間。背景子代理（{@link NativeAgentParams.background}）是 host 叫起的最上層 agent，跟 root 一樣按 thread 留 state、自己交出中斷。
  *
- * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
- * 接不住，TODO(#2608)。
+ * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫 LangGraph 的 `interrupt()`
+ * 也不支援（設計如此，#2608）：native 下它是一則帶原因的 error ToolMessage，要停下來問人走等人服務。
  *
  * @module
  */
@@ -1282,8 +1282,25 @@ export class NativeAgent {
         ...withoutKey(config.configurable, RUN_STOP_CONFIG_KEY),
         ...(emitter !== undefined && { [PROTOCOL_EMITTER_CONFIG_KEY]: emitter }),
       },
-      ...(emitter !== undefined && { writer: (chunk: unknown) => emitter.custom(chunk) }),
+      ...(emitter !== undefined
+        ? { writer: (chunk: unknown) => emitter.custom(chunk) }
+        : this.#subagentWriter(config)),
     } as RunnableConfig;
+  }
+
+  /**
+   * 前景子代理自己的 `writer`：前景子代理沒有自己的出口（出口只有經 `streamEvents` 跑的那一層有），事件走 root 那條，但帶叫起它的那顆 `task` 呼叫的命名空間。
+   * 不給的話子代理繼承 root 的 `writer`，`custom` 的命名空間是 `[]`，消費端把子代理的通知當成 root 的
+   * （[#2504](https://github.com/DemianLi/nexus-agent/issues/2504)）。巢狀的子代理各自蓋一層，命名空間逐層變深。
+   * 找不到出口（root 不是經 `streamEvents` 跑）或命名空間（不在圖裡被叫）就沿用繼承來的。
+   */
+  #subagentWriter(config: RunnableConfig): { writer: (chunk: unknown) => void } | undefined {
+    if (this.#params.subagent !== true) return undefined;
+    const parent = parentEmitterOf(config);
+    const parentNs = parentNamespaceOf(config);
+    if (parent === undefined || parentNs === undefined) return undefined;
+    const namespace = parentNs.split('|');
+    return { writer: (chunk: unknown) => parent.custom(chunk, [...namespace]) };
   }
 }
 
@@ -1352,7 +1369,7 @@ function delegatedWaits(config: RunnableConfig): ToolWaits | undefined {
   return delegationOf(config.configurable?.[HUMAN_INPUT_CONFIG_KEY]);
 }
 
-/** root 那條串流的事件出口，放在節點的 `configurable` 上給前景子代理補它那一層的 `completed`。 */
+/** root 那條串流的事件出口，放在節點的 `configurable` 上給前景子代理補它那一層的 `completed`，並讓它的 `writer` 帶子層命名空間送 `custom`（`#subagentWriter`）。 */
 const PROTOCOL_EMITTER_CONFIG_KEY = 'nexus_native_protocol_emitter';
 
 function parentEmitterOf(config: RunnableConfig): ProtocolEmitter | undefined {
