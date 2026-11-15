@@ -1928,6 +1928,87 @@ fn shutdown_answers_a_thread_waiting_for_its_drain_answer_once() {
     );
 }
 
+/// 停機時排著的那條 thread，自己原來的行程被逐出、還在收：它收完回的 `down(evicted)` 前台不當回答，所以停機當場回 `down(shutdown)`（#2799）。
+/// `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段；`b` 的 `capacity` 回來就表示前面那則 `ensure(a)` 已經排進去了。
+#[test]
+fn shutdown_answers_a_thread_queued_behind_its_own_evicted_one() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 2_000,
+        extra: vec!["--idle-ms", "300", "--capacity", "1"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,ignore-eof";
+    let old = h.up(thread);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    h.ensure("b");
+    assert_eq!(h.next_event(), Some(capacity("b", 1, 1)));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    // 先回答排著的，被逐出的那個收完才回它自己的 `down`。
+    assert_eq!(
+        events,
+        [
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Evicted
+            },
+        ]
+    );
+}
+
+/// 停機時排著的那條 thread，自己原來的行程還沒回答 `drain`；前台還沒回 `admission-stopped` 的這段它才回 `drained`。
+/// 這時不算逐出：照停機的順序收，回的是 `down(shutdown)`，排著的那則 `ensure` 才有回答（#2799）。
+#[test]
+fn a_drain_answered_during_shutdown_is_down_shutdown_not_evicted() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec![
+            "--capacity",
+            "2",
+            "--admission-timeout-ms",
+            "2500",
+            "--drain-timeout-ms",
+            "60000",
+        ],
+        ..Options::default()
+    });
+    let thread = "a,idle:1000,slow-drain:1000";
+    let a = h.up(thread);
+    let x = h.up("x");
+    h.ensure("b");
+    assert!(saw_drain(&a));
+    h.ensure(thread);
+    // 前台的要求照順序處理：x 回了 `up`，前一個 `ensure` 就已經排進去了。
+    assert_eq!(h.up("x"), x);
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    let downs_of_a: Vec<_> = events
+        .iter()
+        .filter(
+            |e| matches!(e, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes()),
+        )
+        .collect();
+    assert_eq!(
+        downs_of_a,
+        [&FrontEvent::Down {
+            thread_id: thread.as_bytes().to_vec(),
+            cause: DeathCause::Shutdown
+        }],
+        "{events:?}"
+    );
+}
+
 /// 宿主在另一個 package，跟監督行程編進同一個 target 目錄。
 fn host_bin() -> PathBuf {
     Path::new(SUPERVISOR).parent().unwrap().join("nexus-host")
@@ -3426,6 +3507,36 @@ fn shutdown_answers_a_thread_queued_behind_a_composition_that_will_not_tell_down
             thread_id: b"a".to_vec(),
             cause: DeathCause::Shutdown
         }]
+    );
+}
+
+/// 成對時也一樣（#2799）：被逐出、還在收的是葉子，組合行程等它收完才連帶收，兩個都不會回停機的 `down`。
+#[test]
+fn shutdown_answers_a_thread_queued_behind_its_own_evicted_leaf() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 2_000,
+        extra: vec!["--idle-ms", "300", "--capacity", "1"],
+        ..paired()
+    });
+    let thread = "a,idle:0,ignore-eof";
+    let socket = h.up(thread);
+    let leaf = leaf_socket(&socket);
+    assert!(wait_until(|| log(&leaf).contains(&"eof".to_string())));
+    h.ensure(thread);
+    h.ensure("b");
+    assert_eq!(h.next_event(), Some(capacity("b", 1, 1)));
+    assert_eq!(
+        shut_down(&mut h),
+        [
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Evicted
+            },
+        ]
     );
 }
 

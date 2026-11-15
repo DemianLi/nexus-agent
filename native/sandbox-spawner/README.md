@@ -59,7 +59,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - `stalled`：心跳斷了超過 `--stall-ms`。
   - `evicted`：回了 `drained`、被收掉的（見逐出）。
   - `protocol`：第一框不是版本相等的 `hello`，或 `hello` 沒宣告 loop 在自己這裡。
-  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。停機時還排著的 thread 只回 `down(shutdown)`，不寫稽核，也不算進 `deaths`；那條 thread 還有行程（例如在等它回答 `drain`）的，只在那個行程結束時回一次。
+  - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。停機時還排著的 thread 只回 `down(shutdown)`，不寫稽核，也不算進 `deaths`；那條 thread 還有行程（例如在等它回答 `drain`）的，只在那個行程結束時回一次；等的那段它才回 `drained` 也不算逐出，照停機收、回 `down(shutdown)`。例外是那個行程已經被逐出、正在收：它回的 `down(evicted)` 前台不當回答，所以停機當場先回一則 `down(shutdown)`，它收完再回自己的 `down(evicted)`，同一條 thread 前台會收到兩則 `down`。
 - 已知限制：
   - RSS 上限只管 leader：只讀 leader 自己的 `VmRSS`，不含任何子孫行程（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494)）。常駐的 spawner 與 `--guard` 包的 MCP 伺服器不 `setsid`，跟著群組一起被殺；spawner 起的工具與 `--exec` 包的 MCP 伺服器各自 `setsid`，`memory` 的群組 SIGKILL 打不到它們，靠 `PR_SET_PDEATHSIG` 跟著父行程（spawner／對話行程）死。
   - `host-oom` 的計數涵蓋整個 cgroup（含子 cgroup）：leader 以外的行程（前台、工具）被 OOM 殺掉也會讓計數加一，之後一條無關、被別人 SIGKILL 的對話行程會領走這一次，記成 `host-oom`。
