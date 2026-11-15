@@ -237,6 +237,12 @@ describe('compactionData', () => {
     expect(payload).toEqual({ seq: 7, cutoff: 3, saved: false });
   });
 
+  it('data 壞掉（摘要讀不出來）：訊息帶事件種類與 seq', () => {
+    expect(() =>
+      compactionData(at({ summary: { type: 'human', data: null } }), DEFAULT_TOOL_TEXT_MAX_BYTES),
+    ).toThrow(/^compaction\/summary 事件讀不出來（seq 7）：/);
+  });
+
   it('歷史那一側：逐顆轉，沒有壓縮就沒有這一格', () => {
     const frames = historyFrames([], DEFAULT_TOOL_TEXT_MAX_BYTES);
     expect(compactionsOf(frames)).toEqual([]);

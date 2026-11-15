@@ -37,7 +37,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { NESTING_TOO_DEEP_CODE } from './live-model.js';
-import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
+import { fakeEndpoint, isMainCall, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, FakeEndpoint, Reply, WireMessage } from './log-derived-history.fixture.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { runServe } from './serve-run.js';
@@ -234,7 +234,7 @@ function textOf(message: WireMessage): string {
  */
 function scriptFor(deep: Record<string, unknown>, deepJson: Record<string, string> = {}) {
   return (_index: number, body: Body): Reply => {
-    if (!hasTools(body)) return { content: '【輔助呼叫】' };
+    if (!isMainCall(body)) return { content: '【輔助呼叫】' };
     const last = body.messages.at(-1)!;
     if (last.role === 'tool') return { content: '收尾' };
     const name = /^深:(\S+)/.exec(textOf(last))?.[1];
@@ -311,7 +311,7 @@ async function say(server: RunningServe, thread: string, prompt: string): Promis
 /** 送給模型的主呼叫裡，最後一則使用者說 `prompt` 的那一個。 */
 function requestFor(upstream: FakeEndpoint, prompt: string): WireMessage[] {
   const body = upstream.bodies.findLast(
-    (candidate) => hasTools(candidate) && textOf(candidate.messages.at(-1)!) === prompt,
+    (candidate) => isMainCall(candidate) && textOf(candidate.messages.at(-1)!) === prompt,
   );
   if (body === undefined) throw new Error(`模型沒收到「${prompt}」那一次`);
   return body.messages;
@@ -496,7 +496,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
 /** 主呼叫裡，最後一則使用者說 `prompt` 的有幾次（重打的話不只一次）。 */
 function mainCalls(upstream: FakeEndpoint, prompt: string): number {
   return upstream.bodies.filter(
-    (body) => hasTools(body) && textOf(body.messages.at(-1)!) === prompt,
+    (body) => isMainCall(body) && textOf(body.messages.at(-1)!) === prompt,
   ).length;
 }
 

@@ -7,8 +7,8 @@
  * - **分母**：走出貨的 `runServe --live`，模型是立即回應的假端點（`log-derived-history.fixture.ts`），量一輪從
  *   `run.start` 到 root 收尾的牆鐘時間，除以這一輪打到端點的請求數。端點在同一個行程裡，SSE 各幀同步寫完、不等待。
  *   這段時間除了 harness（中介層、圖、工具、落盤、下行）之外，還含端點解析請求 body 與客戶端解碼下行，兩者都隨日誌
- *   變長；所以另外量端點解析一次最後那份 body 的時間，讓呼叫端扣掉。下行只排空、不折疊。除數只數主呼叫（帶工具的那幾份）；
- *   不帶工具的輔助呼叫另外計數，花的時間留在牆鐘裡。
+ *   變長；所以另外量端點解析一次最後那份 body 的時間，讓呼叫端扣掉。下行只排空、不折疊。除數只數主呼叫（`isMainCall`）；
+ *   標題、生摘要這類輔助呼叫另外計數，花的時間留在牆鐘裡。
  * - **複製次數**：替換 `SessionLog.prototype` 上 `events` 的 getter，計次並計時（只改這個行程裡的物件）。
  * - **歸因**：同一個規模再跑一個窗口，開 `node:inspector` 的取樣剖析，數堆疊上有那幾支函式的樣本佔非閒置樣本多少。
  *   V8 會把小函式 inline 進呼叫者，所以另做微基準互相核對：對同一份日誌各呼叫 `imageOffloadData` 以外的那幾支（它要一顆 `image/offload`，夾具不帶圖片），取單次的中位數。
@@ -41,7 +41,7 @@ import type { Event as WireEvent } from '@nexus/wire';
 import { serveClient } from '../fixtures.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { LIVE_API_KEY_ENV } from '../live-model.js';
-import { fakeEndpoint, hasTools, liveModelPatch } from '../log-derived-history.fixture.js';
+import { fakeEndpoint, isMainCall, liveModelPatch } from '../log-derived-history.fixture.js';
 import type { Reply } from '../log-derived-history.fixture.js';
 import { runServe } from '../serve-run.js';
 import type { RunningServe } from '../serve-run.js';
@@ -73,10 +73,10 @@ export interface ScanOptions {
 export interface WindowStats {
   /** 量測開始時 root 日誌的筆數。 */
   readonly events: number;
-  /** 計時窗口（不含剖析窗口）跑了幾輪、打了幾次主呼叫（帶工具的）。 */
+  /** 計時窗口（不含剖析窗口）跑了幾輪、打了幾次主呼叫（`isMainCall`）。 */
   readonly turns: number;
   readonly requests: number;
-  /** 同一個窗口裡不帶工具的輔助呼叫數（窗口裡是摘要器的），與日誌裡新增的 `compaction/summary`（摘要成功）筆數。 */
+  /** 同一個窗口裡主呼叫以外的輔助呼叫數（窗口裡是摘要器的），與日誌裡新增的 `compaction/summary`（摘要成功）筆數。 */
   readonly auxRequests: number;
   readonly summaries: number;
   /** 每次請求的 harness 時間（毫秒）：一輪的牆鐘時間除以那一輪的主呼叫數，取各輪的中位數與 p95。 */
@@ -230,7 +230,7 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
   let requests = 0;
   let auxRequests = 0;
   const upstream = await fakeEndpoint((_index, body) => {
-    if (!hasTools(body)) {
+    if (!isMainCall(body)) {
       auxRequests += 1;
       return { content: '【輔助呼叫】' };
     }
