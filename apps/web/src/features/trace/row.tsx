@@ -22,19 +22,17 @@ import { memo } from 'react';
 
 import { CompactionRow } from '@/shared/blocks/compaction-row';
 import { MarkdownText } from '@/shared/markdown/text';
-import { PlanToolCard } from '@/features/plan/review';
+import { PlanToolCard, EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/features/plan';
 import { ReasoningRow } from '@/shared/blocks/reasoning-row';
 import { CallRow } from '@/features/trace/call';
 import { ExpandableLine, SnapshotBlock, StaticLine } from '@/features/trace/lines';
 import { SUBAGENT_CALLS_TITLE, SubagentCalls } from '@/features/trace/subagent';
-import { ToolCard, TOOL_STATUS_LABEL } from '@/features/tool/card';
+import { ToolCard, TOOL_STATUS_LABEL, abortedToolLabel } from '@/features/tool';
 import { Button } from '@/components/ui/button';
 import { mentionDisplayText } from '@/shared/lib/session-mention';
-import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/features/plan/review-view';
 import { reasoningRunning } from '@/shared/blocks/reasoning-view';
 import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, sameRow } from '@/features/trace/view';
 import type { TraceRow } from '@/features/trace/view';
-import { abortedToolLabel } from '@/features/tool/aborted';
 import {
   SIGNAL_LABEL,
   toolCodeText,

@@ -41,7 +41,7 @@ import type { PanelBodyProps } from '@/shared/right-sidebar/api';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Rows } from '@/features/cost/usage-rows';
-import { useStableNames } from '@/features/tool/use-stable-names';
+import { useStableNames, subagentLabel } from '@/features/tool';
 import { useSubagentUsages } from '@/features/cost/use-subagent-usages';
 import type { SubagentUsageSlot } from '@/features/cost/use-subagent-usages';
 import { useVisibleSnapshot } from '@/shared/lib/use-visible-snapshot';
@@ -54,7 +54,6 @@ import {
   usageSections,
 } from '@/features/cost/view';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
-import { subagentLabel } from '@/features/tool/subagent-view';
 import {
   COST_STRUCTURED_HEADLINE,
   COST_STRUCTURED_LIMITS,

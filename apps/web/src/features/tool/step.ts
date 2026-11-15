@@ -28,9 +28,13 @@ import {
   questionsOf,
   questionSummary,
   STOPPED_QUESTION_TEXT,
-} from '@/features/question/view';
-import { PRESENT, presentedFilesOf, presentSummary } from '@/features/deliverable/present-view';
-import type { PresentedFile } from '@/features/deliverable/present-view';
+} from '@/features/question';
+import {
+  PRESENT,
+  presentedFilesOf,
+  presentSummary,
+  type PresentedFile,
+} from '@/features/deliverable';
 import { TODO_WRITE, todosOf, todoSummary } from '@/features/tool/todo-view';
 import type { TodoItem } from '@/features/tool/todo-view';
 import { toolDiffView } from '@/shared/lib/tool-diff';

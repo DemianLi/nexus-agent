@@ -29,11 +29,10 @@
 import type { ConversationEntry, ToolEntry } from '@nexus/wire';
 import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 
-import type { TranscriptItem } from '@/features/deliverable/view';
-import { EXIT_PLAN_MODE } from '@/features/plan/review-view';
-import { PRESENT } from '@/features/deliverable/present-view';
-import { ASK_USER_QUESTION } from '@/features/question/view';
-import { toolTitle } from '@/features/tool/view';
+import { type TranscriptItem, PRESENT } from '@/features/deliverable';
+import { EXIT_PLAN_MODE } from '@/features/plan';
+import { ASK_USER_QUESTION } from '@/features/question';
+import { toolTitle } from '@/features/tool';
 
 /** 一段至少幾顆工具才收。 */
 export const MIN_TOOLS = 2;

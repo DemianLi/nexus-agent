@@ -3,17 +3,15 @@
  */
 
 import { EmptyHero } from '@/features/transcript/empty-hero';
-import { AttachmentImageContext } from '@/features/attachments/sent';
+import { AttachmentImageContext, type AttachmentImageSource } from '@/features/attachments';
 import { SessionReferenceContext } from '@/features/transcript/session-reference';
 import type { SessionReferenceLinks } from '@/features/transcript/session-reference';
-import { SubagentControlContext } from '@/features/tool/subagent-control';
-import type { SubagentControl } from '@/features/tool/subagent-control';
+import { SubagentControlContext, type SubagentControl } from '@/features/tool';
 import { Transcript } from '@/features/transcript/transcript';
 import type { TranscriptFork } from '@/features/transcript/transcript';
 import type { Conversation } from '@/shared/connection/use-conversation';
-import type { AttachmentImageSource } from '@/features/attachments/image';
-import type { ChangesStores } from '@/features/changes/diff';
-import type { DeliverableDownloader } from '@/features/deliverable/download';
+import type { ChangesStores } from '@/features/changes';
+import type { DeliverableDownloader } from '@/features/deliverable';
 
 /**
  * 對話區的中段：還沒有任何一則就是空白頁，否則是對話紀錄，連同它讀的三個 context（會話引用、送出過的圖、子代理）。

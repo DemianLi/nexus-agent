@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * 右側欄是樞紐：`right-sidebar.tsx` 經 `right-sidebar-panels` 載入觀測與成本面板，面板與卡片又要取 `useRightSidebar` 與幾個契約型別。
- * 這兩個檔就是為了讓它們**不必 import 回側欄**而存在（#1127），所以它們自己也不能 import 任何元件，否則環又回來。
- * 這裡守的是這兩個檔的 import 清單，不是整張相依圖。
+ * 分頁的面板與卡片要取 `useRightSidebar` 與幾個契約型別，側欄的殼（`app/right-sidebar/`）又要載入這些面板。
+ * `context.ts` 與 `api.ts` 就是為了讓面板**不必 import 回側欄的殼**而存在（#1127）。它們不往上 import 由
+ * `src/architecture.test.ts` 守；這裡守的是 `api.ts` 只有型別，載入它不會帶進任何分頁的執行期內容。
  */
 function importsOf(file: string): readonly { spec: string; typeOnly: boolean }[] {
   const source = readFileSync(new URL(file, import.meta.url), 'utf8');
@@ -14,17 +14,11 @@ function importsOf(file: string): readonly { spec: string; typeOnly: boolean }[]
   }));
 }
 
-describe('右側欄的 context 與契約型別不 import 回元件', () => {
-  it.each(['./context.ts', './api.ts'])('%s', (file) => {
-    const imports = importsOf(file);
+describe('右側欄的契約型別檔', () => {
+  it('只有型別 import，不帶任何執行期內容', () => {
+    const imports = importsOf('./api.ts');
     // 量具自檢：讀得到 import（空清單會讓下面的斷言空過）。
     expect(imports.length).toBeGreaterThan(0);
-    expect(
-      imports.filter((i) => i.spec.startsWith('@/components/') || i.spec.startsWith('.')),
-    ).toEqual([]);
-  });
-
-  it('契約型別檔只有型別 import，不帶任何執行期內容', () => {
-    expect(importsOf('./api.ts').filter((i) => !i.typeOnly)).toEqual([]);
+    expect(imports.filter((i) => !i.typeOnly)).toEqual([]);
   });
 });

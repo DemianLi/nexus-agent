@@ -42,24 +42,21 @@ import {
 } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 
-import { ChangesReviewTab } from '@/features/changes/review';
-import { DeliverablePreviewTab } from '@/features/deliverable/preview';
-import { PlanPreviewTab } from '@/features/plan/preview-tab';
+import { ChangesReviewTab } from '@/features/changes';
+import { DeliverablePreviewTab, basename } from '@/features/deliverable';
+import { PlanPreviewTab, REVIEW_PLAN_ID_PREFIX, type PlanScanOutcome } from '@/features/plan';
 import { Control, useControl } from '@/shared/right-sidebar/context';
 import type { RightSidebarControl } from '@/shared/right-sidebar/context';
 import { PANELS } from '@/app/right-sidebar/panels';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { REVIEW_PLAN_ID_PREFIX } from '@/features/plan/review-view';
-import type { PlanScanOutcome } from '@/features/plan/review-view';
-import { basename } from '@/features/deliverable/present-view';
-import { TRACE_LOCATE_LOADING_TEXT } from '@/features/trace/view';
+import { TRACE_LOCATE_LOADING_TEXT } from '@/features/trace';
 import {
   findOrExpandTranscriptItem,
   focusTranscriptItem,
   revealTranscriptItem,
-} from '@/features/transcript/locate';
+} from '@/features/transcript';
 import {
   MIN_PANEL_WIDTH,
   clampPanelWidth,

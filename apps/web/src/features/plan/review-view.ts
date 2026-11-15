@@ -27,7 +27,7 @@
 import type { QuestionItem, ToolEntry } from '@nexus/wire';
 
 import { markdownPlainText } from '@/shared/markdown/plain-text';
-import { endedWithoutAnswer } from '@/features/question/view';
+import { endedWithoutAnswer } from '@/features/question';
 
 /** 交出計劃的工具名（`@nexus/plugin-plan-mode` 的 `EXIT_PLAN_MODE_TOOL_NAME`）。 */
 export const EXIT_PLAN_MODE = 'exit_plan_mode';

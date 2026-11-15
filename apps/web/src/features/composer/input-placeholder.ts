@@ -4,8 +4,8 @@
 
 import type { ConnectionStall } from '@/shared/connection/stall';
 import { disconnectedPlaceholder } from '@/shared/connection/stall';
-import { STOPPED_QUESTION_TEXT } from '@/features/question/view';
-import { STEER_QUEUE_PLACEHOLDER } from '@/features/queue/steer-queue';
+import { STOPPED_QUESTION_TEXT } from '@/features/question';
+import { STEER_QUEUE_PLACEHOLDER } from '@/features/queue';
 
 /**
  * 送出框裡那句灰字。

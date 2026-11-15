@@ -1,7 +1,7 @@
 import type { Event, ThreadFeedFrame, ThreadSummary } from '@nexus/wire';
 import { emptyConversation, isApprovalPending, reduceConversation } from '@nexus/wire';
 
-import { isPlanReview } from '@/features/plan/review-view';
+import { isPlanReview } from '@/features/plan';
 
 /**
  * 側欄每一列的即時狀態（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：在跑、停著等人回答、跑完還沒看。

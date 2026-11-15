@@ -38,14 +38,18 @@ import type {
 } from '@nexus/wire';
 
 import { DelegatedChip } from '@/shared/blocks/delegated-chip';
-import { SentAttachments } from '@/features/attachments/sent';
+import { SentAttachments } from '@/features/attachments';
 import { ReferencedText } from '@/features/transcript/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChatBubble } from '@/shared/blocks/chat-bubble';
-import { ChangesCard } from '@/features/changes/card';
+import { ChangesCard, type ChangesStores } from '@/features/changes';
 import { CopyButton } from '@/shared/blocks/copy-button';
 import { CompactionRow } from '@/shared/blocks/compaction-row';
-import { DeliverablesCard } from '@/features/deliverable/card';
+import {
+  DeliverablesCard,
+  type DeliverableDownloader,
+  transcriptItems,
+} from '@/features/deliverable';
 import {
   EarlierPager,
   earlierLoadedNotice,
@@ -53,10 +57,17 @@ import {
 } from '@/features/transcript/earlier-pager';
 import type { EarlierHistory } from '@/features/transcript/earlier-pager';
 import { MarkdownText } from '@/shared/markdown/text';
-import { PlanToolCard } from '@/features/plan/review';
+import { PlanToolCard, EXIT_PLAN_MODE } from '@/features/plan';
 import { ReasoningRow } from '@/shared/blocks/reasoning-row';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
-import { AttributionBadge, ToolCard } from '@/features/tool/card';
+import {
+  AttributionBadge,
+  ToolCard,
+  useStableNames,
+  MAX_TOKENS_NOTICE,
+  agentMessageCaption,
+  subagentLabel,
+} from '@/features/tool';
 import { ToolRun } from '@/features/transcript/tool-run';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
@@ -70,36 +81,33 @@ import {
   useMessageScroller,
 } from '@/components/ui/message-scroller';
 import { mentionDisplayText } from '@/shared/lib/session-mention';
-import type { ChangesStores } from '@/features/changes/diff';
-import type { DeliverableDownloader } from '@/features/deliverable/download';
-import { decisionText } from '@/features/approval/decision-view';
-import { transcriptItems } from '@/features/deliverable/view';
+import { decisionText } from '@/features/approval';
 import { groupToolRuns, toolRunOf } from '@/features/transcript/tool-runs';
 import { registerRunExpander, registerTranscriptScroller } from '@/features/transcript/locate';
-import { FEEDBACK_COPY, isRatable } from '@/features/feedback/feedback';
+import { FEEDBACK_COPY, isRatable } from '@/features/feedback';
 import {
   FORK_LABEL,
   FORK_UNAVAILABLE_TEXT,
   forkUnavailable,
   hasForkButton,
-} from '@/features/threads/fork';
+  BLOCKED_HINT_TEXT,
+} from '@/features/threads';
 import { RetryNotice } from '@/features/transcript/retry-notice';
 import { useFocusHandoff } from '@/shared/lib/use-focus-handoff';
 import { useScrollButtonClearance } from '@/features/transcript/use-scroll-button-clearance';
-import { useStableNames } from '@/features/tool/use-stable-names';
-import { MAX_TOKENS_NOTICE } from '@/features/tool/max-tokens-view';
 import {
   STOPPED_FOOTER_TEXT,
   TIMED_OUT_FOOTER_TEXT,
   stoppedByTurnClock,
 } from '@/shared/lib/stop-cause';
-import { EXIT_PLAN_MODE } from '@/features/plan/review-view';
-import { BLOCKED_HINT_TEXT } from '@/features/threads/archived-view';
-import { settledNoticeText } from '@/features/queue/view';
-import { pairAnswers } from '@/features/question/view';
-import { agentMessageCaption, subagentLabel } from '@/features/tool/subagent-view';
+import {
+  settledNoticeText,
+  pendingAgentText,
+  pendingSteers,
+  pendingSteerText,
+} from '@/features/queue';
+import { pairAnswers } from '@/features/question';
 import { reasoningRunning, visibleReasoning } from '@/shared/blocks/reasoning-view';
-import { pendingAgentText, pendingSteers, pendingSteerText } from '@/features/queue/steer-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、

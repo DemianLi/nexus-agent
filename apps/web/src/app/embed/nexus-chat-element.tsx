@@ -26,7 +26,7 @@ import type { Root } from 'react-dom/client';
 import { agentBaseUrl, createAgentConnection } from '@/shared/connection/agent';
 import type { AgentConnection } from '@/shared/connection/agent';
 import { PortalContainerContext } from '@/lib/portal-container';
-import { forgetThread } from '@/features/threads/remembered-thread';
+import { forgetThread } from '@/features/threads';
 import { clockedFetch, serverClock } from '@/shared/connection/server-clock';
 import { systemDarkQuery } from '@/lib/theme';
 import { randomUuid } from '@/shared/lib/uuid';

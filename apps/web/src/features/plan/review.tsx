@@ -20,7 +20,7 @@ import type { ConversationEntry, PendingInput, PendingQuestion, ToolEntry } from
 
 import { Surface } from '@/shared/blocks/surface';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
-import { ToolCard } from '@/features/tool/card';
+import { ToolCard } from '@/features/tool';
 import { Button } from '@/components/ui/button';
 import {
   EXIT_PLAN_MODE,

@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { activeElementOf } from '@/shared/lib/active-element';
 import { pendingLabel } from '@/features/status/pending-label';
-import { isPlanReview } from '@/features/plan/review-view';
+import { isPlanReview } from '@/features/plan';
 
 /** 舊的那一邊淡出多久，要等於 `motion.css` 的 `.motion-swap[data-phase='out']`；淡完才換成新的（§7）。 */
 const SWAP_OUT_MS = 150;

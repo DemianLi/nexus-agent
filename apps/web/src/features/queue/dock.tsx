@@ -45,7 +45,7 @@ import {
   queuedAgentText,
   queuePreview,
 } from '@/features/queue/view';
-import { attachmentsPreview } from '@/features/attachments/sent-view';
+import { attachmentsPreview } from '@/features/attachments';
 import { mentionDisplayText } from '@/shared/lib/session-mention';
 import {
   canSteerRows,

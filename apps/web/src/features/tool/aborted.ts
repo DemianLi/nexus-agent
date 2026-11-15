@@ -1,5 +1,5 @@
 /** 被中止的工具（#2247）：這一輪被中止，結果被換掉（本體可能已做完）或本體沒開始；不是工具自己回報失敗。 */
-import { ABORTED_BEFORE_DISPATCH_CODE, ASK_USER_QUESTION } from '@/features/question/view';
+import { ABORTED_BEFORE_DISPATCH_CODE, ASK_USER_QUESTION } from '@/features/question';
 
 /** 停止的提問（`.docs/web-ui-spec.md` §4.3，#409）與被中止工具（#2247）的狀態字：停止不是失敗（#276）。 */
 export const STOPPED_STATUS_LABEL = '已停止';

@@ -1,6 +1,6 @@
 import type { ConversationState, PendingInput } from '@nexus/wire';
 
-import { firstLine } from '@/features/tool/view';
+import { firstLine } from '@/features/tool';
 
 /**
  * 這顆待答的中斷是誰在問（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項：前景子代理要核准時交給人）。

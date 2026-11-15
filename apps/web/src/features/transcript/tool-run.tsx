@@ -9,7 +9,7 @@ import type { Step } from '@/components/ui/tool-steps';
 import type { ToolRunItem } from '@/features/transcript/tool-runs';
 import { toolRunLabel, toolRunSummary } from '@/features/transcript/tool-runs';
 import { toolDiffView } from '@/shared/lib/tool-diff';
-import { toolTitle } from '@/features/tool/view';
+import { toolTitle } from '@/features/tool';
 
 /**
  * 收起來的一段工具呼叫（[#1309](https://github.com/DemianLi/nexus-agent/issues/1309)）：SG 的 `StepGroup`（#1682，地圖 #1497 第 ④ 步）。

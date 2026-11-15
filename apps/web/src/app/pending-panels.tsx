@@ -7,15 +7,12 @@ import type { PendingInput } from '@nexus/wire';
 import { X } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { ApprovalCard } from '@/features/approval/card';
-import { PlanReviewPanel } from '@/features/plan/review';
-import { QuestionPanel } from '@/features/question/panel';
+import { ApprovalCard, pendingAsker } from '@/features/approval';
+import { PlanReviewPanel, isPlanReview, planReviewOf } from '@/features/plan';
+import { QuestionPanel, STOPPED_QUESTION_TEXT } from '@/features/question';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Conversation } from '@/shared/connection/use-conversation';
-import { pendingAsker } from '@/features/approval/asker';
-import { isPlanReview, planReviewOf } from '@/features/plan/review-view';
-import { STOPPED_QUESTION_TEXT } from '@/features/question/view';
 
 /** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（`.docs/web-ui-spec.md` §4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
 export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';

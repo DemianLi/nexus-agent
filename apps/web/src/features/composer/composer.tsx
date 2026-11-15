@@ -42,7 +42,7 @@ import type {
 } from '@nexus/wire';
 
 import { AgentMentionChip } from '@/features/composer/agent-mention-chip';
-import { AttachmentRail } from '@/features/attachments/rail';
+import { AttachmentRail, type ComposerAttachments, useFileDrop } from '@/features/attachments';
 import { DropOverlay } from '@/features/composer/drop-overlay';
 import { Button } from '@/components/ui/button';
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
@@ -55,7 +55,6 @@ import { Popover, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { agentRows, applyAgentPick } from '@/features/composer/agent-mention';
 import type { AgentMentionState } from '@/features/composer/agent-mention';
-import type { ComposerAttachments } from '@/features/attachments/attachments';
 import { applyMentionPick, detectMention } from '@/shared/lib/file-mention';
 import {
   MENTION_MENU_CLOSED,
@@ -67,7 +66,7 @@ import {
 } from '@/features/composer/mention-menu';
 import type { MentionRow, MentionSource } from '@/features/composer/mention-menu';
 import { applySessionPick } from '@/shared/lib/session-mention';
-import { namesCommand } from '@/features/queue/view';
+import { namesCommand } from '@/features/queue';
 import {
   applySkillPick,
   applySlashPick,
@@ -78,7 +77,6 @@ import {
 } from '@/features/composer/slash-trigger';
 import type { SlashCandidate } from '@/features/composer/slash-trigger';
 import { isAcceleratedEnter, resolveSubmitMode } from '@/features/composer/submit-mode';
-import { useFileDrop } from '@/features/attachments/use-file-drop';
 import type { SendHint, SubmitGesture } from '@/features/composer/submit-mode';
 
 /** 一個片段：`/` 或 `@` 的位置、游標、中間的字。 */

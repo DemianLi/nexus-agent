@@ -1,6 +1,6 @@
 import type { WireLlmRetry } from '@nexus/wire';
 
-import { failureCodeText } from '@/features/trace/trajectory-view';
+import { failureCodeText } from '@/features/trace';
 
 /**
  * 串流中段出錯、整次重打時輪尾那一行（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）：「逾時，3 秒後重試（第 1／2 次）」。

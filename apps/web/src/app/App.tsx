@@ -2,106 +2,106 @@ import type { ConversationEntry, SlashDescriptor, WireClient } from '@nexus/wire
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { AppSidebar } from '@/features/threads/app-sidebar';
-import { Composer } from '@/features/composer/composer';
-import { ContextMeter } from '@/features/cost/context-meter';
-import { ModelSeat, MODEL_SELECT_FAILED } from '@/features/seats/model-seat';
-import { PermissionSeat } from '@/features/seats/permission-seat';
-import { ConversationBody } from '@/features/transcript/conversation-body';
-import { ConversationFeedbackDialog } from '@/features/feedback/conversation-dialog';
-import { ConversationNotices } from '@/features/status/conversation-notices';
-import { inputPlaceholder } from '@/features/composer/input-placeholder';
-import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
-import { PendingSwap } from '@/features/status/pending-swap';
-import { ArchivedBanner } from '@/features/threads/archived-banner';
-import { GoalBar } from '@/features/goal/bar';
-import { PlanChip } from '@/features/plan/chip';
-import { usePlanLibrary } from '@/features/plan/review';
-import { QueueDock } from '@/features/queue/dock';
-import { FEEDBACK_COMMAND_LINE } from '@/features/feedback/feedback';
 import {
-  RightSidebarPanel,
-  RightSidebarProvider,
-  RightSidebarToggle,
-} from '@/app/right-sidebar/right-sidebar';
-import { useSubagentControl } from '@/features/tool/subagent-control';
-import { SessionUsage } from '@/features/cost/session-usage';
-import { ThemeToggle } from '@/app/theme-toggle';
-import { TodoPanel } from '@/features/tool/todo-panel';
-import { Entry as TranscriptEntry, useFreshItems } from '@/features/transcript/transcript';
-import { Toaster } from '@/components/ui/sonner';
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import { useConversation } from '@/shared/connection/use-conversation';
-import { SM_BREAKPOINT, useMinWidth } from '@/shared/lib/use-min-width';
-import { useAgentMention } from '@/features/composer/use-agent-mention';
-import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/features/seats/use-model-seat';
-import {
-  PERMISSIONS_PROJECTION_KEY,
-  usePermissionSeat,
-} from '@/features/seats/use-permission-seat';
-import { useThreadDirectory } from '@/features/threads/use-directory';
-import {
+  AppSidebar,
+  ArchivedBanner,
+  useThreadDirectory,
   forkThread,
   renameThread,
   useAcceptedTitles,
   useThreadManagement,
-} from '@/features/threads/use-management';
-import { isArchivedThread } from '@/features/threads/archived-view';
-import type { ThreadManagement } from '@/features/threads/management';
-import type { ThreadDirectory } from '@/features/threads/use-directory';
-import { useThemePreference } from '@/shared/lib/use-theme-preference';
-import { agentBaseUrl, createAgentClient } from '@/shared/connection/agent';
-import { createChangesStores } from '@/features/changes/diff';
-import { retainedSuffix } from '@/features/composer/committed-draft';
-import { createDeliverableDownloader } from '@/features/deliverable/download';
-import { createDeliverableFileStore } from '@/features/deliverable/file';
-import { createSubagentUsageLoader } from '@/features/cost/subagent-usage';
-import { createTrajectoryPuller } from '@/features/trace/trajectory-pull';
-import { newConversationTarget, readThreadListing } from '@/features/threads/new-conversation';
-import { stoppedOnQuestion } from '@/features/question/view';
-import {
-  canRunSlash,
-  canSendText,
-  commandToken,
-  namesCommand,
-  steerableItems,
-} from '@/features/queue/view';
-import { recallThread, rememberThread } from '@/features/threads/remembered-thread';
-import type { ThreadChoice } from '@/features/threads/remembered-thread';
-import {
+  isArchivedThread,
+  type ThreadManagement,
+  type ThreadDirectory,
+  newConversationTarget,
+  readThreadListing,
+  recallThread,
+  rememberThread,
+  type ThreadChoice,
   FORK_FAILED_TEXT,
   FORK_RENAME_FAILED_TEXT,
   FORKED_THREAD_NOTICE,
   forkSupported,
   increasedForkTitle,
-} from '@/features/threads/fork';
+  documentTitle,
+  headerTitle,
+  PRODUCT_TITLE,
+} from '@/features/threads';
 import {
+  Composer,
+  inputPlaceholder,
+  useAgentMention,
+  retainedSuffix,
+  toMention,
+  type MentionAgent,
+  resolveSubmitMode,
+  runningSendHint,
+} from '@/features/composer';
+import { ContextMeter, SessionUsage, createSubagentUsageLoader } from '@/features/cost';
+import {
+  ModelSeat,
+  MODEL_SELECT_FAILED,
+  PermissionSeat,
+  MODEL_SELECTION_PROJECTION,
+  useModelSeat,
+  PERMISSIONS_PROJECTION_KEY,
+  usePermissionSeat,
+  MODEL_COMMAND,
+  parseModelLine,
+  permissionLocked,
+} from '@/features/seats';
+import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
+import { ConversationFeedbackDialog, FEEDBACK_COMMAND_LINE } from '@/features/feedback';
+import { ConversationNotices, PendingSwap } from '@/features/status';
+import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
+import { GoalBar } from '@/features/goal';
+import { PlanChip, usePlanLibrary } from '@/features/plan';
+import {
+  QueueDock,
+  canRunSlash,
+  canSendText,
+  commandToken,
+  namesCommand,
+  steerableItems,
   canSteerQueue,
   steerAll,
   STEER_FAILED_TEXT,
   STEER_UNAVAILABLE_TEXT,
-} from '@/features/queue/steer-queue';
-import { pendingAsker } from '@/features/approval/asker';
-import { toMention } from '@/features/composer/agent-mention';
-import type { MentionAgent } from '@/features/composer/agent-mention';
-import { serverSupportsAttachments } from '@/features/attachments/attachments';
-import { MODEL_COMMAND, parseModelLine } from '@/features/seats/model-selection';
-import { permissionLocked } from '@/features/seats/permission-presets';
-import { pendingSteers } from '@/features/queue/steer-view';
-import { resolveSubmitMode, runningSendHint } from '@/features/composer/submit-mode';
+  pendingSteers,
+} from '@/features/queue';
+import {
+  RightSidebarPanel,
+  RightSidebarProvider,
+  RightSidebarToggle,
+} from '@/app/right-sidebar/right-sidebar';
+import { useSubagentControl, TodoPanel } from '@/features/tool';
+import { ThemeToggle } from '@/app/theme-toggle';
+import { Toaster } from '@/components/ui/sonner';
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { useConversation } from '@/shared/connection/use-conversation';
+import { SM_BREAKPOINT, useMinWidth } from '@/shared/lib/use-min-width';
+import { useThemePreference } from '@/shared/lib/use-theme-preference';
+import { agentBaseUrl, createAgentClient } from '@/shared/connection/agent';
+import { createChangesStores } from '@/features/changes';
+import { createDeliverableDownloader, createDeliverableFileStore } from '@/features/deliverable';
+import { createTrajectoryPuller } from '@/features/trace';
+import { stoppedOnQuestion } from '@/features/question';
+import { pendingAsker } from '@/features/approval';
+import {
+  serverSupportsAttachments,
+  prepareAttachments,
+  useDraftAttachments,
+  useUploads,
+  createAttachmentImageSource,
+} from '@/features/attachments';
 import { connectionStall } from '@/shared/connection/stall';
-import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/features/threads/title';
-import { prepareAttachments } from '@/features/attachments/send';
 import { randomUuid } from '@/shared/lib/uuid';
 import { requestIdFor } from '@/shared/connection/request-id';
 import type { PendingRequest, Sentence } from '@/shared/connection/request-id';
-import { useDraftAttachments } from '@/features/attachments/use-draft-attachments';
-import { useUploads } from '@/features/attachments/use-uploads';
-import { createAttachmentImageSource } from '@/features/attachments/image';
 
-export { LEGACY_THREAD_NOTICE } from '@/features/status/conversation-notices';
+export { LEGACY_THREAD_NOTICE } from '@/features/status';
 export { STOP_QUESTIONS_LABEL } from '@/app/pending-panels';
-export { inputPlaceholder } from '@/features/composer/input-placeholder';
+export { inputPlaceholder } from '@/features/composer';
 
 /**
  * 接回上一次那條 thread 時講的話。

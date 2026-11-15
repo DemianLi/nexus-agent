@@ -41,7 +41,7 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { focusLost, useFocusHandoff } from '@/shared/lib/use-focus-handoff';
-import { useStableNames } from '@/features/tool/use-stable-names';
+import { useStableNames } from '@/features/tool';
 import { useTrajectoryPull } from '@/features/trace/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/shared/lib/use-visible-snapshot';
 import {

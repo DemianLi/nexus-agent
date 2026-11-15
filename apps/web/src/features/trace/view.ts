@@ -90,24 +90,31 @@ import type {
 } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
-import { decisionText } from '@/features/approval/decision-view';
-import { MAX_TOKENS_NOTICE } from '@/features/tool/max-tokens-view';
-import { planOutcomeOf, submittedPlanOf } from '@/features/plan/review-view';
-import type { PlanOutcome } from '@/features/plan/review-view';
+import { decisionText } from '@/features/approval';
+import {
+  MAX_TOKENS_NOTICE,
+  agentMessageCaption,
+  subagentLabel,
+  subagentNames,
+  TODO_WRITE,
+  todosOf,
+  todoSummary,
+  abortedToolLabel,
+  firstLine,
+  toolSummary,
+  toolTitle,
+} from '@/features/tool';
+import { planOutcomeOf, submittedPlanOf, type PlanOutcome } from '@/features/plan';
 import {
   ASK_USER_QUESTION,
   answersOfText,
   pairAnswers,
   questionsOf,
   questionSummary,
-} from '@/features/question/view';
-import { settledNoticeText } from '@/features/queue/view';
+} from '@/features/question';
+import { settledNoticeText } from '@/features/queue';
 import { mentionDisplayText } from '@/shared/lib/session-mention';
 import { stoppedByTurnClock } from '@/shared/lib/stop-cause';
-import { agentMessageCaption, subagentLabel, subagentNames } from '@/features/tool/subagent-view';
-import { TODO_WRITE, todosOf, todoSummary } from '@/features/tool/todo-view';
-import { abortedToolLabel } from '@/features/tool/aborted';
-import { firstLine, toolSummary, toolTitle } from '@/features/tool/view';
 import { mergePulled } from '@/features/trace/trajectory-pull';
 import type { PulledTurn } from '@/features/trace/trajectory-pull';
 import { ABSENT, signalText, snapshotsOf, trajectoryOf } from '@/features/trace/trajectory-view';

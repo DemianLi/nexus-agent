@@ -52,6 +52,8 @@ export default defineConfig({
     rollupOptions: {
       input: 'src/app/embed/index.ts',
       preserveEntrySignatures: 'strict',
+      // 切片的公開入口只有 re-export：標成沒有副作用，嵌入版沒用到的那幾個檔才不會跟著入口被打包進來。
+      treeshake: { moduleSideEffects: (id) => !/\/src\/features\/[^/]+\/index\.ts$/.test(id) },
       output: { format: 'es', entryFileNames: 'embed.js', inlineDynamicImports: true },
     },
   },

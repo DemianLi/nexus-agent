@@ -46,7 +46,7 @@ import {
   NOT_RECORDED,
   usageBuckets,
 } from '@/shared/lib/usage-view';
-import { UNKNOWN_SUBAGENT_LABEL } from '@/features/tool/subagent-view';
+import { UNKNOWN_SUBAGENT_LABEL } from '@/features/tool';
 import {
   TURN_END_LABEL,
   TURN_KIND_LABEL,
@@ -54,7 +54,7 @@ import {
   durationText,
   trajectoryOf,
   viewOf,
-} from '@/features/trace/trajectory-view';
+} from '@/features/trace';
 
 type Projections = ConversationState['projections'];
 

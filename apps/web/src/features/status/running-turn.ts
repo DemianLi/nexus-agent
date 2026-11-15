@@ -13,7 +13,7 @@
 
 import type { ConversationState } from '@nexus/wire';
 
-import { trajectoryOf } from '@/features/trace/trajectory-view';
+import { trajectoryOf } from '@/features/trace';
 
 /** 還沒收尾的那一個邏輯輪從 server 時鐘的哪一刻開始；答不出是 `undefined`。 */
 export function runningTurnStart(state: ConversationState): number | undefined {

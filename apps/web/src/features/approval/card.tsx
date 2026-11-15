@@ -42,7 +42,7 @@ import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/shared/blocks/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { approvalReasonOf } from '@/features/approval/reason';
-import { escalationReason } from '@/features/tool/sandbox-escalation';
+import { escalationReason } from '@/features/tool';
 
 /** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
 const LABELS: Record<string, string> = { approve: '全部核准', reject: '全部拒絕' };

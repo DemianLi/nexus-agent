@@ -10,11 +10,10 @@ import type { ConversationState, TrajectoryDigest, TrajectoryTurnKind } from '@n
 import { CallRow } from '@/features/trace/call';
 import { PullControl } from '@/features/trace/pull-control';
 import { HeadFacts } from '@/features/trace/turn-head';
-import { TOOL_STATUS_LABEL } from '@/features/tool/card';
+import { TOOL_STATUS_LABEL, abortedToolLabel } from '@/features/tool';
 import { StepGroup } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 import { useFocusHandoff } from '@/shared/lib/use-focus-handoff';
-import { abortedToolLabel } from '@/features/tool/aborted';
 import { cutByParentClock, subagentDigestHead, subagentTurnView } from '@/features/trace/view';
 import type { SubagentCallView, SubagentTurnView } from '@/features/trace/view';
 import type { TrajectoryPuller } from '@/features/trace/trajectory-pull';

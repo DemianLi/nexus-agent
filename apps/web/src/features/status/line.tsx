@@ -30,7 +30,7 @@ import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { TurnStatus } from '@/components/ui/turn-status';
-import { pendingAsker } from '@/features/approval/asker';
+import { pendingAsker } from '@/features/approval';
 import { pendingLabel } from '@/features/status/pending-label';
 import { elapsedText, runningTurnStart } from '@/features/status/running-turn';
 import { serverClock } from '@/shared/connection/server-clock';

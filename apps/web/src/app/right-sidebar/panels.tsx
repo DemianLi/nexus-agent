@@ -12,8 +12,8 @@ import { Activity, Coins } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentType } from 'react';
 
-import { CostBody } from '@/features/cost/panel';
-import { TraceBody } from '@/features/trace/panel';
+import { CostBody } from '@/features/cost';
+import { TraceBody } from '@/features/trace';
 import type { PanelKind } from '@/shared/right-sidebar/layout';
 import type { PanelBodyProps } from '@/shared/right-sidebar/api';
 

@@ -1,7 +1,7 @@
 import type { PendingInput } from '@nexus/wire';
 
-import { isPlanReview } from '@/features/plan/review-view';
-import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/features/tool/sandbox-escalation';
+import { isPlanReview } from '@/features/plan';
+import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/features/tool';
 
 /** 這一個面板排在第幾、總共幾個待決（跨面板，核准與提問一起數）。 */
 export interface PendingPosition {

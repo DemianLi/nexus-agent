@@ -46,7 +46,7 @@ const styles = walk(SRC, (path) => path.endsWith('.css'));
 const rel = (path: string) => relative(SRC, path);
 /** 元件住的資料夾：`components/ui`、各切片、共用層與組裝層。 */
 const COMPONENT_DIRS = ['components', 'features', 'shared', 'app'].map((dir) => join(SRC, dir));
-/** 住在上面那幾個資料夾、但不是元件的檔（根元件、內嵌版的進入點、markdown 的渲染）：搬資料夾之前它們不在 `components/` 底下。 */
+/** 住在上面那幾個資料夾、但不是元件的檔（根元件、內嵌版的進入點、markdown 的渲染），不當元件檢查。 */
 const NOT_COMPONENTS: readonly string[] = [
   'app/App.tsx',
   'app/embed/embedded-chat.tsx',

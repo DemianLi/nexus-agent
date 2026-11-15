@@ -19,7 +19,7 @@
 import type { ConversationState } from '@nexus/wire';
 
 import type { Activity } from '@/components/ui/status-glyph';
-import { classifyTool } from '@/features/tool/view';
+import { classifyTool } from '@/features/tool';
 
 export function turnActivity(state: ConversationState): Activity {
   if (state.retry !== null) return 'thinking';
