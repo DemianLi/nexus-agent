@@ -179,7 +179,7 @@ const failed = { ...errorsOf(base), ...errorsOf(head) };
 const label = (sha: string | undefined) =>
   sha === undefined || sha === '' ? '?' : sha.slice(0, 8);
 const lines = [
-  '### 視覺差異（只報告，不擋）',
+  '### 視覺差異（不紅；有差時在 PR 留言請作者確認）',
   '',
   `上一個 commit \`${label(process.env.VISUAL_BASE)}\` → 這個 commit \`${label(process.env.VISUAL_HEAD)}\`：比了 ${common.length} 個畫面，` +
     `**${changed.length} 個有差**，${noisy} 個只有零星的雜訊（相鄰成塊的不同像素不超過 ${NOISE_PIXELS} 個）。`,
@@ -208,4 +208,17 @@ if (Object.keys(failed).length > 0) {
 }
 const summary = `${lines.join('\n')}\n`;
 writeFileSync(join(out, 'summary.md'), summary);
+// 畫面有差、多了或少了才寫：合併後那一輪看到這個檔就把它留言到對應的 PR，請作者確認。
+if (changed.length + added.length + removed.length > 0) {
+  writeFileSync(
+    join(out, 'comment.md'),
+    [
+      '### 這張 PR 合併後，測試頁的畫面跟上一個 commit 不一樣',
+      '',
+      '**作者請確認**：下面列的是不是都在這張 PR 打算改的範圍裡。是的話回一句「畫面變動符合預期」；不是就當成 bug 處理。開下一張 PR 之前先回（`AGENTS.md`「分支策略」）。',
+      '',
+      ...lines.slice(2),
+    ].join('\n'),
+  );
+}
 console.log(summary);

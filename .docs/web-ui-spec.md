@@ -499,7 +499,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
 | 在真的 Windows 高對比下看過 | 已列為門檻（§8「Windows 高對比」），但量的都是 Chrome 模擬的 forced-colors，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
-| 視覺回歸會擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」），只報告、不紅；沒有基準圖、沒有門檻 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
+| 視覺回歸由機器擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁，有差時在對應的 PR 留言，作者要回覆確認（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」）。擋在人身上：不紅、沒有基準圖、沒人回 CI 也不會擋。刻意不放在 PR 上擋（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088) 的一分鐘） | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。
 
