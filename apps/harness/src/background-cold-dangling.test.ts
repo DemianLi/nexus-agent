@@ -7,7 +7,7 @@
  *
  * `state` 的補結來自冷復活灌回 state 的那一步，`log` 的補結來自推導端（`conversation-replay.ts` 的 `closer`），兩邊是同一句。
  * `log` 下送出的歷史由推導端換掉（`historyFromLog` 的子代理槽），不讀灌回的 state，見 `background-cold-e2e.test.ts` 的「推不回」；
- * TODO(#2362)：拿掉 graph 端 `patchToolCallsMiddleware.beforeAgent` 時這一輪仍應綠，那一顆的掛載見 `patch-tool-calls-mount.test.ts`。
+ * `log` 下補懸空呼叫那顆不掛 `beforeAgent`（只剩補請求的 `wrapModelCall`），所以 `log` 這一邊的補結只能來自推導端；`state` 仍由那顆 `beforeAgent` 與灌回的 state 補。各張圖上的掛載見 `patch-tool-calls-mount.test.ts`，狀態與請求各補在哪見 `patch-tool-calls-checkpoint.test.ts`。
  *
  * 全走產品組裝與真的 JSONL 存放處，夾具見 `background-cold.fixture.ts`。**零憑證、零外部連線**。
  */
