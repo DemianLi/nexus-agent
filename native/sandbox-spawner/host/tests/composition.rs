@@ -6,7 +6,7 @@
 //! 用到牆鐘的只有兩種，各自寫在用的地方：[`GUARD`]（只在壞掉時讓測試紅，正常不會等到）、與只影響「抓不抓得到錯」的等待。
 
 use nexus_host::composition::forward::MAX_LINKS;
-use nexus_host::composition::{EXIT_PROTOCOL, HEARTBEAT};
+use nexus_host::composition::{EXIT_ATTACH, EXIT_PROTOCOL, HEARTBEAT};
 use nexus_host::host_protocol::{CallError, ErrorCode};
 use nexus_host::json::Value;
 use nexus_host::pair_protocol::{
@@ -511,8 +511,9 @@ fn bound_waits_for_the_leaf_to_answer_attach() {
     assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
 }
 
+/// 葉子回 `attach` 錯：不送 `bound`，以 4 結束。監督行程不會再送 `bind`，留著只會讓這一對停在等 `bound`。
 #[test]
-fn a_failed_attach_sends_no_bound_and_the_next_bind_tries_again() {
+fn a_refused_attach_sends_no_bound_and_exits_4() {
     let (mut rig, mut leaf) = Rig::ready("attach-error");
     rig.command(&bind("thread-1"));
     leaf.answer_attach(
@@ -522,13 +523,10 @@ fn a_failed_attach_sends_no_bound_and_the_next_bind_tries_again() {
             message: "綁不了".into(),
         }),
     );
-    leaf.settle();
-    // 第二則 `bind` 能走到 `attach`，就證明第一次失敗之後行程還在、也沒把葉子當成綁過。
-    rig.command(&bind("thread-1"));
-    leaf.answer_attach("thread-1", Ok(Value::Null));
-    assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
-    drop(rig.stdin.take());
+    assert_eq!(rig.exit(), Some(EXIT_ATTACH));
     assert_eq!(count(&rig.rest(), &bound("thread-1")), 0);
+    assert!(!rig.dir.join("front.sock").exists());
+    assert!(!rig.dir.join("pair.sock").exists());
 }
 
 /// 等 3 個心跳間隔再看：正確的程式在 `bind` 之前永遠不送心跳，等多久都不會紅；這段等待只決定「從起動就送心跳」這種錯抓不抓得到
