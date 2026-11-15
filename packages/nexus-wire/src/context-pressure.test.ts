@@ -92,6 +92,39 @@ describe('contextPressure', () => {
     expect('breakdown' in old!.measure!).toBe(false);
   });
 
+  it('breakdown.messageParts（#2774）：有就帶著四格，沒有就不出這個 key，形狀不對整顆不收', () => {
+    const breakdown = { systemTokens: 3, toolsTokens: 0, messageTokens: 7 };
+    const messageParts = {
+      summaryTokens: 1,
+      injectedTokens: 2,
+      toolResultTokens: 0,
+      conversationTokens: 4,
+    };
+    expect(
+      fold(
+        custom(CONTEXT_MEASURE, {
+          ...measure,
+          breakdown: { ...breakdown, messageParts: { ...messageParts, extra: 1 } },
+        }),
+      ),
+    ).toEqual({ measure: { ...measure, breakdown: { ...breakdown, messageParts } } });
+    const old = fold(custom(CONTEXT_MEASURE, { ...measure, breakdown }));
+    expect('messageParts' in old!.measure!.breakdown!).toBe(false);
+    for (const each of [
+      { ...messageParts, summaryTokens: -1 },
+      { ...messageParts, injectedTokens: 1.5 },
+      { ...messageParts, toolResultTokens: '0' },
+      { summaryTokens: 1, injectedTokens: 2, toolResultTokens: 0 },
+      null,
+      'x',
+    ])
+      expect(
+        fold(
+          custom(CONTEXT_MEASURE, { ...measure, breakdown: { ...breakdown, messageParts: each } }),
+        ),
+      ).toBeNull();
+  });
+
   it('breakdown 形狀不對整顆不收', () => {
     const breakdown = { systemTokens: 3, toolsTokens: 0, messageTokens: 7 };
     const bad: unknown[] = [

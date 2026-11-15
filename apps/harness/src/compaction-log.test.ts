@@ -292,7 +292,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
    *
    * 釘的仍然是**欄位集合**：多一格、少一格都紅。
    */
-  it('酬載是五個欄位（含 beforeCall），summary 就是換上去的那則摘要訊息', async () => {
+  it('酬載是六個欄位（含 beforeCall、durationMs），summary 就是換上去的那則摘要訊息', async () => {
     const { root } = await run(chatter(), {
       summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
       invocations: 12,
@@ -303,10 +303,13 @@ describe('壓縮發生時，日誌裡留得下來', () => {
       expect(Object.keys(record).sort()).toEqual([
         'beforeCall',
         'cutoffIndex',
+        'durationMs',
         'filePath',
         'messagesBefore',
         'summary',
       ]);
+      // 生摘要那次呼叫的牆鐘（#2774）：非負整數。
+      expect(Number.isInteger(record.durationMs) && record.durationMs! >= 0).toBe(true);
       const summary = fromLoggedMessage(record.summary!);
       expect(summary.getType()).toBe('human');
       expect(summary.additional_kwargs.lc_source).toBe('summarization');
