@@ -73,6 +73,8 @@ export const EMBED_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'get_goal',
   'todo_write',
   'present',
+  'history_read',
+  'history_search',
 ]);
 
 /** 工具本體自己就會停下來問人的那幾支：再多回一次 `ask`，同一次呼叫會先出核准卡、再出它自己的那張。 */

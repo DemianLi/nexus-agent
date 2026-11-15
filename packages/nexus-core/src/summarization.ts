@@ -749,6 +749,8 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * @param cutoffs - 這次組裝的切點表（`summary-cutoffs.ts`），`agent/pre-step` 問的也是這一張；省略就是這顆摘要器自己一張。
  * @param sentHistoryOf - 從日誌推「這次要送的歷史」（`history-shadow.ts` 的 `createSentHistoryReader`）。給了而且有 `sessions`，
  *   生摘要那一次就重播上一次主請求（{@link replayedSummaryCall}）；省略就照模板（`state`、`shadow`）。
+ * @param recallTools - 這次組裝有沒有註冊讀回被摘掉的原文的工具（`history-recall.ts`）。有、而且這次呼叫解得到日誌，
+ *   摘要的前言就指向那兩個工具（寫法見 `summarizer-engine.ts` 的 `originalsRecallable`）。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -763,7 +765,13 @@ export function createSummarizer(
   retry?: StreamRetryOptions,
   cutoffs: SummaryCutoffTable = new SummaryCutoffTable(),
   sentHistoryOf?: SentHistoryReader,
+  recallTools = false,
 ): AgentMiddleware {
+  const originalsRecallable =
+    sessions === undefined || !recallTools
+      ? undefined
+      : (request: SessionRequest): boolean =>
+          sessions.forCall({ configurable: request.runtime?.configurable }).kind === 'ok';
   const summaryCallOf =
     sessions === undefined || sentHistoryOf === undefined
       ? undefined
@@ -797,6 +805,7 @@ export function createSummarizer(
       sessionIdOf,
       summaryPrompt: SUMMARY_PROMPT,
       ...(summaryCallOf !== undefined && { summaryCallOf }),
+      ...(originalsRecallable !== undefined && { originalsRecallable }),
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
       // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
       // （`force`，見 {@link withRetainedTail}）給一道 1 則的門檻：基座一進來就判 `shouldSummarize`，現在就摘要。
