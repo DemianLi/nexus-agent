@@ -1,5 +1,5 @@
 //! 稽核紀錄：每個行程結束寫一行 JSON，只追加；宿主回報的違反協定也寫一行（[`Record::Protocol`]，那個行程沒有結束）。
-//! 欄位與值只加不改：讀它的人照 `role`（行程結束）或 `event`（事件）分辨每一行。檔案以 `O_APPEND` 開，一行一次 `write`；
+//! 一對（組合行程加葉子）裡每個行程結束各寫一行（補起的葉子也各一行），都多一個 `pair`（[`Pair`]）。欄位與值只加不改：讀它的人照 `role`（行程結束）或 `event`（事件）分辨每一行。檔案以 `O_APPEND` 開，一行一次 `write`；
 //! 短寫（磁碟滿、被訊號打斷）會留下沒有換行的殘行，下一筆先補一個換行，不黏上去。
 
 use crate::supervisor_protocol::DeathCause;
@@ -40,8 +40,21 @@ impl Exit {
     }
 }
 
+/// 一對（同一條 thread 的組合行程加葉子行程）裡的一個行程結束時，多寫進那一行的部分。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pair {
+    /// 這一對的序號，同一對的每一行都相同；就是 socket 檔名 `c<序號>.sock` 裡的那個數字。
+    pub serial: u64,
+    /// 這一行是組合行程（`role` 記 `composition`）；不是就是葉子，`role` 記 `conversation`。
+    pub composition: bool,
+    /// 被同伴連帶收掉的，與留著等葉子時因 `--idle-ms` 或名額滿被收的組合行程：`cause` 記 `peer`，那一行的 [`DeathCause`] 不看。
+    pub peer: bool,
+}
+
 pub enum Record<'a> {
     Conversation {
+        /// 不成對的對話行程是 `None`，那一行不帶 `pair`。
+        pair: Option<Pair>,
         thread: &'a [u8],
         pid: i32,
         cause: DeathCause,
@@ -144,6 +157,7 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
     let mut out = format!("{{\"ts_ms\":{ts_ms}");
     let (exit, error) = match record {
         Record::Conversation {
+            pair,
             thread,
             pid,
             cause,
@@ -153,12 +167,24 @@ fn line(ts_ms: u128, record: &Record<'_>) -> String {
             max_silence_ms,
             error,
         } => {
-            out.push_str(",\"role\":\"conversation\",\"thread\":");
+            let role = match pair {
+                Some(Pair {
+                    composition: true, ..
+                }) => "composition",
+                _ => "conversation",
+            };
+            out.push_str(&format!(",\"role\":\"{role}\",\"thread\":"));
             json_string(&mut out, &String::from_utf8_lossy(thread));
+            let cause = match pair {
+                Some(Pair { peer: true, .. }) => "peer",
+                _ => cause_name(*cause),
+            };
             out.push_str(&format!(
-                ",\"pid\":{pid},\"cause\":\"{}\",\"turns\":{turns},\"rss_kb\":{rss_kb},\"max_silence_ms\":{max_silence_ms}",
-                cause_name(*cause)
+                ",\"pid\":{pid},\"cause\":\"{cause}\",\"turns\":{turns},\"rss_kb\":{rss_kb},\"max_silence_ms\":{max_silence_ms}"
             ));
+            if let Some(pair) = pair {
+                out.push_str(&format!(",\"pair\":{}", pair.serial));
+            }
             (exit, error)
         }
         Record::Front { pid, exit, error } => {
@@ -261,6 +287,7 @@ mod tests {
     #[test]
     fn conversation_line() {
         let record = Record::Conversation {
+            pair: None,
             thread: b"t\"1\\\n\x01\xff",
             pid: 42,
             cause: DeathCause::Crash,
@@ -277,6 +304,44 @@ mod tests {
             line(7, &record),
             "{\"ts_ms\":7,\"role\":\"conversation\",\"thread\":\"t\\\"1\\\\\\u000a\\u0001\u{fffd}\",\"pid\":42,\
 \"cause\":\"crash\",\"turns\":2,\"rss_kb\":81920,\"max_silence_ms\":5012,\"exit_code\":3,\"signal\":null}\n"
+        );
+    }
+
+    /// 一對的兩行都帶同一個 `pair`；組合行程的 `role` 是 `composition`，被同伴連帶收掉的 `cause` 是 `peer`。
+    #[test]
+    fn pair_lines() {
+        let line_of = |composition, peer| {
+            line(
+                7,
+                &Record::Conversation {
+                    pair: Some(Pair {
+                        serial: 12,
+                        composition,
+                        peer,
+                    }),
+                    thread: b"t",
+                    pid: 42,
+                    cause: DeathCause::Crash,
+                    exit: Exit {
+                        code: None,
+                        signal: Some(9),
+                    },
+                    turns: 0,
+                    rss_kb: 0,
+                    max_silence_ms: 0,
+                    error: None,
+                },
+            )
+        };
+        assert_eq!(
+            line_of(false, false),
+            "{\"ts_ms\":7,\"role\":\"conversation\",\"thread\":\"t\",\"pid\":42,\"cause\":\"crash\",\"turns\":0,\
+\"rss_kb\":0,\"max_silence_ms\":0,\"pair\":12,\"exit_code\":null,\"signal\":9}\n"
+        );
+        assert_eq!(
+            line_of(true, true),
+            "{\"ts_ms\":7,\"role\":\"composition\",\"thread\":\"t\",\"pid\":42,\"cause\":\"peer\",\"turns\":0,\
+\"rss_kb\":0,\"max_silence_ms\":0,\"pair\":12,\"exit_code\":null,\"signal\":9}\n"
         );
     }
 

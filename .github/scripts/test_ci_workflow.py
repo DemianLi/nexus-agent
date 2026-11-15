@@ -510,6 +510,18 @@ class PostMerge(unittest.TestCase):
             with self.subTest(scope=scope):
                 self.assertEqual(self.wf['permissions'].get(scope), level)
 
+    def test_visual_diff_only_reports(self) -> None:
+        """視覺差異（#2766）只報告：自己紅了不讓這一輪紅、`report` 不看它；排在 full 後面，不多佔一個同時跑的 job；拿得到上一個 commit。"""
+        job = self.wf['jobs']['visual-diff']
+        self.assertIs(job['continue-on-error'], True)
+        self.assertEqual(job['needs'], 'full')
+        self.assertEqual(job['if'], '${{ !cancelled() }}')
+        self.assertNotIn('visual-diff', self.wf['jobs']['report']['needs'])
+        self.assertEqual(job['steps'][0]['with']['fetch-depth'], 2)
+        runs = '\n'.join(step.get('run', '') for step in job['steps'])
+        self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
+        self.assertIn('apps/web/visual/compare.ts', runs)
+
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
         self.assertEqual(report['needs'], ['full', 'native-loop'])

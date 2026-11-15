@@ -1,6 +1,6 @@
 //! 組合行程（[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）：一對裡 Rust 的那一個，每條對話一個。現在只有骨架：
 //! 跟監督行程握手、在橋上等葉子（[`crate::pair`]）、把 `bind` 經橋轉成 `attach`、把前台的連線原樣轉給葉子（[`forward`]）。
-//! 還沒有人起它（監督行程、harness 與出貨都還沒接），只有整合測試起；不連宿主。
+//! 監督行程帶 `--composition` 時起它；harness 與出貨都還沒接，所以現在只有整合測試會起。不連宿主。
 //!
 //! ```text
 //! nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑>
