@@ -19,8 +19,11 @@ import { join, resolve } from 'node:path';
 
 import { chromium } from 'playwright-core';
 
-/** 相鄰成塊的不同像素不超過這個數，算雜訊。 */
-const NOISE_PIXELS = 5;
+/**
+ * 相鄰成塊的不同像素不超過這個數，算雜訊。CI 的 Linux runner 上，畫面沒改的 commit 也量到 8–15 個成塊的
+ * （一條分隔線的邊、文字的邊，色差 16 以內），所以留到 30；真的改動（一顆按鈕的圓角）是幾百個起跳。
+ */
+const NOISE_PIXELS = 30;
 
 interface Diff {
   /** 不同的像素數。 */
