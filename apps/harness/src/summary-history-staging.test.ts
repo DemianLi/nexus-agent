@@ -224,11 +224,13 @@ const linesOf = (sections: readonly string[]) =>
   sections.flatMap((section) => section.split(' | '));
 
 describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
-  /** 呼叫：1 ＝ 第 1 輪；2 ＝ 摘要、3 ＝ 摘要之後的請求（超窗）、4 ＝ retain 0 的摘要、5 ＝ 重送。 */
+  /**
+   * 呼叫：1 ＝ 第 1 輪；2、3 ＝ 摘要（條目、現況）、4 ＝ 摘要之後的請求（超窗）、5、6 ＝ retain 0 的摘要、7 ＝ 重送。
+   */
   it('S1 超窗一次：一段，內容是第二次嘗試的', async () => {
-    const run = await converse({ behavior: (n) => (n === 3 ? 'overflow' : 'ok') });
+    const run = await converse({ behavior: (n) => (n === 4 ? 'overflow' : 'ok') });
 
-    // 前提：真的走到了升級（日誌上兩筆事件、模型被叫了五次才進第 3 輪之前）。
+    // 前提：真的走到了升級（日誌上兩筆事件）。
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2]);
     expect(run.snapshots[1]!.end).toBe('turn/end');
 
@@ -237,9 +239,9 @@ describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ', 'EQ']);
   });
 
-  /** 呼叫：3、5 超窗。 */
+  /** 呼叫：4、7 超窗（每次摘要兩呼叫，各次重送之前分別有兩次重摘）。 */
   it('S6 超窗兩次：一段，不是三段巢狀', async () => {
-    const run = await converse({ behavior: (n) => (n === 3 || n === 5 ? 'overflow' : 'ok') });
+    const run = await converse({ behavior: (n) => (n === 4 || n === 7 ? 'overflow' : 'ok') });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2, 3]);
     expect(run.snapshots[1]!.sections).toEqual([`${human(1)} | ${reply(1)} | ${human(2)}`]);
@@ -249,7 +251,7 @@ describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
 });
 
 describe('生摘要的呼叫自己失敗：不留檔（S2）', () => {
-  /** 呼叫：2 ＝ 摘要那次（失敗，基座吞掉、照原請求送出）。 */
+  /** 呼叫：2 ＝ 摘要的第一次呼叫（條目，失敗，基座吞掉、照原請求送出）。 */
   it('失敗那輪不寫檔；下一輪摘要只有一段，原文不重複', async () => {
     const run = await converse({ behavior: (n) => (n === 2 ? 'error' : 'ok') });
 
@@ -272,7 +274,7 @@ describe('生摘要的呼叫自己失敗：不留檔（S2）', () => {
 
 describe('摘要之後主請求失敗或被停：檔留著，下一輪接著它（S3、S4、S10）', () => {
   it('S3 主請求拋錯：失敗那輪檔就在；下一輪的區段與它互不重複', async () => {
-    const run = await converse({ behavior: (n) => (n === 3 ? 'error' : 'ok') });
+    const run = await converse({ behavior: (n) => (n === 4 ? 'error' : 'ok') });
 
     expect(run.snapshots[1]!.end).toBe('turn/failed');
     expect(run.snapshots[1]!.sections).toEqual([human(1)]);
@@ -285,8 +287,8 @@ describe('摘要之後主請求失敗或被停：檔留著，下一輪接著它�
 
   it('S4 使用者在摘要之後按停止：同上', async () => {
     const run = await converse({
-      behavior: (n) => (n === 3 ? 'hang' : 'ok'),
-      cancelAt: 3,
+      behavior: (n) => (n === 4 ? 'hang' : 'ok'),
+      cancelAt: 4,
     });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([1]);
@@ -298,7 +300,7 @@ describe('摘要之後主請求失敗或被停：檔留著，下一輪接著它�
   /** 連續三輪摘要之後都失敗，第五輪才成功：四段，每一段只含新卸下的。 */
   it('S10 連續三次失敗再成功：每一段只含新卸下的內容', async () => {
     const run = await converse({
-      behavior: (n) => (n === 3 || n === 5 || n === 7 ? 'error' : 'ok'),
+      behavior: (n) => (n === 4 || n === 7 || n === 10 ? 'error' : 'ok'),
       turns: 5,
     });
 

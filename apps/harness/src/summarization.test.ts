@@ -128,6 +128,9 @@ async function historyFiles(root: string): Promise<string[]> {
 
 const MARKER = '<這是我們自己的摘要器>';
 
+/** 索引條目那次的假回覆：標題加一行，是合格的條目，不重叫（每次摘要：條目一次、現況一次）。 */
+const ENTRY_TURN = { content: '本段對話\n- 工具回了大段內容' };
+
 /** 一個只在 system prompt 留記號的假摘要器，名字剛好撞上內建那個。 */
 function markerSummarization(): PluginEntry {
   return {
@@ -985,8 +988,10 @@ describe('我們配的那份打底到每個 subagent', () => {
           ],
         },
         { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: `一${PAD}` } }] },
+        ENTRY_TURN,
         { content: '（subagent 那側的摘要）' },
         { content: 'subagent 做完了。' },
+        ENTRY_TURN,
         { content: '（root 那側的摘要）' },
         { content: '收工。' },
         { content: '多的一輪，腳本用不到就不會被消費。' },
@@ -1263,7 +1268,12 @@ describe('關掉摘要是真的關掉', () => {
    */
   it('條目給低門檻時摘要照樣動手——證明那份設定真的被讀了', async () => {
     const model = new ScriptedChatModel({
-      turns: [...chunkRounds('收工。'), { content: '備料，摘要器動手才會用到。' }],
+      turns: [
+        ...chunkRounds('收工。').slice(0, 1),
+        ENTRY_TURN,
+        { content: '收工。' },
+        { content: '備料，摘要器動手才會用到。' },
+      ],
     });
     const { agent, dispose } = await createNexusAgent({
       model,
@@ -1327,9 +1337,9 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
       await dispose();
     }
 
-    // 預設組裝每輪三格：`模型輪數 = floor((上限 - 1) / 3)`。
+    // 預設組裝每輪三格：`模型輪數 = floor((上限 - 1) / 3)`。多的那兩次是摘要器：索引條目一次、現況一次。
     const agentTurns = Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3);
-    expect(model.calls).toBe(agentTurns + 1);
+    expect(model.calls).toBe(agentTurns + 2);
   });
 
   /**
@@ -1380,8 +1390,10 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
 describe('一般長對話不會退化成逐輪重摘', () => {
   it('prompt 的訊息數是鋸齒不是平線', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
-    // 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。
-    const body = '這是一段普通長度的回話。'.repeat(32);
+    // 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。第一行是合格的索引條目標題，
+    // 摘要那次的假回覆才只叫一次（條目一次、現況一次）。
+    const line = `- ${'這是一段普通長度的回話。'.repeat(12)}`;
+    const body = ['本段對話', line, line, line].join('\n');
     const model = new ScriptedChatModel({
       turns: Array.from({ length: 40 }, () => ({ content: body })),
     });
@@ -1409,13 +1421,16 @@ describe('一般長對話不會退化成逐輪重摘', () => {
     );
     // 前提：真的摘要過。少了它，一個門檻根本沒碰到的組裝也會讓下面通過。
     expect(summarizedWithHistory(model)).toBe(true);
-    // 摘要器自己那次的 prompt 只有 1 則（摘要請求本身）。
-    const summaryCalls = sizes.filter((size) => size === 1).length;
-    // 平線的話，每一輪都夾一次摘要器那次（1）：十五輪就是十幾次。鋸齒的話兩次摘要之間隔著好幾輪。
-    expect(summaryCalls).toBeGreaterThan(1);
-    expect(summaryCalls).toBeLessThanOrEqual(sizes.length / 4);
-    // 摘要之後留得下東西：緊接著摘要器那次的 agent 那一輪帶得到摘要＋尾巴＋新一句，不只是摘要載體。
-    const afterSummary = sizes[sizes.indexOf(1, 1) + 1]!;
+    // 摘要器那次的 prompt 只有 1 則（摘要請求本身）；每次摘要兩次，索引條目一次、現況一次，連續緊接著。
+    // 開頭那一輪的使用者句也是 1 則，不計。
+    const summaryCalls = sizes.slice(1).filter((size) => size === 1).length;
+    expect(summaryCalls % 2).toBe(0);
+    const summaries = summaryCalls / 2;
+    // 平線的話，每一輪都夾一次摘要器那次：十五輪就是十幾次。鋸齒的話兩次摘要之間隔著好幾輪。
+    expect(summaries).toBeGreaterThan(1);
+    expect(summaries).toBeLessThanOrEqual(sizes.length / 4);
+    // 摘要之後留得下東西：摘要器那兩次之後的 agent 那一輪帶得到摘要＋尾巴＋新一句，不只是摘要載體。
+    const afterSummary = sizes[sizes.indexOf(1, 1) + 2]!;
     expect(afterSummary).toBeGreaterThan(3);
     // 然後會再長起來：最大值不在剛摘要完的那一輪。
     expect(Math.max(...sizes)).toBeGreaterThan(afterSummary);
@@ -1490,13 +1505,14 @@ describe('壓縮前先剪掉過大的工具結果', () => {
    * `spare` 是**留給摘要器自己那次模型呼叫**的。腳本用完會拋，所以「摘要器動手了」在
    * 沒有備料的腳本上會表現成一個看不出所以然的例外，而不是一個多出來的呼叫次數。
    */
-  function bulkTurns(count = 1, spare = 0): ScriptedChatModel {
+  function bulkTurns(count = 1, spare = 0, summarized = false): ScriptedChatModel {
     return new ScriptedChatModel({
       turns: [
         ...Array.from({ length: count }, () => ({
           content: '',
           toolCalls: [{ name: 'bulk', args: {} }],
         })),
+        ...(summarized ? [ENTRY_TURN] : []),
         { content: '看完了。' },
         ...Array.from({ length: spare }, (_, index) => ({ content: `備料 ${index + 1}。` })),
       ],
@@ -1729,8 +1745,8 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   it('toolResultPruning 的覆寫會生效', async () => {
     const medium = 'M'.repeat(5_000);
     const budget = { thresholdChars: 2_000, headChars: 500, tailChars: 100 };
-    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要，摘要那次呼叫吃掉一份備料。
-    const model = bulkTurns(1, 1);
+    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要；摘要那兩次呼叫（條目、現況）各吃一份備料。
+    const model = bulkTurns(1, 1, true);
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [bulkPlugin(medium)],
@@ -1920,7 +1936,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     it('條目給的預算真的傳到剪刀手上——頭尾長度照它的值', async () => {
       const medium = 'M'.repeat(5_000);
       // 同上一組的覆寫那條：保留量壓到 1，則數門檻才摘得到東西、才算壓力（#1441）。
-      const model = bulkTurns(1, 1);
+      const model = bulkTurns(1, 1, true);
       const { agent, dispose } = await createNexusAgent({
         model,
         plugins: [

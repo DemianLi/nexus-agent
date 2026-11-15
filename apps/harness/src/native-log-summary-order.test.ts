@@ -37,7 +37,9 @@ const SUMMARY_DELAY_MS = 40;
 
 /** 使用者每一句的墊料與模型每一輪的回話，大小同 `compaction-log.test.ts`：幾句就頂過 3,000 token 的門檻。 */
 const USER_PAD = '內容'.repeat(100);
-const BODY = '這是一段普通長度的回話。'.repeat(32);
+/** 第一行加「- 」的兩三行是合格的索引條目，所以摘要那次的假回覆只叫一次（條目一次、現況一次）。 */
+const BODY_LINE = `- ${'這是一段普通長度的回話。'.repeat(10)}`;
+const BODY = ['本段對話', BODY_LINE, BODY_LINE, BODY_LINE].join('\n');
 
 /**
  * 照腳本回答，但生摘要那一次先等 {@link SUMMARY_DELAY_MS}。生摘要那一次由 {@link isSummaryCallPrompt} 認。

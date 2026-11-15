@@ -302,8 +302,8 @@ describe('產品組裝：摘要器生摘要的那一次呼叫吃同一份政策'
         });
         await pump.whenIdle();
       }
-      // 生摘要打了兩次（第一次失敗、重打成功），主呼叫每輪一次。
-      expect(shared.summaryCalls).toBe(2);
+      // 生摘要打了三次：索引條目第一次失敗、重打成功，現況一次；主呼叫每輪一次。
+      expect(shared.summaryCalls).toBe(3);
       expect(shared.mainCalls).toBe(2);
       const events = [...pump.sessionLog.events];
       expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(1);

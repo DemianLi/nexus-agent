@@ -95,10 +95,11 @@ async function run(options: { summarization: boolean; overflow?: boolean }) {
     ])
     .respondWithTools([{ name: 'alpha', args: {}, id: 'sub-alpha' }])
     .respond(new AIMessage('子代理好了'));
-  // root 的第三次模型呼叫：端點說超窗 → 生摘要（同一顆模型）→ 保留 0 重走一次。
+  // root 的第三次模型呼叫：端點說超窗 → 生摘要（同一顆模型：索引條目一次、現況一次）→ 保留 0 重走一次。
   if (options.overflow === true) {
     model = model
       .respond(new ContextOverflowError('Input exceeded the model context window.'))
+      .respond(new AIMessage('Title: 索引條目\n- 一行'))
       .respond(new AIMessage(SUMMARY_TEXT));
   }
   model = model.respond(new AIMessage('好了'));

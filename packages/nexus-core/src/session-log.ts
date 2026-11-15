@@ -1227,6 +1227,14 @@ export interface SessionEventMap {
         readonly injectedTokens: number;
         readonly toolResultTokens: number;
         readonly conversationTokens: number;
+        /**
+         * `summaryTokens` 裡屬於索引（摘要本文的 `<index>…</index>`）的那一截
+         * （[#2776](https://github.com/DemianLi/nexus-agent/issues/2776)），非負整數、不大於 `summaryTokens`；現況連同前言是
+         * `summaryTokens` 減它。照索引在摘要訊息文字裡佔的字元比例分。它**不是第五格**：四格相加等於 `messageTokens` 的規則不變。
+         * 沒有這一格 ＝ 請求裡沒有摘要訊息，或沒拆（這一格出現以前的日誌），不是 `0`。加它沒有升日誌格式版本，紀錄見
+         * `docs/persistence-changes/2026-11-15-context-measure-summary-index.md`。
+         */
+        readonly summaryIndexTokens?: number;
       };
     };
     /**

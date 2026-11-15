@@ -154,7 +154,8 @@ import {
   withSummaryCutoffs,
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
-import { createSummarizerEngine } from './summarizer-engine.js';
+import { createSummarizerEngine, summaryBodyOf } from './summarizer-engine.js';
+import { parseSummaryHead } from './summary-head.js';
 import type { SessionRequest, SummaryCall } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
@@ -1965,6 +1966,33 @@ function splitMessageTokens(
   };
 }
 
+/**
+ * 補上 `summaryIndexTokens`：`summaryTokens` 裡屬於索引（`<index>…</index>`）的那一截，照它在摘要訊息文字裡佔的字元比例分
+ * （無條件捨去）。現況連同前言是 `summaryTokens` 減它。
+ *
+ * @param parts - {@link splitMessageTokens} 分好的四格。
+ * @param messages - 這份請求的訊息。
+ * @returns 四格加 `summaryIndexTokens`；摘要沒有索引時是 `0`。請求裡沒有摘要訊息就不加這一格。
+ */
+function withSummaryIndexTokens(
+  parts: ReturnType<typeof splitMessageTokens>,
+  messages: readonly BaseMessage[],
+): ReturnType<typeof splitMessageTokens> & { readonly summaryIndexTokens?: number } {
+  let chars = 0;
+  let indexChars = 0;
+  for (const message of messages) {
+    if (!isSummarizationMessage(message)) continue;
+    chars += message.text.length;
+    const { indexText } = parseSummaryHead(summaryBodyOf(message));
+    if (indexText !== '') indexChars += '<index>\n'.length + indexText.length + '\n</index>'.length;
+  }
+  if (chars === 0) return parts;
+  return {
+    ...parts,
+    summaryIndexTokens: Math.floor((parts.summaryTokens * indexChars) / chars),
+  };
+}
+
 /** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。`skill-catalog.ts` 的 {@link isHumanSpeech} 也用它。 */
 export function isSummarizationMessage(message: BaseMessage): boolean {
   return (
@@ -2192,11 +2220,14 @@ function withTokenBudget(
                     toolsTokens: estimate.parts.tools,
                     messageTokens,
                     // 訊息那一格再照類別拆（#2774），四格相加等於 `messageTokens`。
-                    messageParts: splitMessageTokens(
-                      messageTokens,
-                      estimateMessageGroups(sent.messages ?? [], messageKindOf, {
-                        singleDigits: book.singleDigits(modelNameOf(sent.model)),
-                      }),
+                    messageParts: withSummaryIndexTokens(
+                      splitMessageTokens(
+                        messageTokens,
+                        estimateMessageGroups(sent.messages ?? [], messageKindOf, {
+                          singleDigits: book.singleDigits(modelNameOf(sent.model)),
+                        }),
+                      ),
+                      sent.messages ?? [],
                     ),
                   },
                 },

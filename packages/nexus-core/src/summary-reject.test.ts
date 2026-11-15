@@ -100,7 +100,10 @@ const reply = (content: unknown, finishReason = 'stop') =>
 
 const HALF = '## 1. Primary Request and Intent\n使用者要含稅的口徑。\n## 2. Key Technical';
 
-/** 拒收、門檻觸發：照原請求送出那 7 則，warn 恰好一條，摘要模型只叫一次（不重打）。 */
+/**
+ * 拒收、門檻觸發：照原請求送出那 7 則，warn 恰好一條。摘要模型叫兩次：索引條目那次被拒收退成指標、現況那次被拒收整次不摘，
+ * 兩次都不重打。
+ */
 async function expectRejectedAndSentAsIs(
   content: unknown,
   finishReason: string,
@@ -115,7 +118,7 @@ async function expectRejectedAndSentAsIs(
   expect(out.reports).toHaveLength(1);
   expect(out.reports[0]).toContain(reason);
   expect(out.reports[0]).toContain('照原請求送出');
-  expect(out.model.invokes).toBe(1);
+  expect(out.model.invokes).toBe(2);
 }
 
 describe('拒收被截斷的摘要（dsh 的 MAX_TOKENS）', () => {
@@ -178,7 +181,7 @@ describe('拒收之後，端點真的超窗那條路（dsh 的 overflow 路徑�
     expect(out.reports[0]).toContain('截斷');
     expect(out.reports[0]).toContain('保留原本的請求錯誤');
     expect(out.handled).toHaveLength(1);
-    expect(out.model.invokes).toBe(1);
+    expect(out.model.invokes).toBe(2);
   });
 });
 
@@ -201,6 +204,27 @@ describe('不誤傷', () => {
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]!.length).toBeLessThan(7);
     expect(String(out.handled[0]![0]!.content)).toContain('## 正常摘要');
-    expect(out.model.invokes).toBe(1);
+    expect(out.model.invokes).toBe(2);
+  });
+});
+
+describe('索引條目被拒收：只退成指標，現況照常', () => {
+  it('條目那次被截斷、現況那次正常：摘要照常交下去，條目只剩指標', async () => {
+    let call = 0;
+    const out = await run({
+      settings: TOKEN_TRIGGER,
+      // 第一次是索引條目（被截斷，拒收），第二次是現況（正常）。
+      reply: () => {
+        call += 1;
+        return call === 1 ? reply(HALF, 'length') : reply('## 正常摘要');
+      },
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.handled).toHaveLength(1);
+    expect(out.handled[0]!.length).toBeLessThan(7);
+    expect(String(out.handled[0]![0]!.content)).toMatch(
+      /<index>\n\[#1 messages 0-\d+\]\n<\/index>\n<state>\n## 正常摘要\n<\/state>/,
+    );
+    expect(out.model.invokes).toBe(2);
   });
 });

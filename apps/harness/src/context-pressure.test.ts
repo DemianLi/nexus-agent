@@ -364,9 +364,10 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
       for (const value of [...Object.values(three), ...Object.values(messageParts!)]) {
         expect(Number.isInteger(value) && value >= 0).toBe(true);
       }
-      expect(Object.values(messageParts!).reduce((sum, value) => sum + value, 0)).toBe(
-        three.messageTokens,
-      );
+      // `summaryIndexTokens` 是 `summaryTokens` 裡的一截，不是第五格：不算進總和。
+      const { summaryIndexTokens, ...four } = messageParts!;
+      expect(Object.values(four).reduce((sum, value) => sum + value, 0)).toBe(three.messageTokens);
+      expect(summaryIndexTokens ?? 0).toBeLessThanOrEqual(four.summaryTokens);
     }
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');
@@ -410,11 +411,17 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
   it('摘要那一輪即時與重新整理一樣，摘要本身只出現在壓縮標記裡，不在任何一則回話或逐段的 frame 裡', async () => {
     const { frames, root, requests } = await converse(TURNS, {
       summarization: summarizeAt([{ type: 'messages', value: 3 }]),
-      script: [{ text: '第一輪回話' }, { text: SUMMARY }, { text: '第二輪回話' }],
+      script: [
+        { text: '第一輪回話' },
+        { text: '本段對話\n- 前面聊了幾件事' },
+        { text: SUMMARY },
+        { text: '第二輪回話' },
+      ],
     });
-    // 前提：第二次請求是摘要（沒帶工具），而且是串流的——不串流的話它本來就不會逐段上線。
+    // 前提：第二、三次請求是摘要（沒帶工具，索引條目與現況各一次），而且是串流的——不串流的話它本來就不會逐段上線。
     expect(requests).toEqual([
       { stream: true, tools: true },
+      { stream: true, tools: false },
       { stream: true, tools: false },
       { stream: true, tools: true },
     ]);
@@ -434,8 +441,10 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
       reduceAll(emptyConversation(), list).entries.flatMap((entry) =>
         entry.kind === 'compaction' ? [entry.summary] : [],
       );
-    expect(markers(frames)).toEqual([SUMMARY]);
-    expect(markers(historyPage(root).events)).toEqual([SUMMARY]);
+    // 標記裡的摘要本文是索引（條目）加現況，現況就是 SUMMARY。
+    expect(markers(frames)).toHaveLength(1);
+    expect(markers(frames)[0]).toContain(SUMMARY);
+    expect(markers(historyPage(root).events)).toEqual(markers(frames));
   }, 30000);
 });
 
@@ -449,21 +458,22 @@ describe('會話總帳不含生摘要的那一次（#574）', () => {
     const run = await converse(TURNS, {
       summarization: summarizeAt([{ type: 'messages', value: 3 }]),
     });
-    // 前提：真的摘要了——三次請求裡恰好一次不帶工具，日誌記了一顆摘要。
-    expect(run.requests).toHaveLength(3);
+    // 前提：真的摘要了——四次請求裡恰好兩次不帶工具（索引條目、現況），日誌記了一顆摘要。
+    expect(run.requests).toHaveLength(4);
     const summaryAt = run.requests.findIndex((request) => !request.tools);
-    expect(run.requests.filter((request) => !request.tools)).toHaveLength(1);
+    expect(run.requests.filter((request) => !request.tools)).toHaveLength(2);
     expect(eventsOf(run.root, 'compaction/summary')).toHaveLength(1);
 
     const inputs = eventsOf(run.root, 'model/usage').map((usage) => usage.inputTokens);
     expect(inputs).toHaveLength(2);
     expect(inputs).not.toContain(1000 + summaryAt);
-    // 摘要那次報的用量不進總帳，但存在 `compaction/summary.usage`（#1022，照 dsh）：假端點報的 prompt 是 `1000 + 第幾次`、
-    // completion 恆為 1，所以這一格的數字能對上是哪一次請求。
+    expect(inputs).not.toContain(1000 + summaryAt + 1);
+    // 摘要那兩次報的用量不進總帳，但加總存在 `compaction/summary.usage`（#1022，照 dsh）：假端點報的 prompt 是 `1000 + 第幾次`、
+    // completion 恆為 1，兩次加總後的數字能對上是哪幾次請求。
     expect(eventsOf(run.root, 'compaction/summary')[0]!.usage).toEqual({
-      inputTokens: 1000 + summaryAt,
-      outputTokens: 1,
-      totalTokens: 1001 + summaryAt,
+      inputTokens: 1000 + summaryAt + (1000 + summaryAt + 1),
+      outputTokens: 2,
+      totalTokens: 1001 + summaryAt + (1001 + summaryAt + 1),
     });
     const expectedInput = inputs[0]! + inputs[1]!;
     const expected = {
