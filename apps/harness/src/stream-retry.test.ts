@@ -26,7 +26,7 @@ import {
 import type { AiEntry, Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { STREAM_RETRY_SIGNAL } from '@nexus/core';
+import { STREAM_RETRY_SIGNAL, streamRetrySignalOf } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
@@ -56,7 +56,9 @@ type Act =
   /** 叫一顆工具，參數吐到一半（`{"text": "嗨`），沒有 `finish_reason`，緊接著送 `[DONE]`（#1538 驗收 6：中間的代理在 chunk 邊界乾淨收尾）。 */
   | 'toolHalf'
   /** 同 `toolHalf`，但連 `[DONE]` 都沒有，上游直接乾淨關線。 */
-  | 'toolHalfEof';
+  | 'toolHalfEof'
+  /** 叫 `task` 委派給 `general-purpose` 子代理（#2504：子代理那幾次請求接在後面的劇本裡）。 */
+  | 'taskcall';
 
 /** `toolHalf` 的工具參數：串到一半就斷了的 JSON。 */
 const TOOL_HALF_ARGS = '{"text": "嗨';
@@ -102,6 +104,31 @@ async function scriptedOpenAi(script: readonly Act[]) {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (act === 'first503') {
       res.write(envelope(503));
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    if (act === 'taskcall') {
+      res.write(
+        chunk(id, {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_task',
+              type: 'function',
+              function: {
+                name: 'task',
+                arguments: JSON.stringify({
+                  description: '幹活',
+                  subagent_type: 'general-purpose',
+                }),
+              },
+            },
+          ],
+        }),
+      );
+      res.write(chunk(id, {}, 'tool_calls'));
       res.end('data: [DONE]\n\n');
       return;
     }
@@ -165,6 +192,12 @@ async function scriptedOpenAi(script: readonly Act[]) {
   };
 }
 
+/** pump 之前的一顆原始事件，只留測試讀的那幾格。 */
+interface RawSeen {
+  readonly method?: string;
+  readonly params?: { readonly namespace?: readonly string[]; readonly data?: unknown };
+}
+
 interface RunOptions {
   /** 這一輪掛的插件（要有工具可叫時用）。 */
   readonly plugins?: readonly PluginEntry[];
@@ -179,22 +212,25 @@ interface RunOptions {
   /** 這幾種事件寫進 root 日誌時拋這個錯（造日誌那一關拒收）。 */
   readonly reject?: { readonly types: readonly string[]; readonly error: Error };
   /** 明給 loop（`vitest.native.config.ts` 下沒給的會被當成 native）；`assistant/attempt` 寫在 pump 的那幾格要 `langgraph`。 */
-  readonly loop?: 'langgraph';
+  readonly loop?: 'langgraph' | 'native';
+  /** 收 agent 吐給 pump 的原始事件（pump 之前，含 pump 不聽的子層 `custom`）。 */
+  readonly raw?: RawSeen[];
   /** pump 讀完第一則 `message-start` 之後停住，等 root 日誌出現 `assistant/message`（日誌由圖寫，不等 pump 讀）才往下讀。 */
   readonly holdAfterFirstStart?: boolean;
 }
 
 /**
  * 把 agent 的 `streamEvents` 包一層：回來的 run 每讀一個事件就多等 `slowMs`。pump 是這條串流唯一的消費者，所以這等於一個慢消費者；
- * 沒給就原樣。
+ * 沒給就原樣。`tap` 收 agent 真吐出的每一顆事件（注入的假事件不算）。
  */
 function slowed(
   agent: object,
   slowMs: number | undefined,
   inject: readonly object[] = [],
   hold?: () => Promise<void>,
+  tap?: (raw: unknown) => void,
 ): PumpAgent {
-  if (slowMs === undefined && inject.length === 0 && hold === undefined) {
+  if (slowMs === undefined && inject.length === 0 && hold === undefined && tap === undefined) {
     return agent as PumpAgent;
   }
   return new Proxy(agent, {
@@ -227,6 +263,7 @@ function slowed(
                     await hold();
                   }
                   const result = await iterator.next();
+                  if (!result.done) tap?.(result.value);
                   const raw = result.value as {
                     method?: string;
                     params?: { data?: { event?: string } };
@@ -279,6 +316,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       options.slowMs,
       options.inject,
       options.holdAfterFirstStart === true ? replyLogged : undefined,
+      options.raw === undefined ? undefined : (raw) => options.raw!.push(raw as RawSeen),
     ) as PumpAgent,
     'stream-retry',
     undefined,
@@ -825,4 +863,79 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     },
     30_000,
   );
+});
+
+describe('前景子代理串流中段出錯重打（#2504）', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+  beforeEach(() => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+  });
+  afterEach(() => {
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  /** root 叫 `task` → 子代理第一次吐兩個字後 503、重打一次成功 → root 收尾。端點照請求次序演。 */
+  const SCRIPT: readonly Act[] = ['taskcall', 'mid503', 'ok', 'ok'];
+
+  /** 從原始事件裡撈出重打通知與它們的命名空間。 */
+  function retrySignals(raw: readonly RawSeen[]) {
+    return raw.flatMap((event) => {
+      if (event.method !== 'custom') return [];
+      const payload = (event.params?.data as { payload?: unknown } | null | undefined)?.payload;
+      const signal = streamRetrySignalOf(payload);
+      return signal === undefined ? [] : [{ namespace: event.params?.namespace ?? [], signal }];
+    });
+  }
+
+  for (const loop of ['native', 'langgraph'] as const) {
+    it(`${loop}：子代理的重打不會在主對話冒出「N 秒後重試」，通知帶子層命名空間`, async () => {
+      const raw: RawSeen[] = [];
+      const run = await runTurn(SCRIPT, { streamRetry: BUDGET, loop, raw });
+      expect(run.thrown).toBeUndefined();
+      expect(run.hits).toBe(4); // root、子代理、子代理重打、root 收尾
+      // root 的線上：沒有任何重試通知、沒有作廢。
+      expect(customNamed(run.frames, LLM_RETRY)).toHaveLength(0);
+      expect(customNamed(run.frames, LLM_RETRY_STARTED)).toHaveLength(0);
+      expect(customNamed(run.frames, MESSAGE_DISCARD)).toHaveLength(0);
+      expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(0);
+      // 子代理那一側：agent 吐出來的原始事件裡，兩顆通知都在、命名空間不是 root 的 `[]`。
+      const signals = retrySignals(raw);
+      expect(signals.map((entry) => entry.signal.phase)).toEqual(['scheduled', 'started']);
+      for (const entry of signals) expect(entry.namespace.length).toBeGreaterThan(0);
+      // 形狀兩個 loop 相同：叫起子代理的那顆 `task` 呼叫的那一層（`tools:<id>`），兩顆通知同一層。
+      const [first] = signals;
+      expect(first?.namespace).toHaveLength(1);
+      expect(first?.namespace[0]).toMatch(/^tools:/);
+      expect(signals[1]?.namespace).toEqual(first?.namespace);
+      // 子層的 `lifecycle started` 每一層只發一次：重打通知落在 `task` 呼叫那一層，不另開層。
+      const started = raw
+        .filter((event) => event.method === 'lifecycle')
+        .filter(
+          (event) => (event.params?.data as { event?: string } | undefined)?.event === 'started',
+        )
+        .map((event) => (event.params?.namespace ?? []).join('|'));
+      expect(new Set(started).size).toBe(started.length);
+      if (loop === 'native') {
+        // 只釘 native：這串層數與順序是 native 自己的 emitter 產的；langgraph 的由 LangGraph 產，不是這裡要釘的。
+        // 子層的 `custom` 不多開、不多收任何一層：每一層各自 started／completed 一次。
+        const depth = (event: RawSeen): number => event.params?.namespace?.length ?? 0;
+        const lifecycle = raw
+          .filter((event) => event.method === 'lifecycle')
+          .map((event) => [(event.params?.data as { event?: string }).event, depth(event)]);
+        expect(lifecycle).toEqual([
+          ['running', 0],
+          ['started', 1],
+          ['completed', 1],
+          ['started', 1],
+          ['started', 2],
+          ['completed', 2],
+          ['completed', 1],
+          ['started', 1],
+          ['completed', 1],
+          ['completed', 0],
+        ]);
+      }
+    }, 30_000);
+  }
 });
