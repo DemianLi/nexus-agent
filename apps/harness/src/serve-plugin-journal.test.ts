@@ -282,6 +282,7 @@ describe('列從紀錄導出', () => {
     const bound = async (): Promise<readonly string[]> => {
       const { plugins } = await loadDefaultPlugins({ env });
       const built = await createCliAgent({ live: false }, plugins);
+      built.attachSessions(built.sessions);
       try {
         await built.agent.invoke(toAgentInvocation('說點什麼'), {
           configurable: { thread_id: 'j' },

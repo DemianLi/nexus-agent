@@ -48,7 +48,7 @@ function readerPlugin(seen: Seen[]): PluginEntry {
 describe.each(['langgraph', 'native'] as const)('%s：CLI headless 那條路', (loop) => {
   it('工具呼叫的 config：native 是標記、沒有服務；langgraph 都沒有', async () => {
     const seen: Seen[] = [];
-    const { agent, dispose, sessionLog } = await createCliAgent(
+    const { agent, dispose, sessionLog, sessions, attachSession } = await createCliAgent(
       { live: false, agentLoop: loop },
       withScriptedModel(
         [...(await shippedPlugins()), readerPlugin(seen)],
@@ -57,9 +57,12 @@ describe.each(['langgraph', 'native'] as const)('%s：CLI headless 那條路', (
       undefined,
       { approvals: HEADLESS_APPROVALS },
     );
+    // log 是產品預設，這一輪要有日誌接著（#2814）。
+    const detach = attachSession(sessions);
     try {
       await runTurn(agent, '讀。', { log: () => {}, error: () => {} }, sessionLog, undefined, loop);
     } finally {
+      detach();
       await dispose();
     }
 

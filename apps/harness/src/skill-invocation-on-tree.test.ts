@@ -26,7 +26,7 @@ import {
   sourceKwargs,
   toLoggedMessage,
 } from '@nexus/core';
-import type { MessageSource, PluginEntry, SessionAddress } from '@nexus/core';
+import type { MessageSource, PluginEntry, SessionAddress, SessionEvent } from '@nexus/core';
 import type { FsLookup } from '@nexus/fs';
 import { isAgentInstructionsMessage } from '@nexus/plugin-agent-instructions';
 import {
@@ -470,13 +470,14 @@ async function openThread(
   turns: readonly ScriptedTurn[],
   ws: string,
   extra: readonly PluginEntry[] = [],
+  rootSeed?: readonly SessionEvent[],
 ) {
   const plugins = withScriptedModel([...booted.loaded.plugins, ...extra], turns);
   const built = await booted.assembly.create(
     { live: false, workspace: ws, sandbox: 'workspace-write' as const },
     { plugins },
   );
-  const sessions = new SessionRegistry(threadId);
+  const sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
   const attachment = built.attachSessions(sessions);
   const model = built.model as ScriptedChatModel;
   const rootLog = () => {
@@ -630,23 +631,22 @@ describe('驗收 7（冷續接）：停在模型回覆之前，從日誌續接�
     // 模型呼叫拋錯：注入已經進 state 也記進日誌，模型一個字都沒回。
     const before = await openThread(booted, 't-cold', [{ content: '', error: '過載' }], ws);
     await expect(before.say('/deploy')).rejects.toThrow('過載');
-    const original = (before.model.prompts[0] ?? []).find((message) => message.text === '/deploy');
     const events = before.rootLog().events;
     expect(invocationEvents(events)).toHaveLength(1);
     await before.close();
 
-    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌照 serve 續接走的 `restoreConversation` 灌回去。
-    const after = await openThread(booted, 't-cold-resumed', [{ content: '好。' }], ws);
+    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌用 `rootSeed` 給新組裝（歷史從它推），再照 serve 續接走的 `restoreConversation` 灌回 thread。
+    const after = await openThread(booted, 't-cold-resumed', [{ content: '好。' }], ws, [], events);
     const replay = await restoreConversation(after.built.agent as never, 't-cold-resumed', events);
     expect(replay.kind).toBe('replayed');
     await after.say('繼續');
     const prompt = after.model.prompts[0] ?? [];
-    // 前提：重放回來的那句人話換了 id（一輪開頭那句的 id 是 reducer 補的，日誌不記）。
+    // 日誌推出來的人話不帶 id（`state` 下一輪開頭那句的 id 是 reducer 補的、日誌不記），所以續接後的去重不能靠 id。
     const replayedHuman = prompt.find((message) => message.text === '/deploy');
-    expect(original?.id).toEqual(expect.any(String));
-    expect(replayedHuman?.id).not.toBe(original?.id);
+    expect(replayedHuman?.id).toBeUndefined();
     expect(prompt.filter(isSkillContent)).toHaveLength(1);
-    expect(invocationEvents(after.rootLog().events)).toEqual([]);
+    // 日誌是續接時接上的那一份，前面那顆 skill-invocation 本來就在；只看續接之後新寫的。
+    expect(invocationEvents(after.rootLog().events.slice(events.length))).toEqual([]);
     await after.close();
   }, 90000);
 });

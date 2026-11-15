@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { BaseMessage } from '@langchain/core/messages';
-import { withModelCallStep } from '@nexus/core';
+import { SessionRegistry, withModelCallStep } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { HARNESS_IDENTITY_SENTENCE } from '@nexus/plugin-system-prompt';
@@ -93,14 +93,13 @@ async function cliPrompt(
   invocation: { readonly workspace?: string } = {},
   cwd?: string,
 ): Promise<string> {
-  const { agent, dispose, model, sessionLog } = await createCliAgent(
-    { live: false, ...invocation },
-    plugins,
-    cwd,
-  );
+  const built = await createCliAgent({ live: false, ...invocation }, plugins, cwd);
+  const { agent, dispose, model, sessionLog } = built;
+  const detach = built.attachSession(built.sessions);
   try {
     await runTurn(agent, '嗨。', silent, sessionLog);
   } finally {
+    detach();
     await dispose();
   }
   return systemOf((model as unknown as { lastPrompt: readonly BaseMessage[] }).lastPrompt);
@@ -202,14 +201,16 @@ describe('掛了 skills 與 task 的組裝', () => {
   it('root：Skills System 與委派說明都在結尾句前面，結尾句是最後一段；子代理：帶部署前綴，自己的提示詞在中間', async () => {
     const root = await workspaceWithSkill();
     const model = delegation();
-    const { agent, dispose } = await createNexusAgent({
+    const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       backend: new ContainedFilesystemBackend({ rootDir: root }),
       plugins: [...shipped, lateAppender, crew],
     });
+    const detach = attachSession(new SessionRegistry('delegation'));
     try {
       await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
     } finally {
+      detach();
       await dispose();
     }
 

@@ -404,6 +404,8 @@ async function runOne(
     {
       live: false,
       agentLoop: loop,
+      // 對照的基線是 `state` 下錄的請求與落盤位元組：直接 invoke 不寫使用者句進日誌，`log` 推導的請求（少那句、助手訊息少 `name`）與基線不同。
+      historySource: 'state',
       workspace: spec.shared === true ? shared : priv,
       ...(spec.shared === true && { workspaceRoot: priv, sharedWorkspaceRoot: shared }),
       sandbox: 'workspace-write',

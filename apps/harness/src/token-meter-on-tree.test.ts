@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 import { manifest as tokenMeterManifest, tokenMeterUnit } from '@nexus/plugin-token-meter';
 import { effectiveReload } from '@nexus/sdk';
+import { SessionRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -75,9 +76,14 @@ async function assemble(loaded: LoadedPluginConfig) {
     keys: built.projections.list().map((unit) => unit.key),
     /** 打一輪讓模型綁工具，交回綁了哪些工具名。 */
     async toolNames(): Promise<string[]> {
-      await built.agent.invoke(toAgentInvocation('看一下。'), {
-        configurable: { thread_id: 'names' },
-      });
+      const detach = built.attachSession(new SessionRegistry('names'));
+      try {
+        await built.agent.invoke(toAgentInvocation('看一下。'), {
+          configurable: { thread_id: 'names' },
+        });
+      } finally {
+        detach();
+      }
       return (built.model as ScriptedChatModel).boundTools.map(
         (tool) => (tool as { name: string }).name,
       );

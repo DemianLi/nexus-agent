@@ -164,9 +164,12 @@ async function registrationCase(
   const turns: ScriptedTurn[] = [{ content: '好。' }];
   const spy = probe();
   binds.length = 0;
+  // 基線錄在 `state` 下：直接 invoke 不把 user 訊息寫進日誌（那是 ThreadPump 的 `turn/start`），log 下「開工」會掉、
+  // 也多一顆 `historyFromLog`，兩者都會讓逐字比對失效。
   const invocation = {
     live: false,
     agentLoop: loop,
+    historySource: 'state' as const,
     ...(workspace !== undefined && { workspace, sandbox: 'workspace-write' as const }),
   };
   let built: Built;

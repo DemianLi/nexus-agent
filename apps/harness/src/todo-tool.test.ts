@@ -250,15 +250,17 @@ describe('todo_write 在真的圖上', () => {
 
   it('工具進得了預設清單面向模型的那一面', async () => {
     const model = new ScriptedChatModel({ turns: [{ content: '什麼都不做。' }] });
-    const { agent, dispose } = await createNexusAgent({
+    const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       plugins: [...shipped],
     });
+    const detach = attachSession(new SessionRegistry('listing'));
     try {
       await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'listing' } });
       expect(model.boundToolNames).toContain(TODO_TOOL_NAME);
     } finally {
+      detach();
       await dispose();
     }
   });

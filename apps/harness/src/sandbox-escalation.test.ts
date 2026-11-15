@@ -62,6 +62,7 @@ import {
   ApprovalPolicyController,
   createHostServicesPlugin,
   deriveApprovalChannel,
+  SessionRegistry,
   toolErrorOf,
 } from '@nexus/core';
 import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
@@ -189,7 +190,7 @@ describe('升級', () => {
       mode: controller.source,
       grants: controller,
     });
-    const { agent, dispose } = await createNexusAgent({
+    const built = await createNexusAgent({
       model,
       backend,
       plugins: [
@@ -219,7 +220,12 @@ describe('升級', () => {
         approvals: { enabled: options.approvalsEnabled },
       }),
     });
-    return { agent, dispose, controller, approvalPolicy };
+    const detach = built.attachSession(new SessionRegistry('sandbox-escalation'));
+    const dispose = async (): Promise<void> => {
+      detach();
+      await built.dispose();
+    };
+    return { agent: built.agent, dispose, controller, approvalPolicy };
   }
 
   /**
@@ -233,6 +239,7 @@ describe('升級', () => {
       withScriptedModel(shipped, turns),
       root,
     );
+    built.attachSessions(built.sessions);
     return { agent: built.agent, dispose: built.dispose };
   }
 
@@ -976,6 +983,7 @@ describe('升級', () => {
    */
   it('產品路徑：沒有 --workspace 的組裝，模型的工具清單裡沒有升級工具；有的話才有', async () => {
     const bare = await createCliAgent({ live: false }, shipped, root);
+    bare.attachSessions(bare.sessions);
     try {
       await bare.agent.invoke(toAgentInvocation('看一下。'), {
         configurable: { thread_id: 'bare' },
@@ -989,6 +997,7 @@ describe('升級', () => {
     }
 
     const fenced = await createCliAgent({ live: false, workspace: root }, shipped, root);
+    fenced.attachSessions(fenced.sessions);
     try {
       await fenced.agent.invoke(toAgentInvocation('看一下。'), {
         configurable: { thread_id: 'fenced' },

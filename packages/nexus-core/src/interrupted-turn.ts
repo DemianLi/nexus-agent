@@ -8,31 +8,27 @@
  * 補結果，每次續接重算。每個讀方還得自己認得「end-seed 前那一輪死了」，漏認的就當它還在跑；web 歷史也分不出
  * 「當掉收的」與「正常完成」。
  *
- * ## 照 dsh：續接時算補結、寫回、再當 seed
+ * ## 續接時算補結、寫回、再當 seed
  *
- * dsh 在續接時拿到寫所有權、冷讀，`interruptedTurnClosers(persisted)` 算補結，`handle.append(closers)` 寫回，
- * 再以 `persisted + closers` 當 seed（`packages/core/agent-loop/src/index.ts:848-863`，`477b4f4`）。補結是最後那一輪
- * 沒配到的呼叫各一顆錯誤 `tool/result`，有開著的步補 `step/end`，最後補 `turn/end {kind:'interrupted'}`
- * （`packages/core/session/src/repair.ts:159-162`）。語意修復歸 agent 層、不歸存放層，所以這裡是一個獨立的 helper，
- * 不放進 `SessionStore.resume`。
+ * 續接時先拿寫所有權、冷讀，算補結，寫回，再以「已存的＋補結」當 seed。補結是最後那一輪沒配到的呼叫各一顆錯誤
+ * `tool/result`，有開著的 `model/start` 補 `model/end`，最後補 `turn/end {reason:{kind:'interrupted'}}`。語意修復歸 agent 層、
+ * 不歸存放層，所以這裡是一個獨立的 helper，不放進 `SessionStore.resume`。與 dsh 的對照見
+ * docs/interrupted-turn-and-invariant-vs-dsh.md。
  *
  * 沒配到結果的呼叫補的那幾句也是一輪失敗時當場補的來源（{@link unansweredCallResults}，[#2029](https://github.com/DemianLi/nexus-agent/issues/2029)）：
  * 兩處共用一份句子與碼。
  *
- * ## 補哪些（卡上三題 PM 2026-10-08 拍板，一律照 dsh）
+ * ## 補哪些
  *
  * - **沒配到結果的呼叫都補**：記過 `tool/call` 的說結果不明，回覆裡要了、還沒記到 `tool/call` 的說還沒開始
- *   （dsh 的 `ToolCallRecovery`：呼叫由回覆登記，`tool/call` 只標「開始了」）。不變量對合成的「還沒開始」結果明文放行
- *   （dsh `packages/core/session/src/invariant.ts:142-145`，我們的 `invariant.ts` 同）。
- * - **開著的 `model/start` 補 `model/end`**，對應 dsh 補 `step/end`。這一對不是 dsh 的 step（`session-log.ts` 的 `model/start`），
- *   但「每一個進入的呼叫恰好一顆結尾」同一條規則（`model/end` 的檔頭）。`outcome` 用 `'error'`（#1022 的詞彙裡表示失敗的那一格；
- *   行程死了不是這一輪被中止，所以不是 `'aborted'`），`modelCall` 指回那顆 `model/start`。
- * - **掃描遇到 `session/end-seed` 不重設**（dsh `repair.ts:107-109`）。dsh 的日誌**會**有「開著的輪後面接 end-seed」
- *   （fork seed 先接 end-seed、再接補結，`fork.ts:21-29`），不變量對 end-seed 不設限（`invariant.ts:155-156`）。我們的舊檔
- *   「開著的輪＋end-seed、之後沒有新輪」（#934 之前續接過、又沒有新輪就停了）因此會補，補結接在 end-seed **後面**；
- *   新檔的補結一律在 end-seed 前面（續接當下先補、再接 seed）。舊檔「開著的輪＋end-seed＋新 `turn/start` …」的新一輪
- *   自己收了尾，掃描由那顆 `turn/start` 重設，所以不補。「只掃最後一顆 end-seed 之後」那條沒有採：理由是舊檔的形狀，
- *   不是基礎建設表達不出來。
+ *   （呼叫由回覆登記，`tool/call` 只標「開始了」）。配對檢查對合成的「還沒開始」結果放行
+ *   （`session-relationships.ts` 的 `tool/result` 分支，認 `TOOL_NOT_STARTED` 碼）。
+ * - **開著的 `model/start` 補 `model/end`**：「每一個進入的呼叫恰好一顆結尾」（`model/end` 的檔頭）。`outcome` 用 `'error'`
+ *   （#1022 的詞彙裡表示失敗的那一格；行程死了不是這一輪被中止，所以不是 `'aborted'`），`modelCall` 指回那顆 `model/start`。
+ * - **掃描遇到 `session/end-seed` 不重設**。我們的舊檔「開著的輪＋end-seed、之後沒有新輪」（#934 之前續接過、又沒有新輪就停了）
+ *   因此會補，補結接在 end-seed **後面**；新檔的補結一律在 end-seed 前面（續接當下先補、再接 seed）。舊檔「開著的輪＋end-seed＋
+ *   新 `turn/start` …」的新一輪自己收了尾，掃描由那顆 `turn/start` 重設，所以不補。「只掃最後一顆 end-seed 之後」那條沒有採：
+ *   理由是舊檔的形狀，不是基礎建設表達不出來。
  *
  * @module
  */
@@ -202,15 +198,13 @@ export interface ColdStoredSession {
 }
 
 /**
- * 冷讀一份已存的會話（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），照 dsh 的 `readColdSessionLog`
- * （`packages/session-query/session-query/src/cold-read.ts:31-57`，`687f282e`）：唯讀打開、讀整份、在記憶體接上
+ * 冷讀一份已存的會話（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)）：唯讀打開、讀整份、在記憶體接上
  * {@link interruptedTurnClosers}，讓寫的那一方死在一輪中間的日誌也折得成收好尾的樣子。**不拿租約、不寫回**——要寫回走
  * {@link resumeClosingInterruptedTurn}。讀失敗原樣拋，由呼叫端分類。
  *
- * dsh 讀完會關把手；我們的唯讀把手沒有 `close()`，所以少這一步。
+ * 我們的唯讀把手沒有 `close()`，所以讀完不用關。
  *
- * 補結的 `seq` 接在最後一顆真事件後面，所以拿 `events.at(-1).seq` 當「讀到哪裡」的，記的是補結的那一顆，同 dsh
- * （`readSurface` 的 `capturedThroughSeq`，`session-query/src/index.ts:315`）。
+ * 補結的 `seq` 接在最後一顆真事件後面，所以拿 `events.at(-1).seq` 當「讀到哪裡」的，記的是補結的那一顆。
  *
  * @param store - 存放處；只用它的唯讀打開。
  * @param id - 要讀的會話 id。

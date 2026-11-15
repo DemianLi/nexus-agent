@@ -121,6 +121,8 @@ async function assembleAndRun(
     home,
     session.mcpPool === undefined ? {} : { mcpPool: session.mcpPool },
   );
+  // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。
+  const detach = built.attachSession(built.sessions);
   try {
     await built.agent.invoke(toAgentInvocation('看一下'), {
       configurable: { thread_id: 'mcp-credentials' },
@@ -130,6 +132,7 @@ async function assembleAndRun(
       warnings: built.warnings.map(({ message }) => message),
     };
   } finally {
+    detach();
     await built.dispose();
   }
 }

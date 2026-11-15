@@ -38,6 +38,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { shippedPlugins, withoutTimeContext } from './fixtures.js';
+import { isSummaryCallPrompt } from './summary-call.fixture.js';
 
 const shipped = withoutTimeContext(await shippedPlugins());
 
@@ -130,9 +131,12 @@ async function run(options: RunOptions) {
       ? new ScriptedChatModel({ turns: options.turns ?? [] })
       : new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
   const checkpointer = new MemorySaver();
+  // 這個檔量的是 state 路徑的摘要切點與續接（切點是 `state.messages` 的索引、`conversation-restore` 只灌 messages）；
+  // log 路徑的推導由 `log-derived-history` 系列測試量。
   const built = await createNexusAgent({
     model,
     checkpointer,
+    historySource: 'state',
     plugins: [
       ...(options.timeContext === true ? await shippedPlugins() : shipped),
       ...(options.extraPlugins ?? []),
@@ -461,8 +465,8 @@ describe('摘要之後下一句話把基線補回來', () => {
     await found.close();
   });
 
-  /** agent 自己的呼叫。摘要器那次也走同一個模型，但它的 prompt 沒有 system。 */
-  const isAgentCall = (prompt: readonly BaseMessage[]) => prompt[0]?.getType() === 'system';
+  /** agent 自己的呼叫。摘要器那次也走同一個模型，由 {@link isSummaryCallPrompt} 認出來。 */
+  const isAgentCall = (prompt: readonly BaseMessage[]) => !isSummaryCallPrompt(prompt);
 
   it('第二、三句話的第一次模型呼叫各看得到恰好一則基線，排在摘要之後', () => {
     for (const sentence of [1, 2]) {
@@ -530,6 +534,7 @@ describe('摘要之後下一句話把基線補回來', () => {
     const resumed = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
+      historySource: 'state',
       plugins: [...shipped],
       backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'workspace-write' }),
     });
@@ -577,7 +582,7 @@ class BackgroundWorkerModel extends BaseChatModel {
       generations: [{ text: message.text, message }],
       llmOutput: {},
     });
-    if (messages[0]?.getType() !== 'system') return reply(new AIMessage('背景的摘要。'));
+    if (isSummaryCallPrompt(messages)) return reply(new AIMessage('背景的摘要。'));
     this.agentCalls.push({ round: this.round, prompt: [...messages] });
     if (this.round === 1 && this.#echoes < 6) {
       this.#echoes += 1;
@@ -703,9 +708,11 @@ it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格�
   const model = new ScriptedChatModel({
     turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
   });
+  // 多句話直接 `invoke`、不經 ThreadPump：log 路徑要求每句話先有 `turn/start`，這裡只量 state 的回傳值。
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
+    historySource: 'state',
     plugins: [...shipped],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     summarization: {

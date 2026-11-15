@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Command } from '@langchain/langgraph';
-import { deriveApprovalChannel, loadPlugins } from '@nexus/core';
+import { deriveApprovalChannel, loadPlugins, SessionRegistry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
 import {
   ASK_USER_QUESTION_TOOL_NAME,
@@ -100,7 +100,12 @@ async function assemble(
     undefined,
     options.approvals === undefined ? undefined : { approvals: options.approvals },
   );
-  return { loaded, built };
+  const attachment = built.attachSessions(new SessionRegistry('ask-user'));
+  const close = async () => {
+    await attachment.detach();
+    await built.dispose();
+  };
+  return { loaded, built, close };
 }
 
 type Assembled = Awaited<ReturnType<typeof assemble>>;
@@ -199,7 +204,7 @@ describe('B：出貨清單上的 ask-user 經樹進來，位置與名字不變',
     const { interrupt, toolText } = await runOnce(thread, 'unspecified');
     expect(interrupt).toBeUndefined();
     expect(toolText).toContain('沒有指定問答管道');
-    await thread.built.dispose();
+    await thread.close();
   }, 60000);
 });
 
@@ -210,7 +215,7 @@ describe('E：答題管道由入口決定，每個入口各一條，沒有樹的
     const { interrupt } = await runOnce(thread, 'serve-like');
     expect(interrupt?.kind).toBe('question');
     expect(interrupt?.questions?.map((question) => question.id)).toEqual(['day']);
-    await thread.built.dispose();
+    await thread.close();
   }, 60000);
 
   it('CLI 那一格（沒有人在）：不發中斷，結果文字含 policy-never 那一句', async () => {
@@ -222,7 +227,7 @@ describe('E：答題管道由入口決定，每個入口各一條，沒有樹的
     const { interrupt, toolText } = await runOnce(thread, 'cli-like');
     expect(interrupt).toBeUndefined();
     expect(toolText).toContain(noAnswererMessage({ kind: 'policy-never' }));
-    await thread.built.dispose();
+    await thread.close();
   }, 60000);
 
   it('沒有樹的呼叫端：同一個行程裡兩份無樹組裝（一份 headless、一份有人在）各有各的答題管道', async () => {
@@ -234,8 +239,8 @@ describe('E：答題管道由入口決定，每個入口各一條，沒有樹的
     expect(a.interrupt).toBeUndefined();
     expect(a.toolText).toContain(noAnswererMessage({ kind: 'policy-never' }));
     expect(b.interrupt?.kind).toBe('question');
-    await headless.built.dispose();
-    await attended.built.dispose();
+    await headless.close();
+    await attended.close();
     // 反過來：先組有人在的、後組 headless 的（腳本每顆模型從頭吃，所以各組新的），確認沒有「後組的蓋掉先組的」。
     const attendedFirst = await assemble(env);
     const headlessSecond = await assemble(env, { approvals: HEADLESS_APPROVALS });
@@ -246,8 +251,8 @@ describe('E：答題管道由入口決定，每個入口各一條，沒有樹的
     expect(c.interrupt?.kind).toBe('question');
     expect(d.interrupt).toBeUndefined();
     expect(d.toolText).toContain(noAnswererMessage({ kind: 'policy-never' }));
-    await attendedFirst.built.dispose();
-    await headlessSecond.built.dispose();
+    await attendedFirst.close();
+    await headlessSecond.close();
   }, 90000);
 
   it('同一棵樹上兩條 thread（serve 的形狀）：各自停在自己的中斷上，互不串線', async () => {
@@ -258,8 +263,8 @@ describe('E：答題管道由入口決定，每個入口各一條，沒有樹的
     const [a, b] = await Promise.all([runOnce(first, 'tree-a'), runOnce(second, 'tree-b')]);
     expect(a.interrupt?.kind).toBe('question');
     expect(b.interrupt?.kind).toBe('question');
-    await first.built.dispose();
-    await second.built.dispose();
+    await first.close();
+    await second.close();
   }, 90000);
 });
 
@@ -291,8 +296,8 @@ describe('D：樹上那一列停用，開著的 thread 照舊答得出來，下�
     expect(JSON.parse(String(toolMessage?.content))).toEqual({
       answers: [{ id: 'day', selected: ['週二'] }],
     });
-    await first.built.dispose();
-    await second.built.dispose();
+    await first.close();
+    await second.close();
   }, 90000);
 });
 

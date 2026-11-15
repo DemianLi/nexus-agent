@@ -2,10 +2,8 @@
  * 預設遞迴上限 100 在**歷史從日誌推（`log`，產品預設）**下的輪數：補懸空呼叫那顆不掛 `beforeAgent`，圖上少一個節點（#2362）。
  *
  * - 出貨清單（`createNexusAgent`，不經樹）：32 輪。`state` 下是 31（`agent-instructions-on-tree.test.ts` 的 D 組，那份測試把組裝留在 `state`），差的正是那一格。
- * - CLI 的樹：31 輪不變。三位 pre-step listener 加切換核准政策的通知共四顆 `beforeAgent`，少一顆是 `floor((100 - 2 - 3) / 3)`，與 `floor((100 - 2 - 4) / 3)` 同為 31。
- * - serve 的樹：23 輪不變。每輪四格，`floor((100 - 2 - 3) / 4)` 與 `floor((100 - 2 - 4) / 4)` 同為 23。
- *
- * 這一份量**產品預設**，所以 `vi.unmock('./assembly-root.js')`（見 `history-source-state.setup.ts`）。
+ * - CLI 的樹：31 輪。三位 pre-step listener 加切換核准政策的通知共四顆 `beforeAgent`，少一顆是 `floor((100 - 2 - 3) / 3)`，與 `floor((100 - 2 - 4) / 3)` 同為 31。
+ * - serve 的樹：23 輪。每輪四格，`floor((100 - 2 - 3) / 4)` 與 `floor((100 - 2 - 4) / 4)` 同為 23。
  */
 
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,8 +12,6 @@ import { join } from 'node:path';
 
 import { SessionRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-vi.unmock('./assembly-root.js');
 
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -72,7 +68,7 @@ describe('log 下預設上限的輪數', () => {
     ['CLI', 'cli', {}, 31],
     ['serve', 'serve', { stepInbox: true }, 23],
   ] as const)(
-    '%s 的樹：%i 輪不變',
+    '%s 的樹：%i 輪',
     async (_label, entry, invocation, rounds) => {
       const looping = new LoopingChatModel();
       vi.spyOn(ScriptedChatModel.prototype, '_generate').mockImplementation((messages) =>

@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
+import { SessionRegistry } from '@nexus/core';
 import type { Event, WireClient } from '@nexus/wire';
 import { createWireClient, fileReferencesPath } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -217,14 +218,17 @@ describe('講給模型聽的那一句', () => {
     readonly workspace?: string;
   }): Promise<{ readonly prompt: string; readonly tools: readonly string[] }> {
     const cwd = await directory('nexus-file-references-prompt-');
-    const { agent, dispose, model, sessionLog } = await createCliAgent(
+    const { agent, dispose, model, attachSessions } = await createCliAgent(
       { live: false, ...invocation },
       shipped,
       cwd,
     );
+    const sessions = new SessionRegistry('file-references-prompt');
+    const attachment = attachSessions(sessions);
     try {
-      await runTurn(agent, '嗨。', { log: () => undefined, error: () => undefined }, sessionLog);
+      await runTurn(agent, '嗨。', { log: () => undefined, error: () => undefined }, sessions.root);
     } finally {
+      await attachment.detach();
       await dispose();
     }
     const scripted = model as unknown as {

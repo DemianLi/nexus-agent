@@ -358,6 +358,7 @@ async function requestsOf(
     withScriptedModel([...(await rows(enabled))], turns),
     workspaceRoot,
   );
+  const detach = built.attachSession(built.sessions);
   try {
     await runTurn(
       built.agent,
@@ -366,6 +367,7 @@ async function requestsOf(
       built.sessionLog,
     );
   } finally {
+    detach();
     await built.dispose();
   }
   return (built.model as unknown as { prompts: BaseMessage[][] }).prompts;

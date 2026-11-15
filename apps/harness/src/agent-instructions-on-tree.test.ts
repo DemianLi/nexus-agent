@@ -549,10 +549,12 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
       const shipped = await shippedPlugins();
       const workspace = withWorkspace ? workspaceWith('規矩。') : undefined;
       const model = new LoopingChatModel();
+      // 輪數算術以節點數為準，`state` 與 `log` 差一顆補懸空的節點：這裡量 `state`，`log` 的輪數在 `recursion-limit-log.test.ts`。
       const { agent, dispose } = await createNexusAgent({
         model,
         plugins: shipped,
         summarization: false,
+        historySource: 'state',
         ...(workspace !== undefined && {
           backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'workspace-write' }),
         }),
@@ -750,6 +752,12 @@ const withTimeContext = (chain: readonly string[]): string[] =>
   );
 
 /**
+ * `historyFromLog` 只在 `history.source === 'log'` 時掛（`fold.ts`，`nexusMaxTokens` 之後、`nexusRequestSnapshot` 之前），產品預設正是 log，
+ * 所以鏈上多**恰好一格**，只在這裡插這一格。
+ */
+const withHistoryFromLog = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) => (name === 'nexusRequestSnapshot' ? ['historyFromLog', name] : [name]));
+/**
  * fold 在其餘 plugin 內側放一格 `nexusApprovalPolicyPrompt`（核准政策句，#1986），`b0a74042` 錄的名單沒有它：鏈上在其餘 plugin
  * 之後、以 `last` 掛的 `nexusSystemPrompt` 之前多**恰好一格**。同上，只在這裡插這一格。
  */
@@ -824,7 +832,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       expect(middlewareNames(agent)).toEqual(
         withPlanModeOnPreStep(
           withToolListeners(
-            withPromptSections(withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED))),
+            withPromptSections(
+              withApprovalPolicyPrompt(withTimeContext(withHistoryFromLog(CHAIN_SHIPPED))),
+            ),
           ),
         ),
       );
@@ -848,7 +858,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
           withPlanModeOnPreStep(
             withToolListeners(
               withPromptSections(
-                withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+                withApprovalPolicyNotice(
+                  withApprovalPolicyPrompt(withTimeContext(withHistoryFromLog(expected))),
+                ),
               ),
             ),
           ),
