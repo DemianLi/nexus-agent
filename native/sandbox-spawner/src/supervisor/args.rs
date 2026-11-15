@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub const USAGE: &str = "nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg <參數>]... \
 --conversation <程式> [--conversation-arg <參數>]... [--composition <程式> [--composition-arg <參數>]...] [--eof-grace-ms <毫秒>] [--term-grace-ms <毫秒>] [--front-restart-ms <毫秒>] \
-[--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--capacity <條>] [--warm <個>] [--idle-ms <毫秒>] \
+[--rss-limit-mb <MiB>] [--rss-poll-ms <毫秒>] [--stall-ms <毫秒>] [--start-timeout-ms <毫秒>] [--capacity <條>] [--warm <個>] [--idle-ms <毫秒>] \
 [--read-only-idle-ms <毫秒>] [--drain-timeout-ms <毫秒>] [--stats-ms <毫秒>] [--throttle-ms <毫秒>] [--throttle-run-ms <毫秒>] \
 [--throttle-stop-ms <毫秒>] [--admission-timeout-ms <毫秒>] [--host <程式> [--host-arg <參數>]... [--host-backoff-ms <毫秒>] \
 [--host-backoff-max-ms <毫秒>] [--host-start-failures <次>] [--host-stable-ms <毫秒>] [--host-ready-timeout-ms <毫秒>]]";
@@ -22,6 +22,8 @@ pub const DEFAULT_FRONT_RESTART: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_RSS_POLL: Duration = Duration::from_millis(250);
 /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就判 `stalled`。
 pub const DEFAULT_STALL: Duration = Duration::from_millis(15_000);
+/// 一對起了（或補了葉子）之後多久還沒讀到組合行程的 `ready`，就整對收掉。
+pub const DEFAULT_START_TIMEOUT: Duration = Duration::from_millis(30_000);
 /// 沉默多久才看要不要壓住吃滿 CPU 的對話行程（[`super::cpu`]）。
 pub const DEFAULT_THROTTLE: Duration = Duration::from_millis(2_000);
 /// 壓住時每一輪放它跑多久。
@@ -86,6 +88,9 @@ pub struct Args {
     pub rss_poll: Duration,
     /// 送出 `bind` 之後多久沒聽到對話行程任何一則回報，就當場對它的群組送 SIGKILL（不走拆除梯度），死因 `stalled`。`None`（`--stall-ms 0`）是不判。
     pub stall: Option<Duration>,
+    /// 一對從起組合行程（補葉子時從補的那一刻）到讀到它的 `ready` 最多這麼久，過了就當場對組合行程的群組送 SIGKILL，死因 `stalled`。
+    /// `None`（`--start-timeout-ms 0`）是不判。只管成對的。
+    pub start_timeout: Option<Duration>,
     /// 同時活著的對話行程（含預熱池、起動中與正在收的）最多幾個。沒給就照記憶體上限算（[`super::memory::auto_capacity`]）。
     pub capacity: Option<u32>,
     /// 預熱池的大小，可以是 0。池裡的算進容量。
@@ -121,6 +126,7 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
     let mut rss_limit_kb = None;
     let mut rss_poll = DEFAULT_RSS_POLL;
     let mut stall = Some(DEFAULT_STALL);
+    let mut start_timeout = Some(DEFAULT_START_TIMEOUT);
     let mut capacity = None;
     let mut warm = DEFAULT_WARM;
     let mut idle = Some(DEFAULT_IDLE);
@@ -159,6 +165,9 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
             "--rss-limit-mb" => rss_limit_kb = Some(positive(flag, value()?)?.saturating_mul(1024)),
             "--rss-poll-ms" => rss_poll = Duration::from_millis(positive(flag, value()?)?),
             "--stall-ms" => stall = Some(millis(flag, value()?)?).filter(|d| !d.is_zero()),
+            "--start-timeout-ms" => {
+                start_timeout = Some(millis(flag, value()?)?).filter(|d| !d.is_zero())
+            }
             "--capacity" => {
                 capacity = Some(
                     Some(count(flag, value()?)?)
@@ -217,6 +226,7 @@ pub fn parse(args: &[OsString]) -> Result<Args, String> {
         rss_limit_kb,
         rss_poll,
         stall,
+        start_timeout,
         capacity,
         warm,
         idle,
@@ -306,6 +316,7 @@ mod tests {
         assert_eq!(args.rss_limit_kb, None);
         assert_eq!(args.rss_poll, DEFAULT_RSS_POLL);
         assert_eq!(args.stall, Some(DEFAULT_STALL));
+        assert_eq!(args.start_timeout, Some(DEFAULT_START_TIMEOUT));
         assert_eq!(args.capacity, None);
         assert_eq!(args.warm, DEFAULT_WARM);
         assert_eq!(args.idle, Some(DEFAULT_IDLE));
@@ -524,6 +535,32 @@ mod tests {
             parse(&os(&items)).unwrap().stall,
             Some(Duration::from_millis(300))
         );
+    }
+
+    #[test]
+    fn zero_turns_the_start_deadline_off() {
+        let base = [
+            "--run-dir",
+            "/r",
+            "--audit",
+            "/a",
+            "--front",
+            "f",
+            "--conversation",
+            "c",
+        ];
+        let mut items = base.to_vec();
+        items.extend(["--start-timeout-ms", "0"]);
+        assert_eq!(parse(&os(&items)).unwrap().start_timeout, None);
+        let mut items = base.to_vec();
+        items.extend(["--start-timeout-ms", "300"]);
+        assert_eq!(
+            parse(&os(&items)).unwrap().start_timeout,
+            Some(Duration::from_millis(300))
+        );
+        let mut items = base.to_vec();
+        items.extend(["--start-timeout-ms", "soon"]);
+        assert!(parse(&os(&items)).is_err());
     }
 
     #[test]
