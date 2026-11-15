@@ -482,17 +482,25 @@ impl Supervisor {
                 return;
             }
             let serial = composition.serial;
+            let collecting = composition.proc.stop.is_some();
+            // 葉子在收（或已經不在）的一對也不會再綁：等它收完屍，整對連帶收。
+            let leaf_serving = self
+                .conversations
+                .iter()
+                .any(|c| c.pair == Some(serial) && c.proc.stop.is_none());
             match report {
-                // 在收的一對不會再綁：晚到的 `ready` 不理，狀態與沉默的起算都不動（下面兩支都是）。
+                // 在收的一對不會再綁：晚到的 `ready`、`bound` 不理，狀態與沉默的起算都不動（下面三支都是）。
                 ConversationReport::Ready
                     if matches!(composition.state, PairState::Refilling { .. })
-                        && composition.proc.stop.is_none() =>
+                        && !collecting
+                        && leaf_serving =>
                 {
                     self.bind_pair(index);
                 }
                 ConversationReport::Ready
                     if matches!(composition.state, PairState::Starting { .. })
-                        && composition.proc.stop.is_none() =>
+                        && !collecting
+                        && leaf_serving =>
                 {
                     self.enter(index, PairState::Ready);
                     if self.compositions[index].thread.is_some() {
@@ -500,7 +508,7 @@ impl Supervisor {
                     }
                 }
                 ConversationReport::Bound { thread_id }
-                    if composition.state == PairState::Binding =>
+                    if composition.state == PairState::Binding && !collecting =>
                 {
                     if Some(&thread_id) != composition.thread.as_ref() {
                         say!("組合行程 {} 綁錯 thread，殺掉", composition.proc.pid);
@@ -508,14 +516,13 @@ impl Supervisor {
                         composition.proc.kill_now();
                         return;
                     }
-                    let serving = composition.proc.stop.is_none();
                     let socket = composition.socket.as_os_str().as_bytes().to_vec();
                     self.enter(index, PairState::Bound);
                     let Some(leaf) = self.conversations.iter().find(|c| c.pair == Some(serial))
                     else {
                         continue;
                     };
-                    if serving && leaf.proc.stop.is_none() {
+                    if leaf.proc.stop.is_none() {
                         self.tell_front(&FrontEvent::Up { thread_id, socket });
                     }
                 }
