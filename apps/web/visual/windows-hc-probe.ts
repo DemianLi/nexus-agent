@@ -33,7 +33,55 @@ const names = [
 ];
 
 const server = await startGuardServer();
-const browser = await chromium.launch({ channel: 'chrome', headless: false });
+/** 幾種開法各試一次，用第一個 `forced-colors` 真的生效的。 */
+const ATTEMPTS = [
+  { label: 'chrome 有頭', options: { channel: 'chrome', headless: false } },
+  { label: 'edge 有頭', options: { channel: 'msedge', headless: false } },
+  {
+    label: 'chrome 有頭、不帶 Playwright 的預設參數',
+    options: {
+      channel: 'chrome',
+      headless: false,
+      ignoreDefaultArgs: true,
+      args: [
+        '--remote-debugging-pipe',
+        '--no-first-run',
+        '--user-data-dir=' + join(out, 'profile'),
+      ],
+    },
+  },
+  { label: 'chrome 無頭', options: { channel: 'chrome', headless: true } },
+  {
+    label: 'chrome 有頭、強制高對比旗標',
+    options: { channel: 'chrome', headless: false, args: ['--force-high-contrast'] },
+  },
+] as const;
+
+let browser;
+for (const attempt of ATTEMPTS) {
+  try {
+    const candidate = await chromium.launch({
+      ...attempt.options,
+      args: [...(('args' in attempt.options ? attempt.options.args : undefined) ?? [])],
+    });
+    const page = await candidate.newPage();
+    await page.goto('about:blank');
+    const on = await page.evaluate(() => matchMedia('(forced-colors: active)').matches);
+    await page.close();
+    console.log(`${attempt.label}：forced-colors ${on ? '生效' : '沒生效'}`);
+    if (on && browser === undefined && !attempt.label.includes('強制')) browser = candidate;
+    else await candidate.close();
+  } catch (error) {
+    console.log(
+      `${attempt.label}：開不起來（${error instanceof Error ? error.message.split('\n')[0] : String(error)}）`,
+    );
+  }
+}
+if (browser === undefined) {
+  await server.close();
+  console.log('沒有一種開法讓 forced-colors 生效');
+  process.exit(1);
+}
 const results: Record<string, unknown> = {};
 let active = 0;
 try {

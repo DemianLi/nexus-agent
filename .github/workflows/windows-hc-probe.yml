@@ -47,6 +47,15 @@ jobs:
           "@
           [HC]::Set()
           Get-ComputerInfo -Property OsName, OsVersion | Format-List
+      - name: 套用系統的高對比佈景
+        shell: pwsh
+        run: |
+          Get-ChildItem "C:\Windows\Resources\Ease of Access Themes" -ErrorAction SilentlyContinue | Select-Object Name
+          $theme = "C:\Windows\Resources\Ease of Access Themes\hc1.theme"
+          if (Test-Path $theme) { Start-Process $theme; Start-Sleep -Seconds 20 }
+          Get-ItemProperty "HKCU:\Control Panel\Accessibility\HighContrast" | Format-List
+          Get-Process | Where-Object { $_.SessionId -ne 0 } | Select-Object -First 5 Name, SessionId
+          [System.Diagnostics.Process]::GetCurrentProcess().SessionId
       - name: 看每個測試頁
         shell: bash
         run: node apps/web/visual/windows-hc-probe.ts "$RUNNER_TEMP/hc"
