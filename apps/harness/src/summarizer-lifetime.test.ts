@@ -30,7 +30,7 @@ import {
   childLogsOf,
   compareToLog,
   fakeEndpoint,
-  hasTools,
+  isMainCall,
   idleWithContent,
   LOW_SUMMARIZATION,
   mainOnly,
@@ -73,7 +73,7 @@ describe('前景子代理：每次委派各一段生命', () => {
       return { content: `${mark} 完成。` };
     };
     const script: Script = (_index, body) => {
-      if (!hasTools(body)) {
+      if (!isMainCall(body)) {
         const text = JSON.stringify(body.messages);
         // root 的串裡也有子代理的記號（task 的參數），先認 root 的第一句。
         if (text.includes('派兩次前景')) return { content: '摘要 ROOT' };
@@ -192,7 +192,7 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
   it('同一步派兩次同型前景委派：兩段歷史都留在 root 的 backend 上', async () => {
     const counters = new Map<string, number>();
     const script: Script = (_index, body) => {
-      if (!hasTools(body)) return summaryOf(body);
+      if (!isMainCall(body)) return summaryOf(body);
       const mark = markerOf(body);
       const k = counters.get(mark) ?? 0;
       counters.set(mark, k + 1);
@@ -231,7 +231,7 @@ describe('前景子代理：歷史檔每次委派各一份', () => {
   it('同型前景委派兩次：第二次的歷史檔不含第一次的暗號', async () => {
     const counters = new Map<string, number>();
     const script: Script = (_index, body) => {
-      if (!hasTools(body)) return summaryOf(body);
+      if (!isMainCall(body)) return summaryOf(body);
       const mark = markerOf(body);
       const k = counters.get(mark) ?? 0;
       counters.set(mark, k + 1);
@@ -293,7 +293,7 @@ describe('續接之後又壓縮', () => {
 describe('沒有 checkpointer 的組裝', () => {
   it('同一個 thread_id invoke 兩次：切點的壽命等於訊息 state 的壽命', async () => {
     const upstream = await fakeEndpoint(
-      (_index, body) => (hasTools(body) ? {} : { content: '【摘要】之前聊了很多。' }),
+      (_index, body) => (isMainCall(body) ? {} : { content: '【摘要】之前聊了很多。' }),
       false,
     );
     const root = await mkdtemp(join(tmpdir(), 'nexus-lifetime-'));
@@ -319,14 +319,14 @@ describe('沒有 checkpointer 的組裝', () => {
     try {
       const first = turns(9, '一', 2);
       await agent.invoke({ messages: first }, config);
-      const firstSummaries = upstream.bodies.filter((body) => !hasTools(body)).length;
+      const firstSummaries = upstream.bodies.filter((body) => !isMainCall(body)).length;
       expect(firstSummaries, '第一次應該摘要過').toBeGreaterThan(0);
 
       const second = turns(13, '二');
       const count = upstream.bodies.length;
       await agent.invoke({ messages: second }, config);
       const bodies = upstream.bodies.slice(count);
-      expect(bodies.every(hasTools), '第二次不該摘要').toBe(true);
+      expect(bodies.every(isMainCall), '第二次不該摘要').toBe(true);
       const sent = bodies[0]!.messages.filter((m) => m.role !== 'system').map((m) => m.content);
       const secondTexts = second.map((m) => m.content);
       // 判 loop 同 `human-message-admission-wire.test.ts`：`vitest.native.config.ts` 設這個變數。
@@ -352,7 +352,7 @@ describe('沒有 checkpointer 的組裝', () => {
 
   it('同一張表留著舊切點、這一次交進來的串比切點短：不套舊切點', async () => {
     const upstream = await fakeEndpoint(
-      (_index, body) => (hasTools(body) ? {} : { content: '【摘要】之前聊了很多。' }),
+      (_index, body) => (isMainCall(body) ? {} : { content: '【摘要】之前聊了很多。' }),
       false,
     );
     const root = await mkdtemp(join(tmpdir(), 'nexus-lifetime-short-'));
@@ -376,7 +376,9 @@ describe('沒有 checkpointer 的組裝', () => {
           : new AIMessage(`一答${String(i)}`),
       );
       await agent.invoke({ messages: first }, config);
-      expect(upstream.bodies.filter((body) => !hasTools(body)).length, '第一次應該摘要過').toBe(1);
+      expect(upstream.bodies.filter((body) => !isMainCall(body)).length, '第一次應該摘要過').toBe(
+        1,
+      );
 
       // 灌回的樣子：比第一次的切點短。
       const second = [new HumanMessage('灌回的摘要'), new HumanMessage('灌回之後')];

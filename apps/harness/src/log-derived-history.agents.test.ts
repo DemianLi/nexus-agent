@@ -22,7 +22,7 @@ import {
   aiDone,
   childLogsOf,
   compareToLog,
-  hasTools,
+  isMainCall,
   idleWithContent,
   LOW_SUMMARIZATION,
   mainOnly,
@@ -141,7 +141,7 @@ const routed = (
 ): Script => {
   const counters = new Map<string, number>();
   return (_index, body) => {
-    if ((body.tools?.length ?? 0) === 0) return summaryReply(body);
+    if (!isMainCall(body)) return summaryReply(body);
     const mark = markerOf(body);
     const k = counters.get(mark) ?? 0;
     counters.set(mark, k + 1);
@@ -500,7 +500,7 @@ describe('背景與前景子代理', () => {
       '',
       {},
       (body) => {
-        if (held || !hasTools(body) || markerOf(body) !== 'CHILD-I') return false;
+        if (held || !isMainCall(body) || markerOf(body) !== 'CHILD-I') return false;
         held = true;
         return true;
       },
@@ -752,9 +752,9 @@ describe('中止與插話', () => {
   const firstCallStopped = () =>
     mainOnly((k) => (k === 0 ? { delay: 2500, content: '被停掉的長回覆。' } : {}));
   const stopFirst = async (ctx: DriverCtx) => {
-    const sent = ctx.bodies.filter(hasTools).length;
+    const sent = ctx.bodies.filter(isMainCall).length;
     await ctx.client.runStart('alpha', '第一句，會被停掉');
-    await vi.waitFor(() => expect(ctx.bodies.filter(hasTools).length).toBeGreaterThan(sent), {
+    await vi.waitFor(() => expect(ctx.bodies.filter(isMainCall).length).toBeGreaterThan(sent), {
       timeout: 10_000,
       interval: 20,
     });

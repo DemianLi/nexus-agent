@@ -36,11 +36,13 @@ import type { FidelityVariantResult } from './runner.js';
 /** eval 的重試政策：跟出貨預設同一份（同 `../survey-cli.ts`）。 */
 const EVAL_RETRY_POLICY = streamRetryOptionsOf(liveModelConfigSchema.parse({}).retryPolicy);
 
-const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--answers] [--count]
+const USAGE = `用法：eval:summary-fidelity [--samples <n>] [--variants <id,...>] [--summary-call <template|replay>] [--answers] [--count]
 
   --samples <n>        每個變體重複幾次，預設 1。摘要是取樣出來的，每次不同。
   --variants <id,...>  只跑指定的變體，預設全部：
                        ${FIDELITY_VARIANTS.map((variant) => `${variant.id}（${variant.title}）`).join(' / ')}
+  --summary-call <形狀> 生摘要的請求形狀：template（預設，要摘的那段攤成一個字串）或 replay
+                       （系統訊息、原訊息、最後接摘要指令，同 history-source: log 的出貨路徑）。
   --answers            報表之後逐題印出模型的答案。
   --count              只印這一輪會送幾個模型請求，不跑、不需要金鑰。
 
@@ -59,6 +61,16 @@ function parseVariants(argv: readonly string[]): readonly FidelityVariant[] {
   return FIDELITY_VARIANTS.filter((variant) => wanted.includes(variant.id));
 }
 
+function parseSummaryCall(argv: readonly string[]): 'template' | 'replay' {
+  const at = argv.indexOf('--summary-call');
+  if (at < 0) return 'template';
+  const value = argv[at + 1];
+  if (value !== 'template' && value !== 'replay') {
+    throw new Error(`--summary-call 認不得 ${value ?? '（空的）'}；可用的是 template、replay`);
+  }
+  return value;
+}
+
 /** 一個變體跑一次送幾個模型請求：每段一次摘要，每題一次。不含重試與摘要器的重摘。 */
 function requestsOf(variant: FidelityVariant): number {
   return variant.segments.length + variant.questions.length;
@@ -71,10 +83,11 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   const samples = parseSamples(argv);
   const variants = parseVariants(argv);
+  const summaryCall = parseSummaryCall(argv);
   const requests = variants.reduce((sum, variant) => sum + requestsOf(variant), 0) * samples;
   console.log(
     `交接保真度評估：${variants.length}/${FIDELITY_VARIANTS.length} 個變體 × ${samples} 次，` +
-      `共 ${requests} 個模型請求（不含重試；${variants.map((variant) => `${variant.id} ${requestsOf(variant)}`).join('、')}）。模型 ${DEFAULT_LIVE_MODEL_ID}。`,
+      `共 ${requests} 個模型請求（不含重試；${variants.map((variant) => `${variant.id} ${requestsOf(variant)}`).join('、')}）。模型 ${DEFAULT_LIVE_MODEL_ID}，生摘要的請求形狀 ${summaryCall}。`,
   );
   if (argv.includes('--count')) return;
 
@@ -104,6 +117,7 @@ async function main(argv: readonly string[]): Promise<void> {
           summaryModel: model,
           ask,
           retry: EVAL_RETRY_POLICY,
+          summaryCall,
         });
         round.push(result);
         console.log(

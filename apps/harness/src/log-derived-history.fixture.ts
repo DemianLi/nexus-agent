@@ -49,6 +49,7 @@ import {
   HISTORY_SHADOW_KINDS,
   ModelHistoryCache,
   SessionRegistry,
+  SUMMARY_INSTRUCTION,
   isBlankContent,
   replayConversation,
   toBaseMessage,
@@ -116,7 +117,13 @@ export interface Reply {
 /** 腳本：第幾次請求（含標題、摘要這類不帶工具的）與它的 body → 回什麼。 */
 export type Script = (index: number, body: Body) => Reply;
 
-export const hasTools = (body: Body): boolean => (body.tools?.length ?? 0) > 0;
+/** 生摘要的重播（#2775）：帶著上一次主請求的工具，最後一則是摘要指令。 */
+export const isSummaryReplay = (body: Body): boolean =>
+  body.messages.at(-1)?.content === SUMMARY_INSTRUCTION;
+
+/** 主呼叫：帶工具，而且不是生摘要的重播。標題、模板摘要不帶工具。 */
+export const isMainCall = (body: Body): boolean =>
+  (body.tools?.length ?? 0) > 0 && !isSummaryReplay(body);
 
 /**
  * 只對「主呼叫」（帶工具的）編號的腳本；標題、摘要這類不帶工具的呼叫一律回固定字串，不佔號。
@@ -126,7 +133,7 @@ export const hasTools = (body: Body): boolean => (body.tools?.length ?? 0) > 0;
  */
 export const mainOnly = (script: (k: number) => Reply): Script => {
   let k = 0;
-  return (_index, body) => (hasTools(body) ? script(k++) : { content: '【輔助呼叫】' });
+  return (_index, body) => (isMainCall(body) ? script(k++) : { content: '【輔助呼叫】' });
 };
 
 export interface FakeEndpoint {
@@ -638,7 +645,7 @@ const finish = (
   return {
     events,
     bodies,
-    mainBodies: bodies.filter(hasTools),
+    mainBodies: bodies.filter(isMainCall),
     ...(counts !== undefined && { shadow: counts }),
     ...(lines !== undefined && { shadowLines: lines }),
   };
@@ -962,7 +969,7 @@ export async function waitForMainCalls(
   for (;;) {
     const seen: Record<string, number> = {};
     for (const body of bodies) {
-      if (hasTools(body)) seen[ownerOf(body)] = (seen[ownerOf(body)] ?? 0) + 1;
+      if (isMainCall(body)) seen[ownerOf(body)] = (seen[ownerOf(body)] ?? 0) + 1;
     }
     if (Object.entries(expected).every(([owner, n]) => (seen[owner] ?? 0) >= n)) return true;
     if (Date.now() >= deadline) return false;
@@ -1042,7 +1049,7 @@ export async function runServeDriver(
     home,
     logs: await readAllLogs(logs),
     bodies: upstream.bodies,
-    mainBodies: upstream.bodies.filter(hasTools),
+    mainBodies: upstream.bodies.filter(isMainCall),
     ...(HISTORY_SOURCE_UNDER_TEST === 'shadow' && { shadow: addShadowCounts(shadow) }),
   };
 }

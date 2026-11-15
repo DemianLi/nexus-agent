@@ -41,7 +41,7 @@ import type { Event as WireEvent } from '@nexus/wire';
 import { serveClient } from '../fixtures.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { LIVE_API_KEY_ENV } from '../live-model.js';
-import { fakeEndpoint, hasTools, liveModelPatch } from '../log-derived-history.fixture.js';
+import { fakeEndpoint, isMainCall, liveModelPatch } from '../log-derived-history.fixture.js';
 import type { Reply } from '../log-derived-history.fixture.js';
 import { runServe } from '../serve-run.js';
 import type { RunningServe } from '../serve-run.js';
@@ -230,7 +230,7 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
   let requests = 0;
   let auxRequests = 0;
   const upstream = await fakeEndpoint((_index, body) => {
-    if (!hasTools(body)) {
+    if (!isMainCall(body)) {
       auxRequests += 1;
       return { content: '【輔助呼叫】' };
     }
