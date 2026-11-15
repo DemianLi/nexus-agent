@@ -373,6 +373,27 @@ describe('createSummarizer 接上真的基座', () => {
     expect(truncations(log)).toHaveLength(0);
   });
 
+  // 查找拋了不是「接不到日誌」：後者沒有日誌可分家，前者日誌在、只是這次摸不到。吞了的話基座照縮、這一層不記，
+  // 模型看到縮短版而日誌沒有，所以這一步失敗。
+  it('查找拋了：這一步以那個錯失敗，模型沒收到請求、日誌沒有縮短', async () => {
+    const { log, sent, call } = setup(() => {
+      throw new Error('查找拋了');
+    });
+    await expect(Promise.resolve().then(() => call(history()))).rejects.toThrow('查找拋了');
+    expect(sent).toEqual([]);
+    expect(truncations(log)).toHaveLength(0);
+  });
+
+  it('日誌上記過的縮短壞了（讀不出來）：同樣不吞，這一步失敗', async () => {
+    const broken = {
+      events: [{ type: 'compaction/truncate-args', data: { calls: 1 } }],
+      append: () => undefined,
+    };
+    const { sent, call } = setup(() => ({ kind: 'ok', address: { kind: 'root' }, log: broken }));
+    await expect(Promise.resolve().then(() => call(history()))).rejects.toThrow();
+    expect(sent).toEqual([]);
+  });
+
   /** #1702：縮短是一筆事件，記不進去就等於沒縮——模型看到原文、講一條 warn、這一輪照常（照 dsh compaction-basic `:163-173`）。 */
   it('記不進去（append 拋）：這次的縮短換回原文，warn 一條，模型呼叫照常發生', async () => {
     const warnings: string[] = [];
