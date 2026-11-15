@@ -1188,6 +1188,8 @@ export { noteSentRequest } from './last-sent-request.js';
 export type { SentHistoryReader } from './summarization.js';
 export {
   composeSummaryHead,
+  HISTORY_READ_TOOL_NAME,
+  HISTORY_SEARCH_TOOL_NAME,
   parseEntryDraft,
   parseSummaryHead,
   renderSummaryEntry,
@@ -1196,4 +1198,17 @@ export {
   SUMMARY_STATE_MAX_CHARS,
 } from './summary-head.js';
 export type { SummaryEntry, SummaryEntryDraft, SummaryHead } from './summary-head.js';
-export { summaryBodyOf, SummaryStateTooLongError } from './summarizer-engine.js';
+export {
+  summaryBodyOf,
+  summaryPointsToRecall,
+  SummaryStateTooLongError,
+} from './summarizer-engine.js';
+export {
+  HISTORY_READ_PAGE_CHARS,
+  HISTORY_SEARCH_DEFAULT_LIMIT,
+  HISTORY_SEARCH_MAX_LIMIT,
+  historyRead,
+  historySearch,
+  recallHistory,
+} from './history-recall.js';
+export type { RecalledHistory, RecallResult, RecallSegment } from './history-recall.js';

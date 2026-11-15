@@ -225,6 +225,8 @@ nexus 另外兩處不在指令本文：前面接 `{conversation}` 和分隔線�
 
 結論：外框由基座決定，規則只能跟著它的兩種形狀寫。
 
+#2777 之後前言多一種：組裝裡有 `history_read`、而且這次呼叫查得到會話日誌時，前言多一句指向讀回工具；歷史檔沒寫成時不退成那一句不包標籤的，而是只指向讀回工具、照樣包 `<summary>`（`summarizer-engine.ts` 的 `buildSummaryMessage`）。規則認的標籤沒變。
+
 ## 20. 摘要呼叫的形狀：重播前綴，還是模板
 
 **偏離**（#2775）。dsh 的預設實作重播（`summarize` 是可覆寫的鉤子，`index.ts:264` 寫明可以換成模板或遠端摘要器）：`buildSummarizationInput`（`region.ts:544-563`）取 surface 開頭的 system、被壓那段的訊息、標頭上的工具；`summarizeWithLlm`（`summarizer.ts:144-162`）在最後接一則 user 指令，連同 `tools`、`toolHistory` 一起送出【核了】。用意是讓這次呼叫成為上一次路由請求的前綴，重用 KV 快取（`summarizer.ts:25-31`、`index.ts:260-264`）【核了】。
@@ -397,6 +399,10 @@ nexus 分兩條路（§20），結論不同：
 ## 35. 載體：`compaction-basic` 是獨立套件
 
 **偏離**（`summarizationPlugin`）。dsh 的 `compaction-basic` 是獨立套件，`BasicCompactionEngine` 用 `static inject = ['llm', 'tokenMeter', 'sessions']` 掛在服務上（`compaction-basic/src/index.ts:112-113`）【核了】。nexus 表達不出來的是「逐個 agent 各建一份」和「同名取代基座那顆」，理由在 `summarizationPlugin` 的說明裡，這裡不另立表。
+
+## 36. 讀回被摘掉的原文：`history_read`、`history_search`
+
+**dsh 沒有實作**，只有一份 proposed 的提案（`.agents/notes/proposed/feature/2026-07-06-recallable-compaction.md`，SHA `8bd0733`）。nexus 做了，定址改用 `<index>` 的條目序號而不是事件 seq。完整的比較與取捨在 [`.docs/history-recall-tools-design-2026-11-15.md`](../.docs/history-recall-tools-design-2026-11-15.md)。
 
 ---
 

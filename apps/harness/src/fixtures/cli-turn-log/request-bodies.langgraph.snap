@@ -155,6 +155,65 @@
       {
         "type": "function",
         "function": {
+          "name": "history_read",
+          "description": "Read back, verbatim, a stretch of this conversation that was replaced by a summary. Pass the entry number shown in the summary <index> (or a segment id from history_search). Returns a transcript page of up to 16000 characters; the last line gives the offset of the next page. Use it when you need an exact detail (a value, an error string, a file path, what a tool returned) that the summary does not give.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "entry": {
+                "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+                "type": "number"
+              },
+              "segment": {
+                "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+                "type": "number"
+              },
+              "offset": {
+                "description": "Character offset to start from. Defaults to 0.",
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "history_search",
+          "description": "Search the stretches of this conversation that were replaced by a summary for a literal string (case-insensitive, not a regex, not semantic). Returns each match with its entry number, a character offset and surrounding text; pass that entry and offset to history_read to read around it. Messages still in context are not searched.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Literal string to look for. Case-insensitive, not a regex."
+              },
+              "entry": {
+                "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+                "type": "number"
+              },
+              "segment": {
+                "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+                "type": "number"
+              },
+              "limit": {
+                "description": "Maximum matches to return. Defaults to 20, at most 100.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
           "name": "present",
           "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.",
           "parameters": {
@@ -753,6 +812,65 @@
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "history_read",
+          "description": "Read back, verbatim, a stretch of this conversation that was replaced by a summary. Pass the entry number shown in the summary <index> (or a segment id from history_search). Returns a transcript page of up to 16000 characters; the last line gives the offset of the next page. Use it when you need an exact detail (a value, an error string, a file path, what a tool returned) that the summary does not give.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "entry": {
+                "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+                "type": "number"
+              },
+              "segment": {
+                "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+                "type": "number"
+              },
+              "offset": {
+                "description": "Character offset to start from. Defaults to 0.",
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "history_search",
+          "description": "Search the stretches of this conversation that were replaced by a summary for a literal string (case-insensitive, not a regex, not semantic). Returns each match with its entry number, a character offset and surrounding text; pass that entry and offset to history_read to read around it. Messages still in context are not searched.",
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Literal string to look for. Case-insensitive, not a regex."
+              },
+              "entry": {
+                "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+                "type": "number"
+              },
+              "segment": {
+                "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+                "type": "number"
+              },
+              "limit": {
+                "description": "Maximum matches to return. Defaults to 20, at most 100.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "query"
+            ],
             "additionalProperties": false
           }
         }
