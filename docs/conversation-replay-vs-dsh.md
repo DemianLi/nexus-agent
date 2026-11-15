@@ -35,13 +35,13 @@ dsh 的 agent loop 續接時，對停在輪中的日誌，用 `interruptedTurnCl
 
 nexus 同樣：續接時當掉那一輪的補結寫回日誌（`interrupted-turn.ts`），寫回之後重放讀到的是日誌上那些。沒寫回的在記憶體裡補，有四種情形：一輪收掉了結果卻沒到齊的、一輪失敗而當場補寫也失敗的、舊檔，這三種由 `conversation-replay.ts` 的 `closer` 補；冷讀由 `interrupted-turn.ts` 的 `readColdSession` 補（用 `interruptedTurnClosers`，不經 `closer`）。
 
-**沒核到：** 舊註解還寫了 dsh 對「合成的『還沒開始』結果沒有對應的 `tool/call`」在不變量檢查上明文放行（`invariant.ts:142-145`）。`8bd0733` 上 `packages/core/session/src/invariant.ts` 不存在，在 `packages/core/session/src` 底下用 `git grep -i -E 'synthetic|not.?started'`（`8bd0733`）只找到補結的產生端（`repair.ts`、`index.ts:1390` 等），沒有對應的放行規則，所以這條出處**沒核到**，不當事實引用。nexus 對這種合成結果放行的理由是自己的配對不變量（`invariant.ts`，nexus 那份）。
+**對現行 dsh 不成立：** 舊註解寫 dsh 對「合成的『還沒開始』結果沒有對應的 `tool/call`」在不變量檢查上明文放行（`invariant.ts:142-145`）。這在 `477b4f4` 上屬實；dsh 後來移除了整套 runtime invariants，`8bd0733` 上 `packages/core/session/src/invariant.ts` 已不存在（`git grep -i -E 'synthetic|not.?started'` 在 `packages/core/session/src` 只找到補結的產生端），所以對現行 dsh 不當事實引用。前因見 [`interrupted-turn-and-invariant-vs-dsh.md`](interrupted-turn-and-invariant-vs-dsh.md) 第四節。nexus 的放行是自己的：`session-relationships.ts` 的 `tool/result` 分支。
 
 ## 四、補結掃描遇到 `session/end-seed` 不重設（照 dsh）
 
 dsh 的掃描（`repair.ts:53` 的 `openTurnClosers`）只在 `turn/start`、`turn/end`、`step/start`、`step/end` 移動輪與步的游標，「其他事件種類不動游標」（同函式內的註解）。`session/end-seed` 在 dsh 是真的事件：fork seed 在邊界後寫它（`packages/core/session/src/fork.ts:24`），Session 建立時帶 seed 才會補寫：帶繼承 seed 的快照且還沒有標記時寫 `{inherited:true}`（`packages/core/session/src/index.ts:698`），其他帶 seed 且最後一顆不是 end-seed 時寫 `{}`（`:700`）。nexus 的 `interrupted-turn.ts` 照同一條規則：掃描遇到 `session/end-seed` 不重設，所以舊檔「開著的輪＋`session/end-seed`、之後沒有新輪」的補結會接在 `end-seed` 後面；新檔的補結一律在 `end-seed` 前面。這一條與 dsh 一致，只是 nexus 有舊檔形狀要顧（#934 之前續接過的檔）。
 
-**沒核到：** `interrupted-turn.ts` 檔頭另外引了 dsh 的 `invariant.ts:155-156`（不變量對 end-seed 不設限）。`invariant.ts` 在 `8bd0733` 上不存在，這條沒核到，也不在這張的範圍內。
+**沒核到：** `interrupted-turn.ts` 檔頭另外引了 dsh 的 `invariant.ts:155-156`（不變量對 end-seed 不設限）。`invariant.ts` 在 `8bd0733` 上已移除（`477b4f4` 上屬實），見 [`interrupted-turn-and-invariant-vs-dsh.md`](interrupted-turn-and-invariant-vs-dsh.md)。
 
 ## 五、`origin` 回呼
 
