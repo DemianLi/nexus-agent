@@ -13,7 +13,11 @@ import { resumedLog } from './fixtures.js';
 import { SessionLog } from './session-log.js';
 import { applyRecordedPrune, applyRecordedPrunes } from './langchain-message-adapter.js';
 import { measureToolResultContent, recordedPrunesOf } from './tool-result-prune-log.js';
-import { TOOL_RESULT_PRUNE_MARKER, withToolResultPruning } from './tool-result-pruner.js';
+import {
+  PRUNE_LOOKUP_FAILED,
+  TOOL_RESULT_PRUNE_MARKER,
+  withToolResultPruning,
+} from './tool-result-pruner.js';
 import type {
   NewlyPruned,
   PruneRequest,
@@ -290,6 +294,16 @@ describe('剪刀：先換記過的、再剪新的、新剪的當場記', () => {
     pressure = false;
     await run(wrapped, [big('a')]);
     expect(measureToolResultContent(seen[1]![0]!.content)).toBe(300);
+    expect(port.appended).toBe(0);
+  });
+
+  it('查找拋了（#2779）：跟找不到日誌不同，壓力到了也一顆都不剪、不記，原樣往下交', async () => {
+    const port = { ...fakeLog(undefined), recorded: () => PRUNE_LOOKUP_FAILED };
+    const { base, seen } = spy();
+    const wrapped = withToolResultPruning(base, () => true, SMALL, port);
+    const messages = [big('a')];
+    await run(wrapped, messages);
+    expect(seen[0]?.[0]).toBe(messages[0]);
     expect(port.appended).toBe(0);
   });
 

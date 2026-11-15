@@ -72,7 +72,7 @@
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
 //! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
 //! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
-//! （留到 `--idle-ms`，名額滿時最先收）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
+//! （留到 `--idle-ms`，名額滿時最先收；補了之後等它替新葉子再回一則 `ready` 才重送 `bind`）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
 //! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
 //! （那條 thread 的 `down` 在葉子死時回過）。兩個行程的沉默各算各的；RSS 上限與壓 CPU 只管葉子。
 //! 停機與拆除都是先葉子後組合行程；停機中再收到訊號時不分先後，全部當場 SIGKILL。
@@ -238,6 +238,9 @@ struct Conversation {
 enum Bind {
     /// 沒有還沒回答的 `bind`：還沒送過，或上一個葉子死後清掉了。
     Unsent,
+    /// 補了葉子，等組合行程替它送 `ready`：收到才送 `bind`。
+    Refilling,
+    /// 送了 `bind`，還沒回 `bound`。
     Sent,
     /// 現在這個葉子回過 `bound`。
     Bound,
@@ -254,7 +257,7 @@ struct Composition {
     read_only: bool,
     /// 前台連的 socket。
     socket: PathBuf,
-    /// 送過 `ready`：第一個葉子在橋上登記完了。只送一次，補起的葉子沒有。
+    /// 送過第一則 `ready`：第一個葉子在橋上登記完了。補起的葉子登記完會再送一則（[`Bind::Refilling`]）。
     ready: bool,
     bind: Bind,
     /// 葉子死了、這一個留著等下一個 `ensure`：從什麼時候起。
@@ -1867,20 +1870,19 @@ impl Supervisor {
         false
     }
 
-    /// 這一對的組合行程還在、葉子死了：補一個葉子，接著重送 `bind`。上一則 `bind` 回過 `bound` 才會留著沒有葉子的組合行程
-    /// （[`Self::on_leaf_gone`]），所以它那邊沒有還留著的 `bind`，重送不會撞上。
+    /// 這一對的組合行程還在、葉子死了：補一個葉子，等組合行程替它送 `ready` 再重送 `bind`。上一則 `bind` 回過 `bound` 才會留著
+    /// 沒有葉子的組合行程（[`Self::on_leaf_gone`]），所以它那邊沒有還留著的 `bind`，重送不會撞上。
     fn refill(&mut self, index: usize, open: OpenMode) {
         let composition = &mut self.compositions[index];
         composition.leafless_since = None;
         composition.told = false;
         composition.read_only = open == OpenMode::ReadOnly;
         if self.start_leaf(index) {
-            self.bind_pair(index);
+            self.compositions[index].bind = Bind::Refilling;
         }
     }
 
     /// 成對時 `bind` 送給組合行程，由它經橋轉給葉子。葉子的沉默每次從這裡重新起算；組合行程的只從第一次 `bind` 起算。
-    /// 補起的葉子（[`Self::refill`]）起完就送，所以它在起動、橋上登記與 `attach` 之間任何一段沉默超過 `--stall-ms` 都會被判 `stalled`。
     fn bind_pair(&mut self, index: usize) {
         let composition = &mut self.compositions[index];
         let Some(thread) = composition.thread.clone() else {
@@ -2011,6 +2013,9 @@ impl Supervisor {
             }
             let serial = composition.serial;
             match report {
+                ConversationReport::Ready if composition.bind == Bind::Refilling => {
+                    self.bind_pair(index);
+                }
                 ConversationReport::Ready if !composition.ready => {
                     composition.ready = true;
                     if composition.thread.is_some() {
@@ -2072,6 +2077,8 @@ impl Supervisor {
     /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個
     /// `ensure` 補葉子。其餘的連帶收掉組合行程：`bind` 還沒回 `bound` 時，從外面分不出組合行程是把它留著等葉子登記（再送一次它會以協定錯誤結束）、
     /// 還是已經轉給葉子而作廢（不再送就永遠不會 `bound`），所以整對收掉，下一個 `ensure` 起新的一對。
+    /// 補起的葉子還沒等到 `ready` 就死（[`Bind::Refilling`]）也整對收：留著的話，它登記完才死時晚到的那則 `ready` 會被當成下一個葉子的，
+    /// `bind` 提早送、新葉子的沉默提早起算。
     fn on_leaf_gone(&mut self, serial: u64, cause: DeathCause) {
         let Some(composition) = self.compositions.iter_mut().find(|p| p.serial == serial) else {
             return;
@@ -3260,6 +3267,68 @@ mod tests {
         supervisor.on_exit(LEAF, KILLED);
         let composition = &supervisor.compositions[0];
         assert!(composition.leafless_since.is_none() && composition.proc.stop.is_some());
+    }
+
+    /// 組合行程送來一則 `ready`。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
+    fn composition_says_ready(supervisor: &mut Supervisor) {
+        let composition = &mut supervisor.compositions[0];
+        composition.proc.hello = true;
+        composition
+            .proc
+            .chan
+            .send(&crate::supervisor_protocol::encode_conversation_report(
+                &ConversationReport::Ready,
+            ));
+        supervisor.on_composition_readable(0);
+    }
+
+    /// 在等補起的葉子時（[`Bind::Refilling`]）不算它的沉默；`ready` 到了才送 `bind`、才起算。
+    #[test]
+    fn a_refilled_leaf_is_bound_when_its_ready_comes() {
+        let (mut supervisor, _, _) = with_a_pair("refilling", Bind::Refilling);
+        supervisor.conversations[0].phase = Phase::Starting;
+        let later = Instant::now() + Duration::from_secs(3600);
+        supervisor.check_stalls(later, Duration::from_secs(1));
+        assert!(supervisor.conversations[0].proc.stop.is_none());
+        assert_eq!(supervisor.compositions[0].bind, Bind::Refilling);
+
+        composition_says_ready(&mut supervisor);
+        assert_eq!(supervisor.compositions[0].bind, Bind::Sent);
+        let leaf = &supervisor.conversations[0];
+        assert!(leaf.phase == Phase::Binding && leaf.heard_at.is_some());
+    }
+
+    /// 不在等補起的葉子時多出來的 `ready` 不理。`Sent`、`Bound` 時再送 `bind`，組合行程當場以協定錯誤結束；沒有葉子時送的會被它留著，
+    /// 補葉子後的那一則 `bind` 就撞上。
+    #[test]
+    fn a_ready_nobody_waits_for_does_not_bind() {
+        for (tag, bind) in [
+            ("stray-unsent", Bind::Unsent),
+            ("stray-sent", Bind::Sent),
+            ("stray-bound", Bind::Bound),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, bind);
+            composition_says_ready(&mut supervisor);
+            assert_eq!(supervisor.compositions[0].bind, bind, "{tag}");
+            assert!(supervisor.conversations[0].heard_at.is_none(), "{tag}");
+        }
+        // 葉子死了、還沒補：留著的組合行程收到的也不理。
+        let (mut supervisor, _, _) = with_a_pair("stray-leafless", Bind::Bound);
+        supervisor.on_exit(LEAF, KILLED);
+        composition_says_ready(&mut supervisor);
+        let composition = &supervisor.compositions[0];
+        assert_eq!(composition.bind, Bind::Unsent);
+        assert!(composition.heard_at.is_none() && composition.proc.stop.is_none());
+    }
+
+    /// 補起的葉子還沒等到 `ready` 就死：整對收（理由見 [`Supervisor::on_leaf_gone`]）。
+    #[test]
+    fn a_refilled_leaf_that_dies_before_its_ready_takes_the_pair_with_it() {
+        let (mut supervisor, _, _) = with_a_pair("refill-died", Bind::Refilling);
+        supervisor.on_exit(LEAF, KILLED);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.proc.stop.is_some() && composition.leafless_since.is_none());
+        assert_eq!(composition.bind, Bind::Unsent);
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。

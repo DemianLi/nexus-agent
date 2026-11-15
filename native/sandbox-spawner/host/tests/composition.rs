@@ -146,11 +146,13 @@ impl Rig {
 
     /// 下一則不是心跳的回報。
     fn next_but_heartbeats(&mut self) -> ConversationReport {
+        let deadline = Instant::now() + GUARD;
         loop {
             let report = self.next();
             if report != ConversationReport::Heartbeat {
                 return report;
             }
+            assert!(Instant::now() < deadline, "只等到心跳，等不到別的回報");
         }
     }
 
@@ -484,7 +486,7 @@ fn there_is_no_ready_while_the_leaf_has_not_registered() {
 }
 
 #[test]
-fn ready_comes_once_after_the_first_register_and_not_again() {
+fn ready_comes_once_for_a_leaf_however_often_it_registers() {
     let (mut rig, mut leaf) = Rig::ready("ready");
     leaf.register();
     rig.command(&bind("thread-1"));
@@ -582,11 +584,27 @@ fn a_bind_ahead_of_the_replacement_leaf_waits_for_it_to_register() {
     rig.command(&bind("thread-1"));
     let mut leaf = Leaf::join(&rig);
     leaf.register();
+    assert_eq!(rig.next_but_heartbeats(), ConversationReport::Ready);
     leaf.answer_attach("thread-1", Ok(Value::Null));
     assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
     drop(rig.stdin.take());
     assert_eq!(rig.exit(), Some(0));
     assert_eq!(count(&rig.rest(), &ConversationReport::Ready), 0);
+}
+
+/// 換上來的葉子 `register` 之後再送一次 `ready`（監督行程靠它決定什麼時候送 `bind`）。同一個葉子再 `register` 不再送。
+#[test]
+fn a_replacement_leaf_gets_its_own_ready() {
+    let (mut rig, old) = Rig::bound("swap-ready");
+    old.die();
+    rig.command(&ConversationCommand::Leaf { pid: me() });
+    let mut leaf = Leaf::join(&rig);
+    leaf.register();
+    assert_eq!(rig.next_but_heartbeats(), ConversationReport::Ready);
+    leaf.register();
+    rig.command(&bind("thread-1"));
+    leaf.answer_attach("thread-1", Ok(Value::Null));
+    assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
 }
 
 /// 葉子自己斷線（沒有新的 `leaf{pid}`）：組合行程照活，之後的 `leaf{pid}`、新葉子、`bind` 照常。
@@ -597,6 +615,7 @@ fn the_composition_survives_its_leaf_and_takes_the_next_one() {
     rig.command(&ConversationCommand::Leaf { pid: me() });
     let mut leaf = Leaf::join(&rig);
     leaf.register();
+    assert_eq!(rig.next_but_heartbeats(), ConversationReport::Ready);
     rig.command(&bind("thread-1"));
     leaf.answer_attach("thread-1", Ok(Value::Null));
     assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
@@ -634,6 +653,7 @@ fn a_leaf_that_dies_before_answering_attach_gets_no_bound() {
     rig.command(&ConversationCommand::Leaf { pid: me() });
     let mut leaf = Leaf::join(&rig);
     leaf.register();
+    assert_eq!(rig.next_but_heartbeats(), ConversationReport::Ready);
     rig.command(&bind("thread-1"));
     leaf.answer_attach("thread-1", Ok(Value::Null));
     assert_eq!(rig.next_but_heartbeats(), bound("thread-1"));
