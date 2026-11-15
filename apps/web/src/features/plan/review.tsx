@@ -23,17 +23,16 @@ import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { ToolCard } from '@/features/tool';
 import { Button } from '@/components/ui/button';
 import {
-  EXIT_PLAN_MODE,
   markAutoOpened,
   PLAN_OUTCOME_LABEL,
-  planDocument,
   planOutcomeOf,
   planReviewOf,
   REVIEW_PLAN_ID_PREFIX,
-  submittedPlanOf,
   wasAutoOpened,
 } from '@/features/plan/review-view';
-import type { PlanDocument, PlanReview } from '@/features/plan/review-view';
+import type { PlanReview } from '@/features/plan/review-view';
+import { EXIT_PLAN_MODE, planDocument, submittedPlanOf } from '@/shared/connection/plan-document';
+import type { PlanDocument } from '@/shared/connection/plan-document';
 
 /** 面板與計劃卡上打開全文的那顆鈕。 */
 export const OPEN_PLAN_LABEL = '查看全文';

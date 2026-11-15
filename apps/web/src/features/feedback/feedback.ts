@@ -12,9 +12,6 @@
 
 import type { AiEntry, WireFeedbackCategory } from '@nexus/wire';
 
-/** 只打這一行時開對話框，不送 `slash.run`（照 dsh 的 `/feedback` 裝飾）。 */
-export const FEEDBACK_COMMAND_LINE = '/feedback';
-
 export const FEEDBACK_COPY = {
   like: '好的回答',
   likeActive: '取消標記',

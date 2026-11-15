@@ -33,17 +33,8 @@ type Exception = { file: string; targets: readonly string[]; why: string };
 const EXCEPTIONS: readonly Exception[] = [
   {
     file: 'shared/connection/use-conversation.ts',
-    targets: [
-      'features/attachments/send',
-      'features/composer/command-directory',
-      'features/feedback/feedback',
-      'features/feedback/ratings',
-      'features/goal/bar-view',
-      'features/plan/chip-view',
-      'features/plan/review-view',
-      'features/queue/view',
-    ],
-    why: '連線核心還把各切片的純函式直接拉進來；走入口會把整個切片的元件帶進連線核心的載入圖。等 #2883 把 use-conversation 切開',
+    targets: ['features/attachments/send', 'features/goal/bar-view'],
+    why: '連線核心還拉著兩個切片的錯誤文案（送出被拒、暫停目標失敗）；走入口會把整個切片的元件帶進連線核心的載入圖。等 #2883 的下行錯誤碼轉文案收成一個 module',
   },
   {
     file: 'shared/right-sidebar/api.ts',
@@ -53,7 +44,6 @@ const EXCEPTIONS: readonly Exception[] = [
       'features/deliverable/download',
       'features/deliverable/file',
       'features/deliverable/view',
-      'features/plan/review-view',
       'features/trace/trajectory-pull',
     ],
     why: '右側欄的契約型別直接指向各分頁的資料型別；走入口會讓契約檔跟著載入各切片的元件。等 #2883 的右側欄分頁登記',

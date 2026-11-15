@@ -44,7 +44,8 @@ import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 
 import { ChangesReviewTab } from '@/features/changes';
 import { DeliverablePreviewTab, basename } from '@/features/deliverable';
-import { PlanPreviewTab, REVIEW_PLAN_ID_PREFIX, type PlanScanOutcome } from '@/features/plan';
+import { PlanPreviewTab, REVIEW_PLAN_ID_PREFIX } from '@/features/plan';
+import type { PlanScanOutcome } from '@/shared/connection/plan-document';
 import { Control, useControl } from '@/shared/right-sidebar/context';
 import type { RightSidebarControl } from '@/shared/right-sidebar/context';
 import { PANELS } from '@/app/right-sidebar/panels';

@@ -7,7 +7,7 @@ import { commandsFailedText, useConversation } from '@/shared/connection/use-con
 /**
  * 命令清單與技能清單跟著連線走（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，照 dsh 的
  * `CommandDirectory.resetConnected` 與 `ui-skill` 重連丟快取）：每次連上都丟掉重抓，送出時認命令那一道等的是**這條線**的
- * 清單。機制本身驗在 `features/composer/command-directory.test.ts`；這裡驗 hook 真的在重連時重設、送出時等它。
+ * 清單。機制本身驗在 `shared/connection/command-directory.test.ts`；這裡驗 hook 真的在重連時重設、送出時等它。
  */
 
 const plan: SlashDescriptor = { name: 'plan', description: '規劃模式' };
@@ -250,3 +250,62 @@ describe.each([false, true])(
     });
   },
 );
+
+describe('useConversation 的兩個回饋接點', () => {
+  const ok = async () => ({ kind: 'ok' as const, commands: [plan] });
+  const noSkills = () => Promise.resolve({ kind: 'ok' as const, skills: [] });
+
+  it('只打 /feedback：清掉狀態列、叫 onFeedbackCommand、不送出；帶了文字的不叫、照舊走命令', async () => {
+    const fake = scriptedClient(ok, noSkills);
+    const onFeedbackCommand = vi.fn();
+    const { result } = renderHook(() =>
+      useConversation({ client: fake.client, threadId: 't', onFeedbackCommand }),
+    );
+    await tick();
+    act(() => result.current.setStatusLine({ error: '舊的錯', notice: '舊的話' }));
+
+    let sent: unknown = 'unset';
+    await act(async () => {
+      sent = await result.current.send(' /feedback ');
+    });
+    expect(sent).toBeUndefined();
+    expect(onFeedbackCommand).toHaveBeenCalledTimes(1);
+    expect(result.current.slashError).toBeUndefined();
+    expect(result.current.slashNotice).toBeUndefined();
+    expect(fake.slashed).toEqual([]);
+    expect(fake.started).toEqual([]);
+
+    await act(async () => {
+      await result.current.send('/feedback 很慢');
+    });
+    expect(onFeedbackCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('沒給 onFeedbackCommand（嵌入版以外的情形）：只清不開，也不送出', async () => {
+    const fake = scriptedClient(ok, noSkills);
+    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+    await tick();
+    act(() => result.current.setStatusLine({ notice: '舊的話' }));
+    await act(async () => {
+      expect(await result.current.send('/feedback')).toBeUndefined();
+    });
+    expect(result.current.slashNotice).toBeUndefined();
+    expect(fake.started).toEqual([]);
+  });
+
+  it('setStatusLine：兩格照傳進來的換，沒給的那格清掉；身分穩定', async () => {
+    const fake = scriptedClient(ok, noSkills);
+    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+    await tick();
+    const first = result.current.setStatusLine;
+    act(() => result.current.setStatusLine({ notice: '好了', error: '壞了' }));
+    expect(result.current.slashNotice).toBe('好了');
+    expect(result.current.slashError).toBe('壞了');
+    act(() => result.current.setStatusLine({ notice: '只剩這句' }));
+    expect(result.current.slashNotice).toBe('只剩這句');
+    expect(result.current.slashError).toBeUndefined();
+    act(() => result.current.setStatusLine({}));
+    expect(result.current.slashNotice).toBeUndefined();
+    expect(result.current.setStatusLine).toBe(first);
+  });
+});

@@ -1,2 +1,3 @@
 export { ConversationFeedbackDialog } from './conversation-dialog';
-export { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY, isRatable } from './feedback';
+export { useFeedback, type Feedback } from './use-feedback';
+export { FEEDBACK_COPY, isRatable } from './feedback';

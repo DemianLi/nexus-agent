@@ -30,7 +30,7 @@ import type { ConversationEntry, ToolEntry } from '@nexus/wire';
 import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 
 import { type TranscriptItem, PRESENT } from '@/features/deliverable';
-import { EXIT_PLAN_MODE } from '@/features/plan';
+import { EXIT_PLAN_MODE } from '@/shared/connection/plan-document';
 import { ASK_USER_QUESTION } from '@/features/question';
 import { toolTitle } from '@/features/tool';
 

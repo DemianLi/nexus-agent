@@ -5,23 +5,19 @@
 import { useRef } from 'react';
 
 import { FeedbackDialog } from '@/features/feedback/dialog';
-import type { Conversation } from '@/shared/connection/use-conversation';
+import type { Feedback } from '@/features/feedback/use-feedback';
 
-/** 這條對話的回饋對話框（`/feedback` 與回覆底下的回報）：開關與送出都由 `conversation` 管。 */
-export function ConversationFeedbackDialog({
-  conversation,
-}: {
-  readonly conversation: Conversation;
-}) {
+/** 這條對話的回饋對話框（`/feedback` 與回覆底下的回報）：開關與送出都由 `feedback` 管。 */
+export function ConversationFeedbackDialog({ feedback }: { readonly feedback: Feedback }) {
   // 關掉之後留著最後那一份：退場動效那段時間裡框裡的字不能先消失。
-  const lastDialog = useRef(conversation.feedbackDialog);
+  const lastDialog = useRef(feedback.feedbackDialog);
   // 數打開了幾次，給下面的 `key` 用。
   const dialogWasOpen = useRef(false);
   const dialogOpens = useRef(0);
-  const dialogOpen = conversation.feedbackDialog !== undefined;
+  const dialogOpen = feedback.feedbackDialog !== undefined;
   if (dialogOpen && !dialogWasOpen.current) dialogOpens.current += 1;
   dialogWasOpen.current = dialogOpen;
-  if (dialogOpen) lastDialog.current = conversation.feedbackDialog;
+  if (dialogOpen) lastDialog.current = feedback.feedbackDialog;
   const feedbackDialog = lastDialog.current;
   if (feedbackDialog === undefined) return null;
   return (
@@ -31,8 +27,8 @@ export function ConversationFeedbackDialog({
       open={dialogOpen}
       submitting={feedbackDialog.submitting}
       {...(feedbackDialog.failure === undefined ? {} : { failure: feedbackDialog.failure })}
-      onSubmit={(draft) => void conversation.submitFeedback(draft)}
-      onDismiss={conversation.dismissFeedback}
+      onSubmit={(draft) => void feedback.submitFeedback(draft)}
+      onDismiss={feedback.dismissFeedback}
     />
   );
 }

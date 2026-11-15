@@ -7,6 +7,7 @@ import type {
   WireSettleReason,
 } from '@nexus/wire';
 
+import { COMMAND_TOKEN, commandArm } from '@/shared/connection/command-line';
 import { stoppedByTurnClock } from '@/shared/lib/stop-cause';
 
 /**
@@ -173,14 +174,6 @@ export function canSendText(
   return connected && (line.trim() !== '' || hasAttachments) && status !== 'awaiting-input';
 }
 
-/** 跟 `parseCommand` 同一條：名字後面緊接非空白（`/plan.md`）就不是命令。 */
-const COMMAND_TOKEN = /^\/([a-z][a-z0-9_-]*)(?=$|\s)/u;
-
-/** 這一行開頭像不像一個命令（`/名字`，名字照 `parseCommand`）；不管清單上有沒有。不像就回 `undefined`。 */
-export function commandToken(line: string): string | undefined {
-  return COMMAND_TOKEN.exec(line.trim())?.[1];
-}
-
 /**
  * 開頭那個字是不是命令清單上的名字（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)）：是才走
  * `slash.run`，其餘一律是一句話、走 `run.start`——技能的 `/deploy 今天`、打錯的 `/plna` 都送給模型。照 dsh：命令在客戶端
@@ -188,26 +181,6 @@ export function commandToken(line: string): string | undefined {
  */
 export function namesCommand(commands: readonly SlashDescriptor[], line: string): boolean {
   return commandArm(commands, line) !== undefined;
-}
-
-/**
- * 這一行是命令的話走哪一路（[#1971](https://github.com/DemianLi/nexus-agent/issues/1971)），照 dsh `matchEnter`
- * （`ui-commands/src/client/service.ts:325-365`，`687f282e`）：
- *
- * - `claim`：宣告了 `input` 的命令，後面帶不帶字都算。送出後在途、收下才清（#1941）。
- * - `detached`：沒宣告 `input`、整行只有 `/名字`。當場拿掉、背景執行，不鎖輸入框（dsh `consumeVia`＋`runDetached`）。
- * - `undefined`：不是命令。不在清單上，或沒宣告 `input` 卻帶了字——後者 dsh 整行當一句話送（`if (!bare) return undefined`）。
- */
-export function commandArm(
-  commands: readonly SlashDescriptor[],
-  line: string,
-): 'claim' | 'detached' | undefined {
-  const name = commandToken(line);
-  if (name === undefined) return undefined;
-  const command = commands.find((candidate) => candidate.name === name);
-  if (command === undefined) return undefined;
-  if (command.input !== undefined) return 'claim';
-  return line.trim() === `/${name}` ? 'detached' : undefined;
 }
 
 /**

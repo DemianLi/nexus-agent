@@ -48,7 +48,8 @@ import {
   permissionLocked,
 } from '@/features/seats';
 import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
-import { ConversationFeedbackDialog, FEEDBACK_COMMAND_LINE } from '@/features/feedback';
+import { ConversationFeedbackDialog, useFeedback } from '@/features/feedback';
+import { FEEDBACK_COMMAND_LINE } from '@/shared/connection/command-line';
 import { ConversationNotices, PendingSwap } from '@/features/status';
 import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
 import { GoalBar } from '@/features/goal';
@@ -343,7 +344,20 @@ function ConversationView({
   readonly onNewConversation: (engaged: boolean) => void;
   readonly onSwitch: (threadId: string) => void;
 }) {
-  const conversation = useConversation({ client, threadId });
+  // 回饋要 `connections` 與狀態列，核心要「開回饋對話框」：兩邊互相要，靠 ref 接，不讓兩個檔互相 import。
+  const openFeedbackDialog = useRef<() => void>(() => undefined);
+  const conversation = useConversation({
+    client,
+    threadId,
+    onFeedbackCommand: () => openFeedbackDialog.current(),
+  });
+  const feedback = useFeedback({
+    client,
+    threadId,
+    connections: conversation.connections,
+    setStatusLine: conversation.setStatusLine,
+  });
+  openFeedbackDialog.current = feedback.openSessionDialog;
   // 模型座（#723）：伺服器沒實作（`not_supported`）或還在讀就是 `null`，座位與 `/model` 一起沒有。
   const modelSeat = useModelSeat(
     client,
@@ -649,6 +663,7 @@ function ConversationView({
 
         <ConversationBody
           conversation={conversation}
+          feedback={feedback}
           isFresh={isFresh}
           hasSteers={steers.length > 0}
           sessionLinks={sessionLinks}
@@ -800,7 +815,7 @@ function ConversationView({
       </SidebarInset>
       <RightSidebarPanel />
 
-      <ConversationFeedbackDialog conversation={conversation} />
+      <ConversationFeedbackDialog feedback={feedback} />
     </RightSidebarProvider>
   );
 }

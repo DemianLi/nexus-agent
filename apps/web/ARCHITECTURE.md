@@ -64,7 +64,7 @@ src/
 
 | 檔                                                              | 為什麼                                             | 什麼時候拿掉                                                                             |
 | --------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `shared/connection/use-conversation.ts`                         | 會話的狀態裡混著幾個功能自己的狀態與文案           | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「use-conversation 切開」 |
+| `shared/connection/use-conversation.ts`                         | 連線核心還拉著兩條錯誤文案（送出被拒、暫停目標失敗） | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「下行錯誤碼轉文案收成一個 module」 |
 | `shared/right-sidebar/api.ts`、`shared/right-sidebar/layout.ts` | 分頁要的資料來源集中在一個型別裡，用到各分頁的型別 | [#2883](https://github.com/DemianLi/nexus-agent/issues/2883) 的「右側欄分頁登記」        |
 
 ## 新東西放哪

@@ -22,7 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Composer, inputPlaceholder } from '@/features/composer';
 import { ConversationBody, Entry as TranscriptEntry, useFreshItems } from '@/features/transcript';
-import { ConversationFeedbackDialog } from '@/features/feedback';
+import { ConversationFeedbackDialog, useFeedback } from '@/features/feedback';
 import { ConversationNotices, PendingSwap } from '@/features/status';
 import { renderPendingActions, renderPendingPanel } from '@/app/pending-panels';
 import { useSubagentControl } from '@/features/tool';
@@ -179,7 +179,22 @@ function EmbeddedConversation({
   readonly onNewConversation: () => void;
   readonly signIns: number;
 }) {
-  const conversation = useConversation({ client, threadId, agentBaseUrl, signIns });
+  // 回饋要 `connections` 與狀態列，核心要「開回饋對話框」：兩邊互相要，靠 ref 接，不讓兩個檔互相 import。
+  const openFeedbackDialog = useRef<() => void>(() => undefined);
+  const conversation = useConversation({
+    client,
+    threadId,
+    agentBaseUrl,
+    signIns,
+    onFeedbackCommand: () => openFeedbackDialog.current(),
+  });
+  const feedback = useFeedback({
+    client,
+    threadId,
+    connections: conversation.connections,
+    setStatusLine: conversation.setStatusLine,
+  });
+  openFeedbackDialog.current = feedback.openSessionDialog;
   useHostCalls(conversation, hostTools, onHostCall);
   const deliverableDownload = useMemo(
     () => createDeliverableDownloader({ threadId, baseUrl: `${agentBaseUrl}${EMBED_PATH_PREFIX}` }),
@@ -241,6 +256,7 @@ function EmbeddedConversation({
       </div>
       <ConversationBody
         conversation={conversation}
+        feedback={feedback}
         isFresh={isFresh}
         hasSteers={steers.length > 0}
         sessionLinks={sessionLinks}
@@ -288,7 +304,7 @@ function EmbeddedConversation({
           </p>
         )}
       </div>
-      <ConversationFeedbackDialog conversation={conversation} />
+      <ConversationFeedbackDialog feedback={feedback} />
     </div>
   );
 }

@@ -26,9 +26,6 @@ import type {
   SlashRunOutcome,
   UplinkResult,
   WireClient,
-  WireFeedbackCategory,
-  WireFeedbackItem,
-  WireFeedbackRating,
 } from '@nexus/wire';
 import {
   answerResponse,
@@ -60,17 +57,18 @@ import { sendRejectionText } from '@/features/attachments/send';
 import { resolvedClientTimeZone } from '@/shared/connection/client-time-zone';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import type { ConversationStore } from '@/shared/connection/conversation-store';
-import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/features/feedback/feedback';
 import { FramePublisher, publicationOf } from '@/shared/connection/frame-publisher';
 import type { Publication } from '@/shared/connection/frame-publisher';
-import { RatingsController } from '@/features/feedback/ratings';
 import { goalPauseFailureText } from '@/features/goal/bar-view';
-import { PLAN_EXIT_LINE } from '@/features/plan/chip-view';
-import { commandArm, commandToken } from '@/features/queue/view';
-import { CommandDirectory } from '@/features/composer/command-directory';
-import { submittedPlanOf } from '@/features/plan/review-view';
-import type { PlanScanOutcome } from '@/features/plan/review-view';
-import type { RatingsView } from '@/features/feedback/ratings';
+import {
+  FEEDBACK_COMMAND_LINE,
+  PLAN_EXIT_LINE,
+  commandArm,
+  commandToken,
+} from '@/shared/connection/command-line';
+import { CommandDirectory } from '@/shared/connection/command-directory';
+import { submittedPlanOf } from '@/shared/connection/plan-document';
+import type { PlanScanOutcome } from '@/shared/connection/plan-document';
 import { probeLivez } from '@/shared/connection/livez-probe';
 import {
   OPENING_NOTICE_MS,
@@ -125,18 +123,6 @@ function pagingFailureText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
-export type FeedbackTarget =
-  | { readonly kind: 'session' }
-  | { readonly kind: 'reply'; readonly messageId: string; readonly rating: WireFeedbackRating };
-
-export interface FeedbackDialogState {
-  readonly target: FeedbackTarget;
-  readonly submitting: boolean;
-  /** 上一次送出失敗的那句話。失敗時框留著（照 dsh）。 */
-  readonly failure?: string;
-}
-
 export interface UseConversationOptions {
   /** 注入用；省略即連同源的 harness。 */
   readonly client?: WireClient;
@@ -149,6 +135,12 @@ export interface UseConversationOptions {
    * 401 回來時當場重開。獨立頁面不給。
    */
   readonly signIns?: number;
+  /**
+   * 只打了 `/feedback` 那一行時叫（照 dsh 的 `/feedback` 裝飾，#267 的 Q2）：核心先清掉狀態列的 {@link Conversation.slashError} 與
+   * {@link Conversation.slashNotice}，這一行不送出、`send` 回 `undefined`，開對話框的事交給這個回呼。帶了文字的 `/feedback 很慢`
+   * 不叫，照舊走 `slash.run`。沒給就只清不開，什麼都不發生。
+   */
+  readonly onFeedbackCommand?: () => void;
 }
 
 /** 畫面上那段歷史的現況（#306）。 */
@@ -316,7 +308,7 @@ export interface Conversation {
    * （[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)，照 dsh）：技能的 `/deploy 今天`、打錯的
    * `/plna` 都是一句話，送給模型。這推翻了 [#123](https://github.com/DemianLi/nexus-agent/issues/123) 的「認不得的命令是
    * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。開頭像命令的那一行要等到這條線的命令清單才分得出來
-   * （照 dsh 的 strong-wait，`features/composer/command-directory.ts`）：清單在途就等它；之前抓失敗就當場重抓一次；等到的還是失敗才回
+   * （照 dsh 的 strong-wait，`shared/connection/command-directory.ts`）：清單在途就等它；之前抓失敗就當場重抓一次；等到的還是失敗才回
    * {@link SendRejected}（{@link commandsFailedText}），不靜默送給模型；等的時候畫面卸載就靜靜回 `undefined`。認的那一道同
    * {@link Conversation.adjudicate}，畫面要在等的期間擋住下一次送出，先自己叫那一個，再把結果帶進 `route`，這裡就不再認。
    *
@@ -433,31 +425,10 @@ export interface Conversation {
    */
   cancel(): Promise<void>;
   /**
-   * 這條 thread 目前的評分，以訊息 id（`AiEntry.messageId`）為鍵（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
-   * **第一次 {@link seedRatings} 之前是空的**，照 dsh。
+   * 在狀態列放一則通知或錯誤（{@link Conversation.slashNotice}、{@link Conversation.slashError}）：兩格都照傳進來的換，沒給的那格就清掉。
+   * 給別的功能（例如回饋）講它自己這一側的結果用，身分穩定。
    */
-  readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
-  /** 讀回評分失敗了（dsh 的 `error.load`）。下一次滑過或按下去會再試。 */
-  readonly ratingsLoadFailed: boolean;
-  /**
-   * 這台伺服器不收評分（`not_supported`，[#1849](https://github.com/DemianLi/nexus-agent/issues/1849)）：讚踩停用、講原因，按下去不開對話框。
-   * 重連之後重讀，讀得到就恢復。評語（只打 `/feedback`）不受影響。
-   */
-  readonly ratingsUnsupported: boolean;
-  /** 讀回這條 thread 的評分，讀過就不再讀。畫面掛在讚踩的第一次滑過或聚焦上。 */
-  seedRatings(): void;
-  readonly feedbackDialog?: FeedbackDialogState;
-  /**
-   * 按了一則回覆的讚或踩。**再點已選的那顆是收回**，另一顆開對話框，送出之後才記（照 dsh）。
-   * 先等讀回評分：還沒滑過就直接按的話，看到的也是存著的那一筆。
-   */
-  rate(messageId: string, rating: WireFeedbackRating): Promise<void>;
-  /** 送出回饋對話框。可以空著送。 */
-  submitFeedback(draft: {
-    readonly category?: WireFeedbackCategory;
-    readonly text: string;
-  }): Promise<void>;
-  dismissFeedback(): void;
+  setStatusLine(line: { readonly notice?: string; readonly error?: string }): void;
 }
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
@@ -487,24 +458,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     },
     [publisher],
   );
-  const [ratingsView, setRatingsView] = useState<RatingsView>(() => ({
-    status: 'cold',
-    items: new Map(),
-  }));
-  // **一條 thread 一個**：換 thread 時整個 view 重掛（`app/App.tsx` 的 `key`），不會拿著上一條的評分。
-  const ratingsController = useMemo(
-    () =>
-      new RatingsController(
-        {
-          list: () => client.feedbackList(threadId),
-          put: (params) => client.feedbackPut(threadId, params),
-          delete: (params) => client.feedbackDelete(threadId, params),
-        },
-        setRatingsView,
-      ),
-    [client, threadId],
-  );
-  const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
@@ -556,6 +509,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [skills, setSkills] = useState<readonly SkillEntry[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
+  const setStatusLine = useCallback(
+    (line: { readonly notice?: string; readonly error?: string }) => {
+      setSlashError(line.error);
+      setSlashNotice(line.notice);
+    },
+    [],
+  );
   /** 這條會話開跑過幾輪（`status` 變成 `running` 的次數）。命令回應靠它認得「發出命令之後有輪開跑了」。 */
   const turnsStarted = useRef(0);
   // 命令回應只在「沒有輪跑著」的時候畫，所以一輪開跑就是它退場的時刻——不分人送的還是伺服器自己排的
@@ -589,8 +549,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const jump = useRef<{ target: number; promise: Promise<void> } | undefined>(undefined);
   const clientRef = useRef(client);
   clientRef.current = client;
-  const dialogRef = useRef(feedbackDialog);
-  dialogRef.current = feedbackDialog;
+  const onFeedbackCommandRef = useRef(options.onFeedbackCommand);
+  onFeedbackCommandRef.current = options.onFeedbackCommand;
 
   /** 排下一次重試。瀏覽器說離線就不排，等 `online`（照 dsh 的 `setNetworkAvailable`）。 */
   const scheduleRetry = useCallback(() => {
@@ -798,10 +758,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           clearTimeout(book.recoveredTimer);
           book.recoveredTimer = setTimeout(() => setRecovered(false), RECOVERED_NOTICE_MS);
         }
-        // **讀過的評分重讀一次**（#772），照 dsh 的 `connection/reset`：每次連上都發、第一次也算，評分外掛只重讀
-        // 不是 `cold` 的那份，冷的等人滑過再讀。斷線期間別的分頁可能改過；走 `resync` 排在路上的修改後面，
-        // 晚回來的舊清單才不會蓋掉剛寫進去的版本。
-        if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線除了還掛著的中斷不重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         // 兩份清單都不等，事件照常往下收（#1929）。
@@ -890,16 +846,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       settled();
       setConnected(false);
     };
-  }, [
-    client,
-    threadId,
-    livezBaseUrl,
-    advance,
-    generation,
-    scheduleRetry,
-    ratingsController,
-    commandDirectory,
-  ]);
+  }, [client, threadId, livezBaseUrl, advance, generation, scheduleRetry, commandDirectory]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -1044,7 +991,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         // 跑著也收。帶了文字的 `/feedback 很慢` 照舊走 `slash.run`（#267 的 Q2）。
         setSlashError(undefined);
         setSlashNotice(undefined);
-        setFeedbackDialog({ target: { kind: 'session' }, submitting: false });
+        onFeedbackCommandRef.current?.();
         return undefined;
       }
       // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
@@ -1417,77 +1364,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId],
   );
 
-  const seedRatings = useCallback(() => {
-    void ratingsController.ensure();
-  }, [ratingsController]);
-
-  const rate = useCallback(
-    async (messageId: string, rating: WireFeedbackRating) => {
-      const loaded = await ratingsController.ensure();
-      // 伺服器不收評分（#1849）：不開對話框，免得填完送出才報錯。畫面那側已經停用了，這裡是保險（滑過與按下是同一下的觸控）。
-      if (ratingsController.view.status === 'unsupported') return;
-      if (!loaded.ok || ratingsController.view.items.get(messageId)?.rating !== rating) {
-        setFeedbackDialog({ target: { kind: 'reply', messageId, rating }, submitting: false });
-        return;
-      }
-      // 再點一次已選的那顆：收回。結果不走對話框，失敗的話跟命令的失敗講在同一行。
-      setSlashError(undefined);
-      setSlashNotice(undefined);
-      const result = await ratingsController.retract(messageId, rating);
-      if (!result.ok) setSlashError(result.failure);
-    },
-    [ratingsController],
-  );
-
-  const submitFeedback = useCallback(
-    async (draft: { readonly category?: WireFeedbackCategory; readonly text: string }) => {
-      const open = dialogRef.current;
-      if (open === undefined || open.submitting) return;
-      setFeedbackDialog({ target: open.target, submitting: true });
-      const fail = (failure: string): void => {
-        setFeedbackDialog((current) =>
-          current === undefined ? current : { target: current.target, submitting: false, failure },
-        );
-      };
-      const text = draft.text.trim();
-      const category = draft.category === undefined ? {} : { category: draft.category };
-      try {
-        if (open.target.kind === 'session') {
-          const outcome = await clientRef.current.feedbackRecord(threadId, {
-            ...(text === '' ? {} : { text }),
-            ...category,
-          });
-          if (outcome.kind === 'rejected') {
-            fail(`${FEEDBACK_COPY.generic}：${outcome.message}`);
-            return;
-          }
-        } else {
-          const { messageId, rating } = open.target;
-          const result = await ratingsController.rate(messageId, rating, {
-            ...(text === '' ? {} : { note: text }),
-            ...category,
-          });
-          if (!result.ok) {
-            fail(result.failure);
-            return;
-          }
-        }
-      } catch (error) {
-        fail(`${FEEDBACK_COPY.generic}：${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      setFeedbackDialog(undefined);
-      setSlashError(undefined);
-      // 送出之後的那句謝謝跟命令的結果講在同一行：兩者都是「這一側要說的話」，不進 transcript。
-      setSlashNotice(FEEDBACK_COPY.recorded);
-    },
-    [threadId, ratingsController],
-  );
-
-  const dismissFeedback = useCallback(() => {
-    setFeedbackDialog(undefined);
-  }, []);
-
   return {
     state,
     store,
@@ -1527,14 +1403,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     dismissQuestion,
     declineQuestion,
     cancel,
-    ratings: ratingsView.items,
-    ratingsLoadFailed: ratingsView.status === 'failed',
-    ratingsUnsupported: ratingsView.status === 'unsupported',
-    seedRatings,
-    rate,
-    submitFeedback,
-    dismissFeedback,
-    ...(feedbackDialog === undefined ? {} : { feedbackDialog }),
+    setStatusLine,
     ...(connectionError === undefined ? {} : { connectionError }),
     ...(refusal === undefined ? {} : { refusal }),
     connections,

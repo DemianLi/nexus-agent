@@ -11,7 +11,7 @@ import type { ConversationStore } from '@/shared/connection/conversation-store';
 import type { DeliverableDownloader } from '@/features/deliverable/download';
 import type { DeliverableFileStore } from '@/features/deliverable/file';
 import type { LocatedFile } from '@/features/deliverable/view';
-import type { PlanDocument, PlanScanOutcome } from '@/features/plan/review-view';
+import type { PlanDocument, PlanScanOutcome } from '@/shared/connection/plan-document';
 import type { PanelKind } from '@/shared/right-sidebar/layout';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
 import type { TrajectoryPuller } from '@/features/trace/trajectory-pull';

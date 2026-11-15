@@ -8,13 +8,13 @@ import { PLAN_TAB_MISSING_TEXT, RightSidebarToggle } from '@/app/right-sidebar/r
 import {
   AUTO_OPENED_KEY,
   PLAN_REVIEW_DISMISSED_TEXT,
-  planDocument,
   planReviewOf,
 } from '@/features/plan/review-view';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
-import type { PlanDocument } from '@/features/plan/review-view';
+import { planDocument } from '@/shared/connection/plan-document';
+import type { PlanDocument } from '@/shared/connection/plan-document';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
 import { WithRightSidebar, memoryStorage } from '@/test/right-sidebar';
