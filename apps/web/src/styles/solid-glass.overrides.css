@@ -648,7 +648,22 @@ body {
 }
 
 /*
- * Windows 高對比（`forced-colors: active`，#2796；README 本地修改第 83 條）：瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`，
+ * 側欄每一列的選項鈕點擊區補到 24×24（#2791；README 本地修改第 86 條）：vendor 是 20×20、疊在那一列的按鈕上，
+ * 不到 WCAG 2.2 的 2.5.8。`lg` 起往上、往右各退 2px，圖示留在原位；窄螢幕 vendor 另有 `after:` 撐大的點擊區，位置不動。
+ */
+[data-sidebar='menu-action'] {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+@media (width >= 64rem) {
+  [data-sidebar='menu-action'] {
+    margin: -2px -2px 0 0;
+  }
+}
+
+/*
+ * Windows 高對比（`forced-colors: active`，#2796；README 本地修改第 85 條）：瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`，
  * 只靠這些表示的狀態與邊界就看不出來。這裡只補看不出來的那幾處，用系統色的外框，不佔版面：
  * - **選取**：command 清單裡鍵盤走到的那一項、對話裡被定位的那一則、開著的選單 Trigger，平常都只換半透明的底色。
  * - **面的邊界**：對話框、alert-dialog、sheet、tooltip、card、輸入框，平常靠陰影與玻璃邊。

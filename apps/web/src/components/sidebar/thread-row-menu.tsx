@@ -97,7 +97,7 @@ export function ThreadRowMenu(props: RowMenuProps) {
           <SidebarMenuAction
             showOnHover
             aria-label={`「${label}」的選項`}
-            className="size-8 lg:size-5"
+            className="size-8 lg:size-6"
           />
         }
       >
