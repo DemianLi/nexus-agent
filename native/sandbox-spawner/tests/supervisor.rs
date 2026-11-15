@@ -3564,24 +3564,47 @@ fn a_leaf_that_refuses_attach_without_a_heartbeat_is_stalled() {
     assert_eq!(shut_down(&mut h), []);
 }
 
-/// 重現 #2858：`attach` 沒成功（回錯、或一直不回）而葉子的心跳照送。想要的是前台拿到 `down`。
+/// 葉子回 `attach` 錯、心跳照送：沒有沉默可判，靠組合行程自己以 4 結束，整對當場收。`--stall-ms` 開到比 [`WAIT`] 長，
+/// 等得到 `down` 就不是沉默判出來的。
 #[test]
-fn repro_2858_attach_that_never_succeeds_with_a_heartbeat() {
-    for flag in ["--refuse-attach", "--ignore-attach"] {
-        let mut h = Harness::start(Options {
-            conversation_args: vec![flag.into(), "--heartbeat-early".into()],
-            extra: vec!["--stall-ms", "3000"],
-            ..paired()
-        });
-        h.ensure("a");
-        let leaf = h.dir.join("run/c1.l.sock");
-        assert!(wait_until(|| log(&leaf)
-            .iter()
-            .any(|l| l.starts_with("attach "))));
-        std::thread::sleep(Duration::from_millis(9_000));
-        let events = shut_down(&mut h);
-        eprintln!("REPRO {flag}: events={events:?} audit={:?}", pair_audit(&h));
-    }
+fn a_leaf_that_refuses_attach_with_a_heartbeat_takes_the_pair_down_at_once() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--refuse-attach".into(), "--heartbeat-early".into()],
+        extra: vec!["--stall-ms", "60000"],
+        ..paired()
+    });
+    assert_eq!(h.down("a"), DeathCause::Crash);
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(
+        line.contains("\"cause\":\"crash\"") && line.contains("\"exit_code\":4"),
+        "{line}"
+    );
+    let line = h.audit_line("\"role\":\"conversation\"");
+    assert!(line.contains("\"cause\":\"peer\""), "{line}");
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// 已知限制：葉子收到 `attach` 一直不回、心跳照送（冷開不結束），這一對留在 `Binding`，沒有期限。等 3 倍 `--stall-ms`
+/// 沒有 `up` 也沒有 `down`，停機才回 `down(shutdown)`。
+#[test]
+fn a_leaf_that_never_answers_attach_with_a_heartbeat_stays_until_shutdown() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ignore-attach".into(), "--heartbeat-early".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    h.ensure("a");
+    let leaf = h.dir.join("run/c1.l.sock");
+    assert!(wait_until(|| log(&leaf).iter().any(|l| l == "attach ignored")));
+    std::thread::sleep(Duration::from_millis(9_000));
+    assert_eq!(pair_audit(&h), Vec::<String>::new());
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown,
+        }]
+    );
 }
 
 /// 殺葉子：前台讀到 `down`，組合行程留著。留著的見證：停機時它那一行的死因是 `shutdown`，不是被葉子連帶收掉的 `peer`。
