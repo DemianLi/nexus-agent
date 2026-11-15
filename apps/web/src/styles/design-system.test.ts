@@ -284,11 +284,6 @@ const ALLOWED: readonly Allowed[] = [
     what: 'bg-card border rounded-3xl',
     why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
   },
-  {
-    file: 'components/goal-bar.tsx',
-    what: 'disabled:opacity-60',
-    why: '目標列的暫停鈕停用時是 60：對齊到 50 會動到畫面，要 demian 看過前後對照才改（#2761）',
-  },
 ];
 
 /**

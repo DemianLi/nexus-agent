@@ -1065,6 +1065,8 @@ export async function openOverlay(
     mode?: Mode;
     viewport?: { width: number; height: number };
     reducedMotion?: boolean;
+    /** 模擬 Windows 高對比（`forced-colors: active`）。 */
+    forcedColors?: boolean;
     marks: Record<string, Record<string, string>>;
     prepare?: (page: Page) => Promise<void>;
     /** 頁面的時鐘與時區釘在這裡，載入之前就生效：畫出來的日期時間不跟著跑的當下變。 */
@@ -1079,6 +1081,7 @@ export async function openOverlay(
   });
   if (options.clock !== undefined) await page.clock.setFixedTime(options.clock.at);
   if (options.reducedMotion === true) await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (options.forcedColors === true) await page.emulateMedia({ forcedColors: 'active' });
   if (mode === 'reduced-transparency') {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setEmulatedMedia', {

@@ -160,3 +160,55 @@ describe('浮層遮罩走 --scrim', () => {
     }
   });
 });
+
+describe('solid-glass 的本地修改：Windows 高對比（#2796，第 83 條）', () => {
+  const FORCED = { conditions: ['@media (forced-colors: active)'] };
+
+  test.each([
+    "[data-slot='command-item'][data-selected='true']",
+    "[data-slot='message-scroller-item'][data-located]",
+    "[data-slot='dropdown-menu-trigger'][data-popup-open]",
+    "[data-slot='sidebar-menu-button'][data-active]:disabled",
+  ])('只靠底色表示的選取補 2px 的 Highlight 外框：%s', (selector) => {
+    expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
+      value: '2px solid Highlight',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test.each([
+    "[data-slot='dialog-content']",
+    "[data-slot='alert-dialog-content']",
+    "[data-slot='sheet-content']",
+    "[data-slot='tooltip-content']",
+    "[data-slot='card']",
+    "[data-slot='composer']",
+  ])('只靠陰影與玻璃邊的面補 1px 的 CanvasText 外框：%s', (selector) => {
+    expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
+      value: '1px solid CanvasText',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test('目前這條會話不畫成停用：按鈕字色、不變淡', () => {
+    const current = "[data-slot='sidebar-menu-button'][data-active]:disabled";
+    expect(cascade.winner([current], 'color', FORCED)).toMatchObject({
+      value: 'ButtonText',
+      layer: null,
+      file: OVERRIDES,
+    });
+    expect(cascade.winner([current], 'opacity', FORCED)).toMatchObject({
+      value: '1',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test('一般模式下這些外框不存在', () => {
+    expect(cascade.value(["[data-slot='dialog-content']"], 'outline')).not.toBe(
+      '1px solid CanvasText',
+    );
+  });
+});
