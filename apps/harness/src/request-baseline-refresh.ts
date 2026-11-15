@@ -12,7 +12,7 @@
  *
  * ```
  * cd apps/harness
- * node_modules/.bin/tsx --tsconfig ../../tsconfig.runtime.json src/request-baseline-refresh.ts [測試檔…]
+ * node_modules/.bin/tsx --tsconfig ../../tsconfig.runtime.json src/request-baseline-refresh.ts
  * ```
  *
  * 故意改了請求的形狀（例如摘要請求的重播）時重跑這支，PR 內文要貼 `git diff --stat` 與每一份差異的原因。
@@ -107,8 +107,8 @@ function sameExceptSummaryRequests(left: RawCase, right: RawCase): boolean {
   return strip(left) === strip(right);
 }
 
-const files = process.argv.slice(2);
-const tests = files.length === 0 ? BASELINE_TEST_FILES : files;
+// 不收測試檔參數：只錄一部分的話，寫檔前清掉整個目錄，其他測試檔的基準檔就整批消失。
+const tests = BASELINE_TEST_FILES;
 const scratch = mkdtempSync(join(tmpdir(), 'nexus-baseline-'));
 try {
   record(tests, false, join(scratch, 'shadow-a'));
