@@ -71,9 +71,11 @@ function formatQuestion(
   const leaked = samples.length - counted.length;
   const inSummary = samples.filter((sample) => sample.inSummary).length;
   const stale = samples.filter((sample) => sample.staleHit).length;
+  const recalled = samples.filter((sample) => sample.recallCalls > 0).length;
   return (
     `${question.questionId.padEnd(13)} ${question.kind.padEnd(10)} 經過 ${question.summariesCrossed} 次摘要  ` +
     `得分 ${formatScores(counted.map((sample) => sample.score))}  摘要裡有 ${inSummary}/${samples.length}` +
+    (recalled === 0 ? '' : `  叫了讀回工具 ${recalled}/${samples.length}`) +
     (stale === 0 ? '' : `  過時命中 ${stale}`) +
     (leaked === 0 ? '' : `  落在尾巴 ${leaked}（不計分）`)
   );

@@ -4,7 +4,12 @@ import { estimateMessageTokens, SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION }
 import { describe, expect, it } from 'vitest';
 import { FIDELITY_VARIANTS } from './dataset.js';
 import { formatFidelityReport } from './report.js';
-import { FIDELITY_TRIGGER_TOKENS, runFidelityVariant, SummaryDidNotHappenError } from './runner.js';
+import {
+  FIDELITY_RECALL_MAX_REQUESTS,
+  FIDELITY_TRIGGER_TOKENS,
+  runFidelityVariant,
+  SummaryDidNotHappenError,
+} from './runner.js';
 import type { FidelityModels } from './runner.js';
 
 const contentOf = (message: BaseMessage) =>
@@ -249,5 +254,85 @@ describe('交接保真度評估（#2774）', () => {
 
     for (const variant of FIDELITY_VARIANTS) expect(report).toContain(variant.id);
     expect(report).toContain('1.00');
+  });
+});
+
+describe('帶讀回工具答題（#2777）', () => {
+  const single = FIDELITY_VARIANTS.find((variant) => variant.id === 'single')!;
+  const double = FIDELITY_VARIANTS.find((variant) => variant.id === 'double')!;
+
+  /** 每一題先搜第一個該提到的字串，再把工具結果念回來的答題模型。 */
+  const searches = (variant: (typeof FIDELITY_VARIANTS)[number]) => {
+    const firstRequests: (readonly BaseMessage[])[] = [];
+    const answerStep: NonNullable<FidelityModels['answerStep']> = async (messages, tools) => {
+      expect(tools.map((tool) => tool.name)).toEqual(['history_read', 'history_search']);
+      const last = messages.at(-1)!;
+      if (ToolMessage.isInstance(last)) return new AIMessage(contentOf(last));
+      firstRequests.push(messages);
+      const question = variant.questions.find((each) => each.prompt === contentOf(last))!;
+      return new AIMessage({
+        content: '',
+        tool_calls: [
+          { id: 'q', name: 'history_search', args: { query: question.mentions[0]!, limit: 1 } },
+        ],
+      });
+    };
+    return { firstRequests, answerStep };
+  };
+
+  it('摘要什麼都沒留，模型搜得到被摘掉的原文：摘要裡沒有、答案裡有', async () => {
+    const { firstRequests, answerStep } = searches(single);
+    const result = await runFidelityVariant(single, {
+      ...models(DROPS_EVERYTHING),
+      answerStep,
+    });
+    const first = result.questions.find((question) => !question.leaked)!;
+    const mention = single.questions.find((each) => each.id === first.questionId)!.mentions[0]!;
+    expect(first.inSummary).toBe(false);
+    expect(first.answer).toMatch(/match(es)? for/);
+    expect(first.answer.replace(/\s+/g, '')).toContain(mention.replace(/\s+/g, ''));
+    expect(first).toMatchObject({ requests: 2, recallCalls: 1 });
+    // 前言指向讀回工具。
+    expect(firstRequests[0]!.map(contentOf).join('\n')).toContain('history_read reads an <index>');
+  });
+
+  it('連續摘要兩次：第一段的原文還讀得回來', async () => {
+    const { answerStep } = searches(double);
+    const result = await runFidelityVariant(double, { ...models(DROPS_EVERYTHING), answerStep });
+    const early = result.questions.find((question) => question.summariesCrossed === 2)!;
+    expect(early.answer).toMatch(/match(es)? for/);
+  });
+
+  it(`一直叫工具：送到第 ${FIDELITY_RECALL_MAX_REQUESTS} 個請求就停，最後那一則的文字當答案`, async () => {
+    let requests = 0;
+    const result = await runFidelityVariant(single, {
+      ...models(DROPS_EVERYTHING),
+      answerStep: async () => {
+        requests += 1;
+        return new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'again', name: 'history_read', args: { entry: 1 } }],
+        });
+      },
+    });
+    expect(requests).toBe(single.questions.length * FIDELITY_RECALL_MAX_REQUESTS);
+    expect(result.questions[0]).toMatchObject({
+      answer: '',
+      requests: FIDELITY_RECALL_MAX_REQUESTS,
+      recallCalls: FIDELITY_RECALL_MAX_REQUESTS - 1,
+    });
+  });
+
+  it('沒給 answerStep：前言不指向讀回工具，每題一個請求、不叫工具', async () => {
+    const seen: string[] = [];
+    const result = await runFidelityVariant(single, {
+      summaryModel: DROPS_EVERYTHING,
+      ask: async (messages) => {
+        seen.push(messages.map(contentOf).join('\n'));
+        return '';
+      },
+    });
+    expect(seen[0]).not.toContain('history_read');
+    expect(result.questions.every((q) => q.requests === 1 && q.recallCalls === 0)).toBe(true);
   });
 });

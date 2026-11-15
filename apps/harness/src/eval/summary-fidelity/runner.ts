@@ -12,6 +12,10 @@
  *
  * 門檻與保留量照出貨在預設模型上的實際比例（保留量封在 token 門檻的兩成），絕對值縮小：題庫要的是「事實被摘掉」，不是把窗口塞滿。
  * 只留 token 門檻，出貨的 60 則訊息數門檻不設。
+ *
+ * **帶讀回工具的量法**（`answerStep`，[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：每一段對話先寫進日誌，摘要的前言
+ * 指向 `history_read`／`history_search`，問題目那一步變成工具迴圈，模型叫工具就從日誌讀回被摘掉的原文。系統提示與題目不變，
+ * 所以量到的是「模型看了前言那一句之後會不會自己去讀」。
  */
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
@@ -22,8 +26,11 @@ import {
   noteSentRequest,
   SessionLog,
   TokenAnchorBook,
+  toLoggedMessage,
 } from '@nexus/core';
 import type { StreamRetryOptions } from '@nexus/core';
+import type { NexusTool, ToolExec } from '@nexus/tools';
+import { createHistoryReadTool, createHistorySearchTool } from '../../history-recall-tools.js';
 import { scoreMentions } from '../scorers.js';
 import type { FidelityQuestion, FidelityVariant } from './dataset.js';
 
@@ -36,6 +43,9 @@ export const FIDELITY_RETAIN_TOKENS = 1_600;
 const ANSWER_SYSTEM_PROMPT =
   'You are an assistant continuing an ongoing conversation. Answer the next question using only what is in the conversation so far. ' +
   'Reply in the language of the question, in one short sentence. If the conversation does not contain the answer, say you do not know.';
+
+/** 帶讀回工具答一題最多送幾次請求。到了這個數還在叫工具，最後那一則的文字就是答案（通常是空的）。 */
+export const FIDELITY_RECALL_MAX_REQUESTS = 4;
 
 /** 主模型那一格的罐頭回覆。 */
 const CANNED_REPLY = 'Understood.';
@@ -54,6 +64,11 @@ export interface FidelityModels {
    * 「送出去的那一串」就用摘要器手上的有效訊息串頂替；主模型那一格是罐頭，所以量不到前綴快取，只量保真度。
    */
   readonly summaryCall?: 'template' | 'replay';
+  /**
+   * 帶讀回工具答題。給了就不用 `ask`：這個函式送一次請求（帶著這兩個工具的定義）、回模型的那一則；有工具呼叫就由跑者執行、
+   * 接回去再送，一題最多 {@link FIDELITY_RECALL_MAX_REQUESTS} 次請求。
+   */
+  answerStep?(messages: readonly BaseMessage[], tools: readonly NexusTool[]): Promise<AIMessage>;
 }
 
 /** 一題的結果。 */
@@ -71,6 +86,10 @@ export interface FidelityQuestionResult {
   /** 該提到的字串有任何一個出現在逐字留下的尾巴裡：這題量不到摘要，不進平均。 */
   readonly leaked: boolean;
   readonly answer: string;
+  /** 這一題送了幾次答題請求。不帶讀回工具時恆為 1。 */
+  readonly requests: number;
+  /** 這一題叫了幾次讀回工具。不帶讀回工具時恆為 0。 */
+  readonly recallCalls: number;
 }
 
 /** 一個變體跑一次的結果。 */
@@ -116,6 +135,62 @@ function isSummary(message: BaseMessage): boolean {
   );
 }
 
+/** 把一則訊息照出貨的事件形狀寫進日誌，讀回工具才推得回原文。 */
+function logMessage(log: SessionLog, message: BaseMessage): void {
+  if (message instanceof ToolMessage) {
+    log.append('tool/result', {
+      callId: message.tool_call_id,
+      isError: false,
+      message: toLoggedMessage(message),
+    });
+  } else if (AIMessage.isInstance(message)) {
+    log.append('assistant/message', { message: toLoggedMessage(message) });
+    for (const call of message.tool_calls ?? []) {
+      log.append('tool/call', {
+        callId: call.id ?? '',
+        name: call.name,
+        arguments: JSON.stringify(call.args),
+      });
+    }
+  } else {
+    log.append('turn/start', { kind: 'message', text: textOf(message) });
+  }
+}
+
+/** 帶讀回工具答一題：模型叫工具就執行、接回去再問，直到它不叫或請求數用完。 */
+async function answerWithRecall(
+  step: NonNullable<FidelityModels['answerStep']>,
+  tools: readonly NexusTool[],
+  messages: readonly BaseMessage[],
+): Promise<{ answer: string; requests: number; recallCalls: number }> {
+  const thread = [...messages];
+  let recallCalls = 0;
+  for (let requests = 1; ; requests += 1) {
+    const reply = await step(thread, tools);
+    const calls = reply.tool_calls ?? [];
+    if (calls.length === 0 || requests === FIDELITY_RECALL_MAX_REQUESTS) {
+      return { answer: reply.text, requests, recallCalls };
+    }
+    thread.push(reply);
+    for (const call of calls) {
+      recallCalls += 1;
+      const tool = tools.find((each) => each.name === call.name);
+      const result =
+        tool === undefined
+          ? { content: `Unknown tool ${call.name}.` }
+          : await tool.execute(call.args, { agent: { kind: 'root' } } as unknown as ToolExec);
+      thread.push(
+        new ToolMessage({
+          content:
+            typeof result.content === 'string' ? result.content : JSON.stringify(result.content),
+          tool_call_id: call.id ?? '',
+          name: call.name,
+        }),
+      );
+    }
+  }
+}
+
 /**
  * 跑一個變體一次。
  *
@@ -131,6 +206,13 @@ export async function runFidelityVariant(
 ): Promise<FidelityVariantResult> {
   const log = new SessionLog(`summary-fidelity-${variant.id}`);
   const replay = models.summaryCall === 'replay';
+  const recallTools =
+    models.answerStep === undefined
+      ? undefined
+      : [
+          createHistoryReadTool(() => ({ kind: 'ok', address: { kind: 'root' }, log })),
+          createHistorySearchTool(() => ({ kind: 'ok', address: { kind: 'root' }, log })),
+        ];
   const systemMessage = new SystemMessage(ANSWER_SYSTEM_PROMPT);
   // 摘要器這一步看到的有效訊息串：第一段是整串 state，之後是「上一次交下去的那一串、罐頭回覆、新的一段」。
   let effective: BaseMessage[] = [];
@@ -153,6 +235,7 @@ export async function runFidelityVariant(
     models.retry,
     undefined,
     replay ? () => effective : undefined,
+    recallTools !== undefined,
   );
   // 兩格都要給：摘要器靠它們認出是同一條對話的呼叫，下一段才會接著上一次的切點摘，而不是從原文重摘。
   const runtime = {
@@ -170,6 +253,7 @@ export async function runFidelityVariant(
   for (const [index, segment] of variant.segments.entries()) {
     state.push(...segment);
     effective = [...effective, ...segment];
+    if (recallTools !== undefined) for (const message of segment) logMessage(log, message);
     if (replay) noteSentRequest(log, [[systemMessage]], {});
     const before = summaryCount();
     const startedAt = performance.now();
@@ -204,6 +288,10 @@ export async function runFidelityVariant(
     const canned = new AIMessage(CANNED_REPLY);
     state.push(canned);
     effective = [...seen, canned];
+    if (recallTools !== undefined) {
+      logMessage(log, canned);
+      log.append('turn/end', {});
+    }
   }
 
   const summaryText = squash(seen.filter(isSummary).map(textOf).join('\n'));
@@ -219,12 +307,16 @@ export async function runFidelityVariant(
 
   const questions: FidelityQuestionResult[] = [];
   for (const question of variant.questions) {
-    const answer = await models.ask([
+    const asked = [
       new SystemMessage(ANSWER_SYSTEM_PROMPT),
       ...seen,
       new AIMessage(CANNED_REPLY),
       new HumanMessage(question.prompt),
-    ]);
+    ];
+    const { answer, requests, recallCalls } =
+      models.answerStep === undefined || recallTools === undefined
+        ? { answer: await models.ask(asked), requests: 1, recallCalls: 0 }
+        : await answerWithRecall(models.answerStep.bind(models), recallTools, asked);
     const score =
       scoreMentions(
         {
@@ -243,6 +335,8 @@ export async function runFidelityVariant(
       inSummary: question.mentions.every((needle) => summaryText.includes(squash(needle))),
       leaked: question.mentions.some((needle) => squashedTail.includes(squash(needle))),
       answer,
+      requests,
+      recallCalls,
     });
   }
 
