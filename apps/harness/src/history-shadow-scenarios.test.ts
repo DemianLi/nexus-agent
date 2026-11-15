@@ -155,7 +155,8 @@ describe('patch-closer', () => {
     const model = new ScriptedChatModel({ turns: [TWO_CALLS, { content: '好。' }] });
     const { pump, outcomes } = await assemble(model, {
       plugins: [PINGS],
-      recursionLimit: FAILS_BEFORE_TOOLS,
+      // `log` 下補懸空呼叫那顆不掛 `beforeAgent`，圖上少一個節點（#2362）：同一個上限能多走一格，要減一格才仍撞在工具那一步之前。
+      recursionLimit: FAILS_BEFORE_TOOLS - 1,
       wrapAgent: noUpdateState,
       source: 'log',
     });

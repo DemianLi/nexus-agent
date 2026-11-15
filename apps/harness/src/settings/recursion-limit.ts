@@ -113,6 +113,10 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * CLI 與 serve 的樹有圍堵時多一位（切換核准政策的通知，`permission-presets`；沒有圍堵時那一列什麼都不註冊），共四位，
  * 2026-11-02 實測（#2057）：CLI 是 **31 輪**（`floor((100 - 2 - 4) / 3)`），serve 是 **23 輪**（每輪四格，見下），都跟三位時同值
  * （`agent-instructions-on-tree.test.ts` 的 D 組）。
+ * **歷史從日誌推（`log`，產品預設）時補懸空呼叫那顆不掛 `beforeAgent`**（#2362，[`patch-tool-calls.ts`](../../../../packages/nexus-core/src/patch-tool-calls.ts) 的 `stateFix`）：少一個節點，上面的顆數都少一顆。
+ * 出貨清單不經樹（`createNexusAgent`）因此是 **32 輪**（少一個節點，`floor((100 - 2 - 3 + 1) / 3) = 32`；`state` 與 `shadow` 仍是 31）；CLI 與 serve 的樹兩邊同值，`floor(95 / 3)` 與 `floor(94 / 3)` 同為 31、`floor(95 / 4)` 與 `floor(94 / 4)` 同為 23，
+ * 所以使用者看得到的輪數沒變。2026-11-15 實測（`recursion-limit-log.test.ts`）。
+ *
  * `− 2` 是裸組裝的 `− 1` 再加基座 skills 中介層的 `SkillsMiddleware.before_agent`（裸組裝沒有這一顆，2026-10-23 對兩邊的節點清單實測）。
  * **有沒有給 `--workspace` 都一樣**：沒有工作區時組裝點照樣墊一顆 `StateBackend`，那幾顆 middleware 照建，只是 listener
  * 找不到東西就什麼都不加（`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 31）。dsh 的 pre-step 是一個事件依序跑完，

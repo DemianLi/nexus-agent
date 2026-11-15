@@ -312,7 +312,7 @@ export function subagentDefaultMiddleware(
   spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills'>,
   context: Pick<
     FoldedAgentParams,
-    'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
+    'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions' | 'patchToolCallsStateFix'
   >,
 ): AgentMiddleware[] {
   const backend = context.backend;
@@ -333,7 +333,7 @@ export function subagentDefaultMiddleware(
       }),
     ),
     createSummarizationMiddleware({ backend }),
-    createPatchToolCallsMiddleware(),
+    createPatchToolCallsMiddleware({ stateFix: context.patchToolCallsStateFix !== false }),
     ...(skills.length > 0
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
@@ -411,6 +411,9 @@ export function assembleAgent(params: AssembleAgentParams) {
               ...(params.fileToolDescriptions !== undefined && {
                 fileToolDescriptions: params.fileToolDescriptions,
               }),
+              ...(params.patchToolCallsStateFix !== undefined && {
+                patchToolCallsStateFix: params.patchToolCallsStateFix,
+              }),
             }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
@@ -471,7 +474,7 @@ export function assembleAgent(params: AssembleAgentParams) {
           }),
         ]),
     createSummarizationMiddleware({ backend }),
-    createPatchToolCallsMiddleware(),
+    createPatchToolCallsMiddleware({ stateFix: params.patchToolCallsStateFix !== false }),
   ] as unknown as AgentMiddleware[];
   const memoryParts =
     memory.length > 0 ? createMemoryMiddleware({ backend, sources: [...memory] }) : undefined;
