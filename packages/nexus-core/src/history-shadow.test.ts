@@ -24,8 +24,10 @@ import { replayConversation } from './langchain-message-adapter.js';
 import { toLoggedMessage } from './logged-message.js';
 import { ModelHistoryCache } from './model-history.js';
 import { patchDanglingToolCalls, patchedToolCallText } from './patch-tool-calls.js';
+import { createRegistry } from './registry.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
+import { SessionRegistry } from './session-registry.js';
 
 const SENT = { applyPrunes: true, applyArgTruncations: true, applyImageOffloads: true } as const;
 const cache = () => new ModelHistoryCache(SENT);
@@ -346,6 +348,51 @@ describe('createHistoryShadowMiddleware', () => {
         throw new Error('記錄端壞了');
       },
     );
+  });
+
+  /**
+   * 子代理第一次查找補寫 `subagent/catalog` 失敗時，`forCall` 拋（#1702）。影子比對這一顆刻意吞查找錯、記成 `other`；
+   * 它吞了之後，登記沒被清掉，下一個不吞的呼叫端（`log` 模式的那一顆）照樣再拋，這一步失敗，不是靜靜往下走。
+   * 這個兜底關係靠登記留著，不靠誰先碰到，所以這裡真的接兩顆 middleware、同一個 registry。
+   */
+  it('吞查找錯的這一顆先碰到補寫失敗：不吞的那一顆照樣讓這一步失敗，不是靜靜往下走', async () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    const boom = new Error('目錄寫不進去');
+    const real = sessions.root.append.bind(sessions.root);
+    vi.spyOn(sessions.root, 'append').mockImplementation(((
+      type: never,
+      data: never,
+      options: never,
+    ) => {
+      if (type === 'subagent/catalog') throw boom;
+      return real(type, data, options);
+    }) as typeof sessions.root.append);
+    const request = {
+      messages: [],
+      runtime: { configurable: { checkpoint_ns: 'tools:spawn|tools:inner' } },
+    };
+
+    const tally = createHistoryShadowTally();
+    const shadow = createHistoryShadowMiddleware({
+      sessions: registry.sessions,
+      sink: tally,
+    }) as unknown as { wrapModelCall: Hook };
+    const swallowed = vi.fn((_request: unknown) => 'reply');
+    expect(await shadow.wrapModelCall(request, swallowed)).toBe('reply');
+    expect(swallowed).toHaveBeenCalledTimes(1);
+    expect(tally.counts().other).toBe(1);
+
+    const fromLog = createHistoryFromLogMiddleware({
+      sessions: registry.sessions,
+    }) as unknown as { wrapModelCall: Hook };
+    const handler = vi.fn((_request: unknown) => 'reply');
+    await expect(
+      Promise.resolve().then(() => fromLog.wrapModelCall(request, handler)),
+    ).rejects.toBe(boom);
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('同一份日誌往後長：每次只推新的（增量推導按日誌物件認）', async () => {
