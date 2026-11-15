@@ -2990,6 +2990,75 @@ mod tests {
         );
     }
 
+    /// 接一個假的前台（通道兩端接在一起），回目前為止送給它的事件。
+    fn front_events(supervisor: &mut Supervisor) -> Vec<FrontEvent> {
+        if supervisor.front.is_none() {
+            let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+            supervisor.front = Some(Proc::new(
+                libc::pid_t::MAX - 3,
+                process::Chan::from_fds(
+                    std::os::fd::OwnedFd::from(read),
+                    std::os::fd::OwnedFd::from(write),
+                    1024,
+                ),
+            ));
+            return Vec::new();
+        }
+        let front = supervisor.front.as_mut().unwrap();
+        front.chan.flush();
+        front
+            .chan
+            .receive()
+            .unwrap()
+            .iter()
+            .map(|frame| crate::supervisor_protocol::decode_front_event(frame).unwrap())
+            .collect()
+    }
+
+    /// 重現 #2871 第 1 點。
+    #[test]
+    fn repro_2871_up_then_down() {
+        // (a) Bound 的一對：葉子在等 drain 的回答、同一條 thread 排著；組合行程停住被當場殺，收屍之前葉子回 busy。
+        let (mut supervisor, _, _) = with_a_pair("repro-a", PairState::Bound);
+        front_events(&mut supervisor);
+        supervisor.conversations[0].idle_since = Some(Instant::now());
+        supervisor.conversations[0].drain = Some(Instant::now());
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        supervisor.not_drained(0);
+        eprintln!("REPRO a 殺了之後、收屍之前：{:?}", front_events(&mut supervisor));
+        supervisor.on_exit(COMPOSITION, KILLED);
+        eprintln!("REPRO a 收屍之後：{:?}", front_events(&mut supervisor));
+
+        // (b) Binding 的一對：組合行程被當場殺，管線裡已經有 bound。
+        let (mut supervisor, _, _) = with_a_pair("repro-b", PairState::Binding);
+        front_events(&mut supervisor);
+        let composition = &mut supervisor.compositions[0];
+        composition.proc.hello = true;
+        composition
+            .proc
+            .chan
+            .send(&crate::supervisor_protocol::encode_conversation_report(
+                &ConversationReport::Bound {
+                    thread_id: b"t".to_vec(),
+                },
+            ));
+        composition.cause = Some(DeathCause::Stalled);
+        composition.proc.kill_now();
+        supervisor.on_composition_readable(0);
+        let front = front_events(&mut supervisor);
+        eprintln!(
+            "REPRO b 讀到 bound：state={:?} leaf.phase={:?} evictable={} front={:?}",
+            supervisor.compositions[0].state(),
+            supervisor.conversations[0].phase,
+            supervisor.conversations[0].evictable(),
+            front
+        );
+        supervisor.on_exit(COMPOSITION, KILLED);
+        eprintln!("REPRO b 收屍之後：{:?}", front_events(&mut supervisor));
+    }
+
     /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
     /// 所以 `ready` 先放進管線再開始收；之後讀端讀到 EOF、死因還是空的，表示那則 `ready` 讀到了、也解開了（解不開的會記 `crash`）。
     #[test]
