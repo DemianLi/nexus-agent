@@ -154,7 +154,7 @@ token 與共用元件不直接刪（規格 §13.6）：
 | `dropdown-menu` | 按鈕打開的動作選單；選值用 `command` 或 radio 項 | `dropdown`、`dropdown-keyboard` |
 | `empty` | 空狀態：圖示、標題、說明 | `trace-empty`、`transcript-rows` |
 | `input-group` | 輸入欄位加前後的附加物（圖示、按鈕） | 總覽、`command` |
-| `input` | 單行文字輸入 | 總覽 |
+| `input` | 單行文字輸入 | 總覽、`fields` |
 | `message-scroller` | 對話流的捲動容器：貼底、定位到某一則、回到底部的鈕 | `messages` |
 | `message` | 對話裡一則訊息的版面：頭像、標頭、內容、頁尾 | `messages` |
 | `popover` | 錨在 Trigger 旁、可以放任意內容的浮層 | `cost`、總覽 |
@@ -166,7 +166,7 @@ token 與共用元件不直接刪（規格 §13.6）：
 | `skeleton` | 內容還沒到時的佔位塊 | `primitives` |
 | `sonner` | toast 通知；`Toaster` 只在 `App` 放一個，其他地方呼叫 `toast()` | `primitives` |
 | `status-glyph` | 一輪的狀態圖示（執行中、完成、失敗） | `turn-status` |
-| `textarea` | 多行文字輸入 | 總覽、`feedback` |
+| `textarea` | 多行文字輸入 | `fields`、`feedback` |
 | `tool-steps` | 工具呼叫：一步（`StepRow`）、一段（`StepGroup`）、輸出區塊 | `tool-steps`、`tool-cards` |
 | `tooltip` | 滑鼠停留或聚焦時的短說明；不放必要資訊 | 總覽 |
 | `turn-status` | 狀態列執行中的那一列 | `turn-status` |

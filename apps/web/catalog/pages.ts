@@ -16,6 +16,7 @@ export const CATALOG_GROUPS: readonly CatalogGroup[] = [
     pages: [
       ['buttons', '按鈕'],
       ['primitives', '分隔線、骨架與通知'],
+      ['fields', '輸入欄位的狀態'],
       ['collapsibles', '展開收合'],
     ],
   },
