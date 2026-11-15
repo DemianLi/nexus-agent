@@ -3057,6 +3057,31 @@ mod tests {
         );
         supervisor.on_exit(COMPOSITION, KILLED);
         eprintln!("REPRO b 收屍之後：{:?}", front_events(&mut supervisor));
+
+        // (c) 第 2 點：Starting、有 thread，葉子被當場殺（RSS 超限），組合行程還沒在收，這時讀到 ready。
+        let since = Instant::now();
+        let (mut supervisor, audit, _) = with_a_pair("repro-c", PairState::Starting { since });
+        front_events(&mut supervisor);
+        composition_ready_in_the_pipe(&mut supervisor);
+        supervisor.conversations[0].cause = Some(DeathCause::Memory);
+        supervisor.conversations[0].proc.kill_now();
+        supervisor.on_composition_readable(0);
+        let composition = &mut supervisor.compositions[0];
+        composition.proc.chan.flush();
+        let sent = composition.proc.chan.receive().map(|f| f.len());
+        eprintln!(
+            "REPRO c 讀到 ready：state={:?} heard_at={} stop={} 管線裡的框={:?} leaf.phase={:?}",
+            composition.state(),
+            composition.heard_at.is_some(),
+            composition.proc.stop.is_some(),
+            sent,
+            supervisor.conversations[0].phase
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        supervisor.on_exit(LEAF, KILLED);
+        supervisor.on_exit(COMPOSITION, KILLED);
+        eprintln!("REPRO c 前台：{:?}", front_events(&mut supervisor));
+        eprintln!("REPRO c 稽核：{:?}", audit_lines(&audit));
     }
 
     /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
