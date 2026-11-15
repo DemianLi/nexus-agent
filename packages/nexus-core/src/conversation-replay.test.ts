@@ -1327,7 +1327,7 @@ describe('推不出來', () => {
   });
 });
 
-describe('會進模型的事件讀不出來（#2836）', () => {
+describe('事件的 data 讀不出來（#2836）', () => {
   /** 把指定種類的每一顆事件的 `data` 換成 `data`，其餘不動。 */
   function withBrokenData(log: SessionLog, type: string, data: unknown): SessionEvent[] {
     return log.events.map((event) =>

@@ -626,7 +626,7 @@ function summaryBody(text: string): string {
  * @param event - 那顆 `compaction/summary` 連同它在日誌裡的 `seq`。
  * @param maxBytes - 摘要全文的位元組上限，就是 `tool-text` 那一列（`toolText.maxBytes`），見 {@link capToolText}。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `CompactionPayload`。
- * @throws 那顆事件的 `data` 讀不出來（形狀壞了）：訊息帶事件種類與 `seq`。
+ * @throws 這顆事件的內容讀不出來：訊息帶事件種類與 `seq`，`cause` 是原錯（{@link readingEvent}）。
  */
 export function compactionData(
   event: { readonly seq: number; readonly data: SessionEventMap['compaction/summary'] },
