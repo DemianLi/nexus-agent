@@ -133,7 +133,8 @@ describe('端點真的回超窗：retain 0', () => {
     });
 
     expect(out.error).toBeUndefined();
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     // 第一次是原請求（拋了超窗），第二次是摘要之後的請求。
     expect(out.handled).toHaveLength(2);
     expect(out.handled[0]).toHaveLength(7);
@@ -196,7 +197,8 @@ describe('端點真的回超窗：retain 0', () => {
     });
 
     expect(out.error).toBeUndefined();
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     expect(texts(out.handled[1]!)).toHaveLength(2);
   });
 
@@ -246,7 +248,8 @@ describe('端點真的回超窗：retain 0', () => {
     });
 
     expect(out.error).toBeUndefined();
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     expect(texts(out.handled[1]!)).toHaveLength(2);
   });
 });
@@ -300,7 +303,8 @@ describe('怎麼認出是真超窗', () => {
     });
 
     expect(out.error).toBeUndefined();
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     expect(texts(out.handled[1]!)).toHaveLength(2);
     expect(texts(out.handled[1]!)[1]).toBe('短問題');
   });

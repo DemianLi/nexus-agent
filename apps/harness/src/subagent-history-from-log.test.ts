@@ -196,14 +196,15 @@ const TWO_SUBAGENTS: readonly ScriptedTurn[] = [
 ];
 
 /**
- * 子代理叫三次工具（累到 7 則，超過門檻 6；root 只有 4 則，不會觸發），摘要器在第四輪之前跑一次（吃掉第五個腳本輪），
- * 之後再叫一次工具、收工。
+ * 子代理叫三次工具（累到 7 則，超過門檻 6；root 只有 4 則，不會觸發），摘要器在第四輪之前跑一次（吃掉第五、第六個腳本輪：
+ * 索引條目、現況），之後再叫一次工具、收工。
  */
 const WITH_SUMMARY: readonly ScriptedTurn[] = [
   { content: '委派。', toolCalls: [task('幹活')] },
   { content: '', toolCalls: [{ name: 'bulk', args: {} }] },
   { content: '', toolCalls: [{ name: 'bulk', args: {} }] },
   { content: '', toolCalls: [{ name: 'bulk', args: {} }] },
+  { content: '本段對話\n- 子代理叫過三次 bulk' },
   { content: '摘要：子代理已經叫過三次 noop。' },
   { content: '', toolCalls: [{ name: 'bulk', args: {} }] },
   { content: '子代理收工。' },

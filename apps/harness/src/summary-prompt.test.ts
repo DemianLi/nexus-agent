@@ -124,9 +124,10 @@ describe('摘要提示詞在產品路徑上', () => {
     // 前提：至少壓縮了兩次。
     expect(calls.length).toBeGreaterThanOrEqual(2);
     const [first, second] = [calls[0], calls[1]];
-    // 第一次的摘要文字就是那個呼叫回的 `回覆#<序>#`，之後它被基座包進 `<summary>…</summary>`。
+    // 第一次的現況就是那個呼叫回的 `回覆#<序>#`；摘要本文是索引（條目）加現況，整份被基座包進 `<summary>…</summary>`。
     const firstSummary = `回覆#${first?.index ?? -1}#`;
-    expect(second?.text).toContain(`<summary>\n${firstSummary}\n</summary>`);
+    expect(second?.text).toContain(`<summary>\n`);
+    expect(second?.text).toContain(`<state>\n${firstSummary}\n</state>`);
     // 指令裡說的「前一次摘要」長什麼樣，與基座實際包的那個一致：兩個開頭都有寫到。
     expect(second?.text).toContain(
       'You are in the middle of a conversation that has been summarized',

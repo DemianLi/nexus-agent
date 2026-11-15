@@ -110,10 +110,25 @@ describe('contextPressure', () => {
     ).toEqual({ measure: { ...measure, breakdown: { ...breakdown, messageParts } } });
     const old = fold(custom(CONTEXT_MEASURE, { ...measure, breakdown }));
     expect('messageParts' in old!.measure!.breakdown!).toBe(false);
+    // `summaryIndexTokens`（#2776）選填：有就帶著，沒有就不出這個 key。
+    const indexed = { ...messageParts, summaryIndexTokens: 1 };
+    expect(
+      fold(
+        custom(CONTEXT_MEASURE, { ...measure, breakdown: { ...breakdown, messageParts: indexed } }),
+      ),
+    ).toEqual({ measure: { ...measure, breakdown: { ...breakdown, messageParts: indexed } } });
+    expect(
+      'summaryIndexTokens' in
+        fold(custom(CONTEXT_MEASURE, { ...measure, breakdown: { ...breakdown, messageParts } }))!
+          .measure!.breakdown!.messageParts!,
+    ).toBe(false);
     for (const each of [
       { ...messageParts, summaryTokens: -1 },
       { ...messageParts, injectedTokens: 1.5 },
       { ...messageParts, toolResultTokens: '0' },
+      { ...messageParts, summaryIndexTokens: -1 },
+      // 索引是摘要那一格裡的一截，不會比它大。
+      { ...messageParts, summaryIndexTokens: 2 },
       { summaryTokens: 1, injectedTokens: 2, toolResultTokens: 0 },
       null,
       'x',
