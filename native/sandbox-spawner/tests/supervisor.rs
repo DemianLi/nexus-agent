@@ -694,7 +694,8 @@ fn a_second_stop_signal_keeps_the_cause_of_a_conversation_already_being_collecte
     kill(h.pid(), libc::SIGINT);
     loop {
         let event = h.event();
-        let last = matches!(&event, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes());
+        let last =
+            matches!(&event, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes());
         events.push(event);
         if last {
             break;
