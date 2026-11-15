@@ -860,6 +860,7 @@ export {
   SUMMARIZATION_MIDDLEWARE_NAME,
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
+  SUMMARY_INSTRUCTION,
   SUMMARY_PROMPT,
   summarizationConfigSchema,
   summarizationPlugin,
@@ -1123,6 +1124,7 @@ export {
   compareHistoryWithLog,
   compareProjections,
   createHistoryFromLogMiddleware,
+  createSentHistoryReader,
   createHistoryShadowMiddleware,
   createHistoryShadowTally,
   createUnsummarizedHistoryReader,
@@ -1182,3 +1184,5 @@ export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。
+export { noteSentRequest } from './last-sent-request.js';
+export type { SentHistoryReader } from './summarization.js';

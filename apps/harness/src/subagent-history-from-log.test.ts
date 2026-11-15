@@ -24,6 +24,7 @@ import { createHookStepMiddleware } from '@nexus/core';
 import type { HistorySource, PluginEntry } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
+import { isSummaryCallPrompt } from './summary-call.fixture.js';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -111,7 +112,10 @@ function project(message: BaseMessage): unknown {
 }
 
 interface Run {
+  /** 每一輪模型收到的 prompt；生摘要的那幾次不算，形狀本來就不同（#2775）。 */
   readonly prompts: readonly (readonly unknown[])[];
+  /** 生摘要的呼叫次數。 */
+  readonly summaryCalls: number;
   readonly built: HistorySource;
   /** 子日誌上的事件型別序，一個子代理一份。 */
   readonly subagentEventTypes: readonly (readonly string[])[];
@@ -151,7 +155,10 @@ async function run(
     await pump.whenIdle();
     const subagents = pump.sessions.list().filter((entry) => entry.address.kind === 'subagent');
     return {
-      prompts: model.prompts.map((prompt) => prompt.map(project)),
+      prompts: model.prompts
+        .filter((prompt) => !isSummaryCallPrompt(prompt))
+        .map((prompt) => prompt.map(project)),
+      summaryCalls: model.prompts.filter(isSummaryCallPrompt).length,
       built: built.historySource,
       subagentEventTypes: subagents.map((entry) => entry.log.events.map((event) => event.type)),
       subagentFirstInputs: subagents.map((entry) => {
@@ -289,5 +296,7 @@ describe.each(['langgraph', 'native'] as const)('子代理的模型歷史從日�
     expect(viaLog.subagentEventTypes[0]).toContain('compaction/summary');
     expect(viaState.subagentEventTypes[0]).toContain('compaction/summary');
     expect(viaLog.prompts).toEqual(viaState.prompts);
+    expect(viaLog.summaryCalls).toBeGreaterThan(0);
+    expect(viaLog.summaryCalls).toBe(viaState.summaryCalls);
   });
 });

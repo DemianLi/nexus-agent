@@ -1,6 +1,6 @@
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { estimateMessageTokens } from '@nexus/core';
+import { estimateMessageTokens, SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { FIDELITY_VARIANTS } from './dataset.js';
 import { formatFidelityReport } from './report.js';
@@ -110,6 +110,33 @@ describe('交接保真度評估（#2774）', () => {
       }
     }
   });
+
+  it.each(FIDELITY_VARIANTS)(
+    '$id：replay 時摘要模型收到系統訊息、原訊息與摘要指令，分數照算',
+    async (variant) => {
+      const inputs: (readonly BaseMessage[])[] = [];
+      const result = await runFidelityVariant(variant, {
+        summaryModel: {
+          profile: {},
+          invoke: async (input: readonly BaseMessage[]) => {
+            inputs.push(input);
+            // 只留原訊息裡不是雜訊的行：系統訊息與摘要指令不算摘要內容。
+            return KEEPS_EVERYTHING.invoke(input.slice(1, -1));
+          },
+        },
+        ask: echo,
+        summaryCall: 'replay',
+      });
+
+      expect(inputs).toHaveLength(variant.segments.length);
+      for (const input of inputs) {
+        expect(input[0]?.getType()).toBe('system');
+        expect(input.length).toBeGreaterThan(2);
+        expect(input.at(-1)?.content).toBe(SUMMARY_INSTRUCTION);
+      }
+      expect(result.score).toBe(1);
+    },
+  );
 
   it('連續摘要兩次：第一段的事實經過兩次摘要，第二段的經過一次', async () => {
     const double = FIDELITY_VARIANTS.find((variant) => variant.id === 'double')!;
