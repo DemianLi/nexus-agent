@@ -152,7 +152,7 @@ async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions
       ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
       ...(options.stepInbox === true && { stepInbox: true }),
       // 手搭的 StepInbox 只把插話併進圖狀態、不寫日誌（產品的收件匣由 pump 寫 `inbox/spliced`）：
-      // 這條量的是 `next-step` 領走輸入後跳回模型，插話要在歷史裡，所以量 `state`。
+      // `reviewPlan` 的插話案例量的是 `next-step` 領走輸入後跳回模型，插話要在歷史裡，所以量 `state`。
       ...(options.stepInbox === true && { historySource: 'state' as const }),
     },
     plugins,
@@ -162,7 +162,7 @@ async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions
       ...(options.rootSeed !== undefined && { rootSeed: [...options.rootSeed] }),
     },
   );
-  // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。收尾時先解綁、再收組裝。
+  // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。
   if (options.attach === false) return { ...built, model: built.model as ScriptedChatModel };
   const detach = built.attachSession(built.sessions);
   return {
@@ -825,7 +825,7 @@ describe('模式狀態活得過什麼', () => {
 
     // **先證明壓縮真的發生了。** 少了這一句，一個根本沒觸發摘要的組裝也會讓下面兩條
     // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。外顯是會話日誌上的 `compaction/summary`
-    // （#143；產品的摘要列把歷史放在 graph state、不寫工作區，所以不再看 `conversation_history` 目錄）。
+    // （#143；摘要不寫工作區，所以不看 `conversation_history` 目錄）。
     expect(pump.sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(
       true,
     );

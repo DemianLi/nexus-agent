@@ -250,7 +250,7 @@ describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` �
   }, 20000);
 
   it('CLI：printer.error 一行，那一輪照常收尾', async () => {
-    // 只量日誌上的事件序列：接會話參與者會多寫 approval/policy，所以明給 `state`。
+    // 只量日誌上的事件序列：`log` 下一定要接日誌，而接上會寫一顆 approval/policy，所以明給 `state`。
     const { agent, dispose, sessionLog } = await createCliAgent(
       { live: false, historySource: 'state' },
       await shippedPlugins(),

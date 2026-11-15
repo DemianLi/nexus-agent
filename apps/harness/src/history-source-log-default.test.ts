@@ -1,5 +1,5 @@
 /**
- * `history-source` 預設改 `log`（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)）：出貨那一列、入口預設、
+ * `history-source` 預設是 `log`（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)）：出貨那一列、入口預設、
  * 那一列關掉或掉下來、自己 copy 的清單、老日誌續接的預告與拋錯。
  */
 

@@ -635,7 +635,7 @@ describe('驗收 7（冷續接）：停在模型回覆之前，從日誌續接�
     expect(invocationEvents(events)).toHaveLength(1);
     await before.close();
 
-    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌照 serve 續接走的 `restoreConversation` 灌回去。
+    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌用 `rootSeed` 給新組裝（歷史從它推），再照 serve 續接走的 `restoreConversation` 灌回 thread。
     const after = await openThread(booted, 't-cold-resumed', [{ content: '好。' }], ws, [], events);
     const replay = await restoreConversation(after.built.agent as never, 't-cold-resumed', events);
     expect(replay.kind).toBe('replayed');

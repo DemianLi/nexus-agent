@@ -53,7 +53,7 @@ function newRoot(): CordisRoot {
 }
 
 /**
- * 接上一份會話註冊表：歷史來源是 log（產品預設），第一次 invoke 要求日誌接著。收尾時先解開接線再 dispose。
+ * 接上一份會話註冊表：歷史來源是 log（產品預設），第一次 invoke 要求日誌接著。
  */
 async function attachedCliAgent(...args: Parameters<typeof createCliAgent>) {
   const built = await createCliAgent(...args);

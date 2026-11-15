@@ -32,7 +32,7 @@ const shipped = await shippedPlugins();
 
 /**
  * 記下每一次模型呼叫綁了哪些工具：`bindTools` 發生時已經過的呼叫數就是「這一次綁給第幾次呼叫」，同一次呼叫前綁了不只一回就取最後一回。
- * 不能按 `bindTools` 的次數對呼叫的次序：native 在同一次呼叫前可能多綁一回。
+ * 不能按 `bindTools` 的次數對呼叫的次序：native 而且 `history-source=log` 的 root 在同一次呼叫前會多綁一回。
  */
 class RecordingModel extends ScriptedChatModel {
   readonly bindingByCall = new Map<number, string[]>();

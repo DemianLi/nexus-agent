@@ -125,7 +125,7 @@ async function drainUntilRootCompleted(
   }
 }
 
-// 跑輪的 CLI 案例明給 `state`：接會話參與者會多寫 approval/policy，這一檔逐筆比對的 ledger 只量遙測的鏡像。
+// 跑輪的 CLI 案例明給 `state`：`log` 下一定要接日誌，而接上會寫一顆 approval/policy，這一檔逐筆比對的 ledger 只量遙測的鏡像。
 describe('遙測接線：CLI 那條路', () => {
   it('一輪跑完，日誌寫下的每一筆都鏡像成一筆 ledger 記錄', async () => {
     const sink = collectingSink();
@@ -399,6 +399,7 @@ describe('遙測接線：分叉來的 thread（#1580）', () => {
 describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）', () => {
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
     const sink = collectingSink('feedback-only');
+    // 明給 `state` 的理由同上面「CLI 那條路」：接上日誌會多寫 approval/policy。
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false, historySource: 'state' }, [
         ...shippedWithMemoryFeedback,
@@ -473,6 +474,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
   it('策略是關閉時，收到回饋講一聲不會送出去；別的事件不講', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sink = collectingSink('disabled');
+    // 明給 `state` 的理由同上面「CLI 那條路」：接上日誌會多寫 approval/policy。
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false, historySource: 'state' }, [
         ...shippedWithMemoryFeedback,
@@ -527,6 +529,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
   it('走真的 OTel 後端：回饋的文字與評分備註原樣進 collector', async () => {
     // #278 留下的那件：當時是讀碼得出、沒實跑。這裡對著假 collector 真打一次。
     const collector = await mockCollector();
+    // 明給 `state` 的理由同上面「CLI 那條路」：接上日誌會多寫 approval/policy。
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false, historySource: 'state' }, [
         ...shippedWithMemoryFeedback,

@@ -776,7 +776,7 @@ describe('對話的連續性', () => {
       await runTurn(built.agent, '第一句：記住「胡桃」這兩個字。', printer, sessions.root);
       await runTurn(built.agent, '第二句：剛剛那兩個字是什麼？', printer, sessions.root);
 
-      // 送進模型的第二輪 prompt 裡還帶著第一句——狀態在 checkpointer 裡，靠 thread_id 認領。
+      // 送進模型的第二輪 prompt 裡還帶著第一句——兩輪寫進同一份 `sessions.root`，歷史從那份日誌推出來。
       const prompt = (built.model as ScriptedChatModel).lastPrompt
         .map((message) => message.text)
         .join('\n');
