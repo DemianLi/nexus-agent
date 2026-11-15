@@ -874,10 +874,24 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
     "[data-popup-open]:not([data-slot='tooltip-trigger'])",
   ].join(',');
   const PANES = '.bg-card,.bg-popover,.glass-panel';
+  /** 選取與三種面之外，本來就該有外框的：覆寫檔列名字的面、目前這條會話、聚焦中的（外框畫在自己或外殼上）。 */
+  const FRAMED = [
+    "[data-slot='dialog-content']",
+    "[data-slot='alert-dialog-content']",
+    "[data-slot='sheet-content']",
+    "[data-slot='tooltip-content']",
+    "[data-slot='card']",
+    "[data-slot='composer']",
+    "[data-slot='sidebar-menu-button'][data-active]:disabled",
+    ':focus-visible',
+    ':has(:focus-visible)',
+  ].join(',');
   /** 一次開幾頁。 */
   const BATCH = 4;
 
-  async function scan(name: string): Promise<{ missing: string[]; kinds: string[] }> {
+  async function scan(
+    name: string,
+  ): Promise<{ missing: string[]; clipped: string[]; stray: string[]; kinds: string[] }> {
     const page =
       name === ''
         ? await open('light')
@@ -885,9 +899,35 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
     try {
       if (name === '') await page.emulateMedia({ forcedColors: 'active' });
       return await page.evaluate(
-        ({ selected, panes }) => {
+        ({ selected, panes, expected }) => {
           const missing: string[] = [];
+          const clipped: string[] = [];
           const kinds: string[] = [];
+          /** 外框畫到哪裡：元素的框往外推 offset 加線寬（offset 是負的就往內）。超出會裁切的祖先就看不到。 */
+          const cutBy = (el: HTMLElement, style: CSSStyleDeclaration): boolean => {
+            const box = el.getBoundingClientRect();
+            const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+            for (let up = el.parentElement; up !== null; up = up.parentElement) {
+              const overflow = getComputedStyle(up);
+              if (overflow.overflowX === 'visible' && overflow.overflowY === 'visible') continue;
+              const frame = up.getBoundingClientRect();
+              const left = frame.left + up.clientLeft;
+              const top = frame.top + up.clientTop;
+              const slack = 0.5;
+              if (
+                box.left - reach < left - slack ||
+                box.right + reach > left + up.clientWidth + slack ||
+                // 捲出去的那幾項本來就看不到，只看整個在框裡的。
+                (box.top >= top &&
+                  box.bottom <= top + up.clientHeight &&
+                  (box.top - reach < top - slack ||
+                    box.bottom + reach > top + up.clientHeight + slack))
+              ) {
+                return true;
+              }
+            }
+            return false;
+          };
           for (const [kind, selector] of [
             ['選取', selected],
             ['面', panes],
@@ -908,19 +948,37 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
                   el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase();
                 missing.push(`${kind} ${what}`);
               }
+              if (kind === '選取' && outline && cutBy(el, style)) {
+                clipped.push(
+                  el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase(),
+                );
+              }
             }
           }
-          return { missing, kinds };
+          // 反過來：不是選取、不是面、沒聚焦的元素不該有外框，否則選中的那一個認不出來。
+          const framed = `${selected},${panes},${expected}`;
+          const stray: string[] = [];
+          for (const el of document.querySelectorAll<HTMLElement>('*')) {
+            const box = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (box.width === 0 || box.height === 0 || style.visibility === 'hidden') continue;
+            if (style.outlineStyle === 'none' || parseFloat(style.outlineWidth) === 0) continue;
+            if (el.matches(framed)) continue;
+            stray.push(el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase());
+          }
+          return { missing, clipped, stray, kinds };
         },
-        { selected: SELECTED, panes: PANES },
+        { selected: SELECTED, panes: PANES, expected: FRAMED },
       );
     } finally {
       await page.close();
     }
   }
 
-  test('選取與面都有邊框或外框', async () => {
+  test('選取與面都有邊框或外框，選取的外框沒被裁掉，其餘沒有外框', async () => {
     const missing = new Set<string>();
+    const clipped = new Set<string>();
+    const stray = new Set<string>();
     const kinds = new Set<string>();
     const pages = ['', ...OVERLAY_NAMES];
     for (let i = 0; i < pages.length; i += BATCH) {
@@ -929,11 +987,15 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
       results.forEach((result, offset) => {
         for (const kind of result.kinds) kinds.add(kind);
         for (const label of result.missing) missing.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.clipped) clipped.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.stray) stray.add(`${batch[offset] || 'main'}：${label}`);
       });
     }
     // 量具自檢：兩類都真的量到東西。
     expect([...kinds].sort()).toEqual(['選取', '面'].sort());
     expect([...missing].sort()).toEqual([]);
+    expect([...clipped].sort()).toEqual([]);
+    expect([...stray].sort()).toEqual([]);
   }, 240_000);
 });
 
