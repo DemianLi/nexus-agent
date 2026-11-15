@@ -41,8 +41,10 @@ describe('焦點外框', () => {
     expect(
       cascade.declarations
         .filter((d) => d.layer === null && d.property === 'outline-offset')
-        .map((d) => `${d.file} ${d.selector}`),
-    ).toEqual([]);
+        .map((d) => d.selector),
+      // 唯一的例外：高對比下 command 的選中項。它帶的 `outline-hidden` 在 `forced-colors` 下自己給 offset 2px（utilities layer），
+      // base layer 的往內縮贏不了它，外框會被清單的捲動容器裁掉。
+    ).toEqual(["[data-slot='command-item'][data-selected='true']"]);
     expect(cascade.winner([':focus-visible'], 'outline-offset')).toMatchObject({
       value: '2px',
       layer: 'base',
