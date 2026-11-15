@@ -17,7 +17,9 @@
 //! - `bind`（第一則 `ready` 之後才合法）：thread 記第一次的，之後每一則都要相同。
 //!   - 現在的葉子驗過並 `register` 了、還沒綁過：馬上在橋上 `attach`，葉子回成功才送 `bound`。
 //!   - 沒有這樣的葉子（斷了、換了還沒到）：留著，等葉子 `register` 那一刻再 `attach`。
-//!   - `attach` 沒成功（葉子回錯、送不出去、回之前斷線）：記一行，不送 `bound`，不替下一個葉子重試，等監督行程再送 `bind`。
+//!   - 葉子回 `attach` 錯、或 `attach` 送不出去：記一行，以 4 結束（[`EXIT_ATTACH`]）。監督行程不會再送 `bind`，留著只會讓這一對
+//!     停在等 `bound`；結束了監督行程才收得到、才回 `down`。
+//!   - 葉子回之前斷線（或要送時已經不在橋上）：記一行，不送 `bound`，照活；那則 `bind` 不替下一個葉子重試。
 //! - 心跳：收到第一則 `bind` 起每 [`HEARTBEAT`] 送一次，之後不停。
 //! - `drain`：不該送到這裡（只有宣告 loop 的行程回答），記一行、不理。
 //! - 葉子斷線：照活，等下一則 `leaf{pid}`。
@@ -31,7 +33,7 @@ macro_rules! say {
 
 pub mod forward;
 
-use crate::pair::{Pair, PairEvent};
+use crate::pair::{Failure, Pair, PairEvent, SendError};
 use forward::Forward;
 use nexus_sandbox_spawner::supervisor::process::Chan;
 use nexus_sandbox_spawner::supervisor_protocol::{
@@ -50,6 +52,9 @@ pub const HEARTBEAT: Duration = Duration::from_secs(1);
 
 /// 協定錯誤的結束碼。
 pub const EXIT_PROTOCOL: i32 = 3;
+
+/// `attach` 明確失敗（葉子回錯、或送不出去）的結束碼。
+pub const EXIT_ATTACH: i32 = 4;
 
 const USAGE: &str = "nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑>";
 
@@ -179,7 +184,7 @@ struct Composition {
     heartbeat: Option<Instant>,
 }
 
-/// 跑組合行程，回結束碼：0 是 stdin 讀到 EOF 或收到 SIGTERM；1 是綁不了 socket；2 是參數不對；3 是協定錯誤（[`EXIT_PROTOCOL`]）。
+/// 跑組合行程，回結束碼：0 是 stdin 讀到 EOF 或收到 SIGTERM；1 是綁不了 socket；2 是參數不對；3 是協定錯誤（[`EXIT_PROTOCOL`]）；4 是 `attach` 明確失敗（[`EXIT_ATTACH`]）。
 pub fn run(args: Vec<OsString>) -> i32 {
     let args = match parse(args) {
         Ok(args) => args,
@@ -291,7 +296,9 @@ impl Composition {
                 return EXIT_PROTOCOL;
             }
             let now = Instant::now();
-            self.step_pair(now);
+            if let Err(code) = self.step_pair(now) {
+                return code;
+            }
             self.forward.step(&fds, now);
             if self.heartbeat.is_some_and(|at| at <= now) {
                 self.report(&ConversationReport::Heartbeat);
@@ -329,7 +336,7 @@ impl Composition {
             ConversationCommand::Leaf { pid } => {
                 self.pair.set_leaf(pid);
                 // 同一批裡跟在後面的 `bind` 要看到舊葉子已經斷了。
-                self.step_pair(Instant::now());
+                self.step_pair(Instant::now())?;
             }
             ConversationCommand::Bind { thread_id } => return self.on_bind(thread_id),
             ConversationCommand::Drain => say!("收到 drain：loop 不在這裡，不理"),
@@ -359,24 +366,30 @@ impl Composition {
             self.heartbeat = Some(Instant::now() + HEARTBEAT);
         }
         if self.registered {
-            self.attach();
+            self.attach()
         } else {
             self.held = true;
+            Ok(())
+        }
+    }
+
+    fn attach(&mut self) -> Result<(), i32> {
+        let Some(thread) = self.thread.as_deref() else {
+            return Ok(());
+        };
+        match self.pair.attach(thread) {
+            Ok(id) => self.attaching = Some(id),
+            // 斷線的事件還排在後面：當成回之前斷線。
+            Err(SendError::NotConnected) => say!("attach 要送時葉子已經不在橋上，不送 bound"),
+            Err(err) => {
+                say!("attach 送不出去（{err:?}）");
+                return Err(EXIT_ATTACH);
+            }
         }
         Ok(())
     }
 
-    fn attach(&mut self) {
-        let Some(thread) = self.thread.as_deref() else {
-            return;
-        };
-        match self.pair.attach(thread) {
-            Ok(id) => self.attaching = Some(id),
-            Err(err) => say!("attach 送不出去（{err:?}），不送 bound"),
-        }
-    }
-
-    fn step_pair(&mut self, now: Instant) {
+    fn step_pair(&mut self, now: Instant) -> Result<(), i32> {
         for event in self.pair.step(now) {
             match event {
                 PairEvent::Connected { pid } => say!("葉子 {pid} 連上橋"),
@@ -388,7 +401,7 @@ impl Composition {
                     self.ready = true;
                     self.report(&ConversationReport::Ready);
                     if std::mem::take(&mut self.held) {
-                        self.attach();
+                        self.attach()?;
                     }
                 }
                 PairEvent::Finished { id, outcome } if self.attaching == Some(id) => {
@@ -399,6 +412,10 @@ impl Composition {
                             self.report(&ConversationReport::Bound {
                                 thread_id: thread.into_bytes(),
                             });
+                        }
+                        (Err(Failure::Error(err)), _) => {
+                            say!("葉子回 attach 錯（{err:?}）");
+                            return Err(EXIT_ATTACH);
                         }
                         (outcome, _) => say!("attach 沒成功（{outcome:?}），不送 bound"),
                     }
@@ -419,5 +436,6 @@ impl Composition {
                 | PairEvent::Resumed => {}
             }
         }
+        Ok(())
     }
 }

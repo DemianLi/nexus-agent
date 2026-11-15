@@ -3550,11 +3550,12 @@ fn a_leaf_that_dies_before_bound_takes_the_pair_with_it() {
     assert_eq!(shut_down(&mut h), []);
 }
 
-/// 葉子回 `attach` 錯、沒有開始送心跳（真的葉子在綁定裡才起心跳）：`bind` 起算的沉默到了 `--stall-ms`，葉子被判 `stalled`，整對收。
+/// 葉子收到 `attach` 不回、也沒有開始送心跳（真的葉子在綁定裡才起心跳）：`bind` 起算的沉默到了 `--stall-ms`，葉子被判 `stalled`，
+/// 整對收。
 #[test]
-fn a_leaf_that_refuses_attach_without_a_heartbeat_is_stalled() {
+fn a_leaf_that_never_answers_attach_without_a_heartbeat_is_stalled() {
     let mut h = Harness::start(Options {
-        conversation_args: vec!["--refuse-attach".into()],
+        conversation_args: vec!["--ignore-attach".into()],
         extra: vec!["--stall-ms", "3000"],
         ..paired()
     });
@@ -3564,7 +3565,7 @@ fn a_leaf_that_refuses_attach_without_a_heartbeat_is_stalled() {
     assert_eq!(shut_down(&mut h), []);
 }
 
-/// 葉子回 `attach` 錯、心跳照送：沒有沉默可判，靠組合行程自己以 4 結束，整對當場收。`--stall-ms` 開到比 [`WAIT`] 長，
+/// 葉子回 `attach` 錯：組合行程自己以 4 結束，整對當場收。心跳照送，所以沒有沉默可判；`--stall-ms` 開到比 [`WAIT`] 長，
 /// 等得到 `down` 就不是沉默判出來的。
 #[test]
 fn a_leaf_that_refuses_attach_with_a_heartbeat_takes_the_pair_down_at_once() {
@@ -3595,7 +3596,9 @@ fn a_leaf_that_never_answers_attach_with_a_heartbeat_stays_until_shutdown() {
     });
     h.ensure("a");
     let leaf = h.dir.join("run/c1.l.sock");
-    assert!(wait_until(|| log(&leaf).iter().any(|l| l == "attach ignored")));
+    assert!(wait_until(|| log(&leaf)
+        .iter()
+        .any(|l| l == "attach ignored")));
     std::thread::sleep(Duration::from_millis(9_000));
     assert_eq!(pair_audit(&h), Vec::<String>::new());
     assert_eq!(
