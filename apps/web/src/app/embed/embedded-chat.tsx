@@ -36,8 +36,7 @@ import { createDeliverableDownloader } from '@/features/deliverable';
 import { canSendText, pendingSteers } from '@/features/queue';
 import { stoppedOnQuestion } from '@/features/question';
 import { recallThread, rememberThread } from '@/features/threads';
-import { requestIdFor } from '@/shared/connection/request-id';
-import type { PendingRequest, Sentence } from '@/shared/connection/request-id';
+import { reportLine, useSubmit } from '@/features/submit';
 import { randomUuid } from '@/shared/lib/uuid';
 
 import type { NexusChatContext } from './context';
@@ -207,38 +206,22 @@ function EmbeddedConversation({
     conversation.connected,
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState('');
   // 沒送出去的原因：嵌入版不掛 toast（sonner 的樣式進不了 shadow root），講在輸入框底下。
   const [sendError, setSendError] = useState<string | undefined>(undefined);
-  // 上次沒送出去的那一句與它的請求編號（#1335），原樣重送時沿用。
-  const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   const status = conversation.state.status;
-  const canSend = canSendText(conversation.connected, status, draft) && status !== 'running';
+  const submit = useSubmit({
+    send: conversation.send,
+    allowed: (line) => canSendText(conversation.connected, status, line),
+    enabled: status !== 'running',
+    mode: () => 'queue',
+    report: (report) => setSendError(report === undefined ? undefined : reportLine(report)),
+    context,
+    hostTools,
+  });
+  const { draft, canSend } = submit;
   // 判準同獨立頁面的「新對話」（`app/App.tsx` 的 `engaged`）：還沒講過話就留在原地。
   const engaged =
     !conversation.connected || conversation.attempted || conversation.state.entries.length > 0;
-
-  const submit = () => {
-    if (!canSend) return;
-    const text = draft;
-    const sentence: Sentence = { text, mention: undefined, attachmentIds: [] };
-    const requestId = requestIdFor(pendingRequest.current, sentence);
-    pendingRequest.current = undefined;
-    setDraft('');
-    setSendError(undefined);
-    void conversation
-      .send(text, 'queue', undefined, undefined, requestId, 'sentence', context, hostTools)
-      .then((rejected) => {
-        if (rejected === undefined) return;
-        pendingRequest.current = { id: requestId, sentence };
-        setDraft((current) => (current === '' ? text : current));
-        setSendError(
-          rejected.uncertain === true
-            ? `不確定這一句有沒有送到，原樣再按一次送出不會重複。（${rejected.message}）`
-            : `這一句沒送出去：${rejected.message}`,
-        );
-      });
-  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -283,14 +266,14 @@ function EmbeddedConversation({
             <Composer
               textareaRef={composerRef}
               draft={draft}
-              onDraftChange={setDraft}
+              onDraftChange={submit.setDraft}
               placeholder={inputPlaceholder({
                 connected: conversation.connected,
                 stall: connectionStall(conversation),
                 stoppedOnQuestion: stoppedOnQuestion(conversation.state),
               })}
               canSend={canSend}
-              onSubmit={submit}
+              onSubmit={submit.submit}
               commands={[]}
               onRunCommand={() => false}
               stoppable={status === 'running'}
