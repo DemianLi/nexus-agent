@@ -11,7 +11,7 @@
  * ## 續接時算補結、寫回、再當 seed
  *
  * 續接時先拿寫所有權、冷讀，算補結，寫回，再以「已存的＋補結」當 seed。補結是最後那一輪沒配到的呼叫各一顆錯誤
- * `tool/result`，有開著的 `model/start` 補 `model/end`，最後補 `turn/end {kind:'interrupted'}`。語意修復歸 agent 層、
+ * `tool/result`，有開著的 `model/start` 補 `model/end`，最後補 `turn/end {reason:{kind:'interrupted'}}`。語意修復歸 agent 層、
  * 不歸存放層，所以這裡是一個獨立的 helper，不放進 `SessionStore.resume`。與 dsh 的對照見
  * docs/interrupted-turn-and-invariant-vs-dsh.md。
  *
