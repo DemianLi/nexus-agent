@@ -454,12 +454,13 @@ fn a_frame_that_does_not_decode_exits_with_a_protocol_error() {
     assert_eq!(rig.exit(), Some(EXIT_PROTOCOL));
 }
 
-/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。
+/// 綁不了 socket 就不送 `hello`：監督行程讀到 `hello` 時兩個 socket 一定都在聽。前台的綁不了時，已經綁好的橋不留在磁碟上。
 #[test]
 fn a_socket_that_cannot_be_bound_exits_1_without_a_hello() {
     let mut rig = Rig::start_at("unbound", "no-such-dir/front.sock");
     assert_eq!(rig.exit(), Some(1));
     assert_eq!(rig.rest(), NONE);
+    assert!(!rig.dir.join("pair.sock").exists());
 }
 
 /// `ready` 之前的 `bind` 是協定錯誤，所以拿它當見證：行程因它結束，就證明到那一刻為止沒送過 `ready`。
@@ -748,6 +749,61 @@ fn a_half_closed_request_still_gets_its_whole_response() {
     });
     assert!(read_to_end(&mut front) == response, "回應被截了");
     writer.join().unwrap();
+}
+
+/// 停住的組合行程；放掉時（測試失敗的路上也一樣）讓它繼續跑，不留一個停住的行程。
+struct Stopped(libc::pid_t);
+
+impl Stopped {
+    /// 送 `SIGSTOP`，等到它真的停住才回來。
+    fn stop(rig: &Rig) -> Stopped {
+        let pid = rig.child.id() as libc::pid_t;
+        // SAFETY：對自己起的子行程送訊號。
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        let stopped = Stopped(pid);
+        let mut status = 0;
+        // SAFETY：等自己的子行程；`WUNTRACED` 讓它停住時也回來，停住的不會被收掉。
+        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) };
+        assert_eq!(waited, pid);
+        assert!(libc::WIFSTOPPED(status), "組合行程沒有停住：{status:#x}");
+        stopped
+    }
+}
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        // SAFETY：對自己起的子行程送訊號。
+        unsafe { libc::kill(self.0, libc::SIGCONT) };
+    }
+}
+
+/// 葉子沒讀請求就回應、然後整條關（提早回的錯誤回應就是這樣）：回應還是要完整到前台。
+/// 組合行程停住的期間葉子寫完並關掉，所以它不會在「寫完」與「關」之間醒來把整份回應轉走。它停在哪裡有兩種：
+/// 停在 poll 裡，醒來那一次 poll 同時看到回應與斷線；停在轉請求的那一輪中間，醒來先照 poll 當時的結果讀葉子一次
+/// （最多 [`nexus_host::composition::forward::BUFFER`]），下一次 poll 才看到斷線。
+/// 回應取 128 KiB：比一次讀的量大，第二種停法也還有沒轉走的；組合行程停著不讀，又要整份放得進 socket 的緩衝。
+#[test]
+fn a_response_from_a_leaf_that_never_read_the_request_arrives_whole() {
+    let (rig, _leaf) = Rig::ready("early-response");
+    let (mut front, mut behind) = rig.link();
+    front.write_all(b"request").unwrap();
+    // 葉子這一端可讀就表示請求已經轉到。故意不讀：帶著沒讀的資料關，Linux 讓對端收到 `ECONNRESET`（`POLLERR`），
+    // 不只是 `POLLHUP`。
+    let mut pfd = libc::pollfd {
+        fd: std::os::fd::AsRawFd::as_raw_fd(&behind),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY：一個 pollfd。
+    let ready = unsafe { libc::poll(&mut pfd, 1, GUARD.as_millis() as libc::c_int) };
+    assert_eq!(ready, 1, "請求一直沒轉到葉子");
+
+    let response = pattern(128 * 1024);
+    let stopped = Stopped::stop(&rig);
+    behind.write_all(&response).unwrap();
+    drop(behind);
+    drop(stopped);
+    assert!(read_to_end(&mut front) == response, "回應被截了");
 }
 
 #[test]

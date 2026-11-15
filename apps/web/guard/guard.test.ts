@@ -26,6 +26,8 @@ import {
   TEXT_MIN,
   type TextSample,
   type Theme,
+  AXE_KNOWN,
+  collectAxe,
   collectBackdrops,
   collectChips,
   collectChoices,
@@ -661,5 +663,201 @@ describe.each(
 
   test('字對它實際的底色過門檻', () => {
     expectTexts(texts, overlay.texts, key);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：%s', (theme) => {
+  let page: Page;
+  let axe: Awaited<ReturnType<typeof collectAxe>>;
+
+  beforeAll(async () => {
+    page = await open(theme);
+    axe = await collectAxe(page);
+    report[`${theme}:axe`] = axe;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  test('沒有已知清單以外的違規（含 color-contrast、target-size）', () => {
+    const known = new Set(AXE_KNOWN.map((k) => k.key));
+    expect(
+      axe.violations.filter((v) => !known.has(v.key)).map((v) => `${v.key}（${v.help}）`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    const found = new Set(axe.violations.map((v) => v.key));
+    expect(AXE_KNOWN.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
+    expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：%s', (theme) => {
+  let page: Page;
+  let buttons: Record<string, { height: number; opacity: string; pointerEvents: string }>;
+
+  beforeAll(async () => {
+    page = await openOverlay('buttons', theme, { marks: { '[data-guard-button]': {} } });
+    buttons = Object.fromEntries(
+      await page.$$eval('[data-guard-button]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return [
+            el.getAttribute('data-guard-button') ?? '',
+            {
+              height: el.getBoundingClientRect().height,
+              opacity: style.opacity,
+              pointerEvents: style.pointerEvents,
+            },
+          ];
+        }),
+      ),
+    );
+    report[`${theme}:buttons`] = buttons;
+  });
+
+  afterAll(async () => {
+    await page.close();
+  });
+
+  const VARIANTS = ['default', 'outline', 'secondary', 'ghost', 'destructive', 'glass', 'link'];
+  const HEIGHTS = { xs: 24, sm: 28, default: 32, lg: 36 };
+
+  test('每種 variant 的四個尺寸高度是 24、28、32、36，圖示鈕同高', () => {
+    const wrong = VARIANTS.flatMap((variant) =>
+      Object.entries(HEIGHTS).flatMap(([size, height]) =>
+        [size, size === 'default' ? 'icon' : `icon-${size}`]
+          .map((name) => `${variant}:${name}`)
+          .filter((key) => buttons[key]?.height !== height)
+          .map((key) => `${key} ${buttons[key]?.height}，應該是 ${height}`),
+      ),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  test('停用的每種 variant 透明度都是 0.5、點不到；沒停用的是 1', () => {
+    expect(
+      VARIANTS.map((variant) => buttons[`${variant}:disabled`]).filter(
+        (b) => b?.opacity !== '0.5' || b.pointerEvents !== 'none',
+      ),
+    ).toEqual([]);
+    expect(VARIANTS.filter((variant) => buttons[`${variant}:default`]?.opacity !== '1')).toEqual(
+      [],
+    );
+  });
+
+  test('滑上去每種 variant 的樣子都會變', async () => {
+    const look = (variant: string) =>
+      page.$eval(`[data-guard-button="${variant}:default"]`, (el) => {
+        const style = getComputedStyle(el);
+        return [
+          style.backgroundColor,
+          style.backgroundImage,
+          style.color,
+          style.boxShadow,
+          style.textDecorationLine,
+          style.filter,
+        ].join('|');
+      });
+    const same: string[] = [];
+    for (const variant of VARIANTS) {
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(300);
+      const rest = await look(variant);
+      await page.hover(`[data-guard-button="${variant}:default"]`);
+      await page.waitForTimeout(300);
+      if ((await look(variant)) === rest) same.push(variant);
+    }
+    expect(same).toEqual([]);
+  });
+});
+
+/**
+ * Windows 高對比（#2796）：瀏覽器把底色換成系統色、拿掉陰影之後，選取與面的邊界要靠外框看得出來。
+ * 量的是 Chrome 模擬的 `forced-colors: active`，不是真的 Windows。
+ */
+describe.each<Theme>(['light', 'dark'])('Windows 高對比（#2796）：%s', (theme) => {
+  const CASES: Record<string, Record<string, string>> = {
+    command: { "[data-slot='command-item'][data-selected='true']": '2px' },
+    dialog: { "[data-slot='dialog-content']": '1px' },
+    'composer-pick-open': {
+      "[data-slot='dropdown-menu-trigger'][data-popup-open]": '2px',
+      "[data-slot='composer']": '1px',
+    },
+    'thread-statuses': { "[data-slot='sidebar-menu-button'][data-active]:disabled": '2px' },
+  };
+
+  const outlines = (page: Page, selectors: string[]) =>
+    page.evaluate(
+      (list) =>
+        list.map((selector) => {
+          const el = document.querySelector(selector);
+          if (el === null) return `${selector} 不在頁上`;
+          const style = getComputedStyle(el);
+          return `${selector} ${style.outlineStyle} ${style.outlineWidth}`;
+        }),
+      selectors,
+    );
+
+  test.each(Object.keys(CASES))('%s：選取與面有實線外框', async (name) => {
+    const expected = CASES[name] ?? {};
+    const marks = Object.fromEntries(Object.keys(expected).map((selector) => [selector, {}]));
+    const page = await openOverlay(name, theme, { forcedColors: true, marks });
+    try {
+      expect(await outlines(page, Object.keys(expected))).toEqual(
+        Object.entries(expected).map(([selector, width]) => `${selector} solid ${width}`),
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('目前這條會話不畫成停用：不變淡，字色跟其他會話列一樣', async () => {
+    const current = "[data-slot='sidebar-menu-button'][data-active]:disabled";
+    const page = await openOverlay('thread-statuses', theme, {
+      forcedColors: true,
+      marks: { [current]: {} },
+    });
+    try {
+      const look = await page.evaluate((selector) => {
+        const el = document.querySelector(selector);
+        const other = document.querySelector(
+          "[data-slot='sidebar-menu-button']:not([data-active]):not(:disabled)",
+        );
+        if (el === null || other === null) return null;
+        const colors = [el, ...el.querySelectorAll('*')].map(
+          (node) => getComputedStyle(node).color,
+        );
+        return {
+          opacity: getComputedStyle(el).opacity,
+          colors: [...new Set(colors)],
+          other: getComputedStyle(other).color,
+        };
+      }, current);
+      expect(look).not.toBeNull();
+      expect(look?.opacity).toBe('1');
+      expect(look?.colors).toEqual([look?.other]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('一般模式下沒有這些外框', async () => {
+    const page = await openOverlay('dialog', theme, {
+      marks: { "[data-slot='dialog-content']": {} },
+    });
+    try {
+      expect(await outlines(page, ["[data-slot='dialog-content']"])).toEqual([
+        expect.stringContaining(' none '),
+      ]);
+    } finally {
+      await page.close();
+    }
   });
 });

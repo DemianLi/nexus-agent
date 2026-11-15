@@ -9,7 +9,8 @@
 | 問題 | 結論 | 在 |
 | --- | --- | --- |
 | 誰是準的 | 理由在卡片（凍結）、現行規則在這份、數字在程式碼 | §1 |
-| UI/UX 的依據 | shadcn＋Tailwind 是基底，外觀與 token 用 solid-glass（原樣 vendor＋覆寫檔）；視覺、token、動效的數值以 SG 為準，Libraries.dev 只參考元件多樣性與交互模式；dsh 只參考元件多樣性 | §3 |
+| UI/UX 的依據 | shadcn＋Tailwind 是基底，外觀與 token 用 solid-glass（原樣 vendor＋覆寫檔）；視覺、token、動效的數值以這份標準為準，第一版凍結自畫面上的現況；Libraries.dev 只參考元件多樣性與交互模式；dsh 只參考元件多樣性 | §3、§13 |
+| 設計系統怎麼管 | 每條規則要有成文、token 或元件、會變紅的測試；token 與共用元件的增刪改要 demian 核可；先做嚴謹、再演進體驗 | §13 |
 | 元件從哪裡拿 | 主用 shadcn 官方；AI Elements 只參考清單、不用程式碼；registry 檔裝進來就是我們的原始碼 | §4 |
 | 核准與提問放哪 | **換掉輸入框**（隱藏不卸載），同時只一個面板、先來先處理 | §4.3 |
 | 顏色怎麼定 | oklch 語意 token 直接寫值；色相、彩度、alpha 取 solid-glass，用 colorjs.io 解明度到 WCAG 2.x 門檻；亮暗鑑別度一樣 | §5 |
@@ -48,7 +49,7 @@
 ## 3. 基底與依據
 
 - **shadcn＋Tailwind 是基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，修改寫在後載入、layer 外的覆寫檔，逐條登記在該目錄 README 的「本地修改」（[#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q1、Q4、Q9）。**外觀類照 SG，機制類保留**（Q8）；碰到本份 §5、§7、§8 的無障礙門檻時以門檻為準（Q5）。`ui/` 的元件也是 SG 的：primitive 以 Base UI 為主（command 用 cmdk、toast 用 sonner、對話捲動與提問用 `@shadcn/react`），`apps/web/src/components/ui/` 是它們的 nexus 層，轉出 vendor 的原檔。
-- **視覺、設計 token、動效的數值以 SG 為準**；**[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當元件多樣性與交互模式的參考**，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是「模仿對象：元件多樣性、交互體驗、動效呈現」）。最後長成我們自己的系統風格。
+- **視覺、設計 token、動效的數值以這份標準為準**（§13）：SG 是值的來源，第一版凍結自畫面上實際的值（SG 加既有覆寫）；之後 SG 與標準不一致時照標準，用覆寫蓋掉（demian 2026-11-15 定，[#2756](https://github.com/DemianLi/nexus-agent/issues/2756#issuecomment-6880263876)）。**[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當元件多樣性與交互模式的參考**，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是「模仿對象：元件多樣性、交互體驗、動效呈現」）。最後長成我們自己的系統風格。
 - **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫對照 dsh 的紀錄（[AGENTS.md「技術實現標準」](../AGENTS.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
 - **動到執行語意的仍照 dsh**，唯一寫明的例外是提問面板的 ❌（§4.3）。
 - **完全內網**：字型、動效 CSS 等資源一律打包進本地，執行期不打外部 CDN。
@@ -188,7 +189,8 @@
 
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；registry 的 `ring-[3px]` 關掉。SG 用 `--focus-line`（灰）畫的焦點全部換回文字色：SG 把 ring 帶回來的選擇器照抄壓回透明，**文字欄位的聚焦是邊框換成文字色**（SG 原本是灰線，Q5 優先於 Q8）。
-- chip 階梯（rest／hover／pressed）、主按鈕 hover／active、disabled `.6`。
+- chip 階梯（rest／hover／pressed）、主按鈕 hover／active。
+- 停用（disabled）的透明度是 50（`disabled:opacity-50`，SG 元件的現值；[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）。不靠透明度變淡的寫 `opacity-100`（例如送出鈕停用時改用字色）。護欄與例外見 §13.4。
 
 **Tailwind layer 的坑**：body 的底色、字色、`color-scheme` **寫在 layer 外**（SG 寫在 base layer，所以在 `solid-glass.overrides.css` 重寫一次，Q8 保留的機制）。寫在 `@layer base` 時，頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字（原型在 Artifact 裡踩過）。
 
@@ -270,6 +272,12 @@
 - `[tabindex="-1"]:focus-visible` 不畫外框。
 - 確認框（alert-dialog）打開時落在第一個可 tab 的按鈕，也就是「取消」：不小心按 Enter 不會執行（Base UI 的預設，#1583）。
 - 下拉選單：Trigger 是原生 button，Enter 打開（瀏覽器轉成 click），方向鍵移動 highlighted、Enter 選取並收起（Base UI 的 Menu；`guard/` 用真的 Chrome 量，#1583）。
+
+**Windows 高對比**（`forced-colors: active`，[#2796](https://github.com/DemianLi/nexus-agent/issues/2796)）
+- 高對比下瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`。**只靠半透明底色表示的選取、只靠陰影或玻璃邊的面，要補系統色的外框**：選取 2px `Highlight`，面 1px `CanvasText`，畫在裡面不佔版面。
+- 現在補的：command 鍵盤走到的那一項、被定位的訊息、開著的選單 Trigger、目前這條會話；dialog、alert-dialog、sheet、tooltip、card、輸入框。目前這條會話是停用的按鈕，高對比下換回按鈕字色、不變淡（它是選取中，不是不能用）。
+- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 83 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。量的是 Chrome 模擬的高對比，沒有在真的 Windows 上看過。
+- 沒補的：`glass` 這個 `Button` variant 沒有邊框（產品沒用到，用到再補）。高對比還不是門檻：新元件沒有測試擋「選取只靠底色」。
 
 **鍵盤**
 - 核准面板與計劃審核面板不加快捷鍵，**Esc 不做事**。
@@ -376,3 +384,129 @@
 - **改 token**：改產生器的輸入，重跑，表與 CSS 跟著出。這份文件只有在**目標或階梯**改了才動。
 - **改動效**：改共用 CSS；新增或刪掉 `@keyframes` 時，同一個 PR 更新 §11 第 4 條的允許清單。
 - **改規則**：改這份文件，PR 內文寫理由。**卡片留言不追改**——它是當初取捨的快照，只有「為什麼」是它的。規則被推翻時，在這裡寫新規則並連到做決定的地方。
+
+## 13. 設計系統
+
+出處：demian 2026-11-15 的[定案](https://github.com/DemianLi/nexus-agent/issues/2756#issuecomment-6880263876)，地圖 [#2756](https://github.com/DemianLi/nexus-agent/issues/2756)。檢驗報告在 [design-system-astryx-audit-2026-11-14.md](design-system-astryx-audit-2026-11-14.md)。
+
+### 13.1 範圍與依據
+
+- **服務對象**：nexus 的 web 與嵌入版 `<nexus-chat>`。不做成獨立套件，不另編版號，跟產品版本走。
+- **依據是這份標準**。素材是 repo 的現況與引入的 shadcn、SG；SG 與標準不一致時照標準，用覆寫蓋掉。
+- **vendor 檔不動**（§3）。上游改了值而標準沒變：釘住畫出來的值的測試會紅，預設蓋回標準的值；要採用上游的新值就改這份。
+- **token 的名字沿用 SG 與 shadcn 的**，只在它們沒有的地方加 nexus 的。
+- **成文在三份**：這份是規範；[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md) 是元件目錄與寫法；[`apps/web/GLOSSARY.md`](../apps/web/GLOSSARY.md) 管用語。
+
+### 13.2 七個環節
+
+| 環節 | 規則在哪 |
+| --- | --- |
+| 基礎 token | §5（顏色、形狀、字型、互動狀態）、§13.4（各類別的級距） |
+| 元件 | §4、`COMPONENTS.md`；分層在 §13.5 |
+| 模式 | §4.3、§4.4、§9 |
+| 文件 | 上面三份；逐元件的用法在 `COMPONENTS.md` |
+| 護欄 | §11、§13.3 |
+| 治理 | §12、§13.6 |
+| 設計與程式同步 | §13.7 |
+
+### 13.3 什麼算一條規則
+
+- **三樣齊**：成文的規範、對應的 token 或元件、會變紅的測試。規則與擋它的測試同一張 PR 進。
+- **在哪一刻擋**：
+  - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
+  - 真瀏覽器的 `apps/web/guard/`、視覺回歸在合併後那一輪。axe 跑兩層：jsdom 那一層（`src/test/axe.ts`）跟著元件測試在合併前跑，算不了看像素與尺寸的規則；真瀏覽器那一層（`guard/guard.test.ts`，[#2765](https://github.com/DemianLi/nexus-agent/issues/2765)）對 `guard/` 的測試頁跑全部規則，含 `color-contrast` 與 `target-size`，亮暗各一次。已知的違規列在 `guard/harness.ts` 的 `AXE_KNOWN`，清單只會變短。
+- **無障礙**：WCAG 2.2 AA 是硬門檻（§8）。每個共用元件要有鍵盤與焦點的測試。
+- **定期複驗**：每完成一個 Phase，照檢驗報告的量尺抽 5 個元件重評，至少 2 個是上次沒過的。分數只當複驗的量尺，不當合併的條件。
+
+### 13.4 有級距的類別
+
+有級距的類別，元件原始碼只能用級距上的值，任意值由護欄擋。顏色照 §5。
+
+| 類別 | 級距 | 護欄 |
+| --- | --- | --- |
+| 字級 | 四階（§5「字型」）；vendor 另有釘住的值（下面「字級」） | `design-system.test.ts`（任意值連 vendor 一起掃）、`type-hierarchy.test.ts` |
+| 圓角 | SG 的階梯加 `--radius-row`（§5「形狀」） | `design-system.test.ts`，連 vendor 一起掃 |
+| 間距 | Tailwind 的預設級距（下面「間距」） | `design-system.test.ts`，連 vendor 一起掃 |
+| 陰影 | Tailwind 具名的階，或引用 token 的畫法（下面「陰影」）；畫法照 §5「形狀」 | `design-system.test.ts`，連 vendor 一起掃；`border-shadow.test.ts`、`shadow-alpha.test.ts` 管畫法 |
+| 層級 | `z-0`、`z-10`、`z-20`、`z-50`（下面「層級」） | `design-system.test.ts`，連 vendor 一起掃 |
+| 透明度 | 只定停用與遮罩兩個值：停用是 50（§5「互動狀態」），遮罩是 `--scrim` | 停用：`design-system.test.ts`，連 vendor 一起掃；遮罩還沒有 |
+| 時長 | Tailwind 的 `duration-*` 級距；不設動效 token（§7） | `design-system.test.ts` |
+
+**現況**（2026-11-15，develop `ae52d15b`；掃 `apps/web/src` 的 ts、tsx 裡的 class 字串，不含測試檔，也不含 css 檔裡直接寫的值）：
+
+| 類別 | 產品原始碼 | vendor 的 SG 元件 |
+| --- | --- | --- |
+| 任意值的字級 | 0 | 20 處、7 種（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem） |
+| 任意值的間距 | 0 | 6 處（另有 2 處是引用 token 的算式，不算任意值） |
+| 任意值的圓角 | 0 | 8 處、5 種；其中數字任意值 3 處（`rounded-[2px]` 2 處、`rounded-[4px]` 1 處），其餘是 `inherit` 與引用 token 的算式 |
+| 任意值的陰影 | 1 處，`Surface` 的內層底配方，引用 `--border` | 2 處，都引用 token |
+| 層級 | `z-50`、`z-10` 各 1 處 | `z-50` 14 處、`z-10` 4 處、`z-20` 2 處、`-z-1` 2 處 |
+| 半透明（0 與 100 以外） | `opacity-50` 2 處、`opacity-60`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `5242b3ca` 加上暫停鈕對齊到 50，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
+
+vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），這一節有級距的類別除外：間距、任意值字級、數字圓角、陰影、層級、停用的透明度。
+
+**間距**（[#2763](https://github.com/DemianLi/nexus-agent/issues/2763)）：內距、外距、間隙、定位偏移（`p-*`、`m-*`、`gap-*`、`space-*`、`inset-*`、`top-*` 這一類）只用這些級距：0、0.5、1、1.5、2、2.5、3、3.5、4、5、6、7、8、9、10、11、12、14、16、20、24、28、32、36、40、44、48、52、56、60、64、72、80、96；數字 1 是 4px。
+
+- 不寫任意值（`pr-[9px]`），也不寫級距外的數字（`p-13`）。
+- `px`、`auto`、`full`、分數（`top-1/2`）與引用 token 的值（`left-(--offset)`、`left-[calc(var(--sidebar-width)*-1)]`）不算任意值。
+- 寬高（`w-*`、`h-*`、`max-h-[300px]`）是版面值，不在這條裡。
+- vendor 現有的 6 處任意值釘住現值：vendor 檔不動，逐條列在 `design-system.test.ts` 的 `VENDOR_PINNED`，清單只會變短。同步上游多出一條會紅，處理方式照 §13.1（用覆寫蓋回級距，或由 demian 核可後列進清單）。
+
+**字級**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：標準是 §5 的四階，產品原始碼只用這四階。vendor 的 SG 元件另用了 7 種任意值（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem，共 20 處），照現況凍結：vendor 檔不動，逐條列在 `VENDOR_PINNED`，規則同間距。vendor 的 `text-sm`、`text-xs` 是 SG 原樣（§5），不在清單裡。
+
+**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 與產品原始碼現有的全部符合。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
+
+**圓角**：階梯照 §5「形狀」。數字任意值（`rounded-[20px]`）不寫；`rounded-[inherit]` 與引用 token 的算式（`rounded-[calc(var(--radius)-3px)]`）不算任意值。vendor 現有的 3 處數字任意值列在 `VENDOR_PINNED`，規則同間距。
+
+**陰影**：用 Tailwind 具名的階（`shadow-none`、`shadow-sm`、`shadow-md`、`shadow-lg` 這一類，`inset-shadow-*`、`drop-shadow-*` 同），或引用 token 的畫法（`shadow-[inset_0_0_0_1px_var(--border)]`）。不寫自己調位移、模糊、顏色的任意值。面的陰影疊層由 SG 的 css 與 token 產生器畫（§5），元件原始碼不重寫。今天產品原始碼與 vendor 都沒有違規，清單裡沒有陰影的條目。
+
+**層級**：只有四層。
+
+| 類別 | 用在 |
+| --- | --- |
+| `z-0` | 建立疊放脈絡、或明確放回底層 |
+| `z-10` | 蓋在同一區塊內容上的一層（固定的側欄、拖曳把手、蓋住整格的點擊區） |
+| `z-20` | 同一區塊裡要壓過 `z-10` 的（側欄的收合軌、附件上的操作鈕） |
+| `z-50` | 浮層（dialog、popover、選單、tooltip、拖放遮罩） |
+
+不寫別的數字、負值與任意值。浮層之間的先後靠 DOM 順序與 portal，不靠再加一層。vendor 的 `dropdown-menu.tsx` 有一處 `-z-1`，列在 `VENDOR_PINNED`。css 檔裡直接寫的 `z-index`（`motion.css` 的 `1`、`-1`）不在這條的掃描範圍。
+
+### 13.5 元件的分層
+
+| 層 | 是什麼 | 要有 |
+| --- | --- | --- |
+| 基礎元件 | `src/components/ui/`：vendor 的 SG 元件與它的 nexus 層 | 文件、測試、目錄裡的預覽 |
+| 共用元件 | 兩處以上共用的自製積木（`COMPONENTS.md`「什麼時候抽共用元件」） | 文件、測試、目錄裡的預覽 |
+| 畫面專屬元件 | 只在一個畫面用的 | 遵守 token 與 §13.4 |
+
+### 13.6 治理
+
+- **要 demian 核可的**：token 的新增、刪除、改值；新增共用元件。
+- **dev session 自己決定的**：改既有元件的實作、畫面專屬元件。
+- **棄用**：token 或元件標記棄用後保留一個 Release 再刪，步驟在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「棄用」。`<nexus-chat>` 給宿主頁的面照[升級指南](../docs/release.md#升級指南)。
+
+### 13.7 設計與程式同步
+
+- repo 為準。設計稿放在 claude.ai 的 artifact（私有，只有 demian 的帳號打得開），存 token、元件的預覽、還沒實作的設計稿；規範文字不放那裡。
+- token 與元件預覽那一份由 repo 產出：`pnpm --filter @nexus/web run catalog` 寫出一個帶 commit 戳記的 HTML（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「元件目錄」），上傳到 artifact 由 demian 做。
+- 還沒實作的新設計先在 artifact 出方案，demian 選過再實作（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q15）。
+
+### 13.8 還沒做到的
+
+| 規則 | 現況 | 卡 |
+| --- | --- | --- |
+| 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
+| 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
+| Windows 高對比列為門檻 | 量過了（[#2764](https://github.com/DemianLi/nexus-agent/issues/2764)），量到的缺口補了（§8「Windows 高對比」）；新元件還沒有通用的測試擋，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
+| 視覺回歸會擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」），只報告、不紅；沒有基準圖、沒有門檻 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
+
+清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。
+
+### 13.9 之後：體驗的演進
+
+§13.8 做完之後才開始，每張卡附前後對照由 demian 選定，`guard/` 的量測不得退步。
+
+- **體驗標竿**：Claude、ChatGPT、Linear、Raycast。用它們的結構與手感，不照抄。
+- **體驗品質**：加一章列可量的預算，在 `guard/` 量：按鍵到畫面回應、送出到第一個回饋、串流時的掉幀、版面位移、每個非同步動作都有載入、空、錯誤三種狀態。數字以 demian 的 Mac 實機量出來再定。
+- **動效 token**：到時重開 §7 的「不設動效 token」，定一小組時長與緩動曲線。
+- **對話產品特有的模式**（串流中的顯示、工具執行、中斷與重試、錯誤後回復、長對話捲動、提問面板、附件）：一個一張卡。
