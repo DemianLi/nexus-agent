@@ -2231,6 +2231,8 @@ impl Supervisor {
                         // 也不再當它閒置，否則過了閒置上限的會馬上再被送一次 `drain`。
                         conversation.idle_since = None;
                     } else {
+                        // 死因 `evicted` 只在這裡記：回過 `drained`（閒置、沒有進行中的一輪）才算。停機靠這一點：排著等它的 thread
+                        // 當場回 `down(shutdown)`（[`Self::will_tell_down`]），前台這時就關掉它的連線，不等它收完。
                         conversation.cause.get_or_insert(DeathCause::Evicted);
                         conversation.begin_stop(Instant::now(), self.args.eof_grace);
                         // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
