@@ -8,6 +8,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 import { describe, expect, test } from 'vitest';
 
+import { CATALOG_GROUPS, MAIN as CATALOG_MAIN } from '../../../catalog/pages';
+
 const here = new URL('.', import.meta.url);
 const doc = readFileSync(new URL('../../../COMPONENTS.md', here), 'utf8');
 const guard = readFileSync(new URL('../../../guard/main.tsx', here), 'utf8');
@@ -80,5 +82,14 @@ describe('共用元件一覽（COMPONENTS.md）', () => {
         : [],
     );
     expect(missing).toEqual([]);
+  });
+
+  test('元件目錄的分組與中文頁名涵蓋每個子頁，沒有多的、沒有重複', () => {
+    const listed = CATALOG_GROUPS.flatMap((group) => group.pages.map(([name]) => name));
+    expect([...listed].sort()).toEqual([CATALOG_MAIN, ...pages].sort());
+    const untranslated = CATALOG_GROUPS.flatMap((group) => group.pages).filter(
+      ([, label]) => !/[\u4e00-\u9fff]/.test(label),
+    );
+    expect(untranslated).toEqual([]);
   });
 });
