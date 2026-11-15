@@ -92,6 +92,7 @@ import {
   offloadLoggedMessages,
   stampLoggedImageOrigin,
 } from './image-offload-log.js';
+import { readingEvent } from './event-read-error.js';
 import { turnStartMessage } from './message-source.js';
 import { nexusContent, nexusToolCalls } from './nexus-message.js';
 import type { NexusMessage } from './nexus-message.js';
@@ -364,131 +365,134 @@ export class ReplayFold {
       this.#failure = { reason, seq: event.seq };
     };
     // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
-    if (isModelVisibleEvent(event)) {
-      switch (event.type) {
-        case 'turn/start': {
-          this.#turn = { replied: false, interrupted: false };
-          // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-          if (event.data.kind !== 'resume') {
-            this.#push(this.#from(turnStartMessage(event.data), event));
+    // 讀事件內容拋的錯，訊息帶事件種類與 seq（#2836）。讀 `data` 的每一種都在這一層裡，不分進不進模型。
+    readingEvent(event, () => {
+      if (isModelVisibleEvent(event)) {
+        switch (event.type) {
+          case 'turn/start': {
+            this.#turn = { replied: false, interrupted: false };
+            // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
+            if (event.data.kind !== 'resume') {
+              this.#push(this.#from(turnStartMessage(event.data), event));
+            }
+            break;
           }
-          break;
-        }
-        case 'assistant/message': {
-          this.#replied = true;
-          if (this.#turn !== undefined) this.#turn.replied = true;
-          const message = this.#from(this.#read(event.data.message, event), event);
-          const calls = requestedCalls(message);
-          this.#push(message);
-          if (calls.length > 0) this.#batch = { calls, results: new Map(), started: new Set() };
-          break;
-        }
-        case 'tool/result': {
-          if (event.data.message === undefined) return fail('result-missing');
-          const message = this.#from(this.#asSeen(this.#read(event.data.message, event)), event);
-          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            this.#batch.results.set(event.data.callId, [message]);
-          } else {
+          case 'assistant/message': {
+            this.#replied = true;
+            if (this.#turn !== undefined) this.#turn.replied = true;
+            const message = this.#from(this.#read(event.data.message, event), event);
+            const calls = requestedCalls(message);
             this.#push(message);
+            if (calls.length > 0) this.#batch = { calls, results: new Map(), started: new Set() };
+            break;
           }
-          break;
+          case 'tool/result': {
+            if (event.data.message === undefined) return fail('result-missing');
+            const message = this.#from(this.#asSeen(this.#read(event.data.message, event)), event);
+            if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+              this.#batch.results.set(event.data.callId, [message]);
+            } else {
+              this.#push(message);
+            }
+            break;
+          }
+          case 'user/message': {
+            const message = this.#from(this.#read(event.data.message, event), event);
+            const { source } = event.data;
+            // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
+            // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
+            const previous = this.#previous;
+            const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
+            const call = this.#batch?.calls.find((candidate) => candidate.id === owner);
+            const results = call === undefined ? undefined : this.#batch?.results.get(call.id);
+            if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
+              results.push(message);
+            } else {
+              this.#push(message);
+            }
+            break;
+          }
+          case 'compaction/summary': {
+            const { summary: logged, cutoffIndex, messagesBefore } = event.data;
+            if (logged === undefined) {
+              return fail('summary-missing');
+            }
+            // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
+            const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
+            if (
+              this.#raw.length + this.#pendingCount() !== expected ||
+              cutoffIndex > messagesBefore
+            ) {
+              return fail('compaction-misaligned');
+            }
+            this.#summary = {
+              message: this.#from(this.#read(logged, event), event),
+              cutoff: cutoffIndex,
+            };
+            break;
+          }
+          default:
+            // 子聯集多一種而這裡沒有 case，這一行編不過。
+            event satisfies never;
         }
-        case 'user/message': {
-          const message = this.#from(this.#read(event.data.message, event), event);
-          const { source } = event.data;
-          // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
-          // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
-          const previous = this.#previous;
-          const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
-          const call = this.#batch?.calls.find((candidate) => candidate.id === owner);
-          const results = call === undefined ? undefined : this.#batch?.results.get(call.id);
-          if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
-            results.push(message);
-          } else {
-            this.#push(message);
+      } else {
+        switch (event.type) {
+          case 'model/start': {
+            this.#openCall = event.seq;
+            break;
           }
-          break;
+          case 'model/end': {
+            // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
+            if (this.#openCall !== undefined && event.data.outcome === undefined) {
+              this.#modelRan ??= this.#openCall;
+            }
+            this.#openCall = undefined;
+            break;
+          }
+          case 'tool/call': {
+            this.#modelRan ??= event.seq;
+            if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+              this.#batch.started.add(event.data.callId);
+            }
+            break;
+          }
+          case 'interrupt/raised': {
+            if (this.#turn !== undefined) this.#turn.interrupted = true;
+            break;
+          }
+          case 'turn/end': {
+            // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
+            // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
+            const turn = this.#turn;
+            if (
+              turn !== undefined &&
+              event.data.reason === undefined &&
+              !turn.replied &&
+              !turn.interrupted
+            ) {
+              return fail('reply-missing');
+            }
+            this.#turn = undefined;
+            break;
+          }
+          case 'turn/failed': {
+            this.#turn = undefined;
+            break;
+          }
+          case 'session/end-seed': {
+            // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
+            this.#raw = settledMessages(this.#raw, this.#summary);
+            this.#summary = undefined;
+            this.#turn = undefined;
+            break;
+          }
+          default:
+            // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
+            // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
+            break;
         }
-        case 'compaction/summary': {
-          const { summary: logged, cutoffIndex, messagesBefore } = event.data;
-          if (logged === undefined) {
-            return fail('summary-missing');
-          }
-          // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
-          const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
-          if (
-            this.#raw.length + this.#pendingCount() !== expected ||
-            cutoffIndex > messagesBefore
-          ) {
-            return fail('compaction-misaligned');
-          }
-          this.#summary = {
-            message: this.#from(this.#read(logged, event), event),
-            cutoff: cutoffIndex,
-          };
-          break;
-        }
-        default:
-          // 子聯集多一種而這裡沒有 case，這一行編不過。
-          event satisfies never;
       }
-    } else {
-      switch (event.type) {
-        case 'model/start': {
-          this.#openCall = event.seq;
-          break;
-        }
-        case 'model/end': {
-          // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
-          if (this.#openCall !== undefined && event.data.outcome === undefined) {
-            this.#modelRan ??= this.#openCall;
-          }
-          this.#openCall = undefined;
-          break;
-        }
-        case 'tool/call': {
-          this.#modelRan ??= event.seq;
-          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            this.#batch.started.add(event.data.callId);
-          }
-          break;
-        }
-        case 'interrupt/raised': {
-          if (this.#turn !== undefined) this.#turn.interrupted = true;
-          break;
-        }
-        case 'turn/end': {
-          // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
-          // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
-          const turn = this.#turn;
-          if (
-            turn !== undefined &&
-            event.data.reason === undefined &&
-            !turn.replied &&
-            !turn.interrupted
-          ) {
-            return fail('reply-missing');
-          }
-          this.#turn = undefined;
-          break;
-        }
-        case 'turn/failed': {
-          this.#turn = undefined;
-          break;
-        }
-        case 'session/end-seed': {
-          // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
-          this.#raw = settledMessages(this.#raw, this.#summary);
-          this.#summary = undefined;
-          this.#turn = undefined;
-          break;
-        }
-        default:
-          // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
-          // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
-          break;
-      }
-    }
+    });
     this.#previous = event;
   }
 

@@ -24,8 +24,8 @@
  * 等人狀態（`suspension.ts`）；模型與工具的事件經繼承的 callbacks 進 root 那條串流，節點收完的 `completed` 經 `configurable` 上 root 的
  * 事件出口補；`getConfig().writer` 寫的 `custom` 也經那個出口送，帶那顆 `task` 呼叫的命名空間。背景子代理（{@link NativeAgentParams.background}）是 host 叫起的最上層 agent，跟 root 一樣按 thread 留 state、自己交出中斷。
  *
- * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫的 `interrupt()`
- * 接不住，TODO(#2608)。
+ * 不支援：`afterModel`、`Command.goto`，以及 {@link SUPPORTED_JUMPS} 以外的跳轉（建構時拋）；工具本體直接呼叫 LangGraph 的 `interrupt()`
+ * 也不支援（設計如此，#2608）：native 下它是一則帶原因的 error ToolMessage，要停下來問人走等人服務。
  *
  * @module
  */

@@ -409,6 +409,7 @@ export {
   parsesLoggedToolCalls,
 } from './logged-message.js';
 
+export { readingEvent } from './event-read-error.js';
 export type {
   DeriveOptions,
   DerivedConversation,
