@@ -14,11 +14,13 @@ nexus 同樣，差別在詞彙：沒有 `step/*` 事件，對應的是 `model/st
 
 ## 二、補哪些
 
-- **沒配到結果的呼叫：** dsh 以 `ToolCallRecovery`（`repair.ts:105`）追蹤，呼叫由回覆登記，`tool/call` 只標「開始了」；nexus 同。
+- **沒配到結果的呼叫：** dsh 以 `ToolCallRecovery`（`repair.ts:105`）追蹤，呼叫由回覆登記（`pendingCalls`，`:106`），`tool/call` 只標「開始了」，補的順序是登記的順序（`:164-165` 的註解）；nexus 的 `scanOpenTurn` 同（`unanswered` 這張表，照回覆要的順序）。差別：nexus 對沒有 `assistant/message` 的舊格式日誌，會從 `tool/call` 登記（順序就是 `tool/call` 的順序）；dsh 的 `tool/call` 只在已登記的呼叫上標 `callSeq`，不新增（`:132-133`）。
+  句子：dsh 的 `CLOSER_TEXT.interrupted`（`repair.ts:34`、`:35`）與 nexus 的 `TOOL_OUTCOME_UNKNOWN_TEXT`、`TOOL_NOT_STARTED_TEXT` 字面一樣（`8bd0733`，逐字相同）；為什麼不能隨手改字見 [`conversation-replay-vs-dsh.md`](conversation-replay-vs-dsh.md)。
+- **掃描何時清待結的呼叫：** dsh 在 `turn/start`、`turn/end`、`step/end` 清（`repair.ts:119-122`）。nexus 在 `turn/start`、`turn/end`（`turn/failed` 也算收工）清；`step/end` 對應的是 `model/start`：開著的輪遇到新的 `model/start` 就清，代表上一批已結清。另一個差別：dsh 的 `tool/result` 要同一個 turn、step 且是 `append` 才算配到（`:138-141`），nexus 只認 `callId`（`tool/result` 一到就算配到）。這是刻意的還是順手，我沒查有沒有測試釘它，不替它下結論。
 - **配對檢查對合成的「還沒開始」結果放行：** dsh 在 `477b4f4` 的 `packages/core/session/src/invariant.ts:142-145`（`syntheticNotStarted`，認 `TOOL_NOT_STARTED` 碼）有這條放行。`8bd0733` 上這個檔已不存在（見第四節），所以對現行 dsh 這條出處**不成立**。nexus 的放行是自己的：`session-relationships.ts` 的 `tool/result` 分支，認同一個碼。
 - **掃描遇到 `session/end-seed` 不重設：** dsh `repair.ts:74`（`8bd0733`，整個 switch 在 `:59-77`）的 `openTurnClosers` 只在 `turn/start`、`turn/end`、`step/start`、`step/end` 移動游標，「其他事件種類不動游標」。舊註解寫的 `repair.ts:107-109`，在 `477b4f4` 上正是這條規則，屬實；`8bd0733` 上是 `ToolCallRecovery` 的欄位宣告。dsh 的日誌會有「開著的輪後面接 end-seed」：fork seed 先接 end-seed、再接補結（`fork.ts:21-29`；`8bd0733` 上 end-seed 在 `fork.ts:24`）。舊註解還寫了 dsh 的不變量對 end-seed 不設限（`477b4f4` 的 `invariant.ts:155-156`），同樣因該檔已移除，對現行 dsh 不成立。
   nexus 與 dsh 一致，另外有自己的舊檔形狀要顧：#934 之前續接過又沒有新輪就停的檔，補結會接在 end-seed 後面；新檔的補結一律在 end-seed 前面。「只掃最後一顆 end-seed 之後」那個做法沒有採，理由是舊檔的形狀，不是基礎建設表達不出來。
-- **開著的 `model/start` 補 `model/end`：** nexus 自己的詞彙，對應 dsh 補 `step/end`；規則同一條（每一個進入的呼叫恰好一顆結尾）。
+- **開著的 `model/start` 補 `model/end`：** nexus 自己的詞彙，對應 dsh 補 `step/end`；規則同一條（每一個進入的呼叫恰好一顆結尾）。補的順序也一樣：結果、步的收尾、輪的收尾（dsh `repair.ts:88` 先取結果，`:92-96` 補 `step/end`、`turn/end`）。
 
 ## 三、冷讀（照 dsh，少一步）
 
@@ -39,4 +41,4 @@ nexus 的 `@nexus/core/invariant` 是照 dsh 的「每個 package 的 `./invaria
 ## 五、沒核到的
 
 - dsh 移除 runtime invariants 的理由：這份對照只讀了升級指南的變更與遷移說明；理由與前因見決策紀錄。
-- `interrupted-turn.ts` 檔頭以外的幾處「照 dsh」短語（`scanOpenTurn`、`unansweredCallResults`、`interruptedTurnClosers` 的 JSDoc、`model/start` 分支的行內註解）這張沒動。
+- 「`tool/result` 只認 `callId`」與 dsh 要求同一個 turn、step 的差別，沒查有沒有實際會發生的日誌形狀（nexus 的日誌每輪的 callId 是否可能重複沒追）。

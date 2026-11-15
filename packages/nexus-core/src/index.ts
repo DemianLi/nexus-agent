@@ -1182,8 +1182,8 @@ export {
 export type { SubagentCatalogData, SubagentCatalogMode, SubagentLink } from './subagent-catalog.js';
 export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent-catalog.js';
 
-// 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
-// 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。
+// 配套入口（`./invariant`）刻意**不從主入口再匯出**：它只掛在 `@nexus/core/invariant` 這個子路徑上，
+// import 主入口不會把它拖進來。與 dsh 的對照見 docs/interrupted-turn-and-invariant-vs-dsh.md 第四節。
 export { noteSentRequest } from './last-sent-request.js';
 export type { SentHistoryReader } from './summarization.js';
 export {
