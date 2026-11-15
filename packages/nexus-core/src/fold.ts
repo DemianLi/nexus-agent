@@ -15,7 +15,6 @@
  * 「全部載完了」這個時刻只有 fold 有。
  */
 
-import { HISTORY_READ_TOOL_NAME } from './summary-head.js';
 import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -1757,7 +1756,6 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
       options.streamRetry,
       cutoffs,
       sentHistoryOf,
-      registry.tools.effective().has(HISTORY_READ_TOOL_NAME),
     );
 }
 

@@ -46,7 +46,7 @@ const withWorker: PluginEntry = {
 };
 
 const SUMMARIZATION = {
-  trigger: [{ type: 'tokens' as const, value: 3_400 }],
+  trigger: [{ type: 'tokens' as const, value: 3_000 }],
   retainTokens: 12,
 };
 
@@ -235,26 +235,6 @@ describe('compactionData', () => {
     const { name, payload } = compactionData(at({ filePath: null }), DEFAULT_TOOL_TEXT_MAX_BYTES);
     expect(name).toBe(COMPACTION);
     expect(payload).toEqual({ seq: 7, cutoff: 3, saved: false });
-  });
-
-  it('檔沒寫成功、但前言指向讀回工具：saved 為 true（原文在會話日誌裡）', () => {
-    const recallable =
-      'You are in the middle of a conversation that has been summarized.\n\n' +
-      'Originals also stay in the session log: history_read reads an <index> entry verbatim, history_search finds a literal string.\n\n' +
-      'A condensed summary follows:\n\n<summary>\n正文\n</summary>';
-    expect(
-      compactionData(
-        at({ filePath: null, summary: human(recallable) }),
-        DEFAULT_TOOL_TEXT_MAX_BYTES,
-      ).payload,
-    ).toEqual({ seq: 7, cutoff: 3, saved: true, summary: '正文' });
-    // 沒有那一句的同一種外框：false。
-    expect(
-      compactionData(
-        at({ filePath: null, summary: human('外框\n<summary>\n正文\n</summary>') }),
-        DEFAULT_TOOL_TEXT_MAX_BYTES,
-      ).payload,
-    ).toEqual({ seq: 7, cutoff: 3, saved: false, summary: '正文' });
   });
 
   it('data 壞掉（摘要讀不出來）：訊息帶事件種類與 seq', () => {

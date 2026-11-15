@@ -31,8 +31,6 @@ import {
 } from './summary-cutoffs.js';
 import {
   composeSummaryHead,
-  HISTORY_READ_TOOL_NAME,
-  HISTORY_SEARCH_TOOL_NAME,
   parseEntryDraft,
   parseSummaryHead,
   SUMMARY_ENTRY_INSTRUCTION,
@@ -66,11 +64,6 @@ export interface SummarizerEngineOptions {
     readonly maxLength?: number;
     readonly truncationText?: string;
   };
-  /**
-   * 這次請求被摘掉的原文讀不讀得回來（會話日誌接上了，而且讀回的工具註冊了）。回 `true` 時前言指向那兩個工具：歷史檔寫成時，
-   * 這一句接在路徑那句後面；沒寫成時，改用只有這一句的前言，本文照樣包在 `<summary>` 裡。歷史檔照寫。省略等於一律 `false`。
-   */
-  readonly originalsRecallable?: (request: SessionRequest) => boolean;
   /**
    * 生摘要的呼叫（索引條目那次與現況那次）改送什麼（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。回 `undefined`，
    * 或沒給這一格，就送一則 user 訊息：現況那次照 `summaryPrompt` 的模板，條目那次是要摘的那一段接 `SUMMARY_ENTRY_INSTRUCTION`。
@@ -118,13 +111,6 @@ const SUMMARY_PREAMBLE_HEAD =
 const SUMMARY_PREAMBLE_TAIL =
   ' should you need to refer back to it for details.\n\nA condensed summary follows:\n\n<summary>\n';
 const SUMMARY_CLOSE = '\n</summary>';
-// 原文讀得回來時（`originalsRecallable`）前言裡的那一句：歷史檔續接之後讀不到，會話日誌讀得到。`summaryPointsToRecall` 認的是這句的
-// 字面值，改了字，已寫進日誌的摘要在 wire 上的 `saved` 會變成 false。句子短：前言每多一個 token，
-// 「摘要要比被取代的原文小」（#1396）就多擋下一些短的摘要。
-const SUMMARY_RECALL_HINT = `Originals also stay in the session log: ${HISTORY_READ_TOOL_NAME} reads an <index> entry verbatim, ${HISTORY_SEARCH_TOOL_NAME} finds a literal string.`;
-const SUMMARY_RECALL_TAIL = ` should you need to refer back to it for details. ${SUMMARY_RECALL_HINT}\n\nA condensed summary follows:\n\n<summary>\n`;
-// 歷史檔沒寫成、但原文讀得回來時的前言。
-const SUMMARY_RECALL_PREAMBLE = `You are in the middle of a conversation that has been summarized.\n\n${SUMMARY_RECALL_HINT}\n\nA condensed summary follows:\n\n<summary>\n`;
 const SUMMARY_PLAIN_PREFIX = 'Here is a summary of the conversation to date:\n\n';
 
 /** 現況重生一次之後仍超過上限。`summarization.ts` 把它登記成「生摘要失敗」，走既有的退路（照原請求送出）。 */
@@ -140,27 +126,11 @@ export class SummaryStateTooLongError extends Error {
  * @returns 去掉前言與 `<summary>` 包法之後的本文；認不出包法就回整份文字。
  */
 export function summaryBodyOf(message: BaseMessage): string {
-  return summaryBodyOfText(message.text);
-}
-
-/**
- * @param text - 摘要訊息的全文（前言加本文）。
- * @returns 摘要本文，同 {@link summaryBodyOf}。
- */
-export function summaryBodyOfText(text: string): string {
+  const text = message.text;
   if (text.startsWith(SUMMARY_PLAIN_PREFIX)) return text.slice(SUMMARY_PLAIN_PREFIX.length);
   const open = text.indexOf('<summary>\n');
   if (open < 0 || !text.endsWith(SUMMARY_CLOSE)) return text;
   return text.slice(open + '<summary>\n'.length, text.length - SUMMARY_CLOSE.length);
-}
-
-/**
- * @param text - 摘要訊息的全文。
- * @returns 前言是不是指向讀回工具的那一種：被摘掉的原文在會話日誌裡讀得回來。
- */
-export function summaryPointsToRecall(text: string): boolean {
-  const open = text.indexOf('<summary>\n');
-  return open >= 0 && text.slice(0, open).includes(SUMMARY_RECALL_HINT);
 }
 
 function isSummaryMessage(message: BaseMessage): boolean {
@@ -194,7 +164,6 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     summaryPrompt,
     sessionIdOf,
     summaryCallOf,
-    originalsRecallable,
     historyPathPrefix = '/conversation_history',
   } = options;
   const trigger = options.trigger;
@@ -570,16 +539,10 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     );
   }
 
-  function buildSummaryMessage(
-    summary: string,
-    filePath: string | null,
-    recallable: boolean,
-  ): HumanMessage {
+  function buildSummaryMessage(summary: string, filePath: string | null): HumanMessage {
     const content = filePath
-      ? `${SUMMARY_PREAMBLE_HEAD}${filePath}${recallable ? SUMMARY_RECALL_TAIL : SUMMARY_PREAMBLE_TAIL}${summary}${SUMMARY_CLOSE}`
-      : recallable
-        ? `${SUMMARY_RECALL_PREAMBLE}${summary}${SUMMARY_CLOSE}`
-        : `${SUMMARY_PLAIN_PREFIX}${summary}`;
+      ? `${SUMMARY_PREAMBLE_HEAD}${filePath}${SUMMARY_PREAMBLE_TAIL}${summary}${SUMMARY_CLOSE}`
+      : `${SUMMARY_PLAIN_PREFIX}${summary}`;
     return new HumanMessage({ content, additional_kwargs: { lc_source: 'summarization' } });
   }
 
@@ -589,7 +552,6 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     request: EngineRequest,
     total: number,
   ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
-    const recallable = originalsRecallable?.(request) === true;
     const filePath = await offloadToBackend(messagesToSummarize, request);
     if (filePath === null)
       console.warn(
@@ -599,7 +561,6 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
       summaryMessage: buildSummaryMessage(
         await createSummary(messagesToSummarize, resolvedModel, request, total),
         filePath,
-        recallable,
       ),
       filePath,
     };

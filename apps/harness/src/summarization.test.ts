@@ -1403,7 +1403,7 @@ describe('一般長對話不會退化成逐輪重摘', () => {
       backend: new ContainedFilesystemBackend({ rootDir: root }),
       checkpointer: new MemorySaver(),
       plugins: [],
-      summarization: { trigger: [{ type: 'tokens', value: 4_900 }] },
+      summarization: { trigger: [{ type: 'tokens', value: 4_500 }] },
     });
 
     try {
