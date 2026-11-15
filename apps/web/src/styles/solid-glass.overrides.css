@@ -668,6 +668,8 @@ body {
  * - **選取**：command 清單裡鍵盤走到的那一項、對話裡被定位的那一則、開著的選單 Trigger，平常都只換半透明的底色。
  * - **面的邊界**：對話框、alert-dialog、sheet、tooltip、card、輸入框，平常靠陰影與玻璃邊。
  * - **目前這條會話**：那一列是停用的按鈕，瀏覽器會畫成停用字色；它是選取中、不是不能用，換回按鈕字色、不變淡。
+ * 列名字的那幾條之外另有通用的兩組，新元件不必逐個補：帶 `aria-selected`、`aria-current`、`aria-pressed`、`data-highlighted`、
+ * `data-popup-open` 的算選取；SG 的三種面（`.bg-card`、`.bg-popover`、`.glass-panel`）算面。tooltip 的 Trigger 開著只是滑鼠停在上面，不算。
  * 外框寫在 layer 外，蓋得過元件自帶的 `outline-hidden`；往內縮的 offset 留在 base layer（`focus-outline.test.ts` 的規矩）。
  * `guard/` 用模擬的 forced-colors 量。
  */
@@ -675,7 +677,12 @@ body {
   [data-slot='command-item'][data-selected='true'],
   [data-slot='message-scroller-item'][data-located],
   [data-slot='dropdown-menu-trigger'][data-popup-open],
-  [data-slot='sidebar-menu-button'][data-active]:disabled {
+  [data-slot='sidebar-menu-button'][data-active]:disabled,
+  [aria-selected='true'],
+  [aria-current]:not([aria-current='false']),
+  [aria-pressed='true'],
+  [data-highlighted],
+  [data-popup-open]:not([data-slot='tooltip-trigger']) {
     outline: 2px solid Highlight;
   }
 
@@ -684,7 +691,10 @@ body {
   [data-slot='sheet-content'],
   [data-slot='tooltip-content'],
   [data-slot='card'],
-  [data-slot='composer'] {
+  [data-slot='composer'],
+  .bg-card,
+  .bg-popover,
+  .glass-panel {
     outline: 1px solid CanvasText;
   }
 
@@ -698,7 +708,12 @@ body {
     [data-slot='command-item'][data-selected='true'],
     [data-slot='message-scroller-item'][data-located],
     [data-slot='dropdown-menu-trigger'][data-popup-open],
-    [data-slot='sidebar-menu-button'][data-active]:disabled {
+    [data-slot='sidebar-menu-button'][data-active]:disabled,
+    [aria-selected='true'],
+    [aria-current]:not([aria-current='false']),
+    [aria-pressed='true'],
+    [data-highlighted],
+    [data-popup-open]:not([data-slot='tooltip-trigger']) {
       outline-offset: -2px;
     }
 
@@ -707,7 +722,10 @@ body {
     [data-slot='sheet-content'],
     [data-slot='tooltip-content'],
     [data-slot='card'],
-    [data-slot='composer'] {
+    [data-slot='composer'],
+    .bg-card,
+    .bg-popover,
+    .glass-panel {
       outline-offset: -1px;
     }
   }
