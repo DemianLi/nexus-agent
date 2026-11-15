@@ -479,6 +479,8 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 共用元件 | 兩處以上共用的自製積木（`COMPONENTS.md`「什麼時候抽共用元件」） | 文件、測試、目錄裡的預覽 |
 | 畫面專屬元件 | 只在一個畫面用的 | 遵守 token 與 §13.4 |
 
+前兩層的每一個元件在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「共用元件一覽」有一列（用在哪、預覽在測試頁的哪一頁），`src/components/ui/components-doc.test.ts` 守著：`ui/` 的檔與列一一對應、預覽的子頁存在。新抽的共用元件沒加列，測試擋不到（`ui/` 之外沒有固定的資料夾可以對）。
+
 ### 13.6 治理
 
 - **要 demian 核可的**：token 的新增、刪除、改值；新增共用元件。
@@ -495,7 +497,6 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
 | Windows 高對比列為門檻 | 量過了（[#2764](https://github.com/DemianLi/nexus-agent/issues/2764)），量到的缺口補了（§8「Windows 高對比」）；新元件還沒有通用的測試擋，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
 | 視覺回歸會擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」），只報告、不紅；沒有基準圖、沒有門檻 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
