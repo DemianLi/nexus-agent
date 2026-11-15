@@ -3550,6 +3550,40 @@ fn a_leaf_that_dies_before_bound_takes_the_pair_with_it() {
     assert_eq!(shut_down(&mut h), []);
 }
 
+/// 葉子回 `attach` 錯、沒有開始送心跳（真的葉子在綁定裡才起心跳）：`bind` 起算的沉默到了 `--stall-ms`，葉子被判 `stalled`，整對收。
+#[test]
+fn a_leaf_that_refuses_attach_without_a_heartbeat_is_stalled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--refuse-attach".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    assert_eq!(h.down("a"), DeathCause::Stalled);
+    let line = h.audit_line("\"role\":\"composition\"");
+    assert!(line.contains("\"cause\":\"peer\""), "{line}");
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// 重現 #2858：`attach` 沒成功（回錯、或一直不回）而葉子的心跳照送。想要的是前台拿到 `down`。
+#[test]
+fn repro_2858_attach_that_never_succeeds_with_a_heartbeat() {
+    for flag in ["--refuse-attach", "--ignore-attach"] {
+        let mut h = Harness::start(Options {
+            conversation_args: vec![flag.into(), "--heartbeat-early".into()],
+            extra: vec!["--stall-ms", "3000"],
+            ..paired()
+        });
+        h.ensure("a");
+        let leaf = h.dir.join("run/c1.l.sock");
+        assert!(wait_until(|| log(&leaf)
+            .iter()
+            .any(|l| l.starts_with("attach "))));
+        std::thread::sleep(Duration::from_millis(9_000));
+        let events = shut_down(&mut h);
+        eprintln!("REPRO {flag}: events={events:?} audit={:?}", pair_audit(&h));
+    }
+}
+
 /// 殺葉子：前台讀到 `down`，組合行程留著。留著的見證：停機時它那一行的死因是 `shutdown`，不是被葉子連帶收掉的 `peer`。
 #[test]
 fn killing_the_leaf_is_down_and_the_composition_stays() {

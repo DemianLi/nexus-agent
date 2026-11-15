@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! fake_conversation [--die-before-ready] [--ready-after-ms <毫秒>] [--hello-version <版本>] [--no-loop] [--skip-hello] --socket <路徑> [--host-socket <路徑>]
-//!                   [--pair-socket <路徑> [--no-register] [--ready-before-register] [--die-on-attach]]
+//!                   [--pair-socket <路徑> [--no-register] [--ready-before-register] [--die-on-attach | --refuse-attach | --ignore-attach] [--heartbeat-early]]
 //! ```
 //!
 //! `--pair-socket`：當一對裡的葉子（#2583）。控制通道上不送 `ready`（`--ready-before-register` 例外），其餘照下面；連橋、交換 `hello`、`register` 一個工具，
@@ -12,7 +12,8 @@
 //! 把 `bind` 排給主迴圈就回 `attach` 成功，不等主迴圈做完。
 //! 另外在 `--socket` 上收資料連線：每條先寫一行 `leaf <pid>`，之後收到什麼回什麼。
 //! `--no-register`：不連橋。`--ready-before-register`：先在控制通道送 `ready`、記一行 `ready`，等 `<socket 路徑>.go` 出現才連橋。
-//! `--die-on-attach`：收到 `attach` 不回，當場以 9 結束。
+//! `--die-on-attach`：收到 `attach` 不回，當場以 9 結束。`--refuse-attach`：回錯；`--ignore-attach`：不回。這兩個都不當成收到 `bind`，所以心跳不會開始，
+//! 要心跳照送就加 `--heartbeat-early`（一起來就開始送）。
 //!
 //! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]；宣告 loop 在自己這裡，`--no-loop` 不宣告）；`--skip-hello` 不送，直接送 `ready`。
 //!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
@@ -38,6 +39,7 @@
 #[path = "common/host_client.rs"]
 mod host_client;
 
+use nexus_host::host_protocol::{CallError, ErrorCode};
 use nexus_host::pair_protocol::{
     self, PairMessage, RejectCode, METHOD_ATTACH, PAIR_PROTOCOL_VERSION, RETRY_BACKOFF_MIN,
 };
@@ -218,7 +220,16 @@ fn join_bridge(path: &str) -> (UnixStream, Vec<u8>) {
     }
 }
 
-fn run_bridge(path: String, go: Option<String>, die_on_attach: bool) {
+/// 收到 `attach` 怎麼辦。
+#[derive(Clone, Copy, PartialEq)]
+enum OnAttach {
+    Bind,
+    Die,
+    Refuse,
+    Ignore,
+}
+
+fn run_bridge(path: String, go: Option<String>, on_attach: OnAttach) {
     std::thread::spawn(move || {
         if let Some(go) = go {
             while !std::path::Path::new(&go).exists() {
@@ -246,8 +257,27 @@ fn run_bridge(path: String, go: Option<String>, die_on_attach: bool) {
             if method != METHOD_ATTACH {
                 continue;
             }
-            if die_on_attach {
-                std::process::exit(9);
+            match on_attach {
+                OnAttach::Bind => {}
+                OnAttach::Die => std::process::exit(9),
+                OnAttach::Refuse => {
+                    log("attach refused");
+                    pair_send(
+                        &mut stream,
+                        &PairMessage::Result {
+                            call,
+                            outcome: Err(CallError {
+                                code: ErrorCode::ServiceError,
+                                message: "不綁".into(),
+                            }),
+                        },
+                    );
+                    continue;
+                }
+                OnAttach::Ignore => {
+                    log("attach ignored");
+                    continue;
+                }
             }
             let thread = payload["threadId"].as_str().unwrap_or_default();
             feed_control(&frame(&encode_conversation_command(
@@ -340,10 +370,23 @@ fn main() {
                 log("ready");
             }
             if !args.iter().any(|a| a == "--no-register") {
+                let has = |flag: &str| args.iter().any(|a| a == flag);
+                let on_attach = if has("--die-on-attach") {
+                    OnAttach::Die
+                } else if has("--refuse-attach") {
+                    OnAttach::Refuse
+                } else if has("--ignore-attach") {
+                    OnAttach::Ignore
+                } else {
+                    OnAttach::Bind
+                };
+                if has("--heartbeat-early") {
+                    start_heartbeat();
+                }
                 run_bridge(
                     pair_socket,
                     early.then(|| format!("{socket}.go")),
-                    args.iter().any(|a| a == "--die-on-attach"),
+                    on_attach,
                 );
             }
         }
