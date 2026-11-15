@@ -159,7 +159,11 @@ import type { SessionRequest, SummaryCall } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
-import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
+import {
+  DEFAULT_TOOL_RESULT_PRUNE,
+  PRUNE_LOOKUP_FAILED,
+  withToolResultPruning,
+} from './tool-result-pruner.js';
 import type {
   PruneRequest,
   ToolResultPruneConfig,
@@ -1026,9 +1030,7 @@ function asModelCallStep(chain: AgentMiddleware): AgentMiddleware {
  * 不是 state 裡每一顆大結果的剪法。
  *
  * **先記、記進去了才剪**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`append` 拋了就回 `false`、講一條 warn，
- * 剪刀這次不套用新剪的（記過的照樣套用）。照 dsh 壓縮的 pressure 路徑：壓縮失敗記 warn、這一輪照原樣繼續
- * （`packages/compaction/compaction-basic/src/index.ts:163-173`）；dsh 的剪裁是一筆事件，寫不進去就沒有剪，不會「模型看到剪過的、
- * 日誌卻沒有」。查找本身失敗（認不出這次呼叫屬於哪一份）不是寫入失敗：`recorded` 回 `undefined`，剪刀退回每次重算，不會叫到這裡。
+ * 剪刀這次不套用新剪的（記過的照樣套用），這一輪照原樣繼續；不會「模型看到剪過的、日誌卻沒有」。查找拋了（#2779）同樣不套用：`recorded` 回 `PRUNE_LOOKUP_FAILED`，剪刀這次不剪；找不到日誌（`found.kind !== 'ok'`）才退回每次重算。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param report - 記不進去時的 warn。
@@ -1048,16 +1050,18 @@ function pruneLogOf(
         const found = lookup(request);
         return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
       } catch {
-        return undefined;
+        return PRUNE_LOOKUP_FAILED;
       }
     },
     record(request, results) {
       let found: SessionLookup;
       try {
         found = lookup(request);
-      } catch {
-        // 認不出這次呼叫屬於哪一份：同 `recorded` 回 `undefined`，不是寫入失敗。
-        return true;
+      } catch (error) {
+        report(
+          `compaction/prune 認不出日誌，這次新剪的工具結果不套用：${error instanceof Error ? error.message : String(error)}`,
+        );
+        return false;
       }
       if (found.kind !== 'ok') return true;
       const sendable = new Set<string>();
