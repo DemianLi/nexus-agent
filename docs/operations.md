@@ -1769,7 +1769,7 @@ nexus-agent serve --process-model per-thread
 
 **只在成對執行時適用**：監督行程起一對（組合行程 `nexus-composition` 加對話行程，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）時，對話行程的命令列多一個 `--pair-socket <路徑>`。沒有這個旗標的對話行程，這一節的東西一行都不會執行（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）。
 
-- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。已綁別條 thread 或 payload 不對時回錯，組合行程不送 `bound`，自己以 4 結束；監督行程整對收，前台收到 `down`（死因 `crash`，`supervisor-audit.jsonl` 裡組合行程那一行 `exit_code` 是 4）。
+- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。payload 的 threadId 不是非空字串、或葉子已綁別條 thread 時回錯，組合行程不送 `bound`，自己以 4 結束；監督行程整對收，前台收到 `down`（死因 `crash`，`supervisor-audit.jsonl` 裡組合行程那一行 `exit_code` 是 4）。
 - **前台的連線不走橋**：組合行程聽前台的 `--socket`，原樣轉到對話行程自己聽的 `--socket`。橋斷了，前台流量照通。
 - **橋斷了，對話行程自己結束**：組合行程在葉子斷線後不收同一個葉子重連，留著沒有路能恢復。
   - 還沒 `attach` 成功（沒綁，或 `handler.open` 還在跑）：立刻結束。
