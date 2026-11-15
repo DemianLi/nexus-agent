@@ -276,7 +276,8 @@
 **Windows 高對比**（`forced-colors: active`，[#2796](https://github.com/DemianLi/nexus-agent/issues/2796)）
 - 高對比下瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`。**只靠半透明底色表示的選取、只靠陰影或玻璃邊的面，要補系統色的外框**：選取 2px `Highlight`，面 1px `CanvasText`，畫在裡面不佔版面。
 - 現在補的：command 鍵盤走到的那一項、被定位的訊息、開著的選單 Trigger、目前這條會話；dialog、alert-dialog、sheet、tooltip、card、輸入框。目前這條會話是停用的按鈕，高對比下換回按鈕字色、不變淡（它是選取中，不是不能用）。
-- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 85 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。量的是 Chrome 模擬的高對比，沒有在真的 Windows 上看過。
+- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 85 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。測試量的是 Chrome 模擬的高對比；2026-11-15 另在 GitHub 的 Windows runner（Windows Server 2025、系統佈景 High Contrast #1、Chrome 不模擬）跑過一次全部 47 個測試頁，`forced-colors` 都生效、選取與面都有外框，畫面與模擬的一致。那是一次性的探測，沒有留在 CI 裡，也沒有人在 Windows 桌面版上逐頁看過。
+- **沒選中的不畫外框**：Tailwind 的 `outline-hidden` 在高對比下會畫一圈 2px 的外框，vendor 無條件掛在選單項、指令項、側欄列上。覆寫檔把它拿掉，外框只留給選取、面與焦點；選取的外框不能超出會裁切的祖先（捲動清單裡的選中項往內畫）。`guard/` 兩條都量。
 - **高對比是門檻**：除了上面列名字的，覆寫檔另有通用的兩組——帶 `aria-selected`、`aria-current`、`aria-pressed`、`data-highlighted`、`data-popup-open` 的算選取（tooltip 的 Trigger 開著只是滑鼠停在上面，不算），SG 的三種面 `.bg-card`、`.bg-popover`、`.glass-panel` 算面。`guard/`「Windows 高對比：每個測試頁」在模擬的高對比下掃總覽與每個子頁，這兩類裡有一個既沒邊框也沒外框就紅。新元件的選取用這些標準屬性、面用這三種 class，就不必另外補。
 - 測試擋不到的：用別的屬性表示選取的（`data-active`、`data-checked`、`data-state` 語意不一，沒有納入）、不用這三種 class 的面、沒放進測試頁的畫面。`glass` 這個 `Button` variant 沒有邊框（產品沒用到，用到再補）。
 
@@ -498,7 +499,6 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 在真的 Windows 高對比下看過 | 已列為門檻（§8「Windows 高對比」），但量的都是 Chrome 模擬的 forced-colors，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
 | 視覺回歸由機器擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁，有差時在對應的 PR 留言，作者要回覆確認（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」）。擋在人身上：不紅、沒有基準圖、沒人回 CI 也不會擋。刻意不放在 PR 上擋（[#2088](https://github.com/DemianLi/nexus-agent/issues/2088) 的一分鐘） | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。
