@@ -117,9 +117,15 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
 /**
  * 建一顆補懸空工具呼叫的 middleware。
  *
+ * @param options.stateFix - 要不要掛 `beforeAgent`（改圖裡的狀態）。預設 `true`：掛。歷史從日誌推（`log`）時狀態裡的
+ *   訊息串不是請求的來源，補在狀態上沒有人讀，反而讓圖上多一個節點、每次 invoke 多吃一格，所以 fold 在 `log` 下傳 `false`；
+ *   `wrapModelCall` 那半（只補這次送出去的請求）兩種都留。
  * @returns 名字是 {@link PATCH_TOOL_CALLS_MIDDLEWARE_NAME} 的 middleware。
  */
-export function createPatchToolCallsMiddleware(): AgentMiddleware {
+export function createPatchToolCallsMiddleware(
+  options: { readonly stateFix?: boolean } = {},
+): AgentMiddleware {
+  const stateFix = options.stateFix ?? true;
   return withModelCallStep(
     async (rawRequest, handler) => {
       const request = rawRequest as { readonly messages?: BaseMessage[] };
@@ -132,14 +138,18 @@ export function createPatchToolCallsMiddleware(): AgentMiddleware {
     (wrapModelCall) =>
       createHookStepMiddleware({
         name: PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
-        beforeAgent: async (state) => {
-          const { messages } = state as { readonly messages?: BaseMessage[] };
-          if (!messages || messages.length === 0) return;
-          const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
-          if (!needsPatch) return;
-          // 先清空再放回處理過的整串：`add_messages` reducer 只認這個寫法。
-          return { messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...patchedMessages] };
-        },
+        ...(stateFix && {
+          beforeAgent: async (state: unknown) => {
+            const { messages } = state as { readonly messages?: BaseMessage[] };
+            if (!messages || messages.length === 0) return;
+            const { patchedMessages, needsPatch } = patchDanglingToolCalls(messages);
+            if (!needsPatch) return;
+            // 先清空再放回處理過的整串：`add_messages` reducer 只認這個寫法。
+            return {
+              messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...patchedMessages],
+            };
+          },
+        }),
         wrapModelCall,
       }),
   );
