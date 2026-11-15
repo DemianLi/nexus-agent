@@ -27,15 +27,15 @@ dsh 的 `interruptedTurnClosers`（`packages/core/session/src/repair.ts:209`，�
 - 記過 `tool/call`、結果沒記下來：`TOOL_OUTCOME_UNKNOWN_TEXT`，等於 `CLOSER_TEXT.interrupted.started`（`repair.ts:34`）。
 - 回覆裡要了、還沒記到 `tool/call`：`TOOL_NOT_STARTED_TEXT`，等於 `CLOSER_TEXT.interrupted.notStarted`（`repair.ts:35`）。
 
-**為什麼這兩句不能隨手改字：** 它們是模型讀得到的文字，措辭就是行為。舊註解寫 `repair.ts:106`、`:107`，`8bd0733` 上這兩句在 `:34`、`:35`（`CLOSER_TEXT` 另有一組 `forked` 的句子，nexus 沒有分叉補結，沒用）。測試多半直接引用常數，改措辭不會被擋住；只有 `apps/harness/src/background-cold-dangling.test.ts:82` 用字面子字串釘了 `interrupted after it was recorded`，`TOOL_NOT_STARTED_TEXT` 完全沒被釘。所以改之前要自己想一遍。
+**為什麼這兩句不能隨手改字：** 它們是模型讀得到的文字，措辭就是行為。舊註解寫 `repair.ts:106`、`:107`，`8bd0733` 上這兩句在 `:34`、`:35`（`CLOSER_TEXT` 另有一組 `forked` 的句子，nexus 沒有分叉補結，沒用）。`conversation-replay.test.ts` 有一格把兩個常數的完整字面寫死（不引用常數），改字要同時改那格測試，那是刻意的摩擦；其他測試多半引用常數，另有 `apps/harness/src/background-cold-dangling.test.ts:82` 用字面子字串釘了 `interrupted after it was recorded`。
 
 ## 三、續接時把補的事件寫回日誌（照 dsh，少一處）
 
 dsh 的 agent loop 續接時，對停在輪中的日誌，用 `interruptedTurnClosers` 補的事件**寫回日誌**，當成一般批次追加（`packages/core/agent-loop/src/index.ts:800-801`；舊註解寫 `:855-856`、SHA `477b4f4`，`8bd0733` 上在 `:800-801`）。冷讀（只讀不改日誌的查詢）則只在記憶體裡補（`packages/session-query/session-query/src/cold-read.ts:23` 附近，README 寫「persistence is never mutated by a read」）。
 
-nexus 同樣：續接時當掉那一輪的補結寫回日誌（`interrupted-turn.ts`），寫回之後重放讀到的是日誌上那些。沒寫回的在記憶體裡補，有兩種來源：一輪收掉了結果卻沒到齊的、一輪失敗而當場補寫也失敗的、以及舊檔，由 `conversation-replay.ts` 的 `closer` 補；冷讀由 `interrupted-turn.ts` 的 `readColdSession` 補（用 `interruptedTurnClosers`，不經 `closer`）。
+nexus 同樣：續接時當掉那一輪的補結寫回日誌（`interrupted-turn.ts`），寫回之後重放讀到的是日誌上那些。沒寫回的在記憶體裡補，有四種情形：一輪收掉了結果卻沒到齊的、一輪失敗而當場補寫也失敗的、舊檔，這三種由 `conversation-replay.ts` 的 `closer` 補；冷讀由 `interrupted-turn.ts` 的 `readColdSession` 補（用 `interruptedTurnClosers`，不經 `closer`）。
 
-**沒核到：** 舊註解還寫了 dsh 對「合成的『還沒開始』結果沒有對應的 `tool/call`」在不變量檢查上明文放行（`invariant.ts:142-145`）。`8bd0733` 上 `packages/core/session/src/invariant.ts` 不存在，我在 `packages/core/session/src` 底下也沒找到對應的放行，所以這條出處**沒核到**，不當事實引用。nexus 對這種合成結果放行的理由是自己的配對不變量（`invariant.ts`，nexus 那份）。
+**沒核到：** 舊註解還寫了 dsh 對「合成的『還沒開始』結果沒有對應的 `tool/call`」在不變量檢查上明文放行（`invariant.ts:142-145`）。`8bd0733` 上 `packages/core/session/src/invariant.ts` 不存在，在 `packages/core/session/src` 底下用 `git grep -i -E 'synthetic|not.?started'`（`8bd0733`）只找到補結的產生端（`repair.ts`、`index.ts:1390` 等），沒有對應的放行規則，所以這條出處**沒核到**，不當事實引用。nexus 對這種合成結果放行的理由是自己的配對不變量（`invariant.ts`，nexus 那份）。
 
 ## 四、補結掃描遇到 `session/end-seed` 不重設（照 dsh）
 
@@ -49,4 +49,4 @@ dsh 的掃描（`repair.ts:53` 的 `openTurnClosers`）只在 `turn/start`、`tu
 
 ## 六、改 `conversation-replay.ts` 的人要知道的
 
-`session-format.ts` 的 `readerBranch` 以「檔:行號」登記讀方分支（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：`:418` 是摘要缺漏的判斷，`:422` 是 `beforeCall` 兩種順序的判斷），`session-format-fixtures.test.ts` 逐條核錨點。在這個檔上面增減行會讓行號位移，要同批改登記，並在 `apps/harness` 用一般設定與 `vitest.native.config.ts` 各跑一次那支測試。
+`session-format.ts` 的 `readerBranch` 以「檔:行號」登記讀方分支（`conversation-replay.ts` 有兩處，都在 `compaction/summary` 那一支：摘要缺漏的判斷與 `beforeCall` 兩種順序的判斷；行號以 `session-format.ts` 的登記為準），`session-format-fixtures.test.ts` 逐條核錨點。在這個檔上面增減行會讓行號位移，要同批改登記，並在 `apps/harness` 用一般設定與 `vitest.native.config.ts` 各跑一次那支測試。
