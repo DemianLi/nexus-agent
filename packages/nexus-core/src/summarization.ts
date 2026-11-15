@@ -1768,6 +1768,9 @@ function withCompactionLog(
  * pressure 路徑（`packages/compaction/compaction-basic/src/index.ts:163-173`）。基座的縮短只改請求、不進 graph state，所以換回請求就是
  * 全部。記過的縮短在交給基座之前就換上去了，照樣生效。
  *
+ * **查找拋了、或日誌上記過的縮短讀不出來，不吞，原錯往外拋、這一步失敗**：吞了的話基座照縮、這一層不記，模型看到縮短的、日誌沒有；
+ * 基座的縮短發生在這一層裡面，撤不回來。
+ *
  * @param base - 外一層（已包過 {@link withCompactionLog}）。
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param report - 記不進去時的 warn。
@@ -1785,22 +1788,16 @@ function withArgTruncationLog(
     ...base,
     wrapModelCall: (request, handler) => {
       let before: readonly BaseMessage[] = request.messages ?? [];
-      let lookup: SessionLookup | undefined;
-      try {
-        lookup = sessions.forCall({
-          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-        });
-        if (lookup.kind === 'ok') {
-          before = applyRecordedArgTruncations(before, recordedArgTruncationsOf(lookup.log.events));
-        }
-      } catch {
-        lookup = undefined;
+      const found = sessions.forCall({
+        configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+      });
+      if (found.kind === 'ok') {
+        before = applyRecordedArgTruncations(before, recordedArgTruncationsOf(found.log.events));
       }
-      const found = lookup;
       const forwarded =
         before === request.messages ? request : { ...request, messages: [...before] };
       return inner(forwarded as typeof request, (sent) => {
-        if (found?.kind !== 'ok') return handler(sent);
+        if (found.kind !== 'ok') return handler(sent);
         const calls = newlyTruncatedArgs(before, sent.messages ?? []);
         if (calls.length === 0) return handler(sent);
         try {
