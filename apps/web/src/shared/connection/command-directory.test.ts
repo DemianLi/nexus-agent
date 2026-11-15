@@ -1,7 +1,7 @@
 import type { SlashDescriptor } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CommandDirectory } from '@/features/composer/command-directory';
+import { CommandDirectory } from '@/shared/connection/command-directory';
 
 /**
  * 一條 thread 的命令清單（#1929），照 dsh `CommandDirectory` 的生命週期：重連丟掉重抓、失敗清空、送出時 strong-wait。

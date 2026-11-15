@@ -104,7 +104,8 @@ import {
   toolSummary,
   toolTitle,
 } from '@/features/tool';
-import { planOutcomeOf, submittedPlanOf, type PlanOutcome } from '@/features/plan';
+import { planOutcomeOf, type PlanOutcome } from '@/features/plan';
+import { submittedPlanOf } from '@/shared/connection/plan-document';
 import {
   ASK_USER_QUESTION,
   answersOfText,

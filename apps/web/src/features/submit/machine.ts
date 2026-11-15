@@ -10,8 +10,7 @@
 import type { SubmitGesture } from '@/features/composer';
 import { retainedSuffix, toMention } from '@/features/composer';
 import type { MentionAgent } from '@/features/composer';
-import { FEEDBACK_COMMAND_LINE } from '@/features/feedback';
-import { commandToken } from '@/features/queue';
+import { FEEDBACK_COMMAND_LINE, commandToken } from '@/shared/connection/command-line';
 import type { PendingRequest, Sentence } from '@/shared/connection/request-id';
 import { requestIdFor } from '@/shared/connection/request-id';
 import type {

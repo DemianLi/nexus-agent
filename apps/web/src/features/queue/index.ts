@@ -7,11 +7,4 @@ export {
   steerAll,
 } from './steer-queue';
 export { pendingAgentText, pendingSteerText, pendingSteers } from './steer-view';
-export {
-  canRunSlash,
-  canSendText,
-  commandToken,
-  namesCommand,
-  settledNoticeText,
-  steerableItems,
-} from './view';
+export { canRunSlash, canSendText, namesCommand, settledNoticeText, steerableItems } from './view';

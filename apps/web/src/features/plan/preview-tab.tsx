@@ -6,7 +6,7 @@
 import type { Ref } from 'react';
 
 import { MarkdownText } from '@/shared/markdown/text';
-import type { PlanDocument } from '@/features/plan/review-view';
+import type { PlanDocument } from '@/shared/connection/plan-document';
 
 export function PlanPreviewTab({ plan, ref }: { plan: PlanDocument; ref?: Ref<HTMLElement> }) {
   return (

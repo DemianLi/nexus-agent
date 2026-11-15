@@ -57,7 +57,8 @@ import {
 } from '@/features/transcript/earlier-pager';
 import type { EarlierHistory } from '@/features/transcript/earlier-pager';
 import { MarkdownText } from '@/shared/markdown/text';
-import { PlanToolCard, EXIT_PLAN_MODE } from '@/features/plan';
+import { PlanToolCard } from '@/features/plan';
+import { EXIT_PLAN_MODE } from '@/shared/connection/plan-document';
 import { ReasoningRow } from '@/shared/blocks/reasoning-row';
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import {

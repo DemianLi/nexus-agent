@@ -3,7 +3,7 @@ import { appendAnswers, appendDecision, emptyConversation, reduceAll } from '@ne
 import { describe, expect, it } from 'vitest';
 
 import { transcriptItems } from '@/features/deliverable/view';
-import { EXIT_PLAN_MODE } from '@/features/plan/review-view';
+import { EXIT_PLAN_MODE } from '@/shared/connection/plan-document';
 import { PRESENT } from '@/features/deliverable/present-view';
 import { ASK_USER_QUESTION } from '@/features/question/view';
 import type { GroupedItem } from '@/features/transcript/tool-runs';

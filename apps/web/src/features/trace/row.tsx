@@ -22,7 +22,8 @@ import { memo } from 'react';
 
 import { CompactionRow } from '@/shared/blocks/compaction-row';
 import { MarkdownText } from '@/shared/markdown/text';
-import { PlanToolCard, EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/features/plan';
+import { PlanToolCard, PLAN_OUTCOME_LABEL } from '@/features/plan';
+import { EXIT_PLAN_MODE } from '@/shared/connection/plan-document';
 import { ReasoningRow } from '@/shared/blocks/reasoning-row';
 import { CallRow } from '@/features/trace/call';
 import { ExpandableLine, SnapshotBlock, StaticLine } from '@/features/trace/lines';

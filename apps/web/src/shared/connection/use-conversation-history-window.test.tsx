@@ -4,7 +4,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JUMP_PAGE_MESSAGES, useConversation } from '@/shared/connection/use-conversation';
-import type { PlanScanOutcome } from '@/features/plan/review-view';
+import type { PlanScanOutcome } from '@/shared/connection/plan-document';
 import { THREAD_PROTOCOL_ERROR_PAGE_TEXT } from '@/shared/connection/thread-protocol-error';
 import { Script } from '@/test/conversation-frames';
 

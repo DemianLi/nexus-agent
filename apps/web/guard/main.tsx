@@ -171,7 +171,8 @@ import {
   SUBAGENT_MAX_TOKENS_REASON,
 } from '@/features/tool/max-tokens-view';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/features/question/view';
-import { planDocument, planReviewOf } from '@/features/plan/review-view';
+import { planReviewOf } from '@/features/plan/review-view';
+import { planDocument } from '@/shared/connection/plan-document';
 import { serverClock } from '@/shared/connection/server-clock';
 import type { SubagentUsageLoader } from '@/features/cost/subagent-usage';
 import { Script } from '@/test/conversation-frames';

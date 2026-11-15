@@ -5,15 +5,13 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeCommandDefinition } from '@nexus/core';
 import type { CommandDefinition } from '@nexus/core';
-import { parseCommand, runsWhileBusy } from '@nexus/plugin-commands';
+import { runsWhileBusy } from '@nexus/plugin-commands';
 import { SETTLE_REASONS } from '@nexus/wire';
 import type { ConversationStatus, SlashDescriptor, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
-  commandArm,
-  commandToken,
   namesCommand,
   slashRunsWhileBusy,
   GOAL_CONTINUATION_TEXT,
@@ -163,40 +161,6 @@ const FIND = {
   find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
 };
 
-describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () => {
-  // 拿 `@nexus/plugin-commands` 真的 `parseCommand` 對照同一批輸入：認命令的文法在 web 分岔了就紅。
-  it.each([
-    '/plan',
-    ' /plan ',
-    '/plan off',
-    '/plan\toff',
-    '/plan\noff',
-    '/plan\u3000off',
-    '/plan\u3000',
-    '/planning',
-    '/Plan',
-    '/plan-b',
-    '/plan_b',
-    '/9plan',
-    '/計劃',
-    '/plan/off',
-    '/usr/bin 是什麼',
-    '/',
-    '',
-    'plan',
-    '說 /plan',
-  ])('%j', (line) => {
-    expect(commandToken(line)).toBe(parseCommand(line.trim())?.name);
-  });
-
-  it('對照組裡兩種結果都有', () => {
-    expect(commandToken('/plan off')).toBe('plan');
-    expect(commandToken('/plan\u3000off')).toBe('plan');
-    expect(commandToken('/planning')).toBe('planning');
-    expect(commandToken('/計劃')).toBeUndefined();
-  });
-});
-
 describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2 (a)）', () => {
   it('清單上的名字是命令，前後空白不計', () => {
     expect(namesCommand(COMMANDS, '/plan')).toBe(true);
@@ -218,26 +182,6 @@ describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2
   it('沒宣告 input 的命令只有整行是 /名字 才是命令；帶了字就是一句話（#1971，dsh matchEnter `:361`）', () => {
     expect(namesCommand(COMMANDS, ' /compact ')).toBe(true);
     expect(namesCommand(COMMANDS, '/compact 留下最近三輪')).toBe(false);
-  });
-});
-
-describe('commandArm：命令走哪一路（#1971，dsh matchEnter）', () => {
-  it.each([
-    ['/plan', 'claim'],
-    ['/plan off', 'claim'],
-    ['/plan\u3000off', 'claim'],
-    [' /goal 把登入改好 ', 'claim'],
-    ['/goal pause', 'claim'],
-    ['/compact', 'detached'],
-    [' /compact\t', 'detached'],
-    ['/compact\u3000', 'detached'],
-    ['/compact 留下最近三輪', undefined],
-    ['/compact\n留下', undefined],
-    ['/deploy 今天', undefined],
-    ['/compacting', undefined],
-    ['說 /compact', undefined],
-  ] as const)('%j → %s', (line, arm) => {
-    expect(commandArm(COMMANDS, line)).toBe(arm);
   });
 });
 

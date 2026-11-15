@@ -12,6 +12,7 @@ import type { TranscriptFork } from '@/features/transcript/transcript';
 import type { Conversation } from '@/shared/connection/use-conversation';
 import type { ChangesStores } from '@/features/changes';
 import type { DeliverableDownloader } from '@/features/deliverable';
+import type { Feedback } from '@/features/feedback';
 
 /**
  * 對話區的中段：還沒有任何一則就是空白頁，否則是對話紀錄，連同它讀的三個 context（會話引用、送出過的圖、子代理）。
@@ -23,6 +24,7 @@ import type { DeliverableDownloader } from '@/features/deliverable';
  */
 export function ConversationBody({
   conversation,
+  feedback,
   isFresh,
   hasSteers,
   sessionLinks,
@@ -34,6 +36,8 @@ export function ConversationBody({
   fileDrop,
 }: {
   readonly conversation: Conversation;
+  /** 評分與回饋對話框，由組裝層從 `useFeedback` 傳進來。 */
+  readonly feedback: Feedback;
   readonly isFresh: (id: string) => boolean;
   readonly hasSteers: boolean;
   readonly sessionLinks: SessionReferenceLinks;
@@ -62,12 +66,12 @@ export function ConversationBody({
             deliverableDownload={deliverableDownload}
             {...(fork === undefined ? {} : { fork })}
             feedback={{
-              ratings: conversation.ratings,
+              ratings: feedback.ratings,
               busy: !conversation.connected,
-              loadFailed: conversation.ratingsLoadFailed,
-              unsupported: conversation.ratingsUnsupported,
-              onSeed: conversation.seedRatings,
-              onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+              loadFailed: feedback.ratingsLoadFailed,
+              unsupported: feedback.ratingsUnsupported,
+              onSeed: feedback.seedRatings,
+              onRate: (messageId, rating) => void feedback.rate(messageId, rating),
             }}
             {...(conversation.history === undefined
               ? {}

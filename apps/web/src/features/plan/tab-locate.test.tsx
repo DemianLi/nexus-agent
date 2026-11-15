@@ -16,8 +16,8 @@ import {
 import { useRightSidebar } from '@/shared/right-sidebar/context';
 import { createConversationStore } from '@/shared/connection/conversation-store';
 import type { WritableConversationStore } from '@/shared/connection/conversation-store';
-import { planDocument } from '@/features/plan/review-view';
-import type { PlanScanOutcome } from '@/features/plan/review-view';
+import { planDocument } from '@/shared/connection/plan-document';
+import type { PlanScanOutcome } from '@/shared/connection/plan-document';
 import { LAYOUT_KEY_PREFIX } from '@/shared/right-sidebar/layout';
 import type { SidebarLayout } from '@/shared/right-sidebar/layout';
 import { Script } from '@/test/conversation-frames';

@@ -10,9 +10,6 @@ import type { ConversationStatus, PlanModePayload } from '@nexus/wire';
  * @module
  */
 
-/** 退出就是打 `/plan off`，走跟打字送出同一條 `slash.run`。 */
-export const PLAN_EXIT_LINE = '/plan off';
-
 /** 標籤上的字。 */
 export const PLAN_CHIP_TEXT = '計劃模式';
 
