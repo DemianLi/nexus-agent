@@ -65,7 +65,13 @@ import { createStepInboxMiddleware } from './step-inbox.js';
 /** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則、檔案工具的組態（`tool-fs`，#1605）與描述。 */
 export type SubagentGraphParams = Pick<
   FoldedAgentParams,
-  'subagents' | 'model' | 'backend' | 'permissions' | 'fileTools' | 'fileToolDescriptions'
+  | 'subagents'
+  | 'model'
+  | 'backend'
+  | 'permissions'
+  | 'fileTools'
+  | 'fileToolDescriptions'
+  | 'patchToolCallsStateFix'
 >;
 
 /**
@@ -177,6 +183,9 @@ export function compileSubagentGraph(
       ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
       ...(params.fileToolDescriptions !== undefined && {
         fileToolDescriptions: params.fileToolDescriptions,
+      }),
+      ...(params.patchToolCallsStateFix !== undefined && {
+        patchToolCallsStateFix: params.patchToolCallsStateFix,
       }),
     }),
     // 背景版插話載體（#858）：host 經 `configurable` 交 handle 進來才有作用，沒交就什麼都不做。

@@ -695,6 +695,11 @@ describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：
     expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
   });
 
+  test('側欄選項鈕的點擊區是 24×24（本地修改第 86 條）', async () => {
+    const box = await page.locator('[data-guard-focus="sidebar-menu-action"]').boundingBox();
+    expect(box).toMatchObject({ width: 24, height: 24 });
+  });
+
   test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
     expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
   });
