@@ -45,6 +45,7 @@ export const VARIANT_TITLE: Record<ToolVariant, string> = {
  * - 委派子代理的 `subagent`（預設關，開了之後模型視野裡取代 `task`）：標題表有，同 `task`。
  * - 背景子代理的三顆管理工具 `list_agents`、`interrupt_agent`、`send_message`（名字照 dsh，#737）：純文字結果，標題表有，不做專屬卡。
  * - 子代理選模型的 `list_subagent_models`（有政策才有，#877）：同上，純文字、只有標題。
+ * - 從會話日誌讀回被摘要原文的 `history_read`、`history_search`（#2777）：純文字結果，分類之外標題表也有，不做專屬卡。
  * - 標題表另含 `@nexus/plugin-sandbox-policy` 的 `request_sandbox_escalation`。
  */
 const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
@@ -52,6 +53,8 @@ const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
   read_file: 'read',
   glob: 'search',
   grep: 'search',
+  history_read: 'read',
+  history_search: 'search',
   write_file: 'write',
   edit_file: 'edit',
   execute: 'bash',
@@ -84,6 +87,8 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   // 同核准面板的名稱（#1292）：同一件事只有一種說法，改字只改 `lib/sandbox-escalation.ts`。
   [SANDBOX_ESCALATION_TOOL]: ESCALATION_TITLE,
   submit_record: '提交紀錄',
+  history_read: '讀回被摘要的原文',
+  history_search: '搜尋被摘要的原文',
 };
 
 export function classifyTool(name: string): ToolVariant {
