@@ -704,6 +704,20 @@ body {
     opacity: 1;
   }
 
+  /* Tailwind 的 `outline-hidden` 在高對比下不是拿掉外框，而是畫一圈 2px 的透明外框（瀏覽器再把它換成系統色）。它原本是給
+     `focus:outline-hidden` 用的，vendor 卻無條件掛在選單項、指令項、側欄列上，結果沒選中的每一項都有一圈框，選中的反而不好認。
+     這裡把它拿掉，用 `:where()` 不帶 specificity：選取、面、焦點外框那幾條照樣贏。`guard/` 量每個測試頁上不是選取、不是面、
+     沒聚焦的元素都沒有外框。 */
+  :where(.outline-hidden) {
+    outline-style: none;
+  }
+
+  /* `command-item` 帶 Tailwind 的 `outline-hidden`，它在高對比下自己給 `outline-offset: 2px`（utilities layer，贏過下面 base layer 的往內縮），
+     外框就畫到清單的捲動容器外面被裁掉。這一項的 offset 寫在 layer 外。`guard/` 量選取的外框有沒有超出會裁切的祖先。 */
+  [data-slot='command-item'][data-selected='true'] {
+    outline-offset: -2px;
+  }
+
   @layer base {
     [data-slot='command-item'][data-selected='true'],
     [data-slot='message-scroller-item'][data-located],
