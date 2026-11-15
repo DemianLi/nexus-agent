@@ -16,6 +16,7 @@
  * @module
  */
 
+import { readingEvent } from './event-read-error.js';
 import { nexusContent } from './nexus-message.js';
 import type { ContentBlock, MessageContent, NexusMessage } from './nexus-message.js';
 import { snapshotJsonValue } from './session-log.js';
@@ -78,6 +79,7 @@ export type RecordedPrunes = ReadonlyMap<string, RecordedPrune>;
  *
  * @param events - 日誌事件，照 `seq` 排。
  * @returns 沒有 `compaction/prune` 就是空 Map。
+ * @throws 某一顆 `compaction/prune` 的內容讀不出來，見 {@link recordPruneInto}。
  */
 export function recordedPrunesOf(events: readonly SessionEvent[]): RecordedPrunes {
   const recorded = new Map<string, RecordedPrune>();
@@ -88,12 +90,16 @@ export function recordedPrunesOf(events: readonly SessionEvent[]): RecordedPrune
 /**
  * 把一顆事件記的剪法收進 `recorded`，規則同 {@link recordedPrunesOf}（後記的蓋前記的）。不是 `compaction/prune` 就不動。
  * 給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ *
+ * @throws 這顆事件的內容讀不出來：訊息帶事件種類與 `seq`，`cause` 是原錯（{@link readingEvent}）。
  */
 export function recordPruneInto(recorded: Map<string, RecordedPrune>, event: SessionEvent): void {
   if (event.type !== 'compaction/prune') return;
-  for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
-    recorded.set(result.callId, { originalChars: result.originalChars, content: result.content });
-  }
+  readingEvent(event, () => {
+    for (const result of (event as SessionEvent<'compaction/prune'>).data.results) {
+      recorded.set(result.callId, { originalChars: result.originalChars, content: result.content });
+    }
+  });
 }
 
 /**
