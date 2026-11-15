@@ -626,6 +626,97 @@ fn second_stop_signal_kills_at_once() {
     assert!(h.audit_line("t,ignore-term").contains("\"signal\":9"));
 }
 
+/// 等前台回 `admission-stopped` 的那一段再收到停止訊號：這時停機還沒開始收對話行程，被當場殺掉的照樣是停機收的，
+/// 回 `down(shutdown)`、稽核記 `shutdown`，不算成 `crash`（#2827）。
+#[test]
+fn a_second_stop_signal_before_the_front_answers_is_down_shutdown() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    h.up("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    kill(h.pid(), libc::SIGINT);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+    let line = h.audit_line("\"thread\":\"a\"");
+    assert!(
+        line.contains("\"cause\":\"shutdown\"") && line.contains("\"signal\":9"),
+        "{line}"
+    );
+}
+
+/// 等前台回答的那一段自己結束的對話行程不是停機收的：照樣是 `crash`。死因在決定殺的那一刻才記，不是停機一開始就全部記成 `shutdown`。
+#[test]
+fn a_conversation_that_dies_by_itself_before_the_front_answers_is_a_crash() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    let thread = "a,wait-go,exit:3";
+    let a = h.up(thread);
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    std::fs::write(format!("{}.go", a.display()), b"").unwrap();
+    assert_eq!(h.down_of(thread), DeathCause::Crash);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+}
+
+/// 已經被逐出、還在收的對話行程（不理 EOF 與 SIGTERM），停機中再收到停止訊號時被當場殺掉：死因還是原來的 `evicted`，不被蓋成 `shutdown`。
+#[test]
+fn a_second_stop_signal_keeps_the_cause_of_a_conversation_already_being_collected() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        eof_grace_ms: 600_000,
+        term_grace_ms: 600_000,
+        extra: vec!["--capacity", "1", "--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    let thread = "a,idle:1000,ignore-term";
+    let a = h.up(thread);
+    h.ensure("b");
+    assert!(wait_until(|| log(&a).contains(&"eof".to_string())));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    loop {
+        let event = h.event();
+        let last = event == FrontEvent::StopAdmission;
+        events.push(event);
+        if last {
+            break;
+        }
+    }
+    kill(h.pid(), libc::SIGINT);
+    loop {
+        let event = h.event();
+        let last = matches!(&event, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes());
+        events.push(event);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(
+        events.last(),
+        Some(&FrontEvent::Down {
+            thread_id: thread.as_bytes().to_vec(),
+            cause: DeathCause::Evicted
+        }),
+        "{events:?}"
+    );
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+    let line = h.audit_line("\"thread\":\"a,idle:1000,ignore-term\"");
+    assert!(
+        line.contains("\"cause\":\"evicted\"") && line.contains("\"signal\":9"),
+        "{line}"
+    );
+}
+
 #[test]
 fn ensure_during_shutdown_is_answered_with_shutdown() {
     let mut h = Harness::start(Options {
@@ -3279,6 +3370,35 @@ fn a_leaf_ready_on_the_control_channel_does_not_bind() {
     shut_down(&mut h);
     let binds = log(&leaf).iter().filter(|line| *line == "bind a").count();
     assert_eq!(binds, 1, "{:?}", log(&leaf));
+}
+
+/// 一對在等前台回 `admission-stopped` 的那一段被第二次停止訊號當場殺掉：組合行程與葉子的稽核都是 `shutdown`，這條 thread 只回一次 `down(shutdown)`（#2827）。
+#[test]
+fn a_second_stop_signal_before_the_front_answers_collects_a_pair_as_shutdown() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..paired()
+    });
+    h.up("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    kill(h.pid(), libc::SIGINT);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.next_event(), None);
+    assert!(h.wait_exit().success());
+    let pair: Vec<String> = h
+        .audit()
+        .into_iter()
+        .filter(|line| line.contains("\"pair\":1,"))
+        .collect();
+    assert_eq!(pair.len(), 2, "{pair:?}");
+    assert!(
+        pair.iter()
+            .all(|line| line.contains("\"cause\":\"shutdown\"")),
+        "{pair:?}"
+    );
 }
 
 /// 等到稽核裡有第 `serial` 對起動逾時的樣子：組合行程那一行是 `stalled`、帶逾時的 `error`；`with_leaf` 時它後面是葉子連帶收的那一行，
