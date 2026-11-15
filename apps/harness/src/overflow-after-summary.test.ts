@@ -129,13 +129,13 @@ async function converse(overflowOn: number) {
 }
 
 describe('第一次已經摘要過、送出去端點還是回超窗', () => {
-  // 第 1 輪：呼叫 1。第 2 輪：呼叫 2 是摘要、呼叫 3 是摘要之後的請求——在這裡超窗；
-  // 升級之後呼叫 4 是 retain 0 的摘要、呼叫 5 是重送。
+  // 第 1 輪：呼叫 1。第 2 輪：呼叫 2、3 是摘要（索引條目、現況），呼叫 4 是摘要之後的請求——在這裡超窗；
+  // 升級之後呼叫 5、6 是 retain 0 的摘要，呼叫 7 是重送。
   it('日誌兩筆都在、推導與實送逐呼叫相等；state 的訊息串沒動；歷史檔一個區段', async () => {
-    const { events, shared, afterTurn } = await converse(3);
+    const { events, shared, afterTurn } = await converse(4);
 
-    // 前提：真的走到了升級（第 4 次呼叫是摘要，第 5 次是重送）。
-    expect(shared.calls).toBe(5);
+    // 前提：真的走到了升級（第 5、6 次呼叫是摘要，第 7 次是重送）。
+    expect(shared.calls).toBe(7);
 
     // 1. 日誌
     const summaries = events.filter((event) => event.type === 'compaction/summary');

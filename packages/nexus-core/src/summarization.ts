@@ -27,22 +27,20 @@
  *
  * 實測（#142 的留言）：`trigger: { fraction, 0.0001 }` 六輪一次都沒觸發；
  * `keep: { fraction, 0.1 }` 則是每一輪都重新摘要、一則逐字訊息都不留。**兩個都不警告、
- * 不拋。** 而 dsh 的預設答案（`thresholdRatio` 0.8 / `retainRatio` 0.16）正是比例形式,
- * 照抄過來會踩中其中一個。
+ * 不拋。**
  *
  * 所以 {@link SummarizationThreshold} 的 `type` **在型別層就沒有 `'fraction'` 這個值**，
  * 另外配一道執行期檢查（{@link resolveSummarizationSettings}）擋住繞過型別的呼叫端。
  *
- * ## 偏離登記（AGENTS.md 的規則）
+ * ## 基座表達得出、表達不出的
  *
- * dsh 把壓縮做成一個能力 seam：`ctx.compaction` 有四個動詞、有 provider、有載入期驗證的
- * `modelPolicies`、有 `compaction/start`→`summary`→`end` 三個日誌事件與一把括住整個操作
- * 的鎖。deepagents 給的是**一個寫死的 middleware**。
+ * deepagents 給的是**一個寫死的 middleware**。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 28、29 節。
  *
  * - **表達得出來的**：按模型選門檻（就是這個檔）、每個 subagent 都吃到同一份
  *   （`foldSubAgents` 打底）、歷史去處是獨立的一格（`backend` 參數）。
- * - **部分表達得出來的**：事件三連退成**一顆**（`compaction/summary`，見
- *   {@link withCompactionLog}）。鎖與 `start`／`end` 表達不出來——摘要器（照基座流程的引擎，`summarizer-engine.ts`）
+ * - **部分表達得出來的**：壓縮在日誌上只有**一顆**事件（`compaction/summary`，見
+ *   {@link withCompactionLog}），沒有 `start`／`end`，也沒有括住整個操作的鎖——摘要器（照基座流程的引擎，`summarizer-engine.ts`）
  *   在一次 `wrapModelCall` 裡生摘要、交下去，沒有「開始壓縮」這個可觀測的時刻，硬記一顆
  *   `start` 只能記在我們的猜測上。登記在
  *   [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
@@ -50,29 +48,25 @@
  *   [#149](https://github.com/DemianLi/nexus-agent/issues/149)、
  *   [#150](https://github.com/DemianLi/nexus-agent/issues/150)。
  *
- *   ⚠️ **最後一項的理由要修正。** 這裡原本寫的是「`overflow` / `context_length` /
- *   `contextWindow` 三個字串在整份 dist 裡零命中」——那句話字面上還是真的（三個都是 0），
- *   但**由它推出的「沒有任何恢復路徑」是錯的**。2026-09-04 重新查證：`ContextOverflowError`
- *   （`@langchain/core/errors`）在 dist 裡有 5 處，`isContextOverflow` 沿著 `cause` 鏈認它，
- *   而摘要器有一條**緊急摘要**的恢復路徑掛在上面（`dist/langsmith-zm0ILQsV.js:3126`、
+ *   最後一項不是因為基座沒有恢復路徑（2026-09-04 重新查證）：`overflow` / `context_length` / `contextWindow` 三個字串在整份
+ *   dist 裡零命中，但 `ContextOverflowError`（`@langchain/core/errors`）在 dist 裡有 5 處，`isContextOverflow`
+ *   沿著 `cause` 鏈認它，而摘要器有一條**緊急摘要**的恢復路徑掛在上面（`dist/langsmith-zm0ILQsV.js:3126`、
  *   `:3151`、`:3168`、`:3225`）。分類靠的是**型別化的錯誤**，不是字串嗅探。
- *   還沒查的是「我們的 `ChatOpenAI` 會不會真的拋出那個型別」——那正是 #150 的題目，
- *   它不該從一個錯的前提開始。
- * - **退到最接近的實作**：dsh 的門檻是比例（吃得到窗口大小），我們退到它提供的另一個
- *   形式——絕對值（`retainTokens` 那條路）。代價是那個數字**手維護**，所以配了一條絆索：
+ *   還沒查的是「我們的 `ChatOpenAI` 會不會真的拋出那個型別」——那正是 #150 的題目。
+ * - **門檻用絕對值**：比例形式要吃得到窗口大小（`profile.maxInputTokens`，見上一節），所以配置的門檻是
+ *   絕對值（`tokens` 那條路）。代價是那個數字**手維護**，所以配了一條絆索：
  *   模型解得出 `maxInputTokens` 的那天要紅。
  *
  * ## 摘要的提示詞（[#432](https://github.com/DemianLi/nexus-agent/issues/432)）
  *
  * 基座預設的 `DEFAULT_SUMMARY_PROMPT` 只要「主話題、關鍵決策、必要背景」，沒有一個字保護使用者
- * 的原意與糾正。dsh 的 `COMPACTION_INSTRUCTION`
- * （`packages/compaction/compaction-basic/src/summarizer.ts`，`5badb15`）是八段固定結構，第一段
+ * 的原意與糾正。{@link SUMMARY_INSTRUCTION} 是八段固定結構，第一段
  * 「Primary Request and Intent」要求逐字引用、第四段「Errors and Fixes」連同使用者的回饋，規則裡
- * 還有「忠實保留指示，尤其是糾正」。{@link SUMMARY_INSTRUCTION} 取它的文字，**用英文**（dsh 明寫要英文，
- * 這是給模型讀的，不是給 demian 讀的）。**沒有把「是哪一版提示詞」寫進日誌**：dsh 的
- * `compaction/summary` 也沒有這一格，指令是程式碼常數，事件記的是那次呼叫的信封。
+ * 還有「忠實保留指示，尤其是糾正」。**用英文**：這是給模型讀的，不是給 demian 讀的。
+ * **沒有把「是哪一版提示詞」寫進日誌**：指令是程式碼常數，`compaction/summary` 記的是那次呼叫的信封。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 18、31 節。
  *
- * ### 與 dsh 的差，各自的理由（AGENTS.md 的偏離規則）
+ * ### 形狀與標籤
  *
  * - **形狀：歷史從日誌推時重播，其餘是模板**（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。
  *   重播：系統訊息與工具、原訊息到切點為止、最後一則是 {@link SUMMARY_INSTRUCTION}，所以那次摘要呼叫是上一次主請求的
@@ -81,18 +75,19 @@
  *   （{@link ./last-sent-request.ts}）。`state`、`shadow` 送出去的是 graph state 的訊息，日誌推出來的那一串不保證與它
  *   相同（shadow 量的正是這個差），照模板：對話用 `getBufferString` 攤成一個字串放在前、指令在後。模板那一次的輸入
  *   按全價算。
- * - **前一次摘要的標籤。** dsh 認 `<compacted-summary>`；我們的是基座 `buildSummaryMessage` 包的：有
+ * - **前一次摘要的標籤。** 前一次摘要是基座 `buildSummaryMessage` 包的：有
  *   `filePath` 時是一段前言加 `<summary>…</summary>`，**沒有**（offload 失敗）時只有
  *   「Here is a summary of the conversation to date:」一句，不包標籤。所以那條規則兩種都要認。
+ *
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 19、20 節。
  *
  * ### 摘要輸出 fail-closed（[#1539](https://github.com/DemianLi/nexus-agent/issues/1539)）
  *
  * 基座的 `createSummary` 只取回覆的 `.text`，不看結束原因、不看是否為空、不看有沒有圖：被截斷的半份、全空白、只有推理、
- * 夾了圖的摘要都會被換上去。dsh 的 `summarizeWithLlm` 對這幾種一律拒收（`compaction-basic/src/summarizer.ts:164-171`、
- * `:196-221`，`687f282e`）。我們在 {@link quietInvoke} 拿得到完整的那則 `AIMessage`，在那裡照同樣的順序檢查，拋
- * {@link SummaryRejectedError}，走 #1374 既有的退路。不是偏離：dsh 判的是組好的區塊與 `FinishReason`，我們判的是
- * `response_metadata.finish_reason` 與 `content`。圖片區塊 dsh 只認 `type === 'image'`（`llm/src/content.ts:126-128`）；
- * LangChain 的圖片另有 OpenAI 形狀的 `image_url`，兩種都認是同一個語意。
+ * 夾了圖的摘要都會被換上去。我們在 {@link quietInvoke} 拿得到完整的那則 `AIMessage`，在那裡對這幾種一律拒收：
+ * 依序檢查結束原因、圖片、有沒有文字（判的是 `response_metadata.finish_reason` 與 `content`），拋
+ * {@link SummaryRejectedError}，走 #1374 既有的退路。圖片區塊除了 `type === 'image'`，LangChain 的圖片另有 OpenAI
+ * 形狀的 `image_url`，兩種都認是同一個語意。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 23 節。
  *
  * ⚠️ **基座的 `{conversation}` 替換有一個已知的小缺陷，我們這層擋不住**：`createSummary` 用
  * `String.prototype.replace(字串, 字串)`，替換字串裡的 `$&`、`` $` ``、`$'`、`$$` 會被當成特殊樣式解讀。
@@ -154,7 +149,12 @@ import {
   withSummaryCutoffs,
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
-import { createSummarizerEngine } from './summarizer-engine.js';
+import {
+  createSummarizerEngine,
+  summaryBodyOf,
+  SummaryStateTooLongError,
+} from './summarizer-engine.js';
+import { parseSummaryHead } from './summary-head.js';
 import type { SessionRequest, SummaryCall } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
@@ -224,13 +224,13 @@ export const SUMMARY_INSTRUCTION = [
 /**
  * 交給基座 `summaryPrompt` 的模板（[#432](https://github.com/DemianLi/nexus-agent/issues/432)）。
  *
- * {@link SUMMARY_INSTRUCTION} 的文字照 dsh 的 `COMPACTION_INSTRUCTION`，**只動三處**，理由見檔頭「摘要的提示詞」：
+ * 前面接一段 `{conversation}`，後面接 {@link SUMMARY_INSTRUCTION}，理由見檔頭「摘要的提示詞」。模板有三個約束：
  *
- * 1. 前面接一段 `{conversation}`。基座**只換第一個** `{conversation}`，所以指令本文裡一個都不能有。
- * 2. 「PRIOR checkpoint」那條規則改認我們的包法（`<summary>` 與「Here is a summary…」兩種）。
+ * 1. 基座**只換第一個** `{conversation}`，所以指令本文裡一個都不能有。
+ * 2. 「PRIOR checkpoint」那條規則認我們的包法（`<summary>` 與「Here is a summary…」兩種）。
  * 3. 分隔線讓「ABOVE」指到那一段。
  *
- * 前六條規則、八個段落與 `(none)` 的寫法都是 dsh 的原句，改了就不是 #432 要的東西。
+ * 前四條規則（第五條是 PRIOR checkpoint）、八個段落與 `(none)` 的寫法，改了就不是 #432 要的東西。
  */
 export const SUMMARY_PROMPT = [
   'Conversation to condense:',
@@ -267,14 +267,13 @@ export interface ModelContextLimits {
   readonly maxOutputTokens: number;
 }
 
-/** 窗口的幾成當上限：dsh 的 `thresholdRatio` 預設（`compaction-basic/src/config.ts`，`DEFAULT_THRESHOLD_RATIO`）。 */
+/** 窗口的幾成當上限。 */
 export const WINDOW_THRESHOLD_RATIO = 0.8;
 
 /**
  * 這顆模型能撐的 `tokens` 門檻上限：`floor(min(窗口 × 0.8, 窗口 − 輸出上限))`，至少 1。
  *
- * 照 dsh `resolveCompactSpec`（`compaction-basic/src/config.ts:153-200`，`5badb15`）的 `min(contextWindow × thresholdRatio,
- * contextWindow − 保留的輸出 − headroom)`，**少一項 headroom**（見 {@link effectiveTrigger} 的登記）。
+ * **不扣 headroom**，理由見 {@link effectiveTrigger}。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 1、2 節。
  */
 export function windowThreshold(limits: ModelContextLimits): number {
   return Math.max(
@@ -293,18 +292,18 @@ export function windowThreshold(limits: ModelContextLimits): number {
  *
  * ## 為什麼要逐步算
  *
- * 換模型之後窗口跟著換（#723）。dsh 的壓縮每次檢查都向路由後的模型問窗口（`compaction-basic/src/index.ts:305-318` 的
- * `resolveModelInfo(target.provider, target.model)`），所以門檻跟著當步的模型走；我們照做。
+ * 換模型之後窗口跟著換（#723），所以每次檢查都用這一步路由後那顆的窗口，門檻跟著當步的模型走。
  *
- * ## 與 dsh 的偏離（登記）
+ * ## 怎麼夾
  *
- * - **配置的絕對值留著當上限，只往下夾。** dsh 的門檻只由窗口導出（沒有絕對值）。我們的 `100_000` 是量出來的（見
+ * - **配置的絕對值留著當上限，只往下夾。** 門檻不只由窗口導出：我們的 `100_000` 是量出來的（見
  *   {@link DEFAULT_SUMMARIZATION}：最小那顆 131,007 塞得進、預設那顆 784k 偏保守），拿掉它預設模型的摘要時機會從 10 萬跳到約 63 萬，
  *   是另一個行為決定。所以窗口只負責「更小的窗口不會來不及」，**預設模型與 131k 級的模型門檻不變**。
- * - **沒有型錄的模型不夾**：dsh 對解不出窗口的目標會 warn 一次然後不壓縮（`TargetPressureConfigError`，`index.ts:163-170`）；我們用
- *   配置的絕對門檻接住它，所以 `limits` 是 `undefined` 時原樣回。
- * - **沒有 headroom。** dsh 的 `headroomTokens` 預設 65,536，是為百萬級窗口定的；套在 131k 的窗口上門檻會掉到 49,087，比我們量過
+ * - **沒有型錄的模型不夾**：解不出窗口不等於不壓縮，用配置的絕對門檻接住它，所以 `limits` 是 `undefined` 時原樣回。
+ * - **沒有 headroom。** 再扣一段為百萬級窗口定的 headroom（例如 65,536），套在 131k 的窗口上門檻會掉到 49,087，比我們量過
  *   安全的 100,000 低一半，無謂地多摘要。輸出上限那一項（`窗口 − maxTokens`）已經守住「請求加回應不超過窗口」。
+ *
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 2、3、4、6 節。
  *
  * @param trigger - 配置的門檻。
  * @param limits - 這一步用的模型的上限；不知道（沒貼型錄的模型）就原樣回。
@@ -322,13 +321,13 @@ export function effectiveTrigger(
   );
 }
 
-/** 保留量的比例預設：dsh 的 `DEFAULT_RETAIN_RATIO`（`compaction-basic/src/config.ts:23`）。 */
+/** 保留量的比例預設：占訊息預算（窗口 − 輸出上限）的幾成。 */
 export const RETAIN_RATIO = 0.16;
 
 /**
  * 封頂比例：token 保留量封在有效 `tokens` 門檻的這一成（{@link retainTokensFor}），尾巴則數封在最小 `messages` 門檻的這一成
  * （出廠 12 則；配對工具呼叫時可能多留，見 {@link retainedMessageCount}）。大窗口上照比例算出的保留量會超過 100,000 的絕對
- * 門檻（預設那顆 109,385），靠這一項壓回門檻之下；90b（窗口 32,768）上這一項是 5,242，高於照比例的 4,587，不生效。
+ * 門檻（出廠預設那顆 122,877），靠這一項壓回門檻之下；90b（窗口 32,768）上這一項是 5,242，高於照比例的 4,587，不生效。
  */
 export const RETAIN_THRESHOLD_CAP_RATIO = 0.2;
 
@@ -339,7 +338,7 @@ export const RETAIN_FALLBACK_MESSAGES = 20;
  * 這一步摘要之後要逐字留下的 token 數。
  *
  * `min(wanted, cap)`：
- * - `wanted`：`retainTokens` 照給；`retainRatio` 是 `floor((窗口 − 輸出上限) × 比例)`，要型錄（dsh 的訊息預算）；
+ * - `wanted`：`retainTokens` 照給；`retainRatio` 是 `floor((窗口 − 輸出上限) × 比例)`，要型錄（窗口 − 輸出上限即訊息預算）；
  * - `cap`：`floor(有效 tokens 門檻 × 0.2)`（{@link RETAIN_THRESHOLD_CAP_RATIO}），見該常數的說明。
  *
  * @param retain - 設定上的 `retainRatio` 或 `retainTokens`（只有一個有值）。
@@ -366,7 +365,7 @@ export function retainTokensFor(
 }
 
 /**
- * 摘要之後要留的尾巴有幾則。照 dsh `selectCompactableRange`（`compaction-basic/src/region.ts:133-148`）：
+ * 摘要之後要留的尾巴有幾則（與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 7、10 節）：
  *
  * 1. 從最新往前累加，到 **≥** `retainTokens` 為止，**跨過的那則也留**——所以至少留一則，最新一則再大也不會一則不留
  *    （基座的 `tokens` 形式會，見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節）；
@@ -495,10 +494,10 @@ export interface SummarizationSettings {
   readonly trigger: readonly SummarizationThreshold[];
   /**
    * 摘要之後最近這些逐字留下，**用比例**：占這顆模型訊息預算（窗口 − 輸出上限）的幾成。與 {@link retainTokens} 擇一。
-   * 照 dsh `compaction-basic` 的 `retainRatio`；實際留多少見 {@link retainTokensFor}。
+   * 實際留多少見 {@link retainTokensFor}。
    */
   readonly retainRatio?: number;
-  /** 摘要之後最近這些逐字留下，**用 token 數**。與 {@link retainRatio} 擇一。照 dsh 的 `retainTokens`。 */
+  /** 摘要之後最近這些逐字留下，**用 token 數**。與 {@link retainRatio} 擇一。 */
   readonly retainTokens?: number;
   /** 工具參數截斷。 */
   readonly truncateArgs: SummarizationArgTruncation;
@@ -517,13 +516,9 @@ export interface SummarizationSettings {
  *
  * ## `trigger`：兩道並聯，都是絕對值
  *
- * **`tokens: 100_000` 原本是一個帶假設的常數，2026-09-04 那個假設被量到了。**
- * 它的來歷是「窗口至少 128k（模型卡上的數字）」取八成再往下取整——八成這一格照 dsh 的
- * `thresholdRatio` 0.8。當時真實窗口在我們這棵樹裡取不到（`gpt-oss` 在整個
- * `node_modules/.pnpm/` 零命中），所以那一句寫的是「未經實測」。
- *
- * **現在都量到了，最大最小差五倍以上**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，
- * 做法見 `apps/harness/src/live-model.ts` 的 `DEFAULT_LIVE_MODEL_ID` 檔頭）：
+ * **`tokens: 100_000` 的依據是量到的窗口，最大最小差五倍以上**（2026-09-04，
+ * [#165](https://github.com/DemianLi/nexus-agent/issues/165)，做法見 `apps/harness/src/live-model.ts` 的
+ * `DEFAULT_LIVE_MODEL_ID` 檔頭；`gpt-oss` 在整個 `node_modules/.pnpm/` 零命中，真實窗口在這棵樹裡取不到）：
  *
  * | 模型 | 量到的窗口 | `100_000` 佔它 |
  * | --- | --- | --- |
@@ -531,8 +526,7 @@ export interface SummarizationSettings {
  * | `nvidia/nemotron-3-super-120b-a12b` | **≥ 700,045** | 14% |
  * | `nvidia/nemotron-3.5-lightning-30b-a3b`（今天的預設） | **≥ 784,369** | 13% |
  *
- * **值不改，但理由換了。** 它不再是「假設 128k 取八成」，而是「量過的最小那一顆是
- * 131,007，而 100,000 塞得進去」。塞得進去的餘裕有多少要扣掉輸出：那條路恆定送
+ * **理由是「量過的最小那一顆是 131,007，而 100,000 塞得進去」。** 塞得進去的餘裕有多少要扣掉輸出：那條路恆定送
  * `DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384`，所以最小那一顆的**輸入**上限其實是 114,623，
  * 而 100,000 離它只有 **14,623** 的餘裕。這是量過的最緊的一格，不是全部——**窗口是逐顆
  * 的性質，不是端點的性質**，同一個端點上這兩顆差五倍。換模型要重量一次。
@@ -550,9 +544,9 @@ export interface SummarizationSettings {
  * 長任務會摘要一次，正常的基準任務（最長 3 次工具呼叫）碰不到它。serve 每輪四格只有 23 輪，
  * 單次 invoke 湊不到 60 則（2026-10-02 實測最多 51 則），要靠同一條 thread 後面幾輪累積才碰得到。
  *
- * **#1374 之後，則數到了不等於會摘要。** 保留量改成 token（下一節），則數到 60 時尾巴若裝得下整串（出廠是 20,000 token），
- * 基座切不出東西、原樣送出。所以這一道實際的意思是「則數 ≥ 60 **而且**訊息本身超過保留量」——訊息短的對話不會在第 60 則摘要
- * （PM 在 #1374 驗收時列為已知、刻意的變化；2026-10-14 發版模擬實測到 70 則、整份請求約 33k token，一次都沒摘、
+ * **則數到了不等於會摘要**（#1374）。保留量是 token（下一節），則數到 60 時尾巴若裝得下整串（出廠是 20,000 token），
+ * 基座切不出東西、原樣送出。所以這一道實際的意思是「則數 ≥ 60 **而且**訊息本身超過保留量」——訊息短的對話不會在第 60 則摘要，
+ * 這是刻意的（2026-10-14 發版模擬實測到 70 則、整份請求約 33k token，一次都沒摘、
  * serve 也沒有任何「摘要失敗」——每一步都是尾巴蓋住全部）。
  * 剪刀的閘門跟著這個意思走，見 {@link isUnderCompactionPressure}。
  *
@@ -563,14 +557,13 @@ export interface SummarizationSettings {
  *
  * ## 保留量：`retainRatio` 0.16，依這一步的模型算 token（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）
  *
- * 這一格原本叫 `keep`，是 20 則。**則數不是尺**：小窗口模型（32,768）上每則 3,000 字，20 則自己就 30,342 token，
- * 比它的門檻還大——摘要完下一步又過門檻，每一步都重摘。dsh 的 `compaction-basic` 每個目標模型有
- * `retainTokens`／`retainRatio`（互斥，`config.ts:292`），所以現在照辦：
+ * **保留量用 token，不用則數。則數不是尺**：小窗口模型（32,768）上每則 3,000 字，20 則自己就 30,342 token，
+ * 比它的門檻還大——摘要完下一步又過門檻，每一步都重摘。所以保留量是 `retainTokens`／`retainRatio` 兩者擇一（互斥）：
  *
- * - **留多少**：`retainTokensFor`——`min(floor((窗口 − 輸出上限) × retainRatio), floor(有效 token 門檻 × 0.2))`。前一項是 dsh
- *   的公式；後一項是**登記的偏離**：我們的 100,000 絕對門檻讓 dsh 的值（預設那顆 109,385）超過門檻，dsh 的載入期驗證
- *   （`retainTokens < thresholdTokens`，`config.ts:198`）會當場不過，所以封在門檻的兩成。
- * - **怎麼選尾巴**：照 dsh `selectCompactableRange`（`region.ts:133-140`）——從最新往前累加到 **≥** 保留量，跨過的那則也留；
+ * - **留多少**：`retainTokensFor`——`min(floor((窗口 − 輸出上限) × retainRatio), floor(有效 token 門檻 × 0.2))`。前一項照比例算；
+ *   後一項封頂：我們的 100,000 絕對門檻下，照比例算出的值（出廠預設那顆 122,877）會超過門檻，而保留量要壓在門檻之下（否則摘完尾巴自己就過門檻，下一步又觸發，每一步都摘，#1374），
+ *   所以封在門檻的兩成。
+ * - **怎麼選尾巴**：從最新往前累加到 **≥** 保留量，跨過的那則也留；
  *   再往前退到「工具呼叫與它的結果沒被切開」的位置。基座的 `{type:'tokens'}` 是反過來的（加上去會超過就切，最新一則自己
  *   就超過時**一則不留**，`langsmith-zm0ILQsV.js:2872`），而且用的是 `countTokensApproximately`，所以不用它。
  * - **誰來切**：基座的 `keep` 在建構時就定了，不能每次請求換，而 `fraction` 要偽造 `profile.maxInputTokens`（見上面
@@ -580,11 +573,12 @@ export interface SummarizationSettings {
  * 沒型錄的模型（`limitsOf` 回 `undefined`）只剩後一項；連 token 門檻都沒有（只有 `messages` 門檻）就退回
  * {@link RETAIN_FALLBACK_MESSAGES} 則。
  *
- * **端點真的回超窗時不用這個保留量**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)）：dsh 的 overflow 路徑
- * 繞過保留政策、`selectCompactableRange(session, measurement, 0)` 只留配對需要的尾巴（`index.ts:262`、`:294`），
- * `retainTokens` 只用在 pressure 路徑。我們的兩條觸發走同一顆基座，所以由 {@link withRetainedTail} 分開：**真超窗**（錯誤鏈上
- * 第一顆 `ContextOverflowError` 不在我們合成的 WeakSet 裡）換上 retain 0 的實例、現在就摘要；**我們自己合成的預算超窗**
- * 保留量照常。
+ * **端點真的回超窗時不用這個保留量**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)）：那時繞過保留政策、
+ * 只留工具呼叫與結果配對需要的尾巴（保留 0）；保留量只用在我們自己的門檻觸發。兩條觸發走同一顆基座，所以由
+ * {@link withRetainedTail} 分開：**真超窗**（錯誤鏈上第一顆 `ContextOverflowError` 不在我們合成的 WeakSet 裡）換上 retain 0
+ * 的實例、現在就摘要；**我們自己合成的預算超窗**保留量照常。
+ *
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 7、8、10、11 節。
  *
  * ## `truncateArgs`：顯式寫出來，是為了**保住**基座本來的行為
  *
@@ -672,8 +666,8 @@ function assertCompactionRetries(value: unknown): void {
 }
 
 /**
- * 保留量的執行期檢查：兩個擇一、數值合理。`retainRatio` 要小於窗口門檻的比例（dsh 的 `validateRatioRetention`，
- * `config.ts:235`）；`retainTokens` 是非負整數（`config.ts:291`），0 的意思是「只留跨過的那一則」。
+ * 保留量的執行期檢查：兩個擇一、數值合理。`retainRatio` 要小於窗口門檻的比例（{@link WINDOW_THRESHOLD_RATIO}）；
+ * `retainTokens` 是非負整數，0 的意思是「只留跨過的那一則」。
  */
 function assertRetain(settings: {
   readonly retainRatio?: number;
@@ -884,7 +878,7 @@ export type SentHistoryReader = (log: SessionLog, subagent?: boolean) => BaseMes
 
 /**
  * 生摘要的那一次呼叫重播上一次主請求（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）：上一次送出的系統訊息與
- * 呼叫選項（工具）、日誌推出來的原訊息到切點為止，最後接一則 {@link SUMMARY_INSTRUCTION}。這樣它是上一次主請求的前綴，
+ * 呼叫選項（工具）、日誌推出來的原訊息到切點為止，最後接一則指令（`instruction`，省略是 {@link SUMMARY_INSTRUCTION}）。這樣它是上一次主請求的前綴，
  * 供應商的前綴快取才對得上。
  *
  * 回 `undefined`（呼叫端照模板送）的情形：找不到這次呼叫的日誌；這份日誌在這個行程裡沒有可重播的上一次請求（行程重啟後的
@@ -902,8 +896,9 @@ function replayedSummaryCall(
   request: SessionRequest,
   messagesToSummarize: readonly BaseMessage[],
   total: number,
+  instruction?: string,
 ) => SummaryCall | undefined {
-  return (request, messagesToSummarize, total) => {
+  return (request, messagesToSummarize, total, instruction = SUMMARY_INSTRUCTION) => {
     try {
       const found = sessions.forCall({ configurable: request.runtime?.configurable });
       if (found.kind !== 'ok') return undefined;
@@ -915,7 +910,7 @@ function replayedSummaryCall(
       if (prefix.some((message, at) => message.getType() !== messagesToSummarize[at]!.getType()))
         return undefined;
       return {
-        input: [...last.system, ...prefix, new HumanMessage({ content: SUMMARY_INSTRUCTION })],
+        input: [...last.system, ...prefix, new HumanMessage({ content: instruction })],
         options: last.options,
       };
     } catch {
@@ -1099,11 +1094,11 @@ const SUMMARY_CALL_TAG = 'nostream';
  * {@link summaryImageText}。基座再把請求交下去時（留下的那幾則給主模型），**換回原本那幾則**：留下的訊息裡有圖，
  * 主模型還要看，那一步是 `ChatOpenAI` 子類（`apps/harness`）依模型能力投影，不是這裡。
  *
- * ## 與 dsh 的偏離（AGENTS.md 的規則）
+ * ## 圖為什麼是文字
  *
- * dsh 的摘要器把圖當圖重播給摘要模型（`packages/compaction/compaction-basic/src/summarizer.ts:105-152`，`5badb150`；
- * 檔案換成 handle 那一行，與這裡相同）。我們的摘要輸入是基座的 `getBufferString` 範本、輸入是一段字串，表達不出
- * 「一則帶圖的訊息」，所以圖退到文字佔位。檔案那一行逐字相同。
+ * 照模板生摘要時，輸入是基座 `getBufferString` 攤成的一段字串，表達不出「一則帶圖的訊息」，所以圖退到文字佔位；
+ * 檔案換成一行 handle 文字。重播那條（{@link replayedSummaryCall}）的原訊息從日誌推，不經這一層的投影。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 21、22 節。
  *
  * @param base - 基座那顆摘要器。
  * @returns 同名、同狀態、摘要輸入裡附件是文字的 middleware。沒有附件時請求原樣通過。
@@ -1144,16 +1139,32 @@ function withAttachmentText(base: AgentMiddleware): AgentMiddleware {
 }
 
 /**
- * 生摘要那一次呼叫報回的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}
+ * 生一份摘要的那幾次呼叫（索引條目、現況）報回的用量加總（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}
  * 放一格，內層 {@link quietInvoke} 的替身在 `invoke` 回來時填。兩層是分開的 middleware，沒有共同的區域變數，
  * 所以用 `AsyncLocalStorage` 把格子帶進去（同 {@link ./model-call-scope.ts} 的 `captureModelCall`）。
  */
 interface SummaryUsageCell {
   usage: ModelUsage | undefined;
-  /** 最近完成的那一次生摘要花了多久（毫秒，含它自己的重試），見 `compaction/summary` 的 `durationMs`。 */
+  /** 上一筆 `compaction/summary` 記完之後各次呼叫花的時間加總（毫秒，含各自的重試），見 `compaction/summary` 的 `durationMs`。 */
   durationMs: number | undefined;
   /** 生摘要的模型呼叫完成過幾次。{@link withCompactionLog} 靠它認得「交下去的這一份剛摘要過」。 */
   summaries: number;
+  /** 上一筆 `compaction/summary` 記完之後完成過幾次；`usage` 與 `durationMs` 是這幾次的加總。 */
+  pending: number;
+}
+
+function sumModelUsage(a: ModelUsage, b: ModelUsage): ModelUsage {
+  const optional = (x: number | undefined, y: number | undefined): number | undefined =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  const cacheReadTokens = optional(a.cacheReadTokens, b.cacheReadTokens);
+  const cacheWriteTokens = optional(a.cacheWriteTokens, b.cacheWriteTokens);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+  };
 }
 const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
 
@@ -1180,19 +1191,16 @@ const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
  * tags 只蓋掉從父層繼承的那一格 `tags`，callbacks 照樣從父層來（`ensureConfig`），父層 callback manager 上的可繼承
  * tags 也還在，所以那次呼叫照樣被計量、照樣歸在同一份日誌。
  *
- * ## 與 dsh 的偏離（AGENTS.md 的規則）
- *
- * dsh 的摘要走 `ctx.llm.stream`（`purpose: 'compaction'`），在自己那一層組 chunk
- * （`packages/compaction/compaction-basic/src/summarizer.ts`，`46a7f68`），本來就不經過對話紀錄的串流。我們的
- * 摘要呼叫長在基座的 middleware 裡、跟主模型共用一條 callback 鏈，表達不出「另起一條不上線的呼叫」。
- * 退到最接近的：同一次呼叫，貼一個串流層認得的標記。結果一樣：摘要文字不進對話，只以 `compaction/summary`
- * 那一顆存在。
+ * **為什麼是貼標記，不是另起一條呼叫**：摘要呼叫長在基座的 middleware 裡、跟主模型共用一條 callback 鏈，表達不出
+ * 「另起一條不上線的呼叫」，所以是同一次呼叫，貼一個串流層認得的標記。結果：摘要文字不進對話，只以 `compaction/summary`
+ * 那一顆存在。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 26 節。
  *
  * ## 生摘要用哪一顆（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)）
  *
- * **門檻跟選中那顆（偏離 dsh，#1378 登記、PM 接受），生摘要跟最近一次已送出的請求那顆（照 dsh `summarizer.ts:127-137` 的
- * `latest ?? agentTarget`）。** 替身的 `invoke` 轉給 `summaryModelOf` 挑的那顆；其餘屬性仍讀 `request.model`（基座讀它的
+ * **門檻跟選中那顆（[#1378](https://github.com/DemianLi/nexus-agent/issues/1378)），生摘要跟最近一次已送出的請求那顆。**
+ * 替身的 `invoke` 轉給 `summaryModelOf` 挑的那顆；其餘屬性仍讀 `request.model`（基座讀它的
  * `profile`）。`summaryModelOf` 沒給或回 `undefined`＝摘要打到 `request.model`，與沒有模型選擇的組裝一樣。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 5、27 節。
  *
  * @param base - 基座那顆摘要器。
  * @param summaryModelOf - 這次生摘要用哪一顆；省略＝`request.model`。
@@ -1238,14 +1246,20 @@ function withQuietSummaryCall(
               }),
             },
       );
-      return inner({ ...request, model: quiet }, (sent) => {
-        const restored = sent.model === quiet ? { ...sent, model } : sent;
-        if (generated > checked) {
-          checked = generated;
-          assertSummaryShrinks(request, sent);
-          afterSummary?.(restored);
-        }
-        return handler(restored);
+      return Promise.resolve(
+        inner({ ...request, model: quiet }, (sent) => {
+          const restored = sent.model === quiet ? { ...sent, model } : sent;
+          if (generated > checked) {
+            checked = generated;
+            assertSummaryShrinks(request, sent);
+            afterSummary?.(restored);
+          }
+          return handler(restored);
+        }),
+      ).catch((error: unknown) => {
+        // 現況過長是引擎自己拋的，不經 `quietInvoke`：在這裡登記成「生摘要失敗」，外面才走照原請求送出的退路。
+        if (error instanceof SummaryStateTooLongError) summaryCallFailures.add(error);
+        throw error;
       });
     },
   } as AgentMiddleware;
@@ -1273,17 +1287,16 @@ export class SummaryNotSmallerError extends Error {
 }
 
 /**
- * dsh 的 shrink 檢查（`compaction-basic/src/region.ts:417-420`）：摘要生出來、提交之前，框好的摘要訊息要**比它取代的那段小**，
+ * shrink 檢查：摘要生出來、提交之前，框好的摘要訊息要**比它取代的那段小**，
  * 不然整次壓縮不提交。擋的是壓了反而變大或沒變小的壓縮。照保留量切時，切點前只剩舊摘要那一類在 {@link retainedMessageCount}
  * 就判成摘不到、不會到這裡；端點超窗、保留量降到 0 時仍可能走到。
  *
  * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架與歷史檔路徑）。
  * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link applySummaryCutoff}），去掉交下去那份留下的尾巴。
- * - **兩邊同一把量具**：{@link estimateMessageTokens}。**偏離 dsh**：它用 route price（`meter.estimateMessage` 對 `shadowedRouteTokenCount`），
- *   我們沒有逐路由的計價，退到這把與保留量選尾巴同一把的估算（#1383 的 D3 同一個理由）。被取代那段取的是參數截斷之前的有效串，
- *   所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。
+ * - **兩邊同一把量具**：{@link estimateMessageTokens}，與保留量選尾巴同一把的估算；我們沒有逐路由的計價（同 #1383 的理由）。
+ *   被取代那段取的是參數截斷之前的有效串，所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。
  *
- * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。
+ * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 16、17 節。
  *
  * 累加到超過框好的摘要就放行，不量完那段：那段被剪過的工具結果是新字串，全量是一次冷編碼，而被取代的內容之後不再送出。
  *
@@ -1315,7 +1328,10 @@ function assertSummaryShrinks(
   throw error;
 }
 
-/** {@link SummaryRejectedError} 的原因。前兩個與 dsh 同名；`EMPTY_SUMMARY` 在 dsh 只有訊息沒有碼，這裡給名字讓測試與 warn 認得。 */
+/**
+ * {@link SummaryRejectedError} 的原因。每一種都有碼，讓測試與 warn 認得。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 23 節。
+ */
 export type SummaryRejectedCode = 'MAX_TOKENS' | 'UNSUPPORTED_CONTENT' | 'EMPTY_SUMMARY';
 
 const SUMMARY_REJECTED_MESSAGES: Readonly<Record<SummaryRejectedCode, string>> = {
@@ -1341,8 +1357,7 @@ export class SummaryRejectedError extends Error {
 const IMAGE_BLOCK_TYPES: ReadonlySet<string> = new Set(['image', 'image_url']);
 
 /**
- * dsh `summarizeWithLlm` 對摘要輸出的 fail-closed（`compaction-basic/src/summarizer.ts:164-171`、`:196-221`），順序也照它：
- * 結束原因、圖片、有沒有文字。
+ * 摘要輸出的 fail-closed，依序判：結束原因、圖片、有沒有文字。
  *
  * **鴨子型別**：測試替身回的是 `{ text }`，沒有 `response_metadata` 也沒有 `content`。沒有 `response_metadata` 就不判截斷；
  * 沒有 `content` 就退回讀 `.text`。
@@ -1360,7 +1375,7 @@ function summaryRejection(result: unknown): SummaryRejectedCode | undefined {
   const { content } = message;
   const blocks: readonly unknown[] = Array.isArray(content) ? content : [];
   if (blocks.some((block) => IMAGE_BLOCK_TYPES.has(blockType(block)))) return 'UNSUPPORTED_CONTENT';
-  // 只取文字區塊（同 dsh 的 `summaryText`）：只有推理的輸出在這裡是空的。
+  // 只取文字區塊：只有推理的輸出在這裡是空的。
   const texts =
     typeof content === 'string'
       ? [content]
@@ -1491,7 +1506,7 @@ function withRetainedTail(
       }
       const keepMessages = suppressed ? SUPPRESSED_CHAIN : retained;
       const normal = keepMessages === SUPPRESSED_CHAIN ? keepMessages : Math.max(1, keepMessages);
-      // 端點真的回超窗：照 dsh 的 overflow 路徑（`compaction-basic/src/index.ts:262`、`:294`）繞過保留政策，retain 取 0，
+      // 端點真的回超窗：繞過保留政策，retain 取 0，
       // 只留工具呼叫與結果配對需要的尾巴（#1381）。**我們合成的預算超窗不算**：那不是端點說的，保留量照常。
       // 已經是最小尾巴（`zero >= normal`）時不用換，基座自己的緊急摘要就是這個保留量。
       const zero = suppressed ? undefined : Math.max(1, retainedTailCount(view, 0));
@@ -1533,7 +1548,7 @@ const summaryCallFailures = new WeakSet<object>();
 
 /**
  * `compaction/summary` 記不進去：包成一顆「生摘要失敗」的錯（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），
- * 由 {@link withTokenBudget} 走 dsh 的 pressure／overflow 兩條路。見 {@link withCompactionLog}。
+ * 由 {@link withTokenBudget} 分門檻觸發／端點超窗兩條路處理。見 {@link withCompactionLog}。
  *
  * @param error - `append` 拋的錯，放進 `cause`。
  * @returns 登記過的錯。
@@ -1547,7 +1562,7 @@ function summaryLogFailure(error: unknown): Error {
   return failure;
 }
 
-/** 我們自己（{@link withTokenBudget}）合成的預算超窗：不是端點說的，不走 dsh 的 overflow 路徑。 */
+/** 我們自己（{@link withTokenBudget}）合成的預算超窗：不是端點說的，不走端點超窗那條路（保留量照常）。 */
 const syntheticOverflows = new WeakSet<object>();
 
 /**
@@ -1658,8 +1673,8 @@ function quietInvoke<T extends object>(
           if (typeof error === 'object' && error !== null) summaryCallFailures.add(error);
           throw error;
         }
-        // 摘要輸出 fail-closed（#1539）：在重試外面檢查，拒收的不重打（同 dsh，摘要那次呼叫不經步級重試）；
-        // 也在記用量之前，被拒收的那次不記（dsh 只在成功時回 usage）。
+        // 摘要輸出 fail-closed（#1539）：在重試外面檢查，拒收的不重打；
+        // 也在記用量之前，被拒收的那次不記。
         const rejected = summaryRejection(result);
         if (rejected !== undefined) {
           const error = new SummaryRejectedError(rejected);
@@ -1669,8 +1684,16 @@ function quietInvoke<T extends object>(
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
         if (cell !== undefined) {
-          cell.usage = readModelUsage(result);
-          cell.durationMs = Math.round(performance.now() - startedAt);
+          // 一份摘要是好幾次呼叫（索引條目、現況，#2776）：用量與耗時加總，其中一次沒報用量就整份沒有。
+          const usage = readModelUsage(result);
+          cell.usage =
+            cell.pending === 0
+              ? usage
+              : cell.usage === undefined || usage === undefined
+                ? undefined
+                : sumModelUsage(cell.usage, usage);
+          cell.durationMs = (cell.durationMs ?? 0) + Math.round(performance.now() - startedAt);
+          cell.pending += 1;
           cell.summaries += 1;
         }
         onGenerated?.();
@@ -1711,11 +1734,11 @@ function quietInvoke<T extends object>(
  * `compaction/summary` 在呼叫之前記，呼叫失敗了事件也已經在日誌上，之後的請求失敗不會收回它。切點表也一樣：這一步拋錯時照樣落定，
  * 下一次呼叫接著這個切點、不重摘，跟日誌上最後一筆一致。
  *
- * ## 範圍怎麼表示：與 dsh 的偏離
+ * ## 範圍怎麼表示
  *
- * dsh 在摘要事件後面緊接一顆 `user/message {surfaceOp: replace}`，用 `shadowedRange`／`shadowedSeqs` 蓋住被壓的範圍。
- * **我們沒有 surface 這一軸**（`conversation-replay.ts` 檔頭），表達不出「蓋住一段 seq」。退到最接近的：仍是一顆
+ * **我們沒有 surface 這一軸**（`conversation-replay.ts` 檔頭），表達不出「蓋住一段 seq」。所以只有一顆
  * `compaction/summary`，範圍用原始訊息串的切點 `cutoffIndex` 表達，推導端據此切。
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 30 節。
  *
  * ## 為什麼是包住它，而不是一顆新 middleware
  *
@@ -1762,7 +1785,12 @@ function withCompactionLog(
   return {
     ...base,
     wrapModelCall: (request, handler) => {
-      const cell: SummaryUsageCell = { usage: undefined, durationMs: undefined, summaries: 0 };
+      const cell: SummaryUsageCell = {
+        usage: undefined,
+        durationMs: undefined,
+        summaries: 0,
+        pending: 0,
+      };
       let logged = 0;
       const effective = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
@@ -1771,6 +1799,11 @@ function withCompactionLog(
           // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
           if (cell.summaries > logged) {
             logged = cell.summaries;
+            const usage = cell.usage;
+            const durationMs = cell.durationMs;
+            cell.usage = undefined;
+            cell.durationMs = undefined;
+            cell.pending = 0;
             const summary = sent.messages?.[0];
             if (summary !== undefined && isSummarizationMessage(summary)) {
               const cutoffIndex = summaryCutoffIndex(
@@ -1792,10 +1825,10 @@ function withCompactionLog(
                     messagesBefore: (request.messages ?? []).length,
                     filePath,
                     summary: toLoggedMessage(summary),
-                    // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
-                    ...(cell.usage === undefined ? {} : { usage: cell.usage }),
+                    // 生這份摘要的那幾次呼叫報的用量加總（#1022）：其中一次沒報、報得對不上就不放 key。**不進 `model/usage`**。
+                    ...(usage === undefined ? {} : { usage }),
                     beforeCall: true,
-                    ...(cell.durationMs === undefined ? {} : { durationMs: cell.durationMs }),
+                    ...(durationMs === undefined ? {} : { durationMs }),
                   });
                 } catch (error) {
                   // 不叫 `handler`：這次摘要不生效。見上面「記不進去，這次摘要不生效」。
@@ -1827,8 +1860,8 @@ function withCompactionLog(
  *    包的是傳給基座的 `handler`，理由與 {@link withCompactionLog} 同：記在那次模型呼叫之前，而且在同一次呼叫的 `compaction/summary` 之後。
  *
  * **記不進去，這次的縮短不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：講一條 warn，把新縮短的那幾則換回
- * 交給基座之前的原訊息再交下去（{@link restoreNewlyTruncatedArgs}），模型看到的跟日誌一致，這一輪照常繼續——照 dsh 自動壓縮的
- * pressure 路徑（`packages/compaction/compaction-basic/src/index.ts:163-173`）。基座的縮短只改請求、不進 graph state，所以換回請求就是
+ * 交給基座之前的原訊息再交下去（{@link restoreNewlyTruncatedArgs}），模型看到的跟日誌一致，這一輪照常繼續。
+ * 基座的縮短只改請求、不進 graph state，所以換回請求就是
  * 全部。記過的縮短在交給基座之前就換上去了，照樣生效。
  *
  * **查找拋了、或日誌上記過的縮短讀不出來，不吞，原錯往外拋、這一步失敗**：吞了的話基座照縮、這一層不記，模型看到縮短的、日誌沒有；
@@ -1930,6 +1963,33 @@ function splitMessageTokens(
   };
 }
 
+/**
+ * 補上 `summaryIndexTokens`：`summaryTokens` 裡屬於索引（`<index>…</index>`）的那一截，照它在摘要訊息文字裡佔的字元比例分
+ * （無條件捨去）。現況連同前言是 `summaryTokens` 減它。
+ *
+ * @param parts - {@link splitMessageTokens} 分好的四格。
+ * @param messages - 這份請求的訊息。
+ * @returns 四格加 `summaryIndexTokens`；摘要沒有索引時是 `0`。請求裡沒有摘要訊息就不加這一格。
+ */
+function withSummaryIndexTokens(
+  parts: ReturnType<typeof splitMessageTokens>,
+  messages: readonly BaseMessage[],
+): ReturnType<typeof splitMessageTokens> & { readonly summaryIndexTokens?: number } {
+  let chars = 0;
+  let indexChars = 0;
+  for (const message of messages) {
+    if (!isSummarizationMessage(message)) continue;
+    chars += message.text.length;
+    const { indexText } = parseSummaryHead(summaryBodyOf(message));
+    if (indexText !== '') indexChars += '<index>\n'.length + indexText.length + '\n</index>'.length;
+  }
+  if (chars === 0) return parts;
+  return {
+    ...parts,
+    summaryIndexTokens: Math.floor((parts.summaryTokens * indexChars) / chars),
+  };
+}
+
 /** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。`skill-catalog.ts` 的 {@link isHumanSpeech} 也用它。 */
 export function isSummarizationMessage(message: BaseMessage): boolean {
   return (
@@ -2009,32 +2069,30 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * **不數成一步**：拋在內層 `handler` 之前，`model-calls.ts` 那顆在更內層，根本沒被叫到；日誌上只有摘要完
  * 送出去的那一對起訖。真的溢出（供應商回的）照舊算兩步。
  *
- * ## 與 dsh 的偏離（AGENTS.md 的規則）
+ * ## 取捨
  *
- * 1. **分子：錨照 dsh，估算器與內容比例不照**，見 {@link ./token-estimate.ts} 的檔頭。dsh 的壓縮與
- *    `contextPressure` 讀同一個 `measure()`，顯示與判準本來就同一個數；我們這一層就是那個「同一個」。
+ * 1. **分子：錨定估算**，估算器與內容比例見 {@link ./token-estimate.ts} 的檔頭。顯示的 `contextPressure` 與摘要判準
+ *    是同一個數，這一層就是那個「同一個」。
  * 2. **觸發借基座的溢出恢復路徑**：基座的判準表達不出錨（沒有注入點），能改變它決定的唯一入口是那條 `catch`。
  *    **絆索**：模型哪天解得出 `profile.maxInputTokens`，那條 `catch` 會拿合成的這顆去調 `tokenEstimationMultiplier`、
  *    也可能走 `compactToolResults`——`summarization.test.ts` 那條「解得出就要紅」的絆索也管這件事。
- * 3. **載體：一顆事件**。dsh 不記這種事件，壓力從 `request/header` 與 surface 投影。我們的日誌不記 system、工具
- *    定義與請求標頭，重建不出這份請求，所以退到只帶量測結果的一顆，同 `model/usage` 那條偏離。**分母也不同**：
- *    dsh 除的是模型窗口，我們除的是摘要門檻（#528 grilling Q2）。
- * 4. **`messagesCompactable` 是 dsh 沒有的一格**（產品需求超出 dsh，#1443）。dsh 的 `ContextPressureProjection`
- *    （`llm/token-meter/src/projection.ts:30-48`，`5719020`）只有 token 數與窗口；「切不切得出東西」只在壓縮內部問
- *    （`selectCompactableRange` 回 `null`，`compaction-basic/src/region.ts:117-155`、`index.ts:299`／`331`／`394`）
- *    與 `/compact` 的回覆裡講（`command-compact/src/index.ts:68`），不進投影。dsh 也沒有 `messages` 門檻（觸發只比 token，
- *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
+ * 3. **載體：一顆事件**。我們的日誌不記 system、工具定義與請求標頭，重建不出這份請求，所以是只帶量測結果的一顆，
+ *    同 `model/usage`。**分母**是摘要門檻，不是模型窗口（#528）。
+ * 4. **`messagesCompactable`**（產品需求，#1443）：「切不切得出東西」進量測事件。`messages` 門檻
+ *    （{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」）成立不等於切得出東西，這一格補的是它的誠實。
  * 5. **`compactionRetries` 只收 0 或 1，重試固定用保留 0**；≥2 在載入時就拒（{@link assertCompactionRetries}）。兩條理由都在
  *    {@link withRetainedTail}：
  *    - 重試交下去的永遠是原請求，換的只有保留量（`chainFor(zero, true)`），再試一次切到的是同一段；
  *    - 保留 0 那一次在 `catch` 裡，外面沒有 `try`，再拋 {@link RetainLessSignal} 會冒過 {@link withTokenBudget}，整輪失敗。
  *
+ * 與 dsh 的對照見 `docs/compaction-vs-dsh.md` 第 14、15、32 節。
+ *
  * ## 量與記都不准拋
  *
  * 唯一刻意拋的是 {@link RetainLessSignal}，見〈摘要完再量一次〉；估不出來時 `afterSummary` 照樣不比、不拋。
  * 估不出來就不比、不記，退回基座自己的 `messages` 門檻。**`context/measure` 記不進去講一條 warn**（`report`），這次呼叫照常回來
- * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702) 歸 (C)）：它不改請求、不改 state，只是量測，跟 dsh 自動壓縮的失敗同一類
- * （`packages/compaction/compaction-basic/src/index.ts:163-173`）。**`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
+ * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702) 歸 (C)）：它不改請求、不改 state，只是量測。
+ * **`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
  *
  * **記的時刻是「下一層正常回來」**：拋錯的那次不記；停止閘門（`turnCancel`）擋下的那一次照記——閘門在更內層，
  * 它回的合成收尾對這裡就是正常回來。`turn-cancel.test.ts` 的委派那條釘著這件事。
@@ -2157,11 +2215,14 @@ function withTokenBudget(
                     toolsTokens: estimate.parts.tools,
                     messageTokens,
                     // 訊息那一格再照類別拆（#2774），四格相加等於 `messageTokens`。
-                    messageParts: splitMessageTokens(
-                      messageTokens,
-                      estimateMessageGroups(sent.messages ?? [], messageKindOf, {
-                        singleDigits: book.singleDigits(modelNameOf(sent.model)),
-                      }),
+                    messageParts: withSummaryIndexTokens(
+                      splitMessageTokens(
+                        messageTokens,
+                        estimateMessageGroups(sent.messages ?? [], messageKindOf, {
+                          singleDigits: book.singleDigits(modelNameOf(sent.model)),
+                        }),
+                      ),
+                      sent.messages ?? [],
                     ),
                   },
                 },
@@ -2194,13 +2255,12 @@ function withTokenBudget(
           if ((error as { name?: unknown }).name === 'AbortError') throw error;
           const reason = error instanceof Error ? error.message : String(error);
           if (endpointOverflow !== undefined) {
-            // 端點真的超窗、摘要也失敗：照 dsh 的 overflow 路徑（`compaction-basic/src/index.ts:205-224`），
-            // 記一條 warn、**保留原本的請求錯誤**，不拿摘要那個錯蓋掉它，也不發明修剪。
+            // 端點真的超窗、摘要也失敗：記一條 warn、**保留原本的請求錯誤**，不拿摘要那個錯蓋掉它，也不發明修剪。
             report(`摘要失敗（端點回超窗後的恢復）：${reason}；保留原本的請求錯誤。`);
             throw endpointOverflow;
           }
-          // 我們自己的門檻（token 預算或訊息數）觸發、摘要失敗：照 dsh 的 pressure 路徑（`index.ts:158-175`，
-          // 「step compaction failed … continuing the turn」）——記一條 warn，照原請求送出去，讓端點自己決定裝不裝得下。
+          // 我們自己的門檻（token 預算或訊息數）觸發、摘要失敗：這一輪照常繼續——
+          // 記一條 warn，照原請求送出去，讓端點自己決定裝不裝得下。
           // 不是任何真的請求錯誤，所以沒有「原錯誤」可保留：拿合成的「摘要預算」那句丟出去只會讓人看不懂。
           report(`摘要失敗（門檻觸發）：${reason}；照原請求送出。`);
           thrown = true;
@@ -2216,7 +2276,7 @@ function withTokenBudget(
               measured,
             );
           } catch (retryError) {
-            // 照原請求送出又碰到端點超窗、基座的緊急摘要又失敗（含摘要記不進去，#1702）：同上面的 overflow 路徑，
+            // 照原請求送出又碰到端點超窗、基座的緊急摘要又失敗（含摘要記不進去，#1702）：同上面端點超窗那條，
             // 保留原本的請求錯誤，不再重摘。
             if (
               endpointOverflow !== undefined &&
@@ -2240,8 +2300,8 @@ function withTokenBudget(
 /**
  * 壓力到了沒。
  *
- * dsh 那側「低于压力的对话绝不被碰」是**呼叫端**的性質——`compaction-basic` 壓力達標才
- * `pruneSession()`。我們的對應就是「摘要器這一輪會不會觸發」，所以這裡跟摘要判準用同一套：`messages` 門檻照抄
+ * 「壓力沒到的對話絕不被剪」是**呼叫端**的性質：剪刀只在壓力到了才動。壓力到了的意思就是「摘要器這一輪會不會觸發」，
+ * 所以這裡跟摘要判準用同一套：`messages` 門檻照抄
  * 基座的 `shouldSummarize`，`tokens` 門檻讀 {@link withTokenBudget} 那個錨定估算（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
  *
  * **估的是還沒剪的那一份**：剪刀在最外層，看到的是原串，錨上的實數是上一次**送出去**（剪過、截過）的那份。
@@ -2256,7 +2316,7 @@ function withTokenBudget(
  * 則數到了，基座才走 `performSummarization`；但保留量改成 token 之後（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)），
  * 尾巴可能蓋住整串，基座算出 `cutoffIndex <= 0`、原樣送出——**這一步不會摘要**。出廠設定下，訊息本身不到 20,000 token
  * 的對話就是這樣（2026-10-14 發版模擬實測：到 70 則、整份請求約 33k token，一次都沒摘）。那時照則數判壓力，剪刀就會在
- * 一個離任何門檻都還很遠的對話上，把每一則大工具結果（包括模型剛查回來的那一則）剪掉中段，正是 dsh「低于压力的对话绝不被碰」
+ * 一個離任何門檻都還很遠的對話上，把每一則大工具結果（包括模型剛查回來的那一則）剪掉中段，正是「壓力沒到的對話絕不被剪」
  * 禁止的事。所以 `messages` 那道多一個條件：{@link retainedMessageCount} 算出的尾巴要比有效串短。
  *
  * `tokens` 那道不加：保留量封在門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），越過門檻時尾巴通常蓋不住全部。例外是 system
@@ -2384,8 +2444,8 @@ export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
  * **同名空殼**——基座無條件建的那顆摘要器靠同名取代才消得掉，真的不掛的話它會補回來。
  * 射程是 root、宣告的 subagent 與 fold 補的 `general-purpose` 各一顆。
  *
- * **這是登記過的偏離**，同前兩顆：dsh 那側 `compaction-basic` 是 base 的一個獨立套件。
- * 我們表達不出來的是「逐個 agent 各建一份」與「同名取代基座那顆」。偏的是載體。
+ * 它是設定條目而不是一顆自帶摘要器的外掛：外掛表達不出「逐個 agent 各建一份」與「同名取代基座那顆」，
+ * 兩件都在 fold 做。
  */
 export const summarizationPlugin: NexusPlugin<SummarizationConfig> = {
   name: SUMMARIZATION_PLUGIN_NAME,

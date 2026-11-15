@@ -312,14 +312,16 @@ describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
     // 工具呼叫前面多一則：切點前是 `[舊摘要, 這一則]`。
     messages.splice(4, 0, new HumanMessage('切點前多一則'));
     const out = await run({ messages, previous, limits: FACTORY_LIMITS });
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
   });
 
   it('後面再來一則撐得過保留量的訊息：切點往前，摘要照常提交', async () => {
     const { messages, previous } = stuck(60);
     messages.push(new HumanMessage('y'.repeat(200_000)));
     const out = await run({ messages, previous, limits: FACTORY_LIMITS });
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     expect(out.committed).toBeDefined();
     expect(out.reports).toEqual([]);
   });
@@ -383,7 +385,8 @@ describe('摘要失敗的處理只認「生摘要那次」', () => {
     });
     expect(out.error).toBe(network);
     expect(out.reports).toEqual([]);
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
   });
 
   it('使用者按停止（AbortError）：不吞、不記 warn', async () => {
@@ -428,7 +431,8 @@ describe('摘要不比被取代的小', () => {
     });
     expect(out.error).toBeUndefined();
     // 摘要真的生出來過（所以才有得比），然後被擋下。
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     // 送出去的是原請求：七則一則沒少，第一則不是摘要。
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]).toHaveLength(7);
@@ -451,7 +455,8 @@ describe('摘要不比被取代的小', () => {
       handlerThrows: (call) => (call === 1 ? endpointError : undefined),
     });
     expect(out.error).toBe(endpointError);
-    expect(out.model.invokes).toBe(1);
+    // 索引條目一次、現況一次。
+    expect(out.model.invokes).toBe(2);
     expect(out.handled).toHaveLength(1);
     expect(out.reports).toHaveLength(1);
     expect(out.reports[0]).toContain('不比被取代');

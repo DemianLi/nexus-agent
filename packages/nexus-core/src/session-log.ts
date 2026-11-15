@@ -1135,10 +1135,10 @@ export interface SessionEventMap {
      */
     readonly beforeCall?: true;
     /**
-     * 生這份摘要的那一次模型呼叫報的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)），照 dsh 的
+     * 生這份摘要的那幾次模型呼叫（索引條目、現況）報的用量加總（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)），照 dsh 的
      * `compaction/summary.usage`（選填）。**不進 `model/usage`、不進總帳**：基座直接 `request.model.invoke` 生摘要，
      * 它不是一次對話呼叫，記進總帳會讓「目前大小」與逐呼叫的歸屬都對不上。要算它的人（#1028）明寫口徑另加。
-     * 沒有這一格 ＝ 沒報、報得對不起來、或舊日誌——**不是 0**。
+     * 沒有這一格 ＝ 其中一次沒報、報得對不起來、或舊日誌——**不是 0**。
      */
     readonly usage?: {
       /** 未快取的輸入（#724，語義同 `model/usage.inputTokens`）。 */
@@ -1149,8 +1149,8 @@ export interface SessionEventMap {
       readonly cacheWriteTokens?: number;
     };
     /**
-     * 生這份摘要的那一次模型呼叫花了多久，毫秒、非負整數（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：從叫生摘要的模型起，
-     * 到它的回覆通過檢查為止，**含這次呼叫自己的重試與退避**。拋錯或被拒收的那一次不記 `compaction/summary`，它花的時間也就不在這裡。
+     * 生這份摘要的那幾次模型呼叫（索引條目、現況）花的時間加總，毫秒、非負整數（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：每一次從叫生摘要的模型起，
+     * 到它的回覆通過檢查為止，**含各次呼叫自己的重試與退避**。拋錯或被拒收的那一次不記 `compaction/summary`，它花的時間也就不在這裡。
      * 沒有這一格 ＝ 沒量（這一格出現以前的日誌），**不是 0**。加它沒有升日誌格式版本，紀錄見
      * `docs/persistence-changes/2026-11-14-compaction-summary-duration.md`。
      */
@@ -1227,6 +1227,14 @@ export interface SessionEventMap {
         readonly injectedTokens: number;
         readonly toolResultTokens: number;
         readonly conversationTokens: number;
+        /**
+         * `summaryTokens` 裡屬於索引（摘要本文的 `<index>…</index>`）的那一截
+         * （[#2776](https://github.com/DemianLi/nexus-agent/issues/2776)），非負整數、不大於 `summaryTokens`；現況連同前言是
+         * `summaryTokens` 減它。照索引在摘要訊息文字裡佔的字元比例分。它**不是第五格**：四格相加等於 `messageTokens` 的規則不變。
+         * 沒有這一格 ＝ 請求裡沒有摘要訊息，或沒拆（這一格出現以前的日誌），不是 `0`。加它沒有升日誌格式版本，紀錄見
+         * `docs/persistence-changes/2026-11-15-context-measure-summary-index.md`。
+         */
+        readonly summaryIndexTokens?: number;
       };
     };
     /**

@@ -23,7 +23,9 @@ import { loadPlugins } from './load.js';
 const TURNS = 24;
 const TOOLS = ['alpha', 'beta', 'gamma'] as const;
 
-/** 腳本模型：摘要請求回摘要並記下是第幾輪；其餘每輪依序呼叫三個工具，再回一則回覆。 */
+/**
+ * 腳本模型：現況的摘要請求回摘要並記下是第幾輪；其餘每輪依序呼叫三個工具，再回一則回覆。
+ */
 class ScriptedModel extends BaseChatModel {
   reply = '';
   turn = 0;
@@ -45,6 +47,10 @@ class ScriptedModel extends BaseChatModel {
     const reply = (message: AIMessage): ChatResult => ({
       generations: [{ message, text: message.text }],
     });
+    // 索引條目那次回一則合格的條目；它不是現況，不記進 `summaries`，也不佔工具步數。
+    if (messages.some((message) => message.text.includes('ONE index entry'))) {
+      return reply(new AIMessage('Title: 索引條目\n- 一行'));
+    }
     if (messages.length === 1 && messages[0]!.text.includes('--- END OF CONVERSATION ---')) {
       this.summaries.push(this.turn);
       this.pending = true;

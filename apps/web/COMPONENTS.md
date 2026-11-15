@@ -195,9 +195,10 @@ pnpm --filter @nexus/web run build
 pnpm --filter @nexus/web run catalog
 ```
 
-寫到 `apps/web/catalog/dist/index.html`，一個檔、直接用瀏覽器開。左邊選頁、右上切亮暗；第一項是全部 token 在亮、暗下的值。檔頭印 commit。
+寫到 `apps/web/catalog/dist/index.html`，一個檔、直接用瀏覽器開。左邊選頁（分組、中文頁名）、右上切亮暗；第一項是全部 token 在亮、暗下的值。檔頭印 commit。
 
 - 內容就是 `guard/` 測試頁的每一個子頁（`guard/main.tsx` 的 `OverlayPage`）加出貨的 CSS，跟護欄量的是同一份。要讓一個元件出現在目錄裡，就在測試頁加一個子頁。
+- 左欄的分組與中文頁名在 `catalog/pages.ts`。測試頁加了子頁要在那裡加一列，漏掉或多出來 `src/components/ui/components-doc.test.ts` 會紅。
 - 存的是畫完之後的 DOM，不帶 JS：hover、聚焦的樣式照常，點了不會有反應；要點才開的浮層只看得到測試頁預設開著的那些。
 - 字型不嵌，退回系統字，字寬跟出貨的略有出入。量尺寸以護欄為準，不以目錄為準。
 

@@ -153,8 +153,12 @@ async function run(
  */
 const USER_PAD = '內容'.repeat(100);
 
-/** 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。 */
-const BODY = '這是一段普通長度的回話。'.repeat(32);
+/**
+ * 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。第一行加上「- 」的兩三行是合格的索引條目，
+ * 所以條目那次不重叫，每次摘要恰好兩次呼叫（條目、現況）。
+ */
+const BODY_LINE = `- ${'這是一段普通長度的回話。'.repeat(10)}`;
+const BODY = ['本段對話', BODY_LINE, BODY_LINE, BODY_LINE].join('\n');
 
 /** subagent 那條用的大回話，每則約 600 token——四五圈就把它自己的串頂過門檻。 */
 const BIG_BODY = '這是一段普通長度的回話。'.repeat(200);
@@ -396,7 +400,8 @@ describe('日誌寫不進去的時候', () => {
       return real.apply(this, args);
     } as SessionLog['append']);
     try {
-      const { root, prompts, rootEvents } = await run(chatter(), {
+      // 每一輪都會試記摘要（失敗），摘要的兩次呼叫（條目、現況）都要有腳本輪可用，所以腳本給長一點。
+      const { root, prompts, rootEvents } = await run(chatter(120), {
         summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
         invocations: 12,
       });
@@ -504,8 +509,9 @@ describe('摘要事件的位置與內容（#1301）', () => {
     );
     expect(summaryTurn).toBeGreaterThan(0);
 
+    // 摘要兩輪（索引條目、現況），摘要之後的主呼叫是第三輪：讓它失敗。
     const turns = chatter(120);
-    turns[summaryTurn + 1] = { content: '', error: '供應商過載' };
+    turns[summaryTurn + 2] = { content: '', error: '供應商過載' };
     const { rootEvents, failures, prompts } = await run(turns, {
       summarization,
       invocations: 20,
