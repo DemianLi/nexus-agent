@@ -274,6 +274,76 @@ struct Composition {
     max_silence: Duration,
 }
 
+/// 一對走到哪：[`Composition`] 的 `ready`、`bind`、`leafless_since` 合起來只會是這六種。
+#[cfg(any(test, debug_assertions))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PairState {
+    /// 還沒讀到組合行程的 `ready`：葉子還沒起，或起了還沒在橋上登記完；葉子在這之前死了或起不來、整對正在收的也在這裡（之後讀到的 `ready` 照常處理）。
+    Starting,
+    /// 讀到過 `ready`，沒有在等回答的 `bind`：預熱好的；送過 `bind` 或補了葉子之後葉子死了、或補葉子起不來，整對正在收的也在這裡。
+    Ready,
+    /// 送了 `bind`，還沒回 `bound`。
+    Binding,
+    /// 組合行程替現在這個葉子回過 `bound`。
+    Bound,
+    /// 葉子死了、組合行程留著等下一個 `ensure`；因 `--idle-ms` 或名額滿被收的也停在這裡。
+    Leafless { since: Instant },
+    /// 補了葉子，等組合行程替它送 `ready`。
+    Refilling,
+}
+
+#[cfg(any(test, debug_assertions))]
+impl Composition {
+    /// 三個欄位湊不出 [`PairState`] 的任何一種就 panic。
+    fn state(&self) -> PairState {
+        match (self.ready, self.bind, self.leafless_since) {
+            (false, Bind::Unsent, None) => PairState::Starting,
+            (true, Bind::Unsent, None) => PairState::Ready,
+            (true, Bind::Sent, None) => PairState::Binding,
+            (true, Bind::Bound, None) => PairState::Bound,
+            (true, Bind::Unsent, Some(since)) => PairState::Leafless { since },
+            (true, Bind::Refilling, None) => PairState::Refilling,
+            (ready, bind, leafless_since) => panic!(
+                "第 {} 對的狀態不該存在：ready={ready} bind={bind:?} leafless={}",
+                self.serial,
+                leafless_since.is_some()
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Composition {
+    /// 測試用：序號 1、走到 `state` 的組合行程。
+    fn staged(proc: Proc, thread: Option<Vec<u8>>, state: PairState) -> Self {
+        let (ready, bind, leafless_since) = match state {
+            PairState::Starting => (false, Bind::Unsent, None),
+            PairState::Ready => (true, Bind::Unsent, None),
+            PairState::Binding => (true, Bind::Sent, None),
+            PairState::Bound => (true, Bind::Bound, None),
+            PairState::Leafless { since } => (true, Bind::Unsent, Some(since)),
+            PairState::Refilling => (true, Bind::Refilling, None),
+        };
+        Self {
+            proc,
+            serial: 1,
+            thread,
+            read_only: false,
+            socket: PathBuf::new(),
+            ready,
+            bind,
+            leafless_since,
+            told: false,
+            peer: false,
+            cause: None,
+            rss_now_kb: 0,
+            rss_kb: 0,
+            heard_at: None,
+            max_silence: Duration::ZERO,
+        }
+    }
+}
+
 impl Composition {
     fn hear(&mut self, now: Instant) {
         if let Some(at) = self.heard_at {
@@ -666,6 +736,8 @@ fn test_stop(_name: &str) {}
 impl Supervisor {
     fn run(&mut self) -> i32 {
         loop {
+            #[cfg(debug_assertions)]
+            self.check_pairs();
             let now = Instant::now();
             let late = self.pace.lap(now, Some(Duration::ZERO));
             self.check_resumed(now, late);
@@ -1709,6 +1781,61 @@ impl Supervisor {
                 .iter()
                 .any(|p| p.serial == serial && p.proc.stop.is_some())
         })
+    }
+
+    /// 每一對的狀態說不通就 panic，訊息帶兩邊的狀態：組合行程自己的（[`Composition::state`]），以及它跟葉子兩邊對不對得上。
+    #[cfg(any(test, debug_assertions))]
+    fn check_pairs(&self) {
+        for composition in &self.compositions {
+            let serial = composition.serial;
+            let state = composition.state();
+            let leaf = self.conversations.iter().find(|c| c.pair == Some(serial));
+            let broken = |what: &str| -> ! {
+                panic!(
+                    "第 {serial} 對兩邊對不上（{what}）：{state:?} told={} peer={} 在收={} thread={}，葉子={:?}",
+                    composition.told,
+                    composition.peer,
+                    composition.proc.stop.is_some(),
+                    composition.thread.is_some(),
+                    leaf.map(|c| (c.phase, c.proc.stop.is_some(), c.peer, c.thread.is_some())),
+                )
+            };
+            if composition.told && leaf.is_some() {
+                broken("葉子那一側算過了卻還有葉子");
+            }
+            if matches!(state, PairState::Leafless { .. }) && !composition.told {
+                broken("沒有葉子、留著的，葉子那一側一定算過");
+            }
+            if composition.proc.stop.is_some() {
+                continue;
+            }
+            let Some(leaf) = leaf else {
+                if !matches!(state, PairState::Starting | PairState::Leafless { .. }) {
+                    broken("這個狀態該有葉子");
+                }
+                continue;
+            };
+            if leaf.thread != composition.thread {
+                broken("兩邊的 thread 不同");
+            }
+            if state != PairState::Starting && state != PairState::Ready && leaf.thread.is_none() {
+                broken("送過 bind 卻沒有 thread");
+            }
+            if leaf.proc.stop.is_some() {
+                continue;
+            }
+            let phase = match state {
+                PairState::Starting | PairState::Refilling => Phase::Starting,
+                PairState::Ready if composition.thread.is_none() => Phase::Warm,
+                PairState::Ready => broken("有 thread、送過 ready 卻沒送 bind"),
+                PairState::Binding => Phase::Binding,
+                PairState::Bound => Phase::Up,
+                PairState::Leafless { .. } => broken("Leafless 卻有葉子"),
+            };
+            if leaf.phase != phase {
+                broken("葉子的 phase 跟一對的狀態不同");
+            }
+        }
     }
 
     fn has_leaf(&self, serial: u64) -> bool {
@@ -3050,8 +3177,9 @@ mod tests {
         signal: Some(libc::SIGKILL),
     };
 
-    /// 手上有一對（序號 1、thread `t`）的監督行程：兩個行程的 pid 都是假的，`oom_kill` 讀 `events` 這個檔。
-    fn with_a_pair(tag: &str, bind: Bind) -> (Supervisor, PathBuf, PathBuf) {
+    /// 手上有一對（序號 1）走到 `state` 的監督行程：有葉子，thread 是 `t`（[`PairState::Ready`] 是預熱池裡的，沒有 thread）。
+    /// 兩個行程的 pid 都是假的，`oom_kill` 讀 `events` 這個檔。
+    fn with_a_pair(tag: &str, state: PairState) -> (Supervisor, PathBuf, PathBuf) {
         let dir = temp(tag);
         let audit = dir.join("audit.jsonl");
         let events = dir.join("memory.events");
@@ -3081,8 +3209,9 @@ mod tests {
         );
         supervisor.oom = OomCounter::at(Some(events.clone()));
         let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
-        supervisor.compositions.push(Composition {
-            proc: Proc::new(
+        let thread = (state != PairState::Ready).then(|| b"t".to_vec());
+        supervisor.compositions.push(Composition::staged(
+            Proc::new(
                 COMPOSITION,
                 process::Chan::from_fds(
                     std::os::fd::OwnedFd::from(read),
@@ -3090,24 +3219,21 @@ mod tests {
                     1024,
                 ),
             ),
-            serial: 1,
-            thread: Some(b"t".to_vec()),
-            read_only: false,
-            socket: PathBuf::new(),
-            ready: true,
-            bind,
-            leafless_since: None,
-            told: false,
-            peer: false,
-            cause: None,
-            rss_now_kb: 0,
-            rss_kb: 0,
-            heard_at: None,
-            max_silence: Duration::ZERO,
-        });
+            thread.clone(),
+            state,
+        ));
         let mut leaf = conversation(LEAF, 1, false);
         leaf.pair = Some(1);
+        leaf.thread = thread;
+        leaf.phase = match state {
+            PairState::Starting | PairState::Refilling => Phase::Starting,
+            PairState::Ready => Phase::Warm,
+            PairState::Binding => Phase::Binding,
+            PairState::Bound => Phase::Up,
+            PairState::Leafless { .. } => panic!("Leafless 沒有葉子：從 Bound 殺掉葉子走到"),
+        };
         supervisor.conversations.push(leaf);
+        supervisor.check_pairs();
         (supervisor, audit, events)
     }
 
@@ -3122,7 +3248,7 @@ mod tests {
     /// 葉子被核心 OOM kill、組合行程接著被連帶收掉（最後也是 SIGKILL）：那一次 `oom_kill` 記在葉子，連帶收的那一行是 `peer`、不進死因累計。
     #[test]
     fn a_host_oom_of_the_leaf_stays_with_the_leaf_when_the_composition_follows() {
-        let (mut supervisor, audit, events) = with_a_pair("oom-leaf", Bind::Sent);
+        let (mut supervisor, audit, events) = with_a_pair("oom-leaf", PairState::Binding);
         std::fs::write(&events, "oom_kill 1\n").unwrap();
         supervisor.on_exit(LEAF, KILLED);
         assert!(supervisor.compositions[0].peer);
@@ -3148,7 +3274,7 @@ mod tests {
     /// 組合行程被核心 OOM kill、葉子被連帶 SIGKILL：那一次記在組合行程，葉子那一行是 `peer`、不進死因累計。
     #[test]
     fn a_host_oom_of_the_composition_is_not_claimed_by_the_leaf_it_takes_down() {
-        let (mut supervisor, audit, events) = with_a_pair("oom-composition", Bind::Bound);
+        let (mut supervisor, audit, events) = with_a_pair("oom-composition", PairState::Bound);
         std::fs::write(&events, "oom_kill 1\n").unwrap();
         supervisor.on_exit(COMPOSITION, KILLED);
         assert!(supervisor.conversations[0].peer);
@@ -3178,7 +3304,7 @@ mod tests {
     /// 葉子已經在收（這裡是停住被殺）時組合行程先死：這一對只進一次死因累計，是葉子的；組合行程那一行照它自己的死因寫稽核。
     #[test]
     fn a_composition_that_dies_while_the_leaf_is_being_collected_is_not_counted_twice() {
-        let (mut supervisor, audit, _) = with_a_pair("once", Bind::Bound);
+        let (mut supervisor, audit, _) = with_a_pair("once", PairState::Bound);
         supervisor.conversations[0].cause = Some(DeathCause::Stalled);
         supervisor.conversations[0].proc.kill_now();
         supervisor.on_exit(
@@ -3207,9 +3333,12 @@ mod tests {
     /// 葉子死了、組合行程留著，之後停機收掉它：這一對只進一次死因累計，是葉子的；組合行程那一行照它自己的死因寫稽核。
     #[test]
     fn a_composition_kept_after_its_leaf_died_is_not_counted_again() {
-        let (mut supervisor, audit, _) = with_a_pair("kept", Bind::Bound);
+        let (mut supervisor, audit, _) = with_a_pair("kept", PairState::Bound);
         supervisor.on_exit(LEAF, KILLED);
-        assert!(supervisor.compositions[0].leafless_since.is_some());
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Leafless { .. }
+        ));
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
         supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
         supervisor.on_exit(COMPOSITION, KILLED);
@@ -3228,9 +3357,7 @@ mod tests {
     /// 預熱池裡的一對兩個行程都已經在收（停機中再收到訊號）、葉子先收屍：組合行程沒被標成連帶收，這一對照樣只進一次死因累計。
     #[test]
     fn a_warm_pair_killed_together_is_counted_once() {
-        let (mut supervisor, audit, _) = with_a_pair("warm-once", Bind::Unsent);
-        supervisor.compositions[0].thread = None;
-        supervisor.conversations[0].thread = None;
+        let (mut supervisor, audit, _) = with_a_pair("warm-once", PairState::Ready);
         supervisor.compositions[0].cause = Some(DeathCause::Shutdown);
         supervisor.conversations[0].cause = Some(DeathCause::Shutdown);
         supervisor.compositions[0].proc.kill_now();
@@ -3247,7 +3374,7 @@ mod tests {
     /// 停機時排著的 thread 靠它決定要不要等。
     #[test]
     fn will_tell_down_skips_peer_told_and_evicted() {
-        let (mut supervisor, _, _) = with_a_pair("tell", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("tell", PairState::Bound);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
         assert!(supervisor.will_tell_down(&thread));
@@ -3256,7 +3383,7 @@ mod tests {
         assert!(supervisor.has_process(&thread));
         assert!(!supervisor.will_tell_down(&thread));
 
-        let (mut supervisor, _, _) = with_a_pair("told", Bind::Sent);
+        let (mut supervisor, _, _) = with_a_pair("told", PairState::Binding);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
         // 葉子先死、整對收：`down` 回過了，組合行程還在收。
@@ -3264,7 +3391,7 @@ mod tests {
         assert!(supervisor.has_process(&thread));
         assert!(!supervisor.will_tell_down(&thread));
 
-        let (mut supervisor, _, _) = with_a_pair("kept-told", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("kept-told", PairState::Bound);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
         // 葉子先死、組合行程留著：`down` 回過了，組合行程沒被標成連帶收。
@@ -3272,7 +3399,7 @@ mod tests {
         assert!(!supervisor.compositions[0].peer);
         assert!(!supervisor.will_tell_down(&thread));
 
-        let (mut supervisor, _, _) = with_a_pair("stopping", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("stopping", PairState::Bound);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
         let grace = supervisor.args.eof_grace;
@@ -3294,15 +3421,25 @@ mod tests {
     /// 上一則 `bind` 回過 `bound`、葉子自己壞掉：組合行程留著；還沒回 `bound` 的整對收。
     #[test]
     fn the_composition_outlives_the_leaf_only_after_bound() {
-        let (mut supervisor, _, _) = with_a_pair("keep", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("keep", PairState::Bound);
         supervisor.on_exit(LEAF, KILLED);
         let composition = &supervisor.compositions[0];
-        assert!(composition.leafless_since.is_some() && composition.proc.stop.is_none());
-        assert_eq!(composition.bind, Bind::Unsent);
-        let (mut supervisor, _, _) = with_a_pair("collect", Bind::Sent);
+        assert!(matches!(composition.state(), PairState::Leafless { .. }));
+        assert!(composition.proc.stop.is_none());
+        let (mut supervisor, _, _) = with_a_pair("collect", PairState::Binding);
         supervisor.on_exit(LEAF, KILLED);
         let composition = &supervisor.compositions[0];
-        assert!(composition.leafless_since.is_none() && composition.proc.stop.is_some());
+        assert_eq!(composition.state(), PairState::Ready);
+        assert!(composition.proc.stop.is_some());
+    }
+
+    /// [`Supervisor::check_pairs`] 擋得住兩邊對不上的：組合行程回過 `bound`，葉子卻不是 `Up`。
+    #[test]
+    #[should_panic(expected = "葉子的 phase 跟一對的狀態不同")]
+    fn check_pairs_rejects_a_bound_pair_whose_leaf_is_not_up() {
+        let (mut supervisor, _, _) = with_a_pair("mismatch", PairState::Bound);
+        supervisor.conversations[0].phase = Phase::Binding;
+        supervisor.check_pairs();
     }
 
     /// 組合行程送來一則 `ready`。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
@@ -3318,59 +3455,77 @@ mod tests {
         supervisor.on_composition_readable(0);
     }
 
-    /// 在等補起的葉子時（[`Bind::Refilling`]）不算它的沉默；`ready` 到了才送 `bind`、才起算。
+    /// 在等補起的葉子時（[`PairState::Refilling`]）不算它的沉默；`ready` 到了才送 `bind`、才起算。
     #[test]
     fn a_refilled_leaf_is_bound_when_its_ready_comes() {
-        let (mut supervisor, _, _) = with_a_pair("refilling", Bind::Refilling);
-        supervisor.conversations[0].phase = Phase::Starting;
+        let (mut supervisor, _, _) = with_a_pair("refilling", PairState::Refilling);
         let later = Instant::now() + Duration::from_secs(3600);
         supervisor.check_stalls(later, Duration::from_secs(1));
         assert!(supervisor.conversations[0].proc.stop.is_none());
-        assert_eq!(supervisor.compositions[0].bind, Bind::Refilling);
+        assert_eq!(supervisor.compositions[0].state(), PairState::Refilling);
 
         composition_says_ready(&mut supervisor);
-        assert_eq!(supervisor.compositions[0].bind, Bind::Sent);
+        assert_eq!(supervisor.compositions[0].state(), PairState::Binding);
         let leaf = &supervisor.conversations[0];
         assert!(leaf.phase == Phase::Binding && leaf.heard_at.is_some());
     }
 
-    /// 不在等補起的葉子時多出來的 `ready` 不理。`Sent`、`Bound` 時再送 `bind`，組合行程當場以協定錯誤結束；沒有葉子時送的會被它留著，
+    /// 不在等補起的葉子時多出來的 `ready` 不理。`Binding`、`Bound` 時再送 `bind`，組合行程當場以協定錯誤結束；沒有葉子時送的會被它留著，
     /// 補葉子後的那一則 `bind` 就撞上。
     #[test]
     fn a_ready_nobody_waits_for_does_not_bind() {
-        for (tag, bind) in [
-            ("stray-unsent", Bind::Unsent),
-            ("stray-sent", Bind::Sent),
-            ("stray-bound", Bind::Bound),
+        for (tag, state) in [
+            ("stray-binding", PairState::Binding),
+            ("stray-bound", PairState::Bound),
         ] {
-            let (mut supervisor, _, _) = with_a_pair(tag, bind);
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
             composition_says_ready(&mut supervisor);
-            assert_eq!(supervisor.compositions[0].bind, bind, "{tag}");
+            assert_eq!(supervisor.compositions[0].state(), state, "{tag}");
             assert!(supervisor.conversations[0].heard_at.is_none(), "{tag}");
         }
         // 葉子死了、還沒補：留著的組合行程收到的也不理。
-        let (mut supervisor, _, _) = with_a_pair("stray-leafless", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("stray-leafless", PairState::Bound);
         supervisor.on_exit(LEAF, KILLED);
         composition_says_ready(&mut supervisor);
         let composition = &supervisor.compositions[0];
-        assert_eq!(composition.bind, Bind::Unsent);
+        assert!(matches!(composition.state(), PairState::Leafless { .. }));
         assert!(composition.heard_at.is_none() && composition.proc.stop.is_none());
+        // 補起的葉子登記完就死，監督行程收完它的屍才讀到組合行程替它送的 `ready`：不理。
+        let (mut supervisor, _, _) = with_a_pair("stray-collected", PairState::Refilling);
+        let composition = &mut supervisor.compositions[0];
+        composition.proc.hello = true;
+        composition.heard_at = Some(Instant::now() - Duration::from_secs(1));
+        composition
+            .proc
+            .chan
+            .send(&crate::supervisor_protocol::encode_conversation_report(
+                &ConversationReport::Ready,
+            ));
+        supervisor.on_exit(LEAF, KILLED);
+        supervisor.on_composition_readable(0);
+        let composition = &supervisor.compositions[0];
+        assert_eq!(composition.state(), PairState::Ready);
+        assert!(composition.proc.stop.is_some() && composition.cause.is_none());
+        assert!(
+            composition.max_silence >= Duration::from_secs(1),
+            "那則 `ready` 沒有讀到"
+        );
     }
 
     /// 補起的葉子還沒等到 `ready` 就死：整對收（理由見 [`Supervisor::on_leaf_gone`]）。
     #[test]
     fn a_refilled_leaf_that_dies_before_its_ready_takes_the_pair_with_it() {
-        let (mut supervisor, _, _) = with_a_pair("refill-died", Bind::Refilling);
+        let (mut supervisor, _, _) = with_a_pair("refill-died", PairState::Refilling);
         supervisor.on_exit(LEAF, KILLED);
         let composition = &supervisor.compositions[0];
-        assert!(composition.proc.stop.is_some() && composition.leafless_since.is_none());
-        assert_eq!(composition.bind, Bind::Unsent);
+        assert!(composition.proc.stop.is_some());
+        assert_eq!(composition.state(), PairState::Ready);
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
     #[test]
     fn resuming_from_a_freeze_restarts_the_silence_of_both_processes() {
-        let (mut supervisor, _, _) = with_a_pair("resumed", Bind::Bound);
+        let (mut supervisor, _, _) = with_a_pair("resumed", PairState::Bound);
         let stall = supervisor.args.stall.unwrap();
         let before = Instant::now() - stall;
         supervisor.compositions[0].heard_at = Some(before);
