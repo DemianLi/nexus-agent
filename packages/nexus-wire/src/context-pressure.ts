@@ -105,6 +105,11 @@ export interface WireContextMessageParts {
   readonly toolResultTokens: number;
   /** 其餘：人講的話與助手的回覆（含工具呼叫的參數）。 */
   readonly conversationTokens: number;
+  /**
+   * {@link summaryTokens} 裡屬於索引條目的那一截（[#2776](https://github.com/DemianLi/nexus-agent/issues/2776)），不大於
+   * `summaryTokens`；現況連同前言是兩者相減。不是第五格。**缺席＝沒有摘要訊息或沒拆**，不當成 `0`。
+   */
+  readonly summaryIndexTokens?: number;
 }
 
 /**

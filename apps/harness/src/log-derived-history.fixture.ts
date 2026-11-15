@@ -49,6 +49,7 @@ import {
   HISTORY_SHADOW_KINDS,
   ModelHistoryCache,
   SessionRegistry,
+  SUMMARY_ENTRY_INSTRUCTION,
   SUMMARY_INSTRUCTION,
   isBlankContent,
   replayConversation,
@@ -119,7 +120,8 @@ export type Script = (index: number, body: Body) => Reply;
 
 /** 生摘要的重播（#2775）：帶著上一次主請求的工具，最後一則是摘要指令。 */
 export const isSummaryReplay = (body: Body): boolean =>
-  body.messages.at(-1)?.content === SUMMARY_INSTRUCTION;
+  body.messages.at(-1)?.content === SUMMARY_INSTRUCTION ||
+  body.messages.at(-1)?.content === SUMMARY_ENTRY_INSTRUCTION;
 
 /** 主呼叫：帶工具，而且不是生摘要的重播。標題、模板摘要不帶工具。 */
 export const isMainCall = (body: Body): boolean =>

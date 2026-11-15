@@ -191,17 +191,17 @@ function derivedVersusActual(run: Run): string[] {
 
 describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
   /**
-   * 呼叫：1 ＝ 第 1 輪；2 ＝ 摘要、3 ＝ 摘要之後的請求（超窗）、4 ＝ retain 0 的摘要、5 ＝ 重送（超窗）、6 ＝ 再摘要、7 ＝ 重送；
-   * 第 3 輪：8 ＝ 原請求照送，沒有摘要那一次。
+   * 呼叫：1 ＝ 第 1 輪；2、3 ＝ 摘要（條目、現況）、4 ＝ 摘要之後的請求（超窗）、5、6 ＝ retain 0 的摘要、7 ＝ 重送（超窗）、
+   * 8、9 ＝ 再摘要、10 ＝ 重送；第 3 輪：11 ＝ 原請求照送，沒有摘要那一次。
    */
   it('不打摘要模型、不提交：日誌沒有那一筆、歷史檔不多空區段、沒有摘要失敗的 warn、推導等於實送', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const run = await converse({ overflowOn: [3, 5], turns: 3 });
+    const run = await converse({ overflowOn: [4, 7], turns: 3 });
 
     // 前提：第 2 輪的兩次超窗真的升級到底（三筆事件，最後切點 3）。第 3 輪只有一次呼叫，而且是主呼叫。
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2, 3]);
-    expect(run.model.calls).toBe(8);
-    expect(run.model.seen[7]![0]).toMatch(/^system:/);
+    expect(run.model.calls).toBe(11);
+    expect(run.model.seen[10]![0]).toMatch(/^system:/);
     expect(run.snapshots[2]!.end).toBe('turn/end');
 
     // 第 3 輪：沒有新事件、歷史檔還是第 2 輪那一段（沒有空區段）。

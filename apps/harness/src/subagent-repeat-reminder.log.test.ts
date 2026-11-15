@@ -236,9 +236,12 @@ const REPEATING_WITH_SUMMARY: readonly ScriptedTurn[] = [
   call('bulk'),
   call('bulk'),
   call('bulk'),
+  // 每次摘要兩輪：索引條目（標題加一行，合格不重叫）、現況。
+  { content: '本段對話\n- 子代理叫了三次 bulk' },
   { content: '摘要：子代理已經叫過三次 bulk。' },
   call('bulk'),
   call('bulk'),
+  { content: '本段對話\n- 子代理又叫了兩次 bulk' },
   { content: '摘要：又累了兩次 bulk。' },
   { content: '子代理收工。' },
   { content: '根收工。' },

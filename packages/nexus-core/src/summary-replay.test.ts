@@ -19,6 +19,7 @@ import {
 } from './summarization.js';
 import type { SentHistoryReader } from './summarization.js';
 import { SummaryCutoffTable } from './summary-cutoffs.js';
+import { SUMMARY_ENTRY_INSTRUCTION } from './summary-head.js';
 import { TokenAnchorBook } from './token-estimate.js';
 
 const BIG = '這是一段很長的內容。'.repeat(300);
@@ -101,11 +102,19 @@ const derived = (): BaseMessage[] =>
       : new AIMessage(`推：${String(message.content)}`),
   );
 
+/**
+ * 退回模板：索引條目與現況兩次都是模板，各只有一則使用者訊息、不帶工具；指令各自接在模板後面。
+ */
 const expectTemplate = (invokes: readonly Invoke[]): void => {
-  expect(invokes).toHaveLength(1);
-  expect(invokes[0]!.input).toHaveLength(1);
-  expect(String(invokes[0]!.input[0]!.content).startsWith('Conversation to condense:')).toBe(true);
-  expect(invokes[0]!.options?.['tools']).toBeUndefined();
+  // 索引條目一次、現況一次。
+  expect(invokes).toHaveLength(2);
+  for (const call of invokes) {
+    expect(call.input).toHaveLength(1);
+    expect(String(call.input[0]!.content).startsWith('Conversation to condense:')).toBe(true);
+    expect(call.options?.['tools']).toBeUndefined();
+  }
+  expect(String(invokes[0]!.input[0]!.content)).toContain(SUMMARY_ENTRY_INSTRUCTION);
+  expect(String(invokes[1]!.input[0]!.content)).toContain(SUMMARY_INSTRUCTION);
 };
 
 describe('生摘要重播上一次主請求', () => {
@@ -125,20 +134,23 @@ describe('生摘要重播上一次主請求', () => {
       },
       sentHistoryOf: () => sentHistory,
     });
-    expect(out.invokes).toHaveLength(1);
-    const { input, options } = out.invokes[0]!;
+    // 索引條目一次、現況一次，兩次都重播同一段前綴，各自接自己的指令。
+    expect(out.invokes).toHaveLength(2);
     // 交下去的是「摘要＋留下的尾巴」，被摘掉的就是前面那幾則。
     const kept = out.handled.at(-1)!.length - 1;
     const replayed = sentHistory.slice(0, sentHistory.length - kept);
     expect(replayed.length).toBeGreaterThan(0);
-    expect(input.slice(0, -1)).toEqual([SYSTEM, ...replayed]);
-    expect(input[0]).toBe(SYSTEM);
-    expect(input.at(-1)!.getType()).toBe('human');
-    expect(input.at(-1)!.content).toBe(SUMMARY_INSTRUCTION);
-    // 工具照帶；只管那一次呼叫與回覆形狀的幾格不帶。`tags` 是摘要呼叫自己加的。
-    const { tags: _tags, ...sentOptions } = options ?? {};
-    expect(sentOptions).toEqual({ tools: TOOLS, strict: true });
-    expect(sentOptions['tools']).toBe(TOOLS);
+    const instructions = [SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION];
+    out.invokes.forEach(({ input, options }, i) => {
+      expect(input.slice(0, -1)).toEqual([SYSTEM, ...replayed]);
+      expect(input[0]).toBe(SYSTEM);
+      expect(input.at(-1)!.getType()).toBe('human');
+      expect(input.at(-1)!.content).toBe(instructions[i]);
+      // 工具照帶；只管那一次呼叫與回覆形狀的幾格不帶。`tags` 是摘要呼叫自己加的。
+      const { tags: _tags, ...sentOptions } = options ?? {};
+      expect(sentOptions).toEqual({ tools: TOOLS, strict: true });
+      expect(sentOptions['tools']).toBe(TOOLS);
+    });
     expect(out.log.events.filter((event) => event.type === 'compaction/summary')).toHaveLength(1);
   });
 
@@ -152,7 +164,8 @@ describe('生摘要重播上一次主請求', () => {
       },
       lookup: (log) => ({ kind: 'ok', address: { kind: 'subagent' }, log }) as never,
     });
-    expect(seen).toEqual([true]);
+    // 索引條目與現況各讀一次日誌，讀者收到的都是子代理。
+    expect(seen).toEqual([true, true]);
   });
 
   it.each<[string, Parameters<typeof run>[0]]>([

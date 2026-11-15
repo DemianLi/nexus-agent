@@ -17,7 +17,7 @@ import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { SessionRegistry, SUMMARY_ENTRY_INSTRUCTION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -29,11 +29,17 @@ const FIRST = `第一句 ${'alpha '.repeat(600)}`;
 /** 撐爆門檻的那一則。 */
 const BIG = `大段 ${'bravo '.repeat(8000)}`;
 const TRIGGER_TOKENS = 4000;
+/** 現況仍撐過門檻（約 5,800 token），又不超過現況的字數上限（否則現況會整段重算一次）。 */
+const BIG_STATE = 'charlie '.repeat(2900);
 
 type Call = 'main' | 'summary';
 
+/** 索引條目那次的假回覆：標題加一行，是合格的條目，不重叫。 */
+const ENTRY_REPLY = '本段對話\n- 使用者提問，助手回覆';
+
 /**
- * 主呼叫（有系統訊息）照 `replies` 依序回；摘要呼叫（沒有系統訊息）照 `summaries` 依序回。`overflowAt` 是第幾次主呼叫拋端點超窗。
+ * 主呼叫（有系統訊息）照 `replies` 依序回；摘要呼叫（沒有系統訊息）是索引條目（回 {@link ENTRY_REPLY}）或現況（照 `summaries`
+ * 依序回）。`overflowAt` 是第幾次主呼叫拋端點超窗。
  */
 class SizedModel extends BaseChatModel {
   constructor(
@@ -58,7 +64,10 @@ class SizedModel extends BaseChatModel {
     this.log.push(isSummary ? 'summary' : 'main');
     if (!isSummary && this.log.filter((call) => call === 'main').length === this.overflowAt)
       throw new ContextOverflowError('Input exceeded the model context window.');
-    const text = (isSummary ? this.summaries.shift() : this.replies.shift()) ?? '好。';
+    const isEntry = String(messages.at(-1)?.content).includes(SUMMARY_ENTRY_INSTRUCTION);
+    const text =
+      (isSummary ? (isEntry ? ENTRY_REPLY : this.summaries.shift()) : this.replies.shift()) ??
+      '好。';
     return { generations: [{ text, message: new AIMessage(text) }], llmOutput: {} };
   }
 }
@@ -141,8 +150,8 @@ describe('摘要完仍超過門檻：換 retain 0 再摘一次', () => {
       replies: [BIG, '收到。'],
       summaries: ['摘要一。', '摘要二。'],
     });
-    // 第 1 輪一次主呼叫；第 2 輪：摘要、（重量超過）retain 0 的摘要、主呼叫。
-    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main']);
+    // 第 1 輪一次主呼叫；第 2 輪：摘要（索引條目、現況各一次）、（重量超過）retain 0 的摘要（同樣兩次）、主呼叫。
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'summary', 'summary', 'main']);
     expect(remeasureWarns(run.warns)).toEqual([]);
   });
 
@@ -169,7 +178,8 @@ describe('摘要完仍超過門檻：換 retain 0 再摘一次', () => {
       replies: [`回話 ${'echo '.repeat(20)}`, '收到。'],
       summaries: ['摘要一。', '摘要二。'],
     });
-    expect(run.calls).toEqual(['main', 'summary', 'main']);
+    // 一次摘要（索引條目、現況各一次）之後已低於門檻，只摘這一次。
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main']);
     expect(summariesOf(run.events)).toHaveLength(1);
     expect(remeasureWarns(run.warns)).toEqual([]);
   });
@@ -180,9 +190,9 @@ describe('不再重試的情況：warn 一條、照摘要完的那份送，這�
     const run = await converse({
       users: [FIRST, '短句'],
       replies: [BIG, '收到。'],
-      summaries: ['摘要一。', `大摘要 ${'charlie '.repeat(3000)}`],
+      summaries: ['摘要一。', `大摘要 ${BIG_STATE}`],
     });
-    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main']);
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'summary', 'summary', 'main']);
     const lines = remeasureWarns(run.warns);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('重摘過 1 次');
@@ -195,8 +205,8 @@ describe('不再重試的情況：warn 一條、照摘要完的那份送，這�
       replies: ['不大的回話。', '收到。'],
       summaries: ['摘要一。', '摘要二。'],
     });
-    // 只摘一次：沒有 retain 0 那次，也沒有基座「整串重摘成一則」那次。
-    expect(run.calls).toEqual(['main', 'summary', 'main']);
+    // 只摘一次（索引條目、現況各一次）：沒有 retain 0 那次，也沒有基座「整串重摘成一則」那次。
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main']);
     const lines = remeasureWarns(run.warns);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('保留的尾巴已經是最小的');
@@ -208,10 +218,10 @@ describe('不再重試的情況：warn 一條、照摘要完的那份送，這�
     const run = await converse({
       users: [BIG, '短句'],
       replies: [`回話 ${'echo '.repeat(20)}`, '收到。'],
-      summaries: ['摘要一。', `大摘要 ${'charlie '.repeat(3900)}`],
+      summaries: ['摘要一。', `大摘要 ${BIG_STATE}`],
       overflowAt: 2,
     });
-    expect(run.calls).toEqual(['main', 'summary', 'main', 'summary', 'main']);
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main', 'summary', 'summary', 'main']);
     expect(remeasureWarns(run.warns)).toHaveLength(1);
   });
 
@@ -222,7 +232,7 @@ describe('不再重試的情況：warn 一條、照摘要完的那份送，這�
       summaries: ['摘要一。', '摘要二。'],
       compactionRetries: 0,
     });
-    expect(run.calls).toEqual(['main', 'summary', 'main']);
+    expect(run.calls).toEqual(['main', 'summary', 'summary', 'main']);
     const lines = remeasureWarns(run.warns);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('compactionRetries 是 0');

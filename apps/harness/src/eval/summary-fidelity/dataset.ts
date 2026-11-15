@@ -2,7 +2,7 @@
  * 交接保真度評估的資料集（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：腳本化的長對話，裡面埋已知事實，
  * 摘要之後問同一組題目，看事實有沒有活過摘要。
  *
- * 每個變體是一到兩段對話。每一段都長過評估用的摘要門檻，而且**事實全在前半、結尾是一長串不含事實的雜訊**：摘要器逐字留下的
+ * 每個變體是一到四段對話。每一段都長過評估用的摘要門檻，而且**事實全在前半、結尾是一長串不含事實的雜訊**：摘要器逐字留下的
  * 只有尾巴，事實只能靠摘要帶過去。跑者把落在尾巴裡的題目標成 `leaked`、不計分
  * （{@link ./runner.ts}），`summary-fidelity.test.ts` 釘住沒有題目落在尾巴、雜訊裡也沒有題目的字串。
  *
@@ -30,7 +30,7 @@ export interface FidelityQuestion {
 
 /** 一個變體。 */
 export interface FidelityVariant {
-  readonly id: 'single' | 'double' | 'zh' | 'overturned';
+  readonly id: 'single' | 'double' | 'quad' | 'zh' | 'overturned';
   readonly title: string;
   /** 一段一次摘要；每一段以使用者的話結尾。 */
   readonly segments: readonly (readonly BaseMessage[])[];
@@ -365,7 +365,7 @@ const OVERTURNED_QUESTIONS: FidelityQuestion[] = [
   },
 ];
 
-/** 四個變體。雜訊的種子各不相同，內容不重複。 */
+/** 五個變體。雜訊的種子各不相同，內容不重複。 */
 export const FIDELITY_VARIANTS: readonly FidelityVariant[] = [
   {
     id: 'single',
@@ -379,6 +379,19 @@ export const FIDELITY_VARIANTS: readonly FidelityVariant[] = [
     segments: [
       [...SINGLE_FACTS, ...englishFiller(200, 8)],
       [...DOUBLE_LATER_FACTS, ...englishFiller(300, 8)],
+    ],
+    questions: [...SINGLE_QUESTIONS, ...DOUBLE_LATER_QUESTIONS],
+  },
+  {
+    // 後兩段只有雜訊：前兩段的事實分別要活過四次與三次摘要
+    // （[#2776](https://github.com/DemianLi/nexus-agent/issues/2776)）。
+    id: 'quad',
+    title: '連續摘要四次',
+    segments: [
+      [...SINGLE_FACTS, ...englishFiller(600, 8)],
+      [...DOUBLE_LATER_FACTS, ...englishFiller(700, 8)],
+      englishFiller(800, 8),
+      englishFiller(900, 8),
     ],
     questions: [...SINGLE_QUESTIONS, ...DOUBLE_LATER_QUESTIONS],
   },

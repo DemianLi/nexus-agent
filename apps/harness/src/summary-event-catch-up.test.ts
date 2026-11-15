@@ -25,6 +25,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import {
   ModelSelectionController,
   replayConversation,
+  SUMMARY_ENTRY_INSTRUCTION,
   SUMMARY_PROMPT,
   tagModelRoute,
 } from '@nexus/core';
@@ -43,8 +44,12 @@ const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_38
 
 const SECTION = /## Summarized at [^\n]+\n\n/;
 const SUMMARY_MARK = SUMMARY_PROMPT.split('\n')[0]!;
+const ENTRY_MARK = SUMMARY_ENTRY_INSTRUCTION.split('\n')[0]!;
+/** 摘要的兩次呼叫：索引條目、現況。 */
 const isSummaryCall = (prompt: readonly BaseMessage[]) =>
-  prompt.some((message) => message.text.includes(SUMMARY_MARK));
+  prompt.some(
+    (message) => message.text.includes(SUMMARY_MARK) || message.text.includes(ENTRY_MARK),
+  );
 
 const LONG = '長'.repeat(2_400);
 
@@ -195,23 +200,25 @@ function derivedVersusActual(run: Run): string[] {
 }
 
 const ok = (content: string): ScriptedTurn => ({ content });
+/** 索引條目那次的假回覆：標題加一行，是合格的條目，不重叫。 */
+const ENTRY = ok('本段對話\n- 第 1 句，助手回覆');
 
 describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
   /**
    * 第 1 輪 → 第 2 輪（摘要＋請求 503）→ 第 3 輪（窗口換大，不摘要）。
-   * 呼叫順序：1 ＝ 第 1 輪、2 ＝ 摘要、3 ＝ 第 2 輪的請求（503）、4 ＝ 第 3 輪。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要（條目、現況）、4 ＝ 第 2 輪的請求（503）、5 ＝ 第 3 輪。
    */
   it('503：下一輪不摘要時，接著日誌上那筆切點，每次呼叫推導等於實送', async () => {
     const run = await converse({
-      script: [ok(A1), ok('摘要一'), { content: '', error: 'upstream 503' }, ok('好 3')],
+      script: [ok(A1), ENTRY, ok('摘要一'), { content: '', error: 'upstream 503' }, ok('好 3')],
       rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
     });
 
-    // 前提：第 2 輪真的摘要了、請求真的失敗了、第 3 輪真的沒有再摘要。
+    // 前提：第 2 輪真的摘要了（條目、現況各一次）、請求真的失敗了、第 3 輪真的沒有再摘要。
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
     expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
-    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(1);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
 
     // 日誌推導＝實送：第 3 輪那次呼叫是修之前對不上的那一次。
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
@@ -222,19 +229,25 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
 
   /**
    * 使用者在摘要之後、請求串流到一半按停止：失敗路徑與 503 不同（取消），切點一樣要接得上。
-   * 呼叫順序：1 ＝ 第 1 輪、2 ＝ 摘要、3 ＝ 第 2 輪的請求（串流中被停）、4 ＝ 第 3 輪。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要（條目、現況）、4 ＝ 第 2 輪的請求（串流中被停）、5 ＝ 第 3 輪。
    */
   it('使用者停止：同樣接著那筆，每次呼叫推導等於實送', async () => {
     const run = await converse({
-      script: [ok(A1), ok('摘要一'), { content: '好'.repeat(400), tokenDelayMs: 25 }, ok('好 3')],
-      rounds: [{ text: H1 }, { text: LONG, cancelAtCall: 3 }, { text: '第 3 句。', limits: BIG }],
+      script: [
+        ok(A1),
+        ENTRY,
+        ok('摘要一'),
+        { content: '好'.repeat(400), tokenDelayMs: 25 },
+        ok('好 3'),
+      ],
+      rounds: [{ text: H1 }, { text: LONG, cancelAtCall: 4 }, { text: '第 3 句。', limits: BIG }],
     });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
     // 前提：這一輪是被使用者停掉的（`turn/end` 帶 `reason: aborted`），不是正常收尾。
     expect(run.snapshots[1]!.reason).toBe('aborted');
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
-    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(1);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
 
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
     expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
@@ -242,14 +255,16 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
 
   /**
    * 下一輪又要摘要：切點接著提交過的那一筆，不從頭重摘。**沒接上的話第二個區段會把第一個區段的內容再抄一遍。**
-   * 呼叫順序：1、2 ＝ 摘要、3 ＝ 請求（503）、4 ＝ 第 3 輪的摘要、5 ＝ 第 3 輪的請求。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ 摘要、4 ＝ 請求（503）、5、6 ＝ 第 3 輪的摘要、7 ＝ 第 3 輪的請求。
    */
   it('503 之後下一輪又摘要：歷史檔不疊區段，兩段內容互不重複', async () => {
     const run = await converse({
       script: [
         ok(A1),
+        ENTRY,
         ok('摘要一'),
         { content: '', error: 'upstream 503' },
+        ENTRY,
         ok('摘要二'),
         ok('好 3'),
       ],
@@ -257,7 +272,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     });
 
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
-    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(2);
+    expect(run.model.prompts.filter(isSummaryCall)).toHaveLength(4);
 
     const sections = run.snapshots[2]!.sections;
     expect(sections).toHaveLength(2);
@@ -275,7 +290,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
   /** 沒有失敗：一筆事件、一個區段。 */
   it('沒有失敗：一筆事件、一個區段', async () => {
     const run = await converse({
-      script: [ok(A1), ok('摘要一'), ok('好 2'), ok('好 3')],
+      script: [ok(A1), ENTRY, ok('摘要一'), ok('好 2'), ok('好 3')],
       rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
     });
 
@@ -292,7 +307,9 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
    */
   it('換模型：第 3 輪換到大窗口那顆，切點不看這一步選中的模型', async () => {
     const defaultModel = tagModelRoute(
-      new ScriptedChatModel({ turns: [ok(A1), ok('摘要一'), { content: '', error: '503' }] }),
+      new ScriptedChatModel({
+        turns: [ok(A1), ENTRY, ok('摘要一'), { content: '', error: '503' }],
+      }),
       { model: 'default' },
     );
     const bigModel = tagModelRoute(new ScriptedChatModel({ turns: [ok('好 3')] }), {
@@ -346,12 +363,13 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
    *
    * 切點取 1（訊息數門檻 3、保留量 12 token；只有第 1 句墊長，尾巴那兩則維持短，切點才仍是 1），子代理 state 只有一則（任務描述）：切點 ≤ 長度，
    * 「切點落在訊息串之外就不算」那一道擋不住——能擋住的是切點表的鍵（呼叫的身分）與錨點那則訊息的 id。
-   * 呼叫順序：1 ＝ 第 1 輪、2 ＝ root 摘要、3 ＝ root 請求（叫 task）、4 ＝ 子代理、5、6 ＝ root 收尾（又摘要一次）。
+   * 呼叫順序：1 ＝ 第 1 輪、2、3 ＝ root 摘要（條目、現況）、4 ＝ root 請求（叫 task）、5 ＝ 子代理、6、7 ＝ root 收尾（又摘要一次）、8 ＝ 收工。
    */
   it('子代理：請求前不會被補上 root 日誌上的事件', async () => {
     const run = await converse({
       script: [
         ok('好 1'),
+        ENTRY,
         ok('摘要一'),
         {
           content: '',
@@ -360,6 +378,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
           ],
         },
         ok('子代理做完了。'),
+        ENTRY,
         ok('摘要二'),
         ok('收工。'),
       ],

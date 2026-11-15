@@ -149,7 +149,12 @@ import {
   withSummaryCutoffs,
 } from './summary-cutoffs.js';
 import type { SummaryCutoff } from './summary-cutoffs.js';
-import { createSummarizerEngine } from './summarizer-engine.js';
+import {
+  createSummarizerEngine,
+  summaryBodyOf,
+  SummaryStateTooLongError,
+} from './summarizer-engine.js';
+import { parseSummaryHead } from './summary-head.js';
 import type { SessionRequest, SummaryCall } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
@@ -873,7 +878,7 @@ export type SentHistoryReader = (log: SessionLog, subagent?: boolean) => BaseMes
 
 /**
  * 生摘要的那一次呼叫重播上一次主請求（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）：上一次送出的系統訊息與
- * 呼叫選項（工具）、日誌推出來的原訊息到切點為止，最後接一則 {@link SUMMARY_INSTRUCTION}。這樣它是上一次主請求的前綴，
+ * 呼叫選項（工具）、日誌推出來的原訊息到切點為止，最後接一則指令（`instruction`，省略是 {@link SUMMARY_INSTRUCTION}）。這樣它是上一次主請求的前綴，
  * 供應商的前綴快取才對得上。
  *
  * 回 `undefined`（呼叫端照模板送）的情形：找不到這次呼叫的日誌；這份日誌在這個行程裡沒有可重播的上一次請求（行程重啟後的
@@ -891,8 +896,9 @@ function replayedSummaryCall(
   request: SessionRequest,
   messagesToSummarize: readonly BaseMessage[],
   total: number,
+  instruction?: string,
 ) => SummaryCall | undefined {
-  return (request, messagesToSummarize, total) => {
+  return (request, messagesToSummarize, total, instruction = SUMMARY_INSTRUCTION) => {
     try {
       const found = sessions.forCall({ configurable: request.runtime?.configurable });
       if (found.kind !== 'ok') return undefined;
@@ -904,7 +910,7 @@ function replayedSummaryCall(
       if (prefix.some((message, at) => message.getType() !== messagesToSummarize[at]!.getType()))
         return undefined;
       return {
-        input: [...last.system, ...prefix, new HumanMessage({ content: SUMMARY_INSTRUCTION })],
+        input: [...last.system, ...prefix, new HumanMessage({ content: instruction })],
         options: last.options,
       };
     } catch {
@@ -1133,16 +1139,32 @@ function withAttachmentText(base: AgentMiddleware): AgentMiddleware {
 }
 
 /**
- * 生摘要那一次呼叫報回的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}
+ * 生一份摘要的那幾次呼叫（索引條目、現況）報回的用量加總（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}
  * 放一格，內層 {@link quietInvoke} 的替身在 `invoke` 回來時填。兩層是分開的 middleware，沒有共同的區域變數，
  * 所以用 `AsyncLocalStorage` 把格子帶進去（同 {@link ./model-call-scope.ts} 的 `captureModelCall`）。
  */
 interface SummaryUsageCell {
   usage: ModelUsage | undefined;
-  /** 最近完成的那一次生摘要花了多久（毫秒，含它自己的重試），見 `compaction/summary` 的 `durationMs`。 */
+  /** 上一筆 `compaction/summary` 記完之後各次呼叫花的時間加總（毫秒，含各自的重試），見 `compaction/summary` 的 `durationMs`。 */
   durationMs: number | undefined;
   /** 生摘要的模型呼叫完成過幾次。{@link withCompactionLog} 靠它認得「交下去的這一份剛摘要過」。 */
   summaries: number;
+  /** 上一筆 `compaction/summary` 記完之後完成過幾次；`usage` 與 `durationMs` 是這幾次的加總。 */
+  pending: number;
+}
+
+function sumModelUsage(a: ModelUsage, b: ModelUsage): ModelUsage {
+  const optional = (x: number | undefined, y: number | undefined): number | undefined =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  const cacheReadTokens = optional(a.cacheReadTokens, b.cacheReadTokens);
+  const cacheWriteTokens = optional(a.cacheWriteTokens, b.cacheWriteTokens);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+  };
 }
 const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
 
@@ -1224,14 +1246,20 @@ function withQuietSummaryCall(
               }),
             },
       );
-      return inner({ ...request, model: quiet }, (sent) => {
-        const restored = sent.model === quiet ? { ...sent, model } : sent;
-        if (generated > checked) {
-          checked = generated;
-          assertSummaryShrinks(request, sent);
-          afterSummary?.(restored);
-        }
-        return handler(restored);
+      return Promise.resolve(
+        inner({ ...request, model: quiet }, (sent) => {
+          const restored = sent.model === quiet ? { ...sent, model } : sent;
+          if (generated > checked) {
+            checked = generated;
+            assertSummaryShrinks(request, sent);
+            afterSummary?.(restored);
+          }
+          return handler(restored);
+        }),
+      ).catch((error: unknown) => {
+        // 現況過長是引擎自己拋的，不經 `quietInvoke`：在這裡登記成「生摘要失敗」，外面才走照原請求送出的退路。
+        if (error instanceof SummaryStateTooLongError) summaryCallFailures.add(error);
+        throw error;
       });
     },
   } as AgentMiddleware;
@@ -1656,8 +1684,16 @@ function quietInvoke<T extends object>(
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
         if (cell !== undefined) {
-          cell.usage = readModelUsage(result);
-          cell.durationMs = Math.round(performance.now() - startedAt);
+          // 一份摘要是好幾次呼叫（索引條目、現況，#2776）：用量與耗時加總，其中一次沒報用量就整份沒有。
+          const usage = readModelUsage(result);
+          cell.usage =
+            cell.pending === 0
+              ? usage
+              : cell.usage === undefined || usage === undefined
+                ? undefined
+                : sumModelUsage(cell.usage, usage);
+          cell.durationMs = (cell.durationMs ?? 0) + Math.round(performance.now() - startedAt);
+          cell.pending += 1;
           cell.summaries += 1;
         }
         onGenerated?.();
@@ -1749,7 +1785,12 @@ function withCompactionLog(
   return {
     ...base,
     wrapModelCall: (request, handler) => {
-      const cell: SummaryUsageCell = { usage: undefined, durationMs: undefined, summaries: 0 };
+      const cell: SummaryUsageCell = {
+        usage: undefined,
+        durationMs: undefined,
+        summaries: 0,
+        pending: 0,
+      };
       let logged = 0;
       const effective = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
@@ -1758,6 +1799,11 @@ function withCompactionLog(
           // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
           if (cell.summaries > logged) {
             logged = cell.summaries;
+            const usage = cell.usage;
+            const durationMs = cell.durationMs;
+            cell.usage = undefined;
+            cell.durationMs = undefined;
+            cell.pending = 0;
             const summary = sent.messages?.[0];
             if (summary !== undefined && isSummarizationMessage(summary)) {
               const cutoffIndex = summaryCutoffIndex(
@@ -1779,10 +1825,10 @@ function withCompactionLog(
                     messagesBefore: (request.messages ?? []).length,
                     filePath,
                     summary: toLoggedMessage(summary),
-                    // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
-                    ...(cell.usage === undefined ? {} : { usage: cell.usage }),
+                    // 生這份摘要的那幾次呼叫報的用量加總（#1022）：其中一次沒報、報得對不上就不放 key。**不進 `model/usage`**。
+                    ...(usage === undefined ? {} : { usage }),
                     beforeCall: true,
-                    ...(cell.durationMs === undefined ? {} : { durationMs: cell.durationMs }),
+                    ...(durationMs === undefined ? {} : { durationMs }),
                   });
                 } catch (error) {
                   // 不叫 `handler`：這次摘要不生效。見上面「記不進去，這次摘要不生效」。
@@ -1914,6 +1960,33 @@ function splitMessageTokens(
     injectedTokens: shares[1]!,
     toolResultTokens: shares[2]!,
     conversationTokens: shares[3]!,
+  };
+}
+
+/**
+ * 補上 `summaryIndexTokens`：`summaryTokens` 裡屬於索引（`<index>…</index>`）的那一截，照它在摘要訊息文字裡佔的字元比例分
+ * （無條件捨去）。現況連同前言是 `summaryTokens` 減它。
+ *
+ * @param parts - {@link splitMessageTokens} 分好的四格。
+ * @param messages - 這份請求的訊息。
+ * @returns 四格加 `summaryIndexTokens`；摘要沒有索引時是 `0`。請求裡沒有摘要訊息就不加這一格。
+ */
+function withSummaryIndexTokens(
+  parts: ReturnType<typeof splitMessageTokens>,
+  messages: readonly BaseMessage[],
+): ReturnType<typeof splitMessageTokens> & { readonly summaryIndexTokens?: number } {
+  let chars = 0;
+  let indexChars = 0;
+  for (const message of messages) {
+    if (!isSummarizationMessage(message)) continue;
+    chars += message.text.length;
+    const { indexText } = parseSummaryHead(summaryBodyOf(message));
+    if (indexText !== '') indexChars += '<index>\n'.length + indexText.length + '\n</index>'.length;
+  }
+  if (chars === 0) return parts;
+  return {
+    ...parts,
+    summaryIndexTokens: Math.floor((parts.summaryTokens * indexChars) / chars),
   };
 }
 
@@ -2142,11 +2215,14 @@ function withTokenBudget(
                     toolsTokens: estimate.parts.tools,
                     messageTokens,
                     // 訊息那一格再照類別拆（#2774），四格相加等於 `messageTokens`。
-                    messageParts: splitMessageTokens(
-                      messageTokens,
-                      estimateMessageGroups(sent.messages ?? [], messageKindOf, {
-                        singleDigits: book.singleDigits(modelNameOf(sent.model)),
-                      }),
+                    messageParts: withSummaryIndexTokens(
+                      splitMessageTokens(
+                        messageTokens,
+                        estimateMessageGroups(sent.messages ?? [], messageKindOf, {
+                          singleDigits: book.singleDigits(modelNameOf(sent.model)),
+                        }),
+                      ),
+                      sent.messages ?? [],
                     ),
                   },
                 },

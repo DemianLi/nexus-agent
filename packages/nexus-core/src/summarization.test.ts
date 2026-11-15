@@ -623,9 +623,37 @@ describe('context/measure 帶 breakdown（接線）', () => {
       injectedTokens: estimateMessageTokens(m.instructions) + estimateMessageTokens(m.reminder),
       toolResultTokens: estimateMessageTokens(m.result),
       conversationTokens: estimateMessageTokens(m.human) + estimateMessageTokens(m.call),
+      // 這則摘要的本文沒有 `<index>`：整份是現況。
+      summaryIndexTokens: 0,
     });
-    for (const value of Object.values(measure.breakdown!.messageParts!))
-      expect(value).toBeGreaterThan(0);
+    const { summaryIndexTokens: _index, ...four } = measure.breakdown!.messageParts!;
+    for (const value of Object.values(four)) expect(value).toBeGreaterThan(0);
+  });
+
+  it('summaryIndexTokens：摘要那一格裡索引佔的那一截，照字元比例分，不動四格的總和', async () => {
+    const index = `[#1 messages 0-41] 備份排程\n- ${'查了三台主機的排程。'.repeat(20)}\nAnchors: ENOSPC`;
+    const state = '## 現況\n還沒決定保留天數。';
+    const summary = new HumanMessage({
+      content: `Here is a summary of the conversation to date:\n\n<index>\n${index}\n</index>\n<state>\n${state}\n</state>`,
+      additional_kwargs: { lc_source: 'summarization' },
+    });
+    const m = mixedMessages();
+    const measure = await measureOf({ messages: [summary, m.human, m.call, m.result] });
+    const {
+      summaryTokens,
+      injectedTokens,
+      toolResultTokens,
+      conversationTokens,
+      summaryIndexTokens,
+    } = measure.breakdown!.messageParts!;
+    expect(summaryTokens + injectedTokens + toolResultTokens + conversationTokens).toBe(
+      measure.breakdown!.messageTokens,
+    );
+    const share = ('<index>\n'.length + index.length + '\n</index>'.length) / summary.text.length;
+    expect(summaryIndexTokens).toBe(Math.floor(summaryTokens * share));
+    // 這份索引比現況長得多：大半格是索引，但不是整格。
+    expect(summaryIndexTokens).toBeGreaterThan(summaryTokens / 2);
+    expect(summaryIndexTokens).toBeLessThan(summaryTokens);
   });
 
   it('messageParts 錨在供應商實數上：四格照比例分攤修正量，相加仍等於 messageTokens', async () => {
@@ -757,9 +785,9 @@ describe('生摘要的那次呼叫不上線（接線）', () => {
   it('摘要了：生摘要那次帶 nostream，交下去的是本尊', async () => {
     const { model, calls } = fakeModel();
     const handed = await modelHandedDown([{ type: 'messages', value: 6 }], model);
-    // 前提：真的摘要了，本尊的 `invoke` 被叫了一次。
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.tags).toEqual(['nostream']);
+    // 前提：真的摘要了。索引條目一次、現況一次，兩次都不上線。
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.tags)).toEqual([['nostream'], ['nostream']]);
     expect(handed).toBe(model);
   });
 
@@ -844,7 +872,8 @@ describe('tokens 門檻（接線）', () => {
       messages: history(new HumanMessage('短問題')),
       pruning: false,
     });
-    expect(invokes).toHaveLength(1);
+    // 索引條目一次、現況一次。
+    expect(invokes).toHaveLength(2);
     expect(sent).toHaveLength(1);
     expect(String(sent[0]!.messages[0]!.content)).toContain('這是摘要。');
     expect(sent[0]!.messages).toHaveLength(3);
@@ -860,7 +889,7 @@ describe('tokens 門檻（接線）', () => {
       messages: history(new HumanMessage('短問題')),
       pruning: false,
     });
-    expect(invokes).toEqual([['nostream']]);
+    expect(invokes).toEqual([['nostream'], ['nostream']]);
     expect(sent[0]!.model).toBe(model);
   });
 
@@ -901,7 +930,8 @@ describe('tokens 門檻（接線）', () => {
       messages: history(new HumanMessage(BIG)),
       pruning: false,
     });
-    expect(invokes).toHaveLength(1);
+    // 索引條目一次、現況一次；第二次摘要不發生。
+    expect(invokes).toHaveLength(2);
     expect(sent).toHaveLength(1);
     expect(String(sent[0]!.messages.at(-1)!.content)).toBe(BIG);
   });
@@ -1028,12 +1058,15 @@ describe('摘要輸入裡的附件', () => {
       new AIMessage('五'),
     ]);
 
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain('File "report.csv" (12 bytes, sha256:aaaaaaaa)');
-    expect(prompts[0]).toContain('/attachments/aa/' + 'a'.repeat(64) + '/report.csv');
-    expect(prompts[0]).toContain('"shot.png" (sha256:bbbbbbbb, 3x2) was attached here');
-    expect(prompts[0]).not.toContain('[nexus-file]');
-    expect(prompts[0]).not.toContain('[nexus-image]');
+    // 索引條目一次、現況一次；兩次的輸入都由同一段訊息組成，附件都照樣寫進去。
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('File "report.csv" (12 bytes, sha256:aaaaaaaa)');
+      expect(prompt).toContain('/attachments/aa/' + 'a'.repeat(64) + '/report.csv');
+      expect(prompt).toContain('"shot.png" (sha256:bbbbbbbb, 3x2) was attached here');
+      expect(prompt).not.toContain('[nexus-file]');
+      expect(prompt).not.toContain('[nexus-image]');
+    }
     // 前提：摘要真的提交了（交下去的是「摘要 ＋ 留下的兩則」），不是被 shrink 檢查擋掉後照原串送（#1396）。
     expect(sent).toHaveLength(3);
     // 留下的那則：同一個物件、區塊沒被換。
@@ -1043,7 +1076,8 @@ describe('摘要輸入裡的附件', () => {
   it('沒有附件時，訊息串原樣進基座', async () => {
     // 訊息要夠長（#1396）：見 `fatHistory`。
     const { prompts, sent } = await summarize(fatHistory(6));
-    expect(prompts).toHaveLength(1);
+    // 索引條目一次、現況一次。
+    expect(prompts).toHaveLength(2);
     expect(sent.slice(1)).toHaveLength(2);
   });
 });

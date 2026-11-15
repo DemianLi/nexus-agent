@@ -1,6 +1,6 @@
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { estimateMessageTokens, SUMMARY_INSTRUCTION } from '@nexus/core';
+import { estimateMessageTokens, SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { FIDELITY_VARIANTS } from './dataset.js';
 import { formatFidelityReport } from './report.js';
@@ -13,20 +13,34 @@ const contentOf = (message: BaseMessage) =>
 /** 雜訊行：存取日誌與會議室借用紀錄。 */
 const NOISE = /^(10\.0\.\d+\.\d+ - - |第 \d+ 筆：)/;
 
-/** 把要摘的對話裡不是雜訊的行原樣留下的摘要模型：事實全在。 */
+/** 索引條目那次的回覆：標題加一行，是合格的條目；這份評估量的是現況，條目只佔位。 */
+const ENTRY_TEXT = '本段對話\n- 見現況';
+/** 這一次呼叫是不是索引條目那次（回覆是 {@link ENTRY_TEXT}，不算進現況）。 */
+const isEntryCall = (input: readonly BaseMessage[]) =>
+  contentOf(input.at(-1) ?? new HumanMessage('')).includes(SUMMARY_ENTRY_INSTRUCTION);
+
+/**
+ * 把要摘的對話裡不是雜訊的行原樣留下的摘要模型：事實全在。系統訊息與摘要指令不算摘要內容（重播形狀才有）。
+ */
 const KEEPS_EVERYTHING = {
   profile: {},
-  invoke: async (input: readonly BaseMessage[]) => ({
-    text: input
-      .map(contentOf)
-      .join('\n')
-      .split('\n')
-      .filter((line) => !NOISE.test(line))
-      .join('\n'),
-  }),
+  invoke: async (input: readonly BaseMessage[]) => {
+    if (isEntryCall(input)) return { text: ENTRY_TEXT };
+    return {
+      text: input
+        .filter(
+          (message) => message.getType() !== 'system' && contentOf(message) !== SUMMARY_INSTRUCTION,
+        )
+        .map(contentOf)
+        .join('\n')
+        .split('\n')
+        .filter((line) => !NOISE.test(line))
+        .join('\n'),
+    };
+  },
 };
 
-/** 什麼都沒留下的摘要模型。 */
+/** 什麼都沒留下的摘要模型（條目那次回的單行也是合格的條目）。 */
 const DROPS_EVERYTHING = {
   profile: {},
   invoke: async () => ({ text: 'Nothing of note happened.' }),
@@ -39,14 +53,16 @@ const echo = async (messages: readonly BaseMessage[]) =>
 const models = (summaryModel: unknown): FidelityModels => ({ summaryModel, ask: echo });
 
 describe('交接保真度評估（#2774）', () => {
-  it('四個變體：摘要一次、連續兩次、中文對話、決定被推翻', () => {
+  it('五個變體：摘要一次、連續兩次、連續四次、中文對話、決定被推翻', () => {
     expect(FIDELITY_VARIANTS.map((variant) => variant.id)).toEqual([
       'single',
       'double',
+      'quad',
       'zh',
       'overturned',
     ]);
     expect(FIDELITY_VARIANTS.find((variant) => variant.id === 'double')?.segments).toHaveLength(2);
+    expect(FIDELITY_VARIANTS.find((variant) => variant.id === 'quad')?.segments).toHaveLength(4);
   });
 
   it('每一段都長過摘要門檻，而且以使用者的話結尾', () => {
@@ -120,20 +136,21 @@ describe('交接保真度評估（#2774）', () => {
           profile: {},
           invoke: async (input: readonly BaseMessage[]) => {
             inputs.push(input);
-            // 只留原訊息裡不是雜訊的行：系統訊息與摘要指令不算摘要內容。
-            return KEEPS_EVERYTHING.invoke(input.slice(1, -1));
+            return KEEPS_EVERYTHING.invoke(input);
           },
         },
         ask: echo,
         summaryCall: 'replay',
       });
 
-      expect(inputs).toHaveLength(variant.segments.length);
+      // 每段兩次：索引條目一次、現況一次，各自的最後一則是它的指令。
+      expect(inputs).toHaveLength(variant.segments.length * 2);
       for (const input of inputs) {
         expect(input[0]?.getType()).toBe('system');
         expect(input.length).toBeGreaterThan(2);
-        expect(input.at(-1)?.content).toBe(SUMMARY_INSTRUCTION);
+        expect([SUMMARY_INSTRUCTION, SUMMARY_ENTRY_INSTRUCTION]).toContain(input.at(-1)?.content);
       }
+      expect(inputs.filter(isEntryCall)).toHaveLength(variant.segments.length);
       expect(result.score).toBe(1);
     },
   );
@@ -151,11 +168,13 @@ describe('交接保真度評估（#2774）', () => {
 
   it('連續摘要兩次：第二次摘的是第一次的摘要，不是第一段的原文', async () => {
     const double = FIDELITY_VARIANTS.find((variant) => variant.id === 'double')!;
+    // 只記現況那一次的輸入（索引條目那次的輸入不是摘要內容，不計）。
     const inputs: string[] = [];
     await runFidelityVariant(double, {
       summaryModel: {
         profile: {},
         invoke: async (input: readonly BaseMessage[]) => {
+          if (isEntryCall(input)) return { text: ENTRY_TEXT };
           inputs.push(input.map(contentOf).join('\n'));
           return { text: `SUMMARY-${inputs.length}` };
         },
