@@ -3585,7 +3585,7 @@ fn a_leaf_that_refuses_attach_with_a_heartbeat_takes_the_pair_down_at_once() {
     assert_eq!(shut_down(&mut h), []);
 }
 
-/// 已知限制：葉子收到 `attach` 一直不回、心跳照送（冷開不結束），這一對留在 `Binding`，沒有期限。等 3 倍 `--stall-ms`
+/// 已知限制：葉子收到 `attach` 一直不回、心跳照送（冷開不結束），這一對留在 `Binding`，沒有期限。等 1.5 倍 `--stall-ms`
 /// 沒有 `up` 也沒有 `down`，停機才回 `down(shutdown)`。
 #[test]
 fn a_leaf_that_never_answers_attach_with_a_heartbeat_stays_until_shutdown() {
@@ -3599,7 +3599,7 @@ fn a_leaf_that_never_answers_attach_with_a_heartbeat_stays_until_shutdown() {
     assert!(wait_until(|| log(&leaf)
         .iter()
         .any(|l| l == "attach ignored")));
-    std::thread::sleep(Duration::from_millis(9_000));
+    std::thread::sleep(Duration::from_millis(4_500));
     assert_eq!(pair_audit(&h), Vec::<String>::new());
     assert_eq!(
         shut_down(&mut h),

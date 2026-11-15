@@ -17,7 +17,7 @@
 //! - `bind`（第一則 `ready` 之後才合法）：thread 記第一次的，之後每一則都要相同。
 //!   - 現在的葉子驗過並 `register` 了、還沒綁過：馬上在橋上 `attach`，葉子回成功才送 `bound`。
 //!   - 沒有這樣的葉子（斷了、換了還沒到）：留著，等葉子 `register` 那一刻再 `attach`。
-//!   - 葉子回 `attach` 錯、或 `attach` 送不出去：記一行，以 4 結束（[`EXIT_ATTACH`]）。監督行程不會再送 `bind`，留著只會讓這一對
+//!   - 葉子回 `attach` 錯、或 `attach` 送不出去（橋上排著的到了暫停線、編出來超過一框）：記一行，以 4 結束（[`EXIT_ATTACH`]）。監督行程不會再送 `bind`，留著只會讓這一對
 //!     停在等 `bound`；結束了監督行程才收得到、才回 `down`。
 //!   - 葉子回之前斷線（或要送時已經不在橋上）：記一行，不送 `bound`，照活；那則 `bind` 不替下一個葉子重試。
 //! - 心跳：收到第一則 `bind` 起每 [`HEARTBEAT`] 送一次，之後不停。
@@ -53,7 +53,7 @@ pub const HEARTBEAT: Duration = Duration::from_secs(1);
 /// 協定錯誤的結束碼。
 pub const EXIT_PROTOCOL: i32 = 3;
 
-/// `attach` 明確失敗（葉子回錯、或送不出去）的結束碼。
+/// `attach` 明確失敗（葉子回錯、或送不出去；葉子已經不在橋上的不算）的結束碼。
 pub const EXIT_ATTACH: i32 = 4;
 
 const USAGE: &str = "nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑>";

@@ -525,6 +525,8 @@ fn a_refused_attach_sends_no_bound_and_exits_4() {
     );
     assert_eq!(rig.exit(), Some(EXIT_ATTACH));
     assert_eq!(count(&rig.rest(), &bound("thread-1")), 0);
+    assert!(!rig.dir.join("front.sock").exists());
+    assert!(!rig.dir.join("pair.sock").exists());
 }
 
 /// 等 3 個心跳間隔再看：正確的程式在 `bind` 之前永遠不送心跳，等多久都不會紅；這段等待只決定「從起動就送心跳」這種錯抓不抓得到

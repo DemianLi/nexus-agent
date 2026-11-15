@@ -13,7 +13,7 @@
 //! 另外在 `--socket` 上收資料連線：每條先寫一行 `leaf <pid>`，之後收到什麼回什麼。
 //! `--no-register`：不連橋。`--ready-before-register`：先在控制通道送 `ready`、記一行 `ready`，等 `<socket 路徑>.go` 出現才連橋。
 //! `--die-on-attach`：收到 `attach` 不回，當場以 9 結束。`--refuse-attach`：回錯；`--ignore-attach`：不回。這兩個都不當成收到 `bind`，所以心跳不會開始，
-//! 要心跳照送就加 `--heartbeat-early`（一起來就開始送）。
+//! 要心跳照送就加 `--heartbeat-early`（連橋的才有用：送完 `hello` 就開始，不等 `bind`）。
 //!
 //! - 第一框送 `hello`（版本照 `--hello-version`，預設是 [`PROTOCOL_VERSION`]；宣告 loop 在自己這裡，`--no-loop` 不宣告）；`--skip-hello` 不送，直接送 `ready`。
 //!   收到監督行程的 `hello` 記一行 `hello <token 的長度>`（不記值），token 留著給連宿主的動作用。
