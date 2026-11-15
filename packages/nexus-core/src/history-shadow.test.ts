@@ -314,6 +314,40 @@ describe('createHistoryShadowMiddleware', () => {
     }
   });
 
+  it('other 的 detail 說得出原因：找不到日誌帶 kind、比對出錯帶原錯；記錄端自己壞了也照樣交下去', async () => {
+    const run = async (forCall: () => SessionLookup, record: (o: HistoryShadowOutcome) => void) => {
+      const middleware = createHistoryShadowMiddleware({
+        sessions: { forCall },
+        sink: { record },
+      }) as unknown as { wrapModelCall: Hook };
+      const handler = vi.fn((_request: unknown) => 'reply');
+      expect(await middleware.wrapModelCall({ messages: [] }, handler)).toBe('reply');
+      expect(handler).toHaveBeenCalledTimes(1);
+    };
+    const seen: HistoryShadowOutcome[] = [];
+    await run(
+      () => ({ kind: 'unknown-caller' }) as SessionLookup,
+      (o) => seen.push(o),
+    );
+    await run(
+      () => {
+        throw new Error('壞了');
+      },
+      (o) => seen.push(o),
+    );
+    expect(seen).toEqual([
+      { kind: 'other', detail: '找不到日誌：unknown-caller' },
+      { kind: 'other', detail: '比對出錯：Error: 壞了' },
+    ]);
+
+    await run(
+      () => ({ kind: 'unknown-caller' }) as SessionLookup,
+      () => {
+        throw new Error('記錄端壞了');
+      },
+    );
+  });
+
   it('同一份日誌往後長：每次只推新的（增量推導按日誌物件認）', async () => {
     const log = secondCallOpen();
     const { tally, hook } = hookOf({
