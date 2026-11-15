@@ -1186,3 +1186,15 @@ export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。
 export { noteSentRequest } from './last-sent-request.js';
 export type { SentHistoryReader } from './summarization.js';
+export {
+  composeSummaryHead,
+  lastSummaryEntryPointer,
+  parseEntryDraft,
+  parseSummaryHead,
+  renderSummaryEntry,
+  SUMMARY_ENTRY_INSTRUCTION,
+  SUMMARY_ENTRY_LIMITS,
+  SUMMARY_STATE_MAX_CHARS,
+} from './summary-head.js';
+export type { SummaryEntry, SummaryEntryDraft, SummaryHead } from './summary-head.js';
+export { summaryBodyOf, SummaryStateTooLongError } from './summarizer-engine.js';

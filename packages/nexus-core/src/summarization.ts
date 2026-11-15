@@ -902,8 +902,9 @@ function replayedSummaryCall(
   request: SessionRequest,
   messagesToSummarize: readonly BaseMessage[],
   total: number,
+  instruction?: string,
 ) => SummaryCall | undefined {
-  return (request, messagesToSummarize, total) => {
+  return (request, messagesToSummarize, total, instruction = SUMMARY_INSTRUCTION) => {
     try {
       const found = sessions.forCall({ configurable: request.runtime?.configurable });
       if (found.kind !== 'ok') return undefined;
@@ -915,7 +916,7 @@ function replayedSummaryCall(
       if (prefix.some((message, at) => message.getType() !== messagesToSummarize[at]!.getType()))
         return undefined;
       return {
-        input: [...last.system, ...prefix, new HumanMessage({ content: SUMMARY_INSTRUCTION })],
+        input: [...last.system, ...prefix, new HumanMessage({ content: instruction })],
         options: last.options,
       };
     } catch {
@@ -1154,6 +1155,22 @@ interface SummaryUsageCell {
   durationMs: number | undefined;
   /** 生摘要的模型呼叫完成過幾次。{@link withCompactionLog} 靠它認得「交下去的這一份剛摘要過」。 */
   summaries: number;
+  /** 上一筆 `compaction/summary` 記完之後完成過幾次；`usage` 與 `durationMs` 是這幾次的加總。 */
+  pending: number;
+}
+
+function sumModelUsage(a: ModelUsage, b: ModelUsage): ModelUsage {
+  const optional = (x: number | undefined, y: number | undefined): number | undefined =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  const cacheReadTokens = optional(a.cacheReadTokens, b.cacheReadTokens);
+  const cacheWriteTokens = optional(a.cacheWriteTokens, b.cacheWriteTokens);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+  };
 }
 const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
 
@@ -1669,8 +1686,16 @@ function quietInvoke<T extends object>(
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
         if (cell !== undefined) {
-          cell.usage = readModelUsage(result);
-          cell.durationMs = Math.round(performance.now() - startedAt);
+          // 一份摘要是好幾次呼叫（索引條目、現況，#2776）：用量與耗時加總，其中一次沒報用量就整份沒有。
+          const usage = readModelUsage(result);
+          cell.usage =
+            cell.pending === 0
+              ? usage
+              : cell.usage === undefined || usage === undefined
+                ? undefined
+                : sumModelUsage(cell.usage, usage);
+          cell.durationMs = (cell.durationMs ?? 0) + Math.round(performance.now() - startedAt);
+          cell.pending += 1;
           cell.summaries += 1;
         }
         onGenerated?.();
@@ -1762,7 +1787,12 @@ function withCompactionLog(
   return {
     ...base,
     wrapModelCall: (request, handler) => {
-      const cell: SummaryUsageCell = { usage: undefined, durationMs: undefined, summaries: 0 };
+      const cell: SummaryUsageCell = {
+        usage: undefined,
+        durationMs: undefined,
+        summaries: 0,
+        pending: 0,
+      };
       let logged = 0;
       const effective = applySummaryCutoff(request.messages ?? [], previousSummaryCutoff());
       const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
@@ -1771,6 +1801,11 @@ function withCompactionLog(
           // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
           if (cell.summaries > logged) {
             logged = cell.summaries;
+            const usage = cell.usage;
+            const durationMs = cell.durationMs;
+            cell.usage = undefined;
+            cell.durationMs = undefined;
+            cell.pending = 0;
             const summary = sent.messages?.[0];
             if (summary !== undefined && isSummarizationMessage(summary)) {
               const cutoffIndex = summaryCutoffIndex(
@@ -1793,9 +1828,9 @@ function withCompactionLog(
                     filePath,
                     summary: toLoggedMessage(summary),
                     // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
-                    ...(cell.usage === undefined ? {} : { usage: cell.usage }),
+                    ...(usage === undefined ? {} : { usage }),
                     beforeCall: true,
-                    ...(cell.durationMs === undefined ? {} : { durationMs: cell.durationMs }),
+                    ...(durationMs === undefined ? {} : { durationMs }),
                   });
                 } catch (error) {
                   // 不叫 `handler`：這次摘要不生效。見上面「記不進去，這次摘要不生效」。

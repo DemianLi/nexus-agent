@@ -21,10 +21,22 @@ import {
 import type { BaseMessage } from '@langchain/core/messages';
 import { resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import { context, countTokensApproximately, createMiddleware } from 'langchain';
+import { countTokensApproximately, createMiddleware } from 'langchain';
 
 import type { AgentMiddleware } from './base-types.js';
-import { applySummaryCutoff, previousSummaryCutoff } from './summary-cutoffs.js';
+import {
+  applySummaryCutoff,
+  previousSummaryCutoff,
+  summaryCutoffIndex,
+} from './summary-cutoffs.js';
+import {
+  composeSummaryHead,
+  parseEntryDraft,
+  parseSummaryHead,
+  SUMMARY_ENTRY_INSTRUCTION,
+  SUMMARY_STATE_MAX_CHARS,
+} from './summary-head.js';
+import type { SummaryEntryDraft } from './summary-head.js';
 
 /** 門檻或保留量，同基座的 `ContextSize`。 */
 export type EngineContextSize =
@@ -59,12 +71,14 @@ export interface SummarizerEngineOptions {
    * @param request - 這次的 `wrapModelCall` 請求。
    * @param messagesToSummarize - 要摘的那一段，有效訊息串的開頭。
    * @param total - 有效訊息串的則數。
+   * @param instruction - 最後一則 user 訊息的指令；省略是現況那一次的指令。
    * @returns 整份請求，或 `undefined`。
    */
   readonly summaryCallOf?: (
     request: SessionRequest,
     messagesToSummarize: readonly BaseMessage[],
     total: number,
+    instruction?: string,
   ) => SummaryCall | undefined;
 }
 
@@ -90,6 +104,33 @@ interface EngineRequest extends SessionRequest {
 }
 
 type Handler = (request: EngineRequest) => Promise<unknown>;
+
+const SUMMARY_PREAMBLE_HEAD =
+  'You are in the middle of a conversation that has been summarized.\n\nThe full conversation history has been saved to ';
+const SUMMARY_PREAMBLE_TAIL =
+  ' should you need to refer back to it for details.\n\nA condensed summary follows:\n\n<summary>\n';
+const SUMMARY_CLOSE = '\n</summary>';
+const SUMMARY_PLAIN_PREFIX = 'Here is a summary of the conversation to date:\n\n';
+
+/** 現況兩次都超過上限：這次摘要不成立。 */
+export class SummaryStateTooLongError extends Error {
+  constructor(readonly length: number) {
+    super(`摘要的現況有 ${length} 個字元，超過上限 ${SUMMARY_STATE_MAX_CHARS}；不截斷，這次不摘要`);
+    this.name = 'SummaryStateTooLongError';
+  }
+}
+
+/**
+ * @param message - 摘要訊息。
+ * @returns 去掉前言與 `<summary>` 包法之後的本文；認不出包法就回整份文字。
+ */
+export function summaryBodyOf(message: BaseMessage): string {
+  const text = message.text;
+  if (text.startsWith(SUMMARY_PLAIN_PREFIX)) return text.slice(SUMMARY_PLAIN_PREFIX.length);
+  const open = text.indexOf('<summary>\n');
+  if (open < 0 || !text.endsWith(SUMMARY_CLOSE)) return text;
+  return text.slice(open + '<summary>\n'.length, text.length - SUMMARY_CLOSE.length);
+}
 
 function isSummaryMessage(message: BaseMessage): boolean {
   if (!HumanMessage.isInstance(message)) return false;
@@ -407,15 +448,17 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     }
   }
 
-  async function createSummary(
+  type SummaryModel = {
+    invoke(input: BaseMessage[], options?: unknown): Promise<{ text: string }>;
+  };
+
+  /** 現況那一次呼叫：輸入是有效串的開頭（含上一份摘要訊息），回新的現況全文。 */
+  async function createState(
     messages: readonly BaseMessage[],
-    chatModel: unknown,
+    model: SummaryModel,
     request: EngineRequest,
     total: number,
   ): Promise<string> {
-    const model = chatModel as {
-      invoke(input: BaseMessage[], options?: unknown): Promise<{ text: string }>;
-    };
     const call = summaryCallOf?.(request, messages, total);
     if (call !== undefined) return (await model.invoke(call.input, call.options)).text;
     const conversation = getBufferString([...messages]);
@@ -423,20 +466,79 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     return (await model.invoke([new HumanMessage({ content: prompt })])).text;
   }
 
+  /**
+   * 索引條目那一次呼叫（#2776）：回覆讀不成條目就再叫一次，還是不成、或那次回覆被拒收，退成只有指標的條目。
+   * 中止與其他錯誤照拋。
+   */
+  async function createEntryDraft(
+    messages: readonly BaseMessage[],
+    model: SummaryModel,
+    request: EngineRequest,
+    total: number,
+    earlierEntries: number,
+  ): Promise<SummaryEntryDraft | undefined> {
+    const call = summaryCallOf?.(request, messages, total, SUMMARY_ENTRY_INSTRUCTION);
+    const input = call?.input ?? [
+      new HumanMessage({
+        content: `Conversation to condense:\n${getBufferString(
+          messages.filter((message) => !isSummaryMessage(message)),
+        )}\n\n--- END OF CONVERSATION ---\n\n${SUMMARY_ENTRY_INSTRUCTION}`,
+      }),
+    ];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let text: string;
+      try {
+        text = (await model.invoke(input, call?.options)).text;
+      } catch (error) {
+        if ((error as { name?: unknown } | null)?.name === 'SummaryRejectedError') return undefined;
+        throw error;
+      }
+      const draft = parseEntryDraft(text, earlierEntries);
+      if (draft !== undefined) return draft;
+    }
+    return undefined;
+  }
+
+  /**
+   * 摘要本文：上一份的索引原樣抄、接這次的新條目，再接重寫過的現況。兩次呼叫都回來才有本文，任一次拋就整次不摘。
+   *
+   * @throws {SummaryStateTooLongError} 現況兩次都超過 {@link SUMMARY_STATE_MAX_CHARS}。
+   */
+  async function createSummary(
+    messages: readonly BaseMessage[],
+    chatModel: unknown,
+    request: EngineRequest,
+    total: number,
+  ): Promise<string> {
+    const model = chatModel as SummaryModel;
+    const first = messages[0];
+    const previous =
+      first !== undefined && isSummaryMessage(first)
+        ? parseSummaryHead(summaryBodyOf(first))
+        : undefined;
+    const previousCutoff = previousSummaryCutoff()?.cutoffIndex;
+    const range = [
+      previousCutoff ?? 0,
+      summaryCutoffIndex(previousCutoff, total, 1 + (total - messages.length)),
+    ] as const;
+    const earlier = previous?.entries ?? 0;
+    const draft = await createEntryDraft(messages, model, request, total, earlier);
+    let state = await createState(messages, model, request, total);
+    if (state.length > SUMMARY_STATE_MAX_CHARS) {
+      state = await createState(messages, model, request, total);
+      if (state.length > SUMMARY_STATE_MAX_CHARS) throw new SummaryStateTooLongError(state.length);
+    }
+    return composeSummaryHead(
+      previous?.indexText ?? '',
+      { index: earlier + 1, range, ...(draft === undefined ? {} : { draft }) },
+      state,
+    );
+  }
+
   function buildSummaryMessage(summary: string, filePath: string | null): HumanMessage {
     const content = filePath
-      ? context`
-        You are in the middle of a conversation that has been summarized.
-
-        The full conversation history has been saved to ${filePath} should you need to refer back to it for details.
-
-        A condensed summary follows:
-
-        <summary>
-        ${summary}
-        </summary>
-      `
-      : `Here is a summary of the conversation to date:\n\n${summary}`;
+      ? `${SUMMARY_PREAMBLE_HEAD}${filePath}${SUMMARY_PREAMBLE_TAIL}${summary}${SUMMARY_CLOSE}`
+      : `${SUMMARY_PLAIN_PREFIX}${summary}`;
     return new HumanMessage({ content, additional_kwargs: { lc_source: 'summarization' } });
   }
 

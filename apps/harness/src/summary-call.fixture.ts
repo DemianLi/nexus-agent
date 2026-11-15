@@ -1,5 +1,5 @@
 import type { BaseMessage } from '@langchain/core/messages';
-import { SUMMARY_INSTRUCTION } from '@nexus/core';
+import { SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION } from '@nexus/core';
 
 /**
  * 這份 prompt 是不是生摘要的那一次呼叫：模板（一則「Conversation to condense:」開頭的人話）或重播
@@ -13,6 +13,7 @@ export function isSummaryCallPrompt(prompt: readonly BaseMessage[]): boolean {
   const content = prompt.at(-1)?.content;
   return (
     content === SUMMARY_INSTRUCTION ||
+    content === SUMMARY_ENTRY_INSTRUCTION ||
     (prompt.length === 1 &&
       typeof content === 'string' &&
       content.startsWith('Conversation to condense:'))

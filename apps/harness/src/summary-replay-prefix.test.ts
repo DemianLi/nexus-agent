@@ -4,7 +4,7 @@
  * 出貨的 `BaseChatOpenAI` 打本機假端點，比的是線上的請求 body：`history-source: log` 時，摘要請求的工具與上一次主請求相同、
  * 訊息逐則相同到兩者較短的那一邊為止，最後一則是摘要指令；`state` 時是模板（一則 user 訊息、不帶工具）。
  */
-import { SUMMARY_INSTRUCTION } from '@nexus/core';
+import { SUMMARY_ENTRY_INSTRUCTION, SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { runAssembly } from './log-derived-history.fixture.js';
@@ -16,7 +16,8 @@ const SUMMARIZATION = { trigger: [{ type: 'tokens' as const, value: 3_000 }], re
 const SUMMARY_TEXT = '## Primary Request and Intent\n- 使用者說了幾輪填充文字。';
 
 const lastContent = (body: Body): unknown => body.messages.at(-1)?.content;
-const isReplay = (body: Body): boolean => lastContent(body) === SUMMARY_INSTRUCTION;
+const isReplay = (body: Body): boolean =>
+  lastContent(body) === SUMMARY_INSTRUCTION || lastContent(body) === SUMMARY_ENTRY_INSTRUCTION;
 const isTemplate = (body: Body): boolean => {
   const content = lastContent(body);
   return typeof content === 'string' && content.startsWith('Conversation to condense:');
