@@ -483,13 +483,16 @@ impl Supervisor {
             }
             let serial = composition.serial;
             match report {
+                // 在收的一對不會再綁：晚到的 `ready` 不理，狀態與沉默的起算都不動。
                 ConversationReport::Ready
-                    if matches!(composition.state, PairState::Refilling { .. }) =>
+                    if matches!(composition.state, PairState::Refilling { .. })
+                        && composition.proc.stop.is_none() =>
                 {
                     self.bind_pair(index);
                 }
                 ConversationReport::Ready
-                    if matches!(composition.state, PairState::Starting { .. }) =>
+                    if matches!(composition.state, PairState::Starting { .. })
+                        && composition.proc.stop.is_none() =>
                 {
                     self.enter(index, PairState::Ready);
                     if self.compositions[index].thread.is_some() {
@@ -599,7 +602,7 @@ impl Supervisor {
             // 有排著的就讓出名額：沒有葉子的組合行程，最早留下的先收。
             self.make_room();
         } else {
-            // 沒有還沒回答的 `bind` 了：晚到的 `bound` 與補起的葉子的 `ready` 不再理。`Starting` 不動：還沒收過 `ready`，沒有 `bind` 要作廢。
+            // 沒有還沒回答的 `bind` 了：晚到的 `bound` 與補起的葉子的 `ready` 不再理。`Starting` 不動：還沒收過 `ready`，沒有 `bind` 要作廢；之後才到的 `ready` 因為已經在收，也不理。
             if matches!(
                 composition.state,
                 PairState::Binding | PairState::Bound | PairState::Refilling { .. }
