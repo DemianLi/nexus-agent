@@ -3,7 +3,7 @@
  * （[#2842](https://github.com/DemianLi/nexus-agent/issues/2842)）。
  *
  * 寫入側在 `kind !== 'ok'` 時靜靜跳過是 `state` 模式的設計；`log` 模式下它們能成立，靠的是模型呼叫那一層的守衛
- * （`history-shadow.ts` 的 `createHistoryFromLogMiddleware`）先拋。這裡把這個順序釘住：真的 `createNexusAgent`＋`ThreadPump`，
+ * （`@nexus/core` 的 `history-shadow.ts`，`createHistoryFromLogMiddleware`）先拋。這裡把這個順序釘住：真的 `createNexusAgent`＋`ThreadPump`，
  * 模型是腳本，**零憑證、零外部連線**。
  *
  * 證據是兩條：模型一次都沒被呼叫；`pump` 自己那份日誌上除了 `pump` 自己寫的事件，沒有任何別的種類。
