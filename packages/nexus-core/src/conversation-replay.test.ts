@@ -190,6 +190,19 @@ describe('每一種產訊息的事件', () => {
   });
 });
 
+describe('補結句子的字面（#2828）', () => {
+  // 這兩句是模型讀得到的文字，措辭就是行為（docs/conversation-replay-vs-dsh.md 第二節）。
+  // 寫死字串、不引用常數，改字要同時改這格，是刻意的摩擦。
+  it('兩個常數的完整字面', () => {
+    expect(TOOL_OUTCOME_UNKNOWN_TEXT).toBe(
+      'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.',
+    );
+    expect(TOOL_NOT_STARTED_TEXT).toBe(
+      'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.',
+    );
+  });
+});
+
 describe('哪幾種事件進模型（#681）', () => {
   it('恰好五種：turn/start、assistant/message、tool/result、user/message、compaction/summary', () => {
     expect([...MODEL_VISIBLE_EVENT_TYPES].sort()).toEqual([
