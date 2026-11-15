@@ -4,7 +4,7 @@
  * ## 缺的是什麼
  *
  * 行程在一輪中間死掉，日誌停在一輪開著：有 `turn/start`，可能有 `tool/call` 沒 `tool/result`，沒有 `turn/end`。
- * 以前續接只補一顆 `session/end-seed`，檔上那一輪永遠開著；模型那一側靠 {@link ./conversation-replay.ts} 在記憶體裡
+ * 只補一顆 `session/end-seed` 的話，檔上那一輪永遠開著；模型那一側靠 {@link ./conversation-replay.ts} 在記憶體裡
  * 補結果，每次續接重算。每個讀方還得自己認得「end-seed 前那一輪死了」，漏認的就當它還在跑；web 歷史也分不出
  * 「當掉收的」與「正常完成」。
  *
@@ -47,7 +47,7 @@ import type {
 /** {@link scanOpenTurn} 掃到的：最後一輪開著沒有，與它還沒結清的東西。 */
 interface OpenTurnScan {
   readonly open: boolean;
-  /** 這一輪的回覆要過、還沒配到結果的呼叫，照要的順序（dsh 的 `ToolCallRecovery.pendingCalls`）。 */
+  /** 這一輪的回覆要過、還沒配到結果的呼叫，照要的順序。 */
   readonly unanswered: ReadonlyMap<string, string>;
   /** 其中記過 `tool/call` 的：決定補哪一句。 */
   readonly started: ReadonlySet<string>;
@@ -56,8 +56,8 @@ interface OpenTurnScan {
 }
 
 /**
- * 掃一遍事件，看最後一輪開著沒有、還欠什麼。掃描照 dsh：`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；
- * **`session/end-seed` 不重設**，見檔頭。
+ * 掃一遍事件，看最後一輪開著沒有、還欠什麼。`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；
+ * **`session/end-seed` 不重設**，見檔頭；與 dsh 的對照見 docs/interrupted-turn-and-invariant-vs-dsh.md 第二節。
  */
 function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
   let open = false;
@@ -82,7 +82,7 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
         break;
       case 'model/start':
         if (open) {
-          // 新一次模型呼叫開始，代表上一批已經結清（或被基座在記憶體裡補掉了）：同 dsh 的 `step/end` 清掉待結的呼叫。
+          // 新一次模型呼叫開始，代表上一批已經結清（或被基座在記憶體裡補掉了）：清掉待結的呼叫（對應 dsh 的 `step/end`，見同一份文件第二節）。
           unanswered.clear();
           started.clear();
           openModelStarts.push(event.seq);
@@ -131,7 +131,7 @@ export interface UnansweredCallResult {
 
 /**
  * 最後一輪如果開著，替它**沒配到結果的呼叫**各算一顆錯誤結果：記過 `tool/call` 的說結果不明，還沒記到的說還沒開始，
- * 字逐字照 dsh。續接時的補結（{@link interruptedTurnClosers}）與一輪失敗時當場補的（#2029）都從這裡拿，
+ * 句子是模型讀得到的文字，措辭就是行為，不隨手改字（與 dsh 的對照見同一份文件第二節）。續接時的補結（{@link interruptedTurnClosers}）與一輪失敗時當場補的（#2029）都從這裡拿，
  * 句子與碼只有這一份。
  *
  * @param events - 全部事件，照 `seq` 排。
@@ -153,7 +153,7 @@ export function unansweredCallResults(events: readonly SessionEvent[]): Unanswer
 /**
  * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（{@link unansweredCallResults}）、
  * **開著的 `model/start`** 各一顆 `model/end {outcome:'error'}`，最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
- * 順序照 dsh：結果、步的收尾、輪的收尾。
+ * 順序：結果、步的收尾、輪的收尾。
  *
  * `seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
  *
