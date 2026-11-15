@@ -273,6 +273,12 @@
 - 確認框（alert-dialog）打開時落在第一個可 tab 的按鈕，也就是「取消」：不小心按 Enter 不會執行（Base UI 的預設，#1583）。
 - 下拉選單：Trigger 是原生 button，Enter 打開（瀏覽器轉成 click），方向鍵移動 highlighted、Enter 選取並收起（Base UI 的 Menu；`guard/` 用真的 Chrome 量，#1583）。
 
+**Windows 高對比**（`forced-colors: active`，[#2796](https://github.com/DemianLi/nexus-agent/issues/2796)）
+- 高對比下瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`。**只靠半透明底色表示的選取、只靠陰影或玻璃邊的面，要補系統色的外框**：選取 2px `Highlight`，面 1px `CanvasText`，畫在裡面不佔版面。
+- 現在補的：command 鍵盤走到的那一項、被定位的訊息、開著的選單 Trigger、目前這條會話；dialog、alert-dialog、sheet、tooltip、card、輸入框。目前這條會話是停用的按鈕，高對比下換回按鈕字色、不變淡（它是選取中，不是不能用）。
+- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 83 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。量的是 Chrome 模擬的高對比，沒有在真的 Windows 上看過。
+- 沒補的：`glass` 這個 `Button` variant 沒有邊框（產品沒用到，用到再補）。高對比還不是門檻：新元件沒有測試擋「選取只靠底色」。
+
 **鍵盤**
 - 核准面板與計劃審核面板不加快捷鍵，**Esc 不做事**。
 - 提問面板留 primitive 內建，加數字鍵 1–9，**Esc＝收起**（不是停止）。
@@ -491,7 +497,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | --- | --- | --- |
 | 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
 | 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
-| Windows 高對比 | 沒量過，量完再定要不要列為門檻 | [#2764](https://github.com/DemianLi/nexus-agent/issues/2764) |
+| Windows 高對比列為門檻 | 量過了（[#2764](https://github.com/DemianLi/nexus-agent/issues/2764)），量到的缺口補了（§8「Windows 高對比」）；新元件還沒有通用的測試擋，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
 | 視覺回歸 | 沒有 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。

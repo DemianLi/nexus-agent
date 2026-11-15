@@ -777,3 +777,87 @@ describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：
     expect(same).toEqual([]);
   });
 });
+
+/**
+ * Windows 高對比（#2796）：瀏覽器把底色換成系統色、拿掉陰影之後，選取與面的邊界要靠外框看得出來。
+ * 量的是 Chrome 模擬的 `forced-colors: active`，不是真的 Windows。
+ */
+describe.each<Theme>(['light', 'dark'])('Windows 高對比（#2796）：%s', (theme) => {
+  const CASES: Record<string, Record<string, string>> = {
+    command: { "[data-slot='command-item'][data-selected='true']": '2px' },
+    dialog: { "[data-slot='dialog-content']": '1px' },
+    'composer-pick-open': {
+      "[data-slot='dropdown-menu-trigger'][data-popup-open]": '2px',
+      "[data-slot='composer']": '1px',
+    },
+    'thread-statuses': { "[data-slot='sidebar-menu-button'][data-active]:disabled": '2px' },
+  };
+
+  const outlines = (page: Page, selectors: string[]) =>
+    page.evaluate(
+      (list) =>
+        list.map((selector) => {
+          const el = document.querySelector(selector);
+          if (el === null) return `${selector} 不在頁上`;
+          const style = getComputedStyle(el);
+          return `${selector} ${style.outlineStyle} ${style.outlineWidth}`;
+        }),
+      selectors,
+    );
+
+  test.each(Object.keys(CASES))('%s：選取與面有實線外框', async (name) => {
+    const expected = CASES[name] ?? {};
+    const marks = Object.fromEntries(Object.keys(expected).map((selector) => [selector, {}]));
+    const page = await openOverlay(name, theme, { forcedColors: true, marks });
+    try {
+      expect(await outlines(page, Object.keys(expected))).toEqual(
+        Object.entries(expected).map(([selector, width]) => `${selector} solid ${width}`),
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('目前這條會話不畫成停用：不變淡，字色跟其他會話列一樣', async () => {
+    const current = "[data-slot='sidebar-menu-button'][data-active]:disabled";
+    const page = await openOverlay('thread-statuses', theme, {
+      forcedColors: true,
+      marks: { [current]: {} },
+    });
+    try {
+      const look = await page.evaluate((selector) => {
+        const el = document.querySelector(selector);
+        const other = document.querySelector(
+          "[data-slot='sidebar-menu-button']:not([data-active]):not(:disabled)",
+        );
+        if (el === null || other === null) return null;
+        const colors = [el, ...el.querySelectorAll('*')].map(
+          (node) => getComputedStyle(node).color,
+        );
+        return {
+          opacity: getComputedStyle(el).opacity,
+          colors: [...new Set(colors)],
+          other: getComputedStyle(other).color,
+        };
+      }, current);
+      expect(look).not.toBeNull();
+      expect(look?.opacity).toBe('1');
+      expect(look?.colors).toEqual([look?.other]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('一般模式下沒有這些外框', async () => {
+    const page = await openOverlay('dialog', theme, {
+      marks: { "[data-slot='dialog-content']": {} },
+    });
+    try {
+      expect(await outlines(page, ["[data-slot='dialog-content']"])).toEqual([
+        expect.stringContaining(' none '),
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+});
