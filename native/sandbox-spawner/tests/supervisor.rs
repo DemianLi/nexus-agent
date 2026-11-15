@@ -3336,7 +3336,7 @@ fn a_leaf_that_never_registers_is_collected_at_the_start_deadline() {
     );
 }
 
-/// `--start-timeout-ms 0` 是不判：不登記的葉子一直留著，停機時回一次 `down(shutdown)`。
+/// `--start-timeout-ms 0` 不是「馬上逾時」：不登記的葉子留著，停機時回一次 `down(shutdown)`。
 #[test]
 fn a_leaf_that_never_registers_stays_when_the_start_deadline_is_off() {
     let mut h = Harness::start(Options {
@@ -3378,7 +3378,7 @@ fn a_composition_that_never_says_hello_is_collected_at_the_start_deadline() {
     assert_eq!(pair_audit(&h).len(), 1, "{:?}", pair_audit(&h));
 }
 
-/// 預熱池裡的一對起動逾時：沒有 thread，不回 `down`；隔 `--front-restart-ms` 再補一對。
+/// 預熱池裡的一對起動逾時：沒有 thread，不回 `down`；之後再補一對。
 #[test]
 fn a_warm_pair_past_the_start_deadline_is_collected_and_refilled() {
     let mut h = Harness::start(Options {
@@ -3512,7 +3512,7 @@ fn a_refilled_leaf_slow_to_register_is_not_stalled() {
     );
 }
 
-/// 補起的葉子一直沒登記：不判 `stalled`，停機時跟組合行程一起收掉。
+/// 補起的葉子一直沒登記：`--stall-ms` 不判它（起動期限還沒到），停機時跟組合行程一起收掉。
 #[test]
 fn shutdown_collects_a_refilled_leaf_that_never_registered() {
     let mut h = Harness::start(Options {

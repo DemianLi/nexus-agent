@@ -31,7 +31,7 @@
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
-//! `memory`，心跳斷了超過 `--stall-ms`（壓住時只算放它跑的時間）是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! `memory`，心跳斷了超過 `--stall-ms`（壓住時只算放它跑的時間）、成對時等 `ready` 超過 `--start-timeout-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
 //! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
 //! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`；預熱池裡還沒指派的只寫稽核（`thread` 是空字串）。
 //!
@@ -41,10 +41,10 @@
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
 //! `max_silence_ms`，死前最後一段不算。監督行程每一輪取兩次時間（迴圈開頭與 poll 回來），相鄰兩次之間比准許的晚了超過 `--stall-ms` 的一半時，判定自己被停住過，
-//! 所有沉默從那一刻重新起算（[`Pace`]、[`Supervisor::check_resumed`]）。
+//! 所有沉默從那一刻重新起算；一對等 `ready` 的時間也一樣，門檻是 `--start-timeout-ms` 的一半（[`Pace`]、[`Supervisor::check_resumed`]）。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
-//! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
+//! 心跳斷了超過 `--stall-ms`、一對等 `ready` 超過 `--start-timeout-ms` 的不走梯度，當場對群組送 SIGKILL。
 //!
 //! 沉默又一直要 CPU 的 leader 交替送 SIGSTOP／SIGCONT（[`cpu`]）；走拆除梯度或送 `drain` 之前先 SIGCONT。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
@@ -71,6 +71,7 @@
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
 //! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
+//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）。
 //! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
 //! （留到 `--idle-ms`，名額滿時最先收；補了之後等它替新葉子再回一則 `ready` 才重送 `bind`）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
 //! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
@@ -924,7 +925,8 @@ impl Supervisor {
     /// 同步等待可能跨過門檻）。凍住前對話行程照常送心跳時，會造成誤判的停住，它所在那一段量到的 `late` 至少是 `stall` 的四分之三減一個心跳間隔：
     /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
     ///
-    /// 一對等 `ready` 的時間（`--start-timeout-ms`）也一樣，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
+    /// 一對等 `ready` 的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
+    /// 這裡沒有 `stall` 四分之一那樣的上限：有一對時 poll 最晚每 `--rss-poll-ms` 醒一次，停在 poll 裡的停頓要扣掉那一段才算 `late`。
     fn check_resumed(&mut self, now: Instant, late: Duration) {
         let waiting = self
             .compositions
@@ -2964,7 +2966,7 @@ mod tests {
     }
 
     /// 等 `ready` 的一對（剛起的與補了葉子的）到了 `--start-timeout-ms` 才殺組合行程：死因 `stalled`、稽核帶 `error`，葉子等它收完屍才連帶收，
-    /// `down` 與死因累計各一次。差 1 ms 還沒到的不動。
+    /// 死因累計一次（`down` 一次由 `tests/supervisor.rs` 釘）。差 1 ms 還沒到的不動。
     #[test]
     fn a_pair_still_waiting_for_ready_at_the_start_deadline_is_killed() {
         let since = Instant::now();

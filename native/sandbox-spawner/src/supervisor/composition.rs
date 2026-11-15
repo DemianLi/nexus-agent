@@ -14,7 +14,7 @@ pub(super) struct Composition {
     pub(super) read_only: bool,
     /// 前台連的 socket。
     pub(super) socket: PathBuf,
-    /// 建好之後只經 [`Supervisor::enter`] 寫：葉子的 `phase` 在那裡跟著走。
+    /// 走到哪只經 [`Supervisor::enter`] 換：葉子的 `phase` 在那裡跟著走。[`Self::restart_start`] 只改等 `ready` 的起算時間，不換狀態。
     state: PairState,
     /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Supervisor::refill`]）時清掉。
     pub(super) told: bool,
@@ -34,7 +34,7 @@ pub(super) struct Composition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PairState {
     /// 還沒讀到組合行程的 `ready`：葉子還沒起，或起了還沒在橋上登記完；葉子在這之前死了或起不來、整對正在收的也在這裡（之後讀到的 `ready` 照常處理）。
-    /// `since` 是起組合行程的時間，`--start-timeout-ms` 從它起算。
+    /// `since` 是起組合行程的時間（監督行程被停住過就是判定的那一刻），`--start-timeout-ms` 從它起算。
     Starting { since: Instant },
     /// 讀到過 `ready`，沒有在等回答的 `bind`：預熱好的；送過 `bind` 或補了葉子之後葉子死了、或補葉子起不來，整對正在收的也在這裡。
     Ready,
@@ -45,7 +45,7 @@ pub(super) enum PairState {
     /// 葉子死了、組合行程留著等下一個 `ensure`；因 `--idle-ms` 或名額滿被收的也停在這裡。
     Leafless { since: Instant },
     /// 補了葉子，等組合行程替它送 `ready`：收到才送 `bind`。組合行程對每個葉子各送一則 `ready`。
-    /// `since` 是補葉子的時間，`--start-timeout-ms` 從它起算。
+    /// `since` 是補葉子的時間（監督行程被停住過就是判定的那一刻），`--start-timeout-ms` 從它起算。
     Refilling { since: Instant },
 }
 
