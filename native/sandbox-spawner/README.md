@@ -26,7 +26,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
                  --conversation <程式> [--conversation-arg <參數>]...
                  [--composition <程式> [--composition-arg <參數>]...]
                  [--eof-grace-ms 6000] [--term-grace-ms 3000] [--front-restart-ms 1000]
-                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000]
+                 [--rss-limit-mb <MiB>] [--rss-poll-ms 250] [--stall-ms 15000] [--start-timeout-ms 30000]
                  [--capacity <條>] [--warm 1] [--idle-ms 7200000] [--read-only-idle-ms 300000]
                  [--drain-timeout-ms 5000] [--stats-ms 10000]
                  [--throttle-ms 2000] [--throttle-run-ms 25] [--throttle-stop-ms 75]
@@ -56,7 +56,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - `memory`：每 `--rss-poll-ms` 讀一次每條對話行程 leader 的 `VmRSS`（`/proc/<pid>/status`），超過 `--rss-limit-mb` 就殺它的群組。不給 `--rss-limit-mb` 就只記不殺。只量 leader（見已知限制）。
   - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
   - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器、hybrid 主機的 v2 掛在別處）就一律算 `crash`。監督行程自己送 SIGKILL 的（RSS 超過上限、停機的最後一步）也會先算一次：核心搶先 OOM kill 了它時，那一次在這裡消掉，死因仍照監督行程的理由。
-  - `stalled`：心跳斷了超過 `--stall-ms`。
+  - `stalled`：心跳斷了超過 `--stall-ms`；或成對時等組合行程的 `ready` 超過 `--start-timeout-ms`（稽核那一行多一個 `error`：`ready 之前逾時`）。
   - `evicted`：停機之前回了 `drained`、被收掉的（見逐出）。停機開始之後、還沒開始收它之前（停機的 ①）才回 `drained` 的一律不算逐出：照停機收，死因 `shutdown`。停機開始之後也不再送 `drain`（閒置到期、`release` 都不送）。
   - `protocol`：第一框不是版本相等的 `hello`，或 `hello` 沒宣告 loop 在自己這裡。
   - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。停機時還排著的 thread 只回 `down(shutdown)`，不寫稽核，也不算進 `deaths`；那條 thread 還有行程（例如在等它回答 `drain`）的，只在那個行程結束時回一次。例外是那個行程已經被逐出、正在收：它回的 `down(evicted)` 前台不當回答，所以停機當場先回一則 `down(shutdown)`，它收完再回自己的 `down(evicted)`，同一條 thread 前台會收到兩則 `down`。
@@ -66,7 +66,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - 同一批收屍的幾條都被 SIGKILL 時，一次 OOM 歸給誰看收屍的順序，不一定是真正被 OOM 殺的那條。
   - 壓制只管沉默的 leader：CPU 吃在主執行緒以外（worker）時心跳照送，不壓也不殺（讀程式推論，沒量過）。SIGSTOP 只送 leader，同群組裡吃 CPU 的子行程壓不到；觸發也只看 leader 的 schedstat，本來就不看它們。spawner 起的工具與 `--exec` 包的 MCP 伺服器各自 `setsid`，不在同一個群組，更打不到（[#2494](https://github.com/DemianLi/nexus-agent/issues/2494) 同一件事）。沉默 `--throttle-ms` 之前的那一段照樣吃滿 CPU。有 CPU 配額（cgroup `cpu.max`）時，放它跑的那四分之一仍吃同一份配額，鄰居照樣變慢（S4 量的見設計 §6-1）。冷開失敗之後由後來的請求重建 thread 時已經 `up`，那段同步工作沉默滿 `--throttle-ms` 也會被壓，牆鐘約拉長成 4 倍；沉默只算放它跑的時間，所以不會因此被判 `stalled`（讀程式推論，沒量過）。
   - 只有監督行程在一輪裡比准許的多花了超過 `--stall-ms` 的一半時（例如它自己被 SIGSTOP、卡在寫自己的 fd 2，或處理本身就花了那麼久），也會把所有沉默重算，真的卡死的對話行程要多等最多 `--stall-ms` 才被殺。合法的同步阻塞做到一半時整棵樹被凍住，沉默加上凍住的時間超過 `--stall-ms` 仍會被殺。兩者都是讀程式推論，沒量過。
-  - `ready` 之前（載插件、建根）不判 stalled，這一段卡死的對話行程會一直留著。
+  - `--stall-ms` 從 `bind` 起才算，`ready` 之前（載插件、建根）不看它。不成對時 `ready` 之前沒有任何期限，這一段卡死的對話行程會一直留著；成對的由 `--start-timeout-ms` 收（見下面成對那一節）。
   - 監督行程卡在寫自己的 fd 2 超過 `--stall-ms` 時，就不再讀對話行程的 stderr；對話行程寫滿 64 KiB 的管線之後，如果 node 對管線是同步寫，它的事件迴圈也會卡住。監督行程醒來時會把所有沉默重算，對話行程要在之後的 `--stall-ms` 內恢復送心跳，否則被判成 `stalled`；fd 2 一直卡著時每一輪都重算，真的卡死的也跟著不被殺（讀程式推論，沒量過）。這違反上面「監督行程的 stderr 一定要有人讀」的前提；node 對管線是不是同步寫沒核過。
   - V8 heap 快用完時，GC 可能連續空轉超過 `--stall-ms`，結果先被判成 `stalled` 而不是 `heap`。沒量過。
   - 容量算的是行程數，不看實際用掉的記憶體：每條對話實際用得比 209 MiB 多（例如掛了 MCP）時，名額還沒滿記憶體就先滿了。
@@ -75,7 +75,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - 名額滿而送出的 `drain` 不撤回：排著的 thread 先被別的行程結束讓出的名額起掉之後，那個 `drain` 仍會照常收掉一條閒置的對話，多逐出一條。對話行程的協定沒有「取消 drain」。
   - 收到 `turn(begin)` 不清掉閒置記號：正在跑一輪的對話仍可能被挑中送 `drain`，靠對話行程收到 `drain` 時當場再判一次、回 `busy` 擋下（`apps/harness/src/conversation-control.ts`）。讀程式推論，沒量過。
   - 收屍時讀到的 stderr 也包括群組外還活著的後代在 leader 死後寫的；寫得多時，會把 heap 那一行擠出最後 16 KiB，判成 `crash`。
-- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`composition`／`front`／`host`）、`pid`、`exit_code`、`signal`；`ready`（結束前送過 `ready` 沒有）只有 `host` 有；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 與 `composition` 有；沒起成的，與宿主 `ready` 之前逾時、插件清單壞了的，多一個 `error`。宿主回報的違反協定另寫一行：`ts_ms`、`event`（`protocol`）、`pid`、`role`（那個 pid 在身分表上是 `front`、`conversation`，不在表上是 `unknown`）、`thread`、`reason`。欄位與值只加不改，讀的人照 `role` 或 `event` 分辨每一行。
+- 稽核：每個行程結束寫一行 JSON 到 `--audit`（只追加、0600；已存在的要是自己擁有、0600 的一般檔，不能是連結，否則不起）：`ts_ms`、`role`（`conversation`／`composition`／`front`／`host`）、`pid`、`exit_code`、`signal`；`ready`（結束前送過 `ready` 沒有）只有 `host` 有；`thread`（預熱池裡還沒指派的是空字串）、`cause`、`turns`、`rss_kb`（輪詢看到的最高 RSS，KiB；沒量到是 0）、`max_silence_ms`（送出 `bind` 起相鄰兩次聽到之間最長的間隔，不含死前最後一段，也不含監督行程判定自己被停住過的那段）只有 `conversation` 與 `composition` 有；沒起成的，與宿主 `ready` 之前逾時、插件清單壞了的、成對時等 `ready` 逾時的組合行程，多一個 `error`。宿主回報的違反協定另寫一行：`ts_ms`、`event`（`protocol`）、`pid`、`role`（那個 pid 在身分表上是 `front`、`conversation`，不在表上是 `unknown`）、`thread`、`reason`。欄位與值只加不改，讀的人照 `role` 或 `event` 分辨每一行。
 - 一對裡每個行程結束各寫一行（組合行程一行，每個葉子各一行，含補起的），都多一個 `pair`（這一對的序號，同一對的每一行都相同，就是 socket 檔名 `c<序號>.sock` 的那個數字）：葉子的 `role` 是 `conversation`，組合行程是 `composition`（`turns` 一律是 0）；被同伴連帶收掉的那一個 `cause` 是 `peer`；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也是（那條 thread 的 `down` 在葉子死時回過）。`peer` 只出現在稽核：不回 `down`、不進 `stats` 的死因累計。
 - 結束碼：停機完成 0；起不來（signalfd、subreaper、`--run-dir`、`--audit`）或執行中 poll 失敗 1；參數錯 2；前台或宿主的 `hello` 對不上 3；宿主在 `ready` 之前連續失敗 4；這個監督行程起來之後宿主還沒 `ready` 過、插件清單就壞了 5。
 
@@ -87,8 +87,9 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 
 - 起動：先起組合行程，argv 是 `<程式> <--composition-arg>... --socket <--run-dir>/c<序號>.sock --pair-socket <--run-dir>/c<序號>.p.sock --leaf-socket <--run-dir>/c<序號>.l.sock`；收到它不宣告 loop 的 `hello` 才起葉子（`--conversation`），葉子的 `--socket` 是 `c<序號>.l.sock`、多一個 `--pair-socket c<序號>.p.sock`，並先送組合行程 `leaf{pid}`。兩個行程各有一條控制通道、各自 `hello`；葉子要宣告 loop 在自己這裡，組合行程不能宣告，對不上的死因是 `protocol`。組合行程的 `hello` 帶空的 token：它還不連宿主，身分表上只有葉子。
 - `ready`、`bound` 看組合行程的（葉子在橋上登記完它才 `ready`），葉子在控制通道上送的不理；`bind` 送給組合行程，由它經橋轉給葉子。`up` 的 socket 是組合行程的 `c<序號>.sock`。`turn`、閒置、`drain` 走葉子。預熱池預熱的是一對，到組合行程 `ready` 為止。
-- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 沒有期限，一直不登記的葉子會一直佔著名額（第一個葉子也一樣，[#2801](https://github.com/DemianLi/nexus-agent/issues/2801)）；這一段葉子死了就整對收。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
+- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 的期限見下面 `--start-timeout-ms` 那一條；這一段葉子死了就整對收。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
 - 組合行程死了：整對收。先收它的屍、判完死因，才對葉子的群組送 SIGKILL（反過來葉子可能先被收屍，領走那一次 `oom_kill`）。`down` 一對只送一次、死因累計也只進一次：葉子已經在收時照葉子的死因，否則照組合行程的。
+- `--start-timeout-ms`：一對從起組合行程到讀到它的 `ready`，整段一筆期限；補葉子時從補的那一刻另算一筆。過了就當場對組合行程的群組送 SIGKILL（不走拆除梯度），葉子等它收完屍連帶收（稽核記 `peer`），死因 `stalled`、`down` 一次，名額讓出來。組合行程沒送 `hello`、葉子沒在橋上登記、組合行程沒替它送 `ready`，從外面分不出來，都算這一條。判之前先讀一次組合行程的控制通道；停機中不判；監督行程判定自己被停住過時（比准許的晚了超過 `--start-timeout-ms` 的一半，跟 `--stall-ms` 開不開無關）從那一刻重新算。預熱池裡的一對逾時不回 `down`，隔 `--front-restart-ms` 再補；一直起不來的會這樣一輪一輪重來，間隔不會拉長。短於那一半的停住照樣算進期限；認不認得出來靠 poll 醒得夠勤，有一對時最晚每 `--rss-poll-ms` 醒一次，`--rss-poll-ms` 調到期限的一半以上就認不出來。期限很小（一輪的處理時間就超過它的一半）或監督行程的 fd 2 一直卡著時，每一輪都重算，一直不逾時（讀程式推論，沒量過）。`--start-timeout-ms 0` 是不判。預設 30000 跟 `--host-ready-timeout-ms` 取一樣的值，一對冷起動實際要多久沒有量過。
 - `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
 - 拆除與停機都是先葉子後組合行程：葉子收完才開始收組合行程。停機中再收到訊號時不分先後，全部當場 SIGKILL。
 
