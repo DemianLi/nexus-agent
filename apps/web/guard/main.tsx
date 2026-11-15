@@ -97,6 +97,8 @@
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  * - `?overlay=buttons` 畫 `Button` 的每一種 variant 配每一種尺寸，另加每種 variant 停用的一顆（#2762）：量各尺寸的高度與
  *   停用的透明度（規格 §5「互動狀態」）。
+ * - `?overlay=primitives` 畫別的子頁都沒畫到的三個共用元件：`Separator`（橫、直）、`Skeleton`、toast（一般與錯誤各一則）。
+ *   每個共用元件都要有預覽（`COMPONENTS.md`「共用元件一覽」），這一頁補齊剩下的。
  */
 import {
   APPROVAL_PENDING_KIND,
@@ -124,6 +126,7 @@ import type {
 } from '@nexus/wire';
 import { Check, MoreHorizontal, Plus } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
@@ -200,6 +203,9 @@ import type { TurnHead } from '@/lib/trace-view';
 import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Toaster } from '@/components/ui/sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ComposerPick } from '@/components/ui/composer';
 import { DiffStats } from '@/components/ui/diff-view';
@@ -2206,6 +2212,40 @@ function ButtonsPage() {
   );
 }
 
+function PrimitivesPage() {
+  useEffect(() => {
+    toast('一般通知', { id: 'plain', description: '通知的說明', duration: Infinity });
+    toast.error('錯誤通知', { id: 'error', description: '錯誤的說明', duration: Infinity });
+  }, []);
+  return (
+    <main style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, width: 360 }}>
+      <h1>Separator</h1>
+      <div data-guard-primitive="separator">
+        <span>上面</span>
+        <Separator />
+        <span>下面</span>
+      </div>
+      <div
+        data-guard-primitive="separator-vertical"
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 24 }}
+      >
+        <span>左邊</span>
+        <Separator orientation="vertical" />
+        <span>右邊</span>
+      </div>
+      <h1>Skeleton</h1>
+      <div
+        data-guard-primitive="skeleton"
+        style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+      >
+        <Skeleton style={{ height: 14, width: '60%' }} />
+        <Skeleton style={{ height: 12, width: '80%' }} />
+      </div>
+      <Toaster theme={dark ? 'dark' : 'light'} position="bottom-center" expand />
+    </main>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -2378,6 +2418,8 @@ function OverlayPage({ name }: { name: string }) {
       return <QuestionnairePage />;
     case 'buttons':
       return <ButtonsPage />;
+    case 'primitives':
+      return <PrimitivesPage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':
