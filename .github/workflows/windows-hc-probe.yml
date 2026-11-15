@@ -1,0 +1,58 @@
+# 一次性的探測：在真的 Windows 上開高對比，看 guard 測試頁。只在這條探測分支上跑，不合併。
+name: Windows 高對比探測
+
+on:
+  push:
+    branches: [ci/windows-high-contrast-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: 真的 Windows 高對比
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: build
+        shell: bash
+        run: |
+          pnpm --filter @nexus/web run build
+          pnpm --filter @nexus/web exec vite build --config guard/vite.config.ts
+      - name: 開高對比
+        shell: pwsh
+        run: |
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public class HC {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct HIGHCONTRAST { public uint cbSize; public uint dwFlags; public IntPtr lpszDefaultScheme; }
+            [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            public static extern bool SystemParametersInfo(uint action, uint param, ref HIGHCONTRAST value, uint winIni);
+            public static string Set() {
+              var h = new HIGHCONTRAST();
+              h.cbSize = (uint)Marshal.SizeOf(typeof(HIGHCONTRAST));
+              h.dwFlags = 1;
+              bool ok = SystemParametersInfo(0x43, h.cbSize, ref h, 3);
+              int err = Marshal.GetLastWin32Error();
+              var g = new HIGHCONTRAST();
+              g.cbSize = (uint)Marshal.SizeOf(typeof(HIGHCONTRAST));
+              SystemParametersInfo(0x42, g.cbSize, ref g, 0);
+              return "set=" + ok + " err=" + err + " flags=" + g.dwFlags;
+            }
+          }
+          "@
+          [HC]::Set()
+          Get-ComputerInfo -Property OsName, OsVersion | Format-List
+      - name: 看每個測試頁
+        shell: bash
+        run: node apps/web/visual/windows-hc-probe.ts "$RUNNER_TEMP/hc"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-high-contrast
+          path: ${{ runner.temp }}/hc
+          retention-days: 7
