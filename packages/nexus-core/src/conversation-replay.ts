@@ -92,6 +92,7 @@ import {
   offloadLoggedMessages,
   stampLoggedImageOrigin,
 } from './image-offload-log.js';
+import { readingEvent } from './event-read-error.js';
 import { turnStartMessage } from './message-source.js';
 import { nexusContent, nexusToolCalls } from './nexus-message.js';
 import type { NexusMessage } from './nexus-message.js';
@@ -365,73 +366,76 @@ export class ReplayFold {
     };
     // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
     if (isModelVisibleEvent(event)) {
-      switch (event.type) {
-        case 'turn/start': {
-          this.#turn = { replied: false, interrupted: false };
-          // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-          if (event.data.kind !== 'resume') {
-            this.#push(this.#from(turnStartMessage(event.data), event));
+      // 事件裡的訊息讀不出來（形狀壞了）時，錯誤訊息帶事件種類與 seq；記帳那幾種不讀內容，不包。
+      readingEvent(event, () => {
+        switch (event.type) {
+          case 'turn/start': {
+            this.#turn = { replied: false, interrupted: false };
+            // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
+            if (event.data.kind !== 'resume') {
+              this.#push(this.#from(turnStartMessage(event.data), event));
+            }
+            break;
           }
-          break;
-        }
-        case 'assistant/message': {
-          this.#replied = true;
-          if (this.#turn !== undefined) this.#turn.replied = true;
-          const message = this.#from(this.#read(event.data.message, event), event);
-          const calls = requestedCalls(message);
-          this.#push(message);
-          if (calls.length > 0) this.#batch = { calls, results: new Map(), started: new Set() };
-          break;
-        }
-        case 'tool/result': {
-          if (event.data.message === undefined) return fail('result-missing');
-          const message = this.#from(this.#asSeen(this.#read(event.data.message, event)), event);
-          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            this.#batch.results.set(event.data.callId, [message]);
-          } else {
+          case 'assistant/message': {
+            this.#replied = true;
+            if (this.#turn !== undefined) this.#turn.replied = true;
+            const message = this.#from(this.#read(event.data.message, event), event);
+            const calls = requestedCalls(message);
             this.#push(message);
+            if (calls.length > 0) this.#batch = { calls, results: new Map(), started: new Set() };
+            break;
           }
-          break;
+          case 'tool/result': {
+            if (event.data.message === undefined) return fail('result-missing');
+            const message = this.#from(this.#asSeen(this.#read(event.data.message, event)), event);
+            if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+              this.#batch.results.set(event.data.callId, [message]);
+            } else {
+              this.#push(message);
+            }
+            break;
+          }
+          case 'user/message': {
+            const message = this.#from(this.#read(event.data.message, event), event);
+            const { source } = event.data;
+            // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
+            // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
+            const previous = this.#previous;
+            const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
+            const call = this.#batch?.calls.find((candidate) => candidate.id === owner);
+            const results = call === undefined ? undefined : this.#batch?.results.get(call.id);
+            if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
+              results.push(message);
+            } else {
+              this.#push(message);
+            }
+            break;
+          }
+          case 'compaction/summary': {
+            const { summary: logged, cutoffIndex, messagesBefore } = event.data;
+            if (logged === undefined) {
+              return fail('summary-missing');
+            }
+            // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
+            const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
+            if (
+              this.#raw.length + this.#pendingCount() !== expected ||
+              cutoffIndex > messagesBefore
+            ) {
+              return fail('compaction-misaligned');
+            }
+            this.#summary = {
+              message: this.#from(this.#read(logged, event), event),
+              cutoff: cutoffIndex,
+            };
+            break;
+          }
+          default:
+            // 子聯集多一種而這裡沒有 case，這一行編不過。
+            event satisfies never;
         }
-        case 'user/message': {
-          const message = this.#from(this.#read(event.data.message, event), event);
-          const { source } = event.data;
-          // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
-          // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
-          const previous = this.#previous;
-          const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
-          const call = this.#batch?.calls.find((candidate) => candidate.id === owner);
-          const results = call === undefined ? undefined : this.#batch?.results.get(call.id);
-          if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
-            results.push(message);
-          } else {
-            this.#push(message);
-          }
-          break;
-        }
-        case 'compaction/summary': {
-          const { summary: logged, cutoffIndex, messagesBefore } = event.data;
-          if (logged === undefined) {
-            return fail('summary-missing');
-          }
-          // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
-          const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
-          if (
-            this.#raw.length + this.#pendingCount() !== expected ||
-            cutoffIndex > messagesBefore
-          ) {
-            return fail('compaction-misaligned');
-          }
-          this.#summary = {
-            message: this.#from(this.#read(logged, event), event),
-            cutoff: cutoffIndex,
-          };
-          break;
-        }
-        default:
-          // 子聯集多一種而這裡沒有 case，這一行編不過。
-          event satisfies never;
-      }
+      });
     } else {
       switch (event.type) {
         case 'model/start': {
