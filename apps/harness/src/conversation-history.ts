@@ -126,6 +126,7 @@ import {
   offloadedImagesOf,
   openTurnStart,
   promptTokensOf,
+  readingEvent,
   replayConversation,
   sessionStatsUnit,
   TOOL_NOT_STARTED,
@@ -625,6 +626,7 @@ function summaryBody(text: string): string {
  * @param event - 那顆 `compaction/summary` 連同它在日誌裡的 `seq`。
  * @param maxBytes - 摘要全文的位元組上限，就是 `tool-text` 那一列（`toolText.maxBytes`），見 {@link capToolText}。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `CompactionPayload`。
+ * @throws 那顆事件的 `data` 讀不出來（形狀壞了）：訊息帶事件種類與 `seq`。
  */
 export function compactionData(
   event: { readonly seq: number; readonly data: SessionEventMap['compaction/summary'] },
@@ -633,17 +635,19 @@ export function compactionData(
   readonly name: typeof COMPACTION;
   readonly payload: CompactionPayload;
 } {
-  const { cutoffIndex, filePath, summary } = event.data;
-  const text = summary === undefined ? '' : summaryBody(textOf(summary));
-  return {
-    name: COMPACTION,
-    payload: {
-      seq: event.seq,
-      cutoff: cutoffIndex,
-      saved: filePath !== null,
-      ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
-    },
-  };
+  return readingEvent({ type: 'compaction/summary', seq: event.seq }, () => {
+    const { cutoffIndex, filePath, summary } = event.data;
+    const text = summary === undefined ? '' : summaryBody(textOf(summary));
+    return {
+      name: COMPACTION,
+      payload: {
+        seq: event.seq,
+        cutoff: cutoffIndex,
+        saved: filePath !== null,
+        ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
+      },
+    };
+  });
 }
 
 /**
