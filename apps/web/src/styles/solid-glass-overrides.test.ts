@@ -187,6 +187,11 @@ describe('solid-glass 的本地修改：Windows 高對比（#2796，第 85 條�
     "[data-slot='message-scroller-item'][data-located]",
     "[data-slot='dropdown-menu-trigger'][data-popup-open]",
     "[data-slot='sidebar-menu-button'][data-active]:disabled",
+    "[aria-selected='true']",
+    "[aria-current]:not([aria-current='false'])",
+    "[aria-pressed='true']",
+    '[data-highlighted]',
+    "[data-popup-open]:not([data-slot='tooltip-trigger'])",
   ])('只靠底色表示的選取補 2px 的 Highlight 外框：%s', (selector) => {
     expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
       value: '2px solid Highlight',
@@ -202,6 +207,9 @@ describe('solid-glass 的本地修改：Windows 高對比（#2796，第 85 條�
     "[data-slot='tooltip-content']",
     "[data-slot='card']",
     "[data-slot='composer']",
+    '.bg-card',
+    '.bg-popover',
+    '.glass-panel',
   ])('只靠陰影與玻璃邊的面補 1px 的 CanvasText 外框：%s', (selector) => {
     expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
       value: '1px solid CanvasText',
