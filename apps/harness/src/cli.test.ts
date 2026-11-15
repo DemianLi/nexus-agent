@@ -643,16 +643,19 @@ describe('CLI 的核准政策', () => {
       },
     };
 
-    const { agent, dispose, sessionLog } = await createCliAgent(
+    const { agent, dispose, attachSessions } = await createCliAgent(
       { live: false },
       [createEchoPlugin(), gateWriteFile, await shippedModelRow()],
       undefined,
       { approvals: HEADLESS_APPROVALS },
     );
+    const sessions = new SessionRegistry('unblocked-tool');
+    const attachment = attachSessions(sessions);
     const { printer, stdout } = recorder();
     try {
-      await runTurn(agent, '動手', printer, sessionLog);
+      await runTurn(agent, '動手', printer, sessions.root);
     } finally {
+      await attachment.detach();
       await dispose();
     }
 
@@ -766,17 +769,23 @@ describe('關機清理與原本的錯誤', () => {
 describe('對話的連續性', () => {
   it('第二輪看得到第一輪說過的話——REPL 是一條對話，不是一串互不相干的呼叫', async () => {
     const { printer } = recorder();
-    const { agent, model, sessionLog } = await createCliAgent({ live: false }, shipped);
+    const built = await createCliAgent({ live: false }, shipped);
+    const sessions = new SessionRegistry('cli-continuity');
+    const attachment = built.attachSessions(sessions);
+    try {
+      await runTurn(built.agent, '第一句：記住「胡桃」這兩個字。', printer, sessions.root);
+      await runTurn(built.agent, '第二句：剛剛那兩個字是什麼？', printer, sessions.root);
 
-    await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer, sessionLog);
-    await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer, sessionLog);
-
-    // 送進模型的第二輪 prompt 裡還帶著第一句——狀態在 checkpointer 裡，靠 thread_id 認領。
-    const prompt = (model as ScriptedChatModel).lastPrompt
-      .map((message) => message.text)
-      .join('\n');
-    expect(prompt).toContain('胡桃');
-    expect(prompt).toContain('剛剛那兩個字是什麼');
+      // 送進模型的第二輪 prompt 裡還帶著第一句——狀態在 checkpointer 裡，靠 thread_id 認領。
+      const prompt = (built.model as ScriptedChatModel).lastPrompt
+        .map((message) => message.text)
+        .join('\n');
+      expect(prompt).toContain('胡桃');
+      expect(prompt).toContain('剛剛那兩個字是什麼');
+    } finally {
+      await attachment.detach();
+      await built.dispose();
+    }
   });
 });
 
@@ -791,11 +800,13 @@ describe('REPL', () => {
   ];
 
   async function replAgent() {
-    const { agent, commands } = await createNexusAgent({
+    const { agent, commands, attachSession } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
       plugins: shipped,
     });
-    return { agent, commands };
+    const sessions = new SessionRegistry('repl');
+    attachSession(sessions);
+    return { agent, commands, sessions };
   }
 
   it('一行一輪，/exit 收工', async () => {
@@ -808,7 +819,7 @@ describe('REPL', () => {
       repl.agent,
       { input, output: new PassThrough() },
       printer,
-      new SessionLog('t'),
+      repl.sessions.root,
       repl.commands,
     );
 
@@ -839,7 +850,7 @@ describe('REPL', () => {
         repl.agent,
         { input, output },
         recorder().printer,
-        new SessionLog('t'),
+        repl.sessions.root,
         repl.commands,
         undefined,
         undefined,
@@ -911,7 +922,7 @@ describe('REPL', () => {
         repl.agent,
         { input, output: new PassThrough() },
         recorder().printer,
-        new SessionLog('t'),
+        repl.sessions.root,
         repl.commands,
       ),
     ).resolves.toBeUndefined();
@@ -928,7 +939,7 @@ describe('REPL', () => {
       repl.agent,
       { input, output: new PassThrough() },
       printer,
-      new SessionLog('t'),
+      repl.sessions.root,
       repl.commands,
     );
 

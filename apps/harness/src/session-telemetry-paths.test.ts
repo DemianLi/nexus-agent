@@ -125,11 +125,12 @@ async function drainUntilRootCompleted(
   }
 }
 
+// 跑輪的 CLI 案例明給 `state`：接會話參與者會多寫 approval/policy，這一檔逐筆比對的 ledger 只量遙測的鏡像。
 describe('遙測接線：CLI 那條路', () => {
   it('一輪跑完，日誌寫下的每一筆都鏡像成一筆 ledger 記錄', async () => {
     const sink = collectingSink();
     const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
-      { live: false },
+      { live: false, historySource: 'state' },
       [...shipped, telemetryPlugin(sink)],
     );
     const detach = attachTelemetry(sessions);
@@ -221,7 +222,7 @@ describe('遙測接線：CLI 那條路', () => {
   it('會拋的脫敏規則扣住記錄，但那一輪照樣跑完', async () => {
     const sink = collectingSink();
     const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
-      { live: false },
+      { live: false, historySource: 'state' },
       [
         ...shipped,
         telemetryPlugin(sink, () => {
@@ -399,7 +400,10 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
     const sink = collectingSink('feedback-only');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false, historySource: 'state' }, [
+        ...shippedWithMemoryFeedback,
+        telemetryPlugin(sink),
+      ]);
     attachTelemetry(sessions);
     const seqs = () => ledgerOf(sink).map((record) => record.attributes['event.seq']);
 
@@ -470,7 +474,10 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sink = collectingSink('disabled');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false, historySource: 'state' }, [
+        ...shippedWithMemoryFeedback,
+        telemetryPlugin(sink),
+      ]);
     attachTelemetry(sessions);
 
     try {
@@ -521,7 +528,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     // #278 留下的那件：當時是讀碼得出、沒實跑。這裡對著假 collector 真打一次。
     const collector = await mockCollector();
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [
+      await createCliAgent({ live: false, historySource: 'state' }, [
         ...shippedWithMemoryFeedback,
         createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url: collector.url } }),
       ]);

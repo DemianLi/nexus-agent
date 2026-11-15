@@ -130,9 +130,12 @@ async function run(options: RunOptions) {
       ? new ScriptedChatModel({ turns: options.turns ?? [] })
       : new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
   const checkpointer = new MemorySaver();
+  // 這個檔量的是 state 路徑的摘要切點與續接（切點是 `state.messages` 的索引、`conversation-restore` 只灌 messages）；
+  // log 路徑的推導由 `log-derived-history` 系列測試量。
   const built = await createNexusAgent({
     model,
     checkpointer,
+    historySource: 'state',
     plugins: [
       ...(options.timeContext === true ? await shippedPlugins() : shipped),
       ...(options.extraPlugins ?? []),
@@ -530,6 +533,7 @@ describe('摘要之後下一句話把基線補回來', () => {
     const resumed = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
+      historySource: 'state',
       plugins: [...shipped],
       backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'workspace-write' }),
     });
@@ -703,9 +707,11 @@ it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格�
   const model = new ScriptedChatModel({
     turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
   });
+  // 多句話直接 `invoke`、不經 ThreadPump：log 路徑要求每句話先有 `turn/start`，這裡只量 state 的回傳值。
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
+    historySource: 'state',
     plugins: [...shipped],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     summarization: {

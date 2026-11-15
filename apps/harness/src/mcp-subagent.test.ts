@@ -13,6 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { SessionRegistry } from '@nexus/core';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
@@ -64,6 +65,8 @@ describe('子代理也拿得到 MCP 的資源工具與指引', () => {
         })),
       ],
     });
+    // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。
+    const detach = built.attachSession(new SessionRegistry('mcp-subagent'));
     try {
       await (
         built.agent as unknown as {
@@ -91,6 +94,7 @@ describe('子代理也拿得到 MCP 的資源工具與指引', () => {
       expect(text(toolMessage)).toContain('MCP server: srv');
       expect(text(toolMessage)).toContain('memo://readme');
     } finally {
+      detach();
       await built.dispose();
     }
   }, 30000);

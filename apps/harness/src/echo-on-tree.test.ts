@@ -10,6 +10,7 @@ import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { SessionRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -51,10 +52,25 @@ function newRoot(): CordisRoot {
   return root;
 }
 
+/**
+ * 接上一份會話註冊表：歷史來源是 log（產品預設），第一次 invoke 要求日誌接著。收尾時先解開接線再 dispose。
+ */
+async function attachedCliAgent(...args: Parameters<typeof createCliAgent>) {
+  const built = await createCliAgent(...args);
+  const attachment = built.attachSessions(new SessionRegistry('echo-on-tree'));
+  return {
+    ...built,
+    dispose: async () => {
+      await attachment.detach();
+      await built.dispose();
+    },
+  };
+}
+
 /** 一條 thread 的組裝：讀清單（帶樹，臨界區）→ 組 agent → 打一輪讓模型綁工具 → 交回綁了什麼。 */
 async function openThread(root: CordisRoot, env: NodeJS.ProcessEnv, thread: string) {
   const loaded = await loadDefaultPlugins({ env }, { tree: root.tree });
-  const built = await createCliAgent({ live: false }, loaded.plugins);
+  const built = await attachedCliAgent({ live: false }, loaded.plugins);
   await built.agent.invoke(toAgentInvocation('看一下。'), { configurable: { thread_id: thread } });
   const names = (built.model as ScriptedChatModel).boundTools.map(
     (tool) => (tool as { name: string }).name,
@@ -90,7 +106,7 @@ describe('D：清單沒變，echo 經樹進來，跟沒上樹之前模型收到�
 
   it('沒有樹的呼叫端（手搭清單、shippedPlugins）拿到同一個工具，走的是同一條路', async () => {
     const detached = await loadPluginConfig({});
-    const built = await createCliAgent({ live: false }, detached.plugins);
+    const built = await attachedCliAgent({ live: false }, detached.plugins);
     await built.agent.invoke(toAgentInvocation('看一下。'), { configurable: { thread_id: 'd' } });
     const names = (built.model as ScriptedChatModel).boundTools.map(
       (tool) => (tool as { name: string }).name,
@@ -104,7 +120,7 @@ describe('D：清單沒變，echo 經樹進來，跟沒上樹之前模型收到�
     const root = newRoot();
     const onTree = await openThread(root, env, 'a');
     const detached = await loadPluginConfig({ shippedLayers: [] });
-    const built = await createCliAgent({ live: false }, detached.plugins);
+    const built = await attachedCliAgent({ live: false }, detached.plugins);
     await built.agent.invoke(toAgentInvocation('看一下。'), { configurable: { thread_id: 'b' } });
     const names = (built.model as ScriptedChatModel).boundTools.map(
       (tool) => (tool as { name: string }).name,

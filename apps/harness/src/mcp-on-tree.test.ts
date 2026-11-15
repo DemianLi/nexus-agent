@@ -394,8 +394,14 @@ async function runOne(
         })
       : undefined;
   binds.length = 0;
+  // 基線記的是 state 下的請求位元組；這一格直接 `invoke`，使用者句不進日誌，所以明給 `state`（歷史來源另有測試守）。
   const built = await createCliAgent(
-    { live: false, agentLoop: loop, ...(credentials !== undefined && { credentials }) },
+    {
+      live: false,
+      agentLoop: loop,
+      historySource: 'state',
+      ...(credentials !== undefined && { credentials }),
+    },
     loaded.plugins,
     dir,
     {

@@ -101,12 +101,14 @@ async function modelCalls(declared: boolean, close: boolean): Promise<number> {
       AGAIN,
     ]),
   );
+  const detach = built.attachSession(built.sessions);
   try {
     await built.agent.invoke(toAgentInvocation('收一下'), {
       configurable: { thread_id: `conclude-${Math.random()}` },
     });
     return (built.model as ScriptedChatModel).prompts.length;
   } finally {
+    detach();
     await built.dispose();
   }
 }

@@ -5,6 +5,7 @@
  */
 
 import { HumanMessage } from '@langchain/core/messages';
+import { SessionRegistry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -16,15 +17,17 @@ const shipped = await shippedPlugins();
 async function boundTools(
   invocation: Parameters<typeof createCliAgent>[0],
 ): Promise<readonly string[]> {
-  const { agent, model, dispose } = await createCliAgent(invocation, shipped);
+  const built = await createCliAgent(invocation, shipped);
+  const attachment = built.attachSessions(new SessionRegistry('bg-mode'));
   try {
-    await agent.invoke(
+    await built.agent.invoke(
       { messages: [new HumanMessage('嗨')] },
       { configurable: { thread_id: 'bg-mode' } },
     );
-    return (model as ScriptedChatModel).boundToolNames;
+    return (built.model as ScriptedChatModel).boundToolNames;
   } finally {
-    await dispose();
+    await attachment.detach();
+    await built.dispose();
   }
 }
 

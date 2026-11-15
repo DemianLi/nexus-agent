@@ -263,7 +263,8 @@ describe('CLI 的 --resume', () => {
       { type: 'turn/end', data: {} },
     ]);
 
-    const stdout = await cli(['--resume', runDir], '還在嗎\n/exit\n');
+    // 「從空的開始」是 state 的披露；`log` 推不回時第一次呼叫會拋（不會空接），那一條由 `history-source-log-default.test.ts` 量。
+    const stdout = await cli(['--resume', runDir, '--history-source', 'state'], '還在嗎\n/exit\n');
 
     expect(shape(seenRequests[0] ?? [])).toEqual(['human:還在嗎']);
     expect(stdout).toContain('對話從空的開始：日誌裡有模型正常回來的呼叫，卻沒有記到回覆');

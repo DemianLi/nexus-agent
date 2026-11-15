@@ -13,7 +13,7 @@ export default defineConfig({
   plugins: [pathsPlugin()],
   test: {
     execArgv: sourceHook(),
-    setupFiles: ['./src/test-home.setup.ts', './src/history-source-state.setup.ts'],
+    setupFiles: ['./src/test-home.setup.ts'],
     sequence: { sequencer: DurationSequencer },
   },
 });

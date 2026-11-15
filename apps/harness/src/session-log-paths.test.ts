@@ -139,7 +139,11 @@ describe('會話事件日誌：CLI 那條路', () => {
   const silent = { log: () => undefined, error: () => undefined };
 
   it('CLI 也在寫，而且 seq 跨輪連續——同一份日誌活得比一輪久', async () => {
-    const { agent, dispose, sessionLog } = await createCliAgent({ live: false }, shipped);
+    // 只量日誌上的事件序列：接會話參與者會多寫 approval/policy，所以明給 `state`。
+    const { agent, dispose, sessionLog } = await createCliAgent(
+      { live: false, historySource: 'state' },
+      shipped,
+    );
 
     try {
       await runTurn(agent, '第一句', silent, sessionLog);

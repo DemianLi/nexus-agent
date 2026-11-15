@@ -92,8 +92,9 @@ async function runOne(_label: string, spec: Case): Promise<unknown> {
       }),
     ),
   ];
+  // 基線記的是 state 下的結果；直接 `invoke` 不把使用者句寫進日誌，所以這一格明給 `state`（歷史來源另有測試守）。
   const built = await createCliAgent(
-    { live: false },
+    { live: false, historySource: 'state' },
     withScriptedModel(plugins, [
       {
         content: '交計劃。',

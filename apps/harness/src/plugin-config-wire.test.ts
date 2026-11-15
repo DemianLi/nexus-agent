@@ -179,6 +179,7 @@ describe('CLI 真的走設定檔那條路', () => {
     const boundTools = async (env: NodeJS.ProcessEnv): Promise<readonly string[]> => {
       const { plugins } = await loadDefaultPlugins({ env });
       const built = await createCliAgent({ live: false }, plugins);
+      built.attachSessions(built.sessions);
       try {
         await built.agent.invoke(toAgentInvocation('說點什麼'), {
           configurable: { thread_id: 'wire' },

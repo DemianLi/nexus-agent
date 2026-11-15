@@ -88,6 +88,8 @@ import {
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { ThreadPump } from './thread-pump.js';
+import type { PumpAgent } from './thread-pump.js';
 
 const shipped = withoutTimeContext(await shippedPlugins());
 
@@ -134,6 +136,10 @@ interface AssembleOptions {
   readonly headless?: boolean;
   /** 掛插話的載體（serve 才開，#710）；要配 `configurable` 裡的 `STEP_INBOX_CONFIG_KEY` handle 才有東西可領。 */
   readonly stepInbox?: boolean;
+  /** 續接：新行程的根日誌從這份事件開始（`rootSeed`，同 CLI 的 `--resume`）。 */
+  readonly rootSeed?: readonly SessionEvent[];
+  /** `false`：不替呼叫端接日誌，由呼叫端自己接（例如 `ThreadPump` 有自己的註冊表）。 */
+  readonly attach?: boolean;
 }
 
 /** 在產品組裝上跑：出貨清單＋這一檔要的改動＋腳本模型。 */
@@ -145,12 +151,28 @@ async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions
       live: false,
       ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
       ...(options.stepInbox === true && { stepInbox: true }),
+      // 手搭的 StepInbox 只把插話併進圖狀態、不寫日誌（產品的收件匣由 pump 寫 `inbox/spliced`）：
+      // 這條量的是 `next-step` 領走輸入後跳回模型，插話要在歷史裡，所以量 `state`。
+      ...(options.stepInbox === true && { historySource: 'state' as const }),
     },
     plugins,
     options.workspace,
-    options.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
+    {
+      ...(options.headless === true && { approvals: HEADLESS_APPROVALS }),
+      ...(options.rootSeed !== undefined && { rootSeed: [...options.rootSeed] }),
+    },
   );
-  return { ...built, model: built.model as ScriptedChatModel };
+  // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。收尾時先解綁、再收組裝。
+  if (options.attach === false) return { ...built, model: built.model as ScriptedChatModel };
+  const detach = built.attachSession(built.sessions);
+  return {
+    ...built,
+    model: built.model as ScriptedChatModel,
+    dispose: async () => {
+      detach();
+      await built.dispose();
+    },
+  };
 }
 
 const quiet = (text = '好。'): ScriptedTurn[] => [{ content: text }];
@@ -346,7 +368,7 @@ async function reviewPlan(
   readonly events: readonly SessionEvent[];
   readonly model: ScriptedChatModel;
 }> {
-  const { agent, model, sessions, attachSession, dispose } = await assemble(script, {
+  const { agent, model, sessions, dispose } = await assemble(script, {
     plan: { startActive: true },
     ...(inbox !== undefined && { stepInbox: true }),
   });
@@ -356,7 +378,6 @@ async function reviewPlan(
       ...(inbox !== undefined && { [STEP_INBOX_CONFIG_KEY]: inbox }),
     },
   };
-  const detach = attachSession(sessions);
   try {
     const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
     const raised = (paused.__interrupt__ ?? []) as readonly RaisedInterrupt[];
@@ -366,7 +387,6 @@ async function reviewPlan(
     };
     return { raised, after, events: sessions.root.events, model };
   } finally {
-    detach();
     await dispose();
   }
 }
@@ -600,7 +620,10 @@ describe('exit_plan_mode 的結局', () => {
       }) as { role: string }[];
       expect(sent.find((message) => message.role === 'tool')).toEqual(expected);
 
-      const fresh = await assemble(quiet('續接後的回覆。'), { plan: { startActive: true } });
+      const fresh = await assemble(quiet('續接後的回覆。'), {
+        plan: { startActive: true },
+        rootSeed: events,
+      });
       try {
         await restoreConversation(fresh.agent as never, THREAD_ID, events);
         await fresh.agent.invoke(toAgentInvocation('接著說。'), {
@@ -666,11 +689,10 @@ describe('exit_plan_mode 的結局', () => {
    * `createHostServicesPlugin({ channel })`，現在是產品算出來的那一顆。
    */
   it('headless → 請使用者自己切模式，沒有中斷，模式還開著', async () => {
-    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+    const { agent, sessions, dispose } = await assemble(PLAN_SCRIPT, {
       plan: { startActive: true },
       headless: true,
     });
-    const detach = attachSession(sessions);
 
     let result;
     try {
@@ -678,7 +700,6 @@ describe('exit_plan_mode 的結局', () => {
         configurable: { thread_id: THREAD_ID },
       });
     } finally {
-      detach();
       await dispose();
     }
 
@@ -708,11 +729,10 @@ describe('exit_plan_mode 的結局', () => {
         },
       },
     };
-    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+    const { agent, sessions, dispose } = await assemble(PLAN_SCRIPT, {
       before: [askEverything],
       headless: true,
     });
-    const detach = attachSession(sessions);
 
     let result;
     try {
@@ -720,7 +740,6 @@ describe('exit_plan_mode 的結局', () => {
         configurable: { thread_id: THREAD_ID },
       });
     } finally {
-      detach();
       await dispose();
     }
 
@@ -783,21 +802,23 @@ describe('模式狀態活得過什麼', () => {
             }
           : entry,
       );
-    const { agent, model, sessions, attachSession, dispose } = await assemble(
+    const { agent, model, attachSession, dispose } = await assemble(
       Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
-      { plan: { startActive: true }, workspace: root, patch: lowThreshold },
+      { plan: { startActive: true }, workspace: root, patch: lowThreshold, attach: false },
     );
-    const config = { configurable: { thread_id: THREAD_ID } };
-    const detach = attachSession(sessions);
+    // 多輪走 `ThreadPump`：使用者句由它寫進日誌（`turn/start`），摘要切點才對得上（#2814）。
+    const pump = new ThreadPump(agent as unknown as PumpAgent, THREAD_ID);
+    const detach = attachSession(pump.sessions);
 
-    let last;
     try {
       // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）。回話不墊——腳本的回話也會被摘要呼叫領走，
       // 墊長了摘要就比被取代的大。
       for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-        last = await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(200)}`), config);
+        await pump.submit({ kind: 'message', text: `${line}${'內容'.repeat(200)}` });
+        await pump.whenIdle();
       }
     } finally {
+      pump.close();
       detach();
       await dispose();
     }
@@ -805,9 +826,10 @@ describe('模式狀態活得過什麼', () => {
     // **先證明壓縮真的發生了。** 少了這一句，一個根本沒觸發摘要的組裝也會讓下面兩條
     // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。外顯是會話日誌上的 `compaction/summary`
     // （#143；產品的摘要列把歷史放在 graph state、不寫工作區，所以不再看 `conversation_history` 目錄）。
-    expect(sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(true);
+    expect(pump.sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(
+      true,
+    );
 
-    expect(last).toBeDefined();
     expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 });
@@ -877,10 +899,9 @@ describe('/plan 這條路', () => {
     stderr: string;
     events: readonly SessionEvent[];
   }> {
-    const { agent, model, commands, sessions, sessionLog, attachSession, dispose } = await assemble(
+    const { agent, model, commands, sessionLog, dispose } = await assemble(
       Array.from({ length: turns }, () => ({ content: '好。' })),
     );
-    const detach = attachSession(sessions);
     const events: SessionEvent[] = [];
     sessionLog.subscribe((event) => events.push(event));
 
@@ -898,7 +919,6 @@ describe('/plan 這條路', () => {
         commands,
       );
     } finally {
-      detach();
       await dispose();
     }
     return { model, stdout: out.join('\n'), stderr: err.join('\n'), events };

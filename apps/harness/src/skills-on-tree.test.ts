@@ -101,6 +101,7 @@ async function assemble(loaded: LoadedPluginConfig, workspaceRoot?: string) {
     loaded.plugins,
     workspaceRoot,
   );
+  built.attachSessions(built.sessions);
   return {
     loaded,
     built,

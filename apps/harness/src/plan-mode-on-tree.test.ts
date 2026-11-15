@@ -241,9 +241,11 @@ async function registrationCase(
   const turns: ScriptedTurn[] = [{ content: '好。' }];
   const spy = probe();
   resetBinds();
+  // 這一格量的是組裝形狀（中介層、註冊、請求位元組），歷史來源另有測試守；基線記的是 state 下的位元組，所以明給 `state`。
   const invocation = {
     live: false,
     agentLoop: loop,
+    historySource: 'state' as const,
     ...(workspace !== undefined && { workspace, sandbox: 'workspace-write' as const }),
   };
   let built: CliAgent;
@@ -397,9 +399,11 @@ async function scenarioCase(
   const workspace = scratch('nexus-plan-tree-ws-');
   const approvals = spec.headless === true ? HEADLESS_APPROVALS : undefined;
   resetBinds();
+  // 直接 `invoke` 不會把使用者句寫進日誌（那是 `ThreadPump` 的 `turn/start`），而這一格的位元組基線是 state 下記的，所以明給 `state`。
   const invocation = {
     live: false,
     agentLoop: loop,
+    historySource: 'state' as const,
     workspace,
     sandbox: 'workspace-write' as const,
   };

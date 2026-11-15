@@ -13,6 +13,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SessionRegistry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
@@ -42,6 +43,7 @@ describe('產品組裝不綁 execute', () => {
       shipped,
       root,
     );
+    const attachment = assembled.attachSessions(new SessionRegistry('execute-check'));
     try {
       await assembled.agent.invoke(toAgentInvocation('看一下。'), {
         configurable: { thread_id: 'execute-check' },
@@ -51,6 +53,7 @@ describe('產品組裝不綁 execute', () => {
       expect(names).toContain('write_file');
       expect(names).not.toContain('execute');
     } finally {
+      await attachment.detach();
       await assembled.dispose();
     }
   });

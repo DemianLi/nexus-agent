@@ -26,6 +26,7 @@ import {
   APPROVAL_POLICY_NEVER_SENTENCE,
   ApprovalPolicyController,
   createHostServicesPlugin,
+  SessionRegistry,
 } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
@@ -71,12 +72,14 @@ async function productPrompt(
     root,
     session.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
   );
+  const attachment = built.attachSessions(new SessionRegistry('approval-prompt'));
   try {
     await built.agent.invoke(toAgentInvocation('嗨。'), {
       configurable: { thread_id: 'approval-prompt' },
     });
     return systemOf((built.model as ScriptedChatModel).prompts.at(-1));
   } finally {
+    await attachment.detach();
     await built.dispose();
   }
 }
