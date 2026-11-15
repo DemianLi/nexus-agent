@@ -123,7 +123,8 @@ const SCENARIOS = [
 describe.each(['langgraph', 'native'] as const)('提醒鏈讀日誌：%s', (loop) => {
   it.each(SCENARIOS)('$name：log 下每一輪 prompt 與 state 逐字相同', async (scenario) => {
     const viaState = await run(loop, 'state', scenario.summarization, scenario.limit);
-    const viaLog = await run(loop, 'log', scenario.summarization, scenario.limit);
+    // `log` 下補懸空呼叫那顆不掛 `beforeAgent`，圖上少一個節點（#2362）：同一個上限多跑一輪，給 `log` 減一格才是同樣的輪數。
+    const viaLog = await run(loop, 'log', scenario.summarization, scenario.limit - 1);
 
     // setup 的 mock 沒蓋掉明給的值。
     expect(viaState.built).toBe('state');
