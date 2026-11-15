@@ -159,11 +159,7 @@ import type { SessionRequest } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
-import {
-  DEFAULT_TOOL_RESULT_PRUNE,
-  PRUNE_LOOKUP_FAILED,
-  withToolResultPruning,
-} from './tool-result-pruner.js';
+import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
   PruneRequest,
   ToolResultPruneConfig,
@@ -967,7 +963,7 @@ function asModelCallStep(chain: AgentMiddleware): AgentMiddleware {
  * 不是 state 裡每一顆大結果的剪法。
  *
  * **先記、記進去了才剪**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`append` 拋了就回 `false`、講一條 warn，
- * 剪刀這次不套用新剪的（記過的照樣套用），這一輪照原樣繼續；不會「模型看到剪過的、日誌卻沒有」。查找拋了（#2779）同樣不套用：`recorded` 回 `PRUNE_LOOKUP_FAILED`，剪刀這次不剪；找不到日誌（`found.kind !== 'ok'`）才退回每次重算。
+ * 剪刀這次不套用新剪的（記過的照樣套用），這一輪照原樣繼續；不會「模型看到剪過的、日誌卻沒有」。查找拋了（#2779）不吞，往外拋、這一步失敗；找不到日誌（`found.kind !== 'ok'`）才退回每次重算。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param report - 記不進去時的 warn。
@@ -983,23 +979,11 @@ function pruneLogOf(
     });
   return {
     recorded(request) {
-      try {
-        const found = lookup(request);
-        return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
-      } catch {
-        return PRUNE_LOOKUP_FAILED;
-      }
+      const found = lookup(request);
+      return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
     },
     record(request, results) {
-      let found: SessionLookup;
-      try {
-        found = lookup(request);
-      } catch (error) {
-        report(
-          `compaction/prune 認不出日誌，這次新剪的工具結果不套用：${error instanceof Error ? error.message : String(error)}`,
-        );
-        return false;
-      }
+      const found = lookup(request);
       if (found.kind !== 'ok') return true;
       const sendable = new Set<string>();
       for (const message of applySummaryCutoff(request.messages ?? [], previousSummaryCutoff())) {
