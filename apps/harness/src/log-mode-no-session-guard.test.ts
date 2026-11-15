@@ -107,7 +107,6 @@ describe.each(['langgraph', 'native'] as const)('log 模式、對不上日誌（
       .map((event) => event.type)
       .filter((type) => !PUMP_OWN_EVENT_TYPES.has(type));
     expect(extra).toEqual([]);
-    // 掛上去的那幾份（別條 thread 的）也沒被寫到。
     expect(
       others.flatMap((other) => other.sessions.root.events.map((event) => event.type)),
     ).toEqual([]);
@@ -160,7 +159,6 @@ describe.each(['langgraph', 'native'] as const)('log 模式、中途卸載（%s�
     const failed = pump.sessions.root.events.filter((event) => event.type === 'turn/failed');
     expect(failed).toHaveLength(1);
     expect((failed[0]?.data as { message: string }).message).toContain(GUARD_MESSAGE);
-    // 第一次呼叫成功、第二次被守衛擋下：模型只被叫過一次。
     expect(model.prompts).toHaveLength(1);
   });
 });
