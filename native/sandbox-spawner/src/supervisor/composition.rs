@@ -3,19 +3,6 @@
 
 use super::*;
 
-/// 送給組合行程的 `bind` 走到哪。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Bind {
-    /// 沒有還沒回答的 `bind`：還沒送過，或上一個葉子死後清掉了。
-    Unsent,
-    /// 補了葉子，等組合行程替它送 `ready`：收到才送 `bind`。
-    Refilling,
-    /// 送了 `bind`，還沒回 `bound`。
-    Sent,
-    /// 現在這個葉子回過 `bound`。
-    Bound,
-}
-
 /// 一對裡的組合行程（#2583）。葉子是 [`Conversation`]，`pair` 指回這裡；一對佔一個名額，從這個行程起到兩個行程都收完
 /// （這個行程先收完時由葉子佔著，見 [`Supervisor::live`]）。
 pub(super) struct Composition {
@@ -27,12 +14,9 @@ pub(super) struct Composition {
     pub(super) read_only: bool,
     /// 前台連的 socket。
     pub(super) socket: PathBuf,
-    /// 送過第一則 `ready`：第一個葉子在橋上登記完了。補起的葉子登記完會再送一則（[`Bind::Refilling`]）。
-    pub(super) ready: bool,
-    pub(super) bind: Bind,
-    /// 葉子死了、這一個留著等下一個 `ensure`：從什麼時候起。
-    pub(super) leafless_since: Option<Instant>,
-    /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Self::refill`]）時清掉。
+    /// 建好之後只經 [`Supervisor::enter`] 寫：葉子的 `phase` 在那裡跟著走。
+    state: PairState,
+    /// 葉子那一側已經算過這一對的死因（有 thread 的也回過 `down`）。補葉子（[`Supervisor::refill`]）時清掉。
     pub(super) told: bool,
     /// 葉子不在了才收它的（葉子收完連帶收，或留著等葉子時因 `--idle-ms`、名額滿被收）：稽核記 `peer`，不回 `down`、不進死因累計。
     pub(super) peer: bool,
@@ -44,8 +28,7 @@ pub(super) struct Composition {
     pub(super) max_silence: Duration,
 }
 
-/// 一對走到哪：[`Composition`] 的 `ready`、`bind`、`leafless_since` 合起來只會是這六種。
-#[cfg(any(test, debug_assertions))]
+/// 一對走到哪。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PairState {
     /// 還沒讀到組合行程的 `ready`：葉子還沒起，或起了還沒在橋上登記完；葉子在這之前死了或起不來、整對正在收的也在這裡（之後讀到的 `ready` 照常處理）。
@@ -58,51 +41,21 @@ pub(super) enum PairState {
     Bound,
     /// 葉子死了、組合行程留著等下一個 `ensure`；因 `--idle-ms` 或名額滿被收的也停在這裡。
     Leafless { since: Instant },
-    /// 補了葉子，等組合行程替它送 `ready`。
+    /// 補了葉子，等組合行程替它送 `ready`：收到才送 `bind`。組合行程對每個葉子各送一則 `ready`。
     Refilling,
-}
-
-#[cfg(any(test, debug_assertions))]
-impl Composition {
-    /// 三個欄位湊不出 [`PairState`] 的任何一種就 panic。
-    pub(super) fn state(&self) -> PairState {
-        match (self.ready, self.bind, self.leafless_since) {
-            (false, Bind::Unsent, None) => PairState::Starting,
-            (true, Bind::Unsent, None) => PairState::Ready,
-            (true, Bind::Sent, None) => PairState::Binding,
-            (true, Bind::Bound, None) => PairState::Bound,
-            (true, Bind::Unsent, Some(since)) => PairState::Leafless { since },
-            (true, Bind::Refilling, None) => PairState::Refilling,
-            (ready, bind, leafless_since) => panic!(
-                "第 {} 對的狀態不該存在：ready={ready} bind={bind:?} leafless={}",
-                self.serial,
-                leafless_since.is_some()
-            ),
-        }
-    }
 }
 
 #[cfg(test)]
 impl Composition {
     /// 測試用：序號 1、走到 `state` 的組合行程。
     pub(super) fn staged(proc: Proc, thread: Option<Vec<u8>>, state: PairState) -> Self {
-        let (ready, bind, leafless_since) = match state {
-            PairState::Starting => (false, Bind::Unsent, None),
-            PairState::Ready => (true, Bind::Unsent, None),
-            PairState::Binding => (true, Bind::Sent, None),
-            PairState::Bound => (true, Bind::Bound, None),
-            PairState::Leafless { since } => (true, Bind::Unsent, Some(since)),
-            PairState::Refilling => (true, Bind::Refilling, None),
-        };
         Self {
             proc,
             serial: 1,
             thread,
             read_only: false,
             socket: PathBuf::new(),
-            ready,
-            bind,
-            leafless_since,
+            state,
             told: false,
             peer: false,
             cause: None,
@@ -111,6 +64,10 @@ impl Composition {
             heard_at: None,
             max_silence: Duration::ZERO,
         }
+    }
+
+    pub(super) fn state(&self) -> PairState {
+        self.state
     }
 }
 
@@ -134,6 +91,14 @@ impl Composition {
         self.thread.is_none() && self.proc.stop.is_none()
     }
 
+    /// 葉子死了、留著等下一個 `ensure`：從什麼時候起。
+    pub(super) fn leafless_since(&self) -> Option<Instant> {
+        match self.state {
+            PairState::Leafless { since } => Some(since),
+            _ => None,
+        }
+    }
+
     /// 連帶收掉：葉子已經不在了。
     pub(super) fn collect(&mut self, now: Instant, eof_grace: Duration) {
         if self.proc.stop.is_none() {
@@ -153,12 +118,12 @@ impl Supervisor {
         })
     }
 
-    /// 每一對的狀態說不通就 panic，訊息帶兩邊的狀態：組合行程自己的（[`Composition::state`]），以及它跟葉子兩邊對不對得上。
+    /// 每一對的組合行程跟葉子兩邊對不上就 panic，訊息帶兩邊的狀態。
     #[cfg(any(test, debug_assertions))]
     pub(super) fn check_pairs(&self) {
         for composition in &self.compositions {
             let serial = composition.serial;
-            let state = composition.state();
+            let state = composition.state;
             let leaf = self.conversations.iter().find(|c| c.pair == Some(serial));
             let broken = |what: &str| -> ! {
                 panic!(
@@ -212,6 +177,27 @@ impl Supervisor {
         self.conversations.iter().any(|c| c.pair == Some(serial))
     }
 
+    /// 這一對走到 `state`。成對的葉子起了之後，`phase` 只在這裡寫，跟著一對的狀態走。
+    fn enter(&mut self, index: usize, state: PairState) {
+        let composition = &mut self.compositions[index];
+        composition.state = state;
+        let phase = match state {
+            PairState::Starting | PairState::Refilling => Phase::Starting,
+            PairState::Ready => Phase::Warm,
+            PairState::Binding => Phase::Binding,
+            PairState::Bound => Phase::Up,
+            PairState::Leafless { .. } => return,
+        };
+        let serial = composition.serial;
+        if let Some(leaf) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.pair == Some(serial))
+        {
+            leaf.phase = phase;
+        }
+    }
+
     /// 一對的三個 socket：前台連的、橋、葉子自己收連線的。
     pub(super) fn pair_sockets(&self, serial: u64) -> [PathBuf; 3] {
         ["sock", "p.sock", "l.sock"]
@@ -251,9 +237,7 @@ impl Supervisor {
                     thread,
                     read_only: open == OpenMode::ReadOnly,
                     socket: front,
-                    ready: false,
-                    bind: Bind::Unsent,
-                    leafless_since: None,
+                    state: PairState::Starting,
                     told: false,
                     peer: false,
                     cause: None,
@@ -319,23 +303,23 @@ impl Supervisor {
     /// 這一對的組合行程還在、葉子死了：補一個葉子，等組合行程替它送 `ready` 再重送 `bind`。上一則 `bind` 回過 `bound` 才會留著
     /// 沒有葉子的組合行程（[`Self::on_leaf_gone`]），所以它那邊沒有還留著的 `bind`，重送不會撞上。
     pub(super) fn refill(&mut self, index: usize, open: OpenMode) {
+        self.enter(index, PairState::Ready);
         let composition = &mut self.compositions[index];
-        composition.leafless_since = None;
         composition.told = false;
         composition.read_only = open == OpenMode::ReadOnly;
         if self.start_leaf(index) {
-            self.compositions[index].bind = Bind::Refilling;
+            self.enter(index, PairState::Refilling);
         }
     }
 
     /// 成對時 `bind` 送給組合行程，由它經橋轉給葉子。葉子的沉默每次從這裡重新起算；組合行程的只從第一次 `bind` 起算。
     pub(super) fn bind_pair(&mut self, index: usize) {
-        let composition = &mut self.compositions[index];
-        let Some(thread) = composition.thread.clone() else {
+        let Some(thread) = self.compositions[index].thread.clone() else {
             return;
         };
         let now = Instant::now();
-        composition.bind = Bind::Sent;
+        self.enter(index, PairState::Binding);
+        let composition = &mut self.compositions[index];
         composition.heard_at.get_or_insert(now);
         let bind = ConversationCommand::Bind { thread_id: thread };
         composition
@@ -348,7 +332,6 @@ impl Supervisor {
             .iter_mut()
             .find(|c| c.pair == Some(serial))
         {
-            leaf.phase = Phase::Binding;
             leaf.heard_at = Some(now);
         }
     }
@@ -365,7 +348,7 @@ impl Supervisor {
         let Some(index) = self
             .compositions
             .iter()
-            .position(|p| free(p) && p.ready)
+            .position(|p| free(p) && p.state != PairState::Starting)
             .or_else(|| self.compositions.iter().position(free))
         else {
             return false;
@@ -373,7 +356,7 @@ impl Supervisor {
         let composition = &mut self.compositions[index];
         composition.thread = Some(thread.to_vec());
         composition.read_only = open == OpenMode::ReadOnly;
-        let (serial, ready) = (composition.serial, composition.ready);
+        let (serial, ready) = (composition.serial, composition.state != PairState::Starting);
         let leaf = self
             .conversations
             .iter_mut()
@@ -459,39 +442,31 @@ impl Supervisor {
             }
             let serial = composition.serial;
             match report {
-                ConversationReport::Ready if composition.bind == Bind::Refilling => {
+                ConversationReport::Ready if composition.state == PairState::Refilling => {
                     self.bind_pair(index);
                 }
-                ConversationReport::Ready if !composition.ready => {
-                    composition.ready = true;
-                    if composition.thread.is_some() {
+                ConversationReport::Ready if composition.state == PairState::Starting => {
+                    self.enter(index, PairState::Ready);
+                    if self.compositions[index].thread.is_some() {
                         self.bind_pair(index);
-                    } else if let Some(leaf) = self
-                        .conversations
-                        .iter_mut()
-                        .find(|c| c.pair == Some(serial))
-                    {
-                        leaf.phase = Phase::Warm;
                     }
                 }
-                ConversationReport::Bound { thread_id } if composition.bind == Bind::Sent => {
+                ConversationReport::Bound { thread_id }
+                    if composition.state == PairState::Binding =>
+                {
                     if Some(&thread_id) != composition.thread.as_ref() {
                         say!("組合行程 {} 綁錯 thread，殺掉", composition.proc.pid);
                         composition.cause.get_or_insert(DeathCause::Crash);
                         composition.proc.kill_now();
                         return;
                     }
-                    composition.bind = Bind::Bound;
                     let serving = composition.proc.stop.is_none();
                     let socket = composition.socket.as_os_str().as_bytes().to_vec();
-                    let Some(leaf) = self
-                        .conversations
-                        .iter_mut()
-                        .find(|c| c.pair == Some(serial))
+                    self.enter(index, PairState::Bound);
+                    let Some(leaf) = self.conversations.iter().find(|c| c.pair == Some(serial))
                     else {
                         continue;
                     };
-                    leaf.phase = Phase::Up;
                     if serving && leaf.proc.stop.is_none() {
                         self.tell_front(&FrontEvent::Up { thread_id, socket });
                     }
@@ -506,7 +481,7 @@ impl Supervisor {
         let Some(idle) = self.args.idle else { return };
         for composition in &mut self.compositions {
             if composition
-                .leafless_since
+                .leafless_since()
                 .is_some_and(|at| at + idle <= now)
                 && composition.proc.stop.is_none()
             {
@@ -523,14 +498,15 @@ impl Supervisor {
     /// 一對的葉子收完屍、判完死因之後。上一則 `bind` 回過 `bound`、葉子是自己壞掉的（不是逐出、停機、協定錯）：組合行程留著，等下一個
     /// `ensure` 補葉子。其餘的連帶收掉組合行程：`bind` 還沒回 `bound` 時，從外面分不出組合行程是把它留著等葉子登記（再送一次它會以協定錯誤結束）、
     /// 還是已經轉給葉子而作廢（不再送就永遠不會 `bound`），所以整對收掉，下一個 `ensure` 起新的一對。
-    /// 補起的葉子還沒等到 `ready` 就死（[`Bind::Refilling`]）也整對收：留著的話，它登記完才死時晚到的那則 `ready` 會被當成下一個葉子的，
+    /// 補起的葉子還沒等到 `ready` 就死（[`PairState::Refilling`]）也整對收：留著的話，它登記完才死時晚到的那則 `ready` 會被當成下一個葉子的，
     /// `bind` 提早送、新葉子的沉默提早起算。
     pub(super) fn on_leaf_gone(&mut self, serial: u64, cause: DeathCause) {
-        let Some(composition) = self.compositions.iter_mut().find(|p| p.serial == serial) else {
+        let Some(index) = self.compositions.iter().position(|p| p.serial == serial) else {
             return;
         };
+        let composition = &mut self.compositions[index];
         composition.told = true;
-        let keep = composition.bind == Bind::Bound
+        let keep = composition.state == PairState::Bound
             && composition.proc.stop.is_none()
             && !self.shutting_down
             && matches!(
@@ -541,14 +517,20 @@ impl Supervisor {
                     | DeathCause::HostOom
                     | DeathCause::Stalled
             );
-        composition.bind = Bind::Unsent;
         let now = Instant::now();
         if keep {
-            composition.leafless_since = Some(now);
+            self.enter(index, PairState::Leafless { since: now });
             // 有排著的就讓出名額：沒有葉子的組合行程，最早留下的先收。
             self.make_room();
         } else {
-            composition.collect(now, self.args.eof_grace);
+            // 沒有還沒回答的 `bind` 了：晚到的 `bound` 與補起的葉子的 `ready` 不再理。`Starting` 不動：還沒收過 `ready`，沒有 `bind` 要作廢。
+            if matches!(
+                composition.state,
+                PairState::Binding | PairState::Bound | PairState::Refilling
+            ) {
+                self.enter(index, PairState::Ready);
+            }
+            self.compositions[index].collect(now, self.args.eof_grace);
         }
     }
 

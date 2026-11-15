@@ -854,7 +854,7 @@ impl Supervisor {
                 self.compositions
                     .iter()
                     .filter(|p| p.proc.stop.is_none())
-                    .filter_map(move |p| Some(p.leafless_since? + idle))
+                    .filter_map(move |p| Some(p.leafless_since()? + idle))
             }))
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations
@@ -1193,7 +1193,7 @@ impl Supervisor {
                 if open == OpenMode::Run {
                     composition.read_only = false;
                 }
-                if composition.leafless_since.is_some() {
+                if composition.leafless_since().is_some() {
                     self.refill(index, open);
                 }
             } else if composition.told || composition.peer {
@@ -1298,8 +1298,8 @@ impl Supervisor {
                 .compositions
                 .iter_mut()
                 .filter(|p| p.proc.stop.is_none())
-                .filter(|p| p.leafless_since.is_some())
-                .min_by_key(|p| p.leafless_since);
+                .filter(|p| p.leafless_since().is_some())
+                .min_by_key(|p| p.leafless_since());
             if let Some(composition) = leafless {
                 say!("名額滿，先收沒有葉子的組合行程 {}", composition.proc.pid);
                 composition.collect(Instant::now(), self.args.eof_grace);
@@ -1354,7 +1354,7 @@ impl Supervisor {
             let Some((at, index)) = self.pending.iter().enumerate().find_map(|(at, (t, _))| {
                 let index = self.compositions.iter().position(|p| {
                     p.thread.as_ref() == Some(t)
-                        && p.leafless_since.is_some()
+                        && p.leafless_since().is_some()
                         && p.proc.stop.is_none()
                 })?;
                 Some((at, index))
