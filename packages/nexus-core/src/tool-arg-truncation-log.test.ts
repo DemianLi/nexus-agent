@@ -386,11 +386,13 @@ describe('createSummarizer 接上真的基座', () => {
 
   it('日誌上記過的縮短壞了（讀不出來）：同樣不吞，這一步失敗', async () => {
     const broken = {
-      events: [{ type: 'compaction/truncate-args', data: { calls: 1 } }],
+      events: [{ type: 'compaction/truncate-args', seq: 7, data: { calls: 1 } }],
       append: () => undefined,
     };
     const { sent, call } = setup(() => ({ kind: 'ok', address: { kind: 'root' }, log: broken }));
-    await expect(Promise.resolve().then(() => call(history()))).rejects.toThrow();
+    await expect(Promise.resolve().then(() => call(history()))).rejects.toThrow(
+      /compaction\/truncate-args 事件讀不出來（seq 7）：.*calls is not iterable/,
+    );
     expect(sent).toEqual([]);
   });
 

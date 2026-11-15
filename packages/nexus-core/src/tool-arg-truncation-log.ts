@@ -59,10 +59,21 @@ export interface NewlyTruncatedCall {
  *
  * @param events - 日誌事件，照 `seq` 排。
  * @returns 沒有 `compaction/truncate-args` 就是空 Map。
+ * @throws 某一顆 `compaction/truncate-args` 的內容讀不出來：訊息帶事件種類與 `seq`，`cause` 是原錯。
  */
 export function recordedArgTruncationsOf(events: readonly SessionEvent[]): RecordedArgTruncations {
   const recorded = new Map<string, Map<string, RecordedArgTruncation>>();
-  for (const event of events) recordArgTruncationsInto(recorded, event);
+  for (const event of events) {
+    try {
+      recordArgTruncationsInto(recorded, event);
+    } catch (cause) {
+      // 壞掉的事件讓這條對話每一步都失敗：訊息要讓維運的人認得出是哪一顆、哪一種。
+      throw new Error(
+        `${event.type} 事件讀不出來（seq ${event.seq}）：${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause },
+      );
+    }
+  }
   return recorded;
 }
 
