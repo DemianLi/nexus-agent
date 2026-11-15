@@ -1328,14 +1328,14 @@ describe('推不出來', () => {
 });
 
 describe('會進模型的事件讀不出來（#2836）', () => {
-  /** 把第一顆指定種類的事件的 `data` 換成壞的，其餘照舊。 */
+  /** 把指定種類的每一顆事件的 `data` 換成 `data`，其餘不動。 */
   function withBrokenData(log: SessionLog, type: string, data: unknown): SessionEvent[] {
     return log.events.map((event) =>
       event.type === type ? ({ ...event, data } as unknown as SessionEvent) : event,
     );
   }
 
-  /** 每一種會進模型的事件各一顆，壞的那一顆是 `type`。 */
+  /** 造一份含 `type` 那種事件的日誌：`compaction/summary` 用帶壓縮的兩輪，其餘用一輪工具呼叫加插話。 */
   function logWith(type: string): SessionLog {
     const log = new SessionLog('replay');
     if (type === 'compaction/summary') {
@@ -1386,6 +1386,25 @@ describe('會進模型的事件讀不出來（#2836）', () => {
     },
   );
 
+  it.each(['model/end', 'tool/call', 'turn/end'])(
+    '記帳那幾種裡會讀 data 的（%s）壞掉：一樣帶事件種類與 seq',
+    (type) => {
+      const log = new SessionLog('replay');
+      log.append('turn/start', { kind: 'message', text: '列一下' });
+      log.append('model/start', {});
+      log.append('model/end', {});
+      log.append('assistant/message', { message: asking('好', [['c1', 'ls']]) });
+      tool(log, 'c1', 'ls', 'a.txt');
+      log.append('assistant/message', { message: reply('完') });
+      log.append('turn/end', {});
+      const seq = log.events.find((event) => event.type === type)?.seq;
+
+      expect(() => replayConversation(withBrokenData(log, type, null))).toThrow(
+        new RegExp(`^${type.replace('/', '\\/')} 事件讀不出來（seq ${seq}）：`),
+      );
+    },
+  );
+
   it('對照：記帳那幾種裡不讀 data 的（model/start）壞了也不影響，推得出來的照推', () => {
     const log = logWith('tool/result');
     log.append('model/start', {});
@@ -1394,7 +1413,7 @@ describe('會進模型的事件讀不出來（#2836）', () => {
     expect(shape(replayConversation(events))).toContain('tool:c1:a.txt');
   });
 
-  it('對照：result-missing 照舊走 unreplayable，不拋', () => {
+  it('對照：result-missing 走 unreplayable，不拋', () => {
     const log = logWith('tool/result');
     const call = log.events.find((event) => event.type === 'tool/result');
     const events = log.events.map((event) =>

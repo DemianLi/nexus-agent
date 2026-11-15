@@ -365,9 +365,9 @@ export class ReplayFold {
       this.#failure = { reason, seq: event.seq };
     };
     // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
-    if (isModelVisibleEvent(event)) {
-      // 事件裡的訊息讀不出來（形狀壞了）時，錯誤訊息帶事件種類與 seq；記帳那幾種不讀內容，不包。
-      readingEvent(event, () => {
+    // 讀事件內容拋的錯，訊息帶事件種類與 seq（#2836）。讀 `data` 的每一種都在這一層裡，不分進不進模型。
+    readingEvent(event, () => {
+      if (isModelVisibleEvent(event)) {
         switch (event.type) {
           case 'turn/start': {
             this.#turn = { replied: false, interrupted: false };
@@ -435,64 +435,64 @@ export class ReplayFold {
             // 子聯集多一種而這裡沒有 case，這一行編不過。
             event satisfies never;
         }
-      });
-    } else {
-      switch (event.type) {
-        case 'model/start': {
-          this.#openCall = event.seq;
-          break;
-        }
-        case 'model/end': {
-          // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
-          if (this.#openCall !== undefined && event.data.outcome === undefined) {
-            this.#modelRan ??= this.#openCall;
+      } else {
+        switch (event.type) {
+          case 'model/start': {
+            this.#openCall = event.seq;
+            break;
           }
-          this.#openCall = undefined;
-          break;
-        }
-        case 'tool/call': {
-          this.#modelRan ??= event.seq;
-          if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
-            this.#batch.started.add(event.data.callId);
+          case 'model/end': {
+            // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
+            if (this.#openCall !== undefined && event.data.outcome === undefined) {
+              this.#modelRan ??= this.#openCall;
+            }
+            this.#openCall = undefined;
+            break;
           }
-          break;
-        }
-        case 'interrupt/raised': {
-          if (this.#turn !== undefined) this.#turn.interrupted = true;
-          break;
-        }
-        case 'turn/end': {
-          // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
-          // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
-          const turn = this.#turn;
-          if (
-            turn !== undefined &&
-            event.data.reason === undefined &&
-            !turn.replied &&
-            !turn.interrupted
-          ) {
-            return fail('reply-missing');
+          case 'tool/call': {
+            this.#modelRan ??= event.seq;
+            if (this.#batch?.calls.some((call) => call.id === event.data.callId) === true) {
+              this.#batch.started.add(event.data.callId);
+            }
+            break;
           }
-          this.#turn = undefined;
-          break;
+          case 'interrupt/raised': {
+            if (this.#turn !== undefined) this.#turn.interrupted = true;
+            break;
+          }
+          case 'turn/end': {
+            // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
+            // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
+            const turn = this.#turn;
+            if (
+              turn !== undefined &&
+              event.data.reason === undefined &&
+              !turn.replied &&
+              !turn.interrupted
+            ) {
+              return fail('reply-missing');
+            }
+            this.#turn = undefined;
+            break;
+          }
+          case 'turn/failed': {
+            this.#turn = undefined;
+            break;
+          }
+          case 'session/end-seed': {
+            // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
+            this.#raw = settledMessages(this.#raw, this.#summary);
+            this.#summary = undefined;
+            this.#turn = undefined;
+            break;
+          }
+          default:
+            // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
+            // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
+            break;
         }
-        case 'turn/failed': {
-          this.#turn = undefined;
-          break;
-        }
-        case 'session/end-seed': {
-          // 這個生命週期到此為止：換成那時灌回去的那一串。還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
-          this.#raw = settledMessages(this.#raw, this.#summary);
-          this.#summary = undefined;
-          this.#turn = undefined;
-          break;
-        }
-        default:
-          // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
-          // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
-          break;
       }
-    }
+    });
     this.#previous = event;
   }
 
