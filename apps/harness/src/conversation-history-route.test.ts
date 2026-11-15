@@ -277,7 +277,7 @@ describe.each(MODES)('超大 human message（%s，langgraph）', (mode) => {
 });
 
 /**
- * **自訂前綴不路由，照舊落在它自己的 backend 上。** 只路由基座的那個常數：那是兩個寫入者
+ * **沒接日誌時，自訂前綴不路由，落在它自己的 backend 上。** 只路由基座的那個常數：那是兩個寫入者
  * 共用、而且 eviction 寫死的那一個。明著換掉前綴等於明著選了去向，這條逃生口留著。
  */
 it('自訂的 historyPathPrefix 照舊落在工作區', async () => {

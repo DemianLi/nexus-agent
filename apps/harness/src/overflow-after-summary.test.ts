@@ -1,6 +1,6 @@
 /**
  * **第一次已經摘要過、送出去端點還是回超窗：三處的樣子**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)
- * PM 要求量清楚的邊界；讀回那一格見 [#1389](https://github.com/DemianLi/nexus-agent/issues/1389)、
+ * 量清楚的邊界；讀回那一格見 [#1389](https://github.com/DemianLi/nexus-agent/issues/1389)、
  * [#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）。
  *
  * 情境：訊息數門檻先到，基座用 N 則的保留量摘要一次（attempt 1），摘要之後的請求送出去，**端點回超窗**；

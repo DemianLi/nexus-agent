@@ -736,7 +736,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * （{@link ./token-estimate.ts}）比，理由與做法見那裡（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
  * 剪刀的「壓力到了沒」也讀同一套估算。
  *
- * @param backend - 歷史寫去哪。
+ * @param backend - 歷史寫去哪。原文讀不回來的呼叫才寫。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
  * @param book - 錨定估算的帳，由進入點建、注入（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：同一本帳的組裝彼此借錨。
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
@@ -750,7 +750,8 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * @param sentHistoryOf - 從日誌推「這次要送的歷史」（`history-shadow.ts` 的 `createSentHistoryReader`）。給了而且有 `sessions`，
  *   生摘要那一次就重播上一次主請求（{@link replayedSummaryCall}）；省略就照模板（`state`、`shadow`）。
  * @param recallTools - 這次組裝有沒有註冊讀回被摘掉的原文的工具（`history-recall.ts`）。有、而且這次呼叫解得到日誌，
- *   摘要的前言就指向那兩個工具（寫法見 `summarizer-engine.ts` 的 `originalsRecallable`）。
+ *   就不寫歷史檔，摘要的前言只指向那兩個工具（`summarizer-engine.ts` 的 `originalsRecallable`）；否則照
+ *   `historyPathPrefix` 寫歷史檔。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -777,7 +778,7 @@ export function createSummarizer(
       ? undefined
       : replayedSummaryCall(sessions, sentHistoryOf);
   // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
-  // 沒有會話註冊表就查不了日誌，維持直接寫。原文讀得回來的呼叫不寫歷史檔，這一層沒有東西可暫存。
+  // 沒有會話註冊表就查不了日誌，直接寫。原文讀得回來的呼叫不寫歷史檔，這一層沒有東西可暫存。
   const staging =
     sessions === undefined
       ? undefined
@@ -1300,7 +1301,7 @@ export class SummaryNotSmallerError extends Error {
  * 不然整次壓縮不提交。擋的是壓了反而變大或沒變小的壓縮。照保留量切時，切點前只剩舊摘要那一類在 {@link retainedMessageCount}
  * 就判成摘不到、不會到這裡；端點超窗、保留量降到 0 時仍可能走到。
  *
- * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架與歷史檔路徑）。
+ * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架；寫了歷史檔的還有路徑）。
  * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link applySummaryCutoff}），去掉交下去那份留下的尾巴。
  * - **兩邊同一把量具**：{@link estimateMessageTokens}，與保留量選尾巴同一把的估算；我們沒有逐路由的計價（同 #1383 的理由）。
  *   被取代那段取的是參數截斷之前的有效串，所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。

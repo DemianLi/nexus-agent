@@ -68,7 +68,7 @@ export interface SummarizerEngineOptions {
   };
   /**
    * 這次請求被摘掉的原文讀不讀得回來（會話日誌接上了，而且讀回的工具註冊了）。回 `true` 時不寫歷史檔，前言只指向那兩個工具，
-   * 本文照樣包在 `<summary>` 裡。省略等於一律 `false`：照寫歷史檔，前言指向那個檔。
+   * 本文照樣包在 `<summary>` 裡。省略等於一律 `false`：寫歷史檔，寫成時前言指向那個檔。
    */
   readonly originalsRecallable?: (request: SessionRequest) => boolean;
   /**
@@ -588,7 +588,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     total: number,
   ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
     const recallable = originalsRecallable?.(request) === true;
-    // 原文在會話日誌裡讀得回來時不另存一份：歷史檔在 graph state 裡，續接之後讀不到。
+    // 原文讀得回來時不另存一份：日誌那份續接之後照樣讀得到，同一份原文不留兩個來源。
     const filePath = recallable ? null : await offloadToBackend(messagesToSummarize, request);
     if (filePath === null && !recallable)
       console.warn(

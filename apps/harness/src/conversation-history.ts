@@ -648,7 +648,7 @@ export function compactionData(
       payload: {
         seq: event.seq,
         cutoff: cutoffIndex,
-        // 前言指向讀回工具的摘要沒有歷史檔（#2777）：原文在會話日誌裡。
+        // 前言指向讀回工具的摘要也算存了（#2777）：沒有歷史檔，原文在會話日誌裡。
         saved: filePath !== null || summaryPointsToRecall(full),
         ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
       },

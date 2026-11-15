@@ -33,8 +33,7 @@
  * ## 偏離登記（AGENTS.md「偏離規則」）
  *
  * dsh 的壓縮不寫任何檔案（原文留在會話日誌，`compaction-basic/README.zh.md`），壓縮是一筆交易，沒有「寫了一半」。
- * 我們的歷史檔是基座無條件建、關不掉的（`agent-factory.ts` 的 `withConversationHistory` 已登記一次），寫入點在
- * 基座裡、先於生摘要。**退到最接近的：在 backend 接縫上做交易化**——寫入先暫存，提交與否跟著「這一步有沒有生出
+ * 我們在原文讀不回來的呼叫上寫歷史檔（`agent-factory.ts` 的 `withConversationHistory` 已登記一次），寫入點先於生摘要。**退到最接近的：在 backend 接縫上做交易化**——寫入先暫存，提交與否跟著「這一步有沒有生出
  * 摘要」走。照 #1390 的處理，我們對基座的節點本身一個字不動。
  *
  * **殘餘**：暫存只管摘要器自己的 backend 實例；`createFilesystemMiddleware` 搬超大使用者訊息的寫入

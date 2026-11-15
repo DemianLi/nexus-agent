@@ -682,7 +682,7 @@ export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
  * `<compacted-summary>`（`packages/compaction/compaction-basic/README.zh.md`，SHA `0d1f500`）。
  * 我們的日誌從 [#305](https://github.com/DemianLi/nexus-agent/issues/305) 起也記著對話
  * （`assistant/message`、`tool/result`），所以耐久的那一份已經在日誌裡；backend 上這一份只是
- * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利。放 state 不必碰磁碟（`read-only` 也
+ * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利，只有原文讀不回來的呼叫（沒接會話日誌）才寫。放 state 不必碰磁碟（`read-only` 也
  * 留得住，以前那次寫入被 fence 擋掉、歷史直接消失），也不必有清理政策。
  *
  * **偏離登記**：基座把歷史寫成檔、還在摘要裡告訴模型路徑，dsh 沒有這條路；這條路基座無條件
@@ -690,10 +690,9 @@ export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
  *
  * **代價講明白**，都跟暫存那一格同形：
  *
- * - 它進 checkpoint，跑完就不在磁碟上，**續接（`--resume`、serve 重開）帶不回來**。灌回去的
- *   摘要仍寫著「完整歷史存在某某路徑」，那時讀不到——跟暫存預覽裡的路徑一樣，另外披露。
- *   接上會話日誌的呼叫另有一條續接後仍讀得到的路（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：`history_read`／`history_search`
- *   從日誌讀回原文（`history-recall-tools.ts`），摘要的前言也指向它們。
+ * - 它進 checkpoint，跑完就不在磁碟上，**續接（`--resume`、serve 重開）帶不回來**。
+ *   接上會話日誌的呼叫不寫這個檔（[#2777](https://github.com/DemianLi/nexus-agent/issues/2777)）：`history_read`／`history_search`
+ *   從日誌讀回原文（`history-recall-tools.ts`），續接後仍讀得到，摘要的前言指向它們。
  * - `CompositeBackend` 把路由前綴剝掉再交給 `StateBackend`，而 `StateBackend` 讀寫的是 graph
  *   state 的 `files`。沒給 `--workspace` 時 default backend 也是一個 `StateBackend`，所以 agent
  *   在自己的根目錄 `grep` 得到歷史檔（實測）。暫存那一格是同一個機制。
