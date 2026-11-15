@@ -38,6 +38,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { shippedPlugins, withoutTimeContext } from './fixtures.js';
+import { isSummaryCallPrompt } from './summary-call.fixture.js';
 
 const shipped = withoutTimeContext(await shippedPlugins());
 
@@ -464,8 +465,8 @@ describe('摘要之後下一句話把基線補回來', () => {
     await found.close();
   });
 
-  /** agent 自己的呼叫。摘要器那次也走同一個模型，但它的 prompt 沒有 system。 */
-  const isAgentCall = (prompt: readonly BaseMessage[]) => prompt[0]?.getType() === 'system';
+  /** agent 自己的呼叫。摘要器那次也走同一個模型，由 {@link isSummaryCallPrompt} 認出來。 */
+  const isAgentCall = (prompt: readonly BaseMessage[]) => !isSummaryCallPrompt(prompt);
 
   it('第二、三句話的第一次模型呼叫各看得到恰好一則基線，排在摘要之後', () => {
     for (const sentence of [1, 2]) {
@@ -581,7 +582,7 @@ class BackgroundWorkerModel extends BaseChatModel {
       generations: [{ text: message.text, message }],
       llmOutput: {},
     });
-    if (messages[0]?.getType() !== 'system') return reply(new AIMessage('背景的摘要。'));
+    if (isSummaryCallPrompt(messages)) return reply(new AIMessage('背景的摘要。'));
     this.agentCalls.push({ round: this.round, prompt: [...messages] });
     if (this.round === 1 && this.#echoes < 6) {
       this.#echoes += 1;
