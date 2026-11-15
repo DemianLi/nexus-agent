@@ -3073,7 +3073,7 @@ When the user gives a date without a year, infer the year from the timestamp abo
 - **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
 - **設定寫錯（不是 IANA 名、間隔不是非負安全整數、多出來的欄位）這一列掉下來**，啟動時印原因，其餘照常；設定只給新的 thread。
 - **關掉**：`plugin disable time-context`，或 patch 寫 `- id: time-context` ＋ `disabled: true`。這一列在 `cordis.yml`（CLI 與 serve 共用），所以兩邊一起關：dsh 只有 web-app 掛它、照理只掛 serve，但 serve 專屬層的函式插件上不了樹（`plugin-tree.ts:51-52`），所以我們的 CLI 也掛（偏離登記在套件檔頭第 5 條，撤除條件：serve 層經 Include 上樹後搬到 `cordis.serve.yml`）。
-- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`）。2026-10-23 起清單上另有 `/名字` 叫用那一顆（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），預設遞迴上限 100 下出貨清單是 31 輪；拿掉這一列（或叫用那一列）是 32 輪。上限壓得很低的部署要自己量。
+- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`）。2026-10-23 起清單上另有 `/名字` 叫用那一顆（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），預設遞迴上限 100 下 CLI 的樹是 31 輪、serve 的樹是 23 輪；CLI 的樹拿掉這一列（或叫用那一列）是 32 輪。不經樹的裸出貨清單（`createNexusAgent` 直接給清單）在 `history-source=log` 下是 32 輪（補懸空工具呼叫那顆不掛改狀態的節點，少一格），在 `state` 下是 31 輪。上限壓得很低的部署要自己量。
 - **畫面上不會多一則**：讀數是持久訊息、模型看得到，但帶 `source.plugin`，web 的對話畫面不把它當使用者說的話畫出來（同 AGENTS.md 基線）。
 
 ### 後台改清單：`plugin` 寫入口與變更紀錄

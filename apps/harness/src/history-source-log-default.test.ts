@@ -1,8 +1,6 @@
 /**
- * `history-source` 預設改 `log`（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)）：出貨那一列、入口預設、
+ * `history-source` 預設是 `log`（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)）：出貨那一列、入口預設、
  * 那一列關掉或掉下來、自己 copy 的清單、老日誌續接的預告與拋錯。
- *
- * 這一檔量**產品預設**，所以不吃 `history-source-state.setup.ts` 那兩個 mock。
  */
 
 import { appendFile, cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -12,9 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-vi.unmock('./assembly-root.js');
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';

@@ -445,17 +445,19 @@ describe('迴圈上限', () => {
     const limitFrom = async (
       options: Partial<Parameters<typeof createNexusAgent>[0]>,
     ): Promise<string> => {
-      const { agent, dispose } = await createNexusAgent({
+      const { agent, dispose, attachSession } = await createNexusAgent({
         model: new LoopingChatModel(),
         plugins: [createEchoPlugin()],
         repeatReminder: false,
         ...options,
       } as Parameters<typeof createNexusAgent>[0]);
+      const detach = attachSession(new SessionRegistry('recursion-limit'));
       try {
         await agent.invoke(toAgentInvocation('一直跑'));
       } catch (error) {
         return (error as Error).message;
       } finally {
+        detach();
         await dispose();
       }
       throw new Error('沒有撞到上限，這條測試的前提不成立');
@@ -535,16 +537,18 @@ describe('迴圈上限', () => {
   it('提醒器把每輪的格數從兩格變三格，同一個上限少跑三分之一', async () => {
     const rounds = async (repeatReminder: false | undefined): Promise<number> => {
       const model = new LoopingChatModel();
-      const { agent, dispose } = await createNexusAgent({
+      const { agent, dispose, attachSession } = await createNexusAgent({
         model,
         plugins: [createEchoPlugin()],
         recursionLimit: 8,
         summarization: false,
         ...(repeatReminder === false && { repeatReminder }),
       });
+      const detach = attachSession(new SessionRegistry('reminder-rounds'));
       try {
         await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
       } finally {
+        detach();
         await dispose();
       }
       return model.calls;

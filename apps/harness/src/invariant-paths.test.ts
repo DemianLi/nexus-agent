@@ -67,55 +67,59 @@ describe('不變量接線：CLI 那條路', () => {
   it('真的跑一輪，配套入口一條違規都不報', async () => {
     // **不再自己補 `createCoreInvariantPlugin()`**：它已經在出貨清單裡
     // （#107），補第二份會撞包名歸屬當場拋。
-    const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
-      { live: false },
-      shipped,
-    );
+    const { agent, dispose, sessions, sessionLog, attachInvariants, attachSession } =
+      await createCliAgent({ live: false }, shipped);
     // 這一條刻意**不**傳 `onInvariantViolation`，走 runner 的預設，因為它問的是
     // 「有沒有誤報」而不是「印去哪裡」——預設那條路徑也得是安靜的。
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
     const detach = attachInvariants(sessions);
+    const detachSession = attachSession(sessions);
     expect(detach).toBeDefined();
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
     } finally {
       detach?.();
+      detachSession();
       console.error = original;
       await dispose();
     }
 
     // 第一句跑完多一顆退回標題（#647），出貨的配套入口對它一條違規都不報。
-    expect(sessionLog.events.map((event) => event.type)).toEqual([
-      'turn/start',
-      'session/title',
-      'turn/end',
-    ]);
+    // 日誌接上之後整輪的事件都會落進來（模型呼叫、工具等），這裡只釘輪的邊界與標題的順序。
+    expect(
+      sessionLog.events
+        .map((event) => event.type)
+        .filter((type) => type === 'turn/start' || type === 'session/title' || type === 'turn/end'),
+    ).toEqual(['turn/start', 'session/title', 'turn/end']);
     expect(violations).toEqual([]);
   });
 
   it('接線真的通了——換一個一律報違規的配套入口就看得到違規', async () => {
-    const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
-      { live: false },
-      [...shipped, noisyInvariantPlugin()],
-    );
+    const { agent, dispose, sessions, sessionLog, attachInvariants, attachSession } =
+      await createCliAgent({ live: false }, [...shipped, noisyInvariantPlugin()]);
     // 預設的 `onViolation` 是 `console.error`，這裡只需要知道它有沒有跑到，所以攔下來。
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
     const detach = attachInvariants(sessions);
+    const detachSession = attachSession(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
     } finally {
       detach?.();
+      detachSession();
       console.error = original;
       await dispose();
     }
 
-    expect(violations).toEqual([
+    // 日誌接上之後整輪的事件都會被看到，這裡只釘輪的邊界與標題那三顆的順序。
+    expect(
+      violations.filter((message) => /看到 (turn\/start|session\/title|turn\/end)$/.test(message)),
+    ).toEqual([
       'invariant violated by "@nexus/noisy": 看到 turn/start',
       'invariant violated by "@nexus/noisy": 看到 session/title',
       'invariant violated by "@nexus/noisy": 看到 turn/end',

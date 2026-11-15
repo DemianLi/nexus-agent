@@ -313,13 +313,14 @@ describe('E：同一棵樹／同一份清單上多條 thread，`{{model}}` 與 `
         approvals: HEADLESS_APPROVALS,
         systemPromptVariables: { model, cwd },
       });
-      return { built, scripted };
+      const detach = built.attachSession(new SessionRegistry(cwd));
+      return { built, scripted, detach };
     };
     const a = await mk('alpha-model', '/work/alpha');
     const b = await mk('beta-model', '/work/beta');
     await Promise.all([
-      a.built.agent.invoke(toAgentInvocation('甲')),
-      b.built.agent.invoke(toAgentInvocation('乙')),
+      a.built.agent.invoke(toAgentInvocation('甲'), { configurable: { thread_id: '/work/alpha' } }),
+      b.built.agent.invoke(toAgentInvocation('乙'), { configurable: { thread_id: '/work/beta' } }),
     ]);
     const aText = systemOf(a.scripted.prompts[0] ?? []);
     const bText = systemOf(b.scripted.prompts[0] ?? []);
@@ -331,6 +332,8 @@ describe('E：同一棵樹／同一份清單上多條 thread，`{{model}}` 與 `
     expect(bText).toContain('Your working directory is /work/beta.');
     expect(bText).not.toContain('alpha-model');
     expect(bText).not.toContain('/work/alpha');
+    a.detach();
+    b.detach();
     await a.built.dispose();
     await b.built.dispose();
   }, 60000);

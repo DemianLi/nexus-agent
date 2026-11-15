@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { createHostServicesPlugin, loadPlugins, SessionRegistry } from '@nexus/core';
 import type { InternalPluginRegistry, PluginEntry } from '@nexus/core';
 import { MCP_CREDENTIALS_SERVICE } from '@nexus/plugin-mcp';
 import { MemorySaver } from '@langchain/langgraph';
@@ -426,6 +426,7 @@ describe('tools.threadSource', () => {
       checkpointer: new MemorySaver(),
       plugins: [...(await shippedPlugins()), ...loaded.plugins],
     });
+    const detach = built.attachSession(new SessionRegistry('thread-section'));
     try {
       await (
         built.agent as unknown as {
@@ -444,6 +445,7 @@ describe('tools.threadSource', () => {
       expect(systems[1]).toContain('段：after');
       expect(systems[1]).not.toContain('段：before');
     } finally {
+      detach();
       await built.dispose();
     }
   }, 60000);

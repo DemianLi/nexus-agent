@@ -45,12 +45,15 @@ const FIXED = () => new Date('2026-10-13T08:00:00.000Z');
 async function boundTools(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   const { plugins } = await loadDefaultPlugins({ env });
   const built = await createCliAgent({ live: false }, plugins);
+  // log 是產品預設，第一次 invoke 前要有日誌接著（#2814）。
+  const detach = built.attachSession(built.sessions);
   try {
     await built.agent.invoke(toAgentInvocation('說點什麼'), {
       configurable: { thread_id: 'plugin-change' },
     });
     return (built.model as ScriptedChatModel).boundToolNames;
   } finally {
+    detach();
     await built.dispose();
   }
 }

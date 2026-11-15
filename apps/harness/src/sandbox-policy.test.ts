@@ -60,11 +60,9 @@ async function promptOf(
   invocation: { readonly workspace?: string; readonly sandbox?: SandboxMode },
   cwd: string,
 ): Promise<string> {
-  const { agent, dispose, model, sessionLog } = await createCliAgent(
-    { live: false, ...invocation },
-    shipped,
-    cwd,
-  );
+  const built = await createCliAgent({ live: false, ...invocation }, shipped, cwd);
+  const { agent, dispose, model, sessionLog } = built;
+  built.attachSessions(built.sessions);
   try {
     await runTurn(agent, '嗨。', silent, sessionLog);
   } finally {
@@ -174,11 +172,9 @@ describe('sandbox-policy 是清單上的一列（#669）', () => {
   );
 
   it('沒有 --workspace 時關掉這一列是合法的：起得來，只是少了那一句', async () => {
-    const { agent, dispose, model, sessionLog } = await createCliAgent(
-      { live: false },
-      withoutRow('disabled'),
-      root,
-    );
+    const built = await createCliAgent({ live: false }, withoutRow('disabled'), root);
+    const { agent, dispose, model, sessionLog } = built;
+    built.attachSessions(built.sessions);
     try {
       await runTurn(agent, '嗨。', silent, sessionLog);
     } finally {

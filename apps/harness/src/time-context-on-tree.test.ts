@@ -644,10 +644,12 @@ describe('K：瀏覽器時區（#1629）——人話帶的時區到了模型手�
 describe('J：代價——有沒有這一列，預設上限 100 下的輪數', () => {
   async function rounds(plugins: readonly PluginEntry[], recursionLimit?: number): Promise<number> {
     const model = new LoopingChatModel();
+    // 輪數算術以節點數為準，`state` 與 `log` 差一顆補懸空的節點：這裡量 `state`，`log` 的輪數在 `recursion-limit-log.test.ts`。
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins,
       summarization: false,
+      historySource: 'state',
       backend: new ContainedFilesystemBackend({
         rootDir: workspaceWith('規矩。'),
         mode: 'workspace-write',

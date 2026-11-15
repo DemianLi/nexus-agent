@@ -87,8 +87,14 @@ async function observe(create: (model: RecordingModel) => Promise<NexusAgentHand
 /** 今天的路：解出貨清單、直接組。 */
 async function today(serve: boolean): Promise<string> {
   const { plugins } = await loadDefaultPlugins({ serve });
+  // 與 `viaCordis` 那側同為 `state`：比的是組裝差異，歷史來源不在量測範圍內。
   return observe((model) =>
-    createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [...plugins] }),
+    createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [...plugins],
+      historySource: 'state',
+    }),
   );
 }
 

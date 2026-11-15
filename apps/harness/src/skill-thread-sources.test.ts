@@ -26,6 +26,8 @@ import { changePlugin } from './plugin-change.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 import { createSkillCatalog } from './skill-catalog-wire.js';
+import { ThreadPump } from './thread-pump.js';
+import type { PumpAgent } from './thread-pump.js';
 
 const temporary: string[] = [];
 const roots: CordisRoot[] = [];
@@ -83,11 +85,12 @@ describe('兩列有同名技能，前面那一列重載過', () => {
       { live: false, workspace: twinWorkspace(), sandbox: 'workspace-write' as const },
       { plugins: withScriptedModel(loaded.plugins, [{ content: '好。' }]) },
     );
-    const attachment = built.attachSessions(new SessionRegistry('t-twin'));
+    // 走 ThreadPump：人話寫進日誌（`turn/start`），log 下技能注入才看得到這一句。
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 't-twin');
+    const attachment = built.attachSessions(pump.sessions);
     try {
-      await built.agent.invoke(toAgentInvocation('/deploy'), {
-        configurable: { thread_id: 't-twin' },
-      });
+      await pump.submit({ kind: 'message', text: '/deploy' });
+      await pump.whenIdle();
       const prompt = ((built.model as ScriptedChatModel).prompts[0] ?? []) as BaseMessage[];
       const system = prompt.filter((message) => message.getType() === 'system');
       const injected = prompt.filter(
@@ -106,6 +109,7 @@ describe('兩列有同名技能，前面那一列重載過', () => {
         ['deploy', '/late/deploy/SKILL.md'],
       ]);
     } finally {
+      pump.close();
       await attachment.detach();
       await built.dispose();
     }

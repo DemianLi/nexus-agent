@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { PluginEntry } from '@nexus/core';
+import { SessionRegistry, type PluginEntry } from '@nexus/core';
 import {
   approvalPolicySentence,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
@@ -30,11 +30,15 @@ import { toAgentInvocation } from './messages.js';
 
 const shipped = await shippedPlugins();
 
-/** 記下每一次 `bindTools` 綁了哪些工具（依模型呼叫的順序）。 */
+/**
+ * 記下每一次模型呼叫綁了哪些工具：`bindTools` 發生時已經過的呼叫數就是「這一次綁給第幾次呼叫」，同一次呼叫前綁了不只一回就取最後一回。
+ * 不能按 `bindTools` 的次數對呼叫的次序：native 而且 `history-source=log` 的 root 在同一次呼叫前會多綁一回。
+ */
 class RecordingModel extends ScriptedChatModel {
-  readonly bindings: string[][] = [];
+  readonly bindingByCall = new Map<number, string[]>();
   override bindTools(tools: readonly unknown[]): ScriptedChatModel {
-    this.bindings.push(
+    this.bindingByCall.set(
+      this.prompts.length,
       tools.map((candidate) => (candidate as { name?: string }).name ?? '<anonymous>'),
     );
     return super.bindTools(tools);
@@ -91,28 +95,32 @@ async function viaTask(name: string, root: string) {
   ];
   const model = new RecordingModel({ turns });
   const built = await assemble(model, root);
+  const detach = built.attachSession(new SessionRegistry('root'));
   try {
     await built.agent.invoke(toAgentInvocation('派 ' + name), {
       configurable: { thread_id: 'root' },
     });
   } finally {
+    detach();
     await built.dispose();
   }
   // 三次模型呼叫：root、子代理、root。
-  return { tools: model.bindings[1], system: systemText(model.prompts[1] ?? []) };
+  return { tools: model.bindingByCall.get(1), system: systemText(model.prompts[1] ?? []) };
 }
 
 /** 同一個子代理在背景圖上的那一次模型呼叫。 */
 async function viaCompiled(name: string, root: string) {
   const model = new RecordingModel({ turns: [{ content: '子代理說完了' }] });
   const built = await assemble(model, root);
+  const detach = built.attachSession(new SessionRegistry('bg-1'));
   try {
     const graph = built.compileSubagent(name, new MemorySaver());
     await graph.invoke(toAgentInvocation('幹活'), { configurable: { thread_id: 'bg-1' } });
   } finally {
+    detach();
     await built.dispose();
   }
-  return { tools: model.bindings[0], system: systemText(model.prompts[0] ?? []) };
+  return { tools: model.bindingByCall.get(0), system: systemText(model.prompts[0] ?? []) };
 }
 
 describe('漂移絆索：同一份規格，task 那條路與背景圖，模型看到的一樣', () => {
