@@ -283,30 +283,20 @@ describe('compaction/prune 記不進去：這次新剪的不生效', () => {
     expect(r.reports).toEqual([expect.stringContaining('compaction/prune 記不進去')]);
   });
 
-  // #2779：查找拋了跟找不到日誌是兩回事。找不到才退回每次重算；拋了，不知道日誌上有什麼，這次一顆都不剪。
-  // 這裡只讓指定的那一次 `forCall` 拋，其餘照常，所以請求會走到模型，看得到有沒有剪。
-  it('recorded 的查找拋了：不剪、不記、不 warn，模型收到原文', async () => {
-    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsAt: 1 });
-    const out = await r.call(withTool());
-    expect(out.error).toBeUndefined();
-    expect(resultOf(r.handled[0]!)?.content).toBe('結'.repeat(500));
-    expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
-    expect(r.reports).toEqual([]);
-  });
-
-  it('record 的查找拋了：新剪的不套用、warn 一條、不記，模型收到原文', async () => {
-    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsAt: 2 });
-    const out = await r.call(withTool());
-    expect(out.error).toBeUndefined();
-    expect(resultOf(r.handled[0]!)?.content).toBe('結'.repeat(500));
-    expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
-    expect(r.reports).toEqual([expect.stringContaining('compaction/prune 認不出日誌')]);
-  });
-
-  it('下游不吞的查找一直拋：這一步以那個錯失敗（大聲），沒有請求交到模型', async () => {
-    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsFrom: 1 });
-    const out = await r.call(withTool());
-    expect(out.error).toEqual(new Error('查找拋了'));
-    expect(r.handled).toEqual([]);
-  });
+  // #2779：查找拋了不吞（和寫入失敗不同：寫入失敗有 warn、這一輪照常），這一步以那個錯失敗，沒有任何請求交到模型。
+  // 「找不到日誌」才退回每次重算；拋了，不知道日誌上有什麼，剪也好不剪也好都會讓模型看到的與日誌分家。
+  it.each([
+    ['recorded 的查找', 1],
+    ['record 的查找', 2],
+  ] as const)(
+    '%s拋了：這一步以那個錯失敗，模型沒收到請求、日誌沒有剪法、不 warn',
+    async (_label, at) => {
+      const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsAt: at });
+      const out = await r.call(withTool());
+      expect(out.error).toEqual(new Error('查找拋了'));
+      expect(r.handled).toEqual([]);
+      expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
+      expect(r.reports).toEqual([]);
+    },
+  );
 });

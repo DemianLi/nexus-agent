@@ -1453,6 +1453,9 @@ impl Supervisor {
     }
 
     fn release(&mut self, thread: &[u8]) {
+        if self.shutting_down {
+            return;
+        }
         let Some(conversation) = self
             .conversations
             .iter_mut()
@@ -1470,9 +1473,10 @@ impl Supervisor {
         }
     }
 
-    /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、或這種開啟方式不照時間逐出的，沒有。
+    /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、這種開啟方式不照時間逐出的，沒有。
+    /// 停機中也沒有：停機不送 `drain`，全部照停機收。
     fn idle_deadline(&self, conversation: &Conversation) -> Option<Instant> {
-        if !conversation.evictable() {
+        if self.shutting_down || !conversation.evictable() {
             return None;
         }
         let limit = if conversation.read_only {
@@ -1722,15 +1726,23 @@ impl Supervisor {
                 .any(|p| p.thread.as_deref() == Some(thread))
     }
 
-    /// 這條 thread 還有一個結束時會回 `down` 的行程：被連帶收的（`peer`）與葉子那一側回過的組合行程（`told`）不會再回。
+    /// 這條 thread 還有一個結束時會回 `down`、而且前台拿那則當回答的行程。被連帶收的（`peer`）與葉子那一側回過的組合行程（`told`）
+    /// 不會再回；被逐出的回的是 `down(evicted)`，前台不拿它了結 `ensure`，所以也不算。成對時它的組合行程等葉子收完才連帶收、
+    /// 也不會回，一起不算。
     fn will_tell_down(&self, thread: &[u8]) -> bool {
+        let evicted = |c: &Conversation| c.cause == Some(DeathCause::Evicted);
         self.conversations
             .iter()
-            .any(|c| c.thread.as_deref() == Some(thread) && !c.peer)
-            || self
-                .compositions
-                .iter()
-                .any(|p| p.thread.as_deref() == Some(thread) && !p.peer && !p.told)
+            .any(|c| c.thread.as_deref() == Some(thread) && !c.peer && !evicted(c))
+            || self.compositions.iter().any(|p| {
+                p.thread.as_deref() == Some(thread)
+                    && !p.peer
+                    && !p.told
+                    && !self
+                        .conversations
+                        .iter()
+                        .any(|c| c.pair == Some(p.serial) && evicted(c))
+            })
     }
 
     fn warm_count(&self) -> usize {
@@ -2204,7 +2216,7 @@ impl Supervisor {
                         now.checked_sub(Duration::from_millis(idle_ms.into()))
                             .unwrap_or(now),
                     );
-                    if conversation.released && conversation.evictable() {
+                    if conversation.released && conversation.evictable() && !self.shutting_down {
                         conversation.released = false;
                         Self::drain(conversation);
                     }
@@ -2218,10 +2230,15 @@ impl Supervisor {
                 }
                 ConversationReport::Drained if conversation.proc.stop.is_none() => {
                     conversation.drain = None;
-                    conversation.cause.get_or_insert(DeathCause::Evicted);
-                    conversation.begin_stop(Instant::now(), self.args.eof_grace);
-                    // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
-                    self.make_room();
+                    // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
+                    if !self.shutting_down {
+                        // 死因 `evicted` 只在這裡記：回過 `drained`（閒置、沒有進行中的一輪）才算。停機靠這一點：排著等它的 thread
+                        // 當場回 `down(shutdown)`（[`Self::will_tell_down`]），前台這時就關掉它的連線，不等它收完。
+                        conversation.cause.get_or_insert(DeathCause::Evicted);
+                        conversation.begin_stop(Instant::now(), self.args.eof_grace);
+                        // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
+                        self.make_room();
+                    }
                 }
                 _ => {}
             }
@@ -3226,9 +3243,10 @@ mod tests {
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
     }
 
-    /// [`Supervisor::will_tell_down`]：被連帶收的葉子、葉子那一側算過死因的組合行程不算；停機時排著的 thread 靠它決定要不要等。
+    /// [`Supervisor::will_tell_down`]：被連帶收的葉子、葉子那一側算過死因的組合行程、逐出正在收的葉子與它的組合行程都不算；
+    /// 停機時排著的 thread 靠它決定要不要等。
     #[test]
-    fn will_tell_down_skips_peer_and_told() {
+    fn will_tell_down_skips_peer_told_and_evicted() {
         let (mut supervisor, _, _) = with_a_pair("tell", Bind::Bound);
         let thread = supervisor.compositions[0].thread.clone().unwrap();
         supervisor.conversations[0].thread = Some(thread.clone());
@@ -3253,6 +3271,24 @@ mod tests {
         supervisor.on_exit(LEAF, KILLED);
         assert!(!supervisor.compositions[0].peer);
         assert!(!supervisor.will_tell_down(&thread));
+
+        let (mut supervisor, _, _) = with_a_pair("stopping", Bind::Bound);
+        let thread = supervisor.compositions[0].thread.clone().unwrap();
+        supervisor.conversations[0].thread = Some(thread.clone());
+        let grace = supervisor.args.eof_grace;
+        // 葉子自己壞掉、正在收：收完回的 `down` 就是回答。
+        supervisor.conversations[0].cause = Some(DeathCause::Stalled);
+        supervisor.conversations[0].begin_stop(Instant::now(), grace);
+        assert!(supervisor.will_tell_down(&thread));
+        // 逐出、正在收：回的是 `down(evicted)`，葉子與等它收完的組合行程都不算。
+        supervisor.conversations[0].cause = Some(DeathCause::Evicted);
+        assert!(!supervisor.will_tell_down(&thread));
+        // 不成對的也一樣。
+        supervisor.conversations[0].pair = None;
+        supervisor.compositions.clear();
+        assert!(!supervisor.will_tell_down(&thread));
+        supervisor.conversations[0].cause = Some(DeathCause::Stalled);
+        assert!(supervisor.will_tell_down(&thread));
     }
 
     /// 上一則 `bind` 回過 `bound`、葉子自己壞掉：組合行程留著；還沒回 `bound` 的整對收。

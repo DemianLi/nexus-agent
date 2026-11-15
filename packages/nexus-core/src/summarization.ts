@@ -159,11 +159,7 @@ import type { SessionRequest } from './summarizer-engine.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
-import {
-  DEFAULT_TOOL_RESULT_PRUNE,
-  PRUNE_LOOKUP_FAILED,
-  withToolResultPruning,
-} from './tool-result-pruner.js';
+import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
   PruneRequest,
   ToolResultPruneConfig,
@@ -967,7 +963,7 @@ function asModelCallStep(chain: AgentMiddleware): AgentMiddleware {
  * 不是 state 裡每一顆大結果的剪法。
  *
  * **先記、記進去了才剪**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`append` 拋了就回 `false`、講一條 warn，
- * 剪刀這次不套用新剪的（記過的照樣套用），這一輪照原樣繼續；不會「模型看到剪過的、日誌卻沒有」。查找拋了（#2779）同樣不套用：`recorded` 回 `PRUNE_LOOKUP_FAILED`，剪刀這次不剪；找不到日誌（`found.kind !== 'ok'`）才退回每次重算。
+ * 剪刀這次不套用新剪的（記過的照樣套用），這一輪照原樣繼續；不會「模型看到剪過的、日誌卻沒有」。查找拋了（#2779）不吞，往外拋、這一步失敗；找不到日誌（`found.kind !== 'ok'`）才退回每次重算。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param report - 記不進去時的 warn。
@@ -983,23 +979,11 @@ function pruneLogOf(
     });
   return {
     recorded(request) {
-      try {
-        const found = lookup(request);
-        return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
-      } catch {
-        return PRUNE_LOOKUP_FAILED;
-      }
+      const found = lookup(request);
+      return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
     },
     record(request, results) {
-      let found: SessionLookup;
-      try {
-        found = lookup(request);
-      } catch (error) {
-        report(
-          `compaction/prune 認不出日誌，這次新剪的工具結果不套用：${error instanceof Error ? error.message : String(error)}`,
-        );
-        return false;
-      }
+      const found = lookup(request);
       if (found.kind !== 'ok') return true;
       const sendable = new Set<string>();
       for (const message of applySummaryCutoff(request.messages ?? [], previousSummaryCutoff())) {
@@ -1784,6 +1768,9 @@ function withCompactionLog(
  * pressure 路徑（`packages/compaction/compaction-basic/src/index.ts:163-173`）。基座的縮短只改請求、不進 graph state，所以換回請求就是
  * 全部。記過的縮短在交給基座之前就換上去了，照樣生效。
  *
+ * **查找拋了、或日誌上記過的縮短讀不出來，不吞，原錯往外拋、這一步失敗**：吞了的話基座照縮、這一層不記，模型看到縮短的、日誌沒有；
+ * 基座的縮短發生在這一層裡面，撤不回來。
+ *
  * @param base - 外一層（已包過 {@link withCompactionLog}）。
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param report - 記不進去時的 warn。
@@ -1801,22 +1788,16 @@ function withArgTruncationLog(
     ...base,
     wrapModelCall: (request, handler) => {
       let before: readonly BaseMessage[] = request.messages ?? [];
-      let lookup: SessionLookup | undefined;
-      try {
-        lookup = sessions.forCall({
-          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-        });
-        if (lookup.kind === 'ok') {
-          before = applyRecordedArgTruncations(before, recordedArgTruncationsOf(lookup.log.events));
-        }
-      } catch {
-        lookup = undefined;
+      const found = sessions.forCall({
+        configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+      });
+      if (found.kind === 'ok') {
+        before = applyRecordedArgTruncations(before, recordedArgTruncationsOf(found.log.events));
       }
-      const found = lookup;
       const forwarded =
         before === request.messages ? request : { ...request, messages: [...before] };
       return inner(forwarded as typeof request, (sent) => {
-        if (found?.kind !== 'ok') return handler(sent);
+        if (found.kind !== 'ok') return handler(sent);
         const calls = newlyTruncatedArgs(before, sent.messages ?? []);
         if (calls.length === 0) return handler(sent);
         try {
