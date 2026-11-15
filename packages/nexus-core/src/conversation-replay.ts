@@ -4,7 +4,7 @@
  *
  * ## 哪幾種事件產訊息
  *
- * 日誌上沒有 surface 那一軸（每顆事件上的 `surfaceOp`），所以「哪幾種事件產訊息」是型別
+ * 「哪幾種事件產訊息」是型別
  * {@link ./session-log.ts | ModelVisibleEventType}（人打的字在 `turn/start`，模型回覆在
  * `assistant/message`，工具結果在 `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在
  * `compaction/summary`），迴圈先用守衛 `isModelVisibleEvent` 分兩支：子聯集那一支逐種窮舉
@@ -55,7 +55,7 @@
  * 行程在工具跑到一半、或停在核准點時結束，會留下一則帶 `tool_calls` 卻沒有對應 ToolMessage 的回覆，
  * 供應商會拒收整串。基座的 `patchToolCallsMiddleware` 會補（實測續接之後走得到它），但它那句話說
  * 「another message came in」，成因是錯的（#265 的 Q12）。所以這裡補：記過 `tool/call` 的說結果不明、
- * 先確認外部狀態，沒記過的說還沒開始、要就重試。句子與 dsh 逐字相同（見 {@link TOOL_OUTCOME_UNKNOWN_TEXT}）。
+ * 先確認外部狀態，沒記過的說還沒開始、要就重試。句子見 {@link TOOL_OUTCOME_UNKNOWN_TEXT}。
  * 一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
  * **配不到任何呼叫的結果（孤兒）照送**：推導只把日誌上有的推出來，不替它判對錯；今天送出前丟掉孤兒的是請求端的 `patchToolCallsMiddleware`。補結與孤兒的規則在推導端只有這一份：
@@ -65,8 +65,8 @@
  * **續接時當掉那一輪的補結寫回日誌**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
  * 寫回在 {@link ./interrupted-turn.ts}：當掉那一輪沒配到結果的呼叫各補一顆錯誤 `tool/result`（記過 `tool/call` 的說結果
  * 不明，沒記過的說還沒開始），開著的 `model/start` 補 `model/end`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是
- * 日誌上那些，句子同一句。**沒記過 `tool/call` 的那種也寫回**，理由是我們的配對不變量（`invariant.ts`）放行這種合成結果。
- * **記憶體裡補的 {@link closer} 還在**，管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上
+ * 日誌上那些，句子同一句。**沒記過 `tool/call` 的那種也寫回**：配對檢查放行這種合成結果（`session-relationships.ts` 的 `tool/result` 分支，認 `TOOL_NOT_STARTED` 碼）。
+ * **記憶體裡補的 {@link closer}** 管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上
  * 是收掉的——`interrupt/raised` 之後有 `turn/end`；一輪失敗、當場補寫也失敗的；以及舊檔），那種不在「開著的最後一輪」，
  * 不在寫回的射程。跟 dsh 的對照見 docs/conversation-replay-vs-dsh.md。
  *
@@ -132,15 +132,15 @@ export function isEmptyAssistant(message: NexusMessage): boolean {
 }
 
 /**
- * 記過 `tool/call`、結果沒記下來的那次。與 dsh 的 `CLOSER_TEXT.interrupted.started` 逐字相同，
- * 這是模型讀得到的文字，措辭就是行為，不要改字；出處與核對見 docs/conversation-replay-vs-dsh.md。
+ * 記過 `tool/call`、結果沒記下來的那次。
+ * 這是模型讀得到的文字，措辭就是行為；改字前先讀 docs/conversation-replay-vs-dsh.md 第二節。
  */
 export const TOOL_OUTCOME_UNKNOWN_TEXT =
   'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.';
 
 /**
- * 回覆裡要了、還沒記到 `tool/call` 的那次。與 dsh 的 `CLOSER_TEXT.interrupted.notStarted` 逐字相同，
- * 不要改字；出處見 docs/conversation-replay-vs-dsh.md。
+ * 回覆裡要了、還沒記到 `tool/call` 的那次。
+ * 改字前先讀 docs/conversation-replay-vs-dsh.md 第二節。
  */
 export const TOOL_NOT_STARTED_TEXT =
   'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.';
