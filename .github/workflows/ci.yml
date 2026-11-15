@@ -621,7 +621,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # 只要 release 的監督行程：Rust 的 fmt、clippy 與測試 sandbox-spawner 那個 job 已經對同一份跑過（#2809）。
       - uses: ./.github/actions/sandbox-spawner
+        with:
+          test: 'false'
       - uses: ./.github/actions/setup
       - name: 建置 lib 與 web
         run: |
