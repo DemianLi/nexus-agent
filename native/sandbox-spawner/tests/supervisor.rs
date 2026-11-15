@@ -2011,7 +2011,7 @@ fn a_drain_answered_during_shutdown_is_down_shutdown_not_evicted() {
     );
 }
 
-/// 過了閒置上限被送 `drain`、停機中才回 `drained`：不收也不再當它閒置，所以不會馬上再送一次 `drain`；照停機收，回 `down(shutdown)`。
+/// 過了閒置上限被送 `drain`、停機中才回 `drained`：不收，它還閒置著也不再送 `drain`（停機不送）；照停機收，回 `down(shutdown)`。
 /// `slow-drain:800` 讓回答落在前台還沒回 `admission-stopped` 的那段；再被送 `drain` 的話，它的紀錄會多一行。
 #[test]
 fn a_drain_answered_during_shutdown_is_not_sent_again() {
@@ -2040,6 +2040,51 @@ fn a_drain_answered_during_shutdown_is_not_sent_again() {
     );
     let drains = log(&a).iter().filter(|line| *line == "drain").count();
     assert_eq!(drains, 1, "{:?}", log(&a));
+}
+
+/// 停機不送 `drain`：前台還沒回 `admission-stopped` 的那段，`release` 一條閒置的、或先前 `release` 過的這時才回報閒置，都不送；
+/// 兩條都照停機收。
+#[test]
+fn release_during_shutdown_sends_no_drain() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "1500"],
+        ..Options::default()
+    });
+    let late = "late,wait-go,idle:0";
+    let b = h.up_read_only(late);
+    h.release(late);
+    let c = h.up_read_only("c,idle:0");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    h.release("c,idle:0");
+    std::fs::write(format!("{}.go", b.display()), b"").unwrap();
+    assert!(wait_until(|| log(&b).contains(&"idle".to_string())));
+    let mut downs = Vec::new();
+    while let Some(event) = h.next_event() {
+        downs.push(event);
+    }
+    downs.sort_by_key(|e| format!("{e:?}"));
+    assert_eq!(
+        downs,
+        [
+            FrontEvent::Down {
+                thread_id: late.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: b"c,idle:0".to_vec(),
+                cause: DeathCause::Shutdown
+            },
+        ]
+    );
+    for socket in [&b, &c] {
+        assert!(
+            !log(socket).contains(&"drain".to_string()),
+            "{:?}",
+            log(socket)
+        );
+    }
 }
 
 /// 宿主在另一個 package，跟監督行程編進同一個 target 目錄。

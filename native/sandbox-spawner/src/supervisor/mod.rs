@@ -1453,6 +1453,9 @@ impl Supervisor {
     }
 
     fn release(&mut self, thread: &[u8]) {
+        if self.shutting_down {
+            return;
+        }
         let Some(conversation) = self
             .conversations
             .iter_mut()
@@ -1470,9 +1473,10 @@ impl Supervisor {
         }
     }
 
-    /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、或這種開啟方式不照時間逐出的，沒有。
+    /// 這條的閒置時限到期的時間點；還沒 `up`、不在閒置、在收、在等 `drain` 的回答、這種開啟方式不照時間逐出的，沒有。
+    /// 停機中也沒有：停機不送 `drain`，全部照停機收。
     fn idle_deadline(&self, conversation: &Conversation) -> Option<Instant> {
-        if !conversation.evictable() {
+        if self.shutting_down || !conversation.evictable() {
             return None;
         }
         let limit = if conversation.read_only {
@@ -2212,7 +2216,7 @@ impl Supervisor {
                         now.checked_sub(Duration::from_millis(idle_ms.into()))
                             .unwrap_or(now),
                     );
-                    if conversation.released && conversation.evictable() {
+                    if conversation.released && conversation.evictable() && !self.shutting_down {
                         conversation.released = false;
                         Self::drain(conversation);
                     }
@@ -2226,11 +2230,8 @@ impl Supervisor {
                 }
                 ConversationReport::Drained if conversation.proc.stop.is_none() => {
                     conversation.drain = None;
-                    if self.shutting_down {
-                        // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
-                        // 也不再當它閒置，否則過了閒置上限的會馬上再被送一次 `drain`。
-                        conversation.idle_since = None;
-                    } else {
+                    // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
+                    if !self.shutting_down {
                         // 死因 `evicted` 只在這裡記：回過 `drained`（閒置、沒有進行中的一輪）才算。停機靠這一點：排著等它的 thread
                         // 當場回 `down(shutdown)`（[`Self::will_tell_down`]），前台這時就關掉它的連線，不等它收完。
                         conversation.cause.get_or_insert(DeathCause::Evicted);

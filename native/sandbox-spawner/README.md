@@ -57,7 +57,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
   - `heap`：以 SIGABRT 結束，而且 stderr 裡有一行以 `FATAL ERROR: ` 開頭、含 `JavaScript heap out of memory`、不超過 512 位元組，那一行的結尾又落在 stderr 的最後 16 KiB 內（node heap 用完時印的那一行；它後面還有約 1–3 KiB 的 stack trace）。夾在行中間的（例如轉印的工具輸出）、整行超長的、或印過之後又寫了超過 16 KiB 才死的，都不算。收屍時先把 stderr 管線裡剩下的再讀最多 1 MiB，才判。
   - `host-oom`：被 SIGKILL、監督行程沒決定收它，而且監督行程啟動時所在 cgroup（v2）的 `memory.events` 裡 `oom_kill` 比啟動時的值加上已經算掉的次數多：多一次只算給一個行程。讀不到 `memory.events`（不是 cgroup v2、沒開記憶體控制器、hybrid 主機的 v2 掛在別處）就一律算 `crash`。監督行程自己送 SIGKILL 的（RSS 超過上限、停機的最後一步）也會先算一次：核心搶先 OOM kill 了它時，那一次在這裡消掉，死因仍照監督行程的理由。
   - `stalled`：心跳斷了超過 `--stall-ms`。
-  - `evicted`：停機之前回了 `drained`、被收掉的（見逐出）。停機開始之後、還沒開始收它之前（停機的 ①）才回 `drained` 的一律不算逐出，也不再當它閒置：照停機收，死因 `shutdown`。
+  - `evicted`：停機之前回了 `drained`、被收掉的（見逐出）。停機開始之後、還沒開始收它之前（停機的 ①）才回 `drained` 的一律不算逐出：照停機收，死因 `shutdown`。停機開始之後也不再送 `drain`（閒置到期、`release` 都不送）。
   - `protocol`：第一框不是版本相等的 `hello`，或 `hello` 沒宣告 loop 在自己這裡。
   - `crash`：其他自己結束或被殺的；`shutdown`：停機收掉的。停機時還排著的 thread 只回 `down(shutdown)`，不寫稽核，也不算進 `deaths`；那條 thread 還有行程（例如在等它回答 `drain`）的，只在那個行程結束時回一次。例外是那個行程已經被逐出、正在收：它回的 `down(evicted)` 前台不當回答，所以停機當場先回一則 `down(shutdown)`，它收完再回自己的 `down(evicted)`，同一條 thread 前台會收到兩則 `down`。
 - 已知限制：
