@@ -120,11 +120,13 @@
 
 token 與共用元件不直接刪（規格 §13.6）：
 
-1. **標記**：元件在 JSDoc 加 `@deprecated`，寫改用什麼；token 在定義的那一行上面加註解，寫改用什麼。同一張 PR 把 repo 裡的用法全部換掉。
+1. **標記**：元件在 JSDoc 加 `@deprecated <版號>：改用 <什麼>`，token 在定義的那一行上面加同樣格式的註解（`/* @deprecated 0.7.0：改用 --scrim */`）。版號寫標記當下 `package.json` 的版號。同一張 PR 把 repo 裡的用法全部換掉。
 2. **保留一個 Release**：標記之後至少隨一個 Release 出去，下一個 Release 才刪。
 3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../../docs/release.md#升級指南)寫一份。
 
 改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
+
+命名與棄用裡機器判得出來的由 `src/styles/naming-deprecation.test.ts` 擋：檔名 kebab-case 且不重複資料夾名、布林的 props 不加 `is`、事件不取 `handleX`／`xHandler`／`xCallback`、不開 `xxxClassName`、token 的名字不帶數值、`@deprecated` 的格式與版號、標了棄用的東西 repo 裡沒有用法。共用元件那張表的元件名與檔名對得上，由 `src/components/ui/components-doc.test.ts` 擋。判不出來、要靠審查的：事件名的動詞取得好不好、該用字串聯集卻開了好幾個布林、標記之後有沒有等一個 Release 才刪（刪的那張 PR 對 `@deprecated` 的版號與已出的 Release）。
 
 ## 共用元件一覽
 
