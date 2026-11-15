@@ -9,6 +9,7 @@
  * 證據是兩條：模型一次都沒被呼叫；`pump` 自己那份日誌上除了 `pump` 自己寫的事件，沒有任何別的種類。
  * 前者擋掉模型呼叫之後的每一處，後者擋掉模型呼叫之前的每一處（pre-step 注入、請求快照、重複提醒、修剪、摘要……），
  * 以後有人加了新的寫入點、在守衛之前寫，種類就會多出來，這條會紅。
+ * 模型呼叫成功之後才卸載日誌（工具動手時）的那一條，證明下一次模型呼叫同樣在守衛就拋。
  */
 
 import { tool } from '@langchain/core/tools';
@@ -110,5 +111,56 @@ describe.each(['langgraph', 'native'] as const)('log 模式、對不上日誌（
     expect(
       others.flatMap((other) => other.sessions.root.events.map((event) => event.type)),
     ).toEqual([]);
+  });
+});
+
+describe.each(['langgraph', 'native'] as const)('log 模式、中途卸載（%s）', (agentLoop) => {
+  it('第一次模型呼叫成功、工具動手時日誌被卸載：下一次模型呼叫在守衛就拋，這一輪失敗', async () => {
+    const detached: (() => void)[] = [];
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '', toolCalls: [{ name: 'detach', args: {}, id: 'call-a' }] },
+        { content: '好。' },
+      ],
+    });
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'detacher',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              () => {
+                for (const detach of detached) detach();
+                return 'done';
+              },
+              { name: 'detach', description: '卸載日誌。', schema: z.object({}) },
+            ),
+          );
+        },
+      },
+    };
+    const built = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      summarization: false,
+      observationPolicy: false,
+      plugins: [plugin],
+      historySource: 'log',
+      agentLoop,
+    });
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'mid-detach');
+    detached.push(built.attachSession(pump.sessions));
+    cleanups.push(async () => {
+      pump.close();
+      await built.dispose();
+    });
+    await pump.submit({ kind: 'message', text: '嗨' }).catch(() => undefined);
+    await pump.whenIdle();
+
+    const failed = pump.sessions.root.events.filter((event) => event.type === 'turn/failed');
+    expect(failed).toHaveLength(1);
+    expect((failed[0]?.data as { message: string }).message).toContain(GUARD_MESSAGE);
+    // 第一次呼叫成功、第二次被守衛擋下：模型只被叫過一次。
+    expect(model.prompts).toHaveLength(1);
   });
 });
