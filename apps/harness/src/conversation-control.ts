@@ -60,6 +60,9 @@ export interface ConversationControlOptions {
 /** 回報 `idle` 時 `idleMs` 的上限（u32）。 */
 const MAX_IDLE_MS = 0xffff_ffff;
 
+/** {@link ConversationControl.bind} 的結果：綁上了（含同一條 thread 再綁一次），或拒絕與原因。 */
+export type BindOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
 export class ConversationControl {
   readonly #options: ConversationControlOptions;
   #bound: string | undefined;
@@ -92,6 +95,21 @@ export class ConversationControl {
   /** 這個行程綁著的 thread；還沒綁是 `undefined`。給 `WireHandlerOptions.boundThread`。 */
   get boundThread(): string | undefined {
     return this.#bound;
+  }
+
+  /** 綁定走完了：thread 已指定、`handler.open` 也結束（成功或失敗都算，見 {@link bind}）。 */
+  get attached(): boolean {
+    return this.#bound !== undefined && !this.#opening;
+  }
+
+  /** 此刻閒不閒，口徑同回報給監督行程的 `idle`。沒綁 thread 不算閒。 */
+  isIdle(): boolean {
+    return this.#idleSince() !== undefined;
+  }
+
+  /** 停收會開新一輪的命令，已在跑的一輪與串流照舊（`drain` 回 `drained` 時做的同一件事）。 */
+  stopAdmission(): void {
+    this.#options.handler.stopAdmission();
   }
 
   /** 根建好、插件載完：送 `ready`，開始輪詢閒置。 */
@@ -182,19 +200,24 @@ export class ConversationControl {
         continue;
       }
       if (command.type === 'hello') this.#options.warn('[控制面] 監督行程又送了一次 hello，不理');
-      else if (command.type === 'bind') void this.#bind(command.threadId);
+      else if (command.type === 'bind') void this.bind(command.threadId);
       else if (command.type === 'drain') this.#drain();
     }
   }
 
-  async #bind(threadId: string): Promise<void> {
+  /**
+   * 綁 thread：stdio 的 `bind` 與橋上的 `attach`（`pair-leaf.ts`）走同一條。`handler.open` 失敗不算拒絕（之後的請求會再試），
+   * 只有「已綁別條 thread」會拒。回來的時候 `bound` 已送出。
+   */
+  async bind(threadId: string): Promise<BindOutcome> {
     if (this.#bound !== undefined) {
       if (this.#bound !== threadId) {
-        this.#options.warn(`[控制面] 已綁 thread "${this.#bound}"，不改綁 "${threadId}"`);
-        return;
+        const reason = `已綁 thread "${this.#bound}"，不改綁 "${threadId}"`;
+        this.#options.warn(`[控制面] ${reason}`);
+        return { ok: false, reason };
       }
       this.#send({ type: 'bound', threadId });
-      return;
+      return { ok: true };
     }
     this.#bound = threadId;
     this.#heartbeat = setInterval(
@@ -214,6 +237,7 @@ export class ConversationControl {
       this.#opening = false;
     }
     this.#send({ type: 'bound', threadId });
+    return { ok: true };
   }
 
   #drain(): void {
