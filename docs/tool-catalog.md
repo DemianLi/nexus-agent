@@ -1,6 +1,6 @@
 # 工具 schema 目錄
 
-模型實際收到的每個工具的名稱、描述與參數 schema（共 25 個）。**這份檔案由程式產生，不要手改**：
+模型實際收到的每個工具的名稱、描述與參數 schema（共 27 個）。**這份檔案由程式產生，不要手改**：
 
 ```bash
 pnpm --filter @nexus/harness run gen-tool-catalog
@@ -197,6 +197,77 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     "glob",
     "max_count",
     "output_mode"
+  ],
+  "additionalProperties": false
+}
+```
+
+### `history_read`
+
+描述：
+
+```text
+Read back, verbatim, a stretch of this conversation that was replaced by a summary. Pass the entry number shown in the summary <index> (or a segment id from history_search). Returns a transcript page of up to 16000 characters; the last line gives the offset of the next page. Use it when you need an exact detail (a value, an error string, a file path, what a tool returned) that the summary does not give.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "entry": {
+      "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+      "type": "number"
+    },
+    "segment": {
+      "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+      "type": "number"
+    },
+    "offset": {
+      "description": "Character offset to start from. Defaults to 0.",
+      "type": "number"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+### `history_search`
+
+描述：
+
+```text
+Search the stretches of this conversation that were replaced by a summary for a literal string (case-insensitive, not a regex, not semantic). Returns each match with its entry number, a character offset and surrounding text; pass that entry and offset to history_read to read around it. Messages still in context are not searched.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Literal string to look for. Case-insensitive, not a regex."
+    },
+    "entry": {
+      "description": "Entry number from the summary <index>, e.g. 2 for \"[#2 messages …]\".",
+      "type": "number"
+    },
+    "segment": {
+      "description": "Segment id as printed by history_search, for stretches that have no index entry.",
+      "type": "number"
+    },
+    "limit": {
+      "description": "Maximum matches to return. Defaults to 20, at most 100.",
+      "type": "number"
+    }
+  },
+  "required": [
+    "query"
   ],
   "additionalProperties": false
 }

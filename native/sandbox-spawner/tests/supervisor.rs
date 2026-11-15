@@ -626,6 +626,100 @@ fn second_stop_signal_kills_at_once() {
     assert!(h.audit_line("t,ignore-term").contains("\"signal\":9"));
 }
 
+/// 等前台回 `admission-stopped` 的那一段再收到停止訊號：這時停機還沒開始收對話行程，被當場殺掉的照樣是停機收的，
+/// 回 `down(shutdown)`、稽核記 `shutdown`，不算成 `crash`（#2827）。
+#[test]
+fn a_second_stop_signal_before_the_front_answers_is_down_shutdown() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    h.up("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    kill(h.pid(), libc::SIGINT);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+    let line = h.audit_line("\"thread\":\"a\"");
+    assert!(
+        line.contains("\"cause\":\"shutdown\"") && line.contains("\"signal\":9"),
+        "{line}"
+    );
+}
+
+/// 等前台回答的那一段自己結束的對話行程不是停機收的：照樣是 `crash`。死因在決定收的那一刻才記，不是停機一開始就全部記成 `shutdown`。
+/// `--admission-timeout-ms` 拉長：等前台的那一段要蓋住它結束的時刻，不然停機已經開始收它、先記了 `shutdown`。
+#[test]
+fn a_conversation_that_dies_by_itself_before_the_front_answers_is_a_crash() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    let thread = "a,wait-go,exit:3";
+    let a = h.up(thread);
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    std::fs::write(format!("{}.go", a.display()), b"").unwrap();
+    assert_eq!(h.down_of(thread), DeathCause::Crash);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+}
+
+/// 已經被逐出、還在收的對話行程（不理 EOF 與 SIGTERM），停機中再收到停止訊號時被當場殺掉：死因還是原來的 `evicted`，不被蓋成 `shutdown`。
+#[test]
+fn a_second_stop_signal_keeps_the_cause_of_a_conversation_already_being_collected() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        eof_grace_ms: 600_000,
+        term_grace_ms: 600_000,
+        extra: vec!["--capacity", "1", "--admission-timeout-ms", "20000"],
+        ..Options::default()
+    });
+    let thread = "a,idle:1000,ignore-term";
+    let a = h.up(thread);
+    h.ensure("b");
+    // 先等到 `eof` 才送停止訊號：`drained` 在停機開始之後才讀到的不記 `evicted`。
+    assert!(wait_until(|| log(&a).contains(&"eof".to_string())));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    loop {
+        let event = h.event();
+        let last = event == FrontEvent::StopAdmission;
+        events.push(event);
+        if last {
+            break;
+        }
+    }
+    kill(h.pid(), libc::SIGINT);
+    loop {
+        let event = h.event();
+        let last =
+            matches!(&event, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes());
+        events.push(event);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(
+        events.last(),
+        Some(&FrontEvent::Down {
+            thread_id: thread.as_bytes().to_vec(),
+            cause: DeathCause::Evicted
+        }),
+        "{events:?}"
+    );
+    h.request(&FrontRequest::AdmissionStopped);
+    assert!(h.wait_exit().success());
+    let line = h.audit_line("\"thread\":\"a,idle:1000,ignore-term\"");
+    assert!(
+        line.contains("\"cause\":\"evicted\"") && line.contains("\"signal\":9"),
+        "{line}"
+    );
+}
+
 #[test]
 fn ensure_during_shutdown_is_answered_with_shutdown() {
     let mut h = Harness::start(Options {
@@ -3281,21 +3375,165 @@ fn a_leaf_ready_on_the_control_channel_does_not_bind() {
     assert_eq!(binds, 1, "{:?}", log(&leaf));
 }
 
-/// 葉子不在橋上登記：組合行程不會 `ready`，前台等不到 `up`；停機時回一次 `down(shutdown)`。
+/// 一對在等前台回 `admission-stopped` 的那一段被第二次停止訊號當場殺掉：組合行程與葉子的稽核都是 `shutdown`，這條 thread 只回一次 `down(shutdown)`（#2827）。
 #[test]
-fn a_leaf_that_never_registers_is_never_up() {
+fn a_second_stop_signal_before_the_front_answers_collects_a_pair_as_shutdown() {
     let mut h = Harness::start(Options {
-        conversation_args: vec!["--no-register".into()],
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "20000"],
+        ..paired()
+    });
+    h.up("a");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    kill(h.pid(), libc::SIGINT);
+    assert_eq!(h.down_of("a"), DeathCause::Shutdown);
+    h.request(&FrontRequest::AdmissionStopped);
+    assert_eq!(h.next_event(), None);
+    assert!(h.wait_exit().success());
+    let pair: Vec<String> = h
+        .audit()
+        .into_iter()
+        .filter(|line| line.contains("\"pair\":1,"))
+        .collect();
+    assert_eq!(pair.len(), 2, "{pair:?}");
+    assert!(
+        pair.iter()
+            .all(|line| line.contains("\"cause\":\"shutdown\"")),
+        "{pair:?}"
+    );
+}
+
+/// 等到稽核裡有第 `serial` 對起動逾時的樣子：組合行程那一行是 `stalled`、帶逾時的 `error`；`with_leaf` 時它後面是葉子連帶收的那一行，
+/// 沒有葉子的就不該再有別行。
+fn assert_start_timed_out(h: &Harness, serial: u32, with_leaf: bool) {
+    let pair = format!("\"pair\":{serial},");
+    let mut lines = Vec::new();
+    wait_until(|| {
+        lines = h
+            .audit()
+            .into_iter()
+            .filter(|line| line.contains(&pair))
+            .skip_while(|line| !line.contains("\"role\":\"composition\""))
+            .collect();
+        lines.len() > usize::from(with_leaf)
+    });
+    assert_eq!(lines.len(), 1 + usize::from(with_leaf), "{:?}", h.audit());
+    assert!(
+        lines[0].contains("\"cause\":\"stalled\"")
+            && lines[0].contains("\"error\":\"ready 之前逾時\""),
+        "{lines:?}"
+    );
+    if with_leaf {
+        assert!(
+            lines[1].contains("\"role\":\"conversation\"")
+                && lines[1].contains("\"cause\":\"peer\""),
+            "{lines:?}"
+        );
+    }
+}
+
+/// 葉子一直不在橋上登記（#2801）：過了 `--start-timeout-ms` 整對被收，前台拿到一則 `down(stalled)`；名額讓出來，下一條 thread 起得來。
+#[test]
+fn a_leaf_that_never_registers_is_collected_at_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--start-timeout-ms", "3000", "--capacity", "1"],
         ..paired()
     });
     h.ensure("a");
-    logged_pid(&h.dir.join("run/c1.l.sock"), "pid");
+    let leaf = logged_pid(&h.dir.join("run/c1.l.sock"), "pid");
+    assert_eq!(h.down_of("a"), DeathCause::Stalled);
+    assert!(wait_until(|| gone(leaf)));
+    assert_start_timed_out(&h, 1, true);
+
+    // 名額只有一個：沒讓出來的話這裡回的是 `capacity`。這一對的葉子一起來就放行。
+    std::fs::write(h.dir.join("run/c2.l.sock.go"), b"").unwrap();
+    assert_eq!(h.up("b"), h.dir.join("run/c2.sock"));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"b".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// `--start-timeout-ms 0` 不是「馬上逾時」：不登記的葉子留著，停機時回一次 `down(shutdown)`。
+#[test]
+fn a_leaf_that_never_registers_stays_when_the_start_deadline_is_off() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--no-register".into()],
+        extra: vec!["--start-timeout-ms", "0"],
+        ..paired()
+    });
+    h.ensure("a");
+    let leaf = logged_pid(&h.dir.join("run/c1.l.sock"), "pid");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!gone(leaf));
     assert_eq!(
         shut_down(&mut h),
         [FrontEvent::Down {
             thread_id: b"a".to_vec(),
             cause: DeathCause::Shutdown
         }]
+    );
+}
+
+/// 組合行程一直不送 `hello`（拿不送 `hello` 的假對話行程當組合行程）：葉子不會起，過了 `--start-timeout-ms` 一樣被收。
+#[test]
+fn a_composition_that_never_says_hello_is_collected_at_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        composition: Some(example("fake_conversation")),
+        extra: vec![
+            "--composition-arg",
+            "--skip-hello",
+            "--composition-arg",
+            "--no-register",
+            "--start-timeout-ms",
+            "1000",
+        ],
+        ..Options::default()
+    });
+    assert_eq!(h.down("a"), DeathCause::Stalled);
+    assert_start_timed_out(&h, 1, false);
+    assert_eq!(shut_down(&mut h), []);
+    assert_eq!(pair_audit(&h).len(), 1, "{:?}", pair_audit(&h));
+}
+
+/// 預熱池裡的一對起動逾時：沒有 thread，不回 `down`；之後再補一對。
+#[test]
+fn a_warm_pair_past_the_start_deadline_is_collected_and_refilled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--no-register".into()],
+        extra: vec!["--warm", "1", "--start-timeout-ms", "1000"],
+        ..paired()
+    });
+    let first = logged_pid(&h.dir.join("run/c1.l.sock"), "pid");
+    let second = logged_pid(&h.dir.join("run/c2.l.sock"), "pid");
+    assert!(wait_until(|| gone(first)));
+    assert_ne!(first, second);
+    assert_start_timed_out(&h, 1, true);
+    assert_eq!(shut_down(&mut h), []);
+}
+
+/// 期限內登記完的不受影響：過了 `--start-timeout-ms` 還是同一對、同一個葉子，沒有人被判 `stalled`。
+#[test]
+fn a_pair_that_is_ready_in_time_outlives_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--start-timeout-ms", "3000"],
+        ..paired()
+    });
+    let socket = h.up("a");
+    let leaf = last_leaf_pid(&leaf_socket(&socket));
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert_eq!(h.up("a"), socket);
+    assert_eq!(leaf_behind(&socket), leaf);
+    shut_down(&mut h);
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
     );
 }
 
@@ -3397,7 +3635,7 @@ fn a_refilled_leaf_slow_to_register_is_not_stalled() {
     );
 }
 
-/// 補起的葉子一直沒登記：不判 `stalled`，停機時跟組合行程一起收掉。
+/// 補起的葉子一直沒登記：`--stall-ms` 不判它（起動期限還沒到），停機時跟組合行程一起收掉。
 #[test]
 fn shutdown_collects_a_refilled_leaf_that_never_registered() {
     let mut h = Harness::start(Options {
@@ -3417,6 +3655,49 @@ fn shutdown_collects_a_refilled_leaf_that_never_registered() {
         }]
     );
     assert!(gone(new as i32));
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
+    );
+}
+
+/// 補起的葉子一直不登記（#2801）：從補的那一刻起過了 `--start-timeout-ms` 整對被收，`down(stalled)` 一次；再要就起新的一對。
+#[test]
+fn a_refilled_leaf_that_never_registers_is_collected_at_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--start-timeout-ms", "3000"],
+        ..paired()
+    });
+    let (socket, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let composition = composition_pid(&h, &socket);
+    let new = last_leaf_pid(&leaf);
+    assert_eq!(h.down_of("a"), DeathCause::Stalled);
+    assert!(wait_until(|| gone(composition as i32) && gone(new as i32)));
+    assert_start_timed_out(&h, 1, true);
+
+    std::fs::write(h.dir.join("run/c2.l.sock.go"), b"").unwrap();
+    assert_eq!(h.up("a"), h.dir.join("run/c2.sock"));
+}
+
+/// 補起的葉子在期限內登記完的不受影響：過了 `--start-timeout-ms` 還是那個葉子。
+#[test]
+fn a_refilled_leaf_that_is_ready_in_time_outlives_the_start_deadline() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--start-timeout-ms", "3000"],
+        ..paired()
+    });
+    let socket = h.up("a");
+    let leaf = leaf_socket(&socket);
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert_eq!(h.up("a"), socket);
+    let new = last_leaf_pid(&leaf);
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert_eq!(h.up("a"), socket);
+    assert_eq!(leaf_behind(&socket), new);
+    shut_down(&mut h);
     let audit = h.audit();
     assert!(
         !audit.iter().any(|line| line.contains("stalled")),

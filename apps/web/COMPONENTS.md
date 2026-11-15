@@ -120,11 +120,13 @@
 
 token 與共用元件不直接刪（規格 §13.6）：
 
-1. **標記**：元件在 JSDoc 加 `@deprecated`，寫改用什麼；token 在定義的那一行上面加註解，寫改用什麼。同一張 PR 把 repo 裡的用法全部換掉。
+1. **標記**：元件在 JSDoc 加 `@deprecated <版號>：改用 <什麼>`，token 在定義的那一行上面加同樣格式的註解（`/* @deprecated 0.7.0：改用 --scrim */`）。版號寫標記當下 `package.json` 的版號。同一張 PR 把 repo 裡的用法全部換掉。
 2. **保留一個 Release**：標記之後至少隨一個 Release 出去，下一個 Release 才刪。
 3. **刪除**：刪的那張 PR 確認 repo 裡沒有用法。token 是 `<nexus-chat>` 給宿主頁用的（升級指南列的那些）就是外部看得到的不相容變更，照[升級指南](../../docs/release.md#升級指南)寫一份。
 
 改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
+
+命名與棄用裡機器判得出來的由 `src/styles/naming-deprecation.test.ts` 擋：檔名 kebab-case 且不重複資料夾名、布林的 props 不加 `is`、事件不取 `handleX`／`xHandler`／`xCallback`、不開 `xxxClassName`、token 的名字不帶數值、`@deprecated` 的格式與版號、標了棄用的東西 repo 裡沒有用法。共用元件那張表的元件名與檔名對得上，由 `src/components/ui/components-doc.test.ts` 擋。判不出來、要靠審查的：事件名的動詞取得好不好、該用字串聯集卻開了好幾個布林、標記之後有沒有等一個 Release 才刪（刪的那張 PR 對 `@deprecated` 的版號與已出的 Release）。
 
 ## 共用元件一覽
 
@@ -152,7 +154,7 @@ token 與共用元件不直接刪（規格 §13.6）：
 | `dropdown-menu` | 按鈕打開的動作選單；選值用 `command` 或 radio 項 | `dropdown`、`dropdown-keyboard` |
 | `empty` | 空狀態：圖示、標題、說明 | `trace-empty`、`transcript-rows` |
 | `input-group` | 輸入欄位加前後的附加物（圖示、按鈕） | 總覽、`command` |
-| `input` | 單行文字輸入 | 總覽 |
+| `input` | 單行文字輸入 | 總覽、`fields` |
 | `message-scroller` | 對話流的捲動容器：貼底、定位到某一則、回到底部的鈕 | `messages` |
 | `message` | 對話裡一則訊息的版面：頭像、標頭、內容、頁尾 | `messages` |
 | `popover` | 錨在 Trigger 旁、可以放任意內容的浮層 | `cost`、總覽 |
@@ -164,7 +166,7 @@ token 與共用元件不直接刪（規格 §13.6）：
 | `skeleton` | 內容還沒到時的佔位塊 | `primitives` |
 | `sonner` | toast 通知；`Toaster` 只在 `App` 放一個，其他地方呼叫 `toast()` | `primitives` |
 | `status-glyph` | 一輪的狀態圖示（執行中、完成、失敗） | `turn-status` |
-| `textarea` | 多行文字輸入 | 總覽、`feedback` |
+| `textarea` | 多行文字輸入 | `fields`、`feedback` |
 | `tool-steps` | 工具呼叫：一步（`StepRow`）、一段（`StepGroup`）、輸出區塊 | `tool-steps`、`tool-cards` |
 | `tooltip` | 滑鼠停留或聚焦時的短說明；不放必要資訊 | 總覽 |
 | `turn-status` | 狀態列執行中的那一列 | `turn-status` |
@@ -195,9 +197,10 @@ pnpm --filter @nexus/web run build
 pnpm --filter @nexus/web run catalog
 ```
 
-寫到 `apps/web/catalog/dist/index.html`，一個檔、直接用瀏覽器開。左邊選頁、右上切亮暗；第一項是全部 token 在亮、暗下的值。檔頭印 commit。
+寫到 `apps/web/catalog/dist/index.html`，一個檔、直接用瀏覽器開。左邊選頁（分組、中文頁名）、右上切亮暗；第一項是全部 token 在亮、暗下的值。檔頭印 commit。
 
 - 內容就是 `guard/` 測試頁的每一個子頁（`guard/main.tsx` 的 `OverlayPage`）加出貨的 CSS，跟護欄量的是同一份。要讓一個元件出現在目錄裡，就在測試頁加一個子頁。
+- 左欄的分組與中文頁名在 `catalog/pages.ts`。測試頁加了子頁要在那裡加一列，漏掉或多出來 `src/components/ui/components-doc.test.ts` 會紅。
 - 存的是畫完之後的 DOM，不帶 JS：hover、聚焦的樣式照常，點了不會有反應；要點才開的浮層只看得到測試頁預設開著的那些。
 - 字型不嵌，退回系統字，字寬跟出貨的略有出入。量尺寸以護欄為準，不以目錄為準。
 

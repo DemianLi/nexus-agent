@@ -728,6 +728,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **回不來的**：虛擬檔案系統、摘要器的會話歷史檔，以及停在核准點還沒答的那張卡——它們只在 graph state 裡。
 
+**被摘掉的原文回得來**：摘要器的會話歷史檔（`/conversation_history/<會話>.md`）回不來，但原文本來就在會話日誌裡。模型有兩個唯讀工具從日誌讀回：`history_read` 照摘要 `<index>` 裡的條目序號讀那一段的逐字稿（每頁至多 16,000 字元，結尾一行給下一頁的位移），`history_search` 在被摘掉的段落裡做不分大小寫的字面比對。讀的是呼叫者自己那份日誌，子代理讀到的是它自己被摘掉的那幾段。兩樣限制：被外溢層換過的工具結果，日誌裡只有預覽，讀回來的也是預覽；沒接會話日誌的組裝（直接叫 `createNexusAgent`）工具還在，呼叫時回一句「沒有日誌」。`summarization` 那一列關掉時這兩個工具不掛。
+
 **工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清；啟動時在背景清一次過期的檔，不擋服務，關機時等它清完）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
 **上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。**路由只露出這條 thread 的日誌引用過的檔案**（#1773，見下面「模型讀附件的範圍」）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）。**上傳不受請求本文上限管**：Node 轉接層（`wire-server.ts`）對上傳路由是串流——位元組從 socket 一路流進儲存，行程記憶體不跟著檔案大小漲（實測 480 MiB 的檔 RSS 約漲 80 MiB，有界；整份緩衝是近 2 GiB）。其他路由（JSON）先收完整份，本文上限 300 MiB（`DEFAULT_MAX_REQUEST_BODY_BYTES`，照 dsh `client/connection` 的 `http-bridge.ts`），超過回 413 並斷線。**所以 300 MiB 的上限擋不到上傳**，上傳也沒有儲存配額（dsh 預設也沒有），磁碟寫滿由主機管。要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
@@ -754,7 +756,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **已知缺口**：模型經檔案路徑讀附件（`ATTACHMENTS_PREFIX` 的路由）不經 `AttachmentStore`，讀的時候不驗內容；壞內容只有在重傳去重碰到物件時才會被發現。dsh 的檔案讀取會驗（`file-store.ts:179`），要不要在路由上補是另一件事。
 
-**外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
+**外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢，`history_read`、`history_search` 也不外溢（它們自己分頁、限筆數）。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
@@ -1762,6 +1764,25 @@ nexus-agent serve --process-model per-thread
   - 每個行程結束寫一行，用 `role`（`conversation`、`front`、`host`）分辨；事件寫一行，用 `event`（目前只有 `protocol`）分辨。
   - 欄位與值只加不改：讀它的工具遇到不認得的欄位或死因要略過，不要報錯。對話行程的死因（`cause`）多了 `protocol`。
   - 這份檔是稽核用的，serve 不讀、不輪替、不截斷。要清，先停 serve 再處理。
+
+### 成對執行：對話行程連組合行程的橋
+
+**只在成對執行時適用**：監督行程起一對（組合行程 `nexus-composition` 加對話行程，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)）時，對話行程的命令列多一個 `--pair-socket <路徑>`。沒有這個旗標的對話行程，這一節的東西一行都不會執行（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）。
+
+- **連線與登記**：對話行程連組合行程的橋、驗過之後登記空的 `tools` 與 `hooks`，並替組合行程做 `attach`（綁 thread，`payload` 是 `{ "threadId": … }`）。`attach` 的 result 在 `handler.open` 結束之後才回，組合行程收到才送 `bound`。已綁別條 thread 或 payload 不對時回錯，組合行程不送 `bound`、不重試。
+- **前台的連線不走橋**：組合行程聽前台的 `--socket`，原樣轉到對話行程自己聽的 `--socket`。橋斷了，前台流量照通。
+- **橋斷了，對話行程自己結束**：組合行程在葉子斷線後不收同一個葉子重連，留著沒有路能恢復。
+  - 還沒 `attach` 成功（沒綁，或 `handler.open` 還在跑）：立刻結束。
+  - 已綁：先停收會開新一輪的命令（`stopAdmission`，已在跑的一輪與串流照舊），閒了就結束；等滿 **120 秒**還不閒就強制結束。**120 秒是暫定值，沒量過一輪的長度分布。**
+  - stderr 記原因（已綁且忙時多記一行等待的說明）；結束前最多等 serve 收尾 5 秒。
+- **結束碼**（監督行程不對這兩個碼賦予意義，`supervisor-audit.jsonl` 只原樣記 `exit_code`；死因記成 `crash`，只能靠結束碼與 stderr 跟真的壞掉分開）：
+
+  | 結束碼 | 意思                                                                           |
+  | ------ | ------------------------------------------------------------------------------ |
+  | 70     | 橋斷了，對話行程自己結束                                                       |
+  | 71     | 20 秒內連不上橋（暫定值），對話行程自己結束；沒有橋就沒有 `attach`，這一對廢了 |
+
+- **已知限制**：橋斷到結束之間，這個對話行程在監督行程眼中仍是活的、仍佔名額；`stopAdmission` 之後進來的新一輪被拒，前台回 `server_closing`（web 照既有的 `SERVER_CLOSING_TEXT` 顯示「伺服器正在重新啟動，這次沒有送出。請稍後再送一次。」），使用者的那個請求失敗，不會被分到別的對話行程。分流在監督行程與組合行程那一側（[#2858](https://github.com/DemianLi/nexus-agent/issues/2858)）。被拒時前台拿到什麼是讀碼的結論，沒有實跑。
 
 ## 用 systemd 常駐
 

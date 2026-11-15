@@ -29,6 +29,8 @@ import {
   type TextSample,
   type Theme,
   AXE_KNOWN,
+  AXE_KNOWN_OVERLAYS,
+  AXE_PAGE_RULES,
   collectAxe,
   collectBackdrops,
   collectChips,
@@ -705,6 +707,77 @@ describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：
   });
 });
 
+/** `?overlay=` 的每個子頁名，從測試頁的原始碼讀：加了子頁就會被下面逐頁掃的測試掃到。 */
+const OVERLAY_SOURCE = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+const OVERLAY_NAMES = [
+  ...new Set(
+    [
+      ...OVERLAY_SOURCE.slice(OVERLAY_SOURCE.indexOf('function OverlayPage')).matchAll(
+        /case '([\w-]+)':/g,
+      ),
+    ].map((m) => m[1] ?? ''),
+  ),
+];
+
+/**
+ * axe 掃每個子頁（#2765）：上面那一組只掃總覽，浮層開著、選單展開的樣子都在子頁上。
+ * 每頁亮暗各掃一次；違規照「規則 元素」合起來比，不分是哪一頁的。問整份文件結構的規則不跑（`AXE_PAGE_RULES`）。
+ */
+describe.each<Theme>(['light', 'dark'])('axe 掃每個子頁（#2765）：%s', (theme) => {
+  /** 一次開幾頁。 */
+  const BATCH = 4;
+  const found = new Map<string, { help: string; pages: string[] }>();
+  let scanned = 0;
+  /** axe 判不出來的 color-contrast 筆數：有記到表示看像素的規則真的跑了。 */
+  let judged = 0;
+
+  beforeAll(async () => {
+    for (let i = 0; i < OVERLAY_NAMES.length; i += BATCH) {
+      const batch = OVERLAY_NAMES.slice(i, i + BATCH);
+      const results = await Promise.all(
+        batch.map(async (name) => {
+          const page = await openOverlay(name, theme, { marks: {} });
+          try {
+            return await collectAxe(page, AXE_PAGE_RULES);
+          } finally {
+            await page.close();
+          }
+        }),
+      );
+      results.forEach((result, offset) => {
+        scanned += 1;
+        judged += result.incomplete['color-contrast'] ?? 0;
+        for (const v of result.violations) {
+          const entry = found.get(v.key) ?? { help: v.help, pages: [] };
+          entry.pages.push(batch[offset] ?? '');
+          found.set(v.key, entry);
+        }
+      });
+    }
+    report[`${theme}:axe-overlays`] = Object.fromEntries(found);
+  }, 240_000);
+
+  test('沒有已知清單以外的違規', () => {
+    const known = new Set(AXE_KNOWN_OVERLAYS.map((k) => k.key));
+    expect(
+      [...found]
+        .filter(([key]) => !known.has(key))
+        .map(([key, v]) => `${key}（${v.help}）：${[...new Set(v.pages)].join('、')}`),
+    ).toEqual([]);
+  });
+
+  test('已知清單都還有命中，每條都寫了理由', () => {
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => !found.has(k.key)).map((k) => k.key)).toEqual([]);
+    expect(AXE_KNOWN_OVERLAYS.filter((k) => k.why.trim() === '')).toEqual([]);
+  });
+
+  test('量具自檢：每個子頁都掃到了，看像素的規則真的跑了', () => {
+    expect(scanned).toBe(OVERLAY_NAMES.length);
+    expect(scanned).toBeGreaterThan(40);
+    expect(judged).toBeGreaterThan(0);
+  });
+});
+
 describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：%s', (theme) => {
   let page: Page;
   let buttons: Record<string, { height: number; opacity: string; pointerEvents: string }>;
@@ -801,19 +874,24 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
     "[data-popup-open]:not([data-slot='tooltip-trigger'])",
   ].join(',');
   const PANES = '.bg-card,.bg-popover,.glass-panel';
+  /** 選取與三種面之外，本來就該有外框的：覆寫檔列名字的面、目前這條會話、聚焦中的（外框畫在自己或外殼上）。 */
+  const FRAMED = [
+    "[data-slot='dialog-content']",
+    "[data-slot='alert-dialog-content']",
+    "[data-slot='sheet-content']",
+    "[data-slot='tooltip-content']",
+    "[data-slot='card']",
+    "[data-slot='composer']",
+    "[data-slot='sidebar-menu-button'][data-active]:disabled",
+    ':focus-visible',
+    ':has(:focus-visible)',
+  ].join(',');
   /** 一次開幾頁。 */
   const BATCH = 4;
 
-  const source = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
-  const names = [
-    ...new Set(
-      [...source.slice(source.indexOf('function OverlayPage')).matchAll(/case '([\w-]+)':/g)].map(
-        (m) => m[1] ?? '',
-      ),
-    ),
-  ];
-
-  async function scan(name: string): Promise<{ missing: string[]; kinds: string[] }> {
+  async function scan(
+    name: string,
+  ): Promise<{ missing: string[]; clipped: string[]; stray: string[]; kinds: string[] }> {
     const page =
       name === ''
         ? await open('light')
@@ -821,9 +899,35 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
     try {
       if (name === '') await page.emulateMedia({ forcedColors: 'active' });
       return await page.evaluate(
-        ({ selected, panes }) => {
+        ({ selected, panes, expected }) => {
           const missing: string[] = [];
+          const clipped: string[] = [];
           const kinds: string[] = [];
+          /** 外框畫到哪裡：元素的框往外推 offset 加線寬（offset 是負的就往內）。超出會裁切的祖先就看不到。 */
+          const cutBy = (el: HTMLElement, style: CSSStyleDeclaration): boolean => {
+            const box = el.getBoundingClientRect();
+            const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+            for (let up = el.parentElement; up !== null; up = up.parentElement) {
+              const overflow = getComputedStyle(up);
+              if (overflow.overflowX === 'visible' && overflow.overflowY === 'visible') continue;
+              const frame = up.getBoundingClientRect();
+              const left = frame.left + up.clientLeft;
+              const top = frame.top + up.clientTop;
+              const slack = 0.5;
+              if (
+                box.left - reach < left - slack ||
+                box.right + reach > left + up.clientWidth + slack ||
+                // 捲出去的那幾項本來就看不到，只看整個在框裡的。
+                (box.top >= top &&
+                  box.bottom <= top + up.clientHeight &&
+                  (box.top - reach < top - slack ||
+                    box.bottom + reach > top + up.clientHeight + slack))
+              ) {
+                return true;
+              }
+            }
+            return false;
+          };
           for (const [kind, selector] of [
             ['選取', selected],
             ['面', panes],
@@ -844,32 +948,54 @@ describe('Windows 高對比：每個測試頁（#2796）', () => {
                   el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase();
                 missing.push(`${kind} ${what}`);
               }
+              if (kind === '選取' && outline && cutBy(el, style)) {
+                clipped.push(
+                  el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase(),
+                );
+              }
             }
           }
-          return { missing, kinds };
+          // 反過來：不是選取、不是面、沒聚焦的元素不該有外框，否則選中的那一個認不出來。
+          const framed = `${selected},${panes},${expected}`;
+          const stray: string[] = [];
+          for (const el of document.querySelectorAll<HTMLElement>('*')) {
+            const box = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (box.width === 0 || box.height === 0 || style.visibility === 'hidden') continue;
+            if (style.outlineStyle === 'none' || parseFloat(style.outlineWidth) === 0) continue;
+            if (el.matches(framed)) continue;
+            stray.push(el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase());
+          }
+          return { missing, clipped, stray, kinds };
         },
-        { selected: SELECTED, panes: PANES },
+        { selected: SELECTED, panes: PANES, expected: FRAMED },
       );
     } finally {
       await page.close();
     }
   }
 
-  test('選取與面都有邊框或外框', async () => {
+  test('選取與面都有邊框或外框，選取的外框沒被裁掉，其餘沒有外框', async () => {
     const missing = new Set<string>();
+    const clipped = new Set<string>();
+    const stray = new Set<string>();
     const kinds = new Set<string>();
-    const pages = ['', ...names];
+    const pages = ['', ...OVERLAY_NAMES];
     for (let i = 0; i < pages.length; i += BATCH) {
       const batch = pages.slice(i, i + BATCH);
       const results = await Promise.all(batch.map(scan));
       results.forEach((result, offset) => {
         for (const kind of result.kinds) kinds.add(kind);
         for (const label of result.missing) missing.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.clipped) clipped.add(`${batch[offset] || 'main'}：${label}`);
+        for (const label of result.stray) stray.add(`${batch[offset] || 'main'}：${label}`);
       });
     }
     // 量具自檢：兩類都真的量到東西。
     expect([...kinds].sort()).toEqual(['選取', '面'].sort());
     expect([...missing].sort()).toEqual([]);
+    expect([...clipped].sort()).toEqual([]);
+    expect([...stray].sort()).toEqual([]);
   }, 240_000);
 });
 

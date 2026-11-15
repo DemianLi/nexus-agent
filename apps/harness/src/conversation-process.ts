@@ -18,6 +18,7 @@ import type { HostClient } from '@nexus/host-bridge';
 
 import { ConversationControl } from './conversation-control.js';
 import { connectHost, createConversationHostBridge, parseHostSocketArg } from './host-client.js';
+import { startPairLeaf } from './pair-leaf.js';
 import { openPeerSocketAuth } from './peer-socket-auth.js';
 import { installServeProcessLifecycle, runServe } from './serve-run.js';
 
@@ -26,9 +27,13 @@ const POLL_MS = 1_000;
 /** 綁定之後多久送一次心跳。 */
 const HEARTBEAT_MS = 1_000;
 
-/** 拆出 `--socket <path>`，其餘原樣交給 serve。 */
+/** 結束前最多等 serve 收尾多久；橋斷後的結束走這條（{@link startPairLeaf}）。 */
+const PAIR_EXIT_CLOSE_MS = 5_000;
+
+/** 拆出 `--socket <path>` 與有給的 `--pair-socket <path>`，其餘原樣交給 serve。 */
 export function parseConversationArgs(argv: readonly string[]): {
   readonly socketPath: string;
+  readonly pairSocketPath?: string;
   readonly serveArgv: readonly string[];
 } {
   const index = argv.indexOf('--socket');
@@ -36,7 +41,18 @@ export function parseConversationArgs(argv: readonly string[]): {
   if (socketPath === undefined || socketPath.startsWith('--')) {
     throw new Error('對話行程要 --socket <path>');
   }
-  return { socketPath, serveArgv: [...argv.slice(0, index), ...argv.slice(index + 2)] };
+  const afterSocket = [...argv.slice(0, index), ...argv.slice(index + 2)];
+  const pairIndex = afterSocket.indexOf('--pair-socket');
+  if (pairIndex === -1) return { socketPath, serveArgv: afterSocket };
+  const pairSocketPath = afterSocket[pairIndex + 1];
+  if (pairSocketPath === undefined || pairSocketPath.startsWith('--')) {
+    throw new Error('--pair-socket 要給路徑');
+  }
+  return {
+    socketPath,
+    pairSocketPath,
+    serveArgv: [...afterSocket.slice(0, pairIndex), ...afterSocket.slice(pairIndex + 2)],
+  };
 }
 
 async function main(): Promise<void> {
@@ -50,7 +66,11 @@ async function main(): Promise<void> {
 
   const lifecycle = installServeProcessLifecycle();
   try {
-    const { socketPath, serveArgv: rest } = parseConversationArgs(process.argv.slice(2));
+    const {
+      socketPath,
+      pairSocketPath,
+      serveArgv: rest,
+    } = parseConversationArgs(process.argv.slice(2));
     const { hostSocket, rest: serveArgv } = parseHostSocketArg(rest);
     const auth = await openPeerSocketAuth(socketPath);
     const hostBridge = createConversationHostBridge(hostSocket);
@@ -96,6 +116,19 @@ async function main(): Promise<void> {
     });
     bound.control = control;
     control.ready();
+    await startPairLeaf({
+      socketPath: pairSocketPath,
+      control,
+      log: (line) => console.error(line),
+      exit: async (code) => {
+        control.close();
+        await Promise.race([
+          running.close({ drain: false }).catch(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, PAIR_EXIT_CLOSE_MS).unref()),
+        ]);
+        process.exit(code);
+      },
+    });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

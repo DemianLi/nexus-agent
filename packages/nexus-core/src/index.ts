@@ -1182,12 +1182,14 @@ export {
 export type { SubagentCatalogData, SubagentCatalogMode, SubagentLink } from './subagent-catalog.js';
 export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent-catalog.js';
 
-// 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
-// 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。
+// 配套入口（`./invariant`）刻意**不從主入口再匯出**：它只掛在 `@nexus/core/invariant` 這個子路徑上，
+// import 主入口不會把它拖進來。與 dsh 的對照見 docs/interrupted-turn-and-invariant-vs-dsh.md 第四節。
 export { noteSentRequest } from './last-sent-request.js';
 export type { SentHistoryReader } from './summarization.js';
 export {
   composeSummaryHead,
+  HISTORY_READ_TOOL_NAME,
+  HISTORY_SEARCH_TOOL_NAME,
   parseEntryDraft,
   parseSummaryHead,
   renderSummaryEntry,
@@ -1196,4 +1198,17 @@ export {
   SUMMARY_STATE_MAX_CHARS,
 } from './summary-head.js';
 export type { SummaryEntry, SummaryEntryDraft, SummaryHead } from './summary-head.js';
-export { summaryBodyOf, SummaryStateTooLongError } from './summarizer-engine.js';
+export {
+  summaryBodyOf,
+  summaryPointsToRecall,
+  SummaryStateTooLongError,
+} from './summarizer-engine.js';
+export {
+  HISTORY_READ_PAGE_CHARS,
+  HISTORY_SEARCH_DEFAULT_LIMIT,
+  HISTORY_SEARCH_MAX_LIMIT,
+  historyRead,
+  historySearch,
+  recallHistory,
+} from './history-recall.js';
+export type { RecalledHistory, RecallResult, RecallSegment } from './history-recall.js';

@@ -9,6 +9,8 @@ import { expect, test } from 'vitest';
 import { browser, server, settle, type Theme } from '../guard/harness';
 import { SHIPPED_DIST } from '../guard/server';
 
+import { CATALOG_GROUPS, MAIN } from './pages';
+
 /**
  * 給人看的元件目錄（`.docs/web-ui-spec.md` §13.5）：把 `guard/` 測試頁的每一個子頁在亮、暗各開一次，連同出貨的 CSS 與
  * token 的計算值寫成**一個**自足的 HTML（`catalog/dist/index.html`，不進版控）。跑法是 `pnpm --filter @nexus/web run catalog`。
@@ -24,9 +26,6 @@ const OUT = join(HERE, 'dist', 'index.html');
 const THEMES: Theme[] = ['light', 'dark'];
 /** 同時開幾頁。 */
 const BATCH = 6;
-
-/** 總覽（沒有 `?overlay=` 的那一頁）排第一個。 */
-const MAIN = 'main';
 
 /** 子頁的名字照 `guard/main.tsx` 的 `OverlayPage` 列出來：那裡加了一頁，目錄就多一頁。 */
 function overlayNames(): string[] {
@@ -161,7 +160,7 @@ const frame = document.getElementById('frame');
 const table = document.getElementById('tokens');
 const list = document.getElementById('list');
 let theme = 'light';
-let current = data.names[0];
+let current = data.groups[0].pages[0][0];
 const TOKENS = '#tokens';
 const attr = (v) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 const text = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -199,8 +198,10 @@ const add = (name, label) => {
 const heading = (label) => { const h = document.createElement('h2'); h.textContent = label; list.append(h); };
 heading('token');
 add(TOKENS, '全部 token');
-heading('元件與畫面');
-for (const name of data.names) add(name, name);
+for (const group of data.groups) {
+  heading(group.label);
+  for (const [name, label] of group.pages) add(name, label);
+}
 document.getElementById('theme').onclick = () => { theme = theme === 'light' ? 'dark' : 'light'; show(); };
 show();
 `;
@@ -226,10 +227,21 @@ test('產出元件目錄', async () => {
   const [light, dark] = await Promise.all(THEMES.map(tokensOf));
   expect(Object.keys(light ?? {}).length).toBeGreaterThan(50);
 
+  // 沒排進 `pages.ts` 的子頁放最後一組、用原名，不靜靜漏掉。
+  const grouped = new Set(CATALOG_GROUPS.flatMap((group) => group.pages.map(([name]) => name)));
+  const rest = names.filter((name) => !grouped.has(name));
+  const groups = [
+    ...CATALOG_GROUPS.map((group) => ({
+      label: group.label,
+      pages: group.pages.filter(([name]) => names.includes(name)),
+    })),
+    ...(rest.length > 0 ? [{ label: '未分組', pages: rest.map((name) => [name, name]) }] : []),
+  ].filter((group) => group.pages.length > 0);
+
   const { commit, date, dirty } = stamp();
   // `<` 一律跳脫：資料裡的 `</script>` 不會提早關掉這個 script。
   const data = JSON.stringify({
-    names,
+    groups,
     pages,
     tokens: { light, dark },
     css: shippedCss(),

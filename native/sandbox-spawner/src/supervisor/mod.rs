@@ -31,7 +31,7 @@
 //! 每 `--stats-ms` 給前台一次 `stats`，前台（重）起時也送一次。
 //!
 //! 對話行程的死因（判法在 [`memory::classify`]）：監督行程自己決定收的照那個理由，停機是 `shutdown`，回了 `drained` 是 `evicted`，RSS 超過 `--rss-limit-mb` 是
-//! `memory`，心跳斷了超過 `--stall-ms`（壓住時只算放它跑的時間）是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
+//! `memory`，心跳斷了超過 `--stall-ms`（壓住時只算放它跑的時間）、成對時等 `ready` 超過 `--start-timeout-ms` 是 `stalled`，控制通道上送了解不開的框或綁錯 thread 是 `crash`。其餘的照結束方式判：以 SIGABRT 結束、stderr 結尾附近有 heap 用完的
 //! 那一行（判法見 [`process::StderrTap`]）是 `heap`；被 SIGKILL 而 cgroup 的 `oom_kill` 多了是 `host-oom`；其他（非零、被別的訊號殺、沒人叫它停卻自己結束、沒起成）
 //! 都是 `crash`。每一個都寫一行稽核、回前台 `down(thread, cause)`；預熱池裡還沒指派的只寫稽核（`thread` 是空字串）。
 //!
@@ -41,10 +41,10 @@
 //!
 //! 有對話行程時，每 `--rss-poll-ms` 讀一次各 leader 的 `VmRSS`，最高值寫進稽核的 `rss_kb`。送出 `bind` 起收到的每個框都算聽到，相鄰兩次（第一次與送出 `bind`）之間最長的間隔寫進稽核的
 //! `max_silence_ms`，死前最後一段不算。監督行程每一輪取兩次時間（迴圈開頭與 poll 回來），相鄰兩次之間比准許的晚了超過 `--stall-ms` 的一半時，判定自己被停住過，
-//! 所有沉默從那一刻重新起算（[`Pace`]、[`Supervisor::check_resumed`]）。
+//! 所有沉默從那一刻重新起算；一對等 `ready` 的時間也一樣，門檻是 `--start-timeout-ms` 的一半（[`Pace`]、[`Supervisor::check_resumed`]）。
 //!
 //! 拆除梯度：關 stdin（EOF）→ 等 `--eof-grace-ms` → 對群組送 SIGTERM → 等 `--term-grace-ms` → 對群組送 SIGKILL。RSS 超過上限與
-//! 心跳斷了超過 `--stall-ms` 的不走梯度，當場對群組送 SIGKILL。
+//! 心跳斷了超過 `--stall-ms`、一對等 `ready` 超過 `--start-timeout-ms` 的不走梯度，當場對群組送 SIGKILL。
 //!
 //! 沉默又一直要 CPU 的 leader 交替送 SIGSTOP／SIGCONT（[`cpu`]）；走拆除梯度或送 `drain` 之前先 SIGCONT。
 //! leader 結束時（收屍之前）再對它的群組送一次 SIGKILL，群組裡剩下的一起帶走。
@@ -66,11 +66,12 @@
 //!
 //! 停機：收到 SIGINT／SIGTERM／SIGHUP，順序是 ① 送前台 `stop-admission`，等它回答最多 `--admission-timeout-ms`（前台不在、或在等的時候結束了就不等）；
 //! ② 所有對話行程走拆除梯度；③ 全部收完之後宿主走一次；④ 宿主收完之後前台走一次；前台收完就回 0（停機是 `hello` 對不上或宿主起不來造成的，回 3 或 4）。
-//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），再走拆除梯度。
+//! 停機中再收到一次這些訊號，所有對話行程與宿主的群組當場 SIGKILL（對話行程與組合行程還沒有死因的記 `shutdown`，在 ① 還沒等完時也一樣）；前台照樣先收到它們的 `down`（排著的框寫完才關它的 stdin），① 等完之後再走拆除梯度。
 //!
 //! 一對（`--composition`，[#2583](https://github.com/DemianLi/nexus-agent/issues/2583)；沒給就是上面的一條對話一個行程）：每條對話是組合行程
 //! （[`Composition`]）加葉子（[`Conversation`]，就是 `--conversation`），佔一個名額。先起組合行程，收到它不宣告 loop 的 `hello` 才起葉子；
 //! `ready`、`bound` 看組合行程的，`bind` 也送給它，`up` 給的是它的 socket；`turn`、閒置、`drain` 走葉子。
+//! 從起組合行程（補葉子時從補的那一刻）到讀到 `ready` 超過 `--start-timeout-ms` 就殺組合行程、整對收（[`Supervisor::check_starts`]）。
 //! 葉子死了照它的死因回 `down`：上一則 `bind` 回過 `bound`、又是它自己壞掉的，組合行程留著等下一個 `ensure` 補葉子
 //! （留到 `--idle-ms`，名額滿時最先收；補了之後等它替新葉子再回一則 `ready` 才重送 `bind`）；其餘的葉子收完就連帶收組合行程。組合行程死了整對收：判完它的死因才對葉子送 SIGKILL。
 //! 被連帶收掉的那一個稽核記 `peer`，不回 `down`、不進死因累計；留著等葉子的組合行程因 `--idle-ms` 或名額滿被收時也記 `peer`
@@ -819,6 +820,7 @@ impl Supervisor {
         self.check_drains(now);
         self.check_idle(now);
         self.check_leafless(now);
+        self.check_starts(now);
         if self.warm_retry_at.is_some_and(|at| at <= now) {
             self.warm_retry_at = None;
             self.fill_warm();
@@ -856,6 +858,17 @@ impl Supervisor {
                     .filter(|p| p.proc.stop.is_none())
                     .filter_map(move |p| Some(p.leafless_since()? + idle))
             }))
+            .chain(
+                self.args
+                    .start_timeout
+                    .filter(|_| !self.shutting_down)
+                    .into_iter()
+                    .flat_map(|limit| {
+                        self.compositions
+                            .iter()
+                            .filter_map(move |p| Some(p.starting_since()? + limit))
+                    }),
+            )
             .chain(self.args.stall.into_iter().flat_map(|stall| {
                 self.conversations
                     .iter()
@@ -911,7 +924,28 @@ impl Supervisor {
     /// 門檻取一半：一輪的處理時間加排程延遲在預設的 `--stall-ms` 下遠低於它（`--stall-ms` 不到約 1 s 時，收屍等宿主收撤銷這類有上限的
     /// 同步等待可能跨過門檻）。凍住前對話行程照常送心跳時，會造成誤判的停住，它所在那一段量到的 `late` 至少是 `stall` 的四分之三減一個心跳間隔：
     /// 每一段准許的時間最多是 poll 的 timeout，[`Self::next_deadline`] 讓它不超過 `stall` 的四分之一。所以心跳間隔不到 `stall` 的四分之一時一定認得出來。
+    ///
+    /// 一對等 `ready` 的時間（`--start-timeout-ms`）也從 `now` 重新起算，門檻是它自己的一半，跟 `--stall-ms` 開不開無關：凍住的那段葉子也沒辦法登記。
+    /// 這裡沒有 `stall` 四分之一那樣的上限：有一對時 poll 最晚每 `--rss-poll-ms` 醒一次，停在 poll 裡的停頓要扣掉那一段才算 `late`。
     fn check_resumed(&mut self, now: Instant, late: Duration) {
+        let waiting = self
+            .compositions
+            .iter()
+            .any(|p| p.starting_since().is_some());
+        if waiting
+            && self
+                .args
+                .start_timeout
+                .is_some_and(|limit| late >= limit / 2)
+        {
+            say!(
+                "監督行程比准許的晚了 {} ms，判定自己被停住過；每一對等 ready 的時間從現在重新起算",
+                late.as_millis()
+            );
+            for composition in &mut self.compositions {
+                composition.restart_start(now);
+            }
+        }
         let Some(stall) = self.args.stall else { return };
         if late < stall / 2 {
             return;
@@ -1857,16 +1891,7 @@ impl Supervisor {
         if stop {
             if self.shutting_down {
                 say!("停機中又收到停止訊號，所有對話行程與宿主當場 SIGKILL");
-                for conversation in &mut self.conversations {
-                    conversation.proc.kill_now();
-                }
-                for composition in &mut self.compositions {
-                    composition.cause.get_or_insert(DeathCause::Shutdown);
-                    composition.proc.kill_now();
-                }
-                if let Some(host) = self.host.as_mut() {
-                    host.proc.kill_now();
-                }
+                self.kill_children();
             } else {
                 self.begin_shutdown(0);
             }
@@ -1944,6 +1969,15 @@ impl Supervisor {
     }
 
     fn kill_everything(&mut self) {
+        self.kill_children();
+        if let Some(front) = self.front.as_mut() {
+            front.kill_now();
+        }
+    }
+
+    /// 所有對話行程、組合行程與宿主當場 SIGKILL。對話行程與組合行程還沒有死因的記 `shutdown`，已經有的不蓋：
+    /// 停機還在等前台回 `admission-stopped` 時，[`Self::advance_shutdown`] 還沒走到記死因的地方。
+    fn kill_children(&mut self) {
         for conversation in &mut self.conversations {
             conversation.cause.get_or_insert(DeathCause::Shutdown);
             conversation.proc.kill_now();
@@ -1954,9 +1988,6 @@ impl Supervisor {
         }
         if let Some(host) = self.host.as_mut() {
             host.proc.kill_now();
-        }
-        if let Some(front) = self.front.as_mut() {
-            front.kill_now();
         }
     }
 
@@ -2625,7 +2656,7 @@ mod tests {
         leaf.pair = Some(1);
         leaf.thread = thread;
         leaf.phase = match state {
-            PairState::Starting | PairState::Refilling => Phase::Starting,
+            PairState::Starting { .. } | PairState::Refilling { .. } => Phase::Starting,
             PairState::Ready => Phase::Warm,
             PairState::Binding => Phase::Binding,
             PairState::Bound => Phase::Up,
@@ -2634,6 +2665,13 @@ mod tests {
         supervisor.conversations.push(leaf);
         supervisor.check_pairs();
         (supervisor, audit, events)
+    }
+
+    /// 現在才補了葉子、在等 `ready` 的狀態。
+    fn refilling() -> PairState {
+        PairState::Refilling {
+            since: Instant::now(),
+        }
     }
 
     fn audit_lines(audit: &Path) -> Vec<String> {
@@ -2753,6 +2791,39 @@ mod tests {
         assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1);
     }
 
+    /// 停機中，還沒有死因的一對被 [`Supervisor::kill_children`] 當場殺掉：兩邊都記 `shutdown`，不管誰先收屍，
+    /// 這一對只進一次死因累計，進 `shutdown` 那一格；已經有死因的不蓋。
+    #[test]
+    fn killing_every_child_records_shutdown_without_overwriting_a_cause() {
+        for leaf_first in [true, false] {
+            let (mut supervisor, audit, _) = with_a_pair("kill-children", PairState::Bound);
+            supervisor.shutting_down = true;
+            supervisor.kill_children();
+            assert_eq!(
+                supervisor.conversations[0].cause,
+                Some(DeathCause::Shutdown)
+            );
+            assert_eq!(supervisor.compositions[0].cause, Some(DeathCause::Shutdown));
+            if leaf_first {
+                supervisor.on_exit(LEAF, KILLED);
+                supervisor.on_exit(COMPOSITION, KILLED);
+            } else {
+                supervisor.on_exit(COMPOSITION, KILLED);
+                supervisor.on_exit(LEAF, KILLED);
+            }
+            assert_eq!(audit_lines(&audit).len(), 2);
+            assert_eq!(supervisor.deaths[DeathCause::Shutdown as usize - 1], 1);
+            assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1, "{leaf_first}");
+        }
+
+        let (mut supervisor, _, _) = with_a_pair("kill-children-decided", PairState::Bound);
+        supervisor.conversations[0].cause = Some(DeathCause::Evicted);
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.kill_children();
+        assert_eq!(supervisor.conversations[0].cause, Some(DeathCause::Evicted));
+        assert_eq!(supervisor.compositions[0].cause, Some(DeathCause::Stalled));
+    }
+
     /// 預熱池裡的一對兩個行程都已經在收（停機中再收到訊號）、葉子先收屍：組合行程沒被標成連帶收，這一對照樣只進一次死因累計。
     #[test]
     fn a_warm_pair_killed_together_is_counted_once() {
@@ -2841,8 +2912,8 @@ mod tests {
         supervisor.check_pairs();
     }
 
-    /// 組合行程送來一則 `ready`。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
-    fn composition_says_ready(supervisor: &mut Supervisor) {
+    /// 組合行程的一則 `ready` 進了管線、監督行程還沒讀（當成它已經送過 `hello`）。測試裡它的通道兩端接在一起，寫進去的下一次就讀得到。
+    fn composition_ready_in_the_pipe(supervisor: &mut Supervisor) {
         let composition = &mut supervisor.compositions[0];
         composition.proc.hello = true;
         composition
@@ -2851,17 +2922,25 @@ mod tests {
             .send(&crate::supervisor_protocol::encode_conversation_report(
                 &ConversationReport::Ready,
             ));
+    }
+
+    /// 組合行程送來一則 `ready`。
+    fn composition_says_ready(supervisor: &mut Supervisor) {
+        composition_ready_in_the_pipe(supervisor);
         supervisor.on_composition_readable(0);
     }
 
     /// 在等補起的葉子時（[`PairState::Refilling`]）不算它的沉默；`ready` 到了才送 `bind`、才起算。
     #[test]
     fn a_refilled_leaf_is_bound_when_its_ready_comes() {
-        let (mut supervisor, _, _) = with_a_pair("refilling", PairState::Refilling);
+        let (mut supervisor, _, _) = with_a_pair("refilling", refilling());
         let later = Instant::now() + Duration::from_secs(3600);
         supervisor.check_stalls(later, Duration::from_secs(1));
         assert!(supervisor.conversations[0].proc.stop.is_none());
-        assert_eq!(supervisor.compositions[0].state(), PairState::Refilling);
+        assert!(matches!(
+            supervisor.compositions[0].state(),
+            PairState::Refilling { .. }
+        ));
 
         composition_says_ready(&mut supervisor);
         assert_eq!(supervisor.compositions[0].state(), PairState::Binding);
@@ -2890,7 +2969,7 @@ mod tests {
         assert!(matches!(composition.state(), PairState::Leafless { .. }));
         assert!(composition.heard_at.is_none() && composition.proc.stop.is_none());
         // 補起的葉子登記完就死，監督行程收完它的屍才讀到組合行程替它送的 `ready`：不理。
-        let (mut supervisor, _, _) = with_a_pair("stray-collected", PairState::Refilling);
+        let (mut supervisor, _, _) = with_a_pair("stray-collected", refilling());
         let composition = &mut supervisor.compositions[0];
         composition.proc.hello = true;
         composition.heard_at = Some(Instant::now() - Duration::from_secs(1));
@@ -2911,14 +2990,181 @@ mod tests {
         );
     }
 
+    /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
+    /// 所以 `ready` 先放進管線再開始收；之後讀端讀到 EOF、死因還是空的，表示那則 `ready` 讀到了、也解開了（解不開的會記 `crash`）。
+    #[test]
+    fn a_ready_from_a_composition_being_collected_does_not_advance_the_pair() {
+        let since = Instant::now();
+        // 葉子登記完就死，監督行程收完它的屍才讀到組合行程替它送的 `ready`。
+        let (mut supervisor, _, _) = with_a_pair("late-leaf-died", PairState::Starting { since });
+        composition_ready_in_the_pipe(&mut supervisor);
+        supervisor.on_exit(LEAF, KILLED);
+        supervisor.on_composition_readable(0);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.proc.stop.is_some() && composition.proc.chan.read_closed());
+        assert!(composition.cause.is_none());
+        assert_eq!(composition.state(), PairState::Starting { since });
+        assert!(composition.heard_at.is_none());
+
+        // 被當場殺掉（起動期限到了；補葉子時也可能是停住太久），判之前讀過的那一次之後才進管線的 `ready`。葉子還在：它等組合行程收完屍才連帶收。
+        for (tag, state) in [
+            ("late-starting", PairState::Starting { since }),
+            ("late-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
+            composition_ready_in_the_pipe(&mut supervisor);
+            supervisor.compositions[0].proc.kill_now();
+            supervisor.on_composition_readable(0);
+            let composition = &supervisor.compositions[0];
+            assert!(composition.proc.chan.read_closed(), "{tag}");
+            assert!(composition.cause.is_none(), "{tag}");
+            assert_eq!(composition.state(), state, "{tag}");
+            assert!(composition.heard_at.is_none(), "{tag}");
+            let leaf = &supervisor.conversations[0];
+            assert!(
+                leaf.phase == Phase::Starting && leaf.heard_at.is_none(),
+                "{tag}"
+            );
+        }
+    }
+
     /// 補起的葉子還沒等到 `ready` 就死：整對收（理由見 [`Supervisor::on_leaf_gone`]）。
     #[test]
     fn a_refilled_leaf_that_dies_before_its_ready_takes_the_pair_with_it() {
-        let (mut supervisor, _, _) = with_a_pair("refill-died", PairState::Refilling);
+        let (mut supervisor, _, _) = with_a_pair("refill-died", refilling());
         supervisor.on_exit(LEAF, KILLED);
         let composition = &supervisor.compositions[0];
         assert!(composition.proc.stop.is_some());
         assert_eq!(composition.state(), PairState::Ready);
+    }
+
+    /// 等 `ready` 的一對（剛起的與補了葉子的）到了 `--start-timeout-ms` 才殺組合行程：死因 `stalled`、稽核帶 `error`，葉子等它收完屍才連帶收，
+    /// 死因累計一次（`down` 一次由 `tests/supervisor.rs` 釘）。差 1 ms 還沒到的不動。
+    #[test]
+    fn a_pair_still_waiting_for_ready_at_the_start_deadline_is_killed() {
+        let since = Instant::now();
+        for (tag, state) in [
+            ("start-starting", PairState::Starting { since }),
+            ("start-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, audit, _) = with_a_pair(tag, state);
+            let limit = supervisor.args.start_timeout.unwrap();
+            supervisor.check_starts(since + limit - Duration::from_millis(1));
+            assert!(supervisor.compositions[0].proc.stop.is_none(), "{tag}");
+            supervisor.check_starts(since + limit);
+            let composition = &supervisor.compositions[0];
+            assert!(composition.proc.stop.is_some(), "{tag}");
+            assert_eq!(composition.cause, Some(DeathCause::Stalled), "{tag}");
+            assert!(supervisor.conversations[0].proc.stop.is_none(), "{tag}");
+
+            supervisor.on_exit(COMPOSITION, KILLED);
+            assert!(supervisor.conversations[0].peer, "{tag}");
+            supervisor.on_exit(LEAF, KILLED);
+            assert_eq!(supervisor.live(), 0, "{tag}");
+            let lines = audit_lines(&audit);
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            assert!(
+                lines[0].contains("\"role\":\"composition\"")
+                    && lines[0].contains("\"cause\":\"stalled\"")
+                    && lines[0].contains("\"error\":\"ready 之前逾時\""),
+                "{lines:?}"
+            );
+            assert!(lines[1].contains("\"cause\":\"peer\""), "{lines:?}");
+            assert_eq!(supervisor.deaths[DeathCause::Stalled as usize - 1], 1);
+            assert_eq!(supervisor.deaths.iter().sum::<u32>(), 1, "{tag}");
+        }
+    }
+
+    /// 期限到的時候 `ready` 已經在管線裡、還沒讀（監督行程自己慢了）：判之前先讀，讀到就不殺、照常送 `bind`。
+    #[test]
+    fn a_ready_already_in_the_pipe_at_the_start_deadline_is_read_first() {
+        let since = Instant::now();
+        for (tag, state) in [
+            ("piped-starting", PairState::Starting { since }),
+            ("piped-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
+            let limit = supervisor.args.start_timeout.unwrap();
+            let composition = &mut supervisor.compositions[0];
+            composition.proc.hello = true;
+            composition
+                .proc
+                .chan
+                .send(&crate::supervisor_protocol::encode_conversation_report(
+                    &ConversationReport::Ready,
+                ));
+            supervisor.check_starts(since + limit);
+            let composition = &supervisor.compositions[0];
+            assert_eq!(composition.state(), PairState::Binding, "{tag}");
+            assert!(
+                composition.proc.stop.is_none() && composition.cause.is_none(),
+                "{tag}"
+            );
+        }
+    }
+
+    /// 不判起動期限的：`--start-timeout-ms 0`、停機中、組合行程已經在收。
+    #[test]
+    fn the_start_deadline_skips_off_shutdown_and_stopping() {
+        let since = Instant::now();
+        let late = since + Duration::from_secs(3600);
+        let (mut supervisor, _, _) = with_a_pair("start-off", PairState::Starting { since });
+        supervisor.args.start_timeout = None;
+        supervisor.check_starts(late);
+        assert!(supervisor.compositions[0].proc.stop.is_none());
+
+        let (mut supervisor, _, _) = with_a_pair("start-shutdown", PairState::Starting { since });
+        supervisor.shutting_down = true;
+        supervisor.check_starts(late);
+        assert!(supervisor.compositions[0].proc.stop.is_none());
+
+        let (mut supervisor, _, _) = with_a_pair("start-stopping", PairState::Starting { since });
+        let eof_grace = supervisor.args.eof_grace;
+        supervisor.compositions[0].collect(since, eof_grace);
+        supervisor.check_starts(late);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.cause.is_none() && !composition.timed_out);
+    }
+
+    /// 等 `ready` 的一對，poll 最晚在它的起動期限醒來；停機中不算。
+    #[test]
+    fn the_start_deadline_wakes_the_poll() {
+        let since = Instant::now();
+        for (tag, state) in [
+            ("wake-starting", PairState::Starting { since }),
+            ("wake-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
+            let limit = supervisor.args.start_timeout.unwrap();
+            let far = since + Duration::from_secs(24 * 3600);
+            supervisor.rss_poll_at = far;
+            supervisor.stats_at = None;
+            assert_eq!(supervisor.next_deadline(), Some(since + limit), "{tag}");
+            supervisor.shutting_down = true;
+            assert_eq!(supervisor.next_deadline(), Some(far), "{tag}");
+        }
+    }
+
+    /// 整棵樹被凍住過：等 `ready` 的時間從判定那一刻重新起算，門檻是 `--start-timeout-ms` 的一半，`--stall-ms` 關著也一樣；
+    /// 比准許的晚不到一半就不動。
+    #[test]
+    fn resuming_from_a_freeze_restarts_the_start_deadline() {
+        let since = Instant::now() - Duration::from_secs(3600);
+        for (tag, state) in [
+            ("resume-starting", PairState::Starting { since }),
+            ("resume-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
+            supervisor.args.stall = None;
+            let limit = supervisor.args.start_timeout.unwrap();
+            let now = Instant::now();
+            supervisor.check_resumed(now, limit / 2 - Duration::from_millis(1));
+            assert_eq!(supervisor.compositions[0].starting_since(), Some(since));
+            supervisor.check_resumed(now, limit / 2);
+            assert_eq!(supervisor.compositions[0].starting_since(), Some(now));
+            supervisor.check_starts(now);
+            assert!(supervisor.compositions[0].proc.stop.is_none(), "{tag}");
+        }
     }
 
     /// 整棵樹被凍住過：一對裡兩個行程的沉默都從判定那一刻重新起算；比准許的晚不到 stall 的一半就都不動。
