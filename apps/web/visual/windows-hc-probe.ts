@@ -64,7 +64,8 @@ for (const attempt of ATTEMPTS) {
       ...attempt.options,
       args: [...(('args' in attempt.options ? attempt.options.args : undefined) ?? [])],
     });
-    const page = await candidate.newPage();
+    // Playwright 預設把 forced-colors 模擬成 none；給 null 才是照系統的。
+    const page = await candidate.newPage({ forcedColors: null });
     await page.goto('about:blank');
     const on = await page.evaluate(() => matchMedia('(forced-colors: active)').matches);
     await page.close();
@@ -86,7 +87,10 @@ const results: Record<string, unknown> = {};
 let active = 0;
 try {
   for (const name of ['main', ...names]) {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 1000 },
+      forcedColors: null,
+    });
     try {
       await page.goto(`${server.url}?theme=light${name === 'main' ? '' : `&overlay=${name}`}`);
       await page.waitForFunction(
