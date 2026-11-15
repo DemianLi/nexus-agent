@@ -50,6 +50,8 @@ import { scriptedPatchText } from './scripted-serve.js';
 import { signalPid } from './test-pids.fixture.js';
 
 const SUPERVISOR = process.env.NEXUS_SUPERVISOR_BIN;
+/** `nexus-composition` 的執行檔：一對（#2769）的整合測試要它；沒設就跳過。 */
+const COMPOSITION = process.env.NEXUS_COMPOSITION_BIN;
 const SERVE = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const TSX = import.meta.resolve('tsx');
 const SOURCE_PATHS =
@@ -1107,5 +1109,30 @@ describe.skipIf(SUPERVISOR === undefined)(
         expect.stringContaining('撤之前的暗號是什麼'),
       ]);
     }, 240_000);
+  },
+);
+
+describe.skipIf(SUPERVISOR === undefined || COMPOSITION === undefined)(
+  'per-thread：一對（組合行程加葉子，#2769）',
+  () => {
+    it('前台的請求經組合行程轉到葉子，這一輪照常答；葉子帶 --pair-socket，組合行程在監督行程底下', async () => {
+      const running = await start([{ content: '經橋綁上的回覆。' }], '', undefined, [
+        '--composition',
+        COMPOSITION!,
+      ]);
+      const supervisor = running.child.pid!;
+      const client = await clientOf(await running.loginUrl(1));
+
+      expect(replies(await turn(client, 'thread-pair', '你好'))).toEqual(['經橋綁上的回覆。']);
+
+      const leaves = childrenRunning(supervisor, 'conversation-process');
+      expect(leaves.length).toBeGreaterThan(0);
+      for (const pid of leaves) {
+        expect(readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').split('\0')).toContain(
+          '--pair-socket',
+        );
+      }
+      expect(childrenRunning(supervisor, 'nexus-composition').length).toBeGreaterThan(0);
+    }, 180_000);
   },
 );

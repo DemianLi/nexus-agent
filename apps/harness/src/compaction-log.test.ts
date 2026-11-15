@@ -499,7 +499,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
    */
   it('摘要之後的模型呼叫失敗：事件仍在日誌裡，下一次呼叫接著它走，不重摘', async () => {
     const summarization = {
-      trigger: [{ type: 'tokens' as const, value: 3_000 }],
+      trigger: [{ type: 'tokens' as const, value: 3_400 }],
       retainTokens: 12,
     };
     // 先照全部成功的腳本跑一遍，找出第一次摘要用掉的是第幾輪（摘要提示詞是一則含對話全文的 human 訊息）。

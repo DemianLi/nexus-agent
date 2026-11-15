@@ -134,6 +134,7 @@ import {
   tokenUsageUnit,
   type ProjectionUnit,
   type ProjectionValue,
+  summaryPointsToRecall,
 } from '@nexus/core';
 
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
@@ -640,13 +641,15 @@ export function compactionData(
 } {
   return readingEvent({ type: 'compaction/summary', seq: event.seq }, () => {
     const { cutoffIndex, filePath, summary } = event.data;
-    const text = summary === undefined ? '' : summaryBody(textOf(summary));
+    const full = summary === undefined ? '' : textOf(summary);
+    const text = summaryBody(full);
     return {
       name: COMPACTION,
       payload: {
         seq: event.seq,
         cutoff: cutoffIndex,
-        saved: filePath !== null,
+        // 歷史檔沒寫成、但摘要的前言指向讀回工具的那一種也算（#2777）：原文在會話日誌裡。
+        saved: filePath !== null || summaryPointsToRecall(full),
         ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
       },
     };

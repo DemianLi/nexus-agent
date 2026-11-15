@@ -70,6 +70,15 @@ describe('共用元件一覽（COMPONENTS.md）', () => {
     expect(wrong.map((row) => `${row.name}（${row.file}）`)).toEqual([]);
   });
 
+  test('共用元件的檔名就是元件名的 kebab-case（`RowTrigger` 在 `row-trigger.tsx`）', () => {
+    const kebab = (name: string) => name.replace(/(?<!^)([A-Z])/g, '-$1').toLowerCase();
+    expect(
+      shared
+        .filter((row) => row.file.split('/').pop() !== `${kebab(row.name)}.tsx`)
+        .map((row) => `${row.name}（${row.file}）`),
+    ).toEqual([]);
+  });
+
   test('每一列都寫了用在哪', () => {
     const rows = [...base, ...shared];
     expect(rows.filter((row) => row.use.trim().length < 4).map((row) => row.name)).toEqual([]);

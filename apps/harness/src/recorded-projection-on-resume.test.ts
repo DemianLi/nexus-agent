@@ -30,7 +30,7 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-const PAD = '內容'.repeat(100);
+const PAD = '內容'.repeat(140);
 const PRUNER_OFF = '- id: tool-result-pruner\n  disabled: true';
 const SUMMARIZATION_OFF = '- id: summarization\n  disabled: true';
 

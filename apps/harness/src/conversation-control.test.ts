@@ -368,3 +368,67 @@ describe('hello', () => {
     expect(h.warnings).toEqual([]);
   });
 });
+
+describe('bind() 與橋的 attach 共用一條路（#2769）', () => {
+  it('bind() 回 ok、bound 已送出；同一條再綁一次也回 ok 並再送一次 bound', async () => {
+    const h = harness();
+    h.control.ready();
+    expect(await h.control.bind('t1')).toEqual({ ok: true });
+    expect(h.reports()).toEqual([{ type: 'ready' }, { type: 'bound', threadId: 't1' }]);
+    expect(await h.control.bind('t1')).toEqual({ ok: true });
+    expect(h.reports()).toEqual([{ type: 'bound', threadId: 't1' }]);
+    expect(h.opened).toEqual(['t1']);
+  });
+
+  it('已綁別條就拒，回原因、記一行、不改綁', async () => {
+    const h = harness();
+    await h.control.bind('t1');
+    h.reports();
+    const outcome = await h.control.bind('t2');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.reason).toContain('t1');
+    expect(h.warnings).toHaveLength(1);
+    expect(h.control.boundThread).toBe('t1');
+    expect(h.reports()).toEqual([]);
+  });
+
+  it('attached：沒綁與 open 還在跑都是 false，open 結束（含失敗）才是 true', async () => {
+    let release: () => void = () => undefined;
+    const h = harness(() => new Promise((resolve) => (release = resolve)));
+    expect(h.control.attached).toBe(false);
+    const pending = h.control.bind('t1');
+    expect(h.control.attached).toBe(false);
+    release();
+    await pending;
+    expect(h.control.attached).toBe(true);
+
+    const failed = harness(async () => {
+      throw new Error('日誌太大');
+    });
+    await failed.control.bind('t1');
+    expect(failed.control.attached).toBe(true);
+  });
+
+  it('isIdle 與回報給監督行程的閒置同一個口徑；沒綁不算閒；stopAdmission 轉給 handler', async () => {
+    const h = harness();
+    expect(h.control.isIdle()).toBe(false);
+    await h.control.bind('t1');
+    h.state.idle = false;
+    expect(h.control.isIdle()).toBe(false);
+    h.state.idle = true;
+    expect(h.control.isIdle()).toBe(true);
+    h.control.stopAdmission();
+    expect(h.stopped).toBe(1);
+  });
+
+  it('stdio 的 bind 照舊：送 bound、起心跳（沒旗標的路徑不動）', async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.control.ready();
+    h.send({ type: 'bind', threadId: 't1' });
+    await vi.advanceTimersByTimeAsync(1_500);
+    const types = h.reports().map((report) => report.type);
+    expect(types).toContain('bound');
+    expect(types).toContain('heartbeat');
+  });
+});

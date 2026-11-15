@@ -145,7 +145,7 @@ const big = (char: string, n: number) => char.repeat(n);
  * （#1396），所以要壓縮的那幾格把每句墊到比摘要框架大。框架約 60–70 token（歷史檔路徑裡的隨機 session id
  * 讓它每次差幾個），墊料要留足餘裕，不然這幾格會隨機被擋、而且被擋了只留一行 warn、測試照綠。
  */
-const PAD = '內容'.repeat(100);
+const PAD = '內容'.repeat(140);
 const echoCall = (id: string, message: string): Reply => ({
   tools: [{ id, name: 'echo', args: { message } }],
 });
