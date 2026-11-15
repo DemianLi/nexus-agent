@@ -122,6 +122,7 @@ jobs:
 
   # 視覺差異（#2766）：在同一台 runner 上把這個 commit 與上一個 commit 的 `guard/` 測試頁各拍一次（亮暗、每個子頁），列出畫面有差的。
   # **只報告、不紅**：`continue-on-error`，`report` 也不看它，所以不影響這一輪的結論；畫面本來就會改，有差不等於壞掉。
+  # 有差（或多了、少了畫面）時在對應的 PR 留言請作者確認，所以這個 job 另給 `pull-requests: write`；其他 job 照檔頭的 read。
   # 不存基準：兩邊都是當場拍的，字型與 Chrome 版本一定相同。拍照與比對在 `apps/web/visual/`，容差寫在 `compare.ts`。
   # 排在 `full` 後面（`needs`）而不是同時跑：同時跑會讓 ci.yml 檔頭算的同時 job 數多一個。`full` 紅了照跑。
   visual-diff:
@@ -131,6 +132,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -157,6 +161,23 @@ jobs:
         run: |
           VISUAL_BASE=$(git rev-parse HEAD^) node apps/web/visual/compare.ts \
             "$RUNNER_TEMP/visual/base" "$RUNNER_TEMP/visual/head" "$RUNNER_TEMP/visual/diff" >> "$GITHUB_STEP_SUMMARY"
+      # `comment.md` 只在有差時才有（`compare.ts`）。PR 號從 squash 合併的標題結尾 `(#N)` 取，同 `report`。
+      - name: 有差時在 PR 留言
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # commit 訊息是外部輸入，經環境變數傳，不用 ${{ }} 內插進 run。
+          MESSAGE: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          comment="$RUNNER_TEMP/visual/diff/comment.md"
+          [ -f "$comment" ] || exit 0
+          pr=$(printf '%s\n' "$MESSAGE" | head -n 1 | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+          if [ -z "$pr" ]; then
+            echo "標題裡沒有 PR 號，不留言。"
+            exit 0
+          fi
+          printf '\n圖在[這一輪](%s)的 artifact `visual-diff`。\n' "$RUN_URL" >> "$comment"
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file "$comment"
       - name: 上傳有差的畫面
         if: always()
         uses: actions/upload-artifact@v7

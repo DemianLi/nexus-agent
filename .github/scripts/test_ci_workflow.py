@@ -522,6 +522,23 @@ class PostMerge(unittest.TestCase):
         self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
         self.assertIn('apps/web/visual/compare.ts', runs)
 
+    def test_visual_diff_comments_on_the_pr(self) -> None:
+        """有差時在對應的 PR 留言請作者確認：寫 PR 的權限只給這一個 job，commit 訊息經環境變數傳，沒有留言檔或沒有 PR 號就不留。"""
+        job = self.wf['jobs']['visual-diff']
+        self.assertEqual(job['permissions'], {'contents': 'read', 'pull-requests': 'write'})
+        self.assertEqual(self.wf['permissions'].get('pull-requests'), 'read')
+        for name, other in self.wf['jobs'].items():
+            if name != 'visual-diff':
+                with self.subTest(job=name):
+                    self.assertNotIn('permissions', other)
+        step = next(step for step in job['steps'] if step.get('name') == '有差時在 PR 留言')
+        self.assertEqual(step['env']['MESSAGE'], '${{ github.event.head_commit.message }}')
+        self.assertNotIn('${{', step['run'])
+        self.assertIn('[ -f "$comment" ] || exit 0', step['run'])
+        self.assertIn('gh pr comment "$pr"', step['run'])
+        names = [step.get('name') for step in job['steps']]
+        self.assertLess(names.index('比對'), names.index('有差時在 PR 留言'))
+
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
         self.assertEqual(report['needs'], ['full', 'native-loop'])
