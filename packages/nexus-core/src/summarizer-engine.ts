@@ -52,6 +52,28 @@ export interface SummarizerEngineOptions {
     readonly maxLength?: number;
     readonly truncationText?: string;
   };
+  /**
+   * 生摘要的那一次呼叫改送什麼（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。回 `undefined`，或沒給這一格，
+   * 就照 `summaryPrompt` 的模板送一則訊息。
+   *
+   * @param request - 這次的 `wrapModelCall` 請求。
+   * @param messagesToSummarize - 要摘的那一段，有效訊息串的開頭。
+   * @param total - 有效訊息串的則數。
+   * @returns 整份請求，或 `undefined`。
+   */
+  readonly summaryCallOf?: (
+    request: SessionRequest,
+    messagesToSummarize: readonly BaseMessage[],
+    total: number,
+  ) => SummaryCall | undefined;
+}
+
+/** {@link SummarizerEngineOptions.summaryCallOf} 交回來的那一次呼叫。 */
+export interface SummaryCall {
+  /** 送出的訊息串。 */
+  readonly input: BaseMessage[];
+  /** 這次呼叫的選項（工具等）。 */
+  readonly options: Readonly<Record<string, unknown>>;
 }
 
 /** {@link SummarizerEngineOptions.sessionIdOf} 讀得到的那一部分請求。 */
@@ -99,6 +121,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     backend,
     summaryPrompt,
     sessionIdOf,
+    summaryCallOf,
     historyPathPrefix = '/conversation_history',
   } = options;
   const trigger = options.trigger;
@@ -387,13 +410,17 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
   async function createSummary(
     messages: readonly BaseMessage[],
     chatModel: unknown,
+    request: EngineRequest,
+    total: number,
   ): Promise<string> {
+    const model = chatModel as {
+      invoke(input: BaseMessage[], options?: unknown): Promise<{ text: string }>;
+    };
+    const call = summaryCallOf?.(request, messages, total);
+    if (call !== undefined) return (await model.invoke(call.input, call.options)).text;
     const conversation = getBufferString([...messages]);
     const prompt = summaryPrompt.replace('{conversation}', conversation);
-    const reply = await (
-      chatModel as { invoke(input: BaseMessage[]): Promise<{ text: string }> }
-    ).invoke([new HumanMessage({ content: prompt })]);
-    return reply.text;
+    return (await model.invoke([new HumanMessage({ content: prompt })])).text;
   }
 
   function buildSummaryMessage(summary: string, filePath: string | null): HumanMessage {
@@ -417,6 +444,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
     messagesToSummarize: readonly BaseMessage[],
     resolvedModel: unknown,
     request: EngineRequest,
+    total: number,
   ): Promise<{ summaryMessage: HumanMessage; filePath: string | null }> {
     const filePath = await offloadToBackend(messagesToSummarize, request);
     if (filePath === null)
@@ -425,7 +453,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
       );
     return {
       summaryMessage: buildSummaryMessage(
-        await createSummary(messagesToSummarize, resolvedModel),
+        await createSummary(messagesToSummarize, resolvedModel, request, total),
         filePath,
       ),
       filePath,
@@ -457,7 +485,12 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
           if (!isContextOverflow(err)) throw err;
         }
     }
-    const { summaryMessage } = await summarizeMessages(messagesToSummarize, resolvedModel, request);
+    const { summaryMessage } = await summarizeMessages(
+      messagesToSummarize,
+      resolvedModel,
+      request,
+      truncatedMessages.length,
+    );
     const modifiedMessages: BaseMessage[] = [summaryMessage, ...preservedMessages];
     const modifiedTokens = countTotalTokens(modifiedMessages, request.systemMessage, request.tools);
     try {
@@ -473,6 +506,7 @@ export function createSummarizerEngine(options: SummarizerEngineOptions): AgentM
         [...messagesToSummarize, ...preservedMessages],
         resolvedModel,
         request,
+        truncatedMessages.length,
       );
       return await handler({ ...request, messages: [reSumResult.summaryMessage] });
     }

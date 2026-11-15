@@ -293,6 +293,21 @@ describe('剪刀：先換記過的、再剪新的、新剪的當場記', () => {
     expect(port.appended).toBe(0);
   });
 
+  it('查找拋了（#2779）：不吞，這一步以那個錯失敗，剪刀不往下交、不記', async () => {
+    const boom = new Error('查找拋了');
+    const port = {
+      ...fakeLog(undefined),
+      recorded: () => {
+        throw boom;
+      },
+    };
+    const { base, seen } = spy();
+    const wrapped = withToolResultPruning(base, () => true, SMALL, port);
+    await expect(run(wrapped, [big('a')])).rejects.toBe(boom);
+    expect(seen).toEqual([]);
+    expect(port.appended).toBe(0);
+  });
+
   it('不給接口：行為同以前（每次重算）', async () => {
     const { base, seen } = spy();
     const wrapped = withToolResultPruning(base, () => true, SMALL);

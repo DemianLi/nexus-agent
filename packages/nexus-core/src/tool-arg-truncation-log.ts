@@ -28,6 +28,7 @@
  * @module
  */
 
+import { readingEvent } from './event-read-error.js';
 import { nexusContent, nexusToolCalls } from './nexus-message.js';
 import type { MessageContent, NexusMessage, NexusToolCall } from './nexus-message.js';
 import type { SessionEvent } from './session-log.js';
@@ -59,6 +60,7 @@ export interface NewlyTruncatedCall {
  *
  * @param events - 日誌事件，照 `seq` 排。
  * @returns 沒有 `compaction/truncate-args` 就是空 Map。
+ * @throws 某一顆 `compaction/truncate-args` 的內容讀不出來，見 {@link recordArgTruncationsInto}。
  */
 export function recordedArgTruncationsOf(events: readonly SessionEvent[]): RecordedArgTruncations {
   const recorded = new Map<string, Map<string, RecordedArgTruncation>>();
@@ -69,19 +71,23 @@ export function recordedArgTruncationsOf(events: readonly SessionEvent[]): Recor
 /**
  * 把一顆事件記的縮短收進 `recorded`，規則同 {@link recordedArgTruncationsOf}（同一個參數後記的蓋前記的）。不是
  * `compaction/truncate-args` 就不動。給逐顆累積的讀者（`model-history.ts` 的增量推導）。
+ *
+ * @throws 這顆事件的內容讀不出來：訊息帶事件種類與 `seq`，`cause` 是原錯（{@link readingEvent}）。
  */
 export function recordArgTruncationsInto(
   recorded: Map<string, Map<string, RecordedArgTruncation>>,
   event: SessionEvent,
 ): void {
   if (event.type !== 'compaction/truncate-args') return;
-  for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
-    let args = recorded.get(call.callId);
-    if (args === undefined) recorded.set(call.callId, (args = new Map()));
-    for (const [key, truncation] of Object.entries(call.args)) {
-      args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
+  readingEvent(event, () => {
+    for (const call of (event as SessionEvent<'compaction/truncate-args'>).data.calls) {
+      let args = recorded.get(call.callId);
+      if (args === undefined) recorded.set(call.callId, (args = new Map()));
+      for (const [key, truncation] of Object.entries(call.args)) {
+        args.set(key, { originalChars: truncation.originalChars, value: truncation.value });
+      }
     }
-  }
+  });
 }
 
 /**

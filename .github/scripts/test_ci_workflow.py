@@ -522,6 +522,23 @@ class PostMerge(unittest.TestCase):
         self.assertIn('git worktree add --detach "$RUNNER_TEMP/prev" HEAD^', runs)
         self.assertIn('apps/web/visual/compare.ts', runs)
 
+    def test_visual_diff_comments_on_the_pr(self) -> None:
+        """有差時在對應的 PR 留言請作者確認：寫 PR 的權限只給這一個 job，commit 訊息經環境變數傳，沒有留言檔或沒有 PR 號就不留。"""
+        job = self.wf['jobs']['visual-diff']
+        self.assertEqual(job['permissions'], {'contents': 'read', 'pull-requests': 'write'})
+        self.assertEqual(self.wf['permissions'].get('pull-requests'), 'read')
+        for name, other in self.wf['jobs'].items():
+            if name != 'visual-diff':
+                with self.subTest(job=name):
+                    self.assertNotIn('permissions', other)
+        step = next(step for step in job['steps'] if step.get('name') == '有差時在 PR 留言')
+        self.assertEqual(step['env']['MESSAGE'], '${{ github.event.head_commit.message }}')
+        self.assertNotIn('${{', step['run'])
+        self.assertIn('[ -f "$comment" ] || exit 0', step['run'])
+        self.assertIn('gh pr comment "$pr"', step['run'])
+        names = [step.get('name') for step in job['steps']]
+        self.assertLess(names.index('比對'), names.index('有差時在 PR 留言'))
+
     def test_report_turns_red_with_the_run(self) -> None:
         report = self.wf['jobs']['report']
         self.assertEqual(report['needs'], ['full', 'native-loop'])
@@ -650,17 +667,47 @@ class SandboxSpawner(unittest.TestCase):
         """發版傳 cache: 'false'：快取那一步要真的看這個 input。"""
         action = load(SPAWNER_ACTION)
         self.assertEqual(action['inputs']['cache']['default'], 'true')
-        cache = next(s for s in action['runs']['steps'] if '~/.cargo/registry' in str(s.get('with', {}).get('path', '')))
-        self.assertEqual(cache['if'], "inputs.cache == 'true'")
+        caches = [s for s in action['runs']['steps'] if '~/.cargo/registry' in str(s.get('with', {}).get('path', ''))]
+        self.assertEqual(len(caches), 2, '存得了的一份與只還原的一份')
+        for cache in caches:
+            self.assertTrue(cache['if'].startswith("inputs.cache == 'true' && "), cache['if'])
 
     def test_lints_with_the_pinned_toolchain(self) -> None:
         """fmt 與 clippy 用安裝那一步裝的元件；fmt 紅了 clippy 照樣跑，clippy 警告即錯（#2620）。"""
         self.assertIn('--component clippy --component rustfmt', self.steps['安裝釘住的 Rust']['run'])
         self.assertEqual(self.steps['格式']['run'], 'cargo fmt --all --check')
-        self.assertEqual(self.steps['clippy']['if'], '${{ !cancelled() }}')
+        self.assertEqual(self.steps['clippy']['if'], "${{ !cancelled() && inputs.test == 'true' }}")
         self.assertEqual(self.steps['clippy']['run'], 'cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings')
         names = list(self.steps)
         self.assertLess(names.index('clippy'), names.index('編譯'))
+
+    def test_only_the_e2e_per_thread_job_skips_lint_and_tests(self) -> None:
+        """e2e (per-thread) 只要 release 的監督行程（#2809）：`test` 預設 'true'，略過的是 fmt、clippy 與兩輪測試，編譯不略過、快取只還原不存；
+        只有那一個 job 帶 'false'，其餘用到 action 的 job（含發版）不帶，照舊跑測試。"""
+        action = load(SPAWNER_ACTION)
+        self.assertEqual(action['inputs']['test']['default'], 'true')
+        skipped = sorted(s['name'] for s in action['runs']['steps'] if 'name' in s and "inputs.test == 'true'" in str(s.get('if', '')))
+        self.assertEqual(skipped, sorted(['格式', 'clippy', '測試（musl）', '測試（glibc 的子行程）']))
+        self.assertNotIn('if', self.steps['編譯'])
+        caches = [s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache')]
+        self.assertEqual(
+            sorted((s['uses'], s['if']) for s in caches if 'target' in s['with']['path']),
+            [
+                ('actions/cache/restore@v6', "inputs.cache == 'true' && inputs.test != 'true'"),
+                ('actions/cache@v6', "inputs.cache == 'true' && inputs.test == 'true'"),
+            ],
+        )
+        users = {}
+        for path in (CI, ROOT / '.github' / 'workflows' / 'release.yml'):
+            for name, job in load(path)['jobs'].items():
+                for step in job.get('steps', []):
+                    if step.get('uses') == './.github/actions/sandbox-spawner':
+                        users[(path.name, name)] = step.get('with', {}).get('test', 'true')
+        self.assertEqual(
+            {key for key, value in users.items() if value != 'true'},
+            {('ci.yml', 'e2e-per-thread')},
+        )
+        self.assertEqual(users[('ci.yml', 'e2e-per-thread')], 'false')
 
     def test_bundle_keeps_the_exec_bit(self) -> None:
         """upload-artifact 不保留執行權限，所以先包成 tar。"""

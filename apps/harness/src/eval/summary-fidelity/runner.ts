@@ -15,7 +15,13 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { createSummarizer, DEFAULT_SUMMARIZATION, SessionLog, TokenAnchorBook } from '@nexus/core';
+import {
+  createSummarizer,
+  DEFAULT_SUMMARIZATION,
+  noteSentRequest,
+  SessionLog,
+  TokenAnchorBook,
+} from '@nexus/core';
 import type { StreamRetryOptions } from '@nexus/core';
 import { scoreMentions } from '../scorers.js';
 import type { FidelityQuestion, FidelityVariant } from './dataset.js';
@@ -41,6 +47,12 @@ export interface FidelityModels {
   ask(messages: readonly BaseMessage[]): Promise<string>;
   /** 摘要器那一次呼叫的重試政策。省略就不重試。 */
   readonly retry?: StreamRetryOptions;
+  /**
+   * 生摘要的請求形狀（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。`template`（預設）把要摘的那段攤成一個字串；
+   * `replay` 照 `history-source: log` 的出貨路徑：系統訊息、原訊息到切點為止、最後接摘要指令。這裡沒有日誌推導，
+   * 「送出去的那一串」就用摘要器手上的有效訊息串頂替；主模型那一格是罐頭，所以量不到前綴快取，只量保真度。
+   */
+  readonly summaryCall?: 'template' | 'replay';
 }
 
 /** 一題的結果。 */
@@ -117,6 +129,10 @@ export async function runFidelityVariant(
   models: FidelityModels,
 ): Promise<FidelityVariantResult> {
   const log = new SessionLog(`summary-fidelity-${variant.id}`);
+  const replay = models.summaryCall === 'replay';
+  const systemMessage = new SystemMessage(ANSWER_SYSTEM_PROMPT);
+  // 摘要器這一步看到的有效訊息串：第一段是整串 state，之後是「上一次交下去的那一串、罐頭回覆、新的一段」。
+  let effective: BaseMessage[] = [];
   const middleware = createSummarizer(
     // 歷史檔寫進空的替身，不落盤。
     { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
@@ -134,6 +150,8 @@ export async function runFidelityVariant(
     undefined,
     undefined,
     models.retry,
+    undefined,
+    replay ? () => effective : undefined,
   );
   // 兩格都要給：摘要器靠它們認出是同一條對話的呼叫，下一段才會接著上一次的切點摘，而不是從原文重摘。
   const runtime = {
@@ -150,6 +168,8 @@ export async function runFidelityVariant(
   const summaries: FidelityVariantResult['summaries'][number][] = [];
   for (const [index, segment] of variant.segments.entries()) {
     state.push(...segment);
+    effective = [...effective, ...segment];
+    if (replay) noteSentRequest(log, [[systemMessage]], {});
     const before = summaryCount();
     const startedAt = performance.now();
     await middleware.wrapModelCall?.(
@@ -158,7 +178,7 @@ export async function runFidelityVariant(
         state: { messages: [...state] },
         runtime,
         model: models.summaryModel,
-        systemMessage: new SystemMessage(ANSWER_SYSTEM_PROMPT),
+        systemMessage,
         tools: [],
       } as never,
       ((request: { messages: readonly BaseMessage[] }) => {
@@ -180,7 +200,9 @@ export async function runFidelityVariant(
       summaryChars: textOf(summary).length,
       retainedMessages: seen.length - 1,
     });
-    state.push(new AIMessage(CANNED_REPLY));
+    const canned = new AIMessage(CANNED_REPLY);
+    state.push(canned);
+    effective = [...seen, canned];
   }
 
   const summaryText = squash(seen.filter(isSummary).map(textOf).join('\n'));

@@ -285,11 +285,16 @@ export function resolveToolResultPruneConfig(
  * 組裝在 {@link ./summarization.ts} 的 `createSummarizer`（那裡有會話註冊表與「這次請求真正送出去的是哪一段」）。
  */
 export interface ToolResultPruneLog {
-  /** 這次請求所屬那份日誌上記過的剪法；**找不到日誌**（沒接註冊表、認不出呼叫者）是 `undefined`，剪刀退回每次重算。 */
+  /**
+   * 這次請求所屬那份日誌上記過的剪法；**找不到日誌**（沒接註冊表、認不出呼叫者）是 `undefined`，剪刀退回每次重算。
+   * **查找本身拋了**（`forCall` 內 `pickSessionForCall` 補寫 `subagent/catalog` 等登記寫不進去，見 `registry.ts` 的 `writePendingCatalog`）不吞，
+   * 原錯往外拋、這一步失敗（#1665、#2779）：不知道日誌上有什麼，剪也好不剪也好都會讓模型看到的與日誌分家。
+   */
   recorded(request: PruneRequest): RecordedPrunes | undefined;
   /**
    * 把這次新剪的記進日誌。**回 `false` 表示記不進去**（接口自己講 warn），剪刀這次不套用新剪的
-   * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)：日誌與模型看到的不能分家）；沒有要記的也回 `true`。不拋。
+   * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)：日誌與模型看到的不能分家）；沒有要記的也回 `true`。
+   * 只有**寫入**失敗回 `false`；查找拋了原錯往外拋（同 `recorded`）。
    */
   record(request: PruneRequest, results: readonly NewlyPruned[]): boolean;
 }
@@ -331,6 +336,9 @@ export interface PruneRequest {
  * 於是日誌就是模型看到的那一份的唯一來源：門檻、頭尾長度改了、壓力退了（摘要之後常見），已經剪過的仍是當時剪成的樣子。
  * **行為上與以前的差別只有一處**：以前壓力退了之後原文會回來（剪刀每次從原文重算、壓力不到就不碰），現在不會。
  * 沒有日誌（`log` 省略、或找不到那份日誌）時退回以前的每次重算。
+ *
+ * **查找拋了，這一步失敗**（#2779）：`recorded`／`record` 的查找錯誤不吞，往外拋。查找錯誤不退回「每次重算」——那條路不經 `record`，
+ * 會變成「模型看到剪過的、日誌沒有」。
  *
  * **記不進去，新剪的不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`record` 回 `false` 就照記過的剪法送出，
  * 不套用這次新剪的；記過的照樣套用。

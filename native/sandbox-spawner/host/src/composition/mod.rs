@@ -13,15 +13,15 @@
 //! - 一起來先綁兩個 socket（舊的先刪掉）再送 `hello`（不宣告 loop 在自己這裡）：監督行程讀到 `hello` 時兩個 socket 都已經在聽。
 //!   監督行程的第一框要是同一版的 `hello`；它帶的 token 還用不到。
 //! - `leaf{pid}`：交給橋，橋只認這個 pid 的連線；已經連著的葉子斷掉。
-//! - `ready` 只送一次：葉子在橋上驗過、而且送了第一則 `register`（清單可以是空的）之後。換了葉子不再送。`ready` 之前不收前台的連線。
-//! - `bind`（`ready` 之後才合法）：thread 記第一次的，之後每一則都要相同。
+//! - `ready` 每個葉子送一次：葉子在橋上驗過、而且送了第一則 `register`（清單可以是空的）之後。第一則 `ready` 之前不收前台的連線。
+//! - `bind`（第一則 `ready` 之後才合法）：thread 記第一次的，之後每一則都要相同。
 //!   - 現在的葉子驗過並 `register` 了、還沒綁過：馬上在橋上 `attach`，葉子回成功才送 `bound`。
 //!   - 沒有這樣的葉子（斷了、換了還沒到）：留著，等葉子 `register` 那一刻再 `attach`。
 //!   - `attach` 沒成功（葉子回錯、送不出去、回之前斷線）：記一行，不送 `bound`，不替下一個葉子重試，等監督行程再送 `bind`。
 //! - 心跳：收到第一則 `bind` 起每 [`HEARTBEAT`] 送一次，之後不停。
 //! - `drain`：不該送到這裡（只有宣告 loop 的行程回答），記一行、不理。
 //! - 葉子斷線：照活，等下一則 `leaf{pid}`。
-//! - 協定錯誤（回 3）：第一框不是同一版的 `hello`；解不開的框或訊息；`ready` 之前的 `bind`；thread 不同或不是 UTF-8 的 `bind`；
+//! - 協定錯誤（回 3）：第一框不是同一版的 `hello`；解不開的框或訊息；第一則 `ready` 之前的 `bind`；thread 不同或不是 UTF-8 的 `bind`；
 //!   現在的葉子已經綁了、`attach` 還沒回、或已經有一則留著時又來的 `bind`。
 //! - stdin 讀到 EOF 或收到 SIGTERM：刪掉兩個 socket、回 0。
 
@@ -163,6 +163,7 @@ struct Composition {
     term: OwnedFd,
     /// 收到監督行程的 `hello` 了。
     hello: bool,
+    /// 送過第一則 `ready`。
     ready: bool,
     /// 現在的葉子驗過、而且送過 `register`。
     registered: bool,
@@ -384,9 +385,8 @@ impl Composition {
                     if std::mem::replace(&mut self.registered, true) {
                         continue;
                     }
-                    if !std::mem::replace(&mut self.ready, true) {
-                        self.report(&ConversationReport::Ready);
-                    }
+                    self.ready = true;
+                    self.report(&ConversationReport::Ready);
                     if std::mem::take(&mut self.held) {
                         self.attach();
                     }

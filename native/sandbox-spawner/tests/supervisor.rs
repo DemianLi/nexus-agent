@@ -1928,6 +1928,165 @@ fn shutdown_answers_a_thread_waiting_for_its_drain_answer_once() {
     );
 }
 
+/// 停機時排著的那條 thread，自己原來的行程被逐出、還在收：它收完回的 `down(evicted)` 前台不當回答，所以停機當場回 `down(shutdown)`（#2799）。
+/// `ignore-eof` 加長的 `--eof-grace-ms` 撐開「回了 `drained`、還在收」那段；`b` 的 `capacity` 回來就表示前面那則 `ensure(a)` 已經排進去了。
+#[test]
+fn shutdown_answers_a_thread_queued_behind_its_own_evicted_one() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 2_000,
+        extra: vec!["--idle-ms", "300", "--capacity", "1"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,ignore-eof";
+    let old = h.up(thread);
+    assert!(wait_until(|| log(&old).contains(&"eof".to_string())));
+    h.ensure(thread);
+    h.ensure("b");
+    assert_eq!(h.next_event(), Some(capacity("b", 1, 1)));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    // 先回答排著的，被逐出的那個收完才回它自己的 `down`。
+    assert_eq!(
+        events,
+        [
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Evicted
+            },
+        ]
+    );
+}
+
+/// 停機時排著的那條 thread，自己原來的行程還沒回答 `drain`；前台還沒回 `admission-stopped` 的這段它才回 `drained`。
+/// 這時不算逐出：照停機的順序收，回的是 `down(shutdown)`，排著的那則 `ensure` 才有回答（#2799）。
+/// 前台不回 `admission-stopped`，`--admission-timeout-ms` 把那段撐到 2.5 秒；`slow-drain:1000` 讓 `drained` 落在裡面；
+/// `--drain-timeout-ms` 拉長，免得 `drain` 先逾時。
+#[test]
+fn a_drain_answered_during_shutdown_is_down_shutdown_not_evicted() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec![
+            "--capacity",
+            "2",
+            "--admission-timeout-ms",
+            "2500",
+            "--drain-timeout-ms",
+            "60000",
+        ],
+        ..Options::default()
+    });
+    let thread = "a,idle:1000,slow-drain:1000";
+    let a = h.up(thread);
+    let x = h.up("x");
+    h.ensure("b");
+    assert!(saw_drain(&a));
+    h.ensure(thread);
+    // 前台的要求照順序處理：x 回了 `up`，前一個 `ensure` 就已經排進去了。
+    assert_eq!(h.up("x"), x);
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    let downs_of_a: Vec<_> = events
+        .iter()
+        .filter(
+            |e| matches!(e, FrontEvent::Down { thread_id, .. } if thread_id == thread.as_bytes()),
+        )
+        .collect();
+    assert_eq!(
+        downs_of_a,
+        [&FrontEvent::Down {
+            thread_id: thread.as_bytes().to_vec(),
+            cause: DeathCause::Shutdown
+        }],
+        "{events:?}"
+    );
+}
+
+/// 過了閒置上限被送 `drain`、停機中才回 `drained`：不收，它還閒置著也不再送 `drain`（停機不送）；照停機收，回 `down(shutdown)`。
+/// `slow-drain:800` 讓回答落在前台還沒回 `admission-stopped` 的那段；再被送 `drain` 的話，它的紀錄會多一行。
+#[test]
+fn a_drain_answered_during_shutdown_is_not_sent_again() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--idle-ms", "300", "--admission-timeout-ms", "2500"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,slow-drain:800";
+    let a = h.up(thread);
+    assert!(saw_drain(&a));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    assert_eq!(
+        events,
+        [
+            FrontEvent::StopAdmission,
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+        ]
+    );
+    let drains = log(&a).iter().filter(|line| *line == "drain").count();
+    assert_eq!(drains, 1, "{:?}", log(&a));
+}
+
+/// 停機不送 `drain`：前台還沒回 `admission-stopped` 的那段，`release` 一條閒置的、或先前 `release` 過的這時才回報閒置，都不送；
+/// 兩條都照停機收。
+#[test]
+fn release_during_shutdown_sends_no_drain() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--admission-timeout-ms", "1500"],
+        ..Options::default()
+    });
+    let late = "late,wait-go,idle:0";
+    let b = h.up_read_only(late);
+    h.release(late);
+    let c = h.up_read_only("c,idle:0");
+    kill(h.pid(), libc::SIGTERM);
+    assert_eq!(h.event(), FrontEvent::StopAdmission);
+    h.release("c,idle:0");
+    std::fs::write(format!("{}.go", b.display()), b"").unwrap();
+    assert!(wait_until(|| log(&b).contains(&"idle".to_string())));
+    let mut downs = Vec::new();
+    while let Some(event) = h.next_event() {
+        downs.push(event);
+    }
+    downs.sort_by_key(|e| format!("{e:?}"));
+    assert_eq!(
+        downs,
+        [
+            FrontEvent::Down {
+                thread_id: late.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: b"c,idle:0".to_vec(),
+                cause: DeathCause::Shutdown
+            },
+        ]
+    );
+    for socket in [&b, &c] {
+        assert!(
+            !log(socket).contains(&"drain".to_string()),
+            "{:?}",
+            log(socket)
+        );
+    }
+}
+
 /// 宿主在另一個 package，跟監督行程編進同一個 target 目錄。
 fn host_bin() -> PathBuf {
     Path::new(SUPERVISOR).parent().unwrap().join("nexus-host")
@@ -3197,6 +3356,127 @@ fn ensure_after_the_leaf_died_refills_the_leaf_behind_the_same_socket() {
     assert_eq!(composition_pid(&h, &socket), composition);
 }
 
+/// 起一對、讓第一個葉子登記完（`--ready-before-register` 的葉子等 `.go` 才連橋），再殺掉它並要回同一條 thread：
+/// 回來時補起的葉子已經起來、還沒連橋。回前台連的 socket 與葉子的 socket。
+fn refilled_leaf_waiting_to_register(h: &mut Harness) -> (PathBuf, PathBuf) {
+    h.ensure("a");
+    let leaf = h.dir.join("run/c1.l.sock");
+    let go = format!("{}.go", leaf.display());
+    let readies = |leaf: &Path| log(leaf).iter().filter(|line| *line == "ready").count();
+    assert!(wait_until(|| readies(&leaf) == 1));
+    std::fs::write(&go, b"").unwrap();
+    let socket = h.up_of("a");
+    std::fs::remove_file(&go).unwrap();
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    h.ensure("a");
+    assert!(wait_until(|| readies(&leaf) == 2));
+    (socket, leaf)
+}
+
+/// 補起的葉子登記得慢（超過 `--stall-ms`）：登記之前不算它的沉默，登記完照常 `up`。
+#[test]
+fn a_refilled_leaf_slow_to_register_is_not_stalled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let (socket, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let new = last_leaf_pid(&leaf);
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert!(!gone(new as i32));
+    std::fs::write(format!("{}.go", leaf.display()), b"").unwrap();
+    assert_eq!(h.up_of("a"), socket);
+    assert_eq!(leaf_behind(&socket), new);
+    shut_down(&mut h);
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
+    );
+}
+
+/// 補起的葉子一直沒登記：不判 `stalled`，停機時跟組合行程一起收掉。
+#[test]
+fn shutdown_collects_a_refilled_leaf_that_never_registered() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let (_, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let new = last_leaf_pid(&leaf);
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert!(!gone(new as i32));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    assert!(gone(new as i32));
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
+    );
+}
+
+/// 補起的葉子還沒登記就死：前台拿到這條 thread 的一則 `down`，組合行程連帶收；再要就起新的一對。
+#[test]
+fn a_refilled_leaf_killed_before_it_registers_takes_the_pair_down_once() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        ..paired()
+    });
+    let (socket, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let composition = composition_pid(&h, &socket);
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert!(wait_until(|| gone(composition as i32)));
+
+    h.ensure("a");
+    let next = h.dir.join("run/c2.l.sock");
+    assert!(wait_until(|| log(&next).contains(&"ready".to_string())));
+    std::fs::write(format!("{}.go", next.display()), b"").unwrap();
+    // 中間再來一則 `down` 的話 `up_of` 會當場失敗。
+    assert_eq!(h.up_of("a"), h.dir.join("run/c2.sock"));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// 補起的葉子登記、綁定之後卡住：照 `--stall-ms` 被收，跟第一個葉子一樣。
+#[test]
+fn a_refilled_leaf_that_hangs_after_bound_is_stalled() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let socket = h.up("a,hang");
+    let leaf = leaf_socket(&socket);
+    let old = last_leaf_pid(&leaf);
+    assert_eq!(h.down_of("a,hang"), DeathCause::Stalled);
+    assert_eq!(h.up("a,hang"), socket);
+    assert_ne!(last_leaf_pid(&leaf), old);
+    assert_eq!(h.down_of("a,hang"), DeathCause::Stalled);
+    let stalled = |h: &Harness| {
+        pair_audit(h)
+            .iter()
+            .filter(|line| {
+                line.contains("\"cause\":\"stalled\"") && line.contains("\"role\":\"conversation\"")
+            })
+            .count()
+    };
+    assert!(wait_until(|| stalled(&h) == 2), "{:?}", pair_audit(&h));
+}
+
 /// 補起的葉子在舊葉子收屍之後才起：舊葉子留在同一個群組的子孫，新葉子 `up` 時已經不在了。
 #[test]
 fn the_leaf_is_refilled_after_the_old_one_is_reaped() {
@@ -3305,6 +3585,37 @@ fn shutdown_answers_a_thread_queued_behind_a_composition_that_will_not_tell_down
             thread_id: b"a".to_vec(),
             cause: DeathCause::Shutdown
         }]
+    );
+}
+
+/// 成對時也一樣（#2799）：被逐出、還在收的是葉子，它收完回的是 `down(evicted)`；組合行程等它收完才連帶收、不回 `down`。
+/// 兩個都不是排著那則 `ensure` 的回答，所以停機當場回 `down(shutdown)`。
+#[test]
+fn shutdown_answers_a_thread_queued_behind_its_own_evicted_leaf() {
+    let mut h = Harness::start(Options {
+        eof_grace_ms: 2_000,
+        extra: vec!["--idle-ms", "300", "--capacity", "1"],
+        ..paired()
+    });
+    let thread = "a,idle:0,ignore-eof";
+    let socket = h.up(thread);
+    let leaf = leaf_socket(&socket);
+    assert!(wait_until(|| log(&leaf).contains(&"eof".to_string())));
+    h.ensure(thread);
+    h.ensure("b");
+    assert_eq!(h.next_event(), Some(capacity("b", 1, 1)));
+    assert_eq!(
+        shut_down(&mut h),
+        [
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Evicted
+            },
+        ]
     );
 }
 
