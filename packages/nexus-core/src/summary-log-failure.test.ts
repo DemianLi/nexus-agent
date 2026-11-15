@@ -44,12 +44,29 @@ const TOKEN_TRIGGER: Partial<SummarizationSettings> = {
 function rig(
   settings: Partial<SummarizationSettings>,
   fail: boolean,
-  options: { failType?: string; pruning?: ToolResultPruneConfig } = {},
+  options: {
+    failType?: string;
+    pruning?: ToolResultPruneConfig;
+    /** 第幾次 `forCall` 起拋（從 1 數）；省略就不拋。 */
+    forCallThrowsFrom?: number;
+    /** 只在第幾次 `forCall` 拋（從 1 數）；其餘照常。 */
+    forCallThrowsAt?: number;
+  } = {},
 ) {
   const failType = options.failType ?? 'compaction/summary';
   const log = new SessionLog('s');
+  let forCalls = 0;
   const sessions = {
-    forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
+    forCall: (): SessionLookup => {
+      forCalls += 1;
+      if (
+        (options.forCallThrowsFrom !== undefined && forCalls >= options.forCallThrowsFrom) ||
+        options.forCallThrowsAt === forCalls
+      ) {
+        throw new Error('查找拋了');
+      }
+      return { kind: 'ok', address: { kind: 'root' }, log };
+    },
   };
   const real = log.append.bind(log);
   let summaryAppends = 0;
@@ -264,5 +281,32 @@ describe('compaction/prune 記不進去：這次新剪的不生效', () => {
     expect(resultOf(r.handled[0]!)?.content).toBe('結'.repeat(500));
     expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
     expect(r.reports).toEqual([expect.stringContaining('compaction/prune 記不進去')]);
+  });
+
+  // #2779：查找拋了跟找不到日誌是兩回事。找不到才退回每次重算；拋了，不知道日誌上有什麼，這次一顆都不剪。
+  // 這裡只讓指定的那一次 `forCall` 拋，其餘照常，所以請求會走到模型，看得到有沒有剪。
+  it('recorded 的查找拋了：不剪、不記、不 warn，模型收到原文', async () => {
+    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsAt: 1 });
+    const out = await r.call(withTool());
+    expect(out.error).toBeUndefined();
+    expect(resultOf(r.handled[0]!)?.content).toBe('結'.repeat(500));
+    expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
+    expect(r.reports).toEqual([]);
+  });
+
+  it('record 的查找拋了：新剪的不套用、warn 一條、不記，模型收到原文', async () => {
+    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsAt: 2 });
+    const out = await r.call(withTool());
+    expect(out.error).toBeUndefined();
+    expect(resultOf(r.handled[0]!)?.content).toBe('結'.repeat(500));
+    expect(r.log.events.filter((event) => event.type === 'compaction/prune')).toEqual([]);
+    expect(r.reports).toEqual([expect.stringContaining('compaction/prune 認不出日誌')]);
+  });
+
+  it('下游不吞的查找一直拋：這一步以那個錯失敗（大聲），沒有請求交到模型', async () => {
+    const r = rig(TOKEN_TRIGGER, false, { pruning: PRUNE, forCallThrowsFrom: 1 });
+    const out = await r.call(withTool());
+    expect(out.error).toEqual(new Error('查找拋了'));
+    expect(r.handled).toEqual([]);
   });
 });
