@@ -31,7 +31,12 @@ import { EMBED_IDENTITIES_FILE } from './embed-identities.js';
 import { EMBED_EXCHANGE_PATH } from './embed-login.js';
 import { EMBED_SESSION_PATH } from './embed-session.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
-import { fakeEndpoint, hasTools, liveModelPatch, mainOnly } from './log-derived-history.fixture.js';
+import {
+  fakeEndpoint,
+  isMainCall,
+  liveModelPatch,
+  mainOnly,
+} from './log-derived-history.fixture.js';
 import type { FakeEndpoint, WireMessage } from './log-derived-history.fixture.js';
 import { FrontForwarder } from './front-forward.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -1009,7 +1014,7 @@ describe.skipIf(SUPERVISOR === undefined)(
     /** 主呼叫裡最後一則人話含 `prompt` 的那一次，回它每一則（系統以外）的角色與文字。 */
     function requestFor(upstream: FakeEndpoint, prompt: string): string[] {
       const body = upstream.bodies.findLast(
-        (candidate) => hasTools(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
+        (candidate) => isMainCall(candidate) && textOf(candidate.messages.at(-1)!).includes(prompt),
       );
       if (body === undefined) throw new Error(`模型沒收到「${prompt}」那一次`);
       return body.messages

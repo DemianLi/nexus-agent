@@ -190,6 +190,19 @@ describe('每一種產訊息的事件', () => {
   });
 });
 
+describe('補結句子的字面（#2828）', () => {
+  // 這兩句是模型讀得到的文字，措辭就是行為（docs/conversation-replay-vs-dsh.md 第二節）。
+  // 寫死字串、不引用常數，改字要同時改這格，是刻意的摩擦。
+  it('兩個常數的完整字面', () => {
+    expect(TOOL_OUTCOME_UNKNOWN_TEXT).toBe(
+      'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.',
+    );
+    expect(TOOL_NOT_STARTED_TEXT).toBe(
+      'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.',
+    );
+  });
+});
+
 describe('哪幾種事件進模型（#681）', () => {
   it('恰好五種：turn/start、assistant/message、tool/result、user/message、compaction/summary', () => {
     expect([...MODEL_VISIBLE_EVENT_TYPES].sort()).toEqual([
@@ -1323,6 +1336,109 @@ describe('推不出來', () => {
       kind: 'unreplayable',
       reason: 'summary-missing',
       seq: bare.seq,
+    });
+  });
+});
+
+describe('事件的 data 讀不出來（#2836）', () => {
+  /** 把指定種類的每一顆事件的 `data` 換成 `data`，其餘不動。 */
+  function withBrokenData(log: SessionLog, type: string, data: unknown): SessionEvent[] {
+    return log.events.map((event) =>
+      event.type === type ? ({ ...event, data } as unknown as SessionEvent) : event,
+    );
+  }
+
+  /** 造一份含 `type` 那種事件的日誌：`compaction/summary` 用帶壓縮的兩輪，其餘用一輪工具呼叫加插話。 */
+  function logWith(type: string): SessionLog {
+    const log = new SessionLog('replay');
+    if (type === 'compaction/summary') {
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('assistant/message', { message: reply('二') });
+      log.append('turn/end', {});
+      log.append('turn/start', { kind: 'message', text: '三' });
+      log.append('compaction/summary', {
+        summary: summaryMessage('摘要'),
+        cutoffIndex: 1,
+        messagesBefore: 3,
+        beforeCall: true,
+      } as never);
+      log.append('assistant/message', { message: reply('四') });
+      log.append('turn/end', {});
+      return log;
+    }
+    log.append('turn/start', { kind: 'message', text: '列一下' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'ls']]) });
+    tool(log, 'c1', 'ls', 'a.txt');
+    log.append('user/message', {
+      message: toLoggedMessage(new HumanMessage('插話')),
+      source: { kind: 'user' },
+    } as never);
+    log.append('assistant/message', { message: reply('完') });
+    log.append('turn/end', {});
+    return log;
+  }
+
+  it.each(['turn/start', 'assistant/message', 'tool/result', 'user/message', 'compaction/summary'])(
+    '%s 的 data 壞掉：錯誤訊息帶事件種類與 seq，原錯在 cause',
+    (type) => {
+      const log = logWith(type);
+      const seq = log.events.find((event) => event.type === type)?.seq;
+      const events = withBrokenData(log, type, null);
+
+      let thrown: unknown;
+      try {
+        replayConversation(events);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(
+        new RegExp(`^${type.replace('/', '\\/')} 事件讀不出來（seq ${seq}）：`),
+      );
+      expect((thrown as Error).cause).toBeInstanceOf(Error);
+    },
+  );
+
+  it.each(['model/end', 'tool/call', 'turn/end'])(
+    '記帳那幾種裡會讀 data 的（%s）壞掉：一樣帶事件種類與 seq',
+    (type) => {
+      const log = new SessionLog('replay');
+      log.append('turn/start', { kind: 'message', text: '列一下' });
+      log.append('model/start', {});
+      log.append('model/end', {});
+      log.append('assistant/message', { message: asking('好', [['c1', 'ls']]) });
+      tool(log, 'c1', 'ls', 'a.txt');
+      log.append('assistant/message', { message: reply('完') });
+      log.append('turn/end', {});
+      const seq = log.events.find((event) => event.type === type)?.seq;
+
+      expect(() => replayConversation(withBrokenData(log, type, null))).toThrow(
+        new RegExp(`^${type.replace('/', '\\/')} 事件讀不出來（seq ${seq}）：`),
+      );
+    },
+  );
+
+  it('對照：記帳那幾種裡不讀 data 的（model/start）壞了也不影響，推得出來的照推', () => {
+    const log = logWith('tool/result');
+    log.append('model/start', {});
+    const events = withBrokenData(log, 'model/start', null);
+
+    expect(shape(replayConversation(events))).toContain('tool:c1:a.txt');
+  });
+
+  it('對照：result-missing 走 unreplayable，不拋', () => {
+    const log = logWith('tool/result');
+    const call = log.events.find((event) => event.type === 'tool/result');
+    const events = log.events.map((event) =>
+      event === call
+        ? ({ ...event, data: { callId: 'c1', isError: false } } as unknown as SessionEvent)
+        : event,
+    );
+
+    expect(replayConversation(events)).toEqual({
+      kind: 'unreplayable',
+      reason: 'result-missing',
+      seq: call?.seq,
     });
   });
 });

@@ -140,6 +140,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
 import { createMiddleware } from 'langchain';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { noteSentRequest } from './last-sent-request.js';
 import { bindRequestModel, previewCallParams } from './model-bind.js';
 import { withModelCallStep } from './model-call-step.js';
 import type { AgentMiddleware } from './base-types.js';
@@ -475,6 +476,7 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
     );
     this.call?.ensureStarted();
     if (this.flushBeforeDispatch) await this.sessions.flush(this.log);
+    noteSentRequest(this.log, messages, extraParams?.['options']);
   }
 }
 
@@ -523,7 +525,7 @@ export function firstDifference(
 }
 
 /**
- * 推導之前已經記過快照時，模型被叫那一刻只比對、不寫：實際要送的跟預先記的對不上，這次請求不送（`raiseError`）。
+ * 推導之前已經記過快照時，模型被叫那一刻只比對、不寫日誌（仍記下送出的請求，給生摘要重播，見 `last-sent-request.ts`）：實際要送的跟預先記的對不上，這次請求不送（`raiseError`）。
  * 兩邊經同一組 {@link extractRequest}，有損的格子（工具只留三格、`max_tokens` 別名、`-0`）壓平的方式相同。
  */
 class RequestSnapshotCheckHandler extends BaseCallbackHandler {
@@ -531,7 +533,10 @@ class RequestSnapshotCheckHandler extends BaseCallbackHandler {
   override awaitHandlers = true;
   override raiseError = true;
 
-  constructor(private readonly expected: ExtractedRequest) {
+  constructor(
+    private readonly expected: ExtractedRequest,
+    private readonly log: SessionLog,
+  ) {
     super();
   }
 
@@ -556,6 +561,7 @@ class RequestSnapshotCheckHandler extends BaseCallbackHandler {
         `請求快照與實際要送的對不上，這次請求不送：${difference}。快照寫好之後有東西改了請求`,
       );
     }
+    noteSentRequest(this.log, messages, extraParams?.['options']);
   }
 }
 
@@ -657,7 +663,7 @@ export function createRequestSnapshotRecorder(
       const watcher =
         expected === undefined
           ? new RequestSnapshotHandler(log, call, sessions, options.flushBeforeDispatch)
-          : new RequestSnapshotCheckHandler(expected);
+          : new RequestSnapshotCheckHandler(expected, log);
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({

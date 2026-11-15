@@ -49,6 +49,7 @@ import {
   HISTORY_SHADOW_KINDS,
   ModelHistoryCache,
   SessionRegistry,
+  SUMMARY_INSTRUCTION,
   isBlankContent,
   replayConversation,
   toBaseMessage,
@@ -113,20 +114,26 @@ export interface Reply {
   chunky?: boolean;
 }
 
-/** 腳本：第幾次請求（含標題、摘要這類不帶工具的）與它的 body → 回什麼。 */
+/** 腳本：第幾次請求（含標題、生摘要這類非主呼叫的）與它的 body → 回什麼。 */
 export type Script = (index: number, body: Body) => Reply;
 
-export const hasTools = (body: Body): boolean => (body.tools?.length ?? 0) > 0;
+/** 生摘要的重播（#2775）：帶著上一次主請求的工具，最後一則是摘要指令。 */
+export const isSummaryReplay = (body: Body): boolean =>
+  body.messages.at(-1)?.content === SUMMARY_INSTRUCTION;
+
+/** 主呼叫：帶工具，而且不是生摘要的重播。標題、模板摘要不帶工具。 */
+export const isMainCall = (body: Body): boolean =>
+  (body.tools?.length ?? 0) > 0 && !isSummaryReplay(body);
 
 /**
- * 只對「主呼叫」（帶工具的）編號的腳本；標題、摘要這類不帶工具的呼叫一律回固定字串，不佔號。
+ * 只對主呼叫（{@link isMainCall}）編號的腳本；標題、生摘要這類呼叫一律回固定字串，不佔號。
  *
  * 腳本有狀態：主呼叫編號存在回傳的腳本裡、跨請求累計，一份只給一次 {@link runServeDriver}（或其他收 {@link Script} 的跑法）用。
  * 同一次呼叫裡的重啟照樣接著數；對照組與重啟組是兩次呼叫，各要一份，共用時後一組的 `k` 不從 0 起算。
  */
 export const mainOnly = (script: (k: number) => Reply): Script => {
   let k = 0;
-  return (_index, body) => (hasTools(body) ? script(k++) : { content: '【輔助呼叫】' });
+  return (_index, body) => (isMainCall(body) ? script(k++) : { content: '【輔助呼叫】' });
 };
 
 export interface FakeEndpoint {
@@ -499,7 +506,7 @@ function withoutUnreachedAborted<T extends SessionEvent>(
 }
 
 /**
- * 對每次主呼叫比一次。`events` 是整份日誌，`mainBodies` 是假端點收到的、帶工具的 body，照順序。
+ * 對每次主呼叫比一次。`events` 是整份日誌，`mainBodies` 是假端點收到的主呼叫（{@link isMainCall}）body，照順序。
  *
  * 主呼叫的數量必須等於日誌裡 root 的 `model/start` 數——對不上就是量具壞了（少一邊的話逐個配對會默默漏比），
  * 當場拋。每次主呼叫同時拿增量推導（{@link ModelHistoryCache}，#2349）跟整份重算比，逐則序列化不同也當場拋：
@@ -638,7 +645,7 @@ const finish = (
   return {
     events,
     bodies,
-    mainBodies: bodies.filter(hasTools),
+    mainBodies: bodies.filter(isMainCall),
     ...(counts !== undefined && { shadow: counts }),
     ...(lines !== undefined && { shadowLines: lines }),
   };
@@ -940,7 +947,7 @@ export const settle = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * 等到每個擁有者的主呼叫（帶工具的請求）都至少有預期的次數，或到 `ms` 為止。
+ * 等到每個擁有者的主呼叫（{@link isMainCall}）都至少有預期的次數，或到 `ms` 為止。
  *
  * 背景子代理的後續呼叫、root 被叫醒再跑的一輪，何時發生看機器快慢，所以等次數，不睡固定時間。影子比對掛在組裝點，在請求送出之前就數了，
  * 所以主呼叫數到了，影子計數就到了；日誌要等回應寫完，仍靠 {@link runServeDriver} 收尾的那一小段睡眠。
@@ -962,7 +969,7 @@ export async function waitForMainCalls(
   for (;;) {
     const seen: Record<string, number> = {};
     for (const body of bodies) {
-      if (hasTools(body)) seen[ownerOf(body)] = (seen[ownerOf(body)] ?? 0) + 1;
+      if (isMainCall(body)) seen[ownerOf(body)] = (seen[ownerOf(body)] ?? 0) + 1;
     }
     if (Object.entries(expected).every(([owner, n]) => (seen[owner] ?? 0) >= n)) return true;
     if (Date.now() >= deadline) return false;
@@ -1042,7 +1049,7 @@ export async function runServeDriver(
     home,
     logs: await readAllLogs(logs),
     bodies: upstream.bodies,
-    mainBodies: upstream.bodies.filter(hasTools),
+    mainBodies: upstream.bodies.filter(isMainCall),
     ...(HISTORY_SOURCE_UNDER_TEST === 'shadow' && { shadow: addShadowCounts(shadow) }),
   };
 }

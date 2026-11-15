@@ -74,6 +74,8 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 - **這一輪紅了，先只重跑失敗的 job 一次**（Actions 的 Re-run failed jobs）。轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發：
   開 backlog 卡（已有的就在卡上記一筆），不撤回。還是紅，就**撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，
   修好再重新開 PR。
+- **這一輪在你的 PR 留言說畫面有差時，開下一張 PR 之前先回那則留言**：列出來的都在這張 PR 打算改的範圍裡，就回「畫面變動符合預期」；
+  有不在範圍裡的，當成 bug 修。它不讓這一輪變紅，也不走撤回（[`apps/web/COMPONENTS.md`](apps/web/COMPONENTS.md)「視覺差異」）。
 - **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
 - **`develop` 要求分支與 base 同步（strict）**；`main` 刻意不開。

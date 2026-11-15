@@ -28,7 +28,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
-import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
+import { fakeEndpoint, isMainCall, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, Reply, WireMessage } from './log-derived-history.fixture.js';
 import { runServe } from './serve-run.js';
 import type { RunningServe } from './serve-run.js';
@@ -56,7 +56,7 @@ function textOf(message: WireMessage): string {
 /** 主呼叫照最後一則決定：工具結果之後收尾；使用者說「深:<名字>」就叫一個工具，參數是 `argsJson`（有給的話）或淺的。 */
 function script(argsJson?: string) {
   return (_index: number, body: Body): Reply => {
-    if (!hasTools(body)) return { content: '【輔助呼叫】' };
+    if (!isMainCall(body)) return { content: '【輔助呼叫】' };
     const last = body.messages.at(-1)!;
     if (last.role === 'tool') return { content: '收尾' };
     const name = /^深:(\S+)/.exec(textOf(last))?.[1];
