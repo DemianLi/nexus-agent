@@ -244,6 +244,27 @@ describe('圍堵與核准的交界', () => {
   });
 });
 
+describe('native 下工具本體直接呼叫 LangGraph 的 `interrupt()`（#2608）', () => {
+  // 登記表（`native-loop-known-differences.ts` 的 `rawInterrupt`）寫的是「設計如此、回帶原因的工具錯誤」；這一格釘住它，
+  // 免得圍堵哪天改成把它吞掉而登記表默默變假。明給 loop，所以兩份設定下都跑 native。K13 拿掉 LangGraph 的 `interrupt` 時跟著刪。
+  it('是一則帶原因的 error ToolMessage：沒有 __interrupt__、工具沒跑完', async () => {
+    const { agent } = await createNexusAgent({
+      agentLoop: 'native',
+      model: scripted('ask'),
+      plugins: [askPlugin()],
+    });
+    const result = await agent.invoke(toAgentInvocation('動手'), {
+      configurable: { thread_id: 'raw-interrupt-native' },
+    });
+    expect(result.__interrupt__).toBeUndefined();
+    expect(ran).toEqual([]);
+    const results = toolMessages(result.messages as BaseMessage[]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe('error');
+    expect(results[0]?.text).toContain('工具 ask 執行失敗');
+  });
+});
+
 describe('輸出 schema（隨註冊帶，fold 打底，#252）', () => {
   const schema = z.object({ total: z.number() });
 

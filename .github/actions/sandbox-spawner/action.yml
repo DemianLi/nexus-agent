@@ -15,6 +15,12 @@ inputs:
     description: bundle 上傳成的 artifact 名；空的就不打 bundle
     required: false
     default: ''
+  test:
+    description: >-
+      'false' 就只編 release 版：略過 fmt、clippy 與兩輪測試，並且只還原 cargo 快取、不存。給只要執行檔的 job 用（#2809），
+      同一份 Rust 的 lint 與測試由 sandbox-spawner 那個 job 負責
+    required: false
+    default: 'true'
   per-thread-binaries:
     description: >-
       release 版的 nexus-supervisor 與 nexus-host 包成 tar 上傳成的 artifact 名（#2657：packed-install 照產物起 per-thread 用）；
@@ -55,8 +61,16 @@ runs:
         CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
         ALLOW_GCC_FALLBACK: ${{ inputs.cache }}
       run: ${{ github.workspace }}/.github/scripts/install-musl-debs.sh
-    - if: inputs.cache == 'true'
+    # 不跑測試的 job 只還原不存：它的 target/ 沒有測試版的編譯產物，搶在 sandbox-spawner 前存下同一把鍵，後面每輪的測試都得重編。
+    - if: inputs.cache == 'true' && inputs.test == 'true'
       uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          native/sandbox-spawner/target
+        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
+    - if: inputs.cache == 'true' && inputs.test != 'true'
+      uses: actions/cache/restore@v6
       with:
         path: |
           ~/.cargo/registry
@@ -69,11 +83,12 @@ runs:
         cat /sys/kernel/security/lsm
     # fmt 紅了 clippy 照樣跑：一輪看得到兩邊的輸出。根是 package，cargo 預設只動它，所以編、測、查的每個 cargo 步驟都要涵蓋整個 workspace（fmt 用 `--all`，其餘用 `--workspace`）；bundle 只收 spawner。
     - name: 格式
+      if: inputs.test == 'true'
       shell: bash
       working-directory: native/sandbox-spawner
       run: cargo fmt --all --check
     - name: clippy
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && inputs.test == 'true' }}
       shell: bash
       working-directory: native/sandbox-spawner
       run: cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warnings
@@ -86,12 +101,14 @@ runs:
     # 兩輪：musl 那輪對著出貨的 libc 驗；不帶 target 那輪的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試
     # clone3）拿到 ENOSYS 會退回 clone，工具子行程就是主機上這類 glibc 程式。
     - name: 測試（musl）
+      if: inputs.test == 'true'
       shell: bash
       working-directory: native/sandbox-spawner
       env:
         NEXUS_REQUIRE_LANDLOCK: '1'
       run: cargo test --locked --workspace --no-fail-fast --features test-hooks --target "$SPAWNER_TARGET"
     - name: 測試（glibc 的子行程）
+      if: inputs.test == 'true'
       shell: bash
       working-directory: native/sandbox-spawner
       env:
