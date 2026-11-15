@@ -525,7 +525,7 @@ export function firstDifference(
 }
 
 /**
- * 推導之前已經記過快照時，模型被叫那一刻只比對、不寫：實際要送的跟預先記的對不上，這次請求不送（`raiseError`）。
+ * 推導之前已經記過快照時，模型被叫那一刻只比對、不寫日誌（仍記下送出的請求，給生摘要重播，見 `last-sent-request.ts`）：實際要送的跟預先記的對不上，這次請求不送（`raiseError`）。
  * 兩邊經同一組 {@link extractRequest}，有損的格子（工具只留三格、`max_tokens` 別名、`-0`）壓平的方式相同。
  */
 class RequestSnapshotCheckHandler extends BaseCallbackHandler {

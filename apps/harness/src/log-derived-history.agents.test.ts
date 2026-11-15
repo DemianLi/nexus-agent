@@ -79,7 +79,7 @@ const markerOf = (body: Body): string => {
   );
 };
 
-/** 不帶工具的呼叫（標題、摘要）：回固定文字，摘要那種（請求裡有子代理記號）把記號抄進去，讓摘要後的請求認得出是誰的。 */
+/** 主呼叫以外的呼叫（標題、生摘要）：回固定文字，摘要那種（請求裡有子代理記號）把記號抄進去，讓摘要後的請求認得出是誰的。 */
 const summaryReply = (body: Body): Reply => {
   const mark = /CHILD-[A-Z0-9]+/.exec(JSON.stringify(body.messages))?.[0];
   return { content: mark === undefined ? '標題' : `摘要 ${mark}` };
@@ -134,7 +134,7 @@ async function expectAllSame(
 const expectRootSame = (name: string, run: DriverRun, calls: number) =>
   expectAllSame(name, run, { ROOT: calls });
 
-/** 腳本：依請求的記號分流給 root 與各子代理，各自有自己的計數。標題這類不帶工具的呼叫回固定字串，不佔號。 */
+/** 腳本：依請求的記號分流給 root 與各子代理，各自有自己的計數。標題、生摘要這類非主呼叫回固定字串，不佔號。 */
 const routed = (
   root: (k: number, body: Body) => Reply,
   children: Record<string, (k: number, body: Body) => Reply>,

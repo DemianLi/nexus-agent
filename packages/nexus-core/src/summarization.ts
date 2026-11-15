@@ -68,7 +68,7 @@
  * 的原意與糾正。dsh 的 `COMPACTION_INSTRUCTION`
  * （`packages/compaction/compaction-basic/src/summarizer.ts`，`5badb15`）是八段固定結構，第一段
  * 「Primary Request and Intent」要求逐字引用、第四段「Errors and Fixes」連同使用者的回饋，規則裡
- * 還有「忠實保留指示，尤其是糾正」。{@link SUMMARY_PROMPT} 取它的文字，**用英文**（dsh 明寫要英文，
+ * 還有「忠實保留指示，尤其是糾正」。{@link SUMMARY_INSTRUCTION} 取它的文字，**用英文**（dsh 明寫要英文，
  * 這是給模型讀的，不是給 demian 讀的）。**沒有把「是哪一版提示詞」寫進日誌**：dsh 的
  * `compaction/summary` 也沒有這一格，指令是程式碼常數，事件記的是那次呼叫的信封。
  *
@@ -76,10 +76,11 @@
  *
  * - **形狀：歷史從日誌推時重播，其餘是模板**（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。
  *   重播：系統訊息與工具、原訊息到切點為止、最後一則是 {@link SUMMARY_INSTRUCTION}，所以那次摘要呼叫是上一次主請求的
- *   **前綴**，吃得到供應商的前綴快取（{@link replayedSummaryCall}）。摘要器排在洋蔥外層，看不到這次請求最終的系統訊息與
- *   工具，拿的是上一次主請求送出那一刻留在記憶體裡的原物件（{@link ./last-sent-request.ts}）；行程重啟後的第一次摘要
- *   沒有那一份，退回模板。`state`、`shadow` 的訊息在 graph state 裡，剪法、參數截斷每次請求重算，推不出送出去的那一串，
- *   也是模板：對話用 `getBufferString` 攤成一個字串放在前、指令在後。
+ *   **前綴**，供應商的前綴快取才對得上（{@link replayedSummaryCall}，退回模板的條件也在那裡）。摘要器排在洋蔥外層，
+ *   看不到這次請求最終的系統訊息與工具，拿的是上一次主請求送出那一刻留在記憶體裡的原物件
+ *   （{@link ./last-sent-request.ts}）。`state`、`shadow` 送出去的是 graph state 的訊息，日誌推出來的那一串不保證與它
+ *   相同（shadow 量的正是這個差），照模板：對話用 `getBufferString` 攤成一個字串放在前、指令在後。模板那一次的輸入
+ *   按全價算。
  * - **前一次摘要的標籤。** dsh 認 `<compacted-summary>`；我們的是基座 `buildSummaryMessage` 包的：有
  *   `filePath` 時是一段前言加 `<summary>…</summary>`，**沒有**（offload 失敗）時只有
  *   「Here is a summary of the conversation to date:」一句，不包標籤。所以那條規則兩種都要認。
@@ -180,6 +181,8 @@ export const SUMMARIZATION_MIDDLEWARE_NAME = 'SummarizationMiddleware';
 /**
  * 摘要指令本文：{@link SUMMARY_PROMPT} 的後半，也是重播時接在原對話後面的最後一則 user 訊息
  * （[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)，{@link replayedSummaryCall}）。
+ *
+ * 本文裡不能有 `{conversation}`：模板裡基座只換第一個，重播時原樣送出。
  */
 export const SUMMARY_INSTRUCTION = [
   'You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.',
@@ -221,7 +224,7 @@ export const SUMMARY_INSTRUCTION = [
 /**
  * 交給基座 `summaryPrompt` 的模板（[#432](https://github.com/DemianLi/nexus-agent/issues/432)）。
  *
- * 文字照 dsh 的 `COMPACTION_INSTRUCTION`，**只動三處**，理由見檔頭「摘要的提示詞」：
+ * {@link SUMMARY_INSTRUCTION} 的文字照 dsh 的 `COMPACTION_INSTRUCTION`，**只動三處**，理由見檔頭「摘要的提示詞」：
  *
  * 1. 前面接一段 `{conversation}`。基座**只換第一個** `{conversation}`，所以指令本文裡一個都不能有。
  * 2. 「PRIOR checkpoint」那條規則改認我們的包法（`<summary>` 與「Here is a summary…」兩種）。
@@ -750,6 +753,8 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   只把日誌上記過的剪法換上去（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)），沒有 `sessions` 就不包。
  * @param report - 摘要失敗時往哪裡講一條 warn（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）；省略即 `console.warn`。
  * @param cutoffs - 這次組裝的切點表（`summary-cutoffs.ts`），`agent/pre-step` 問的也是這一張；省略就是這顆摘要器自己一張。
+ * @param sentHistoryOf - 從日誌推「這次要送的歷史」（`history-shadow.ts` 的 `createSentHistoryReader`）。給了而且有 `sessions`，
+ *   生摘要那一次就重播上一次主請求（{@link replayedSummaryCall}）；省略就照模板（`state`、`shadow`）。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -880,10 +885,11 @@ export type SentHistoryReader = (log: SessionLog, subagent?: boolean) => BaseMes
 /**
  * 生摘要的那一次呼叫重播上一次主請求（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）：上一次送出的系統訊息與
  * 呼叫選項（工具）、日誌推出來的原訊息到切點為止，最後接一則 {@link SUMMARY_INSTRUCTION}。這樣它是上一次主請求的前綴，
- * 吃得到供應商的前綴快取。
+ * 供應商的前綴快取才對得上。
  *
- * 回 `undefined`（呼叫端照模板送）的情形：找不到這次呼叫的日誌；這個行程裡這份日誌還沒送過請求（行程重啟後的第一次摘要）；
- * 日誌推出來的那一串與摘要器手上的有效訊息串對不上（則數不同，或要摘的那一段裡有一則型別不同）；推導拋錯。
+ * 回 `undefined`（呼叫端照模板送）的情形：找不到這次呼叫的日誌；這份日誌在這個行程裡沒有可重播的上一次請求（行程重啟後的
+ * 第一次摘要，或上一次的留不得，見 `noteSentRequest`）；日誌推出來的那一串與摘要器手上的有效訊息串對不上（則數不同，或
+ * 要摘的那一段裡有一則型別不同）；過程中任何一步拋錯。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
  * @param sentHistoryOf - 從日誌推「要送的歷史」。

@@ -1738,7 +1738,7 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
       : summaryModelOf(options.modelSelection, registry.sessions);
   // 切點表一次組裝一張，root 與子代理共用（條目按身分分開），`agent/pre-step` 也問同一張（summary-cutoffs.ts）。
   const cutoffs = summaryCutoffsOf(registry);
-  // 生摘要重播上一次主請求（#2775）：只有歷史從日誌推時，日誌推得出送出去的那一串；`state`、`shadow` 維持模板。
+  // 生摘要重播上一次主請求（#2775）：只有歷史從日誌推時，送出去的就是日誌推出來的那一串；`state`、`shadow` 送的是 graph state 的訊息，照模板。
   const sentHistoryOf =
     options.history?.source === 'log'
       ? createSentHistoryReader(options.history.toolResultAsSeen)

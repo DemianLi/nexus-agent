@@ -26,6 +26,7 @@ import { runRepl } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
+import { isSummaryCallPrompt } from './summary-call.fixture.js';
 
 type CompactionSummary = SessionEventMap['compaction/summary'];
 
@@ -39,7 +40,7 @@ const USER_PAD = '內容'.repeat(100);
 const BODY = '這是一段普通長度的回話。'.repeat(32);
 
 /**
- * 照腳本回答，但生摘要那一次先等 {@link SUMMARY_DELAY_MS}。agent 自己的呼叫第一則是系統訊息，生摘要那次不是。
+ * 照腳本回答，但生摘要那一次先等 {@link SUMMARY_DELAY_MS}。生摘要那一次由 {@link isSummaryCallPrompt} 認。
  */
 class SlowSummaryModel extends ScriptedChatModel {
   private readonly script: {
@@ -64,7 +65,7 @@ class SlowSummaryModel extends ScriptedChatModel {
     messages: BaseMessage[],
     options?: this['ParsedCallOptions'],
   ): Promise<ChatResult> {
-    if (messages[0]?.getType() !== 'system') await sleep(SUMMARY_DELAY_MS);
+    if (isSummaryCallPrompt(messages)) await sleep(SUMMARY_DELAY_MS);
     return super._generate(messages, options);
   }
 
@@ -72,7 +73,7 @@ class SlowSummaryModel extends ScriptedChatModel {
     messages: BaseMessage[],
     options?: this['ParsedCallOptions'],
   ): AsyncGenerator<ChatGenerationChunk> {
-    if (messages[0]?.getType() !== 'system') await sleep(SUMMARY_DELAY_MS);
+    if (isSummaryCallPrompt(messages)) await sleep(SUMMARY_DELAY_MS);
     yield* super._streamResponseChunks(messages, options);
   }
 }

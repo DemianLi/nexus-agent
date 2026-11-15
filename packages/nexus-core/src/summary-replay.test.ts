@@ -2,7 +2,7 @@
  * 生摘要的那一次呼叫重播上一次主請求，條件不齊就退回模板——[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)。
  *
  * 走出貨的 `createSummarizer` 組出來的整條鏈，摘要模型記下每次 `invoke` 收到的訊息與選項。線上位元組的比對在
- * `apps/harness/src/summary-replay-prefix.test.ts`（真的 `ChatOpenAI` 打假端點）。
+ * `apps/harness/src/summary-replay-prefix.test.ts`（出貨的 `BaseChatOpenAI` 打假端點）。
  */
 
 import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';

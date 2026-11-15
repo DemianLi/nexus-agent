@@ -37,7 +37,10 @@ const REPLY_SHAPING_OPTIONS: ReadonlySet<string> = new Set([
 
 const lastSent = new WeakMap<SessionLog, LastSentRequest>();
 
-/** LangChain 交給 callback 之前會改寫的內容：改寫過的不是送出的那一份。 */
+/**
+ * 區塊陣列裡有非文字區塊就當成可能被改寫：LangChain 交給 callback 前會把 url／base64 資料區塊換成別的形狀
+ * （`_formatForTracing`），改寫過的不是送出的那一份。這裡不細分，一律不留。
+ */
 function rewrittenForTracing(message: BaseMessage): boolean {
   if (!Array.isArray(message.content)) return false;
   return message.content.some(
@@ -45,6 +48,7 @@ function rewrittenForTracing(message: BaseMessage): boolean {
   );
 }
 
+/** `@langchain/openai` 的 `ChatOpenAI` 交給 callback 前會把 `mcp` 工具的憑證欄位換成遮蔽字串；這裡一律當成被遮蔽。 */
 function isRedactedTool(tool: unknown): boolean {
   return typeof tool === 'object' && tool !== null && (tool as { type?: unknown }).type === 'mcp';
 }
@@ -81,7 +85,8 @@ export function noteSentRequest(
 
 /**
  * @param log - 會話日誌。
- * @returns 這份日誌最近一次送出的請求；這個行程裡還沒送過，或上一次的留不得，是 `undefined`。
+ * @returns 這份日誌最近一次送出的請求；這個行程裡還沒送過，或上一次的留不得，是 `undefined`。只有經過請求快照記錄器的
+ *   呼叫會更新這一份。
  */
 export function lastSentRequestOf(log: SessionLog): LastSentRequest | undefined {
   return lastSent.get(log);

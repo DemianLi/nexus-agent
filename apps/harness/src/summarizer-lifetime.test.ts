@@ -281,7 +281,7 @@ describe('續接之後又壓縮', () => {
     expect(old.length, '重啟前摘要過').toBeGreaterThan(0);
     expect(fresh.length, '重啟後又摘要').toBeGreaterThan(0);
 
-    // 新生命週期第一次摘要的請求：摘要器那次呼叫收到的（不帶工具）裡有上一次的摘要，也就是從灌回串摘起。
+    // 新生命週期第一次摘要的請求：摘要器那次呼叫收到的裡有上一次的摘要，也就是從灌回串摘起。
     const verdicts = await compareToLog(run.events, run.mainBodies);
     expect(verdicts.filter((v) => v.kinds.length > 0 || !v.systemMatches)).toEqual([]);
     // 續接後最後一次主呼叫：第一則是新的摘要，裡面不再有舊的大結果。

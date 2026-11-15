@@ -1,8 +1,8 @@
 /**
  * 生摘要的那一次呼叫是上一次主請求的前綴（[#2775](https://github.com/DemianLi/nexus-agent/issues/2775)）。
  *
- * 真的 `ChatOpenAI` 打本機假端點，比的是線上的請求 body：`history-source: log` 時，摘要請求的工具與上一次主請求相同、
- * 訊息逐則相同到兩者較短的那一邊為止，最後一則是摘要指令；`state` 時維持模板（一則 user 訊息、不帶工具）。
+ * 出貨的 `BaseChatOpenAI` 打本機假端點，比的是線上的請求 body：`history-source: log` 時，摘要請求的工具與上一次主請求相同、
+ * 訊息逐則相同到兩者較短的那一邊為止，最後一則是摘要指令；`state` 時是模板（一則 user 訊息、不帶工具）。
  */
 import { SUMMARY_INSTRUCTION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -54,7 +54,7 @@ describe('生摘要的請求形狀', () => {
     }
   }, 120_000);
 
-  it('state：維持模板，一則 user 訊息、不帶工具', async () => {
+  it('state：模板，一則 user 訊息、不帶工具', async () => {
     const run = await runAssembly(LINES, script, [], SUMMARIZATION, 'state');
     const summaries = run.events.filter((event) => event.type === 'compaction/summary');
     expect(summaries.length).toBeGreaterThan(0);
