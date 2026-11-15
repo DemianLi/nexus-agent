@@ -187,7 +187,7 @@ enum Phase {
     Starting,
     /// 預熱池裡的：送了 `ready`，還沒指派 thread。
     Warm,
-    /// 送了 `bind`，還沒回 `bound`。
+    /// 送了 `bind`，還沒回 `bound`；成對時組合行程在收之後才讀到的 `bound` 不理，也停在這裡。
     Binding,
     /// 收到同一個 thread 的 `bound`；沒在收的才會給前台 `up`。
     Up,
@@ -1194,7 +1194,7 @@ impl Supervisor {
                 conversation.read_only = false;
             }
             if conversation.drain.is_some() {
-                // 等它回答：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
+                // 等它回答：回 `busy` 或逾時就回 `up`（成對而組合行程在收的不回，等這一對的 `down`）；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
                 self.queue(thread, open);
             } else if conversation.phase == Phase::Up
                 && conversation.proc.stop.is_none()
@@ -1482,7 +1482,7 @@ impl Supervisor {
         }
     }
 
-    /// `drain` 的回答是不收（`busy` 或逾時）：排著等它的那條 thread 回 `up`，其餘排著的另找名額。
+    /// `drain` 的回答是不收（`busy` 或逾時）：排著等它的那條 thread 回 `up`（成對而組合行程在收的不回），其餘排著的另找名額。
     fn not_drained(&mut self, index: usize) {
         let composition_stopping = self.composition_stopping(&self.conversations[index]);
         let conversation = &mut self.conversations[index];
@@ -1491,7 +1491,7 @@ impl Supervisor {
         if let Some(thread) = conversation.thread.clone() {
             if let Some(at) = self.pending.iter().position(|(t, _)| *t == thread) {
                 self.pending.remove(at);
-                // 組合行程在收：不回 `up`，它收完回的 `down` 就是回答。
+                // 組合行程在收：不回 `up`，這一對收完回的 `down` 就是回答。
                 if conversation.phase == Phase::Up
                     && conversation.proc.stop.is_none()
                     && !composition_stopping
@@ -2995,7 +2995,7 @@ mod tests {
         );
     }
 
-    /// 接一個假的前台（通道兩端接在一起），回目前為止送給它的事件。
+    /// 沒有前台時接一個假的（通道兩端接在一起）並回空；有了就回上一次呼叫之後送給它的事件。
     fn front_events(supervisor: &mut Supervisor) -> Vec<FrontEvent> {
         if supervisor.front.is_none() {
             let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -3104,6 +3104,7 @@ mod tests {
         }
     }
 
+    /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
     /// 所以 `ready` 先放進管線再開始收；之後讀端讀到 EOF、死因還是空的，表示那則 `ready` 讀到了、也解開了（解不開的會記 `crash`）。
     #[test]
     fn a_ready_from_a_composition_being_collected_does_not_advance_the_pair() {
