@@ -514,7 +514,8 @@ describe('context/measure 帶 breakdown（接線）', () => {
 
     const { breakdown } = measure;
     expect(breakdown).toBeDefined();
-    for (const value of Object.values(breakdown!)) {
+    const { messageParts, ...three } = breakdown!;
+    for (const value of [...Object.values(three), ...Object.values(messageParts!)]) {
       expect(Number.isInteger(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
     }
@@ -533,6 +534,12 @@ describe('context/measure 帶 breakdown（接線）', () => {
       systemTokens: 0,
       toolsTokens: 0,
       messageTokens: measure.approxTokens,
+      messageParts: {
+        summaryTokens: 0,
+        injectedTokens: 0,
+        toolResultTokens: 0,
+        conversationTokens: measure.approxTokens,
+      },
     });
   });
 
@@ -575,6 +582,129 @@ describe('context/measure 帶 breakdown（接線）', () => {
       measure.breakdown!.systemTokens + measure.breakdown!.toolsTokens,
     );
     expect(measure.breakdown!.messageTokens).toBe(0);
+    expect(measure.breakdown!.messageParts).toEqual({
+      summaryTokens: 0,
+      injectedTokens: 0,
+      toolResultTokens: 0,
+      conversationTokens: 0,
+    });
+  });
+
+  /** 四類各至少一則：摘要、機器塞的（帶來源的與重複工具提醒）、工具結果、人與助手的對話。 */
+  function mixedMessages() {
+    const summary = new HumanMessage({
+      content: `Here is a summary of the conversation to date:\n\n${'先前談過的事。'.repeat(40)}`,
+      additional_kwargs: { lc_source: 'summarization' },
+    });
+    const instructions = new HumanMessage({
+      content: '專案說明：一律用繁體中文回答。'.repeat(10),
+      additional_kwargs: { nexus_source: { kind: 'plugin', plugin: 'agent-instructions' } },
+    });
+    const reminder = new HumanMessage({
+      content: '你一直在重複同一個呼叫。',
+      additional_kwargs: { nexus_repeat_reminder: { tool: 'read_file', count: 3 } },
+    });
+    const human = new HumanMessage('幫我讀一下設定檔。');
+    const call = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c1', name: 'read_file', args: { path: '/etc/app.toml' } }],
+    });
+    const result = new ToolMessage({ content: 'port = 8080\n'.repeat(120), tool_call_id: 'c1' });
+    return { summary, instructions, reminder, human, call, result };
+  }
+
+  it('messageParts 把訊息分成四類：沒錨、沒有系統提示與工具時，每一格就是那一類訊息的純估算', async () => {
+    const m = mixedMessages();
+    const measure = await measureOf({
+      messages: [m.summary, m.instructions, m.human, m.call, m.result, m.reminder],
+    });
+    expect(measure.breakdown!.messageParts).toEqual({
+      summaryTokens: estimateMessageTokens(m.summary),
+      injectedTokens: estimateMessageTokens(m.instructions) + estimateMessageTokens(m.reminder),
+      toolResultTokens: estimateMessageTokens(m.result),
+      conversationTokens: estimateMessageTokens(m.human) + estimateMessageTokens(m.call),
+    });
+    for (const value of Object.values(measure.breakdown!.messageParts!))
+      expect(value).toBeGreaterThan(0);
+  });
+
+  it('messageParts 錨在供應商實數上：四格照比例分攤修正量，相加仍等於 messageTokens', async () => {
+    const m = mixedMessages();
+    const reply = new AIMessage({
+      content: '讀到了。',
+      id: 'a1',
+      usage_metadata: { input_tokens: 7001, output_tokens: 1, total_tokens: 7002 },
+    });
+    const request = {
+      messages: [m.summary, m.instructions, m.human, m.call, m.result, reply, m.reminder],
+      systemMessage: new SystemMessage('你是助理。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+    // 前提：真的錨上了，訊息那一格不等於純估算，四格要靠分攤才加得回來。
+    expect(measure.breakdown!.messageTokens).not.toBe(parts.messages);
+    const { summaryTokens, injectedTokens, toolResultTokens, conversationTokens } =
+      measure.breakdown!.messageParts!;
+    expect(summaryTokens + injectedTokens + toolResultTokens + conversationTokens).toBe(
+      measure.breakdown!.messageTokens,
+    );
+    // 比例照純估算：每一格離「照比例的精確值」不到 1。
+    const scale = measure.breakdown!.messageTokens / parts.messages;
+    expect(Math.abs(summaryTokens - estimateMessageTokens(m.summary) * scale)).toBeLessThan(1);
+    expect(Math.abs(toolResultTokens - estimateMessageTokens(m.result) * scale)).toBeLessThan(1);
+  });
+});
+
+/**
+ * **`compaction/summary` 帶 `durationMs`**（[#2774](https://github.com/DemianLi/nexus-agent/issues/2774)）：生摘要那一次模型呼叫的牆鐘。
+ * 走 `createSummarizer`，生摘要的假模型固定等一段時間才回。
+ */
+describe('compaction/summary 帶 durationMs（接線）', () => {
+  const SUMMARY_DELAY_MS = 40;
+
+  it('摘要了：事件帶非負整數的 durationMs，不小於生摘要那次呼叫實際等的時間', async () => {
+    const log = new SessionLog('duration');
+    const model = {
+      profile: {},
+      invoke: async () => {
+        await new Promise((resolve) => setTimeout(resolve, SUMMARY_DELAY_MS));
+        return { text: '這是摘要。' };
+      },
+    };
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      { ...DEFAULT_SUMMARIZATION, trigger: [{ type: 'tokens', value: 2_000 }], retainTokens: 400 },
+      new TokenAnchorBook(),
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      false,
+    );
+    await middleware.wrapModelCall?.(
+      {
+        messages: fatHistory(30),
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+      } as never,
+      (() => new AIMessage('好。')) as never,
+    );
+    const summaries = log.events.flatMap((event) =>
+      event.type === 'compaction/summary'
+        ? [event.data as SessionEventMap['compaction/summary']]
+        : [],
+    );
+    expect(summaries).toHaveLength(1);
+    const { durationMs } = summaries[0]!;
+    expect(Number.isInteger(durationMs)).toBe(true);
+    // 計時器可能早一點點醒，留 5 毫秒的餘裕；上限只擋「量到別的東西」。
+    expect(durationMs).toBeGreaterThanOrEqual(SUMMARY_DELAY_MS - 5);
+    expect(durationMs).toBeLessThan(5_000);
+    // 摘要過的那份請求，量測裡的摘要那一格不是 0。
+    const measure = log.events.flatMap((event) =>
+      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
+    );
+    expect(measure).toHaveLength(1);
+    expect(measure[0]!.breakdown!.messageParts!.summaryTokens).toBeGreaterThan(0);
   });
 });
 
