@@ -59,6 +59,13 @@ export const SUMMARY_ENTRY_INSTRUCTION = [
   '- Do not use angle-bracket tags. Do not call any tool or take any other action.',
 ].join('\n');
 
+/**
+ * 讀回被摘掉的原文的兩個工具（`history-recall.ts`）。名字放這裡不放 `history-recall.ts`：摘要的前言（`summarizer-engine.ts`）也寫著它們，
+ * 而 `history-recall.ts` 自己 import `summarizer-engine.ts`。
+ */
+export const HISTORY_READ_TOOL_NAME = 'history_read';
+export const HISTORY_SEARCH_TOOL_NAME = 'history_search';
+
 /** 模型寫的那幾格。 */
 export interface SummaryEntryDraft {
   readonly title: string;
