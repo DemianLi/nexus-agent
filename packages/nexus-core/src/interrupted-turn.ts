@@ -82,7 +82,7 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
         break;
       case 'model/start':
         if (open) {
-          // 新一次模型呼叫開始，代表上一批已經結清（或被基座在記憶體裡補掉了）：清掉待結的呼叫（對應 dsh 的 `step/end`，見同一份文件第二節）。
+          // 新一次模型呼叫開始，代表上一批已經結清（或被基座在記憶體裡補掉了）：清掉待結的呼叫（與 dsh 的對照見 docs/interrupted-turn-and-invariant-vs-dsh.md 第二節）。
           unanswered.clear();
           started.clear();
           openModelStarts.push(event.seq);
@@ -153,7 +153,7 @@ export function unansweredCallResults(events: readonly SessionEvent[]): Unanswer
 /**
  * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（{@link unansweredCallResults}）、
  * **開著的 `model/start`** 各一顆 `model/end {outcome:'error'}`，最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
- * 順序：結果、步的收尾、輪的收尾。
+ * 順序：結果、`model/end`、`turn/end`。
  *
  * `seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
  *
