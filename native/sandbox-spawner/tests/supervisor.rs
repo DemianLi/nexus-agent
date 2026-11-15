@@ -1966,6 +1966,8 @@ fn shutdown_answers_a_thread_queued_behind_its_own_evicted_one() {
 
 /// 停機時排著的那條 thread，自己原來的行程還沒回答 `drain`；前台還沒回 `admission-stopped` 的這段它才回 `drained`。
 /// 這時不算逐出：照停機的順序收，回的是 `down(shutdown)`，排著的那則 `ensure` 才有回答（#2799）。
+/// 前台不回 `admission-stopped`，`--admission-timeout-ms` 把那段撐到 2.5 秒；`slow-drain:1000` 讓 `drained` 落在裡面；
+/// `--drain-timeout-ms` 拉長，免得 `drain` 先逾時。
 #[test]
 fn a_drain_answered_during_shutdown_is_down_shutdown_not_evicted() {
     let mut h = Harness::start(Options {
@@ -2007,6 +2009,37 @@ fn a_drain_answered_during_shutdown_is_down_shutdown_not_evicted() {
         }],
         "{events:?}"
     );
+}
+
+/// 過了閒置上限被送 `drain`、停機中才回 `drained`：不收也不再當它閒置，所以不會馬上再送一次 `drain`；照停機收，回 `down(shutdown)`。
+/// `slow-drain:800` 讓回答落在前台還沒回 `admission-stopped` 的那段；再被送 `drain` 的話，它的紀錄會多一行。
+#[test]
+fn a_drain_answered_during_shutdown_is_not_sent_again() {
+    let mut h = Harness::start(Options {
+        answer_stop_admission: false,
+        extra: vec!["--idle-ms", "300", "--admission-timeout-ms", "2500"],
+        ..Options::default()
+    });
+    let thread = "a,idle:0,slow-drain:800";
+    let a = h.up(thread);
+    assert!(saw_drain(&a));
+    kill(h.pid(), libc::SIGTERM);
+    let mut events = Vec::new();
+    while let Some(event) = h.next_event() {
+        events.push(event);
+    }
+    assert_eq!(
+        events,
+        [
+            FrontEvent::StopAdmission,
+            FrontEvent::Down {
+                thread_id: thread.as_bytes().to_vec(),
+                cause: DeathCause::Shutdown
+            },
+        ]
+    );
+    let drains = log(&a).iter().filter(|line| *line == "drain").count();
+    assert_eq!(drains, 1, "{:?}", log(&a));
 }
 
 /// 宿主在另一個 package，跟監督行程編進同一個 target 目錄。
@@ -3510,7 +3543,8 @@ fn shutdown_answers_a_thread_queued_behind_a_composition_that_will_not_tell_down
     );
 }
 
-/// 成對時也一樣（#2799）：被逐出、還在收的是葉子，組合行程等它收完才連帶收，兩個都不會回停機的 `down`。
+/// 成對時也一樣（#2799）：被逐出、還在收的是葉子，它收完回的是 `down(evicted)`；組合行程等它收完才連帶收、不回 `down`。
+/// 兩個都不是排著那則 `ensure` 的回答，所以停機當場回 `down(shutdown)`。
 #[test]
 fn shutdown_answers_a_thread_queued_behind_its_own_evicted_leaf() {
     let mut h = Harness::start(Options {

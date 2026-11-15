@@ -1723,7 +1723,8 @@ impl Supervisor {
     }
 
     /// 這條 thread 還有一個結束時會回 `down`、而且前台拿那則當回答的行程。被連帶收的（`peer`）與葉子那一側回過的組合行程（`told`）
-    /// 不會再回；被逐出的回的是 `down(evicted)`，前台不拿它了結 `ensure`，所以也不算，成對時連它的組合行程一起不算。
+    /// 不會再回；被逐出的回的是 `down(evicted)`，前台不拿它了結 `ensure`，所以也不算。成對時它的組合行程等葉子收完才連帶收、
+    /// 也不會回，一起不算。
     fn will_tell_down(&self, thread: &[u8]) -> bool {
         let evicted = |c: &Conversation| c.cause == Some(DeathCause::Evicted);
         self.conversations
@@ -2225,8 +2226,11 @@ impl Supervisor {
                 }
                 ConversationReport::Drained if conversation.proc.stop.is_none() => {
                     conversation.drain = None;
-                    // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
-                    if !self.shutting_down {
+                    if self.shutting_down {
+                        // 停機中才回的不算逐出：留給停機照順序收，回的 `down(shutdown)` 才是排著等它的那則 `ensure` 的回答。
+                        // 也不再當它閒置，否則過了閒置上限的會馬上再被送一次 `drain`。
+                        conversation.idle_since = None;
+                    } else {
                         conversation.cause.get_or_insert(DeathCause::Evicted);
                         conversation.begin_stop(Instant::now(), self.args.eof_grace);
                         // 在等它回答的那條 thread 現在要一個新行程，跟其他排著的一起重算名額。
