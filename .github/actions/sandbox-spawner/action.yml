@@ -82,6 +82,7 @@ runs:
       shell: bash
       working-directory: native/sandbox-spawner
       run: cargo build --release --locked --workspace --target "$SPAWNER_TARGET"
+    # `--no-fail-fast`：cargo 預設遇到第一個紅的測試執行檔就不跑後面的，lib 一紅整合測試就看不到；加上之後每個執行檔都跑完，整步仍以非零結束。
     # 兩輪：musl 那輪對著出貨的 libc 驗；不帶 target 那輪的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試
     # clone3）拿到 ENOSYS 會退回 clone，工具子行程就是主機上這類 glibc 程式。
     - name: 測試（musl）
@@ -89,13 +90,13 @@ runs:
       working-directory: native/sandbox-spawner
       env:
         NEXUS_REQUIRE_LANDLOCK: '1'
-      run: cargo test --locked --workspace --features test-hooks --target "$SPAWNER_TARGET"
+      run: cargo test --locked --workspace --no-fail-fast --features test-hooks --target "$SPAWNER_TARGET"
     - name: 測試（glibc 的子行程）
       shell: bash
       working-directory: native/sandbox-spawner
       env:
         NEXUS_REQUIRE_LANDLOCK: '1'
-      run: cargo test --locked --workspace --features test-hooks
+      run: cargo test --locked --workspace --no-fail-fast --features test-hooks
     - name: 打 bundle
       if: inputs.bundle != ''
       shell: bash
