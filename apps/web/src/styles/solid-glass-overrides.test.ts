@@ -161,7 +161,25 @@ describe('浮層遮罩走 --scrim', () => {
   });
 });
 
-describe('solid-glass 的本地修改：Windows 高對比（#2796，第 83 條）', () => {
+describe('solid-glass 的本地修改：側欄選項鈕的點擊區（#2791，第 86 條）', () => {
+  const ACTION = "[data-sidebar='menu-action']";
+
+  test.each(['min-width', 'min-height'])('點擊區至少 24px：%s', (property) => {
+    expect(cascade.winner([ACTION], property)).toMatchObject({
+      value: '24px',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test('1024 起往上、往右各退 2px，圖示留在原位', () => {
+    expect(
+      cascade.winner([ACTION], 'margin', { conditions: ['@media (width >= 64rem)'] }),
+    ).toMatchObject({ value: '-2px -2px 0 0', layer: null, file: OVERRIDES });
+  });
+});
+
+describe('solid-glass 的本地修改：Windows 高對比（#2796，第 85 條）', () => {
   const FORCED = { conditions: ['@media (forced-colors: active)'] };
 
   test.each([
