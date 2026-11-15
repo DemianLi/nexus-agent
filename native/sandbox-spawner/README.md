@@ -87,7 +87,7 @@ nexus-supervisor --run-dir <目錄> --audit <檔> --front <程式> [--front-arg 
 
 - 起動：先起組合行程，argv 是 `<程式> <--composition-arg>... --socket <--run-dir>/c<序號>.sock --pair-socket <--run-dir>/c<序號>.p.sock --leaf-socket <--run-dir>/c<序號>.l.sock`；收到它不宣告 loop 的 `hello` 才起葉子（`--conversation`），葉子的 `--socket` 是 `c<序號>.l.sock`、多一個 `--pair-socket c<序號>.p.sock`，並先送組合行程 `leaf{pid}`。兩個行程各有一條控制通道、各自 `hello`；葉子要宣告 loop 在自己這裡，組合行程不能宣告，對不上的死因是 `protocol`。組合行程的 `hello` 帶空的 token：它還不連宿主，身分表上只有葉子。
 - `ready`、`bound` 看組合行程的（葉子在橋上登記完它才 `ready`），葉子在控制通道上送的不理；`bind` 送給組合行程，由它經橋轉給葉子。`up` 的 socket 是組合行程的 `c<序號>.sock`。`turn`、閒置、`drain` 走葉子。預熱池預熱的是一對，到組合行程 `ready` 為止。
-- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子（`leaf{pid}` 接著 `bind`），`up` 的 socket 不變。補起的葉子從起動就開始算 `--stall-ms`（第一個葉子是在橋上登記完、送出 `bind` 才算）：組合行程換了葉子不再回 `ready`，監督行程不知道它什麼時候登記完，所以起動到綁定之間任何一段沉默超過 `--stall-ms` 的會被判 `stalled`、整對收（[#2792](https://github.com/DemianLi/nexus-agent/issues/2792)）。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
+- 葉子死了：照它的死因回 `down`。上一則 `bind` 回過 `bound`、而且是它自己壞掉的（`crash`、`heap`、`memory`、`host-oom`、`stalled`），組合行程留著、名額也留著；同一條 thread 再被 `ensure` 就只補一個葉子，`up` 的 socket 不變：送 `leaf{pid}`，等組合行程替補起的葉子再回一則 `ready`（它在橋上登記完）才送 `bind`，`--stall-ms` 也從那則 `bind` 起算，跟第一個葉子一樣。等這則 `ready` 沒有期限，一直不登記的葉子會一直佔著名額（第一個葉子也一樣，[#2801](https://github.com/DemianLi/nexus-agent/issues/2801)）；這一段葉子死了就整對收。第一則之後、不在等補起的葉子時多出來的 `ready` 不理。沒人要的留到 `--idle-ms`（從葉子死的時候算；`--idle-ms 0` 就不逾期），名額滿時最先被收；留著的之後不管怎麼結束都不再回 `down`、不再進死因累計。其餘的（逐出、停機、`protocol`、預熱池裡的、`bind` 還沒回 `bound`）葉子收完就連帶收組合行程。`bind` 還沒回 `bound` 也整對收，是因為從外面分不出組合行程是把那則 `bind` 留著等葉子登記、還是已經轉給葉子而作廢：前者再送一次它會以協定錯誤結束，後者不再送就永遠不會 `bound`。
 - 組合行程死了：整對收。先收它的屍、判完死因，才對葉子的群組送 SIGKILL（反過來葉子可能先被收屍，領走那一次 `oom_kill`）。`down` 一對只送一次、死因累計也只進一次：葉子已經在收時照葉子的死因，否則照組合行程的。
 - `--stall-ms` 兩個行程各看各的：葉子停住只殺葉子，組合行程停住整對收。組合行程的心跳是 1 秒一次，`--stall-ms` 要超過 4000：監督行程最晚每 `--stall-ms` 的四分之一醒一次，心跳間隔要小於這個值，整棵樹凍住才認得出來（見上面「心跳」那一條）；參數解析不擋。`--rss-limit-mb` 只管葉子；組合行程的 RSS 只記進稽核與 `stats`。壓住吃滿 CPU 的也只有葉子。
 - 拆除與停機都是先葉子後組合行程：葉子收完才開始收組合行程。停機中再收到訊號時不分先後，全部當場 SIGKILL。
@@ -228,12 +228,12 @@ nexus-composition --socket <路徑> --pair-socket <路徑> --leaf-socket <路徑
 `--socket` 是前台連的，`--pair-socket` 是橋（葉子連進來），這兩個由它 listen；`--leaf-socket` 是葉子自己 listen 的資料 socket。控制通道是 stdin／stdout，走對話行程那一組訊息（`src/supervisor_protocol.rs`）。單執行緒、一個 poll 迴圈。
 
 - 握手：兩個 socket 都在聽了才送 `hello`，不宣告 loop 在自己這裡（`runs_loop` 是否）；監督行程的第一框要是同一版的 `hello`。
-- `ready` 只送一次，三件事都到了才送：收到 `leaf{pid}`、那個 pid 的葉子在橋上驗過（交換了 `hello`）、葉子送了第一則 `register`。清單是空的也算，但**葉子一定要送 `register`**，不送就永遠不會 `ready`。換了葉子不再送 `ready`。`ready` 之前不收前台的連線（排在 backlog）。
+- `ready` 每個葉子送一次，三件事都到了才送：收到 `leaf{pid}`、那個 pid 的葉子在橋上驗過（交換了 `hello`）、葉子送了第一則 `register`。清單是空的也算，但**葉子一定要送 `register`**，不送就永遠不會 `ready`。換了葉子，新葉子 `register` 之後再送一則。第一則 `ready` 之前不收前台的連線（排在 backlog）。
 - `bind`：經橋對葉子發 `attach`（payload 是 `{"threadId": …}`），葉子回成功才送 `bound`。thread 記第一次的，之後每一則都要相同。葉子換過之後監督行程再送同一條 thread 的 `bind`，就對新葉子再 `attach` 一次、成功再送一次 `bound`；`bind` 比新葉子的 `register` 早到就留著，等 `register` 那一刻才 `attach`。`attach` 沒成功（葉子回錯、送不出去、回之前斷線）只記一行，不送 `bound`、不自己重試，行程照活。
 - 心跳：收到第一則 `bind` 起每 1 s 一則（跟對話行程的間隔相同），之後不停。
 - `drain`：loop 不在這裡，記一行、不理。
 - 葉子斷線：行程照活，等下一則 `leaf{pid}`。
-- 協定錯誤，以 3 結束：第一框不是同一版的 `hello`；解不開的框或訊息；`ready` 之前的 `bind`；thread 跟第一次不同、或不是 UTF-8 的 `bind`；現在的葉子已經綁了、`attach` 還沒回、或已經有一則 `bind` 留著時又來的 `bind`。
+- 協定錯誤，以 3 結束：第一框不是同一版的 `hello`；解不開的框或訊息；第一則 `ready` 之前的 `bind`；thread 跟第一次不同、或不是 UTF-8 的 `bind`；現在的葉子已經綁了、`attach` 還沒回、或已經有一則 `bind` 留著時又來的 `bind`。
 - 結束：stdin 讀到 EOF 或收到 SIGTERM 就刪掉兩個 socket、回 0。綁不了 socket 回 1（這時還沒送 `hello`），參數不對回 2。
 - 前台連線的轉送（`host/src/composition/forward.rs`）：`--socket` 上每收一條就對 `--leaf-socket` 連一條，位元組原樣雙向對接，不解析內容。每個方向最多留 64 KiB 還沒寫出去的，留著的寫完之前不讀來源，所以對方不讀時來源那一端會被核心擋住。一邊讀到 EOF，留著的寫完之後只關另一邊寫的方向；兩個方向都結束、或有一邊整條關了而它剩下的都轉完，才整條關。同時最多 64 條，到了就不 accept，多的排在 backlog。連不上葉子（含葉子的 backlog 滿了）就把進來的那一條直接關。
 - 轉送緩衝的最壞值（算的，沒量）：64 條 × 2 個方向 × 64 KiB＝8 MiB，加上共用的一塊 64 KiB 讀取區。心跳間隔、緩衝大小與連線數上限都是暫定的，沒有對著實際負載量過。
