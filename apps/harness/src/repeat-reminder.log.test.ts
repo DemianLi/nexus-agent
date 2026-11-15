@@ -2,7 +2,7 @@
  * 提醒鏈在 `history-source=log` 下讀日誌沒套摘要的那一串（[#2362](https://github.com/DemianLi/nexus-agent/issues/2362)），
  * **在正式路徑上、兩種 loop 各跑一次**。
  *
- * 比的是同一支腳本在 `state` 與 `log` 下，模型每一輪收到的 prompt 逐字相同（LangChain 的 `id`、時間戳與摘要的歷史檔名除外）：`state` 那一邊讀 `state.messages`、
+ * 比的是同一支腳本在 `state` 與 `log` 下，模型每一輪收到的 prompt 逐字相同（LangChain 的 `id`、時間戳、摘要的歷史檔名，以及只有接了日誌的 `log` 那一邊才有、指向讀回工具的那一句除外）：`state` 那一邊讀 `state.messages`、
  * 不碰日誌，是對照基準。三個場景：
  *
  * - 摘要之前：不開摘要，鏈走到門檻。
@@ -36,9 +36,11 @@ const isReminder = (message: BaseMessage): boolean =>
 function project(message: BaseMessage): unknown {
   return {
     type: message.getType(),
-    // 摘要附的歷史檔名帶每次隨機的會話代號，其餘逐字。
+    // 摘要附的歷史檔名帶每次隨機的會話代號；指向讀回工具的那一句只有接了日誌的那一邊有。其餘逐字。
     content: JSON.parse(
-      JSON.stringify(message.content).replace(/session_[0-9a-f]+\.md/g, 'session_X.md'),
+      JSON.stringify(message.content)
+        .replace(/session_[0-9a-f]+\.md/g, 'session_X.md')
+        .replace(/ Originals also stay in the session log: [^\\]*?literal string\./g, ''),
     ) as unknown,
     toolCalls: 'tool_calls' in message ? message.tool_calls : undefined,
     toolCallId: 'tool_call_id' in message ? message.tool_call_id : undefined,
