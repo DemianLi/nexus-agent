@@ -1,7 +1,7 @@
 /**
  * 一對裡的葉子整支跑起來（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）：子行程起真的 `conversation-process.ts`
  * 加 `--pair-socket`，橋那一端是這個測試用 TS 寫的**假組合行程**（`pair-protocol.ts` 的編解碼；握手、登記、`attach` 的順序照
- * `pair_protocol.rs` 檔頭），不是真的 `nexus-composition`。真的組合行程對真的葉子在 `pair-conversation.integration.test.ts`
+ * `pair_protocol.rs` 檔頭），不是真的 `nexus-composition`。真的組合行程對真的葉子在 `per-thread.integration.test.ts`
  * （要 Linux 與 `nexus-composition` 執行檔）。這支量的是葉子自己的行為：連橋、登記、收 `attach`、橋斷時結束，不要 Linux。
  *
  * 跑的是原始碼（`node --import tsx`），子行程環境同 `conversation-process.test.ts`。

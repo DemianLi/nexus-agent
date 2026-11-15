@@ -1,6 +1,6 @@
 /**
  * 一對裡的葉子（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）：假的橋連線、假的控制面、假的計時器，
- * 量「連上登記什麼、`attach` 怎麼綁、橋斷了什麼時候結束」。接真的組合行程在 `pair-conversation.integration.test.ts`。
+ * 量「連上登記什麼、`attach` 怎麼綁、橋斷了什麼時候結束」。接真的組合行程在 `per-thread.integration.test.ts`。
  */
 
 import { PairConnectError } from '@nexus/host-bridge';

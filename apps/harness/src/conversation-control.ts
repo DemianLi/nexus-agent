@@ -207,7 +207,7 @@ export class ConversationControl {
 
   /**
    * 綁 thread：stdio 的 `bind` 與橋上的 `attach`（`pair-leaf.ts`）走同一條。`handler.open` 失敗不算拒絕（之後的請求會再試），
-   * 只有「已綁別條 thread」會拒。回來的時候 `bound` 已送出。
+   * 只有「已綁別條 thread」會拒。回 `ok: true` 時 `bound` 已送出。
    */
   async bind(threadId: string): Promise<BindOutcome> {
     if (this.#bound !== undefined) {

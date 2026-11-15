@@ -1,28 +1,13 @@
 /**
- * 一對裡的葉子這一側（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)，一對的設計見 #2583）：`--pair-socket` 給了，
- * 對話行程就連組合行程的橋、登記，並替它做 `attach`；組合行程轉來的 `bind` 到這裡變成 {@link ConversationControl.bind}，
- * 與監督行程在 stdio 上送的 `bind` 是同一條路。沒給 `--pair-socket` 就不呼叫這裡的任何東西。
+ * 一對裡的葉子這一側（[#2769](https://github.com/DemianLi/nexus-agent/issues/2769)）：`--pair-socket` 給了，對話行程就連組合行程的橋、
+ * 登記空的 `tools` 與 `hooks`，並替它做 `attach`，綁 thread 走 {@link ConversationControl.bind}，與 stdio 的 `bind` 同一條路。
+ * 沒給 `--pair-socket` 就不呼叫這裡的任何東西。
  *
- * - **登記是空的**：`tools`、`hooks` 都沒有。橋這一側還不替這個行程做事，只負責讓組合行程知道葉子在、並把 `bind` 轉過來。
- * - **`attach` 的 result 在綁完才回**：`handler.open` 結束（成功或失敗都算，同 stdio 的 `bind`）。組合行程收到才送 `bound`。
- *   拒絕（已綁別條 thread、payload 不對）回錯，組合行程不送 `bound`、不重試。
- * - **前台的連線不走橋**：組合行程 listen 前台的 `--socket`、原樣轉到這個行程自己 listen 的 `--socket`；橋斷了前台流量照通。
+ * - `attach` 的 result 在 `handler.open` 結束之後才回；拒絕（已綁別條 thread、payload 不對）回錯。
+ * - 橋斷了：還沒 `attach` 成功就立刻結束；已綁就 `stopAdmission`，閒了結束，{@link BRIDGE_LOST_GRACE_MS} 到了強制結束。
+ *   結束碼 {@link BRIDGE_LOST_EXIT_CODE}。連不上橋（{@link PAIR_STARTUP_DEADLINE_MS} 內）結束碼 {@link BRIDGE_UNREACHABLE_EXIT_CODE}。
  *
- * ## 橋斷了
- *
- * 組合行程在葉子斷線時只清登記與綁定、照活，同一個葉子重連不會被收（pid 作廢，要等下一則 `leaf{pid}`，只在起葉子時送）。
- * 留著沒有路能恢復，所以葉子自己結束，結束碼 {@link BRIDGE_LOST_EXIT_CODE}，stderr 一行原因：
- *
- * - 還沒 `attach` 成功（沒綁、或 `handler.open` 還在跑）：**立刻結束**。留著會讓那條 thread 等不到 `up` 也等不到 `down`。
- * - 已綁：先停收會開新一輪的命令（`stopAdmission`，已在跑的一輪與串流照舊），**閒了就結束**；{@link BRIDGE_LOST_GRACE_MS}
- *   到了還不閒就強制結束。這個上限是暫定值，沒量過一輪的長度分布。
- *
- * **已知限制：**橋斷到結束之間，這個葉子在監督行程眼中仍是活的、仍佔名額；`stopAdmission` 之後進來的新一輪被拒，前台回
- * `server_closing`（web 顯示「伺服器正在收尾」），使用者的那個請求失敗，不會被分到別的葉子。分流在監督行程與組合行程那一側（#2858）。
- * 死因在監督行程那邊記成 `crash`，只能靠結束碼與 stderr 跟真的壞掉分開。
- *
- * 連不上橋（{@link PAIR_STARTUP_DEADLINE_MS} 內沒進去）也結束，結束碼 {@link BRIDGE_UNREACHABLE_EXIT_CODE}：沒有橋就沒有 `attach`，
- * 這一對廢了。
+ * 理由、結束碼表與已知限制見 docs/operations.md〈成對執行：對話行程連組合行程的橋〉。
  *
  * @module
  */
