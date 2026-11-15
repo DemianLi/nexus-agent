@@ -2,7 +2,7 @@ import type { Event } from '@nexus/wire';
 
 /**
  * 真的線上形狀的 frame 建構器：測試拿它**折進 `reduceAll`**，不手寫 `entries`（手寫的 fixture 會與折疊器漂移，
- * `@nexus/wire` 的 `conversation.ts` 檔頭講的就是這件事）。形狀照 `conversation.test.ts` 與 `history-ui.test.tsx`。
+ * `@nexus/wire` 的 `conversation.ts` 檔頭講的就是這件事）。形狀照 `conversation.test.ts` 與 `app/history-ui.test.tsx`。
  *
  * 每個建構器自己領 `seq`（單調遞增），所以同一個 `Script` 建出來的 frame 可以直接丟給 `reduceAll`；
  * 另開一個 `Script` 就是「重新整理之後從頭重放」。

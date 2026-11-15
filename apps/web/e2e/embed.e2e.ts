@@ -16,7 +16,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { build } from 'vite';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 
-import { EMBED_UNAUTHORIZED_TEXT } from '../src/lib/embed-unauthorized';
+import { EMBED_UNAUTHORIZED_TEXT } from '../src/shared/connection/embed-unauthorized';
 
 import { startE2eServe, type E2eServe, type ScriptTurn } from './serve';
 import { shot as saveShot } from './shot';

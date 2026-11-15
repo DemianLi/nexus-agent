@@ -1,5 +1,5 @@
 /*
- * 語法高亮的色票：shiki css-variables 主題吐出來的 `--shiki-*`（`src/lib/markdown/highlight.ts`）。
+ * 語法高亮的色票：shiki css-variables 主題吐出來的 `--shiki-*`（`src/shared/markdown/highlight.ts`）。
  * 形狀照 dsh `packages/client/ui-theme/src/styles/shiki.css`（token 表只給值），**值是 nexus 自己的**：
  * 全部指到既有的語意色，亮暗跟著 token 一起換，不另開一組色；對比度由 `tokens-contrast.test.ts` 的 stage 那幾對驗。
  * 字色對齊 `.md-code`，高亮與純文字的區塊看起來一樣。

@@ -1,7 +1,7 @@
 /**
  * nexus 層（#1638 PR B）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/message-scroller.tsx`），外觀照 SG（#1468 Q8）。
  * 這個檔是一行轉出，沒有本地修改。捲到最新的按鈕原本有一條（第 41 條，動效照 nexus 的 §7），④ 收尾換全域動效時撤掉，
- * 改回 vendor 原樣（#1687）：藏著時 `translate-y-full`、`scale-95`。浮鈕的避讓（`hooks/use-scroll-button-clearance.ts`）
+ * 改回 vendor 原樣（#1687）：藏著時 `translate-y-full`、`scale-95`。浮鈕的避讓（`features/transcript/use-scroll-button-clearance.ts`）
  * 因此在過渡跑完時再量一次，見那個檔的檔頭。
  *
  * 跟它有關的本地修改都不在這個檔：

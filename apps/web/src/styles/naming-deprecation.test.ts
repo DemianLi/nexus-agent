@@ -43,23 +43,32 @@ function walk(dir: string, keep: (path: string) => boolean): string[] {
 const isTest = (path: string) => /\.test\.tsx?$/.test(path);
 const code = walk(SRC, (path) => /\.tsx?$/.test(path) && !isTest(path));
 const styles = walk(SRC, (path) => path.endsWith('.css'));
-const components = code.filter(
-  (path) => path.startsWith(join(SRC, 'components')) && path.endsWith('.tsx'),
-);
 const rel = (path: string) => relative(SRC, path);
+/** 元件住的資料夾：`components/ui`、各切片、共用層與組裝層。 */
+const COMPONENT_DIRS = ['components', 'features', 'shared', 'app'].map((dir) => join(SRC, dir));
+/** 住在上面那幾個資料夾、但不是元件的檔（根元件、內嵌版的進入點、markdown 的渲染）：搬資料夾之前它們不在 `components/` 底下。 */
+const NOT_COMPONENTS: readonly string[] = [
+  'app/App.tsx',
+  'app/embed/embedded-chat.tsx',
+  'app/embed/nexus-chat-element.tsx',
+  'shared/markdown/katex.tsx',
+  'shared/markdown/render.tsx',
+];
+const components = code.filter(
+  (path) =>
+    COMPONENT_DIRS.some((dir) => path.startsWith(dir)) &&
+    path.endsWith('.tsx') &&
+    !NOT_COMPONENTS.includes(rel(path)),
+);
 const read = (path: string) => readFileSync(path, 'utf8');
 
 /** 檔名重複了資料夾名、在這條規則之前就有的檔。 */
-const REPEATS_FOLDER: readonly string[] = [
-  'components/conversation/conversation-body.tsx',
-  'components/conversation/conversation-feedback-dialog.tsx',
-  'components/conversation/conversation-notices.tsx',
-];
+const REPEATS_FOLDER: readonly string[] = [];
 
 /** props 命名的例外，在這條規則之前就有的。只能變少。 */
 const PROPS_ALLOWED: readonly { file: string; name: string; why: string }[] = [
   {
-    file: 'components/sidebar/right-sidebar-context.ts',
+    file: 'shared/right-sidebar/context.ts',
     name: 'isMobile',
     why: '跟 vendor 的 `useSidebar().isMobile` 同名：左右側欄用同一個字，呼叫端不必記兩個',
   },

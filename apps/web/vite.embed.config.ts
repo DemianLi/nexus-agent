@@ -18,7 +18,7 @@ function elementTypes(): Plugin {
       this.emitFile({
         type: 'asset',
         fileName: 'nexus-chat.d.ts',
-        source: await readFile(new URL('src/embed/nexus-chat.d.ts', import.meta.url), 'utf8'),
+        source: await readFile(new URL('src/app/embed/nexus-chat.d.ts', import.meta.url), 'utf8'),
       });
     },
   };
@@ -33,7 +33,7 @@ function elementTypes(): Plugin {
  * - 不清空 `dist`：網頁那一份先建好，這裡只加 `embed.js`（`package.json` 的 `build` 照這個順序跑）。
  * - 只有一支檔（`inlineDynamicImports`）：宿主頁只放一個 `<script type="module">`。
  * - 樣式全部進 shadow root，改寫見 `embed-shadow-css.ts`。
- * - 給宿主頁的型別 `src/embed/nexus-chat.d.ts` 照原樣放到 `dist/nexus-chat.d.ts`，跟 `embed.js` 一起供應。
+ * - 給宿主頁的型別 `src/app/embed/nexus-chat.d.ts` 照原樣放到 `dist/nexus-chat.d.ts`，跟 `embed.js` 一起供應。
  */
 export default defineConfig({
   base: './',
@@ -50,7 +50,7 @@ export default defineConfig({
     emptyOutDir: false,
     assetsInlineLimit: 0,
     rollupOptions: {
-      input: 'src/embed/index.ts',
+      input: 'src/app/embed/index.ts',
       preserveEntrySignatures: 'strict',
       output: { format: 'es', entryFileNames: 'embed.js', inlineDynamicImports: true },
     },

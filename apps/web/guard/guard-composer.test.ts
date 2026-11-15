@@ -893,7 +893,7 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
   );
 
   /**
-   * 浮鈕的避讓（`hooks/use-scroll-button-clearance.ts`，#1295）在浮鈕位移之後還對（#1687 驗收 C3）。浮鈕從藏著的位置
+   * 浮鈕的避讓（`features/transcript/use-scroll-button-clearance.ts`，#1295）在浮鈕位移之後還對（#1687 驗收 C3）。浮鈕從藏著的位置
    * （往下一整個身高、縮 .95）過渡到出現的位置，hook 在過渡途中量到的是途中的框；它要在 `transitionend` 時重量，最後的
    * `data-obscuring` 才對得上終點的框。reduced-motion 下沒有過渡，靠捲動那次重量就量到終點：primitive 的 `data-active` 在 scroll
    * 事件之前就翻好（`@shadcn/react` 0.3.1 實測）；升 primitive 之後翻轉時機變了，reduced-motion 那一格會紅。
