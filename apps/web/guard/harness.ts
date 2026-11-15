@@ -1777,9 +1777,10 @@ const AXE_SOURCE = readFileSync(
 
 export async function collectAxe(
   page: Page,
+  skip: readonly string[] = [],
 ): Promise<{ violations: AxeFinding[]; incomplete: Record<string, number> }> {
   await page.addScriptTag({ content: AXE_SOURCE });
-  return page.evaluate(async () => {
+  return page.evaluate(async (skipped) => {
     interface Result {
       id: string;
       help: string;
@@ -1798,6 +1799,7 @@ export async function collectAxe(
         type: 'tag',
         values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'],
       },
+      rules: Object.fromEntries(skipped.map((id) => [id, { enabled: false }])),
     });
     const name = (target: unknown[]) => {
       const selector = target[target.length - 1];
@@ -1812,7 +1814,7 @@ export async function collectAxe(
       ),
       incomplete: Object.fromEntries(result.incomplete.map((v) => [v.id, v.nodes.length])),
     };
-  });
+  }, skip);
 }
 
 /**
@@ -1828,3 +1830,20 @@ export const AXE_KNOWN: readonly { key: string; why: string }[] = [
     why: 'Base UI 把浮層 portal 到 body 底下，不在任何 landmark 裡；浮層開著時頁面其他部分是 inert',
   },
 ];
+
+/**
+ * 子頁上不跑的規則：它們問的是整份文件的結構（有沒有 main、有沒有 h1、內容在不在 landmark 裡、landmark 有沒有重複），
+ * 子頁只畫一塊元件，不是一份文件。這幾條在總覽那一頁照跑。
+ */
+export const AXE_PAGE_RULES: readonly string[] = [
+  'landmark-one-main',
+  'page-has-heading-one',
+  'region',
+  'landmark-unique',
+  'landmark-no-duplicate-banner',
+];
+
+/**
+ * axe 在各子頁上已知的違規，規則同上：**只能變少**。
+ */
+export const AXE_KNOWN_OVERLAYS: readonly { key: string; why: string }[] = [];
