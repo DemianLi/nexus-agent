@@ -187,7 +187,7 @@ enum Phase {
     Starting,
     /// 預熱池裡的：送了 `ready`，還沒指派 thread。
     Warm,
-    /// 送了 `bind`，還沒回 `bound`。
+    /// 送了 `bind`，還沒回 `bound`；成對時組合行程在收之後才讀到的 `bound` 不理，也停在這裡。
     Binding,
     /// 收到同一個 thread 的 `bound`；沒在收的才會給前台 `up`。
     Up,
@@ -1194,7 +1194,7 @@ impl Supervisor {
                 conversation.read_only = false;
             }
             if conversation.drain.is_some() {
-                // 等它回答：回 `busy` 或逾時就回 `up`；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
+                // 等它回答：回 `busy` 或逾時就回 `up`（成對而組合行程在收的不回，等這一對的 `down`）；回 `drained` 就收掉，這條跟其他排著的一起重算名額，收完照順序起。
                 self.queue(thread, open);
             } else if conversation.phase == Phase::Up
                 && conversation.proc.stop.is_none()
@@ -1482,15 +1482,20 @@ impl Supervisor {
         }
     }
 
-    /// `drain` 的回答是不收（`busy` 或逾時）：排著等它的那條 thread 回 `up`，其餘排著的另找名額。
+    /// `drain` 的回答是不收（`busy` 或逾時）：排著等它的那條 thread 回 `up`（成對而組合行程在收的不回），其餘排著的另找名額。
     fn not_drained(&mut self, index: usize) {
+        let composition_stopping = self.composition_stopping(&self.conversations[index]);
         let conversation = &mut self.conversations[index];
         conversation.drain = None;
         conversation.idle_since = None;
         if let Some(thread) = conversation.thread.clone() {
             if let Some(at) = self.pending.iter().position(|(t, _)| *t == thread) {
                 self.pending.remove(at);
-                if conversation.phase == Phase::Up && conversation.proc.stop.is_none() {
+                // 組合行程在收：不回 `up`，這一對收完回的 `down` 就是回答。
+                if conversation.phase == Phase::Up
+                    && conversation.proc.stop.is_none()
+                    && !composition_stopping
+                {
                     let socket = conversation.socket.as_os_str().as_bytes().to_vec();
                     self.tell_front(&FrontEvent::Up {
                         thread_id: thread,
@@ -2988,6 +2993,115 @@ mod tests {
             composition.max_silence >= Duration::from_secs(1),
             "那則 `ready` 沒有讀到"
         );
+    }
+
+    /// 沒有前台時接一個假的（通道兩端接在一起）並回空；有了就回上一次呼叫之後送給它的事件。
+    fn front_events(supervisor: &mut Supervisor) -> Vec<FrontEvent> {
+        if supervisor.front.is_none() {
+            let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+            supervisor.front = Some(Proc::new(
+                libc::pid_t::MAX - 3,
+                process::Chan::from_fds(
+                    std::os::fd::OwnedFd::from(read),
+                    std::os::fd::OwnedFd::from(write),
+                    1024,
+                ),
+            ));
+            return Vec::new();
+        }
+        let front = supervisor.front.as_mut().unwrap();
+        front.chan.flush();
+        front
+            .chan
+            .receive()
+            .unwrap()
+            .iter()
+            .map(|frame| crate::supervisor_protocol::decode_front_event(frame).unwrap())
+            .collect()
+    }
+
+    /// 組合行程被當場殺、還沒收屍：葉子這時回 `busy`（或 `drain` 逾時）不回 `up`，排著的那條 thread 等到的是收屍之後的 `down`。
+    #[test]
+    fn a_leaf_whose_composition_is_being_collected_is_not_reported_up() {
+        let (mut supervisor, _, _) = with_a_pair("not-drained", PairState::Bound);
+        front_events(&mut supervisor);
+        supervisor.conversations[0].idle_since = Some(Instant::now());
+        supervisor.conversations[0].drain = Some(Instant::now());
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.compositions[0].cause = Some(DeathCause::Stalled);
+        supervisor.compositions[0].proc.kill_now();
+        supervisor.not_drained(0);
+        assert_eq!(front_events(&mut supervisor), []);
+        assert!(supervisor.pending.is_empty());
+        supervisor.on_exit(COMPOSITION, KILLED);
+        assert_eq!(
+            front_events(&mut supervisor),
+            [FrontEvent::Down {
+                thread_id: b"t".to_vec(),
+                cause: DeathCause::Stalled,
+            }]
+        );
+    }
+
+    /// 組合行程沒在收時照舊：葉子回 `busy`，排著的那條 thread 回 `up`。
+    #[test]
+    fn a_leaf_that_is_not_drained_is_reported_up() {
+        let (mut supervisor, _, _) = with_a_pair("not-drained-up", PairState::Bound);
+        front_events(&mut supervisor);
+        supervisor.conversations[0].idle_since = Some(Instant::now());
+        supervisor.conversations[0].drain = Some(Instant::now());
+        supervisor.pending.push((b"t".to_vec(), OpenMode::Run));
+        supervisor.not_drained(0);
+        assert!(matches!(
+            front_events(&mut supervisor)[..],
+            [FrontEvent::Up { ref thread_id, .. }] if thread_id == b"t"
+        ));
+    }
+
+    /// `Binding` 的一對，組合行程被當場殺、管線裡已經有 `bound`：不進 `Bound`，葉子不變成 `Up`，也不回 `up`。
+    #[test]
+    fn a_bound_from_a_composition_being_collected_does_not_advance_the_pair() {
+        let (mut supervisor, _, _) = with_a_pair("late-bound", PairState::Binding);
+        front_events(&mut supervisor);
+        let composition = &mut supervisor.compositions[0];
+        composition.proc.hello = true;
+        composition
+            .proc
+            .chan
+            .send(&crate::supervisor_protocol::encode_conversation_report(
+                &ConversationReport::Bound {
+                    thread_id: b"t".to_vec(),
+                },
+            ));
+        composition.proc.kill_now();
+        supervisor.on_composition_readable(0);
+        let composition = &supervisor.compositions[0];
+        assert!(composition.proc.chan.read_closed() && composition.cause.is_none());
+        assert_eq!(composition.state(), PairState::Binding);
+        assert_eq!(supervisor.conversations[0].phase, Phase::Binding);
+        assert_eq!(front_events(&mut supervisor), []);
+    }
+
+    /// 葉子被當場殺、組合行程還沒在收，這時讀到 `ready`：不送 `bind`，狀態與沉默的起算都不動。
+    #[test]
+    fn a_ready_for_a_leaf_being_collected_does_not_bind() {
+        let since = Instant::now();
+        for (tag, state) in [
+            ("leaf-collected-starting", PairState::Starting { since }),
+            ("leaf-collected-refilling", PairState::Refilling { since }),
+        ] {
+            let (mut supervisor, _, _) = with_a_pair(tag, state);
+            composition_ready_in_the_pipe(&mut supervisor);
+            supervisor.conversations[0].proc.kill_now();
+            supervisor.on_composition_readable(0);
+            let composition = &mut supervisor.compositions[0];
+            assert_eq!(composition.state(), state, "{tag}");
+            assert!(composition.heard_at.is_none(), "{tag}");
+            // 兩端接在一起：送過 `bind` 的話這裡讀得到一框。
+            composition.proc.chan.flush();
+            assert_eq!(composition.proc.chan.receive().unwrap().len(), 0, "{tag}");
+            assert_eq!(supervisor.conversations[0].phase, Phase::Starting, "{tag}");
+        }
     }
 
     /// 在收的組合行程，晚到的 `ready` 不推進這一對：狀態不進 `Binding`、不起算沉默。測試裡開始收之後通道的寫端就關了，
