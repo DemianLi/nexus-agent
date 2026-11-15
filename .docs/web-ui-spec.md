@@ -415,7 +415,7 @@
 - **三樣齊**：成文的規範、對應的 token 或元件、會變紅的測試。規則與擋它的測試同一張 PR 進。
 - **在哪一刻擋**：
   - 掃原始碼的測試（`apps/web/src/styles/*.test.ts`、`apps/web/src/components/ui/registry-edits.test.ts`）在合併前擋：PR 動到 `apps/web/src` 的 tsx、css 或 `apps/web/tokengen/` 時，CI 輕的模式會跑它們（`.github/scripts/plan_ci.py`）。
-  - 真瀏覽器的 `apps/web/guard/`、視覺回歸在合併後那一輪。axe 跑兩層：jsdom 那一層（`src/test/axe.ts`）跟著元件測試在合併前跑，算不了看像素與尺寸的規則；真瀏覽器那一層（`guard/guard.test.ts`，[#2765](https://github.com/DemianLi/nexus-agent/issues/2765)）對 `guard/` 的測試頁跑全部規則，含 `color-contrast` 與 `target-size`，亮暗各一次。已知的違規列在 `guard/harness.ts` 的 `AXE_KNOWN`，清單只會變短。
+  - 真瀏覽器的 `apps/web/guard/`、視覺回歸在合併後那一輪。axe 跑兩層：jsdom 那一層（`src/test/axe.ts`）跟著元件測試在合併前跑，算不了看像素與尺寸的規則；真瀏覽器那一層（`guard/guard.test.ts`，[#2765](https://github.com/DemianLi/nexus-agent/issues/2765)）對 `guard/` 的測試頁跑全部規則，含 `color-contrast` 與 `target-size`，總覽與每個子頁（浮層開著、選單展開的樣子在子頁上）亮暗各一次。子頁只畫一塊元件，問整份文件結構的規則（有沒有 main、h1、landmark）在子頁上不跑，清單在 `AXE_PAGE_RULES`。已知的違規列在 `guard/harness.ts` 的 `AXE_KNOWN` 與 `AXE_KNOWN_OVERLAYS`，清單只會變短。
 - **無障礙**：WCAG 2.2 AA 是硬門檻（§8）。每個共用元件要有鍵盤與焦點的測試。
 - **定期複驗**：每完成一個 Phase，照檢驗報告的量尺抽 5 個元件重評，至少 2 個是上次沒過的。分數只當複驗的量尺，不當合併的條件。
 
