@@ -138,7 +138,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 9,
     kind: 'additive',
     ref: '#305',
-    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:414',
+    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:417',
   },
   {
     from: 9,
@@ -186,7 +186,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1191',
+    readerBranch: 'apps/harness/src/conversation-history.ts:1195',
   },
   {
     from: 33,
@@ -210,7 +210,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 45,
     kind: 'additive',
     ref: '#1301',
-    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:418',
+    readerBranch: 'packages/nexus-core/src/conversation-replay.ts:421',
   },
   { from: 45, to: 46, kind: 'additive', ref: '#1302' },
   { from: 46, to: 47, kind: 'additive', ref: '#1303' },
