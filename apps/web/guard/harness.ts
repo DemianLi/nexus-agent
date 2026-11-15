@@ -1827,8 +1827,4 @@ export const AXE_KNOWN: readonly { key: string; why: string }[] = [
     key: 'region base-ui-portal',
     why: 'Base UI 把浮層 portal 到 body 底下，不在任何 landmark 裡；浮層開著時頁面其他部分是 inert',
   },
-  {
-    key: 'target-size sidebar-menu-action',
-    why: 'vendor 的 SidebarMenuAction 是 20×24，不到 WCAG 2.2 的 24×24（2.5.8）；要不要用覆寫補到 24 另開卡定（#2791）',
-  },
 ];

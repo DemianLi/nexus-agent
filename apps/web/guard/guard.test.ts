@@ -1,5 +1,7 @@
 // @vitest-environment node
 /** 瀏覽器護欄（#1512）：出貨 CSS 的焦點、對比、陰影與 modal 浮層。量具與 Chrome、伺服器的生命週期在 `harness.ts`。 */
+import { readFileSync } from 'node:fs';
+
 import { type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parseColor, shadowLayers } from '../src/styles/color-math';
@@ -693,6 +695,11 @@ describe.each<Theme>(['light', 'dark'])('axe 在真瀏覽器裡跑（#2765）：
     expect(AXE_KNOWN.filter((k) => k.why.trim() === '')).toEqual([]);
   });
 
+  test('側欄選項鈕的點擊區是 24×24（本地修改第 86 條）', async () => {
+    const box = await page.locator('[data-guard-focus="sidebar-menu-action"]').boundingBox();
+    expect(box).toMatchObject({ width: 24, height: 24 });
+  });
+
   test('量具自檢：axe 真的跑了看像素的規則（判不出來的 color-contrast 有記到）', () => {
     expect(axe.incomplete['color-contrast']).toBeGreaterThan(0);
   });
@@ -776,6 +783,94 @@ describe.each<Theme>(['light', 'dark'])('Button 的尺寸與停用（#2762）：
     }
     expect(same).toEqual([]);
   });
+});
+
+/**
+ * Windows 高對比的通用門檻（#2796）：每一個測試頁上，表示選取的元素與 SG 的面在 `forced-colors: active` 下都要有邊框或外框。
+ * 新元件畫在測試頁上就會被量到，不必逐個加案例。只開亮色：高對比下顏色由系統色決定，亮暗畫出來一樣。
+ * `data-active`、`data-checked`、`data-state` 不算在內：它們的意思每個元件不一樣，有的自己另畫了記號（勾、圓點）。
+ */
+describe('Windows 高對比：每個測試頁（#2796）', () => {
+  const SELECTED = [
+    "[aria-selected='true']",
+    "[data-selected='true']",
+    "[aria-current]:not([aria-current='false'])",
+    "[aria-pressed='true']",
+    '[data-highlighted]',
+    '[data-located]',
+    "[data-popup-open]:not([data-slot='tooltip-trigger'])",
+  ].join(',');
+  const PANES = '.bg-card,.bg-popover,.glass-panel';
+  /** 一次開幾頁。 */
+  const BATCH = 4;
+
+  const source = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+  const names = [
+    ...new Set(
+      [...source.slice(source.indexOf('function OverlayPage')).matchAll(/case '([\w-]+)':/g)].map(
+        (m) => m[1] ?? '',
+      ),
+    ),
+  ];
+
+  async function scan(name: string): Promise<{ missing: string[]; kinds: string[] }> {
+    const page =
+      name === ''
+        ? await open('light')
+        : await openOverlay(name, 'light', { forcedColors: true, marks: {} });
+    try {
+      if (name === '') await page.emulateMedia({ forcedColors: 'active' });
+      return await page.evaluate(
+        ({ selected, panes }) => {
+          const missing: string[] = [];
+          const kinds: string[] = [];
+          for (const [kind, selector] of [
+            ['選取', selected],
+            ['面', panes],
+          ] as const) {
+            for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+              const box = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              if (box.width === 0 || box.height === 0 || style.visibility === 'hidden') continue;
+              const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+              const border = (['Top', 'Right', 'Bottom', 'Left'] as const).some(
+                (side) =>
+                  style[`border${side}Style`] !== 'none' &&
+                  parseFloat(style[`border${side}Width`]) > 0,
+              );
+              kinds.push(kind);
+              if (!outline && !border) {
+                const what =
+                  el.dataset['slot'] ?? el.getAttribute('role') ?? el.tagName.toLowerCase();
+                missing.push(`${kind} ${what}`);
+              }
+            }
+          }
+          return { missing, kinds };
+        },
+        { selected: SELECTED, panes: PANES },
+      );
+    } finally {
+      await page.close();
+    }
+  }
+
+  test('選取與面都有邊框或外框', async () => {
+    const missing = new Set<string>();
+    const kinds = new Set<string>();
+    const pages = ['', ...names];
+    for (let i = 0; i < pages.length; i += BATCH) {
+      const batch = pages.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(scan));
+      results.forEach((result, offset) => {
+        for (const kind of result.kinds) kinds.add(kind);
+        for (const label of result.missing) missing.add(`${batch[offset] || 'main'}：${label}`);
+      });
+    }
+    // 量具自檢：兩類都真的量到東西。
+    expect([...kinds].sort()).toEqual(['選取', '面'].sort());
+    expect([...missing].sort()).toEqual([]);
+  }, 240_000);
 });
 
 /**

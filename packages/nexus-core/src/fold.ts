@@ -556,6 +556,10 @@ export interface FoldedAgentParams {
    * 由決定掛不掛的這裡一起算（{@link filesystemToolDescriptions}）。root 與兩條子代理路徑共用。一顆都不換時省略。
    */
   fileToolDescriptions?: FilesystemToolDescriptions;
+  /**
+   * 補懸空呼叫那顆 middleware 要不要掛改狀態的 `beforeAgent`（{@link createPatchToolCallsMiddleware} 的 `stateFix`）。**省略時掛**；歷史從日誌推（`log`）時是 `false`：補在推導端，狀態上的補沒有人讀。root、一次性與背景子代理共用這一格。
+   */
+  patchToolCallsStateFix?: boolean;
 }
 
 /**
@@ -1069,6 +1073,7 @@ export function foldRegistry(
     options.fileTools,
   );
   if (fileToolDescriptions !== undefined) params.fileToolDescriptions = fileToolDescriptions;
+  if (options.history?.source === 'log') params.patchToolCallsStateFix = false;
 
   return params;
 }

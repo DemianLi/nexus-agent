@@ -276,8 +276,9 @@
 **Windows 高對比**（`forced-colors: active`，[#2796](https://github.com/DemianLi/nexus-agent/issues/2796)）
 - 高對比下瀏覽器把底色換成系統色、拿掉陰影與 `backdrop-filter`。**只靠半透明底色表示的選取、只靠陰影或玻璃邊的面，要補系統色的外框**：選取 2px `Highlight`，面 1px `CanvasText`，畫在裡面不佔版面。
 - 現在補的：command 鍵盤走到的那一項、被定位的訊息、開著的選單 Trigger、目前這條會話；dialog、alert-dialog、sheet、tooltip、card、輸入框。目前這條會話是停用的按鈕，高對比下換回按鈕字色、不變淡（它是選取中，不是不能用）。
-- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 83 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。量的是 Chrome 模擬的高對比，沒有在真的 Windows 上看過。
-- 沒補的：`glass` 這個 `Button` variant 沒有邊框（產品沒用到，用到再補）。高對比還不是門檻：新元件沒有測試擋「選取只靠底色」。
+- 規則在 `apps/web/src/styles/solid-glass.overrides.css` 的 `@media (forced-colors: active)`（vendor README 本地修改第 85 條），`solid-glass-overrides.test.ts` 與 `guard/` 守著。量的是 Chrome 模擬的高對比，沒有在真的 Windows 上看過。
+- **高對比是門檻**：除了上面列名字的，覆寫檔另有通用的兩組——帶 `aria-selected`、`aria-current`、`aria-pressed`、`data-highlighted`、`data-popup-open` 的算選取（tooltip 的 Trigger 開著只是滑鼠停在上面，不算），SG 的三種面 `.bg-card`、`.bg-popover`、`.glass-panel` 算面。`guard/`「Windows 高對比：每個測試頁」在模擬的高對比下掃總覽與每個子頁，這兩類裡有一個既沒邊框也沒外框就紅。新元件的選取用這些標準屬性、面用這三種 class，就不必另外補。
+- 測試擋不到的：用別的屬性表示選取的（`data-active`、`data-checked`、`data-state` 語意不一，沒有納入）、不用這三種 class 的面、沒放進測試頁的畫面。`glass` 這個 `Button` variant 沒有邊框（產品沒用到，用到再補）。
 
 **鍵盤**
 - 核准面板與計劃審核面板不加快捷鍵，**Esc 不做事**。
@@ -441,7 +442,7 @@
 | 任意值的圓角 | 0 | 8 處、5 種；其中數字任意值 3 處（`rounded-[2px]` 2 處、`rounded-[4px]` 1 處），其餘是 `inherit` 與引用 token 的算式 |
 | 任意值的陰影 | 1 處，`Surface` 的內層底配方，引用 `--border` | 2 處，都引用 token |
 | 層級 | `z-50`、`z-10` 各 1 處 | `z-50` 14 處、`z-10` 4 處、`z-20` 2 處、`-z-1` 2 處 |
-| 半透明（0 與 100 以外） | `opacity-60` 2 處、`opacity-50`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `f3581ca8`，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
+| 半透明（0 與 100 以外） | `opacity-50` 2 處、`opacity-60`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `5242b3ca` 加上暫停鈕對齊到 50，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
 
 vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），這一節有級距的類別除外：間距、任意值字級、數字圓角、陰影、層級、停用的透明度。
 
@@ -454,7 +455,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 **字級**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：標準是 §5 的四階，產品原始碼只用這四階。vendor 的 SG 元件另用了 7 種任意值（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem，共 20 處），照現況凍結：vendor 檔不動，逐條列在 `VENDOR_PINNED`，規則同間距。vendor 的 `text-sm`、`text-xs` 是 SG 原樣（§5），不在清單裡。
 
-**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 現有的全部符合。產品原始碼有一處例外：`goal-bar.tsx` 的暫停鈕是 `disabled:opacity-60`，列在 `ALLOWED`，對齊到 50 要 demian 看過前後對照再改。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
+**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 與產品原始碼現有的全部符合。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
 
 **圓角**：階梯照 §5「形狀」。數字任意值（`rounded-[20px]`）不寫；`rounded-[inherit]` 與引用 token 的算式（`rounded-[calc(var(--radius)-3px)]`）不算任意值。vendor 現有的 3 處數字任意值列在 `VENDOR_PINNED`，規則同間距。
 
@@ -479,6 +480,8 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 | 共用元件 | 兩處以上共用的自製積木（`COMPONENTS.md`「什麼時候抽共用元件」） | 文件、測試、目錄裡的預覽 |
 | 畫面專屬元件 | 只在一個畫面用的 | 遵守 token 與 §13.4 |
 
+前兩層的每一個元件在 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「共用元件一覽」有一列（用在哪、預覽在測試頁的哪一頁），`src/components/ui/components-doc.test.ts` 守著：`ui/` 的檔與列一一對應、預覽的子頁存在。新抽的共用元件沒加列，測試擋不到（`ui/` 之外沒有固定的資料夾可以對）。
+
 ### 13.6 治理
 
 - **要 demian 核可的**：token 的新增、刪除、改值；新增共用元件。
@@ -495,9 +498,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 | 規則 | 現況 | 卡 |
 | --- | --- | --- |
-| 側欄選項鈕的點擊區到 24×24（§8、§13.3） | 測試頁上量到 20×24，列在 `AXE_KNOWN` | [#2791](https://github.com/DemianLi/nexus-agent/issues/2791) |
-| 每個共用元件有文件與預覽（§13.5） | 預覽有目錄了（`COMPONENTS.md`「元件目錄」，內容是 `guard/` 測試頁的每個子頁）；文件只有 `Button` 補了，其他共用元件不齊 | 還沒開卡 |
-| Windows 高對比列為門檻 | 量過了（[#2764](https://github.com/DemianLi/nexus-agent/issues/2764)），量到的缺口補了（§8「Windows 高對比」）；新元件還沒有通用的測試擋，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
+| 在真的 Windows 高對比下看過 | 已列為門檻（§8「Windows 高對比」），但量的都是 Chrome 模擬的 forced-colors，沒在真的 Windows 上看過 | [#2796](https://github.com/DemianLi/nexus-agent/issues/2796) |
 | 視覺回歸會擋 | 合併後那一輪列出與上一個 commit 畫面有差的測試頁（[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「視覺差異」），只報告、不紅；沒有基準圖、沒有門檻 | [#2766](https://github.com/DemianLi/nexus-agent/issues/2766) |
 
 清 §13.4 的任意值時，與最近一級差 2px 以內的直接對齊，PR 附前後截圖；差更多的交 demian 逐條定。全部清完，那一類的護欄才上線。

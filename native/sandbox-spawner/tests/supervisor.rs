@@ -3197,6 +3197,127 @@ fn ensure_after_the_leaf_died_refills_the_leaf_behind_the_same_socket() {
     assert_eq!(composition_pid(&h, &socket), composition);
 }
 
+/// 起一對、讓第一個葉子登記完（`--ready-before-register` 的葉子等 `.go` 才連橋），再殺掉它並要回同一條 thread：
+/// 回來時補起的葉子已經起來、還沒連橋。回前台連的 socket 與葉子的 socket。
+fn refilled_leaf_waiting_to_register(h: &mut Harness) -> (PathBuf, PathBuf) {
+    h.ensure("a");
+    let leaf = h.dir.join("run/c1.l.sock");
+    let go = format!("{}.go", leaf.display());
+    let readies = |leaf: &Path| log(leaf).iter().filter(|line| *line == "ready").count();
+    assert!(wait_until(|| readies(&leaf) == 1));
+    std::fs::write(&go, b"").unwrap();
+    let socket = h.up_of("a");
+    std::fs::remove_file(&go).unwrap();
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    h.ensure("a");
+    assert!(wait_until(|| readies(&leaf) == 2));
+    (socket, leaf)
+}
+
+/// 補起的葉子登記得慢（超過 `--stall-ms`）：登記之前不算它的沉默，登記完照常 `up`。
+#[test]
+fn a_refilled_leaf_slow_to_register_is_not_stalled() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let (socket, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let new = last_leaf_pid(&leaf);
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert!(!gone(new as i32));
+    std::fs::write(format!("{}.go", leaf.display()), b"").unwrap();
+    assert_eq!(h.up_of("a"), socket);
+    assert_eq!(leaf_behind(&socket), new);
+    shut_down(&mut h);
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
+    );
+}
+
+/// 補起的葉子一直沒登記：不判 `stalled`，停機時跟組合行程一起收掉。
+#[test]
+fn shutdown_collects_a_refilled_leaf_that_never_registered() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let (_, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let new = last_leaf_pid(&leaf);
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert!(!gone(new as i32));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+    assert!(gone(new as i32));
+    let audit = h.audit();
+    assert!(
+        !audit.iter().any(|line| line.contains("stalled")),
+        "{audit:?}"
+    );
+}
+
+/// 補起的葉子還沒登記就死：前台拿到這條 thread 的一則 `down`，組合行程連帶收；再要就起新的一對。
+#[test]
+fn a_refilled_leaf_killed_before_it_registers_takes_the_pair_down_once() {
+    let mut h = Harness::start(Options {
+        conversation_args: vec!["--ready-before-register".into()],
+        ..paired()
+    });
+    let (socket, leaf) = refilled_leaf_waiting_to_register(&mut h);
+    let composition = composition_pid(&h, &socket);
+    kill(last_leaf_pid(&leaf), libc::SIGKILL);
+    assert_eq!(h.down_of("a"), DeathCause::Crash);
+    assert!(wait_until(|| gone(composition as i32)));
+
+    h.ensure("a");
+    let next = h.dir.join("run/c2.l.sock");
+    assert!(wait_until(|| log(&next).contains(&"ready".to_string())));
+    std::fs::write(format!("{}.go", next.display()), b"").unwrap();
+    // 中間再來一則 `down` 的話 `up_of` 會當場失敗。
+    assert_eq!(h.up_of("a"), h.dir.join("run/c2.sock"));
+    assert_eq!(
+        shut_down(&mut h),
+        [FrontEvent::Down {
+            thread_id: b"a".to_vec(),
+            cause: DeathCause::Shutdown
+        }]
+    );
+}
+
+/// 補起的葉子登記、綁定之後卡住：照 `--stall-ms` 被收，跟第一個葉子一樣。
+#[test]
+fn a_refilled_leaf_that_hangs_after_bound_is_stalled() {
+    let mut h = Harness::start(Options {
+        extra: vec!["--stall-ms", "3000"],
+        ..paired()
+    });
+    let socket = h.up("a,hang");
+    let leaf = leaf_socket(&socket);
+    let old = last_leaf_pid(&leaf);
+    assert_eq!(h.down_of("a,hang"), DeathCause::Stalled);
+    assert_eq!(h.up("a,hang"), socket);
+    assert_ne!(last_leaf_pid(&leaf), old);
+    assert_eq!(h.down_of("a,hang"), DeathCause::Stalled);
+    let stalled = |h: &Harness| {
+        pair_audit(h)
+            .iter()
+            .filter(|line| {
+                line.contains("\"cause\":\"stalled\"") && line.contains("\"role\":\"conversation\"")
+            })
+            .count()
+    };
+    assert!(wait_until(|| stalled(&h) == 2), "{:?}", pair_audit(&h));
+}
+
 /// 補起的葉子在舊葉子收屍之後才起：舊葉子留在同一個群組的子孫，新葉子 `up` 時已經不在了。
 #[test]
 fn the_leaf_is_refilled_after_the_old_one_is_reaped() {

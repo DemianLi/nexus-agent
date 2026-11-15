@@ -161,7 +161,25 @@ describe('浮層遮罩走 --scrim', () => {
   });
 });
 
-describe('solid-glass 的本地修改：Windows 高對比（#2796，第 83 條）', () => {
+describe('solid-glass 的本地修改：側欄選項鈕的點擊區（#2791，第 86 條）', () => {
+  const ACTION = "[data-sidebar='menu-action']";
+
+  test.each(['min-width', 'min-height'])('點擊區至少 24px：%s', (property) => {
+    expect(cascade.winner([ACTION], property)).toMatchObject({
+      value: '24px',
+      layer: null,
+      file: OVERRIDES,
+    });
+  });
+
+  test('1024 起往上、往右各退 2px，圖示留在原位', () => {
+    expect(
+      cascade.winner([ACTION], 'margin', { conditions: ['@media (width >= 64rem)'] }),
+    ).toMatchObject({ value: '-2px -2px 0 0', layer: null, file: OVERRIDES });
+  });
+});
+
+describe('solid-glass 的本地修改：Windows 高對比（#2796，第 85 條）', () => {
   const FORCED = { conditions: ['@media (forced-colors: active)'] };
 
   test.each([
@@ -169,6 +187,11 @@ describe('solid-glass 的本地修改：Windows 高對比（#2796，第 83 條�
     "[data-slot='message-scroller-item'][data-located]",
     "[data-slot='dropdown-menu-trigger'][data-popup-open]",
     "[data-slot='sidebar-menu-button'][data-active]:disabled",
+    "[aria-selected='true']",
+    "[aria-current]:not([aria-current='false'])",
+    "[aria-pressed='true']",
+    '[data-highlighted]',
+    "[data-popup-open]:not([data-slot='tooltip-trigger'])",
   ])('只靠底色表示的選取補 2px 的 Highlight 外框：%s', (selector) => {
     expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
       value: '2px solid Highlight',
@@ -184,6 +207,9 @@ describe('solid-glass 的本地修改：Windows 高對比（#2796，第 83 條�
     "[data-slot='tooltip-content']",
     "[data-slot='card']",
     "[data-slot='composer']",
+    '.bg-card',
+    '.bg-popover',
+    '.glass-panel',
   ])('只靠陰影與玻璃邊的面補 1px 的 CanvasText 外框：%s', (selector) => {
     expect(cascade.winner([selector], 'outline', FORCED)).toMatchObject({
       value: '1px solid CanvasText',
