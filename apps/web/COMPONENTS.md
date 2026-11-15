@@ -126,6 +126,66 @@ token 與共用元件不直接刪（規格 §13.6）：
 
 改名照同一個流程：新名字先加、舊名字標記棄用，不在同一張 PR 裡直接換掉。vendor 的 SG 元件與 token 不適用，它們跟著上游同步走（vendor README）。
 
+## 共用元件一覽
+
+規格 §13.5 的兩層各一張表。「預覽」是 `guard/` 測試頁上畫到它的地方：「總覽」是不帶參數的那一頁，其餘是 `?overlay=` 的子頁名，在[元件目錄](#元件目錄)左邊選同一個名字。只列最具代表性的一兩頁，不是全部用到的地方。
+
+### 基礎元件
+
+`src/components/ui/` 的每一個檔一列。
+
+| 元件 | 用在哪 | 預覽 |
+| --- | --- | --- |
+| `alert-dialog` | 要使用者確認才繼續的對話框（刪除、放棄草稿）；不能點外面關掉 | `alert-dialog` |
+| `attachment` | 附件的一格：檔名、狀態、移除鈕；輸入框底下的草稿附件與已送出的附件 | `attachments` |
+| `badge` | 短的狀態或分類標籤，不能點 | 總覽 |
+| `bubble` | 對話裡一則訊息的泡泡與成組的泡泡 | `messages` |
+| `button` | 所有按鈕；variant 與尺寸見上面〈`Button` 的 variant 與尺寸〉 | `buttons` |
+| `card` | 有邊界的一塊內容，帶標題、說明、內容、頁尾 | 總覽 |
+| `collapsible` | 可收合的一段：一列 Trigger 加一塊內容 | `collapsibles` |
+| `command` | 可搜尋、鍵盤上下選的清單（模型選單、斜線指令） | `command`、`composer-menu` |
+| `composer` | 輸入框的外殼：文字區加底下那一排 | `composer-idle` |
+| `context-ring` | context 用量的圓環 | `composer-idle` |
+| `dialog` | 一般對話框；要使用者確認才繼續的用 `alert-dialog` | `dialog` |
+| `diff-view` | 檔案變更的 diff 與增刪行數 | `diff-view`、`diff-stats` |
+| `dot-loader` | 三個點的讀取中；沒有報讀名稱，旁邊要有同義的字 | `transcript-rows` |
+| `dropdown-menu` | 按鈕打開的動作選單；選值用 `command` 或 radio 項 | `dropdown`、`dropdown-keyboard` |
+| `empty` | 空狀態：圖示、標題、說明 | `trace-empty`、`transcript-rows` |
+| `input-group` | 輸入欄位加前後的附加物（圖示、按鈕） | 總覽、`command` |
+| `input` | 單行文字輸入 | 總覽 |
+| `message-scroller` | 對話流的捲動容器：貼底、定位到某一則、回到底部的鈕 | `messages` |
+| `message` | 對話裡一則訊息的版面：頭像、標頭、內容、頁尾 | `messages` |
+| `popover` | 錨在 Trigger 旁、可以放任意內容的浮層 | `cost`、總覽 |
+| `questionnaire` | 模型提問的面板：單選、多選、自填，上一題下一題 | `questionnaire` |
+| `reasoning` | 思考過程：可收合的一列 | `reasoning` |
+| `separator` | 橫或直的分隔線 | `primitives` |
+| `sheet` | 從邊上滑出的面板（窄螢幕的側欄與右側欄） | `sheet` |
+| `sidebar` | 側欄的骨架：容器、群組、選單列、列上的選項鈕 | `desktop-sidebar`、`mobile-sidebar` |
+| `skeleton` | 內容還沒到時的佔位塊 | `primitives` |
+| `sonner` | toast 通知；`Toaster` 只在 `App` 放一個，其他地方呼叫 `toast()` | `primitives` |
+| `status-glyph` | 一輪的狀態圖示（執行中、完成、失敗） | `turn-status` |
+| `textarea` | 多行文字輸入 | 總覽、`feedback` |
+| `tool-steps` | 工具呼叫：一步（`StepRow`）、一段（`StepGroup`）、輸出區塊 | `tool-steps`、`tool-cards` |
+| `tooltip` | 滑鼠停留或聚焦時的短說明；不放必要資訊 | 總覽 |
+| `turn-status` | 狀態列執行中的那一列 | `turn-status` |
+
+### 共用元件
+
+兩處以上共用的自製積木（什麼時候抽見[下面](#什麼時候抽共用元件)）。
+
+| 元件 | 檔 | 用在哪 | 預覽 |
+| --- | --- | --- | --- |
+| `RowTrigger` | `row-trigger.tsx` | 可展開的一列：底色、最小高度、圓角、過渡；`fit="card"` 嵌在卡片裡，`fit="bare"` 自己就是一列 | `collapsibles`、`cost` |
+| `Chevron` | `chevron.tsx` | 展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給 | `collapsibles` |
+| `ChatBubble` | `chat-bubble.tsx` | 對話裡的文字泡泡：人的話靠右、子代理寄來的話靠左 | `messages` |
+| `MonoBlock` | `mono-block.tsx` | 夾在說明文字裡的等寬字小框；有標題、有細線的內層底用 `Surface tone="stage"` | `stage-surfaces` |
+| `Surface` | `surface.tsx` | 卡片與內層底：`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的卡片 | `stage-surfaces`、`tool-cards` |
+| `CopyButton` | `copy-button.tsx` | 複製鈕：交付卡的路徑、回覆、程式碼區塊共用同一套行為與回饋 | `stage-surfaces`、`messages` |
+
+- **新增基礎元件或共用元件要同時加一列**，並且在測試頁畫出來（沒有合適的子頁就加一個）。`src/components/ui/components-doc.test.ts` 會紅：`ui/` 有檔沒有列、有列沒有檔、共用元件那張表寫的檔不存在或沒有匯出那個名字、預覽寫的子頁不存在。
+- 測試擋不到的：新抽了一個共用元件卻沒加列（`ui/` 之外沒有固定的資料夾可以對），以及預覽那一頁是不是真的畫了這個元件。抽的那張 PR 自己加列、開目錄看一眼。
+- 每個元件的 props 與本地修改不寫在這裡：props 看型別，本地修改看 vendor README 的「本地修改」。有呼叫端要注意的事的（浮層、工具卡、狀態列、`Button`）在本檔各自的一節。
+
 ## 元件目錄
 
 給人看的預覽是產出來的，不進版控：
