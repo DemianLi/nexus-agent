@@ -441,7 +441,7 @@
 | 任意值的圓角 | 0 | 8 處、5 種；其中數字任意值 3 處（`rounded-[2px]` 2 處、`rounded-[4px]` 1 處），其餘是 `inherit` 與引用 token 的算式 |
 | 任意值的陰影 | 1 處，`Surface` 的內層底配方，引用 `--border` | 2 處，都引用 token |
 | 層級 | `z-50`、`z-10` 各 1 處 | `z-50` 14 處、`z-10` 4 處、`z-20` 2 處、`-z-1` 2 處 |
-| 半透明（0 與 100 以外） | `opacity-60` 2 處、`opacity-50`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `f3581ca8`，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
+| 半透明（0 與 100 以外） | `opacity-50` 2 處、`opacity-60`、`opacity-70`、`opacity-40` 各 1 處（2026-11-15 重數，develop `5242b3ca` 加上暫停鈕對齊到 50，不含註解） | `opacity-50` 17 處、`opacity-60` 2 處 |
 
 vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」），這一節有級距的類別除外：間距、任意值字級、數字圓角、陰影、層級、停用的透明度。
 
@@ -454,7 +454,7 @@ vendor 的 SG 元件不受外觀護欄檢查（vendor README「護欄放行」�
 
 **字級**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：標準是 §5 的四階，產品原始碼只用這四階。vendor 的 SG 元件另用了 7 種任意值（12.5px、12px、13px、11.5px、11px、0.8rem、0.625rem，共 20 處），照現況凍結：vendor 檔不動，逐條列在 `VENDOR_PINNED`，規則同間距。vendor 的 `text-sm`、`text-xs` 是 SG 原樣（§5），不在清單裡。
 
-**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 現有的全部符合。產品原始碼有一處例外：`goal-bar.tsx` 的暫停鈕是 `disabled:opacity-60`，列在 `ALLOWED`，對齊到 50 要 demian 看過前後對照再改。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
+**停用的透明度**（[#2761](https://github.com/DemianLi/nexus-agent/issues/2761)）：`disabled:`、`data-disabled:`、`aria-disabled:` 這類 variant 下只寫 `opacity-50` 或 `opacity-100`。vendor 與產品原始碼現有的全部符合。不是停用的半透明（排著的插話 `opacity-70` 這類）沒有級距。
 
 **圓角**：階梯照 §5「形狀」。數字任意值（`rounded-[20px]`）不寫；`rounded-[inherit]` 與引用 token 的算式（`rounded-[calc(var(--radius)-3px)]`）不算任意值。vendor 現有的 3 處數字任意值列在 `VENDOR_PINNED`，規則同間距。
 
